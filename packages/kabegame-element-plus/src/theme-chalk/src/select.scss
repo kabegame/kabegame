@@ -1,0 +1,329 @@
+@use 'sass:map';
+
+@use 'mixins/mixins' as *;
+@use 'mixins/utils' as *;
+@use 'mixins/var' as *;
+@use 'common/var' as *;
+@use './select-dropdown.scss';
+@use './option.scss';
+@use './option-group.scss';
+
+@mixin mixed-input-border($color) {
+  box-shadow: 0 0 0 1px $color inset;
+}
+
+@include b(select) {
+  @include set-component-css-var('select', $select);
+}
+
+@include b(select) {
+  display: inline-block;
+  position: relative;
+  vertical-align: middle;
+  width: getCssVar('select-width');
+
+  @include e(wrapper) {
+    display: flex;
+    align-items: center;
+    position: relative;
+    box-sizing: border-box;
+    cursor: pointer;
+    text-align: left;
+    font-size: map.get($input-font-size, 'default');
+    padding: map.get($select-wrapper-padding, 'default');
+    gap: map.get($select-item-gap, 'default');
+    min-height: map.get($input-height, 'default');
+    line-height: map.get($select-item-height, 'default');
+    border-radius: getCssVar('select-border-radius');
+    background-color: getCssVar('fill-color', 'blank');
+    transition: getCssVar('transition', 'duration');
+
+    // Keep the 3D transform to avoid Chromium inset box-shadow noise.
+    transform: translateZ(0);
+    @include mixed-input-border(#{getCssVar('select-border-color')});
+
+    @include when(filterable) {
+      cursor: text;
+    }
+
+    // focus / hover / error 都是「inset 描边 + 外扩一圈光晕」，
+    // 光晕必须和描边写在同一条 box-shadow 里，否则后写的会整条覆盖前一条
+    @include when(focused) {
+      box-shadow: 0 0 0 1px getCssVar('select-input-focus-border-color') inset,
+        getCssVar('select-focus-ring');
+    }
+
+    @include when(hovering) {
+      &:not(.is-focused) {
+        box-shadow: 0 0 0 1px getCssVar('select-border-color-hover') inset,
+          getCssVar('select-hover-ring');
+      }
+    }
+
+    @include when(disabled) {
+      cursor: not-allowed;
+
+      background-color: getCssVar('select-disabled-bg-color');
+      color: getCssVar('text-color', 'placeholder');
+      opacity: 0.65;
+      @include mixed-input-border(#{getCssVar('select-disabled-border')});
+
+      &:hover {
+        @include mixed-input-border(#{getCssVar('select-disabled-border')});
+      }
+
+      &.is-focus {
+        @include mixed-input-border(#{getCssVar('input-focus-border-color')});
+      }
+
+      @include e(selected-item) {
+        color: getCssVar('select-disabled-color');
+      }
+
+      @include e(caret) {
+        cursor: not-allowed;
+      }
+
+      .#{$namespace}-tag {
+        cursor: not-allowed;
+      }
+
+      // When the native input tag is disabled, the cursor value is the 'default'.
+      input {
+        cursor: not-allowed;
+      }
+
+      .#{$namespace}-select__prefix,
+      .#{$namespace}-select__suffix {
+        pointer-events: none;
+      }
+    }
+
+    // form-item.scss 的 is-error 只给了 inset 描边；这里补外扩光晕。
+    // 必须把 __content 一起写上才和它同特异性（本文件在 index.scss 里排在其后）
+    .#{$namespace}-form-item.is-error .#{$namespace}-form-item__content & {
+      &,
+      &:hover,
+      &.is-focused {
+        box-shadow: 0 0 0 1px getCssVar('color-danger') inset,
+          getCssVar('select-error-ring');
+      }
+    }
+  }
+
+  @include e(prefix) {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: map.get($select-item-gap, 'default');
+    color: var(
+      #{getCssVarName('input-icon-color')},
+      map.get($input, 'icon-color')
+    );
+  }
+
+  @include e(suffix) {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: map.get($select-item-gap, 'default');
+    color: var(
+      #{getCssVarName('input-icon-color')},
+      map.get($input, 'icon-color')
+    );
+  }
+
+  @include e(caret) {
+    color: getCssVar('select-input-color');
+    font-size: getCssVar('select-input-font-size');
+    transition: getCssVar('transition', 'duration');
+    transform: rotateZ(0deg);
+    cursor: pointer;
+
+    @include when(reverse) {
+      transform: rotateZ(180deg);
+    }
+
+    // 展开时箭头跟着描边一起转成主色，让「面板开着」在触发器上也读得出来。
+    // 清除按钮同一个元素上也挂着 __caret，要排除掉，否则它的粉底徽章会被染成主色
+    .#{$namespace}-select__wrapper.is-focused
+      &:not(.#{$namespace}-select__clear) {
+      color: var(--anime-primary);
+    }
+  }
+
+  // 清除按钮做成圆形淡粉徽章，而不是一个孤零零的灰叉
+  @include e(clear) {
+    cursor: pointer;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background-color: color-mix(in srgb, var(--anime-primary) 12%, transparent);
+    color: var(--anime-primary-dark);
+    padding: 2px;
+
+    &:hover {
+      background-color: color-mix(in srgb, var(--anime-primary) 20%, transparent);
+      color: getCssVar('select-close-hover-color');
+    }
+  }
+
+  @include e(selection) {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    gap: map.get($select-item-gap, 'default');
+
+    @include when(near) {
+      margin-left: map.get($select-near-margin-left, 'default');
+    }
+
+    // 多选标签只在 select 内改配色，不动全局 el-tag
+    .#{$namespace}-tag {
+      cursor: pointer;
+      border-color: transparent;
+      border-radius: 8px;
+      height: 22px;
+      background-color: map.get($select-option, 'selected-background');
+      color: map.get($select-option, 'selected-text-color');
+      font-weight: 500;
+
+      &.#{$namespace}-tag--plain {
+        border-color: getCssVar('tag', 'border-color');
+      }
+
+      .#{$namespace}-tag__content {
+        min-width: 0;
+      }
+
+      .#{$namespace}-tag__close {
+        color: var(--anime-primary);
+
+        &:hover {
+          background-color: var(--anime-primary);
+          color: #fff;
+        }
+      }
+    }
+  }
+
+  @include e(selected-item) {
+    display: flex;
+    flex-wrap: wrap;
+    user-select: none;
+  }
+
+  @include e(tags-text) {
+    display: block;
+    line-height: normal;
+    @include utils-ellipsis;
+  }
+
+  @include e(placeholder) {
+    position: absolute;
+    z-index: -1;
+    display: block;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 100%;
+    @include utils-ellipsis;
+    color: var(
+      #{getCssVarName('input-text-color')},
+      map.get($input, 'text-color')
+    );
+
+    @include when(transparent) {
+      user-select: none;
+      color: getCssVar('text-color', 'placeholder');
+    }
+  }
+
+  @include e(popper) {
+    @include picker-popper(
+      map.get($select-dropdown, 'bg-color'),
+      map.get($select-dropdown, 'border'),
+      map.get($select-dropdown, 'shadow')
+    );
+
+    // 必须带 .is-light：popper.scss 里的 `.el-popper.is-light` 与
+    // `.el-select__popper.el-popper` 特异性相同，且在 index.scss 里排在后面
+    &.#{$namespace}-popper.is-light {
+      border: map.get($select-dropdown, 'border');
+      border-radius: map.get($select-dropdown, 'border-radius');
+
+      // 与日期面板一致：面板自己有明确边界，箭头只会在圆角上啃一个缺口
+      .#{$namespace}-popper__arrow {
+        display: none;
+      }
+    }
+  }
+
+  @include e(input-wrapper) {
+    flex: 1;
+
+    @include when(hidden) {
+      // Out of the document flow
+      position: absolute;
+      opacity: 0;
+      z-index: -1;
+    }
+  }
+
+  @include e(input) {
+    border: none;
+    outline: none;
+    padding: 0;
+    color: getCssVar('select-multiple-input-color');
+    font-size: inherit;
+    font-family: inherit;
+    appearance: none;
+    height: map.get($select-item-height, 'default');
+    width: 100%;
+    background-color: transparent;
+  }
+
+  @include e(input-calculator) {
+    position: absolute;
+    left: 0;
+    top: 0;
+    max-width: 100%;
+    visibility: hidden;
+    white-space: pre;
+    overflow: hidden;
+  }
+
+  @each $size in (large, small) {
+    @include m($size) {
+      @include e(wrapper) {
+        gap: map.get($select-item-gap, $size);
+        padding: map.get($select-wrapper-padding, $size);
+        min-height: map.get($input-height, $size);
+        line-height: map.get($select-item-height, $size);
+        font-size: map.get($input-font-size, $size);
+      }
+
+      @include e(selection) {
+        gap: map.get($select-item-gap, $size);
+
+        @include when(near) {
+          margin-left: map.get($select-near-margin-left, $size);
+        }
+      }
+
+      @include e(prefix) {
+        gap: map.get($select-item-gap, $size);
+      }
+
+      @include e(suffix) {
+        gap: map.get($select-item-gap, $size);
+      }
+
+      @include e(input) {
+        height: map.get($select-item-height, $size);
+      }
+    }
+  }
+}

@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { Lightning } from "@element-plus/icons-vue";
+import { Lightning } from "@kabegame/element-plus-icons";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_ANDROID } from "@kabegame/core/env";

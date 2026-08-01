@@ -60,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, MoreFilled } from "@element-plus/icons-vue";
+import { ArrowLeft, MoreFilled } from "@kabegame/element-plus-icons";
 import { useHeaderStore } from "../../stores/header";
 import HeaderActionButton from "./HeaderActionButton.vue";
 

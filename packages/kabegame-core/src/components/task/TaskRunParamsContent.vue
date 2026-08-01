@@ -96,7 +96,7 @@
 import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Clock, CopyDocument, Grid, WarningFilled } from "@element-plus/icons-vue";
+import { Clock, CopyDocument, Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import {
   buildVarMetaMapFromPluginConfig,
   usePluginStore,

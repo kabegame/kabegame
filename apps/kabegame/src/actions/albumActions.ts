@@ -1,4 +1,4 @@
-import { FolderOpened, Folder, Picture, Edit, Rank, Delete, Refresh } from "@element-plus/icons-vue";
+import { FolderOpened, Folder, Picture, Edit, Rank, Delete, Refresh } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
 import { i18n } from "@kabegame/i18n";

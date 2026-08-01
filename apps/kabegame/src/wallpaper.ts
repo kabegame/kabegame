@@ -49,6 +49,32 @@ let debugPanelEl: HTMLElement | null = null;
 // 事件监听器（setting-change）
 let unlistenSettingChange: UnlistenFn | null = null;
 
+// ---- init 看门狗 ----
+// 睡眠瞬间 renderer 被杀 → CEF `on_render_process_terminated` reload → 重载后
+// init() 的首个 IPC await（listen/invoke）恰逢系统挂起，响应永久丢失（Tauri
+// invoke 无超时），init 卡死在中途 → 永久白屏（2026-08 实测复现）。
+// 对策：init 未在期限内跑完就整页重载。挂起期间定时器被冻结，唤醒后才触发，
+// 此时 IPC 已恢复，重载后的 init 必然成功；成功后清零重试计数。
+const INIT_RETRY_KEY = "wallpaperInitRetry";
+let initDone = false;
+
+function armInitWatchdog() {
+    const attempt = Number(sessionStorage.getItem(INIT_RETRY_KEY) || "0");
+    // 15s 起步，指数退避封顶 2min：避免后端长期不可用时高频重载
+    const delay = Math.min(15_000 * 2 ** attempt, 120_000);
+    window.setTimeout(() => {
+        if (initDone) return;
+        sessionStorage.setItem(INIT_RETRY_KEY, String(attempt + 1));
+        location.reload();
+    }, delay);
+}
+
+// ---- base 层图片加载重试 ----
+// base 层加载失败即白屏，不能只记日志：带退避重试（瞬时故障——如唤醒瞬间
+// 本地文件服务尚未恢复——几次内即可自愈），加载成功后计数清零。
+let baseImgRetryCount = 0;
+let baseImgRetryTimer: number | null = null;
+
 // 防止并发请求同一路径的 Map（仅用于 prefetch 去重）
 const inflight = new Set<string>();
 
@@ -307,6 +333,18 @@ function handleImageError(type: "base" | "top") {
         }
     } else {
         lastError = "base 层图片加载失败";
+        if (baseSrc && mode !== "tile" && baseImgRetryCount < 5) {
+            const delay = Math.min(2_000 * 2 ** baseImgRetryCount, 30_000);
+            baseImgRetryCount += 1;
+            if (baseImgRetryTimer) window.clearTimeout(baseImgRetryTimer);
+            baseImgRetryTimer = window.setTimeout(() => {
+                baseImgRetryTimer = null;
+                if (!baseImgEl || !baseSrc || mode === "tile") return;
+                // removeAttribute 后重设同一 URL 才会重新发起加载
+                clearImgSrc(baseImgEl);
+                baseImgEl.src = baseSrc;
+            }, delay);
+        }
     }
     updateDebugPanel();
 }
@@ -645,6 +683,10 @@ function initDOM() {
             if (!baseImgEl?.getAttribute("src")) return;
             handleImageError("base");
         });
+        // 加载成功即重置重试计数，让下一次失败重新从短退避开始
+        baseImgEl.addEventListener("load", () => {
+            baseImgRetryCount = 0;
+        });
     }
     if (topImgEl) {
         topImgEl.addEventListener("transitionend", handleTopTransitionEnd);
@@ -755,6 +797,9 @@ function applyStyleFromMode() {
 }
 
 async function init() {
+    // 先武装看门狗再碰任何 await：init 的每个 IPC await 都可能在系统挂起
+    // 瞬间永久 pending
+    armInitWatchdog();
     initDOM();
     updateModeDisplay();
 
@@ -846,6 +891,10 @@ async function init() {
         lastError = `invoke wallpaper_window_ready failed: ${String(e)}`;
     }
 
+    // init 完整跑通：解除看门狗并清零重载计数
+    initDone = true;
+    sessionStorage.removeItem(INIT_RETRY_KEY);
+
     updateDebugPanel();
 }
 
@@ -859,6 +908,10 @@ function cleanup() {
     if (transitionGuardTimer) {
         window.clearTimeout(transitionGuardTimer);
         transitionGuardTimer = null;
+    }
+    if (baseImgRetryTimer) {
+        window.clearTimeout(baseImgRetryTimer);
+        baseImgRetryTimer = null;
     }
     baseVideoSrc = "";
     topVideoSrc = "";

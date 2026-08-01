@@ -105,7 +105,7 @@
 
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
-import { FolderOpened, ZoomIn } from "@element-plus/icons-vue";
+import { FolderOpened, ZoomIn } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";

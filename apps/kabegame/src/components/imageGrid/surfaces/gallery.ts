@@ -40,7 +40,7 @@ export function createGallerySurface(params: {
     routeStore,
     isActive: () => router.currentRoute.value.path === "/gallery",
     computeCountPath: () => {
-      const rootPath = buildGalleryCountPath(routeStore.filters, routeStore.search);
+      const rootPath = buildGalleryCountPath(routeStore.filters, routeStore.search, routeStore.searchMode);
       return routeStore.hide ? `hide/${rootPath}` : rootPath;
     },
     onCountError: resetGalleryRouteAfterLoadError,

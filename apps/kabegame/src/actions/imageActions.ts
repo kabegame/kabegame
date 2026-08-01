@@ -13,7 +13,7 @@ import {
   Share,
   Hide,
   View,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";

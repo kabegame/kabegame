@@ -8,11 +8,10 @@
     class="update-dialog"
     @update:model-value="modal.close"
   >
-    <el-tabs v-if="releases.length" v-model="activeTab" type="card" class="update-tabs">
-      <el-tab-pane v-for="r in releases" :key="r.tag" :name="r.tag" :label="r.tag">
-        <div class="changelog" v-html="renderedBody(r)" @click="onBodyClick"></div>
-      </el-tab-pane>
-    </el-tabs>
+    <template v-if="releases.length">
+      <KbTab v-model="activeTab" :items="tabItems" class="update-tabs" />
+      <div v-if="active" class="changelog" v-html="renderedBody(active)" @click="onBodyClick"></div>
+    </template>
 
     <template #footer>
       <div class="update-footer">
@@ -44,7 +43,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ElButton, ElDialog, ElTabPane, ElTabs } from "element-plus";
+import { ElButton, ElDialog, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { IS_LINUX } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -75,6 +74,10 @@ watch(
 
 const active = computed(
   () => releases.value.find((r) => r.tag === activeTab.value) ?? releases.value[0] ?? null,
+);
+
+const tabItems = computed<KbTabItem[]>(() =>
+  releases.value.map((r) => ({ name: r.tag, label: r.tag })),
 );
 
 // changelog 渲染缓存：按 tag 缓存，但 body 变化（如发布后编辑了 release notes）时失效重渲染
@@ -127,9 +130,8 @@ function onBodyClick(e: MouseEvent) {
 
 <style scoped lang="scss">
 .update-tabs {
-  :deep(.el-tabs__header) {
-    margin-bottom: 12px;
-  }
+  margin-bottom: 12px;
+  max-width: 100%;
 }
 
 .changelog {

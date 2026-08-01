@@ -162,7 +162,7 @@
 import { computed, ref, watch } from "vue";
 import { useVirtualList } from "@vueuse/core";
 import { useRouter } from "vue-router";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import {
   ArrowDown,
@@ -173,7 +173,7 @@ import {
   Picture,
   Refresh,
   WarningFilled,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { isTauri } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useI18n } from "@kabegame/i18n";

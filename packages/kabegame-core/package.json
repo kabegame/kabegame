@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@kabegame/i18n": "workspace:*",
+    "@kabegame/element-plus": "workspace:*",
+    "@kabegame/element-plus-icons": "workspace:*",
     "@panzoom/panzoom": "^4.6.1",
     "@tauri-apps/plugin-opener": "^2.0",
     "@vueuse/core": "^14.2.1",

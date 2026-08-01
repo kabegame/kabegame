@@ -4,7 +4,7 @@
   "windows": ["crawler-*"],
   "webviews": ["crawler-*"],
   "remote": {
-    "urls": ["https://*.*", "http://*.*"]
+    "urls": ["https://*.*:*", "http://*.*:*"]
   },
   "permissions": [
     "core:event:allow-listen",

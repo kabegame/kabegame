@@ -133,9 +133,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from "vue";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Refresh, Setting, QuestionFilled, Delete } from "@element-plus/icons-vue";
+import { Refresh, Setting, QuestionFilled, Delete } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";

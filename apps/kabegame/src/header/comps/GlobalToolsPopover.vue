@@ -78,7 +78,7 @@
 
 <script setup lang="ts">
 import { watch } from "vue";
-import { Tools, Setting } from "@element-plus/icons-vue";
+import { Tools, Setting } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";

@@ -19,7 +19,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { CircleCheck, InfoFilled, WarningFilled, CircleCloseFilled } from "@element-plus/icons-vue";
+import { CircleCheck, InfoFilled, WarningFilled, CircleCloseFilled } from "@kabegame/element-plus-icons";
 import type { KameMessageType } from "@kabegame/core/stores/kameMessage";
 
 const props = withDefaults(defineProps<{

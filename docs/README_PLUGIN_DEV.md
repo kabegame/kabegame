@@ -125,6 +125,7 @@ node package-plugin.js --outDir ../data/plugins-directory
   - `options`: 选项列表（不同类型规则不同，见下）
   - `min`: 最小值（可选，仅用于 `int` 和 `float` 类型）
   - `max`: 最大值（可选，仅用于 `int` 和 `float` 类型）
+  - `width`: 表单栅格宽度（可选，1~4，默认 4 = 独占一行）
 
 **date（日期）说明：**
 - 收集表单使用日期选择器；写入运行配置并传入脚本的值为 **`YYYY-MM-DD` 字符串**（例如 `"2025-03-26"`）

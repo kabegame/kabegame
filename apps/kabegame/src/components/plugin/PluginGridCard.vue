@@ -18,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-import { Grid, Loading } from "@element-plus/icons-vue";
+import { Grid, Loading } from "@kabegame/element-plus-icons";
 
 defineProps<{
   name: string;

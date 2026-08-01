@@ -70,8 +70,8 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
-import { ElIcon } from "element-plus";
-import { ArrowLeft, ArrowRight, Loading, Picture } from "@element-plus/icons-vue";
+import { ElIcon } from "@kabegame/element-plus";
+import { ArrowLeft, ArrowRight, Loading, Picture } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 
 export interface PluginQuickPreviewImage {

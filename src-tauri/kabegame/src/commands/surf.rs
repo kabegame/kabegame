@@ -1,4 +1,3 @@
-use kabegame_core::crawler::downloader::get_default_images_dir;
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
@@ -83,7 +82,12 @@ fn collect_surf_cookie_string<R: Runtime>(
     Ok(pairs.join("; "))
 }
 
-fn eval_surf_toast_for_host<R: Runtime>(app: &AppHandle<R>, host: &str, message: &str, kind: &str) {
+pub(crate) fn eval_surf_toast_for_host<R: Runtime>(
+    app: &AppHandle<R>,
+    host: &str,
+    message: &str,
+    kind: &str,
+) {
     if let Some(webview) = app.get_webview(&surf_label(host)) {
         let msg_json =
             serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
@@ -331,10 +335,9 @@ pub async fn surf_start_session<R: Runtime>(
                 }
             })
             .on_download({
-                let app = app.clone();
                 let host = host_for_plugin_id.clone();
                 let surf_record_id = record_id_for_download.clone();
-                move |_webview, event| match event {
+                move |webview, event| match event {
                     DownloadEvent::Requested { url, destination } => {
                         let suggested_name = destination
                             .file_name()
@@ -355,51 +358,84 @@ pub async fn surf_start_session<R: Runtime>(
                             return false;
                         }
 
-                        let app = app.clone();
-                        let host = host.clone();
-                        let surf_record_id = surf_record_id.clone();
-                        let url = url.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let result = TaskScheduler::global()
-                                .download_queue()
-                                .download(
-                                    url,
-                                    get_default_images_dir(),
-                                    host.clone(),
-                                    String::new(),
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64,
-                                    None,
-                                    Some(surf_record_id),
-                                    HashMap::new(),
-                                    None,
-                                    suggested_name,
-                                    None,
-                                    false,
-                                    None,
-                                )
-                                .await;
-                            match result {
-                                Ok(()) => {
-                                    eval_surf_toast_for_host(&app, &host, "已加入下载列表", "start")
-                                }
+                        let session =
+                            match crate::commands::surf_session::get_or_create_session(&host) {
+                                Ok(session) => session,
                                 Err(error) => {
-                                    eprintln!("[Surf] Failed to enqueue page download: {error}");
+                                    crate::commands::crawler::notify_page_download(
+                                        &webview,
+                                        serde_json::json!({
+                                            "url": url.as_str(),
+                                            "success": false,
+                                            "error": error,
+                                        }),
+                                    );
+                                    return false;
                                 }
-                            }
-                        });
-                        false
+                            };
+                        if let Err(error) =
+                            crate::commands::crawler::assign_page_download_destination(
+                                &session.vfs,
+                                session.handle,
+                                &url,
+                                suggested_name.as_deref(),
+                                destination,
+                            )
+                        {
+                            crate::commands::crawler::notify_page_download(
+                                &webview,
+                                serde_json::json!({
+                                    "url": url.as_str(),
+                                    "success": false,
+                                    "error": error,
+                                }),
+                            );
+                            return false;
+                        }
+                        true
                     }
                     DownloadEvent::Finished { url, path, success } => {
-                        crate::commands::crawler::finish_native_download(
-                            None,
-                            Some(&surf_record_id),
-                            &url,
-                            path.clone(),
-                            success,
-                        );
+                        match path
+                            .as_deref()
+                            .and_then(crate::commands::crawler::native_download_id_from_path)
+                        {
+                            Some(_) => crate::commands::crawler::finish_native_download(
+                                None,
+                                Some(&surf_record_id),
+                                &url,
+                                path,
+                                success,
+                            ),
+                            None => match path {
+                                Some(path) => {
+                                    // 已知且接受：关窗后迟到的 Finished 会重建空会话注册表项；不写目录，残留由启动时 clear_stale_sessions 兜底。
+                                    match crate::commands::surf_session::get_or_create_session(
+                                        &host,
+                                    ) {
+                                        Ok(session) => {
+                                            crate::commands::crawler::finish_page_download(
+                                                &webview,
+                                                &session.vfs,
+                                                session.handle,
+                                                &url,
+                                                &path,
+                                                success,
+                                            );
+                                        }
+                                        Err(_) => {
+                                            let _ = std::fs::remove_file(path);
+                                        }
+                                    }
+                                }
+                                None => crate::commands::crawler::finish_native_download(
+                                    None,
+                                    Some(&surf_record_id),
+                                    &url,
+                                    None,
+                                    success,
+                                ),
+                            },
+                        }
                         true
                     }
                     _ => true,

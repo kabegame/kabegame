@@ -83,17 +83,32 @@ export const GALLERY_ASPECT_BUCKETS = [
   { range: "other", labelKey: "filterAspect_other" },
 ] as const;
 
+export type GallerySearchMode = "display-name" | "metadata" | "native-metadata";
+
+/** 下拉菜单顺序：从最常用到最专业。 */
+export const GALLERY_SEARCH_MODES: readonly GallerySearchMode[] = [
+  "display-name",
+  "metadata",
+  "native-metadata",
+];
+
+export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
+
+export function isGallerySearchMode(value: string | undefined): value is GallerySearchMode {
+  return value === "display-name" || value === "metadata" || value === "native-metadata";
+}
+
 export interface ParsedGalleryPath {
   filters: GalleryFilterSet;
   sort: GallerySort;
   page: number;
   pageSize: number;
   search: string;
+  searchMode: GallerySearchMode;
   /** Compatibility for compact/legacy controls: first selected dimension or all. */
   filter: GalleryFilter;
 }
 
-const SEARCH_PREFIX = "search/display-name/";
 const FILTER_COMB = "filter_comb";
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 100;
@@ -114,8 +129,11 @@ const DIMENSION_ORDER: GalleryFilterDimension[] = [
   "aspect",
 ];
 
-export function buildGalleryContextPrefix(search: string | undefined): string {
-  return buildComposableContextPrefix("", search);
+export function buildGalleryContextPrefix(
+  search: string | undefined,
+  searchMode?: GallerySearchMode,
+): string {
+  return buildComposableContextPrefix("", search, searchMode);
 }
 
 export interface ComposablePathParams {
@@ -125,6 +143,7 @@ export interface ComposablePathParams {
   page: number;
   pageSize?: number;
   search?: string;
+  searchMode?: GallerySearchMode;
 }
 
 export function buildComposablePath(params: ComposablePathParams): string {
@@ -134,6 +153,7 @@ export function buildComposablePath(params: ComposablePathParams): string {
     page,
     pageSize = DEFAULT_PAGE_SIZE,
     search = "",
+    searchMode = DEFAULT_GALLERY_SEARCH_MODE,
   } = params;
   const filters = isGalleryFilter(params.filters)
     ? singleFilterToSet(params.filters)
@@ -153,7 +173,7 @@ export function buildComposablePath(params: ComposablePathParams): string {
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
   const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
   const q = (search ?? "").trim();
-  const searchPrefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return sort.desc ? `${searchPrefix}${rp}${body}/desc/${ps}${p}` : `${searchPrefix}${rp}${body}/${ps}${p}`;
 }
@@ -170,6 +190,7 @@ export function parseComposablePath(
     page: DEFAULT_PAGE,
     pageSize: DEFAULT_PAGE_SIZE,
     search: "",
+    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   };
   const trimmed = (path || "").trim();
   if (!trimmed) return base;
@@ -177,18 +198,18 @@ export function parseComposablePath(
   const rawSegs = trimmed.split("/").filter(Boolean);
   if (rawSegs.length === 0) return base;
 
-  const { search, rest: segs } = stripSearchPrefix(rawSegs);
+  const { search, searchMode, rest: segs } = stripSearchPrefix(rawSegs);
 
   let restSegs = segs;
   if (rootSegs.length > 0) {
-    if (restSegs.length < rootSegs.length) return { ...base, search };
+    if (restSegs.length < rootSegs.length) return { ...base, search, searchMode };
     for (let i = 0; i < rootSegs.length; i++) {
-      if (restSegs[i] !== rootSegs[i]) return { ...base, search };
+      if (restSegs[i] !== rootSegs[i]) return { ...base, search, searchMode };
     }
     restSegs = segs.slice(rootSegs.length);
   }
 
-  if (restSegs.length === 0) return { ...base, search };
+  if (restSegs.length === 0) return { ...base, search, searchMode };
 
   const { body, tail } = splitBodyAndTail(restSegs);
   const { sort: order, pageSize, page } = parseTail(tail);
@@ -199,12 +220,16 @@ export function parseComposablePath(
     ...(sortField === "random" && sortSeed ? { seed: sortSeed } : {}),
   };
   const filter = legacyFilter ?? filterSetToSingleFilter(filters);
-  return { filters, filter, sort, page, pageSize, search };
+  return { filters, filter, sort, page, pageSize, search, searchMode };
 }
 
-export function buildComposableContextPrefix(rootPrefix: string, search: string | undefined): string {
+export function buildComposableContextPrefix(
+  rootPrefix: string,
+  search: string | undefined,
+  searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
+): string {
   const q = (search ?? "").trim();
-  const searchPrefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${searchPrefix}${rp}`;
 }
@@ -213,10 +238,11 @@ export function buildComposableCountPath(
   rootPrefix: string,
   filters: GalleryFilterSet | GalleryFilter,
   search: string = "",
+  searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
 ): string {
   const filterset = isGalleryFilter(filters) ? singleFilterToSet(filters) : filters;
   const q = (search ?? "").trim();
-  const searchPrefix = q ? `${SEARCH_PREFIX}${encodeURIComponent(q)}/` : "";
+  const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${searchPrefix}${rp}${buildFilterSetCountPath(filterset)}`;
 }
@@ -238,12 +264,45 @@ export function stripComposablePathTail(path: string): string {
   return segs.slice(0, i).join("/");
 }
 
-function stripSearchPrefix(segs: string[]): { search: string; rest: string[] } {
-  if (segs.length >= 3 && segs[0] === "search" && segs[1] === "display-name") {
-    const raw = segs[2] ?? "";
-    return { search: decodePathSegment(raw), rest: segs.slice(3) };
+/** 从原始(未 decode)路径段数组中剥离形如 `search/<mode>/<q>/` 的前缀(若存在)。
+ *  返回的 3 段仍保持原始 percent-encoding,真正的 decode 统一发生在 `stripSearchPrefix` 里。 */
+function splitLeadingSearchSegments(segs: string[]): { segments: string[]; rest: string[] } {
+  if (segs.length >= 3 && segs[0] === "search" && isGallerySearchMode(segs[1])) {
+    return { segments: segs.slice(0, 3), rest: segs.slice(3) };
   }
-  return { search: "", rest: segs };
+  return { segments: [], rest: segs };
+}
+
+function stripSearchPrefix(
+  segs: string[],
+): { search: string; searchMode: GallerySearchMode; rest: string[] } {
+  const { segments, rest } = splitLeadingSearchSegments(segs);
+  if (segments.length === 0) {
+    return { search: "", searchMode: DEFAULT_GALLERY_SEARCH_MODE, rest: segs };
+  }
+  const searchMode = segments[1] as GallerySearchMode;
+  const raw = segments[2] ?? "";
+  return { search: decodePathSegment(raw), searchMode, rest };
+}
+
+/**
+ * 供 3 个 detail route store(album/task/surf)复用:从完整 path 中先剥离(若存在的)
+ * `search/<mode>/<q>/` 前缀,再定位 `<rootSeg>/<id>/` 形式的根前缀,返回 `{ id, body }`——
+ * `body` 是把 search 前缀重新拼回"根前缀之后剩余部分"前面得到的字符串,可以直接交给
+ * `parseComposablePath` 解析(由它统一完成 search 的实际 decode)。`rootSeg` 不匹配时
+ * 返回 `{ id: "", body: 原始 trimmed path }`。
+ */
+export function extractRootIdAndBody(path: string, rootSeg: string): { id: string; body: string } {
+  const trimmed = (path || "").trim();
+  const allSegs = trimmed.split("/").filter(Boolean);
+  const { segments: searchSegs, rest } = splitLeadingSearchSegments(allSegs);
+  if (rest.length >= 2 && rest[0] === rootSeg) {
+    const id = rest[1]!;
+    const body = rest.slice(2).join("/");
+    const prefix = searchSegs.length ? `${searchSegs.join("/")}/` : "";
+    return { id, body: prefix + body };
+  }
+  return { id: "", body: trimmed };
 }
 
 function isGalleryFilter(value: GalleryFilter | GalleryFilterSet): value is GalleryFilter {
@@ -504,15 +563,24 @@ export function buildGalleryPath(
   page: number,
   pageSize: number = DEFAULT_PAGE_SIZE,
   search: string = "",
+  searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
 ): string {
-  return buildComposablePath({ filters: filtersOrFilter, sort: sortOrOrder, page, pageSize, search });
+  return buildComposablePath({
+    filters: filtersOrFilter,
+    sort: sortOrOrder,
+    page,
+    pageSize,
+    search,
+    searchMode,
+  });
 }
 
 export function buildGalleryCountPath(
   filtersOrFilter: GalleryFilterSet | GalleryFilter,
   search: string = "",
+  searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
 ): string {
-  return buildComposableCountPath("", filtersOrFilter, search);
+  return buildComposableCountPath("", filtersOrFilter, search, searchMode);
 }
 
 export function parseGalleryPath(path: string): ParsedGalleryPath {
@@ -535,6 +603,7 @@ export function galleryPathWithSortOnly(
     p.page,
     p.pageSize,
     p.search,
+    p.searchMode,
   );
 }
 
@@ -543,15 +612,16 @@ export function galleryPathWithFilterOnly(
   newFilter: GalleryFilter,
 ): string {
   const p = parseGalleryPath(path);
-  return buildGalleryPath(singleFilterToSet(newFilter), p.sort, 1, p.pageSize, p.search);
+  return buildGalleryPath(singleFilterToSet(newFilter), p.sort, 1, p.pageSize, p.search, p.searchMode);
 }
 
 export function galleryPathWithSearchOnly(
   path: string,
   search: string,
+  searchMode?: GallerySearchMode,
 ): string {
   const p = parseGalleryPath(path);
-  return buildGalleryPath(p.filters, p.sort, 1, p.pageSize, search);
+  return buildGalleryPath(p.filters, p.sort, 1, p.pageSize, search, searchMode ?? p.searchMode);
 }
 
 function parseBody(body: string[]): {

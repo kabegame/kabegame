@@ -7,7 +7,7 @@ const OUT = join(import.meta.dir, "src/assets/screenshots");
 const VIEWS = [
   { url: "/gallery",        file: "gallery.png" },
   { url: "/albums",         file: "albums.png" },
-  { url: "/plugin-browser", file: "plugins.png" },
+  { url: "/plugins", file: "plugins.png" },
   { url: "/settings",       file: "settings.png" },
   { url: "/surf",           file: "surf.png" },
 ];

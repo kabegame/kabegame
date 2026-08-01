@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
-import { ElImageViewer } from "element-plus";
+import { ElImageViewer } from "@kabegame/element-plus";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports

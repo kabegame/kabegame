@@ -761,6 +761,10 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             crawl_create_image_metadata,
             #[cfg(not(target_os = "android"))]
+            crawl_plugin_data,
+            #[cfg(not(target_os = "android"))]
+            crawl_set_plugin_data,
+            #[cfg(not(target_os = "android"))]
             crawl_download_image,
             #[cfg(not(target_os = "android"))]
             surf_download_image,

@@ -12,7 +12,7 @@
   {{/unless}}
   "identifier": {{#if isAndroid}}{{#if isDev}}"app.kabegame.dev"{{else}}"app.kabegame"{{/if}}{{else}}"Kabegame"{{/if}},
   "build": {
-    "removeUnusedCommands": true,
+    "removeUnusedCommands": false,
     "beforeDevCommand": "deno task dev:frontend",
     "devUrl": "http://{{devServerHost}}:1420"{{#unless isDev}},
     "frontendDist": "../../dist-kabegame"{{/unless}}

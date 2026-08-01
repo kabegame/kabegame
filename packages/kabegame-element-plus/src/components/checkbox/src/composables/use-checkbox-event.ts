@@ -1,0 +1,88 @@
+import { computed, getCurrentInstance, inject, nextTick, watch } from 'vue'
+import { useFormItem } from '@kabegame/element-plus/components/form'
+import { NOOP } from '@kabegame/element-plus/utils'
+import { CHANGE_EVENT } from '@kabegame/element-plus/constants'
+import { checkboxGroupContextKey } from '../constants'
+
+import type { useFormItemInputId } from '@kabegame/element-plus/components/form'
+import type { CheckboxProps } from '../checkbox'
+import type {
+  CheckboxDisabled,
+  CheckboxModel,
+  CheckboxStatus,
+} from '.'
+
+export const useCheckboxEvent = (
+  props: CheckboxProps,
+  {
+    model,
+    isLimitExceeded,
+    hasOwnLabel,
+    isDisabled,
+    isLabeledByFormItem,
+  }: Pick<CheckboxModel, 'model' | 'isLimitExceeded'> &
+    Pick<CheckboxStatus, 'hasOwnLabel'> &
+    Pick<CheckboxDisabled, 'isDisabled'> &
+    Pick<ReturnType<typeof useFormItemInputId>, 'isLabeledByFormItem'>
+) => {
+  const checkboxGroup = inject(checkboxGroupContextKey, undefined)
+  const { formItem } = useFormItem()
+  const { emit } = getCurrentInstance()!
+
+  function getLabeledValue(value: string | number | boolean) {
+    return [true, props.trueValue, props.trueLabel].includes(value)
+      ? (props.trueValue ?? props.trueLabel ?? true)
+      : (props.falseValue ?? props.falseLabel ?? false)
+  }
+
+  function emitChangeEvent(
+    checked: string | number | boolean,
+    e: InputEvent | MouseEvent
+  ) {
+    emit(CHANGE_EVENT, getLabeledValue(checked), e)
+  }
+
+  function handleChange(e: Event) {
+    if (isLimitExceeded.value) return
+
+    const target = e.target as HTMLInputElement
+    emit(CHANGE_EVENT, getLabeledValue(target.checked), e)
+  }
+
+  async function onClickRoot(e: MouseEvent) {
+    if (isLimitExceeded.value) return
+
+    if (!hasOwnLabel.value && !isDisabled.value && isLabeledByFormItem.value) {
+      // fix: https://github.com/element-plus/element-plus/issues/9981
+      const eventTargets: EventTarget[] = e.composedPath()
+      const hasLabel = eventTargets.some(
+        (item) => (item as HTMLElement).tagName === 'LABEL'
+      )
+      if (!hasLabel) {
+        model.value = getLabeledValue(
+          [false, props.falseValue, props.falseLabel].includes(model.value)
+        )
+        await nextTick()
+        emitChangeEvent(model.value, e)
+      }
+    }
+  }
+
+  const validateEvent = computed(
+    () => checkboxGroup?.validateEvent || props.validateEvent
+  )
+
+  watch(
+    () => props.modelValue,
+    () => {
+      if (validateEvent.value) {
+        formItem?.validate('change').catch(NOOP)
+      }
+    }
+  )
+
+  return {
+    handleChange,
+    onClickRoot,
+  }
+}

@@ -1,0 +1,36 @@
+@use 'sass:map';
+
+@use 'mixins/mixins' as *;
+@use 'common/var' as *;
+
+@include b(select-group) {
+  // 与选项左内边距对齐（上游是 20px）
+  $gap: 9px;
+
+  margin: 0;
+  padding: 0;
+
+  @include e(wrap) {
+    position: relative;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  @include e(title) {
+    box-sizing: border-box;
+    padding: 7px $gap 3px;
+    font-size: map.get($select-group, 'font-size');
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: map.get($select-group, 'text-color');
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  & .#{$namespace}-select-dropdown__item {
+    padding-left: $gap;
+  }
+}

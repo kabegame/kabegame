@@ -26,8 +26,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Delete } from "@element-plus/icons-vue";
-import { ElMessageBox } from "element-plus";
+import { Delete } from "@kabegame/element-plus-icons";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";

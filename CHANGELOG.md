@@ -14,18 +14,22 @@
   - 添加每任务隔离的插件私有虚拟文件系统：V8 提供完整 `deno_fs` API，WebView 提供无句柄子集；插件卸载时 best-effort 清理其 data、cache、tmp 目录，升级时保留
   - 新增[haowallpaper](https://www.haowallpaper.com)、[小红书](https://www.xiaohongshu.com)、[kemono](https://kemono.cr) 插件。小红书webview插件实现了关键字检索+滚动下载。参考项目 [XHS-Downloader](https://github/JoeanAmier/XHS-Downloader)
   - 新增archive接口，能够解压zip、gzip、bzip、7z、tar，使用方法是通过原生vfs接口来解压，然后遍历图片文件downloadImage导入。
+  - 新增 WebView 页面自发原生下载出口：文件落到窗口 VFS `tmp/Downloads`，插件可监听终态事件并统一导入；畅游自动导入普通文件，并探测解压 ZIP、TAR 与 7z 后逐项导入。
+  - 新增ffmpeg接口，可以用来混合m4s流
+  - 新增changelog收集和展示（本质上是markdown渲染）。
 - **CLI**: 新增 plugn run 命令，能够运行一个已安装插件，先import安装kgpg插件，然后run，是当前的v8插件的开发、测试工作流（集成Claude skill）。
 - **原生元数据**:
   - 新增图片格式原生元数据查看：JPEG 读 EXIF（拍摄参数、GPS、缩略图、MakerNote，含 GPS 隐私提示），PNG 走自写 chunk walker（IHDR、tEXt/iTXt/zTXt 文本块、色彩、物理尺寸/时间、未知块），能直接看到 ComfyUI 的 `prompt`/`workflow`、A1111 的 `parameters`、NovelAI 的生成参数（进一步可以通过MCP帮忙检索所有带生成参数的图片）
   - 扩展支持 WebP 与 GIF：WebP 走 RIFF chunk walker（VP8X 容器标志与画布、VP8/VP8L/ALPH 位流、ICCP、XMP、ANIM/ANMF 动画聚合），其 EXIF 与 JPEG 同构故共用同一套分组；对 EXIF chunk 带 `Exif\0\0` 前缀的文件（多见于 JPEG 转码而来）额外做一次剥前缀重试，避免解析不出。GIF 走自写 block walker（画布与全局调色板、帧数/总时长/循环次数、Comment、XMP、ICC），只按长度跳过数据子块、不解 LZW
-  - 存量图片不迁移，改为懒计算：按图片内容 hash 去重共享一份解析结果，同哈希图片自动回填；新下载与本地导入在入库后 best-effort 计算
-  - 整理新增「补充原生元数据」选项（默认关闭）：批量为缺失或解析器版本过旧的 JPEG/PNG/WebP/GIF 补算，开启后整理批次自动收敛到 10；即将被整理删除的图片跳过，避免白做解析
+- **整理**： 新增补充原生元数据的选项
 - **图片详情**: 预览窗左右侧栏宽度可拖动（240px ~ min(560px, 45vw)，双击复位，分别持久化）
 - **隐藏图片清理**: 新增一键清空隐藏画册；桌面源文件分批移入系统回收站并对失败块逐条降级，Android 优先直删 app 自有 MediaStore 媒体，其余在 Android 11+ 合并为一次系统删除授权。
 - **MCP**:
   - 新增只读发现工具 `list_pathql_entry`，可逐层枚举 PathQL 懒树、读取节点说明并分页发现子节点；资源模板由 10 条扩展到 15 条。
   - 新增 images 集合分页护栏：未显式分页且超过 500 行的读取返回 `pagination_required`，避免一次拉取过大结果集。
-
+- **PathQL 查询**: 
+  - 新增随机排序，可以随机抽图玩啦
+  - 新增元数据搜索，可以直接通过搜索prompt来找AI图片了，但在那之前别忘了执行一次整理来填充元数据
 
 ### Fixed
 - **壁纸**: 
@@ -40,6 +44,7 @@
 - MacOS点击图标不显示窗口的bug
 - **畅游**： 
   - 打开重复host的url的时候，已有窗口会刷新到新url而不只是打开。
+  - 修复下载完成后没有 toast 反馈的问题；右键下载、blob/data 导入和页面自发下载的成功/失败终态现在统一提示。
 - **画册**: 
   - 无法查看子画册bug
   - 画册设置轮播对象失败bug
@@ -57,6 +62,7 @@
   - 帮助页面去除，改成打开官网
   - 畅游页面优化
   - 应用后台任务可以看到进度了
+  - 插件页面美化
 - **本地文件夹画册**: 可以取消，可以选择快速导入（比较文件夹是否更新）
 
 ### Changed
@@ -67,6 +73,7 @@
 - **图片详情**: 详情区拆成基本信息、原生元数据、插件简介三个同构面板
 - **文档**: Demo 页面url改成 demo.kabegame.com
 - **插件**: 插件要声明白名单的文档asset列表，而不会自动递归查找
+- **Web**： Web下首页默认改成随机正序
 
 ### Removed
 - **插件**: 移除kgpg v2兼容，迁到kgpg v3，文件头包含50kb的固定icon数据

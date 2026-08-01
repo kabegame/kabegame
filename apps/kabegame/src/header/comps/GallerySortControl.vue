@@ -32,7 +32,7 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
-import { ArrowDown, Sort } from "@element-plus/icons-vue";
+import { ArrowDown, Sort } from "@kabegame/element-plus-icons";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 
 const route = useRoute();

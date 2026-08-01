@@ -86,7 +86,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { storeToRefs } from "pinia";
-import { Clock, FullScreen, Hide, Minus } from "@element-plus/icons-vue";
+import { Clock, FullScreen, Hide, Minus } from "@kabegame/element-plus-icons";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import { useKameMessageStore } from "@kabegame/core/stores/kameMessage";

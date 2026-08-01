@@ -62,7 +62,7 @@ fn split_last_segment(path: &str) -> (String, String) {
 }
 
 /// 解析 get_note 的 JSON 字符串；非 JSON 时把它当 title=content。
-fn parse_note(raw: Option<String>) -> Option<ProviderNote> {
+pub(crate) fn parse_note(raw: Option<String>) -> Option<ProviderNote> {
     let s = raw?;
     if let Ok(v) = serde_json::from_str::<Value>(&s) {
         if let (Some(t), Some(c)) = (

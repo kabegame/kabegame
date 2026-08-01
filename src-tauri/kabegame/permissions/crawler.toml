@@ -37,6 +37,8 @@ commands.allow = [
     "crawl_task_log",
     "crawl_add_progress",
     "crawl_create_image_metadata",
+    "crawl_plugin_data",
+    "crawl_set_plugin_data",
     "crawl_download_image",
     "crawl_to",
     "crawl_back",

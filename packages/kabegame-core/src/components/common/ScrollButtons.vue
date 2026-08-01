@@ -34,7 +34,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@kabegame/element-plus-icons";
 
 interface Props {
     /** 获取滚动容器的函数 */

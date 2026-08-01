@@ -1,0 +1,48 @@
+<template>
+  <template v-if="uiLoading">
+    <div :class="[ns.b(), ns.is('animated', animated)]" v-bind="$attrs">
+      <template v-for="i in count" :key="i">
+        <slot v-if="uiLoading" :key="i" name="template">
+          <el-skeleton-item :class="ns.is('first')" variant="p" />
+          <el-skeleton-item
+            v-for="item in rows"
+            :key="item"
+            :class="[
+              ns.e('paragraph'),
+              ns.is('last', item === rows && rows > 1),
+            ]"
+            variant="p"
+          />
+        </slot>
+      </template>
+    </div>
+  </template>
+  <template v-else>
+    <slot v-bind="$attrs" />
+  </template>
+</template>
+
+<script lang="ts" setup>
+import { toRef } from 'vue'
+import { useNamespace, useThrottleRender } from '@kabegame/element-plus/hooks'
+import ElSkeletonItem from './skeleton-item.vue'
+
+import type { SkeletonProps } from './skeleton.js'
+
+defineOptions({
+  name: 'ElSkeleton',
+})
+const props = withDefaults(defineProps<SkeletonProps>(), {
+  loading: true,
+  count: 1,
+  rows: 3,
+})
+
+const ns = useNamespace('skeleton')
+const uiLoading = useThrottleRender(toRef(props, 'loading'), props.throttle)
+
+defineExpose({
+  /** @description loading state */
+  uiLoading,
+})
+</script>

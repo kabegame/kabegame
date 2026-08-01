@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { computed, watch } from "vue";
-import { ElButton, ElDialog, ElMessageBox, ElProgress } from "element-plus";
+import { ElButton, ElDialog, ElMessageBox, ElProgress } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
 import * as updaterService from "@/services/updater";

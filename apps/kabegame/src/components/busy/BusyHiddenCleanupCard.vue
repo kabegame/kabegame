@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { Close, Delete } from "@element-plus/icons-vue";
+import { Close, Delete } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";

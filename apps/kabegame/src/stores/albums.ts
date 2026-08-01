@@ -8,7 +8,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@/api/rpc";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import type { AlbumTreeNode } from "@kabegame/core/types/album";
 import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";

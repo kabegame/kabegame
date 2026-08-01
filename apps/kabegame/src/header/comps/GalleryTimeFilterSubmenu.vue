@@ -50,7 +50,7 @@
 
 <script setup lang="ts">
 import { defineAsyncComponent } from "vue";
-import { ArrowRight } from "@element-plus/icons-vue";
+import { ArrowRight } from "@kabegame/element-plus-icons";
 import type { TimeMenuNode } from "@/utils/galleryTimeFilterMenu";
 import { isTimeMenuNodeActive } from "@/utils/galleryTimeFilterMenu";
 

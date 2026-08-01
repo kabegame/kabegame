@@ -102,10 +102,33 @@
       </template>
     </el-dropdown>
 
+    <el-dropdown trigger="click" class="ml-auto" @command="onSearchModeCommand">
+      <el-button class="max-w-[280px]">
+        <el-icon class="mr-1.5 text-sm">
+          <Search />
+        </el-icon>
+        <span>{{ searchModeLabel(searchMode) }}</span>
+        <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
+          <ArrowDown />
+        </el-icon>
+      </el-button>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item
+            v-for="mode in GALLERY_SEARCH_MODES"
+            :key="mode"
+            :command="mode"
+            :class="{ 'is-active': searchMode === mode }"
+          >
+            {{ searchModeLabel(mode) }}
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+
     <SearchInput
       :model-value="search"
-      :placeholder="t('gallery.searchPlaceholder')"
-      class="ml-auto"
+      :placeholder="searchInputPlaceholder"
       @update:model-value="(v) => emit('update:search', v)"
     />
   </div>
@@ -300,7 +323,7 @@ import {
   ScaleToOriginal,
   Search,
   Sort,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
@@ -314,6 +337,7 @@ import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
+  GALLERY_SEARCH_MODES,
   filterForDimension,
   filterAspectRange,
   filterDateSegment,
@@ -334,6 +358,7 @@ import {
   type GalleryFilter,
   type GalleryFilterDimension,
   type GalleryFilterSet,
+  type GallerySearchMode,
   type GallerySort,
   type GallerySortField,
 } from "@/utils/galleryPath";
@@ -365,8 +390,10 @@ interface Props {
   sort?: GallerySort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
-  /** display_name 搜索词 */
+  /** 搜索词 */
   search?: string;
+  /** 搜索目标：display-name(显示名) | metadata(插件元数据) | native-metadata(EXIF/PNG) */
+  searchMode?: GallerySearchMode;
   /** provider tree 上下文前缀：hide/search 等由 route store 统一拼好 */
   providerContextPrefix?: string;
 }
@@ -380,6 +407,7 @@ const props = withDefaults(defineProps<Props>(), {
   sort: () => ({ field: "by-id", desc: false } as GallerySort),
   pageSize: 100,
   search: "",
+  searchMode: "display-name",
   providerContextPrefix: "",
 });
 
@@ -400,6 +428,7 @@ const activeFilters = computed<GalleryFilterSet>(() => props.filters ?? singleFi
 const legacyFilter = computed<GalleryFilter>(() => filterSetToSingleFilter(activeFilters.value));
 const sortField = computed<GallerySortField>(() => props.sort.field);
 const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
+const searchMode = computed<GallerySearchMode>(() => props.searchMode);
 
 const isWallpaperOrderBrowse = computed(
   () => !!activeFilters.value.wallpaperOrder
@@ -528,6 +557,33 @@ function sortFieldLabel(field: GallerySortField) {
   }
 }
 
+function searchModeLabel(mode: GallerySearchMode) {
+  switch (mode) {
+    case "display-name":
+      return t("gallery.searchModeDisplayName");
+    case "metadata":
+      return t("gallery.searchModeMetadata");
+    case "native-metadata":
+      return t("gallery.searchModeNativeMetadata");
+  }
+}
+
+const searchInputPlaceholder = computed(() => {
+  switch (props.searchMode) {
+    case "metadata":
+      return t("gallery.searchPlaceholderMetadata");
+    case "native-metadata":
+      return t("gallery.searchPlaceholderNativeMetadata");
+    default:
+      return t("gallery.searchPlaceholder");
+  }
+});
+
+function onSearchModeCommand(cmd: string) {
+  if (!GALLERY_SEARCH_MODES.includes(cmd as GallerySearchMode)) return;
+  emit("update:searchMode", cmd as GallerySearchMode);
+}
+
 function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
   dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };
 }
@@ -549,6 +605,7 @@ function clearAllFilters() {
   // no-album 仅由 header fold 开关控制，清除全部过滤时保留它。
   emit("update:filters", activeFilters.value.noAlbum ? { noAlbum: true } : {});
   emit("update:search", "");
+  emit("update:searchMode", "display-name");
   dimensionPopoverOpen.value = {};
 }
 
@@ -1594,6 +1651,7 @@ const emit = defineEmits<{
   "update:sort": [value: GallerySort];
   "update:pageSize": [value: number];
   "update:search": [value: string];
+  "update:searchMode": [value: GallerySearchMode];
 }>();
 
 const showIds = computed(() => {

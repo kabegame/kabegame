@@ -159,7 +159,8 @@ struct Foo {
 ## Architecture
 
 ### Monorepo Layout
-- `apps/kabegame/` — Vue 3 frontend (Vite, Element Plus, Pinia, UnoCSS)
+- `apps/kabegame/` — Vue 3 frontend (Vite, Pinia, UnoCSS, 自有组件库)
+- `packages/kabegame-element-plus/`, `packages/kabegame-element-plus-icons/` — vendored element-plus 与图标，作为**自有组件库** fork 维护（见下）
 - `packages/` — Shared frontend packages (`core`, `i18n`, `image-type`)
 - `src-tauri/kabegame-core/` — `kabegame-core`: shared Rust library (crawler engine, plugin system, storage)
 - `src-tauri/kabegame/` — Tauri GUI app (desktop + Android)
@@ -190,6 +191,18 @@ struct Foo {
 - Gallery playback of stored videos is always supported (uses the HTML `<video>` element, no FFmpeg needed).
 
 **Android modals** — Every overlay (dialog, drawer, ActionSheet, preview) must call `useModalBack(visibleRef)` from `@kabegame/core/composables/useModalBack` so the Android back button closes layers in stack order. The composable is a no-op on desktop; use it everywhere regardless of platform.
+
+### Component library — 自有，不是 element-plus
+本仓**不再依赖 npm 的 `element-plus` / `@element-plus/icons-vue`**，两者已 vendor 成自有组件库并 fork 维护（不跟上游）。**不要从 `"element-plus"` 导入任何东西**：
+
+```ts
+import { ElButton, ElMessageBox } from "@kabegame/element-plus";
+import { ArrowLeft } from "@kabegame/element-plus-icons";
+```
+
+类名前缀目前仍是 `el-`（namespace 开关未翻），但**不要按「第三方库覆盖」的思路加 hack CSS**——给组件加主题一律下沉到 `packages/kabegame-element-plus/src/theme-chalk/src/common/var.scss` 的 token map（方向恒为 `--kb-el-* ← --anime-*`），而不是在业务侧写 `.el-xxx { ... }`。新写的通用组件可以直接进 vendored 包（`KbTab` 已取代删掉的 `ElTabs`）。
+
+接线有三处必须同步：vite alias、根与 `apps/kabegame` 的 tsconfig `paths`（app 的是**整体覆盖**不合并）、web 的 `manualChunks`。改任何前端组件或样式前先读 `cocs/ui/COMPONENT_LIBRARY.md`。
 
 ### Styling
 New styles should use **UnoCSS utility classes** (configured in `uno.config.pub.ts` and `apps/kabegame/uno.config.ts`, using `presetWind3` — Tailwind-compatible syntax). Only write `<style>` blocks for complex animations or third-party overrides. Extract repeated class combinations into shortcuts in `uno.config.*.ts`.

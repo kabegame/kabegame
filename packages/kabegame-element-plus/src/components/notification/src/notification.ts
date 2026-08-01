@@ -1,0 +1,293 @@
+import { Close } from '@kabegame/element-plus-icons'
+import { buildProps, definePropType, iconPropType } from '@kabegame/element-plus/utils'
+
+import type { AppContext, ExtractPublicPropTypes, Ref, VNode } from 'vue'
+import type { ClassValue, IconPropType } from '@kabegame/element-plus/utils'
+import type { ProgressProps } from '@kabegame/element-plus/components/progress'
+import type Notification from './notification.vue'
+
+export const notificationTypes = [
+  'primary',
+  'success',
+  'info',
+  'warning',
+  'error',
+] as const
+
+export type NotificationType = (typeof notificationTypes)[number] | ''
+
+export type NotificationPosition =
+  'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+
+/**
+ * Progress bar configuration. `percentage`, `type`, `duration`, `indeterminate`
+ * and `width` are excluded: the bar is always a countdown-driven line.
+ */
+export type NotificationProgress = Omit<
+  Partial<ProgressProps>,
+  'percentage' | 'type' | 'duration' | 'indeterminate' | 'width'
+>
+
+export interface NotificationProps {
+  /**
+   * @description custom class name for Notification
+   */
+  customClass?: ClassValue
+  /**
+   * @description whether `message` is treated as HTML string
+   */
+  dangerouslyUseHTMLString?: boolean
+  /**
+   * @description duration before close. It will not automatically close if set 0
+   */
+  duration?: number
+  /**
+   * @description custom icon component. It will be overridden by `type`
+   */
+  icon?: IconPropType
+  /**
+   * @description notification dom id
+   */
+  id?: string
+  /**
+   * @description description text
+   */
+  message?: string | VNode | (() => VNode)
+  /**
+   * @description offset from the top edge of the screen. Every Notification instance of the same moment should have the same offset
+   */
+  offset?: number
+  /**
+   * @description callback function when notification clicked
+   */
+  onClick?: () => void
+  /**
+   * @description callback function when closed
+   */
+  onClose: () => void
+  /**
+   * @description custom position
+   */
+  position?: NotificationPosition
+  /**
+   * @description whether to show a close button
+   */
+  showClose?: boolean
+  /**
+   * @description title
+   */
+  title?: string
+  /**
+   * @description notification type
+   */
+  type?: NotificationType
+  /**
+   * @description initial zIndex
+   */
+  zIndex?: number
+  /**
+   * @description custom close icon, default is Close
+   */
+  closeIcon?: IconPropType
+  /**
+   * @description progress bar indicating auto-close countdown. Set `true` to show a default progress bar, or pass an object to customize it (options of `ElProgress`)
+   */
+  progress?: boolean | NotificationProgress
+  /**
+   * @description whether to pause the timer when hovering over the notification
+   */
+  pauseOnHover?: boolean
+}
+
+/**
+ * @deprecated Removed after 3.0.0, Use `NotificationProps` instead.
+ */
+export const notificationProps = buildProps({
+  /**
+   * @description custom class name for Notification
+   */
+  customClass: {
+    type: definePropType<ClassValue>([String, Array, Object, Boolean]),
+    default: '',
+  },
+  /**
+   * @description whether `message` is treated as HTML string
+   */
+  dangerouslyUseHTMLString: Boolean,
+  /**
+   * @description duration before close. It will not automatically close if set 0
+   */
+  duration: {
+    type: Number,
+    default: 4500,
+  },
+  /**
+   * @description custom icon component. It will be overridden by `type`
+   */
+  icon: {
+    type: iconPropType,
+  },
+  /**
+   * @description notification dom id
+   */
+  id: {
+    type: String,
+    default: '',
+  },
+  /**
+   * @description description text
+   */
+  message: {
+    type: definePropType<string | VNode | (() => VNode)>([
+      String,
+      Object,
+      Function,
+    ]),
+    default: '',
+  },
+  /**
+   * @description offset from the top edge of the screen. Every Notification instance of the same moment should have the same offset
+   */
+  offset: {
+    type: Number,
+    default: 0,
+  },
+  /**
+   * @description callback function when notification clicked
+   */
+  onClick: {
+    type: definePropType<() => void>(Function),
+    default: () => undefined,
+  },
+  /**
+   * @description callback function when closed
+   */
+  onClose: {
+    type: definePropType<() => void>(Function),
+    required: true,
+  },
+  /**
+   * @description custom position
+   */
+  position: {
+    type: String,
+    values: ['top-right', 'top-left', 'bottom-right', 'bottom-left'],
+    default: 'top-right',
+  },
+  /**
+   * @description whether to show a close button
+   */
+  showClose: {
+    type: Boolean,
+    default: true,
+  },
+  /**
+   * @description title
+   */
+  title: {
+    type: String,
+    default: '',
+  },
+  /**
+   * @description notification type
+   */
+  type: {
+    type: String,
+    values: [...notificationTypes, ''],
+    default: '',
+  },
+  /**
+   * @description initial zIndex
+   */
+  zIndex: Number,
+  /**
+   * @description custom close icon, default is Close
+   */
+  closeIcon: {
+    type: iconPropType,
+    default: Close,
+  },
+  /**
+   * @description progress bar indicating auto-close countdown. Set `true` to show a default progress bar, or pass an object to customize it (options of `ElProgress`)
+   */
+  progress: {
+    type: definePropType<boolean | NotificationProgress>([Boolean, Object]),
+    default: false,
+  },
+  /**
+   * @description whether to pause the timer when hovering over the notification
+   */
+  pauseOnHover: {
+    type: Boolean,
+    default: true,
+  },
+} as const)
+
+/**
+ * @deprecated Removed after 3.0.0, Use `NotificationProps` instead.
+ */
+export type NotificationPropsPublic = ExtractPublicPropTypes<
+  typeof notificationProps
+>
+
+export const notificationEmits = {
+  destroy: () => true,
+}
+export type NotificationEmits = typeof notificationEmits
+
+export type NotificationInstance = InstanceType<typeof Notification> & unknown
+
+export interface NotificationExposed {
+  /** @description close notification */
+  close: () => void
+  visible: Ref<boolean>
+}
+
+export type NotificationOptions = Omit<NotificationProps, 'id' | 'onClose'> & {
+  /**
+   * @description set the root element for the notification, default to `document.body`
+   */
+  appendTo?: HTMLElement | string
+  /**
+   * @description callback function when closed
+   */
+  onClose?(vm: VNode): void
+}
+export type NotificationOptionsTyped = Omit<NotificationOptions, 'type'>
+
+export interface NotificationHandle {
+  close: () => void
+}
+
+export type NotificationParams = Partial<NotificationOptions> | string | VNode
+export type NotificationParamsTyped =
+  Partial<NotificationOptionsTyped> | string | VNode
+
+export interface NotifyFn {
+  (
+    options?: NotificationParams,
+    appContext?: null | AppContext
+  ): NotificationHandle
+  closeAll(): void
+  updateOffsets(position?: NotificationOptions['position']): void
+  _context: AppContext | null
+}
+
+export type NotifyTypedFn = (
+  options?: NotificationParamsTyped,
+  appContext?: null | AppContext
+) => NotificationHandle
+
+export interface Notify extends NotifyFn {
+  primary: NotifyTypedFn
+  success: NotifyTypedFn
+  warning: NotifyTypedFn
+  error: NotifyTypedFn
+  info: NotifyTypedFn
+}
+
+export interface NotificationQueueItem {
+  vm: VNode
+}
+
+export type NotificationQueue = NotificationQueueItem[]

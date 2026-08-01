@@ -130,6 +130,7 @@
           :sort="albumDetailRouteStore.sort"
           :page-size="gridPageSize"
           :search="search"
+          :search-mode="searchMode"
           :provider-context-prefix="albumDetailRouteStore.computedContextPath"
           :filter-features="albumFilterFeatures"
           :sort-features="albumSortFeatures"
@@ -139,6 +140,7 @@
           @update:sort="(s) => albumDetailRouteStore.navigate({ sort: s })"
           @update:page-size="(ps) => albumDetailRouteStore.navigate({ page: 1, pageSize: ps })"
           @update:search="(s) => albumDetailRouteStore.navigate({ page: 1, search: s })"
+          @update:searchMode="(m) => { rememberAlbumDetailSearchMode(m); albumDetailRouteStore.navigate({ page: 1, searchMode: m }); }"
         />
 
         <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
@@ -212,9 +214,9 @@ import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick }
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Picture } from "@element-plus/icons-vue";
+import { Picture } from "@kabegame/element-plus-icons";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import { createAlbumDetailSurface } from "@/components/imageGrid/surfaces/album";
@@ -231,12 +233,12 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import GalleryFilters from "@/components/GalleryFilters.vue";
 import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
-import KbTab, { type KbTabItem } from "@/components/common/KbTab.vue";
+import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { createImageAnalytics, currentUrl } from "@kabegame/core/track/imageAnalytics";
-import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
+import { useAlbumDetailRouteStore, rememberAlbumDetailSearchMode } from "@/stores/albumDetailRoute";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -265,7 +267,7 @@ const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotati
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
 const albumDetailRouteStore = useAlbumDetailRouteStore();
-const { search, albumId } = storeToRefs(albumDetailRouteStore);
+const { search, searchMode, albumId } = storeToRefs(albumDetailRouteStore);
 
 
 const albumName = ref<string>("");

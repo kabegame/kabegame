@@ -1,0 +1,25 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_search_metadata_query_provider",
+    "properties": {
+        "query": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "join": [{
+            "kind": "LEFT",
+            "table": "metadata",
+            "as": "metadata_im",
+            "on": "images.metadata_id = metadata_im.id",
+            "in_need": true
+        }],
+        "where": "LOWER(metadata_im.search_text) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

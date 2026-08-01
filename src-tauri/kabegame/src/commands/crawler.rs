@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{AppHandle, Manager, Resource, ResourceId, Runtime, Webview, WebviewWindow};
 use url::Url;
@@ -145,13 +145,96 @@ pub(crate) fn surf_download_name_from_url(url: &Url) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn native_download_id_from_path(path: &std::path::Path) -> Option<u64> {
+pub(crate) fn native_download_id_from_path(path: &Path) -> Option<u64> {
     path.file_name()?
         .to_str()?
         .strip_prefix("native-")?
         .strip_suffix(".part")?
         .parse()
         .ok()
+}
+
+/// 向触发页面自发原生下载的 WebView 分发终态事件。
+pub(crate) fn notify_page_download<R: Runtime>(webview: &Webview<R>, payload: Value) {
+    let Ok(payload_json) = serde_json::to_string(&payload) else {
+        return;
+    };
+    let script = format!("window.__kb_native_download_finished__?.({payload_json});");
+    let _ = webview.eval(script.as_str());
+}
+
+/// 把页面自发原生下载定向到当前窗口 VFS 的 `tmp/Downloads`。
+pub(crate) fn assign_page_download_destination(
+    vfs: &PluginVfs,
+    handle: u64,
+    url: &Url,
+    suggested_name: Option<&str>,
+    destination: &mut PathBuf,
+) -> Result<(), String> {
+    let relative =
+        kabegame_core::crawler::downloader::util::page_download_rel_path(url, suggested_name);
+    let virtual_path = PathBuf::from(format!("/{handle}/tmp")).join(relative);
+    let host_path = vfs
+        .host_path_for_write(&virtual_path)
+        .map_err(|error| format!("无法分配页面下载路径：{error}"))?;
+    let parent = host_path
+        .parent()
+        .ok_or_else(|| "页面下载路径缺少父目录".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("无法创建页面下载目录：{error}"))?;
+    *destination = host_path;
+    Ok(())
+}
+
+/// 校验页面自发下载确实落在当前窗口 VFS 内，再把虚拟路径回传给页面。
+pub(crate) fn finish_page_download<R: Runtime>(
+    webview: &Webview<R>,
+    vfs: &PluginVfs,
+    handle: u64,
+    url: &Url,
+    path: &Path,
+    success: bool,
+) {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned);
+    if !success {
+        let _ = std::fs::remove_file(path);
+        notify_page_download(
+            webview,
+            serde_json::json!({
+                "url": url.as_str(),
+                "success": false,
+                "name": name,
+                "error": "下载失败或已取消",
+            }),
+        );
+        return;
+    }
+
+    let Some(name) = name else {
+        let _ = std::fs::remove_file(path);
+        return;
+    };
+    let virtual_path = format!("/{handle}/tmp/Downloads/{name}");
+    let Ok(expected_path) = vfs.host_path_for_read(Path::new(&virtual_path)) else {
+        let _ = std::fs::remove_file(path);
+        return;
+    };
+    if expected_path.as_path() != path {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+
+    notify_page_download(
+        webview,
+        serde_json::json!({
+            "url": url.as_str(),
+            "success": true,
+            "path": virtual_path,
+            "name": name,
+        }),
+    );
 }
 
 /// CEF Requested 回调认领 worker 发起的下载并设置统一临时路径。
@@ -1094,6 +1177,33 @@ pub async fn crawl_create_image_metadata<R: Runtime>(
 ) -> Result<i64, String> {
     let (_, run) = run_of(&webview)?;
     run.insert_metadata(&value)
+}
+
+#[tauri::command]
+pub async fn crawl_plugin_data<R: Runtime>(
+    webview: WebviewWindow<R>,
+) -> Result<Value, String> {
+    let (_, run) = run_of(&webview)?;
+    Storage::global()
+        .plugin_data()
+        .get(&run.params.plugin.id)
+        .map(|value| value.unwrap_or_else(|| Value::Object(Map::new())))
+        .map_err(|error| format!("读取插件私有数据失败：{error}"))
+}
+
+#[tauri::command]
+pub async fn crawl_set_plugin_data<R: Runtime>(
+    webview: WebviewWindow<R>,
+    value: Value,
+) -> Result<(), String> {
+    if !value.is_object() {
+        return Err("设置插件私有数据失败：value 必须是 JSON 对象".to_string());
+    }
+    let (_, run) = run_of(&webview)?;
+    Storage::global()
+        .plugin_data()
+        .set(&run.params.plugin.id, &value)
+        .map_err(|error| format!("写入插件私有数据失败：{error}"))
 }
 
 /// WebView `Kabegame.downloadImage(url, opts)`：支持与 V8 同形的

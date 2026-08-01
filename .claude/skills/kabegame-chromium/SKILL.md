@@ -125,6 +125,14 @@ $S shot /tmp/surf.png --url surf
   白名单 origin，否则 403），仅在端口确实开启时追加。
 - **`cef-example` 不走这条路径**。它在 `examples/cef-example.rs` 里有自己独立的
   `Settings`，改 `runtime.rs` 不影响它，也没法拿它验证 CDP。
+- **playwright 连接会劫持页面触发的下载**。`connectOverCDP` 附着时对 browser/context
+  下发 `Browser.setDownloadBehavior allowAndName`，导航/链接触发的下载被 CDP 层截走存进
+  `playwright-artifacts-*`，**CEF 的 `CefDownloadHandler`（`on_before_download` 等）完全
+  收不到**，且断开连接后该行为仍残留在 browser 上——之后不经 CDP 的手动下载也被吞。
+  `host.start_download()` 显式触发的下载不受影响。要测试真实下载链路：保持单条连接，
+  连接后先对 browser 级 + `Target.getBrowserContexts` 的每个 context 发
+  `Browser.setDownloadBehavior {behavior:"default"}` 再触发（参考实测：驱动每次调用都是
+  新 playwright 连接，会重新注入劫持，所以"改回 default"和"触发下载"必须在同一连接内完成）。
 
 ## Troubleshooting
 

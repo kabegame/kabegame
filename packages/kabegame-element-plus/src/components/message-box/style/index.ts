@@ -1,0 +1,5 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/theme-chalk/src/message-box.scss'
+import '@kabegame/element-plus/components/button/style'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/overlay/style'

@@ -25,6 +25,7 @@
             :sort="surfImagesRouteStore.sort"
             :page-size="pageSize"
             :search="surfImagesRouteStore.search"
+            :search-mode="surfImagesRouteStore.searchMode"
             :provider-context-prefix="surfImagesRouteStore.computedContextPath"
             :filter-features="surfFilterFeatures"
             :sort-features="surfSortFeatures"
@@ -34,6 +35,7 @@
             @update:sort="(s) => surfImagesRouteStore.navigate({ sort: s })"
             @update:page-size="(ps) => surfImagesRouteStore.navigate({ page: 1, pageSize: ps })"
             @update:search="(v) => surfImagesRouteStore.navigate({ page: 1, search: v })"
+            @update:searchMode="(m) => { rememberSurfImagesSearchMode(m); surfImagesRouteStore.navigate({ page: 1, searchMode: m }); }"
           />
 
           <GalleryBigPaginator
@@ -59,7 +61,7 @@ import GalleryFilters from "@/components/GalleryFilters.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { createSurfImagesSurface } from "@/components/imageGrid/surfaces/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
-import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
+import { useSurfImagesRouteStore, rememberSurfImagesSearchMode } from "@/stores/surfImagesRoute";
 import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import { useUiStore } from "@kabegame/core/stores/ui";

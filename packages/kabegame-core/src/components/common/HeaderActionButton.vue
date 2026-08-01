@@ -7,7 +7,7 @@
 </template>
 
 <script setup lang="ts">
-import { ElButton, ElIcon } from "element-plus";
+import { ElButton, ElIcon } from "@kabegame/element-plus";
 import type { Component } from "vue";
 
 const props = defineProps<{

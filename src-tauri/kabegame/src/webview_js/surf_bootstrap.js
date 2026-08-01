@@ -47,6 +47,86 @@
     return out;
   }
 
+  function archiveKind(name) {
+    const lower = String(name || "").toLowerCase();
+    if (lower.endsWith(".zip")) return { command: "crawl_archive_zip" };
+    if (
+      [".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz"].some((extension) =>
+        lower.endsWith(extension)
+      )
+    ) {
+      return { command: "crawl_archive_tar" };
+    }
+    if (lower.endsWith(".7z")) return { command: "crawl_archive_7z" };
+    return null;
+  }
+
+  async function listFilesRecursive(directory) {
+    const entries = await invoke("crawl_fs_read_dir", { path: directory });
+    const files = [];
+    const base = directory.replace(/\/+$/, "");
+    for (const entry of entries) {
+      const path = `${base}/${entry.name}`;
+      if (entry.isDirectory && !entry.isSymlink) {
+        files.push(...(await listFilesRecursive(path)));
+      } else if (entry.isFile) {
+        files.push({ path, name: entry.name });
+      }
+    }
+    return files;
+  }
+
+  // 页面自发原生下载成功后统一导入；压缩包先尝试解压并逐项导入。
+  window.__kb_native_download_finished__ = async (payload) => {
+    if (!payload.success) {
+      window.__kabegame_toast?.(payload.error || "下载失败", "failed");
+      return;
+    }
+
+    const options = downloadOptions(payload.url, {
+      name: payload.name || undefined,
+    });
+    const archive = archiveKind(payload.name);
+    if (!archive) {
+      window.__kb_media_submit__(payload.path, payload.url, options).catch(reportErr);
+      return;
+    }
+
+    try {
+      const destDir = payload.path + ".extract";
+      await invoke(archive.command, {
+        src: payload.path,
+        destDir,
+        opts: null,
+      });
+      const files = await listFilesRecursive(destDir);
+      const results = await Promise.allSettled(
+        files.map((file) =>
+          window.__kb_media_submit__(file.path, payload.url, {
+            ...options,
+            name: file.name,
+          })
+        ),
+      );
+      const imported = results.filter((result) => result.status === "fulfilled").length;
+      window.__kabegame_toast?.(
+        `已导入 ${imported}/${files.length} 项`,
+        imported ? "success" : "failed",
+      );
+      await invoke("crawl_fs_remove", {
+        path: destDir,
+        options: { recursive: true },
+      }).catch(() => {});
+      await invoke("crawl_fs_remove", {
+        path: payload.path,
+        options: { recursive: false },
+      }).catch(() => {});
+    } catch (_) {
+      // 无法解压时按普通文件导入，由后处理给出最终类型错误。
+      window.__kb_media_submit__(payload.path, payload.url, options).catch(reportErr);
+    }
+  };
+
   function triggerDownload(url, opts) {
     const options = downloadOptions(url, opts);
     if (/^(data|blob):/i.test(String(url || ""))) {

@@ -1,8 +1,9 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import ElementPlus from "element-plus";
-import "element-plus/dist/index.css";
-import * as ElementPlusIconsVue from "@element-plus/icons-vue";
+import ElementPlus from "@kabegame/element-plus";
+/** vendored element-plus 无构建产物，直接吃 scss 源码（等价于原 element-plus/dist/index.css） */
+import "@kabegame/element-plus/theme-chalk/src/index.scss";
+import * as ElementPlusIconsVue from "@kabegame/element-plus-icons";
 import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";

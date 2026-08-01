@@ -1,5 +1,5 @@
 <template>
-  <!-- 面板壳与标题恒定存在；无插件数据时内容区为空（不随内容有无出现/消失） -->
+  <!-- 面板壳与标题恒定存在；无插件数据时显示空态（不随内容有无出现/消失） -->
   <CollapsibleDrawerPanel
     class="image-plugin-description-panel"
     storage-key="kabegame-image-detail-plugin-description-open"
@@ -25,6 +25,11 @@
         <span class="metadata-value">{{ formatMetadataValue(value) }}</span>
       </div>
     </div>
+    <DetailPanelEmptyState
+      v-else-if="effectiveMetadata !== undefined"
+      :title="t('gallery.pluginDetailEmptyTitle')"
+      :description="t('gallery.pluginDetailEmptyDesc')"
+    />
   </CollapsibleDrawerPanel>
 </template>
 
@@ -33,6 +38,7 @@ import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import ejs from "ejs";
 import { useI18n } from "@kabegame/i18n";
 import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
+import DetailPanelEmptyState from "./DetailPanelEmptyState.vue";
 import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?raw";
 import type { ImageDetailLike } from "./ImageBasicInfoPanel.vue";
 import { invoke } from "../../api";
@@ -350,7 +356,7 @@ const showRawMetadata = computed(() => {
   if (!img?.pluginId || !isRenderableMetadata(meta)) return false;
   const tpl = pluginDescriptionTemplate(img.pluginId);
   if (tpl?.trim()) return false;
-  return true;
+  return meta != null && typeof meta === "object" && !Array.isArray(meta);
 });
 
 const rawMetadataEntries = computed(() => {

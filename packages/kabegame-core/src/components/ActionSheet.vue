@@ -70,7 +70,7 @@
 
 <script setup lang="ts">
 import { computed, markRaw, ref, toRaw, watch, type Component, type CSSProperties } from "vue";
-import { CloseBold, Select } from "@element-plus/icons-vue";
+import { CloseBold, Select } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "../actions/types";
 import { useModal } from "../composables/useModal";
 import { useUiStore } from "../stores/ui";

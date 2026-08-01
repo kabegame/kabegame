@@ -1,7 +1,7 @@
 import type { KameMessageType } from "../stores/kameMessage";
 import { useKameMessageStore } from "../stores/kameMessage";
 import { useSettingsStore } from "../stores/settings";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "@kabegame/element-plus";
 
 type KameMessageOptions = {
   type?: KameMessageType;

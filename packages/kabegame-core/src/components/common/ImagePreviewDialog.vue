@@ -207,7 +207,7 @@
 <script setup lang="ts">
 import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
+import { ArrowLeftBold, ArrowRightBold } from "@kabegame/element-plus-icons";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";

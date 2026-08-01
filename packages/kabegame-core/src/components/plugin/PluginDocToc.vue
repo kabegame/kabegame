@@ -30,7 +30,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ArrowLeft } from "@element-plus/icons-vue";
+import { ArrowLeft } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";

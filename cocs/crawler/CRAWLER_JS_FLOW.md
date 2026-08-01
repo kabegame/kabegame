@@ -120,7 +120,7 @@ Tauri initialization script 在每次页面加载时执行：
 
 ### 3.6 下载与媒体
 
-`Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 统一调用 `DownloadQueue::download_image`，在容量满时挂起 JS promise；worker 根据任务插件为 WebView backend 把 job 反投到对应 CEF 窗口，等待条目内 oneshot 后统一执行后处理。页面自发下载在首次 `Requested` 时取消并入队，worker 第二次发起后才真正落盘。
+`Kabegame.downloadImage` 的普通 HTTP/HTTPS URL 统一调用 `DownloadQueue::download_image`，在容量满时挂起 JS promise；worker 根据任务插件为 WebView backend 把 job 反投到对应 CEF 窗口，等待条目内 oneshot 后统一执行后处理。页面自身触发且未被 claim 的原生下载不进入这套 waiter，而是直接落到窗口 VFS 并通过 `Kabegame.onNativeDownload` 交还插件处理。
 
 `data:` / 普通 `blob:` / MSE `blob:` 保持对插件相同的 `downloadImage(url, opts)` 调用形状，但内部不再走专用媒体上传命令：
 
@@ -131,6 +131,30 @@ Tauri initialization script 在每次页面加载时执行：
 5. `finally` 递归删除本次 `tmp/media-*` 子目录。`crawl_download_image` 会等待下载完成，因此清理不会早于 task-vfs 读取。
 
 同一 `media_download.js` 也供 surf 使用，但提交回调由 `surf_bootstrap.js` 注入为 `surf_import_media`，以会话 VFS 的 Path 直通入库；媒体脚本本身不判断窗口类型。
+
+#### 页面自发原生下载：`Kabegame.onNativeDownload`
+
+该 API 只适用于有浏览器窗口的 WebView 后端；V8 后端没有页面原生下载，也不提供此事件。完整链路如下：
+
+1. CEF `Requested` 未命中注册下载 claim 后，Rust 通过纯函数把目标改到当前任务 VFS 的 `tmp/Downloads/<sha256(url) 前 16 位 hex>-<安全文件名>`，不创建 waiter。
+2. `Finished` 成功或失败时，Rust eval `window.__kb_native_download_finished__?.(<payload JSON>)`；`Requested` 阶段分配路径失败也 eval 失败载荷。
+3. 每页 document-start 重跑的 `bootstrap.js` 会重装 `window.__kb_native_download_finished__` 和监听器 `Set`，收到 eval 后逐个调用当前页监听器。
+4. 插件在 `crawl.js` 顶层调用 `Kabegame.onNativeDownload(callback)` 注册；返回值是取消监听函数。因为导航会销毁当前 JS 上下文，新页面必须重新注册。
+
+payload 形状为 `{ url, success, path?, name?, error? }`：`url` 是原始下载 URL；`success` 是终态；成功时 `path` 是当前任务 VFS 虚拟路径，可直接传给 `Kabegame.downloadImage(path, opts)` 进入统一下载和后处理；`name` 在可取得文件名时提供；失败或取消时 `error` 是可读错误且没有可导入的 `path`。
+
+```js
+const off = Kabegame.onNativeDownload((payload) => {
+  if (!payload.success) {
+    Kabegame.warn(payload.error || "页面下载失败");
+    return;
+  }
+  void Kabegame.downloadImage(payload.path, {
+    name: payload.name,
+    url: payload.url,
+  });
+});
+```
 
 下载请求使用 `Task.headers_snapshot()`；页面 Referer 由当前 page stack 顶部 URL 派生。
 

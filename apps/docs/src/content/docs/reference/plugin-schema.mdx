@@ -86,6 +86,7 @@ v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉
 | `when` | object | 否 | 条件显示：`{ otherKey: [值...] }`，某 key 当前值 ∈ 数组才显示；多 key 之间为 AND。可挂变量或单个 option 上。 |
 | `format` | string | `date` 用 | dayjs 格式，决定提交的日期字符串；默认 `YYYY-MM-DD`。 |
 | `dateMin` / `dateMax` | string | `date` 用 | 可选日期范围：`YYYY-MM-DD` 或关键字 `today` / `yesterday`。 |
+| `width` | number | 否 | 表单栅格宽度，1~4，缺省或非法值按 4（独占一行）处理。四列栅格按声明顺序贪心填充，放不下则整体换行；窄屏/移动端折为两列，宽度 1、2 占半行，3、4 占整行。 |
 
 ### 变量类型
 

@@ -1,0 +1,5 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/theme-chalk/src/date-picker-panel.scss'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/scrollbar/style'
+import '@kabegame/element-plus/components/button/style'

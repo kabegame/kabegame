@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { List } from "@element-plus/icons-vue";
+import { List } from "@kabegame/element-plus-icons";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import { storeToRefs } from "pinia";
 

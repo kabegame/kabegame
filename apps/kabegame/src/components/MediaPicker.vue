@@ -12,7 +12,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Picture, FolderOpened, VideoPlay } from "@element-plus/icons-vue";
+import { Picture, FolderOpened, VideoPlay } from "@kabegame/element-plus-icons";
 import OptionPickerDrawer from "@kabegame/core/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@kabegame/core/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";

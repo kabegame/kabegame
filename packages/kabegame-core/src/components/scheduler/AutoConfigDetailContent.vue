@@ -105,7 +105,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { Grid } from "@element-plus/icons-vue";
+import { Grid } from "@kabegame/element-plus-icons";
 import ScheduleProgressBar from "./ScheduleProgressBar.vue";
 import {
   buildVarMetaMapFromPluginConfig,

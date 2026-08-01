@@ -1,5 +1,8 @@
 import { UserConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+/** vendored element-plus 有 31 个 .tsx（form-label-wrap / date-picker / table-v2 等），
+ *  没有这个插件 esbuild 会按 React 语义编译 JSX，运行时报 `React is not defined` */
+import vueJsx from "@vitejs/plugin-vue-jsx";
 import path from "path";
 import UnoCSS from "unocss/vite";
 import { getDevServerHost } from "./scripts/utils";
@@ -23,6 +26,7 @@ export const isDebugIngestEnabled = process.env.KABEGAME_DEBUG_INGEST !== "false
 export default {
   plugins: [
     vue(),
+    vueJsx(),
     UnoCSS(),
     kabegameDebugServer({
       workspaceRoot: root,
@@ -82,11 +86,24 @@ export default {
     alias: {
       "@": path.resolve(process.cwd(), "src"),
       "@kabegame/core": path.resolve(root, "packages", "kabegame-core", "src"),
-      // element-plus 在其 package.json 里把 "@popperjs/core" 别名到
-      // "npm:@sxzz/popperjs-es"（ESM fork）。bun 会在 node_modules 物化该别名目录，
-      // 但 deno 的 hoisted linker 不物化「依赖的 npm 别名」，rollup 从 element-plus
-      // 解析裸 "@popperjs/core" 会失败。此处直接把裸 specifier 指到实包。
-      "@popperjs/core": "@sxzz/popperjs-es",
+      // vendored element-plus：单包平铺（deno 不认嵌套子 workspace），源码直接消费，
+      // 与 @kabegame/core 同一套约定（alias 指向 src/，无构建产物）。
+      "@kabegame/element-plus-icons": path.resolve(
+        root,
+        "packages",
+        "kabegame-element-plus-icons",
+        "src"
+      ),
+      "@kabegame/element-plus": path.resolve(
+        root,
+        "packages",
+        "kabegame-element-plus",
+        "src"
+      ),
+      // 原先这里把 "@popperjs/core" 别名到 "@sxzz/popperjs-es"：npm 版 element-plus 在自己
+      // package.json 里做了这个 npm alias，而 deno 的 hoisted linker 不物化「依赖的 npm 别名」，
+      // rollup 解析裸 specifier 会失败。vendored 之后 @kabegame/element-plus 直接声明真包
+      // @popperjs/core，别名连同 npm element-plus 一起移除。
     },
   },
   css: {

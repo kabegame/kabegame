@@ -1,6 +1,6 @@
 import { computed, type Ref } from "vue";
 import { invoke } from "@/api/rpc";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";

@@ -11,7 +11,7 @@
 
 <script setup lang="ts">
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpened } from "@element-plus/icons-vue";
+import { FolderOpened } from "@kabegame/element-plus-icons";
 
 const props = withDefaults(
   defineProps<{

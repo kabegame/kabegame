@@ -302,7 +302,7 @@ import {
   Operation,
   PictureRounded,
   Tools,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";

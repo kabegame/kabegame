@@ -1,6 +1,6 @@
 import { i18n } from "@kabegame/i18n";
 import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { useApp } from "@/stores/app";
 
 const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";

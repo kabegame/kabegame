@@ -17,7 +17,7 @@ import {
   Document,
   InfoFilled,
   Hide,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
 

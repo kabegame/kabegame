@@ -122,7 +122,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Document, Tickets } from "@element-plus/icons-vue";
+import { Document, Tickets } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";

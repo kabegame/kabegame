@@ -1,5 +1,5 @@
 <template>
-  <SettingStepperControl
+  <KbStepper
     v-if="isCompact"
     :model-value="localValue"
     :min="effectiveMin"
@@ -25,7 +25,7 @@ import { computed, ref, watch } from "vue";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
 import { useUiStore } from "../../../stores/ui";
-import SettingStepperControl from "./SettingStepperControl.vue";
+import KbStepper from "../../common/form/KbStepper.vue";
 
 const props = defineProps<{
   settingKey: AppSettingKey;

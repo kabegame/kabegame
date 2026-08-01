@@ -1,4 +1,4 @@
-import { Picture, Delete, InfoFilled } from "@element-plus/icons-vue";
+import { Picture, Delete, InfoFilled } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { SurfRecord } from "@/stores/surf";
 import { i18n } from "@kabegame/i18n";

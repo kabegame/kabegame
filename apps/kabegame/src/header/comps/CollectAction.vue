@@ -33,7 +33,7 @@
 
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
-import { Plus, ArrowDown, FolderOpened, Connection } from "@element-plus/icons-vue";
+import { Plus, ArrowDown, FolderOpened, Connection } from "@kabegame/element-plus-icons";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WEB } from "@kabegame/core/env";
 

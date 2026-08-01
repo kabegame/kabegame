@@ -68,7 +68,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, markRaw, toRaw, type CSSProperties } from "vue";
-import { ArrowRight } from "@element-plus/icons-vue";
+import { ArrowRight } from "@kabegame/element-plus-icons";
 import type { Component } from "vue";
 
 export interface MenuItem {

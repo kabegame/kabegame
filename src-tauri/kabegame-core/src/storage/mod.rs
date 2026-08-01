@@ -11,6 +11,7 @@ pub mod hidden_cleanup;
 pub mod image_events;
 pub mod images;
 pub mod migrations;
+pub(crate) mod metadata_search_text;
 pub mod organize;
 pub mod plugin_data;
 pub mod plugin_sources;

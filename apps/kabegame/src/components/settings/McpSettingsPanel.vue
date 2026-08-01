@@ -137,7 +137,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { DocumentCopy } from "@element-plus/icons-vue";
+import { DocumentCopy } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { IS_WEB } from "@kabegame/core/env";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";

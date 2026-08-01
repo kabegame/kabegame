@@ -1,6 +1,6 @@
 import { ref, watch, computed, unref, type Ref } from "vue";
 import { useI18n, resolveConfigText, i18n } from "@kabegame/i18n";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";

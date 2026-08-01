@@ -39,8 +39,8 @@
 
 <script setup lang="ts">
 import type { Component } from "vue";
-import { ArrowRight } from "@element-plus/icons-vue";
-import { ElDrawer, ElIcon } from "element-plus";
+import { ArrowRight } from "@kabegame/element-plus-icons";
+import { ElDrawer, ElIcon } from "@kabegame/element-plus";
 import { computed, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "../../composables/useModal";

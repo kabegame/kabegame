@@ -1,0 +1,5 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/theme-chalk/src/color-picker.scss'
+import '@kabegame/element-plus/components/color-picker-panel/style'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/button/style'

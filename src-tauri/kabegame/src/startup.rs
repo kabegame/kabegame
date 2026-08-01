@@ -1,6 +1,8 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+use kabegame_core::crawler::downloader::DownloadState;
 use kabegame_core::crawler::{task_scheduler, TaskScheduler};
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
@@ -418,6 +420,35 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                         eprintln!("保存设置失败 {}", e);
                     }
                 }
+                // surf 的所有导入路径最终都会广播 DownloadState，在这里统一反馈终态。
+                #[cfg(all(not(target_os = "android"), not(feature = "web")))]
+                DaemonEvent::DownloadState {
+                    id, state, error, ..
+                } if matches!(state, DownloadState::Completed | DownloadState::Failed) => {
+                    let dq = TaskScheduler::global().download_queue();
+                    if let Some(info) = dq.get_active_download(*id) {
+                        if info.surf_record_id.is_some() {
+                            match state {
+                                DownloadState::Completed => {
+                                    crate::commands::surf::eval_surf_toast_for_host(
+                                        &app,
+                                        &info.plugin_id,
+                                        "下载成功",
+                                        "success",
+                                    );
+                                }
+                                _ => {
+                                    crate::commands::surf::eval_surf_toast_for_host(
+                                        &app,
+                                        &info.plugin_id,
+                                        error.as_deref().unwrap_or("下载失败"),
+                                        "failed",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 #[cfg(target_os = "android")]
                 DaemonEvent::TaskChanged { diff, .. } => {
                     // 任务状态变化时刷新汇总(运行数 + 下载快照);完成态由命令内「无下载+无运行」自动转「全部完成」。
@@ -595,7 +626,7 @@ pub fn create_crawler_window<R: Runtime>(
         .initialization_script(media_download)
         .initialization_script(script)
         .on_page_load(move |_webview, _payload| {})
-        .on_download(move |_webview, event| match event {
+        .on_download(move |webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
                 let suggested_name = destination
                     .file_name()
@@ -617,44 +648,63 @@ pub fn create_crawler_window<R: Runtime>(
                     return false;
                 }
 
-                let task_id = task_id_for_download.clone();
-                let url = url.clone();
-                tauri::async_runtime::spawn(async move {
-                    let Some(run) = TaskScheduler::global().get_run(&task_id) else {
-                        return;
-                    };
-                    let result = TaskScheduler::global()
-                        .download_queue()
-                        .download_image(
-                            url,
-                            run.params.images_dir.clone(),
-                            run.params.plugin.id.clone(),
-                            task_id,
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64,
-                            run.params.output_album_id.clone(),
-                            std::collections::HashMap::new(),
-                            suggested_name,
-                            None,
-                            None,
-                        )
-                        .await;
-                    if let Err(error) = result {
-                        eprintln!("[Crawler] Failed to enqueue page download: {error}");
-                    }
-                });
-                false
+                let Some(run) = TaskScheduler::global().get_run(&task_id_for_download) else {
+                    return false;
+                };
+                if let Err(error) = crate::commands::crawler::assign_page_download_destination(
+                    &run.vfs,
+                    run.fs_handle,
+                    &url,
+                    suggested_name.as_deref(),
+                    destination,
+                ) {
+                    crate::commands::crawler::notify_page_download(
+                        &webview,
+                        serde_json::json!({
+                            "url": url.as_str(),
+                            "success": false,
+                            "error": error,
+                        }),
+                    );
+                    return false;
+                }
+                true
             }
             DownloadEvent::Finished { url, path, success } => {
-                crate::commands::crawler::finish_native_download(
-                    Some(&task_id_for_download),
-                    None,
-                    &url,
-                    path.clone(),
-                    success,
-                );
+                match path
+                    .as_deref()
+                    .and_then(crate::commands::crawler::native_download_id_from_path)
+                {
+                    Some(_) => crate::commands::crawler::finish_native_download(
+                        Some(&task_id_for_download),
+                        None,
+                        &url,
+                        path,
+                        success,
+                    ),
+                    None => match (path, TaskScheduler::global().get_run(&task_id_for_download)) {
+                        (Some(path), Some(run)) => {
+                            crate::commands::crawler::finish_page_download(
+                                &webview,
+                                &run.vfs,
+                                run.fs_handle,
+                                &url,
+                                &path,
+                                success,
+                            );
+                        }
+                        (Some(path), None) => {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        (None, _) => crate::commands::crawler::finish_native_download(
+                            Some(&task_id_for_download),
+                            None,
+                            &url,
+                            None,
+                            success,
+                        ),
+                    },
+                }
                 true
             }
             _ => true,

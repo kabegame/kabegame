@@ -46,6 +46,17 @@
       sourceUrl,
     });
   };
+  // 页面自发原生下载的终态由 Rust eval 到这里；每次页面加载都会重装监听集合。
+  const nativeDownloadListeners = new Set();
+  window.__kb_native_download_finished__ = (payload) => {
+    for (const callback of nativeDownloadListeners) {
+      try {
+        callback(payload);
+      } catch (error) {
+        console.error("[kabegame] onNativeDownload listener:", error);
+      }
+    }
+  };
   const pendingDownloads = new Set();
   const trackDownload = (promise) => {
     const tracked = Promise.resolve(promise);
@@ -382,6 +393,12 @@
     createImageMetadata(value, opts) {
       return invoke("crawl_create_image_metadata", { value });
     },
+    pluginData() {
+      return invoke("crawl_plugin_data");
+    },
+    setPluginData(map) {
+      return invoke("crawl_set_plugin_data", { value: map });
+    },
     // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
     // name（展示名）、metadata_id（已有 metadata 行）、metadata（任意 JSON）、
     // url（source url）。metadata_id 优先于 metadata。
@@ -400,6 +417,12 @@
         metadataId: o.metadata_id ?? undefined,
         sourceUrl: o.url ?? undefined,
       }));
+    },
+    // 监听页面自发触发的浏览器原生下载。成功时 path 可直接交给 downloadImage；
+    // 失败时 payload 带可读 error。插件需在每页 crawl.js 顶层重新注册。
+    onNativeDownload(callback) {
+      nativeDownloadListeners.add(callback);
+      return () => nativeDownloadListeners.delete(callback);
     },
     // 导航到新页面；payload 可为字符串 url，opts 合并 pageLabel/pageState。
     // 导航后当前页 JS 上下文销毁、新页重跑本模板（按页重跑生命周期）。

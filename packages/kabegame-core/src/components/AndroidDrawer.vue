@@ -49,7 +49,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
-import { Close } from "@element-plus/icons-vue";
+import { Close } from "@kabegame/element-plus-icons";
 import { useModal } from "../composables/useModal";
 
 defineOptions({ inheritAttrs: false });

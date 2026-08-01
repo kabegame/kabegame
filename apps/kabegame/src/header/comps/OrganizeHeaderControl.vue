@@ -19,7 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { FolderOpened } from "@element-plus/icons-vue";
+import { FolderOpened } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useOrganizeStore } from "@/stores/organize";
 

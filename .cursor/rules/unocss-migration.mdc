@@ -55,6 +55,20 @@ shortcuts: [
 <button class="btn-icon">...</button>
 ```
 
+## 组件库样式：不要写 `.el-*` 覆盖
+
+本仓的 element-plus 是 **vendored 自有组件库**（`packages/kabegame-element-plus/`），不是第三方依赖。
+所以上面「仅在第三方覆盖时才写 CSS」这条**不适用于它**：
+
+- **给组件加主题** → 改 `packages/kabegame-element-plus/src/theme-chalk/src/common/var.scss` 的
+  token map，让 `--anime-*` 作为唯一色彩真源（方向恒为 `--kb-el-* ← --anime-*`）。
+- **改组件形状/布局** → 改 `theme-chalk/src/<组件>.scss`。
+- **自己新写的组件** → SFC `<style scoped>`，不要进 theme-chalk。
+- ❌ **业务侧不要再出现 `.el-*` 选择器**。存量 208 行正在清理，清零后才能把 namespace 开关翻成 `kb-el`；
+  新增一行就是给那次切换加一份债。
+
+细节与踩坑见 [cocs/ui/COMPONENT_LIBRARY.md](../../cocs/ui/COMPONENT_LIBRARY.md)。
+
 ## 与现有样式共存
 
 - 旧代码中的 `<style scoped>` / SCSS 可保留，**不必一次性重写**。

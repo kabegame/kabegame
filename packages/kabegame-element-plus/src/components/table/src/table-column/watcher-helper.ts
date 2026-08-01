@@ -1,0 +1,129 @@
+import { getCurrentInstance, watch } from 'vue'
+import { hasOwn, isUndefined } from '@kabegame/element-plus/utils'
+import { parseMinWidth, parseWidth } from '../util'
+import { useGlobalConfig } from '@kabegame/element-plus/components/config-provider'
+
+import type { ComputedRef } from 'vue'
+import type { DefaultRow } from '../table/defaults'
+import type { TableColumn, TableColumnCtx, ValueOf } from './defaults'
+
+function getAllAliases(props: string[], aliases: Record<string, string>) {
+  return props.reduce((prev, cur) => {
+    prev[cur as keyof typeof prev] = cur
+    return prev
+  }, aliases)
+}
+function useWatcher<T extends DefaultRow>(
+  owner: ComputedRef<any>,
+  props_: Partial<TableColumnCtx<T>>
+) {
+  const instance = getCurrentInstance() as TableColumn<T>
+  const registerComplexWatchers = () => {
+    const props = ['fixed']
+    const aliases: Record<string, string> = {
+      realWidth: 'width',
+      realMinWidth: 'minWidth',
+    }
+    const allAliases = getAllAliases(props, aliases)
+    Object.keys(allAliases).forEach((key) => {
+      const columnKey = aliases[key]
+      if (hasOwn(props_, columnKey)) {
+        watch(
+          () => props_[columnKey],
+          (newVal) => {
+            let value: ValueOf<TableColumnCtx<T>> = newVal
+            if (columnKey === 'width' && key === 'realWidth') {
+              value = parseWidth(newVal)
+            }
+            if (columnKey === 'minWidth' && key === 'realMinWidth') {
+              value = parseMinWidth(newVal)
+            }
+            instance.columnConfig.value[columnKey as never] = value as never
+            instance.columnConfig.value[key as never] = value as never
+            const updateColumns = columnKey === 'fixed'
+            owner.value.store.scheduleLayout(updateColumns)
+          }
+        )
+      }
+    })
+  }
+  const registerNormalWatchers = () => {
+    const props = [
+      'label',
+      'filters',
+      'filterMultiple',
+      'filteredValue',
+      'sortable',
+      'index',
+      'formatter',
+      'className',
+      'labelClassName',
+      'filterClassName',
+      'showOverflowTooltip',
+      'tooltipFormatter',
+      'resizable',
+    ]
+    const parentProps = ['showOverflowTooltip']
+    const aliases: Record<string, string> = {
+      property: 'prop',
+      align: 'realAlign',
+      headerAlign: 'realHeaderAlign',
+    }
+    const allAliases = getAllAliases(props, aliases)
+    Object.keys(allAliases).forEach((key) => {
+      const columnKey = aliases[key]
+      if (hasOwn(props_, columnKey)) {
+        watch(
+          () => props_[columnKey],
+          (newVal) => {
+            instance.columnConfig.value[key as never] = newVal
+            if (key === 'filters' || key === 'filterMethod') {
+              instance.columnConfig.value['filterable'] = !!(
+                instance.columnConfig.value['filters'] ||
+                instance.columnConfig.value['filterMethod']
+              )
+            }
+          }
+        )
+      }
+    })
+    parentProps.forEach((key) => {
+      if (hasOwn(owner.value.props, key)) {
+        watch(
+          () => owner.value.props[key],
+          (newVal) => {
+            if (instance.columnConfig.value.type === 'selection') return
+            if (!isUndefined(props_[key])) return
+            instance.columnConfig.value[key] = newVal as never
+          }
+        )
+      }
+    })
+
+    const globalConfig = useGlobalConfig('table')
+    if (
+      globalConfig.value &&
+      hasOwn(globalConfig.value, 'showOverflowTooltip')
+    ) {
+      watch(
+        () => globalConfig.value?.showOverflowTooltip,
+        (newVal) => {
+          if (instance.columnConfig.value.type === 'selection') return
+          if (
+            !isUndefined(props_.showOverflowTooltip) ||
+            !isUndefined(owner.value.props.showOverflowTooltip)
+          )
+            return
+          instance.columnConfig.value.showOverflowTooltip = newVal as never
+        }
+      )
+    }
+  }
+
+  return {
+    registerComplexWatchers,
+    registerNormalWatchers,
+  }
+}
+
+export default useWatcher

@@ -45,7 +45,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Delete, DocumentCopy, Grid } from "@element-plus/icons-vue";
+import { Delete, DocumentCopy, Grid } from "@kabegame/element-plus-icons";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";

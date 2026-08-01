@@ -77,7 +77,7 @@
 </template>
 
 <script setup lang="ts">
-import { AlarmClock, ArrowDown } from "@element-plus/icons-vue";
+import { AlarmClock, ArrowDown } from "@kabegame/element-plus-icons";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
 import AutoConfigCardScheduleEditor from "@/components/scheduler/AutoConfigCardScheduleEditor.vue";

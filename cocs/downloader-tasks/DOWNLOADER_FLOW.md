@@ -136,7 +136,7 @@ worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker l
 `active_downloads` 是所有进行中下载的唯一列表。WebView/CEF HTTP(S) job 与 reqwest job 都由 worker 从 pending 队列取出；pop 时持 pending 锁同步 push active，任务排空按“先 pending、后 active”的顺序计数时不会漏掉迁移中的 job。因为 WebView `on_download` 回调是同步闭包，`active_downloads` 使用 `std::sync::Mutex`。CEF 路径通过条目内的 oneshot 协调：
 
 - worker 挂 `native_completion` tx 后反调 app 的 `start_native_download`。
-- `Requested` 按窗口身份 + URL 原子认领 `Preparing` 条目，设置 `native-<id>.part` 并切到 `Downloading`；认领不到的页面自发下载先取消本次 CEF 请求，再生成新 job 入队。
+- 注册下载的 `Requested` 按窗口身份 + URL 原子认领 `Preparing` 条目，设置 `native-<id>.part` 并切到 `Downloading`；未认领的页面自发下载不使用这套 waiter，改走窗口 VFS 与页面事件出口（见“页面自发原生下载”）。
 - `Finished` 从 `.part` 文件名解析 id，取 tx 发送 `(path, success)`；worker 收到后统一执行 `Processing`、后处理和终态。
 - crawler/surf 窗口销毁会 take 并丢弃对应 tx，使等待中的 worker 立即以窗口销毁错误收尾。
 
@@ -223,6 +223,26 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 写 VFS 阶段尚未登记为 `ActiveDownloadInfo`，百分比由页面 toast 直接展示；crawler 提交入队、surf 开始 Path 后处理后，才进入各自既有下载状态/事件流程。
 
 单个 MediaSource 捕获上限仍为 768 MiB。该机制不做 HLS/DASH manifest 解析，也不主动抓分片；它只处理播放器已经通过 `appendBuffer` 喂给 MSE 的字节。
+
+### 页面自发原生下载
+
+页面自身触发、且未被注册下载 claim 命中的 CEF 下载不再取消后重新入队。`Requested` 直接把目标改到当前 crawler 任务或 surf 会话 VFS 的 `tmp/Downloads/<sha256(url) 前 16 位 hex>-<安全文件名>`；路径由 `(url, suggested_name)` 纯函数计算，同一 URL 与建议文件名会覆盖写入同一路径，Rust 不保存 URL 对应关系或额外 waiter。若 `Requested` 阶段无法解析 VFS 目标或创建父目录，会取消本次下载并立即向页面派发失败事件。
+
+`Finished` 按目标文件名分流：`native-<id>.part` 继续走注册下载 oneshot；其余路径经当前窗口 VFS 反向核对后，由 Rust 使用 `serde_json` 序列化载荷并 eval：
+
+```js
+window.__kb_native_download_finished__?.({
+  url,
+  success,
+  path,  // 仅成功时存在：当前窗口 VFS 虚拟路径
+  name,  // 可选
+  error, // 失败时存在
+});
+```
+
+成功与失败都会派发；CEF 下载失败或取消时使用可读错误，`Requested` 分配失败也走同一出口。crawler 的 `bootstrap.js` 将事件分发给当前页通过 `Kabegame.onNativeDownload(callback)` 注册的监听器，由插件决定是否把 `payload.path` 传给 `Kabegame.downloadImage` 进入统一下载/后处理；页面导航会重建 JS 上下文，因此插件必须在每页顶层重新注册。surf 的 `surf_bootstrap.js` 自动接管成功事件：普通文件直接调用 `surf_import_media`，ZIP、TAR 系列和 7z 先尝试解压、递归枚举文件并逐项导入，解压不可用或失败时退回普通文件导入。
+
+surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`startup.rs` 事件循环统一监听其 `DownloadState::Completed` / `DownloadState::Failed` 并向对应 surf WebView eval toast，因此右键 HTTP 下载、blob/data 导入和页面自发下载共用同一个成功/失败反馈出口。
 
 桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
 

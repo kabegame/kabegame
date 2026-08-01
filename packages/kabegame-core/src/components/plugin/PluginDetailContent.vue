@@ -159,9 +159,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useLocalStorage, useThrottleFn } from "@vueuse/core";
-import { ArrowRight } from "@element-plus/icons-vue";
+import { ArrowRight } from "@kabegame/element-plus-icons";
 import { useI18n, resolveManifestText, resolveManifestDoc } from "@kabegame/i18n";
-import KbTab, { type KbTabItem } from "../common/KbTab.vue";
+import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginDocPanel from "./PluginDocPanel.vue";
 import PluginDocToc from "./PluginDocToc.vue";

@@ -1,6 +1,6 @@
 import { computed } from "vue";
 import type { Component } from "vue";
-import { FolderOpened, Hide, Key, Refresh } from "@element-plus/icons-vue";
+import { FolderOpened, Hide, Key, Refresh } from "@kabegame/element-plus-icons";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@kabegame/core/env";
 import { usePageBridgeStore } from "@/stores/pageBridge";

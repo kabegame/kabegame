@@ -21,7 +21,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Upload } from "@element-plus/icons-vue";
+import { Upload } from "@kabegame/element-plus-icons";
 import { useModal } from "@kabegame/core/composables/useModal";
 
 const emit = defineEmits<{

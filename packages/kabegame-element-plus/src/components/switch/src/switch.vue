@@ -1,0 +1,269 @@
+<template>
+  <div :class="switchKls" @click.prevent="switchValue">
+    <input
+      :id="inputId"
+      ref="input"
+      :class="ns.e('input')"
+      type="checkbox"
+      role="switch"
+      :aria-checked="checked"
+      :aria-disabled="switchDisabled"
+      :aria-label="ariaLabel"
+      :name="name"
+      :true-value="activeValue"
+      :false-value="inactiveValue"
+      :disabled="switchDisabled"
+      :tabindex="tabindex"
+      @change="handleChange"
+      @keydown.enter="switchValue"
+    />
+    <span
+      v-if="!inlinePrompt && (inactiveIcon || inactiveText || $slots.inactive)"
+      :class="labelLeftKls"
+    >
+      <slot name="inactive">
+        <el-icon v-if="inactiveIcon">
+          <component :is="inactiveIcon" />
+        </el-icon>
+        <span v-if="!inactiveIcon && inactiveText" :aria-hidden="checked">{{
+          inactiveText
+        }}</span>
+      </slot>
+    </span>
+    <span :class="ns.e('core')" :style="coreStyle">
+      <div v-if="inlinePrompt" :class="ns.e('inner')">
+        <div v-if="!checked" :class="ns.e('inner-wrapper')">
+          <slot name="inactive">
+            <el-icon v-if="inactiveIcon">
+              <component :is="inactiveIcon" />
+            </el-icon>
+            <span v-if="!inactiveIcon && inactiveText">{{ inactiveText }}</span>
+          </slot>
+        </div>
+        <div v-else :class="ns.e('inner-wrapper')">
+          <slot name="active">
+            <el-icon v-if="activeIcon">
+              <component :is="activeIcon" />
+            </el-icon>
+            <span v-if="!activeIcon && activeText">{{ activeText }}</span>
+          </slot>
+        </div>
+      </div>
+      <div :class="ns.e('action')">
+        <el-icon v-if="loading" :class="ns.is('loading')">
+          <loading />
+        </el-icon>
+        <slot v-else-if="checked" name="active-action">
+          <el-icon v-if="activeActionIcon">
+            <component :is="activeActionIcon" />
+          </el-icon>
+        </slot>
+        <slot v-else-if="!checked" name="inactive-action">
+          <el-icon v-if="inactiveActionIcon">
+            <component :is="inactiveActionIcon" />
+          </el-icon>
+        </slot>
+      </div>
+    </span>
+    <span
+      v-if="!inlinePrompt && (activeIcon || activeText || $slots.active)"
+      :class="labelRightKls"
+    >
+      <slot name="active">
+        <el-icon v-if="activeIcon">
+          <component :is="activeIcon" />
+        </el-icon>
+        <span v-if="!activeIcon && activeText" :aria-hidden="!checked">{{
+          activeText
+        }}</span>
+      </slot>
+    </span>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import {
+  NOOP,
+  addUnit,
+  debugWarn,
+  isBoolean,
+  isPromise,
+  throwError,
+} from '@kabegame/element-plus/utils'
+import ElIcon from '@kabegame/element-plus/components/icon'
+import {
+  useFormDisabled,
+  useFormItem,
+  useFormItemInputId,
+  useFormSize,
+} from '@kabegame/element-plus/components/form'
+import { Loading } from '@kabegame/element-plus-icons'
+import {
+  CHANGE_EVENT,
+  INPUT_EVENT,
+  UPDATE_MODEL_EVENT,
+} from '@kabegame/element-plus/constants'
+import { useNamespace } from '@kabegame/element-plus/hooks'
+import { switchEmits } from './switch'
+
+import type { CSSProperties } from 'vue'
+import type { SwitchProps } from './switch'
+
+const COMPONENT_NAME = 'ElSwitch'
+defineOptions({
+  name: COMPONENT_NAME,
+})
+
+const props = withDefaults(defineProps<SwitchProps>(), {
+  modelValue: false,
+  disabled: undefined,
+  activeText: '',
+  inactiveText: '',
+  activeValue: true,
+  inactiveValue: false,
+  name: '',
+  validateEvent: true,
+  width: '',
+})
+const emit = defineEmits(switchEmits)
+
+const { formItem } = useFormItem()
+const switchSize = useFormSize()
+const ns = useNamespace('switch')
+
+const { inputId } = useFormItemInputId(props, {
+  formItemContext: formItem,
+})
+
+const switchDisabled = useFormDisabled(
+  computed(() => {
+    if (props.loading) {
+      return true
+    }
+    return undefined
+  })
+)
+const isControlled = ref(props.modelValue !== false)
+const input = shallowRef<HTMLInputElement>()
+
+const switchKls = computed(() => [
+  ns.b(),
+  ns.m(switchSize.value),
+  ns.is('disabled', switchDisabled.value),
+  ns.is('checked', checked.value),
+])
+
+const labelLeftKls = computed(() => [
+  ns.e('label'),
+  ns.em('label', 'left'),
+  ns.is('active', !checked.value),
+])
+
+const labelRightKls = computed(() => [
+  ns.e('label'),
+  ns.em('label', 'right'),
+  ns.is('active', checked.value),
+])
+
+const coreStyle = computed<CSSProperties>(() => ({
+  width: addUnit(props.width),
+}))
+
+watch(
+  () => props.modelValue,
+  () => {
+    isControlled.value = true
+  }
+)
+
+const actualValue = computed(() => {
+  return isControlled.value ? props.modelValue : false
+})
+
+const checked = computed(() => actualValue.value === props.activeValue)
+
+if (![props.activeValue, props.inactiveValue].includes(actualValue.value)) {
+  debugWarn(
+    COMPONENT_NAME,
+    'model-value must be active-value or inactive-value'
+  )
+  emit(UPDATE_MODEL_EVENT, props.inactiveValue)
+  emit(CHANGE_EVENT, props.inactiveValue)
+  emit(INPUT_EVENT, props.inactiveValue)
+}
+
+watch(checked, (val) => {
+  input.value!.checked = val
+
+  if (props.validateEvent) {
+    formItem?.validate?.('change').catch(NOOP)
+  }
+})
+
+const handleChange = () => {
+  const val = checked.value ? props.inactiveValue : props.activeValue
+  emit(UPDATE_MODEL_EVENT, val)
+  emit(CHANGE_EVENT, val)
+  emit(INPUT_EVENT, val)
+  nextTick(() => {
+    input.value!.checked = checked.value
+  })
+}
+
+const switchValue = () => {
+  if (switchDisabled.value) return
+
+  const { beforeChange } = props
+  if (!beforeChange) {
+    handleChange()
+    return
+  }
+
+  const shouldChange = beforeChange()
+
+  const isPromiseOrBool = [
+    isPromise(shouldChange),
+    isBoolean(shouldChange),
+  ].includes(true)
+  if (!isPromiseOrBool) {
+    throwError(
+      COMPONENT_NAME,
+      'beforeChange must return type `Promise<boolean>` or `boolean`'
+    )
+  }
+
+  if (isPromise(shouldChange)) {
+    shouldChange
+      .then((result) => {
+        if (result) {
+          handleChange()
+        }
+      })
+      .catch((e) => {
+        debugWarn(COMPONENT_NAME, `some error occurred: ${e}`)
+      })
+  } else if (shouldChange) {
+    handleChange()
+  }
+}
+
+const focus = (): void => {
+  input.value?.focus?.()
+}
+
+onMounted(() => {
+  input.value!.checked = checked.value
+})
+
+defineExpose({
+  /**
+   *  @description manual focus to the switch component
+   **/
+  focus,
+  /**
+   * @description whether Switch is checked
+   */
+  checked,
+})
+</script>

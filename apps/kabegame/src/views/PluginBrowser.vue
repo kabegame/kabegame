@@ -232,7 +232,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, reactive, watch, nextTick } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import {
   Refresh,
@@ -241,7 +241,7 @@ import {
   Search,
   Setting,
   QuestionFilled,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import type { PluginManifestText } from "@kabegame/core/stores/plugins";
 import type { PluginLabel } from "@kabegame/core/stores/pluginLabels";
@@ -251,7 +251,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
-import KbTab, { type KbTabItem } from "@kabegame/core/components/common/KbTab.vue";
+import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
 import PluginQuickPreviewPanel, {
   type QuickPreviewPluginLike,

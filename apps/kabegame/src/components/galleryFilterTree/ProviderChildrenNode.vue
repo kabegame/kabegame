@@ -56,7 +56,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useSlots, watch } from "vue";
-import { ArrowRight } from "@element-plus/icons-vue";
+import { ArrowRight } from "@kabegame/element-plus-icons";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";

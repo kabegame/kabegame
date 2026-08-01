@@ -16,8 +16,14 @@
       </template>
     </PageHeader>
 
-    <el-tabs v-model="listTab" class="auto-configs-list-tabs" @tab-change="onTabChange">
-      <el-tab-pane name="mine" :label="$t('autoConfig.tabMine')">
+    <div class="auto-configs-list-tabs">
+      <KbTab
+        v-model="listTab"
+        :items="listTabItems"
+        class="auto-configs-list-tabs__nav"
+        @select="onTabChange"
+      />
+      <div v-show="listTab === 'mine'" class="auto-configs-tab-pane">
         <div class="auto-configs-mine-pane">
           <div class="auto-configs-browse-toolbar" role="toolbar">
             <el-dropdown trigger="click" @command="onScheduleFilterCommand">
@@ -78,9 +84,9 @@
             </div>
           </div>
         </div>
-      </el-tab-pane>
+      </div>
 
-      <el-tab-pane name="recommended" :label="recommendedTabLabel">
+      <div v-show="listTab === 'recommended'" class="auto-configs-tab-pane">
         <div class="auto-configs-recommended-pane">
           <div v-if="recommendedGrouped.length === 0" class="auto-configs-empty auto-configs-empty--recommended">
             <el-empty :description="$t('autoConfig.noRecommendedConfigs')">
@@ -129,8 +135,8 @@
             </el-collapse>
           </div>
         </div>
-      </el-tab-pane>
-    </el-tabs>
+      </div>
+    </div>
 
     <el-dialog :model-value="presetPreviewDialog.isOpen.value" :z-index="presetPreviewDialog.zIndex.value" :title="$t('autoConfig.recommendedPreviewTitle')"
       class="auto-config-dialog task-params-dialog auto-config-preset-preview-dialog" width="min(560px, 92vw)"
@@ -177,9 +183,9 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useVirtualList } from "@vueuse/core";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { AlarmClock, ArrowDown, QuestionFilled, Timer } from "@element-plus/icons-vue";
+import { AlarmClock, ArrowDown, QuestionFilled, Timer } from "@kabegame/element-plus-icons";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
@@ -272,6 +278,11 @@ const recommendedTabLabel = computed(() =>
     n: crawlerStore.pluginRecommendedConfigs.length,
   }),
 );
+
+const listTabItems = computed<KbTabItem<"mine" | "recommended">[]>(() => [
+  { name: "mine", label: t("autoConfig.tabMine") },
+  { name: "recommended", label: recommendedTabLabel.value },
+]);
 
 function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
@@ -640,21 +651,21 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
   flex-direction: column;
   overflow: hidden;
 
-  :deep(.el-tabs__header) {
-    flex-shrink: 0;
-    margin-bottom: 12px;
-  }
+}
 
-  :deep(.el-tabs__content) {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-  }
+/* KbTab 是 inline-flex，放进 column flex 容器会被 stretch 成整行，
+   align-self 拉回内容宽度 */
+.auto-configs-list-tabs__nav {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-bottom: 12px;
+  max-width: 100%;
+}
 
-  :deep(.el-tab-pane) {
-    height: 100%;
-    overflow: hidden;
-  }
+.auto-configs-tab-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .auto-configs-mine-pane {

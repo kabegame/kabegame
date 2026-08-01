@@ -1,5 +1,5 @@
 <template>
-  <SegmentedControl
+  <KbSegmentedControl
     :model-value="radioValue"
     :options="options"
     :disabled="props.disabled || disabled || showDisabled"
@@ -11,7 +11,7 @@
 import { computed } from "vue";
 import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
-import SegmentedControl from "./SegmentedControl.vue";
+import KbSegmentedControl from "../../common/form/KbSegmentedControl.vue";
 
 type Option = { label: string; value: string };
 

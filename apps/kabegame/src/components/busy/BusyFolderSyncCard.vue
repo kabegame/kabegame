@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Close, Refresh } from "@element-plus/icons-vue";
+import { Close, Refresh } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { useFolderSyncStore } from "@/stores/folderSync";

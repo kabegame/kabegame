@@ -16,7 +16,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { invoke } from "@/api/rpc";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";

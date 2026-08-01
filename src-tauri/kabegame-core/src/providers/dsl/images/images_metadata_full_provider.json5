@@ -29,11 +29,6 @@
                 "sql": "im.plugin_id",
                 "as": "plugin_id",
                 "in_need": true
-            },
-            {
-                "sql": "im.content_hash",
-                "as": "content_hash",
-                "in_need": true
             }
         ],
         "limit": 1

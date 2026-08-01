@@ -16,6 +16,10 @@ commands.allow = [
     "crawl_fs_fwrite",
     "crawl_fs_close",
     "crawl_fs_remove",
+    "crawl_fs_read_dir",
+    "crawl_archive_zip",
+    "crawl_archive_tar",
+    "crawl_archive_7z",
     "crawl_ffmpeg_mux",
     "crawl_ffmpeg_probe",
 ]

@@ -119,6 +119,40 @@ Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用�
 
 ---
 
+## WebView 页面原生下载：`Kabegame.onNativeDownload`
+
+仅 WebView 后端提供 `Kabegame.onNativeDownload(callback): () => void`。它用于接收页面自身触发、且无法由插件直接 `fetch` / `downloadImage` 的浏览器原生下载终态；V8 后端没有浏览器窗口，不适用此 API。返回值是取消监听函数。WebView 每次导航都会重跑 bootstrap 并重建监听集合，因此插件必须在每页 `crawl.js` 顶层重新注册。
+
+页面原生下载会落到当前任务 VFS 的 `tmp/Downloads/<sha256(url) 前 16 位 hex>-<安全文件名>`。路径由 URL 与浏览器建议文件名纯函数生成，同一 URL 重复下载覆盖写入固定位置；Rust 不保存 waiter。下载成功、失败或取消都会触发回调，`Requested` 阶段分配 VFS 路径失败也会触发失败回调。
+
+| payload 字段 | 类型 | 说明 |
+|---|---|---|
+| `url` | `string` | 页面原生下载的原始 URL。 |
+| `success` | `boolean` | 是否下载成功。 |
+| `path` | `string?` | 仅成功时提供；当前任务 VFS 虚拟路径，可直接传给 `Kabegame.downloadImage`。 |
+| `name` | `string?` | 可取得时提供的下载文件名。 |
+| `error` | `string?` | 失败或取消时提供的可读错误。 |
+
+```js
+// crawl.js 顶层：每次页面导航都会重跑脚本，因此每页都要重新注册。
+Kabegame.onNativeDownload((payload) => {
+  if (!payload.success) {
+    Kabegame.warn(payload.error || "页面下载失败");
+    return;
+  }
+  void Kabegame.downloadImage(payload.path, {
+    name: payload.name,
+    url: payload.url,
+  });
+});
+```
+
+:::caution
+`tmp/Downloads` **不会自动清理**，插件需自行管理。不要在 `Kabegame.downloadImage(path)` 的 Promise 返回后立即删除源文件：该调用返回时只保证已入队，worker 仍可能在后台读取该路径；应延后到能够确认下载与后处理结束的安全时点（例如下一次任务启动）再清理。
+:::
+
+---
+
 ## KGPG v3 固定头部规范
 
 固定头部总大小：**49216 bytes**

@@ -1,0 +1,248 @@
+@use 'sass:map';
+
+@use '../mixins/mixins' as *;
+@use '../mixins/var' as *;
+@use '../common/var' as *;
+@use '../common/transition' as *;
+
+@include b(picker) {
+  @include e(popper) {
+    @include set-css-var-type('datepicker', 'border-color', $datepicker);
+    @include picker-popper(
+      getCssVar('bg-color', 'overlay'),
+      1px solid getCssVar('datepicker', 'border-color'),
+      var(--anime-shadow-hover)
+    );
+
+    // 圆角与「无箭头」是 kabegame 的弹层观感：面板本身已有明确边界，
+    // 再挂一个箭头会让圆角缺一块。
+    // 必须带上 .is-light：popper.scss 里的 `.el-popper.is-light` 特异性与
+    // `.el-picker__popper.el-popper` 相同，而它在 index.scss 里排在本文件之后，
+    // 不加这一节 border 会被它压回默认灰。
+    &.#{$namespace}-popper.is-light {
+      border: 1px solid getCssVar('datepicker', 'border-color');
+      border-radius: 14px;
+
+      .#{$namespace}-popper__arrow {
+        display: none;
+      }
+    }
+  }
+}
+
+@include b(date-editor) {
+  @include set-component-css-var('date-editor', $date-editor);
+  @include set-component-css-var('input', $input);
+  // 输入框不在 .el-date-picker 面板内，拿不到面板上注册的 datepicker 变量，
+  // 这里按需补两个（与 __popper 上补 border-color 是同一个理由）
+  @include set-css-var-type('datepicker', 'icon-color', $datepicker);
+  @include set-css-var-type('datepicker', 'hover-text-color', $datepicker);
+  position: relative;
+  text-align: left;
+  vertical-align: middle;
+
+  &.#{$namespace}-input__wrapper {
+    @include inset-input-border(
+      var(
+        #{getCssVarName('input-border-color')},
+        map.get($input, 'border-color')
+      )
+    );
+
+    &:hover {
+      @include inset-input-border(#{getCssVar('input', 'hover-border-color')});
+    }
+  }
+
+  // 输入框前缀的日历图标：常态紫、聚焦转粉，和面板里的导航箭头同一套配色
+  .#{$namespace}-input__prefix,
+  .#{$namespace}-input__icon {
+    color: getCssVar('datepicker-icon-color');
+  }
+
+  @include when(focus) {
+    .#{$namespace}-input__wrapper {
+      @include inset-input-border(#{getCssVar('input', 'focus-border-color')});
+    }
+  }
+
+  .#{$namespace}-input__wrapper.is-focus {
+    .#{$namespace}-input__prefix,
+    .#{$namespace}-input__icon {
+      color: getCssVar('datepicker-hover-text-color');
+    }
+  }
+
+  &.#{$namespace}-input,
+  &.#{$namespace}-input__wrapper {
+    width: getCssVar('date-editor-width');
+    height: var(#{getCssVarName('input-height')}, getCssVar('component-size'));
+  }
+
+  @include m((monthrange)) {
+    @include css-var-from-global(
+      'date-editor-width',
+      'date-editor-monthrange-width'
+    );
+  }
+
+  @include m((daterange, timerange)) {
+    @include css-var-from-global(
+      'date-editor-width',
+      'date-editor-daterange-width'
+    );
+  }
+
+  @include m(datetimerange) {
+    @include css-var-from-global(
+      'date-editor-width',
+      'date-editor-datetimerange-width'
+    );
+  }
+
+  @include m(dates) {
+    .#{$namespace}-input__wrapper {
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .close-icon {
+    cursor: pointer;
+  }
+
+  .clear-icon {
+    cursor: pointer;
+
+    &:hover {
+      color: getCssVar('input-clear-hover-color');
+    }
+  }
+
+  .#{$namespace}-range__icon {
+    height: inherit;
+    font-size: 14px;
+    color: getCssVar('text-color', 'placeholder');
+    float: left;
+
+    svg {
+      vertical-align: middle;
+    }
+  }
+
+  .#{$namespace}-range-input {
+    appearance: none;
+    border: none;
+    outline: none;
+    display: inline-block;
+    height: #{map.get($input-height, 'default') - 2};
+    line-height: #{map.get($input-height, 'default') - 2};
+    margin: 0;
+    padding: 0;
+    width: 39%;
+    text-align: center;
+    font-size: getCssVar('font-size', 'base');
+    color: getCssVar('text-color', 'regular');
+    background-color: transparent;
+
+    &::placeholder {
+      color: getCssVar('text-color', 'placeholder');
+    }
+  }
+
+  .#{$namespace}-range-separator {
+    flex: 1;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    padding: 0 5px;
+    margin: 0;
+    font-size: 14px;
+    overflow-wrap: break-word;
+    color: getCssVar('text-color', 'primary');
+  }
+
+  .#{$namespace}-range__close-icon {
+    font-size: 14px;
+    color: getCssVar('text-color', 'placeholder');
+    height: inherit;
+    width: unset;
+    cursor: pointer;
+
+    &:hover {
+      color: getCssVar('input-clear-hover-color');
+    }
+
+    svg {
+      vertical-align: middle;
+    }
+
+    &--hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+  }
+}
+
+@include b(range-editor) {
+  &.#{$namespace}-input__wrapper {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 10px;
+    vertical-align: middle;
+  }
+
+  @include when(active) {
+    @include inset-input-border(#{getCssVar('input', 'focus-border-color')});
+    &:hover {
+      @include inset-input-border(#{getCssVar('input', 'focus-border-color')});
+    }
+  }
+
+  @each $size in (large, small) {
+    @include m($size) {
+      line-height: getCssVar('component-size', $size);
+
+      &.#{$namespace}-input__wrapper {
+        height: getCssVar('component-size', $size);
+      }
+
+      .#{$namespace}-range-separator {
+        line-height: map.get($input-line-height, $size);
+        font-size: map.get($input-font-size, $size);
+      }
+
+      .#{$namespace}-range-input {
+        height: #{map.get($input-height, $size) - 2};
+        line-height: #{map.get($input-height, $size) - 2};
+        font-size: map.get($input-font-size, $size);
+      }
+    }
+  }
+
+  @include when(disabled) {
+    background-color: map.get($input-disabled, 'fill');
+    border-color: map.get($input-disabled, 'border');
+    color: map.get($input-disabled, 'text-color');
+    cursor: not-allowed;
+
+    &:hover,
+    &:focus {
+      border-color: map.get($input-disabled, 'border');
+    }
+
+    input {
+      background-color: map.get($input-disabled, 'fill');
+      color: map.get($input-disabled, 'text-color');
+      cursor: not-allowed;
+      &::placeholder {
+        color: map.get($input-disabled, 'placeholder-color');
+      }
+    }
+
+    .#{$namespace}-range-separator {
+      color: map.get($input-disabled, 'text-color');
+    }
+  }
+}

@@ -232,7 +232,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
-import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowRight, Filter } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";

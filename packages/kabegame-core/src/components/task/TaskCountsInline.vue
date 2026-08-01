@@ -33,7 +33,7 @@
 </template>
 
 <script setup lang="ts">
-import { CircleCheck, CopyDocument, Delete, WarningFilled } from "@element-plus/icons-vue";
+import { CircleCheck, CopyDocument, Delete, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 
 defineProps<{

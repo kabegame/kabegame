@@ -1,0 +1,19 @@
+{
+  "name": "@kabegame/element-plus-icons",
+  "version": "2.3.2",
+  "private": true,
+  "type": "module",
+  "description": "Vendored element-plus-icons（fork，不跟上游）。vendor base: element-plus-icons v2.3.2",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./global": "./src/global.ts",
+    "./*": "./src/*"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "vue": "^3.4.0"
+  }
+}

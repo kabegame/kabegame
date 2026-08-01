@@ -53,7 +53,8 @@
         "description_template": { "name": "플러그인 설명 템플릿", "desc": "플러그인 설명 페이지 템플릿을 읽습니다" },
         "doc": { "name": "플러그인 문서", "desc": "플러그인 기본 문서를 읽습니다" },
         "changelog": { "name": "플러그인 변경 로그", "desc": "플러그인 기본 변경 로그를 읽습니다" },
-        "asset": { "name": "플러그인 리소스", "desc": "플러그인 문서 및 변경 로그에서 참조하는 리소스 파일을 읽습니다" }
+        "asset": { "name": "플러그인 리소스", "desc": "플러그인 문서 및 변경 로그에서 참조하는 리소스 파일을 읽습니다" },
+        "provider": { "name": "플러그인 PathQL Provider", "desc": "플러그인이 제공하는 PathQL provider 정의와 소스 코드를 읽습니다" }
       }
     }
   }

@@ -8,15 +8,15 @@
     "vue-tsc": "vue-tsc"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.3.1",
     "@kabegame/core": "workspace:*",
+    "@kabegame/element-plus": "workspace:*",
+    "@kabegame/element-plus-icons": "workspace:*",
     "@kabegame/i18n": "workspace:*",
     "@tauri-apps/api": "^2.11",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-opener": "^2.0",
     "@vueuse/core": "^14.1.0",
     "axios": "^1.6.7",
-    "element-plus": "^2.5.14",
     "pinia": "^2.1.7",
     "tauri-plugin-android-battery-optimization-api": "^0.1.0",
     "tauri-plugin-picker-api": "workspace:*",

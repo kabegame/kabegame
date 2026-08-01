@@ -1,0 +1,68 @@
+import { getEventCode, triggerEvent } from '@kabegame/element-plus/utils'
+import { EVENT_CODE } from '@kabegame/element-plus/constants'
+
+import type MenuItem from './menu-item'
+
+class SubMenu {
+  public subMenuItems: NodeListOf<HTMLLIElement>
+  public subIndex: number
+  constructor(
+    public parent: MenuItem,
+    public domNode: ParentNode
+  ) {
+    this.subIndex = 0
+    this.subMenuItems = this.domNode.querySelectorAll('li')
+    this.addListeners()
+  }
+
+  gotoSubIndex(idx: number) {
+    if (idx === this.subMenuItems.length) {
+      idx = 0
+    } else if (idx < 0) {
+      idx = this.subMenuItems.length - 1
+    }
+    this.subMenuItems[idx].focus()
+    this.subIndex = idx
+  }
+
+  addListeners() {
+    const parentNode = this.parent.domNode
+    this.subMenuItems.forEach((el) => {
+      el.addEventListener('keydown', (event: KeyboardEvent) => {
+        const code = getEventCode(event)
+        let prevDef = false
+
+        switch (code) {
+          case EVENT_CODE.down: {
+            this.gotoSubIndex(this.subIndex + 1)
+            prevDef = true
+            break
+          }
+          case EVENT_CODE.up: {
+            this.gotoSubIndex(this.subIndex - 1)
+            prevDef = true
+            break
+          }
+          case EVENT_CODE.tab: {
+            triggerEvent(parentNode, 'mouseleave')
+            break
+          }
+          case EVENT_CODE.enter:
+          case EVENT_CODE.numpadEnter:
+          case EVENT_CODE.space: {
+            prevDef = true
+            ;(event.currentTarget as HTMLElement).click()
+            break
+          }
+        }
+        if (prevDef) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        return false
+      })
+    })
+  }
+}
+
+export default SubMenu

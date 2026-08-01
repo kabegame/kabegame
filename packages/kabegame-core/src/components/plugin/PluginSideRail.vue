@@ -39,8 +39,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { ElIcon } from "element-plus";
-import { CircleCheckFilled, WarningFilled } from "@element-plus/icons-vue";
+import { ElIcon } from "@kabegame/element-plus";
+import { CircleCheckFilled, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import type { Plugin } from "../../stores/plugins";
 import { useSurfStore } from "../../stores/surf";

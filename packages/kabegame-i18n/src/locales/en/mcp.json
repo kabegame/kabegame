@@ -53,7 +53,8 @@
         "description_template": { "name": "Plugin description template", "desc": "Read the plugin description page template" },
         "doc": { "name": "Plugin documentation", "desc": "Read the default plugin documentation" },
         "changelog": { "name": "Plugin changelog", "desc": "Read the default plugin changelog" },
-        "asset": { "name": "Plugin asset", "desc": "Read a resource file referenced by plugin documentation and changelogs" }
+        "asset": { "name": "Plugin asset", "desc": "Read a resource file referenced by plugin documentation and changelogs" },
+        "provider": { "name": "Plugin PathQL provider", "desc": "Read PathQL provider definitions and source contributed by a plugin" }
       }
     }
   }

@@ -1,0 +1,7 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/button/style'
+import '@kabegame/element-plus/components/checkbox/style'
+import '@kabegame/element-plus/components/checkbox-group/style'
+import '@kabegame/element-plus/components/virtual-list/style'
+import '@kabegame/element-plus/theme-chalk/src/transfer.scss'

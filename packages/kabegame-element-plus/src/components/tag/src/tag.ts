@@ -1,0 +1,103 @@
+import { buildProps } from '@kabegame/element-plus/utils'
+import { componentSizes } from '@kabegame/element-plus/constants'
+
+import type { ComponentSize } from '@kabegame/element-plus/constants'
+import type Tag from './tag.vue'
+import type { ExtractPublicPropTypes } from 'vue'
+
+export interface TagProps {
+  /**
+   * @description type of Tag
+   */
+  type?: 'primary' | 'success' | 'info' | 'warning' | 'danger'
+  /**
+   * @description whether Tag can be removed
+   */
+  closable?: boolean
+  /**
+   * @description whether to disable animations
+   */
+  disableTransitions?: boolean
+  /**
+   * @description whether Tag has a highlighted border
+   */
+  hit?: boolean
+  /**
+   * @description background color of the Tag
+   */
+  color?: string
+  /**
+   * @description size of Tag
+   */
+  size?: ComponentSize
+  /**
+   * @description theme of Tag
+   */
+  effect?: 'dark' | 'light' | 'plain'
+  /**
+   * @description whether Tag is rounded
+   */
+  round?: boolean
+}
+
+/**
+ * @deprecated Removed after 3.0.0, Use `TagProps` instead.
+ */
+export const tagProps = buildProps({
+  /**
+   * @description type of Tag
+   */
+  type: {
+    type: String,
+    values: ['primary', 'success', 'info', 'warning', 'danger'],
+    default: 'primary',
+  },
+  /**
+   * @description whether Tag can be removed
+   */
+  closable: Boolean,
+  /**
+   * @description whether to disable animations
+   */
+  disableTransitions: Boolean,
+  /**
+   * @description whether Tag has a highlighted border
+   */
+  hit: Boolean,
+  /**
+   * @description background color of the Tag
+   */
+  color: String,
+  /**
+   * @description size of Tag
+   */
+  size: {
+    type: String,
+    values: componentSizes,
+  },
+  /**
+   * @description theme of Tag
+   */
+  effect: {
+    type: String,
+    values: ['dark', 'light', 'plain'],
+    default: 'light',
+  },
+  /**
+   * @description whether Tag is rounded
+   */
+  round: Boolean,
+} as const)
+
+/**
+ * @deprecated Removed after 3.0.0, Use `TagProps` instead.
+ */
+export type TagPropsPublic = ExtractPublicPropTypes<typeof tagProps>
+
+export const tagEmits = {
+  close: (evt: MouseEvent) => evt instanceof MouseEvent,
+  click: (evt: MouseEvent) => evt instanceof MouseEvent,
+}
+export type TagEmits = typeof tagEmits
+
+export type TagInstance = InstanceType<typeof Tag> & unknown

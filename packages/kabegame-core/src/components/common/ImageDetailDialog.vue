@@ -32,7 +32,7 @@
           :fill-when-expanded="!isCompact"
         />
       </div>
-      <!-- 面板壳恒定存在（无插件数据时内容区为空），列不随内容有无出现/消失 -->
+      <!-- 面板壳恒定存在（无插件数据时显示空态），列不随内容有无出现/消失 -->
       <div class="detail-col-plugin">
         <ImagePluginDescriptionPanel
           :image="image"

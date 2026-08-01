@@ -1,0 +1,368 @@
+<template>
+  <div
+    ref="el$"
+    :class="[
+      ns.b(),
+      ns.is('dragging', !!dragState.draggingNode),
+      ns.is('drop-not-allow', !dragState.allowDrop),
+      ns.is('drop-inner', dragState.dropType === 'inner'),
+      { [ns.m('highlight-current')]: highlightCurrent },
+    ]"
+    role="tree"
+  >
+    <el-tree-node
+      v-for="child in root.childNodes"
+      :key="getNodeKey(child)"
+      :node="child"
+      :props="props"
+      :accordion="accordion"
+      :render-after-expand="renderAfterExpand"
+      :show-checkbox="showCheckbox"
+      :render-content="renderContent"
+      @node-expand="handleNodeExpand"
+    />
+    <div v-if="isEmpty" :class="ns.e('empty-block')">
+      <slot name="empty">
+        <span :class="ns.e('empty-text')">
+          {{ emptyText ?? t('el.tree.emptyText') }}
+        </span>
+      </slot>
+    </div>
+    <div
+      v-show="dragState.showDropIndicator"
+      ref="dropIndicator$"
+      :class="ns.e('drop-indicator')"
+    />
+  </div>
+</template>
+
+<script lang="ts">
+import {
+  computed,
+  defineComponent,
+  getCurrentInstance,
+  provide,
+  ref,
+  watch,
+} from 'vue'
+import { isEqual } from 'lodash-unified'
+import { useLocale, useNamespace } from '@kabegame/element-plus/hooks'
+import { formItemContextKey } from '@kabegame/element-plus/components/form'
+import TreeStore from './model/tree-store.ts'
+import { getNodeKey as getNodeKeyUtil, handleCurrentChange } from './model/util.ts'
+import ElTreeNode from './tree-node.vue'
+import { useNodeExpandEventBroadcast } from './model/useNodeExpandEventBroadcast.ts'
+import { useDragNodeHandler } from './model/useDragNode.ts'
+import { useKeydown } from './model/useKeydown.ts'
+import { ROOT_TREE_INJECTION_KEY } from './tokens.ts'
+import { treeEmits, treeProps } from './tree.ts'
+
+import type Node from './model/node.ts'
+import type { ComponentInternalInstance } from 'vue'
+import type { Nullable } from '@kabegame/element-plus/utils'
+import type { FilterValue, TreeData, TreeKey, TreeNodeData } from './tree.type.ts'
+
+export default defineComponent({
+  name: 'ElTree',
+  components: { ElTreeNode },
+  props: treeProps,
+  emits: treeEmits,
+  setup(props, ctx) {
+    const { t } = useLocale()
+    const ns = useNamespace('tree')
+
+    const store = ref<TreeStore>(
+      new TreeStore({
+        key: props.nodeKey,
+        data: props.data,
+        lazy: props.lazy,
+        props: props.props,
+        load: props.load,
+        currentNodeKey: props.currentNodeKey,
+        checkStrictly: props.checkStrictly,
+        checkDescendants: props.checkDescendants,
+        defaultCheckedKeys: props.defaultCheckedKeys,
+        defaultExpandedKeys: props.defaultExpandedKeys,
+        autoExpandParent: props.autoExpandParent,
+        defaultExpandAll: props.defaultExpandAll,
+        filterNodeMethod: props.filterNodeMethod,
+      })
+    )
+
+    store.value.initialize()
+
+    const root = ref<Node>(store.value.root)
+    const currentNode = ref<Node | null>(null)
+    const el$ = ref<Nullable<HTMLElement>>(null)
+    const dropIndicator$ = ref<Nullable<HTMLElement>>(null)
+
+    const { broadcastExpanded } = useNodeExpandEventBroadcast(props)
+
+    const { dragState } = useDragNodeHandler({
+      props,
+      ctx,
+      el$,
+      dropIndicator$,
+      store,
+    })
+
+    useKeydown({ el$ }, store)
+
+    const instance = getCurrentInstance()
+
+    const isSelectTree = computed(() => {
+      let parent = instance?.parent
+      while (parent) {
+        if (parent.type.name === 'ElTreeSelect') {
+          return true
+        }
+        parent = parent.parent
+      }
+      return false
+    })
+
+    const isEmpty = computed(() => {
+      const { childNodes } = root.value
+      return (
+        (!childNodes ||
+          childNodes.length === 0 ||
+          childNodes.every(({ visible }) => !visible)) &&
+        !isSelectTree.value
+      )
+    })
+
+    watch(
+      () => props.currentNodeKey,
+      (newVal) => {
+        store.value.setCurrentNodeKey(newVal ?? null)
+      }
+    )
+
+    watch(
+      () => props.defaultCheckedKeys,
+      (newVal, oldVal) => {
+        if (isEqual(newVal, oldVal)) return
+
+        store.value.setDefaultCheckedKey(newVal ?? [])
+      }
+    )
+
+    watch(
+      () => props.defaultExpandedKeys,
+      (newVal) => {
+        store.value.setDefaultExpandedKeys(newVal ?? [])
+      }
+    )
+
+    watch(
+      () => props.data,
+      (newVal) => {
+        store.value.setData(newVal)
+      },
+      { deep: true }
+    )
+
+    watch(
+      () => props.checkStrictly,
+      (newVal) => {
+        store.value.checkStrictly = newVal
+      }
+    )
+
+    const filter = (value: FilterValue) => {
+      if (!props.filterNodeMethod)
+        throw new Error('[Tree] filterNodeMethod is required when filter')
+      store.value.filter(value)
+    }
+
+    const getNodeKey = (node: Node) => {
+      return props.nodeKey ? getNodeKeyUtil(props.nodeKey, node.data) : node.id
+    }
+
+    const requireNodeKey = (methodName: string) => {
+      if (!props.nodeKey) {
+        throw new Error(`[Tree] nodeKey is required in ${methodName}`)
+      }
+    }
+
+    const getNodePath = (data: TreeKey | TreeNodeData) => {
+      requireNodeKey('getNodePath')
+
+      const node = store.value.getNode(data)
+      if (!node) return []
+      const path = [node.data]
+      let parent = node.parent
+      while (parent && parent !== root.value) {
+        path.push(parent.data)
+        parent = parent.parent
+      }
+      return path.reverse()
+    }
+
+    const getCheckedNodes = (
+      leafOnly?: boolean,
+      includeHalfChecked?: boolean
+    ): TreeNodeData[] => {
+      return store.value.getCheckedNodes(leafOnly, includeHalfChecked)
+    }
+
+    const getCheckedKeys = (leafOnly?: boolean): TreeKey[] => {
+      return store.value.getCheckedKeys(leafOnly)
+    }
+
+    const getCurrentNode = () => {
+      const currentNode = store.value.getCurrentNode()
+      return currentNode ? currentNode.data : null
+    }
+
+    const getCurrentKey = (): TreeKey | null => {
+      requireNodeKey('getCurrentKey')
+
+      const currentNode = getCurrentNode()
+      return currentNode ? currentNode[props.nodeKey!] : null
+    }
+
+    const setCheckedNodes = (nodes: Node[], leafOnly?: boolean) => {
+      requireNodeKey('setCheckedNodes')
+
+      store.value.setCheckedNodes(nodes, leafOnly)
+    }
+
+    const setCheckedKeys = (keys: TreeKey[], leafOnly?: boolean) => {
+      requireNodeKey('setCheckedKeys')
+
+      store.value.setCheckedKeys(keys, leafOnly)
+    }
+
+    const setChecked = (
+      data: TreeKey | TreeNodeData,
+      checked: boolean,
+      deep: boolean = false
+    ) => {
+      store.value.setChecked(data, checked, deep)
+    }
+
+    const getHalfCheckedNodes = (): TreeNodeData[] => {
+      return store.value.getHalfCheckedNodes()
+    }
+
+    const getHalfCheckedKeys = (): TreeKey[] => {
+      return store.value.getHalfCheckedKeys()
+    }
+
+    const setCurrentNode = (node: Node, shouldAutoExpandParent = true) => {
+      requireNodeKey('setCurrentNode')
+
+      handleCurrentChange(store, ctx.emit, () => {
+        broadcastExpanded(node)
+        store.value.setUserCurrentNode(node, shouldAutoExpandParent)
+      })
+    }
+
+    const setCurrentKey = (
+      key: TreeKey | null = null,
+      shouldAutoExpandParent = true
+    ) => {
+      requireNodeKey('setCurrentKey')
+
+      handleCurrentChange(store, ctx.emit, () => {
+        broadcastExpanded()
+        store.value.setCurrentNodeKey(key, shouldAutoExpandParent)
+      })
+    }
+
+    const getNode = (data: TreeKey | TreeNodeData): Node => {
+      return store.value.getNode(data)
+    }
+
+    const remove = (data: TreeNodeData | Node) => {
+      store.value.remove(data)
+    }
+
+    const append = (
+      data: TreeNodeData,
+      parentNode: TreeNodeData | TreeKey | Node
+    ) => {
+      store.value.append(data, parentNode)
+    }
+
+    const insertBefore = (
+      data: TreeNodeData,
+      refNode: TreeKey | TreeNodeData | Node
+    ) => {
+      store.value.insertBefore(data, refNode)
+    }
+
+    const insertAfter = (
+      data: TreeNodeData,
+      refNode: TreeKey | TreeNodeData | Node
+    ) => {
+      store.value.insertAfter(data, refNode)
+    }
+
+    const handleNodeExpand = (
+      nodeData: TreeNodeData,
+      node: Node,
+      instance: ComponentInternalInstance
+    ) => {
+      broadcastExpanded(node)
+      ctx.emit('node-expand', nodeData, node, instance)
+    }
+
+    const updateKeyChildren = (key: TreeKey, data: TreeData) => {
+      requireNodeKey('updateKeyChildren')
+
+      store.value.updateChildren(key, data)
+    }
+
+    provide(ROOT_TREE_INJECTION_KEY, {
+      ctx,
+      props,
+      store,
+      root,
+      currentNode,
+      instance,
+    })
+
+    provide(formItemContextKey, undefined)
+
+    return {
+      ns,
+      // ref
+      store,
+      root,
+      currentNode,
+      dragState,
+      el$,
+      dropIndicator$,
+
+      // computed
+      isEmpty,
+
+      // methods
+      filter,
+      getNodeKey,
+      getNodePath,
+      getCheckedNodes,
+      getCheckedKeys,
+      getCurrentNode,
+      getCurrentKey,
+      setCheckedNodes,
+      setCheckedKeys,
+      setChecked,
+      getHalfCheckedNodes,
+      getHalfCheckedKeys,
+      setCurrentNode,
+      setCurrentKey,
+      t,
+      getNode,
+      remove,
+      append,
+      insertBefore,
+      insertAfter,
+      handleNodeExpand,
+      updateKeyChildren,
+    }
+  },
+})
+</script>

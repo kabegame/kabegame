@@ -1,0 +1,113 @@
+<script lang="ts">
+import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
+import { pick } from 'lodash-unified'
+import { ElSelect, selectProps } from '@kabegame/element-plus/components/select'
+import { ElTree, treeProps } from '@kabegame/element-plus/components/tree'
+import { useSelect } from './select'
+import { useTree } from './tree'
+import CacheOptions from './cache-options'
+
+import type { TreeInstance } from '@kabegame/element-plus/components/tree'
+import type { SelectInstance } from '@kabegame/element-plus/components/select'
+
+export default defineComponent({
+  name: 'ElTreeSelect',
+  // disable `ElSelect` inherit current attrs
+  inheritAttrs: false,
+  props: {
+    ...selectProps,
+    ...treeProps,
+    /**
+     * @description The cached data of the lazy node, the structure is the same as the data, used to get the label of the unloaded data
+     */
+    cacheData: {
+      type: Array,
+      default: () => [],
+    },
+  },
+  setup(props, context) {
+    const { slots, expose, emit, attrs } = context
+    const childAttrs = {
+      ...attrs,
+      onChange: undefined,
+    }
+
+    const select = ref<SelectInstance>()
+    const tree = ref<TreeInstance>()
+
+    const key = computed(() => props.nodeKey || props.valueKey || 'value')
+
+    const selectProps = useSelect(props, { attrs, emit }, { select, tree, key })
+    const { cacheOptions, ...treeProps } = useTree(
+      props,
+      { attrs: childAttrs, slots, emit },
+      {
+        select,
+        tree,
+        key,
+      }
+    )
+
+    // expose ElTree/ElSelect methods
+    const methods = reactive({})
+    expose(methods)
+    onMounted(() => {
+      Object.assign(methods, {
+        //TODO: let only tree and select in 3.0
+        ...pick(tree.value, [
+          'filter',
+          'updateKeyChildren',
+          'getCheckedNodes',
+          'setCheckedNodes',
+          'getCheckedKeys',
+          'setCheckedKeys',
+          'setChecked',
+          'getHalfCheckedNodes',
+          'getHalfCheckedKeys',
+          'getCurrentKey',
+          'getCurrentNode',
+          'setCurrentKey',
+          'setCurrentNode',
+          'getNode',
+          'remove',
+          'append',
+          'insertBefore',
+          'insertAfter',
+        ]),
+        ...pick(select.value, ['focus', 'blur', 'selectedLabel']),
+        treeRef: tree.value,
+        selectRef: select.value,
+      })
+    })
+
+    return () =>
+      h(
+        ElSelect,
+        /**
+         * 1. The `props` is processed into `Refs`, but `v-bind` and
+         * render function props cannot read `Refs`, so use `reactive`
+         * unwrap the `Refs` and keep reactive.
+         * 2. The keyword `ref` requires `Ref`, but `reactive` broke it,
+         * so use function.
+         */
+        reactive({
+          ...selectProps,
+          ref: (ref: SelectInstance) => (select.value = ref),
+        }),
+        {
+          ...slots,
+          default: () => [
+            h(CacheOptions, { data: cacheOptions.value }),
+            h(
+              ElTree,
+              reactive({
+                ...treeProps,
+                ref: (ref: TreeInstance) => (tree.value = ref),
+              })
+            ),
+          ],
+        }
+      )
+  },
+})
+</script>

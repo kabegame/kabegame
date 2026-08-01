@@ -35,7 +35,7 @@
 </template>
 
 <script setup lang="ts">
-import { Close, FolderOpened } from "@element-plus/icons-vue";
+import { Close, FolderOpened } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useOrganizeStore } from "@/stores/organize";
 import * as organizeService from "@/services/organize";

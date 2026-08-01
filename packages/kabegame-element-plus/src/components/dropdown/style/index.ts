@@ -1,0 +1,6 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/components/button/style'
+import '@kabegame/element-plus/components/button-group/style'
+import '@kabegame/element-plus/components/popper/style'
+import '@kabegame/element-plus/components/scrollbar/style'
+import '@kabegame/element-plus/theme-chalk/src/dropdown.scss'

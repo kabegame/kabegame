@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { ElMessageBox } from 'element-plus';
+import { ElMessageBox } from '@kabegame/element-plus';
 import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
 import { invoke } from "@/api/rpc";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";

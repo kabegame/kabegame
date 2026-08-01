@@ -71,9 +71,12 @@ export default defineConfig(async ({ mode }) => {
           inlineDynamicImports: !hasWallpaper && !hasSurfNavbar && !isWeb,
           ...(isWeb && {
             manualChunks(id: string) {
+              // vendored 的 element-plus / icons 是仓内源码（packages/kabegame-element-plus*），
+              // 不在 node_modules 下，必须在下面的 node_modules 闸门之前判掉，
+              // 否则会整包并进主 bundle。
+              if (id.includes("packages/kabegame-element-plus-icons")) return "vendor-ep-icons";
+              if (id.includes("packages/kabegame-element-plus")) return "vendor-element-plus";
               if (!id.includes("node_modules")) return undefined;
-              if (id.includes("@element-plus/icons-vue")) return "vendor-ep-icons";
-              if (id.includes("element-plus")) return "vendor-element-plus";
               if (id.includes("vant")) return "vendor-vant";
               if (id.includes("pinia") || id.includes("vue-router")) return "vendor-vue-router";
               if (id.includes("@vue") || id.includes("/vue/")) return "vendor-vue";

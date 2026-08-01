@@ -43,7 +43,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ArrowDown } from "@element-plus/icons-vue";
+import { ArrowDown } from "@kabegame/element-plus-icons";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { SUPPORTED_LANGUAGES, resolveLanguage } from "@kabegame/i18n";

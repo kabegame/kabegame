@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_search_metadata_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "gallery_search_metadata_query_provider",
+            "properties": { "query": "${capture[1]}" }
+        }
+    }
+}

@@ -27,6 +27,8 @@ export type PluginVarDef = {
   /** type 为 date 时可选：最早/最晚可选日，`YYYY-MM-DD` 或 `today` / `yesterday` */
   dateMin?: string;
   dateMax?: string;
+  /** 表单栅格宽度（1~4，缺省/非法值按 4 处理）；纯布局提示，不参与取值与校验 */
+  width?: number;
 };
 
 export function optionValue(opt: VarOption) {

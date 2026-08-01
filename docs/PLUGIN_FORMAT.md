@@ -171,6 +171,36 @@ KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、�
 
 - **V8 宿主 Cookie**：`Kabegame.requireCookie(host?): boolean` 从用户已访问并登录的畅游站点持久化记录中取 Cookie，注入当前任务请求头；省略 `host` 时使用插件 `baseUrl` 的 host，且 Cookie 明文不会返回脚本。
 
+### WebView 页面原生下载：`Kabegame.onNativeDownload`
+
+仅 WebView 后端提供 `Kabegame.onNativeDownload(callback): () => void`。它用于接收页面自身触发、且无法由插件直接 `fetch` / `downloadImage` 的浏览器原生下载终态；V8 后端没有浏览器窗口，不适用此 API。返回值是取消监听函数。WebView 每次导航都会重跑 bootstrap 并重建监听集合，因此插件必须在每页 `crawl.js` 顶层重新注册。
+
+页面原生下载会落到当前任务 VFS 的 `tmp/Downloads/<sha256(url) 前 16 位 hex>-<安全文件名>`。路径由 URL 与浏览器建议文件名纯函数生成，同一 URL 重复下载覆盖写入固定位置；Rust 不保存 waiter。下载成功、失败或取消都会触发回调，`Requested` 阶段分配 VFS 路径失败也会触发失败回调。
+
+| payload 字段 | 类型 | 说明 |
+|---|---|---|
+| `url` | `string` | 页面原生下载的原始 URL。 |
+| `success` | `boolean` | 是否下载成功。 |
+| `path` | `string?` | 仅成功时提供；当前任务 VFS 虚拟路径，可直接传给 `Kabegame.downloadImage`。 |
+| `name` | `string?` | 可取得时提供的下载文件名。 |
+| `error` | `string?` | 失败或取消时提供的可读错误。 |
+
+```js
+// crawl.js 顶层：每次页面导航都会重跑脚本，因此每页都要重新注册。
+Kabegame.onNativeDownload((payload) => {
+  if (!payload.success) {
+    Kabegame.warn(payload.error || "页面下载失败");
+    return;
+  }
+  void Kabegame.downloadImage(payload.path, {
+    name: payload.name,
+    url: payload.url,
+  });
+});
+```
+
+`tmp/Downloads` **不会自动清理**，插件需自行管理。不要在 `Kabegame.downloadImage(path)` 的 Promise 返回后立即删除源文件：该调用返回时只保证已入队，worker 仍可能在后台读取该路径；应延后到能够确认下载与后处理结束的安全时点（例如下一次任务启动）再清理。
+
 ### 插件私有文件系统：`Kabegame.fs`
 
 插件不能看到宿主物理目录。每次任务用 `Kabegame.fs.getRoot()` 取得形如 `/{handle}` 的虚拟根，再拼接以下挂载点：

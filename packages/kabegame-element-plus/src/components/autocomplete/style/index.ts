@@ -1,0 +1,5 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/theme-chalk/src/autocomplete.scss'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/scrollbar/style'
+import '@kabegame/element-plus/components/popper/style'

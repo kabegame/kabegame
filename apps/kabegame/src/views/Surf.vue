@@ -229,10 +229,10 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { ElDialog } from "element-plus";
-import { QuestionFilled, Right, Clock, Link } from "@element-plus/icons-vue";
+import { ElDialog } from "@kabegame/element-plus";
+import { QuestionFilled, Right, Clock, Link } from "@kabegame/element-plus-icons";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";

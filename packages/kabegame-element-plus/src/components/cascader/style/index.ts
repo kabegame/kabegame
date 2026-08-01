@@ -1,0 +1,6 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/theme-chalk/src/cascader.scss'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/popper/style'
+import '@kabegame/element-plus/components/tag/style'
+import '@kabegame/element-plus/components/cascader-panel/style'

@@ -17,7 +17,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useRoute } from "vue-router";
-import { WarningFilled } from "@element-plus/icons-vue";
+import { WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";

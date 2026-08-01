@@ -89,7 +89,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Grid, WarningFilled } from "@element-plus/icons-vue";
+import { Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import PluginLabelTags from "@kabegame/core/components/plugin/PluginLabelTags.vue";

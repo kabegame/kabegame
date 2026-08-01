@@ -19,6 +19,7 @@
                     :sort="taskDetailRouteStore.sort"
                     :page-size="pageSize"
                     :search="taskDetailRouteStore.search"
+                    :search-mode="taskDetailRouteStore.searchMode"
                     :provider-context-prefix="taskDetailRouteStore.computedContextPath"
                     :filter-features="taskFilterFeatures"
                     :sort-features="taskSortFeatures"
@@ -28,6 +29,7 @@
                     @update:sort="(s) => taskDetailRouteStore.navigate({ sort: s })"
                     @update:page-size="(ps) => taskDetailRouteStore.navigate({ page: 1, pageSize: ps })"
                     @update:search="(v) => taskDetailRouteStore.navigate({ page: 1, search: v })"
+                    @update:searchMode="(m) => { rememberTaskDetailSearchMode(m); taskDetailRouteStore.navigate({ page: 1, searchMode: m }); }"
                 />
 
                 <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
@@ -48,7 +50,7 @@ import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
 import { listen } from "@/api/rpc";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
 import GalleryFilters from "@/components/GalleryFilters.vue";
@@ -65,7 +67,7 @@ import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunPa
 import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
+import { useTaskDetailRouteStore, rememberTaskDetailSearchMode } from "@/stores/taskDetailRoute";
 import { IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useI18n } from "@kabegame/i18n";
@@ -271,9 +273,11 @@ watch(
             // 清理旧的定时器和监听器
             stopTimersAndListeners();
             // 切换到新任务（列表与总数由 ImageGrid 按 isActive/currentPath 自动加载）
+            rememberTaskDetailSearchMode('display-name')
             taskDetailRouteStore.patch({
                 taskId: newId,
                 search: '',
+                searchMode: 'display-name',
                 page: 1
             })
             // 重新启动定时器和监听器

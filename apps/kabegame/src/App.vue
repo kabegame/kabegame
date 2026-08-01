@@ -88,7 +88,7 @@
               </el-icon>
               <span>{{ $t('route.albums') }}</span>
             </el-menu-item>
-            <el-menu-item index="/plugin-browser">
+            <el-menu-item index="/plugins">
               <el-icon>
                 <Grid />
               </el-icon>
@@ -171,12 +171,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import zhCn from "element-plus/dist/locale/zh-cn.mjs";
-import en from "element-plus/dist/locale/en.mjs";
-import zhTw from "element-plus/dist/locale/zh-tw.mjs";
-import ja from "element-plus/dist/locale/ja.mjs";
-import ko from "element-plus/dist/locale/ko.mjs";
-import { Picture, Grid, Setting, Collection, Compass, AlarmClock } from "@element-plus/icons-vue";
+import { zhCn, en, zhTw, ja, ko } from "@kabegame/element-plus/locale";
+import { Picture, Grid, Setting, Collection, Compass, AlarmClock } from "@kabegame/element-plus-icons";
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -216,7 +212,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
 import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
@@ -273,7 +269,7 @@ const bottomTabs = computed(() => {
   return [
     { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
     { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
-    { index: "/plugin-browser", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
+    { index: "/plugins", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
   ];
 });
 

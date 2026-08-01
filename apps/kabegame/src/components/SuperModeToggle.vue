@@ -15,7 +15,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElSwitch, ElTooltip } from "element-plus";
+import { ElSwitch, ElTooltip } from "@kabegame/element-plus";
 import { useApp } from "@/stores/app";
 
 const app = useApp();

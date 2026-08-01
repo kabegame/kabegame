@@ -1,3 +1,4 @@
+use crate::storage::metadata_search_text::search_text_from_json_str;
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -229,14 +230,29 @@ pub(crate) fn insert_metadata_id(
     plugin_version: u32,
 ) -> Result<i64, String> {
     let plugin_version_i64 = i64::from(plugin_version);
+    let search_text = search_text_from_json_str(data_json);
 
     conn.execute(
-        "INSERT INTO metadata (data, plugin_id, plugin_version)
-         VALUES (?1, ?2, ?3)",
-        params![data_json, plugin_id, plugin_version_i64],
+        "INSERT INTO metadata (data, plugin_id, plugin_version, search_text)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![data_json, plugin_id, plugin_version_i64, search_text],
     )
     .map_err(|e| format!("insert metadata: {}", e))?;
 
+    Ok(conn.last_insert_rowid())
+}
+
+fn insert_image_metadata_row(
+    conn: &rusqlite::Connection,
+    data_json: &str,
+    parser_version: u32,
+) -> Result<i64, String> {
+    let search_text = search_text_from_json_str(data_json);
+    conn.execute(
+        "INSERT INTO image_metadata (data, parser_version, search_text) VALUES (?1, ?2, ?3)",
+        params![data_json, i64::from(parser_version), search_text],
+    )
+    .map_err(|e| format!("insert image_metadata: {}", e))?;
     Ok(conn.last_insert_rowid())
 }
 
@@ -411,11 +427,12 @@ impl Storage {
             tx.execute("DELETE FROM metadata WHERE id = ?1", params![row_id])
                 .map_err(|e| format!("delete merged metadata row: {e}"))?;
         } else {
+            let search_text = search_text_from_json_str(new_data);
             tx.execute(
                 "UPDATE metadata
-                 SET data = ?1, plugin_version = ?2
-                 WHERE id = ?3",
-                params![new_data, new_version_i64, row_id],
+                 SET data = ?1, plugin_version = ?2, search_text = ?3
+                 WHERE id = ?4",
+                params![new_data, new_version_i64, search_text, row_id],
             )
             .map_err(|e| format!("update migrated metadata row: {e}"))?;
         }
@@ -503,12 +520,7 @@ impl Storage {
         let metadata_id = if let Some(id) = current_id {
             id
         } else if let Some(json) = json_if_missing {
-            tx.execute(
-                "INSERT INTO image_metadata (data, parser_version) VALUES (?1, ?2)",
-                params![json, i64::from(expected_version)],
-            )
-            .map_err(|e| format!("insert native metadata: {e}"))?;
-            tx.last_insert_rowid()
+            insert_image_metadata_row(&tx, json, expected_version)?
         } else {
             tx.commit()
                 .map_err(|e| format!("commit native metadata miss: {e}"))?;
@@ -569,12 +581,7 @@ impl Storage {
             return Ok(None);
         };
 
-        tx.execute(
-            "INSERT INTO image_metadata (data, parser_version) VALUES (?1, ?2)",
-            params![json, i64::from(expected_version)],
-        )
-        .map_err(|e| format!("insert image native metadata: {e}"))?;
-        let metadata_id = tx.last_insert_rowid();
+        let metadata_id = insert_image_metadata_row(&tx, json, expected_version)?;
         tx.execute(
             "UPDATE images SET image_metadata_id = ?1 WHERE id = ?2",
             params![metadata_id, image_id],

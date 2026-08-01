@@ -29,7 +29,7 @@
 <script setup lang="ts">
 import { computed, type Ref, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElCheckbox } from "element-plus";
+import { ElCheckbox } from "@kabegame/element-plus";
 
 type ImportItem = {
     path?: string;

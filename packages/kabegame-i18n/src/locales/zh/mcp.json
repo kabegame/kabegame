@@ -53,7 +53,8 @@
         "description_template": { "name": "插件描述模板", "desc": "读取插件描述页模板" },
         "doc": { "name": "插件文档", "desc": "读取插件默认文档" },
         "changelog": { "name": "插件更新日志", "desc": "读取插件默认更新日志" },
-        "asset": { "name": "插件资源", "desc": "读取插件文档与更新日志引用的资源文件" }
+        "asset": { "name": "插件资源", "desc": "读取插件文档与更新日志引用的资源文件" },
+        "provider": { "name": "插件 PathQL Provider", "desc": "读取插件贡献的 PathQL provider 定义与源码" }
       }
     }
   }

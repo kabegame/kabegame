@@ -12,8 +12,8 @@
 </template>
 
 <script setup lang="ts">
-import { Refresh } from "@element-plus/icons-vue";
-import { ElButton, ElIcon, ElMessage } from "element-plus";
+import { Refresh } from "@kabegame/element-plus-icons";
+import { ElButton, ElIcon, ElMessage } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useUpdaterStore } from "@/stores/updater";
 import * as updaterService from "@/services/updater";

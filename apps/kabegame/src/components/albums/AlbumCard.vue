@@ -64,7 +64,7 @@ import { computed, ref, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { Album } from "@/stores/albums";
-import { Loading } from "@element-plus/icons-vue";
+import { Loading } from "@kabegame/element-plus-icons";
 import { useAlbumStore } from "@/stores/albums";
 import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";

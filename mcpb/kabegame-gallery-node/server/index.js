@@ -40,6 +40,7 @@ const PLUGIN_SUB_RESOURCES = new Set([
   "doc",
   "changelog",
   "asset",
+  "provider",
 ]);
 
 function toBool(value, defaultValue = false) {
@@ -450,7 +451,8 @@ const ALL_TOOLS = [
         "With plugin_id and resource='info' (default), returns the trimmed plugin object. " +
         "Other resource values: 'icon' (base64 PNG), 'description_template' (EJS), " +
         "'doc' (doc.md, default locale), 'changelog' (CHANGELOG.md, default locale), " +
-        "'asset' (requires plugin-root-relative `key`).",
+        "'asset' (requires plugin-root-relative `key`), " +
+        "'provider' (list PathQL providers, or one provider's def+source with `key`=name).",
       inputSchema: {
         type: "object",
         properties: {
@@ -460,12 +462,22 @@ const ALL_TOOLS = [
           },
           resource: {
             type: "string",
-            enum: ["info", "icon", "description_template", "doc", "changelog", "asset"],
+            enum: [
+              "info",
+              "icon",
+              "description_template",
+              "doc",
+              "changelog",
+              "asset",
+              "provider",
+            ],
             description: "Sub-resource to fetch. Defaults to 'info'.",
           },
           key: {
             type: "string",
-            description: "Required when resource='asset' (a kbAssets plugin-root-relative path).",
+            description:
+              "Required when resource='asset' (plugin-root-relative path) or resource='provider' " +
+              "with a specific provider name; omit for resource='provider' to list all providers.",
           },
         },
       },
@@ -731,6 +743,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           case "asset": {
             assertRequiredIdentifier(args.key, "key", 512);
             uri += `/asset/${args.key}`;
+            break;
+          }
+          case "provider": {
+            if (isNonEmptyString(args.key)) {
+              uri += `/provider/${args.key}`;
+            } else {
+              uri += "/provider";
+            }
             break;
           }
           default:

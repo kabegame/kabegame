@@ -1,4 +1,4 @@
-import { Minus, SwitchButton } from "@element-plus/icons-vue";
+import { Minus, SwitchButton } from "@kabegame/element-plus-icons";
 import { invoke } from "@kabegame/core/api";
 import { resolveSettingWithPrompt } from "@kabegame/core/composables/useSettingChoice";
 import { IS_LINUX, IS_WINDOWS } from "@kabegame/core/env";

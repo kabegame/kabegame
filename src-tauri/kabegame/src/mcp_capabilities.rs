@@ -135,6 +135,7 @@ mcp_capabilities! {
             PLUGIN_READ_DOC => "doc",
             PLUGIN_READ_CHANGELOG => "changelog",
             PLUGIN_READ_ASSET => "asset",
+            PLUGIN_READ_PROVIDER => "provider",
         }
     }
 }
@@ -193,6 +194,7 @@ fn read_plugin_capability_id(segments: &[&str]) -> Option<&'static str> {
         [_id, "doc"] => Some(ids::PLUGIN_READ_DOC),
         [_id, "changelog"] => Some(ids::PLUGIN_READ_CHANGELOG),
         [_id, "asset", ..] => Some(ids::PLUGIN_READ_ASSET),
+        [_id, "provider", ..] => Some(ids::PLUGIN_READ_PROVIDER),
         _ => None,
     }
 }

@@ -12,15 +12,6 @@
     <template #trailing>
       <span class="native-meta-chip native-meta-chip-primary">{{ mimeLabel }}</span>
     </template>
-    <div v-if="state === 'loaded'" class="native-meta-toolbar">
-      <el-button size="small" plain @click="copyText(buildTxtExport())">
-        {{ t("gallery.nativeMetaExportTxt") }}
-      </el-button>
-      <el-button size="small" plain @click="copyText(buildJsonExport())">
-        {{ t("gallery.nativeMetaExportJson") }}
-      </el-button>
-    </div>
-
     <div class="native-meta-body">
       <template v-if="state === 'loading'">
         <template v-if="showLoading">
@@ -37,17 +28,11 @@
         </template>
       </template>
 
-      <div v-else-if="state === 'empty'" class="native-meta-state">
-        <div class="native-meta-state-icon native-meta-state-icon-empty">
-          <el-icon><Document /></el-icon>
-        </div>
-        <div class="native-meta-state-title">
-          {{ t("gallery.nativeMetaEmptyTitle") }}
-        </div>
-        <div class="native-meta-state-desc">
-          {{ t(emptyDescKey) }}
-        </div>
-      </div>
+      <DetailPanelEmptyState
+        v-else-if="state === 'empty'"
+        :title="t('gallery.nativeMetaEmptyTitle')"
+        :description="t(emptyDescKey)"
+      />
 
       <div v-else-if="state === 'error'" class="native-meta-state" role="alert">
         <div class="native-meta-state-icon native-meta-state-icon-error">
@@ -156,13 +141,13 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
+import DetailPanelEmptyState from "./DetailPanelEmptyState.vue";
 import {
   CopyDocument,
-  Document,
   Loading,
   Refresh,
   WarningFilled,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { kameMessage as ElMessage } from "../../utils/kameMessage";
 import { useNativeMetadataState } from "../../composables/useNativeMetadataState";
@@ -176,7 +161,6 @@ import { displayImageMimeType } from "../../utils/mediaMime";
 
 type NativeMetadataImageLike = {
   id?: string;
-  displayName?: string;
   type?: string;
 };
 
@@ -265,23 +249,6 @@ function groupText(group: NativeGroup): string {
   return [header, ...group.entries.map(entryText)].join("\n");
 }
 
-function buildTxtExport(): string {
-  const title = t("gallery.nativeMetaTitle");
-  const displayName = props.image?.displayName || "—";
-  return [
-    `# ${title} — ${displayName}`,
-    "",
-    ...displayGroups.value.flatMap((group, index) => [
-      ...(index > 0 ? [""] : []),
-      groupText(group),
-    ]),
-  ].join("\n");
-}
-
-function buildJsonExport(): string {
-  return JSON.stringify(payload.value, null, 2);
-}
-
 async function copyText(text: string): Promise<void> {
   try {
     if (IS_WEB) {
@@ -318,16 +285,6 @@ async function copyText(text: string): Promise<void> {
   color: var(--anime-primary-dark);
   background: color-mix(in srgb, var(--anime-primary) 14%, transparent);
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-}
-
-.native-meta-toolbar {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 9px 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--anime-primary) 15%, transparent);
 }
 
 .native-meta-body {
@@ -386,15 +343,6 @@ async function copyText(text: string): Promise<void> {
   justify-content: center;
   border-radius: 50%;
   font-size: 28px;
-}
-
-.native-meta-state-icon-empty {
-  color: var(--anime-secondary);
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--anime-primary) 14%, transparent),
-    color-mix(in srgb, var(--anime-secondary) 16%, transparent)
-  );
 }
 
 .native-meta-state-icon-error {

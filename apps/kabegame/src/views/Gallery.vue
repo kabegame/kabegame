@@ -17,6 +17,7 @@
               <GalleryToolbar :total-count="totalCount" :big-page-enabled="totalCount > pageSize"
                 :filters="galleryRouteStore.filters"
                 :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search"
+                :search-mode="searchMode"
                 :provider-context-prefix="galleryRouteStore.computedContextPath"
                 @refresh="handleManualRefresh"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
@@ -24,7 +25,8 @@
                 @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 }, { push: true })"
                 @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
                 @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
-                @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })" />
+                @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })"
+                @update:searchMode="(m) => { rememberGallerySearchMode(m); galleryRouteStore.navigate({ page: 1, searchMode: m }); }" />
 
               <!-- 大页分页器 -->
               <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage" :big-page-size="pageSize"
@@ -86,7 +88,7 @@ import { ref, computed, onMounted, watch, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Plus, FolderOpened, Connection } from "@element-plus/icons-vue";
+import { Plus, FolderOpened, Connection } from "@kabegame/element-plus-icons";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
@@ -101,7 +103,7 @@ import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import * as organizeService from "@/services/organize";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { createGallerySurface } from "@/components/imageGrid/surfaces/gallery";
-import { useGalleryRouteStore } from "@/stores/galleryRoute";
+import { useGalleryRouteStore, rememberGallerySearchMode } from "@/stores/galleryRoute";
 import { newRandomSortSeed } from "@/utils/galleryPath";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
@@ -126,7 +128,7 @@ const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
-const { search } = storeToRefs(galleryRouteStore);
+const { search, searchMode } = storeToRefs(galleryRouteStore);
 
 const currentPath = computed(() => galleryRouteStore.computedPath);
 let lastTrackedGalleryPath: string | null = null;

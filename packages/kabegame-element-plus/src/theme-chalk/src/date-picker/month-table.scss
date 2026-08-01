@@ -1,0 +1,127 @@
+@use '../mixins/mixins' as *;
+@use '../common/var' as *;
+
+@include b(month-table) {
+  font-size: 12px;
+  margin: -1px;
+  border-collapse: collapse;
+
+  td {
+    width: 68px;
+    text-align: center;
+    padding: 8px 0;
+    cursor: pointer;
+    position: relative;
+
+    @include b(date-table-cell) {
+      height: 48px;
+      padding: 6px 0;
+      box-sizing: border-box;
+      // 月/年格子比日格宽，圆角取大一档与之区分
+      border-radius: getCssVar('datepicker-cell-radius-large');
+    }
+
+    // 与日视图一致：今天用描边而不是换字色
+    &.today {
+      .#{$namespace}-date-table-cell {
+        box-shadow: inset 0 0 0 1px getCssVar('datepicker-today-ring-color');
+      }
+
+      &:not(.disabled) .#{$namespace}-date-table-cell__text {
+        color: getCssVar('datepicker-active-color');
+        font-weight: 600;
+      }
+
+      &.start-date .#{$namespace}-date-table-cell__text,
+      &.end-date .#{$namespace}-date-table-cell__text {
+        color: $color-white;
+      }
+    }
+
+    &:not(.disabled):not(.current):hover .#{$namespace}-date-table-cell {
+      background-color: getCssVar('datepicker-hover-bg-color');
+    }
+
+    &.disabled .#{$namespace}-date-table-cell {
+      background-color: transparent;
+    }
+
+    &.disabled .#{$namespace}-date-table-cell__text {
+      background-color: transparent;
+      cursor: not-allowed;
+      color: getCssVar('datepicker-disabled-text-color');
+
+      &:hover {
+        color: getCssVar('datepicker-disabled-text-color');
+      }
+    }
+
+    @include b(date-table-cell__text) {
+      width: 54px;
+      height: 36px;
+      display: block;
+      line-height: 36px;
+      color: getCssVar('datepicker-text-color');
+      margin: 0 auto;
+      border-radius: 18px;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+
+      &:hover {
+        color: getCssVar('datepicker-hover-text-color');
+      }
+    }
+
+    &.in-range .#{$namespace}-date-table-cell {
+      background-color: getCssVar('datepicker-inrange-bg-color');
+
+      &:hover {
+        background-color: getCssVar('datepicker-inrange-hover-bg-color');
+      }
+    }
+
+    &.start-date .#{$namespace}-date-table-cell,
+    &.end-date .#{$namespace}-date-table-cell {
+      color: $color-white;
+    }
+
+    &.start-date .#{$namespace}-date-table-cell__text,
+    &.end-date .#{$namespace}-date-table-cell__text {
+      color: $color-white;
+      background: getCssVar('datepicker-active-bg');
+    }
+
+    &.start-date .#{$namespace}-date-table-cell {
+      margin-left: 3px;
+      border-top-left-radius: 24px;
+      border-bottom-left-radius: 24px;
+    }
+
+    &.end-date .#{$namespace}-date-table-cell {
+      margin-right: 3px;
+      border-top-right-radius: 24px;
+      border-bottom-right-radius: 24px;
+    }
+
+    // 选中压过今天：清掉描边，渐变统一画在 __text 的胶囊上（与日视图同一套口径）
+    &.current:not(.disabled) .#{$namespace}-date-table-cell {
+      box-shadow: none;
+    }
+
+    &.current:not(.disabled) .#{$namespace}-date-table-cell__text {
+      color: $color-white;
+      font-weight: 700;
+      background: getCssVar('datepicker-active-bg');
+    }
+
+    &:focus-visible {
+      outline: none;
+
+      .#{$namespace}-date-table-cell__text {
+        outline: 2px solid getCssVar('datepicker-active-color');
+        outline-offset: 1px;
+      }
+    }
+  }
+}

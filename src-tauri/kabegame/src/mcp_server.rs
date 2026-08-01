@@ -1,5 +1,7 @@
 //! MCP 的 `plugin://{id}/asset/{path}` 中，path 是归一化后的插件根相对路径；
 //! 资源来自 `kbAssets`，由文档与更新日志共用。
+//! `plugin://{id}/provider` 列出插件贡献的 PathQL provider；
+//! `plugin://{id}/provider/{name}` 返回完整定义及其 DSL 源文。
 
 use kabegame_core::{
     emitter::GlobalEmitter,
@@ -94,6 +96,8 @@ Other read schemes:
   plugin://{id}/doc                      default-locale doc.md
   plugin://{id}/changelog                default-locale CHANGELOG.md
   plugin://{id}/asset/{path}             one plugin asset, MIME by extension
+  plugin://{id}/provider                 list of PathQL providers this plugin contributes
+  plugin://{id}/provider/{name}          one provider def + its DSL source
 
 For asset, path is the normalized plugin-root-relative path declared in kbAssets. Documentation
 and changelogs share these entries. "Trimmed" plugin JSON has assets, iconPngBase64, and
@@ -577,6 +581,20 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type(mime)])
                         .into())
                     }
+                    [_plugin_id, "provider"] => {
+                        let value = serde_json::to_value(rows)
+                            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                        json_value_resource(value, request.uri)
+                    }
+                    [_plugin_id, "provider", _name] => {
+                        let row = rows.into_iter().next().ok_or_else(|| {
+                            McpError::resource_not_found(
+                                "provider_not_found",
+                                Some(json!({ "uri": request.uri })),
+                            )
+                        })?;
+                        json_value_resource(row, request.uri)
+                    }
                     _ => Err(McpError::resource_not_found(
                         "invalid_plugin_path",
                         Some(json!({ "uri": request.uri })),
@@ -730,6 +748,30 @@ impl ServerHandler for KabegameMcpServer {
                          declared in kbAssets; documentation and changelogs share these entries. \
                          MIME is inferred by extension.",
                     ),
+                ),
+                (
+                    "plugin.read.provider",
+                    ResourceTemplate::new(
+                        "plugin://{pluginId}/provider",
+                        "Plugin PathQL providers",
+                    )
+                    .with_description(
+                        "List of PathQL provider definitions this plugin contributes (name, \
+                         namespace, sourcePath, note summary).",
+                    )
+                    .with_mime_type("application/json"),
+                ),
+                (
+                    "plugin.read.provider",
+                    ResourceTemplate::new(
+                        "plugin://{pluginId}/provider/{name}",
+                        "Plugin PathQL provider detail",
+                    )
+                    .with_description(
+                        "One provider's full structured definition plus its raw DSL source text \
+                         (source is null for the application-injected default entry_provider).",
+                    )
+                    .with_mime_type("application/json"),
                 ),
             ]
             .into_iter()

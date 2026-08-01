@@ -26,7 +26,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ArrowDown } from "@element-plus/icons-vue";
+import { ArrowDown } from "@kabegame/element-plus-icons";
 import { useModal } from "../composables/useModal";
 
 const MIN_MS = 100;

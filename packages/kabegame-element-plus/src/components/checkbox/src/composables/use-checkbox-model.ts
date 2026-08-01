@@ -1,0 +1,48 @@
+import { computed, getCurrentInstance, inject, ref } from 'vue'
+import { isArray, isUndefined } from '@kabegame/element-plus/utils'
+import { UPDATE_MODEL_EVENT } from '@kabegame/element-plus/constants'
+import { checkboxGroupContextKey } from '../constants'
+
+import type { CheckboxProps } from '../checkbox'
+
+export const useCheckboxModel = (props: CheckboxProps) => {
+  const selfModel = ref<unknown>(false)
+  const { emit, vnode } = getCurrentInstance()!
+  const checkboxGroup = inject(checkboxGroupContextKey, undefined)
+  const isGroup = computed(() => isUndefined(checkboxGroup) === false)
+  const isLimitExceeded = ref(false)
+  const isControlled = computed(() => {
+    const rawProps = vnode.props ?? {}
+    return 'modelValue' in rawProps || 'model-value' in rawProps
+  })
+  const model = computed({
+    get() {
+      return isGroup.value
+        ? checkboxGroup?.modelValue?.value
+        : !isControlled.value
+          ? selfModel.value
+          : props.modelValue
+    },
+
+    set(val: unknown) {
+      if (isGroup.value && isArray(val)) {
+        isLimitExceeded.value =
+          checkboxGroup?.max?.value !== undefined &&
+          val.length > checkboxGroup?.max.value &&
+          val.length > model.value.length
+        isLimitExceeded.value === false && checkboxGroup?.changeEvent?.(val)
+      } else {
+        emit(UPDATE_MODEL_EVENT, val)
+        selfModel.value = val
+      }
+    },
+  })
+
+  return {
+    model,
+    isGroup,
+    isLimitExceeded,
+  }
+}
+
+export type CheckboxModel = ReturnType<typeof useCheckboxModel>

@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@kabegame/element-plus-icons";
 
 interface Props {
   showUp?: boolean;

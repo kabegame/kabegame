@@ -21,9 +21,9 @@
 
 协议层的单一入口。它负责：
 
-- 声明预置资源、15 条资源模板和 5 个工具。
+- 声明预置资源、18 条资源模板和 5 个工具。
 - 将 `images://`、`albums://`、`tasks://`、`surf_records://`、`plugin://` 读取交给 Provider Runtime。
-- 对返回行反序列化、单条/列表形态、插件二进制/文本子资源做协议适配。
+- 对返回行反序列化、单条/列表形态、插件二进制/文本/PathQL provider 子资源做协议适配。
 - 在 `resources/read` 和 `list_pathql_entry` 前执行 capability 检查。
 - 对未显式分页的大型 images 集合执行 MCP 专用分页护栏。
 - 通过 `/mcp` 暴露 rmcp 3.0 StreamableHTTP service。
@@ -53,7 +53,14 @@ disabled capability 列表直接写入 settings。`get_mcp_capabilities` 将能�
 - `images://x100x/1` → `images.read.raw`
 - `images://id_{id}` → `images.read.by_id`
 - `images://id_{id}/metadata` → `images.read.metadata`
-- 其它表资源按 list / by_id，plugin 再细分 info、icon、doc 等子资源
+- 其它表资源按 list / by_id，plugin 再细分 info、icon、doc、provider 等子资源
+
+插件贡献的 PathQL provider 通过两级只读资源按需读取：
+
+- `plugin://{id}/provider` 返回按名称排序的轻量摘要列表，包含 name、namespace、
+  sourcePath 与结构化 note。
+- `plugin://{id}/provider/{name}` 返回完整序列化定义和包内 DSL 源文；应用兜底注入的
+  `entry_provider` 没有包内源文，因此 source 为 null。
 
 `read_resource` 和 `list_pathql_entry` 都复用 `is_uri_capability_enabled`。发现工具没有独立
 capability；它发现哪个 scheme/path，就受该读能力约束。

@@ -14,7 +14,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onBeforeUnmount } from "vue";
-import { Search } from "@element-plus/icons-vue";
+import { Search } from "@kabegame/element-plus-icons";
 import { IS_WEB } from "@kabegame/core/env";
 
 const props = defineProps<{

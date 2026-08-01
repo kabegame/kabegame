@@ -31,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { ElCheckbox, ElDialog, ElIcon } from "element-plus";
+import { ElCheckbox, ElDialog, ElIcon } from "@kabegame/element-plus";
 import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "../../composables/useModal";

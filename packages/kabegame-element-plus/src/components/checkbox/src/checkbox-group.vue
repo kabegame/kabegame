@@ -1,0 +1,120 @@
+<template>
+  <component
+    :is="tag"
+    :id="groupId"
+    :class="ns.b('group')"
+    role="group"
+    :aria-label="
+      !isLabeledByFormItem ? ariaLabel || 'checkbox-group' : undefined
+    "
+    :aria-labelledby="isLabeledByFormItem ? formItem?.labelId : undefined"
+  >
+    <slot>
+      <component
+        :is="optionComponent"
+        v-for="(item, index) in options"
+        :key="index"
+        v-bind="getOptionProps(item)"
+      />
+    </slot>
+  </component>
+</template>
+
+<script lang="ts" setup>
+import { computed, nextTick, provide, toRefs, watch } from 'vue'
+import { isEqual, omit, pick } from 'lodash-unified'
+import { CHANGE_EVENT, UPDATE_MODEL_EVENT } from '@kabegame/element-plus/constants'
+import { NOOP } from '@kabegame/element-plus/utils'
+import { useNamespace } from '@kabegame/element-plus/hooks'
+import {
+  useFormDisabled,
+  useFormItem,
+  useFormItemInputId,
+} from '@kabegame/element-plus/components/form'
+import { checkboxDefaultProps, checkboxGroupEmits } from './checkbox-group.ts'
+import { checkboxGroupContextKey } from './constants.ts'
+import ElCheckbox from './checkbox.vue'
+import ElCheckboxButton from './checkbox-button.vue'
+
+import type {
+  CheckboxGroupProps,
+  CheckboxGroupValueType,
+} from './checkbox-group.ts'
+
+defineOptions({
+  name: 'ElCheckboxGroup',
+})
+
+const props = withDefaults(defineProps<CheckboxGroupProps>(), {
+  modelValue: () => [],
+  disabled: undefined,
+  tag: 'div',
+  validateEvent: true,
+  props: () => checkboxDefaultProps,
+  type: 'checkbox',
+})
+const emit = defineEmits(checkboxGroupEmits)
+const ns = useNamespace('checkbox')
+
+const checkboxDisabled = useFormDisabled()
+const { formItem } = useFormItem()
+const { inputId: groupId, isLabeledByFormItem } = useFormItemInputId(props, {
+  formItemContext: formItem,
+})
+
+const changeEvent = async (value: CheckboxGroupValueType) => {
+  emit(UPDATE_MODEL_EVENT, value)
+  await nextTick()
+  emit(CHANGE_EVENT, value)
+}
+
+const modelValue = computed({
+  get() {
+    return props.modelValue
+  },
+  set(val: CheckboxGroupValueType) {
+    changeEvent(val)
+  },
+})
+
+const aliasProps = computed(() => ({
+  ...checkboxDefaultProps,
+  ...props.props,
+}))
+const getOptionProps = (option: Record<string, any>) => {
+  const { label, value, disabled } = aliasProps.value
+  const base = {
+    label: option[label],
+    value: option[value],
+    disabled: option[disabled],
+  }
+  return { ...omit(option, [label, value, disabled]), ...base }
+}
+
+const optionComponent = computed(() =>
+  props.type === 'button' ? ElCheckboxButton : ElCheckbox
+)
+
+provide(checkboxGroupContextKey, {
+  ...pick(toRefs(props), [
+    'size',
+    'min',
+    'max',
+    'validateEvent',
+    'fill',
+    'textColor',
+  ]),
+  disabled: checkboxDisabled,
+  modelValue,
+  changeEvent,
+})
+
+watch(
+  () => props.modelValue,
+  (newVal, oldValue) => {
+    if (props.validateEvent && !isEqual(newVal, oldValue)) {
+      formItem?.validate('change').catch(NOOP)
+    }
+  }
+)
+</script>

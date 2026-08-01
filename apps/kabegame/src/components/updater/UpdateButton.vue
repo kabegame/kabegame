@@ -22,7 +22,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useUpdaterStore } from "@/stores/updater";
 import * as updaterService from "@/services/updater";

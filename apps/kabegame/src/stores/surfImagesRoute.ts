@@ -1,15 +1,25 @@
+import { ref } from "vue";
 import { createPathRouteStore } from "./pathRoute";
 import {
   buildComposablePath,
   parseComposablePath,
   buildComposableContextPrefix,
+  extractRootIdAndBody,
+  DEFAULT_GALLERY_SEARCH_MODE,
   type GalleryFilterSet,
+  type GallerySearchMode,
   type GallerySort,
 } from "@/utils/galleryPath";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const DEFAULT_PAGE_SIZE = 100;
-const SEARCH_PREFIX = "search/display-name/";
+
+/** 会话内记忆的搜索模式，清空搜索框后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
+const stickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+
+export function rememberSurfImagesSearchMode(mode: GallerySearchMode): void {
+  stickySearchMode.value = mode;
+}
 
 type SurfImagesRouteState = {
   host: string;
@@ -18,6 +28,7 @@ type SurfImagesRouteState = {
   page: number;
   pageSize: number;
   search: string;
+  searchMode: GallerySearchMode;
 };
 
 function createDefaultState(): SurfImagesRouteState {
@@ -29,30 +40,8 @@ function createDefaultState(): SurfImagesRouteState {
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? DEFAULT_PAGE_SIZE,
     search: "",
+    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   };
-}
-
-function extractHostAndBody(path: string): { host: string; body: string } {
-  const trimmed = (path || "").trim();
-  let segs = trimmed.split("/").filter(Boolean);
-  let search = "";
-  if (segs.length >= 3 && segs[0] === "search" && segs[1] === "display-name") {
-    try {
-      search = segs[2] ?? "";
-    } catch {
-      search = segs[2] ?? "";
-    }
-    segs = segs.slice(3);
-  }
-  if (segs.length >= 2 && segs[0] === "surf") {
-    const host = segs[1]!;
-    const body = segs.slice(2).join("/");
-    const searchPrefix = search
-      ? `${SEARCH_PREFIX}${search}/`
-      : "";
-    return { host, body: searchPrefix + body };
-  }
-  return { host: "", body: trimmed };
 }
 
 export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState>(
@@ -60,9 +49,12 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
   {
     settingKey: "surf-images-path",
     parse: (path) => {
-      const { host, body } = extractHostAndBody(path);
+      const { id: host, body } = extractRootIdAndBody(path, "surf");
       if (!host) return createDefaultState();
       const parsed = parseComposablePath(body);
+      if (parsed.search.trim()) {
+        stickySearchMode.value = parsed.searchMode;
+      }
       return {
         host,
         filters: parsed.filters,
@@ -70,6 +62,7 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
         page: parsed.page,
         pageSize: parsed.pageSize,
         search: parsed.search,
+        searchMode: parsed.search.trim() ? parsed.searchMode : stickySearchMode.value,
       };
     },
     build: (state) =>
@@ -80,11 +73,13 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
         page: state.page,
         pageSize: state.pageSize,
         search: state.search,
+        searchMode: state.searchMode,
       }),
     buildContext: (state) =>
       buildComposableContextPrefix(
         `surf/${state.host}`,
         state.search,
+        state.searchMode,
       ),
     defaultState: createDefaultState,
     onStateChange: (state) => {

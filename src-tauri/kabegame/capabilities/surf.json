@@ -4,7 +4,7 @@
   "windows": ["surf-*"],
   "webviews": ["surf-*"],
   "remote": {
-    "urls": ["https://*.*", "http://*.*"]
+    "urls": ["https://*.*:*", "http://*.*:*"]
   },
   "permissions": [
     "surf"

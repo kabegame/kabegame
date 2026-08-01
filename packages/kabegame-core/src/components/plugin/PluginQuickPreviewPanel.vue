@@ -40,8 +40,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElIcon } from "element-plus";
-import { ArrowRight, Grid } from "@element-plus/icons-vue";
+import { ElIcon } from "@kabegame/element-plus";
+import { ArrowRight, Grid } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import PluginLabelTags from "./PluginLabelTags.vue";
 import PluginQuickPreviewCarousel, {

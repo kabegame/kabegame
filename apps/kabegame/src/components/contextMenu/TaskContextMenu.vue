@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpened, Collection, Delete, VideoPause } from "@element-plus/icons-vue";
+import { FolderOpened, Collection, Delete, VideoPause } from "@kabegame/element-plus-icons";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 
 interface Props {

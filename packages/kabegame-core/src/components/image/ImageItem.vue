@@ -48,7 +48,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { WarningFilled, VideoPlay, VideoPause } from "@element-plus/icons-vue";
+import { WarningFilled, VideoPlay, VideoPause } from "@kabegame/element-plus-icons";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";

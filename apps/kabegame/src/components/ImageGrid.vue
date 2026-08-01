@@ -78,7 +78,13 @@ import type {
 } from "@kabegame/core/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
-import { singleFilterToSet, type GalleryFilter, type GalleryFilterSet } from "@/utils/galleryPath";
+import {
+  singleFilterToSet,
+  DEFAULT_GALLERY_SEARCH_MODE,
+  type GalleryFilter,
+  type GalleryFilterSet,
+  type GallerySearchMode,
+} from "@/utils/galleryPath";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -206,10 +212,10 @@ async function handleOpenSurfRecord(target: ImageDetailSurfRecordTarget) {
 
 function galleryFilterTargetToRoute(
   target: ImageDetailGalleryFilterTarget,
-): { filters: GalleryFilterSet; search: string } | null {
+): { filters: GalleryFilterSet; search: string; searchMode: GallerySearchMode } | null {
   if (target.type === "search") {
     const search = target.search.trim();
-    return search ? { filters: {}, search } : null;
+    return search ? { filters: {}, search, searchMode: DEFAULT_GALLERY_SEARCH_MODE } : null;
   }
 
   let filter: GalleryFilter;
@@ -232,7 +238,7 @@ function galleryFilterTargetToRoute(
       filter = { type: "aspect", range: target.range };
       break;
   }
-  return { filters: singleFilterToSet(filter), search: "" };
+  return { filters: singleFilterToSet(filter), search: "", searchMode: DEFAULT_GALLERY_SEARCH_MODE };
 }
 
 async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {

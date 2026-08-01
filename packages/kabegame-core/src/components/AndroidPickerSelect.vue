@@ -91,7 +91,7 @@
 <script setup lang="ts">
 import { computed, ref, useSlots, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ArrowDown } from "@element-plus/icons-vue";
+import { ArrowDown } from "@kabegame/element-plus-icons";
 import { useModal } from "../composables/useModal";
 import type { PluginLabel } from "../stores/pluginLabels";
 

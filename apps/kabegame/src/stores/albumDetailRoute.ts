@@ -1,13 +1,24 @@
+import { ref } from "vue";
 import { createPathRouteStore } from "./pathRoute";
 import {
   buildComposablePath,
   parseComposablePath,
   buildComposableContextPrefix,
+  extractRootIdAndBody,
+  DEFAULT_GALLERY_SEARCH_MODE,
   type GalleryFilterSet,
+  type GallerySearchMode,
   type GallerySort,
 } from "@/utils/galleryPath";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+
+/** 会话内记忆的搜索模式，清空搜索框后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
+const stickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+
+export function rememberAlbumDetailSearchMode(mode: GallerySearchMode): void {
+  stickySearchMode.value = mode;
+}
 
 type AlbumDetailRouteState = {
   albumId: string;
@@ -16,9 +27,8 @@ type AlbumDetailRouteState = {
   page: number;
   pageSize: number;
   search: string;
+  searchMode: GallerySearchMode;
 };
-
-const SEARCH_PREFIX = "search/display-name/";
 
 function createDefaultState(): AlbumDetailRouteState {
   const settings = useSettingsStore();
@@ -29,30 +39,8 @@ function createDefaultState(): AlbumDetailRouteState {
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
     search: "",
+    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   };
-}
-
-function extractAlbumIdAndBody(path: string): { albumId: string; body: string } {
-  const trimmed = (path || "").trim();
-  let segs = trimmed.split("/").filter(Boolean);
-  let search = "";
-  if (segs.length >= 3 && segs[0] === "search" && segs[1] === "display-name") {
-    try {
-      search = segs[2] ?? "";
-    } catch {
-      search = segs[2] ?? "";
-    }
-    segs = segs.slice(3);
-  }
-  if (segs.length >= 2 && segs[0] === "album") {
-    const albumId = segs[1]!;
-    const body = segs.slice(2).join("/");
-    const searchPrefix = search
-      ? `${SEARCH_PREFIX}${search}/`
-      : "";
-    return { albumId, body: searchPrefix + body };
-  }
-  return { albumId: "", body: trimmed };
 }
 
 export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteState>(
@@ -60,9 +48,12 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
   {
     settingKey: "album-detail-path",
     parse: (path) => {
-      const { albumId, body } = extractAlbumIdAndBody(path);
+      const { id: albumId, body } = extractRootIdAndBody(path, "album");
       if (!albumId) return createDefaultState();
       const parsed = parseComposablePath(body, [], "by-album-order");
+      if (parsed.search.trim()) {
+        stickySearchMode.value = parsed.searchMode;
+      }
       return {
         albumId,
         filters: parsed.filters,
@@ -70,6 +61,7 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
         page: parsed.page,
         pageSize: parsed.pageSize,
         search: parsed.search,
+        searchMode: parsed.search.trim() ? parsed.searchMode : stickySearchMode.value,
       };
     },
     build: (state) =>
@@ -80,11 +72,13 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
         page: state.page,
         pageSize: state.pageSize,
         search: state.search,
+        searchMode: state.searchMode,
       }),
     buildContext: (state) =>
       buildComposableContextPrefix(
         `album/${state.albumId}`,
         state.search,
+        state.searchMode,
       ),
     defaultState: createDefaultState,
     ignoreHide: (s) => s.albumId === HIDDEN_ALBUM_ID,

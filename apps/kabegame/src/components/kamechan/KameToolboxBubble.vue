@@ -52,7 +52,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Setting } from "@element-plus/icons-vue";
+import { Setting } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
 import { shortcutLabel } from "@/composables/useGlobalShortcuts";

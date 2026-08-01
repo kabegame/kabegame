@@ -23,7 +23,7 @@
 </template>
 
 <script setup lang="ts">
-import { Plus, ArrowRight } from "@element-plus/icons-vue";
+import { Plus, ArrowRight } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 
 interface Props {

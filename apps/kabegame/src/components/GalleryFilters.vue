@@ -109,11 +109,34 @@
         <span>{{ t("header.refresh") }}</span>
       </button>
 
+      <el-dropdown v-if="enableSearch" trigger="click" class="ml-auto" @command="onSearchModeCommand">
+        <el-button class="max-w-[280px]">
+          <el-icon class="mr-1.5 text-sm">
+            <Search />
+          </el-icon>
+          <span>{{ searchModeLabel(searchMode) }}</span>
+          <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
+            <ArrowDown />
+          </el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item
+              v-for="mode in GALLERY_SEARCH_MODES"
+              :key="mode"
+              :command="mode"
+              :class="{ 'is-active': searchMode === mode }"
+            >
+              {{ searchModeLabel(mode) }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+
       <SearchInput
         v-if="enableSearch"
         :model-value="search"
-        :placeholder="t('gallery.searchPlaceholder')"
-        class="ml-auto"
+        :placeholder="searchInputPlaceholder"
         @update:model-value="(v) => emit('update:search', v)"
       />
     </div>
@@ -305,7 +328,7 @@ import {
   ScaleToOriginal,
   Search,
   Sort,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
@@ -316,6 +339,7 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
+  GALLERY_SEARCH_MODES,
   filterForDimension,
   filterAspectRange,
   filterDateSegment,
@@ -334,6 +358,7 @@ import {
   type GalleryFilter,
   type GalleryFilterDimension,
   type GalleryFilterSet,
+  type GallerySearchMode,
   type GallerySort,
   type GallerySortField,
 } from "@/utils/galleryPath";
@@ -358,6 +383,8 @@ interface Props {
   sort?: GallerySort;
   pageSize?: number;
   search?: string;
+  /** 搜索目标：display-name(显示名) | metadata(插件元数据) | native-metadata(EXIF/PNG) */
+  searchMode?: GallerySearchMode;
   providerContextPrefix?: string;
   filterFeatures?: GalleryFilterDimension[];
   sortFeatures?: GallerySortField[];
@@ -372,6 +399,7 @@ const props = withDefaults(defineProps<Props>(), {
   sort: () => ({ field: "by-time", desc: false } as GallerySort),
   pageSize: 100,
   search: "",
+  searchMode: "display-name",
   providerContextPrefix: "",
   filterFeatures: () => [],
   sortFeatures: () => [],
@@ -386,6 +414,7 @@ const emit = defineEmits<{
   "update:sort": [value: GallerySort];
   "update:pageSize": [value: number];
   "update:search": [value: string];
+  "update:searchMode": [value: GallerySearchMode];
   refresh: [];
 }>();
 
@@ -396,6 +425,7 @@ const uiStore = useUiStore();
 const activeFilters = computed<GalleryFilterSet>(() => props.filters ?? singleFilterToSet(props.filter));
 const sortField = computed<GallerySortField>(() => props.sort.field);
 const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
+const searchMode = computed<GallerySearchMode>(() => props.searchMode);
 
 const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
   "unknown": "filterSize_unknown",
@@ -476,6 +506,33 @@ function sortFieldLabel(field: GallerySortField) {
   }
 }
 
+function searchModeLabel(mode: GallerySearchMode) {
+  switch (mode) {
+    case "display-name":
+      return t("gallery.searchModeDisplayName");
+    case "metadata":
+      return t("gallery.searchModeMetadata");
+    case "native-metadata":
+      return t("gallery.searchModeNativeMetadata");
+  }
+}
+
+const searchInputPlaceholder = computed(() => {
+  switch (props.searchMode) {
+    case "metadata":
+      return t("gallery.searchPlaceholderMetadata");
+    case "native-metadata":
+      return t("gallery.searchPlaceholderNativeMetadata");
+    default:
+      return t("gallery.searchPlaceholder");
+  }
+});
+
+function onSearchModeCommand(cmd: string) {
+  if (!GALLERY_SEARCH_MODES.includes(cmd as GallerySearchMode)) return;
+  emit("update:searchMode", cmd as GallerySearchMode);
+}
+
 function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
   dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };
 }
@@ -496,6 +553,7 @@ function clearDimension(dimension: GalleryFilterDimension) {
 function clearAllFilters() {
   emit("update:filters", {});
   emit("update:search", "");
+  emit("update:searchMode", "display-name");
   dimensionPopoverOpen.value = {};
 }
 

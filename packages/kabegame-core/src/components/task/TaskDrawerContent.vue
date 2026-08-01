@@ -162,7 +162,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useModal } from "../../composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { Close, Grid, Loading } from "@element-plus/icons-vue";
+import { Close, Grid, Loading } from "@kabegame/element-plus-icons";
 import { invoke, listen } from "../../api";
 import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";

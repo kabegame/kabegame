@@ -1,5 +1,5 @@
 import { invoke } from "@/api/rpc";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@kabegame/core/env";
 import { useSettingsStore } from "@kabegame/core/stores/settings";

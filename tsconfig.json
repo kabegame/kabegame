@@ -23,6 +23,10 @@
     /* Path aliases */
     "paths": {
       "@kabegame/core/*": ["./packages/kabegame-core/src/*"],
+      "@kabegame/element-plus": ["./packages/kabegame-element-plus/src/index.ts"],
+      "@kabegame/element-plus/*": ["./packages/kabegame-element-plus/src/*"],
+      "@kabegame/element-plus-icons": ["./packages/kabegame-element-plus-icons/src/index.ts"],
+      "@kabegame/element-plus-icons/*": ["./packages/kabegame-element-plus-icons/src/*"],
     }
   },
   "include": [

@@ -11,7 +11,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpened, Connection } from "@element-plus/icons-vue";
+import { FolderOpened, Connection } from "@kabegame/element-plus-icons";
 import { IS_WEB } from "@kabegame/core/env";
 import OptionPickerDrawer from "@kabegame/core/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@kabegame/core/components/common/OptionPickerDrawer.vue";

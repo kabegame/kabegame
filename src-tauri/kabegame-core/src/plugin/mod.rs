@@ -231,6 +231,8 @@ pub struct Plugin {
 #[derive(Debug, Clone)]
 pub struct PluginProviderDef {
     pub source_path: String,
+    /// 包内 DSL 原文；应用兜底注入的 default entry_provider 无源文
+    pub source: Option<String>,
     pub def: ProviderDef,
 }
 
@@ -2540,6 +2542,7 @@ fn parse_plugin_provider_entries(
         })?;
         providers.push(PluginProviderDef {
             source_path,
+            source: Some(source),
             def: normalize_plugin_provider_def(plugin_id, def)?,
         });
     }
@@ -2552,6 +2555,7 @@ fn parse_plugin_provider_entries(
     if !has_entry {
         providers.push(PluginProviderDef {
             source_path: "<default entry_provider>".to_string(),
+            source: None,
             def: default_plugin_entry_provider(plugin_id),
         });
     }
@@ -2963,6 +2967,9 @@ pub struct VarDefinition {
     pub date_min: Option<String>,
     #[serde(default, rename = "dateMax")]
     pub date_max: Option<String>,
+    /// 表单栅格宽度（1~4，缺省 4 = 独占一行）；纯布局提示，不参与取值
+    #[serde(default)]
+    pub width: Option<u8>,
 }
 
 impl<'de> Deserialize<'de> for VarDefinition {
@@ -3037,6 +3044,7 @@ impl<'de> Deserialize<'de> for VarDefinition {
             .get("dateMax")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let width = map.get("width").and_then(|v| v.as_u64()).map(|n| n as u8);
         Ok(VarDefinition {
             key,
             var_type,
@@ -3050,6 +3058,7 @@ impl<'de> Deserialize<'de> for VarDefinition {
             format,
             date_min,
             date_max,
+            width,
         })
     }
 }
@@ -3130,6 +3139,12 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
     }
     if let Some(ref d) = v.date_max {
         obj.insert("dateMax".to_string(), serde_json::Value::String(d.clone()));
+    }
+    if let Some(w) = v.width {
+        obj.insert(
+            "width".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(w)),
+        );
     }
     serde_json::Value::Object(obj)
 }

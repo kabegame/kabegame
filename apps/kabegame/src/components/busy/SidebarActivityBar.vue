@@ -80,7 +80,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Loading, WarningFilled } from "@element-plus/icons-vue";
+import { Loading, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useBusyTasks } from "@/composables/useBusyTasks";

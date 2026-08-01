@@ -53,7 +53,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ArrowDown, Histogram } from "@element-plus/icons-vue";
+import { ArrowDown, Histogram } from "@kabegame/element-plus-icons";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 

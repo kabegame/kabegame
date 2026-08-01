@@ -158,7 +158,7 @@ import {
   InfoFilled,
   Picture,
   WarningFilled,
-} from "@element-plus/icons-vue";
+} from "@kabegame/element-plus-icons";
 import { usePluginStore } from "../../stores/plugins";
 
 /** 与 CrawlTask / 抽屉 ScriptTask 共用的最小字段 */

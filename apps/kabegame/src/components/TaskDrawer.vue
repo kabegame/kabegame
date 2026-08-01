@@ -49,9 +49,9 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Lightning } from "@element-plus/icons-vue";
+import { Lightning } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { useRoute, useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";

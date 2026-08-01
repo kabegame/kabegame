@@ -1,0 +1,472 @@
+<template>
+  <div
+    :class="[ns.b('panel'), ns.is('bordered', border)]"
+    @keydown="handleKeyDown"
+  >
+    <el-cascader-menu
+      v-for="(menu, index) in menus"
+      :key="index"
+      :ref="(item) => (menuList[index] = item as CascaderMenuInstance)"
+      :index="index"
+      :nodes="[...menu]"
+      :virtual-scroll="virtualScroll"
+      :item-size="itemSize"
+      :height="height"
+    >
+      <template #empty>
+        <slot name="empty" />
+      </template>
+    </el-cascader-menu>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import {
+  computed,
+  nextTick,
+  onBeforeUpdate,
+  onMounted,
+  provide,
+  reactive,
+  ref,
+  useSlots,
+  watch,
+} from 'vue'
+import { cloneDeep, flattenDeep, isEqual } from 'lodash-unified'
+import {
+  castArray,
+  focusNode,
+  getEventCode,
+  getSibling,
+  isClient,
+  isEmpty,
+  scrollIntoView,
+  unique,
+} from '@kabegame/element-plus/utils'
+import {
+  CHANGE_EVENT,
+  EVENT_CODE,
+  UPDATE_MODEL_EVENT,
+} from '@kabegame/element-plus/constants'
+import { useNamespace } from '@kabegame/element-plus/hooks'
+import ElCascaderMenu from './menu.vue'
+import Store from './store.ts'
+import Node from './node.ts'
+import {
+  CASCADER_PANEL_HEIGHT,
+  CASCADER_PANEL_ITEM_SIZE,
+  cascaderPanelEmits,
+  useCascaderConfig,
+} from './config.ts'
+import { checkNode, getMenuIndex, sortByOriginalOrder } from './utils.ts'
+import { CASCADER_PANEL_INJECTION_KEY } from './types.ts'
+
+import type {
+  CascaderNode,
+  CascaderNodeValue,
+  CascaderOption,
+  CascaderValue,
+  ElCascaderPanelContext,
+} from './types.ts'
+import type { CascaderMenuInstance } from './instance.ts'
+import type { CascaderPanelProps } from './config.ts'
+
+defineOptions({
+  name: 'ElCascaderPanel',
+})
+
+const props = withDefaults(defineProps<CascaderPanelProps>(), {
+  options: () => [],
+  props: () => ({}),
+  border: true,
+  itemSize: CASCADER_PANEL_ITEM_SIZE,
+  height: CASCADER_PANEL_HEIGHT,
+})
+const emit = defineEmits(cascaderPanelEmits)
+
+// for interrupt sync check status in lazy mode
+let manualChecked = false
+
+const ns = useNamespace('cascader')
+const config = useCascaderConfig(props)
+const slots = useSlots()
+
+let store: Store
+const initialLoaded = ref(true)
+const initialLoadedOnce = ref(false)
+const menuList = ref<CascaderMenuInstance[]>([])
+const checkedValue = ref<CascaderValue>()
+const menus = ref<CascaderNode[][]>([])
+const expandingNode = ref<CascaderNode>()
+const checkedNodes = ref<CascaderNode[]>([])
+
+const isHoverMenu = computed(() => config.value.expandTrigger === 'hover')
+const renderLabelFn = computed(() => props.renderLabel || slots.default)
+const virtualScroll = computed(() => props.virtualScroll)
+const itemSize = computed(() => props.itemSize)
+const height = computed(() => props.height)
+
+const initStore = () => {
+  const { options } = props
+  const cfg = config.value
+
+  manualChecked = false
+  store = new Store(options, cfg)
+  menus.value = [store.getNodes()]
+
+  if (cfg.lazy && isEmpty(props.options)) {
+    initialLoaded.value = false
+    lazyLoad(undefined, (list) => {
+      if (list) {
+        store = new Store(list, cfg)
+        menus.value = [store.getNodes()]
+      }
+      initialLoaded.value = true
+      syncCheckedValue(false, true)
+    })
+  } else {
+    syncCheckedValue(false, true)
+  }
+}
+
+const lazyLoad: ElCascaderPanelContext['lazyLoad'] = (node, cb) => {
+  const cfg = config.value
+  node! = node || new Node({}, cfg, undefined, true)
+  node.loading = true
+
+  const resolve = (dataList?: CascaderOption[]) => {
+    const _node = node as Node
+    const parent = _node.root ? null : _node
+    _node.loading = false
+    _node.loaded = true
+    _node.childrenData = _node.childrenData || []
+    dataList && store?.appendNodes(dataList, parent as Node)
+    dataList && cb?.(dataList)
+    if (node.level === 0) {
+      initialLoadedOnce.value = true
+    }
+  }
+
+  const reject = () => {
+    node!.loading = false
+    node!.loaded = false
+    if (node!.level === 0) {
+      initialLoaded.value = true
+    }
+  }
+
+  cfg.lazyLoad(node, resolve, reject)
+}
+
+const expandNode: ElCascaderPanelContext['expandNode'] = (node, silent) => {
+  const { level } = node
+  const newMenus = menus.value.slice(0, level)
+  let newExpandingNode: CascaderNode
+
+  if (node.isLeaf) {
+    newExpandingNode = node.pathNodes[level - 2]
+  } else {
+    newExpandingNode = node
+    newMenus.push(node.children)
+  }
+
+  if (expandingNode.value?.uid !== newExpandingNode?.uid) {
+    expandingNode.value = node
+    menus.value = newMenus
+    !silent && emit('expand-change', node?.pathValues || [])
+  }
+}
+
+const handleCheckChange: ElCascaderPanelContext['handleCheckChange'] = (
+  node,
+  checked,
+  emitClose = true
+) => {
+  const { checkStrictly, multiple } = config.value
+  const oldNode = checkedNodes.value[0]
+  manualChecked = true
+
+  !multiple && oldNode?.doCheck(false)
+  node.doCheck(checked)
+  calculateCheckedValue()
+  emitClose && !multiple && !checkStrictly && emit('close')
+  !emitClose && !multiple && expandParentNode(node)
+}
+
+const expandParentNode = (node: Node | undefined) => {
+  if (!node) return
+  node = node.parent
+  expandParentNode(node)
+  node && expandNode(node)
+}
+
+const getFlattedNodes = (leafOnly: boolean) => store?.getFlattedNodes(leafOnly)
+
+const getCheckedNodes = (leafOnly: boolean) => {
+  return getFlattedNodes(leafOnly)?.filter(({ checked }) => checked !== false)
+}
+
+const clearCheckedNodes = () => {
+  checkedNodes.value.forEach((node) => node.doCheck(false))
+  calculateCheckedValue()
+  menus.value = menus.value.slice(0, 1)
+  expandingNode.value = undefined
+  emit('expand-change', [])
+}
+
+const calculateCheckedValue = () => {
+  const { checkStrictly, multiple } = config.value
+  const oldNodes = checkedNodes.value
+  const newNodes = getCheckedNodes(!checkStrictly)!
+  // ensure the original order
+  const nodes = sortByOriginalOrder(oldNodes, newNodes)
+  const values = nodes.map((node) => node.valueByOption)
+  checkedNodes.value = nodes
+  checkedValue.value = multiple ? values : (values[0] ?? null)
+}
+
+const syncCheckedValue = (loaded = false, forced = false) => {
+  const { modelValue } = props
+  const { lazy, multiple, checkStrictly } = config.value
+  const leafOnly = !checkStrictly
+
+  if (
+    !initialLoaded.value ||
+    manualChecked ||
+    (!forced && isEqual(modelValue, checkedValue.value))
+  )
+    return
+
+  if (lazy && !loaded) {
+    const values: CascaderNodeValue[] = unique(
+      flattenDeep(castArray(modelValue as CascaderNodeValue[]))
+    )
+    const nodes = values
+      .map((val) => store?.getNodeByValue(val))
+      .filter((node) => !!node && !node.loaded && !node.loading) as Node[]
+
+    if (nodes.length) {
+      nodes.forEach((node) => {
+        lazyLoad(node, () => syncCheckedValue(false, forced))
+      })
+    } else {
+      syncCheckedValue(true, forced)
+    }
+  } else {
+    const values = multiple ? castArray(modelValue) : [modelValue]
+    const nodes = unique(
+      values.map((val) =>
+        store?.getNodeByValue(val as CascaderNodeValue, leafOnly)
+      )
+    ) as Node[]
+    syncMenuState(nodes, forced)
+    checkedValue.value = cloneDeep(modelValue ?? undefined)
+  }
+}
+
+const syncMenuState = (
+  newCheckedNodes: CascaderNode[],
+  reserveExpandingState = true
+) => {
+  const { checkStrictly } = config.value
+  const oldNodes = checkedNodes.value
+  const newNodes = newCheckedNodes.filter(
+    (node) => !!node && (checkStrictly || node.isLeaf)
+  )
+  const oldExpandingNode = store?.getSameNode(expandingNode.value!)
+  const newExpandingNode =
+    (reserveExpandingState && oldExpandingNode) || newNodes[0]
+
+  if (newExpandingNode) {
+    newExpandingNode.pathNodes.forEach((node) => expandNode(node, true))
+  } else {
+    expandingNode.value = undefined
+  }
+
+  oldNodes.forEach((node) => node.doCheck(false))
+  reactive(newNodes).forEach((node) => node.doCheck(true))
+  checkedNodes.value = newNodes
+  nextTick(scrollToExpandingNode)
+}
+
+const scrollToExpandingNode = () => {
+  if (!isClient) return
+
+  menuList.value.forEach((menu) => {
+    const menuElement = menu?.$el
+    if (menuElement) {
+      // virtual scroll mode, use scrollToItem method
+      if (virtualScroll.value) {
+        const activeIndex = menu?.getActiveNodeIndex?.()
+        if (activeIndex !== undefined && activeIndex >= 0) {
+          menu?.scrollToItem?.(activeIndex)
+        }
+      } else {
+        // logic for non-virtual scroll mode
+        const container = menuElement.querySelector(
+          `.${ns.namespace.value}-scrollbar__wrap`
+        )
+        let activeNode = menuElement.querySelector(
+          `.${ns.b('node')}.in-active-path`
+        )
+        if (!activeNode) {
+          const activeElements = menuElement.querySelectorAll(
+            `.${ns.b('node')}.${ns.is('active')}`
+          )
+          activeNode = activeElements[activeElements.length - 1]
+        }
+        scrollIntoView(container, activeNode)
+      }
+    }
+  })
+}
+
+const handleKeyDown = (e: KeyboardEvent) => {
+  const target = e.target as HTMLElement
+  const code = getEventCode(e)
+
+  switch (code) {
+    case EVENT_CODE.up:
+    case EVENT_CODE.down: {
+      e.preventDefault()
+      const distance = code === EVENT_CODE.up ? -1 : 1
+
+      if (virtualScroll.value) {
+        const menuIndex = getMenuIndex(target)
+        const menu = menuList.value[menuIndex]
+        if (menu) {
+          // For virtual scroll, calculate the target index and use focusNodeAt
+          const currentIndex = menu.getNodeIndexById(target.id)
+          if (currentIndex >= 0) {
+            const nodesInMenu = menus.value[menuIndex] ?? []
+            const nodesCount = nodesInMenu.length
+            // Find the next non-disabled node
+            let targetIndex = currentIndex + distance
+            while (targetIndex >= 0 && targetIndex < nodesCount) {
+              if (!nodesInMenu[targetIndex].isDisabled) {
+                menu.focusNodeAt(targetIndex)
+                return
+              }
+              targetIndex += distance
+            }
+          }
+        }
+      }
+
+      focusNode(
+        getSibling(
+          target,
+          distance,
+          `.${ns.b('node')}[tabindex="-1"]`
+        ) as HTMLElement
+      )
+      break
+    }
+    case EVENT_CODE.left: {
+      e.preventDefault()
+      const preMenu = menuList.value[getMenuIndex(target) - 1]
+      const expandedNode = preMenu?.$el.querySelector(
+        `.${ns.b('node')}[aria-expanded="true"]`
+      )
+      focusNode(expandedNode)
+      break
+    }
+    case EVENT_CODE.right: {
+      e.preventDefault()
+      const nextMenu = menuList.value[getMenuIndex(target) + 1]
+      const firstNode = nextMenu?.$el.querySelector(
+        `.${ns.b('node')}[tabindex="-1"]`
+      )
+      focusNode(firstNode)
+      break
+    }
+    case EVENT_CODE.enter:
+    case EVENT_CODE.numpadEnter:
+      checkNode(target)
+      break
+  }
+}
+
+provide(
+  CASCADER_PANEL_INJECTION_KEY,
+  reactive({
+    config,
+    expandingNode,
+    checkedNodes,
+    isHoverMenu,
+    initialLoaded,
+    renderLabelFn,
+    virtualScroll,
+    itemSize,
+    height,
+    lazyLoad,
+    expandNode,
+    handleCheckChange,
+  })
+)
+
+watch(
+  config,
+  (newVal, oldVal) => {
+    if (isEqual(newVal, oldVal)) return
+    initStore()
+  },
+  {
+    immediate: true,
+  }
+)
+
+watch(() => props.options, initStore, {
+  deep: true,
+})
+
+watch(
+  () => props.modelValue,
+  () => {
+    manualChecked = false
+    syncCheckedValue()
+  },
+  {
+    deep: true,
+  }
+)
+
+watch(
+  () => checkedValue.value,
+  (val) => {
+    if (!isEqual(val, props.modelValue)) {
+      emit(UPDATE_MODEL_EVENT, val)
+      emit(CHANGE_EVENT, val)
+    }
+  }
+)
+
+const loadLazyRootNodes = () => {
+  if (initialLoadedOnce.value || !initialLoaded.value) return
+  initStore()
+}
+
+onBeforeUpdate(() => (menuList.value = []))
+
+onMounted(() => !isEmpty(props.modelValue) && syncCheckedValue())
+
+defineExpose({
+  menuList,
+  menus,
+  checkedNodes,
+  handleKeyDown,
+  handleCheckChange,
+  getFlattedNodes,
+  /**
+   * @description get an array of currently selected node,(leafOnly) whether only return the leaf checked nodes, default is `false`
+   */
+  getCheckedNodes,
+  /**
+   * @description clear checked nodes
+   */
+  clearCheckedNodes,
+  calculateCheckedValue,
+  scrollToExpandingNode,
+  loadLazyRootNodes,
+})
+</script>

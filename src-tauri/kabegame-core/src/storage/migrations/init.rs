@@ -42,6 +42,7 @@ CREATE INDEX idx_tasks_start_time ON tasks(start_time DESC);
 CREATE TABLE metadata (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     data           TEXT    NOT NULL,
+    search_text    TEXT    NOT NULL DEFAULT '',
     plugin_version INTEGER NOT NULL DEFAULT 0,
     plugin_id      TEXT    NOT NULL DEFAULT ''
 );
@@ -52,6 +53,7 @@ CREATE INDEX idx_metadata_dedup
 CREATE TABLE image_metadata (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     data           TEXT    NOT NULL,
+    search_text    TEXT    NOT NULL DEFAULT '',
     parser_version INTEGER NOT NULL DEFAULT 0
 );
 

@@ -26,7 +26,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Close, Download } from "@element-plus/icons-vue";
+import { Close, Download } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useUpdaterStore } from "@/stores/updater";
 import { formatBytes } from "@/utils/formatBytes";

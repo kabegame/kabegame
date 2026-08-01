@@ -84,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { Delete, InfoFilled, Picture } from "@element-plus/icons-vue";
+import { Delete, InfoFilled, Picture } from "@kabegame/element-plus-icons";
 
 type TaskStatus = "pending" | "running" | "waiting_downloads" | "completed" | "failed" | "canceled";
 type ScriptTask = {

@@ -98,6 +98,41 @@ pub fn sanitize_stem_for_filename(stem: &str) -> String {
     out
 }
 
+/// 计算页面自发原生下载在任务 `tmp` 挂载下的固定相对路径。
+pub fn page_download_rel_path(url: &Url, suggested_name: Option<&str>) -> String {
+    let raw_name = suggested_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            url.path_segments()
+                .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+        })
+        .unwrap_or("download");
+    let path = Path::new(raw_name);
+    let stem = sanitize_stem_for_filename(
+        path.file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("download"),
+    );
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(sanitize_stem_for_filename);
+    let safe_name = if let Some(extension) = extension {
+        let reserve = 1 + extension.len();
+        let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
+        format!("{}.{}", clamp_utf8_len(&stem, stem_max), extension)
+    } else {
+        clamp_utf8_len(&stem, MAX_SAFE_FILENAME_LEN).to_string()
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(url.as_str().as_bytes());
+    let url_hash = format!("{:x}", hasher.finalize());
+    format!("Downloads/{}-{}", &url_hash[..16], safe_name)
+}
+
 pub fn normalize_ext(ext: &str, fallback_ext: &str) -> String {
     let e = ext.trim().trim_start_matches('.').trim();
     let e = if e.is_empty() { fallback_ext.trim() } else { e };
@@ -310,7 +345,7 @@ pub fn compute_unique_download_path_with_name(
 mod tests {
     use super::{
         build_safe_custom_filename, build_safe_filename, compute_unique_download_path,
-        compute_unique_download_path_with_name,
+        compute_unique_download_path_with_name, page_download_rel_path,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -445,6 +480,28 @@ mod tests {
             build_safe_custom_filename("Some.Page", Some("webp")),
             "Some.Page.webp"
         );
+    }
+
+    #[test]
+    fn page_download_path_is_stable_and_sanitized() {
+        let url = Url::parse("https://example.com/files/archive.tar.gz?token=secret").unwrap();
+        let path = page_download_rel_path(&url, Some("示例:压缩包.tar.gz"));
+        assert!(path.starts_with("Downloads/"));
+        assert_eq!(
+            path.len(),
+            "Downloads/".len() + 16 + 1 + "示例_压缩包.tar.gz".len()
+        );
+        assert!(path.ends_with("-示例_压缩包.tar.gz"));
+        assert_eq!(
+            path,
+            page_download_rel_path(&url, Some("示例:压缩包.tar.gz"))
+        );
+    }
+
+    #[test]
+    fn page_download_path_falls_back_to_url_segment() {
+        let url = Url::parse("https://example.com/files/wallpaper.webp").unwrap();
+        assert!(page_download_rel_path(&url, None).ends_with("-wallpaper.webp"));
     }
 }
 

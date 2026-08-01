@@ -1,0 +1,120 @@
+<template>
+  <el-popper-trigger
+    :id="id"
+    :virtual-ref="virtualRef"
+    :open="open"
+    :virtual-triggering="virtualTriggering"
+    :class="ns.e('trigger')"
+    @blur="onBlur"
+    @click="onClick"
+    @contextmenu="onContextMenu"
+    @focus="onFocus"
+    @mouseenter="onMouseenter"
+    @mouseleave="onMouseleave"
+    @keydown="onKeydown"
+  >
+    <slot />
+  </el-popper-trigger>
+</template>
+
+<script lang="ts" setup>
+import { inject, nextTick, ref, toRef, unref } from 'vue'
+import { ElPopperTrigger } from '@kabegame/element-plus/components/popper'
+import {
+  composeEventHandlers,
+  focusElement,
+  getEventCode,
+} from '@kabegame/element-plus/utils'
+import { useNamespace } from '@kabegame/element-plus/hooks'
+import { TOOLTIP_INJECTION_KEY } from './constants'
+import { whenTrigger } from './utils'
+import { useTooltipTriggerPropsDefaults } from './trigger'
+
+import type { UseTooltipTriggerProps } from './trigger'
+import type { OnlyChildExpose } from '@kabegame/element-plus/components/slot'
+
+defineOptions({
+  name: 'ElTooltipTrigger',
+})
+
+const props = withDefaults(
+  defineProps<UseTooltipTriggerProps>(),
+  useTooltipTriggerPropsDefaults
+)
+
+const ns = useNamespace('tooltip')
+const { controlled, id, open, onOpen, onClose, onToggle } = inject(
+  TOOLTIP_INJECTION_KEY,
+  undefined
+)!
+
+const triggerRef = ref<OnlyChildExpose | null>(null)
+
+const stopWhenControlledOrDisabled = () => {
+  if (unref(controlled) || props.disabled) {
+    return true
+  }
+}
+const trigger = toRef(props, 'trigger')
+const onMouseenter = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  whenTrigger(trigger, 'hover', (e) => {
+    onOpen(e)
+
+    if (props.focusOnTarget && e.target) {
+      nextTick(() => {
+        focusElement(e.target as HTMLElement, { preventScroll: true })
+      })
+    }
+  })
+)
+const onMouseleave = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  whenTrigger(trigger, 'hover', onClose)
+)
+const onClick = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  whenTrigger(trigger, 'click', (e) => {
+    // distinguish left click
+    if ((e as MouseEvent).button === 0) {
+      onToggle(e)
+    }
+  })
+)
+
+const onFocus = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  whenTrigger(trigger, 'focus', onOpen)
+)
+
+const onBlur = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  whenTrigger(trigger, 'focus', onClose)
+)
+
+const onContextMenu = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  whenTrigger(trigger, 'contextmenu', (e: Event) => {
+    e.preventDefault()
+    onToggle(e)
+  })
+)
+
+const onKeydown = composeEventHandlers(
+  stopWhenControlledOrDisabled,
+  (e: Event) => {
+    const code = getEventCode(e as KeyboardEvent)
+    if (props.triggerKeys.includes(code)) {
+      e.preventDefault()
+      onToggle(e)
+    }
+  }
+)
+
+defineExpose({
+  /**
+   * @description trigger element
+   */
+  triggerRef,
+})
+</script>

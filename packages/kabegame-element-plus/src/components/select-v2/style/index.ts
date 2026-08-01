@@ -1,0 +1,7 @@
+import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/components/input/style'
+import '@kabegame/element-plus/components/tag/style'
+import '@kabegame/element-plus/components/scrollbar/style'
+import '@kabegame/element-plus/components/popper/style'
+import '@kabegame/element-plus/components/virtual-list/style'
+import '@kabegame/element-plus/theme-chalk/src/select-v2.scss'

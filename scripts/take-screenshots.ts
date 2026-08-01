@@ -15,7 +15,7 @@ const OUT = join(
 const VIEWS = [
   { url: "/gallery",        file: "gallery.png",       waitFor: ".image-grid, .empty-state, [class*='gallery']" },
   { url: "/albums",         file: "albums.png",         waitFor: null },
-  { url: "/plugin-browser", file: "plugins.png",        waitFor: null },
+  { url: "/plugins", file: "plugins.png",        waitFor: null },
   { url: "/settings",       file: "settings.png",       waitFor: null },
   { url: "/surf",           file: "surf.png",           waitFor: null },
 ];
