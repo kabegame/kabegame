@@ -145,70 +145,6 @@ export function normalizeQuery(
   return normalizeSequence(tree);
 }
 
-/**
- * 弹窗顶层恒为「一个或组」：分支之间是 OR，分支内部才是 AND。
- * 数据模型本身没变（根仍是 AND 序列），只是编辑态约定根上恒有且仅有这一个组节点。
- */
-export function emptyRootGroup(): GalleryAdvancedQuery {
-  return [{ any: [[{ is: {} }]] }];
-}
-
-function rootGroupNode(
-  tree: GalleryAdvancedQuery,
-): { any: GalleryQueryNode[][] } | null {
-  if (tree.length !== 1) return null;
-  const node = tree[0]!;
-  if (isAnyNode(node)) return node;
-  if ("not" in node && node.not.length === 1 && isAnyNode(node.not[0]!)) {
-    return node.not[0] as { any: GalleryQueryNode[][] };
-  }
-  return null;
-}
-
-/** 把任意查询搬进编辑态形状：已经是根组就原样克隆，否则整条序列成为唯一分支。 */
-export function toRootGroup(
-  tree: GalleryAdvancedQuery,
-): GalleryAdvancedQuery {
-  if (rootGroupNode(tree)) return cloneQuery(tree);
-  const branch = tree.length > 0 ? cloneQuery(tree) : [{ is: {} }];
-  return [{ any: [branch] }];
-}
-
-/**
- * 编辑态归一：丢掉被删空的分支；分支全空时保留一行空条件（弹窗永远有得可编辑）。
- * 空分支在引擎里是恒真，留着会让 OR 整体恒真，不能当「什么都没填」看待。
- */
-export function ensureRootGroup(
-  tree: GalleryAdvancedQuery,
-): GalleryAdvancedQuery {
-  const rooted = toRootGroup(tree);
-  const group = rootGroupNode(rooted)!;
-  const branches = group.any.filter((branch) => branch.length > 0);
-  const nextGroup: GalleryQueryNode = {
-    any: branches.length > 0 ? branches : [[{ is: {} }]],
-  };
-  const root = rooted[0]!;
-  return "not" in root ? [{ not: [nextGroup] }] : [nextGroup];
-}
-
-/** 顶层或组只剩一条分支时坍缩成普通序列：语义等价，路径省下一对 `~any`/`~end`。 */
-export function collapseRootGroup(
-  tree: GalleryAdvancedQuery,
-): GalleryAdvancedQuery {
-  if (tree.length !== 1) return tree;
-  const node = tree[0]!;
-  if (isAnyNode(node)) {
-    return node.any.length === 1 ? node.any[0]! : tree;
-  }
-  if ("not" in node && node.not.length === 1) {
-    const inner = node.not[0]!;
-    if (isAnyNode(inner) && inner.any.length === 1) {
-      return [{ not: inner.any[0]! }];
-    }
-  }
-  return tree;
-}
-
 /** 将工具栏简单过滤复制为高级查询首行；noAlbum 是随行上下文，不进入树。 */
 export function advancedQueryFromSimpleFilters(
   filters: GalleryFilterSet,
@@ -676,8 +612,7 @@ export function facetListPath(
     nextTree = unwrapAncestorNots(nextTree, nodePath, 0);
   }
 
-  // 编辑态根组只有一条分支时先坍缩：facet 路径与最终应用的路径保持同一形状。
-  const normalized = collapseRootGroup(normalizeQuery(nextTree));
+  const normalized = normalizeQuery(nextTree);
   if (normalized.length === 0) return facetSegment;
 
   const serialized = serializeAdvancedQuery(normalized);

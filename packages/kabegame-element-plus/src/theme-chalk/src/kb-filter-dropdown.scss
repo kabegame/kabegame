@@ -180,6 +180,13 @@
     width: clamp(260px, 24vw, 340px);
     color: getCssVar('kb-filter-dropdown', 'option-text-color');
     outline: none;
+
+    // 自定义面板(#panel 插槽)自己决定宽度：内置列表那套固定宽度会把更宽的
+    // 面板(如搜索的模式切换 + 输入框)裁掉，视觉上就是内容溢出弹层。
+    @include when(custom) {
+      width: auto;
+      max-width: calc(100vw - 32px);
+    }
   }
 
   @include e(search) {

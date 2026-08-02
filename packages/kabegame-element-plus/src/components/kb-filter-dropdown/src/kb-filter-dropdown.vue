@@ -17,7 +17,7 @@
     <template #content>
       <div
         ref="panelRef"
-        :class="ns.e('panel')"
+        :class="[ns.e('panel'), ns.is('custom', !!$slots.panel)]"
         :tabindex="$slots.panel || searchable ? -1 : 0"
         @keydown="handlePanelKeydown"
       >

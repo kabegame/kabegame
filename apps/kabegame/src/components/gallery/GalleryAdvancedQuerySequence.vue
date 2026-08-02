@@ -28,7 +28,7 @@
         class="rounded-2xl border border-solid p-3"
         :class="groupFor(node, index)!.wrapperPath
           ? 'border-[color-mix(in_srgb,var(--el-color-error)_38%,transparent)] bg-[color-mix(in_srgb,var(--el-color-error)_5%,transparent)]'
-          : rootGroup
+          : groupDepth === 0
             ? 'border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)] bg-[color-mix(in_srgb,var(--anime-secondary)_6%,transparent)]'
             : 'border-[color-mix(in_srgb,var(--anime-secondary)_55%,transparent)] bg-[color-mix(in_srgb,var(--anime-secondary)_12%,transparent)]'"
       >
@@ -37,7 +37,7 @@
             {{ t("gallery.advancedOrGroup") }}
           </span>
           <span class="text-xs text-[var(--anime-text-secondary)]">
-            {{ rootGroup ? t("gallery.advancedRootGroupHint") : t("gallery.advancedOrGroupHint") }}
+            {{ t("gallery.advancedOrGroupHint") }}
           </span>
           <button
             type="button"
@@ -50,7 +50,6 @@
             {{ t("gallery.advancedNegateGroup") }}
           </button>
           <button
-            v-if="!rootGroup"
             type="button"
             class="inline-flex h-7 w-7 items-center justify-center rounded-lg border-0 bg-transparent text-[var(--anime-text-secondary)] hover:bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] hover:text-[var(--el-color-error)] cursor-pointer"
             :aria-label="t('common.delete')"
@@ -97,32 +96,15 @@
           </div>
         </template>
 
-        <!-- 顶层组的两个添加口都是「加一条分支」(或);嵌套组沿用单个「＋ 分支」 -->
-        <div class="mt-3 flex flex-wrap items-center gap-2">
+        <!-- 组里只加「或」:分支之间是或,分支内部不再提供任何添加口 -->
+        <div class="mt-3">
           <button
             type="button"
-            class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-primary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-primary)] cursor-pointer"
+            class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-secondary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-secondary-dark)] cursor-pointer"
             @click="addBranch(groupFor(node, index)!.groupPath, [{ is: {} }])"
           >
-            ＋ {{ rootGroup ? t("gallery.advancedAddOrCondition") : t("gallery.advancedAddBranch") }}
+            ＋ {{ t("gallery.advancedAddBranch") }}
           </button>
-          <el-tooltip
-            v-if="rootGroup"
-            :content="t('gallery.advancedNestingLimit')"
-            :disabled="canNestInBranch"
-            placement="top"
-          >
-            <span>
-              <button
-                type="button"
-                class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-secondary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-secondary-dark)] cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
-                :disabled="!canNestInBranch"
-                @click="addBranch(groupFor(node, index)!.groupPath, [newGroup()])"
-              >
-                ＋ {{ t("gallery.advancedAddOrGroup") }}
-              </button>
-            </span>
-          </el-tooltip>
         </div>
       </section>
 
@@ -156,31 +138,32 @@
       </section>
     </template>
 
-    <!--
-      顶层只有那一个或组,序列级添加口只在分支/取非组内部出现,且只留「嵌套或组」:
-      条件行本身已是八维同时生效(且),分支内再并一个条件行只在需要 A 且 (B 或 C) 时有意义。
-    -->
-    <div v-if="!rootGroup && canAddGroup" class="mt-1">
+    <!-- 添加口只在顶层:条件之间是「且」,或组作为一个整体参与这个「且」 -->
+    <div v-if="target.kind === 'root'" class="mt-1 flex flex-wrap items-center gap-2">
       <button
         type="button"
-        class="rounded-md border-0 bg-transparent px-1 py-0.5 text-xs text-[var(--anime-text-muted)] hover:text-[var(--anime-secondary-dark)] cursor-pointer"
-        :title="t('gallery.advancedAddNestedGroupHint')"
+        class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-primary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-primary)] cursor-pointer"
+        @click="appendNode({ is: {} })"
+      >
+        ＋ {{ t("gallery.advancedAddCondition") }}
+      </button>
+      <button
+        type="button"
+        class="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--anime-secondary)_50%,transparent)] bg-[var(--anime-bg-card)] px-3 py-1.5 text-sm font-semibold text-[var(--anime-secondary-dark)] cursor-pointer"
         @click="appendNode(newGroup())"
       >
-        ＋ {{ t("gallery.advancedAddNestedGroup") }}
+        ＋ {{ t("gallery.advancedAddOrGroup") }}
       </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ElIcon, ElTooltip } from "@kabegame/element-plus";
+import { ElIcon } from "@kabegame/element-plus";
 import { Close } from "@kabegame/element-plus-icons";
 import GalleryAdvancedQueryConditionRow from "./GalleryAdvancedQueryConditionRow.vue";
 import {
-  MAX_GROUP_DEPTH,
   removeNode,
   updateNode,
   type GalleryAdvancedQuery,
@@ -214,15 +197,12 @@ const props = withDefaults(defineProps<{
   groupDepth?: number;
   compact?: boolean;
   contextPrefix?: string;
-  /** 弹窗根:唯一节点是顶层或组,组头不可删、序列级添加口收起。 */
-  rootGroup?: boolean;
 }>(), {
   basePath: () => [],
   target: () => ({ kind: "root" }),
   groupDepth: 0,
   compact: false,
   contextPrefix: "images://gallery/",
-  rootGroup: false,
 });
 
 const emit = defineEmits<{
@@ -230,9 +210,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const canAddGroup = computed(() => props.groupDepth < MAX_GROUP_DEPTH);
-// 顶层「添加或组」落在分支里,深度比本序列深一层。
-const canNestInBranch = computed(() => props.groupDepth + 1 < MAX_GROUP_DEPTH);
+
 
 function nodePath(index: number): NodePath {
   return [...props.basePath, index];

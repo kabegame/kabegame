@@ -1,9 +1,6 @@
 import {
   advancedQueryFromSimpleFilters,
-  collapseRootGroup,
   conditionCount,
-  emptyRootGroup,
-  ensureRootGroup,
   facetListPath,
   type GalleryAdvancedQuery,
   getNode,
@@ -13,7 +10,6 @@ import {
   parseAdvancedBody,
   removeNode,
   serializeAdvancedQuery,
-  toRootGroup,
   updateNode,
 } from "../src/utils/galleryQuery.ts";
 import {
@@ -467,57 +463,4 @@ Deno.test("解析降级：parseComposablePath 对坏高级路径给空过滤而�
   // 不许把组内的 plugin/date 摊平进简单过滤。
   assertEquals(parsed.filters, {});
   assertEquals(parsed.sort.field, "by-time");
-});
-
-Deno.test("顶层或组：搬进编辑态、删空分支自愈、单分支坍缩", () => {
-  // 普通序列整条成为唯一分支。
-  assertEquals(
-    toRootGroup([{ is: { plugin: { pluginId: "pixiv" } } }]),
-    [{ any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] }],
-  );
-  // 空查询也给一行可编辑的空条件。
-  assertEquals(toRootGroup([]), [{ any: [[{ is: {} }]] }]);
-  assertEquals(emptyRootGroup(), [{ any: [[{ is: {} }]] }]);
-  // 已经是根组(含整组取非)则原样保留,不再套一层。
-  const negatedRoot: GalleryAdvancedQuery = [{
-    not: [{ any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] }],
-  }];
-  assertEquals(toRootGroup(negatedRoot), negatedRoot);
-
-  // 分支被删空:空分支在引擎里恒真,必须丢掉而不是留着。
-  assertEquals(
-    ensureRootGroup([{ any: [[], [{ is: { size: { range: "large" } } }]] }]),
-    [{ any: [[{ is: { size: { range: "large" } } }]] }],
-  );
-  // 全删光时回到一行空条件,弹窗不会变成空白。
-  assertEquals(ensureRootGroup([{ any: [[], []] }]), [{ any: [[{ is: {} }]] }]);
-
-  // 单分支坍缩:语义等价,路径省下一对 ~any/~end。
-  assertEquals(
-    collapseRootGroup([{ any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] }]),
-    [{ is: { plugin: { pluginId: "pixiv" } } }],
-  );
-  assertEquals(
-    collapseRootGroup(negatedRoot),
-    [{ not: [{ is: { plugin: { pluginId: "pixiv" } } }] }],
-  );
-  // 多分支不坍缩。
-  const twoBranches: GalleryAdvancedQuery = [{
-    any: [[{ is: { plugin: { pluginId: "a" } } }], [{
-      is: { plugin: { pluginId: "b" } },
-    }]],
-  }];
-  assertEquals(collapseRootGroup(twoBranches), twoBranches);
-
-  // 编辑态经坍缩后序列化,单条件不带组记号;多分支才出 ~any。
-  assertEquals(
-    serializeAdvancedQuery(
-      collapseRootGroup(toRootGroup([{ is: { plugin: { pluginId: "pixiv" } } }])),
-    ).body,
-    "plugin/pixiv",
-  );
-  assertEquals(
-    serializeAdvancedQuery(collapseRootGroup(twoBranches)).body,
-    "~any/plugin/a/~or/plugin/b/~end",
-  );
 });
