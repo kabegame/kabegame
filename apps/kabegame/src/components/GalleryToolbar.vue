@@ -94,83 +94,92 @@
   <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
   <div v-else-if="!uiStore.isCompact" class="mb-1 flex items-center gap-2">
     <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
-         清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。 -->
-    <el-scrollbar
-      class="filter-chip-row min-w-0 flex-1"
-      view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
-      @wheel="onFilterChipWheel"
+         清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
+         右边界的粉色渐隐只在还能往右滚时出现，提示「后面还有」。 -->
+    <div
+      class="filter-chip-viewport relative min-w-0 flex-1"
+      :class="{ 'has-more': chipRowHasMore }"
     >
-      <!-- 搜索与其它维度同列：chip 内 badge 显示搜索模式，面板里切模式 + 输入 -->
-      <KbFilterDropdown
-        :model-value="search.trim() ? search : null"
-        :chip-label="t('gallery.advancedChipSearch')"
-        :selected-label="search"
-        :badge="search.trim() ? searchModeLabel(searchMode) : undefined"
-        :any-label="t('gallery.filterAny')"
-        :title="t('gallery.searchPlaceholder')"
-        @update:model-value="(value) => { if (value === null) emit('update:search', ''); }"
+      <el-scrollbar
+        ref="filterChipScrollRef"
+        class="filter-chip-row"
+        view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
+        always
+        @scroll="updateChipRowOverflow"
+        @wheel="onFilterChipWheel"
       >
-        <template #icon>
-          <Search />
-        </template>
-        <template #panel>
-          <div class="w-[360px] max-w-[calc(100vw-48px)] p-3">
-            <KbTab
-              :model-value="searchMode"
-              :items="searchModeItems"
-              class="w-full"
-              @update:model-value="(mode) => emit('update:searchMode', mode)"
-            />
-            <SearchInput
-              :model-value="search"
-              :placeholder="searchInputPlaceholder"
-              class="mt-3 w-full!"
-              @update:model-value="(v) => emit('update:search', v)"
-            />
-          </div>
-        </template>
-      </KbFilterDropdown>
+        <!-- 搜索与其它维度同列：chip 内 badge 显示搜索模式，面板里切模式 + 输入 -->
+        <KbFilterDropdown
+          :model-value="search.trim() ? search : null"
+          :chip-label="t('gallery.advancedChipSearch')"
+          :selected-label="search"
+          :badge="search.trim() ? searchModeLabel(searchMode) : undefined"
+          :any-label="t('gallery.filterAny')"
+          :title="t('gallery.searchPlaceholder')"
+          @update:model-value="(value) => { if (value === null) emit('update:search', ''); }"
+        >
+          <template #icon>
+            <Search />
+          </template>
+          <template #panel>
+            <div class="w-[360px] max-w-[calc(100vw-48px)] p-3">
+              <KbTab
+                :model-value="searchMode"
+                :items="searchModeItems"
+                class="w-full"
+                @update:model-value="(mode) => emit('update:searchMode', mode)"
+              />
+              <SearchInput
+                :model-value="search"
+                :placeholder="searchInputPlaceholder"
+                class="mt-3 w-full!"
+                @update:model-value="(v) => emit('update:search', v)"
+              />
+            </div>
+          </template>
+        </KbFilterDropdown>
 
-      <KbFilterDropdown
-        v-for="dimension in filterDimensions"
-        :key="dimension.key"
-        :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
-        :chip-label="dimension.chipLabel"
-        :selected-label="dimensionChipValue(dimension.key)"
-        :any-label="t('gallery.filterAny')"
-        :title="dimension.title"
-        @open="setDimensionPopoverOpen(dimension.key, true)"
-        @close="setDimensionPopoverOpen(dimension.key, false)"
-        @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
-      >
-        <template #icon>
-          <component :is="dimension.icon" />
-        </template>
-        <template #panel="{ close }">
-          <div class="p-1.5">
-            <button
-              type="button"
-              class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[rgba(255,107,157,0.07)]"
-              :class="{
-                '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
-              }"
-              @click="clearDimension(dimension.key); close();"
-            >
-              {{ t("gallery.filterAny") }}
-            </button>
-            <GalleryFilterTree
-              ref="providerTreeRef"
-              :context-prefix="providerContextPrefix"
-              :filters="activeFilters"
-              :filter="filterForDimension(activeFilters, dimension.key)"
-              :dimension="dimension.key"
-              :visible="!!dimensionPopoverOpen[dimension.key]"
-              @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
-            />
-          </div>
-        </template>
-      </KbFilterDropdown>
-    </el-scrollbar>
+        <KbFilterDropdown
+          v-for="dimension in filterDimensions"
+          :key="dimension.key"
+          :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
+          :chip-label="dimension.chipLabel"
+          :selected-label="dimensionChipValue(dimension.key)"
+          :any-label="t('gallery.filterAny')"
+          :title="dimension.title"
+          @open="setDimensionPopoverOpen(dimension.key, true)"
+          @close="setDimensionPopoverOpen(dimension.key, false)"
+          @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
+        >
+          <template #icon>
+            <component :is="dimension.icon" />
+          </template>
+          <template #panel="{ close }">
+            <div class="p-1.5">
+              <button
+                type="button"
+                class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[rgba(255,107,157,0.07)]"
+                :class="{
+                  '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
+                }"
+                @click="clearDimension(dimension.key); close();"
+              >
+                {{ t("gallery.filterAny") }}
+              </button>
+              <GalleryFilterTree
+                ref="providerTreeRef"
+                :context-prefix="providerContextPrefix"
+                :filters="activeFilters"
+                :filter="filterForDimension(activeFilters, dimension.key)"
+                :dimension="dimension.key"
+                :visible="!!dimensionPopoverOpen[dimension.key]"
+                @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
+              />
+            </div>
+          </template>
+          </KbFilterDropdown>
+      </el-scrollbar>
+    </div>
 
     <!-- 清除放在滚动区外，chip 再多也常驻可见 -->
     <el-button
@@ -309,7 +318,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, ref, watch, onMounted, onUnmounted, type Component } from "vue";
+import { computed, markRaw, nextTick, ref, watch, onMounted, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, KbTab, type KbTabItem } from "@kabegame/element-plus";
@@ -727,6 +736,44 @@ function searchModeLabel(mode: GallerySearchMode) {
       return t("gallery.searchModeNativeMetadata");
   }
 }
+
+const filterChipScrollRef = ref<{ wrapRef?: HTMLElement } | null>(null);
+/** 过滤行右侧还有没滚到的 chip：用来点亮右边界那道粉色渐隐。 */
+const chipRowHasMore = ref(false);
+
+function updateChipRowOverflow() {
+  const wrap = filterChipScrollRef.value?.wrapRef;
+  if (!wrap) {
+    chipRowHasMore.value = false;
+    return;
+  }
+  chipRowHasMore.value =
+    wrap.scrollWidth - wrap.clientWidth - wrap.scrollLeft > 1;
+}
+
+// 切换过滤模式会重建这段 DOM，observer 得跟着重绑；同时观察 view，
+// chip 增减(如清除按钮出现)也要重算「右边还有没有」。
+let chipRowResizeObserver: ResizeObserver | null = null;
+
+function bindChipRowObserver() {
+  chipRowResizeObserver?.disconnect();
+  const wrap = filterChipScrollRef.value?.wrapRef;
+  if (!wrap) {
+    chipRowHasMore.value = false;
+    return;
+  }
+  chipRowResizeObserver = new ResizeObserver(updateChipRowOverflow);
+  chipRowResizeObserver.observe(wrap);
+  if (wrap.firstElementChild) chipRowResizeObserver.observe(wrap.firstElementChild);
+  updateChipRowOverflow();
+}
+
+watch(
+  [filterMode, () => uiStore.isCompact],
+  () => void nextTick(bindChipRowObserver),
+);
+onMounted(() => void nextTick(bindChipRowObserver));
+onUnmounted(() => chipRowResizeObserver?.disconnect());
 
 /**
  * 鼠标滚轮在过滤行上转成横向滚动：竖向滚轮本身不会驱动横向溢出，
@@ -2003,19 +2050,43 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
 <style scoped lang="scss">
 /* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
 .filter-chip-row {
-  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走。
-  --el-scrollbar-bg-color: var(--anime-secondary-light);
-  --el-scrollbar-hover-bg-color: var(--anime-primary);
-  --el-scrollbar-opacity: 0.55;
-  --el-scrollbar-hover-opacity: 0.9;
+  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走（always 常驻显示）。
+  --el-scrollbar-bg-color: var(--anime-primary);
+  --el-scrollbar-hover-bg-color: var(--anime-primary-dark, var(--anime-primary));
+  --el-scrollbar-opacity: 0.6;
+  --el-scrollbar-hover-opacity: 0.95;
 
   :deep(.el-scrollbar__view) > * {
     flex: none;
   }
 
   :deep(.el-scrollbar__bar.is-horizontal) {
-    height: 5px;
+    height: 4px;
     bottom: 0;
+    left: 0;
+    right: 0;
   }
+}
+
+/* 右边界的粉色渐隐：还能往右滚时才出现，提示「后面还有维度」。 */
+.filter-chip-viewport::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 36px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  background: linear-gradient(
+    to right,
+    rgba(255, 107, 157, 0) 0%,
+    rgba(255, 107, 157, 0.18) 100%
+  );
+}
+
+.filter-chip-viewport.has-more::after {
+  opacity: 1;
 }
 </style>
