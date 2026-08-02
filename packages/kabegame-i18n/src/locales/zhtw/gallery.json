@@ -263,6 +263,7 @@
   "advancedConditionN": "條件 {n}",
   "advancedOrGroup": "或群組",
   "advancedOrGroupHint": "符合任一分支即可",
+  "advancedRootGroupHint": "滿足任一分支即可 · 分支之間是「或」",
   "advancedBranch": "分支",
   "advancedBranchN": "分支 {n}",
   "advancedAnd": "且",
@@ -270,7 +271,10 @@
   "advancedNot": "非",
   "advancedNegateGroup": "整組取非",
   "advancedAddCondition": "新增條件",
+  "advancedAddOrCondition": "新增或條件",
   "advancedAddOrGroup": "新增或群組",
+  "advancedAddNestedGroup": "且 · 或群組",
+  "advancedAddNestedGroupHint": "與本分支其它條件同時成立（且）",
   "advancedAddBranch": "新增分支",
   "advancedNestingLimit": "已達巢狀上限",
   "advancedSearchDimension": "搜尋",
@@ -287,7 +291,7 @@
   "advancedPluginExtendRestricted": "外掛細分篩選不能用於或群組或取非條件，已僅保留外掛。",
   "advancedPath": "路徑",
   "advancedCopy": "複製",
-  "advancedReset": "重設",
+  "advancedClear": "清空",
   "advancedApply": "套用",
   "advancedSimpleFilterDisabled": "進階查詢已啟用；簡單過濾與進階查詢互斥"
 }

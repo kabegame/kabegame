@@ -41,15 +41,38 @@
     }
   }
 
+  // 传进来的是裸 svg(维度图标不经 el-icon 包裹),尺寸由这里定死。
   @include e(chip-icon) {
     display: inline-flex;
     flex: none;
+    width: 15px;
+    height: 15px;
     color: inherit;
+
+    svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
   }
 
   @include e(chip-label) {
     flex: none;
     color: inherit;
+  }
+
+  // 维度名与值之间的小胶囊(搜索维度的「元数据」等限定词)。
+  @include e(chip-badge) {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 6px;
+    color: getCssVar('kb-filter-dropdown', 'badge-text-color');
+    background: getCssVar('kb-filter-dropdown', 'badge-bg-color');
+    font-size: 12px;
+    font-weight: 600;
   }
 
   @include e(chip-value) {

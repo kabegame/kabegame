@@ -1,5 +1,10 @@
 <template>
-  <div class="rounded-xl border border-[var(--anime-border)] bg-[color-mix(in_srgb,var(--anime-bg-card)_94%,var(--kb-el-bg-color))] p-3">
+  <div
+    class="relative rounded-xl border border-solid bg-[var(--el-bg-color)] p-3 shadow-[0_1px_3px_rgba(124,58,237,0.06)]"
+    :class="negated
+      ? 'border-[color-mix(in_srgb,var(--el-color-error)_35%,transparent)]'
+      : 'border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)]'"
+  >
     <div v-if="compact" class="mb-2 text-xs font-medium text-[var(--anime-text-secondary)]">
       {{ title }}
     </div>
@@ -8,7 +13,7 @@
         type="button"
         class="h-9 flex-none rounded-lg border border-dashed border-[var(--anime-border)] bg-transparent px-3 text-sm text-[var(--anime-text-secondary)] transition-colors cursor-pointer"
         :class="{
-          '!border-solid !border-[var(--anime-primary)] !bg-[color-mix(in_srgb,var(--anime-primary)_10%,transparent)] !text-[var(--anime-primary)]': negated,
+          '!border-solid !border-[color-mix(in_srgb,var(--el-color-error)_45%,transparent)] !bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] !font-bold !text-[var(--el-color-error)]': negated,
         }"
         :aria-pressed="negated"
         @click="toggleNegation"
@@ -19,43 +24,13 @@
       <div class="min-w-0 flex flex-1 flex-wrap items-center gap-2">
         <KbFilterDropdown
           :model-value="atom.search?.query || null"
-          :options="[]"
           :chip-label="t('gallery.advancedChipSearch')"
+          :badge="atom.search?.query ? searchModeLabel(atom.search.mode) : undefined"
           :any-label="t('gallery.filterAny')"
-          :empty-text="t('common.noData')"
           :negated="negated"
           @update:model-value="updateSearchQuery"
         >
-          <template #trigger="{ open }">
-            <span
-              class="inline-flex h-9 max-w-[280px] items-center gap-1.5 rounded-lg border border-[var(--anime-border)] bg-[var(--anime-bg-card)] px-3 text-sm text-[var(--anime-text-secondary)] cursor-pointer"
-              :class="{
-                '!border-[var(--anime-primary)] !text-[var(--anime-primary)]': !!atom.search?.query,
-                'ring-2 ring-[color-mix(in_srgb,var(--anime-primary)_18%,transparent)]': open,
-              }"
-            >
-              <el-icon><Search /></el-icon>
-              <span>{{ t("gallery.advancedChipSearch") }}</span>
-              <span
-                v-if="atom.search?.query"
-                class="rounded-md bg-[color-mix(in_srgb,var(--anime-secondary)_14%,transparent)] px-1.5 py-0.5 text-xs"
-              >
-                {{ searchModeLabel(atom.search.mode) }}
-              </span>
-              <span class="min-w-0 max-w-28 truncate text-[var(--anime-text-primary)]">
-                {{ atom.search?.query || t("gallery.filterAny") }}
-              </span>
-              <button
-                v-if="atom.search?.query"
-                type="button"
-                class="ml-0.5 inline-flex border-0 bg-transparent p-0 text-inherit cursor-pointer"
-                :aria-label="t('gallery.filterAny')"
-                @click.stop="updateSearchQuery(null)"
-              >
-                <el-icon><Close /></el-icon>
-              </button>
-            </span>
-          </template>
+          <template #icon><Search /></template>
           <template #panel="{ close }">
             <div class="w-[360px] max-w-[calc(100vw-48px)] p-3">
               <KbTab v-model="searchMode" :items="searchModeItems" class="w-full" />
@@ -83,7 +58,7 @@
           :any-label="t('gallery.filterAny')"
           :negated="negated"
           @open="openFacetPanel(item.dimension)"
-          @before-hide="closeFacetPanel(item.dimension)"
+          @close="closeFacetPanel(item.dimension)"
           @update:model-value="(value) => clearDimensionFromDropdown(item.dimension, value)"
         >
           <template #icon>
@@ -115,15 +90,17 @@
         </KbFilterDropdown>
       </div>
 
-      <button
-        type="button"
-        class="mt-1 inline-flex h-7 w-7 flex-none items-center justify-center rounded-full border-0 bg-transparent text-[var(--anime-text-secondary)] hover:bg-[color-mix(in_srgb,var(--anime-primary)_10%,transparent)] hover:text-[var(--anime-primary)] cursor-pointer"
-        :aria-label="t('common.delete')"
-        @click="removeCondition"
-      >
-        <el-icon><Close /></el-icon>
-      </button>
     </div>
+
+    <!-- 删除条件:浮在卡片右上角的圆形徽章(设计稿) -->
+    <button
+      type="button"
+      class="absolute -right-2 -top-2 z-1 inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-[var(--anime-bg-card)] bg-[var(--anime-primary)] p-0 text-xs text-white shadow-[0_2px_7px_rgba(255,107,157,0.45)] hover:bg-[var(--el-color-error)] cursor-pointer"
+      :aria-label="t('common.delete')"
+      @click="removeCondition"
+    >
+      <el-icon><Close /></el-icon>
+    </button>
   </div>
 </template>
 

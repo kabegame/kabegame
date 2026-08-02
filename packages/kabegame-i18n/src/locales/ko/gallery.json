@@ -261,6 +261,7 @@
   "advancedConditionN": "조건 {n}",
   "advancedOrGroup": "OR 그룹",
   "advancedOrGroupHint": "분기 중 하나 이상 일치",
+  "advancedRootGroupHint": "분기 중 하나만 만족하면 됨 · 분기 사이는 OR",
   "advancedBranch": "분기",
   "advancedBranchN": "분기 {n}",
   "advancedAnd": "그리고",
@@ -268,7 +269,10 @@
   "advancedNot": "제외",
   "advancedNegateGroup": "그룹 전체 제외",
   "advancedAddCondition": "조건 추가",
+  "advancedAddOrCondition": "OR 조건 추가",
   "advancedAddOrGroup": "OR 그룹 추가",
+  "advancedAddNestedGroup": "AND · OR 그룹",
+  "advancedAddNestedGroupHint": "이 분기의 다른 조건과 동시에 성립(AND)",
   "advancedAddBranch": "분기 추가",
   "advancedNestingLimit": "중첩 한도에 도달했습니다",
   "advancedSearchDimension": "검색",
@@ -285,7 +289,7 @@
   "advancedPluginExtendRestricted": "플러그인 하위 필터는 OR 그룹이나 제외 조건에서 사용할 수 없어 플러그인만 유지했습니다.",
   "advancedPath": "경로",
   "advancedCopy": "복사",
-  "advancedReset": "초기화",
+  "advancedClear": "비우기",
   "advancedApply": "적용",
   "advancedSimpleFilterDisabled": "고급 검색이 활성화되어 일반 필터와 함께 사용할 수 없습니다"
 }

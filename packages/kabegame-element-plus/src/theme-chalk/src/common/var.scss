@@ -485,6 +485,9 @@ $kb-filter-dropdown: map.merge(
       color-mix(in srgb, var(--anime-primary) 4%, transparent),
     'chip-disabled-bg-color':
       color-mix(in srgb, var(--anime-border) 22%, transparent),
+    // chip 内的限定词胶囊(搜索模式等)。
+    'badge-bg-color': color-mix(in srgb, var(--anime-secondary) 16%, transparent),
+    'badge-text-color': var(--anime-secondary-dark),
     'panel-bg-color': var(--anime-bg-card),
     'panel-border-color': var(--anime-border),
     'panel-shadow': var(--anime-shadow-hover),

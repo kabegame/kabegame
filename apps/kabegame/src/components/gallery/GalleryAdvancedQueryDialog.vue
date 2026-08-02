@@ -11,13 +11,13 @@
     @update:model-value="onDialogVisible"
   >
     <div class="advanced-query-shell flex max-h-[calc(90dvh-40px)] min-h-0 flex-col overflow-hidden rounded-xl">
-      <header class="flex flex-none items-start gap-3 border-b border-[var(--anime-border)] px-1 pb-4">
+      <header class="flex flex-none items-start gap-3 border-b border-solid border-[var(--anime-border)] px-1 pb-4">
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-3">
             <h2 class="m-0 text-xl font-semibold text-[var(--anime-text-primary)]">
               {{ t("gallery.advancedQuery") }}
             </h2>
-            <span class="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_8%,transparent)] px-2.5 py-1 text-sm font-semibold text-[var(--anime-primary)]">
+            <span class="inline-flex items-center gap-1.5 rounded-lg border border-solid border-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_8%,transparent)] px-2.5 py-1 text-sm font-semibold text-[var(--anime-primary)]">
               <el-icon v-if="hitCountLoading" class="animate-spin"><Loading /></el-icon>
               <span v-else>
                 {{ t("gallery.advancedHitCount", { count: formatCount(hitCount ?? 0) }) }}
@@ -42,18 +42,19 @@
         <GalleryAdvancedQuerySequence
           :tree="draft"
           :sequence="draft"
+          root-group
           :compact="uiStore.isCompact"
           :context-prefix="contextPrefix"
-          @update:tree="draft = $event"
+          @update:tree="draft = ensureRootGroup($event)"
         />
       </main>
 
-      <footer class="flex flex-none flex-col gap-3 border-t border-[var(--anime-border)] pt-3">
+      <footer class="flex flex-none flex-col gap-3 border-t border-solid border-[var(--anime-border)] pt-3">
         <div class="flex min-w-0 items-center gap-2">
           <span class="flex-none text-sm font-medium text-[var(--anime-secondary)]">
             {{ t("gallery.advancedPath") }}
           </span>
-          <div class="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[var(--anime-border)] bg-[var(--anime-bg-sidebar)] px-3 py-2 font-mono text-xs text-[var(--anime-text-secondary)] whitespace-nowrap">
+          <div class="min-w-0 flex-1 overflow-x-auto rounded-lg border border-solid border-[var(--anime-border)] bg-[var(--anime-bg-sidebar)] px-3 py-2 font-mono text-xs text-[var(--anime-text-secondary)] whitespace-nowrap">
             {{ previewPath }}
           </div>
           <el-button class="flex-none" @click="copyPath">
@@ -62,7 +63,7 @@
           </el-button>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <el-button @click="reset">{{ t("gallery.advancedReset") }}</el-button>
+          <el-button @click="clear">{{ t("gallery.advancedClear") }}</el-button>
           <div class="ml-auto flex items-center gap-2">
             <el-button @click="cancel">{{ t("common.cancel") }}</el-button>
             <el-button type="primary" @click="apply">{{ t("gallery.advancedApply") }}</el-button>
@@ -90,6 +91,9 @@ import {
   type GallerySort,
 } from "@/utils/galleryPath";
 import {
+  collapseRootGroup,
+  emptyRootGroup,
+  ensureRootGroup,
   normalizeQuery,
   type GalleryAdvancedQuery,
 } from "@/utils/galleryQuery";
@@ -115,10 +119,14 @@ const emit = defineEmits<{
 const visible = defineModel<boolean>("visible", { required: true });
 const { t } = useI18n();
 const uiStore = useUiStore();
-const draft = ref<GalleryAdvancedQuery>([]);
+// draft 是编辑态(顶层恒为一个或组);对外一律用坍缩+归一后的 effectiveQuery。
+const draft = ref<GalleryAdvancedQuery>(emptyRootGroup());
+const effectiveQuery = computed(() =>
+  normalizeQuery(collapseRootGroup(draft.value))
+);
 const contextPrefix = toRef(props, "contextPrefix");
 const { count: hitCount, loading: hitCountLoading } = useAdvancedHitCount(
-  draft,
+  effectiveQuery,
   contextPrefix,
 );
 
@@ -128,7 +136,7 @@ watch(
   () => [visible.value, props.query] as const,
   ([open]) => {
     if (!open) return;
-    draft.value = cloneTree(props.query);
+    draft.value = ensureRootGroup(props.query);
   },
   { flush: "post" },
 );
@@ -137,7 +145,7 @@ const previewPath = computed(() =>
   advancedQueryRuntimePath(
     buildComposablePath({
       filters: {},
-      advanced: normalizeQuery(draft.value),
+      advanced: effectiveQuery.value,
       sort: props.sort,
       page: props.page,
       pageSize: props.pageSize,
@@ -145,10 +153,6 @@ const previewPath = computed(() =>
     contextPrefix.value,
   )
 );
-
-function cloneTree(tree: GalleryAdvancedQuery): GalleryAdvancedQuery {
-  return JSON.parse(JSON.stringify(tree)) as GalleryAdvancedQuery;
-}
 
 function formatCount(value: number): string {
   return value.toLocaleString();
@@ -158,8 +162,8 @@ function onDialogVisible(next: boolean): void {
   if (!next) cancel();
 }
 
-function reset(): void {
-  draft.value = [];
+function clear(): void {
+  draft.value = emptyRootGroup();
 }
 
 function cancel(): void {
@@ -167,7 +171,7 @@ function cancel(): void {
 }
 
 function apply(): void {
-  emit("apply", normalizeQuery(draft.value));
+  emit("apply", effectiveQuery.value);
   visible.value = false;
 }
 
@@ -187,7 +191,7 @@ async function copyPath(): Promise<void> {
 .advanced-query-shell {
   container-type: inline-size;
   /* --anime-bg-card 本身带透明度;叠在实底上合成不透明卡片,避免底下画廊透出干扰。 */
-  background-color: var(--kb-el-bg-color);
+  background-color: var(--el-bg-color);
   background-image: linear-gradient(var(--anime-bg-card), var(--anime-bg-card));
 }
 

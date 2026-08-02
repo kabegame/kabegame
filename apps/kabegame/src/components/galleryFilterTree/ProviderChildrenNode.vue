@@ -45,7 +45,7 @@
         <span
           class="flex-none text-[var(--anime-text-secondary)] text-xs"
           :class="{
-            '!text-[var(--kb-el-color-error)]': isCountNegated && !isEmpty,
+            '!text-[var(--el-color-error)]': isCountNegated && !isEmpty,
             '!text-[var(--anime-text-muted)]': isEmpty,
           }"
         >({{ displayCount }})</span>

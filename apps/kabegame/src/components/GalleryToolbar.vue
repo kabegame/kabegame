@@ -160,64 +160,32 @@
     />
   </div>
 
-  <!-- 桌面具体过滤行 -->
-  <div v-if="!uiStore.isCompact && showDesktopFilterRow && !isAdvancedActive" class="flex flex-wrap items-center gap-2 mb-2">
-    <div
+  <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉 -->
+  <div v-if="!uiStore.isCompact && showDesktopFilterRow && !isAdvancedActive" class="flex flex-wrap items-center gap-3 mb-2">
+    <KbFilterDropdown
       v-for="dimension in filterDimensions"
       :key="dimension.key"
-      class="relative inline-flex items-center max-w-[260px]"
+      :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
+      :chip-label="dimension.chipLabel"
+      :selected-label="dimensionChipValue(dimension.key)"
+      :any-label="t('gallery.filterAny')"
+      :title="dimension.title"
+      @open="setDimensionPopoverOpen(dimension.key, true)"
+      @close="setDimensionPopoverOpen(dimension.key, false)"
+      @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
     >
-      <el-popover
-        :visible="!!dimensionPopoverOpen[dimension.key]"
-        placement="bottom-start"
-        trigger="click"
-        width="auto"
-        @update:visible="setDimensionPopoverOpen(dimension.key, $event)"
-      >
-        <template #reference>
-          <div class="relative inline-flex max-w-[240px]">
-            <el-button
-              class="max-w-[240px] !pr-7 [&_span]:min-w-0"
-              :class="{
-                '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isDimensionActive(dimension.key),
-              }"
-              :aria-label="dimension.title"
-              :title="dimension.title"
-            >
-              <el-icon
-                class="mr-1.5 flex-none text-sm text-[var(--anime-text-secondary)]"
-                :class="{ '!text-[var(--anime-primary)]': isDimensionActive(dimension.key) }"
-              >
-                <component :is="dimension.icon" />
-              </el-icon>
-              <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-                {{ dimensionLabel(dimension.key) }}
-              </span>
-              <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
-                <ArrowDown />
-              </el-icon>
-            </el-button>
-            <button
-              v-if="isDimensionActive(dimension.key)"
-              type="button"
-              class="absolute -right-1 -top-1 z-10 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border border-white bg-[var(--anime-primary)] p-0 text-[11px] text-white shadow-[0_2px_6px_rgba(255,107,157,0.35)] cursor-pointer"
-              :aria-label="`${dimension.title}: ${t('gallery.filterAny')}`"
-              @click.stop.prevent="clearDimension(dimension.key)"
-            >
-              <el-icon>
-                <Close />
-              </el-icon>
-            </button>
-          </div>
-        </template>
-        <div class="w-[320px] max-w-[min(320px,80vw)]">
+      <template #icon>
+        <component :is="dimension.icon" />
+      </template>
+      <template #panel="{ close }">
+        <div class="p-1.5">
           <button
             type="button"
-            class="w-[calc(100%-12px)] m-[6px] min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[var(--el-fill-color-light)]"
+            class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[var(--el-fill-color-light)]"
             :class="{
               '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
             }"
-            @click="clearDimension(dimension.key)"
+            @click="clearDimension(dimension.key); close();"
           >
             {{ t("gallery.filterAny") }}
           </button>
@@ -228,11 +196,11 @@
             :filter="filterForDimension(activeFilters, dimension.key)"
             :dimension="dimension.key"
             :visible="!!dimensionPopoverOpen[dimension.key]"
-            @update:filter="(f) => onDimensionFilter(dimension.key, f)"
+            @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
           />
         </div>
-      </el-popover>
-    </div>
+      </template>
+    </KbFilterDropdown>
   </div>
 
   <div v-if="uiStore.isCompact" class="mb-2 flex justify-end">
@@ -362,18 +330,20 @@
 import { computed, markRaw, ref, watch, onMounted, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
+import { KbFilterDropdown } from "@kabegame/element-plus";
 import { useRouter } from "vue-router";
 import {
   ArrowDown,
-  Calendar,
   Close,
-  CollectionTag,
-  Connection,
-  Files,
-  Film,
   Filter,
+  FilterAspect,
+  FilterDate,
+  FilterMedia,
+  FilterName,
+  FilterPlugin,
+  FilterSize,
+  FilterWallpaper,
   Histogram,
-  ScaleToOriginal,
   Search,
   Sort,
 } from "@kabegame/element-plus-icons";
@@ -430,6 +400,7 @@ import {
   type TimeMenuNode,
   type YearGroupRow,
 } from "@/utils/galleryTimeFilterMenu";
+import { facetValueLabel } from "@/composables/useAdvancedQueryFacets";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
@@ -592,28 +563,30 @@ const sortFieldOptions: GallerySortField[] = [
 ];
 
 // no-album 不是可浏览过滤维度（不进过滤行 / 不显示图标），故从图标表中排除。
+// 过滤维度图标与高级查询弹窗同源(设计稿那套 16px 线性图标)。
 const FILTER_DIMENSION_ICONS: Record<Exclude<GalleryFilterDimension, "noAlbum">, Component> = {
-  wallpaperOrder: markRaw(CollectionTag),
-  plugin: markRaw(Connection),
-  mediaType: markRaw(Film),
-  date: markRaw(Calendar),
-  name: markRaw(Search),
-  size: markRaw(Files),
-  aspect: markRaw(ScaleToOriginal),
+  wallpaperOrder: markRaw(FilterWallpaper),
+  plugin: markRaw(FilterPlugin),
+  mediaType: markRaw(FilterMedia),
+  date: markRaw(FilterDate),
+  name: markRaw(FilterName),
+  size: markRaw(FilterSize),
+  aspect: markRaw(FilterAspect),
 };
 
 const filterDimensions = computed<Array<{
   key: GalleryFilterDimension;
   title: string;
+  chipLabel: string;
   icon: Component;
 }>>(() => [
-  { key: "date", title: t("gallery.filterByTime"), icon: FILTER_DIMENSION_ICONS.date },
-  { key: "plugin", title: t("gallery.filterByPlugin"), icon: FILTER_DIMENSION_ICONS.plugin },
-  { key: "mediaType", title: t("gallery.filterByMediaType"), icon: FILTER_DIMENSION_ICONS.mediaType },
-  { key: "aspect", title: t("gallery.filterByAspect"), icon: FILTER_DIMENSION_ICONS.aspect },
-  { key: "size", title: t("gallery.filterBySize"), icon: FILTER_DIMENSION_ICONS.size },
-  { key: "name", title: t("gallery.filterByName"), icon: FILTER_DIMENSION_ICONS.name },
-  { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
+  { key: "date", title: t("gallery.filterByTime"), chipLabel: t("gallery.advancedChipTime"), icon: FILTER_DIMENSION_ICONS.date },
+  { key: "plugin", title: t("gallery.filterByPlugin"), chipLabel: t("gallery.advancedChipPlugin"), icon: FILTER_DIMENSION_ICONS.plugin },
+  { key: "mediaType", title: t("gallery.filterByMediaType"), chipLabel: t("gallery.advancedChipMediaType"), icon: FILTER_DIMENSION_ICONS.mediaType },
+  { key: "aspect", title: t("gallery.filterByAspect"), chipLabel: t("gallery.advancedChipAspect"), icon: FILTER_DIMENSION_ICONS.aspect },
+  { key: "size", title: t("gallery.filterBySize"), chipLabel: t("gallery.advancedChipSize"), icon: FILTER_DIMENSION_ICONS.size },
+  { key: "name", title: t("gallery.filterByName"), chipLabel: t("gallery.advancedChipName"), icon: FILTER_DIMENSION_ICONS.name },
+  { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), chipLabel: t("gallery.advancedChipWallpaper"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
 ]);
 
 // no-album 是 header fold 的手动开关，不算「过滤」维度：不点亮过滤指示、也不显示清除叉号。
@@ -1330,6 +1303,45 @@ const sortOptionLabelDesc = computed(() => {
       return t("gallery.byRandomDesc");
   }
 });
+
+/**
+ * chip 上只显示纯值：维度名已经在 chip 左侧，labelForFilter 的「按插件：」这类前缀
+ * 在这里是冗余的。取值口径与高级查询弹窗一致（facetValueLabel）。
+ */
+function dimensionChipValue(dimension: GalleryFilterDimension): string | undefined {
+  void locale.value;
+  const filter = filterForDimension(activeFilters.value, dimension);
+  if (filter.type === "all") return undefined;
+  if (dimension === "wallpaperOrder") return t("gallery.filterWallpaperSet");
+  if (dimension === "plugin") {
+    const pid = filterPluginId(filter);
+    if (!pid) return undefined;
+    const ext = filter.type === "plugin" ? filter.extendPath?.trim() : "";
+    const name = pluginStore.pluginLabel(pid);
+    return ext ? `${name} / ${ext}` : name;
+  }
+  if (dimension === "date") {
+    if (filter.type === "date-range") return `${filter.start} ~ ${filter.end}`;
+    const segment = filterDateSegment(filter);
+    return segment
+      ? formatTimeFilterDetail(segment, String(locale.value), t)
+      : undefined;
+  }
+  if (dimension === "mediaType") {
+    const kind = filterMediaKind(filter);
+    if (!kind) return undefined;
+    const format = filterMediaFormat(filter);
+    const label = facetValueLabel("mediaType", kind, t);
+    return format ? `${label} / ${format}` : label;
+  }
+  const value = dimension === "name"
+    ? filterNameBucket(filter)
+    : dimension === "size"
+    ? filterSizeRange(filter)
+    : filterAspectRange(filter);
+  if (value == null) return undefined;
+  return facetValueLabel(dimension, value, t);
+}
 
 function labelForFilter(filter: GalleryFilter) {
   void locale.value;

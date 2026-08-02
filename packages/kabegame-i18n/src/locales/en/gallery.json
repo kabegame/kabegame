@@ -259,6 +259,7 @@
   "advancedConditionN": "Condition {n}",
   "advancedOrGroup": "OR group",
   "advancedOrGroupHint": "Match any branch",
+  "advancedRootGroupHint": "Any branch matches · branches are OR-ed",
   "advancedBranch": "Branch",
   "advancedBranchN": "Branch {n}",
   "advancedAnd": "AND",
@@ -266,7 +267,10 @@
   "advancedNot": "NOT",
   "advancedNegateGroup": "Negate group",
   "advancedAddCondition": "Add condition",
+  "advancedAddOrCondition": "Add OR condition",
   "advancedAddOrGroup": "Add OR group",
+  "advancedAddNestedGroup": "AND · OR group",
+  "advancedAddNestedGroupHint": "Must hold together with the rest of this branch (AND)",
   "advancedAddBranch": "Add branch",
   "advancedNestingLimit": "Nesting limit reached",
   "advancedSearchDimension": "Search",
@@ -283,7 +287,7 @@
   "advancedPluginExtendRestricted": "Plugin subfilters cannot be used in OR groups or negated conditions. Only the plugin was kept.",
   "advancedPath": "Path",
   "advancedCopy": "Copy",
-  "advancedReset": "Reset",
+  "advancedClear": "Clear",
   "advancedApply": "Apply",
   "advancedSimpleFilterDisabled": "Advanced query is active; simple and advanced filters are mutually exclusive"
 }

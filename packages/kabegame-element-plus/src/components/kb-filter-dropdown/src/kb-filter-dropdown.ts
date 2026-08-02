@@ -16,6 +16,8 @@ export interface KbFilterDropdownProps {
    * 由调用侧直接给出;缺省回退 options 匹配项 label → modelValue 原文。
    */
   selectedLabel?: string
+  /** chip 内维度名与值之间的小胶囊(如搜索维度的「元数据」)。 */
+  badge?: string
   anyLabel: string
   anyCount?: number
   searchable?: boolean

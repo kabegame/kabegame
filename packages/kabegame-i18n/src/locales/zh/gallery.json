@@ -262,6 +262,7 @@
   "advancedConditionN": "条件 {n}",
   "advancedOrGroup": "或组",
   "advancedOrGroupHint": "满足任一分支即可",
+  "advancedRootGroupHint": "满足任一分支即可 · 分支之间是「或」",
   "advancedBranch": "分支",
   "advancedBranchN": "分支 {n}",
   "advancedAnd": "且",
@@ -269,7 +270,10 @@
   "advancedNot": "非",
   "advancedNegateGroup": "整组取非",
   "advancedAddCondition": "添加条件",
+  "advancedAddOrCondition": "添加或条件",
   "advancedAddOrGroup": "添加或组",
+  "advancedAddNestedGroup": "且 · 或组",
+  "advancedAddNestedGroupHint": "与本分支其它条件同时成立（且）",
   "advancedAddBranch": "添加分支",
   "advancedNestingLimit": "已达嵌套上限",
   "advancedSearchDimension": "搜索",
@@ -286,7 +290,7 @@
   "advancedPluginExtendRestricted": "插件细分筛选不能用于或组或取非条件，已仅保留插件。",
   "advancedPath": "路径",
   "advancedCopy": "复制",
-  "advancedReset": "重置",
+  "advancedClear": "清空",
   "advancedApply": "应用",
   "advancedSimpleFilterDisabled": "高级查询已启用；简单过滤与高级查询互斥"
 }

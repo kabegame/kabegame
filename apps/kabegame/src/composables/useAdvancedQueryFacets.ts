@@ -2,7 +2,6 @@ import {
   computed,
   type MaybeRefOrGetter,
   onScopeDispose,
-  type Ref,
   ref,
   toValue,
   watch,
@@ -161,7 +160,7 @@ export function useDimensionFacet(
 }
 
 export function useAdvancedHitCount(
-  tree: Ref<GalleryAdvancedQuery>,
+  tree: MaybeRefOrGetter<GalleryAdvancedQuery>,
   contextPrefix: MaybeRefOrGetter<string> = "images://gallery/",
 ) {
   const count = ref<number>();
@@ -170,7 +169,7 @@ export function useAdvancedHitCount(
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const path = computed(() => {
-    const serialized = serializeAdvancedQuery(normalizeQuery(tree.value));
+    const serialized = serializeAdvancedQuery(normalizeQuery(toValue(tree)));
     return advancedQueryRuntimePath(serialized.body, toValue(contextPrefix));
   });
 

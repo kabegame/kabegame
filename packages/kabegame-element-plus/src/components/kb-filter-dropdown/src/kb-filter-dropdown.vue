@@ -22,7 +22,7 @@
         @keydown="handlePanelKeydown"
       >
         <slot v-if="$slots.panel" name="panel" :close="close" />
-
+      
         <template v-else>
           <div v-if="searchable" :class="ns.e('search')">
             <el-input
@@ -117,6 +117,7 @@
             <slot name="icon" />
           </span>
           <span :class="ns.e('chip-label')">{{ chipLabel }}</span>
+          <span v-if="badge" :class="ns.e('chip-badge')">{{ badge }}</span>
           <span :class="ns.e('chip-value')">{{ selectedLabel }}</span>
           <button
             v-if="hasSelection"
@@ -170,6 +171,7 @@ const props = withDefaults(defineProps<KbFilterDropdownProps>(), {
 const emit = defineEmits<{
   (event: 'update:modelValue', value: string | null): void
   (event: 'open'): void
+  (event: 'close'): void
 }>()
 
 const slots = defineSlots<{
@@ -231,11 +233,15 @@ function handleVisibleChange(nextVisible: boolean) {
     query.value = ''
     syncHighlightToSelection()
     emit('open')
+  } else {
+    emit('close')
   }
 }
 
 function close() {
+  if (!visible.value) return
   visible.value = false
+  emit('close')
 }
 
 function focusPanel() {
