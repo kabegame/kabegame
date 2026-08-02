@@ -99,38 +99,15 @@
         @scroll="updateChipRowOverflow"
         @wheel="onFilterChipWheel"
       >
-        <!-- 搜索与其它维度同列：chip 内 badge 显示搜索模式，面板里切模式 + 输入 -->
-        <KbFilterDropdown
-          :model-value="search.trim() ? search : null"
-          :chip-label="t('gallery.advancedChipSearch')"
-          :selected-label="search"
-          :badge="search.trim() ? searchModeLabel(searchMode) : undefined"
-          :any-label="t('gallery.filterAny')"
-          :title="t('gallery.searchPlaceholder')"
-          @update:model-value="(value) => { if (value === null) emit('update:search', ''); }"
-        >
-          <template #icon>
-            <Search />
-          </template>
-          <template #panel>
-            <!-- 宽度不写死：由三个模式 tab 并排的自然宽度决定，输入框跟着撑满 -->
-            <div class="w-max max-w-[calc(100vw-48px)] p-3">
-              <KbTab
-                :model-value="searchMode"
-                :items="searchModeItems"
-                @update:model-value="(mode) => emit('update:searchMode', mode)"
-              />
-              <!-- w-0 + min-w-full：输入框自身宽度不参与 w-max 的测量(el-input 的
-                   固有宽度有 440px，会把面板撑得比 tab 宽一倍)，定宽后再撑满 -->
-              <KbText
-                :model-value="searchDraft"
-                :placeholder="searchInputPlaceholder"
-                class="mt-3 w-0! min-w-full"
-                @update:model-value="onSearchDraft"
-              />
-            </div>
-          </template>
-        </KbFilterDropdown>
+        <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
+             这里每次提交都会 navigate + 重查，所以要防抖 -->
+        <GallerySearchDropdown
+          :query="search"
+          :mode="searchMode"
+          :debounce="300"
+          @update:query="(value) => emit('update:search', value)"
+          @update:mode="(mode) => emit('update:searchMode', mode)"
+        />
 
         <KbFilterDropdown
           v-for="dimension in filterDimensions"
@@ -323,11 +300,11 @@ import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { withGalleryPrefix } from "@/utils/path";
-import KbText from "@kabegame/core/components/common/form/KbText.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import PathqlPathBar from "@/components/gallery/PathqlPathBar.vue";
+import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -336,7 +313,6 @@ import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
   DEFAULT_GALLERY_SEARCH_MODE,
-  GALLERY_SEARCH_MODES,
   advancedQueryRuntimePath,
   buildAdvancedQueryContextPrefix,
   buildComposablePath,
@@ -720,17 +696,6 @@ function sortFieldLabel(field: GallerySortField) {
   }
 }
 
-function searchModeLabel(mode: GallerySearchMode) {
-  switch (mode) {
-    case "display-name":
-      return t("gallery.searchModeDisplayName");
-    case "metadata":
-      return t("gallery.searchModeMetadata");
-    case "native-metadata":
-      return t("gallery.searchModeNativeMetadata");
-  }
-}
-
 const filterChipScrollRef = ref<{ wrapRef?: HTMLElement } | null>(null);
 /** 过滤行右侧还有没滚到的 chip：用来点亮右边界那道粉色渐隐。 */
 const chipRowHasMore = ref(false);
@@ -792,54 +757,6 @@ function onFilterChipWheel(event: WheelEvent) {
   event.preventDefault();
   wrap.scrollLeft = next;
 }
-
-/** 搜索 chip 面板顶部的模式切换(与高级查询条件行同一套)。 */
-const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
-  GALLERY_SEARCH_MODES.map((mode) => ({ name: mode, label: searchModeLabel(mode) }))
-);
-
-/**
- * 搜索面板的输入草稿。KbText 是裸 el-input(逐键回调)，防抖放在这里：
- * 每敲一个字就 navigate 一次会把路由和查询打爆；清空则立即生效，不必等 300ms。
- */
-const searchDraft = ref(props.search ?? "");
-let searchDebounceTimer: number | null = null;
-
-watch(
-  () => props.search,
-  (value) => {
-    if ((value ?? "") !== searchDraft.value) searchDraft.value = value ?? "";
-  },
-);
-
-function onSearchDraft(value: string) {
-  searchDraft.value = value;
-  if (searchDebounceTimer !== null) window.clearTimeout(searchDebounceTimer);
-  if (!value) {
-    searchDebounceTimer = null;
-    if (props.search) emit("update:search", "");
-    return;
-  }
-  searchDebounceTimer = window.setTimeout(() => {
-    searchDebounceTimer = null;
-    if (props.search !== value) emit("update:search", value);
-  }, 300);
-}
-
-onUnmounted(() => {
-  if (searchDebounceTimer !== null) window.clearTimeout(searchDebounceTimer);
-});
-
-const searchInputPlaceholder = computed(() => {
-  switch (props.searchMode) {
-    case "metadata":
-      return t("gallery.searchPlaceholderMetadata");
-    case "native-metadata":
-      return t("gallery.searchPlaceholderNativeMetadata");
-    default:
-      return t("gallery.searchPlaceholder");
-  }
-});
 
 function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
   dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };

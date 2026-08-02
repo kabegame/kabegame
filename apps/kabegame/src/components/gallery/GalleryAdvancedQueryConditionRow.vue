@@ -22,35 +22,14 @@
       </button>
 
       <div class="min-w-0 flex flex-1 flex-wrap items-center gap-2">
-        <KbFilterDropdown
-          :model-value="atom.search?.query || null"
-          :chip-label="t('gallery.advancedChipSearch')"
-          :badge="atom.search?.query ? searchModeLabel(atom.search.mode) : undefined"
-          :any-label="t('gallery.filterAny')"
+        <!-- 与画廊工具行同一个组件；这里改的是本地草稿树，不需要防抖 -->
+        <GallerySearchDropdown
+          :query="atom.search?.query ?? ''"
+          :mode="searchMode"
           :negated="negated"
-          @update:model-value="updateSearchQuery"
-        >
-          <template #icon><Search /></template>
-          <template #panel="{ close }">
-            <!-- 与画廊工具行的搜索面板同构：宽度不写死，由三个模式 tab 并排的自然
-                 宽度决定。输入框与说明文字都用 w-0!+min-w-full 退出宽度测量
-                 （el-input 固有 440px、整段说明的 max-content 更宽，都会把 w-max 撑坏）。 -->
-            <div class="w-max max-w-[calc(100vw-48px)] p-3">
-              <KbTab v-model="searchMode" :items="searchModeItems" />
-              <KbText
-                :model-value="atom.search?.query || ''"
-                class="mt-3 w-0! min-w-full"
-                allow-unset
-                :placeholder="searchPlaceholder"
-                @update:model-value="updateSearchQuery"
-                @keyup.enter="close"
-              />
-              <p class="mb-0 mt-3 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-secondary)]">
-                {{ t("gallery.advancedSearchHelp") }}
-              </p>
-            </div>
-          </template>
-        </KbFilterDropdown>
+          @update:query="updateSearch($event)"
+          @update:mode="searchMode = $event"
+        />
 
         <KbFilterDropdown
           v-for="item in facetItems"
@@ -113,11 +92,8 @@ import { useI18n } from "@kabegame/i18n";
 import {
   ElIcon,
   KbFilterDropdown,
-  KbTab,
   type KbFilterDropdownOption,
-  type KbTabItem,
 } from "@kabegame/element-plus";
-import KbText from "@kabegame/core/components/common/form/KbText.vue";
 import {
   Close,
   FilterAspect,
@@ -127,7 +103,6 @@ import {
   FilterPlugin,
   FilterSize,
   FilterWallpaper,
-  Search,
 } from "@kabegame/element-plus-icons";
 import {
   facetValueLabel,
@@ -147,11 +122,11 @@ import {
 } from "@/utils/galleryQuery";
 import {
   DEFAULT_GALLERY_SEARCH_MODE,
-  GALLERY_SEARCH_MODES,
   type GalleryFilter,
   type GallerySearchMode,
 } from "@/utils/galleryPath";
 import AdvancedFacetTreePanel from "./AdvancedFacetTreePanel.vue";
+import GallerySearchDropdown from "./GallerySearchDropdown.vue";
 
 const props = defineProps<{
   tree: GalleryAdvancedQuery;
@@ -198,22 +173,6 @@ const searchMode = computed<GallerySearchMode>({
   set: (mode) => updateSearch(atom.value.search?.query ?? "", mode, true),
 });
 
-const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
-  GALLERY_SEARCH_MODES.map((mode) => ({ name: mode, label: searchModeLabel(mode) }))
-);
-
-const searchPlaceholder = computed(() => {
-  if (searchMode.value === "metadata") return t("gallery.searchPlaceholderMetadata");
-  if (searchMode.value === "native-metadata") return t("gallery.searchPlaceholderNativeMetadata");
-  return t("gallery.searchPlaceholder");
-});
-
-function searchModeLabel(mode: GallerySearchMode): string {
-  if (mode === "metadata") return t("gallery.searchModeMetadata");
-  if (mode === "native-metadata") return t("gallery.searchModeNativeMetadata");
-  return t("gallery.searchModeDisplayName");
-}
-
 function updateAtom(updater: (atom: GalleryAtom) => GalleryAtom): void {
   emit("update:tree", updateNode(props.tree, props.nodePath, (node) => {
     if (!("is" in node)) return node;
@@ -233,10 +192,6 @@ function updateSearch(
     else delete next.search;
     return next;
   });
-}
-
-function updateSearchQuery(value: string | null): void {
-  updateSearch(value ?? "");
 }
 
 function dimensionValue(dimension: FacetDimension): string | null {
