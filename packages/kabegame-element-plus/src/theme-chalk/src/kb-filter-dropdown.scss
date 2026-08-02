@@ -52,7 +52,8 @@
     flex: none;
     width: 15px;
     height: 15px;
-    color: inherit;
+    // 不跟着维度名一起变黑，维持原来那档紫。
+    color: getCssVar('kb-filter-dropdown', 'chip-icon-color');
 
     svg {
       display: block;
@@ -137,6 +138,11 @@
     @include e(chip-value) {
       color: inherit;
       font-weight: 600;
+    }
+
+    // 选中态整颗 chip 转粉，图标跟上（此时它不该还留在中性紫）。
+    @include e(chip-icon) {
+      color: inherit;
     }
   }
 

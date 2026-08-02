@@ -475,7 +475,11 @@ $select-dropdown: map.merge(
 $kb-filter-dropdown: () !default;
 $kb-filter-dropdown: map.merge(
   (
-    'chip-text-color': var(--anime-text-secondary),
+    // 维度名走正文色：原来是 secondary(#7c3aed)，两整行 chip 铺开时紫得晃眼。
+    // 值与箭头留在弱化的紫(muted)，正好还兼作「名 vs 值」的层次；
+    // 图标继续用原来那档紫(secondary)，不跟着名字变黑。
+    'chip-text-color': var(--anime-text-primary),
+    'chip-icon-color': var(--anime-text-secondary),
     'chip-muted-color': var(--anime-text-muted),
     'chip-border-color': var(--anime-border),
     'chip-hover-border-color': var(--anime-primary-light),
