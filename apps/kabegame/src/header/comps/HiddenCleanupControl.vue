@@ -6,23 +6,19 @@
       :title="buttonTitle"
       @click="handleClick"
     >
-      <!-- el-button 把整个 default 插槽裹进一个 inline 的 <span>，button 自己的
-           flex 布局够不到里面，ml-auto 会失效——所以这层 flex 必须自己写。 -->
-      <span class="flex w-full items-center gap-[11px]">
-        <el-icon><Delete /></el-icon>
-        <span>{{ t("header.cleanHidden") }}</span>
-        <span
-          v-if="store.running"
-          class="ml-auto text-xs text-[var(--anime-text-muted)]"
-        >
-          {{ t("header.cleanHiddenInProgress") }}
-        </span>
-        <span
-          v-else-if="hiddenCount > 0"
-          class="ml-auto font-mono text-xs text-[var(--anime-text-muted)]"
-        >
-          {{ hiddenCount.toLocaleString() }}
-        </span>
+      <el-icon><Delete /></el-icon>
+      <span>{{ t("header.cleanHidden") }}</span>
+      <span
+        v-if="store.running"
+        class="ml-auto text-xs text-[var(--anime-text-muted)]"
+      >
+        {{ t("header.cleanHiddenInProgress") }}
+      </span>
+      <span
+        v-else-if="hiddenCount > 0"
+        class="ml-auto font-mono text-xs text-[var(--anime-text-muted)]"
+      >
+        {{ hiddenCount.toLocaleString() }}
       </span>
     </el-button>
   </div>
@@ -67,3 +63,16 @@ async function handleClick() {
   await hiddenCleanupService.start(count);
 }
 </script>
+
+<style scoped lang="scss">
+/* el-button 把整个 default 插槽裹进一个 <span>，而那层是 inline 的：button 自己的
+   flex 布局够不到里面，剩余数量上的 ml-auto 就永远推不动。把这层 wrapper 也变成
+   撑满的 flex 才行。icon 与文字的间距仍由 EP 的 `.el-icon + span` margin 管，
+   这里不再加 gap，否则会和「整理」那行的缩进对不齐。 */
+.hidden-cleanup-control :deep(.el-button > span) {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+</style>
