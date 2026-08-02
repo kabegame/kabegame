@@ -57,6 +57,9 @@ workspace**，故已平铺成单包：
   `popper.scss` 里的 `.el-popper.is-light` 特异性相同且排在后面。
 - **`tabs` 组件已删除，由 `kb-tab` 取代**（`ElTabs`/`ElTabPane` 不再导出）。KbTab 只管
   tab 头本身，内容由调用方按 v-model 自行切换。样式走 SFC scoped，不进 theme-chalk。
+- **新增 `kb-filter-dropdown`**：画廊 facet 等场景共用的 chip + 双列计数面板，复用
+  `ElTooltip`/Popper 基建；支持本地搜索、loading/empty、排除计数、键盘选择及整体面板插槽，
+  样式和 `--anime-*` 映射统一位于 theme-chalk。
 
 ## 待办
 

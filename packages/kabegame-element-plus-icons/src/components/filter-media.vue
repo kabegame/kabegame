@@ -1,0 +1,9 @@
+<template>
+  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M2.4 3.4h11.2a.9.9 0 0 1 .9.9v7.4a.9.9 0 0 1-.9.9H2.4a.9.9 0 0 1-.9-.9V4.3a.9.9 0 0 1 .9-.9z"></path><path d="M1.8 11.2 5.3 7.7l2.4 2.4 2.1-2.1 3.9 3.9"></path><circle cx="10.7" cy="6.1" r=".95"></circle></svg>
+</template>
+
+<script lang="ts" setup>
+defineOptions({
+  name: "FilterMedia",
+})
+</script>

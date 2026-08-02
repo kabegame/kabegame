@@ -471,6 +471,37 @@ $select-dropdown: map.merge(
   $select-dropdown
 );
 
+// KbFilterDropdown
+$kb-filter-dropdown: () !default;
+$kb-filter-dropdown: map.merge(
+  (
+    'chip-text-color': var(--anime-text-secondary),
+    'chip-muted-color': var(--anime-text-muted),
+    'chip-border-color': var(--anime-border),
+    'chip-hover-border-color': var(--anime-primary-light),
+    'chip-active-text-color': var(--anime-primary-dark),
+    'chip-active-border-color': var(--anime-primary),
+    'chip-active-bg-color':
+      color-mix(in srgb, var(--anime-primary) 4%, transparent),
+    'chip-disabled-bg-color':
+      color-mix(in srgb, var(--anime-border) 22%, transparent),
+    'panel-bg-color': var(--anime-bg-card),
+    'panel-border-color': var(--anime-border),
+    'panel-shadow': var(--anime-shadow-hover),
+    'option-text-color': var(--anime-text-primary),
+    'option-muted-color': var(--anime-text-muted),
+    'option-hover-bg-color':
+      color-mix(in srgb, var(--anime-primary) 6%, transparent),
+    'option-selected-bg-color':
+      color-mix(in srgb, var(--anime-primary) 10%, transparent),
+    'option-selected-text-color': var(--anime-primary-dark),
+    'focus-ring':
+      0 0 0 2px color-mix(in srgb, var(--anime-primary) 18%, transparent),
+    'error-color': getCssVar('color-error'),
+  ),
+  $kb-filter-dropdown
+);
+
 $select-wrapper-padding: () !default;
 $select-wrapper-padding: map.merge(
   (

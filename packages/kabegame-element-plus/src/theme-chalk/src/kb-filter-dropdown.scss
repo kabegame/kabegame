@@ -1,0 +1,255 @@
+@use 'mixins/mixins' as *;
+@use 'mixins/var' as *;
+@use 'common/var' as *;
+
+@include b(kb-filter-dropdown) {
+  @include set-component-css-var('kb-filter-dropdown', $kb-filter-dropdown);
+
+  display: inline-flex;
+  min-width: 0;
+
+  @include e(chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    height: 38px;
+    padding: 0 11px;
+    border: 1px solid getCssVar('kb-filter-dropdown', 'chip-border-color');
+    border-radius: 11px;
+    color: getCssVar('kb-filter-dropdown', 'chip-text-color');
+    background: transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      color 0.18s ease,
+      border-color 0.18s ease,
+      background-color 0.18s ease,
+      box-shadow 0.18s ease;
+
+    &:hover {
+      border-color: getCssVar(
+        'kb-filter-dropdown',
+        'chip-hover-border-color'
+      );
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: getCssVar('kb-filter-dropdown', 'focus-ring');
+    }
+  }
+
+  @include e(chip-icon) {
+    display: inline-flex;
+    flex: none;
+    color: inherit;
+  }
+
+  @include e(chip-label) {
+    flex: none;
+    color: inherit;
+  }
+
+  @include e(chip-value) {
+    min-width: 0;
+    overflow: hidden;
+    color: getCssVar('kb-filter-dropdown', 'chip-muted-color');
+    text-overflow: ellipsis;
+  }
+
+  @include e(arrow) {
+    flex: none;
+    width: 13px;
+    color: getCssVar('kb-filter-dropdown', 'chip-muted-color');
+    font-size: 12px;
+  }
+
+  @include e(clear) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      outline: none;
+      background: getCssVar('kb-filter-dropdown', 'option-hover-bg-color');
+    }
+  }
+
+  @include when(selected) {
+    @include e(chip) {
+      color: getCssVar('kb-filter-dropdown', 'chip-active-text-color');
+      border-color: getCssVar(
+        'kb-filter-dropdown',
+        'chip-active-border-color'
+      );
+      background: getCssVar(
+        'kb-filter-dropdown',
+        'chip-active-bg-color'
+      );
+    }
+
+    @include e(chip-value) {
+      color: inherit;
+      font-weight: 600;
+    }
+  }
+
+  @include when(open) {
+    @include e(chip) {
+      border-color: getCssVar(
+        'kb-filter-dropdown',
+        'chip-active-border-color'
+      );
+      box-shadow: getCssVar('kb-filter-dropdown', 'focus-ring');
+    }
+  }
+
+  @include when(disabled) {
+    opacity: 0.55;
+    cursor: not-allowed;
+
+    @include e(chip) {
+      color: getCssVar('kb-filter-dropdown', 'chip-muted-color');
+      background: getCssVar(
+        'kb-filter-dropdown',
+        'chip-disabled-bg-color'
+      );
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+  }
+
+  @include e(popper) {
+    @include set-component-css-var('kb-filter-dropdown', $kb-filter-dropdown);
+
+    &.#{$namespace}-popper.is-light {
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid getCssVar(
+        'kb-filter-dropdown',
+        'panel-border-color'
+      );
+      border-radius: 13px;
+      background: getCssVar('kb-filter-dropdown', 'panel-bg-color');
+      box-shadow: getCssVar('kb-filter-dropdown', 'panel-shadow');
+    }
+  }
+
+  @include e(panel) {
+    width: clamp(260px, 24vw, 340px);
+    color: getCssVar('kb-filter-dropdown', 'option-text-color');
+    outline: none;
+  }
+
+  @include e(search) {
+    padding: 10px 10px 8px;
+    border-bottom: 1px solid getCssVar(
+      'kb-filter-dropdown',
+      'panel-border-color'
+    );
+  }
+
+  @include e(body) {
+    max-height: 300px;
+    padding: 6px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  @include e(list) {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  @include e(option) {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    width: 100%;
+    min-height: 38px;
+    padding: 0 11px;
+    border: 0;
+    border-radius: 9px;
+    color: getCssVar('kb-filter-dropdown', 'option-text-color');
+    background: transparent;
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+      background: getCssVar(
+        'kb-filter-dropdown',
+        'option-hover-bg-color'
+      );
+    }
+
+    @include when(highlighted) {
+      background: getCssVar(
+        'kb-filter-dropdown',
+        'option-hover-bg-color'
+      );
+    }
+
+    @include when(selected) {
+      color: getCssVar(
+        'kb-filter-dropdown',
+        'option-selected-text-color'
+      );
+      background: getCssVar(
+        'kb-filter-dropdown',
+        'option-selected-bg-color'
+      );
+    }
+  }
+
+  @include e(option-label) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @include e(count) {
+    flex: none;
+    color: getCssVar('kb-filter-dropdown', 'option-muted-color');
+    font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    @include when(negated) {
+      color: getCssVar('kb-filter-dropdown', 'error-color');
+    }
+  }
+
+  @include e(loading) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 112px;
+  }
+
+  @include e(loading-icon) {
+    color: getCssVar('kb-filter-dropdown', 'chip-active-text-color');
+    font-size: 22px;
+  }
+
+  @include e(empty) {
+    padding: 14px 11px 12px;
+    color: getCssVar('kb-filter-dropdown', 'option-muted-color');
+    font-size: 13px;
+    text-align: center;
+  }
+}

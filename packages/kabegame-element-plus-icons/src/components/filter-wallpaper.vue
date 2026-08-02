@@ -1,0 +1,9 @@
+<template>
+  <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M2.1 3.5h11.8a.6.6 0 0 1 .6.6v5.8a.6.6 0 0 1-.6.6H2.1a.6.6 0 0 1-.6-.6V4.1a.6.6 0 0 1 .6-.6z"></path><path d="M3.6 9 6.2 6.4l1.8 1.8 1.6-1.6 2.8 2.8"></path><path d="M8 10.5v2.9"></path><path d="M5.8 13.6h4.4"></path></svg>
+</template>
+
+<script lang="ts" setup>
+defineOptions({
+  name: "FilterWallpaper",
+})
+</script>
