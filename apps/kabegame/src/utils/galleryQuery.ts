@@ -145,11 +145,13 @@ export function normalizeQuery(
   return normalizeSequence(tree);
 }
 
-/** 将工具栏简单过滤复制为高级查询首行；noAlbum 是随行上下文，不进入树。 */
+/** 将工具栏简单过滤（含搜索）复制为高级查询首行；noAlbum 是随行上下文，不进入树。 */
 export function advancedQueryFromSimpleFilters(
   filters: GalleryFilterSet,
+  search?: GalleryAtomSearch | null,
 ): GalleryAdvancedQuery {
   const atom: GalleryAtom = {};
+  if (search?.query.trim()) atom.search = { ...search };
   if (filters.wallpaperOrder) atom.wallpaperOrder = true;
   if (filters.plugin?.pluginId) {
     atom.plugin = { pluginId: filters.plugin.pluginId };
@@ -165,6 +167,26 @@ export function advancedQueryFromSimpleFilters(
   if (filters.size) atom.size = { ...filters.size };
   if (filters.aspect) atom.aspect = { ...filters.aspect };
   return [{ is: atom }];
+}
+
+/**
+ * 逆向：能被工具栏简单过滤完整表达的查询树 → 简单过滤 + 搜索。
+ * 「简单」= 归一化后至多一个 `is` 节点（无 `any` / `not`），因为简单过滤行只能表达
+ * 各维度取值的 AND。表达不了就返回 null，调用方据此决定是否清空。
+ */
+export function simpleFiltersFromAdvancedQuery(
+  tree: GalleryAdvancedQuery,
+): { filters: GalleryFilterSet; search: GalleryAtomSearch | null } | null {
+  const normalized = normalizeQuery(tree);
+  if (normalized.length === 0) return { filters: {}, search: null };
+  if (normalized.length > 1) return null;
+
+  const node = normalized[0]!;
+  if (!isIsNode(node)) return null;
+
+  const { search, ...filters } = node.is;
+  // extendPath 只存在于简单过滤侧（树不支持），这里不会出现，无需特殊处理。
+  return { filters: filters as GalleryFilterSet, search: search ?? null };
 }
 
 export function isEmptyQuery(tree: GalleryAdvancedQuery): boolean {

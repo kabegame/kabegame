@@ -257,6 +257,7 @@
   "advancedQueryShort": "高度",
   "filterModeSimple": "シンプル",
   "filterModeAdvanced": "高度",
+  "advancedQueryDropped": "高度な検索に OR / NOT が含まれており、シンプルフィルターでは表現できないためクリアしました。",
   "advancedConfigure": "設定",
   "advancedHitCount": "{count} 枚に一致",
   "advancedIntro": "各条件行は一式のギャラリーフィルターです。行内の各項目はすべて適用され、未選択の項目は任意になります。",

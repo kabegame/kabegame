@@ -259,6 +259,7 @@
   "advancedQueryShort": "進階",
   "filterModeSimple": "簡單過濾",
   "filterModeAdvanced": "進階過濾",
+  "advancedQueryDropped": "進階查詢含「或 / 非」等條件，簡單過濾無法表達，已清空。",
   "advancedConfigure": "設定",
   "advancedHitCount": "命中 {count} 張",
   "advancedIntro": "每個條件列是一整套圖庫過濾，列內各維度同時生效；未選維度為任意。",

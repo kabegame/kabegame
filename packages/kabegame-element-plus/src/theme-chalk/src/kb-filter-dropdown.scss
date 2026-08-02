@@ -15,12 +15,15 @@
     gap: 7px;
     min-width: 0;
     height: 38px;
-    padding: 0 11px;
+    padding: 0 6px;
     border: 1px solid getCssVar('kb-filter-dropdown', 'chip-border-color');
     border-radius: 11px;
     color: getCssVar('kb-filter-dropdown', 'chip-text-color');
     background: transparent;
     cursor: pointer;
+    // 与同一行的 el-button 对齐:不写死就继承 root 的 16px，chip 行会明显比工具行大一号。
+    font-size: getCssVar('font-size', 'base');
+    font-weight: getCssVar('font-weight-primary');
     white-space: nowrap;
     transition:
       color 0.18s ease,

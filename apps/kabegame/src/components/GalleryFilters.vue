@@ -162,7 +162,7 @@
           <div class="p-1.5">
             <button
               type="button"
-              class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[var(--el-fill-color-light)]"
+              class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[rgba(255,107,157,0.07)]"
               :class="{
                 '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
               }"

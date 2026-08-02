@@ -10,6 +10,7 @@ import {
   parseAdvancedBody,
   removeNode,
   serializeAdvancedQuery,
+  simpleFiltersFromAdvancedQuery,
   updateNode,
 } from "../src/utils/galleryQuery.ts";
 import {
@@ -463,4 +464,39 @@ Deno.test("解析降级：parseComposablePath 对坏高级路径给空过滤而�
   // 不许把组内的 plugin/date 摊平进简单过滤。
   assertEquals(parsed.filters, {});
   assertEquals(parsed.sort.field, "by-time");
+});
+
+Deno.test("降解：单条 is 可以还原成简单过滤，或/非/多条件不行", () => {
+  // 工具栏「高级 → 简单」靠这个判断决定是平移还是清空。
+  assertEquals(simpleFiltersFromAdvancedQuery([]), { filters: {}, search: null });
+
+  const single: GalleryAdvancedQuery = [{
+    is: {
+      plugin: { pluginId: "pixiv" },
+      search: { mode: "metadata", query: "初音" },
+    },
+  }];
+  assertEquals(simpleFiltersFromAdvancedQuery(single), {
+    filters: { plugin: { pluginId: "pixiv" } },
+    search: { mode: "metadata", query: "初音" },
+  });
+
+  // 或组：简单过滤行没有「或」，只能清空。
+  assertEquals(
+    simpleFiltersFromAdvancedQuery([{ any: [[{ is: { wallpaperOrder: true } }]] }]),
+    null,
+  );
+  // 取非同理。
+  assertEquals(
+    simpleFiltersFromAdvancedQuery([{ not: [{ is: { wallpaperOrder: true } }] }]),
+    null,
+  );
+  // 同一维度两次取值，归一化后是两个节点，简单过滤只能存一个。
+  assertEquals(
+    simpleFiltersFromAdvancedQuery([
+      { is: { mediaType: { kind: "image" } } },
+      { is: { mediaType: { kind: "video" } } },
+    ]),
+    null,
+  );
 });

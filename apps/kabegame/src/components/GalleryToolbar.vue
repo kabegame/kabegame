@@ -5,8 +5,9 @@
     </template>
   </PageHeader>
 
-  <!-- 桌面：组合过滤 + 独立排序，置于标题与分页器之间 -->
-  <div v-if="!uiStore.isCompact" class="flex flex-wrap items-center gap-2 mb-2">
+  <!-- 桌面：组合过滤 + 独立排序，置于标题与分页器之间。
+       -mt-3 收掉 PageHeader 那 20px 外边距的一大半,两行贴近标题栏。 -->
+  <div v-if="!uiStore.isCompact" class="-mt-3 flex flex-wrap items-center gap-2">
     <!-- 过滤入口:简单 / 高级 二选一,下面那行跟着换 -->
     <KbTab
       v-model="filterMode"
@@ -76,45 +77,10 @@
       </template>
     </el-dropdown>
 
-    <el-dropdown
-      v-if="filterMode === 'simple'"
-      trigger="click"
-      class="ml-auto"
-      @command="onSearchModeCommand"
-    >
-      <el-button class="max-w-[280px]">
-        <el-icon class="mr-1.5 text-sm">
-          <Search />
-        </el-icon>
-        <span>{{ searchModeLabel(searchMode) }}</span>
-        <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
-          <ArrowDown />
-        </el-icon>
-      </el-button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item
-            v-for="mode in GALLERY_SEARCH_MODES"
-            :key="mode"
-            :command="mode"
-            :class="{ 'is-active': searchMode === mode }"
-          >
-            {{ searchModeLabel(mode) }}
-          </el-dropdown-item>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
-
-    <SearchInput
-      v-if="filterMode === 'simple'"
-      :model-value="search"
-      :placeholder="searchInputPlaceholder"
-      @update:model-value="(v) => emit('update:search', v)"
-    />
   </div>
 
   <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
-  <div v-if="!uiStore.isCompact && filterMode === 'advanced'" class="mb-2">
+  <div v-if="!uiStore.isCompact && filterMode === 'advanced'" class="mb-1 pt-1.5">
     <PathqlPathBar :path="advancedPathPreview">
       <template #prefix>
         <el-button type="primary" class="flex-none" @click="openAdvancedQuery">
@@ -125,48 +91,88 @@
     </PathqlPathBar>
   </div>
 
-  <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉 -->
-  <div v-else-if="!uiStore.isCompact" class="flex flex-wrap items-center gap-3 mb-2">
-    <KbFilterDropdown
-      v-for="dimension in filterDimensions"
-      :key="dimension.key"
-      :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
-      :chip-label="dimension.chipLabel"
-      :selected-label="dimensionChipValue(dimension.key)"
-      :any-label="t('gallery.filterAny')"
-      :title="dimension.title"
-      @open="setDimensionPopoverOpen(dimension.key, true)"
-      @close="setDimensionPopoverOpen(dimension.key, false)"
-      @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
+  <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
+  <div v-else-if="!uiStore.isCompact" class="mb-1 flex items-center gap-2">
+    <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
+         清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。 -->
+    <el-scrollbar
+      class="filter-chip-row min-w-0 flex-1"
+      view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
+      @wheel="onFilterChipWheel"
     >
-      <template #icon>
-        <component :is="dimension.icon" />
-      </template>
-      <template #panel="{ close }">
-        <div class="p-1.5">
-          <button
-            type="button"
-            class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[var(--el-fill-color-light)]"
-            :class="{
-              '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
-            }"
-            @click="clearDimension(dimension.key); close();"
-          >
-            {{ t("gallery.filterAny") }}
-          </button>
-          <GalleryFilterTree
-            ref="providerTreeRef"
-            :context-prefix="providerContextPrefix"
-            :filters="activeFilters"
-            :filter="filterForDimension(activeFilters, dimension.key)"
-            :dimension="dimension.key"
-            :visible="!!dimensionPopoverOpen[dimension.key]"
-            @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
-          />
-        </div>
-      </template>
-    </KbFilterDropdown>
+      <!-- 搜索与其它维度同列：chip 内 badge 显示搜索模式，面板里切模式 + 输入 -->
+      <KbFilterDropdown
+        :model-value="search.trim() ? search : null"
+        :chip-label="t('gallery.advancedChipSearch')"
+        :selected-label="search"
+        :badge="search.trim() ? searchModeLabel(searchMode) : undefined"
+        :any-label="t('gallery.filterAny')"
+        :title="t('gallery.searchPlaceholder')"
+        @update:model-value="(value) => { if (value === null) emit('update:search', ''); }"
+      >
+        <template #icon>
+          <Search />
+        </template>
+        <template #panel>
+          <div class="w-[360px] max-w-[calc(100vw-48px)] p-3">
+            <KbTab
+              :model-value="searchMode"
+              :items="searchModeItems"
+              class="w-full"
+              @update:model-value="(mode) => emit('update:searchMode', mode)"
+            />
+            <SearchInput
+              :model-value="search"
+              :placeholder="searchInputPlaceholder"
+              class="mt-3 w-full!"
+              @update:model-value="(v) => emit('update:search', v)"
+            />
+          </div>
+        </template>
+      </KbFilterDropdown>
 
+      <KbFilterDropdown
+        v-for="dimension in filterDimensions"
+        :key="dimension.key"
+        :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
+        :chip-label="dimension.chipLabel"
+        :selected-label="dimensionChipValue(dimension.key)"
+        :any-label="t('gallery.filterAny')"
+        :title="dimension.title"
+        @open="setDimensionPopoverOpen(dimension.key, true)"
+        @close="setDimensionPopoverOpen(dimension.key, false)"
+        @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
+      >
+        <template #icon>
+          <component :is="dimension.icon" />
+        </template>
+        <template #panel="{ close }">
+          <div class="p-1.5">
+            <button
+              type="button"
+              class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[rgba(255,107,157,0.07)]"
+              :class="{
+                '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
+              }"
+              @click="clearDimension(dimension.key); close();"
+            >
+              {{ t("gallery.filterAny") }}
+            </button>
+            <GalleryFilterTree
+              ref="providerTreeRef"
+              :context-prefix="providerContextPrefix"
+              :filters="activeFilters"
+              :filter="filterForDimension(activeFilters, dimension.key)"
+              :dimension="dimension.key"
+              :visible="!!dimensionPopoverOpen[dimension.key]"
+              @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
+            />
+          </div>
+        </template>
+      </KbFilterDropdown>
+    </el-scrollbar>
+
+    <!-- 清除放在滚动区外，chip 再多也常驻可见 -->
     <el-button
       v-if="isFilterIndicatorActive"
       text
@@ -297,7 +303,7 @@
     :sort="props.sort"
     :page="galleryRouteStore.page"
     :page-size="props.pageSize"
-    :context-prefix="advancedContextPrefix"
+    :context-prefix="advancedDialogContextPrefix"
     @apply="applyAdvancedQuery"
   />
 </template>
@@ -324,6 +330,7 @@ import {
   Search,
   Sort,
 } from "@kabegame/element-plus-icons";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
@@ -339,6 +346,7 @@ import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
+  DEFAULT_GALLERY_SEARCH_MODE,
   GALLERY_SEARCH_MODES,
   advancedQueryRuntimePath,
   buildAdvancedQueryContextPrefix,
@@ -389,6 +397,7 @@ import {
   advancedQueryFromSimpleFilters,
   conditionCount,
   normalizeQuery,
+  simpleFiltersFromAdvancedQuery,
   type GalleryAdvancedQuery,
 } from "@/utils/galleryQuery";
 
@@ -487,8 +496,24 @@ const advancedContextPrefix = computed(() =>
   }`
 );
 
+/**
+ * 弹窗里的上下文前缀只保留「应用后仍然生效」的部分：应用高级查询会接管
+ * 简单过滤与搜索（见 applyAdvancedQuery），所以它们不能再算进前缀，
+ * 否则弹窗里的条件会与前缀里的同一条件重复。
+ */
+const advancedDialogContextPrefix = computed(() =>
+  `images://gallery/${
+    galleryHide.value ? "hide/" : ""
+  }${
+    buildAdvancedQueryContextPrefix(
+      activeFilters.value.noAlbum ? { noAlbum: true } : {},
+      "",
+    )
+  }`
+);
+
 function openAdvancedQuery() {
-  // 优先已应用的树 → 切模式时暂存的树 → 由(刚被清掉的)简单过滤翻译一行
+  // 优先已应用的树 → 切模式时暂存的树 → 由当前简单过滤(含搜索)翻译一行
   const source = galleryRouteStore.advanced ?? stashedAdvanced.value;
   if (source) {
     advancedDialogInitialQuery.value = JSON.parse(
@@ -496,7 +521,10 @@ function openAdvancedQuery() {
     ) as GalleryAdvancedQuery;
   } else {
     advancedDialogInitialQuery.value = advancedQueryFromSimpleFilters(
-      stashedSimpleFilters.value ?? activeFilters.value,
+      activeFilters.value,
+      props.search.trim()
+        ? { mode: props.searchMode, query: props.search }
+        : null,
     );
   }
   advancedDialogVisible.value = true;
@@ -508,6 +536,10 @@ async function applyAdvancedQuery(tree: GalleryAdvancedQuery) {
     {
       advanced: normalized.length > 0 ? normalized : undefined,
       filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
+      // 树接管简单过滤与搜索：弹窗初值已把它们复制进去，原件必须在同一次
+      // navigate 里清掉——走 emit 会让父组件再导航一次，把刚写进去的树冲掉。
+      search: "",
+      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
       page: 1,
     },
     { push: true },
@@ -533,15 +565,14 @@ const showGalleryFilterFold = computed(() =>
 const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
 
 /**
- * 过滤入口是二选一:简单维度行 与 高级查询树在路由上互斥,
- * 所以切换模式时把另一侧清空(只留 no-album 这个随行上下文),避免半套状态叠加。
+ * 过滤入口是二选一:简单维度行 与 高级查询树在路由上互斥,但切换本身尽量不丢查询——
+ * 简单 → 高级:什么都不动(简单过滤会成为高级路径的上下文前缀,点「配置」再翻译进树);
+ * 高级 → 简单:树能被简单过滤表达就平移过去,表达不了(含 或/非/多条件)才清空。
  */
 type FilterMode = "simple" | "advanced";
 const filterMode = ref<FilterMode>("simple");
 /** 切走高级时把树留在本地,再切回来「配置」还能接着editing(不是已应用状态)。 */
 const stashedAdvanced = ref<GalleryAdvancedQuery | null>(null);
-/** 切到高级时把刚清掉的简单过滤留作弹窗初值。 */
-const stashedSimpleFilters = ref<GalleryFilterSet | null>(null);
 
 const filterModeItems = computed<KbTabItem<FilterMode>[]>(() => [
   {
@@ -579,28 +610,44 @@ watch(
 );
 
 async function onFilterModeSelect(mode: FilterMode) {
-  if (mode === "advanced") {
-    const dirty =
-      hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined }) ||
-      !!props.search.trim();
-    if (!dirty) return;
-    stashedSimpleFilters.value = { ...activeFilters.value };
+  // 简单过滤是高级路径的合法上下文前缀,切过去不用动任何状态。
+  if (mode === "advanced") return;
+  if (!isAdvancedActive.value) return;
+
+  const advanced = galleryRouteStore.advanced ?? [];
+  stashedAdvanced.value = advanced;
+
+  const degraded = simpleFiltersFromAdvancedQuery(advanced);
+  if (!degraded) {
+    // 或/非/多条件:简单过滤行表达不了,只能清空——这是丢查询,必须明说。
+    ElMessage.warning(t("gallery.advancedQueryDropped"));
     await resetToContextOnly();
     return;
   }
-  if (!isAdvancedActive.value) return;
-  stashedAdvanced.value = galleryRouteStore.advanced ?? null;
-  await resetToContextOnly();
+
+  await galleryRouteStore.navigate(
+    {
+      advanced: undefined,
+      filters: {
+        ...degraded.filters,
+        ...(activeFilters.value.noAlbum ? { noAlbum: true } : {}),
+      },
+      search: degraded.search?.query ?? "",
+      searchMode: degraded.search?.mode ?? DEFAULT_GALLERY_SEARCH_MODE,
+      page: 1,
+    },
+    { push: true },
+  );
 }
 
 /** 只留 no-album 这个随行上下文,过滤维度、搜索与高级树都清掉。 */
 async function resetToContextOnly() {
-  emit("update:search", "");
-  emit("update:searchMode", "display-name");
   await galleryRouteStore.navigate(
     {
       advanced: undefined,
       filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
+      search: "",
+      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
       page: 1,
     },
     { push: true },
@@ -681,6 +728,35 @@ function searchModeLabel(mode: GallerySearchMode) {
   }
 }
 
+/**
+ * 鼠标滚轮在过滤行上转成横向滚动：竖向滚轮本身不会驱动横向溢出，
+ * 不接管的话这行看着能滚却滚不动（只有触控板横扫有效）。
+ */
+function onFilterChipWheel(event: WheelEvent) {
+  const wrap = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(
+    ".el-scrollbar__wrap",
+  );
+  if (!wrap) return;
+
+  const maxScroll = wrap.scrollWidth - wrap.clientWidth;
+  if (maxScroll <= 0) return;
+
+  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+    ? event.deltaX
+    : event.deltaY;
+  if (!delta) return;
+
+  const next = Math.min(Math.max(wrap.scrollLeft + delta, 0), maxScroll);
+  if (next === wrap.scrollLeft) return; // 已到端点：让页面继续接管滚动
+  event.preventDefault();
+  wrap.scrollLeft = next;
+}
+
+/** 搜索 chip 面板顶部的模式切换(与高级查询条件行同一套)。 */
+const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
+  GALLERY_SEARCH_MODES.map((mode) => ({ name: mode, label: searchModeLabel(mode) }))
+);
+
 const searchInputPlaceholder = computed(() => {
   switch (props.searchMode) {
     case "metadata":
@@ -691,11 +767,6 @@ const searchInputPlaceholder = computed(() => {
       return t("gallery.searchPlaceholder");
   }
 });
-
-function onSearchModeCommand(cmd: string) {
-  if (!GALLERY_SEARCH_MODES.includes(cmd as GallerySearchMode)) return;
-  emit("update:searchMode", cmd as GallerySearchMode);
-}
 
 function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
   dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };
@@ -1928,3 +1999,23 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
   }
 };
 </script>
+
+<style scoped lang="scss">
+/* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
+.filter-chip-row {
+  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走。
+  --el-scrollbar-bg-color: var(--anime-secondary-light);
+  --el-scrollbar-hover-bg-color: var(--anime-primary);
+  --el-scrollbar-opacity: 0.55;
+  --el-scrollbar-hover-opacity: 0.9;
+
+  :deep(.el-scrollbar__view) > * {
+    flex: none;
+  }
+
+  :deep(.el-scrollbar__bar.is-horizontal) {
+    height: 5px;
+    bottom: 0;
+  }
+}
+</style>

@@ -258,6 +258,7 @@
   "advancedQueryShort": "高级",
   "filterModeSimple": "简单过滤",
   "filterModeAdvanced": "高级过滤",
+  "advancedQueryDropped": "高级查询含「或 / 非」等条件，简单过滤无法表达，已清空。",
   "advancedConfigure": "配置",
   "advancedHitCount": "命中 {count} 张",
   "advancedIntro": "每个条件行是一整套画廊过滤，行内各维度同时生效；未选维度为任意。",

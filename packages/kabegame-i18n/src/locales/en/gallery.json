@@ -255,6 +255,7 @@
   "advancedQueryShort": "Advanced",
   "filterModeSimple": "Simple",
   "filterModeAdvanced": "Advanced",
+  "advancedQueryDropped": "The advanced query uses OR/NOT, which simple filters cannot express — it has been cleared.",
   "advancedConfigure": "Configure",
   "advancedHitCount": "{count} matches",
   "advancedIntro": "Each condition row is a complete gallery filter. Dimensions in a row all apply; unselected dimensions match any value.",

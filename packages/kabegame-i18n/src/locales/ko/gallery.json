@@ -257,6 +257,7 @@
   "advancedQueryShort": "고급",
   "filterModeSimple": "간단",
   "filterModeAdvanced": "고급",
+  "advancedQueryDropped": "고급 검색에 OR/NOT이 포함되어 간단 필터로 표현할 수 없으므로 초기화했습니다.",
   "advancedConfigure": "설정",
   "advancedHitCount": "{count}개 일치",
   "advancedIntro": "각 조건 행은 하나의 완전한 갤러리 필터입니다. 행 안의 차원은 모두 적용되며 선택하지 않은 차원은 전체를 뜻합니다.",

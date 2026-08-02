@@ -10,7 +10,7 @@
     :style="nodeStyle"
   >
     <div
-      class="provider-tree-node__row min-h-8 flex items-center pl-[calc(var(--tree-depth)*16px)] rounded-[6px] text-[var(--anime-text-primary)] hover:bg-[var(--el-fill-color-light)]"
+      class="provider-tree-node__row min-h-8 flex items-center pl-[calc(var(--tree-depth)*16px)] rounded-[6px] text-[var(--anime-text-primary)] hover:bg-[rgba(255,107,157,0.07)]"
       :class="{
         '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': active,
         'opacity-50 hover:bg-transparent': isDisabled,
