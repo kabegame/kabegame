@@ -148,17 +148,9 @@
             <component :is="dimension.icon" />
           </template>
           <template #panel="{ close }">
+            <!-- 「任意」不再手写：树自己的 AnyProviderChildrenNode 就是它，
+                 而且带计数（pathForTreeSegment 对单维度的 all 段会算「去掉本维度后」的总数）。 -->
             <div class="p-1.5">
-              <button
-                type="button"
-                class="w-full min-h-8 border-0 rounded-[6px] bg-transparent text-[var(--anime-text-primary)] text-left px-3 cursor-pointer hover:bg-[rgba(255,107,157,0.07)]"
-                :class="{
-                  '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': !isDimensionActive(dimension.key),
-                }"
-                @click="clearDimension(dimension.key); close();"
-              >
-                {{ t("gallery.filterAny") }}
-              </button>
               <GalleryFilterTree
                 ref="providerTreeRef"
                 :context-prefix="providerContextPrefix"

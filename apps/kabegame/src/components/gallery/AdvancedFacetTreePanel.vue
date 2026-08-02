@@ -3,7 +3,7 @@
     class="w-[320px] max-w-[calc(100vw-48px)] max-h-[340px] min-h-0 overflow-x-hidden overflow-y-auto p-1"
     style="--provider-tree-row-height: 32px; --provider-tree-sticky-offset: 0px"
   >
-    <AllProviderChildrenNode @select="selectFilter" />
+    <AnyProviderChildrenNode @select="selectFilter" />
     <DateProviderChildrenNode
       v-if="dimension === 'date'"
       @select="selectFilter"
@@ -46,7 +46,7 @@ import {
   type GalleryAtom,
   type NodePath,
 } from "@/utils/galleryQuery";
-import AllProviderChildrenNode from "@/components/galleryFilterTree/AllProviderChildrenNode.vue";
+import AnyProviderChildrenNode from "@/components/galleryFilterTree/AnyProviderChildrenNode.vue";
 import AspectProviderChildrenNode from "@/components/galleryFilterTree/AspectProviderChildrenNode.vue";
 import DateProviderChildrenNode from "@/components/galleryFilterTree/DateProviderChildrenNode.vue";
 import MediaTypeProviderChildrenNode from "@/components/galleryFilterTree/MediaTypeProviderChildrenNode.vue";

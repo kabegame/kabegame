@@ -1,7 +1,9 @@
 <template>
   <div class="gallery-filter-tree">
     <div :key="treeKey" class="provider-tree">
-      <AllProviderChildrenNode v-if="!dimension" @select="selectFilter" />
+      <!-- 单维度面板下它就是「任意」那一行（计数按去掉本维度后的过滤集算），
+           所以不再按 dimension 关掉，chip 面板也不用在外面手写一个。 -->
+      <AnyProviderChildrenNode @select="selectFilter" />
       <WallpaperOrderProviderChildrenNode v-if="showDimension('wallpaperOrder')" @select="selectFilter" />
       <NameProviderChildrenNode v-if="showDimension('name')" @select="selectFilter" />
       <DateProviderChildrenNode v-if="showDimension('date')" @select="selectFilter" />
@@ -23,7 +25,7 @@ import {
   type GalleryFilterDimension,
   type GalleryFilterSet,
 } from "@/utils/galleryPath";
-import AllProviderChildrenNode from "./AllProviderChildrenNode.vue";
+import AnyProviderChildrenNode from "./AnyProviderChildrenNode.vue";
 import NameProviderChildrenNode from "./NameProviderChildrenNode.vue";
 import DateProviderChildrenNode from "./DateProviderChildrenNode.vue";
 import MediaTypeProviderChildrenNode from "./MediaTypeProviderChildrenNode.vue";

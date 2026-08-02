@@ -1,6 +1,6 @@
 <template>
   <ProviderChildrenNode
-    :name="t('gallery.filterAll')"
+    :name="t('gallery.filterAny')"
     :path="path"
     :active="isSameGalleryFilter({ type: 'all' }, filter)"
     @select="$emit('select', { type: 'all' })"
