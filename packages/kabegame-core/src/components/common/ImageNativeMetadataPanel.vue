@@ -12,7 +12,7 @@
     <template #trailing>
       <span class="native-meta-chip native-meta-chip-primary">{{ mimeLabel }}</span>
     </template>
-    <div class="native-meta-body">
+    <div class="native-meta-body kb-selectable">
       <template v-if="state === 'loading'">
         <template v-if="showLoading">
           <div class="native-meta-loading">
@@ -295,8 +295,6 @@ async function copyText(text: string): Promise<void> {
   gap: 12px;
   overflow: auto;
   padding: 14px 16px;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .native-meta-loading {

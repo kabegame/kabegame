@@ -1,6 +1,7 @@
 <template>
-    <div class="code-block-wrapper">
-        <pre class="code-block"><code>{{ code }}</code></pre>
+    <div class="code-block-wrapper" :class="{ 'is-single-line': singleLine }">
+        <!-- kb-selectable：全局 body 是 user-select:none，代码/路径要能划词部分复制 -->
+        <pre class="code-block kb-selectable"><code>{{ code }}</code></pre>
         <el-button class="copy-btn" circle size="small" @click="handleCopy" :icon="copied ? Check : DocumentCopy">
         </el-button>
     </div>
@@ -16,6 +17,8 @@ import { IS_WEB } from "@kabegame/core/env";
 const { t } = useI18n();
 const props = defineProps<{
     code: string;
+    /** 单行紧凑形态（工具栏那条 PathQL 路径）：不留上下外边距、复制图标垂直居中。 */
+    singleLine?: boolean;
 }>();
 
 const copied = ref(false);
@@ -75,6 +78,19 @@ const handleCopy = async () => {
 
         &:hover {
             opacity: 1;
+        }
+    }
+
+    &.is-single-line {
+        margin: 0;
+
+        .code-block {
+            padding: 7px 40px 7px 12px;
+        }
+
+        .copy-btn {
+            top: 50%;
+            transform: translateY(-50%);
         }
     }
 }

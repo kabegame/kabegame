@@ -7,66 +7,13 @@
 
   <!-- 桌面：组合过滤 + 独立排序，置于标题与分页器之间 -->
   <div v-if="!uiStore.isCompact" class="flex flex-wrap items-center gap-2 mb-2">
-    <!-- 打开过滤行 -->
-    <div class="relative inline-flex max-w-[280px]">
-      <el-tooltip
-        :content="t('gallery.advancedSimpleFilterDisabled')"
-        :disabled="!isAdvancedActive"
-        placement="top"
-      >
-        <span>
-          <el-button
-            class="max-w-[280px] !pr-7"
-            :class="{
-              '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isFilterIndicatorActive,
-            }"
-            :disabled="isAdvancedActive"
-            @click="showDesktopFilterRow = !showDesktopFilterRow"
-          >
-            <el-icon class="mr-1.5 text-sm">
-              <Filter />
-            </el-icon>
-            <span>{{ t("gallery.filter") }} </span>
-            <el-icon
-              class="el-icon--right transition-transform duration-150 ease-[ease]"
-              :class="{ 'rotate-180': showDesktopFilterRow }"
-            >
-              <ArrowDown />
-            </el-icon>
-          </el-button>
-        </span>
-      </el-tooltip>
-      <button
-        v-if="isFilterIndicatorActive"
-        type="button"
-        class="absolute -right-1 -top-1 z-10 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border border-white bg-[var(--anime-primary)] p-0 text-[11px] text-white shadow-[0_2px_6px_rgba(255,107,157,0.35)] cursor-pointer"
-        :aria-label="t('gallery.clearAllFilters')"
-        :title="t('gallery.clearAllFilters')"
-        @click.stop.prevent="clearAllFilters"
-      >
-        <el-icon>
-          <Close />
-        </el-icon>
-      </button>
-    </div>
-
-    <div class="relative inline-flex">
-      <el-button
-        :class="{
-          '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isAdvancedActive,
-        }"
-        @click="openAdvancedQuery"
-      >
-        <el-icon class="mr-1.5 text-sm"><Filter /></el-icon>
-        {{ t("gallery.advancedQueryShort") }}
-      </el-button>
-      <span
-        v-if="advancedConditionCount > 0"
-        class="absolute -right-1.5 -top-1.5 z-10 inline-flex min-w-[19px] h-[19px] items-center justify-center rounded-full border border-white bg-[var(--anime-primary)] px-1 text-[10px] font-semibold text-white"
-      >
-        {{ advancedConditionCount > 99 ? "99+" : advancedConditionCount }}
-      </span>
-    </div>
+    <!-- 过滤入口:简单 / 高级 二选一,下面那行跟着换 -->
+    <KbTab
+      v-model="filterMode"
+      :items="filterModeItems"
+      class="flex-none"
+      @select="onFilterModeSelect"
+    />
 
     <!-- 排序维度 -->
     <el-dropdown trigger="click" @command="onDesktopSortFieldCommand">
@@ -129,7 +76,12 @@
       </template>
     </el-dropdown>
 
-    <el-dropdown trigger="click" class="ml-auto" @command="onSearchModeCommand">
+    <el-dropdown
+      v-if="filterMode === 'simple'"
+      trigger="click"
+      class="ml-auto"
+      @command="onSearchModeCommand"
+    >
       <el-button class="max-w-[280px]">
         <el-icon class="mr-1.5 text-sm">
           <Search />
@@ -154,14 +106,27 @@
     </el-dropdown>
 
     <SearchInput
+      v-if="filterMode === 'simple'"
       :model-value="search"
       :placeholder="searchInputPlaceholder"
       @update:model-value="(v) => emit('update:search', v)"
     />
   </div>
 
+  <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
+  <div v-if="!uiStore.isCompact && filterMode === 'advanced'" class="mb-2">
+    <PathqlPathBar :path="advancedPathPreview">
+      <template #prefix>
+        <el-button type="primary" class="flex-none" @click="openAdvancedQuery">
+          <el-icon class="mr-1.5 text-sm"><Setting /></el-icon>
+          {{ t("gallery.advancedConfigure") }}
+        </el-button>
+      </template>
+    </PathqlPathBar>
+  </div>
+
   <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉 -->
-  <div v-if="!uiStore.isCompact && showDesktopFilterRow && !isAdvancedActive" class="flex flex-wrap items-center gap-3 mb-2">
+  <div v-else-if="!uiStore.isCompact" class="flex flex-wrap items-center gap-3 mb-2">
     <KbFilterDropdown
       v-for="dimension in filterDimensions"
       :key="dimension.key"
@@ -201,6 +166,17 @@
         </div>
       </template>
     </KbFilterDropdown>
+
+    <el-button
+      v-if="isFilterIndicatorActive"
+      text
+      class="flex-none !text-[var(--anime-text-secondary)]"
+      :title="t('gallery.clearAllFilters')"
+      @click="clearAllFilters"
+    >
+      <el-icon class="mr-1"><Close /></el-icon>
+      {{ t("gallery.clearAllFilters") }}
+    </el-button>
   </div>
 
   <div v-if="uiStore.isCompact" class="mb-2 flex justify-end">
@@ -330,12 +306,13 @@
 import { computed, markRaw, ref, watch, onMounted, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { KbFilterDropdown } from "@kabegame/element-plus";
+import { KbFilterDropdown, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { useRouter } from "vue-router";
 import {
   ArrowDown,
   Close,
   Filter,
+  Setting,
   FilterAspect,
   FilterDate,
   FilterMedia,
@@ -354,6 +331,7 @@ import SearchInput from "@/components/SearchInput.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
+import PathqlPathBar from "@/components/gallery/PathqlPathBar.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -362,7 +340,9 @@ import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
   GALLERY_SEARCH_MODES,
+  advancedQueryRuntimePath,
   buildAdvancedQueryContextPrefix,
+  buildComposablePath,
   filterForDimension,
   filterAspectRange,
   filterDateSegment,
@@ -377,7 +357,6 @@ import {
   isSimpleFilter,
   newRandomSortSeed,
   removeFilterDimension,
-  serializeFilterSet,
   setFilterDimension,
   singleFilterToSet,
   type GalleryFilter,
@@ -509,13 +488,15 @@ const advancedContextPrefix = computed(() =>
 );
 
 function openAdvancedQuery() {
-  if (galleryRouteStore.advanced) {
+  // 优先已应用的树 → 切模式时暂存的树 → 由(刚被清掉的)简单过滤翻译一行
+  const source = galleryRouteStore.advanced ?? stashedAdvanced.value;
+  if (source) {
     advancedDialogInitialQuery.value = JSON.parse(
-      JSON.stringify(galleryRouteStore.advanced),
+      JSON.stringify(source),
     ) as GalleryAdvancedQuery;
   } else {
     advancedDialogInitialQuery.value = advancedQueryFromSimpleFilters(
-      activeFilters.value,
+      stashedSimpleFilters.value ?? activeFilters.value,
     );
   }
   advancedDialogVisible.value = true;
@@ -549,8 +530,82 @@ const showGalleryFilterFold = computed(() =>
   galleryRouteStore.advanced === undefined && isSimpleFilter(activeFilters.value)
 );
 
-const showDesktopFilterRow = ref(false);
 const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
+
+/**
+ * 过滤入口是二选一:简单维度行 与 高级查询树在路由上互斥,
+ * 所以切换模式时把另一侧清空(只留 no-album 这个随行上下文),避免半套状态叠加。
+ */
+type FilterMode = "simple" | "advanced";
+const filterMode = ref<FilterMode>("simple");
+/** 切走高级时把树留在本地,再切回来「配置」还能接着editing(不是已应用状态)。 */
+const stashedAdvanced = ref<GalleryAdvancedQuery | null>(null);
+/** 切到高级时把刚清掉的简单过滤留作弹窗初值。 */
+const stashedSimpleFilters = ref<GalleryFilterSet | null>(null);
+
+const filterModeItems = computed<KbTabItem<FilterMode>[]>(() => [
+  {
+    name: "simple",
+    label: t("gallery.filterModeSimple"),
+    icon: markRaw(Filter),
+  },
+  {
+    name: "advanced",
+    label: t("gallery.filterModeAdvanced"),
+    icon: markRaw(Filter),
+    count: advancedConditionCount.value > 0 ? advancedConditionCount.value : null,
+  },
+]);
+
+const advancedPathPreview = computed(() =>
+  advancedQueryRuntimePath(
+    buildComposablePath({
+      filters: {},
+      advanced: galleryRouteStore.advanced ?? [],
+      sort: props.sort,
+      page: galleryRouteStore.page,
+      pageSize: props.pageSize,
+    }),
+    advancedContextPrefix.value,
+  )
+);
+
+watch(
+  isAdvancedActive,
+  (active) => {
+    if (active) filterMode.value = "advanced";
+  },
+  { immediate: true },
+);
+
+async function onFilterModeSelect(mode: FilterMode) {
+  if (mode === "advanced") {
+    const dirty =
+      hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined }) ||
+      !!props.search.trim();
+    if (!dirty) return;
+    stashedSimpleFilters.value = { ...activeFilters.value };
+    await resetToContextOnly();
+    return;
+  }
+  if (!isAdvancedActive.value) return;
+  stashedAdvanced.value = galleryRouteStore.advanced ?? null;
+  await resetToContextOnly();
+}
+
+/** 只留 no-album 这个随行上下文,过滤维度、搜索与高级树都清掉。 */
+async function resetToContextOnly() {
+  emit("update:search", "");
+  emit("update:searchMode", "display-name");
+  await galleryRouteStore.navigate(
+    {
+      advanced: undefined,
+      filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
+      page: 1,
+    },
+    { push: true },
+  );
+}
 
 const sortFieldOptions: GallerySortField[] = [
   "by-id",
@@ -594,26 +649,6 @@ const isFilterIndicatorActive = computed(
   () =>
     !!props.search.trim() ||
     hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined })
-);
-
-const visibleFilterSignature = computed(() =>
-  serializeFilterSet({ ...activeFilters.value, noAlbum: undefined })
-);
-
-const lastAutoOpenedFilterSignature = ref<string | null>(null);
-watch(
-  [visibleFilterSignature, () => uiStore.isCompact],
-  ([signature, isCompact]) => {
-    if (!signature) {
-      lastAutoOpenedFilterSignature.value = null;
-      return;
-    }
-    if (!isCompact && signature !== lastAutoOpenedFilterSignature.value) {
-      showDesktopFilterRow.value = true;
-    }
-    lastAutoOpenedFilterSignature.value = signature;
-  },
-  { immediate: true }
 );
 
 function sortFieldLabel(field: GallerySortField) {

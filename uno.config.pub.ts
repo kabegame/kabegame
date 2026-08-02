@@ -29,6 +29,9 @@ export default defineConfig({
     ['kb-chip', 'inline-flex items-center h-5 px-1.75 rounded-8px text-12px font-500'],
     ['kb-card', 'rounded-12px bg-white border border-solid border-[var(--anime-border)]'],
     ['kb-grad', 'bg-gradient-to-r from-[var(--anime-primary)] to-[var(--anime-secondary)]'],
+    // 全局 body 是 user-select:none(桌面 app 观感);需要让用户能划词复制的地方
+    // (路径、日志、原生元数据、亀ちゃん历史)统一挂这个类表达豁免，别各写各的 CSS。
+    ['kb-selectable', 'select-text cursor-text [-webkit-touch-callout:default]'],
   ],
   rules: [
     // Drawer 最大宽度规则（所有平台统一使用 500px，使用 !important 确保优先级）

@@ -141,7 +141,7 @@ import { DocumentCopy } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { IS_WEB } from "@kabegame/core/env";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import CodeBlock from "@/components/help/CodeBlock.vue";
+import CodeBlock from "@/components/common/CodeBlock.vue";
 
 interface McpCapability {
   id: string;

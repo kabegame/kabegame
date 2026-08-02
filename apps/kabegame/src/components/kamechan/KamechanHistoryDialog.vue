@@ -8,7 +8,7 @@
     class="kamechan-history-dialog"
     @update:model-value="$event || emit('close')"
   >
-    <div class="kamechan-history-list">
+    <div class="kamechan-history-list kb-selectable">
       <div v-if="messages.length === 0" class="kamechan-history-empty">
         {{ t("kamechan.historyEmpty") }}
       </div>
@@ -73,8 +73,6 @@ const tagType = (type: KameMessageType): "info" | "warning" | "danger" | "succes
   display: flex;
   flex-direction: column;
   gap: 8px;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .kamechan-history-empty {

@@ -1,7 +1,6 @@
 <template>
   <el-dialog
     :model-value="visible"
-    :close-on-click-modal="false"
     :close-on-press-escape="true"
     append-to-body
     destroy-on-close
@@ -40,18 +39,7 @@
 
     <template #footer>
       <div class="advanced-query-footer flex flex-col gap-3 text-left">
-        <div class="flex min-w-0 items-center gap-2">
-          <span class="flex-none text-sm font-medium text-[var(--anime-secondary)]">
-            {{ t("gallery.advancedPath") }}
-          </span>
-          <div class="min-w-0 flex-1 overflow-x-auto rounded-lg border border-solid border-[var(--anime-border)] bg-[var(--anime-bg-sidebar)] px-3 py-2 font-mono text-xs text-[var(--anime-text-secondary)] whitespace-nowrap">
-            {{ previewPath }}
-          </div>
-          <el-button class="flex-none" @click="copyPath">
-            <el-icon class="mr-1"><DocumentCopy /></el-icon>
-            {{ t("gallery.advancedCopy") }}
-          </el-button>
-        </div>
+        <PathqlPathBar :path="previewPath" show-label />
         <div class="flex flex-wrap items-center gap-2">
           <el-button @click="clear">{{ t("gallery.advancedClear") }}</el-button>
           <div class="ml-auto flex items-center gap-2">
@@ -66,14 +54,11 @@
 
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from "vue";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useI18n } from "@kabegame/i18n";
 import { ElButton, ElDialog, ElIcon } from "@kabegame/element-plus";
-import { DocumentCopy, Loading } from "@kabegame/element-plus-icons";
+import { Loading } from "@kabegame/element-plus-icons";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import { isTauri } from "@tauri-apps/api/core";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useAdvancedHitCount } from "@/composables/useAdvancedQueryFacets";
 import {
   advancedQueryRuntimePath,
@@ -85,6 +70,7 @@ import {
   type GalleryAdvancedQuery,
 } from "@/utils/galleryQuery";
 import GalleryAdvancedQuerySequence from "./GalleryAdvancedQuerySequence.vue";
+import PathqlPathBar from "./PathqlPathBar.vue";
 
 const props = withDefaults(defineProps<{
   query?: GalleryAdvancedQuery;
@@ -161,17 +147,6 @@ function cancel(): void {
 function apply(): void {
   emit("apply", effectiveQuery.value);
   visible.value = false;
-}
-
-async function copyPath(): Promise<void> {
-  try {
-    if (isTauri()) await writeText(previewPath.value);
-    else await navigator.clipboard.writeText(previewPath.value);
-    ElMessage.success(t("common.copySuccess"));
-  } catch (error) {
-    console.error("复制高级查询路径失败:", error);
-    ElMessage.error(t("common.copyFailed"));
-  }
 }
 </script>
 

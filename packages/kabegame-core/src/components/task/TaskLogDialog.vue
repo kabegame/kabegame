@@ -8,7 +8,7 @@
     class="task-log-dialog"
     @update:model-value="(v: boolean) => { if (!v) close() }"
   >
-    <div class="task-log-list">
+    <div class="task-log-list kb-selectable">
       <div v-if="currentTaskLogs.length === 0" class="task-log-empty">{{ t('tasks.drawerNoLogs') }}</div>
       <div
         v-for="log in currentTaskLogs"
@@ -163,8 +163,6 @@ defineExpose({ openTaskLog });
   display: flex;
   flex-direction: column;
   gap: 8px;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .task-log-empty {
@@ -181,8 +179,6 @@ defineExpose({ openTaskLog });
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 12px;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .task-log-main {
