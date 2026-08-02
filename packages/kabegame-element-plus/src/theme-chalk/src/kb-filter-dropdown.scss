@@ -9,6 +9,7 @@
   min-width: 0;
 
   @include e(chip) {
+    position: relative; // 清除徽章锚点(右上角浮出)
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -65,24 +66,30 @@
     font-size: 12px;
   }
 
+  // 清除徽章:浮在 chip 右上角(对照设计稿选中态的圆形 ✕),不占据行内空间。
   @include e(clear) {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    z-index: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: none;
-    width: 20px;
-    height: 20px;
+    width: 17px;
+    height: 17px;
     padding: 0;
-    border: 0;
+    border: 2px solid getCssVar('kb-filter-dropdown', 'clear-ring-color');
     border-radius: 50%;
-    color: inherit;
-    background: transparent;
+    color: getCssVar('kb-filter-dropdown', 'clear-text-color');
+    background: getCssVar('kb-filter-dropdown', 'clear-bg-color');
+    font-size: 9px;
     cursor: pointer;
 
     &:hover,
     &:focus-visible {
       outline: none;
-      background: getCssVar('kb-filter-dropdown', 'option-hover-bg-color');
+      background: getCssVar('kb-filter-dropdown', 'clear-hover-bg-color');
     }
   }
 
@@ -214,6 +221,15 @@
         'kb-filter-dropdown',
         'option-selected-bg-color'
       );
+    }
+
+    // 计数为 0:整行灰字(含计数,负计数语境同样灰——排除 0 个无效果),仍可选。
+    @include when(zero) {
+      color: getCssVar('kb-filter-dropdown', 'option-zero-color');
+
+      .#{$namespace}-kb-filter-dropdown__count {
+        color: getCssVar('kb-filter-dropdown', 'option-zero-color');
+      }
     }
   }
 

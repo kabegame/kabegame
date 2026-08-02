@@ -78,21 +78,27 @@
           v-for="item in facetItems"
           :key="item.dimension"
           :model-value="dimensionValue(item.dimension)"
-          :options="item.facet.options.value"
           :chip-label="item.label"
           :selected-label="dimensionValueLabel(item.dimension)"
           :any-label="t('gallery.filterAny')"
-          :any-count="item.facet.anyCount.value"
-          :searchable="item.dimension === 'plugin'"
-          :search-placeholder="t('gallery.advancedSearchOptions')"
-          :empty-text="t('common.noData')"
-          :loading="item.facet.loading.value"
-          :negated="item.facet.negated.value"
-          @open="item.facet.load"
-          @update:model-value="(value) => updateDimension(item.dimension, value)"
+          :negated="negated"
+          @open="openFacetPanel(item.dimension)"
+          @before-hide="closeFacetPanel(item.dimension)"
+          @update:model-value="(value) => clearDimensionFromDropdown(item.dimension, value)"
         >
           <template #icon>
             <component :is="item.icon" />
+          </template>
+          <!-- TODO:树面板暂不支持文本过滤。 -->
+          <template #panel="{ close }">
+            <AdvancedFacetTreePanel
+              :tree="tree"
+              :node-path="nodePath"
+              :dimension="item.dimension"
+              :context-prefix="contextPrefix"
+              :visible="openedFacet === item.dimension"
+              @select="(filter) => selectDimensionFilter(item.dimension, filter, close)"
+            />
           </template>
         </KbFilterDropdown>
 
@@ -122,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, toRef, type Component } from "vue";
+import { computed, markRaw, ref, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import {
   ElIcon,
@@ -143,8 +149,12 @@ import {
   FilterWallpaper,
   Search,
 } from "@kabegame/element-plus-icons";
-import { facetValueLabel, useDimensionFacet } from "@/composables/useAdvancedQueryFacets";
+import {
+  facetValueLabel,
+  type FacetDimension,
+} from "@/composables/useAdvancedQueryFacets";
 import { usePluginStore } from "@/stores/plugins";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import {
   getNode,
   notParity,
@@ -158,10 +168,10 @@ import {
 import {
   DEFAULT_GALLERY_SEARCH_MODE,
   GALLERY_SEARCH_MODES,
+  type GalleryFilter,
   type GallerySearchMode,
 } from "@/utils/galleryPath";
-
-type FacetDimension = "date" | "plugin" | "mediaType" | "aspect" | "size" | "name";
+import AdvancedFacetTreePanel from "./AdvancedFacetTreePanel.vue";
 
 const props = defineProps<{
   tree: GalleryAdvancedQuery;
@@ -178,36 +188,24 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const pluginStore = usePluginStore();
-const treeRef = toRef(props, "tree");
-const nodePathRef = computed(() => props.nodePath);
+const openedFacet = ref<FacetDimension | null>(null);
 const atom = computed<GalleryAtom>(() => {
   const node = getNode(props.tree, props.nodePath);
   return "is" in node ? node.is : {};
 });
 const negated = computed(() => notParity(props.tree, props.nodePath));
-const contextPrefixRef = computed(() => props.contextPrefix ?? "images://gallery/");
-
-const facets = {
-  date: useDimensionFacet(treeRef, nodePathRef, "date", contextPrefixRef),
-  plugin: useDimensionFacet(treeRef, nodePathRef, "plugin", contextPrefixRef),
-  mediaType: useDimensionFacet(treeRef, nodePathRef, "mediaType", contextPrefixRef),
-  aspect: useDimensionFacet(treeRef, nodePathRef, "aspect", contextPrefixRef),
-  size: useDimensionFacet(treeRef, nodePathRef, "size", contextPrefixRef),
-  name: useDimensionFacet(treeRef, nodePathRef, "name", contextPrefixRef),
-};
 
 const facetItems = computed<Array<{
   dimension: FacetDimension;
   label: string;
   icon: Component;
-  facet: (typeof facets)[FacetDimension];
 }>>(() => [
-  { dimension: "date", label: t("gallery.advancedChipTime"), icon: markRaw(FilterDate), facet: facets.date },
-  { dimension: "plugin", label: t("gallery.advancedChipPlugin"), icon: markRaw(FilterPlugin), facet: facets.plugin },
-  { dimension: "mediaType", label: t("gallery.advancedChipMediaType"), icon: markRaw(FilterMedia), facet: facets.mediaType },
-  { dimension: "aspect", label: t("gallery.advancedChipAspect"), icon: markRaw(FilterAspect), facet: facets.aspect },
-  { dimension: "size", label: t("gallery.advancedChipSize"), icon: markRaw(FilterSize), facet: facets.size },
-  { dimension: "name", label: t("gallery.advancedChipName"), icon: markRaw(FilterName), facet: facets.name },
+  { dimension: "date", label: t("gallery.advancedChipTime"), icon: markRaw(FilterDate) },
+  { dimension: "plugin", label: t("gallery.advancedChipPlugin"), icon: markRaw(FilterPlugin) },
+  { dimension: "mediaType", label: t("gallery.advancedChipMediaType"), icon: markRaw(FilterMedia) },
+  { dimension: "aspect", label: t("gallery.advancedChipAspect"), icon: markRaw(FilterAspect) },
+  { dimension: "size", label: t("gallery.advancedChipSize"), icon: markRaw(FilterSize) },
+  { dimension: "name", label: t("gallery.advancedChipName"), icon: markRaw(FilterName) },
 ]);
 
 const wallpaperOptions = computed<KbFilterDropdownOption[]>(() => [{
@@ -271,7 +269,7 @@ function dimensionValue(dimension: FacetDimension): string | null {
   return current.name?.bucket ?? null;
 }
 
-/** chip 选中值的本地化文案:options 惰性加载,不能依赖下拉数据反查。 */
+/** chip 选中值的本地化文案：树面板未打开时也不能依赖节点数据反查。 */
 function dimensionValueLabel(dimension: FacetDimension): string | undefined {
   const value = dimensionValue(dimension);
   if (!value) return undefined;
@@ -281,20 +279,68 @@ function dimensionValueLabel(dimension: FacetDimension): string | undefined {
   return facetValueLabel(dimension, value, t);
 }
 
-function updateDimension(dimension: FacetDimension, value: string | null): void {
+function openFacetPanel(dimension: FacetDimension): void {
+  openedFacet.value = dimension;
+}
+
+function closeFacetPanel(dimension: FacetDimension): void {
+  if (openedFacet.value === dimension) openedFacet.value = null;
+}
+
+function clearDimensionFromDropdown(
+  dimension: FacetDimension,
+  value: string | null,
+): void {
+  if (value === null) updateDimensionFilter(dimension, null);
+}
+
+function selectDimensionFilter(
+  dimension: FacetDimension,
+  filter: GalleryFilter,
+  close: () => void,
+): void {
+  let nextFilter = filter;
+  if (
+    filter.type === "plugin" &&
+    filter.extendPath?.trim() &&
+    (props.nodePath.length > 1 || negated.value)
+  ) {
+    ElMessage.warning(t("gallery.advancedPluginExtendRestricted"));
+    nextFilter = { type: "plugin", pluginId: filter.pluginId };
+  }
+  updateDimensionFilter(dimension, nextFilter);
+  openedFacet.value = null;
+  close();
+}
+
+function updateDimensionFilter(
+  dimension: FacetDimension,
+  filter: GalleryFilter | null,
+): void {
   updateAtom((current) => {
     const next: GalleryAtom = { ...current };
-    if (!value) {
-      delete next[dimension];
-      return next;
+    delete next[dimension];
+    if (!filter || filter.type === "all") return next;
+
+    if (dimension === "date" && filter.type === "date") {
+      next.date = { segment: filter.segment };
+    } else if (dimension === "plugin" && filter.type === "plugin") {
+      next.plugin = {
+        pluginId: filter.pluginId,
+        ...(filter.extendPath ? { extendPath: filter.extendPath } : {}),
+      };
+    } else if (dimension === "mediaType" && filter.type === "media-type") {
+      next.mediaType = {
+        kind: filter.kind,
+        ...(filter.format ? { format: filter.format } : {}),
+      };
+    } else if (dimension === "aspect" && filter.type === "aspect") {
+      next.aspect = { range: filter.range };
+    } else if (dimension === "size" && filter.type === "size") {
+      next.size = { range: filter.range };
+    } else if (dimension === "name" && filter.type === "name") {
+      next.name = { bucket: filter.bucket };
     }
-    if (dimension === "date") next.date = { segment: value };
-    else if (dimension === "plugin") next.plugin = { pluginId: value };
-    else if (dimension === "mediaType" && (value === "image" || value === "video")) {
-      next.mediaType = { kind: value };
-    } else if (dimension === "aspect") next.aspect = { range: value };
-    else if (dimension === "size") next.size = { range: value };
-    else if (dimension === "name") next.name = { bucket: value };
     return next;
   });
 }

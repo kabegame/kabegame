@@ -14,6 +14,8 @@
       :class="{
         '!bg-[rgba(255,107,157,0.14)] !text-[var(--anime-primary)]': active,
         'opacity-50 hover:bg-transparent': isDisabled,
+        // 计数为 0:整行灰字弱化,但仍可选(排除语境下选 0 也有意义)。
+        '!text-[var(--anime-text-muted)]': isEmpty && !active,
       }"
       :aria-busy="loading"
       :aria-disabled="isDisabled"
@@ -40,7 +42,13 @@
         @click="onLabelClick"
       >
         <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{{ name }}</span>
-        <span class="flex-none text-[var(--anime-text-secondary)] text-xs">({{ displayCount }})</span>
+        <span
+          class="flex-none text-[var(--anime-text-secondary)] text-xs"
+          :class="{
+            '!text-[var(--kb-el-color-error)]': isCountNegated && !isEmpty,
+            '!text-[var(--anime-text-muted)]': isEmpty,
+          }"
+        >({{ displayCount }})</span>
       </button>
     </div>
 
@@ -92,7 +100,12 @@ const emit = defineEmits<{
 }>();
 
 const slots = useSlots();
-const { autoExpandRoot, registerRefreshTarget, visible } = useGalleryFilterTreeContext();
+const {
+  autoExpandRoot,
+  countNegated,
+  registerRefreshTarget,
+  visible,
+} = useGalleryFilterTreeContext();
 const localExpanded = ref(props.defaultExpanded);
 const childrenMounted = ref(props.defaultExpanded);
 const count = ref<number | null>(null);
@@ -103,7 +116,11 @@ let unregisterRefresh: (() => void) | null = null;
 const hasChildren = computed(() => Boolean(slots.default));
 const isExpanded = computed(() => localExpanded.value);
 const hasStickyHeader = computed(() => hasChildren.value && isExpanded.value);
-const displayCount = computed(() => (count.value == null ? "..." : String(count.value)));
+const isCountNegated = computed(() => countNegated?.value ?? false);
+const displayCount = computed(() => {
+  if (count.value == null) return "...";
+  return `${isCountNegated.value ? "−" : ""}${count.value}`;
+});
 const isEmpty = computed(() => count.value !== null && count.value === 0);
 const shouldHide = computed(() => props.emptyState === "hide" && isEmpty.value);
 const isDisabled = computed(() => props.emptyState === "disable" && isEmpty.value);
@@ -227,4 +244,3 @@ defineExpose({ refresh });
   z-index: 0;
 }
 </style>
- 

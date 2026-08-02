@@ -7,14 +7,7 @@ import {
   toValue,
   watch,
 } from "vue";
-import { useI18n } from "@kabegame/i18n";
-import type { KbFilterDropdownOption } from "@kabegame/element-plus";
-import {
-  pathqlEntry,
-  pathqlList,
-  type ProviderListChild,
-} from "@/services/pathql";
-import { usePluginStore } from "@/stores/plugins";
+import { pathqlEntry } from "@/services/pathql";
 import {
   advancedQueryRuntimePath,
   GALLERY_ASPECT_BUCKETS,
@@ -35,8 +28,28 @@ export type FacetDimension = Exclude<
   "search" | "wallpaperOrder"
 >;
 
+const FACET_SEGMENTS: Record<FacetDimension, string> = {
+  plugin: "plugin",
+  mediaType: "media-type",
+  date: "date",
+  name: "name",
+  size: "size",
+  aspect: "aspect",
+};
+
+const SIZE_LABEL_KEYS: Record<string, string> = {
+  unknown: "filterSize_unknown",
+  "1B-512KB": "filterSize_lt512k",
+  "512KB-1MB": "filterSize_512k_1m",
+  "1MB-2MB": "filterSize_1m_2m",
+  "2MB-5MB": "filterSize_2m_5m",
+  "5MB-10MB": "filterSize_5m_10m",
+  "10MB-50MB": "filterSize_10m_50m",
+  "50MB-": "filterSize_gte50m",
+};
+
 /**
- * 维度选中值 → 本地化展示文案(chip 未打开下拉、options 尚未加载时也要有正确文案)。
+ * 维度选中值 → 本地化展示文案(chip 未打开下拉时也要有正确文案)。
  * plugin 由调用侧经 pluginLabel 解析(store 依赖不进本纯函数)。
  */
 export function facetValueLabel(
@@ -50,7 +63,9 @@ export function facetValueLabel(
     return value;
   }
   if (dimension === "name") {
-    const bucket = GALLERY_NAME_LANGUAGE_BUCKETS.find((item) => item.bucket === value);
+    const bucket = GALLERY_NAME_LANGUAGE_BUCKETS.find((item) =>
+      item.bucket === value
+    );
     return bucket ? t(`gallery.${bucket.labelKey}`) : value;
   }
   if (dimension === "aspect") {
@@ -65,159 +80,84 @@ export function facetValueLabel(
   return value;
 }
 
-export interface UseDimensionFacetOptions {
-  /** 为将来需要追加细分 facet 的调用侧保留；当前根 facet 不需要额外参数。 */
-  searchable?: boolean;
-}
+/** 从 facet 列表路径剥掉末尾维度 router，得到该维度的减格树。空串表示 gallery 根。 */
+export function reducedFacetTreePath(
+  listPath: string,
+  dimension: FacetDimension,
+): string {
+  const normalized = listPath.replace(/^\/+|\/+$/g, "");
+  const suffix = FACET_SEGMENTS[dimension];
+  if (normalized === suffix) return "";
 
-interface FacetCacheEntry {
-  entries: ProviderListChild[];
-  anyCount: number;
-}
-
-const MAX_CACHE_ENTRIES = 128;
-const facetCache = new Map<string, FacetCacheEntry>();
-
-const SIZE_LABEL_KEYS: Record<string, string> = {
-  unknown: "filterSize_unknown",
-  "1B-512KB": "filterSize_lt512k",
-  "512KB-1MB": "filterSize_512k_1m",
-  "1MB-2MB": "filterSize_1m_2m",
-  "2MB-5MB": "filterSize_2m_5m",
-  "5MB-10MB": "filterSize_5m_10m",
-  "10MB-50MB": "filterSize_10m_50m",
-  "50MB-": "filterSize_gte50m",
-};
-
-function reducedTreePath(listPath: string, dimension: FacetDimension): string {
-  const segments: Record<FacetDimension, string> = {
-    plugin: "plugin",
-    mediaType: "media-type",
-    date: "date",
-    name: "name",
-    size: "size",
-    aspect: "aspect",
-  };
-  const suffix = segments[dimension];
   const withComb = `/filter_comb/${suffix}`;
-  if (listPath.endsWith(withComb)) return listPath.slice(0, -withComb.length);
+  if (normalized.endsWith(withComb)) {
+    return normalized.slice(0, -withComb.length);
+  }
   const direct = `/${suffix}`;
-  return listPath.endsWith(direct) ? listPath.slice(0, -direct.length) : "all";
-}
-
-function touchCache(key: string, value: FacetCacheEntry): void {
-  facetCache.delete(key);
-  facetCache.set(key, value);
-  if (facetCache.size <= MAX_CACHE_ENTRIES) return;
-  const oldest = facetCache.keys().next().value as string | undefined;
-  if (oldest) facetCache.delete(oldest);
-}
-
-/** 每次打开高级查询弹窗时清理，缓存生命周期限定在本次编辑会话。 */
-export function clearAdvancedQueryFacetCache(): void {
-  facetCache.clear();
-}
-
-function metaDisplayName(meta: unknown): string {
-  if (!meta || typeof meta !== "object") return "";
-  const record = meta as Record<string, unknown>;
-  for (const key of ["display", "displayName", "label", "title", "name"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+  if (normalized.endsWith(direct)) {
+    return normalized.slice(0, -direct.length);
   }
-  const plugin = record.plugin;
-  if (plugin && typeof plugin === "object") {
-    const displayName = (plugin as Record<string, unknown>).displayName;
-    if (typeof displayName === "string" && displayName.trim()) {
-      return displayName.trim();
-    }
-  }
-  return "";
+  throw new Error(`facet 路径缺少维度尾段 ${suffix}: ${listPath}`);
 }
 
+/**
+ * 把侧栏树节点 segment 接到高级查询减格上下文。
+ * `all` 指向减格树本身；根减格树直接从维度 router 起步，绝不生成 all/filter_comb。
+ */
+export function advancedFacetTreeSegmentPath(
+  listPath: string,
+  dimension: FacetDimension,
+  segment: string,
+): string {
+  const normalizedSegment = segment.replace(/^\/+|\/+$/g, "");
+  const reduced = reducedFacetTreePath(listPath, dimension);
+  if (!normalizedSegment || normalizedSegment === "all") {
+    return reduced || "all";
+  }
+
+  const suffix = FACET_SEGMENTS[dimension];
+  if (
+    normalizedSegment !== suffix &&
+    !normalizedSegment.startsWith(`${suffix}/`)
+  ) {
+    throw new Error(`树节点路径不属于维度 ${dimension}: ${segment}`);
+  }
+
+  if (!reduced) return normalizedSegment;
+  const usesFilterComb = listPath.replace(/\/+$/g, "").endsWith(
+    `/filter_comb/${suffix}`,
+  );
+  return `${reduced}${
+    usesFilterComb ? "/filter_comb/" : "/"
+  }${normalizedSegment}`;
+}
+
+/** 为高级查询 facet 树提供减格路径、逐节点路径和取非显示状态。 */
 export function useDimensionFacet(
-  tree: Ref<GalleryAdvancedQuery>,
+  tree: MaybeRefOrGetter<GalleryAdvancedQuery>,
   nodePath: MaybeRefOrGetter<NodePath>,
   dimension: FacetDimension,
   contextPrefix: MaybeRefOrGetter<string> = "images://gallery/",
-  _options: UseDimensionFacetOptions = {},
 ) {
-  const { t } = useI18n();
-  const pluginStore = usePluginStore();
-  const entries = ref<ProviderListChild[]>([]);
-  const anyCount = ref<number>();
-  const loading = ref(false);
-  let requestToken = 0;
-
-  const relativePath = computed(() =>
-    facetListPath(tree.value, toValue(nodePath), dimension)
+  const listPath = computed(() =>
+    facetListPath(toValue(tree), toValue(nodePath), dimension)
   );
-  const path = computed(() =>
-    advancedQueryRuntimePath(relativePath.value, toValue(contextPrefix))
+  const reducedTreePath = computed(() =>
+    advancedQueryRuntimePath(
+      advancedFacetTreeSegmentPath(listPath.value, dimension, "all"),
+      toValue(contextPrefix),
+    )
   );
-  const negated = computed(() => notParity(tree.value, toValue(nodePath)));
+  const negated = computed(() => notParity(toValue(tree), toValue(nodePath)));
 
-  function labelFor(entry: ProviderListChild): string {
-    if (dimension === "plugin") {
-      return metaDisplayName(entry.meta) ||
-        pluginStore.pluginLabel(entry.name) || entry.name;
-    }
-    if (dimension === "date") {
-      return entry.name.replace(/y$/, "");
-    }
-    return facetValueLabel(dimension, entry.name, t);
-  }
-
-  function valueFor(entry: ProviderListChild): string {
-    return dimension === "date" ? entry.name.replace(/y$/, "") : entry.name;
-  }
-
-  const options = computed<KbFilterDropdownOption[]>(() =>
-    entries.value.map((entry) => ({
-      label: labelFor(entry),
-      value: valueFor(entry),
-      count: entry.total ?? undefined,
-    }))
-  );
-
-  async function load(): Promise<void> {
-    const key = path.value;
-    const cached = facetCache.get(key);
-    if (cached) {
-      touchCache(key, cached);
-      entries.value = cached.entries;
-      anyCount.value = cached.anyCount;
-      return;
-    }
-
-    const token = ++requestToken;
-    loading.value = true;
-    const reducedPath = advancedQueryRuntimePath(
-      reducedTreePath(relativePath.value, dimension),
+  function pathForSegment(segment: string): string {
+    return advancedQueryRuntimePath(
+      advancedFacetTreeSegmentPath(listPath.value, dimension, segment),
       toValue(contextPrefix),
     );
-    try {
-      const [nextEntries, entry] = await Promise.all([
-        pathqlList(key, true),
-        pathqlEntry(reducedPath),
-      ]);
-      if (token !== requestToken || key !== path.value) return;
-      const next = {
-        entries: Array.isArray(nextEntries) ? nextEntries : [],
-        anyCount: typeof entry.total === "number" ? entry.total : 0,
-      };
-      touchCache(key, next);
-      // fetch-then-overwrite：请求期间保留旧选项，避免切格时列表闪空。
-      entries.value = next.entries;
-      anyCount.value = next.anyCount;
-    } catch (error) {
-      console.error(`[advanced-query] facet load failed: ${key}`, error);
-    } finally {
-      if (token === requestToken) loading.value = false;
-    }
   }
 
-  return { options, anyCount, loading, load, negated, path };
+  return { listPath, reducedTreePath, negated, pathForSegment };
 }
 
 export function useAdvancedHitCount(

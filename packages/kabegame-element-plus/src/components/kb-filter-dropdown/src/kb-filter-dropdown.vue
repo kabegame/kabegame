@@ -69,7 +69,10 @@
                   :key="option.value"
                   type="button"
                   role="option"
-                  :class="optionClasses(index + 1, modelValue === option.value)"
+                  :class="[
+                    ...optionClasses(index + 1, modelValue === option.value),
+                    ns.is('zero', option.count === 0),
+                  ]"
                   :aria-selected="modelValue === option.value"
                   :data-kb-filter-index="index + 1"
                   @mouseenter="highlightedIndex = index + 1"
@@ -157,6 +160,7 @@ import type {
 defineOptions({ name: 'KbFilterDropdown' })
 
 const props = withDefaults(defineProps<KbFilterDropdownProps>(), {
+  options: () => [],
   searchable: false,
   loading: false,
   negated: false,

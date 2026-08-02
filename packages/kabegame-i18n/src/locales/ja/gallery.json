@@ -282,6 +282,7 @@
   "advancedChipSearch": "検索",
   "advancedSearchHelp": "名前はファイル名、メタデータは正規化されたタイトル・作者・タグ、ネイティブメタデータはプラグインがそのまま保存した項目を検索します。",
   "advancedSearchOptions": "選択肢を検索…",
+  "advancedPluginExtendRestricted": "プラグインの詳細フィルターは OR グループや除外条件では使用できないため、プラグインのみ保持しました。",
   "advancedPath": "パス",
   "advancedCopy": "コピー",
   "advancedReset": "リセット",

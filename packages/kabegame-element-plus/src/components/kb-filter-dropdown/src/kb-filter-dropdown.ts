@@ -7,7 +7,8 @@ export interface KbFilterDropdownOption {
 
 export interface KbFilterDropdownProps {
   modelValue: string | null
-  options: KbFilterDropdownOption[]
+  /** 缺省 [](纯 #panel 插槽用法不需要选项列表)。 */
+  options?: KbFilterDropdownOption[]
   /** 内置 chip 的维度名称。 */
   chipLabel: string
   /**

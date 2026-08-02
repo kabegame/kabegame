@@ -83,10 +83,7 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { isTauri } from "@tauri-apps/api/core";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import {
-  clearAdvancedQueryFacetCache,
-  useAdvancedHitCount,
-} from "@/composables/useAdvancedQueryFacets";
+import { useAdvancedHitCount } from "@/composables/useAdvancedQueryFacets";
 import {
   advancedQueryRuntimePath,
   buildComposablePath,
@@ -131,7 +128,6 @@ watch(
   () => [visible.value, props.query] as const,
   ([open]) => {
     if (!open) return;
-    clearAdvancedQueryFacetCache();
     draft.value = cloneTree(props.query);
   },
   { flush: "post" },

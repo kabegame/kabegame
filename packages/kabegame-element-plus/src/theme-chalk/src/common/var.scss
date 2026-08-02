@@ -495,9 +495,16 @@ $kb-filter-dropdown: map.merge(
     'option-selected-bg-color':
       color-mix(in srgb, var(--anime-primary) 10%, transparent),
     'option-selected-text-color': var(--anime-primary-dark),
+    // 计数为 0 的行整体灰化：0 仍可选（尤其排除语境下 −0 有意义），只做视觉弱化。
+    'option-zero-color': var(--anime-text-muted),
     'focus-ring':
       0 0 0 2px color-mix(in srgb, var(--anime-primary) 18%, transparent),
     'error-color': getCssVar('color-error'),
+    // 选中态 chip 右上角的清除徽章（浮在 chip 边界外）。
+    'clear-bg-color': var(--anime-primary),
+    'clear-hover-bg-color': var(--anime-primary-dark),
+    'clear-text-color': #fff,
+    'clear-ring-color': var(--anime-bg-card),
   ),
   $kb-filter-dropdown
 );

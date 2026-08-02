@@ -43,6 +43,7 @@ export interface GalleryFilterTreeContext {
   prefix: ComputedRef<string>;
   visible: ComputedRef<boolean>;
   autoExpandRoot: ComputedRef<boolean>;
+  countNegated?: ComputedRef<boolean>;
   pathForSegment: (segment: string) => string;
   registerRefreshTarget: (target: RefreshTarget) => () => void;
 }

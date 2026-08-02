@@ -280,6 +280,7 @@
   "advancedChipSearch": "Search",
   "advancedSearchHelp": "Name matches filenames; metadata searches normalized titles, authors, and tags; native metadata searches fields saved verbatim by plugins.",
   "advancedSearchOptions": "Search options…",
+  "advancedPluginExtendRestricted": "Plugin subfilters cannot be used in OR groups or negated conditions. Only the plugin was kept.",
   "advancedPath": "Path",
   "advancedCopy": "Copy",
   "advancedReset": "Reset",
