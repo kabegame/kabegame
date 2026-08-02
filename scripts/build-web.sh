@@ -44,6 +44,15 @@ if [[ ! -x target/release/kabegame-cli ]]; then
   deno task b -c kabegame-cli --release
 fi
 
+# pathql 生成客户端不入库，vite 侧 @kabegame/pathql-client 别名指向该文件，缺失则前端
+# 构建必败——在最前面给出明确指引（不自动生成：release CLI 的数据目录/插件集合与
+# 生成语境耦合，交由开发者显式执行）。
+if [[ ! -f packages/kabegame-pathql-client/index.ts ]]; then
+  echo "Error: packages/kabegame-pathql-client/index.ts 不存在。" >&2
+  echo "先运行: target/release/kabegame-cli pathql generate --out packages/kabegame-pathql-client/index.ts" >&2
+  exit 1
+fi
+
 echo "==> [宿主] 构建 web 前端 dist-kabegame-web/ + 插件 .kabegame/release/plugins/"
 deno task b -c kabegame --mode web --skip cargo
 

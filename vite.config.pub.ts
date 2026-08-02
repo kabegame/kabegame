@@ -100,6 +100,15 @@ export default {
         "kabegame-element-plus",
         "src"
       ),
+      // pathql 生成客户端:产物不入库(gitignore),由
+      // `kabegame-cli pathql generate --out packages/kabegame-pathql-client/index.ts`
+      // 手动生成;缺文件时前端构建/类型检查会明确报错,先跑 generate。
+      "@kabegame/pathql-client": path.resolve(
+        root,
+        "packages",
+        "kabegame-pathql-client",
+        "index.ts"
+      ),
       // 原先这里把 "@popperjs/core" 别名到 "@sxzz/popperjs-es"：npm 版 element-plus 在自己
       // package.json 里做了这个 npm alias，而 deno 的 hoisted linker 不物化「依赖的 npm 别名」，
       // rollup 解析裸 specifier 会失败。vendored 之后 @kabegame/element-plus 直接声明真包
