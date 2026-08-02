@@ -167,6 +167,7 @@
   "noImages": "画像なし",
   "galleryPathLoadFailedClearFilters": "現在のパスを読み込めませんでした。すべてのフィルターと検索を自動的に解除しました。",
   "totalImages": "合計 {count} 枚",
+  "totalImagesFiltered": "{count} / {total} 枚",
   "gallery": "画集",
   "chooseImportMethod": "インポート方法を選択",
   "selectImage": "画像を選択",

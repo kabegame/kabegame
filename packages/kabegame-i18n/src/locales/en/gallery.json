@@ -165,6 +165,7 @@
   "noImages": "No images",
   "galleryPathLoadFailedClearFilters": "The current path failed to load. All filters and search have been cleared automatically.",
   "totalImages": "{count} images total",
+  "totalImagesFiltered": "{count} / {total} images",
   "gallery": "Gallery",
   "chooseImportMethod": "Choose import method",
   "selectImage": "Select image",

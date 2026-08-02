@@ -1,7 +1,23 @@
 <template>
   <PageHeader :title="$t('gallery.gallery')" :show="showIds" :fold="foldIds" @action="handleAction" sticky>
     <template #subtitle>
-      <span>{{ totalCountText }}</span>
+      <span class="inline-flex items-center gap-2">
+        <span>{{ totalCountText }}</span>
+        <!-- 清除过滤挪进副标题：过滤行里那个文字按钮太占位置，而这里本来就在说
+             「筛出了多少 / 一共多少」，清除是同一件事的延伸。只认简单过滤 + 搜索,
+             hide 这类全局开关不算过滤，不该被这个叉号一并清掉。 -->
+        <button
+          v-if="isFilterIndicatorActive"
+          type="button"
+          class="subtitle-clear-filter"
+          :title="t('gallery.clearAllFilters')"
+          :aria-label="t('gallery.clearAllFilters')"
+          @click="clearAllFilters"
+        >
+          <el-icon><Filter /></el-icon>
+          <span class="subtitle-clear-filter__badge"><el-icon><Close /></el-icon></span>
+        </button>
+      </span>
     </template>
   </PageHeader>
 
@@ -158,17 +174,6 @@
       </el-scrollbar>
     </div>
 
-    <!-- 清除放在滚动区外，chip 再多也常驻可见 -->
-    <el-button
-      v-if="filterMode === 'simple' && isFilterIndicatorActive"
-      text
-      class="flex-none !text-[var(--anime-text-secondary)]"
-      :title="t('gallery.clearAllFilters')"
-      @click="clearAllFilters"
-    >
-      <el-icon class="mr-1"><Close /></el-icon>
-      {{ t("gallery.clearAllFilters") }}
-    </el-button>
   </div>
 
   <div v-if="uiStore.isCompact" class="mb-2 flex justify-end">
@@ -297,6 +302,7 @@
 <script setup lang="ts">
 import { computed, markRaw, nextTick, ref, watch, onMounted, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import {
   KbFilterDropdown,
@@ -323,6 +329,7 @@ import {
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
+import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { withGalleryPrefix } from "@/utils/path";
 import KbText from "@kabegame/core/components/common/form/KbText.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
@@ -1927,11 +1934,48 @@ async function onPageSizePickerConfirm() {
   emit("update:pageSize", n);
 }
 
+/**
+ * 无过滤总数（分母）。只带上下文里那部分「不是用户过滤」的东西——目前就是 hide，
+ * 所以它跟着 galleryHide 与入库变更自己刷新，不依赖当前这次查询的结果。
+ */
+const unfilteredTotal = ref<number | null>(null);
+
+async function refreshUnfilteredTotal() {
+  try {
+    unfilteredTotal.value = await countProviderPath(galleryHide.value ? "hide" : "gallery");
+  } catch {
+    unfilteredTotal.value = null; // 拿不到就退回只显示当前数，不显示分母
+  }
+}
+
+watch(galleryHide, () => void refreshUnfilteredTotal(), { immediate: true });
+
+useImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: 500,
+  onRefresh: refreshUnfilteredTotal,
+});
+
+// 隐藏/取消隐藏走 album_images 而不是 images：只订阅前者的话，藏掉一张图后
+// 分子会掉、分母不动，副标题就长期停在 "16876 / 16877" 这种差一。
+useAlbumImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: 500,
+  filter: (payload: AlbumImagesChangePayload) =>
+    (payload.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
+  onRefresh: refreshUnfilteredTotal,
+});
+
 const totalCountText = computed(() => {
   if (props.totalCount === 0) {
     return t('gallery.noImages');
   }
-  return t('gallery.totalImages', { count: props.totalCount });
+  const total = unfilteredTotal.value;
+  // 没过滤(或分母还没回来)时不写 "16892 / 16892" 这种废话。
+  if (total == null || total <= props.totalCount) {
+    return t('gallery.totalImages', { count: props.totalCount });
+  }
+  return t('gallery.totalImagesFiltered', { count: props.totalCount, total });
 });
 
 const emit = defineEmits<{
@@ -2070,6 +2114,48 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
 </script>
 
 <style scoped lang="scss">
+/* 副标题里的清除过滤按钮：过滤图标本体 + 右上角浮出的 ✕ 徽章，
+   形态沿用 chip 的清除徽章（KbFilterDropdown __clear），只是这里整颗都可点。 */
+.subtitle-clear-filter {
+  position: relative;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--anime-border);
+  border-radius: 7px;
+  color: var(--anime-primary);
+  background: var(--anime-bg-card);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+
+  &:hover {
+    border-color: var(--anime-primary);
+    background: color-mix(in srgb, var(--anime-primary) 8%, var(--anime-bg-card));
+  }
+}
+
+.subtitle-clear-filter__badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--anime-bg-card);
+  border-radius: 50%;
+  color: #fff;
+  background: var(--anime-primary);
+  font-size: 7px;
+}
+
 /* 简单/高级共用的查询行：行高钉死在简单态的尺寸（chip 38px + 滚动区上下 8/10px 留白），
    高级态内容更矮时靠 align-items 居中撑住，切模式时下方画廊不会上下跳。 */
 .query-row {

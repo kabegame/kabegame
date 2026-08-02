@@ -6,19 +6,23 @@
       :title="buttonTitle"
       @click="handleClick"
     >
-      <el-icon><Delete /></el-icon>
-      <span>{{ t("header.cleanHidden") }}</span>
-      <span
-        v-if="store.running"
-        class="ml-auto text-xs text-[var(--anime-text-muted)]"
-      >
-        {{ t("header.cleanHiddenInProgress") }}
-      </span>
-      <span
-        v-else-if="hiddenCount > 0"
-        class="ml-auto font-mono text-xs text-[var(--anime-text-muted)]"
-      >
-        {{ hiddenCount.toLocaleString() }}
+      <!-- el-button 把整个 default 插槽裹进一个 inline 的 <span>，button 自己的
+           flex 布局够不到里面，ml-auto 会失效——所以这层 flex 必须自己写。 -->
+      <span class="flex w-full items-center gap-[11px]">
+        <el-icon><Delete /></el-icon>
+        <span>{{ t("header.cleanHidden") }}</span>
+        <span
+          v-if="store.running"
+          class="ml-auto text-xs text-[var(--anime-text-muted)]"
+        >
+          {{ t("header.cleanHiddenInProgress") }}
+        </span>
+        <span
+          v-else-if="hiddenCount > 0"
+          class="ml-auto font-mono text-xs text-[var(--anime-text-muted)]"
+        >
+          {{ hiddenCount.toLocaleString() }}
+        </span>
       </span>
     </el-button>
   </div>

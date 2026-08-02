@@ -167,6 +167,7 @@
   "noImages": "暂无图片",
   "galleryPathLoadFailedClearFilters": "当前路径加载失败，已自动清除所有过滤和搜索",
   "totalImages": "共 {count} 张图片",
+  "totalImagesFiltered": "共 {count} / {total} 张图片",
   "gallery": "画廊",
   "chooseImportMethod": "选择导入方式",
   "selectImage": "选择图片",

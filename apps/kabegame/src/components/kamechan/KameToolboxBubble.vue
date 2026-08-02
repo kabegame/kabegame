@@ -14,7 +14,6 @@
         <button type="button" class="kame-toolbox-bubble__settings" @click="emit('open-settings')">
           <el-icon><Setting /></el-icon>
           <span>{{ t("route.settings") }}</span>
-          <span class="kame-toolbox-bubble__shortcut">{{ shortcutLabel("openSettings") }}</span>
         </button>
       </div>
       <div class="kame-toolbox-bubble__divider" />
@@ -33,7 +32,6 @@
             <div v-else class="tool-row" @click="handleItemClick(item)">
               <el-icon class="row-icon"><component :is="item.icon" /></el-icon>
               <span class="row-label">{{ item.label }}</span>
-              <span v-if="item.shortcut" class="row-shortcut">{{ item.shortcut }}</span>
               <el-switch
                 v-if="item.kind === 'toggle'"
                 :model-value="item.toggleGet?.()"
@@ -55,7 +53,6 @@ import { computed } from "vue";
 import { Setting } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
-import { shortcutLabel } from "@/composables/useGlobalShortcuts";
 import { useBusyTasks } from "@/composables/useBusyTasks";
 import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";
 
@@ -185,13 +182,6 @@ const handleItemClick = (item: GlobalToolItem) => {
   }
 }
 
-.kame-toolbox-bubble__shortcut {
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--anime-text-muted);
-  font-family: ui-monospace, Menlo, monospace;
-}
-
 .kame-toolbox-bubble__divider {
   height: 1px;
   background: var(--anime-border);
@@ -241,13 +231,6 @@ const handleItemClick = (item: GlobalToolItem) => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .row-shortcut {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--anime-text-muted);
-    font-family: ui-monospace, Menlo, monospace;
   }
 
   .row-switch {
