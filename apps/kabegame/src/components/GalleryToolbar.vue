@@ -104,7 +104,6 @@
         ref="filterChipScrollRef"
         class="filter-chip-row"
         view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
-        always
         @scroll="updateChipRowOverflow"
         @wheel="onFilterChipWheel"
       >
@@ -2050,7 +2049,7 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
 <style scoped lang="scss">
 /* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
 .filter-chip-row {
-  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走（always 常驻显示）。
+  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走。
   --el-scrollbar-bg-color: var(--anime-primary);
   --el-scrollbar-hover-bg-color: var(--anime-primary-dark, var(--anime-primary));
   --el-scrollbar-opacity: 0.6;

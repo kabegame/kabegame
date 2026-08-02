@@ -253,12 +253,9 @@ textarea,
   height: 0 !important;
 }
 
-/* 3) Element Plus 的自定义滚动条（不是浏览器原生 scrollbar） */
-.el-scrollbar__bar {
-  display: none !important;
-  opacity: 0 !important;
-}
-
+/* 3) Element Plus 的自定义滚动条（不是浏览器原生 scrollbar）：
+   只隐藏 wrap 上的原生条，EP 自绘的 __bar 保持可用——它本来就只在 hover 时出现，
+   一律 display:none 会让所有需要横向滚动的行（如画廊过滤 chip 行）失去唯一的滚动提示。 */
 .el-scrollbar__wrap {
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE and Edge */
