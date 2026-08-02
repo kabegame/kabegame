@@ -561,13 +561,12 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::{Arc, Mutex};
 
     use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
     use pathql_rs::template::eval::TemplateValue;
-    use pathql_rs::ProviderRuntime;
-    use rusqlite::functions::FunctionFlags;
+    use pathql_rs::{LoaderType, ProviderRuntime, Source};
     use rusqlite::Connection;
 
     use super::{
@@ -593,21 +592,7 @@ mod tests {
 
     fn fixture_db() -> Arc<Mutex<Connection>> {
         let conn = Connection::open_in_memory().unwrap();
-        conn.create_scalar_function(
-            "get_plugin",
-            -1,
-            FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
-            |ctx| -> rusqlite::Result<String> {
-                let plugin_id: String = ctx.get(0)?;
-                Ok(serde_json::json!({
-                    "id": plugin_id,
-                    "name": "Pixel Plugin",
-                    "description": "fixture"
-                })
-                .to_string())
-            },
-        )
-        .unwrap();
+        crate::storage::dsl_funcs::register_dsl_functions(&conn).unwrap();
         conn.execute_batch(
             r#"
             CREATE TABLE images (
@@ -642,8 +627,14 @@ mod tests {
             CREATE TABLE metadata (
                 id INTEGER PRIMARY KEY,
                 data TEXT NOT NULL,
+                search_text TEXT,
                 plugin_version INTEGER NOT NULL DEFAULT 0,
                 plugin_id TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE image_metadata (
+                id INTEGER PRIMARY KEY,
+                data TEXT NOT NULL,
+                search_text TEXT
             );
             CREATE TABLE albums (
                 id TEXT PRIMARY KEY,
@@ -660,26 +651,41 @@ mod tests {
                 ('album-firefly', '萤', 3, 'album-a'),
                 ('album-march', '三月七', 4, 'album-a'),
                 ('album-secret', '秘密', 5, 'album-firefly');
+
+            INSERT INTO metadata (id, data, search_text, plugin_id) VALUES
+                (1,  '{"kind":"fav"}',   'star bright', 'p1'),
+                (2,  '{"kind":"fav"}',   'moon light',  'p1'),
+                (3,  '{"kind":"plain"}', 'star field',  'p1'),
+                (4,  '{"kind":"plain"}', 'cloud',       'p2'),
+                (5,  '{"kind":"plain"}', 'star trail',  'p2'),
+                (6,  '{"kind":"plain"}', 'mountain',    'p2'),
+                (7,  '{"kind":"plain"}', 'forest',      'p3'),
+                (8,  '{"kind":"plain"}', 'moon sea',    'p3'),
+                (9,  '{"kind":"plain"}', 'plain',       'p1'),
+                (10, '{"kind":"plain"}', 'star cloud',  'p2'),
+                (11, '{"kind":"plain"}', 'star night',  'p3'),
+                (12, '{"kind":"plain"}', 'river',       'p1');
+
+            INSERT INTO images
+                (id, url, local_path, plugin_id, crawled_at, metadata_id,
+                 thumbnail_path, hash, type, width, height, display_name,
+                 last_set_wallpaper_at, size)
+            VALUES
+                (1,  'https://example.test/1.jpg',  '/fixture/1.jpg',  'p1', 1704067201, 1,  '', 'hash-1',  'image/jpeg', 1600, 1000, '萤火', 101, 100),
+                (2,  'https://example.test/2.png',  '/fixture/2.png',  'p1', 1704067202, 2,  '', 'hash-2',  'image/png',  1000, 1000, 'Alpha', NULL, 2097152),
+                (3,  'https://example.test/3.mp4',  '/fixture/3.mp4',  'p1', 1672531203, 3,  '', 'hash-3',  'video/mp4',  1600, 1000, '星海', NULL, 512000),
+                (4,  'https://example.test/4.webp', '/fixture/4.webp', 'p2', 1704067204, 4,  '', 'hash-4',  'image/webp',  900, 1600, 'Beta', NULL, 716800),
+                (5,  'https://example.test/5.mp4',  '/fixture/5.mp4',  'p2', 1672531205, 5,  '', 'hash-5',  'video/mp4',  2000, 1000, 'あか', 105, 3145728),
+                (6,  'https://example.test/6.jpg',  '/fixture/6.jpg',  'p2', 1672531206, 6,  '', 'hash-6',  'image/jpeg', 1000, 1000, '山', NULL, 204800),
+                (7,  'https://example.test/7.jpg',  '/fixture/7.jpg',  'p3', 1704067207, 7,  '', 'hash-7',  'image/jpeg', 1600, 1000, '한', NULL, 921600),
+                (8,  'https://example.test/8.webm', '/fixture/8.webm', 'p3', 1672531208, 8,  '', 'hash-8',  'video/webm',  900, 1600, 'Gamma', 108, 102400),
+                (9,  'https://example.test/9.jpg',  '/fixture/9.jpg',  'p1', 1704067209, 9,  '', 'hash-9',  'image/jpeg', 2000, 1000, '123', NULL, 1572864),
+                (10, 'https://example.test/10.png', '/fixture/10.png', 'p2', 1704067210, 10, '', 'hash-10', 'image/png',  1600, 1000, '云', 110, 51200),
+                (11, 'https://example.test/11.jpg', '/fixture/11.jpg', 'p3', 1672531211, 11, '', 'hash-11', 'image/jpeg', 3000, 1000, 'Delta', NULL, 5242880),
+                (12, 'https://example.test/12.mp4', '/fixture/12.mp4', 'p1', 1672531212, 12, '', 'hash-12', 'video/mp4',  1600, 1000, '月', NULL, 307200);
             "#,
         )
         .unwrap();
-        for id in 1..=12 {
-            conn.execute(
-                "INSERT INTO images
-                 (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
-                  metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
-                 VALUES (?1, ?2, ?3, 'pixiv', NULL, NULL, ?4, NULL, '', ?5, 'image/jpeg', 100, 100, ?6, 10)",
-                (
-                    id,
-                    format!("https://example.test/{id}.jpg"),
-                    format!("D:/fixture/{id}.jpg"),
-                    id,
-                    format!("hash-{id}"),
-                    format!("image-{id}"),
-                ),
-            )
-            .unwrap();
-        }
         Arc::new(Mutex::new(conn))
     }
 
@@ -687,6 +693,10 @@ mod tests {
         Arc::new(ClosureExecutor::new(
             SqlDialect::Sqlite,
             move |sql: &str, params: &[TemplateValue]| {
+                // PATHQL_DEBUG=1 时打印测试 executor 收到的 SQL 与参数(定位动态 list 反查)。
+                if std::env::var("PATHQL_DEBUG").ok().as_deref() == Some("1") {
+                    eprintln!("[test-sql] {sql}\n[test-sql]   params={params:?}");
+                }
                 let conn = conn.lock().unwrap();
                 let mut stmt = conn.prepare(sql).map_err(|e| {
                     EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string())
@@ -737,6 +747,34 @@ mod tests {
         ]);
         let runtime = ProviderRuntime::new(make_executor(fixture_db()), globals);
         register_embedded_dsl(&runtime);
+        runtime
+            .register_provider_dsl(
+                LoaderType::JSON5,
+                Source::Str(
+                    r#"{
+                        "namespace": "plugins.p1",
+                        "name": "entry_provider",
+                        "resolve": {
+                            "fav": { "provider": "fav_provider" }
+                        }
+                    }"#,
+                ),
+            )
+            .unwrap();
+        runtime
+            .register_provider_dsl(
+                LoaderType::JSON5,
+                Source::Str(
+                    r#"{
+                        "namespace": "plugins.p1",
+                        "name": "fav_provider",
+                        "query": {
+                            "where": "json_extract(plugin_im.data, '$.kind') = 'fav'"
+                        }
+                    }"#,
+                ),
+            )
+            .unwrap();
         validate_dsl(&runtime);
         runtime
             .register_schema("images", "images", "kabegame", "images_root_provider")
@@ -745,6 +783,29 @@ mod tests {
             .register_schema("albums", "albums", "kabegame", "albums_root_provider")
             .unwrap();
         runtime
+    }
+
+    fn row_ids(rows: &[serde_json::Value]) -> BTreeSet<i64> {
+        rows.iter()
+            .map(|row| {
+                let id = &row["id"];
+                id.as_i64()
+                    .or_else(|| id.as_str().and_then(|value| value.parse().ok()))
+                    .unwrap_or_else(|| panic!("row has no numeric id: {row}"))
+            })
+            .collect()
+    }
+
+    fn assert_gallery_ids(runtime: &ProviderRuntime, path: &str, expected: &[i64]) {
+        let expected: BTreeSet<i64> = expected.iter().copied().collect();
+        let entry = query_entry_with_runtime(runtime, path).unwrap();
+        assert_eq!(
+            entry.total,
+            Some(expected.len()),
+            "count mismatch for {path}"
+        );
+        let rows = query_fetch_with_runtime(runtime, path).unwrap();
+        assert_eq!(row_ids(&rows), expected, "fetch mismatch for {path}");
     }
 
     #[test]
@@ -788,15 +849,20 @@ mod tests {
         let runtime = build_runtime();
         let with_count =
             query_list_with_runtime(&runtime, "images://gallery/plugin", true).unwrap();
-        assert_eq!(with_count.len(), 1);
-        assert_eq!(with_count[0].name, "pixiv");
-        assert_eq!(with_count[0].total, Some(12));
+        assert_eq!(with_count.len(), 3);
+        assert_eq!(
+            with_count
+                .iter()
+                .map(|child| (child.name.as_str(), child.total))
+                .collect::<Vec<_>>(),
+            vec![("p1", Some(5)), ("p2", Some(4)), ("p3", Some(3))]
+        );
 
         let without_count =
             query_list_with_runtime(&runtime, "images://gallery/plugin", false).unwrap();
-        assert_eq!(without_count.len(), 1);
-        assert_eq!(without_count[0].name, "pixiv");
-        assert_eq!(without_count[0].total, None);
+        assert_eq!(without_count.len(), 3);
+        assert_eq!(without_count[0].name, "p1");
+        assert!(without_count.iter().all(|child| child.total.is_none()));
     }
 
     #[test]
@@ -830,5 +896,134 @@ mod tests {
             query_fetch_with_runtime(&runtime, "albums://by_sub_tree/星穹铁道/萤").unwrap();
         assert_eq!(grandchildren.len(), 1);
         assert_eq!(grandchildren[0]["name"], "秘密");
+    }
+
+    #[test]
+    fn gallery_where_groups_route_all_seven_filter_dimensions() {
+        let runtime = build_runtime();
+        // 高级树的组从 gallery 根枢纽进入；这里的根集合与 `gallery/all` 等价，
+        // 但 `all` 本身是分页叶，不能作为跨维度组入口。
+        let cases: [(&str, &[i64]); 7] = [
+            ("wallpaper-order", &[1, 4, 5, 6, 8, 10]),
+            ("plugin/p1", &[1, 2, 3, 4, 5, 6, 9, 10, 12]),
+            ("media-type/image", &[1, 2, 4, 5, 6, 7, 9, 10, 11]),
+            ("date/2024y/01m", &[1, 2, 4, 5, 6, 7, 9, 10]),
+            ("name/chinese", &[1, 3, 4, 5, 6, 10, 12]),
+            ("size/1B-1MB", &[1, 3, 4, 5, 6, 7, 8, 10, 12]),
+            ("aspect/landscape-4x3-16x9", &[1, 3, 4, 5, 6, 7, 10, 12]),
+        ];
+
+        for (dimension, expected) in cases {
+            let path = format!("images://gallery/~any/{dimension}/~or/plugin/p2/~end");
+            assert_gallery_ids(&runtime, &path, expected);
+        }
+    }
+
+    #[test]
+    fn gallery_search_works_in_group_branches_and_as_a_middle_atom() {
+        let runtime = build_runtime();
+
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~any/search/metadata/star/~or/plugin/p2/~end",
+            &[1, 3, 4, 5, 6, 10, 11],
+        );
+        // 两个分支都请求 metadata_im；in_need 必须让它们共享同一个 LEFT JOIN 别名。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~any/search/metadata/star/~or/search/metadata/moon/~end",
+            &[1, 2, 3, 5, 8, 10, 11],
+        );
+        // search query provider 委派回 gallery_route，是超级枢纽；后面直接接 date，
+        // 不需要再插入 filter_comb。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/plugin/p1/filter_comb/search/metadata/star/date/2024y/01m",
+            &[1],
+        );
+    }
+
+    #[test]
+    fn gallery_not_and_three_level_nested_groups_preserve_boolean_semantics() {
+        let runtime = build_runtime();
+
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~not/plugin/p1/~end",
+            &[4, 5, 6, 7, 8, 10, 11],
+        );
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~not/~not/plugin/p1/~end/~end",
+            &[1, 2, 3, 9, 12],
+        );
+
+        // 三层分别是：外层 any、p1 分支内的 any、该 any 第二支的 not。
+        // (p1 AND (1MB-4MB OR NOT chinese)) OR p2 = {2,4,5,6,9,10}。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~any/plugin/p1/filter_comb/~any/size/1MB-4MB/~or/~not/name/chinese/~end/~end/~or/plugin/p2/~end",
+            &[2, 4, 5, 6, 9, 10],
+        );
+    }
+
+    #[test]
+    fn gallery_closed_group_returns_to_its_comb_hub_before_sorting() {
+        let runtime = build_runtime();
+        let direct_tail = "images://gallery/media-type/image/filter_comb/~any/plugin/p1/~or/date/2024y/01m/~end/sort/by-time/desc/x100x/1";
+        assert_gallery_ids(&runtime, direct_tail, &[1, 2, 4, 7, 9, 10]);
+
+        // ~end 会把游标放回开组时的 gallery_filter_comb，故可直接续 sort。
+        // 再写一遍 filter_comb 等于让 comb 解析自己的名字，反而应被确定性拒绝。
+        let redundant_comb = "images://gallery/media-type/image/filter_comb/~any/plugin/p1/~or/date/2024y/01m/~end/filter_comb/sort/by-time/desc/x100x/1";
+        let err = query_fetch_with_runtime(&runtime, redundant_comb).unwrap_err();
+        assert!(err.contains("filter_comb"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn gallery_plugin_extend_documents_its_current_group_field_rejection() {
+        let runtime = build_runtime();
+        let path = "images://gallery/~any/plugin/p1/extend/fav/~or/plugin/p2/~end";
+        let err = query_fetch_with_runtime(&runtime, path).unwrap_err();
+        assert!(
+            err.contains("may only contribute `where` and LEFT JOINs")
+                && err.contains("changed `fields`"),
+            "unexpected plugin extend error: {err}"
+        );
+    }
+
+    #[test]
+    fn gallery_empty_flat_and_unclosed_paths_keep_their_contracts() {
+        let runtime = build_runtime();
+
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/all",
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        );
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/plugin/p1/filter_comb/date/2024y/01m/filter_comb/sort/by-time/desc/x100x/1",
+            &[1, 2, 9],
+        );
+        // 裸年节点必须真实过滤(gallery_date_year_provider 自身的年 WHERE;
+        // 历史上它只列月份不过滤, date/2024y 单独作维度时是全集)。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/date/2024y",
+            &[1, 2, 4, 7, 9, 10],
+        );
+
+        let unclosed = "images://gallery/~any/plugin/p1";
+        let fetch_err = query_fetch_with_runtime(&runtime, unclosed).unwrap_err();
+        assert!(
+            fetch_err.contains("unclosed where group"),
+            "unexpected fetch error: {fetch_err}"
+        );
+        let count_err = runtime.count(unclosed).unwrap_err().to_string();
+        assert!(
+            count_err.contains("unclosed where group"),
+            "unexpected count error: {count_err}"
+        );
     }
 }

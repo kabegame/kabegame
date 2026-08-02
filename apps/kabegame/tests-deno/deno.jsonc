@@ -1,0 +1,7 @@
+{
+  "nodeModulesDir": "manual",
+  "nodeModulesLinker": "hoisted",
+  "imports": {
+    "@kabegame/pathql-client": "../../../packages/kabegame-pathql-client/index.ts"
+  }
+}

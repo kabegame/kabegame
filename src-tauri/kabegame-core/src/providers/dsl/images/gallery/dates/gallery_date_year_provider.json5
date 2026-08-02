@@ -4,6 +4,13 @@
     "properties": {
         "year": { "type": "string", "default": "", "optional": false }
     },
+    // 年节点自身过滤年份: date/2024y 单独作过滤维度(高级查询原子)时必须真实收窄;
+    // 月/日子节点的 %Y-%m(-%d) 条件与之 AND 后语义不变(冗余但无害)。
+    // CAST 同 shared/year_provider: year 模板值按数值绑参, 而 strftime 返回 TEXT,
+    // TEXT = INTEGER 在 SQLite 恒假。
+    "query": {
+        "where": "strftime('%Y', crawled_at_seconds(images.crawled_at), 'unixepoch') = CAST(${properties.year} AS TEXT)"
+    },
     // list: desc 静态 + 动态月份 + 默认分页静态 (与 programmatic 同; 用户在年下既可看月也可直接翻页)
     "list": {
         "${out.meta.mm}m": {

@@ -1,3 +1,9 @@
+import {
+  parseAdvancedBody,
+  serializeAdvancedQuery,
+  type GalleryAdvancedQuery,
+} from "./galleryQuery.ts";
+
 /**
  * Gallery provider path builder/parser.
  *
@@ -107,6 +113,7 @@ export interface ParsedGalleryPath {
   searchMode: GallerySearchMode;
   /** Compatibility for compact/legacy controls: first selected dimension or all. */
   filter: GalleryFilter;
+  advanced?: GalleryAdvancedQuery;
 }
 
 const FILTER_COMB = "filter_comb";
@@ -118,7 +125,7 @@ export const DEFAULT_GALLERY_FILTER: GalleryFilter = { type: "all" };
 export const DEFAULT_GALLERY_FILTER_SET: GalleryFilterSet = {};
 export const DEFAULT_GALLERY_SORT: GallerySort = { field: "by-time", desc: false };
 
-const DIMENSION_ORDER: GalleryFilterDimension[] = [
+export const DIMENSION_ORDER: GalleryFilterDimension[] = [
   "wallpaperOrder",
   "noAlbum",
   "plugin",
@@ -138,7 +145,7 @@ export function buildGalleryContextPrefix(
 
 export interface ComposablePathParams {
   rootPrefix?: string;
-  filters: GalleryFilterSet | GalleryFilter;
+  filters: GalleryFilterSet | GalleryFilter | GalleryAdvancedQuery;
   sort: GallerySort | GalleryStoredSort;
   page: number;
   pageSize?: number;
@@ -155,21 +162,24 @@ export function buildComposablePath(params: ComposablePathParams): string {
     search = "",
     searchMode = DEFAULT_GALLERY_SEARCH_MODE,
   } = params;
-  const filters = isGalleryFilter(params.filters)
-    ? singleFilterToSet(params.filters)
-    : params.filters;
   const sort = normalizeGallerySort(sortOrOrder);
-  const filterPath = serializeFilterSet(filters);
-  const bodyParts: string[] = [];
-
-  if (filterPath) bodyParts.push(filterPath);
-  bodyParts.push(
-    sort.field === "random"
-      ? `sort/random-${sort.seed || newRandomSortSeed()}`
-      : `sort/${sort.field}`,
-  );
-
-  const body = bodyParts.join(`/${FILTER_COMB}/`);
+  const sortPath = sort.field === "random"
+    ? `sort/random-${sort.seed || newRandomSortSeed()}`
+    : `sort/${sort.field}`;
+  let body: string;
+  if (Array.isArray(params.filters)) {
+    const serialized = serializeAdvancedQuery(params.filters);
+    body = `${serialized.body}${
+      serialized.endsAtHub ? "/" : `/${FILTER_COMB}/`
+    }${sortPath}`;
+  } else {
+    const filters = isGalleryFilter(params.filters)
+      ? singleFilterToSet(params.filters)
+      : params.filters;
+    const filterPath = serializeFilterSet(filters);
+    const bodyParts = filterPath ? [filterPath, sortPath] : [sortPath];
+    body = bodyParts.join(`/${FILTER_COMB}/`);
+  }
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
   const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
   const q = (search ?? "").trim();
@@ -213,14 +223,14 @@ export function parseComposablePath(
 
   const { body, tail } = splitBodyAndTail(restSegs);
   const { sort: order, pageSize, page } = parseTail(tail);
-  const { filters, sortField, sortSeed, legacyFilter } = parseBody(body);
+  const { filters, sortField, sortSeed, legacyFilter, advanced } = parseBody(body);
   const sort: GallerySort = {
     field: sortField ?? defaultSort,
     desc: order === "desc",
     ...(sortField === "random" && sortSeed ? { seed: sortSeed } : {}),
   };
-  const filter = legacyFilter ?? filterSetToSingleFilter(filters);
-  return { filters, filter, sort, page, pageSize, search, searchMode };
+  const filter = advanced ? DEFAULT_GALLERY_FILTER : legacyFilter ?? filterSetToSingleFilter(filters);
+  return { filters, filter, sort, page, pageSize, search, searchMode, ...(advanced ? { advanced } : {}) };
 }
 
 export function buildComposableContextPrefix(
@@ -236,14 +246,17 @@ export function buildComposableContextPrefix(
 
 export function buildComposableCountPath(
   rootPrefix: string,
-  filters: GalleryFilterSet | GalleryFilter,
+  filters: GalleryFilterSet | GalleryFilter | GalleryAdvancedQuery,
   search: string = "",
   searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
 ): string {
-  const filterset = isGalleryFilter(filters) ? singleFilterToSet(filters) : filters;
   const q = (search ?? "").trim();
   const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
+  if (Array.isArray(filters)) {
+    return `${searchPrefix}${rp}${serializeAdvancedQuery(filters).body}`;
+  }
+  const filterset = isGalleryFilter(filters) ? singleFilterToSet(filters) : filters;
   return `${searchPrefix}${rp}${buildFilterSetCountPath(filterset)}`;
 }
 
@@ -268,7 +281,14 @@ export function stripComposablePathTail(path: string): string {
  *  返回的 3 段仍保持原始 percent-encoding,真正的 decode 统一发生在 `stripSearchPrefix` 里。 */
 function splitLeadingSearchSegments(segs: string[]): { segments: string[]; rest: string[] } {
   if (segs.length >= 3 && segs[0] === "search" && isGallerySearchMode(segs[1])) {
-    return { segments: segs.slice(0, 3), rest: segs.slice(3) };
+    let queryEnd = 2;
+    while (queryEnd + 1 < segs.length && hasEscapedSlash(segs[queryEnd]!)) {
+      queryEnd += 1;
+    }
+    return {
+      segments: [segs[0]!, segs[1]!, segs.slice(2, queryEnd + 1).join("/")],
+      rest: segs.slice(queryEnd + 1),
+    };
   }
   return { segments: [], rest: segs };
 }
@@ -277,7 +297,7 @@ function stripSearchPrefix(
   segs: string[],
 ): { search: string; searchMode: GallerySearchMode; rest: string[] } {
   const { segments, rest } = splitLeadingSearchSegments(segs);
-  if (segments.length === 0) {
+  if (segments.length === 0 || rest[0] === FILTER_COMB) {
     return { search: "", searchMode: DEFAULT_GALLERY_SEARCH_MODE, rest: segs };
   }
   const searchMode = segments[1] as GallerySearchMode;
@@ -629,7 +649,31 @@ function parseBody(body: string[]): {
   sortField?: GallerySortField;
   sortSeed?: string;
   legacyFilter?: GalleryFilter;
+  advanced?: GalleryAdvancedQuery;
 } {
+  if (
+    body.some((segment) =>
+      segment === "~any" || segment === "~not" || segment === "~or" ||
+      segment === "~end"
+    )
+  ) {
+    const sortIndex = findAdvancedSortIndex(body);
+    const treeBody = body.slice(0, sortIndex < 0 ? body.length : sortIndex);
+    if (treeBody.at(-1) === FILTER_COMB) treeBody.pop();
+    const advanced = parseAdvancedBody(treeBody);
+    if (advanced) {
+      const parsedSort = sortIndex < 0
+        ? {}
+        : parseSortChunk(body.slice(sortIndex));
+      return { filters: {}, advanced, ...parsedSort };
+    }
+    // 回退为空过滤而不是走老的平铺解析: 平铺解析会把组内维度摊平成简单过滤,
+    // 展示出错误的部分语义。
+    console.warn("无法解析画廊高级查询路径，已降级为空过滤");
+    const parsedSort = sortIndex < 0 ? {} : parseSortChunk(body.slice(sortIndex));
+    return { filters: {}, ...parsedSort };
+  }
+
   let filters: GalleryFilterSet = {};
   let sortField: GallerySortField | undefined;
   let sortSeed: string | undefined;
@@ -662,6 +706,25 @@ function parseBody(body: string[]): {
   return { filters, sortField, sortSeed, legacyFilter };
 }
 
+function parseSortChunk(chunk: readonly string[]): {
+  sortField?: GallerySortField;
+  sortSeed?: string;
+} {
+  const field = chunk[1];
+  const randomMatch = /^random-([0-9]{1,18})$/.exec(field ?? "");
+  if (randomMatch) return { sortField: "random", sortSeed: randomMatch[1] };
+  return isGallerySortField(field) ? { sortField: field } : {};
+}
+
+function findAdvancedSortIndex(body: readonly string[]): number {
+  for (let index = body.length - 2; index >= 0; index--) {
+    if (body[index] !== "sort") continue;
+    const parsed = parseSortChunk(body.slice(index));
+    if (parsed.sortField) return index;
+  }
+  return -1;
+}
+
 function splitFilterChunks(body: string[]): string[][] {
   const chunks: string[][] = [];
   let current: string[] = [];
@@ -677,7 +740,7 @@ function splitFilterChunks(body: string[]): string[][] {
   return chunks;
 }
 
-function parseDimensionChunk(
+export function parseDimensionChunk(
   chunk: readonly string[],
 ): { filter: GalleryFilter; dimension: GalleryFilterDimension } | null {
   const root = chunk[0]?.toLowerCase();
@@ -806,6 +869,14 @@ function decodePathSegment(segment: string): string {
   } catch {
     return segment;
   }
+}
+
+function hasEscapedSlash(segment: string): boolean {
+  let backslashes = 0;
+  for (let index = segment.length - 1; index >= 0 && segment[index] === "\\"; index--) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
 }
 
 function normalizePath(path = "") {

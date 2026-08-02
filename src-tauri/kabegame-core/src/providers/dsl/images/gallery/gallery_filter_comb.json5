@@ -27,6 +27,9 @@
         "aspect": {
             "provider": "gallery_aspect_router"
         },
+        "search": {
+            "provider": "gallery_search_router"
+        },
         "sort": {
             "provider": "gallery_sort_router"
         }
