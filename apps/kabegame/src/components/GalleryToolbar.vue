@@ -16,67 +16,42 @@
       @select="onFilterModeSelect"
     />
 
-    <!-- 排序维度 -->
-    <el-dropdown trigger="click" @command="onDesktopSortFieldCommand">
-      <el-button class="max-w-[280px]">
-        <el-icon class="mr-1.5 text-sm">
-          <Sort />
-        </el-icon>
-        <span>{{ sortFieldLabel(sortField) }} </span>
-        <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
-          <ArrowDown />
-        </el-icon>
-      </el-button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item
-            v-for="field in sortFieldOptions"
-            :key="field"
-            :command="field"
-            :class="{ 'is-active': sortField === field }"
-          >
-            {{ sortFieldLabel(field) }}
-          </el-dropdown-item>
-        </el-dropdown-menu>
+    <!-- 排序维度 / 顺序 / 每页条数：与过滤维度同一套 chip 下拉，区别只是必选
+         (clearable=false：没有「任意」行、不出清除徽章、chip 不进选中高亮态)。 -->
+    <KbFilterDropdown
+      :model-value="sortField"
+      :options="sortFieldItems"
+      :chip-label="t('gallery.sort')"
+      :clearable="false"
+      class="flex-none"
+      @update:model-value="(value) => { if (value) onDesktopSortFieldCommand(value); }"
+    >
+      <template #icon><Sort /></template>
+    </KbFilterDropdown>
+
+    <KbFilterDropdown
+      :model-value="sortOrder"
+      :options="sortOrderItems"
+      :chip-label="t('gallery.sortOrder')"
+      :clearable="false"
+      class="flex-none"
+      @update:model-value="(value) => { if (value) emit('update:sort', { ...sort, desc: value === 'desc' }); }"
+    >
+      <template #icon>
+        <Sort :class="{ 'rotate-180': sortOrder === 'desc' }" />
       </template>
-    </el-dropdown>
+    </KbFilterDropdown>
 
-    <!-- 排序方向 -->
-    <el-button class="max-w-[280px]" @click="toggleDesktopSortDesc">
-      <el-icon
-        class="mr-1.5 text-sm transition-transform duration-150 ease-[ease]"
-        :class="{ 'rotate-180': sortOrder === 'desc' }"
-      >
-        <Sort />
-      </el-icon>
-      <span>{{ sortOrder === "desc" ? t("gallery.sortDescending") : t("gallery.sortAscending") }}</span>
-    </el-button>
-
-    <!-- 页面大小 -->
-    <el-dropdown trigger="click" @command="onDesktopPageSizeCommand">
-      <el-button class="max-w-[280px]">
-        <el-icon class="mr-1.5 text-sm">
-          <Histogram />
-        </el-icon>
-        <span>{{ pageSizeLabel }}</span>
-        <el-icon class="el-icon--right transition-transform duration-150 ease-[ease]">
-          <ArrowDown />
-        </el-icon>
-      </el-button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item
-            v-for="n in pageSizeOptions"
-            :key="n"
-            :command="String(n)"
-            :class="{ 'is-active': pageSize === n }"
-          >
-            {{ n }}
-          </el-dropdown-item>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
-
+    <KbFilterDropdown
+      :model-value="String(pageSize)"
+      :options="pageSizeItems"
+      :chip-label="t('gallery.pageSize')"
+      :clearable="false"
+      class="flex-none"
+      @update:model-value="(value) => { if (value) onDesktopPageSizeCommand(value); }"
+    >
+      <template #icon><Histogram /></template>
+    </KbFilterDropdown>
   </div>
 
   <!-- 查询行：简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），
@@ -323,10 +298,14 @@
 import { computed, markRaw, nextTick, ref, watch, onMounted, onUnmounted, type Component } from "vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { KbFilterDropdown, KbTab, type KbTabItem } from "@kabegame/element-plus";
+import {
+  KbFilterDropdown,
+  KbTab,
+  type KbFilterDropdownOption,
+  type KbTabItem,
+} from "@kabegame/element-plus";
 import { useRouter } from "vue-router";
 import {
-  ArrowDown,
   Close,
   Filter,
   Setting,
@@ -702,6 +681,20 @@ const filterDimensions = computed<Array<{
   { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), chipLabel: t("gallery.advancedChipWallpaper"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
 ]);
 
+/** 排序维度 / 顺序 / 每页条数：KbFilterDropdown 的内置列表（必选，无「任意」行）。 */
+const sortFieldItems = computed<KbFilterDropdownOption[]>(() =>
+  sortFieldOptions.map((field) => ({ label: sortFieldLabel(field), value: field })),
+);
+
+const sortOrderItems = computed<KbFilterDropdownOption[]>(() => [
+  { label: t("gallery.sortDescending"), value: "desc" },
+  { label: t("gallery.sortAscending"), value: "asc" },
+]);
+
+const pageSizeItems = computed<KbFilterDropdownOption[]>(() =>
+  pageSizeOptions.map((n) => ({ label: String(n), value: String(n) })),
+);
+
 // no-album 是 header fold 的手动开关，不算「过滤」维度：不点亮过滤指示、也不显示清除叉号。
 const isFilterIndicatorActive = computed(
   () =>
@@ -887,10 +880,6 @@ function onDesktopSortFieldCommand(cmd: string) {
     return;
   }
   emit("update:sort", { field: cmd as GallerySortField, desc: props.sort.desc });
-}
-
-function toggleDesktopSortDesc() {
-  emit("update:sort", { ...props.sort, desc: !props.sort.desc });
 }
 
 interface PluginGroupRow {
@@ -1606,7 +1595,6 @@ async function refreshProviderFilterTree() {
 defineExpose({ refreshProviderFilterTree });
 
 const pageSizeOptions = [100, 500, 1000] as const;
-const pageSizeLabel = computed(() => String(props.pageSize));
 
 async function onDesktopPageSizeCommand(cmd: string) {
   const n = Number(cmd);

@@ -47,6 +47,7 @@
             <template v-else>
               <div :class="ns.e('list')" role="listbox">
                 <button
+                  v-if="clearable"
                   type="button"
                   role="option"
                   :class="optionClasses(0, modelValue === null)"
@@ -70,12 +71,12 @@
                   type="button"
                   role="option"
                   :class="[
-                    ...optionClasses(index + 1, modelValue === option.value),
+                    ...optionClasses(index + optionIndexOffset, modelValue === option.value),
                     ns.is('zero', option.count === 0),
                   ]"
                   :aria-selected="modelValue === option.value"
-                  :data-kb-filter-index="index + 1"
-                  @mouseenter="highlightedIndex = index + 1"
+                  :data-kb-filter-index="index + optionIndexOffset"
+                  @mouseenter="highlightedIndex = index + optionIndexOffset"
                   @click="selectValue(option.value)"
                 >
                   <span :class="ns.e('option-label')">{{ option.label }}</span>
@@ -102,7 +103,7 @@
         ns.b(),
         ns.is('open', visible),
         ns.is('disabled', disabled),
-        ns.is('selected', hasSelection),
+        ns.is('selected', isActive),
       ]"
       :aria-disabled="disabled"
     >
@@ -120,7 +121,7 @@
           <span v-if="badge" :class="ns.e('chip-badge')">{{ badge }}</span>
           <span :class="ns.e('chip-value')">{{ selectedLabel }}</span>
           <button
-            v-if="hasSelection"
+            v-if="isActive"
             type="button"
             :class="ns.e('clear')"
             :aria-label="anyLabel"
@@ -166,6 +167,7 @@ const props = withDefaults(defineProps<KbFilterDropdownProps>(), {
   loading: false,
   negated: false,
   disabled: false,
+  clearable: true,
 })
 
 const emit = defineEmits<{
@@ -191,11 +193,15 @@ const selectedOption = computed(
   () => props.options.find((option) => option.value === props.modelValue) ?? null
 )
 const hasSelection = computed(() => props.modelValue !== null)
+/** 必选模式没有「已选/未选」之分：不进高亮态、不出清除徽章。 */
+const isActive = computed(() => props.clearable && hasSelection.value)
 const selectedLabel = computed(() =>
   hasSelection.value
     ? props.selectedLabel ?? selectedOption.value?.label ?? props.modelValue
-    : props.anyLabel
+    : props.anyLabel ?? ''
 )
+/** 必选模式没有「任意」行，选项索引不再整体后移一位。 */
+const optionIndexOffset = computed(() => (props.clearable ? 1 : 0))
 const filteredOptions = computed(() => {
   const normalizedQuery = query.value.trim().toLocaleLowerCase()
   if (!normalizedQuery) return props.options
@@ -204,10 +210,11 @@ const filteredOptions = computed(() => {
     option.label.toLocaleLowerCase().includes(normalizedQuery)
   )
 })
-const navigableValues = computed<(string | null)[]>(() => [
-  null,
-  ...filteredOptions.value.map((option) => option.value),
-])
+const navigableValues = computed<(string | null)[]>(() =>
+  props.clearable
+    ? [null, ...filteredOptions.value.map((option) => option.value)]
+    : filteredOptions.value.map((option) => option.value)
+)
 
 watch(
   [() => props.modelValue, filteredOptions],

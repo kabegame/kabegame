@@ -94,6 +94,24 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 `@kabegame/element-plus/components/kb-tab` 的 `KbTab`（只管 tab 头本身，内容由调用方按
 `v-model` 自行切换）。
 
+另一个先例是 `kb-filter-dropdown` 的 `KbFilterDropdown`。名字来自第一个用例（画廊过滤
+维度），但它本质是**「chip 触发器 + 浮层」的通用单选器**，两种形态：
+
+- **内置列表**：给 `options`（可带 `count`），组件自己渲染选项行。行高 32 / 圆角 6 /
+  hover 与选中的粉色浓度都对齐 `ProviderChildrenNode`，因为同一层弹层里内置列表与
+  过滤树面板会混用，尺寸和配色不一致会很扎眼。
+- **`#panel` 插槽**：一旦用了插槽，内置列表整个不渲染，浮层内容完全由调用方决定
+  （过滤树、搜索模式 + 输入框都是这么接的）。此时面板宽度交给内容（`is-custom`），
+  不再走内置列表那条 `clamp(260px, 24vw, 340px)`。
+
+`clearable`（默认 `true`）区分两种语义：过滤维度可清空——有「任意」行、选中后 chip
+右上角出清除徽章、chip 进粉色高亮态；排序 / 每页条数这类**恒有值**的必选场景传
+`false`，三者全部关掉——恒有值时高亮不构成对比，只会满行发亮。
+
+仍是 el-dropdown 的地方分两类：**值选择器**（画册页排序/每页、失败图按插件过滤等）
+该逐步换过来；**动作菜单**（编辑/复制/删除、header 折叠动作）没有 `modelValue` 语义，
+不要硬套，将来需要的话另抽一个复用同一套 popper + 选项样式的 `KbActionMenu`。
+
 样式约定按组件性质分流：
 
 - **改 EP 原有组件的主题** → 进 `theme-chalk/src/*.scss`（它是全局 CSS，参与 `index.scss` 汇总）

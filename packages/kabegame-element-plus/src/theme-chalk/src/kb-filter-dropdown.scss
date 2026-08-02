@@ -175,6 +175,9 @@
       );
       border-radius: 13px;
       background: getCssVar('kb-filter-dropdown', 'panel-bg-color');
+      // 底色是 90% 白，弹层压在画廊缩略图上时字会被花底吃掉；
+      // 配方同过滤树的 sticky 行(ProviderChildrenNode)：半透明 + 背景模糊。
+      backdrop-filter: blur(10px);
       box-shadow: getCssVar('kb-filter-dropdown', 'panel-shadow');
     }
   }
@@ -220,10 +223,12 @@
     justify-content: space-between;
     gap: 18px;
     width: 100%;
-    min-height: 38px;
-    padding: 0 11px;
+    // 行高/圆角对齐过滤树节点(ProviderChildrenNode: min-h-8 + rounded-6px),
+    // 内置列表与树面板是同一层弹层里的两种内容，尺寸不一致会很扎眼。
+    min-height: 32px;
+    padding: 0 10px;
     border: 0;
-    border-radius: 9px;
+    border-radius: 6px;
     color: getCssVar('kb-filter-dropdown', 'option-text-color');
     background: transparent;
     font: inherit;

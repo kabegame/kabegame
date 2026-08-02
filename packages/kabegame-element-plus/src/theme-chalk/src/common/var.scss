@@ -493,11 +493,13 @@ $kb-filter-dropdown: map.merge(
     'panel-shadow': var(--anime-shadow-hover),
     'option-text-color': var(--anime-text-primary),
     'option-muted-color': var(--anime-text-muted),
+    // hover / 选中的浓度对齐过滤树节点(ProviderChildrenNode 的 .07 / .14),
+    // 同一个弹层里内置列表与树面板混用时不能一深一浅。
     'option-hover-bg-color':
-      color-mix(in srgb, var(--anime-primary) 6%, transparent),
+      color-mix(in srgb, var(--anime-primary) 7%, transparent),
     'option-selected-bg-color':
-      color-mix(in srgb, var(--anime-primary) 10%, transparent),
-    'option-selected-text-color': var(--anime-primary-dark),
+      color-mix(in srgb, var(--anime-primary) 14%, transparent),
+    'option-selected-text-color': var(--anime-primary),
     // 计数为 0 的行整体灰化：0 仍可选（尤其排除语境下 −0 有意义），只做视觉弱化。
     'option-zero-color': var(--anime-text-muted),
     'focus-ring':

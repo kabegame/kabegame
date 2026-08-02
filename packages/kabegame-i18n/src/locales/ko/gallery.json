@@ -47,6 +47,7 @@
   "sortByAspect": "화면 비율",
   "sortBySetTime": "배경화면 설정 시간",
   "sortByRandom": "무작위",
+  "sortOrder": "순서",
   "sortAscending": "오름차순",
   "sortDescending": "내림차순",
   "wallpaperSortTitle": "배경화면 설정 순서",

@@ -18,8 +18,15 @@ export interface KbFilterDropdownProps {
   selectedLabel?: string
   /** chip 内维度名与值之间的小胶囊(如搜索维度的「元数据」)。 */
   badge?: string
-  anyLabel: string
+  /** 「任意」行/未选中态的文案。必选模式(clearable=false)下不需要。 */
+  anyLabel?: string
   anyCount?: number
+  /**
+   * 值可否清空。默认 true(过滤维度语义:有「任意」行 + 选中后 chip 带清除徽章)。
+   * 置 false 变成必选的单选器(排序、每页条数这类恒有值的场景):不渲染「任意」行、
+   * 不出清除徽章、chip 也不进选中高亮态——恒有值时高亮不构成对比,只会满行发亮。
+   */
+  clearable?: boolean
   searchable?: boolean
   searchPlaceholder?: string
   emptyText?: string
