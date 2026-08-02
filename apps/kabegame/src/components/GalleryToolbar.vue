@@ -79,9 +79,11 @@
 
   </div>
 
-  <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
-  <div v-if="!uiStore.isCompact && filterMode === 'advanced'" class="mb-1 pt-1.5">
-    <PathqlPathBar :path="advancedPathPreview">
+  <!-- 查询行：简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），
+       否则两种模式高度不同，切换时下面的画廊会整体上下跳。 -->
+  <div v-if="!uiStore.isCompact" class="query-row mb-1 flex items-center gap-2">
+    <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
+    <PathqlPathBar v-if="filterMode === 'advanced'" :path="advancedPathPreview" class="flex-1">
       <template #prefix>
         <el-button type="primary" class="flex-none" @click="openAdvancedQuery">
           <el-icon class="mr-1.5 text-sm"><Setting /></el-icon>
@@ -89,14 +91,13 @@
         </el-button>
       </template>
     </PathqlPathBar>
-  </div>
 
-  <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
-  <div v-else-if="!uiStore.isCompact" class="mb-1 flex items-center gap-2">
+    <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
     <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
          清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
          右边界的粉色渐隐只在还能往右滚时出现，提示「后面还有」。 -->
     <div
+      v-else
       class="filter-chip-viewport relative min-w-0 flex-1"
       :class="{ 'has-more': chipRowHasMore }"
     >
@@ -121,18 +122,20 @@
             <Search />
           </template>
           <template #panel>
-            <div class="w-[360px] max-w-[calc(100vw-48px)] p-3">
+            <!-- 宽度不写死：由三个模式 tab 并排的自然宽度决定，输入框跟着撑满 -->
+            <div class="w-max max-w-[calc(100vw-48px)] p-3">
               <KbTab
                 :model-value="searchMode"
                 :items="searchModeItems"
-                class="w-full"
                 @update:model-value="(mode) => emit('update:searchMode', mode)"
               />
-              <SearchInput
-                :model-value="search"
+              <!-- w-0 + min-w-full：输入框自身宽度不参与 w-max 的测量(el-input 的
+                   固有宽度有 440px，会把面板撑得比 tab 宽一倍)，定宽后再撑满 -->
+              <KbText
+                :model-value="searchDraft"
                 :placeholder="searchInputPlaceholder"
-                class="mt-3 w-full!"
-                @update:model-value="(v) => emit('update:search', v)"
+                class="mt-3 w-0! min-w-full"
+                @update:model-value="onSearchDraft"
               />
             </div>
           </template>
@@ -182,7 +185,7 @@
 
     <!-- 清除放在滚动区外，chip 再多也常驻可见 -->
     <el-button
-      v-if="isFilterIndicatorActive"
+      v-if="filterMode === 'simple' && isFilterIndicatorActive"
       text
       class="flex-none !text-[var(--anime-text-secondary)]"
       :title="t('gallery.clearAllFilters')"
@@ -342,7 +345,7 @@ import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
-import SearchInput from "@/components/SearchInput.vue";
+import KbText from "@kabegame/core/components/common/form/KbText.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
@@ -802,6 +805,38 @@ function onFilterChipWheel(event: WheelEvent) {
 const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
   GALLERY_SEARCH_MODES.map((mode) => ({ name: mode, label: searchModeLabel(mode) }))
 );
+
+/**
+ * 搜索面板的输入草稿。KbText 是裸 el-input(逐键回调)，防抖放在这里：
+ * 每敲一个字就 navigate 一次会把路由和查询打爆；清空则立即生效，不必等 300ms。
+ */
+const searchDraft = ref(props.search ?? "");
+let searchDebounceTimer: number | null = null;
+
+watch(
+  () => props.search,
+  (value) => {
+    if ((value ?? "") !== searchDraft.value) searchDraft.value = value ?? "";
+  },
+);
+
+function onSearchDraft(value: string) {
+  searchDraft.value = value;
+  if (searchDebounceTimer !== null) window.clearTimeout(searchDebounceTimer);
+  if (!value) {
+    searchDebounceTimer = null;
+    if (props.search) emit("update:search", "");
+    return;
+  }
+  searchDebounceTimer = window.setTimeout(() => {
+    searchDebounceTimer = null;
+    if (props.search !== value) emit("update:search", value);
+  }, 300);
+}
+
+onUnmounted(() => {
+  if (searchDebounceTimer !== null) window.clearTimeout(searchDebounceTimer);
+});
 
 const searchInputPlaceholder = computed(() => {
   switch (props.searchMode) {
@@ -2047,6 +2082,12 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
 </script>
 
 <style scoped lang="scss">
+/* 简单/高级共用的查询行：行高钉死在简单态的尺寸（chip 38px + 滚动区上下 8/10px 留白），
+   高级态内容更矮时靠 align-items 居中撑住，切模式时下方画廊不会上下跳。 */
+.query-row {
+  min-height: 56px;
+}
+
 /* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
 .filter-chip-row {
   // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走。
