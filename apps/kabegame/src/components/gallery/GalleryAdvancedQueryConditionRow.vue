@@ -32,17 +32,20 @@
         >
           <template #icon><Search /></template>
           <template #panel="{ close }">
-            <div class="w-[360px] max-w-[calc(100vw-48px)] p-3">
-              <KbTab v-model="searchMode" :items="searchModeItems" class="w-full" />
-              <el-input
+            <!-- 与画廊工具行的搜索面板同构：宽度不写死，由三个模式 tab 并排的自然
+                 宽度决定。输入框与说明文字都用 w-0!+min-w-full 退出宽度测量
+                 （el-input 固有 440px、整段说明的 max-content 更宽，都会把 w-max 撑坏）。 -->
+            <div class="w-max max-w-[calc(100vw-48px)] p-3">
+              <KbTab v-model="searchMode" :items="searchModeItems" />
+              <KbText
                 :model-value="atom.search?.query || ''"
-                class="mt-3"
-                clearable
+                class="mt-3 w-0! min-w-full"
+                allow-unset
                 :placeholder="searchPlaceholder"
                 @update:model-value="updateSearchQuery"
                 @keyup.enter="close"
               />
-              <p class="mb-0 mt-3 text-xs leading-5 text-[var(--anime-text-secondary)]">
+              <p class="mb-0 mt-3 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-secondary)]">
                 {{ t("gallery.advancedSearchHelp") }}
               </p>
             </div>
@@ -109,12 +112,12 @@ import { computed, markRaw, ref, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import {
   ElIcon,
-  ElInput,
   KbFilterDropdown,
   KbTab,
   type KbFilterDropdownOption,
   type KbTabItem,
 } from "@kabegame/element-plus";
+import KbText from "@kabegame/core/components/common/form/KbText.vue";
 import {
   Close,
   FilterAspect,

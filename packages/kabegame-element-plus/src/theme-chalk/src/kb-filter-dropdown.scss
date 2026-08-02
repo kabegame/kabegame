@@ -25,7 +25,7 @@
     cursor: pointer;
     // 与同一行的 el-button 对齐:不写死就继承 root 的 16px，chip 行会明显比工具行大一号。
     font-size: getCssVar('font-size', 'base');
-    font-weight: getCssVar('font-weight-primary');
+    font-weight: normal;
     white-space: nowrap;
     transition:
       color 0.18s ease,
@@ -135,9 +135,9 @@
       );
     }
 
+    // 选中态靠颜色和底色区分就够，不再加粗（整行 chip 一起变粗会显得吵）。
     @include e(chip-value) {
       color: inherit;
-      font-weight: 600;
     }
 
     // 选中态整颗 chip 转粉，图标跟上（此时它不该还留在中性紫）。
