@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// claude CLI 驱动：把一个前端任务派给 claude（默认 sonnet 模型），流式打印进度，
+// claude CLI 驱动：把一个前端任务外包给便宜的 sonnet 子进程跑（省主会话的 token），流式打印进度，
 // 最终答案写文件并回显。后端 Rust 任务请走 run-codex skill。用法见同目录 SKILL.md。
 
 import { spawn } from "node:child_process";
@@ -7,7 +7,7 @@ import { mkdirSync, openSync, writeFileSync, readFileSync, existsSync, readdirSy
 import { resolve, join } from "node:path";
 
 const SCOPES = {
-  // 默认作用域：本 skill 就是"claude 写前端"的入口，后端交给 codex。
+  // 默认作用域：本 skill 就是"sonnet 写前端"的入口，后端交给 codex。
   fe: [
     "本轮你只负责【前端】：Vue / TypeScript / JavaScript / 样式(UnoCSS、CSS) / i18n JSON。",
     "禁止修改任何后端与构建产物文件——按【文件类型】判断，不要只按目录判断：",
@@ -19,7 +19,7 @@ const SCOPES = {
   ].join(""),
   be: [
     "本轮你只负责【后端】：src-tauri/ 下的 Rust。前端 Vue/TS 文件只读不改。",
-    "（注意：本仓库后端任务默认应该派给 codex，用这个 scope 说明你有意让 claude 来做。）",
+    "（注意：本仓库后端任务默认应该派给 codex，用这个 scope 说明你有意让 sonnet 来做。）",
   ].join(""),
   none: "",
 };
@@ -62,7 +62,7 @@ for (let i = 0; i < argv.length; i++) {
 选项:
   --write              允许改文件（--permission-mode acceptEdits）。默认只读：Edit/Write 会被拒
   --full               --dangerously-skip-permissions（什么都放行，慎用）
-  -m, --model <名字>    默认 sonnet（本 skill 的定位就是让 sonnet 写前端）
+  -m, --model <名字>    默认 sonnet（本 skill 的定位就是用便宜模型省主会话 token，换 opus 就失去意义）
   --scope <fe|be|none> 追加作用域约束系统提示，默认 fe（只碰前端，后端交给 codex）
   --effort <级别>       low|medium|high|xhigh|max，默认走 claude 自己的设置
   --schema <file>      JSON Schema 文件，强制最终答案为结构化 JSON
@@ -77,7 +77,7 @@ for (let i = 0; i < argv.length; i++) {
 退出码: 0 正常 · 3 写入类工具(Edit/Write)被权限拒绝（多半是忘了 --write）· 124 超时 · 其他透传 claude
         Bash 被拒不影响退出码（分类器挡掉某条命令很常见，claude 会换写法重试）
 
-产物写到 <cd>/ignore/claude-runs/<时间戳>/：events.jsonl · last-message.txt · session.txt · meta.json`);
+产物写到 <cd>/ignore/sonnet-runs/<时间戳>/：events.jsonl · last-message.txt · session.txt · meta.json`);
     process.exit(0);
   } else if (!a.startsWith("-") && !opts.prompt) opts.prompt = a;
   else {
@@ -95,7 +95,7 @@ if (!opts.prompt) {
   process.exit(2);
 }
 
-const runsRoot = join(opts.cd, "ignore", "claude-runs");
+const runsRoot = join(opts.cd, "ignore", "sonnet-runs");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const runDir = join(runsRoot, stamp);
 mkdirSync(runDir, { recursive: true });

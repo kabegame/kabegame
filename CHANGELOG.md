@@ -7,6 +7,7 @@
 **Changelog entries:** ~~Write release notes in **English** (new sections and bullets from [3.4.5] onward). ~~ 从4.2.1开始用中文。
 
 ## [4.4.0]
+
 ### Added
 - **插件**:
   - 添加标签系统，可以声明自己是否需要翻墙、需要cookie
@@ -30,6 +31,7 @@
 - **PathQL 查询**: 
   - 新增随机排序，可以随机抽图玩啦
   - 新增元数据搜索，可以直接通过搜索prompt来找AI图片了，但在那之前别忘了执行一次整理来填充元数据
+  - 更自由强大的过滤！你可以组合高级过滤来实现例如找到元数据里有 prompt 但名称里没有 Comfy 的图片。高级过滤能显示pathql路径，让你知道机箱下面是什么在工作。
 
 ### Fixed
 - **壁纸**: 
@@ -74,6 +76,7 @@
 - **文档**: Demo 页面url改成 demo.kabegame.com
 - **插件**: 插件要声明白名单的文档asset列表，而不会自动递归查找
 - **Web**： Web下首页默认改成随机正序
+- **界面**: 搜索框被移动到到过滤行中
 
 ### Removed
 - **插件**: 移除kgpg v2兼容，迁到kgpg v3，文件头包含50kb的固定icon数据

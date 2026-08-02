@@ -257,9 +257,9 @@ export type GalleryAdvancedQuery = GalleryQueryNode[];   // 顶层 AND 序列
 
 - 批 1(codex):点 1-3 + 点 9.1 deno 测试(纯逻辑,可独立验收)。
 - 批 2(codex):点 5 引擎回归。
-- 批 3(codex/run-claude):点 6 图标 + 点 7 组件结构;**视觉打磨由我做**
+- 批 3(codex/run-sonnet):点 6 图标 + 点 7 组件结构;**视觉打磨由我做**
   (codex 样式不达标的既往约定)。
-- 批 4(run-claude):点 8 弹窗结构 + 接线;我做视觉打磨与截图核对。
+- 批 4(run-sonnet):点 8 弹窗结构 + 接线;我做视觉打磨与截图核对。
 - 每批独立提交;与 pathql-client Phase 3 无依赖,可并行或先后。
 
 ## 风险与边界

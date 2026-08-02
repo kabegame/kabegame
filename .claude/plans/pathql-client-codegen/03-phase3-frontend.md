@@ -3,7 +3,7 @@
 > 前置:Phase 2 已落地(commit 32383584)。生成命令
 > `kabegame-cli pathql generate --target typescript --out …`,真实产物已过
 > deno check + 行为断言。本阶段把生成客户端接进前端,并按调用点清单分批迁移。
-> 迁移分工:机械替换批次派 run-claude(前端归 claude),我复核 + 验证。
+> 迁移分工:机械替换批次派 run-sonnet(前端归 sonnet),我复核 + 验证。
 
 ## 总体思路
 
@@ -48,7 +48,7 @@ build/parse 与引擎三方同构。`galleryPath.ts` 的 `buildComposablePath` �
   - `scripts/build-web.sh`:host 侧 JS 构建前确认产物存在(存在性检查 + 报错提示,
     不自动构建 CLI)。
 
-## 点 2 — 迁移批次(每批独立可验收,run-claude 执行)
+## 点 2 — 迁移批次(每批独立可验收,run-sonnet 执行)
 
 **批次 A(单段拼接,低风险)**
 - `App.vue:422`:`images://id_${encodeURIComponent(id)}` → `pql.images.$resolveId(`id_${…}`)`

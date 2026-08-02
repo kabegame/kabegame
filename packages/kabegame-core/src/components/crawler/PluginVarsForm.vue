@@ -134,7 +134,8 @@ const updateVar = (varDef: PluginVarDef, value: any) => {
 .plugin-vars-notes {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  /* 项内可能折成多行，项间距要明显大于行距才分得开 */
+  gap: 8px;
   padding: 10px 12px;
   border-left: 3px solid var(--anime-secondary);
   border-radius: 12px;
@@ -144,14 +145,14 @@ const updateVar = (varDef: PluginVarDef, value: any) => {
   line-height: 1.6;
 }
 
+/* 走自然文本流而不是 flex：名称和描述首行仍并排，
+   但描述折行时回到容器左边缘，不会缩在右半边排成窄窄一条 */
 .plugin-vars-notes__item {
-  display: flex;
-  gap: 8px;
   min-width: 0;
 }
 
 .plugin-vars-notes__name {
-  flex: none;
+  margin-right: 8px;
   color: var(--anime-text-secondary);
   font-weight: 600;
 }
