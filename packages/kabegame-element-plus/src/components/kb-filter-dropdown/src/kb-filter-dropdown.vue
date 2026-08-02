@@ -185,8 +185,10 @@ const selectedOption = computed(
   () => props.options.find((option) => option.value === props.modelValue) ?? null
 )
 const hasSelection = computed(() => props.modelValue !== null)
-const selectedLabel = computed(
-  () => selectedOption.value?.label ?? props.modelValue ?? props.anyLabel
+const selectedLabel = computed(() =>
+  hasSelection.value
+    ? props.selectedLabel ?? selectedOption.value?.label ?? props.modelValue
+    : props.anyLabel
 )
 const filteredOptions = computed(() => {
   const normalizedQuery = query.value.trim().toLocaleLowerCase()

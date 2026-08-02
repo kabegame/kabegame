@@ -12,7 +12,6 @@
       :name="b.autonym"
       :path="pathForSegment(`name/${b.bucket}`)"
       :depth="1"
-      empty-state="disable"
       :active="isSameGalleryFilter({ type: 'name', bucket: b.bucket }, filter)"
       :filter="nameChangeFilter"
       @select="$emit('select', { type: 'name', bucket: b.bucket })"

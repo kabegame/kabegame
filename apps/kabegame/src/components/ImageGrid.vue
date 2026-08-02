@@ -249,7 +249,7 @@ async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
   // 等导航 await 完成后再关闭，可保证 previewedId→null 引发的 pvwimgid 写入只
   // 基于已落定的目标 URL，不会与 push 在同一 tick 竞争而把 filter 覆盖回去。
   await galleryRouteStore.navigate(
-    { ...routeState, page: 1 },
+    { ...routeState, advanced: undefined, page: 1 },
     { push: true },
   );
   imageDetailDialog.close();

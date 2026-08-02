@@ -9,24 +9,33 @@
   <div v-if="!uiStore.isCompact" class="flex flex-wrap items-center gap-2 mb-2">
     <!-- 打开过滤行 -->
     <div class="relative inline-flex max-w-[280px]">
-      <el-button
-        class="max-w-[280px] !pr-7"
-        :class="{
-          '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isFilterIndicatorActive,
-        }"
-        @click="showDesktopFilterRow = !showDesktopFilterRow"
+      <el-tooltip
+        :content="t('gallery.advancedSimpleFilterDisabled')"
+        :disabled="!isAdvancedActive"
+        placement="top"
       >
-        <el-icon class="mr-1.5 text-sm">
-          <Filter />
-        </el-icon>
-        <span>{{ t("gallery.filter") }} </span>
-        <el-icon
-          class="el-icon--right transition-transform duration-150 ease-[ease]"
-          :class="{ 'rotate-180': showDesktopFilterRow }"
-        >
-          <ArrowDown />
-        </el-icon>
-      </el-button>
+        <span>
+          <el-button
+            class="max-w-[280px] !pr-7"
+            :class="{
+              '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isFilterIndicatorActive,
+            }"
+            :disabled="isAdvancedActive"
+            @click="showDesktopFilterRow = !showDesktopFilterRow"
+          >
+            <el-icon class="mr-1.5 text-sm">
+              <Filter />
+            </el-icon>
+            <span>{{ t("gallery.filter") }} </span>
+            <el-icon
+              class="el-icon--right transition-transform duration-150 ease-[ease]"
+              :class="{ 'rotate-180': showDesktopFilterRow }"
+            >
+              <ArrowDown />
+            </el-icon>
+          </el-button>
+        </span>
+      </el-tooltip>
       <button
         v-if="isFilterIndicatorActive"
         type="button"
@@ -39,6 +48,24 @@
           <Close />
         </el-icon>
       </button>
+    </div>
+
+    <div class="relative inline-flex">
+      <el-button
+        :class="{
+          '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)] !shadow-[0_0_0_1px_rgba(255,107,157,0.20)]': isAdvancedActive,
+        }"
+        @click="openAdvancedQuery"
+      >
+        <el-icon class="mr-1.5 text-sm"><Filter /></el-icon>
+        {{ t("gallery.advancedQueryShort") }}
+      </el-button>
+      <span
+        v-if="advancedConditionCount > 0"
+        class="absolute -right-1.5 -top-1.5 z-10 inline-flex min-w-[19px] h-[19px] items-center justify-center rounded-full border border-white bg-[var(--anime-primary)] px-1 text-[10px] font-semibold text-white"
+      >
+        {{ advancedConditionCount > 99 ? "99+" : advancedConditionCount }}
+      </span>
     </div>
 
     <!-- 排序维度 -->
@@ -134,7 +161,7 @@
   </div>
 
   <!-- 桌面具体过滤行 -->
-  <div v-if="!uiStore.isCompact && showDesktopFilterRow" class="flex flex-wrap items-center gap-2 mb-2">
+  <div v-if="!uiStore.isCompact && showDesktopFilterRow && !isAdvancedActive" class="flex flex-wrap items-center gap-2 mb-2">
     <div
       v-for="dimension in filterDimensions"
       :key="dimension.key"
@@ -206,6 +233,22 @@
         </div>
       </el-popover>
     </div>
+  </div>
+
+  <div v-if="uiStore.isCompact" class="mb-2 flex justify-end">
+    <el-button
+      size="small"
+      :class="{
+        '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)]': isAdvancedActive,
+      }"
+      @click="openAdvancedQuery"
+    >
+      <el-icon class="mr-1"><Filter /></el-icon>
+      {{ t("gallery.advancedQueryShort") }}
+      <span v-if="advancedConditionCount > 0" class="ml-1 rounded-full bg-[var(--anime-primary)] px-1.5 text-[10px] text-white">
+        {{ advancedConditionCount }}
+      </span>
+    </el-button>
   </div>
 
   <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
@@ -303,6 +346,16 @@
          对话框由本组件托管并经 handleAction 打开 -->
     <FailedImagesDialog ref="failedImagesDialogRef" />
   </Teleport>
+
+  <GalleryAdvancedQueryDialog
+    v-model:visible="advancedDialogVisible"
+    :query="advancedDialogInitialQuery"
+    :sort="props.sort"
+    :page="galleryRouteStore.page"
+    :page-size="props.pageSize"
+    :context-prefix="advancedContextPrefix"
+    @apply="applyAdvancedQuery"
+  />
 </template>
 
 <script setup lang="ts">
@@ -330,6 +383,7 @@ import { withGalleryPrefix } from "@/utils/path";
 import SearchInput from "@/components/SearchInput.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
+import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -338,6 +392,7 @@ import {
   GALLERY_ASPECT_BUCKETS,
   GALLERY_NAME_LANGUAGE_BUCKETS,
   GALLERY_SEARCH_MODES,
+  buildAdvancedQueryContextPrefix,
   filterForDimension,
   filterAspectRange,
   filterDateSegment,
@@ -380,6 +435,12 @@ import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import {
+  advancedQueryFromSimpleFilters,
+  conditionCount,
+  normalizeQuery,
+  type GalleryAdvancedQuery,
+} from "@/utils/galleryQuery";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -458,6 +519,48 @@ const NAME_BUCKET_AUTONYMS: Record<string, string> = Object.fromEntries(
 );
 
 const uiStore = useUiStore();
+const advancedDialogVisible = ref(false);
+const advancedDialogInitialQuery = ref<GalleryAdvancedQuery>([{ is: {} }]);
+const isAdvancedActive = computed(() => galleryRouteStore.advanced !== undefined);
+const advancedConditionCount = computed(() =>
+  conditionCount(galleryRouteStore.advanced ?? [])
+);
+const advancedContextPrefix = computed(() =>
+  `images://gallery/${
+    galleryHide.value ? "hide/" : ""
+  }${
+    buildAdvancedQueryContextPrefix(
+      activeFilters.value,
+      props.search,
+      props.searchMode,
+    )
+  }`
+);
+
+function openAdvancedQuery() {
+  if (galleryRouteStore.advanced) {
+    advancedDialogInitialQuery.value = JSON.parse(
+      JSON.stringify(galleryRouteStore.advanced),
+    ) as GalleryAdvancedQuery;
+  } else {
+    advancedDialogInitialQuery.value = advancedQueryFromSimpleFilters(
+      activeFilters.value,
+    );
+  }
+  advancedDialogVisible.value = true;
+}
+
+async function applyAdvancedQuery(tree: GalleryAdvancedQuery) {
+  const normalized = normalizeQuery(tree);
+  await galleryRouteStore.navigate(
+    {
+      advanced: normalized.length > 0 ? normalized : undefined,
+      filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
+      page: 1,
+    },
+    { push: true },
+  );
+}
 
 const currentPluginId = computed(() => filterPluginId(activeFilters.value));
 
@@ -471,7 +574,9 @@ const isMediaTypeFilterBrowse = computed(
   () => filterMediaKind(activeFilters.value) != null
 );
 
-const showGalleryFilterFold = computed(() => isSimpleFilter(activeFilters.value));
+const showGalleryFilterFold = computed(() =>
+  galleryRouteStore.advanced === undefined && isSimpleFilter(activeFilters.value)
+);
 
 const showDesktopFilterRow = ref(false);
 const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
@@ -1757,6 +1862,7 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       }
       break;
     case HeaderFeatureId.GalleryFilter:
+      if (isAdvancedActive.value) break;
       filterPicker.open();
       break;
     case HeaderFeatureId.GallerySort:

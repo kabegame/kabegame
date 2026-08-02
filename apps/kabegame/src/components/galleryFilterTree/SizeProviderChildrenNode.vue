@@ -11,7 +11,6 @@
       :name="t(`gallery.${b.labelKey}`)"
       :path="pathForSegment(`size/${b.range}`)"
       :depth="1"
-      empty-state="disable"
       :active="isSameGalleryFilter({ type: 'size', range: b.range }, filter)"
       @select="$emit('select', { type: 'size', range: b.range })"
     />

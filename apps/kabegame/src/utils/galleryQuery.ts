@@ -145,6 +145,28 @@ export function normalizeQuery(
   return normalizeSequence(tree);
 }
 
+/** 将工具栏简单过滤复制为高级查询首行；noAlbum 是随行上下文，不进入树。 */
+export function advancedQueryFromSimpleFilters(
+  filters: GalleryFilterSet,
+): GalleryAdvancedQuery {
+  const atom: GalleryAtom = {};
+  if (filters.wallpaperOrder) atom.wallpaperOrder = true;
+  if (filters.plugin?.pluginId) {
+    atom.plugin = { pluginId: filters.plugin.pluginId };
+    if (filters.plugin.extendPath?.trim()) {
+      console.warn(
+        `[advanced-query] plugin extendPath 不受查询树支持，已仅保留 pluginId: ${filters.plugin.pluginId}`,
+      );
+    }
+  }
+  if (filters.mediaType) atom.mediaType = { ...filters.mediaType };
+  if (filters.date) atom.date = { ...filters.date };
+  if (filters.name) atom.name = { ...filters.name };
+  if (filters.size) atom.size = { ...filters.size };
+  if (filters.aspect) atom.aspect = { ...filters.aspect };
+  return [{ is: atom }];
+}
+
 export function isEmptyQuery(tree: GalleryAdvancedQuery): boolean {
   return normalizeQuery(tree).length === 0;
 }
@@ -590,7 +612,10 @@ export function facetListPath(
     nextTree = unwrapAncestorNots(nextTree, nodePath, 0);
   }
 
-  const serialized = serializeAdvancedQuery(nextTree);
+  const normalized = normalizeQuery(nextTree);
+  if (normalized.length === 0) return facetSegment;
+
+  const serialized = serializeAdvancedQuery(normalized);
   return `${serialized.body}${
     serialized.endsAtHub ? "/" : "/filter_comb/"
   }${facetSegment}`;

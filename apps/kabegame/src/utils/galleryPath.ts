@@ -1,4 +1,5 @@
 import {
+  normalizeQuery,
   parseAdvancedBody,
   serializeAdvancedQuery,
   type GalleryAdvancedQuery,
@@ -146,11 +147,106 @@ export function buildGalleryContextPrefix(
 export interface ComposablePathParams {
   rootPrefix?: string;
   filters: GalleryFilterSet | GalleryFilter | GalleryAdvancedQuery;
+  /**
+   * 高级查询树。显式传入时，`filters` 只承载不进入树的随行过滤（当前为 noAlbum）。
+   * `filters` 直接传数组的旧调用仍兼容，但新代码应优先使用本字段。
+   */
+  advanced?: GalleryAdvancedQuery;
   sort: GallerySort | GalleryStoredSort;
   page: number;
   pageSize?: number;
   search?: string;
   searchMode?: GallerySearchMode;
+}
+
+interface AdvancedBodyPart {
+  body: string;
+  endsAtHub: boolean;
+}
+
+function appendAdvancedBodyPart(
+  current: AdvancedBodyPart,
+  next: AdvancedBodyPart,
+): AdvancedBodyPart {
+  if (!next.body) return current;
+  if (!current.body) return next;
+  return {
+    body: `${current.body}${
+      current.endsAtHub ? "/" : `/${FILTER_COMB}/`
+    }${next.body}`,
+    endsAtHub: next.endsAtHub,
+  };
+}
+
+function buildAdvancedBody(
+  filters: GalleryFilterSet,
+  advanced: GalleryAdvancedQuery,
+  search: string,
+  searchMode: GallerySearchMode,
+  trailing?: string,
+  emptyFallback = false,
+): string {
+  let result: AdvancedBodyPart = { body: "", endsAtHub: true };
+
+  if (filters.noAlbum) {
+    result = appendAdvancedBodyPart(result, {
+      body: "no-album",
+      endsAtHub: false,
+    });
+  }
+
+  const query = search.trim();
+  if (query) {
+    result = appendAdvancedBodyPart(result, {
+      body: `search/${searchMode}/${encodeURIComponent(query)}`,
+      // search query provider 会委派回 gallery 根，是枢纽。
+      endsAtHub: true,
+    });
+  }
+
+  const normalized = normalizeQuery(advanced);
+  if (normalized.length > 0) {
+    result = appendAdvancedBodyPart(result, serializeAdvancedQuery(normalized));
+  }
+
+  if (trailing) {
+    result = appendAdvancedBodyPart(result, {
+      body: trailing,
+      endsAtHub: false,
+    });
+  }
+
+  return result.body || (emptyFallback ? "all" : "");
+}
+
+/**
+ * 高级弹窗中树体之前的随行上下文。返回值为空或以 `/` 结尾，并始终停在枢纽：
+ * `no-album` 叶会先经过 `filter_comb`，全局 search 查询结束后本身回到 gallery 枢纽。
+ */
+export function buildAdvancedQueryContextPrefix(
+  filters: GalleryFilterSet,
+  search: string | undefined,
+  searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
+): string {
+  const body = buildAdvancedBody(filters, [], search ?? "", searchMode);
+  if (!body) return "";
+  return body === "no-album" ? `${body}/${FILTER_COMB}/` : `${body}/`;
+}
+
+/** 把高级树/列表的相对 body 接到完整 gallery 上下文，供 facet、计数与路径条共用。 */
+export function advancedQueryRuntimePath(
+  body: string,
+  contextPrefix = "images://gallery/",
+): string {
+  const normalizedBody = body.replace(/^\/+/, "") || "all";
+  let prefix = contextPrefix.trim().replace(/\/+$/, "");
+  if (!prefix) prefix = "images://gallery";
+
+  // no-album/filter_comb/all 不可路由；no-album 叶自身就是相同集合的合法计数入口。
+  if (normalizedBody === "all" && prefix.endsWith("/filter_comb")) {
+    return prefix.slice(0, -"/filter_comb".length);
+  }
+  return `${prefix}/${normalizedBody}`;
 }
 
 export function buildComposablePath(params: ComposablePathParams): string {
@@ -167,15 +263,28 @@ export function buildComposablePath(params: ComposablePathParams): string {
     ? `sort/random-${sort.seed || newRandomSortSeed()}`
     : `sort/${sort.field}`;
   let body: string;
-  if (Array.isArray(params.filters)) {
-    const serialized = serializeAdvancedQuery(params.filters);
-    body = `${serialized.body}${
-      serialized.endsAtHub ? "/" : `/${FILTER_COMB}/`
-    }${sortPath}`;
-  } else {
-    const filters = isGalleryFilter(params.filters)
+  const legacyAdvanced = Array.isArray(params.filters)
+    ? params.filters
+    : undefined;
+  const advanced = params.advanced ?? legacyAdvanced;
+  if (advanced !== undefined) {
+    const contextFilters = Array.isArray(params.filters)
+      ? {}
+      : isGalleryFilter(params.filters)
       ? singleFilterToSet(params.filters)
       : params.filters;
+    body = buildAdvancedBody(
+      contextFilters,
+      advanced,
+      search,
+      searchMode,
+      sortPath,
+    );
+  } else {
+    const simpleFilters = params.filters as GalleryFilterSet | GalleryFilter;
+    const filters = isGalleryFilter(simpleFilters)
+      ? singleFilterToSet(simpleFilters)
+      : simpleFilters;
     const filterPath = serializeFilterSet(filters);
     const bodyParts = filterPath ? [filterPath, sortPath] : [sortPath];
     body = bodyParts.join(`/${FILTER_COMB}/`);
@@ -183,7 +292,9 @@ export function buildComposablePath(params: ComposablePathParams): string {
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
   const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
   const q = (search ?? "").trim();
-  const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
+  const searchPrefix = advanced === undefined && q
+    ? `search/${searchMode}/${encodeURIComponent(q)}/`
+    : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return sort.desc ? `${searchPrefix}${rp}${body}/desc/${ps}${p}` : `${searchPrefix}${rp}${body}/${ps}${p}`;
 }
@@ -223,14 +334,31 @@ export function parseComposablePath(
 
   const { body, tail } = splitBodyAndTail(restSegs);
   const { sort: order, pageSize, page } = parseTail(tail);
-  const { filters, sortField, sortSeed, legacyFilter, advanced } = parseBody(body);
+  const {
+    filters,
+    sortField,
+    sortSeed,
+    legacyFilter,
+    advanced,
+    search: bodySearch,
+    searchMode: bodySearchMode,
+  } = parseBody(body);
   const sort: GallerySort = {
     field: sortField ?? defaultSort,
     desc: order === "desc",
     ...(sortField === "random" && sortSeed ? { seed: sortSeed } : {}),
   };
   const filter = advanced ? DEFAULT_GALLERY_FILTER : legacyFilter ?? filterSetToSingleFilter(filters);
-  return { filters, filter, sort, page, pageSize, search, searchMode, ...(advanced ? { advanced } : {}) };
+  return {
+    filters,
+    filter,
+    sort,
+    page,
+    pageSize,
+    search: bodySearch ?? search,
+    searchMode: bodySearchMode ?? searchMode,
+    ...(advanced ? { advanced } : {}),
+  };
 }
 
 export function buildComposableContextPrefix(
@@ -249,14 +377,34 @@ export function buildComposableCountPath(
   filters: GalleryFilterSet | GalleryFilter | GalleryAdvancedQuery,
   search: string = "",
   searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
+  advanced?: GalleryAdvancedQuery,
 ): string {
+  const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
+  const legacyAdvanced = Array.isArray(filters) ? filters : undefined;
+  const advancedTree = advanced ?? legacyAdvanced;
+  if (advancedTree !== undefined) {
+    const contextFilters = Array.isArray(filters)
+      ? {}
+      : isGalleryFilter(filters)
+      ? singleFilterToSet(filters)
+      : filters;
+    return `${rp}${
+      buildAdvancedBody(
+        contextFilters,
+        advancedTree,
+        search,
+        searchMode,
+        undefined,
+        true,
+      )
+    }`;
+  }
   const q = (search ?? "").trim();
   const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
-  const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
-  if (Array.isArray(filters)) {
-    return `${searchPrefix}${rp}${serializeAdvancedQuery(filters).body}`;
-  }
-  const filterset = isGalleryFilter(filters) ? singleFilterToSet(filters) : filters;
+  const simpleFilters = filters as GalleryFilterSet | GalleryFilter;
+  const filterset = isGalleryFilter(simpleFilters)
+    ? singleFilterToSet(simpleFilters)
+    : simpleFilters;
   return `${searchPrefix}${rp}${buildFilterSetCountPath(filterset)}`;
 }
 
@@ -599,8 +747,15 @@ export function buildGalleryCountPath(
   filtersOrFilter: GalleryFilterSet | GalleryFilter,
   search: string = "",
   searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
+  advanced?: GalleryAdvancedQuery,
 ): string {
-  return buildComposableCountPath("", filtersOrFilter, search, searchMode);
+  return buildComposableCountPath(
+    "",
+    filtersOrFilter,
+    search,
+    searchMode,
+    advanced,
+  );
 }
 
 export function parseGalleryPath(path: string): ParsedGalleryPath {
@@ -650,36 +805,71 @@ function parseBody(body: string[]): {
   sortSeed?: string;
   legacyFilter?: GalleryFilter;
   advanced?: GalleryAdvancedQuery;
+  search?: string;
+  searchMode?: GallerySearchMode;
 } {
+  let queryBody = body;
+  let filters: GalleryFilterSet = {};
+  let contextSearch: string | undefined;
+  let contextSearchMode: GallerySearchMode | undefined;
+
+  if (queryBody[0] === "no-album" && queryBody[1] === FILTER_COMB) {
+    filters.noAlbum = true;
+    queryBody = queryBody.slice(2);
+
+    // no-album 不属于树，因此紧随其后的 search 是全局随行上下文。
+    const searchPrefix = splitLeadingSearchSegments(queryBody);
+    if (searchPrefix.segments.length > 0) {
+      contextSearchMode = searchPrefix.segments[1] as GallerySearchMode;
+      contextSearch = decodePathSegment(searchPrefix.segments[2] ?? "");
+      queryBody = searchPrefix.rest;
+    }
+  }
+
   if (
-    body.some((segment) =>
+    queryBody.some((segment) =>
       segment === "~any" || segment === "~not" || segment === "~or" ||
       segment === "~end"
     )
   ) {
-    const sortIndex = findAdvancedSortIndex(body);
-    const treeBody = body.slice(0, sortIndex < 0 ? body.length : sortIndex);
+    const sortIndex = findAdvancedSortIndex(queryBody);
+    const treeBody = queryBody.slice(
+      0,
+      sortIndex < 0 ? queryBody.length : sortIndex,
+    );
     if (treeBody.at(-1) === FILTER_COMB) treeBody.pop();
     const advanced = parseAdvancedBody(treeBody);
     if (advanced) {
       const parsedSort = sortIndex < 0
         ? {}
-        : parseSortChunk(body.slice(sortIndex));
-      return { filters: {}, advanced, ...parsedSort };
+        : parseSortChunk(queryBody.slice(sortIndex));
+      return {
+        filters,
+        advanced,
+        ...parsedSort,
+        ...(contextSearch !== undefined ? { search: contextSearch } : {}),
+        ...(contextSearchMode ? { searchMode: contextSearchMode } : {}),
+      };
     }
     // 回退为空过滤而不是走老的平铺解析: 平铺解析会把组内维度摊平成简单过滤,
     // 展示出错误的部分语义。
     console.warn("无法解析画廊高级查询路径，已降级为空过滤");
-    const parsedSort = sortIndex < 0 ? {} : parseSortChunk(body.slice(sortIndex));
-    return { filters: {}, ...parsedSort };
+    const parsedSort = sortIndex < 0
+      ? {}
+      : parseSortChunk(queryBody.slice(sortIndex));
+    return {
+      filters,
+      ...parsedSort,
+      ...(contextSearch !== undefined ? { search: contextSearch } : {}),
+      ...(contextSearchMode ? { searchMode: contextSearchMode } : {}),
+    };
   }
 
-  let filters: GalleryFilterSet = {};
   let sortField: GallerySortField | undefined;
   let sortSeed: string | undefined;
   let legacyFilter: GalleryFilter | undefined;
 
-  for (const chunk of splitFilterChunks(body)) {
+  for (const chunk of splitFilterChunks(queryBody)) {
     if (chunk.length === 0) continue;
     const root = chunk[0]?.toLowerCase();
     if (root === "all") continue;
@@ -703,7 +893,14 @@ function parseBody(body: string[]): {
     filters = setFilterDimension(filters, parsed.dimension, parsed.filter);
   }
 
-  return { filters, sortField, sortSeed, legacyFilter };
+  return {
+    filters,
+    sortField,
+    sortSeed,
+    legacyFilter,
+    ...(contextSearch !== undefined ? { search: contextSearch } : {}),
+    ...(contextSearchMode ? { searchMode: contextSearchMode } : {}),
+  };
 }
 
 function parseSortChunk(chunk: readonly string[]): {

@@ -10,6 +10,11 @@ export interface KbFilterDropdownProps {
   options: KbFilterDropdownOption[]
   /** 内置 chip 的维度名称。 */
   chipLabel: string
+  /**
+   * 选中值的展示文案覆盖。options 惰性加载时 chip 无法从 options 反查 label,
+   * 由调用侧直接给出;缺省回退 options 匹配项 label → modelValue 原文。
+   */
+  selectedLabel?: string
   anyLabel: string
   anyCount?: number
   searchable?: boolean

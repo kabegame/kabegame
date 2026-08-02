@@ -1,17 +1,18 @@
 import { ref } from "vue";
 import { createPathRouteStore } from "./pathRoute";
 import {
+  buildComposablePath,
   buildGalleryContextPrefix,
-  buildGalleryPath,
-  parseGalleryPath,
-  GALLERY_STORAGE_KEY_PATH,
   DEFAULT_GALLERY_FILTER_SET,
   DEFAULT_GALLERY_SEARCH_MODE,
-  newRandomSortSeed,
+  GALLERY_STORAGE_KEY_PATH,
   type GalleryFilterSet,
   type GallerySearchMode,
   type GallerySort,
+  newRandomSortSeed,
+  parseGalleryPath,
 } from "@/utils/galleryPath";
+import type { GalleryAdvancedQuery } from "@/utils/galleryQuery";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_WEB } from "@kabegame/core/env";
 
@@ -40,6 +41,7 @@ export function rememberGallerySearchMode(mode: GallerySearchMode): void {
 
 type GalleryRouteState = {
   filters: GalleryFilterSet;
+  advanced: GalleryAdvancedQuery | undefined;
   sort: GallerySort;
   page: number;
   pageSize: number;
@@ -58,35 +60,44 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       }
       return {
         filters: parsed.filters,
+        advanced: parsed.advanced,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
         search: parsed.search,
-        searchMode: parsed.search.trim() ? parsed.searchMode : stickySearchMode.value,
+        searchMode: parsed.search.trim()
+          ? parsed.searchMode
+          : stickySearchMode.value,
       };
     },
     build: (state) =>
-      buildGalleryPath(
-        state.filters,
-        state.sort,
-        state.page,
-        state.pageSize,
-        state.search,
-        state.searchMode,
-      ),
-    buildContext: (state) => buildGalleryContextPrefix(state.search, state.searchMode),
+      buildComposablePath({
+        filters: state.filters,
+        advanced: state.advanced,
+        sort: state.sort,
+        page: state.page,
+        pageSize: state.pageSize,
+        search: state.search,
+        searchMode: state.searchMode,
+      }),
+    buildContext: (state) =>
+      buildGalleryContextPrefix(state.search, state.searchMode),
     defaultState: () => {
       const settings = useSettingsStore();
-      const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
+      const stored = IS_WEB
+        ? null
+        : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
       const parsed = stored ? parseGalleryPath(stored) : null;
       const defaultSort: GallerySort = IS_WEB
         ? { field: "random", desc: false, seed: webRandomSeed() }
         : { field: "by-id", desc: false };
       return {
         filters: parsed?.filters ?? DEFAULT_GALLERY_FILTER_SET,
+        advanced: parsed?.advanced,
         sort: parsed?.sort ?? defaultSort,
         page: 1, // 页码不持久化，由当前页面状态/URL 驱动
-        pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
+        pageSize: (settings.values.galleryPageSize as number | undefined) ??
+          100,
         search: "", // 搜索词/模式不持久化
         searchMode: DEFAULT_GALLERY_SEARCH_MODE,
       };
@@ -96,7 +107,12 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
       if (!IS_WEB) {
         localStorage.setItem(
           GALLERY_STORAGE_KEY_PATH,
-          buildGalleryPath(state.filters, state.sort, 1),
+          buildComposablePath({
+            filters: state.filters,
+            advanced: state.advanced,
+            sort: state.sort,
+            page: 1,
+          }),
         );
       }
       const settings = useSettingsStore();
@@ -104,12 +120,18 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
         void settings.save("galleryPageSize", state.pageSize);
       }
     },
-  }
+  },
 );
 
 /** 回到默认「全部」第 1 页（用于错误兜底等） */
 export async function resetGalleryRouteToDefault() {
   const store = useGalleryRouteStore();
   rememberGallerySearchMode(DEFAULT_GALLERY_SEARCH_MODE);
-  await store.navigate({ filters: {}, page: 1, search: "", searchMode: DEFAULT_GALLERY_SEARCH_MODE });
+  await store.navigate({
+    filters: {},
+    advanced: undefined,
+    page: 1,
+    search: "",
+    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
+  });
 }

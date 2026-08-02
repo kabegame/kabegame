@@ -22,7 +22,7 @@
                 @refresh="handleManualRefresh"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
                 @open-collect-menu="handleOpenCollectMenu"
-                @update:filters="(filters) => galleryRouteStore.navigate({ filters, page: 1 }, { push: true })"
+                @update:filters="(filters) => galleryRouteStore.navigate({ filters, advanced: undefined, page: 1 }, { push: true })"
                 @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
                 @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
                 @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })"

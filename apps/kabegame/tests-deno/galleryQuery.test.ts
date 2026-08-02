@@ -1,4 +1,5 @@
 import {
+  advancedQueryFromSimpleFilters,
   conditionCount,
   facetListPath,
   type GalleryAdvancedQuery,
@@ -12,6 +13,8 @@ import {
   updateNode,
 } from "../src/utils/galleryQuery.ts";
 import {
+  advancedQueryRuntimePath,
+  buildAdvancedQueryContextPrefix,
   buildComposableCountPath,
   buildComposablePath,
   parseComposablePath,
@@ -113,6 +116,97 @@ Deno.test("构建路径：sort 根据叶/枢纽收尾选择连接符", () => {
     "~any/plugin/pixiv/~end/sort/by-time/desc/2",
   );
   assertEquals(buildComposableCountPath("", group), "~any/plugin/pixiv/~end");
+});
+
+Deno.test("构建与解析：advanced 显式参数保留 noAlbum 与全局 search 上下文", () => {
+  const tree: GalleryAdvancedQuery = [{
+    any: [[{ is: { plugin: { pluginId: "pixiv" } } }]],
+  }];
+  const path = buildComposablePath({
+    filters: { noAlbum: true },
+    advanced: tree,
+    sort: { field: "by-time", desc: false },
+    page: 1,
+    search: "星空",
+    searchMode: "metadata",
+  });
+  assertEquals(
+    path,
+    "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/~any/plugin/pixiv/~end/sort/by-time/1",
+  );
+
+  const parsed = parseComposablePath(path);
+  assertEquals(parsed.filters, { noAlbum: true });
+  assertEquals(parsed.search, "星空");
+  assertEquals(parsed.searchMode, "metadata");
+  assertEquals(parsed.advanced, tree);
+  assertEquals(
+    buildComposableCountPath(
+      "",
+      { noAlbum: true },
+      "星空",
+      "metadata",
+      tree,
+    ),
+    "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/~any/plugin/pixiv/~end",
+  );
+  assertEquals(
+    buildAdvancedQueryContextPrefix(
+      { noAlbum: true },
+      "星空",
+      "metadata",
+    ),
+    "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/",
+  );
+});
+
+Deno.test("高级空树计数：无上下文用 all，noAlbum 上下文用其合法叶", () => {
+  assertEquals(
+    buildComposableCountPath("", {}, "", "display-name", []),
+    "all",
+  );
+  assertEquals(
+    buildComposableCountPath(
+      "",
+      { noAlbum: true },
+      "",
+      "display-name",
+      [],
+    ),
+    "no-album",
+  );
+  assertEquals(
+    advancedQueryRuntimePath(
+      "all",
+      "images://gallery/hide/no-album/filter_comb/",
+    ),
+    "images://gallery/hide/no-album",
+  );
+  assertEquals(
+    advancedQueryRuntimePath(
+      "plugin",
+      "images://gallery/hide/no-album/filter_comb/",
+    ),
+    "images://gallery/hide/no-album/filter_comb/plugin",
+  );
+});
+
+Deno.test("解析：noAlbum + 全局 search 后的单原子仍完整保留", () => {
+  const path = buildComposablePath({
+    filters: { noAlbum: true },
+    advanced: [{ is: { mediaType: { kind: "video", format: "mp4" } } }],
+    sort: { field: "by-time", desc: false },
+    page: 1,
+    search: "星空",
+    searchMode: "metadata",
+  });
+  const parsed = parseComposablePath(path);
+  assertEquals(parsed.filters, {
+    noAlbum: true,
+    mediaType: { kind: "video", format: "mp4" },
+  });
+  assertEquals(parsed.search, "星空");
+  assertEquals(parsed.searchMode, "metadata");
 });
 
 Deno.test("序列化：not、三层嵌套与 any 多分支", () => {
@@ -264,6 +358,16 @@ Deno.test("conditionCount 统计所有 is 节点", () => {
 });
 
 Deno.test("facetListPath：普通减格、not 解包与 mediaType 映射", () => {
+  assertEquals(facetListPath([{ is: {} }], [0], "plugin"), "plugin");
+  assertEquals(
+    facetListPath(
+      [{ is: { plugin: { pluginId: "pixiv" } } }],
+      [0],
+      "plugin",
+    ),
+    "plugin",
+  );
+
   const ordinary: GalleryAdvancedQuery = [{
     is: { plugin: { pluginId: "pixiv" }, date: { segment: "2026-08" } },
   }];
@@ -288,6 +392,33 @@ Deno.test("facetListPath：普通减格、not 解包与 mediaType 映射", () =>
     "plugin/pixiv/filter_comb/media-type",
   );
   assertThrows(() => facetListPath(media, [0], "wallpaperOrder"));
+});
+
+Deno.test("简单过滤转高级首行：保留媒体格式与壁纸，noAlbum/extend 不进树", () => {
+  const previousWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+  try {
+    assertEquals(
+      advancedQueryFromSimpleFilters({
+        noAlbum: true,
+        wallpaperOrder: true,
+        plugin: { pluginId: "pixiv", extendPath: "ranking/daily" },
+        mediaType: { kind: "video", format: "mp4" },
+      }),
+      [{
+        is: {
+          wallpaperOrder: true,
+          plugin: { pluginId: "pixiv" },
+          mediaType: { kind: "video", format: "mp4" },
+        },
+      }],
+    );
+    assertEquals(warnings.length, 1);
+    assert(warnings[0]!.includes("extendPath"));
+  } finally {
+    console.warn = previousWarn;
+  }
 });
 
 Deno.test("search 使用 PathQL 段转义并可逆", () => {
