@@ -290,7 +290,7 @@
   "advancedChipSearch": "搜尋",
   "searchModeHelpDisplayName": "比對圖片名稱。",
   "searchModeHelpMetadata": "搜尋標題、作者、標籤等正規欄位。",
-  "searchModeHelpNativeMetadata": "搜尋外掛原樣儲存的欄位。",
+  "searchModeHelpNativeMetadata": "搜尋圖片檔案自帶的 EXIF/PNG 等格式中繼資料。",
   "advancedSearchOptions": "搜尋選項…",
   "advancedPluginExtendRestricted": "外掛細分篩選不能用於或群組或取非條件，已僅保留外掛。",
   "advancedPath": "路徑",

@@ -288,7 +288,7 @@
   "advancedChipSearch": "検索",
   "searchModeHelpDisplayName": "画像名を検索します。",
   "searchModeHelpMetadata": "正規化されたタイトル・作者・タグを検索します。",
-  "searchModeHelpNativeMetadata": "プラグインがそのまま保存した項目を検索します。",
+  "searchModeHelpNativeMetadata": "画像ファイル自体に埋め込まれた EXIF/PNG などのメタデータを検索します。",
   "advancedSearchOptions": "選択肢を検索…",
   "advancedPluginExtendRestricted": "プラグインの詳細フィルターは OR グループや除外条件では使用できないため、プラグインのみ保持しました。",
   "advancedPath": "パス",

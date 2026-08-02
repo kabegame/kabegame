@@ -286,7 +286,7 @@
   "advancedChipSearch": "Search",
   "searchModeHelpDisplayName": "Matches image names.",
   "searchModeHelpMetadata": "Searches normalized titles, authors, and tags.",
-  "searchModeHelpNativeMetadata": "Searches fields saved verbatim by plugins.",
+  "searchModeHelpNativeMetadata": "Searches EXIF/PNG metadata embedded in the image file itself.",
   "advancedSearchOptions": "Search options…",
   "advancedPluginExtendRestricted": "Plugin subfilters cannot be used in OR groups or negated conditions. Only the plugin was kept.",
   "advancedPath": "Path",

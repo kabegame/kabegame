@@ -289,7 +289,7 @@
   "advancedChipSearch": "搜索",
   "searchModeHelpDisplayName": "匹配图片名称。",
   "searchModeHelpMetadata": "搜索标题、作者、标签等归一字段。",
-  "searchModeHelpNativeMetadata": "搜索插件原样保存的字段。",
+  "searchModeHelpNativeMetadata": "搜索图片文件自带的 EXIF/PNG 等格式元数据。",
   "advancedSearchOptions": "搜索选项…",
   "advancedPluginExtendRestricted": "插件细分筛选不能用于或组或取非条件，已仅保留插件。",
   "advancedPath": "路径",
