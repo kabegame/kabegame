@@ -19,7 +19,9 @@
     border: 1px solid getCssVar('kb-filter-dropdown', 'chip-border-color');
     border-radius: 11px;
     color: getCssVar('kb-filter-dropdown', 'chip-text-color');
-    background: transparent;
+    // 与弹层同一套底：透明底的 chip 直接坐在画廊缩略图上，字会被花底吃掉。
+    background: getCssVar('kb-filter-dropdown', 'chip-bg-color');
+    backdrop-filter: blur(10px);
     cursor: pointer;
     // 与同一行的 el-button 对齐:不写死就继承 root 的 16px，chip 行会明显比工具行大一号。
     font-size: getCssVar('font-size', 'base');

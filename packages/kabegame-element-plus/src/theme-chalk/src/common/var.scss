@@ -479,10 +479,13 @@ $kb-filter-dropdown: map.merge(
     'chip-muted-color': var(--anime-text-muted),
     'chip-border-color': var(--anime-border),
     'chip-hover-border-color': var(--anime-primary-light),
+    // chip 底色与弹层同源(90% 白 + 背景模糊):透明底会让 chip 直接坐在画廊缩略图上,
+    // 文字被花底吃掉。选中态的粉是混进这层白底，而不是再叠一层透明色。
+    'chip-bg-color': var(--anime-bg-card),
     'chip-active-text-color': var(--anime-primary-dark),
     'chip-active-border-color': var(--anime-primary),
     'chip-active-bg-color':
-      color-mix(in srgb, var(--anime-primary) 4%, transparent),
+      color-mix(in srgb, var(--anime-primary) 6%, var(--anime-bg-card)),
     'chip-disabled-bg-color':
       color-mix(in srgb, var(--anime-border) 22%, transparent),
     // chip 内的限定词胶囊(搜索模式等)。
