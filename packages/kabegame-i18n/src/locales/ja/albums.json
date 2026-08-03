@@ -9,6 +9,7 @@
   "syncCancelFailedToast": "同期のキャンセルに失敗しました",
   "emptyTip": "まだアルバムがありません。右上のボタンで作成",
   "subAlbums": "サブアルバム",
+  "subAlbumsEmptyTip": "サブアルバムはまだありません",
   "imagesTab": "画像",
   "newAlbum": "新規アルバム",
   "placeholderName": "アルバム名を入力",

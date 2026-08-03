@@ -35,6 +35,13 @@
                 <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
                 :big-page-size="pageSize" :is-sticky="true" @jump-to-page="jumpToPage" />
             </template>
+
+            <template #empty>
+                <div class="task-empty fade-in">
+                    <EmptyState :lines="[t('tasks.emptyStateTip')]" show-button
+                        :button-text="t('tasks.emptyStateReportIssue')" @button-click="openReportIssueLink" />
+                </div>
+            </template>
         </ImageGrid>
 
         <TaskLogDialog ref="taskLogDialogRef" />
@@ -53,6 +60,7 @@ import { listen } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryFilters from "@/components/GalleryFilters.vue";
 import { createTaskDetailSurface } from "@/components/imageGrid/surfaces/task";
 import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
@@ -72,8 +80,10 @@ import { IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
+import { useGithubIssueUrl, type GithubIssueField } from "@/composables/useGithubIssueUrl";
 
 const { t } = useI18n();
+const { openIssue } = useGithubIssueUrl();
 const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
@@ -99,6 +109,43 @@ const handleShowFailedImages = () => {
     const id = String(taskId.value || "").trim();
     failedImagesDialogRef.value?.setTaskId(id || undefined);
     failedImagesDialogRef.value?.open();
+};
+
+// 运行配置里可能出现对象/数组值（如多选项）；httpHeaders 单独持有鉴权信息，永远不带入 issue 正文
+const formatConfigValueForReport = (value: unknown): string => {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+};
+
+const openReportIssueLink = () => {
+    const tsk = task.value;
+    const configFields: GithubIssueField[] = Object.entries(tsk?.userConfig ?? {}).map(([key, value]) => ({
+        label: key,
+        value: formatConfigValueForReport(value),
+    }));
+    void openIssue({
+        title: t("tasks.reportIssueTitle", { plugin: taskName.value || t("tasks.task") }),
+        description: t("tasks.emptyStateTip"),
+        sections: [
+            {
+                heading: t("tasks.reportIssueSection"),
+                fields: [
+                    { label: t("tasks.reportIssuePlugin"), value: tsk ? `${taskName.value} (${tsk.pluginId})` : undefined },
+                    { label: t("tasks.reportIssueStatus"), value: tsk?.status },
+                    { label: t("tasks.reportIssueTrigger"), value: tsk?.triggerSource },
+                    { label: t("tasks.reportIssueSuccessCount"), value: tsk?.successCount },
+                    { label: t("tasks.reportIssueFailedCount"), value: tsk?.failedCount },
+                    { label: t("tasks.reportIssueDedupCount"), value: tsk?.dedupCount },
+                    { label: t("tasks.reportIssueDeletedCount"), value: tsk?.deletedCount },
+                ],
+            },
+            {
+                heading: t("tasks.reportIssueConfigSection"),
+                fields: configFields,
+            },
+        ],
+    });
 };
 
 const taskParamsDialog = useModal();
@@ -412,6 +459,14 @@ onDeactivated(async () => {
         .image-grid-root {
             overflow: visible;
         }
+    }
+
+    .task-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 24px 16px;
     }
 
 }

@@ -9,6 +9,7 @@
   "syncCancelFailedToast": "取消同步失败",
   "emptyTip": "暂无画册，点击右上角创建",
   "subAlbums": "子画册",
+  "subAlbumsEmptyTip": "还没有任何子画册呢",
   "imagesTab": "图片",
   "newAlbum": "新建画册",
   "placeholderName": "输入画册名称",

@@ -42,6 +42,7 @@
       <KbTab v-model="activeAlbumDetailTab" :items="albumDetailTabItems" class="album-detail-tabs" />
 
       <div
+        v-if="childAlbums.length > 0"
         class="child-albums-view"
         :class="isCompact ? 'child-albums-view--android' : 'child-albums-view--desktop'"
       >
@@ -58,6 +59,10 @@
           @click="openChildAlbum(child)"
           @contextmenu="openChildAlbumContextMenu($event, child)"
         />
+      </div>
+      <div v-else class="album-empty fade-in">
+        <EmptyState :lines="[t('albums.subAlbumsEmptyTip')]" show-button :button-text="t('header.createAlbum')"
+          @button-click="openCreateSubAlbumDialog" />
       </div>
     </div>
 
@@ -367,7 +372,12 @@ const childAlbumStats = computed(() => albumStore.getAlbumStats(albumMediaHide.v
 const childAlbumCountsForPicker = computed(() => ({
   ...albumStore.getAlbumCounts(albumMediaHide.value),
 }));
-const showAlbumDetailTabs = computed(() => childAlbums.value.length > 0);
+/** 收藏/隐藏画册是虚拟聚合，结构上不可能有子画册，创建子画册功能也不对它们开放 */
+const canManageSubAlbums = computed(
+  () => albumId.value !== FAVORITE_ALBUM_ID && albumId.value !== HIDDEN_ALBUM_ID,
+);
+/** 普通画册即使暂无子画册也常驻展示 tab，方便直接切到「子画册」创建 */
+const showAlbumDetailTabs = computed(() => canManageSubAlbums.value || childAlbums.value.length > 0);
 const activeAlbumDetailTab = ref<AlbumDetailTab>("images");
 const albumDetailTabItems = computed<KbTabItem<AlbumDetailTab>[]>(() => [
   { name: "images", label: t("albums.imagesTab"), count: totalImagesCount.value },

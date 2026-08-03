@@ -9,6 +9,7 @@
   "syncCancelFailedToast": "Failed to cancel sync",
   "emptyTip": "No albums yet; tap top-right to create",
   "subAlbums": "Sub-albums",
+  "subAlbumsEmptyTip": "No sub-albums yet",
   "imagesTab": "Images",
   "newAlbum": "New album",
   "placeholderName": "Enter album name",
