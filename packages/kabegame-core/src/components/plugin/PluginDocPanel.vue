@@ -1,10 +1,10 @@
 <template>
   <div ref="scrollEl" class="h-full overflow-y-auto [scrollbar-width:none] py-4 px-5.5 pb-10 text-14.5px leading-[1.7]">
+    <!-- 无 banner 图时整块不渲染：文档顶上顶一个「没有示例图」的空框只是噪音 -->
     <PluginQuickPreviewCarousel
-      v-if="showCarousel"
+      v-if="showCarousel && images.length"
       class="mb-4.5"
       :images="images"
-      :empty-reason="images.length ? null : 'no-assets'"
       :reset-token="resetToken"
     />
     <PluginDocRenderer
@@ -23,7 +23,7 @@
 import { computed, ref } from "vue";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginQuickPreviewCarousel from "./PluginQuickPreviewCarousel.vue";
-import { guessAssetMime, humanizeAssetLabel } from "../../utils/assetPath";
+import { guessAssetMime, isBannerAsset } from "../../utils/assetPath";
 
 /** 滚动容器：供外层目录点击跳转 / scrollspy 使用 */
 const scrollEl = ref<HTMLElement | null>(null);
@@ -52,15 +52,15 @@ const emit = defineEmits<{
   (e: "image-preview-close", payload: { index: number; count: number; src: string; alt: string }): void;
 }>();
 
-// 走马灯素材：直接复用 assets 表，与 PluginBrowser.vue 的 hover 快捷预览构造方式一致
+// 走马灯素材：复用 assets 表里的 banner 图，与 PluginBrowser.vue 的 hover 快捷预览构造方式一致
 const images = computed(() => {
   const assets = props.assets ?? {};
   return Object.keys(assets)
+    .filter(isBannerAsset)
     .sort()
     .map((key) => ({
       key,
       src: `data:${guessAssetMime(key)};base64,${assets[key]}`,
-      label: humanizeAssetLabel(key),
     }));
 });
 </script>

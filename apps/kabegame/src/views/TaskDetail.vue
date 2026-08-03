@@ -14,22 +14,21 @@
                     </template>
                 </TaskDetailPageHeader>
 
-                <GalleryFilters
+                <GalleryQueryBar
                     :filters="taskDetailRouteStore.filters"
+                    :advanced="taskDetailRouteStore.advanced"
                     :sort="taskDetailRouteStore.sort"
+                    :page="taskDetailRouteStore.page"
                     :page-size="pageSize"
                     :search="taskDetailRouteStore.search"
                     :search-mode="taskDetailRouteStore.searchMode"
                     :provider-context-prefix="taskDetailRouteStore.computedContextPath"
+                    :context-base="taskDetailRouteStore.contextPathFor({ search: '' })"
                     :filter-features="taskFilterFeatures"
                     :sort-features="taskSortFeatures"
-                    enable-search
-                    enable-page-size
-                    @update:filters="(f) => taskDetailRouteStore.navigate({ filters: f, page: 1 })"
-                    @update:sort="(s) => taskDetailRouteStore.navigate({ sort: s })"
-                    @update:page-size="(ps) => taskDetailRouteStore.navigate({ page: 1, pageSize: ps })"
-                    @update:search="(v) => taskDetailRouteStore.navigate({ page: 1, search: v })"
-                    @update:searchMode="(m) => { rememberTaskDetailSearchMode(m); taskDetailRouteStore.navigate({ page: 1, searchMode: m }); }"
+                    :search-features="taskSearchFeatures"
+                    enable-clear-all
+                    @navigate="onQueryNavigate"
                 />
 
                 <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
@@ -61,9 +60,14 @@ import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import GalleryFilters from "@/components/GalleryFilters.vue";
+import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import { createTaskDetailSurface } from "@/components/imageGrid/surfaces/task";
-import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
+import {
+  GALLERY_SEARCH_MODES_BASIC,
+  type GalleryFilterDimension,
+  type GalleryQueryPatch,
+  type GallerySortField,
+} from "@/utils/galleryPath";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -168,8 +172,15 @@ const taskFilterFeatures: GalleryFilterDimension[] = [
 const taskSortFeatures: GallerySortField[] = [
   "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
 ];
+const taskSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
 
 const taskViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
+
+/** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
+const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
+    if (patch.searchMode) rememberTaskDetailSearchMode(patch.searchMode);
+    void taskDetailRouteStore.navigate(patch, options);
+};
 
 // 任务数据一律从 crawlerStore 读取
 const task = computed(() => {
@@ -325,6 +336,8 @@ watch(
                 taskId: newId,
                 search: '',
                 searchMode: 'display-name',
+                // 换任务与清搜索同理：高级树是上一个任务的查询，不该跟过来
+                advanced: undefined,
                 page: 1
             })
             // 重新启动定时器和监听器

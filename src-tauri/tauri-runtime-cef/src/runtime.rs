@@ -498,6 +498,19 @@ mod imp {
     /// `Message::CefWindowEvent`;delegate 本身不需要泛型。
     pub(crate) type WindowEventEmitter = Arc<dyn Fn(WindowEvent) + Send + Sync>;
 
+    /// 造一个投向 `window_id` 的窗口事件发射器。
+    ///
+    /// CEF 的各种回调都在 CEF UI 线程上,不能直接碰窗口 listener 列表;统一
+    /// `enqueue` 成 `Message::CefWindowEvent`,由主循环串行分发。
+    pub(crate) fn window_event_emitter<T: UserEvent>(
+        window_id: WindowId,
+        context: CefContext<T>,
+    ) -> WindowEventEmitter {
+        Arc::new(move |event| {
+            let _ = context.enqueue(Message::CefWindowEvent(window_id, event));
+        })
+    }
+
     impl<T: UserEvent> fmt::Debug for Message<T> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
@@ -1408,8 +1421,21 @@ mod imp {
     }
 
     /// 创建 browser 与 helper 共用的 CEF app。
+    ///
+    /// 版本必须是 `CEF_API_VERSION`(= EXPERIMENTAL/999999),**不能**是
+    /// `CEF_API_VERSION_LAST`(= 最新已发布版,当前 14900)。
+    ///
+    /// `cef_api_hash` 的第一次调用即决定 libcef 拿哪一版的结构体布局去校验
+    /// **client 侧分配**的 handler 结构体(`_cef_drag_handler_t` 等)。而 cef-rs 的
+    /// bindings 一律按默认的 EXPERIMENTAL 生成(`sys::CEF_API_VERSION == 999999`),
+    /// 即带上所有 `added=experimental` 成员。两者对不上时,libcef 的
+    /// `CefCToCppRefCounted::Wrap` 会 `LOG(FATAL)`:
+    /// `Cannot wrap struct with invalid base.size value (got 80, expected 56)`。
+    ///
+    /// 声明 LAST 是既有的错误配对,只是在 patch 0002 给 `CefDragHandler` 加出
+    /// 第一个「已发布版与 experimental 不同尺寸的 client 侧结构体」之前一直没被踩到。
     fn create_cef_app() -> cef::App {
-        let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+        let _ = api_hash(sys::CEF_API_VERSION, 0);
         let quit = windowed_quit();
         CefRuntimeApp::new(
             quit.clone(),
@@ -1422,7 +1448,7 @@ mod imp {
     pub fn run_cef_subprocess() -> ! {
         // 必须先协商 API 版本:下面 as_cmd_line 已经进 CEF C API,
         // 版本未配置(-1)会触发 CppToC wrap 的 NOTREACHED,helper 直接 abort。
-        let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+        let _ = api_hash(sys::CEF_API_VERSION, 0);
         let args = Args::new();
         let process_type = args
             .as_cmd_line()
@@ -2233,12 +2259,7 @@ mod imp {
 
             // 窗口事件回流发射器:delegate 在 CEF UI 线程回调里调用,把事件
             // enqueue 成 `Message::CefWindowEvent`,由主循环分发到该窗口 listeners。
-            let emitter: WindowEventEmitter = {
-                let context = context.clone();
-                Arc::new(move |event| {
-                    let _ = context.enqueue(Message::CefWindowEvent(window_id, event));
-                })
-            };
+            let emitter: WindowEventEmitter = window_event_emitter(window_id, context.clone());
             // 关闭请求投递器:can_close 首次被调用时,向主循环投递
             // `WindowCloseRequested(window_id)`,主循环再发 CloseRequested 给上层裁决。
             let close_requester: Arc<dyn Fn() + Send + Sync> = {

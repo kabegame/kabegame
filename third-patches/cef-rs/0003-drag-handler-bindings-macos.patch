@@ -1,0 +1,546 @@
+diff --git a/cef/src/bindings/aarch64_apple_darwin.rs b/cef/src/bindings/aarch64_apple_darwin.rs
+index 23d4114..22b6682 100644
+--- a/cef/src/bindings/aarch64_apple_darwin.rs
++++ b/cef/src/bindings/aarch64_apple_darwin.rs
+@@ -19145,6 +19145,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+         regions: Option<&[DraggableRegion]>,
+     ) {
+     }
++    #[doc = "See [`_cef_drag_handler_t::on_drag_over`] for more documentation."]
++    fn on_drag_over(
++        &self,
++        browser: Option<&mut Browser>,
++        client_pt: Option<&Point>,
++        mask: DragOperationsMask,
++    ) {
++    }
++    #[doc = "See [`_cef_drag_handler_t::on_drag_leave`] for more documentation."]
++    fn on_drag_leave(&self, browser: Option<&mut Browser>) {}
++    #[doc = "See [`_cef_drag_handler_t::on_drop`] for more documentation."]
++    fn on_drop(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) -> ::std::os::raw::c_int {
++        Default::default()
++    }
+     fn init_methods(object: &mut _cef_drag_handler_t) {
+         impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
+     }
+@@ -19158,6 +19176,9 @@ mod impl_cef_drag_handler_t {
+     pub fn init_methods<I: ImplDragHandler, R: Rc>(object: &mut _cef_drag_handler_t) {
+         object.on_drag_enter = Some(on_drag_enter::<I, R>);
+         object.on_draggable_regions_changed = Some(on_draggable_regions_changed::<I, R>);
++        object.on_drag_over = Some(on_drag_over::<I, R>);
++        object.on_drag_leave = Some(on_drag_leave::<I, R>);
++        object.on_drop = Some(on_drop::<I, R>);
+     }
+     extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
+         self_: *mut _cef_drag_handler_t,
+@@ -19207,6 +19228,52 @@ mod impl_cef_drag_handler_t {
+             arg_regions,
+         )
+     }
++    extern "C" fn on_drag_over<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        client_pt: *const _cef_point_t,
++        mask: cef_drag_operations_mask_t,
++    ) {
++        let (arg_self_, arg_browser, arg_client_pt, arg_mask) = (self_, browser, client_pt, mask);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let arg_client_pt = if arg_client_pt.is_null() {
++            None
++        } else {
++            Some(WrapParamRef::<Point, _>::from(arg_client_pt))
++        };
++        let arg_client_pt = arg_client_pt.as_ref().map(|arg| arg.as_ref());
++        let arg_mask = arg_mask.into_raw();
++        ImplDragHandler::on_drag_over(&arg_self_.interface, arg_browser, arg_client_pt, arg_mask)
++    }
++    extern "C" fn on_drag_leave<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++    ) {
++        let (arg_self_, arg_browser) = (self_, browser);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        ImplDragHandler::on_drag_leave(&arg_self_.interface, arg_browser)
++    }
++    extern "C" fn on_drop<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        drag_data: *mut _cef_drag_data_t,
++    ) -> ::std::os::raw::c_int {
++        let (arg_self_, arg_browser, arg_drag_data) = (self_, browser, drag_data);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let mut arg_drag_data = unsafe { arg_drag_data.as_mut() }
++            .map(|arg| DragData(unsafe { RefGuard::from_raw(arg) }));
++        let arg_drag_data = arg_drag_data.as_mut();
++        ImplDragHandler::on_drop(&arg_self_.interface, arg_browser, arg_drag_data)
++    }
+ }
+ impl ImplDragHandler for DragHandler {
+     fn on_drag_enter(
+@@ -19285,6 +19352,76 @@ impl ImplDragHandler for DragHandler {
+             }
+         }
+     }
++    fn on_drag_over(
++        &self,
++        browser: Option<&mut Browser>,
++        client_pt: Option<&Point>,
++        mask: DragOperationsMask,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.on_drag_over {
++                let (arg_browser, arg_client_pt, arg_mask) = (browser, client_pt, mask);
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                let arg_client_pt = arg_client_pt.cloned().map(|arg| arg.into());
++                let arg_client_pt = arg_client_pt
++                    .as_ref()
++                    .map(std::ptr::from_ref)
++                    .unwrap_or(std::ptr::null());
++                let arg_mask = arg_mask.into_raw();
++                f(arg_self_, arg_browser, arg_client_pt, arg_mask);
++            }
++        }
++    }
++    fn on_drag_leave(&self, browser: Option<&mut Browser>) {
++        unsafe {
++            if let Some(f) = self.0.on_drag_leave {
++                let arg_browser = browser;
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                f(arg_self_, arg_browser);
++            }
++        }
++    }
++    fn on_drop(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .on_drop
++                .map(|f| {
++                    let (arg_browser, arg_drag_data) = (browser, drag_data);
++                    let arg_self_ = self.into_raw();
++                    let arg_browser = arg_browser
++                        .map(|arg| {
++                            arg.add_ref();
++                            ImplBrowser::get_raw(arg)
++                        })
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_drag_data = arg_drag_data
++                        .map(|arg| {
++                            arg.add_ref();
++                            ImplDragData::get_raw(arg)
++                        })
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(arg_self_, arg_browser, arg_drag_data);
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_drag_handler_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/cef/src/bindings/x86_64_apple_darwin.rs b/cef/src/bindings/x86_64_apple_darwin.rs
+index 23d4114..22b6682 100644
+--- a/cef/src/bindings/x86_64_apple_darwin.rs
++++ b/cef/src/bindings/x86_64_apple_darwin.rs
+@@ -19145,6 +19145,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+         regions: Option<&[DraggableRegion]>,
+     ) {
+     }
++    #[doc = "See [`_cef_drag_handler_t::on_drag_over`] for more documentation."]
++    fn on_drag_over(
++        &self,
++        browser: Option<&mut Browser>,
++        client_pt: Option<&Point>,
++        mask: DragOperationsMask,
++    ) {
++    }
++    #[doc = "See [`_cef_drag_handler_t::on_drag_leave`] for more documentation."]
++    fn on_drag_leave(&self, browser: Option<&mut Browser>) {}
++    #[doc = "See [`_cef_drag_handler_t::on_drop`] for more documentation."]
++    fn on_drop(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) -> ::std::os::raw::c_int {
++        Default::default()
++    }
+     fn init_methods(object: &mut _cef_drag_handler_t) {
+         impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
+     }
+@@ -19158,6 +19176,9 @@ mod impl_cef_drag_handler_t {
+     pub fn init_methods<I: ImplDragHandler, R: Rc>(object: &mut _cef_drag_handler_t) {
+         object.on_drag_enter = Some(on_drag_enter::<I, R>);
+         object.on_draggable_regions_changed = Some(on_draggable_regions_changed::<I, R>);
++        object.on_drag_over = Some(on_drag_over::<I, R>);
++        object.on_drag_leave = Some(on_drag_leave::<I, R>);
++        object.on_drop = Some(on_drop::<I, R>);
+     }
+     extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
+         self_: *mut _cef_drag_handler_t,
+@@ -19207,6 +19228,52 @@ mod impl_cef_drag_handler_t {
+             arg_regions,
+         )
+     }
++    extern "C" fn on_drag_over<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        client_pt: *const _cef_point_t,
++        mask: cef_drag_operations_mask_t,
++    ) {
++        let (arg_self_, arg_browser, arg_client_pt, arg_mask) = (self_, browser, client_pt, mask);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let arg_client_pt = if arg_client_pt.is_null() {
++            None
++        } else {
++            Some(WrapParamRef::<Point, _>::from(arg_client_pt))
++        };
++        let arg_client_pt = arg_client_pt.as_ref().map(|arg| arg.as_ref());
++        let arg_mask = arg_mask.into_raw();
++        ImplDragHandler::on_drag_over(&arg_self_.interface, arg_browser, arg_client_pt, arg_mask)
++    }
++    extern "C" fn on_drag_leave<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++    ) {
++        let (arg_self_, arg_browser) = (self_, browser);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        ImplDragHandler::on_drag_leave(&arg_self_.interface, arg_browser)
++    }
++    extern "C" fn on_drop<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        drag_data: *mut _cef_drag_data_t,
++    ) -> ::std::os::raw::c_int {
++        let (arg_self_, arg_browser, arg_drag_data) = (self_, browser, drag_data);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let mut arg_drag_data = unsafe { arg_drag_data.as_mut() }
++            .map(|arg| DragData(unsafe { RefGuard::from_raw(arg) }));
++        let arg_drag_data = arg_drag_data.as_mut();
++        ImplDragHandler::on_drop(&arg_self_.interface, arg_browser, arg_drag_data)
++    }
+ }
+ impl ImplDragHandler for DragHandler {
+     fn on_drag_enter(
+@@ -19285,6 +19352,76 @@ impl ImplDragHandler for DragHandler {
+             }
+         }
+     }
++    fn on_drag_over(
++        &self,
++        browser: Option<&mut Browser>,
++        client_pt: Option<&Point>,
++        mask: DragOperationsMask,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.on_drag_over {
++                let (arg_browser, arg_client_pt, arg_mask) = (browser, client_pt, mask);
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                let arg_client_pt = arg_client_pt.cloned().map(|arg| arg.into());
++                let arg_client_pt = arg_client_pt
++                    .as_ref()
++                    .map(std::ptr::from_ref)
++                    .unwrap_or(std::ptr::null());
++                let arg_mask = arg_mask.into_raw();
++                f(arg_self_, arg_browser, arg_client_pt, arg_mask);
++            }
++        }
++    }
++    fn on_drag_leave(&self, browser: Option<&mut Browser>) {
++        unsafe {
++            if let Some(f) = self.0.on_drag_leave {
++                let arg_browser = browser;
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                f(arg_self_, arg_browser);
++            }
++        }
++    }
++    fn on_drop(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .on_drop
++                .map(|f| {
++                    let (arg_browser, arg_drag_data) = (browser, drag_data);
++                    let arg_self_ = self.into_raw();
++                    let arg_browser = arg_browser
++                        .map(|arg| {
++                            arg.add_ref();
++                            ImplBrowser::get_raw(arg)
++                        })
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_drag_data = arg_drag_data
++                        .map(|arg| {
++                            arg.add_ref();
++                            ImplDragData::get_raw(arg)
++                        })
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(arg_self_, arg_browser, arg_drag_data);
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_drag_handler_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/sys/src/bindings/aarch64_apple_darwin.rs b/sys/src/bindings/aarch64_apple_darwin.rs
+index 91039bf..7132e5d 100644
+--- a/sys/src/bindings/aarch64_apple_darwin.rs
++++ b/sys/src/bindings/aarch64_apple_darwin.rs
+@@ -30,14 +30,14 @@ pub const CEF_API_VERSION_LAST: i32 = 14900;
+ pub const CEF_API_VERSION_EXPERIMENTAL: i32 = 999999;
+ pub const CEF_API_VERSION_NEXT: i32 = 999998;
+ pub const CEF_API_VERSION: i32 = 999999;
+-pub const CEF_VERSION: &[u8; 40] = b"149.0.2+ged5b3fd+chromium-149.0.7827.53\0";
++pub const CEF_VERSION: &[u8; 41] = b"149.0.6+g0d0eeb6+chromium-149.0.7827.201\0";
+ pub const CEF_VERSION_MAJOR: i32 = 149;
+ pub const CEF_VERSION_MINOR: i32 = 0;
+-pub const CEF_VERSION_PATCH: i32 = 2;
++pub const CEF_VERSION_PATCH: i32 = 6;
+ pub const CHROME_VERSION_MAJOR: i32 = 149;
+ pub const CHROME_VERSION_MINOR: i32 = 0;
+ pub const CHROME_VERSION_BUILD: i32 = 7827;
+-pub const CHROME_VERSION_PATCH: i32 = 53;
++pub const CHROME_VERSION_PATCH: i32 = 201;
+ unsafe extern "C" {
+     #[doc = "\n Load the CEF library at the specified |path|. Returns true (1) on\n success and false (0) on failure.\n"]
+     pub fn cef_load_library(path: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int;
+@@ -7346,7 +7346,7 @@ const _: () = {
+ #[doc = "\n Structure used for managing cookies. The functions of this structure may be\n called on any thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_cookie_manager_t = _cef_cookie_manager_t;
+ unsafe extern "C" {
+-    #[doc = "\n Returns the global cookie manager. By default data will be stored at\n cef_settings_t.cache_path if specified or in memory otherwise. If |callback|\n is non-NULL it will be executed asnychronously on the UI thread after the\n manager's storage has been initialized. Using this function is equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()->Get\n DefaultCookieManager().\n"]
++    #[doc = "\n Returns the global cookie manager. By default data will be stored at\n cef_settings_t.cache_path if specified or in memory otherwise. If |callback|\n is non-NULL it will be executed asnychronously on the UI thread after the\n manager's storage has been initialized. Using this function is equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()-\n >GetDefaultCookieManager().\n"]
+     pub fn cef_cookie_manager_get_global_manager(
+         callback: *mut _cef_completion_callback_t,
+     ) -> *mut cef_cookie_manager_t;
+@@ -7490,7 +7490,7 @@ const _: () = {
+ #[doc = "\n Supports discovery of and communication with media devices on the local\n network via the Cast and DIAL protocols. The functions of this structure may\n be called on any browser process thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_media_router_t = _cef_media_router_t;
+ unsafe extern "C" {
+-    #[doc = "\n Returns the MediaRouter object associated with the global request context.\n If |callback| is non-NULL it will be executed asnychronously on the UI\n thread after the manager's storage has been initialized. Equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()->get\n _media_router().\n"]
++    #[doc = "\n Returns the MediaRouter object associated with the global request context.\n If |callback| is non-NULL it will be executed asnychronously on the UI\n thread after the manager's storage has been initialized. Equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()-\n >get_media_router().\n"]
+     pub fn cef_media_router_get_global(
+         callback: *mut _cef_completion_callback_t,
+     ) -> *mut cef_media_router_t;
+@@ -10566,10 +10566,31 @@ pub struct _cef_drag_handler_t {
+             regions: *const cef_draggable_region_t,
+         ),
+     >,
++    #[doc = "\n Called continuously while an external drag event moves over the browser\n window. |clientPt| is the position within the browser view in density\n independent pixels (DIP) and |mask| represents the type of drag operation.\n This function is only called if OnDragEnter returned false (0) for the\n current drag event.\n"]
++    pub on_drag_over: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            clientPt: *const cef_point_t,
++            mask: cef_drag_operations_mask_t,
++        ),
++    >,
++    #[doc = "\n Called when an external drag event leaves the browser window without being\n dropped. This function is only called if OnDragEnter returned false (0)\n for the current drag event.\n"]
++    pub on_drag_leave: ::std::option::Option<
++        unsafe extern "C" fn(self_: *mut _cef_drag_handler_t, browser: *mut _cef_browser_t),
++    >,
++    #[doc = "\n Called when an external drag event is dropped on the browser window.\n |dragData| contains the drag event data. Return false (0) for default drop\n handling behavior, in which case the drop is delivered to the renderer and\n may trigger navigation. Return true (1) to consume the drop, in which case\n it is not delivered to the renderer and no default action occurs. This\n function is only called if OnDragEnter returned false (0) for the current\n drag event.\n"]
++    pub on_drop: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            dragData: *mut _cef_drag_data_t,
++        ) -> ::std::os::raw::c_int,
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 56usize];
++    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 80usize];
+     ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
+     ["Offset of field: _cef_drag_handler_t::base"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
+@@ -10577,6 +10598,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_enter) - 40usize];
+     ["Offset of field: _cef_drag_handler_t::on_draggable_regions_changed"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_draggable_regions_changed) - 48usize];
++    ["Offset of field: _cef_drag_handler_t::on_drag_over"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_over) - 56usize];
++    ["Offset of field: _cef_drag_handler_t::on_drag_leave"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_leave) - 64usize];
++    ["Offset of field: _cef_drag_handler_t::on_drop"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drop) - 72usize];
+ };
+ #[doc = "\n Implement this structure to handle events related to dragging. The functions\n of this structure will be called on the UI thread.\n\n NOTE: This struct is allocated client-side.\n"]
+ pub type cef_drag_handler_t = _cef_drag_handler_t;
+@@ -14026,7 +14053,7 @@ const _: () = {
+ #[doc = "\n Structure that creates cef_resource_handler_t instances for handling scheme\n requests. The functions of this structure will always be called on the IO\n thread.\n\n NOTE: This struct is allocated client-side.\n"]
+ pub type cef_scheme_handler_factory_t = _cef_scheme_handler_factory_t;
+ unsafe extern "C" {
+-    #[doc = "\n Register a scheme handler factory with the global request context. An NULL\n |domain_name| value for a standard scheme will cause the factory to match\n all domain names. The |domain_name| value will be ignored for non-standard\n schemes. If |scheme_name| is a built-in scheme and no handler is returned by\n |factory| then the built-in scheme handler factory will be called. If\n |scheme_name| is a custom scheme then you must also implement the\n cef_app_t::on_register_custom_schemes() function in all processes. This\n function may be called multiple times to change or remove the factory that\n matches the specified |scheme_name| and optional |domain_name|. Returns\n false (0) if an error occurs. This function may be called on any thread in\n the browser process. Using this function is equivalent to calling cef_reques\n t_context_t::cef_request_context_get_global_context()->register_scheme_handl\n er_factory().\n"]
++    #[doc = "\n Register a scheme handler factory with the global request context. An NULL\n |domain_name| value for a standard scheme will cause the factory to match\n all domain names. The |domain_name| value will be ignored for non-standard\n schemes. If |scheme_name| is a built-in scheme and no handler is returned by\n |factory| then the built-in scheme handler factory will be called. If\n |scheme_name| is a custom scheme then you must also implement the\n cef_app_t::on_register_custom_schemes() function in all processes. This\n function may be called multiple times to change or remove the factory that\n matches the specified |scheme_name| and optional |domain_name|. Returns\n false (0) if an error occurs. This function may be called on any thread in\n the browser process. Using this function is equivalent to calling cef_reques\n t_context_t::cef_request_context_get_global_context()-\n >register_scheme_handler_factory().\n"]
+     pub fn cef_register_scheme_handler_factory(
+         scheme_name: *const cef_string_t,
+         domain_name: *const cef_string_t,
+@@ -14034,7 +14061,7 @@ unsafe extern "C" {
+     ) -> ::std::os::raw::c_int;
+ }
+ unsafe extern "C" {
+-    #[doc = "\n Clear all scheme handler factories registered with the global request\n context. Returns false (0) on error. This function may be called on any\n thread in the browser process. Using this function is equivalent to calling\n cef_request_context_t::cef_request_context_get_global_context()->clear_schem\n e_handler_factories().\n"]
++    #[doc = "\n Clear all scheme handler factories registered with the global request\n context. Returns false (0) on error. This function may be called on any\n thread in the browser process. Using this function is equivalent to calling\n cef_request_context_t::cef_request_context_get_global_context()-\n >clear_scheme_handler_factories().\n"]
+     pub fn cef_clear_scheme_handler_factories() -> ::std::os::raw::c_int;
+ }
+ #[doc = "\n Implement this structure to provide handler implementations. Methods will be\n called by the process and/or thread indicated.\n\n NOTE: This struct is allocated client-side.\n"]
+diff --git a/sys/src/bindings/x86_64_apple_darwin.rs b/sys/src/bindings/x86_64_apple_darwin.rs
+index 91039bf..7132e5d 100644
+--- a/sys/src/bindings/x86_64_apple_darwin.rs
++++ b/sys/src/bindings/x86_64_apple_darwin.rs
+@@ -30,14 +30,14 @@ pub const CEF_API_VERSION_LAST: i32 = 14900;
+ pub const CEF_API_VERSION_EXPERIMENTAL: i32 = 999999;
+ pub const CEF_API_VERSION_NEXT: i32 = 999998;
+ pub const CEF_API_VERSION: i32 = 999999;
+-pub const CEF_VERSION: &[u8; 40] = b"149.0.2+ged5b3fd+chromium-149.0.7827.53\0";
++pub const CEF_VERSION: &[u8; 41] = b"149.0.6+g0d0eeb6+chromium-149.0.7827.201\0";
+ pub const CEF_VERSION_MAJOR: i32 = 149;
+ pub const CEF_VERSION_MINOR: i32 = 0;
+-pub const CEF_VERSION_PATCH: i32 = 2;
++pub const CEF_VERSION_PATCH: i32 = 6;
+ pub const CHROME_VERSION_MAJOR: i32 = 149;
+ pub const CHROME_VERSION_MINOR: i32 = 0;
+ pub const CHROME_VERSION_BUILD: i32 = 7827;
+-pub const CHROME_VERSION_PATCH: i32 = 53;
++pub const CHROME_VERSION_PATCH: i32 = 201;
+ unsafe extern "C" {
+     #[doc = "\n Load the CEF library at the specified |path|. Returns true (1) on\n success and false (0) on failure.\n"]
+     pub fn cef_load_library(path: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int;
+@@ -7346,7 +7346,7 @@ const _: () = {
+ #[doc = "\n Structure used for managing cookies. The functions of this structure may be\n called on any thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_cookie_manager_t = _cef_cookie_manager_t;
+ unsafe extern "C" {
+-    #[doc = "\n Returns the global cookie manager. By default data will be stored at\n cef_settings_t.cache_path if specified or in memory otherwise. If |callback|\n is non-NULL it will be executed asnychronously on the UI thread after the\n manager's storage has been initialized. Using this function is equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()->Get\n DefaultCookieManager().\n"]
++    #[doc = "\n Returns the global cookie manager. By default data will be stored at\n cef_settings_t.cache_path if specified or in memory otherwise. If |callback|\n is non-NULL it will be executed asnychronously on the UI thread after the\n manager's storage has been initialized. Using this function is equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()-\n >GetDefaultCookieManager().\n"]
+     pub fn cef_cookie_manager_get_global_manager(
+         callback: *mut _cef_completion_callback_t,
+     ) -> *mut cef_cookie_manager_t;
+@@ -7490,7 +7490,7 @@ const _: () = {
+ #[doc = "\n Supports discovery of and communication with media devices on the local\n network via the Cast and DIAL protocols. The functions of this structure may\n be called on any browser process thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_media_router_t = _cef_media_router_t;
+ unsafe extern "C" {
+-    #[doc = "\n Returns the MediaRouter object associated with the global request context.\n If |callback| is non-NULL it will be executed asnychronously on the UI\n thread after the manager's storage has been initialized. Equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()->get\n _media_router().\n"]
++    #[doc = "\n Returns the MediaRouter object associated with the global request context.\n If |callback| is non-NULL it will be executed asnychronously on the UI\n thread after the manager's storage has been initialized. Equivalent to\n calling cef_request_context_t::cef_request_context_get_global_context()-\n >get_media_router().\n"]
+     pub fn cef_media_router_get_global(
+         callback: *mut _cef_completion_callback_t,
+     ) -> *mut cef_media_router_t;
+@@ -10566,10 +10566,31 @@ pub struct _cef_drag_handler_t {
+             regions: *const cef_draggable_region_t,
+         ),
+     >,
++    #[doc = "\n Called continuously while an external drag event moves over the browser\n window. |clientPt| is the position within the browser view in density\n independent pixels (DIP) and |mask| represents the type of drag operation.\n This function is only called if OnDragEnter returned false (0) for the\n current drag event.\n"]
++    pub on_drag_over: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            clientPt: *const cef_point_t,
++            mask: cef_drag_operations_mask_t,
++        ),
++    >,
++    #[doc = "\n Called when an external drag event leaves the browser window without being\n dropped. This function is only called if OnDragEnter returned false (0)\n for the current drag event.\n"]
++    pub on_drag_leave: ::std::option::Option<
++        unsafe extern "C" fn(self_: *mut _cef_drag_handler_t, browser: *mut _cef_browser_t),
++    >,
++    #[doc = "\n Called when an external drag event is dropped on the browser window.\n |dragData| contains the drag event data. Return false (0) for default drop\n handling behavior, in which case the drop is delivered to the renderer and\n may trigger navigation. Return true (1) to consume the drop, in which case\n it is not delivered to the renderer and no default action occurs. This\n function is only called if OnDragEnter returned false (0) for the current\n drag event.\n"]
++    pub on_drop: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            dragData: *mut _cef_drag_data_t,
++        ) -> ::std::os::raw::c_int,
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 56usize];
++    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 80usize];
+     ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
+     ["Offset of field: _cef_drag_handler_t::base"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
+@@ -10577,6 +10598,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_enter) - 40usize];
+     ["Offset of field: _cef_drag_handler_t::on_draggable_regions_changed"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_draggable_regions_changed) - 48usize];
++    ["Offset of field: _cef_drag_handler_t::on_drag_over"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_over) - 56usize];
++    ["Offset of field: _cef_drag_handler_t::on_drag_leave"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_leave) - 64usize];
++    ["Offset of field: _cef_drag_handler_t::on_drop"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drop) - 72usize];
+ };
+ #[doc = "\n Implement this structure to handle events related to dragging. The functions\n of this structure will be called on the UI thread.\n\n NOTE: This struct is allocated client-side.\n"]
+ pub type cef_drag_handler_t = _cef_drag_handler_t;
+@@ -14026,7 +14053,7 @@ const _: () = {
+ #[doc = "\n Structure that creates cef_resource_handler_t instances for handling scheme\n requests. The functions of this structure will always be called on the IO\n thread.\n\n NOTE: This struct is allocated client-side.\n"]
+ pub type cef_scheme_handler_factory_t = _cef_scheme_handler_factory_t;
+ unsafe extern "C" {
+-    #[doc = "\n Register a scheme handler factory with the global request context. An NULL\n |domain_name| value for a standard scheme will cause the factory to match\n all domain names. The |domain_name| value will be ignored for non-standard\n schemes. If |scheme_name| is a built-in scheme and no handler is returned by\n |factory| then the built-in scheme handler factory will be called. If\n |scheme_name| is a custom scheme then you must also implement the\n cef_app_t::on_register_custom_schemes() function in all processes. This\n function may be called multiple times to change or remove the factory that\n matches the specified |scheme_name| and optional |domain_name|. Returns\n false (0) if an error occurs. This function may be called on any thread in\n the browser process. Using this function is equivalent to calling cef_reques\n t_context_t::cef_request_context_get_global_context()->register_scheme_handl\n er_factory().\n"]
++    #[doc = "\n Register a scheme handler factory with the global request context. An NULL\n |domain_name| value for a standard scheme will cause the factory to match\n all domain names. The |domain_name| value will be ignored for non-standard\n schemes. If |scheme_name| is a built-in scheme and no handler is returned by\n |factory| then the built-in scheme handler factory will be called. If\n |scheme_name| is a custom scheme then you must also implement the\n cef_app_t::on_register_custom_schemes() function in all processes. This\n function may be called multiple times to change or remove the factory that\n matches the specified |scheme_name| and optional |domain_name|. Returns\n false (0) if an error occurs. This function may be called on any thread in\n the browser process. Using this function is equivalent to calling cef_reques\n t_context_t::cef_request_context_get_global_context()-\n >register_scheme_handler_factory().\n"]
+     pub fn cef_register_scheme_handler_factory(
+         scheme_name: *const cef_string_t,
+         domain_name: *const cef_string_t,
+@@ -14034,7 +14061,7 @@ unsafe extern "C" {
+     ) -> ::std::os::raw::c_int;
+ }
+ unsafe extern "C" {
+-    #[doc = "\n Clear all scheme handler factories registered with the global request\n context. Returns false (0) on error. This function may be called on any\n thread in the browser process. Using this function is equivalent to calling\n cef_request_context_t::cef_request_context_get_global_context()->clear_schem\n e_handler_factories().\n"]
++    #[doc = "\n Clear all scheme handler factories registered with the global request\n context. Returns false (0) on error. This function may be called on any\n thread in the browser process. Using this function is equivalent to calling\n cef_request_context_t::cef_request_context_get_global_context()-\n >clear_scheme_handler_factories().\n"]
+     pub fn cef_clear_scheme_handler_factories() -> ::std::os::raw::c_int;
+ }
+ #[doc = "\n Implement this structure to provide handler implementations. Methods will be\n called by the process and/or thread indicated.\n\n NOTE: This struct is allocated client-side.\n"]

@@ -1,7 +1,7 @@
-import { decodeSeg, encodeSeg } from "@kabegame/pathql-client";
-
 import {
+  decodeUserSegment,
   DIMENSION_ORDER,
+  encodeUserSegment,
   filterForDimension,
   type GalleryFilterDimension,
   type GalleryFilterSet,
@@ -359,7 +359,7 @@ function serializeAtom(atom: GalleryAtom): SerializedSequence {
     .filter((filter) => filter.type !== "all")
     .map(serializeFilter);
   if (hasSearch(atom)) {
-    parts.push(`search/${atom.search!.mode}/${encodeSeg(atom.search!.query)}`);
+    parts.push(`search/${atom.search!.mode}/${encodeUserSegment(atom.search!.query)}`);
   }
   return { body: parts.join("/filter_comb/"), endsAtHub: hasSearch(atom) };
 }
@@ -402,6 +402,8 @@ export function serializeAdvancedQuery(
   return serialized.body ? serialized : { body: "all", endsAtHub: false };
 }
 
+// legacy 兼容：旧版高级树在 localStorage 里以 encodeSeg 直存（段内有裸 `\/`
+// 被盲切），对新形态（双层编码后段内不再有裸 `/`）退化为恒等。
 function hasEscapedSlash(segment: string): boolean {
   let backslashes = 0;
   for (
@@ -514,7 +516,7 @@ function parseSequence(
       const query = segments[position + 2];
       if (!isGallerySearchMode(mode) || query === undefined) return null;
       appendAtom(sequence, "search", {
-        search: { mode, query: decodeSeg(query) },
+        search: { mode, query: decodeUserSegment(query) },
       });
       position += 3;
       continue;

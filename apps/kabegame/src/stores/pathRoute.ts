@@ -295,6 +295,8 @@ export function createPathRouteStore<TState extends object>(
       computedPath,
       // 根据 state 算出的上下文path.
       computedContextPath,
+      // 按覆盖后的 state 算上下文 path（如 `{ search: "" }` 拿到不含搜索的基址）
+      contextPathFor,
       // 从某个state算一个path
       computePath,
       // 

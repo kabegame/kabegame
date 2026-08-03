@@ -1,3 +1,5 @@
+import { decodeSeg, encodeSeg } from "@kabegame/pathql-client";
+
 import {
   normalizeQuery,
   parseAdvancedBody,
@@ -90,10 +92,24 @@ export const GALLERY_ASPECT_BUCKETS = [
   { range: "other", labelKey: "filterAspect_other" },
 ] as const;
 
-export type GallerySearchMode = "display-name" | "metadata" | "native-metadata";
+export type GallerySearchMode =
+  | "display-name"
+  | "metadata"
+  | "native-metadata"
+  | "local-path"
+  | "url";
 
-/** 下拉菜单顺序：从最常用到最专业。 */
+/** 下拉顺序：名称类三项在前（显示名 → 路径 → 链接），内容类元数据在后。 */
 export const GALLERY_SEARCH_MODES: readonly GallerySearchMode[] = [
+  "display-name",
+  "local-path",
+  "url",
+  "metadata",
+  "native-metadata",
+];
+
+/** 任务详情 / 畅游详情只暴露基础三项。 */
+export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchMode[] = [
   "display-name",
   "metadata",
   "native-metadata",
@@ -102,7 +118,7 @@ export const GALLERY_SEARCH_MODES: readonly GallerySearchMode[] = [
 export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
 
 export function isGallerySearchMode(value: string | undefined): value is GallerySearchMode {
-  return value === "display-name" || value === "metadata" || value === "native-metadata";
+  return GALLERY_SEARCH_MODES.includes(value as GallerySearchMode);
 }
 
 export interface ParsedGalleryPath {
@@ -142,6 +158,22 @@ export function buildGalleryContextPrefix(
   searchMode?: GallerySearchMode,
 ): string {
   return buildComposableContextPrefix("", search, searchMode);
+}
+
+/**
+ * 查询行一次导航要改的字段集合：`GalleryQueryBar` 只发这一种事件，各页把它整体
+ * 转交给自己的 path-route store。必须整体传递——「切回简单过滤时把高级树降级
+ * 平移」这类改动跨多个字段，拆成多次导航会互相覆盖。
+ */
+export interface GalleryQueryPatch {
+  filters?: GalleryFilterSet;
+  /** 显式传 undefined = 清掉已应用的高级树（键存在即生效） */
+  advanced?: GalleryAdvancedQuery;
+  sort?: GallerySort;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  searchMode?: GallerySearchMode;
 }
 
 export interface ComposablePathParams {
@@ -198,7 +230,7 @@ function buildAdvancedBody(
   const query = search.trim();
   if (query) {
     result = appendAdvancedBodyPart(result, {
-      body: `search/${searchMode}/${encodeURIComponent(query)}`,
+      body: `search/${searchMode}/${encodeUserSegment(query)}`,
       // search query provider 会委派回 gallery 根，是枢纽。
       endsAtHub: true,
     });
@@ -293,7 +325,7 @@ export function buildComposablePath(params: ComposablePathParams): string {
   const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
   const q = (search ?? "").trim();
   const searchPrefix = advanced === undefined && q
-    ? `search/${searchMode}/${encodeURIComponent(q)}/`
+    ? `search/${searchMode}/${encodeUserSegment(q)}/`
     : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return sort.desc ? `${searchPrefix}${rp}${body}/desc/${ps}${p}` : `${searchPrefix}${rp}${body}/${ps}${p}`;
@@ -367,7 +399,7 @@ export function buildComposableContextPrefix(
   searchMode: GallerySearchMode = DEFAULT_GALLERY_SEARCH_MODE,
 ): string {
   const q = (search ?? "").trim();
-  const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
+  const searchPrefix = q ? `search/${searchMode}/${encodeUserSegment(q)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${searchPrefix}${rp}`;
 }
@@ -400,7 +432,7 @@ export function buildComposableCountPath(
     }`;
   }
   const q = (search ?? "").trim();
-  const searchPrefix = q ? `search/${searchMode}/${encodeURIComponent(q)}/` : "";
+  const searchPrefix = q ? `search/${searchMode}/${encodeUserSegment(q)}/` : "";
   const simpleFilters = filters as GalleryFilterSet | GalleryFilter;
   const filterset = isGalleryFilter(simpleFilters)
     ? singleFilterToSet(simpleFilters)
@@ -426,16 +458,13 @@ export function stripComposablePathTail(path: string): string {
 }
 
 /** 从原始(未 decode)路径段数组中剥离形如 `search/<mode>/<q>/` 的前缀(若存在)。
- *  返回的 3 段仍保持原始 percent-encoding,真正的 decode 统一发生在 `stripSearchPrefix` 里。 */
+ *  返回的 3 段仍保持原始 percent-encoding,真正的 decode 统一发生在 `stripSearchPrefix` 里。
+ *  双层编码下 query 段内的裸 `/` 已被 percent 转义,不再需要回接多段。 */
 function splitLeadingSearchSegments(segs: string[]): { segments: string[]; rest: string[] } {
   if (segs.length >= 3 && segs[0] === "search" && isGallerySearchMode(segs[1])) {
-    let queryEnd = 2;
-    while (queryEnd + 1 < segs.length && hasEscapedSlash(segs[queryEnd]!)) {
-      queryEnd += 1;
-    }
     return {
-      segments: [segs[0]!, segs[1]!, segs.slice(2, queryEnd + 1).join("/")],
-      rest: segs.slice(queryEnd + 1),
+      segments: [segs[0]!, segs[1]!, segs[2]!],
+      rest: segs.slice(3),
     };
   }
   return { segments: [], rest: segs };
@@ -450,7 +479,7 @@ function stripSearchPrefix(
   }
   const searchMode = segments[1] as GallerySearchMode;
   const raw = segments[2] ?? "";
-  return { search: decodePathSegment(raw), searchMode, rest };
+  return { search: decodeUserSegment(raw), searchMode, rest };
 }
 
 /**
@@ -628,7 +657,7 @@ export function serializeFilter(filter: GalleryFilter): string {
     case "no-album":
       return "no-album";
     case "plugin": {
-      const id = encodeURIComponent(filter.pluginId.trim());
+      const id = encodeUserSegment(filter.pluginId.trim());
       const extendPath = providerPathSegment(filter.extendPath ?? "");
       return extendPath ? `plugin/${id}/extend/${extendPath}` : `plugin/${id}`;
     }
@@ -638,7 +667,7 @@ export function serializeFilter(filter: GalleryFilter): string {
       return `date-range/${filter.start}~${filter.end}`;
     case "media-type":
       return filter.format
-        ? `media-type/${filter.kind}/${encodeURIComponent(filter.format)}`
+        ? `media-type/${filter.kind}/${encodeUserSegment(filter.format)}`
         : `media-type/${filter.kind}`;
     case "name":
       return `name/${filter.bucket}`;
@@ -821,7 +850,7 @@ function parseBody(body: string[]): {
     const searchPrefix = splitLeadingSearchSegments(queryBody);
     if (searchPrefix.segments.length > 0) {
       contextSearchMode = searchPrefix.segments[1] as GallerySearchMode;
-      contextSearch = decodePathSegment(searchPrefix.segments[2] ?? "");
+      contextSearch = decodeUserSegment(searchPrefix.segments[2] ?? "");
       queryBody = searchPrefix.rest;
     }
   }
@@ -952,11 +981,11 @@ export function parseDimensionChunk(
   }
 
   if (root === "plugin" || root === "plugins") {
-    const pluginId = decodePathSegment(chunk[1] ?? "").trim();
+    const pluginId = decodeUserSegment(chunk[1] ?? "").trim();
     if (!pluginId) return null;
     const extendIndex = chunk[2] === "extend" ? 3 : -1;
     const extendPath =
-      extendIndex >= 0 ? chunk.slice(extendIndex).map(decodePathSegment).join("/") : "";
+      extendIndex >= 0 ? chunk.slice(extendIndex).map(decodeUserSegment).join("/") : "";
     return {
       filter: extendPath
         ? { type: "plugin", pluginId, extendPath: normalizePath(extendPath) }
@@ -968,7 +997,7 @@ export function parseDimensionChunk(
   if (root === "media-type") {
     const kind = chunk[1]?.toLowerCase();
     if (kind !== "image" && kind !== "video") return null;
-    const format = decodePathSegment(chunk[2] ?? "").trim();
+    const format = decodeUserSegment(chunk[2] ?? "").trim();
     return {
       filter: format ? { type: "media-type", kind, format } : { type: "media-type", kind },
       dimension: "mediaType",
@@ -1059,21 +1088,21 @@ function decodeDateSegments(
   return { segment: `${y}-${m}-${d}`, consumed: 3 };
 }
 
-function decodePathSegment(segment: string): string {
-  if (!segment) return "";
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
+/** 用户数据 → 路径段：先 pathql 反斜线转义（逻辑层），再 percent（传输层）。
+ *  后端边界解一次 percent，引擎解反斜线，各解各的。 */
+export function encodeUserSegment(value: string): string {
+  return encodeURIComponent(encodeSeg(value));
 }
 
-function hasEscapedSlash(segment: string): boolean {
-  let backslashes = 0;
-  for (let index = segment.length - 1; index >= 0 && segment[index] === "\\"; index--) {
-    backslashes += 1;
+/** encodeUserSegment 的逆。无效 percent（旧逻辑形态的孤立 %）原样保留，再解反斜线。 */
+export function decodeUserSegment(segment: string): string {
+  let once = segment;
+  try {
+    once = decodeURIComponent(segment);
+  } catch {
+    /* 旧数据孤立 % → 原样 */
   }
-  return backslashes % 2 === 1;
+  return decodeSeg(once);
 }
 
 function normalizePath(path = "") {
@@ -1084,7 +1113,7 @@ function providerPathSegment(path = "") {
   return normalizePath(path)
     .split("/")
     .filter(Boolean)
-    .map(encodeURIComponent)
+    .map(encodeUserSegment)
     .join("/");
 }
 

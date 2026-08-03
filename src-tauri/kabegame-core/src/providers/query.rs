@@ -36,10 +36,11 @@ pub fn decode_provider_path_segments(raw: &str) -> String {
         .map(|seg| {
             if seg.is_empty() {
                 String::new()
-            } else if seg.contains('\\') {
-                // TODO(Phase 3 收尾): 前端迁完后简化为 unescape_path_segment
-                pathql_rs::unescape_path_segment(seg)
             } else {
+                // 传输层解码：恰好解一次 percent，还原 pathql 逻辑形态。
+                // 反斜线转义是引擎(classify_segment)的职责，这里不碰——
+                // 在边界解会与引擎叠成“解两层”，Windows 路径的 \ 全丢。
+                // 无效 percent 序列原样保留：旧逻辑形态数据（孤立 %）不受伤。
                 urlencoding::decode(seg)
                     .map(|cow| cow.into_owned())
                     .unwrap_or_else(|_| seg.to_string())
@@ -825,14 +826,22 @@ mod tests {
     }
 
     #[test]
-    fn provider_path_segments_support_both_transition_encodings() {
+    fn provider_path_segments_decode_only_the_transport_layer() {
         assert_eq!(
             decode_provider_path_segments("gallery/search/%E8%90%A4"),
             "gallery/search/萤"
         );
         assert_eq!(
             decode_provider_path_segments(r"gallery/search/\~any"),
-            "gallery/search/~any"
+            r"gallery/search/\~any"
+        );
+        assert_eq!(
+            decode_provider_path_segments("C%3A%5C%5CUsers"),
+            r"C:\\Users"
+        );
+        assert_eq!(
+            decode_provider_path_segments(r"gallery/search/local-path/C:\\Users"),
+            r"gallery/search/local-path/C:\\Users"
         );
     }
 

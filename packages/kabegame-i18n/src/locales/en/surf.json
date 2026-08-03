@@ -42,6 +42,7 @@
   "deleteSuccess": "Deleted",
   "deleteFailed": "Delete failed",
   "surfImagesTitle": "Surf images",
+  "surfImagesEmptyTip": "Open Surf, right-click images or videos, and they'll show up here",
   "confirmDelete": "Confirm delete",
   "removeText": "Delete",
   "operationFailed": "Operation failed",

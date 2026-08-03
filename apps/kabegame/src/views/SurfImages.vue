@@ -20,22 +20,21 @@
             @back="goBack"
           />
 
-          <GalleryFilters
+          <GalleryQueryBar
             :filters="surfImagesRouteStore.filters"
+            :advanced="surfImagesRouteStore.advanced"
             :sort="surfImagesRouteStore.sort"
+            :page="surfImagesRouteStore.page"
             :page-size="pageSize"
             :search="surfImagesRouteStore.search"
             :search-mode="surfImagesRouteStore.searchMode"
             :provider-context-prefix="surfImagesRouteStore.computedContextPath"
+            :context-base="surfImagesRouteStore.contextPathFor({ search: '' })"
             :filter-features="surfFilterFeatures"
             :sort-features="surfSortFeatures"
-            enable-search
-            enable-page-size
-            @update:filters="(f) => surfImagesRouteStore.navigate({ filters: f, page: 1 })"
-            @update:sort="(s) => surfImagesRouteStore.navigate({ sort: s })"
-            @update:page-size="(ps) => surfImagesRouteStore.navigate({ page: 1, pageSize: ps })"
-            @update:search="(v) => surfImagesRouteStore.navigate({ page: 1, search: v })"
-            @update:searchMode="(m) => { rememberSurfImagesSearchMode(m); surfImagesRouteStore.navigate({ page: 1, searchMode: m }); }"
+            :search-features="surfSearchFeatures"
+            enable-clear-all
+            @navigate="onQueryNavigate"
           />
 
           <GalleryBigPaginator
@@ -45,6 +44,13 @@
             :is-sticky="true"
             @jump-to-page="jumpToPage"
           />
+        </template>
+
+        <template #empty>
+          <div class="surf-empty fade-in">
+            <EmptyState :lines="[t('surf.surfImagesEmptyTip')]" show-button :button-text="t('surf.openSurf')"
+              @button-click="handleOpenSurf" />
+          </div>
         </template>
       </ImageGrid>
     </div>
@@ -57,15 +63,22 @@ import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
-import GalleryFilters from "@/components/GalleryFilters.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
+import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { createSurfImagesSurface } from "@/components/imageGrid/surfaces/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { useSurfImagesRouteStore, rememberSurfImagesSearchMode } from "@/stores/surfImagesRoute";
-import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
+import {
+  GALLERY_SEARCH_MODES_BASIC,
+  type GalleryFilterDimension,
+  type GalleryQueryPatch,
+  type GallerySortField,
+} from "@/utils/galleryPath";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useI18n } from "@kabegame/i18n";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -80,6 +93,13 @@ const surfFilterFeatures: GalleryFilterDimension[] = [
 const surfSortFeatures: GallerySortField[] = [
   "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
 ];
+const surfSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
+
+/** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
+const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
+  if (patch.searchMode) rememberSurfImagesSearchMode(patch.searchMode);
+  void surfImagesRouteStore.navigate(patch, options);
+};
 
 /** 路由与 VD 路径使用的站点 host（与 `surf_records.host` 一致） */
 const surfHost = ref("");
@@ -134,6 +154,17 @@ const goBack = () => {
   router.push("/surf");
 };
 
+const handleOpenSurf = async () => {
+  const r = record.value;
+  if (!r) return;
+  try {
+    await surfStore.startSession(r.rootUrl);
+    ElMessage.success(t("surf.sessionStartSuccess"));
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
+  }
+};
+
 const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfImages");
 
 // keep-alive: 监听路由参数变化
@@ -178,6 +209,14 @@ onActivated(async () => {
 .surf-grid {
   flex: 1;
   min-height: 0;
+}
+
+.surf-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 16px;
 }
 
 </style>

@@ -2,6 +2,7 @@
 
 mod imp {
     use std::{
+        cell::RefCell,
         collections::BTreeMap,
         io,
         path::PathBuf,
@@ -17,7 +18,7 @@ mod imp {
     use tauri_runtime::{
         dpi::{PhysicalPosition, PhysicalSize, Rect as RuntimeRect, Size},
         webview::{DetachedWebview, PageLoadEvent, PendingWebview},
-        window::{WebviewEvent, WindowId},
+        window::{DragDropEvent, WebviewEvent, WindowEvent, WindowId},
         Cookie, Error, Result, UserEvent, WebviewDispatch, WebviewEventId,
     };
     use tauri_utils::config::Color;
@@ -758,6 +759,126 @@ mod imp {
         }
     }
 
+    /// 一次外部拖放会话的累积状态。
+    ///
+    /// CEF 的三个回调各自只带一部分信息:`OnDragEnter` 有文件路径但没有位置,
+    /// `OnDragOver` 有位置但没有路径,`OnDrop` 有路径但没有位置。Tauri 的
+    /// `DragDropEvent` 每一态都要「路径 + 位置」,所以在会话内把两者攒起来。
+    #[derive(Default)]
+    pub(crate) struct DragSession {
+        paths: Vec<PathBuf>,
+        position: PhysicalPosition<f64>,
+    }
+
+    /// 从 `DragData` 抽出本地文件绝对路径。
+    ///
+    /// 对齐 wry 的 `collect_paths`:只认文件拖放,拖 URL / 选中文本得到空列表,
+    /// 上层据此不会误报一次「文件拖入」。
+    fn drag_data_paths(drag_data: Option<&mut DragData>) -> Vec<PathBuf> {
+        let Some(drag_data) = drag_data else {
+            return Vec::new();
+        };
+        if drag_data.is_file() != 1 {
+            return Vec::new();
+        }
+        let mut paths = CefStringList::default();
+        if drag_data.file_paths(Some(&mut paths)) != 1 {
+            return Vec::new();
+        }
+        paths
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect()
+    }
+
+    /// CEF 回调给的 `client_pt` 是 DIP(逻辑像素),Tauri `DragDropEvent` 要物理像素。
+    ///
+    /// 拖放跨屏时理应按光标所在 display 换算,但回调里拿不到窗口句柄,只能用主屏
+    /// 的 scale。多屏异构 DPI 下位置会有偏差 —— 可接受:位置只用于上层做命中判断,
+    /// 路径才是载重信息(wry 在 macOS 上干脆不换算,直接把 DIP 当物理像素报出去)。
+    fn dip_to_physical(client_pt: &Point) -> PhysicalPosition<f64> {
+        let scale = display_get_primary()
+            .map(|display| display.device_scale_factor() as f64)
+            .unwrap_or(1.0);
+        PhysicalPosition::new(client_pt.x as f64 * scale, client_pt.y as f64 * scale)
+    }
+
+    // 把 CEF 的拖放回调翻成 Tauri 的 `WindowEvent::DragDrop` 四态,语义对齐 wry 的
+    // `with_drag_drop_handler`。
+    //
+    // 关键点是 `on_drop` 返回 1:CEF 侧据此中止投递给渲染进程(见
+    // `third-patches/cef/0002`),Chromium 默认的「导航到被拖入的文件」因此不会发生
+    // —— 等价于 wry `performDragOperation` 返回 `YES` 且不调 `super`。
+    wrap_drag_handler! {
+        pub(crate) struct TauriCefDragHandler {
+            emitter: runtime::WindowEventEmitter,
+            session: Rc<RefCell<DragSession>>,
+        }
+        impl DragHandler {
+            fn on_drag_enter(
+                &self,
+                _browser: Option<&mut Browser>,
+                drag_data: Option<&mut DragData>,
+                _mask: DragOperationsMask,
+            ) -> ::std::os::raw::c_int {
+                let paths = drag_data_paths(drag_data);
+                // Enter 没有位置,先按原点上报;紧随其后的第一个 Over 会带来真实
+                // 位置。上层(kabegame 前端)只用 paths 判断可导入性。
+                let position = PhysicalPosition::new(0.0, 0.0);
+                *self.session.borrow_mut() = DragSession {
+                    paths: paths.clone(),
+                    position,
+                };
+                (self.emitter)(WindowEvent::DragDrop(DragDropEvent::Enter {
+                    paths,
+                    position,
+                }));
+                // 0 = 不取消拖放。取消会让后续 over/drop 全部消失,拿不到落点。
+                0
+            }
+
+            fn on_drag_over(
+                &self,
+                _browser: Option<&mut Browser>,
+                client_pt: Option<&Point>,
+                _mask: DragOperationsMask,
+            ) {
+                let Some(client_pt) = client_pt else { return };
+                let position = dip_to_physical(client_pt);
+                self.session.borrow_mut().position = position;
+                (self.emitter)(WindowEvent::DragDrop(DragDropEvent::Over { position }));
+            }
+
+            fn on_drag_leave(&self, _browser: Option<&mut Browser>) {
+                *self.session.borrow_mut() = DragSession::default();
+                (self.emitter)(WindowEvent::DragDrop(DragDropEvent::Leave));
+            }
+
+            fn on_drop(
+                &self,
+                _browser: Option<&mut Browser>,
+                drag_data: Option<&mut DragData>,
+            ) -> ::std::os::raw::c_int {
+                let mut session = std::mem::take(&mut *self.session.borrow_mut());
+                // Drop 自带 drag_data,但拖放途中 CEF 会重建 DragData;以本次为准,
+                // 拿不到时回落到 enter 时缓存的路径。
+                let paths = match drag_data_paths(drag_data) {
+                    paths if paths.is_empty() => std::mem::take(&mut session.paths),
+                    paths => paths,
+                };
+                // 位置沿用最后一次 Over —— OnDrop 本身不带坐标,而松手点必然等于
+                // 最后一次拖动经过的点。
+                (self.emitter)(WindowEvent::DragDrop(DragDropEvent::Drop {
+                    paths,
+                    position: session.position,
+                }));
+                // 1 = 消费本次 drop,渲染进程收不到,默认的文件导航被抑制。
+                1
+            }
+        }
+    }
+
     wrap_client! {
         pub(crate) struct ViewsClient {
             load_handler: LoadHandler,
@@ -766,6 +887,7 @@ mod imp {
             download_handler: Option<DownloadHandler>,
             request_handler: Option<RequestHandler>,
             life_span_handler: Option<LifeSpanHandler>,
+            drag_handler: Option<DragHandler>,
         }
         impl Client {
             fn load_handler(&self) -> Option<LoadHandler> { Some(self.load_handler.clone()) }
@@ -774,6 +896,7 @@ mod imp {
             fn download_handler(&self) -> Option<DownloadHandler> { self.download_handler.clone() }
             fn request_handler(&self) -> Option<RequestHandler> { self.request_handler.clone() }
             fn life_span_handler(&self) -> Option<LifeSpanHandler> { self.life_span_handler.clone() }
+            fn drag_handler(&self) -> Option<DragHandler> { self.drag_handler.clone() }
         }
     }
 
@@ -1007,6 +1130,7 @@ mod imp {
         context: runtime::CefContext<T>,
         mut pending: PendingWebview<T, Cef<T>>,
     ) -> Result<(CefWebviewState, BrowserView)> {
+        let context_for_drag = context.clone();
         let detached = detached_webview(pending.label.clone(), window_id, webview_id, context);
         let initial_url = pending.url.clone();
         ipc::install_post_message_bridge(&mut pending, detached, initial_url);
@@ -1056,6 +1180,15 @@ mod imp {
             initialization_scripts_payload,
             redirect_tab_popups,
         ));
+        // 与 wry 后端一致:`drag_drop_handler_enabled` 为 false 时不挂 handler,
+        // 拖放回落到 CEF/Chromium 默认行为(页面自己的 HTML5 dnd 可用)。
+        let drag_handler = pending
+            .webview_attributes
+            .drag_drop_handler_enabled
+            .then(|| {
+                let emitter = runtime::window_event_emitter(window_id, context_for_drag);
+                TauriCefDragHandler::new(emitter, Rc::new(RefCell::new(DragSession::default())))
+            });
         let mut client = ViewsClient::new(
             InitializationLoadHandler::new(on_page_load),
             DevToolsKeyboardHandler::new(),
@@ -1063,6 +1196,7 @@ mod imp {
             download_handler,
             request_handler,
             life_span_handler,
+            drag_handler,
         );
         let mut delegate = ViewsBrowserViewDelegate::new(webview_label, pending_protocols);
         let url = pending.url.clone();

@@ -42,6 +42,7 @@
   "deleteSuccess": "已刪除",
   "deleteFailed": "刪除失敗",
   "surfImagesTitle": "暢遊圖片",
+  "surfImagesEmptyTip": "打開暢遊，右鍵圖片、影片，就會出現在這裡",
   "confirmDelete": "確認刪除",
   "removeText": "刪除",
   "operationFailed": "操作失敗",

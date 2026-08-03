@@ -38,8 +38,8 @@
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。
-  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题。
+  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`（简单 chip 行 + 高级 PathQL 树、唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工），以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
+  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流、设置持久化、`browse_gallery_provider` 与 `invoke` 参数约定；**列表不带 `metadata`**、`get_image_metadata` 与前端 per-page 缓存；**`images-change`（images 表）与 `album-images-change`（album_images 表）** 事件拆分与前端/Plasma 订阅要点。
@@ -118,12 +118,12 @@
   - 适用场景：android dev/prod 真机并存隔离；排查 `Project directory ... does not exist`、auto-launch 拉起失败、`BuildConfig` 解析错误；升级 tauri-cli 版本；排查 deb 包 webkit 依赖或 Depends 重复。
 
 - [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
-  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF 上游 pin/patch series 维护流程。
-  - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（官方 pin + patch series re-vendor）、调整 `tauri-runtime-cef` trait 适配；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包。
+  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；**文件拖放**（`TauriCefDragHandler` 把 CEF 回调翻成 Tauri 四态 `WindowEvent::DragDrop`，依赖 patch 0002 补出的 `OnDragOver`/`OnDragLeave`/`OnDrop`，语义对齐 wry）；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF 上游 pin/patch series 维护流程（含**「patch 必须落成 `kabegame-7827` 分支上的提交」**——`automate-git.py` 只 fetch 分支、只认提交，工作区 patch 与 detached HEAD 提交都进不了构建且不报错）。
+  - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（官方 pin + patch series re-vendor）、调整 `tauri-runtime-cef` trait 适配；排查从外部拖入文件被 CEF 直接打开成预览页、`onDragDropEvent` 不触发；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包；确认自编的 CEF 里到底有没有 kabegame patch。
 
 - [../third-patches/cef/README.md](../third-patches/cef/README.md)
-  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` 原子 apply/reverse 命令与 re-vendor 流程。
-  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移。
+  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` 原子 apply/reverse 命令与 re-vendor 流程。现有两个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补 `OnDragOver`/`OnDragLeave`/`OnDrop`（`added=experimental`，接 `PreHandleDragUpdate`/`PreHandleDragExit`/`OnPerformingDrop`），生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
+  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移；给 CEF client 加新回调（照 0002 的做法：只改 C++ 头 + 实现，胶水交给 translator）。
 
 ## 调试（`debug/`）
 
@@ -137,6 +137,10 @@
   - 主题：**本仓不再依赖 npm element-plus**，组件与图标已 vendor 成自有组件库 `@kabegame/element-plus` / `@kabegame/element-plus-icons`（fork，不跟上游）。涵盖 vendor 动机（从没覆盖 EP 全局 token 导致的 1733 行覆盖 + 147 处 `!important`）、三处接线（vite alias / **两处** tsconfig `paths`，app 的是整体覆盖 / web `manualChunks` 必须判在 node_modules 闸门之前且 `-icons` 在前）、`vueJsx()` 插件的必要性、前缀现状（namespace 两个开关仍是 `el`，翻之前必须清零业务侧 `.el-*`，及字面量 transition 名等漏网处）、**加主题的正确姿势**（下沉到 `common/var.scss` 的 token map，`--kb-el-* ← --anime-*`，date-picker 是范例）、自有组件放哪（可直接进 vendored 包，`KbTab` 已取代 `ElTabs`；theme-chalk vs SFC scoped 的分流）、图标 svg 真源 + 零依赖 Deno 生成器，以及 scss 自包含 / `process.env.NODE_ENV` / `.tsx` JSX 类型等踩坑。
   - 适用场景：写任何前端组件或样式前先读；排查「从 element-plus 导入报错」；给组件加主题；新增/删除 vendored 组件；加图标；改 alias / tsconfig paths / chunk 划分；准备翻 `kb-el` 前缀。
   - 配套：[../packages/kabegame-element-plus/README.md](../packages/kabegame-element-plus/README.md) 与 [../packages/kabegame-element-plus-icons/README.md](../packages/kabegame-element-plus-icons/README.md) 记录各自与上游的逐项结构差异。
+
+- [ui/FILE_DROP_ZONES.md](ui/FILE_DROP_ZONES.md)
+  - 主题：桌面外部文件拖入的**区域级**结构。涵盖两层分工（窗口级 `useFileDrop` 只做类型探测 + 落点命中 → 区域级 `v-drag-file` 的 `plan()`/`onDrop()` 决定接不接与做什么）、为何指令不监听 DOM 事件（CEF 在 content 层就 veto 了 drop，渲染进程收不到）、**为何 `enter` 不做命中**（`TauriCefDragHandler` 的 Enter position 恒为 `(0,0)`，浮层推迟到第一个 `over`；`setFocus` 只在 enter 调一次）、坐标契约（物理像素 ÷ `devicePixelRatio`、多显示器缩放偏差与物理值兜底、用 rect 包含判定而非 `elementFromPoint`、多命中取 DOM 最深）、四页接受矩阵与热区挂载点的选择理由、**只读判断必须写在 `plan()` 里而非 `disabled`**、复用的既有导入 API（无新增 Rust 命令；文件夹走 `add_local_folder_album` + 后台 `sync_album` 递归建子画册）、浮层样式两个坑（虚线框独立成 `.drop-frame` 层避开 `box-sizing`；`.drop-icon` 不能用 `background-clip: text`，SVG 上无效会渲染成黑色）。
+  - 适用场景：给某个页面新增/修改拖入热区；排查拖入无反应、提示「此处不支持」、虚线框位置偏移或大一圈、图标变黑；理解拖文件夹为什么建的是会跟着磁盘变的同步画册。
 
 ## 国际化（`i18n/`）
 

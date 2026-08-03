@@ -10,6 +10,7 @@ import {
   type GallerySearchMode,
   type GallerySort,
 } from "@/utils/galleryPath";
+import type { GalleryAdvancedQuery } from "@/utils/galleryQuery";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
@@ -23,6 +24,8 @@ export function rememberAlbumDetailSearchMode(mode: GallerySearchMode): void {
 type AlbumDetailRouteState = {
   albumId: string;
   filters: GalleryFilterSet;
+  /** 高级查询树；与 filters 在路由上互斥（见 GalleryQueryBar） */
+  advanced: GalleryAdvancedQuery | undefined;
   sort: GallerySort;
   page: number;
   pageSize: number;
@@ -35,6 +38,7 @@ function createDefaultState(): AlbumDetailRouteState {
   return {
     albumId: "",
     filters: {},
+    advanced: undefined,
     sort: { field: "by-album-order", desc: false },
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
@@ -57,6 +61,7 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
       return {
         albumId,
         filters: parsed.filters,
+        advanced: parsed.advanced,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
@@ -68,6 +73,7 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
       buildComposablePath({
         rootPrefix: `album/${state.albumId}`,
         filters: state.filters,
+        advanced: state.advanced,
         sort: state.sort,
         page: state.page,
         pageSize: state.pageSize,

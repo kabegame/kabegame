@@ -526,11 +526,14 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 ### 7.2 路径安全
 
 - 6e 起 delegate 字段不再是 PathExpr — provider 引用走 ProviderCall (name + properties), 引擎按 namespace 链解析
-- 路径分段是**转义感知**的：`\X` 表示字面 X、未转义 `/` 才分段，数据进段唯一入口是
-  `escape_path_segment`（TS 侧 `encodeSeg`）。引擎核心不做 percent-decode——percent 是
-  URI 传输层职责，URI 边界（如 MCP server）自行 decode 后再交引擎。过渡期兜底：不含
-  `\` 的段仍尝试 percent-decode（兼容尚未迁移的前端 `encodeURIComponent` 调用点），
-  前端迁移完成后移除
+- 路径段采用**双层编码契约**：
+  1. pathql 逻辑层由 `escape_path_segment`（TS 侧 `encodeSeg`）编码；`\X` 表示字面 X、
+     未转义 `/` 才分段，反斜线自身、段内 `/` 与前导 `~` 都在这一层转义。`%` 在逻辑层
+     没有特殊含义，引擎只识别并解开反斜线转义。
+  2. 逻辑段经过 URL 形态通道（地址栏、Tauri invoke 的 path 参数、MCP URI）时，整段再做
+     percent-encode，路径分隔 `/` 保留。接收边界（`decode_provider_path_segments` / MCP
+     server）恰好 percent-decode 一次，还原逻辑形态后交给引擎；边界不解反斜线，引擎也
+     不做 percent-decode。
 - 加载期 strict cross_ref 校验所有静态 ProviderCall.provider 必须存在；包含 `${...}` 的 provider 名是运行时动态引用，按模板 scope 校验后留到实例化时解析
 - cycle 检测捕获静态 delegate 自指 / 多节点环；运行时动态 provider 名不参与静态环检测
 
@@ -672,6 +675,10 @@ get_surf_record(record_id) -> JSON_TEXT
 
 crawled_at_seconds(timestamp) -> INTEGER
   将秒 / 毫秒混合的 crawled_at 规整为 unix seconds, 供日期 router 与 date_range 复用。
+
+is_search_dummy_url(url) -> INTEGER
+  URL 搜索维度的排除判定：去重 dummy 集合不含 file://，搜索 dummy 集合在其上增加
+  file://；NULL 也返回 1，使 DSL 用 `is_search_dummy_url(x) = 0` 同时排除 NULL 与占位值。
 
 vd_display_name(canonical) -> TEXT
   读取当前 VD locale, 把 canonical 段名映射为本地化路径显示名。

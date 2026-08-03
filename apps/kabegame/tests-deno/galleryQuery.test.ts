@@ -18,6 +18,7 @@ import {
   buildAdvancedQueryContextPrefix,
   buildComposableCountPath,
   buildComposablePath,
+  isGallerySearchMode,
   parseComposablePath,
 } from "../src/utils/galleryPath.ts";
 
@@ -92,7 +93,8 @@ Deno.test("序列化：组与 search 收尾使用枢纽游标", () => {
       { is: { search: { mode: "metadata", query: "星空" } } },
       { any: [[{ is: { aspect: { range: "widescreen-16x9-21x9" } } }]] },
     ]),
-    "search/metadata/星空/~any/aspect/widescreen-16x9-21x9/~end",
+    // 双层编码：树体里的 search query 现在也经 percent，不再是裸中文。
+    "search/metadata/%E6%98%9F%E7%A9%BA/~any/aspect/widescreen-16x9-21x9/~end",
   );
 });
 
@@ -422,17 +424,19 @@ Deno.test("简单过滤转高级首行：保留媒体格式与壁纸，noAlbum/e
   }
 });
 
-Deno.test("search 使用 PathQL 段转义并可逆", () => {
+Deno.test("search 使用双层编码（pathql 转义 + percent）并可逆", () => {
+  // 双层编码：先 encodeSeg（`~星空` 前导 `~` 转义为 `\~`），再 percent——
+  // 反斜线与中文都落进传输层，body 里不再出现裸反斜线或裸 `/`。
   const tilde: GalleryAdvancedQuery = [{
     any: [[{ is: { search: { mode: "metadata", query: "~星空" } } }]],
   }];
-  assert(body(tilde).includes("search/metadata/\\~星空"));
+  assert(body(tilde).includes("search/metadata/%5C~%E6%98%9F%E7%A9%BA"));
   assertEquals(roundTrip(tilde), normalizeQuery(tilde));
 
   const slash: GalleryAdvancedQuery = [{
     any: [[{ is: { search: { mode: "metadata", query: "a/b" } } }]],
   }];
-  assert(body(slash).includes("search/metadata/a\\/b"));
+  assert(body(slash).includes("search/metadata/a%5C%2Fb"));
   assertEquals(roundTrip(slash), normalizeQuery(slash));
 });
 
@@ -499,4 +503,56 @@ Deno.test("降解：单条 is 可以还原成简单过滤，或/非/多条件不
     ]),
     null,
   );
+});
+
+const DOUBLE_LAYER_ROUND_TRIP_QUERIES = [
+  "C:\\Users\\me",
+  "https://x.com/a/",
+  "%E8%90%A4",
+  "50%off",
+  "~tilde",
+];
+
+Deno.test("双层编码往返：简单模式 search 原样还原，且不吞后续 tail 段", () => {
+  for (const q of DOUBLE_LAYER_ROUND_TRIP_QUERIES) {
+    const path = buildComposablePath({
+      filters: {},
+      sort: { field: "by-time", desc: false },
+      page: 3,
+      pageSize: 500,
+      search: q,
+      searchMode: "local-path",
+    });
+    const parsed = parseComposablePath(path);
+    assertEquals(parsed.search, q, `search 往返失败: ${q}`);
+    assertEquals(parsed.searchMode, "local-path");
+    assertEquals(parsed.page, 3);
+    assertEquals(parsed.pageSize, 500);
+  }
+});
+
+Deno.test("双层编码往返：高级树 search 原子原样还原", () => {
+  for (const q of DOUBLE_LAYER_ROUND_TRIP_QUERIES) {
+    const tree: GalleryAdvancedQuery = [{ is: { search: { mode: "url", query: q } } }];
+    assertEquals(roundTrip(tree), normalizeQuery(tree), `advanced 往返失败: ${q}`);
+  }
+});
+
+Deno.test("local-path / url 是合法搜索模式，可参与简单路径构建与解析", () => {
+  assert(isGallerySearchMode("local-path"));
+  assert(isGallerySearchMode("url"));
+  assert(!isGallerySearchMode("bogus-mode"));
+
+  for (const mode of ["local-path", "url"] as const) {
+    const path = buildComposablePath({
+      filters: {},
+      sort: { field: "by-time", desc: false },
+      page: 1,
+      search: "关键词",
+      searchMode: mode,
+    });
+    const parsed = parseComposablePath(path);
+    assertEquals(parsed.search, "关键词");
+    assertEquals(parsed.searchMode, mode);
+  }
 });

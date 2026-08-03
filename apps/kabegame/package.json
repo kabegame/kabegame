@@ -21,7 +21,8 @@
     "tauri-plugin-android-battery-optimization-api": "^0.1.0",
     "tauri-plugin-picker-api": "workspace:*",
     "vue": "^3.4.21",
-    "vue-router": "^4.3.0"
+    "vue-router": "^4.3.0",
+    "vant": "^4.9.22"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",

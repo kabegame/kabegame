@@ -2409,9 +2409,8 @@ mod tests {
     }
 
     #[test]
-    fn percent_decode_path_segments() {
-        // 过渡期兜底: 无反斜线的字面段仍在 classify_segment 中 percent-decode。
-        // simulate /vd/i18n-zh_CN/%E6%8C%89%E7%94%BB%E5%86%8C  (UTF-8 percent-encoded "画册")
+    fn percent_encoded_path_segments_remain_literal() {
+        // percent 编码属于传输层；直接调用引擎时应按字面匹配，不在这里解码。
         struct Inner {
             children: Vec<(String, Arc<dyn Provider>)>,
         }
@@ -2435,12 +2434,12 @@ mod tests {
         }
         let leaf: Arc<dyn Provider> = Arc::new(Inner { children: vec![] });
         let root = Arc::new(Inner {
-            children: vec![("按画册".into(), leaf)],
+            children: vec![("%E6%8C%89%E7%94%BB%E5%86%8C".into(), leaf)],
         });
         let runtime = runtime_with_root(root);
         let _ = runtime
             .resolve("test://%E6%8C%89%E7%94%BB%E5%86%8C")
-            .expect("percent-decoded path should resolve");
+            .expect("percent-encoded text should remain a literal path segment");
     }
 
     #[test]

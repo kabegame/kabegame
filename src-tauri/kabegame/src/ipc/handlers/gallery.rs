@@ -1,7 +1,7 @@
 //! Gallery / Provider 命令处理器
 
 use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
-use kabegame_core::providers::{query_entry, query_list};
+use kabegame_core::providers::{decode_provider_path_segments, query_entry, query_list};
 use serde_json::json;
 
 pub async fn handle_gallery_request(req: &IpcRequest) -> Option<IpcResponse> {
@@ -18,7 +18,7 @@ async fn browse_provider(path: &str) -> IpcResponse {
         .trim_end_matches('/')
         .trim_end_matches("/*")
         .to_string();
-    let full = format!("gallery/{}", trimmed);
+    let full = decode_provider_path_segments(&format!("gallery/{}", trimmed));
     let entry = match query_entry(&full) {
         Ok(entry) => entry,
         Err(e) => return IpcResponse::err(e),

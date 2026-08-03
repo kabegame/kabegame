@@ -39,7 +39,7 @@ pub(crate) enum SegmentKind {
     Close,
     /// 未转义的 `~` 前缀保留段。
     Reserved(String),
-    /// 普通路径段 (已解反斜线转义, 或经 percent-decode 过渡兜底)。
+    /// 普通路径段（已解反斜线转义，或无需转义而原样保留）。
     Literal(String),
 }
 
@@ -68,14 +68,9 @@ pub(crate) fn classify_segment(seg: &str) -> SegmentKind {
         "~end" => SegmentKind::Close,
         _ if seg.starts_with('~') => SegmentKind::Reserved(seg.to_string()),
         _ if seg.contains('\\') => SegmentKind::Literal(unescape_path_segment(seg)),
-        _ => {
-            // TODO(Phase 3 收尾): 前端全部迁到反斜线转义后移除本兜底
-            SegmentKind::Literal(
-                percent_encoding::percent_decode_str(seg)
-                    .decode_utf8_lossy()
-                    .into_owned(),
-            )
-        }
+        // percent-decode 过渡兜底已移除：percent 是传输层职责，在 URI 边界
+        // (decode_provider_path_segments / MCP server) 解掉；引擎只认反斜线转义。
+        _ => SegmentKind::Literal(seg.to_string()),
     }
 }
 
@@ -390,10 +385,10 @@ mod tests {
     }
 
     #[test]
-    fn percent_decode_fallback_only_applies_without_backslash() {
+    fn percent_sequences_without_backslash_are_preserved_as_literals() {
         assert_eq!(
             classify_segment("%E7%94%BB"),
-            SegmentKind::Literal("画".into())
+            SegmentKind::Literal("%E7%94%BB".into())
         );
         assert_eq!(
             classify_segment(r"a\%2F"),

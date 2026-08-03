@@ -1108,8 +1108,6 @@ dependencies = [
 [[package]]
 name = "cef"
 version = "149.0.0+149.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bacf8a6a4238b4168d11cf9c98282153035318b4ff63c49b6057d29d90ae53b"
 dependencies = [
  "cef-dll-sys",
  "libloading 0.9.0",
@@ -5801,7 +5799,6 @@ version = "4.4.0"
 dependencies = [
  "arc-swap",
  "json5",
- "percent-encoding",
  "regex",
  "regex-automata",
  "rusqlite",

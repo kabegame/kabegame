@@ -22,10 +22,8 @@
         @error="handleBgMediaError"
       />
     </div>
-    <!-- 全局文件拖拽提示层（仅非安卓平台） -->
-    <FileDropOverlay v-if="!uiStore.isCompact" ref="fileDropOverlayRef" @click="handleOverlayClick" />
-    <!-- 文件拖拽导入确认弹窗（仅非安卓平台） -->
-    <ImportConfirmDialog v-if="!uiStore.isCompact" ref="importConfirmDialogRef" />
+    <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
+    <FileDropOverlay ref="fileDropOverlayRef" />
     <!-- 外部插件导入弹窗 -->
     <PluginImportDialog
       :visible="importDialog.isOpen.value"
@@ -90,7 +88,7 @@
             </el-menu-item>
             <el-menu-item index="/plugins">
               <el-icon>
-                <Grid />
+                <FilterPlugin />
               </el-icon>
               <span>{{ $t('route.pluginBrowser') }}</span>
             </el-menu-item>
@@ -172,7 +170,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { zhCn, en, zhTw, ja, ko } from "@kabegame/element-plus/locale";
-import { Picture, Grid, Setting, Collection, Compass, AlarmClock } from "@kabegame/element-plus-icons";
+import { Picture, FilterPlugin, Setting, Collection, Compass, AlarmClock } from "@kabegame/element-plus-icons";
 import appLogoUrl from "@/assets/icon-small.png";
 import { setSettingsQueryAdapter, useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -184,7 +182,6 @@ import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { useCrawlerDrawerStore } from "./stores/crawlerDrawer";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
-import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
 import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
@@ -269,7 +266,7 @@ const bottomTabs = computed(() => {
   return [
     { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
     { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
-    { index: "/plugins", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
+    { index: "/plugins", icon: FilterPlugin, label: i18n.global.t("route.pluginBrowser") },
   ];
 });
 
@@ -321,7 +318,6 @@ const modalStack = useModalStackStore();
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<any>(null);
-const importConfirmDialogRef = ref<any>(null);
 
 // 外部导入插件对话框
 const importDialog = useModal();
@@ -348,7 +344,7 @@ const { init: initWindowEvents } = useWindowEvents();
 useMainCloseGuard();
 
 // 文件拖拽
-const { init: initFileDrop, handleOverlayClick } = useFileDrop(fileDropOverlayRef, importConfirmDialogRef);
+const { init: initFileDrop } = useFileDrop(fileDropOverlayRef);
 
 // 侧边栏
 const { isCollapsed, toggleCollapse } = useSidebar();
@@ -1043,144 +1039,6 @@ body,
   &::-webkit-scrollbar {
     display: none;
     /* Chrome, Safari, Opera */
-  }
-}
-
-// 文件拖拽确认对话框样式
-.file-drop-confirm-dialog {
-  .import-confirm-content {
-    max-width: 500px;
-
-    .import-summary {
-      margin-bottom: 20px;
-
-      p {
-        margin-bottom: 12px;
-        font-size: 16px;
-        color: var(--anime-text-primary);
-
-        strong {
-          color: var(--anime-primary);
-          font-weight: 600;
-        }
-      }
-
-      .summary-stats {
-        display: flex;
-        gap: 20px;
-        font-size: 14px;
-        color: var(--anime-text-secondary);
-
-        strong {
-          color: var(--anime-primary);
-          font-weight: 600;
-        }
-      }
-    }
-
-    .import-options {
-      margin: 8px 0 14px 0;
-      padding: 10px 12px;
-      border: 1px dashed var(--anime-border);
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.35);
-
-      .import-option {
-        color: var(--anime-text-primary);
-        font-size: 14px;
-      }
-    }
-
-    .import-list {
-      max-height: 400px;
-      overflow-y: auto;
-      border: 1px solid var(--anime-border);
-      border-radius: 12px;
-      padding: 12px;
-      background: var(--anime-bg-card);
-
-      .import-item {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 10px 12px;
-        margin-bottom: 8px;
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.5);
-        transition: all 0.2s ease;
-
-        &:last-child {
-          margin-bottom: 0;
-        }
-
-        &:hover {
-          background: rgba(255, 107, 157, 0.1);
-          transform: translateX(4px);
-        }
-
-        .item-icon {
-          font-size: 20px;
-          flex-shrink: 0;
-        }
-
-        .item-name {
-          flex: 1;
-          font-size: 14px;
-          color: var(--anime-text-primary);
-          font-weight: 500;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .item-type {
-          font-size: 12px;
-          color: var(--anime-text-secondary);
-          padding: 4px 8px;
-          background: rgba(167, 139, 250, 0.1);
-          border-radius: 6px;
-          flex-shrink: 0;
-        }
-      }
-    }
-  }
-}
-
-// 覆盖：拖入项目过多时，确认弹窗不应撑满屏幕；列表区域滚动即可
-::deep(.file-drop-confirm-dialog) {
-  // 限制整个 MessageBox 的最大高度
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-
-  .el-message-box__content {
-    max-height: none;
-    overflow: visible;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .el-message-box__message {
-    max-height: none;
-    overflow: visible;
-  }
-
-  .import-confirm-content {
-    max-height: 60vh;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .import-confirm-content .summary-stats {
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-
-  .import-confirm-content .import-list {
-    flex: 1;
-    min-height: 160px;
-    max-height: 45vh;
-    overflow-y: auto;
   }
 }
 

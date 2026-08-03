@@ -10,6 +10,7 @@ import {
   type GallerySearchMode,
   type GallerySort,
 } from "@/utils/galleryPath";
+import type { GalleryAdvancedQuery } from "@/utils/galleryQuery";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -24,6 +25,8 @@ export function rememberSurfImagesSearchMode(mode: GallerySearchMode): void {
 type SurfImagesRouteState = {
   host: string;
   filters: GalleryFilterSet;
+  /** 高级查询树；与 filters 在路由上互斥（见 GalleryQueryBar） */
+  advanced: GalleryAdvancedQuery | undefined;
   sort: GallerySort;
   page: number;
   pageSize: number;
@@ -36,6 +39,7 @@ function createDefaultState(): SurfImagesRouteState {
   return {
     host: "",
     filters: {},
+    advanced: undefined,
     sort: { field: "by-time", desc: false },
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? DEFAULT_PAGE_SIZE,
@@ -58,6 +62,7 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
       return {
         host,
         filters: parsed.filters,
+        advanced: parsed.advanced,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
@@ -69,6 +74,7 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
       buildComposablePath({
         rootPrefix: `surf/${state.host}`,
         filters: state.filters,
+        advanced: state.advanced,
         sort: state.sort,
         page: state.page,
         pageSize: state.pageSize,

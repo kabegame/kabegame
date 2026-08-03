@@ -2,7 +2,7 @@
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <div class="gallery-content-layout">
-        <div class="gallery-grid-pane">
+        <div class="gallery-grid-pane" v-drag-file="dropZone">
           <ImageGrid
             ref="galleryViewRef"
             :surface="surface"
@@ -21,12 +21,7 @@
                 :provider-context-prefix="galleryRouteStore.computedContextPath"
                 @refresh="handleManualRefresh"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
-                @open-collect-menu="handleOpenCollectMenu"
-                @update:filters="(filters) => galleryRouteStore.navigate({ filters, advanced: undefined, page: 1 }, { push: true })"
-                @update:sort="(sort) => galleryRouteStore.navigate({ sort })"
-                @update:pageSize="(ps) => galleryRouteStore.navigate({ page: 1, pageSize: ps })"
-                @update:search="(s) => galleryRouteStore.navigate({ page: 1, search: s })"
-                @update:searchMode="(m) => { rememberGallerySearchMode(m); galleryRouteStore.navigate({ page: 1, searchMode: m }); }" />
+                @open-collect-menu="handleOpenCollectMenu" />
 
               <!-- 大页分页器 -->
               <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage" :big-page-size="pageSize"
@@ -103,7 +98,7 @@ import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import * as organizeService from "@/services/organize";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { createGallerySurface } from "@/components/imageGrid/surfaces/gallery";
-import { useGalleryRouteStore, rememberGallerySearchMode } from "@/stores/galleryRoute";
+import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { newRandomSortSeed } from "@/utils/galleryPath";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
@@ -112,6 +107,9 @@ import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
+import { useTaskDrawerStore } from "@/stores/taskDrawer";
+import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
+import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -191,6 +189,40 @@ const onOrganizeConfirm = (options: OrganizeOptions) => {
   organizeStore.closeDialog();
   void organizeService.start(options);
 };
+
+// ---------- 区域级文件拖入（画廊网格区域）----------
+const taskDrawerStore = useTaskDrawerStore();
+
+const dropZone = computed<DragFileOptions>(() => ({
+  plan: (items: DragFileItem[]): DragFilePlan | null => {
+    const media = items.filter((i) => !i.isDirectory && (i.isImage || i.isVideo));
+    const folders = items.filter((i) => i.isDirectory);
+    if (media.length === 0 && folders.length === 0) return null;
+    const label =
+      media.length > 0 && folders.length > 0
+        ? t("import.dropZone.galleryMixed", { count: media.length, folders: folders.length })
+        : media.length > 0
+          ? t("import.dropZone.galleryMedia", { count: media.length })
+          : t("import.dropZone.galleryFolders", { count: folders.length });
+    return { label, media, folders, plugins: [] };
+  },
+  onDrop: async (plan: DragFilePlan) => {
+    if (plan.media.length > 0) {
+      const ok = await crawlerStore.addTask("local-import", undefined, {
+        paths: plan.media.map((m) => m.path),
+        recursive: false,
+      });
+      if (ok) {
+        taskDrawerStore.open();
+        ElMessage.success(t("import.addedLocalImport"));
+      } else {
+        ElMessage.error(t("import.fileDropFailed"));
+      }
+    }
+    // 画廊拖入的文件夹建成根级同步画册
+    await createFolderAlbumsFromDrag(plan.folders, null);
+  },
+}));
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
@@ -336,40 +368,6 @@ onMounted(async () => {
     return;
   }
   listenersCreated.value = true;
-
-  // 监听 App.vue 发送的文件拖拽事件（仅 Tauri 桌面）
-  if (!IS_ANDROID && !IS_WEB) {
-    const handleFileDrop = async (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        path: string;
-        isDirectory: boolean;
-        outputDir: string;
-      }>;
-
-      const { path } = customEvent.detail;
-
-      try {
-        // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
-        const currentRoutePath = router.currentRoute.value.path;
-        if (currentRoutePath !== '/gallery') {
-          await router.push({ path: "/gallery", query: { path: "全部" } });
-          await nextTick();
-          // 再等待一下确保组件已激活
-          await new Promise(resolve => setTimeout(resolve, 200));
-        }
-
-        crawlerStore.addTask("local-import", undefined, {
-          paths: [path],
-          recursive: true,
-        });
-        ElMessage.success(t("gallery.localImportTaskAdded"));
-      } catch (error) {
-        console.error('[Gallery] 处理文件拖拽事件失败:', error);
-        ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));
-      }
-    };
-    window.addEventListener('file-drop', handleFileDrop);
-  }
 });
 </script>
 

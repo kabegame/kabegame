@@ -1,51 +1,58 @@
-import { ref, Ref, onUnmounted } from "vue";
+import { Ref, onUnmounted } from "vue";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@/api/rpc";
-import FileDropOverlay from "@/components/FileDropOverlay.vue";
-import ImportConfirmDialog from "@/components/import/ImportConfirmDialog.vue";
-import { useTaskDrawerStore } from "@/stores/taskDrawer";
-import { useCrawlerStore } from "@/stores/crawler";
+import {
+  DragFileItem,
+  DragFilePlan,
+  DragFileZone,
+  hitTestDragZone,
+} from "@/directives/dragFile";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
 
 /** 后端根据路径推断类型（扩展名 + infer），用于拖入文件分类 */
-interface FileDropKindItem {
-  path: string;
-  isDirectory: boolean;
-  isImage: boolean;
-  isVideo: boolean;
-  isKgpg: boolean;
-}
-
-const getFileDropKinds = async (paths: string[]): Promise<FileDropKindItem[]> => {
+const getFileDropKinds = async (paths: string[]): Promise<DragFileItem[]> => {
   if (paths.length === 0) return [];
-  return invoke<FileDropKindItem[]>("get_file_drop_kinds", { paths });
+  return invoke<DragFileItem[]>("get_file_drop_kinds", { paths });
 };
 
-export interface ImportItem {
-  path: string;
-  name: string;
-  isDirectory: boolean;
-  isKgpg?: boolean;
-  isVideo?: boolean;
-}
+/** 本次拖放会话（enter → drop/leave 期间有效），跨多次 over 事件复用探测结果 */
+let sessionPaths: string[] | null = null;
+let sessionItems: DragFileItem[] | null = null;
+/** over 阶段命中的热区与其 plan 缓存，避免同一热区内重复计算 */
+let lastZone: DragFileZone | null = null;
+let lastPlan: DragFilePlan | null = null;
+
+const clearSession = () => {
+  sessionPaths = null;
+  sessionItems = null;
+  lastZone = null;
+  lastPlan = null;
+};
+
+/** 坐标换算：Tauri 事件 position 是物理像素，DOM rect 是 CSS 像素 */
+const toCss = (p: { x: number; y: number }) => {
+  const r = window.devicePixelRatio || 1;
+  return { x: p.x / r, y: p.y / r };
+};
+
+const resolveZone = (p: { x: number; y: number }) => {
+  const css = toCss(p);
+  // 兜底：多显示器不同缩放时，Rust 侧用的是主显示器的 scale factor，
+  // 换算可能偏；按 CSS 坐标全 miss 时再用原始物理值重试一次。
+  return hitTestDragZone(css.x, css.y) ?? hitTestDragZone(p.x, p.y);
+};
 
 /**
- * 文件拖拽 composable
+ * 文件拖拽 composable：路由层。
+ * 只做类型探测 + 落点命中，具体接不接、导入什么行为下沉到各热区（v-drag-file）自己决定。
  */
-export function useFileDrop(
-  fileDropOverlayRef: Ref<any>,
-  importConfirmDialogRef: Ref<any>,
-) {
-  const taskDrawerStore = useTaskDrawerStore();
-  const crawlerStore = useCrawlerStore();
-
+export function useFileDrop(fileDropOverlayRef: Ref<any>) {
   let fileDropUnlisten: (() => void) | null = null;
   let currentWindow: ReturnType<typeof getCurrentWebviewWindow> | null = null;
-  let isOverlayVisible = false; // 跟踪遮罩是否显示
 
-  // 辅助函数：将窗口带到前台并聚焦（只置顶一次，不设置 alwaysOnTop）
+  // 将窗口带到前台并聚焦（只在 enter 时调一次，避免每个 over 都发一次 IPC）
   const bringWindowToFront = async () => {
     if (!currentWindow) {
       currentWindow = getCurrentWebviewWindow();
@@ -63,196 +70,96 @@ export function useFileDrop(
       return;
     }
 
-    // 注册全局文件拖拽事件监听（使用 onDragDropEvent，根据 Tauri v2 文档）
     try {
       currentWindow = getCurrentWebviewWindow();
-      
+
       fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
         if (event.payload.type === "enter") {
-          // 文件/文件夹进入窗口时，显示视觉提示（后端按路径推断类型：扩展名 + infer）
-          const paths = event.payload.paths;
-          if (paths && paths.length > 0) {
-            try {
-              const kinds = await getFileDropKinds(paths.slice(0, 1));
-              const first = kinds[0];
-              const t = (key: string, params?: Record<string, string>) =>
-                params ? i18n.global.t(key, params) : i18n.global.t(key);
-              let text = t("import.dropFileToImport");
-              let isImportable = false;
-
-              if (first) {
-                if (first.isDirectory) {
-                  text = t("import.dropFolderToImport");
-                  isImportable = true;
-                } else if (first.isKgpg) {
-                  text = t("import.dropPluginToImport");
-                  isImportable = true;
-                } else if (first.isImage) {
-                  isImportable = true;
-                  text = t("import.dropImageToImport");
-                } else if (first.isVideo) {
-                  isImportable = true;
-                  text = t("import.dropVideoToImport");
-                }
-                // unsupported file type: no overlay shown
-              }
-
-              if (isImportable) {
-                fileDropOverlayRef.value?.show(text);
-                isOverlayVisible = true;
-                await bringWindowToFront();
-              }
-            } catch (error) {
-              // Don't show overlay on error — we don't know if the file is importable.
-            }
+          // enter 的 position 恒为 (0,0)，不可信，这里只做全量类型探测，不命中、不显示浮层
+          const paths = event.payload.paths ?? [];
+          try {
+            sessionItems = await getFileDropKinds(paths);
+            sessionPaths = paths;
+          } catch (error) {
+            sessionItems = null;
+            sessionPaths = null;
           }
+          lastZone = null;
+          lastPlan = null;
+          await bringWindowToFront();
         } else if (event.payload.type === "over") {
-          // 文件/文件夹在窗口上移动时，保持显示提示并将窗口带到前台
-          // over 事件只有 position，没有 paths，但遮罩已经在 enter 时显示
-          // 如果遮罩正在显示，说明文件是可导入的，保持窗口在前台
-          if (isOverlayVisible) {
-            await bringWindowToFront();
+          if (!sessionItems) return;
+
+          const zone = resolveZone(event.payload.position);
+          if (!zone) {
+            if (lastZone) {
+              fileDropOverlayRef.value?.hide();
+              lastZone = null;
+              lastPlan = null;
+            }
+            return;
+          }
+
+          if (zone.el !== lastZone?.el) {
+            lastZone = zone;
+            lastPlan = zone.options.plan(sessionItems);
+          }
+
+          if (lastPlan) {
+            fileDropOverlayRef.value?.show({
+              rect: zone.rect(),
+              label: lastPlan.label,
+              hint: lastPlan.hint,
+            });
+          } else {
+            fileDropOverlayRef.value?.hide();
           }
         } else if (event.payload.type === "drop") {
-          // 隐藏视觉提示
           fileDropOverlayRef.value?.hide();
-          isOverlayVisible = false;
+          lastZone = null;
+          lastPlan = null;
 
-          const droppedPaths = event.payload.paths;
-          if (droppedPaths && droppedPaths.length > 0) {
+          const droppedPaths = event.payload.paths ?? [];
+          let items = sessionItems;
+          const pathsChanged =
+            !sessionPaths ||
+            droppedPaths.length !== sessionPaths.length ||
+            droppedPaths.some((p, i) => p !== sessionPaths![i]);
+          if (pathsChanged) {
             try {
-              // 后端根据路径推断类型（扩展名 + infer），一次调用得到所有分类
-              const kinds = await getFileDropKinds(droppedPaths);
-              const items: ImportItem[] = [];
-
-              for (const k of kinds) {
-                const pathParts = k.path.split(/[/\\]/);
-                const name = pathParts[pathParts.length - 1] || k.path;
-
-                if (k.isDirectory) {
-                  items.push({
-                    path: k.path,
-                    name,
-                    isDirectory: true,
-                    isKgpg: false,
-                  });
-                } else if (k.isImage || k.isVideo || k.isKgpg) {
-                  items.push({
-                    path: k.path,
-                    name: k.isKgpg ? `${name}${i18n.global.t("import.pluginPackageSuffix")}` : name,
-                    isDirectory: false,
-                    isKgpg: k.isKgpg,
-                    isVideo: k.isVideo,
-                  });
-                } else {
-                  console.log("[App] 跳过不支持的文件:", k.path);
-                }
-              }
-
-              if (items.length === 0) {
-                ElMessage.warning(i18n.global.t("import.noImportableFound"));
-                return;
-              }
-
-              const confirmed = (await importConfirmDialogRef.value?.open(items)) !== null;
-              if (!confirmed) {
-                // 用户取消
-                console.log("[App] 用户取消导入");
-                return;
-              }
-
-              // 用户确认，开始导入
-              console.log("[App] 用户确认导入，开始添加任务");
-
-              const kgpgItems = items.filter((it) => it.isKgpg);
-              const localImportItems = items.filter((it) => !it.isKgpg);
-              const hasCrawlerImport = localImportItems.length > 0;
-              // 只有存在"图片/视频/文件夹导入任务"时才打开任务抽屉；仅导入 kgpg 时避免打扰
-              if (hasCrawlerImport) {
-                try {
-                  taskDrawerStore.open();
-                } catch {
-                  // ignore
-                }
-              }
-
-              // 关键：不要在拖拽回调里长时间串行 await；放到后台任务并分批让出 UI
-              void (async () => {
-                let importedPluginCount = 0;
-
-                // kgpg：逐个导入插件
-                for (const item of kgpgItems) {
-                  try {
-                    await invoke("import_plugin_from_zip", {
-                      zipPath: item.path,
-                    });
-                    importedPluginCount++;
-                    console.log("[App] 已导入插件包:", item.path);
-                  } catch (error) {
-                    console.error("[App] 导入插件失败:", item.path, error);
-                    ElMessage.error(
-                      `${i18n.global.t("import.importPluginFailed")}: ${item.name}`,
-                    );
-                  }
-                }
-
-                // 本地导入：单一任务，所有路径
-                if (localImportItems.length > 0) {
-                  const allPaths = localImportItems.map((it) => it.path);
-                  crawlerStore.addTask(
-                    "local-import",
-                    undefined,
-                    {
-                      paths: allPaths,
-                      recursive: true,
-                    },
-                  );
-                  console.log("[App] 已添加本地导入任务:", allPaths.length, "个路径");
-                }
-
-
-                if (localImportItems.length > 0 && importedPluginCount > 0) {
-                  ElMessage.success(
-                    i18n.global.t("import.addedLocalImportAndPlugins", {
-                      count: String(importedPluginCount),
-                    }),
-                  );
-                } else if (localImportItems.length > 0) {
-                  ElMessage.success(i18n.global.t("import.addedLocalImport"));
-                } else if (importedPluginCount > 0) {
-                  ElMessage.success(
-                    i18n.global.t("import.importedPluginsCount", {
-                      count: String(importedPluginCount),
-                    }),
-                  );
-                } else {
-                  ElMessage.info(i18n.global.t("import.nothingToImport"));
-                }
-              })();
+              items = await getFileDropKinds(droppedPaths);
             } catch (error) {
-              console.error("[App] 处理文件拖入失败:", error);
-              ElMessage.error(
-                `${i18n.global.t("import.fileDropFailed")}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
+              items = null;
             }
           }
+
+          const zone = resolveZone(event.payload.position);
+          const plan = zone && items ? zone.options.plan(items) : null;
+          clearSession();
+
+          if (!zone || !plan) {
+            ElMessage.info(i18n.global.t("import.dropUnsupportedHere"));
+            return;
+          }
+
+          try {
+            await zone.options.onDrop(plan);
+          } catch (error) {
+            console.error("[FileDrop] 处理文件拖入失败:", error);
+            ElMessage.error(
+              `${i18n.global.t("import.fileDropFailed")}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
         } else if (event.payload.type === "leave") {
-          // 文件/文件夹离开窗口时，隐藏提示
           fileDropOverlayRef.value?.hide();
-          isOverlayVisible = false;
+          clearSession();
         }
       });
     } catch (error) {
-      console.error("[App] 注册文件拖拽事件监听失败:", error);
+      console.error("[FileDrop] 注册文件拖拽事件监听失败:", error);
     }
-  };
-
-  // 处理遮罩点击关闭
-  const handleOverlayClick = async () => {
-    fileDropOverlayRef.value?.hide();
-    isOverlayVisible = false;
   };
 
   const cleanup = () => {
@@ -270,6 +177,5 @@ export function useFileDrop(
   return {
     init,
     cleanup,
-    handleOverlayClick,
   };
 }

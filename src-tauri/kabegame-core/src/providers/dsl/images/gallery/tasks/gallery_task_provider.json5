@@ -16,7 +16,7 @@
         "filter_comb": {
             "provider": "gallery_filter_comb"
         },
-        "all|wallpaper-order|no-album|name|names|plugin|plugins|media-type|date|dates|sort|size|aspect|dimension|dimensions": {
+        "all|wallpaper-order|no-album|name|names|plugin|plugins|media-type|date|dates|search|sort|size|aspect|dimension|dimensions": {
             "delegate": { "provider": "gallery_route" },
             "child_var": "child",
             "provider": "${child.provider}",

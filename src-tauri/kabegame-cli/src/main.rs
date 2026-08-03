@@ -1438,7 +1438,8 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
     }
 
     for (path, raw) in &assets {
-        if !referenced.contains(path) {
+        // banner 图是走马灯橱窗图，本就不进 md，别为它报「未被引用」的噪音
+        if !referenced.contains(path) && !core_plugin::assets::is_banner_asset(path) {
             eprintln!(
                 "[WARN] kbAssets 声明但未被任何 kbDoc / kbChangelog 引用（允许预留）: \
                  {raw:?} → {path:?}"

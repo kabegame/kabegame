@@ -42,6 +42,7 @@
   "deleteSuccess": "已删除",
   "deleteFailed": "删除失败",
   "surfImagesTitle": "畅游图片",
+  "surfImagesEmptyTip": "打开畅游，右键图片、视频，就会出现在这里",
   "confirmDelete": "确认删除",
   "removeText": "删除",
   "operationFailed": "操作失败",

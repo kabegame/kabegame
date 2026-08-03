@@ -42,6 +42,7 @@
   "deleteSuccess": "삭제됨",
   "deleteFailed": "삭제 실패",
   "surfImagesTitle": "서핑 이미지",
+  "surfImagesEmptyTip": "서핑을 열고 이미지·동영상을 우클릭하면 여기에 표시돼요",
   "confirmDelete": "삭제 확인",
   "removeText": "삭제",
   "operationFailed": "작업 실패",

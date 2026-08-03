@@ -1,0 +1,23 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_search_url_query_provider",
+    "properties": {
+        "query": { "type": "string", "default": "", "optional": false }
+    },
+    // where 数组 = OR（RULES §3.3）：直链 url 或来源页 post_url 任一命中即可。
+    // is_search_dummy_url 对 NULL 也返回 1，不必再写 IS NOT NULL。
+    "query": {
+        "where": [
+            "is_search_dummy_url(images.url) = 0 AND LOWER(images.url) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'",
+            "is_search_dummy_url(images.post_url) = 0 AND LOWER(images.post_url) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
+        ]
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

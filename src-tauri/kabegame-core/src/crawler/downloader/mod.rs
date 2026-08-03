@@ -23,6 +23,24 @@ use url::Url;
 pub const DATA_URI_PLACEHOLDER: &str = "data:dummy";
 pub const TASK_VFS_URI_PLACEHOLDER: &str = "task-vfs://placeholder";
 
+/// 本地导入图片的 url 前缀。**去重集合不含它** —— 本地导入正是靠 url 去重。
+pub const LOCAL_FILE_URI_PREFIX: &str = "file://";
+
+/// 去重语义：`find_image_by_url` 使用。
+pub fn is_dedup_dummy_url(url: &str) -> bool {
+    url.is_empty()
+        || url == DATA_URI_PLACEHOLDER
+        || url == TASK_VFS_URI_PLACEHOLDER
+        || url.starts_with("blob:")
+}
+
+/// 搜索语义：url 搜索维度使用 = 去重集合 **+ file://**。
+/// 两套刻意分开：去重必须认 file://（本地导入去重的依据），搜索必须排除它
+/// （否则“按 URL”会把全部本地导入图捞出来，且那串路径与 local-path 维度重复）。
+pub fn is_search_dummy_url(url: &str) -> bool {
+    is_dedup_dummy_url(url) || url.starts_with(LOCAL_FILE_URI_PREFIX)
+}
+
 pub mod compress;
 #[cfg(target_os = "android")]
 mod content;

@@ -1,5 +1,5 @@
 <template>
-  <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts">
+  <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
     <div
       v-if="showAlbumDetailTabs && activeAlbumDetailTab === 'subAlbums'"
       ref="albumSubAlbumsScrollRef"
@@ -126,27 +126,28 @@
           </el-breadcrumb>
         </nav>
 
-        <KbTab v-if="showAlbumDetailTabs" v-model="activeAlbumDetailTab" :items="albumDetailTabItems"
-          class="album-detail-tabs" />
-
-        <GalleryFilters
+        <GalleryQueryBar
           ref="albumBrowseToolbarRef"
           :filters="albumDetailRouteStore.filters"
+          :advanced="albumDetailRouteStore.advanced"
           :sort="albumDetailRouteStore.sort"
+          :page="albumDetailRouteStore.page"
           :page-size="gridPageSize"
           :search="search"
           :search-mode="searchMode"
           :provider-context-prefix="albumDetailRouteStore.computedContextPath"
+          :context-base="albumDetailRouteStore.contextPathFor({ search: '' })"
           :filter-features="albumFilterFeatures"
           :sort-features="albumSortFeatures"
-          enable-search
-          enable-page-size
-          @update:filters="(f) => albumDetailRouteStore.navigate({ filters: f, page: 1 })"
-          @update:sort="(s) => albumDetailRouteStore.navigate({ sort: s })"
-          @update:page-size="(ps) => albumDetailRouteStore.navigate({ page: 1, pageSize: ps })"
-          @update:search="(s) => albumDetailRouteStore.navigate({ page: 1, search: s })"
-          @update:searchMode="(m) => { rememberAlbumDetailSearchMode(m); albumDetailRouteStore.navigate({ page: 1, searchMode: m }); }"
-        />
+          enable-clear-all
+          @navigate="onQueryNavigate"
+        >
+          <!-- 「图片 / 子画册」与过滤模式同属「看哪一批」，并进查询行首，不再单占一行 -->
+          <template #leading>
+            <KbTab v-if="showAlbumDetailTabs" v-model="activeAlbumDetailTab" :items="albumDetailTabItems"
+              class="album-detail-tabs album-detail-tabs--inline" />
+          </template>
+        </GalleryQueryBar>
 
         <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
           :big-page-size="gridPageSize" :is-sticky="true" @jump-to-page="jumpToPage" />
@@ -236,8 +237,12 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
-import GalleryFilters from "@/components/GalleryFilters.vue";
-import type { GalleryFilterDimension, GallerySortField } from "@/utils/galleryPath";
+import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
+import type {
+  GalleryFilterDimension,
+  GalleryQueryPatch,
+  GallerySortField,
+} from "@/utils/galleryPath";
 import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
@@ -257,6 +262,10 @@ import {
 } from "@/utils/albumMediaTree";
 import { syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
 import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
+import { useCrawlerStore } from "@/stores/crawler";
+import { useTaskDrawerStore } from "@/stores/taskDrawer";
+import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
+import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
 
 // ---------- Component setup ----------
 const route = useRoute();
@@ -318,6 +327,12 @@ const albumBrowseToolbarRef = ref<{
   openSortPicker: () => void;
   openPageSizePicker: () => void;
 } | null>(null);
+
+/** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
+const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
+  if (patch.searchMode) rememberAlbumDetailSearchMode(patch.searchMode);
+  void albumDetailRouteStore.navigate(patch, options);
+};
 const albumContainerRef = ref<HTMLElement | null>(null);
 
 // grid 卸载（子画册 tab）时保留最后一次总数，供 header / tab label 显示
@@ -997,6 +1012,9 @@ const initAlbum = async (newAlbumId: string) => {
     await albumDetailRouteStore.navigate({
       albumId: newAlbumId,
       filters: {},
+      // 简单过滤既然清空，高级树也要一起清：换画册就是换数据源，
+      // 留着上一个画册的查询会让新画册一进来就是「空」。
+      advanced: undefined,
       sort: { field: "by-album-order", desc: false },
       page: 1,
     });
@@ -1150,6 +1168,51 @@ const handleDeleteAlbum = async () => {
   }
 };
 
+// ---------- 区域级文件拖入（整个画册详情页）----------
+const crawlerStore = useCrawlerStore();
+const taskDrawerStore = useTaskDrawerStore();
+
+const dropZone = computed<DragFileOptions>(() => ({
+  plan: (items: DragFileItem[]): DragFilePlan | null => {
+    // local_folder / 收藏 / 隐藏三类画册不允许手工拖入加图：
+    // local_folder 会被下一次后台 sync 覆写，收藏/隐藏有专门语义
+    const id = albumId.value;
+    if (!id || isLocalFolderDetail.value || id === FAVORITE_ALBUM_ID || id === HIDDEN_ALBUM_ID) return null;
+
+    const media = items.filter((i) => !i.isDirectory && (i.isImage || i.isVideo));
+    const folders = items.filter((i) => i.isDirectory);
+    if (media.length === 0 && folders.length === 0) return null;
+    const album = albumName.value;
+    const label =
+      media.length > 0 && folders.length > 0
+        ? t("import.dropZone.albumMixed", { count: media.length, album, folders: folders.length })
+        : media.length > 0
+          ? t("import.dropZone.albumMedia", { count: media.length, album })
+          : t("import.dropZone.albumFolders", { count: folders.length, album });
+    return { label, media, folders, plugins: [] };
+  },
+  onDrop: async (plan: DragFilePlan) => {
+    const id = albumId.value;
+    if (!id) return;
+    if (plan.media.length > 0) {
+      const ok = await crawlerStore.addTask(
+        "local-import",
+        undefined,
+        { paths: plan.media.map((m) => m.path), recursive: false },
+        id,
+      );
+      if (ok) {
+        taskDrawerStore.open();
+        ElMessage.success(t("import.addedLocalImport"));
+      } else {
+        ElMessage.error(t("import.fileDropFailed"));
+      }
+    }
+    // 拖入的文件夹建成当前画册的子画册
+    await createFolderAlbumsFromDrag(plan.folders, id);
+  },
+}));
+
 // ---------- Event-driven refresh（子画册预览维度）----------
 // 本画册页面自身的 images-change / album-images-change 刷新由 ImageGrid（surface adapter）
 // 接管；这里只保留子画册预览的刷新——它属于 view 状态，且需要在 grid 卸载
@@ -1241,6 +1304,11 @@ onDeactivated(() => {
   margin-bottom: 12px;
 }
 
+/* 并进查询行首时不再自带行距，靠该行的 gap 与其它 chip 对齐 */
+.album-detail-tabs--inline {
+  margin-bottom: 0;
+}
+
 .child-albums-view {
   padding-right: 2px;
 }
@@ -1286,6 +1354,10 @@ onDeactivated(() => {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    /* 与图片分支的滚动容器（anime-theme.css 里 `.album-detail .detail-body` 为图片
+       hover 上移留的 6px）对齐：两支不一致时切换选项卡整个 header 会上下跳 6px。 */
+    padding-top: 6px;
+    padding-bottom: 6px;
   }
 
   .album-detail-scroll.hide-scrollbar {

@@ -76,7 +76,7 @@ deno task package --only <id1> <id2>     # 多选
 清单未引用的文件会被**静默丢弃**，不会提示。文档与更新日志资源应显式写进 `kbAssets` 数组，数组项与 Markdown 本地资源引用都使用插件根相对路径（如 `images/home.png`）。Markdown 引用了但未声明会硬报错；声明但未引用只警告。字段缺失或空数组都表示零资源。
 :::
 
-`kbAssets` 项必须存在且为 jpg/jpeg/png/gif/webp/bmp；单文件超过 2 MB 会硬报错，总体积超过 10 MB 会警告。`.kabegameignore` 不能排除 `kbDoc`、`kbChangelog` 或 `kbAssets` 明确引用的关键文件。
+`kbAssets` 项必须存在且为 jpg/jpeg/png/gif/webp/bmp；单文件超过 2 MB 会硬报错，总体积超过 10 MB 会警告。文件名以 `banner` 开头的项是**橱窗图**（进插件卡片快捷预览走马灯），不必被 Markdown 引用，也不触发「声明但未引用」警告。`.kabegameignore` 不能排除 `kbDoc`、`kbChangelog` 或 `kbAssets` 明确引用的关键文件。
 
 ### 输出
 

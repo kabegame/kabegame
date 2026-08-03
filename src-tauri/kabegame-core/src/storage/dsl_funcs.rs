@@ -10,6 +10,7 @@
 //! - `crawled_at_seconds(timestamp)` → 规整秒/毫秒时间戳。
 //! - `name_language_bucket(name)` / `name_language_rank(bucket)` → 名称语言分桶与排序。
 //! - `kb_rand(seed, id)` → 基于 SplitMix64 finalizer 的确定性随机排序值。
+//! - `is_search_dummy_url(url)` → url 搜索维度的占位/本地 url 判定。
 //!
 //! 约束: host SQL function 不得访问当前 Storage/SQLite 连接。数据库中可查的数据应直接写
 //! SQL；否则会在 `KabegameSqlExecutor` 持有连接 mutex 期间重入同一把锁。
@@ -63,7 +64,27 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_crawled_at_seconds(conn)?;
     register_vd_display_name(conn)?;
     register_name_language_functions(conn)?;
+    register_is_search_dummy_url(conn)?;
     Ok(())
+}
+
+/// `is_search_dummy_url(url)` — url 搜索维度的占位/本地 url 判定。
+/// 1 = dummy（应排除），0 = 真实来源 url。**NULL 也判 1**，让 DSL 侧一句
+/// `is_search_dummy_url(x) = 0` 同时吃掉 NULL 与占位值，不必再写 IS NOT NULL。
+fn register_is_search_dummy_url(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.create_scalar_function(
+        "is_search_dummy_url",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            // 必须用 get_raw：ctx.get::<String>(0) 遇 NULL 会直接报错。
+            let ValueRef::Text(bytes) = ctx.get_raw(0) else {
+                return Ok(1);
+            };
+            let url = String::from_utf8_lossy(bytes);
+            Ok(crate::crawler::downloader::is_search_dummy_url(url.trim()) as i64)
+        },
+    )
 }
 
 /// 返回固定 seed 与 id 对应的确定性随机排序值。
@@ -298,6 +319,23 @@ mod tests {
     #[test]
     fn kb_rand_changes_with_seed() {
         assert_ne!(kb_rand_value(42, 7), kb_rand_value(43, 7));
+    }
+
+    #[test]
+    fn search_dummy_url_function_handles_null_placeholders_and_real_urls() {
+        let conn = Connection::open_in_memory().unwrap();
+        register_is_search_dummy_url(&conn).unwrap();
+        let values: (i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT is_search_dummy_url(NULL), \
+                        is_search_dummy_url('file:///a/b.png'), \
+                        is_search_dummy_url('https://x/a.png'), \
+                        is_search_dummy_url('blob:https://x/1')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(values, (1, 1, 0, 1));
     }
 
     #[test]

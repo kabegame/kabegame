@@ -669,11 +669,8 @@ impl Storage {
     }
 
     pub fn find_image_by_url(url: &str) -> Result<Option<ImageInfo>, String> {
-        if url.is_empty()
-            || url == crate::crawler::downloader::DATA_URI_PLACEHOLDER
-            || url == crate::crawler::downloader::TASK_VFS_URI_PLACEHOLDER
-            || url.starts_with("blob:")
-        {
+        // 去重语义，不含 file://：本地导入图片正是靠 file:// url 去重。
+        if crate::crawler::downloader::is_dedup_dummy_url(url) {
             return Ok(None);
         }
         first_gallery_image_at(&format!(

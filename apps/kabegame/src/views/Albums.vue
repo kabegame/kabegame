@@ -1,5 +1,5 @@
 <template>
-  <div class="albums-page" v-pull-to-refresh="pullToRefreshOpts">
+  <div class="albums-page" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
     <div class="albums-scroll-container">
       <AlbumsPageHeader
         :album-drive-enabled="albumDriveEnabled"
@@ -171,6 +171,8 @@ import {
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
+import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
@@ -615,6 +617,24 @@ const handleCreateAlbum = async () => {
     creatingAlbum.value = false;
   }
 };
+
+// ---------- 区域级文件拖入（画册列表页，只收文件夹）----------
+const dropZone = computed<DragFileOptions>(() => ({
+  plan: (items: DragFileItem[]): DragFilePlan | null => {
+    const folders = items.filter((i) => i.isDirectory);
+    if (folders.length === 0) return null;
+    return {
+      label: t("import.dropZone.albumsFolders", { count: folders.length }),
+      media: [],
+      folders,
+      plugins: [],
+    };
+  },
+  onDrop: async (plan: DragFilePlan) => {
+    // 画册列表页拖入的文件夹建成根级同步画册
+    await createFolderAlbumsFromDrag(plan.folders, null);
+  },
+}));
 
 // 计算每个画册是否正在加载（用于响应式更新）
 const albumIsLoadingMap = computed(() => {

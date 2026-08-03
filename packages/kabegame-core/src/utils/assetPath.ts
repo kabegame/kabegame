@@ -93,13 +93,13 @@ export function guessAssetMime(pathOrKey: string): string {
 }
 
 /**
- * 从文档资源键推导一个可读标签（去目录前缀与扩展名，`-`/`_` 转空格，首字母大写）。
- * 插件作者没有提供图注元数据，这是唯一能从真实数据推导出的说明文字，不编造内容。
+ * 是否是「展示位」资源：文件名（不含目录）以 `banner` 开头，大小写不敏感。
+ *
+ * `kbAssets` 同时承载文档插图与展示图，只有后者适合放进快捷预览走马灯——文档里的
+ * 「点这个按钮」截图当橱窗图看毫无意义。约定由文件名承载，插件作者不必新增字段：
+ * `banner.png` / `banner-1.jpg` / `images/banner-home.webp` 都算。
  */
-export function humanizeAssetLabel(key: string): string {
+export function isBannerAsset(key: string): boolean {
   const base = key.split("/").pop() || key;
-  const withoutExt = base.replace(/\.[^./]+$/, "");
-  const spaced = withoutExt.replace(/[-_]+/g, " ").trim();
-  if (!spaced) return base;
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+  return base.toLowerCase().startsWith("banner");
 }

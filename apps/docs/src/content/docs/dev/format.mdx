@@ -62,6 +62,10 @@ plugin-name.kgpg
 
 Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用项只警告，允许预留。字段缺失或空数组都表示零资源。
 
+:::tip[橱窗图：`banner` 前缀]
+`kbAssets` 里**文件名以 `banner` 开头**（大小写不敏感）的项，会额外出现在「源」页面插件卡片的快捷预览走马灯与插件详情文档顶部——`banner.png`、`banner-1.jpg`、`images/banner-home.webp` 都算。这类图不必被任何 Markdown 引用，也不会因此产生打包警告；其余资源只在文档正文里出现，不进走马灯。
+:::
+
 ### package.json 最小示例
 
 ```jsonc

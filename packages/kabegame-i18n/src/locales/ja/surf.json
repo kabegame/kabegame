@@ -42,6 +42,7 @@
   "deleteSuccess": "削除しました",
   "deleteFailed": "削除に失敗しました",
   "surfImagesTitle": "サーフ画像",
+  "surfImagesEmptyTip": "サーフを開いて画像・動画を右クリックすると、ここに表示されます",
   "confirmDelete": "削除の確認",
   "removeText": "削除",
   "operationFailed": "操作に失敗しました",

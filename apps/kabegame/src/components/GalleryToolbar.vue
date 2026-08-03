@@ -21,350 +21,65 @@
     </template>
   </PageHeader>
 
-  <!-- 桌面：组合过滤 + 独立排序，置于标题与分页器之间。
-       -mt-3 收掉 PageHeader 那 20px 外边距的一大半,两行贴近标题栏。 -->
-  <div v-if="!uiStore.isCompact" class="-mt-3 flex flex-wrap items-center gap-2">
-    <!-- 过滤入口:简单 / 高级 二选一,下面那行跟着换 -->
-    <KbTab
-      v-model="filterMode"
-      :items="filterModeItems"
-      class="flex-none"
-      @select="onFilterModeSelect"
-    />
-
-    <!-- 排序维度 / 顺序 / 每页条数：与过滤维度同一套 chip 下拉，区别只是必选
-         (clearable=false：没有「任意」行、不出清除徽章、chip 不进选中高亮态)。 -->
-    <KbFilterDropdown
-      :model-value="sortField"
-      :options="sortFieldItems"
-      :chip-label="t('gallery.sort')"
-      :clearable="false"
-      class="flex-none"
-      @update:model-value="(value) => { if (value) onDesktopSortFieldCommand(value); }"
-    >
-      <template #icon><Sort /></template>
-    </KbFilterDropdown>
-
-    <KbFilterDropdown
-      :model-value="sortOrder"
-      :options="sortOrderItems"
-      :chip-label="t('gallery.sortOrder')"
-      :clearable="false"
-      class="flex-none"
-      @update:model-value="(value) => { if (value) emit('update:sort', { ...sort, desc: value === 'desc' }); }"
-    >
-      <template #icon>
-        <Sort :class="{ 'rotate-180': sortOrder === 'desc' }" />
-      </template>
-    </KbFilterDropdown>
-
-    <KbFilterDropdown
-      :model-value="String(pageSize)"
-      :options="pageSizeItems"
-      :chip-label="t('gallery.pageSize')"
-      :clearable="false"
-      class="flex-none"
-      @update:model-value="(value) => { if (value) onDesktopPageSizeCommand(value); }"
-    >
-      <template #icon><Histogram /></template>
-    </KbFilterDropdown>
-  </div>
-
-  <!-- 查询行：简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），
-       否则两种模式高度不同，切换时下面的画廊会整体上下跳。 -->
-  <div v-if="!uiStore.isCompact" class="query-row mb-1 flex items-center gap-2">
-    <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
-    <PathqlPathBar v-if="filterMode === 'advanced'" :path="advancedPathPreview" class="flex-1">
-      <template #prefix>
-        <el-button type="primary" class="flex-none" @click="openAdvancedQuery">
-          <el-icon class="mr-1.5 text-sm"><Setting /></el-icon>
-          {{ t("gallery.advancedConfigure") }}
-        </el-button>
-      </template>
-    </PathqlPathBar>
-
-    <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
-    <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
-         清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
-         右边界的粉色渐隐只在还能往右滚时出现，提示「后面还有」。 -->
-    <div
-      v-else
-      class="filter-chip-viewport relative min-w-0 flex-1"
-      :class="{ 'has-more': chipRowHasMore }"
-    >
-      <el-scrollbar
-        ref="filterChipScrollRef"
-        class="filter-chip-row"
-        view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
-        @scroll="updateChipRowOverflow"
-        @wheel="onFilterChipWheel"
-      >
-        <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
-             这里每次提交都会 navigate + 重查，所以要防抖 -->
-        <GallerySearchDropdown
-          :query="search"
-          :mode="searchMode"
-          :debounce="300"
-          @update:query="(value) => emit('update:search', value)"
-          @update:mode="(mode) => emit('update:searchMode', mode)"
-        />
-
-        <KbFilterDropdown
-          v-for="dimension in filterDimensions"
-          :key="dimension.key"
-          :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
-          :chip-label="dimension.chipLabel"
-          :selected-label="dimensionChipValue(dimension.key)"
-          :any-label="t('gallery.filterAny')"
-          :title="dimension.title"
-          @open="setDimensionPopoverOpen(dimension.key, true)"
-          @close="setDimensionPopoverOpen(dimension.key, false)"
-          @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
-        >
-          <template #icon>
-            <component :is="dimension.icon" />
-          </template>
-          <template #panel="{ close }">
-            <!-- 「任意」不再手写：树自己的 AnyProviderChildrenNode 就是它，
-                 而且带计数（pathForTreeSegment 对单维度的 all 段会算「去掉本维度后」的总数）。 -->
-            <div class="p-1.5">
-              <GalleryFilterTree
-                ref="providerTreeRef"
-                :context-prefix="providerContextPrefix"
-                :filters="activeFilters"
-                :filter="filterForDimension(activeFilters, dimension.key)"
-                :dimension="dimension.key"
-                :visible="!!dimensionPopoverOpen[dimension.key]"
-                @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
-              />
-            </div>
-          </template>
-          </KbFilterDropdown>
-      </el-scrollbar>
-    </div>
-
-  </div>
-
-  <div v-if="uiStore.isCompact" class="mb-2 flex justify-end">
-    <el-button
-      size="small"
-      :class="{
-        '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)]': isAdvancedActive,
-      }"
-      @click="openAdvancedQuery"
-    >
-      <el-icon class="mr-1"><Filter /></el-icon>
-      {{ t("gallery.advancedQueryShort") }}
-      <span v-if="advancedConditionCount > 0" class="ml-1 rounded-full bg-[var(--anime-primary)] px-1.5 text-[10px] text-white">
-        {{ advancedConditionCount }}
-      </span>
-    </el-button>
-  </div>
-
-  <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
-  <Teleport v-if="uiStore.isCompact" to="body">
-    <van-popup :show="filterPicker.isOpen.value" position="bottom" round :z-index="filterPicker.zIndex.value" @update:show="filterPicker.close">
-      <van-picker
-        v-model="filterPickerSelected"
-        :title="$t('gallery.filter')"
-        :columns="filterPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onFilterPickerConfirm"
-        @cancel="filterPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="timeFilterPicker.isOpen.value" position="bottom" round :z-index="timeFilterPicker.zIndex.value" @update:show="timeFilterPicker.close">
-      <van-picker
-        v-model="timeFilterPickerSelected"
-        :title="timeFilterPickerTitle"
-        :columns="timeFilterPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onTimeFilterPickerConfirm"
-        @change="onTimeFilterPickerChange"
-        @cancel="timeFilterPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="pluginFilterPicker.isOpen.value" position="bottom" round :z-index="pluginFilterPicker.zIndex.value" @update:show="pluginFilterPicker.close">
-      <van-picker
-        v-model="pluginFilterPickerSelected"
-        :title="t('gallery.filterByPlugin')"
-        :columns="pluginFilterPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onPluginFilterPickerConfirm"
-        @cancel="pluginFilterPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="mediaTypeFilterPicker.isOpen.value" position="bottom" round :z-index="mediaTypeFilterPicker.zIndex.value" @update:show="mediaTypeFilterPicker.close">
-      <van-picker
-        v-model="mediaTypeFilterPickerSelected"
-        :title="t('gallery.filterByMediaType')"
-        :columns="mediaTypeFilterPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onMediaTypeFilterPickerConfirm"
-        @cancel="mediaTypeFilterPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="nameFilterPicker.isOpen.value" position="bottom" round :z-index="nameFilterPicker.zIndex.value" @update:show="nameFilterPicker.close">
-      <van-picker
-        v-model="nameFilterPickerSelected"
-        :title="t('gallery.filterByName')"
-        :columns="nameFilterPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onNameFilterPickerConfirm"
-        @cancel="nameFilterPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="aspectFilterPicker.isOpen.value" position="bottom" round :z-index="aspectFilterPicker.zIndex.value" @update:show="aspectFilterPicker.close">
-      <van-picker
-        v-model="aspectFilterPickerSelected"
-        :title="t('gallery.filterByAspect')"
-        :columns="aspectFilterPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onAspectFilterPickerConfirm"
-        @cancel="aspectFilterPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="sortPicker.isOpen.value" position="bottom" round :z-index="sortPicker.zIndex.value" @update:show="sortPicker.close">
-      <van-picker
-        v-model="sortPickerSelected"
-        :title="$t('gallery.byTime')"
-        :columns="sortPickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onSortPickerConfirm"
-        @cancel="sortPicker.close()"
-      />
-    </van-popup>
-    <van-popup :show="pageSizePicker.isOpen.value" position="bottom" round :z-index="pageSizePicker.zIndex.value" @update:show="pageSizePicker.close">
-      <van-picker
-        v-model="pageSizePickerSelected"
-        :title="$t('gallery.pageSize')"
-        :columns="pageSizePickerColumns"
-        :confirm-button-text="t('common.confirm')"
-        :cancel-button-text="t('common.cancel')"
-        @confirm="onPageSizePickerConfirm"
-        @cancel="pageSizePicker.close()"
-      />
-    </van-popup>
-    <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，
-         对话框由本组件托管并经 handleAction 打开 -->
-    <FailedImagesDialog ref="failedImagesDialogRef" />
-  </Teleport>
-
-  <GalleryAdvancedQueryDialog
-    v-model:visible="advancedDialogVisible"
-    :query="advancedDialogInitialQuery"
+  <!-- 过滤 / 排序 / 搜索：与画册、任务、畅游详情共用同一条查询行。 -->
+  <GalleryQueryBar
+    ref="queryBarRef"
+    :filters="activeFilters"
+    :advanced="galleryRouteStore.advanced"
     :sort="props.sort"
     :page="galleryRouteStore.page"
     :page-size="props.pageSize"
-    :context-prefix="advancedDialogContextPrefix"
-    @apply="applyAdvancedQuery"
+    :search="props.search"
+    :search-mode="props.searchMode"
+    :provider-context-prefix="props.providerContextPrefix"
+    :context-base="galleryRouteStore.contextPathFor({ search: '' })"
+    hug-top
+    @navigate="onQueryNavigate"
   />
+
+  <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，
+       对话框由本组件托管并经 handleAction 打开 -->
+  <Teleport v-if="uiStore.isCompact" to="body">
+    <FailedImagesDialog ref="failedImagesDialogRef" />
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, nextTick, ref, watch, onMounted, onUnmounted, type Component } from "vue";
-import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import {
-  KbFilterDropdown,
-  KbTab,
-  type KbFilterDropdownOption,
-  type KbTabItem,
-} from "@kabegame/element-plus";
-import { useRouter } from "vue-router";
-import {
-  Close,
-  Filter,
-  Setting,
-  FilterAspect,
-  FilterDate,
-  FilterMedia,
-  FilterName,
-  FilterPlugin,
-  FilterSize,
-  FilterWallpaper,
-  Histogram,
-  Search,
-  Sort,
-} from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { invoke } from "@/api/rpc";
-import { pathqlEntry, pathqlList } from "@/services/pathql";
+import { Close, Filter } from "@kabegame/element-plus-icons";
+import { pathqlEntry } from "@/services/pathql";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { withGalleryPrefix } from "@/utils/path";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
-import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
-import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
-import PathqlPathBar from "@/components/gallery/PathqlPathBar.vue";
-import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
+import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { useModal } from "@kabegame/core/composables/useModal";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
-  GALLERY_ASPECT_BUCKETS,
-  GALLERY_NAME_LANGUAGE_BUCKETS,
   DEFAULT_GALLERY_SEARCH_MODE,
-  advancedQueryRuntimePath,
-  buildAdvancedQueryContextPrefix,
-  buildComposablePath,
-  filterForDimension,
-  filterAspectRange,
-  filterDateSegment,
-  filterMediaFormat,
-  filterMediaKind,
-  filterNameBucket,
   filterNoAlbum,
-  filterPluginId,
-  filterSizeRange,
   filterSetToSingleFilter,
   hasActiveGalleryFilters,
   isSimpleFilter,
-  newRandomSortSeed,
-  removeFilterDimension,
-  setFilterDimension,
   singleFilterToSet,
   type GalleryFilter,
-  type GalleryFilterDimension,
   type GalleryFilterSet,
+  type GalleryQueryPatch,
   type GallerySearchMode,
   type GallerySort,
-  type GallerySortField,
 } from "@/utils/galleryPath";
 import {
-  buildGalleryTimeMenuTree,
-  buildTimeMenuScopeLabels,
-  formatTimeFilterDetail,
-  getTimeMenuMaxDepth,
-  resolveInitialTimePickPath,
-  resolveTimeMenuPickToDateTail,
-  syncTimeMenuPickerState,
-  type DateGroupRow,
-  type DayGroupRow,
-  type TimeMenuNode,
-  type YearGroupRow,
-} from "@/utils/galleryTimeFilterMenu";
-import { facetValueLabel } from "@/composables/useAdvancedQueryFacets";
+  galleryLabelForFilter,
+  gallerySortOrderLabels,
+} from "@/utils/galleryFilterLabels";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
-import { useGalleryRouteStore } from "@/stores/galleryRoute";
+import { useGalleryRouteStore, rememberGallerySearchMode } from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import {
-  advancedQueryFromSimpleFilters,
-  conditionCount,
-  normalizeQuery,
-  simpleFiltersFromAdvancedQuery,
-  type GalleryAdvancedQuery,
-} from "@/utils/galleryQuery";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -396,1453 +111,87 @@ const props = withDefaults(defineProps<Props>(), {
   providerContextPrefix: "",
 });
 
-const router = useRouter();
+const emit = defineEmits<{
+  refresh: [];
+  showCrawlerDialog: [];
+  showLocalImport: [];
+  openCollectMenu: [];
+}>();
+
+const { t, locale } = useI18n();
+const uiStore = useUiStore();
+const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const galleryRouteStore = useGalleryRouteStore();
 const { hide: galleryHide } = storeToRefs(galleryRouteStore);
-const failedCountFoldLabel = computed(() => {
-  const n = failedImagesStore.allFailed.length;
-  const suffix = n >= 99 ? "99+" : String(n);
-  return `${t("header.failedImages")} (${suffix})`;
-});
+
+const queryBarRef = ref<{
+  openFilterPicker: () => void;
+  openSortPicker: () => void;
+  openPageSizePicker: () => void;
+  refreshProviderFilterTree: () => Promise<void>;
+} | null>(null);
 const failedImagesDialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
-const { t, locale } = useI18n();
-const pluginStore = usePluginStore();
 
-const activeFilters = computed<GalleryFilterSet>(() => props.filters ?? singleFilterToSet(props.filter));
-const legacyFilter = computed<GalleryFilter>(() => filterSetToSingleFilter(activeFilters.value));
-const sortField = computed<GallerySortField>(() => props.sort.field);
-const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
-const searchMode = computed<GallerySearchMode>(() => props.searchMode);
-
-const isWallpaperOrderBrowse = computed(
-  () => !!activeFilters.value.wallpaperOrder
+const activeFilters = computed<GalleryFilterSet>(
+  () => props.filters ?? singleFilterToSet(props.filter),
 );
 const isNoAlbumBrowse = computed(() => filterNoAlbum(activeFilters.value));
 
-const isSizeBrowse = computed(() => filterSizeRange(activeFilters.value) !== null);
-const isAspectBrowse = computed(() => filterAspectRange(activeFilters.value) !== null);
-const isNameBrowse = computed(() => filterNameBucket(activeFilters.value) !== null);
-
-const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
-  "unknown":   "filterSize_unknown",
-  "1B-512KB":  "filterSize_lt512k",
-  "512KB-1MB": "filterSize_512k_1m",
-  "1MB-2MB":   "filterSize_1m_2m",
-  "2MB-5MB":   "filterSize_2m_5m",
-  "5MB-10MB":  "filterSize_5m_10m",
-  "10MB-50MB": "filterSize_10m_50m",
-  "50MB-":     "filterSize_gte50m",
-};
-
-const ASPECT_RANGE_LABEL_KEYS: Record<string, string> = Object.fromEntries(
-  GALLERY_ASPECT_BUCKETS.map((b) => [b.range, b.labelKey]),
-);
-const NAME_BUCKET_AUTONYMS: Record<string, string> = Object.fromEntries(
-  GALLERY_NAME_LANGUAGE_BUCKETS.map((b) => [b.bucket, b.autonym]),
-);
-
-const uiStore = useUiStore();
-const advancedDialogVisible = ref(false);
-const advancedDialogInitialQuery = ref<GalleryAdvancedQuery>([{ is: {} }]);
-const isAdvancedActive = computed(() => galleryRouteStore.advanced !== undefined);
-const advancedConditionCount = computed(() =>
-  conditionCount(galleryRouteStore.advanced ?? [])
-);
-const advancedContextPrefix = computed(() =>
-  `images://gallery/${
-    galleryHide.value ? "hide/" : ""
-  }${
-    buildAdvancedQueryContextPrefix(
-      activeFilters.value,
-      props.search,
-      props.searchMode,
-    )
-  }`
-);
-
-/**
- * 弹窗里的上下文前缀只保留「应用后仍然生效」的部分：应用高级查询会接管
- * 简单过滤与搜索（见 applyAdvancedQuery），所以它们不能再算进前缀，
- * 否则弹窗里的条件会与前缀里的同一条件重复。
- */
-const advancedDialogContextPrefix = computed(() =>
-  `images://gallery/${
-    galleryHide.value ? "hide/" : ""
-  }${
-    buildAdvancedQueryContextPrefix(
-      activeFilters.value.noAlbum ? { noAlbum: true } : {},
-      "",
-    )
-  }`
-);
-
-function openAdvancedQuery() {
-  // 优先已应用的树 → 切模式时暂存的树 → 由当前简单过滤(含搜索)翻译一行
-  const source = galleryRouteStore.advanced ?? stashedAdvanced.value;
-  if (source) {
-    advancedDialogInitialQuery.value = JSON.parse(
-      JSON.stringify(source),
-    ) as GalleryAdvancedQuery;
-  } else {
-    advancedDialogInitialQuery.value = advancedQueryFromSimpleFilters(
-      activeFilters.value,
-      props.search.trim()
-        ? { mode: props.searchMode, query: props.search }
-        : null,
-    );
-  }
-  advancedDialogVisible.value = true;
+/** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
+function onQueryNavigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
+  if (patch.searchMode) rememberGallerySearchMode(patch.searchMode);
+  void galleryRouteStore.navigate(patch, options);
 }
-
-async function applyAdvancedQuery(tree: GalleryAdvancedQuery) {
-  const normalized = normalizeQuery(tree);
-  await galleryRouteStore.navigate(
-    {
-      advanced: normalized.length > 0 ? normalized : undefined,
-      filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
-      // 树接管简单过滤与搜索：弹窗初值已把它们复制进去，原件必须在同一次
-      // navigate 里清掉——走 emit 会让父组件再导航一次，把刚写进去的树冲掉。
-      search: "",
-      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
-}
-
-const currentPluginId = computed(() => filterPluginId(activeFilters.value));
-
-const dateTail = computed(() => filterDateSegment(activeFilters.value));
-
-const isPluginFilterBrowse = computed(() => currentPluginId.value != null);
-
-const isTimeFilterBrowse = computed(() => dateTail.value != null);
-
-const isMediaTypeFilterBrowse = computed(
-  () => filterMediaKind(activeFilters.value) != null
-);
-
-const showGalleryFilterFold = computed(() =>
-  galleryRouteStore.advanced === undefined && isSimpleFilter(activeFilters.value)
-);
-
-const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
-
-/**
- * 过滤入口是二选一:简单维度行 与 高级查询树在路由上互斥,但切换本身尽量不丢查询——
- * 简单 → 高级:什么都不动(简单过滤会成为高级路径的上下文前缀,点「配置」再翻译进树);
- * 高级 → 简单:树能被简单过滤表达就平移过去,表达不了(含 或/非/多条件)才清空。
- */
-type FilterMode = "simple" | "advanced";
-const filterMode = ref<FilterMode>("simple");
-/** 切走高级时把树留在本地,再切回来「配置」还能接着editing(不是已应用状态)。 */
-const stashedAdvanced = ref<GalleryAdvancedQuery | null>(null);
-
-const filterModeItems = computed<KbTabItem<FilterMode>[]>(() => [
-  {
-    name: "simple",
-    label: t("gallery.filterModeSimple"),
-    icon: markRaw(Filter),
-  },
-  {
-    name: "advanced",
-    label: t("gallery.filterModeAdvanced"),
-    icon: markRaw(Filter),
-    count: advancedConditionCount.value > 0 ? advancedConditionCount.value : null,
-  },
-]);
-
-const advancedPathPreview = computed(() =>
-  advancedQueryRuntimePath(
-    buildComposablePath({
-      filters: {},
-      advanced: galleryRouteStore.advanced ?? [],
-      sort: props.sort,
-      page: galleryRouteStore.page,
-      pageSize: props.pageSize,
-    }),
-    advancedContextPrefix.value,
-  )
-);
-
-watch(
-  isAdvancedActive,
-  (active) => {
-    if (active) filterMode.value = "advanced";
-  },
-  { immediate: true },
-);
-
-async function onFilterModeSelect(mode: FilterMode) {
-  // 简单过滤是高级路径的合法上下文前缀,切过去不用动任何状态。
-  if (mode === "advanced") return;
-  if (!isAdvancedActive.value) return;
-
-  const advanced = galleryRouteStore.advanced ?? [];
-  stashedAdvanced.value = advanced;
-
-  const degraded = simpleFiltersFromAdvancedQuery(advanced);
-  if (!degraded) {
-    // 或/非/多条件:简单过滤行表达不了,只能清空——这是丢查询,必须明说。
-    ElMessage.warning(t("gallery.advancedQueryDropped"));
-    await resetToContextOnly();
-    return;
-  }
-
-  await galleryRouteStore.navigate(
-    {
-      advanced: undefined,
-      filters: {
-        ...degraded.filters,
-        ...(activeFilters.value.noAlbum ? { noAlbum: true } : {}),
-      },
-      search: degraded.search?.query ?? "",
-      searchMode: degraded.search?.mode ?? DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
-}
-
-/** 只留 no-album 这个随行上下文,过滤维度、搜索与高级树都清掉。 */
-async function resetToContextOnly() {
-  await galleryRouteStore.navigate(
-    {
-      advanced: undefined,
-      filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
-      search: "",
-      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
-}
-
-const sortFieldOptions: GallerySortField[] = [
-  "by-id",
-  "by-time",
-  "by-size",
-  "by-name",
-  "by-aspect",
-  "by-set-time",
-  "random",
-];
-
-// no-album 不是可浏览过滤维度（不进过滤行 / 不显示图标），故从图标表中排除。
-// 过滤维度图标与高级查询弹窗同源(设计稿那套 16px 线性图标)。
-const FILTER_DIMENSION_ICONS: Record<Exclude<GalleryFilterDimension, "noAlbum">, Component> = {
-  wallpaperOrder: markRaw(FilterWallpaper),
-  plugin: markRaw(FilterPlugin),
-  mediaType: markRaw(FilterMedia),
-  date: markRaw(FilterDate),
-  name: markRaw(FilterName),
-  size: markRaw(FilterSize),
-  aspect: markRaw(FilterAspect),
-};
-
-const filterDimensions = computed<Array<{
-  key: GalleryFilterDimension;
-  title: string;
-  chipLabel: string;
-  icon: Component;
-}>>(() => [
-  { key: "date", title: t("gallery.filterByTime"), chipLabel: t("gallery.advancedChipTime"), icon: FILTER_DIMENSION_ICONS.date },
-  { key: "plugin", title: t("gallery.filterByPlugin"), chipLabel: t("gallery.advancedChipPlugin"), icon: FILTER_DIMENSION_ICONS.plugin },
-  { key: "mediaType", title: t("gallery.filterByMediaType"), chipLabel: t("gallery.advancedChipMediaType"), icon: FILTER_DIMENSION_ICONS.mediaType },
-  { key: "aspect", title: t("gallery.filterByAspect"), chipLabel: t("gallery.advancedChipAspect"), icon: FILTER_DIMENSION_ICONS.aspect },
-  { key: "size", title: t("gallery.filterBySize"), chipLabel: t("gallery.advancedChipSize"), icon: FILTER_DIMENSION_ICONS.size },
-  { key: "name", title: t("gallery.filterByName"), chipLabel: t("gallery.advancedChipName"), icon: FILTER_DIMENSION_ICONS.name },
-  { key: "wallpaperOrder", title: t("gallery.filterWallpaperSet"), chipLabel: t("gallery.advancedChipWallpaper"), icon: FILTER_DIMENSION_ICONS.wallpaperOrder },
-]);
-
-/** 排序维度 / 顺序 / 每页条数：KbFilterDropdown 的内置列表（必选，无「任意」行）。 */
-const sortFieldItems = computed<KbFilterDropdownOption[]>(() =>
-  sortFieldOptions.map((field) => ({ label: sortFieldLabel(field), value: field })),
-);
-
-const sortOrderItems = computed<KbFilterDropdownOption[]>(() => [
-  { label: t("gallery.sortDescending"), value: "desc" },
-  { label: t("gallery.sortAscending"), value: "asc" },
-]);
-
-const pageSizeItems = computed<KbFilterDropdownOption[]>(() =>
-  pageSizeOptions.map((n) => ({ label: String(n), value: String(n) })),
-);
 
 // no-album 是 header fold 的手动开关，不算「过滤」维度：不点亮过滤指示、也不显示清除叉号。
 const isFilterIndicatorActive = computed(
   () =>
     !!props.search.trim() ||
-    hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined })
+    hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined }),
 );
-
-function sortFieldLabel(field: GallerySortField) {
-  switch (field) {
-    case "by-id":
-      return t("gallery.sortByDefault");
-    case "by-time":
-      return t("gallery.sortByTime");
-    case "by-size":
-      return t("gallery.sortBySize");
-    case "by-name":
-      return t("gallery.sortByName");
-    case "by-aspect":
-      return t("gallery.sortByAspect");
-    case "by-set-time":
-      return t("gallery.sortBySetTime");
-    case "random":
-      return t("gallery.sortByRandom");
-  }
-}
-
-const filterChipScrollRef = ref<{ wrapRef?: HTMLElement } | null>(null);
-/** 过滤行右侧还有没滚到的 chip：用来点亮右边界那道粉色渐隐。 */
-const chipRowHasMore = ref(false);
-
-function updateChipRowOverflow() {
-  const wrap = filterChipScrollRef.value?.wrapRef;
-  if (!wrap) {
-    chipRowHasMore.value = false;
-    return;
-  }
-  chipRowHasMore.value =
-    wrap.scrollWidth - wrap.clientWidth - wrap.scrollLeft > 1;
-}
-
-// 切换过滤模式会重建这段 DOM，observer 得跟着重绑；同时观察 view，
-// chip 增减(如清除按钮出现)也要重算「右边还有没有」。
-let chipRowResizeObserver: ResizeObserver | null = null;
-
-function bindChipRowObserver() {
-  chipRowResizeObserver?.disconnect();
-  const wrap = filterChipScrollRef.value?.wrapRef;
-  if (!wrap) {
-    chipRowHasMore.value = false;
-    return;
-  }
-  chipRowResizeObserver = new ResizeObserver(updateChipRowOverflow);
-  chipRowResizeObserver.observe(wrap);
-  if (wrap.firstElementChild) chipRowResizeObserver.observe(wrap.firstElementChild);
-  updateChipRowOverflow();
-}
-
-watch(
-  [filterMode, () => uiStore.isCompact],
-  () => void nextTick(bindChipRowObserver),
-);
-onMounted(() => void nextTick(bindChipRowObserver));
-onUnmounted(() => chipRowResizeObserver?.disconnect());
-
-/**
- * 鼠标滚轮在过滤行上转成横向滚动：竖向滚轮本身不会驱动横向溢出，
- * 不接管的话这行看着能滚却滚不动（只有触控板横扫有效）。
- */
-function onFilterChipWheel(event: WheelEvent) {
-  const wrap = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(
-    ".el-scrollbar__wrap",
-  );
-  if (!wrap) return;
-
-  const maxScroll = wrap.scrollWidth - wrap.clientWidth;
-  if (maxScroll <= 0) return;
-
-  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-    ? event.deltaX
-    : event.deltaY;
-  if (!delta) return;
-
-  const next = Math.min(Math.max(wrap.scrollLeft + delta, 0), maxScroll);
-  if (next === wrap.scrollLeft) return; // 已到端点：让页面继续接管滚动
-  event.preventDefault();
-  wrap.scrollLeft = next;
-}
-
-function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
-  dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };
-}
-
-function closeDimensionPopover(dimension: GalleryFilterDimension) {
-  setDimensionPopoverOpen(dimension, false);
-}
-
-function isDimensionActive(dimension: GalleryFilterDimension) {
-  return filterForDimension(activeFilters.value, dimension).type !== "all";
-}
-
-function clearDimension(dimension: GalleryFilterDimension) {
-  emit("update:filters", removeFilterDimension(activeFilters.value, dimension));
-  closeDimensionPopover(dimension);
-}
 
 function clearAllFilters() {
   // no-album 仅由 header fold 开关控制，清除全部过滤时保留它。
-  emit("update:filters", activeFilters.value.noAlbum ? { noAlbum: true } : {});
-  emit("update:search", "");
-  emit("update:searchMode", "display-name");
-  dimensionPopoverOpen.value = {};
-}
-
-function onDimensionFilter(dimension: GalleryFilterDimension, filter: GalleryFilter) {
-  emit("update:filters", setFilterDimension(activeFilters.value, dimension, filter));
-  closeDimensionPopover(dimension);
-}
-
-function onDesktopSortFieldCommand(cmd: string) {
-  if (!sortFieldOptions.includes(cmd as GallerySortField)) return;
-  if (cmd === "random") {
-    // 已处于随机也重新洗牌：不做 already-active 提前返回。
-    emit("update:sort", { field: "random", desc: props.sort.desc, seed: newRandomSortSeed() });
-    return;
-  }
-  emit("update:sort", { field: cmd as GallerySortField, desc: props.sort.desc });
-}
-
-interface PluginGroupRow {
-  plugin_id: string;
-  count: number;
-}
-
-interface GalleryMediaTypeCountsPayload {
-  imageCount: number;
-  videoCount: number;
-}
-
-interface ProviderChildDir {
-  name: string;
-  meta: {
-    isLeaf?: boolean;
-    plain?: boolean;
-  } | null;
-  total: number | null;
-}
-
-interface PickerCascadeOption {
-  text: string;
-  value: string;
-  children?: PickerCascadeOption[];
-}
-
-const pluginGroups = ref<PluginGroupRow[]>([]);
-const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
-  imageCount: 0,
-  videoCount: 0,
-});
-const providerTreeRef = ref<any>(null);
-const monthGroups = ref<DateGroupRow[]>([]);
-const dayGroups = ref<DayGroupRow[]>([]);
-const yearGroups = ref<YearGroupRow[]>([]);
-
-const timeMenuRoots = computed<TimeMenuNode[]>(() =>
-  buildGalleryTimeMenuTree(
-    monthGroups.value,
-    dayGroups.value,
-    buildTimeMenuScopeLabels(t, String(locale.value)),
-    yearGroups.value,
-    { collapse: false }
-  )
-);
-
-/** 当前上下文前缀：hide + search，由 galleryRouteStore 统一拼出。
- *  各 filter 列表查询（`plugin/` / `media-type/` / `date/`）都拼这个前缀，
- *  保证 hide 状态与搜索词对预览计数生效。 */
-const { computedContextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
-
-async function countProviderPath(path: string): Promise<number> {
-  const p = path.trim().replace(/\/+$/, "");
-  if (!p) return 0;
-  const res = await pathqlEntry(withGalleryPrefix(p));
-  return typeof res?.total === "number" ? res.total : 0;
-}
-
-async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
-  const entries = await pathqlList(withGalleryPrefix(path), true);
-  return (Array.isArray(entries) ? entries : []).filter(
-    (e): e is ProviderChildDir => !!e && typeof e.name === "string" && !!e.name
-  );
-}
-
-const YEAR_SEG_RE = /^(\d{4})y$/;
-const MONTH_SEG_RE = /^(\d{2})m$/;
-const DAY_SEG_RE = /^(\d{2})d$/;
-
-type LazyScope =
-  | "plugin"
-  | "media-type"
-  | "time-root"
-  | `time-year:${string}`
-  | `time-month:${string}`
-  | `plugin-extend:${string}`;
-
-const lazyLoadedKeys = ref(new Set<string>());
-const lazyDirtyKeys = ref(new Set<string>());
-const lazyPendingKeys = ref(new Set<string>());
-const lazyVisibleLoadingKeys = ref(new Set<string>());
-const lazyInFlight = new Map<string, Promise<void>>();
-const lazyLoadingTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pluginExtendChildren = ref<Record<string, ProviderChildDir[]>>({});
-
-function currentLazyKey(scope: LazyScope, prefix = filterContextPrefix.value) {
-  return `${prefix}|${scope}`;
-}
-
-function replaceSetValue(target: typeof lazyLoadedKeys, op: (next: Set<string>) => void) {
-  const next = new Set(target.value);
-  op(next);
-  target.value = next;
-}
-
-function isLazyLoaded(scope: LazyScope) {
-  return lazyLoadedKeys.value.has(currentLazyKey(scope));
-}
-
-function isLazyLoadingVisible(scope: LazyScope) {
-  return lazyVisibleLoadingKeys.value.has(currentLazyKey(scope));
-}
-
-function startLazyLoadingUi(key: string) {
-  replaceSetValue(lazyPendingKeys, (next) => next.add(key));
-  replaceSetValue(lazyVisibleLoadingKeys, (next) => next.delete(key));
-  if (lazyLoadingTimers.has(key)) {
-    clearTimeout(lazyLoadingTimers.get(key)!);
-  }
-  lazyLoadingTimers.set(
-    key,
-    setTimeout(() => {
-      if (lazyPendingKeys.value.has(key)) {
-        replaceSetValue(lazyVisibleLoadingKeys, (next) => next.add(key));
-      }
-      lazyLoadingTimers.delete(key);
-    }, 300)
-  );
-}
-
-function finishLazyLoadingUi(key: string) {
-  if (lazyLoadingTimers.has(key)) {
-    clearTimeout(lazyLoadingTimers.get(key)!);
-    lazyLoadingTimers.delete(key);
-  }
-  replaceSetValue(lazyPendingKeys, (next) => next.delete(key));
-  replaceSetValue(lazyVisibleLoadingKeys, (next) => next.delete(key));
-}
-
-async function ensureLazyLoaded(scope: LazyScope, loader: (prefix: string) => Promise<void>) {
-  const prefix = filterContextPrefix.value;
-  const key = currentLazyKey(scope, prefix);
-  if (lazyLoadedKeys.value.has(key) && !lazyDirtyKeys.value.has(key)) return;
-  const existing = lazyInFlight.get(key);
-  if (existing) return existing;
-
-  startLazyLoadingUi(key);
-  const task = (async () => {
-    try {
-      await loader(prefix);
-      if (prefix === filterContextPrefix.value) {
-        replaceSetValue(lazyLoadedKeys, (next) => next.add(key));
-        replaceSetValue(lazyDirtyKeys, (next) => next.delete(key));
-      }
-    } finally {
-      finishLazyLoadingUi(key);
-      lazyInFlight.delete(key);
-    }
-  })();
-  lazyInFlight.set(key, task);
-  return task;
-}
-
-function resetLazyDataForPrefixChange() {
-  for (const timer of lazyLoadingTimers.values()) {
-    clearTimeout(timer);
-  }
-  lazyLoadingTimers.clear();
-  lazyInFlight.clear();
-  lazyLoadedKeys.value = new Set();
-  lazyDirtyKeys.value = new Set();
-  lazyPendingKeys.value = new Set();
-  lazyVisibleLoadingKeys.value = new Set();
-  pluginGroups.value = [];
-  pluginExtendChildren.value = {};
-  mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
-  yearGroups.value = [];
-  monthGroups.value = [];
-  dayGroups.value = [];
-}
-
-function parsePluginExtendScope(scope: string) {
-  const raw = scope.slice("plugin-extend:".length);
-  const tab = raw.indexOf("\t");
-  if (tab < 0) return { pluginId: raw, extendPath: "" };
-  return { pluginId: raw.slice(0, tab), extendPath: raw.slice(tab + 1) };
-}
-
-function loadedPluginExtendScopes() {
-  const prefix = `${filterContextPrefix.value}|plugin-extend:`;
-  return [...lazyLoadedKeys.value]
-    .filter((key) => key.startsWith(prefix))
-    .map((key) => parsePluginExtendScope(key.slice(prefix.length)))
-    .filter((scope) => scope.pluginId);
-}
-
-function imageChangePluginIds(payload: ImagesChangePayload) {
-  const ids = (payload.pluginIds ?? []).map((id) => id.trim()).filter(Boolean);
-  return ids.length ? new Set(ids) : null;
-}
-
-async function markFilterLazyDataDirty(payload: ImagesChangePayload = {}) {
-  const changedPluginIds = imageChangePluginIds(payload);
-  const shouldReloadPlugins = isLazyLoaded("plugin");
-  const shouldReloadPluginExtends = loadedPluginExtendScopes().filter(
-    ({ pluginId }) => !changedPluginIds || changedPluginIds.has(pluginId)
-  );
-  const nextDirty = new Set(lazyDirtyKeys.value);
-  const currentPrefix = `${filterContextPrefix.value}|`;
-  for (const key of lazyLoadedKeys.value) {
-    if (!key.startsWith(currentPrefix)) continue;
-    const scope = key.slice(currentPrefix.length);
-    if (!scope.startsWith("plugin-extend:")) {
-      nextDirty.add(key);
-      continue;
-    }
-    const { pluginId } = parsePluginExtendScope(scope);
-    if (!changedPluginIds || changedPluginIds.has(pluginId)) {
-      nextDirty.add(key);
-    }
-  }
-  lazyDirtyKeys.value = nextDirty;
-  if (changedPluginIds) {
-    const nextChildren = { ...pluginExtendChildren.value };
-    for (const key of Object.keys(nextChildren)) {
-      const { pluginId } = parsePluginExtendKey(key);
-      if (changedPluginIds.has(pluginId)) delete nextChildren[key];
-    }
-    pluginExtendChildren.value = nextChildren;
-  } else {
-    pluginExtendChildren.value = {};
-  }
-  if (shouldReloadPlugins) {
-    await ensurePluginGroupsLoaded();
-  }
-  await Promise.all(
-    shouldReloadPluginExtends.map(({ pluginId, extendPath }) =>
-      ensurePluginExtendLoaded(pluginId, extendPath)
-    )
-  );
-}
-
-watch(filterContextPrefix, () => {
-  resetLazyDataForPrefixChange();
-});
-
-onUnmounted(() => {
-  for (const timer of lazyLoadingTimers.values()) {
-    clearTimeout(timer);
-  }
-  lazyLoadingTimers.clear();
-});
-
-useImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: 500,
-  onRefresh: markFilterLazyDataDirty,
-});
-
-const pluginSignature = computed(() =>
-  pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|")
-);
-
-function resetPluginLazyData() {
-  for (const timer of lazyLoadingTimers.values()) {
-    clearTimeout(timer);
-  }
-  lazyLoadingTimers.clear();
-  for (const key of [...lazyInFlight.keys()]) {
-    if (key.includes("|plugin")) lazyInFlight.delete(key);
-  }
-  lazyLoadedKeys.value = new Set([...lazyLoadedKeys.value].filter((key) => !key.includes("|plugin")));
-  lazyDirtyKeys.value = new Set([...lazyDirtyKeys.value].filter((key) => !key.includes("|plugin")));
-  lazyPendingKeys.value = new Set([...lazyPendingKeys.value].filter((key) => !key.includes("|plugin")));
-  lazyVisibleLoadingKeys.value = new Set(
-    [...lazyVisibleLoadingKeys.value].filter((key) => !key.includes("|plugin"))
-  );
-  pluginGroups.value = [];
-  pluginExtendChildren.value = {};
-}
-
-watch(pluginSignature, () => {
-  const shouldReloadPlugins = isLazyLoaded("plugin");
-  resetPluginLazyData();
-  const current = activeFilters.value.plugin?.pluginId ?? "";
-  if (current && !pluginStore.plugins.some((p) => p.id === current)) {
-    clearDimension("plugin");
-    return;
-  }
-  if (shouldReloadPlugins) {
-    void ensurePluginGroupsLoaded();
-  }
-});
-
-async function ensurePluginGroupsLoaded() {
-  await ensureLazyLoaded("plugin", async (prefix) => {
-    try {
-      const entries = await listProviderDirs(`${prefix}plugin/`);
-      const groups = await Promise.all(
-        entries.map(async (e) => ({
-          plugin_id: e.name,
-          count: typeof e.total === "number"
-            ? e.total
-            : await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
-        }))
-      );
-      if (prefix !== filterContextPrefix.value) return;
-      pluginGroups.value = groups.filter((r) => r.count > 0);
-    } catch {
-      if (prefix === filterContextPrefix.value) pluginGroups.value = [];
-    }
-  });
-}
-
-function normalizeExtendPath(path = "") {
-  return path.trim().replace(/^\/+|\/+$/g, "");
-}
-
-function pluginExtendKey(pluginId: string, extendPath = "") {
-  const path = normalizeExtendPath(extendPath);
-  return path ? `${pluginId}\t${path}` : pluginId;
-}
-
-function parsePluginExtendKey(key: string) {
-  const tab = key.indexOf("\t");
-  if (tab < 0) return { pluginId: key, extendPath: "" };
-  return { pluginId: key.slice(0, tab), extendPath: key.slice(tab + 1) };
-}
-
-function pluginExtendScope(pluginId: string, extendPath = ""): LazyScope {
-  return `plugin-extend:${pluginExtendKey(pluginId, extendPath)}`;
-}
-
-function pluginExtendPathForProvider(extendPath = "") {
-  return normalizeExtendPath(extendPath)
-    .split("/")
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join("/");
-}
-
-function pluginExtendChildrenByPath(pluginId: string) {
-  const prefix = `${pluginId}\t`;
-  const out: Record<string, ProviderChildDir[]> = {};
-  for (const [key, children] of Object.entries(pluginExtendChildren.value)) {
-    if (key === pluginId) {
-      out[""] = children;
-    } else if (key.startsWith(prefix)) {
-      out[key.slice(prefix.length)] = children;
-    }
-  }
-  return out;
-}
-
-function isProviderLeaf(entry: ProviderChildDir) {
-  return entry.meta?.isLeaf === true;
-}
-
-function isProviderPlain(entry: ProviderChildDir) {
-  return entry.meta?.plain === true;
-}
-
-function activePluginExtendPath(pluginId: string) {
-  return activeFilters.value.plugin?.pluginId === pluginId
-    ? normalizeExtendPath(activeFilters.value.plugin.extendPath ?? "")
-    : "";
-}
-
-function visiblePluginExtendLoadingPaths(pluginId: string) {
-  const prefix = `${filterContextPrefix.value}|plugin-extend:${pluginId}`;
-  const paths = new Set<string>();
-  for (const key of lazyVisibleLoadingKeys.value) {
-    if (!key.startsWith(prefix)) continue;
-    const suffix = key.slice(prefix.length);
-    paths.add(suffix.startsWith("\t") ? suffix.slice(1) : "");
-  }
-  return paths;
-}
-
-function pluginCommand(pluginId: string, extendPath = "") {
-  return extendPath ? `${pluginId}\t${extendPath}` : pluginId;
-}
-
-function parsePluginCommand(command: string) {
-  const [pluginId, extendPath = ""] = String(command || "").split("\t");
-  return { pluginId: pluginId.trim(), extendPath: extendPath.trim() };
-}
-
-function isPluginCommandActive(pluginId: string, extendPath = "") {
-  return (
-    activeFilters.value.plugin?.pluginId === pluginId &&
-    (activeFilters.value.plugin.extendPath ?? "") === extendPath
-  );
-}
-
-function isPluginProviderCommandActive(pluginId: string) {
-  return activeFilters.value.plugin?.pluginId === pluginId;
-}
-
-async function ensurePluginExtendLoaded(pluginId: string, extendPath = "") {
-  const id = pluginId.trim();
-  if (!id) return;
-  const path = normalizeExtendPath(extendPath);
-  await ensureLazyLoaded(pluginExtendScope(id, path), async (prefix) => {
-    try {
-      const providerPath = pluginExtendPathForProvider(path);
-      const entries = await listProviderDirs(
-        `${prefix}plugin/${encodeURIComponent(id)}/extend/${providerPath}`
-      );
-      if (prefix !== filterContextPrefix.value) return;
-      pluginExtendChildren.value = {
-        ...pluginExtendChildren.value,
-        [pluginExtendKey(id, path)]: entries,
-      };
-    } catch {
-      if (prefix === filterContextPrefix.value) {
-        pluginExtendChildren.value = {
-          ...pluginExtendChildren.value,
-          [pluginExtendKey(id, path)]: [],
-        };
-      }
-    }
-  });
-}
-
-async function ensureAllPluginExtendsLoaded() {
-  await Promise.all(pluginGroups.value.map((g) => ensurePluginExtendTreeLoaded(g.plugin_id)));
-}
-
-async function ensurePluginExtendTreeLoaded(pluginId: string, extendPath = "", depth = 0) {
-  if (depth > 3) return;
-  await ensurePluginExtendLoaded(pluginId, extendPath);
-  const children = pluginExtendChildren.value[pluginExtendKey(pluginId, extendPath)] ?? [];
-  await Promise.all(
-    children
-      .filter((child) => !isProviderLeaf(child))
-      .map((child) =>
-        ensurePluginExtendTreeLoaded(
-          pluginId,
-          [normalizeExtendPath(extendPath), child.name].filter(Boolean).join("/"),
-          depth + 1
-        )
-      )
-  );
-}
-
-async function ensureMediaTypeCountsLoaded() {
-  await ensureLazyLoaded("media-type", async (prefix) => {
-    try {
-      const [imageCount, videoCount] = await Promise.all([
-        countProviderPath(`${prefix}media-type/image`),
-        countProviderPath(`${prefix}media-type/video`),
-      ]);
-      if (prefix !== filterContextPrefix.value) return;
-      mediaTypeCounts.value = { imageCount, videoCount };
-    } catch {
-      if (prefix === filterContextPrefix.value) {
-        mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
-      }
-    }
-  });
-}
-
-async function ensureTimeRootLoaded() {
-  await ensureLazyLoaded("time-root", async (prefix) => {
-    try {
-      const yearEntries = await listProviderDirs(`${prefix}date/`);
-      const yearCandidates = yearEntries
-        .map((e) => {
-          const m = YEAR_SEG_RE.exec(e.name);
-          return m ? { year: m[1]!, seg: e.name } : null;
-        })
-        .filter((y): y is { year: string; seg: string } => !!y);
-      const years = (
-        await Promise.all(
-          yearCandidates.map(async (y) => ({
-            year: y.year,
-            count: await countProviderPath(`${prefix}date/${y.seg}`),
-          }))
-        )
-      ).filter((y) => y.count > 0);
-      if (prefix !== filterContextPrefix.value) return;
-      yearGroups.value = years;
-    } catch {
-      if (prefix === filterContextPrefix.value) {
-        yearGroups.value = [];
-        monthGroups.value = [];
-        dayGroups.value = [];
-      }
-    }
-  });
-}
-
-async function ensureTimeYearMonthsLoaded(year: string) {
-  if (!/^\d{4}$/.test(year)) return;
-  await ensureLazyLoaded(`time-year:${year}`, async (prefix) => {
-    try {
-      const yearSeg = `${year}y`;
-      const monthEntries = await listProviderDirs(`${prefix}date/${yearSeg}/`);
-      const monthCandidates = monthEntries
-        .map((e) => {
-          const m = MONTH_SEG_RE.exec(e.name);
-          return m ? { month: m[1]!, seg: e.name } : null;
-        })
-        .filter((m): m is { month: string; seg: string } => !!m);
-      const months = (
-        await Promise.all(
-          monthCandidates.map(async (mo) => ({
-            year_month: `${year}-${mo.month}`,
-            count: await countProviderPath(`${prefix}date/${yearSeg}/${mo.seg}`),
-          }))
-        )
-      ).filter((mo) => mo.count > 0);
-      if (prefix !== filterContextPrefix.value) return;
-      monthGroups.value = [
-        ...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)),
-        ...months,
-      ];
-      dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
-    } catch {
-      if (prefix === filterContextPrefix.value) {
-        monthGroups.value = monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`));
-        dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
-      }
-    }
-  });
-}
-
-async function ensureTimeMonthDaysLoaded(yearMonth: string) {
-  const m = /^(\d{4})-(\d{2})$/.exec(yearMonth);
-  if (!m) return;
-  const [, year, month] = m;
-  await ensureLazyLoaded(`time-month:${yearMonth}`, async (prefix) => {
-    try {
-      const yearSeg = `${year}y`;
-      const monthSeg = `${month}m`;
-      const dayEntries = await listProviderDirs(`${prefix}date/${yearSeg}/${monthSeg}/`);
-      const dayCandidates = dayEntries
-        .map((e) => {
-          const dm = DAY_SEG_RE.exec(e.name);
-          return dm ? { day: dm[1]!, seg: e.name } : null;
-        })
-        .filter((d): d is { day: string; seg: string } => !!d);
-      const days = (
-        await Promise.all(
-          dayCandidates.map(async (d) => ({
-            ymd: `${yearMonth}-${d.day}`,
-            count: await countProviderPath(`${prefix}date/${yearSeg}/${monthSeg}/${d.seg}`),
-          }))
-        )
-      ).filter((d) => d.count > 0);
-      if (prefix !== filterContextPrefix.value) return;
-      dayGroups.value = [
-        ...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)),
-        ...days,
-      ];
-    } catch {
-      if (prefix === filterContextPrefix.value) {
-        dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`));
-      }
-    }
-  });
-}
-
-async function ensureTimeNodeChildrenLoaded(node: TimeMenuNode) {
-  if (/^\d{4}$/.test(node.name)) {
-    await ensureTimeYearMonthsLoaded(node.name);
-  } else if (/^\d{4}-\d{2}$/.test(node.name)) {
-    await ensureTimeMonthDaysLoaded(node.name);
-  }
-}
-
-const sortOptionLabelAsc = computed(() => {
-  switch (sortField.value) {
-    case "by-id":
-      return t("gallery.byDefaultAsc");
-    case "by-set-time":
-      return t("gallery.bySetTimeAsc");
-    case "by-name":
-      return t("gallery.byNameAsc");
-    case "by-size":
-      return t("gallery.bySizeAsc");
-    case "by-aspect":
-      return t("gallery.byAspectWidthHeight");
-    case "by-time":
-      return t("gallery.byTimeAsc");
-    case "random":
-      return t("gallery.byRandomAsc");
-  }
-});
-const sortOptionLabelDesc = computed(() => {
-  switch (sortField.value) {
-    case "by-id":
-      return t("gallery.byDefaultDesc");
-    case "by-set-time":
-      return t("gallery.bySetTimeDesc");
-    case "by-name":
-      return t("gallery.byNameDesc");
-    case "by-size":
-      return t("gallery.bySizeDesc");
-    case "by-aspect":
-      return t("gallery.byAspectHeightWidth");
-    case "by-time":
-      return t("gallery.byTimeDesc");
-    case "random":
-      return t("gallery.byRandomDesc");
-  }
-});
-
-/**
- * chip 上只显示纯值：维度名已经在 chip 左侧，labelForFilter 的「按插件：」这类前缀
- * 在这里是冗余的。取值口径与高级查询弹窗一致（facetValueLabel）。
- */
-function dimensionChipValue(dimension: GalleryFilterDimension): string | undefined {
-  void locale.value;
-  const filter = filterForDimension(activeFilters.value, dimension);
-  if (filter.type === "all") return undefined;
-  if (dimension === "wallpaperOrder") return t("gallery.filterWallpaperSet");
-  if (dimension === "plugin") {
-    const pid = filterPluginId(filter);
-    if (!pid) return undefined;
-    const ext = filter.type === "plugin" ? filter.extendPath?.trim() : "";
-    const name = pluginStore.pluginLabel(pid);
-    return ext ? `${name} / ${ext}` : name;
-  }
-  if (dimension === "date") {
-    if (filter.type === "date-range") return `${filter.start} ~ ${filter.end}`;
-    const segment = filterDateSegment(filter);
-    return segment
-      ? formatTimeFilterDetail(segment, String(locale.value), t)
-      : undefined;
-  }
-  if (dimension === "mediaType") {
-    const kind = filterMediaKind(filter);
-    if (!kind) return undefined;
-    const format = filterMediaFormat(filter);
-    const label = facetValueLabel("mediaType", kind, t);
-    return format ? `${label} / ${format}` : label;
-  }
-  const value = dimension === "name"
-    ? filterNameBucket(filter)
-    : dimension === "size"
-    ? filterSizeRange(filter)
-    : filterAspectRange(filter);
-  if (value == null) return undefined;
-  return facetValueLabel(dimension, value, t);
-}
-
-function labelForFilter(filter: GalleryFilter) {
-  void locale.value;
-  if (filter.type === "wallpaper-order") return t("gallery.filterWallpaperSet");
-  if (filter.type === "no-album") return t("gallery.filterNoAlbum");
-  const nb = filterNameBucket(filter);
-  if (nb !== null) {
-    const detail = NAME_BUCKET_AUTONYMS[nb] ?? nb;
-    return `${t("gallery.filterByName")}: ${detail}`;
-  }
-  const sr = filterSizeRange(filter);
-  if (sr !== null) {
-    const key = SIZE_RANGE_LABEL_KEYS[sr];
-    const detail = key ? t(`gallery.${key}`) : sr;
-    return `${t("gallery.filterBySize")}: ${detail}`;
-  }
-  const ar = filterAspectRange(filter);
-  if (ar !== null) {
-    const key = ASPECT_RANGE_LABEL_KEYS[ar];
-    const detail = key ? t(`gallery.${key}`) : ar;
-    return `${t("gallery.filterByAspect")}: ${detail}`;
-  }
-  if (filter.type === "date-range") {
-    return `${filter.start} ~ ${filter.end}`;
-  }
-  const dt = filterDateSegment(filter);
-  if (dt) {
-    return t("gallery.filterByTimeWithDetail", {
-      detail: formatTimeFilterDetail(dt, String(locale.value), t),
-    });
-  }
-  const pid = filterPluginId(filter);
-  if (pid) {
-    const ext = filter.type === "plugin" ? filter.extendPath?.trim() : "";
-    const name = pluginStore.pluginLabel(pid);
-    return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
-  }
-  const mk = filterMediaKind(filter);
-  const mf = filterMediaFormat(filter);
-  if (mk === "image") {
-    const label = t("gallery.filterImageOnlyLabel");
-    if (mf) return `${label} / ${mf}`;
-    return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.imageCount})` : label;
-  }
-  if (mk === "video") {
-    const label = t("gallery.filterVideoOnlyLabel");
-    if (mf) return `${label} / ${mf}`;
-    return isLazyLoaded("media-type") ? `${label} (${mediaTypeCounts.value.videoCount})` : label;
-  }
-  return t("gallery.filterAll");
-}
-
-const filterFoldLabel = computed(() => labelForFilter(legacyFilter.value));
-
-function dimensionLabel(dimension: GalleryFilterDimension) {
-  const filter = filterForDimension(activeFilters.value, dimension);
-  return filter.type === "all" ? t("gallery.filterAny") : labelForFilter(filter);
-}
-
-function onSortOrderChange(value: string) {
-  emit("update:sort", { ...props.sort, desc: value === "desc" });
-}
-
-const sortToolbarButtonLabel = computed(() =>
-  sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
-);
-
-async function refreshProviderFilterTree() {
-  const target = Array.isArray(providerTreeRef.value)
-    ? providerTreeRef.value[0]
-    : providerTreeRef.value;
-  await target?.refresh?.();
-}
-
-defineExpose({ refreshProviderFilterTree });
-
-const pageSizeOptions = [100, 500, 1000] as const;
-
-async function onDesktopPageSizeCommand(cmd: string) {
-  const n = Number(cmd);
-  if (n !== 100 && n !== 500 && n !== 1000) return;
-  emit("update:pageSize", n);
-}
-
-// Android：fold 中过滤 / 排序弹出的 picker
-const filterPicker = useModal();
-const timeFilterPicker = useModal();
-const pluginFilterPicker = useModal();
-const mediaTypeFilterPicker = useModal();
-const nameFilterPicker = useModal();
-const aspectFilterPicker = useModal();
-const sortPicker = useModal();
-const pageSizePicker = useModal();
-
-const filterPickerColumns = computed(() => [
-  { text: t("gallery.filterAll"), value: "all" },
-  { text: t("gallery.filterByTime"), value: "time" },
-  { text: t("gallery.filterByPlugin"), value: "plugin" },
-  { text: t("gallery.filterByMediaType"), value: "media-type" },
-  { text: t("gallery.filterByAspect"), value: "aspect" },
-  { text: t("gallery.filterByName"), value: "name" },
-  { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
-]);
-const filterPickerSelected = ref<string[]>(["all"]);
-watch(filterPicker.isOpen, (open) => {
-  if (open) {
-    if (isWallpaperOrderBrowse.value) {
-      filterPickerSelected.value = ["wallpaper-order"];
-    } else if (isTimeFilterBrowse.value) {
-      filterPickerSelected.value = ["time"];
-    } else if (isPluginFilterBrowse.value) {
-      filterPickerSelected.value = ["plugin"];
-    } else if (isMediaTypeFilterBrowse.value) {
-      filterPickerSelected.value = ["media-type"];
-    } else if (isNameBrowse.value) {
-      filterPickerSelected.value = ["name"];
-    } else if (isAspectBrowse.value) {
-      filterPickerSelected.value = ["aspect"];
-    } else {
-      filterPickerSelected.value = ["all"];
-    }
-  }
-});
-async function onFilterPickerConfirm() {
-  filterPicker.close();
-  const v = filterPickerSelected.value[0];
-  if (v === "time") {
-    await ensureTimeRootLoaded();
-    await ensureTimeTailLoaded(dateTail.value);
-    if (!timeMenuRoots.value.length) return;
-    timeFilterPicker.open();
-    return;
-  }
-  if (v === "plugin") {
-    await ensurePluginGroupsLoaded();
-    await ensureAllPluginExtendsLoaded();
-    if (!pluginGroups.value.length) return;
-    pluginFilterPicker.open();
-    return;
-  }
-  if (v === "media-type") {
-    await ensureMediaTypeCountsLoaded();
-    mediaTypeFilterPicker.open();
-    return;
-  }
-  if (v === "name") {
-    nameFilterPicker.open();
-    return;
-  }
-  if (v === "aspect") {
-    aspectFilterPicker.open();
-    return;
-  }
-  if (v === "all" || v === "wallpaper-order") {
-    emit(
-      "update:filters",
-      v === "all" ? {} : { wallpaperOrder: true }
-    );
-  }
-}
-
-const timeFilterPickerTitle = computed(() => t("gallery.filterByTime"));
-
-const timeFilterPickerColumns = ref<{ text: string; value: string }[][]>([]);
-const timeFilterPickerSelected = ref<string[]>([]);
-
-function applyTimeMenuPickerState(raw: readonly string[]) {
-  const roots = timeMenuRoots.value;
-  const { columns, values } = syncTimeMenuPickerState(roots, raw);
-  timeFilterPickerColumns.value = columns;
-  timeFilterPickerSelected.value = values;
-}
-
-function findTimeNodeByPickerValues(raw: readonly string[]) {
-  let nodes = timeMenuRoots.value;
-  let found: TimeMenuNode | null = null;
-  for (const value of raw) {
-    const node = nodes.find((n) => (n.key ?? n.name) === value);
-    if (!node) break;
-    found = node;
-    nodes = node.children ?? [];
-  }
-  return found;
-}
-
-async function ensureTimeTailLoaded(tail: string | null) {
-  const s = tail?.trim();
-  if (!s) return;
-  const year = /^(\d{4})(?:-\d{2})?(?:-\d{2})?$/.exec(s)?.[1];
-  if (year) {
-    await ensureTimeYearMonthsLoaded(year);
-  }
-  const yearMonth = /^(\d{4}-\d{2})(?:-\d{2})?$/.exec(s)?.[1];
-  if (yearMonth) {
-    await ensureTimeMonthDaysLoaded(yearMonth);
-  }
-}
-
-watch(timeFilterPicker.isOpen, (open) => {
-  if (!open) return;
-  const roots = timeMenuRoots.value;
-  const initial = resolveInitialTimePickPath(roots, dateTail.value);
-  applyTimeMenuPickerState(initial);
-});
-
-async function onTimeFilterPickerChange(payload: {
-  selectedValues: (string | number)[];
-  columnIndex: number;
-}) {
-  const { columnIndex, selectedValues } = payload;
-  const maxD = getTimeMenuMaxDepth(timeMenuRoots.value);
-  if (columnIndex >= maxD - 1) return;
-  const values = selectedValues.map(String);
-  const node = findTimeNodeByPickerValues(values);
-  if (node) {
-    await ensureTimeNodeChildrenLoaded(node);
-  }
-  applyTimeMenuPickerState(values);
-}
-
-function onTimeFilterPickerConfirm(payload: {
-  selectedValues: (string | number)[];
-}) {
-  timeFilterPicker.close();
-  const roots = timeMenuRoots.value;
-  const tail = resolveTimeMenuPickToDateTail(
-    roots,
-    payload.selectedValues.map(String)
-  );
-  if (!tail) return;
-  emit("update:filters", singleFilterToSet({ type: "date", segment: tail }));
-}
-
-const pluginFilterPickerColumns = computed(() => {
-  void locale.value;
-  const rows: PickerCascadeOption[] = [];
-  for (const g of pluginGroups.value) {
-    const pluginLabel = pluginStore.pluginLabel(g.plugin_id);
-    const children: PickerCascadeOption[] = [
-      {
-        text: `${t("gallery.filterAll")} (${g.count})`,
-        value: pluginCommand(g.plugin_id),
-      },
-    ];
-    children.push(...pluginExtendPickerOptions(g.plugin_id));
-    rows.push({
-      text: `${pluginLabel} (${g.count})`,
-      value: g.plugin_id,
-      children,
-    });
-  }
-  return rows;
-});
-
-function pluginExtendPickerOptions(pluginId: string, parentPath = ""): PickerCascadeOption[] {
-  return (pluginExtendChildren.value[pluginExtendKey(pluginId, parentPath)] ?? []).map((child) => {
-    const path = [normalizeExtendPath(parentPath), child.name].filter(Boolean).join("/");
-    const nested = isProviderLeaf(child) ? [] : pluginExtendPickerOptions(pluginId, path);
-    return {
-      text: child.name,
-      value: pluginCommand(pluginId, path),
-      children: nested.length ? nested : undefined,
-    };
-  });
-}
-
-function pluginExtendChildByPath(pluginId: string, extendPath = "") {
-  const segments = normalizeExtendPath(extendPath).split("/").filter(Boolean);
-  let parentPath = "";
-  let found: ProviderChildDir | undefined;
-  for (const segment of segments) {
-    found = (pluginExtendChildren.value[pluginExtendKey(pluginId, parentPath)] ?? []).find(
-      (child) => child.name === segment
-    );
-    if (!found) return undefined;
-    parentPath = [parentPath, segment].filter(Boolean).join("/");
-  }
-  return found;
-}
-
-function isPluginCommandPlain(command: string) {
-  const { pluginId, extendPath } = parsePluginCommand(command);
-  if (!pluginId || !extendPath) return false;
-  const child = pluginExtendChildByPath(pluginId, extendPath);
-  return child ? isProviderPlain(child) : false;
-}
-
-const pluginFilterPickerSelected = ref<string[]>([]);
-watch(pluginFilterPicker.isOpen, (open) => {
-  if (open) {
-    const id = currentPluginId.value || pluginGroups.value[0]?.plugin_id || "";
-    const extendPath = activeFilters.value.plugin?.extendPath ?? "";
-    pluginFilterPickerSelected.value = id ? [id, pluginCommand(id, extendPath)] : [];
-  }
-});
-function onPluginFilterPickerConfirm() {
-  const selected = pluginFilterPickerSelected.value;
-  const command = selected[selected.length - 1] ?? "";
-  if (isPluginCommandPlain(command)) return;
-  pluginFilterPicker.close();
-  const { pluginId: id, extendPath } = parsePluginCommand(command);
-  if (!id) return;
-  emit(
-    "update:filters",
-    singleFilterToSet(
-      extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }
-    )
-  );
-}
-
-const mediaTypeFilterPickerColumns = computed(() => {
-  void locale.value;
-  const { imageCount, videoCount } = mediaTypeCounts.value;
-  return [
+  onQueryNavigate(
     {
-      text: `${t("gallery.filterImageOnly")} (${imageCount})`,
-      value: "image",
+      filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
+      advanced: undefined,
+      search: "",
+      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
+      page: 1,
     },
-    {
-      text: `${t("gallery.filterVideoOnly")} (${videoCount})`,
-      value: "video",
-    },
-  ];
-});
-const mediaTypeFilterPickerSelected = ref<string[]>(["image"]);
-watch(mediaTypeFilterPicker.isOpen, (open) => {
-  if (open) {
-    const k = filterMediaKind(activeFilters.value);
-    mediaTypeFilterPickerSelected.value = [k === "video" ? "video" : "image"];
-  }
-});
-function onMediaTypeFilterPickerConfirm() {
-  mediaTypeFilterPicker.close();
-  const kind = mediaTypeFilterPickerSelected.value[0];
-  if (kind !== "image" && kind !== "video") return;
-  emit("update:filters", singleFilterToSet({ type: "media-type", kind }));
+    { push: true },
+  );
 }
 
-const nameFilterPickerColumns = computed(() =>
-  GALLERY_NAME_LANGUAGE_BUCKETS.map((b) => ({
-    text: b.autonym,
-    value: b.bucket,
-  })),
+// ---------- 安卓折叠菜单标签 ----------
+const labelContext = computed(() => ({
+  t,
+  locale: String(locale.value),
+  pluginLabel: (id: string) => pluginStore.pluginLabel(id),
+}));
+
+const filterFoldLabel = computed(() =>
+  galleryLabelForFilter(filterSetToSingleFilter(activeFilters.value), labelContext.value),
 );
-const nameFilterPickerSelected = ref<string[]>(["english"]);
-watch(nameFilterPicker.isOpen, (open) => {
-  if (open) {
-    nameFilterPickerSelected.value = [
-      filterNameBucket(activeFilters.value) ?? GALLERY_NAME_LANGUAGE_BUCKETS[0].bucket,
-    ];
-  }
-});
-function onNameFilterPickerConfirm() {
-  nameFilterPicker.close();
-  const bucket = nameFilterPickerSelected.value[0]?.trim();
-  if (!bucket) return;
-  emit("update:filters", singleFilterToSet({ type: "name", bucket }));
-}
 
-const aspectFilterPickerColumns = computed(() =>
-  GALLERY_ASPECT_BUCKETS.map((b) => ({
-    text: t(`gallery.${b.labelKey}`),
-    value: b.range,
-  })),
+const sortFoldLabel = computed(() => {
+  const labels = gallerySortOrderLabels(props.sort.field, t);
+  return props.sort.desc ? labels.desc : labels.asc;
+});
+
+const showGalleryFilterFold = computed(
+  () => galleryRouteStore.advanced === undefined && isSimpleFilter(activeFilters.value),
 );
-const aspectFilterPickerSelected = ref<string[]>(["landscape-4x3-16x9"]);
-watch(aspectFilterPicker.isOpen, (open) => {
-  if (open) {
-    aspectFilterPickerSelected.value = [
-      filterAspectRange(activeFilters.value) ?? GALLERY_ASPECT_BUCKETS[0].range,
-    ];
-  }
-});
-function onAspectFilterPickerConfirm() {
-  aspectFilterPicker.close();
-  const range = aspectFilterPickerSelected.value[0]?.trim();
-  if (!range) return;
-  emit("update:filters", singleFilterToSet({ type: "aspect", range }));
-}
 
-const sortPickerColumns = computed(() => [
-  { text: sortOptionLabelAsc.value, value: "asc" },
-  { text: sortOptionLabelDesc.value, value: "desc" },
-]);
-const sortPickerSelected = ref<string[]>(["asc"]);
-watch(sortPicker.isOpen, (open) => {
-  if (open) sortPickerSelected.value = [sortOrder.value];
+const failedCountFoldLabel = computed(() => {
+  const n = failedImagesStore.allFailed.length;
+  const suffix = n >= 99 ? "99+" : String(n);
+  return `${t("header.failedImages")} (${suffix})`;
 });
-function onSortPickerConfirm() {
-  sortPicker.close();
-  const v = sortPickerSelected.value[0];
-  if (v === "asc" || v === "desc") onSortOrderChange(v);
-}
 
-const pageSizePickerColumns = computed(() =>
-  pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })),
-);
-const pageSizePickerSelected = ref<string[]>(["100"]);
-watch(pageSizePicker.isOpen, (open) => {
-  if (open) pageSizePickerSelected.value = [String(props.pageSize)];
-});
-async function onPageSizePickerConfirm() {
-  pageSizePicker.close();
-  const v = pageSizePickerSelected.value[0];
-  const n = Number(v);
-  if (n !== 100 && n !== 500 && n !== 1000) return;
-  emit("update:pageSize", n);
-}
-
+// ---------- 总数（分子 / 分母）----------
 /**
  * 无过滤总数（分母）。只带上下文里那部分「不是用户过滤」的东西——目前就是 hide，
  * 所以它跟着 galleryHide 与入库变更自己刷新，不依赖当前这次查询的结果。
@@ -1851,7 +200,8 @@ const unfilteredTotal = ref<number | null>(null);
 
 async function refreshUnfilteredTotal() {
   try {
-    unfilteredTotal.value = await countProviderPath(galleryHide.value ? "hide" : "gallery");
+    const res = await pathqlEntry(withGalleryPrefix(galleryHide.value ? "hide" : "gallery"));
+    unfilteredTotal.value = typeof res?.total === "number" ? res.total : null;
   } catch {
     unfilteredTotal.value = null; // 拿不到就退回只显示当前数，不显示分母
   }
@@ -1877,28 +227,17 @@ useAlbumImagesChangeRefresh({
 
 const totalCountText = computed(() => {
   if (props.totalCount === 0) {
-    return t('gallery.noImages');
+    return t("gallery.noImages");
   }
   const total = unfilteredTotal.value;
   // 没过滤(或分母还没回来)时不写 "16892 / 16892" 这种废话。
   if (total == null || total <= props.totalCount) {
-    return t('gallery.totalImages', { count: props.totalCount });
+    return t("gallery.totalImages", { count: props.totalCount });
   }
-  return t('gallery.totalImagesFiltered', { count: props.totalCount, total });
+  return t("gallery.totalImagesFiltered", { count: props.totalCount, total });
 });
 
-const emit = defineEmits<{
-  refresh: [];
-  showCrawlerDialog: [];
-  showLocalImport: [];
-  openCollectMenu: [];
-  "update:filters": [value: GalleryFilterSet];
-  "update:sort": [value: GallerySort];
-  "update:pageSize": [value: number];
-  "update:search": [value: string];
-  "update:searchMode": [value: GallerySearchMode];
-}>();
-
+// ---------- Header ----------
 const showIds = computed(() => {
   if (uiStore.isCompact) {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
@@ -1926,9 +265,7 @@ const foldIds = computed(() => {
 const headerStore = useHeaderStore();
 watch(
   [
-    sortOrder,
-    sortOptionLabelAsc,
-    sortOptionLabelDesc,
+    sortFoldLabel,
     filterFoldLabel,
     showGalleryFilterFold,
     () => props.pageSize,
@@ -1942,13 +279,10 @@ watch(
     } else {
       headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
     }
-    headerStore.setFoldLabel(
-      HeaderFeatureId.GallerySort,
-      sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
-    );
+    headerStore.setFoldLabel(HeaderFeatureId.GallerySort, sortFoldLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, String(props.pageSize));
   },
-  { immediate: true }
+  { immediate: true },
 );
 onUnmounted(() => {
   if (!uiStore.isCompact) return;
@@ -1977,7 +311,7 @@ onMounted(() => {
       } else {
         delete next.noAlbum;
       }
-      emit("update:filters", next);
+      onQueryNavigate({ filters: next, page: 1 });
     },
   });
 });
@@ -1985,6 +319,10 @@ onUnmounted(() => {
   pageBridge.setRefresh(null);
   pageBridge.setToggleShowHidden(null);
   pageBridge.setToggleShowAlbumImages(null);
+});
+
+defineExpose({
+  refreshProviderFilterTree: () => queryBarRef.value?.refreshProviderFilterTree(),
 });
 
 // 处理action事件
@@ -2002,15 +340,13 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       }
       break;
     case HeaderFeatureId.GalleryFilter:
-      if (isAdvancedActive.value) break;
-      filterPicker.open();
+      queryBarRef.value?.openFilterPicker();
       break;
     case HeaderFeatureId.GallerySort:
-      sortPicker.open();
+      queryBarRef.value?.openSortPicker();
       break;
     case HeaderFeatureId.GalleryPageSize:
-      pageSizePickerSelected.value = [String(props.pageSize)];
-      pageSizePicker.open();
+      queryBarRef.value?.openPageSizePicker();
       break;
     case HeaderFeatureId.FailedImages:
       // 桌面由 show 区的 FailedImagesHeaderButton comp 直接处理；
@@ -2063,53 +399,5 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
   color: #fff;
   background: var(--anime-primary);
   font-size: 7px;
-}
-
-/* 简单/高级共用的查询行：行高钉死在简单态的尺寸（chip 38px + 滚动区上下 8/10px 留白），
-   高级态内容更矮时靠 align-items 居中撑住，切模式时下方画廊不会上下跳。 */
-.query-row {
-  min-height: 56px;
-}
-
-/* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */
-.filter-chip-row {
-  // el-scrollbar 的滑块是浮层不占位，配色跟应用主色系走。
-  --el-scrollbar-bg-color: var(--anime-primary);
-  --el-scrollbar-hover-bg-color: var(--anime-primary-dark, var(--anime-primary));
-  --el-scrollbar-opacity: 0.6;
-  --el-scrollbar-hover-opacity: 0.95;
-
-  :deep(.el-scrollbar__view) > * {
-    flex: none;
-  }
-
-  :deep(.el-scrollbar__bar.is-horizontal) {
-    height: 4px;
-    bottom: 0;
-    left: 0;
-    right: 0;
-  }
-}
-
-/* 右边界的粉色渐隐：还能往右滚时才出现，提示「后面还有维度」。 */
-.filter-chip-viewport::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 36px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.18s ease;
-  background: linear-gradient(
-    to right,
-    rgba(255, 107, 157, 0) 0%,
-    rgba(255, 107, 157, 0.18) 100%
-  );
-}
-
-.filter-chip-viewport.has-more::after {
-  opacity: 1;
 }
 </style>

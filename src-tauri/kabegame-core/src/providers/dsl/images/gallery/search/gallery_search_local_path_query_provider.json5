@@ -1,0 +1,20 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_search_local_path_query_provider",
+    "properties": {
+        "query": { "type": "string", "default": "", "optional": false }
+    },
+    // 两侧都把 `\` 归一成 `/`：Windows 存反斜线，用户可能复制反斜线也可能手打正斜线。
+    // 归一后 query 里已无 `\`，LIKE 只需转义 % 和 _。local_path 是 NOT NULL，无需兜底。
+    "query": {
+        "where": "LOWER(REPLACE(images.local_path, '\\', '/')) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '/'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

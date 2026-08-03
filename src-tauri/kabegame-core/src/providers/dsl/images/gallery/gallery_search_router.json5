@@ -1,13 +1,15 @@
 {
     "namespace": "kabegame",
     "name": "gallery_search_router",
-    "note": "Search by display name, plugin metadata, or native metadata: search/display-name/<query>, search/metadata/<query>, or search/native-metadata/<query>. Each is a PREFIX, so filtering and pagination may continue after it.",
+    "note": "Search by display name, plugin metadata, native metadata, local path, or source URL: search/display-name/<query>, search/metadata/<query>, search/native-metadata/<query>, search/local-path/<query>, or search/url/<query>. Each is a PREFIX, so filtering and pagination may continue after it.",
     // 7a: 纯 router 壳 — 仅持 list 路由表, 无 apply_query 贡献 (search 本身不变换 query;
     // search 子项 /<query>/ 才会注入 LIKE WHERE). 严格遵守 router/provider 分工:
-    // 这一层只负责枚举三种搜索目标，不混业务逻辑。
+    // 这一层只负责枚举五种搜索目标，不混业务逻辑。
     "list": {
         "display-name": { "provider": "gallery_search_display_name_router" },
         "metadata": { "provider": "gallery_search_metadata_router" },
-        "native-metadata": { "provider": "gallery_search_native_metadata_router" }
+        "native-metadata": { "provider": "gallery_search_native_metadata_router" },
+        "local-path": { "provider": "gallery_search_local_path_router" },
+        "url": { "provider": "gallery_search_url_router" }
     }
 }

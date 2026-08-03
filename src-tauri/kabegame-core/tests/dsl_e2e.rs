@@ -65,6 +65,20 @@ fn fixture_kb_rand_arg(
 
 fn register_fixture_functions(conn: &Connection) {
     conn.create_scalar_function(
+        "is_search_dummy_url",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<i64> {
+            let rusqlite::types::ValueRef::Text(bytes) = ctx.get_raw(0) else {
+                return Ok(1);
+            };
+            let url = String::from_utf8_lossy(bytes);
+            Ok(kabegame_core::crawler::downloader::is_search_dummy_url(url.trim()) as i64)
+        },
+    )
+    .unwrap();
+
+    conn.create_scalar_function(
         "kb_rand",
         2,
         FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
@@ -390,6 +404,26 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         }
     }
 
+    conn.execute(
+        "INSERT INTO images
+         (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
+          metadata_id, thumbnail_path, hash, type, width, height, display_name, size, post_url)
+         VALUES (121, 'file:///D:/import/a.jpg', ?1, 'pixiv', ?2, 'surf-a', 1680660060,
+                 NULL, '', 'hash-121', 'image/jpeg', 100, 100, 'local-file', 10, NULL)",
+        (r"D:\pics\a.jpg", TASK_A_ID),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO images
+         (id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
+          metadata_id, thumbnail_path, hash, type, width, height, display_name, size, post_url)
+         VALUES (122, 'data:dummy', 'D:/import/dummy.jpg', 'pixiv', ?1, 'surf-a', 1680660120,
+                 NULL, '', 'hash-122', 'image/jpeg', 100, 100, 'dummy-url', 10,
+                 'https://post.test/p/1')",
+        [TASK_A_ID],
+    )
+    .unwrap();
+
     Arc::new(Mutex::new(conn))
 }
 
@@ -587,7 +621,7 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
     assert_eq!(surf.id, "surf-a");
     assert_eq!(
         runtime.count("images://gallery/surf/pixiv.test").unwrap(),
-        120
+        122
     );
     assert!(runtime
         .count("images://gallery/hide/surf/pixiv.test")
@@ -598,8 +632,8 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
 fn root_gallery_and_vd_topology_uses_images_schema() {
     let runtime = build_runtime();
 
-    assert_eq!(runtime.count("images://").unwrap(), 120);
-    assert_eq!(runtime.count("images://gallery/all").unwrap(), 120);
+    assert_eq!(runtime.count("images://").unwrap(), 122);
+    assert_eq!(runtime.count("images://gallery/all").unwrap(), 122);
 
     let plugins = runtime.list("images://gallery/plugin").unwrap();
     assert_eq!(
@@ -721,13 +755,14 @@ fn gallery_by_routes_fetch_single_images() {
     let runtime = build_runtime();
     for (path, expected_id) in [
         ("images://gallery/by_id/7", "7"),
-        ("images://gallery/by_path/D%3A%2Ffixture%2F8.jpg", "8"),
+        // e2e 直连引擎(不经传输边界),路径段说 pathql 逻辑形态:段内 `/` 写 `\/`。
+        (r"images://gallery/by_path/D:\/fixture\/8.jpg", "8"),
         (
-            "images://gallery/by_thumbnail_path/D%3A%2Ffixture%2F9.jpg",
+            r"images://gallery/by_thumbnail_path/D:\/fixture\/9.jpg",
             "9",
         ),
         (
-            "images://gallery/by_url/https%3A%2F%2Fexample.test%2F10.jpg",
+            r"images://gallery/by_url/https:\/\/example.test\/10.jpg",
             "10",
         ),
         ("images://gallery/by_hash/hash-11", "11"),
@@ -791,7 +826,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
     let media_type = runtime
         .fetch("images://gallery/media-type/image/desc/x2x/1")
         .unwrap();
-    assert_eq!(ids(media_type), ["120", "119"]);
+    assert_eq!(ids(media_type), ["122", "121"]);
 
     let webp = runtime
         .fetch("images://gallery/media-type/image/webp/desc/x2x/1")
@@ -820,7 +855,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
     let hidden_filtered = runtime
         .fetch("images://gallery/hide/media-type/image/desc/x2x/1")
         .unwrap();
-    assert_eq!(ids(hidden_filtered), ["120", "119"]);
+    assert_eq!(ids(hidden_filtered), ["122", "121"]);
 }
 
 #[test]
@@ -833,7 +868,7 @@ fn gallery_sort_by_id_provider_orders_default_ids() {
     let by_id_desc = runtime
         .fetch("images://gallery/sort/by-id/desc/x3x/1")
         .unwrap();
-    assert_eq!(ids(by_id_desc), ["120", "119", "118"]);
+    assert_eq!(ids(by_id_desc), ["122", "121", "120"]);
 }
 
 #[test]
@@ -849,15 +884,15 @@ fn gallery_seeded_random_sort_is_stable_and_reversible() {
     assert_eq!(first_page, repeated_first_page);
 
     let mut paged = Vec::new();
-    for page in 1..=12 {
+    for page in 1..=13 {
         paged.extend(ids(runtime
             .fetch(&format!("images://gallery/sort/random-42/x10x/{page}"))
             .unwrap()));
     }
     let unique = paged.iter().cloned().collect::<HashSet<_>>();
-    let expected = (1..=120).map(|id| id.to_string()).collect::<HashSet<_>>();
-    assert_eq!(paged.len(), 120);
-    assert_eq!(unique.len(), 120);
+    let expected = (1..=122).map(|id| id.to_string()).collect::<HashSet<_>>();
+    assert_eq!(paged.len(), 122);
+    assert_eq!(unique.len(), 122);
     assert_eq!(unique, expected);
 
     let seed_42 = ids(runtime.fetch("images://gallery/sort/random-42").unwrap());
@@ -873,13 +908,45 @@ fn gallery_seeded_random_sort_is_stable_and_reversible() {
 
     assert_eq!(
         runtime.count("images://gallery/sort/random-42").unwrap(),
-        120
+        122
     );
     assert_eq!(
         runtime
             .count("images://gallery/sort/random-42/x10x/1")
             .unwrap(),
         10
+    );
+}
+
+#[test]
+fn gallery_url_search_matches_real_url_columns_and_excludes_dummy_urls() {
+    let runtime = build_runtime();
+
+    assert_eq!(
+        ids(runtime
+            .fetch("images://gallery/search/url/post.test/all/x10x/1")
+            .unwrap()),
+        ["122"]
+    );
+    assert!(runtime
+        .fetch("images://gallery/search/url/import/all/x10x/1")
+        .unwrap()
+        .is_empty());
+    assert!(runtime
+        .fetch("images://gallery/search/url/dummy/all/x10x/1")
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn gallery_local_path_search_normalizes_forward_and_backslashes() {
+    let runtime = build_runtime();
+
+    assert_eq!(
+        ids(runtime
+            .fetch(r"images://gallery/search/local-path/D:\/pics/all/x10x/1")
+            .unwrap()),
+        ["121"]
     );
 }
 
@@ -998,7 +1065,7 @@ fn gallery_no_album_filter_excludes_album_memberships_except_favorite() {
         ids(no_album),
         ["9", "10", "11", "12", "13", "14", "15", "16", "17", "18"]
     );
-    assert_eq!(runtime.count("images://gallery/no-album").unwrap(), 112);
+    assert_eq!(runtime.count("images://gallery/no-album").unwrap(), 114);
 
     let combined = runtime
         .fetch("images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size/desc/x10x/1")
@@ -1012,7 +1079,7 @@ fn gallery_no_album_filter_excludes_album_memberships_except_favorite() {
                 "images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size"
             )
             .unwrap(),
-        111
+        113
     );
 }
 
@@ -1313,10 +1380,10 @@ fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
             .unwrap();
     }
     // The first list fallback at /gallery/all/x1x expands and caches all
-    // countable page nodes from the fixture (120), plus the three route
+    // countable page nodes from the fixture (122), plus the three route
     // prefixes used to reach them.
     assert!(
-        runtime.cache_size() <= 123,
+        runtime.cache_size() <= 125,
         "cache size={}",
         runtime.cache_size()
     );

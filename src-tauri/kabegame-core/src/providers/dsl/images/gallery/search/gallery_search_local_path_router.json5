@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_search_local_path_router",
+    "resolve": {
+        "(.+)": {
+            "alias": "query",
+            "provider": "gallery_search_local_path_query_provider",
+            "properties": { "query": "${capture[1]}" }
+        }
+    }
+}

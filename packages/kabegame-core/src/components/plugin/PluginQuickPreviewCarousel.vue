@@ -19,7 +19,6 @@
     <template v-else-if="images.length">
       <div class="qp-carousel-box" @mouseenter="paused = true" @mouseleave="paused = false">
         <img :src="images[activeIndex].src" alt="" class="qp-carousel-img" />
-        <div class="qp-carousel-caption">{{ images[activeIndex].label }}</div>
         <div v-if="images.length > 1" class="qp-carousel-counter">
           {{ activeIndex + 1 }} / {{ images.length }}
         </div>
@@ -79,8 +78,6 @@ export interface PluginQuickPreviewImage {
   key: string;
   /** data: URL */
   src: string;
-  /** 由文件名推导的说明文字（无法获知插件作者的原始配图说明，退而求其次） */
-  label: string;
 }
 
 const props = withDefaults(
@@ -202,20 +199,6 @@ onBeforeUnmount(clearTimer);
   height: 100%;
   object-fit: cover;
   display: block;
-}
-
-.qp-carousel-caption {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 20px 10px 8px;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.6) 100%);
-  font: 500 11px/1.3 var(--kb-font-sans, sans-serif);
-  color: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .qp-carousel-counter {

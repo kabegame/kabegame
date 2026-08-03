@@ -83,6 +83,19 @@ pub fn mime_for_asset(key_or_path: &str) -> &'static str {
     }
 }
 
+/// 是否是「展示位」资源：文件名（不含目录）以 `banner` 开头，大小写不敏感。
+///
+/// 这类图供「源」页面的快捷预览走马灯当橱窗图用，通常不被任何 md 引用；
+/// 同构 TS 实现：`packages/kabegame-core/src/utils/assetPath.ts::isBannerAsset`。
+pub fn is_banner_asset(key_or_path: &str) -> bool {
+    key_or_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(key_or_path)
+        .to_ascii_lowercase()
+        .starts_with("banner")
+}
+
 /// 返回归一化后的资源路径集合，来源只有 `kbAssets`。
 /// 每项都是插件根相对路径；doc 与 changelog 共用这一份集合。
 /// 字段缺失 = 该插件零资源。

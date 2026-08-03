@@ -1,5 +1,5 @@
 <template>
-  <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts">
+  <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
     <div class="plugin-browser-content">
       <PluginBrowserPageHeader @refresh="handleRefresh" @import-source="handleImportSource"
         @manage-sources="openManageSources" />
@@ -258,7 +258,7 @@ import PluginQuickPreviewPanel, {
 } from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
 import type { PluginQuickPreviewImage } from "@kabegame/core/components/plugin/PluginQuickPreviewCarousel.vue";
 import { usePluginQuickPreview } from "@kabegame/core/composables/usePluginQuickPreview";
-import { guessAssetMime, humanizeAssetLabel } from "@kabegame/core/utils/assetPath";
+import { guessAssetMime, isBannerAsset } from "@kabegame/core/utils/assetPath";
 import { isUpdateAvailable } from "@/utils/version";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -266,6 +266,7 @@ import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { trackEvent } from "@kabegame/core/track/umami";
+import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
 
 interface PluginSource {
   id: string;
@@ -568,11 +569,11 @@ const quickPreviewImages = computed<PluginQuickPreviewImage[]>(() => {
   const resources = quickPreviewInstalledMatch.value?.assets;
   if (!resources) return [];
   return Object.keys(resources)
+    .filter(isBannerAsset)
     .sort()
     .map((key) => ({
       key,
       src: `data:${guessAssetMime(key)};base64,${resources[key]}`,
-      label: humanizeAssetLabel(key),
     }));
 });
 
@@ -1174,6 +1175,40 @@ const handleImport = async () => {
     );
   }
 };
+
+// ---------- 区域级文件拖入（只收 .kgpg 插件包）----------
+const dropZone = computed<DragFileOptions>(() => ({
+  plan: (items: DragFileItem[]): DragFilePlan | null => {
+    const plugins = items.filter((i) => i.isKgpg);
+    if (plugins.length === 0) return null;
+    return {
+      label: t("import.dropZone.plugins", { count: plugins.length }),
+      media: [],
+      folders: [],
+      plugins,
+    };
+  },
+  onDrop: async (plan: DragFilePlan) => {
+    let successCount = 0;
+    for (const plugin of plan.plugins) {
+      try {
+        await invoke("import_plugin_from_zip", { zipPath: plugin.path });
+        successCount++;
+      } catch (error) {
+        console.error("[PluginBrowser] 导入插件失败:", plugin.path, error);
+        ElMessage.error(t("import.importPluginFailed"));
+      }
+    }
+    if (successCount > 0) {
+      ElMessage.success(t("import.importedPluginsCount", { count: successCount }));
+      // plugin-added / plugin-updated 事件会自动更新已安装列表；商店 tab 的 installedVersion 需主动刷新
+      await pluginStore.refreshPlugins();
+      if (activeStoreSourceId.value) {
+        await loadStorePlugins(activeStoreSourceId.value, { showMessage: false, forceRefresh: false });
+      }
+    }
+  },
+}));
 
 const openDetailDialog = (plugin: PluginListItem) => {
   trackPluginBrowserEvent("plugin_browser_plugin_open", pluginAnalyticsItem(plugin));

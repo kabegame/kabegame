@@ -26,6 +26,7 @@
         <GallerySearchDropdown
           :query="atom.search?.query ?? ''"
           :mode="searchMode"
+          :modes="searchModes"
           :negated="negated"
           @update:query="updateSearch($event)"
           @update:mode="searchMode = $event"
@@ -127,6 +128,9 @@ import {
 } from "@/utils/galleryPath";
 import AdvancedFacetTreePanel from "./AdvancedFacetTreePanel.vue";
 import GallerySearchDropdown from "./GallerySearchDropdown.vue";
+import { useGallerySearchModes } from "./searchModesContext";
+
+const searchModes = useGallerySearchModes();
 
 const props = defineProps<{
   tree: GalleryAdvancedQuery;

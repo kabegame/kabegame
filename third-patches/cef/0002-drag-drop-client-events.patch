@@ -1,0 +1,180 @@
+diff --git a/include/cef_drag_handler.h b/include/cef_drag_handler.h
+index cd354d782..ca449ca76 100644
+--- a/include/cef_drag_handler.h
++++ b/include/cef_drag_handler.h
+@@ -65,6 +65,41 @@ class CefDragHandler : public virtual CefBaseRefCounted {
+     return false;
+   }
+ 
++  ///
++  /// Called continuously while an external drag event moves over the browser
++  /// window. |clientPt| is the position within the browser view in density
++  /// independent pixels (DIP) and |mask| represents the type of drag operation.
++  /// This method is only called if OnDragEnter returned false for the current
++  /// drag event.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual void OnDragOver(CefRefPtr<CefBrowser> browser,
++                          const CefPoint& clientPt,
++                          DragOperationsMask mask) {}
++
++  ///
++  /// Called when an external drag event leaves the browser window without
++  /// being dropped. This method is only called if OnDragEnter returned false
++  /// for the current drag event.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual void OnDragLeave(CefRefPtr<CefBrowser> browser) {}
++
++  ///
++  /// Called when an external drag event is dropped on the browser window.
++  /// |dragData| contains the drag event data. Return false for default drop
++  /// handling behavior, in which case the drop is delivered to the renderer
++  /// and may trigger navigation. Return true to consume the drop, in which
++  /// case it is not delivered to the renderer and no default action occurs.
++  /// This method is only called if OnDragEnter returned false for the current
++  /// drag event.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual bool OnDrop(CefRefPtr<CefBrowser> browser,
++                      CefRefPtr<CefDragData> dragData) {
++    return false;
++  }
++
+   ///
+   /// Called whenever draggable regions for the browser window change. These can
+   /// be specified using the '-webkit-app-region: drag/no-drag' CSS-property. If
+diff --git a/libcef/browser/alloy/alloy_browser_host_impl.cc b/libcef/browser/alloy/alloy_browser_host_impl.cc
+index b10a9fd42..fc2ee7ac5 100644
+--- a/libcef/browser/alloy/alloy_browser_host_impl.cc
++++ b/libcef/browser/alloy/alloy_browser_host_impl.cc
+@@ -53,6 +53,7 @@
+ #include "extensions/common/constants.h"
+ #include "net/base/net_errors.h"
+ #include "ui/events/base_event_utils.h"
++#include "ui/gfx/geometry/point_f.h"
+ 
+ using content::KeyboardEventProcessingResult;
+ 
+@@ -1012,9 +1013,39 @@ bool AlloyBrowserHostImpl::CanDragEnter(content::WebContents* source,
+       return false;
+     }
+   }
++  // Remember the mask for the duration of this drag. The drag update/exit
++  // notifications below do not carry it, and the client needs it to report a
++  // complete drag sequence.
++  current_drag_operations_mask_ = mask;
+   return true;
+ }
+ 
++void AlloyBrowserHostImpl::PreHandleDragUpdate(
++    const content::DropData& drop_data,
++    const gfx::PointF& client_pt) {
++  CefRefPtr<CefDragHandler> handler;
++  if (client_) {
++    handler = client_->GetDragHandler();
++  }
++  if (handler) {
++    handler->OnDragOver(this,
++                        CefPoint(static_cast<int>(client_pt.x()),
++                                 static_cast<int>(client_pt.y())),
++                        static_cast<CefDragHandler::DragOperationsMask>(
++                            current_drag_operations_mask_));
++  }
++}
++
++void AlloyBrowserHostImpl::PreHandleDragExit() {
++  CefRefPtr<CefDragHandler> handler;
++  if (client_) {
++    handler = client_->GetDragHandler();
++  }
++  if (handler) {
++    handler->OnDragLeave(this);
++  }
++}
++
+ void AlloyBrowserHostImpl::GetCustomWebContentsView(
+     content::WebContents* web_contents,
+     const GURL& target_url,
+diff --git a/libcef/browser/alloy/alloy_browser_host_impl.h b/libcef/browser/alloy/alloy_browser_host_impl.h
+index 705fb3411..16461ab68 100644
+--- a/libcef/browser/alloy/alloy_browser_host_impl.h
++++ b/libcef/browser/alloy/alloy_browser_host_impl.h
+@@ -208,6 +208,9 @@ class AlloyBrowserHostImpl : public CefBrowserHostBase,
+   bool CanDragEnter(content::WebContents* source,
+                     const content::DropData& data,
+                     blink::DragOperationsMask operations_allowed) override;
++  void PreHandleDragUpdate(const content::DropData& drop_data,
++                           const gfx::PointF& client_pt) override;
++  void PreHandleDragExit() override;
+   void GetCustomWebContentsView(
+       content::WebContents* web_contents,
+       const GURL& target_url,
+@@ -329,6 +332,12 @@ class AlloyBrowserHostImpl : public CefBrowserHostBase,
+   // starts running when a tab stops being audible, and is canceled if it starts
+   // being audible again before it fires.
+   std::unique_ptr<base::OneShotTimer> recently_audible_timer_;
++
++  // Drag operations allowed for the drag currently over this browser, captured
++  // in CanDragEnter. The drag update notification does not carry the mask, so
++  // it is remembered here for CefDragHandler::OnDragOver.
++  blink::DragOperationsMask current_drag_operations_mask_ =
++      blink::kDragOperationNone;
+ };
+ 
+ #endif  // CEF_LIBCEF_BROWSER_ALLOY_ALLOY_BROWSER_HOST_IMPL_H_
+diff --git a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
+index 49118f737..7c56ee576 100644
+--- a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
++++ b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
+@@ -4,7 +4,10 @@
+ 
+ #include "cef/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h"
+ 
++#include "cef/libcef/browser/browser_host_base.h"
+ #include "cef/libcef/browser/chrome/chrome_context_menu_handler.h"
++#include "cef/libcef/common/drag_data_impl.h"
++#include "content/public/browser/web_contents.h"
+ 
+ ChromeWebContentsViewDelegateCef::ChromeWebContentsViewDelegateCef(
+     content::WebContents* web_contents)
+@@ -30,3 +33,26 @@ void ChromeWebContentsViewDelegateCef::ShowContextMenu(
+     context_menu::MaybeResetContextMenu(web_contents_);
+   }
+ }
++
++void ChromeWebContentsViewDelegateCef::OnPerformingDrop(
++    const content::DropData& drop_data,
++    DropCompletionCallback callback) {
++  // Give the client a chance to consume the drop before it reaches the
++  // renderer. A consumed drop is aborted, which suppresses the default
++  // handling (e.g. navigating to a dropped file).
++  if (auto browser = CefBrowserHostBase::GetBrowserForContents(web_contents_)) {
++    if (auto client = browser->client()) {
++      if (auto handler = client->GetDragHandler()) {
++        CefRefPtr<CefDragDataImpl> cef_drag_data(new CefDragDataImpl(drop_data));
++        cef_drag_data->SetReadOnly(true);
++        if (handler->OnDrop(browser.get(), cef_drag_data.get())) {
++          std::move(callback).Run(std::nullopt);
++          return;
++        }
++      }
++    }
++  }
++
++  ChromeWebContentsViewDelegateBase::OnPerformingDrop(drop_data,
++                                                      std::move(callback));
++}
+diff --git a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
+index 7fad0509a..609f8b21f 100644
+--- a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
++++ b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
+@@ -30,6 +30,8 @@ class ChromeWebContentsViewDelegateCef
+   // WebContentsViewDelegate methods:
+   void ShowContextMenu(content::RenderFrameHost& render_frame_host,
+                        const content::ContextMenuParams& params) override;
++  void OnPerformingDrop(const content::DropData& drop_data,
++                        DropCompletionCallback callback) override;
+ 
+  private:
+   const raw_ptr<content::WebContents> web_contents_;

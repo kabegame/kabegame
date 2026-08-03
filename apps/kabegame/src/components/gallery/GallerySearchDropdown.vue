@@ -52,6 +52,8 @@ const props = withDefaults(
   defineProps<{
     query: string;
     mode: GallerySearchMode;
+    /** 面板里可见的 tab 集合：任务/畅游详情只暴露基础三项。 */
+    modes?: readonly GallerySearchMode[];
     /** 取非语境（高级查询的 ~not 组）：计数显示为负数。 */
     negated?: boolean;
     /**
@@ -61,7 +63,7 @@ const props = withDefaults(
      */
     debounce?: number;
   }>(),
-  { negated: false, debounce: 0 },
+  { modes: () => GALLERY_SEARCH_MODES, negated: false, debounce: 0 },
 );
 
 const emit = defineEmits<{
@@ -109,23 +111,35 @@ onBeforeUnmount(clearDebounce);
 function searchModeLabel(mode: GallerySearchMode): string {
   if (mode === "metadata") return t("gallery.searchModeMetadata");
   if (mode === "native-metadata") return t("gallery.searchModeNativeMetadata");
+  if (mode === "local-path") return t("gallery.searchModeLocalPath");
+  if (mode === "url") return t("gallery.searchModeUrl");
   return t("gallery.searchModeDisplayName");
 }
 
+/** 当前 mode 不在允许集合里（分享来的 URL 落到受限页）时把它临时补进 tab 列表：
+ *  既不静默改写用户的查询语义，也让人能一眼看见并切走；切走后该 tab 自然消失。 */
+const visibleModes = computed<readonly GallerySearchMode[]>(() =>
+  props.modes.includes(props.mode) ? props.modes : [...props.modes, props.mode],
+);
+
 const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
-  GALLERY_SEARCH_MODES.map((mode) => ({ name: mode, label: searchModeLabel(mode) })),
+  visibleModes.value.map((mode) => ({ name: mode, label: searchModeLabel(mode) })),
 );
 
 const placeholder = computed(() => {
   if (props.mode === "metadata") return t("gallery.searchPlaceholderMetadata");
   if (props.mode === "native-metadata") return t("gallery.searchPlaceholderNativeMetadata");
+  if (props.mode === "local-path") return t("gallery.searchPlaceholderLocalPath");
+  if (props.mode === "url") return t("gallery.searchPlaceholderUrl");
   return t("gallery.searchPlaceholder");
 });
 
-/** 说明按模式走：一段把三个模式串起来的总说明，读的人得先自己找哪半句是当前模式。 */
+/** 说明按模式走：一段把各模式串起来的总说明，读的人得先自己找哪半句是当前模式。 */
 const help = computed(() => {
   if (props.mode === "metadata") return t("gallery.searchModeHelpMetadata");
   if (props.mode === "native-metadata") return t("gallery.searchModeHelpNativeMetadata");
+  if (props.mode === "local-path") return t("gallery.searchModeHelpLocalPath");
+  if (props.mode === "url") return t("gallery.searchModeHelpUrl");
   return t("gallery.searchModeHelpDisplayName");
 });
 </script>
