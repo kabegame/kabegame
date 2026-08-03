@@ -81,6 +81,19 @@ Android（`--mode android --skip vue`）走 fork 的 `cargo tauri android check`
 toolchain 来自 cargo-mobile2，与 build 一致），需要 env NDK + `deno task build:ffmpeg
 --target android` + `bin/android/` v8 产物；细节与 gotchas 见 skill 的 SKILL.md。
 
+### Backend Tests
+**用 `test-kabegame` skill**（`.claude/skills/test-kabegame/`）跑后端 cargo test，
+不要手敲裸 `cargo test`（缺 FFmpeg/CEF 环境变量会编译失败）。前端没有测试。
+
+```bash
+.claude/skills/test-kabegame/driver.sh kabegame-core --lib kgpg   # 按名过滤 core 单测
+.claude/skills/test-kabegame/driver.sh kabegame-cli               # cli 全部测试
+```
+
+driver 包装 `deno task test -c <crate>`（crate：kabegame | kabegame-cli |
+kabegame-core），剩余参数自动补 `--` 传给 cargo test；全量套件有约 20 个既有失败，
+验证改动请按名过滤。
+
 ### Data directory modes (`--data`)
 - `dev` (default for `deno task dev`): repo-local `.kabegame/debug/data`, `.kabegame/debug/cache`, and `.kabegame/debug/tmp` dirs — isolated from installed app
 - `prod` (default for all other commands): system user data dirs (`%LOCALAPPDATA%\Kabegame` on Windows, `~/.local/share/Kabegame` on Linux/macOS)

@@ -263,13 +263,13 @@ export class ModePlugin extends BasePlugin {
           !this.mode!.isWeb &&
           bs.context.component!.isMain
         ) {
-          // dev/check 用 cef-dev(check 只需要任意有效 CEF 目录做编译,不打包);
-          // dev/check 用 cef-dev，build 用 cef-prod。
+          // dev/check/test 用 cef-dev(check/test 只需要任意有效 CEF 目录做编译,不打包);
+          // build 用 cef-prod。
           // macOS 跨编时 CEF runtime 也必须换成对应架构那一份:framework 的架构不匹配
           // 链接期才炸(且报错在 ld 层面,不可读),这里的默认路径直接按架构分叉,
           // 与 build-chromium.sh 的 export_dir(cef-<variant>[-x64])完全对齐。
           const cefVariant =
-            (bs.context.cmd.isDev || bs.context.cmd.isCheck
+            (bs.context.cmd.isDev || bs.context.cmd.isCheck || bs.context.cmd.isTest
               ? "cef-dev"
               : "cef-prod") + (OSPlugin.isMacOS ? CEF_DIR_SUFFIX : "");
           const cefPath =

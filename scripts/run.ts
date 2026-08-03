@@ -30,8 +30,6 @@ interface BuildOptions {
   skip?: string;
   args?: string[];
   release?: boolean;
-  package?: string;
-  test?: string;
   target?: string;
 }
 
@@ -179,23 +177,26 @@ program
     await check(options);
   });
 
+// test 命令：只跑后端 cargo test（前端没有测试），不触发 build 生命周期
 program
   .command("test")
-  .description("运行 Rust 测试（自动准备 Kabegame/FFmpeg 环境变量）")
+  .description("运行后端 Rust 测试（cargo test，自动准备 Kabegame/FFmpeg 环境变量）")
   .requiredOption(
     "-c, --component <component>",
-    "用于准备环境的组件：kabegame | kabegame-cli",
-    Component.MAIN,
+    "要测试的 crate：kabegame | kabegame-cli | kabegame-core",
+    Component.CORE,
   )
-  .option("--package <package>", "Cargo package", "kabegame-core")
-  .option("--test <testName>", "Cargo integration test target")
   .option(
     "--mode <mode>",
     "构建模式：standard",
     Mode.STANDARD,
   )
   .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
-  .argument("[args...]", "剩余测试参数（传给 cargo test 的 -- 之后）")
+  .argument(
+    "[args...]",
+    "剩余参数（放在 -- 之后），原样追加给 cargo test：可以是测试名过滤、" +
+      "--test <target>，或再带一个 -- 透传给测试二进制（如 -- --nocapture）",
+  )
   .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
     await test(options);

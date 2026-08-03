@@ -22,7 +22,10 @@ import Handlebars from "handlebars";
 export class Component {
   static readonly MAIN = "kabegame";
   static readonly CLI = "kabegame-cli";
+  // kabegame-core 只作为 test 命令的目标 crate 存在（无 app/前端形态，不可 dev/build/start）
+  static readonly CORE = "kabegame-core";
   static readonly components = [this.MAIN, this.CLI];
+  static readonly testComponents = [this.MAIN, this.CLI, this.CORE];
 
   constructor(private readonly _comp: string) {}
 
@@ -36,6 +39,10 @@ export class Component {
 
   get isCli(): boolean {
     return this.comp === Component.CLI || this.isAll;
+  }
+
+  get isCore(): boolean {
+    return this.comp === Component.CORE;
   }
 
   get isAll(): boolean {
@@ -57,6 +64,9 @@ export class Component {
       }
       case this.CLI: {
         return path.join(SRC_TAURI_DIR, "kabegame-cli");
+      }
+      case this.CORE: {
+        return path.join(SRC_TAURI_DIR, "kabegame-core");
       }
       default: {
         throw new Error(`未知的app: ${cmp}`);
@@ -93,9 +103,13 @@ export class ComponentPlugin extends BasePlugin {
   apply(bs: BuildSystem): void {
     bs.hooks.parseParams.tap(this.name, () => {
       let component = bs.options.component || "";
-      if (component && !Component.components.includes(component)) {
+      // kabegame-core 是纯库 crate，只有 test 命令接受它
+      const allowed = bs.context.cmd!.isTest
+        ? Component.testComponents
+        : Component.components;
+      if (component && !allowed.includes(component)) {
         throw new Error(
-          `不存在的组件名称 ${component}，允许的列表：${Component.components}`,
+          `不存在的组件名称 ${component}，允许的列表：${allowed}`,
         );
       }
       if (!component && !bs.context.cmd!.isBuild) {

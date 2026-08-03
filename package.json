@@ -13,7 +13,7 @@
     "start": "deno run -A scripts/run.ts start",
     "b": "deno run -A scripts/run.ts build",
     "check": "deno run -A scripts/run.ts check",
-    "test:media": "deno run -A scripts/run.ts test -c kabegame --package kabegame-core --test probe_media",
+    "test": "deno run -A scripts/run.ts test",
     "dev:frontend": "deno task --cwd apps/kabegame dev",
     "//": "以下命令为构建前端的命令，通过 deno task b 调用不要直接调用因为没有设置相关环境变量",
     "build-kabegame": "deno task --cwd apps/kabegame build",

@@ -56,8 +56,6 @@ interface BuildOptions {
   skip?: string;
   release?: boolean;
   args?: string[];
-  package?: string;
-  test?: string;
 }
 
 interface BuildContext {
@@ -117,7 +115,7 @@ export class BuildSystem {
 
     this.context = {
       //@ts-ignore
-      cmd: null, // "build" / "dev" / "start" / "check"
+      cmd: null, // "build" / "dev" / "start" / "check" / "test"
     };
   }
 
@@ -455,6 +453,11 @@ export class BuildSystem {
     }
   }
 
+  /**
+   * test 命令：只跑后端 cargo test（前端没有测试）。
+   * 只经过 parseParams/prepareEnv（FFmpeg/CEF 等编译环境）+ prepareCompileArgs，
+   * 不触发 beforeBuild/afterBuild 构建生命周期（插件打包、CEF helper 预构建等）。
+   */
   async test(options: BuildOptions): Promise<void> {
     //@ts-ignore
     this.options = Object.freeze(options);
@@ -462,31 +465,19 @@ export class BuildSystem {
     this.commonUse(Cmd.TEST);
     this.commonBefore();
 
-    const packageName = this.options.package || "kabegame-core";
-    const testArgs = ["test", "-p", packageName];
-    if (this.options.test) {
-      testArgs.push("--test", this.options.test);
-    }
+    const component = this.context.component!;
+    const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(
+      component.comp,
+    );
 
-    let features: string[] = [];
-    let compileArgs: string[] | undefined;
-    if (packageName === this.context.component!.cargoComp) {
-      const prepared = this.hooks.prepareCompileArgs.call(
-        this.context.component!.comp,
-      );
-      features = prepared.features;
-      compileArgs = prepared.args;
-    }
-
-    const mergedArgs = [...(compileArgs || [])];
+    // `--` 之后的剩余参数原样追加给 cargo test：可以是测试名过滤、--test <target>，
+    // 或再带一个 `--` 透传给测试二进制（如 -- --nocapture）。
+    const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
     const args = this.buildCargoArgs(
-      testArgs,
+      ["test", "-p", component.cargoComp],
       features,
       mergedArgs.length > 0 ? mergedArgs : undefined,
     );
-    if (this.options.args && this.options.args.length > 0) {
-      args.push("--", ...this.options.args);
-    }
     run("cargo", args);
   }
 }
