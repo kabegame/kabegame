@@ -39,7 +39,7 @@
 
 1. 插件解析阶段读取 `kbMetadataMigration` 脚本源码挂到 `Plugin.metadata_migration`，并把 `Plugin.version` pack 成 `Plugin.version_packed`。
 2. 插件安装 / 更新成功后触发后台迁移；应用启动加载已安装插件（`refresh_plugins` → `install_plugin_from_kgpg`）同样走该路径，所以每次启动都会检查（无待迁移行时一条 SELECT 早退）。
-3. 运行器查询当前插件 `plugin_version < version_packed` 的 metadata 行；为空直接结束。
+3. 运行器查询当前插件 `plugin_version < version_packed` 的 metadata 行；`data` 字段 trim 后为空串或字面量 `"null"` 视为没有 metadata，直接排除在外，不跑迁移脚本；结果为空直接结束。
 4. 装载一次 `migrate` 导出，逐行调用 `migrate(data)`；成功则写回并把该行 `plugin_version` 盖为 `version_packed`。
 5. 某行执行失败只跳过该行（版本不动，下次触发重试）；脚本装载失败则整体报错。
 6. 写回时如果目标 `(plugin_id, plugin_version, data)` 已有行，会把 `images.metadata_id` 与 `task_failed_images.metadata_id` 合并到既有行并删除重复行。

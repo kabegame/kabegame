@@ -337,6 +337,7 @@ impl Storage {
     }
 
     /// 扫描某插件低于目标插件版本（packed）的 metadata 行，供迁移运行器逐行升级。
+    /// 空串或字面量 `"null"`（trim 后）视为没有 metadata，不参与迁移。
     pub fn metadata_rows_below_plugin_version(
         &self,
         plugin_id: &str,
@@ -348,6 +349,7 @@ impl Storage {
                 "SELECT id, data, plugin_version
                  FROM metadata
                  WHERE plugin_id = ?1 AND plugin_version < ?2
+                   AND TRIM(data) NOT IN ('', 'null')
                  ORDER BY id",
             )
             .map_err(|e| format!("prepare metadata_rows_below_plugin_version: {e}"))?;
