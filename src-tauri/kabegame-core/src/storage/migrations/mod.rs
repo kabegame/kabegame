@@ -41,6 +41,7 @@ mod v024_metadata_rename_and_image_metadata;
 mod v025_drop_surf_record_deleted_count;
 mod v026_drop_surf_record_download_count;
 mod v027_metadata_search_text;
+mod v028_album_ancestor_path;
 
 use rusqlite::Connection;
 
@@ -156,13 +157,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "metadata_search_text",
         up: v027_metadata_search_text::up,
     },
+    Migration {
+        version: 28,
+        name: "album_ancestor_path",
+        up: v028_album_ancestor_path::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 27;
+pub const LATEST_VERSION: u32 = 28;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

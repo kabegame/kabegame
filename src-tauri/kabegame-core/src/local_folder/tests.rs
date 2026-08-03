@@ -98,15 +98,17 @@ fn create_sync_album_with_parent(sync_folder: &Path, parent_id: Option<&str>) ->
     let album_id = uuid::Uuid::new_v4().to_string();
     let storage = Storage::global();
     let conn = storage.db.lock().unwrap();
+    let ancestor_path = Storage::album_ancestor_path_of(&conn, parent_id, &album_id).unwrap();
     conn.execute(
-        "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-         VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL)",
+        "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
+         VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL, ?6)",
         params![
             album_id,
             format!("sync-{}", uuid::Uuid::new_v4().simple()),
             now_secs(),
             parent_id,
-            sync_folder.to_string_lossy().as_ref()
+            sync_folder.to_string_lossy().as_ref(),
+            ancestor_path
         ],
     )
     .unwrap();

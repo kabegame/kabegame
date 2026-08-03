@@ -643,14 +643,15 @@ mod tests {
                 parent_id TEXT,
                 type TEXT NOT NULL DEFAULT 'normal',
                 sync_folder TEXT,
-                folder_status TEXT
+                folder_status TEXT,
+                ancestor_path TEXT NOT NULL DEFAULT ''
             );
-            INSERT INTO albums (id, name, created_at, parent_id) VALUES
-                ('album-a', '星穹铁道', 1, NULL),
-                ('album-b', 'Album B', 2, NULL),
-                ('album-firefly', '萤', 3, 'album-a'),
-                ('album-march', '三月七', 4, 'album-a'),
-                ('album-secret', '秘密', 5, 'album-firefly');
+            INSERT INTO albums (id, name, created_at, parent_id, ancestor_path) VALUES
+                ('album-a', '星穹铁道', 1, NULL, '/album-a/'),
+                ('album-b', 'Album B', 2, NULL, '/album-b/'),
+                ('album-firefly', '萤', 3, 'album-a', '/album-a/album-firefly/'),
+                ('album-march', '三月七', 4, 'album-a', '/album-a/album-march/'),
+                ('album-secret', '秘密', 5, 'album-firefly', '/album-a/album-firefly/album-secret/');
 
             INSERT INTO metadata (id, data, search_text, plugin_id) VALUES
                 (1,  '{"kind":"fav"}',   'star bright', 'p1'),

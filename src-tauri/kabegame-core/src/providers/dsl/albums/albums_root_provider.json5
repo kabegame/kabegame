@@ -9,7 +9,8 @@
             { "sql": "albums.parent_id", "as": "parent_id" },
             { "sql": "albums.type", "as": "type" },
             { "sql": "albums.sync_folder", "as": "sync_folder" },
-            { "sql": "albums.folder_status", "as": "folder_status" }
+            { "sql": "albums.folder_status", "as": "folder_status" },
+            { "sql": "albums.ancestor_path", "as": "ancestor_path" }
         ],
     },
     "resolve": {

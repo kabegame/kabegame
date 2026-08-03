@@ -98,7 +98,8 @@ CREATE TABLE albums (
     parent_id     TEXT    REFERENCES albums(id) ON DELETE CASCADE,
     type          TEXT    NOT NULL DEFAULT 'normal',
     sync_folder   TEXT,
-    folder_status TEXT
+    folder_status TEXT,
+    ancestor_path TEXT    NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX idx_albums_name_scoped
     ON albums(COALESCE(parent_id, ''), LOWER(name));

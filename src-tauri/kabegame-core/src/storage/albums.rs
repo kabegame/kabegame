@@ -34,6 +34,8 @@ pub struct Album {
     pub sync_folder: Option<String>,
     /// 仅 kind=="local_folder" 时使用，JSON 字符串，Phase 2 起填充
     pub folder_status: Option<String>,
+    /// 从根画册到自身的 id 链，格式为 `/root-id/.../self-id/`
+    pub ancestor_path: String,
 }
 
 fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
@@ -45,6 +47,7 @@ fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
         kind: row.get(4)?,
         sync_folder: row.get(5)?,
         folder_status: row.get(6)?,
+        ancestor_path: row.get(7)?,
     })
 }
 
@@ -170,10 +173,16 @@ impl Storage {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| format!("Time error: {}", e))?
                 .as_secs();
+            let ancestor_path = format!("/{FAVORITE_ALBUM_ID}/");
             conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL)",
-                params![FAVORITE_ALBUM_ID, "收藏", created_at as i64],
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
+                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL, ?4)",
+                params![
+                    FAVORITE_ALBUM_ID,
+                    "收藏",
+                    created_at as i64,
+                    ancestor_path
+                ],
             )
             .map_err(|e| format!("Failed to create default '收藏' album: {}", e))?;
         }
@@ -202,10 +211,11 @@ impl Storage {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| format!("Time error: {}", e))?
                 .as_secs();
+            let ancestor_path = format!("/{HIDDEN_ALBUM_ID}/");
             conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL)",
-                params![HIDDEN_ALBUM_ID, name, created_at as i64],
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
+                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL, ?4)",
+                params![HIDDEN_ALBUM_ID, name, created_at as i64, ancestor_path],
             )
             .map_err(|e| format!("Failed to create hidden album: {}", e))?;
         }
@@ -238,19 +248,19 @@ impl Storage {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| format!("Time error: {}", e))?
             .as_secs();
+        let ancestor_path = Self::album_ancestor_path_of(&conn, parent_id, &id)?;
 
-        match parent_id {
-            None => conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-                 VALUES (?1, ?2, ?3, NULL, 'normal', NULL, NULL)",
-                params![id, name_trimmed, created_at as i64],
-            ),
-            Some(pid) => conn.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-                 VALUES (?1, ?2, ?3, ?4, 'normal', NULL, NULL)",
-                params![id, name_trimmed, created_at as i64, pid],
-            ),
-        }
+        conn.execute(
+            "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
+             VALUES (?1, ?2, ?3, ?4, 'normal', NULL, NULL, ?5)",
+            params![
+                id,
+                name_trimmed,
+                created_at as i64,
+                parent_id,
+                ancestor_path
+            ],
+        )
         .map_err(|e| format!("Failed to add album: {}", e))?;
 
         let album = Album {
@@ -261,6 +271,7 @@ impl Storage {
             kind: "normal".to_string(),
             sync_folder: None,
             folder_status: None,
+            ancestor_path,
         };
         if let Some(emitter) = GlobalEmitter::try_global() {
             emitter.emit_album_added(
@@ -277,10 +288,10 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = match parent_id {
             None => conn.prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             ),
             Some(_) => conn.prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
             ),
         }
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -303,7 +314,7 @@ impl Storage {
     pub fn list_all_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums ORDER BY created_at DESC")
+            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums ORDER BY created_at DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
         let rows = stmt
             .query_map([], album_from_storage_row)
@@ -684,11 +695,49 @@ impl Storage {
         Ok(())
     }
 
+    /// 自顶向下重算全表 `albums.ancestor_path`。
+    /// 画册数量级小（几百至几千），全表重算换掉所有增量维护逻辑。
+    pub(crate) fn rebuild_album_ancestor_paths(conn: &Connection) -> Result<(), String> {
+        conn.execute(
+            r#"
+WITH RECURSIVE tree(id, path) AS (
+    SELECT id, '/' || id || '/' FROM albums WHERE parent_id IS NULL
+    UNION ALL
+    SELECT a.id, tree.path || a.id || '/'
+      FROM albums a JOIN tree ON a.parent_id = tree.id
+)
+UPDATE albums SET ancestor_path = tree.path
+  FROM tree WHERE albums.id = tree.id
+"#,
+            [],
+        )
+        .map_err(|e| format!("rebuild_album_ancestor_paths: {e}"))?;
+        Ok(())
+    }
+
+    pub(crate) fn album_ancestor_path_of(
+        conn: &Connection,
+        parent_id: Option<&str>,
+        id: &str,
+    ) -> Result<String, String> {
+        let Some(parent_id) = parent_id else {
+            return Ok(format!("/{id}/"));
+        };
+        let parent_path: String = conn
+            .query_row(
+                "SELECT ancestor_path FROM albums WHERE id = ?1",
+                params![parent_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("album_ancestor_path_of parent={parent_id}: {e}"))?;
+        Ok(format!("{parent_path}{id}/"))
+    }
+
     pub fn get_album_by_id(&self, id: &str) -> Result<Option<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE id = ?1",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE id = ?1",
                 params![id],
                 album_from_storage_row,
             )
@@ -715,7 +764,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path
                  FROM albums WHERE type = 'local_folder' ORDER BY created_at ASC",
             )
             .map_err(|e| format!("prepare list_local_folder_albums: {e}"))?;
@@ -766,8 +815,8 @@ impl Storage {
         for entry in entries {
             Self::ensure_album_name_unique_ci(&tx, &entry.name, entry.parent_id.as_deref(), None)?;
             tx.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status)
-                 VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL)",
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
+                 VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL, '')",
                 params![
                     entry.id.as_str(),
                     entry.name.as_str(),
@@ -786,7 +835,19 @@ impl Storage {
                 kind: "local_folder".to_string(),
                 sync_folder: Some(entry.sync_folder.clone()),
                 folder_status: None,
+                ancestor_path: String::new(),
             });
+        }
+
+        Self::rebuild_album_ancestor_paths(&tx)?;
+        for album in &mut created {
+            album.ancestor_path = tx
+                .query_row(
+                    "SELECT ancestor_path FROM albums WHERE id = ?1",
+                    params![album.id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("read rebuilt ancestor_path for {}: {e}", album.id))?;
         }
 
         tx.commit().map_err(|e| format!("commit: {e}"))?;
@@ -907,9 +968,67 @@ impl Storage {
         }
         .map_err(|e| format!("Failed to move album: {}", e))?;
 
+        Self::rebuild_album_ancestor_paths(&conn)?;
+
         if let Some(emitter) = GlobalEmitter::try_global() {
             emitter.emit_album_changed(album_id, json!({ "parentId": new_parent_id }));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn test_storage() -> Storage {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::storage::migrations::init::create_all_tables(&conn);
+        Storage {
+            db: Arc::new(Mutex::new(conn)),
+            cached_images_total: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn move_and_rename_maintain_ancestor_paths() {
+        let storage = test_storage();
+        let a = storage.add_album("a", None).unwrap();
+        let b = storage.add_album("b", Some(&a.id)).unwrap();
+        let c = storage.add_album("c", Some(&b.id)).unwrap();
+
+        assert_eq!(a.ancestor_path, format!("/{}/", a.id));
+        assert_eq!(b.ancestor_path, format!("/{}/{}/", a.id, b.id));
+        assert_eq!(c.ancestor_path, format!("/{}/{}/{}/", a.id, b.id, c.id));
+
+        storage.move_album(&b.id, None).unwrap();
+        let moved_b = storage.get_album_by_id(&b.id).unwrap().unwrap();
+        let moved_c = storage.get_album_by_id(&c.id).unwrap().unwrap();
+        assert_eq!(moved_b.ancestor_path, format!("/{}/", b.id));
+        assert_eq!(moved_c.ancestor_path, format!("/{}/{}/", b.id, c.id));
+
+        let b_path_before_rename = moved_b.ancestor_path;
+        let c_path_before_rename = moved_c.ancestor_path;
+        storage.rename_album(&b.id, "renamed-b").unwrap();
+        assert_eq!(
+            storage
+                .get_album_by_id(&b.id)
+                .unwrap()
+                .unwrap()
+                .ancestor_path,
+            b_path_before_rename
+        );
+        assert_eq!(
+            storage
+                .get_album_by_id(&c.id)
+                .unwrap()
+                .unwrap()
+                .ancestor_path,
+            c_path_before_rename
+        );
+
+        let d = storage.add_album("d", Some(&c.id)).unwrap();
+        assert_eq!(d.ancestor_path, format!("/{}/{}/{}/", b.id, c.id, d.id));
     }
 }

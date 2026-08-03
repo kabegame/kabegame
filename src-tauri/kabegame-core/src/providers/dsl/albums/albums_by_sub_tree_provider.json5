@@ -14,7 +14,7 @@
     },
     "list": {
         "${album.name}": {
-            "sql": "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status FROM albums WHERE ((${properties.parent_id} = '' AND parent_id IS NULL) OR parent_id = ${properties.parent_id}) ORDER BY created_at ASC",
+            "sql": "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE ((${properties.parent_id} = '' AND parent_id IS NULL) OR parent_id = ${properties.parent_id}) ORDER BY created_at ASC",
             "data_var": "album",
             "provider": "albums_by_sub_tree_provider",
             "properties": { "parent_id": "${album.id}" },

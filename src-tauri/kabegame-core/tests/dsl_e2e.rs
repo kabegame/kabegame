@@ -239,7 +239,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             parent_id TEXT,
             type TEXT NOT NULL DEFAULT 'normal',
             sync_folder TEXT,
-            folder_status TEXT
+            folder_status TEXT,
+            ancestor_path TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE tasks (
             id TEXT PRIMARY KEY,
@@ -283,9 +284,9 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             name TEXT NOT NULL DEFAULT '',
             cookie TEXT NOT NULL DEFAULT ''
         );
-        INSERT INTO albums(id, name, created_at, parent_id) VALUES
-            ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL),
-            ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111');
+        INSERT INTO albums(id, name, created_at, parent_id, ancestor_path) VALUES
+            ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL, '/11111111-1111-1111-1111-111111111111/'),
+            ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111', '/11111111-1111-1111-1111-111111111111/33333333-3333-3333-3333-333333333333/');
         INSERT INTO metadata(id, data, plugin_version, plugin_id) VALUES
             (1, '{"source":"table","tags":["a"]}', 0, 'pixiv');
         INSERT INTO tasks VALUES
