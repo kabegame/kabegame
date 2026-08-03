@@ -430,7 +430,7 @@ const syncActivePathFromUrl = () => {
 const refresh = async (opts?: { resetScroll?: boolean }) => {
   if (!adapter || !paged) return;
   await loadPage(gridCurrentPath.value);
-  await paged.loadTotalImagesCount();
+  void paged.loadTotalImagesCount();
   if (opts?.resetScroll) {
     const el = getContainerEl();
     if (el) el.scrollTop = 0;
@@ -451,12 +451,13 @@ if (adapter) {
       void (async () => {
         try {
           await loadPage(path);
-          await paged?.loadTotalImagesCount();
         } catch (error) {
           await adapter.onLoadError?.(error, path);
+          return;
         } finally {
           finishLoading();
         }
+        void paged?.loadTotalImagesCount();
       })();
     }
   );

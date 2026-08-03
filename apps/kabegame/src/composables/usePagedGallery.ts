@@ -186,12 +186,13 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       params.loading.startLoading();
       try {
         await params.load(newPath);
-        await loadTotalImagesCount();
       } catch (error) {
         await params.onLoadError?.(error, newPath);
+        return;
       } finally {
         params.loading.finishLoading();
       }
+      void loadTotalImagesCount();
     },
     { immediate: true }
   );
