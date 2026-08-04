@@ -59,14 +59,17 @@
             </template>
             <span class="plugin-picker-option__label">{{ option.label }}</span>
             <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
-            <el-icon
-              v-if="option.warning"
-              class="plugin-picker-option__warning"
-              :title="$t('plugins.androidNotSupported')"
-            >
-              <WarningFilled />
-            </el-icon>
-            <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" />
+            <!-- 尾部整体右对齐：让各行的标签落在同一条右边线上，便于纵向对比 -->
+            <span class="plugin-picker-option__trailing">
+              <el-icon
+                v-if="option.warning"
+                class="plugin-picker-option__warning"
+                :title="$t('plugins.androidNotSupported')"
+              >
+                <WarningFilled />
+              </el-icon>
+              <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" fixed-slots />
+            </span>
           </div>
         </el-option>
       </el-select>
@@ -328,8 +331,17 @@ const selectedPluginIsJs = computed(() => {
   color: var(--el-color-danger);
 }
 
-.plugin-picker-option__warning {
+/* 右推整个尾部而不是单独推 warning：两者都写 margin-left:auto 会平分剩余空间，
+   把 warning 顶到行中间。flex-shrink:0 保证挤压时先省略插件名而不是压扁标签。 */
+.plugin-picker-option__trailing {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.plugin-picker-option__warning {
   font-size: 18px;
 }
 

@@ -37,7 +37,11 @@ $checked-icon: "data:image/svg+xml;utf8,%3Csvg class='icon' width='200' height='
     overflow: hidden;
     text-overflow: ellipsis;
     color: map.get($select-option, 'text-color');
-    height: map.get($select-option, 'height');
+    // min-height 而非 height:盒模型是 border-box,固定 height 会被垂直 padding 从内容区
+    // 里扣掉(调用方加 padding: 8px 后内容区只剩 12px),超出部分被上面的 overflow: hidden
+    // 裁掉——放图标/多行的下拉项因此缺一截。默认项 padding 垂直为 0、内容由 line-height
+    // 撑满,总高与固定 height 时一致,所以这里放开不会改变普通下拉的观感。
+    min-height: map.get($select-option, 'height');
     line-height: map.get($select-option, 'height');
     box-sizing: border-box;
     cursor: pointer;
