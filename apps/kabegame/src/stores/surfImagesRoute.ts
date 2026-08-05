@@ -6,45 +6,41 @@ import {
   buildComposableContextPrefix,
   extractRootIdAndBody,
   DEFAULT_GALLERY_SEARCH_MODE,
-  type GalleryFilterSet,
+  type GalleryQuery,
   type GallerySearchMode,
   type GallerySort,
+  querySearchTerm,
 } from "@/utils/galleryPath";
-import type { GalleryAdvancedQuery } from "@/utils/galleryQuery";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const DEFAULT_PAGE_SIZE = 100;
 
-/** 会话内记忆的搜索模式，清空搜索框后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
-const stickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+/** 会话内记忆的搜索模式，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
+export const surfImagesStickySearchMode = ref<GallerySearchMode>(
+  DEFAULT_GALLERY_SEARCH_MODE,
+);
 
 export function rememberSurfImagesSearchMode(mode: GallerySearchMode): void {
-  stickySearchMode.value = mode;
+  surfImagesStickySearchMode.value = mode;
 }
 
 type SurfImagesRouteState = {
   host: string;
-  filters: GalleryFilterSet;
-  /** 高级查询树；与 filters 在路由上互斥（见 GalleryQueryBar） */
-  advanced: GalleryAdvancedQuery | undefined;
+  /** 唯一查询对象：简单过滤只是单原子查询的退化形态。 */
+  query: GalleryQuery;
   sort: GallerySort;
   page: number;
   pageSize: number;
-  search: string;
-  searchMode: GallerySearchMode;
 };
 
 function createDefaultState(): SurfImagesRouteState {
   const settings = useSettingsStore();
   return {
     host: "",
-    filters: {},
-    advanced: undefined,
+    query: [],
     sort: { field: "by-time", desc: false },
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? DEFAULT_PAGE_SIZE,
-    search: "",
-    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   };
 }
 
@@ -56,37 +52,29 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
       const { id: host, body } = extractRootIdAndBody(path, "surf");
       if (!host) return createDefaultState();
       const parsed = parseComposablePath(body);
-      if (parsed.search.trim()) {
-        stickySearchMode.value = parsed.searchMode;
+      const term = querySearchTerm(parsed.query);
+      if (term?.query.trim()) {
+        surfImagesStickySearchMode.value = term.mode;
       }
       return {
         host,
-        filters: parsed.filters,
-        advanced: parsed.advanced,
+        query: parsed.query,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
-        search: parsed.search,
-        searchMode: parsed.search.trim() ? parsed.searchMode : stickySearchMode.value,
       };
     },
-    build: (state) =>
+    build: (state, { noAlbum }) =>
       buildComposablePath({
         rootPrefix: `surf/${state.host}`,
-        filters: state.filters,
-        advanced: state.advanced,
+        noAlbum,
+        query: state.query,
         sort: state.sort,
         page: state.page,
         pageSize: state.pageSize,
-        search: state.search,
-        searchMode: state.searchMode,
       }),
     buildContext: (state) =>
-      buildComposableContextPrefix(
-        `surf/${state.host}`,
-        state.search,
-        state.searchMode,
-      ),
+      buildComposableContextPrefix(`surf/${state.host}`, state.query),
     defaultState: createDefaultState,
     onStateChange: (state) => {
       const settings = useSettingsStore();

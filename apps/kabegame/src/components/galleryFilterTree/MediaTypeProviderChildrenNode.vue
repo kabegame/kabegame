@@ -21,7 +21,6 @@
         :path="pathForSegment(`media-type/image/${entry.name}`)"
         :depth="2"
         :active="isSameGalleryFilter({ type: 'media-type', kind: 'image', format: entry.name }, filter)"
-        :initial-count="entry.total ?? undefined"
         @select="$emit('select', { type: 'media-type', kind: 'image', format: entry.name })"
       />
     </ProviderChildrenNode>
@@ -41,7 +40,6 @@
         :path="pathForSegment(`media-type/video/${entry.name}`)"
         :depth="2"
         :active="isSameGalleryFilter({ type: 'media-type', kind: 'video', format: entry.name }, filter)"
-        :initial-count="entry.total ?? undefined"
         @select="$emit('select', { type: 'media-type', kind: 'video', format: entry.name })"
       />
     </ProviderChildrenNode>
@@ -58,8 +56,8 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   isSameGalleryFilter,
-  listProviderDirs,
   useGalleryFilterTreeContext,
+  useProviderTreeList,
   type ProviderChildDir,
   type RefreshTarget,
 } from "./context";
@@ -70,6 +68,7 @@ defineEmits<{
 
 const { t } = useI18n();
 const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { listPathForSegment, listDirs } = useProviderTreeList();
 const imageFormats = ref<ProviderChildDir[]>([]);
 const videoFormats = ref<ProviderChildDir[]>([]);
 const loadedKinds = ref(new Set<"image" | "video">());
@@ -84,15 +83,11 @@ function formatsRef(kind: "image" | "video") {
   return kind === "image" ? imageFormats : videoFormats;
 }
 
-function pathForKind(kind: "image" | "video") {
-  return kind === "image" ? imagePath.value : videoPath.value;
-}
-
 async function refreshFormats(kind: "image" | "video") {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(`${pathForKind(kind)}/`);
+    const entries = await listDirs(`${listPathForSegment(`media-type/${kind}`)}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     formatsRef(kind).value = entries;
     loadedKinds.value = new Set([...loadedKinds.value, kind]);

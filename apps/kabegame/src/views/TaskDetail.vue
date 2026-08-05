@@ -15,20 +15,20 @@
                 </TaskDetailPageHeader>
 
                 <GalleryQueryBar
-                    :filters="taskDetailRouteStore.filters"
-                    :advanced="taskDetailRouteStore.advanced"
+                    :query="taskDetailRouteStore.query"
+                    :no-album="taskDetailRouteStore.effectiveNoAlbum"
                     :sort="taskDetailRouteStore.sort"
                     :page="taskDetailRouteStore.page"
                     :page-size="pageSize"
-                    :search="taskDetailRouteStore.search"
-                    :search-mode="taskDetailRouteStore.searchMode"
+                    :search-mode="taskDetailStickySearchMode"
                     :provider-context-prefix="taskDetailRouteStore.computedContextPath"
-                    :context-base="taskDetailRouteStore.contextPathFor({ search: '' })"
+                    :context-base="taskDetailRouteStore.contextPathFor({ query: [] })"
                     :filter-features="taskFilterFeatures"
                     :sort-features="taskSortFeatures"
                     :search-features="taskSearchFeatures"
                     enable-clear-all
                     @navigate="onQueryNavigate"
+                    @search-mode-change="rememberTaskDetailSearchMode"
                 />
 
                 <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage"
@@ -64,7 +64,8 @@ import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import { createTaskDetailSurface } from "@/components/imageGrid/surfaces/task";
 import {
   GALLERY_SEARCH_MODES_BASIC,
-  type GalleryFilterDimension,
+  querySearchTerm,
+  type GalleryBrowseDimension,
   type GalleryQueryPatch,
   type GallerySortField,
 } from "@/utils/galleryPath";
@@ -79,7 +80,11 @@ import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunPa
 import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import { useTaskDetailRouteStore, rememberTaskDetailSearchMode } from "@/stores/taskDetailRoute";
+import {
+  useTaskDetailRouteStore,
+  rememberTaskDetailSearchMode,
+  taskDetailStickySearchMode,
+} from "@/stores/taskDetailRoute";
 import { IS_WEB } from "@kabegame/core/env";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useI18n } from "@kabegame/i18n";
@@ -164,10 +169,10 @@ const taskDetailRouteStore = useTaskDetailRouteStore();
 const surface = createTaskDetailSurface({
     taskId: () => taskId.value,
 });
-const { search: searchQuery, taskId, page } = storeToRefs(taskDetailRouteStore);
+const { taskId, page } = storeToRefs(taskDetailRouteStore);
 
-const taskFilterFeatures: GalleryFilterDimension[] = [
-  "wallpaperOrder", "noAlbum", "plugin", "mediaType", "date", "name", "size", "aspect",
+const taskFilterFeatures: GalleryBrowseDimension[] = [
+  "plugin", "mediaType", "date", "size", "aspect",
 ];
 const taskSortFeatures: GallerySortField[] = [
   "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
@@ -178,7 +183,8 @@ const taskViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
-    if (patch.searchMode) rememberTaskDetailSearchMode(patch.searchMode);
+    const term = patch.query ? querySearchTerm(patch.query) : null;
+    if (term?.query.trim()) rememberTaskDetailSearchMode(term.mode);
     void taskDetailRouteStore.navigate(patch, options);
 };
 
@@ -334,10 +340,8 @@ watch(
             rememberTaskDetailSearchMode('display-name')
             taskDetailRouteStore.patch({
                 taskId: newId,
-                search: '',
-                searchMode: 'display-name',
-                // 换任务与清搜索同理：高级树是上一个任务的查询，不该跟过来
-                advanced: undefined,
+                // 换任务就是换数据源：上一个任务的查询不该跟过来
+                query: [],
                 page: 1
             })
             // 重新启动定时器和监听器

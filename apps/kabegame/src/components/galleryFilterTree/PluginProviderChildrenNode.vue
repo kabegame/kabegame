@@ -6,7 +6,6 @@
     :active="active"
     :default-expanded="defaultExpanded"
     :filter="imagesChangeFilter"
-    :initial-count="initialCount"
     @select="$emit('select', { type: 'plugin', pluginId })"
     @update:expanded="onExpanded"
   >
@@ -19,7 +18,6 @@
       :is-leaf="isProviderLeaf(child)"
       :is-plain="isProviderPlain(child)"
       :depth="2"
-      :initial-count="child.total ?? undefined"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -39,16 +37,15 @@ import {
   isProviderLeaf,
   isProviderPlain,
   isSameGalleryFilter,
-  listProviderDirs,
   unknownOrMatchingPlugin,
   useGalleryFilterTreeContext,
+  useProviderTreeList,
   type ProviderChildDir,
   type RefreshTarget,
 } from "./context";
 
 const props = defineProps<{
   pluginId: string;
-  initialCount?: number;
 }>();
 
 defineEmits<{
@@ -57,6 +54,7 @@ defineEmits<{
 
 const pluginStore = usePluginStore();
 const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { listPathForSegment, listDirs } = useProviderTreeList();
 const children = ref<ProviderChildDir[]>([]);
 const loaded = ref(false);
 let listToken = 0;
@@ -80,8 +78,8 @@ async function refreshChildren() {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(
-      `${pathForSegment(`plugin/${encodeURIComponent(props.pluginId)}/extend`)}/`
+    const entries = await listDirs(
+      `${listPathForSegment(`plugin/${encodeURIComponent(props.pluginId)}/extend`)}/`
     );
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     children.value = entries;

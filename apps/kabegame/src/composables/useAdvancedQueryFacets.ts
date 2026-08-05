@@ -8,30 +8,28 @@ import {
 } from "vue";
 import { pathqlEntry } from "@/services/pathql";
 import {
-  advancedQueryRuntimePath,
+  queryRuntimePath,
   GALLERY_ASPECT_BUCKETS,
-  GALLERY_NAME_LANGUAGE_BUCKETS,
 } from "@/utils/galleryPath";
 import {
-  facetListPath,
-  type GalleryAdvancedQuery,
-  type GalleryAtomDimension,
+  type GalleryFilter,
+  type GalleryQuery,
+  type GalleryFilterDimension,
   type NodePath,
   normalizeQuery,
   notParity,
-  serializeAdvancedQuery,
+  serializeQueryBody,
+  setFilterDimension,
+  updateNode,
 } from "@/utils/galleryQuery";
+import { filterFromTreeSegment } from "@/components/galleryFilterTree/context";
 
-export type FacetDimension = Exclude<
-  GalleryAtomDimension,
-  "search" | "wallpaperOrder"
->;
+export type FacetDimension = Exclude<GalleryFilterDimension, "search">;
 
 const FACET_SEGMENTS: Record<FacetDimension, string> = {
   plugin: "plugin",
   mediaType: "media-type",
   date: "date",
-  name: "name",
   size: "size",
   aspect: "aspect",
 };
@@ -61,12 +59,6 @@ export function facetValueLabel(
     if (value === "video") return t("gallery.filterVideoOnlyLabel");
     return value;
   }
-  if (dimension === "name") {
-    const bucket = GALLERY_NAME_LANGUAGE_BUCKETS.find((item) =>
-      item.bucket === value
-    );
-    return bucket ? t(`gallery.${bucket.labelKey}`) : value;
-  }
   if (dimension === "aspect") {
     const bucket = GALLERY_ASPECT_BUCKETS.find((item) => item.range === value);
     return bucket ? t(`gallery.${bucket.labelKey}`) : value;
@@ -79,88 +71,72 @@ export function facetValueLabel(
   return value;
 }
 
-/** 从 facet 列表路径剥掉末尾维度 router，得到该维度的减格树。空串表示 gallery 根。 */
-export function reducedFacetTreePath(
-  listPath: string,
-  dimension: FacetDimension,
-): string {
-  const normalized = listPath.replace(/^\/+|\/+$/g, "");
-  const suffix = FACET_SEGMENTS[dimension];
-  if (normalized === suffix) return "";
-
-  const withComb = `/filter_comb/${suffix}`;
-  if (normalized.endsWith(withComb)) {
-    return normalized.slice(0, -withComb.length);
-  }
-  const direct = `/${suffix}`;
-  if (normalized.endsWith(direct)) {
-    return normalized.slice(0, -direct.length);
-  }
-  throw new Error(`facet 路径缺少维度尾段 ${suffix}: ${listPath}`);
-}
-
 /**
- * 把侧栏树节点 segment 接到高级查询减格上下文。
- * `all` 指向减格树本身；根减格树直接从维度 router 起步，绝不生成 all/filter_comb。
+ * 高级面板 facet 树：枚举与计数分家。
+ *
+ * - 枚举（listPathForSegment）：纯净路径 `<contextPrefix>/<segment>`，不折叠任何
+ *   草稿条件——候选全集与草稿树无关，稳定且可缓存（listProviderDirsPure）。
+ *   减格枚举是简单查询「不断收窄 slot」时代的产物；高级查询里其他条件（尤其
+ *   取非行的兄弟约束）会把候选列表挤没，反而丢信息。
+ * - 计数（pathForSegment）：把候选值写进 NodePath 所指原子的对应维度，序列化
+ *   **整棵草稿树**取命中数；节点侧与 baseline（当前整树命中数）作差显示
+ *   +N/−N/0。取非、或组的符号由整树语义自然得出，不再需要拆 not 的特判。
  */
-export function advancedFacetTreeSegmentPath(
-  listPath: string,
-  dimension: FacetDimension,
-  segment: string,
-): string {
-  const normalizedSegment = segment.replace(/^\/+|\/+$/g, "");
-  const reduced = reducedFacetTreePath(listPath, dimension);
-  if (!normalizedSegment || normalizedSegment === "all") {
-    return reduced || "all";
-  }
-
-  const suffix = FACET_SEGMENTS[dimension];
-  if (
-    normalizedSegment !== suffix &&
-    !normalizedSegment.startsWith(`${suffix}/`)
-  ) {
-    throw new Error(`树节点路径不属于维度 ${dimension}: ${segment}`);
-  }
-
-  if (!reduced) return normalizedSegment;
-  const usesFilterComb = listPath.replace(/\/+$/g, "").endsWith(
-    `/filter_comb/${suffix}`,
-  );
-  return `${reduced}${
-    usesFilterComb ? "/filter_comb/" : "/"
-  }${normalizedSegment}`;
-}
-
-/** 为高级查询 facet 树提供减格路径、逐节点路径和取非显示状态。 */
 export function useDimensionFacet(
-  tree: MaybeRefOrGetter<GalleryAdvancedQuery>,
+  tree: MaybeRefOrGetter<GalleryQuery>,
   nodePath: MaybeRefOrGetter<NodePath>,
   dimension: FacetDimension,
   contextPrefix: MaybeRefOrGetter<string> = "images://gallery/",
 ) {
-  const listPath = computed(() =>
-    facetListPath(toValue(tree), toValue(nodePath), dimension)
+  const treeRootPath = computed(() =>
+    queryRuntimePath(FACET_SEGMENTS[dimension], toValue(contextPrefix))
   );
-  const reducedTreePath = computed(() =>
-    advancedQueryRuntimePath(
-      advancedFacetTreeSegmentPath(listPath.value, dimension, "all"),
-      toValue(contextPrefix),
-    )
-  );
-  const negated = computed(() => notParity(toValue(tree), toValue(nodePath)));
+  const baseline = useAdvancedHitCount(tree, contextPrefix);
 
-  function pathForSegment(segment: string): string {
-    return advancedQueryRuntimePath(
-      advancedFacetTreeSegmentPath(listPath.value, dimension, segment),
+  function listPathForSegment(segment: string): string {
+    return queryRuntimePath(
+      segment.replace(/^\/+|\/+$/g, ""),
       toValue(contextPrefix),
     );
   }
 
-  return { listPath, reducedTreePath, negated, pathForSegment };
+  function pathForSegment(segment: string): string {
+    const currentTree = toValue(tree);
+    const path = toValue(nodePath);
+    const normalized = segment.replace(/^\/+|\/+$/g, "");
+    let filter: GalleryFilter | null = null;
+    if (normalized && normalized !== "all") {
+      filter = filterFromTreeSegment(normalized);
+      // 组内/取非行的 plugin extend 贡献受引擎限制，选择时会降级为裸插件
+      // （见 GalleryAdvancedQueryConditionRow）；预测保持同一口径。
+      if (
+        filter.type === "plugin" &&
+        filter.extendPath?.trim() &&
+        (path.length > 1 || notParity(currentTree, path))
+      ) {
+        filter = { type: "plugin", pluginId: filter.pluginId };
+      }
+    }
+    const nextTree = updateNode(currentTree, path, (node) => {
+      if (!("is" in node)) {
+        throw new Error("facet 预测的 NodePath 必须指向原子节点");
+      }
+      return { is: setFilterDimension(node.is, dimension, filter) };
+    });
+    const serialized = serializeQueryBody(nextTree);
+    return queryRuntimePath(serialized.body, toValue(contextPrefix));
+  }
+
+  return {
+    treeRootPath,
+    listPathForSegment,
+    pathForSegment,
+    baselineCount: computed(() => baseline.count.value ?? null),
+  };
 }
 
 export function useAdvancedHitCount(
-  tree: MaybeRefOrGetter<GalleryAdvancedQuery>,
+  tree: MaybeRefOrGetter<GalleryQuery>,
   contextPrefix: MaybeRefOrGetter<string> = "images://gallery/",
 ) {
   const count = ref<number>();
@@ -169,8 +145,8 @@ export function useAdvancedHitCount(
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const path = computed(() => {
-    const serialized = serializeAdvancedQuery(normalizeQuery(toValue(tree)));
-    return advancedQueryRuntimePath(serialized.body, toValue(contextPrefix));
+    const serialized = serializeQueryBody(normalizeQuery(toValue(tree)));
+    return queryRuntimePath(serialized.body, toValue(contextPrefix));
   });
 
   watch(

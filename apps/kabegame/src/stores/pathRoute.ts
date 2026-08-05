@@ -6,20 +6,34 @@ import type { AppSettingKey } from "@kabegame/core/stores/settings";
 
 const HIDE_PREFIX = "hide/";
 const GLOBAL_HIDE_KEY = "pathRoute.hide";
+const GLOBAL_NO_ALBUM_KEY = "pathRoute.noAlbum";
 
 export interface GlobalRouteState {
   hide: boolean;
+  noAlbum: boolean;
 }
 
 /**
- * 全局路由参数 singleton：目前只有 `hide`。它是"路由参数"——序列化进 URL
- * 的 `hide/` 前缀——但值在所有 path-route store 之间共享。
+ * 全局路由参数 singleton：`hide` 与 `no-album`。它们是"路由参数"——序列化进
+ * URL 的路径段——但值在所有 path-route store 之间共享，由全局工具箱统一开关。
  * 持久化通过 `useLocalStorage` 自动完成。
  */
 export const useGlobalPathRoute = defineStore("globalPathRoute", () => {
   const hide = useLocalStorage<boolean>(GLOBAL_HIDE_KEY, true);
-  return { hide };
+  const noAlbum = useLocalStorage<boolean>(GLOBAL_NO_ALBUM_KEY, false);
+  return { hide, noAlbum };
 });
+
+/**
+ * 扣除赦免后、真正该出现在路径里的全局参数。
+ *
+ * `hide/` 是整条路径的前缀，工厂自己拼；`no-album` 的位置在根前缀之后
+ * （`album/<id>/no-album/...`），只有业务 `build` 知道根前缀有多长，所以由工厂
+ * 把生效值算好传下去、业务侧负责插入。
+ */
+export interface EffectiveGlobalRoute {
+  noAlbum: boolean;
+}
 
 type PathRouteStoreConfig<TState extends object> = {
   /**
@@ -31,10 +45,18 @@ type PathRouteStoreConfig<TState extends object> = {
    * ```
    */
   settingKey: Extract<AppSettingKey, "gallery-path" | "task-detail-path" | "surf-images-path" | "album-detail-path">;
-  /** 解析业务部分：工厂会先剥掉 `hide/` 前缀再把剩余 path 交过来 */
+  /**
+   * 解析业务部分：工厂会先剥掉 `hide/` 前缀再把剩余 path 交过来。
+   * 全局参数（hide / noAlbum）的值只由全局 store 决定，路径里解析出的同名段一律
+   * 丢弃——与 hide 现有语义一致（见被注释掉的 syncFromUrl）。
+   */
   parse: (path: string) => TState;
-  /** 构建业务部分：工厂会在外面自动套 `hide/`，不要自己套 */
-  build: (state: TState) => string;
+  /**
+   * 构建业务部分：工厂会在外面自动套 `hide/`，不要自己套。
+   * `global.noAlbum` 是扣除赦免后的生效值，业务侧把它插到根前缀之后
+   * （`buildComposablePath` 的 `noAlbum` 参数就是这个位置）。
+   */
+  build: (state: TState, global: EffectiveGlobalRoute) => string;
   /**
    * 可选：构建"上下文前缀"——是 `build` 的 **严格前缀**，代表任何属于本 store 路由
    * 语义下的子路径都会共享的那部分（例如 gallery 的 `search/display-name/<q>/`）。
@@ -53,6 +75,11 @@ type PathRouteStoreConfig<TState extends object> = {
    * 用于让某些路由（HIDDEN 画册 / TaskDetail）不参与全局 hide。
    */
   ignoreHide?: (state: TState & GlobalRouteState) => boolean;
+  /**
+   * 返回 true 时：`build` 收到的 `global.noAlbum` 恒为 false，该路由不参与全局
+   * no-album。用于画册详情——画册里的图必然属于画册，再叠「不属于任何画册」自相矛盾。
+   */
+  ignoreNoAlbum?: (state: TState & GlobalRouteState) => boolean;
 };
 
 type StateComputedRefs<TState extends object> = {
@@ -74,7 +101,7 @@ export function createPathRouteStore<TState extends object>(
 
   return defineStore(storeId, () => {
     const globalStore = useGlobalPathRoute();
-    const { hide } = storeToRefs(globalStore);
+    const { hide, noAlbum } = storeToRefs(globalStore);
     const { settingValue: path, set: setPath } = useSettingKeyState(config.settingKey);
     const defaults = getDefault();
 
@@ -86,14 +113,31 @@ export function createPathRouteStore<TState extends object>(
       return inner ? config.parse(inner) : getDefault();
     };
 
+    /** 扣除赦免后的生效值：hide 归工厂拼前缀，noAlbum 交给业务 build 插段。 */
+    const effectiveGlobals = (
+      nextState: TState,
+      rawHide: boolean,
+      rawNoAlbum: boolean,
+    ): { hide: boolean; noAlbum: boolean } => {
+      const full = {
+        ...nextState,
+        hide: rawHide,
+        noAlbum: rawNoAlbum,
+      } as TState & GlobalRouteState;
+      return {
+        hide: !config.ignoreHide?.(full) && rawHide,
+        noAlbum: !config.ignoreNoAlbum?.(full) && rawNoAlbum,
+      };
+    };
+
     const fullPathFor = (
       nextState: TState,
       overrideHide = hide.value,
+      overrideNoAlbum = noAlbum.value,
     ): string => {
-      const full = { ...nextState, hide: overrideHide } as TState & GlobalRouteState;
-      const effHide = !config.ignoreHide?.(full) && overrideHide;
-      const inner = config.build(nextState);
-      return effHide ? HIDE_PREFIX + inner : inner;
+      const eff = effectiveGlobals(nextState, overrideHide, overrideNoAlbum);
+      const inner = config.build(nextState, { noAlbum: eff.noAlbum });
+      return eff.hide ? HIDE_PREFIX + inner : inner;
     };
 
     const writeState = async (
@@ -108,7 +152,9 @@ export function createPathRouteStore<TState extends object>(
       const ok = await setPath(nextPath as any, options);
       if (ok) {
         config.onStateChange?.(
-          { ...nextState, hide: hide.value } as TState & GlobalRouteState,
+          { ...nextState, hide: hide.value, noAlbum: noAlbum.value } as
+            & TState
+            & GlobalRouteState,
           nextPath,
         );
       }
@@ -152,10 +198,15 @@ export function createPathRouteStore<TState extends object>(
 
     const pathFor = (
       overrideState: Partial<TState>,
-      overrideHide?: boolean
+      overrideHide?: boolean,
+      overrideNoAlbum?: boolean,
     ): string => {
       const mergedState = { ...state.value, ...overrideState } as TState;
-      return fullPathFor(mergedState, overrideHide ?? hide.value);
+      return fullPathFor(
+        mergedState,
+        overrideHide ?? hide.value,
+        overrideNoAlbum ?? noAlbum.value,
+      );
     };
 
     const computedPath = computed(() => pathFor({}));
@@ -164,6 +215,9 @@ export function createPathRouteStore<TState extends object>(
      * 构建"上下文前缀"——`[hide/]` + `config.buildContext(state)`（若未声明则空串）。
      * 跟 `pathFor` 一样支持覆盖 local / hide；用于"我想列 `<ctx>plugin/`、`<ctx>date/` 这种
      * filter 根下选项"的场景，让调用方不用手拼 hide/search 等前缀。
+     *
+     * 不含 `no-album` 段：它是查询体首的随行段，由消费侧（GalleryQueryBar）按
+     * `effectiveNoAlbum` 自行接在基址后面。
      */
     const contextPathFor = (
       overrideLocal: Partial<TState> = {},
@@ -171,13 +225,20 @@ export function createPathRouteStore<TState extends object>(
     ): string => {
       const ml = { ...state.value, ...overrideLocal } as TState;
       const h = overrideHide ?? hide.value;
-      const full = { ...ml, hide: h } as TState & GlobalRouteState;
-      const effHide = !config.ignoreHide?.(full) && h;
+      const effHide = effectiveGlobals(ml, h, noAlbum.value).hide;
       const ctx = config.buildContext?.(ml) ?? "";
       return effHide ? HIDE_PREFIX + ctx : ctx;
     };
 
     const computedContextPath = computed(() => contextPathFor({}));
+
+    /**
+     * 当前路由下 no-album 的生效值（已扣赦免）。消费侧（计数路径、查询行的高级
+     * 前缀、事件刷新判定）一律读它，别直接读全局 store。
+     */
+    const effectiveNoAlbum = computed(
+      () => effectiveGlobals(state.value, hide.value, noAlbum.value).noAlbum,
+    );
 
     /**
      * 计算"**若用给定 overrides 调 navigate/push，最终会路由到哪条 path**"——
@@ -187,19 +248,22 @@ export function createPathRouteStore<TState extends object>(
      *
      * 行为与 `push` 内部计算的 path 完全一致：
      * - `overrideLocal` 里出现的字段覆盖 local state；未列出的字段沿用当前值
-     * - `hide` 字段单独走 global hide store；`config.ignoreHide` 仍然生效
+     * - `hide` / `noAlbum` 单独走 global store；对应的 `ignore*` 仍然生效
      */
     const computePath = (u: Partial<TState & GlobalRouteState> = {}): string => {
       const overrideLocal: Record<string, unknown> = {};
       let overrideHide: boolean | undefined;
+      let overrideNoAlbum: boolean | undefined;
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           overrideHide = v as boolean;
+        } else if (k === "noAlbum") {
+          overrideNoAlbum = v as boolean;
         } else {
           overrideLocal[k] = v;
         }
       }
-      return pathFor(overrideLocal as Partial<TState>, overrideHide);
+      return pathFor(overrideLocal as Partial<TState>, overrideHide, overrideNoAlbum);
     };
 
     // todo: 去掉这个接口，应该在内部own这个接口
@@ -260,14 +324,18 @@ export function createPathRouteStore<TState extends object>(
       console.log(`[${storeId}] patch`, u);
       const draft = { ...state.value }
       let nextHide = hide.value;
+      let nextNoAlbum = noAlbum.value;
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           nextHide = v as boolean;
+        } else if (k === "noAlbum") {
+          nextNoAlbum = v as boolean;
         } else if (k in stateComputedKeys) {
           draft[k as StateKey] = v as TState[StateKey];
         }
       }
       hide.value = nextHide;
+      noAlbum.value = nextNoAlbum;
       return writeState(draft as TState);
     };
 
@@ -275,15 +343,22 @@ export function createPathRouteStore<TState extends object>(
     const push = async (u: Partial<TState & GlobalRouteState>) => {
       const overrideState: Record<string, unknown> = {};
       let overrideHide: boolean | undefined;
+      let overrideNoAlbum: boolean | undefined;
       for (const [k, v] of Object.entries(u)) {
         if (k === "hide") {
           overrideHide = v as boolean;
+        } else if (k === "noAlbum") {
+          overrideNoAlbum = v as boolean;
         } else {
           overrideState[k] = v;
         }
       }
       const nextState = { ...state.value, ...overrideState } as TState;
-      const path = fullPathFor(nextState, overrideHide ?? hide.value);
+      const path = fullPathFor(
+        nextState,
+        overrideHide ?? hide.value,
+        overrideNoAlbum ?? noAlbum.value,
+      );
       console.log(`[${storeId}] push → `, path);
       await setPath(path as any, { history: "push" });
     };
@@ -291,6 +366,9 @@ export function createPathRouteStore<TState extends object>(
     return {
       ...stateComputedKeys,
       hide,
+      // 全局开关原值；本路由下是否真的生效见 effectiveNoAlbum
+      noAlbum,
+      effectiveNoAlbum,
       // 根据state算出的path，不是真实url path
       computedPath,
       // 根据 state 算出的上下文path.

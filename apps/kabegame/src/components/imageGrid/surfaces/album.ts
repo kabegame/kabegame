@@ -5,9 +5,7 @@ import router from "@/router";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import {
-  stripComposablePathTail,
-} from "@/utils/galleryPath";
+import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import type { GridSurfaceAdapter } from "../types";
@@ -79,7 +77,6 @@ export function createAlbumDetailSurface(params: {
           return ids.length === 0 || intersects;
         }
         if (reason === "change") {
-          if (routeStore.filters.wallpaperOrder) return true;
           return ids.length === 0 || intersects;
         }
         return true;

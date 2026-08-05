@@ -8,8 +8,7 @@ import {
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import {
   buildGalleryCountPath,
-  filterNoAlbum,
-  hasActiveGalleryFilters,
+  hasActiveQuery,
 } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import type { GridSurfaceAdapter } from "../types";
@@ -25,9 +24,7 @@ export function createGallerySurface(params: {
   const t = i18n.global.t;
 
   const isDefaultGalleryRoute = () =>
-    !hasActiveGalleryFilters(routeStore.filters) &&
-    routeStore.page === 1 &&
-    !routeStore.search.trim();
+    !hasActiveQuery(routeStore.query) && routeStore.page === 1;
 
   const resetGalleryRouteAfterLoadError = async () => {
     if (isDefaultGalleryRoute()) return;
@@ -40,12 +37,7 @@ export function createGallerySurface(params: {
     routeStore,
     isActive: () => router.currentRoute.value.path === "/gallery",
     computeCountPath: () => {
-      const rootPath = buildGalleryCountPath(
-        routeStore.filters,
-        routeStore.search,
-        routeStore.searchMode,
-        routeStore.advanced,
-      );
+      const rootPath = buildGalleryCountPath(routeStore.effectiveNoAlbum, routeStore.query);
       return routeStore.hide ? `hide/${rootPath}` : rootPath;
     },
     onCountError: resetGalleryRouteAfterLoadError,
@@ -68,11 +60,9 @@ export function createGallerySurface(params: {
           return ids.length === 0 || intersects;
         }
         if (reason === "change") {
-          if (routeStore.filters.wallpaperOrder) return true;
           return ids.length === 0 || intersects;
         }
         if (reason === "rename") {
-          if (routeStore.filters.name) return true;
           return ids.length === 0 || intersects;
         }
         return true;
@@ -84,14 +74,14 @@ export function createGallerySurface(params: {
       filter: (p) => {
         const ids = p.albumIds ?? [];
         return (
-          filterNoAlbum(routeStore.filters) ||
+          routeStore.effectiveNoAlbum ||
           ids.includes(FAVORITE_ALBUM_ID) ||
           ids.includes(HIDDEN_ALBUM_ID)
         );
       },
       onRefresh: async (p, ctx) => {
         const ids = p.albumIds ?? [];
-        if (filterNoAlbum(routeStore.filters) || ids.includes(HIDDEN_ALBUM_ID)) {
+        if (routeStore.effectiveNoAlbum || ids.includes(HIDDEN_ALBUM_ID)) {
           await ctx.refreshPage();
           return;
         }

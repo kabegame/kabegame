@@ -3,16 +3,15 @@ import { createPathRouteStore } from "./pathRoute";
 import {
   buildComposablePath,
   buildGalleryContextPrefix,
-  DEFAULT_GALLERY_FILTER_SET,
   DEFAULT_GALLERY_SEARCH_MODE,
   GALLERY_STORAGE_KEY_PATH,
-  type GalleryFilterSet,
+  type GalleryQuery,
   type GallerySearchMode,
   type GallerySort,
   newRandomSortSeed,
   parseGalleryPath,
+  querySearchTerm,
 } from "@/utils/galleryPath";
-import type { GalleryAdvancedQuery } from "@/utils/galleryQuery";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_WEB } from "@kabegame/core/env";
 
@@ -24,29 +23,26 @@ let cachedWebRandomSeed: string | null = null;
 const webRandomSeed = () => (cachedWebRandomSeed ??= newRandomSortSeed());
 
 /**
- * 会话内记忆的搜索模式。`search/<mode>/<query>/` 只有 query 非空才会进 path——
- * 清空搜索框后 query 变空，若仍想把 mode 编进 path 会撞上两个后端限制：
- * pathql-rs 的 `normalize_segments` 会丢弃空字符串路径段（下一个真实过滤词会被
- * 误当成 query 文本），且 metadata/native-metadata 的 `LEFT JOIN` 列在空 query 下
- * `NULL LIKE '%%'` 恒非真，等于把没有该元数据的图片全部滤掉。两者都不该动引擎/
- * WHERE 表达式去迁就一个纯 UI 偏好，所以 mode 在 query 清空后不再由 path 承载，
- * 改用这个 ref 兜底——`parse()` 读它，下拉框选择时直接写它。
+ * 会话内记忆的搜索模式。搜索是查询原子的一个维度，query 为空时原子不存在，
+ * 模式自然不进 path（后端 `normalize_segments` 会丢空段、空 query 的 LIKE 又
+ * 恒非真，不能为纯 UI 偏好去动引擎）。所以模式在搜索词清空后由这个 ref 兜底：
+ * 搜索下拉展示时读它，用户切换模式时写它（`rememberGallerySearchMode`）。
  */
-const stickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+export const galleryStickySearchMode = ref<GallerySearchMode>(
+  DEFAULT_GALLERY_SEARCH_MODE,
+);
 
-/** 手动记住当前搜索模式，供下拉框切换时调用（见 stickySearchMode 注释）。 */
+/** 手动记住当前搜索模式，供下拉框切换时调用（见 galleryStickySearchMode 注释）。 */
 export function rememberGallerySearchMode(mode: GallerySearchMode): void {
-  stickySearchMode.value = mode;
+  galleryStickySearchMode.value = mode;
 }
 
 type GalleryRouteState = {
-  filters: GalleryFilterSet;
-  advanced: GalleryAdvancedQuery | undefined;
+  /** 唯一查询对象：简单过滤只是单原子查询的退化形态。 */
+  query: GalleryQuery;
   sort: GallerySort;
   page: number;
   pageSize: number;
-  search: string;
-  searchMode: GallerySearchMode;
 };
 
 export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
@@ -55,33 +51,28 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
     settingKey: "gallery-path",
     parse: (path) => {
       const parsed = parseGalleryPath(path);
-      if (parsed.search.trim()) {
-        stickySearchMode.value = parsed.searchMode;
+      const term = querySearchTerm(parsed.query);
+      if (term?.query.trim()) {
+        galleryStickySearchMode.value = term.mode;
       }
+      // parsed.noAlbum 丢弃：no-album 与 hide 一样是全局路由参数，值只由
+      // globalPathRoute 决定（见 pathRoute.ts 的 parse 契约）。
       return {
-        filters: parsed.filters,
-        advanced: parsed.advanced,
+        query: parsed.query,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
-        search: parsed.search,
-        searchMode: parsed.search.trim()
-          ? parsed.searchMode
-          : stickySearchMode.value,
       };
     },
-    build: (state) =>
+    build: (state, { noAlbum }) =>
       buildComposablePath({
-        filters: state.filters,
-        advanced: state.advanced,
+        noAlbum,
+        query: state.query,
         sort: state.sort,
         page: state.page,
         pageSize: state.pageSize,
-        search: state.search,
-        searchMode: state.searchMode,
       }),
-    buildContext: (state) =>
-      buildGalleryContextPrefix(state.search, state.searchMode),
+    buildContext: (state) => buildGalleryContextPrefix(state.query),
     defaultState: () => {
       const settings = useSettingsStore();
       const stored = IS_WEB
@@ -92,24 +83,21 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>(
         ? { field: "random", desc: false, seed: webRandomSeed() }
         : { field: "by-id", desc: false };
       return {
-        filters: parsed?.filters ?? DEFAULT_GALLERY_FILTER_SET,
-        advanced: parsed?.advanced,
+        query: parsed?.query ?? [],
         sort: parsed?.sort ?? defaultSort,
         page: 1, // 页码不持久化，由当前页面状态/URL 驱动
         pageSize: (settings.values.galleryPageSize as number | undefined) ??
           100,
-        search: "", // 搜索词/模式不持久化
-        searchMode: DEFAULT_GALLERY_SEARCH_MODE,
       };
     },
     onStateChange: (state) => {
-      // 仅持久化 filter/sort（page / search 不持久化，pageSize 交 settings 统一管理）
+      // 仅持久化 query/sort（page 不持久化，pageSize 交 settings 统一管理；
+      // noAlbum 由全局 store 自己的 localStorage 承担，不再进这条路径）
       if (!IS_WEB) {
         localStorage.setItem(
           GALLERY_STORAGE_KEY_PATH,
           buildComposablePath({
-            filters: state.filters,
-            advanced: state.advanced,
+            query: state.query,
             sort: state.sort,
             page: 1,
           }),
@@ -128,10 +116,7 @@ export async function resetGalleryRouteToDefault() {
   const store = useGalleryRouteStore();
   rememberGallerySearchMode(DEFAULT_GALLERY_SEARCH_MODE);
   await store.navigate({
-    filters: {},
-    advanced: undefined,
+    query: [],
     page: 1,
-    search: "",
-    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   });
 }

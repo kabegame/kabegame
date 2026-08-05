@@ -76,18 +76,7 @@
 
       <template #empty>
         <div class="album-empty fade-in">
-          <template v-if="isAlbumWallpaperFilterEmpty">
-            <EmptyState :primary-tip="t('gallery.wallpaperOrderEmptyTip')" />
-            <el-button type="primary" class="empty-action-btn" @click="handleAlbumWallpaperEmptyViewAll">
-              <el-icon>
-                <Picture />
-              </el-icon>
-              {{ t("gallery.viewAllImages") }}
-            </el-button>
-          </template>
-          <template v-else>
-            <EmptyState />
-          </template>
+          <EmptyState />
         </div>
       </template>
 
@@ -128,19 +117,19 @@
 
         <GalleryQueryBar
           ref="albumBrowseToolbarRef"
-          :filters="albumDetailRouteStore.filters"
-          :advanced="albumDetailRouteStore.advanced"
+          :query="albumDetailRouteStore.query"
+          :no-album="albumDetailRouteStore.effectiveNoAlbum"
           :sort="albumDetailRouteStore.sort"
           :page="albumDetailRouteStore.page"
           :page-size="gridPageSize"
-          :search="search"
-          :search-mode="searchMode"
+          :search-mode="albumDetailStickySearchMode"
           :provider-context-prefix="albumDetailRouteStore.computedContextPath"
-          :context-base="albumDetailRouteStore.contextPathFor({ search: '' })"
+          :context-base="albumDetailRouteStore.contextPathFor({ query: [] })"
           :filter-features="albumFilterFeatures"
           :sort-features="albumSortFeatures"
           enable-clear-all
           @navigate="onQueryNavigate"
+          @search-mode-change="rememberAlbumDetailSearchMode"
         >
           <!-- 「图片 / 子画册」与过滤模式同属「看哪一批」，并进查询行首，不再单占一行 -->
           <template #leading>
@@ -222,7 +211,6 @@ import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Picture } from "@kabegame/element-plus-icons";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import { createAlbumDetailSurface } from "@/components/imageGrid/surfaces/album";
@@ -238,17 +226,22 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
-import type {
-  GalleryFilterDimension,
-  GalleryQueryPatch,
-  GallerySortField,
+import {
+  querySearchTerm,
+  type GalleryBrowseDimension,
+  type GalleryQueryPatch,
+  type GallerySortField,
 } from "@/utils/galleryPath";
 import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_WEB, IS_ANDROID } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { createImageAnalytics, currentUrl } from "@kabegame/core/track/imageAnalytics";
-import { useAlbumDetailRouteStore, rememberAlbumDetailSearchMode } from "@/stores/albumDetailRoute";
+import {
+  useAlbumDetailRouteStore,
+  rememberAlbumDetailSearchMode,
+  albumDetailStickySearchMode,
+} from "@/stores/albumDetailRoute";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -281,7 +274,7 @@ const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotati
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
 const albumDetailRouteStore = useAlbumDetailRouteStore();
-const { search, searchMode, albumId } = storeToRefs(albumDetailRouteStore);
+const { albumId } = storeToRefs(albumDetailRouteStore);
 
 
 const albumName = ref<string>("");
@@ -330,7 +323,8 @@ const albumBrowseToolbarRef = ref<{
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
-  if (patch.searchMode) rememberAlbumDetailSearchMode(patch.searchMode);
+  const term = patch.query ? querySearchTerm(patch.query) : null;
+  if (term?.query.trim()) rememberAlbumDetailSearchMode(term.mode);
   void albumDetailRouteStore.navigate(patch, options);
 };
 const albumContainerRef = ref<HTMLElement | null>(null);
@@ -811,20 +805,12 @@ function childAlbumScopeIds(): string[] {
 }
 
 // ---------- Filter flags ----------
-const albumFilterFeatures: GalleryFilterDimension[] = [
-  "wallpaperOrder", "plugin", "mediaType", "date", "name", "size", "aspect",
+const albumFilterFeatures: GalleryBrowseDimension[] = [
+  "plugin", "mediaType", "date", "size", "aspect",
 ];
 const albumSortFeatures: GallerySortField[] = [
   "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "by-album-order",
 ];
-
-const isAlbumWallpaperFilterEmpty = computed(() =>
-  !!albumDetailRouteStore.filters.wallpaperOrder
-);
-
-const handleAlbumWallpaperEmptyViewAll = async () => {
-  await albumDetailRouteStore.navigate({ filters: {}, page: 1 });
-};
 
 // ---------- Route synchronization ----------
 watch(
@@ -1011,10 +997,8 @@ const initAlbum = async (newAlbumId: string) => {
   } else {
     await albumDetailRouteStore.navigate({
       albumId: newAlbumId,
-      filters: {},
-      // 简单过滤既然清空，高级树也要一起清：换画册就是换数据源，
-      // 留着上一个画册的查询会让新画册一进来就是「空」。
-      advanced: undefined,
+      // 换画册就是换数据源：留着上一个画册的查询会让新画册一进来就是「空」。
+      query: [],
       sort: { field: "by-album-order", desc: false },
       page: 1,
     });

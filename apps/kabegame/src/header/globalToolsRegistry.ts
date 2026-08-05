@@ -98,22 +98,26 @@ export function useGlobalTools() {
     }
 
     const display: GlobalToolItem[] = [];
-    if (pageBridge.toggleShowAlbumImages) {
-      const bridge = pageBridge.toggleShowAlbumImages;
-      display.push({
-        id: "toggleShowAlbumImages",
-        group: "display",
-        // 文案恒为「不显示…」（开关打开即该状态生效），跟着状态在显示/隐藏之间翻转
-        // 会让人分不清这行到底是在描述当前状态还是点下去的效果
-        label: t("header.hideAlbumImages"),
-        icon: FolderOpened,
-        kind: "toggle",
-        toggleGet: bridge.get,
-        toggleSet: bridge.set,
-      });
-    }
-    // 常驻项：hide 是所有 path-route store 共享的全局状态，没有页面注册桥接时
-    // 直接读写全局 store，开关不再随页面进出而消失。
+    // 常驻项：no-album 与 hide 同为所有 path-route store 共享的全局路由参数，页面
+    // 注册了桥接就走桥接（画廊那份顺带把页码复位），否则直接读写全局 store。
+    // 画册详情赦免该参数（ignoreNoAlbum），开关仍在但对该页不生效。
+    const noAlbumBridge = pageBridge.toggleShowAlbumImages ?? {
+      get: () => globalPathRoute.noAlbum,
+      set: (v: boolean) => {
+        globalPathRoute.noAlbum = v;
+      },
+    };
+    display.push({
+      id: "toggleShowAlbumImages",
+      group: "display",
+      // 文案恒为「不显示…」（开关打开即该状态生效），跟着状态在显示/隐藏之间翻转
+      // 会让人分不清这行到底是在描述当前状态还是点下去的效果
+      label: t("header.hideAlbumImages"),
+      icon: FolderOpened,
+      kind: "toggle",
+      toggleGet: noAlbumBridge.get,
+      toggleSet: noAlbumBridge.set,
+    });
     const hiddenBridge = pageBridge.toggleShowHidden ?? {
       get: () => globalPathRoute.hide,
       set: (v: boolean) => {

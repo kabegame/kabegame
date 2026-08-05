@@ -38,7 +38,7 @@
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`（简单 chip 行 + 高级 PathQL 树、唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工），以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
+  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`——前端状态统一为**唯一查询对象 `GalleryQuery`**（搜索是原子的一个维度；简单过滤 = 单原子退化形态，简单/高级只是两种投影；`no-album` 与 `hide` 并列为随行路由上下文），唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工；以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
   - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)

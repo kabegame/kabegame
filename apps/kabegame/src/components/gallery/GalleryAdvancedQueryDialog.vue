@@ -16,8 +16,9 @@
           </h2>
           <span class="inline-flex items-center gap-1.5 rounded-lg border border-solid border-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_8%,transparent)] px-2.5 py-1 text-sm font-semibold text-[var(--anime-primary)]">
             <el-icon v-if="hitCountLoading" class="animate-spin"><Loading /></el-icon>
+            <!-- 请求失败时 hitCount 是 undefined：显示 "—" 而不是冒充 0（"一张不剩"）。 -->
             <span v-else>
-              {{ t("gallery.advancedHitCount", { count: formatCount(hitCount ?? 0) }) }}
+              {{ t("gallery.advancedHitCount", { count: hitCount == null ? "—" : formatCount(hitCount) }) }}
             </span>
           </span>
         </div>
@@ -61,19 +62,20 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useAdvancedHitCount } from "@/composables/useAdvancedQueryFacets";
 import {
-  advancedQueryRuntimePath,
+  queryRuntimePath,
   buildComposablePath,
   type GallerySort,
 } from "@/utils/galleryPath";
 import {
+  cloneQuery,
   normalizeQuery,
-  type GalleryAdvancedQuery,
+  type GalleryQuery,
 } from "@/utils/galleryQuery";
 import GalleryAdvancedQuerySequence from "./GalleryAdvancedQuerySequence.vue";
 import PathqlPathBar from "./PathqlPathBar.vue";
 
 const props = withDefaults(defineProps<{
-  query?: GalleryAdvancedQuery;
+  query?: GalleryQuery;
   sort: GallerySort;
   page?: number;
   pageSize?: number;
@@ -86,13 +88,13 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{
-  apply: [tree: GalleryAdvancedQuery];
+  apply: [tree: GalleryQuery];
 }>();
 
 const visible = defineModel<boolean>("visible", { required: true });
 const { t } = useI18n();
 const uiStore = useUiStore();
-const draft = ref<GalleryAdvancedQuery>([]);
+const draft = ref<GalleryQuery>([]);
 const effectiveQuery = computed(() => normalizeQuery(draft.value));
 const contextPrefix = toRef(props, "contextPrefix");
 const { count: hitCount, loading: hitCountLoading } = useAdvancedHitCount(
@@ -112,10 +114,9 @@ watch(
 );
 
 const previewPath = computed(() =>
-  advancedQueryRuntimePath(
+  queryRuntimePath(
     buildComposablePath({
-      filters: {},
-      advanced: effectiveQuery.value,
+      query: effectiveQuery.value,
       sort: props.sort,
       page: props.page,
       pageSize: props.pageSize,
@@ -124,8 +125,8 @@ const previewPath = computed(() =>
   )
 );
 
-function cloneTree(tree: GalleryAdvancedQuery): GalleryAdvancedQuery {
-  return JSON.parse(JSON.stringify(tree)) as GalleryAdvancedQuery;
+function cloneTree(tree: GalleryQuery): GalleryQuery {
+  return cloneQuery(tree);
 }
 
 function formatCount(value: number): string {

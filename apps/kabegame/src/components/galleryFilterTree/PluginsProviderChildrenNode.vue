@@ -10,7 +10,6 @@
       v-for="entry in pluginEntries"
       :key="pluginKey(entry.pluginId)"
       :plugin-id="entry.pluginId"
-      :initial-count="entry.count"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -30,8 +29,8 @@ import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import PluginProviderChildrenNode from "./PluginProviderChildrenNode.vue";
 import {
   countProviderPath,
-  listProviderDirs,
   useGalleryFilterTreeContext,
+  useProviderTreeList,
   type RefreshTarget,
 } from "./context";
 
@@ -44,7 +43,8 @@ type UnlistenFn = () => void;
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
-const pluginEntries = ref<Array<{ pluginId: string; count: number }>>([]);
+const { deltaMode, listPathForSegment, listDirs } = useProviderTreeList();
+const pluginEntries = ref<Array<{ pluginId: string }>>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
@@ -64,20 +64,28 @@ async function refreshList() {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(`${pathForSegment("plugin")}/`);
-    const groups = await Promise.all(
-      entries.map(async (entry) => ({
-        pluginId: entry.name,
-        count:
-          typeof entry.total === "number"
-            ? entry.total
-            : await countProviderPath(pathForSegment(`plugin/${encodeURIComponent(entry.name)}`)),
-      }))
-    );
+    const entries = await listDirs(`${listPathForSegment("plugin")}/`);
+    // diff 模式列的是纯净全集，不按绝对数量过滤（预测为 0 的项灰显但仍可选）；
+    // 侧栏保持「只列有图的插件」。
+    let ids: string[];
+    if (deltaMode.value) {
+      ids = entries.map((entry) => entry.name).filter(Boolean);
+    } else {
+      const groups = await Promise.all(
+        entries.map(async (entry) => ({
+          pluginId: entry.name,
+          count:
+            typeof entry.total === "number"
+              ? entry.total
+              : await countProviderPath(pathForSegment(`plugin/${encodeURIComponent(entry.name)}`)),
+        }))
+      );
+      ids = groups
+        .filter((group) => group.pluginId && group.count > 0)
+        .map((group) => group.pluginId);
+    }
     if (token !== listToken || expectedPrefix !== prefix.value) return;
-    pluginEntries.value = groups
-      .filter((group) => group.pluginId && group.count > 0)
-      .map((group) => ({ pluginId: group.pluginId, count: group.count }));
+    pluginEntries.value = ids.map((pluginId) => ({ pluginId }));
     loaded.value = true;
   } catch {
     if (token === listToken && expectedPrefix === prefix.value) {

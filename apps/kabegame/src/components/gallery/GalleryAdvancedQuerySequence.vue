@@ -166,7 +166,7 @@ import GalleryAdvancedQueryConditionRow from "./GalleryAdvancedQueryConditionRow
 import {
   removeNode,
   updateNode,
-  type GalleryAdvancedQuery,
+  type GalleryQuery,
   type GalleryQueryNode,
   type NodePath,
 } from "@/utils/galleryQuery";
@@ -190,7 +190,7 @@ interface GroupDescriptor {
 }
 
 const props = withDefaults(defineProps<{
-  tree: GalleryAdvancedQuery;
+  tree: GalleryQuery;
   sequence: GalleryQueryNode[];
   basePath?: NodePath;
   target?: SequenceTarget;
@@ -206,7 +206,7 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{
-  "update:tree": [tree: GalleryAdvancedQuery];
+  "update:tree": [tree: GalleryQuery];
 }>();
 
 const { t } = useI18n();
@@ -250,7 +250,7 @@ function newGroup(): GalleryQueryNode {
   return { any: [[{ is: {} }], [{ is: {} }]] };
 }
 
-function updateTree(tree: GalleryAdvancedQuery): void {
+function updateTree(tree: GalleryQuery): void {
   emit("update:tree", tree);
 }
 

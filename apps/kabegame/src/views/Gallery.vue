@@ -15,9 +15,7 @@
             <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalCount" :big-page-enabled="totalCount > pageSize"
-                :filters="galleryRouteStore.filters"
-                :sort="galleryRouteStore.sort" :page-size="pageSize" :search="search"
-                :search-mode="searchMode"
+                :sort="galleryRouteStore.sort" :page-size="pageSize"
                 :provider-context-prefix="galleryRouteStore.computedContextPath"
                 @refresh="handleManualRefresh"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
@@ -126,7 +124,6 @@ const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
-const { search, searchMode } = storeToRefs(galleryRouteStore);
 
 const currentPath = computed(() => galleryRouteStore.computedPath);
 let lastTrackedGalleryPath: string | null = null;

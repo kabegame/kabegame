@@ -7,7 +7,6 @@
     :active="active"
     :default-expanded="defaultExpanded"
     :filter="imagesChangeFilter"
-    :initial-count="initialCount"
     :selectable="!isPlain"
     @select="$emit('select', filterForSelf)"
     @update:expanded="onExpanded"
@@ -21,7 +20,6 @@
       :is-leaf="isProviderLeaf(child)"
       :is-plain="isProviderPlain(child)"
       :depth="depth + 1"
-      :initial-count="child.total ?? undefined"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -32,7 +30,6 @@
     :depth="depth"
     :active="active"
     :filter="imagesChangeFilter"
-    :initial-count="initialCount"
     :selectable="!isPlain"
     @select="$emit('select', filterForSelf)"
   />
@@ -51,10 +48,10 @@ import {
   isProviderPlain,
   isSameGalleryFilter,
   joinProviderPath,
-  listProviderDirs,
   normalizeProviderPath,
   unknownOrMatchingPlugin,
   useGalleryFilterTreeContext,
+  useProviderTreeList,
   type ProviderChildDir,
   type RefreshTarget,
 } from "./context";
@@ -66,7 +63,6 @@ const props = withDefaults(defineProps<{
   isLeaf?: boolean;
   isPlain?: boolean;
   depth?: number;
-  initialCount?: number;
 }>(), {
   isLeaf: false,
   isPlain: false,
@@ -78,27 +74,28 @@ defineEmits<{
 }>();
 
 const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { listPathForSegment, listDirs } = useProviderTreeList();
 const children = ref<ProviderChildDir[]>([]);
 const loaded = ref(false);
 let listToken = 0;
 let unregisterRefresh: (() => void) | null = null;
 
-const path = computed(() =>
-  pathForSegment(
-    [
-      "plugin",
-      encodeURIComponent(props.pluginId),
-      "extend",
-      normalizeProviderPath(props.extendPath)
-        .split("/")
-        .filter(Boolean)
-        .map(encodeURIComponent)
-        .join("/"),
-    ]
+const selfSegment = computed(() =>
+  [
+    "plugin",
+    encodeURIComponent(props.pluginId),
+    "extend",
+    normalizeProviderPath(props.extendPath)
+      .split("/")
       .filter(Boolean)
-      .join("/")
-  )
+      .map(encodeURIComponent)
+      .join("/"),
+  ]
+    .filter(Boolean)
+    .join("/")
 );
+const path = computed(() => pathForSegment(selfSegment.value));
+const listPath = computed(() => listPathForSegment(selfSegment.value));
 const filterForSelf = computed<GalleryFilter>(() => ({
   type: "plugin",
   pluginId: props.pluginId,
@@ -124,7 +121,7 @@ async function refreshChildren() {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(`${path.value}/`);
+    const entries = await listDirs(`${listPath.value}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     children.value = entries;
     loaded.value = true;

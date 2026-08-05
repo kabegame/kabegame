@@ -6,7 +6,6 @@
     :depth="depth"
     :active="active"
     :default-expanded="defaultExpanded"
-    :initial-count="initialCount"
     @select="$emit('select', filterForSelf)"
     @update:expanded="onExpanded"
   >
@@ -15,7 +14,6 @@
       :key="child.seg"
       :segments="[...segments, child.seg]"
       :depth="depth + 1"
-      :initial-count="child.total"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -25,7 +23,6 @@
     :path="path"
     :depth="depth"
     :active="active"
-    :initial-count="initialCount"
     @select="$emit('select', filterForSelf)"
   />
 </template>
@@ -45,15 +42,14 @@ import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import {
   dateFilterSegment,
   isSameGalleryFilter,
-  listProviderDirs,
   useGalleryFilterTreeContext,
+  useProviderTreeList,
   type RefreshTarget,
 } from "./context";
 
 const props = withDefaults(defineProps<{
   segments: string[];
   depth?: number;
-  initialCount?: number;
 }>(), {
   depth: 1,
 });
@@ -64,6 +60,7 @@ defineEmits<{
 
 const { t, locale } = useI18n();
 const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { listPathForSegment, listDirs } = useProviderTreeList();
 const childRows = ref<Array<{ seg: string; total?: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
@@ -75,7 +72,9 @@ const filterForSelf = computed<GalleryFilter>(() => ({
   type: "date",
   segment: segment.value,
 }));
-const path = computed(() => pathForSegment(["date", ...props.segments].join("/")));
+const selfSegment = computed(() => ["date", ...props.segments].join("/"));
+const path = computed(() => pathForSegment(selfSegment.value));
+const listPath = computed(() => listPathForSegment(selfSegment.value));
 const canHaveChildren = computed(() => props.segments.length < 3);
 const active = computed(() => isSameGalleryFilter(filterForSelf.value, filter.value));
 const defaultExpanded = computed(() => {
@@ -114,7 +113,7 @@ async function refreshChildren() {
   const expectedPrefix = prefix.value;
   try {
     const pattern = childSegmentPattern();
-    const entries = await listProviderDirs(`${path.value}/`);
+    const entries = await listDirs(`${listPath.value}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     childRows.value = entries
       .map((entry) => ({ seg: entry.name, total: entry.total ?? undefined }))

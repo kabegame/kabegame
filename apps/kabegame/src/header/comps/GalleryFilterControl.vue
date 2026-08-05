@@ -17,12 +17,6 @@
         >
           {{ t("gallery.filterAll") }}
         </el-dropdown-item>
-        <el-dropdown-item
-          command="wallpaper-order"
-          :class="{ 'is-active': legacyFilter.type === 'wallpaper-order' }"
-        >
-          {{ t("gallery.filterWallpaperSet") }}
-        </el-dropdown-item>
         <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
           <el-dropdown
             trigger="hover"
@@ -54,35 +48,6 @@
                 </template>
                 <el-dropdown-item v-else disabled>
                   {{ t("gallery.filterByTimeEmpty") }}
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </el-dropdown-item>
-        <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
-          <el-dropdown
-            trigger="hover"
-            placement="right-start"
-            @command="handleNameCommand"
-          >
-            <span
-              class="plugin-submenu-trigger"
-              :class="{ 'is-active': isNameFilterActive }"
-            >
-              {{ t("gallery.filterByName") }}
-              <el-icon class="plugin-submenu-chevron">
-                <ArrowRight />
-              </el-icon>
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu class="plugin-submenu-menu">
-                <el-dropdown-item
-                  v-for="b in GALLERY_NAME_LANGUAGE_BUCKETS"
-                  :key="b.bucket"
-                  :command="b.bucket"
-                  :class="{ 'is-active': filterNameBucket(legacyFilter) === b.bucket }"
-                >
-                  {{ t(`gallery.${b.labelKey}`) }}
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -238,16 +203,15 @@ import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
 import {
   GALLERY_ASPECT_BUCKETS,
-  GALLERY_NAME_LANGUAGE_BUCKETS,
   filterAspectRange,
   filterDateSegment,
   filterMediaFormat,
   filterMediaKind,
-  filterNameBucket,
   filterPluginId,
   filterSizeRange,
   filterSetToSingleFilter,
-  isSimpleFilter,
+  asSingleFilterSet,
+  queryFromFilterSet,
   singleFilterToSet,
 } from "@/utils/galleryPath";
 import {
@@ -285,11 +249,13 @@ const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const galleryRouteStore = useGalleryRouteStore();
 const { computedContextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
-const legacyFilter = computed(() => filterSetToSingleFilter(galleryRouteStore.filters));
-
-const showSimpleFilter = computed(() =>
-  isSimpleFilter(legacyFilter.value)
+/** 查询的单原子投影；null = 组合查询，此时快捷过滤控件不展示。 */
+const simpleFilters = computed(() => asSingleFilterSet(galleryRouteStore.query));
+const legacyFilter = computed(() =>
+  filterSetToSingleFilter(simpleFilters.value ?? {})
 );
+
+const showSimpleFilter = computed(() => simpleFilters.value !== null);
 
 const currentPluginId = computed(() => filterPluginId(legacyFilter.value));
 
@@ -301,10 +267,6 @@ const isTimeFilterActive = computed(() => dateTail.value != null);
 
 const isMediaTypeFilterActive = computed(
   () => filterMediaKind(legacyFilter.value) != null
-);
-
-const isNameFilterActive = computed(
-  () => filterNameBucket(legacyFilter.value) != null
 );
 
 const isSizeFilterActive = computed(
@@ -586,7 +548,7 @@ watch(pluginSignature, () => {
   const current =
     legacyFilter.value.type === "plugin" ? legacyFilter.value.pluginId : "";
   if (current && !pluginStore.plugins.some((p) => p.id === current)) {
-    void galleryRouteStore.navigate({ filters: {}, page: 1 }, { push: true });
+    void galleryRouteStore.navigate({ query: [], page: 1 }, { push: true });
     return;
   }
   void loadPluginGroups();
@@ -600,9 +562,6 @@ useImagesChangeRefresh({
 
 const filterLabel = computed(() => {
   void locale.value;
-  if (legacyFilter.value.type === "wallpaper-order") {
-    return t("gallery.filterWallpaperSet");
-  }
   if (legacyFilter.value.type === "date-range") {
     const f = legacyFilter.value;
     return `${f.start} ~ ${f.end}`;
@@ -632,12 +591,6 @@ const filterLabel = computed(() => {
     if (mf) return `${t("gallery.filterVideoOnlyLabel")} / ${mf}`;
     return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
   }
-  const nb = filterNameBucket(legacyFilter.value);
-  if (nb) {
-    const bucket = GALLERY_NAME_LANGUAGE_BUCKETS.find((b) => b.bucket === nb);
-    const label = bucket ? t(`gallery.${bucket.labelKey}`) : nb;
-    return `${t("gallery.filterByName")}: ${label}`;
-  }
   const sr = filterSizeRange(legacyFilter.value);
   if (sr) {
     const bucket = SIZE_BUCKETS.find((b) => b.range === sr);
@@ -654,13 +607,10 @@ const filterLabel = computed(() => {
 });
 
 function handleCommand(command: string) {
-  if (command !== "all" && command !== "wallpaper-order") return;
+  if (command !== "all") return;
   void galleryRouteStore.navigate(
     {
-      filters:
-        command === "all"
-          ? {}
-          : { wallpaperOrder: true },
+      query: [],
       page: 1,
     },
     { push: true }
@@ -672,11 +622,11 @@ function handlePluginCommand(pluginId: string) {
   if (!id) return;
   void galleryRouteStore.navigate(
     {
-      filters: singleFilterToSet(
+      query: queryFromFilterSet(singleFilterToSet(
         extendPath
           ? { type: "plugin", pluginId: id, extendPath }
           : { type: "plugin", pluginId: id }
-      ),
+      )),
       page: 1,
     },
     { push: true }
@@ -687,7 +637,7 @@ function handleTimeCommand(name: string) {
   const seg = (name || "").trim();
   if (!seg) return;
   void galleryRouteStore.navigate(
-    { filters: singleFilterToSet({ type: "date", segment: seg }), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "date", segment: seg })), page: 1 },
     { push: true }
   );
 }
@@ -695,15 +645,7 @@ function handleTimeCommand(name: string) {
 function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
   void galleryRouteStore.navigate(
-    { filters: singleFilterToSet({ type: "media-type", kind }), page: 1 },
-    { push: true }
-  );
-}
-
-function handleNameCommand(bucket: string) {
-  if (!bucket) return;
-  void galleryRouteStore.navigate(
-    { filters: singleFilterToSet({ type: "name", bucket }), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "media-type", kind })), page: 1 },
     { push: true }
   );
 }
@@ -711,7 +653,7 @@ function handleNameCommand(bucket: string) {
 function handleSizeCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
-    { filters: singleFilterToSet({ type: "size", range }), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "size", range })), page: 1 },
     { push: true }
   );
 }
@@ -719,7 +661,7 @@ function handleSizeCommand(range: string) {
 function handleAspectCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
-    { filters: singleFilterToSet({ type: "aspect", range }), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "aspect", range })), page: 1 },
     { push: true }
   );
 }

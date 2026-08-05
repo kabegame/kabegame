@@ -24,17 +24,17 @@
   <!-- 过滤 / 排序 / 搜索：与画册、任务、畅游详情共用同一条查询行。 -->
   <GalleryQueryBar
     ref="queryBarRef"
-    :filters="activeFilters"
-    :advanced="galleryRouteStore.advanced"
+    :query="galleryRouteStore.query"
+    :no-album="galleryRouteStore.effectiveNoAlbum"
     :sort="props.sort"
     :page="galleryRouteStore.page"
     :page-size="props.pageSize"
-    :search="props.search"
-    :search-mode="props.searchMode"
+    :search-mode="stickySearchMode"
     :provider-context-prefix="props.providerContextPrefix"
-    :context-base="galleryRouteStore.contextPathFor({ search: '' })"
+    :context-base="galleryRouteStore.contextPathFor({ query: [] })"
     hug-top
     @navigate="onQueryNavigate"
+    @search-mode-change="rememberGallerySearchMode"
   />
 
   <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，
@@ -59,16 +59,11 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
-  DEFAULT_GALLERY_SEARCH_MODE,
-  filterNoAlbum,
+  asSingleFilterSet,
   filterSetToSingleFilter,
-  hasActiveGalleryFilters,
-  isSimpleFilter,
-  singleFilterToSet,
-  type GalleryFilter,
-  type GalleryFilterSet,
+  hasActiveQuery,
+  querySearchTerm,
   type GalleryQueryPatch,
-  type GallerySearchMode,
   type GallerySort,
 } from "@/utils/galleryPath";
 import {
@@ -77,7 +72,11 @@ import {
 } from "@/utils/galleryFilterLabels";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
-import { useGalleryRouteStore, rememberGallerySearchMode } from "@/stores/galleryRoute";
+import {
+  useGalleryRouteStore,
+  galleryStickySearchMode as stickySearchMode,
+  rememberGallerySearchMode,
+} from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -85,15 +84,9 @@ interface Props {
   isLoadingAll?: boolean;
   totalCount?: number;
   bigPageEnabled?: boolean;
-  filters?: GalleryFilterSet;
-  filter?: GalleryFilter;
   sort?: GallerySort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
-  /** 搜索词 */
-  search?: string;
-  /** 搜索目标：display-name(显示名) | metadata(插件元数据) | native-metadata(EXIF/PNG) */
-  searchMode?: GallerySearchMode;
   /** provider tree 上下文前缀：hide/search 等由 route store 统一拼好 */
   providerContextPrefix?: string;
 }
@@ -102,12 +95,8 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
-  filters: () => ({} as GalleryFilterSet),
-  filter: () => ({ type: "all" } as GalleryFilter),
   sort: () => ({ field: "by-id", desc: false } as GallerySort),
   pageSize: 100,
-  search: "",
-  searchMode: "display-name",
   providerContextPrefix: "",
 });
 
@@ -133,36 +122,24 @@ const queryBarRef = ref<{
 } | null>(null);
 const failedImagesDialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
 
-const activeFilters = computed<GalleryFilterSet>(
-  () => props.filters ?? singleFilterToSet(props.filter),
-);
-const isNoAlbumBrowse = computed(() => filterNoAlbum(activeFilters.value));
+/** 查询的单原子投影（安卓折叠菜单标签用）；null = 组合查询。 */
+const simpleFilters = computed(() => asSingleFilterSet(galleryRouteStore.query));
+const isNoAlbumBrowse = computed(() => galleryRouteStore.effectiveNoAlbum);
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 function onQueryNavigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
-  if (patch.searchMode) rememberGallerySearchMode(patch.searchMode);
+  const term = patch.query ? querySearchTerm(patch.query) : null;
+  if (term?.query.trim()) rememberGallerySearchMode(term.mode);
   void galleryRouteStore.navigate(patch, options);
 }
 
-// no-album 是 header fold 的手动开关，不算「过滤」维度：不点亮过滤指示、也不显示清除叉号。
-const isFilterIndicatorActive = computed(
-  () =>
-    !!props.search.trim() ||
-    hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined }),
+// no-album 与 hide 并列，是路由上下文不是查询：天然不点亮过滤指示、不被清除。
+const isFilterIndicatorActive = computed(() =>
+  hasActiveQuery(galleryRouteStore.query)
 );
 
 function clearAllFilters() {
-  // no-album 仅由 header fold 开关控制，清除全部过滤时保留它。
-  onQueryNavigate(
-    {
-      filters: activeFilters.value.noAlbum ? { noAlbum: true } : {},
-      advanced: undefined,
-      search: "",
-      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
+  onQueryNavigate({ query: [], page: 1 }, { push: true });
 }
 
 // ---------- 安卓折叠菜单标签 ----------
@@ -173,7 +150,10 @@ const labelContext = computed(() => ({
 }));
 
 const filterFoldLabel = computed(() =>
-  galleryLabelForFilter(filterSetToSingleFilter(activeFilters.value), labelContext.value),
+  galleryLabelForFilter(
+    filterSetToSingleFilter(simpleFilters.value ?? {}),
+    labelContext.value,
+  ),
 );
 
 const sortFoldLabel = computed(() => {
@@ -181,9 +161,8 @@ const sortFoldLabel = computed(() => {
   return props.sort.desc ? labels.desc : labels.asc;
 });
 
-const showGalleryFilterFold = computed(
-  () => galleryRouteStore.advanced === undefined && isSimpleFilter(activeFilters.value),
-);
+// 组合查询没有单一维度标签，折叠菜单里不展示过滤入口。
+const showGalleryFilterFold = computed(() => simpleFilters.value !== null);
 
 const failedCountFoldLabel = computed(() => {
   const n = failedImagesStore.allFailed.length;
@@ -305,13 +284,7 @@ onMounted(() => {
   pageBridge.setToggleShowAlbumImages({
     get: () => isNoAlbumBrowse.value,
     set: (v) => {
-      const next: GalleryFilterSet = { ...activeFilters.value };
-      if (v) {
-        next.noAlbum = true;
-      } else {
-        delete next.noAlbum;
-      }
-      onQueryNavigate({ filters: next, page: 1 });
+      onQueryNavigate({ noAlbum: v, page: 1 });
     },
   });
 });

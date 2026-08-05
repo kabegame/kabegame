@@ -6,44 +6,40 @@ import {
   buildComposableContextPrefix,
   extractRootIdAndBody,
   DEFAULT_GALLERY_SEARCH_MODE,
-  type GalleryFilterSet,
+  type GalleryQuery,
   type GallerySearchMode,
   type GallerySort,
+  querySearchTerm,
 } from "@/utils/galleryPath";
-import type { GalleryAdvancedQuery } from "@/utils/galleryQuery";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
-/** 会话内记忆的搜索模式，清空搜索框后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
-const stickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+/** 会话内记忆的搜索模式，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
+export const albumDetailStickySearchMode = ref<GallerySearchMode>(
+  DEFAULT_GALLERY_SEARCH_MODE,
+);
 
 export function rememberAlbumDetailSearchMode(mode: GallerySearchMode): void {
-  stickySearchMode.value = mode;
+  albumDetailStickySearchMode.value = mode;
 }
 
 type AlbumDetailRouteState = {
   albumId: string;
-  filters: GalleryFilterSet;
-  /** 高级查询树；与 filters 在路由上互斥（见 GalleryQueryBar） */
-  advanced: GalleryAdvancedQuery | undefined;
+  /** 唯一查询对象：简单过滤只是单原子查询的退化形态。 */
+  query: GalleryQuery;
   sort: GallerySort;
   page: number;
   pageSize: number;
-  search: string;
-  searchMode: GallerySearchMode;
 };
 
 function createDefaultState(): AlbumDetailRouteState {
   const settings = useSettingsStore();
   return {
     albumId: "",
-    filters: {},
-    advanced: undefined,
+    query: [],
     sort: { field: "by-album-order", desc: false },
     page: 1,
     pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
-    search: "",
-    searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   };
 }
 
@@ -55,39 +51,33 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
       const { id: albumId, body } = extractRootIdAndBody(path, "album");
       if (!albumId) return createDefaultState();
       const parsed = parseComposablePath(body, [], "by-album-order");
-      if (parsed.search.trim()) {
-        stickySearchMode.value = parsed.searchMode;
+      const term = querySearchTerm(parsed.query);
+      if (term?.query.trim()) {
+        albumDetailStickySearchMode.value = term.mode;
       }
       return {
         albumId,
-        filters: parsed.filters,
-        advanced: parsed.advanced,
+        query: parsed.query,
         sort: parsed.sort,
         page: parsed.page,
         pageSize: parsed.pageSize,
-        search: parsed.search,
-        searchMode: parsed.search.trim() ? parsed.searchMode : stickySearchMode.value,
       };
     },
-    build: (state) =>
+    build: (state, { noAlbum }) =>
       buildComposablePath({
         rootPrefix: `album/${state.albumId}`,
-        filters: state.filters,
-        advanced: state.advanced,
+        noAlbum,
+        query: state.query,
         sort: state.sort,
         page: state.page,
         pageSize: state.pageSize,
-        search: state.search,
-        searchMode: state.searchMode,
       }),
     buildContext: (state) =>
-      buildComposableContextPrefix(
-        `album/${state.albumId}`,
-        state.search,
-        state.searchMode,
-      ),
+      buildComposableContextPrefix(`album/${state.albumId}`, state.query),
     defaultState: createDefaultState,
     ignoreHide: (s) => s.albumId === HIDDEN_ALBUM_ID,
+    // 画册里的图必然属于画册，再叠「不属于任何画册」自相矛盾：整个画册详情都赦免
+    ignoreNoAlbum: () => true,
     onStateChange: (state) => {
       const settings = useSettingsStore();
       if (state.pageSize !== settings.values.galleryPageSize) {

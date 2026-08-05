@@ -80,10 +80,9 @@ import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import {
   singleFilterToSet,
-  DEFAULT_GALLERY_SEARCH_MODE,
+  queryFromFilterSet,
   type GalleryFilter,
-  type GalleryFilterSet,
-  type GallerySearchMode,
+  type GalleryQuery,
 } from "@/utils/galleryPath";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
@@ -210,14 +209,9 @@ async function handleOpenSurfRecord(target: ImageDetailSurfRecordTarget) {
   coreRef.value?.closePreview?.();
 }
 
-function galleryFilterTargetToRoute(
+function galleryFilterTargetToQuery(
   target: ImageDetailGalleryFilterTarget,
-): { filters: GalleryFilterSet; search: string; searchMode: GallerySearchMode } | null {
-  if (target.type === "search") {
-    const search = target.search.trim();
-    return search ? { filters: {}, search, searchMode: DEFAULT_GALLERY_SEARCH_MODE } : null;
-  }
-
+): GalleryQuery | null {
   let filter: GalleryFilter;
   switch (target.type) {
     case "plugin":
@@ -238,20 +232,17 @@ function galleryFilterTargetToRoute(
       filter = { type: "aspect", range: target.range };
       break;
   }
-  return { filters: singleFilterToSet(filter), search: "", searchMode: DEFAULT_GALLERY_SEARCH_MODE };
+  return queryFromFilterSet(singleFilterToSet(filter));
 }
 
 async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
-  const routeState = galleryFilterTargetToRoute(target);
-  if (!routeState) return;
+  const query = galleryFilterTargetToQuery(target);
+  if (!query) return;
   // 先在 gallery 内部导航（push 一条 history），导航完成后再关闭预览/详情：
   // 这是 gallery 内部跳转，预览的当前图片可能已不在新 filter 结果中，需要关闭；
   // 等导航 await 完成后再关闭，可保证 previewedId→null 引发的 pvwimgid 写入只
   // 基于已落定的目标 URL，不会与 push 在同一 tick 竞争而把 filter 覆盖回去。
-  await galleryRouteStore.navigate(
-    { ...routeState, advanced: undefined, page: 1 },
-    { push: true },
-  );
+  await galleryRouteStore.navigate({ query, page: 1 }, { push: true });
   imageDetailDialog.close();
   coreRef.value?.closePreview?.();
 }

@@ -8,17 +8,15 @@
  */
 import {
   GALLERY_ASPECT_BUCKETS,
-  GALLERY_NAME_LANGUAGE_BUCKETS,
   filterAspectRange,
   filterDateSegment,
   filterForDimension,
   filterMediaFormat,
   filterMediaKind,
-  filterNameBucket,
   filterPluginId,
   filterSizeRange,
   type GalleryFilter,
-  type GalleryFilterDimension,
+  type GalleryBrowseDimension,
   type GalleryFilterSet,
   type GallerySortField,
 } from "./galleryPath";
@@ -48,10 +46,6 @@ const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
 
 const ASPECT_RANGE_LABEL_KEYS: Record<string, string> = Object.fromEntries(
   GALLERY_ASPECT_BUCKETS.map((b) => [b.range, b.labelKey]),
-);
-
-const NAME_BUCKET_AUTONYMS: Record<string, string> = Object.fromEntries(
-  GALLERY_NAME_LANGUAGE_BUCKETS.map((b) => [b.bucket, b.autonym]),
 );
 
 export function gallerySortFieldLabel(field: GallerySortField, t: TFn): string {
@@ -113,13 +107,6 @@ export function galleryLabelForFilter(
 ): string {
   const { t, locale, pluginLabel } = ctx;
   const single = filter as GalleryFilter;
-  if (single.type === "wallpaper-order") return t("gallery.filterWallpaperSet");
-  if (single.type === "no-album") return t("gallery.filterNoAlbum");
-  const nb = filterNameBucket(filter);
-  if (nb !== null) {
-    const detail = NAME_BUCKET_AUTONYMS[nb] ?? nb;
-    return `${t("gallery.filterByName")}: ${detail}`;
-  }
   const sr = filterSizeRange(filter);
   if (sr !== null) {
     const key = SIZE_RANGE_LABEL_KEYS[sr];
@@ -161,16 +148,13 @@ export function galleryLabelForFilter(
  * 取值口径与高级查询弹窗一致（`facetValueLabel`）。未选中该维度时返回 undefined。
  */
 export function galleryDimensionChipValue(
-  dimension: GalleryFilterDimension,
+  dimension: GalleryBrowseDimension,
   filters: GalleryFilterSet,
   ctx: GalleryLabelContext,
 ): string | undefined {
   const { t, locale, pluginLabel } = ctx;
-  // no-album 是工具箱里的手动开关，不进 chip 行，也没有 facet 口径。
-  if (dimension === "noAlbum") return undefined;
   const filter = filterForDimension(filters, dimension);
   if (filter.type === "all") return undefined;
-  if (dimension === "wallpaperOrder") return t("gallery.filterWallpaperSet");
   if (dimension === "plugin") {
     const pid = filterPluginId(filter);
     if (!pid) return undefined;
@@ -190,9 +174,7 @@ export function galleryDimensionChipValue(
     const label = facetValueLabel("mediaType", kind, t);
     return format ? `${label} / ${format}` : label;
   }
-  const value = dimension === "name"
-    ? filterNameBucket(filter)
-    : dimension === "size"
+  const value = dimension === "size"
     ? filterSizeRange(filter)
     : filterAspectRange(filter);
   if (value == null) return undefined;

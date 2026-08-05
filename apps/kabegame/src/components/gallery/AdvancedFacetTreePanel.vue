@@ -24,10 +24,6 @@
       v-else-if="dimension === 'size'"
       @select="selectFilter"
     />
-    <NameProviderChildrenNode
-      v-else-if="dimension === 'name'"
-      @select="selectFilter"
-    />
   </div>
 </template>
 
@@ -36,21 +32,19 @@ import { computed, onBeforeUnmount, toRef } from "vue";
 import { useDimensionFacet, type FacetDimension } from "@/composables/useAdvancedQueryFacets";
 import {
   filterForDimension,
+  type GalleryBrowseDimension,
   type GalleryFilter,
-  type GalleryFilterDimension,
   type GalleryFilterSet,
 } from "@/utils/galleryPath";
 import {
   getNode,
-  type GalleryAdvancedQuery,
-  type GalleryAtom,
+  type GalleryQuery,
   type NodePath,
 } from "@/utils/galleryQuery";
 import AnyProviderChildrenNode from "@/components/galleryFilterTree/AnyProviderChildrenNode.vue";
 import AspectProviderChildrenNode from "@/components/galleryFilterTree/AspectProviderChildrenNode.vue";
 import DateProviderChildrenNode from "@/components/galleryFilterTree/DateProviderChildrenNode.vue";
 import MediaTypeProviderChildrenNode from "@/components/galleryFilterTree/MediaTypeProviderChildrenNode.vue";
-import NameProviderChildrenNode from "@/components/galleryFilterTree/NameProviderChildrenNode.vue";
 import PluginsProviderChildrenNode from "@/components/galleryFilterTree/PluginsProviderChildrenNode.vue";
 import SizeProviderChildrenNode from "@/components/galleryFilterTree/SizeProviderChildrenNode.vue";
 import {
@@ -59,7 +53,7 @@ import {
 } from "@/components/galleryFilterTree/context";
 
 const props = withDefaults(defineProps<{
-  tree: GalleryAdvancedQuery;
+  tree: GalleryQuery;
   nodePath: NodePath;
   dimension: FacetDimension;
   contextPrefix?: string;
@@ -84,7 +78,7 @@ const facet = useDimensionFacet(
 );
 const refreshTargets = new Set<RefreshTarget>();
 
-const atom = computed<GalleryAtom>(() => {
+const atom = computed<GalleryFilterSet>(() => {
   const node = getNode(props.tree, props.nodePath);
   if (!("is" in node)) {
     throw new Error("高级 facet 面板的 NodePath 必须指向原子节点");
@@ -92,15 +86,13 @@ const atom = computed<GalleryAtom>(() => {
   return node.is;
 });
 const filters = computed<GalleryFilterSet>(() => ({
-  wallpaperOrder: atom.value.wallpaperOrder,
   plugin: atom.value.plugin,
   mediaType: atom.value.mediaType,
   date: atom.value.date,
-  name: atom.value.name,
   size: atom.value.size,
   aspect: atom.value.aspect,
 }));
-const dimension = computed<GalleryFilterDimension>(() => props.dimension);
+const dimension = computed<GalleryBrowseDimension>(() => props.dimension);
 const filter = computed(() => filterForDimension(filters.value, dimension.value));
 const visible = computed(() => props.visible);
 
@@ -119,11 +111,12 @@ provideGalleryFilterTreeContext({
   filter,
   filters,
   dimension,
-  prefix: facet.reducedTreePath,
+  prefix: facet.treeRootPath,
   visible,
   autoExpandRoot: computed(() => true),
-  countNegated: facet.negated,
   pathForSegment: facet.pathForSegment,
+  listPathForSegment: facet.listPathForSegment,
+  countBaseline: facet.baselineCount,
   registerRefreshTarget,
 });
 

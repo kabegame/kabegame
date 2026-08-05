@@ -60,17 +60,6 @@
           </template>
         </KbFilterDropdown>
 
-        <KbFilterDropdown
-          :model-value="atom.wallpaperOrder ? 'selected' : null"
-          :options="wallpaperOptions"
-          :chip-label="t('gallery.advancedChipWallpaper')"
-          :any-label="t('gallery.filterAny')"
-          :empty-text="t('common.noData')"
-          :negated="negated"
-          @update:model-value="updateWallpaper"
-        >
-          <template #icon><FilterWallpaper /></template>
-        </KbFilterDropdown>
       </div>
 
     </div>
@@ -93,17 +82,14 @@ import { useI18n } from "@kabegame/i18n";
 import {
   ElIcon,
   KbFilterDropdown,
-  type KbFilterDropdownOption,
 } from "@kabegame/element-plus";
 import {
   Close,
   FilterAspect,
   FilterDate,
   FilterMedia,
-  FilterName,
   FilterPlugin,
   FilterSize,
-  FilterWallpaper,
 } from "@kabegame/element-plus-icons";
 import {
   facetValueLabel,
@@ -116,8 +102,8 @@ import {
   notParity,
   removeNode,
   updateNode,
-  type GalleryAdvancedQuery,
-  type GalleryAtom,
+  type GalleryQuery,
+  type GalleryFilterSet,
   type GalleryQueryNode,
   type NodePath,
 } from "@/utils/galleryQuery";
@@ -133,7 +119,7 @@ import { useGallerySearchModes } from "./searchModesContext";
 const searchModes = useGallerySearchModes();
 
 const props = defineProps<{
-  tree: GalleryAdvancedQuery;
+  tree: GalleryQuery;
   nodePath: NodePath;
   contextPrefix?: string;
   negationWrapperPath?: NodePath;
@@ -142,13 +128,13 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  "update:tree": [tree: GalleryAdvancedQuery];
+  "update:tree": [tree: GalleryQuery];
 }>();
 
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 const openedFacet = ref<FacetDimension | null>(null);
-const atom = computed<GalleryAtom>(() => {
+const atom = computed<GalleryFilterSet>(() => {
   const node = getNode(props.tree, props.nodePath);
   return "is" in node ? node.is : {};
 });
@@ -164,20 +150,14 @@ const facetItems = computed<Array<{
   { dimension: "mediaType", label: t("gallery.advancedChipMediaType"), icon: markRaw(FilterMedia) },
   { dimension: "aspect", label: t("gallery.advancedChipAspect"), icon: markRaw(FilterAspect) },
   { dimension: "size", label: t("gallery.advancedChipSize"), icon: markRaw(FilterSize) },
-  { dimension: "name", label: t("gallery.advancedChipName"), icon: markRaw(FilterName) },
 ]);
-
-const wallpaperOptions = computed<KbFilterDropdownOption[]>(() => [{
-  label: t("gallery.filterWallpaperSet"),
-  value: "selected",
-}]);
 
 const searchMode = computed<GallerySearchMode>({
   get: () => atom.value.search?.mode ?? DEFAULT_GALLERY_SEARCH_MODE,
   set: (mode) => updateSearch(atom.value.search?.query ?? "", mode, true),
 });
 
-function updateAtom(updater: (atom: GalleryAtom) => GalleryAtom): void {
+function updateAtom(updater: (atom: GalleryFilterSet) => GalleryFilterSet): void {
   emit("update:tree", updateNode(props.tree, props.nodePath, (node) => {
     if (!("is" in node)) return node;
     return { is: updater(node.is) };
@@ -204,8 +184,7 @@ function dimensionValue(dimension: FacetDimension): string | null {
   if (dimension === "plugin") return current.plugin?.pluginId ?? null;
   if (dimension === "mediaType") return current.mediaType?.kind ?? null;
   if (dimension === "aspect") return current.aspect?.range ?? null;
-  if (dimension === "size") return current.size?.range ?? null;
-  return current.name?.bucket ?? null;
+  return current.size?.range ?? null;
 }
 
 /** chip 选中值的本地化文案：树面板未打开时也不能依赖节点数据反查。 */
@@ -257,7 +236,7 @@ function updateDimensionFilter(
   filter: GalleryFilter | null,
 ): void {
   updateAtom((current) => {
-    const next: GalleryAtom = { ...current };
+    const next: GalleryFilterSet = { ...current };
     delete next[dimension];
     if (!filter || filter.type === "all") return next;
 
@@ -277,15 +256,9 @@ function updateDimensionFilter(
       next.aspect = { range: filter.range };
     } else if (dimension === "size" && filter.type === "size") {
       next.size = { range: filter.range };
-    } else if (dimension === "name" && filter.type === "name") {
-      next.name = { bucket: filter.bucket };
     }
     return next;
   });
-}
-
-function updateWallpaper(value: string | null): void {
-  updateAtom((current) => ({ ...current, wallpaperOrder: value === "selected" || undefined }));
 }
 
 function toggleNegation(): void {

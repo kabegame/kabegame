@@ -45,7 +45,8 @@
         <span
           class="flex-none text-[var(--anime-text-secondary)] text-xs"
           :class="{
-            '!text-[var(--el-color-error)]': isCountNegated && !isEmpty,
+            '!text-[var(--el-color-error)]': deltaSign < 0,
+            '!text-[var(--el-color-success)]': deltaSign > 0,
             '!text-[var(--anime-text-muted)]': isEmpty,
           }"
         >({{ displayCount }})</span>
@@ -102,7 +103,7 @@ const emit = defineEmits<{
 const slots = useSlots();
 const {
   autoExpandRoot,
-  countNegated,
+  countBaseline,
   registerRefreshTarget,
   visible,
 } = useGalleryFilterTreeContext();
@@ -116,12 +117,29 @@ let unregisterRefresh: (() => void) | null = null;
 const hasChildren = computed(() => Boolean(slots.default));
 const isExpanded = computed(() => localExpanded.value);
 const hasStickyHeader = computed(() => hasChildren.value && isExpanded.value);
-const isCountNegated = computed(() => countNegated?.value ?? false);
-const displayCount = computed(() => {
-  if (count.value == null) return "...";
-  return `${isCountNegated.value ? "−" : ""}${count.value}`;
+// diff 模式（高级面板）：count 是「候选写进原子后的整树命中数」，显示与当前
+// 命中数基线的净变化；绝对模式（侧栏）照旧显示总数。
+const isDeltaMode = computed(() => !!countBaseline);
+const delta = computed(() => {
+  if (!isDeltaMode.value || count.value == null) return null;
+  const baseline = countBaseline?.value;
+  if (baseline == null) return null;
+  return count.value - baseline;
 });
-const isEmpty = computed(() => count.value !== null && count.value === 0);
+const deltaSign = computed(() => Math.sign(delta.value ?? 0));
+const displayCount = computed(() => {
+  if (isDeltaMode.value) {
+    if (delta.value == null) return "...";
+    if (delta.value > 0) return `+${delta.value}`;
+    if (delta.value < 0) return `−${-delta.value}`;
+    return "0";
+  }
+  if (count.value == null) return "...";
+  return String(count.value);
+});
+const isEmpty = computed(() =>
+  isDeltaMode.value ? delta.value === 0 : count.value !== null && count.value === 0
+);
 const shouldHide = computed(() => props.emptyState === "hide" && isEmpty.value);
 const isDisabled = computed(() => props.emptyState === "disable" && isEmpty.value);
 const nodeStyle = computed<Record<string, string | number>>(() => ({
@@ -196,6 +214,11 @@ watch(visible, (v) => {
   if (!v) return;
   syncAutoExpand();
   void refresh();
+});
+
+// 计数路径本身可变（diff 模式下随草稿树变化），路径换了就重取。
+watch(() => props.path, () => {
+  if (visible.value) void refresh();
 });
 
 watch([autoExpandRoot, hasChildren, () => props.defaultExpanded], syncAutoExpand);

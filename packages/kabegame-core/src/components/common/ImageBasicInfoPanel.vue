@@ -13,12 +13,9 @@
     <div class="detail-fields-body">
       <div v-if="image.displayName" class="detail-item">
         <span class="detail-label">{{ t('gallery.imageDetailDisplayName') }}</span>
-        <button
-          type="button"
-          class="detail-value line-clamp-2 detail-filter-link"
-          :title="image.displayName"
-          @click="emitGalleryFilter(displayNameFilterTarget)"
-        >{{ image.displayName }}</button>
+        <span class="detail-value line-clamp-2" :title="image.displayName">
+          {{ image.displayName }}
+        </span>
       </div>
       <div class="detail-item">
         <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
@@ -184,7 +181,6 @@ export type ImageDetailSurfRecordTarget = {
 };
 
 export type ImageDetailGalleryFilterTarget =
-  | { type: "search"; search: string }
   | { type: "plugin"; pluginId: string }
   | { type: "media-type"; kind: "image" | "video"; format?: string }
   | { type: "date"; segment: string }
@@ -215,11 +211,6 @@ function handleOpenTask() {
   const tid = props.image?.taskId;
   if (tid) emit("open-task", tid);
 }
-
-const displayNameFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
-  const search = props.image?.displayName?.trim();
-  return search ? { type: "search", search } : null;
-});
 
 const pluginFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
   const pluginId = props.image?.pluginId?.trim();

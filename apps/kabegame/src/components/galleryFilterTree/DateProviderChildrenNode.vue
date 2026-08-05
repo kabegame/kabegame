@@ -11,7 +11,6 @@
       :key="year.seg"
       :segments="[year.seg]"
       :depth="1"
-      :initial-count="year.total"
       @select="$emit('select', $event)"
     />
   </ProviderChildrenNode>
@@ -27,8 +26,8 @@ import type { GalleryFilter } from "@/utils/galleryPath";
 import ProviderChildrenNode from "./ProviderChildrenNode.vue";
 import DateChildProviderChildrenNode from "./DateChildProviderChildrenNode.vue";
 import {
-  listProviderDirs,
   useGalleryFilterTreeContext,
+  useProviderTreeList,
   type RefreshTarget,
 } from "./context";
 
@@ -38,6 +37,7 @@ defineEmits<{
 
 const { t } = useI18n();
 const { filter, prefix, pathForSegment, registerRefreshTarget } = useGalleryFilterTreeContext();
+const { listPathForSegment, listDirs } = useProviderTreeList();
 const years = ref<Array<{ seg: string; year: string; total?: number }>>([]);
 const loaded = ref(false);
 let listToken = 0;
@@ -50,7 +50,7 @@ async function refreshList() {
   const token = ++listToken;
   const expectedPrefix = prefix.value;
   try {
-    const entries = await listProviderDirs(`${pathForSegment("date")}/`);
+    const entries = await listDirs(`${listPathForSegment("date")}/`);
     if (token !== listToken || expectedPrefix !== prefix.value) return;
     years.value = entries
       .map((entry) => {

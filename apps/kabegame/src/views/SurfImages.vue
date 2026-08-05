@@ -21,20 +21,20 @@
           />
 
           <GalleryQueryBar
-            :filters="surfImagesRouteStore.filters"
-            :advanced="surfImagesRouteStore.advanced"
+            :query="surfImagesRouteStore.query"
+            :no-album="surfImagesRouteStore.effectiveNoAlbum"
             :sort="surfImagesRouteStore.sort"
             :page="surfImagesRouteStore.page"
             :page-size="pageSize"
-            :search="surfImagesRouteStore.search"
-            :search-mode="surfImagesRouteStore.searchMode"
+            :search-mode="surfImagesStickySearchMode"
             :provider-context-prefix="surfImagesRouteStore.computedContextPath"
-            :context-base="surfImagesRouteStore.contextPathFor({ search: '' })"
+            :context-base="surfImagesRouteStore.contextPathFor({ query: [] })"
             :filter-features="surfFilterFeatures"
             :sort-features="surfSortFeatures"
             :search-features="surfSearchFeatures"
             enable-clear-all
             @navigate="onQueryNavigate"
+            @search-mode-change="rememberSurfImagesSearchMode"
           />
 
           <GalleryBigPaginator
@@ -68,10 +68,15 @@ import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { createSurfImagesSurface } from "@/components/imageGrid/surfaces/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
-import { useSurfImagesRouteStore, rememberSurfImagesSearchMode } from "@/stores/surfImagesRoute";
+import {
+  useSurfImagesRouteStore,
+  rememberSurfImagesSearchMode,
+  surfImagesStickySearchMode,
+} from "@/stores/surfImagesRoute";
 import {
   GALLERY_SEARCH_MODES_BASIC,
-  type GalleryFilterDimension,
+  querySearchTerm,
+  type GalleryBrowseDimension,
   type GalleryQueryPatch,
   type GallerySortField,
 } from "@/utils/galleryPath";
@@ -87,8 +92,8 @@ const { isCompact } = storeToRefs(useUiStore());
 const surfStore = useSurfStore();
 const surfImagesRouteStore = useSurfImagesRouteStore();
 
-const surfFilterFeatures: GalleryFilterDimension[] = [
-  "wallpaperOrder", "noAlbum", "plugin", "mediaType", "date", "name", "size", "aspect",
+const surfFilterFeatures: GalleryBrowseDimension[] = [
+  "plugin", "mediaType", "date", "size", "aspect",
 ];
 const surfSortFeatures: GallerySortField[] = [
   "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
@@ -97,7 +102,8 @@ const surfSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
-  if (patch.searchMode) rememberSurfImagesSearchMode(patch.searchMode);
+  const term = patch.query ? querySearchTerm(patch.query) : null;
+  if (term?.query.trim()) rememberSurfImagesSearchMode(term.mode);
   void surfImagesRouteStore.navigate(patch, options);
 };
 

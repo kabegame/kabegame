@@ -94,12 +94,12 @@
                这里每次提交都会 navigate + 重查，所以要防抖 -->
           <GallerySearchDropdown
             v-if="enableSearch"
-            :query="search"
-            :mode="searchMode"
+            :query="searchText"
+            :mode="searchModeView"
             :modes="searchFeatures"
             :debounce="300"
-            @update:query="(value) => navigate({ search: value, page: 1 })"
-            @update:mode="(mode) => navigate({ searchMode: mode, page: 1 })"
+            @update:query="onSearchInput"
+            @update:mode="onSearchModeSelect"
           />
 
           <KbFilterDropdown
@@ -221,17 +221,6 @@
           @cancel="mediaTypeFilterPicker.close()"
         />
       </van-popup>
-      <van-popup :show="nameFilterPicker.isOpen.value" position="bottom" round :z-index="nameFilterPicker.zIndex.value" @update:show="nameFilterPicker.close">
-        <van-picker
-          v-model="nameFilterPickerSelected"
-          :title="t('gallery.filterByName')"
-          :columns="nameFilterPickerColumns"
-          :confirm-button-text="t('common.confirm')"
-          :cancel-button-text="t('common.cancel')"
-          @confirm="onNameFilterPickerConfirm"
-          @cancel="nameFilterPicker.close()"
-        />
-      </van-popup>
       <van-popup :show="aspectFilterPicker.isOpen.value" position="bottom" round :z-index="aspectFilterPicker.zIndex.value" @update:show="aspectFilterPicker.close">
         <van-picker
           v-model="aspectFilterPickerSelected"
@@ -274,7 +263,7 @@
       :sort="sort"
       :page="page"
       :page-size="pageSize"
-      :context-prefix="advancedDialogContextPrefix"
+      :context-prefix="advancedContextPrefix"
       @apply="applyAdvancedQuery"
     />
   </div>
@@ -295,10 +284,8 @@ import {
   FilterAspect,
   FilterDate,
   FilterMedia,
-  FilterName,
   FilterPlugin,
   FilterSize,
-  FilterWallpaper,
   Histogram,
   Setting,
   Sort,
@@ -317,24 +304,21 @@ import { usePluginStore } from "@/stores/plugins";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import {
   GALLERY_ASPECT_BUCKETS,
-  GALLERY_NAME_LANGUAGE_BUCKETS,
   DEFAULT_GALLERY_SEARCH_MODE,
-  advancedQueryRuntimePath,
-  buildAdvancedQueryContextPrefix,
   buildComposablePath,
   filterAspectRange,
   filterDateSegment,
   filterForDimension,
   filterMediaKind,
-  filterNameBucket,
   filterPluginId,
-  hasActiveGalleryFilters,
   newRandomSortSeed,
+  noAlbumContextPrefix,
+  queryRuntimePath,
   removeFilterDimension,
   setFilterDimension,
   singleFilterToSet,
+  type GalleryBrowseDimension,
   type GalleryFilter,
-  type GalleryFilterDimension,
   type GalleryFilterSet,
   type GalleryQueryPatch,
   type GallerySearchMode,
@@ -359,11 +343,13 @@ import {
   type YearGroupRow,
 } from "@/utils/galleryTimeFilterMenu";
 import {
-  advancedQueryFromSimpleFilters,
+  asSingleFilterSet,
+  cloneQuery,
   conditionCount,
+  hasActiveQuery,
   normalizeQuery,
-  simpleFiltersFromAdvancedQuery,
-  type GalleryAdvancedQuery,
+  queryFromFilterSet,
+  type GalleryQuery,
 } from "@/utils/galleryQuery";
 
 /**
@@ -375,24 +361,28 @@ import {
  * 拆成多次导航互相覆盖。
  */
 interface Props {
-  filters?: GalleryFilterSet;
-  /** 已应用的高级查询树；undefined = 当前不是高级模式 */
-  advanced?: GalleryAdvancedQuery;
+  /** 唯一查询对象：简单过滤行与高级弹窗都是它的投影。 */
+  query?: GalleryQuery;
+  /**
+   * 随行上下文（全局工具箱开关）：只用于高级路径前缀展示与计数。
+   * 各页传自己 route store 的 `effectiveNoAlbum`——赦免该参数的路由（画册详情）
+   * 拿到的恒为 false。
+   */
+  noAlbum?: boolean;
   sort?: GallerySort;
   page?: number;
   pageSize?: number;
-  search?: string;
-  /** 搜索目标：display-name(显示名) | metadata(插件元数据) | native-metadata(EXIF/PNG) */
+  /** 搜索词为空时搜索下拉展示的模式兜底（各页的会话 sticky 模式）。 */
   searchMode?: GallerySearchMode;
   /** provider 树 / facet 计数的上下文前缀：route store 的 `computedContextPath` */
   providerContextPrefix?: string;
   /**
    * 高级查询路径的基址（含 `hide/` 与 `album/<id>` 这类根前缀，**不含 search**）：
-   * route store 的 `contextPathFor({ search: "" })`。search 由本组件按当前模式
+   * route store 的 `contextPathFor({ query: [] })`。查询体（含搜索原子）由本组件
    * 自己拼进去，基址里再带一份会重复。
    */
   contextBase?: string;
-  filterFeatures?: GalleryFilterDimension[];
+  filterFeatures?: GalleryBrowseDimension[];
   sortFeatures?: GallerySortField[];
   /** 搜索 chip 可见的目标 tab；任务/畅游详情传基础三项。 */
   searchFeatures?: readonly GallerySearchMode[];
@@ -407,12 +397,11 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  filters: () => ({} as GalleryFilterSet),
-  advanced: undefined,
+  query: () => [],
+  noAlbum: false,
   sort: () => ({ field: "by-id", desc: false } as GallerySort),
   page: 1,
   pageSize: 100,
-  search: "",
   searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   providerContextPrefix: "",
   contextBase: "",
@@ -423,8 +412,6 @@ const props = withDefaults(defineProps<Props>(), {
     "mediaType",
     "aspect",
     "size",
-    "name",
-    "wallpaperOrder",
   ],
   sortFeatures: () => [
     "by-id",
@@ -451,16 +438,22 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   navigate: [patch: GalleryQueryPatch, options?: { push?: boolean }];
+  /** 搜索模式切换（含搜索词为空时）：各页借此维护会话 sticky 模式。 */
+  searchModeChange: [mode: GallerySearchMode];
 }>();
 
 const { t, locale } = useI18n();
 const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 
-const activeFilters = computed<GalleryFilterSet>(() => props.filters ?? {});
+/** 查询的单原子投影；null = 只能用高级视图表达（含 或/非/多条件）。 */
+const simpleView = computed<GalleryFilterSet | null>(() =>
+  asSingleFilterSet(props.query)
+);
+/** chip 行读写的 FilterSet（含 search 维度）；高级态下为空集，chip 行也不渲染。 */
+const activeFilters = computed<GalleryFilterSet>(() => simpleView.value ?? {});
 const sortField = computed<GallerySortField>(() => props.sort.field);
 const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
-const searchMode = computed<GallerySearchMode>(() => props.searchMode);
 
 // 高级弹窗内的搜索 chip（ConditionRow）通过 inject 拿这份可见集合，不逐层透传。
 provide(GallerySearchModesKey, computed(() => props.searchFeatures));
@@ -475,24 +468,53 @@ function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
   emit("navigate", patch, options);
 }
 
-/** 只留 no-album 这个随行上下文：它是工具箱的手动开关，不算用户过滤。 */
-function contextOnlyFilters(): GalleryFilterSet {
-  return activeFilters.value.noAlbum ? { noAlbum: true } : {};
+// ---------- 搜索（查询原子的 search 维度）----------
+const searchTerm = computed(() => simpleView.value?.search ?? null);
+const searchText = computed(() => searchTerm.value?.query ?? "");
+/** 展示模式：有搜索词跟词走，没有用各页传入的 sticky 兜底。 */
+const searchModeView = computed<GallerySearchMode>(
+  () => searchTerm.value?.mode ?? props.searchMode,
+);
+
+function onSearchInput(value: string) {
+  const next = { ...activeFilters.value };
+  if (value.trim()) {
+    next.search = { mode: searchModeView.value, query: value };
+  } else {
+    delete next.search;
+  }
+  navigate({ query: queryFromFilterSet(next), page: 1 });
+}
+
+function onSearchModeSelect(mode: GallerySearchMode) {
+  emit("searchModeChange", mode);
+  // 有搜索词时模式是查询的一部分，改模式即改查询；空词时只记 sticky。
+  if (searchTerm.value?.query.trim()) {
+    navigate({
+      query: queryFromFilterSet({
+        ...activeFilters.value,
+        search: { ...searchTerm.value, mode },
+      }),
+      page: 1,
+    });
+  }
 }
 
 // ---------- 简单 / 高级 ----------
 /**
- * 过滤入口是二选一:简单维度行 与 高级查询树在路由上互斥,但切换本身尽量不丢查询——
- * 简单 → 高级:什么都不动(简单过滤会成为高级路径的上下文前缀,点「配置」再翻译进树);
- * 高级 → 简单:树能被简单过滤表达就平移过去,表达不了(含 或/非/多条件)才清空。
+ * 简单过滤行与高级弹窗是同一个 GalleryQuery 的两种投影：单原子查询两边都能编辑，
+ * 含 或/非/多条件 的查询只有高级视图能表达（此时强制高级态）。因此「切视图」
+ * 本身不再动状态——唯一的例外是带着不可表达的查询切回简单态，只能清空并明说。
  */
 type FilterMode = "simple" | "advanced";
 const filterMode = ref<FilterMode>("simple");
-/** 切走高级时把树留在本地,再切回来「配置」还能接着 editing(不是已应用状态)。 */
-const stashedAdvanced = ref<GalleryAdvancedQuery | null>(null);
+/** 清空查询后再点「配置」还能接着上次的树 editing(不是已应用状态)。 */
+const stashedQuery = ref<GalleryQuery | null>(null);
 
-const isAdvancedActive = computed(() => props.advanced !== undefined);
-const advancedConditionCount = computed(() => conditionCount(props.advanced ?? []));
+const isAdvancedActive = computed(() => simpleView.value === null);
+const advancedConditionCount = computed(() =>
+  isAdvancedActive.value ? conditionCount(props.query) : 0
+);
 
 const filterModeItems = computed<KbTabItem<FilterMode>[]>(() => [
   {
@@ -527,32 +549,18 @@ watch(
 /** `images://gallery[/hide][/album/<id>]` —— 高级路径与 facet 的共同基址。 */
 const providerBase = computed(() => `images://${withGalleryPrefix(props.contextBase)}`);
 
-const advancedContextPrefix = computed(
-  () =>
-    `${providerBase.value}/${
-      buildAdvancedQueryContextPrefix(
-        activeFilters.value,
-        props.search,
-        props.searchMode,
-      )
-    }`,
-);
-
 /**
- * 弹窗里的上下文前缀只保留「应用后仍然生效」的部分：应用高级查询会接管
- * 简单过滤与搜索（见 applyAdvancedQuery），所以它们不能再算进前缀，
- * 否则弹窗里的条件会与前缀里的同一条件重复。
+ * 高级路径前缀 = 基址 + no-album 随行段。查询体（含搜索原子）全在 query 里，
+ * 预览与弹窗计数共用同一个前缀，不再有「弹窗里要去重」的第二形态。
  */
-const advancedDialogContextPrefix = computed(
-  () =>
-    `${providerBase.value}/${buildAdvancedQueryContextPrefix(contextOnlyFilters(), "")}`,
+const advancedContextPrefix = computed(
+  () => `${providerBase.value}/${noAlbumContextPrefix(props.noAlbum)}`,
 );
 
 const advancedPathPreview = computed(() =>
-  advancedQueryRuntimePath(
+  queryRuntimePath(
     buildComposablePath({
-      filters: {},
-      advanced: props.advanced ?? [],
+      query: props.query,
       sort: props.sort,
       page: props.page,
       pageSize: props.pageSize,
@@ -562,94 +570,46 @@ const advancedPathPreview = computed(() =>
 );
 
 const advancedDialogVisible = ref(false);
-const advancedDialogInitialQuery = ref<GalleryAdvancedQuery>([{ is: {} }]);
+const advancedDialogInitialQuery = ref<GalleryQuery>([{ is: {} }]);
 
 function openAdvancedQuery() {
-  // 优先已应用的树 → 切模式时暂存的树 → 由当前简单过滤(含搜索)翻译一行
-  const source = props.advanced ?? stashedAdvanced.value;
-  if (source) {
-    advancedDialogInitialQuery.value = JSON.parse(
-      JSON.stringify(source),
-    ) as GalleryAdvancedQuery;
-  } else {
-    advancedDialogInitialQuery.value = advancedQueryFromSimpleFilters(
-      activeFilters.value,
-      props.search.trim()
-        ? { mode: props.searchMode, query: props.search }
-        : null,
-    );
-  }
+  // 优先当前查询 → 清空后暂存的树 → 空白一行
+  const source = hasActiveQuery(props.query)
+    ? props.query
+    : stashedQuery.value ?? [];
+  const initial = cloneQuery(source);
+  advancedDialogInitialQuery.value = initial.length > 0 ? initial : [{ is: {} }];
   advancedDialogVisible.value = true;
 }
 
-function applyAdvancedQuery(tree: GalleryAdvancedQuery) {
-  const normalized = normalizeQuery(tree);
-  navigate(
-    {
-      advanced: normalized.length > 0 ? normalized : undefined,
-      // 树接管简单过滤与搜索：弹窗初值已把它们复制进去，原件必须在同一次
-      // navigate 里清掉，否则会与树里的同一条件叠加。
-      filters: contextOnlyFilters(),
-      search: "",
-      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
+function applyAdvancedQuery(tree: GalleryQuery) {
+  navigate({ query: normalizeQuery(tree), page: 1 }, { push: true });
 }
 
 function onFilterModeSelect(mode: FilterMode) {
-  // 简单过滤是高级路径的合法上下文前缀,切过去不用动任何状态。
+  // 单原子查询两种视图等价表达，切换本身不动状态。
   if (mode === "advanced") return;
   if (!isAdvancedActive.value) return;
 
-  const advanced = props.advanced ?? [];
-  stashedAdvanced.value = advanced;
-
-  const degraded = simpleFiltersFromAdvancedQuery(advanced);
-  if (!degraded) {
-    // 或/非/多条件:简单过滤行表达不了,只能清空——这是丢查询,必须明说。
-    ElMessage.warning(t("gallery.advancedQueryDropped"));
-    navigate(
-      {
-        advanced: undefined,
-        filters: contextOnlyFilters(),
-        search: "",
-        searchMode: DEFAULT_GALLERY_SEARCH_MODE,
-        page: 1,
-      },
-      { push: true },
-    );
-    return;
-  }
-
-  navigate(
-    {
-      advanced: undefined,
-      filters: { ...degraded.filters, ...contextOnlyFilters() },
-      search: degraded.search?.query ?? "",
-      searchMode: degraded.search?.mode ?? DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
+  // 或/非/多条件:简单过滤行表达不了,只能清空——这是丢查询,必须明说。
+  stashedQuery.value = props.query;
+  ElMessage.warning(t("gallery.advancedQueryDropped"));
+  navigate({ query: [], page: 1 }, { push: true });
 }
 
 // ---------- 过滤维度 chip ----------
-// no-album 不是可浏览过滤维度（不进过滤行 / 不显示图标），故从图标表中排除。
+// 搜索有独立输入组件（GallerySearchDropdown），不进图标表。
 // 过滤维度图标与高级查询弹窗同源(设计稿那套 16px 线性图标)。
-const FILTER_DIMENSION_ICONS: Record<Exclude<GalleryFilterDimension, "noAlbum">, Component> = {
-  wallpaperOrder: markRaw(FilterWallpaper),
+const FILTER_DIMENSION_ICONS: Record<GalleryBrowseDimension, Component> = {
   plugin: markRaw(FilterPlugin),
   mediaType: markRaw(FilterMedia),
   date: markRaw(FilterDate),
-  name: markRaw(FilterName),
   size: markRaw(FilterSize),
   aspect: markRaw(FilterAspect),
 };
 
 const ALL_FILTER_DIMENSIONS: Array<{
-  key: Exclude<GalleryFilterDimension, "noAlbum">;
+  key: GalleryBrowseDimension;
   titleKey: string;
   chipKey: string;
 }> = [
@@ -658,12 +618,10 @@ const ALL_FILTER_DIMENSIONS: Array<{
   { key: "mediaType", titleKey: "gallery.filterByMediaType", chipKey: "gallery.advancedChipMediaType" },
   { key: "aspect", titleKey: "gallery.filterByAspect", chipKey: "gallery.advancedChipAspect" },
   { key: "size", titleKey: "gallery.filterBySize", chipKey: "gallery.advancedChipSize" },
-  { key: "name", titleKey: "gallery.filterByName", chipKey: "gallery.advancedChipName" },
-  { key: "wallpaperOrder", titleKey: "gallery.filterWallpaperSet", chipKey: "gallery.advancedChipWallpaper" },
 ];
 
 const filterDimensions = computed<Array<{
-  key: GalleryFilterDimension;
+  key: GalleryBrowseDimension;
   title: string;
   chipLabel: string;
   icon: Component;
@@ -678,57 +636,50 @@ const filterDimensions = computed<Array<{
     })),
 );
 
-const dimensionPopoverOpen = ref<Partial<Record<GalleryFilterDimension, boolean>>>({});
+const dimensionPopoverOpen = ref<Partial<Record<GalleryBrowseDimension, boolean>>>({});
 
-function setDimensionPopoverOpen(dimension: GalleryFilterDimension, open: boolean) {
+function setDimensionPopoverOpen(dimension: GalleryBrowseDimension, open: boolean) {
   dimensionPopoverOpen.value = { ...dimensionPopoverOpen.value, [dimension]: open };
 }
 
-function closeDimensionPopover(dimension: GalleryFilterDimension) {
+function closeDimensionPopover(dimension: GalleryBrowseDimension) {
   setDimensionPopoverOpen(dimension, false);
 }
 
-function isDimensionActive(dimension: GalleryFilterDimension) {
+function isDimensionActive(dimension: GalleryBrowseDimension) {
   return filterForDimension(activeFilters.value, dimension).type !== "all";
 }
 
-function dimensionChipValue(dimension: GalleryFilterDimension) {
+function dimensionChipValue(dimension: GalleryBrowseDimension) {
   return galleryDimensionChipValue(dimension, activeFilters.value, labelContext.value);
 }
 
-/** 应用一次简单过滤：与高级查询互斥，故一并清掉树。 */
+/** 应用一次维度过滤：整体替换查询为单原子形态，但保留当前搜索词。 */
 function applyFilters(filters: GalleryFilterSet) {
-  navigate({ filters, advanced: undefined, page: 1 }, { push: true });
+  const next = { ...filters };
+  if (searchTerm.value?.query.trim()) {
+    next.search = searchTerm.value;
+  } else {
+    delete next.search;
+  }
+  navigate({ query: queryFromFilterSet(next), page: 1 }, { push: true });
 }
 
-function clearDimension(dimension: GalleryFilterDimension) {
+function clearDimension(dimension: GalleryBrowseDimension) {
   applyFilters(removeFilterDimension(activeFilters.value, dimension));
   closeDimensionPopover(dimension);
 }
 
-function onDimensionFilter(dimension: GalleryFilterDimension, filter: GalleryFilter) {
+function onDimensionFilter(dimension: GalleryBrowseDimension, filter: GalleryFilter) {
   applyFilters(setFilterDimension(activeFilters.value, dimension, filter));
   closeDimensionPopover(dimension);
 }
 
-// no-album 是工具箱的手动开关，不算「过滤」维度：不点亮指示、也不被清除。
-const isFilterIndicatorActive = computed(
-  () =>
-    !!props.search.trim() ||
-    hasActiveGalleryFilters({ ...activeFilters.value, noAlbum: undefined }),
-);
+// no-album 是工具箱的手动开关，与 hide 并列的路由上下文：天然不在查询里。
+const isFilterIndicatorActive = computed(() => hasActiveQuery(props.query));
 
 function clearAllFilters() {
-  navigate(
-    {
-      filters: contextOnlyFilters(),
-      advanced: undefined,
-      search: "",
-      searchMode: DEFAULT_GALLERY_SEARCH_MODE,
-      page: 1,
-    },
-    { push: true },
-  );
+  navigate({ query: [], page: 1 }, { push: true });
   dimensionPopoverOpen.value = {};
 }
 
@@ -1350,29 +1301,24 @@ const filterPicker = useModal();
 const timeFilterPicker = useModal();
 const pluginFilterPicker = useModal();
 const mediaTypeFilterPicker = useModal();
-const nameFilterPicker = useModal();
 const aspectFilterPicker = useModal();
 const sortPicker = useModal();
 const pageSizePicker = useModal();
 
-const isWallpaperOrderBrowse = computed(() => !!activeFilters.value.wallpaperOrder);
 const isTimeFilterBrowse = computed(() => filterDateSegment(activeFilters.value) !== null);
 const isPluginFilterBrowse = computed(() => filterPluginId(activeFilters.value) !== null);
 const isMediaTypeFilterBrowse = computed(() => filterMediaKind(activeFilters.value) !== null);
-const isNameBrowse = computed(() => filterNameBucket(activeFilters.value) !== null);
 const isAspectBrowse = computed(() => filterAspectRange(activeFilters.value) !== null);
 
 const PICKER_DIMENSIONS: Array<{
   value: string;
-  key: Exclude<GalleryFilterDimension, "noAlbum">;
+  key: GalleryBrowseDimension;
   labelKey: string;
 }> = [
   { value: "time", key: "date", labelKey: "gallery.filterByTime" },
   { value: "plugin", key: "plugin", labelKey: "gallery.filterByPlugin" },
   { value: "media-type", key: "mediaType", labelKey: "gallery.filterByMediaType" },
   { value: "aspect", key: "aspect", labelKey: "gallery.filterByAspect" },
-  { value: "name", key: "name", labelKey: "gallery.filterByName" },
-  { value: "wallpaper-order", key: "wallpaperOrder", labelKey: "gallery.filterWallpaperSet" },
 ];
 
 const filterPickerColumns = computed(() => [
@@ -1385,11 +1331,9 @@ const filterPickerColumns = computed(() => [
 const filterPickerSelected = ref<string[]>(["all"]);
 watch(filterPicker.isOpen, (open) => {
   if (!open) return;
-  if (isWallpaperOrderBrowse.value) filterPickerSelected.value = ["wallpaper-order"];
-  else if (isTimeFilterBrowse.value) filterPickerSelected.value = ["time"];
+  if (isTimeFilterBrowse.value) filterPickerSelected.value = ["time"];
   else if (isPluginFilterBrowse.value) filterPickerSelected.value = ["plugin"];
   else if (isMediaTypeFilterBrowse.value) filterPickerSelected.value = ["media-type"];
-  else if (isNameBrowse.value) filterPickerSelected.value = ["name"];
   else if (isAspectBrowse.value) filterPickerSelected.value = ["aspect"];
   else filterPickerSelected.value = ["all"];
 });
@@ -1419,16 +1363,12 @@ async function onFilterPickerConfirm() {
     mediaTypeFilterPicker.open();
     return;
   }
-  if (v === "name") {
-    nameFilterPicker.open();
-    return;
-  }
   if (v === "aspect") {
     aspectFilterPicker.open();
     return;
   }
-  if (v === "all" || v === "wallpaper-order") {
-    applyFilters(v === "all" ? contextOnlyFilters() : { ...contextOnlyFilters(), wallpaperOrder: true });
+  if (v === "all") {
+    applyFilters({});
   }
 }
 
@@ -1491,10 +1431,7 @@ function onTimeFilterPickerConfirm(payload: { selectedValues: (string | number)[
     payload.selectedValues.map(String),
   );
   if (!tail) return;
-  applyFilters({
-    ...contextOnlyFilters(),
-    ...singleFilterToSet({ type: "date", segment: tail }),
-  });
+  applyFilters(singleFilterToSet({ type: "date", segment: tail }));
 }
 
 const pluginFilterPickerColumns = computed(() => {
@@ -1566,12 +1503,11 @@ function onPluginFilterPickerConfirm() {
   pluginFilterPicker.close();
   const { pluginId: id, extendPath } = parsePluginCommand(command);
   if (!id) return;
-  applyFilters({
-    ...contextOnlyFilters(),
-    ...singleFilterToSet(
+  applyFilters(
+    singleFilterToSet(
       extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id },
     ),
-  });
+  );
 }
 
 const mediaTypeFilterPickerColumns = computed(() => {
@@ -1594,32 +1530,7 @@ function onMediaTypeFilterPickerConfirm() {
   mediaTypeFilterPicker.close();
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
-  applyFilters({
-    ...contextOnlyFilters(),
-    ...singleFilterToSet({ type: "media-type", kind }),
-  });
-}
-
-const nameFilterPickerColumns = computed(() =>
-  GALLERY_NAME_LANGUAGE_BUCKETS.map((b) => ({ text: b.autonym, value: b.bucket })),
-);
-
-const nameFilterPickerSelected = ref<string[]>(["english"]);
-watch(nameFilterPicker.isOpen, (open) => {
-  if (!open) return;
-  nameFilterPickerSelected.value = [
-    filterNameBucket(activeFilters.value) ?? GALLERY_NAME_LANGUAGE_BUCKETS[0].bucket,
-  ];
-});
-
-function onNameFilterPickerConfirm() {
-  nameFilterPicker.close();
-  const bucket = nameFilterPickerSelected.value[0]?.trim();
-  if (!bucket) return;
-  applyFilters({
-    ...contextOnlyFilters(),
-    ...singleFilterToSet({ type: "name", bucket }),
-  });
+  applyFilters(singleFilterToSet({ type: "media-type", kind }));
 }
 
 const aspectFilterPickerColumns = computed(() =>
@@ -1638,10 +1549,7 @@ function onAspectFilterPickerConfirm() {
   aspectFilterPicker.close();
   const range = aspectFilterPickerSelected.value[0]?.trim();
   if (!range) return;
-  applyFilters({
-    ...contextOnlyFilters(),
-    ...singleFilterToSet({ type: "aspect", range }),
-  });
+  applyFilters(singleFilterToSet({ type: "aspect", range }));
 }
 
 const sortPickerColumns = computed(() => {
