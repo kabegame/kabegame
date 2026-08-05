@@ -40,7 +40,9 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
 逃生阀：`KB_ALLOW_HOST_BUILD=1`（明知在做什么时才用，例如临时验证一个不发布的构建）。
 
 > 首次切到本模型时，如果 host 上留有旧的 `target/release/`（glibc 2.43 的存量产物），
-> 在 guest 首次 release 构建前清掉：`rm -rf target/release`。
+> 在 guest 首次 release 构建前清掉：`rm -rf target/release`。**本机已于 2026-08-06 执行**
+> （连同退役的 `target-22`、`node_modules-22`、`third/*-build-22` 一并清理，释放 63G）；
+> 清理前已把 guest 产的 `deno` 与 `cargo-tauri` 抢救进 `.vm/bin/`。
 
 ## 环境总览（一次性搭好，长期复用）
 
@@ -51,12 +53,16 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
   `/home/cm/i/kabegame`。**guest 必须挂到与 host 完全相同的路径 `/home/cm/i/kabegame`**
   （见踩坑 3）。**整棵树完整挂载**——CEF distrib、FFmpeg 产物、node_modules 全在树内，
   guest 不需要任何侧拷贝。
-- **工具链/缓存放共享区**（guest 系统盘仅 ~12G，装不下）：统一在
-  `/home/cm/i/kabegame/.vm/`（git 本地忽略，见 `.git/info/exclude`）：
-  - `.vm/env.sh`：导出 `CARGO_HOME`/`RUSTUP_HOME`/`BUN_INSTALL` + `LANG=C.UTF-8`。
-    **不再需要** `CARGO_TARGET_DIR`（共用 `target/`）与 `CEF_PATH`（构建系统按
-    `bin/linux/x86_64/cef-build-prod` 自动解析）。
-  - `.vm/{cargo,rustup,bun}`：rustup stable + bun（guest 独立的 CARGO_HOME，与 host 不共享）。
+- **guest 专用工具与缓存**放共享区 `/home/cm/i/kabegame/.vm/`（git 本地忽略，见
+  `.git/info/exclude`）。Rust 工具链本身已装在 guest 本地盘 `~/.cargo` + `~/.rustup`（更快）：
+  - `.vm/env.sh`：只剩 `LANG`/`DENO_DIR`/`KABEGAME_SKIP_DENO_CLI`/`PATH` 四项。
+    `CARGO_TARGET_DIR`、`CEF_PATH`、`KB_BUILD_SUFFIX`、`DENO_NODE_MODULES_SUFFIX`
+    **全部删除**——共用 `target/`、CEF 与 FFmpeg 由构建系统按树内路径自动解析、
+    node_modules 共用主树。
+  - `.vm/bin/{deno,cargo-tauri}`：**guest 专用的 glibc 2.35 工具**，PATH 里排最前。
+    自编 deno 是必须的——官方二进制的 glibc 基线比 22.04 新，直接段错误；fork 的
+    cargo-tauri 同理。（2026-08 退役 `target-22` 时从中抢救出来，避免重编。）
+  - `.vm/deno-dir`：deno 模块/npm 缓存。
   - `.vm/run-build.sh`：一键构建脚本（见下）。
   - `.vm/cef-prod` **已废除**：CEF distrib 现在就在树内 `bin/linux/x86_64/cef-build-prod/`。
 - **guest 依赖**（apt）：`build-essential pkg-config cmake git curl file zlib1g-dev
