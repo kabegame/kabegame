@@ -1,0 +1,28 @@
+---
+description: third-patches 是 reset 模型：patch 可自由增删改，套用/移除都从纯净基线全量重放
+globs: third-patches/**
+alwaysApply: false
+---
+
+# third-patches 工作流（reset 模型）
+
+- **patch 文件可以自由修改、删除、重新编号。** 曾经的"追加式原则"已废除——它存在的唯一
+  理由是旧的 `--from N` 重同步要靠"磁盘上的前缀 patch 与已应用内容逐字节一致"才能逆向回滚。
+- `deno task patch <dir>` = `git reset --hard`（回到子模块当前 HEAD 的纯净基线，并清掉系列
+  会新建的文件）+ 依次 `git apply` 整个系列。重复执行结果一致；中途失败会 reset 回纯净基线，
+  不留半套状态。
+- `deno task patch <dir> -r` = 仅 reset。不需要逆序 `apply -R`，因此也不要求 patch 与已应用
+  内容一致。
+- `deno task patch <dir> --check` = 在一次性 worktree 里链式预检，不动真实工作区。
+  改完 patch 后跑它验证，并同步 `third-patches/<dir>/README.md` 与相关 cocs 文档。
+- **代价**：reset 会丢弃子模块工作区里的一切未提交改动。要在 `third/` 下做本地开发，
+  先 commit 到子模块分支上（reset 目标是子模块 HEAD，提交不会丢）。
+- 生成新 patch 的工法：在已套用全系列的工作树上 `git -C third/<dir> add -A` 把当前状态存入
+  index，改完源码后 `git diff` 即为新 patch 内容，最后 `git reset` 恢复。
+- **`rusty_v8` 不由 patch-manager 接管**（见 `scripts/patch-manager.ts` 的 `MANUAL_REPOS`）：
+  它是就地复用的胖构建树（嵌套子模块 + 几十 GB 编译产物），reset 代价过大；patch 由
+  `scripts/build-v8.ts` 在构建流程里幂等应用。
+- `cef` 走标准流程，但 `automate-git.py` 只认提交、不看工作区。这一点由
+  `scripts/build-chromium.ts` 的 `stageCefPatchesAsCommit()` 在构建前自动固化成分支
+  `kabegame-build` 上的提交来满足——**不需要**人工维护 fork 分支，`third/cef` 的 gitlink
+  始终指向官方上游 pin。

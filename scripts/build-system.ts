@@ -205,9 +205,6 @@ export class BuildSystem {
 
     // fork 的 cargo-tauri(third/tauri/crates/tauri-cli):PATH 前置 + dev/build 前确保构建
     this.use(new TauriCliPlugin());
-
-    // 树内自编 deno CLI(third/deno):dev/build 前增量刷新,与 tauri-cli 同款管理
-    // this.use(new DenoCliPlugin());
   }
 
   commonBefore(): void {

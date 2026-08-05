@@ -10,16 +10,13 @@
 #   linux/amd64 模拟层下 V8 浮点损坏（小数截断为整数），容器内严禁跑任何 JS 构建；
 #   rustc/esbuild(Go)/SWC(Rust) 不受影响。
 #
-# deno 用官方二进制而非自编（2026-07 起）：
+# deno CLI 一律使用官方二进制：
 #   容器内 deno 只执行 scripts/run.ts 构建编排——纯 JS 控制流，零小数运算，
 #   依赖（commander/tapable/chalk/glob/handlebars）均为纯 JS。因此：
-#   - 不再需要 0004 node_modules 后缀补丁（那是给容器内 vite/rollup 等 JS 产物
-#     构建做 per-glibc 原生依赖隔离用的；现已无此类构建），官方 deno 在
-#     nodeModulesDir=manual 下直接读挂载树的宿主 node_modules；
+#   - 官方 deno 在 nodeModulesDir=manual 下直接读挂载树的宿主 node_modules；
 #   - 旧注释称官方二进制在此基线段错误——实测 deno 2.9.0 于 almalinux 8
 #     （glibc 2.28，Rosetta linux/amd64）运行正常，不再成立。
-#   注意 V8 浮点缺陷对官方/自编 deno 同等生效（与构建方式无关），编排层经
-#   多次完整构建验证不受影响。
+#   注意 V8 浮点缺陷与 deno 的安装来源无关，编排层经多次完整构建验证不受影响。
 #
 # 路径契约：ffmpeg-builder 必须在 /src（=运行时 bind-mount 挂载点）就地构建，因为
 #   pkg-config 的 .pc 文件仍烧入 /src/bin/linux/x86_64/*-build/install 前缀；产物经
@@ -104,9 +101,8 @@ COPY --from=ffmpeg-builder /src/bin/linux/x86_64/x264-build/install /opt/kabegam
 COPY docker/web-release-entrypoint.sh /usr/local/bin/web-release-entrypoint.sh
 RUN chmod +x /usr/local/bin/web-release-entrypoint.sh
 
-# KABEGAME_SKIP_DENO_CLI=1：容器用镜像里的官方 deno，DenoCliPlugin 不做自编刷新。
-ENV CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu \
-    KABEGAME_SKIP_DENO_CLI=1
+# 容器直接使用镜像里的官方 deno，没有树内 CLI 刷新步骤。
+ENV CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu
 
 ENTRYPOINT ["/usr/local/bin/web-release-entrypoint.sh"]
 CMD ["bash", "-l"]

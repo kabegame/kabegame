@@ -34,6 +34,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -380,6 +381,77 @@ function checkBuildDir(ctx: BuildContext): void {
   }
 }
 
+/** automate-git 只 fetch `refs/heads/*`，所以固化点必须是分支，不能是游离提交。 */
+const CEF_BUILD_BRANCH = "kabegame-build";
+
+/**
+ * 把 `third/cef` 工作区里的 patch 固化成 {@link CEF_BUILD_BRANCH} 上的一个提交，返回其 hash。
+ *
+ * 为什么必须这么做:`automate-git.py` 对 chromium 树里的 cef 做的是 `git fetch` +
+ * `git checkout <hash>`——**只认提交，不看工作区**。直接把 `rev-parse HEAD`（= 上游 pin）
+ * 交给它，产出的 CEF 里一个 kabegame patch 都不会有，且全程零报错，极易误判。
+ *
+ * 历史上这靠人工维护一个 `kabegame-7827` fork 分支来满足，代价是 gitlink 指向只存在于
+ * 本地的提交（别人 clone 后 `submodule update` 必然失败）。现在 `third/cef` pin 回官方
+ * 上游，patch 走标准的 `third-patches/cef/` 系列，固化这一步由本函数在构建前自动完成。
+ *
+ * 实现上走临时 index（`GIT_INDEX_FILE`）+ `commit-tree`：只新增一个分支引用，**不触碰
+ * 工作区，也不动仓库真实的 index**，所以构建前后 `git status` 完全一致。
+ */
+function stageCefPatchesAsCommit(ctx: BuildContext): string {
+  const head = capture("git", ["-C", ctx.cefSource, "rev-parse", "HEAD"], {
+    env: ctx.env,
+  });
+
+  const dirty = capture("git", ["-C", ctx.cefSource, "status", "--porcelain"], {
+    env: ctx.env,
+  }).trim();
+  if (!dirty) {
+    die(
+      [
+        `third/cef 工作区没有任何 kabegame patch（当前就是上游 ${head.slice(0, 9)}）。`,
+        "构建出来的 CEF 会缺少 flat-subprocess-path 等改动且不会报错，故在此拦下。",
+        "请先套用 patch 系列：deno task patch cef",
+      ].join("\n"),
+    );
+  }
+
+  const indexFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "kabegame-cef-index-")),
+    "index",
+  );
+  const env = { ...ctx.env, GIT_INDEX_FILE: indexFile };
+
+  try {
+    run("git", ["-C", ctx.cefSource, "read-tree", head], { env });
+    run("git", ["-C", ctx.cefSource, "add", "-A"], { env });
+    const tree = capture("git", ["-C", ctx.cefSource, "write-tree"], { env });
+    const commit = capture(
+      "git",
+      [
+        "-C",
+        ctx.cefSource,
+        "commit-tree",
+        tree,
+        "-p",
+        head,
+        "-m",
+        "kabegame: third-patches/cef series (auto-staged for automate-git)",
+      ],
+      { env },
+    );
+    run(
+      "git",
+      ["-C", ctx.cefSource, "branch", "-f", CEF_BUILD_BRANCH, commit],
+      { env: ctx.env },
+    );
+    log(`CEF patch 已固化到分支 ${CEF_BUILD_BRANCH}: ${commit.slice(0, 9)}`);
+    return commit;
+  } finally {
+    fs.rmSync(path.dirname(indexFile), { recursive: true, force: true });
+  }
+}
+
 function prepareCefReference(ctx: BuildContext): void {
   if (!fs.existsSync(ctx.cefSource) || !fs.statSync(ctx.cefSource).isDirectory()) {
     die(
@@ -397,11 +469,7 @@ function prepareCefReference(ctx: BuildContext): void {
     die(`third/cef 不是有效的 Git checkout: ${ctx.cefSource}`);
   }
 
-  ctx.cefSourceCommit = capture(
-    "git",
-    ["-C", ctx.cefSource, "rev-parse", "HEAD"],
-    { env: ctx.env },
-  );
+  ctx.cefSourceCommit = stageCefPatchesAsCommit(ctx);
   ctx.cefSourceUrl = ctx.windows
     ? ctx.windows.toMixed(ctx.cefSource)
     : ctx.cefSource;

@@ -20,10 +20,6 @@ jobs:
             os: ubuntu-24.04
     runs-on: ${{ matrix.platform.os }}
 
-    env:
-      # CI 用上方官方 deno 二进制，DenoCliPlugin 跳过从 third/deno 源码自编。
-      KABEGAME_SKIP_DENO_CLI: "1"
-
     steps:
       - name: Checkout code (with submodules)
         uses: actions/checkout@v4
@@ -31,8 +27,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 官方二进制仅作 CI bootstrap/运行器；本地/VM 用 third/deno 自编 CLI
-      # （deno task build:deno）。third-patches/deno 只补 libs/core，不影响 CLI 行为。
+      # CI 直接使用官方 deno 二进制；third-patches/deno 只补 libs/core，不影响 CLI 行为。
       - name: Setup Deno 2.9.0
         uses: denoland/setup-deno@v2
         with:

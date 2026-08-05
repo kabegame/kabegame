@@ -41,8 +41,7 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
 
 > 首次切到本模型时，如果 host 上留有旧的 `target/release/`（glibc 2.43 的存量产物），
 > 在 guest 首次 release 构建前清掉：`rm -rf target/release`。**本机已于 2026-08-06 执行**
-> （连同退役的 `target-22`、`node_modules-22`、`third/*-build-22` 一并清理，释放 63G）；
-> 清理前已把 guest 产的 `deno` 与 `cargo-tauri` 抢救进 `.vm/bin/`。
+> （连同退役的 `target-22`、`node_modules-22`、`third/*-build-22` 一并清理，释放 63G）。
 
 ## 环境总览（一次性搭好，长期复用）
 
@@ -53,18 +52,18 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
   `/home/cm/i/kabegame`。**guest 必须挂到与 host 完全相同的路径 `/home/cm/i/kabegame`**
   （见踩坑 3）。**整棵树完整挂载**——CEF distrib、FFmpeg 产物、node_modules 全在树内，
   guest 不需要任何侧拷贝。
-- **guest 专用工具与缓存**放共享区 `/home/cm/i/kabegame/.vm/`（git 本地忽略，见
-  `.git/info/exclude`）。Rust 工具链本身已装在 guest 本地盘 `~/.cargo` + `~/.rustup`（更快）：
-  - `.vm/env.sh`：只剩 `LANG`/`DENO_DIR`/`KABEGAME_SKIP_DENO_CLI`/`PATH` 四项。
-    `CARGO_TARGET_DIR`、`CEF_PATH`、`KB_BUILD_SUFFIX`、`DENO_NODE_MODULES_SUFFIX`
-    **全部删除**——共用 `target/`、CEF 与 FFmpeg 由构建系统按树内路径自动解析、
-    node_modules 共用主树。
-  - `.vm/bin/{deno,cargo-tauri}`：**guest 专用的 glibc 2.35 工具**，PATH 里排最前。
-    自编 deno 是必须的——官方二进制的 glibc 基线比 22.04 新，直接段错误；fork 的
-    cargo-tauri 同理。（2026-08 退役 `target-22` 时从中抢救出来，避免重编。）
-  - `.vm/deno-dir`：deno 模块/npm 缓存。
-  - `.vm/run-build.sh`：一键构建脚本（见下）。
-  - `.vm/cef-prod` **已废除**：CEF distrib 现在就在树内 `bin/linux/x86_64/cef-build-prod/`。
+- **guest 自备构建环境，仓库不再下发任何 env 脚本。** 曾经的 `.vm/env.sh` 已删除——它当年
+  存在是为了下发 `CARGO_TARGET_DIR`/`CEF_PATH`/`KB_BUILD_SUFFIX`/`DENO_NODE_MODULES_SUFFIX`
+  这些隔离变量，而它们**全部退役**了：共用 `target/`（profile 隔离）、CEF 与 FFmpeg 由构建
+  系统按树内路径自动解析、node_modules 共用主树。guest 里现在只需要装好通用工具链：
+  - **Rust**：rustup stable，装在 guest 本地盘 `~/.cargo` + `~/.rustup`（比共享挂载快）。
+  - **Deno**：官方二进制即可（`curl -fsSL https://deno.land/install.sh | sh`）。
+    不要自编——官方二进制的 glibc 地板是 **2.27**，比 22.04 的 2.35 还低；曾经"官方 deno
+    在 22.04 段错误、必须自编"的说法经实测证伪，自编 CLI 已整个停用。
+  - **`cargo-tauri`**：fork 的版本必须自建，但这由 `TauriCliPlugin` 在构建流程里自动完成，
+    产物落 `target/release/`，无需手工准备。
+  - `.vm/` 只留 guest 本地的构建日志与 `run-build.sh`（git 本地忽略，见 `.git/info/exclude`）。
+  - `.vm/cef-prod` 已废除：CEF distrib 就在树内 `bin/linux/x86_64/cef-build-prod/`。
 - **guest 依赖**（apt）：`build-essential pkg-config cmake git curl file zlib1g-dev
   libssl-dev libgtk-3-dev libglib2.0-dev clang libclang-dev libayatana-appindicator3-dev
   nasm`；`ubuntu-test` 开了免密 sudo；加了 6G swapfile 防链接期 OOM。
@@ -221,4 +220,4 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
 - `src-crawler-plugins/package-plugin.ts` —— 打包 `.kgpg` 的 `CLI_EXE` 按 `CARGO_TARGET_DIR` 定位。
 - `scripts/build-ffmpeg.ts` —— x264+FFmpeg 源码构建（Linux 目标带属地守卫）。
 - `src-tauri/tauri-runtime-cef/README.md`、`../../third-patches/cef/README.md` —— CEF 构建/直链。
-- `.vm/env.sh`、`.vm/run-build.sh` —— guest 内环境与一键构建（git 本地忽略）。
+- `.vm/run-build.sh` —— guest 内的一键构建脚本（git 本地忽略；环境由 guest 自备，仓库不下发 env 脚本）。

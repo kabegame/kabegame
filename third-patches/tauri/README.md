@@ -80,14 +80,12 @@ Apply the whole series manually before building against `third/tauri`:
 deno task patch tauri
 ```
 
-The series is **append-only**: never edit or delete a published `NNNN-*.patch` — add a new
-numbered patch on top instead (`.cursor/rules/third-patches-append-only.mdc`; the only
-exception is a full re-vendor, below). When a pull adds new patches while the submodule still
-has the old prefix applied, resync with:
-
-```bash
-deno task patch tauri --from <N>   # reverse applied prefix (< N), then re-apply the full series
-```
+The patch manager uses a **reset model**, so the series is *not* append-only: patches may be
+edited, deleted or renumbered freely (`.cursor/rules/third-patches-workflow.mdc`). Applying
+resets the submodule to its clean pinned baseline and replays the whole series in filename
+order; `-r` just resets. Re-running is therefore idempotent — after a pull that changes any
+patch, plain `deno task patch tauri` resyncs (the `.husky/post-merge` hook does this
+automatically).
 
 The `.husky/post-merge` hook detects newly added `third-patches/*/*.patch` after a pull and
 runs this automatically.

@@ -134,9 +134,14 @@ function patchKabegameReleaseDownloadLine(
   if (!line.includes("github.com/kabegame/kabegame/releases/download")) {
     return line;
   }
-  let s = line.replaceAll(`v${oldVersion}/`, `v${newVersion}/`);
-  s = s.replaceAll(`_${oldVersion}_`, `_${newVersion}_`);
-  s = s.replaceAll(
+  // 用 split/join 做全量替换：项目的 TS lib 版本里还没有 String.replaceAll
+  const replaceAll = (input: string, from: string, to: string) =>
+    input.split(from).join(to);
+
+  let s = replaceAll(line, `v${oldVersion}/`, `v${newVersion}/`);
+  s = replaceAll(s, `_${oldVersion}_`, `_${newVersion}_`);
+  s = replaceAll(
+    s,
     `Kabegame_${oldVersion}_android`,
     `Kabegame_${newVersion}_android`,
   );

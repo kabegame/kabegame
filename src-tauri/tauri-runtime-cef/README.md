@@ -191,25 +191,30 @@ checkout 的 origin 校正到该引用、同步当前提交，并由 CEF 标准 
 
 ```bash
 git submodule update --init third/cef
-git -C third/cef checkout kabegame-7827          # 见下方「patch 必须落成分支上的提交」
+deno task patch cef
 deno task build:chromium dev
 deno task build:chromium prod
 ```
 
-**patch 必须落成分支上的提交。** `automate-git.py` 对 `third/chromium/chromium_git/cef` 做的是
-`git fetch` + `git checkout <hash>`（hash 来自 `git -C third/cef rev-parse HEAD`），
-有两个后果：
+**automate-git 只认提交，固化由构建脚本自动完成。** `automate-git.py` 对
+`third/chromium/chromium_git/cef` 做的是 `git fetch` + `git checkout <hash>`，有两个后果：
 
-1. **只看提交，不看工作区。** `deno task patch cef` 只改工作区，套完 patch 直接开构建，
-   产出的 CEF 里一个 kabegame patch 都没有，且全程无任何报错，极易误判。
-2. **必须在分支上。** `git fetch` 只取 `refs/heads/*`；detached HEAD 上的提交不在任何
-   分支上，构建端 fetch 不到，`git checkout <hash>` 直接 `exit 128`。
+1. **只看提交，不看工作区。** `deno task patch cef` 只改工作区，若直接把 `rev-parse HEAD`
+   （= 上游 pin）交给它，产出的 CEF 里一个 kabegame patch 都没有，且全程无任何报错。
+2. **必须在分支上。** `git fetch` 只取 `refs/heads/*`；游离提交 fetch 不到，
+   `git checkout <hash>` 直接 `exit 128`。
 
-因此 `third/cef` 里维护一条 `kabegame-7827` 分支（基于上游 pin `0d0eeb611`），
-`third-patches/cef/` 的每个 patch 在其上对应一个提交。新增 patch 时在该分支上
-`git apply` 新 patch 再 commit。**不要 `git add third/cef` 提回父仓库**：父仓库的
-gitlink 始终指向官方上游 pin，Kabegame 的分歧只以 `third-patches/cef/*.patch` 为准，
-分支只是构建入口。
+`scripts/build-chromium.ts` 的 `stageCefPatchesAsCommit()` 在构建前自动满足这两点：把工作区
+状态经临时 index + `commit-tree` 固化成分支 `kabegame-build` 上的一个提交，再把该提交交给
+automate。它**不触碰工作区、也不动仓库 index**，构建前后 `git status` 一致；工作区若没有
+任何 patch（说明忘了 `deno task patch cef`），它会直接报错拦下而不是静默产出无 patch 的 CEF。
+
+因此 `third/cef` 的 gitlink **始终指向官方上游 pin**（当前 `0d0eeb611`），Kabegame 的分歧
+只以 `third-patches/cef/*.patch` 为准，与其它 `third/` 子模块完全同构。
+
+> 历史包袱：这里一度靠人工维护一条 `kabegame-7827` fork 分支，且父仓库 gitlink 误指向该
+> 分支的 tip —— 那个提交只存在于本地，别人 clone 后 `git submodule update` 必然失败。
+> 2026-08 已回到上游 pin + 标准 patch 系列，分支删除。
 
 升级 CEF 大版本时两边都走同一套 re-vendor 流程：先 `deno task patch <dir> -r` 还原成
 干净的上游树，再 bump 官方 pin，最后修复 context 漂移并重新生成整个 patch series，

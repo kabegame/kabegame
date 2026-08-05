@@ -7,8 +7,8 @@ index bbb953d..833e575 100644
  snapshot_flags_eager_parse = []
  uv_compat_export = []
 +# kabegame patch: embed extension JS sources via include_str! (snapshotless
-+# runtimes / cross-compilation). Must stay OFF for the in-tree deno CLI build —
-+# see __extension_include_js_files_detect! in extensions.rs.
++# runtimes / cross-compilation). It is opt-in so other deno_core consumers keep
++# upstream behavior; see __extension_include_js_files_detect! in extensions.rs.
 +embed_ext_sources = []
  
  [dependencies]
@@ -30,9 +30,9 @@ index 1f07dca..24ad8b0 100644
 +/// [`__extension_include_js_files_detect!`] — see that macro for the rationale.
 +/// Lazy sources such as `deno_crypto`'s `00_crypto.js` are `load()`ed from disk
 +/// at runtime under kabegame's snapshotless runtime, which ENOENTs on a
-+/// cross-compiled Android device, so kabegame builds embed them; the deno CLI
-+/// keeps upstream `mode=loaded` (its lazy TS sources must go through the
-+/// snapshot build's transpile step — embedding raw `.ts` breaks `node:*`).
++/// cross-compiled Android device, so feature-enabled builds embed them.
++/// Consumers that leave it disabled keep upstream `mode=loaded`, which remains
++/// appropriate for snapshot build flows.
  #[macro_export]
  macro_rules! include_lazy_loaded_js_files {
    ($name:ident $( dir $dir:literal, )? $(
@@ -72,12 +72,12 @@ index 1f07dca..24ad8b0 100644
 -/// default. kabegame never builds a snapshot, so unconditional embedding is safe.
 +/// default. kabegame never builds a snapshot, so embedding is safe there.
 +///
-+/// The feature must stay OFF for the deno CLI built from this monorepo
-+/// (`cargo build -p deno`): its extension sources include TypeScript
-+/// (`ext/node`'s `node:*` polyfills) that upstream transpiles during the
-+/// snapshot build. Embedding the raw `.ts` bytes bypasses that transpile and
-+/// V8 throws `SyntaxError: Unexpected identifier` the moment `node:url`/
-+/// `node:console` load. Feature off → upstream `mode=loaded` behavior.
++/// The feature is opt-in: snapshot-producing `deno_core` consumers keep
++/// upstream `mode=loaded`, allowing their build pipelines to read and transform
++/// extension sources before snapshotting. Enabling it instead embeds declared
++/// source bytes verbatim, which is the behavior kabegame's snapshotless runtime
++/// needs. Feature off therefore preserves upstream `mode=loaded` behavior.
++///
  #[doc(hidden)]
 +#[cfg(feature = "embed_ext_sources")]
  #[macro_export]
@@ -85,9 +85,9 @@ index 1f07dca..24ad8b0 100644
    ($($rest:tt)*) => { $crate::__extension_include_js_files_inner!(mode=included, $($rest)*) };
  }
  
-+/// Upstream behavior (`mode=loaded`) when `embed_ext_sources` is off — used by
-+/// the deno CLI build. See the feature-gated twin above for the kabegame patch
-+/// rationale.
++/// Upstream behavior (`mode=loaded`) when `embed_ext_sources` is off. See the
++/// feature-gated twin above for the kabegame patch rationale and intended
++/// snapshotless-runtime use case.
 +#[doc(hidden)]
 +#[cfg(not(feature = "embed_ext_sources"))]
 +#[macro_export]

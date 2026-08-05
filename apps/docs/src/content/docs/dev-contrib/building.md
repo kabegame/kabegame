@@ -7,7 +7,7 @@ Kabegame 是一个 Deno 驱动的 monorepo：前端使用 Vue 3，桌面与 Andr
 
 ## 前置要求
 
-- **Deno 2.9.0**：可以安装官方 2.9.0 版本，也可以在仓库内运行 `deno task build:deno`，从 `third/deno` 构建固定版本的 CLI。
+- **Deno 2.9.0**：使用官方二进制，可通过 `denoland/setup-deno`、Homebrew 或官方安装脚本安装。`third-patches/deno/` 只补应用编译使用的 `libs/core`，不改变 CLI 行为。
 - **Rust 工具链**：通过 rustup 安装当前稳定版 Rust。
 - **Tauri 2 的平台依赖**：按 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) 为目标系统安装编译工具和系统库。
 - **Git 子模块**：克隆时使用 `--recurse-submodules`，或在已有 checkout 中运行 `git submodule update --init --recursive`。

@@ -55,7 +55,7 @@ Kabegame 建立在众多开源项目之上。感谢这些项目的开发者与�
 
 - [**CEF（Chromium Embedded Framework）**](https://github.com/chromiumembedded/cef) — 桌面端 WebView 后端使用的 Chromium 浏览器引擎。
 - [**cef-rs**](https://github.com/tauri-apps/cef-rs) — CEF 的 Rust 绑定。
-- [**deno**](https://github.com/denoland/deno) — 提供 `deno_core` 源码并用于树内构建 Deno CLI；`deno_core` 驱动 V8 插件后端。
+- [**deno**](https://github.com/denoland/deno) — 提供驱动 V8 插件后端的 `deno_core` 源码；构建编排使用官方 Deno CLI 二进制。
 - [**rusty_v8**](https://github.com/denoland/rusty_v8) — V8 的 Rust 绑定；Kabegame 为 Android aarch64 自行构建静态库与 binding。
 - [**FFmpeg**](https://github.com/FFmpeg/FFmpeg) — 视频摄入、预览压缩和媒体处理框架。
 - [**x264**](https://code.videolan.org/videolan/x264) — H.264 编码器，由 FFmpeg 构建静态链接。

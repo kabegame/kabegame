@@ -24,7 +24,6 @@
     "build:ffmpeg": "deno run -A scripts/build-ffmpeg.ts",
     "build:chromium": "deno run -A scripts/build-chromium.ts",
     "build:v8": "deno run -A scripts/build-v8.ts",
-    "build:deno": "deno run -A scripts/build-deno.ts",
     "build:web": "deno run -A scripts/build-web.ts",
     "prepare": "husky"
   },

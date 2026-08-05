@@ -13,8 +13,8 @@
 # 前缀在宿主无效；跑完后需要在 Ubuntu 22.04 guest 里重新执行
 # `deno task build:ffmpeg`。macOS 宿主无此问题（树内本无 Linux 产物）。
 #
-# node_modules-web 种子已随自编 deno / 0004 后缀补丁一并移除：容器不再跑任何 JS
-# 产物构建，官方 deno 只执行构建编排，直接读挂载树里宿主的 node_modules（纯 JS 依赖）。
+# 容器不跑任何 JS 产物构建；官方 deno 只执行构建编排，直接读取挂载树里宿主的
+# node_modules（纯 JS 依赖），无需额外的依赖目录种子。
 set -euo pipefail
 
 SEED=/opt/kabegame/seed

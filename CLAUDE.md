@@ -107,12 +107,9 @@ kabegame-cli pathql generate --target typescript --out packages/kabegame-pathql-
                                  # 生成 PathQL 客户端(@kabegame/pathql-client 别名指向该文件);
                                  # 产物不入库,新 checkout / 修改 DSL 后需先手动生成,
                                  # 否则前端 vue-tsc / vite 构建会因缺文件明确报错
-deno task patch cef              # Apply third-patches/cef series atomically to third/cef
-deno task patch cef -r           # Reverse the CEF series in reverse order
-deno task patch --all --check    # Dry-run every available third-patches/* series
-deno task patch tauri --from 9   # Series grew (new patch ≥9): reverse applied prefix (1..8),
-                                 # then re-apply the full series (post-merge hook runs this
-                                 # automatically when a pull adds third-patches/*/*.patch)
+deno task patch deno             # Reset third/deno to its clean baseline, then apply the full series
+deno task patch deno -r          # Reset third/deno to its clean baseline
+deno task patch --all --check    # Dry-run every patch-manager-owned third-patches/* series
 deno task build:ffmpeg           # Build x264 (third/x264) + FFmpeg libav* libs from source (native)
                                  # x264 is built-in (no system libx264 needed); Linux build uses
                                  # --disable-asm + -DNATIVE_ALIGN=16 to avoid CEF/PartitionAlloc crash
@@ -127,23 +124,10 @@ deno task build:chromium prod    # (~60GB, gitignored). Export: bin/{platform}/{
 deno task build:ffmpeg --target android  # Cross-compile aarch64 FFmpeg via env NDK (NDK_HOME etc.)
                                  # Output gitignored under bin/android/arm64/FFmpeg-build/ (reproduced by
                                  # command, not committed). Required before android cargo build/check.
-deno task build:deno             # Build the deno CLI from third/deno sources (pin v2.9.0, with the
-                                 # third-patches/deno series applied) into target/release/deno.
-                                 # Managed like the tauri-cli fork: DenoCliPlugin refreshes it
-                                 # incrementally before dev/build; CI uses the official binary and
-                                 # sets KABEGAME_SKIP_DENO_CLI=1 to skip. Defaults to a thin-LTO
-                                 # profile (KB_DENO_OFFICIAL=1 switches to the official fat-LTO
-                                 # profile; linking needs 8-16GB RAM).
-                                 # The self-built CLI also honors DENO_NODE_MODULES_SUFFIX (patch
-                                 # 0004): when set, every node_modules path component is redirected
-                                 # to node_modules<suffix> at the real-IO boundary (in-process bind
-                                 # mount for per-glibc native isolation). The mechanism is currently
-                                 # DORMANT — nothing in the repo sets the variable: the 22.04 guest
-                                 # mounts the whole tree and shares node_modules, and the web docker
-                                 # image runs no JS build. Kept in the patch series (append-only) for
-                                 # when per-glibc native isolation is needed again.
-                                 # See third-patches/deno/README.md.
 ```
+
+Deno CLI 一律使用官方二进制，可通过 `denoland/setup-deno`、Homebrew 或官方安装脚本安装。
+`third-patches/deno/` 只补应用通过 Cargo 消费的 `libs/core`，与 CLI 行为无关。
 
 ### Verification workflow
 **Do not run `cargo build` / `tauri build` / `deno task b` to verify changes** — invoke the **`check-kabegame` skill** instead (`.claude/skills/check-kabegame/driver.sh`, narrow it with `--skip vue` / `--skip cargo`). Editor lint diagnostics are equally valid for small edits. Only build when the user explicitly asks. Gotcha: `check` fails with `os error 32` while an app instance is running (`cef-dll-sys`'s build script copies the CEF runtime into `target/`) — kill `kabegame.exe` first. Rule: `.cursor/rules/verify-by-lint.mdc`.
@@ -199,7 +183,7 @@ struct Foo {
 ### Key Architecture Rules
 **Path logic belongs in `tauri-plugin-pathes`** — Any path/directory calculation must live in `src-tauri-plugins/tauri-plugin-pathes/`. Other modules call into it via `AppPaths`; never hardcode or recompute paths elsewhere.
 
-**Third-party patch series** — Kabegame changes to vendored `third/` repositories belong in matching `third-patches/<dir>/NNNN-*.patch` files, applied manually with `deno task patch <dir>`. The manager preflights the full ordered series in a disposable Git worktree before changing the real submodule and rolls back a partial commit-stage failure. Reverse mode applies patches in reverse order. **The series is append-only**: never modify or delete a committed patch file — add a new numbered patch on top (rule: `.cursor/rules/third-patches-append-only.mdc`; only exception is a full re-vendor). After pulling newly added patches onto an already-patched submodule, resync with `deno task patch <dir> --from <N>` (reverses the applied prefix `< N`, then re-applies the whole series); the `.husky/post-merge` hook runs this automatically. `third/cef` directly pins official `chromiumembedded/cef` commit `0d0eeb611`; apply `third-patches/cef/0001-flat-subprocess-path.patch` before preparing a custom CEF/Chromium build. Re-vendor by reversing the series, bumping the upstream pin, then regenerating patches. See `third-patches/cef/README.md`.
+**Third-party patch series** — Kabegame changes to vendored `third/` repositories belong in matching `third-patches/<dir>/NNNN-*.patch` files. For patch-manager-owned repositories, `deno task patch <dir>` resets the submodule to its clean pinned baseline and applies the full filename-sorted series; `deno task patch <dir> -r` resets it without applying patches. Patch files may be modified, deleted, or renumbered because every operation starts from the baseline. `--check` preflights the ordered series in a disposable worktree. Reset discards uncommitted submodule work, so commit local `third/` development to a branch first. `rusty_v8` is the one manual exception (a reuse-in-place fat build tree; its patches are applied by `scripts/build-v8.ts`), documented in `.cursor/rules/third-patches-workflow.mdc`. `cef` follows the standard flow — `automate-git.py` only honors commits, but `scripts/build-chromium.ts` stages the patched worktree onto a `kabegame-build` branch automatically, so `third/cef`'s gitlink always points at the official upstream pin.
 
 **Script repository paths** — `scripts/paths.ts` is the dependency-light single source for `ROOT`、`THIRD_DIR`、目标架构及 `bin/{platform}/{arch}/{repo}-build`；`scripts/utils.ts` re-export 这些符号以保持现有 import 面，构建插件不得自行重算。
 

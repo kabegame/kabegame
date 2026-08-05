@@ -86,8 +86,8 @@
   - 适用场景：编写/迁移 V8 插件；排查 startup snapshot 生成/失效/fallback、`Kabegame.fs` / `Kabegame.ffmpeg`、`fetch`、`URL`、`crypto`、`DOMParser`；更新 JS 插件模板和类型声明；排查 V8 后端 Android 交叉编译（依赖门控 / 自建预编译产物 / NDK 链接）或网络/`Response`/`Headers` 行为。
 
 - [../third-patches/deno/README.md](../third-patches/deno/README.md)
-  - 主题：`deno_core` 的上游 vendor base 与 kabegame patch series。`third/deno` = `denoland/deno` monorepo submodule（pin `v2.9.0`，`libs/core` 与 crates.io deno_core 0.405.0 逐字节一致），经 `[patch.crates-io] deno_core = third/deno/libs/core` 单一来源消费；3 个 patch（扩展 JS 内嵌 / 共享 V8 platform 初始化 / Android Bionic errno）作用于 `libs/core`，`deno task patch deno` 应用。`serde_v8`/`deno_ops` 作为 monorepo path 依赖单份解析（无 path-vs-registry 重复）。
-  - 适用场景：新 checkout 后准备构建 V8 后端（先 `deno task patch deno`）；升级 deno_core 版本 re-vendor；排查 deno_core patch 应用/漂移或 serde_v8/deno_ops 解析来源。
+  - 主题：`deno_core` 的上游 vendor base 与 kabegame patch series。`third/deno` = `denoland/deno` monorepo submodule（pin `v2.9.0`，`libs/core` 与 crates.io deno_core 0.405.0 逐字节一致），经 `[patch.crates-io] deno_core = third/deno/libs/core` 单一来源消费；4 个 patch（扩展 JS 内嵌 / 共享 V8 platform 初始化 / Android Bionic errno / 内嵌行为 feature 门控）只作用于 `libs/core`，`deno task patch deno` 按 reset 模型全量应用。Deno CLI 一律使用官方二进制，与这组 patch 无关；`serde_v8`/`deno_ops` 作为 monorepo path 依赖单份解析（无 path-vs-registry 重复）。
+  - 适用场景：新 checkout 后准备构建 V8 后端（先 `deno task patch deno`）；升级 deno_core 版本 re-vendor；排查 deno_core patch 应用/漂移或 serde_v8/deno_ops 解析来源。不要把这里的 patch 当成 Deno CLI 定制。
 
 - [../third-patches/rusty_v8/README.md](../third-patches/rusty_v8/README.md)
   - 主题：Android 版 `librusty_v8` 自建产物的可复现构建。`third/rusty_v8` = `denoland/rusty_v8` submodule（pin `v149.4.0` = Cargo.lock 的 v8）是**就地复用的胖构建树**（nested submodules + 已编译 target/ 都在其中，增量复用、不重拉/重编，`ignore = dirty`）。`deno task build:v8`（`scripts/build-v8.ts`，仅 Linux）幂等应用补丁并构建：补丁是 `third-patches/rusty_v8/` 顶层 `*.patch`，均 `git -C third/rusty_v8 apply`（0002 路径带 `build/` 前缀，跨进嵌套 build 子模块），**由 build-v8.ts 应用而非 `deno task patch`**——patch-manager 现只对**纯净树** forward、对**脏树** reverse（幂等），本胖树常驻脏态故被跳过。产物 `bin/android/arm64/rusty_v8-build/{*.a,src_binding.rs}` gitignore、不入库。**`v8` 不经 `[patch.crates-io]`**——git 仓缺发布版的 `gen/` binding，patch 会破坏桌面构建；app 构建仍用 crates.io v8 + 注入 archive/binding。
@@ -118,7 +118,7 @@
   - 适用场景：android dev/prod 真机并存隔离；排查 `Project directory ... does not exist`、auto-launch 拉起失败、`BuildConfig` 解析错误；升级 tauri-cli 版本；排查 deb 包 webkit 依赖或 Depends 重复。
 
 - [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
-  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；**文件拖放**（`TauriCefDragHandler` 把 CEF 回调翻成 Tauri 四态 `WindowEvent::DragDrop`，依赖 patch 0002 补出的 `OnDragOver`/`OnDragLeave`/`OnDrop`，语义对齐 wry）；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF 上游 pin/patch series 维护流程（含**「patch 必须落成 `kabegame-7827` 分支上的提交」**——`automate-git.py` 只 fetch 分支、只认提交，工作区 patch 与 detached HEAD 提交都进不了构建且不报错）。
+  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；**文件拖放**（`TauriCefDragHandler` 把 CEF 回调翻成 Tauri 四态 `WindowEvent::DragDrop`，依赖 patch 0002 补出的 `OnDragOver`/`OnDragLeave`/`OnDrop`，语义对齐 wry）；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包，以及 CEF 上游 pin/patch series 维护流程（`third/cef` 的 gitlink 始终指向官方上游 pin、patch 走标准系列；`automate-git.py` 只 fetch 分支、只认提交，故构建前由 `stageCefPatchesAsCommit()` 把工作区自动固化到 `kabegame-build` 分支——曾经人工维护 fork 分支并让 gitlink 误指向本地提交的做法已废除）。
   - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（官方 pin + patch series re-vendor）、调整 `tauri-runtime-cef` trait 适配；排查从外部拖入文件被 CEF 直接打开成预览页、`onDragDropEvent` 不触发；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包；确认自编的 CEF 里到底有没有 kabegame patch。
 
 - [../third-patches/cef/README.md](../third-patches/cef/README.md)
@@ -184,4 +184,4 @@
 
 - 新增流程文档后，必须在本索引补充条目（链到具体文件路径 + 主题 + 适用场景）。
 - 发生流程级改动时，先更新对应文档，再更新本索引描述（若语义有变化）。
-- **third-patches 追加式原则**：已入库的 `third-patches/<dir>/NNNN-*.patch` 一律不改不删，只在系列末尾追加新编号 patch（唯一例外是 re-vendor 整体重生成）。拉取到新增 patch 后用 `deno task patch <dir> --from <N>` 重同步（`.husky/post-merge` 钩子自动执行）。详见 [.cursor/rules/third-patches-append-only.mdc](../.cursor/rules/third-patches-append-only.mdc)。
+- **third-patches reset 模型**：patch-manager 接管的系列可自由增删改和重编号；`deno task patch <dir>` 先把子模块 reset 到纯净基线，再按文件名顺序全量 apply，`-r` 仅 reset。操作会丢弃子模块未提交改动，本地开发应先提交到分支。`rusty_v8` 是唯一的手动例外（就地复用的胖构建树，patch 由 `scripts/build-v8.ts` 应用）；`cef` 走标准流程，automate-git 只认提交这一点由 `scripts/build-chromium.ts` 自动固化成 `kabegame-build` 分支来满足。详见 [.cursor/rules/third-patches-workflow.mdc](../.cursor/rules/third-patches-workflow.mdc)。

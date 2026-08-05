@@ -1,15 +1,22 @@
 #!/usr/bin/env -S deno run -A
 /**
- * 原子管理 third/ 子模块对应的 third-patches/ patch series。
+ * 管理 third/ 子模块对应的 third-patches/ patch series。
  *
  * 用法:
- *   deno task patch cef
- *   deno task patch cef --reverse
- *   deno task patch --all --check
- *   deno task patch tauri --from 9   # 系列新增 0009 后重同步:回滚已应用前缀(1..8)再全量正向套用
+ *   deno task patch cef              # 套用:先 reset 回纯净基线,再依次应用整个系列
+ *   deno task patch cef --reverse    # 移除:reset 回纯净基线,就这样
+ *   deno task patch --all --check    # 一次性 worktree 里预检,不动真实工作区
  *
- * patch 系列是**追加式**的:已入库的 NNNN-*.patch 一律不改不删,只在末尾追加新编号
- * (--from 的回滚正确性依赖"磁盘上的前缀 == 已应用的前缀")。见 .cursor/rules/third-patches-append-only.mdc。
+ * **模型:reset 即纯净。** 子模块的源码全在 git 里,`git reset --hard <当前 HEAD>` 永远能
+ * 拿回纯净基线,所以两个方向都是幂等的全量操作,不需要"当前应用到第几个"这类状态推断:
+ *   - 套用 = reset + 全量 apply(重复执行结果一致;应用到一半失败时也不会留下半套状态)
+ *   - 移除 = reset(不需要逆序 `apply -R`,也就不要求 patch 与已应用内容逐字节一致)
+ *
+ * 由此**取消了追加式约束**:patch 文件可以随意修改、删除、重新编号——下一次套用总是从
+ * 纯净基线重新展开整个系列。历史上的 `--from N` 重同步与工作区纯净度门控随之删除。
+ *
+ * 代价:reset 会丢弃子模块工作区里的一切未提交改动。要在 third/ 下做本地开发,请先自行
+ * commit 到子模块的分支上(reset 的目标是子模块**当前 HEAD**,提交不会被丢弃)。
  */
 
 import { spawnSync } from "child_process";
@@ -22,6 +29,22 @@ import { globSync } from "glob";
 import { ROOT, THIRD_DIR } from "./utils.ts";
 
 const THIRD_PATCHES_DIR = path.join(ROOT, "third-patches");
+
+/**
+ * 不由本工具接管的子模块——patch 有各自的应用方式,`third-patches/<dir>/` 下的文件
+ * 对它只是**来源记录**。
+ *
+ * `rusty_v8` 是**就地复用的胖构建树**:嵌套子模块(v8/build/third_party/*)与几十 GB 的
+ * 已编译 `target/` 都在其中,还带若干非 diff 形式的 fixup。对它 `reset --hard` 会重置
+ * 嵌套子模块指针并抹掉构建状态,代价是从零重编。它的 patch 由 `scripts/build-v8.ts`
+ * 在构建流程里幂等应用(含跨嵌套子模块的 0002),见 third-patches/rusty_v8/README.md。
+ *
+ * 注:`cef` 曾经也在此列——它的 patch 一度以提交形式挂在自建分支 `kabegame-7827` 上,
+ * 而 gitlink 指向那个只存在于本地的提交(clone 后 `submodule update` 必然失败)。现已
+ * 回到官方上游 pin + 标准 patch 系列;`automate-git.py` 只认提交这一约束改由
+ * `scripts/build-chromium.ts` 在构建前把工作区状态固化成临时分支来满足。
+ */
+const MANUAL_REPOS = new Set(["rusty_v8"]);
 
 export interface RepoPlan {
   dir: string;
@@ -120,19 +143,55 @@ export function isRepo(sub: string): boolean {
 }
 
 /**
- * 工作区是否纯净(据以判定 forward/reverse 门控)。**不含子仓库**:`--ignore-submodules=all`
- * 只看本仓库自己的已跟踪改动——嵌套子模块可能被提前单独应用(如 0002 经 `build/` 前缀跨进 build
- * 子模块),且跨路径应用顺序不保证,故子仓库的脏不应门控父仓库。空即纯净。
+ * 解析 patch 会**新建**的文件路径(`new file mode` 对应的 `+++ b/<path>`)。
+ *
+ * `git reset --hard` 只还原已跟踪文件,patch 新建的那些在 reset 后会沦为 untracked 残留,
+ * 下一次 `git apply` 撞见既存文件即失败。这里精确点名删除,而不是 `git clean -fd`——
+ * 后者会连带清掉子模块里正当的未跟踪内容(构建产物、本地笔记)。
  */
-export function isClean(sub: string): boolean {
-  const result = runCommand("git", [
-    "-C",
-    sub,
-    "status",
-    "--porcelain",
-    "--ignore-submodules=all",
-  ]);
-  return result.ok && result.stdout.trim() === "";
+export function patchCreatedFiles(patch: string): string[] {
+  const lines = fs.readFileSync(patch, "utf8").split("\n");
+  const created: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith("new file mode")) continue;
+    // diff header 里 `new file mode` 与 `+++ b/<path>` 之间还隔着 index/--- 行
+    for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+      const matched = lines[j].match(/^\+\+\+ b\/(.+)$/);
+      if (matched) {
+        created.push(matched[1].trim());
+        break;
+      }
+    }
+  }
+
+  return created;
+}
+
+/**
+ * 把子模块还原到纯净基线:`reset --hard` 到它**当前的 HEAD**(patch-manager 从不 commit,
+ * 故 HEAD 恒为父仓库 pin 的那个提交),再删掉系列会新建的文件的残留。
+ */
+export function resetToBaseline(
+  plan: RepoPlan,
+): { ok: boolean; stderr?: string } {
+  const reset = runCommand("git", ["-C", plan.sub, "reset", "--hard", "HEAD"]);
+  if (!reset.ok) {
+    return { ok: false, stderr: reset.stderr };
+  }
+
+  for (const patch of plan.patches) {
+    for (const relative of patchCreatedFiles(patch)) {
+      const target = path.join(plan.sub, relative);
+      // 防越界:patch 里的路径必须落在子模块内
+      if (!path.resolve(target).startsWith(path.resolve(plan.sub) + path.sep)) {
+        return { ok: false, stderr: `patch 越界的新建路径: ${relative}` };
+      }
+      fs.rmSync(target, { force: true });
+    }
+  }
+
+  return { ok: true };
 }
 
 export function gitApply(
@@ -158,7 +217,6 @@ export function gitApply(
 
 export function preflight(
   plan: RepoPlan,
-  reverse: boolean,
 ): { ok: boolean; failedPatch?: string; stderr?: string } {
   const tempRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), `kabegame-patch-${plan.dir}-`),
@@ -180,26 +238,12 @@ export function preflight(
   }
 
   try {
-    if (reverse) {
-      for (const patch of plan.patches) {
-        const result = gitApply(worktree, patch);
-        if (!result.ok) {
-          return { ok: false, failedPatch: patch, stderr: result.stderr };
-        }
-      }
-
-      for (const patch of [...plan.patches].reverse()) {
-        const result = gitApply(worktree, patch, { reverse: true });
-        if (!result.ok) {
-          return { ok: false, failedPatch: patch, stderr: result.stderr };
-        }
-      }
-    } else {
-      for (const patch of plan.patches) {
-        const result = gitApply(worktree, patch);
-        if (!result.ok) {
-          return { ok: false, failedPatch: patch, stderr: result.stderr };
-        }
+    // 一次性 worktree 从 HEAD 建出,本就是纯净基线,直接链式套用即可。
+    // 移除方向无需预检——它只是 reset,不可能失败在 patch 上。
+    for (const patch of plan.patches) {
+      const result = gitApply(worktree, patch);
+      if (!result.ok) {
+        return { ok: false, failedPatch: patch, stderr: result.stderr };
       }
     }
 
@@ -215,96 +259,6 @@ export function preflight(
     ]);
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
-}
-
-/**
- * 链式应用一组 patch 到真实工作区:逐个 `git apply`,后一个看到前一个的结果。
- * 任一失败即 best-effort 完整回滚(逆序撤回已应用的),回滚本身也可能失败,
- * 此时 rollbackOk 为 false,交由调用方提示手动检查。
- */
-export function chainApply(
-  sub: string,
-  patches: string[],
-  reverse: boolean,
-): { ok: boolean; failedPatch?: string; stderr?: string; rollbackOk: boolean } {
-  const applied: string[] = [];
-
-  for (const patch of patches) {
-    const result = gitApply(sub, patch, { reverse });
-    if (result.ok) {
-      applied.push(patch);
-      continue;
-    }
-
-    let rollbackOk = true;
-    for (const done of [...applied].reverse()) {
-      if (!gitApply(sub, done, { reverse: !reverse }).ok) {
-        rollbackOk = false;
-      }
-    }
-
-    return { ok: false, failedPatch: patch, stderr: result.stderr, rollbackOk };
-  }
-
-  return { ok: true, rollbackOk: true };
-}
-
-/** 解析 patch 文件名的前导编号(如 0009-foo.patch → 9) */
-export function patchNumber(patch: string): number {
-  const m = path.basename(patch).match(/^(\d+)-/);
-  if (!m) {
-    throw new Error(`patch 文件名缺少数字编号前缀: ${path.basename(patch)}`);
-  }
-  return parseInt(m[1], 10);
-}
-
-/**
- * `--from N`:系列在末尾追加了新 patch(编号 ≥ N)后,把子模块从"旧前缀已应用"
- * 重同步到"完整系列已应用"。分两步、各自复用 processRepo 的既有门控:
- *   1. 回滚前缀(编号 < N,逆序 reverse)——含脏检查:纯净树(全新 checkout、
- *      从未应用过)自动跳过回滚,直接进入第 2 步;
- *   2. 正向套用完整系列——含干净检查:第 1 步之后树应回到纯净基线,否则报错。
- * 前提:追加式原则保证磁盘上的前缀文件与已应用内容逐字节一致,回滚才可行。
- */
-export function processRepoFrom(
-  plan: RepoPlan,
-  from: number,
-  check: boolean,
-): void {
-  const prefix = plan.patches.filter((patch) => patchNumber(patch) < from);
-  if (prefix.length === plan.patches.length) {
-    throw new Error(
-      `${plan.dir}: --from ${from} 之后没有更新的 patch,无需重同步`,
-    );
-  }
-
-  // 幂等保护:最新 patch 若已可反向 dry-run(即已应用),说明树已处于完整系列
-  // 状态,重跑 --from 会先把前缀回滚出一个"只剩新 patch"的坏状态,这里直接跳过。
-  const newest = plan.patches[plan.patches.length - 1];
-  if (
-    isRepo(plan.sub) &&
-    gitApply(plan.sub, newest, { reverse: true, check: true }).ok
-  ) {
-    console.log(
-      chalk.gray(
-        `${plan.dir}: 最新 patch 已应用,树已是完整系列状态,跳过 --from`,
-      ),
-    );
-    return;
-  }
-
-  processRepo(
-    { ...plan, patches: prefix },
-    { reverse: true, check },
-  );
-  // 正向套用前显式断言纯净:processRepo 的 forward 门控对脏树是"静默跳过"
-  // 语义,放在 --from 里会把"回滚成功但树仍脏"的异常状态误报为成功。
-  if (!check && !isClean(plan.sub)) {
-    throw new Error(
-      `${plan.dir}: 回滚前缀(--from ${from})后工作区仍非纯净,拒绝正向套用;请手动检查本地改动`,
-    );
-  }
-  processRepo(plan, { reverse: false, check });
 }
 
 function patchFailure(
@@ -326,35 +280,22 @@ export function processRepo(
     return;
   }
 
+  if (MANUAL_REPOS.has(plan.dir)) {
+    console.log(
+      chalk.gray(`${plan.dir}: 由其构建脚本自行应用,patch-manager 跳过`),
+    );
+    return;
+  }
+
   if (!isRepo(plan.sub)) {
     throw new Error(
       `${plan.dir}: 子模块未初始化，请运行 git submodule update --init third/${plan.dir}`,
     );
   }
 
-  const ordered = options.reverse
-    ? [...plan.patches].reverse()
-    : [...plan.patches];
-
-  // 幂等门控,以工作区纯净度为准(apply/reverse/--check 一致):forward 只在纯净树上进行
-  //(脏树视为已应用/有本地改动而跳过);reverse 只在脏树上进行(纯净树无可回滚而跳过)。
-  // 复用型胖构建树(如 third/rusty_v8 就地搬入的完整构建树)常驻脏态,forward 与 --check 据此
-  // 自动跳过——其嵌套子模块也不在一次性 worktree 里、无法预检,由其构建脚本自行幂等应用。
-  const clean = isClean(plan.sub);
-  if (!options.reverse && !clean) {
-    console.log(
-      chalk.gray(`${plan.dir}: 工作区非纯净,跳过(视为已应用或有本地改动)`),
-    );
-    return;
-  }
-  if (options.reverse && clean) {
-    console.log(chalk.gray(`${plan.dir}: 工作区纯净,无需回滚,跳过`));
-    return;
-  }
-
   // --check:在一次性 worktree 里链式模拟,不动真实工作区
   if (options.check) {
-    const checked = preflight(plan, options.reverse);
+    const checked = preflight(plan);
     if (!checked.ok) {
       throw patchFailure(plan, checked.failedPatch, checked.stderr);
     }
@@ -362,61 +303,47 @@ export function processRepo(
     return;
   }
 
-  // 链式应用到真实工作区,任一失败即 best-effort 完整回滚
-  const result = chainApply(plan.sub, ordered, options.reverse);
-  if (!result.ok) {
-    const rollbackNote = result.rollbackOk
-      ? "\n已完整回滚"
-      : "\n回滚未完全成功,请手动检查工作区";
-    throw patchFailure(
-      plan,
-      result.failedPatch,
-      `${result.stderr ?? ""}${rollbackNote}`,
-    );
+  // 两个方向都从 reset 开始——移除到此为止,套用再展开整个系列。
+  const reset = resetToBaseline(plan);
+  if (!reset.ok) {
+    throw new Error(`${plan.dir}: reset 到纯净基线失败:\n${reset.stderr ?? ""}`);
   }
 
-  const action = options.reverse ? "reversed" : "applied";
-  console.log(chalk.green(`${plan.dir}: ${ordered.length} patches ${action}`));
+  if (options.reverse) {
+    console.log(chalk.green(`${plan.dir}: reset 到纯净基线`));
+    return;
+  }
+
+  for (const patch of plan.patches) {
+    const result = gitApply(plan.sub, patch);
+    if (!result.ok) {
+      // 不留半套状态:失败即退回纯净基线,重跑本命令即可再试。
+      resetToBaseline(plan);
+      throw patchFailure(plan, patch, `${result.stderr}\n已 reset 回纯净基线`);
+    }
+  }
+
+  console.log(
+    chalk.green(`${plan.dir}: ${plan.patches.length} patches applied`),
+  );
 }
 
 interface CliOptions {
   reverse: boolean;
   check: boolean;
   all: boolean;
-  from?: string;
 }
 
 export function main(argv = process.argv): void {
   const program = new Command();
   program
     .name("patch")
-    .description("原子应用或移除 third/ 子模块的 patch series")
+    .description("套用或移除 third/ 子模块的 patch series（两个方向都先 reset 回纯净基线）")
     .argument("[third-dir]", "third/ 下的子目录名，例如 cef")
-    .option("-r, --reverse", "逆序移除 patch", false)
+    .option("-r, --reverse", "移除 patch（reset 回纯净基线）", false)
     .option("--check", "仅在一次性 worktree 中预检", false)
     .option("--all", "处理 third-patches/ 下的全部仓库", false)
-    .option(
-      "--from <n>",
-      "系列末尾新增编号 ≥ n 的 patch 后重同步:先回滚已应用前缀(编号 < n),再全量正向套用",
-    )
     .action((thirdDir: string | undefined, options: CliOptions) => {
-      let from: number | undefined;
-      if (options.from !== undefined) {
-        from = Number(options.from);
-        if (!Number.isInteger(from) || from < 1) {
-          console.error(chalk.red(`✗ --from 需要 ≥1 的整数编号: ${options.from}`));
-          process.exitCode = 1;
-          return;
-        }
-        if (options.reverse || options.all || !thirdDir) {
-          console.error(
-            chalk.red("✗ --from 需要显式指定单个 third 目录,且不能与 --reverse/--all 同用"),
-          );
-          process.exitCode = 1;
-          return;
-        }
-      }
-
       let plans: RepoPlan[];
       try {
         plans = discoverRepos(thirdDir, options.all);
@@ -433,11 +360,7 @@ export function main(argv = process.argv): void {
       const failures: string[] = [];
       for (const plan of plans) {
         try {
-          if (from !== undefined) {
-            processRepoFrom(plan, from, options.check);
-          } else {
-            processRepo(plan, options);
-          }
+          processRepo(plan, options);
         } catch (error) {
           const message = (error as Error).message;
           failures.push(message);
@@ -461,6 +384,7 @@ export function main(argv = process.argv): void {
   program.parse(argv);
 }
 
-if (import.meta.main) {
+// import.meta.main 是 Deno 运行时字段，项目的 TS lib 里没有它的声明
+if ((import.meta as { main?: boolean }).main) {
   main();
 }
