@@ -13,13 +13,51 @@ const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
  *
  * dev 下 CDP 端口是随机的（`KABEGAME_CEF_DEBUG_PORT=random`），而 vite 的 1420 是
  * 死端口，所以让 app 把号寄存在这里当集合点：`.claude/skills/kabegame-chromium/`
- * 只探 1420 就能拿到端口。**进程内内存态**——vite 重启即清空，由 app 下次启动
- * 重新上报（app 的重启频率远高于 vite）。
+ * 只探 1420 就能拿到端口。
+ *
+ * 登记**同时写盘**（`.kabegame/debug/cdp-port.json`），vite 启动时读回：
+ * 改 `vite.config.ts` 会让 vite restart，而 restart 重建 plugin 实例、清空闭包里的
+ * 内存态；app 侧只在启动时上报一次且失败即放弃，于是 app 还活着却永远查不到端口。
+ * 实测：POST 登记 → touch vite.config.ts → GET 变 404。落盘是这条链路唯一的持久环节。
+ *
+ * 文件可能是陈旧的（app 退出不会撤销登记），所以读回来的号照旧要探活——skill 与
+ * 本文件的 GET 分支都不假设它一定还活着。
  */
 interface CdpRegistration {
   port: number;
   pid: number | null;
   registeredAt: string;
+}
+
+const CDP_PORT_FILE = "cdp-port.json";
+
+async function readCdpFile(debugDir: string): Promise<CdpRegistration | null> {
+  try {
+    const raw = await fs.readFile(path.join(debugDir, CDP_PORT_FILE), "utf8");
+    const parsed = JSON.parse(raw) as Partial<CdpRegistration>;
+    const port = Number(parsed.port);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
+    return {
+      port,
+      pid: Number.isInteger(Number(parsed.pid)) ? Number(parsed.pid) : null,
+      registeredAt: typeof parsed.registeredAt === "string" ? parsed.registeredAt : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeCdpFile(debugDir: string, registration: CdpRegistration): Promise<void> {
+  try {
+    await fs.mkdir(debugDir, { recursive: true });
+    await fs.writeFile(
+      path.join(debugDir, CDP_PORT_FILE),
+      `${JSON.stringify(registration, null, 2)}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    console.warn(`[kabegame-cdp] 无法写入 ${CDP_PORT_FILE}: ${String(error)}`);
+  }
 }
 
 export interface KabegameDebugServerOptions {
@@ -74,12 +112,15 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
               }
               const pid = Number.isInteger(Number(parsed.pid)) ? Number(parsed.pid) : null;
               cdp = { port, pid, registeredAt: new Date().toISOString() };
+              await writeCdpFile(debugDir, cdp);
               console.log(`[kabegame-cdp] registered CDP port ${port}${pid ? ` (pid ${pid})` : ""}`);
               sendJson(res, 200, { ok: true, ...cdp });
               return;
             }
 
             if (req.method === "GET" && (url.pathname === CDP_PREFIX || url.pathname === `${CDP_PREFIX}/`)) {
+              // vite restart 会清空内存态，落盘的登记是唯一能跨重启活下来的副本
+              cdp ??= await readCdpFile(debugDir);
               if (!cdp) {
                 sendJson(res, 404, { ok: false, error: "no CDP port registered" });
                 return;

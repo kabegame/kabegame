@@ -46,8 +46,36 @@ registered_port() {
     sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]\{1,\}\).*/\1/p'
 }
 
+# 只看 HTTP 状态码不够：vite 的 SPA fallback 对**任意**路径都回 200 text/html，
+# 探到 1420 会误判成 CDP。必须认响应里的 webSocketDebuggerUrl——cdp.mjs 连的也是它。
 cdp_up() {
-  curl -sf -o /dev/null -m 2 "http://127.0.0.1:${1}/json/version" 2>/dev/null
+  curl -sf -m 2 "http://127.0.0.1:${1}/json/version" 2>/dev/null |
+    grep -q 'webSocketDebuggerUrl'
+}
+
+# 兜底：绕开 vite 中转，直接在本机找 kabegame 进程自己监听的 CDP 端口。
+#
+# vite 中转有两个断点：登记是 vite 进程内的内存态（改 vite.config.ts 或它 import
+# 的任何本地文件都会让 vite restart 并清空它，实测如此），而 app 侧只在启动时上报
+# 一次、失败即放弃。落盘已经补上了 restart 那一环，这里再补一条完全不依赖 vite 的
+# 路径：app 活着就一定能找到，vite 没跑也能用。
+#
+# lsof 缺席（如 Windows 的 git bash）时静默跳过，行为退回纯 vite 发现。
+discover_port() {
+  command -v lsof >/dev/null 2>&1 || return 1
+  local ports p
+  # `-a` 不能省：lsof 的多个选择项默认取**并集**，没有它 `-c kabegame` 形同虚设，
+  # 会把本机所有监听端口都列出来。-c 按命令名前缀匹配，kabegame 与
+  # kabegame-cef-helper 都会中；helper 不听 CDP，探活自然把它筛掉。
+  ports="$(lsof -nP -iTCP -sTCP:LISTEN -a -c kabegame -Fn 2>/dev/null |
+    sed -n 's/^n.*:\([0-9]\{1,\}\)$/\1/p' | sort -u)"
+  for p in $ports; do
+    if cdp_up "$p"; then
+      echo "$p"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # 解析出可用的 CDP 端口；失败时把"下一步该干嘛"写到 stderr 并返回非 0。
@@ -59,8 +87,14 @@ resolve_port() {
   fi
 
   if ! vite_up; then
+    # vite 没跑不代表 app 没跑（比如只重启了 vite，或直接跑了 dev 编好的二进制）
+    local scanned
+    if scanned="$(discover_port)"; then
+      echo "$scanned"
+      return 0
+    fi
     cat >&2 <<EOF
-[chromium] 没检测到 dev server（${VITE_BASE} 无应答）。
+[chromium] 没检测到 dev server（${VITE_BASE} 无应答），本机也没扫到在监听的 CDP 端口。
 [chromium] 请在你自己的终端里手动启动（这样编译进度你能直接看到）：
 [chromium]
 [chromium]     ${DEV_CMD}
@@ -70,28 +104,32 @@ EOF
     return 1
   fi
 
-  local port
+  local port scanned
   port="$(registered_port)"
+
+  # 登记缺失或已陈旧（app 退出/换号都不会撤销登记）→ 回落到本机扫描
+  if [ -z "$port" ] || ! cdp_up "$port"; then
+    if scanned="$(discover_port)"; then
+      echo "$scanned"
+      return 0
+    fi
+  fi
+
   if [ -z "$port" ]; then
     cat >&2 <<EOF
-[chromium] dev server 活着，但没有 app 上报 CDP 端口。常见原因：
+[chromium] dev server 活着，但查不到 CDP 端口（vite 上没登记，本机也没扫到）。常见原因：
 [chromium]   1. app 还在编译 / 还没起到 setup（等一会儿再试）；
 [chromium]   2. 这个 dev 实例是本次改动之前起的（没有上报逻辑）——重启 dev 即可；
-[chromium]   3. 显式设了 KABEGAME_CEF_DEBUG_PORT=0 把调试端口关掉了；
-[chromium]   4. vite 中途重启过，注册记录（内存态）被清空——重启 app 侧即可。
+[chromium]   3. 显式设了 KABEGAME_CEF_DEBUG_PORT=0 把调试端口关掉了。
 EOF
     return 1
   fi
 
-  if ! cdp_up "$port"; then
-    cat >&2 <<EOF
-[chromium] vite 上登记的 CDP 端口是 ${port}，但它现在不应答。
-[chromium] 多半是 app 已退出/正在热重启（登记是内存态，不会自动撤销）。等它起来再试。
+  cat >&2 <<EOF
+[chromium] vite 上登记的 CDP 端口是 ${port}，但它现在不应答，本机也没扫到别的。
+[chromium] 多半是 app 已退出/正在热重启（登记不会自动撤销）。等它起来再试。
 EOF
-    return 1
-  fi
-
-  echo "$port"
+  return 1
 }
 
 cmd_status() {
@@ -100,17 +138,26 @@ cmd_status() {
     echo "  状态          : 活着 ✅"
   else
     echo "  状态          : 无应答 ❌（需手动启动: ${DEV_CMD}）"
-    return 0
   fi
 
-  local port
+  local port source scanned
   port="$(registered_port)"
+  source="由 app 上报给 vite"
+  if [ -z "$port" ] || ! cdp_up "$port"; then
+    if scanned="$(discover_port)"; then
+      [ -n "$port" ] &&
+        echo "CDP 登记        : ${port}（已陈旧，不应答；回落到本机扫描）"
+      port="$scanned"
+      source="本机扫描 kabegame 进程的监听端口"
+    fi
+  fi
+
   if [ -z "$port" ]; then
-    echo "CDP             : 未登记 ❌（app 未起 / 还在编译 / 端口被显式关闭）"
+    echo "CDP             : 未发现 ❌（app 未起 / 还在编译 / 端口被显式关闭）"
     return 0
   fi
 
-  echo "CDP 端口        : ${port}（由 app 上报给 vite）"
+  echo "CDP 端口        : ${port}（${source}）"
   if cdp_up "$port"; then
     echo "  状态          : 就绪 ✅"
     curl -sf -m 2 "http://127.0.0.1:${port}/json/version" | sed 's/^/                  /'

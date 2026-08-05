@@ -18,9 +18,16 @@ deno task dev -c kabegame          用户自己跑（能看到编译进度）
         │
         ├── vite            :1420           ← skill 只认这个死端口
         └── app (CEF)       :<random>       ← 起来后 POST /__kabegame_cdp/register
-                                              把号寄存到 vite
+                                              把号寄存到 vite（内存 + 落盘）
 skill ── GET :1420/__kabegame_cdp → 拿到 <random> → connectOverCDP
+     └── 要不到 / 号不应答 → lsof 扫 kabegame 进程的监听端口 → 探 /json/version
 ```
+
+**发现有两条独立的路**，因为 vite 中转会断：登记原本只是 vite 进程内的内存态，
+而改 `vite.config.ts`（或它 import 的任何本地文件，比如 `scripts/vite-debug-server.ts`）
+都会让 vite restart 并清空它——app 还活着却永远查不到号。现在内存态**同时落盘**到
+`.kabegame/debug/cdp-port.json`，vite 重启后读回；再加一条完全不依赖 vite 的
+`lsof` 扫描兜底。三条路任意一条通就能用。
 
 **本 skill 不管 dev 的生命周期**。以前它代跑 `deno task dev` 并等就绪，实测很糟：
 Rust 冷编译好几分钟、agent 侧看不到任何进度、还会跟用户已有的实例抢 1420 端口。
@@ -61,9 +68,13 @@ $S text '.page-header .title' # 取元素文本
 
 | status 输出 | 含义 | 下一步 |
 |---|---|---|
-| `无应答 ❌` | dev 没跑 | 请用户跑 `deno task dev -c kabegame` |
-| `CDP: 未登记 ❌` | dev 在跑但 app 还没上报 | 等编译/启动完；或该实例早于本功能，需重启 dev |
+| vite `无应答 ❌` + `CDP: 未发现 ❌` | dev 没跑 | 请用户跑 `deno task dev -c kabegame` |
+| vite 活着 + `CDP: 未发现 ❌` | app 还没起/还在编译 | 等编译完；或该实例早于本功能，需重启 dev |
 | `就绪 ✅` | 可用 | 直接 shot/eval/click |
+
+vite 无应答但 CDP `就绪 ✅` 是**正常且可用**的：只重启了 vite、或直接跑了编好的
+dev 二进制时，扫描兜底照样能找到 app。`CDP 登记 : <旧号>（已陈旧…）` 这行也不是
+错误，只是说明 vite 上那条记录过期了，已自动回落到扫描。
 
 ### 选窗口
 
@@ -102,14 +113,24 @@ $S shot /tmp/surf.png --url surf
    `/json/version` 直到真的应答，**然后**才 POST 给 vite。所以"vite 上有端口"
    等价于"CDP 已就绪"。
 4. `scripts/vite-debug-server.ts` — `/__kabegame_cdp/register`（POST 登记）与
-   `/__kabegame_cdp`（GET 查询）。登记是**进程内内存态**，vite 重启即清空。
+   `/__kabegame_cdp`（GET 查询）。登记是进程内内存态**并落盘**到
+   `.kabegame/debug/cdp-port.json`（gitignored），GET 时内存为空就读回文件——vite
+   restart 会重建 plugin 实例、清空闭包变量，落盘是这条链路唯一跨得过重启的环节。
+5. `driver.sh` 的 `discover_port()` — 上面整条链都失灵时的兜底：
+   `lsof -a -c kabegame` 列出 app 自己的监听端口，逐个探 `/json/version`。
 
 ## Gotchas
 
-- **登记是内存态，且没有撤销**。app 退出后 vite 上仍留着旧端口，所以驱动在用之前
-  会再探一次 `/json/version`；探不通就报"app 已退出或正在重启"，别以为是发现机制坏了。
-- **vite 重启会清空登记**（改 vite config、`__REBOOT__` 开关等）。此时 app 还活着但
-  vite 上没号 → 重启 app 侧（或整个 dev）重新上报。
+- **登记没有撤销机制**。app 退出后 vite 与磁盘上都仍留着旧端口，所以驱动在用之前
+  会再探一次 `/json/version`；探不通就回落到扫描，扫不到才报"app 已退出或正在重启"。
+- **vite 重启曾经会丢号**（改 `vite.config.ts` 或它 import 的本地文件都会触发
+  restart）。落盘 + 扫描兜底之后不再需要重启 app —— 但如果你在排查历史现象，这就是
+  "app 明明开着却查不到端口"的根因。注意 `uno.config.ts` **不**触发 restart，它不在
+  vite 的 config 依赖里。
+- **`cdp_up` 必须校验 `webSocketDebuggerUrl`，不能只看 HTTP 状态码**：vite 的 SPA
+  fallback 对任意路径都回 200 text/html，扫到 1420 会被它骗过去。
+- **`lsof` 的 `-a` 不能省**：多个选择项默认取**并集**，漏了 `-a` 的
+  `lsof -iTCP -sTCP:LISTEN -c kabegame` 会列出本机所有监听端口。
 - **随机端口有极小的 TOCTOU 窗口**：探号的 socket 释放后、CEF 真正 bind 前，别的进程
   可能抢先占上。表现为 CDP 起不来，重启 dev 换个号即可。
 - **`click` 默认带 `force: true`**。页面上的亀ちゃん吉祥物（`.kamechan-mascot`）
@@ -139,8 +160,9 @@ $S shot /tmp/surf.png --url surf
 | 症状 | 处理 |
 |---|---|
 | `没检测到 dev server` | 让用户跑 `deno task dev -c kabegame`，别代跑 |
-| `没有 app 上报 CDP 端口` | app 还在编译；或 dev 实例早于本功能（重启）；或 `=0` 关掉了 |
-| `登记的端口不应答` | app 已退出/热重启中，等它起来 |
+| `查不到 CDP 端口（vite 上没登记，本机也没扫到）` | app 还在编译；或 dev 实例早于本功能（重启）；或 `=0` 关掉了 |
+| `登记的端口不应答，本机也没扫到别的` | app 已退出/热重启中，等它起来 |
+| 扫描兜底不生效（Windows） | git bash 里通常没有 `lsof`，此时只剩 vite 中转（内存 + 落盘）这一条路 |
 | `没有 URL 含 ...` 的 page | 窗口还没渲染完，或主窗口关了。`targets` 看实际 URL |
 | 截图全白 | 页面还在加载；`eval 'document.readyState'` 确认，或 sleep 后重截 |
 | `无法加载 playwright-core` | 仓库根跑 `bun install` 恢复依赖 |
