@@ -8,8 +8,7 @@ dist-web
 .kabegame
 ignore
 .git/worktrees
-third/FFmpeg-build
-third/FFmpeg-build-*
-third/x264-build
-third/x264-build-*
+third/chromium
+# 只排除 bin/{platform}/{arch}/ 第三方构建树，保留平台根部的运行时暂存文件
+bin/*/*/
 test

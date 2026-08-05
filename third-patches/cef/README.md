@@ -14,7 +14,7 @@
 
   Scope note: `OnDrop` rides on `WebContentsViewDelegate`, which is not created for windowless (OSR) browsers — see the comment in `CefBrowserPlatformDelegateAlloy::AttachHelpers`. Kabegame uses windowed CEF Views browsers, so this is not a limitation in practice, but an OSR embedder would still get `OnDragEnter`/`OnDragOver`/`OnDragLeave` and no `OnDrop`.
 
-  The generated C API, `libcef_dll` cpptoc/ctocpp glue and API hashes are **not** part of this patch — they are produced by `tools/version_manager.py` during `cef_create_projects.sh`, which `scripts/build-chromium.sh` runs.
+  The generated C API, `libcef_dll` cpptoc/ctocpp glue and API hashes are **not** part of this patch — they are produced by `tools/version_manager.py` during `cef_create_projects.sh`, which `scripts/build-chromium.ts` runs.
 
 Apply this series manually before running CEF's `patcher.py`:
 

@@ -95,8 +95,8 @@ deno task check -c kabegame --skip cargo
 - **`--skip` 只接受一个值**，写两次不报错而是**后者覆盖前者**：
   `--skip vue --skip cargo` 实测跑了 vue-tsc、跳了 cargo。别指望它俩都跳。
 - **`--mode android` 在多数机器上直接失败**，实测报
-  `error: Uncaught (in promise) Error: rusty_v8 Android 自建产物缺失: bin/android/`。
-  它需要 `bin/android/` 的 rusty_v8 自建产物（只能在 x86_64 Linux 上产出）+
+  `error: Uncaught (in promise) Error: rusty_v8 Android 自建产物缺失: bin/android/arm64/rusty_v8-build/`。
+  它需要 `bin/android/arm64/rusty_v8-build/` 的 rusty_v8 自建产物（只能在 x86_64 Linux 上产出）+
   `deno task build:ffmpeg --target android` + NDK。默认别跑它，除非改动确实只影响
   Android 且环境已备齐。见 `cocs/crawler/V8_RUNTIME.md`。
 - 日志带 ANSI 颜色码，driver 内部已 `sed` 剥除后再 grep；如果自己写脚本解析该日志，
@@ -108,5 +108,5 @@ deno task check -c kabegame --skip cargo
 |---|---|
 | `deno task check` 报缺 `-c` | driver 会自动补 `-c kabegame`；裸命令必须显式给 |
 | cargo 报 `os error 32` / `Text file busy` | 有 kabegame 实例在跑，退出后重试 |
-| `rusty_v8 Android 自建产物缺失: bin/android/` | `--mode android` 前置没备齐，见上面 Gotchas；桌面改动直接去掉 `--mode android` |
+| `rusty_v8 Android 自建产物缺失: bin/android/arm64/rusty_v8-build/` | `--mode android` 前置没备齐，见上面 Gotchas；桌面改动直接去掉 `--mode android` |
 | `failed to auto-clean cache data ... os error 13` | 噪音，忽略 |

@@ -12,7 +12,7 @@ set -euo pipefail
 #      压缩到只覆盖二进制那几秒。仅覆盖同名文件，不删除服务器上已有的其它插件。
 #   2. 停服务 → 上传二进制 → 启动服务。
 #
-# 前置：bash scripts/build-web.sh（产出 .kabegame/release/{kabegame,plugins/}）
+# 前置：deno task build:web（产出 .kabegame/release/{kabegame,plugins/}）
 
 REMOTE_HOST="cmtheit.com"
 REMOTE_USER="cmtheit"
@@ -28,7 +28,7 @@ LOCAL_PLUGINS="${RELEASE_DIR}/plugins"
 cd "$(dirname "$0")/.."
 
 if [[ ! -f "${LOCAL_BIN}" ]]; then
-  echo "Error: ${LOCAL_BIN} not found. Build it first: bash scripts/build-web.sh" >&2
+  echo "Error: ${LOCAL_BIN} not found. Build it first: deno task build:web" >&2
   exit 1
 fi
 

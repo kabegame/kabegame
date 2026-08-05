@@ -11,17 +11,25 @@ Android 的 ABI 走另一条路（`-- --target aarch64` 透传给 tauri CLI）�
 
 ## 单一来源
 
-架构解析集中在 [scripts/utils.ts](../../scripts/utils.ts)，模块加载期就定死，
-供所有插件与子进程消费：
+架构解析与路径命名集中在 [scripts/paths.ts](../../scripts/paths.ts)（模块加载期就定死），
+由 [scripts/utils.ts](../../scripts/utils.ts) re-export 后供所有插件与子进程消费。
+paths.ts **只依赖 Node 内建模块**，因此没有 node_modules 的构建阶段（如 docker 的
+ffmpeg-builder）也能直接 import：
 
 | 导出 | 含义 |
 |---|---|
 | `TARGET_ARCH` | `x86_64` \| `arm64` \| `undefined`（未传 `--target`） |
 | `TARGET_TRIPLE` | `x86_64-apple-darwin` \| `aarch64-apple-darwin` \| `undefined` |
 | `HOST_ARCH` / `IS_CROSS_COMPILE` | 宿主架构 / 目标是否 ≠ 宿主 |
+| `BUILD_PLATFORM` | 目录命名 token：`macos` \| `linux` \| `windows` |
 | `ARTIFACT_DIR` | 本次构建的产物目录 = `TARGET_DIR[/<triple>]` |
-| `FFMPEG_INSTALL_DIR` | 按架构解析的 FFmpeg 安装前缀 |
-| `CEF_DIR_SUFFIX` | CEF runtime 目录后缀（`""` \| `"-x64"`） |
+| `repoBuildDir(repo, opts?)` | 第三方产物目录公式 `bin/{platform}/{arch}/{repo}-build` |
+| `cefExportDir(variant, arch?)` | CEF distrib `bin/{platform}/{arch}/cef-build-{dev,prod}` |
+| `CHROMIUM_DIR` | chromium checkout 工作区 `third/chromium` |
+| `FFMPEG_INSTALL_DIR`（utils.ts） | `repoBuildDir("FFmpeg") + /install` |
+
+架构不再靠目录后缀区分（旧的 `CEF_DIR_SUFFIX` / `-x64` 与 `KB_BUILD_SUFFIX` 均已删除），
+而是直接作为路径的一级。
 
 解析只看 argv 中第一个裸 `--` **之前**的 `--target`；`--` 之后的参数是原样透传给
 tauri/cargo 的，不消费也不重复注入。解析结果回写 `KB_TARGET_ARCH` /
@@ -32,16 +40,16 @@ tauri/cargo 的，不消费也不重复注入。解析结果回写 `KB_TARGET_AR
 
 ## 目录隔离约定
 
-**按架构决定，不随宿主变化** —— 同一条命令在任何 Mac 上落点一致。
-`arm64` 沿用既有的无后缀目录（历史产物继续有效，不必重编）；`x86_64` 全部独立：
+**按架构决定，不随宿主变化** —— 同一条命令在任何 Mac 上落点一致。两个架构的第三方产物
+是完全对称的两棵树，没有哪个是"默认"：
 
 | | arm64（及不传 `--target`） | x86_64 |
 |---|---|---|
 | cargo/tauri 产物 | `target/[aarch64-apple-darwin/]` | `target/x86_64-apple-darwin/` |
-| FFmpeg | `third/FFmpeg-build/install` | `third/FFmpeg-build/darwin/x86_64/install` |
-| x264 | `third/x264-build/install` | `third/x264-build/darwin/x86_64/install` |
-| CEF runtime | `<root>/cef-{dev,prod}` | `<root>/cef-{dev,prod}-x64` |
-| CEF GN 输出 | `out/Release_GN_arm64` | `out/Release_GN_x64` |
+| FFmpeg | `bin/macos/arm64/FFmpeg-build/install` | `bin/macos/x86_64/FFmpeg-build/install` |
+| x264 | `bin/macos/arm64/x264-build/install` | `bin/macos/x86_64/x264-build/install` |
+| CEF runtime | `bin/macos/arm64/cef-build-{dev,prod}` | `bin/macos/x86_64/cef-build-{dev,prod}` |
+| CEF GN 输出 | `third/chromium/…/out/Release_GN_arm64` | `third/chromium/…/out/Release_GN_x64` |
 | dmg 资产名 | `..._aarch64.dmg` | `..._x64.dmg` |
 
 > **注意**：`--target` 一旦显式传入，cargo/tauri 就会多套一层 triple 目录 ——
@@ -49,8 +57,10 @@ tauri/cargo 的，不消费也不重复注入。解析结果回写 `KB_TARGET_AR
 > 的路径必须用 `ARTIFACT_DIR` 而非 `TARGET_DIR`，否则会静默打包上一次 native
 > 构建的残留，产出架构混合的 `.app`（最危险的失败模式：不报错，装上才崩）。
 
-CEF 的 Chromium checkout（`CEFBUILD`）两架构**共用**，只是 `out/` 子目录不同；
-想彻底分开可用 `CEFBUILD` 环境变量各指一处，代价是多一份数十 G 的源码树。
+CEF 的 Chromium checkout（`CHROMIUM_DIR` = `third/chromium`，~60GB）两架构**共用**，
+只是 `out/` 子目录不同——所以它不带 platform/arch 维度，也不是 submodule（体积过大，
+gitignore、由 `deno task build:chromium` 复现）。想彻底分开可用 `CEFBUILD` 环境变量
+各指一处，代价是多一份数十 G 的源码树。
 
 ## 出 Intel 包的完整顺序
 
@@ -64,7 +74,7 @@ brew install nasm
 deno task build:ffmpeg --target x86_64
 
 # 2. CEF/Chromium（数小时～十几小时，唯一的大头）
-scripts/build-chromium.sh prod --target x86_64
+deno task build:chromium prod --target x86_64
 
 # 3. CLI 与主应用
 deno task b -c kabegame-cli --release --target x86_64
@@ -96,7 +106,7 @@ ld64.lld: error: library not found for -lSystem      # 用了 NDK 的 clang
 ld: library 'System' not found                        # 用了 Xcode clang 但 ld 仍来自 NDK
 ```
 
-因此 `build-ffmpeg.sh` 的 macOS 分支一律用 **`cc`**（`/usr/bin/cc`）：它是
+因此 `build-ffmpeg.ts` 的 macOS 分支一律用 **`cc`**（`/usr/bin/cc`）：它是
 xcode-select 的 shim，自动注入 macOS SDK 与正确的 ld，`-arch` 即可跨架构，
 无需 `-isysroot`/`-B`。NDK 不提供 `cc`，所以这条路是安全的。
 **不要**改成裸 `clang` 或 `xcrun --find clang` 的绝对路径。
@@ -106,7 +116,7 @@ FFmpeg 侧另需 `--host-cc="cc"`（不带 `-arch`）：构建期辅助工具必
 ### 3. `--target arm64` 也会换产物目录
 
 它不是"什么都不做"。在 Apple Silicon 上它仍是原生编译（不加 `--enable-cross-compile`、
-FFmpeg/CEF 沿用无后缀目录），但 cargo 产物落 `target/aarch64-apple-darwin/`，
+FFmpeg/CEF 用 arm64 那棵产物树），但 cargo 产物落 `target/aarch64-apple-darwin/`，
 等于一次全量重编。想复用既有增量就**别传** `--target`。
 
 ### 4. .kgpg 打包用宿主 CLI
@@ -129,7 +139,7 @@ mode-plugin 在 `IS_CROSS_COMPILE` 时注入 `PKG_CONFIG_ALLOW_CROSS=1` 放行�
 
 ### 6. CEF 自编：`--x64-build` 不足，还需 `CEF_ENABLE_*` + PGO profile
 
-`build-chromium.sh` 跨编时两个 automate-git 与 gn_args 之间的脱节（均已在脚本内修复）：
+`build-chromium.ts` 跨编时两个 automate-git 与 gn_args 之间的脱节（均已在脚本内修复）：
 
 - **架构未传导**：automate 的 `--x64-build` 只决定它期望读的 out 目录名，真正生成
   GN 配置的 `gn_args.py:GetAllPlatformConfigs` 只看**宿主** machine，arm64 上就只
@@ -146,9 +156,10 @@ mode-plugin 在 `IS_CROSS_COMPILE` 时注入 `PKG_CONFIG_ALLOW_CROSS=1` 放行�
 
 ## 涉及文件
 
-- [scripts/utils.ts](../../scripts/utils.ts) —— 架构解析与全部路径常量的单一来源
+- [scripts/paths.ts](../../scripts/paths.ts) —— 架构解析与路径命名公式的单一来源（零 npm 依赖）
+- [scripts/utils.ts](../../scripts/utils.ts) —— re-export paths.ts + 派生常量
 - [scripts/plugins/target-plugin.ts](../../scripts/plugins/target-plugin.ts) —— 命令/模式门控与落点日志
 - [scripts/build-system.ts](../../scripts/build-system.ts) —— `targetArgs()` 注入 cargo/tauri
 - [scripts/plugins/mode-plugin.ts](../../scripts/plugins/mode-plugin.ts) —— FFmpeg pkgconfig、CEF_PATH、bindgen `-target`
 - [scripts/plugins/os-plugin.ts](../../scripts/plugins/os-plugin.ts) / [release-plugin.ts](../../scripts/plugins/release-plugin.ts) —— helper 校验、bundle 目录、资产命名
-- [scripts/build-ffmpeg.sh](../../scripts/build-ffmpeg.sh) / [scripts/build-chromium.sh](../../scripts/build-chromium.sh)
+- [scripts/build-ffmpeg.ts](../../scripts/build-ffmpeg.ts) / [scripts/build-chromium.ts](../../scripts/build-chromium.ts)

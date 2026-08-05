@@ -62,7 +62,7 @@ fn main() {
     // (src/web_assets.rs;该目录只由 `--mode web` 的 vite 构建产出,与桌面/Android
     // 的 dist-kabegame/ 严格分开,避免互相覆盖)。include_dir 宏在稳定版不追踪资产
     // 变化——不加这条,前端产物更新后增量编译会沿用旧资产(混合构建流程里宿主重出
-    // dist 后,容器 cargo 必须感知;见 scripts/build-web.sh)。
+    // dist 后,容器 cargo 必须感知;见 scripts/build-web.ts)。
     if std::env::var_os("CARGO_FEATURE_WEB").is_some() {
         let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../dist-kabegame-web");

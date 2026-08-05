@@ -55,7 +55,7 @@ export default defineConfig(async ({ mode }) => {
     build: {
       // 桌面/Android 与 web 的产物目录必须分开：两者的平台 define（__WEB__ /
       // __MACOS__ 等）、rollup input（wallpaper/surf-navbar）、chunking 策略完全
-      // 不同，共用一个目录时后跑的构建会静默覆盖前者。build-web.sh 是「宿主出
+      // 不同，共用一个目录时后跑的构建会静默覆盖前者。build-web.ts 是「宿主出
       // 前端 → 容器编 Rust 嵌入」两段式，中间若插入一次桌面构建，web 二进制就
       // 会嵌到桌面 bundle（invoke 走 __TAURI_INTERNALS__，浏览器里全挂）。
       outDir: path.resolve(root, isWeb ? "dist-kabegame-web" : "dist-kabegame"),

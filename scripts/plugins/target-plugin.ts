@@ -14,8 +14,8 @@ import path from "path";
 /**
  * `--target x86_64|arm64`（仅 macOS）的校验与说明性日志。
  *
- * 解析本身在 utils.ts 完成（模块加载期就要定下 ARTIFACT_DIR / FFMPEG_INSTALL_DIR /
- * CEF_DIR_SUFFIX，早于任何插件运行），这里只负责"哪些命令/模式允许跨编"的门控，
+ * 解析本身在 paths.ts 完成（模块加载期就要定下 ARTIFACT_DIR 与依赖产物架构，
+ * 早于任何插件运行），这里只负责"哪些命令/模式允许跨编"的门控，
  * 以及把实际落点打出来——跨编最危险的失败模式是静默用了另一架构的依赖或残留产物。
  */
 export class TargetPlugin extends BasePlugin {
@@ -43,7 +43,9 @@ export class TargetPlugin extends BasePlugin {
 
       this.log(
         chalk.cyan(
-          `目标架构 ${TARGET_ARCH}（宿主 ${HOST_ARCH}${IS_CROSS_COMPILE ? "，跨编" : "，原生"}）` +
+          `目标架构 ${TARGET_ARCH}（宿主 ${HOST_ARCH}${
+            IS_CROSS_COMPILE ? "，跨编" : "，原生"
+          }）` +
             `\n  triple:   ${TARGET_TRIPLE}` +
             `\n  产物目录: ${path.relative(ROOT, ARTIFACT_DIR)}`,
         ),

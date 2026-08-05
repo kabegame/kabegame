@@ -1,31 +1,32 @@
 # 本地构建 kabegame web 二进制，产物输出到 .kabegame/release/kabegame
 #
-# 用法（标准入口是 scripts/build-web.sh，它先在宿主构建前端再调本文件）：
-#   bash scripts/build-web.sh                                              # 完整流程（推荐）
+# 用法（标准入口是 scripts/build-web.ts，它先在宿主构建前端再调本文件）：
+#   deno task build:web                                                    # 完整流程（推荐）
 #   docker compose -f docker/docker-compose.web-release.yml build          # 首次 / 依赖或 third 子模块变更后
 #   docker compose -f docker/docker-compose.web-release.yml run --rm build # 仅容器步骤（要求 dist-kabegame-web/ 已就绪）
 #
 # 前置（宿主）：git submodule update --init third/FFmpeg third/x264
 #
 # 分工：
-#   宿主（scripts/build-web.sh）：一切 JS 构建——vite 出 dist-kabegame-web/、爬虫插件打包。
+#   宿主（scripts/build-web.ts）：一切 JS 构建——vite 出 dist-kabegame-web/、爬虫插件打包。
 #     ⚠ 容器内严禁跑任何 JS 构建：Apple Silicon 上 linux/amd64 模拟层（Rosetta for Linux）
 #     下 V8 所有 double 的小数部分被截断为整数（0.96→0、Math.PI→3），sass/rollup 产物
 #     被静默数值污染（背景全透明、transition 全 0s 等），且不报任何错误。
 #     Rust/C/Go 工具链（rustc、esbuild 二进制、rspack 的 SWC）浮点正常，故 cargo 可留在容器。
 #   镜像构建（web-release.Dockerfile，多阶段）：官方 deno 二进制（仅跑构建编排，
-#     详见 Dockerfile 头注释）+ x264+FFmpeg 静态库（-web 后缀）——烘进镜像层，
+#     详见 Dockerfile 头注释）+ x264+FFmpeg 静态库——烘进镜像层，
 #     子模块不变时全缓存。
 #   运行（本文件 command）：只剩 Rust——`deno task b -c kabegame --mode web --release --skip vue`
 #     （--skip vue 跳过前端；KABEGAME_SKIP_PLUGIN_PACKAGE=1 跳过插件打包，两者均已在宿主完成。
 #     dist-kabegame-web/ 缺失时 build-system 会带清晰报错直接失败；kabegame build.rs 对该目录
 #     rerun-if-changed，宿主重出前端后容器增量编译必然重新嵌入）。不再构建 kabegame-cli
 #     （此前仅为容器内插件打包所需）。镜像 entrypoint（web-release-entrypoint.sh）先把
-#     FFmpeg/x264 种子 rsync 进 /src 的 third/*-build-web/install/，再执行 command。
+#     FFmpeg/x264 种子 rsync 进 /src 的 bin/linux/x86_64/*-build/install/，再执行 command。
 #
-# 编译隔离（镜像 ENV 注入，与宿主/其它 glibc 环境互不污染）：
-#   CARGO_TARGET_DIR=/src/target-web    （宿主 target-web/，跨 run 增量复用）
-#   KB_BUILD_SUFFIX=-web                （FFmpeg/x264 产物目录带 -web 后缀）
+# 编译隔离（镜像 ENV 注入）：
+#   CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu 让 Cargo 产物落进
+#   target/x86_64-unknown-linux-gnu/，靠内建 triple 子目录与宿主 macOS 的
+#   target/{debug,release}/ 隔离；FFmpeg/x264 使用常规 bin/linux/x86_64/ 落点。
 #
 # 产物路径（宿主机）：.kabegame/release/kabegame（插件在 .kabegame/release/plugins/）
 # 部署到服务器：bash scripts/deploy-web.sh（demo.kabegame.com，见脚本头注）
@@ -45,13 +46,13 @@ services:
     tty: false
     volumes:
       # 整个仓库树 bind-mount 到 /src（含 third/ 子模块）。镜像内预制产物由 entrypoint
-      # 种回该树的 gitignored 路径（third/*-build-web/、node_modules-web/）。
+      # 种回该树的 gitignored 路径（bin/linux/x86_64/*-build/）。
       - ..:/src
       # 发布产物统一汇集到 .kabegame/release（gitignored；桌面安装包/CLI/web 二进制/
       # 插件同处一地）。单一来源见 scripts/utils.ts 的 RELEASE_DIR。
       - ../.kabegame/release:/dist
     environment:
-      # 插件打包已在宿主完成（scripts/build-web.sh）；容器内 V8 浮点损坏，禁跑 JS 构建。
+      # 插件打包已在宿主完成（scripts/build-web.ts）；容器内 V8 浮点损坏，禁跑 JS 构建。
       KABEGAME_SKIP_PLUGIN_PACKAGE: "1"
     command:
       - bash
@@ -59,5 +60,5 @@ services:
       - >-
         deno task b -c kabegame --mode web --release --skip vue
         && mkdir -p /dist
-        && cp target-web/release/kabegame /dist/kabegame
+        && cp target/x86_64-unknown-linux-gnu/release/kabegame /dist/kabegame
         && echo "✓ 产物已写入 /dist/kabegame"

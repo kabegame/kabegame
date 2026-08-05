@@ -1,14 +1,15 @@
 import { BasePlugin } from "./base-plugin.ts";
 import {
-  run,
-  ROOT,
-  FFMPEG_BUILD_DIR,
-  FFMPEG_INSTALL_DIR,
-  CEF_DIR_SUFFIX,
-  TARGET_ARCH,
-  IS_CROSS_COMPILE,
+  cefExportDir,
   CRAWLER_PLUGINS_DIR,
+  FFMPEG_INSTALL_DIR,
+  IS_CROSS_COMPILE,
   RELEASE_PLUGINS_DIR,
+  repoBuildDir,
+  requireUbuntu2204,
+  ROOT,
+  run,
+  TARGET_ARCH,
 } from "../utils.ts";
 import { Component } from "./component-plugin.ts";
 import chalk from "chalk";
@@ -16,7 +17,6 @@ import { BuildSystem } from "../build-system.ts";
 import { OSPlugin } from "./os-plugin.ts";
 import path from "path";
 import fs from "fs";
-import os from "os";
 import { execSync } from "child_process";
 
 export class Mode {
@@ -116,6 +116,15 @@ export class ModePlugin extends BasePlugin {
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
+      if (
+        bs.context.cmd!.isBuild &&
+        !this.mode!.isAndroid &&
+        !this.mode!.isWeb &&
+        OSPlugin.isLinux
+      ) {
+        requireUbuntu2204("release 构建");
+      }
+
       // 仅供前端 vite 注入展示与 build.rs 旧期间兼容；不再驱动 Rust 编译期分支。
       // 编译期 mode 现在通过 cargo --features 传递（见 prepareCompileArgs hook）。
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
@@ -130,10 +139,13 @@ export class ModePlugin extends BasePlugin {
         this.setEnv("TAURI_ANDROID_PACKAGE", "app.kabegame");
         // rusty_v8 官方自 v0.102.0 起不再发布 aarch64-linux-android 预编译产物,
         // Android 交叉编译依赖自建产物(librusty_v8 静态库 + src_binding.rs),
-        // 存放在仓库根 bin/android/(gitignore、不入库,由 `deno task build:v8` 复现;不放 bin/linux/
-        // ——那里是 os-plugin 构建期生成并整目录进 deb 的。见 cocs/crawler/V8_RUNTIME.md)。
-        // 直接是 .a(bin/android 已 gitignore,无需 gzip);v8 build.rs 的 copy_archive 原样拷贝。
-        const rustyV8Dir = path.join(ROOT, "bin", "android");
+        // 存放在 bin/android/arm64/rusty_v8-build/(gitignore、不入库,由
+        // `deno task build:v8` 复现)。见 cocs/crawler/V8_RUNTIME.md。
+        // 直接是 .a；v8 build.rs 的 copy_archive 原样拷贝。
+        const rustyV8Dir = repoBuildDir("rusty_v8", {
+          platform: "android",
+          arch: "arm64",
+        });
         const rustyV8Archive = path.join(
           rustyV8Dir,
           "librusty_v8_simdutf_release_aarch64-linux-android.a",
@@ -145,7 +157,9 @@ export class ModePlugin extends BasePlugin {
         if (!fs.existsSync(rustyV8Archive) || !fs.existsSync(rustyV8Binding)) {
           throw new Error(
             [
-              `rusty_v8 Android 自建产物缺失: ${path.relative(ROOT, rustyV8Dir)}/`,
+              `rusty_v8 Android 自建产物缺失: ${
+                path.relative(ROOT, rustyV8Dir)
+              }/`,
               "在 x86_64 Linux 上一次性复现(产物 gitignore、不入库):",
               "  deno task build:v8",
               "见 third-patches/rusty_v8/README.md 与 cocs/crawler/V8_RUNTIME.md。",
@@ -158,13 +172,11 @@ export class ModePlugin extends BasePlugin {
         // 进程内 FFmpeg(rsmpeg):Android 视频预览/维度/兼容副本改走交叉编译的 aarch64
         // FFmpeg,取代此前慢速的 Kotlin 编码 provider(见 cocs/downloader-tasks/VIDEO_INGEST.md)。
         // 产物由 `deno task build:ffmpeg --target android` 生成到
-        // third/FFmpeg-build/android/aarch64/install/(gitignore,不入库,命令复现)。
+        // bin/android/arm64/FFmpeg-build/install/(gitignore,不入库,命令复现)。
         const androidArch = "aarch64";
         const androidApi = process.env.ANDROID_API || "24";
         const ffmpegAndroidInstall = path.join(
-          FFMPEG_BUILD_DIR,
-          "android",
-          androidArch,
+          repoBuildDir("FFmpeg", { platform: "android", arch: "arm64" }),
           "install",
         );
         const ffmpegAndroidPkgConfig = path.join(
@@ -177,7 +189,9 @@ export class ModePlugin extends BasePlugin {
         ) {
           throw new Error(
             [
-              `Android FFmpeg 产物缺失: ${path.relative(ROOT, ffmpegAndroidInstall)}/`,
+              `Android FFmpeg 产物缺失: ${
+                path.relative(ROOT, ffmpegAndroidInstall)
+              }/`,
               "需要(装好 NDK 的 Linux/macOS 宿主上)先交叉编译一次:",
               "  git submodule update --init third/FFmpeg third/x264",
               "  deno task build:ffmpeg --target android",
@@ -189,9 +203,8 @@ export class ModePlugin extends BasePlugin {
 
         // bindgen(rusty_ffmpeg)解析 FFmpeg 头文件时必须按 android target + NDK sysroot,
         // 否则 clang 用宿主 sysroot/宿主 target 解析,类型宽度与宏定义错乱(仿桌面 macOS
-        // 的 BINDGEN_EXTRA_CLANG_ARGS sysroot 注入)。NDK 定位顺序与 build-ffmpeg.sh 一致。
-        let ndkDir =
-          process.env.NDK_HOME ||
+        // 的 BINDGEN_EXTRA_CLANG_ARGS sysroot 注入)。NDK 定位顺序与 build-ffmpeg.ts 一致。
+        let ndkDir = process.env.NDK_HOME ||
           process.env.ANDROID_NDK_HOME ||
           process.env.ANDROID_NDK_ROOT ||
           "";
@@ -200,9 +213,7 @@ export class ModePlugin extends BasePlugin {
           if (fs.existsSync(ndkRoot)) {
             const versions = fs
               .readdirSync(ndkRoot)
-              .filter((v) =>
-                fs.statSync(path.join(ndkRoot, v)).isDirectory(),
-              )
+              .filter((v) => fs.statSync(path.join(ndkRoot, v)).isDirectory())
               .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
             if (versions.length) {
               ndkDir = path.join(ndkRoot, versions[versions.length - 1]);
@@ -239,8 +250,8 @@ export class ModePlugin extends BasePlugin {
         // `cargo tauri android {dev,build,check}`,由 cargo-mobile2 的 NDK Env 从 NDK 推导
         // 并注入(三者同源、随 minSdk/NDK 版本自动正确)。见 cocs/tauri/TAURI_CLI_FORK.md。
       } else {
-        // 桌面 FFmpeg 安装前缀按目标架构取(macOS --target x86_64 时是独立的
-        // third/FFmpeg-build/darwin/x86_64/install,与 arm64 产物隔离)。见 utils.FFMPEG_INSTALL_DIR。
+        // 桌面 FFmpeg 安装前缀按平台与目标架构取：
+        // bin/{platform}/{arch}/FFmpeg-build/install。见 utils.FFMPEG_INSTALL_DIR。
         this.setEnv(
           "FFMPEG_PKG_CONFIG_PATH",
           path.join(FFMPEG_INSTALL_DIR, "lib", "pkgconfig"),
@@ -253,8 +264,7 @@ export class ModePlugin extends BasePlugin {
         // Linux/Windows/macOS 用 CEF runtime。必须在任何 cargo 命令前设好
         // CEF_PATH,否则 cef-dll-sys 会下载官方无 H.264 的 CEF 覆盖 target 目录
         // (见 .cursor/rules/cef-path-set.mdc)。
-        // 回退约定:Linux ~/i/cef-{dev,prod};Windows H:\cef-{dev,prod}；
-        // macOS /Volumes/KIOXIA/cef-{dev,prod}(见 scripts/build-chromium.sh)。
+        // 默认按 bin/{platform}/{arch}/cef-build-{dev,prod} 解析，也可由 CEF_PATH 覆盖。
         // 只有主 app 组件链接 CEF(cef-dll-sys 在 tauri-runtime-cef 依赖链里);
         // kabegame-cli 是 headless,不检查也不注入 CEF_PATH(web-release 容器等
         // 无 CEF runtime 的环境要能单独构建 cli)。
@@ -263,44 +273,42 @@ export class ModePlugin extends BasePlugin {
           !this.mode!.isWeb &&
           bs.context.component!.isMain
         ) {
-          // dev/check/test 用 cef-dev(check/test 只需要任意有效 CEF 目录做编译,不打包);
-          // build 用 cef-prod。
+          // dev/check/test 用 cef-build-dev(check/test 只需要任意有效 CEF 目录做编译,不打包);
+          // build 用 cef-build-prod。
           // macOS 跨编时 CEF runtime 也必须换成对应架构那一份:framework 的架构不匹配
-          // 链接期才炸(且报错在 ld 层面,不可读),这里的默认路径直接按架构分叉,
-          // 与 build-chromium.sh 的 export_dir(cef-<variant>[-x64])完全对齐。
-          const cefVariant =
-            (bs.context.cmd.isDev || bs.context.cmd.isCheck || bs.context.cmd.isTest
-              ? "cef-dev"
-              : "cef-prod") + (OSPlugin.isMacOS ? CEF_DIR_SUFFIX : "");
-          const cefPath =
-            process.env.CEF_PATH ||
-            (OSPlugin.isWindows
-              ? path.join("H:", cefVariant)
-              : OSPlugin.isMacOS
-                ? path.join("/Volumes/KIOXIA", cefVariant)
-                : path.join(os.homedir(), "i", cefVariant));
-          // macOS 的 CEF runtime 是 framework(见 build-chromium.sh 导出结构),
+          // 会在链接期失败，因此默认目录直接使用当前目标架构。
+          const cefVariant = bs.context.cmd.isDev || bs.context.cmd.isCheck ||
+              bs.context.cmd.isTest
+            ? "dev"
+            : "prod";
+          const cefPath = process.env.CEF_PATH || cefExportDir(cefVariant);
+          // macOS 的 CEF runtime 是 framework(见 build-chromium.ts 导出结构),
           // Linux/Windows 是单个 libcef.so/dll。
           const cefRuntimeExists = OSPlugin.isMacOS
             ? fs.existsSync(
-                path.join(cefPath, "Chromium Embedded Framework.framework"),
-              )
+              path.join(cefPath, "Chromium Embedded Framework.framework"),
+            )
             : fs.existsSync(
-                path.join(cefPath, OSPlugin.isWindows ? "libcef.dll" : "libcef.so"),
-              );
+              path.join(
+                cefPath,
+                OSPlugin.isWindows ? "libcef.dll" : "libcef.so",
+              ),
+            );
           if (!cefRuntimeExists) {
             throw new Error(
               [
                 `CEF runtime not found in: ${cefPath}`,
                 "Set CEF_PATH to an exported cef-rs runtime directory" +
-                  (OSPlugin.isLinux || OSPlugin.isMacOS ? ", or run:" : "."),
+                (OSPlugin.isLinux || OSPlugin.isMacOS ? ", or run:" : "."),
                 ...(OSPlugin.isLinux || OSPlugin.isMacOS
-                  ? TARGET_ARCH
-                    ? [
-                        `scripts/build-chromium.sh dev --target ${TARGET_ARCH}`,
-                        `scripts/build-chromium.sh prod --target ${TARGET_ARCH}`,
-                      ]
-                    : ["scripts/build-chromium.sh dev", "scripts/build-chromium.sh prod"]
+                  ? [
+                    `deno task build:chromium dev${
+                      TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
+                    }`,
+                    `deno task build:chromium prod${
+                      TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
+                    }`,
+                  ]
                   : []),
               ].join("\n"),
             );
@@ -327,16 +335,26 @@ export class ModePlugin extends BasePlugin {
         // bindgen and passed straight to clang before binding generation.
         if (OSPlugin.isMacOS) {
           try {
-            const sdkPath = execSync("xcrun --sdk macosx --show-sdk-path", { encoding: "utf8" }).trim();
+            const sdkPath = execSync("xcrun --sdk macosx --show-sdk-path", {
+              encoding: "utf8",
+            }).trim();
             // 跨编时还必须显式给 target,否则 bindgen 用宿主 arch 解析 FFmpeg 头文件,
             // 与实际链接的另一架构静态库对不上(仿 android 分支的 --sysroot + -target 注入)。
-            const crossTarget =
-              IS_CROSS_COMPILE && TARGET_ARCH
-                ? ` -target ${TARGET_ARCH === "x86_64" ? "x86_64" : "arm64"}-apple-darwin`
-                : "";
-            this.setEnv("BINDGEN_EXTRA_CLANG_ARGS", `-isysroot ${sdkPath}${crossTarget}`);
+            const crossTarget = IS_CROSS_COMPILE && TARGET_ARCH
+              ? ` -target ${
+                TARGET_ARCH === "x86_64" ? "x86_64" : "arm64"
+              }-apple-darwin`
+              : "";
+            this.setEnv(
+              "BINDGEN_EXTRA_CLANG_ARGS",
+              `-isysroot ${sdkPath}${crossTarget}`,
+            );
           } catch {
-            this.log(chalk.yellow("Warning: xcrun failed — BINDGEN_EXTRA_CLANG_ARGS not set. bindgen may fail to find system headers."));
+            this.log(
+              chalk.yellow(
+                "Warning: xcrun failed — BINDGEN_EXTRA_CLANG_ARGS not set. bindgen may fail to find system headers.",
+              ),
+            );
           }
           // 跨编时 rusty_ffmpeg 的 build.rs 用 pkg-config crate 静态探测,而它默认
           // 拒绝交叉编译(host≠target)直接 panic。我们自编的 x64 .pc 用的是 x64 install
@@ -346,8 +364,7 @@ export class ModePlugin extends BasePlugin {
           if (IS_CROSS_COMPILE) {
             this.setEnv("PKG_CONFIG_ALLOW_CROSS", "1");
           }
-        }
-        // windows: libs dir
+        } // windows: libs dir
         else if (OSPlugin.isWindows) {
           const ffmpegBinDir = path.join(FFMPEG_INSTALL_DIR, "bin");
           this.setEnv("FFMPEG_LIBS_DIR", ffmpegBinDir);
@@ -362,7 +379,8 @@ export class ModePlugin extends BasePlugin {
           if (pathPrefixes.length > 0) {
             this.setEnv(
               "PATH",
-              pathPrefixes.join(path.delimiter) + path.delimiter + (process.env.PATH || ""),
+              pathPrefixes.join(path.delimiter) + path.delimiter +
+                (process.env.PATH || ""),
             );
           }
         }
@@ -393,8 +411,8 @@ export class ModePlugin extends BasePlugin {
           ? [...nullOrCompOrFeatures]
           : typeof nullOrCompOrFeatures === "object" &&
               nullOrCompOrFeatures !== null
-            ? [...(nullOrCompOrFeatures.features || [])]
-            : [];
+          ? [...(nullOrCompOrFeatures.features || [])]
+          : [];
         const comp = nullOrCompOrFeatures
           ? typeof nullOrCompOrFeatures === "string"
             ? new Component(nullOrCompOrFeatures)
@@ -402,12 +420,11 @@ export class ModePlugin extends BasePlugin {
           : bs.context.component!;
 
         // 保留前一个 hook 传递的 args
-        const args =
-          typeof nullOrCompOrFeatures === "object" &&
-          nullOrCompOrFeatures !== null &&
-          "args" in nullOrCompOrFeatures
-            ? nullOrCompOrFeatures.args
-            : undefined;
+        const args = typeof nullOrCompOrFeatures === "object" &&
+            nullOrCompOrFeatures !== null &&
+            "args" in nullOrCompOrFeatures
+          ? nullOrCompOrFeatures.args
+          : undefined;
 
         // Mode → cargo feature 翻译。仅作用于 main 组件；cli 始终以 standard 等价
         // 编译，不感知 mode（mode-plugin.ts 顶部 parseParams 已强制 android/web
@@ -446,11 +463,13 @@ export class ModePlugin extends BasePlugin {
   // - start：不打包插件；正式环境插件从 GitHub Releases 下载
   packagePlugins(bs: BuildSystem): void {
     // 显式跳过插件打包(rspack + kabegame-cli 均为 JS/宿主工具链步骤)。
-    // web-release 容器设置此变量:插件打包已在宿主完成(scripts/build-web.sh),
+    // web-release 容器设置此变量:插件打包已在宿主完成(scripts/build-web.ts),
     // 且 web 二进制不消费 resources/plugins(运行时读 exe 旁目录,部署只传二进制),
     // 容器内重打包纯属浪费——x86_64 模拟层下 V8 浮点损坏,容器里也不该跑任何 JS 构建。
     if (process.env.KABEGAME_SKIP_PLUGIN_PACKAGE === "1") {
-      this.log(chalk.yellow("KABEGAME_SKIP_PLUGIN_PACKAGE=1 → 跳过爬虫插件打包"));
+      this.log(
+        chalk.yellow("KABEGAME_SKIP_PLUGIN_PACKAGE=1 → 跳过爬虫插件打包"),
+      );
       return;
     }
     const cmd = bs.context.cmd;
@@ -461,10 +480,14 @@ export class ModePlugin extends BasePlugin {
           "打包插件到开发 data 目录: deno task package --out-dir ../.kabegame/debug/data/plugins-directory",
         ),
       );
-      run("package", ["--out-dir", "../.kabegame/debug/data/plugins-directory"], {
-        bin: "deno-task",
-        cwd: CRAWLER_PLUGINS_DIR,
-      });
+      run(
+        "package",
+        ["--out-dir", "../.kabegame/debug/data/plugins-directory"],
+        {
+          bin: "deno-task",
+          cwd: CRAWLER_PLUGINS_DIR,
+        },
+      );
     } else if (comp.isMain && cmd.isBuild && this.mode!.isWeb) {
       // web：插件不进二进制（无 tauri bundle.resources），服务器改从用户数据目录
       // plugins-directory/ 加载。故产出到 .kabegame/release/plugins，由

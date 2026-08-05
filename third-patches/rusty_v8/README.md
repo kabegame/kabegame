@@ -2,7 +2,7 @@
 
 `third/rusty_v8` (denoland/rusty_v8, pinned `v149.4.0` = Cargo.lock's `v8`) is the reproducible
 **source** for the Android self-built `librusty_v8` archive, produced by `deno task build:v8`
-(`scripts/build-v8.sh`, Linux only). Unlike the other `third/` submodules, this is a **reuse-in-place
+(`scripts/build-v8.ts`, Linux only). Unlike the other `third/` submodules, this is a **reuse-in-place
 fat build tree**: its nested submodules (`v8`, `build/`, `third_party/*`) and the compiled `target/`
 live in the working tree, so a rebuild is incremental — no re-fetch, no from-scratch compile.
 
@@ -17,7 +17,7 @@ all app builds, and this submodule is only the from-source archive's build tree.
 
 ## Patches
 
-Both are flat top-level `*.patch`, applied with `git -C third/rusty_v8 apply` (`build-v8.sh` does this
+Both are flat top-level `*.patch`, applied with `git -C third/rusty_v8 apply` (`build-v8.ts` does this
 idempotently — skip if already applied):
 
 - `0001-ninja-jobserver-fd.patch` → `build.rs`: `ninja()` drops `CARGO_MAKEFLAGS` / `MAKEFLAGS`. Cargo
@@ -30,16 +30,16 @@ idempotently — skip if already applied):
 
 `deno task patch rusty_v8` is a no-op here: patch-manager only applies to a **clean** tree (and only
 reverses a **dirty** one), and this reuse-in-place tree is permanently dirty (nested submodules +
-`target/` + baked fixups), so it is skipped. The patches are applied by `build-v8.sh` instead.
+`target/` + baked fixups), so it is skipped. The patches are applied by `build-v8.ts` instead.
 
-Three more build-tree adjustments are **actions, not diffs**, so they are `build-v8.sh` steps done
+Three more build-tree adjustments are **actions, not diffs**, so they are `build-v8.ts` steps done
 only on a fresh nested checkout (present already in the reused tree): `third_party/simdutf` file
 checkout, host amd64 sysroot install, and the `third_party/android_toolchain/ndk → ../android_ndk`
 symlink.
 
 ## Artifacts
 
-`deno task build:v8` writes to `bin/android/` (gitignored, reproduced by command, NOT committed):
+`deno task build:v8` writes to `bin/android/arm64/rusty_v8-build/` (gitignored, reproduced by command, NOT committed):
 `librusty_v8_simdutf_release_aarch64-linux-android.a` + `src_binding_simdutf_release_aarch64-linux-android.rs`,
 injected into the Android build by mode-plugin (`RUSTY_V8_ARCHIVE` / `RUSTY_V8_SRC_BINDING_PATH`). The `.a`
 is stored raw (no gzip) — the dir is gitignored, so there's no committed-blob size to shrink.

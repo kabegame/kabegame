@@ -5,6 +5,7 @@ import {
   ROOT,
   RESOURCES_DIR,
   ARTIFACT_DIR,
+  isArchDirName,
   run,
 } from "../utils.ts";
 import { OSPlugin } from "./os-plugin.ts";
@@ -168,9 +169,13 @@ export class ComponentPlugin extends BasePlugin {
           const dir = path.join(ROOT, "bin", "linux");
           if (existsSync(dir)) {
             // 递归收集(含 CEF 的 locales/ 子目录),路径相对 bin/linux。
+            // 顶层的架构子目录(bin/linux/{arm64,x86_64})装的是第三方仓库的编译产物
+            // (FFmpeg-build / cef-build-* 等,数 GB),不是运行时暂存内容,必须跳过——
+            // 否则整棵构建树会被写进 deb 的 files map。
             const rels: string[] = [];
             const walk = (cur: string) => {
               for (const name of readdirSync(cur)) {
+                if (cur === dir && isArchDirName(name)) continue;
                 const abs = path.join(cur, name);
                 if (statSync(abs).isDirectory()) {
                   walk(abs);
@@ -315,7 +320,7 @@ export class ComponentPlugin extends BasePlugin {
         // 清空是"重新打包/收集前的准备"，必须与打包步骤同进退：
         // KABEGAME_SKIP_PLUGIN_PACKAGE=1 时 ModePlugin.packagePlugins 不再产出，
         // 此处若照常清空，净效果就是把上游(宿主)已打包好的 .kgpg 全删掉。
-        // 见 scripts/build-web.sh 的宿主/容器拆分。
+        // 见 scripts/build-web.ts 的宿主/容器拆分。
         if (component.isMain && process.env.KABEGAME_SKIP_PLUGIN_PACKAGE !== "1") {
           // 先清空 resources 下所有插件和二进制文件
           const resourcesDir = path.join(RESOURCES_DIR);

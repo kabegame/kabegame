@@ -45,13 +45,13 @@ deno task b -c kabegame --skip vue         # Cargo build only
 deno task b --release                  # Copy artifacts to release/
 deno task b -c kabegame --target x86_64    # macOS only: cross-compile for Intel (also valid on check/start).
                                        # Artifacts go to target/<triple>/; FFmpeg/CEF deps are resolved per-arch
-                                       # (x86_64 uses third/FFmpeg-build/darwin/x86_64/ and cef-{dev,prod}-x64).
+                                       # under bin/macos/x86_64/{FFmpeg-build,cef-build-{dev,prod}}.
                                        # Prepare deps first: deno task build:ffmpeg --target x86_64 and
-                                       # scripts/build-chromium.sh prod --target x86_64.
+                                       # deno task build:chromium prod --target x86_64.
                                        # See cocs/build/MACOS_CROSS_BUILD.md.
 deno task b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin injects --target aarch64 unless
                                        # --target/-t is passed; gen/android RustPlugin.kt only has arm64 flavors)
-bash scripts/build-web.sh              # Web release (demo.kabegame.com): host builds ALL JS (vite dist-kabegame-web
+deno task build:web                    # Web release (demo.kabegame.com): host builds ALL JS (vite dist-kabegame-web
                                        # + plugin .kgpg), docker (linux/amd64) builds Rust only via --skip vue.
                                        # Frontend output dirs are per-mode and must stay separate: web →
                                        # dist-kabegame-web/ (embedded by include_dir! in src/web_assets.rs),
@@ -79,7 +79,7 @@ On macOS both binaries are flat cargo artifacts in `target/<profile>`; the CEF f
 
 Android（`--mode android --skip vue`）走 fork 的 `cargo tauri android check`（NDK
 toolchain 来自 cargo-mobile2，与 build 一致），需要 env NDK + `deno task build:ffmpeg
---target android` + `bin/android/` v8 产物；细节与 gotchas 见 skill 的 SKILL.md。
+--target android` + `bin/android/arm64/rusty_v8-build/` v8 产物；细节与 gotchas 见 skill 的 SKILL.md。
 
 ### Backend Tests
 **用 `test-kabegame` skill**（`.claude/skills/test-kabegame/`）跑后端 cargo test，
@@ -116,9 +116,16 @@ deno task patch tauri --from 9   # Series grew (new patch ≥9): reverse applied
 deno task build:ffmpeg           # Build x264 (third/x264) + FFmpeg libav* libs from source (native)
                                  # x264 is built-in (no system libx264 needed); Linux build uses
                                  # --disable-asm + -DNATIVE_ALIGN=16 to avoid CEF/PartitionAlloc crash
-                                 # Required before standard/CLI cargo build
+                                 # Required before standard/CLI cargo build.
+                                 # Output: bin/{platform}/{arch}/{FFmpeg,x264}-build/ (gitignored).
+                                 # On Linux this is GUARDED to Ubuntu 22.04 only (glibc 2.35 floor,
+                                 # see cocs/build/LINUX_BUILD_WORKFLOW.md); escape: KB_ALLOW_HOST_BUILD=1.
+deno task build:chromium dev     # Build CEF/Chromium from third/cef (hours). Workspace: third/chromium/
+deno task build:chromium prod    # (~60GB, gitignored). Export: bin/{platform}/{arch}/cef-build-{dev,prod}/
+                                 # which is what mode-plugin resolves CEF_PATH to (dev/check/test use
+                                 # cef-build-dev, build uses cef-build-prod).
 deno task build:ffmpeg --target android  # Cross-compile aarch64 FFmpeg via env NDK (NDK_HOME etc.)
-                                 # Output gitignored under third/FFmpeg-build/android/ (reproduced by
+                                 # Output gitignored under bin/android/arm64/FFmpeg-build/ (reproduced by
                                  # command, not committed). Required before android cargo build/check.
 deno task build:deno             # Build the deno CLI from third/deno sources (pin v2.9.0, with the
                                  # third-patches/deno series applied) into target/release/deno.
@@ -128,11 +135,14 @@ deno task build:deno             # Build the deno CLI from third/deno sources (p
                                  # profile (KB_DENO_OFFICIAL=1 switches to the official fat-LTO
                                  # profile; linking needs 8-16GB RAM).
                                  # The self-built CLI also honors DENO_NODE_MODULES_SUFFIX (patch
-                                 # 0004): when set (VM=-22, docker=-web), every node_modules path
-                                 # component is redirected to node_modules<suffix> at the real-IO
-                                 # boundary (in-process bind mount for per-glibc native isolation).
-                                 # The suffixed tree must be created by `deno install` run WITH the
-                                 # suffix set; DENO_DIR is exempt. See third-patches/deno/README.md.
+                                 # 0004): when set, every node_modules path component is redirected
+                                 # to node_modules<suffix> at the real-IO boundary (in-process bind
+                                 # mount for per-glibc native isolation). The mechanism is currently
+                                 # DORMANT — nothing in the repo sets the variable: the 22.04 guest
+                                 # mounts the whole tree and shares node_modules, and the web docker
+                                 # image runs no JS build. Kept in the patch series (append-only) for
+                                 # when per-glibc native isolation is needed again.
+                                 # See third-patches/deno/README.md.
 ```
 
 ### Verification workflow
@@ -191,7 +201,7 @@ struct Foo {
 
 **Third-party patch series** — Kabegame changes to vendored `third/` repositories belong in matching `third-patches/<dir>/NNNN-*.patch` files, applied manually with `deno task patch <dir>`. The manager preflights the full ordered series in a disposable Git worktree before changing the real submodule and rolls back a partial commit-stage failure. Reverse mode applies patches in reverse order. **The series is append-only**: never modify or delete a committed patch file — add a new numbered patch on top (rule: `.cursor/rules/third-patches-append-only.mdc`; only exception is a full re-vendor). After pulling newly added patches onto an already-patched submodule, resync with `deno task patch <dir> --from <N>` (reverses the applied prefix `< N`, then re-applies the whole series); the `.husky/post-merge` hook runs this automatically. `third/cef` directly pins official `chromiumembedded/cef` commit `0d0eeb611`; apply `third-patches/cef/0001-flat-subprocess-path.patch` before preparing a custom CEF/Chromium build. Re-vendor by reversing the series, bumping the upstream pin, then regenerating patches. See `third-patches/cef/README.md`.
 
-**Script repository paths** — `scripts/utils.ts` is the single source for both `ROOT` and `THIRD_DIR`; standalone scripts and build plugins import `THIRD_DIR` from there, not from `build-system.ts` and not by recomputing `path.join(ROOT, "third")`.
+**Script repository paths** — `scripts/paths.ts` is the dependency-light single source for `ROOT`、`THIRD_DIR`、目标架构及 `bin/{platform}/{arch}/{repo}-build`；`scripts/utils.ts` re-export 这些符号以保持现有 import 面，构建插件不得自行重算。
 
 **Single source of truth for file types:**
 - `kabegame_core::media::image_type::MEDIA_FORMATS` is the single table for format keys, standard MIME values, extensions, aliases, and support flags. `images.type` stores format keys such as `image/jpg` and `video/mov`; use `mime_from_format` only at boundaries that require a standard MIME (HTTP Content-Type / Android MediaStore).
@@ -200,7 +210,7 @@ struct Foo {
 
 **Video ingestion uses rsmpeg/FFmpeg on desktop AND Android (only iOS excluded):**
 - Desktop builds (standard/CLI on Windows/macOS/Linux) link rsmpeg/FFmpeg for preview compression and video dimensions (native static libs from `deno task build:ffmpeg`).
-- **Android also links rsmpeg/FFmpeg** — aarch64 static libs cross-compiled by `deno task build:ffmpeg --target android` (env NDK; output gitignored under `third/FFmpeg-build/android/`, reproduced by command, not committed). `rsmpeg`/`rusty_ffmpeg` are gated `cfg(not(target_os = "ios"))`.
+- **Android also links rsmpeg/FFmpeg** — aarch64 static libs cross-compiled by `deno task build:ffmpeg --target android` (env NDK; output gitignored under `bin/android/arm64/FFmpeg-build/`, reproduced by command, not committed). `rsmpeg`/`rusty_ffmpeg` are gated `cfg(not(target_os = "ios"))`.
 - Preview format differs by platform: **desktop** = H.264 MP4 (grid uses `<video>`, hover-autoplays); **Android** = 10fps animated **GIF** (`run_ffmpeg_gif`: `fps,scale,palettegen,paletteuse`), because Android grids have no hover so a static `<video>` frame is useless — the frontend shows it in `<img>` (`ImageContent.vue` `mode==='gif'`). The Android FFmpeg build enables the gif encoder/muxer + palettegen/paletteuse/fps filters. The old Kotlin `tauri-plugin-compress` GIF path is removed.
 - Android reads `content://` videos via `ContentIoProvider.open_fd(uri)` (PickerPlugin `openFileDescriptor().detachFd()`), then FFmpeg opens `/proc/self/fd/N`. Never treat a `content://` URI as a plain path or spill it to disk first. Video **dimensions** still come from `ContentIoProvider.get_video_dimensions` (`MediaMetadataRetriever`), not FFmpeg.
 - `mode-plugin.ts` injects the Android FFmpeg env (`FFMPEG_PKG_CONFIG_PATH`, `FFMPEG_LINK_MODE=static`, `BINDGEN_EXTRA_CLANG_ARGS` with NDK sysroot+target, `PKG_CONFIG_ALLOW_CROSS=1`, NDK cross linker/CC). `deno task check -c kabegame --mode android` is supported (runs `cargo check --target aarch64-linux-android`). See `cocs/downloader-tasks/VIDEO_INGEST.md`.

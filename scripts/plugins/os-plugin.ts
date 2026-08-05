@@ -2,21 +2,22 @@ import { BuildSystem } from "../build-system.ts";
 import { BasePlugin } from "./base-plugin.ts";
 import { Component } from "./component-plugin.ts";
 import {
-  ROOT,
   ARTIFACT_DIR,
+  cefExportDir,
+  ensureDir,
+  isArchDirName,
+  existsFile,
   FFMPEG_INSTALL_DIR,
-  TARGET_ARCH,
+  findFirstExisting,
   RESOURCES_BIN_DIR,
   RESOURCES_DIR,
-  ensureDir,
-  existsFile,
-  findFirstExisting,
+  ROOT,
   stageResourceFile,
+  TARGET_ARCH,
 } from "../utils.ts";
 import chalk from "chalk";
 import { execSync } from "child_process";
 import fs from "fs";
-import os from "os";
 import path from "path";
 
 // CEF 运行时白名单:除下列单文件外,locales 只保留 kabegame 支持的 UI 语言 + en-US 回退
@@ -59,11 +60,11 @@ const WINDOWS_CEF_RUNTIME_FILES = [
 const CEF_LOCALES = ["en-US.pak", "zh-CN.pak", "zh-TW.pak", "ja.pak", "ko.pak"];
 
 // Windows 运行时 DLL 清单（位于仓库根 bin/windows/，构建时复制到 resources/bin）。
-// 仅 libav*（由 scripts/build-ffmpeg.sh 产出，FFmpeg 8.x 主版本后缀）；
+// 仅 libav*（由 scripts/build-ffmpeg.ts 产出，FFmpeg 8.x 主版本后缀）；
 // libx264 静态嵌入 avcodec-*.dll，libwinpthread 静态嵌入 avutil-*.dll，均无需单独打包。
 // 实际复制以 bin/windows/ 下发现的所有 *.dll 为准（见 OSPlugin.copyFFmpegDllsToResources），本清单为预期 manifest。
 const WINDOWS_FFMPEG_DLLS_EXPECTED = [
-  // libwinpthread 已静态链接进 avutil-*.dll（见 scripts/build-ffmpeg.sh），无需再单独打包。
+  // libwinpthread 已静态链接进 avutil-*.dll（见 scripts/build-ffmpeg.ts），无需再单独打包。
   // libav*（FFmpeg 8.2：avcodec/avformat 62、avutil 60、avfilter 11、swscale 9、swresample 6）
   "avcodec-62.dll",
   "avformat-62.dll",
@@ -98,7 +99,7 @@ export class OSPlugin extends BasePlugin {
 
   static isAndroid: boolean = false;
 
-  /** 平台对应的暂存目录,build 期产物在此（Linux/macOS 完全生成,Windows 部分预置 + 部分生成） */
+  /** 平台对应的运行时暂存目录；架构子目录保留第三方仓库编译产物。 */
   static get binDir(): string {
     if (OSPlugin.isWindows) return path.join(ROOT, "bin", "windows");
     if (OSPlugin.isLinux) return path.join(ROOT, "bin", "linux");
@@ -106,9 +107,17 @@ export class OSPlugin extends BasePlugin {
     return path.join(ROOT, "bin");
   }
 
-  /** Linux/macOS 子目录是否完全由本插件生成（用于在收集前清空） */
-  private static isGeneratedPlatformDir(): boolean {
-    return OSPlugin.isLinux || OSPlugin.isMacOS;
+  /**
+   * 清空平台目录根部的运行时暂存项，保留按架构隔离的第三方编译产物子树。
+   * `arm64/` 与 `x86_64/` 只承载 bin/{platform}/{arch}/{repo}-build。
+   */
+  private static clearRuntimeStagingDir(): void {
+    const dir = OSPlugin.binDir;
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (isArchDirName(entry.name)) continue;
+      fs.rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+    }
   }
 
   apply(bs: BuildSystem): void {
@@ -124,7 +133,10 @@ export class OSPlugin extends BasePlugin {
         const args: string[] = [];
 
         // 处理 waterfall hook 的输入
-        if (typeof nullOrCompOrResult === "object" && nullOrCompOrResult !== null && "comp" in nullOrCompOrResult) {
+        if (
+          typeof nullOrCompOrResult === "object" &&
+          nullOrCompOrResult !== null && "comp" in nullOrCompOrResult
+        ) {
           return {
             comp: nullOrCompOrResult.comp,
             features: nullOrCompOrResult.features || [],
@@ -132,10 +144,9 @@ export class OSPlugin extends BasePlugin {
           };
         }
 
-        const comp =
-          typeof nullOrCompOrResult === "string"
-            ? new Component(nullOrCompOrResult)
-            : bs.context.component!;
+        const comp = typeof nullOrCompOrResult === "string"
+          ? new Component(nullOrCompOrResult)
+          : bs.context.component!;
 
         return {
           comp,
@@ -185,7 +196,7 @@ export class OSPlugin extends BasePlugin {
         this.collectWindowsCefRuntime();
       }
     } else if (OSPlugin.isLinux) {
-      // 注意:collectLinuxSharedLibs() 会先清空 bin/linux/,CEF 收集必须排在其后。
+      // collectLinuxSharedLibs() 会先清空 bin/linux/ 根部暂存项，CEF 收集必须排在其后。
       this.collectLinuxSharedLibs();
       // Linux standard 用 CEF runtime;打包其运行时文件(libcef.so + 资源 + locales)。
       if (bs.context.mode?.isStandard) {
@@ -205,23 +216,26 @@ export class OSPlugin extends BasePlugin {
         throw new Error(
           [
             `❌ 未找到 FFmpeg 构建产物: ${path.relative(ROOT, archive)}`,
-            `请先运行: deno task build:ffmpeg${TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""}`,
-            `(脚本 scripts/build-ffmpeg.sh 会把 libav*.a 编到上述 install/lib/;` +
-              `macOS 跨编时 x86_64 产物独立落在 third/FFmpeg-build/darwin/x86_64/)`,
+            `请先运行: deno task build:ffmpeg${
+              TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
+            }`,
+            `(脚本 scripts/build-ffmpeg.ts 会把 libav*.a 编到上述 install/lib/;` +
+            `各平台与架构的产物独立落在 bin/{platform}/{arch}/FFmpeg-build/)`,
           ].join("\n"),
         );
       }
     } else if (OSPlugin.isWindows) {
       const installBin = path.join(FFMPEG_INSTALL_DIR, "bin");
-      const exists =
-        fs.existsSync(installBin) &&
+      const exists = fs.existsSync(installBin) &&
         fs
           .readdirSync(installBin)
           .some((f) => /^avcodec-\d+\.dll$/i.test(f));
       if (!exists) {
         throw new Error(
           [
-            `❌ 未找到 FFmpeg 构建产物: ${path.relative(ROOT, installBin)}/avcodec-*.dll`,
+            `❌ 未找到 FFmpeg 构建产物: ${
+              path.relative(ROOT, installBin)
+            }/avcodec-*.dll`,
             `请在 MSYS2 MinGW 64-bit 终端中运行: deno task build:ffmpeg`,
           ].join("\n"),
         );
@@ -229,7 +243,7 @@ export class OSPlugin extends BasePlugin {
     }
   }
 
-  // ===== Windows:从 third/FFmpeg-build/install/bin + MSYS2 mingw64 收集到 bin/windows/ =====
+  // ===== Windows:从 bin/windows/x86_64/FFmpeg-build/install/bin 收集到 bin/windows/ =====
   private collectWindowsFFmpegDlls(): void {
     const dst = OSPlugin.binDir;
     ensureDir(dst);
@@ -245,7 +259,9 @@ export class OSPlugin extends BasePlugin {
       );
     if (ffmpegDlls.length === 0) {
       throw new Error(
-        `❌ ${path.relative(ROOT, installBin)} 中未发现 libav* DLL;请重新运行 deno task build:ffmpeg`,
+        `❌ ${
+          path.relative(ROOT, installBin)
+        } 中未发现 libav* DLL;请重新运行 deno task build:ffmpeg`,
       );
     }
     for (const f of ffmpegDlls) {
@@ -257,9 +273,7 @@ export class OSPlugin extends BasePlugin {
   // ===== Linux:pkg-config 收集到 bin/linux/ =====
   private collectLinuxSharedLibs(): void {
     const dst = OSPlugin.binDir;
-    if (OSPlugin.isGeneratedPlatformDir()) {
-      fs.rmSync(dst, { recursive: true, force: true });
-    }
+    OSPlugin.clearRuntimeStagingDir();
     ensureDir(dst);
 
     // Linux 不捆 libfuse.so:fuser 关闭 libfuse feature 走纯 Rust 挂载,二进制根本不链接
@@ -312,14 +326,9 @@ export class OSPlugin extends BasePlugin {
   // ===== CEF runtime(Linux/Windows/MacOS !isWeb)=====
   // 这里的收集和验证只在 Linux和Windows运行，因为MacOS通过tauri framworks 来打包
   // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),
-  // 回退 Linux ~/i/cef-prod、Windows H:\cef-prod。
+  // 否则使用 bin/{platform}/{arch}/cef-build-prod。
   private cefDir(): string {
-    return (
-      process.env.CEF_PATH ||
-      (OSPlugin.isWindows
-        ? path.join("H:", "cef-prod")
-        : path.join(os.homedir(), "i", "cef-prod"))
-    );
+    return process.env.CEF_PATH || cefExportDir("prod");
   }
 
   // 前置校验:缺少 CEF 运行时则报错并提示导出命令(类比 verifyFFmpegBuildArtifacts)。
@@ -337,9 +346,9 @@ export class OSPlugin extends BasePlugin {
           ...(OSPlugin.isWindows
             ? [`  在 Windows 上设置 CEF_PATH 指向已构建的 CEF 发行版目录`]
             : [
-                `  scripts/build-chromium.sh prod`,
-                `  # 开发运行时: scripts/build-chromium.sh dev`,
-              ]),
+              `  deno task build:chromium prod`,
+              `  # 开发运行时: deno task build:chromium dev`,
+            ]),
         ].join("\n"),
       );
     }
@@ -375,7 +384,9 @@ export class OSPlugin extends BasePlugin {
       if (!fs.existsSync(s)) {
         if (f === "en-US.pak") {
           throw new Error(
-            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${path.join(src, "locales")}`,
+            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${
+              path.join(src, "locales")
+            }`,
           );
         }
         this.log(chalk.yellow(`CEF locale 缺失(跳过): ${f}`));
@@ -385,7 +396,9 @@ export class OSPlugin extends BasePlugin {
       copied++;
     }
     this.log(
-      chalk.cyan(`已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ bin/linux/locales/`),
+      chalk.cyan(
+        `已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ bin/linux/locales/`,
+      ),
     );
   }
 
@@ -417,7 +430,9 @@ export class OSPlugin extends BasePlugin {
       if (!fs.existsSync(s)) {
         if (f === "en-US.pak") {
           throw new Error(
-            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${path.join(src, "locales")}`,
+            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${
+              path.join(src, "locales")
+            }`,
           );
         }
         this.log(chalk.yellow(`CEF locale 缺失(跳过): ${f}`));
@@ -436,9 +451,7 @@ export class OSPlugin extends BasePlugin {
   // ===== macOS:仅保留 KABEGAME_BUNDLE_LIBS_EXTRA 逃生口(x264 已静态嵌入 FFmpeg,libfuse 弱链接懒加载) =====
   private collectMacOSDylibs(): void {
     const dst = OSPlugin.binDir;
-    if (OSPlugin.isGeneratedPlatformDir()) {
-      fs.rmSync(dst, { recursive: true, force: true });
-    }
+    OSPlugin.clearRuntimeStagingDir();
     ensureDir(dst);
     this.appendExtraLibs(dst);
   }
@@ -447,10 +460,12 @@ export class OSPlugin extends BasePlugin {
   private appendExtraLibs(dst: string): void {
     const extra = (process.env.KABEGAME_BUNDLE_LIBS_EXTRA ?? "").trim();
     if (!extra) return;
-    for (const raw of extra
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)) {
+    for (
+      const raw of extra
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    ) {
       if (!fs.existsSync(raw)) {
         throw new Error(
           `KABEGAME_BUNDLE_LIBS_EXTRA 指向的文件不存在: ${raw}`,
@@ -458,7 +473,9 @@ export class OSPlugin extends BasePlugin {
       }
       const realpath = fs.realpathSync(raw);
       fs.copyFileSync(realpath, path.join(dst, path.basename(raw)));
-      this.log(chalk.cyan(`已收集额外库 → ${path.basename(raw)}(来源: ${realpath})`));
+      this.log(
+        chalk.cyan(`已收集额外库 → ${path.basename(raw)}(来源: ${realpath})`),
+      );
     }
   }
 
@@ -467,14 +484,20 @@ export class OSPlugin extends BasePlugin {
     if (!fs.existsSync(helper)) {
       throw new Error(
         [
-          `❌ 缺少 kabegame-cef-helper 可执行文件: ${path.relative(ROOT, helper)}`,
-          `请先构建 kabegame 主组件${profile === "release" ? " release" : " dev"} 产物`,
+          `❌ 缺少 kabegame-cef-helper 可执行文件: ${
+            path.relative(ROOT, helper)
+          }`,
+          `请先构建 kabegame 主组件${
+            profile === "release" ? " release" : " dev"
+          } 产物`,
         ].join("\n"),
       );
     }
     this.log(
       chalk.cyan(
-        `macOS 使用扁平 CEF helper (${profile}): ${path.relative(ROOT, helper)}`,
+        `macOS 使用扁平 CEF helper (${profile}): ${
+          path.relative(ROOT, helper)
+        }`,
       ),
     );
     return helper;
@@ -529,10 +552,12 @@ export class OSPlugin extends BasePlugin {
     fs.copyFileSync(src, dst);
     this.log(
       chalk.cyan(
-        `[build] Staged dokan2.dll resource: ${path.relative(
-          ROOT,
-          dst,
-        )} (from: ${src})`,
+        `[build] Staged dokan2.dll resource: ${
+          path.relative(
+            ROOT,
+            dst,
+          )
+        } (from: ${src})`,
       ),
     );
   }
@@ -582,10 +607,12 @@ export class OSPlugin extends BasePlugin {
       fs.copyFileSync(src, dst);
       this.log(
         chalk.cyan(
-          `[build] Copied dokan2.dll next to target/release exe: ${path.relative(
-            ROOT,
-            dst,
-          )}`,
+          `[build] Copied dokan2.dll next to target/release exe: ${
+            path.relative(
+              ROOT,
+              dst,
+            )
+          }`,
         ),
       );
     } catch {

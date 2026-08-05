@@ -102,7 +102,7 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
 CEF_PATH=... cargo check -p tauri-runtime-cef
 ```
 
-`cef-rs` 默认下载对应的官方预编译 CEF（**不含 H.264/AAC**）；必须设置 `CEF_PATH` 指向自编运行时目录（见 `.cursor/rules/cef-path-set.mdc`）。构建脚本回退约定：Linux `~/i/cef-{dev,prod}`，Windows `H:\cef-{dev,prod}`，macOS `/Volumes/KIOXIA/cef-{dev,prod}`（`scripts/plugins/mode-plugin.ts`）。
+`cef-rs` 默认下载对应的官方预编译 CEF（**不含 H.264/AAC**）；必须设置 `CEF_PATH` 指向自编运行时目录（见 `.cursor/rules/cef-path-set.mdc`）。默认目录统一为 `bin/{platform}/{arch}/cef-build-{dev,prod}`（`scripts/plugins/mode-plugin.ts`）。
 
 Windows 构建 `libcef_dll_wrapper` 需要 cmake + ninja + MSVC；cef-dll-sys 的 build.rs 会把整个 CEF runtime 拷进 `target/{debug,release}/`，dev 运行免手工拷贝。
 
@@ -182,9 +182,9 @@ submodule 的 gitlink 永远不提交本地改动：
     并消费落点。详见 `third-patches/cef/README.md`。生成的 C API 与 `libcef_dll`
     胶水不入 patch——它们由 `cef_create_projects.sh` 里的 `version_manager.py` 产出。
 
-`scripts/build-chromium.sh` 在构建前以仓库内 `third/cef` 为本地源码引用:
+`scripts/build-chromium.ts` 在构建前以仓库内 `third/cef` 为本地源码引用:
 把它的路径和当前提交分别传给 `automate-git.py --url` / `--checkout`。首次或
-`--clean` 构建会从该引用创建 `cefbuild/chromium_git/cef`，增量构建会把已有
+`--clean` 构建会从该引用创建 `third/chromium/chromium_git/cef`，增量构建会把已有
 checkout 的 origin 校正到该引用、同步当前提交，并由 CEF 标准 patch 流程将
 `kabegame_flat_subprocess_path` 应用到 Chromium 源码。构建前需初始化子模块并手动
 应用 Kabegame patch series：
@@ -192,11 +192,11 @@ checkout 的 origin 校正到该引用、同步当前提交，并由 CEF 标准 
 ```bash
 git submodule update --init third/cef
 git -C third/cef checkout kabegame-7827          # 见下方「patch 必须落成分支上的提交」
-scripts/build-chromium.sh dev
-scripts/build-chromium.sh prod
+deno task build:chromium dev
+deno task build:chromium prod
 ```
 
-**patch 必须落成分支上的提交。** `automate-git.py` 对 `cefbuild/chromium_git/cef` 做的是
+**patch 必须落成分支上的提交。** `automate-git.py` 对 `third/chromium/chromium_git/cef` 做的是
 `git fetch` + `git checkout <hash>`（hash 来自 `git -C third/cef rev-parse HEAD`），
 有两个后果：
 

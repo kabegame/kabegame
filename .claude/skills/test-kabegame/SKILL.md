@@ -89,7 +89,7 @@ deno task test -c kabegame-cli
 - **同一时间只跑一个 driver**：三个 crate 共用根 target/，并行的第二个 cargo 会
   `Blocking waiting for file lock on build directory` 干等（实测白等了 100s+ 才轮到）。
   串行跑。
-- **`-c kabegame` 会做 CEF 检查**：注入 `CEF_PATH`（dev/check/test 均取 cef-dev），
+- **`-c kabegame` 会做 CEF 检查**：注入 `CEF_PATH`（dev/check/test 均取 cef-build-dev），
   机器上没有导出的 CEF runtime 会直接报 `CEF runtime not found`。core/cli 不链
   CEF，无此要求。
 - **app 在跑的时候 `-c kabegame` 会炸**：cef-dll-sys build script 复制 CEF 运行时
@@ -106,6 +106,6 @@ deno task test -c kabegame-cli
 |---|---|
 | `error: no test target named ...` | `--test <name>` 的 target 不存在；`kabegame-core/tests/` 下目前只有 `dsl_e2e` |
 | bindgen/rsmpeg 报找不到 FFmpeg 头文件 | 手敲了裸 `cargo test`；走本 driver 或 `deno task test` |
-| `CEF runtime not found in: .../cef-dev` | `-c kabegame` 需要本机 CEF runtime（`scripts/build-chromium.sh dev`），或者改测 kabegame-core/cli |
+| `CEF runtime not found in: .../cef-build-dev` | `-c kabegame` 需要本机 CEF runtime（`deno task build:chromium dev`），或者改测 kabegame-core/cli |
 | `不存在的组件名称 ...` | crate 名拼错；只接受 kabegame / kabegame-cli / kabegame-core |
 | `failed to auto-clean cache data ... os error 13` | cargo 缓存权限噪音，忽略 |

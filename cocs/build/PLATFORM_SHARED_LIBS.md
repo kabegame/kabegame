@@ -10,7 +10,7 @@
 
 | 平台 | 暂存目录 | git 跟踪 | 内容 |
 |---|---|---|---|
-| Windows | `bin/windows/` | 部分 | dokan2 等预置文件跟踪;av*/swscale-*/swresample-* 由 os-plugin 在 build 期从 `third/FFmpeg-build/install/bin` 收集(`.gitignore` 已忽略)。x264 静态嵌入 avcodec-\*.dll、libwinpthread 静态嵌入 avutil-\*.dll(见 `scripts/build-ffmpeg.sh`),均无需单独收集/打包 |
+| Windows | `bin/windows/` | 部分 | dokan2 等预置文件跟踪;av*/swscale-*/swresample-* 由 os-plugin 在 build 期从 `bin/windows/x86_64/FFmpeg-build/install/bin` 收集(`.gitignore` 已忽略)。x264 静态嵌入 avcodec-\*.dll、libwinpthread 静态嵌入 avutil-\*.dll(见 `scripts/build-ffmpeg.ts`),均无需单独收集/打包 |
 | Linux | `bin/linux/` | 否 | FFmpeg、x264 均静态链接；仅保留 `KABEGAME_BUNDLE_LIBS_EXTRA` 指定的额外动态库 |
 | macOS | `bin/macos/` | 否 | 仅保留 `KABEGAME_BUNDLE_LIBS_EXTRA` 逃生口；x264 已静态嵌入 FFmpeg,libfuse 弱链接懒加载,不随包分发任何 brew dylib |
 
@@ -44,7 +44,7 @@ build.rs 在 macOS 注入 `-Wl,-rpath,@executable_path/../Frameworks`(对位于 
 ## CEF runtime 随包打包(Linux/Windows standard|light)
 
 CEF/Chromium 运行时(约 200MB)不走系统收集,来源是 `CEF_PATH` 指向的自编发行版目录
-(回退:Linux `~/i/cef-prod`、Windows `H:\cef-prod`;dev/check 用对应 cef-dev):
+(回退:`bin/{platform}/{arch}/cef-build-prod`;dev/check/test 用 `cef-build-dev`):
 
 | 平台 | 收集函数(os-plugin) | 暂存位置 | 安装位置 | 搬运机制 |
 |---|---|---|---|---|
@@ -88,7 +88,7 @@ macOS 的 CEF helper **不经模板变量注入**:三平台统一为 exe 旁的�
 },
 "macOS": {
   "minimumSystemVersion": "11.0",
-  "frameworks": ["/Volumes/KIOXIA/cef-prod/Chromium Embedded Framework.framework"],
+  "frameworks": ["<repo>/bin/macos/arm64/cef-build-prod/Chromium Embedded Framework.framework"],
   "files": {
     "MacOS/kabegame-cef-helper": "../../target/release/kabegame-cef-helper"
   },
@@ -113,8 +113,8 @@ macOS 的 CEF helper **不经模板变量注入**:三平台统一为 exe 旁的�
 | `scripts/plugins/component-plugin.ts` | 渲染 tauri.conf 前注入 `linuxBins` / `macosFrameworks`;dev 预构建 `kabegame-cef-helper` |
 | `scripts/plugins/mode-plugin.ts` | dev/start 时 Windows PATH 注入(`OSPlugin.binDir`);copyBin 已并入 OSPlugin |
 | `scripts/plugins/release-plugin.ts` | Linux assertNoLinuxLibfuseLink(强制 Linux 不链 libfuse) |
-| `scripts/build-ffmpeg.sh` | 只编 FFmpeg + 生成 MSVC 导入库;**不再**复制 DLL 到 bin/ |
-| `scripts/utils.ts` | 通用工具;Windows DLL 复制函数已迁到 os-plugin |
+| `scripts/build-ffmpeg.ts` | 只编 FFmpeg + 生成 MSVC 导入库;**不再**复制 DLL 到 bin/ |
+| `scripts/paths.ts` / `scripts/utils.ts` | 路径命名公式(`repoBuildDir`/`cefExportDir`)与通用工具;Windows DLL 复制函数已迁到 os-plugin |
 | `src-tauri/kabegame/build.rs` | Linux `$ORIGIN/../lib/kabegame` + macOS `@executable_path/../Frameworks` rpath |
 | `src-tauri/kabegame-cli/build.rs` | 同上(CLI 也吃同一份 libx264) |
 | `src-tauri/kabegame/tauri.conf.json.handlebars` | Linux deb files + macOS frameworks 动态注入点 |

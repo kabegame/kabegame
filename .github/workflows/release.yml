@@ -104,16 +104,18 @@ jobs:
         run: cargo install tauri-cli --version 2.10.0
 
       # 构建 libav*（rsmpeg 链接所需）。须在 cargo 构建之前执行：
-      #   - Unix：静态库 third/FFmpeg-build/install/lib/*.a
-      #   - Windows：动态库 bin/avcodec-*.dll 等 + install/lib/*.lib 导入库（MSYS2 + lib.exe）
+      #   - Unix：静态库 bin/{macos|linux}/{arm64|x86_64}/FFmpeg-build/install/lib/*.a
+      #   - Windows：动态库 bin/windows/x86_64/FFmpeg-build/install/bin/*.dll
+      #     + install/lib/*.lib 导入库（MSYS2 + lib.exe），打包阶段再收集到 bin/windows/
       - name: Build FFmpeg libraries (rsmpeg) [Unix]
         if: runner.os != 'Windows'
         run: deno task build:ffmpeg
 
       - name: Build FFmpeg libraries (rsmpeg) [Windows]
         if: runner.os == 'Windows'
+        # 保持 MSYS2 shell，确保 deno 继承 MinGW autotools 与 MSVC lib.exe 所需的 PATH。
         shell: msys2 {0}
-        run: bash scripts/build-ffmpeg.sh
+        run: deno run -A scripts/build-ffmpeg.ts
 
       - name: Build CLI (required before main packaging)
         run: deno task b -c kabegame-cli

@@ -8,7 +8,7 @@
 ## Patches
 
 - `0001-drop-avdevice.patch` — removes `avdevice` from the linked FFmpeg `LIBS`; the project's FFmpeg build disables libavdevice.
-- `0002-static-x264-and-link-path-order.patch` — rewrites the pkg-config linking pass in `build.rs`: emits the FFmpeg libraries' own link paths first (so `third/FFmpeg-build` archives win over identically-named system archives) and forces x264 to link statically (the system `libx264.so` crashes under CEF's PartitionAlloc `memalign` replacement).
+- `0002-static-x264-and-link-path-order.patch` — rewrites the pkg-config linking pass in `build.rs`: emits the FFmpeg libraries' own link paths first (so the `bin/{platform}/{arch}/FFmpeg-build` archives win over identically-named system archives) and forces x264 to link statically (the system `libx264.so` crashes under CEF's PartitionAlloc `memalign` replacement).
 - `0003-ffmpeg-archive-rebuild-stamp.patch` — tracks each `libav*.pc`/`libav*.a` with `rerun-if-changed` and embeds an archive mtime stamp via `RUSTY_FFMPEG_ARCHIVE_STAMP`, so rebuilding FFmpeg externally recompiles rusty_ffmpeg instead of reusing an rlib with stale `.o` files.
 
 The crate is consumed as a `[patch.crates-io]` path override in the root

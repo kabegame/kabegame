@@ -69,7 +69,7 @@ Android 上的 V8 插件后端使用仓库自建的 aarch64 `rusty_v8` 静态库
 deno task build:v8
 ```
 
-产物写入 gitignore 的 `bin/android/`，Android 模式通过 `RUSTY_V8_ARCHIVE` 与 `RUSTY_V8_SRC_BINDING_PATH` 自动接入。完整构建原理和磁盘、clang 要求见 [`cocs/crawler/V8_RUNTIME.md`](https://github.com/kabegame/kabegame/blob/main/cocs/crawler/V8_RUNTIME.md) 与 [`third-patches/rusty_v8/README.md`](https://github.com/kabegame/kabegame/blob/main/third-patches/rusty_v8/README.md)。
+产物写入 gitignore 的 `bin/android/arm64/rusty_v8-build/`，Android 模式通过 `RUSTY_V8_ARCHIVE` 与 `RUSTY_V8_SRC_BINDING_PATH` 自动接入。完整构建原理和磁盘、clang 要求见 [`cocs/crawler/V8_RUNTIME.md`](https://github.com/kabegame/kabegame/blob/main/cocs/crawler/V8_RUNTIME.md) 与 [`third-patches/rusty_v8/README.md`](https://github.com/kabegame/kabegame/blob/main/third-patches/rusty_v8/README.md)。
 
 Android 视频摄入还需要交叉编译 FFmpeg / x264：
 
@@ -77,7 +77,7 @@ Android 视频摄入还需要交叉编译 FFmpeg / x264：
 deno task build:ffmpeg --target android
 ```
 
-这些产物位于 `third/FFmpeg-build/android/`，不提交到 Git，由命令按需复现。
+这些产物位于 `bin/android/arm64/FFmpeg-build/`，不提交到 Git，由命令按需复现。
 
 ## 深入阅读
 

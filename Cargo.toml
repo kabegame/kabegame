@@ -67,7 +67,7 @@ sevenz-rust2 = { version = "0.21", default-features = false, features = [
 ] }
 # 进程内 FFmpeg（libav*）绑定：替代旧的 ffmpeg sidecar 进程调用与 mp4 crate。
 # feature 须匹配 third/FFmpeg 子模块的 FFmpeg 主版本（当前 n8.2 → ffmpeg8）。
-# 链接经 rusty_ffmpeg：由构建环境的 FFMPEG_PKG_CONFIG_PATH 指向 third/FFmpeg-build/install/lib/pkgconfig。
+# 链接经 rusty_ffmpeg：由构建环境的 FFMPEG_PKG_CONFIG_PATH 指向 bin/{platform}/{arch}/FFmpeg-build/install/lib/pkgconfig。
 # 源码来自 [patch.crates-io] 的 third/rsmpeg 子模块（larksuite/rsmpeg + third-patches/rsmpeg）；
 # rusty_ffmpeg 不在此声明——它只被 rsmpeg 依赖，同样经 [patch.crates-io] 解析。
 rsmpeg = { version = "0.18.0", default-features = false, features = ["ffmpeg8_1"] }

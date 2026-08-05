@@ -60,7 +60,7 @@ trash = "5"
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 # 进程内 FFmpeg：视频预览压缩 + 维度读取。桌面 + Android 均接入（仅排除 iOS）。
 # 链接依赖构建环境 FFMPEG_PKG_CONFIG_PATH 指向对应平台的 FFmpeg-build install/lib/pkgconfig
-# （桌面 third/FFmpeg-build/install；Android third/FFmpeg-build/android/<arch>/install）。
+# （统一位于 bin/{platform}/{arch}/FFmpeg-build/install，Android 架构 token 为 arm64）。
 # Android content:// 视频经 ContentIoProvider.open_fd 拿 fd，Rust 用 file 协议打开 /proc/self/fd/N。
 rsmpeg = { workspace = true }
 # embed_ext_sources：kabegame 补丁 feature（third/deno libs/core），无快照运行时将扩展 JS
