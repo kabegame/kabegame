@@ -17,4 +17,14 @@
             }
         }
     },
+    // resolve 兜底: 年份段不靠动态枚举也能路由。上文条件组合为空集时(高级查询
+    // 取非/搜索交叉), 动态 list 枚举不出该年, 但路径必须仍可路由——命中数为 0
+    // 是合法结果, 不是 path not found。
+    "resolve": {
+        "([0-9]{4})y": {
+            "alias": "year",
+            "provider": "gallery_date_year_provider",
+            "properties": { "year": "${capture[1]}" }
+        }
+    },
 }

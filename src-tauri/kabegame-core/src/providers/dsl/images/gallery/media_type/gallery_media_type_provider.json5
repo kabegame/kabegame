@@ -36,5 +36,13 @@
             "provider": "${child.provider}",
             "meta": "${child.meta}"
         },
+        // 兜底: 格式段不靠动态枚举也能路由(空上下文命中数为 0, 不是 not found)。
+        // resolve 按声明顺序匹配, 本条必须在 desc/分页之后; 字符集排除 `_`,
+        // 结构上就命不中 filter_comb; 纯数字页码由前面的分页条目先接走。
+        "([0-9]*[a-z][a-z0-9.+-]*)": {
+            "alias": "format",
+            "provider": "gallery_media_format_provider",
+            "properties": { "format": "${capture[1]}" }
+        },
     }
 }

@@ -47,6 +47,7 @@ image = { version = "0.25.10", default-features = false, features = [
   "png", "pnm", "qoi", "tga", "tiff", "webp", "rayon",
 ] }
 include_dir = "0.7"
+indexmap = { version = "2", features = ["serde"] }
 json5 = "1.3"
 kamadak-exif = "0.6"
 kabegame-core = {path = "./src-tauri/kabegame-core", default-features = false}

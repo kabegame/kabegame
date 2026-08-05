@@ -7,6 +7,7 @@ description = "Path-folding query DSL — AST + Loader + Registry + template eva
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+indexmap = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 json5 = { workspace = true, optional = true }

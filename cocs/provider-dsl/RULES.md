@@ -246,6 +246,11 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 - gallery 路由表已统一使用 `list` 范式，与 VD 一致。新增纯字面量路由表必须写在 `list`，
   不要写进 `resolve`；`resolve` 虽可解析字面量，但该层无法被 `runtime.list` 和 MCP
   `list_pathql_entry` 枚举。
+- 反过来，**动态 list 层必须同时配 resolve 兜底**：动态 list 的路由靠「枚举后按 key
+  反查」，一旦上文条件组合成空集（高级查询里取非 / 搜索交叉是常态），该值枚举不出来，
+  路径就 `path not found`——但「命中数为 0」是合法查询结果，不是不存在的路径。凡是
+  值域可由格式判定的维度段（年 `([0-9]{4})y`、月/日、媒体格式等），都要加一条正则
+  resolve 直接实例化对应 provider；resolve 按声明顺序匹配（§5.2），兜底正则放最后。
 - `note` 与 `meta` 职责分离：`note` 是面向人和模型的可读节点说明，写在**被说明的 provider
   自己身上**；`meta` 是 ChildEntry 的 JSON 实体数据，例如 album 行、plugin manifest 或
   路由所需结构化属性。不要把说明文字塞进 `meta`，也不要用 `note` 承载实体数据。
@@ -410,7 +415,10 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 
 引擎按以下顺序逐级查找一个路径段名 `seg`：
 
-1. **正则 resolve**：依次尝试 `resolve` 内每条正则；命中即构造对应 ProviderInvocation
+1. **正则 resolve**：**按声明顺序**依次尝试 `resolve` 内每条正则；首个命中即构造对应
+   ProviderInvocation。resolve 表底层是保序 map（IndexMap），json5 文档里条目的书写
+   顺序就是匹配优先级——宽泛的兜底正则（如维度值捕获 `([0-9]{4})y`、媒体格式）必须
+   写在 `filter_comb` / 分页等保留段条目**之后**。
 2. **静态 list key 字面量**：在 list 中查 key 是否字面等于 `seg`；命中即构造
 3. **动态 list 反查**（默认开启，无需配置）：
    - 跑 list 中所有 DynamicListEntry 的 SQL / delegate 数据源

@@ -5798,6 +5798,7 @@ name = "pathql-rs"
 version = "4.4.0"
 dependencies = [
  "arc-swap",
+ "indexmap 2.13.0",
  "json5",
  "regex",
  "regex-automata",

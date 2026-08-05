@@ -1,6 +1,6 @@
 use crate::ast::invocation::ProviderInvocation;
+use indexmap::IndexMap;
 use serde::{de, Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolveEntry {
@@ -34,9 +34,11 @@ impl From<ProviderInvocation> for ResolveEntry {
     }
 }
 
+/// resolve 表。IndexMap 保住 json5 文档里的声明顺序——匹配按声明顺序逐条尝试，
+/// 首个命中生效。宽泛的兜底正则（如维度值捕获）必须放在保留段条目之后。
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(transparent)]
-pub struct Resolve(pub HashMap<String, ResolveEntry>);
+pub struct Resolve(pub IndexMap<String, ResolveEntry>);
 
 #[cfg(test)]
 mod tests {

@@ -40,5 +40,11 @@
             "provider": "${child.provider}",
             "meta": "${child.meta}"
         },
+        // 兜底: 月份段不靠动态枚举也能路由(空上下文命中数为 0, 不是 not found)。
+        "([0-9]{2})m": {
+            "alias": "month",
+            "provider": "gallery_date_month_provider",
+            "properties": { "year_month": "${properties.year}-${capture[1]}" }
+        },
     }
 }
