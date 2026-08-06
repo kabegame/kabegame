@@ -15,11 +15,11 @@
   "main": "dist/main.js",
   "scripts": { "build": "rspack build" },
   "devDependencies": {
-    "@kabegame/plugin-sdk": "^0.1.0",
-    "@kabegame/types": "^0.1.0",
+    "@kabegame/plugin-sdk": "file:../../../packages/kabegame-plugin-sdk",
+    "@kabegame/types": "file:../../../packages/kabegame-types",
     "@rspack/cli": "^1",
     "@rspack/core": "^1",
-    "typescript": "^5"
+    "typescript": "^5.5.0"
   }
 {%- else %},
   "main": "crawl.js",
