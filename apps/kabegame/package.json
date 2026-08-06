@@ -12,6 +12,7 @@
     "@kabegame/element-plus": "workspace:*",
     "@kabegame/element-plus-icons": "workspace:*",
     "@kabegame/i18n": "workspace:*",
+    "@kabegame/pathql-client": "workspace:*",
     "@tauri-apps/api": "^2.11",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-opener": "^2.0",

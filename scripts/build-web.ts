@@ -113,8 +113,8 @@ function main(): void {
     run("deno", ["task", "b", "-c", "kabegame-cli", "--release"]);
   }
 
-  // pathql 生成客户端不入库，vite 侧 @kabegame/pathql-client 别名指向该文件，缺失则前端
-  // 构建必败——在最前面给出明确指引（不自动生成：release CLI 的数据目录/插件集合与
+  // pathql 生成客户端 index.ts 不入库，vite 侧 @kabegame/pathql-client 别名指向该文件，
+  // 缺失则前端构建必败——在最前面给出明确指引（不自动生成：CLI 的数据目录/插件集合与
   // 生成语境耦合，交由开发者显式执行）。
   const pathqlClient = path.join(
     ROOT,
@@ -123,11 +123,9 @@ function main(): void {
     "index.ts",
   );
   if (!fs.existsSync(pathqlClient) || !fs.statSync(pathqlClient).isFile()) {
-    const cliCommand = path.relative(ROOT, cliExecutable) || cliExecutable;
     die(
       "packages/kabegame-pathql-client/index.ts 不存在。\n" +
-        `先运行: ${cliCommand} pathql generate --out ` +
-        "packages/kabegame-pathql-client/index.ts",
+        "先运行: deno task pathql:generate",
     );
   }
 

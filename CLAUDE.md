@@ -103,10 +103,13 @@ kabegame-core），剩余参数自动补 `--` 传给 cargo test；全量套件�
 ### Other
 ```bash
 deno task set-version            # Bump version across workspace
-kabegame-cli pathql generate --target typescript --out packages/kabegame-pathql-client/index.ts
-                                 # 生成 PathQL 客户端(@kabegame/pathql-client 别名指向该文件);
-                                 # 产物不入库,新 checkout / 修改 DSL 后需先手动生成,
-                                 # 否则前端 vue-tsc / vite 构建会因缺文件明确报错
+deno task pathql:generate        # 生成 PathQL 客户端 packages/kabegame-pathql-client/index.ts
+                                 # (deno TS 脚本 scripts/generate-pathql-client.ts:默认先增量
+                                 # 构建 debug kabegame-cli 再 pathql generate,--skip-build 用现有
+                                 # 二进制)。包是 workspace 成员:外壳 package.json 入库、可被
+                                 # 安装(@kabegame/pathql-client),index.ts 为生成物不入库;
+                                 # 新 checkout / 修改 DSL 后需先生成,否则前端 vue-tsc / vite
+                                 # 构建会因缺文件明确报错
 deno task patch deno             # Reset third/deno to its clean baseline, then apply the full series
 deno task patch deno -r          # Reset third/deno to its clean baseline
 deno task patch --all --check    # Dry-run every patch-manager-owned third-patches/* series

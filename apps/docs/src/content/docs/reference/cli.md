@@ -160,7 +160,7 @@ kabegame-cli pathql generate --target typescript --out packages/kabegame-pathql-
 | `--target` | 否   | 生成目标，当前仅支持 `typescript`（默认）。 |
 | `--out`    | 是   | 输出文件路径；`-` 表示标准输出。          |
 
-生成物不入库；修改 provider DSL 后需手动重新生成。
+生成物不入库；修改 provider DSL 后需手动重新生成。在 kabegame 仓库内推荐用 `deno task pathql:generate`——先增量构建 debug CLI 再生成，避免旧二进制（DSL 编译期内嵌）静默产出旧客户端。
 
 ### pathql query
 

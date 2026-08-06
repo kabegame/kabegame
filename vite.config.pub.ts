@@ -100,9 +100,9 @@ export default {
         "kabegame-element-plus",
         "src"
       ),
-      // pathql 生成客户端:产物不入库(gitignore),由
-      // `kabegame-cli pathql generate --out packages/kabegame-pathql-client/index.ts`
-      // 手动生成;缺文件时前端构建/类型检查会明确报错,先跑 generate。
+      // pathql 生成客户端:index.ts 为生成物不入库(外壳 package.json 入库,包为
+      // workspace 成员),由 `deno task pathql:generate` 生成;缺文件时前端构建/
+      // 类型检查会明确报错,先跑 generate。
       "@kabegame/pathql-client": path.resolve(
         root,
         "packages",

@@ -9,8 +9,8 @@ lerna-debug.log*
 
 node_modules
 node_modules-*/
-# PathQL client 生成物（改 DSL 后手动重生成，不入库）
-/packages/kabegame-pathql-client/
+# PathQL client 生成物（deno task pathql:generate 重生成，不入库；外壳 package.json 入库）
+/packages/kabegame-pathql-client/index.ts
 dist-*
 !dist-kabegame/
 dist-kabegame/*

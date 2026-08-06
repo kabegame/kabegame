@@ -1,0 +1,9 @@
+{
+  "name": "@kabegame/pathql-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PathQL 生成客户端外壳。index.ts 为生成物不入库，由 `deno task pathql:generate` 生成；本 package.json 入库，使包作为 workspace 成员可被安装。",
+  "main": "./index.ts",
+  "types": "./index.ts"
+}
