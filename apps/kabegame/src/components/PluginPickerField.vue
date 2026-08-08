@@ -50,27 +50,34 @@
         @update:model-value="emitValue"
       >
         <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value">
-          <div class="plugin-picker-option">
-            <template v-if="showIcons && option.pluginId">
-              <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
-              <el-icon v-else class="plugin-picker-option__icon-placeholder">
-                <Grid />
-              </el-icon>
+          <!-- 悬浮时在整行右侧弹出插件快捷预览（与「源」页面同一张面板）；
+               「全部」这类没有插件实体的行不弹 -->
+          <HoverRevealPanel :disabled="!option.plugin">
+            <div class="plugin-picker-option">
+              <template v-if="showIcons && option.pluginId">
+                <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__icon" alt="" />
+                <el-icon v-else class="plugin-picker-option__icon-placeholder">
+                  <Grid />
+                </el-icon>
+              </template>
+              <span class="plugin-picker-option__label">{{ option.label }}</span>
+              <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
+              <!-- 尾部整体右对齐：让各行的标签落在同一条右边线上，便于纵向对比 -->
+              <span class="plugin-picker-option__trailing">
+                <el-icon
+                  v-if="option.warning"
+                  class="plugin-picker-option__warning"
+                  :title="$t('plugins.androidNotSupported')"
+                >
+                  <WarningFilled />
+                </el-icon>
+                <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" fixed-slots />
+              </span>
+            </div>
+            <template v-if="option.plugin" #panel>
+              <PluginQuickPreviewPanel v-bind="quickPreviewProps(option.plugin)" :show-detail-hint="false" />
             </template>
-            <span class="plugin-picker-option__label">{{ option.label }}</span>
-            <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
-            <!-- 尾部整体右对齐：让各行的标签落在同一条右边线上，便于纵向对比 -->
-            <span class="plugin-picker-option__trailing">
-              <el-icon
-                v-if="option.warning"
-                class="plugin-picker-option__warning"
-                :title="$t('plugins.androidNotSupported')"
-              >
-                <WarningFilled />
-              </el-icon>
-              <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" fixed-slots />
-            </span>
-          </div>
+          </HoverRevealPanel>
         </el-option>
       </el-select>
 
@@ -95,7 +102,12 @@ import { computed } from "vue";
 import { Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
+import HoverRevealPanel from "@kabegame/core/components/common/HoverRevealPanel.vue";
 import PluginLabelTags from "@kabegame/core/components/plugin/PluginLabelTags.vue";
+import PluginQuickPreviewPanel, {
+  type QuickPreviewPluginLike,
+} from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
+import { bannerPreviewImages } from "@kabegame/core/utils/assetPath";
 import {
   VERSION_INCOMPATIBLE_LABEL_ID,
   type PluginLabel,
@@ -190,6 +202,20 @@ function labelsFor(p?: Plugin): PluginLabel[] {
   return p.minAppIncompatible
     ? [...base, { id: VERSION_INCOMPATIBLE_LABEL_ID }]
     : base;
+}
+
+/**
+ * 快捷预览面板的 props。这里的插件一定是已安装的，示例图直接从内存里的 `assets` 读，
+ * 不存在「未安装故读不到」的分支；标签口径与行尾标签保持一致（含版本不兼容这类派生标签）。
+ */
+function quickPreviewProps(plugin: Plugin) {
+  const images = bannerPreviewImages(plugin.assets);
+  return {
+    plugin: { ...plugin, labels: labelsFor(plugin) } as QuickPreviewPluginLike,
+    iconSrc: pluginStore.pluginIconSrc(plugin.id),
+    images,
+    emptyReason: images.length > 0 ? null : ("no-assets" as const),
+  };
 }
 
 const pluginRows = computed((): PluginPickerOption[] => {

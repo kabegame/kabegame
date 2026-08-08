@@ -16,6 +16,9 @@
 
 datasource db {
   provider = "sqlite"
+  // 仅为满足 PSL 校验（Prisma 6 要求 datasource.url 必填）；本文件不生成 client，
+  // 运行时路径由 tauri-plugin-pathes 决定，实际库位于 {app_data_dir}/images.db。
+  url      = "file:./images.db"
 }
 
 /// 任务表
@@ -114,10 +117,22 @@ model Album {
   type         String  @default("normal")
   syncFolder   String? @unique(map: "idx_albums_sync_folder") @map("sync_folder")
   folderStatus String? @map("folder_status")
+  ancestorPath String  @default("") @map("ancestor_path")
+  syncMode     String  @default("none") @map("sync_mode")
 
   parent   Album?  @relation("AlbumTree", fields: [parentId], references: [id], onDelete: Cascade)
   children Album[] @relation("AlbumTree")
-
+  // syncMode 状态语义：none 不同步；shallow 仅同步自身目录；recursive 递归同步整棵子树；
+  // delegated 表示同步行为由某个 recursive 祖先委托，不能直接设置。
+  // local_folder 画册有 recursive 严格祖先时必须为 delegated；否则 delegated 必须降为 none。
+  //
+  // 需要新设计一个pathql查询路径画册，用户视角为”查询画册“，该画册和文件夹画册一样放在顶部，并且内部内容自组织。
+  // 该类画册是一个带images:// 的 pathql 查询的计算画册，并且画册下的子画册是list的结果+用户可能创建的子画册（用户可以创建子画册来手动resolve），画册下的图片是fetch的结果，保存路径的pathql编码形式（不包括URL百分号编码，包括反斜线转移，不包括Images://前缀）。
+  // 为了性能着想，将其设计即时计算而不是维护图片画册链接。
+  // 用户创建的画册如果父画册是查询画册，那么该画册自动成为查询画册，并记录后端入库。但子画册list结果是计算出来的，不入库。最终子画册是list结果+用户手动创建，路径一样的情况下，查询一样，但用户可以重命名画册，所以以用户的为准。
+  // 后端不处理查询，并且前端不积极地一次性建树，因为是计算的，所以可能有无限的深度。当用户从左侧下拉的那一瞬间，前端去加载，然后返回结果。并且不响应式更新list结果，list要带上总数，以及和现在一样要响应式更新总数。用户唯一可以右键刷新子画册结果。
+  // 如果打开发现某个画册fetch报错（通常是路径找不到），则给该类画册右侧加上红色感叹号，让用户刷新父画册。如果是用户自己创建的画册，刷新也不去掉，只是下次打开发现还是坏的还是标红。
+  // 遇到坏的路径，就自动退回到上一个访问的路径（路由回退）
   // SQLite expression index not representable in Prisma:
   // CREATE UNIQUE INDEX idx_albums_name_scoped
   //   ON albums(COALESCE(parent_id, ''), LOWER(name));

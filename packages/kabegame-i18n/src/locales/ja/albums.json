@@ -67,6 +67,12 @@
     "recursiveHint": "各サブフォルダを「<アルバム名>-<サブフォルダ>」形式の独立したアルバムとして作成します。",
     "recursiveLimits": "最大 {maxDepth} 階層まで展開し、それより深いサブフォルダはスキップされます。",
     "skipNotice": "シンボリックリンク、「.」で始まる隠し項目、画像/動画以外のファイルは同期されません。",
+    "syncMode": {
+      "none": { "label": "同期しない", "description": "フォルダの変更を監視せず、自動同期もしません" },
+      "shallow": { "label": "浅い同期", "description": "このフォルダ直下のファイルだけを自動同期し、子アルバムは作成しません" },
+      "recursive": { "label": "再帰同期", "description": "フォルダツリー全体を自動同期し、サブフォルダに対応するアルバムを作成します" },
+      "delegated": { "label": "同期を委任", "description": "上位アルバムの再帰同期によって管理されているため、個別には変更できません" }
+    },
     "statusMissing": "ローカルパスが存在しないか移動されました",
     "statusDenied": "ローカルパスにアクセスする権限がありません：{message}",
     "statusNotADir": "ローカルパスはフォルダではありません",
@@ -111,5 +117,19 @@
   "moveFailed": "移動に失敗しました",
   "selectTargetAlbum": "移動先のアルバムを選択",
   "enterHidden": "非表示アルバム",
-  "hiddenAlbumName": "非表示アルバム"
+  "hiddenAlbumName": "非表示アルバム",
+  "treePanelTitle": "アルバムツリー",
+  "treeFilterPlaceholder": "アルバムを絞り込む",
+  "treeSectionLocalFolders": "ローカルフォルダ",
+  "treeRotationTooltip": "壁紙ローテーション中",
+  "treeFolderStatusTooltip": "フォルダ状態の異常：{state}",
+  "treeAddAlbum": "アルバムを追加",
+  "detailPanelTitle": "アルバム情報",
+  "detailPanelEmpty": "左のアルバムを選択すると詳細が表示されます",
+  "detailRotatingBadge": "壁紙ローテーション中",
+  "detailStartRotation": "壁紙ローテーションに設定",
+  "detailStopRotation": "壁紙ローテーションを停止",
+  "detailManualAlbum": "手動アルバム",
+  "detailLocalFolderAlbum": "ローカルフォルダ",
+  "detailCrumbStats": "· {images} 枚 · サブアルバム {subAlbums} 件"
 }

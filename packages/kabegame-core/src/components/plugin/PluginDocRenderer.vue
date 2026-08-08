@@ -41,7 +41,7 @@ import { useI18n } from "@kabegame/i18n";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { openExternalLink } from "../../utils/openExternalLink";
-import { guessAssetMime, normalizeAssetPath } from "../../utils/assetPath";
+import { guessAssetMime, normalizeAssetPath, type PluginAsset } from "../../utils/assetPath";
 
 /** 文档目录项：id 是渲染时打进标题的锚点，序号即下标，与 DOM 锚点天然一一对应 */
 export interface DocHeading {
@@ -55,10 +55,10 @@ const props = withDefaults(
     markdown?: string | null;
     emptyDescription?: string;
     /**
-     * 插件内嵌资源：归一化后的插件根相对路径 → base64。
-     * 键的语义由 `normalizeAssetPath` 裁决，与后端 `assets::normalize_asset_path` 同构。
+     * 插件内嵌资源：按 kbAssets 声明顺序排列，key 由 `normalizeAssetPath` 裁决，
+     * 与后端 `assets::normalize_asset_path` 同构。
      */
-    assets?: Record<string, string> | null;
+    assets?: PluginAsset[] | null;
     /** 标题锚点前缀；同页多个渲染器实例（如 说明/更新记录 tab 同时挂载）必须各自不同 */
     anchorPrefix?: string;
   }>(),
@@ -226,7 +226,7 @@ const sanitizeHtml = (rawHtml: string): string => {
 
 const renderMarkdown = async (
   markdown: string,
-  assets?: Record<string, string> | null
+  assets?: PluginAsset[] | null
 ): Promise<{ html: string; headings: DocHeading[] }> => {
   if (!markdown) return { html: "", headings: [] };
 
@@ -269,12 +269,13 @@ const renderMarkdown = async (
 
   // 2) 替换本地图片引用：用 assets（内嵌 base64）。
   //    外链（http/https/data/协议相对）归一化返回 null，原样留给 marked 渲染。
+  const assetByKey = new Map(assets?.map((asset) => [asset.key, asset.dataBase64]) ?? []);
   let processed = markdown;
   for (const img of imageMatches.slice().reverse()) {
     const key = normalizeAssetPath(img.path);
     if (key === null) continue;
 
-    const base64 = assets?.[key];
+    const base64 = assetByKey.get(key);
     const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (base64) {
       const url = `data:${guessAssetMime(key)};base64,${base64}`;

@@ -1,4 +1,5 @@
 use crate::emitter::GlobalEmitter;
+use crate::local_folder::SyncMode;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use kabegame_i18n::t;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -7,6 +8,7 @@ use serde_json::json;
 use std::{
     collections::{HashSet, VecDeque},
     fs,
+    path::PathBuf,
 };
 
 fn validate_album_name(name: &str) -> Result<&str, String> {
@@ -36,6 +38,8 @@ pub struct Album {
     pub folder_status: Option<String>,
     /// 从根画册到自身的 id 链，格式为 `/root-id/.../self-id/`
     pub ancestor_path: String,
+    /// 本地文件夹画册的逐画册同步状态
+    pub sync_mode: String,
 }
 
 fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
@@ -48,6 +52,7 @@ fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
         sync_folder: row.get(5)?,
         folder_status: row.get(6)?,
         ancestor_path: row.get(7)?,
+        sync_mode: row.get(8)?,
     })
 }
 
@@ -65,6 +70,127 @@ pub struct AlbumImageFsEntry {
     pub file_name: String,
     pub image_id: String,
     pub resolved_path: String,
+}
+
+#[derive(Debug)]
+struct LocalFolderRechainRow {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
+    sync_path: PathBuf,
+    created_at: i64,
+}
+
+#[derive(Debug)]
+struct AlbumRechainChange {
+    id: String,
+    parent_id: Option<String>,
+    name: Option<String>,
+}
+
+/// 修复本地文件夹画册同步状态不变量，并返回实际发生的 `(画册 id, 新状态)`。
+pub(crate) fn normalize_local_folder_sync_modes(
+    conn: &Connection,
+) -> Result<Vec<(String, String)>, String> {
+    let delegated_ids = {
+        let mut stmt = conn
+            .prepare(
+                r#"
+SELECT albums.id
+  FROM albums
+ WHERE albums.type = 'local_folder'
+   AND albums.sync_mode <> 'delegated'
+   AND EXISTS (
+       SELECT 1
+         FROM albums anc
+        WHERE anc.type = 'local_folder'
+          AND anc.sync_mode = 'recursive'
+          AND anc.id <> albums.id
+          AND substr(albums.ancestor_path, 1, length(anc.ancestor_path)) = anc.ancestor_path
+   )
+ ORDER BY albums.id
+"#,
+            )
+            .map_err(|e| format!("prepare delegated sync mode normalization: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query delegated sync mode normalization: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read delegated sync mode normalization: {e}"))?
+    };
+    let none_ids = {
+        let mut stmt = conn
+            .prepare(
+                r#"
+SELECT albums.id
+  FROM albums
+ WHERE albums.type = 'local_folder'
+   AND albums.sync_mode = 'delegated'
+   AND NOT EXISTS (
+       SELECT 1
+         FROM albums anc
+        WHERE anc.type = 'local_folder'
+          AND anc.sync_mode = 'recursive'
+          AND anc.id <> albums.id
+          AND substr(albums.ancestor_path, 1, length(anc.ancestor_path)) = anc.ancestor_path
+   )
+ ORDER BY albums.id
+"#,
+            )
+            .map_err(|e| format!("prepare none sync mode normalization: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query none sync mode normalization: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read none sync mode normalization: {e}"))?
+    };
+
+    conn.execute(
+        r#"
+UPDATE albums
+   SET sync_mode = 'delegated'
+ WHERE type = 'local_folder'
+   AND sync_mode <> 'delegated'
+   AND EXISTS (
+       SELECT 1
+         FROM albums anc
+        WHERE anc.type = 'local_folder'
+          AND anc.sync_mode = 'recursive'
+          AND anc.id <> albums.id
+          AND substr(albums.ancestor_path, 1, length(anc.ancestor_path)) = anc.ancestor_path
+   )
+"#,
+        [],
+    )
+    .map_err(|e| format!("normalize delegated local folder sync modes: {e}"))?;
+    conn.execute(
+        r#"
+UPDATE albums
+   SET sync_mode = 'none'
+ WHERE type = 'local_folder'
+   AND sync_mode = 'delegated'
+   AND NOT EXISTS (
+       SELECT 1
+         FROM albums anc
+        WHERE anc.type = 'local_folder'
+          AND anc.sync_mode = 'recursive'
+          AND anc.id <> albums.id
+          AND substr(albums.ancestor_path, 1, length(anc.ancestor_path)) = anc.ancestor_path
+   )
+"#,
+        [],
+    )
+    .map_err(|e| format!("normalize none local folder sync modes: {e}"))?;
+
+    Ok(delegated_ids
+        .into_iter()
+        .map(|id| (id, SyncMode::Delegated.as_str().to_string()))
+        .chain(
+            none_ids
+                .into_iter()
+                .map(|id| (id, SyncMode::None.as_str().to_string())),
+        )
+        .collect())
 }
 
 impl Storage {
@@ -229,15 +355,22 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         if let Some(pid) = parent_id {
-            let exists: bool = conn
+            let parent_kind: Option<String> = conn
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                    "SELECT type FROM albums WHERE id = ?1",
                     params![pid],
                     |row| row.get(0),
                 )
+                .optional()
                 .map_err(|e| format!("Failed to verify parent album: {}", e))?;
-            if !exists {
-                return Err("父画册不存在".to_string());
+            match parent_kind.as_deref() {
+                None => {
+                    return Err(t!("albums.errors.parentNotFound", id = pid).to_string());
+                }
+                Some("local_folder") => {
+                    return Err(t!("albums.errors.parentIsLocalFolder").to_string());
+                }
+                _ => {}
             }
         }
 
@@ -251,8 +384,8 @@ impl Storage {
         let ancestor_path = Self::album_ancestor_path_of(&conn, parent_id, &id)?;
 
         conn.execute(
-            "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
-             VALUES (?1, ?2, ?3, ?4, 'normal', NULL, NULL, ?5)",
+            "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode)
+             VALUES (?1, ?2, ?3, ?4, 'normal', NULL, NULL, ?5, 'none')",
             params![
                 id,
                 name_trimmed,
@@ -272,6 +405,7 @@ impl Storage {
             sync_folder: None,
             folder_status: None,
             ancestor_path,
+            sync_mode: SyncMode::None.as_str().to_string(),
         };
         if let Some(emitter) = GlobalEmitter::try_global() {
             emitter.emit_album_added(
@@ -288,10 +422,10 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = match parent_id {
             None => conn.prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             ),
             Some(_) => conn.prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
             ),
         }
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -314,7 +448,7 @@ impl Storage {
     pub fn list_all_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums ORDER BY created_at DESC")
+            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums ORDER BY created_at DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
         let rows = stmt
             .query_map([], album_from_storage_row)
@@ -658,41 +792,68 @@ impl Storage {
         parent_id: Option<&str>,
         exclude_album_id: Option<&str>,
     ) -> Result<(), String> {
+        if Self::scoped_album_name_exists_ci(conn, parent_id, new_name_trimmed, exclude_album_id)? {
+            return Err(t!("albums.errors.nameExists").to_string());
+        }
+        Ok(())
+    }
+
+    fn scoped_album_name_exists_ci(
+        conn: &Connection,
+        parent_id: Option<&str>,
+        name: &str,
+        exclude_album_id: Option<&str>,
+    ) -> Result<bool, String> {
         let count: i64 = match (parent_id, exclude_album_id) {
             (None, None) => conn
                 .query_row(
                     "SELECT COUNT(*) FROM albums WHERE parent_id IS NULL AND LOWER(name) = LOWER(?1)",
-                    params![new_name_trimmed],
+                    params![name],
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("Failed to query album name uniqueness: {}", e))?,
             (None, Some(ex)) => conn
                 .query_row(
                     "SELECT COUNT(*) FROM albums WHERE parent_id IS NULL AND LOWER(name) = LOWER(?1) AND id != ?2",
-                    params![new_name_trimmed, ex],
+                    params![name, ex],
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("Failed to query album name uniqueness: {}", e))?,
             (Some(pid), None) => conn
                 .query_row(
                     "SELECT COUNT(*) FROM albums WHERE parent_id = ?1 AND LOWER(name) = LOWER(?2)",
-                    params![pid, new_name_trimmed],
+                    params![pid, name],
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("Failed to query album name uniqueness: {}", e))?,
             (Some(pid), Some(ex)) => conn
                 .query_row(
                     "SELECT COUNT(*) FROM albums WHERE parent_id = ?1 AND LOWER(name) = LOWER(?2) AND id != ?3",
-                    params![pid, new_name_trimmed, ex],
+                    params![pid, name, ex],
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("Failed to query album name uniqueness: {}", e))?,
         };
+        Ok(count > 0)
+    }
 
-        if count > 0 {
-            return Err(t!("albums.errors.nameExists").to_string());
+    /// 在给定父级作用域内返回首个不发生大小写不敏感撞名的名称。
+    pub(crate) fn resolve_scoped_name_ci(
+        conn: &Connection,
+        parent_id: Option<&str>,
+        base: &str,
+        exclude_album_id: Option<&str>,
+    ) -> Result<String, String> {
+        if !Self::scoped_album_name_exists_ci(conn, parent_id, base, exclude_album_id)? {
+            return Ok(base.to_string());
         }
-        Ok(())
+        for suffix in 2usize.. {
+            let candidate = format!("{base} ({suffix})");
+            if !Self::scoped_album_name_exists_ci(conn, parent_id, &candidate, exclude_album_id)? {
+                return Ok(candidate);
+            }
+        }
+        unreachable!("an unbounded numeric suffix always has an available value")
     }
 
     /// 自顶向下重算全表 `albums.ancestor_path`。
@@ -737,7 +898,7 @@ UPDATE albums SET ancestor_path = tree.path
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE id = ?1",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums WHERE id = ?1",
                 params![id],
                 album_from_storage_row,
             )
@@ -764,7 +925,7 @@ UPDATE albums SET ancestor_path = tree.path
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode
                  FROM albums WHERE type = 'local_folder' ORDER BY created_at ASC",
             )
             .map_err(|e| format!("prepare list_local_folder_albums: {e}"))?;
@@ -773,6 +934,171 @@ UPDATE albums SET ancestor_path = tree.path
             .map_err(|e| format!("query list_local_folder_albums: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("read list_local_folder_albums: {e}"))
+    }
+
+    pub fn set_album_sync_mode(&self, album_id: &str, mode: SyncMode) -> Result<(), String> {
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("start set_album_sync_mode transaction: {e}"))?;
+
+        let album: Option<(String, String)> = tx
+            .query_row(
+                "SELECT type, sync_mode FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("query album sync mode: {e}"))?;
+        let Some((kind, current_mode)) = album else {
+            return Err("画册不存在".to_string());
+        };
+        if kind != "local_folder" {
+            return Err("只有本地文件夹画册可以设置同步模式".to_string());
+        }
+        if mode == SyncMode::Delegated {
+            return Err("不能直接设置同步委托状态".to_string());
+        }
+        let current_mode = SyncMode::from_str(&current_mode)
+            .ok_or_else(|| format!("画册同步模式无效: {current_mode}"))?;
+        if current_mode == SyncMode::Delegated {
+            return Err("同步委托画册不能自行设置同步模式".to_string());
+        }
+
+        tx.execute(
+            "UPDATE albums SET sync_mode = ?1 WHERE id = ?2",
+            params![mode.as_str(), album_id],
+        )
+        .map_err(|e| format!("update album sync mode: {e}"))?;
+        let normalized = normalize_local_folder_sync_modes(&tx)?;
+        tx.commit()
+            .map_err(|e| format!("commit set_album_sync_mode: {e}"))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_album_changed(album_id, json!({ "syncMode": mode.as_str() }));
+            for (id, sync_mode) in normalized {
+                emitter.emit_album_changed(&id, json!({ "syncMode": sync_mode }));
+            }
+        }
+        Ok(())
+    }
+
+    /// 按同步目录的最近真祖先重建本地文件夹画册层级。
+    ///
+    /// 路径可访问时优先使用 canonicalize 结果；离线目录退回词法路径比较。
+    /// 所有数据库更新与 ancestor_path 重建在同一事务内完成，事件在提交后发出。
+    pub fn rechain_local_folder_albums(&self) -> Result<Vec<String>, String> {
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut rows = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, name, parent_id, sync_folder, created_at
+                       FROM albums
+                      WHERE type = 'local_folder' AND sync_folder IS NOT NULL
+                      ORDER BY created_at ASC, id ASC",
+                )
+                .map_err(|e| format!("prepare rechain_local_folder_albums: {e}"))?;
+            let mapped = stmt
+                .query_map([], |row| {
+                    let raw_path = PathBuf::from(row.get::<_, String>(3)?);
+                    let sync_path = fs::canonicalize(&raw_path)
+                        .unwrap_or_else(|_| raw_path.components().collect());
+                    Ok(LocalFolderRechainRow {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        parent_id: row.get(2)?,
+                        sync_path,
+                        created_at: row.get(4)?,
+                    })
+                })
+                .map_err(|e| format!("query rechain_local_folder_albums: {e}"))?;
+            mapped
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("read rechain_local_folder_albums: {e}"))?
+        };
+        rows.sort_by(|a, b| {
+            a.sync_path
+                .components()
+                .count()
+                .cmp(&b.sync_path.components().count())
+                .then_with(|| a.created_at.cmp(&b.created_at))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        let desired_parents: Vec<(String, Option<String>)> = rows
+            .iter()
+            .map(|album| {
+                let album_depth = album.sync_path.components().count();
+                let parent = rows
+                    .iter()
+                    .filter(|candidate| {
+                        let candidate_depth = candidate.sync_path.components().count();
+                        candidate.id != album.id
+                            && candidate_depth < album_depth
+                            && album.sync_path.starts_with(&candidate.sync_path)
+                    })
+                    .max_by(|a, b| {
+                        a.sync_path
+                            .components()
+                            .count()
+                            .cmp(&b.sync_path.components().count())
+                            .then_with(|| b.created_at.cmp(&a.created_at))
+                            .then_with(|| b.id.cmp(&a.id))
+                    })
+                    .map(|candidate| candidate.id.clone());
+                (album.id.clone(), parent)
+            })
+            .collect();
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("start rechain_local_folder_albums transaction: {e}"))?;
+        let mut changes = Vec::new();
+        for (id, desired_parent) in desired_parents {
+            let album = rows
+                .iter()
+                .find(|album| album.id == id)
+                .expect("desired parent must refer to a loaded album");
+            if album.parent_id == desired_parent {
+                continue;
+            }
+            let resolved_name = Self::resolve_scoped_name_ci(
+                &tx,
+                desired_parent.as_deref(),
+                &album.name,
+                Some(&album.id),
+            )?;
+            tx.execute(
+                "UPDATE albums SET name = ?1, parent_id = ?2 WHERE id = ?3",
+                params![resolved_name, desired_parent.as_deref(), album.id],
+            )
+            .map_err(|e| format!("rechain local folder album {}: {e}", album.id))?;
+            changes.push(AlbumRechainChange {
+                id: album.id.clone(),
+                parent_id: desired_parent,
+                name: (resolved_name != album.name).then_some(resolved_name),
+            });
+        }
+        if !changes.is_empty() {
+            Self::rebuild_album_ancestor_paths(&tx)?;
+        }
+        let sync_mode_changes = normalize_local_folder_sync_modes(&tx)?;
+        tx.commit()
+            .map_err(|e| format!("commit rechain_local_folder_albums: {e}"))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            for change in &changes {
+                let payload = match &change.name {
+                    Some(name) => json!({ "parentId": change.parent_id, "name": name }),
+                    None => json!({ "parentId": change.parent_id }),
+                };
+                emitter.emit_album_changed(&change.id, payload);
+            }
+            for (id, sync_mode) in &sync_mode_changes {
+                emitter.emit_album_changed(id, json!({ "syncMode": sync_mode }));
+            }
+        }
+        Ok(changes.into_iter().map(|change| change.id).collect())
     }
 
     pub fn add_local_folder_albums_tx(
@@ -815,14 +1141,15 @@ UPDATE albums SET ancestor_path = tree.path
         for entry in entries {
             Self::ensure_album_name_unique_ci(&tx, &entry.name, entry.parent_id.as_deref(), None)?;
             tx.execute(
-                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path)
-                 VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL, '')",
+                "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode)
+                 VALUES (?1, ?2, ?3, ?4, 'local_folder', ?5, NULL, '', ?6)",
                 params![
                     entry.id.as_str(),
                     entry.name.as_str(),
                     created_at as i64,
                     entry.parent_id.as_deref(),
                     entry.sync_folder.as_str(),
+                    entry.sync_mode.as_str(),
                 ],
             )
             .map_err(|e| format!("insert local_folder album: {e}"))?;
@@ -836,6 +1163,7 @@ UPDATE albums SET ancestor_path = tree.path
                 sync_folder: Some(entry.sync_folder.clone()),
                 folder_status: None,
                 ancestor_path: String::new(),
+                sync_mode: entry.sync_mode.as_str().to_string(),
             });
         }
 
@@ -915,6 +1243,12 @@ UPDATE albums SET ancestor_path = tree.path
     }
 
     pub fn move_album(&self, album_id: &str, new_parent_id: Option<&str>) -> Result<(), String> {
+        let album = self
+            .get_album_by_id(album_id)?
+            .ok_or_else(|| "画册不存在".to_string())?;
+        if album.kind == "local_folder" {
+            return Err(t!("albums.errors.cannotMoveLocalFolder").to_string());
+        }
         if album_id == FAVORITE_ALBUM_ID || album_id == HIDDEN_ALBUM_ID {
             return Err("不能移动系统默认画册".to_string());
         }
@@ -928,8 +1262,11 @@ UPDATE albums SET ancestor_path = tree.path
             if pid == album_id {
                 return Err("不能将画册移动到自身".to_string());
             }
-            if !self.album_exists(pid)? {
-                return Err("父画册不存在".to_string());
+            let parent = self
+                .get_album_by_id(pid)?
+                .ok_or_else(|| t!("albums.errors.parentNotFound", id = pid).to_string())?;
+            if parent.kind == "local_folder" {
+                return Err(t!("albums.errors.cannotMoveIntoLocalFolder").to_string());
             }
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
             let would_cycle: bool = conn
@@ -948,10 +1285,6 @@ UPDATE albums SET ancestor_path = tree.path
                 return Err("不能将画册移动到其子画册下".to_string());
             }
         }
-
-        let album = self
-            .get_album_by_id(album_id)?
-            .ok_or_else(|| "画册不存在".to_string())?;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         Self::ensure_album_name_unique_ci(&conn, &album.name, new_parent_id, Some(album_id))?;
@@ -980,6 +1313,8 @@ UPDATE albums SET ancestor_path = tree.path
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_folder::create::build_entries_non_recursive;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     fn test_storage() -> Storage {
@@ -989,6 +1324,16 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             cached_images_total: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn add_local_folder(storage: &Storage, name: &str, path: &Path) -> Album {
+        let entry = build_entries_non_recursive(name, path, None);
+        storage
+            .add_local_folder_albums_tx(&[entry])
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
     }
 
     #[test]
@@ -1030,5 +1375,194 @@ mod tests {
 
         let d = storage.add_album("d", Some(&c.id)).unwrap();
         assert_eq!(d.ancestor_path, format!("/{}/{}/{}/", b.id, c.id, d.id));
+    }
+
+    #[test]
+    fn rechain_uses_nearest_canonical_ancestor_and_is_idempotent() {
+        let storage = test_storage();
+        let temp = tempfile::tempdir().unwrap();
+        let a_path = temp.path().join("A");
+        let c_path = a_path.join("C");
+        let e_path = c_path.join("E");
+        fs::create_dir_all(&e_path).unwrap();
+
+        let a = add_local_folder(&storage, "A", &a_path);
+        let e = add_local_folder(&storage, "E", &e_path);
+        assert_eq!(
+            storage.rechain_local_folder_albums().unwrap(),
+            vec![e.id.clone()]
+        );
+        assert_eq!(
+            storage.get_album_by_id(&e.id).unwrap().unwrap().parent_id,
+            Some(a.id.clone())
+        );
+
+        let c = add_local_folder(&storage, "C", &c_path);
+        let mut changed = storage.rechain_local_folder_albums().unwrap();
+        changed.sort();
+        let mut expected = vec![c.id.clone(), e.id.clone()];
+        expected.sort();
+        assert_eq!(changed, expected);
+        assert_eq!(
+            storage.get_album_by_id(&c.id).unwrap().unwrap().parent_id,
+            Some(a.id)
+        );
+        assert_eq!(
+            storage.get_album_by_id(&e.id).unwrap().unwrap().parent_id,
+            Some(c.id)
+        );
+        assert!(storage.rechain_local_folder_albums().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rechain_falls_back_to_lexical_paths_for_offline_folders() {
+        let storage = test_storage();
+        let temp = tempfile::tempdir().unwrap();
+        let offline_root = temp.path().join("offline").join("A");
+        let offline_child = offline_root.join("B");
+        let root = add_local_folder(&storage, "offline-a", &offline_root);
+        let child = add_local_folder(&storage, "offline-b", &offline_child);
+
+        assert_eq!(
+            storage.rechain_local_folder_albums().unwrap(),
+            vec![child.id.clone()]
+        );
+        assert_eq!(
+            storage
+                .get_album_by_id(&child.id)
+                .unwrap()
+                .unwrap()
+                .parent_id,
+            Some(root.id)
+        );
+    }
+
+    #[test]
+    fn rechain_and_set_sync_mode_preserve_delegation_invariant() {
+        let storage = test_storage();
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = temp.path().join("root");
+        let child_path = root_path.join("child");
+        let grandchild_path = child_path.join("grandchild");
+
+        let root = add_local_folder(&storage, "root", &root_path);
+        storage
+            .set_album_sync_mode(&root.id, SyncMode::Recursive)
+            .unwrap();
+
+        let child = add_local_folder(&storage, "child", &child_path);
+        let grandchild = add_local_folder(&storage, "grandchild", &grandchild_path);
+        storage.rechain_local_folder_albums().unwrap();
+
+        assert_eq!(
+            storage
+                .get_album_by_id(&child.id)
+                .unwrap()
+                .unwrap()
+                .sync_mode,
+            SyncMode::Delegated.as_str()
+        );
+        assert_eq!(
+            storage
+                .get_album_by_id(&grandchild.id)
+                .unwrap()
+                .unwrap()
+                .sync_mode,
+            SyncMode::Delegated.as_str()
+        );
+        assert_eq!(
+            storage
+                .set_album_sync_mode(&child.id, SyncMode::None)
+                .unwrap_err(),
+            "同步委托画册不能自行设置同步模式"
+        );
+
+        storage
+            .set_album_sync_mode(&root.id, SyncMode::Shallow)
+            .unwrap();
+        assert_eq!(
+            storage
+                .get_album_by_id(&child.id)
+                .unwrap()
+                .unwrap()
+                .sync_mode,
+            SyncMode::None.as_str()
+        );
+        assert_eq!(
+            storage
+                .get_album_by_id(&grandchild.id)
+                .unwrap()
+                .unwrap()
+                .sync_mode,
+            SyncMode::None.as_str()
+        );
+    }
+
+    #[test]
+    fn normalize_sync_modes_treats_album_id_wildcards_literally() {
+        let storage = test_storage();
+        let conn = storage.db.lock().unwrap();
+        conn.execute_batch(
+            r#"
+INSERT INTO albums
+    (id, name, created_at, type, sync_folder, ancestor_path, sync_mode)
+VALUES
+    ('root_%', 'root', 1, 'local_folder', '/root', '/root_%/', 'recursive'),
+    ('actual', 'actual', 2, 'local_folder', '/root/actual', '/root_%/actual/', 'none'),
+    ('imposter', 'imposter', 3, 'local_folder', '/imposter', '/root-AB/imposter/', 'none'),
+    ('stale', 'stale', 4, 'local_folder', '/stale', '/stale/', 'delegated');
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            normalize_local_folder_sync_modes(&conn).unwrap(),
+            vec![
+                ("actual".to_string(), "delegated".to_string()),
+                ("stale".to_string(), "none".to_string()),
+            ]
+        );
+        let imposter_mode: String = conn
+            .query_row(
+                "SELECT sync_mode FROM albums WHERE id = 'imposter'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(imposter_mode, SyncMode::None.as_str());
+    }
+
+    #[test]
+    fn resolve_scoped_name_ci_uses_incrementing_case_insensitive_suffixes() {
+        let storage = test_storage();
+        storage.add_album("Name", None).unwrap();
+        storage.add_album("name (2)", None).unwrap();
+        let conn = storage.db.lock().unwrap();
+
+        assert_eq!(
+            Storage::resolve_scoped_name_ci(&conn, None, "name", None).unwrap(),
+            "name (3)"
+        );
+    }
+
+    #[test]
+    fn local_folder_album_type_guards_reject_manual_tree_changes() {
+        let storage = test_storage();
+        let temp = tempfile::tempdir().unwrap();
+        let local = add_local_folder(&storage, "local", temp.path());
+        let normal = storage.add_album("normal", None).unwrap();
+
+        assert_eq!(
+            storage.add_album("child", Some(&local.id)).unwrap_err(),
+            t!("albums.errors.parentIsLocalFolder").to_string()
+        );
+        assert_eq!(
+            storage.move_album(&local.id, None).unwrap_err(),
+            t!("albums.errors.cannotMoveLocalFolder").to_string()
+        );
+        assert_eq!(
+            storage.move_album(&normal.id, Some(&local.id)).unwrap_err(),
+            t!("albums.errors.cannotMoveIntoLocalFolder").to_string()
+        );
     }
 }

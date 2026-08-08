@@ -284,7 +284,7 @@ impl Provider for PluginAssetRootProvider {
         let Some(resources) = get_plugin(&self.plugin_id).and_then(|p| p.assets.clone()) else {
             return Ok(Vec::new());
         };
-        let mut keys: Vec<String> = resources.keys().cloned().collect();
+        let mut keys: Vec<String> = resources.iter().map(|asset| asset.key.clone()).collect();
         keys.sort();
         Ok(keys
             .into_iter()
@@ -326,7 +326,12 @@ impl Provider for PluginAssetProvider {
     ) -> Result<Option<Vec<Value>>, EngineError> {
         let rows = get_plugin(&self.plugin_id)
             .and_then(|plugin| plugin.assets.clone())
-            .and_then(|assets| assets.get(&self.asset_path).cloned())
+            .and_then(|assets| {
+                assets
+                    .into_iter()
+                    .find(|asset| asset.key == self.asset_path)
+                    .map(|asset| asset.data_base64)
+            })
             .map(|data| {
                 vec![json!({
                     // key 是归一化后的插件根相对路径。

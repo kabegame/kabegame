@@ -993,7 +993,10 @@ mod tests {
     #[test]
     fn snapshot_placeholder_denies_all_paths() {
         let vfs = PluginVfs::snapshot_placeholder();
-        assert_eq!(vfs.cwd().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            vfs.cwd().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
         assert_eq!(
             vfs.tmp_dir().unwrap_err().kind(),
             io::ErrorKind::PermissionDenied

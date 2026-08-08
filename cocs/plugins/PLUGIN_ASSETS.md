@@ -2,7 +2,7 @@
 
 本文档描述插件配图的**声明、打包、加载、展示**全链路：`package.json` 的 `kbAssets`
 如何用一份「插件根相对路径」清单同时服务 `kbDoc`（README）与 `kbChangelog`
-（更新日志），路径归一化的唯一裁决者是谁，以及其中**文件名以 `banner` 开头**的那些
+（更新日志），路径归一化的唯一裁决者是谁，以及其中**归一化路径以 `banner` 开头**的那些
 除了渲染在文档正文里之外，还被「源」页面的 hover 快捷预览当作走马灯示例图使用。
 
 ---
@@ -58,7 +58,7 @@
   `..`）。扩展名限 jpg/jpeg/png/gif/webp/bmp。
 - **doc 与 changelog 共用这一份清单**。同一张图被 README 与 CHANGELOG 同时引用只需声明
   一次（打包按 ZIP 内路径去重）。
-- **文件名以 `banner` 开头的项额外进快捷预览走马灯**（第 5 节），且不必被任何 md 引用
+- **归一化路径以 `banner` 开头的项额外进快捷预览走马灯**（第 5 节），且不必被任何 md 引用
   ——「声明但未引用」本来就只是 WARN，正是为橱窗图预留的。
 - **字段缺失 = 该插件零资源**，这是唯一语义，不再有回退。空数组同义 —— 所以
   「不要写空对象」那条旧告诫也不再需要，写不写都一样，但没配图的插件**没必要**写。
@@ -70,7 +70,7 @@
 
 ## 3. 归一化契约（唯一裁决者）
 
-**`kbAssets` 项、Markdown 引用串、运行时 `Plugin.assets` 的键，三者是同一个东西**：
+**`kbAssets` 项、Markdown 引用串、运行时 `Plugin.assets[].key`，三者是同一个东西**：
 插件根相对路径，经一次归一化后逐字比较。规则按序：
 
 1. `trim`
@@ -126,8 +126,8 @@ package.json (kbAssets + kbDoc + kbChangelog)
     │
     ├─ 加载 parse_kgpg → load_plugin_v3_from_zip
     │     read_locale_md_field() 对 kbDoc / kbChangelog 各跑一次（缺条目 = 硬错误）
-    │     build_asset_index(pkg) → BTreeSet<归一化路径>（有序，省掉后续排序）
-    │     按路径读字节 → base64 → Plugin.assets（键即该路径）
+    │     build_asset_index(pkg) → Vec<归一化路径>（保留 kbAssets 声明顺序）
+    │     按路径读字节 → base64 → Plugin.assets（数组项为 { key, dataBase64 }，继续保序）
     │     md 推**原文**，不改写引用；资源条目缺失只 WARN 跳过，不让整个插件装不上
     │
     └─ 展示
@@ -159,28 +159,30 @@ package.json (kbAssets + kbDoc + kbChangelog)
 
 ## 5. 快捷预览走马灯
 
-「源」页面（`PluginBrowser.vue`）的插件卡片支持快捷预览：桌面 hover 400ms 后在卡片旁弹出
-320px 悬浮面板，紧凑端长按 500ms 弹出同一面板的底部抽屉形态。面板里的**示例图走马灯直接
-复用 `Plugin.assets`** —— 不额外增加任何后端接口或资源。
+「源」页面（`PluginBrowser.vue`）的插件卡片与**插件选择器**（`PluginPickerField.vue`
+的桌面下拉行）支持快捷预览：桌面 hover 400ms 后在触发元素旁弹出 320px 悬浮面板，
+紧凑端长按 500ms 弹出同一面板的底部抽屉形态。面板里的**示例图走马灯直接复用
+`Plugin.assets`** —— 不额外增加任何后端接口或资源。
 
 | 关注点 | 处理 |
 |---|---|
-| **只收 banner 图** | `isBannerAsset(key)`：文件名（不含目录）以 `banner` 开头，大小写不敏感。见下 |
-| 顺序 | 过滤后 `.sort()`，与 PathQL provider `plugin://{id}/asset` 的 list 排序口径一致（字典序，非作者声明序） |
+| **只收 banner 图** | `isBannerAsset(key)`：完整归一化路径以 `banner` 开头，大小写不敏感。见下 |
+| 顺序 | `Plugin.assets` 按 `kbAssets` 数组声明顺序下发；过滤后不再排序，走马灯直接沿用作者声明顺序 |
 | 图注 | **不显示**。走马灯是橱窗，图上压一行从文件名推导的字符串（`Banner 1`）既非作者本意也无信息量 |
 | MIME | `guessAssetMime(key)`，与 Rust `mime_for_asset` 及打包白名单口径一致 |
 | **只对已安装插件出图** | 商店里未安装的条目**不出图**，显示「安装后可查看示例图」。原因见下 |
 
-### 为什么按文件名前缀筛
+### 为什么按路径前缀筛
 
 `kbAssets` 同时承载两类图：文档正文里的操作截图（「点这个按钮」「填这个 cookie」）与
 插件橱窗图。前者进走马灯毫无意义 —— 脱离上下文的局部截图既不好看也不说明插件能抓什么。
 
-区分方式选了**文件名前缀**而非新增清单字段：`kbAssets` 的立身之本是「一份清单、一个坐标系」
+区分方式选了**路径前缀**而非新增清单字段：`kbAssets` 的立身之本是「一份清单、一个坐标系」
 （第 1 节），再引一个 `kbBanners` 数组等于把刚合并掉的两个空间重新劈开，还要处理两份清单
-不一致时谁说了算。前缀约定零字段、零校验、作者改个文件名即可加入橱窗。
+不一致时谁说了算。前缀约定零字段、零校验，作者调整资源路径即可加入橱窗。
 
-`banner.png` / `banner-1.jpg` / `images/banner-home.webp` 都算；判定实现在
+`banner.png` / `banner-1.jpg` / `banner/home.webp` 都算；`images/banner-home.webp` 不算，
+因为它的完整路径不是以 `banner` 开头。判定实现在
 `packages/kabegame-core/src/utils/assetPath.ts::isBannerAsset`，两个装配点共用。
 **存量插件没有迁移**，因此它们当前都命中「没有示例图」空态 —— 这是预期的，
 补图时按新约定命名即可。
@@ -204,12 +206,16 @@ best-effort：
 |---|---|
 | 走马灯 | `packages/kabegame-core/src/components/plugin/PluginQuickPreviewCarousel.vue` |
 | 悬浮面板 | `packages/kabegame-core/src/components/plugin/PluginQuickPreviewPanel.vue` |
-| 交互（hover 延迟/长按/定位翻转） | `packages/kabegame-core/src/composables/usePluginQuickPreview.ts` |
-| 接入 | `apps/kabegame/src/views/PluginBrowser.vue` |
+| 交互（hover 延迟/长按/定位翻转/抽屉形态） | `packages/kabegame-core/src/components/common/HoverRevealPanel.vue` |
+| 示例图装配 | `packages/kabegame-core/src/utils/assetPath.ts::bannerPreviewImages` |
+| 接入 | `apps/kabegame/src/views/PluginBrowser.vue`、`apps/kabegame/src/components/PluginPickerField.vue` |
 
-> `usePluginQuickPreview` 的 `cardListeners(item)` 供 `v-on="..."` 使用，
-> 返回的**键是事件名本身**（`mouseenter`），不带 `on` 前缀 —— 对象语法的 `v-on` 会把
-> `onMouseenter` 当成名为 `onMouseenter` 的事件，永远不触发。
+> **弹出容器是组件不是 composable**：`HoverRevealPanel` 把触发器放默认插槽、面板内容放
+> `panel` 具名插槽，套在需要弹出的元素外层即可，两个接入点因此共用同一套延迟、定位与
+> 抽屉逻辑。它只管「何时弹、贴哪」，面板 props 由各接入点自行装配 —— 「源」页面要处理
+> 商店条目与更新提示，选择器面对的一定是已安装插件（故传 `:show-detail-hint="false"`：
+> 那里点面板不跳详情）。面板层级取 `useZIndex().nextZIndex()`，否则会被 dialog 里的
+> select 下拉压住。
 
 ---
 

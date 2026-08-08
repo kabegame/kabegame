@@ -10,7 +10,8 @@
                     <template v-else-if="getItemVisible(item)">
                         <!-- 有子菜单的项 -->
                         <div v-if="item.children && item.children.length > 0" class="context-menu-item submenu-trigger"
-                            :class="item.className" @mouseenter="handleSubmenuTriggerEnter(index)"
+                            :class="[item.className, disabledClass(item)]" :aria-disabled="item.disabled || undefined"
+                            @mouseenter="handleSubmenuTriggerEnter(index, item)"
                             @mouseleave="handleSubmenuTriggerLeave">
                             <el-icon v-if="item.icon">
                                 <component :is="getIcon(item)!" />
@@ -24,13 +25,14 @@
                                 <ArrowRight />
                             </el-icon>
                             <!-- 子菜单 -->
-                            <div v-if="activeSubmenuIndex === index"
+                            <div v-if="activeSubmenuIndex === index && !item.disabled"
                                 :ref="(el) => { if (el) setSubmenuRef(el as HTMLElement, index); }" class="submenu"
                                 :style="getSubmenuStyle(index)" @mouseenter="handleSubmenuEnter(index)"
                                 @mouseleave="handleSubmenuLeave">
                                 <template v-for="(child, childIndex) in item.children" :key="childIndex">
                                     <div v-if="child.type !== 'divider' && getItemVisible(child)"
-                                        class="context-menu-item" :class="child.className"
+                                        class="context-menu-item" :class="[child.className, disabledClass(child)]"
+                                        :aria-disabled="child.disabled || undefined"
                                         @click.stop="handleItemClick(child)">
                                         <el-icon v-if="child.icon">
                                             <component :is="getIcon(child)!" />
@@ -46,7 +48,8 @@
                             </div>
                         </div>
                         <!-- 普通菜单项 -->
-                        <div v-else class="context-menu-item" :class="item.className"
+                        <div v-else class="context-menu-item" :class="[item.className, disabledClass(item)]"
+                            :aria-disabled="item.disabled || undefined"
                             @click.stop="handleItemClick(item)">
                             <el-icon v-if="item.icon">
                                 <component :is="getIcon(item)!" />
@@ -78,6 +81,7 @@ export interface MenuItem {
     icon?: Component;
     command?: string;
     visible?: boolean | (() => boolean);
+    disabled?: boolean;
     className?: string;
     suffix?: string;
     children?: MenuItem[];
@@ -224,7 +228,16 @@ watch(activeSubmenuIndex, (newIndex, oldIndex) => {
 });
 
 // 子菜单 hover 处理（带延迟，解决从父菜单项移动到子菜单时的过渡问题）
-const handleSubmenuTriggerEnter = (index: number) => {
+const disabledClass = (item: MenuItem): string =>
+    item.disabled
+        ? "!cursor-not-allowed !opacity-45 hover:!bg-transparent"
+        : "";
+
+const handleSubmenuTriggerEnter = (index: number, item: MenuItem) => {
+    if (item.disabled) {
+        activeSubmenuIndex.value = null;
+        return;
+    }
     // 取消关闭定时器
     if (submenuCloseTimer) {
         clearTimeout(submenuCloseTimer);
@@ -277,6 +290,7 @@ const getItemVisible = (item: MenuItem) => {
 };
 
 const handleItemClick = (item: MenuItem) => {
+    if (item.disabled) return;
     if (item.onClick) item.onClick();
     if (item.command) emit("command", item.command);
     emit("close");

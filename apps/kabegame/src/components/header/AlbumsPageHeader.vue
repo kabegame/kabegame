@@ -27,6 +27,10 @@ const emit = defineEmits<{
   'view-vd': [];
   refresh: [];
   'create-album': [];
+  /** 紧凑模式：唤起画册树抽屉（桌面左树常驻，无此按钮） */
+  'open-tree': [];
+  /** 桌面：开合画册信息右栏；紧凑模式：唤起画册信息抽屉 */
+  'toggle-detail': [];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());
@@ -46,9 +50,9 @@ const withVd = (ids: string[]) =>
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (isCompact.value) {
-    return [HeaderFeatureId.TaskDrawer];
+    return [HeaderFeatureId.AlbumTree, HeaderFeatureId.AlbumInfo, HeaderFeatureId.TaskDrawer];
   } else {
-    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.CreateAlbum, HeaderFeatureId.TaskDrawer]);
+    return withVd([HeaderFeatureId.AlbumInfo, HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.CreateAlbum, HeaderFeatureId.TaskDrawer]);
   }
 });
 
@@ -68,6 +72,12 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.CreateAlbum:
       emit("create-album");
+      break;
+    case HeaderFeatureId.AlbumTree:
+      emit("open-tree");
+      break;
+    case HeaderFeatureId.AlbumInfo:
+      emit("toggle-detail");
       break;
   }
 };

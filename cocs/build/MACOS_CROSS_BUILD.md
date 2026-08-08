@@ -25,7 +25,7 @@ ffmpeg-builder）也能直接 import：
 | `ARTIFACT_DIR` | 本次构建的产物目录 = `TARGET_DIR[/<triple>]` |
 | `repoBuildDir(repo, opts?)` | 第三方产物目录公式 `bin/{platform}/{arch}/{repo}-build` |
 | `cefExportDir(variant, arch?)` | CEF distrib `bin/{platform}/{arch}/cef-build-{dev,prod}` |
-| `CHROMIUM_DIR` | chromium checkout 工作区 `third/chromium` |
+| `CHROMIUM_DIR` | chromium checkout 工作区的默认值 `third/chromium`；实际构建须用 `CEFBUILD` 指到仓库外（见下） |
 | `FFMPEG_INSTALL_DIR`（utils.ts） | `repoBuildDir("FFmpeg") + /install` |
 
 架构不再靠目录后缀区分（旧的 `CEF_DIR_SUFFIX` / `-x64` 与 `KB_BUILD_SUFFIX` 均已删除），
@@ -49,7 +49,7 @@ tauri/cargo 的，不消费也不重复注入。解析结果回写 `KB_TARGET_AR
 | FFmpeg | `bin/macos/arm64/FFmpeg-build/install` | `bin/macos/x86_64/FFmpeg-build/install` |
 | x264 | `bin/macos/arm64/x264-build/install` | `bin/macos/x86_64/x264-build/install` |
 | CEF runtime | `bin/macos/arm64/cef-build-{dev,prod}` | `bin/macos/x86_64/cef-build-{dev,prod}` |
-| CEF GN 输出 | `third/chromium/…/out/Release_GN_arm64` | `third/chromium/…/out/Release_GN_x64` |
+| CEF GN 输出 | `$CEFBUILD/…/out/Release_GN_arm64` | `$CEFBUILD/…/out/Release_GN_x64` |
 | dmg 资产名 | `..._aarch64.dmg` | `..._x64.dmg` |
 
 > **注意**：`--target` 一旦显式传入，cargo/tauri 就会多套一层 triple 目录 ——
@@ -57,10 +57,21 @@ tauri/cargo 的，不消费也不重复注入。解析结果回写 `KB_TARGET_AR
 > 的路径必须用 `ARTIFACT_DIR` 而非 `TARGET_DIR`，否则会静默打包上一次 native
 > 构建的残留，产出架构混合的 `.app`（最危险的失败模式：不报错，装上才崩）。
 
-CEF 的 Chromium checkout（`CHROMIUM_DIR` = `third/chromium`，~60GB）两架构**共用**，
-只是 `out/` 子目录不同——所以它不带 platform/arch 维度，也不是 submodule（体积过大，
-gitignore、由 `deno task build:chromium` 复现）。想彻底分开可用 `CEFBUILD` 环境变量
-各指一处，代价是多一份数十 G 的源码树。
+CEF 的 Chromium checkout（~60GB）两架构**共用**，只是 `out/` 子目录不同——所以它不带
+platform/arch 维度，也不是 submodule（体积过大，gitignore、由 `deno task build:chromium`
+复现）。想彻底分开可让 `CEFBUILD` 各指一处，代价是多一份数十 G 的源码树。
+
+**它必须待在任何 `node_modules` 之外**，所以默认值 `CHROMIUM_DIR`（`third/chromium`）实际
+不可用：chromium 树内的 TS 编译逐级向上遍历 `node_modules`、没有仓库边界概念，checkout 落在
+本仓库里会解析到 `<repo>/node_modules` 并让 `//ui/webui/resources/tools/eslint:build_ts` 失败。
+构建前的 `checkNoNodeModulesAncestor()` 护栏会拦下这种布局。固定这样跑：
+
+```bash
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod --target x86_64
+```
+
+成因、为何打存根不管用、以及护栏细节见
+[../../src-tauri/tauri-runtime-cef/README.md](../../src-tauri/tauri-runtime-cef/README.md)。
 
 ## 出 Intel 包的完整顺序
 

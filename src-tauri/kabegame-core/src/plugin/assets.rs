@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -83,24 +83,20 @@ pub fn mime_for_asset(key_or_path: &str) -> &'static str {
     }
 }
 
-/// 是否是「展示位」资源：文件名（不含目录）以 `banner` 开头，大小写不敏感。
+/// 是否是「展示位」资源：完整归一化路径以 `banner` 开头，大小写不敏感。
 ///
 /// 这类图供「源」页面的快捷预览走马灯当橱窗图用，通常不被任何 md 引用；
 /// 同构 TS 实现：`packages/kabegame-core/src/utils/assetPath.ts::isBannerAsset`。
 pub fn is_banner_asset(key_or_path: &str) -> bool {
-    key_or_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(key_or_path)
-        .to_ascii_lowercase()
-        .starts_with("banner")
+    key_or_path.to_ascii_lowercase().starts_with("banner")
 }
 
-/// 返回归一化后的资源路径集合，来源只有 `kbAssets`。
-/// 每项都是插件根相对路径；doc 与 changelog 共用这一份集合。
+/// 返回归一化后的资源路径列表，来源只有 `kbAssets`，顺序与数组声明顺序一致。
+/// 每项都是插件根相对路径；doc 与 changelog 共用这一份列表。
 /// 字段缺失 = 该插件零资源。
-pub fn build_asset_index(pkg: &serde_json::Value) -> BTreeSet<String> {
-    let mut index = BTreeSet::new();
+pub fn build_asset_index(pkg: &serde_json::Value) -> Vec<String> {
+    let mut index = Vec::new();
+    let mut seen = HashSet::new();
     let Some(pkg_obj) = pkg.as_object() else {
         eprintln!("[WARN] package.json 不是 JSON 对象，无法构建资源清单");
         return index;
@@ -129,9 +125,11 @@ pub fn build_asset_index(pkg: &serde_json::Value) -> BTreeSet<String> {
             eprintln!("[WARN] kbAssets 项路径非法，已跳过 {raw:?}: {error}");
             continue;
         }
-        if !index.insert(path.clone()) {
+        if !seen.insert(path.clone()) {
             eprintln!("[WARN] kbAssets 归一化后重复，已忽略: {path:?}");
+            continue;
         }
+        index.push(path);
     }
 
     index
@@ -184,8 +182,8 @@ mod tests {
     fn build_asset_index_uses_kb_assets_only() {
         let pkg = serde_json::json!({
             "kbAssets": [
-                "./images/a.png",
                 "shared/b.jpg",
+                "./images/a.png",
                 "images/../shared/b.jpg",
                 "../outside.png",
                 42
@@ -194,8 +192,15 @@ mod tests {
         let index = build_asset_index(&pkg);
 
         assert_eq!(
-            index.into_iter().collect::<Vec<_>>(),
-            vec!["images/a.png".to_string(), "shared/b.jpg".to_string()]
+            index,
+            vec!["shared/b.jpg".to_string(), "images/a.png".to_string()]
         );
+    }
+
+    #[test]
+    fn banner_asset_uses_full_path_prefix() {
+        assert!(is_banner_asset("banner.png"));
+        assert!(is_banner_asset("Banner/home.webp"));
+        assert!(!is_banner_asset("images/banner-home.webp"));
     }
 }

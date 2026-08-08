@@ -68,6 +68,12 @@
     "recursiveLimits": "遞迴最多展開 {maxDepth} 層，超出的子目錄會被跳過。",
     "skipNotice": "符號連結、以「.」開頭的隱藏目錄與檔案、非圖片/影片檔案均不會同步。",
     "duplicatePathHint": "此資料夾已存在對應的同步畫冊，請選擇其他資料夾。",
+    "syncMode": {
+      "none": { "label": "不同步", "description": "不監聽資料夾變更，也不會自動同步" },
+      "shallow": { "label": "淺層同步", "description": "只自動同步此資料夾目前層級的檔案，不建立子畫冊" },
+      "recursive": { "label": "遞迴同步", "description": "自動同步整個資料夾子樹，並依子資料夾建立畫冊" },
+      "delegated": { "label": "同步委派", "description": "由上層畫冊的遞迴同步接管，無法單獨設定" }
+    },
     "statusMissing": "本機路徑不存在或已被移動",
     "statusDenied": "無權存取本機路徑：{message}",
     "statusNotADir": "本機路徑不是資料夾",
@@ -114,5 +120,19 @@
   "moveFailed": "移動失敗",
   "selectTargetAlbum": "選擇目標畫冊",
   "enterHidden": "進入隱藏畫冊",
-  "hiddenAlbumName": "隱藏畫冊"
+  "hiddenAlbumName": "隱藏畫冊",
+  "treePanelTitle": "畫冊樹",
+  "treeFilterPlaceholder": "過濾畫冊",
+  "treeSectionLocalFolders": "本機資料夾",
+  "treeRotationTooltip": "桌布輪播中",
+  "treeFolderStatusTooltip": "資料夾狀態異常：{state}",
+  "treeAddAlbum": "新增畫冊",
+  "detailPanelTitle": "畫冊資訊",
+  "detailPanelEmpty": "選擇左側畫冊查看詳情",
+  "detailRotatingBadge": "桌布輪播中",
+  "detailStartRotation": "設為桌布輪播",
+  "detailStopRotation": "停止桌布輪播",
+  "detailManualAlbum": "手動畫冊",
+  "detailLocalFolderAlbum": "本機資料夾",
+  "detailCrumbStats": "· {images} 張 · {subAlbums} 個子畫冊"
 }

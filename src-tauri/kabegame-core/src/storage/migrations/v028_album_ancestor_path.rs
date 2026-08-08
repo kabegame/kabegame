@@ -69,7 +69,7 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
-    fn run_pending_adds_and_backfills_album_ancestor_path() {
+    fn up_adds_and_backfills_album_ancestor_path() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             r#"
@@ -86,16 +86,12 @@ INSERT INTO albums (id, name, created_at, parent_id) VALUES
     ('a', 'a', 1, NULL),
     ('b', 'b', 2, 'a'),
     ('c', 'c', 3, 'b');
-PRAGMA user_version = 27;
 "#,
         )
         .unwrap();
 
-        crate::storage::migrations::run_pending(&conn).unwrap();
+        super::up(&conn).unwrap();
 
-        let version: u32 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
         let root_path: String = conn
             .query_row(
                 "SELECT ancestor_path FROM albums WHERE id = 'a'",
@@ -111,7 +107,6 @@ PRAGMA user_version = 27;
             )
             .unwrap();
 
-        assert_eq!(version, 28);
         assert_eq!(root_path, "/a/");
         assert_eq!(leaf_path, "/a/b/c/");
     }

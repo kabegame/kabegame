@@ -56,7 +56,7 @@ plugin-name.kgpg
 | `kbIcon` | string | 否 | 4.3.0 | 包内图标 PNG 相对路径。 |
 | `kbDoc` | object | 否 | 4.3.0 | 多语言文档映射：键 `default`/`zh`/`en`/`ja`/`ko`/`zhtw`，值为 `.md` 相对路径。 |
 | `kbChangelog` | object | 否 | <Badge text="4.4.0" variant="note" /> | 多语言更新日志映射；与 `kbDoc` 同构，值为 `.md` 插件根相对路径。 |
-| `kbAssets` | string[] | 否 | <Badge text="4.4.0" variant="note" /> | 文档与更新日志共用的资源白名单；每项是插件根相对路径。未声明的 Markdown 本地资源引用会使打包报错。文件名以 `banner` 开头的项另作快捷预览走马灯的橱窗图。 |
+| `kbAssets` | string[] | 否 | <Badge text="4.4.0" variant="note" /> | 文档与更新日志共用的资源白名单；每项是插件根相对路径。未声明的 Markdown 本地资源引用会使打包报错。归一化路径以 `banner` 开头的项另作快捷预览走马灯的橱窗图。 |
 | `kbRecommendedConfigs` | string[] | 否 | 4.3.0 | 推荐运行配置文件路径数组（`configs/*.json`）。 |
 | `kbPathQLProviders` | string[] | 否 | 4.3.0 | PathQL provider DSL 文件路径数组（`providers/*.json5`），后端用。 |
 | `kbDescriptionTemplate` | string | 否 | 4.3.0 | 图片描述模板 `.ejs` 路径。 |
@@ -64,7 +64,7 @@ plugin-name.kgpg
 
 所有 `kb*` 路径字段和 `kbAssets` 数组项统一走安全校验：非空、包根相对、禁越界的 `..`、禁绝对路径 / 盘符 / 前导 `/`。
 
-`kbAssets` 数组项、`kbDoc` / `kbChangelog` Markdown 引用与运行时 `assets` key 使用同一个插件根坐标系和同一归一化语义：依次 trim、去 Markdown 标题后缀、截断 query/fragment、统一 `/`、百分号解码、排除外链、去前导 `/`、折叠路径段，越过插件根时判非法。结果大小写敏感，Markdown 所在目录不参与解析；因此 `./a.png` → `a.png`，位于 `doc_root/doc.md` 的文档若要引用 `doc_root/a.png`，也必须写完整的插件根相对路径。允许 jpg/jpeg/png/gif/webp/bmp；显式资源单文件超过 2 MB 打包失败，总量超过 10 MB 警告。文件名（不含目录）以 `banner` 开头的项被视为橱窗图：额外进快捷预览走马灯，且允许不被任何 Markdown 引用而不产生警告。
+`kbAssets` 数组项、`kbDoc` / `kbChangelog` Markdown 引用与运行时 `assets[].key` 使用同一个插件根坐标系和同一归一化语义：依次 trim、去 Markdown 标题后缀、截断 query/fragment、统一 `/`、百分号解码、排除外链、去前导 `/`、折叠路径段，越过插件根时判非法。结果大小写敏感，Markdown 所在目录不参与解析；因此 `./a.png` → `a.png`，位于 `doc_root/doc.md` 的文档若要引用 `doc_root/a.png`，也必须写完整的插件根相对路径。运行时 `assets` 是 `{ key, dataBase64 }[]`，顺序与 `kbAssets` 声明顺序一致。允许 jpg/jpeg/png/gif/webp/bmp；显式资源单文件超过 2 MB 打包失败，总量超过 10 MB 警告。完整归一化路径以 `banner` 开头（大小写不敏感）的项被视为橱窗图：额外进快捷预览走马灯，按数组声明顺序展示，且允许不被任何 Markdown 引用而不产生警告。
 
 :::note[`minAppVersion` 与 `engines.kabegame`]
 v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉 `>=` 后的规范化派生值，出现在 `index.json` 与运行时兼容判断里（应用版本 `>= minAppVersion` 才允许安装，否则打上 `app.versionIncompatible` 标签）。作者面**只需写 `engines.kabegame`**。

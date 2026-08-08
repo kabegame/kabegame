@@ -91,6 +91,14 @@ pub async fn sync_local_folder_album(
 }
 
 #[tauri::command]
+pub async fn set_album_sync_mode(
+    album_id: String,
+    mode: kabegame_core::local_folder::SyncMode,
+) -> Result<Value, String> {
+    commands::album::set_album_sync_mode(album_id, mode)
+}
+
+#[tauri::command]
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
     commands::album::sync_local_folder_albums(album_ids).await
 }

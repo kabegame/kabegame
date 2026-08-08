@@ -1,0 +1,37 @@
+/* v-hscroll-fade（directives/hscrollFade.ts）：横向滚动容器两侧的粉色渐隐，
+   提示「这个方向还有内容没滚到」。类名由指令挂在不滚动的外框上，伪元素才能钉在两缘；
+   z-index 压在内容之上、el-scrollbar 滑块（z:2）之下。 */
+.kb-hscroll-fade {
+  position: relative;
+}
+
+.kb-hscroll-fade::before,
+.kb-hscroll-fade::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  z-index: 1;
+}
+
+.kb-hscroll-fade::before {
+  left: 0;
+  background: linear-gradient(to left, rgba(255, 107, 157, 0), rgba(255, 107, 157, 0.18));
+}
+
+.kb-hscroll-fade::after {
+  right: 0;
+  background: linear-gradient(to right, rgba(255, 107, 157, 0), rgba(255, 107, 157, 0.18));
+}
+
+.kb-hscroll-fade--start::before {
+  opacity: 1;
+}
+
+.kb-hscroll-fade--end::after {
+  opacity: 1;
+}

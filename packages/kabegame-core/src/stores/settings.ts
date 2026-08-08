@@ -26,7 +26,6 @@ export interface AppSettings {
   /** 画廊列数（0=动态；1-6=固定列数），前端本地偏好 */
   galleryGridColumns: number;
   autoDeduplicate: boolean;
-  realtimeFolderSync: boolean;
   /** 快速同步：跳过修改时间未变的文件夹（本地文件夹同步全入口生效），默认开启 */
   fastFolderSync: boolean;
   defaultDownloadDir: string | null;
@@ -111,6 +110,14 @@ export interface AppSettings {
   "surf-images-path": string;
   /** 画册详情 route path query 的原始字符串，包含可选 `hide/` 前缀。 */
   "album-detail-path": string;
+  /**
+   * 当前选中画册的祖先 id 链（`/root-id/.../self-id/`，与 `albums.ancestorPath` 同构），
+   * query backend——深链入口。与 `albumIdPathLocal` 是独立的两个设置项（不新增双后端
+   * 机制），「读优先 query、写两者同步写」由 `useAlbumIdPathState` 承载。
+   */
+  albumIdPath: string;
+  /** 当前选中画册祖先 id 链的本地记忆（localStorage backend），见 `albumIdPath`。 */
+  albumIdPathLocal: string;
 }
 
 export type AppSettingKey = keyof AppSettings;

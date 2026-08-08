@@ -32,5 +32,7 @@
   "hideAlbumImages": "不显示画册图片",
   "cleanHidden": "清理隐藏图片",
   "cleanHiddenInProgress": "进行中",
-  "cleanHiddenEmpty": "没有隐藏图片"
+  "cleanHiddenEmpty": "没有隐藏图片",
+  "albumTree": "画册树",
+  "albumInfo": "画册信息"
 }

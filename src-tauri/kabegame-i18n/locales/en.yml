@@ -58,6 +58,9 @@ albums:
   errors:
     nameExists: An album with this name already exists. Choose another name.
     parentNotFound: "Parent album does not exist: {id}"
+    parentIsLocalFolder: Local folder album contents are managed by folder sync, so child albums cannot be created manually under them.
+    cannotMoveLocalFolder: A local folder album's location is determined by its disk path and cannot be moved manually.
+    cannotMoveIntoLocalFolder: Albums cannot be moved under a local folder album.
   localFolderErrors:
     androidUnsupported: Local folder sync is not supported on Android
     nameRequired: Album name cannot be empty

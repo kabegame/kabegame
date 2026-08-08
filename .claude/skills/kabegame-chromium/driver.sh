@@ -107,12 +107,16 @@ EOF
   local port scanned
   port="$(registered_port)"
 
+  # 健康路径：登记的端口活着，直接用。
+  if [ -n "$port" ] && cdp_up "$port"; then
+    echo "$port"
+    return 0
+  fi
+
   # 登记缺失或已陈旧（app 退出/换号都不会撤销登记）→ 回落到本机扫描
-  if [ -z "$port" ] || ! cdp_up "$port"; then
-    if scanned="$(discover_port)"; then
-      echo "$scanned"
-      return 0
-    fi
+  if scanned="$(discover_port)"; then
+    echo "$scanned"
+    return 0
   fi
 
   if [ -z "$port" ]; then

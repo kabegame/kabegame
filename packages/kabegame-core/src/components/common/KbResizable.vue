@@ -7,22 +7,19 @@
     :style="sizeStyle"
   >
     <slot />
+    <!-- move/up 一律挂 window（见脚本注释），这里只起手 -->
     <div
       v-if="!disabled"
       class="kb-resizable-handle"
       :title="handleTitle"
       @pointerdown="handlePointerDown"
-      @pointermove="handlePointerMove"
-      @pointerup="handlePointerUp"
-      @pointercancel="handlePointerUp"
-      @lostpointercapture="handlePointerUp"
       @dblclick="handleReset"
     />
   </component>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 
 /**
  * 可拖拽改变尺寸的容器。
@@ -42,8 +39,12 @@ import { computed, ref } from "vue";
  * }
  * ```
  *
- * 拖拽时以「当前真实渲染尺寸」为增量基准（而不是累加意图值），所以拖到 min/max
- * 之外不会积累看不见的偏移，反向拖动立刻跟手。
+ * 拖拽仿 vscode 的 `Sash` + `SplitView`：按下时记一份「指针起点 + 尺寸快照」，之后每次
+ * move 都算 `快照 + (当前指针 − 起点)`，**不是**把逐帧增量累加到当前渲染尺寸上。
+ * 后者看着也是增量，实际会两头出问题：拖过 min/max 被 clamp 时越界的那段位移直接丢失，
+ * 任何一次 move 丢帧同理，于是把手会**永久**偏离光标（甩得越快偏得越多）。锚在起点上则
+ * 每个事件都能独立还原出正确尺寸，丢帧也自愈；越界期间保留意图值，反向拖回时把手恰好在
+ * 光标回到边界的那一刻重新贴合。落盘的仍是 clamp 后的真实尺寸。
  *
  * 布局提示：当侧栏用时父级请用 flex 且给本组件 `flex-none`。grid 的 `auto` 列按
  * min/max-content 定尺寸，会把 clamp 出来的宽度压掉（拖到下限直接塌成 0）。
@@ -81,7 +82,12 @@ const emit = defineEmits<{
 
 const rootRef = ref<HTMLElement | null>(null);
 const resizing = ref(false);
-let lastPos = 0;
+/** 拖拽锚点：按下时的指针坐标与当时的真实尺寸，整场拖拽期间不变 */
+let startPos = 0;
+let startSize = 0;
+let activePointerId: number | null = null;
+let captureEl: HTMLElement | null = null;
+let dragStyleEl: HTMLStyleElement | null = null;
 
 const isHorizontal = computed(() => props.side === "left" || props.side === "right");
 /** 把手在 right/bottom 时，指针朝正方向移动等于变大；在 left/top 时相反 */
@@ -103,37 +109,100 @@ function applySize(next: number) {
   const rounded = Math.round(next);
   size.value = rounded;
   // 同步写一次 DOM：pointermove 是高频事件，等 Vue 下一 tick 才落到 style 的话，
-  // 本次移动后的 measure() 会读到旧尺寸，增量基准就会漂移
+  // 松手时的 measure() 会读到旧尺寸，落盘的就不是这次拖出来的值
   rootRef.value?.style.setProperty("--kb-resizable-size", `${rounded}px`);
 }
 
-function handlePointerDown(event: PointerEvent) {
-  if (props.disabled || event.button !== 0) return;
-  resizing.value = true;
-  lastPos = isHorizontal.value ? event.clientX : event.clientY;
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-  emit("resize-start");
+/**
+ * 拖拽期间全局强制光标 + 禁选中（同 vscode sash 的做法：往 head 注入一张
+ * `* { cursor: ... !important }`）。
+ * 写在 documentElement 的 style 上不够用——指针虽然被把手捕获，光标形状仍由指针
+ * 底下的元素决定，而图片项、树行都自带 cursor，拖过去就会一路跳。
+ */
+function setDragGuard(active: boolean) {
+  if (!active) {
+    dragStyleEl?.remove();
+    dragStyleEl = null;
+    return;
+  }
+  if (dragStyleEl) return;
+  dragStyleEl = document.createElement("style");
+  dragStyleEl.textContent =
+    `*{cursor:${isHorizontal.value ? "col-resize" : "row-resize"}!important;user-select:none!important}`;
+  document.head.appendChild(dragStyleEl);
+}
+
+/**
+ * window 监听一律走**捕获阶段**：拖拽跨越整页，途中任何一个祖先/兄弟处理器
+ * `stopPropagation()` 都会让冒泡阶段的 pointerup 永远到不了这里，拖拽态就此卡死。
+ * 捕获阶段在派发链最前面，谁也拦不住。
+ */
+const WIN_LISTENER_OPTS = true;
+
+/** 拆监听 / 放捕获 / 撤全局样式；不落盘、不发事件，供松手与卸载共用 */
+function teardownDrag() {
+  resizing.value = false;
+  setDragGuard(false);
+  window.removeEventListener("pointermove", onWindowPointerMove, WIN_LISTENER_OPTS);
+  window.removeEventListener("pointerup", onWindowPointerUp, WIN_LISTENER_OPTS);
+  window.removeEventListener("pointercancel", onWindowPointerUp, WIN_LISTENER_OPTS);
+  if (captureEl && activePointerId != null && captureEl.hasPointerCapture(activePointerId)) {
+    captureEl.releasePointerCapture(activePointerId);
+  }
+  captureEl = null;
+  activePointerId = null;
+}
+
+function onWindowPointerMove(event: PointerEvent) {
+  if (!resizing.value || event.pointerId !== activePointerId) return;
+  const pos = isHorizontal.value ? event.clientX : event.clientY;
+  // 相对起点的位移 → 尺寸；不读 measure()，所以既不受 clamp 影响也不逐帧漂移
+  applySize(startSize + (pos - startPos) * sign.value);
   event.preventDefault();
 }
 
-function handlePointerMove(event: PointerEvent) {
+function onWindowPointerUp(event: PointerEvent) {
   if (!resizing.value) return;
-  const pos = isHorizontal.value ? event.clientX : event.clientY;
-  const delta = (pos - lastPos) * sign.value;
-  if (delta === 0) return;
-  lastPos = pos;
-  applySize(measure() + delta);
-}
-
-function handlePointerUp(event: PointerEvent) {
-  if (!resizing.value) return;
-  resizing.value = false;
-  const handle = event.currentTarget as HTMLElement;
-  if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  // 这里不比对 pointerId：一个把手同时只可能有一场拖拽，宁可被别的指针误结束，
+  // 也不要因为 id 对不上而永远收不了尾
+  teardownDrag();
   // 落盘的是 clamp 之后的真实尺寸，避免把越界的意图值持久化下来
   applySize(measure());
   emit("resize-end", size.value ?? 0);
 }
+
+function handlePointerDown(event: PointerEvent) {
+  if (props.disabled || event.button !== 0) return;
+  // 上一次拖拽万一没收干净（比如 pointerup 落在了监听拆掉之后），这里先无条件复位，
+  // 否则残留的 resizing/监听会让把手从此再也起不来
+  teardownDrag();
+  resizing.value = true;
+  startPos = isHorizontal.value ? event.clientX : event.clientY;
+  startSize = measure();
+  activePointerId = event.pointerId;
+  captureEl = event.currentTarget as HTMLElement;
+  // 捕获是尽力而为：真正保证收得到后续事件的是下面挂在 window 上的监听
+  // （同 vscode sash 把 move/up 挂到 window）。只靠捕获的话，任何在祖先上
+  // 对同一 pointerId 再调一次 setPointerCapture 的手势识别器都会把它夺走，
+  // 把手收到 lostpointercapture，拖拽在半路无声中断 —— 就是「拖着拖着脱手」。
+  try {
+    captureEl.setPointerCapture(event.pointerId);
+  } catch {
+    // 捕获失败不影响拖拽
+  }
+  window.addEventListener("pointermove", onWindowPointerMove, WIN_LISTENER_OPTS);
+  window.addEventListener("pointerup", onWindowPointerUp, WIN_LISTENER_OPTS);
+  window.addEventListener("pointercancel", onWindowPointerUp, WIN_LISTENER_OPTS);
+  setDragGuard(true);
+  emit("resize-start");
+  event.preventDefault();
+  // 把手上的手势由本组件独占：不拦冒泡，祖先的手势识别器（如 enableDragScroll
+  // 的拖拽滚动）也会认下这次按下，一边抢捕获一边跟着滚动
+  event.stopPropagation();
+}
+
+// 拖到一半被卸载（如切紧凑模式把树收进抽屉）时别把监听和全局样式留在页面上
+onBeforeUnmount(teardownDrag);
 
 function handleReset() {
   if (props.disabled || props.defaultSize == null) return;

@@ -3,9 +3,9 @@
 //! Platform gate: desktop + Android (only iOS is excluded).
 
 use deno_core::{
-    Extension, ExtensionArguments, JsRuntime, PollEventLoopOptions, RuntimeOptions,
-    anyhow::{Result as AnyhowResult, anyhow},
-    extension, resolve_url, serde_v8, v8,
+    anyhow::{anyhow, Result as AnyhowResult},
+    extension, resolve_url, serde_v8, v8, Extension, ExtensionArguments, JsRuntime,
+    PollEventLoopOptions, RuntimeOptions,
 };
 use deno_fs::FileSystemRc;
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
@@ -314,8 +314,7 @@ pub fn execute_crawler_script_v8(run: Arc<Task>) -> TaskResult {
             task_id,
             cancel: cancel_for_ctx,
         };
-        let mut rt =
-            JsPluginRuntime::new(ctx, fs).map_err(|e| TaskError::Other(e.to_string()))?;
+        let mut rt = JsPluginRuntime::new(ctx, fs).map_err(|e| TaskError::Other(e.to_string()))?;
         let isolate_handle = rt.runtime_mut().v8_isolate().thread_safe_handle();
         let watcher = tokio::spawn(async move {
             cancel_for_watcher.cancelled().await;
@@ -509,8 +508,7 @@ mod tests {
         .to_string();
 
         let run = test_run("v8-sync-ops", "https://example.test");
-        let mut rt =
-            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl(
             "plugin.test",
             entry,
@@ -525,8 +523,7 @@ mod tests {
     async fn run_crawl_errors_when_export_missing() {
         let entry = "export const notCrawl = 1;".to_string();
         let run = test_run("v8-missing-export", "");
-        let mut rt =
-            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
@@ -545,8 +542,7 @@ mod tests {
         "#
         .to_string();
         let run = test_run("v8-import-rejected", "");
-        let mut rt =
-            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         let err = rt
             .run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
@@ -591,8 +587,7 @@ mod tests {
             "#
         );
 
-        let mut rt =
-            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
             .expect("fetch should resolve");
@@ -696,9 +691,8 @@ mod tests {
         let run = test_run("v8-snapshot-fs", "");
         let blob: &'static [u8] =
             Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
-        let mut runtime =
-            JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
-                .expect("restore snapshot runtime");
+        let mut runtime = JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
+            .expect("restore snapshot runtime");
         let entry = r#"
             export async function crawl(common) {
                 if (Kabegame.fs.getRoot() !== common.root) {
@@ -735,9 +729,8 @@ mod tests {
 
         let blob: &'static [u8] =
             Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
-        let mut runtime =
-            JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
-                .expect("restore snapshot runtime");
+        let mut runtime = JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
+            .expect("restore snapshot runtime");
         let expected_root = format!("/{}", run.fs_handle);
         let entry = format!(
             r#"
@@ -810,8 +803,7 @@ mod tests {
             "#
         );
 
-        let mut rt =
-            JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl("plugin.test", entry, json!({}), json!({}))
             .await
             .expect("to should resolve");

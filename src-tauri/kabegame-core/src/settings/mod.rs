@@ -92,8 +92,6 @@ pub enum SettingKey {
     GalleryImageObjectPosition,
     /// 自动去重
     AutoDeduplicate,
-    /// 实时监听本地文件夹画册源目录
-    RealtimeFolderSync,
     /// 本地文件夹画册快速同步
     FastFolderSync,
     /// 默认下载目录
@@ -318,7 +316,6 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
-            SettingKey::RealtimeFolderSync => SettingValue::Bool(false),
             SettingKey::FastFolderSync => SettingValue::Bool(true),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
@@ -420,7 +417,6 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio,
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
-            SettingKey::RealtimeFolderSync,
             SettingKey::FastFolderSync,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperRotationEnabled,
@@ -527,7 +523,6 @@ impl Settings {
         match key {
             SettingKey::AutoLaunch
             | SettingKey::AutoDeduplicate
-            | SettingKey::RealtimeFolderSync
             | SettingKey::WallpaperRotationEnabled
             | SettingKey::WallpaperDisabled
             | SettingKey::McpEnabled => {
@@ -726,7 +721,6 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
-            SettingKey::RealtimeFolderSync => "realtimeFolderSync".to_string(),
             SettingKey::FastFolderSync => "fastFolderSync".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
@@ -959,13 +953,6 @@ impl Settings {
     pub fn get_auto_deduplicate(&self) -> bool {
         Self::cells()
             .get(&SettingKey::AutoDeduplicate)
-            .map(|c| c.load().as_bool().unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    pub fn get_realtime_folder_sync(&self) -> bool {
-        Self::cells()
-            .get(&SettingKey::RealtimeFolderSync)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
@@ -1318,16 +1305,6 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value);
-        Ok(())
-    }
-
-    pub fn set_realtime_folder_sync(&self, enabled: bool) -> Result<(), String> {
-        let cells = Self::cells();
-        let new_value = SettingValue::Bool(enabled);
-        if let Some(cell) = cells.get(&SettingKey::RealtimeFolderSync) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::RealtimeFolderSync, &new_value);
         Ok(())
     }
 

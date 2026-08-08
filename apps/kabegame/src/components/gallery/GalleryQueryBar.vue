@@ -1,11 +1,14 @@
 <template>
   <div class="gallery-query-bar w-full min-w-0">
     <!-- 桌面：过滤入口(简单/高级) + 排序维度 / 顺序 / 每页条数。
-         hugTop 收掉上方 PageHeader 那 20px 外边距的一大半，两行贴近标题栏。 -->
-    <div
+         hugTop 收掉上方 PageHeader 那 20px 外边距的一大半，两行贴近标题栏。
+         整行不换行、横向滚动，v-hscroll-fade 在两侧点亮「还有内容」的粉色渐隐。 -->
+    <el-scrollbar
       v-if="!uiStore.isCompact"
-      class="flex flex-wrap items-center gap-2"
+      v-hscroll-fade
+      class="filter-chip-row"
       :class="{ '-mt-3': hugTop }"
+      view-class="flex flex-nowrap items-center gap-2 py-1"
     >
       <!-- 页面自己的行首控件（如画册详情的「图片 / 子画册」选项卡）：
            它和过滤模式一样是「看哪一批」的开关，挤在同一行省掉一整行高度。 -->
@@ -59,7 +62,7 @@
       >
         <template #icon><Histogram /></template>
       </KbFilterDropdown>
-    </div>
+    </el-scrollbar>
 
     <!-- 查询行：简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），
          否则两种模式高度不同，切换时下面的画廊会整体上下跳。 -->
@@ -77,19 +80,13 @@
       <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
       <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
            清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
-           右边界的粉色渐隐只在还能往右滚时出现，提示「后面还有」。 -->
-      <div
+           v-hscroll-fade 在两侧点亮「还有内容没滚到」的粉色渐隐。 -->
+      <el-scrollbar
         v-else
-        class="filter-chip-viewport relative min-w-0 flex-1"
-        :class="{ 'has-more': chipRowHasMore }"
+        v-hscroll-fade
+        class="filter-chip-row min-w-0 flex-1"
+        view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
       >
-        <el-scrollbar
-          ref="filterChipScrollRef"
-          class="filter-chip-row"
-          view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
-          @scroll="updateChipRowOverflow"
-          @wheel="onFilterChipWheel"
-        >
           <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
                这里每次提交都会 navigate + 重查，所以要防抖 -->
           <GallerySearchDropdown
@@ -133,8 +130,7 @@
               </div>
             </template>
           </KbFilterDropdown>
-        </el-scrollbar>
-      </div>
+      </el-scrollbar>
 
       <!-- 清除全部过滤。画廊把它放在标题副标题里（那里本来就在说「筛出了多少」），
            详情页没有那个位置，就钉在过滤行右端，不随 chip 一起滚走。 -->
@@ -270,7 +266,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onMounted, onUnmounted, provide, ref, watch, type Component } from "vue";
+import { computed, markRaw, onUnmounted, provide, ref, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import {
   KbFilterDropdown,
@@ -722,67 +718,7 @@ function onPageSizeCommand(cmd: string) {
   navigate({ pageSize: n, page: 1 });
 }
 
-// ---------- 过滤行横向滚动 ----------
-const filterChipScrollRef = ref<{ wrapRef?: HTMLElement } | null>(null);
-/** 过滤行右侧还有没滚到的 chip：用来点亮右边界那道粉色渐隐。 */
-const chipRowHasMore = ref(false);
-
-function updateChipRowOverflow() {
-  const wrap = filterChipScrollRef.value?.wrapRef;
-  if (!wrap) {
-    chipRowHasMore.value = false;
-    return;
-  }
-  chipRowHasMore.value = wrap.scrollWidth - wrap.clientWidth - wrap.scrollLeft > 1;
-}
-
-// 切换过滤模式会重建这段 DOM，observer 得跟着重绑；同时观察 view，
-// chip 增减(如清除按钮出现)也要重算「右边还有没有」。
-let chipRowResizeObserver: ResizeObserver | null = null;
-
-function bindChipRowObserver() {
-  chipRowResizeObserver?.disconnect();
-  const wrap = filterChipScrollRef.value?.wrapRef;
-  if (!wrap) {
-    chipRowHasMore.value = false;
-    return;
-  }
-  chipRowResizeObserver = new ResizeObserver(updateChipRowOverflow);
-  chipRowResizeObserver.observe(wrap);
-  if (wrap.firstElementChild) chipRowResizeObserver.observe(wrap.firstElementChild);
-  updateChipRowOverflow();
-}
-
-watch(
-  [filterMode, () => uiStore.isCompact],
-  () => void nextTick(bindChipRowObserver),
-);
-onMounted(() => void nextTick(bindChipRowObserver));
-onUnmounted(() => chipRowResizeObserver?.disconnect());
-
-/**
- * 鼠标滚轮在过滤行上转成横向滚动：竖向滚轮本身不会驱动横向溢出，
- * 不接管的话这行看着能滚却滚不动（只有触控板横扫有效）。
- */
-function onFilterChipWheel(event: WheelEvent) {
-  const wrap = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(
-    ".el-scrollbar__wrap",
-  );
-  if (!wrap) return;
-
-  const maxScroll = wrap.scrollWidth - wrap.clientWidth;
-  if (maxScroll <= 0) return;
-
-  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
-    ? event.deltaX
-    : event.deltaY;
-  if (!delta) return;
-
-  const next = Math.min(Math.max(wrap.scrollLeft + delta, 0), maxScroll);
-  if (next === wrap.scrollLeft) return; // 已到端点：让页面继续接管滚动
-  event.preventDefault();
-  wrap.scrollLeft = next;
-}
+// 过滤行的横向滚动渐隐 + 滚轮接管统一走 v-hscroll-fade 指令（directives/hscrollFade.ts）
 
 // ---------- 懒加载（安卓 picker 的候选与计数）----------
 interface PluginGroupRow {
@@ -1645,28 +1581,6 @@ defineExpose({
     left: 0;
     right: 0;
   }
-}
-
-/* 右边界的粉色渐隐：还能往右滚时才出现，提示「后面还有维度」。 */
-.filter-chip-viewport::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 36px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.18s ease;
-  background: linear-gradient(
-    to right,
-    rgba(255, 107, 157, 0) 0%,
-    rgba(255, 107, 157, 0.18) 100%
-  );
-}
-
-.filter-chip-viewport.has-more::after {
-  opacity: 1;
 }
 
 /* 清除全部过滤：过滤图标本体 + 右上角浮出的 ✕ 徽章，形态沿用 chip 的清除徽章

@@ -99,7 +99,8 @@ CREATE TABLE albums (
     type          TEXT    NOT NULL DEFAULT 'normal',
     sync_folder   TEXT,
     folder_status TEXT,
-    ancestor_path TEXT    NOT NULL DEFAULT ''
+    ancestor_path TEXT    NOT NULL DEFAULT '',
+    sync_mode     TEXT    NOT NULL DEFAULT 'none'
 );
 CREATE UNIQUE INDEX idx_albums_name_scoped
     ON albums(COALESCE(parent_id, ''), LOWER(name));

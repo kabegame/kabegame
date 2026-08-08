@@ -58,6 +58,17 @@ type PathRouteStoreConfig<TState extends object> = {
    */
   build: (state: TState, global: EffectiveGlobalRoute) => string;
   /**
+   * 可选：查询出口专用的构建函数——`computedPath`/`computePath`（pathql 消费方，如
+   * ImageGrid 的实际查询 path）改走这个函数拼出的结果；缺省退化为 `build` 本身
+   * （现状：存储与查询同源）。
+   *
+   * 用于「持久化 path 与业务身份（如当前选中的画册）分离」的场景：`build` 只产出
+   * 不含身份前缀的存储形态（写入 settingKey），`queryBuild` 则从外部真源（如
+   * `useAlbumIdPathState`）读取当前身份、拼回完整 pathql 前缀。两者的落点必须
+   * 一致（都是「同一份状态」的两种表达），否则查询会读到与存储不一致的路径。
+   */
+  queryBuild?: (state: TState, global: EffectiveGlobalRoute) => string;
+  /**
    * 可选：构建"上下文前缀"——是 `build` 的 **严格前缀**，代表任何属于本 store 路由
    * 语义下的子路径都会共享的那部分（例如 gallery 的 `search/display-name/<q>/`）。
    * 工厂会自动在外面拼 `hide/`。
@@ -140,6 +151,18 @@ export function createPathRouteStore<TState extends object>(
       return eff.hide ? HIDE_PREFIX + inner : inner;
     };
 
+    /** 查询出口专用：见 `config.queryBuild` 的注释。未声明时与 `fullPathFor` 完全等价。 */
+    const fullQueryPathFor = (
+      nextState: TState,
+      overrideHide = hide.value,
+      overrideNoAlbum = noAlbum.value,
+    ): string => {
+      const eff = effectiveGlobals(nextState, overrideHide, overrideNoAlbum);
+      const build = config.queryBuild ?? config.build;
+      const inner = build(nextState, { noAlbum: eff.noAlbum });
+      return eff.hide ? HIDE_PREFIX + inner : inner;
+    };
+
     const writeState = async (
       nextState: TState,
       options?: { history?: "push" | "replace" },
@@ -202,7 +225,7 @@ export function createPathRouteStore<TState extends object>(
       overrideNoAlbum?: boolean,
     ): string => {
       const mergedState = { ...state.value, ...overrideState } as TState;
-      return fullPathFor(
+      return fullQueryPathFor(
         mergedState,
         overrideHide ?? hide.value,
         overrideNoAlbum ?? noAlbum.value,

@@ -1,5 +1,5 @@
 <template>
-  <div class="qp-panel">
+  <div class="qp-panel" :class="{ 'qp-panel--no-footer': !showFooter }">
     <div class="qp-header">
       <div class="qp-icon">
         <img v-if="iconSrc" :src="iconSrc" alt="" />
@@ -26,11 +26,11 @@
       :reset-token="plugin.id"
     />
 
-    <div class="qp-footer">
+    <div v-if="showFooter" class="qp-footer">
       <span v-if="updateAvailableVersion" class="qp-footer-update">
         {{ t("plugins.quickPreview.canUpdateTo", { version: updateAvailableVersion }) }}
       </span>
-      <span class="qp-footer-hint">
+      <span v-if="showDetailHint" class="qp-footer-hint">
         {{ t("plugins.quickPreview.viewDetails") }}
         <el-icon><ArrowRight /></el-icon>
       </span>
@@ -60,15 +60,23 @@ export interface QuickPreviewPluginLike {
   labels?: PluginLabel[];
 }
 
-const props = defineProps<{
-  plugin: QuickPreviewPluginLike;
-  iconSrc?: string | null;
-  images: PluginQuickPreviewImage[];
-  carouselLoading?: boolean;
-  emptyReason?: "no-assets" | "not-installed" | null;
-  /** 已知的可更新版本号；未知或已是最新则为 null，面板只显示"点击查看详情" */
-  updateAvailableVersion?: string | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    plugin: QuickPreviewPluginLike;
+    iconSrc?: string | null;
+    images: PluginQuickPreviewImage[];
+    carouselLoading?: boolean;
+    emptyReason?: "no-assets" | "not-installed" | null;
+    /** 已知的可更新版本号；未知或已是最新则为 null，面板只显示"点击查看详情" */
+    updateAvailableVersion?: string | null;
+    /** 面板点击后不会跳转详情时（如插件选择器里的预览）关掉这行提示 */
+    showDetailHint?: boolean;
+  }>(),
+  { showDetailHint: true },
+);
+
+/** 页脚两项都没有就整条去掉，改由面板自身补底部内边距 */
+const showFooter = computed(() => props.showDetailHint || !!props.updateAvailableVersion);
 
 const { t } = useI18n();
 const { pluginName, pluginDescription } = usePluginManifestI18n();
@@ -100,6 +108,10 @@ const metaLine = computed(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.qp-panel--no-footer {
+  padding-bottom: 16px;
 }
 
 .qp-header {

@@ -20,7 +20,7 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
 | 开发迭代（`dev` / `check` / `test`，一律 debug） | host | `target/debug/` |
 | release 构建（`deno task b --release`） | **只在 guest** | `target/release/` |
 | FFmpeg/x264 产物构建（`deno task build:ffmpeg`） | **只在 guest** | `bin/linux/x86_64/{FFmpeg,x264}-build/` |
-| chromium/CEF（`deno task build:chromium`） | host 或 guest 均可 | `third/chromium/` → `bin/linux/x86_64/cef-build-{dev,prod}/` |
+| chromium/CEF（`deno task build:chromium`） | host 或 guest 均可 | `$CEFBUILD`（须在仓库外） → `bin/linux/x86_64/cef-build-{dev,prod}/` |
 | rusty_v8 android（`deno task build:v8`） | host 或 guest 均可 | `bin/android/arm64/rusty_v8-build/` |
 
 - **同一个 `target/`**：debug 与 release 是 cargo 的两个 profile 子目录，`.o` 与 build-script
@@ -202,7 +202,9 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
 - `repoBuildDir(repo, { platform?, arch? })` —— 第三方编译产物目录
   `bin/{platform}/{arch}/{repo}-build`。
 - `cefExportDir(variant)` —— `bin/{platform}/{arch}/cef-build-{dev,prod}`。
-- `CHROMIUM_DIR` —— `third/chromium`（chromium checkout 工作区）。
+- `CHROMIUM_DIR` —— chromium checkout 工作区的默认值 `third/chromium`。实际构建须用 `CEFBUILD`
+  覆盖到仓库外（任何 `node_modules` 之外），否则 `checkNoNodeModulesAncestor()` 护栏拦下；
+  成因见 [../../src-tauri/tauri-runtime-cef/README.md](../../src-tauri/tauri-runtime-cef/README.md)。
 - `requireUbuntu2204(what)` —— 构建属地守卫。
 
 ## 涉及文件

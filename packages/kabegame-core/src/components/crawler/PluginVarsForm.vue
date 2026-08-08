@@ -9,7 +9,24 @@
         :required="isRequired(varDef)"
         :rules="getValidationRules(varDef, varDisplayName(varDef))"
         :style="{ gridColumn: `span ${spanOf(varDef)}` }"
+        :class="{ 'plugin-vars-item--checkbox': varDef.type === 'checkbox' }"
       >
+        <!-- checkbox 型：全选与计数挤占字段高度，收进 label 行右侧 -->
+        <template v-if="varDef.type === 'checkbox'" #label>
+          <span>{{ varDisplayName(varDef) }}</span>
+          <button
+            v-if="checkboxOptionValues(varDef).length > 1"
+            type="button"
+            class="plugin-vars-grid__select-all"
+            :class="{ 'is-indeterminate': checkboxIndeterminate(varDef) }"
+            @click.prevent.stop="toggleAllCheckbox(varDef)"
+          >
+            {{ checkboxAllSelected(varDef) ? "✓" : "–" }} {{ t("plugins.pluginVarSelectAll") }}
+          </button>
+          <span v-if="checkboxOptionValues(varDef).length > 0" class="plugin-vars-grid__count">
+            {{ checkboxSelectedCount(varDef) }}/{{ checkboxOptionValues(varDef).length }}
+          </span>
+        </template>
         <PluginVar
           :type="varDef.type"
           :model-value="(modelValue || {})[varDef.key]"
@@ -47,7 +64,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import PluginVar from "../plugin/var-fields/PluginVar.vue";
-import { usePluginConfigI18n } from "@kabegame/i18n";
+import { usePluginConfigI18n, useI18n } from "@kabegame/i18n";
 import { filterVarOptionsByWhen } from "../../utils/pluginVarWhen";
 import { isRequired, getValidationRules, type PluginVarDef } from "../../utils/pluginVarForm";
 import { useUiStore } from "../../stores/ui";
@@ -69,6 +86,7 @@ const emit = defineEmits<{
 }>();
 
 const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
+const { t } = useI18n();
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
 
@@ -86,6 +104,36 @@ function spanOf(v: PluginVarDef): number {
 
 /** 底部说明区只列出「当前可见且有描述」的字段，顺序与表单一致 */
 const describedVars = computed(() => props.pluginVars.filter((v) => varDescripts(v)));
+
+/* ---- checkbox 型的全选/计数（渲染在 label 行，逻辑归表单层） ---- */
+
+function checkboxOptionValues(varDef: PluginVarDef): string[] {
+  return optionsForVar(varDef)
+    .map((o) => (typeof o === "string" ? o : o.variable))
+    .filter((v) => typeof v === "string" && v.trim() !== "");
+}
+
+function checkboxSelectedCount(varDef: PluginVarDef): number {
+  const raw = (props.modelValue ?? {})[varDef.key];
+  const sel = Array.isArray(raw) ? raw.map((x) => `${x}`) : [];
+  return checkboxOptionValues(varDef).filter((v) => sel.includes(v)).length;
+}
+
+function checkboxAllSelected(varDef: PluginVarDef): boolean {
+  const vals = checkboxOptionValues(varDef);
+  return vals.length > 0 && checkboxSelectedCount(varDef) === vals.length;
+}
+
+function checkboxIndeterminate(varDef: PluginVarDef): boolean {
+  const n = checkboxSelectedCount(varDef);
+  return n > 0 && n < checkboxOptionValues(varDef).length;
+}
+
+function toggleAllCheckbox(varDef: PluginVarDef) {
+  const vals = checkboxOptionValues(varDef);
+  if (vals.length === 0) return;
+  updateVar(varDef, checkboxAllSelected(varDef) ? [] : [...vals]);
+}
 
 const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
   const filtered = filterVarOptionsByWhen(varDef.options, props.modelValue ?? {});
@@ -129,6 +177,47 @@ const updateVar = (varDef: PluginVarDef, value: any) => {
   :deep(.el-form-item) {
     min-width: 0;
   }
+
+  // checkbox 型的 label 行要在右侧放全选/计数：整行铺满并 flex 排布。
+  // display: flex 下必填星号（label 的 ::before）仍是首个 flex item，不会换行。
+  :deep(.plugin-vars-item--checkbox .el-form-item__label) {
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+}
+
+.plugin-vars-grid__select-all {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px dashed color-mix(in srgb, var(--anime-secondary) 60%, transparent);
+  border-radius: 6px;
+  margin: 0 0 0 auto; /* 推到 label 行最右 */
+  background: transparent;
+  color: var(--anime-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.plugin-vars-grid__select-all:hover {
+  color: var(--anime-primary);
+  border-color: color-mix(in srgb, var(--anime-primary) 60%, transparent);
+}
+.plugin-vars-grid__select-all.is-indeterminate {
+  border-style: solid;
+}
+
+.plugin-vars-grid__count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--anime-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .plugin-vars-notes {

@@ -1,29 +1,164 @@
 <template>
   <div class="albums-page" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
-    <div class="albums-scroll-container">
-      <AlbumsPageHeader
-        :album-drive-enabled="albumDriveEnabled"
-        @view-vd="openVirtualDrive"
-        @refresh="handleRefresh"
-        @create-album="createDialog.open()"
+    <!-- 单个 ImageGrid、单个滚动容器（sticky 体系与 Gallery 同源）：#header 页头全宽 sticky 钉顶，
+         #aside 树列排在页头之下、自身 sticky 钉在页头下缘，中栏 = before-grid（查询行 / sticky 分页）
+         + 图片流，图片能滚到页头下方 -->
+    <ImageGrid
+      ref="albumViewRef"
+      class="albums-grid-body"
+      :class="{ 'has-detail': !isCompact && detailOpen }"
+      :surface="surface"
+      :enable-ctrl-wheel-adjust-columns="!isCompact"
+      enable-virtual-scroll
+      :enable-ctrl-key-adjust-columns="!isCompact"
+      :loading="isRefreshing"
+      :loading-overlay="isRefreshing"
+      hide-scrollbar
+      scroll-whole-container
+    >
+      <!-- 直接放 AlbumsPageHeader，不能包短容器：sticky 元素被限制在父盒内，父盒等高即失效 -->
+      <template #header>
+        <AlbumsPageHeader
+          class="albums-page-header"
+          :album-drive-enabled="albumDriveEnabled"
+          @view-vd="openVirtualDrive"
+          @refresh="handleRefresh"
+          @create-album="openCreateDialogWithParent(null)"
+          @open-tree="treeDrawer.open()"
+          @toggle-detail="toggleDetailPanel"
+        />
+      </template>
+
+      <template v-if="!isCompact" #aside>
+        <KbResizable
+          side="right"
+          class="albums-tree-pane"
+          v-model="treeWidth"
+          :default-size="TREE_DEFAULT_WIDTH"
+        >
+          <AlbumTreePanel
+            :selected-id="selectedAlbumId"
+            @select="onTreeSelect"
+            @create-album="openCreateDialogWithParent"
+            @contextmenu="onTreeContextMenu"
+            @dblclick="onTreeDblclick"
+          />
+        </KbResizable>
+      </template>
+
+      <template v-if="!isCompact && detailOpen" #aside-right>
+        <KbResizable
+          side="left"
+          class="albums-detail-pane"
+          v-model="detailWidth"
+          :default-size="DETAIL_DEFAULT_WIDTH"
+        >
+          <AlbumDetailPanel
+            :album="selectedAlbum"
+            :is-hidden="selectedAlbumId === HIDDEN_ALBUM_ID"
+            :stats="selectedAlbumStats"
+            :is-rotating="isSelectedAlbumRotating"
+            :can-create-sub-album="canCreateSubAlbumForSelected"
+            :can-rename="selectedAlbumId !== HIDDEN_ALBUM_ID"
+            :cover="albumCover"
+            @close="detailOpen = false"
+            @more="(e: MouseEvent) => selectedAlbum && albumMenu.show(selectedAlbum, e)"
+            @command="(cmd) => runAlbumCommand(cmd, selectedAlbum)"
+          />
+        </KbResizable>
+      </template>
+
+      <template #empty>
+        <div class="album-empty fade-in">
+          <EmptyState />
+        </div>
+      </template>
+
+      <template #before-grid="{ totalCount, currentPage, pageSize: gridPageSize, jumpToPage }">
+        <nav v-if="selectedAlbumId" class="album-breadcrumb-wrap" aria-label="breadcrumb">
+          <el-breadcrumb>
+            <el-breadcrumb-item v-for="crumb in selectedAlbumAncestorCrumbs" :key="crumb.id">
+              <a class="album-breadcrumb-link" @click="selectAlbum(crumb.id)">{{ crumb.name }}</a>
+            </el-breadcrumb-item>
+            <el-breadcrumb-item>
+              <span class="album-breadcrumb-current">{{ selectedAlbumName || "…" }}</span>
+              <span class="album-breadcrumb-stats">{{ t("albums.detailCrumbStats", { images: selectedAlbumStats.imageCount, subAlbums: selectedAlbumStats.subAlbumCount }) }}</span>
+            </el-breadcrumb-item>
+          </el-breadcrumb>
+        </nav>
+
+        <GalleryQueryBar
+          ref="albumBrowseToolbarRef"
+          :query="albumDetailRouteStore.query"
+          :no-album="albumDetailRouteStore.effectiveNoAlbum"
+          :sort="albumDetailRouteStore.sort"
+          :page="albumDetailRouteStore.page"
+          :page-size="gridPageSize"
+          :search-mode="albumDetailStickySearchMode"
+          :provider-context-prefix="albumDetailRouteStore.computedContextPath"
+          :context-base="albumDetailRouteStore.contextPathFor({ query: [] })"
+          :filter-features="albumFilterFeatures"
+          :sort-features="albumSortFeatures"
+          enable-clear-all
+          @navigate="onQueryNavigate"
+          @search-mode-change="rememberAlbumDetailSearchMode"
+        />
+
+        <!-- 与 Gallery 同款：查询行随内容滚走，分页条 sticky（top:64）贴在 sticky 页头下方 -->
+        <GalleryBigPaginator
+          :total-count="totalCount"
+          :current-page="currentPage"
+          :big-page-size="gridPageSize"
+          :is-sticky="true"
+          @jump-to-page="jumpToPage"
+        />
+      </template>
+    </ImageGrid>
+
+    <!-- 紧凑模式：左树收进抽屉（useModal 已接 modalStack → Android 返回键可关） -->
+    <el-drawer
+      v-if="isCompact"
+      :model-value="treeDrawer.isOpen.value"
+      :z-index="treeDrawer.zIndex.value"
+      direction="ltr"
+      size="min(80vw, 320px)"
+      :with-header="false"
+      class="albums-tree-drawer"
+      @update:model-value="treeDrawer.close"
+    >
+      <AlbumTreePanel
+        :selected-id="selectedAlbumId"
+        @select="(id) => { onTreeSelect(id); treeDrawer.close(); }"
+        @create-album="(pid) => { openCreateDialogWithParent(pid); treeDrawer.close(); }"
+        @contextmenu="onTreeContextMenu"
+        @dblclick="(id) => { onTreeDblclick(id); treeDrawer.close(); }"
       />
+    </el-drawer>
 
-      <div v-loading="showLoading" style="min-height: 200px;">
-        <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
-          class="albums-grid" :class="{ 'albums-grid-compact': isCompact }">
-          <AlbumCard v-for="album in displayedAlbumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
-            :count="displayedAlbumStats[album.id]?.imageCount || 0"
-            :sub-album-count="displayedAlbumStats[album.id]?.subAlbumCount || 0"
-            :preview-images="albumPreviewImages[album.id] || []"
-            :video-preview-remount-key="albumVideoPreviewRemountKey"
-            :is-loading="albumIsLoadingMap[album.id] || false"
-            @click="openAlbum(album)"
-            @contextmenu="openAlbumContextMenu($event, album)" />
-        </transition-group>
-
-        <div v-if="!loading && displayedAlbumRoots.length === 0" class="empty-tip">{{ $t('albums.emptyTip') }}</div>
-      </div>
-    </div>
+    <!-- 紧凑模式：画册信息面板收进右侧抽屉 -->
+    <el-drawer
+      v-if="isCompact"
+      :model-value="detailDrawer.isOpen.value"
+      :z-index="detailDrawer.zIndex.value"
+      direction="rtl"
+      size="min(85vw, 340px)"
+      :with-header="false"
+      class="albums-detail-drawer"
+      @update:model-value="detailDrawer.close"
+    >
+      <AlbumDetailPanel
+        :album="selectedAlbum"
+        :is-hidden="selectedAlbumId === HIDDEN_ALBUM_ID"
+        :stats="selectedAlbumStats"
+        :is-rotating="isSelectedAlbumRotating"
+        :can-create-sub-album="canCreateSubAlbumForSelected"
+        :can-rename="selectedAlbumId !== HIDDEN_ALBUM_ID"
+        :cover="albumCover"
+        @close="detailDrawer.close()"
+        @more="(e: MouseEvent) => selectedAlbum && albumMenu.show(selectedAlbum, e)"
+        @command="(cmd) => runAlbumCommand(cmd, selectedAlbum)"
+      />
+    </el-drawer>
 
     <ActionRenderer
       :visible="albumMenu.visible.value"
@@ -32,7 +167,7 @@
       :context="albumMenuContext"
       :z-index="albumMenu.zIndex.value"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder')" />
+      @command="(cmd) => runAlbumCommand(cmd as AlbumCommand, albumMenuContext.target)" />
 
     <el-dialog
       :model-value="createDialog.isOpen.value"
@@ -118,16 +253,6 @@
         <el-button type="primary" @click="confirmMoveAlbum">{{ $t('common.ok') }}</el-button>
       </template>
     </el-dialog>
-
-    <button
-      class="hidden-album-fab"
-      :title="t('albums.enterHidden')"
-      :aria-label="t('albums.enterHidden')"
-      @click="openHiddenAlbum"
-      @contextmenu.prevent
-    >
-      <el-icon :size="20"><Delete /></el-icon>
-    </button>
   </div>
 </template>
 
@@ -135,51 +260,66 @@
 import { ref, computed, onMounted, onActivated, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Refresh, Setting, QuestionFilled, Delete } from "@kabegame/element-plus-icons";
+import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
-import AlbumCard from "@/components/albums/AlbumCard.vue";
+import AlbumTreePanel from "@/components/albums/AlbumTreePanel.vue";
+import AlbumDetailPanel from "@/components/albums/AlbumDetailPanel.vue";
+import type { AlbumPanelCommand } from "@/components/albums/AlbumDetailPanel.vue";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import KbResizable from "@kabegame/core/components/common/KbResizable.vue";
+import ImageGrid from "@/components/ImageGrid.vue";
+import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
+import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
 import type { Album } from "@/stores/albums";
-import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { storeToRefs } from "pinia";
-import { useRouter } from "vue-router";
 import { trackEvent } from "@kabegame/core/track/umami";
+import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
-import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import type { ImageInfo } from "@kabegame/core/types/image";
-import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
-import { useGlobalPathRoute } from "@/stores/pathRoute";
-import { openFilePicker } from "@/api/dialog";
-import { syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
-import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 import {
-  albumSubtreeContainsAny,
-  buildAlbumMediaNodes,
-  flattenAlbumMediaNodes,
-  loadAlbumMediaPreview,
-  type AlbumMediaNode,
-} from "@/utils/albumMediaTree";
+  querySearchTerm,
+  type GalleryBrowseDimension,
+  type GalleryQueryPatch,
+  type GallerySortField,
+} from "@/utils/galleryPath";
+import { createAlbumDetailSurface } from "@/components/imageGrid/surfaces/album";
+import {
+  useAlbumDetailRouteStore,
+  albumDetailStickySearchMode,
+  rememberAlbumDetailSearchMode,
+} from "@/stores/albumDetailRoute";
+import {
+  useAlbumIdPathState,
+  lastAlbumIdOf,
+  segmentsOfAlbumIdPath,
+} from "@/composables/useAlbumIdPathState";
+import { openFilePicker } from "@/api/dialog";
+import { setAlbumSyncMode, syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
+import type { AlbumSyncMode } from "@kabegame/core/types/album";
+import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
 import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
+import {
+  buildAlbumMediaNodes,
+  loadAlbumMediaPreview,
+  type AlbumMediaNode,
+} from "@/utils/albumMediaTree";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const { albums, albumRoots } = storeToRefs(albumStore);
-const globalPathRoute = useGlobalPathRoute();
-const { hide: globalHide } = storeToRefs(globalPathRoute);
-const router = useRouter();
+const { albums } = storeToRefs(albumStore);
 const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
 
@@ -193,7 +333,7 @@ function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
 }
 
-function trackAlbumEnter(album: { id: string; name: string }, source: "card" | "context_menu" | "hidden_button") {
+function trackAlbumEnter(album: { id: string; name: string }, source: "tree" | "context_menu") {
   if (!IS_WEB) return;
   trackEvent("album_enter", {
     albumId: album.id,
@@ -205,8 +345,194 @@ function trackAlbumEnter(album: { id: string; name: string }, source: "card" | "
   });
 }
 
+// ---------- 左树宽度 / 紧凑抽屉 ----------
+const TREE_DEFAULT_WIDTH = 248;
+const treeWidth = useLocalStorage("kabegame-albums-tree-width", TREE_DEFAULT_WIDTH, {
+  mergeDefaults: true,
+});
+const treeDrawer = useModal();
 
-// 虚拟磁盘
+// ---------- 右栏（画册信息面板）宽度 / 开合 / 紧凑抽屉 ----------
+const DETAIL_DEFAULT_WIDTH = 288;
+const detailWidth = useLocalStorage("kabegame-albums-detail-width", DETAIL_DEFAULT_WIDTH, {
+  mergeDefaults: true,
+});
+const detailOpen = useLocalStorage("kabegame-albums-detail-open", true, {
+  mergeDefaults: true,
+});
+const detailDrawer = useModal();
+const toggleDetailPanel = () => {
+  if (isCompact.value) detailDrawer.open();
+  else detailOpen.value = !detailOpen.value;
+};
+
+// ---------- 选中状态：albumIdPath（祖先链）为唯一真源 ----------
+const albumDetailRouteStore = useAlbumDetailRouteStore();
+const { albumIdPath, set: setAlbumIdPath } = useAlbumIdPathState();
+const selectedAlbumId = computed(() => lastAlbumIdOf(albumIdPath.value));
+const selectedAlbum = computed<Album | null>(
+  () => albums.value.find((a) => a.id === selectedAlbumId.value) ?? null,
+);
+const selectedAlbumName = computed(() => {
+  if (selectedAlbumId.value === HIDDEN_ALBUM_ID) return t("albums.hiddenAlbumName");
+  return selectedAlbum.value?.name ?? "";
+});
+
+// ---------- 右栏（画册信息面板）派生数据 ----------
+const selectedAlbumStats = computed(() => {
+  const id = selectedAlbumId.value;
+  if (!id) return { imageCount: 0, subAlbumCount: 0 };
+  const stats = albumStore.getAlbumStats(false)[id];
+  return { imageCount: stats?.imageCount ?? 0, subAlbumCount: stats?.subAlbumCount ?? 0 };
+});
+
+const isSelectedAlbumRotating = computed(
+  () => wallpaperRotationEnabled.value && currentRotationAlbumId.value === selectedAlbumId.value,
+);
+
+const canCreateSubAlbumForSelected = computed(() => {
+  const album = selectedAlbum.value;
+  if (!album) return false;
+  return album.id !== FAVORITE_ALBUM_ID && album.id !== HIDDEN_ALBUM_ID && album.type !== "local_folder";
+});
+
+/** 从根到直接父级（不含当前画册），与 AlbumDetail.vue 的 albumAncestorCrumbs 同款逻辑，
+ * 但链接改为切换选中态（selectAlbum）而非路由跳转——本页不再整页跳转。 */
+const selectedAlbumAncestorCrumbs = computed((): { id: string; name: string }[] => {
+  const id = selectedAlbumId.value;
+  if (!id) return [];
+  const map = new Map(albums.value.map((a) => [a.id, a]));
+  const up: { id: string; name: string }[] = [];
+  let cur = map.get(id);
+  if (!cur) return [];
+  while (cur.parentId) {
+    const p = map.get(cur.parentId);
+    if (!p) break;
+    up.push({ id: p.id, name: p.name });
+    cur = p;
+  }
+  up.reverse();
+  return up;
+});
+
+// 封面：按选中画册取 1 张预览图。走 loadAlbumMediaPreview（与子画册卡片同源，
+// 自身没图时会递归到子画册补齐）；`get_album_preview` 那条 Tauri 命令的 provider
+// 路径已过时（images://gallery/album/<id>/order 不存在），不能用。
+const albumCover = ref<ImageInfo | null>(null);
+const selectedAlbumMediaNode = computed<AlbumMediaNode | null>(() => {
+  const album = selectedAlbum.value;
+  if (!album) return null;
+  return (
+    buildAlbumMediaNodes(
+      [album],
+      albums.value,
+      albumStore.getAlbumDirectCounts(false),
+      false,
+    )[0] ?? null
+  );
+});
+watch(
+  [selectedAlbumId, () => selectedAlbumStats.value.imageCount],
+  async ([id]) => {
+    const node = selectedAlbumMediaNode.value;
+    if (!id || !node) {
+      albumCover.value = null;
+      return;
+    }
+    try {
+      const preview = await loadAlbumMediaPreview(node, 1);
+      if (selectedAlbumId.value !== id) return; // 过期响应
+      albumCover.value = preview[0] ?? null;
+    } catch (e) {
+      console.error("加载画册封面失败:", e);
+      if (selectedAlbumId.value === id) albumCover.value = null;
+    }
+  },
+  { immediate: true },
+);
+
+const albumExists = (id: string) =>
+  !!id && (id === HIDDEN_ALBUM_ID || albums.value.some((a) => a.id === id));
+
+const selectAlbum = (id: string) => {
+  const chain = albums.value.find((a) => a.id === id)?.ancestorPath || `/${id}/`;
+  void setAlbumIdPath(chain);
+  // 换画册就是换数据源：重置查询/排序/页码（存储 path 只含查询体，见 albumDetailRoute）
+  void albumDetailRouteStore.navigate({
+    query: [],
+    sort: { field: "by-album-order", desc: false },
+    page: 1,
+  });
+};
+
+const onTreeSelect = (id: string) => {
+  if (id !== selectedAlbumId.value) {
+    trackAlbumEnter({ id, name: albums.value.find((a) => a.id === id)?.name ?? "" }, "tree");
+  }
+  selectAlbum(id);
+};
+
+/** 双击树上的画册：选中它并开合详情面板（第一次点击已由 row-click 选中） */
+const onTreeDblclick = (id: string) => {
+  selectAlbum(id);
+  toggleDetailPanel();
+};
+
+onMounted(async () => {
+  await albumStore.loadAlbums();
+  // 「query 优先、localStorage 兜底」在 useAlbumIdPathState 读取端完成；
+  // 这里只做存活校验与最终回落收藏。
+  if (!albumExists(selectedAlbumId.value)) selectAlbum(FAVORITE_ALBUM_ID);
+});
+
+onActivated(async () => {
+  await albumStore.loadAlbums();
+});
+
+// 选中画册被删（含事件驱动删除）→ 沿祖先链上溯最近存活者，无则回落收藏
+watch(
+  () => albumExists(selectedAlbumId.value),
+  (ok) => {
+    if (ok || albumStore.loading) return;
+    if (!selectedAlbumId.value) return;
+    const chain = segmentsOfAlbumIdPath(albumIdPath.value);
+    const fallback = [...chain].reverse().find((cid) => albumExists(cid));
+    selectAlbum(fallback ?? FAVORITE_ALBUM_ID);
+  },
+);
+
+// ---------- 中栏：ImageGrid surface（与 AlbumDetail 共用 album surface） ----------
+const analytics = createImageAnalytics(() => ({
+  surface: "albums_page",
+  albumId: selectedAlbumId.value,
+  albumName: selectedAlbumName.value,
+  path: albumDetailRouteStore.computedPath,
+}));
+
+const surface = createAlbumDetailSurface({
+  albumId: () => selectedAlbumId.value,
+  albumName: () => selectedAlbumName.value,
+  isLocalFolder: () => albumStore.isLocalFolderAlbum(selectedAlbumId.value),
+  analytics,
+});
+
+const albumViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
+const albumBrowseToolbarRef = ref<InstanceType<typeof GalleryQueryBar> | null>(null);
+
+const albumFilterFeatures: GalleryBrowseDimension[] = [
+  "plugin", "mediaType", "date", "size", "aspect",
+];
+const albumSortFeatures: GallerySortField[] = [
+  "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "by-album-order",
+];
+
+const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
+  const term = patch.query ? querySearchTerm(patch.query) : null;
+  if (term?.query.trim()) rememberAlbumDetailSearchMode(term.mode);
+  void albumDetailRouteStore.navigate(patch, options);
+};
+
+// ---------- 虚拟磁盘 ----------
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
@@ -231,7 +557,14 @@ const currentRotationAlbumId = computed(() => {
 // 轮播是否开启
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
+// ---------- 新建画册弹窗 ----------
 const createDialog = useModal();
+
+/** 树三点菜单 /「+」按钮入口：预填父级后打开创建弹窗。 */
+const openCreateDialogWithParent = (parentId: string | null) => {
+  newAlbumParentId.value = parentId;
+  createDialog.open();
+};
 
 const moveDlgAlbum = ref<Album | null>(null);
 const moveDialog = useModal();
@@ -242,7 +575,7 @@ const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
   const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID];
-  return albumStore.getAlbumTreeExcluding(exclude);
+  return albumStore.getAlbumTreeExcluding(exclude, { excludeLocalFolder: true });
 });
 
 watch(moveDialog.isOpen, (open) => {
@@ -312,69 +645,18 @@ const canSubmitCreateAlbum = computed(() => {
   return true;
 });
 const isRefreshing = ref(false);
-const albumCardRefs = ref<Record<string, any>>({});
-// 使用 300ms 防闪屏加载延迟
-const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
-// 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
-const albumsListKey = ref(0);
-const albumListPath = computed(() => (globalHide.value ? "hide/album/" : "album/"));
-/** keep-alive 再次进入画册页时递增，作为视频预览 ImageItem 的 :key 后缀，强制重建以恢复桌面 <video> autoplay */
-const albumVideoPreviewRemountKey = ref(0);
-const albumsSkipFirstActivateForVideoRemount = ref(true);
 
-const displayedAlbumRoots = computed(() => albumRoots.value);
-const displayedAlbumNodes = computed(() =>
-  buildAlbumMediaNodes(
-    displayedAlbumRoots.value,
-    albums.value,
-    albumStore.getAlbumDirectCounts(globalHide.value),
-    globalHide.value,
-  ),
-);
-const displayedAlbumNodeById = computed(() => {
-  const entries = displayedAlbumNodes.value
-    .flatMap((node) => flattenAlbumMediaNodes(node))
-    .map((node) => [node.album.id, node] as const);
-  return Object.fromEntries(entries) as Record<string, AlbumMediaNode>;
-});
-const displayedAlbumStats = computed(() => albumStore.getAlbumStats(globalHide.value));
 const displayedAlbumCountsForPicker = computed(() => ({
-  ...albumStore.getAlbumCounts(globalHide.value),
+  ...albumStore.getAlbumCounts(false),
 }));
+// 新建画册的父级候选：排除系统画册与文件夹画册（其成员只能经同步产生）
 const createAlbumParentTree = computed(() =>
-  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
+  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID], { excludeLocalFolder: true }),
 );
-
-function removeLocalAlbumMediaState(albumIds: Iterable<string>) {
-  const ids = new Set(albumIds);
-  for (const id of ids) {
-    clearAlbumPreviewCache(id);
-  }
-}
-
-async function loadAlbumPreviewFromProvider(album: { id: string }, limit = albumPreviewLimit): Promise<ImageInfo[]> {
-  const node = displayedAlbumNodeById.value[album.id];
-  if (!node) return [];
-  return loadAlbumMediaPreview(node, limit);
-}
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
 const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
   if (currentRotationAlbumId.value !== deletedAlbumId) return;
-
-  const wasEnabled = wallpaperRotationEnabled.value;
-
-  // 先读一下当前壁纸（用于切回单张壁纸时保持不变）
-  let currentWallpaperPath: string | null = null;
-  if (wasEnabled) {
-    try {
-      currentWallpaperPath = await invoke<string | null>("get_current_wallpaper_path");
-    } catch {
-      currentWallpaperPath = null;
-    }
-  }
-
-  // 清除轮播画册
   try {
     await setWallpaperRotationAlbumId(null);
   } catch {
@@ -382,162 +664,26 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
   }
 };
 
-const toPreviewUrl = (img: ImageInfo): string => {
-  const thumbPath = (img.thumbnailPath || "").trim();
-  const localPath = (img.localPath || "").trim();
-  const path = thumbPath || localPath;
-  if (!path) return "";
-  return thumbPath ? thumbnailToUrl(thumbPath) : fileToUrl(localPath);
-};
-
-const hasPreviewUrl = (img: ImageInfo) => !!toPreviewUrl(img);
-
-// 画册预览图数量：桌面 3 张，安卓 1 张
-const albumPreviewLimit = IS_ANDROID ? 1 : 3;
-
-// 保存每个画册的预览 ImageInfo 列表
-const albumPreviewImages = ref<Record<string, ImageInfo[]>>({});
-
-// 正在加载预览的画册 ID 集合
-const albumIsLoading = ref<Set<string>>(new Set());
-
-// 刷新单个画册预览：直接拉取并覆写，不先清空（清空到空数组再回填才是闪屏根因）
-const refreshAlbumPreview = async (album: { id: string }) => {
-  if (albumIsLoading.value.has(album.id)) return;
-  albumIsLoading.value.add(album.id);
-  try {
-    const next = await loadAlbumPreviewFromProvider(album, albumPreviewLimit);
-    albumPreviewImages.value[album.id] = next;
-  } catch (error) {
-    console.error("刷新画册预览失败:", error);
-  } finally {
-    albumIsLoading.value.delete(album.id);
-  }
-};
-
-// 刷新收藏画册的预览（用于收藏状态变化时）
-const refreshFavoriteAlbumPreview = async () => {
-  const favoriteAlbum =
-    displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
-    albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
-  if (!favoriteAlbum) return;
-  await refreshAlbumPreview(favoriteAlbum);
-};
-
-// 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
-const stopFavoriteCountWatch = ref<null | (() => void)>(null);
-
-// album_images 表变更：按 albumIds 刷新对应画册预览（1000ms trailing 节流，不丢最后一次）
-useAlbumImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: 1000,
-  filter: (p) => {
-    const ids = p.albumIds ?? [];
-    return ids.length === 0 || ids.includes(HIDDEN_ALBUM_ID) || ids.some((aid) => albums.value.some((a) => a.id === aid));
-  },
-  onRefresh: async (p) => {
-    const affected = new Set(p.albumIds ?? []);
-    const allAffected = affected.size === 0;
-    const hiddenAffected = affected.has(HIDDEN_ALBUM_ID);
-
-    for (const node of displayedAlbumNodes.value) {
-      const album = node.album;
-      const subtreeAffected = albumSubtreeContainsAny(node, affected);
-      if (!allAffected && !subtreeAffected && !hiddenAffected) continue;
-
-      await refreshAlbumPreview(album);
-    }
-  },
-});
-
-onMounted(async () => {
-  startLoading();
-  try {
-    await albumStore.loadAlbums();
-  } finally {
-    finishLoading();
-  }
-  // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
-  // 预览图加载由上方 watch(displayedAlbumRoots) 统一驱动，无需在此手动预载。
-
-  // 监听收藏画册数量变化，刷新预览
-  stopFavoriteCountWatch.value?.();
-  stopFavoriteCountWatch.value = watch(
-    () => displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount,
-    () => {
-      refreshFavoriteAlbumPreview();
-    }
-  );
-
-  // 画册成员变更的预览刷新由 `album-images-change` 驱动，统一节流处理。
-});
-
-// 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表，并等待设置缓存就绪。
-onActivated(async () => {
-  await albumStore.loadAlbums();
-
-  // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  const favoriteAlbum =
-    displayedAlbumRoots.value.find((a) => a.id === FAVORITE_ALBUM_ID) ??
-    albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
-  if (favoriteAlbum) {
-    const favoriteCount = displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount || 0;
-    const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
-    const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
-
-    // 如果画册有内容但预览为空，清除缓存并重新加载
-    if (favoriteCount > 0 && !hasValidPreview) {
-      clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
-      // 重新加载预览
-      await prefetchPreview(favoriteAlbum);
-    }
-  }
-
-  // 为所有画册补齐预览（prefetchPreview 自带去重/已加载短路）
-  ensureAllAlbumPreviews();
-
-  // 首次 onActivated 不递增，避免刚进页就多挂一次视频；从其它页返回时再递增以重建 ImageItem
-  if (albumsSkipFirstActivateForVideoRemount.value) {
-    albumsSkipFirstActivateForVideoRemount.value = false;
-  } else {
-    albumVideoPreviewRemountKey.value++;
-  }
-});
-
-
 const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     await albumStore.loadAlbums();
-    // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
-    for (const album of displayedAlbumRoots.value) {
-      clearAlbumPreviewCache(album.id);
-    }
-    // 收藏画册也强制重载一次（收藏状态变化会影响预览）
-    clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
-
-    // 清除所有画册的详情缓存，确保进入画册详情页时能获取最新内容
+    // 清除画册详情缓存，确保图片流拿到最新内容
     for (const album of albums.value) {
       delete albumStore.albumImages[album.id];
     }
-    // 也清除收藏画册的详情缓存
     delete albumStore.albumImages[FAVORITE_ALBUM_ID];
+    await albumViewRef.value?.refresh?.();
 
-    // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
-    albumsListKey.value++;
-
-    // 重新加载所有画册预览
-    ensureAllAlbumPreviews();
-
-    const localFolderIdsOnPage = displayedAlbumRoots.value
+    const localFolderIds = albums.value
       .filter((a) => a.type === "local_folder")
       .map((a) => a.id);
 
-    if (IS_ANDROID || IS_WEB || localFolderIdsOnPage.length === 0) {
+    if (IS_ANDROID || IS_WEB || localFolderIds.length === 0) {
       ElMessage.success(t("albums.refreshSuccess"));
     } else {
       ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));
-      const results = await syncLocalFolderAlbums(localFolderIdsOnPage);
+      const results = await syncLocalFolderAlbums(localFolderIds);
       reportBatchSyncResult(results);
     }
   } catch (error) {
@@ -547,18 +693,6 @@ const handleRefresh = async () => {
     isRefreshing.value = false;
   }
 };
-
-watch(globalHide, async () => {
-  albumPreviewImages.value = {};
-  albumIsLoading.value.clear();
-  albumsListKey.value++;
-  startLoading();
-  try {
-    ensureAllAlbumPreviews();
-  } finally {
-    finishLoading();
-  }
-});
 
 const resetCreateAlbumDialog = () => {
   newAlbumName.value = "";
@@ -592,10 +726,11 @@ const handleCreateAlbum = async () => {
   try {
     const parentId = newAlbumParentId.value?.trim() || null;
     if (newAlbumIsLocalFolder.value) {
+      // parent_id 已废弃：文件夹画册的层级由 sync_folder 的祖先串联唯一决定
       await albumStore.createLocalFolderAlbum(
         {
           name: newAlbumName.value.trim(),
-          parentId,
+          parentId: null,
           syncFolder: newAlbumSyncFolder.value,
           recursive: newAlbumRecursive.value,
         },
@@ -618,7 +753,7 @@ const handleCreateAlbum = async () => {
   }
 };
 
-// ---------- 区域级文件拖入（画册列表页，只收文件夹）----------
+// ---------- 区域级文件拖入（画册页，只收文件夹）----------
 const dropZone = computed<DragFileOptions>(() => ({
   plan: (items: DragFileItem[]): DragFilePlan | null => {
     const folders = items.filter((i) => i.isDirectory);
@@ -631,40 +766,15 @@ const dropZone = computed<DragFileOptions>(() => ({
     };
   },
   onDrop: async (plan: DragFilePlan) => {
-    // 画册列表页拖入的文件夹建成根级同步画册
+    // 画册页拖入的文件夹建成同步画册（层级由磁盘路径串联决定）
     await createFolderAlbumsFromDrag(plan.folders, null);
   },
 }));
 
-// 计算每个画册是否正在加载（用于响应式更新）
-const albumIsLoadingMap = computed(() => {
-  const result: Record<string, boolean> = {};
-  for (const albumId of albumIsLoading.value) {
-    result[albumId] = true;
-  }
-  return result;
-});
-
-const clearAlbumPreviewCache = (albumId: string) => {
-  delete albumPreviewImages.value[albumId];
-  albumIsLoading.value.delete(albumId);
-  // 清除 store 中的预览缓存（强制下一次重新拉取预览图片列表）
-  delete albumStore.albumPreviews[albumId];
-};
-
-// 画册右键菜单状态
-// Album actions
+// ---------- 画册右键菜单（树节点） ----------
 const albumActions = computed(() => createAlbumActions());
-
-// Find album by ID helper
-const findAlbumById = (id: string): Album | null => {
-  return albums.value.find((a) => a.id === id) ?? null;
-};
-
-// Album menu using useActionMenu (visible/position/context passed to ActionRenderer)
 const albumMenu = useActionMenu<Album>();
 
-// Album menu context with extended fields (must include ActionContext<Album> for ActionRenderer)
 const albumMenuContext = computed<AlbumActionContext>(() => {
   const album = albumMenu.context.value.target;
   return {
@@ -673,106 +783,46 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (displayedAlbumStats.value[album.id]?.imageCount || 0) : 0,
+    albumImageCount: album ? (albumStore.getAlbumCounts(false)[album.id] || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
     isLocalFolder: album?.type === "local_folder",
+    albumDriveEnabled: albumDriveEnabled.value,
   };
 });
 
-const prefetchPreview = async (album: { id: string }) => {
-  // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  if (album.id === FAVORITE_ALBUM_ID) {
-    const favoriteCount = displayedAlbumStats.value[FAVORITE_ALBUM_ID]?.imageCount || 0;
-    const images = albumPreviewImages.value[FAVORITE_ALBUM_ID];
-    const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
-
-    // 如果画册有内容但预览为空，清除缓存
-    if (favoriteCount > 0 && !hasValidPreview) {
-      clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
-    }
-  }
-
-  // 如果已经加载完成，直接返回
-  const images = albumPreviewImages.value[album.id];
-  if (images && images.length > 0) {
-    const allLoaded = images.every((img) => hasPreviewUrl(img));
-    if (allLoaded) return;
-  }
-
-  // 如果正在加载，也返回
-  if (albumIsLoading.value.has(album.id)) {
-    return;
-  }
-
-  albumIsLoading.value.add(album.id);
-
-  try {
-    // 加载预览图片列表（桌面 3 张，安卓 1 张）
-    const previewImages = await loadAlbumPreviewFromProvider(album, albumPreviewLimit);
-    albumPreviewImages.value[album.id] = previewImages;
-  } catch (error) {
-    console.error("加载画册预览失败:", error);
-    delete albumPreviewImages.value[album.id];
-  } finally {
-    albumIsLoading.value.delete(album.id);
-  }
-};
-
-// 直接为所有展示中的画册加载预览（不再用视口懒加载，新增画册经下方 watch 自动补齐）
-const ensureAllAlbumPreviews = () => {
-  for (const album of displayedAlbumRoots.value) {
-    prefetchPreview(album);
-  }
-};
-
-watch(
-  () => displayedAlbumRoots.value.map((a) => a.id).join("|"),
-  () => ensureAllAlbumPreviews(),
-  { immediate: true },
-);
-
-const openAlbum = (album: { id: string; name: string }) => {
-  trackAlbumEnter(album, "card");
-  router.push(`/albums/${album.id}`);
-};
-
-const openHiddenAlbum = () => {
-  trackAlbumEnter({ id: HIDDEN_ALBUM_ID, name: t("albums.hiddenAlbumName") }, "hidden_button");
-  router.push(`/albums/${HIDDEN_ALBUM_ID}`);
-};
-
-const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: string }) => {
+const onTreeContextMenu = (album: Album, event: MouseEvent) => {
   if (album.id === HIDDEN_ALBUM_ID) {
     event.preventDefault();
     return;
   }
-  const albumObj = findAlbumById(album.id);
-  if (albumObj) {
-    albumMenu.show(albumObj, event);
-  }
+  albumMenu.show(album, event);
 };
 
-const handleAlbumMenuCommand = async (
-  command:
-    | "browse"
-    | "delete"
-    | "setWallpaperRotation"
-    | "rename"
-    | "moveTo"
-    | "syncNow"
-    | "syncNowRecursiveExisting"
-    | "syncNowRecursiveFull"
-    | "openLocalFolder",
-) => {
-  const context = albumMenuContext.value;
-  const album = context.target;
+type AlbumCommand =
+  | "browse"
+  | "delete"
+  | "setWallpaperRotation"
+  | "stopWallpaperRotation"
+  | "rename"
+  | "moveTo"
+  | "syncNow"
+  | "syncNowRecursiveExisting"
+  | "syncNowRecursiveFull"
+  | "openLocalFolder"
+  | "createSubAlbum"
+  | "openVirtualDrive"
+  | `setSyncMode:${AlbumSyncMode}`;
+
+/** 画册操作的唯一入口：树右键、右栏「⋯」、右栏精简按钮共用同一份实现。
+ * 显式收画册参数（而非隐式读右键目标）——右栏按钮作用于当前选中画册，与右键目标是两回事。 */
+const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (!album) return;
   const { id, name } = album;
   albumMenu.hide();
 
   if (command === "browse") {
     trackAlbumEnter({ id, name }, "context_menu");
-    router.push(`/albums/${id}`);
+    selectAlbum(id);
     return;
   }
 
@@ -783,6 +833,32 @@ const handleAlbumMenuCommand = async (
       await invoke("open_explorer", { path: folder });
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "createSubAlbum") {
+    openCreateDialogWithParent(id);
+    return;
+  }
+
+  if (command === "openVirtualDrive") {
+    try {
+      await invoke("open_album_virtual_drive_folder", { albumId: id });
+    } catch (e: any) {
+      console.error("打开画册虚拟盘失败:", e);
+      ElMessage.error(`${e?.message || String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
+    }
+    return;
+  }
+
+  if (command.startsWith("setSyncMode:")) {
+    const mode = command.slice("setSyncMode:".length) as AlbumSyncMode;
+    if (mode === "delegated") return;
+    try {
+      await setAlbumSyncMode(id, mode);
+    } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }
     return;
@@ -832,7 +908,6 @@ const handleAlbumMenuCommand = async (
     return;
   }
 
-
   if (command === "setWallpaperRotation") {
     try {
       // 如果轮播未开启，先开启轮播
@@ -847,11 +922,41 @@ const handleAlbumMenuCommand = async (
     return;
   }
 
+  if (command === "stopWallpaperRotation") {
+    try {
+      await setWallpaperRotationEnabled(false);
+      ElMessage.success(t("albums.detailStopRotation"));
+    } catch (error) {
+      console.error("停止桌面轮播失败:", error);
+      ElMessage.error(t("albums.setFailed"));
+    }
+    return;
+  }
+
   if (command === "rename") {
-    // 通过 ref 触发重命名
-    const cardRef = albumCardRefs.value[id];
-    if (cardRef && cardRef.startRename) {
-      cardRef.startRename();
+    // 卡片内联改名随卡片下线：树上改名走 prompt（与 AlbumDetail 子画册改名同款）
+    try {
+      const { value } = await ElMessageBox.prompt(
+        t("albums.placeholderName"),
+        t("albums.title"),
+        {
+          inputValue: name,
+          inputValidator: (v) => {
+            if (!String(v || "").trim()) return t("albums.albumNameCannotBeEmpty");
+            return true;
+          },
+        }
+      );
+      const newName = String(value || "").trim();
+      if (!newName || newName === name) return;
+      await albumStore.renameAlbum(id, newName);
+      ElMessage.success(t("albums.renameSuccess"));
+    } catch (error) {
+      if (error !== "cancel") {
+        const errorMessage =
+          typeof error === "string" ? error : (error as any)?.message || String(error);
+        ElMessage.error(errorMessage || t("albums.renameFailed"));
+      }
     }
     return;
   }
@@ -876,11 +981,9 @@ const handleAlbumMenuCommand = async (
       t("albums.confirmDelete"),
       { type: "warning" }
     );
-    const deletedIds = [id, ...albumStore.getDescendantIds(id)];
     await albumStore.deleteAlbum(id);
     // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
     await handleDeletedRotationAlbum(id);
-    removeLocalAlbumMediaState(deletedIds);
     ElMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {
@@ -894,67 +997,136 @@ const handleAlbumMenuCommand = async (
 
 <style scoped lang="scss">
 .albums-page {
+  /* 三栏几何的三个常量：整页内缩，以及 PageHeader 的高度与其下外边距
+   * （真源在 packages/kabegame-core/src/components/common/PageHeader.vue）。
+   * 下面 aside 的 sticky 偏移与高度全部由它们派生，不再各写各的字面量。 */
+  --albums-page-pad: 20px;
+  --albums-header-h: 64px;
+  --albums-header-gap: 20px;
+  /* 页头连同其下外边距占掉的高度，也就是 aside 在滚动流里的自然起点 */
+  --albums-header-block: calc(var(--albums-header-h) + var(--albums-header-gap));
+
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.albums-scroll-container {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 20px;
-}
-
-
-
-.albums-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-}
-
-/* 紧凑布局：2 列网格，卡片正方形 */
-.albums-grid-compact {
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-
-  :deep(.album-card) {
-    height: auto;
-    aspect-ratio: 1;
+  /* 与 .gallery-page 同口径的整页内缩：页头/树列/内容距窗口四周 20px */
+  // padding: var(--albums-page-pad);
+  .albums-page-header {
+    margin: var(--albums-page-pad) var(--albums-page-pad) 20px;
   }
 }
 
-/* 列表淡入动画 */
-.fade-in-list-enter-active {
-  transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.26s ease-out, filter 0.26s ease-out;
+.albums-grid-body {
+  flex: 1;
+  min-height: 0;
 }
 
-.fade-in-list-leave-active {
-  transition: transform 0.22s ease-in, opacity 0.22s ease-in, filter 0.22s ease-in;
-  pointer-events: none;
+/* 注意：.albums-grid-body / .image-grid-main 等元素由 core ImageGrid 渲染，不带本组件
+ * scope 属性，:deep() 必须从本组件根 .albums-page 出发，否则整条规则不命中。 */
+
+/* 三栏模式：aside 树列钉在页头下缘。
+ * sticky top 取 aside 的自然起点（页头 + 页头下外边距）而非仅页头高度——两者差 20px
+ * 时它还能往上滑那 20px；高度同样从自然起点算到滚动容器底缘，否则内容不溢出时
+ * 整页也会凭空多出 20px 可滚区间。两个值同源，改页头常量即整体跟着走。 */
+.albums-page :deep(.albums-grid-body.has-aside) {
+  --kb-image-grid-aside-top: var(--albums-header-block);
+  --kb-image-grid-aside-height: calc(
+    100vh - var(--albums-page-pad) * 2 - var(--albums-header-block)
+  );
 }
 
-.fade-in-list-enter-from {
-  opacity: 0;
-  transform: translateY(14px) scale(0.96);
-  filter: blur(2px);
+/* 三栏模式中栏：树列与内容之间留 20px；右侧靠页内边距收口（与 Gallery 同缘）。
+ * 右栏（画册信息面板）开启时中栏与它之间也留 20px，不再靠页内边距收口。 */
+.albums-page :deep(.albums-grid-body.has-aside .image-grid-main) {
+  padding: 0 0 12px 20px;
 }
 
-.fade-in-list-leave-to {
-  opacity: 0;
-  transform: translateY(-6px) scale(0.92);
-  filter: blur(2px);
+.albums-page :deep(.albums-grid-body.has-aside.has-detail .image-grid-main) {
+  padding: 0 20px 12px 20px;
 }
 
-.fade-in-list-move {
-  transition: transform 0.4s ease;
+/* 图片区与分页条之间留一点呼吸感 */
+.albums-page :deep(.albums-grid-body.has-aside .image-grid-scroll) {
+  padding-top: 8px;
 }
 
-.empty-tip {
-  padding: 32px;
-  color: var(--anime-text-muted);
+/* 紧凑模式（无 aside）：留白由 .albums-page 的整页内边距承担，容器本体不再叠加 */
+.albums-page :deep(.albums-grid-body:not(.has-aside) .image-grid-root) {
+  overflow: visible;
+}
+
+/* KbResizable 契约：父级 flex（.image-grid-aside）+ 自身 flex-none，宽度由 clamp 变量收口 */
+.albums-tree-pane {
+  --kb-resizable-min: 200px;
+  --kb-resizable-max: min(420px, 40vw);
+  flex: 0 0 var(--kb-resizable-clamped);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--anime-border, rgba(120, 140, 180, 0.14));
+}
+
+/* 右栏（画册信息面板）：对称于 .albums-tree-pane，把手在左 */
+.albums-detail-pane {
+  --kb-resizable-min: 240px;
+  --kb-resizable-max: min(420px, 40vw);
+  flex: 0 0 var(--kb-resizable-clamped);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--anime-border, rgba(120, 140, 180, 0.14));
+}
+
+.album-empty {
+  padding: 48px 0;
+}
+
+.albums-tree-drawer :deep(.el-drawer__body),
+.albums-detail-drawer :deep(.el-drawer__body) {
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.album-breadcrumb-wrap {
+  margin-bottom: 12px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+
+  :deep(.el-breadcrumb) {
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  :deep(.el-breadcrumb__separator) {
+    color: var(--anime-text-muted);
+    margin: 0 6px;
+  }
+
+  .album-breadcrumb-link {
+    color: var(--anime-text-muted);
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.15s ease;
+
+    &:hover {
+      color: var(--el-color-primary);
+    }
+  }
+
+  .album-breadcrumb-current {
+    color: var(--anime-text-primary);
+    font-weight: 500;
+  }
+
+  .album-breadcrumb-stats {
+    margin-left: 6px;
+    color: var(--anime-text-muted);
+  }
 }
 
 .local-folder-path {
@@ -980,30 +1152,5 @@ const handleAlbumMenuCommand = async (
   color: var(--el-color-danger);
   font-size: 12px;
   line-height: 1.45;
-}
-
-.hidden-album-fab {
-  position: fixed;
-  right: 20px;
-  bottom: 20px;
-  z-index: 100;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--anime-surface, #fff);
-  color: var(--anime-text-secondary, #666);
-  border: 1px solid var(--anime-border, rgba(0, 0, 0, 0.08));
-  box-shadow: var(--anime-shadow, 0 2px 10px rgba(0, 0, 0, 0.1));
-  cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.15s ease, transform 0.15s ease;
-
-  &:hover {
-    opacity: 1;
-    transform: translateY(-1px);
-  }
 }
 </style>

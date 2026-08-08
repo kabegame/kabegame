@@ -53,11 +53,15 @@
           <div v-else>
             <transition-group name="fade-in-list" tag="div" class="plugin-grid"
               :class="{ 'plugin-grid-android': uiStore.isCompact }">
-              <PluginGridCard v-for="plugin in filteredInstalledPlugins" :key="plugin.id"
-                :card-class="appBackgroundCardClass" :name="pluginName(plugin)" :version="plugin.version"
-                :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
-                :update-available="hasKnownUpdateFor(plugin.id, plugin.version)"
-                @click="openDetailDialog(plugin)" v-on="quickPreview.cardListeners(plugin)" />
+              <HoverRevealPanel v-for="plugin in filteredInstalledPlugins" :key="plugin.id"
+                @panel-click="openDetailDialog(plugin)">
+                <PluginGridCard :card-class="appBackgroundCardClass" :name="pluginName(plugin)"
+                  :version="plugin.version" :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
+                  :update-available="hasKnownUpdateFor(plugin.id, plugin.version)" @click="openDetailDialog(plugin)" />
+                <template #panel>
+                  <PluginQuickPreviewPanel v-bind="quickPreviewProps(plugin)" />
+                </template>
+              </HoverRevealPanel>
             </transition-group>
           </div>
         </div>
@@ -122,11 +126,16 @@
 
           <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid"
             :class="{ 'plugin-grid-android': uiStore.isCompact }">
-            <PluginGridCard v-for="plugin in filteredStorePlugins(s.id)" :key="plugin.id"
-              :card-class="appBackgroundCardClass" :name="pluginName(plugin)" :version="plugin.version"
-              :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
-              :update-available="isUpdateAvailable(plugin.installedVersion, plugin.version)"
-              @click="openDetailDialog(plugin)" v-on="quickPreview.cardListeners(plugin)" />
+            <HoverRevealPanel v-for="plugin in filteredStorePlugins(s.id)" :key="plugin.id"
+              @panel-click="openDetailDialog(plugin)">
+              <PluginGridCard :card-class="appBackgroundCardClass" :name="pluginName(plugin)"
+                :version="plugin.version" :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
+                :update-available="isUpdateAvailable(plugin.installedVersion, plugin.version)"
+                @click="openDetailDialog(plugin)" />
+              <template #panel>
+                <PluginQuickPreviewPanel v-bind="quickPreviewProps(plugin)" />
+              </template>
+            </HoverRevealPanel>
           </transition-group>
         </div>
       </div>
@@ -206,26 +215,6 @@
       </template>
     </el-dialog>
 
-    <!-- 桌面 hover 悬浮快捷预览：贴卡片弹出，跟随卡片翻转/贴边定位 -->
-    <Teleport to="body">
-      <div v-if="quickPreview.visible.value && !quickPreview.compact.value"
-        :ref="(el) => (quickPreview.panelRef.value = (el as HTMLElement | null))" :style="quickPreview.panelStyle.value"
-        v-on="quickPreview.panelListeners" @click="handleQuickPreviewOpenDetail">
-        <PluginQuickPreviewPanel v-if="quickPreviewPlugin" :plugin="quickPreviewPlugin" :icon-src="quickPreviewIconSrc"
-          :images="quickPreviewImages" :empty-reason="quickPreviewEmptyReason"
-          :update-available-version="quickPreviewUpdateVersion" />
-      </div>
-    </Teleport>
-
-    <!-- 紧凑端长按：同一张面板以底部抽屉形态展现 -->
-    <el-drawer v-if="quickPreview.compact.value" :model-value="quickPreview.visible.value" direction="btt" size="auto"
-      :with-header="false" append-to-body class="quick-preview-drawer"
-      @update:model-value="(v) => (v ? null : quickPreview.close())" @click="handleQuickPreviewOpenDetail">
-      <PluginQuickPreviewPanel v-if="quickPreviewPlugin" :plugin="quickPreviewPlugin" :icon-src="quickPreviewIconSrc"
-        :images="quickPreviewImages" :empty-reason="quickPreviewEmptyReason"
-        :update-available-version="quickPreviewUpdateVersion" class="quick-preview-drawer-panel" />
-    </el-drawer>
-
   </div>
 </template>
 
@@ -256,9 +245,8 @@ import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
 import PluginQuickPreviewPanel, {
   type QuickPreviewPluginLike,
 } from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
-import type { PluginQuickPreviewImage } from "@kabegame/core/components/plugin/PluginQuickPreviewCarousel.vue";
-import { usePluginQuickPreview } from "@kabegame/core/composables/usePluginQuickPreview";
-import { guessAssetMime, isBannerAsset } from "@kabegame/core/utils/assetPath";
+import HoverRevealPanel from "@kabegame/core/components/common/HoverRevealPanel.vue";
+import { bannerPreviewImages } from "@kabegame/core/utils/assetPath";
 import { isUpdateAvailable } from "@/utils/version";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -536,7 +524,6 @@ const getPluginIconSrc = (p: PluginListItem) => {
 //      商店未安装条目若拉取示例图需要 get_plugin_detail 现下整包 .kgpg，
 //      hover 这种高频轻量交互不适合触发这种下载，故只做 best-effort：
 //      版本与已安装一致时复用本地已装包，否则提示"安装后可查看"）----
-const quickPreview = usePluginQuickPreview<PluginListItem>();
 
 /** 已安装 tab 里"已知有更新"仅在对应商店列表恰好已加载时才能判断，不主动为此发请求 */
 const hasKnownUpdateFor = (pluginId: string, installedVersion: string): boolean => {
@@ -548,43 +535,16 @@ const hasKnownUpdateFor = (pluginId: string, installedVersion: string): boolean 
 };
 
 /** 预览目标对应的"已安装 Plugin"：本身就是已安装插件，或商店条目版本与本地一致（同一份内容，复用零成本） */
-const quickPreviewInstalledMatch = computed<Plugin | null>(() => {
-  const item = quickPreview.activeItem.value;
-  if (!item) return null;
+const quickPreviewInstalledMatch = (item: PluginListItem): Plugin | null => {
   if (!("sourceId" in item)) return item as Plugin;
   const store = item as StorePluginResolved;
   if (store.installedVersion && store.installedVersion === store.version) {
     return installedPlugins.value.find((p) => p.id === store.id) ?? null;
   }
   return null;
-});
+};
 
-const quickPreviewPlugin = computed<QuickPreviewPluginLike | null>(() => quickPreview.activeItem.value);
-const quickPreviewIconSrc = computed(() => {
-  const item = quickPreview.activeItem.value;
-  return item ? getPluginIconSrc(item) : null;
-});
-
-const quickPreviewImages = computed<PluginQuickPreviewImage[]>(() => {
-  const resources = quickPreviewInstalledMatch.value?.assets;
-  if (!resources) return [];
-  return Object.keys(resources)
-    .filter(isBannerAsset)
-    .sort()
-    .map((key) => ({
-      key,
-      src: `data:${guessAssetMime(key)};base64,${resources[key]}`,
-    }));
-});
-
-const quickPreviewEmptyReason = computed<"no-assets" | "not-installed" | null>(() => {
-  if (quickPreviewImages.value.length > 0) return null;
-  return quickPreviewInstalledMatch.value ? "no-assets" : "not-installed";
-});
-
-const quickPreviewUpdateVersion = computed<string | null>(() => {
-  const item = quickPreview.activeItem.value;
-  if (!item) return null;
+const quickPreviewUpdateVersion = (item: PluginListItem): string | null => {
   if ("sourceId" in item) {
     const store = item as StorePluginResolved;
     return isUpdateAvailable(store.installedVersion, store.version) ? store.version : null;
@@ -594,13 +554,19 @@ const quickPreviewUpdateVersion = computed<string | null>(() => {
     if (match && isUpdateAvailable(item.version, match.version)) return match.version;
   }
   return null;
-});
+};
 
-const handleQuickPreviewOpenDetail = () => {
-  const item = quickPreview.activeItem.value;
-  if (!item) return;
-  quickPreview.close();
-  openDetailDialog(item);
+/** 面板 props 现算不缓存：面板只在真正弹出的那一张卡片上渲染，算一次的成本可以忽略 */
+const quickPreviewProps = (item: PluginListItem) => {
+  const installed = quickPreviewInstalledMatch(item);
+  const images = bannerPreviewImages(installed?.assets);
+  return {
+    plugin: item as QuickPreviewPluginLike,
+    iconSrc: getPluginIconSrc(item),
+    images,
+    emptyReason: images.length > 0 ? null : installed ? ("no-assets" as const) : ("not-installed" as const),
+    updateAvailableVersion: quickPreviewUpdateVersion(item),
+  };
 };
 
 // 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）
@@ -1584,18 +1550,4 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
-/* 紧凑端长按快捷预览：底部抽屉，面板铺满宽度、贴底圆角 */
-.quick-preview-drawer .el-drawer__body {
-  padding: 0;
-  display: flex;
-  justify-content: center;
-}
-
-.quick-preview-drawer-panel {
-  width: 100% !important;
-  max-width: 420px;
-  border-radius: 18px 18px 0 0 !important;
-  box-shadow: none !important;
-  border: none !important;
-}
 </style>

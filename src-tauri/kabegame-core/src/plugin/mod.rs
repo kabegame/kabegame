@@ -148,6 +148,15 @@ fn plugin_labels_from_object(obj: &serde_json::Map<String, serde_json::Value>) -
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginAsset {
+    /// `kbAssets` 项归一化后的插件根相对路径。
+    pub key: String,
+    /// 资源内容的 base64 编码（不含 data URI 前缀）。
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Plugin {
     pub id: String,
     /// 插件名称：string 或按语言 key 的对象（如 default、zh、ja、ko），前端按 locale 解析，default 为回退
@@ -212,10 +221,10 @@ pub struct Plugin {
     /// 脚本内容及后端类型，仅后端使用，不序列化到前端
     #[serde(skip)]
     pub script: PluginScript,
-    /// 资源文件（图片等）：键为 kbAssets 声明的插件根相对路径经
-    /// normalize_asset_path 归一化后的结果，值为 base64。doc 与 changelog 共用。
+    /// 资源文件（图片等）：顺序与 kbAssets 声明顺序一致；key 为声明路径经
+    /// normalize_asset_path 归一化后的结果。doc 与 changelog 共用。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assets: Option<HashMap<String, String>>,
+    pub assets: Option<Vec<PluginAsset>>,
     /// 插件内 providers/ 解析出的 DSL，仅后端使用，不序列化到前端。
     #[serde(skip)]
     pub providers: Vec<PluginProviderDef>,
@@ -2127,11 +2136,14 @@ impl PluginManager {
             None
         } else {
             use base64::{engine::general_purpose::STANDARD, Engine as _};
-            let map: HashMap<String, String> = asset_entries
+            let entries = asset_entries
                 .into_iter()
-                .map(|(path, bytes)| (path, STANDARD.encode(&bytes)))
+                .map(|(key, bytes)| PluginAsset {
+                    key,
+                    data_base64: STANDARD.encode(&bytes),
+                })
                 .collect();
-            Some(map)
+            Some(entries)
         };
 
         let providers = parse_plugin_provider_entries(&plugin_id, provider_entries)?;
@@ -3570,6 +3582,28 @@ mod tests {
         let vars = c.var.unwrap();
         assert_eq!(vars.len(), 1);
         assert_eq!(vars[0].key, "tag");
+    }
+
+    #[test]
+    fn plugin_assets_serialize_as_ordered_array() {
+        let assets = vec![
+            PluginAsset {
+                key: "banner/second.png".to_string(),
+                data_base64: "second".to_string(),
+            },
+            PluginAsset {
+                key: "banner/first.png".to_string(),
+                data_base64: "first".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            serde_json::to_value(assets).unwrap(),
+            serde_json::json!([
+                { "key": "banner/second.png", "dataBase64": "second" },
+                { "key": "banner/first.png", "dataBase64": "first" }
+            ])
+        );
     }
 
     #[test]

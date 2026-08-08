@@ -188,9 +188,22 @@
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
-          <PluginPickerField :model-value="form.pluginId || null" :plugins="plugins"
-            :placeholder="$t('plugins.selectSourcePlaceholder')" popper-class="crawl-plugin-select-dropdown"
-            show-labels @update:model-value="onPluginChange" />
+          <div class="flex w-full min-w-0 items-start gap-2">
+            <PluginPickerField class="min-w-0 flex-1" :model-value="form.pluginId || null" :plugins="plugins"
+              :placeholder="$t('plugins.selectSourcePlaceholder')" popper-class="crawl-plugin-select-dropdown"
+              show-labels @update:model-value="onPluginChange" />
+            <el-tooltip :content="$t('plugins.detail.goSurfLogin')" placement="top">
+              <span class="inline-flex flex-none">
+                <el-button class="!m-0 h-32px w-40px !p-0" :aria-label="$t('plugins.detail.goSurfLogin')"
+                  :disabled="!selectedPluginSurfUrl" @click="openSelectedPluginInSurf">
+                  <span class="inline-flex items-center gap-0.5">
+                    <Compass class="h-18px w-18px" />
+                    <TopRight class="h-11px w-11px" />
+                  </span>
+                </el-button>
+              </span>
+            </el-tooltip>
+          </div>
           <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
             {{ crawlDialogMinAppErrorText }}
           </div>
@@ -333,7 +346,7 @@ import { computed, watch, ref, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
-import { FolderOpened } from "@kabegame/element-plus-icons";
+import { Compass, FolderOpened, TopRight } from "@kabegame/element-plus-icons";
 import { ElDialog } from "@kabegame/element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
@@ -363,6 +376,7 @@ import {
 } from "@kabegame/core/utils/pluginVarWhen";
 import { useApp } from "@/stores/app";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { useSurfStore } from "@kabegame/core/stores/surf";
 
 interface Props {
   modelValue: boolean;
@@ -412,6 +426,7 @@ function runConfigDescription(cfg: { description?: unknown }): string {
 
 const albumStore = useAlbumStore();
 const uiStore = useUiStore();
+const surfStore = useSurfStore();
 
 type HttpHeaderRow = { key: string; value: string };
 const httpHeaderRows = ref<HttpHeaderRow[]>([]);
@@ -707,6 +722,18 @@ const selectedPlugin = computed(() => {
   const id = form.value.pluginId;
   return id ? plugins.value.find((p) => p.id === id) : null;
 });
+const selectedPluginSurfUrl = computed(() => selectedPlugin.value?.baseUrl?.trim() ?? "");
+
+async function openSelectedPluginInSurf() {
+  const url = selectedPluginSurfUrl.value;
+  if (!url) return;
+  try {
+    await surfStore.startSession(url);
+    ElMessage.success(t("surf.sessionStartSuccess"));
+  } catch (error: any) {
+    ElMessage.error(error?.message || String(error) || t("surf.sessionStartFailed"));
+  }
+}
 
 const selectedPluginMinAppIncompatible = computed(() => !!selectedPlugin.value?.minAppIncompatible);
 

@@ -178,13 +178,9 @@ fn init(
         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
     }
 
-    // 桌面端启动时的自动同步归「实时同步文件夹」开关管：开关开着才有 watcher，而
-    // watcher 起来后本就会先跑一次全量增量扫描（watch::run_manager），启动同步由它承担；
-    // 开关关着就不该在启动时自动扫盘（手动同步不受影响）。
-    // web/android 没有 watcher，保留无条件的启动同步。
-    #[cfg(any(feature = "web", target_os = "android"))]
-    spawn_startup_local_folder_sync();
-    spawn_realtime_folder_sync_if_enabled();
+    // 桌面端 watcher 无条件常驻；是否监听与同步由各本地文件夹画册的 sync_mode 决定。
+    // 存量画册均为 none 时不会建立目录监听，也不会自动扫盘。
+    spawn_local_folder_sync_watcher();
 
     // 桌面端 MCP 与自动更新：初始化后端权威单例
     #[cfg(all(not(feature = "web"), not(target_os = "android")))]
@@ -222,42 +218,16 @@ fn init(
     Ok(())
 }
 
-#[cfg(any(feature = "web", target_os = "android"))]
-fn spawn_startup_local_folder_sync() {
-    let fut = async {
-        let reports = kabegame_core::local_folder::sync_all_local_folder_albums().await;
-        if !reports.is_empty() {
-            let added: usize = reports.iter().map(|report| report.added).sum();
-            let deleted: usize = reports.iter().map(|report| report.deleted).sum();
-            let reimported: usize = reports.iter().map(|report| report.reimported).sum();
-            let skipped_unchanged = reports
-                .iter()
-                .filter(|report| report.skipped_unchanged)
-                .count();
-            println!(
-                "[local_folder] startup sync done: {} albums, +{added}/-{deleted}/~{reimported}, skipped_unchanged={skipped_unchanged}",
-                reports.len()
-            );
-        }
-    };
-
-    #[cfg(feature = "web")]
-    tokio::spawn(fut);
-    #[cfg(not(feature = "web"))]
-    tauri::async_runtime::spawn(fut);
-}
 
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
-fn spawn_realtime_folder_sync_if_enabled() {
+fn spawn_local_folder_sync_watcher() {
     tauri::async_runtime::spawn(async {
-        if kabegame_core::settings::Settings::global().get_realtime_folder_sync() {
-            kabegame_core::local_folder::watch::set_enabled(true).await;
-        }
+        kabegame_core::local_folder::watch::set_enabled(true).await;
     });
 }
 
 #[cfg(not(all(not(feature = "web"), not(target_os = "android"))))]
-fn spawn_realtime_folder_sync_if_enabled() {}
+fn spawn_local_folder_sync_watcher() {}
 
 // ---- web entry point ----
 #[cfg(feature = "web")]
@@ -457,6 +427,7 @@ pub(crate) fn configure_app(
             #[cfg(all(not(target_os = "android"), not(feature = "web")))]
             add_local_folder_album,
             sync_local_folder_album,
+            set_album_sync_mode,
             sync_local_folder_albums,
             get_folder_sync_run_state,
             cancel_folder_sync,
@@ -593,8 +564,6 @@ pub(crate) fn configure_app(
             set_gallery_image_object_position,
             get_auto_deduplicate,
             set_auto_deduplicate,
-            get_realtime_folder_sync,
-            set_realtime_folder_sync,
             get_fast_folder_sync,
             set_fast_folder_sync,
             #[cfg(not(target_os = "android"))]

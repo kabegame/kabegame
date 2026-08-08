@@ -15,7 +15,7 @@
     <ActionSheet
       v-else-if="renderMode === 'actionsheet'"
       :visible="visible"
-      :actions="actions"
+      :actions="resolvedActions"
       :context="context"
       :teleport="teleport"
       :no-transition="noTransition"
@@ -79,16 +79,38 @@ const renderMode = computed<"contextmenu" | "actionsheet">(() => {
   return uiStore.isCompact ? "actionsheet" : "contextmenu";
 });
 
+const resolveAction = (action: ActionItem<any>): ActionItem<any> => ({
+  ...action,
+  label: typeof action.label === "function" ? action.label(props.context) : action.label,
+  //@ts-expect-error ActionItem 的函数型 icon 是基于当前上下文的解析器
+  icon: typeof action.icon === "function" ? action.icon(props.context) : action.icon,
+  suffix: typeof action.suffix === "function" ? action.suffix(props.context) : action.suffix,
+  disabled:
+    typeof action.disabled === "function"
+      ? action.disabled(props.context)
+      : action.disabled ?? false,
+  dividerBefore:
+    typeof action.dividerBefore === "function"
+      ? action.dividerBefore(props.context)
+      : action.dividerBefore ?? false,
+  visible: undefined,
+  children: action.children
+    ?.filter((child) => child.visible === undefined || child.visible(props.context))
+    .map(resolveAction),
+});
+
+/** 桌面菜单与 Android ActionSheet 共用同一份上下文解析结果，子项也递归解析。 */
+const resolvedActions = computed<ActionItem<any>[]>(() =>
+  props.actions
+    .filter((action) => action.visible === undefined || action.visible(props.context))
+    .map(resolveAction),
+);
+
 // Convert ActionItem[] to MenuItem[] for ContextMenu compatibility
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
   
-  for (const action of props.actions) {
-    // Check visibility
-    if (action.visible !== undefined && !action.visible(props.context)) {
-      continue;
-    }
-
+  for (const action of resolvedActions.value) {
     // Add divider if needed
     const shouldShowDivider =
       typeof action.dividerBefore === "function"
@@ -121,6 +143,7 @@ const menuItems = computed<MenuItem[]>(() => {
             //@ts-expect-error Resolve icon
             icon: typeof child.icon === "function" ? child.icon(props.context) : child.icon,
             command: child.command,
+            disabled: typeof child.disabled === "boolean" ? child.disabled : false,
             className: child.className,
             suffix: typeof child.suffix === "function" ? child.suffix(props.context) : child.suffix,
           }))
@@ -132,6 +155,7 @@ const menuItems = computed<MenuItem[]>(() => {
       label,
       icon,
       command: action.command,
+      disabled: typeof action.disabled === "boolean" ? action.disabled : false,
       className: action.className,
       suffix,
       children,

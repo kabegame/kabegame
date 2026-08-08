@@ -24,7 +24,9 @@ export function useDragScroll(container: Ref<HTMLElement | null>) {
           enableForPointerTypes: ["mouse", "pen"],
           ignoreSelector:
             "a,button,input,textarea,select,label,[contenteditable='true']," +
-            ".page-header,.el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box",
+            ".page-header,.el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box," +
+            // 拖拽把手：手势归 KbResizable 独占，拖拽滚动不能在这里起手
+            ".kb-resizable-handle",
         });
         console.log("[拖拽滚动调试] 拖拽滚动已启用");
       } else {

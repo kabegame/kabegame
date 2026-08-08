@@ -20,6 +20,7 @@
           <img
             src="/swim.png"
             :alt="$t('surf.title')"
+            draggable="false"
             class="surf-logo-img"
             :style="hasRecords ? { height: logoHeight + 'px' } : undefined"
           />

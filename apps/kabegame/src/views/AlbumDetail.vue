@@ -158,7 +158,7 @@
       :context="childAlbumMenuContext"
       :z-index="childAlbumMenu.zIndex.value"
       @close="childAlbumMenu.hide"
-      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder')"
+      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'stopWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder' | 'createSubAlbum' | 'openVirtualDrive' | 'setSyncMode:none' | 'setSyncMode:shallow' | 'setSyncMode:recursive' | 'setSyncMode:delegated')"
     />
 
     <el-dialog
@@ -206,7 +206,6 @@ const albumDetailStack: AlbumDetailSnapshot[] = [];
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
-import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
@@ -243,6 +242,7 @@ import {
   albumDetailStickySearchMode,
 } from "@/stores/albumDetailRoute";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
+import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
@@ -253,7 +253,8 @@ import {
   loadAlbumMediaPreview,
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
-import { syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
+import { setAlbumSyncMode, syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
+import type { AlbumSyncMode } from "@kabegame/core/types/album";
 import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
@@ -274,13 +275,20 @@ const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotati
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
 const albumDetailRouteStore = useAlbumDetailRouteStore();
-const { albumId } = storeToRefs(albumDetailRouteStore);
-
+const { set: setAlbumIdPath } = useAlbumIdPathState();
+/**
+ * 当前画册 id：一律来自路由参数（不再是 albumDetailRouteStore 的 state 字段——
+ * path 已与画册身份分离，见 stores/albumDetailRoute.ts）。
+ */
+const albumId = computed(() => {
+  const raw = route.params.albumId;
+  return typeof raw === "string" ? raw : "";
+});
 
 const albumName = ref<string>("");
 /**
  * 本组件已完成初始化的画册 id。
- * 与 `albumId`（albumDetailRouteStore 的状态，路由一变就同步）刻意分开：
+ * 与 `albumId`（来自路由参数，路由一变就同步）刻意分开：
  * 判断「要不要重新初始化」只能看这个，否则后退时会误判为同一画册而跳过初始化。
  */
 const initializedAlbumId = ref<string>("");
@@ -342,8 +350,7 @@ const isLightMode = IS_LIGHT_MODE;
 const albumDriveEnabled = computed(() => !isLightMode && !!settingsStore.values.albumDriveEnabled);
 
 // ---------- Album shell actions ----------
-const openVirtualDriveAlbumFolder = async () => {
-  const id = albumId.value?.trim();
+const openVirtualDriveForAlbum = async (id: string) => {
   if (!id) {
     ElMessage.warning("画册 ID 无效");
     return;
@@ -355,6 +362,7 @@ const openVirtualDriveAlbumFolder = async () => {
     ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
   }
 };
+const openVirtualDriveAlbumFolder = () => openVirtualDriveForAlbum(albumId.value?.trim() ?? "");
 
 // ---------- Child albums ----------
 const childAlbumRoots = computed(() => {
@@ -415,6 +423,8 @@ const childPreviewImages = ref<Record<string, ImageInfo[]>>({});
 // ---------- Dialog flow ----------
 const createSubAlbumDialog = useModal();
 const newSubAlbumName = ref("");
+/** 新建子画册的父画册 id：默认当前查看的画册，子画册右键「新建子画册」时改为该子画册（建孙画册） */
+const createSubAlbumParentId = ref<string | null>(null);
 const moveAlbumDialog = useModal();
 const moveDlgAlbum = ref<Album | null>(null);
 const moveToRoot = ref(false);
@@ -433,6 +443,7 @@ const childAlbumMenuContext = computed<AlbumActionContext>(() => {
     albumImageCount: album ? (childAlbumStats.value[album.id]?.imageCount || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
     isLocalFolder: album?.type === "local_folder",
+    albumDriveEnabled: albumDriveEnabled.value,
   };
 });
 
@@ -503,19 +514,21 @@ const openChildAlbumContextMenu = (event: MouseEvent, child: Album) => {
   childAlbumMenu.show(child, event);
 };
 
-const openCreateSubAlbumDialog = () => {
+const openCreateSubAlbumDialog = (parentId?: string) => {
   newSubAlbumName.value = "";
+  createSubAlbumParentId.value = parentId ?? albumId.value ?? null;
   createSubAlbumDialog.open();
 };
 
 const confirmCreateSubAlbum = async () => {
   const name = newSubAlbumName.value.trim();
-  if (!name || !albumId.value) return;
+  const parentId = createSubAlbumParentId.value;
+  if (!name || !parentId) return;
   try {
-    await albumStore.createAlbum(name, { parentId: albumId.value, reload: false });
+    await albumStore.createAlbum(name, { parentId, reload: false });
     createSubAlbumDialog.close();
     newSubAlbumName.value = "";
-    activeAlbumDetailTab.value = "subAlbums";
+    if (parentId === albumId.value) activeAlbumDetailTab.value = "subAlbums";
     ElMessage.success(t("albums.albumCreated"));
   } catch (error: any) {
     const errorMessage =
@@ -552,12 +565,16 @@ const handleChildAlbumMenuCommand = async (
     | "browse"
     | "delete"
     | "setWallpaperRotation"
+    | "stopWallpaperRotation"
     | "rename"
     | "moveTo"
     | "syncNow"
     | "syncNowRecursiveExisting"
     | "syncNowRecursiveFull"
-    | "openLocalFolder",
+    | "openLocalFolder"
+    | "createSubAlbum"
+    | "openVirtualDrive"
+    | `setSyncMode:${AlbumSyncMode}`,
 ) => {
   const context = childAlbumMenuContext.value;
   const album = context.target;
@@ -577,6 +594,27 @@ const handleChildAlbumMenuCommand = async (
       await invoke("open_explorer", { path: folder });
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
+      ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "createSubAlbum") {
+    openCreateSubAlbumDialog(id);
+    return;
+  }
+
+  if (command === "openVirtualDrive") {
+    await openVirtualDriveForAlbum(id);
+    return;
+  }
+
+  if (command.startsWith("setSyncMode:")) {
+    const mode = command.slice("setSyncMode:".length) as AlbumSyncMode;
+    if (mode === "delegated") return;
+    try {
+      await setAlbumSyncMode(id, mode);
+    } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }
     return;
@@ -633,6 +671,17 @@ const handleChildAlbumMenuCommand = async (
       ElMessage.success(t("albums.rotationStarted", { name }));
     } catch (error) {
       console.error("设置轮播画册失败:", error);
+      ElMessage.error(t("albums.setFailed"));
+    }
+    return;
+  }
+
+  if (command === "stopWallpaperRotation") {
+    try {
+      await setWallpaperRotationEnabled(false);
+      ElMessage.success(t("albums.detailStopRotation"));
+    } catch (error) {
+      console.error("停止桌面轮播失败:", error);
       ElMessage.error(t("albums.setFailed"));
     }
     return;
@@ -976,11 +1025,16 @@ const handleRefresh = async () => {
 };
 
 // ---------- Album initialization ----------
-const initAlbum = async (newAlbumId: string) => {
+/**
+ * @param isAlbumSwitch 是否为「已挂载组件内的换画册」（面包屑 / 子画册卡片跳转）——
+ *   为 true 时重置查询（换画册就是换数据源）；为 false 时（首次挂载/深链）保留
+ *   `album-detail-path` 当前已持久化的查询体（state 已由 path 反应式派生，无需手动采纳）。
+ */
+const initAlbum = async (newAlbumId: string, isAlbumSwitch: boolean) => {
   // 同画册且当前页已有图片时跳过重复初始化。
   //
   // 这里必须比 `initializedAlbumId`（本组件真正初始化到哪个画册），不能比 `albumId`：
-  // `albumId` 来自 albumDetailRouteStore，会在路由变化时先于本 watcher 同步成「新」画册 id，
+  // `albumId` 来自路由参数，会在路由变化时先于本 watcher 同步成「新」画册 id，
   // 于是浏览器后退时条件恒真、直接早退，albumName / 快照恢复全被跳过
   // （表现：面包屑还是子画册名，子画册数却已是父画册的）。
   if (initializedAlbumId.value === newAlbumId && (albumViewRef.value?.images?.length ?? 0) > 0) {
@@ -988,16 +1042,9 @@ const initAlbum = async (newAlbumId: string) => {
   }
 
   clearSelection();
-  albumId.value = newAlbumId;
-  const rawPath = route.query.path;
-  const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-  const innerPath = qp.startsWith("hide/") ? qp.slice("hide/".length) : qp;
-  if (innerPath.startsWith(`album/${newAlbumId}/`)) {
-    albumDetailRouteStore.syncFromUrl(qp);
-  } else {
+  if (isAlbumSwitch) {
+    // 换画册就是换数据源：留着上一个画册的查询会让新画册一进来就是「空」。
     await albumDetailRouteStore.navigate({
-      albumId: newAlbumId,
-      // 换画册就是换数据源：留着上一个画册的查询会让新画册一进来就是「空」。
       query: [],
       sort: { field: "by-album-order", desc: false },
       page: 1,
@@ -1007,6 +1054,8 @@ const initAlbum = async (newAlbumId: string) => {
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
   initializedAlbumId.value = newAlbumId;
+  // 回写当前选中画册的祖先链，供画册树侧栏（Albums.vue）与深链共享同一份真源。
+  void setAlbumIdPath(found?.ancestorPath || `/${newAlbumId}/`);
 
   // 清除store中的缓存；列表与总数由 ImageGrid 自动加载（albumName 就绪后 isActive 翻转触发）
   delete albumStore.albumImages[newAlbumId];
@@ -1029,7 +1078,9 @@ watch(
     const restored = albumDetailStack.find((s) => s.albumId === newId) ?? null;
 
     // 3) 初始化新画册（会加载 albums，使祖先链可计算）。
-    await initAlbum(newId);
+    //    oldAlbumId !== undefined：immediate:true 首次触发时为 undefined（首次挂载/深链）；
+    //    否则是组件已挂载期间的路由参数变化，视为真正的「换画册」。
+    await initAlbum(newId, oldAlbumId !== undefined);
 
     // 4) 跳后保存、跳前丢弃地维护访问栈。
     maintainAlbumDetailStack(newId, leaving);

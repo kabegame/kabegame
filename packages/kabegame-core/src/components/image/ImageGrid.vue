@@ -2,11 +2,24 @@
   <div ref="containerEl" class="image-grid-container" :class="[
       { 'hide-scrollbar': hideScrollbar },
       { 'scrolls-whole-container': scrollWholeContainer && !isHorizontal },
+      { 'has-aside': !!$slots.aside || !!$slots['aside-right'] },
       `layout-${layoutDirection}`,
     ]" v-bind="$attrs" tabindex="0" @keydown="handleKeyDown">
-    <slot name="before-grid" />
+    <!-- 页头 slot：滚动流内的全宽区（宿主用 sticky 钉顶）。必须保持容器直接子元素——
+         包一层与页头等高的容器会让 position: sticky 失去可移动空间而失效 -->
+    <slot name="header" />
 
-    <div ref="innerScrollEl" class="image-grid-scroll" :class="`layout-${layoutDirection}`">
+    <div class="image-grid-body">
+      <!-- 左侧列（如画册树）：无 aside slot 时包装层为 display: contents，布局与旧结构逐像素一致；
+           整列滚动模式下 aside 自身 sticky 钉在滚动流里（偏移/高度由宿主经 CSS 变量给定） -->
+      <aside v-if="$slots.aside" class="image-grid-aside">
+        <slot name="aside" />
+      </aside>
+
+      <div class="image-grid-main">
+        <slot name="before-grid" />
+
+        <div ref="innerScrollEl" class="image-grid-scroll" :class="`layout-${layoutDirection}`">
       <div class="image-grid-root" v-loading="isLoadingOverlay" :class="{ 'is-zooming': isZoomingLayout }"
         @click="handleRootClick" @contextmenu.prevent>
         <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
@@ -94,7 +107,14 @@
           @open-task="emit('open-task', $event)"
           @open-surf-record="emit('open-surf-record', $event)"
           @open-gallery-filter="emit('open-gallery-filter', $event)" />
+        </div>
       </div>
+      </div>
+
+      <!-- 右侧列（如画册信息面板）：与左列共享同一套 sticky/flex 契约，参见下方 .image-grid-aside -->
+      <aside v-if="$slots['aside-right']" class="image-grid-aside image-grid-aside--end">
+        <slot name="aside-right" />
+      </aside>
     </div>
 
     <slot name="footer" />
@@ -316,7 +336,8 @@ const virtualEndRow = ref(0);
 // 外层容器：默认只做键盘/焦点/resize；scrollWholeContainer 时也作为滚动元素。
 const containerEl = ref<HTMLElement | null>(null);
 const innerScrollEl = ref<HTMLElement | null>(null);
-// 实际滚动容器：默认是内部 scroll；纵向整页滚动时切到外层容器让 before-grid 共享 sticky 上下文。
+// 实际滚动容器：默认是内部 scroll；纵向整页滚动时切到外层容器让 header/before-grid 共享
+// sticky 上下文（aside 列同样以 sticky 钉在这条滚动流里，不另设滚动容器）。
 // 水平布局依赖内部 scroll 的固定高度链条，仍保持旧滚动容器。
 const scrollEl = computed(() =>
   props.scrollWholeContainer && !isHorizontal.value ? containerEl.value : innerScrollEl.value
@@ -994,8 +1015,12 @@ const stepSmoothWheel = () => {
   if (nextX !== curX) el.scrollLeft = nextX;
   if (nextY !== curY) el.scrollTop = nextY;
   const done =
-    Math.abs(smoothWheel.targetX - el.scrollLeft) < SMOOTH_WHEEL_SNAP &&
-    Math.abs(smoothWheel.targetY - el.scrollTop) < SMOOTH_WHEEL_SNAP;
+    (Math.abs(smoothWheel.targetX - el.scrollLeft) < SMOOTH_WHEEL_SNAP &&
+      Math.abs(smoothWheel.targetY - el.scrollTop) < SMOOTH_WHEEL_SNAP) ||
+    // 量化护栏：scrollTop 写入按设备像素量化，靠近目标时 lerp 步长可能整帧被吃掉
+    // （写 0.78 读回 1），距离阈值永不满足 → rAF 永动，并把外部/程序化滚动一直拽回
+    // 目标。读回毫无进展即视为已到量化边界，终止动画。
+    (el.scrollLeft === curX && el.scrollTop === curY);
   if (done) {
     smoothWheel.active = false;
     return;
@@ -1028,6 +1053,20 @@ const handleSmoothWheel = (event: WheelEvent) => {
     return;
   // 事件目标不在当前 scrollEl 内部（例如冒泡自 teleport 的弹层）也不处理
   if (target && !el.contains(target)) return;
+  // 嵌套滚动区（aside 树列、面包屑横滚等）优先消费 wheel：目标到 scrollEl 之间
+  // 存在真的有溢出的滚动容器时交还原生滚动——原生滚动链会在其滚到尽头后自然
+  // 续滚外层，这里一旦 preventDefault 就把内层滚动彻底堵死了。
+  for (let node = target; node && node !== el; node = node.parentElement) {
+    const canY = node.scrollHeight > node.clientHeight;
+    const canX = node.scrollWidth > node.clientWidth;
+    if (!canY && !canX) continue;
+    const cs = getComputedStyle(node);
+    if (
+      (canY && (cs.overflowY === "auto" || cs.overflowY === "scroll")) ||
+      (canX && (cs.overflowX === "auto" || cs.overflowX === "scroll"))
+    )
+      return;
+  }
   // deltaMode: 0=像素, 1=行, 2=页
   const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight || 0 : 1;
   const dy = event.deltaY * unit;
@@ -1407,6 +1446,60 @@ defineExpose({
       overflow: visible;
       height: auto;
       min-height: 0;
+    }
+  }
+
+  /* ---------- aside 多栏模式 ----------
+   * 无 aside slot 时 body/main 只是 display: contents 的透明包装，既有页面布局逐像素不变；
+   * 有 aside 时 body 行 = aside 列 + 中栏。滚动容器不变（整列滚动仍是外层容器本身），
+   * aside 列以 position: sticky 钉在滚动流里——header/分页条/aside 共享同一个 sticky
+   * 上下文，图片能滚到 sticky 页头下方；偏移与高度由宿主经 CSS 变量给定。 */
+  .image-grid-body,
+  .image-grid-main {
+    display: contents;
+  }
+
+  &.has-aside {
+    .image-grid-body {
+      display: flex;
+      flex: 1 1 0;
+      align-items: stretch;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .image-grid-aside {
+      flex: none;
+      display: flex;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .image-grid-main {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    /* 整列滚动：容器本身仍是唯一滚动元素（继承 .scrolls-whole-container 的 block+overflow），
+     * body 行随内容自然增高，aside 钉住、中栏回归普通文档流 */
+    &.scrolls-whole-container {
+      .image-grid-body {
+        flex: none;
+        align-items: flex-start;
+      }
+
+      .image-grid-aside {
+        position: sticky;
+        top: var(--kb-image-grid-aside-top, 0px);
+        height: var(--kb-image-grid-aside-height, auto);
+      }
+
+      .image-grid-main {
+        display: block;
+      }
     }
   }
 }

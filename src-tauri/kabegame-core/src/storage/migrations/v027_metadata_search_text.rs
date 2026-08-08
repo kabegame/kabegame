@@ -86,7 +86,7 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
-    fn run_pending_adds_and_backfills_both_search_text_columns() {
+    fn up_adds_and_backfills_both_search_text_columns() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             r#"
@@ -103,16 +103,12 @@ CREATE TABLE image_metadata (
 );
 INSERT INTO metadata (id, data) VALUES (1, '{"author":{"name":"Ada"}}');
 INSERT INTO image_metadata (id, data) VALUES (1, '{"camera":"Canon"}');
-PRAGMA user_version = 26;
 "#,
         )
         .unwrap();
 
-        crate::storage::migrations::run_pending(&conn).unwrap();
+        super::up(&conn).unwrap();
 
-        let version: u32 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
         let metadata_search: String = conn
             .query_row("SELECT search_text FROM metadata WHERE id = 1", [], |row| {
                 row.get(0)
@@ -126,7 +122,6 @@ PRAGMA user_version = 26;
             )
             .unwrap();
 
-        assert_eq!(version, 27);
         assert_eq!(metadata_search, "author\nname\nAda");
         assert_eq!(image_metadata_search, "camera\nCanon");
     }

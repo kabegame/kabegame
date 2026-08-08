@@ -10,7 +10,7 @@ import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
-import type { AlbumTreeNode } from "@kabegame/core/types/album";
+import type { AlbumSyncMode, AlbumTreeNode } from "@kabegame/core/types/album";
 import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
 import {
   buildAlbumMediaNodes,
@@ -19,6 +19,7 @@ import {
 } from "@/utils/albumMediaTree";
 
 export type { AlbumTreeNode };
+export type { AlbumSyncMode } from "@kabegame/core/types/album";
 
 /** 隐藏画册的固定 UUID（与后端 `HIDDEN_ALBUM_ID` 常量一致） */
 export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
@@ -44,6 +45,9 @@ export interface Album {
   type: AlbumKind;
   syncFolder: string | null;
   folderStatus: FolderStatus | null;
+  syncMode: AlbumSyncMode;
+  /** 从根画册到自身的 id 链，格式为 `/root-id/.../self-id/`（与后端 `albums.ancestor_path` 同构） */
+  ancestorPath: string;
 }
 
 export interface AlbumStats {
@@ -72,6 +76,17 @@ function parseFolderStatus(raw: unknown): FolderStatus | null {
   }
 }
 
+function parseAlbumSyncMode(raw: unknown): AlbumSyncMode {
+  switch (raw) {
+    case "shallow":
+    case "recursive":
+    case "delegated":
+      return raw;
+    default:
+      return "none";
+  }
+}
+
 function normalizeAlbumRow(a: Record<string, unknown>): Album {
   const createdAt =
     (a.created_at as number | undefined) ??
@@ -87,6 +102,8 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
     const raw = a.folder_status ?? a.folderStatus;
     return parseFolderStatus(raw);
   })();
+  const syncMode = parseAlbumSyncMode(a.sync_mode ?? a.syncMode);
+  const ancestorPath = String(a.ancestor_path ?? a.ancestorPath ?? "");
   return {
     id: String(a.id ?? ""),
     name: String(a.name ?? ""),
@@ -95,6 +112,8 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
     type,
     syncFolder,
     folderStatus,
+    syncMode,
+    ancestorPath,
   };
 }
 
@@ -237,10 +256,44 @@ export const useAlbumStore = defineStore("albums", () => {
     patchAlbumDirectCounts(await fetchAlbumDirectCounts(ids, hide), hide);
   };
 
-  /** 排除若干画册（及不需要单独处理：仅从扁平列表过滤后再建树） */
-  const getAlbumTreeExcluding = (excludeIds: string[]): AlbumTreeNode[] => {
+  /**
+   * 排除若干画册（仅从扁平列表过滤后再建树）。
+   * `excludeLocalFolder`：本地文件夹画册的父子关系由磁盘路径唯一决定，不能作为
+   * 新建/移动的目标父级——传 true 时连同其整棵子树一起从候选树中剔除。
+   */
+  const getAlbumTreeExcluding = (
+    excludeIds: string[],
+    opts?: { excludeLocalFolder?: boolean },
+  ): AlbumTreeNode[] => {
     const exclude = new Set(excludeIds);
-    return buildAlbumTreeFromFlat(albums.value.filter((a) => !exclude.has(a.id)));
+    return buildAlbumTreeFromFlat(
+      albums.value.filter(
+        (a) => !exclude.has(a.id) && !(opts?.excludeLocalFolder && a.type === "local_folder"),
+      ),
+    );
+  };
+
+  /**
+   * 按当前 parentId 关系整表补算 ancestorPath（格式 `/root/.../self/`）。
+   * 后端在移动后会重算，但本地是乐观 patch 的，不补算会让 albumIdPath、树的
+   * 祖先链自动展开都停留在旧父级上。画册量是十级，全表重算最省心。
+   */
+  const recomputeAncestorPaths = () => {
+    const byId = new Map(albums.value.map((a) => [a.id, a]));
+    const memo = new Map<string, string>();
+    const pathOf = (id: string, seen: Set<string>): string => {
+      const cached = memo.get(id);
+      if (cached) return cached;
+      const parentId = byId.get(id)?.parentId;
+      // seen 兜住脏数据里的环，避免爆栈
+      const path =
+        parentId && byId.has(parentId) && !seen.has(parentId)
+          ? `${pathOf(parentId, new Set(seen).add(parentId))}${id}/`
+          : `/${id}/`;
+      memo.set(id, path);
+      return path;
+    };
+    for (const album of albums.value) album.ancestorPath = pathOf(album.id, new Set([album.id]));
   };
 
   /** 画册列表页仅展示根画册（无 parent），并隐藏"隐藏画册"本体（通过独立入口访问） */
@@ -290,6 +343,9 @@ export const useAlbumStore = defineStore("albums", () => {
     }
     if (Object.prototype.hasOwnProperty.call(changes, "folderStatus")) {
       album.folderStatus = parseFolderStatus(changes.folderStatus);
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "syncMode")) {
+      album.syncMode = parseAlbumSyncMode(changes.syncMode);
     }
   };
 
@@ -506,6 +562,8 @@ export const useAlbumStore = defineStore("albums", () => {
       const album = albums.value.find((a) => a.id === albumId);
       if (album) {
         album.parentId = newParentId;
+        // 自身与整棵后代的 ancestorPath 都随之改变
+        recomputeAncestorPaths();
         recomputeAllAlbumCounts();
       }
     } catch (error: any) {

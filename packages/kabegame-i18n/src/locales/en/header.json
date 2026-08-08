@@ -32,5 +32,7 @@
   "hideAlbumImages": "Don't show album images",
   "cleanHidden": "Clean hidden images",
   "cleanHiddenInProgress": "In progress",
-  "cleanHiddenEmpty": "No hidden images"
+  "cleanHiddenEmpty": "No hidden images",
+  "albumTree": "Album tree",
+  "albumInfo": "Album info"
 }

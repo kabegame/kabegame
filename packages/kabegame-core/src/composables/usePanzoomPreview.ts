@@ -1,7 +1,9 @@
 import type { Ref } from "vue";
-import { nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, shallowRef, watch } from "vue";
 import Panzoom from "@panzoom/panzoom";
 import type { PanzoomObject } from "@panzoom/panzoom";
+
+type PanzoomOptions = NonNullable<Parameters<typeof Panzoom>[1]>;
 
 export interface UsePanzoomPreviewOptions {
   /** 可见时且 enabled 时创建实例；回调在 panzoomstart 时调用 */
@@ -14,11 +16,12 @@ export interface UsePanzoomPreviewOptions {
 
 const DEFAULT_MIN_SCALE = 1;
 const DEFAULT_MAX_SCALE = 10;
+const DEFAULT_START_SCALE = 1;
 const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
 const WHEEL_LINE_HEIGHT = 16;
 
-const DEFAULT_OPTIONS: NonNullable<Parameters<typeof Panzoom>[1]> = {
+const DEFAULT_OPTIONS: PanzoomOptions = {
   contain: "outside",
   panOnlyWhenZoomed: true,
   minScale: DEFAULT_MIN_SCALE,
@@ -42,6 +45,37 @@ export function usePanzoomPreview(
   const scale = ref(1);
   let instance: PanzoomObject | null = null;
   let instanceEl: HTMLElement | null = null;
+  /** 当前实例真正生效的 options（含调用方覆盖），仅用于推导 canPan；无实例时为 null */
+  const activeOptions = shallowRef<PanzoomOptions | null>(null);
+
+  /**
+   * 此刻按住拖动会不会真的产生位移。
+   *
+   * panzoom 的 `pan()` 在 `disablePan || (panOnlyWhenZoomed && scale === startScale)` 时
+   * 直接 return（@panzoom/panzoom dist/panzoom.js:475），即未缩放时拖动是彻底的空操作。
+   * 这段区间里 pointerdown 的默认行为对 panzoom 毫无价值，可以整个让给浏览器——
+   * 见 handleStartEvent。
+   */
+  const canPan = computed(() => {
+    const opts = activeOptions.value;
+    if (!opts) return false;
+    if (opts.disablePan) return false;
+    if (!opts.panOnlyWhenZoomed) return true;
+    return scale.value !== Number(opts.startScale ?? DEFAULT_START_SCALE);
+  });
+
+  /**
+   * 替换 panzoom 默认的 handleStartEvent（默认实现无条件 preventDefault + stopPropagation）。
+   *
+   * pointerdown 上的 preventDefault 会让 Chromium 放弃原生 HTML5 拖拽——连拖拽残影都不会生成，
+   * 于是图片在 webview 里完全拖不动。这里只在拖动确实会平移画面时才吞掉默认行为；
+   * 未缩放时放行，图片便可像普通网页一样被拖出（`ImageContent` 的 nativeDrag 同步放开 draggable）。
+   */
+  const handleStartEvent = (event: Event) => {
+    if (!canPan.value) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
 
   const handlePanzoomStart = () => {
     options?.onPanzoomStart?.();
@@ -68,16 +102,21 @@ export function usePanzoomPreview(
       instance = null;
     }
     instanceEl = null;
+    activeOptions.value = null;
     scale.value = 1;
   };
 
   const create = (el: HTMLElement) => {
     if (instance && instanceEl === el) return;
     destroy();
-    instance = Panzoom(el, {
+    const resolved: PanzoomOptions = {
       ...DEFAULT_OPTIONS,
       ...options?.panzoomOptions,
-    });
+    };
+    // 调用方未显式覆盖时才接管，避免悄悄吃掉外部传入的 handleStartEvent
+    resolved.handleStartEvent ??= handleStartEvent;
+    instance = Panzoom(el, resolved);
+    activeOptions.value = resolved;
     instanceEl = el;
     scale.value = instance.getScale();
     el.addEventListener("panzoomstart", handlePanzoomStart);
@@ -173,6 +212,7 @@ export function usePanzoomPreview(
   return {
     wrapperRef,
     scale,
+    canPan,
     handleWheel,
     reset,
     destroy,

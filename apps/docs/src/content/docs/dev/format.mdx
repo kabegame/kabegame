@@ -58,12 +58,12 @@ plugin-name.kgpg
 `kbAssets` 只允许 jpg/jpeg/png/gif/webp/bmp。显式资源 **单文件 ≤ 2 MB**，超限会使打包失败；总和超过 **10 MB** 会警告，加载时跳过超出部分。
 :::
 
-`kbAssets` 数组项、`kbDoc` / `kbChangelog` Markdown 引用和运行时 `assets` key 共用一个插件根坐标系与同一套归一化规则：标题后缀、query/fragment、前导 `/` 会被去掉，反斜杠改为 `/`，百分号按 UTF-8 解码，`.` / `..` 按段折叠且越过插件根时判非法；HTTP(S)、`data:` 与 `//` 外链不注册。键大小写敏感。Markdown 所在目录不参与解析，因此 `doc_root/doc.md` 引用同目录图片时要写 `doc_root/images/a.png`；Markdown 原文不会被加载器改写。
+`kbAssets` 数组项、`kbDoc` / `kbChangelog` Markdown 引用和运行时 `assets[].key` 共用一个插件根坐标系与同一套归一化规则：标题后缀、query/fragment、前导 `/` 会被去掉，反斜杠改为 `/`，百分号按 UTF-8 解码，`.` / `..` 按段折叠且越过插件根时判非法；HTTP(S)、`data:` 与 `//` 外链不注册。键大小写敏感。Markdown 所在目录不参与解析，因此 `doc_root/doc.md` 引用同目录图片时要写 `doc_root/images/a.png`；Markdown 原文不会被加载器改写。运行时 `assets` 是 `{ key, dataBase64 }[]`，顺序与 `kbAssets` 声明顺序一致。
 
 Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用项只警告，允许预留。字段缺失或空数组都表示零资源。
 
 :::tip[橱窗图：`banner` 前缀]
-`kbAssets` 里**文件名以 `banner` 开头**（大小写不敏感）的项，会额外出现在「源」页面插件卡片的快捷预览走马灯与插件详情文档顶部——`banner.png`、`banner-1.jpg`、`images/banner-home.webp` 都算。这类图不必被任何 Markdown 引用，也不会因此产生打包警告；其余资源只在文档正文里出现，不进走马灯。
+`kbAssets` 里**完整归一化路径以 `banner` 开头**（大小写不敏感）的项，会额外出现在「源」页面插件卡片的快捷预览走马灯与插件详情文档顶部——`banner.png`、`banner-1.jpg`、`banner/home.webp` 都算，`images/banner-home.webp` 不算。轮播顺序就是这些项在 `kbAssets` 数组中的声明顺序。这类图不必被任何 Markdown 引用，也不会因此产生打包警告；其余资源只在文档正文里出现，不进走马灯。
 :::
 
 ### package.json 最小示例

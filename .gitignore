@@ -70,6 +70,10 @@ src-tauri/kabegame/resources/cef/
 # development data
 /.kabegame/debug
 
+# claude设计
+/*.zip
+/exports
+
 # .cursor/
 
 # /test/

@@ -5,7 +5,7 @@ use crate::settings::Settings;
 use crate::storage::image_events::{
     add_images_to_album_with_event, remove_images_from_album_with_event,
 };
-use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use crate::storage::Storage;
 #[cfg(feature = "virtual-driver")]
 use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(feature = "virtual-driver")]
@@ -46,6 +46,14 @@ pub fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Val
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
     #[cfg(feature = "virtual-driver")]
     crate::virtual_driver::VirtualDriveService::global().bump_albums();
+    Ok(Value::Null)
+}
+
+pub fn set_album_sync_mode(
+    album_id: String,
+    mode: crate::local_folder::SyncMode,
+) -> Result<Value, String> {
+    Storage::global().set_album_sync_mode(&album_id, mode)?;
     Ok(Value::Null)
 }
 
@@ -102,7 +110,7 @@ pub async fn add_local_folder_album(
     sync_folder: String,
     recursive: bool,
 ) -> Result<Value, String> {
-    use crate::local_folder::build_entries_non_recursive;
+    use crate::local_folder::{build_entries_non_recursive, SyncMode};
     use std::path::Path;
     // 检查画册名称
     let name = name.trim();
@@ -112,11 +120,10 @@ pub async fn add_local_folder_album(
     if name.contains('/') {
         return Err(t!("albums.localFolderErrors.nameNoSlash").to_string());
     }
-    if matches!(
-        parent_id.as_deref(),
-        Some(HIDDEN_ALBUM_ID) | Some(FAVORITE_ALBUM_ID)
-    ) {
-        return Err(t!("albums.localFolderErrors.parentReadonly").to_string());
+    if let Some(deprecated_parent_id) = parent_id.as_deref() {
+        eprintln!(
+            "[deprecated] add_local_folder_album parent_id={deprecated_parent_id} is ignored; hierarchy is derived from sync_folder"
+        );
     }
 
     // 检查同步文件夹是否可用
@@ -182,10 +189,12 @@ pub async fn add_local_folder_album(
     }
 
     // 只建**根画册**；子画册与文件由后台同步（递归/非递归）经扫描钩子按需产生。
-    let root_entry = build_entries_non_recursive(name, sync_folder, parent_id.as_deref());
+    let mut root_entry = build_entries_non_recursive(name, sync_folder, None);
+    root_entry.sync_mode = SyncMode::None;
     let root_id = root_entry.id.clone();
     let created =
         Storage::global().add_local_folder_albums_tx(std::slice::from_ref(&root_entry))?;
+    Storage::global().rechain_local_folder_albums()?;
 
     tokio::spawn(async move {
         let options = crate::local_folder::SyncAlbumOptions {
@@ -283,7 +292,7 @@ pub fn cancel_folder_sync(_album_id: Option<String>) -> Result<Value, String> {
 
 /// 递归同步/创建时需要刻意避开的「禁区根」（规范化）：仅 VD 挂载点。
 #[cfg(not(target_os = "android"))]
-fn local_folder_forbidden_roots() -> Vec<std::path::PathBuf> {
+pub(crate) fn local_folder_forbidden_roots() -> Vec<std::path::PathBuf> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     #[cfg(feature = "virtual-driver")]
     {

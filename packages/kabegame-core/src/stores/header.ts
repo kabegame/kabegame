@@ -47,6 +47,10 @@ export enum HeaderFeatureId {
   ToggleShowAlbumImages = "toggleShowAlbumImages",
   /** 设置页：手动检查应用更新（仅桌面） */
   CheckUpdate = "checkUpdate",
+  /** 画册页：唤起画册树抽屉（仅紧凑模式；桌面左树常驻） */
+  AlbumTree = "albumTree",
+  /** 画册页：显示/隐藏画册信息面板（桌面开合右栏；紧凑模式唤起右侧抽屉） */
+  AlbumInfo = "albumInfo",
 }
 
 export interface HeaderFeatureDef {

@@ -254,7 +254,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             type TEXT NOT NULL DEFAULT 'normal',
             sync_folder TEXT,
             folder_status TEXT,
-            ancestor_path TEXT NOT NULL DEFAULT ''
+            ancestor_path TEXT NOT NULL DEFAULT '',
+            sync_mode TEXT NOT NULL DEFAULT 'none'
         );
         CREATE TABLE tasks (
             id TEXT PRIMARY KEY,

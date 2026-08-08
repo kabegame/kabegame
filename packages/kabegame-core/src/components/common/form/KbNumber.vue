@@ -19,7 +19,7 @@
         :max="effectiveMax"
         :step="sliderStep"
         :show-tooltip="false"
-        @input="(v) => emitNumber(Array.isArray(v) ? v[0] : v)"
+        @input="(v) => onSliderInput(Array.isArray(v) ? v[0] : v)"
       />
       <!-- 两端刻度：让用户不用拖到底也知道可选范围 -->
       <div class="kb-number__bounds">
@@ -85,7 +85,10 @@ const isFloat = computed(() => props.type === "float");
 const sliderStep = computed(() => {
   if (!isFloat.value) return 1;
   const span = effectiveMax.value - effectiveMin.value;
-  return span > 0 ? Math.max(span / 100, 0.01) : 0.01;
+  const raw = span > 0 ? Math.max(span / 100, 0.01) : 0.01;
+  // 截到 6 位：span / 100 常带浮点噪声（0.8 / 100 → 0.008000000000000002），
+  // el-slider 按 step 的小数位数推 precision，噪声会把它推到 18 位并污染滑杆输出
+  return Number(raw.toFixed(6));
 });
 
 function formatNumber(v: number): string {
@@ -102,25 +105,44 @@ function emitNumber(v: number) {
 
 /**
  * 输入框是「半受控」的：编辑期间保留用户原始字符串（否则输入 "1." 或删空会被立刻改写），
- * 只在 blur / 回车时才归一化并提交。
+ * 但只要当前文本已经是个合法数字就随打随提交，滑杆实时跟随；归一化文本推迟到 blur / 回车。
  */
 const inputText = ref("");
+/**
+ * 编辑中：值回流不得覆写输入框。随打随提交会让 modelValue 立刻变化，
+ * 若不拦住这条 watch，float 输入 "1." 会被 formatNumber 改写成 "1.00" 从而吞掉后续输入。
+ */
+const isEditing = ref(false);
 watch(
   () => [numberValue.value, effectiveMin.value, isFloat.value] as const,
   () => {
+    if (isEditing.value) return;
     inputText.value = formatNumber(numberValue.value ?? effectiveMin.value);
   },
   { immediate: true }
 );
 
+/** 滑杆接管：输入框退出编辑态，回到跟随 modelValue 的受控显示 */
+function onSliderInput(v: number) {
+  isEditing.value = false;
+  emitNumber(v);
+}
+
 function onInputText(text: string) {
+  isEditing.value = true;
   inputText.value = text;
+  // 中间态（空串、"-"、"1e"）不提交，留到 commit 时回退；注意 Number("") === 0，得先判空
+  if (text.trim() === "") return;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) return;
+  emitNumber(parsed);
 }
 
 /** 提交：非法输入回退到当前值，合法输入 clamp 进范围 */
 function onInputCommit() {
   const parsed = Number(inputText.value);
-  if (inputText.value.trim() === "" || Number.isNaN(parsed)) {
+  isEditing.value = false;
+  if (inputText.value.trim() === "" || !Number.isFinite(parsed)) {
     inputText.value = formatNumber(numberValue.value ?? effectiveMin.value);
     return;
   }

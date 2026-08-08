@@ -310,16 +310,91 @@ async fn recursive_sync_creates_subalbums_and_imports() {
     assert_eq!(report.added, 2);
     assert_eq!(album_image_count(&album_id), 1, "根画册装 root.png");
 
-    let child_id: String = {
+    let (child_id, child_name): (String, String) = {
         let conn = Storage::global().db.lock().unwrap();
         conn.query_row(
-            "SELECT id FROM albums WHERE parent_id = ?1",
+            "SELECT id, name FROM albums WHERE parent_id = ?1",
             params![album_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap()
     };
+    assert_eq!(child_name, "cats", "子画册应直接使用目录名");
     assert_eq!(album_image_count(&child_id), 1, "子画册装 cat.png");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recursive_sync_does_not_mark_normal_descendant_missing() {
+    let _guard = test_guard();
+    let (_tmp, dir) = temp_album_dir();
+    let album_id = create_sync_album(&dir);
+    let normal_id = uuid::Uuid::new_v4().to_string();
+    {
+        let conn = Storage::global().db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO albums (id, name, created_at, parent_id, type, folder_status, ancestor_path)
+             VALUES (?1, ?2, ?3, ?4, 'normal', 'normal-sentinel', ?5)",
+            params![
+                normal_id,
+                format!("normal-{}", uuid::Uuid::new_v4().simple()),
+                now_secs(),
+                album_id,
+                format!("/{album_id}/{normal_id}/")
+            ],
+        )
+        .unwrap();
+    }
+
+    let report = sync_album(
+        &album_id,
+        SyncAlbumOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.failed, 0);
+    assert_eq!(
+        folder_status_json(&normal_id).as_deref(),
+        Some("normal-sentinel"),
+        "普通子画册不能被递归同步标记为 missing"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recursive_sync_rechains_external_deep_album_under_created_middle_album() {
+    let _guard = test_guard();
+    let (_tmp, dir) = temp_album_dir();
+    let middle_dir = dir.join("middle");
+    let deep_dir = middle_dir.join("deep");
+    fs::create_dir_all(&deep_dir).unwrap();
+    let root_id = create_sync_album(&dir);
+    let deep_id = create_sync_album(&deep_dir);
+
+    let report = sync_album(
+        &root_id,
+        SyncAlbumOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.created_albums, 1);
+    let middle_id = album_id_for_sync_folder(&middle_dir);
+    assert_eq!(
+        Storage::global()
+            .get_album_by_id(&deep_id)
+            .unwrap()
+            .unwrap()
+            .parent_id
+            .as_deref(),
+        Some(middle_id.as_str()),
+        "同步创建中间目录画册后应收编已有深层画册"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

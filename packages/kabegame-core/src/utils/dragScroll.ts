@@ -57,7 +57,9 @@ export interface DragScrollOptions {
 
 const DEFAULT_IGNORE_SELECTOR =
   "a,button,input,textarea,select,label,summary,[contenteditable='true']," +
-  ".el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box";
+  ".el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box," +
+  // 拖拽把手：手势归 KbResizable 独占，拖拽滚动不能在这里起手
+  ".kb-resizable-handle";
 
 /**
  * 为一个可滚动容器启用“按住空格 + 鼠标拖拽滚动 + 惯性”。

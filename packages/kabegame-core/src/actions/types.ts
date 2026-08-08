@@ -22,6 +22,7 @@ export interface ActionItem<T = unknown> {
   icon?: Component | ((ctx: ActionContext<T>) => Component);
   command?: string;
   visible?: (ctx: ActionContext<T>) => boolean;
+  disabled?: boolean | ((ctx: ActionContext<T>) => boolean);
   /** Show divider before this item */
   dividerBefore?: boolean | ((ctx: ActionContext<T>) => boolean);
   suffix?: string | ((ctx: ActionContext<T>) => string);

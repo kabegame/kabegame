@@ -29,10 +29,10 @@
           class="ic-img thumbnail-layer z-1"
           :style="{ objectFit: fit }"
           :alt="image.id"
-          draggable="false"
+          :draggable="nativeDrag"
           @load="onLoad"
           @error="onImgError(thumbSlot, $event)"
-          @dragstart.prevent
+          @dragstart="onDragStart"
         />
         <img
           v-if="origEngaged && !origSlot.dead"
@@ -43,10 +43,10 @@
           class="ic-img original-layer z-2"
           :style="{ objectFit: fit }"
           :alt="image.id"
-          draggable="false"
+          :draggable="nativeDrag"
           @load="onLoad"
           @error="onImgError(origSlot, $event)"
-          @dragstart.prevent
+          @dragstart="onDragStart"
         />
       </template>
 
@@ -60,10 +60,10 @@
         class="ic-img"
         :style="{ objectFit: fit }"
         :alt="image.id"
-        draggable="false"
+        :draggable="nativeDrag"
         @load="onLoad"
         @error="onImgError(thumbSlot, $event)"
-        @dragstart.prevent
+        @dragstart="onDragStart"
       />
 
       <!-- 视频 -->
@@ -74,7 +74,7 @@
         :src="videoSlot.src"
         class="ic-img ic-video"
         :style="{ objectFit: fit }"
-        draggable="false"
+        :draggable="nativeDrag"
         :muted="videoMuted"
         :loop="videoLoop"
         :controls="nativeVideoControls"
@@ -87,8 +87,8 @@
         @loadeddata="onLoad"
         @canplay="onLoad"
         @error="onVideoError"
-        @dragstart.prevent
-        @mousedown.prevent
+        @dragstart="onDragStart"
+        @mousedown="onVideoMouseDown"
       />
     </template>
   </div>
@@ -99,7 +99,7 @@ import { computed, reactive, ref, watch, watchEffect } from "vue";
 import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
-import { isVideoMediaType } from "../../utils/mediaMime";
+import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../httpServer";
@@ -167,6 +167,12 @@ interface Props {
    * 网格缩略图跟随 `imageFit` 设置（fit→contain / fill→cover）；预览等全屏场景固定 `contain`。
    */
   fit?: "contain" | "cover";
+  /**
+   * 是否允许浏览器原生拖拽媒体（拖出到外部 + 拖拽残影），图片与视频一致生效。
+   * 默认放开（同浏览器默认行为）；只有当宿主自己要用指针做手势时才关掉，
+   * 例如预览的 panzoom 在已缩放状态下要靠拖动平移画面（见 `usePanzoomPreview` 的 canPan）。
+   */
+  nativeDrag?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -176,7 +182,48 @@ const props = withDefaults(defineProps<Props>(), {
   videoLoop: true,
   resetVideoOnPause: false,
   fit: "contain",
+  nativeDrag: true,
 });
+
+/** 拖拽落盘的建议文件名：优先 localPath 的 basename（带真实扩展名），退回 displayName / id */
+const dragFileName = (): string => {
+  const path = localPath.value.split(/[?#]/)[0];
+  const base = path.split(/[/\\]/).pop() || "";
+  if (base.includes(".")) return base;
+  return props.image.displayName || base || props.image.id;
+};
+
+/**
+ * 原生拖拽起手：把拖拽数据统一改写成「原图」。
+ * 网格 prefer=thumbnail 时 <img> 的 src 是缩略图，浏览器默认写入的拖拽数据也会是缩略图；
+ * 这里覆盖为原图——`DownloadURL`（Chromium 专有 `mime:filename:url` 三段格式，拖到
+ * 文件管理器时按 url 真实下载落盘；实际内容与 Content-Type 由 /file 响应决定，
+ * mime 段仅是提示，故直接用格式键）+ `text/uri-list`/`text/plain`（拖进浏览器/
+ * 编辑器时得到原图 URL 而非缩略图）。
+ * nativeDrag 关闭时把 dragstart 掐掉：`draggable=false` 之外的第二道闸。
+ */
+const onDragStart = (event: DragEvent) => {
+  if (!props.nativeDrag) {
+    event.preventDefault();
+    return;
+  }
+  const dt = event.dataTransfer;
+  const url = fileToUrl(localPath.value);
+  if (!dt || !url) return;
+  // filename 段不能含冒号（DownloadURL 以冒号分段）
+  const name = dragFileName().replace(/:/g, "_");
+  dt.setData("DownloadURL", `${displayImageMimeType(props.image.type)}:${name}:${url}`);
+  dt.setData("text/uri-list", url);
+  dt.setData("text/plain", url);
+};
+
+/**
+ * 视频历史上用 `@mousedown.prevent` 一并掐掉拖拽/选中，但 Chromium 里 mousedown 被
+ * preventDefault 会抑制原生拖拽起手，故改为仅在 nativeDrag 关闭时保留旧行为。
+ */
+const onVideoMouseDown = (event: MouseEvent) => {
+  if (!props.nativeDrag) event.preventDefault();
+};
 
 const emit = defineEmits<{
   ready: [];

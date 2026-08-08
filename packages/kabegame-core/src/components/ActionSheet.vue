@@ -7,13 +7,20 @@
           v-for="item in resolvedActions"
           :key="item.key"
           class="action-sheet-button"
-          :class="item.className"
+          :class="[item.className, disabledClass(item)]"
+          :disabled="isDisabled(item)"
           @click.stop="handleClick(item)">
           <el-icon class="action-sheet-icon">
             <component :is="getIcon(item)" />
           </el-icon>
           <span class="action-sheet-label">
             {{ getLabel(item) }}
+          </span>
+          <span
+            v-if="getSuffix(item)"
+            class="max-w-full truncate text-[10px] leading-tight text-[var(--anime-text-muted)]"
+          >
+            {{ getSuffix(item) }}
           </span>
         </button>
         <!-- Android: 全选/取消全选（写死在最右侧，不关闭 sheet） -->
@@ -49,7 +56,8 @@
             <button
               v-if="child.type !== 'divider'"
               class="submenu-item"
-              :class="child.className"
+              :class="[child.className, disabledClass(child)]"
+              :disabled="isDisabled(child)"
               @click.stop="handleChildClick(child)">
               <el-icon v-if="child.icon" class="submenu-icon">
                 <component :is="getChildIcon(child)" />
@@ -236,7 +244,20 @@ const getChildSuffix = (child: ActionItem): string => {
   return suffix;
 };
 
+const getSuffix = (item: ActionItem): string => getChildSuffix(item);
+
+const isDisabled = (item: ActionItem): boolean =>
+  typeof item.disabled === "function"
+    ? item.disabled(props.context)
+    : item.disabled ?? false;
+
+const disabledClass = (item: ActionItem): string =>
+  isDisabled(item)
+    ? "!cursor-not-allowed !opacity-45 active:!bg-transparent"
+    : "";
+
 const handleClick = (item: ActionItem) => {
+  if (isDisabled(item)) return;
   // If item has children, expand submenu instead of emitting command
   if (item.children && item.children.length > 0) {
     const visibleChildren = item.children.filter((child) => {
@@ -258,6 +279,7 @@ const handleClick = (item: ActionItem) => {
 };
 
 const handleChildClick = (child: ActionItem) => {
+  if (isDisabled(child)) return;
   if (child.command) {
     emit("command", child.command);
   }

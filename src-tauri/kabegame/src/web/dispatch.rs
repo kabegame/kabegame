@@ -1086,6 +1086,26 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "set_album_sync_mode",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_id: String,
+                        mode: kabegame_core::local_folder::SyncMode,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::album::set_album_sync_mode(args.album_id, args.mode)
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "sync_local_folder_albums",
         MethodEntry {
             requires_super: true,

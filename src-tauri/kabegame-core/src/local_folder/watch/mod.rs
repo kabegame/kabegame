@@ -30,6 +30,12 @@ use std::time::Duration;
 ))]
 use tokio::sync::{mpsc, Mutex};
 
+#[cfg(all(
+    feature = "ipc-server",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+use crate::local_folder::SyncMode;
+
 #[cfg(all(feature = "ipc-server", target_os = "linux"))]
 mod linux;
 #[cfg(all(feature = "ipc-server", target_os = "macos"))]
@@ -86,6 +92,7 @@ pub(super) trait PlatformWatcher: Send {
 ))]
 pub(super) enum ManagerMsg {
     Event(WatchEvent),
+    Debounced { album_id: String, generation: u64 },
     Shutdown,
 }
 
@@ -96,6 +103,17 @@ pub(super) enum ManagerMsg {
 struct ManagerHandle {
     tx: mpsc::Sender<ManagerMsg>,
     join: tokio::task::JoinHandle<()>,
+}
+
+#[cfg(all(
+    feature = "ipc-server",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+struct PendingDebounce {
+    ancestor_path: String,
+    mode: SyncMode,
+    generation: u64,
+    handle: tokio::task::JoinHandle<()>,
 }
 
 #[cfg(all(
@@ -149,16 +167,18 @@ async fn run_manager(mut rx: mpsc::Receiver<ManagerMsg>, self_tx: mpsc::Sender<M
     use crate::ipc::events::DaemonEventKind;
     use crate::ipc::server::EventBroadcaster;
 
-    let mut platform = PlatformImpl::new(self_tx);
+    let mut platform = PlatformImpl::new(self_tx.clone());
     let mut desired: HashMap<String, PathBuf> = HashMap::new();
-    let mut debounce: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut modes: HashMap<String, (String, SyncMode)> = HashMap::new();
+    let mut debounce: HashMap<String, PendingDebounce> = HashMap::new();
+    let mut debounce_generation = 0u64;
     let mut album_events = EventBroadcaster::global().subscribe_filtered_stream(&[
         DaemonEventKind::AlbumAdded,
         DaemonEventKind::AlbumChanged,
         DaemonEventKind::AlbumDeleted,
     ]);
 
-    reconcile(&mut platform, &mut desired).await;
+    reconcile(&mut platform, &mut desired, &mut modes).await;
     let _ = crate::local_folder::sync_all_local_folder_albums().await;
 
     loop {
@@ -167,19 +187,86 @@ async fn run_manager(mut rx: mpsc::Receiver<ManagerMsg>, self_tx: mpsc::Sender<M
                 match maybe_msg {
                     Some(ManagerMsg::Event(event)) => {
                         let album_id = event.album_id;
-                        if let Some(old) = debounce.remove(&album_id) {
-                            old.abort();
+                        if !desired.contains_key(&album_id) {
+                            continue;
                         }
+                        let Some((ancestor_path, mode)) = modes.get(&album_id).cloned() else {
+                            continue;
+                        };
+                        if let Some(old) = debounce.remove(&album_id) {
+                            old.handle.abort();
+                        }
+
+                        let covered_by_pending_ancestor = debounce.iter().any(|(pending_id, pending)| {
+                            pending_id != &album_id
+                                && mode_covers_descendants(pending.mode)
+                                && is_strict_descendant(&ancestor_path, &pending.ancestor_path)
+                        });
+                        if covered_by_pending_ancestor {
+                            continue;
+                        }
+
+                        if mode_covers_descendants(mode) {
+                            let descendant_ids: Vec<String> = debounce
+                                .iter()
+                                .filter(|(pending_id, pending)| {
+                                    *pending_id != &album_id
+                                        && is_strict_descendant(
+                                            &pending.ancestor_path,
+                                            &ancestor_path,
+                                        )
+                                })
+                                .map(|(pending_id, _)| pending_id.clone())
+                                .collect();
+                            for descendant_id in descendant_ids {
+                                if let Some(pending) = debounce.remove(&descendant_id) {
+                                    pending.handle.abort();
+                                }
+                            }
+                        }
+
+                        debounce_generation = debounce_generation.wrapping_add(1);
+                        let generation = debounce_generation;
                         let sync_album_id = album_id.clone();
+                        let debounced_tx = self_tx.clone();
                         let handle = tokio::spawn(async move {
                             tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
-                            sync_album_after_event(sync_album_id).await;
+                            let _ = debounced_tx
+                                .send(ManagerMsg::Debounced {
+                                    album_id: sync_album_id,
+                                    generation,
+                                })
+                                .await;
                         });
-                        debounce.insert(album_id, handle);
+                        debounce.insert(
+                            album_id,
+                            PendingDebounce {
+                                ancestor_path,
+                                mode,
+                                generation,
+                                handle,
+                            },
+                        );
+                    }
+                    Some(ManagerMsg::Debounced { album_id, generation }) => {
+                        let is_current = debounce
+                            .get(&album_id)
+                            .is_some_and(|pending| pending.generation == generation);
+                        if !is_current {
+                            continue;
+                        }
+                        debounce.remove(&album_id);
+                        if !desired.contains_key(&album_id) {
+                            continue;
+                        }
+                        let Some(mode) = modes.get(&album_id).map(|(_, mode)| *mode) else {
+                            continue;
+                        };
+                        tokio::spawn(sync_album_after_event(album_id, mode));
                     }
                     Some(ManagerMsg::Shutdown) | None => {
-                        for (_, handle) in debounce.drain() {
-                            handle.abort();
+                        for (_, pending) in debounce.drain() {
+                            pending.handle.abort();
                         }
                         platform.shutdown();
                         break;
@@ -188,7 +275,23 @@ async fn run_manager(mut rx: mpsc::Receiver<ManagerMsg>, self_tx: mpsc::Sender<M
             }
             album_event = album_events.recv() => {
                 if album_event.is_some() {
-                    reconcile(&mut platform, &mut desired).await;
+                    reconcile(&mut platform, &mut desired, &mut modes).await;
+                    let stale_ids: Vec<String> = debounce
+                        .keys()
+                        .filter(|id| !desired.contains_key(*id))
+                        .cloned()
+                        .collect();
+                    for id in stale_ids {
+                        if let Some(pending) = debounce.remove(&id) {
+                            pending.handle.abort();
+                        }
+                    }
+                    for (id, pending) in &mut debounce {
+                        if let Some((ancestor_path, mode)) = modes.get(id) {
+                            pending.ancestor_path.clone_from(ancestor_path);
+                            pending.mode = *mode;
+                        }
+                    }
                 }
             }
         }
@@ -199,17 +302,41 @@ async fn run_manager(mut rx: mpsc::Receiver<ManagerMsg>, self_tx: mpsc::Sender<M
     feature = "ipc-server",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
-async fn sync_album_after_event(album_id: String) {
+fn mode_covers_descendants(mode: SyncMode) -> bool {
+    matches!(mode, SyncMode::Recursive | SyncMode::Delegated)
+}
+
+#[cfg(all(
+    feature = "ipc-server",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+fn is_strict_descendant(path: &str, ancestor_path: &str) -> bool {
+    path.len() > ancestor_path.len() && path.starts_with(ancestor_path)
+}
+
+#[cfg(all(
+    feature = "ipc-server",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+async fn sync_album_after_event(album_id: String, mode: SyncMode) {
+    let options = match mode {
+        SyncMode::Shallow => crate::local_folder::SyncAlbumOptions {
+            recursive: false,
+            create_missing_albums: false,
+            forbidden_roots: Vec::new(),
+        },
+        SyncMode::Recursive | SyncMode::Delegated => crate::local_folder::SyncAlbumOptions {
+            recursive: true,
+            create_missing_albums: true,
+            forbidden_roots: crate::commands::album::local_folder_forbidden_roots(),
+        },
+        SyncMode::None => return,
+    };
     // 仅在「被并发同步占用」(skipped_in_flight) 时自旋重试：在飞的那次可能在本次文件
     // 落地前已列完目录，从而漏掉本次变更，且该已写完文件不一定再触发新的文件事件。
     // 稳定性相关的重试已随该功能移除。
     for attempt in 0..=IN_FLIGHT_RETRY_LIMIT {
-        let report = match crate::local_folder::sync_album(
-            &album_id,
-            crate::local_folder::SyncAlbumOptions::default(),
-        )
-        .await
-        {
+        let report = match crate::local_folder::sync_album(&album_id, options.clone()).await {
             Ok(report) => report,
             Err(err) => {
                 eprintln!("[local_folder.watch] sync_album {album_id} failed: {err}");
@@ -236,7 +363,11 @@ async fn sync_album_after_event(album_id: String) {
     feature = "ipc-server",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
-async fn reconcile(platform: &mut PlatformImpl, desired: &mut HashMap<String, PathBuf>) {
+async fn reconcile(
+    platform: &mut PlatformImpl,
+    desired: &mut HashMap<String, PathBuf>,
+    modes: &mut HashMap<String, (String, SyncMode)>,
+) {
     let albums = match list_local_folder_albums() {
         Ok(albums) => albums,
         Err(err) => {
@@ -246,7 +377,19 @@ async fn reconcile(platform: &mut PlatformImpl, desired: &mut HashMap<String, Pa
     };
 
     let mut next = HashMap::new();
+    let mut next_modes = HashMap::new();
     for album in albums {
+        let Some(mode) = SyncMode::from_str(&album.sync_mode) else {
+            eprintln!(
+                "[local_folder.watch] skip album {} with invalid sync_mode {}",
+                album.id, album.sync_mode
+            );
+            continue;
+        };
+        next_modes.insert(album.id.clone(), (album.ancestor_path.clone(), mode));
+        if mode == SyncMode::None {
+            continue;
+        }
         let Some(folder) = album.sync_folder.as_deref() else {
             continue;
         };
@@ -289,6 +432,7 @@ async fn reconcile(platform: &mut PlatformImpl, desired: &mut HashMap<String, Pa
             }
         }
     }
+    *modes = next_modes;
 }
 
 #[cfg(all(

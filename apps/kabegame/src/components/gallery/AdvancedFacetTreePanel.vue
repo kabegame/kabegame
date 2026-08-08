@@ -1,29 +1,16 @@
 <template>
   <div
-    class="w-[320px] max-w-[calc(100vw-48px)] max-h-[340px] min-h-0 overflow-x-hidden overflow-y-auto p-1"
-    style="--provider-tree-row-height: 32px; --provider-tree-sticky-offset: 0px"
+    class="w-[320px] max-w-[calc(100vw-48px)] max-h-[340px] min-h-0 flex flex-col overflow-hidden p-1"
+    style="
+      --provider-tree-row-height: 32px;
+      --provider-tree-sticky-offset: 0px;
+      --kb-tree-sticky-bg: var(--el-kb-filter-dropdown-panel-bg-color);
+      --kb-tree-sticky-backdrop: blur(10px);
+    "
   >
-    <AnyProviderChildrenNode @select="selectFilter" />
-    <DateProviderChildrenNode
-      v-if="dimension === 'date'"
-      @select="selectFilter"
-    />
-    <PluginsProviderChildrenNode
-      v-else-if="dimension === 'plugin'"
-      @select="selectFilter"
-    />
-    <MediaTypeProviderChildrenNode
-      v-else-if="dimension === 'mediaType'"
-      @select="selectFilter"
-    />
-    <AspectProviderChildrenNode
-      v-else-if="dimension === 'aspect'"
-      @select="selectFilter"
-    />
-    <SizeProviderChildrenNode
-      v-else-if="dimension === 'size'"
-      @select="selectFilter"
-    />
+    <!-- 常驻不重建（无 treeKey）：草稿变化经 ctx 的 computed 流入，
+         计数按 path watch 重取、active 链经 syncAutoExpand 单向展开 -->
+    <GalleryFacetTreeInner :ctx="ctx" :dimensions="dimensions" @select="selectFilter" />
   </div>
 </template>
 
@@ -41,15 +28,10 @@ import {
   type GalleryQuery,
   type NodePath,
 } from "@/utils/galleryQuery";
-import AnyProviderChildrenNode from "@/components/galleryFilterTree/AnyProviderChildrenNode.vue";
-import AspectProviderChildrenNode from "@/components/galleryFilterTree/AspectProviderChildrenNode.vue";
-import DateProviderChildrenNode from "@/components/galleryFilterTree/DateProviderChildrenNode.vue";
-import MediaTypeProviderChildrenNode from "@/components/galleryFilterTree/MediaTypeProviderChildrenNode.vue";
-import PluginsProviderChildrenNode from "@/components/galleryFilterTree/PluginsProviderChildrenNode.vue";
-import SizeProviderChildrenNode from "@/components/galleryFilterTree/SizeProviderChildrenNode.vue";
-import {
-  provideGalleryFilterTreeContext,
-  type RefreshTarget,
+import GalleryFacetTreeInner from "@/components/galleryFilterTree/GalleryFacetTreeInner.vue";
+import type {
+  GalleryFilterTreeContext,
+  RefreshTarget,
 } from "@/components/galleryFilterTree/context";
 
 const props = withDefaults(defineProps<{
@@ -95,6 +77,7 @@ const filters = computed<GalleryFilterSet>(() => ({
 const dimension = computed<GalleryBrowseDimension>(() => props.dimension);
 const filter = computed(() => filterForDimension(filters.value, dimension.value));
 const visible = computed(() => props.visible);
+const dimensions = computed<GalleryBrowseDimension[]>(() => [dimension.value]);
 
 function registerRefreshTarget(target: RefreshTarget): () => void {
   refreshTargets.add(target);
@@ -107,7 +90,8 @@ function selectFilter(nextFilter: GalleryFilter): void {
   emit("select", nextFilter);
 }
 
-provideGalleryFilterTreeContext({
+// 旧 provide/inject 注入链改为显式传参（与 GalleryFilterTree 同步迁移）
+const ctx: GalleryFilterTreeContext = {
   filter,
   filters,
   dimension,
@@ -118,7 +102,7 @@ provideGalleryFilterTreeContext({
   listPathForSegment: facet.listPathForSegment,
   countBaseline: facet.baselineCount,
   registerRefreshTarget,
-});
+};
 
 onBeforeUnmount(() => {
   refreshTargets.clear();

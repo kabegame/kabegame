@@ -58,6 +58,9 @@ albums:
   errors:
     nameExists: 同じ名前のアルバムが既にあります。別の名前を選んでください
     parentNotFound: "親アルバムが存在しません: {id}"
+    parentIsLocalFolder: ローカルフォルダアルバムの内容はフォルダ同期で管理されるため、その配下に子アルバムを手動で作成できません
+    cannotMoveLocalFolder: ローカルフォルダアルバムの位置はディスク上のパスで決まるため、手動で移動できません
+    cannotMoveIntoLocalFolder: アルバムをローカルフォルダアルバムの配下へ移動できません
   localFolderErrors:
     androidUnsupported: Android ではローカルフォルダ同期に対応していません
     nameRequired: アルバム名は空にできません

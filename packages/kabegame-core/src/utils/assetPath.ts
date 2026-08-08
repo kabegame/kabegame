@@ -1,7 +1,7 @@
 /**
  * 插件资源路径归一化。
  *
- * 这是 `kbAssets` 项、文档 md 里的引用串、后端 `Plugin.assets` 的键
+ * 这是 `kbAssets` 项、文档 md 里的引用串、后端 `Plugin.assets[].key`
  * 三者的**唯一裁决者**：三者都使用归一化后的插件根相对路径。
  *
  * 同构 Rust 实现：`src-tauri/kabegame-core/src/plugin/assets.rs::normalize_asset_path`
@@ -92,14 +92,47 @@ export function guessAssetMime(pathOrKey: string): string {
   }
 }
 
+/** 后端下发的单个插件资源；所在数组顺序与 `kbAssets` 声明顺序一致。 */
+export interface PluginAsset {
+  key: string;
+  dataBase64: string;
+}
+
+/** 判断持久缓存中的资源字段是否已使用当前数组协议。 */
+export function isPluginAssetList(value: unknown): value is PluginAsset[] | null | undefined {
+  return value == null || (
+    Array.isArray(value) &&
+    value.every((asset) =>
+      typeof asset === "object" &&
+      asset !== null &&
+      typeof (asset as PluginAsset).key === "string" &&
+      typeof (asset as PluginAsset).dataBase64 === "string"
+    )
+  );
+}
+
 /**
- * 是否是「展示位」资源：文件名（不含目录）以 `banner` 开头，大小写不敏感。
+ * 是否是「展示位」资源：完整归一化路径以 `banner` 开头，大小写不敏感。
  *
  * `kbAssets` 同时承载文档插图与展示图，只有后者适合放进快捷预览走马灯——文档里的
- * 「点这个按钮」截图当橱窗图看毫无意义。约定由文件名承载，插件作者不必新增字段：
- * `banner.png` / `banner-1.jpg` / `images/banner-home.webp` 都算。
+ * 「点这个按钮」截图当橱窗图看毫无意义。约定由路径前缀承载，插件作者不必新增字段：
+ * `banner.png` / `banner-1.jpg` / `banner/home.webp` 都算。
  */
 export function isBannerAsset(key: string): boolean {
-  const base = key.split("/").pop() || key;
-  return base.toLowerCase().startsWith("banner");
+  return key.toLowerCase().startsWith("banner");
+}
+
+/**
+ * 从已安装插件的 `Plugin.assets` 挑出展示位图，并按数组原顺序转成走马灯素材。
+ */
+export function bannerPreviewImages(
+  assets?: PluginAsset[] | null,
+): { key: string; src: string }[] {
+  if (!assets) return [];
+  return assets
+    .filter((asset) => isBannerAsset(asset.key))
+    .map((asset) => ({
+      key: asset.key,
+      src: `data:${guessAssetMime(asset.key)};base64,${asset.dataBase64}`,
+    }));
 }

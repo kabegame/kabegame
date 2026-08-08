@@ -5,12 +5,15 @@
 
 use std::path::Path;
 
+use super::SyncMode;
+
 #[derive(Debug, Clone)]
 pub struct NewLocalFolderEntry {
     pub id: String,
     pub name: String,
     pub sync_folder: String,
     pub parent_id: Option<String>,
+    pub sync_mode: SyncMode,
 }
 
 /// 构造单个本地文件夹画册条目（根画册，或同步钩子中的一个子画册）。
@@ -24,5 +27,6 @@ pub fn build_entries_non_recursive(
         name: name.to_string(),
         sync_folder: sync_folder.to_string_lossy().into_owned(),
         parent_id: parent_id.map(|s| s.to_string()),
+        sync_mode: SyncMode::None,
     }
 }

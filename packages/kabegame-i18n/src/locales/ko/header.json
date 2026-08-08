@@ -32,5 +32,7 @@
   "hideAlbumImages": "앨범 이미지 표시 안 함",
   "cleanHidden": "숨김 이미지 정리",
   "cleanHiddenInProgress": "진행 중",
-  "cleanHiddenEmpty": "숨김 이미지가 없습니다"
+  "cleanHiddenEmpty": "숨김 이미지가 없습니다",
+  "albumTree": "앨범 트리",
+  "albumInfo": "앨범 정보"
 }

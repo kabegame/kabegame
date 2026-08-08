@@ -68,6 +68,12 @@
     "recursiveLimits": "Recurses up to {maxDepth} levels deep; deeper subfolders are skipped.",
     "skipNotice": "Symlinks, hidden entries starting with \".\", and non-image/video files are skipped.",
     "duplicatePathHint": "A sync album for this folder already exists; choose a different folder.",
+    "syncMode": {
+      "none": { "label": "No sync", "description": "Do not watch folder changes or sync automatically" },
+      "shallow": { "label": "Shallow sync", "description": "Sync files in this folder only, without creating child albums" },
+      "recursive": { "label": "Recursive sync", "description": "Sync the entire folder tree and create albums for subfolders" },
+      "delegated": { "label": "Delegated sync", "description": "Managed by recursive sync from a parent album and cannot be changed independently" }
+    },
     "statusMissing": "Local folder does not exist or was moved",
     "statusDenied": "Permission denied accessing local folder: {message}",
     "statusNotADir": "Local path is not a directory",
@@ -114,5 +120,19 @@
   "moveFailed": "Move failed",
   "selectTargetAlbum": "Select target album",
   "enterHidden": "Hidden album",
-  "hiddenAlbumName": "Hidden album"
+  "hiddenAlbumName": "Hidden album",
+  "treePanelTitle": "Album tree",
+  "treeFilterPlaceholder": "Filter albums",
+  "treeSectionLocalFolders": "Local folders",
+  "treeRotationTooltip": "Wallpaper rotation active",
+  "treeFolderStatusTooltip": "Folder status issue: {state}",
+  "treeAddAlbum": "Add album",
+  "detailPanelTitle": "Album info",
+  "detailPanelEmpty": "Select an album on the left to see details",
+  "detailRotatingBadge": "Wallpaper rotation active",
+  "detailStartRotation": "Set as wallpaper rotation",
+  "detailStopRotation": "Stop wallpaper rotation",
+  "detailManualAlbum": "Manual album",
+  "detailLocalFolderAlbum": "Local folder",
+  "detailCrumbStats": "· {images} items · {subAlbums} sub-albums"
 }

@@ -1,6 +1,6 @@
-use super::{Plugin, PluginBackend, PluginScript, pack_plugin_version};
+use super::{pack_plugin_version, Plugin, PluginBackend, PluginScript};
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};

@@ -80,7 +80,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | `kbIcon` | 否 | 插件图标路径，通常为 `icon.png`。打包时会写入 KGPG v3 固定头部。 |
 | `kbDoc` | 否 | 文档映射；`default` 对应默认文档，其他键为语言码。值为插件根相对路径，如 `doc_root/doc.ja.md`。 |
 | `kbChangelog` | 否 | 更新日志映射；与 `kbDoc` 同构，`default` 对应默认更新日志，其他键为语言码。值为插件根相对路径。 |
-| `kbAssets` | 否 | 文档与更新日志共用的资源白名单，值为插件根相对路径字符串数组。Markdown 本地资源引用未声明会报错，未引用的预留项只警告。 |
+| `kbAssets` | 否 | 文档与更新日志共用的资源白名单，值为插件根相对路径字符串数组。Markdown 本地资源引用未声明会报错，未引用的预留项只警告；归一化路径以 `banner` 开头的项按数组声明顺序进入轮播。 |
 | `kbRecommendedConfigs` | 否 | 推荐运行配置文件路径数组。 |
 | `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。 |
 | `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，`export function migrate(input)`，需幂等一步到位；详见 cocs/crawler/METADATA_MIGRATION.md）。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
@@ -99,7 +99,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 ]
 ```
 
-所有 `kb*` 路径字段和 `kbAssets` 数组项都按插件根相对解析，禁止绝对路径、盘符和越界的 `..`。`kbAssets` 项、`kbDoc` / `kbChangelog` Markdown 的本地资源引用、运行时 `Plugin.assets` 的 key 使用同一个插件根坐标系：去标题后缀、query/fragment 与前导 `/`，统一 `/` 分隔，百分号解码并折叠路径段；外链不注册，大小写保持不变。Markdown 所在目录不参与解析，因此文档位于 `doc_root/doc.md` 时，引用同目录图片也应写 `doc_root/images/a.png`；`./images/a.png` 始终解析为插件根的 `images/a.png`。
+所有 `kb*` 路径字段和 `kbAssets` 数组项都按插件根相对解析，禁止绝对路径、盘符和越界的 `..`。`kbAssets` 项、`kbDoc` / `kbChangelog` Markdown 的本地资源引用、运行时 `Plugin.assets[].key` 使用同一个插件根坐标系：去标题后缀、query/fragment 与前导 `/`，统一 `/` 分隔，百分号解码并折叠路径段；外链不注册，大小写保持不变。Markdown 所在目录不参与解析，因此文档位于 `doc_root/doc.md` 时，引用同目录图片也应写 `doc_root/images/a.png`；`./images/a.png` 始终解析为插件根的 `images/a.png`。
 
 显式白名单中的文件必须存在且扩展名为 jpg/jpeg/png/gif/webp/bmp，单文件超过 **2 MB** 会使打包失败；总体积超过 **10 MB** 会警告，加载时超出部分不内嵌。字段缺失或空数组都表示零资源。
 
@@ -153,7 +153,7 @@ KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、�
 - `CHANGELOG.md` - 可选，`kbChangelog` 指向的更新日志（基于标准 Markdown/GFM 渲染）
 - `<image>` - 可选，由 `kbAssets` 显式导入、供文档与更新日志共用的资源（jpg/jpeg/png/gif/webp/bmp）
 
-  这些资源在插件解析时会被一次性读入内存，经 base64 编码后随插件列表以 `Plugin.assets` 字段下发给前端。key 是 `kbAssets` 声明的插件根相对路径经统一归一化后的结果，`kbDoc` 与 `kbChangelog` 共用同一张表；Markdown 原文不会被改写。显式白名单的单文件 **2 MB** 上限在 CLI 打包阶段硬校验，单插件所有资源合计 **10 MB** 上限在打包时警告、加载时截断。
+  这些资源在插件解析时会被一次性读入内存，经 base64 编码后随插件列表以 `Plugin.assets` 数组下发给前端；数组项形如 `{ key, dataBase64 }`，顺序与 `kbAssets` 声明顺序一致。`key` 是声明路径经统一归一化后的结果，`kbDoc` 与 `kbChangelog` 共用同一数组；Markdown 原文不会被改写。归一化路径以 `banner` 开头（大小写不敏感）的项是橱窗图，例如 `banner.png`、`banner-1.jpg`、`banner/home.webp`；轮播顺序就是数组声明顺序。显式白名单的单文件 **2 MB** 上限在 CLI 打包阶段硬校验，单插件所有资源合计 **10 MB** 上限在打包时警告、加载时截断。
 
 ### kbConfig 与变量在脚本中的访问
 

@@ -9,6 +9,7 @@
     >
       <ImageContent
         ref="bgContentRef"
+        :native-drag="false"
         :key="`bg-${bgImageToken}`"
         :image="bgImage"
         prefer="original"
@@ -61,10 +62,10 @@
     />
     <!-- 非紧凑布局：侧边栏 + 主内容 -->
     <template v-if="!uiStore.isCompact">
-      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
+      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '170px'">
         <div class="sidebar-header">
           <span class="app-logo-wrap">
-            <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+            <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" draggable="false" />
             <UpdateButton v-if="isCollapsed" :collapsed="true" />
           </span>
           <div v-if="!isCollapsed" class="sidebar-title-section">
@@ -754,7 +755,7 @@ body,
   overflow: hidden;
 
   .sidebar-header {
-    padding: 24px 20px;
+    padding: 16px 12px;
     border-bottom: 2px solid var(--anime-border);
     background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
     display: flex;
@@ -774,8 +775,8 @@ body,
     }
 
     .app-logo {
-      width: 56px;
-      height: 56px;
+      width:40px;
+      height: 40px;
       object-fit: contain;
       transition: all 0.3s ease;
       flex-shrink: 0;

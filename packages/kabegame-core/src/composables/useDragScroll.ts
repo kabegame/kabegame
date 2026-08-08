@@ -29,7 +29,9 @@ export function useDragScroll(
           enableForPointerTypes: ["mouse", "pen"],
           ignoreSelector:
             "a,button,input,textarea,select,label,[contenteditable='true']," +
-            ".page-header,.el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box",
+            ".page-header,.el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box," +
+            // 拖拽把手：手势归 KbResizable 独占，拖拽滚动不能在这里起手
+            ".kb-resizable-handle",
           maxVelocityPxPerMs: options?.maxVelocityPxPerMs,
         });
       }

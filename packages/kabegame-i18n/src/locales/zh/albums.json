@@ -68,6 +68,12 @@
     "recursiveLimits": "递归最多展开 {maxDepth} 层，超出的子目录会被跳过。",
     "skipNotice": "符号链接、以“.”开头的隐藏目录与文件、非图片/视频文件均不会同步。",
     "duplicatePathHint": "该文件夹已存在对应的同步画册，请选择其他文件夹。",
+    "syncMode": {
+      "none": { "label": "不同步", "description": "不监听文件夹变更，也不会自动同步" },
+      "shallow": { "label": "浅同步", "description": "只自动同步此文件夹当前层的文件，不创建子画册" },
+      "recursive": { "label": "递归同步", "description": "自动同步整棵文件夹子树，并按子文件夹创建画册" },
+      "delegated": { "label": "同步委托", "description": "由父级画册的递归同步接管，不能单独设置" }
+    },
     "statusMissing": "本地路径不存在或已被移动",
     "statusDenied": "无权访问本地路径：{message}",
     "statusNotADir": "本地路径不是目录",
@@ -114,5 +120,19 @@
   "moveFailed": "移动失败",
   "selectTargetAlbum": "选择目标画册",
   "enterHidden": "进入隐藏画册",
-  "hiddenAlbumName": "隐藏画册"
+  "hiddenAlbumName": "隐藏画册",
+  "treePanelTitle": "画册树",
+  "treeFilterPlaceholder": "过滤画册",
+  "treeSectionLocalFolders": "本地文件夹",
+  "treeRotationTooltip": "壁纸轮播中",
+  "treeFolderStatusTooltip": "文件夹状态异常：{state}",
+  "treeAddAlbum": "添加画册",
+  "detailPanelTitle": "画册信息",
+  "detailPanelEmpty": "选择左侧画册查看详情",
+  "detailRotatingBadge": "桌面轮播中",
+  "detailStartRotation": "设为桌面轮播",
+  "detailStopRotation": "停止桌面轮播",
+  "detailManualAlbum": "手动画册",
+  "detailLocalFolderAlbum": "本地文件夹",
+  "detailCrumbStats": "· {images} 张 · {subAlbums} 个子画册"
 }

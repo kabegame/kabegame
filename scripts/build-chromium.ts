@@ -23,6 +23,10 @@
  * CEFBUILD 可覆盖构建根；CEF_EXPORT_ROOT 可覆盖 runtime 的父目录，覆盖后导出到
  * <root>/cef-build-{variant}。CEF_SOURCE 默认仍为 third/cef。
  *
+ * 构建根必须待在任何 node_modules 之外，所以上面那个默认值实际不可用——须显式
+ *   CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod
+ * 成因见 checkNoNodeModulesAncestor()（构建前会拦下不合规布局）。
+ *
  * Linux 关键前提：Chromium/CEF 的源码树重度依赖符号链接、POSIX 权限和大小写敏感，
  * exFAT/NTFS 都不行，构建根必须位于 POSIX 文件系统。
  *
@@ -352,6 +356,57 @@ function ensureBuildDir(ctx: BuildContext): void {
   log(`runtime 导出目录: ${ctx.exportDir}`);
 }
 
+/**
+ * 构建空间的任何祖先目录都不得含 `node_modules`。
+ *
+ * chromium 树内的 TS 编译（`tools/typescript/ts_library.py`）用的是 node 模块解析：
+ * 逐级向上遍历 `node_modules`，没有「仓库边界」概念。只要 checkout 落在一个 JS 仓库
+ * 里，树内解析不到的裸 import 就会一路向上命中外部依赖，而官方独立 checkout 下它们
+ * 本该解析失败。两种后果都会中断构建：
+ *
+ *   - 解析到不兼容的类型 → tsc 报错。如 `@types/esquery` 的
+ *     `import { Node } from "estree"`（树内未 vendor `@types/estree`）命中仓库根后，
+ *     `Node` 变成 estree 联合类型，与 `@typescript-eslint` 的 TSESTree 互不兼容。
+ *   - 解析成功但文件在树外 → `ts_library.py` 的 `validateDefinitionDeps` 断言
+ *     「Undeclared dependencies to definition files」。如 `@types/node` 依赖的
+ *     `undici-types`：chromium 把树内那份裁剪成只剩 package.json（`types` 指向不存在的
+ *     `index.d.ts`），解析在该层失败后继续向上，命中 `<repo>/node_modules/undici-types`。
+ *
+ * 注意这里没有「打存根挡住」的解法：树内被裁剪的 undici-types 本身就是一个解析失败的
+ * 存根，TS 照样越过它继续向上；而能真正命中的存根又会变成未声明的 `.d.ts` 触发断言。
+ * `preserveSymlinks: true` 也让「软链到仓外」无效——TS 按书写路径算祖先。唯一可靠的
+ * 办法就是让构建空间物理上待在任何 `node_modules` 之外。
+ */
+function checkNoNodeModulesAncestor(ctx: BuildContext): void {
+  const offenders: string[] = [];
+  let dir = ctx.cefBuild;
+  for (;;) {
+    // 只有真装了包的 node_modules 才构成解析危险。空目录、或只剩 `.yarn-integrity`
+    // /`.package-lock.json`/`.bin` 这类元数据的残留（常见于误在某层跑包管理器）无害：
+    // 包名不可能以 `.` 开头（scoped 包以 `@` 开头），所以点条目一律不算。
+    const candidate = path.join(dir, "node_modules");
+    let populated = false;
+    try {
+      populated = fs.readdirSync(candidate)
+        .some((entry) => !entry.startsWith("."));
+    } catch {
+      populated = false;
+    }
+    if (populated) offenders.push(candidate);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (offenders.length === 0) return;
+  die(
+    `构建空间的祖先目录中存在 node_modules，chromium 树内 TS 编译会向上解析到它们：\n` +
+      offenders.map((p) => `  ${p}`).join("\n") +
+      `\n构建空间：${ctx.cefBuild}\n` +
+      "请用 CEFBUILD 指向仓库外的目录（同卷 mv 可秒级迁移已有 checkout），例如：\n" +
+      "  CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod",
+  );
+}
+
 function checkBuildDir(ctx: BuildContext): void {
   if (BUILD_PLATFORM === "windows") {
     log(
@@ -573,7 +628,11 @@ function setupEnv(ctx: BuildContext): void {
     .filter(Boolean)
     .join(path.delimiter);
   ctx.env.CEF_USE_GN = "1";
-  ctx.env.DEPOT_TOOLS_UPDATE = "1";
+  // 默认让 depot_tools 自更新，但保留逃生阀：增量构建（--no-chromium-update + CEF 走本地
+  // 路径）本身不需要联网，depot_tools 的自更新却是硬网络依赖，网络不通时会直接 exit 128
+  // 卡死整个构建。外部显式传 DEPOT_TOOLS_UPDATE=0 即可跳过（update_depot_tools 自己认这个
+  // 约定）。注意不能写成无条件赋值，否则调用方无法覆盖。
+  ctx.env.DEPOT_TOOLS_UPDATE ||= "1";
   ctx.env.NINJA_CORE_LIMIT = ctx.ninjaJobs;
 }
 
@@ -968,6 +1027,7 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   const ctx = createContext(parsed);
   ensureBuildDir(ctx);
+  checkNoNodeModulesAncestor(ctx);
   checkBuildDir(ctx);
   prepareCefReference(ctx);
   setupEnv(ctx);

@@ -1,4 +1,4 @@
-import type { AlbumTreeNode } from "../types/album";
+import type { AlbumSyncMode, AlbumTreeNode } from "../types/album";
 
 /** 与画册 store 中 `albumTree` 一致的扁平列表 → 树构建（供多处复用） */
 export interface AlbumFlatRow {
@@ -6,6 +6,10 @@ export interface AlbumFlatRow {
   name: string;
   parentId: string | null;
   createdAt: number;
+  type?: "normal" | "local_folder";
+  syncFolder?: string | null;
+  folderStatus?: { state: string; message?: string } | null;
+  syncMode?: AlbumSyncMode;
 }
 
 export function buildAlbumTreeFromFlat(albums: AlbumFlatRow[]): AlbumTreeNode[] {

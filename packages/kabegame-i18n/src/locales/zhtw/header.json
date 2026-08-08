@@ -32,5 +32,7 @@
   "hideAlbumImages": "不顯示畫冊圖片",
   "cleanHidden": "清理隱藏圖片",
   "cleanHiddenInProgress": "進行中",
-  "cleanHiddenEmpty": "沒有隱藏圖片"
+  "cleanHiddenEmpty": "沒有隱藏圖片",
+  "albumTree": "畫冊樹",
+  "albumInfo": "畫冊資訊"
 }

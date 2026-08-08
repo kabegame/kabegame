@@ -191,7 +191,7 @@
   }
 
   @include e(panel) {
-    width: clamp(260px, 24vw, 340px);
+    // width: auto;
     color: getCssVar('kb-filter-dropdown', 'option-text-color');
     outline: none;
 

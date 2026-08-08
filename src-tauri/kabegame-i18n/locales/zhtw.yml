@@ -58,6 +58,9 @@ albums:
   errors:
     nameExists: 畫冊名稱已存在，請換一個名稱
     parentNotFound: "父畫冊不存在: {id}"
+    parentIsLocalFolder: 本機資料夾畫冊的內容由資料夾同步管理，不能在其下手動建立子畫冊
+    cannotMoveLocalFolder: 本機資料夾畫冊的位置由其磁碟路徑決定，不能手動移動
+    cannotMoveIntoLocalFolder: 不能將畫冊移動到本機資料夾畫冊下
   localFolderErrors:
     androidUnsupported: Android 平台不支援本機資料夾同步
     nameRequired: 畫冊名稱不能為空

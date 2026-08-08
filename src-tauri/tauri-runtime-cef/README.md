@@ -216,6 +216,39 @@ automate。它**不触碰工作区、也不动仓库 index**，构建前后 `git
 > 分支的 tip —— 那个提交只存在于本地，别人 clone 后 `git submodule update` 必然失败。
 > 2026-08 已回到上游 pin + 标准 patch 系列，分支删除。
 
+**构建空间必须待在任何 `node_modules` 之外——用 `CEFBUILD` 指到仓库外。** chromium 树内的
+TS 编译（`tools/typescript/ts_library.py`）走 node 模块解析：逐级向上遍历 `node_modules`，
+没有「仓库边界」概念。只要 checkout 落在一个 JS 仓库里，树内解析不到的裸 import 就会一路向上
+命中外部依赖，而官方独立 checkout 下它们本该解析失败。两种后果都会中断构建，触发点都是
+`//ui/webui/resources/tools/eslint:build_ts`：
+
+- **解析到不兼容的类型 → tsc 报错。** chromium vendor 了 `@types/esquery`，其 `index.d.ts`
+  首行 `import { Node } from "estree"`，但树内没有 vendor `@types/estree`。命中
+  `<repo>/node_modules/@types/estree` 后，esquery 的 `Node` 变成 estree 的联合类型，与
+  `@typescript-eslint/types` 的 TSESTree 互不兼容，报 13 个 TS2345/TS2352。（`siso` 只提示
+  `see out/<config>/siso_output`，真正的类型错误全在那个文件里。）
+- **解析成功但文件在树外 → `validateDefinitionDeps` 断言**「Undeclared dependencies to
+  definition files」。`@types/node`（由该 target 的 `types: ["node", …]` 引入）依赖
+  `undici-types`，而 chromium 把树内那份**裁剪成只剩 `LICENSE` + `package.json`**（`types`
+  仍写着不存在的 `index.d.ts`），解析在该层失败后继续向上，命中 `<repo>/node_modules/undici-types`。
+
+注意这里**没有「打存根挡住」的解法**，两个方向都是死路：树内被裁剪的 `undici-types` 本身就是
+一个解析失败的存根，TS 照样越过它继续向上——可见失败的存根拦不住向上遍历；而能真正命中的存根
+（曾经的 `writeTsResolutionBarrier()`，往 `chromium_git/node_modules/@types/estree` 写
+`export type Node = any`）又会变成一个未声明的树外 `.d.ts`，直接把错误从 tsc 换成上面那条断言。
+`tsconfig_base.json` 的 `preserveSymlinks: true` 也让「软链到仓外」无效——TS 按书写路径算祖先。
+
+唯一可靠的办法是让构建空间物理上待在任何 `node_modules` 之外：
+
+```bash
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod
+```
+
+`checkNoNodeModulesAncestor()` 在构建前从构建空间逐级向上扫描，发现装了包的 `node_modules`
+祖先就直接报错拦下（只剩 `.yarn-integrity` 这类点条目的空壳不算——包名不可能以 `.` 开头）。
+默认值 `CHROMIUM_DIR` 仍是 `third/chromium`，忘了带 `CEFBUILD` 会被这道护栏挡住并提示命令。
+已有 checkout 用同卷 `mv` 迁移即可，是秒级 rename，不复制 60GB。
+
 升级 CEF 大版本时两边都走同一套 re-vendor 流程：先 `deno task patch <dir> -r` 还原成
 干净的上游树，再 bump 官方 pin，最后修复 context 漂移并重新生成整个 patch series，
 同步更新 `third-patches/<dir>/README.md` 的 vendor base。cef-rs 侧还要重跑

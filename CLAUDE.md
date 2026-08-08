@@ -120,10 +120,17 @@ deno task build:ffmpeg           # Build x264 (third/x264) + FFmpeg libav* libs 
                                  # Output: bin/{platform}/{arch}/{FFmpeg,x264}-build/ (gitignored).
                                  # On Linux this is GUARDED to Ubuntu 22.04 only (glibc 2.35 floor,
                                  # see cocs/build/LINUX_BUILD_WORKFLOW.md); escape: KB_ALLOW_HOST_BUILD=1.
-deno task build:chromium dev     # Build CEF/Chromium from third/cef (hours). Workspace: third/chromium/
-deno task build:chromium prod    # (~60GB, gitignored). Export: bin/{platform}/{arch}/cef-build-{dev,prod}/
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium dev   # Build CEF/Chromium from third/cef (hours).
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod  # Export: bin/{platform}/{arch}/cef-build-{dev,prod}/
                                  # which is what mode-plugin resolves CEF_PATH to (dev/check/test use
                                  # cef-build-dev, build uses cef-build-prod).
+                                 # The workspace (~60GB, gitignored) MUST live outside any node_modules:
+                                 # chromium's in-tree TS build walks node_modules upward with no repo
+                                 # boundary, so a workspace under this repo resolves bare imports into
+                                 # <repo>/node_modules and fails //ui/webui/resources/tools/eslint:build_ts.
+                                 # Default CHROMIUM_DIR (third/chromium/) is rejected by a preflight guard;
+                                 # see src-tauri/tauri-runtime-cef/README.md. Move an existing checkout with
+                                 # a same-volume mv (instant rename, no 60GB copy).
 deno task build:ffmpeg --target android  # Cross-compile aarch64 FFmpeg via env NDK (NDK_HOME etc.)
                                  # Output gitignored under bin/android/arm64/FFmpeg-build/ (reproduced by
                                  # command, not committed). Required before android cargo build/check.

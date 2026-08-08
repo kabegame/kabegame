@@ -47,7 +47,6 @@
           <template #icon>
             <component :is="item.icon" />
           </template>
-          <!-- TODO:树面板暂不支持文本过滤。 -->
           <template #panel="{ close }">
             <AdvancedFacetTreePanel
               :tree="tree"

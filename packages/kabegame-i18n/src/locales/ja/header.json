@@ -32,5 +32,7 @@
   "hideAlbumImages": "アルバム画像を表示しない",
   "cleanHidden": "非表示画像を整理",
   "cleanHiddenInProgress": "実行中",
-  "cleanHiddenEmpty": "非表示画像はありません"
+  "cleanHiddenEmpty": "非表示画像はありません",
+  "albumTree": "アルバムツリー",
+  "albumInfo": "アルバム情報"
 }

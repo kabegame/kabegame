@@ -1,5 +1,8 @@
 import { invoke } from "@/api/rpc";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import type { AlbumSyncMode } from "@kabegame/core/types/album";
+
+export type { AlbumSyncMode } from "@kabegame/core/types/album";
 
 /** 本地文件夹同步仅桌面端支持（排除 Android 与 Web）。 */
 const LOCAL_FOLDER_UNSUPPORTED = IS_ANDROID || IS_WEB;
@@ -55,6 +58,8 @@ export interface SyncLocalFolderAlbumOptions {
   createMissingAlbums?: boolean;
 }
 
+export type SettableAlbumSyncMode = Exclude<AlbumSyncMode, "delegated">;
+
 export function syncLocalFolderAlbum(
   albumId: string,
   options: { recursive: true; createMissingAlbums?: boolean },
@@ -78,6 +83,15 @@ export async function syncLocalFolderAlbum(
     console.warn("[local_folder] sync_local_folder_album failed", albumId, e);
     throw e;
   }
+}
+
+/** 设置画册的持续同步意图；delegated 仅由后端状态机维护，不能由调用方直接设置。 */
+export async function setAlbumSyncMode(
+  albumId: string,
+  mode: SettableAlbumSyncMode,
+): Promise<void> {
+  if (LOCAL_FOLDER_UNSUPPORTED) return;
+  await invoke("set_album_sync_mode", { albumId, mode });
 }
 
 /**

@@ -6,6 +6,7 @@ import { pluginCacheDb } from "../cache/pluginCache";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
 import { useCrawlerStore } from "./crawler";
 import type { PluginLabel } from "./pluginLabels";
+import { isPluginAssetList, type PluginAsset } from "../utils/assetPath";
 
 /** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
 export type PluginManifestText = Record<string, string>;
@@ -85,8 +86,8 @@ export interface Plugin {
   descriptionTemplate?: string | null;
   /** configs/*.json 推荐运行配置列表 */
   recommendedConfigs?: any[];
-  /** 插件资源（图片等）base64 映射，键为归一化后的插件根相对路径 */
-  assets?: Record<string, string> | null;
+  /** 插件资源；顺序与 kbAssets 声明顺序一致，key 为归一化后的插件根相对路径 */
+  assets?: PluginAsset[] | null;
 }
 
 /**
@@ -286,7 +287,7 @@ export const usePluginStore = defineStore("plugins", () => {
         const list = await Promise.all(
           index.map(async ({ id, version }) => {
             const cached = await pluginCacheDb.plugins.get(id);
-            if (cached && cached.version === version) {
+            if (cached && cached.version === version && isPluginAssetList(cached.data.assets)) {
               return cached.data;
             }
             const full = await invoke<Plugin>("get_plugin_detail", {

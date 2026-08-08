@@ -8,6 +8,7 @@ use crate::local_folder::scan_service::{
     scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanOptions, ScannedDir, ScannedFile,
 };
 use crate::local_folder::status::{now_millis, FolderStatus};
+use crate::local_folder::SyncMode;
 use crate::settings::Settings;
 use crate::storage::image_events::delete_images_with_events;
 use crate::storage::{Album, Storage};
@@ -23,7 +24,6 @@ use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 const CANCEL_MARKER: &str = "__folder_sync_canceled__";
-const NAME_SEPARATOR: &str = "-";
 
 /// 同步的逐文件节流间隔：**只在真正写了库之后**才等这一手（新增 / 链接进画册 / 重导入）。
 /// 已入库且本次什么都没做的文件全速掠过——否则一个几万张图的老目录，光空转就要几十分钟。
@@ -74,7 +74,36 @@ pub async fn sync_all_local_folder_albums() -> Vec<SyncReport> {
 
     let mut reports = Vec::with_capacity(albums.len());
     for album in albums {
-        match sync_album(&album.id, SyncAlbumOptions::default()).await {
+        let Some(mode) = SyncMode::from_str(&album.sync_mode) else {
+            eprintln!(
+                "[local_folder] skip album {} with invalid sync_mode {}",
+                album.id, album.sync_mode
+            );
+            continue;
+        };
+        let options = match mode {
+            SyncMode::Recursive => SyncAlbumOptions {
+                recursive: true,
+                create_missing_albums: true,
+                forbidden_roots: {
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        crate::commands::album::local_folder_forbidden_roots()
+                    }
+                    #[cfg(target_os = "android")]
+                    {
+                        Vec::new()
+                    }
+                },
+            },
+            SyncMode::Shallow => SyncAlbumOptions {
+                recursive: false,
+                create_missing_albums: false,
+                forbidden_roots: Vec::new(),
+            },
+            SyncMode::Delegated | SyncMode::None => continue,
+        };
+        match sync_album(&album.id, options).await {
             Ok(report) => reports.push(report),
             Err(err) => {
                 eprintln!("[local_folder] sync_album {} failed: {err}", album.id);
@@ -98,7 +127,6 @@ pub async fn sync_albums_by_ids(ids: &[String]) -> Vec<Result<SyncReport, String
 #[derive(Clone)]
 struct SyncDirCtx {
     album_id: String,
-    album_name: String,
     skip_files: bool,
 }
 
@@ -342,7 +370,6 @@ impl FolderScanHook for SyncHook {
             skip_since = self.should_skip_dir(dir_path, found.folder_status.as_deref());
             SyncDirCtx {
                 album_id: found.id,
-                album_name: found.name,
                 skip_files: skip_since.is_some(),
             }
         } else {
@@ -350,9 +377,23 @@ impl FolderScanHook for SyncHook {
                 return Ok(None);
             }
             // 新子目录：在父画册下创建子画册。
-            let name = format!("{}{}{}", parent.album_name, NAME_SEPARATOR, enter.name);
-            let entry = build_entries_non_recursive(&name, dir_path, Some(&parent.album_id));
-            let created = Storage::global()
+            let mut name = enter.name.clone();
+            let storage = Storage::global();
+            if storage
+                .find_child_album_by_name_ci(Some(&parent.album_id), &name)
+                .map_err(ScanError::Skip)?
+                .is_some()
+            {
+                let conn = storage
+                    .db
+                    .lock()
+                    .map_err(|e| ScanError::Skip(format!("Lock error: {e}")))?;
+                name = Storage::resolve_scoped_name_ci(&conn, Some(&parent.album_id), &name, None)
+                    .map_err(ScanError::Skip)?;
+            }
+            let mut entry = build_entries_non_recursive(&name, dir_path, Some(&parent.album_id));
+            entry.sync_mode = SyncMode::None;
+            let created = storage
                 .add_local_folder_albums_tx(std::slice::from_ref(&entry))
                 .map_err(ScanError::Skip)?
                 .into_iter()
@@ -363,7 +404,6 @@ impl FolderScanHook for SyncHook {
             self.record_created_album();
             let ctx = SyncDirCtx {
                 album_id: created.id.clone(),
-                album_name: created.name.clone(),
                 skip_files: false,
             };
             self.existing.insert(canon, created);
@@ -544,7 +584,6 @@ pub async fn sync_album(album_id: &str, options: SyncAlbumOptions) -> Result<Syn
     }
     let root_ctx = SyncDirCtx {
         album_id: album_id.to_string(),
-        album_name: album.name.clone(),
         skip_files: root_skip_since.is_some(),
     };
     // 不用通用 min_collect_interval：同步自己在 on_file 里按「是否写了库」节流。
@@ -587,9 +626,17 @@ pub async fn sync_album(album_id: &str, options: SyncAlbumOptions) -> Result<Syn
         report.synced_albums = visited.len();
         for id in storage.list_subtree_album_ids(album_id)? {
             if !visited.contains(&id) {
-                persist_status(&id, &FolderStatus::now_missing());
-                report.failed += 1;
+                if matches!(
+                    storage.get_album_by_id(&id)?,
+                    Some(album) if album.kind == "local_folder"
+                ) {
+                    persist_status(&id, &FolderStatus::now_missing());
+                    report.failed += 1;
+                }
             }
+        }
+        if hook.created_albums > 0 {
+            let _ = storage.rechain_local_folder_albums();
         }
     }
 

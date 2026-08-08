@@ -14,6 +14,16 @@
     @open-gallery-filter="handleOpenGalleryFilter"
     @open-surf-record="handleOpenSurfRecord"
   >
+    <!-- header / aside 必须按需透传：无条件声明会让 core 误判 $slots.aside 存在而切换多栏布局 -->
+    <template v-if="$slots.header" #header>
+      <slot name="header" v-bind="beforeGridSlotProps" />
+    </template>
+    <template v-if="$slots.aside" #aside>
+      <slot name="aside" />
+    </template>
+    <template v-if="$slots['aside-right']" #aside-right>
+      <slot name="aside-right" />
+    </template>
     <template #before-grid>
       <slot name="before-grid" v-bind="beforeGridSlotProps" />
     </template>

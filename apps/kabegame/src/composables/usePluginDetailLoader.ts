@@ -2,6 +2,7 @@ import { computed, ref, watch, type Ref } from "vue";
 import { invoke } from "@/api/rpc";
 import { IS_WEB } from "@kabegame/core/env";
 import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
+import { isPluginAssetList } from "@kabegame/core/utils/assetPath";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 
 export interface UsePluginDetailLoaderOptions {
@@ -66,7 +67,11 @@ export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
     if (IS_WEB && sourceId.value) {
       const dexieKey = `${sourceId.value}:${id}`;
       const dexieCached = await storePluginCacheDb.details.get(dexieKey);
-      if (dexieCached && (!expectedVersion.value || dexieCached.version === expectedVersion.value)) {
+      if (
+        dexieCached &&
+        (!expectedVersion.value || dexieCached.version === expectedVersion.value) &&
+        isPluginAssetList(dexieCached.data.assets)
+      ) {
         plugin.value = dexieCached.data;
         pluginStore.setCachedPluginDetail(cacheKey, dexieCached.data);
         loading.value = false;

@@ -183,7 +183,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   }
 
   if (!IS_ANDROID && !IS_WEB && (IS_MACOS || IS_LINUX || IS_WINDOWS)) {
-    entries.push(tauri("realtimeFolderSync", "get_realtime_folder_sync", "set_realtime_folder_sync", "enabled"));
     entries.push(tauri("fastFolderSync", "get_fast_folder_sync", "set_fast_folder_sync", "enabled"));
   }
 
@@ -223,7 +222,11 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   }
   if (!IS_WEB) {
     localEntries.push(frontendLocal("gallery-path", ""));
+    // album-detail-path 照 gallery-path 平台分化：桌面/Android 用 localStorage，query 注册见下方 IS_WEB 分支
+    localEntries.push(frontendLocal("album-detail-path", ""));
   }
+  // albumIdPathLocal 全平台一致走 localStorage（当前选中画册的本地记忆，见 useAlbumIdPathState）
+  localEntries.push(frontendLocal("albumIdPathLocal", ""));
   for (const entry of localEntries) assignEntry(map, entry);
 
   if (IS_WEB) {
@@ -263,12 +266,14 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     query("superMode", "super", booleanQueryCodec),
     query("task-detail-path", "path"),
     query("surf-images-path", "path"),
-    query("album-detail-path", "path"),
+    // 当前选中画册的祖先 id 链：query 参数名用 "album"，短且不与 "path" 冲突，全平台统一
+    query("albumIdPath", "album"),
   ];
   if (IS_WEB) {
     queryEntries.push(
       // @ts-expect-error 非web下用localStorage
-      query("gallery-path", "path")
+      query("gallery-path", "path"),
+      query("album-detail-path", "path"),
     )
   }
   for (const entry of queryEntries) assignEntry(map, entry);

@@ -23,7 +23,7 @@
 import { computed, ref } from "vue";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginQuickPreviewCarousel from "./PluginQuickPreviewCarousel.vue";
-import { guessAssetMime, isBannerAsset } from "../../utils/assetPath";
+import { bannerPreviewImages, type PluginAsset } from "../../utils/assetPath";
 
 /** 滚动容器：供外层目录点击跳转 / scrollspy 使用 */
 const scrollEl = ref<HTMLElement | null>(null);
@@ -32,7 +32,7 @@ defineExpose({ scrollEl });
 const props = withDefaults(
   defineProps<{
     markdown?: string | null;
-    assets?: Record<string, string> | null;
+    assets?: PluginAsset[] | null;
     anchorPrefix?: string;
     showCarousel?: boolean;
     emptyDescription?: string;
@@ -52,15 +52,6 @@ const emit = defineEmits<{
   (e: "image-preview-close", payload: { index: number; count: number; src: string; alt: string }): void;
 }>();
 
-// 走马灯素材：复用 assets 表里的 banner 图，与 PluginBrowser.vue 的 hover 快捷预览构造方式一致
-const images = computed(() => {
-  const assets = props.assets ?? {};
-  return Object.keys(assets)
-    .filter(isBannerAsset)
-    .sort()
-    .map((key) => ({
-      key,
-      src: `data:${guessAssetMime(key)};base64,${assets[key]}`,
-    }));
-});
+// 走马灯素材：按 kbAssets 声明顺序复用 banner 图，与快捷预览构造方式一致。
+const images = computed(() => bannerPreviewImages(props.assets));
 </script>

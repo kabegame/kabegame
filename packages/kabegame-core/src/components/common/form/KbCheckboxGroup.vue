@@ -1,36 +1,24 @@
 <template>
+  <!-- 全选与已选计数渲染在 el-form-item 的 label 行（见 PluginVarsForm），这里只负责选项本体 -->
   <div class="var-checkbox-group-field">
-    <div v-if="optionValues.length > 0" class="var-checkbox-group-field__count">
-      {{ selectedInOptionsCount }}/{{ optionValues.length }}
-    </div>
-    <div class="var-checkbox-group-field__box">
-      <button
-        v-if="normalizedOptions.length > 1"
-        type="button"
-        class="var-checkbox-group-field__tag is-all"
-        :class="{ 'is-indeterminate': isIndeterminate }"
-        @click="onToggleAll(!allOptionsSelected)"
-      >
-        <span class="var-checkbox-group-field__dash"></span>
-        {{ t("plugins.pluginVarSelectAll") }}
-      </button>
-      <button
-        v-for="opt in normalizedOptions"
-        :key="opt.value"
-        type="button"
-        class="var-checkbox-group-field__tag"
-        :class="{ 'is-on': valueForGroup.includes(opt.value) }"
-        @click="toggleOne(opt.value)"
-      >
-        <span v-if="valueForGroup.includes(opt.value)">✓ </span>{{ opt.label }}
-      </button>
-    </div>
+    <button
+      v-for="opt in normalizedOptions"
+      :key="opt.value"
+      type="button"
+      class="var-checkbox-group-field__tag"
+      :class="{ 'is-on': valueForGroup.includes(opt.value) }"
+      @click="toggleOne(opt.value)"
+    >
+      <span class="var-checkbox-group-field__check">
+        <template v-if="valueForGroup.includes(opt.value)">✓</template>
+      </span>
+      {{ opt.label }}
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { useI18n } from "@kabegame/i18n";
 
 type VarOption = string | { name: string | Record<string, string>; variable: string };
 
@@ -46,8 +34,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   "update:modelValue": [value: string[]];
 }>();
-
-const { t } = useI18n();
 
 function optionLabel(o: VarOption): string {
   if (typeof o === "string") return o;
@@ -70,33 +56,6 @@ const valueForGroup = computed<string[]>(() => {
   return Array.isArray(props.modelValue) ? (props.modelValue as unknown[]).map((x) => `${x}`) : [];
 });
 
-const optionValues = computed(() => normalizedOptions.value.map((o) => o.value));
-
-const allOptionsSelected = computed(() => {
-  const vals = optionValues.value;
-  const sel = valueForGroup.value;
-  return vals.length > 0 && vals.every((v) => sel.includes(v));
-});
-
-const isIndeterminate = computed(() => {
-  const vals = optionValues.value;
-  const sel = valueForGroup.value;
-  const n = vals.filter((v) => sel.includes(v)).length;
-  return n > 0 && n < vals.length;
-});
-
-const selectedInOptionsCount = computed(() => {
-  const vals = optionValues.value;
-  const sel = valueForGroup.value;
-  return vals.filter((v) => sel.includes(v)).length;
-});
-
-function onToggleAll(checked: boolean) {
-  const vals = optionValues.value;
-  if (vals.length === 0) return;
-  emit("update:modelValue", checked ? [...vals] : []);
-}
-
 function toggleOne(value: string) {
   const sel = valueForGroup.value;
   const next = sel.includes(value) ? sel.filter((v) => v !== value) : [...sel, value];
@@ -105,69 +64,54 @@ function toggleOne(value: string) {
 </script>
 
 <style scoped>
+/* 容器风格对齐 KbSegmentedControl（同底色/圆角/内距），同一行里两种控件才像一家人；
+   区别是多选可换行，选项多时限高滚动 */
 .var-checkbox-group-field {
-  width: 100%;
-}
-
-.var-checkbox-group-field__count {
-  margin-bottom: 6px;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--el-text-color-secondary);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.var-checkbox-group-field__box {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--anime-primary) 9%, transparent);
+  width: fit-content;
+  max-width: 100%;
   max-height: min(40vh, 120px);
   overflow-y: auto;
-  padding: 2px;
 }
 
 .var-checkbox-group-field__tag {
   appearance: none;
-  height: 26px;
-  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 13px;
   border: none;
   border-radius: 9px;
   margin: 0;
-  background: color-mix(in srgb, var(--anime-primary) 6%, transparent);
-  color: var(--anime-text-primary);
+  background: transparent;
+  color: var(--anime-text-secondary);
   cursor: pointer;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   white-space: nowrap;
+  transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
 }
-.var-checkbox-group-field__tag:hover {
-  background: color-mix(in srgb, var(--anime-primary) 14%, transparent);
+.var-checkbox-group-field__tag:not(.is-on):hover {
+  color: var(--anime-primary);
 }
 .var-checkbox-group-field__tag.is-on {
-  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+  background: linear-gradient(135deg, var(--anime-primary), var(--anime-secondary));
   color: #fff;
   font-weight: 600;
+  box-shadow: 0 3px 10px rgba(255, 107, 157, 0.3);
 }
-.var-checkbox-group-field__tag.is-on:hover {
-  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-}
-.var-checkbox-group-field__tag.is-all {
-  background: #fff;
-  border: 1px dashed var(--anime-secondary);
-  color: var(--anime-text-secondary);
-  font-weight: 600;
+/* 固定宽度勾选槽：选中/未选中切换时按钮不跳宽 */
+.var-checkbox-group-field__check {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  width: 14px;
+  margin-right: 4px;
 }
-.var-checkbox-group-field__tag.is-all.is-indeterminate {
-  border-style: solid;
-}
-.var-checkbox-group-field__dash {
-  width: 9px;
-  height: 2px;
-  background: var(--anime-text-secondary);
-  border-radius: 1px;
-}
+
 </style>

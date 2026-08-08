@@ -645,7 +645,8 @@ mod tests {
                 type TEXT NOT NULL DEFAULT 'normal',
                 sync_folder TEXT,
                 folder_status TEXT,
-                ancestor_path TEXT NOT NULL DEFAULT ''
+                ancestor_path TEXT NOT NULL DEFAULT '',
+                sync_mode TEXT NOT NULL DEFAULT 'none'
             );
             INSERT INTO albums (id, name, created_at, parent_id, ancestor_path) VALUES
                 ('album-a', '星穹铁道', 1, NULL, '/album-a/'),

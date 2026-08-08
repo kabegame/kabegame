@@ -7,6 +7,7 @@ pub mod scan;
 pub mod scan_service;
 pub mod status;
 pub mod sync;
+pub mod sync_mode;
 pub mod watch;
 
 #[cfg(test)]
@@ -22,3 +23,4 @@ pub use status::FolderStatus;
 pub use sync::{
     sync_album, sync_albums_by_ids, sync_all_local_folder_albums, SyncAlbumOptions, SyncReport,
 };
+pub use sync_mode::SyncMode;

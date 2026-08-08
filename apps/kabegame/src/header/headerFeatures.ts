@@ -17,6 +17,7 @@ import {
   Document,
   InfoFilled,
   Hide,
+  Expand,
 } from "@kabegame/element-plus-icons";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -40,6 +41,16 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.Refresh,
       label: t("header.refresh"),
       icon: Refresh,
+    },
+    {
+      id: HeaderFeatureId.AlbumTree,
+      label: t("header.albumTree"),
+      icon: Expand,
+    },
+    {
+      id: HeaderFeatureId.AlbumInfo,
+      label: t("header.albumInfo"),
+      icon: InfoFilled,
     },
     {
       id: HeaderFeatureId.StopTask,

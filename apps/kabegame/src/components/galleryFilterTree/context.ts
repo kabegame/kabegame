@@ -58,10 +58,17 @@ export interface GalleryFilterTreeContext {
 export const GalleryFilterTreeContextKey: InjectionKey<GalleryFilterTreeContext> =
   Symbol("GalleryFilterTreeContext");
 
+/**
+ * @deprecated 树基座迁移后 ctx 改为显式传参（createGalleryFacetSource(ctx, deps)），
+ * 注入链已无消费者；保留导出仅为过渡，勿在新代码中使用。
+ */
 export function provideGalleryFilterTreeContext(context: GalleryFilterTreeContext) {
   provide(GalleryFilterTreeContextKey, context);
 }
 
+/**
+ * @deprecated 同 provideGalleryFilterTreeContext——ctx 请显式传参。
+ */
 export function useGalleryFilterTreeContext() {
   const context = inject(GalleryFilterTreeContextKey);
   if (!context) {

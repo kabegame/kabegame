@@ -58,6 +58,9 @@ albums:
   errors:
     nameExists: 画册名称已存在，请换一个名称
     parentNotFound: "父画册不存在: {id}"
+    parentIsLocalFolder: 本地文件夹画册的内容由文件夹同步管理，不能在其下手动创建子画册
+    cannotMoveLocalFolder: 本地文件夹画册的位置由其磁盘路径决定，不能手动移动
+    cannotMoveIntoLocalFolder: 不能将画册移动到本地文件夹画册下
   localFolderErrors:
     androidUnsupported: 安卓平台不支持本地文件夹同步
     nameRequired: 画册名称不能为空

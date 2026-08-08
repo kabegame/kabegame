@@ -133,8 +133,9 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
 }
 
 watch(
-  [() => props.image?.id, () => props.image?.pluginVersion],
+  [() => props.image?.metadataId],
   () => {
+    console.log('reload metadata');
     void loadMetadataForImage(props.image ?? null);
   },
   { immediate: true },

@@ -46,7 +46,8 @@
     <el-dialog :model-value="previewModal.isOpen.value" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
       class="image-preview-dialog" :show-close="true" :lock-scroll="true"
       :z-index="previewFullscreenZIndex" @update:model-value="previewModal.close" @close="closePreview">
-      <div v-if="previewModal.isOpen.value" class="preview-desktop-body">
+      <div v-if="previewModal.isOpen.value" class="preview-desktop-body"
+        :class="{ 'is-app-fullscreen': isAppFullscreen }">
         <KbResizable
           v-model="detailDrawerLeftWidth"
           tag="aside"
@@ -77,7 +78,10 @@
             />
           </div>
         </KbResizable>
+        <!-- 全屏层的 z-index 必须走内联 style：SFC 的 v-bind() 只把自定义属性下发到组件根节点，
+             el-dialog 的根是 Teleport，Vue 不会往里遍历，写在 <style> 里的 v-bind 恒为 auto -->
         <div ref="previewContainerRef" class="preview-container" :class="{ 'is-app-fullscreen': isAppFullscreen }"
+          :style="isAppFullscreen ? { zIndex: previewFullscreenZIndex } : undefined"
           @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
           @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
           <button v-if="!isAppFullscreen" type="button"
@@ -125,8 +129,9 @@
             </button>
           </div>
           <div v-if="previewImage && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
+            <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
             <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
-              @ready="handlePreviewReady" />
+              :native-drag="!panzoomCanPan" @ready="handlePreviewReady" />
           </div>
           <PreviewControlBar
             ref="imageControlBarRef"
@@ -364,6 +369,8 @@ let panzoomZoomIn!: () => void;
 let panzoomZoomOut!: () => void;
 let panzoomZoomTo!: (scale: number, animate?: boolean) => void;
 let panzoomScale!: Ref<number>;
+/** 拖动会否平移画面；为 false 时把指针让给浏览器原生图片拖拽 */
+let panzoomCanPan!: Ref<boolean>;
 // Android 上划删除相关状态
 const swipeDeleteActive = ref(false);
 const swipeDeleteReady = ref(false);
@@ -433,6 +440,7 @@ const markPreviewInteracting = () => {
 ({
   wrapperRef: panzoomWrapperRef,
   scale: panzoomScale,
+  canPan: panzoomCanPan,
   handleWheel: handlePanzoomWheel,
   reset: panzoomReset,
   destroy: panzoomDestroy,
@@ -1290,12 +1298,19 @@ body.image-preview-hides-kamechan .kamechan-host {
     box-sizing: border-box;
     position: relative;
 
+    /* z-index 由模板内联绑定给出（见模板处注释），这里不写 v-bind */
     &.is-app-fullscreen {
       position: fixed;
       inset: 0;
-      z-index: v-bind(previewFullscreenZIndex);
       background: #000;
     }
+  }
+
+  /* 全屏时容器 position: fixed 脱离了这条 flex 行，两个抽屉会塌到左侧挤成一团；
+     且抽屉是 position: relative（resize handle 需要），与 fixed 容器同属定位层，
+     DOM 在后的右抽屉会直接画在全屏图上。全屏即纯图，直接不参与布局 */
+  .preview-desktop-body.is-app-fullscreen > .preview-detail-drawer {
+    display: none;
   }
 
   .preview-detail-toggle,
