@@ -15,6 +15,7 @@ import {
   stageResourceFile,
   TARGET_ARCH,
 } from "../utils.ts";
+import { CEF_FALLBACK_PAK, CEF_LOCALE_PAKS } from "../cef-locales.ts";
 import chalk from "chalk";
 import { execSync } from "child_process";
 import fs from "fs";
@@ -56,8 +57,9 @@ const WINDOWS_CEF_RUNTIME_FILES = [
   "dxcompiler.dll",
   "dxil.dll",
 ];
-// en-US.pak 必留(CEF 找不到系统语言时回退它,缺失会启动报错)。
-const CEF_LOCALES = ["en-US.pak", "zh-CN.pak", "zh-TW.pak", "ja.pak", "ko.pak"];
+// locales 白名单来自 scripts/cef-locales.ts(单一来源,与 build-chromium.ts 的
+// 导出期裁剪共用)。自编 cef-build-* 在导出期就已经只剩白名单,这里再挑一次是
+// 幂等的重复工作,留着给「CEF_PATH 指向未经裁剪的目录」兜底。
 
 // Windows 运行时 DLL 清单（位于仓库根 bin/windows/，构建时复制到 resources/bin）。
 // 仅 libav*（由 scripts/build-ffmpeg.ts 产出，FFmpeg 8.x 主版本后缀）；
@@ -379,12 +381,12 @@ export class OSPlugin extends BasePlugin {
     const localesDst = path.join(dst, "locales");
     ensureDir(localesDst);
     let copied = 0;
-    for (const f of CEF_LOCALES) {
+    for (const f of CEF_LOCALE_PAKS) {
       const s = path.join(src, "locales", f);
       if (!fs.existsSync(s)) {
-        if (f === "en-US.pak") {
+        if (f === CEF_FALLBACK_PAK) {
           throw new Error(
-            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${
+            `❌ CEF locales 缺少 ${CEF_FALLBACK_PAK}(CEF 必需的回退语言): ${
               path.join(src, "locales")
             }`,
           );
@@ -397,7 +399,7 @@ export class OSPlugin extends BasePlugin {
     }
     this.log(
       chalk.cyan(
-        `已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ bin/linux/locales/`,
+        `已收集 CEF locales(白名单 ${copied}/${CEF_LOCALE_PAKS.length})→ bin/linux/locales/`,
       ),
     );
   }
@@ -425,12 +427,12 @@ export class OSPlugin extends BasePlugin {
     const localesDst = path.join(dst, "locales");
     ensureDir(localesDst);
     let copied = 0;
-    for (const f of CEF_LOCALES) {
+    for (const f of CEF_LOCALE_PAKS) {
       const s = path.join(src, "locales", f);
       if (!fs.existsSync(s)) {
-        if (f === "en-US.pak") {
+        if (f === CEF_FALLBACK_PAK) {
           throw new Error(
-            `❌ CEF locales 缺少 en-US.pak(CEF 必需的回退语言): ${
+            `❌ CEF locales 缺少 ${CEF_FALLBACK_PAK}(CEF 必需的回退语言): ${
               path.join(src, "locales")
             }`,
           );
@@ -443,7 +445,7 @@ export class OSPlugin extends BasePlugin {
     }
     this.log(
       chalk.cyan(
-        `已收集 CEF locales(白名单 ${copied}/${CEF_LOCALES.length})→ resources/cef/locales/`,
+        `已收集 CEF locales(白名单 ${copied}/${CEF_LOCALE_PAKS.length})→ resources/cef/locales/`,
       ),
     );
   }

@@ -216,6 +216,26 @@ deno task build:chromium prod
 automate。它**不触碰工作区、也不动仓库 index**，构建前后 `git status` 一致；工作区若没有
 任何 patch（说明忘了 `deno task patch cef`），它会直接报错拦下而不是静默产出无 patch 的 CEF。
 
+**固化提交的身份只由内容决定（防误触发全量重编）。** commit 对象的 SHA 含提交时间戳，
+内容相同的 `commit-tree` 每次也会得到新 hash；而 automate 全凭 hash 判断「cef 变没变」，
+判定为变会 `delete_directory(src/cef)` + 整树重拷（几万文件 mtime 全新）并强制进编译，
+ninja 按 mtime 判脏 → 内容零变化也能重编数万 target、耗时数小时。对策有三层，全在
+`build-chromium.ts`：
+
+1. **memo**：`kabegame-build` 已指向同一 `(parent, tree)` 时直接复用旧提交；新建提交时把
+   日期钉在上游 pin 的 committer date、身份固定，hash 成为 `(tree, parent)` 的纯函数
+   （分支丢失/换机器重算也撞回同一 hash）。
+2. **判定权交还 automate**：增量构建不再传 `--force-cef-update`（它会无视 hash 比对恒判
+   「变了」）；保留 `--force-build`（无脏文件时 ninja 秒级 no-op，兜底中断残留）与
+   `--force-distrib`（分钟级，保证只改导出规则——如 CEF locale 白名单——不用重编即生效）。
+3. **mtime 保全**：cef 内容真变时，同步阶段（`--no-build --no-distrib` 先行一趟）前后对
+   `src/cef` 全树 + 被 CEF patch 的 chromium 文件做 `(sha1, mtime)` 快照比对，内容未变的
+   写回原 mtime——整删重拷的 churn 被中和，ninja 只重编真实变更的依赖锥，并在日志中列出
+   变更文件。
+
+因此纯 rerun / 只改导出逻辑时增量构建为分钟级（同步跳过 + no-op ninja + 重打包导出）；
+只有 patch 内容或上游 pin 真变时才触发重编，且范围贴近真实依赖锥。
+
 因此 `third/cef` 的 gitlink **始终指向官方上游 pin**（当前 `0d0eeb611`），Kabegame 的分歧
 只以 `third-patches/cef/*.patch` 为准，与其它 `third/` 子模块完全同构。
 

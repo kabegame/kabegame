@@ -27,6 +27,13 @@
  *   CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod
  * 成因见 checkNoNodeModulesAncestor()（构建前会拦下不合规布局）。
  *
+ * dev/prod 共用同一个 out/Release_GN_*，GN_DEFINES 不同（official/PGO vs 非
+ * official），交替构建会互相覆盖对方的对象文件——每次切换 variant 都是一次全量。
+ * 频繁两边出包时建议按 variant 各备一套工作区（APFS 上 `cp -Rpc` 写时复制克隆，
+ * 数据零成本）：
+ *   prod: CEFBUILD=~/kabegame-cefbuild        deno task build:chromium prod
+ *   dev:  CEFBUILD=~/kabegame-cefbuild-dev    deno task build:chromium dev
+ *
  * Linux 关键前提：Chromium/CEF 的源码树重度依赖符号链接、POSIX 权限和大小写敏感，
  * exFAT/NTFS 都不行，构建根必须位于 POSIX 文件系统。
  *
@@ -40,6 +47,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   BUILD_PLATFORM,
@@ -52,6 +60,12 @@ import {
   THIRD_DIR,
   type TargetArch,
 } from "./paths.ts";
+import {
+  CEF_FALLBACK_PAK,
+  isDroppedLocalePak,
+  isDroppedMacOSLproj,
+  MACOS_CEF_FALLBACK_LPROJ,
+} from "./cef-locales.ts";
 
 type Variant = "dev" | "prod";
 
@@ -92,6 +106,8 @@ interface BuildContext {
   pgoFlags: string[];
   distribFlags: string[];
   updateFlags: string[];
+  /** 增量构建(复用已有 checkout);runBuild 据此走「同步→mtime 恢复→编译」两阶段。 */
+  incremental: boolean;
 }
 
 // CEF_BRANCH 对应 CEF 149.0.x / Chromium 149.0.7827.x，与 cef-rs "149" 对齐；
@@ -343,6 +359,7 @@ function createContext(parsed: ParsedArgs): BuildContext {
     pgoFlags: [],
     distribFlags: [],
     updateFlags: [],
+    incremental: false,
   };
 }
 
@@ -481,6 +498,55 @@ function stageCefPatchesAsCommit(ctx: BuildContext): string {
     run("git", ["-C", ctx.cefSource, "read-tree", head], { env });
     run("git", ["-C", ctx.cefSource, "add", "-A"], { env });
     const tree = capture("git", ["-C", ctx.cefSource, "write-tree"], { env });
+
+    // memo:分支已指向同一 (parent, tree) 时复用旧提交,不再新建。
+    // commit 对象的 SHA 含提交时间戳,内容相同的 commit-tree 每次也会得到新 hash;
+    // 而 automate-git 全凭 hash 判断「cef 变没变」,新 hash 会触发 src/cef 整删重拷
+    // 与 ninja 大范围重编。tree+parent 相同 ⇔ 待构建源码逐字节相同 ⇔ 沿用旧身份。
+    if (
+      commandSucceeds(
+        "git",
+        ["-C", ctx.cefSource, "rev-parse", "--verify", "--quiet", `${CEF_BUILD_BRANCH}^`],
+        { env: ctx.env },
+      )
+    ) {
+      const [prev, prevParent, prevTree] = capture(
+        "git",
+        [
+          "-C",
+          ctx.cefSource,
+          "rev-parse",
+          CEF_BUILD_BRANCH,
+          `${CEF_BUILD_BRANCH}^`,
+          `${CEF_BUILD_BRANCH}^{tree}`,
+        ],
+        { env: ctx.env },
+      ).split("\n");
+      if (prevParent === head && prevTree === tree) {
+        log(
+          `CEF patch 未变,复用已固化提交 ${prev.slice(0, 9)}(分支 ${CEF_BUILD_BRANCH})`,
+        );
+        return prev;
+      }
+    }
+
+    // 新建提交时把日期钉在上游 pin 的 committer date、身份固定:
+    // 让 commit hash 成为 (tree, parent) 的纯函数——分支丢失或换机器重算,
+    // 也能得到同一个 hash,不至于凭空触发一次全量重编。
+    const pinDate = capture(
+      "git",
+      ["-C", ctx.cefSource, "show", "-s", "--format=%cI", head],
+      { env: ctx.env },
+    );
+    const commitEnv = {
+      ...env,
+      GIT_AUTHOR_NAME: "kabegame-build",
+      GIT_AUTHOR_EMAIL: "build@kabegame.invalid",
+      GIT_AUTHOR_DATE: pinDate,
+      GIT_COMMITTER_NAME: "kabegame-build",
+      GIT_COMMITTER_EMAIL: "build@kabegame.invalid",
+      GIT_COMMITTER_DATE: pinDate,
+    };
     const commit = capture(
       "git",
       [
@@ -493,7 +559,7 @@ function stageCefPatchesAsCommit(ctx: BuildContext): string {
         "-m",
         "kabegame: third-patches/cef series (auto-staged for automate-git)",
       ],
-      { env },
+      { env: commitEnv },
     );
     run(
       "git",
@@ -732,13 +798,19 @@ function configureUpdate(ctx: BuildContext): void {
     );
     ctx.updateFlags = ["--force-clean"];
   } else {
-    log("增量：复用 Chromium checkout，同步 third/cef 后重编 + 重新打包");
+    log("增量：复用 Chromium checkout;patch 未变时跳过重编,仅重打包 + 导出");
+    // 不传 --force-cef-update:cef 变没变交给 automate-git 的 hash 比对判断
+    // (staged commit 已由 memo 保证「内容相同 ⇒ hash 相同」,比对才有意义)。
+    // 保留 --force-build:进 build 段会先跑 gclient_hook(gn gen,GN_DEFINES 改动
+    // 因此仍然生效),ninja 无脏文件时是秒级 no-op,还兜底上次编译中断的残缺 out。
+    // 保留 --force-distrib:make_distrib+导出只有分钟级,保证导出规则改动
+    // (如 locale 白名单)不用重编也能生效。
     ctx.updateFlags = [
       "--no-chromium-update",
-      "--force-cef-update",
       "--force-build",
       "--force-distrib",
     ];
+    ctx.incremental = true;
   }
 }
 
@@ -824,6 +896,53 @@ function copyDirectoryContents(source: string, destination: string): void {
   }
 }
 
+/** 导出期被 locale 白名单剔除的条目数,仅用于日志。 */
+let droppedLocales = 0;
+
+/**
+ * 拷贝 CEF 运行时,途中按白名单剔除用不到的 locale(见 scripts/cef-locales.ts)。
+ * 全量 228 个 locale 约 52MB,应用只可能显示其中 5 种;在导出期就不导出,
+ * `cef-build-{dev,prod}` 本身与后续所有消费者(dev 直链、tauri 打包)就都是瘦的。
+ *
+ * 两种排布分别处理:
+ * - macOS:framework 内 `Resources/<locale>.lproj/`
+ * - Linux/Windows:扁平 `locales/<locale>.pak`
+ *
+ * 除 locale 外一律原样拷贝,符号链接保持 verbatim(framework 的 `Versions/Current → A`
+ * 等内部链接不能被 deref,否则 200MB+ 的二进制会被复制成两份)。
+ */
+function copyRuntimeTree(source: string, destination: string): void {
+  const stat = fs.lstatSync(source);
+  if (stat.isSymbolicLink()) {
+    fs.symlinkSync(fs.readlinkSync(source), destination);
+    return;
+  }
+  if (!stat.isDirectory()) {
+    copyPath(source, destination);
+    return;
+  }
+  fs.mkdirSync(destination, { recursive: true });
+  const inLocalesDir = path.basename(source) === "locales";
+  for (const entry of fs.readdirSync(source)) {
+    // .lproj 只出现在 framework 的 Resources/ 下,.pak 的判断则限定在 locales/ 内
+    // ——否则会误伤同层的 resources.pak / chrome_100_percent.pak。
+    if (
+      isDroppedMacOSLproj(entry) || (inLocalesDir && isDroppedLocalePak(entry))
+    ) {
+      droppedLocales++;
+      continue;
+    }
+    copyRuntimeTree(path.join(source, entry), path.join(destination, entry));
+  }
+  fs.utimesSync(destination, stat.atime, stat.mtime);
+}
+
+function copyRuntimeDirectoryContents(source: string, destination: string): void {
+  for (const entry of fs.readdirSync(source)) {
+    copyRuntimeTree(path.join(source, entry), path.join(destination, entry));
+  }
+}
+
 function exportCefRuntime(ctx: BuildContext, distrib: string): void {
   const tmpDir = `${ctx.exportDir}.tmp`;
   let frameworkDir: string | undefined;
@@ -853,11 +972,14 @@ function exportCefRuntime(ctx: BuildContext, distrib: string): void {
   // cef-dll-sys 需要扁平 runtime：Linux/Windows 把 distrib 的 Release/Resources
   // 内容拷到根层；macOS framework 必须取 GN build output（不是 distrib），其余
   // headers/cmake/libcef_dll 仍取 distrib。framework 内的相对符号链接必须原样保留。
+  // copyRuntimeTree 途中剔除非白名单 locale(见 scripts/cef-locales.ts);
+  // headers/cmake/libcef_dll 那些不含 locale,继续走普通 copyPath。
+  droppedLocales = 0;
   if (frameworkDir) {
-    copyPath(frameworkDir, path.join(tmpDir, ctx.runtimeLib));
+    copyRuntimeTree(frameworkDir, path.join(tmpDir, ctx.runtimeLib));
   } else {
-    copyDirectoryContents(path.join(distrib, "Release"), tmpDir);
-    copyDirectoryContents(path.join(distrib, "Resources"), tmpDir);
+    copyRuntimeDirectoryContents(path.join(distrib, "Release"), tmpDir);
+    copyRuntimeDirectoryContents(path.join(distrib, "Resources"), tmpDir);
   }
 
   for (
@@ -885,9 +1007,21 @@ function exportCefRuntime(ctx: BuildContext, distrib: string): void {
   );
 
   const runtimePath = path.join(tmpDir, ctx.runtimeLib);
+  // 回退 locale 必须活过白名单过滤:CEF 匹配不到系统语言时用它,缺失会启动报错。
   if (BUILD_PLATFORM === "macos") {
     if (!fs.existsSync(runtimePath) || !fs.statSync(runtimePath).isDirectory()) {
       die(`导出失败: ${runtimePath} 不存在`);
+    }
+    const fallback = path.join(
+      runtimePath,
+      "Versions",
+      "A",
+      "Resources",
+      MACOS_CEF_FALLBACK_LPROJ,
+      "locale.pak",
+    );
+    if (!fs.existsSync(fallback)) {
+      die(`导出失败: 缺少回退 locale ${MACOS_CEF_FALLBACK_LPROJ}: ${fallback}`);
     }
   } else {
     if (!fs.existsSync(runtimePath) || !fs.statSync(runtimePath).isFile()) {
@@ -897,7 +1031,12 @@ function exportCefRuntime(ctx: BuildContext, distrib: string): void {
     if (!fs.existsSync(localesDir) || !fs.statSync(localesDir).isDirectory()) {
       die(`导出失败: ${localesDir} 不存在`);
     }
+    const fallback = path.join(localesDir, CEF_FALLBACK_PAK);
+    if (!fs.existsSync(fallback)) {
+      die(`导出失败: 缺少回退 locale ${CEF_FALLBACK_PAK}: ${fallback}`);
+    }
   }
+  log(`locale 白名单已生效(剔除 ${droppedLocales} 个,见 scripts/cef-locales.ts)`);
 
   fs.rmSync(ctx.exportDir, { recursive: true, force: true });
   fs.renameSync(tmpDir, ctx.exportDir);
@@ -970,6 +1109,155 @@ function runWithTee(
   });
 }
 
+// ===== 同步阶段的 mtime 保全 =====
+//
+// automate-git 判定「cef 变了」后的同步动作是 delete_directory(src/cef) + 整树重拷:
+// 几万个文件不管内容变没变,mtime 全部刷新。ninja 按 mtime 判脏,被拷的 gni/头文件
+// 又被 chromium 侧广泛引用,结果是内容零变化也能点着数万 target 的重编。
+// 对策:同步前对相关文件快照 (sha1, mtime),同步后凡内容未变的写回原 mtime——
+// 不需要预知 churn 具体来自哪一步(整拷/版本头重写/未来 automate 的新行为),
+// 内容不变就一律兜住;内容真变的保留新 mtime,ninja 只走真实依赖锥。
+
+interface MtimeSnap {
+  size: number;
+  mtimeMs: number;
+  atimeMs: number;
+  sha1: string;
+}
+
+function fileSha1(filePath: string): string {
+  return createHash("sha1").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+/** 递归收集普通文件(跳过 .git——不参与编译,几万 git 对象白算)。 */
+function listFilesRecursive(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === ".git") continue;
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.isFile()) out.push(p);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/**
+ * 从 src/cef/patch/patches/*.patch 的 diff 头解析被 CEF patch 的 chromium 文件。
+ * 当前流程(--no-chromium-update)里这些文件在同步阶段不会被碰,纳入快照纯属兜底:
+ * 万一 automate 的 patch_updater 在别的分支被触发,revert/reapply 的 churn 也能恢复。
+ */
+function listPatchedChromiumFiles(ctx: BuildContext): string[] {
+  const patchesDir = path.join(
+    chromiumSourceDir(ctx),
+    "cef",
+    "patch",
+    "patches",
+  );
+  if (!fs.existsSync(patchesDir)) return [];
+  const files = new Set<string>();
+  for (const name of fs.readdirSync(patchesDir)) {
+    if (!name.endsWith(".patch")) continue;
+    const text = fs.readFileSync(path.join(patchesDir, name), "utf8");
+    for (const m of text.matchAll(/^\+\+\+ b\/(.+)$/gm)) {
+      files.add(path.join(chromiumSourceDir(ctx), m[1]));
+    }
+  }
+  return [...files];
+}
+
+function takeCefMtimeSnapshot(ctx: BuildContext): Map<string, MtimeSnap> {
+  const snapshot = new Map<string, MtimeSnap>();
+  const cefSrcDir = path.join(chromiumSourceDir(ctx), "cef");
+  const candidates = [
+    ...(fs.existsSync(cefSrcDir) ? listFilesRecursive(cefSrcDir) : []),
+    ...listPatchedChromiumFiles(ctx),
+  ];
+  for (const p of candidates) {
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    snapshot.set(p, {
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      atimeMs: st.atimeMs,
+      sha1: fileSha1(p),
+    });
+  }
+  return snapshot;
+}
+
+/** 同步后:内容未变的文件写回原 mtime;顺带把真实变更列出来(即将重编的依赖锥根)。 */
+function restoreUnchangedMtimes(
+  ctx: BuildContext,
+  snapshot: Map<string, MtimeSnap>,
+): void {
+  let restored = 0;
+  const changed: string[] = [];
+  for (const [p, snap] of snapshot) {
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      changed.push(`${p} (已删除)`);
+      continue;
+    }
+    if (!st.isFile()) continue;
+    // mtime 与大小都没动 ⇒ 文件未被碰,跳过(免去重算 sha 的大头开销)
+    if (st.mtimeMs === snap.mtimeMs && st.size === snap.size) continue;
+    if (st.size === snap.size && fileSha1(p) === snap.sha1) {
+      fs.utimesSync(p, new Date(snap.atimeMs), new Date(snap.mtimeMs));
+      restored++;
+    } else {
+      changed.push(p);
+    }
+  }
+  log(`mtime 保全: ${restored} 个文件同步后内容未变,已写回原 mtime`);
+  if (changed.length > 0) {
+    log(`真实变更 ${changed.length} 个(将按依赖锥重编):`);
+    for (const p of changed.slice(0, 20)) {
+      log(`  ${path.relative(chromiumSourceDir(ctx), p)}`);
+    }
+    if (changed.length > 20) log(`  ...等共 ${changed.length} 个`);
+  }
+}
+
+/**
+ * 同步阶段是否有事可做。memo 复用旧提交 + checkout 已停在该提交上时(纯 rerun 的
+ * 常态),automate-git 的同步本来就是 no-op,阶段 A 与快照可以整个跳过。
+ * src/cef 缺失时仍需同步(automate 会从 chromium_git/cef 重拷补齐)。
+ */
+function cefSyncNeeded(ctx: BuildContext): boolean {
+  const cefCheckout = path.join(ctx.cefBuild, "chromium_git", "cef");
+  const cefSrcDir = path.join(chromiumSourceDir(ctx), "cef");
+  if (!fs.existsSync(cefSrcDir)) return true;
+  if (
+    !commandSucceeds(
+      "git",
+      ["-C", cefCheckout, "rev-parse", "--is-inside-work-tree"],
+      { env: ctx.env },
+    )
+  ) {
+    return true;
+  }
+  const current = capture(
+    "git",
+    ["-C", cefCheckout, "rev-parse", "HEAD"],
+    { env: ctx.env },
+  );
+  if (current === ctx.cefSourceCommit) {
+    log("cef checkout 已是目标提交,跳过同步阶段");
+    return false;
+  }
+  return true;
+}
+
 async function runBuild(ctx: BuildContext): Promise<void> {
   const logfile = path.join(ctx.cefBuild, `build-${ctx.variant}.log`);
   log(`开始编译，日志: ${logfile}`);
@@ -1011,6 +1299,24 @@ async function runBuild(ctx: BuildContext): Promise<void> {
   ];
 
   try {
+    // 增量且 cef checkout 与 staged commit 不一致时,拆两阶段跑:
+    //   A. --no-build --no-distrib 只做同步(checkout、src/cef 整删重拷)
+    //   B. 原参数再跑一次(此时 current==desired,同步全为 no-op,直接进编译+打包)
+    // 两阶段之间做 mtime 保全,让 ninja 只看见真实变更。memo 命中且 checkout
+    // 已就位时(最常见的纯 rerun)连阶段 A 都省掉——同步本来就无事可做。
+    if (ctx.incremental && cefSyncNeeded(ctx)) {
+      const syncLogfile = path.join(ctx.cefBuild, `sync-${ctx.variant}.log`);
+      log(`同步阶段开始(日志: ${syncLogfile})`);
+      const snapshot = takeCefMtimeSnapshot(ctx);
+      log(`已快照 ${snapshot.size} 个文件的 (sha1, mtime)`);
+      await runWithTee(
+        ctx.pythonBin,
+        [...args, "--no-build", "--no-distrib"],
+        syncLogfile,
+        ctx.env,
+      );
+      restoreUnchangedMtimes(ctx, snapshot);
+    }
     await runWithTee(ctx.pythonBin, args, logfile, ctx.env);
   } catch (error) {
     die(error instanceof Error ? error.message : String(error));

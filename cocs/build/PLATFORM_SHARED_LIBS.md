@@ -41,17 +41,35 @@ build.rs 在 macOS 注入 `-Wl,-rpath,@executable_path/../Frameworks`(对位于 
 
 无 brew dylib 捆绑 → 无 `install_name_tool` 改写 Mach-O → Apple Silicon linker 的 ad-hoc 签名天然有效 → 无需事后 `codesign` 重签。CEF 框架与 helper 在 `tauri build` 打 dmg 前经 Tauri 原生 `macOS.frameworks` / `macOS.files` 拷入,签名保原样,全程无签名重做。
 
-## CEF runtime 随包打包(Linux/Windows standard|light)
+## CEF runtime 随包打包
 
 CEF/Chromium 运行时(约 200MB)不走系统收集,来源是 `CEF_PATH` 指向的自编发行版目录
-(回退:`bin/{platform}/{arch}/cef-build-prod`;dev/check/test 用 `cef-build-dev`):
+(回退:`bin/{platform}/{arch}/cef-build-prod`;dev/check/test 用 `cef-build-dev`)。
+
+**编译产物不落在 `bin/`,是拷过去的。** 编译发生在仓库外的 `CEFBUILD` 工作区
+(默认 `~/kabegame-cefbuild`),`exportCefRuntime()` 再 `cpSync` 到 `bin/{platform}/{arch}/cef-build-{dev,prod}`:
+
+| 平台 | runtime 取自 | 落到 `cef-build-*` 的形态 |
+|---|---|---|
+| macOS | `out/{gnOut}/` 的 **GN 输出** framework(不是 distrib) | 保持 framework 目录结构 |
+| Linux/Windows | distrib 的 `Release/` + `Resources/` | **拍扁**到根层(cef-dll-sys 要扁平 runtime) |
+
+headers / cmake / libcef_dll / CREDITS.html 三平台都取 distrib(`findDistrib()` 定位)。
+
+从 `cef-build-*` 到最终产物,**Linux/Windows 两跳、macOS 一跳**:
 
 | 平台 | 收集函数(os-plugin) | 暂存位置 | 安装位置 | 搬运机制 |
 |---|---|---|---|---|
 | Linux | `collectLinuxCefLibs()` | `bin/linux/`(含 `locales/`) | `/usr/lib/kabegame/` | deb `files` 注入(component-plugin 递归扫描 bin/linux) |
 | Windows | `collectWindowsCefRuntime()` | `src-tauri/kabegame/resources/cef/`(含 `locales/`) | `$INSTDIR\` 与 `$INSTDIR\locales\` | 随 `resources/**/*` 进 NSIS 包,POSTINSTALL hook(`nsis/installer-hooks.nsh`)move 到位 |
+| macOS | 无(不逐文件收集) | 无 | `Contents/Frameworks/` | Tauri 原生 `macOS.frameworks` **整目录**拷贝 |
 
-- 清单常量:`CEF_RUNTIME_FILES`(Linux)/ `WINDOWS_CEF_RUNTIME_FILES`(Windows),locales 白名单共用 `CEF_LOCALES`(en-US 必留)。
+- 清单常量:`CEF_RUNTIME_FILES`(Linux)/ `WINDOWS_CEF_RUNTIME_FILES`(Windows)。
+- **locale 白名单:`scripts/cef-locales.ts` 是单一来源**(en/ja/ko/zh_CN/zh_TW,`en` 必留作回退)。CEF 的 locale 是 Chromium 自身 UI 文案,与 app 的 Vue i18n 无关;自编发行版带全量 228 个共 ~52MB。
+  - **裁剪在导出期**:`exportCefRuntime()` 的 `copyRuntimeTree()` 拷贝途中就跳过非白名单条目,于是 `cef-build-*` 本身就是瘦的(macOS framework 304M → 256M),后续所有消费者(dev 直链、打包收集、Tauri 拷贝)自动受益。同一份白名单两种排布:Linux/Windows 是扁平 `locales/<locale>.pak`(**连字符**),macOS 是 framework 内 `Resources/<locale>.lproj/locale.pak`(**下划线**)。`.pak` 的判断限定在 `locales/` 目录内,否则会误伤同层的 `resources.pak` / `chrome_100_percent.pak`。
+  - macOS 一并保留 `_FEMININE`/`_MASCULINE`/`_NEUTER` 差分包 —— Chromium 性别化翻译,各只有 18 字节。
+  - os-plugin 的 Linux/Windows 收集仍按同一份白名单挑一次:对自编目录是幂等的重复工作,留着给「`CEF_PATH` 指向未经裁剪的目录」兜底。**macOS 没有这层兜底**(没有逐文件收集那一跳),完全依赖导出期裁剪 —— 这也是历史上 228 个 `.lproj` 会原样进 dmg 的原因。
+  - 改白名单后**必须重跑 `deno task build:chromium {dev,prod}`** 才对已有 `cef-build-*` 生效(不重编 Chromium,只重走导出)。裁剪不影响签名:自编 framework 是 linker-signed adhoc,`Sealed Resources=none`,签名只覆盖 Mach-O。也不会触发 cef-dll-sys 的「下载官方无 H.264 CEF」回退 —— `check_archive_json` 只校验 `archive.json` 里的版本号,不看文件清单。
 - Windows 必须搬到 exe 同目录:`libcef.dll` 是 load-time 链接,CEF 要求 dll/pak/dat/locales 与 exe 同层;NSIS 现有 `resources\bin\*.dll` move loop 只搬 DLL,CEF 用独立的 `resources\cef` move 段(含非 DLL 文件与 locales 子目录),卸载时在 PREUNINSTALL 里显式删除非 DLL 残留(icudtl.dat、*.pak、locales/ 等)。
 - Windows exe 还必须内嵌含 `<compatibility>` supportedOS 的 application manifest,否则 GPU 进程崩溃循环 —— 见 [tauri-runtime-cef README](../../src-tauri/tauri-runtime-cef/README.md) 的 Windows 注意事项。
 - 运行时资源定位:dev 下 cef-dll-sys build.rs 已把 runtime 拷进 `target/{debug,release}/`;安装态 Linux 走 `<exe>/../lib/kabegame`,Windows 走 CEF 默认(exe 同目录)。
@@ -114,6 +132,8 @@ macOS 的 CEF helper **不经模板变量注入**:三平台统一为 exe 旁的�
 | `scripts/plugins/mode-plugin.ts` | dev/start 时 Windows PATH 注入(`OSPlugin.binDir`);copyBin 已并入 OSPlugin |
 | `scripts/plugins/release-plugin.ts` | Linux assertNoLinuxLibfuseLink(强制 Linux 不链 libfuse) |
 | `scripts/build-ffmpeg.ts` | 只编 FFmpeg + 生成 MSVC 导入库;**不再**复制 DLL 到 bin/ |
+| `scripts/build-chromium.ts` | 编 CEF/Chromium(仓库外 CEFBUILD 工作区)+ `exportCefRuntime()` 拷到 `cef-build-{dev,prod}`,途中按 locale 白名单裁剪 |
+| `scripts/cef-locales.ts` | CEF locale 白名单单一来源(pak / lproj 两种排布),导出期与打包期共用 |
 | `scripts/paths.ts` / `scripts/utils.ts` | 路径命名公式(`repoBuildDir`/`cefExportDir`)与通用工具;Windows DLL 复制函数已迁到 os-plugin |
 | `src-tauri/kabegame/build.rs` | Linux `$ORIGIN/../lib/kabegame` + macOS `@executable_path/../Frameworks` rpath |
 | `src-tauri/kabegame-cli/build.rs` | 同上(CLI 也吃同一份 libx264) |
