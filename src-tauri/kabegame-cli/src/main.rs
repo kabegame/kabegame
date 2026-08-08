@@ -474,7 +474,7 @@ fn write_template_files(
                     .to_ascii_lowercase();
                 let is_text = matches!(
                     ext.as_str(),
-                    "json" | "js" | "ts" | "mjs" | "md" | "toml" | "gitignore" | "kabegameignore"
+                    "json" | "js" | "ts" | "mjs" | "md" | "toml" | "gitignore"
                 );
 
                 if is_text {
@@ -1539,8 +1539,7 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         .as_object()
         .ok_or_else(|| "package.json 必须是 JSON 对象".to_string())?;
 
-    let kubignore = load_kubignore(plugin_dir);
-
+    // v3 打包是全量白名单：只收 package.json 显式字段引用到的文件，没有额外的排除机制。
     let mut entries: Vec<(String, PathBuf)> = Vec::new();
 
     // package.json
@@ -1612,77 +1611,6 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         entries.push((mig_path.to_string(), plugin_dir.join(mig_path)));
     }
 
-    // .kabegameignore
-    if let Some(ignore_rules) = kubignore {
-        let rooted = make_rooted_globset(&ignore_rules)?;
-
-        // remove matches
-        entries.retain(|(name, _path)| {
-            if rooted.is_match(name) {
-                let is_critical = name == "package.json"
-                    || name == main_path
-                    || ["kbDoc", "kbChangelog"].iter().any(|field| {
-                        pkg_obj
-                            .get(*field)
-                            .and_then(|v| v.as_object())
-                            .map(|docs| docs.values().any(|x| x.as_str() == Some(name)))
-                            .unwrap_or(false)
-                    })
-                    || pkg_obj
-                        .get("kbAssets")
-                        .and_then(|v| v.as_array())
-                        .map(|assets| {
-                            assets.iter().filter_map(|x| x.as_str()).any(|raw| {
-                                core_plugin::assets::normalize_asset_path(raw).as_deref()
-                                    == Some(name)
-                            })
-                        })
-                        .unwrap_or(false);
-                if is_critical {
-                    eprintln!("[ERROR] .kabegameignore 排除了关键文件: {}", name);
-                }
-                !is_critical
-            } else {
-                true
-            }
-        });
-
-        // !force_includes
-        for rule in &ignore_rules {
-            if let Some(pattern) = rule.strip_prefix('!') {
-                let pattern = pattern.trim();
-                // walk plugin_dir for matches to force-include
-                let mut stack = vec![plugin_dir.to_path_buf()];
-                while let Some(dir) = stack.pop() {
-                    let rd = match std::fs::read_dir(&dir) {
-                        Ok(rd) => rd,
-                        Err(_) => continue,
-                    };
-                    for ent in rd.flatten() {
-                        let p = ent.path();
-                        if p.is_dir() {
-                            let dir_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                            if dir_name == "node_modules" || dir_name == ".git" {
-                                continue;
-                            }
-                            stack.push(p);
-                            continue;
-                        }
-                        let rel = p
-                            .strip_prefix(plugin_dir)
-                            .map(|p| p.to_string_lossy().replace('\\', "/"))
-                            .unwrap_or_default();
-                        if glob_match(pattern, &rel) {
-                            if !entries.iter().any(|(n, _)| n == &rel) {
-                                entries.push((rel, p));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // 按 ZIP 内路径去重，保留首次出现。
     // 多语言 kbDoc 会让同一张插图被每个语言的 doc 各收集一次（6 个语言 = 6 份），
     // 图标 / 模板等也可能被多个字段同时引用。重复条目在 zip 0.6 下只是白白撑大包体，
@@ -1713,71 +1641,6 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         zip.finish().map_err(|e| format!("完成 ZIP 失败: {}", e))?;
     }
     Ok(buf)
-}
-
-fn load_kubignore(plugin_dir: &Path) -> Option<Vec<String>> {
-    let path = plugin_dir.join(".kabegameignore");
-    if !path.is_file() {
-        return None;
-    }
-    let content = std::fs::read_to_string(&path).ok()?;
-    let lines: Vec<String> = content
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("//"))
-        .collect();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines)
-    }
-}
-
-fn glob_match(pat: &str, name: &str) -> bool {
-    let re_str = glob_to_regex(pat);
-    Regex::new(&re_str)
-        .map(|re| re.is_match(name))
-        .unwrap_or(false)
-}
-
-fn glob_to_regex(pat: &str) -> String {
-    let mut out = String::from("^");
-    let chars: Vec<char> = pat.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '*' => {
-                if i + 1 < chars.len() && chars[i + 1] == '*' {
-                    i += 1;
-                    out.push_str(".*");
-                } else {
-                    out.push_str("[^/]*");
-                }
-            }
-            '?' => out.push('.'),
-            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']' | '\\' => {
-                out.push('\\');
-                out.push(chars[i]);
-            }
-            c => out.push(c),
-        }
-        i += 1;
-    }
-    out.push('$');
-    out
-}
-
-fn make_rooted_globset(rules: &[String]) -> Result<globset::GlobSet, String> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for rule in rules {
-        if rule.starts_with('!') {
-            continue;
-        }
-        builder.add(globset::Glob::new(rule).map_err(|e| format!("无效 glob: {} ({})", rule, e))?);
-    }
-    builder
-        .build()
-        .map_err(|e| format!("构建 globset 失败: {}", e))
 }
 
 fn has_non_empty_zip_entry(zip_path: &Path, entry_name: &str) -> Result<bool, String> {
@@ -1979,16 +1842,6 @@ mod tests {
         assert!(!kabegame_core::plugin::package_json_is_v3(
             &serde_json::json!({"kbPackageVersion": 2})
         ));
-    }
-
-    #[test]
-    fn test_glob_match() {
-        assert!(glob_match("*.log", "error.log"));
-        assert!(!glob_match("*.log", "logs/error.log"));
-        assert!(!glob_match("*.log", "file.txt"));
-        assert!(glob_match("dist/**", "dist/main.js"));
-        assert!(glob_match("dist/**", "dist/sub/file.js"));
-        assert!(!glob_match("dist/**", "src/main.ts"));
     }
 
     #[test]

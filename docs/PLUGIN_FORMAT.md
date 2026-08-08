@@ -103,9 +103,9 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 
 显式白名单中的文件必须存在且扩展名为 jpg/jpeg/png/gif/webp/bmp，单文件超过 **2 MB** 会使打包失败；总体积超过 **10 MB** 会警告，加载时超出部分不内嵌。字段缺失或空数组都表示零资源。
 
-### `.kabegameignore`
+### 打包收集范围
 
-v3 打包会先按 `package.json` 显式字段收集文件，再应用插件根目录下的 `.kabegameignore`。语法是简单 glob，每行一条，空行、`#` 和 `//` 注释会被忽略；以 `!` 开头的规则会强制重新包含匹配文件。`package.json`、`main`、`kbDoc` / `kbChangelog` Markdown 和 `kbAssets` resources 都是关键文件，不能被 ignore 排除。
+v3 打包是**全量白名单**：只收 `package.json` 显式字段引用到的文件（`package.json` 本身、`main`、`kbIcon`、`kbDescriptionTemplate`、`kbDoc` / `kbChangelog`、`kbAssets`、`kbRecommendedConfigs`、`kbPathQLProviders`、`kbMetadataMigration`），没有目录遍历，也没有额外的排除机制。要让某个文件进包，就把它声明到对应字段里。
 
 ### 头部与插件清单
 

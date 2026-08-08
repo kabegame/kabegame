@@ -243,7 +243,7 @@ best-effort：
 | 归一化 / 建表 / 常量 | `src-tauri/kabegame-core/src/plugin/assets.rs` | `normalize_asset_path`、`build_asset_index`、`mime_for_asset`、两个限额常量 |
 | 引用提取 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `extract_local_refs(md)` —— 只回原始引用串，按插件根解析，不拼 md 目录 |
 | 加载 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_locale_md_field`（kbDoc / kbChangelog 共用）、`load_plugin_v3_from_zip` 的资源段、`Plugin.assets` / `Plugin.changelog` |
-| 打包 | `src-tauri/kabegame-cli/src/main.rs` | `pack_plugin_v3` 清单解析 + 无条件交叉校验 + `collect_v3_entries` 收集 + `.kabegameignore` 关键文件保护 |
+| 打包 | `src-tauri/kabegame-cli/src/main.rs` | `pack_plugin_v3` 清单解析 + 无条件交叉校验 + `collect_v3_entries` 全量白名单收集（只收清单显式引用的文件） |
 | PathQL | `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs` | `plugin://{id}/asset/{path}`、`plugin://{id}/changelog`，MIME 复用 `mime_for_asset` |
 | MCP | `src-tauri/kabegame/src/mcp_capabilities.rs`、`mcp_server.rs` | capability `plugin.read.asset` / `plugin.read.changelog`，资源模板与说明文案 |
 | MCP bundle | `mcpb/kabegame-gallery-node/server/index.js` | `read_plugin` 工具的 `resource` 枚举（`asset` / `changelog`） |

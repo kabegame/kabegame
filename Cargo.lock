@@ -4535,7 +4535,6 @@ dependencies = [
  "clap",
  "console",
  "dirs 5.0.1",
- "globset",
  "include_dir",
  "indicatif",
  "kabegame-core",
