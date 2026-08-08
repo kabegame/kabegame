@@ -68,6 +68,10 @@
     "recursiveLimits": "递归最多展开 {maxDepth} 层，超出的子目录会被跳过。",
     "skipNotice": "符号链接、以“.”开头的隐藏目录与文件、非图片/视频文件均不会同步。",
     "duplicatePathHint": "该文件夹已存在对应的同步画册，请选择其他文件夹。",
+    "convertToNormalTitle": "转换为普通画册？",
+    "convertToNormalConfirm": "这是不可逆操作。将把该画册及其 {count} 个子画册全部转换为普通画册，并停止跟随磁盘目录。图片仍指向磁盘上的原文件；转换后若选择删除图片文件，原文件会被移入系统回收站。",
+    "convertToNormalSuccess": "已转换为普通画册",
+    "convertToNormalFailed": "转换失败：{error}",
     "syncMode": {
       "none": { "label": "不同步", "description": "不监听文件夹变更，也不会自动同步" },
       "shallow": { "label": "浅同步", "description": "只自动同步此文件夹当前层的文件，不创建子画册" },

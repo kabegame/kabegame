@@ -54,7 +54,34 @@ pub fn set_album_sync_mode(
     mode: crate::local_folder::SyncMode,
 ) -> Result<Value, String> {
     Storage::global().set_album_sync_mode(&album_id, mode)?;
+    if matches!(
+        mode,
+        crate::local_folder::SyncMode::Shallow | crate::local_folder::SyncMode::Recursive
+    ) {
+        tokio::spawn(async move {
+            if let Err(err) =
+                crate::local_folder::sync_album_for_mode_with_retry(&album_id, mode).await
+            {
+                eprintln!(
+                    "[commands.album] sync_album {album_id} after sync mode change failed: {err}"
+                );
+            }
+        });
+    }
     Ok(Value::Null)
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn convert_local_folder_album_to_normal(album_id: String) -> Result<Value, String> {
+    let converted_ids = Storage::global().convert_local_folder_album_to_normal(&album_id)?;
+    #[cfg(feature = "virtual-driver")]
+    VirtualDriveService::global().bump_albums();
+    serde_json::to_value(converted_ids).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+pub async fn convert_local_folder_album_to_normal(_album_id: String) -> Result<Value, String> {
+    Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
 }
 
 pub fn add_album(name: String, parent_id: Option<String>) -> Result<Value, String> {
@@ -219,7 +246,7 @@ pub async fn sync_local_folder_album(
         recursive,
         create_missing_albums: create_missing_albums.unwrap_or(true),
         forbidden_roots: if recursive {
-            local_folder_forbidden_roots()
+            crate::local_folder::local_folder_forbidden_roots()
         } else {
             Vec::new()
         },
@@ -288,18 +315,4 @@ pub fn cancel_folder_sync(album_id: Option<String>) -> Result<Value, String> {
 #[cfg(target_os = "android")]
 pub fn cancel_folder_sync(_album_id: Option<String>) -> Result<Value, String> {
     Ok(serde_json::json!({ "canceled": 0 }))
-}
-
-/// 递归同步/创建时需要刻意避开的「禁区根」（规范化）：仅 VD 挂载点。
-#[cfg(not(target_os = "android"))]
-pub(crate) fn local_folder_forbidden_roots() -> Vec<std::path::PathBuf> {
-    let mut roots: Vec<std::path::PathBuf> = Vec::new();
-    #[cfg(feature = "virtual-driver")]
-    {
-        if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
-            let p = std::path::Path::new(&mount_point);
-            roots.push(p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
-        }
-    }
-    roots
 }

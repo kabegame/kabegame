@@ -1,5 +1,6 @@
 use super::status::FolderStatus;
-use super::{sync_album, SyncAlbumOptions};
+use super::sync::sync_options_for_mode;
+use super::{sync_album, SyncAlbumOptions, SyncMode};
 use crate::app_paths::AppPaths;
 use crate::crawler::downloader::{IMAGE_THUMBNAIL_MAX_DIM, IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES};
 use crate::settings::Settings;
@@ -13,6 +14,22 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TEST_INIT: OnceLock<()> = OnceLock::new();
+
+#[test]
+fn sync_mode_options_match_automatic_sync_semantics() {
+    assert!(sync_options_for_mode(SyncMode::None).is_none());
+
+    let shallow = sync_options_for_mode(SyncMode::Shallow).unwrap();
+    assert!(!shallow.recursive);
+    assert!(!shallow.create_missing_albums);
+    assert!(shallow.forbidden_roots.is_empty());
+
+    for mode in [SyncMode::Recursive, SyncMode::Delegated] {
+        let options = sync_options_for_mode(mode).unwrap();
+        assert!(options.recursive);
+        assert!(options.create_missing_albums);
+    }
+}
 
 fn test_guard() -> MutexGuard<'static, ()> {
     let guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();

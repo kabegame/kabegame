@@ -27,6 +27,8 @@
   "syncModeCurrent": "✓ Current",
   "syncModeDelegatedReason": "Managed by parent recursive sync",
   "openLocalFolder": "Open local folder",
+  "convertToNormalAlbum": "Convert to normal album",
+  "convertDelegatedReason": "Disable recursive sync on the parent first",
   "setWallpaperRotation": "Set as desktop rotation",
   "setWallpaperRotationActive": "(Active)",
   "stopWallpaperRotation": "Stop desktop rotation",

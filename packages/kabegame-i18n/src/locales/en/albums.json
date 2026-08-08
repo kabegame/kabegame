@@ -68,6 +68,10 @@
     "recursiveLimits": "Recurses up to {maxDepth} levels deep; deeper subfolders are skipped.",
     "skipNotice": "Symlinks, hidden entries starting with \".\", and non-image/video files are skipped.",
     "duplicatePathHint": "A sync album for this folder already exists; choose a different folder.",
+    "convertToNormalTitle": "Convert to normal album?",
+    "convertToNormalConfirm": "This is irreversible. This album and all {count} sub-albums will be converted to normal albums and will no longer follow their folders on disk. The images will still reference the original files on disk; deleting an image file afterward will move the original file to the system Trash.",
+    "convertToNormalSuccess": "Converted to normal album",
+    "convertToNormalFailed": "Conversion failed: {error}",
     "syncMode": {
       "none": { "label": "No sync", "description": "Do not watch folder changes or sync automatically" },
       "shallow": { "label": "Shallow sync", "description": "Sync files in this folder only, without creating child albums" },

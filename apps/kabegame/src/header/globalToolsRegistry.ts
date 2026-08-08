@@ -1,12 +1,11 @@
 import { computed } from "vue";
 import type { Component } from "vue";
-import { FolderOpened, Hide, Key, Refresh } from "@kabegame/element-plus-icons";
+import { FolderOpened, Hide, Key } from "@kabegame/element-plus-icons";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@kabegame/core/env";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { useApp } from "@/stores/app";
-import { shortcutLabel } from "@/composables/useGlobalShortcuts";
 import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
 import HiddenCleanupControl from "./comps/HiddenCleanupControl.vue";
 import CheckUpdateControl from "./comps/CheckUpdateControl.vue";
@@ -37,8 +36,9 @@ export interface GlobalToolGroup {
 
 /**
  * 全局工具箱条目：维护类动作 + 显示类开关。
- * Refresh / ToggleShowHidden / ToggleShowAlbumImages 语义上仍是当前页面的动作，
- * 通过 pageBridge 桥接——当前页面没注册时该项不出现。
+ * 刷新的入口在各页面 header 上，不进工具箱（pageBridge.refresh 只服务全局快捷键）。
+ * ToggleShowHidden / ToggleShowAlbumImages 语义上仍是当前页面的动作，
+ * 通过 pageBridge 桥接——当前页面没注册时退回全局 path-route store。
  */
 export function useGlobalTools() {
   const pageBridge = usePageBridgeStore();
@@ -62,17 +62,6 @@ export function useGlobalTools() {
         kind: "action",
       },
     ];
-    if (pageBridge.refresh) {
-      maintenance.push({
-        id: "refresh",
-        group: "maintenance",
-        label: t("header.refresh"),
-        icon: Refresh,
-        shortcut: shortcutLabel("refresh"),
-        kind: "action",
-        action: () => pageBridge.refresh?.(),
-      });
-    }
     if (!IS_WEB) {
       maintenance.push({
         id: "checkUpdate",

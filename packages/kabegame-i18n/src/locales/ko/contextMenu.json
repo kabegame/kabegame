@@ -27,6 +27,8 @@
   "syncModeCurrent": "✓ 현재",
   "syncModeDelegatedReason": "상위 재귀 동기화가 관리",
   "openLocalFolder": "로컬 폴더 열기",
+  "convertToNormalAlbum": "일반 앨범으로 변환",
+  "convertDelegatedReason": "먼저 상위 앨범의 재귀 동기화를 해제하세요",
   "setWallpaperRotation": "데스크톱 순환으로 설정",
   "setWallpaperRotationActive": "(활성)",
   "stopWallpaperRotation": "데스크톱 순환 중지",

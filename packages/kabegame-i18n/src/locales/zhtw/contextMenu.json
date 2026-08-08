@@ -27,6 +27,8 @@
   "syncModeCurrent": "✓ 目前",
   "syncModeDelegatedReason": "由上層遞迴同步接管",
   "openLocalFolder": "開啟本機資料夾",
+  "convertToNormalAlbum": "轉為一般畫冊",
+  "convertDelegatedReason": "請先解除上層的遞迴同步",
   "setWallpaperRotation": "設為桌面輪播",
   "setWallpaperRotationActive": "（已設定）",
   "stopWallpaperRotation": "停止桌面輪播",

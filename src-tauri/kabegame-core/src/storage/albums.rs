@@ -1,5 +1,5 @@
 use crate::emitter::GlobalEmitter;
-use crate::local_folder::SyncMode;
+use crate::local_folder::{FolderSyncService, SyncMode};
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use kabegame_i18n::t;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -408,12 +408,7 @@ impl Storage {
             sync_mode: SyncMode::None.as_str().to_string(),
         };
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_added(
-                &album.id,
-                &album.name,
-                album.created_at,
-                album.parent_id.as_deref(),
-            );
+            emitter.emit_album_added(&album);
         }
         Ok(album)
     }
@@ -983,6 +978,154 @@ UPDATE albums SET ancestor_path = tree.path
         Ok(())
     }
 
+    /// 将本地文件夹画册及其全部后代原地转换为普通画册。
+    pub fn convert_local_folder_album_to_normal(
+        &self,
+        album_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("start convert local folder album transaction: {e}"))?;
+
+        let album: Option<(String, String, String, Option<String>, String)> = tx
+            .query_row(
+                "SELECT type, sync_mode, ancestor_path, parent_id, name FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("query local folder album conversion root: {e}"))?;
+        let Some((kind, sync_mode, root_ancestor_path, root_parent_id, root_name)) = album else {
+            return Err("画册不存在".to_string());
+        };
+        if kind != "local_folder" {
+            return Err(t!("albums.localFolderErrors.notLocalFolder").to_string());
+        }
+        if sync_mode == SyncMode::Delegated.as_str() {
+            return Err(t!("albums.localFolderErrors.delegatedConversion").to_string());
+        }
+
+        for task in FolderSyncService::global().snapshot() {
+            if task.album_id == album_id {
+                return Err(t!("albums.localFolderErrors.syncInProgress").to_string());
+            }
+            let running_ancestor_path: Option<String> = tx
+                .query_row(
+                    "SELECT ancestor_path FROM albums WHERE id = ?1",
+                    params![task.album_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| format!("query running folder sync album path: {e}"))?;
+            if running_ancestor_path.is_some_and(|running_path| {
+                running_path.starts_with(&root_ancestor_path)
+                    || root_ancestor_path.starts_with(&running_path)
+            }) {
+                return Err(t!("albums.localFolderErrors.syncInProgress").to_string());
+            }
+        }
+
+        let converted_ids = {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+SELECT id
+  FROM albums
+ WHERE type = 'local_folder'
+   AND substr(ancestor_path, 1, length(?1)) = ?1
+ ORDER BY length(ancestor_path), id
+"#,
+                )
+                .map_err(|e| format!("prepare local folder album conversion ids: {e}"))?;
+            let rows = stmt
+                .query_map(params![root_ancestor_path], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("query local folder album conversion ids: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("read local folder album conversion ids: {e}"))?
+        };
+
+        tx.execute(
+            r#"
+UPDATE albums
+   SET type = 'normal', sync_folder = NULL, folder_status = NULL, sync_mode = 'none'
+ WHERE type = 'local_folder'
+   AND substr(ancestor_path, 1, length(?1)) = ?1
+"#,
+            params![root_ancestor_path],
+        )
+        .map_err(|e| format!("convert local folder album subtree: {e}"))?;
+
+        // 普通画册不能挂在本地文件夹画册下（`add_album` 拒绝该组合，v029 迁移专门清理它）。
+        // 只转子树时父级仍是 local_folder，若原地不动就会制造这种非法状态，并且父级下一次
+        // 递归同步重建同名子画册时会撞上它，被迫改名成「X (2)」，两个画册指向同一个目录。
+        // 照 v029 `lift_normal_albums_from_local_folders` 的语义：把子树根提到根级并解重名，
+        // 子树内部父子关系保持不变（它们一起变 normal，内部组合是合法的）。
+        let mut lifted: Option<(String, Option<String>)> = None;
+        if let Some(parent_id) = root_parent_id.as_deref() {
+            let parent_kind: Option<String> = tx
+                .query_row(
+                    "SELECT type FROM albums WHERE id = ?1",
+                    params![parent_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| format!("query converted album parent type: {e}"))?;
+            if parent_kind.as_deref() == Some("local_folder") {
+                let resolved = Self::resolve_scoped_name_ci(&tx, None, &root_name, Some(album_id))?;
+                tx.execute(
+                    "UPDATE albums SET parent_id = NULL, name = ?1 WHERE id = ?2",
+                    params![resolved, album_id],
+                )
+                .map_err(|e| format!("lift converted album to root: {e}"))?;
+                // parent_id 变了，整棵子树的 ancestor_path 必须重算。
+                Self::rebuild_album_ancestor_paths(&tx)?;
+                lifted = Some((
+                    album_id.to_string(),
+                    (resolved != root_name).then_some(resolved),
+                ));
+            }
+        }
+
+        let normalized = normalize_local_folder_sync_modes(&tx)?;
+        tx.commit()
+            .map_err(|e| format!("commit local folder album conversion: {e}"))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            for id in &converted_ids {
+                emitter.emit_album_changed(
+                    id,
+                    json!({
+                        "albumType": "normal",
+                        "syncFolder": null,
+                        "folderStatus": null,
+                        "syncMode": "none",
+                    }),
+                );
+            }
+            if let Some((id, renamed)) = lifted {
+                let payload = match renamed {
+                    Some(name) => json!({ "parentId": null, "name": name }),
+                    None => json!({ "parentId": null }),
+                };
+                emitter.emit_album_changed(&id, payload);
+            }
+            for (id, sync_mode) in normalized {
+                emitter.emit_album_changed(&id, json!({ "syncMode": sync_mode }));
+            }
+        }
+
+        Ok(converted_ids)
+    }
+
     /// 按同步目录的最近真祖先重建本地文件夹画册层级。
     ///
     /// 路径可访问时优先使用 canonicalize 结果；离线目录退回词法路径比较。
@@ -1182,12 +1325,7 @@ UPDATE albums SET ancestor_path = tree.path
 
         if let Some(emitter) = GlobalEmitter::try_global() {
             for album in &created {
-                emitter.emit_album_added(
-                    &album.id,
-                    &album.name,
-                    album.created_at,
-                    album.parent_id.as_deref(),
-                );
+                emitter.emit_album_added(album);
             }
         }
 
@@ -1530,6 +1668,247 @@ VALUES
             )
             .unwrap();
         assert_eq!(imposter_mode, SyncMode::None.as_str());
+    }
+
+    #[test]
+    fn convert_local_folder_album_to_normal_converts_subtree_and_preserves_images() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute_batch(
+                r#"
+INSERT INTO albums
+    (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode)
+VALUES
+    ('root', 'root', 1, NULL, 'local_folder', '/root', '{"state":"ok"}', '/root/', 'recursive'),
+    ('child', 'child', 2, 'root', 'local_folder', '/root/child', '{"state":"ok"}', '/root/child/', 'delegated'),
+    ('grandchild', 'grandchild', 3, 'child', 'local_folder', '/root/child/grandchild', '{"state":"ok"}', '/root/child/grandchild/', 'delegated');
+
+INSERT INTO images (id, local_path, crawled_at)
+VALUES
+    (1, '/tmp/convert-root.jpg', 1),
+    (2, '/tmp/convert-child.jpg', 2),
+    (3, '/tmp/convert-grandchild.jpg', 3);
+
+INSERT INTO album_images (album_id, image_id, "order")
+VALUES ('root', 1, 1), ('child', 2, 1), ('grandchild', 3, 1);
+"#,
+            )
+            .unwrap();
+        }
+
+        let associations_before = storage
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM album_images", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(
+            storage
+                .convert_local_folder_album_to_normal("root")
+                .unwrap(),
+            vec![
+                "root".to_string(),
+                "child".to_string(),
+                "grandchild".to_string(),
+            ]
+        );
+
+        let conn = storage.db.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, sync_folder, folder_status, sync_mode
+                   FROM albums
+                  WHERE id IN ('root', 'child', 'grandchild')
+                  ORDER BY created_at",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("normal".to_string(), None, None, "none".to_string()),
+                ("normal".to_string(), None, None, "none".to_string()),
+                ("normal".to_string(), None, None, "none".to_string()),
+            ]
+        );
+        let associations_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM album_images", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(associations_after, associations_before);
+    }
+
+    #[test]
+    fn convert_local_folder_album_to_normal_lifts_subtree_out_of_local_folder_parent() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute_batch(
+                r#"
+INSERT INTO albums
+    (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode)
+VALUES
+    ('root', 'root', 1, NULL, 'local_folder', '/root', NULL, '/root/', 'none'),
+    ('child', 'child', 2, 'root', 'local_folder', '/root/child', NULL, '/root/child/', 'none'),
+    ('grandchild', 'grandchild', 3, 'child', 'local_folder', '/root/child/gc', NULL, '/root/child/grandchild/', 'none');
+-- 根级已有同名画册，上提时必须解重名
+INSERT INTO albums (id, name, created_at, parent_id, type, ancestor_path, sync_mode)
+VALUES ('other', 'child', 4, NULL, 'normal', '/other/', 'none');
+"#,
+            )
+            .unwrap();
+        }
+
+        storage
+            .convert_local_folder_album_to_normal("child")
+            .unwrap();
+
+        let conn = storage.db.lock().unwrap();
+        let (parent_id, name, ancestor_path): (Option<String>, String, String) = conn
+            .query_row(
+                "SELECT parent_id, name, ancestor_path FROM albums WHERE id = 'child'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        // 提到根级，不再挂在 local_folder 父下
+        assert_eq!(parent_id, None);
+        // 根级撞名 'child' → 解重名
+        assert_ne!(name, "child");
+        // parent_id 变了，ancestor_path 必须已重算
+        assert_eq!(ancestor_path, "/child/");
+
+        // 子树内部关系保持不变，且 ancestor_path 跟着重算
+        let (gc_parent, gc_path): (Option<String>, String) = conn
+            .query_row(
+                "SELECT parent_id, ancestor_path FROM albums WHERE id = 'grandchild'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(gc_parent.as_deref(), Some("child"));
+        assert_eq!(gc_path, "/child/grandchild/");
+
+        // 没有普通画册残留在 local_folder 画册下（`add_album` 与 v029 都视其为非法）
+        let illegal: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM albums c JOIN albums p ON p.id = c.parent_id
+                  WHERE c.type = 'normal' AND p.type = 'local_folder'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(illegal, 0);
+    }
+
+    #[test]
+    fn convert_local_folder_album_to_normal_keeps_root_level_album_in_place() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute_batch(
+                r#"
+INSERT INTO albums
+    (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode)
+VALUES
+    ('root', 'root', 1, NULL, 'local_folder', '/root', NULL, '/root/', 'none'),
+    ('child', 'child', 2, 'root', 'local_folder', '/root/child', NULL, '/root/child/', 'none');
+"#,
+            )
+            .unwrap();
+        }
+
+        storage
+            .convert_local_folder_album_to_normal("root")
+            .unwrap();
+
+        // 整棵树从根转换：根本来就在根级，不该被改名或改挂
+        let conn = storage.db.lock().unwrap();
+        let (parent_id, name): (Option<String>, String) = conn
+            .query_row(
+                "SELECT parent_id, name FROM albums WHERE id = 'root'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(parent_id, None);
+        assert_eq!(name, "root");
+        let child_parent: Option<String> = conn
+            .query_row(
+                "SELECT parent_id FROM albums WHERE id = 'child'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(child_parent.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn convert_local_folder_album_to_normal_rejects_delegated_album() {
+        let storage = test_storage();
+        let conn = storage.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO albums
+                (id, name, created_at, type, sync_folder, ancestor_path, sync_mode)
+             VALUES ('delegated', 'delegated', 1, 'local_folder', '/delegated', '/delegated/', 'delegated')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(
+            storage
+                .convert_local_folder_album_to_normal("delegated")
+                .unwrap_err(),
+            t!("albums.localFolderErrors.delegatedConversion").to_string()
+        );
+    }
+
+    #[test]
+    fn convert_local_folder_album_to_normal_treats_wildcards_literally() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute_batch(
+                r#"
+INSERT INTO albums
+    (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode)
+VALUES
+    ('root_%', 'root', 1, NULL, 'local_folder', '/root', '{"state":"root"}', '/root_%/', 'none'),
+    ('child', 'child', 2, 'root_%', 'local_folder', '/root/child', '{"state":"child"}', '/root_%/child/', 'none'),
+    ('imposter', 'imposter', 3, NULL, 'local_folder', '/imposter', '{"state":"imposter"}', '/root-AB/imposter/', 'shallow');
+"#,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            storage
+                .convert_local_folder_album_to_normal("root_%")
+                .unwrap(),
+            vec!["root_%".to_string(), "child".to_string()]
+        );
+        let imposter = storage.get_album_by_id("imposter").unwrap().unwrap();
+        assert_eq!(imposter.kind, "local_folder");
+        assert_eq!(imposter.sync_folder.as_deref(), Some("/imposter"));
+        assert_eq!(
+            imposter.folder_status.as_deref(),
+            Some(r#"{"state":"imposter"}"#)
+        );
+        assert_eq!(imposter.sync_mode, "shallow");
     }
 
     #[test]

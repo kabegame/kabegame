@@ -63,6 +63,9 @@ albums:
     cannotMoveIntoLocalFolder: アルバムをローカルフォルダアルバムの配下へ移動できません
   localFolderErrors:
     androidUnsupported: Android ではローカルフォルダ同期に対応していません
+    notLocalFolder: ローカルフォルダアルバムのみ通常のアルバムに変換できます
+    delegatedConversion: このアルバムは親アルバムの再帰同期で管理されています。先に親の再帰同期を解除してください
+    syncInProgress: このアルバムまたは関連するアルバムを同期中です。しばらくしてからもう一度お試しください
     nameRequired: アルバム名は空にできません
     nameNoSlash: "アルバム名に '/' は使用できません"
     parentReadonly: システムアルバムの下にはローカルフォルダ同期アルバムを作成できません

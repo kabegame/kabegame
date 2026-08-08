@@ -99,6 +99,11 @@ pub async fn set_album_sync_mode(
 }
 
 #[tauri::command]
+pub async fn convert_local_folder_album_to_normal(album_id: String) -> Result<Value, String> {
+    commands::album::convert_local_folder_album_to_normal(album_id).await
+}
+
+#[tauri::command]
 pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
     commands::album::sync_local_folder_albums(album_ids).await
 }

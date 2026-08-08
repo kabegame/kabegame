@@ -27,6 +27,8 @@
   "syncModeCurrent": "✓ 現在",
   "syncModeDelegatedReason": "上位の再帰同期が管理",
   "openLocalFolder": "ローカルフォルダーを開く",
+  "convertToNormalAlbum": "通常のアルバムに変換",
+  "convertDelegatedReason": "先に親の再帰同期を解除してください",
   "setWallpaperRotation": "デスクトップローテーションに設定",
   "setWallpaperRotationActive": "（有効）",
   "stopWallpaperRotation": "デスクトップローテーションを停止",

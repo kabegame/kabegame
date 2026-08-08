@@ -36,7 +36,7 @@ const emit = defineEmits<{
 const { isCompact } = storeToRefs(useUiStore());
 const pageBridge = usePageBridgeStore();
 
-// Refresh 入口已收进全局工具箱，这里只注册桥接。
+// Refresh 的入口在 header 上，这里额外注册桥接供全局快捷键（⇧⌘R）使用。
 onMounted(() => {
   pageBridge.setRefresh(() => emit("refresh"));
 });
@@ -52,13 +52,13 @@ const showIds = computed(() => {
   if (isCompact.value) {
     return [HeaderFeatureId.AlbumTree, HeaderFeatureId.AlbumInfo, HeaderFeatureId.TaskDrawer];
   } else {
-    return withVd([HeaderFeatureId.AlbumInfo, HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.CreateAlbum, HeaderFeatureId.TaskDrawer]);
+    return withVd([HeaderFeatureId.AlbumInfo, HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.TaskDrawer]);
   }
 });
 
 const foldIds = computed(() => {
   if (isCompact.value) {
-    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.CreateAlbum]);
+    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum]);
   } else {
     return [];
   }
@@ -69,6 +69,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
     case HeaderFeatureId.OpenVirtualDrive:
       emit("view-vd");
+      break;
+    case HeaderFeatureId.Refresh:
+      emit("refresh");
       break;
     case HeaderFeatureId.CreateAlbum:
       emit("create-album");

@@ -59,17 +59,6 @@ const DEBOUNCE_MS: u64 = 1500;
     feature = "ipc-server",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
-const IN_FLIGHT_RETRY_LIMIT: usize = 3;
-#[cfg(all(
-    feature = "ipc-server",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
-const IN_FLIGHT_RETRY_DELAY_MS: u64 = 500;
-
-#[cfg(all(
-    feature = "ipc-server",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
 #[derive(Debug, Clone)]
 pub struct WatchEvent {
     pub album_id: String,
@@ -319,43 +308,8 @@ fn is_strict_descendant(path: &str, ancestor_path: &str) -> bool {
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 async fn sync_album_after_event(album_id: String, mode: SyncMode) {
-    let options = match mode {
-        SyncMode::Shallow => crate::local_folder::SyncAlbumOptions {
-            recursive: false,
-            create_missing_albums: false,
-            forbidden_roots: Vec::new(),
-        },
-        SyncMode::Recursive | SyncMode::Delegated => crate::local_folder::SyncAlbumOptions {
-            recursive: true,
-            create_missing_albums: true,
-            forbidden_roots: crate::commands::album::local_folder_forbidden_roots(),
-        },
-        SyncMode::None => return,
-    };
-    // 仅在「被并发同步占用」(skipped_in_flight) 时自旋重试：在飞的那次可能在本次文件
-    // 落地前已列完目录，从而漏掉本次变更，且该已写完文件不一定再触发新的文件事件。
-    // 稳定性相关的重试已随该功能移除。
-    for attempt in 0..=IN_FLIGHT_RETRY_LIMIT {
-        let report = match crate::local_folder::sync_album(&album_id, options.clone()).await {
-            Ok(report) => report,
-            Err(err) => {
-                eprintln!("[local_folder.watch] sync_album {album_id} failed: {err}");
-                return;
-            }
-        };
-
-        if !report.skipped_in_flight {
-            return;
-        }
-
-        if attempt == IN_FLIGHT_RETRY_LIMIT {
-            eprintln!(
-                "[local_folder.watch] sync_album {album_id} still in flight after {IN_FLIGHT_RETRY_LIMIT} retries"
-            );
-            return;
-        }
-
-        tokio::time::sleep(Duration::from_millis(IN_FLIGHT_RETRY_DELAY_MS)).await;
+    if let Err(err) = crate::local_folder::sync_album_for_mode_with_retry(&album_id, mode).await {
+        eprintln!("[local_folder.watch] sync_album {album_id} failed: {err}");
     }
 }
 

@@ -428,6 +428,7 @@ pub(crate) fn configure_app(
             add_local_folder_album,
             sync_local_folder_album,
             set_album_sync_mode,
+            convert_local_folder_album_to_normal,
             sync_local_folder_albums,
             get_folder_sync_run_state,
             cancel_folder_sync,

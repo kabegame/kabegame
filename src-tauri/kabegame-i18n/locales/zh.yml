@@ -63,6 +63,9 @@ albums:
     cannotMoveIntoLocalFolder: 不能将画册移动到本地文件夹画册下
   localFolderErrors:
     androidUnsupported: 安卓平台不支持本地文件夹同步
+    notLocalFolder: 只有本地文件夹画册可以转换为普通画册
+    delegatedConversion: 该画册由父级递归同步管理，请先解除父级的递归同步
+    syncInProgress: 该画册或关联画册正在同步中，请稍后再试
     nameRequired: 画册名称不能为空
     nameNoSlash: "画册名称不能包含 '/'"
     parentReadonly: 不能在系统画册下创建本地文件夹同步画册

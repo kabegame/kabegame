@@ -92,7 +92,8 @@ const albumRouteStore = useAlbumDetailRouteStore();
 const { isCompact } = storeToRefs(useUiStore());
 const pageBridge = usePageBridgeStore();
 
-// Refresh / ToggleShowHidden 入口已收进全局工具箱，这里只注册桥接。
+// Refresh 的入口在 header 上，这里额外注册桥接供全局快捷键（⇧⌘R）使用；
+// ToggleShowHidden 的入口在全局工具箱，只有桥接。
 onMounted(() => {
   pageBridge.setRefresh(() => emit("refresh"));
 });
@@ -147,7 +148,7 @@ const showIds = computed(() => {
   if (isCompact.value) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
-    return withoutHiddenAlbumActions(withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer])));
+    return withoutHiddenAlbumActions(withoutCreateAlbum(withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer])));
   }
 });
 
@@ -155,6 +156,7 @@ const foldIds = computed(() => {
   if (isCompact.value) {
     const base = withoutHiddenAlbumActions(withoutCreateAlbum(withVd([
       HeaderFeatureId.OpenVirtualDrive,
+      HeaderFeatureId.Refresh,
       HeaderFeatureId.CreateAlbum,
       HeaderFeatureId.SetAsWallpaperCarousel,
       HeaderFeatureId.DeleteAlbum,
@@ -177,6 +179,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
     case HeaderFeatureId.OpenVirtualDrive:
       emit("view-vd");
+      break;
+    case HeaderFeatureId.Refresh:
+      emit("refresh");
       break;
     case HeaderFeatureId.CreateAlbum:
       emit("create-sub-album");

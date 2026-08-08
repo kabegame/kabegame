@@ -305,7 +305,12 @@ import {
   segmentsOfAlbumIdPath,
 } from "@/composables/useAlbumIdPathState";
 import { openFilePicker } from "@/api/dialog";
-import { setAlbumSyncMode, syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
+import {
+  convertLocalFolderAlbumToNormal,
+  setAlbumSyncMode,
+  syncLocalFolderAlbum,
+  syncLocalFolderAlbums,
+} from "@/api/syncLocalFolder";
 import type { AlbumSyncMode } from "@kabegame/core/types/album";
 import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
@@ -809,6 +814,7 @@ type AlbumCommand =
   | "syncNowRecursiveExisting"
   | "syncNowRecursiveFull"
   | "openLocalFolder"
+  | "convertToNormal"
   | "createSubAlbum"
   | "openVirtualDrive"
   | `setSyncMode:${AlbumSyncMode}`;
@@ -834,6 +840,29 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
       ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "convertToNormal") {
+    const descendantCount = albumStore.getDescendantIds(id).length;
+    try {
+      await ElMessageBox.confirm(
+        t("albums.localFolder.convertToNormalConfirm", { count: descendantCount }),
+        t("albums.localFolder.convertToNormalTitle"),
+        { type: "warning" },
+      );
+      await convertLocalFolderAlbumToNormal(id);
+      await albumStore.loadAlbums();
+      ElMessage.success(t("albums.localFolder.convertToNormalSuccess"));
+    } catch (error) {
+      if (error !== "cancel") {
+        const errorMessage =
+          typeof error === "string" ? error : (error as any)?.message || String(error);
+        ElMessage.error(
+          t("albums.localFolder.convertToNormalFailed", { error: errorMessage }),
+        );
+      }
     }
     return;
   }
@@ -1011,10 +1040,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   flex-direction: column;
   overflow: hidden;
   /* 与 .gallery-page 同口径的整页内缩：页头/树列/内容距窗口四周 20px */
-  // padding: var(--albums-page-pad);
-  .albums-page-header {
-    margin: var(--albums-page-pad) var(--albums-page-pad) 20px;
-  }
+  padding: var(--albums-page-pad) var(--albums-page-pad) var(--albums-page-pad) 0;
 }
 
 .albums-grid-body {

@@ -63,6 +63,9 @@ albums:
     cannotMoveIntoLocalFolder: Albums cannot be moved under a local folder album.
   localFolderErrors:
     androidUnsupported: Local folder sync is not supported on Android
+    notLocalFolder: Only local folder albums can be converted to normal albums
+    delegatedConversion: This album is managed by a parent album's recursive sync. Disable recursive sync on the parent first
+    syncInProgress: This album or a related album is currently syncing. Please try again later
     nameRequired: Album name cannot be empty
     nameNoSlash: "Album name cannot contain '/'"
     parentReadonly: Cannot create a local folder sync album under a system album

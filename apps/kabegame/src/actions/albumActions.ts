@@ -1,4 +1,4 @@
-import { Connection, FolderOpened, Folder, FolderAdd, Picture, Edit, Rank, Delete, Refresh, VideoPause } from "@kabegame/element-plus-icons";
+import { Connection, FolderOpened, Folder, FolderAdd, FolderChecked, Picture, Edit, Rank, Delete, Refresh, VideoPause } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import type { Album } from "@/stores/albums";
@@ -142,6 +142,19 @@ export function createAlbumActions(): ActionItem<Album>[] {
         const ext = ctx as AlbumActionContext;
         return LOCAL_FOLDER_SUPPORTED && ext.isLocalFolder && !!ext.target?.syncFolder;
       },
+    },
+    {
+      key: "convertToNormal",
+      label: t("contextMenu.convertToNormalAlbum"),
+      icon: FolderChecked,
+      command: "convertToNormal",
+      dividerBefore: true,
+      visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
+      disabled: (ctx) => ctx.target?.syncMode === "delegated",
+      suffix: (ctx) =>
+        ctx.target?.syncMode === "delegated"
+          ? t("contextMenu.convertDelegatedReason")
+          : "",
     },
     {
       key: "setWallpaperRotation",

@@ -27,6 +27,8 @@
   "syncModeCurrent": "✓ 当前",
   "syncModeDelegatedReason": "父级递归同步接管",
   "openLocalFolder": "打开本地文件夹",
+  "convertToNormalAlbum": "转为普通画册",
+  "convertDelegatedReason": "请先解除父级的递归同步",
   "setWallpaperRotation": "设为桌面轮播",
   "setWallpaperRotationActive": "（已设置）",
   "stopWallpaperRotation": "停止桌面轮播",

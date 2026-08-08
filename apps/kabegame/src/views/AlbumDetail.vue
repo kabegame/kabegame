@@ -158,7 +158,7 @@
       :context="childAlbumMenuContext"
       :z-index="childAlbumMenu.zIndex.value"
       @close="childAlbumMenu.hide"
-      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'stopWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder' | 'createSubAlbum' | 'openVirtualDrive' | 'setSyncMode:none' | 'setSyncMode:shallow' | 'setSyncMode:recursive' | 'setSyncMode:delegated')"
+      @command="(cmd) => handleChildAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'stopWallpaperRotation' | 'rename' | 'moveTo' | 'syncNow' | 'syncNowRecursiveExisting' | 'syncNowRecursiveFull' | 'openLocalFolder' | 'convertToNormal' | 'createSubAlbum' | 'openVirtualDrive' | 'setSyncMode:none' | 'setSyncMode:shallow' | 'setSyncMode:recursive' | 'setSyncMode:delegated')"
     />
 
     <el-dialog
@@ -253,7 +253,12 @@ import {
   loadAlbumMediaPreview,
   type AlbumMediaNode,
 } from "@/utils/albumMediaTree";
-import { setAlbumSyncMode, syncLocalFolderAlbum, syncLocalFolderAlbums } from "@/api/syncLocalFolder";
+import {
+  convertLocalFolderAlbumToNormal,
+  setAlbumSyncMode,
+  syncLocalFolderAlbum,
+  syncLocalFolderAlbums,
+} from "@/api/syncLocalFolder";
 import type { AlbumSyncMode } from "@kabegame/core/types/album";
 import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -572,6 +577,7 @@ const handleChildAlbumMenuCommand = async (
     | "syncNowRecursiveExisting"
     | "syncNowRecursiveFull"
     | "openLocalFolder"
+    | "convertToNormal"
     | "createSubAlbum"
     | "openVirtualDrive"
     | `setSyncMode:${AlbumSyncMode}`,
@@ -595,6 +601,29 @@ const handleChildAlbumMenuCommand = async (
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
       ElMessage.error(e?.message || String(e));
+    }
+    return;
+  }
+
+  if (command === "convertToNormal") {
+    const descendantCount = albumStore.getDescendantIds(id).length;
+    try {
+      await ElMessageBox.confirm(
+        t("albums.localFolder.convertToNormalConfirm", { count: descendantCount }),
+        t("albums.localFolder.convertToNormalTitle"),
+        { type: "warning" },
+      );
+      await convertLocalFolderAlbumToNormal(id);
+      await albumStore.loadAlbums();
+      ElMessage.success(t("albums.localFolder.convertToNormalSuccess"));
+    } catch (error) {
+      if (error !== "cancel") {
+        const errorMessage =
+          typeof error === "string" ? error : (error as any)?.message || String(error);
+        ElMessage.error(
+          t("albums.localFolder.convertToNormalFailed", { error: errorMessage }),
+        );
+      }
     }
     return;
   }

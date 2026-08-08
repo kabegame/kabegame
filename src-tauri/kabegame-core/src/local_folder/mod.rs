@@ -20,6 +20,7 @@ pub use scan_service::{
     ScannedFile,
 };
 pub use status::FolderStatus;
+pub(crate) use sync::{local_folder_forbidden_roots, sync_album_for_mode_with_retry};
 pub use sync::{
     sync_album, sync_albums_by_ids, sync_all_local_folder_albums, SyncAlbumOptions, SyncReport,
 };

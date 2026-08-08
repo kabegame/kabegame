@@ -12,6 +12,10 @@ use crate::local_folder::SyncMode;
 use crate::settings::Settings;
 use crate::storage::image_events::delete_images_with_events;
 use crate::storage::{Album, Storage};
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
+use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
+#[cfg(all(feature = "virtual-driver", not(target_os = "android")))]
+use crate::virtual_driver::VirtualDriveService;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -28,6 +32,11 @@ const CANCEL_MARKER: &str = "__folder_sync_canceled__";
 /// 同步的逐文件节流间隔：**只在真正写了库之后**才等这一手（新增 / 链接进画册 / 重导入）。
 /// 已入库且本次什么都没做的文件全速掠过——否则一个几万张图的老目录，光空转就要几十分钟。
 const SYNC_WRITE_THROTTLE_MS: u64 = 100;
+
+/// 同一画册已有同步在飞时的补偿重试次数。
+const IN_FLIGHT_RETRY_LIMIT: usize = 3;
+/// 补偿重试间隔；只处理 `skipped_in_flight`，普通同步错误不重试。
+const IN_FLIGHT_RETRY_DELAY_MS: u64 = 500;
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +72,71 @@ impl Default for SyncAlbumOptions {
     }
 }
 
+/// 递归同步/创建时需要刻意避开的「禁区根」（规范化）：仅 VD 挂载点。
+pub(crate) fn local_folder_forbidden_roots() -> Vec<PathBuf> {
+    #[cfg(all(feature = "virtual-driver", not(target_os = "android")))]
+    {
+        return VirtualDriveService::global()
+            .current_mount_point()
+            .map(|mount_point| {
+                let path = Path::new(&mount_point);
+                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+            })
+            .into_iter()
+            .collect();
+    }
+    #[cfg(not(all(feature = "virtual-driver", not(target_os = "android"))))]
+    {
+        Vec::new()
+    }
+}
+
+/// 将同步模式映射为统一的同步选项；`none` 不触发同步。
+pub(crate) fn sync_options_for_mode(mode: SyncMode) -> Option<SyncAlbumOptions> {
+    match mode {
+        SyncMode::None => None,
+        SyncMode::Shallow => Some(SyncAlbumOptions {
+            recursive: false,
+            create_missing_albums: false,
+            forbidden_roots: Vec::new(),
+        }),
+        SyncMode::Recursive | SyncMode::Delegated => Some(SyncAlbumOptions {
+            recursive: true,
+            create_missing_albums: true,
+            forbidden_roots: local_folder_forbidden_roots(),
+        }),
+    }
+}
+
+/// 按同步模式执行，并补偿「已有同画册同步在飞」造成的跳过。
+pub(crate) async fn sync_album_for_mode_with_retry(
+    album_id: &str,
+    mode: SyncMode,
+) -> Result<Option<SyncReport>, String> {
+    let Some(options) = sync_options_for_mode(mode) else {
+        return Ok(None);
+    };
+
+    // 在飞的同步可能已在新文件落地前列完目录；若不补偿，本次变更可能永久漏掉。
+    for attempt in 0..=IN_FLIGHT_RETRY_LIMIT {
+        let report = sync_album(album_id, options.clone()).await?;
+        if !report.skipped_in_flight {
+            return Ok(Some(report));
+        }
+
+        if attempt == IN_FLIGHT_RETRY_LIMIT {
+            eprintln!(
+                "[local_folder] sync_album {album_id} still in flight after {IN_FLIGHT_RETRY_LIMIT} retries"
+            );
+            return Ok(Some(report));
+        }
+
+        tokio::time::sleep(Duration::from_millis(IN_FLIGHT_RETRY_DELAY_MS)).await;
+    }
+
+    unreachable!("in-flight retry loop always returns")
+}
+
 pub async fn sync_all_local_folder_albums() -> Vec<SyncReport> {
     let albums = match Storage::global().list_local_folder_albums() {
         Ok(albums) => albums,
@@ -81,27 +155,11 @@ pub async fn sync_all_local_folder_albums() -> Vec<SyncReport> {
             );
             continue;
         };
-        let options = match mode {
-            SyncMode::Recursive => SyncAlbumOptions {
-                recursive: true,
-                create_missing_albums: true,
-                forbidden_roots: {
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        crate::commands::album::local_folder_forbidden_roots()
-                    }
-                    #[cfg(target_os = "android")]
-                    {
-                        Vec::new()
-                    }
-                },
-            },
-            SyncMode::Shallow => SyncAlbumOptions {
-                recursive: false,
-                create_missing_albums: false,
-                forbidden_roots: Vec::new(),
-            },
-            SyncMode::Delegated | SyncMode::None => continue,
+        if matches!(mode, SyncMode::Delegated | SyncMode::None) {
+            continue;
+        }
+        let Some(options) = sync_options_for_mode(mode) else {
+            continue;
         };
         match sync_album(&album.id, options).await {
             Ok(report) => reports.push(report),

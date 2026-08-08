@@ -302,7 +302,8 @@ export const useAlbumStore = defineStore("albums", () => {
   );
 
   const applyAlbumAddedPayload = (p: Record<string, unknown>) => {
-    const row = normalizeAlbumRow(p);
+    // DaemonEvent 的 `type` 是事件类型标识；画册自身类型通过 `albumType` 单独传递。
+    const row = normalizeAlbumRow({ ...p, type: p.albumType ?? "normal" });
     if (!row.id) return;
     if (albums.value.some((a) => a.id === row.id)) return;
     albums.value.unshift(row);
@@ -336,6 +337,12 @@ export const useAlbumStore = defineStore("albums", () => {
     if (!album) return;
     if (typeof changes.name === "string") {
       album.name = changes.name;
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "albumType")) {
+      album.type = changes.albumType === "local_folder" ? "local_folder" : "normal";
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "syncFolder")) {
+      album.syncFolder = changes.syncFolder == null ? null : String(changes.syncFolder);
     }
     if (Object.prototype.hasOwnProperty.call(changes, "parentId")) {
       album.parentId = parseParentId(changes.parentId);

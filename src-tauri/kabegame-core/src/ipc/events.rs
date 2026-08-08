@@ -305,6 +305,17 @@ pub enum DaemonEvent {
         created_at: u64,
         #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
         parent_id: Option<String>,
+        /// 画册自身类型；事件类型已占用顶层 `type` 键，因此必须使用独立字段名。
+        #[serde(rename = "albumType")]
+        album_type: String,
+        #[serde(rename = "syncFolder", skip_serializing_if = "Option::is_none")]
+        sync_folder: Option<String>,
+        #[serde(rename = "folderStatus", skip_serializing_if = "Option::is_none")]
+        folder_status: Option<String>,
+        #[serde(rename = "syncMode")]
+        sync_mode: String,
+        #[serde(rename = "ancestorPath")]
+        ancestor_path: String,
     },
     /// 画册属性变更（重命名、移动父级等；`changes` 为增量，如 `{ "name": "..." }`、`{ "parentId": "..." | null }`）
     AlbumChanged {
@@ -384,6 +395,34 @@ pub enum DaemonEvent {
     /// 下载条目移除（后端 wait 完成后发出，前端据此从活跃列表删除）
     #[serde(rename_all = "camelCase")]
     DownloadRemoved { id: u64 },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DaemonEvent;
+
+    #[test]
+    fn album_added_serializes_complete_album_fields_without_type_collision() {
+        let event = DaemonEvent::AlbumAdded {
+            id: "child-id".to_string(),
+            name: "child".to_string(),
+            created_at: 123,
+            parent_id: Some("parent-id".to_string()),
+            album_type: "local_folder".to_string(),
+            sync_folder: Some("/pictures/child".to_string()),
+            folder_status: Some(r#"{"state":"ok"}"#.to_string()),
+            sync_mode: "delegated".to_string(),
+            ancestor_path: "/parent-id/child-id/".to_string(),
+        };
+
+        let payload = serde_json::to_value(event).expect("AlbumAdded 应可序列化");
+        assert_eq!(payload["type"], "album-added");
+        assert_eq!(payload["albumType"], "local_folder");
+        assert_eq!(payload["syncFolder"], "/pictures/child");
+        assert_eq!(payload["folderStatus"], r#"{"state":"ok"}"#);
+        assert_eq!(payload["syncMode"], "delegated");
+        assert_eq!(payload["ancestorPath"], "/parent-id/child-id/");
+    }
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递

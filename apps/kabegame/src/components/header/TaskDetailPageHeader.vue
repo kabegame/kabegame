@@ -55,7 +55,8 @@ const { isCompact } = storeToRefs(useUiStore());
 const taskRouteStore = useTaskDetailRouteStore();
 const pageBridge = usePageBridgeStore();
 
-// Refresh / ToggleShowHidden 入口已收进全局工具箱，这里只注册桥接。
+// Refresh 的入口在 header 上，这里额外注册桥接供全局快捷键（⇧⌘R）使用；
+// ToggleShowHidden 的入口在全局工具箱，只有桥接。
 onMounted(() => {
   pageBridge.setRefresh(() => emit("refresh"));
   pageBridge.setToggleShowHidden({
@@ -73,9 +74,10 @@ onUnmounted(() => {
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (isCompact.value) {
-    return [HeaderFeatureId.TaskDrawer];
+    return [HeaderFeatureId.Refresh, HeaderFeatureId.TaskDrawer];
   } else {
     const ids = [
+      HeaderFeatureId.Refresh,
       HeaderFeatureId.DeleteTask,
       HeaderFeatureId.AddToAlbum,
       HeaderFeatureId.FailedImages,
@@ -83,7 +85,8 @@ const showIds = computed(() => {
       HeaderFeatureId.TaskViewLog,
       HeaderFeatureId.TaskViewParams,
     ];
-    if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
+    // StopTask 紧跟在 Refresh 之后
+    if (props.showStopTask) ids.splice(1, 0, HeaderFeatureId.StopTask);
     if (props.showOpenWebview) ids.push(HeaderFeatureId.OpenTaskWebview);
     return ids;
   }
@@ -106,6 +109,9 @@ const foldIds = computed(() => {
 // 处理action事件
 const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
+    case HeaderFeatureId.Refresh:
+      emit("refresh");
+      break;
     case HeaderFeatureId.StopTask:
       emit("stop-task");
       break;

@@ -68,6 +68,10 @@
     "recursiveLimits": "遞迴最多展開 {maxDepth} 層，超出的子目錄會被跳過。",
     "skipNotice": "符號連結、以「.」開頭的隱藏目錄與檔案、非圖片/影片檔案均不會同步。",
     "duplicatePathHint": "此資料夾已存在對應的同步畫冊，請選擇其他資料夾。",
+    "convertToNormalTitle": "轉換為一般畫冊？",
+    "convertToNormalConfirm": "這是不可逆操作。將把此畫冊及其 {count} 個子畫冊全部轉換為一般畫冊，並停止跟隨磁碟資料夾。圖片仍指向磁碟上的原始檔案；轉換後若選擇刪除圖片檔案，原始檔案會被移入系統垃圾桶。",
+    "convertToNormalSuccess": "已轉換為一般畫冊",
+    "convertToNormalFailed": "轉換失敗：{error}",
     "syncMode": {
       "none": { "label": "不同步", "description": "不監聽資料夾變更，也不會自動同步" },
       "shallow": { "label": "淺層同步", "description": "只自動同步此資料夾目前層級的檔案，不建立子畫冊" },

@@ -63,6 +63,9 @@ albums:
     cannotMoveIntoLocalFolder: 不能將畫冊移動到本機資料夾畫冊下
   localFolderErrors:
     androidUnsupported: Android 平台不支援本機資料夾同步
+    notLocalFolder: 只有本機資料夾畫冊可以轉換為一般畫冊
+    delegatedConversion: 此畫冊由父級遞迴同步管理，請先解除父級的遞迴同步
+    syncInProgress: 此畫冊或關聯畫冊正在同步中，請稍後再試
     nameRequired: 畫冊名稱不能為空
     nameNoSlash: "畫冊名稱不能包含 '/'"
     parentReadonly: 不能在系統畫冊下建立本機資料夾同步畫冊

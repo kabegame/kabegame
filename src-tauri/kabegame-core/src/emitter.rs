@@ -382,12 +382,17 @@ impl GlobalEmitter {
     }
 
     /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
-    pub fn emit_album_added(&self, id: &str, name: &str, created_at: u64, parent_id: Option<&str>) {
+    pub fn emit_album_added(&self, album: &crate::storage::Album) {
         let event = std::sync::Arc::new(DaemonEvent::AlbumAdded {
-            id: id.to_string(),
-            name: name.to_string(),
-            created_at,
-            parent_id: parent_id.map(|s| s.to_string()),
+            id: album.id.clone(),
+            name: album.name.clone(),
+            created_at: album.created_at,
+            parent_id: album.parent_id.clone(),
+            album_type: album.kind.clone(),
+            sync_folder: album.sync_folder.clone(),
+            folder_status: album.folder_status.clone(),
+            sync_mode: album.sync_mode.clone(),
+            ancestor_path: album.ancestor_path.clone(),
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -628,14 +633,7 @@ impl GlobalEmitter {
 
     pub fn emit_album_changed(&self, _album_id: &str, _changes: serde_json::Value) {}
 
-    pub fn emit_album_added(
-        &self,
-        _id: &str,
-        _name: &str,
-        _created_at: u64,
-        _parent_id: Option<&str>,
-    ) {
-    }
+    pub fn emit_album_added(&self, _album: &crate::storage::Album) {}
 
     pub fn emit_album_deleted(&self, _album_id: &str) {}
 

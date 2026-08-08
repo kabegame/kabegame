@@ -222,6 +222,7 @@ const showIds = computed(() => {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
   return [
+    HeaderFeatureId.Refresh,
     HeaderFeatureId.FailedImages,
     HeaderFeatureId.TaskDrawer,
     HeaderFeatureId.Collect,
@@ -271,7 +272,8 @@ onUnmounted(() => {
   headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);
 });
 
-// Refresh / ToggleShowHidden / ToggleShowAlbumImages 入口已收进全局工具箱，这里只注册桥接。
+// Refresh 的入口在 header 上，这里额外注册桥接供全局快捷键（⇧⌘R）使用；
+// ToggleShowHidden / ToggleShowAlbumImages 的入口在全局工具箱，只有桥接。
 const pageBridge = usePageBridgeStore();
 onMounted(() => {
   pageBridge.setRefresh(() => emit("refresh"));
@@ -301,6 +303,9 @@ defineExpose({
 // 处理action事件
 const handleAction = (payload: { id: string; data: { type: string; value?: string } }) => {
   switch (payload.id) {
+    case HeaderFeatureId.Refresh:
+      emit("refresh");
+      break;
     case HeaderFeatureId.Collect:
       if (payload.data.type === "openMenu") {
         emit("openCollectMenu");

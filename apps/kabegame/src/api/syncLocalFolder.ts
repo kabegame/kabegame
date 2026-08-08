@@ -94,6 +94,12 @@ export async function setAlbumSyncMode(
   await invoke("set_album_sync_mode", { albumId, mode });
 }
 
+/** 将本地文件夹画册及其全部后代脱钩并转换为普通画册。 */
+export async function convertLocalFolderAlbumToNormal(albumId: string): Promise<void> {
+  if (LOCAL_FOLDER_UNSUPPORTED) return;
+  await invoke("convert_local_folder_album_to_normal", { albumId });
+}
+
 /**
  * 取消进行中的文件夹同步：传 albumId 取消单个，不传取消全部。
  * 返回实际被置位的任务数（已结束的任务不计）。

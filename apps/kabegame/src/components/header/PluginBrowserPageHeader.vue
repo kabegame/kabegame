@@ -29,7 +29,7 @@ const { isCompact } = storeToRefs(useUiStore());
 const { isSuper } = storeToRefs(useApp());
 const pageBridge = usePageBridgeStore();
 
-// Refresh 入口已收进全局工具箱，这里只在 isSuper 时注册桥接（保持原先"仅 super 模式显示"的语义）。
+// Refresh 的入口在 header 上（仅 super 模式显示），这里额外注册桥接供全局快捷键（⇧⌘R）使用。
 watch(
   isSuper,
   (v) => {
@@ -46,17 +46,24 @@ const showIds = computed(() => {
   if (isCompact.value) {
     return [];
   }
-  return [HeaderFeatureId.ImportSource];
+  const ids = [HeaderFeatureId.ImportSource];
+  if (isSuper.value) ids.unshift(HeaderFeatureId.Refresh);
+  return ids;
 });
 
 const foldIds = computed(() => {
   if (!isCompact.value) return [];
-  return [HeaderFeatureId.ImportSource, HeaderFeatureId.ManageSources];
+  const ids = [HeaderFeatureId.ImportSource, HeaderFeatureId.ManageSources];
+  if (isSuper.value) ids.unshift(HeaderFeatureId.Refresh);
+  return ids;
 });
 
 // 处理action事件
 const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
+    case HeaderFeatureId.Refresh:
+      emit("refresh");
+      break;
     case HeaderFeatureId.ImportSource:
       emit("import-source");
       break;

@@ -74,9 +74,15 @@
         class="query-main"
       >
         <template #prefix>
-          <el-button type="primary" class="flex-none" @click="openAdvancedQuery">
-            <el-icon class="mr-1.5 text-sm"><Setting /></el-icon>
-            {{ t("gallery.advancedConfigure") }}
+          <!-- 同工具条上其它控件一样只留图标：名字走 title。 -->
+          <el-button
+            type="primary"
+            class="flex-none"
+            :title="t('gallery.advancedConfigure')"
+            :aria-label="t('gallery.advancedConfigure')"
+            @click="openAdvancedQuery"
+          >
+            <el-icon class="text-sm"><Setting /></el-icon>
           </el-button>
         </template>
       </PathqlPathBar>
