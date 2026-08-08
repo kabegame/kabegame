@@ -236,6 +236,26 @@ ninja 按 mtime 判脏 → 内容零变化也能重编数万 target、耗时数�
 因此纯 rerun / 只改导出逻辑时增量构建为分钟级（同步跳过 + no-op ninja + 重打包导出）；
 只有 patch 内容或上游 pin 真变时才触发重编，且范围贴近真实依赖锥。
 
+**dev/prod 交替必然全量，用两套工作区隔开。** 上面三层只治「内容没变却重编」，治不了
+variant 切换：两个 variant 共用同一个 `out/Release_GN_*`，而 `GN_DEFINES` 不同
+（`is_official_build=true` + PGO vs 非 official），切换时 `args.gn` 被改写、gn 重新生成
+**所有编译命令**，ninja 按命令行 hash 判脏 → 全量重编并覆盖另一 variant 的对象文件。
+磁盘上永远只存在最后一次构建那个 variant 的编译缓存。
+
+约定优于机制：**按 variant 分批干活**（dev 里迭代完再出一次 prod），把 N 次切换压成 1 次。
+需要两边频繁出包时各备一套工作区——macOS 的 APFS 用 `cp -Rpc` 是写时复制克隆，几万文件
+瞬间完成、数据零占用（只有后续各自编译产生的差异才真正吃盘）：
+
+```bash
+cp -Rpc ~/kabegame-cefbuild ~/kabegame-cefbuild-dev     # 克隆一份给 dev 专用
+CEFBUILD=~/kabegame-cefbuild     deno task build:chromium prod
+CEFBUILD=~/kabegame-cefbuild-dev deno task build:chromium dev
+```
+
+`out/` 目录名按 variant 分开（`Release_GN_arm64_dev`）走不通——automate-git 里目录名写死
+为 `Release_GN_<arch>`，得 patch automate 本身。ccache/sccache 是另一条路，代价是缓存
+数十 GB 且首次填充仍全量。
+
 因此 `third/cef` 的 gitlink **始终指向官方上游 pin**（当前 `0d0eeb611`），Kabegame 的分歧
 只以 `third-patches/cef/*.patch` 为准，与其它 `third/` 子模块完全同构。
 
