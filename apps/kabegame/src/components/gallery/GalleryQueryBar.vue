@@ -1,20 +1,22 @@
 <template>
   <div class="gallery-query-bar w-full min-w-0">
-    <!-- 桌面：过滤入口(简单/高级) + 排序维度 / 顺序 / 每页条数。
-         hugTop 收掉上方 PageHeader 那 20px 外边距的一大半，两行贴近标题栏。
-         整行不换行、横向滚动，v-hscroll-fade 在两侧点亮「还有内容」的粉色渐隐。 -->
-    <el-scrollbar
+    <!-- 桌面：一条工具条搞定。左端是「看哪一批」的固定控件（行首插槽、简单/高级、
+         排序与每页），中段是随查询变化的 chip（搜索 + 过滤维度）横向滚动区，右端钉
+         着清除全部与 chip 自定义入口。
+         chip 只写取值——维度由图标表明，维度名与取值一起进 tooltip（chipDisplay）。
+         简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），否则两种模式
+         高度不同，切换时下面的画廊会整体上下跳。
+         hugTop 收掉上方 PageHeader 那 20px 外边距的一大半，工具条贴近标题栏。 -->
+    <div
       v-if="!uiStore.isCompact"
-      v-hscroll-fade
-      class="filter-chip-row"
+      class="query-row mb-1 flex flex-wrap items-center gap-2"
       :class="{ '-mt-3': hugTop }"
-      view-class="flex flex-nowrap items-center gap-2 py-1"
     >
       <!-- 页面自己的行首控件（如画册详情的「图片 / 子画册」选项卡）：
            它和过滤模式一样是「看哪一批」的开关，挤在同一行省掉一整行高度。 -->
       <slot name="leading" />
 
-      <!-- 过滤入口:简单 / 高级 二选一,下面那行跟着换 -->
+      <!-- 过滤入口:简单 / 高级 二选一,中段跟着换 -->
       <KbTab
         v-if="enableAdvanced"
         v-model="filterMode"
@@ -23,52 +25,54 @@
         @select="onFilterModeSelect"
       />
 
-      <!-- 排序维度 / 顺序 / 每页条数：与过滤维度同一套 chip 下拉，区别只是必选
-           (clearable=false：没有「任意」行、不出清除徽章、chip 不进选中高亮态)。 -->
+      <!-- 排序 = 两颗纯图标 chip：先「按哪个维度」，再「往哪个方向」。两颗都不写字
+           ——排序恒有值，写出来就是一段永远占位的常量；名字与取值全在 tooltip 里。 -->
       <KbFilterDropdown
-        v-if="sortFeatures.length > 0"
+        v-if="showSortFieldChip"
         :model-value="sortField"
         :options="sortFieldItems"
         :chip-label="t('gallery.sort')"
+        chip-display="icon"
+        :title="chipTitle(t('gallery.sort'), sortFieldChipValue)"
         :clearable="false"
-        class="flex-none"
         @update:model-value="(value) => { if (value) onSortFieldCommand(value); }"
       >
-        <template #icon><Sort /></template>
-      </KbFilterDropdown>
-
-      <KbFilterDropdown
-        v-if="sortFeatures.length > 0"
-        :model-value="sortOrder"
-        :options="sortOrderItems"
-        :chip-label="t('gallery.sortOrder')"
-        :clearable="false"
-        class="flex-none"
-        @update:model-value="(value) => { if (value) onSortOrderChange(value); }"
-      >
+        <!-- 复合图标：底是通用的「排序」双箭头（一眼认出这颗管排序），
+             右下角挂当前维度的小徽章（再认出按什么排）。只给维度图标的话，
+             它和右侧同名的过滤维度长得一模一样，认不出是排序入口。 -->
         <template #icon>
-          <Sort :class="{ 'rotate-180': sortOrder === 'desc' }" />
+          <span class="sort-combo">
+            <Sort class="sort-combo__base" />
+            <component :is="sortFieldIcon" class="sort-combo__badge" />
+          </span>
         </template>
       </KbFilterDropdown>
 
       <KbFilterDropdown
-        v-if="enablePageSize"
-        :model-value="String(pageSize)"
-        :options="pageSizeItems"
-        :chip-label="t('gallery.pageSize')"
+        v-if="showSortOrderChip"
+        :model-value="sortOrder"
+        :chip-label="t('gallery.sortOrder')"
+        :selected-label="sortOrderChipValue"
+        chip-action="toggle"
+        chip-display="icon"
+        :title="chipTitle(t('gallery.sortOrder'), sortOrderToggleHint)"
         :clearable="false"
-        class="flex-none"
-        @update:model-value="(value) => { if (value) onPageSizeCommand(value); }"
+        @toggle="onSortOrderToggle"
       >
-        <template #icon><Histogram /></template>
+        <template #icon>
+          <SortDesc v-if="sortOrder === 'desc'" />
+          <SortAsc v-else />
+        </template>
       </KbFilterDropdown>
-    </el-scrollbar>
 
-    <!-- 查询行：简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），
-         否则两种模式高度不同，切换时下面的画廊会整体上下跳。 -->
-    <div v-if="!uiStore.isCompact" class="query-row mb-1 flex items-center gap-2">
+      <span v-if="hasFixedSection" class="query-divider" />
+
       <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
-      <PathqlPathBar v-if="filterMode === 'advanced'" :path="advancedPathPreview" class="flex-1">
+      <PathqlPathBar
+        v-if="filterMode === 'advanced'"
+        :path="advancedPathPreview"
+        class="query-main"
+      >
         <template #prefix>
           <el-button type="primary" class="flex-none" @click="openAdvancedQuery">
             <el-icon class="mr-1.5 text-sm"><Setting /></el-icon>
@@ -77,23 +81,24 @@
         </template>
       </PathqlPathBar>
 
-      <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整行横向滚动，不换行 -->
+      <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整段横向滚动，不换行 -->
       <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
            清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
            v-hscroll-fade 在两侧点亮「还有内容没滚到」的粉色渐隐。 -->
       <el-scrollbar
         v-else
         v-hscroll-fade
-        class="filter-chip-row min-w-0 flex-1"
+        class="filter-chip-row query-main"
         view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
       >
           <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
                这里每次提交都会 navigate + 重查，所以要防抖 -->
           <GallerySearchDropdown
-            v-if="enableSearch"
+            v-if="showSearchChip"
             :query="searchText"
             :mode="searchModeView"
             :modes="searchFeatures"
+            :chip-display="searchText.trim() ? 'value' : 'icon'"
             :debounce="300"
             @update:query="onSearchInput"
             @update:mode="onSearchModeSelect"
@@ -105,8 +110,9 @@
             :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
             :chip-label="dimension.chipLabel"
             :selected-label="dimensionChipValue(dimension.key)"
-            :any-label="t('gallery.filterAny')"
-            :title="dimension.title"
+            :any-label="dimension.anyLabel"
+            :chip-display="isDimensionActive(dimension.key) ? 'value' : 'icon'"
+            :title="chipTitle(dimension.title, dimensionChipTitleValue(dimension))"
             @open="setDimensionPopoverOpen(dimension.key, true)"
             @close="setDimensionPopoverOpen(dimension.key, false)"
             @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
@@ -132,8 +138,10 @@
           </KbFilterDropdown>
       </el-scrollbar>
 
+      <span class="query-divider" />
+
       <!-- 清除全部过滤。画廊把它放在标题副标题里（那里本来就在说「筛出了多少」），
-           详情页没有那个位置，就钉在过滤行右端，不随 chip 一起滚走。 -->
+           详情页没有那个位置，就钉在工具条右端，不随 chip 一起滚走。 -->
       <button
         v-if="enableClearAll && filterMode === 'simple' && isFilterIndicatorActive"
         type="button"
@@ -145,6 +153,39 @@
         <el-icon><Filter /></el-icon>
         <span class="query-clear-filter__badge"><el-icon><Close /></el-icon></span>
       </button>
+
+      <!-- chip 自定义入口：借 chip 下拉的弹层与开合逻辑，trigger 用 icon 档收成方形。
+           它自己不是过滤维度，所以恒 clearable=false + model-value=null。 -->
+      <KbFilterDropdown
+        :model-value="null"
+        :chip-label="t('gallery.chipSettings')"
+        :title="t('gallery.chipSettings')"
+        chip-display="icon"
+        :clearable="false"
+      >
+        <template #icon><MoreFilled /></template>
+        <template #panel>
+          <div class="chip-settings">
+            <template v-for="(group, index) in chipToggleGroups" :key="index">
+              <div v-if="index > 0 && group.length" class="chip-settings__divider" />
+              <div v-if="index === 0 && group.length" class="chip-settings__title">
+                {{ t("gallery.chipVisibleTitle") }}
+              </div>
+              <div v-for="item in group" :key="item.key" class="chip-settings__row">
+                <span class="chip-settings__icon"><component :is="item.icon" /></span>
+                <span class="flex-1">{{ item.label }}</span>
+                <el-switch
+                  :model-value="isChipEnabled(item.key)"
+                  size="small"
+                  @update:model-value="(v) => saveChipSetting(item.key, !!v)"
+                />
+              </div>
+            </template>
+
+            <p class="chip-settings__help">{{ t("gallery.chipHiddenHelp") }}</p>
+          </div>
+        </template>
+      </KbFilterDropdown>
     </div>
 
     <!-- 紧凑模式没有上面那行，行首控件与「高级查询」按钮共用这一行 -->
@@ -266,7 +307,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, onUnmounted, provide, ref, watch, type Component } from "vue";
+import {
+  computed,
+  markRaw,
+  onUnmounted,
+  provide,
+  ref,
+  useSlots,
+  watch,
+  type Component,
+} from "vue";
 import { useI18n } from "@kabegame/i18n";
 import {
   KbFilterDropdown,
@@ -275,16 +325,26 @@ import {
   type KbTabItem,
 } from "@kabegame/element-plus";
 import {
+  Clock,
   Close,
   Filter,
   FilterAspect,
   FilterDate,
   FilterMedia,
+  FilterName,
   FilterPlugin,
   FilterSize,
-  Histogram,
+  FilterWallpaper,
+  LetterA,
+  List,
+  MagicStick,
+  MoreFilled,
+  Rank,
+  Search,
   Setting,
   Sort,
+  SortAsc,
+  SortDesc,
 } from "@kabegame/element-plus-icons";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
@@ -296,6 +356,7 @@ import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vu
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import {
@@ -439,8 +500,10 @@ const emit = defineEmits<{
 }>();
 
 const { t, locale } = useI18n();
+const slots = useSlots();
 const uiStore = useUiStore();
 const pluginStore = usePluginStore();
+const settingsStore = useSettingsStore();
 
 /** 查询的单原子投影；null = 只能用高级视图表达（含 或/非/多条件）。 */
 const simpleView = computed<GalleryFilterSet | null>(() =>
@@ -512,16 +575,20 @@ const advancedConditionCount = computed(() =>
   isAdvancedActive.value ? conditionCount(props.query) : 0
 );
 
+// 两档都只留图标（名字走 title）：漏斗=简单，大写 A=Advanced。
+// 这一对是整条工具条上最靠左、最常看的东西，写全名要占掉近三颗 chip 的宽度。
 const filterModeItems = computed<KbTabItem<FilterMode>[]>(() => [
   {
     name: "simple",
     label: t("gallery.filterModeSimple"),
     icon: markRaw(Filter),
+    iconOnly: true,
   },
   {
     name: "advanced",
     label: t("gallery.filterModeAdvanced"),
-    icon: markRaw(Filter),
+    icon: markRaw(LetterA),
+    iconOnly: true,
     count: advancedConditionCount.value > 0 ? advancedConditionCount.value : null,
   },
 ]);
@@ -608,29 +675,157 @@ const ALL_FILTER_DIMENSIONS: Array<{
   key: GalleryBrowseDimension;
   titleKey: string;
   chipKey: string;
+  /** 未选中态的 chip 文案。chip 上没有维度名了，所以「任意」必须自带维度。 */
+  anyKey: string;
+  setting: ChipSettingKey;
 }> = [
-  { key: "date", titleKey: "gallery.filterByTime", chipKey: "gallery.advancedChipTime" },
-  { key: "plugin", titleKey: "gallery.filterByPlugin", chipKey: "gallery.advancedChipPlugin" },
-  { key: "mediaType", titleKey: "gallery.filterByMediaType", chipKey: "gallery.advancedChipMediaType" },
-  { key: "aspect", titleKey: "gallery.filterByAspect", chipKey: "gallery.advancedChipAspect" },
-  { key: "size", titleKey: "gallery.filterBySize", chipKey: "gallery.advancedChipSize" },
+  { key: "date", titleKey: "gallery.filterByTime", chipKey: "gallery.advancedChipTime", anyKey: "gallery.filterAnyTime", setting: "galleryChipDate" },
+  { key: "plugin", titleKey: "gallery.filterByPlugin", chipKey: "gallery.advancedChipPlugin", anyKey: "gallery.filterAnyPlugin", setting: "galleryChipPlugin" },
+  { key: "mediaType", titleKey: "gallery.filterByMediaType", chipKey: "gallery.advancedChipMediaType", anyKey: "gallery.filterAnyMediaType", setting: "galleryChipMediaType" },
+  { key: "aspect", titleKey: "gallery.filterByAspect", chipKey: "gallery.advancedChipAspect", anyKey: "gallery.filterAnyAspect", setting: "galleryChipAspect" },
+  { key: "size", titleKey: "gallery.filterBySize", chipKey: "gallery.advancedChipSize", anyKey: "gallery.filterAnySize", setting: "galleryChipSize" },
 ];
 
+/**
+ * 本页开放、且用户没在 ⋯ 面板里关掉的过滤维度。
+ *
+ * 关掉的维度只要**当前真的在过滤**就强行显示：否则查询被一条看不见的条件夹着，
+ * 人既不知道为什么少了图，也没地方把它清掉。
+ */
 const filterDimensions = computed<Array<{
   key: GalleryBrowseDimension;
   title: string;
   chipLabel: string;
+  anyLabel: string;
   icon: Component;
 }>>(() =>
   ALL_FILTER_DIMENSIONS
-    .filter((d) => props.filterFeatures.includes(d.key))
+    .filter(
+      (d) =>
+        props.filterFeatures.includes(d.key) &&
+        (isChipEnabled(d.setting) || isDimensionActive(d.key)),
+    )
     .map((d) => ({
       key: d.key,
       title: t(d.titleKey),
       chipLabel: t(d.chipKey),
+      anyLabel: t(d.anyKey),
       icon: FILTER_DIMENSION_ICONS[d.key],
     })),
 );
+
+// ---------- 工具条 chip：显隐与信息密度 ----------
+/**
+ * 每颗 chip 一个 `galleryChip*` 设置键（localStorage 后端），在 ⋯ 面板里直接开关。
+ *
+ * 读取一律「非 false 即显示」：设置还没落盘（新装、或后来新增的维度）时应当先把
+ * chip 显出来，而不是让人对着一条空工具条去找开关。
+ */
+type ChipSettingKey = Extract<AppSettingKey, `galleryChip${string}`>;
+
+function isChipEnabled(key: ChipSettingKey) {
+  return settingsStore.values[key] !== false;
+}
+
+function saveChipSetting(key: ChipSettingKey, value: boolean) {
+  void settingsStore.save(key, value);
+}
+
+/** tooltip 文案：chip 上一律不写维度名，全靠这里补回来。 */
+function chipTitle(label: string, value: string) {
+  return value ? `${label} · ${value}` : label;
+}
+
+function dimensionChipTitleValue(dimension: { key: GalleryBrowseDimension; anyLabel: string }) {
+  return isDimensionActive(dimension.key)
+    ? dimensionChipValue(dimension.key)
+    : dimension.anyLabel;
+}
+
+/** 搜索同理：关掉的搜索框只要还兜着关键词，就得留在条上让人看得见、清得掉。 */
+const showSearchChip = computed(
+  () => props.enableSearch && (isChipEnabled("galleryChipSearch") || !!searchText.value.trim()),
+);
+const showSortFieldChip = computed(
+  () => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortField"),
+);
+const showSortOrderChip = computed(
+  () => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortOrder"),
+);
+
+/** 左端固定区是否有内容——空的话它后面那条分隔线就成了行首一根孤立竖线。 */
+const hasFixedSection = computed(
+  () =>
+    !!slots.leading ||
+    props.enableAdvanced ||
+    showSortFieldChip.value ||
+    showSortOrderChip.value,
+);
+
+/**
+ * 排序维度的图标。纯图标 chip 下，通用的「排序」双箭头说不出到底按什么排，
+ * 所以每个维度用它自己那张脸——与同名过滤维度共用一张，认过一次就都认得。
+ */
+const SORT_FIELD_ICONS: Record<GallerySortField, Component> = {
+  "by-id": markRaw(Rank),
+  "by-time": markRaw(Clock),
+  "by-size": markRaw(FilterSize),
+  "by-name": markRaw(FilterName),
+  "by-aspect": markRaw(FilterAspect),
+  "by-set-time": markRaw(FilterWallpaper),
+  "by-album-order": markRaw(List),
+  random: markRaw(MagicStick),
+};
+
+const sortFieldIcon = computed<Component>(
+  () => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort),
+);
+const sortFieldChipValue = computed(() => gallerySortFieldLabel(sortField.value, t));
+const sortOrderChipValue = computed(() =>
+  props.sort.desc ? t("gallery.sortDescending") : t("gallery.sortAscending"),
+);
+/** 顺序 chip 点了就翻，tooltip 得把「翻过去是什么」说清楚。 */
+const sortOrderToggleHint = computed(() =>
+  t("gallery.sortOrderToggle", {
+    current: sortOrderChipValue.value,
+    next: props.sort.desc ? t("gallery.sortAscending") : t("gallery.sortDescending"),
+  }),
+);
+
+interface ChipToggleItem {
+  key: ChipSettingKey;
+  label: string;
+  icon: Component;
+}
+
+/**
+ * ⋯ 面板里的 chip 开关，分两组：随查询变化的过滤维度，和恒定的排序 / 每页。
+ * 只列本页真的会渲染的 chip——页面本就没开的维度，给个开关也开不出东西来。
+ */
+const chipToggleGroups = computed<ChipToggleItem[][]>(() => {
+  const filters: ChipToggleItem[] = [];
+  if (props.enableSearch) {
+    filters.push({
+      key: "galleryChipSearch",
+      label: t("gallery.advancedChipSearch"),
+      icon: markRaw(Search),
+    });
+  }
+  for (const d of ALL_FILTER_DIMENSIONS) {
+    if (!props.filterFeatures.includes(d.key)) continue;
+    filters.push({ key: d.setting, label: t(d.chipKey), icon: FILTER_DIMENSION_ICONS[d.key] });
+  }
+
+  const tools: ChipToggleItem[] = [];
+  if (props.sortFeatures.length > 0) {
+    tools.push(
+      { key: "galleryChipSortField", label: t("gallery.sort"), icon: markRaw(Sort) },
+      { key: "galleryChipSortOrder", label: t("gallery.sortOrder"), icon: markRaw(SortAsc) },
+    );
+  }
+
+  return [filters, tools];
+});
 
 const dimensionPopoverOpen = ref<Partial<Record<GalleryBrowseDimension, boolean>>>({});
 
@@ -687,16 +882,8 @@ const sortFieldItems = computed<KbFilterDropdownOption[]>(() =>
   })),
 );
 
-const sortOrderItems = computed<KbFilterDropdownOption[]>(() => [
-  { label: t("gallery.sortDescending"), value: "desc" },
-  { label: t("gallery.sortAscending"), value: "asc" },
-]);
-
+// 桌面工具条不再有每页条数 chip（改从设置页与安卓 picker 走）；这里只留 picker 用的候选。
 const pageSizeOptions = [100, 500, 1000] as const;
-
-const pageSizeItems = computed<KbFilterDropdownOption[]>(() =>
-  pageSizeOptions.map((n) => ({ label: String(n), value: String(n) })),
-);
 
 function onSortFieldCommand(cmd: string) {
   if (!props.sortFeatures.includes(cmd as GallerySortField)) return;
@@ -712,10 +899,8 @@ function onSortOrderChange(value: string) {
   navigate({ sort: { ...props.sort, desc: value === "desc" } });
 }
 
-function onPageSizeCommand(cmd: string) {
-  const n = Number(cmd);
-  if (n !== 100 && n !== 500 && n !== 1000) return;
-  navigate({ pageSize: n, page: 1 });
+function onSortOrderToggle() {
+  navigate({ sort: { ...props.sort, desc: !props.sort.desc } });
 }
 
 // 过滤行的横向滚动渐隐 + 滚轮接管统一走 v-hscroll-fade 指令（directives/hscrollFade.ts）
@@ -1561,6 +1746,112 @@ defineExpose({
    高级态内容更矮时靠 align-items 居中撑住，切模式时下方画廊不会上下跳。 */
 .query-row {
   min-height: 56px;
+}
+
+/* 中段（chip 滚动区 / 高级路径）。
+   `min-width` 是这里的关键：它既是「至少露出一颗 chip」的下限，也是换行的触发器
+   —— flex 只按 flex-basis 与 min-width 决定断行，basis 为 0 且能缩到 0 时，中段会
+   在窄容器里被挤成 0 宽却仍留在第一行，整段 chip 就这么凭空消失了（画册详情中栏
+   两侧面板全开时正好如此）。给了下限，装不下就整段掉到第二行，退化成改版前那种
+   两行布局，而宽屏下依旧是一行。 */
+.query-main {
+  flex: 1 1 12rem;
+  min-width: 12rem;
+}
+
+/* 分区竖线：把「看哪一批」的固定控件、随查询变化的 chip、行末工具三段隔开。
+   高度只取 22px（不占满行），一整行下来是三段轻分隔而不是三个格子。 */
+.query-divider {
+  flex: none;
+  width: 1px;
+  height: 22px;
+  background: var(--anime-border);
+}
+
+/* 排序维度 chip 的复合图标：通用排序双箭头打底 + 右下角的维度小徽章。
+   徽章故意越出 15px 的图标盒（chip 是 38px 方块，右下有的是空地），
+   否则挤在盒内两个图形都缩到看不清；一圈同色底把它和底图分开。
+   选择器带 `.sort-combo` 前缀是为了压过 theme-chalk 里
+   `__chip-icon svg { width:100%; height:100% }` 那条（scoped 属性再加一层特异性）。 */
+.sort-combo {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+}
+
+.sort-combo__base {
+  width: 100%;
+  height: 100%;
+}
+
+.sort-combo .sort-combo__badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  box-sizing: content-box;
+  width: 9px;
+  height: 9px;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--anime-bg-card);
+}
+
+/* ⋯ 面板：与 chip 下拉共用弹层外壳，这里只排版内容。
+   自己铺一层不透明底——共用弹层那档半透明是给「压在缩略图上的过滤树」调的，
+   开关清单是表单，底下透出画作会让人分不清哪个开关是开的。 */
+.chip-settings {
+  display: flex;
+  width: 268px;
+  max-width: calc(100vw - 32px);
+  flex-direction: column;
+  padding: 10px;
+  background: var(--anime-bg-card);
+}
+
+/* 行距压到刚够点：清单有近十行，每行多 3px 面板就高出一大截，
+   最后要么顶出视口要么盖住半个画廊。 */
+.chip-settings__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.chip-settings__icon {
+  display: inline-flex;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--anime-secondary);
+
+  :deep(svg) {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.chip-settings__title {
+  padding: 2px 8px 4px;
+  color: var(--anime-text-secondary);
+  font-size: 12px;
+}
+
+.chip-settings__help {
+  margin: 0;
+  padding: 4px 8px 0;
+  color: var(--anime-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.chip-settings__divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--anime-border);
 }
 
 /* 过滤 chip 一整行横向滚动：chip 一律不压缩，否则窄屏下每个 chip 的值都被裁成半个字。 */

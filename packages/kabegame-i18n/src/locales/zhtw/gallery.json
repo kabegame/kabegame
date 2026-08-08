@@ -294,5 +294,15 @@
   "advancedCopy": "複製",
   "advancedClear": "清空",
   "advancedApply": "套用",
-  "advancedSimpleFilterDisabled": "進階查詢已啟用；簡單過濾與進階查詢互斥"
+  "advancedSimpleFilterDisabled": "進階查詢已啟用；簡單過濾與進階查詢互斥",
+  "filterAnyKeyword": "任意關鍵字",
+  "filterAnyTime": "任意時間",
+  "filterAnyPlugin": "任意外掛",
+  "filterAnyMediaType": "任意類型",
+  "filterAnyAspect": "任意比例",
+  "filterAnySize": "任意尺寸",
+  "chipSettings": "自訂顯示哪些 chip",
+  "chipVisibleTitle": "顯示在工具列上的 chip",
+  "chipHiddenHelp": "關掉的維度仍能在「進階」裡使用，只是不佔工具列。",
+  "sortOrderToggle": "{current}（點擊切換{next}）"
 }

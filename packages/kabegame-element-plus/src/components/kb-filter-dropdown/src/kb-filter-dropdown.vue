@@ -5,7 +5,7 @@
     effect="light"
     placement="bottom-start"
     :fallback-placements="['bottom-start', 'top-start', 'bottom-end', 'top-end']"
-    :disabled="disabled"
+    :disabled="disabled || chipAction === 'toggle'"
     :show-arrow="false"
     :hide-after="0"
     :popper-class="ns.e('popper')"
@@ -109,17 +109,26 @@
     >
       <slot name="trigger" :open="visible" :selected="selectedOption">
         <span
-          :class="ns.e('chip')"
+          :class="[ns.e('chip'), ns.is('icon-only', chipDisplay === 'icon')]"
           role="button"
+          :title="title"
           :tabindex="disabled ? -1 : 0"
-          :aria-expanded="visible"
+          :aria-expanded="chipAction === 'toggle' ? undefined : visible"
+          :aria-label="chipLabel"
+          @click="handleChipClick"
+          @keydown.enter="handleChipClick"
+          @keydown.space="handleChipClick"
         >
           <span v-if="$slots.icon" :class="ns.e('chip-icon')">
             <slot name="icon" />
           </span>
-          <span :class="ns.e('chip-label')">{{ chipLabel }}</span>
-          <span v-if="badge" :class="ns.e('chip-badge')">{{ badge }}</span>
-          <span :class="ns.e('chip-value')">{{ selectedLabel }}</span>
+          <template v-if="chipDisplay !== 'icon'">
+            <span v-if="chipDisplay === 'full'" :class="ns.e('chip-label')">
+              {{ chipLabel }}
+            </span>
+            <span v-if="badge" :class="ns.e('chip-badge')">{{ badge }}</span>
+            <span :class="ns.e('chip-value')">{{ selectedLabel }}</span>
+          </template>
           <button
             v-if="isActive"
             type="button"
@@ -131,7 +140,12 @@
           >
             <el-icon><Close /></el-icon>
           </button>
-          <el-icon v-else :class="ns.e('arrow')"><ArrowDown /></el-icon>
+          <el-icon
+            v-else-if="chipDisplay !== 'icon'"
+            :class="ns.e('arrow')"
+          >
+            <ArrowDown />
+          </el-icon>
         </span>
       </slot>
     </span>
@@ -163,6 +177,8 @@ defineOptions({ name: 'KbFilterDropdown' })
 
 const props = withDefaults(defineProps<KbFilterDropdownProps>(), {
   options: () => [],
+  chipDisplay: 'full',
+  chipAction: 'dropdown',
   searchable: false,
   loading: false,
   negated: false,
@@ -174,6 +190,8 @@ const emit = defineEmits<{
   (event: 'update:modelValue', value: string | null): void
   (event: 'open'): void
   (event: 'close'): void
+  /** 仅 `chipAction="toggle"`：chip 被点/回车/空格，值怎么翻由调用侧决定。 */
+  (event: 'toggle'): void
 }>()
 
 const slots = defineSlots<{
@@ -243,6 +261,17 @@ function handleVisibleChange(nextVisible: boolean) {
   } else {
     emit('close')
   }
+}
+
+/**
+ * dropdown 档什么都不做——开合由 el-tooltip 的 click trigger 负责，这里再插一手
+ * 会和它打架（一次点击开了又关）。toggle 档 tooltip 是 disabled 的，点击只到这里。
+ */
+function handleChipClick(event: Event) {
+  if (props.disabled || props.chipAction !== 'toggle') return
+  // 空格键要拦下来，否则翻值的同时页面还滚一屏。
+  event.preventDefault()
+  emit('toggle')
 }
 
 function close() {

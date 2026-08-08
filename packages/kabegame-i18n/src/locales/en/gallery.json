@@ -290,5 +290,15 @@
   "advancedCopy": "Copy",
   "advancedClear": "Clear",
   "advancedApply": "Apply",
-  "advancedSimpleFilterDisabled": "Advanced query is active; simple and advanced filters are mutually exclusive"
+  "advancedSimpleFilterDisabled": "Advanced query is active; simple and advanced filters are mutually exclusive",
+  "filterAnyKeyword": "Any keyword",
+  "filterAnyTime": "Any time",
+  "filterAnyPlugin": "Any plugin",
+  "filterAnyMediaType": "Any type",
+  "filterAnyAspect": "Any aspect",
+  "filterAnySize": "Any size",
+  "chipSettings": "Choose which chips to show",
+  "chipVisibleTitle": "Chips shown on the toolbar",
+  "chipHiddenHelp": "Hidden dimensions are still available under Advanced — they just don't take up toolbar space.",
+  "sortOrderToggle": "{current} — click to switch to {next}"
 }

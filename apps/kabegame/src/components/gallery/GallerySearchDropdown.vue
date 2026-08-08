@@ -4,8 +4,9 @@
     :chip-label="t('gallery.advancedChipSearch')"
     :selected-label="query"
     :badge="query.trim() ? searchModeLabel(mode) : undefined"
-    :any-label="t('gallery.filterAny')"
-    :title="t('gallery.searchPlaceholder')"
+    :any-label="t('gallery.filterAnyKeyword')"
+    :chip-display="chipDisplay"
+    :title="chipTitle"
     :negated="negated"
     @update:model-value="(value) => { if (value === null) commit(''); }"
   >
@@ -57,13 +58,18 @@ const props = withDefaults(
     /** 取非语境（高级查询的 ~not 组）：计数显示为负数。 */
     negated?: boolean;
     /**
+     * chip 信息密度，透传给 KbFilterDropdown。画廊工具条给 `value`（维度名进
+     * tooltip）或 `icon`（精简）；高级查询条件行留默认的 `full`。
+     */
+    chipDisplay?: "full" | "value" | "icon";
+    /**
      * 提交防抖毫秒数。0 = 逐键提交。
      * 画廊工具行的每次提交都会 navigate + 重查，必须防抖；高级弹窗里只改本地
      * 草稿树，不需要。清空一律立即生效，不必等这段时间。
      */
     debounce?: number;
   }>(),
-  { modes: () => GALLERY_SEARCH_MODES, negated: false, debounce: 0 },
+  { modes: () => GALLERY_SEARCH_MODES, negated: false, chipDisplay: "full", debounce: 0 },
 );
 
 const emit = defineEmits<{
@@ -107,6 +113,15 @@ function onInput(value: string) {
 }
 
 onBeforeUnmount(clearDebounce);
+
+/** chip 上省掉的维度名与取值在 tooltip 里补回来（工具条的 value / icon 档）。 */
+const chipTitle = computed(() => {
+  const label = t("gallery.advancedChipSearch");
+  const value = props.query.trim()
+    ? `${searchModeLabel(props.mode)}：${props.query}`
+    : t("gallery.filterAnyKeyword");
+  return `${label} · ${value}`;
+});
 
 function searchModeLabel(mode: GallerySearchMode): string {
   if (mode === "metadata") return t("gallery.searchModeMetadata");

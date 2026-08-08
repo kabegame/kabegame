@@ -6,6 +6,10 @@
   @include set-component-css-var('kb-filter-dropdown', $kb-filter-dropdown);
 
   display: inline-flex;
+  // chip 一律不压缩:被压缩的 chip 会把取值裁成半个字,而它恰恰是 chip 上唯一的信息。
+  // 写在这里而不是靠调用侧加 flex-none —— 根节点是 el-tooltip,fallthrough 的 class
+  // 到不了这个 span(同 `title`),外面加了也是白加。
+  flex: none;
   min-width: 0;
 
   @include e(chip) {
@@ -43,6 +47,14 @@
     &:focus-visible {
       outline: none;
       box-shadow: getCssVar('kb-filter-dropdown', 'focus-ring');
+    }
+
+    // 精简档:只剩图标,chip 收成正方形(与同行的方形按钮同一档尺寸),
+    // 否则左右还留着给文字准备的 padding，一排下来全是空心方块。
+    @include when(icon-only) {
+      justify-content: center;
+      width: 38px;
+      padding: 0;
     }
   }
 

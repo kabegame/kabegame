@@ -292,5 +292,15 @@
   "advancedCopy": "복사",
   "advancedClear": "비우기",
   "advancedApply": "적용",
-  "advancedSimpleFilterDisabled": "고급 검색이 활성화되어 일반 필터와 함께 사용할 수 없습니다"
+  "advancedSimpleFilterDisabled": "고급 검색이 활성화되어 일반 필터와 함께 사용할 수 없습니다",
+  "filterAnyKeyword": "모든 키워드",
+  "filterAnyTime": "모든 시간",
+  "filterAnyPlugin": "모든 플러그인",
+  "filterAnyMediaType": "모든 종류",
+  "filterAnyAspect": "모든 비율",
+  "filterAnySize": "모든 크기",
+  "chipSettings": "표시할 칩 선택",
+  "chipVisibleTitle": "툴바에 표시할 칩",
+  "chipHiddenHelp": "숨긴 항목도 '고급'에서 계속 사용할 수 있으며, 툴바 자리만 차지하지 않습니다.",
+  "sortOrderToggle": "{current} (클릭하면 {next}(으)로 전환)"
 }

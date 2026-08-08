@@ -292,5 +292,15 @@
   "advancedCopy": "コピー",
   "advancedClear": "クリア",
   "advancedApply": "適用",
-  "advancedSimpleFilterDisabled": "高度な検索が有効です。通常フィルターとは同時に使用できません"
+  "advancedSimpleFilterDisabled": "高度な検索が有効です。通常フィルターとは同時に使用できません",
+  "filterAnyKeyword": "任意のキーワード",
+  "filterAnyTime": "任意の時間",
+  "filterAnyPlugin": "任意のプラグイン",
+  "filterAnyMediaType": "任意の種類",
+  "filterAnyAspect": "任意の比率",
+  "filterAnySize": "任意のサイズ",
+  "chipSettings": "表示するチップを選択",
+  "chipVisibleTitle": "ツールバーに表示するチップ",
+  "chipHiddenHelp": "非表示にした項目も「高度」から利用できます。ツールバーの場所を取らなくなるだけです。",
+  "sortOrderToggle": "{current}（クリックで{next}に切り替え）"
 }

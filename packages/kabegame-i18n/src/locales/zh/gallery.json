@@ -293,5 +293,15 @@
   "advancedCopy": "复制",
   "advancedClear": "清空",
   "advancedApply": "应用",
-  "advancedSimpleFilterDisabled": "高级查询已启用；简单过滤与高级查询互斥"
+  "advancedSimpleFilterDisabled": "高级查询已启用；简单过滤与高级查询互斥",
+  "filterAnyKeyword": "任意关键词",
+  "filterAnyTime": "任意时间",
+  "filterAnyPlugin": "任意插件",
+  "filterAnyMediaType": "任意类型",
+  "filterAnyAspect": "任意比例",
+  "filterAnySize": "任意尺寸",
+  "chipSettings": "自定义显示哪些 chip",
+  "chipVisibleTitle": "显示在工具条上的 chip",
+  "chipHiddenHelp": "关掉的维度仍能在「高级」里用，只是不占工具条。",
+  "sortOrderToggle": "{current}（点击切换{next}）"
 }

@@ -216,6 +216,15 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("kamechanEnabled", true),
     frontendLocal("imageFit", "fit"),
     frontendLocal("linkOpenMode", "unconfigured"),
+    // 画廊工具条 chip：默认全开——新用户先看到完整工具条，再自己裁。
+    frontendLocal("galleryChipSearch", true),
+    frontendLocal("galleryChipDate", true),
+    frontendLocal("galleryChipPlugin", true),
+    frontendLocal("galleryChipMediaType", true),
+    frontendLocal("galleryChipAspect", true),
+    frontendLocal("galleryChipSize", true),
+    frontendLocal("galleryChipSortField", true),
+    frontendLocal("galleryChipSortOrder", true),
   ];
   if (IS_WINDOWS || IS_LINUX) {
     localEntries.push(frontendLocal("closeAction", "unconfigured"));
