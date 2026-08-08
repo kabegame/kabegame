@@ -47,8 +47,7 @@ src-tauri/kabegame/resources/bin/*
 src-tauri/kabegame/resources/plugins/
 # Windows CEF runtime,由 os-plugin collectWindowsCefRuntime() 构建期生成
 src-tauri/kabegame/resources/cef/
-# macOS gen/CEFExample.app\Kabegame.app
-/gen/
+
 
 # bin/{platform}/ 根部是 os-plugin 构建期生成的运行时暂存：Linux/macOS 全部生成，
 # Windows 的 dokan2/libwinpthread/libva 等部分 DLL 预置入库，生成的 FFmpeg/x264 DLL 忽略。
@@ -74,8 +73,6 @@ src-tauri/kabegame/resources/cef/
 /*.zip
 /exports
 
-# .cursor/
-
 # /test/
 
 # chromium checkout（build-chromium 的工作区，原仓库外 cefbuild）。
@@ -95,3 +92,6 @@ apps/docs/dist
 apps/docs/.astro
 
 __pycache__/
+
+release
+

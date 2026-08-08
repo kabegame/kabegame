@@ -104,3 +104,9 @@ pub use runtime::macos_unbundled_main_bundle;
 /// `CefSettings::remote_debugging_port` 是同一个值。app crate 用它把端口上报给
 /// vite dev server,供 `.claude/skills/kabegame-chromium/` 发现。
 pub use runtime::remote_debugging_port;
+
+/// 注册「已有实例被第二个实例拉起」(Chrome ProcessSingleton relaunch)的处理器。
+///
+/// runtime 恒拦截 Chrome 默认的「在本进程弹一个浏览器窗口」;app 通过此处理器把
+/// 这次拉起转成显示主窗口等应用语义。回调参数为发起方的完整 argv。
+pub use runtime::set_already_running_app_relaunch_handler;

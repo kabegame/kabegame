@@ -78,7 +78,14 @@ export default {
         }
       : {}),
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: [
+        "**/src-tauri/**", 
+        "**/third/**", 
+        "**/src-crawler-plugins/**", 
+        "**/target/**", 
+        "**/node_modules/**",
+        "**/bin/**",
+      ],
     },
   },
 

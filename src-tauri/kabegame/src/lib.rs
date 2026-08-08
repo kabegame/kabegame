@@ -132,6 +132,37 @@ fn init(
             return Err(Box::new(std::io::Error::other(e)));
         }
     }
+    // CEF Chrome ProcessSingleton：并发双开（如开机自启竞态，IPC 单例守卫因 socket
+    // 未就绪而双双放行）时，第二个实例的启动会被转交到本进程（runtime 已拦截 Chrome
+    // 默认的「弹一个浏览器窗口」）。这里把它转成与 IPC AppShowWindow / AppImportPlugin
+    // 相同的应用语义（见 ipc/handlers/mod.rs）。
+    #[cfg(all(
+        not(feature = "web"),
+        any(target_os = "linux", target_os = "windows", target_os = "macos"),
+        feature = "standard"
+    ))]
+    {
+        let app_handle = app.app_handle().clone();
+        tauri_runtime_cef::set_already_running_app_relaunch_handler(move |argv| {
+            let app_handle = app_handle.clone();
+            // 回调在 CEF UI 线程（主线程）上；窗口操作转投异步上下文，与 IPC 处理器一致。
+            tauri::async_runtime::spawn(async move {
+                // 发起方带 --minimized（开机自启）时尊重其静默意图，不弹主窗口；
+                // 用户手动再次启动（无该参数）才与 IPC AppShowWindow 一致地显示主窗口。
+                if !argv.iter().any(|arg| arg == "--minimized") {
+                    if let Err(e) = startup::ensure_main_window(app_handle.clone()) {
+                        eprintln!("[relaunch] 显示主窗口失败: {}", e);
+                    }
+                }
+                if let Some(path) = argv.iter().skip(1).find(|arg| arg.ends_with(".kgpg")) {
+                    let _ = app_handle.emit(
+                        "app-import-plugin",
+                        serde_json::json!({ "kgpgPath": path }),
+                    );
+                }
+            });
+        });
+    }
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
         eprintln!("Failed to init crawler webview handler: {}", e);

@@ -75,9 +75,16 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
 - cookies/localStorage 落 `%LOCALAPPDATA%\kabegame-cef`（Linux 为 XDG cache）。
   **dev 与安装态目录必须分开**：CEF 是 Chrome runtime，`cef_initialize` 会在该目录建
   Chrome profile 并注册进程级 ProcessSingleton（单实例锁）。若 `deno task dev` 与已安装正式版
-  共用目录，后启动者会命中对方 singleton → `Opening in existing browser session.` →
-  `cef_initialize` 返回 false → panic。故按构建 profile 隔离：debug（`deno task dev`）用
-  `kabegame-cef-dev`，release（安装态）用 `kabegame-cef`（见 `cef_cache_dir_name`）。
+  共用目录，后启动者会命中对方 singleton → `Opening in existing browser session.`。故按构建
+  profile 隔离：debug（`deno task dev`）用 `kabegame-cef-dev`，release（安装态）用
+  `kabegame-cef`（见 `cef_cache_dir_name`）。
+- **同 profile 双实例相撞（如开机自启竞态，app 层 IPC 单例守卫因 socket 未就绪双双放行）**：
+  后启动者的 `cef_initialize` 返回 false，`initialize_cef` 识别退出码
+  `NORMAL_EXIT_PROCESS_NOTIFIED` 后干净退出（exit 0，早前是 panic → status=101）；先启动者
+  收到 `on_already_running_app_relaunch`，runtime 恒返回已处理拦掉 Chrome 默认的「弹一个
+  浏览器窗口」（曾表现为开机多出一个带应用图标的 Chrome 窗口），并调 app 层经
+  `set_already_running_app_relaunch_handler` 注册的处理器——kabegame 在 `init` 里把它接到
+  `ensure_main_window` + `.kgpg` 导入事件，与 IPC `AppShowWindow`/`AppImportPlugin` 同语义。
 - **前端/asset scheme 与 Linux 不同**：Windows/Android 上 Tauri core 用 `http://<scheme>.localhost`
   提供自定义 scheme 资源（`tauri_protocol_url` / `window_origin` 改写，默认 `http`，
   由 `use_https_scheme` 决定 http/https），主框架加载的是 `http://tauri.localhost`。因此

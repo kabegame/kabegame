@@ -53,6 +53,11 @@ mod imp {
 
     static WINDOWED_QUIT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static WINDOWED_CONTEXT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    /// app 层注册的「已有实例被再次拉起」处理器(Chrome ProcessSingleton relaunch),
+    /// 参数为发起方(第二个实例)的完整 argv。回调发生在 CEF UI 线程(即主线程),
+    /// app 侧不要在其中同步阻塞等待主循环,窗口操作应转投异步上下文。
+    static ALREADY_RUNNING_RELAUNCH_HANDLER: OnceLock<Box<dyn Fn(Vec<String>) + Send + Sync>> =
+        OnceLock::new();
     const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &[
         "ImmersiveReadAnything",
         // `tauri`/`asset` custom schemes are registered with `SECURE` below, so
@@ -821,6 +826,18 @@ mod imp {
         }
     }
 
+    /// 注册「已有实例被第二个实例拉起」的处理器。
+    ///
+    /// 命中场景:另一个进程对同一 CEF profile 调 `cef_initialize`,Chrome
+    /// ProcessSingleton 把那次启动的命令行转交给本进程。未注册时 runtime 仅拦截
+    /// Chrome 默认行为(在本进程弹一个浏览器窗口);注册后可把这次拉起转成应用
+    /// 语义(显示主窗口、处理 `.kgpg` 参数等)。重复注册只有首次生效。
+    pub fn set_already_running_app_relaunch_handler(
+        handler: impl Fn(Vec<String>) + Send + Sync + 'static,
+    ) {
+        let _ = ALREADY_RUNNING_RELAUNCH_HANDLER.set(Box::new(handler));
+    }
+
     /// 在 Tauri 启动前初始化 CEF browser 主进程。
     pub fn dispatch_cef_subprocess() {
         // Select X11 before CEF parses
@@ -1340,6 +1357,29 @@ mod imp {
         impl BrowserProcessHandler {
             fn on_schedule_message_pump_work(&self, _delay_ms: i64) {}
 
+            // Chrome ProcessSingleton:第二个实例命中本进程的 SingletonLock 后,把它的
+            // 命令行转交过来。Chrome 默认行为是在本进程弹一个浏览器窗口(任务栏顶着
+            // 应用图标的"Chrome"),必须返回 1 拦下;应用语义交给 app 层注册的
+            // relaunch 处理器(显示主窗口等)。
+            fn on_already_running_app_relaunch(
+                &self,
+                command_line: Option<&mut CommandLine>,
+                _current_directory: Option<&CefString>,
+            ) -> i32 {
+                let argv: Vec<String> = command_line
+                    .map(|command_line| {
+                        let mut list = CefStringList::default();
+                        command_line.argv(Some(&mut list));
+                        list.into_iter().collect()
+                    })
+                    .unwrap_or_default();
+                eprintln!("[cef-runtime] already-running relaunch intercepted; argv={argv:?}");
+                if let Some(handler) = ALREADY_RUNNING_RELAUNCH_HANDLER.get() {
+                    handler(argv);
+                }
+                1
+            }
+
             fn on_context_initialized(&self) {
                 WINDOWED_CONTEXT_INITIALIZED.store(true, Ordering::Release);
                 if std::env::var("KABEGAME_CEF_WINDOWED_BOOTSTRAP").as_deref() != Ok("1") {
@@ -1571,11 +1611,15 @@ mod imp {
     /// CEF 用户数据目录名。**dev(debug)与安装态(release)必须分开**:
     ///
     /// CEF 用的是 Chrome runtime,浏览器进程在 `cef_initialize` 时按此目录建立 Chrome
-    /// profile 并注册进程级 **ProcessSingleton**(单实例锁)。若 `bun dev` 与已安装的
-    /// 正式版共用同一目录,后启动者的 `cef_initialize` 会命中对方的 singleton →
-    /// 打印 "Opening in existing browser session." 并返回 false → `initialize_cef`
-    /// panic(见 issue:开发启动时弹出一个 Chrome 窗口后崩溃)。按构建 profile 隔离即可:
-    /// 安装态恒为 release,`bun dev` 恒为 debug,两者目录不再冲突。
+    /// profile 并注册进程级 **ProcessSingleton**(单实例锁)。若 `deno task dev` 与已
+    /// 安装的正式版共用同一目录,后启动者的 `cef_initialize` 会命中对方的 singleton。
+    /// 按构建 profile 隔离:安装态恒为 release,dev 恒为 debug,两者目录不再冲突。
+    ///
+    /// 同一 profile 的两个实例仍可能相撞(如开机自启竞态双开,IPC 单例守卫因 socket
+    /// 未就绪而双双放行):此时后启动者在 `initialize_cef` 里识别
+    /// `NORMAL_EXIT_PROCESS_NOTIFIED` 后干净退出(exit 0),先启动者经
+    /// `on_already_running_app_relaunch` 拦截 Chrome 默认的「弹一个浏览器窗口」,
+    /// 转为 app 层注册的 relaunch 处理(显示主窗口)。
     const fn cef_cache_dir_name() -> &'static str {
         if cfg!(debug_assertions) {
             "kabegame-cef-dev"
@@ -1691,8 +1735,20 @@ mod imp {
         {
             Ok(())
         } else {
+            // Chrome ProcessSingleton:同一 CEF profile 已有实例在跑,本次启动的
+            // 命令行已被转交给对方(触发对方的 on_already_running_app_relaunch)。
+            // 按 Chrome 语义静默正常退出 —— 不能向上抛错变成 panic/非零码,否则
+            // 开机自启竞态双开时 systemd/桌面会记一次 crash(曾以 status=101 退出)。
+            let exit_code = get_exit_code();
+            if exit_code == Resultcode::NORMAL_EXIT_PROCESS_NOTIFIED.get_raw() as i32 {
+                eprintln!(
+                    "[cef-runtime] another instance owns this CEF profile; \
+                     launch forwarded to it, exiting cleanly"
+                );
+                std::process::exit(0);
+            }
             Err(Error::CreateWebview(Box::new(std::io::Error::other(
-                "cef::initialize failed",
+                format!("cef::initialize failed (exit_code={exit_code})"),
             ))))
         }
     }

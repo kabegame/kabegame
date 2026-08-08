@@ -1,0 +1,219 @@
+diff --git a/cef/src/bindings/x86_64_unknown_linux_gnu.rs b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
+index 50f5d3f..4f56497 100644
+--- a/cef/src/bindings/x86_64_unknown_linux_gnu.rs
++++ b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
+@@ -19202,6 +19202,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+         regions: Option<&[DraggableRegion]>,
+     ) {
+     }
++    #[doc = "See [`_cef_drag_handler_t::on_drag_over`] for more documentation."]
++    fn on_drag_over(
++        &self,
++        browser: Option<&mut Browser>,
++        client_pt: Option<&Point>,
++        mask: DragOperationsMask,
++    ) {
++    }
++    #[doc = "See [`_cef_drag_handler_t::on_drag_leave`] for more documentation."]
++    fn on_drag_leave(&self, browser: Option<&mut Browser>) {}
++    #[doc = "See [`_cef_drag_handler_t::on_drop`] for more documentation."]
++    fn on_drop(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) -> ::std::os::raw::c_int {
++        Default::default()
++    }
+     fn init_methods(object: &mut _cef_drag_handler_t) {
+         impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
+     }
+@@ -19215,6 +19233,9 @@ mod impl_cef_drag_handler_t {
+     pub fn init_methods<I: ImplDragHandler, R: Rc>(object: &mut _cef_drag_handler_t) {
+         object.on_drag_enter = Some(on_drag_enter::<I, R>);
+         object.on_draggable_regions_changed = Some(on_draggable_regions_changed::<I, R>);
++        object.on_drag_over = Some(on_drag_over::<I, R>);
++        object.on_drag_leave = Some(on_drag_leave::<I, R>);
++        object.on_drop = Some(on_drop::<I, R>);
+     }
+     extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
+         self_: *mut _cef_drag_handler_t,
+@@ -19264,6 +19285,52 @@ mod impl_cef_drag_handler_t {
+             arg_regions,
+         )
+     }
++    extern "C" fn on_drag_over<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        client_pt: *const _cef_point_t,
++        mask: cef_drag_operations_mask_t,
++    ) {
++        let (arg_self_, arg_browser, arg_client_pt, arg_mask) = (self_, browser, client_pt, mask);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let arg_client_pt = if arg_client_pt.is_null() {
++            None
++        } else {
++            Some(WrapParamRef::<Point, _>::from(arg_client_pt))
++        };
++        let arg_client_pt = arg_client_pt.as_ref().map(|arg| arg.as_ref());
++        let arg_mask = arg_mask.into_raw();
++        ImplDragHandler::on_drag_over(&arg_self_.interface, arg_browser, arg_client_pt, arg_mask)
++    }
++    extern "C" fn on_drag_leave<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++    ) {
++        let (arg_self_, arg_browser) = (self_, browser);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        ImplDragHandler::on_drag_leave(&arg_self_.interface, arg_browser)
++    }
++    extern "C" fn on_drop<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        drag_data: *mut _cef_drag_data_t,
++    ) -> ::std::os::raw::c_int {
++        let (arg_self_, arg_browser, arg_drag_data) = (self_, browser, drag_data);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let mut arg_drag_data = unsafe { arg_drag_data.as_mut() }
++            .map(|arg| DragData(unsafe { RefGuard::from_raw(arg) }));
++        let arg_drag_data = arg_drag_data.as_mut();
++        ImplDragHandler::on_drop(&arg_self_.interface, arg_browser, arg_drag_data)
++    }
+ }
+ impl ImplDragHandler for DragHandler {
+     fn on_drag_enter(
+@@ -19342,6 +19409,76 @@ impl ImplDragHandler for DragHandler {
+             }
+         }
+     }
++    fn on_drag_over(
++        &self,
++        browser: Option<&mut Browser>,
++        client_pt: Option<&Point>,
++        mask: DragOperationsMask,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.on_drag_over {
++                let (arg_browser, arg_client_pt, arg_mask) = (browser, client_pt, mask);
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                let arg_client_pt = arg_client_pt.cloned().map(|arg| arg.into());
++                let arg_client_pt = arg_client_pt
++                    .as_ref()
++                    .map(std::ptr::from_ref)
++                    .unwrap_or(std::ptr::null());
++                let arg_mask = arg_mask.into_raw();
++                f(arg_self_, arg_browser, arg_client_pt, arg_mask);
++            }
++        }
++    }
++    fn on_drag_leave(&self, browser: Option<&mut Browser>) {
++        unsafe {
++            if let Some(f) = self.0.on_drag_leave {
++                let arg_browser = browser;
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                f(arg_self_, arg_browser);
++            }
++        }
++    }
++    fn on_drop(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .on_drop
++                .map(|f| {
++                    let (arg_browser, arg_drag_data) = (browser, drag_data);
++                    let arg_self_ = self.into_raw();
++                    let arg_browser = arg_browser
++                        .map(|arg| {
++                            arg.add_ref();
++                            ImplBrowser::get_raw(arg)
++                        })
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_drag_data = arg_drag_data
++                        .map(|arg| {
++                            arg.add_ref();
++                            ImplDragData::get_raw(arg)
++                        })
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(arg_self_, arg_browser, arg_drag_data);
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_drag_handler_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/sys/src/bindings/x86_64_unknown_linux_gnu.rs b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
+index 00b220e..1c14557 100644
+--- a/sys/src/bindings/x86_64_unknown_linux_gnu.rs
++++ b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
+@@ -10540,10 +10540,31 @@ pub struct _cef_drag_handler_t {
+             regions: *const cef_draggable_region_t,
+         ),
+     >,
++    #[doc = "\n Called continuously while an external drag event moves over the browser\n window. |clientPt| is the position within the browser view in density\n independent pixels (DIP) and |mask| represents the type of drag operation.\n This function is only called if OnDragEnter returned false (0) for the\n current drag event.\n"]
++    pub on_drag_over: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            clientPt: *const cef_point_t,
++            mask: cef_drag_operations_mask_t,
++        ),
++    >,
++    #[doc = "\n Called when an external drag event leaves the browser window without being\n dropped. This function is only called if OnDragEnter returned false (0)\n for the current drag event.\n"]
++    pub on_drag_leave: ::std::option::Option<
++        unsafe extern "C" fn(self_: *mut _cef_drag_handler_t, browser: *mut _cef_browser_t),
++    >,
++    #[doc = "\n Called when an external drag event is dropped on the browser window.\n |dragData| contains the drag event data. Return false (0) for default drop\n handling behavior, in which case the drop is delivered to the renderer and\n may trigger navigation. Return true (1) to consume the drop, in which case\n it is not delivered to the renderer and no default action occurs. This\n function is only called if OnDragEnter returned false (0) for the current\n drag event.\n"]
++    pub on_drop: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            dragData: *mut _cef_drag_data_t,
++        ) -> ::std::os::raw::c_int,
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 56usize];
++    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 80usize];
+     ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
+     ["Offset of field: _cef_drag_handler_t::base"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
+@@ -10551,6 +10572,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_enter) - 40usize];
+     ["Offset of field: _cef_drag_handler_t::on_draggable_regions_changed"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_draggable_regions_changed) - 48usize];
++    ["Offset of field: _cef_drag_handler_t::on_drag_over"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_over) - 56usize];
++    ["Offset of field: _cef_drag_handler_t::on_drag_leave"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_leave) - 64usize];
++    ["Offset of field: _cef_drag_handler_t::on_drop"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_drop) - 72usize];
+ };
+ #[doc = "\n Implement this structure to handle events related to dragging. The functions\n of this structure will be called on the UI thread.\n\n NOTE: This struct is allocated client-side.\n"]
+ pub type cef_drag_handler_t = _cef_drag_handler_t;

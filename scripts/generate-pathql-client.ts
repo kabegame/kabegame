@@ -77,15 +77,8 @@ function main(): void {
     else usageError(`未知参数: ${arg}`);
   }
 
-  let cli: string;
-  if (skipBuild) {
-    cli = resolveExistingCli();
-  } else {
-    console.log("==> 增量构建 kabegame-cli（DSL 编译期内嵌，旧二进制会生成旧客户端）");
-    run("deno", ["task", "b", "-c", "kabegame-cli"]);
-    cli = cliBinary("debug");
-    if (!isExecutable(cli)) die(`构建完成但未找到 ${cli}`);
-  }
+  let cli = cliBinary("release");
+  if (!isExecutable(cli)) die(`未找到 ${cli}`);
 
   console.log(`==> 生成 ${OUT_RELATIVE}（${path.relative(ROOT, cli)}）`);
   run(cli, ["pathql", "generate", "--target", "typescript", "--out", OUT_RELATIVE]);
