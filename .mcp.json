@@ -3,6 +3,10 @@
     "kabegame": {
       "type": "http",
       "url": "http://127.0.0.1:7490/mcp"
+    },
+    "agent-browser": {
+      "command": "deno",
+      "args": ["run", "-A", "npm:agent-browser", "mcp"]
     }
   }
 }

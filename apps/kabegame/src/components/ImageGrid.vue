@@ -418,7 +418,10 @@ const syncActivePathFromUrl = () => {
   if (!adapter || !isRouteActive.value || !adapter.isActive()) return;
   const qp = readRouteQueryPath().trim();
   if (!qp) {
-    adapter.routeStore.syncFromUrl("");
+    // URL 无 ?path=：gallery 语义是「回到默认画廊路径」（如点击侧栏「画廊」）。
+    // 把当前默认 state 写回 URL（navigate 走 replace），让地址栏反映默认 path。
+    // detail 路由无此语义（恒带 path），不 materialize。
+    if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
     return;
   }
   if (adapter.validatePath && !adapter.validatePath(qp)) return;
@@ -444,7 +447,6 @@ if (adapter) {
   watch(
     () => isRouteActive.value && adapter.isActive(),
     (active) => {
-      console.log('run here')
       if (!active || pageLoadInFlight) return;
       const path = adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
       if (!path || loadedKey.value === path) return;
@@ -470,7 +472,9 @@ if (adapter) {
       if (!isRouteActive.value || !adapter.isActive()) return;
       const qp = readRouteQueryPath();
       if (!qp.trim()) {
-        if (adapter.syncEmptyQueryPath) adapter.routeStore.syncFromUrl("");
+        // 见 syncActivePathFromUrl：gallery 空 path = 回默认，把默认 state
+        // 写回 URL（replace）；其余 surface 无 syncEmptyQueryPath，不处理。
+        if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
         return;
       }
       const pending = paged?.pendingPreviewBoundary.value;

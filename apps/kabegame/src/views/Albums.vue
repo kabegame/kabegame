@@ -459,11 +459,25 @@ watch(
 const albumExists = (id: string) =>
   !!id && (id === HIDDEN_ALBUM_ID || albums.value.some((a) => a.id === id));
 
-const selectAlbum = (id: string) => {
+/**
+ * 切换选中画册。默认 push 一条 history 记录（用户主动切换,浏览器可后退回上一个
+ * 画册）；自动回落（存活校验、删除上溯）传 `history: "replace"`,修正非法状态
+ * 不产生历史记录。
+ */
+const selectAlbum = async (
+  id: string,
+  opts?: { history?: "push" | "replace" },
+) => {
   const chain = albums.value.find((a) => a.id === id)?.ancestorPath || `/${id}/`;
-  void setAlbumIdPath(chain);
-  // 换画册就是换数据源：重置查询/排序/页码（存储 path 只含查询体，见 albumDetailRoute）
-  void albumDetailRouteStore.navigate({
+  // 必须先 await album 落地再写查询 path：两者是同一 URL 上的两个 query 参数,
+  // 各自发起 router 导航,并发时后发导航会取消先发的(album 写入丢失,点击
+  // 「不生效」);且 path 的 hide 前缀(ignoreHide)读 currentAlbumId(),只有
+  // album 提交后才能算对,否则跨隐藏边界时 hide/ 反复错写又修正。
+  await setAlbumIdPath(chain, { history: opts?.history ?? "push" });
+  // 换画册就是换数据源：重置查询/排序/页码（存储 path 只含查询体，见
+  // albumDetailRoute）。path 写入保持 replace,与上面 push 出的记录合并成
+  // 「一次切换 = 一条完整历史记录」,后退一步即回到上一个画册的完整状态。
+  await albumDetailRouteStore.navigate({
     query: [],
     sort: { field: "by-album-order", desc: false },
     page: 1,
@@ -474,12 +488,12 @@ const onTreeSelect = (id: string) => {
   if (id !== selectedAlbumId.value) {
     trackAlbumEnter({ id, name: albums.value.find((a) => a.id === id)?.name ?? "" }, "tree");
   }
-  selectAlbum(id);
+  void selectAlbum(id);
 };
 
 /** 双击树上的画册：选中它并开合详情面板（第一次点击已由 row-click 选中） */
 const onTreeDblclick = (id: string) => {
-  selectAlbum(id);
+  void selectAlbum(id);
   toggleDetailPanel();
 };
 
@@ -487,7 +501,9 @@ onMounted(async () => {
   await albumStore.loadAlbums();
   // 「query 优先、localStorage 兜底」在 useAlbumIdPathState 读取端完成；
   // 这里只做存活校验与最终回落收藏。
-  if (!albumExists(selectedAlbumId.value)) selectAlbum(FAVORITE_ALBUM_ID);
+  if (!albumExists(selectedAlbumId.value)) {
+    void selectAlbum(FAVORITE_ALBUM_ID, { history: "replace" });
+  }
 });
 
 onActivated(async () => {
@@ -502,7 +518,7 @@ watch(
     if (!selectedAlbumId.value) return;
     const chain = segmentsOfAlbumIdPath(albumIdPath.value);
     const fallback = [...chain].reverse().find((cid) => albumExists(cid));
-    selectAlbum(fallback ?? FAVORITE_ALBUM_ID);
+    void selectAlbum(fallback ?? FAVORITE_ALBUM_ID, { history: "replace" });
   },
 );
 
@@ -828,7 +844,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "browse") {
     trackAlbumEnter({ id, name }, "context_menu");
-    selectAlbum(id);
+    await selectAlbum(id);
     return;
   }
 

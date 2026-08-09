@@ -234,8 +234,11 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     // album-detail-path 照 gallery-path 平台分化：桌面/Android 用 localStorage，query 注册见下方 IS_WEB 分支
     localEntries.push(frontendLocal("album-detail-path", ""));
   }
-  // albumIdPathLocal 全平台一致走 localStorage（当前选中画册的本地记忆，见 useAlbumIdPathState）
-  localEntries.push(frontendLocal("albumIdPathLocal", ""));
+  if (!IS_WEB) {
+    // albumIdPathLocal：当前选中画册的本地记忆（重启恢复），仅桌面/Android 消费；
+    // web 下 albumIdPath 只走 query（URL 即完整状态），见 useAlbumIdPathState
+    localEntries.push(frontendLocal("albumIdPathLocal", ""));
+  }
   for (const entry of localEntries) assignEntry(map, entry);
 
   if (IS_WEB) {

@@ -207,8 +207,19 @@ defineExpose({ scrollerRef });
 
 <style scoped>
 /* wrap 在 el-scrollbar 内部，scoped 属性到不了，须走 :deep()。
- * 滑块是浮层不占位，原先的 scrollbar-gutter 不再需要；横向内容维持裁切。 */
+ * 滑块是浮层不占位，原先的 scrollbar-gutter 不再需要；横向内容维持裁切。
+ *
+ * 高度必须走 flex 链而不是 el-scrollbar 自带的 height:100%：在「max-height 收缩」
+ * 容器里（如过滤下拉弹层），祖先高度不是 definite，百分比解析不了会退化成内容
+ * 高度——wrap 撑满全部内容、永远不滚。flex 尺寸不依赖百分比解析，收缩容器下照样生效。 */
+:deep(.el-scrollbar) {
+  display: flex;
+  flex-direction: column;
+}
+
 :deep(.kb-tree-panel__scroller) {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: var(--provider-tree-sticky-offset, 0px);
   overflow-x: hidden;
 }

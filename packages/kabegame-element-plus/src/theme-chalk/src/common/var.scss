@@ -1453,10 +1453,10 @@ $loading: map.merge(
 $scrollbar: () !default;
 $scrollbar: map.merge(
   (
-    'opacity': 0.3,
-    'bg-color': getCssVar('text-color-secondary'),
-    'hover-opacity': 0.5,
-    'hover-bg-color': getCssVar('text-color-secondary'),
+    'opacity': 0.45,
+    'bg-color': var(--anime-primary-light),
+    'hover-opacity': 0.75,
+    'hover-bg-color': var(--anime-primary),
   ),
   $scrollbar
 );
