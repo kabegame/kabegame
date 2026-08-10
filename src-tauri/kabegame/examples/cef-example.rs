@@ -12,7 +12,7 @@
 //!
 //! Run (`kabegame-cef-helper` built next to this binary):
 //! ```sh
-//! export CEF_PATH="$PWD/bin/linux/x86_64/cef-build-dev"
+//! export CEF_PATH="$PWD/bin/linux/x86_64/cef-build"
 //! export LD_LIBRARY_PATH="$CEF_PATH:$LD_LIBRARY_PATH"
 //! CEF_WINDOWED_URL=file:///tmp/cef-gpu-readback.html \
 //!   cargo build -p kabegame --features standard --bin kabegame-cef-helper
@@ -21,14 +21,14 @@
 //!
 //! Windows:
 //! ```powershell
-//! $env:CEF_PATH = "$PWD\bin\windows\x86_64\cef-build-dev"
+//! $env:CEF_PATH = "$PWD\bin\windows\x86_64\cef-build"
 //! $env:PATH = "$env:CEF_PATH;$env:PATH"
 //! cargo build -p kabegame --features standard --bin kabegame-cef-helper
 //! cargo run -p kabegame --features standard --example cef-example
 //! ```
 //!
 //! macOS uses the same two Cargo commands with
-//! `CEF_PATH=$PWD/bin/macos/<arch>/cef-build-dev`. Both executables are flat
+//! `CEF_PATH=$PWD/bin/macos/<arch>/cef-build`. Both executables are flat
 //! artifacts in `target/<profile>`; cef-dll-sys provides `target/Frameworks` for dyld.
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]

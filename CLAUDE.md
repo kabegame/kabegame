@@ -45,9 +45,9 @@ deno task b -c kabegame --skip vue         # Cargo build only
 deno task b --release                  # Copy artifacts to release/
 deno task b -c kabegame --target x86_64    # macOS only: cross-compile for Intel (also valid on check/start).
                                        # Artifacts go to target/<triple>/; FFmpeg/CEF deps are resolved per-arch
-                                       # under bin/macos/x86_64/{FFmpeg-build,cef-build-{dev,prod}}.
+                                       # under bin/macos/x86_64/{FFmpeg-build,cef-build}.
                                        # Prepare deps first: deno task build:ffmpeg --target x86_64 and
-                                       # deno task build:chromium prod --target x86_64.
+                                       # deno task build:chromium --target x86_64.
                                        # See cocs/build/MACOS_CROSS_BUILD.md.
 deno task b -c kabegame --mode android     # Build Android APK/AAB (mode-plugin injects --target aarch64 unless
                                        # --target/-t is passed; gen/android RustPlugin.kt only has arm64 flavors)
@@ -120,10 +120,12 @@ deno task build:ffmpeg           # Build x264 (third/x264) + FFmpeg libav* libs 
                                  # Output: bin/{platform}/{arch}/{FFmpeg,x264}-build/ (gitignored).
                                  # On Linux this is GUARDED to Ubuntu 22.04 only (glibc 2.35 floor,
                                  # see cocs/build/LINUX_BUILD_WORKFLOW.md); escape: KB_ALLOW_HOST_BUILD=1.
-CEFBUILD=~/kabegame-cefbuild deno task build:chromium dev   # Build CEF/Chromium from third/cef (hours).
-CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod  # Export: bin/{platform}/{arch}/cef-build-{dev,prod}/
-                                 # which is what mode-plugin resolves CEF_PATH to (dev/check/test use
-                                 # cef-build-dev, build uses cef-build-prod).
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium  # Build CEF/Chromium from third/cef (hours).
+                                 # Export: bin/{platform}/{arch}/cef-build/, which is what mode-plugin
+                                 # resolves CEF_PATH to for dev/check/test/build alike. There is only one
+                                 # build profile (official build + PGO); the old dev/prod variant split is
+                                 # gone — two profiles fought over the same out/Release_GN_* and every
+                                 # switch degenerated into a full rebuild.
                                  # The workspace (~60GB, gitignored) MUST live outside any node_modules:
                                  # chromium's in-tree TS build walks node_modules upward with no repo
                                  # boundary, so a workspace under this repo resolves bare imports into

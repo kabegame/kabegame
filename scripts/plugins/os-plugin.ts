@@ -3,12 +3,12 @@ import { BasePlugin } from "./base-plugin.ts";
 import { Component } from "./component-plugin.ts";
 import {
   ARTIFACT_DIR,
-  cefExportDir,
   ensureDir,
   isArchDirName,
   existsFile,
   FFMPEG_INSTALL_DIR,
   findFirstExisting,
+  repoBuildDir,
   RESOURCES_BIN_DIR,
   RESOURCES_DIR,
   ROOT,
@@ -58,7 +58,7 @@ const WINDOWS_CEF_RUNTIME_FILES = [
   "dxil.dll",
 ];
 // locales 白名单来自 scripts/cef-locales.ts(单一来源,与 build-chromium.ts 的
-// 导出期裁剪共用)。自编 cef-build-* 在导出期就已经只剩白名单,这里再挑一次是
+// 导出期裁剪共用)。自编 cef-build 在导出期就已经只剩白名单,这里再挑一次是
 // 幂等的重复工作,留着给「CEF_PATH 指向未经裁剪的目录」兜底。
 
 // Windows 运行时 DLL 清单（位于仓库根 bin/windows/，构建时复制到 resources/bin）。
@@ -328,9 +328,9 @@ export class OSPlugin extends BasePlugin {
   // ===== CEF runtime(Linux/Windows/MacOS !isWeb)=====
   // 这里的收集和验证只在 Linux和Windows运行，因为MacOS通过tauri framworks 来打包
   // CEF 目录解析与 mode-plugin 一致:优先 CEF_PATH(prepareEnv 已设),
-  // 否则使用 bin/{platform}/{arch}/cef-build-prod。
+  // 否则使用 bin/{platform}/{arch}/cef-build。
   private cefDir(): string {
-    return process.env.CEF_PATH || cefExportDir("prod");
+    return process.env.CEF_PATH || repoBuildDir("cef");
   }
 
   // 前置校验:缺少 CEF 运行时则报错并提示导出命令(类比 verifyFFmpegBuildArtifacts)。
@@ -347,10 +347,7 @@ export class OSPlugin extends BasePlugin {
           `请先导出 CEF(release/minimal)或设置 CEF_PATH:`,
           ...(OSPlugin.isWindows
             ? [`  在 Windows 上设置 CEF_PATH 指向已构建的 CEF 发行版目录`]
-            : [
-              `  deno task build:chromium prod`,
-              `  # 开发运行时: deno task build:chromium dev`,
-            ]),
+            : [`  deno task build:chromium`]),
         ].join("\n"),
       );
     }

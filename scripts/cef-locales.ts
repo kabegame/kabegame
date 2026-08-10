@@ -11,7 +11,7 @@
  *
  * 裁剪落在两处,共用本文件:
  * 1. `scripts/build-chromium.ts` 的 `exportCefRuntime()` —— 导出期源头就不导出,
- *    于是 `bin/{platform}/{arch}/cef-build-{dev,prod}` 本身就是瘦的。
+ *    于是 `bin/{platform}/{arch}/cef-build` 本身就是瘦的。
  * 2. `scripts/plugins/os-plugin.ts` 的 Linux/Windows 收集 —— 打包期再按白名单挑一次。
  *    对自编导出目录是幂等的重复工作,但能给「CEF_PATH 指向未经裁剪的目录」兜底。
  *    macOS 没有第 2 步:framework 由 Tauri `macOS.frameworks` 整目录拷进 .app,

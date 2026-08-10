@@ -1,6 +1,5 @@
 import { BasePlugin } from "./base-plugin.ts";
 import {
-  cefExportDir,
   CRAWLER_PLUGINS_DIR,
   FFMPEG_INSTALL_DIR,
   IS_CROSS_COMPILE,
@@ -264,7 +263,7 @@ export class ModePlugin extends BasePlugin {
         // Linux/Windows/macOS 用 CEF runtime。必须在任何 cargo 命令前设好
         // CEF_PATH,否则 cef-dll-sys 会下载官方无 H.264 的 CEF 覆盖 target 目录
         // (见 .cursor/rules/cef-path-set.mdc)。
-        // 默认按 bin/{platform}/{arch}/cef-build-{dev,prod} 解析，也可由 CEF_PATH 覆盖。
+        // 默认按 bin/{platform}/{arch}/cef-build 解析，也可由 CEF_PATH 覆盖。
         // 只有主 app 组件链接 CEF(cef-dll-sys 在 tauri-runtime-cef 依赖链里);
         // kabegame-cli 是 headless,不检查也不注入 CEF_PATH(web-release 容器等
         // 无 CEF runtime 的环境要能单独构建 cli)。
@@ -273,15 +272,11 @@ export class ModePlugin extends BasePlugin {
           !this.mode!.isWeb &&
           bs.context.component!.isMain
         ) {
-          // dev/check/test 用 cef-build-dev(check/test 只需要任意有效 CEF 目录做编译,不打包);
-          // build 用 cef-build-prod。
+          // dev/check/test/build 共用同一份 cef-build(只有一套构建档位;check/test
+          // 本来也只需要任意有效 CEF 目录做编译,不打包)。
           // macOS 跨编时 CEF runtime 也必须换成对应架构那一份:framework 的架构不匹配
           // 会在链接期失败，因此默认目录直接使用当前目标架构。
-          const cefVariant = bs.context.cmd.isDev || bs.context.cmd.isCheck ||
-              bs.context.cmd.isTest
-            ? "dev"
-            : "prod";
-          const cefPath = process.env.CEF_PATH || cefExportDir(cefVariant);
+          const cefPath = process.env.CEF_PATH || repoBuildDir("cef");
           // macOS 的 CEF runtime 是 framework(见 build-chromium.ts 导出结构),
           // Linux/Windows 是单个 libcef.so/dll。
           const cefRuntimeExists = OSPlugin.isMacOS
@@ -302,10 +297,7 @@ export class ModePlugin extends BasePlugin {
                 (OSPlugin.isLinux || OSPlugin.isMacOS ? ", or run:" : "."),
                 ...(OSPlugin.isLinux || OSPlugin.isMacOS
                   ? [
-                    `deno task build:chromium dev${
-                      TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
-                    }`,
-                    `deno task build:chromium prod${
+                    `deno task build:chromium${
                       TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
                     }`,
                   ]

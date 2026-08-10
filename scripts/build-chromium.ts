@@ -4,35 +4,30 @@
  * proprietary_codecs=true + ffmpeg_branding=Chrome 自己编一份，供 tauri-runtime-cef 使用。
  *
  * 用法：
- *   deno task build:chromium dev
- *   deno task build:chromium prod
- *   deno task build:chromium dev --clean
- *   deno task build:chromium prod --clean
- *   deno task build:chromium prod --target x86_64   # 仅 macOS，跨编 Intel 版 CEF
+ *   deno task build:chromium
+ *   deno task build:chromium --clean
+ *   deno task build:chromium --target x86_64   # 仅 macOS，跨编 Intel 版 CEF
+ *
+ * 只有一套构建档位（official build + PGO）。曾经的 dev/prod variant 已删除：
+ * 两份产物意味着两份 GN 配置抢同一个 out/Release_GN_*，每次切换都退化成全量重编，
+ * 而 dev 档位省下的编译时间抵不上这个代价——CEF 产物本就只需编一次。
  *
  * --target x86_64|arm64（仅 macOS）：在一台 Mac 上为另一架构编 CEF。默认宿主架构，
  * 即 Apple Silicon 上不传时行为与以往完全一致。两种架构共用 Chromium checkout，
  * 只用 out/Release_GN_{arm64,x64} 隔离 GN 输出；runtime 则分别导出到：
- *   bin/macos/arm64/cef-build-{dev,prod}
- *   bin/macos/x86_64/cef-build-{dev,prod}
+ *   bin/macos/arm64/cef-build
+ *   bin/macos/x86_64/cef-build
  * 想彻底分开 checkout 可用 CEFBUILD 环境变量各指一处，代价是多一份数十 G 的源码树。
  *
  * 默认路径（路径公式全部来自 scripts/paths.ts）：
  *   构建根：third/chromium（CHROMIUM_DIR，不带 platform/arch 维度）
- *   runtime：bin/{platform}/{arch}/cef-build-{dev,prod}（cefExportDir）
+ *   runtime：bin/{platform}/{arch}/cef-build（repoBuildDir("cef")）
  * CEFBUILD 可覆盖构建根；CEF_EXPORT_ROOT 可覆盖 runtime 的父目录，覆盖后导出到
- * <root>/cef-build-{variant}。CEF_SOURCE 默认仍为 third/cef。
+ * <root>/cef-build。CEF_SOURCE 默认仍为 third/cef。
  *
  * 构建根必须待在任何 node_modules 之外，所以上面那个默认值实际不可用——须显式
- *   CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod
+ *   CEFBUILD=~/kabegame-cefbuild deno task build:chromium
  * 成因见 checkNoNodeModulesAncestor()（构建前会拦下不合规布局）。
- *
- * dev/prod 共用同一个 out/Release_GN_*，GN_DEFINES 不同（official/PGO vs 非
- * official），交替构建会互相覆盖对方的对象文件——每次切换 variant 都是一次全量。
- * 频繁两边出包时建议按 variant 各备一套工作区（APFS 上 `cp -Rpc` 写时复制克隆，
- * 数据零成本）：
- *   prod: CEFBUILD=~/kabegame-cefbuild        deno task build:chromium prod
- *   dev:  CEFBUILD=~/kabegame-cefbuild-dev    deno task build:chromium dev
  *
  * Linux 关键前提：Chromium/CEF 的源码树重度依赖符号链接、POSIX 权限和大小写敏感，
  * exFAT/NTFS 都不行，构建根必须位于 POSIX 文件系统。
@@ -51,10 +46,10 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   BUILD_PLATFORM,
-  cefExportDir,
   CHROMIUM_DIR,
   HOST_ARCH,
   normalizeTargetArch,
+  repoBuildDir,
   ROOT,
   TARGET_ARCH,
   THIRD_DIR,
@@ -67,10 +62,7 @@ import {
   MACOS_CEF_FALLBACK_LPROJ,
 } from "./cef-locales.ts";
 
-type Variant = "dev" | "prod";
-
 interface ParsedArgs {
-  variant: Variant;
   clean: boolean;
   targetArch?: TargetArch;
 }
@@ -83,7 +75,6 @@ interface WindowsPathBridge {
 }
 
 interface BuildContext {
-  variant: Variant;
   clean: boolean;
   targetArch?: TargetArch;
   archivePlatform: string;
@@ -131,20 +122,15 @@ function die(message: string, code = 1): never {
 function usageError(message?: string): never {
   if (message) console.error(message);
   console.error(
-    "用法: deno task build:chromium [dev|prod] [--clean] [--target x86_64|arm64]",
+    "用法: deno task build:chromium [--clean] [--target x86_64|arm64]",
   );
   process.exit(2);
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const rawVariant = argv[0] ?? "dev";
-  if (rawVariant !== "dev" && rawVariant !== "prod") {
-    usageError();
-  }
-
   let clean = false;
   let rawTarget: string | undefined;
-  for (let i = 1; i < argv.length; i++) {
+  for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--clean") {
       clean = true;
@@ -173,7 +159,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { variant: rawVariant, clean, targetArch };
+  return { clean, targetArch };
 }
 
 function capture(
@@ -318,9 +304,9 @@ function createContext(parsed: ParsedArgs): BuildContext {
   const exportDir = process.env.CEF_EXPORT_ROOT
     ? path.join(
       resolveConfiguredPath(process.env.CEF_EXPORT_ROOT, windows),
-      `cef-build-${parsed.variant}`,
+      "cef-build",
     )
-    : cefExportDir(parsed.variant, targetArch);
+    : repoBuildDir("cef", { arch: targetArch });
   const env: NodeJS.ProcessEnv = { ...process.env };
 
   if (BUILD_PLATFORM === "macos") {
@@ -338,7 +324,6 @@ function createContext(parsed: ParsedArgs): BuildContext {
   }
 
   return {
-    variant: parsed.variant,
     clean: parsed.clean,
     targetArch,
     archivePlatform,
@@ -420,7 +405,7 @@ function checkNoNodeModulesAncestor(ctx: BuildContext): void {
       offenders.map((p) => `  ${p}`).join("\n") +
       `\n构建空间：${ctx.cefBuild}\n` +
       "请用 CEFBUILD 指向仓库外的目录（同卷 mv 可秒级迁移已有 checkout），例如：\n" +
-      "  CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod",
+      "  CEFBUILD=~/kabegame-cefbuild deno task build:chromium",
   );
 }
 
@@ -746,36 +731,21 @@ function bootstrap(ctx: BuildContext): void {
   }
 }
 
-function configureVariant(ctx: BuildContext): void {
+function configureGnArgs(ctx: BuildContext): void {
   // CEF 7827 的 gn_args.py 硬性要求 optimize_webui=true、enable_widevine=true，
   // //cef/BUILD.gn 还有 assert 兜底，不能在这里覆盖。NaCl 已从 Chromium 149 移除，
-  // 也不能再写 enable_nacl。prod 的 official build 默认启用 PGO，全量 checkout 通过
-  // --with-pgo-profiles 下载；dev 非 official build，不需要 profile。
-  let common = "proprietary_codecs=true ffmpeg_branding=Chrome";
-  if (BUILD_PLATFORM === "linux") common += " use_sysroot=true";
+  // 也不能再写 enable_nacl。official build 默认启用 PGO，全量 checkout 通过
+  // --with-pgo-profiles 下载。
+  let defines = "proprietary_codecs=true ffmpeg_branding=Chrome";
+  if (BUILD_PLATFORM === "linux") defines += " use_sysroot=true";
+  defines += " is_official_build=true optimize_for_size=true symbol_level=0";
+  if (BUILD_PLATFORM === "linux") defines += " use_cups=false";
 
-  if (ctx.variant === "dev") {
-    ctx.env.GN_DEFINES =
-      `${common} is_official_build=false symbol_level=0 ` +
-      "blink_symbol_level=0 dcheck_always_on=false";
-    ctx.distribFlags = [
-      "--minimal-distrib-only",
-      "--no-distrib-docs",
-      "--no-distrib-symbols",
-      "--distrib-subdir-suffix=dev",
-    ];
-  } else {
-    let prodExtra = "optimize_for_size=true symbol_level=0";
-    if (BUILD_PLATFORM === "linux") prodExtra += " use_cups=false";
-    ctx.env.GN_DEFINES = `${common} is_official_build=true ${prodExtra}`;
-    ctx.distribFlags = [
-      "--minimal-distrib-only",
-      "--no-distrib-docs",
-      "--distrib-subdir-suffix=prod",
-    ];
-    ctx.pgoFlags = ["--with-pgo-profiles"];
-  }
-  log(`variant=${ctx.variant}`);
+  ctx.env.GN_DEFINES = defines;
+  // 不传 --distrib-subdir-suffix:只有一套档位,distrib 目录名就是无后缀的
+  // cef_binary_<ver>_<platform>_minimal(findDistrib 按同一公式匹配)。
+  ctx.distribFlags = ["--minimal-distrib-only", "--no-distrib-docs"];
+  ctx.pgoFlags = ["--with-pgo-profiles"];
   log(`GN_DEFINES=${ctx.env.GN_DEFINES}`);
 }
 
@@ -815,10 +785,9 @@ function configureUpdate(ctx: BuildContext): void {
 }
 
 function ensurePgoProfile(ctx: BuildContext): void {
-  // prod 增量构建不会重跑负责 PGO profile 的 gclient hook；切到另一目标架构时，所需
+  // 增量构建不会重跑负责 PGO profile 的 gclient hook；切到另一目标架构时，所需
   // profile 往往从未下载。这里按 chrome/build/<target>.pgo.txt 幂等补齐；全量构建
   // 在源码目录尚不存在时直接返回，仍交给 --with-pgo-profiles。
-  if (ctx.variant !== "prod") return;
   const sourceDir = chromiumSourceDir(ctx);
   if (!fs.existsSync(sourceDir)) return;
 
@@ -869,13 +838,13 @@ function ensurePgoProfile(ctx: BuildContext): void {
       env: ctx.env,
       failureMessage:
         `PGO profile 下载失败（${pgoTarget}）。` +
-        "可手动重试或改用 dev variant（无 PGO）。",
+        "profile 缺失会让 official build 直接失败,必须补齐。",
     },
   );
   if (!fs.existsSync(profilePath)) {
     die(
       `PGO profile 下载后仍缺失: ${profilePath}\n` +
-        "可手动重试或改用 dev variant（无 PGO）。",
+        "profile 缺失会让 official build 直接失败,必须补齐。",
     );
   }
   log("PGO profile 下载完成 ✓");
@@ -902,7 +871,7 @@ let droppedLocales = 0;
 /**
  * 拷贝 CEF 运行时,途中按白名单剔除用不到的 locale(见 scripts/cef-locales.ts)。
  * 全量 228 个 locale 约 52MB,应用只可能显示其中 5 种;在导出期就不导出,
- * `cef-build-{dev,prod}` 本身与后续所有消费者(dev 直链、tauri 打包)就都是瘦的。
+ * `cef-build` 本身与后续所有消费者(dev 直链、tauri 打包)就都是瘦的。
  *
  * 两种排布分别处理:
  * - macOS:framework 内 `Resources/<locale>.lproj/`
@@ -1000,7 +969,7 @@ function exportCefRuntime(ctx: BuildContext, distrib: string): void {
     path.join(tmpDir, "archive.json"),
     `{
   "type": "minimal",
-  "name": "cef_binary_${ctx.cefRsArchiveVersion}+${ctx.archivePlatform}_${ctx.variant}_minimal",
+  "name": "cef_binary_${ctx.cefRsArchiveVersion}+${ctx.archivePlatform}_minimal",
   "sha1": "0000000000000000000000000000000000000000"
 }
 `,
@@ -1059,7 +1028,7 @@ function findDistrib(ctx: BuildContext): string | undefined {
     "binary_distrib",
   );
   if (!fs.existsSync(distribRoot)) return undefined;
-  const suffix = `_${ctx.archivePlatform}_${ctx.variant}_minimal`;
+  const suffix = `_${ctx.archivePlatform}_minimal`;
   const matches = fs.readdirSync(distribRoot, { withFileTypes: true })
     .filter((entry) =>
       entry.isDirectory() && entry.name.startsWith("cef_binary_") &&
@@ -1259,9 +1228,9 @@ function cefSyncNeeded(ctx: BuildContext): boolean {
 }
 
 async function runBuild(ctx: BuildContext): Promise<void> {
-  const logfile = path.join(ctx.cefBuild, `build-${ctx.variant}.log`);
+  const logfile = path.join(ctx.cefBuild, "build.log");
   log(`开始编译，日志: ${logfile}`);
-  log("建议在 tmux/screen 里跑；prod 的 LTO 链接很吃内存，OOM 就在 ~/e 挂 swap。");
+  log("建议在 tmux/screen 里跑；official build 的 LTO 链接很吃内存，OOM 就在 ~/e 挂 swap。");
 
   const historyFlags: string[] = [];
   if (ctx.noHistory === "1") {
@@ -1305,13 +1274,19 @@ async function runBuild(ctx: BuildContext): Promise<void> {
     // 两阶段之间做 mtime 保全,让 ninja 只看见真实变更。memo 命中且 checkout
     // 已就位时(最常见的纯 rerun)连阶段 A 都省掉——同步本来就无事可做。
     if (ctx.incremental && cefSyncNeeded(ctx)) {
-      const syncLogfile = path.join(ctx.cefBuild, `sync-${ctx.variant}.log`);
+      const syncLogfile = path.join(ctx.cefBuild, "sync.log");
       log(`同步阶段开始(日志: ${syncLogfile})`);
       const snapshot = takeCefMtimeSnapshot(ctx);
       log(`已快照 ${snapshot.size} 个文件的 (sha1, mtime)`);
+      // automate-git.py 的 invalid_options_combination 把 --no-build/--force-build
+      // 与 --no-distrib/--force-distrib 判为非法组合,而增量路径的 updateFlags 恒带
+      // 这两个 --force-*(见 configureUpdate),所以阶段 A 必须先摘掉再加 --no-*。
+      const syncArgs = args.filter(
+        (a) => a !== "--force-build" && a !== "--force-distrib",
+      );
       await runWithTee(
         ctx.pythonBin,
-        [...args, "--no-build", "--no-distrib"],
+        [...syncArgs, "--no-build", "--no-distrib"],
         syncLogfile,
         ctx.env,
       );
@@ -1338,7 +1313,7 @@ async function main(): Promise<void> {
   prepareCefReference(ctx);
   setupEnv(ctx);
   bootstrap(ctx);
-  configureVariant(ctx);
+  configureGnArgs(ctx);
   configureUpdate(ctx);
   ensurePgoProfile(ctx);
   await runBuild(ctx);

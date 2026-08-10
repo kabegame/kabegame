@@ -170,7 +170,7 @@ export class ComponentPlugin extends BasePlugin {
           if (existsSync(dir)) {
             // 递归收集(含 CEF 的 locales/ 子目录),路径相对 bin/linux。
             // 顶层的架构子目录(bin/linux/{arm64,x86_64})装的是第三方仓库的编译产物
-            // (FFmpeg-build / cef-build-* 等,数 GB),不是运行时暂存内容,必须跳过——
+            // (FFmpeg-build / cef-build 等,数 GB),不是运行时暂存内容,必须跳过——
             // 否则整棵构建树会被写进 deb 的 files map。
             const rels: string[] = [];
             const walk = (cur: string) => {

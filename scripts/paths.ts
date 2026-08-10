@@ -139,14 +139,6 @@ export function isArchDirName(name: string): boolean {
   return ARCH_DIR_NAMES.includes(name);
 }
 
-/** CEF runtime distrib 导出目录：bin/{p}/{a}/cef-build-{dev,prod}。 */
-export function cefExportDir(
-  variant: "dev" | "prod",
-  arch?: TargetArch,
-): string {
-  return `${repoBuildDir("cef", { arch })}-${variant}`;
-}
-
 /** chromium checkout 工作区（build-chromium 的构建根，原仓库外 cefbuild）。 */
 export const CHROMIUM_DIR: string = path.join(THIRD_DIR, "chromium");
 

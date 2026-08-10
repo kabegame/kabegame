@@ -20,7 +20,7 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
 | 开发迭代（`dev` / `check` / `test`，一律 debug） | host | `target/debug/` |
 | release 构建（`deno task b --release`） | **只在 guest** | `target/release/` |
 | FFmpeg/x264 产物构建（`deno task build:ffmpeg`） | **只在 guest** | `bin/linux/x86_64/{FFmpeg,x264}-build/` |
-| chromium/CEF（`deno task build:chromium`） | host 或 guest 均可 | `$CEFBUILD`（须在仓库外） → `bin/linux/x86_64/cef-build-{dev,prod}/` |
+| chromium/CEF（`deno task build:chromium`） | host 或 guest 均可 | `$CEFBUILD`（须在仓库外） → `bin/linux/x86_64/cef-build/` |
 | rusty_v8 android（`deno task build:v8`） | host 或 guest 均可 | `bin/android/arm64/rusty_v8-build/` |
 
 - **同一个 `target/`**：debug 与 release 是 cargo 的两个 profile 子目录，`.o` 与 build-script
@@ -63,7 +63,7 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
   - **`cargo-tauri`**：fork 的版本必须自建，但这由 `TauriCliPlugin` 在构建流程里自动完成，
     产物落 `target/release/`，无需手工准备。
   - `.vm/` 只留 guest 本地的构建日志与 `run-build.sh`（git 本地忽略，见 `.git/info/exclude`）。
-  - `.vm/cef-prod` 已废除：CEF distrib 就在树内 `bin/linux/x86_64/cef-build-prod/`。
+  - `.vm/cef-prod` 已废除：CEF distrib 就在树内 `bin/linux/x86_64/cef-build/`。
 - **guest 依赖**（apt）：`build-essential pkg-config cmake git curl file zlib1g-dev
   libssl-dev libgtk-3-dev libglib2.0-dev clang libclang-dev libayatana-appindicator3-dev
   nasm`；`ubuntu-test` 开了免密 sudo；加了 6G swapfile 防链接期 OOM。
@@ -179,7 +179,7 @@ host 的 debug 迭代不会污染 guest 的 release 产物。真正要防的是�
 
 **6. 无需重编的部分。** CEF `libcef.so`（glibc 2.25）与 `rusty_v8` 预编译静态库都不带
 `__isoc23_*`/高版本符号，**不用在 guest 重编**——这正是 chromium/v8 构建能豁免守卫、
-留在 host 跑的原因。它们的产物在树内（`bin/linux/x86_64/cef-build-prod/`、
+留在 host 跑的原因。它们的产物在树内（`bin/linux/x86_64/cef-build/`、
 `bin/android/arm64/rusty_v8-build/`），guest 挂载即得。
 
 **7. guest 资源。** 系统盘仅 12G：把 `CARGO_HOME`/`RUSTUP_HOME` 放共享区（sdb4）；
@@ -200,8 +200,7 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
   `process.env.CARGO_TARGET_DIR`**，保证不同 cwd（主构建 cwd=src-tauri、tauri-cli cwd=ROOT）
   派生的 cargo/tauri 落点一致；缺省 `ROOT/target`。构建系统一切"找/搬产物"的路径都从这里取。
 - `repoBuildDir(repo, { platform?, arch? })` —— 第三方编译产物目录
-  `bin/{platform}/{arch}/{repo}-build`。
-- `cefExportDir(variant)` —— `bin/{platform}/{arch}/cef-build-{dev,prod}`。
+  `bin/{platform}/{arch}/{repo}-build`；CEF distrib 即 `repoBuildDir("cef")`。
 - `CHROMIUM_DIR` —— chromium checkout 工作区的默认值 `third/chromium`。实际构建须用 `CEFBUILD`
   覆盖到仓库外（任何 `node_modules` 之外），否则 `checkNoNodeModulesAncestor()` 护栏拦下；
   成因见 [../../src-tauri/tauri-runtime-cef/README.md](../../src-tauri/tauri-runtime-cef/README.md)。

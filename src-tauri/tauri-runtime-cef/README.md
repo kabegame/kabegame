@@ -109,7 +109,7 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
 CEF_PATH=... cargo check -p tauri-runtime-cef
 ```
 
-`cef-rs` 默认下载对应的官方预编译 CEF（**不含 H.264/AAC**）；必须设置 `CEF_PATH` 指向自编运行时目录（见 `.cursor/rules/cef-path-set.mdc`）。默认目录统一为 `bin/{platform}/{arch}/cef-build-{dev,prod}`（`scripts/plugins/mode-plugin.ts`）。
+`cef-rs` 默认下载对应的官方预编译 CEF（**不含 H.264/AAC**）；必须设置 `CEF_PATH` 指向自编运行时目录（见 `.cursor/rules/cef-path-set.mdc`）。默认目录统一为 `bin/{platform}/{arch}/cef-build`（`scripts/plugins/mode-plugin.ts`）。
 
 Windows 构建 `libcef_dll_wrapper` 需要 cmake + ninja + MSVC；cef-dll-sys 的 build.rs 会把整个 CEF runtime 拷进 `target/{debug,release}/`，dev 运行免手工拷贝。
 
@@ -199,8 +199,7 @@ checkout 的 origin 校正到该引用、同步当前提交，并由 CEF 标准 
 ```bash
 git submodule update --init third/cef
 deno task patch cef
-deno task build:chromium dev
-deno task build:chromium prod
+deno task build:chromium
 ```
 
 **automate-git 只认提交，固化由构建脚本自动完成。** `automate-git.py` 对
@@ -236,25 +235,19 @@ ninja 按 mtime 判脏 → 内容零变化也能重编数万 target、耗时数�
 因此纯 rerun / 只改导出逻辑时增量构建为分钟级（同步跳过 + no-op ninja + 重打包导出）；
 只有 patch 内容或上游 pin 真变时才触发重编，且范围贴近真实依赖锥。
 
-**dev/prod 交替必然全量，用两套工作区隔开。** 上面三层只治「内容没变却重编」，治不了
-variant 切换：两个 variant 共用同一个 `out/Release_GN_*`，而 `GN_DEFINES` 不同
-（`is_official_build=true` + PGO vs 非 official），切换时 `args.gn` 被改写、gn 重新生成
-**所有编译命令**，ninja 按命令行 hash 判脏 → 全量重编并覆盖另一 variant 的对象文件。
-磁盘上永远只存在最后一次构建那个 variant 的编译缓存。
+**只有一套构建档位（official build + PGO），dev/prod variant 已删除。** 这不是简化文档，
+是上面三层增量优化治不了的一类全量重编：两个 variant 共用同一个 `out/Release_GN_*`，而
+`GN_DEFINES` 不同（`is_official_build=true` + PGO vs 非 official），切换时 `args.gn` 被
+改写、gn 重新生成**所有编译命令**，ninja 按命令行 hash 判脏 → 全量重编并覆盖另一 variant
+的对象文件。磁盘上永远只存在最后一次构建那个 variant 的编译缓存。
 
-约定优于机制：**按 variant 分批干活**（dev 里迭代完再出一次 prod），把 N 次切换压成 1 次。
-需要两边频繁出包时各备一套工作区——macOS 的 APFS 用 `cp -Rpc` 是写时复制克隆，几万文件
-瞬间完成、数据零占用（只有后续各自编译产生的差异才真正吃盘）：
-
-```bash
-cp -Rpc ~/kabegame-cefbuild ~/kabegame-cefbuild-dev     # 克隆一份给 dev 专用
-CEFBUILD=~/kabegame-cefbuild     deno task build:chromium prod
-CEFBUILD=~/kabegame-cefbuild-dev deno task build:chromium dev
-```
-
-`out/` 目录名按 variant 分开（`Release_GN_arm64_dev`）走不通——automate-git 里目录名写死
-为 `Release_GN_<arch>`，得 patch automate 本身。ccache/sccache 是另一条路，代价是缓存
-数十 GB 且首次填充仍全量。
+绕开它的每条路代价都超过 dev 档位省下的那点编译时间：`out/` 目录名按 variant 分开
+（`Release_GN_arm64_dev`）走不通——automate-git 里目录名写死为 `Release_GN_<arch>`，
+得 patch automate 本身；各备一套工作区要多一份数十 G 的 checkout（APFS 的 `cp -Rpc`
+写时复制只是让克隆瞬间完成，后续各自编译的差异仍真正吃盘）；ccache/sccache 则是缓存
+数十 GB 且首次填充仍全量。而 CEF 产物本就只需编一次——dev/check/test/build 共用
+`bin/{platform}/{arch}/cef-build` 这一份即可，check/test 更是只需要任意有效 CEF 目录
+做链接。
 
 因此 `third/cef` 的 gitlink **始终指向官方上游 pin**（当前 `0d0eeb611`），Kabegame 的分歧
 只以 `third-patches/cef/*.patch` 为准，与其它 `third/` 子模块完全同构。
@@ -288,7 +281,7 @@ TS 编译（`tools/typescript/ts_library.py`）走 node 模块解析：逐级向
 唯一可靠的办法是让构建空间物理上待在任何 `node_modules` 之外：
 
 ```bash
-CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium
 ```
 
 `checkNoNodeModulesAncestor()` 在构建前从构建空间逐级向上扫描，发现装了包的 `node_modules`

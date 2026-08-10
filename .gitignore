@@ -52,7 +52,7 @@ src-tauri/kabegame/resources/cef/
 # bin/{platform}/ 根部是 os-plugin 构建期生成的运行时暂存：Linux/macOS 全部生成，
 # Windows 的 dokan2/libwinpthread/libva 等部分 DLL 预置入库，生成的 FFmpeg/x264 DLL 忽略。
 # bin/{platform}/{arch}/ 是第三方仓库编译产物（FFmpeg-build / x264-build /
-# cef-build-{dev,prod} / rusty_v8-build），全部忽略，由 `deno task build:*` 复现。
+# cef-build / rusty_v8-build），全部忽略，由 `deno task build:*` 复现。
 # 架构目录名与 scripts/paths.ts 的 ARCH_DIR_NAMES 保持一致。
 /bin/*/arm64/
 /bin/*/x86_64/

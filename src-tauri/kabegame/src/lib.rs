@@ -214,7 +214,7 @@ fn init(
     spawn_local_folder_sync_watcher();
 
     // 桌面端 MCP 与自动更新：初始化后端权威单例
-    #[cfg(any(not(feature = "web"), not(target_os = "android")))]
+    #[cfg(all(not(feature = "web"), not(target_os = "android")))]
     {
         let _ = mcp_service::McpService::init_global(std::sync::Arc::new(
             mcp_service::McpService::new(),

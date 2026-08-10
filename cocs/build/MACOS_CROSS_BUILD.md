@@ -23,8 +23,7 @@ ffmpeg-builder）也能直接 import：
 | `HOST_ARCH` / `IS_CROSS_COMPILE` | 宿主架构 / 目标是否 ≠ 宿主 |
 | `BUILD_PLATFORM` | 目录命名 token：`macos` \| `linux` \| `windows` |
 | `ARTIFACT_DIR` | 本次构建的产物目录 = `TARGET_DIR[/<triple>]` |
-| `repoBuildDir(repo, opts?)` | 第三方产物目录公式 `bin/{platform}/{arch}/{repo}-build` |
-| `cefExportDir(variant, arch?)` | CEF distrib `bin/{platform}/{arch}/cef-build-{dev,prod}` |
+| `repoBuildDir(repo, opts?)` | 第三方产物目录公式 `bin/{platform}/{arch}/{repo}-build`；CEF distrib 即 `repoBuildDir("cef")` |
 | `CHROMIUM_DIR` | chromium checkout 工作区的默认值 `third/chromium`；实际构建须用 `CEFBUILD` 指到仓库外（见下） |
 | `FFMPEG_INSTALL_DIR`（utils.ts） | `repoBuildDir("FFmpeg") + /install` |
 
@@ -48,7 +47,7 @@ tauri/cargo 的，不消费也不重复注入。解析结果回写 `KB_TARGET_AR
 | cargo/tauri 产物 | `target/[aarch64-apple-darwin/]` | `target/x86_64-apple-darwin/` |
 | FFmpeg | `bin/macos/arm64/FFmpeg-build/install` | `bin/macos/x86_64/FFmpeg-build/install` |
 | x264 | `bin/macos/arm64/x264-build/install` | `bin/macos/x86_64/x264-build/install` |
-| CEF runtime | `bin/macos/arm64/cef-build-{dev,prod}` | `bin/macos/x86_64/cef-build-{dev,prod}` |
+| CEF runtime | `bin/macos/arm64/cef-build` | `bin/macos/x86_64/cef-build` |
 | CEF GN 输出 | `$CEFBUILD/…/out/Release_GN_arm64` | `$CEFBUILD/…/out/Release_GN_x64` |
 | dmg 资产名 | `..._aarch64.dmg` | `..._x64.dmg` |
 
@@ -67,7 +66,7 @@ platform/arch 维度，也不是 submodule（体积过大，gitignore、由 `den
 构建前的 `checkNoNodeModulesAncestor()` 护栏会拦下这种布局。固定这样跑：
 
 ```bash
-CEFBUILD=~/kabegame-cefbuild deno task build:chromium prod --target x86_64
+CEFBUILD=~/kabegame-cefbuild deno task build:chromium --target x86_64
 ```
 
 成因、为何打存根不管用、以及护栏细节见
@@ -85,7 +84,7 @@ brew install nasm
 deno task build:ffmpeg --target x86_64
 
 # 2. CEF/Chromium（数小时～十几小时，唯一的大头）
-deno task build:chromium prod --target x86_64
+deno task build:chromium --target x86_64
 
 # 3. CLI 与主应用
 deno task b -c kabegame-cli --release --target x86_64
