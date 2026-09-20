@@ -162,7 +162,7 @@ Kabegame 可以把图片或视频导出为 **Wallpaper Engine Web 工程**（包
 | Linux Plasma 插件 | plasmoid 由 Plasma Shell 管理；具体行为取决于插件实现 |
 | Android | 系统壁纸已永久写入并保留；轮播不再推进 |
 
-想让壁纸持续轮播，请让 Kabegame 在后台运行（最小化到托盘，不要选「退出」）。
+想让壁纸持续轮播，请让 Kabegame 在后台运行：关闭主窗口只会把它收进系统托盘，应用继续跑；真正退出要用托盘菜单的「退出」（macOS 也可以 Cmd+Q）。
 
 ## 平台差异
 

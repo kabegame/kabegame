@@ -224,7 +224,6 @@ import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.
 import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
 import SettingChoiceHost from "@kabegame/core/components/common/SettingChoiceHost.vue";
 import SettingsDialog from "./components/settings/SettingsDialog.vue";
-import { useMainCloseGuard } from "./composables/useMainCloseGuard";
 import { useGlobalShortcuts, shortcutLabel } from "./composables/useGlobalShortcuts";
 import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
 import { useBusyTasks } from "./composables/useBusyTasks";
@@ -342,7 +341,6 @@ const {
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
-useMainCloseGuard();
 
 // 文件拖拽
 const { init: initFileDrop } = useFileDrop(fileDropOverlayRef);

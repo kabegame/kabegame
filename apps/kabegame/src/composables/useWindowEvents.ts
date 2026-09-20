@@ -10,22 +10,8 @@ export function useWindowEvents() {
 
   const init = async () => {
     if (IS_WEB) return;
-    // 监听窗口关闭事件 - 隐藏而不是退出
-    try {
-      const currentWindow = getCurrentWebviewWindow();
-      await currentWindow.onCloseRequested(async (event) => {
-        // 阻止默认关闭行为
-        event.preventDefault();
-        // 调用后端命令隐藏窗口
-        try {
-          await invoke("hide_main_window");
-        } catch (error) {
-          console.error("隐藏窗口失败:", error);
-        }
-      });
-    } catch (error) {
-      console.error("注册窗口关闭事件监听失败:", error);
-    }
+    // 关闭主窗口 = 隐藏保活在托盘，整条路径在 Rust 侧（lib.rs 的 CloseRequested
+    // handler → commands::window::hide_main_window），前端不参与，也不再询问用户。
 
     // 监听窗口最小化事件 - 修复壁纸窗口 Z-order（防止覆盖桌面图标）
     try {

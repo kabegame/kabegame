@@ -92,10 +92,6 @@
                   :description="$t('settings.linkOpenModeDesc')">
                   <SettingRadioControl setting-key="linkOpenMode" :options="linkOpenModeOptions" />
                 </SettingRow>
-                <SettingRow v-if="IS_WINDOWS || IS_LINUX" :label="$t('settings.closeAction')"
-                  :description="$t('settings.closeActionDesc')">
-                  <SettingRadioControl setting-key="closeAction" :options="closeActionOptions" />
-                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.fastFolderSync')"
                   :description="$t('settings.fastFolderSyncDesc')">
                   <SettingSwitchControl setting-key="fastFolderSync" />
@@ -365,11 +361,6 @@ const linkOpenModeOptions = computed(() => [
   { label: t("settings.linkOpenSurf"), value: "surf" },
   { label: t("settings.linkOpenBrowser"), value: "browser" },
   { label: t("settings.linkOpenAsk"), value: "unconfigured" },
-]);
-const closeActionOptions = computed(() => [
-  { label: t("settings.closeActionExit"), value: "exit" },
-  { label: t("settings.closeActionTray"), value: "tray" },
-  { label: t("settings.closeActionAsk"), value: "unconfigured" },
 ]);
 
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";

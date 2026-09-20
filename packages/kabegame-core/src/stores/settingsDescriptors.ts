@@ -226,9 +226,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("galleryChipSortField", true),
     frontendLocal("galleryChipSortOrder", true),
   ];
-  if (IS_WINDOWS || IS_LINUX) {
-    localEntries.push(frontendLocal("closeAction", "unconfigured"));
-  }
   if (!IS_WEB) {
     localEntries.push(frontendLocal("gallery-path", ""));
     // album-detail-path 照 gallery-path 平台分化：桌面/Android 用 localStorage，query 注册见下方 IS_WEB 分支

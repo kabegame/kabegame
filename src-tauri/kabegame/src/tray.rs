@@ -170,9 +170,9 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             }
         }
         "hide" => {
-            // 只隐藏主窗口（label 为 "main"），排除壁纸窗口
-            if let Some(main_window) = app.get_webview_window("main") {
-                let _ = main_window.hide();
+            // 与关闭按钮共用同一条隐藏路径（只隐藏 label 为 "main" 的主窗口，排除壁纸窗口）
+            if let Err(e) = crate::commands::window::hide_main_window(app.clone()) {
+                eprintln!("[托盘] 隐藏窗口失败: {}", e);
             }
         }
         "quit" => {

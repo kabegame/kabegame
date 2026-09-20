@@ -20,9 +20,11 @@ pub(super) async fn fix_wallpaper_window_zorder<R: tauri::Runtime>(app: tauri::A
     crate::wallpaper::window::zorder::restore(Some(tauri_hwnd.0 as HWND));
 }
 
-/// 隐藏主窗口（用于窗口关闭事件处理）
-#[tauri::command]
-pub fn hide_main_window<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+/// 隐藏主窗口。关闭按钮（`CloseRequested`）与托盘「隐藏窗口」共用同一条路径：
+/// 本应用常驻后台，关闭窗口一律只隐藏、保活在托盘，不提供「关闭即退出」的分支。
+/// 退出只走托盘菜单「退出」/ macOS Cmd+Q / `exit_app`。
+#[cfg(not(target_os = "android"))]
+pub(crate) fn hide_main_window<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
     use tauri::Manager;
     // 明确获取主窗口，而不是使用 values().next()（可能获取到壁纸窗口）
     let Some(window) = app.get_webview_window("main") else {
@@ -30,11 +32,7 @@ pub fn hide_main_window<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(
     };
 
     // 不保存 window_state：用户要求每次居中弹出
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
-    }
+    window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
 
     // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
     #[cfg(target_os = "windows")]

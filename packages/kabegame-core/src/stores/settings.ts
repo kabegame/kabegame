@@ -111,8 +111,6 @@ export interface AppSettings {
   galleryChipSortField: boolean;
   /** 排序顺序 chip 是否占工具条 */
   galleryChipSortOrder: boolean;
-  /** 关闭主窗口的行为(仅 Win/Linux);unconfigured 时首次关闭弹选择框 */
-  closeAction: "tray" | "exit" | "unconfigured";
 
   // --- URL query 镜像键（settings 层只做哑同步，页面自己做激活态 guard）---
   /** `/auto-configs?tab=`；缺省为 `"mine"`，`"mine"` 会编码为空并删除参数。 */

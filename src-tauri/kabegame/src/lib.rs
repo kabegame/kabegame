@@ -398,10 +398,14 @@ pub(crate) fn configure_app(
                     let _ = window.hide();
                     api.prevent_close();
                 }
-                #[cfg(any(windows, target_os = "linux"))]
+                // 主窗口关闭一律只隐藏、保活在托盘（三平台一致，不询问也不退出）。
+                // 退出走托盘菜单「退出」/ macOS Cmd+Q / `exit_app`。
                 if window.label() == "main" {
                     api.prevent_close();
-                    let _ = window.emit("main-close-requested", ());
+                    if let Err(e) = commands::window::hide_main_window(window.app_handle().clone())
+                    {
+                        eprintln!("[窗口] 关闭主窗口时隐藏失败: {e}");
+                    }
                 }
             }
             tauri::WindowEvent::Destroyed => {
@@ -664,7 +668,6 @@ pub(crate) fn configure_app(
             #[cfg(all(feature = "standard", target_os = "windows"))]
             install_album_drive_driver,
             // --- Window ---
-            hide_main_window,
             #[cfg(not(target_os = "android"))]
             toggle_fullscreen,
             get_window_state,
