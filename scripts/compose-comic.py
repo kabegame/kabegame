@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Compose 4 single-panel images onto the 4masu PSD template.
+Compose 4 single-panel images onto the 4koma PSD template.
 
 Panel slots are read from layers named '01', '02', '03', '04'.
 The PSD is composited with those layers hidden to produce the frame overlay.
@@ -11,7 +11,7 @@ Usage:
   Panels in reading order: top-left, top-right, bottom-left, bottom-right.
 
 Options:
-  --template FILE   PSD template (default: 4masu/template.psd)
+  --template FILE   PSD template (default: 4koma/template.psd)
   --out FILE        Output PNG (default: comic.png next to first panel)
   --fit cover|contain|stretch
                     cover   — fill slot, crop excess (default)
@@ -139,7 +139,7 @@ def find_repo_root() -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Compose 4 panels into the 4masu PSD template"
+        description="Compose 4 panels into the 4koma PSD template"
     )
     ap.add_argument("panels", nargs="*", metavar="PANEL",
                     help="4 panel images: tl tr bl br")
@@ -148,7 +148,7 @@ def main() -> None:
     ap.add_argument("--bl", metavar="FILE")
     ap.add_argument("--br", metavar="FILE")
     ap.add_argument("--template", metavar="FILE",
-                    help="PSD template (default: 4masu/template.psd)")
+                    help="PSD template (default: 4koma/template.psd)")
     ap.add_argument("--out", metavar="FILE", help="Output PNG")
     ap.add_argument("--fit", choices=["cover", "contain", "stretch"], default="cover")
     ap.add_argument("--output-size", metavar="WxH",
@@ -182,7 +182,7 @@ def main() -> None:
     repo_root = find_repo_root()
     template_path = (
         Path(args.template) if args.template
-        else repo_root / "4masu/template.psd"
+        else repo_root / "4koma/template.psd"
     )
     if not template_path.exists():
         sys.exit(f"error: template not found: {template_path}")

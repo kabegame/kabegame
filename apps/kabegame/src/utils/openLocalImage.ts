@@ -6,7 +6,7 @@ import { guardDesktopOnly } from "./desktopOnlyGuard";
 /**
  * 用系统默认方式打开本地图片（路径或 content:// URI）。
  * - Android：使用 picker 的 openImage(uri)，传入 content:// 或 file:// URI。
- * - 桌面：使用 open_file_path。
+ * - 桌面：使用 open_path。
  * - Web：弹窗引导用户前往桌面版。
  */
 export async function openLocalImage(localPath: string): Promise<void> {
@@ -20,6 +20,6 @@ export async function openLocalImage(localPath: string): Promise<void> {
         : `file:///${localPath}`;
     await openImage(uri);
   } else {
-    await invoke("open_file_path", { filePath: localPath });
+    await invoke("open_path", { path: localPath });
   }
 }

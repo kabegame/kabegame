@@ -11,8 +11,8 @@ re-run this script to refresh all prompts without touching the JSON.
 
 Usage:
   python scripts/regenerate-comic-prompts.py 4.2.0
-  python scripts/regenerate-comic-prompts.py v4.2.0 --raw 4masu/v4.2.0/generated-prompts.json
-  python scripts/regenerate-comic-prompts.py 4.2.0 --out-dir 4masu/v4.2.0/generated-prompts
+  python scripts/regenerate-comic-prompts.py v4.2.0 --raw versions/v4.2.0/4koma/generated-prompts.json
+  python scripts/regenerate-comic-prompts.py 4.2.0 --out-dir versions/v4.2.0/4koma/generated-prompts
   python scripts/regenerate-comic-prompts.py 4.2.0 --expected-candidates 2 --expected-story 1 --expected-gag 1
 """
 
@@ -26,14 +26,14 @@ from pathlib import Path
 
 
 ALLOWED_LAYOUTS = {
-    "4masu/layout-00-app-shell.prompt.md",
-    "4masu/layout-01-gallery.prompt.md",
-    "4masu/layout-02-filter-preview.prompt.md",
-    "4masu/layout-03-albums.prompt.md",
-    "4masu/layout-04-plugins.prompt.md",
-    "4masu/layout-05-tasks-auto-configs.prompt.md",
-    "4masu/layout-06-settings-help.prompt.md",
-    "4masu/layout-07-mobile-compact.prompt.md",
+    "4koma/layout-00-app-shell.prompt.md",
+    "4koma/layout-01-gallery.prompt.md",
+    "4koma/layout-02-filter-preview.prompt.md",
+    "4koma/layout-03-albums.prompt.md",
+    "4koma/layout-04-plugins.prompt.md",
+    "4koma/layout-05-tasks-auto-configs.prompt.md",
+    "4koma/layout-06-settings-help.prompt.md",
+    "4koma/layout-07-mobile-compact.prompt.md",
 }
 
 # Strip duplicate dialogue suggestions that the model may embed inside the
@@ -144,12 +144,12 @@ def main() -> None:
     ap.add_argument(
         "--raw",
         metavar="FILE",
-        help="Path to raw JSON file (default: 4masu/vVERSION/generated-prompts.json)",
+        help="Path to raw JSON file (default: versions/vVERSION/4koma/generated-prompts.json)",
     )
     ap.add_argument(
         "--out-dir",
         metavar="DIR",
-        help="Output directory (default: 4masu/vVERSION/generated-prompts)",
+        help="Output directory (default: versions/vVERSION/4koma/generated-prompts)",
     )
     ap.add_argument(
         "--expected-candidates",
@@ -170,12 +170,12 @@ def main() -> None:
     raw_path = (
         Path(args.raw)
         if args.raw
-        else repo_root / f"4masu/{tag}/generated-prompts.json"
+        else repo_root / f"versions/{tag}/4koma/generated-prompts.json"
     )
     out_dir = (
         Path(args.out_dir)
         if args.out_dir
-        else repo_root / f"4masu/{tag}/generated-prompts"
+        else repo_root / f"versions/{tag}/4koma/generated-prompts"
     )
 
     if not raw_path.exists():
@@ -203,9 +203,9 @@ def main() -> None:
         f"# {tag} 发布漫画系列\n\n{series_text}\n", encoding="utf-8"
     )
 
-    wv_path = repo_root / "4masu/worldview.prompt.md"
+    wv_path = repo_root / "4koma/worldview.prompt.md"
     worldview = wv_path.read_text(encoding="utf-8").rstrip() if wv_path.exists() else ""
-    bo = read_src(repo_root, "4masu/bo.prompt.md")
+    bo = read_src(repo_root, "4koma/bo.prompt.md")
 
     written: list[Path] = []
 

@@ -597,7 +597,7 @@ const handleChildAlbumMenuCommand = async (
     const folder = album.syncFolder?.trim();
     if (!folder) return;
     try {
-      await invoke("open_explorer", { path: folder });
+      await invoke("open_path", { path: folder });
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
       ElMessage.error(e?.message || String(e));

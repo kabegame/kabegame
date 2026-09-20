@@ -93,7 +93,7 @@ const handleClear = async () => {
 const handleOpenEffective = async () => {
   try {
     if (!effectiveDownloadDir.value) return;
-    await invoke("open_file_path", { filePath: effectiveDownloadDir.value });
+    await invoke("open_path", { path: effectiveDownloadDir.value });
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("打开目录失败:", e);

@@ -438,7 +438,7 @@ const handleOpenPath = async (path?: string) => {
           : `file:///${path}`;
       await openImage(uri);
     } else {
-      await invoke("open_file_path", { filePath: path });
+      await invoke("open_path", { path });
     }
   } catch (error) {
     console.error("打开文件失败:", error);

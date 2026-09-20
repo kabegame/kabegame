@@ -49,7 +49,7 @@ export function useImageOperations(
     return "";
   };
 
-  // 打开文件路径（Android 用系统图片查看器 openImage，桌面用 open_file_path）
+  // 打开文件路径（Android 用系统图片查看器 openImage，桌面用 open_path）
   const handleOpenImagePath = async (localPath: string) => {
     try {
       await openLocalImage(localPath);

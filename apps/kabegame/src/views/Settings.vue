@@ -468,7 +468,7 @@ async function refreshCurrentWallpaperPath() {
 async function openCurrentWallpaperPath() {
   if (!currentWallpaperPath.value) return;
   try {
-    await invoke("open_file_path", { filePath: currentWallpaperPath.value });
+    await invoke("open_path", { path: currentWallpaperPath.value });
   } catch (e) {
     ElMessage.error(t("settings.messageOpenFailed"));
   }

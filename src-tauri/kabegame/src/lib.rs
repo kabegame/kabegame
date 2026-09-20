@@ -671,8 +671,7 @@ pub(crate) fn configure_app(
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             wallpaper_window_ready,
             // --- Filesystem ---
-            open_explorer,
-            open_file_path,
+            open_path,
             open_file_folder,
             open_album_virtual_drive_folder,
             // --- Misc ---

@@ -134,7 +134,7 @@ await crawl.to(nextUrl, "detail");
    - 该 capability 的 `permissions` **仅**包含爬虫相关权限，例如：
      - 仅允许与 crawl 相关的 Tauri 命令：如 `crawl_add_progress`、`crawl_set_task_interval`、`crawl_prepare_download`、以及代理/任务上下文所需的 set_header/del_header 对应命令等。  
      - **不**包含 `core:default`、`shell:*`、`fs:*`、`dialog:*` 等主应用权限。  
-   - 这样即使插件脚本内调用了 `invoke("open_explorer", ...)` 或其它未授权命令，Tauri 的 capability 检查会直接拒绝，命令不会执行。
+   - 这样即使插件脚本内调用了 `invoke("open_path", ...)` 或其它未授权命令，Tauri 的 capability 检查会直接拒绝，命令不会执行。
 
 2. **爬虫页面不暴露全局 invoke**  
    - 爬虫运行时页面（如从代理 `/crawler` 加载的页面）**不要**在全局作用域暴露 `@tauri-apps/api` 的 `invoke`。  

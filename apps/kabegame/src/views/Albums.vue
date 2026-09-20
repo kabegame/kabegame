@@ -562,7 +562,7 @@ const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMount
 
 const openVirtualDrive = async () => {
   try {
-    await invoke("open_explorer", { path: albumDriveMountPoint.value });
+    await invoke("open_path", { path: albumDriveMountPoint.value });
   } catch (e) {
     console.error("打开虚拟磁盘失败:", e);
     ElMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
@@ -852,7 +852,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     const folder = album.syncFolder?.trim();
     if (!folder) return;
     try {
-      await invoke("open_explorer", { path: folder });
+      await invoke("open_path", { path: folder });
     } catch (e: any) {
       console.error("打开本地文件夹失败:", e);
       ElMessage.error(e?.message || String(e));

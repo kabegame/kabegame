@@ -10,7 +10,7 @@ Examples:
   scripts/generate-release-comic-prompts.sh 4.1.1
   scripts/generate-release-comic-prompts.sh v4.1.0 --count 5
   scripts/generate-release-comic-prompts.sh 4.1.1 --count 4 --story-candidates 1 --gag-candidates 2
-  scripts/generate-release-comic-prompts.sh 4.1.1 --base v4.1.0 --head v4.1.1 --out-dir 4masu/v4.1.1/comics
+  scripts/generate-release-comic-prompts.sh 4.1.1 --base v4.1.0 --head v4.1.1 --out-dir versions/v4.1.1/4koma/comics
 
 Options:
   --base REF       Base git ref. Defaults to the previous v* tag before VERSION.
@@ -20,8 +20,8 @@ Options:
                    Number of no-gag/explanatory story candidates per comic. Defaults to 1 and must be >= 1.
   --gag-candidates N
                    Number of gag / 小コント candidates per comic. Defaults to 1 and may be 0.
-  --out FILE       Raw JSON response. Defaults to 4masu/vVERSION/generated-prompts.json.
-  --out-dir DIR    Directory for split prompts. Defaults to 4masu/vVERSION/generated-prompts.
+  --out FILE       Raw JSON response. Defaults to versions/vVERSION/4koma/generated-prompts.json.
+  --out-dir DIR    Directory for split prompts. Defaults to versions/vVERSION/4koma/generated-prompts.
   --backend BACKEND
                    AI backend to use. One of: codex, claude. Defaults to codex.
   --model MODEL    Model for the backend. Defaults to gpt-5.5 (codex) or claude-opus-4-8 (claude).
@@ -34,7 +34,7 @@ The script combines:
   - CHANGELOG.md section for the requested version
   - git commits and diff stats between base..head
   - selected git patches for changed source/docs files
-  - 4masu base character/UI/layout prompt files
+  - 4koma base character/UI/layout prompt files
 
 It then calls codex exec, stores the raw JSON response, and splits each comic into:
   OUT_DIR/comic-XX-slug/具体剧情名称.prompt.md
@@ -63,8 +63,8 @@ head_ref=""
 count="4"
 story_candidates="1"
 gag_candidates="1"
-out_file="4masu/${tag}/generated-prompts.json"
-out_dir="4masu/${tag}/generated-prompts"
+out_file="versions/${tag}/4koma/generated-prompts.json"
+out_dir="versions/${tag}/4koma/generated-prompts"
 backend="codex"
 model=""
 reasoning_effort="high"
@@ -154,8 +154,9 @@ else
 fi
 command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || die "python3/python command not found"
 python_cmd="$(command -v python3 2>/dev/null || command -v python)"
-[[ -f CHANGELOG.md ]] || die "CHANGELOG.md not found"
-[[ -d 4masu ]] || die "4masu directory not found"
+[[ -f "versions/v${version}/changelog.md" || -f CHANGELOG.md ]] \
+  || die "changelog not found: versions/v${version}/changelog.md"
+[[ -d 4koma ]] || die "4koma directory not found"
 
 if [[ -z "$head_ref" ]]; then
   if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
@@ -199,14 +200,20 @@ commits_file="$tmp_dir/commits-${base_ref//\//_}-${head_ref//\//_}.txt"
 patch_file="$tmp_dir/selected-patch-${base_ref//\//_}-${head_ref//\//_}.diff"
 prompt_file="$tmp_dir/codex-prompt.md"
 
-awk -v ver="$version" '
-  $0 ~ "^## \\[?" ver "\\]?" { in_section=1; print; next }
-  in_section && /^## / { exit }
-  in_section { print }
-' CHANGELOG.md > "$changelog_file"
+# 更新日志自 v4.4.1 起按版本拆到 versions/v<version>/changelog.md；老版本仍可从历史
+# CHANGELOG.md（现已收敛为索引）里按段落提取，故保留 awk 回退。
+if [[ -f "versions/v${version}/changelog.md" ]]; then
+  cat "versions/v${version}/changelog.md" > "$changelog_file"
+elif [[ -f CHANGELOG.md ]]; then
+  awk -v ver="$version" '
+    $0 ~ "^## \\[?" ver "\\]?" { in_section=1; print; next }
+    in_section && /^## / { exit }
+    in_section { print }
+  ' CHANGELOG.md > "$changelog_file"
+fi
 
 if [[ ! -s "$changelog_file" ]]; then
-  echo "No CHANGELOG.md section found for ${version}." > "$changelog_file"
+  echo "No changelog section found for ${version}." > "$changelog_file"
 fi
 
 git log --oneline --decorate --no-merges "${base_ref}..${head_ref}" > "$commits_file" || true
@@ -254,7 +261,7 @@ cat > "$prompt_file" <<EOF
 - 单格固定为横向 3:2，推荐尺寸 ${panel_width}x${panel_height} px；最终 2x2 拼图推荐尺寸 ${final_width}x${final_height} px，阅读顺序为左上、右上、左下、右下。
 - 多个漫画组成同一次发布的系列，主题不要重复。
 - 每个 candidate 的 prompt 字段必须是可直接复制给图片生成 AI 的最终 prompt 正文。
-- 脚本会自动把 4masu/bo.prompt.md、4masu/app-ui-setting.prompt.md、以及 layouts 字段引用的布局文件全文复制到每个 prompt.md 头部。
+- 脚本会自动把 4koma/bo.prompt.md、4koma/app-ui-setting.prompt.md、以及 layouts 字段引用的布局文件全文复制到每个 prompt.md 头部。
 - 因为脚本会复制布局文件全文，所以不要在 title、reason、prompt、dialogue 里提到布局文件名，例如不要写“layout-01-gallery.prompt.md”。如果需要描述布局，请直接说“画廊页”“插件页”“任务详情页”等自然语言。
 - 你输出的每个 candidate.prompt 字段不要重复 bo.prompt.md 的通用四格格式和角色固定段落，也不要重复布局文件全文；只写该剧情候选独有的应用场景、版本主题、四格剧情（每格逐格说明）、避免项。对白建议不要写在 prompt 字段里，脚本会从 candidate.dialogue 字段单独追加到 prompt 文件末尾。
 - 同一 comic 的不同 candidate.prompt 里，版本主题和对应更新点要保持一致。story candidate 的最后一格可以是温柔收束、说明完成或轻微反差，不需要搞笑；gag candidate 的最后一格需要有明确笑点、吐槽、误会或反差オチ。
@@ -265,21 +272,21 @@ cat > "$prompt_file" <<EOF
 - 不要实际生成图片，不要修改仓库文件，只输出 JSON。
 
 必须参考的本地 prompt 文件：
-- 4masu/bo.prompt.md
-- 4masu/worldview.prompt.md
-- 4masu/app-ui-setting.prompt.md
-- 4masu/layout-00-app-shell.prompt.md
-- 4masu/layout-01-gallery.prompt.md
-- 4masu/layout-02-filter-preview.prompt.md
-- 4masu/layout-03-albums.prompt.md
-- 4masu/layout-04-plugins.prompt.md
-- 4masu/layout-05-tasks-auto-configs.prompt.md
-- 4masu/layout-06-settings-help.prompt.md
-- 4masu/layout-07-mobile-compact.prompt.md
-- 4masu/ui-comic-variants.prompt.md
+- 4koma/bo.prompt.md
+- 4koma/worldview.prompt.md
+- 4koma/app-ui-setting.prompt.md
+- 4koma/layout-00-app-shell.prompt.md
+- 4koma/layout-01-gallery.prompt.md
+- 4koma/layout-02-filter-preview.prompt.md
+- 4koma/layout-03-albums.prompt.md
+- 4koma/layout-04-plugins.prompt.md
+- 4koma/layout-05-tasks-auto-configs.prompt.md
+- 4koma/layout-06-settings-help.prompt.md
+- 4koma/layout-07-mobile-compact.prompt.md
+- 4koma/ui-comic-variants.prompt.md
 
 参考角色图：
-- 4masu/chara/kamechan.png
+- 4koma/chara/kamechan.png
 
 版本范围：
 - base: ${base_ref}
@@ -302,8 +309,8 @@ JSON 结构：
       "id": "comic-01-short-slug",
       "title": "漫画标题",
       "layouts": [
-        "4masu/layout-00-app-shell.prompt.md",
-        "4masu/layout-01-gallery.prompt.md"
+        "4koma/layout-00-app-shell.prompt.md",
+        "4koma/layout-01-gallery.prompt.md"
       ],
       "updates": [
         "来自 changelog 或代码 diff 的具体更新点 1",
@@ -343,14 +350,14 @@ JSON 结构：
 }
 
 layouts 只能从以下文件中选择，至少 1 个，最多 3 个：
-- 4masu/layout-00-app-shell.prompt.md
-- 4masu/layout-01-gallery.prompt.md
-- 4masu/layout-02-filter-preview.prompt.md
-- 4masu/layout-03-albums.prompt.md
-- 4masu/layout-04-plugins.prompt.md
-- 4masu/layout-05-tasks-auto-configs.prompt.md
-- 4masu/layout-06-settings-help.prompt.md
-- 4masu/layout-07-mobile-compact.prompt.md
+- 4koma/layout-00-app-shell.prompt.md
+- 4koma/layout-01-gallery.prompt.md
+- 4koma/layout-02-filter-preview.prompt.md
+- 4koma/layout-03-albums.prompt.md
+- 4koma/layout-04-plugins.prompt.md
+- 4koma/layout-05-tasks-auto-configs.prompt.md
+- 4koma/layout-06-settings-help.prompt.md
+- 4koma/layout-07-mobile-compact.prompt.md
 
 继续输出直到 comics 数组有 ${count} 个漫画。每个 comic 必须有且只有 ${candidates} 个 candidates，其中 tone="story" 必须正好 ${story_candidates} 个，tone="gag" 必须正好 ${gag_candidates} 个。comic.id 使用英文小写、数字和连字符，例如 comic-01-provider-tree。candidate.title 必须是具体剧情名称，不能叫“剧情1”“候选1”“方案A”这种泛名；candidate.id 可用英文小写、数字和连字符。同一 comic 内的候选必须共享同一组 updates，只提供不同叙事方式或不同オチ。
 
@@ -363,7 +370,7 @@ EOF
 if [[ "$backend" == "claude" ]]; then
   claude_args=(--print --dangerously-skip-permissions --output-format text)
   [[ -n "$model" ]] && claude_args+=(--model "$model")
-  [[ -f "4masu/character.png" ]] && claude_args+=(--image "4masu/character.png")
+  [[ -f "4koma/character.png" ]] && claude_args+=(--image "4koma/character.png")
 else
   codex_args=(
     --ask-for-approval never
@@ -374,7 +381,7 @@ else
     --output-last-message "$out_file"
   )
   [[ -n "$model" ]] && codex_args+=(--model "$model")
-  [[ -f "4masu/character.png" ]] && codex_args+=(--image "4masu/character.png")
+  [[ -f "4koma/character.png" ]] && codex_args+=(--image "4koma/character.png")
   codex_args+=("-")
 fi
 
