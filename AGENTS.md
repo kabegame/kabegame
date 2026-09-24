@@ -231,7 +231,7 @@ struct Foo {
 }
 ```
 ````
-
+在进行更改后要把回归补充到 @versions/vX.X.X/regression.md，格式参考 [v4.4.1回归](./versions/v4.4.1/regression.md). 
 
 ## 语言规范
 所有与用户的交流均使用简体中文。

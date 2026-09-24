@@ -2,6 +2,7 @@
   "recommendations": [
     "vue.volar",
     "rust-lang.rust-analyzer",
-    "antfu.unocss"
+    "antfu.unocss",
+    "lydanne.i18n-ally-next"
   ]
 }

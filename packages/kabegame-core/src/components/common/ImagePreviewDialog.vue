@@ -1493,19 +1493,20 @@ body.image-preview-hides-kamechan .kamechan-host {
   .zoom-progress-wrap {
     flex: 1;
     min-width: 120px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    position: relative;
     user-select: none;
   }
 
   .zoom-progress-text {
-    width: 44px;
+    position: absolute;
+    top: calc(50% + 8px);
+    right: 0;
     font-size: 12px;
     line-height: 1;
     text-align: right;
     color: rgba(255, 255, 255, 0.92);
     font-variant-numeric: tabular-nums;
+    pointer-events: none;
   }
 
   .preview-image {

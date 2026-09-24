@@ -9,8 +9,6 @@
       </svg>
     </button>
 
-    <div class="time-text">{{ displayTime }}</div>
-
     <div class="seek-wrap">
       <PreviewRangeSlider
         :model-value="seekPercent"
@@ -22,6 +20,7 @@
         @update:model-value="handleSeekInput"
         @change="commitSeek"
       />
+      <div class="time-text">{{ displayTime }}</div>
     </div>
 
     <div class="volume-wrap" @mouseenter="handleVolumeEnter" @mouseleave="handleVolumeLeave">
@@ -426,6 +425,20 @@ document.addEventListener("touchend", handleDocumentPointerUp, { passive: true }
 <style scoped lang="scss">
 .seek-wrap {
   flex: 1;
+  position: relative;
+}
+
+.time-text {
+  position: absolute;
+  top: calc(50% + 8px);
+  right: 0;
+  font-size: 12px;
+  line-height: 1;
+  text-align: right;
+  color: rgba(255, 255, 255, 0.92);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  pointer-events: none;
 }
 
 .volume-wrap {

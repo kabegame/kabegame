@@ -183,15 +183,6 @@ defineExpose({
   }
 }
 
-:deep(.time-text) {
-  width: 110px;
-  font-size: 12px;
-  line-height: 1;
-  text-align: center;
-  user-select: none;
-  color: rgba(255, 255, 255, 0.92);
-}
-
 :deep(.control-bar-spacer) {
   flex: 1;
 }
