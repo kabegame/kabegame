@@ -562,6 +562,7 @@ mod imp {
 
     pub(crate) struct WindowedWindowState {
         shared: Arc<Mutex<WindowedWindowShared>>,
+        size_constraints: Arc<Mutex<CefWindowSizeConstraints>>,
         title: String,
         size: PhysicalSize<u32>,
         position: Option<PhysicalPosition<i32>>,
@@ -605,6 +606,67 @@ mod imp {
         close_requested: bool,
         /// 上层未拦截,已确认允许销毁,`can_close` 下次调用直接放行。
         close_confirmed: bool,
+    }
+
+    /// CEF Views 窗口的内容区尺寸约束。
+    ///
+    /// Tauri/tao 用 `PixelUnit` 保留调用方传入的是物理像素还是逻辑像素；CEF
+    /// delegate 则必须返回 DIP。约束与当前 display scale 放在同一把锁里，既让
+    /// 创建期 delegate 能读取，也让运行时 setter 和跨屏缩放更新同一份状态。
+    #[derive(Debug)]
+    struct CefWindowSizeConstraints {
+        inner: tao::window::WindowSizeConstraints,
+        scale_factor: f64,
+    }
+
+    impl CefWindowSizeConstraints {
+        fn new(inner: tao::window::WindowSizeConstraints, scale_factor: f64) -> Self {
+            Self {
+                inner,
+                scale_factor: scale_factor.max(1.0),
+            }
+        }
+
+        fn minimum_size(&self) -> cef::Size {
+            cef_constraint_size(
+                self.inner.min_width,
+                self.inner.min_height,
+                self.scale_factor,
+                1,
+            )
+        }
+
+        fn maximum_size(&self) -> cef::Size {
+            // `CefSize::IsEmpty()` 在任一轴为 0 时都会把整组约束视为空。
+            // 单轴最大值因此不能给未约束轴返回 0；用一个不会在加窗口边框时
+            // 溢出的巨大 DIP 值表达“该轴实际上不设上限”。
+            cef_constraint_size(
+                self.inner.max_width,
+                self.inner.max_height,
+                self.scale_factor,
+                i32::MAX / 4,
+            )
+        }
+    }
+
+    fn cef_constraint_size(
+        width: Option<tao::dpi::PixelUnit>,
+        height: Option<tao::dpi::PixelUnit>,
+        scale_factor: f64,
+        unconstrained_axis: i32,
+    ) -> cef::Size {
+        if width.is_none() && height.is_none() {
+            return cef::Size::default();
+        }
+
+        let to_dip = |unit: tao::dpi::PixelUnit| {
+            let value: f64 = unit.to_logical::<f64>(scale_factor.max(1.0)).0;
+            value.round().clamp(1.0, i32::MAX as f64) as i32
+        };
+        cef::Size {
+            width: width.map(to_dip).unwrap_or(unconstrained_axis),
+            height: height.map(to_dip).unwrap_or(unconstrained_axis),
+        }
     }
 
     pub(crate) struct CefWindow {
@@ -957,6 +1019,7 @@ mod imp {
         struct WindowedTopLevelWindowDelegate {
             shared: Arc<Mutex<WindowedWindowShared>>,
             initial_bounds: cef::Rect,
+            size_constraints: Arc<Mutex<CefWindowSizeConstraints>>,
             initial_show_state: ShowState,
             // Tauri `visible: false`。**不能**用 `ShowState::HIDDEN` 表达:
             // `CEF_SHOW_STATE_HIDDEN` 只在 macOS 有效,其他平台 CEF 会把它翻译成
@@ -993,6 +1056,20 @@ mod imp {
                     width: self.initial_bounds.width,
                     height: self.initial_bounds.height,
                 }
+            }
+
+            fn minimum_size(&self, _view: Option<&mut View>) -> cef::Size {
+                self.size_constraints
+                    .lock()
+                    .expect("window size constraints mutex poisoned")
+                    .minimum_size()
+            }
+
+            fn maximum_size(&self, _view: Option<&mut View>) -> cef::Size {
+                self.size_constraints
+                    .lock()
+                    .expect("window size constraints mutex poisoned")
+                    .maximum_size()
             }
         }
 
@@ -1091,6 +1168,10 @@ mod imp {
                 } else {
                     1.0
                 };
+                self.size_constraints
+                    .lock()
+                    .expect("window size constraints mutex poisoned")
+                    .scale_factor = scale.max(1.0);
                 let width = (bounds.width.max(0) as f64 * scale).round() as u32;
                 let height = (bounds.height.max(0) as f64 * scale).round() as u32;
                 let x = (bounds.x as f64 * scale).round() as i32;
@@ -1433,6 +1514,10 @@ mod imp {
                             width: 1024,
                             height: 768,
                         },
+                        Arc::new(Mutex::new(CefWindowSizeConstraints::new(
+                            tao::window::WindowSizeConstraints::default(),
+                            1.0,
+                        ))),
                         ShowState::NORMAL,
                         // bootstrap 窗口创建后即显示。
                         true,
@@ -2281,6 +2366,21 @@ mod imp {
             let position = attrs
                 .position
                 .map(|position| position.to_physical::<i32>(1.0));
+            let initial_bounds = cef::Rect {
+                x: position.map(|p| p.x).unwrap_or(0),
+                y: position.map(|p| p.y).unwrap_or(0),
+                width: size.width as i32,
+                height: size.height as i32,
+            };
+            let initial_scale_factor = display_get_matching_bounds(Some(&initial_bounds), 0)
+                .or_else(display_get_primary)
+                .map(|display| f64::from(display.device_scale_factor()))
+                .unwrap_or(1.0)
+                .max(1.0);
+            let size_constraints = Arc::new(Mutex::new(CefWindowSizeConstraints::new(
+                attrs.inner_size_constraints,
+                initial_scale_factor,
+            )));
             let shared = Arc::new(Mutex::new(WindowedWindowShared {
                 window: None,
                 browser_view: None,
@@ -2326,12 +2426,8 @@ mod imp {
             };
             let mut delegate = WindowedTopLevelWindowDelegate::new(
                 shared.clone(),
-                cef::Rect {
-                    x: position.map(|p| p.x).unwrap_or(0),
-                    y: position.map(|p| p.y).unwrap_or(0),
-                    width: size.width as i32,
-                    height: size.height as i32,
-                },
+                initial_bounds,
+                size_constraints.clone(),
                 initial_show_state(attrs.visible, attrs.maximized, attrs.fullscreen.is_some()),
                 attrs.visible,
                 !attrs.decorations,
@@ -2380,6 +2476,7 @@ mod imp {
                     label: label.clone(),
                     kind: CefWindowKind::Windowed(WindowedWindowState {
                         shared,
+                        size_constraints,
                         title: attrs.title,
                         size,
                         position,
@@ -3212,6 +3309,36 @@ mod imp {
         }
     }
 
+    fn runtime_size_to_pixel_units(size: Size) -> (tao::dpi::PixelUnit, tao::dpi::PixelUnit) {
+        match size {
+            Size::Physical(size) => (
+                tao::dpi::PhysicalUnit::new(size.width).into(),
+                tao::dpi::PhysicalUnit::new(size.height).into(),
+            ),
+            Size::Logical(size) => (
+                tao::dpi::LogicalUnit::new(size.width).into(),
+                tao::dpi::LogicalUnit::new(size.height).into(),
+            ),
+        }
+    }
+
+    fn runtime_constraints_to_tao(
+        constraints: tauri_runtime::window::WindowSizeConstraints,
+    ) -> tao::window::WindowSizeConstraints {
+        tao::window::WindowSizeConstraints {
+            min_width: constraints.min_width,
+            min_height: constraints.min_height,
+            max_width: constraints.max_width,
+            max_height: constraints.max_height,
+        }
+    }
+
+    fn refresh_cef_window_size_constraints(window: &cef::Window) {
+        window.invalidate_layout();
+        let bounds = window.bounds();
+        window.set_bounds(Some(&bounds));
+    }
+
     fn runtime_position_to_physical(position: Position) -> PhysicalPosition<i32> {
         match position {
             Position::Physical(position) => position,
@@ -3477,7 +3604,44 @@ mod imp {
                 }
                 window.size = size;
             }
-            WindowSet::MinSize(_) | WindowSet::MaxSize(_) | WindowSet::SizeConstraints(_) => {}
+            WindowSet::MinSize(size) => {
+                let mut constraints = window
+                    .size_constraints
+                    .lock()
+                    .expect("window size constraints mutex poisoned");
+                (constraints.inner.min_width, constraints.inner.min_height) = size
+                    .map(runtime_size_to_pixel_units)
+                    .map(|(width, height)| (Some(width), Some(height)))
+                    .unwrap_or((None, None));
+                drop(constraints);
+                if let Some(ref cef_window) = cef_window {
+                    refresh_cef_window_size_constraints(cef_window);
+                }
+            }
+            WindowSet::MaxSize(size) => {
+                let mut constraints = window
+                    .size_constraints
+                    .lock()
+                    .expect("window size constraints mutex poisoned");
+                (constraints.inner.max_width, constraints.inner.max_height) = size
+                    .map(runtime_size_to_pixel_units)
+                    .map(|(width, height)| (Some(width), Some(height)))
+                    .unwrap_or((None, None));
+                drop(constraints);
+                if let Some(ref cef_window) = cef_window {
+                    refresh_cef_window_size_constraints(cef_window);
+                }
+            }
+            WindowSet::SizeConstraints(constraints) => {
+                window
+                    .size_constraints
+                    .lock()
+                    .expect("window size constraints mutex poisoned")
+                    .inner = runtime_constraints_to_tao(constraints);
+                if let Some(ref cef_window) = cef_window {
+                    refresh_cef_window_size_constraints(cef_window);
+                }
+            }
             WindowSet::Position(v) => {
                 let position = runtime_position_to_physical(v);
                 if let Some(ref cef_window) = cef_window {

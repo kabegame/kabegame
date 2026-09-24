@@ -232,6 +232,7 @@ struct Foo {
 ```
 ````
 在进行更改后要把回归补充到 @versions/vX.X.X/regression.md，格式参考 [v4.4.1回归](./versions/v4.4.1/regression.md). 
+检查用 `kabegame-chromium` 技能，如果是指出开发web版本才使用 `agent-browser` 技能。
 
 ## 语言规范
 所有与用户的交流均使用简体中文。
