@@ -122,6 +122,11 @@
                   :description="$t('settings.galleryLayoutDirectionDesc')">
                   <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
                 </SettingRow>
+                <SettingRow
+                  :label="$t('settings.imageFit')"
+                  :description="$t('settings.imageFitDesc')">
+                  <SettingRadioControl setting-key="imageFit" :options="imageFitOptions" />
+                </SettingRow>
                 <SettingRow :label="$t('settings.appBackgroundEnabled')"
                   :description="$t('settings.appBackgroundEnabledDesc')">
                   <SettingSwitchControl setting-key="appBackgroundEnabled" />
@@ -356,6 +361,10 @@ const galleryLayoutModeOptions = computed(() => [
 const galleryLayoutDirectionOptions = computed(() => [
   { label: t("settings.galleryLayoutDirectionVertical"), value: "vertical" },
   { label: t("settings.galleryLayoutDirectionHorizontal"), value: "horizontal" },
+]);
+const imageFitOptions = computed(() => [
+  { label: t("settings.imageFitContain"), value: "fit" },
+  { label: t("settings.imageFitCover"), value: "fill" },
 ]);
 const linkOpenModeOptions = computed(() => [
   { label: t("settings.linkOpenSurf"), value: "surf" },
