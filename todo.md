@@ -98,6 +98,7 @@
 - [ ] 安卓用桌面小组件代替桌面上系统托盘功能。
 - [ ] 文件资源管理器快速预览插件（macos quiklook, windows preview handler，gnome sushi, KDE KIOpreview）
 - [ ] 安卓前台服务
+- [ ] 元数据回填，对于内置插件下载的图片，其他插件下载去重会将元数据回填
 
 ## refactor
 - [x] `4.2.0` 吉祥物气泡消息
