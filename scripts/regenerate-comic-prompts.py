@@ -203,9 +203,9 @@ def main() -> None:
         f"# {tag} 发布漫画系列\n\n{series_text}\n", encoding="utf-8"
     )
 
-    wv_path = repo_root / "4koma/worldview.prompt.md"
+    wv_path = repo_root / "4koma/prompt-01.worldview.prompt.md"
     worldview = wv_path.read_text(encoding="utf-8").rstrip() if wv_path.exists() else ""
-    bo = read_src(repo_root, "4koma/bo.prompt.md")
+    bo = read_src(repo_root, "4koma/prompt-04.bo.prompt.md")
 
     written: list[Path] = []
 

@@ -1,4 +1,38 @@
 #!/usr/bin/env bash
+#
+# 发布漫画 prompt 生成脚本。
+#
+# 给定一个版本号，把「这一版到底改了什么」和「Kabegame 的世界观 / 角色 / UI 布局」
+# 两类素材拼成一份大 prompt，交给 AI 后端（codex 或 claude）产出四格漫画剧情 JSON，
+# 最后由 scripts/regenerate-comic-prompts.py 拆成一个个可直接复制给图片生成 AI 的 prompt.md。
+# 先从参数得到应用版本、AI后端、需要的漫画剧情候选数量等信息, 生成以下临时文件：
+#     changelog-<tag>.md   本版更新日志：优先 versions/v<version>/changelog.md，
+#                          老版本回退到 CHANGELOG.md 里按 "## <version>" 段落抽取。
+#     commits-<base>-<head>.txt   git log --oneline（不含 merge）
+#     diffstat-<base>-<head>.txt  git diff --stat
+#     selected-patch-<base>-<head>.diff
+#                          过滤掉 lock/target/dist/node_modules/third 和图片视频等二进制后，
+#                          最多取 80 个文件的 unified=80 patch，超过 220000 字节截断。
+#     codex-prompt.md      真正喂给 AI 的完整 prompt，由本脚本内嵌的中文指令模板
+#                          加上以上 4 个文件的路径拼成。
+#   正式产物两处：
+#     --out      原始 JSON 响应，默认 versions/<tag>/4koma/generated-prompts.json
+#     --out-dir  拆分后的 prompt，默认 versions/<tag>/4koma/generated-prompts/，
+#                形如 comic-XX-slug/<具体剧情名称>.prompt.md
+#
+# 每个剧情候选最终得到一份 .prompt.md（落在 --out-dir 下），可整份复制给图片生成 AI。
+# 它由 regenerate-comic-prompts.py 按以下顺序拼出：
+#     1. 4koma/prompt-01.worldview.prompt.md 全文——世界观与画风
+#     2. 该漫画 layouts 字段选中的 1~3 个 4koma/layout-*.prompt.md 全文——页面布局设定
+#     3. 本候选的剧情信息：剧情标题、漫画主题、候选类型（说明型 / 搞笑型）、
+#        为什么适合画、剧情角度、对应的版本更新点
+#     4. AI 生成的 prompt 正文（代码块）——这一候选独有的四格逐格描述
+#     5. candidate.dialogue 转成的「可选对白」
+#     6. 4koma/prompt-04.bo.prompt.md 全文——角色设定与四格通用格式
+#   正因为布局与角色设定会被整篇复制进来，AI 生成的正文里不允许出现布局文件名，
+#   也不该重复角色固定段落。分格尺寸约定：单格 1536x1024 横向 3:2，
+#   最终 2x2 拼图 3072x2048，阅读顺序左上、右上、左下、右下。
+#
 set -euo pipefail
 
 usage() {
@@ -261,20 +295,22 @@ cat > "$prompt_file" <<EOF
 - 单格固定为横向 3:2，推荐尺寸 ${panel_width}x${panel_height} px；最终 2x2 拼图推荐尺寸 ${final_width}x${final_height} px，阅读顺序为左上、右上、左下、右下。
 - 多个漫画组成同一次发布的系列，主题不要重复。
 - 每个 candidate 的 prompt 字段必须是可直接复制给图片生成 AI 的最终 prompt 正文。
-- 脚本会自动把 4koma/bo.prompt.md、4koma/app-ui-setting.prompt.md、以及 layouts 字段引用的布局文件全文复制到每个 prompt.md 头部。
+- 脚本会自动把 4koma/prompt-04.bo.prompt.md、4koma/prompt-02.app-ui-setting.prompt.md、以及 layouts 字段引用的布局文件全文复制到每个 prompt.md 头部。
 - 因为脚本会复制布局文件全文，所以不要在 title、reason、prompt、dialogue 里提到布局文件名，例如不要写“layout-01-gallery.prompt.md”。如果需要描述布局，请直接说“画廊页”“插件页”“任务详情页”等自然语言。
-- 你输出的每个 candidate.prompt 字段不要重复 bo.prompt.md 的通用四格格式和角色固定段落，也不要重复布局文件全文；只写该剧情候选独有的应用场景、版本主题、四格剧情（每格逐格说明）、避免项。对白建议不要写在 prompt 字段里，脚本会从 candidate.dialogue 字段单独追加到 prompt 文件末尾。
+- 你指向的每个 candidate.prompt 字段不要重复 prompt-04.bo.prompt.md 的通用四格格式和角色固定段落，也不要重复布局文件全文；只写该剧情候选独有的应用场景、版本主题、四格剧情（每格逐格说明）、避免项。对白建议不要写在 prompt 字段里，脚本会从 candidate.dialogue 字段单独追加到 prompt 文件末尾。
 - 同一 comic 的不同 candidate.prompt 里，版本主题和对应更新点要保持一致。story candidate 的最后一格可以是温柔收束、说明完成或轻微反差，不需要搞笑；gag candidate 的最后一格需要有明确笑点、吐槽、误会或反差オチ。
 - 每个 candidate.prompt 的四格剧情必须逐格说明登场人物、站位、动作、表情、UI 背景、画面变化，以及每格在最终 2x2 中的位置。每一格都要能作为一张 ${panel_width}x${panel_height} px 单格图独立生成；不要只写台词。对白只能作为补充。
 - 不要要求用户再补充“这是吉祥物”“请画四格漫画”“参考之前的角色”等前置语。
-- 尽量把技术更新转译为普通用户和二次元用户能理解的视觉梗。
+- 尽量把技术更新转译为20岁到30岁普通用户能理解的视觉梗。
 - 如果某个改动只适合开发者，明确把它包装成“后台整理仓库 / 路径树 / 小龟工程师”等隐喻。
-- 不要实际生成图片，不要修改仓库文件，只输出 JSON。
+- 不要修改仓库文件，只输出 JSON。
 
-必须参考的本地 prompt 文件：
-- 4koma/bo.prompt.md
-- 4koma/worldview.prompt.md
-- 4koma/app-ui-setting.prompt.md
+参考的本地 prompt 文件：
+- 4koma/prompt-01.worldview.prompt.md
+- 4koma/prompt-02.app-ui-setting.prompt.md
+- 4koma/prompt-03.ui-comic-variants.prompt.md
+- 4koma/prompt-04.bo.prompt.md
+
 - 4koma/layout-00-app-shell.prompt.md
 - 4koma/layout-01-gallery.prompt.md
 - 4koma/layout-02-filter-preview.prompt.md
@@ -283,7 +319,6 @@ cat > "$prompt_file" <<EOF
 - 4koma/layout-05-tasks-auto-configs.prompt.md
 - 4koma/layout-06-settings-help.prompt.md
 - 4koma/layout-07-mobile-compact.prompt.md
-- 4koma/ui-comic-variants.prompt.md
 
 参考角色图：
 - 4koma/chara/kamechan.png
@@ -323,7 +358,7 @@ JSON 结构：
           "tone": "story",
           "title": "具体剧情候选标题",
           "angle": "无笑点/说明型短故事。说明同一更新内容如何发生，最后一格温柔收束或说明完成。",
-          "prompt": "完整可复制的最终图片生成 prompt 的剧情候选正文。不要提布局文件名。不要重复 bo.prompt.md 和布局文件全文。必须包含 Kabegame 是什么、本漫画主题、四格剧情（每格逐格说明）、版本更新点、避免项。不要在此字段里写对白建议，对白已通过 dialogue 字段单独输出。",
+          "prompt": "完整可复制的最终图片生成 prompt 的剧情候选正文。不要提布局文件名。不要重复 prompt-04.bo.prompt.md 和布局文件全文。必须包含 Kabegame 是什么、本漫画主题、四格剧情（每格逐格说明）、版本更新点、避免项。不要在此字段里写对白建议，对白已通过 dialogue 字段单独输出。",
           "dialogue": [
             "第 1 格：...",
             "第 2 格：...",
