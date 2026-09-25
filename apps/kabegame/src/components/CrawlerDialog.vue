@@ -147,8 +147,16 @@
         <div class="run-config-row">
           <el-select v-model="selectedRunConfigId" class="run-config-select"
             :placeholder="$t('plugins.selectConfigOptional')" clearable popper-class="run-config-select-dropdown"
+            fit-input-width
             @change="(v: string | null) => void setRunConfigId(v)">
-            <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="runConfigName(cfg)" :value="cfg.id">
+            <template #label>
+              <span v-if="selectedRunConfig" class="run-config-selected-title"
+                :title="runConfigDescription(selectedRunConfig) || undefined">
+                <span class="plugin-name">{{ runConfigPluginName(selectedRunConfig) }}</span>
+                <span class="config-name"> - {{ runConfigName(selectedRunConfig) }}</span>
+              </span>
+            </template>
+            <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="runConfigLabel(cfg)" :value="cfg.id">
               <div class="run-config-option">
                 <div class="run-config-info">
                   <div class="name">
@@ -160,8 +168,10 @@
                       size="small" style="margin-right: 6px">
                       {{ $t("plugins.incompatible") }}
                     </el-tag>
-                    {{ runConfigName(cfg) }}
-                    <span v-if="runConfigDescription(cfg)" class="desc"> - {{ runConfigDescription(cfg) }}</span>
+                    <span class="run-config-title" :title="runConfigDescription(cfg) || undefined">
+                      <span class="plugin-name">{{ runConfigPluginName(cfg) }}</span>
+                      <span class="config-name"> - {{ runConfigName(cfg) }}</span>
+                    </span>
                   </div>
                 </div>
                 <div class="run-config-actions">
@@ -422,6 +432,12 @@ function runConfigName(cfg: { name?: unknown }): string {
 }
 function runConfigDescription(cfg: { description?: unknown }): string {
   return resolveConfigText(cfg.description as any, locale.value);
+}
+function runConfigPluginName(cfg: Pick<RunConfig, "pluginId">): string {
+  return pluginStore.pluginLabel(cfg.pluginId);
+}
+function runConfigLabel(cfg: RunConfig): string {
+  return `${runConfigPluginName(cfg)} - ${runConfigName(cfg)}`;
 }
 
 const albumStore = useAlbumStore();
@@ -702,6 +718,9 @@ watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immedia
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
+const selectedRunConfig = computed(() =>
+  runConfigs.value.find((cfg) => cfg.id === selectedRunConfigId.value),
+);
 const { albumCounts } = storeToRefs(albumStore);
 const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
 const outputAlbumParentTree = computed(() =>
@@ -709,14 +728,10 @@ const outputAlbumParentTree = computed(() =>
 );
 
 const runConfigPickerOptions = computed(() =>
-  runConfigs.value.map((cfg) => {
-    const name = runConfigName(cfg);
-    const desc = runConfigDescription(cfg);
-    return {
-      label: desc ? `${name} - ${desc}` : name,
-      value: cfg.id,
-    };
-  }),
+  runConfigs.value.map((cfg) => ({
+    label: runConfigLabel(cfg),
+    value: cfg.id,
+  })),
 );
 const selectedPlugin = computed(() => {
   const id = form.value.pluginId;
@@ -1200,6 +1215,27 @@ watch(selectedOutputAlbumId, (newValue) => {
   color: var(--el-text-color-primary);
 }
 
+.run-config-selected-title {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+
+  .plugin-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .config-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    font-weight: normal;
+    text-overflow: ellipsis;
+  }
+}
+
 .run-config-btn:hover {
   background-color: var(--el-fill-color-light) !important;
   color: var(--el-text-color-primary);
@@ -1249,6 +1285,9 @@ watch(selectedOutputAlbumId, (newValue) => {
   gap: 10px;
   min-height: 32px;
   width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .run-config-info {
@@ -1268,13 +1307,27 @@ watch(selectedOutputAlbumId, (newValue) => {
     font-size: 14px;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    min-width: 0;
 
-    .desc {
-      font-size: 12px;
+    .run-config-title {
+      display: flex;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .plugin-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .config-name {
+      min-width: 0;
+      overflow: hidden;
       color: var(--el-text-color-secondary);
+      font-size: 12px;
       font-weight: normal;
-      margin-left: 4px;
+      text-overflow: ellipsis;
     }
   }
 }
@@ -1385,6 +1438,9 @@ watch(selectedOutputAlbumId, (newValue) => {
     gap: 10px;
     min-height: 32px;
     width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
   }
 
   .run-config-info {
@@ -1404,13 +1460,27 @@ watch(selectedOutputAlbumId, (newValue) => {
       font-size: 14px;
       white-space: nowrap;
       overflow: hidden;
-      text-overflow: ellipsis;
+      min-width: 0;
 
-      .desc {
-        font-size: 12px;
+      .run-config-title {
+        display: flex;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .plugin-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .config-name {
+        min-width: 0;
+        overflow: hidden;
         color: var(--el-text-color-secondary);
+        font-size: 12px;
         font-weight: normal;
-        margin-left: 4px;
+        text-overflow: ellipsis;
       }
     }
   }
