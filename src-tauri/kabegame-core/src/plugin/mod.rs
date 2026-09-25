@@ -183,6 +183,7 @@ pub struct Plugin {
     pub min_app_version: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<PluginLabel>,
+    // 当前是否不兼容
     #[serde(rename = "minAppIncompatible", default)]
     pub min_app_incompatible: bool,
     /// 插件包文件路径（.kgpg），仅已安装插件有值

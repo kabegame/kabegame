@@ -100,10 +100,11 @@ import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
+import { DRAG_IMAGE_ID_MIME } from "../../utils/dragExport";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { fileToUrl, thumbnailToUrl, compatibleToUrl, downloadToUrl } from "../../utils/fileUrl";
-import { IS_ANDROID } from "../../env";
+import { IS_ANDROID, IS_LINUX } from "../../env";
 
 /**
  * 资源开始加载
@@ -195,13 +196,23 @@ const dragFileName = (): string => {
 
 /**
  * 原生拖拽起手：把拖拽数据统一改写成「原图」。
- * 网格 prefer=thumbnail 时 <img> 的 src 是缩略图，浏览器默认写入的拖拽数据也会是缩略图；
- * 这里覆盖为原图——`DownloadURL`（Chromium 专有 `mime:filename:url` 三段格式，拖到
- * 文件管理器时按 url 真实下载落盘；实际内容与 Content-Type 由响应决定，
- * mime 段仅是提示，故直接用格式键）+ `text/uri-list`/`text/plain`（拖进浏览器/
- * 编辑器时得到原图 URL 而非缩略图）。
- * URL 用 /download 而非 /file：前者把路径接在端点后面，文件名落在 URL 末段，
- * Linux 文件管理器（走 KIO / gvfs 下载这个 URL）才能给出正确的落地文件名。
+ * 网格 prefer=thumbnail 时 <img> 的 src 是缩略图，浏览器默认写入的拖拽数据也会是缩略图。
+ *
+ * 两条平台路径互斥，不共用载荷：
+ *
+ * - **Linux** 只写自定义 mime 里的 image id，浏览器进程据此查库换成真实本地文件
+ *   （见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`）。这里**不再写** http 下载 URL：
+ *   注入文件成功时 Chromium 会把 url_infos / text / file_contents 一起清掉，写了
+ *   也留不下；留着只会让人误以为 Linux 拖出仍依赖 http server。
+ *   自定义 mime 走 `DropData::custom_data`，不被 Chromium 的拖拽数据过滤器改写；
+ *   只提议 id 而不传路径，即使前端被注入也只能导出图库中已有的图片。
+ * - **Windows / macOS** 仍走 http 下载 URL：`DownloadURL`（Chromium 专有
+ *   `mime:filename:url` 三段格式，Windows 上由 `PrepareDragForDownload` 转成
+ *   CF_HDROP 虚拟文件；实际内容与 Content-Type 由响应决定，mime 段仅是提示，
+ *   故直接用格式键）+ `text/uri-list`/`text/plain`（拖进浏览器/编辑器时得到原图
+ *   URL 而非缩略图）。URL 用 /download 而非 /file：前者把路径接在端点后面，
+ *   文件名落在 URL 末段，下载方才能给出正确的落地文件名。
+ *
  * nativeDrag 关闭时把 dragstart 掐掉：`draggable=false` 之外的第二道闸。
  */
 const onDragStart = (event: DragEvent) => {
@@ -210,8 +221,13 @@ const onDragStart = (event: DragEvent) => {
     return;
   }
   const dt = event.dataTransfer;
+  if (!dt) return;
+  if (IS_LINUX) {
+    if (props.image.id) dt.setData(DRAG_IMAGE_ID_MIME, props.image.id);
+    return;
+  }
   const url = downloadToUrl(localPath.value);
-  if (!dt || !url) return;
+  if (!url) return;
   // filename 段不能含冒号（DownloadURL 以冒号分段）
   const name = dragFileName().replace(/:/g, "_");
   dt.setData("DownloadURL", `${displayImageMimeType(props.image.type)}:${name}:${url}`);

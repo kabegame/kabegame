@@ -26,6 +26,9 @@ mod imp {
 
     use crate::{ipc, protocol, runtime, Cef};
 
+    // 前端同名常量见 `packages/kabegame-core/src/utils/dragExport.ts`。
+    const DRAG_IMAGE_ID_MIME: &str = "application/x-kabegame-image-id";
+
     static WEBVIEW_BROWSER_IDS: std::sync::OnceLock<Mutex<BTreeMap<String, i32>>> =
         std::sync::OnceLock::new();
 
@@ -814,8 +817,57 @@ mod imp {
         pub(crate) struct TauriCefDragHandler {
             emitter: runtime::WindowEventEmitter,
             session: Rc<RefCell<DragSession>>,
+            label: String,
         }
         impl DragHandler {
+            /// 把前端提议的图片 id 翻成 app 授权的真实文件。
+            ///
+            /// 自定义 mime 里的 id 只是提议;能否导出、实际导出哪个文件由 app 注入的
+            /// resolver 决定。handler 是 per-webview 的,label 在构造时已经确定,
+            /// surf navbar 与内容页天然属于不同实例,不需要通过注册表反查来源。
+            fn on_start_dragging(
+                &self,
+                _browser: Option<&mut Browser>,
+                drag_data: Option<&mut DragData>,
+            ) {
+                #[cfg(target_os = "linux")]
+                {
+                    let Some(drag_data) = drag_data else { return };
+                    let custom_data = drag_data
+                        .custom_data(Some(&CefString::from(DRAG_IMAGE_ID_MIME)));
+                    // 先判空指针再转 CefString:`From<&CefStringUserfreeUtf16>` 对 null
+                    // 是容错的,但会往 stderr 刷一行 "Invalid UTF-16 string" —— 而不带本
+                    // 自定义 mime 的拖拽(拖文字、拖链接)是常态,不能每次都刷。
+                    // 裸 sys 类型经 `cef` 再导出的 `sys` 取得(cef-rs lib.rs 的
+                    // `pub use cef_dll_sys as sys`),本 crate 不直接依赖 cef-dll-sys。
+                    let custom_data_ref: Option<&cef::sys::_cef_string_utf16_t> =
+                        (&custom_data).into();
+                    if custom_data_ref.is_none() {
+                        return;
+                    }
+                    let id = CefString::from(&custom_data).to_string();
+                    if id.is_empty() {
+                        return;
+                    }
+                    let Some(resolver) = runtime::drag_file_resolver() else {
+                        return;
+                    };
+                    let Some(path) = resolver(&self.label, &id) else {
+                        return;
+                    };
+                    let Some(path_str) = path.to_str() else {
+                        return;
+                    };
+                    // Linux 三条落地路径都按 path 的 basename 命名并忽略 display_name;
+                    // 仍填入 basename,保证 CEF 的 GetFileNames() 语义自洽。
+                    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+                    drag_data.add_file(
+                        Some(&CefString::from(path_str)),
+                        Some(&CefString::from(name)),
+                    );
+                }
+            }
+
             fn on_drag_enter(
                 &self,
                 _browser: Option<&mut Browser>,
@@ -1187,7 +1239,11 @@ mod imp {
             .drag_drop_handler_enabled
             .then(|| {
                 let emitter = runtime::window_event_emitter(window_id, context_for_drag);
-                TauriCefDragHandler::new(emitter, Rc::new(RefCell::new(DragSession::default())))
+                TauriCefDragHandler::new(
+                    emitter,
+                    Rc::new(RefCell::new(DragSession::default())),
+                    webview_label.clone(),
+                )
             });
         let mut client = ViewsClient::new(
             InitializationLoadHandler::new(on_page_load),

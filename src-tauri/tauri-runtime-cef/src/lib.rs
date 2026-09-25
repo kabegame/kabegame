@@ -110,3 +110,6 @@ pub use runtime::remote_debugging_port;
 /// runtime 恒拦截 Chrome 默认的「在本进程弹一个浏览器窗口」;app 通过此处理器把
 /// 这次拉起转成显示主窗口等应用语义。回调参数为发起方的完整 argv。
 pub use runtime::set_already_running_app_relaunch_handler;
+
+/// 注册把 `(webview_label, image_id)` 解析为已授权本地文件的拖拽导出回调。
+pub use runtime::set_drag_file_resolver;

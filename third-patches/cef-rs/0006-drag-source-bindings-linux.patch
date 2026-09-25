@@ -1,0 +1,173 @@
+diff --git a/cef/src/bindings/x86_64_unknown_linux_gnu.rs b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
+index 4f56497..3c050dc 100644
+--- a/cef/src/bindings/x86_64_unknown_linux_gnu.rs
++++ b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
+@@ -5268,6 +5268,8 @@ pub trait ImplDragData: Clone + Sized + Rc {
+     fn image_hotspot(&self) -> Point;
+     #[doc = "See [`_cef_drag_data_t::has_image`] for more documentation."]
+     fn has_image(&self) -> ::std::os::raw::c_int;
++    #[doc = "See [`_cef_drag_data_t::get_custom_data`] for more documentation."]
++    fn custom_data(&self, type_: Option<&CefString>) -> CefStringUserfree;
+     fn get_raw(&self) -> *mut _cef_drag_data_t;
+ }
+ impl ImplDragData for DragData {
+@@ -5613,6 +5615,22 @@ impl ImplDragData for DragData {
+                 .unwrap_or_default()
+         }
+     }
++    fn custom_data(&self, type_: Option<&CefString>) -> CefStringUserfree {
++        unsafe {
++            self.0
++                .get_custom_data
++                .map(|f| {
++                    let arg_type_ = type_;
++                    let arg_self_ = self.into_raw();
++                    let arg_type_ = arg_type_
++                        .map(|arg| arg.into_raw())
++                        .unwrap_or(std::ptr::null());
++                    let result = f(arg_self_, arg_type_);
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_drag_data_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+@@ -19220,6 +19238,13 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+     ) -> ::std::os::raw::c_int {
+         Default::default()
+     }
++    #[doc = "See [`_cef_drag_handler_t::on_start_dragging`] for more documentation."]
++    fn on_start_dragging(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) {
++    }
+     fn init_methods(object: &mut _cef_drag_handler_t) {
+         impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
+     }
+@@ -19236,6 +19261,7 @@ mod impl_cef_drag_handler_t {
+         object.on_drag_over = Some(on_drag_over::<I, R>);
+         object.on_drag_leave = Some(on_drag_leave::<I, R>);
+         object.on_drop = Some(on_drop::<I, R>);
++        object.on_start_dragging = Some(on_start_dragging::<I, R>);
+     }
+     extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
+         self_: *mut _cef_drag_handler_t,
+@@ -19331,6 +19357,21 @@ mod impl_cef_drag_handler_t {
+         let arg_drag_data = arg_drag_data.as_mut();
+         ImplDragHandler::on_drop(&arg_self_.interface, arg_browser, arg_drag_data)
+     }
++    extern "C" fn on_start_dragging<I: ImplDragHandler, R: Rc>(
++        self_: *mut _cef_drag_handler_t,
++        browser: *mut _cef_browser_t,
++        drag_data: *mut _cef_drag_data_t,
++    ) {
++        let (arg_self_, arg_browser, arg_drag_data) = (self_, browser, drag_data);
++        let arg_self_: &RcImpl<R, I> = RcImpl::get(arg_self_.cast());
++        let mut arg_browser =
++            unsafe { arg_browser.as_mut() }.map(|arg| Browser(unsafe { RefGuard::from_raw(arg) }));
++        let arg_browser = arg_browser.as_mut();
++        let mut arg_drag_data = unsafe { arg_drag_data.as_mut() }
++            .map(|arg| DragData(unsafe { RefGuard::from_raw(arg) }));
++        let arg_drag_data = arg_drag_data.as_mut();
++        ImplDragHandler::on_start_dragging(&arg_self_.interface, arg_browser, arg_drag_data)
++    }
+ }
+ impl ImplDragHandler for DragHandler {
+     fn on_drag_enter(
+@@ -19479,6 +19520,31 @@ impl ImplDragHandler for DragHandler {
+                 .unwrap_or_default()
+         }
+     }
++    fn on_start_dragging(
++        &self,
++        browser: Option<&mut Browser>,
++        drag_data: Option<&mut DragData>,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.on_start_dragging {
++                let (arg_browser, arg_drag_data) = (browser, drag_data);
++                let arg_self_ = self.into_raw();
++                let arg_browser = arg_browser
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplBrowser::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                let arg_drag_data = arg_drag_data
++                    .map(|arg| {
++                        arg.add_ref();
++                        ImplDragData::get_raw(arg)
++                    })
++                    .unwrap_or(std::ptr::null_mut());
++                f(arg_self_, arg_browser, arg_drag_data);
++            }
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_drag_handler_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/sys/src/bindings/x86_64_unknown_linux_gnu.rs b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
+index 1c14557..fd2696f 100644
+--- a/sys/src/bindings/x86_64_unknown_linux_gnu.rs
++++ b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
+@@ -5938,10 +5938,17 @@ pub struct _cef_drag_data_t {
+     pub has_image: ::std::option::Option<
+         unsafe extern "C" fn(self_: *mut _cef_drag_data_t) -> ::std::os::raw::c_int,
+     >,
++    #[doc = "\n Returns the drag data value for the custom format |type|, as set by the\n page through DataTransfer.setdata(). Returns an NULL string when absent.\n Custom formats survive the browser-side drag data filtering that strips\n file paths and rewrites URLs, so they are the only channel through which a\n renderer can name something for the client to act on.\n"]
++    pub get_custom_data: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_data_t,
++            type_: *const cef_string_t,
++        ) -> cef_string_userfree_t,
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_drag_data_t"][::std::mem::size_of::<_cef_drag_data_t>() - 256usize];
++    ["Size of _cef_drag_data_t"][::std::mem::size_of::<_cef_drag_data_t>() - 264usize];
+     ["Alignment of _cef_drag_data_t"][::std::mem::align_of::<_cef_drag_data_t>() - 8usize];
+     ["Offset of field: _cef_drag_data_t::base"]
+         [::std::mem::offset_of!(_cef_drag_data_t, base) - 0usize];
+@@ -5999,6 +6006,8 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_drag_data_t, get_image_hotspot) - 240usize];
+     ["Offset of field: _cef_drag_data_t::has_image"]
+         [::std::mem::offset_of!(_cef_drag_data_t, has_image) - 248usize];
++    ["Offset of field: _cef_drag_data_t::get_custom_data"]
++        [::std::mem::offset_of!(_cef_drag_data_t, get_custom_data) - 256usize];
+ };
+ #[doc = "\n Structure used to represent drag data. The functions of this structure may\n be called on any thread.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_drag_data_t = _cef_drag_data_t;
+@@ -10561,10 +10570,18 @@ pub struct _cef_drag_handler_t {
+             dragData: *mut _cef_drag_data_t,
+         ) -> ::std::os::raw::c_int,
+     >,
++    #[doc = "\n Called when |browser| starts a drag that the renderer initiated, before\n the drag data is handed to the platform. |dragData| is writable: call\n cef_drag_data_t::add_file() to attach real local files to the drag, which\n makes the platform advertise a file drag and drops the drag's URL, text\n and file contents payloads. A renderer-initiated drag can never carry\n filenames on its own, so this is the only way for a client to hand out\n real files from page content. Currently only called on Linux for windowed\n browsers.\n"]
++    pub on_start_dragging: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_drag_handler_t,
++            browser: *mut _cef_browser_t,
++            dragData: *mut _cef_drag_data_t,
++        ),
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 80usize];
++    ["Size of _cef_drag_handler_t"][::std::mem::size_of::<_cef_drag_handler_t>() - 88usize];
+     ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
+     ["Offset of field: _cef_drag_handler_t::base"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
+@@ -10578,6 +10595,8 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_leave) - 64usize];
+     ["Offset of field: _cef_drag_handler_t::on_drop"]
+         [::std::mem::offset_of!(_cef_drag_handler_t, on_drop) - 72usize];
++    ["Offset of field: _cef_drag_handler_t::on_start_dragging"]
++        [::std::mem::offset_of!(_cef_drag_handler_t, on_start_dragging) - 80usize];
+ };
+ #[doc = "\n Implement this structure to handle events related to dragging. The functions\n of this structure will be called on the UI thread.\n\n NOTE: This struct is allocated client-side.\n"]
+ pub type cef_drag_handler_t = _cef_drag_handler_t;

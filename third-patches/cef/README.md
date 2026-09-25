@@ -16,6 +16,12 @@
 
   The generated C API, `libcef_dll` cpptoc/ctocpp glue and API hashes are **not** part of this patch — they are produced by `tools/version_manager.py` during `cef_create_projects.sh`, which `scripts/build-chromium.ts` runs.
 
+- `0003-drag-source-filenames.patch` — lets a CEF client turn a renderer-initiated drag into a drag of real local files on Linux. Chromium always clears renderer-supplied `DropData::filenames`, so the patch adds a `WebContentsViewDelegate::GetDragFilenames` hook before the platform drag payload is built. CEF exposes that hook through `CefDragHandler::OnStartDragging`, and adds `CefDragData::GetCustomData` so the client can inspect custom formats set by `DataTransfer.setData()` before adding authorized local paths.
+
+  The Chromium-side patch (`patch/patches/kabegame_drag_source_filenames.patch` plus its `patch.cfg` entry) and the CEF-side API changes are two halves of the same feature and must be added or removed together.
+
+  The generated C API, `libcef_dll` cpptoc/ctocpp glue and API hashes are **not** part of this patch — they are produced by `tools/version_manager.py` during `cef_create_projects.sh`, which `scripts/build-chromium.ts` runs.
+
 Apply this series manually before running CEF's `patcher.py`:
 
 ```bash

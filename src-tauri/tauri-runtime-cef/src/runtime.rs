@@ -58,6 +58,15 @@ mod imp {
     /// app 侧不要在其中同步阻塞等待主循环,窗口操作应转投异步上下文。
     static ALREADY_RUNNING_RELAUNCH_HANDLER: OnceLock<Box<dyn Fn(Vec<String>) + Send + Sync>> =
         OnceLock::new();
+    /// 拖拽导出解析器:把渲染进程声明的图片 id 翻成真实本地文件路径。
+    ///
+    /// 渲染进程发起的拖拽无法携带文件路径,而判定谁有资格导出哪个文件属于 app
+    /// 策略。runtime 是通用适配层,不能依赖 `kabegame-core`,因此由 app 注入回调。
+    /// 不安装 resolver 就不注入文件,同时承担功能的平台门控。
+    pub type DragFileResolver =
+        dyn Fn(&str, &str) -> Option<std::path::PathBuf> + Send + Sync + 'static;
+
+    static DRAG_FILE_RESOLVER: OnceLock<Box<DragFileResolver>> = OnceLock::new();
     const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &[
         "ImmersiveReadAnything",
         // `tauri`/`asset` custom schemes are registered with `SECURE` below, so
@@ -941,6 +950,20 @@ mod imp {
         handler: impl Fn(Vec<String>) + Send + Sync + 'static,
     ) {
         let _ = ALREADY_RUNNING_RELAUNCH_HANDLER.set(Box::new(handler));
+    }
+
+    /// 注册拖拽导出解析器。
+    ///
+    /// 参数为 `(webview_label, image_id)`,`None` 表示维持原拖拽数据不变。
+    /// 重复注册时仅首次生效。
+    pub fn set_drag_file_resolver(
+        resolver: impl Fn(&str, &str) -> Option<std::path::PathBuf> + Send + Sync + 'static,
+    ) {
+        let _ = DRAG_FILE_RESOLVER.set(Box::new(resolver));
+    }
+
+    pub(crate) fn drag_file_resolver() -> Option<&'static Box<DragFileResolver>> {
+        DRAG_FILE_RESOLVER.get()
     }
 
     /// 在 Tauri 启动前初始化 CEF browser 主进程。

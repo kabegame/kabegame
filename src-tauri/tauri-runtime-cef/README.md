@@ -38,7 +38,7 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events |
 | Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
-| 文件拖放 | `TauriCefDragHandler` 把 CEF 的拖放回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用。挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
+| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在 Linux 上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件，**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
 | 渲染进程看门狗 | `TauriCefRequestHandler` 对所有 webview 无条件挂载（导航闸门为可选字段）。`on_render_process_unresponsive`（渲染进程约 15s 未回执输入）直接 `terminate()`；`on_render_process_terminated`（含真崩溃）自动 `browser.reload()` 恢复。`crawler-*` 标签的隐藏爬虫窗口在两个回调中均被排除——其卡死由 kabegame-core 调度器的 60s/120s 心跳看门狗判定并结束任务（见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.6） |
 
 ## 平台门控
@@ -170,13 +170,24 @@ submodule 的 gitlink 永远不提交本地改动：
     才建，避免后台 `cargo check`(rust-analyzer)把运行时 framework 悄悄换成官方无编解码器的构建。
   - `0003-drag-handler-bindings-macos.patch`：重新生成的 macOS bindings，带上
     `third-patches/cef/0002` 给 `CefDragHandler` 加的三个回调。
+  - `0004-drag-handler-bindings-linux.patch`：Linux x86_64 bindings，同步 0002 的
+    `OnDragOver` / `OnDragLeave` / `OnDrop`。
+  - `0005-drag-handler-bindings-windows.patch`：Windows x86_64 bindings，同步 0002 的
+    三个落点侧回调。
+  - `0006-drag-source-bindings-linux.patch`：Linux x86_64 bindings，加入 0003 的
+    `CefDragHandler::OnStartDragging` 与 `CefDragData::GetCustomData`。
+  - `0007-drag-source-bindings-windows.patch`：Windows x86_64 bindings，同步 0003
+    新增的两个起手侧 API，以保持 CEF struct 布局一致。
+  - `0008-drag-source-bindings-macos.patch`：macOS aarch64/x86_64 bindings，同步 0003
+    新增的两个起手侧 API。
 
   根 `Cargo.toml` 以 `[patch.crates-io]` 同时接入 `cef-dll-sys = { path = "third/cef-rs/sys" }`
   与 `cef = { path = "third/cef-rs/cef" }`——**两层必须同源**：只 patch sys 而让安全层走
   registry 会让新回调在 Rust 侧不存在、且两份 bindings 对同一个 C 结构体的字段数不一致。
   与 `third/cef` 不同，这里的 bindings **必须**进 patch series：`{cef,sys}/src/bindings/*.rs`
-  是入库源码、被上面的 path patch 直接编译，不打就编不过。Linux/Windows bindings 尚未重生成
-  （需在各自平台跑 `update-bindings`），故 `tauri-runtime-cef` 目前只在 macOS 可构建。
+  是入库源码、被上面的 path patch 直接编译，不打就编不过。当前应用使用的 Linux x86_64、
+  Windows x86_64 与 macOS aarch64/x86_64 bindings 均已同步，`tauri-runtime-cef` 可在三个
+  桌面平台构建；新增其它 target 时仍须为对应 triple 生成 bindings。
 - **`third/cef`**直接跟随官方 `chromiumembedded/cef` 的 `7827` 分支，pin 在
   `0d0eeb611`（Chromium 149.0.7827.201）。Kabegame 的改动位于
   `third-patches/cef/`：
@@ -188,6 +199,11 @@ submodule 的 gitlink 永远不提交本地改动：
     `OnDragLeave` / `OnDrop`（`added=experimental`），让 client 能观察完整拖放序列
     并消费落点。详见 `third-patches/cef/README.md`。生成的 C API 与 `libcef_dll`
     胶水不入 patch——它们由 `cef_create_projects.sh` 里的 `version_manager.py` 产出。
+  - `0003-drag-source-filenames.patch`：在 Linux Chromium 的起手侧加入
+    `WebContentsViewDelegate::GetDragFilenames`，并通过 CEF 的
+    `CefDragHandler::OnStartDragging` / `CefDragData::GetCustomData` 暴露给 client，允许
+    app 将前端声明的图片 id 授权为真实本地文件。其 Chromium 内层 patch 与 CEF API
+    是同一功能的两半，必须同进同退；生成的 C API 与胶水同样由构建流程产出。
 
 `scripts/build-chromium.ts` 在构建前以仓库内 `third/cef` 为本地源码引用:
 把它的路径和当前提交分别传给 `automate-git.py --url` / `--checkout`。首次或
@@ -298,17 +314,24 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium
 
 - CEF Views 对部分 Tauri window API 没有等价能力；运行时对这些 API 返回保守值或 no-op。
 - Linux CEF 的 GL 后端固定 ANGLE/GL；ozone 后端由 `linux_ozone_platform()` 按会话探测（`WAYLAND_DISPLAY` 有值走原生 Wayland，否则 X11），`GDK_BACKEND` 与 `--ozone-platform` 取同一个值，`KABEGAME_OZONE_PLATFORM=x11|wayland` 可强制覆盖。**不要在别处另行判断后端。**
-- Linux 拖出文件依赖目标端能下载 `http://127.0.0.1` URL（KDE KIO、GNOME gvfs 可以）；
-  需要真实本地路径的程序（绘图软件导入、上传框等）拿不到文件。Windows 走 `DownloadURL`
-  虚拟文件，对所有目标都成立，Linux 在这一点上仍弱一档。另外 XWayland 客户端往原生
-  Wayland 目标拖出会被直接拒绝（光标显示禁止符号），所以 Wayland 会话下不能退回 X11。
+- Linux 在 **CEF standard** 模式下安装拖出 resolver；当使用已重编且包含
+  `third-patches/cef/0003-drag-source-filenames.patch` 的 CEF 时，图库拖出会交付真实本地
+  文件路径，绘图软件、浏览器上传框与文件管理器不再依赖目标端下载 localhost URL。
+  Linux 前端因此**只**写自定义 mime 里的 image id，不再写 `DownloadURL` / `text/uri-list` /
+  `text/plain`（写了也会被 Chromium 一并清掉）。代价是没有 HTTP 兜底：resolver 未安装、id 未获
+  授权或仍在用未包含 0003 的旧 CEF 时，目标端拿到的是 Blink 为 `<img>` 自动填充的缩略图载荷。
+  Windows / macOS 仍写那三项并沿用 `DownloadURL` 虚拟文件路径，`/download` 端点为此保留，
+  不受此链路影响。
+- Wayland 会话下**不能**用 `KABEGAME_OZONE_PLATFORM=x11` 退回 X11：XWayland 客户端往原生
+  Wayland 目标拖出会被合成器直接拒绝（光标显示禁止符号），拖出在源头就失败，与上面这条
+  链路是否生效无关。本机 Chrome 强制 `--ozone-platform=x11` 可独立复现。
 - Windows 下 tauri `theme` 恒报 Light；`shadow` 为 best-effort。`WindowBuilder::drag_and_drop`
   （tao 层的 OLE drop target）仍是 best-effort 且实际不生效——CEF 的 browser view 覆盖在
   tao 窗口之上，拖放命中的是 CEF；文件拖放走 `TauriCefDragHandler`，见「Tauri 适配边界」。
 - `OnDrop` 挂在 `WebContentsViewDelegate` 上，而窗口外（OSR/windowless）浏览器不创建该
   delegate。kabegame 用的是 windowed CEF Views，不受影响；OSR 场景只会收到
   Enter/Over/Leave，没有 Drop。
-- `third/cef-rs` 的 bindings 目前只重新生成了两个 macOS target（`aarch64/x86_64-apple-darwin`）。
-  Linux/Windows 的 bindings 需在对应平台上跑
-  `cargo run -p update-bindings -- --bindgen --target <triple>`（bindgen 要该平台的
-  sysroot），与该平台的 CEF 重编一并进行。
+- `third/cef-rs` 已覆盖应用当前使用的 Linux x86_64、Windows x86_64 与 macOS
+  aarch64/x86_64 target。若要增加其它 CEF target，需在对应平台上运行
+  `cargo run -p update-bindings -- --bindgen --target <triple>`（bindgen 需要该平台的
+  sysroot），并将结果加入 patch series。

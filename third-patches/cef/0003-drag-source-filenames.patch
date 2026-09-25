@@ -1,0 +1,232 @@
+diff --git a/include/cef_drag_data.h b/include/cef_drag_data.h
+index 382047b9672084af59ad245bdbeffa0ba9a7cec2..3bf45d8c231a053a4aaf2a02f5fae250f468a27e 100644
+--- a/include/cef_drag_data.h
++++ b/include/cef_drag_data.h
+@@ -228,6 +228,16 @@ class CefDragData : public virtual CefBaseRefCounted {
+   ///
+   /*--cef()--*/
+   virtual bool HasImage() = 0;
++
++  ///
++  /// Returns the drag data value for the custom format |type|, as set by the
++  /// page through DataTransfer.setData(). Returns an empty string when absent.
++  /// Custom formats survive the browser-side drag data filtering that strips
++  /// file paths and rewrites URLs, so they are the only channel through which a
++  /// renderer can name something for the client to act on.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual CefString GetCustomData(const CefString& type) = 0;
+ };
+ 
+ #endif  // CEF_INCLUDE_CEF_DRAG_DATA_H_
+diff --git a/include/cef_drag_handler.h b/include/cef_drag_handler.h
+index ca449ca76f7b0d05daef35376e6073377a261f1f..76ae104f9c5ec541124c774acf1e86839f9012a2 100644
+--- a/include/cef_drag_handler.h
++++ b/include/cef_drag_handler.h
+@@ -100,6 +100,19 @@ class CefDragHandler : public virtual CefBaseRefCounted {
+     return false;
+   }
+ 
++  ///
++  /// Called when |browser| starts a drag that the renderer initiated, before the
++  /// drag data is handed to the platform. |dragData| is writable: call
++  /// CefDragData::AddFile() to attach real local files to the drag, which makes
++  /// the platform advertise a file drag and drops the drag's URL, text and file
++  /// contents payloads. A renderer-initiated drag can never carry filenames on
++  /// its own, so this is the only way for a client to hand out real files from
++  /// page content. Currently only called on Linux for windowed browsers.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual void OnStartDragging(CefRefPtr<CefBrowser> browser,
++                               CefRefPtr<CefDragData> dragData) {}
++
+   ///
+   /// Called whenever draggable regions for the browser window change. These can
+   /// be specified using the '-webkit-app-region: drag/no-drag' CSS-property. If
+diff --git a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
+index 7c56ee5765157ba1652ec7bf9d713e285db56cd1..47f0136bcabd07c108944b59f5724eaad7f1f3ea 100644
+--- a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
++++ b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
+@@ -34,6 +34,32 @@ void ChromeWebContentsViewDelegateCef::ShowContextMenu(
+   }
+ }
+ 
++std::vector<ui::FileInfo>
++ChromeWebContentsViewDelegateCef::GetDragFilenames(
++    const content::DropData& drop_data) {
++  auto browser = CefBrowserHostBase::GetBrowserForContents(web_contents_);
++  if (!browser) {
++    return {};
++  }
++  auto client = browser->client();
++  if (!client) {
++    return {};
++  }
++  auto handler = client->GetDragHandler();
++  if (!handler) {
++    return {};
++  }
++
++  // Deliberately writable, unlike the OnDrop path: the point of this callback
++  // is to let the client push local paths into a drag the renderer could not
++  // express.
++  CefRefPtr<CefDragDataImpl> cef_drag_data(new CefDragDataImpl(drop_data));
++  handler->OnStartDragging(browser.get(), cef_drag_data.get());
++
++  base::AutoLock lock_scope(cef_drag_data->lock());
++  return cef_drag_data->drop_data()->filenames;
++}
++
+ void ChromeWebContentsViewDelegateCef::OnPerformingDrop(
+     const content::DropData& drop_data,
+     DropCompletionCallback callback) {
+diff --git a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
+index 609f8b21fb8c41f1c053533583e23f597633477b..9e24b63206f6c359f4afd294f027aa574da79020 100644
+--- a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
++++ b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
+@@ -30,6 +30,8 @@ class ChromeWebContentsViewDelegateCef
+   // WebContentsViewDelegate methods:
+   void ShowContextMenu(content::RenderFrameHost& render_frame_host,
+                        const content::ContextMenuParams& params) override;
++  std::vector<ui::FileInfo> GetDragFilenames(
++      const content::DropData& drop_data) override;
+   void OnPerformingDrop(const content::DropData& drop_data,
+                         DropCompletionCallback callback) override;
+ 
+diff --git a/libcef/common/drag_data_impl.cc b/libcef/common/drag_data_impl.cc
+index d01a93898a5a610f8bbaec0e629530d46c7d1e3d..33ef34416fc73f9f7f9d36a83c45a83d6f4e2221 100644
+--- a/libcef/common/drag_data_impl.cc
++++ b/libcef/common/drag_data_impl.cc
+@@ -276,3 +276,9 @@ bool CefDragDataImpl::HasImage() {
+   base::AutoLock lock_scope(lock_);
+   return image_ ? true : false;
+ }
++
++CefString CefDragDataImpl::GetCustomData(const CefString& type) {
++  base::AutoLock lock_scope(lock_);
++  const auto it = data_.custom_data.find(type.ToString16());
++  return it == data_.custom_data.end() ? CefString() : CefString(it->second);
++}
+diff --git a/libcef/common/drag_data_impl.h b/libcef/common/drag_data_impl.h
+index 3a4981c56aeda46aaa8f74da6ca1fc4a38962a48..bf2e74684eddd54f5f919e08640386c385958064 100644
+--- a/libcef/common/drag_data_impl.h
++++ b/libcef/common/drag_data_impl.h
+@@ -49,6 +49,7 @@ class CefDragDataImpl : public CefDragData {
+   CefRefPtr<CefImage> GetImage() override;
+   CefPoint GetImageHotspot() override;
+   bool HasImage() override;
++  CefString GetCustomData(const CefString& type) override;
+ 
+   // This method is not safe. Use Lock/Unlock to get mutually exclusive access.
+   content::DropData* drop_data() { return &data_; }
+diff --git a/patch/patch.cfg b/patch/patch.cfg
+index 33e372fc3016ff6125663107b7ee81af1fe8d497..d610d7463c5e1730e45a57b3657ca513a81fc544 100644
+--- a/patch/patch.cfg
++++ b/patch/patch.cfg
+@@ -895,5 +895,11 @@ patches = [
+     # process type (skips the macOS helper-app variant rewrite so a single
+     # flat helper executable next to the main binary can serve all types).
+     'name': 'kabegame_flat_subprocess_path',
++  },
++  {
++    # kabegame: let WebContentsViewDelegate turn a renderer-initiated drag into
++    # a drag of real local files (renderer-supplied filenames are always
++    # cleared by RenderWidgetHostImpl::FilterDropData).
++    'name': 'kabegame_drag_source_filenames',
+   }
+ ]
+diff --git a/patch/patches/kabegame_drag_source_filenames.patch b/patch/patches/kabegame_drag_source_filenames.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f7ddf3ce381946cada5e259758b3aacb8362d90
+--- /dev/null
++++ b/patch/patches/kabegame_drag_source_filenames.patch
+@@ -0,0 +1,89 @@
++diff --git content/public/browser/web_contents_view_delegate.h content/public/browser/web_contents_view_delegate.h
++--- content/public/browser/web_contents_view_delegate.h
+++++ content/public/browser/web_contents_view_delegate.h
++@@ -16,6 +16,7 @@
++ 
++ #include "base/functional/callback_forward.h"
++ #include "content/common/content_export.h"
+++#include "ui/base/clipboard/file_info.h"
++ #include "ui/gfx/native_ui_types.h"
++ 
++ #if defined(__OBJC__)
++@@ -102,6 +103,19 @@ class CONTENT_EXPORT WebContentsViewDelegate {
++   virtual void* GetDelegateForHost(RenderWidgetHost* render_widget_host,
++                                    bool is_popup);
++ #endif
++ 
+++  // Gives the delegate a chance to turn a renderer-initiated drag into a drag
+++  // of real local files.
+++  //
+++  // `drop_data.filenames` is always empty for such drags —
+++  // RenderWidgetHostImpl::FilterDropData() clears it unconditionally — so an
+++  // embedder that knows the dragged content maps to a file on disk has no way
+++  // to express that. Returning a non-empty vector makes the view build the
+++  // platform payload from those files instead of from the drag's URLs.
+++  //
+++  // Called on the UI thread from the view's StartDragging(), before the data is
+++  // handed to the platform drag loop. Currently only called on Linux.
+++  virtual std::vector<ui::FileInfo> GetDragFilenames(const DropData& drop_data);
+++
++   // Performs the actions needed for a drop and then calls the completion
++   // callback once done.
++   virtual void OnPerformingDrop(const DropData& drop_data,
++diff --git content/public/browser/web_contents_view_delegate.cc content/public/browser/web_contents_view_delegate.cc
++--- content/public/browser/web_contents_view_delegate.cc
+++++ content/public/browser/web_contents_view_delegate.cc
++@@ -66,6 +66,11 @@ void* WebContentsViewDelegate::GetDelegateForHost(
++   return nullptr;
++ }
++ 
+++std::vector<ui::FileInfo> WebContentsViewDelegate::GetDragFilenames(
+++    const DropData& drop_data) {
+++  return {};
+++}
+++
++ void WebContentsViewDelegate::OnPerformingDrop(
++     const DropData& drop_data,
++     DropCompletionCallback callback) {
++diff --git content/browser/web_contents/web_contents_view_aura.cc content/browser/web_contents/web_contents_view_aura.cc
++--- content/browser/web_contents/web_contents_view_aura.cc
+++++ content/browser/web_contents/web_contents_view_aura.cc
++@@ -1238,7 +1238,38 @@ void WebContentsViewAura::StartDragging(
++     selection_controller->HideAndDisallowShowingAutomatically();
++   std::unique_ptr<ui::OSExchangeDataProvider> provider =
++       ui::OSExchangeDataProviderFactory::CreateProvider();
+++#if BUILDFLAG(IS_LINUX)
+++  // A renderer-initiated drag can never carry filenames (they are cleared in
+++  // RenderWidgetHostImpl::FilterDropData), so give the delegate a chance to
+++  // supply them out-of-band.
+++  //
+++  // When it does, the URL and text payloads must go away too. The Wayland
+++  // provider synthesizes text/uri-list from GetURLs(), which puts url_ ahead of
+++  // the file:// entries, and falls back to parsing the plain text as a URL when
+++  // url_ is unset — either way the http URL would lead the list and most
+++  // targets only read the first line. On X11 the URL additionally turns into
+++  // _NETSCAPE_URL, which makes file managers fetch it instead of copying the
+++  // file. file_contents goes as well: for an <img> drag it holds whatever the
+++  // dragged element had loaded, which is the thumbnail in a gallery grid, and a
+++  // target that prefers application/octet-stream would silently get that
+++  // instead of the real image.
+++  std::vector<ui::FileInfo> delegate_filenames;
+++  if (delegate_ && drop_data.filenames.empty()) {
+++    delegate_filenames = delegate_->GetDragFilenames(drop_data);
+++  }
+++  if (!delegate_filenames.empty()) {
+++    DropData file_drop_data = drop_data;
+++    file_drop_data.filenames = std::move(delegate_filenames);
+++    file_drop_data.url_infos.clear();
+++    file_drop_data.text.reset();
+++    file_drop_data.file_contents.clear();
+++    PrepareDragData(source_rfh, file_drop_data, provider.get());
+++  } else {
+++    PrepareDragData(source_rfh, drop_data, provider.get());
+++  }
+++#else
++   PrepareDragData(source_rfh, drop_data, provider.get());
+++#endif
++ 
++   auto data = std::make_unique<ui::OSExchangeData>(std::move(provider));
++   data->SetSource(std::make_unique<ui::DataTransferEndpoint>(
