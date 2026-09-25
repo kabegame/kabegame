@@ -45,6 +45,7 @@ export const RESOURCES_BIN_DIR = path.join(
 );
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const SRC_FE_DIR = path.join(root, "apps");
+export const SRC_PKG_DIR = path.join(root, "packages");
 export const TAURI_KABEGAME_DIR = path.join(SRC_TAURI_DIR, "kabegame");
 
 interface BuildOptions {
@@ -451,9 +452,12 @@ export class BuildSystem {
   }
 
   /**
-   * test 命令：只跑后端 cargo test（前端没有测试）。
+   * test 命令：跑后端 cargo test 与前端 vitest。
    * 只经过 parseParams/prepareEnv（FFmpeg/CEF 等编译环境）+ prepareCompileArgs，
    * 不触发 beforeBuild/afterBuild 构建生命周期（插件打包、CEF helper 预构建等）。
+   *
+   * 与 check 命令一致，用 `--skip vue` / `--skip cargo` 各自关掉一侧。前端测试只对
+   * 有前端包的组件存在（见 `Component.feTestDir`），其余组件该步自动跳过。
    */
   async test(options: BuildOptions): Promise<void> {
     //@ts-ignore
@@ -463,18 +467,28 @@ export class BuildSystem {
     this.commonBefore();
 
     const component = this.context.component!;
-    const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(
-      component.comp,
-    );
+    // `--` 之后的剩余参数只给 cargo test：实际用法里它们是 cargo 专有的
+    // （--lib / --test <target> / 再套一层 `--` 传给测试二进制），交给 vitest
+    // 只会让它报未知选项。前端用例总共百来毫秒，不需要过滤；真要单挑某个文件，
+    // 在 packages/<pkg> 下直接跑 `deno task test:watch`。
+    const extraArgs = this.options.args || [];
 
-    // `--` 之后的剩余参数原样追加给 cargo test：可以是测试名过滤、--test <target>，
-    // 或再带一个 `--` 透传给测试二进制（如 -- --nocapture）。
-    const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-    const args = this.buildCargoArgs(
-      ["test", "-p", component.cargoComp],
-      features,
-      mergedArgs.length > 0 ? mergedArgs : undefined,
-    );
-    run("cargo", args);
+    const feTestDir = component.feTestDir;
+    if (!this.context.skip?.isVue && feTestDir) {
+      run("test", [], { bin: "deno-task", cwd: feTestDir });
+    }
+
+    if (!this.context.skip?.isCargo) {
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs
+        .call(component.comp);
+
+      const mergedArgs = [...(compileArgs || []), ...extraArgs];
+      const args = this.buildCargoArgs(
+        ["test", "-p", component.cargoComp],
+        features,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
+      );
+      run("cargo", args);
+    }
   }
 }

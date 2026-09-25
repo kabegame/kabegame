@@ -297,7 +297,11 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium
 ## 当前限制
 
 - CEF Views 对部分 Tauri window API 没有等价能力；运行时对这些 API 返回保守值或 no-op。
-- Linux CEF 窗口固定采用 X11/ANGLE GL 配置；原生 Wayland 路径尚未接入。
+- Linux CEF 的 GL 后端固定 ANGLE/GL；ozone 后端由 `linux_ozone_platform()` 按会话探测（`WAYLAND_DISPLAY` 有值走原生 Wayland，否则 X11），`GDK_BACKEND` 与 `--ozone-platform` 取同一个值，`KABEGAME_OZONE_PLATFORM=x11|wayland` 可强制覆盖。**不要在别处另行判断后端。**
+- Linux 拖出文件依赖目标端能下载 `http://127.0.0.1` URL（KDE KIO、GNOME gvfs 可以）；
+  需要真实本地路径的程序（绘图软件导入、上传框等）拿不到文件。Windows 走 `DownloadURL`
+  虚拟文件，对所有目标都成立，Linux 在这一点上仍弱一档。另外 XWayland 客户端往原生
+  Wayland 目标拖出会被直接拒绝（光标显示禁止符号），所以 Wayland 会话下不能退回 X11。
 - Windows 下 tauri `theme` 恒报 Light；`shadow` 为 best-effort。`WindowBuilder::drag_and_drop`
   （tao 层的 OLE drop target）仍是 best-effort 且实际不生效——CEF 的 browser view 覆盖在
   tao 窗口之上，拖放命中的是 CEF；文件拖放走 `TauriCefDragHandler`，见「Tauri 适配边界」。

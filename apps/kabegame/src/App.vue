@@ -199,7 +199,7 @@ import { invoke } from "@/api/rpc";
 import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
+import { initHttpServerBaseUrl } from "@kabegame/core/utils/fileUrl";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";

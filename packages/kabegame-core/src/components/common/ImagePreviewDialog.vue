@@ -237,7 +237,7 @@ import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
-import { fileToUrl, thumbnailToUrl } from "../../httpServer";
+import { fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
 import type { Plugin } from "@kabegame/core/stores/plugins";
 

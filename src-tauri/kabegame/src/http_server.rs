@@ -8,11 +8,11 @@ use axum::middleware::{from_fn, Next};
 #[cfg(not(target_os = "android"))]
 use axum::{
     body::Body,
-    extract::Query,
+    extract::{Path as UrlPath, Query},
     http::{
         header::{
-            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
-            RANGE,
+            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
+            CONTENT_RANGE, CONTENT_TYPE, RANGE,
         },
         Request, StatusCode, Uri,
     },
@@ -93,24 +93,40 @@ fn set_immutable_cache(resp: &mut Response) {
         .insert(CACHE_CONTROL, IMMUTABLE_CACHE_CONTROL);
 }
 
+/// 本地路径端点共用的白名单校验。
+///
+/// 两道门缺一不可:文件要真实存在于磁盘,并且要能在 images 表里按路径查到。后者
+/// 才是白名单本身——它把可读范围锁在图库已登记的文件上,否则端点就退化成任意本地
+/// 文件读取。新增任何按本地路径取文件的端点一律走这里,不要再各写一份。
+///
+/// 通过时返回该图片的 `ImageInfo`(调用方要用它的 media_type 定 MIME);不通过时返回
+/// 已经构造好的错误响应,调用方直接 return 即可。
+#[cfg(not(target_os = "android"))]
+async fn authorize_local_path(
+    path: &str,
+) -> Result<kabegame_core::storage::ImageInfo, Response> {
+    if path.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "missing path").into_response());
+    }
+    // 先看磁盘,不存在就不必再查表。
+    if tokio::fs::metadata(path).await.is_err() {
+        return Err((StatusCode::NOT_FOUND, "file not found").into_response());
+    }
+    match kabegame_core::storage::Storage::find_image_by_path(path) {
+        Ok(Some(info)) => Ok(info),
+        _ => Err((StatusCode::NOT_FOUND, "file not found").into_response()),
+    }
+}
+
 #[cfg(not(target_os = "android"))]
 async fn handle_file_query(
     Query(query): Query<FileQuery>,
     headers: axum::http::HeaderMap,
 ) -> Response {
     let path = query.path.trim();
-    if path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "missing path").into_response();
-    }
-
-    // 先检查本地文件是否存在，找不到则不查表直接 404
-    if tokio::fs::metadata(path).await.is_err() {
-        return (StatusCode::NOT_FOUND, "file not found").into_response();
-    }
-
-    let image_info = match kabegame_core::storage::Storage::find_image_by_path(path) {
-        Ok(Some(info)) => info,
-        _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    let image_info = match authorize_local_path(path).await {
+        Ok(info) => info,
+        Err(response) => return response,
     };
 
     let mime = image_info
@@ -125,6 +141,55 @@ async fn handle_file_query(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     serve_file_with_mime(path, mime, range).await
+}
+
+/// `/download/<绝对路径>`：桌面「把图片拖到文件管理器」时对方实际下载的 URL。
+///
+/// 与 `/file` 的区别只在**路径怎么传**：`/file?path=...` 把路径放在 query 里，URL 的
+/// 路径段恒为 `file`，下载方只能拿它当文件名，结果每张图都落地成没有扩展名的 `file`
+/// 且互相覆盖。这里改成把路径直接接在 `/download` 后面，文件名天然落在 URL 末段，
+/// KDE KIO 与 GNOME gvfs 直接就能取到正确的名字。
+///
+/// 为什么单开一个端点而不是改 `/file`：`/file` 还在给页面里的 `<img>` / `<video>`
+/// 供图，动它会波及现有视图的显示，没必要冒这个险。
+///
+/// 权限与 `/file` 共用 `authorize_local_path`，白名单语义不放宽。
+#[cfg(not(target_os = "android"))]
+async fn handle_download_path(
+    UrlPath(rest): UrlPath<String>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    // 通配段不带前导斜杠：Unix 绝对路径要补回来；Windows 的 `C:\...` 本身已完整。
+    let path = if cfg!(windows) && rest.chars().nth(1) == Some(':') {
+        rest
+    } else {
+        format!("/{rest}")
+    };
+    let path = path.as_str();
+
+    let image_info = match authorize_local_path(path).await {
+        Ok(info) => info,
+        Err(response) => return response,
+    };
+
+    let mime = image_info
+        .media_type
+        .as_deref()
+        .and_then(kabegame_core::media::image_type::mime_from_format)
+        .map(str::to_string)
+        .or_else(|| mime_from_path(path));
+
+    let range = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let mut response = serve_file_with_mime(path, mime, range).await;
+    // 只声明「这是一次下载」。文件名不由这条头给出——它已经在 URL 末段里了,
+    // 下载方直接从 URL 取,所以这里不需要读 path,也就没有转义与编码问题。
+    response
+        .headers_mut()
+        .insert(CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
+    response
 }
 
 #[cfg(not(target_os = "android"))]
@@ -367,6 +432,7 @@ async fn handle_unmatched(uri: Uri) -> Response {
 pub fn file_routes() -> Router {
     Router::new()
         .route("/file", get(handle_file_query))
+        .route("/download/{*path}", get(handle_download_path))
         .route("/thumbnail", get(handle_thumbnail_query))
         .route("/compatible", get(handle_compatible_query))
         .route("/proxy", get(handle_proxy_query))

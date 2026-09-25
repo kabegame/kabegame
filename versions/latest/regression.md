@@ -40,3 +40,44 @@
 | 主窗口最小尺寸 | Windows / macOS / Linux | 启动桌面应用，拖动主窗口边缘持续缩小 | 内容区不能缩到 `800×600` 以下；到达下限后继续拖动不再改变尺寸 | 分别在 100% 与高 DPI 缩放下检查 | [ ] |
 | 创建期最大尺寸 | Windows / macOS / Linux | 创建一个设置了 `max_inner_size` 的测试窗口，持续拖动窗口边缘放大 | 内容区不能超过配置的最大宽高 | 同时检查只限制一个轴的配置 | [ ] |
 | 运行时更新约束 | Windows / macOS / Linux | 对已显示窗口依次调用 `set_min_size`、`set_max_size` 和 `set_size_constraints`，每次调用后拖动窗口边缘 | 新约束立即生效；传入 `None` 清除对应约束后可再次越过旧边界 | 检查逻辑尺寸与物理尺寸入参 | [ ] |
+
+## Linux ozone 后端与拖出文件
+
+本版把 Linux 的 ozone 后端从「固定 X11」改成「按会话探测」：`WAYLAND_DISPLAY` 有值就跑
+原生 Wayland，否则仍是 X11。**X11 会话的行为与上版完全一致**（探测结果就是 x11），
+需要重点验的是 Wayland 会话——那是本版新走通的路径，整个窗口、输入、GPU 栈都换了后端。
+`KABEGAME_OZONE_PLATFORM=x11|wayland` 可强制覆盖，用来对照。
+
+另外新增了 `/download/<绝对路径>` 端点专供拖出下载，修掉「拖出去的文件都叫 `file`、
+没有扩展名、后一次覆盖前一次」——路径改为直接接在端点后面，文件名因此落在 URL 末段。
+`/file` **未改动**，页面里的图片与视频仍走它，显示路径不受影响。该端点只挂在桌面路由，
+web 与 Android 不开放；路径白名单与 `/file` 完全一致（必须真实存在且能在 images 表查到）。
+
+**macOS 的拖出本版不修**，在这里挂一条记录，去 macOS 上继续这项工作时从它开始：那边拖出去
+拿到的是一串 URL 而不是文件。根因与 Linux 同源——渲染进程发起的拖拽交不出真实本地路径
+（`RenderWidgetHostImpl::FilterDropData` 会把 `did_originate_from_renderer` 的 `filenames`
+整个清空，这是安全边界，不是 bug），所以只能退化成 URL。根治要让浏览器进程自己发起拖拽并
+给出真实路径，但 macOS 是 `NSPasteboard` / `NSDraggingSession` 另一套实现，与 Linux 的
+`OSExchangeData` + aura drag client 不能共用，需单独做。三平台里只有 Windows 现状是好的
+（`DownloadURL` → 真虚拟文件）。
+
+| 标题 | 环境 | 操作 | 预期 | 备注 | 是否完成 |
+| --- | --- | --- | --- | --- | --- |
+| 后端探测 | Linux Wayland 会话 | 启动应用，`pgrep -af kabegame-cef-helper \| grep -o '\-\-ozone-platform=[a-z0-9]*'` | 全部子进程都是 `--ozone-platform=wayland` | 主进程用 `xwininfo -root -tree \| grep -i kabegame` 应查不到窗口 | [ ] |
+| 后端探测 | Linux X11 会话 | 同上 | 全部子进程都是 `--ozone-platform=x11`，行为与上版一致 | 这是回归兜底：X11 会话不能因本次改动有任何变化 | [ ] |
+| 强制覆盖 | Linux Wayland 会话 | `KABEGAME_OZONE_PLATFORM=x11` 启动 | 退回 X11，窗口重新出现在 `xwininfo` 树里 | 逃生阀，Wayland 下出问题时要能退回去 | [ ] |
+| 拖出到文件管理器 | Linux Wayland 会话 | 图库里拖一张图到 Dolphin / Nautilus 窗口 | 光标显示可放下（不是禁止符号），松手后文件落地 | 上版在 Wayland 桌面下恒为禁止符号 | [ ] |
+| 拖出文件名 | Linux Wayland 会话 | 连续拖出两张**不同**的图到同一个目录 | 两个文件都带正确扩展名、用的是库里的原文件名，**不互相覆盖** | 本次新增 `/download` 端点修的就是这个 | [ ] |
+| 拖出中日文文件名 | Linux Wayland 会话 | 拖出一张文件名含中文或日文的图（例如带【】和省略号的） | 落地文件名不是乱码、不被截断 | 名字**只**由 URL 末段给出；`Content-Disposition` 恒为不带 filename 的 `attachment`，不参与命名。编码往返已有前端单测 `fileUrl.test.ts` 覆盖，这条验的是真实目标端解出来的名字 | [ ] |
+| 现有视图不受影响 | 全平台 | 浏览图库网格、打开图片详情、播放视频、切换原图/缩略图偏好 | 显示一切如常 | `/file` 本次未改动，这条是兜底确认 | [ ] |
+| 端点白名单 | 任一桌面平台 | 直接访问 `http://127.0.0.1:<port>/download/etc/passwd` | 返回 404，不返回文件内容 | 白名单语义不得放宽：必须能在 images 表里按路径查到 | [ ] |
+| 端点不开放 | web | 启动 web 版，访问 `/download/...` | 404 / 路由不存在 | 该端点只挂在桌面 `file_routes()` | [ ] |
+| Windows 拖出 | Windows | 从图库拖一张图到资源管理器 | 落地文件名与扩展名正确 | Windows 走 `DownloadURL`，URL 换成 `/download` 后要回归确认 | [ ] |
+| macOS 拖出 | macOS | 从图库拖一张图到 Finder 窗口或桌面 | 落地一个真实文件 | **当前不满足：落地的是一串 URL。本版不修**，macOS 侧工作从这条开始；先确认换成 `/download` 后现象有无变化 | [ ] |
+| 拖出内容正确 | Linux Wayland 会话 | 拖出一张图后，比对落地文件与库内原图的 sha256 | 完全一致；拿到的是**原图**而不是缩略图 | 网格里拖的是缩略层，别拖出缩略图 | [ ] |
+| 拖入文件 | Linux Wayland 会话 | 从文件管理器拖若干图片进各个拖入热区 | 拖入照旧可用，浮层与命中区域正常 | 换了后端，`TauriCefDragHandler` 的坐标契约要重验 | [ ] |
+| 窗口身份 | Linux Wayland 会话 | 看任务栏与 Alt-Tab | 只有一个条目、图标正确，不出现双条目 | Wayland 下靠 app_id，不再是 `WM_CLASS` | [ ] |
+| 渲染与视频 | Linux Wayland 会话 | 浏览图库、播放视频壁纸、开畅游窗口 | 画面正常，无黑屏、无花屏；视频能出声自动播放 | 日志里 `Frame latency is negative` 属已知无害告警 | [ ] |
+| 托盘 | Linux Wayland 会话 | 检查托盘图标与菜单 | 图标出现，菜单可点 | 托盘走 GTK，`GDK_BACKEND` 本版跟随 ozone 一起切到 wayland | [ ] |
+| 多显示器与缩放 | Linux Wayland 会话 | 在不同缩放比的显示器间移动窗口 | 不模糊、不错位；拖入热区命中仍然准 | Wayland 的缩放语义与 X11 不同，这里最容易出偏移 | [ ] |
+| 壁纸设置 | Linux Wayland 会话 | 设置一张静态壁纸和一张视频壁纸 | 设置成功并生效 | 壁纸走桌面环境接口，与 ozone 后端无关，属兜底 | [ ] |

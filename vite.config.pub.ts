@@ -116,10 +116,6 @@ export default {
         "kabegame-pathql-client",
         "index.ts"
       ),
-      // 原先这里把 "@popperjs/core" 别名到 "@sxzz/popperjs-es"：npm 版 element-plus 在自己
-      // package.json 里做了这个 npm alias，而 deno 的 hoisted linker 不物化「依赖的 npm 别名」，
-      // rollup 解析裸 specifier 会失败。vendored 之后 @kabegame/element-plus 直接声明真包
-      // @popperjs/core，别名连同 npm element-plus 一起移除。
     },
   },
   css: {
@@ -133,7 +129,7 @@ export default {
   envPrefix: ["VITE_", "TAURI_"],
   optimizeDeps: {
     entries: [path.resolve(process.cwd(), "index.html")],
-    // 不预构建本地 photoswipe-reactive，始终从源码编译，改包内代码立即生效
+    // 不预构建本地 photoswipe-vue，始终从源码编译，改包内代码立即生效
     exclude: ["photoswipe", "photoswipe/lightbox"],
   },
   build: {

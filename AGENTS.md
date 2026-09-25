@@ -138,18 +138,38 @@ Android（`--mode android --skip vue`）使用 fork 版的 `cargo tauri android 
 工具链来自 cargo-mobile2，与构建保持一致），需要环境中的 NDK + `deno task build:ffmpeg
 --target android` + `bin/android/arm64/rusty_v8-build/` V8 产物；详细信息与注意事项见该 skill 的 `SKILL.md`。
 
-### 后端测试
-**用 `test-kabegame` skill**（`.claude/skills/test-kabegame/`）跑后端 cargo test，
-不要手敲裸 `cargo test`（缺 FFmpeg/CEF 环境变量会编译失败）。前端没有测试。
+### 测试
+统一入口是 **`deno task test -c <组件>`**，同时覆盖后端 cargo test 与前端 vitest，
+用 `--skip vue` / `--skip cargo` 各自关掉一侧（与 `deno task check` 同约定）。
+
+**后端**：**用 `test-kabegame` skill**（`.claude/skills/test-kabegame/`），
+不要手敲裸 `cargo test`（缺 FFmpeg/CEF 环境变量会编译失败）。
 
 ```bash
 .claude/skills/test-kabegame/driver.sh kabegame-core --lib kgpg   # 按名过滤 core 单测
 .claude/skills/test-kabegame/driver.sh kabegame-cli               # cli 全部测试
 ```
 
-driver 封装了 `deno task test -c <crate>`（crate：kabegame | kabegame-cli |
+driver 封装了 `deno task test -c <crate> --skip vue`（crate：kabegame | kabegame-cli |
 kabegame-core），剩余参数自动补 `--` 传给 cargo test；全量套件有约 20 个既有失败，
-验证改动请按名过滤。
+验证改动请按名过滤。它固定只跑 Rust——把前端混进来会污染它按 `N passed` 累加的汇总。
+
+**前端**（vitest）：
+
+```bash
+deno task test -c kabegame-core --skip cargo        # 跑 @kabegame/core 的全部单测
+deno task --cwd packages/kabegame-core test:watch   # watch 模式，改哪跑哪
+```
+
+`kabegame-core` 这个名字下挂着两套互不相干的代码：Rust crate `src-tauri/kabegame-core`
+与 npm 包 `packages/kabegame-core`，test 命令把两者都算作该组件。
+
+测试文件就近放（`src/**/*.test.ts`）。各包自己的 `vitest.config.ts` **从
+`vite.config.pub.ts` 取 `define` / `resolve` / `css`**——平台常量（`__WEB__` 等）由
+ModePlugin 注入的环境变量算出，测试环境必须与应用一致，不要在测试配置里另写一套。
+新增前端包要接测试时：在 `Component.feTestDir` 登记目录、给 package.json 补 `test`
+脚本、拷一份 `vitest.config.ts`，并补一个两行 re-export 的 `uno.config.ts`（UnoCSS
+按 cwd 查找它，缺了会刷 config-not-found 并退回默认配置）。
 
 ### 数据目录模式（`--data`）
 - `dev`（`deno task dev` 的默认值）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离

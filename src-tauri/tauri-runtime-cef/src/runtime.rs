@@ -237,6 +237,49 @@ mod imp {
         }
     }
 
+    /// Linux 桌面后端(ozone platform)的唯一决策点。
+    ///
+    /// 三处必须取同一个值:`GDK_BACKEND`(GTK 侧,托盘与系统对话框走它)、CEF 命令行
+    /// 的 `--ozone-platform`(Chromium 的窗口与输入)、以及被子进程继承的同一份环境。
+    /// 任何一处不一致都会割裂成「窗口在 Wayland、托盘在 XWayland」这类状态,所以
+    /// 不要在别处另行判断后端,一律调这里。
+    ///
+    /// 为什么按会话探测而不是固定 X11:XWayland 客户端往原生 Wayland 目标(Dolphin
+    /// 等)**拖出**文件会被拒绝,光标显示禁止符号——拖出去的 `text/uri-list` 送不到
+    /// 目标端。同一台机器上把系统 Chrome 强制 `--ozone-platform=x11` 可复现同样的
+    /// 拒绝,改回原生 Wayland 立即正常。因此 Wayland 会话下必须跑原生 Wayland。
+    ///
+    /// `KABEGAME_OZONE_PLATFORM=x11|wayland` 可强制覆盖,用于两种后端对比排查。
+    #[cfg(target_os = "linux")]
+    fn linux_ozone_platform() -> &'static str {
+        static PLATFORM: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+        *PLATFORM.get_or_init(|| {
+            let forced = std::env::var("KABEGAME_OZONE_PLATFORM").unwrap_or_default();
+            let forced = forced.trim();
+            if forced.eq_ignore_ascii_case("wayland") {
+                return "wayland";
+            }
+            if forced.eq_ignore_ascii_case("x11") {
+                return "x11";
+            }
+            if !forced.is_empty() {
+                eprintln!(
+                    "[cef-runtime] WARN: 无法识别 KABEGAME_OZONE_PLATFORM={forced:?},改为按会话探测"
+                );
+            }
+            // 判据取 WAYLAND_DISPLAY 而不是 XDG_SESSION_TYPE:前者直接表示「能否真的
+            // 连上合成器」,后者在部分登录管理器下缺失或与实际不符,不能单独作准。
+            if std::env::var("WAYLAND_DISPLAY")
+                .map(|display| display.trim().is_empty())
+                .unwrap_or(true)
+            {
+                "x11"
+            } else {
+                "wayland"
+            }
+        })
+    }
+
     /// CEF runtime 的主状态。
     ///
     /// 它只应在 tao 主事件循环线程上被实际驱动。`RefCell` 存储窗口/webview
@@ -902,11 +945,11 @@ mod imp {
 
     /// 在 Tauri 启动前初始化 CEF browser 主进程。
     pub fn dispatch_cef_subprocess() {
-        // Select X11 before CEF parses
-        // the process environment or launches any child process.
+        // 必须在 CEF 解析进程环境、拉起任何子进程之前定下后端;GDK_BACKEND 要和
+        // on_before_command_line_processing 追加的 --ozone-platform 取同一个值。
         #[cfg(target_os = "linux")]
         unsafe {
-            std::env::set_var("GDK_BACKEND", "x11");
+            std::env::set_var("GDK_BACKEND", linux_ozone_platform());
         }
         #[cfg(target_os = "macos")]
         {
@@ -957,11 +1000,12 @@ mod imp {
                 command_line: Option<&mut CommandLine>,
             ) {
                 let Some(cl) = command_line else { return };
+                // 命令行已显式给了 --ozone-platform 时不覆盖,便于临时对比两种后端。
                 #[cfg(target_os = "linux")]
                 if cl.has_switch(Some(&CefString::from("ozone-platform"))) == 0 {
                     cl.append_switch_with_value(
                         Some(&CefString::from("ozone-platform")),
-                        Some(&CefString::from("x11")),
+                        Some(&CefString::from(linux_ozone_platform())),
                     );
                 }
                 cl.append_switch(Some(&CefString::from("no-sandbox")));
@@ -2068,9 +2112,10 @@ mod imp {
     }
 
     fn create_cef_runtime<T: UserEvent>(args: RuntimeInitArgs, any_thread: bool) -> Result<Cef<T>> {
+        // 与 dispatch_cef_subprocess 同理:后端必须在 CEF 初始化之前定下。
         #[cfg(target_os = "linux")]
         unsafe {
-            std::env::set_var("GDK_BACKEND", "x11");
+            std::env::set_var("GDK_BACKEND", linux_ozone_platform());
         }
         // 必须先于 initialize_cef:bootstrap 窗口在 CEF context 初始化回调里
         // 创建,届时 delegate 已经要读取窗口类名。

@@ -102,7 +102,7 @@ import ImageNotFound from "../common/ImageNotFound.vue";
 import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
-import { fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../httpServer";
+import { fileToUrl, thumbnailToUrl, compatibleToUrl, downloadToUrl } from "../../utils/fileUrl";
 import { IS_ANDROID } from "../../env";
 
 /**
@@ -197,9 +197,11 @@ const dragFileName = (): string => {
  * 原生拖拽起手：把拖拽数据统一改写成「原图」。
  * 网格 prefer=thumbnail 时 <img> 的 src 是缩略图，浏览器默认写入的拖拽数据也会是缩略图；
  * 这里覆盖为原图——`DownloadURL`（Chromium 专有 `mime:filename:url` 三段格式，拖到
- * 文件管理器时按 url 真实下载落盘；实际内容与 Content-Type 由 /file 响应决定，
+ * 文件管理器时按 url 真实下载落盘；实际内容与 Content-Type 由响应决定，
  * mime 段仅是提示，故直接用格式键）+ `text/uri-list`/`text/plain`（拖进浏览器/
  * 编辑器时得到原图 URL 而非缩略图）。
+ * URL 用 /download 而非 /file：前者把路径接在端点后面，文件名落在 URL 末段，
+ * Linux 文件管理器（走 KIO / gvfs 下载这个 URL）才能给出正确的落地文件名。
  * nativeDrag 关闭时把 dragstart 掐掉：`draggable=false` 之外的第二道闸。
  */
 const onDragStart = (event: DragEvent) => {
@@ -208,7 +210,7 @@ const onDragStart = (event: DragEvent) => {
     return;
   }
   const dt = event.dataTransfer;
-  const url = fileToUrl(localPath.value);
+  const url = downloadToUrl(localPath.value);
   if (!dt || !url) return;
   // filename 段不能含冒号（DownloadURL 以冒号分段）
   const name = dragFileName().replace(/:/g, "_");

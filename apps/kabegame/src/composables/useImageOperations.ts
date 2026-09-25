@@ -7,7 +7,7 @@ import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { fileToUrl } from "@kabegame/core/httpServer";
+import { fileToUrl } from "@kabegame/core/utils/fileUrl";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { IS_WEB } from "@kabegame/core/env";
 import { openLocalImage } from "@/utils/openLocalImage";

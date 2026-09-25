@@ -177,14 +177,23 @@ program
     await check(options);
   });
 
-// test 命令：只跑后端 cargo test（前端没有测试），不触发 build 生命周期
+// test 命令：跑后端 cargo test 与前端 vitest，不触发 build 生命周期
 program
   .command("test")
-  .description("运行后端 Rust 测试（cargo test，自动准备 Kabegame/FFmpeg 环境变量）")
+  .description(
+    "运行测试：后端 cargo test（自动准备 Kabegame/FFmpeg 环境变量）与前端 vitest",
+  )
   .requiredOption(
     "-c, --component <component>",
-    "要测试的 crate：kabegame | kabegame-cli | kabegame-core",
+    "要测试的组件：kabegame | kabegame-cli | kabegame-core" +
+      "（kabegame-core 同时覆盖 Rust crate 与前端包 @kabegame/core）",
     Component.CORE,
+  )
+  .option(
+    "--skip <skip>",
+    "跳过某一侧：vue | cargo（只能一个值）。--skip vue 只跑 cargo test；" +
+      "--skip cargo 只跑前端 vitest",
+    "",
   )
   .option(
     "--mode <mode>",

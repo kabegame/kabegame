@@ -68,7 +68,7 @@ import { Loading } from "@kabegame/element-plus-icons";
 import { useAlbumStore } from "@/stores/albums";
 import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/utils/fileUrl";
 import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { useUiStore } from "@kabegame/core/stores/ui";
 

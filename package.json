@@ -57,6 +57,7 @@
     "typescript": "^5.9.3",
     "unocss": "^66.7.5",
     "vite": "6",
+    "vitest": "^4.1.10",
     "vue-tsc": "^2.2.12"
   },
   "engines": {

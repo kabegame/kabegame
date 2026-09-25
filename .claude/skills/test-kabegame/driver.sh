@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Kabegame 后端测试驱动 —— 包装 `deno task test -c <crate> -- <args...>`。
+# Kabegame 后端测试驱动 —— 包装 `deno task test -c <crate> --skip vue -- <args...>`。
+#
+# 固定带 `--skip vue`：本 driver 只管 Rust。前端 vitest 另走
+# `deno task test -c kabegame-core --skip cargo`——混进来会让下面按
+# `N passed` 累加的汇总把前端用例数也算进 cargo 的账里。
 #
 # 用法（在仓库任意位置运行，脚本会自行定位仓库根）：
 #   .claude/skills/test-kabegame/driver.sh                                # cargo test -p kabegame-core（全量，慢且有既有失败，慎用）
@@ -41,11 +45,11 @@ if [ "$CRATE" = "kabegame" ]; then
   fi
 fi
 
-echo "[test] 运行: deno task test -c $CRATE -- $*"
+echo "[test] 运行: deno task test -c $CRATE --skip vue -- $*"
 echo "[test] 日志: $LOG"
 START=$(date +%s)
 
-deno task test -c "$CRATE" -- "$@" 2>&1 | tee "$LOG"
+deno task test -c "$CRATE" --skip vue -- "$@" 2>&1 | tee "$LOG"
 STATUS=${PIPESTATUS[0]}
 
 ELAPSED=$(( $(date +%s) - START ))

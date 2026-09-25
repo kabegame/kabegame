@@ -1,5 +1,10 @@
 import { BasePlugin } from "./base-plugin.ts";
-import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system.ts";
+import {
+  BuildSystem,
+  SRC_FE_DIR,
+  SRC_PKG_DIR,
+  SRC_TAURI_DIR,
+} from "../build-system.ts";
 import * as path from "path";
 import {
   ROOT,
@@ -85,6 +90,29 @@ export class Component {
 
   get appFeDir(): string {
     return Component.appFeDir(this.comp);
+  }
+
+  /**
+   * 该组件的前端测试目录(vitest)。返回 null 表示这个组件没有前端测试。
+   *
+   * `kabegame-core` 这个名字下挂着两套互不相干的代码:Rust crate
+   * `src-tauri/kabegame-core`,和 npm 包 `packages/kabegame-core`(@kabegame/core)。
+   * test 命令把两者都算作该组件的测试,用 `--skip vue` / `--skip cargo` 各自关掉。
+   * 其余组件(kabegame / kabegame-cli)暂时没有前端测试,返回 null 即只跑 cargo。
+   */
+  static feTestDir(comp: string): string | null {
+    switch (comp) {
+      case this.CORE: {
+        return path.join(SRC_PKG_DIR, "kabegame-core");
+      }
+      default: {
+        return null;
+      }
+    }
+  }
+
+  get feTestDir(): string | null {
+    return Component.feTestDir(this.comp);
   }
 }
 

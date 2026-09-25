@@ -7050,6 +7050,7 @@
         "npm:typescript@^5.9.3",
         "npm:unocss@^66.7.5",
         "npm:vite@6",
+        "npm:vitest@^4.1.10",
         "npm:vue-router@^4.6.4",
         "npm:vue-tsc@^2.2.12",
         "npm:vue@^3.5.40"

@@ -1,6 +1,6 @@
 import { listen, type UnlistenFn } from "@/api/rpc";
 import { invoke } from "@/api/rpc";
-import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
+import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/utils/fileUrl";
 import { IS_DEV } from "@kabegame/core/env";
 
 type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
