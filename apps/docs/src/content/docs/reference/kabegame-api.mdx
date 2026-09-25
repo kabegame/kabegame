@@ -53,6 +53,7 @@ import { Badge } from '@astrojs/starlight/components';
 | `setHeader` | `setHeader(key, value): void` | ✅ | ❌ | 设置后续宿主 HTTP 请求与 `fetch` 的请求头。 |
 | `delHeader` | `delHeader(key): void` | ✅ | ❌ | 删除先前设置的请求头。 |
 | `requireCookie` | `requireCookie(host?): boolean` <Badge text="4.4.0" variant="note" /> | ✅ | ❌ | 把用户在**畅游**里登录该 host 留下的 cookie 注入本任务 `Cookie` 头。省略 `host` 时从 `base_url` 推断。cookie 明文不暴露给插件，返回值只表示注入是否成功。 |
+| `cefUserAgent` | `cefUserAgent(): string \| null` <Badge text="4.4.1" variant="note" /> | ✅ | ❌ | 返回桌面**畅游**（CEF）的默认 User-Agent；Android 返回 `null`。Cloudflare `cf_clearance` 等 cookie 绑定签发时的 UA，配合 `requireCookie()` 时应一并 `setHeader("User-Agent", ...)`。Chrome 大版本号由应用写死维护，可能落后于实际 CEF。 |
 
 WebView 后端没有这些方法——请求头由真实浏览器会话决定，登录态自动携带。
 

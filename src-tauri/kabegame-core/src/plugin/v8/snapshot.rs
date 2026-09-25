@@ -18,8 +18,8 @@ const MAGIC: &[u8; 8] = b"KGVSNAP1";
 ///
 /// `CRYPTO_INIT_SCRIPT` runs after restore and does not require a bump. The V8
 /// version is recorded separately in the metadata below.
-/// Fingerprint 5 is reserved for the upcoming op set and `prelude.js` changes.
-const SNAPSHOT_FINGERPRINT: u32 = 5;
+/// Fingerprint 6: `prelude.js` 新增 `Kabegame.cefUserAgent`。
+const SNAPSHOT_FINGERPRINT: u32 = 6;
 const MAX_META_LEN: usize = 4096;
 
 static LOADED: OnceLock<&'static [u8]> = OnceLock::new();

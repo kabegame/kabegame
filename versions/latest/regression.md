@@ -97,3 +97,17 @@ web 与 Android 不开放；路径白名单与 `/file` 完全一致（必须真�
 | 托盘 | Linux Wayland 会话 | 检查托盘图标与菜单 | 图标出现，菜单可点 | 托盘走 GTK，`GDK_BACKEND` 本版跟随 ozone 一起切到 wayland | [ ] |
 | 多显示器与缩放 | Linux Wayland 会话 | 在不同缩放比的显示器间移动窗口 | 不模糊、不错位；拖入热区命中仍然准 | Wayland 的缩放语义与 X11 不同，这里最容易出偏移 | [ ] |
 | 壁纸设置 | Linux Wayland 会话 | 设置一张静态壁纸和一张视频壁纸 | 设置成功并生效 | 壁纸走桌面环境接口，与 ozone 后端无关，属兜底 | [ ] |
+
+## anime-pictures 插件 Cloudflare 403
+
+`cf_clearance` 与签发它的 UA 绑定。插件原先写死的是 Windows Chrome/124 UA，和畅游（Linux CEF 149）的 UA
+不一致，所以即使 cookie 是从畅游新鲜复制来的，列表页仍会 403。现已把 UA 改为畅游的 UA。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 列表页不再 403 | Linux | 在畅游中通过 anime-pictures 的 Cloudflare 验证，把 `cf_clearance` 填入插件后重新打包，运行第 0 页任务 | 列表页返回 200，并能解析出帖子链接 | cookie 与 IP、UA 绑定，必须在同一台机器、同一出口 IP 下获取 |
+| [ ] | 使用畅游 Cookie | Linux | 在畅游中打开 anime-pictures 并通过验证，然后运行任务 | 日志出现「已从畅游注入 anime-pictures.net 的 Cookie」 | 畅游没有该站记录时会 warn 并回退到内置 Cookie |
+| [ ] | `cefUserAgent` 各平台取值 | Windows / macOS / Linux | 运行 anime-pictures 任务，查看日志中的「User-Agent 来源」 | 显示「畅游 CEF」，平台段分别为 `Windows NT 10.0; Win64; x64` / `Macintosh; Intel Mac OS X 10_15_7` / `X11; Linux x86_64`，版本段为 `Chrome/149.0.0.0`，且与该平台畅游里 `navigator.userAgent` 逐字一致 | 在畅游 devtools 执行 `navigator.userAgent` 对照 |
+| [ ] | Android 上 `cefUserAgent` | Android | 运行调用 `Kabegame.cefUserAgent()` 的插件 | 返回 `null`，插件回退到内置 UA，不报错 | Android 畅游是系统 WebView，不走 CEF |
+| [ ] | V8 snapshot 重建 | 任意桌面 | 升级后首次运行任意 V8 插件 | 生成 `runtime@6.bin` 并正常运行；`Kabegame.cefUserAgent` 可调用 | prelude.js 有改动，fingerprint 已从 5 升到 6 |
+| [ ] | 原图下载 | Linux | 同上任务继续执行到详情页下载 | `api.anime-pictures.net/pictures/download_image/...` 307 到 `oimages`，下载器合并重定向响应里的 `kira=1` 后拿到 `image/jpeg` | 缺 `kira` cookie 时 `oimages` 会 302 回首页，得到的是 HTML |

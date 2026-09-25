@@ -170,6 +170,7 @@ KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、�
   ```
 
 - **V8 宿主 Cookie**：`Kabegame.requireCookie(host?): boolean` 从用户已访问并登录的畅游站点持久化记录中取 Cookie，注入当前任务请求头；省略 `host` 时使用插件 `baseUrl` 的 host，且 Cookie 明文不会返回脚本。
+- **V8 畅游 UA**：`Kabegame.cefUserAgent(): string | null` 返回桌面畅游（CEF）的默认 User-Agent（Android 为 `null`）；站点 Cookie 绑定 UA 时（如 Cloudflare `cf_clearance`）应与 `requireCookie()` 配套设置。
 
 ### WebView 页面原生下载：`Kabegame.onNativeDownload`
 

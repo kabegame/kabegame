@@ -43,6 +43,7 @@ extension!(
         ops::op_kabegame_set_plugin_data,
         ops::op_kabegame_set_header,
         ops::op_kabegame_require_cookie,
+        ops::op_kabegame_cef_user_agent,
         ops::op_kabegame_del_header,
         ops::op_kabegame_warn,
         ops::op_kabegame_log,

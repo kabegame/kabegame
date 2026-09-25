@@ -454,6 +454,35 @@ pub fn op_kabegame_set_header(state: &mut OpState, #[string] key: String, #[stri
     }
 }
 
+/// 畅游 CEF 的 Chrome 大版本号：升级 CEF 时手动同步（落后也可接受，只影响 UA 与畅游是否逐字一致）。
+const CEF_CHROME_MAJOR: u32 = 149;
+
+/// 畅游（桌面 CEF）默认 User-Agent，按 Chromium `BuildUserAgentFromOSAndProduct` 的公式拼出：
+/// 平台段为 Chromium 写死的 unified platform，版本段为 `<major>.0.0.0`。
+/// Cloudflare 的 `cf_clearance` 绑定签发时的 UA，插件拿畅游 Cookie 时须配套使用。
+/// Android 不走 CEF（系统 WebView），返回 `None`。
+fn cef_user_agent() -> Option<String> {
+    let platform = if cfg!(target_os = "windows") {
+        "Windows NT 10.0; Win64; x64"
+    } else if cfg!(target_os = "macos") {
+        "Macintosh; Intel Mac OS X 10_15_7"
+    } else if cfg!(target_os = "linux") {
+        "X11; Linux x86_64"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) \
+         Chrome/{CEF_CHROME_MAJOR}.0.0.0 Safari/537.36"
+    ))
+}
+
+#[op2]
+#[string]
+pub fn op_kabegame_cef_user_agent() -> Option<String> {
+    cef_user_agent()
+}
+
 #[op2(fast)]
 pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -> bool {
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
