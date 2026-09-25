@@ -856,7 +856,12 @@ const handlePreviewReady = () => {
 
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (!previewVisible.value) return;
-  if (isTextInputLike(event.target)) return;
+  const target = event.target as HTMLInputElement | null;
+  const isRangeArrow =
+    target?.tagName === "INPUT" &&
+    target.type === "range" &&
+    (event.key === "ArrowLeft" || event.key === "ArrowRight");
+  if (isTextInputLike(event.target) && !isRangeArrow) return;
   if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
     if (!previewImage.value) return;
     event.preventDefault();
@@ -1287,6 +1292,7 @@ body.image-preview-hides-kamechan .kamechan-host {
   }
 
   .preview-container {
+    container-type: inline-size;
     flex: 1 1 auto;
     min-width: 0;
     width: 100%;

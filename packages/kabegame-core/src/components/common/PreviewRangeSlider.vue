@@ -13,6 +13,8 @@
     @mousedown.stop="$emit('drag-start')"
     @touchstart.stop="$emit('drag-start')"
     @click.stop
+    @keydown.left.prevent
+    @keydown.right.prevent
   />
 </template>
 

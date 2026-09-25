@@ -13,7 +13,11 @@
     "vue": "^3.4.0"
   },
   "devDependencies": {
-    "@types/ejs": "^3.1.5"
+    "@types/ejs": "^3.1.5",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vitejs/plugin-vue-jsx": "^4.2.0",
+    "@vue/test-utils": "^2.4.6",
+    "happy-dom": "^20.7.0"
   },
   "dependencies": {
     "@kabegame/i18n": "workspace:*",

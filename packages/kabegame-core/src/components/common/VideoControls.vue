@@ -131,7 +131,7 @@ const seekPercent = computed(() => {
   if (!duration.value) return 0;
   return Math.min(100, Math.max(0, (effectiveCurrentTime.value / duration.value) * 100));
 });
-const keepVisible = computed(() => !isPlaying.value || isSeekDragging.value || volumePanelActive.value);
+const keepVisible = computed(() => isSeekDragging.value || volumePanelActive.value);
 const volumePanelVisible = computed(() => volumePanelActive.value);
 
 const clearVolumePanelTimer = () => {
@@ -191,6 +191,7 @@ const handlePause = () => {
   syncFromVideo();
   stopProgressRaf();
   showControls();
+  scheduleHideControls(1000);
 };
 
 const handleEnded = () => {

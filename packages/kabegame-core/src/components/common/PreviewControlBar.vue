@@ -114,28 +114,27 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
-.preview-control-bar-hover-zone {
+.preview-control-bar-hover-zone,
+.preview-control-bar {
   position: absolute;
-  left: 20%;
-  right: 20%;
+  left: 50%;
+  // 1000px 容器时为 600px（60%），线性收窄至 300px 容器时为 300px（100%）。
+  width: min(600px, 100%, calc(42.8571cqw + 171.4286px));
+  transform: translateX(-50%);
+}
+
+.preview-control-bar-hover-zone {
   bottom: 0;
   height: 76px;
   z-index: 3;
-
-  &.is-fullscreen {
-    left: 5%;
-    right: 5%;
-  }
 }
 
 .preview-control-bar {
-  position: absolute;
-  left: 20%;
-  right: 20%;
   bottom: 16px;
   z-index: 4;
   min-height: 44px;
   padding: 8px 10px;
+  box-sizing: border-box;
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -152,10 +151,12 @@ defineExpose({
     opacity: 0;
     pointer-events: none;
   }
+}
 
-  &.is-fullscreen {
-    left: 5%;
-    right: 5%;
+@container (width < 200px) {
+  .preview-control-bar-hover-zone,
+  .preview-control-bar {
+    display: none;
   }
 }
 

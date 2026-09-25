@@ -1,3 +1,5 @@
+import vue from "@vitejs/plugin-vue";
+import vueJsx from "@vitejs/plugin-vue-jsx";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -14,15 +16,15 @@ import { defineConfig } from "vitest/config";
  * - `build` / `publicDir` / `optimizeDeps.entries` 都指向应用包（`index.html`、
  *   仓库 `static/`），本包没有对应文件。
  *
- * 将来写组件测试时，在这里补 `plugins: [vue(), vueJsx()]` 即可（两行 import），
- * 并给那些测试文件顶部加 `// @vitest-environment jsdom`（需先装 jsdom）——不要把
- * 整包切成 jsdom，那会让这批纯函数测试慢一个数量级。
+ * 组件测试在测试文件顶部声明 `// @vitest-environment happy-dom`，不要把整包切成 DOM
+ * 环境，否则会让纯函数测试承担不必要的初始化开销。
  */
 export default defineConfig(async () => {
   const { default: pubConfig } = await import("../../vite.config.pub");
   const { define, resolve, css } = pubConfig;
 
   return {
+    plugins: [vue(), vueJsx()],
     define,
     resolve,
     css,
