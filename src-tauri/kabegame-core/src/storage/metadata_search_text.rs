@@ -15,9 +15,11 @@
 use serde_json::Value;
 
 /// 非法 JSON（含空串）返回空串——与 `parse_metadata_json` 的宽松兜底一致，不阻塞写入。
+/// 页面快照（`page_snapshot::PAGE_SNAPSHOT_KIND`）例外：只索引标题与来源 URL。
 pub(crate) fn search_text_from_json_str(data_json: &str) -> String {
     match serde_json::from_str::<Value>(data_json) {
-        Ok(value) => flatten_json_for_search(&value),
+        Ok(value) => super::page_snapshot::search_text(&value)
+            .unwrap_or_else(|| flatten_json_for_search(&value)),
         Err(_) => String::new(),
     }
 }

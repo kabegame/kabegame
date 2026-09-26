@@ -104,6 +104,7 @@ const emit = defineEmits<{
   refresh: [];
   showCrawlerDialog: [];
   showLocalImport: [];
+  showWebpageCollect: [];
   openCollectMenu: [];
 }>();
 
@@ -303,6 +304,8 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
           emit("showLocalImport");
         } else if (payload.data.value === "network") {
           emit("showCrawlerDialog");
+        } else if (payload.data.value === "webpage") {
+          emit("showWebpageCollect");
         }
       }
       break;

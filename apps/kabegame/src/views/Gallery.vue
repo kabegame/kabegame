@@ -20,6 +20,7 @@
                 :provider-context-prefix="galleryRouteStore.computedContextPath"
                 @refresh="handleManualRefresh"
                 @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
+                @show-webpage-collect="handleShowWebpageCollect"
                 @open-collect-menu="handleOpenCollectMenu" />
 
               <!-- 大页分页器 -->
@@ -47,6 +48,8 @@
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
     <CrawlerDialog v-if="!isCompact" :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
     <LocalImportDialog v-if="!isCompact && !IS_WEB" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
+    <!-- 网页收集：桌面 dialog / 紧凑 drawer 由组件自身切换；Web 发布版不开放（避免服务端 SSRF） -->
+    <WebpageCollectDialog v-if="!IS_WEB" :model-value="webpageCollectDialog.isOpen.value" @update:model-value="webpageCollectDialog.close" />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
     <el-dialog :model-value="collectMenuDialog.isOpen.value" :z-index="collectMenuDialog.zIndex.value" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
@@ -63,6 +66,12 @@
             <Connection />
           </el-icon>
           <span>{{ $t('gallery.network') }}</span>
+        </div>
+        <div v-if="!IS_WEB" class="collect-menu-option" @click="onDesktopCollectWebpage">
+          <el-icon>
+            <Link />
+          </el-icon>
+          <span>{{ $t('gallery.webpage') }}</span>
         </div>
       </div>
     </el-dialog>
@@ -82,7 +91,7 @@ import { ref, computed, onMounted, watch, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { Plus, FolderOpened, Connection } from "@kabegame/element-plus-icons";
+import { Plus, FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
@@ -90,6 +99,7 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import WebpageCollectDialog from "@/components/WebpageCollectDialog.vue";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import OrganizeDialog from "@/components/OrganizeDialog.vue";
@@ -151,6 +161,7 @@ watch(
 const listenersCreated = ref(false);
 const crawlerDialog = useModal();
 const localImportDialog = useModal();
+const webpageCollectDialog = useModal();
 const mediaPicker = useModal();
 const collectSourcePicker = useModal();
 const collectMenuDialog = useModal();
@@ -170,6 +181,12 @@ const handleShowLocalImport = () => {
   if (IS_WEB) return;
   analytics.track("gallery_import_entry", { entry: "local" });
   localImportDialog.open();
+};
+
+const handleShowWebpageCollect = () => {
+  if (IS_WEB) return;
+  analytics.track("gallery_import_entry", { entry: "webpage" });
+  webpageCollectDialog.open();
 };
 
 const handleOpenCollectMenu = () => {
@@ -247,16 +264,27 @@ const onDesktopCollectNetwork = () => {
   crawlerDialog.open();
 };
 
-// Android：收集方式选择器选「本地」→ MediaPicker，选「远程」→ 收集 drawer
-const handleCollectSourceSelect = (source: "local" | "remote") => {
+// 桌面：选择收集方式对话框 → 网页（先关选择层，再开独立表单）
+const onDesktopCollectWebpage = () => {
+  if (IS_WEB) return;
+  analytics.track("gallery_import_entry", { entry: "webpage", source: "empty_state_dialog" });
+  collectMenuDialog.close();
+  webpageCollectDialog.open();
+};
+
+// 紧凑布局：收集方式选择器选「本地」→ MediaPicker，「远程」→ 收集 drawer，「网页」→ 网页收集 drawer
+const handleCollectSourceSelect = (source: "local" | "remote" | "webpage") => {
   analytics.track("gallery_import_entry", {
-    entry: source === "local" ? "local" : "network",
+    entry: source === "local" ? "local" : source === "webpage" ? "webpage" : "network",
     source: "compact_picker",
   });
   collectSourcePicker.close();
   if (source === "local") {
     if (IS_WEB) return;
     mediaPicker.open();
+  } else if (source === "webpage") {
+    if (IS_WEB) return;
+    webpageCollectDialog.open();
   } else {
     crawlerDrawerStore.open();
   }

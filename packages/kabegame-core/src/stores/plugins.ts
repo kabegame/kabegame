@@ -14,6 +14,9 @@ export type PluginManifestText = Record<string, string>;
 /** 内置本地导入插件 id（爬虫任务、画廊、任务抽屉一致） */
 export const LOCAL_IMPORT_PLUGIN_ID = "local-import" as const;
 
+/** 内置网页收集插件 id（画廊「网页」来源；后端由任务 userConfig.backend 决定） */
+export const WEBPAGE_PLUGIN_ID = "webpage" as const;
+
 /** 单条插件记录的展示名（当前全局 locale + manifest）。 */
 export function resolvePluginRecordDisplayName(plugin: {
   id: string;

@@ -233,6 +233,11 @@ const props = withDefaults(
     active?: boolean;
     /** 可关闭右键菜单 */
     enableContextMenu?: boolean;
+    /**
+     * 任务是否可「打开 WebView」（已由调用方判断运行状态与后端）。
+     * 缺省时按插件静态 `scriptType === "js"` 判断；后端按任务参数决定的内建任务需由应用层传入。
+     */
+    canOpenWebview?: (task: ScriptTask) => boolean;
   }>(),
   { plugins: () => [], active: true, enableContextMenu: true }
 );
@@ -524,8 +529,10 @@ const isJsTask = (pluginId: string) =>
   pluginStore.plugins.find((plugin) => plugin.id === pluginId)?.scriptType === "js";
 
 const shouldShowTaskWebviewButton = (task: ScriptTask) =>
-  (task.status === "running" || task.status === "waiting_downloads") &&
-  isJsTask(task.pluginId);
+  props.canOpenWebview
+    ? props.canOpenWebview(task)
+    : (task.status === "running" || task.status === "waiting_downloads") &&
+      isJsTask(task.pluginId);
 
 async function openTaskWindow(taskId: string) {
   const id = String(taskId || "").trim();

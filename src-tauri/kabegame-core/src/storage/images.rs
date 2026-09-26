@@ -230,22 +230,11 @@ pub(crate) fn insert_metadata_id(
     plugin_version: u32,
 ) -> Result<i64, String> {
     let search_text = search_text_from_json_str(data_json);
-    insert_metadata_id_with_search_text(conn, data_json, plugin_id, plugin_version, &search_text)
-}
-
-/// 同 [`insert_metadata_id`]，但由调用方指定 `search_text`（大文本 metadata 不整体进搜索索引）。
-fn insert_metadata_id_with_search_text(
-    conn: &rusqlite::Connection,
-    data_json: &str,
-    plugin_id: &str,
-    plugin_version: u32,
-    search_text: &str,
-) -> Result<i64, String> {
     let plugin_version_i64 = i64::from(plugin_version);
     conn.execute(
         "INSERT INTO metadata (data, plugin_id, plugin_version, search_text)
          VALUES (?1, ?2, ?3, ?4)",
-        params![data_json, plugin_id, plugin_version_i64, search_text],
+        params![data_json, plugin_id, plugin_version_i64, &search_text],
     )
     .map_err(|e| format!("insert metadata: {}", e))?;
 
@@ -315,30 +304,18 @@ impl Storage {
 
     /// V8 `Kabegame.createImageMetadata`：将 JSON 写入 `metadata` 并返回 id。
     /// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可读写）。
+    /// 页面快照 metadata 先经 `page_snapshot::validate`（空 / 超限直接报错）。
     pub fn insert_metadata_row(
         &self,
         value: &Value,
         plugin_id: &str,
         plugin_version: u32,
     ) -> Result<i64, String> {
+        super::page_snapshot::validate(value)?;
         let s = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         insert_metadata_id(&conn, &s, plugin_id, plugin_version)
-    }
-
-    /// 写入 metadata 行，`search_text` 由调用方给出（畅游页面快照：只索引标题与 URL，不索引整页 HTML）。
-    pub fn insert_metadata_row_with_search_text(
-        &self,
-        value: &Value,
-        plugin_id: &str,
-        plugin_version: u32,
-        search_text: &str,
-    ) -> Result<i64, String> {
-        let s = serde_json::to_string(value)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_metadata_id_with_search_text(&conn, &s, plugin_id, plugin_version, search_text)
     }
 
     /// 读取 metadata 行的 `plugin_id`；行不存在返回 `None`。
@@ -1481,31 +1458,25 @@ mod metadata_search_text_override_tests {
         conn
     }
 
+    fn search_text_of(conn: &rusqlite::Connection, id: i64) -> String {
+        conn.query_row("SELECT search_text FROM metadata WHERE id = ?1", params![id], |row| row.get(0))
+            .unwrap()
+    }
+
     #[test]
-    fn caller_search_text_replaces_flattened_json() {
+    fn page_snapshot_indexes_only_title_and_url() {
         let conn = conn();
-        let data = r#"{"kind":"kabegame.surfPageSnapshot","pageHtml":"<html>huge body</html>"}"#;
-        let id = insert_metadata_id_with_search_text(&conn, data, "example.com", 0, "Title\nhttps://example.com/p")
-            .unwrap();
-        let (search_text, plugin_id): (String, String) = conn
-            .query_row(
-                "SELECT search_text, plugin_id FROM metadata WHERE id = ?1",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
+        let data = r#"{"kind":"kabegame.surfPageSnapshot","title":"Title","sourceUrl":"https://example.com/p","pageHtml":"<html>huge body</html>"}"#;
+        let id = insert_metadata_id(&conn, data, "webpage", 0).unwrap();
+        let search_text = search_text_of(&conn, id);
         assert_eq!(search_text, "Title\nhttps://example.com/p");
         assert!(!search_text.contains("huge body"));
-        assert_eq!(plugin_id, "example.com");
     }
 
     #[test]
     fn default_insert_still_flattens_json() {
         let conn = conn();
         let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0).unwrap();
-        let search_text: String = conn
-            .query_row("SELECT search_text FROM metadata WHERE id = ?1", params![id], |row| row.get(0))
-            .unwrap();
-        assert!(search_text.contains("sakura"));
+        assert!(search_text_of(&conn, id).contains("sakura"));
     }
 }

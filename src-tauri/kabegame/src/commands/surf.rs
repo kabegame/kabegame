@@ -286,15 +286,19 @@ pub async fn surf_start_session<R: Runtime>(
                 include_str!("../webview_js/surf_bootstrap.js"),
                 "\n})();\n"
             ))
-            // 一键下载：发现 / 快照 / 编排拼进同一个封闭 IIFE，不挂 window 全局
-            .initialization_script(concat!(
-                "(function () {\n\"use strict\";\n",
-                include_str!("../webview_js/surf_download_name.js"),
-                include_str!("../webview_js/page_discover.js"),
-                include_str!("../webview_js/page_snapshot.js"),
-                include_str!("../webview_js/surf_collect.js"),
-                "\n})();\n"
-            ))
+            // 一键下载：发现 / 快照 / 编排拼进同一个封闭 IIFE，不挂 window 全局；
+            // 发现脚本是 builtin `webpage` 插件的载荷（core 唯一一份），故运行时拼接。
+            .initialization_script(
+                [
+                    "(function () {\n\"use strict\";\n",
+                    include_str!("../webview_js/surf_download_name.js"),
+                    kabegame_core::plugin::webpage::PAGE_DISCOVER_JS,
+                    include_str!("../webview_js/page_snapshot.js"),
+                    include_str!("../webview_js/surf_collect.js"),
+                    "\n})();\n",
+                ]
+                .concat(),
+            )
             .initialization_script(include_str!("../webview_js/surf_toast.js"))
             .initialization_script(include_str!("../webview_js/surf_context_menu.js"))
             .initialization_script(include_str!("../webview_js/surf_url_report.js"))

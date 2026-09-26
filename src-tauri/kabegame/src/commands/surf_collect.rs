@@ -13,6 +13,7 @@ use std::sync::{LazyLock, Mutex};
 
 use kabegame_core::media::image_type::{supported_image_extensions, supported_video_extensions};
 use kabegame_core::settings::Settings;
+use kabegame_core::storage::page_snapshot::PAGE_SNAPSHOT_KIND;
 use kabegame_core::storage::Storage;
 use kabegame_i18n::t;
 use serde::Serialize;
@@ -21,11 +22,6 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Runtime, Webview};
 
 use super::surf::{host_from_surf_label, is_surf_content_label, normalize_surf_host, surf_label};
-
-/// 快照 HTML 上限；超限拒绝入库（避免 metadata 表被单页撑爆）。
-const MAX_SNAPSHOT_HTML_BYTES: usize = 32 * 1024 * 1024;
-/// 快照 metadata 的类型标记；description 面板据此走快照展示分支。
-pub const SURF_PAGE_SNAPSHOT_KIND: &str = "kabegame.surfPageSnapshot";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -228,27 +224,15 @@ pub async fn surf_save_page_snapshot<R: Runtime>(
             .to_string()
     };
     let page_html = text("pageHtml");
-    if page_html.is_empty() {
-        return Err("Empty page snapshot".to_string());
-    }
-    if page_html.len() > MAX_SNAPSHOT_HTML_BYTES {
-        return Err(format!(
-            "Page snapshot too large: {} bytes (max {MAX_SNAPSHOT_HTML_BYTES})",
-            page_html.len()
-        ));
-    }
-    let source_url = text("sourceUrl");
-    let title = text("title");
     let value = json!({
-        "kind": SURF_PAGE_SNAPSHOT_KIND,
+        "kind": PAGE_SNAPSHOT_KIND,
         "schemaVersion": 1,
-        "sourceUrl": source_url,
+        "sourceUrl": text("sourceUrl"),
         "documentUrl": text("documentUrl"),
-        "title": title,
+        "title": text("title"),
         "pageHtml": page_html,
         "capturedAt": super::crawler::now_ms(),
     });
-    // 只索引标题与 URL：整页 HTML 进搜索会让任意搜词命中无关图片。
-    let search_text = format!("{title}\n{source_url}");
-    Storage::global().insert_metadata_row_with_search_text(&value, &host, 0, &search_text)
+    // 空 / 超限由 core 的 page_snapshot::validate 拒绝；search_text 只含标题与 URL 也由 core 统一处理。
+    Storage::global().insert_metadata_row(&value, &host, 0)
 }

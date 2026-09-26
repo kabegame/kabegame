@@ -248,7 +248,7 @@
                   <SettingSwitchControl setting-key="autoDeduplicate" />
                 </SettingRow>
 
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.surfFreezePage')"
+                <SettingRow v-if="!IS_WEB" :label="$t('settings.surfFreezePage')"
                   :description="$t('settings.surfFreezePageDesc')">
                   <SettingSwitchControl setting-key="surfFreezePage" />
                 </SettingRow>

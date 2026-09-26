@@ -12,6 +12,7 @@ pub mod metadata_migration;
 pub mod v8;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod vfs;
+pub mod webpage;
 
 mod builtin;
 
@@ -127,6 +128,12 @@ impl PluginScript {
 
     pub fn is_builtin(&self) -> bool {
         matches!(self.backend, Some(PluginBackend::Builtin))
+    }
+
+    /// builtin 插件携带的只读载荷（webpage 为页面发现 JS，local-import 为空）。
+    /// 与 [`Self::js_source`] 分开：builtin 载荷不能冒充 WebView 插件脚本。
+    pub fn builtin_source(&self) -> Option<&str> {
+        matches!(self.backend, Some(PluginBackend::Builtin)).then(|| self.source.as_str())
     }
 }
 

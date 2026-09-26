@@ -11,7 +11,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpened, Connection } from "@kabegame/element-plus-icons";
+import { FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
 import { IS_WEB } from "@kabegame/core/env";
 import OptionPickerDrawer from "@kabegame/core/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@kabegame/core/components/common/OptionPickerDrawer.vue";
@@ -21,6 +21,8 @@ interface Props {
   title?: string;
 }
 
+type CollectSource = "local" | "remote" | "webpage";
+
 const props = withDefaults(defineProps<Props>(), {
   title: undefined,
 });
@@ -29,7 +31,7 @@ const resolvedTitle = computed(() => props.title ?? t('gallery.chooseCollectMeth
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
-  (e: "select", source: "local" | "remote"): void;
+  (e: "select", source: CollectSource): void;
 }>();
 
 const sourceOptions = computed<OptionItem[]>(() => [
@@ -45,10 +47,16 @@ const sourceOptions = computed<OptionItem[]>(() => [
     desc: t('gallery.remoteDesc'),
     icon: Connection,
   },
+  ...(!IS_WEB ? [{
+    id: "webpage",
+    title: t('gallery.webpage'),
+    desc: t('gallery.webpageDesc'),
+    icon: Link,
+  }] : []),
 ]);
 
 const handleSelect = (id: string) => {
-  if (id === "local" || id === "remote") {
+  if (id === "local" || id === "remote" || id === "webpage") {
     emit("select", id);
   }
 };

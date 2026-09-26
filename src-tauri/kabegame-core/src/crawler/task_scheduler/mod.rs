@@ -4,6 +4,7 @@ use crate::crawler::downloader::{
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
+use crate::plugin::webpage::WEBPAGE_PLUGIN_ID;
 use crate::plugin::{PluginManager, VarDefinition, VarOption, check_min_app_version};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
@@ -732,127 +733,140 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
                     .await
                     .map_err(TaskError::Other)
             }
+            // 网页收集会向异步下载队列提交候选，必须经下载排空收尾（在各后端路径内完成）
+            WEBPAGE_PLUGIN_ID => {
+                crate::crawler::webpage::run_builtin_webpage(download_queue, Arc::clone(&run)).await
+            }
             other => Err(TaskError::Other(format!("未知内建插件: {other}"))),
         };
     }
 
-    // 从 Plugin 结构读取脚本和变量定义（已在 parse_kgpg 阶段加载到内存）
+    // WebView 后端：仅桌面 CEF。
     #[cfg(not(target_os = "android"))]
-    let js_script = plugin.script.js_source().map(|s| s.to_string());
-
-    #[cfg(not(target_os = "android"))]
-    if let Some(crawl_js) = js_script {
-        let _ = crawl_js;
-        {
-            let mut stack = run.page_stack.lock().unwrap();
-            stack.push(PageStackEntry {
-                url: if run.params.base_url().trim().is_empty() {
-                    "about:blank".to_string()
-                } else {
-                    run.params.base_url().to_string()
-                },
-                html: String::new(),
-                headers: HashMap::new(),
-                page_label: INITIAL_PAGE_LABEL.to_string(),
-                page_state: serde_json::Value::Object(serde_json::Map::new()),
-            });
-        }
-        let (mut completion_rx, mut heartbeat_rx) =
-            run.begin_webview_session().map_err(TaskError::Other)?;
-        let Some(handler) = get_webview_handler() else {
-            return Err(TaskError::Other(
-                "Crawler webview handler is not initialized".to_string(),
-            ));
-        };
-
-        let base_url = if run.params.base_url().trim().is_empty() {
+    if plugin.script.js_source().is_some() {
+        let start_url = if run.params.base_url().trim().is_empty() {
             "about:blank".to_string()
         } else {
             run.params.base_url().to_string()
         };
+        return run_webview_session(&download_queue, &run, start_url).await;
+    }
 
-        if let Err(e) = handler.create_task_window(&run.task_id, &base_url).await {
-            let _ = handler.destroy_task_window(&run.task_id).await;
-            return Err(TaskError::Other(e));
-        }
-
-        // 心跳看门狗:每轮 select 重建 sleep,收到心跳即重置超时;
-        // 超时(渲染进程卡死/崩溃后心跳停止)则以「窗口无响应」结束任务,
-        // 不刷新窗口(刷新会导致任务状态不稳定),走既有失败收尾路径。
-        let completion = loop {
-            tokio::select! {
-                r = &mut completion_rx => {
-                    break r.map_err(|_| {
-                        TaskError::Other("Crawler task completion channel closed".to_string())
-                    });
-                }
-                // 通道关闭时模式不匹配 → 本轮内禁用该分支,继续等 completion/超时。
-                Some(()) = heartbeat_rx.recv() => {}
-                _ = tokio::time::sleep(WEBVIEW_HEARTBEAT_TIMEOUT) => {
-                    GlobalEmitter::global().emit_task_log(
-                        &run.task_id,
-                        "error",
-                        &format!(
-                            "超过 {} 秒未收到 WebView 心跳，判定窗口无响应，结束任务",
-                            WEBVIEW_HEARTBEAT_TIMEOUT.as_secs()
-                        ),
-                    );
-                    break Err(TaskError::Other("WebView 窗口无响应".to_string()));
-                }
-            }
-        };
-        let mut result = match completion {
-            Ok(result) => result,
-            Err(error) => Err(error),
-        };
-        if !matches!(result, Err(TaskError::Canceled)) {
-            wait_task_downloads_drained(&download_queue, &run).await;
-            if run.cancel.is_cancelled() && result.is_ok() {
-                result = Err(TaskError::Canceled);
-            }
-        }
-        let destroy_result = handler.destroy_task_window(&run.task_id).await;
-        if let Err(e) = destroy_result {
-            eprintln!(
-                "Failed to destroy crawler task window {}: {}",
-                run.task_id, e
-            );
-        }
-        return result;
+    // V8 后端：桌面 + Android 均可用。
+    #[cfg(feature = "plugin-runtime")]
+    if plugin.script.v8_source().is_some() {
+        return run_v8_and_drain(&download_queue, &run, crate::plugin::v8::execute_crawler_script_v8)
+            .await;
     }
 
     #[cfg(not(feature = "plugin-runtime"))]
     let _ = &download_queue;
-
-    // V8 后端：桌面 + Android 均可用（WebView 后端在上方，仅桌面 CEF）。
-    #[cfg(feature = "plugin-runtime")]
-    {
-        let v8_script = plugin.script.v8_source().map(|s| s.to_string());
-        if let Some(crawl_v8) = v8_script {
-            let _ = crawl_v8;
-            let run_for_exec = Arc::clone(&run);
-
-            let mut result = tokio::task::spawn_blocking(move || {
-                crate::plugin::v8::execute_crawler_script_v8(run_for_exec)
-            })
-            .await
-            .map_err(|e| TaskError::Other(format!("V8 task worker join error: {}", e)))?;
-
-            if !matches!(result, Err(TaskError::Canceled)) {
-                wait_task_downloads_drained(&download_queue, &run).await;
-                if run.cancel.is_cancelled() && result.is_ok() {
-                    result = Err(TaskError::Canceled);
-                }
-            }
-            return result;
-        }
-    }
 
     // Rhai 后端已移除：走到这里说明插件没有可执行的 v8/webview 脚本。
     Err(TaskError::Other(format!(
         "插件 {} 没有提供可执行的爬虫脚本（需要 v8 或 webview 后端）",
         plugin.id
     )))
+}
+
+/// 在隐藏的爬虫 WebView 窗口里跑一次任务会话：建窗 → 心跳看门狗等完成 → 排空下载 → 销毁窗口。
+/// 窗口注入的脚本由 app crate 的 `CrawlerWebViewHandler` 按任务决定（JS 插件 / 网页收集）。
+#[cfg(not(target_os = "android"))]
+pub(crate) async fn run_webview_session(
+    download_queue: &DownloadQueue,
+    run: &Arc<Task>,
+    start_url: String,
+) -> TaskResult {
+    {
+        let mut stack = run.page_stack.lock().unwrap();
+        stack.push(PageStackEntry {
+            url: start_url.clone(),
+            html: String::new(),
+            headers: HashMap::new(),
+            page_label: INITIAL_PAGE_LABEL.to_string(),
+            page_state: serde_json::Value::Object(serde_json::Map::new()),
+        });
+    }
+    let (mut completion_rx, mut heartbeat_rx) =
+        run.begin_webview_session().map_err(TaskError::Other)?;
+    let Some(handler) = get_webview_handler() else {
+        return Err(TaskError::Other(
+            "Crawler webview handler is not initialized".to_string(),
+        ));
+    };
+
+    if let Err(e) = handler.create_task_window(&run.task_id, &start_url).await {
+        let _ = handler.destroy_task_window(&run.task_id).await;
+        return Err(TaskError::Other(e));
+    }
+
+    // 心跳看门狗:每轮 select 重建 sleep,收到心跳即重置超时;
+    // 超时(渲染进程卡死/崩溃后心跳停止)则以「窗口无响应」结束任务,
+    // 不刷新窗口(刷新会导致任务状态不稳定),走既有失败收尾路径。
+    let completion = loop {
+        tokio::select! {
+            r = &mut completion_rx => {
+                break r.map_err(|_| {
+                    TaskError::Other("Crawler task completion channel closed".to_string())
+                });
+            }
+            // 通道关闭时模式不匹配 → 本轮内禁用该分支,继续等 completion/超时。
+            Some(()) = heartbeat_rx.recv() => {}
+            _ = tokio::time::sleep(WEBVIEW_HEARTBEAT_TIMEOUT) => {
+                GlobalEmitter::global().emit_task_log(
+                    &run.task_id,
+                    "error",
+                    &format!(
+                        "超过 {} 秒未收到 WebView 心跳，判定窗口无响应，结束任务",
+                        WEBVIEW_HEARTBEAT_TIMEOUT.as_secs()
+                    ),
+                );
+                break Err(TaskError::Other("WebView 窗口无响应".to_string()));
+            }
+        }
+    };
+    let mut result = match completion {
+        Ok(result) => result,
+        Err(error) => Err(error),
+    };
+    if !matches!(result, Err(TaskError::Canceled)) {
+        wait_task_downloads_drained(download_queue, run).await;
+        if run.cancel.is_cancelled() && result.is_ok() {
+            result = Err(TaskError::Canceled);
+        }
+    }
+    let destroy_result = handler.destroy_task_window(&run.task_id).await;
+    if let Err(e) = destroy_result {
+        eprintln!(
+            "Failed to destroy crawler task window {}: {}",
+            run.task_id, e
+        );
+    }
+    result
+}
+
+/// 在阻塞线程上执行一次 V8 入口，结束后排空该任务的下载。
+#[cfg(feature = "plugin-runtime")]
+pub(crate) async fn run_v8_and_drain<F>(
+    download_queue: &DownloadQueue,
+    run: &Arc<Task>,
+    exec: F,
+) -> TaskResult
+where
+    F: FnOnce(Arc<Task>) -> TaskResult + Send + 'static,
+{
+    let run_for_exec = Arc::clone(run);
+    let mut result = tokio::task::spawn_blocking(move || exec(run_for_exec))
+        .await
+        .map_err(|e| TaskError::Other(format!("V8 task worker join error: {}", e)))?;
+
+    if !matches!(result, Err(TaskError::Canceled)) {
+        wait_task_downloads_drained(download_queue, run).await;
+        if run.cancel.is_cancelled() && result.is_ok() {
+            result = Err(TaskError::Canceled);
+        }
+    }
+    result
 }
 
 #[derive(Debug, Serialize, Deserialize)]

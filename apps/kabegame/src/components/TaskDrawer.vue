@@ -11,14 +11,14 @@
         </el-tooltip>
       </div>
     </template>
-    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" @clear-finished-tasks="handleDeleteAllTasks"
+    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" :can-open-webview="canOpenWebview" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
   <el-drawer v-else :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" :title="$t('tasks.taskList')" size="460px" direction="rtl" :with-header="true"
     :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width" @update:model-value="modal.close">
-    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" @clear-finished-tasks="handleDeleteAllTasks"
+    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" :can-open-webview="canOpenWebview" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import { canOpenTaskWebview } from "@/utils/webpageCollect";
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
@@ -116,6 +117,9 @@ const saveConfigName = ref("");
 const saveConfigDescription = ref("");
 
 const plugins = computed(() => pluginStore.plugins);
+// 网页收集的后端是每次任务的参数，不能只看插件静态 scriptType
+const canOpenWebview = (task: Parameters<typeof canOpenTaskWebview>[0]) =>
+  canOpenTaskWebview(task, pluginStore.plugins);
 const nonRunningTasksCount = computed(() =>
   props.tasks.filter(
     (task) =>

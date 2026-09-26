@@ -69,6 +69,13 @@ pub async fn start_task(task: Value) -> Result<String, String> {
     }
 
     let p: StartTaskParams = serde_json::from_value(task).map_err(|e| e.to_string())?;
+    // 网页收集：前端校验之外必须再校验一次，非法直接拒绝，不创建任务记录
+    if p.plugin_id == crate::plugin::webpage::WEBPAGE_PLUGIN_ID {
+        crate::crawler::webpage::validate_submission(
+            p.user_config.as_ref(),
+            p.http_headers.as_ref(),
+        )?;
+    }
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let images_dir = crate::crawler::downloader::resolve_crawl_output_dir(p.output_dir.as_deref());

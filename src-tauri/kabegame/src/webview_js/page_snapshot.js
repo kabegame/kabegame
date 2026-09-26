@@ -1,5 +1,5 @@
 // 页面快照：把当前 DOM 序列化为「HTML + 内联 CSS」的静态文档；不挂 window。
-// 由 surf.rs 以 concat! 拼进内容页 IIFE。
+// 由 surf.rs 拼进畅游内容页 IIFE；网页收集 WebView 任务把它拼进爬虫窗口的 crawl_js（startup.rs）。
 //
 // 只保存 HTML 与 CSS：图片等子资源仍引用远程绝对地址（回看时由 <base> 解析）。
 // 样式必须内联——回看的 srcdoc 继承应用 CSP（style-src 'self' 'unsafe-inline'），跨域 <link> 会被拦。

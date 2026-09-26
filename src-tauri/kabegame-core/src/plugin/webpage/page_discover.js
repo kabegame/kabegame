@@ -1,5 +1,9 @@
-// 页面媒体发现：只扫描调用时的当前 document，返回候选 URL；不下载、不依赖任务、不挂 window。
-// 由 surf.rs 以 concat! 拼进内容页 IIFE；未来 webpage WebView runner 以同样方式复用（见 PRD 4.5）。
+// 页面媒体发现：只扫描给定（缺省为当前）document，返回候选 URL；不下载、不依赖任务、不挂 window。
+// 这是 builtin `webpage` 插件的载荷（`PluginScript::builtin_source()`），唯一一份，三处复用：
+// - 畅游一键下载：surf.rs 拼进内容页封闭 IIFE，扫描实时 DOM；
+// - 网页收集 WebView：拼进爬虫窗口 bootstrap 的 crawl_js 槽位，扫描滚动后的实时 DOM；
+// - 网页收集 V8：与 webpage_host_collect.js 拼成 ES 模块，扫描 DOMParser 解析的静态文档
+//   （此时传 options.document / documentUrl / baseUrl；静态文档无 currentSrc / naturalWidth，相关分支自然跳过）。
 //
 // 来源参考 yt-dlp GenericIE（HTML5 media → og/twitter meta → JSON-LD → JW Player / video.js 脚本配置），
 // 但与 yt-dlp「命中即返回」不同，这里取并集：目标是整页所有媒体，而非单个视频。
@@ -12,7 +16,9 @@
   function discoverMedia(options) {
     const imageExts = new Set((options && options.imageExtensions) || []);
     const videoExts = new Set((options && options.videoExtensions) || []);
-    const documentUrl = location.href;
+    const doc = (options && options.document) || document;
+    const documentUrl = (options && options.documentUrl) || location.href;
+    const baseUrl = (options && options.baseUrl) || doc.baseURI || documentUrl;
     const seen = new Set();
     const candidates = [];
 
@@ -40,7 +46,7 @@
       // 脚本字符串里常见的转义：\/ 与 /
       value = value.replace(/\\\//g, "/").replace(/\\u002[fF]/g, "/");
       try {
-        const url = new URL(value, base || document.baseURI);
+        const url = new URL(value, base || baseUrl);
         if (url.protocol !== "http:" && url.protocol !== "https:") return null;
         url.hash = "";
         return url.href;
@@ -80,21 +86,21 @@
     }
 
     // 0) 文档本身就是媒体（直接打开的图片/视频）
-    const contentType = String(document.contentType || "").toLowerCase();
+    const contentType = String(doc.contentType || "").toLowerCase();
     if (contentType.startsWith("image/") || contentType.startsWith("video/")) {
       add(documentUrl, contentType.startsWith("video/") ? "video" : "image");
       return { candidates, documentUrl };
     }
 
     // 1) HTML5 media（yt-dlp _parse_html5_media_entries）
-    for (const video of document.querySelectorAll("video")) {
+    for (const video of doc.querySelectorAll("video")) {
       if (!/^blob:/i.test(video.currentSrc || "")) add(video.currentSrc || video.getAttribute("src"), "video");
       for (const source of video.querySelectorAll("source[src]")) add(source.getAttribute("src"), "video");
       add(video.getAttribute("poster"), "image");
     }
 
     // 2) 图片：真实加载地址、srcset 最大项、懒加载属性
-    for (const img of document.querySelectorAll("img")) {
+    for (const img of doc.querySelectorAll("img")) {
       const loaded = img.complete && img.naturalWidth > 0;
       const tiny =
         loaded &&
@@ -107,14 +113,14 @@
       for (const attr of DISCOVER_LAZY_SRCSET_ATTRS) add(largestFromSrcset(img.getAttribute(attr)), "image");
       for (const attr of DISCOVER_LAZY_ATTRS) add(img.getAttribute(attr), "image");
     }
-    for (const source of document.querySelectorAll("picture source[srcset]")) {
+    for (const source of doc.querySelectorAll("picture source[srcset]")) {
       add(largestFromSrcset(source.getAttribute("srcset")), "image");
     }
 
     // 3) meta：Twitter card 与 Open Graph（og:video 仅在 og:video:type 为视频时采纳，同 yt-dlp）
     const meta = (name) =>
       Array.from(
-        document.querySelectorAll(`meta[property="${name}"], meta[name="${name}"]`),
+        doc.querySelectorAll(`meta[property="${name}"], meta[name="${name}"]`),
         (el) => el.getAttribute("content"),
       );
     for (const name of ["og:image", "og:image:url", "og:image:secure_url", "twitter:image", "twitter:image:src"]) {
@@ -145,18 +151,18 @@
       if (typeof node.url === "string" && /ImageObject/i.test(type)) add(node.url, "image");
       for (const key of ["@graph", "associatedMedia", "video", "hasPart"]) walkLd(node[key], depth + 1);
     }
-    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
       try {
         walkLd(JSON.parse(script.textContent || "null"), 0);
       } catch (_) {}
     }
 
     // 5) 直链：a[href] 仅当扩展名已能确认是受支持媒体
-    for (const a of document.querySelectorAll("a[href]")) add(a.getAttribute("href"), null);
+    for (const a of doc.querySelectorAll("a[href]")) add(a.getAttribute("href"), null);
 
     // 6) 播放器脚本配置（yt-dlp 的 JW Player / loader / video.js 形态），只收扩展名命中的 http(s) 直链
     const scriptPattern = /["']?(?:file|src|video_url|videoUrl|contentUrl)["']?\s*[:=]\s*["'](https?:[^"'\s]+)["']/g;
-    for (const script of document.querySelectorAll("script:not([src])")) {
+    for (const script of doc.querySelectorAll("script:not([src])")) {
       const text = script.textContent || "";
       if (!text || text.length > 2 * 1024 * 1024) continue;
       for (const match of text.matchAll(scriptPattern)) add(match[1], null);

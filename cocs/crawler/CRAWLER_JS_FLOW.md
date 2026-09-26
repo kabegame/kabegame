@@ -45,14 +45,24 @@
 
 `TaskScheduler::enqueue` 是参数冻结边界：
 
-- 所有任务（普通插件和内建 `local-import`）都走同一条冻结路径：提交时执行 `resolve_plugin_for_task_request`、`check_min_app_version`、`resolve_crawl_output_dir`、`build_effective_user_config_from_var_defs`，并把结果存入 `TaskParams`。
-- `local-import` 是 `PluginBackend::Builtin` 插件，`PluginManager::get` 先查内建静态表；内建插件不进入 `get_all`，但 `get_plugins` / web 插件索引 / IPC 列表会追加 `scriptType=builtin` 的内建记录，前端管理类列表用 `visiblePlugins` 过滤隐藏。同名 kgpg 双重防护：`parse_kgpg` 在安装/临时运行/商店缓存入口统一拒绝内建保留 id（`refresh_plugins` 扫描对同名文件先行跳过、`refresh_plugin` 对内建 id no-op，避免残留文件炸掉整次刷新），运行时 `get()` 另有内建优先兜底。
+- 所有任务（普通插件和内建 `local-import` / `webpage`）都走同一条冻结路径：提交时执行 `resolve_plugin_for_task_request`、`check_min_app_version`、`resolve_crawl_output_dir`、`build_effective_user_config_from_var_defs`，并把结果存入 `TaskParams`。
+- `local-import` 与 `webpage` 是 `PluginBackend::Builtin` 插件（`plugin/builtin.rs` 静态表，公共字段统一显式赋值：版本 `1.0.0`、共享图标、`recommended_configs = []`），`PluginManager::get` 先查内建静态表；内建插件不进入 `get_all`，但 `get_plugins` / web 插件索引 / IPC 列表会追加 `scriptType=builtin` 的内建记录，前端管理类列表用 `visiblePlugins` 过滤隐藏。同名 kgpg 双重防护：`parse_kgpg` 在安装/临时运行/商店缓存入口统一拒绝内建保留 id（`refresh_plugins` 扫描对同名文件先行跳过、`refresh_plugin` 对内建 id no-op，避免残留文件炸掉整次刷新），运行时 `get()` 另有内建优先兜底。
 - 内建插件展示元数据（`name` / `description` / `iconPngBase64` / `config.vars`）由后端静态表下发，前端任务抽屉和运行参数展示不再维护 `local-import` 名称、图标、变量名特判。
-- `TaskParams.plugin` 是非空 `Arc<Plugin>`，不再保存冗余 `plugin_id`；`plugin_version()` / `base_url()` 直接从 `plugin` 派生。内建插件 `var_defs` 为空，配置合并会原样透传用户配置。
+- `TaskParams.plugin` 是非空 `Arc<Plugin>`，不再保存冗余 `plugin_id`；`plugin_version()` / `base_url()` 直接从 `plugin` 派生。`local-import` 的 `var_defs` 为空，配置合并原样透传；`webpage` 的变量（`url` / `backend` / `injectSurfCookie` / `injectCefUserAgent`）以 manifest 扁平格式定义一次，同时生成 `var_defs` 与前端 `config.vars`，默认值经合并补齐。
+- `TaskParams::uses_webview_transport()` 是下载 transport 的唯一判据：普通插件看静态 `js_source()`，`webpage` 看本次任务 `backend == "webview"`。下载队列 `is_native_job` 据此把请求交给任务 CEF 窗口（保留 Cookie / 登录态）。
 
 worker 启动后不再重新解析 DB/PluginManager。提交失败由 `enqueue` 内统一把任务 transition 到 `Failed`。
 
-`run_task` 先按 `plugin.script.is_builtin()` 分发内建插件；当前仅 `local-import` 路由到 `run_builtin_local_import`。非内建任务再按 WebView/V8 脚本后端运行。
+`run_task` 先按 `plugin.script.is_builtin()` 分发内建插件：`local-import` 路由到 `run_builtin_local_import`（同步后处理，直接返回）；`webpage` 路由到 `crawler::webpage::run_builtin_webpage`。非内建任务再按 WebView/V8 脚本后端运行。WebView 会话（建窗 → 心跳看门狗 → 排空下载 → 销毁窗口）与 V8「执行 + 排空下载」分别抽成 `run_webview_session(start_url)` / `run_v8_and_drain(exec)`，普通插件与 `webpage` 共用；V8 入口 `plugin::v8::execute_v8_entry` 接受宿主给出的模块与 `common` / `custom`。
+
+### 3.1.1 内建 `webpage`（网页收集）
+
+- **一份发现脚本三处复用**：`plugin/webpage/page_discover.js` 是 `webpage` 的 builtin 载荷（`PluginScript::builtin_source()`，与 `js_source()` 分开，builtin 不能冒充 WebView 插件）。`discoverMedia(options)` 可传 `document / documentUrl / baseUrl`，缺省取全局 `document` / `location`。畅游一键下载（`surf.rs`）、网页 WebView 任务、网页 V8 任务都拼接同一份文件。
+- **公共编排** `plugin/webpage/webpage_collect.js`：按冻结开关写一次共享快照 metadata（失败 / 超 32MB 只 warn，媒体照常无 metadata 下载），逐个 `Kabegame.downloadImage(url, { url: 初始 URL, metadata_id })`，单项失败计数、取消上抛；日志用 `{"_i18n":{k,p}}`（前端 `tasks.taskLogWebpage*`）。两运行时 Kabegame API 同形，故 V8 与 WebView 共用。
+- **V8 后端**（`backend = "v8"`，桌面 + Android）：`v8_collect_module()` = 发现 + 公共编排 + `webpage_v8_collect.js`。先按开关注入身份（`injectCefUserAgent` → `Kabegame.cefUserAgent()` 写 `User-Agent`；`injectSurfCookie` → `Kabegame.requireCookie(hostname)` 从畅游记录写 `Cookie`；两者默认开，**用户在任务 Header 里显式写过的同名头优先**，名单由 Rust 经 `common.userHeaderNames` 下发），再 `Kabegame.to` 静态取页（代理、手动重定向、重试、取消、任务 Header），入口扩展名或响应 content-type 为媒体则只下它（快照是最小 H5），否则 `currentDocument()`（deno_dom）+ `<base href>` 解析后调 `discoverMedia`。快照为原始响应 HTML（前置 charset + base），**无 CSS**。
+- **WebView 后端**（`backend = "webview"`，仅桌面）：`run_webview_session(start_url = 用户 URL)`；app 的 `create_task_window` 按 `crawler::webpage::is_webview_task` 把 crawl_js 换成「发现 + `page_snapshot.js` + 公共编排 + `webview_js/webpage_webview_collect.js`」，vars = userConfig ∪ `collect_params`（冻结开关、`MEDIA_FORMATS` 扩展名）。脚本等 DOMContentLoaded → 增量滚动（高度连续 3 轮不变即停，最多 30 次 / 20 秒）→ 发现 → 冻结 HTML+CSS → 下载 → `exit`。bootstrap 每次整页导航都会重跑：进入下载阶段前以 `updateState({ webpageStarted })` 打标，之后的导航不再重复收集。任务 Header 必须为空（身份只来自浏览器会话）。
+- **校验**：`start_task` 对 `pluginId == webpage` 先 `validate_submission`（绝对 http(s)、无 userinfo；Android 拒绝 webview；Header 名去空白后非空、无 `:`/CR/LF、拒绝 `Host`/`Content-Length`/`Connection`/`Transfer-Encoding`，值无 CR/LF，错误不回显值），非法直接不建任务；runner 开头再校验一次。
+- **已知限制**：注入的 Cookie 是任务级头，与插件 `requireCookie` 一致，也会随媒体请求发往候选所在的第三方域名；WebView 页面若先出挑战页再跳转，只要在进入下载阶段前跳转就会在新页重新收集，否则需用户从任务抽屉打开窗口处理后重跑。
 
 ### 3.2 Task 内状态
 

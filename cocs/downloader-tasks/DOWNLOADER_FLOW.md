@@ -41,7 +41,8 @@ JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通�
 | `src-tauri/kabegame-core/src/plugin/vfs.rs`、`src-tauri/kabegame-core/src/plugin/ffmpeg.rs` | 任务/会话虚拟路径安全边界；虚拟路径上的显式媒体合流与探测 |
 | `src-tauri/kabegame/src/webview_js/media_capture.js`、`src-tauri/kabegame/src/webview_js/media_download.js` | 捕获 Blob/MSE；以 Raw IPC 分块写入会话 VFS、显式合流并提交 |
 | `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs`、`src-tauri/kabegame/src/commands/surf_session.rs` | 桌面 WebView/CEF 下载投递与回传；fs/ffmpeg 命令按窗口 label 选择 VFS；surf 会话 VFS 与 Path 直通导入 |
-| `src-tauri/kabegame/src/commands/surf_collect.rs`、`src-tauri/kabegame/src/webview_js/{page_discover,page_snapshot,surf_collect,surf_download_name}.js`、`apps/kabegame/src/surf-navbar.ts` | 畅游一键下载：Rust 权威的 run 状态机、Channel 通信、页面媒体发现与 HTML+CSS 快照 |
+| `src-tauri/kabegame/src/commands/surf_collect.rs`、`src-tauri/kabegame/src/webview_js/{page_snapshot,surf_collect,surf_download_name}.js`、`src-tauri/kabegame-core/src/plugin/webpage/page_discover.js`、`apps/kabegame/src/surf-navbar.ts` | 畅游一键下载：Rust 权威的 run 状态机、Channel 通信、页面媒体发现（builtin `webpage` 载荷）与 HTML+CSS 快照 |
+| `src-tauri/kabegame-core/src/storage/page_snapshot.rs` | 冻结网页快照 metadata 的统一规则：`kind`、32MB 上限、search_text 只含标题与 URL |
 | `src-tauri/kabegame-core/src/crawler/task_scheduler/mod.rs`、`src-tauri/kabegame-core/src/crawler/task_scheduler/task.rs` | crawl task 调度；运行中 `Task` 注册表；任务级 header/display_name/metadata 快照回放；失败图片重试入口 |
 | `src-tauri/kabegame/src/commands/task.rs` | 失败项重试、取消重试、删除失败项等命令入口 |
 | `apps/kabegame/src/stores/failedImages.ts` | 前端失败图片事件增量同步 |
@@ -251,7 +252,7 @@ surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`st
 
 导航栏右侧的“一键下载”按钮扫描当前页媒体并逐个入队；转圈期间再点一次即取消。
 
-**Rust 是运行状态的唯一权威，内容页不暴露新的 window 全局。** `page_discover.js`、`page_snapshot.js`、`surf_collect.js` 与共享的 `surf_download_name.js` 由 `surf.rs` 以 `concat!(include_str!…)` 拼进同一个封闭 IIFE，彼此只做局部函数调用（`surf_bootstrap.js` 同样与 `surf_download_name.js` 拼接）。页面加载时脚本用 `__TAURI_INTERNALS__.transformCallback` 拼出 `"__CHANNEL__:<id>"`，经 `surf_collect_attach` 交给 Rust 一条 Tauri `Channel`；Rust 只经它发 `start` / `cancel`，JS 端按 `index` 保序。**不给内容 capability 开 `core:event:*`**：内容页是任意 remote 站点，开放事件监听等于让站点收听应用全局广播。
+**Rust 是运行状态的唯一权威，内容页不暴露新的 window 全局。** `page_discover.js`（core `plugin::webpage::PAGE_DISCOVER_JS`，builtin `webpage` 的载荷）、`page_snapshot.js`、`surf_collect.js` 与共享的 `surf_download_name.js` 由 `surf.rs` 运行时拼接进同一个封闭 IIFE，彼此只做局部函数调用（`surf_bootstrap.js` 同样与 `surf_download_name.js` 拼接）。页面加载时脚本用 `__TAURI_INTERNALS__.transformCallback` 拼出 `"__CHANNEL__:<id>"`，经 `surf_collect_attach` 交给 Rust 一条 Tauri `Channel`；Rust 只经它发 `start` / `cancel`，JS 端按 `index` 保序。**不给内容 capability 开 `core:event:*`**：内容页是任意 remote 站点，开放事件监听等于让站点收听应用全局广播。
 
 `surf_collect.rs` 按内容 label 维护 `{ channel, active_run }`：
 
@@ -267,11 +268,13 @@ surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`st
 
 `surf_download_image` 带 `collectRunId` 时 Rust 先校验 run 仍活跃（取消后拒绝，Channel 消息迟到也不会多下），并以 `blocking=true` 入队（等下载池有空位），让取消能拦下尚未入队的候选；已入队的项照常下载。右键下载不传此参数，行为不变。
 
-**发现**（`page_discover.js`，参考 yt-dlp GenericIE，但取并集而非命中即返回）：文档本身是媒体则只返回它；`video[src]`/`source`/`poster`（跳过 `blob:`）；`img` 的 srcset 最大项或 `currentSrc`、懒加载属性（已加载且任一边 < 64px 的小图跳过当前地址，但照收懒加载属性——占位图常是 1x1）；`picture source[srcset]`；og/twitter meta（og:video 仅在 og:video:type 为视频时采纳）；JSON-LD `contentUrl`/`image`；扩展名命中的 `a[href]`；内联脚本里 `file/src/video_url/contentUrl` 的直链。只收 http(s)，去 fragment 去重，丢弃 m3u8/mpd 等流清单（下载器不支持）。扩展名表由 Rust 从 `MEDIA_FORMATS` 下发，不在 JS 硬编码。脚本不依赖任务、不下载，供 webpage WebView runner 以同样的 `concat!` 方式复用。
+**发现**（`page_discover.js`，参考 yt-dlp GenericIE，但取并集而非命中即返回）：文档本身是媒体则只返回它；`video[src]`/`source`/`poster`（跳过 `blob:`）；`img` 的 srcset 最大项或 `currentSrc`、懒加载属性（已加载且任一边 < 64px 的小图跳过当前地址，但照收懒加载属性——占位图常是 1x1）；`picture source[srcset]`；og/twitter meta（og:video 仅在 og:video:type 为视频时采纳）；JSON-LD `contentUrl`/`image`；扩展名命中的 `a[href]`；内联脚本里 `file/src/video_url/contentUrl` 的直链。只收 http(s)，去 fragment 去重，丢弃 m3u8/mpd 等流清单（下载器不支持）。扩展名表由 Rust 从 `MEDIA_FORMATS` 下发，不在 JS 硬编码。脚本不依赖任务、不下载；可传 `document / documentUrl / baseUrl` 扫描非全局文档，网页收集的 WebView（实时 DOM）与 V8（deno_dom 静态文档）后端复用同一份（见 [CRAWLER_JS_FLOW.md](../crawler/CRAWLER_JS_FLOW.md) 3.1.1）。
 
-**快照**（开关 `surfFreezePage`，位于设置「下载」分区，默认开，仅桌面）：`page_snapshot.js` 克隆 DOM，按顺序回填 `img.currentSrc`，删除 script/iframe/object/样式节点/`on*`/`javascript:` 与 Kabegame toast；遍历 `styleSheets` + `adoptedStyleSheets` 读 `cssRules`（可拿到 CSS-in-JS 规则），跨域不可读时 `fetch(href, {credentials:"omit"})`，`url()`/`@import` 按表 href 绝对化后合成一个 `<style>`；head 前置 `<meta charset>` 与 `<base href>`。样式必须内联：回看的 srcdoc 继承应用 CSP（`style-src 'self' 'unsafe-inline'`）。
+**快照**（开关 `surfFreezePage`，设置文案「冻结网页」，位于设置「下载」分区，默认开；同时作用于网页收集任务，故 Android 也显示）：`page_snapshot.js` 克隆 DOM，按顺序回填 `img.currentSrc`，删除 script/iframe/object/样式节点/`on*`/`javascript:` 与 Kabegame toast；遍历 `styleSheets` + `adoptedStyleSheets` 读 `cssRules`（可拿到 CSS-in-JS 规则），跨域不可读时 `fetch(href, {credentials:"omit"})`，`url()`/`@import` 按表 href 绝对化后合成一个 `<style>`；head 前置 `<meta charset>` 与 `<base href>`。样式必须内联：回看的 srcdoc 继承应用 CSP（`style-src 'self' 'unsafe-inline'`）。
 
-快照以 `{ kind: "kabegame.surfPageSnapshot", schemaVersion: 1, sourceUrl, documentUrl, title, pageHtml, capturedAt }` 写入 **metadata 表**一次（上限 32 MB，`plugin_id` = host），同批 `surf_download_image(metadataId)` 共享该 id；Rust 校验该行 `plugin_id` 等于当前 host 才允许引用。`search_text` 只写标题与 URL（`insert_metadata_row_with_search_text`），整页 HTML 不进搜索索引。
+快照以 `{ kind: "kabegame.surfPageSnapshot", schemaVersion: 1, sourceUrl, documentUrl, title, pageHtml, capturedAt, backend? }` 写入 **metadata 表**一次，同批下载共享该 id。畅游行的 `plugin_id` = host，`surf_download_image(metadataId)` 校验该行 `plugin_id` 等于当前 host 才允许引用；网页收集行由 `Task::insert_metadata` 盖 `plugin_id = webpage`，`backend` 为 `v8` / `webview`，`sourceUrl` 恒为用户初始 URL（与 `images.post_url` 一致）。**规则统一在 core `storage::page_snapshot`**：`insert_metadata_row` 写入前 `validate`（空 / 超 32MB 报错），`search_text_from_json_str` 遇到该 `kind` 只索引标题与 URL，整页 HTML 不进搜索索引。`kind` 名沿用畅游首发叫法，已有数据按它识别，勿改。
+
+网页收集的冻结差异：V8 后端只能拿到服务端响应 HTML（前置 charset 与 base，**无 CSS**，子资源仍远程加载）；WebView 后端走同一个 `page_snapshot.js`，保存 HTML+CSS。超限时跳过快照并写 warn，媒体照常下载（无 metadata）。
 
 图片详情的 `ImagePluginDescriptionPanel` 识别该 `kind`，优先于 EJS / 原始字段展示：顶部标题 + 刷新按钮（递增 iframe `key` 重新挂载子页面，重载远程子资源）+ “打开原网页”（`openExternalLink`，仅 http/https），下方 `sandbox=""` 的 iframe，srcdoc 前置内层 CSP（只放行远程图片/媒体与内联样式）。畅游图片 `images.plugin_id` 为空，面板按 `surfRecordId` 放行 metadata 加载。
 

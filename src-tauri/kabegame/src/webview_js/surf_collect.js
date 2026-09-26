@@ -1,5 +1,5 @@
-// 畅游一键下载：内容页编排。由 surf.rs 以 concat! 与 surf_download_name.js / page_discover.js /
-// page_snapshot.js 拼进同一个 IIFE，不挂任何 window 全局（页面脚本无从探测）。
+// 畅游一键下载：内容页编排。由 surf.rs 与 surf_download_name.js / page_discover.js（core builtin
+// `webpage` 载荷）/ page_snapshot.js 拼进同一个 IIFE，不挂任何 window 全局（页面脚本无从探测）。
 //
 // Rust 是运行状态的唯一权威：本脚本经 Tauri Channel 接收 start / cancel，不监听应用事件。
 // 协议与 @tauri-apps/api 的 Channel 一致：参数传 "__CHANNEL__:<callbackId>"，

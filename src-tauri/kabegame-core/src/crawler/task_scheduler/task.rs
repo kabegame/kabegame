@@ -35,6 +35,13 @@ impl TaskParams {
     pub fn base_url(&self) -> &str {
         &self.plugin.base_url
     }
+
+    /// 下载是否交给本任务的 CEF 窗口执行（保留浏览器 Cookie / 登录态）。
+    /// 普通插件看静态脚本类型；builtin `webpage` 看每次任务选择的后端。
+    pub fn uses_webview_transport(&self) -> bool {
+        self.plugin.script.js_source().is_some()
+            || crate::crawler::webpage::is_webview_task(&self.plugin.id, &self.config)
+    }
 }
 
 pub struct WebviewSession {

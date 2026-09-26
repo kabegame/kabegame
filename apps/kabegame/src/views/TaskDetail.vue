@@ -86,6 +86,7 @@ import {
   taskDetailStickySearchMode,
 } from "@/stores/taskDetailRoute";
 import { IS_WEB } from "@kabegame/core/env";
+import { canOpenTaskWebview } from "@/utils/webpageCollect";
 import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
@@ -210,8 +211,7 @@ const shouldShowStopButton = computed(() => {
 
 const showOpenWebview = computed(() => {
     const tsk = task.value;
-    if (!tsk || (tsk.status !== "running" && tsk.status !== "waiting_downloads")) return false;
-    return pluginStore.plugins.find((plugin) => plugin.id === tsk.pluginId)?.scriptType === "js";
+    return !!tsk && canOpenTaskWebview(tsk, pluginStore.plugins);
 });
 
 async function handleOpenTaskWebview() {

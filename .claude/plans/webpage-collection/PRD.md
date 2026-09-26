@@ -6,6 +6,24 @@
 >
 > 内置任务 ID：`webpage`
 
+## 实施结论（已落地，覆盖下文相应条款）
+
+评审后按以下决定实现；下文保留原始评审稿，冲突处以本节为准。
+
+- **后端改名为 `v8` / `webview`**（不再叫 host / Rust）。V8 后端在已有 V8 运行时里执行：`Kabegame.to` 静态取页 →
+  deno_dom `DOMParser` → 与畅游、WebView 共用的**同一份** `page_discover.js`（现位于
+  `src-tauri/kabegame-core/src/plugin/webpage/`，即 `PluginScript::builtin_source()`）。不在 Rust 重写发现规则，
+  也不需要双端 fixture 对齐；发现范围 = `page_discover.js` 全部规则（含 JSON-LD、内联脚本直链），不按 4.2 收窄。
+- **V8 身份注入**：新增插件变量 `injectSurfCookie`（自动尝试注入畅游 Cookie）与 `injectCefUserAgent`（自动注入
+  CEF UA），默认均打开，只在 `backend = v8` 时显示与生效；用户在 HTTP Header 里显式写过的同名头优先。
+- **快照复用畅游形状**：metadata 为 `kind: "kabegame.surfPageSnapshot"`（另带 `backend: "v8" | "webview"`），
+  详情由现有面板渲染；**不做** `webpage_description.ejs`，`description_template = None`。
+- **冻结开关复用 `surfFreezePage`**（文案改为「冻结网页」，Android 也显示）：V8 只冻结响应 HTML（无 CSS），
+  WebView 用 `page_snapshot.js` 冻结 HTML+CSS。快照超 32MB 时跳过快照并 warn，媒体照常下载。
+- **平台**：Web 发布版隐藏入口；Android 仅 V8；WebView 固定自动滚动（3 轮稳定 / 30 次 / 20 秒）。
+
+实现细节见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.1.1 与 `cocs/downloader-tasks/DOWNLOADER_FLOW.md`「畅游一键下载与页面快照」。
+
 ## 总体设计思路
 
 “网页”不是“网络”来源里的又一个可安装插件，而是一项随应用发布的通用单页媒体收集能力。

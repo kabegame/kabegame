@@ -1,5 +1,5 @@
 <template>
-  <!-- 安卓：单按钮打开「本地/远程」选择 picker，无下拉箭头 -->
+  <!-- 安卓：单按钮打开「本地/网络/网页」选择 picker，无下拉箭头 -->
   <el-button v-if="uiStore.isCompact" type="primary" class="collect-btn" @click="emit('action', { type: 'openMenu' })">
     <el-icon>
       <Plus />
@@ -26,6 +26,10 @@
           <el-icon><Connection /></el-icon>
           {{ t('gallery.network') }}
         </el-dropdown-item>
+        <el-dropdown-item v-if="!IS_WEB" command="webpage">
+          <el-icon><Link /></el-icon>
+          {{ t('gallery.webpage') }}
+        </el-dropdown-item>
       </el-dropdown-menu>
     </template>
   </el-dropdown>
@@ -33,7 +37,7 @@
 
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
-import { Plus, ArrowDown, FolderOpened, Connection } from "@kabegame/element-plus-icons";
+import { Plus, ArrowDown, FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WEB } from "@kabegame/core/env";
 

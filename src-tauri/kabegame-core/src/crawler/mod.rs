@@ -5,6 +5,7 @@ pub mod local_import;
 pub mod proxy;
 pub mod task_log_i18n;
 pub mod task_scheduler;
+pub mod webpage;
 pub mod webview;
 
 pub use downloader::{create_client, ActiveDownloadInfo, DownloadQueue};

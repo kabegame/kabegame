@@ -303,7 +303,20 @@ pub fn execute_crawler_script_v8(run: Arc<Task>) -> TaskResult {
         .ok_or_else(|| TaskError::Other(format!("插件 {} 没有提供 V8 脚本", plugin.id)))?
         .to_string();
     let (common, custom) = build_crawl_configs(plugin, run.params.config.clone());
-    let plugin_id = run.params.plugin.id.clone();
+    let plugin_id = plugin.id.clone();
+    execute_v8_entry(run, &plugin_id, script_content, common, custom)
+}
+
+/// 在新 V8 运行时里执行一个自包含 `crawl(common, custom)` 模块，绑定任务取消。
+/// 普通 V8 插件与 builtin `webpage` 的 V8 后端共用（后者的模块与参数由宿主给出）。
+pub fn execute_v8_entry(
+    run: Arc<Task>,
+    plugin_id: &str,
+    entry_code: String,
+    common: JsonValue,
+    custom: JsonValue,
+) -> TaskResult {
+    let plugin_id = plugin_id.to_string();
     let task_id = run.task_id.clone();
     let cancel = run.cancel.clone();
     let fs: FileSystemRc = run.vfs.clone();
@@ -321,9 +334,7 @@ pub fn execute_crawler_script_v8(run: Arc<Task>) -> TaskResult {
             cancel_for_watcher.cancelled().await;
             isolate_handle.terminate_execution();
         });
-        let result = rt
-            .run_crawl(&plugin_id, script_content, common, custom)
-            .await;
+        let result = rt.run_crawl(&plugin_id, entry_code, common, custom).await;
         watcher.abort();
         normalize_cancel_error(result, &cancel)
     })
@@ -913,6 +924,96 @@ mod tests {
         join.await
             .expect("blocking worker should not panic")
             .expect("execute should resolve");
+    }
+
+    /// 网页收集 V8 后端复用的 `discoverMedia` 在 deno_dom 静态文档上的行为（选择器兼容、
+    /// srcset 最大项、懒加载、<base>、fragment 去重、og / JSON-LD / 直链 / 脚本直链、流清单过滤）。
+    #[tokio::test]
+    async fn webpage_discover_runs_on_static_dom() {
+        let fixture = r##"<html><head>
+            <base href="https://cdn.example.com/assets/">
+            <meta property="og:image" content="https://example.com/og.jpg">
+            <script type="application/ld+json">{"@type":"ImageObject","contentUrl":"/ld.png"}</script>
+            </head><body>
+            <video src="clip.mp4" poster="poster.jpg"><source src="clip2.webm"></video>
+            <img src="a.jpg" srcset="a-small.jpg 320w, a-large.jpg 1280w">
+            <img src="placeholder.gif" data-src="lazy.webp">
+            <picture><source srcset="pic-1x.avif 1x, pic-2x.avif 2x"></picture>
+            <a href="direct.png#frag">x</a><a href="direct.png">dup</a><a href="page.html">page</a>
+            <a href="stream.m3u8">stream</a>
+            <script>var cfg = { file: "https://media.example.com/v.mp4" };</script>
+            </body></html>"##;
+        let expected = [
+            "https://cdn.example.com/assets/clip.mp4|video",
+            "https://cdn.example.com/assets/clip2.webm|video",
+            "https://cdn.example.com/assets/poster.jpg|image",
+            "https://cdn.example.com/assets/a-large.jpg|image",
+            "https://cdn.example.com/assets/placeholder.gif|image",
+            "https://cdn.example.com/assets/lazy.webp|image",
+            "https://cdn.example.com/assets/pic-2x.avif|image",
+            "https://example.com/og.jpg|image",
+            "https://cdn.example.com/ld.png|image",
+            "https://cdn.example.com/assets/direct.png|image",
+            "https://media.example.com/v.mp4|video",
+        ];
+        let entry = format!(
+            r#"{discover}
+            export async function crawl(_common, custom) {{
+                const doc = new DOMParser().parseFromString(custom.html, "text/html");
+                const {{ candidates, documentUrl }} = discoverMedia({{
+                    document: doc,
+                    documentUrl: "https://example.com/page",
+                    baseUrl: "https://cdn.example.com/assets/",
+                    imageExtensions: ["jpg", "png", "webp", "gif", "avif"],
+                    videoExtensions: ["mp4", "webm"],
+                }});
+                const got = candidates.map((c) => c.url + "|" + c.kind);
+                if (documentUrl !== "https://example.com/page") throw new Error("bad documentUrl " + documentUrl);
+                if (JSON.stringify(got) !== JSON.stringify(custom.expected)) {{
+                    throw new Error("unexpected candidates: " + JSON.stringify(got));
+                }}
+            }}"#,
+            discover = crate::plugin::webpage::PAGE_DISCOVER_JS,
+        );
+        let run = test_run("v8-webpage-discover", "");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        rt.run_crawl(
+            "webpage",
+            entry,
+            json!({}),
+            json!({ "html": fixture, "expected": expected }),
+        )
+        .await
+        .expect("discoverMedia should match the fixture");
+    }
+
+    /// 真实的网页收集 V8 模块能完整跑通：取页、解析、冻结快照、无媒体时正常结束。
+    #[tokio::test]
+    async fn webpage_v8_module_runs_on_page_without_media() {
+        init_scheduler();
+        let server = spawn_http_server(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: 57\r\n\r\n<html><head><title>T</title></head><body>hi</body></html>",
+        );
+        let run = test_run("v8-webpage-module", "");
+        let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
+        rt.run_crawl(
+            "webpage",
+            crate::plugin::webpage::v8_collect_module(),
+            json!({
+                "freeze": true,
+                "imageExtensions": ["jpg"],
+                "videoExtensions": ["mp4"],
+                // 模拟用户显式填写：不触发 UA / Cookie 自动注入
+                "userHeaderNames": ["User-Agent", "Cookie"],
+            }),
+            json!({ "url": format!("{server}/page"), "backend": "v8" }),
+        )
+        .await
+        .expect("webpage v8 module should resolve");
+
+        let stack = Arc::clone(&run.page_stack);
+        let top = stack.lock().unwrap().last().map(|e| e.url.clone());
+        assert_eq!(top.as_deref(), Some(format!("{server}/page").as_str()));
     }
 
     fn spawn_http_server(response: &'static str) -> String {

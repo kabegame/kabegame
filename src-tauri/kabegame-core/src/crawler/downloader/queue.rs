@@ -896,7 +896,7 @@ fn is_native_job(job: &DownloadRequest) -> bool {
         && (job.surf_record_id.is_some()
             || TaskScheduler::global()
                 .get_run(&job.task_id)
-                .is_some_and(|run| run.params.plugin.script.js_source().is_some()))
+                .is_some_and(|run| run.params.uses_webview_transport()))
 }
 
 /// 持 pending 锁完成 pop→active 迁移，避免任务排空计数看见两侧都没有 job 的窗口。

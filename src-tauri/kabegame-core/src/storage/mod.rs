@@ -13,6 +13,7 @@ pub mod images;
 pub mod migrations;
 pub(crate) mod metadata_search_text;
 pub mod organize;
+pub mod page_snapshot;
 pub mod plugin_data;
 pub mod plugin_sources;
 pub mod run_configs;

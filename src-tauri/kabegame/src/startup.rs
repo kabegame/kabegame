@@ -45,12 +45,28 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
             .get_run(task_id)
             .ok_or_else(|| format!("Crawler task not found for task {task_id}"))?;
         let plugin = &run.params.plugin;
-        let crawl_js = plugin
-            .script
-            .js_source()
-            .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
-            .to_string();
-        let vars_json = serde_json::to_string(&run.params.config)
+        let (crawl_js, vars) = if kabegame_core::crawler::webpage::is_webview_task(
+            &plugin.id,
+            &run.params.config,
+        ) {
+            // 网页收集 WebView：builtin 发现脚本 + 快照 + 公共编排 + WebView 入口，
+            // vars 额外带上宿主参数（冻结开关、扩展名）
+            let mut vars = serde_json::Map::from_iter(run.params.config.clone());
+            if let serde_json::Value::Object(extra) =
+                kabegame_core::crawler::webpage::collect_params(&run)
+            {
+                vars.extend(extra);
+            }
+            (webpage_webview_crawl_js(), serde_json::Value::Object(vars))
+        } else {
+            let js = plugin
+                .script
+                .js_source()
+                .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
+                .to_string();
+            (js, serde_json::to_value(&run.params.config).unwrap_or_default())
+        };
+        let vars_json = serde_json::to_string(&vars)
             .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
         let task_id = task_id.to_string();
         let base_url = base_url.to_string();
@@ -564,6 +580,22 @@ pub fn start_download_workers() {
     tauri::async_runtime::spawn(task_future);
     #[cfg(feature = "web")]
     tokio::spawn(task_future);
+}
+
+/// 网页收集 WebView 任务注入到 bootstrap crawl_js 槽位的脚本：发现（core builtin 载荷）+
+/// HTML+CSS 快照 + 两后端公共编排 + WebView 入口（滚动 / 发现 / 冻结 / 下载 / exit）。
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+fn webpage_webview_crawl_js() -> String {
+    [
+        kabegame_core::plugin::webpage::PAGE_DISCOVER_JS,
+        "\n",
+        include_str!("webview_js/page_snapshot.js"),
+        "\n",
+        kabegame_core::plugin::webpage::WEBPAGE_COLLECT_JS,
+        "\n",
+        include_str!("webview_js/webpage_webview_collect.js"),
+    ]
+    .concat()
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
