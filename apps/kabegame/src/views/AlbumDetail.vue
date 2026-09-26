@@ -67,7 +67,7 @@
     </div>
 
     <ImageGrid v-else
-      ref="albumViewRef" class="detail-body" :surface="surface"
+      ref="albumViewRef" class="detail-body" :adapter="adapter"
       :enable-ctrl-wheel-adjust-columns="!isCompact"
       enable-virtual-scroll
       :enable-ctrl-key-adjust-columns="!isCompact"
@@ -212,7 +212,7 @@ import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import ImageGrid from "@/components/ImageGrid.vue";
-import { createAlbumDetailSurface } from "@/components/imageGrid/surfaces/album";
+import { createAlbumDetailAdapter } from "@/components/imageGrid/adapters/album";
 import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import type { Album } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
@@ -311,7 +311,7 @@ const analytics = createImageAnalytics(() => ({
 }));
 
 // 数据加载 / 菜单命令 / 本页事件刷新均由 ImageGrid connected 模式接管
-const surface = createAlbumDetailSurface({
+const adapter = createAlbumDetailAdapter({
   albumId: () => albumId.value,
   albumName: () => albumName.value,
   isLocalFolder: () => isLocalFolderDetail.value,
@@ -1278,7 +1278,7 @@ const dropZone = computed<DragFileOptions>(() => ({
 }));
 
 // ---------- Event-driven refresh（子画册预览维度）----------
-// 本画册页面自身的 images-change / album-images-change 刷新由 ImageGrid（surface adapter）
+// 本画册页面自身的 images-change / album-images-change 刷新由 ImageGrid（adapter）
 // 接管；这里只保留子画册预览的刷新——它属于 view 状态，且需要在 grid 卸载
 // （子画册 tab 激活）时仍然生效。
 function childAlbumEventAffectsCurrentSubtree(albumIds: ReadonlySet<string>): boolean {

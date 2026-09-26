@@ -538,7 +538,42 @@ fn lock_for(album_id: &str) -> Arc<AsyncMutex<()>> {
 }
 
 /// 同步指定本地文件夹画册。递归与非递归共用同一入口和报告结构。
+///
+/// 扫描与入库全程是同步 IO（`std::fs` + SQLite），大文件夹即使无变化也要跑数分钟，
+/// 且对已入库文件几乎从不让出。直接跑在 tokio worker 上会饿死同 worker 排队的任务——
+/// 首当其冲的是 `EventBroadcaster` 转发任务，表现为同步期间全 app 事件停摆（如删除
+/// 本地文件夹图片触发的 inotify 重扫期间，画廊收不到任何 images-change）。
+/// 故整体搬到阻塞线程池，由当前 runtime 的 `Handle` 驱动（内部 sleep / spawn 照常可用）。
 pub async fn sync_album(album_id: &str, options: SyncAlbumOptions) -> Result<SyncReport, String> {
+    let album_id = album_id.to_string();
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || handle.block_on(sync_album_blocking(&album_id, options)))
+        .await
+        .map_err(|e| format!("sync_album task panicked: {e}"))?
+}
+
+async fn sync_album_blocking(
+    album_id: &str,
+    options: SyncAlbumOptions,
+) -> Result<SyncReport, String> {
+    // #region DEBUG-gallery-refresh
+    let dbg_t0 = std::time::Instant::now();
+    crate::dbg_gallery_refresh::dbg("core_sync_album_start", json!({ "album": album_id, "recursive": options.recursive, "thread": format!("{:?}", std::thread::current().name()) }));
+    let r = sync_album_inner(album_id, options).await;
+    crate::dbg_gallery_refresh::dbg("core_sync_album_end", json!({
+        "album": album_id,
+        "ms": dbg_t0.elapsed().as_millis(),
+        "ok": r.is_ok(),
+        "skipped_in_flight": r.as_ref().map(|x| x.skipped_in_flight).unwrap_or(false),
+        "skipped_unchanged": r.as_ref().map(|x| x.skipped_unchanged).unwrap_or(false),
+        "added": r.as_ref().map(|x| x.added).unwrap_or(0),
+        "deleted": r.as_ref().map(|x| x.deleted).unwrap_or(0),
+    }));
+    r
+}
+
+async fn sync_album_inner(album_id: &str, options: SyncAlbumOptions) -> Result<SyncReport, String> {
+    // #endregion
     let lock = lock_for(album_id);
     let _guard = match lock.try_lock() {
         Ok(guard) => guard,

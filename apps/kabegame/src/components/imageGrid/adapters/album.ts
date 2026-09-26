@@ -8,22 +8,22 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
-import type { GridSurfaceAdapter } from "../types";
+import type { GridAdapter } from "../types";
 
 /**
- * AlbumDetail（`/albums/:id`）的 grid surface。
+ * AlbumDetail（`/albums/:id`）的 grid adapter。
  * 必须在 AlbumDetail.vue 的 setup 中调用（route store 不能过早实例化）。
  *
  * remove = 从画册移除（本地文件夹画册只读拦截）；deleteFile = 删除文件。
  * 这里只处理「本画册页面」的刷新；子画册预览刷新是 view 状态且需要在
  * grid 卸载（子画册 tab）时仍生效，由 view 自己监听 album-images-change。
  */
-export function createAlbumDetailSurface(params: {
+export function createAlbumDetailAdapter(params: {
   albumId: () => string;
   albumName: () => string;
   isLocalFolder: () => boolean;
   analytics: ImageAnalytics;
-}): GridSurfaceAdapter {
+}): GridAdapter {
   const routeStore = useAlbumDetailRouteStore();
   const albumStore = useAlbumStore();
   const settingsStore = useSettingsStore();

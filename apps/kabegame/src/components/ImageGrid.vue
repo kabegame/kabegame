@@ -49,7 +49,7 @@
     @open-surf-record="handleOpenSurfRecord"
   />
 
-  <!-- remove / deleteFile 确认框：文案与执行语义由 surface adapter 决定 -->
+  <!-- remove / deleteFile 确认框：文案与执行语义由 adapter 决定 -->
   <RemoveImagesConfirmDialog
     :open="removeDialog.isOpen.value"
     :z-index="removeDialog.zIndex.value"
@@ -112,10 +112,13 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
+// #region DEBUG-gallery-refresh
+import { sendDebugEvent } from "@kabegame/core/debugIngest";
+// #endregion
 import type {
   GridRefreshContext,
   GridRemoveDialogText,
-  GridSurfaceAdapter,
+  GridAdapter,
 } from "@/components/imageGrid/types";
 
 import type {
@@ -140,13 +143,11 @@ defineOptions({ inheritAttrs: false });
 
 interface Props {
   /**
-   * connected 模式：传入 per-surface 适配器后，数据加载 / URL 同步 / 事件刷新 /
-   * 菜单命令默认实现均由本组件接管；不传则为受控模式（images 由外部提供）。
+   * per-page 适配器：数据加载 / URL 同步 / 事件刷新 / 菜单命令默认实现均由本组件
+   * 按 adapter 接管。在组件生命周期内不变（view setup 中创建后传入）。
    */
-  surface?: GridSurfaceAdapter;
-  /** 受控模式的图片列表；connected 模式下忽略 */
-  images?: ImageInfo[];
-  /** Actions for context menu (desktop) / action sheet (Android). 缺省由 surface.actionsOptions 生成 */
+  adapter: GridAdapter;
+  /** Actions for context menu (desktop) / action sheet (Android). 缺省由 adapter.actionsOptions 生成 */
   actions?: ActionItem<ImageInfo>[];
   /**
    * 可选覆盖钩子：返回命令字符串 = 交给内置默认实现；返回 null/undefined = 已处理/抑制。
@@ -204,8 +205,12 @@ const galleryRouteStore = useGalleryRouteStore();
 const settingsStore = useSettingsStore();
 const albumStore = useAlbumStore();
 
-// adapter 在组件生命周期内不变（view setup 中创建后传入）
-const adapter = props.surface;
+const adapter = props.adapter;
+// #region DEBUG-gallery-refresh
+let dbgSeq = 0;
+const dbg = (name: string, payload: Record<string, unknown> = {}) =>
+  void sendDebugEvent(name, { grid: adapter.id, seq: ++dbgSeq, ...payload }, { sessionId: "gallery-refresh" });
+// #endregion
 
 function handleOpenTask(taskId: string) {
   void router.push({ name: "TaskDetail", params: { taskId: taskId } });
@@ -274,16 +279,12 @@ const clearSelection = () => {
 // onActivated/onDeactivated 不触发，保持默认 true 即原行为。
 const isRouteActive = ref(true);
 
-/* ---------------- connected 数据层 ----------------
- * adapter 存在时，本组件持有 images / loadedKey，接管路径加载、
- * usePagedGallery 分页、route.query.path 同步与 images-change /
- * album-images-change 事件刷新。
+/* ---------------- 数据层 ----------------
+ * 本组件持有 images / loadedKey，接管路径加载、usePagedGallery 分页、
+ * route.query.path 同步与 images-change / album-images-change 事件刷新。
  */
-const internalImages = shallowRef<ImageInfo[]>([]);
+const images = shallowRef<ImageInfo[]>([]);
 const loadedKey = ref("");
-const effectiveImages = computed<ImageInfo[]>(() =>
-  adapter ? internalImages.value : props.images ?? []
-);
 
 // metadata per-page 缓存：本组件是详情/预览的公共祖先，在此 provide
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
@@ -309,77 +310,75 @@ const {
   shareImage,
   openImageFolder,
   setWallpaper,
-} = useImageOperations(effectiveImages, currentWallpaperImageId, coreRef);
+} = useImageOperations(images, currentWallpaperImageId, coreRef);
 
-let pageLoadInFlight = false;
+let loadImagesInFlight = false;
 // 加载路径数据。调用点有三个：path变化、事件驱动、手动刷新
-const loadPage = async (path?: string) => {
-  if (!adapter) return;
+const loadImages = async (path?: string) => {
   const raw = path || adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
   if (!raw) return;
   if (adapter.validatePath && !adapter.validatePath(raw)) return;
-  pageLoadInFlight = true;
+  loadImagesInFlight = true;
+  dbg("loadImages_start", { raw, argPath: path ?? null, computedPath: adapter.routeStore.computedPath });
   try {
     clearImageMetadataCache();
     const rows = await pathqlFetch<Record<string, unknown>>(withGalleryPrefix(raw));
-    internalImages.value = rows.map(rowToImageInfo);
+    images.value = rows.map(rowToImageInfo);
     loadedKey.value = raw;
+    dbg("loadImages_done", { raw, rows: rows.length, firstIds: rows.slice(0, 3).map((x) => x.id) });
+  } catch (e) {
+    dbg("loadImages_error", { raw, error: String(e) });
+    throw e;
   } finally {
-    pageLoadInFlight = false;
+    loadImagesInFlight = false;
   }
 };
 
+const paged = usePagedGallery({
+  routeStore: adapter.routeStore,
+  images,
+  loadedKey,
+  viewRef: coreRef,
+  loading: { startLoading, finishLoading },
+  // 数据
+  load: (path) => loadImages(path),
+  computeCountPath: adapter.computeCountPath,
+  isActive: () => isRouteActive.value && adapter.isActive(),
+  computeTargetPath: adapter.computeTargetPath,
+  onCountError: (error) => adapter.onCountError?.(error, refreshCtx),
+  onLoadError: adapter.onLoadError,
+});
 
-const paged = adapter
-  ? usePagedGallery({
-      routeStore: adapter.routeStore,
-      images: internalImages,
-      loadedKey,
-      viewRef: coreRef,
-      loading: { startLoading, finishLoading },
-      // 数据
-      load: (path) => loadPage(path),
-      computeCountPath: adapter.computeCountPath,
-      isActive: () => isRouteActive.value && adapter.isActive(),
-      computeTargetPath: adapter.computeTargetPath,
-      onCountError: (error) => adapter.onCountError?.(error, refreshCtx),
-      onLoadError: adapter.onLoadError,
-    })
-  : null;
-
-const totalImagesCount = computed(() => paged?.totalImagesCount.value ?? 0);
-const gridCurrentPage = computed(() => paged?.currentPage.value ?? 1);
-const gridPageSize = computed(() => paged?.pageSize.value ?? 0);
-const gridCurrentPath = computed(() => paged?.currentPath.value ?? "");
-const jumpToPage = async (page: number) => {
-  await paged?.handleJumpToPage(page);
-};
-const loadTotalImagesCount = async () => {
-  await paged?.loadTotalImagesCount();
-};
-const ensureValidPageAfterMassRemoval = async () => {
-  await paged?.ensureValidPageAfterMassRemoval();
-};
+const {
+  totalImagesCount,
+  currentPage: gridCurrentPage,
+  pageSize: gridPageSize,
+  currentPath: gridCurrentPath,
+  handleJumpToPage: jumpToPage,
+  loadTotalImagesCount,
+  ensureValidPageAfterMassRemoval,
+} = paged;
 
 /**
  * 事件驱动的当前页刷新：保留滚动位置，重算总数；对被移除的图片做
  * 选中清理、当前壁纸清理与页码越界回退。
  */
 const refreshPage = async (): Promise<{ removedIds: string[] }> => {
-  if (!adapter || !paged) return { removedIds: [] };
-  const prevList = internalImages.value.slice();
+  const prevList = images.value.slice();
+  dbg("refreshPage_start", { path: gridCurrentPath.value, prevCount: prevList.length, isRouteActive: isRouteActive.value, adapterActive: adapter.isActive() });
   const container = getContainerEl();
   const prevScrollTop = container?.scrollTop ?? 0;
   try {
-    await loadPage(gridCurrentPath.value);
+    await loadImages(gridCurrentPath.value);
   } catch (error) {
     await adapter.onLoadError?.(error, gridCurrentPath.value);
     return { removedIds: [] };
   }
   if (container) container.scrollTop = prevScrollTop;
-  await paged.loadTotalImagesCount();
+  await loadTotalImagesCount();
 
-  const { removedIds } = diffById(prevList, internalImages.value);
+  const { removedIds } = diffById(prevList, images.value);
+  dbg("refreshPage_diff", { newCount: images.value.length, removedIds, total: totalImagesCount.value });
   if (removedIds.length > 0) {
     const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
     if (selected && selected.size > 0 && removedIds.some((id) => selected.has(id))) {
@@ -392,14 +391,14 @@ const refreshPage = async (): Promise<{ removedIds: string[] }> => {
       currentWallpaperImageId.value = null;
     }
   }
-  if (removedIds.length > 0 || internalImages.value.length === 0) {
-    await paged.ensureValidPageAfterMassRemoval();
+  if (removedIds.length > 0 || images.value.length === 0) {
+    await ensureValidPageAfterMassRemoval();
   }
   return { removedIds };
 };
 
 const refreshCtx: GridRefreshContext = {
-  images: internalImages,
+  images,
   computedPath: gridCurrentPath,
   refreshPage,
   loadTotalImagesCount,
@@ -415,7 +414,7 @@ const readRouteQueryPath = (): string => {
 };
 
 const syncActivePathFromUrl = () => {
-  if (!adapter || !isRouteActive.value || !adapter.isActive()) return;
+  if (!isRouteActive.value || !adapter.isActive()) return;
   const qp = readRouteQueryPath().trim();
   if (!qp) {
     // URL 无 ?path=：gallery 语义是「回到默认画廊路径」。
@@ -432,118 +431,135 @@ const syncActivePathFromUrl = () => {
 
 /** 手动刷新：重拉当前页 + 总数（错误向上抛，由 view 决定提示文案） */
 const refresh = async (opts?: { resetScroll?: boolean }) => {
-  if (!adapter || !paged) return;
-  await loadPage(gridCurrentPath.value);
-  void paged.loadTotalImagesCount();
+  await loadImages(gridCurrentPath.value);
+  void loadTotalImagesCount();
   if (opts?.resetScroll) {
     const el = getContainerEl();
     if (el) el.scrollTop = 0;
   }
 };
 
-if (adapter) {
-  // isActive 后置就绪（如 taskId/albumName 异步初始化）时 currentPath 不变，
-  // usePagedGallery 的 path watch 不会重发——在激活翻转时补一次加载。
-  watch(
-    () => isRouteActive.value && adapter.isActive(),
-    (active) => {
-      if (!active || pageLoadInFlight) return;
-      const path = adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
-      if (!path || loadedKey.value === path) return;
-      startLoading();
-      void (async () => {
-        try {
-          await loadPage(path);
-        } catch (error) {
-          await adapter.onLoadError?.(error, path);
-          return;
-        } finally {
-          finishLoading();
-        }
-        void paged?.loadTotalImagesCount();
-      })();
+// isActive 后置就绪（如 taskId/albumName 异步初始化）时 currentPath 不变，
+// usePagedGallery 的 path watch 不会重发——在激活翻转时补一次加载。
+watch(
+  () => isRouteActive.value && adapter.isActive(),
+  (active) => {
+    if (!active || loadImagesInFlight) return;
+    const path = adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
+    if (!path || loadedKey.value === path) return;
+    startLoading();
+    void (async () => {
+      try {
+        await loadImages(path);
+      } catch (error) {
+        await adapter.onLoadError?.(error, path);
+        return;
+      } finally {
+        finishLoading();
+      }
+      void loadTotalImagesCount();
+    })();
+  }
+);
+
+// route.query.path → routeStore 同步（预览跨页 pendingPreviewBoundary 特判见下）
+watch(
+  () => route.query.path,
+  () => {
+    if (!isRouteActive.value || !adapter.isActive()) return;
+    const qp = readRouteQueryPath();
+    if (!qp.trim()) {
+      // 见 syncActivePathFromUrl：gallery 空 path = 回默认，把默认 state
+      // 写回 URL（replace）；其余 adapter 无 syncEmptyQueryPath，不处理。
+      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
+      return;
     }
-  );
+    const pending = paged.pendingPreviewBoundary.value;
+    if (
+      pending?.targetPath &&
+      gridCurrentPath.value === pending.targetPath &&
+      qp !== pending.targetPath
+    ) {
+      void router.replace({
+        path: route.path,
+        query: { ...route.query, path: pending.targetPath },
+      });
+      return;
+    }
+    if (qp !== gridCurrentPath.value) {
+      adapter.routeStore.syncFromUrl(qp);
+    }
+  },
+  { immediate: true }
+);
 
-  // route.query.path → routeStore 同步（预览跨页 pendingPreviewBoundary 特判见下）
-  watch(
-    () => route.query.path,
-    () => {
-      if (!isRouteActive.value || !adapter.isActive()) return;
-      const qp = readRouteQueryPath();
-      if (!qp.trim()) {
-        // 见 syncActivePathFromUrl：gallery 空 path = 回默认，把默认 state
-        // 写回 URL（replace）；其余 surface 无 syncEmptyQueryPath，不处理。
-        if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
-        return;
-      }
-      const pending = paged?.pendingPreviewBoundary.value;
-      if (
-        pending?.targetPath &&
-        gridCurrentPath.value === pending.targetPath &&
-        qp !== pending.targetPath
-      ) {
-        void router.replace({
-          path: route.path,
-          query: { ...route.query, path: pending.targetPath },
-        });
-        return;
-      }
-      if (qp !== gridCurrentPath.value) {
-        adapter.routeStore.syncFromUrl(qp);
-      }
-    },
-    { immediate: true }
-  );
-
-  // 统一图片变更事件：不做增量同步，收到事件后刷新“当前页”（trailing 节流）。
-  // 始终启用（含 keep-alive 后台），保证返回页面时数据已反映删除/新增。
-  const defaultEventRefresh = async () => {
-    const { removedIds } = await refreshPage();
-    await adapter.onAfterRefresh?.(refreshCtx, { removedIds });
-  };
-  useImagesChangeRefresh({
-    enabled: ref(true),
-    waitMs: adapter.imagesChange?.waitMs ?? 1000,
-    filter: (p) => adapter.imagesChange?.filter?.(p, refreshCtx) ?? true,
-    onRefresh: async (p) => {
-      if (adapter.imagesChange?.onRefresh) {
-        await adapter.imagesChange.onRefresh(p, refreshCtx);
-      } else {
-        await defaultEventRefresh();
-      }
-    },
-  });
-  // album_images 表变更：默认只关心 HIDDEN 画册（HideGate 影响可见性）
-  useAlbumImagesChangeRefresh({
-    enabled: ref(true),
-    waitMs: adapter.albumImagesChange?.waitMs ?? 500,
-    filter: (p) =>
-      adapter.albumImagesChange?.filter
-        ? adapter.albumImagesChange.filter(p, refreshCtx)
-        : (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
-    onRefresh: async (p) => {
-      if (adapter.albumImagesChange?.onRefresh) {
-        await adapter.albumImagesChange.onRefresh(p, refreshCtx);
-      } else {
-        await defaultEventRefresh();
-      }
-    },
-  });
-}
+// 统一图片变更事件：不做增量同步，收到事件后刷新“当前页”（trailing 节流）。
+// 始终启用（含 keep-alive 后台），保证返回页面时数据已反映删除/新增。
+const defaultEventRefresh = async () => {
+  const { removedIds } = await refreshPage();
+  await adapter.onAfterRefresh?.(refreshCtx, { removedIds });
+};
+useImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: adapter.imagesChange?.waitMs ?? 1000,
+  filter: (p) => {
+    const pass = adapter.imagesChange?.filter?.(p, refreshCtx) ?? true;
+    dbg("imagesChange_recv", { payload: p, pass, currentIds: images.value.slice(0, 5).map((i) => i.id), count: images.value.length });
+    return pass;
+  },
+  onRefresh: async (p) => {
+    dbg("imagesChange_refresh_start", { reason: p.reason });
+    try {
+    if (adapter.imagesChange?.onRefresh) {
+      await adapter.imagesChange.onRefresh(p, refreshCtx);
+    } else {
+      await defaultEventRefresh();
+    }
+    dbg("imagesChange_refresh_end", { reason: p.reason });
+    } catch (e) {
+      dbg("imagesChange_refresh_error", { error: String(e) });
+      throw e;
+    }
+  },
+});
+// album_images 表变更：默认只关心 HIDDEN 画册（HideGate 影响可见性）
+useAlbumImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: adapter.albumImagesChange?.waitMs ?? 500,
+  filter: (p) => {
+    const pass = adapter.albumImagesChange?.filter
+      ? adapter.albumImagesChange.filter(p, refreshCtx)
+      : (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID);
+    dbg("albumImagesChange_recv", { payload: p, pass });
+    return pass;
+  },
+  onRefresh: async (p) => {
+    dbg("albumImagesChange_refresh_start", { reason: p.reason, albumIds: p.albumIds });
+    try {
+    if (adapter.albumImagesChange?.onRefresh) {
+      await adapter.albumImagesChange.onRefresh(p, refreshCtx);
+    } else {
+      await defaultEventRefresh();
+    }
+    dbg("albumImagesChange_refresh_end", {});
+    } catch (e) {
+      dbg("albumImagesChange_refresh_error", { error: String(e) });
+      throw e;
+    }
+  },
+});
 
 // 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]，避免泛型不兼容
 const effectiveActions = computed(() => {
   if (props.actions) return props.actions;
-  if (adapter?.actionsOptions) return createImageActions(adapter.actionsOptions());
+  if (adapter.actionsOptions) return createImageActions(adapter.actionsOptions());
   return undefined;
 });
 
 const coreGridBind = computed(() => {
   const {
     actions: _actions,
-    images: _images,
-    surface: _surface,
+    adapter: _adapter,
     onContextCommand: _onContextCommand,
     loading: _loading,
     loadingOverlay: _loadingOverlay,
@@ -552,7 +568,7 @@ const coreGridBind = computed(() => {
   return {
     ...attrs,
     ...rest,
-    images: effectiveImages.value,
+    images: images.value,
     loading: (props.loading ?? false) || internalLoading.value,
     loadingOverlay:
       (props.loadingOverlay ?? props.loading ?? false) || showInternalLoading.value,
@@ -562,7 +578,7 @@ const coreGridBind = computed(() => {
 });
 
 const beforeGridSlotProps = computed(() => ({
-  images: effectiveImages.value,
+  images: images.value,
   totalCount: totalImagesCount.value,
   currentPage: gridCurrentPage.value,
   pageSize: gridPageSize.value,
@@ -613,22 +629,21 @@ onActivated(() => {
   void applyPreviewFromUrl();
   // keep-alive 重新激活：路径已变或列表为空时按当前路由 path 刷新，
   // 保证从其它页面返回后顺序与路由、header 一致。
-  if (adapter && paged && !pageLoadInFlight) {
-    const pathToLoad = gridCurrentPath.value;
-    if (
-      pathToLoad &&
-      adapter.isActive() &&
-      (internalImages.value.length === 0 || loadedKey.value !== pathToLoad)
-    ) {
-      void (async () => {
-        try {
-          await loadPage(pathToLoad);
-          await paged.loadTotalImagesCount();
-        } catch (error) {
-          await adapter.onLoadError?.(error, pathToLoad);
-        }
-      })();
-    }
+  const pathToLoad = gridCurrentPath.value;
+  if (
+    !loadImagesInFlight &&
+    pathToLoad &&
+    adapter.isActive() &&
+    (images.value.length === 0 || loadedKey.value !== pathToLoad)
+  ) {
+    void (async () => {
+      try {
+        await loadImages(pathToLoad);
+        await loadTotalImagesCount();
+      } catch (error) {
+        await adapter.onLoadError?.(error, pathToLoad);
+      }
+    })();
   }
 });
 onDeactivated(() => {
@@ -636,7 +651,7 @@ onDeactivated(() => {
   clearSelection();
 });
 watch(() => previewImageId.value, applyPreviewFromUrl); // 前进/后退、外部改动
-watch(() => effectiveImages.value, () => {
+watch(images, () => {
   // 列表异步加载完成后再尝试一次（仅在仍有待打开 id 且未预览时）
   if (readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
 }, {
@@ -648,24 +663,24 @@ function handlePreviewOpen(payload: { image: ImageInfo }) {
 }
 function handlePreviewNavigate(payload: PreviewNavigatePayload) {
   previewedId.value = payload.image.id;
-  adapter?.analytics?.trackPreviewNavigate(payload);
+  adapter.analytics?.trackPreviewNavigate(payload);
   emit("preview-navigate", payload);
 }
 function handlePreviewClose(payload: { image: ImageInfo | null }) {
   previewedId.value = null;
-  adapter?.analytics?.trackPreviewClose(payload);
+  adapter.analytics?.trackPreviewClose(payload);
   emit("preview-close", payload);
 }
 function handlePreviewDetailToggle(payload: { open: boolean; image: ImageInfo | null }) {
-  adapter?.analytics?.trackPreviewDetailToggle(payload);
+  adapter.analytics?.trackPreviewDetailToggle(payload);
   emit("preview-detail-toggle", payload);
 }
 function handleImageDblclick(payload: { action: "preview" | "open"; image: ImageInfo }) {
-  adapter?.analytics?.trackDoubleOpen(payload);
+  adapter.analytics?.trackDoubleOpen(payload);
   emit("image-dblclick", payload);
 }
 function handlePreviewPageBoundary(payload: PreviewPageBoundaryPayload) {
-  if (paged) void paged.handlePreviewPageBoundary(payload);
+  void paged.handlePreviewPageBoundary(payload);
   emit("preview-page-boundary", payload);
 }
 
@@ -681,7 +696,7 @@ const addToAlbumDialog = useModal();
 const addToAlbumImageIds = ref<string[]>([]);
 const addToAlbumTaskId = ref<string | undefined>(undefined);
 const pendingAddToAlbumImages = ref<ImageInfo[]>([]);
-const addToAlbumExcludeIds = computed(() => adapter?.addToAlbumExcludeIds?.() ?? []);
+const addToAlbumExcludeIds = computed(() => adapter.addToAlbumExcludeIds?.() ?? []);
 
 /** header「一键加入画册」等场景由 view 通过 ref 调用 */
 const openAddToAlbum = (opts: { imageIds?: string[]; taskId?: string }) => {
@@ -692,18 +707,18 @@ const openAddToAlbum = (opts: { imageIds?: string[]; taskId?: string }) => {
 
 const handleAddedToAlbum = async () => {
   if (pendingAddToAlbumImages.value.length > 0) {
-    adapter?.analytics?.trackAction("addToAlbum", pendingAddToAlbumImages.value);
+    adapter.analytics?.trackAction("addToAlbum", pendingAddToAlbumImages.value);
   }
   pendingAddToAlbumImages.value = [];
   addToAlbumTaskId.value = undefined;
   clearSelection();
-  await adapter?.onAddedToAlbum?.();
+  await adapter.onAddedToAlbum?.();
   emit("addedToAlbum");
 };
 
 /** 从当前列表解析命令目标：单选回退 payload.image（预览等场景图片可能不在列表中） */
 const resolveCommandTargets = (payload: CoreContextCommandPayload) => {
-  const list = effectiveImages.value;
+  const list = images.value;
   const image: ImageInfo | undefined =
     list.find((i) => i.id === payload.image?.id) ?? (payload.image as ImageInfo | undefined);
   if (!image) {
@@ -721,7 +736,7 @@ const resolveCommandTargets = (payload: CoreContextCommandPayload) => {
 };
 
 const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) => {
-  const cfg = mode === "remove" ? adapter?.remove : adapter?.deleteFile;
+  const cfg = mode === "remove" ? adapter.remove : adapter.deleteFile;
   if (!cfg) return;
   if (cfg.guard?.()) return;
   const includesCurrentWallpaper =
@@ -734,16 +749,17 @@ const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) =>
 
 const confirmRemoveImages = async () => {
   const pending = pendingRemove.value;
+  dbg("confirmRemove", { mode: pending?.mode, ids: pending?.images.map((i) => i.id) });
   removeDialog.close();
   if (!pending || pending.images.length === 0) return;
   pendingRemove.value = null;
-  const cfg = pending.mode === "remove" ? adapter?.remove : adapter?.deleteFile;
+  const cfg = pending.mode === "remove" ? adapter.remove : adapter.deleteFile;
   if (cfg?.confirm) {
     await cfg.confirm(pending.images, refreshCtx);
   } else {
     await handleBatchDeleteImages(pending.images);
   }
-  adapter?.analytics?.trackAction(pending.mode, pending.images);
+  adapter.analytics?.trackAction(pending.mode, pending.images);
 };
 
 const runDefaultCommand = async (
@@ -754,7 +770,7 @@ const runDefaultCommand = async (
     detailImage.value = payload.image;
     imageDetailDialog.open();
     if (payload.image) {
-      adapter?.analytics?.trackAction("detail", [payload.image as ImageInfo]);
+      adapter.analytics?.trackAction("detail", [payload.image as ImageInfo]);
     }
     return;
   }
@@ -765,7 +781,7 @@ const runDefaultCommand = async (
     cmd: string,
     targets: ImageInfo[] = imagesToProcess,
     data?: Record<string, unknown>,
-  ) => adapter?.analytics?.trackAction(cmd, targets, data);
+  ) => adapter.analytics?.trackAction(cmd, targets, data);
 
   switch (command) {
     case "download":
@@ -817,7 +833,7 @@ const runDefaultCommand = async (
     case "addToHidden": {
       if (await guardDesktopOnly("hideImage", { needSuper: true })) break;
       const ids = imagesToProcess.map((img) => img.id);
-      const isUnhide = !!image.isHidden || (adapter?.forceUnhide?.() ?? false);
+      const isUnhide = !!image.isHidden || (adapter.forceUnhide?.() ?? false);
       try {
         if (isUnhide) {
           await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
@@ -843,7 +859,7 @@ const runDefaultCommand = async (
       openRemoveDialog(command, imagesToProcess);
       break;
     case "swipe-remove":
-      if (adapter?.swipeRemove) {
+      if (adapter.swipeRemove) {
         await adapter.swipeRemove(imagesToProcess, refreshCtx);
       } else {
         await handleBatchHideImages(imagesToProcess);
@@ -859,6 +875,7 @@ const runDefaultCommand = async (
 };
 
 async function handleContextCommand(payload: CoreContextCommandPayload): Promise<CoreContextCommand | null | undefined> {
+  dbg("contextCommand", { command: payload.command, imageId: payload.image?.id });
   // view 的覆盖钩子先执行：返回命令 = 委托内置默认实现；返回 null = 已处理/抑制
   const res = props.onContextCommand
     ? await props.onContextCommand(payload as ContextCommandPayload)
@@ -875,7 +892,6 @@ defineExpose({
   exitAndroidSelectionMode: () => coreRef.value?.exitAndroidSelectionMode?.(),
   openPreviewById: (id: string) => coreRef.value?.openPreviewById?.(id),
   closePreview: () => coreRef.value?.closePreview?.(),
-  // connected 模式
   refresh,
   refreshPage,
   loadTotalImagesCount,
@@ -886,7 +902,7 @@ defineExpose({
   currentPage: gridCurrentPage,
   pageSize: gridPageSize,
   currentPath: gridCurrentPath,
-  images: effectiveImages,
+  images,
   loadedKey,
 });
 </script>

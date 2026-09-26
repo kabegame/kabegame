@@ -11,16 +11,16 @@ import {
   hasActiveQuery,
 } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
-import type { GridSurfaceAdapter } from "../types";
+import type { GridAdapter } from "../types";
 import { IS_WEB } from "@kabegame/core/env";
 
 /**
- * Gallery（`/gallery`）的 grid surface。
+ * Gallery（`/gallery`）的 grid adapter。
  * 必须在 Gallery.vue 的 setup 中调用。
  */
-export function createGallerySurface(params: {
+export function createGalleryAdapter(params: {
   analytics: ImageAnalytics;
-}): GridSurfaceAdapter {
+}): GridAdapter {
   const routeStore = useGalleryRouteStore();
   const t = i18n.global.t;
 

@@ -3,7 +3,7 @@
     <div class="surf-images-scroll-container">
       <ImageGrid
         class="surf-grid"
-        :surface="surface"
+        :adapter="adapter"
         :enable-ctrl-wheel-adjust-columns="!isCompact"
         :enable-ctrl-key-adjust-columns="!isCompact"
         hide-scrollbar
@@ -66,7 +66,7 @@ import ImageGrid from "@/components/ImageGrid.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import { createSurfImagesSurface } from "@/components/imageGrid/surfaces/surf";
+import { createSurfImagesAdapter } from "@/components/imageGrid/adapters/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import {
   useSurfImagesRouteStore,
@@ -114,7 +114,7 @@ const record = computed<SurfRecord | null>(() =>
 );
 
 // 数据加载 / 菜单命令 / 事件刷新均由 ImageGrid connected 模式接管
-const surface = createSurfImagesSurface({
+const adapter = createSurfImagesAdapter({
   recordId: () => record.value?.id ?? "",
 });
 

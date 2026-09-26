@@ -39,7 +39,13 @@ pub fn move_album<R: Runtime>(
 
 #[tauri::command]
 pub fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
-    commands::album::add_images_to_album(album_id, image_ids)
+    // #region DEBUG-gallery-refresh
+    let t0 = std::time::Instant::now();
+    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_add_to_album_enter", serde_json::json!({ "album": album_id, "ids": image_ids, "thread": format!("{:?}", std::thread::current().name()) }));
+    let r = commands::album::add_images_to_album(album_id, image_ids);
+    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_add_to_album_exit", serde_json::json!({ "ms": t0.elapsed().as_millis(), "ok": r.is_ok() }));
+    r
+    // #endregion
 }
 
 /// 将任务的全部图片加入画册（后端根据 task_id 取图，前端只负责选画册）

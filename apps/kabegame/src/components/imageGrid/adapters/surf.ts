@@ -3,16 +3,16 @@ import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import { stripComposablePathTail } from "@/utils/galleryPath";
-import type { GridSurfaceAdapter } from "../types";
+import type { GridAdapter } from "../types";
 
 /**
- * SurfImages（`/surf/:host/images`）的 grid surface。
+ * SurfImages（`/surf/:host/images`）的 grid adapter。
  * 必须在 SurfImages.vue 的 setup 中调用（route store 不能过早实例化）。
  */
-export function createSurfImagesSurface(params: {
+export function createSurfImagesAdapter(params: {
   /** 当前 surf record id（images-change 事件按 surfRecordIds 过滤） */
   recordId: () => string;
-}): GridSurfaceAdapter {
+}): GridAdapter {
   const routeStore = useSurfImagesRouteStore();
   const t = i18n.global.t;
 

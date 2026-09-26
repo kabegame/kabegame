@@ -4,15 +4,15 @@ import router from "@/router";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { stripComposablePathTail } from "@/utils/galleryPath";
-import type { GridSurfaceAdapter } from "../types";
+import type { GridAdapter } from "../types";
 
 /**
- * TaskDetail（`/tasks/:id`）的 grid surface。
+ * TaskDetail（`/tasks/:id`）的 grid adapter。
  * 必须在 TaskDetail.vue 的 setup 中调用（route store 不能过早实例化）。
  */
-export function createTaskDetailSurface(params: {
+export function createTaskDetailAdapter(params: {
   taskId: () => string;
-}): GridSurfaceAdapter {
+}): GridAdapter {
   const routeStore = useTaskDetailRouteStore();
   const failedImagesStore = useFailedImagesStore();
   const t = i18n.global.t;

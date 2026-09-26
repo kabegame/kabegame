@@ -5,7 +5,7 @@ import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChang
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 
-export type GridSurfaceId = "gallery" | "task" | "album" | "surf";
+export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
 /**
  * ImageGrid connected 模式使用的 path-route store 子集。
@@ -61,14 +61,14 @@ export interface GridEventRefreshConfig<TPayload> {
 }
 
 /**
- * Per-surface 适配器：让 ImageGrid 按所在页面加载数据、过滤事件、
+ * Per-page 适配器：让 ImageGrid 按所在页面加载数据、过滤事件、
  * 以及关闭 / 特殊处理部分菜单功能。
  *
- * 工厂（createXxxSurface）必须在对应 view 的 setup 中调用——route store
+ * 工厂（createXxxAdapter）必须在对应 view 的 setup 中调用——route store
  * 只能在自己的路由 finalize 后实例化（pathRoute store 过早实例化会拼出脏路径）。
  */
-export interface GridSurfaceAdapter {
-  id: GridSurfaceId;
+export interface GridAdapter {
+  id: GridAdapterId;
   routeStore: GridRouteStore;
   /** 视图是否处于可加载状态（路由匹配 + 关键参数就绪）；keep-alive 激活态由 ImageGrid 自己守卫 */
   isActive: () => boolean;

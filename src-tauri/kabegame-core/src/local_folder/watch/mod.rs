@@ -175,6 +175,9 @@ async fn run_manager(mut rx: mpsc::Receiver<ManagerMsg>, self_tx: mpsc::Sender<M
             maybe_msg = rx.recv() => {
                 match maybe_msg {
                     Some(ManagerMsg::Event(event)) => {
+                        // #region DEBUG-gallery-refresh
+                        crate::dbg_gallery_refresh::dbg("core_watch_event", serde_json::json!({ "album": event.album_id, "kind": event.kind }));
+                        // #endregion
                         let album_id = event.album_id;
                         if !desired.contains_key(&album_id) {
                             continue;

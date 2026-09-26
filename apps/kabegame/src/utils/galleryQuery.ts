@@ -447,7 +447,7 @@ export function querySearchTerm(query: GalleryQuery): GallerySearchTerm | null {
   return null;
 }
 
-/** 查询的任意原子是否用到了某维度（surface 刷新启发式用）。 */
+/** 查询的任意原子是否用到了某维度（grid adapter 刷新启发式用）。 */
 export function queryUsesDimension(
   query: GalleryQuery,
   dimension: GalleryFilterDimension,

@@ -1,6 +1,6 @@
 <template>
     <div class="task-detail" v-pull-to-refresh="pullToRefreshOpts">
-        <ImageGrid ref="taskViewRef" class="detail-body" :surface="surface"
+        <ImageGrid ref="taskViewRef" class="detail-body" :adapter="adapter"
             :enable-ctrl-wheel-adjust-columns="!isCompact" :enable-ctrl-key-adjust-columns="!isCompact"
             enable-virtual-scroll scroll-whole-container hide-scrollbar>
             <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
@@ -61,7 +61,7 @@ import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
-import { createTaskDetailSurface } from "@/components/imageGrid/surfaces/task";
+import { createTaskDetailAdapter } from "@/components/imageGrid/adapters/task";
 import {
   GALLERY_SEARCH_MODES_BASIC,
   querySearchTerm,
@@ -166,7 +166,7 @@ const handleViewTaskParams = () => {
 
 // 数据加载 / 菜单命令 / 事件刷新均由 ImageGrid connected 模式接管
 const taskDetailRouteStore = useTaskDetailRouteStore();
-const surface = createTaskDetailSurface({
+const adapter = createTaskDetailAdapter({
     taskId: () => taskId.value,
 });
 const { taskId, page } = storeToRefs(taskDetailRouteStore);

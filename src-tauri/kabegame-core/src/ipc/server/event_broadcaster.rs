@@ -57,6 +57,14 @@ impl EventBroadcaster {
         loop {
             match sync_rx_guard.recv().await {
                 Some(event) => {
+                    // #region DEBUG-gallery-refresh
+                    {
+                        let n = (*event).kind().as_event_name();
+                        if n == "images-change" || n == "album-images-change" {
+                            crate::dbg_gallery_refresh::dbg("core_forward_recv", serde_json::json!({ "kind": n, "thread": format!("{:?}", std::thread::current().name()) }));
+                        }
+                    }
+                    // #endregion
                     let event_with_id = {
                         let mut next_id_guard = broadcaster.next_id.write().await;
                         let id = *next_id_guard;
@@ -90,6 +98,14 @@ impl EventBroadcaster {
 
     /// 广播事件
     pub fn broadcast(&self, event: ArcDaemonEvent) {
+        // #region DEBUG-gallery-refresh
+        {
+            let n = (*event).kind().as_event_name();
+            if n == "images-change" || n == "album-images-change" {
+                crate::dbg_gallery_refresh::dbg("core_broadcast", serde_json::json!({ "kind": n }));
+            }
+        }
+        // #endregion
         let broadcaster = Self::global();
         let _ = broadcaster.sync_tx.send(event);
     }

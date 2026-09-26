@@ -116,6 +116,26 @@ fn init(
             "debug_assertions": cfg!(debug_assertions),
         }),
     );
+    // #region DEBUG-gallery-refresh：主线程心跳，排队延迟 >200ms 上报
+    #[cfg(all(debug_assertions, not(feature = "web")))]
+    {
+        let hb_handle = app.app_handle().clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let sent = std::time::Instant::now();
+            let _ = hb_handle.run_on_main_thread(move || {
+                let lag = sent.elapsed().as_millis();
+                if lag > 200 {
+                    crate::debug_ingest::spawn_debug_event(
+                        "gallery-refresh",
+                        "be_main_thread_lag",
+                        serde_json::json!({ "lag_ms": lag }),
+                    );
+                }
+            });
+        });
+    }
+    // #endregion
     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
     #[cfg(all(target_os = "linux", not(feature = "web")))]
     {

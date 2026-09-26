@@ -5,7 +5,7 @@
         <div class="gallery-grid-pane" v-drag-file="dropZone">
           <ImageGrid
             ref="galleryViewRef"
-            :surface="surface"
+            :adapter="adapter"
             :enable-ctrl-wheel-adjust-columns="!isCompact"
             hide-scrollbar
             :enable-ctrl-key-adjust-columns="!isCompact"
@@ -96,7 +96,7 @@ import OrganizeDialog from "@/components/OrganizeDialog.vue";
 import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
 import * as organizeService from "@/services/organize";
 import EmptyState from "@/components/common/EmptyState.vue";
-import { createGallerySurface } from "@/components/imageGrid/surfaces/gallery";
+import { createGalleryAdapter } from "@/components/imageGrid/adapters/gallery";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { newRandomSortSeed } from "@/utils/galleryPath";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
@@ -133,7 +133,7 @@ let lastTrackedGalleryPath: string | null = null;
 const analytics = createImageAnalytics(() => ({ path: currentPath.value }));
 
 // 数据加载 / 菜单命令 / 事件刷新 / URL path 同步均由 ImageGrid connected 模式接管
-const surface = createGallerySurface({ analytics });
+const adapter = createGalleryAdapter({ analytics });
 
 watch(
   currentPath,

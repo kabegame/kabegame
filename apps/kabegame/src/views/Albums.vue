@@ -7,7 +7,7 @@
       ref="albumViewRef"
       class="albums-grid-body"
       :class="{ 'has-detail': !isCompact && detailOpen }"
-      :surface="surface"
+      :adapter="adapter"
       :enable-ctrl-wheel-adjust-columns="!isCompact"
       enable-virtual-scroll
       :enable-ctrl-key-adjust-columns="!isCompact"
@@ -293,7 +293,7 @@ import {
   type GalleryQueryPatch,
   type GallerySortField,
 } from "@/utils/galleryPath";
-import { createAlbumDetailSurface } from "@/components/imageGrid/surfaces/album";
+import { createAlbumDetailAdapter } from "@/components/imageGrid/adapters/album";
 import {
   useAlbumDetailRouteStore,
   albumDetailStickySearchMode,
@@ -522,7 +522,7 @@ watch(
   },
 );
 
-// ---------- 中栏：ImageGrid surface（与 AlbumDetail 共用 album surface） ----------
+// ---------- 中栏：ImageGrid adapter（与 AlbumDetail 共用 album adapter） ----------
 const analytics = createImageAnalytics(() => ({
   surface: "albums_page",
   albumId: selectedAlbumId.value,
@@ -530,7 +530,7 @@ const analytics = createImageAnalytics(() => ({
   path: albumDetailRouteStore.computedPath,
 }));
 
-const surface = createAlbumDetailSurface({
+const adapter = createAlbumDetailAdapter({
   albumId: () => selectedAlbumId.value,
   albumName: () => selectedAlbumName.value,
   isLocalFolder: () => albumStore.isLocalFolderAlbum(selectedAlbumId.value),
