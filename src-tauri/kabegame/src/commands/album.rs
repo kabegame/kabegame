@@ -39,13 +39,7 @@ pub fn move_album<R: Runtime>(
 
 #[tauri::command]
 pub fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
-    // #region DEBUG-gallery-refresh
-    let t0 = std::time::Instant::now();
-    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_add_to_album_enter", serde_json::json!({ "album": album_id, "ids": image_ids, "thread": format!("{:?}", std::thread::current().name()) }));
-    let r = commands::album::add_images_to_album(album_id, image_ids);
-    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_add_to_album_exit", serde_json::json!({ "ms": t0.elapsed().as_millis(), "ok": r.is_ok() }));
-    r
-    // #endregion
+    commands::album::add_images_to_album(album_id, image_ids)
 }
 
 /// 将任务的全部图片加入画册（后端根据 task_id 取图，前端只负责选画册）
@@ -90,10 +84,9 @@ pub async fn add_local_folder_album(
 #[tauri::command]
 pub async fn sync_local_folder_album(
     album_id: String,
-    recursive: Option<bool>,
-    create_missing_albums: Option<bool>,
+    descend: Option<kabegame_core::local_folder::Descend>,
 ) -> Result<Value, String> {
-    commands::album::sync_local_folder_album(album_id, recursive, create_missing_albums).await
+    commands::album::sync_local_folder_album(album_id, descend).await
 }
 
 #[tauri::command]
@@ -107,11 +100,6 @@ pub async fn set_album_sync_mode(
 #[tauri::command]
 pub async fn convert_local_folder_album_to_normal(album_id: String) -> Result<Value, String> {
     commands::album::convert_local_folder_album_to_normal(album_id).await
-}
-
-#[tauri::command]
-pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
-    commands::album::sync_local_folder_albums(album_ids).await
 }
 
 #[tauri::command]

@@ -6,10 +6,10 @@ import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import {
-  useFolderSyncStore,
   type FolderSyncFinished,
   type FolderSyncRunState,
   type FolderSyncTask,
+  useFolderSyncStore,
 } from "@/stores/folderSync";
 
 let unlistenProgress: UnlistenFn | null = null;
@@ -23,35 +23,67 @@ export async function init(): Promise<void> {
   if (disabled()) return;
   const store = useFolderSyncStore();
   try {
-    store.applyRunState(await invoke<FolderSyncRunState>("get_folder_sync_run_state"));
+    store.applyRunState(
+      await invoke<FolderSyncRunState>("get_folder_sync_run_state"),
+    );
   } catch (error) {
     console.warn("[folderSync] get_folder_sync_run_state failed:", error);
   }
 
-  unlistenProgress = await listen<FolderSyncTask>("folder-sync-progress", (event) => {
-    store.applyProgress(event.payload);
-  });
-  unlistenFinished = await listen<FolderSyncFinished>("folder-sync-finished", (event) => {
-    const payload = event.payload;
-    store.applyFinished(payload);
-    if (payload.error) {
-      ElMessage.error(i18n.global.t("albums.syncFailedToast", { name: payload.albumName }));
-      return;
-    }
-    if (payload.canceled) {
-      ElMessage.info(i18n.global.t("albums.syncCanceledToast", { name: payload.albumName }));
-      return;
-    }
-    const changed = payload.added + payload.deleted + payload.reimported + payload.createdAlbums;
-    if (changed > 0) {
-      ElMessage.success(
-        i18n.global.t("albums.syncDoneToast", {
-          name: payload.albumName,
-          added: payload.added,
-        }),
-      );
-    }
-  });
+  unlistenProgress = await listen<FolderSyncTask>(
+    "folder-sync-progress",
+    (event) => {
+      store.applyProgress(event.payload);
+    },
+  );
+  unlistenFinished = await listen<FolderSyncFinished>(
+    "folder-sync-finished",
+    (event) => {
+      const payload = event.payload;
+      store.applyFinished(payload);
+      if (payload.preempted) return;
+      if (payload.error) {
+        ElMessage.error(
+          i18n.global.t("albums.syncFailedToast", { name: payload.albumName }),
+        );
+        return;
+      }
+      if (payload.canceled) {
+        ElMessage.info(
+          i18n.global.t("albums.syncCanceledToast", {
+            name: payload.albumName,
+          }),
+        );
+        return;
+      }
+      if (payload.removedAlbum) {
+        ElMessage.warning(
+          i18n.global.t("albums.folderRemovedToast", {
+            name: payload.albumName,
+          }),
+        );
+        return;
+      }
+      if (payload.manual && payload.skippedUnchanged) {
+        ElMessage.info(
+          i18n.global.t("albums.localFolder.syncSkippedUnchanged"),
+        );
+        return;
+      }
+      const changed = payload.added + payload.deleted + payload.reimported +
+        payload.createdAlbums;
+      // 手动触发的任务即使无变化也要给反馈；自动任务只在有变化时提示
+      if (changed > 0 || payload.manual) {
+        ElMessage.success(
+          i18n.global.t("albums.localFolder.syncDone", {
+            added: payload.added,
+            deleted: payload.deleted,
+            reimported: payload.reimported,
+          }),
+        );
+      }
+    },
+  );
 }
 
 export function dispose(): void {

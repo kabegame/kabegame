@@ -1,6 +1,3 @@
-// #region DEBUG-gallery-refresh
-import { sendDebugEvent } from "@kabegame/core/debugIngest";
-// #endregion
 /**
  * trailing throttle（带尾触发）：在高频触发下，最多每 `waitMs` 执行一次，
  * 且保证“最后一次触发”不会丢（会在窗口结束后补执行一次）。
@@ -43,9 +40,6 @@ export function useTrailingThrottleFn<TArgs extends any[]>(
     pendingArgs = args;
     const now = Date.now();
     const elapsed = now - lastRunAt;
-    // #region DEBUG-gallery-refresh
-    void sendDebugEvent("throttle_trigger", { waitMs, elapsed, lastRunAt, hasTimer: !!timer, immediate: lastRunAt === 0 || elapsed >= waitMs }, { sessionId: "gallery-refresh" });
-    // #endregion
 
     // 第一次或超过窗口：立即执行，并清掉可能的 trailing 计划
     if (lastRunAt === 0 || elapsed >= waitMs) {
@@ -75,4 +69,3 @@ export function useTrailingThrottleFn<TArgs extends any[]>(
 
   return { trigger, cancel, flush };
 }
-

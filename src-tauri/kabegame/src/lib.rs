@@ -116,26 +116,6 @@ fn init(
             "debug_assertions": cfg!(debug_assertions),
         }),
     );
-    // #region DEBUG-gallery-refresh：主线程心跳，排队延迟 >200ms 上报
-    #[cfg(all(debug_assertions, not(feature = "web")))]
-    {
-        let hb_handle = app.app_handle().clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let sent = std::time::Instant::now();
-            let _ = hb_handle.run_on_main_thread(move || {
-                let lag = sent.elapsed().as_millis();
-                if lag > 200 {
-                    crate::debug_ingest::spawn_debug_event(
-                        "gallery-refresh",
-                        "be_main_thread_lag",
-                        serde_json::json!({ "lag_ms": lag }),
-                    );
-                }
-            });
-        });
-    }
-    // #endregion
     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
     #[cfg(all(target_os = "linux", not(feature = "web")))]
     {
@@ -247,7 +227,7 @@ fn init(
 
     // 桌面端 watcher 无条件常驻；是否监听与同步由各本地文件夹画册的 sync_mode 决定。
     // 存量画册均为 none 时不会建立目录监听，也不会自动扫盘。
-    spawn_local_folder_sync_watcher();
+    spawn_local_folder_sync();
 
     // 桌面端 MCP 与自动更新：初始化后端权威单例
     #[cfg(all(not(feature = "web"), not(target_os = "android")))]
@@ -287,14 +267,14 @@ fn init(
 
 
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
-fn spawn_local_folder_sync_watcher() {
+fn spawn_local_folder_sync() {
     tauri::async_runtime::spawn(async {
-        kabegame_core::local_folder::watch::set_enabled(true).await;
+        kabegame_core::local_folder::start().await;
     });
 }
 
 #[cfg(not(all(not(feature = "web"), not(target_os = "android"))))]
-fn spawn_local_folder_sync_watcher() {}
+fn spawn_local_folder_sync() {}
 
 // ---- web entry point ----
 #[cfg(feature = "web")]
@@ -500,7 +480,6 @@ pub(crate) fn configure_app(
             sync_local_folder_album,
             set_album_sync_mode,
             convert_local_folder_album_to_normal,
-            sync_local_folder_albums,
             get_folder_sync_run_state,
             cancel_folder_sync,
             // --- Images ---

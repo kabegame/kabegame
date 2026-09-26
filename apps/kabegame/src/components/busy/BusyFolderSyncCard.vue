@@ -26,6 +26,12 @@
         <el-icon class="text-[13px]"><Close /></el-icon>
       </button>
     </div>
+    <div class="mt-2 h-1 overflow-hidden rounded-full bg-[rgba(167,139,250,0.18)]">
+      <div
+        class="h-full rounded-full bg-[var(--anime-primary)] transition-[width] duration-200"
+        :style="{ width: `${Math.min(100, Math.max(0, task.progress))}%` }"
+      />
+    </div>
   </article>
 </template>
 
@@ -35,6 +41,8 @@ import { Close, Refresh } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { useFolderSyncStore } from "@/stores/folderSync";
+import { useAlbumStore } from "@/stores/albums";
+import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import * as folderSyncService from "@/services/folderSync";
 
 const props = defineProps<{ albumId: string }>();
@@ -42,12 +50,14 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const router = useRouter();
 const store = useFolderSyncStore();
+const albumStore = useAlbumStore();
+const albumPath = useAlbumIdPathState();
 
 const task = computed(() => store.tasks.get(props.albumId) ?? null);
 const detail = computed(() => {
   const current = task.value;
   if (!current) return "";
-  const parts = [t("albums.syncScanning", { added: current.added })];
+  const parts = [`${Math.round(current.progress)}%`, t("albums.syncScanning", { added: current.added })];
   if (current.deleted > 0) {
     parts.push(t("albums.syncDetailDeleted", { deleted: current.deleted }));
   }
@@ -58,7 +68,9 @@ const detail = computed(() => {
 });
 
 async function viewAlbum() {
-  await router.push({ name: "AlbumDetail", params: { albumId: props.albumId } });
+  const album = albumStore.albums.find((item) => item.id === props.albumId);
+  if (album) await albumPath.set(album.ancestorPath);
+  await router.push({ name: "Albums" });
   emit("close");
 }
 </script>

@@ -1,5 +1,5 @@
 use crate::emitter::GlobalEmitter;
-use crate::local_folder::{FolderSyncService, SyncMode};
+use crate::local_folder::SyncMode;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use kabegame_i18n::t;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -1012,26 +1012,6 @@ UPDATE albums SET ancestor_path = tree.path
         }
         if sync_mode == SyncMode::Delegated.as_str() {
             return Err(t!("albums.localFolderErrors.delegatedConversion").to_string());
-        }
-
-        for task in FolderSyncService::global().snapshot() {
-            if task.album_id == album_id {
-                return Err(t!("albums.localFolderErrors.syncInProgress").to_string());
-            }
-            let running_ancestor_path: Option<String> = tx
-                .query_row(
-                    "SELECT ancestor_path FROM albums WHERE id = ?1",
-                    params![task.album_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| format!("query running folder sync album path: {e}"))?;
-            if running_ancestor_path.is_some_and(|running_path| {
-                running_path.starts_with(&root_ancestor_path)
-                    || root_ancestor_path.starts_with(&running_path)
-            }) {
-                return Err(t!("albums.localFolderErrors.syncInProgress").to_string());
-            }
         }
 
         let converted_ids = {

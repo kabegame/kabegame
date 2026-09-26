@@ -11,9 +11,6 @@ pub mod crawler;
 pub mod gallery;
 pub mod kgpg;
 pub mod local_folder;
-// #region DEBUG-gallery-refresh
-pub mod dbg_gallery_refresh;
-// #endregion
 pub mod media;
 pub mod plugin;
 pub mod providers;

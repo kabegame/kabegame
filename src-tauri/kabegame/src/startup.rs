@@ -383,20 +383,8 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
     let event_loop_future = async move {
         let mut rx = broadcaster.subscribe_filtered_stream(&DaemonEventKind::ALL);
         eprintln!("[EVENT_LOOP] ready for receive event");
-        while let Some((_id, event)) = rx.recv().await {
+        while let Some((_, event)) = rx.recv().await {
             let kind = event.kind();
-            // #region DEBUG-gallery-refresh
-            #[cfg(all(debug_assertions, not(feature = "web")))]
-            let dbg_name = kind.as_event_name();
-            #[cfg(all(debug_assertions, not(feature = "web")))]
-            let dbg_watch = dbg_name == "images-change" || dbg_name == "album-images-change";
-            #[cfg(all(debug_assertions, not(feature = "web")))]
-            let dbg_t0 = std::time::Instant::now();
-            #[cfg(all(debug_assertions, not(feature = "web")))]
-            if dbg_watch {
-                crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_loop_recv", serde_json::json!({ "id": _id, "kind": dbg_name }));
-            }
-            // #endregion
 
             #[cfg(feature = "web")]
             {
@@ -421,20 +409,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                         serde_json::to_value(&event).unwrap_or(serde_json::Value::Null),
                     )
                 };
-                // #region DEBUG-gallery-refresh
-                #[cfg(debug_assertions)]
-                let dbg_emit_t0 = std::time::Instant::now();
-                // #endregion
-                let _r = app.emit(name.as_str(), payload);
-                // #region DEBUG-gallery-refresh
-                #[cfg(debug_assertions)]
-                {
-                    let ms = dbg_emit_t0.elapsed().as_millis();
-                    if dbg_watch || ms > 100 {
-                        crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_loop_emitted", serde_json::json!({ "id": _id, "kind": dbg_name, "emit_ms": ms, "ok": _r.is_ok(), "err": _r.as_ref().err().map(|e| e.to_string()) }));
-                    }
-                }
-                // #endregion
+                let _ = app.emit(name.as_str(), payload);
             }
 
             match &*event {
@@ -494,15 +469,6 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
             ) {
                 refresh_notifications(&app).await;
             }
-            // #region DEBUG-gallery-refresh
-            #[cfg(all(debug_assertions, not(feature = "web")))]
-            {
-                let ms = dbg_t0.elapsed().as_millis();
-                if ms > 100 {
-                    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_loop_slow_iter", serde_json::json!({ "id": _id, "kind": dbg_name, "ms": ms }));
-                }
-            }
-            // #endregion
         }
     };
     #[cfg(not(feature = "web"))]

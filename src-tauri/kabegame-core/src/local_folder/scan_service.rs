@@ -200,6 +200,15 @@ pub trait FolderScanHook: Send + Sync {
         Ok(())
     }
 
+    /// 不递归进入子目录时报告直接子目录，由消费者决定是否另起任务。
+    async fn on_subdir(
+        &mut self,
+        _dir: &ScannedDir,
+        _ctx: &ScanCtx<Self::DirCtx>,
+    ) -> Result<(), ScanError> {
+        Ok(())
+    }
+
     /// 发现一个健康、稳定的媒体文件时调用，`ctx` 当前帧为其所在目录。
     async fn on_file(
         &mut self,
@@ -343,6 +352,26 @@ async fn read_dir_entries(dir_url: &Url, skip_hidden_dirs: bool) -> Result<Vec<R
     }
 }
 
+/// 列出目录的健康、非符号链接直接子目录，不对文件做 metadata/stat。
+pub async fn list_child_dirs(
+    dir_url: &Url,
+    skip_hidden_dirs: bool,
+) -> Result<Vec<ScannedDir>, String> {
+    let mut dirs = read_dir_entries(dir_url, skip_hidden_dirs)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.is_dir && !entry.is_symlink)
+        .map(|entry| ScannedDir {
+            path: entry.url.to_file_path().ok(),
+            url: entry.url,
+            name: entry.name,
+            depth: 1,
+        })
+        .collect::<Vec<_>>();
+    dirs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(dirs)
+}
+
 /// 对一个媒体文件项分类（媒体过滤），命中则按收集节流间隔回调 `on_file`。
 async fn process_file<H: FolderScanHook>(
     raw: &RawEntry,
@@ -478,6 +507,19 @@ async fn process_dir<H: FolderScanHook>(
         if raw.is_dir {
             let can_recurse = options.recursive && depth + 1 < options.max_depth;
             if !can_recurse {
+                let sub = ScannedDir {
+                    url: raw.url.clone(),
+                    path: raw.url.to_file_path().ok(),
+                    name: raw.name.clone(),
+                    depth: depth + 1,
+                };
+                match hook.on_subdir(&sub, &*ctx).await {
+                    Ok(()) => {}
+                    Err(ScanError::Fatal(message)) => return Err(ScanError::Fatal(message)),
+                    Err(error @ ScanError::Skip(_)) | Err(error @ ScanError::Interrupt(_)) => {
+                        ctx.record_at(raw.url.clone(), Some(raw.url.clone()), error);
+                    }
+                }
                 hook.on_progress(per);
                 continue;
             }

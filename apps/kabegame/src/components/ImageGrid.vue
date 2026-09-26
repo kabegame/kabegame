@@ -112,9 +112,6 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
-// #region DEBUG-gallery-refresh
-import { sendDebugEvent } from "@kabegame/core/debugIngest";
-// #endregion
 import type {
   GridRefreshContext,
   GridRemoveDialogText,
@@ -206,11 +203,6 @@ const settingsStore = useSettingsStore();
 const albumStore = useAlbumStore();
 
 const adapter = props.adapter;
-// #region DEBUG-gallery-refresh
-let dbgSeq = 0;
-const dbg = (name: string, payload: Record<string, unknown> = {}) =>
-  void sendDebugEvent(name, { grid: adapter.id, seq: ++dbgSeq, ...payload }, { sessionId: "gallery-refresh" });
-// #endregion
 
 function handleOpenTask(taskId: string) {
   void router.push({ name: "TaskDetail", params: { taskId: taskId } });
@@ -319,16 +311,11 @@ const loadImages = async (path?: string) => {
   if (!raw) return;
   if (adapter.validatePath && !adapter.validatePath(raw)) return;
   loadImagesInFlight = true;
-  dbg("loadImages_start", { raw, argPath: path ?? null, computedPath: adapter.routeStore.computedPath });
   try {
     clearImageMetadataCache();
     const rows = await pathqlFetch<Record<string, unknown>>(withGalleryPrefix(raw));
     images.value = rows.map(rowToImageInfo);
     loadedKey.value = raw;
-    dbg("loadImages_done", { raw, rows: rows.length, firstIds: rows.slice(0, 3).map((x) => x.id) });
-  } catch (e) {
-    dbg("loadImages_error", { raw, error: String(e) });
-    throw e;
   } finally {
     loadImagesInFlight = false;
   }
@@ -365,7 +352,6 @@ const {
  */
 const refreshPage = async (): Promise<{ removedIds: string[] }> => {
   const prevList = images.value.slice();
-  dbg("refreshPage_start", { path: gridCurrentPath.value, prevCount: prevList.length, isRouteActive: isRouteActive.value, adapterActive: adapter.isActive() });
   const container = getContainerEl();
   const prevScrollTop = container?.scrollTop ?? 0;
   try {
@@ -378,7 +364,6 @@ const refreshPage = async (): Promise<{ removedIds: string[] }> => {
   await loadTotalImagesCount();
 
   const { removedIds } = diffById(prevList, images.value);
-  dbg("refreshPage_diff", { newCount: images.value.length, removedIds, total: totalImagesCount.value });
   if (removedIds.length > 0) {
     const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
     if (selected && selected.size > 0 && removedIds.some((id) => selected.has(id))) {
@@ -502,23 +487,12 @@ const defaultEventRefresh = async () => {
 useImagesChangeRefresh({
   enabled: ref(true),
   waitMs: adapter.imagesChange?.waitMs ?? 1000,
-  filter: (p) => {
-    const pass = adapter.imagesChange?.filter?.(p, refreshCtx) ?? true;
-    dbg("imagesChange_recv", { payload: p, pass, currentIds: images.value.slice(0, 5).map((i) => i.id), count: images.value.length });
-    return pass;
-  },
+  filter: (p) => adapter.imagesChange?.filter?.(p, refreshCtx) ?? true,
   onRefresh: async (p) => {
-    dbg("imagesChange_refresh_start", { reason: p.reason });
-    try {
     if (adapter.imagesChange?.onRefresh) {
       await adapter.imagesChange.onRefresh(p, refreshCtx);
     } else {
       await defaultEventRefresh();
-    }
-    dbg("imagesChange_refresh_end", { reason: p.reason });
-    } catch (e) {
-      dbg("imagesChange_refresh_error", { error: String(e) });
-      throw e;
     }
   },
 });
@@ -526,25 +500,14 @@ useImagesChangeRefresh({
 useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: adapter.albumImagesChange?.waitMs ?? 500,
-  filter: (p) => {
-    const pass = adapter.albumImagesChange?.filter
+  filter: (p) => adapter.albumImagesChange?.filter
       ? adapter.albumImagesChange.filter(p, refreshCtx)
-      : (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID);
-    dbg("albumImagesChange_recv", { payload: p, pass });
-    return pass;
-  },
+      : (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
   onRefresh: async (p) => {
-    dbg("albumImagesChange_refresh_start", { reason: p.reason, albumIds: p.albumIds });
-    try {
     if (adapter.albumImagesChange?.onRefresh) {
       await adapter.albumImagesChange.onRefresh(p, refreshCtx);
     } else {
       await defaultEventRefresh();
-    }
-    dbg("albumImagesChange_refresh_end", {});
-    } catch (e) {
-      dbg("albumImagesChange_refresh_error", { error: String(e) });
-      throw e;
     }
   },
 });
@@ -749,7 +712,6 @@ const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) =>
 
 const confirmRemoveImages = async () => {
   const pending = pendingRemove.value;
-  dbg("confirmRemove", { mode: pending?.mode, ids: pending?.images.map((i) => i.id) });
   removeDialog.close();
   if (!pending || pending.images.length === 0) return;
   pendingRemove.value = null;
@@ -875,7 +837,6 @@ const runDefaultCommand = async (
 };
 
 async function handleContextCommand(payload: CoreContextCommandPayload): Promise<CoreContextCommand | null | undefined> {
-  dbg("contextCommand", { command: payload.command, imageId: payload.image?.id });
   // view 的覆盖钩子先执行：返回命令 = 委托内置默认实现；返回 null = 已处理/抑制
   const res = props.onContextCommand
     ? await props.onContextCommand(payload as ContextCommandPayload)

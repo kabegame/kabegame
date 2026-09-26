@@ -6,6 +6,9 @@ export interface FolderSyncTask {
   albumId: string;
   albumName: string;
   recursive: boolean;
+  kind: "full" | "diff";
+  progress: number;
+  manual: boolean;
   added: number;
   deleted: number;
   reimported: number;
@@ -17,6 +20,9 @@ export interface FolderSyncTask {
 export type FolderSyncFinished = Omit<FolderSyncTask, "startedAtMs"> & {
   /** 用户主动取消（不是失败）：与 error 互斥。 */
   canceled: boolean;
+  preempted: boolean;
+  skippedUnchanged: boolean;
+  removedAlbum: boolean;
   error: string | null;
 };
 
@@ -44,7 +50,9 @@ export const useFolderSyncStore = defineStore("folderSync", () => {
 
   function applyRunState(state: FolderSyncRunState) {
     tasks.value = new Map(
-      (Array.isArray(state.tasks) ? state.tasks : []).map((task) => [task.albumId, { ...task }]),
+      (Array.isArray(state.tasks) ? state.tasks : []).map((
+        task,
+      ) => [task.albumId, { ...task }]),
     );
   }
 

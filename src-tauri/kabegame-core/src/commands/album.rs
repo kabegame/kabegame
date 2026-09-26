@@ -7,8 +7,6 @@ use crate::storage::image_events::{
 };
 use crate::storage::Storage;
 #[cfg(feature = "virtual-driver")]
-use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "virtual-driver")]
 use crate::virtual_driver::VirtualDriveService;
 use kabegame_i18n::t;
 use serde_json::Value;
@@ -58,21 +56,33 @@ pub fn set_album_sync_mode(
         mode,
         crate::local_folder::SyncMode::Shallow | crate::local_folder::SyncMode::Recursive
     ) {
-        tokio::spawn(async move {
-            if let Err(err) =
-                crate::local_folder::sync_album_for_mode_with_retry(&album_id, mode).await
-            {
-                eprintln!(
-                    "[commands.album] sync_album {album_id} after sync mode change failed: {err}"
-                );
-            }
-        });
+        let descend = match mode {
+            crate::local_folder::SyncMode::Shallow => crate::local_folder::Descend::None,
+            crate::local_folder::SyncMode::Recursive => crate::local_folder::Descend::CreateMissing,
+            _ => unreachable!(),
+        };
+        crate::local_folder::synchronizer::submit(
+            crate::local_folder::synchronizer::SyncCmd::Full {
+                album_id,
+                opts: crate::local_folder::FullSyncOptions {
+                    descend,
+                    origin: crate::local_folder::SyncOrigin::System,
+                    depth: 0,
+                },
+            },
+        );
     }
     Ok(Value::Null)
 }
 
 #[cfg(not(target_os = "android"))]
 pub async fn convert_local_folder_album_to_normal(album_id: String) -> Result<Value, String> {
+    let album = Storage::global()
+        .get_album_by_id(&album_id)?
+        .ok_or_else(|| "画册不存在".to_string())?;
+    if crate::local_folder::synchronizer::is_busy_under(&album.ancestor_path) {
+        return Err(t!("albums.localFolderErrors.syncInProgress").to_string());
+    }
     let converted_ids = Storage::global().convert_local_folder_album_to_normal(&album_id)?;
     #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().bump_albums();
@@ -180,8 +190,6 @@ pub async fn add_local_folder_album(
 
     // 唯一需要刻意避开的「禁区根」：VD 挂载点。根命中直接报错；递归子目录由同步钩子 forbidden_roots 静默剪枝。
     // （下载输出目录不再禁止：同步时按路径复用图库已有图片，不会产生 local_path 冲突。）
-    let mut forbidden_roots: Vec<std::path::PathBuf> = Vec::new();
-
     #[cfg(feature = "virtual-driver")]
     {
         if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
@@ -196,7 +204,6 @@ pub async fn add_local_folder_album(
                 )
                 .to_string());
             }
-            forbidden_roots.push(mount_canon);
         }
     }
 
@@ -223,13 +230,17 @@ pub async fn add_local_folder_album(
         Storage::global().add_local_folder_albums_tx(std::slice::from_ref(&root_entry))?;
     Storage::global().rechain_local_folder_albums()?;
 
-    tokio::spawn(async move {
-        let options = crate::local_folder::SyncAlbumOptions {
-            recursive,
-            forbidden_roots,
-            ..Default::default()
-        };
-        let _ = crate::local_folder::sync_album(&root_id, options).await;
+    crate::local_folder::synchronizer::submit(crate::local_folder::synchronizer::SyncCmd::Full {
+        album_id: root_id,
+        opts: crate::local_folder::FullSyncOptions {
+            descend: if recursive {
+                crate::local_folder::Descend::CreateMissing
+            } else {
+                crate::local_folder::Descend::None
+            },
+            origin: crate::local_folder::SyncOrigin::System,
+            depth: 0,
+        },
     });
 
     serde_json::to_value(created).map_err(|e| e.to_string())
@@ -238,56 +249,24 @@ pub async fn add_local_folder_album(
 #[cfg(not(target_os = "android"))]
 pub async fn sync_local_folder_album(
     album_id: String,
-    recursive: Option<bool>,
-    create_missing_albums: Option<bool>,
+    descend: Option<crate::local_folder::Descend>,
 ) -> Result<Value, String> {
-    let recursive = recursive.unwrap_or(false);
-    let options = crate::local_folder::SyncAlbumOptions {
-        recursive,
-        create_missing_albums: create_missing_albums.unwrap_or(true),
-        forbidden_roots: if recursive {
-            crate::local_folder::local_folder_forbidden_roots()
-        } else {
-            Vec::new()
+    crate::local_folder::synchronizer::submit(crate::local_folder::synchronizer::SyncCmd::Full {
+        album_id,
+        opts: crate::local_folder::FullSyncOptions {
+            descend: descend.unwrap_or(crate::local_folder::Descend::None),
+            origin: crate::local_folder::SyncOrigin::Manual,
+            depth: 0,
         },
-    };
-    let report = crate::local_folder::sync_album(&album_id, options).await?;
-    serde_json::to_value(report).map_err(|e| e.to_string())
+    });
+    Ok(Value::Null)
 }
 
 #[cfg(target_os = "android")]
 pub async fn sync_local_folder_album(
     _album_id: String,
-    _recursive: Option<bool>,
-    _create_missing_albums: Option<bool>,
+    _descend: Option<crate::local_folder::Descend>,
 ) -> Result<Value, String> {
-    Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
-}
-
-#[cfg(not(target_os = "android"))]
-pub async fn sync_local_folder_albums(album_ids: Vec<String>) -> Result<Value, String> {
-    let results = crate::local_folder::sync_albums_by_ids(&album_ids).await;
-    let payload: Vec<Value> = album_ids
-        .iter()
-        .zip(results.into_iter())
-        .map(|(id, result)| match result {
-            Ok(report) => serde_json::json!({
-                "albumId": id,
-                "ok": report,
-                "err": null,
-            }),
-            Err(err) => serde_json::json!({
-                "albumId": id,
-                "ok": null,
-                "err": err,
-            }),
-        })
-        .collect();
-    Ok(Value::Array(payload))
-}
-
-#[cfg(target_os = "android")]
-pub async fn sync_local_folder_albums(_album_ids: Vec<String>) -> Result<Value, String> {
     Err(t!("albums.localFolderErrors.androidUnsupported").to_string())
 }
 
@@ -304,10 +283,9 @@ pub fn get_folder_sync_run_state() -> Result<Value, String> {
 
 #[cfg(not(target_os = "android"))]
 pub fn cancel_folder_sync(album_id: Option<String>) -> Result<Value, String> {
-    let service = crate::local_folder::FolderSyncService::global();
     let canceled = match album_id {
-        Some(album_id) => usize::from(service.cancel(&album_id)),
-        None => service.cancel_all(),
+        Some(album_id) => usize::from(crate::local_folder::synchronizer::cancel(&album_id)),
+        None => crate::local_folder::synchronizer::cancel_all(),
     };
     Ok(serde_json::json!({ "canceled": canceled }))
 }

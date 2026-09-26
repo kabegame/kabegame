@@ -1069,14 +1069,12 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         album_id: String,
-                        recursive: Option<bool>,
-                        create_missing_albums: Option<bool>,
+                        descend: Option<kabegame_core::local_folder::Descend>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::sync_local_folder_album(
                         args.album_id,
-                        args.recursive,
-                        args.create_missing_albums,
+                        args.descend,
                     )
                     .await
                     .map_err(RpcError::internal)
@@ -1122,26 +1120,6 @@ pub fn init_registry() {
                     )
                     .await
                     .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
-        "sync_local_folder_albums",
-        MethodEntry {
-            requires_super: true,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(Deserialize)]
-                    #[serde(rename_all = "camelCase")]
-                    struct Args {
-                        album_ids: Vec<String>,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::album::sync_local_folder_albums(args.album_ids)
-                        .await
-                        .map_err(RpcError::internal)
                 })
             }),
         },

@@ -309,10 +309,8 @@ import {
   convertLocalFolderAlbumToNormal,
   setAlbumSyncMode,
   syncLocalFolderAlbum,
-  syncLocalFolderAlbums,
 } from "@/api/syncLocalFolder";
 import type { AlbumSyncMode } from "@kabegame/core/types/album";
-import { reportBatchSyncResult, reportSingleSyncResult } from "@/utils/folderSyncReport";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
 import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
@@ -696,16 +694,13 @@ const handleRefresh = async () => {
     delete albumStore.albumImages[FAVORITE_ALBUM_ID];
     await albumViewRef.value?.refresh?.();
 
-    const localFolderIds = albums.value
-      .filter((a) => a.type === "local_folder")
-      .map((a) => a.id);
-
-    if (IS_ANDROID || IS_WEB || localFolderIds.length === 0) {
+    const selected = albums.value.find((album) => album.id === selectedAlbumId.value);
+    if (IS_ANDROID || IS_WEB || selected?.type !== "local_folder") {
       ElMessage.success(t("albums.refreshSuccess"));
     } else {
-      ElMessage.warning(t("albums.localFolder.refreshSyncProgressing"));
-      const results = await syncLocalFolderAlbums(localFolderIds);
-      reportBatchSyncResult(results);
+      void syncLocalFolderAlbum(selected.id).catch((error) => {
+        ElMessage.error(error?.message || String(error));
+      });
     }
   } catch (error) {
     console.error("刷新失败:", error);
@@ -911,8 +906,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "syncNow") {
     try {
-      const report = await syncLocalFolderAlbum(id);
-      if (report) reportSingleSyncResult(report);
+      await syncLocalFolderAlbum(id, "none");
     } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }
@@ -920,33 +914,11 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   }
 
   if (command === "syncNowRecursiveExisting" || command === "syncNowRecursiveFull") {
-    ElMessage.info(t("albums.localFolder.recursiveSyncing", { name }));
     try {
-      const report = await syncLocalFolderAlbum(id, {
-        recursive: true,
-        createMissingAlbums: command === "syncNowRecursiveFull",
-      });
-      if (report) {
-        // 递归入口合并后首次可能返回 skippedInFlight（同一画册并发递归的第二次调用）。
-        if (report.skippedInFlight) {
-          ElMessage.info(t("albums.localFolder.syncInFlight"));
-          return;
-        }
-        await albumStore.loadAlbums();
-        if (report.canceled) return; // 取消的提示走 folder-sync-finished 事件
-        const skippedText = report.skippedUnchangedDirs > 0
-          ? t("albums.localFolder.recursiveSyncSkippedSuffix", { skipped: report.skippedUnchangedDirs })
-          : "";
-        ElMessage.success(
-          t("albums.localFolder.recursiveSyncDone", {
-            createdAlbums: report.createdAlbums,
-            syncedAlbums: report.syncedAlbums,
-            added: report.added,
-            deleted: report.deleted,
-            skippedText,
-          }),
-        );
-      }
+      await syncLocalFolderAlbum(
+        id,
+        command === "syncNowRecursiveFull" ? "createMissing" : "existing",
+      );
     } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }

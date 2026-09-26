@@ -81,13 +81,7 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
-    // #region DEBUG-gallery-refresh
-    let t0 = std::time::Instant::now();
-    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_batch_delete_enter", serde_json::json!({ "ids": image_ids, "thread": format!("{:?}", std::thread::current().name()) }));
-    let r = commands::image::batch_delete_images(image_ids).await;
-    crate::debug_ingest::spawn_debug_event("gallery-refresh", "be_batch_delete_exit", serde_json::json!({ "ms": t0.elapsed().as_millis(), "ok": r.is_ok() }));
-    r
-    // #endregion
+    commands::image::batch_delete_images(image_ids).await
 }
 
 #[tauri::command]
