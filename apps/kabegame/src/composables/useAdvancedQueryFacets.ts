@@ -17,7 +17,6 @@ import {
   type GalleryFilterDimension,
   type NodePath,
   normalizeQuery,
-  notParity,
   serializeQueryBody,
   setFilterDimension,
   updateNode,
@@ -107,12 +106,10 @@ export function useDimensionFacet(
     let filter: GalleryFilter | null = null;
     if (normalized && normalized !== "all") {
       filter = filterFromTreeSegment(normalized);
-      // 组内/取非行的 plugin extend 贡献受引擎限制，选择时会降级为裸插件
-      // （见 GalleryAdvancedQueryConditionRow）；预测保持同一口径。
+      // 追加高级条件可能包装进组；插件细分在选择时降级为裸插件，预测保持同一口径。
       if (
         filter.type === "plugin" &&
-        filter.extendPath?.trim() &&
-        (path.length > 1 || notParity(currentTree, path))
+        filter.extendPath?.trim()
       ) {
         filter = { type: "plugin", pluginId: filter.pluginId };
       }

@@ -68,6 +68,7 @@ import {
 } from "@/utils/galleryPath";
 import {
   cloneQuery,
+  composeQueryFilters,
   normalizeQuery,
   type GalleryQuery,
 } from "@/utils/galleryQuery";
@@ -116,7 +117,8 @@ watch(
 const previewPath = computed(() =>
   queryRuntimePath(
     buildComposablePath({
-      query: effectiveQuery.value,
+      // 路径预览保留追加边界，与查询条实际应用后的持久化路径一致。
+      query: composeQueryFilters({}, effectiveQuery.value),
       sort: props.sort,
       page: props.page,
       pageSize: props.pageSize,

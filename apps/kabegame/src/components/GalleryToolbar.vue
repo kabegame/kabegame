@@ -4,7 +4,7 @@
       <span class="inline-flex items-center gap-2">
         <span>{{ totalCountText }}</span>
         <!-- 清除过滤挪进副标题：过滤行里那个文字按钮太占位置，而这里本来就在说
-             「筛出了多少 / 一共多少」，清除是同一件事的延伸。只认简单过滤 + 搜索,
+             「筛出了多少 / 一共多少」，清除是同一件事的延伸。清除简单与高级条件，
              hide 这类全局开关不算过滤，不该被这个叉号一并清掉。 -->
         <button
           v-if="isFilterIndicatorActive"
@@ -59,7 +59,7 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
-  asSingleFilterSet,
+  splitQueryFilters,
   filterSetToSingleFilter,
   hasActiveQuery,
   querySearchTerm,
@@ -122,8 +122,8 @@ const queryBarRef = ref<{
 } | null>(null);
 const failedImagesDialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
 
-/** 查询的单原子投影（安卓折叠菜单标签用）；null = 组合查询。 */
-const simpleFilters = computed(() => asSingleFilterSet(galleryRouteStore.query));
+/** 安卓折叠菜单只展示简单部分，高级条件由独立 chip 管理。 */
+const simpleFilters = computed(() => splitQueryFilters(galleryRouteStore.query).simple);
 const isNoAlbumBrowse = computed(() => galleryRouteStore.effectiveNoAlbum);
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
@@ -160,9 +160,6 @@ const sortFoldLabel = computed(() => {
   const labels = gallerySortOrderLabels(props.sort.field, t);
   return props.sort.desc ? labels.desc : labels.asc;
 });
-
-// 组合查询没有单一维度标签，折叠菜单里不展示过滤入口。
-const showGalleryFilterFold = computed(() => simpleFilters.value !== null);
 
 const failedCountFoldLabel = computed(() => {
   const n = failedImagesStore.allFailed.length;
@@ -233,10 +230,7 @@ const foldIds = computed(() => {
   if (!uiStore.isCompact) {
     return [];
   }
-  const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages];
-  if (showGalleryFilterFold.value) {
-    ids.push(HeaderFeatureId.GalleryFilter);
-  }
+  const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages, HeaderFeatureId.GalleryFilter];
   ids.push(HeaderFeatureId.GallerySort);
   ids.push(HeaderFeatureId.GalleryPageSize);
   return ids;
@@ -247,18 +241,13 @@ watch(
   [
     sortFoldLabel,
     filterFoldLabel,
-    showGalleryFilterFold,
     () => props.pageSize,
     () => failedImagesStore.allFailed.length,
   ],
   () => {
     if (!uiStore.isCompact) return;
     headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
-    if (showGalleryFilterFold.value) {
-      headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, filterFoldLabel.value);
-    } else {
-      headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
-    }
+    headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, filterFoldLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.GallerySort, sortFoldLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, String(props.pageSize));
   },

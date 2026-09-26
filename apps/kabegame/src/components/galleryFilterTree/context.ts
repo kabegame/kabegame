@@ -17,6 +17,7 @@ import {
   filterAspectRange,
   filterSizeRange,
   filterForDimension,
+  queryRuntimePath,
   removeFilterDimension,
   type GalleryFilter,
   type GalleryBrowseDimension,
@@ -276,16 +277,15 @@ export function pathForTreeSegment(
   segment: string,
 ) {
   const normalized = normalizeProviderPath(segment);
+  // 上下文可能结束于 no-album/filter_comb；空过滤应计数该叶，而非不存在的 all 子项。
+  const countPath = (body: string) => prefix ? queryRuntimePath(body, prefix) : body;
   if (!dimension) {
-    return joinProviderPath(prefix, normalized || "all");
+    return countPath(normalized || "all");
   }
   if (!normalized || normalized === "all") {
-    return joinProviderPath(
-      prefix,
-      buildFilterSetCountPath(removeFilterDimension(filters, dimension)),
-    );
+    return countPath(buildFilterSetCountPath(removeFilterDimension(filters, dimension)));
   }
-  return joinProviderPath(prefix, buildDimensionCountPath(filters, normalized));
+  return countPath(buildDimensionCountPath(filters, normalized));
 }
 
 export function isSameGalleryFilter(a: GalleryFilter, b: GalleryFilter) {

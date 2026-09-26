@@ -158,6 +158,7 @@ kabegame-core），剩余参数自动补 `--` 传给 cargo test；全量套件�
 
 ```bash
 deno task test -c kabegame-core --skip cargo        # 跑 @kabegame/core 的全部单测
+deno task test -c kabegame --skip cargo             # 跑应用查询模型与 Vue 组件的 Vitest 测试
 deno task --cwd packages/kabegame-core test:watch   # watch 模式，改哪跑哪
 ```
 

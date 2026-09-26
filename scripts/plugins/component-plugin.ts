@@ -98,10 +98,13 @@ export class Component {
    * `kabegame-core` 这个名字下挂着两套互不相干的代码:Rust crate
    * `src-tauri/kabegame-core`,和 npm 包 `packages/kabegame-core`(@kabegame/core)。
    * test 命令把两者都算作该组件的测试,用 `--skip vue` / `--skip cargo` 各自关掉。
-   * 其余组件(kabegame / kabegame-cli)暂时没有前端测试,返回 null 即只跑 cargo。
+   * kabegame 跑应用内的 Vue/查询测试；kabegame-cli 无前端测试。
    */
   static feTestDir(comp: string): string | null {
     switch (comp) {
+      case this.MAIN: {
+        return this.appFeDir(comp);
+      }
       case this.CORE: {
         return path.join(SRC_PKG_DIR, "kabegame-core");
       }

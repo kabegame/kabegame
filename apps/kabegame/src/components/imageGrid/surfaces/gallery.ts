@@ -12,6 +12,7 @@ import {
 } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import type { GridSurfaceAdapter } from "../types";
+import { IS_WEB } from "@kabegame/core/env";
 
 /**
  * Gallery（`/gallery`）的 grid surface。
@@ -46,7 +47,7 @@ export function createGallerySurface(params: {
       await resetGalleryRouteAfterLoadError();
     },
     // 空 `?path=` 表示回到默认画廊路径（如点击侧栏「画廊」）
-    syncEmptyQueryPath: true,
+    syncEmptyQueryPath: IS_WEB,
     imagesChange: {
       waitMs: 100,
       filter: (p, ctx) => {

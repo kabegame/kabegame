@@ -11,7 +11,8 @@
             :enable-ctrl-key-adjust-columns="!isCompact"
             :enable-virtual-scroll="true"
             :loading="isRefreshing" :loading-overlay="isRefreshing"
-            scroll-whole-container>
+            scroll-whole-container
+          >
             <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
               <!-- 顶部工具栏 -->
               <GalleryToolbar :total-count="totalCount" :big-page-enabled="totalCount > pageSize"
@@ -323,7 +324,7 @@ const refreshKey = ref(0);
 const pullToRefreshOpts = computed(() => undefined);
 
 const handleManualRefresh = async () => {
-  // 手动刷新：回到第 1 页并强制重拉当前路径。
+  // 手动刷新：强制重拉当前路径。
   analytics.track("gallery_manual_refresh");
   refreshKey.value++;
   if (galleryRouteStore.sort.field === "random") {
@@ -332,7 +333,6 @@ const handleManualRefresh = async () => {
     // 这里不再调用 galleryViewRef.refresh()，避免对同一次刷新重复拉两次。
     await galleryRouteStore.navigate({
       sort: { ...galleryRouteStore.sort, seed: newRandomSortSeed() },
-      page: 1,
     });
     return;
   }

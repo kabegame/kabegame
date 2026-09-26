@@ -7,7 +7,8 @@ import { decodeSeg, encodeSeg } from "@kabegame/pathql-client";
  * 即 `GalleryFilterSet`，搜索也是其中一个维度），要么是组合器 `any`（OR 分支）/
  * `not`（取非），组合器的孩子仍是 `GalleryQuery`。旧的「简单过滤 FilterSet」与
  * 「高级查询树 AdvancedQuery」不再是两种状态：FilterSet 只是单原子查询的退化形态，
- * 用 `queryFromFilterSet` / `asSingleFilterSet` 在两种视图间投影。
+ * 查询条用 `splitQueryFilters` / `composeQueryFilters` 编辑简单与追加高级部分，
+ * 以单分支组保留高级原子的边界；持久化仍只有这一份查询。
  *
  * 本模块只关心查询体（维度 chunk、原子、树、`filter_comb`/`~` 组合器的序列化与
  * 解析），不关心排序 / 分页 / hide / no-album / 根前缀——那些是整条路径的事，
@@ -343,6 +344,36 @@ export function asSingleFilterSet(query: GalleryQuery): GalleryFilterSet | null 
   return node.is;
 }
 
+/** 查询条：首个顶层原子属于简单 chip，其余节点属于追加高级条件。 */
+export function splitQueryFilters(query: GalleryQuery): {
+  simple: GalleryFilterSet;
+  advanced: GalleryQuery;
+} {
+  const normalized = normalizeQuery(query);
+  const first = normalized[0];
+  const simple = first && isIsNode(first) ? first.is : {};
+  const tail = first && isIsNode(first) ? normalized.slice(1) : normalized;
+  // composeQueryFilters 为以原子开头的高级条件保留单分支组边界。
+  const only = tail.length === 1 ? tail[0] : undefined;
+  const advanced = only && isAnyNode(only) && only.any.length === 1
+    ? only.any[0]!
+    : tail;
+  return { simple, advanced };
+}
+
+/** 两部分以 AND 组合；单分支 ~any 防止高级原子被归一化合入简单 chip。 */
+export function composeQueryFilters(
+  simple: GalleryFilterSet,
+  advanced: GalleryQuery,
+): GalleryQuery {
+  const extra = normalizeQuery(advanced);
+  const first = extra[0];
+  const suffix: GalleryQuery = first && isIsNode(first)
+    ? [{ any: [extra] }]
+    : extra;
+  return normalizeQuery([...queryFromFilterSet(simple), ...suffix]);
+}
+
 /** 查询里第一个搜索词（DFS）；用于会话记忆搜索模式等 UI 兜底。 */
 export function querySearchTerm(query: GalleryQuery): GallerySearchTerm | null {
   for (const node of query) {
@@ -596,13 +627,22 @@ function removeFromSequence(
     if (!branch || position + 2 >= path.length) {
       throw new Error(`无效 NodePath: ${path.join(".")}`);
     }
-    const branches = [...node.any];
-    branches[branchIndex] = removeFromSequence(branch, path, position + 2);
+    const nextBranch = removeFromSequence(branch, path, position + 2);
+    // 分支删空即删掉该分支，否则 UI 会残留一条指向空分支的「或」分隔线
+    const branches = nextBranch.length > 0
+      ? node.any.map((current, index) => index === branchIndex ? nextBranch : current)
+      : node.any.filter((_, index) => index !== branchIndex);
+    if (branches.length === 0) {
+      return sequence.filter((_, index) => index !== nodeIndex);
+    }
     nextSequence[nodeIndex] = { any: branches };
   } else if ("not" in node) {
-    nextSequence[nodeIndex] = {
-      not: removeFromSequence(node.not, path, position + 1),
-    };
+    const nextNot = removeFromSequence(node.not, path, position + 1);
+    // 取非包装里的内容删空了，包装本身也没有意义
+    if (nextNot.length === 0) {
+      return sequence.filter((_, index) => index !== nodeIndex);
+    }
+    nextSequence[nodeIndex] = { not: nextNot };
   } else {
     throw new Error(`NodePath 穿过了原子节点: ${path.join(".")}`);
   }

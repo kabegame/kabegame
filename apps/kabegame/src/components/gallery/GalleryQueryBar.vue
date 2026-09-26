@@ -1,11 +1,8 @@
 <template>
   <div class="gallery-query-bar w-full min-w-0">
-    <!-- 桌面：一条工具条搞定。左端是「看哪一批」的固定控件（行首插槽、简单/高级、
-         排序与每页），中段是随查询变化的 chip（搜索 + 过滤维度）横向滚动区，右端钉
+    <!-- 桌面：左端是行首插槽与排序，中段是简单 chip + 追加高级 chip 横向滚动区，右端钉
          着清除全部与 chip 自定义入口。
          chip 只写取值——维度由图标表明，维度名与取值一起进 tooltip（chipDisplay）。
-         简单/高级共用同一个容器与同一档行高（按简单态的 chip 行算），否则两种模式
-         高度不同，切换时下面的画廊会整体上下跳。
          hugTop 收掉上方 PageHeader 那 20px 外边距的一大半，工具条贴近标题栏。 -->
     <div
       v-if="!uiStore.isCompact"
@@ -13,17 +10,8 @@
       :class="{ '-mt-3': hugTop }"
     >
       <!-- 页面自己的行首控件（如画册详情的「图片 / 子画册」选项卡）：
-           它和过滤模式一样是「看哪一批」的开关，挤在同一行省掉一整行高度。 -->
+           挤在同一行省掉一整行高度。 -->
       <slot name="leading" />
-
-      <!-- 过滤入口:简单 / 高级 二选一,中段跟着换 -->
-      <KbTab
-        v-if="enableAdvanced"
-        v-model="filterMode"
-        :items="filterModeItems"
-        class="flex-none"
-        @select="onFilterModeSelect"
-      />
 
       <!-- 排序 = 两颗纯图标 chip：先「按哪个维度」，再「往哪个方向」。两颗都不写字
            ——排序恒有值，写出来就是一段永远占位的常量；名字与取值全在 tooltip 里。 -->
@@ -67,32 +55,11 @@
 
       <span v-if="hasFixedSection" class="query-divider" />
 
-      <!-- 高级过滤:简单过滤那些维度整行不渲染,只留 pathql 路径与配置入口 -->
-      <PathqlPathBar
-        v-if="filterMode === 'advanced'"
-        :path="advancedPathPreview"
-        class="query-main"
-      >
-        <template #prefix>
-          <!-- 同工具条上其它控件一样只留图标：名字走 title。 -->
-          <el-button
-            type="primary"
-            class="flex-none"
-            :title="t('gallery.advancedConfigure')"
-            :aria-label="t('gallery.advancedConfigure')"
-            @click="openAdvancedQuery"
-          >
-            <el-icon class="text-sm"><Setting /></el-icon>
-          </el-button>
-        </template>
-      </PathqlPathBar>
-
       <!-- 桌面具体过滤行：与高级查询同一套 chip 下拉；整段横向滚动，不换行 -->
       <!-- el-scrollbar：滚动条是浮层不占位；view 的上下 padding 给 chip 右上角浮出的
            清除徽章留位置(overflow-x 会连带裁 y)，下边距同时让滑块不压住 chip。
            v-hscroll-fade 在两侧点亮「还有内容没滚到」的粉色渐隐。 -->
       <el-scrollbar
-        v-else
         v-hscroll-fade
         class="filter-chip-row query-main"
         view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
@@ -132,7 +99,7 @@
               <div class="p-1.5">
                 <GalleryFilterTree
                   ref="providerTreeRef"
-                  :context-prefix="providerContextPrefix"
+                  :context-prefix="simpleContextPrefix"
                   :filters="activeFilters"
                   :filter="filterForDimension(activeFilters, dimension.key)"
                   :dimension="dimension.key"
@@ -142,6 +109,21 @@
               </div>
             </template>
           </KbFilterDropdown>
+          <KbFilterDropdown
+            v-if="enableAdvanced"
+            :model-value="isAdvancedActive ? 'advanced' : null"
+            :chip-label="t('gallery.advancedQuery')"
+            :selected-label="t('gallery.advancedQueryShort')"
+            :badge="advancedConditionCount > 0 ? String(advancedConditionCount) : undefined"
+            :any-label="t(isAdvancedActive ? 'gallery.advancedClear' : 'gallery.advancedQueryShort')"
+            :title="t('gallery.advancedQuery')"
+            chip-display="value"
+            chip-action="toggle"
+            @toggle="openAdvancedQuery"
+            @update:model-value="clearAdvancedQuery"
+          >
+            <template #icon><LetterA /></template>
+          </KbFilterDropdown>
       </el-scrollbar>
 
       <span class="query-divider" />
@@ -149,7 +131,7 @@
       <!-- 清除全部过滤。画廊把它放在标题副标题里（那里本来就在说「筛出了多少」），
            详情页没有那个位置，就钉在工具条右端，不随 chip 一起滚走。 -->
       <button
-        v-if="enableClearAll && filterMode === 'simple' && isFilterIndicatorActive"
+        v-if="enableClearAll && isFilterIndicatorActive"
         type="button"
         class="query-clear-filter flex-none"
         :title="t('gallery.clearAllFilters')"
@@ -200,21 +182,22 @@
       class="mb-2 flex items-center gap-2"
     >
       <slot name="leading" />
-      <el-button
+      <KbFilterDropdown
         v-if="enableAdvanced"
         class="ml-auto"
-        size="small"
-        :class="{
-          '!border-[rgba(255,107,157,0.55)] !bg-[rgba(255,107,157,0.12)] !text-[var(--anime-primary)]': isAdvancedActive,
-        }"
-        @click="openAdvancedQuery"
+        :model-value="isAdvancedActive ? 'advanced' : null"
+        :chip-label="t('gallery.advancedQuery')"
+        :selected-label="t('gallery.advancedQueryShort')"
+        :badge="advancedConditionCount > 0 ? String(advancedConditionCount) : undefined"
+        :any-label="t(isAdvancedActive ? 'gallery.advancedClear' : 'gallery.advancedQueryShort')"
+        :title="t('gallery.advancedQuery')"
+        chip-display="value"
+        chip-action="toggle"
+        @toggle="openAdvancedQuery"
+        @update:model-value="clearAdvancedQuery"
       >
-        <el-icon class="mr-1"><Filter /></el-icon>
-        {{ t("gallery.advancedQueryShort") }}
-        <span v-if="advancedConditionCount > 0" class="ml-1 rounded-full bg-[var(--anime-primary)] px-1.5 text-[10px] text-white">
-          {{ advancedConditionCount }}
-        </span>
-      </el-button>
+        <template #icon><LetterA /></template>
+      </KbFilterDropdown>
     </div>
 
     <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
@@ -326,9 +309,7 @@ import {
 import { useI18n } from "@kabegame/i18n";
 import {
   KbFilterDropdown,
-  KbTab,
   type KbFilterDropdownOption,
-  type KbTabItem,
 } from "@kabegame/element-plus";
 import {
   Clock,
@@ -347,17 +328,14 @@ import {
   MoreFilled,
   Rank,
   Search,
-  Setting,
   Sort,
   SortAsc,
   SortDesc,
 } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
 import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.vue";
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
-import PathqlPathBar from "@/components/gallery/PathqlPathBar.vue";
 import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -367,8 +345,8 @@ import { usePluginStore } from "@/stores/plugins";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import {
   GALLERY_ASPECT_BUCKETS,
+  FILTER_COMB,
   DEFAULT_GALLERY_SEARCH_MODE,
-  buildComposablePath,
   filterAspectRange,
   filterDateSegment,
   filterForDimension,
@@ -376,7 +354,6 @@ import {
   filterPluginId,
   newRandomSortSeed,
   noAlbumContextPrefix,
-  queryRuntimePath,
   removeFilterDimension,
   setFilterDimension,
   singleFilterToSet,
@@ -406,12 +383,13 @@ import {
   type YearGroupRow,
 } from "@/utils/galleryTimeFilterMenu";
 import {
-  asSingleFilterSet,
   cloneQuery,
+  composeQueryFilters,
   conditionCount,
   hasActiveQuery,
-  normalizeQuery,
   queryFromFilterSet,
+  serializeQueryBody,
+  splitQueryFilters,
   type GalleryQuery,
 } from "@/utils/galleryQuery";
 
@@ -419,15 +397,14 @@ import {
  * 画廊 / 画册详情 / 任务详情 / 畅游详情共用的查询行。
  *
  * 组件本身不认识任何 route store：所有会改变查询的动作都汇成一个 `navigate`
- * 事件（一次一个 patch），由各页把它转给自己的 path-route store。这样
- * 「切回简单过滤时把树降级平移」这类**必须原子完成**的多字段改动，才不会被
- * 拆成多次导航互相覆盖。
+ * 事件（一次一个 patch），由各页把它转给自己的 path-route store。
+ * 简单 chip 与追加高级条件只修改自己负责的部分，再合成同一份查询。
  */
 interface Props {
-  /** 唯一查询对象：简单过滤行与高级弹窗都是它的投影。 */
+  /** 唯一查询对象：首个原子为简单 chip，其余为追加高级条件。 */
   query?: GalleryQuery;
   /**
-   * 随行上下文（全局工具箱开关）：只用于高级路径前缀展示与计数。
+   * 随行上下文（全局工具箱开关）：用于简单与高级过滤的计数上下文。
    * 各页传自己 route store 的 `effectiveNoAlbum`——赦免该参数的路由（画册详情）
    * 拿到的恒为 false。
    */
@@ -437,7 +414,7 @@ interface Props {
   pageSize?: number;
   /** 搜索词为空时搜索下拉展示的模式兜底（各页的会话 sticky 模式）。 */
   searchMode?: GallerySearchMode;
-  /** provider 树 / facet 计数的上下文前缀：route store 的 `computedContextPath` */
+  /** 兼容调用侧的旧参数；计数上下文现由 contextBase + 两部分查询构造。 */
   providerContextPrefix?: string;
   /**
    * 高级查询路径的基址（含 `hide/` 与 `album/<id>` 这类根前缀，**不含 search**）：
@@ -451,7 +428,7 @@ interface Props {
   searchFeatures?: readonly GallerySearchMode[];
   enableSearch?: boolean;
   enablePageSize?: boolean;
-  /** 是否提供「简单 / 高级」入口与高级查询弹窗 */
+  /** 是否提供追加高级条件的 chip 与弹窗 */
   enableAdvanced?: boolean;
   /** 在过滤行右端提供「清除全部过滤」（画廊把它放在副标题里，故传 false） */
   enableClearAll?: boolean;
@@ -511,12 +488,9 @@ const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 
-/** 查询的单原子投影；null = 只能用高级视图表达（含 或/非/多条件）。 */
-const simpleView = computed<GalleryFilterSet | null>(() =>
-  asSingleFilterSet(props.query)
-);
-/** chip 行读写的 FilterSet（含 search 维度）；高级态下为空集，chip 行也不渲染。 */
-const activeFilters = computed<GalleryFilterSet>(() => simpleView.value ?? {});
+const queryParts = computed(() => splitQueryFilters(props.query));
+const activeFilters = computed(() => queryParts.value.simple);
+const advancedQuery = computed(() => queryParts.value.advanced);
 const sortField = computed<GallerySortField>(() => props.sort.field);
 const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
 
@@ -534,7 +508,7 @@ function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
 }
 
 // ---------- 搜索（查询原子的 search 维度）----------
-const searchTerm = computed(() => simpleView.value?.search ?? null);
+const searchTerm = computed(() => activeFilters.value.search ?? null);
 const searchText = computed(() => searchTerm.value?.query ?? "");
 /** 展示模式：有搜索词跟词走，没有用各页传入的 sticky 兜底。 */
 const searchModeView = computed<GallerySearchMode>(
@@ -548,7 +522,7 @@ function onSearchInput(value: string) {
   } else {
     delete next.search;
   }
-  navigate({ query: queryFromFilterSet(next), page: 1 });
+  navigate({ query: composeQueryFilters(next, advancedQuery.value), page: 1 });
 }
 
 function onSearchModeSelect(mode: GallerySearchMode) {
@@ -556,114 +530,49 @@ function onSearchModeSelect(mode: GallerySearchMode) {
   // 有搜索词时模式是查询的一部分，改模式即改查询；空词时只记 sticky。
   if (searchTerm.value?.query.trim()) {
     navigate({
-      query: queryFromFilterSet({
+      query: composeQueryFilters({
         ...activeFilters.value,
         search: { ...searchTerm.value, mode },
-      }),
+      }, advancedQuery.value),
       page: 1,
     });
   }
 }
 
-// ---------- 简单 / 高级 ----------
-/**
- * 简单过滤行与高级弹窗是同一个 GalleryQuery 的两种投影：单原子查询两边都能编辑，
- * 含 或/非/多条件 的查询只有高级视图能表达（此时强制高级态）。因此「切视图」
- * 本身不再动状态——唯一的例外是带着不可表达的查询切回简单态，只能清空并明说。
- */
-type FilterMode = "simple" | "advanced";
-const filterMode = ref<FilterMode>("simple");
-/** 清空查询后再点「配置」还能接着上次的树 editing(不是已应用状态)。 */
-const stashedQuery = ref<GalleryQuery | null>(null);
+// ---------- 追加高级条件 ----------
+const isAdvancedActive = computed(() => hasActiveQuery(advancedQuery.value));
+const advancedConditionCount = computed(() => conditionCount(advancedQuery.value));
 
-const isAdvancedActive = computed(() => simpleView.value === null);
-const advancedConditionCount = computed(() =>
-  isAdvancedActive.value ? conditionCount(props.query) : 0
-);
+/** 固定另一部分作为计数上下文，编辑器只读写自身条件。 */
+function contextWithQuery(query: GalleryQuery): string {
+  const part = serializeQueryBody(query);
+  const base = `${withGalleryPrefix(props.contextBase)}/${noAlbumContextPrefix(props.noAlbum)}`;
+  return part.body
+    ? `${base}${part.body}/${part.endsAtHub ? "" : `${FILTER_COMB}/`}`
+    : base;
+}
 
-// 两档都只留图标（名字走 title）：漏斗=简单，大写 A=Advanced。
-// 这一对是整条工具条上最靠左、最常看的东西，写全名要占掉近三颗 chip 的宽度。
-const filterModeItems = computed<KbTabItem<FilterMode>[]>(() => [
-  {
-    name: "simple",
-    label: t("gallery.filterModeSimple"),
-    icon: markRaw(Filter),
-    iconOnly: true,
-  },
-  {
-    name: "advanced",
-    label: t("gallery.filterModeAdvanced"),
-    icon: markRaw(LetterA),
-    iconOnly: true,
-    count: advancedConditionCount.value > 0 ? advancedConditionCount.value : null,
-  },
-]);
-
-watch(
-  isAdvancedActive,
-  (active) => {
-    if (active) filterMode.value = "advanced";
-  },
-  { immediate: true },
-);
-
-// 页面换了数据源（切画册 / 切任务）时回到简单态：树是跟着路径走的，不该跨源残留。
-watch(
-  () => props.contextBase,
-  () => {
-    if (!isAdvancedActive.value) filterMode.value = "simple";
-  },
-);
-
-/** `images://gallery[/hide][/album/<id>]` —— 高级路径与 facet 的共同基址。 */
-const providerBase = computed(() => `images://${withGalleryPrefix(props.contextBase)}`);
-
-/**
- * 高级路径前缀 = 基址 + no-album 随行段。查询体（含搜索原子）全在 query 里，
- * 预览与弹窗计数共用同一个前缀，不再有「弹窗里要去重」的第二形态。
- */
-const advancedContextPrefix = computed(
-  () => `${providerBase.value}/${noAlbumContextPrefix(props.noAlbum)}`,
-);
-
-const advancedPathPreview = computed(() =>
-  queryRuntimePath(
-    buildComposablePath({
-      query: props.query,
-      sort: props.sort,
-      page: props.page,
-      pageSize: props.pageSize,
-    }),
-    advancedContextPrefix.value,
-  ),
+const simpleContextPrefix = computed(() => contextWithQuery(
+  composeQueryFilters({}, advancedQuery.value),
+));
+const advancedContextPrefix = computed(() =>
+  `images://${contextWithQuery(queryFromFilterSet(activeFilters.value))}`,
 );
 
 const advancedDialogVisible = ref(false);
-const advancedDialogInitialQuery = ref<GalleryQuery>([{ is: {} }]);
+const advancedDialogInitialQuery = ref<GalleryQuery>([]);
 
 function openAdvancedQuery() {
-  // 优先当前查询 → 清空后暂存的树 → 空白一行
-  const source = hasActiveQuery(props.query)
-    ? props.query
-    : stashedQuery.value ?? [];
-  const initial = cloneQuery(source);
-  advancedDialogInitialQuery.value = initial.length > 0 ? initial : [{ is: {} }];
+  advancedDialogInitialQuery.value = cloneQuery(advancedQuery.value);
   advancedDialogVisible.value = true;
 }
 
 function applyAdvancedQuery(tree: GalleryQuery) {
-  navigate({ query: normalizeQuery(tree), page: 1 }, { push: true });
+  navigate({ query: composeQueryFilters(activeFilters.value, tree), page: 1 }, { push: true });
 }
 
-function onFilterModeSelect(mode: FilterMode) {
-  // 单原子查询两种视图等价表达，切换本身不动状态。
-  if (mode === "advanced") return;
-  if (!isAdvancedActive.value) return;
-
-  // 或/非/多条件:简单过滤行表达不了,只能清空——这是丢查询,必须明说。
-  stashedQuery.value = props.query;
-  ElMessage.warning(t("gallery.advancedQueryDropped"));
-  navigate({ query: [], page: 1 }, { push: true });
+function clearAdvancedQuery() {
+  navigate({ query: queryFromFilterSet(activeFilters.value), page: 1 }, { push: true });
 }
 
 // ---------- 过滤维度 chip ----------
@@ -763,7 +672,6 @@ const showSortOrderChip = computed(
 const hasFixedSection = computed(
   () =>
     !!slots.leading ||
-    props.enableAdvanced ||
     showSortFieldChip.value ||
     showSortOrderChip.value,
 );
@@ -851,7 +759,7 @@ function dimensionChipValue(dimension: GalleryBrowseDimension) {
   return galleryDimensionChipValue(dimension, activeFilters.value, labelContext.value);
 }
 
-/** 应用一次维度过滤：整体替换查询为单原子形态，但保留当前搜索词。 */
+/** 更新简单维度，保留当前搜索词和追加高级条件。 */
 function applyFilters(filters: GalleryFilterSet) {
   const next = { ...filters };
   if (searchTerm.value?.query.trim()) {
@@ -859,7 +767,7 @@ function applyFilters(filters: GalleryFilterSet) {
   } else {
     delete next.search;
   }
-  navigate({ query: queryFromFilterSet(next), page: 1 }, { push: true });
+  navigate({ query: composeQueryFilters(next, advancedQuery.value), page: 1 }, { push: true });
 }
 
 function clearDimension(dimension: GalleryBrowseDimension) {
@@ -954,8 +862,11 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   ),
 );
 
-/** 当前上下文前缀：hide + 根前缀 + search，由各页 route store 统一拼出。 */
-const filterContextPrefix = computed(() => props.providerContextPrefix);
+/** Android 单维度 picker 的枚举保留高级条件与简单搜索。 */
+const filterContextPrefix = computed(() => contextWithQuery(composeQueryFilters(
+  searchTerm.value ? { search: searchTerm.value } : {},
+  advancedQuery.value,
+)));
 
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");
@@ -1724,8 +1635,6 @@ async function refreshProviderFilterTree() {
 }
 
 function openFilterPicker() {
-  // 高级查询生效时简单过滤入口整体失效：两者在路由上互斥。
-  if (isAdvancedActive.value) return;
   filterPicker.open();
 }
 
@@ -1748,13 +1657,12 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
-/* 简单/高级共用的查询行：行高钉死在简单态的尺寸（chip 38px + 滚动区上下 8/10px 留白），
-   高级态内容更矮时靠 align-items 居中撑住，切模式时下方画廊不会上下跳。 */
+/* chip 38px + 滚动区上下留白，查询改变时保持行高稳定。 */
 .query-row {
   min-height: 56px;
 }
 
-/* 中段（chip 滚动区 / 高级路径）。
+/* 中段 chip 滚动区。
    `min-width` 是这里的关键：它既是「至少露出一颗 chip」的下限，也是换行的触发器
    —— flex 只按 flex-basis 与 min-width 决定断行，basis 为 0 且能缩到 0 时，中段会
    在窄容器里被挤成 0 宽却仍留在第一行，整段 chip 就这么凭空消失了（画册详情中栏

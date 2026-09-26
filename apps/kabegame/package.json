@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vite --config vite.config.ts",
     "build": "vite build --config vite.config.ts",
-    "vue-tsc": "vue-tsc"
+    "vue-tsc": "vue-tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@kabegame/core": "workspace:*",

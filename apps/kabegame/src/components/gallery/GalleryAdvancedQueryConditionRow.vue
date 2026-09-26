@@ -219,9 +219,9 @@ function selectDimensionFilter(
   let nextFilter = filter;
   if (
     filter.type === "plugin" &&
-    filter.extendPath?.trim() &&
-    (props.nodePath.length > 1 || negated.value)
+    filter.extendPath?.trim()
   ) {
+    // 追加的根原子也可能包装为单分支组；插件细分的 fields 贡献不被组引擎支持。
     ElMessage.warning(t("gallery.advancedPluginExtendRestricted"));
     nextFilter = { type: "plugin", pluginId: filter.pluginId };
   }

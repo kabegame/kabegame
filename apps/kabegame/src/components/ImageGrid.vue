@@ -418,7 +418,7 @@ const syncActivePathFromUrl = () => {
   if (!adapter || !isRouteActive.value || !adapter.isActive()) return;
   const qp = readRouteQueryPath().trim();
   if (!qp) {
-    // URL 无 ?path=：gallery 语义是「回到默认画廊路径」（如点击侧栏「画廊」）。
+    // URL 无 ?path=：gallery 语义是「回到默认画廊路径」。
     // 把当前默认 state 写回 URL（navigate 走 replace），让地址栏反映默认 path。
     // detail 路由无此语义（恒带 path），不 materialize。
     if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
@@ -608,6 +608,7 @@ const applyPreviewFromUrl = async () => {
 onMounted(applyPreviewFromUrl);
 onActivated(() => {
   isRouteActive.value = true;
+  console.log('grid reactivate');
   syncActivePathFromUrl();
   void applyPreviewFromUrl();
   // keep-alive 重新激活：路径已变或列表为空时按当前路由 path 刷新，
