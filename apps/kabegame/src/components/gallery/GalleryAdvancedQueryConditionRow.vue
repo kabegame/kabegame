@@ -108,6 +108,7 @@ import {
 } from "@/utils/galleryQuery";
 import {
   DEFAULT_GALLERY_SEARCH_MODE,
+  makeSearchTerm,
   type GalleryFilter,
   type GallerySearchMode,
 } from "@/utils/galleryPath";
@@ -171,7 +172,7 @@ function updateSearch(
   updateAtom((current) => {
     const next = { ...current };
     const trimmed = query.trim();
-    if (trimmed || preserveEmpty) next.search = { mode, query };
+    if (trimmed || preserveEmpty) next.search = makeSearchTerm(mode, query, searchModes.value);
     else delete next.search;
     return next;
   });

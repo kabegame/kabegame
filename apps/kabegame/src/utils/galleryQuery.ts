@@ -52,15 +52,24 @@ function providerPathSegment(path = "") {
 // 搜索维度
 // ---------------------------------------------------------------------------
 
-export type GallerySearchMode =
+/** 后端真实存在的搜索目标：路径段 `search/<mode>/<q>` 的合法取值。 */
+export type GallerySearchPathMode =
   | "display-name"
   | "metadata"
   | "native-metadata"
   | "local-path"
   | "url";
 
+/**
+ * 「任意搜」：前端虚拟模式，后端没有对应 provider。序列化时展开成
+ * `~any/search/<m1>/<q>/~or/…/~end`，解析时再折叠回来（见 foldAnySearch）。
+ */
+export const GALLERY_SEARCH_ANY = "any";
+
+export type GallerySearchMode = GallerySearchPathMode | typeof GALLERY_SEARCH_ANY;
+
 /** 下拉顺序：名称类三项在前（显示名 → 路径 → 链接），内容类元数据在后。 */
-export const GALLERY_SEARCH_MODES: readonly GallerySearchMode[] = [
+export const GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = [
   "display-name",
   "local-path",
   "url",
@@ -69,7 +78,7 @@ export const GALLERY_SEARCH_MODES: readonly GallerySearchMode[] = [
 ];
 
 /** 任务详情 / 畅游详情只暴露基础三项。 */
-export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchMode[] = [
+export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchPathMode[] = [
   "display-name",
   "metadata",
   "native-metadata",
@@ -77,13 +86,59 @@ export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchMode[] = [
 
 export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
 
+/** 路径段里的搜索模式：只认后端真实存在的五种，`search/any/…` 不合法。 */
+export function isGallerySearchPathMode(
+  value: string | undefined,
+): value is GallerySearchPathMode {
+  return GALLERY_SEARCH_MODES.includes(value as GallerySearchPathMode);
+}
+
+/** UI 层的搜索模式（含虚拟的「任意」）。 */
 export function isGallerySearchMode(value: string | undefined): value is GallerySearchMode {
-  return GALLERY_SEARCH_MODES.includes(value as GallerySearchMode);
+  return value === GALLERY_SEARCH_ANY || isGallerySearchPathMode(value);
 }
 
 export interface GallerySearchTerm {
   mode: GallerySearchMode;
   query: string;
+  /** 仅 `mode === "any"`：展开范围（写入时可见的真实模式，按 GALLERY_SEARCH_MODES 排序去重）。 */
+  modes?: GallerySearchPathMode[];
+}
+
+function canonicalSearchScope(
+  scope: readonly GallerySearchPathMode[],
+): GallerySearchPathMode[] {
+  return GALLERY_SEARCH_MODES.filter((mode) => scope.includes(mode));
+}
+
+/**
+ * 构造搜索项的唯一入口：切到「任意」时把当前可见 tab 固化为展开范围，
+ * 切回单模式时不带 `modes`，避免 `{ ...term, mode }` 残留旧范围。
+ */
+export function makeSearchTerm(
+  mode: GallerySearchMode,
+  query: string,
+  scope: readonly GallerySearchPathMode[],
+): GallerySearchTerm {
+  if (mode !== GALLERY_SEARCH_ANY) return { mode, query };
+  const modes = canonicalSearchScope(scope);
+  return { mode, query, modes: modes.length > 0 ? modes : [...GALLERY_SEARCH_MODES] };
+}
+
+/** 「任意」项实际覆盖的真实模式；缺省范围按全部五种兜底。 */
+export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[] {
+  if (term.mode !== GALLERY_SEARCH_ANY) return [term.mode];
+  const modes = canonicalSearchScope(term.modes ?? []);
+  return modes.length > 0 ? modes : [...GALLERY_SEARCH_MODES];
+}
+
+/** 搜索项 → 查询体片段。单模式是一个搜索段；「任意」展开成同词多模式的 OR 组。
+ *  两种形态都结束在 gallery 枢纽（search 委派回枢纽，`~end` 游标回到组入口）。 */
+export function serializeSearchTerm(term: GallerySearchTerm): string {
+  const query = encodeUserSegment(term.query);
+  if (term.mode !== GALLERY_SEARCH_ANY) return `search/${term.mode}/${query}`;
+  const branches = searchTermModes(term).map((mode) => `search/${mode}/${query}`);
+  return `~any/${branches.join("/~or/")}/~end`;
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +723,14 @@ export function cloneQuery(query: GalleryQuery): GalleryQuery {
           ...(node.is.date ? { date: { ...node.is.date } } : {}),
           ...(node.is.size ? { size: { ...node.is.size } } : {}),
           ...(node.is.aspect ? { aspect: { ...node.is.aspect } } : {}),
-          ...(node.is.search ? { search: { ...node.is.search } } : {}),
+          ...(node.is.search
+            ? {
+                search: {
+                  ...node.is.search,
+                  ...(node.is.search.modes ? { modes: [...node.is.search.modes] } : {}),
+                },
+              }
+            : {}),
         },
       };
     }
@@ -739,10 +801,7 @@ export function serializeFilter(filter: GalleryFilter): string {
 function serializeAtom(atom: GalleryFilterSet): QueryBodyPart {
   let result: QueryBodyPart = { body: "", endsAtHub: true };
   if (hasSearch(atom)) {
-    result = {
-      body: `search/${atom.search!.mode}/${encodeUserSegment(atom.search!.query)}`,
-      endsAtHub: true,
-    };
+    result = { body: serializeSearchTerm(atom.search!), endsAtHub: true };
   }
   for (const dimension of DIMENSION_ORDER) {
     const filter = filterForDimension(atom, dimension);
@@ -849,6 +908,29 @@ function appendAtom(
   }
 }
 
+/**
+ * `serializeSearchTerm` 展开「任意」的逆：≥2 个分支、每支恰为只含搜索的单原子、
+ * 同一搜索词且模式互异 → 折叠回 `mode: "any"`。单分支组不折叠——那是
+ * composeQueryFilters 保留高级原子边界的包装，不是任意搜。
+ */
+function foldAnySearch(branches: readonly GalleryQuery[]): GallerySearchTerm | null {
+  if (branches.length < 2) return null;
+  const modes: GallerySearchPathMode[] = [];
+  let query: string | null = null;
+  for (const branch of branches) {
+    const node = branch.length === 1 ? branch[0]! : null;
+    if (!node || !isIsNode(node)) return null;
+    const { search, ...rest } = node.is;
+    if (!search || search.mode === GALLERY_SEARCH_ANY || !hasSearch(node.is)) return null;
+    if (Object.keys(rest).length > 0) return null;
+    if (query !== null && search.query !== query) return null;
+    if (modes.includes(search.mode)) return null;
+    query = search.query;
+    modes.push(search.mode);
+  }
+  return makeSearchTerm(GALLERY_SEARCH_ANY, query!, modes);
+}
+
 function parseSequence(
   segments: readonly string[],
   start: number,
@@ -885,7 +967,9 @@ function parseSequence(
         position += 1;
         break;
       }
-      sequence.push({ any: branches });
+      const anySearch = foldAnySearch(branches);
+      if (anySearch) appendAtom(sequence, "search", { search: anySearch });
+      else sequence.push({ any: branches });
       continue;
     }
     if (segment === "~not") {
@@ -905,7 +989,7 @@ function parseSequence(
     if (segment === "search") {
       const mode = segments[position + 1];
       const query = segments[position + 2];
-      if (!isGallerySearchMode(mode) || query === undefined) return null;
+      if (!isGallerySearchPathMode(mode) || query === undefined) return null;
       appendAtom(sequence, "search", {
         search: { mode, query: decodeUserSegment(query) },
       });

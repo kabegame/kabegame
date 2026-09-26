@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   composeQueryFilters,
+  GALLERY_SEARCH_MODES_BASIC,
+  makeSearchTerm,
   normalizeQuery,
   parseQueryBody,
   removeNode,
@@ -97,5 +99,57 @@ describe("removeNode", () => {
   it("取非的或组删空时连同取非包装一起移除", () => {
     const query: GalleryQuery = [{ not: [{ any: [[{ is: {} }]] }] }];
     expect(removeNode(query, [0, 0, 0, 0])).toEqual([]);
+  });
+});
+
+describe("任意搜（虚拟模式 any）", () => {
+  const anyTerm = makeSearchTerm("any", "sakura", ["url", "display-name", "url"]);
+
+  it("makeSearchTerm 按规范顺序去重范围，单模式不带 modes", () => {
+    expect(anyTerm).toEqual({ mode: "any", query: "sakura", modes: ["display-name", "url"] });
+    expect(makeSearchTerm("url", "x", GALLERY_SEARCH_MODES_BASIC)).toEqual({ mode: "url", query: "x" });
+  });
+
+  it("序列化展开为同词 OR 组，结束在枢纽可直接接维度", () => {
+    const query: GalleryQuery = [{ is: { search: anyTerm, plugin: { pluginId: "pixiv" } } }];
+    expect(serializeQueryBody(query).body).toBe(
+      "~any/search/display-name/sakura/~or/search/url/sakura/~end/plugin/pixiv",
+    );
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("作为简单 chip 或高级原子都能往返折叠回 any", () => {
+    const term = makeSearchTerm("any", "樱花 / sakura", GALLERY_SEARCH_MODES_BASIC);
+    const atom: GalleryFilterSet = { search: term };
+    for (const [base, extra] of [
+      [atom, advanced],
+      [simple, [{ is: atom }]],
+    ] as [GalleryFilterSet, GalleryQuery][]) {
+      const parts = splitQueryFilters(roundTrip(composeQueryFilters(base, extra)));
+      expect(parts).toEqual({ simple: base, advanced: normalizeQuery(extra) });
+    }
+  });
+
+  it.each(["", "task/42"])("路由 %s 下 any 搜索往返保持", (rootPrefix) => {
+    const path = buildComposablePath({
+      rootPrefix, query: [{ is: { search: anyTerm } }], sort: { field: "by-time", desc: false }, page: 1,
+    });
+    const parsed = parseComposablePath(path, rootPrefix ? rootPrefix.split("/") : []);
+    expect(parsed.query).toEqual([{ is: { search: anyTerm } }]);
+  });
+
+  it.each([
+    "~any/search/url/a/~end",
+    "~any/search/url/a/~or/search/metadata/b/~end",
+    "~any/search/url/a/~or/search/url/a/~end",
+    "~any/search/url/a/~or/search/metadata/a/media-type/image/~end",
+  ])("不满足折叠条件时保持普通 OR 组：%s", (body) => {
+    const parsed = parseQueryBody(body.split("/"));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.every((node) => "any" in node)).toBe(true);
+  });
+
+  it("search/any/<q> 不是合法路径段", () => {
+    expect(parseQueryBody(["search", "any", "sakura"])).toBeNull();
   });
 });

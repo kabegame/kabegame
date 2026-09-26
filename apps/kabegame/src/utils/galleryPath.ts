@@ -1,12 +1,12 @@
 import {
   appendQueryBodyPart,
   asSingleFilterSet,
-  encodeUserSegment,
+  serializeSearchTerm,
   FILTER_COMB,
   type GalleryBrowseDimension,
   type GalleryFilterSet,
   type GalleryQuery,
-  isGallerySearchMode,
+  isGallerySearchPathMode,
   parseQueryBody,
   type QueryBodyPart,
   removeFilterDimension,
@@ -196,7 +196,8 @@ export function buildGalleryCountPath(
 }
 
 /**
- * provider 树 / facet 计数的上下文前缀：`[search/<mode>/<q>/][<root>/]`。
+ * provider 树 / facet 计数的上下文前缀：`[search/<mode>/<q>/][<root>/]`；
+ * 「任意」搜索展开为 `~any/…/~end/`，`~end` 游标回到枢纽后照样接 root。
  * 只有能被单原子表达的查询才贡献搜索上下文（高级弹窗的 facet 走
  * useDimensionFacet 的整树预测，不经过本前缀）。
  * 返回值为空或以 `/` 结尾；搜索段在 root 之前（search provider 是全局枢纽，
@@ -208,7 +209,7 @@ export function buildComposableContextPrefix(
 ): string {
   const term = asSingleFilterSet(query)?.search;
   const searchPrefix = term?.query.trim()
-    ? `search/${term.mode}/${encodeUserSegment(term.query)}/`
+    ? `${serializeSearchTerm(term)}/`
     : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${searchPrefix}${rp}`;
@@ -331,7 +332,7 @@ export function stripComposablePathTail(path: string): string {
 /** 从原始(未 decode)路径段数组中剥离形如 `search/<mode>/<q>/` 的前缀(若存在)。
  *  旧形态的路径把搜索段放在 root 之前，`extractRootIdAndBody` 靠它兼容。 */
 function splitLeadingSearchSegments(segs: string[]): { segments: string[]; rest: string[] } {
-  if (segs.length >= 3 && segs[0] === "search" && isGallerySearchMode(segs[1])) {
+  if (segs.length >= 3 && segs[0] === "search" && isGallerySearchPathMode(segs[1])) {
     return {
       segments: [segs[0]!, segs[1]!, segs[2]!],
       rest: segs.slice(3),

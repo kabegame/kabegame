@@ -43,7 +43,12 @@ import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { Search } from "@kabegame/element-plus-icons";
 import KbText from "@kabegame/core/components/common/form/KbText.vue";
-import { GALLERY_SEARCH_MODES, type GallerySearchMode } from "@/utils/galleryPath";
+import {
+  GALLERY_SEARCH_ANY,
+  GALLERY_SEARCH_MODES,
+  type GallerySearchMode,
+  type GallerySearchPathMode,
+} from "@/utils/galleryPath";
 
 /**
  * 搜索维度的 chip 下拉：chip 里显示当前模式徽章 + 关键词，面板里切模式 + 输入。
@@ -53,8 +58,11 @@ const props = withDefaults(
   defineProps<{
     query: string;
     mode: GallerySearchMode;
-    /** 面板里可见的 tab 集合：任务/畅游详情只暴露基础三项。 */
-    modes?: readonly GallerySearchMode[];
+    /**
+     * 面板里可见的真实模式 tab：任务/畅游详情只暴露基础三项。「任意」tab 恒在最前，
+     * 它的展开范围就是这组 tab（由调用方经 makeSearchTerm 固化进搜索项）。
+     */
+    modes?: readonly GallerySearchPathMode[];
     /** 取非语境（高级查询的 ~not 组）：计数显示为负数。 */
     negated?: boolean;
     /**
@@ -124,6 +132,7 @@ const chipTitle = computed(() => {
 });
 
 function searchModeLabel(mode: GallerySearchMode): string {
+  if (mode === GALLERY_SEARCH_ANY) return t("gallery.searchModeAny");
   if (mode === "metadata") return t("gallery.searchModeMetadata");
   if (mode === "native-metadata") return t("gallery.searchModeNativeMetadata");
   if (mode === "local-path") return t("gallery.searchModeLocalPath");
@@ -133,15 +142,17 @@ function searchModeLabel(mode: GallerySearchMode): string {
 
 /** 当前 mode 不在允许集合里（分享来的 URL 落到受限页）时把它临时补进 tab 列表：
  *  既不静默改写用户的查询语义，也让人能一眼看见并切走；切走后该 tab 自然消失。 */
-const visibleModes = computed<readonly GallerySearchMode[]>(() =>
-  props.modes.includes(props.mode) ? props.modes : [...props.modes, props.mode],
-);
+const visibleModes = computed<readonly GallerySearchMode[]>(() => {
+  const modes: GallerySearchMode[] = [GALLERY_SEARCH_ANY, ...props.modes];
+  return modes.includes(props.mode) ? modes : [...modes, props.mode];
+});
 
 const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
   visibleModes.value.map((mode) => ({ name: mode, label: searchModeLabel(mode) })),
 );
 
 const placeholder = computed(() => {
+  if (props.mode === GALLERY_SEARCH_ANY) return t("gallery.searchPlaceholderAny");
   if (props.mode === "metadata") return t("gallery.searchPlaceholderMetadata");
   if (props.mode === "native-metadata") return t("gallery.searchPlaceholderNativeMetadata");
   if (props.mode === "local-path") return t("gallery.searchPlaceholderLocalPath");
@@ -151,6 +162,12 @@ const placeholder = computed(() => {
 
 /** 说明按模式走：一段把各模式串起来的总说明，读的人得先自己找哪半句是当前模式。 */
 const help = computed(() => {
+  // 「任意」把覆盖了哪些 tab 说出来，否则读的人不知道它到底搜了什么。
+  if (props.mode === GALLERY_SEARCH_ANY) {
+    return t("gallery.searchModeHelpAny", {
+      modes: props.modes.map(searchModeLabel).join(" / "),
+    });
+  }
   if (props.mode === "metadata") return t("gallery.searchModeHelpMetadata");
   if (props.mode === "native-metadata") return t("gallery.searchModeHelpNativeMetadata");
   if (props.mode === "local-path") return t("gallery.searchModeHelpLocalPath");

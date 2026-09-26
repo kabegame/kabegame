@@ -362,6 +362,8 @@ import {
   type GalleryFilterSet,
   type GalleryQueryPatch,
   type GallerySearchMode,
+  type GallerySearchPathMode,
+  makeSearchTerm,
   type GallerySort,
   type GallerySortField,
 } from "@/utils/galleryPath";
@@ -425,7 +427,7 @@ interface Props {
   filterFeatures?: GalleryBrowseDimension[];
   sortFeatures?: GallerySortField[];
   /** 搜索 chip 可见的目标 tab；任务/畅游详情传基础三项。 */
-  searchFeatures?: readonly GallerySearchMode[];
+  searchFeatures?: readonly GallerySearchPathMode[];
   enableSearch?: boolean;
   enablePageSize?: boolean;
   /** 是否提供追加高级条件的 chip 与弹窗 */
@@ -518,7 +520,7 @@ const searchModeView = computed<GallerySearchMode>(
 function onSearchInput(value: string) {
   const next = { ...activeFilters.value };
   if (value.trim()) {
-    next.search = { mode: searchModeView.value, query: value };
+    next.search = makeSearchTerm(searchModeView.value, value, props.searchFeatures);
   } else {
     delete next.search;
   }
@@ -532,7 +534,7 @@ function onSearchModeSelect(mode: GallerySearchMode) {
     navigate({
       query: composeQueryFilters({
         ...activeFilters.value,
-        search: { ...searchTerm.value, mode },
+        search: makeSearchTerm(mode, searchTerm.value.query, props.searchFeatures),
       }, advancedQuery.value),
       page: 1,
     });
