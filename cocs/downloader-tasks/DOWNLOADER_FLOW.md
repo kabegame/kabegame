@@ -156,7 +156,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByUrl`
 - 如果指定了输出画册，把已存在图片加入该画册并发送 `album-images-change`
-- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
 - 增加 `tasks.dedup_count` 并通过 `tasks-change` / `TaskChanged` 发送新的 `dedupCount`
 - 发送 Completed，清理对应失败记录，跳过下载读取
 
@@ -166,7 +166,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByHash`
 - 按需加入输出画册
-- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
 - 后处理最终分支收到 `imported = false` 后增加 `tasks.dedup_count`
 - 发送 Completed，清理对应失败记录
 
@@ -420,7 +420,7 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 
 `autoDeduplicate` 打开时启用 URL 前置去重和 hash 后置去重；关闭时仍会受 `local_path` 唯一约束保护，避免同一磁盘路径或同一 content URI 重复入库。
 
-`dedupUpdateMetadata` 默认关闭。开启后，两级去重命中且本次下载带 metadata 时会改挂已有图片：插件下载可覆盖任意来源并同步 `plugin_id`；畅游下载只更新无插件来源的旧图。两类都保留原 `task_id` / `surf_record_id`，并清理无人引用的旧 metadata 行。
+`dedupUpdateMetadata` 默认关闭。开启后，两级去重命中且本次下载带 metadata 时会改挂已有图片：插件下载可覆盖任意来源并同步 `plugin_id`；畅游下载只更新无插件来源的旧图。本次带非空 `post_url` 时同步覆盖，未带则保留旧值。两类都保留原 `task_id` / `surf_record_id`，并清理无人引用的旧 metadata 行。
 
 ---
 

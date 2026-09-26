@@ -128,7 +128,7 @@
   "autoDeduplicate": "自動去重",
   "autoDeduplicateDesc": "根據檔案雜湊值自動略過重複圖片",
   "dedupUpdateMetadata": "去重時更新中繼資料",
-  "dedupUpdateMetadataDesc": "命中去重時，使用本次外掛下載的中繼資料取代現有圖片的中繼資料與來源外掛",
+  "dedupUpdateMetadataDesc": "命中去重時，使用本次外掛下載的中繼資料取代現有圖片的中繼資料、來源外掛與貼文網址",
   "fastFolderSync": "快速同步",
   "fastFolderSyncDesc": "跳過修改時間未變的資料夾。僅在資料夾內的圖片檔案不會被原地修改時啟用",
   "surfFreezePage": "凍結網頁",

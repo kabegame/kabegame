@@ -128,7 +128,7 @@
   "autoDeduplicate": "自動重複除去",
   "autoDeduplicateDesc": "ハッシュで重複ファイルをスキップ",
   "dedupUpdateMetadata": "重複除去時にメタデータを更新",
-  "dedupUpdateMetadataDesc": "重複が見つかった場合、既存画像のメタデータと取得元プラグインを今回のプラグインダウンロードの内容に置き換えます",
+  "dedupUpdateMetadataDesc": "重複が見つかった場合、既存画像のメタデータ・取得元プラグイン・投稿 URL を今回のプラグインダウンロードの内容に置き換えます",
   "fastFolderSync": "高速同期",
   "fastFolderSyncDesc": "更新日時が変わっていないフォルダをスキップします。フォルダ内の画像ファイルが上書き変更されない場合にのみ有効にしてください",
   "surfFreezePage": "ウェブページを凍結",

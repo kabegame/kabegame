@@ -487,13 +487,14 @@ impl Storage {
         Ok(deleted)
     }
 
-    /// 去重命中时把旧图改挂到新 metadata；`plugin_id` 为 Some 时同步改来源插件。
+    /// 去重命中时把旧图改挂到新 metadata；`plugin_id` / `post_url` 为 Some 时同步覆盖，None 保留原值。
     /// `task_id` / `surf_record_id` 不动。旧 metadata 行改挂后无人引用则 GC。
     pub fn rebind_image_metadata(
         &self,
         image_id: &str,
         metadata_id: i64,
         plugin_id: Option<&str>,
+        post_url: Option<&str>,
     ) -> Result<(), String> {
         let old_metadata_id = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -508,9 +509,11 @@ impl Storage {
                 .flatten();
             conn.execute(
                 "UPDATE images
-                 SET metadata_id = ?1, plugin_id = COALESCE(?2, plugin_id)
-                 WHERE id = ?3",
-                params![metadata_id, plugin_id, image_id],
+                 SET metadata_id = ?1,
+                     plugin_id = COALESCE(?2, plugin_id),
+                     post_url = COALESCE(?3, post_url)
+                 WHERE id = ?4",
+                params![metadata_id, plugin_id, post_url, image_id],
             )
             .map_err(|e| format!("rebind image metadata: {e}"))?;
             old_metadata_id
@@ -1534,7 +1537,8 @@ mod rebind_image_metadata_tests {
                 metadata_id    INTEGER,
                 plugin_id      TEXT,
                 task_id        TEXT,
-                surf_record_id TEXT
+                surf_record_id TEXT,
+                post_url       TEXT
             );
             CREATE TABLE task_failed_images (
                 metadata_id INTEGER
@@ -1554,20 +1558,20 @@ mod rebind_image_metadata_tests {
             let conn = storage.db.lock().unwrap();
             conn.execute_batch(
                 "INSERT INTO metadata (id) VALUES (1), (2), (3), (4);
-                 INSERT INTO images (id, metadata_id, plugin_id, task_id, surf_record_id)
+                 INSERT INTO images (id, metadata_id, plugin_id, task_id, surf_record_id, post_url)
                  VALUES
-                   ('image-plugin', 1, 'old-plugin', 'task-plugin', 'surf-plugin'),
-                   ('image-shared', 3, 'kept-plugin', 'task-shared', 'surf-shared'),
-                   ('image-other', 3, 'other-plugin', 'task-other', 'surf-other');",
+                   ('image-plugin', 1, 'old-plugin', 'task-plugin', 'surf-plugin', 'https://old/post'),
+                   ('image-shared', 3, 'kept-plugin', 'task-shared', 'surf-shared', 'https://kept/post'),
+                   ('image-other', 3, 'other-plugin', 'task-other', 'surf-other', NULL);",
             )
             .unwrap();
         }
 
         storage
-            .rebind_image_metadata("image-plugin", 2, Some("new-plugin"))
+            .rebind_image_metadata("image-plugin", 2, Some("new-plugin"), Some("https://new/post"))
             .unwrap();
         storage
-            .rebind_image_metadata("image-shared", 4, None)
+            .rebind_image_metadata("image-shared", 4, None, None)
             .unwrap();
 
         let conn = storage.db.lock().unwrap();
@@ -1605,6 +1609,26 @@ mod rebind_image_metadata_tests {
                 Some("task-shared".to_string()),
                 Some("surf-shared".to_string()),
             )
+        );
+
+        let post_urls: Vec<Option<String>> = ["image-plugin", "image-shared"]
+            .iter()
+            .map(|id| {
+                conn.query_row(
+                    "SELECT post_url FROM images WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+            })
+            .collect();
+        // 带 post_url 时覆盖，None 时保留原值
+        assert_eq!(
+            post_urls,
+            vec![
+                Some("https://new/post".to_string()),
+                Some("https://kept/post".to_string()),
+            ]
         );
 
         let unique_old_exists: bool = conn

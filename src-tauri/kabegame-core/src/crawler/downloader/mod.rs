@@ -34,13 +34,14 @@ pub fn is_dedup_dummy_url(url: &str) -> bool {
         || url.starts_with("blob:")
 }
 
-/// 去重命中后按设置把旧图改挂到本次 metadata。
+/// 去重命中后按设置把旧图改挂到本次 metadata，并用本次非空 post_url 覆盖帖子地址。
 /// 插件下载覆盖任意来源并同步 plugin_id；畅游只更新无插件来源的旧图。
 pub(super) fn rebind_deduped_metadata(
     existing: &ImageInfo,
     metadata_id: Option<i64>,
     plugin_id: &str,
     surf_record_id: Option<&str>,
+    post_url: Option<&str>,
 ) {
     if !Settings::global().get_dedup_update_metadata() {
         return;
@@ -59,15 +60,25 @@ pub(super) fn rebind_deduped_metadata(
     }
 
     let new_plugin_id = (!is_surf).then_some(plugin_id);
+    // 本次没带 post_url 时保留旧值，不清空
+    let new_post_url = post_url.map(str::trim).filter(|url| !url.is_empty());
     if existing.metadata_id == Some(metadata_id)
         && new_plugin_id.map_or(true, |new_plugin_id| {
             existing.plugin_id.as_deref() == Some(new_plugin_id)
+        })
+        && new_post_url.map_or(true, |new_post_url| {
+            existing.post_url.as_deref() == Some(new_post_url)
         })
     {
         return;
     }
 
-    match Storage::global().rebind_image_metadata(&existing.id, metadata_id, new_plugin_id) {
+    match Storage::global().rebind_image_metadata(
+        &existing.id,
+        metadata_id,
+        new_plugin_id,
+        new_post_url,
+    ) {
         Ok(()) => {
             let mut plugin_ids = Vec::new();
             if let Some(existing_plugin_id) = existing
@@ -927,7 +938,7 @@ pub async fn postprocess_downloaded_image(
                         }
                     }
                 }
-                rebind_deduped_metadata(existing, metadata_id, plugin_id, surf_record_id);
+                rebind_deduped_metadata(existing, metadata_id, plugin_id, surf_record_id, post_url);
                 if let Some(task_id) = task_id {
                     emit_task_log(
                         task_id,

@@ -128,7 +128,7 @@
   "autoDeduplicate": "Auto deduplicate",
   "autoDeduplicateDesc": "Skip duplicate files by hash",
   "dedupUpdateMetadata": "Update metadata on deduplication",
-  "dedupUpdateMetadataDesc": "When a duplicate is found, replace the existing image's metadata and source plugin with those from the current plugin download",
+  "dedupUpdateMetadataDesc": "When a duplicate is found, replace the existing image's metadata, source plugin and post URL with those from the current plugin download",
   "fastFolderSync": "Fast sync",
   "fastFolderSyncDesc": "Skip folders whose modification time is unchanged. Enable only when image files inside the folder are never modified in place",
   "surfFreezePage": "Freeze web pages",

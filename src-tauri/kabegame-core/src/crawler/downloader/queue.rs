@@ -1003,6 +1003,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     job.metadata_id,
                     &job.plugin_id,
                     job.surf_record_id.as_deref(),
+                    job.post_url.as_deref(),
                 );
                 if !task_id_clone.trim().is_empty() {
                     if let Ok(new_count) =
