@@ -10,7 +10,42 @@
     <template #title>
       {{ t("gallery.toggleDetailPanel") }}
     </template>
-    <div v-if="descriptionSrcdoc" class="description-iframe-wrap">
+    <div v-if="pageSnapshot" class="description-iframe-wrap">
+      <div class="mb-2 flex min-w-0 items-center gap-2">
+        <span
+          class="min-w-0 flex-1 truncate text-[13px] text-[var(--anime-text-secondary)]"
+          :title="pageSnapshot.sourceUrl"
+        >
+          {{ pageSnapshot.title || pageSnapshot.sourceUrl }}
+        </span>
+        <button
+          type="button"
+          class="flex flex-none cursor-pointer items-center rounded-md border border-solid border-[var(--anime-border)] bg-transparent p-1 text-[var(--anime-text-secondary)] hover:bg-[var(--anime-bg-card)]"
+          :title="t('common.refresh')"
+          :aria-label="t('common.refresh')"
+          @click="snapshotFrameKey += 1"
+        >
+          <el-icon><Refresh /></el-icon>
+        </button>
+        <button
+          v-if="isAllowedOpenUrl(pageSnapshot.sourceUrl)"
+          type="button"
+          class="flex-none cursor-pointer rounded-md border border-solid border-[var(--anime-border)] bg-transparent px-2.5 py-1 text-xs text-[var(--anime-primary)] hover:bg-[var(--anime-bg-card)]"
+          @click="openExternalLink(pageSnapshot.sourceUrl)"
+        >
+          {{ t("gallery.openOriginalPage") }}
+        </button>
+      </div>
+      <!-- 捕获的是任意网站的 HTML：sandbox 为空（无脚本/表单/弹窗/导航），另加内层 CSP -->
+      <iframe
+        :key="snapshotFrameKey"
+        class="description-iframe"
+        :srcdoc="pageSnapshotSrcdoc"
+        sandbox=""
+        referrerpolicy="no-referrer"
+      />
+    </div>
+    <div v-else-if="descriptionSrcdoc" class="description-iframe-wrap">
       <iframe
         ref="descriptionIframeRef"
         class="description-iframe"
@@ -49,6 +84,7 @@ import {
 } from "../../composables/useImageMetadataCache";
 import { usePluginStore } from "../../stores/plugins";
 import { openExternalLink } from "../../utils/openExternalLink";
+import { Refresh } from "@kabegame/element-plus-icons";
 
 const props = withDefaults(
   defineProps<{
@@ -106,7 +142,8 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
     resolvedMetadata.value = null;
     return;
   }
-  if (!img.pluginId) {
+  // 畅游图片 plugin_id 为空（只有 surf_record_id），其 metadata 可能是一键下载冻结的页面快照
+  if (!img.pluginId && !img.surfRecordId) {
     resolvedMetadata.value = null;
     return;
   }
@@ -149,6 +186,40 @@ const effectiveMetadata = computed(() => {
 });
 
 const descriptionIframeRef = ref<HTMLIFrameElement | null>(null);
+
+/** 畅游一键下载冻结的页面快照（`surf_collect.rs` 写入的 metadata 形状） */
+type SurfPageSnapshot = {
+  kind: "kabegame.surfPageSnapshot";
+  sourceUrl: string;
+  title?: string;
+  pageHtml: string;
+};
+
+const pageSnapshot = computed<SurfPageSnapshot | null>(() => {
+  const meta = effectiveMetadata.value as Record<string, unknown> | null | undefined;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
+  if (meta.kind !== "kabegame.surfPageSnapshot" || typeof meta.pageHtml !== "string") return null;
+  return {
+    kind: "kabegame.surfPageSnapshot",
+    sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : "",
+    title: typeof meta.title === "string" ? meta.title : undefined,
+    pageHtml: meta.pageHtml,
+  };
+});
+
+/** 只放行远程图片/媒体与内联样式；脚本、连接、子 frame、表单一律禁止 */
+const PAGE_SNAPSHOT_CSP =
+  "default-src 'none'; img-src http: https: data:; media-src http: https: data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'";
+
+/** 递增即重建快照 iframe（重新挂载子页面，重载远程图片等子资源） */
+const snapshotFrameKey = ref(0);
+
+const pageSnapshotSrcdoc = computed(() => {
+  const snapshot = pageSnapshot.value;
+  if (!snapshot) return "";
+  // CSP meta 必须在任何资源之前生效，直接前置到文档最前
+  return `<meta http-equiv="Content-Security-Policy" content="${PAGE_SNAPSHOT_CSP}">${snapshot.pageHtml}`;
+});
 
 function isAllowedOpenUrl(u: string): boolean {
   try {
@@ -332,6 +403,7 @@ const EJS_BRIDGE_NONCE = "kabegame-ejs-bridge";
 const descriptionSrcdoc = computed(() => {
   const img = props.image;
   const meta = effectiveMetadata.value;
+  if (pageSnapshot.value) return "";
 
   if (!img?.pluginId || !isRenderableMetadata(meta)) return "";
   const tpl = pluginDescriptionTemplate(img.pluginId);
@@ -354,6 +426,7 @@ const descriptionSrcdoc = computed(() => {
 const showRawMetadata = computed(() => {
   const img = props.image;
   const meta = effectiveMetadata.value;
+  if (pageSnapshot.value) return false;
   if (!img?.pluginId || !isRenderableMetadata(meta)) return false;
   const tpl = pluginDescriptionTemplate(img.pluginId);
   if (tpl?.trim()) return false;

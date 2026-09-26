@@ -8,6 +8,12 @@ const initialUrl = params.get("url") ?? (host ? `https://${host}` : "");
 
 let currentUrl = initialUrl;
 let unlistenUrlChanged: UnlistenFn | null = null;
+let unlistenCollectState: UnlistenFn | null = null;
+
+const COLLECT_ICON =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+const COLLECT_BUSY_ICON =
+    '<svg class="surf-navbar__spinner" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"></path></svg>';
 
 function normalizeNavigateUrl(raw: string): string | null {
     let value = raw.trim();
@@ -138,6 +144,16 @@ function mount() {
         .surf-navbar__address--invalid {
             border-color: var(--kg-surf-invalid);
         }
+
+        .surf-navbar__spinner {
+            animation: surf-navbar-spin 0.8s linear infinite;
+        }
+
+        @keyframes surf-navbar-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     `;
     document.head.appendChild(style);
 
@@ -200,6 +216,18 @@ function mount() {
         () => runCommand("surf_open_in_browser", { url: currentUrl }),
     );
 
+    // 一键下载：运行态完全由 Rust 的 surf-collect-state 驱动，点击只发 toggle（空闲=开始，运行中=取消）
+    const collect = iconButton("Download all media", COLLECT_ICON, () =>
+        runCommand("surf_collect_toggle", { host }),
+    );
+    const setCollectRunning = (running: boolean) => {
+        collect.innerHTML = running ? COLLECT_BUSY_ICON : COLLECT_ICON;
+        const title = running ? "Cancel" : "Download all media";
+        collect.title = title;
+        collect.setAttribute("aria-label", title);
+        collect.setAttribute("aria-busy", String(running));
+    };
+
     address.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
         event.preventDefault();
@@ -216,7 +244,7 @@ function mount() {
         address.value = currentUrl;
     });
 
-    bar.append(back, forward, reload, address, devtools, openInBrowser);
+    bar.append(back, forward, reload, address, devtools, openInBrowser, collect);
     root.appendChild(bar);
 
     // target 必须显式给本 navbar 的 webview label:后端用 emit_to(<label>-navbar) 定向,
@@ -234,12 +262,24 @@ function mount() {
     ).then((unlisten) => {
         unlistenUrlChanged = unlisten;
     }, showError);
+
+    listen<{ running?: boolean }>(
+        "surf-collect-state",
+        (event) => setCollectRunning(event.payload?.running === true),
+        { target: getCurrentWebview().label },
+    ).then((unlisten) => {
+        unlistenCollectState = unlisten;
+    }, showError);
 }
 
 window.addEventListener("beforeunload", () => {
     if (unlistenUrlChanged) {
         unlistenUrlChanged();
         unlistenUrlChanged = null;
+    }
+    if (unlistenCollectState) {
+        unlistenCollectState();
+        unlistenCollectState = null;
     }
 });
 

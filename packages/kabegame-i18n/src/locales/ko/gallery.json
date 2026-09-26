@@ -1,6 +1,7 @@
 {
   "imageDetailTitle": "이미지 상세",
   "toggleDetailPanel": "플러그인 상세",
+  "openOriginalPage": "원본 페이지 열기",
   "pluginDetailEmptyTitle": "표시할 플러그인 상세 정보가 없습니다",
   "pluginDetailEmptyDesc": "이 이미지에 플러그인 메타데이터가 없거나 플러그인이 상세 템플릿을 제공하지 않습니다.",
   "toggleImageInfoPanel": "이미지 정보",

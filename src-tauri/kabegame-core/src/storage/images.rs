@@ -229,9 +229,19 @@ pub(crate) fn insert_metadata_id(
     plugin_id: &str,
     plugin_version: u32,
 ) -> Result<i64, String> {
-    let plugin_version_i64 = i64::from(plugin_version);
     let search_text = search_text_from_json_str(data_json);
+    insert_metadata_id_with_search_text(conn, data_json, plugin_id, plugin_version, &search_text)
+}
 
+/// 同 [`insert_metadata_id`]，但由调用方指定 `search_text`（大文本 metadata 不整体进搜索索引）。
+fn insert_metadata_id_with_search_text(
+    conn: &rusqlite::Connection,
+    data_json: &str,
+    plugin_id: &str,
+    plugin_version: u32,
+    search_text: &str,
+) -> Result<i64, String> {
+    let plugin_version_i64 = i64::from(plugin_version);
     conn.execute(
         "INSERT INTO metadata (data, plugin_id, plugin_version, search_text)
          VALUES (?1, ?2, ?3, ?4)",
@@ -315,6 +325,33 @@ impl Storage {
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         insert_metadata_id(&conn, &s, plugin_id, plugin_version)
+    }
+
+    /// 写入 metadata 行，`search_text` 由调用方给出（畅游页面快照：只索引标题与 URL，不索引整页 HTML）。
+    pub fn insert_metadata_row_with_search_text(
+        &self,
+        value: &Value,
+        plugin_id: &str,
+        plugin_version: u32,
+        search_text: &str,
+    ) -> Result<i64, String> {
+        let s = serde_json::to_string(value)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        insert_metadata_id_with_search_text(&conn, &s, plugin_id, plugin_version, search_text)
+    }
+
+    /// 读取 metadata 行的 `plugin_id`；行不存在返回 `None`。
+    pub fn metadata_plugin_id(&self, metadata_id: i64) -> Result<Option<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.query_row(
+            "SELECT plugin_id FROM metadata WHERE id = ?1",
+            params![metadata_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map(|v| v.map(|p| p.unwrap_or_default()))
+        .map_err(|e| format!("metadata_plugin_id: {}", e))
     }
 
     /// 读取某 metadata 行的原始 `data` 文本（用于文件夹同步重导入前「保存」内容）。
@@ -1423,4 +1460,52 @@ fn gc_native_metadata_candidates(
         deleted += changed;
     }
     Ok(deleted)
+}
+
+#[cfg(test)]
+mod metadata_search_text_override_tests {
+    use super::*;
+
+    fn conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE metadata (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                data           TEXT    NOT NULL,
+                search_text    TEXT    NOT NULL DEFAULT '',
+                plugin_version INTEGER NOT NULL DEFAULT 0,
+                plugin_id      TEXT    NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn caller_search_text_replaces_flattened_json() {
+        let conn = conn();
+        let data = r#"{"kind":"kabegame.surfPageSnapshot","pageHtml":"<html>huge body</html>"}"#;
+        let id = insert_metadata_id_with_search_text(&conn, data, "example.com", 0, "Title\nhttps://example.com/p")
+            .unwrap();
+        let (search_text, plugin_id): (String, String) = conn
+            .query_row(
+                "SELECT search_text, plugin_id FROM metadata WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(search_text, "Title\nhttps://example.com/p");
+        assert!(!search_text.contains("huge body"));
+        assert_eq!(plugin_id, "example.com");
+    }
+
+    #[test]
+    fn default_insert_still_flattens_json() {
+        let conn = conn();
+        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0).unwrap();
+        let search_text: String = conn
+            .query_row("SELECT search_text FROM metadata WHERE id = ?1", params![id], |row| row.get(0))
+            .unwrap();
+        assert!(search_text.contains("sakura"));
+    }
 }

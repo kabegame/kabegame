@@ -1,5 +1,4 @@
-(function () {
-  "use strict";
+// 由 surf.rs 以 concat! 包进 IIFE（与 surf_download_name.js 共享闭包），本文件不是独立脚本。
 
   const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args || {});
   window.__kb_media_submit__ = (vfsPath, sourceUrl, opts) => {
@@ -15,26 +14,6 @@
 
   function reportErr(error) {
     window.__kabegame_toast?.(String(error && error.message ? error.message : error), "failed");
-  }
-
-  // 用于计算下载url所用的名称
-  function nameFromUrl(url) {
-    try {
-      const u = new URL(String(url || ""), location.href);
-      if (/^(data|blob):$/i.test(u.protocol)) return "";
-      const segment = u.pathname.split("/").filter(Boolean).pop() || "";
-      return decodeURIComponent(segment).trim();
-    } catch (_) {
-      return "";
-    }
-  }
-
-  // 将title和url名称拼接，用来计算最终所用的名称
-  function downloadName(url) {
-    const title = String(document.title || "").trim();
-    const segment = nameFromUrl(url) || nameFromUrl(location.href);
-    if (title && segment) return title + " / " + segment;
-    return title || segment || "";
   }
 
   // 下载选项用 name: downloadName()
@@ -143,4 +122,3 @@
   }
 
   window.__kabegame_surf_triggerDownload = triggerDownload;
-})();

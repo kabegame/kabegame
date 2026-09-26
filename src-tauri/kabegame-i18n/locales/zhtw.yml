@@ -104,3 +104,11 @@ vd:
 
 surf:
   windowTitle: "暢遊 - {host}"
+  collect:
+    detecting: "正在偵測媒體資源…"
+    none: "目前頁面未偵測到可下載的媒體資源"
+    found: "偵測到 {count} 個媒體資源（圖片 {images} / 影片 {videos}），開始嘗試下載"
+    canceled: "已取消"
+    done: "已加入下載 {queued}/{total} 項"
+    notReady: "頁面尚未就緒，請稍後再試"
+    snapshotFailed: "頁面快照儲存失敗：{error}"

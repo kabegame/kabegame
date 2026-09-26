@@ -104,3 +104,11 @@ vd:
 
 surf:
   windowTitle: "畅游 - {host}"
+  collect:
+    detecting: "正在检测媒体资源…"
+    none: "当前页面未检测到可下载的媒体资源"
+    found: "检测到 {count} 个媒体资源（图片 {images} / 视频 {videos}），开始尝试下载"
+    canceled: "已取消"
+    done: "已加入下载 {queued}/{total} 项"
+    notReady: "页面尚未就绪，请稍后再试"
+    snapshotFailed: "页面快照保存失败：{error}"

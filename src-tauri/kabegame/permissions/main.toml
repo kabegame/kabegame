@@ -124,6 +124,8 @@ commands.allow = [
   "set_auto_deduplicate",
   "get_fast_folder_sync",
   "set_fast_folder_sync",
+  "get_surf_freeze_page",
+  "set_surf_freeze_page",
   "get_mcp_enabled",
   "get_mcp_port",
   "get_mcp_disabled_capabilities",

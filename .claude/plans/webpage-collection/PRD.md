@@ -215,6 +215,11 @@ WebView 任务时必须强制传空 Header，不能把隐藏字段的旧值带�
 - WebView runner 负责向脚本注入取消/超时边界并接收结果，Rust 负责 URL 规范化、去重、metadata 创建、
   下载与入库。这样未来“冲浪”只需在当前浏览器页执行同一脚本，再把结果交给相同的 Rust 接收入口。
 - 本期必须为脚本入口与返回 JSON 写契约测试；未来冲浪按钮不得 fork 或复制脚本源码。
+- **已落地（先于本 PRD）**：畅游“一键下载”已实现页面发现脚本 `src-tauri/kabegame/src/webview_js/page_discover.js`
+  （`discoverMedia({ imageExtensions, videoExtensions }) → { candidates: [{url, kind}], documentUrl }`，
+  不挂 window，由 `concat!` 拼进封闭 IIFE）。webpage WebView runner 应以同样方式复用该文件，而不是另写一份；
+  畅游的 HTML+CSS 快照（`page_snapshot.js`）也可复用为 WebView 后端的 `pageHtml` 来源。见
+  `cocs/downloader-tasks/DOWNLOADER_FLOW.md`「畅游一键下载与页面快照」。
 
 ## 5. 下载与入库顺序
 

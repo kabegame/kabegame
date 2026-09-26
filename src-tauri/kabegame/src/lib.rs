@@ -436,6 +436,7 @@ pub(crate) fn configure_app(
                         }
                         commands::surf_session::drop_session(&host);
                     }
+                    commands::surf_collect::drop_slot(window.label());
                     commands::surf::notify_surf_session_closed(
                         &window.app_handle(),
                         Some(window.label()),
@@ -559,6 +560,14 @@ pub(crate) fn configure_app(
             surf_navigate,
             #[cfg(not(target_os = "android"))]
             surf_report_url,
+            #[cfg(not(target_os = "android"))]
+            surf_collect_attach,
+            #[cfg(not(target_os = "android"))]
+            surf_collect_toggle,
+            #[cfg(not(target_os = "android"))]
+            surf_collect_finished,
+            #[cfg(not(target_os = "android"))]
+            surf_save_page_snapshot,
             // --- Run Configs ---
             get_run_configs,
             get_run_config,
@@ -617,6 +626,8 @@ pub(crate) fn configure_app(
             set_auto_deduplicate,
             get_fast_folder_sync,
             set_fast_folder_sync,
+            get_surf_freeze_page,
+            set_surf_freeze_page,
             #[cfg(not(target_os = "android"))]
             get_mcp_enabled,
             #[cfg(not(target_os = "android"))]

@@ -104,3 +104,11 @@ vd:
 
 surf:
   windowTitle: "サーフ - {host}"
+  collect:
+    detecting: "メディアを検出しています…"
+    none: "このページにダウンロード可能なメディアは見つかりませんでした"
+    found: "{count} 件のメディアを検出しました（画像 {images} / 動画 {videos}）。ダウンロードを試みます"
+    canceled: "キャンセルしました"
+    done: "{queued}/{total} 件をダウンロードに追加しました"
+    notReady: "ページの準備ができていません。しばらくしてから再試行してください"
+    snapshotFailed: "ページのスナップショット保存に失敗しました：{error}"

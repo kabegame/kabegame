@@ -104,3 +104,11 @@ vd:
 
 surf:
   windowTitle: "Surf - {host}"
+  collect:
+    detecting: "Detecting media on this page…"
+    none: "No downloadable media found on this page"
+    found: "Found {count} media ({images} images / {videos} videos), trying to download"
+    canceled: "Canceled"
+    done: "Queued {queued}/{total} for download"
+    notReady: "Page is not ready yet, please try again"
+    snapshotFailed: "Failed to save page snapshot: {error}"

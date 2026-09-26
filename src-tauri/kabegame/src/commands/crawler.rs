@@ -1259,7 +1259,10 @@ pub async fn crawl_download_image<R: Runtime>(
     }
 }
 
-/// 畅游右键下载统一入队；worker 仍会在所属 surf WebView 中调用 CEF 下载以保留会话。
+/// 畅游右键下载 / 一键下载统一入队；worker 仍会在所属 surf WebView 中调用 CEF 下载以保留会话。
+///
+/// 一键下载额外传 `collect_run_id`：run 已取消则直接拒绝，并以 blocking 方式入队（等下载池
+/// 有空位），使取消能拦下尚未入队的候选；`metadata_id` 为同批共享的页面快照行，必须属于本站点。
 #[tauri::command]
 pub async fn surf_download_image<R: Runtime>(
     webview: Webview<R>,
@@ -1267,6 +1270,8 @@ pub async fn surf_download_image<R: Runtime>(
     name: Option<String>,
     headers: Option<HashMap<String, String>>,
     metadata: Option<Value>,
+    metadata_id: Option<i64>,
+    collect_run_id: Option<u64>,
     source_url: Option<String>,
 ) -> Result<(), String> {
     let ctx = surf_ctx_from_label(webview.label())?;
@@ -1274,9 +1279,23 @@ pub async fn surf_download_image<R: Runtime>(
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("Surf download only supports http or https URLs".to_string());
     }
+    if let Some(run_id) = collect_run_id {
+        if !super::surf_collect::is_run_active(webview.label(), run_id) {
+            return Err(kabegame_i18n::t!("surf.collect.canceled"));
+        }
+    }
 
     let custom_name = name.or_else(|| surf_download_name_from_url(&parsed));
-    let metadata_id = insert_metadata(&ctx.host, metadata, 0)?;
+    let metadata_id = match metadata_id {
+        Some(id) => {
+            let owner = Storage::global().metadata_plugin_id(id)?;
+            if owner.as_deref() != Some(ctx.host.as_str()) {
+                return Err(format!("Metadata {id} does not belong to this surf site"));
+            }
+            Some(id)
+        }
+        None => insert_metadata(&ctx.host, metadata, 0)?,
+    };
     let mut http_headers = HashMap::new();
     if let Some(headers) = headers {
         http_headers.extend(headers);
@@ -1294,7 +1313,7 @@ pub async fn surf_download_image<R: Runtime>(
         None,
         custom_name,
         metadata_id,
-        false,
+        collect_run_id.is_some(),
         source_url,
     )
     .await

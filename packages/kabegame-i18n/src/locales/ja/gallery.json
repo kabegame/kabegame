@@ -1,6 +1,7 @@
 {
   "imageDetailTitle": "画像詳細",
   "toggleDetailPanel": "プラグイン詳細",
+  "openOriginalPage": "元のページを開く",
   "pluginDetailEmptyTitle": "表示できるプラグイン詳細はありません",
   "pluginDetailEmptyDesc": "この画像にはプラグインメタデータがないか、プラグインに詳細テンプレートがありません。",
   "toggleImageInfoPanel": "画像情報",

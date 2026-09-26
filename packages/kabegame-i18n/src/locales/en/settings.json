@@ -129,6 +129,8 @@
   "autoDeduplicateDesc": "Skip duplicate files by hash",
   "fastFolderSync": "Fast sync",
   "fastFolderSyncDesc": "Skip folders whose modification time is unchanged. Enable only when image files inside the folder are never modified in place",
+  "surfFreezePage": "Freeze surf page",
+  "surfFreezePageDesc": "When downloading all media in Surf, save an HTML and style snapshot of the page so you can view the original page in image details later",
   "defaultDownloadDir": "Default download directory",
   "defaultDownloadDirDesc": "Used when task does not specify output (per-plugin subfolders)",
   "defaultDownloadDirPlaceholder": "Leave empty to use default location",

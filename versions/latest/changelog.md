@@ -3,6 +3,9 @@
 ## 用户侧
 ### Added
 - 任意搜索功能，本质上是所有其他搜索（名称、元数据等）的按或查询
+- 畅游导航栏新增“一键下载”：检测当前页面的图片与视频并逐个下载，转圈时再次点击可取消
+- 新增设置“冻结畅游页面”（下载分区，默认开启）：一键下载时保存页面的 HTML 与样式快照，可在图片详情中回看原网页，并可刷新重新加载
+- 新增 v8 api: `cefUA()` 函数，可以获取cef的默认UA拼到http header.
 
 ### Fixed
 - 修复本地文件夹中单个文件变化会触发整目录重扫、阻塞应用事件刷新，以及同步在飞时可能漏掉后续文件变化的问题
@@ -25,6 +28,7 @@
 ## 开发侧
 
 ### Added
+- 畅游一键下载：`surf_collect.rs` 以 Tauri Channel 与内容页通信（Rust 权威 run 状态机，内容页脚本 `concat!` 成封闭 IIFE、不挂 window 全局）；页面发现脚本 `page_discover.js` 供后续 webpage runner 复用；快照写入 metadata 表并只以标题与 URL 建搜索索引
 - 新增本地文件夹 `fs_listener` + `synchronizer` 双管道与跨画册 CPU 核数并发限制
 - 添加了 cef 、 cef-rs 补丁，为了实现linux的拖拽，维护负担增加
 - V8 插件新增 `Kabegame.cefUserAgent()`，返回畅游（桌面 CEF）的默认 UA，配合 `requireCookie()` 解决 Cloudflare `cf_clearance` 绑定 UA 导致的 403；Chrome 大版本号写死在 `ops.rs` 的 `CEF_CHROME_MAJOR`，升级 CEF 时同步

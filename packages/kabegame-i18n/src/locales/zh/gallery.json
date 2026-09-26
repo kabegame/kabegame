@@ -1,6 +1,7 @@
 {
   "imageDetailTitle": "图片详情",
   "toggleDetailPanel": "插件详情",
+  "openOriginalPage": "打开原网页",
   "pluginDetailEmptyTitle": "没有可显示的插件详情",
   "pluginDetailEmptyDesc": "此图片没有关联的插件元数据，或插件未提供详情模板。",
   "toggleImageInfoPanel": "图片信息",

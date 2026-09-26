@@ -1,6 +1,7 @@
 {
   "imageDetailTitle": "圖片詳情",
   "toggleDetailPanel": "外掛詳情",
+  "openOriginalPage": "開啟原網頁",
   "pluginDetailEmptyTitle": "沒有可顯示的外掛詳情",
   "pluginDetailEmptyDesc": "此圖片沒有關聯的外掛中繼資料，或外掛未提供詳情範本。",
   "toggleImageInfoPanel": "圖片資訊",

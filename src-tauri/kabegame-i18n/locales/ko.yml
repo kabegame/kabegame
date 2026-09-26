@@ -104,3 +104,11 @@ vd:
 
 surf:
   windowTitle: "서핑 - {host}"
+  collect:
+    detecting: "미디어를 감지하는 중…"
+    none: "이 페이지에서 다운로드할 수 있는 미디어를 찾지 못했습니다"
+    found: "미디어 {count}개를 감지했습니다(이미지 {images} / 동영상 {videos}). 다운로드를 시도합니다"
+    canceled: "취소되었습니다"
+    done: "{queued}/{total}개를 다운로드에 추가했습니다"
+    notReady: "페이지가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요"
+    snapshotFailed: "페이지 스냅샷 저장 실패: {error}"

@@ -129,6 +129,8 @@
   "autoDeduplicateDesc": "根据文件哈希值自动跳过重复图片，避免在画廊中重复添加相同文件",
   "fastFolderSync": "快速同步",
   "fastFolderSyncDesc": "跳过修改时间未变的文件夹。仅在文件夹内的图片文件不会被原地修改时启用",
+  "surfFreezePage": "冻结畅游页面",
+  "surfFreezePageDesc": "畅游一键下载时保存当前页面的 HTML 与样式快照，之后可在图片详情中回看原网页",
   "defaultDownloadDir": "默认下载目录",
   "defaultDownloadDirDesc": "未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）",
   "defaultDownloadDirPlaceholder": "留空使用默认位置",

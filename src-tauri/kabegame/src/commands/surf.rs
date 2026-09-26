@@ -106,7 +106,7 @@ fn surf_navbar_label(host: &str) -> String {
     format!("{}-navbar", surf_label(host))
 }
 
-fn is_surf_content_label(label: &str) -> bool {
+pub(crate) fn is_surf_content_label(label: &str) -> bool {
     label.starts_with("surf-") && !label.ends_with("-navbar")
 }
 
@@ -280,7 +280,21 @@ pub async fn surf_start_session<R: Runtime>(
             .devtools(true)
             .initialization_script(media_capture)
             .initialization_script(media_download)
-            .initialization_script(include_str!("../webview_js/surf_bootstrap.js"))
+            .initialization_script(concat!(
+                "(function () {\n\"use strict\";\n",
+                include_str!("../webview_js/surf_download_name.js"),
+                include_str!("../webview_js/surf_bootstrap.js"),
+                "\n})();\n"
+            ))
+            // 一键下载：发现 / 快照 / 编排拼进同一个封闭 IIFE，不挂 window 全局
+            .initialization_script(concat!(
+                "(function () {\n\"use strict\";\n",
+                include_str!("../webview_js/surf_download_name.js"),
+                include_str!("../webview_js/page_discover.js"),
+                include_str!("../webview_js/page_snapshot.js"),
+                include_str!("../webview_js/surf_collect.js"),
+                "\n})();\n"
+            ))
             .initialization_script(include_str!("../webview_js/surf_toast.js"))
             .initialization_script(include_str!("../webview_js/surf_context_menu.js"))
             .initialization_script(include_str!("../webview_js/surf_url_report.js"))
@@ -288,7 +302,11 @@ pub async fn surf_start_session<R: Runtime>(
                 let app = app.clone();
                 let host = host.clone();
                 let navbar_label = navbar_label.clone();
-                move |_surf_window, payload| {
+                move |surf_webview, payload| {
+                    if payload.event() == PageLoadEvent::Started {
+                        // 整页导航会销毁内容脚本：结束其一键下载 run，导航栏停止转圈。
+                        super::surf_collect::on_content_page_started(&app, surf_webview.label());
+                    }
                     // Started 也上报:整页导航一发起地址栏即更新,不必等加载完;
                     // SPA 内部跳转(pushState 等)不经过这里,由 surf_report_url 补上。
                     let _ = app.emit_to(
@@ -556,7 +574,7 @@ pub async fn surf_get_records_by_ids(ids: Vec<String>) -> Result<Vec<SurfRecord>
     kabegame_core::commands::surf::surf_get_records_by_ids(ids)
 }
 
-fn normalize_surf_host(host: &str) -> String {
+pub(crate) fn normalize_surf_host(host: &str) -> String {
     host.trim().to_lowercase()
 }
 

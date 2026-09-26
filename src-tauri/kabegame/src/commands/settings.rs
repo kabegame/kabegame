@@ -90,6 +90,11 @@ pub fn get_fast_folder_sync() -> bool {
 }
 
 #[tauri::command]
+pub fn get_surf_freeze_page() -> bool {
+    Settings::global().get_surf_freeze_page()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -442,6 +447,11 @@ pub fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn set_fast_folder_sync(enabled: bool) -> Result<(), String> {
     Settings::global().set_fast_folder_sync(enabled)
+}
+
+#[tauri::command]
+pub fn set_surf_freeze_page(enabled: bool) -> Result<(), String> {
+    Settings::global().set_surf_freeze_page(enabled)
 }
 
 #[tauri::command]

@@ -1,6 +1,7 @@
 {
   "imageDetailTitle": "Image Details",
   "toggleDetailPanel": "Plugin details",
+  "openOriginalPage": "Open original page",
   "pluginDetailEmptyTitle": "No plugin details to display",
   "pluginDetailEmptyDesc": "This image has no plugin metadata, or the plugin does not provide a detail template.",
   "toggleImageInfoPanel": "Image info",
