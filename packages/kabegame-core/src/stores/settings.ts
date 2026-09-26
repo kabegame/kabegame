@@ -26,6 +26,8 @@ export interface AppSettings {
   /** 画廊列数（0=动态；1-6=固定列数），前端本地偏好 */
   galleryGridColumns: number;
   autoDeduplicate: boolean;
+  /** 去重命中时用本次下载的 metadata 更新已有图片 */
+  dedupUpdateMetadata: boolean;
   /** 快速同步：跳过修改时间未变的文件夹（本地文件夹同步全入口生效），默认开启 */
   fastFolderSync: boolean;
   /** 畅游一键下载时冻结页面（HTML+CSS 快照写入 metadata，详情可回看） */

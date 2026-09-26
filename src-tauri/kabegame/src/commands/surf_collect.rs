@@ -13,7 +13,7 @@ use std::sync::{LazyLock, Mutex};
 
 use kabegame_core::media::image_type::{supported_image_extensions, supported_video_extensions};
 use kabegame_core::settings::Settings;
-use kabegame_core::storage::page_snapshot::PAGE_SNAPSHOT_KIND;
+use kabegame_core::storage::page_snapshot::{PAGE_SNAPSHOT_KIND, SURF_METADATA_VERSION};
 use kabegame_core::storage::Storage;
 use kabegame_i18n::t;
 use serde::Serialize;
@@ -234,5 +234,5 @@ pub async fn surf_save_page_snapshot<R: Runtime>(
         "capturedAt": super::crawler::now_ms(),
     });
     // 空 / 超限由 core 的 page_snapshot::validate 拒绝；search_text 只含标题与 URL 也由 core 统一处理。
-    Storage::global().insert_metadata_row(&value, &host, 0)
+    Storage::global().insert_metadata_row(&value, &host, SURF_METADATA_VERSION)
 }

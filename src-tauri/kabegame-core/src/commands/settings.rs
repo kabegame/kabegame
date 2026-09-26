@@ -10,6 +10,7 @@ const WEB_READABLE_SETTING_KEYS: &[&str] = &[
     "downloadIntervalMs",
     "networkRetryCount",
     "autoDeduplicate",
+    "dedupUpdateMetadata",
 ];
 
 pub fn get_settings(keys: Vec<String>) -> Result<Value, String> {
@@ -67,6 +68,12 @@ pub fn get_auto_deduplicate() -> Result<Value, String> {
     Ok(Value::Bool(Settings::global().get_auto_deduplicate()))
 }
 
+pub fn get_dedup_update_metadata() -> Result<Value, String> {
+    Ok(Value::Bool(
+        Settings::global().get_dedup_update_metadata(),
+    ))
+}
+
 /// 写入 + 同步运行时调度器。调度器从设置里读新值，故必须写在前。
 ///
 /// 副作用原先挂在 `startup::start_event_loop` 的 `SettingChange` 分支（且 `tokio::spawn`
@@ -98,6 +105,11 @@ pub fn set_network_retry_count(count: u32) -> Result<Value, String> {
 
 pub fn set_auto_deduplicate(enabled: bool) -> Result<Value, String> {
     Settings::global().set_auto_deduplicate(enabled)?;
+    Ok(Value::Null)
+}
+
+pub fn set_dedup_update_metadata(enabled: bool) -> Result<Value, String> {
+    Settings::global().set_dedup_update_metadata(enabled)?;
     Ok(Value::Null)
 }
 

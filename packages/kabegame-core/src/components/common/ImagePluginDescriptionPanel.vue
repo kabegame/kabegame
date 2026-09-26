@@ -82,7 +82,7 @@ import {
   imageMetadataResolverKey,
   type ImageMetadataResolver,
 } from "../../composables/useImageMetadataCache";
-import { usePluginStore } from "../../stores/plugins";
+import { usePluginStore, WEBPAGE_PLUGIN_ID } from "../../stores/plugins";
 import { openExternalLink } from "../../utils/openExternalLink";
 import { Refresh } from "@kabegame/element-plus-icons";
 
@@ -149,7 +149,11 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
   }
   try {
     if (injectedResolveMetadata) {
-      const m = await injectedResolveMetadata(img.id, resolvedPluginVersion.value);
+      const m = await injectedResolveMetadata(
+        img.id,
+        img.metadataId,
+        resolvedPluginVersion.value,
+      );
       resolvedMetadata.value = m ?? null;
     } else {
       const full = await invoke<ImageMetadataFullPayload>("get_image_metadata_full", {
@@ -187,20 +191,26 @@ const effectiveMetadata = computed(() => {
 
 const descriptionIframeRef = ref<HTMLIFrameElement | null>(null);
 
-/** 畅游一键下载冻结的页面快照（`surf_collect.rs` 写入的 metadata 形状） */
-type SurfPageSnapshot = {
-  kind: "kabegame.surfPageSnapshot";
+/** 畅游 / 网页收集冻结的页面快照 */
+type PageSnapshot = {
   sourceUrl: string;
   title?: string;
   pageHtml: string;
 };
 
-const pageSnapshot = computed<SurfPageSnapshot | null>(() => {
+/** 快照只来自畅游或保留 id 的内建网页收集，不信任 metadata 自带的 kind。 */
+const isSnapshotSource = computed(() => {
+  const img = props.image;
+  if (!img) return false;
+  return (!img.pluginId && !!img.surfRecordId) || img.pluginId === WEBPAGE_PLUGIN_ID;
+});
+
+const pageSnapshot = computed<PageSnapshot | null>(() => {
+  if (!isSnapshotSource.value) return null;
   const meta = effectiveMetadata.value as Record<string, unknown> | null | undefined;
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
-  if (meta.kind !== "kabegame.surfPageSnapshot" || typeof meta.pageHtml !== "string") return null;
+  if (typeof meta.pageHtml !== "string") return null;
   return {
-    kind: "kabegame.surfPageSnapshot",
     sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : "",
     title: typeof meta.title === "string" ? meta.title : undefined,
     pageHtml: meta.pageHtml,

@@ -3,9 +3,10 @@ import { invoke } from "../api";
 import { IS_WEB } from "../env";
 import { imageMetadataCacheDb } from "../cache/imageMetadataCache";
 
-/** 按 imageId + pluginVersion 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
+/** 按 imageId + metadataId + pluginVersion 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
 export type ImageMetadataResolver = (
   imageId: string,
+  metadataId?: number | null,
   pluginVersion?: number | null,
 ) => Promise<unknown | null>;
 
@@ -20,8 +21,12 @@ function normalizePluginVersion(version: number | null | undefined): number {
     : 0;
 }
 
-function cacheKeyFor(imageId: string, pluginVersion?: number | null): string {
-  return `${imageId}@v${normalizePluginVersion(pluginVersion)}`;
+function cacheKeyFor(
+  imageId: string,
+  metadataId?: number | null,
+  pluginVersion?: number | null,
+): string {
+  return `${imageId}@m${metadataId ?? 0}@v${normalizePluginVersion(pluginVersion)}`;
 }
 
 class LruMap {
@@ -85,11 +90,12 @@ function ensureInit(): Promise<void> {
 export function useProvideImageMetadataCache() {
   async function resolveMetadata(
     imageId: string,
+    metadataId?: number | null,
     pluginVersion?: number | null,
   ): Promise<unknown | null> {
     await ensureInit();
 
-    const key = cacheKeyFor(imageId, pluginVersion);
+    const key = cacheKeyFor(imageId, metadataId, pluginVersion);
 
     // 1. 内存 LRU 命中（初始化后与 Dexie 同步，命中内存即命中持久化层）
     if (mem.has(key)) {

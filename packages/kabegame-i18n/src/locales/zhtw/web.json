@@ -20,6 +20,7 @@
     "downloadSettings": "下載設定",
     "gallerySettings": "相冊顯示",
     "autoDeduplicate": "自動去重",
+    "dedupUpdateMetadata": "去重時更新中繼資料",
     "scheduler": "定時任務",
     "deleteImages": "刪除圖片",
     "deleteTask": "刪除任務",

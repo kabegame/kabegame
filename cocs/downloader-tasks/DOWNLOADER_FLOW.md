@@ -156,6 +156,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByUrl`
 - 如果指定了输出画册，把已存在图片加入该画册并发送 `album-images-change`
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
 - 增加 `tasks.dedup_count` 并通过 `tasks-change` / `TaskChanged` 发送新的 `dedupCount`
 - 发送 Completed，清理对应失败记录，跳过下载读取
 
@@ -165,7 +166,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByHash`
 - 按需加入输出画册
-- 发送 `images-change` reason `change`，让前端刷新既有记录关联视图
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
 - 后处理最终分支收到 `imported = false` 后增加 `tasks.dedup_count`
 - 发送 Completed，清理对应失败记录
 
@@ -272,11 +273,11 @@ surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`st
 
 **快照**（开关 `surfFreezePage`，设置文案「冻结网页」，位于设置「下载」分区，默认开；同时作用于网页收集任务，故 Android 也显示）：`page_snapshot.js` 克隆 DOM，按顺序回填 `img.currentSrc`，删除 script/iframe/object/样式节点/`on*`/`javascript:` 与 Kabegame toast；遍历 `styleSheets` + `adoptedStyleSheets` 读 `cssRules`（可拿到 CSS-in-JS 规则），跨域不可读时 `fetch(href, {credentials:"omit"})`，`url()`/`@import` 按表 href 绝对化后合成一个 `<style>`；head 前置 `<meta charset>` 与 `<base href>`。样式必须内联：回看的 srcdoc 继承应用 CSP（`style-src 'self' 'unsafe-inline'`）。
 
-快照以 `{ kind: "kabegame.surfPageSnapshot", schemaVersion: 1, sourceUrl, documentUrl, title, pageHtml, capturedAt, backend? }` 写入 **metadata 表**一次，同批下载共享该 id。畅游行的 `plugin_id` = host，`surf_download_image(metadataId)` 校验该行 `plugin_id` 等于当前 host 才允许引用；网页收集行由 `Task::insert_metadata` 盖 `plugin_id = webpage`，`backend` 为 `v8` / `webview`，`sourceUrl` 恒为用户初始 URL（与 `images.post_url` 一致）。**规则统一在 core `storage::page_snapshot`**：`insert_metadata_row` 写入前 `validate`（空 / 超 32MB 报错），`search_text_from_json_str` 遇到该 `kind` 只索引标题与 URL，整页 HTML 不进搜索索引。`kind` 名沿用畅游首发叫法，已有数据按它识别，勿改。
+快照以 `{ kind: "kabegame.surfPageSnapshot", schemaVersion: 1, sourceUrl, documentUrl, title, pageHtml, capturedAt, backend? }` 写入 **metadata 表**一次，同批下载共享该 id。畅游行的 `plugin_id` = host、`plugin_version = 1`（`storage::page_snapshot::SURF_METADATA_VERSION`），`surf_download_image(metadataId)` 校验该行 `plugin_id` 等于当前 host 才允许引用；网页收集行由 `Task::insert_metadata` 盖 `plugin_id = webpage` 与内建插件版本，`backend` 为 `v8` / `webview`，`sourceUrl` 恒为用户初始 URL（与 `images.post_url` 一致）。**规则统一在 core `storage::page_snapshot`**：`insert_metadata_row` 写入前 `validate`（空 / 超 32MB 报错），`search_text_from_json_str` 遇到该 `kind` 只索引标题与 URL，整页 HTML 不进搜索索引。`kind` 名沿用畅游首发叫法，已有数据仍按它做写入校验与搜索索引识别，勿改。
 
 网页收集的冻结差异：V8 后端只能拿到服务端响应 HTML（前置 charset 与 base，**无 CSS**，子资源仍远程加载）；WebView 后端走同一个 `page_snapshot.js`，保存 HTML+CSS。超限时跳过快照并写 warn，媒体照常下载（无 metadata）。
 
-图片详情的 `ImagePluginDescriptionPanel` 识别该 `kind`，优先于 EJS / 原始字段展示：顶部标题 + 刷新按钮（递增 iframe `key` 重新挂载子页面，重载远程子资源）+ “打开原网页”（`openExternalLink`，仅 http/https），下方 `sandbox=""` 的 iframe，srcdoc 前置内层 CSP（只放行远程图片/媒体与内联样式）。畅游图片 `images.plugin_id` 为空，面板按 `surfRecordId` 放行 metadata 加载。
+图片详情的 `ImagePluginDescriptionPanel` 按图片来源识别快照：`plugin_id` 为空且有 `surf_record_id` 的畅游图片，或保留 id `webpage` 的内建网页收集图片，优先于 EJS / 原始字段展示；普通插件即使写入相同 `kind` 也仍走 EJS。快照顶部为标题 + 刷新按钮（递增 iframe `key` 重新挂载子页面，重载远程子资源）+ “打开原网页”（`openExternalLink`，仅 http/https），下方 `sandbox=""` 的 iframe，srcdoc 前置内层 CSP（只放行远程图片/媒体与内联样式）。`pageHtml` 仍须是字符串才渲染。
 
 已知限制：快照只含 HTML 与 CSS，图片仍为远程地址（原站删图或防盗链会缺图），远程字体被 CSP 拦截，canvas、shadow DOM、表单状态不保留。
 
@@ -418,6 +419,8 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 ### 自动去重
 
 `autoDeduplicate` 打开时启用 URL 前置去重和 hash 后置去重；关闭时仍会受 `local_path` 唯一约束保护，避免同一磁盘路径或同一 content URI 重复入库。
+
+`dedupUpdateMetadata` 默认关闭。开启后，两级去重命中且本次下载带 metadata 时会改挂已有图片：插件下载可覆盖任意来源并同步 `plugin_id`；畅游下载只更新无插件来源的旧图。两类都保留原 `task_id` / `surf_record_id`，并清理无人引用的旧 metadata 行。
 
 ---
 

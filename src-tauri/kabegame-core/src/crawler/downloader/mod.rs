@@ -34,6 +34,69 @@ pub fn is_dedup_dummy_url(url: &str) -> bool {
         || url.starts_with("blob:")
 }
 
+/// 去重命中后按设置把旧图改挂到本次 metadata。
+/// 插件下载覆盖任意来源并同步 plugin_id；畅游只更新无插件来源的旧图。
+pub(super) fn rebind_deduped_metadata(
+    existing: &ImageInfo,
+    metadata_id: Option<i64>,
+    plugin_id: &str,
+    surf_record_id: Option<&str>,
+) {
+    if !Settings::global().get_dedup_update_metadata() {
+        return;
+    }
+    let Some(metadata_id) = metadata_id else {
+        return;
+    };
+
+    let is_surf = surf_record_id.is_some();
+    let existing_has_plugin = existing
+        .plugin_id
+        .as_deref()
+        .is_some_and(|plugin_id| !plugin_id.is_empty());
+    if is_surf && existing_has_plugin {
+        return;
+    }
+
+    let new_plugin_id = (!is_surf).then_some(plugin_id);
+    if existing.metadata_id == Some(metadata_id)
+        && new_plugin_id.map_or(true, |new_plugin_id| {
+            existing.plugin_id.as_deref() == Some(new_plugin_id)
+        })
+    {
+        return;
+    }
+
+    match Storage::global().rebind_image_metadata(&existing.id, metadata_id, new_plugin_id) {
+        Ok(()) => {
+            let mut plugin_ids = Vec::new();
+            if let Some(existing_plugin_id) = existing
+                .plugin_id
+                .as_ref()
+                .filter(|plugin_id| !plugin_id.is_empty())
+            {
+                plugin_ids.push(existing_plugin_id.clone());
+            }
+            if let Some(new_plugin_id) = new_plugin_id {
+                if !plugin_ids.iter().any(|id| id == new_plugin_id) {
+                    plugin_ids.push(new_plugin_id.to_string());
+                }
+            }
+            GlobalEmitter::global().emit_images_change(
+                "change",
+                std::slice::from_ref(&existing.id),
+                existing.task_id.as_ref().map(std::slice::from_ref),
+                existing
+                    .surf_record_id
+                    .as_ref()
+                    .map(std::slice::from_ref),
+                (!plugin_ids.is_empty()).then_some(plugin_ids.as_slice()),
+            );
+        }
+        Err(e) => eprintln!("[downloader] rebind deduped metadata failed: {e}"),
+    }
+}
+
 /// 搜索语义：url 搜索维度使用 = 去重集合 **+ file://**。
 /// 两套刻意分开：去重必须认 file://（本地导入去重的依据），搜索必须排除它
 /// （否则“按 URL”会把全部本地导入图捞出来，且那串路径与 local-path 维度重复）。
@@ -864,6 +927,7 @@ pub async fn postprocess_downloaded_image(
                         }
                     }
                 }
+                rebind_deduped_metadata(existing, metadata_id, plugin_id, surf_record_id);
                 if let Some(task_id) = task_id {
                     emit_task_log(
                         task_id,

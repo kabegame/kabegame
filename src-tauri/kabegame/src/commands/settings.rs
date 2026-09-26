@@ -85,6 +85,11 @@ pub fn get_auto_deduplicate() -> bool {
 }
 
 #[tauri::command]
+pub fn get_dedup_update_metadata() -> bool {
+    Settings::global().get_dedup_update_metadata()
+}
+
+#[tauri::command]
 pub fn get_fast_folder_sync() -> bool {
     Settings::global().get_fast_folder_sync()
 }
@@ -442,6 +447,11 @@ pub fn get_desktop_resolution<R: tauri::Runtime>(
 #[tauri::command]
 pub fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
     Settings::global().set_auto_deduplicate(enabled)
+}
+
+#[tauri::command]
+pub fn set_dedup_update_metadata(enabled: bool) -> Result<(), String> {
+    Settings::global().set_dedup_update_metadata(enabled)
 }
 
 #[tauri::command]

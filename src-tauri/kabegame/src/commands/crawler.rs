@@ -12,6 +12,7 @@ use kabegame_core::plugin::{
     ffmpeg::FfmpegProbeResult,
     vfs::PluginVfs,
 };
+use kabegame_core::storage::page_snapshot::SURF_METADATA_VERSION;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -1294,7 +1295,7 @@ pub async fn surf_download_image<R: Runtime>(
             }
             Some(id)
         }
-        None => insert_metadata(&ctx.host, metadata, 0)?,
+        None => insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?,
     };
     let mut http_headers = HashMap::new();
     if let Some(headers) = headers {

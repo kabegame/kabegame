@@ -1,7 +1,7 @@
 import Dexie, { type Table } from "dexie";
 
 export interface CachedImageMetadata {
-  /** imageId + pluginVersion */
+  /** imageId + metadataId + pluginVersion */
   cacheKey: string;
   data: unknown | null;
   cachedAt: number;
@@ -21,6 +21,10 @@ class ImageMetadataCacheDb extends Dexie {
       .upgrade((tx) => tx.table("entries").clear());
     // v4: cacheKey 纳入版本（现 pluginVersion），旧 imageId-only 缓存作废。
     this.version(4)
+      .stores({ entries: "cacheKey, cachedAt" })
+      .upgrade((tx) => tx.table("entries").clear());
+    // v5: cacheKey 纳入 metadataId，改挂 metadata 后同插件版本也会重新读取。
+    this.version(5)
       .stores({ entries: "cacheKey, cachedAt" })
       .upgrade((tx) => tx.table("entries").clear());
   }

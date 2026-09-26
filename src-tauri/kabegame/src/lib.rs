@@ -624,6 +624,8 @@ pub(crate) fn configure_app(
             set_gallery_image_object_position,
             get_auto_deduplicate,
             set_auto_deduplicate,
+            get_dedup_update_metadata,
+            set_dedup_update_metadata,
             get_fast_folder_sync,
             set_fast_folder_sync,
             get_surf_freeze_page,

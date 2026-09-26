@@ -763,6 +763,19 @@ pub fn init_registry() {
         },
     );
 
+    map.insert(
+        "get_dedup_update_metadata",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::settings::get_dedup_update_metadata()
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
     // ── write (super required) ────────────────────────────────────────────────
 
     map.insert(
@@ -1903,6 +1916,24 @@ pub fn init_registry() {
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::settings::set_auto_deduplicate(args.enabled)
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "set_dedup_update_metadata",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    struct Args {
+                        enabled: bool,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::settings::set_dedup_update_metadata(args.enabled)
                         .map_err(RpcError::internal)
                 })
             }),

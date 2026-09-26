@@ -20,6 +20,7 @@
     "downloadSettings": "下载设置",
     "gallerySettings": "画廊显示",
     "autoDeduplicate": "自动去重",
+    "dedupUpdateMetadata": "去重时更新元数据",
     "scheduler": "定时任务",
     "deleteImages": "删除图片",
     "deleteTask": "删除任务",

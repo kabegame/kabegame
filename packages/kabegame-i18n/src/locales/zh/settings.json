@@ -127,6 +127,8 @@
   "networkRetryCountDesc": "下载图片遇到网络错误/超时等情况时，额外重试的次数（0-10）",
   "autoDeduplicate": "自动去重",
   "autoDeduplicateDesc": "根据文件哈希值自动跳过重复图片，避免在画廊中重复添加相同文件",
+  "dedupUpdateMetadata": "去重时更新元数据",
+  "dedupUpdateMetadataDesc": "命中去重时，用本次插件下载的元数据替换已有图片的元数据与来源插件",
   "fastFolderSync": "快速同步",
   "fastFolderSyncDesc": "跳过修改时间未变的文件夹。仅在文件夹内的图片文件不会被原地修改时启用",
   "surfFreezePage": "冻结网页",

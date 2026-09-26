@@ -127,6 +127,8 @@
   "networkRetryCountDesc": "네트워크 오류/타임아웃 시 추가 재시도 (0–10)",
   "autoDeduplicate": "자동 중복 제거",
   "autoDeduplicateDesc": "해시로 중복 파일 건너뛰기",
+  "dedupUpdateMetadata": "중복 제거 시 메타데이터 업데이트",
+  "dedupUpdateMetadataDesc": "중복이 발견되면 기존 이미지의 메타데이터와 원본 플러그인을 이번 플러그인 다운로드의 정보로 교체합니다",
   "fastFolderSync": "빠른 동기화",
   "fastFolderSyncDesc": "수정 시간이 변경되지 않은 폴더를 건너뜁니다. 폴더 안의 이미지 파일이 제자리에서 수정되지 않는 경우에만 사용하세요",
   "surfFreezePage": "웹페이지 고정",

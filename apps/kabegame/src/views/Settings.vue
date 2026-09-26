@@ -248,6 +248,11 @@
                   <SettingSwitchControl setting-key="autoDeduplicate" />
                 </SettingRow>
 
+                <SettingRow :label="$t('settings.dedupUpdateMetadata')"
+                  :description="$t('settings.dedupUpdateMetadataDesc')">
+                  <SettingSwitchControl setting-key="dedupUpdateMetadata" />
+                </SettingRow>
+
                 <SettingRow v-if="!IS_WEB" :label="$t('settings.surfFreezePage')"
                   :description="$t('settings.surfFreezePageDesc')">
                   <SettingSwitchControl setting-key="surfFreezePage" />

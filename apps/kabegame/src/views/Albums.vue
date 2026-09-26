@@ -19,7 +19,7 @@
       <!-- 直接放 AlbumsPageHeader，不能包短容器：sticky 元素被限制在父盒内，父盒等高即失效 -->
       <template #header>
         <AlbumsPageHeader
-          class="albums-page-header"
+          class="albums-page-header ml-5"
           :album-drive-enabled="albumDriveEnabled"
           @view-vd="openVirtualDrive"
           @refresh="handleRefresh"

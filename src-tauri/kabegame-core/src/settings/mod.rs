@@ -92,6 +92,8 @@ pub enum SettingKey {
     GalleryImageObjectPosition,
     /// 自动去重
     AutoDeduplicate,
+    /// 去重命中时更新已有图片的元数据与来源插件
+    DedupUpdateMetadata,
     /// 本地文件夹画册快速同步
     FastFolderSync,
     /// 畅游一键下载时冻结页面（HTML+CSS 快照入 metadata）
@@ -318,6 +320,7 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
+            SettingKey::DedupUpdateMetadata => SettingValue::Bool(false),
             SettingKey::FastFolderSync => SettingValue::Bool(true),
             SettingKey::SurfFreezePage => SettingValue::Bool(true),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
@@ -420,6 +423,7 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio,
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
+            SettingKey::DedupUpdateMetadata,
             SettingKey::FastFolderSync,
             SettingKey::SurfFreezePage,
             SettingKey::DefaultDownloadDir,
@@ -527,6 +531,7 @@ impl Settings {
         match key {
             SettingKey::AutoLaunch
             | SettingKey::AutoDeduplicate
+            | SettingKey::DedupUpdateMetadata
             | SettingKey::WallpaperRotationEnabled
             | SettingKey::WallpaperDisabled
             | SettingKey::McpEnabled => {
@@ -726,6 +731,7 @@ impl Settings {
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
+            SettingKey::DedupUpdateMetadata => "dedupUpdateMetadata".to_string(),
             SettingKey::FastFolderSync => "fastFolderSync".to_string(),
             SettingKey::SurfFreezePage => "surfFreezePage".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
@@ -959,6 +965,13 @@ impl Settings {
     pub fn get_auto_deduplicate(&self) -> bool {
         Self::cells()
             .get(&SettingKey::AutoDeduplicate)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    pub fn get_dedup_update_metadata(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::DedupUpdateMetadata)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
@@ -1318,6 +1331,16 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value);
+        Ok(())
+    }
+
+    pub fn set_dedup_update_metadata(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::DedupUpdateMetadata) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::DedupUpdateMetadata, &new_value);
         Ok(())
     }
 

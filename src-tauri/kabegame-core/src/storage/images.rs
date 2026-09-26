@@ -487,6 +487,41 @@ impl Storage {
         Ok(deleted)
     }
 
+    /// 去重命中时把旧图改挂到新 metadata；`plugin_id` 为 Some 时同步改来源插件。
+    /// `task_id` / `surf_record_id` 不动。旧 metadata 行改挂后无人引用则 GC。
+    pub fn rebind_image_metadata(
+        &self,
+        image_id: &str,
+        metadata_id: i64,
+        plugin_id: Option<&str>,
+    ) -> Result<(), String> {
+        let old_metadata_id = {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let old_metadata_id = conn
+                .query_row(
+                    "SELECT metadata_id FROM images WHERE id = ?1",
+                    params![image_id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map_err(|e| format!("select image metadata for rebind: {e}"))?
+                .flatten();
+            conn.execute(
+                "UPDATE images
+                 SET metadata_id = ?1, plugin_id = COALESCE(?2, plugin_id)
+                 WHERE id = ?3",
+                params![metadata_id, plugin_id, image_id],
+            )
+            .map_err(|e| format!("rebind image metadata: {e}"))?;
+            old_metadata_id
+        };
+
+        if let Some(old_metadata_id) = old_metadata_id.filter(|old| *old != metadata_id) {
+            self.gc_metadata(&[old_metadata_id])?;
+        }
+        Ok(())
+    }
+
     /// 查找同内容哈希且解析器版本匹配的原生元数据，并回填到全部同哈希图片。
     /// 未命中时仅在传入 JSON 后创建新行；空哈希不跨图片共享。
     pub fn ensure_native_metadata_for_hash(
@@ -1478,5 +1513,111 @@ mod metadata_search_text_override_tests {
         let conn = conn();
         let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0).unwrap();
         assert!(search_text_of(&conn, id).contains("sakura"));
+    }
+}
+
+#[cfg(test)]
+mod rebind_image_metadata_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn storage() -> Storage {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE metadata (
+                id        INTEGER PRIMARY KEY,
+                data      TEXT NOT NULL DEFAULT '{}',
+                plugin_id TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE images (
+                id             TEXT PRIMARY KEY,
+                metadata_id    INTEGER,
+                plugin_id      TEXT,
+                task_id        TEXT,
+                surf_record_id TEXT
+            );
+            CREATE TABLE task_failed_images (
+                metadata_id INTEGER
+            );",
+        )
+        .unwrap();
+        Storage {
+            db: Arc::new(Mutex::new(conn)),
+            cached_images_total: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn rebind_image_metadata_updates_source_preserves_ownership_and_gcs_old_rows() {
+        let storage = storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO metadata (id) VALUES (1), (2), (3), (4);
+                 INSERT INTO images (id, metadata_id, plugin_id, task_id, surf_record_id)
+                 VALUES
+                   ('image-plugin', 1, 'old-plugin', 'task-plugin', 'surf-plugin'),
+                   ('image-shared', 3, 'kept-plugin', 'task-shared', 'surf-shared'),
+                   ('image-other', 3, 'other-plugin', 'task-other', 'surf-other');",
+            )
+            .unwrap();
+        }
+
+        storage
+            .rebind_image_metadata("image-plugin", 2, Some("new-plugin"))
+            .unwrap();
+        storage
+            .rebind_image_metadata("image-shared", 4, None)
+            .unwrap();
+
+        let conn = storage.db.lock().unwrap();
+        let plugin_row: (Option<i64>, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT metadata_id, plugin_id, task_id, surf_record_id
+                 FROM images WHERE id = 'image-plugin'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            plugin_row,
+            (
+                Some(2),
+                Some("new-plugin".to_string()),
+                Some("task-plugin".to_string()),
+                Some("surf-plugin".to_string()),
+            )
+        );
+
+        let shared_row: (Option<i64>, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT metadata_id, plugin_id, task_id, surf_record_id
+                 FROM images WHERE id = 'image-shared'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            shared_row,
+            (
+                Some(4),
+                Some("kept-plugin".to_string()),
+                Some("task-shared".to_string()),
+                Some("surf-shared".to_string()),
+            )
+        );
+
+        let unique_old_exists: bool = conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 1)", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let shared_old_exists: bool = conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 3)", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(!unique_old_exists);
+        assert!(shared_old_exists);
     }
 }

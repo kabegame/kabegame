@@ -1,13 +1,18 @@
 //! 冻结网页快照 metadata 的统一规则（畅游一键下载与网页收集任务共用）。
 //!
 //! 形状：`{ kind: PAGE_SNAPSHOT_KIND, schemaVersion: 1, sourceUrl, documentUrl, title, pageHtml,
-//! capturedAt, backend? }`。详情面板按 `kind` 识别并在沙箱 iframe 中渲染。
+//! capturedAt, backend? }`。详情面板按图片来源识别并在沙箱 iframe 中渲染。
 //! 这里只放与写入方无关的约束：大小上限与搜索索引范围。
+//! 畅游写入盖 `SURF_METADATA_VERSION`，网页收集由内建插件版本盖章。
 
 use serde_json::Value;
 
 /// 页面快照 metadata 的 `kind`。名字沿用畅游首发时的叫法，已被网页收集复用，勿改（已有数据按它识别）。
 pub const PAGE_SNAPSHOT_KIND: &str = "kabegame.surfPageSnapshot";
+
+/// 畅游写入的 metadata（页面快照等）的 `plugin_version`。畅游不是插件、无包版本，
+/// 由应用维护；HTML 快照首发于 v4.4.1 记为 1，结构变更时递增以便迁移与兼容。
+pub const SURF_METADATA_VERSION: u32 = 1;
 
 /// 单页快照 HTML 上限（UTF-8 字节）。快照入本地库并被同页图片共享。
 pub const MAX_PAGE_SNAPSHOT_HTML_BYTES: usize = 32 * 1024 * 1024;

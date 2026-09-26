@@ -157,6 +157,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     tauri("downloadIntervalMs", "get_download_interval_ms", "set_download_interval_ms", "intervalMs"),
     tauri("networkRetryCount", "get_network_retry_count", "set_network_retry_count", "count"),
     tauri("autoDeduplicate", "get_auto_deduplicate", "set_auto_deduplicate", "enabled"),
+    tauri("dedupUpdateMetadata", "get_dedup_update_metadata", "set_dedup_update_metadata", "enabled"),
     tauri("wallpaperRotationEnabled", "get_wallpaper_rotation_enabled", "set_wallpaper_rotation_enabled", "enabled"),
     tauri("wallpaperRotationAlbumId", "get_wallpaper_rotation_album_id", "set_wallpaper_rotation_album_id", "albumId"),
     tauri("wallpaperRotationIncludeSubalbums", "get_wallpaper_rotation_include_subalbums", "set_wallpaper_rotation_include_subalbums", "includeSubalbums"),

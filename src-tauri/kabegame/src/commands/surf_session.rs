@@ -5,6 +5,7 @@ use kabegame_core::crawler::downloader::{
 };
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::plugin::vfs::PluginVfs;
+use kabegame_core::storage::page_snapshot::SURF_METADATA_VERSION;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -109,7 +110,8 @@ pub async fn surf_import_media<R: Runtime>(
         .len();
     let parsed = Url::parse(&source_url).map_err(|error| format!("Invalid media URL: {error}"))?;
     let custom_name = name.or_else(|| super::crawler::surf_download_name_from_url(&parsed));
-    let metadata_id = super::crawler::insert_metadata(&ctx.host, metadata, 0)?;
+    let metadata_id =
+        super::crawler::insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?;
     let download_id = next_download_id();
     let download_start_time = super::crawler::now_ms();
     let http_headers = HashMap::new();

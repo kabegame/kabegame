@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use url::Url;
 
-use super::postprocess_downloaded_image;
+use super::{postprocess_downloaded_image, rebind_deduped_metadata};
 use super::{download_with_retry, emit_task_log, wait_after_download_if_needed};
 
 static DOWNLOAD_ID_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -998,6 +998,12 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         }
                     }
                 }
+                rebind_deduped_metadata(
+                    existing,
+                    job.metadata_id,
+                    &job.plugin_id,
+                    job.surf_record_id.as_deref(),
+                );
                 if !task_id_clone.trim().is_empty() {
                     if let Ok(new_count) =
                         Storage::global().increment_task_dedup_count(&task_id_clone)

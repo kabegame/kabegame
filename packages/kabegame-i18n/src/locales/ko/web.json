@@ -20,6 +20,7 @@
     "downloadSettings": "다운로드 설정",
     "gallerySettings": "갤러리 표시",
     "autoDeduplicate": "자동 중복 제거",
+    "dedupUpdateMetadata": "중복 제거 시 메타데이터 업데이트",
     "scheduler": "스케줄러",
     "deleteImages": "이미지 삭제",
     "deleteTask": "작업 삭제",

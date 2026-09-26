@@ -20,6 +20,7 @@
     "downloadSettings": "ダウンロード設定",
     "gallerySettings": "ギャラリー表示",
     "autoDeduplicate": "自動重複排除",
+    "dedupUpdateMetadata": "重複除去時にメタデータを更新",
     "scheduler": "スケジューラ",
     "deleteImages": "画像を削除",
     "deleteTask": "タスクを削除",

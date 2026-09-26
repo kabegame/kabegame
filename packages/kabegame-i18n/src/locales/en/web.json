@@ -20,6 +20,7 @@
     "downloadSettings": "Download settings",
     "gallerySettings": "Gallery display",
     "autoDeduplicate": "Auto-deduplication",
+    "dedupUpdateMetadata": "Update metadata on deduplication",
     "scheduler": "Scheduler",
     "deleteImages": "Delete images",
     "deleteTask": "Delete task",
