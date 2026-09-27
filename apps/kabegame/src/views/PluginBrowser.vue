@@ -148,12 +148,14 @@
         {{ $t('plugins.sourcesIntro') }}
       </div>
       <el-table :data="sources" style="width: 100%" :empty-text="$t('plugins.noSources')">
+        <!-- @vue-generic {PluginSource} -->
         <el-table-column :label="$t('plugins.name')" width="180">
           <template #default="{ row }">
             {{ pluginSourceDisplayName(row) }}
           </template>
         </el-table-column>
         <el-table-column prop="indexUrl" :label="$t('plugins.indexUrl')" show-overflow-tooltip />
+        <!-- @vue-generic {PluginSource} -->
         <el-table-column :label="$t('plugins.action')" width="140">
           <template #default="{ row, $index }">
             <el-button size="small" @click="editSource($index)">{{ $t('plugins.edit') }}</el-button>

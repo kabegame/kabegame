@@ -30,6 +30,7 @@ import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 import { type AppSettingKey } from "../../../stores/settings";
 import { useUiStore } from "../../../stores/ui";
 import KbStepper from "../../common/form/KbStepper.vue";
+import { Arrayable } from "@kabegame/element-plus/utils/typescript.ts";
 
 const props = defineProps<{
   settingKey: AppSettingKey;
@@ -78,7 +79,7 @@ watch(
   { immediate: true }
 );
 
-const onChange = async (v: number | undefined) => {
+const onChange = async (v: Arrayable<number>) => {
   if (typeof v !== "number" || !Number.isFinite(v)) return;
   const ok = await set(v);
   if (!ok) {

@@ -144,6 +144,8 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 - **`.tsx` 的 JSX 类型**：靠 `src/env.d.ts` 里的 `/// <reference types="vue/jsx" />` 提供全局
   `JSX.IntrinsicElements`（根 tsconfig 只设了 `"jsx": "preserve"`）。`src/index.ts` 另有
   `/// <reference path="./env.d.ts" />` 把 `App[INSTALLED_KEY]` 的模块增强带进编译程序。
+- **模板里 `<el-xxx>` 的类型**：靠 `src/global.d.ts` 声明 `GlobalComponents`（由 `env.d.ts` reference 带入）。
+  增删 `src/component.ts` 里的组件时同步它；缺了不会报「找不到」，而是整个组件静默退化成 any。
 - **`src/version.ts`** 是手写常量，上游由构建脚本从 package.json 生成。
 - **验证方式**：类型走 `.claude/skills/check-kabegame/driver.sh --skip cargo`；但 vite 的 alias 与
   SFC 解析 lint 验不出来，改接线后要跑一次 `deno task b -c kabegame --skip cargo` 确认真的能打包

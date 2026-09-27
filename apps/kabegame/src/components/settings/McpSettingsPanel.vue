@@ -71,7 +71,7 @@
               class="mcp-cat__check"
               :model-value="cat.checked"
               :indeterminate="cat.indeterminate"
-              @change="(v: boolean) => setCaps(cat.allIds, v)"
+              @change="(v) => setCaps(cat.allIds, v === true)"
             >
               <span class="mcp-cat__name">{{ t(`mcp.category.${cat.category}`) }}</span>
             </el-checkbox>
@@ -82,7 +82,7 @@
               class="mcp-kind__check"
               :model-value="grp.checked"
               :indeterminate="grp.indeterminate"
-              @change="(v: boolean) => setCaps(grp.ids, v)"
+              @change="(v) => setCaps(grp.ids, v === true)"
             >
               <span class="mcp-kind__tag" :class="`is-${grp.kind}`">
                 {{ t(`mcp.kind.${grp.kind}`) }}
@@ -99,7 +99,7 @@
                 <el-checkbox
                   :model-value="!disabledSet.has(cap.id)"
                   @click.stop
-                  @change="(v: boolean) => setCaps([cap.id], v)"
+                  @change="(v) => setCaps([cap.id], v === true)"
                 />
                 <div class="mcp-cap__text">
                   <span class="mcp-cap__name">{{ t(`mcp.cap.${cap.id}.name`) }}</span>

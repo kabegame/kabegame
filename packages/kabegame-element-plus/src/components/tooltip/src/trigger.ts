@@ -6,7 +6,7 @@ import type { PopperTriggerProps } from '@kabegame/element-plus/components/poppe
 import type { Arrayable } from '@kabegame/element-plus/utils'
 import type { ExtractPublicPropTypes } from 'vue'
 
-export type TooltipTriggerType = 'hover' | 'focus' | 'click' | 'contextmenu'
+export type TooltipTriggerType = 'hover' | 'focus' | 'click' | 'contextmenu' | "manual"
 
 export interface UseTooltipTriggerProps extends PopperTriggerProps {
   /**

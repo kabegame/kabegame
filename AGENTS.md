@@ -127,6 +127,7 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
 ### 类型检查
 **用 `check-kabegame` skill**（`.claude/skills/check-kabegame/`），不要手敲这些命令。
 它包装 `deno task check`，落盘日志并从几百行 warning 里摘出真正的 error：
+（vue-tsc 经 node 运行——`deno task` 下 vue-tsc 会退化为原版 tsc、静默漏掉所有 `.vue` 错误，详见该 skill 的 `SKILL.md`。）
 
 ```bash
 .claude/skills/check-kabegame/driver.sh              # vue-tsc + cargo check

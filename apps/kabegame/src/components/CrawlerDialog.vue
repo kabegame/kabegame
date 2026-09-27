@@ -1065,6 +1065,7 @@ watch(modal.isOpen, async (open) => {
   }
 
   if (props.initialConfig) {
+    selectedRunConfigId.value = null;
     if (props.initialConfig.pluginId) {
       form.value.pluginId = props.initialConfig.pluginId;
       await loadPluginVarDefs(props.initialConfig.pluginId);
@@ -1077,9 +1078,7 @@ watch(modal.isOpen, async (open) => {
     if (props.initialConfig.outputDir !== undefined) {
       form.value.outputDir = props.initialConfig.outputDir ?? "";
     }
-    if (props.initialConfig.httpHeaders && Object.keys(props.initialConfig.httpHeaders).length > 0) {
-      httpHeaderRows.value = Object.entries(props.initialConfig.httpHeaders).map(([k, v]) => ({ key: k, value: v }));
-    }
+    httpHeaderRows.value = Object.entries(props.initialConfig.httpHeaders ?? {}).map(([k, v]) => ({ key: k, value: v }));
     if (props.initialConfig.outputAlbumId !== undefined) {
       selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
     }

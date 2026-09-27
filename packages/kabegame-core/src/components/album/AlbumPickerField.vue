@@ -147,7 +147,7 @@ const frostedOptions = computed(() => {
       : t("albums.albumCount", { count: n.count }),
   }));
   if (props.allowCreate) {
-    flat.push({ label: t("albums.createNewAlbum"), value: "__create_new__", desc: undefined });
+    flat.push({ label: t("albums.createNewAlbum"), value: "__create_new__", desc: "" });
   }
   return [...prepend, ...flat];
 });

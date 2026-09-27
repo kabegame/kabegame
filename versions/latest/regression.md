@@ -350,3 +350,20 @@ CEF/Chromium，再用该 CEF 构建并运行应用。** 如果仍使用旧 CEF�
 | --- | --- | --- | --- | --- | --- |
 | [ ] | 打开整理并关闭气泡 | Windows / macOS / Linux | 在画廊首页点击 Kamechan 打开工具箱，再点击“整理” | 整理弹窗打开，Kamechan 工具箱气泡立即关闭 | 弹窗关闭后可再次重复打开 |
 | [ ] | Android 紧凑布局 | Android | 在画廊首页从 Kamechan 工具箱点击“整理” | 整理抽屉打开，工具箱气泡关闭；返回键只关闭整理抽屉 | |
+
+## 任务抽屉右键菜单
+
+自动化：`check-kabegame --skip cargo` 覆盖组件与 store 类型；`deno task test -c kabegame --skip cargo`
+覆盖网页收集再次执行时 URL、变量与 HTTP Header 的回填。以下菜单层级与交互仍需真机回归。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 右键弹出与层级 | Windows / macOS / Linux | 打开任务抽屉，在任意任务行右键 | 菜单出现在指针附近且位于抽屉上方，点击空白处关闭 | 菜单通过 Teleport 脱离 `.app-container` 直接子元素规则 |
+| [ ] | 详情 / 图片 / 日志 | Windows / macOS / Linux / Android | 依次点击三个菜单项 | 详情打开原任务参数；图片进入 `/tasks/:id`；日志打开对应任务日志 | 详情与日志复用抽屉内容已有弹窗 |
+| [ ] | 停止任务 | Windows / macOS / Linux / Android | 对运行中或等待下载任务右键并点击“停止任务”，确认操作 | 仅这两种状态显示停止项；确认后发出停止请求 | 取消确认不改变任务 |
+| [ ] | 普通插件再次执行 | Windows / macOS / Linux / Android / Web | 对普通插件任务点击“再次执行” | 打开全局收集表单并回填插件、输出目录、变量、Header、输出画册；不绑定原运行配置，不自动提交 | |
+| [ ] | 网页收集再次执行 | Windows / macOS / Linux / Android | 对 `webpage` 任务点击“再次执行” | 网页收集表单回填 URL、变量、输出目录、Header 与输出画册 | Web 版不显示此项 |
+| [ ] | 本地导入再次执行 | Windows / macOS / Linux | 对普通 `local-import` 任务点击“再次执行” | 本地导入表单回填路径、递归开关与输出画册，确认后创建新任务 | Web 与 Android 不显示此项 |
+| [ ] | 文件夹画册拖入任务再次执行 | Windows / macOS / Linux | 对带 `outputDir`、`copy_to_dir=true` 的 `local-import` 任务重跑；先保持原画册提交，再改选画册提交 | 保持原画册时继续传 `outputDir` 与 `copy_to_dir: true`；改选画册后按普通导入，不透传二者 | |
+| [ ] | 保存配置与删除 | Windows / macOS / Linux / Android | 分别点击“保存为配置”和“删除任务” | 行为与改动前一致，确认与结果提示正常 | |
+| [ ] | 五语言文案 | 任一平台 | 依次切换中文、繁中、英文、日文、韩文并打开菜单 | 详情、图片、日志、再次执行均显示对应语言，无裸 key | |

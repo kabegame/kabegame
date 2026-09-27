@@ -1,6 +1,8 @@
 // 注册 vue 的全局 JSX 命名空间：本包的 .tsx（table-v2 / tabs / avatar）依赖
 // JSX.IntrinsicElements，而本仓根 tsconfig 只设了 "jsx": "preserve"，不会自动引入。
 /// <reference types="vue/jsx" />
+// 全局组件 / 指令的模板类型（GlobalComponents / GlobalDirectives），见 global.d.ts
+/// <reference path="./global.d.ts" />
 import type { INSTALLED_KEY } from '@kabegame/element-plus/constants'
 import type { ClassValue } from '@kabegame/element-plus/utils'
 import type { Component, StyleValue } from 'vue'

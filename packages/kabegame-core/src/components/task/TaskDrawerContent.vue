@@ -570,6 +570,14 @@ const openTaskLog = async (taskId: string) => {
   await taskLogDialogRef.value?.openTaskLog(id);
 };
 
+defineExpose({
+  openRunParams: (taskId: string) => {
+    const task = props.tasks.find((item) => item.id === taskId);
+    if (task) openRunParamsDialog(task);
+  },
+  openTaskLog,
+});
+
 const toLocaleTagDrawer = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
   return loc === "en" ? "en-US" : loc;

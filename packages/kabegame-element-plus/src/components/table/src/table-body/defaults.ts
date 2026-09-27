@@ -45,5 +45,5 @@ const defaultProps = {
   highlight: Boolean,
 }
 
-export { TableBodyProps }
+export type { TableBodyProps }
 export default defaultProps

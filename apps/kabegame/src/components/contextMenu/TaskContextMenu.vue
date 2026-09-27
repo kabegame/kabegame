@@ -6,7 +6,15 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpened, Collection, Delete, VideoPause } from "@kabegame/element-plus-icons";
+import {
+  Collection,
+  Delete,
+  Document,
+  InfoFilled,
+  Picture,
+  RefreshRight,
+  VideoPause,
+} from "@kabegame/element-plus-icons";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 
 interface Props {
@@ -14,6 +22,7 @@ interface Props {
   zIndex: number;
   position: { x: number; y: number };
   task: any | null;
+  canRerun: boolean;
 }
 
 const props = defineProps<Props>();
@@ -37,14 +46,43 @@ const menuItems = computed<MenuItem[]>(() => {
     });
   }
 
-  // 查看文件
+  // 详情
   items.push({
-    key: "view",
+    key: "detail",
     type: "item",
-    label: t("contextMenu.viewFiles"),
-    icon: FolderOpened,
-    command: "view",
+    label: t("contextMenu.taskDetail"),
+    icon: InfoFilled,
+    command: "detail",
   });
+
+  // 图片
+  items.push({
+    key: "images",
+    type: "item",
+    label: t("contextMenu.taskImages"),
+    icon: Picture,
+    command: "images",
+  });
+
+  // 日志
+  items.push({
+    key: "log",
+    type: "item",
+    label: t("contextMenu.taskLog"),
+    icon: Document,
+    command: "log",
+  });
+
+  // 再次执行
+  if (props.canRerun) {
+    items.push({
+      key: "rerun",
+      type: "item",
+      label: t("contextMenu.rerunTask"),
+      icon: RefreshRight,
+      command: "rerun",
+    });
+  }
 
   // 保存为配置
   items.push({

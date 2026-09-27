@@ -649,7 +649,7 @@ function saveChipSetting(key: ChipSettingKey, value: boolean) {
 }
 
 /** tooltip 文案：chip 上一律不写维度名，全靠这里补回来。 */
-function chipTitle(label: string, value: string) {
+function chipTitle(label: string, value?: string) {
   return value ? `${label} · ${value}` : label;
 }
 

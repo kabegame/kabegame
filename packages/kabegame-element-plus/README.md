@@ -49,6 +49,9 @@ workspace**，故已平铺成单包：
   `JSX.IntrinsicElements`，而根 tsconfig 只设了 `"jsx": "preserve"`。
 - `src/index.ts` —— 加 `/// <reference path="./env.d.ts" />`，让 `App[INSTALLED_KEY]` 的模块增强
   进入编译程序。
+- `src/global.d.ts` —— 上游包根的 `global.d.ts`（`GlobalComponents` / `GlobalDirectives`）vendor 时漏掉，
+  补回并由 `env.d.ts` 的 `/// <reference path="./global.d.ts" />` 带进程序。缺它时模板里全局注册的
+  `<el-xxx>` 类型为 any，事件回调参数报 TS7006、props 不校验。组件清单与 `src/component.ts` 保持同步。
 - **date-picker 主题下沉**：`$datepicker` token map 直接取 `--anime-*`，并追加
   `active-bg` / `hover-bg-color` / `today-ring-color` / `disabled-text-color` /
   `cell-radius(-large)`；日/月/年表与 popper 的选择器改在组件自身。业务侧

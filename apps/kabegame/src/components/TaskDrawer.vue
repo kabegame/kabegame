@@ -11,14 +11,14 @@
         </el-tooltip>
       </div>
     </template>
-    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" :can-open-webview="canOpenWebview" @clear-finished-tasks="handleDeleteAllTasks"
+    <TaskDrawerContent ref="drawerContentRef" :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" :can-open-webview="canOpenWebview" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
   <el-drawer v-else :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" :title="$t('tasks.taskList')" size="460px" direction="rtl" :with-header="true"
     :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width" @update:model-value="modal.close">
-    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" :can-open-webview="canOpenWebview" @clear-finished-tasks="handleDeleteAllTasks"
+    <TaskDrawerContent ref="drawerContentRef" :tasks="tasks" :plugins="plugins" :active="modal.isOpen.value" :can-open-webview="canOpenWebview" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
@@ -41,8 +41,11 @@
     </template>
   </el-dialog>
 
-  <TaskContextMenu :visible="contextMenuModal.isOpen.value" :z-index="contextMenuModal.zIndex.value" :position="contextMenuPos" :task="contextMenuTask"
-    @close="closeContextMenu" @command="handleContextAction" />
+  <Teleport to="body">
+    <TaskContextMenu :visible="contextMenuModal.isOpen.value" :z-index="contextMenuModal.zIndex.value" :position="contextMenuPos" :task="contextMenuTask"
+      :can-rerun="contextMenuTask ? canRerun(contextMenuTask) : false"
+      @close="closeContextMenu" @command="handleContextAction" />
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -56,9 +59,10 @@ import { Lightning } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
 import { useRoute, useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
-import { useCrawlerStore } from "@/stores/crawler";
+import { useCrawlerStore, type CrawlTask } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { LOCAL_IMPORT_PLUGIN_ID, WEBPAGE_PLUGIN_ID } from "@kabegame/core/stores/plugins";
+import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
@@ -67,10 +71,12 @@ import { useModal } from "@kabegame/core/composables/useModal";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
+import { useCollectDialogsStore } from "@/stores/collectDialogs";
 
 interface Props {
   modelValue: boolean;
-  tasks: any[];
+  tasks: CrawlTask[];
 }
 
 interface Emits {
@@ -87,6 +93,8 @@ const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
+const crawlerDrawerStore = useCrawlerDrawerStore();
+const collectDialogs = useCollectDialogsStore();
 
 const modal = useModal({ onClose: () => emit('update:modelValue', false) });
 watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
@@ -107,12 +115,13 @@ async function onBatteryIconClick() {
 // 任务右键菜单
 const contextMenuModal = useModal({ onClose: () => { contextMenuTask.value = null; } });
 const contextMenuPos = ref({ x: 0, y: 0 });
-const contextMenuTask = ref<any | null>(null);
+const contextMenuTask = ref<CrawlTask | null>(null);
+const drawerContentRef = ref<InstanceType<typeof TaskDrawerContent> | null>(null);
 
 // 保存为运行配置弹窗
 const saveConfigModal = useModal();
 const savingConfig = ref(false);
-const saveConfigTask = ref<any | null>(null);
+const saveConfigTask = ref<CrawlTask | null>(null);
 const saveConfigName = ref("");
 const saveConfigDescription = ref("");
 
@@ -149,8 +158,11 @@ function trackTaskDrawerAction(action: "view_images" | "delete_task", task: any)
 }
 
 // 右键菜单（由 TaskDrawerContent 转发）
-const openTaskContextMenu = (payload: { x: number; y: number; task: any }) => {
-  contextMenuTask.value = payload.task;
+const openTaskContextMenu = (payload: { x: number; y: number; task: { id: string } }) => {
+  // core 抽屉组件只认宽松的 ScriptTask，这里按 id 取回完整的 CrawlTask
+  const task = props.tasks.find((t) => t.id === payload.task.id);
+  if (!task) return;
+  contextMenuTask.value = task;
   contextMenuPos.value = { x: payload.x, y: payload.y };
   contextMenuModal.open();
 };
@@ -159,13 +171,61 @@ const closeContextMenu = () => {
   contextMenuModal.close();
 };
 
+const canRerun = (task: CrawlTask) => {
+  if (task.pluginId === WEBPAGE_PLUGIN_ID) return !IS_WEB;
+  if (task.pluginId === LOCAL_IMPORT_PLUGIN_ID) return !IS_WEB && !uiStore.isCompact;
+  return true;
+};
+
+const rerunTask = (task: CrawlTask) => {
+  const userConfig = task.userConfig ?? {};
+  if (task.pluginId === WEBPAGE_PLUGIN_ID) {
+    collectDialogs.openWebpage({
+      userConfig: { ...userConfig },
+      outputDir: task.outputDir,
+      httpHeaders: { ...(task.httpHeaders ?? {}) },
+      outputAlbumId: task.outputAlbumId ?? null,
+    });
+    return;
+  }
+  if (task.pluginId === LOCAL_IMPORT_PLUGIN_ID) {
+    collectDialogs.openLocalImport({
+      paths: Array.isArray(userConfig.paths) ? [...userConfig.paths] : [],
+      recursive: typeof userConfig.recursive === "boolean" ? userConfig.recursive : undefined,
+      copyToDir: userConfig.copy_to_dir === true,
+      outputDir: task.outputDir,
+      outputAlbumId: task.outputAlbumId ?? null,
+    });
+    return;
+  }
+  crawlerDrawerStore.open({
+    pluginId: task.pluginId,
+    outputDir: task.outputDir,
+    vars: { ...userConfig },
+    httpHeaders: { ...(task.httpHeaders ?? {}) },
+    outputAlbumId: task.outputAlbumId ?? null,
+  });
+};
+
 const handleContextAction = async (action: string) => {
   const task = contextMenuTask.value;
   closeContextMenu();
   if (!task) return;
   switch (action) {
-    case "view":
+    case "detail":
+      drawerContentRef.value?.openRunParams(task.id);
+      break;
+    case "images":
       handleOpenTaskImagesById(task.id);
+      break;
+    case "log":
+      await drawerContentRef.value?.openTaskLog(task.id);
+      break;
+    case "rerun":
+      rerunTask(task);
+      break;
+    case "stop":
+      await handleCancelTaskById(task.id);
       break;
     case "delete":
       await handleDeleteTaskById(task.id);
@@ -183,7 +243,7 @@ const resetSaveConfigForm = () => {
   saveConfigDescription.value = "";
 };
 
-const openSaveConfigDialog = (task: any) => {
+const openSaveConfigDialog = (task: CrawlTask) => {
   const pluginName = getPluginName(task.pluginId);
   saveConfigTask.value = task;
   saveConfigName.value = pluginName;

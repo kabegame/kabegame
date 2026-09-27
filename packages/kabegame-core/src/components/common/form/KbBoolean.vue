@@ -1,5 +1,5 @@
 <template>
-  <el-switch :model-value="switchOn" @update:model-value="onSwitch" />
+  <el-switch :model-value="switchOn" @update:model-value="(v) => onSwitch(v === true)" />
 </template>
 
 <script setup lang="ts">

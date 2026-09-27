@@ -48,9 +48,13 @@
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <AutoConfigDialog />
-    <!-- Android：全局导入抽屉 -->
-    <CrawlerDialog v-if="uiStore.isCompact" v-model="crawlerDrawerVisible"
+    <!-- 全局任务重跑弹窗宿主；页面内原有实例继续服务各自入口 -->
+    <CrawlerDialog v-model="crawlerDrawerVisible"
       :initial-config="crawlerDrawerInitialConfig" />
+    <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible"
+      :initial-config="webpageInitial" />
+    <LocalImportDialog v-if="!IS_WEB && !uiStore.isCompact" v-model="localImportVisible"
+      :initial-config="localImportInitial" />
     <MissedRunsDialog
       :open="missedRunsModal.isOpen.value"
       :z-index="missedRunsModal.zIndex.value"
@@ -181,10 +185,13 @@ import GlobalToolsPopover from "@/header/comps/GlobalToolsPopover.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { useCrawlerDrawerStore } from "./stores/crawlerDrawer";
+import { useCollectDialogsStore } from "./stores/collectDialogs";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
+import WebpageCollectDialog from "./components/WebpageCollectDialog.vue";
+import LocalImportDialog from "./components/LocalImportDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
 import FrameMonitor from "./components/common/FrameMonitor.vue";
@@ -291,9 +298,16 @@ const openSettingsEntry = () => {
 };
 useGlobalShortcuts({ openSettings: openSettingsEntry });
 
-// Android：导入抽屉 store
+// 全局导入弹窗 store
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig } = storeToRefs(crawlerDrawerStore);
+const collectDialogsStore = useCollectDialogsStore();
+const {
+  webpageVisible,
+  webpageInitial,
+  localImportVisible,
+  localImportInitial,
+} = storeToRefs(collectDialogsStore);
 
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();

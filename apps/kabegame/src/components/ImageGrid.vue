@@ -405,7 +405,7 @@ const syncActivePathFromUrl = () => {
     // URL 无 ?path=：gallery 语义是「回到默认画廊路径」。
     // 把当前默认 state 写回 URL（navigate 走 replace），让地址栏反映默认 path。
     // detail 路由无此语义（恒带 path），不 materialize。
-    if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
+    if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({ page: 1 });
     return;
   }
   if (adapter.validatePath && !adapter.validatePath(qp)) return;
@@ -456,7 +456,7 @@ watch(
     if (!qp.trim()) {
       // 见 syncActivePathFromUrl：gallery 空 path = 回默认，把默认 state
       // 写回 URL（replace）；其余 adapter 无 syncEmptyQueryPath，不处理。
-      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
+      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({ page: 1, });
       return;
     }
     const pending = paged.pendingPreviewBoundary.value;

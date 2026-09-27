@@ -172,6 +172,7 @@ import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import { useApp } from "@/stores/app";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { Arrayable } from "@kabegame/element-plus/utils";
 
 interface Props {
     modelValue: boolean;
@@ -240,9 +241,9 @@ function clampRangePair(val: [number, number]): [number, number] {
     return [a, b];
 }
 
-function onRangeChange(val: number | [number, number]) {
+function onRangeChange(val: Arrayable<number>) {
     if (!Array.isArray(val)) return;
-    rangeValue.value = clampRangePair(val);
+    rangeValue.value = clampRangePair([val[0], val[1]]);
 }
 
 // 同步 visible 与 modelValue

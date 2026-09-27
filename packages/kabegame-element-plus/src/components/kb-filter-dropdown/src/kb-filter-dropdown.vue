@@ -196,8 +196,8 @@ const emit = defineEmits<{
 
 const slots = defineSlots<{
   trigger(props: KbFilterDropdownTriggerSlotProps): unknown
-  icon(): unknown
-  panel(props: KbFilterDropdownPanelSlotProps): unknown
+  icon?(): unknown
+  panel?(props: KbFilterDropdownPanelSlotProps): unknown
 }>()
 
 const ns = useNamespace('kb-filter-dropdown')

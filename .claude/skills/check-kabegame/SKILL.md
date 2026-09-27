@@ -20,7 +20,14 @@ Kabegame 的**唯一正规校验入口**。`deno task check` 会先注入 `CEF_P
 
 ## 前置
 
-`deno`（2.9.x）在 PATH 里即可；其余（cargo/CEF/FFmpeg）由 `deno task check` 自行准备。
+`deno`（2.9.x）与 `node` 都要在 PATH 里；其余（cargo/CEF/FFmpeg）由 `deno task check` 自行准备。
+
+**vue-tsc 必须用 node 跑**（`apps/kabegame/package.json` 的 `vue-tsc` 脚本是
+`node ./node_modules/vue-tsc/bin/vue-tsc.js`，不要改回裸 `vue-tsc`）。`deno task` 遇到
+`#!/usr/bin/env node` 的 bin 会用 Deno 执行，而 vue-tsc（含最新 3.x）靠劫持 `fs.readFileSync`
+在 `require(tsc)` 时改写 tsc 源码注入 `.vue` 支持；Deno 的 `require` 不走 JS 层
+`fs.readFileSync`，劫持不生效，退化成原版 tsc——`.ts` 照查，**所有 `.vue` 的类型错误静默漏报**，
+且耗时骤降到 3 秒左右。汇总若出现「秒级通过但你明知 .vue 有错」，先查这里。
 新 checkout 首次需要 `deno install && deno task prepare`。
 
 ## 用法（agent 路径）

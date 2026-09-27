@@ -1,7 +1,7 @@
 <template>
   <SettingRow :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
     <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="enabledDisabled"
-      @change="handleToggle" />
+      @change="(v) => handleToggle(v === true)" />
   </SettingRow>
 
   <!-- 挂载点是独立一项：盘已挂载时不能改，必须先关掉画册盘 -->

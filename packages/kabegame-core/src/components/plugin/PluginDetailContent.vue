@@ -174,6 +174,7 @@ import { useUiStore } from "../../stores/ui";
 import { usePluginActionState } from "../../composables/usePluginActionState";
 import { APP_VERSION } from "../../env";
 import { openExternalLink } from "../../utils/openExternalLink";
+import { PluginRecommendedPreset } from "@kabegame/core/stores/crawler.ts";
 
 const { t, locale } = useI18n();
 const uiStore = useUiStore();
@@ -198,7 +199,7 @@ const emit = defineEmits<{
     e: "start-task",
     payload: { pluginId: string; vars?: Record<string, any>; httpHeaders?: Record<string, string> }
   ): void;
-  (e: "import-all-presets", presets: unknown[]): void;
+  (e: "import-all-presets", presets: PluginRecommendedPreset[]): void;
   (e: "doc-image-preview-open", payload: { index: number; count: number; src: string; alt: string }): void;
   (e: "doc-image-preview-close", payload: { index: number; count: number; src: string; alt: string }): void;
 }>();

@@ -255,23 +255,25 @@ function updateTree(tree: GalleryQuery): void {
 }
 
 function appendNode(node: GalleryQueryNode): void {
-  if (props.target.kind === "root") {
+  // 取成局部常量：对 props.target 的收窄进不了下面的回调闭包
+  const target: SequenceTarget = props.target;
+  if (target.kind === "root") {
     updateTree([...props.tree, node]);
     return;
   }
-  if (props.target.kind === "any") {
-    updateTree(updateNode(props.tree, props.target.groupPath, (current) => {
+  if (target.kind === "any") {
+    updateTree(updateNode(props.tree, target.groupPath, (current) => {
       if (!("any" in current)) return current;
       const branches = current.any.map((branch) => [...branch]);
-      branches[props.target.branchIndex] = [
-        ...(branches[props.target.branchIndex] ?? []),
+      branches[target.branchIndex] = [
+        ...(branches[target.branchIndex] ?? []),
         node,
       ];
       return { any: branches };
     }));
     return;
   }
-  updateTree(updateNode(props.tree, props.target.notPath, (current) => {
+  updateTree(updateNode(props.tree, target.notPath, (current) => {
     if (!("not" in current)) return current;
     return { not: [...current.not, node] };
   }));

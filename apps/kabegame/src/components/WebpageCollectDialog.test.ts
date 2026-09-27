@@ -75,9 +75,14 @@ type Exposed = {
 };
 
 const wrappers: ReturnType<typeof shallowMount>[] = [];
-async function open(): Promise<Exposed> {
+async function open(initialConfig?: {
+  userConfig?: Record<string, any>;
+  outputDir?: string;
+  httpHeaders?: Record<string, string>;
+  outputAlbumId?: string | null;
+}): Promise<Exposed> {
   const wrapper = shallowMount(WebpageCollectDialog, {
-    props: { modelValue: true },
+    props: { modelValue: true, initialConfig },
     global: { plugins: [createPinia()], mocks: { $t: (key: string) => key } },
   });
   wrappers.push(wrapper);
@@ -94,6 +99,32 @@ afterEach(() => {
 });
 
 describe("WebpageCollectDialog", () => {
+  it("fills url, vars, and headers from initialConfig when opened", async () => {
+    const vm = await open({
+      userConfig: {
+        url: "https://example.com/rerun",
+        backend: "v8",
+        injectSurfCookie: false,
+        injectCefUserAgent: true,
+      },
+      httpHeaders: {
+        Referer: "https://example.com/",
+        Authorization: "Bearer rerun",
+      },
+    });
+
+    expect(vm.form.url).toBe("https://example.com/rerun");
+    expect(vm.form.vars).toEqual({
+      backend: "v8",
+      injectSurfCookie: false,
+      injectCefUserAgent: true,
+    });
+    expect(vm.headers).toEqual({
+      Referer: "https://example.com/",
+      Authorization: "Bearer rerun",
+    });
+  });
+
   it("submits V8 tasks with headers and the injection switches on by default", async () => {
     const vm = await open();
     expect(vm.form.vars).toMatchObject({ backend: "v8", injectSurfCookie: true, injectCefUserAgent: true });

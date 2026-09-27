@@ -100,10 +100,12 @@ import { useImageTypes } from "@/composables/useImageTypes";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import type { LocalImportInitialConfig } from "@/stores/collectDialogs";
 
 const { t } = useI18n();
 const props = defineProps<{
   modelValue: boolean;
+  initialConfig?: LocalImportInitialConfig;
 }>();
 
 const emit = defineEmits<{
@@ -245,9 +247,16 @@ async function handleSubmit() {
     outputAlbumId = selectedOutputAlbumId.value;
   }
 
-  crawlerStore.addTask("local-import", undefined, {
+  const initialOutputAlbumId = props.initialConfig?.outputAlbumId ?? null;
+  const preserveCopyToDir =
+    props.initialConfig?.copyToDir === true &&
+    typeof initialOutputAlbumId === "string" &&
+    selectedOutputAlbumId.value === initialOutputAlbumId;
+
+  crawlerStore.addTask("local-import", preserveCopyToDir ? props.initialConfig?.outputDir : undefined, {
     paths: paths.value,
     recursive: recursive.value,
+    ...(preserveCopyToDir ? { copy_to_dir: true } : {}),
   }, outputAlbumId);
 
   modal.close();
@@ -256,7 +265,12 @@ async function handleSubmit() {
 }
 
 function handleOpen() {
-  loadAlbums();
+  void loadAlbums();
+  if (props.initialConfig) {
+    paths.value = [...(props.initialConfig.paths ?? [])];
+    recursive.value = props.initialConfig.recursive ?? true;
+    selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
+  }
 }
 
 function handleClosed() {

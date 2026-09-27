@@ -678,5 +678,6 @@ export const useAlbumStore = defineStore("albums", () => {
     getAlbumDirectCounts,
     getAlbumCounts,
     getAlbumStats,
+    refreshAlbumDirectCounts,
   };
 });

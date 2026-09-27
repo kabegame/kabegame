@@ -182,7 +182,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useVirtualList } from "@vueuse/core";
+import { Arrayable, useVirtualList } from "@vueuse/core";
 import { ElMessageBox, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { AlarmClock, ArrowDown, QuestionFilled, Timer } from "@kabegame/element-plus-icons";
@@ -409,7 +409,7 @@ function onTabChange(name: string | number) {
   void setAutoConfigTab(nextTab, { history: "replace" });
 }
 
-function onRecommendedPluginChange(name: string | string[] | number | number[]) {
+function onRecommendedPluginChange(name: Arrayable<string | number>) {
   const pluginId = Array.isArray(name) ? String(name[0] ?? "") : String(name ?? "");
   if (!pluginId) return;
   const group = recommendedGrouped.value.find((item) => item.pluginId === pluginId);

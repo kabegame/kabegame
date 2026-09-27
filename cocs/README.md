@@ -62,8 +62,8 @@
   - 适用场景：新增视频处理调用点；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `deno task build:ffmpeg` 与桌面构建的关系。
 
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
-  - 主题：任务抽屉分页加载、触底加载与相关数据流。
-  - 适用场景：任务数量多时打开抽屉卡顿、loadTasksPage 与 get_tasks_page 行为。
+  - 主题：任务抽屉分页加载、触底加载、右键菜单与再次执行的数据流。
+  - 适用场景：任务数量多时打开抽屉卡顿、`loadTasksPage` 与 `get_tasks_page` 行为；排查右键菜单层级、菜单动作或三类任务重跑参数回填。
 
 ## 爬虫（`crawler/`）
 

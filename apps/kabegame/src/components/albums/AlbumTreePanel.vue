@@ -101,7 +101,8 @@ import type { TreeDataSource, TreeDndController, TreeRowState } from "@/componen
 import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID, type Album } from "@/stores/albums";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { buildAlbumTreeFromFlat, type AlbumTreeNode } from "@kabegame/core/utils/albumTree";
+import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
+import { AlbumTreeNode } from "@kabegame/core/types/album";
 import { segmentsOfAlbumIdPath } from "@/composables/useAlbumIdPathState";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
@@ -318,11 +319,9 @@ const refreshCounts = () => {
   void albumStore.refreshAlbumDirectCounts(false);
   void albumStore.refreshAlbumDirectCounts(true);
 };
-if (props.refreshEvent === "images-change") {
-  useImagesChangeRefresh({ enabled: refreshEnabled, waitMs: 1000, onRefresh: refreshCounts });
-} else {
-  useAlbumImagesChangeRefresh({ enabled: refreshEnabled, waitMs: 1000, onRefresh: refreshCounts });
-}
+
+useAlbumImagesChangeRefresh({ enabled: refreshEnabled, waitMs: 10000, onRefresh: refreshCounts });
+
 </script>
 
 <style scoped>

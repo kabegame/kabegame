@@ -102,8 +102,12 @@ import { enqueueTask } from "@/composables/useCrawlTaskLauncher";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { validateWebpageUrl, type WebpageUrlError } from "@/utils/webpageCollect";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { WebpageCollectInitialConfig } from "@/stores/collectDialogs";
 
-const props = defineProps<{ modelValue: boolean }>();
+const props = defineProps<{
+  modelValue: boolean;
+  initialConfig?: WebpageCollectInitialConfig;
+}>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void }>();
 
 const { t } = useI18n();
@@ -182,6 +186,17 @@ watch(
     if (visible) {
       // 每次打开都从空白开始：取消后不残留上次未提交的数据
       resetForm();
+      if (props.initialConfig) {
+        const { url, ...userVars } = props.initialConfig.userConfig ?? {};
+        form.value.url = typeof url === "string" ? url : "";
+        form.value.outputDir = props.initialConfig.outputDir ?? "";
+        form.value.vars = normalizeVarsForUI(
+          userVars,
+          varDefs.value.filter((def) => def.key !== "url"),
+        );
+        headers.value = { ...(props.initialConfig.httpHeaders ?? {}) };
+        selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
+      }
       void albumStore.loadAlbums().catch((e) => console.error("加载画册列表失败:", e));
       modal.open();
     } else {
