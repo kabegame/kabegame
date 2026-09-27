@@ -20,7 +20,7 @@ export interface AlbumActionContext extends ActionContext<Album> {
   albumImageCount: number;
   favoriteAlbumId: string;
   isLocalFolder: boolean;
-  /** 虚拟盘门禁（宿主已各自算好：Albums.vue albumDriveEnabled / AlbumDetail.vue albumDriveEnabled） */
+  /** 虚拟盘门禁（宿主已算好：Albums.vue albumDriveEnabled） */
   albumDriveEnabled: boolean;
 }
 

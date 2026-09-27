@@ -26,7 +26,7 @@
         <template v-for="(group, gi) in groups" :key="group.id">
           <div class="tool-group-title">{{ group.title }}</div>
           <template v-for="item in group.items" :key="item.id">
-            <div v-if="item.comp" class="tool-row-comp">
+            <div v-if="item.comp" class="tool-row-comp" @click="emit('close')">
               <component :is="item.comp" />
             </div>
             <div v-else class="tool-row" @click="handleItemClick(item)">

@@ -38,7 +38,7 @@ export interface CreateImageActionsOptions {
 /**
  * Creates the full set of image actions.
  * This replaces the duplicate definitions in SingleImageContextMenu, MultiImageContextMenu,
- * and the androidActionItems in Gallery.vue, AlbumDetail.vue, TaskDetail.vue.
+ * and the androidActionItems in Gallery.vue, Albums.vue, TaskDetail.vue.
  */
 export function createImageActions(
   options: CreateImageActionsOptions = {}

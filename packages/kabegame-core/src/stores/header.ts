@@ -10,8 +10,6 @@ export enum HeaderFeatureId {
   Collect = "collect",
   CreateAlbum = "createAlbum",
   OpenVirtualDrive = "openVirtualDrive",
-  SetAsWallpaperCarousel = "setAsWallpaperCarousel",
-  DeleteAlbum = "deleteAlbum",
   ImportSource = "importSource",
   ManageSources = "manageSources",
   TaskDrawer = "taskDrawer",
@@ -29,10 +27,6 @@ export enum HeaderFeatureId {
   GallerySort = "gallerySort",
   /** 画廊每页条数（仅 Android 放入 fold） */
   GalleryPageSize = "galleryPageSize",
-  /** 画册详情：过滤（全部 / 设过壁纸），Android 放入 fold */
-  AlbumBrowseFilter = "albumBrowseFilter",
-  /** 画册详情：排序，Android 放入 fold */
-  AlbumBrowseSort = "albumBrowseSort",
   /** 失败图片页：取消等待；Android 放入 fold */
   FailedImagesCancelWaiting = "failedImagesCancelWaiting",
   /** 失败图片页：全部重试；Android 放入 fold */

@@ -81,14 +81,14 @@
 - **Composable**：[`packages/core/src/composables/useImageMetadataCache.ts`](/packages/core/src/composables/useImageMetadataCache.ts) — `useProvideImageMetadataCache()` 向子组件树 `provide` 懒加载解析器（内部 `Map` 缓存 + `invoke("get_image_metadata", { imageId })`）。
 - **详情 UI**：[`packages/core/src/components/common/ImageDetailContent.vue`](/packages/core/src/components/common/ImageDetailContent.vue) — `inject` 解析器；若列表项已有可渲染 `metadata` 则直接用，否则异步拉取并合并为 `effectiveMetadata`。
 - **详情来源**：`ImageDetailContent.vue` 的来源优先显示 `pluginId` 对应插件；没有 `pluginId` 但有 `surfRecordId` 时，通过 `packages/core/src/stores/surf.ts` 读取 Surf host 并可跳转 `/surf/:host/images`；两者都没有时显示 `unknown`。
-- **接入视图**（在拉取当前 leaf 前 `clearCache`）：[`Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)（经 `useGalleryImages` 的 `onBeforeFetch`）、[`AlbumDetail.vue`](/apps/kabegame/src/views/AlbumDetail.vue)、[`TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)、[`SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)。
+- **接入视图**（在拉取当前 leaf 前 `clearCache`）：[`Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)（经 `useGalleryImages` 的 `onBeforeFetch`）、[`Albums.vue`](/apps/kabegame/src/views/Albums.vue)、[`TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)、[`SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)。
 
 ### 使用 SimplePage 列表的视图（需统一）
 
 以下视图从设置读取 `galleryPageSize`，传入 `useProviderPathRoute` 与 `useGalleryImages`，并在 **`pageSize` 变化时回到第 1 页并刷新**（`watch` 内 `navigateToPage(1)` 等）：
 
 - [`apps/kabegame/src/views/Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)
-- [`apps/kabegame/src/views/AlbumDetail.vue`](/apps/kabegame/src/views/AlbumDetail.vue)
+- [`apps/kabegame/src/views/Albums.vue`](/apps/kabegame/src/views/Albums.vue)
 - [`apps/kabegame/src/views/TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)
 - [`apps/kabegame/src/views/SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)
 
@@ -97,7 +97,7 @@
 ### UI：每页条数入口
 
 - **画廊**：[`GalleryToolbar.vue`](/apps/kabegame/src/components/GalleryToolbar.vue)（桌面下拉；Android：header fold + `van-picker`）。
-- **画册详情**：[`AlbumDetailBrowseToolbar.vue`](/apps/kabegame/src/components/AlbumDetailBrowseToolbar.vue) + [`GalleryPageSizeControl.vue`](/apps/kabegame/src/components/GalleryPageSizeControl.vue)；Android 在 [`AlbumDetailPageHeader.vue`](/apps/kabegame/src/components/header/AlbumDetailPageHeader.vue) fold 中增加与画廊相同的 `HeaderFeatureId.GalleryPageSize`。
+- **画册页**：[`Albums.vue`](/apps/kabegame/src/views/Albums.vue) 中栏的 `GalleryQueryBar` + `GalleryBigPaginator`。
 - **任务 / 畅游**：分页器上方工具行内嵌 `GalleryPageSizeControl`（`android-ui="inline"`）。
 - **设置**：[`GalleryPageSizeSetting.vue`](/apps/kabegame/src/components/settings/items/GalleryPageSizeSetting.vue)，[`Settings.vue`](/apps/kabegame/src/views/Settings.vue) 应用设置区。
 

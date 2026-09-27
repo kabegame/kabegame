@@ -100,7 +100,10 @@ import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
-import { DRAG_IMAGE_ID_MIME } from "../../utils/dragExport";
+import { beginInternalDrag, DRAG_IMAGE_ID_MIME } from "../../utils/dragExport";
+// #region debug-drag
+import { sendDebugEvent } from "../../debugIngest";
+// #endregion debug-drag
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { fileToUrl, thumbnailToUrl, compatibleToUrl, downloadToUrl } from "../../utils/fileUrl";
@@ -216,10 +219,14 @@ const dragFileName = (): string => {
  * nativeDrag 关闭时把 dragstart 掐掉：`draggable=false` 之外的第二道闸。
  */
 const onDragStart = (event: DragEvent) => {
+  // #region debug-drag
+  void sendDebugEvent("img_dragstart", { nativeDrag: props.nativeDrag, id: props.image.id }, { sessionId: "drag-internal" });
+  // #endregion debug-drag
   if (!props.nativeDrag) {
     event.preventDefault();
     return;
   }
+  beginInternalDrag();
   const dt = event.dataTransfer;
   if (!dt) return;
   if (IS_LINUX) {

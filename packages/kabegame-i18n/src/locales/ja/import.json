@@ -11,13 +11,10 @@
   "fileDropFailed": "ファイルドロップの処理に失敗しました",
   "dropUnsupportedHere": "ここにはこれらのファイルをドロップできません",
   "dropZone.galleryMedia": "{count} 件のファイルをギャラリーにインポート",
-  "dropZone.galleryFolders": "{count} 件のフォルダに同期アルバムを作成",
-  "dropZone.galleryMixed": "{count} 件のファイルをインポートし、{folders} 件のフォルダにアルバムを作成",
+  "dropZone.galleryFolders": "{count} 件のフォルダ内のメディアをギャラリーにインポート",
+  "dropZone.galleryMixed": "{count} 件のファイルと {folders} 件のフォルダをギャラリーにインポート",
   "dropZone.albumMedia": "{count} 件のファイルを「{album}」にインポート",
-  "dropZone.albumFolders": "「{album}」の下に {count} 件のフォルダアルバムを作成",
-  "dropZone.albumMixed": "{count} 件のファイルを「{album}」にインポートし、{folders} 件のサブアルバムを作成",
-  "dropZone.albumsFolders": "{count} 件のフォルダ同期アルバムを作成",
-  "dropZone.plugins": "{count} 件のプラグインパッケージをインストール",
-  "createdFolderAlbums": "{count} 件のフォルダアルバムを作成しました",
-  "createFolderAlbumFailed": "フォルダアルバム「{name}」の作成に失敗しました：{reason}"
+  "dropZone.albumFolders": "{count} 件のフォルダ内のメディアを「{album}」にインポート",
+  "dropZone.albumMixed": "{count} 件のファイルと {folders} 件のフォルダを「{album}」にインポート",
+  "dropZone.plugins": "{count} 件のプラグインパッケージをインストール"
 }

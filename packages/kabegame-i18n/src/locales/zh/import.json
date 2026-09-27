@@ -11,13 +11,10 @@
   "fileDropFailed": "处理文件拖入失败",
   "dropUnsupportedHere": "此处不支持拖入这些文件",
   "dropZone.galleryMedia": "导入 {count} 个文件到画廊",
-  "dropZone.galleryFolders": "为 {count} 个文件夹创建同步画册",
-  "dropZone.galleryMixed": "导入 {count} 个文件，并为 {folders} 个文件夹创建画册",
+  "dropZone.galleryFolders": "导入 {count} 个文件夹中的媒体到画廊",
+  "dropZone.galleryMixed": "导入 {count} 个文件和 {folders} 个文件夹到画廊",
   "dropZone.albumMedia": "导入 {count} 个文件到「{album}」",
-  "dropZone.albumFolders": "在「{album}」下创建 {count} 个文件夹画册",
-  "dropZone.albumMixed": "导入 {count} 个文件到「{album}」，并创建 {folders} 个子画册",
-  "dropZone.albumsFolders": "创建 {count} 个文件夹同步画册",
-  "dropZone.plugins": "安装 {count} 个源插件包",
-  "createdFolderAlbums": "已创建 {count} 个文件夹画册",
-  "createFolderAlbumFailed": "创建文件夹画册「{name}」失败：{reason}"
+  "dropZone.albumFolders": "导入 {count} 个文件夹中的媒体到「{album}」",
+  "dropZone.albumMixed": "导入 {count} 个文件和 {folders} 个文件夹到「{album}」",
+  "dropZone.plugins": "安装 {count} 个源插件包"
 }

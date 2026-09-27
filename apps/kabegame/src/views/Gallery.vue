@@ -116,9 +116,8 @@ import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
-import { useTaskDrawerStore } from "@/stores/taskDrawer";
-import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
-import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
+import type { DragFileOptions } from "@/directives/dragFile";
+import { buildDropPlan, importDroppedFiles } from "@/utils/dragFileImport";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -206,37 +205,9 @@ const onOrganizeConfirm = (options: OrganizeOptions) => {
 };
 
 // ---------- 区域级文件拖入（画廊网格区域）----------
-const taskDrawerStore = useTaskDrawerStore();
-
 const dropZone = computed<DragFileOptions>(() => ({
-  plan: (items: DragFileItem[]): DragFilePlan | null => {
-    const media = items.filter((i) => !i.isDirectory && (i.isImage || i.isVideo));
-    const folders = items.filter((i) => i.isDirectory);
-    if (media.length === 0 && folders.length === 0) return null;
-    const label =
-      media.length > 0 && folders.length > 0
-        ? t("import.dropZone.galleryMixed", { count: media.length, folders: folders.length })
-        : media.length > 0
-          ? t("import.dropZone.galleryMedia", { count: media.length })
-          : t("import.dropZone.galleryFolders", { count: folders.length });
-    return { label, media, folders, plugins: [] };
-  },
-  onDrop: async (plan: DragFilePlan) => {
-    if (plan.media.length > 0) {
-      const ok = await crawlerStore.addTask("local-import", undefined, {
-        paths: plan.media.map((m) => m.path),
-        recursive: false,
-      });
-      if (ok) {
-        taskDrawerStore.open();
-        ElMessage.success(t("import.addedLocalImport"));
-      } else {
-        ElMessage.error(t("import.fileDropFailed"));
-      }
-    }
-    // 画廊拖入的文件夹建成根级同步画册
-    await createFolderAlbumsFromDrag(plan.folders, null);
-  },
+  plan: (items) => buildDropPlan(items, null),
+  onDrop: (plan) => importDroppedFiles(plan, null),
 }));
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框

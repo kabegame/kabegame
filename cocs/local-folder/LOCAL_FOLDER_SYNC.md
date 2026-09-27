@@ -53,9 +53,23 @@ diff 对存在的媒体文件复用 `import_one`，对消失文件调用
   结构不会自动恢复；这是选择“磁盘现状为画册关系真源”的明确风险。
 - `Denied`、`NotADir` 和其他 IO 错误不删画册，仍写入 `folder_status`。
 
+## 手动增删
+
+文件夹画册的成员关系仍以磁盘目录为唯一真源，但 UI 提供两条作用于磁盘的手动路径：
+
+- 在网格中按 `Delete` 会把 album adapter 的 `remove` 命令委托给 `deleteFile`，经
+  `batch_delete_images` 把源文件移入回收站；右键菜单继续隐藏“从画册移除”，只显示“删除文件”。
+  无确认框的上划手势不会删除磁盘文件，仍提示改用 `Delete` 或右键操作。
+- 向文件夹画册拖入文件或文件夹会创建一个 `local-import` 任务：`outputAlbumId` 指向该画册，
+  任务级 `outputDir` 设为 `sync_folder`，并传入 `recursive: true`、`copy_to_dir: true`。文件夹
+  递归展开后扁平复制进同步目录，导入结果立即入库并挂到画册，不必等待下一轮同步。
+
+监听或全量同步随后会按路径 `find_image_by_path` 命中已有图片，`add_images_to_album_silent`
+不会重复挂载。数据库层的写守卫没有放开：普通“加入画册 / 从画册移除”对 `local_folder` 仍然
+只读，只有上述删除磁盘文件和 local-import 复制入同步目录的专用流程能够改变成员。
+
 ## 运行态与提示
 
 任务开始后满 1500ms 才进入 `FolderSyncService` 的可见快照并显示卡片，卡片展示本目录真实
 百分比。finished/toast 以单个任务为单位：错误、用户取消、目录删除、手动快速跳过和实际变化
 分别提示；抢占静默。Manual 即使在卡片出现前因目录未变化而跳过，也会收到 finished 反馈。
-

@@ -11,13 +11,10 @@
   "fileDropFailed": "파일 드롭 처리 실패",
   "dropUnsupportedHere": "여기에는 이 파일을 드롭할 수 없습니다",
   "dropZone.galleryMedia": "{count}개 파일을 갤러리에 가져오기",
-  "dropZone.galleryFolders": "{count}개 폴더에 동기화 앨범 생성",
-  "dropZone.galleryMixed": "{count}개 파일을 가져오고 {folders}개 폴더에 앨범 생성",
-  "dropZone.albumMedia": "{count}개 파일을 「{album}」에 가져오기",
-  "dropZone.albumFolders": "「{album}」 아래에 {count}개 폴더 앨범 생성",
-  "dropZone.albumMixed": "{count}개 파일을 「{album}」에 가져오고 {folders}개 하위 앨범 생성",
-  "dropZone.albumsFolders": "{count}개 폴더 동기화 앨범 생성",
-  "dropZone.plugins": "{count}개 플러그인 패키지 설치",
-  "createdFolderAlbums": "{count}개 폴더 앨범을 생성했습니다",
-  "createFolderAlbumFailed": "폴더 앨범 \"{name}\" 생성 실패: {reason}"
+  "dropZone.galleryFolders": "{count}개 폴더의 미디어를 갤러리로 가져오기",
+  "dropZone.galleryMixed": "{count}개 파일과 {folders}개 폴더를 갤러리로 가져오기",
+  "dropZone.albumMedia": "{count}개 파일을 \"{album}\"으로 가져오기",
+  "dropZone.albumFolders": "{count}개 폴더의 미디어를 \"{album}\"으로 가져오기",
+  "dropZone.albumMixed": "{count}개 파일과 {folders}개 폴더를 \"{album}\"으로 가져오기",
+  "dropZone.plugins": "{count}개 플러그인 패키지 설치"
 }

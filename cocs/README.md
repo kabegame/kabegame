@@ -48,7 +48,7 @@
 ## 本地文件夹（`local-folder/`）
 
 - [local-folder/LOCAL_FOLDER_SYNC.md](local-folder/LOCAL_FOLDER_SYNC.md)
-  - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、延迟卡片和逐任务 toast。
+  - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、数据库成员写守卫保持只读）。
   - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为。
 
 ## 下载与任务（`downloader-tasks/`）
@@ -149,8 +149,8 @@
   - 配套：[../packages/kabegame-element-plus/README.md](../packages/kabegame-element-plus/README.md) 与 [../packages/kabegame-element-plus-icons/README.md](../packages/kabegame-element-plus-icons/README.md) 记录各自与上游的逐项结构差异。
 
 - [ui/FILE_DROP_ZONES.md](ui/FILE_DROP_ZONES.md)
-  - 主题：桌面外部文件拖入的**区域级**结构。涵盖两层分工（窗口级 `useFileDrop` 只做类型探测 + 落点命中 → 区域级 `v-drag-file` 的 `plan()`/`onDrop()` 决定接不接与做什么）、为何指令不监听 DOM 事件（CEF 在 content 层就 veto 了 drop，渲染进程收不到）、**为何 `enter` 不做命中**（`TauriCefDragHandler` 的 Enter position 恒为 `(0,0)`，浮层推迟到第一个 `over`；`setFocus` 只在 enter 调一次）、坐标契约（物理像素 ÷ `devicePixelRatio`、多显示器缩放偏差与物理值兜底、用 rect 包含判定而非 `elementFromPoint`、多命中取 DOM 最深）、四页接受矩阵与热区挂载点的选择理由、**只读判断必须写在 `plan()` 里而非 `disabled`**、复用的既有导入 API（无新增 Rust 命令；文件夹走 `add_local_folder_album` + 后台 `sync_album` 递归建子画册）、浮层样式两个坑（虚线框独立成 `.drop-frame` 层避开 `box-sizing`；`.drop-icon` 不能用 `background-clip: text`，SVG 上无效会渲染成黑色）。
-  - 适用场景：给某个页面新增/修改拖入热区；排查拖入无反应、提示「此处不支持」、虚线框位置偏移或大一圈、图标变黑；理解拖文件夹为什么建的是会跟着磁盘变的同步画册。
+  - 主题：桌面文件拖入的**区域级**结构。涵盖窗口级 `useFileDrop` 与区域级 `v-drag-file` 的分工、Enter `(0,0)` 与坐标命中契约、画廊/普通画册/文件夹画册统一走 `local-import` 扁平递归导入（文件夹画册带 `outputDir=sync_folder` + `copy_to_dir`）、收藏/隐藏拒绝规则，以及应用自身拖出媒体通过 `dragstart` 标记 + `enter` 快照实现全程静默的原因。
+  - 适用场景：给页面新增/修改拖入热区；排查拖入无反应、错误创建同步画册、内部拖出误触发导入、提示「此处不支持」、浮层坐标或样式异常。
 
 ## 国际化（`i18n/`）
 

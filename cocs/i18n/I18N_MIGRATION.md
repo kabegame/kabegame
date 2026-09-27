@@ -206,7 +206,6 @@
 | `apps/kabegame/src/views/SurfImages.vue` | 确认删除、收藏/轮播/壁纸/文件夹/分享/打开/移除等提示与副标题 |
 | `apps/kabegame/src/views/TaskDetail.vue` | 确认删除、任务状态文案、刷新/加载失败、停止与删除任务确认及提示等 |
 | `apps/kabegame/src/views/Albums.vue` | 空状态、新建画册对话框、刷新/创建/轮播/删除画册等提示与确认 |
-| `apps/kabegame/src/views/AlbumDetail.vue` | （待补：从画册移除、收藏/加入画册等操作文案与对话框） |
 | `apps/kabegame/src/views/PluginBrowser.vue` | （待补：已安装源、商店源、安装/更新/导入等 tab 与对话框） |
 | `apps/kabegame/src/views/PluginDetail.vue` | （待补：源详情、确认安装/卸载等） |
 | `apps/kabegame/src/views/Help.vue` | （待补：帮助标题、使用技巧、快捷键等） |
@@ -239,7 +238,6 @@
 | `apps/kabegame/src/components/GalleryBigPaginator.vue` | 上一页/下一页等 |
 | `apps/kabegame/src/components/GalleryToolbar.vue` | 工具栏按钮、筛选文案 |
 | `apps/kabegame/src/components/LoadMoreButton.vue` | 「加载更多」等 |
-| `apps/kabegame/src/components/albums/AlbumCard.vue` | 画册卡标题、数量等 |
 
 #### 7.1.5 页头与操作区（已完成）
 
@@ -248,7 +246,6 @@
 | `apps/kabegame/src/components/header/TaskDetailPageHeader.vue` | 返回、标题、操作按钮 |
 | `apps/kabegame/src/components/header/PluginBrowserPageHeader.vue` | 同上 |
 | `apps/kabegame/src/components/header/AlbumsPageHeader.vue` | 同上 |
-| `apps/kabegame/src/components/header/AlbumDetailPageHeader.vue` | 同上 |
 | `apps/kabegame/src/header/comps/GallerySortControl.vue` | 排序选项 |
 | `apps/kabegame/src/header/comps/CollectAction.vue` | 收藏相关文案 |
 | `apps/kabegame/src/header/comps/OrganizeHeaderControl.vue` | 整理相关文案 |

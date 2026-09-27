@@ -1,7 +1,8 @@
 # 区域级文件拖入（`v-drag-file` 热区）
 
-外部文件拖进桌面窗口后，**由落点所在的页面区域**决定接不接、提示什么、松手做什么。
-本文说明这套两层结构、坐标命中的契约，以及几个不写下来就会被重新踩的坑。
+外部文件拖进桌面窗口后，**由落点所在的页面区域**决定接不接、提示什么、松手做什么；
+从应用自身网格拖出的媒体则由会话标记识别并全程静默。本文说明这套两层结构、坐标命中的
+契约，以及几个不写下来就会被重新踩的坑。
 
 平台范围：**仅桌面**（Windows / macOS / Linux，CEF runtime 后端）。
 `IS_ANDROID || IS_WEB` 在 `useFileDrop.init()` 里直接 return，Android 走的是 picker 插件，不是拖放。
@@ -16,7 +17,7 @@ CEF content 层（Rust）
        ▼
 窗口级监听（路由层，全局唯一）
   useFileDrop.ts                           apps/kabegame/src/composables/useFileDrop.ts
-  ├─ enter : get_file_drop_kinds(全量) → 存会话；setFocus 一次；不显示浮层
+  ├─ enter : 快照内部拖拽标记；外部拖拽才 get_file_drop_kinds(全量) → 存会话、setFocus
   ├─ over  : position → CSS 坐标 → hitTestDragZone → zone.plan(items) → 浮层 show/hide
   ├─ drop  : 重新命中 → plan → await zone.onDrop(plan)
   └─ leave : hide + 清会话
@@ -76,10 +77,10 @@ scale factor，而 webview 所在窗口可能在副屏。`useFileDrop.resolveZon
 
 | 页面 | 热区元素 | 图片/视频 | 文件夹 | `.kgpg` |
 |---|---|---|---|---|
-| `Gallery.vue` | `.gallery-grid-pane` | 导入画廊（无 `outputAlbumId`） | 建**根级**同步画册（递归） | ✗ |
-| `AlbumDetail.vue` | 根 `.album-detail` | 导入并入当前画册（带 `outputAlbumId`） | 建为当前画册的**子画册**（递归） | ✗ |
-| `AlbumDetail.vue`（local_folder / 收藏 / 隐藏） | — | ✗ | ✗ | ✗ |
-| `Albums.vue` | 根 `.albums-page` | ✗ | 建**根级**同步画册（递归） | ✗ |
+| `Gallery.vue` | `.gallery-grid-pane` | `local-import` 导入画廊（无 `outputAlbumId`） | `local-import` 递归展开后扁平导入画廊 | ✗ |
+| `Albums.vue`（普通画册） | 根 `.albums-page` | `local-import` 导入选中画册 | `local-import` 递归展开后扁平导入选中画册 | ✗ |
+| `Albums.vue`（local_folder） | 根 `.albums-page` | 复制进 `sync_folder` 后导入选中画册 | 递归展开、扁平复制进 `sync_folder` 后导入选中画册 | ✗ |
+| `Albums.vue`（收藏 / 隐藏 / 无选中） | — | ✗ | ✗ | ✗ |
 | `PluginBrowser.vue` | 根 `.plugin-browser-container` | ✗ | ✗ | 安装插件 |
 | `TaskDetail.vue` / `SurfImages.vue` | **不挂指令** | ✗ | ✗ | ✗ |
 
@@ -90,19 +91,13 @@ scale factor，而 webview 所在窗口可能在副屏。`useFileDrop.resolveZon
 
 - **画廊挂 `.gallery-grid-pane` 而不是整页**：正好包住网格、排除同级 pane，
   虚线框贴着网格画，视觉上就是「拖到网格里」。
-- **画册详情挂根节点而不是 ImageGrid**：「子画册」tab 下 ImageGrid 被 `v-else` 卸载了，
-  挂 grid 会漏掉半个页面。
 
 ### 只读判断必须写在 `plan()` 里
 
 `DragFileOptions.disabled` 存在，但**不要用它承载响应式条件**：指令的 `updated` 只在组件
 patch 时触发，`disabled` 可能是陈旧值。`plan()` 是闭包，每次调用都读到最新的 ref。
-`AlbumDetail` 的三类只读画册判断就写在 `plan()` 开头：
-
-```ts
-const id = albumId.value;
-if (!id || isLocalFolderDetail.value || id === FAVORITE_ALBUM_ID || id === HIDDEN_ALBUM_ID) return null;
-```
+需要按页面状态拒绝时，判断一律写在 `plan()` 开头并返回 `null`。`Albums.vue` 在收藏、
+隐藏或无选中画册时就是这样拒绝；`local_folder` 不再拒绝拖入。
 
 ## 导入行为复用的既有 API
 
@@ -110,17 +105,29 @@ if (!id || isLocalFolderDetail.value || id === FAVORITE_ALBUM_ID || id === HIDDE
 
 | 行为 | 调用 |
 |---|---|
-| 媒体导入 | `crawlerStore.addTask("local-import", undefined, { paths, recursive: false }, outputAlbumId?)` |
-| 文件夹 → 画册 | `albumStore.createLocalFolderAlbum({ name, syncFolder, recursive: true, parentId }, { reload: false })` |
+| 画廊拖入 | `addTask("local-import", undefined, { paths, recursive: true })` |
+| 普通画册拖入 | `addTask("local-import", undefined, { paths, recursive: true }, album.id)` |
+| 文件夹画册拖入 | `addTask("local-import", album.syncFolder, { paths, recursive: true, copy_to_dir: true }, album.id)` |
 | 插件包 | `invoke("import_plugin_from_zip", { zipPath })` |
 
-「递归导入文件夹画册」不需要额外实现：`add_local_folder_album` 只建根画册，
-随后后端 spawn `sync_album`，子画册由 `SyncHook::on_enter_dir` 按目录树自动创建
-（`src-tauri/kabegame-core/src/local_folder/sync.rs`）。
+`apps/kabegame/src/utils/dragFileImport.ts` 的 `buildDropPlan` / `importDroppedFiles` 是三个目标
+形态的共用入口。文件与文件夹总是合并成一个任务，`recursive: true` 让文件夹递归展开，但
+local-import 的结果保持扁平，不再为拖入目录创建同步画册或子画册。
 
-> **注意**：拖文件夹建出来的是 **`type = 'local_folder'` 的同步画册**，不是把图片拷进画廊 ——
-> 磁盘目录里删了文件，画册里对应的图片会跟着消失。这是产品语义，不是 bug，
-> 但用户文档必须写清楚（已写在 `apps/docs/.../guide/albums.md`）。
+文件夹画册额外把任务级 `outputDir` 设为 `sync_folder`，并传 `copy_to_dir: true`。local-import
+先把源文件扁平复制进同步目录，再立即入库并挂到目标画册；后续监听或全量同步按路径命中已有行，
+不会重复导入。已位于 `sync_folder` 直接下级的拖入项会跳过，避免生成 `a (1).png`。
+
+## 应用内部拖拽静默
+
+`ImageContent.vue` 的原生 `dragstart` 会调用 `beginInternalDrag()`；`dragExport.ts` 保持模块级标记，
+并在捕获阶段的一次性 `dragend` 上清除。`useFileDrop.ts` 在 Tauri `enter` 到达时把该标记快照到
+`sessionInternal`：内部会话不做类型探测、不抢焦点、不显示浮层，也不调用热区的 `plan()` /
+`onDrop()`，落在非热区同样不会提示 `import.dropUnsupportedHere`。
+
+必须在 `enter` 快照，不能只在 `drop` 读取实时值：浏览器的 `dragend` 可能先于 Tauri `drop`
+到达，实时标记届时已经清除。拖出窗口后再拖回来会产生新的 `enter`，而未结束的拖拽标记仍在，
+所以仍能被静默识别。
 
 ## 浮层样式的两个坑
 
@@ -141,18 +148,21 @@ if (!id || isLocalFolderDetail.value || id === FAVORITE_ALBUM_ID || id === HIDDE
 | 症状 | 检查 |
 |---|---|
 | 拖进去完全没反应，连提示都没有 | 该页面挂热区了吗（`grep -rn "v-drag-file" apps/kabegame/src/views/`）；`IS_WEB`/`IS_ANDROID` 是否为真 |
-| 松手只提示「此处不支持拖入这些文件」 | 命中失败或 `plan()` 返回了 `null`。在 `plan()` 里打点看 `items` 的分类标志 |
+| 外部文件松手只提示「此处不支持拖入这些文件」 | 命中失败或 `plan()` 返回了 `null`。在 `plan()` 里打点看 `items` 的分类标志 |
+| 从应用网格拖出时出现导入浮层或“不支持”提示 | 检查 `ImageContent.onDragStart` 是否调用 `beginInternalDrag()`，以及 `enter` 是否快照到 `sessionInternal` |
 | 虚线框位置偏移 / 落在错的区域 | 多显示器缩放不一致，见上面的坐标契约；确认 `window.devicePixelRatio` 与 Rust 侧取的主显示器 scale factor 是否一致 |
 | 虚线框比区域大一圈 | 有人把 `border` 挪回 `.file-drop-overlay` 自身了，且 `box-sizing` 不是 border-box |
 | 图标是黑色的 | `.drop-icon` 被改回 `background-clip: text` 了 |
-| 拖入文件夹后画册里的图莫名消失 | 那是 `local_folder` 同步画册的正常行为，源目录变了 |
+| 拖入文件夹却创建了同步画册 | 页面仍保留旧的“拖目录建同步画册”分支；所有媒体/文件夹应统一走 `importDroppedFiles` |
 
 ## 涉及文件
 
 - `apps/kabegame/src/directives/dragFile.ts` —— 指令 + 注册表 + `hitTestDragZone`
 - `apps/kabegame/src/composables/useFileDrop.ts` —— 窗口级监听 / 路由层
+- `apps/kabegame/src/utils/dragFileImport.ts` —— 共用拖入计划 / local-import 参数
 - `apps/kabegame/src/components/FileDropOverlay.vue` —— 浮层
-- `apps/kabegame/src/views/{Gallery,AlbumDetail,Albums,PluginBrowser}.vue` —— 四个热区
+- `apps/kabegame/src/views/{Gallery,Albums,PluginBrowser}.vue` —— 三个热区
+- `packages/kabegame-core/src/utils/dragExport.ts`、`components/image/ImageContent.vue` —— 内部拖拽标记
 - `src-tauri/kabegame/src/commands/misc.rs` —— `get_file_drop_kinds`
 - `src-tauri/tauri-runtime-cef/src/webview.rs` —— `TauriCefDragHandler`
 - `third-patches/cef/0002-drag-drop-client-events.patch` —— CEF 侧的 over/leave/drop 回调

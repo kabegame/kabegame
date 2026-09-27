@@ -28,12 +28,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "route.albums" },
   },
   {
-    path: "/albums/:albumId",
-    name: "AlbumDetail",
-    component: () => import("@/views/AlbumDetail.vue"),
-    meta: { title: "route.albumDetail" },
-  },
-  {
     path: "/tasks/:taskId",
     name: "TaskDetail",
     component: () => import("@/views/TaskDetail.vue"),

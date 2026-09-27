@@ -312,8 +312,8 @@ import {
 } from "@/api/syncLocalFolder";
 import type { AlbumSyncMode } from "@kabegame/core/types/album";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
-import { createFolderAlbumsFromDrag } from "@/utils/dragFileImport";
+import type { DragFileOptions } from "@/directives/dragFile";
+import { buildDropPlan, importDroppedFiles } from "@/utils/dragFileImport";
 import {
   buildAlbumMediaNodes,
   loadAlbumMediaPreview,
@@ -399,8 +399,8 @@ const canCreateSubAlbumForSelected = computed(() => {
   return album.id !== FAVORITE_ALBUM_ID && album.id !== HIDDEN_ALBUM_ID && album.type !== "local_folder";
 });
 
-/** 从根到直接父级（不含当前画册），与 AlbumDetail.vue 的 albumAncestorCrumbs 同款逻辑，
- * 但链接改为切换选中态（selectAlbum）而非路由跳转——本页不再整页跳转。 */
+/** 从根到直接父级（不含当前画册），供面包屑中间段；
+ * 链接切换选中态（selectAlbum）而非路由跳转——本页不整页跳转。 */
 const selectedAlbumAncestorCrumbs = computed((): { id: string; name: string }[] => {
   const id = selectedAlbumId.value;
   if (!id) return [];
@@ -520,7 +520,7 @@ watch(
   },
 );
 
-// ---------- 中栏：ImageGrid adapter（与 AlbumDetail 共用 album adapter） ----------
+// ---------- 中栏：ImageGrid adapter ----------
 const analytics = createImageAnalytics(() => ({
   surface: "albums_page",
   albumId: selectedAlbumId.value,
@@ -769,21 +769,23 @@ const handleCreateAlbum = async () => {
   }
 };
 
-// ---------- 区域级文件拖入（画册页，只收文件夹）----------
+// ---------- 区域级文件拖入（导入当前选中画册）----------
 const dropZone = computed<DragFileOptions>(() => ({
-  plan: (items: DragFileItem[]): DragFilePlan | null => {
-    const folders = items.filter((i) => i.isDirectory);
-    if (folders.length === 0) return null;
-    return {
-      label: t("import.dropZone.albumsFolders", { count: folders.length }),
-      media: [],
-      folders,
-      plugins: [],
-    };
+  plan: (items) => {
+    const target = selectedAlbum.value;
+    if (
+      !target ||
+      target.id === FAVORITE_ALBUM_ID ||
+      target.id === HIDDEN_ALBUM_ID
+    ) {
+      return null;
+    }
+    return buildDropPlan(items, selectedAlbumName.value);
   },
-  onDrop: async (plan: DragFilePlan) => {
-    // 画册页拖入的文件夹建成同步画册（层级由磁盘路径串联决定）
-    await createFolderAlbumsFromDrag(plan.folders, null);
+  onDrop: async (plan) => {
+    const target = selectedAlbum.value;
+    if (!target) return;
+    await importDroppedFiles(plan, target);
   },
 }));
 
@@ -951,7 +953,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   }
 
   if (command === "rename") {
-    // 卡片内联改名随卡片下线：树上改名走 prompt（与 AlbumDetail 子画册改名同款）
+    // 树上改名走 prompt
     try {
       const { value } = await ElMessageBox.prompt(
         t("albums.placeholderName"),

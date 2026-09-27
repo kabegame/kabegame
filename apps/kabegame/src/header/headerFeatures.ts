@@ -3,7 +3,6 @@ import {
   Plus,
   FolderOpened,
   FolderAdd,
-  Picture,
   Delete,
   Upload,
   Grid,
@@ -84,16 +83,6 @@ export function registerHeaderFeatures() {
       icon: FolderAdd,
     },
     {
-      id: HeaderFeatureId.SetAsWallpaperCarousel,
-      label: t("header.setAsWallpaperCarousel"),
-      icon: Picture,
-    },
-    {
-      id: HeaderFeatureId.DeleteAlbum,
-      label: t("header.deleteAlbum"),
-      icon: Delete,
-    },
-    {
       id: HeaderFeatureId.ImportSource,
       label: t("header.importSource"),
       icon: Upload,
@@ -144,16 +133,6 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.GalleryPageSize,
       label: t("header.galleryPageSize"),
       icon: Histogram,
-    },
-    {
-      id: HeaderFeatureId.AlbumBrowseFilter,
-      label: t("gallery.filter"),
-      icon: Filter,
-    },
-    {
-      id: HeaderFeatureId.AlbumBrowseSort,
-      label: t("header.gallerySort"),
-      icon: Sort,
     },
     {
       id: HeaderFeatureId.FailedImagesCancelWaiting,

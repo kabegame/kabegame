@@ -60,16 +60,8 @@ export function buildAlbumMediaNodes(
   return sortAlbums(roots).map((album) => build(album, new Set()));
 }
 
-export function flattenAlbumMediaNodes(node: AlbumMediaNode): AlbumMediaNode[] {
+function flattenAlbumMediaNodes(node: AlbumMediaNode): AlbumMediaNode[] {
   return [node, ...node.children.flatMap((child) => flattenAlbumMediaNodes(child))];
-}
-
-export function albumSubtreeContainsAny(
-  node: AlbumMediaNode,
-  albumIds: ReadonlySet<string>,
-): boolean {
-  if (albumIds.has(node.album.id)) return true;
-  return node.children.some((child) => albumSubtreeContainsAny(child, albumIds));
 }
 
 export async function fetchAlbumDirectCount(path: string): Promise<number> {

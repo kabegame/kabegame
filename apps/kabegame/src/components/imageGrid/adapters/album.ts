@@ -8,15 +8,14 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
-import type { GridAdapter } from "../types";
+import type { GridAdapter, GridRemoveConfig } from "../types";
 
 /**
- * AlbumDetail（`/albums/:id`）的 grid adapter。
- * 必须在 AlbumDetail.vue 的 setup 中调用（route store 不能过早实例化）。
+ * 画册页（`/albums`）中栏的 grid adapter。
+ * 必须在 Albums.vue 的 setup 中调用（route store 不能过早实例化）。
  *
- * remove = 从画册移除（本地文件夹画册只读拦截）；deleteFile = 删除文件。
- * 这里只处理「本画册页面」的刷新；子画册预览刷新是 view 状态且需要在
- * grid 卸载（子画册 tab）时仍生效，由 view 自己监听 album-images-change。
+ * remove = 从画册移除（本地文件夹画册下委托 deleteFile）；deleteFile = 删除文件。
+ * 这里只处理当前选中画册的图片刷新。
  */
 export function createAlbumDetailAdapter(params: {
   albumId: () => string;
@@ -40,6 +39,35 @@ export function createAlbumDetailAdapter(params: {
   };
   const wallpaperHint = (included: boolean) =>
     included ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
+
+  const deleteFileConfig: GridRemoveConfig = {
+    dialogText: (count, extra) => ({
+      title: t("gallery.deleteImageFiles"),
+      message:
+        (count > 1
+          ? t("gallery.deleteDialogMessageMulti", { count })
+          : t("gallery.deleteDialogMessageSingle")) +
+        wallpaperHint(extra.includesCurrentWallpaper),
+      confirmText: t("common.delete"),
+    }),
+    confirm: async (images) => {
+      const count = images.length;
+      try {
+        await invoke("batch_delete_images", {
+          imageIds: images.map((img) => img.id),
+        });
+        clearCurrentWallpaperIfIncluded(images);
+        ElMessage.success(
+          count > 1
+            ? t("gallery.deletedAndRemovedCountSuccess", { count })
+            : t("gallery.deletedAndRemovedSuccess"),
+        );
+      } catch (error) {
+        console.error("操作失败:", error);
+        ElMessage.error(t("common.deleteFail"));
+      }
+    },
+  };
 
   return {
     id: "album",
@@ -118,23 +146,23 @@ export function createAlbumDetailAdapter(params: {
       await albumStore.loadAlbums();
     },
     remove: {
-      guard: () => {
+      dialogText: (count, extra) =>
+        params.isLocalFolder()
+          ? deleteFileConfig.dialogText(count, extra)
+          : {
+              title: t("gallery.removeFromAlbum"),
+              message:
+                (count > 1
+                  ? t("gallery.removeDialogMessageMulti", { count })
+                  : t("gallery.removeDialogMessageSingle")) +
+                wallpaperHint(extra.includesCurrentWallpaper),
+              confirmText: t("common.remove"),
+            },
+      confirm: async (images, ctx) => {
         if (params.isLocalFolder()) {
-          ElMessage.info(t("albums.localFolder.readOnlyHint"));
-          return true;
+          await deleteFileConfig.confirm?.(images, ctx);
+          return;
         }
-        return false;
-      },
-      dialogText: (count, extra) => ({
-        title: t("gallery.removeFromAlbum"),
-        message:
-          (count > 1
-            ? t("gallery.removeDialogMessageMulti", { count })
-            : t("gallery.removeDialogMessageSingle")) +
-          wallpaperHint(extra.includesCurrentWallpaper),
-        confirmText: t("common.remove"),
-      }),
-      confirm: async (images) => {
         const id = params.albumId();
         if (!id) return;
         const count = images.length;
@@ -156,34 +184,7 @@ export function createAlbumDetailAdapter(params: {
         }
       },
     },
-    deleteFile: {
-      dialogText: (count, extra) => ({
-        title: t("gallery.deleteImageFiles"),
-        message:
-          (count > 1
-            ? t("gallery.deleteDialogMessageMulti", { count })
-            : t("gallery.deleteDialogMessageSingle")) +
-          wallpaperHint(extra.includesCurrentWallpaper),
-        confirmText: t("common.delete"),
-      }),
-      confirm: async (images) => {
-        const count = images.length;
-        try {
-          await invoke("batch_delete_images", {
-            imageIds: images.map((img) => img.id),
-          });
-          clearCurrentWallpaperIfIncluded(images);
-          ElMessage.success(
-            count > 1
-              ? t("gallery.deletedAndRemovedCountSuccess", { count })
-              : t("gallery.deletedAndRemovedSuccess"),
-          );
-        } catch (error) {
-          console.error("操作失败:", error);
-          ElMessage.error(t("common.deleteFail"));
-        }
-      },
-    },
+    deleteFile: deleteFileConfig,
     // 上划手势：直接从画册移除（不删文件、无确认框）
     swipeRemove: async (images) => {
       if (params.isLocalFolder()) {

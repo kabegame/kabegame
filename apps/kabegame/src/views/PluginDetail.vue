@@ -263,7 +263,7 @@ watch(
 
 <style scoped>
 .plugin-detail {
-  /* 与其它详情页（TaskDetail / AlbumDetail）一致的四周留白 */
+  /* 与其它详情页（TaskDetail）一致的四周留白 */
   padding: 16px;
 }
 

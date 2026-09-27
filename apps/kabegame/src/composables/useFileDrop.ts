@@ -9,6 +9,10 @@ import {
   hitTestDragZone,
 } from "@/directives/dragFile";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { claimInternalDrag } from "@kabegame/core/utils/dragExport";
+// #region debug-drag
+import { sendDebugEvent } from "@kabegame/core/debugIngest";
+// #endregion debug-drag
 import { i18n } from "@kabegame/i18n";
 
 /** 后端根据路径推断类型（扩展名 + infer），用于拖入文件分类 */
@@ -20,6 +24,10 @@ const getFileDropKinds = async (paths: string[]): Promise<DragFileItem[]> => {
 /** 本次拖放会话（enter → drop/leave 期间有效），跨多次 over 事件复用探测结果 */
 let sessionPaths: string[] | null = null;
 let sessionItems: DragFileItem[] | null = null;
+/** 会话是否已开始（首个 enter/over/drop 到达）；enter 可能缺席，不能只在 enter 里开会话 */
+let sessionStarted = false;
+/** 本会话是否为应用内拖拽（会话开始时认领），是则全程静默 */
+let sessionInternal = false;
 /** over 阶段命中的热区与其 plan 缓存，避免同一热区内重复计算 */
 let lastZone: DragFileZone | null = null;
 let lastPlan: DragFilePlan | null = null;
@@ -27,6 +35,8 @@ let lastPlan: DragFilePlan | null = null;
 const clearSession = () => {
   sessionPaths = null;
   sessionItems = null;
+  sessionStarted = false;
+  sessionInternal = false;
   lastZone = null;
   lastPlan = null;
 };
@@ -74,7 +84,32 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
       currentWindow = getCurrentWebviewWindow();
 
       fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
+        // #region debug-drag
+        void sendDebugEvent("tauri_drag", {
+          type: event.payload.type,
+          sessionInternal,
+          hasItems: !!sessionItems,
+          paths: "paths" in event.payload ? event.payload.paths : undefined,
+        }, { sessionId: "drag-internal" });
+        // #endregion debug-drag
+        // 会话开始：认领应用内起手。Linux CEF 上内部拖拽有时不发 enter，首个事件就是 over。
+        if (event.payload.type === "enter" || (!sessionStarted && event.payload.type !== "leave")) {
+          sessionStarted = true;
+          sessionInternal = claimInternalDrag();
+          // #region debug-drag
+          void sendDebugEvent("session_start", { via: event.payload.type, sessionInternal }, { sessionId: "drag-internal" });
+          // #endregion debug-drag
+        }
+
         if (event.payload.type === "enter") {
+          if (sessionInternal) {
+            sessionPaths = null;
+            sessionItems = null;
+            lastZone = null;
+            lastPlan = null;
+            fileDropOverlayRef.value?.hide();
+            return;
+          }
           // enter 的 position 恒为 (0,0)，不可信，这里只做全量类型探测，不命中、不显示浮层
           const paths = event.payload.paths ?? [];
           try {
@@ -88,7 +123,7 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
           lastPlan = null;
           await bringWindowToFront();
         } else if (event.payload.type === "over") {
-          if (!sessionItems) return;
+          if (sessionInternal || !sessionItems) return;
 
           const zone = resolveZone(event.payload.position);
           if (!zone) {
@@ -115,11 +150,21 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
             fileDropOverlayRef.value?.hide();
           }
         } else if (event.payload.type === "drop") {
+          if (sessionInternal) {
+            fileDropOverlayRef.value?.hide();
+            clearSession();
+            return;
+          }
           fileDropOverlayRef.value?.hide();
           lastZone = null;
           lastPlan = null;
 
           const droppedPaths = event.payload.paths ?? [];
+          // 没有任何文件（拖文字/链接、或拖出时未带文件）：无可导入内容，静默，不提示「此处不支持」
+          if (droppedPaths.length === 0 && !sessionPaths?.length) {
+            clearSession();
+            return;
+          }
           let items = sessionItems;
           const pathsChanged =
             !sessionPaths ||
@@ -138,6 +183,9 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
           clearSession();
 
           if (!zone || !plan) {
+            // #region debug-drag
+            void sendDebugEvent("drop_unsupported", { zone: !!zone, plan: !!plan, items: items?.length }, { sessionId: "drag-internal" });
+            // #endregion debug-drag
             ElMessage.info(i18n.global.t("import.dropUnsupportedHere"));
             return;
           }

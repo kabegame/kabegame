@@ -45,6 +45,18 @@ fn map_io_error_for_user(e: io::Error, context: &str) -> String {
     format!("{}: {}", context, e)
 }
 
+/// 源文件是否直接位于 `dir` 中（两侧都 canonicalize，消除符号链接、尾部分隔符与大小写差异）。
+#[cfg(not(target_os = "android"))]
+async fn is_in_dir(src: &std::path::Path, dir: &std::path::Path) -> bool {
+    let Some(parent) = src.parent() else {
+        return false;
+    };
+    match (fs::canonicalize(parent).await, fs::canonicalize(dir).await) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// 本地导入钩子：`DirCtx = ()`（输出画册固定在钩子里）。
 struct LocalImportHook {
     task_id: String,
@@ -80,6 +92,22 @@ impl LocalImportHook {
         next
     }
 
+    /// 复制到目标目录，重名时生成不冲突的文件名。
+    #[cfg(not(target_os = "android"))]
+    async fn copy_into(&self, src: &std::path::Path, dest_dir: &std::path::Path) -> Result<PathBuf, String> {
+        let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
+        let fallback_ext = crate::media::image_type::mime_type_from_path(src)
+            .as_deref()
+            .and_then(crate::media::image_type::ext_from_mime)
+            .unwrap_or_else(|| "bin".to_string());
+        let safe = build_safe_filename(name, &fallback_ext);
+        let dest = unique_path(dest_dir, &safe);
+        fs::copy(src, &dest)
+            .await
+            .map_err(|e| format!("Failed to copy local file: {}", e))?;
+        Ok(dest)
+    }
+
     #[cfg(not(target_os = "android"))]
     async fn import_file_url(
         &mut self,
@@ -96,17 +124,13 @@ impl LocalImportHook {
             fs::create_dir_all(dest_dir)
                 .await
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
-            let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
-            let fallback_ext = crate::media::image_type::mime_type_from_path(&src)
-                .as_deref()
-                .and_then(crate::media::image_type::ext_from_mime)
-                .unwrap_or_else(|| "bin".to_string());
-            let safe = build_safe_filename(name, &fallback_ext);
-            let dest = unique_path(dest_dir, &safe);
-            fs::copy(&src, &dest)
-                .await
-                .map_err(|e| format!("Failed to copy local file: {}", e))?;
-            dest
+            if is_in_dir(&src, dest_dir).await {
+                // 源文件已在目标目录：复制只会产生「name (1).ext」副本（去重拦不住，
+                // 文件夹同步还会把副本当新文件入库），直接用原文件走后处理
+                src.clone()
+            } else {
+                self.copy_into(&src, dest_dir).await?
+            }
         } else {
             src.clone()
         };
