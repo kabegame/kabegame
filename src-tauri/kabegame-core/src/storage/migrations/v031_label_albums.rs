@@ -6,9 +6,9 @@ pub fn up(conn: &Connection) -> Result<(), String> {
 ALTER TABLE albums ADD COLUMN label_key TEXT;
 ALTER TABLE albums ADD COLUMN label_path TEXT;
 CREATE UNIQUE INDEX idx_albums_label_key
-    ON albums(COALESCE(parent_id, ''), LOWER(label_key)) WHERE type = 'label';
+    ON albums(COALESCE(parent_id, ''), LOWER(label_key)) WHERE type IN ('label', 'label_dir');
 CREATE INDEX idx_albums_label_path
-    ON albums(LOWER(label_path)) WHERE type = 'label';
+    ON albums(LOWER(label_path)) WHERE type IN ('label', 'label_dir');
 ALTER TABLE task_failed_images ADD COLUMN labels TEXT;
 "#,
     )
@@ -59,6 +59,12 @@ CREATE TABLE task_failed_images (
             [],
         )
         .unwrap();
+        assert!(conn
+            .execute(
+                "INSERT INTO albums (id, name, created_at, type, label_key, label_path) VALUES ('dir', 'Dir', 2, 'label_dir', 'KEY', 'KEY')",
+                [],
+            )
+            .is_err());
         conn.execute(
             "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, labels) VALUES ('task', 'plugin', 'https://example.com/a.jpg', 1, 1, '[]')",
             [],

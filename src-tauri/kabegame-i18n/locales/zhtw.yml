@@ -64,6 +64,9 @@ albums:
     labelForestIsolated: 標籤畫冊只能巢狀放在標籤畫冊下，其他畫冊不能進入標籤森林
     labelKeyInvalid: "標籤 key 只允許 ASCII 字母、數字、'_'、'-'、英文括號和空格（空格不能在首尾或連續），且不能超過 64 位元組"
     labelKeyExists: 目前層級已存在相同 key 的標籤畫冊
+    labelLeafNoChildren: 標籤是葉節點，不能包含子畫冊
+    labelDirNoImages: 標籤目錄不能放圖片，請放到其下的標籤裡
+    labelKindConflict: 標籤路徑與既有節點類型衝突，已略過此標籤
   localFolderErrors:
     androidUnsupported: Android 平台不支援本機資料夾同步
     notLocalFolder: 只有本機資料夾畫冊可以轉換為一般畫冊

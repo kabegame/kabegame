@@ -64,6 +64,9 @@ albums:
     labelForestIsolated: ラベルアルバムはラベルアルバムの配下にのみ配置でき、他のアルバムをラベルツリーに入れることはできません
     labelKeyInvalid: "ラベルキーには ASCII 英数字、'_'、'-'、半角括弧、スペース（先頭・末尾・連続は不可）のみ使用でき、64 バイト以内である必要があります"
     labelKeyExists: この階層には同じキーのラベルアルバムが既にあります
+    labelLeafNoChildren: ラベルは末端ノードのため、子アルバムを含めることはできません
+    labelDirNoImages: ラベルディレクトリには画像を追加できません。配下のラベルに追加してください
+    labelKindConflict: ラベルパスが既存ノードの種類と競合したため、このラベルをスキップしました
   localFolderErrors:
     androidUnsupported: Android ではローカルフォルダ同期に対応していません
     notLocalFolder: ローカルフォルダアルバムのみ通常のアルバムに変換できます

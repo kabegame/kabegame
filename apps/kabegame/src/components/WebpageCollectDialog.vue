@@ -31,6 +31,7 @@
       </el-form-item>
       <el-form-item :label="$t('albums.outputAlbum')">
         <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="outputAlbumTree" :album-counts="albumCounts"
+          :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
           clearable />
       </el-form-item>

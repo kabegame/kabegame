@@ -113,8 +113,14 @@ pub fn add_label_album(
     key: String,
     name: Option<String>,
     parent_id: Option<String>,
+    directory: bool,
 ) -> Result<Value, String> {
-    let album = Storage::global().add_label_album(&key, name.as_deref(), parent_id.as_deref())?;
+    let album = Storage::global().add_label_album(
+        &key,
+        name.as_deref(),
+        parent_id.as_deref(),
+        directory,
+    )?;
     serde_json::to_value(album).map_err(|e| e.to_string())
 }
 

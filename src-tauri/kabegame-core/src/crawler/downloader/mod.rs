@@ -123,9 +123,24 @@ fn apply_download_labels(
     }
     let image_ids = vec![image_id.to_string()];
     match Storage::global().apply_labels_to_images(labels, &image_ids) {
-        Ok(touched) => {
-            if !touched.is_empty() {
-                GlobalEmitter::global().emit_album_images_change("add", &touched, &image_ids);
+        Ok(applied) => {
+            if !applied.album_ids.is_empty() {
+                GlobalEmitter::global().emit_album_images_change(
+                    "add",
+                    &applied.album_ids,
+                    &image_ids,
+                );
+            }
+            for (spec, error) in applied.skipped {
+                let path = format!("{}/{}", spec.segments.join("/"), spec.key);
+                eprintln!("[labels] 图片 {image_id} 跳过标签 `{path}`: {error}");
+                if let Some(task_id) = task_id {
+                    emit_task_log(
+                        task_id,
+                        "warn",
+                        format!("[labels] 跳过标签 `{path}`：{error}"),
+                    );
+                }
             }
         }
         Err(error) => {

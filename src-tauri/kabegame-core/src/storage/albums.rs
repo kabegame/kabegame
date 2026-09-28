@@ -23,6 +23,11 @@ fn validate_album_name(name: &str) -> Result<&str, String> {
     Ok(t)
 }
 
+/// 标签森林成员：目录（label_dir）或叶子（label）。
+pub(crate) fn is_label_forest_kind(kind: &str) -> bool {
+    matches!(kind, "label" | "label_dir")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct Album {
@@ -30,7 +35,7 @@ pub struct Album {
     pub name: String,
     pub created_at: u64,
     pub parent_id: Option<String>,
-    /// "normal" | "local_folder" | "label"（未来可扩展）
+    /// "normal" | "local_folder" | "label" | "label_dir"（未来可扩展）
     #[serde(rename(serialize = "type"), alias = "type")]
     pub kind: String,
     /// 仅 kind=="local_folder" 时为 Some，存绝对路径
@@ -41,7 +46,7 @@ pub struct Album {
     pub ancestor_path: String,
     /// 本地文件夹画册的逐画册同步状态
     pub sync_mode: String,
-    /// 仅 kind=="label" 时为 Some，用于插件定位与搜索
+    /// kind 为 "label" 或 "label_dir" 时为 Some，用于插件定位与搜索
     pub label_key: Option<String>,
     /// 从标签森林根到自身的 key 链，格式为 `root/.../self`
     pub label_path: Option<String>,
@@ -76,6 +81,14 @@ pub struct AddToAlbumResult {
 pub struct EnsuredLabel {
     pub album_id: String,
     pub created: Vec<Album>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppliedLabels {
+    /// 实际新增了图片成员的标签叶子。
+    pub album_ids: Vec<String>,
+    /// 寻址失败而跳过的标签及原因；同批其它标签仍会继续处理。
+    pub skipped: Vec<(LabelSpec, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -395,7 +408,7 @@ impl Storage {
                 Some("local_folder") => {
                     return Err(t!("albums.errors.parentIsLocalFolder").to_string());
                 }
-                Some("label") => {
+                Some(kind) if is_label_forest_kind(kind) => {
                     return Err(t!("albums.errors.labelForestIsolated").to_string());
                 }
                 _ => {}
@@ -448,13 +461,15 @@ impl Storage {
         key: &str,
         name: Option<&str>,
         parent_id: Option<&str>,
+        directory: bool,
     ) -> Result<Album, String> {
         if !is_label_key(key) {
             return Err(t!("albums.errors.labelKeyInvalid").to_string());
         }
         let name = name.filter(|name| !name.trim().is_empty()).unwrap_or(key);
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let album = Self::insert_label_album(&conn, key, name, parent_id)?;
+        let kind = if directory { "label_dir" } else { "label" };
+        let album = Self::insert_label_album(&conn, key, name, parent_id, kind)?;
         if let Some(emitter) = GlobalEmitter::try_global() {
             emitter.emit_album_added(&album);
         }
@@ -478,7 +493,7 @@ impl Storage {
             .optional()
             .map_err(|e| format!("Failed to query label album: {e}"))?
             .ok_or_else(|| "画册不存在".to_string())?;
-        if kind != "label" {
+        if !is_label_forest_kind(&kind) {
             return Err(t!("albums.errors.labelForestIsolated").to_string());
         }
         Self::ensure_label_key_unique_ci(&tx, new_key, parent_id.as_deref(), Some(album_id))?;
@@ -516,12 +531,16 @@ impl Storage {
             if let Some(existing) =
                 Self::find_label_child_by_key_ci(&tx, parent_id.as_deref(), segment)?
             {
+                if existing.kind != "label_dir" {
+                    return Err(t!("albums.errors.labelKindConflict").to_string());
+                }
                 parent_id = Some(existing.id);
                 continue;
             }
             let name =
                 Self::resolve_new_label_name_ci(&tx, parent_id.as_deref(), segment, segment)?;
-            let album = Self::insert_label_album(&tx, segment, &name, parent_id.as_deref())?;
+            let album =
+                Self::insert_label_album(&tx, segment, &name, parent_id.as_deref(), "label_dir")?;
             parent_id = Some(album.id.clone());
             created.push(album);
         }
@@ -529,6 +548,9 @@ impl Storage {
         let leaf = if let Some(existing) =
             Self::find_label_child_by_key_ci(&tx, parent_id.as_deref(), &spec.key)?
         {
+            if existing.kind != "label" {
+                return Err(t!("albums.errors.labelKindConflict").to_string());
+            }
             existing
         } else {
             let requested_name = spec.name.as_deref().unwrap_or(&spec.key);
@@ -538,7 +560,8 @@ impl Storage {
                 requested_name,
                 &spec.key,
             )?;
-            let album = Self::insert_label_album(&tx, &spec.key, &name, parent_id.as_deref())?;
+            let album =
+                Self::insert_label_album(&tx, &spec.key, &name, parent_id.as_deref(), "label")?;
             created.push(album.clone());
             album
         };
@@ -555,11 +578,18 @@ impl Storage {
         &self,
         specs: &[LabelSpec],
         image_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<AppliedLabels, String> {
         let mut album_ids = Vec::new();
+        let mut skipped = Vec::new();
         let mut seen = HashSet::new();
         for spec in specs {
-            let ensured = self.ensure_label_path(spec)?;
+            let ensured = match self.ensure_label_path(spec) {
+                Ok(ensured) => ensured,
+                Err(error) => {
+                    skipped.push((spec.clone(), error));
+                    continue;
+                }
+            };
             if let Some(emitter) = GlobalEmitter::try_global() {
                 for album in &ensured.created {
                     emitter.emit_album_added(album);
@@ -570,7 +600,7 @@ impl Storage {
                 album_ids.push(ensured.album_id);
             }
         }
-        Ok(album_ids)
+        Ok(AppliedLabels { album_ids, skipped })
     }
 
     pub fn get_albums(&self, parent_id: Option<&str>) -> Result<Vec<Album>, String> {
@@ -755,6 +785,18 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+        let kind: Option<String> = tx
+            .query_row(
+                "SELECT type FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query album type: {e}"))?;
+        if kind.as_deref() == Some("label_dir") {
+            return Err(t!("albums.errors.labelDirNoImages").to_string());
+        }
 
         let current_count: usize = tx
             .query_row(
@@ -961,22 +1003,22 @@ impl Storage {
     ) -> Result<(), String> {
         let count: i64 = match (parent_id, exclude_album_id) {
             (None, None) => conn.query_row(
-                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1)",
+                "SELECT COUNT(*) FROM albums WHERE type IN ('label', 'label_dir') AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1)",
                 params![key],
                 |row| row.get(0),
             ),
             (None, Some(exclude)) => conn.query_row(
-                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1) AND id != ?2",
+                "SELECT COUNT(*) FROM albums WHERE type IN ('label', 'label_dir') AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1) AND id != ?2",
                 params![key, exclude],
                 |row| row.get(0),
             ),
             (Some(parent_id), None) => conn.query_row(
-                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2)",
+                "SELECT COUNT(*) FROM albums WHERE type IN ('label', 'label_dir') AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2)",
                 params![parent_id, key],
                 |row| row.get(0),
             ),
             (Some(parent_id), Some(exclude)) => conn.query_row(
-                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2) AND id != ?3",
+                "SELECT COUNT(*) FROM albums WHERE type IN ('label', 'label_dir') AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2) AND id != ?3",
                 params![parent_id, key, exclude],
                 |row| row.get(0),
             ),
@@ -993,7 +1035,11 @@ impl Storage {
         key: &str,
         name: &str,
         parent_id: Option<&str>,
+        kind: &str,
     ) -> Result<Album, String> {
+        if !is_label_forest_kind(kind) {
+            return Err(t!("albums.errors.labelForestIsolated").to_string());
+        }
         let (ancestor_prefix, label_prefix) = match parent_id {
             None => (String::new(), None),
             Some(parent_id) => {
@@ -1008,7 +1054,10 @@ impl Storage {
                 let Some((kind, ancestor_path, label_path)) = parent else {
                     return Err(t!("albums.errors.parentNotFound", id = parent_id).to_string());
                 };
-                if kind != "label" {
+                if kind == "label" {
+                    return Err(t!("albums.errors.labelLeafNoChildren").to_string());
+                }
+                if kind != "label_dir" {
                     return Err(t!("albums.errors.labelForestIsolated").to_string());
                 }
                 let label_path =
@@ -1036,8 +1085,8 @@ impl Storage {
         };
         conn.execute(
             "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path)
-             VALUES (?1, ?2, ?3, ?4, 'label', NULL, NULL, ?5, 'none', ?6, ?7)",
-            params![id, name, created_at as i64, parent_id, ancestor_path, key, label_path],
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 'none', ?7, ?8)",
+            params![id, name, created_at as i64, parent_id, kind, ancestor_path, key, label_path],
         )
         .map_err(|e| format!("Failed to add label album: {e}"))?;
 
@@ -1046,7 +1095,7 @@ impl Storage {
             name: name.to_string(),
             created_at,
             parent_id: parent_id.map(str::to_string),
-            kind: "label".to_string(),
+            kind: kind.to_string(),
             sync_folder: None,
             folder_status: None,
             ancestor_path,
@@ -1064,12 +1113,12 @@ impl Storage {
         let sql = if parent_id.is_some() {
             "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path
                FROM albums
-              WHERE type = 'label' AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2)
+              WHERE type IN ('label', 'label_dir') AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2)
               LIMIT 1"
         } else {
             "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path
                FROM albums
-              WHERE type = 'label' AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1)
+              WHERE type IN ('label', 'label_dir') AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1)
               LIMIT 1"
         };
         let album = match parent_id {
@@ -1175,11 +1224,11 @@ impl Storage {
         conn.execute(
             r#"
 WITH RECURSIVE tree(id, path, lpath) AS (
-    SELECT id, '/' || id || '/', CASE WHEN type = 'label' THEN label_key END
+    SELECT id, '/' || id || '/', CASE WHEN type IN ('label', 'label_dir') THEN label_key END
       FROM albums WHERE parent_id IS NULL
     UNION ALL
     SELECT a.id, tree.path || a.id || '/',
-           CASE WHEN a.type = 'label' THEN tree.lpath || '/' || a.label_key END
+           CASE WHEN a.type IN ('label', 'label_dir') THEN tree.lpath || '/' || a.label_key END
       FROM albums a JOIN tree ON a.parent_id = tree.id
 )
 UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
@@ -1378,7 +1427,10 @@ UPDATE albums
                 )
                 .optional()
                 .map_err(|e| format!("query converted album parent type: {e}"))?;
-            if matches!(parent_kind.as_deref(), Some("local_folder" | "label")) {
+            if matches!(
+                parent_kind.as_deref(),
+                Some("local_folder" | "label" | "label_dir")
+            ) {
                 let resolved = Self::resolve_scoped_name_ci(&tx, None, &root_name, Some(album_id))?;
                 tx.execute(
                     "UPDATE albums SET parent_id = NULL, name = ?1 WHERE id = ?2",
@@ -1574,7 +1626,7 @@ UPDATE albums
                                 t!("albums.errors.parentNotFound", id = parent_id).to_string()
                             );
                         }
-                        Some("label") => {
+                        Some(kind) if is_label_forest_kind(kind) => {
                             return Err(t!("albums.errors.labelForestIsolated").to_string());
                         }
                         _ => {}
@@ -1716,8 +1768,13 @@ UPDATE albums
             if parent.kind == "local_folder" {
                 return Err(t!("albums.errors.cannotMoveIntoLocalFolder").to_string());
             }
-            if (album.kind == "label") != (parent.kind == "label") {
+            let album_is_label = is_label_forest_kind(&album.kind);
+            let parent_is_label = is_label_forest_kind(&parent.kind);
+            if album_is_label != parent_is_label {
                 return Err(t!("albums.errors.labelForestIsolated").to_string());
+            }
+            if album_is_label && parent.kind == "label" {
+                return Err(t!("albums.errors.labelLeafNoChildren").to_string());
             }
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
             let would_cycle: bool = conn
@@ -1739,7 +1796,7 @@ UPDATE albums
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         Self::ensure_album_name_unique_ci(&conn, &album.name, new_parent_id, Some(album_id))?;
-        if album.kind == "label" {
+        if is_label_forest_kind(&album.kind) {
             let key = album
                 .label_key
                 .as_deref()
@@ -1845,9 +1902,9 @@ mod tests {
 INSERT INTO albums
     (id, name, created_at, parent_id, type, ancestor_path, sync_mode, label_key)
 VALUES
-    ('pixiv', 'Pixiv', 1, NULL, 'label', '', 'none', 'pixiv'),
+    ('pixiv', 'Pixiv', 1, NULL, 'label_dir', '', 'none', 'pixiv'),
     ('character', '角色', 2, 'pixiv', 'label', '', 'none', 'character'),
-    ('booru', 'Booru', 3, NULL, 'label', '', 'none', 'booru');
+    ('booru', 'Booru', 3, NULL, 'label_dir', '', 'none', 'booru');
 "#,
             )
             .unwrap();
@@ -1879,13 +1936,13 @@ VALUES
     fn label_album_create_and_key_change_enforce_invariants() {
         let storage = test_storage();
         let root = storage
-            .add_label_album("Root", Some("标签根"), None)
+            .add_label_album("Root", Some("标签根"), None, true)
             .unwrap();
         let child = storage
-            .add_label_album("Child", None, Some(&root.id))
+            .add_label_album("Child", None, Some(&root.id), true)
             .unwrap();
         let grandchild = storage
-            .add_label_album("Leaf", Some("叶子"), Some(&child.id))
+            .add_label_album("Leaf", Some("叶子"), Some(&child.id), false)
             .unwrap();
         assert_eq!(child.name, "Child");
         assert_eq!(grandchild.label_path.as_deref(), Some("Root/Child/Leaf"));
@@ -1901,26 +1958,32 @@ VALUES
             Some("renamed/Child/Leaf")
         );
 
-        storage.add_label_album("Other", None, None).unwrap();
-        assert!(storage.add_label_album("other", None, None).is_err());
+        storage.add_label_album("Other", None, None, false).unwrap();
+        assert!(storage.add_label_album("other", None, None, true).is_err());
         assert!(storage.set_label_key(&root.id, "OTHER").is_err());
         let arbitrary_name = storage
-            .add_label_album("display", Some("任意 / 名称"), None)
+            .add_label_album("display", Some("任意 / 名称"), None, false)
             .unwrap();
         assert_eq!(arbitrary_name.name, "任意 / 名称");
         let default_name = storage
-            .add_label_album("default-name", Some("  "), None)
+            .add_label_album("default-name", Some("  "), None, false)
             .unwrap();
         assert_eq!(default_name.name, "default-name");
         for key in ["bad.key", "bad/key", "bad,key", " bad", "bad  key", "中文"] {
-            assert!(storage.add_label_album(key, None, None).is_err(), "{key}");
+            assert!(
+                storage.add_label_album(key, None, None, false).is_err(),
+                "{key}"
+            );
             assert!(storage.set_label_key(&root.id, key).is_err(), "{key}");
         }
 
         assert!(storage.add_album("normal-child", Some(&root.id)).is_err());
         let normal = storage.add_album("normal", None).unwrap();
         assert!(storage
-            .add_label_album("nested", None, Some(&normal.id))
+            .add_label_album("nested", None, Some(&normal.id), false)
+            .is_err());
+        assert!(storage
+            .add_label_album("child-of-leaf", None, Some(&grandchild.id), false)
             .is_err());
     }
 
@@ -1928,18 +1991,25 @@ VALUES
     fn move_album_keeps_label_forest_isolated_and_checks_keys() {
         let storage = test_storage();
         let normal = storage.add_album("normal", None).unwrap();
-        let label_a = storage.add_label_album("a", None, None).unwrap();
-        let label_b = storage.add_label_album("b", None, None).unwrap();
+        let label_a = storage.add_label_album("a", None, None, true).unwrap();
+        let label_b = storage.add_label_album("b", None, None, true).unwrap();
         let child_a = storage
-            .add_label_album("same", Some("a-same"), Some(&label_a.id))
+            .add_label_album("same", Some("a-same"), Some(&label_a.id), false)
             .unwrap();
         storage
-            .add_label_album("SAME", Some("b-same"), Some(&label_b.id))
+            .add_label_album("SAME", Some("b-same"), Some(&label_b.id), false)
+            .unwrap();
+        let leaf = storage
+            .add_label_album("leaf", None, Some(&label_a.id), false)
+            .unwrap();
+        let movable_dir = storage
+            .add_label_album("dir", None, Some(&label_b.id), true)
             .unwrap();
 
         assert!(storage.move_album(&normal.id, Some(&label_a.id)).is_err());
         assert!(storage.move_album(&label_a.id, Some(&normal.id)).is_err());
         assert!(storage.move_album(&child_a.id, Some(&label_b.id)).is_err());
+        assert!(storage.move_album(&movable_dir.id, Some(&leaf.id)).is_err());
         assert_eq!(
             storage
                 .get_album_by_id(&child_a.id)
@@ -1964,6 +2034,9 @@ VALUES
         let spec = label_spec(&["plugin", "character"], "miku", Some("初音未来"));
         let first = storage.ensure_label_path(&spec).unwrap();
         assert_eq!(first.created.len(), 3);
+        assert_eq!(first.created[0].kind, "label_dir");
+        assert_eq!(first.created[1].kind, "label_dir");
+        assert_eq!(first.created[2].kind, "label");
         assert_eq!(
             storage
                 .get_album_by_id(&first.album_id)
@@ -1991,9 +2064,9 @@ VALUES
             "初音未来"
         );
 
-        let c1 = storage.add_label_album("c1", None, None).unwrap();
+        let c1 = storage.add_label_album("c1", None, None, true).unwrap();
         storage
-            .add_label_album("occupied", Some("Pretty"), Some(&c1.id))
+            .add_label_album("occupied", Some("Pretty"), Some(&c1.id), false)
             .unwrap();
         let leaf = storage
             .ensure_label_path(&label_spec(&["c1"], "leaf", Some("Pretty")))
@@ -2007,12 +2080,12 @@ VALUES
             "Pretty (leaf)"
         );
 
-        let c2 = storage.add_label_album("c2", None, None).unwrap();
+        let c2 = storage.add_label_album("c2", None, None, true).unwrap();
         storage
-            .add_label_album("occupied1", Some("Pretty"), Some(&c2.id))
+            .add_label_album("occupied1", Some("Pretty"), Some(&c2.id), false)
             .unwrap();
         storage
-            .add_label_album("occupied2", Some("Pretty (leaf)"), Some(&c2.id))
+            .add_label_album("occupied2", Some("Pretty (leaf)"), Some(&c2.id), false)
             .unwrap();
         let leaf = storage
             .ensure_label_path(&label_spec(&["c2"], "leaf", Some("Pretty")))
@@ -2026,14 +2099,14 @@ VALUES
             "leaf"
         );
 
-        let c3 = storage.add_label_album("c3", None, None).unwrap();
+        let c3 = storage.add_label_album("c3", None, None, true).unwrap();
         for (key, name) in [
             ("occupied1", "Pretty"),
             ("occupied2", "Pretty (leaf)"),
             ("occupied3", "leaf"),
         ] {
             storage
-                .add_label_album(key, Some(name), Some(&c3.id))
+                .add_label_album(key, Some(name), Some(&c3.id), false)
                 .unwrap();
         }
         let leaf = storage
@@ -2061,7 +2134,7 @@ VALUES
             .unwrap();
         }
         let image_ids = vec!["1".to_string()];
-        let album_ids = storage
+        let applied = storage
             .apply_labels_to_images(
                 &[
                     label_spec(&["plugin"], "first", None),
@@ -2070,10 +2143,11 @@ VALUES
                 &image_ids,
             )
             .unwrap();
-        assert_eq!(album_ids.len(), 2);
+        assert_eq!(applied.album_ids.len(), 2);
+        assert!(applied.skipped.is_empty());
         let memberships = storage.get_image_album_ids("1").unwrap();
         assert_eq!(memberships.len(), 2);
-        assert!(album_ids.iter().all(|id| memberships.contains(id)));
+        assert!(applied.album_ids.iter().all(|id| memberships.contains(id)));
 
         let root = storage
             .get_albums(None)
@@ -2087,7 +2161,48 @@ VALUES
             .list_all_albums()
             .unwrap()
             .into_iter()
-            .all(|album| album.kind != "label"));
+            .all(|album| !is_label_forest_kind(&album.kind)));
+    }
+
+    #[test]
+    fn label_directory_rejects_images() {
+        let storage = test_storage();
+        let directory = storage.add_label_album("plugin", None, None, true).unwrap();
+        let error = storage
+            .add_images_to_album(&directory.id, &["1".to_string()])
+            .unwrap_err();
+        assert_eq!(error, t!("albums.errors.labelDirNoImages").to_string());
+    }
+
+    #[test]
+    fn apply_labels_skips_kind_conflict_and_continues() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO images (id, local_path, crawled_at) VALUES (1, '/tmp/label.jpg', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        storage
+            .add_label_album("blocked", None, None, false)
+            .unwrap();
+
+        let applied = storage
+            .apply_labels_to_images(
+                &[
+                    label_spec(&["blocked"], "skipped", None),
+                    label_spec(&["valid"], "kept", None),
+                ],
+                &["1".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(applied.skipped.len(), 1);
+        assert_eq!(applied.skipped[0].0.key, "skipped");
+        assert_eq!(applied.album_ids.len(), 1);
+        assert_eq!(storage.get_image_album_ids("1").unwrap(), applied.album_ids);
     }
 
     #[test]

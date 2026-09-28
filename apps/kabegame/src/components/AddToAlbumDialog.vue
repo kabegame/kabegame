@@ -6,6 +6,7 @@
           v-model="selectedAlbumId"
           :album-tree="albumTreeForPicker"
           :album-counts="albumCounts"
+          :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create
           :placeholder="$t('albums.chooseAlbumPlaceholder')"
           :picker-title="$t('albums.selectAlbum')"

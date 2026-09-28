@@ -1123,12 +1123,14 @@ pub fn init_registry() {
                         key: String,
                         name: Option<String>,
                         parent_id: Option<String>,
+                        directory: bool,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_label_album(
                         args.key,
                         args.name,
                         args.parent_id,
+                        args.directory,
                     )
                     .map_err(RpcError::internal)
                 })

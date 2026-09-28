@@ -15,6 +15,7 @@
           v-model="selectedOutputAlbumId"
           :album-tree="outputAlbumTree"
           :album-counts="albumCounts"
+          :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create
           :placeholder="$t('albums.notSpecifiedAddToGallery')"
           :picker-title="$t('albums.outputAlbum')"

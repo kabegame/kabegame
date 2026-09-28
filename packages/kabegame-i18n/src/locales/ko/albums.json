@@ -138,5 +138,11 @@
   "imageLabelsFilterPlaceholder": "이름 또는 키로 라벨 필터",
   "imageLabelsNoCandidate": "추가할 라벨이 없습니다",
   "imageLabelsAdd": "라벨 추가",
-  "imageLabelsCreate": "새 라벨"
+  "imageLabelsCreate": "새 라벨",
+  "kindLabelDir": "라벨 디렉터리",
+  "treeAddLabelDir": "새 라벨 디렉터리",
+  "detailLabelDir": "라벨 디렉터리",
+  "labelDirChildCount": "하위 앨범 {count}개",
+  "labelDirNoImagesHint": "라벨 디렉터리에는 이미지를 넣을 수 없습니다. 그 아래 라벨에 추가하세요",
+  "selectParentLabelDir": "상위 라벨 디렉터리 (선택)"
 }

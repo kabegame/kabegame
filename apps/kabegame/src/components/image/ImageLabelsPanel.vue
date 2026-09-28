@@ -265,7 +265,7 @@ const newName = ref("");
 const newParentId = ref<string | null>(null);
 const creating = ref(false);
 const newKeyValid = computed(() => isLabelKey(newKey.value.trim()));
-const labelTree = computed(() => albumStore.getAlbumTreeExcluding([], { onlyLabel: true }));
+const labelTree = computed(() => albumStore.getAlbumTreeExcluding([], { onlyLabelDir: true }));
 
 function openCreateDialog() {
   createDialog.open();

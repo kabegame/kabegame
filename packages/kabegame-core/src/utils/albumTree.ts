@@ -43,14 +43,17 @@ export function buildAlbumTreeFromFlat(albums: AlbumFlatRow[]): AlbumTreeNode[] 
 export function flattenAlbumTreeForAndroidPicker(
   nodes: AlbumTreeNode[],
   albumCounts: Record<string, number>,
+  isSelectable: (node: AlbumTreeNode) => boolean = () => true,
   depth = 0,
 ): { label: string; value: string }[] {
   return nodes.flatMap((n) => [
-    {
-      label: "\u00A0\u00A0".repeat(depth) + n.name + ` (${albumCounts[n.id] ?? 0})`,
-      value: n.id,
-    },
-    ...flattenAlbumTreeForAndroidPicker(n.children, albumCounts, depth + 1),
+    ...(isSelectable(n)
+      ? [{
+          label: "\u00A0\u00A0".repeat(depth) + n.name + ` (${albumCounts[n.id] ?? 0})`,
+          value: n.id,
+        }]
+      : []),
+    ...flattenAlbumTreeForAndroidPicker(n.children, albumCounts, isSelectable, depth + 1),
   ]);
 }
 
@@ -61,14 +64,17 @@ export function flattenAlbumTreeForAndroidPicker(
 export function flattenAlbumTreeForFrostedPicker(
   nodes: AlbumTreeNode[],
   albumCounts: Record<string, number>,
+  isSelectable: (node: AlbumTreeNode) => boolean = () => true,
 ): { label: string; value: string; count: number; childCount: number }[] {
   return nodes.flatMap((n) => [
-    {
-      label: n.name,
-      value: n.id,
-      count: albumCounts[n.id] ?? 0,
-      childCount: n.children.length,
-    },
-    ...flattenAlbumTreeForFrostedPicker(n.children, albumCounts),
+    ...(isSelectable(n)
+      ? [{
+          label: n.name,
+          value: n.id,
+          count: albumCounts[n.id] ?? 0,
+          childCount: n.children.length,
+        }]
+      : []),
+    ...flattenAlbumTreeForFrostedPicker(n.children, albumCounts, isSelectable),
   ]);
 }

@@ -54,7 +54,7 @@
           <span class="flex-none">· {{ typeLabel }}</span>
         </div>
         <div
-          v-if="isLabel && album.labelPath"
+          v-if="isLabelForest && album.labelPath"
           class="mt-1 flex min-w-0 items-center gap-1 text-[12px]"
           :title="album.labelPath"
         >
@@ -97,7 +97,13 @@
         </div>
       </div>
 
-      <div class="mt-3.5 grid grid-cols-2 gap-2">
+      <div v-if="isLabelDir" class="album-detail-stat mt-3.5">
+        <div class="album-detail-stat-num">{{ stats.imageCount }}</div>
+        <div class="album-detail-stat-label">
+          {{ t("albums.labelDirChildCount", { count: stats.imageCount }) }}
+        </div>
+      </div>
+      <div v-else class="mt-3.5 grid grid-cols-2 gap-2">
         <div class="album-detail-stat">
           <div class="album-detail-stat-num">{{ stats.imageCount }}</div>
           <div class="album-detail-stat-label">{{ t("albums.imagesTab") }}</div>
@@ -110,6 +116,7 @@
 
       <div v-if="!isHidden" class="mt-3.5 flex flex-col gap-2">
         <button
+          v-if="!isLabelDir"
           class="album-detail-primary-btn"
           type="button"
           @click="emit('command', isRotating ? 'stopWallpaperRotation' : 'setWallpaperRotation')"
@@ -197,6 +204,8 @@ const { t } = useI18n();
 
 const isLocalFolder = computed(() => props.album?.type === "local_folder");
 const isLabel = computed(() => props.album?.type === "label");
+const isLabelDir = computed(() => props.album?.type === "label_dir");
+const isLabelForest = computed(() => isLabel.value || isLabelDir.value);
 
 const displayName = computed(() => {
   if (!props.album) return "";
@@ -205,6 +214,7 @@ const displayName = computed(() => {
 
 const typeLabel = computed(() => {
   if (isLocalFolder.value) return t("albums.detailLocalFolderAlbum");
+  if (isLabelDir.value) return t("albums.detailLabelDir");
   if (isLabel.value) return t("albums.detailLabelAlbum");
   return t("albums.detailManualAlbum");
 });

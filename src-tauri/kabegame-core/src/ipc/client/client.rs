@@ -184,11 +184,13 @@ impl IpcClient {
         key: String,
         name: Option<String>,
         parent_id: Option<String>,
+        directory: bool,
     ) -> Result<serde_json::Value, String> {
         self.request_data(IpcRequest::StorageAddLabelAlbum {
             key,
             name,
             parent_id,
+            directory,
         })
         .await
     }

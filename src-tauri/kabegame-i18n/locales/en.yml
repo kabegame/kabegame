@@ -64,6 +64,9 @@ albums:
     labelForestIsolated: Label albums can only be nested under label albums, and other albums cannot be placed in the label forest.
     labelKeyInvalid: "Label keys may contain only ASCII letters, numbers, '_', '-', parentheses, and single spaces (not at either end), and must not exceed 64 bytes."
     labelKeyExists: A label with the same key already exists at this level.
+    labelLeafNoChildren: Labels are leaf nodes and cannot contain child albums.
+    labelDirNoImages: Label directories cannot contain images. Add them to a label below the directory.
+    labelKindConflict: The label path conflicts with an existing node type, so this label was skipped.
   localFolderErrors:
     androidUnsupported: Local folder sync is not supported on Android
     notLocalFolder: Only local folder albums can be converted to normal albums

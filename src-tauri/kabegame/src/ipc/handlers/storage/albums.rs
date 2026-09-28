@@ -35,8 +35,9 @@ pub async fn add_label_album(
     key: &str,
     name: Option<&str>,
     parent_id: Option<&str>,
+    directory: bool,
 ) -> IpcResponse {
-    match Storage::global().add_label_album(key, name, parent_id) {
+    match Storage::global().add_label_album(key, name, parent_id, directory) {
         Ok(album) => {
             IpcResponse::ok_with_data("created", serde_json::to_value(album).unwrap_or_default())
         }

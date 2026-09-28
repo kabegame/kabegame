@@ -139,5 +139,11 @@
   "imageLabelsFilterPlaceholder": "Filter labels by name or key",
   "imageLabelsNoCandidate": "No labels to add",
   "imageLabelsAdd": "Add label",
-  "imageLabelsCreate": "New label"
+  "imageLabelsCreate": "New label",
+  "kindLabelDir": "Label directory",
+  "treeAddLabelDir": "New label directory",
+  "detailLabelDir": "Label directory",
+  "labelDirChildCount": "{count} sub-albums",
+  "labelDirNoImagesHint": "Label directories cannot contain images. Add them to a label below this directory.",
+  "selectParentLabelDir": "Parent label directory (optional)"
 }

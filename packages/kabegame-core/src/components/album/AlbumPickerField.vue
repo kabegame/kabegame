@@ -58,6 +58,8 @@ const props = withDefaults(
     disabled?: boolean;
     /** 安卓下改用居中磨玻璃列表（点选即生效），而非底部滚轮选择器 */
     frosted?: boolean;
+    /** 节点是否可以被选中；桌面保留并置灰，安卓隐藏该行但继续展开其子项。 */
+    isSelectable?: (node: AlbumTreeNode) => boolean;
   }>(),
   { allowCreate: false, clearable: true, prependOptions: () => [], disabled: false, frosted: false },
 );
@@ -72,11 +74,13 @@ const isCompact = computed(() => useUiStore().isCompact);
 const pickerTitleResolved = computed(
   () => props.pickerTitle ?? props.placeholder ?? t("common.selectPlaceholder"),
 );
+const nodeIsSelectable = (node: AlbumTreeNode) => props.isSelectable?.(node) ?? true;
 
 const treeProps = {
   value: "value",
   label: "label",
   children: "children",
+  disabled: "disabled",
 };
 
 type TreeRow = {
@@ -85,6 +89,7 @@ type TreeRow = {
   count: number;
   children?: TreeRow[];
   isLeaf?: boolean;
+  disabled?: boolean;
 };
 
 function mapPrepend(o: { value: string; label: string }): TreeRow {
@@ -102,6 +107,7 @@ function mapNode(n: AlbumTreeNode): TreeRow {
     value: n.id,
     label: n.name,
     count: props.albumCounts[n.id] ?? 0,
+    disabled: !nodeIsSelectable(n),
     ...(children.length ? { children } : { isLeaf: true }),
   };
 }
@@ -126,7 +132,11 @@ const androidOptions = computed(() => {
     label: o.label,
     value: o.value,
   }));
-  const flat = flattenAlbumTreeForAndroidPicker(props.albumTree ?? [], props.albumCounts);
+  const flat = flattenAlbumTreeForAndroidPicker(
+    props.albumTree ?? [],
+    props.albumCounts,
+    nodeIsSelectable,
+  );
   if (props.allowCreate) {
     flat.push({ label: t("albums.createNewAlbum"), value: "__create_new__" });
   }
@@ -139,7 +149,11 @@ const frostedOptions = computed(() => {
     value: o.value,
     desc: o.desc,
   }));
-  const flat = flattenAlbumTreeForFrostedPicker(props.albumTree ?? [], props.albumCounts).map((n) => ({
+  const flat = flattenAlbumTreeForFrostedPicker(
+    props.albumTree ?? [],
+    props.albumCounts,
+    nodeIsSelectable,
+  ).map((n) => ({
     label: n.label,
     value: n.value,
     desc: n.childCount > 0

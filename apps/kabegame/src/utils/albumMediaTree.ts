@@ -51,11 +51,13 @@ export function buildAlbumMediaNodes(
       album,
       path: buildGalleryAlbumPath(album.id, hide),
       directTotal,
-      // 标签画册不汇总子标签：同一张图会挂在多个子标签上，加总出的数字没有意义，只取直接成员数
+      // 标签目录显示直接子画册数；标签叶子显示直接成员数。普通画册仍汇总子树图片数。
       aggregateTotal:
-        album.type === "label"
-          ? directTotal
-          : directTotal + children.reduce((sum, child) => sum + child.aggregateTotal, 0),
+        album.type === "label_dir"
+          ? children.length
+          : album.type === "label"
+            ? directTotal
+            : directTotal + children.reduce((sum, child) => sum + child.aggregateTotal, 0),
       children,
     };
   };

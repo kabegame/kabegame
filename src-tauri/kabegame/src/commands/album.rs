@@ -28,8 +28,9 @@ pub fn add_label_album(
     key: String,
     name: Option<String>,
     parent_id: Option<String>,
+    directory: bool,
 ) -> Result<Value, String> {
-    commands::album::add_label_album(key, name, parent_id)
+    commands::album::add_label_album(key, name, parent_id, directory)
 }
 
 #[tauri::command]

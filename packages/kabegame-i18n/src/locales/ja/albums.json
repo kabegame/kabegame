@@ -138,5 +138,11 @@
   "imageLabelsFilterPlaceholder": "名前またはキーで絞り込み",
   "imageLabelsNoCandidate": "追加できるラベルがありません",
   "imageLabelsAdd": "ラベルを追加",
-  "imageLabelsCreate": "新規ラベル"
+  "imageLabelsCreate": "新規ラベル",
+  "kindLabelDir": "ラベルディレクトリ",
+  "treeAddLabelDir": "新規ラベルディレクトリ",
+  "detailLabelDir": "ラベルディレクトリ",
+  "labelDirChildCount": "サブアルバム {count} 件",
+  "labelDirNoImagesHint": "ラベルディレクトリには画像を追加できません。配下のラベルに追加してください",
+  "selectParentLabelDir": "親ラベルディレクトリ（任意）"
 }

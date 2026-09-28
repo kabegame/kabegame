@@ -107,9 +107,9 @@ CREATE TABLE albums (
 CREATE UNIQUE INDEX idx_albums_name_scoped
     ON albums(COALESCE(parent_id, ''), LOWER(name));
 CREATE UNIQUE INDEX idx_albums_label_key
-    ON albums(COALESCE(parent_id, ''), LOWER(label_key)) WHERE type = 'label';
+    ON albums(COALESCE(parent_id, ''), LOWER(label_key)) WHERE type IN ('label', 'label_dir');
 CREATE INDEX idx_albums_label_path
-    ON albums(LOWER(label_path)) WHERE type = 'label';
+    ON albums(LOWER(label_path)) WHERE type IN ('label', 'label_dir');
 -- 本地文件夹同步画册：同一物理目录只能对应一个同步画册
 CREATE UNIQUE INDEX idx_albums_sync_folder
     ON albums(sync_folder) WHERE sync_folder IS NOT NULL;

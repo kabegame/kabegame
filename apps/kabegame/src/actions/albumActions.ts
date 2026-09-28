@@ -22,6 +22,8 @@ export interface AlbumActionContext extends ActionContext<Album> {
   isLocalFolder: boolean;
   /** 标签画册：多出「修改 key」 */
   isLabel: boolean;
+  /** 标签目录：允许新建子标签/子目录，但不能放图片。 */
+  isLabelDir: boolean;
   /** 虚拟盘门禁（宿主已算好：Albums.vue albumDriveEnabled） */
   albumDriveEnabled: boolean;
 }
@@ -53,9 +55,31 @@ export function createAlbumActions(): ActionItem<Album>[] {
         return (
           ext.target?.id !== ext.favoriteAlbumId &&
           ext.target?.id !== HIDDEN_ALBUM_ID &&
-          !ext.isLocalFolder
+          !ext.isLocalFolder &&
+          !ext.isLabel &&
+          !ext.isLabelDir
         );
       },
+    },
+    {
+      key: "createLabelChild",
+      label: t("contextMenu.createSubAlbum"),
+      icon: FolderAdd,
+      visible: (ctx) => (ctx as AlbumActionContext).isLabelDir,
+      children: [
+        {
+          key: "createSubLabel",
+          label: t("albums.treeAddLabel"),
+          icon: PriceTag,
+          command: "createSubLabel",
+        },
+        {
+          key: "createSubLabelDir",
+          label: t("albums.treeAddLabelDir"),
+          icon: Folder,
+          command: "createSubLabelDir",
+        },
+      ],
     },
     {
       key: "openVirtualDrive",
@@ -195,7 +219,10 @@ export function createAlbumActions(): ActionItem<Album>[] {
       label: t("contextMenu.setLabelKey"),
       icon: PriceTag,
       command: "setLabelKey",
-      visible: (ctx) => (ctx as AlbumActionContext).isLabel,
+      visible: (ctx) => {
+        const ext = ctx as AlbumActionContext;
+        return ext.isLabel || ext.isLabelDir;
+      },
     },
     {
       key: "moveTo",

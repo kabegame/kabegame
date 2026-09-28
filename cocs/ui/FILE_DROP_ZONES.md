@@ -78,7 +78,8 @@ scale factor，而 webview 所在窗口可能在副屏。`useFileDrop.resolveZon
 | 页面 | 热区元素 | 图片/视频 | 文件夹 | `.kgpg` |
 |---|---|---|---|---|
 | `Gallery.vue` | `.gallery-grid-pane` | `local-import` 导入画廊（无 `outputAlbumId`） | `local-import` 递归展开后扁平导入画廊 | ✗ |
-| `Albums.vue`（普通画册 / 标签画册） | 根 `.albums-page` | `local-import` 导入选中画册（标签画册即给导入的图片打上该标签） | `local-import` 递归展开后扁平导入选中画册 | ✗ |
+| `Albums.vue`（普通画册 / 标签叶子） | 根 `.albums-page` | `local-import` 导入选中画册（标签叶子即给导入的图片打上该标签） | `local-import` 递归展开后扁平导入选中画册 | ✗ |
+| `Albums.vue`（标签目录） | — | ✗ | ✗ | ✗ |
 | `Albums.vue`（local_folder） | 根 `.albums-page` | 复制进 `sync_folder` 后导入选中画册 | 递归展开、扁平复制进 `sync_folder` 后导入选中画册 | ✗ |
 | `Albums.vue`（收藏 / 隐藏 / 无选中） | — | ✗ | ✗ | ✗ |
 | `PluginBrowser.vue` | 根 `.plugin-browser-container` | ✗ | ✗ | 安装插件 |
@@ -97,7 +98,7 @@ scale factor，而 webview 所在窗口可能在副屏。`useFileDrop.resolveZon
 `DragFileOptions.disabled` 存在，但**不要用它承载响应式条件**：指令的 `updated` 只在组件
 patch 时触发，`disabled` 可能是陈旧值。`plan()` 是闭包，每次调用都读到最新的 ref。
 需要按页面状态拒绝时，判断一律写在 `plan()` 开头并返回 `null`。`Albums.vue` 在收藏、
-隐藏或无选中画册时就是这样拒绝；`local_folder` 不再拒绝拖入。
+隐藏、标签目录或无选中画册时就是这样拒绝；`local_folder` 不再拒绝拖入。
 
 ## 导入行为复用的既有 API
 

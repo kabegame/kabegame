@@ -4,6 +4,7 @@
       :model-value="pickerAlbumId"
       :album-tree="albumStore.albumTree"
       :album-counts="albumStore.albumCounts"
+      :is-selectable="(node) => node.type !== 'label_dir'"
       :prepend-options="rotationPrependOptions"
       :disabled="disabled || keyDisabled || wallpaperModeSwitching"
       :placeholder="t('settings.rotationTargetPlaceholder')"

@@ -193,7 +193,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 插件在 `downloadImage` 的 `labels` 里声明标签（V8 经 `parse_download_opts`，WebView 经 `crawl_download_image`，两处都调用 `storage::labels::validate_label_values`）。入口**只校验、不建画册**——下载可能失败；校验后的 `Vec<LabelSpec>` 随 `DownloadRequest` / `ActiveDownloadInfo` 搬运，失败时序列化进 `task_failed_images.labels`，重试时还原。
 
-入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建标签画册，只在叶子上挂图，随后发 `album-added`（新建的画册）与一次 `album-images-change`。去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息：失败只写任务日志警告，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
+入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建 `label_dir`，末端找或建 `label`，只在叶子上挂图，随后发 `album-added`（新建的画册）与一次 `album-images-change`。某项撞到相反类型时只跳过该标签并写任务 warn，同批其它标签继续；去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
 
 `images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
 

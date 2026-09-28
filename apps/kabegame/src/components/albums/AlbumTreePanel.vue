@@ -18,6 +18,10 @@
               <el-icon style="margin-right: 6px; vertical-align: middle;"><PriceTag /></el-icon>
               <span>{{ t("albums.treeAddLabel") }}</span>
             </el-dropdown-item>
+            <el-dropdown-item command="create-label-dir">
+              <el-icon style="margin-right: 6px; vertical-align: middle;"><Folder /></el-icon>
+              <span>{{ t("albums.treeAddLabelDir") }}</span>
+            </el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -67,7 +71,7 @@
           </el-icon>
           <span
             class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap"
-            :title="element.type === 'label' ? element.labelPath ?? undefined : undefined"
+            :title="isLabelForestKind(element.type) ? element.labelPath ?? undefined : undefined"
           >{{ displayNameOf(element) }}</span>
           <span class="flex-1" />
           <el-icon
@@ -116,6 +120,7 @@ import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
 import { AlbumTreeNode } from "@kabegame/core/types/album";
+import { isLabelForestKind } from "@kabegame/core/types/album";
 import { segmentsOfAlbumIdPath } from "@/composables/useAlbumIdPathState";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
@@ -139,8 +144,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   select: [albumId: string];
   "create-album": [parentId: string | null];
-  /** 新建标签画册：parentId 为空表示标签分区顶层 */
-  "create-label": [parentId: string | null];
+  /** 新建标签或标签目录：parentId 为空表示标签分区顶层。 */
+  "create-label": [parentId: string | null, directory: boolean];
   contextmenu: [album: Album, event: MouseEvent];
   /** 双击画册行：宿主用来开合右侧详情面板 */
   dblclick: [albumId: string];
@@ -186,7 +191,7 @@ const normalTreeRoots = computed<AlbumTreeNode[]>(() =>
 );
 
 const labelRoots = computed<AlbumTreeNode[]>(() =>
-  buildAlbumTreeFromFlat(albumStore.labelAlbums),
+  buildAlbumTreeFromFlat(albumStore.labelForestAlbums),
 );
 
 const localFolderRoots = computed<AlbumTreeNode[]>(() =>
@@ -254,9 +259,8 @@ function countOf(node: AlbumTreeNode): number {
   return aggregateCounts.value[node.id] ?? 0;
 }
 
-// 标签只计直接成员（不汇总子标签）；纯目录标签（有子标签、自身没图）的 0 没有信息量，不显示
-function showCount(node: AlbumTreeNode): boolean {
-  return !(node.type === "label" && (node.children?.length ?? 0) > 0 && countOf(node) === 0);
+function showCount(_node: AlbumTreeNode): boolean {
+  return true;
 }
 
 function folderIconOf(node: AlbumTreeNode) {
@@ -264,11 +268,13 @@ function folderIconOf(node: AlbumTreeNode) {
   if (node.id === HIDDEN_ALBUM_ID) return Delete;
   // 普通画册用画廊同款 Picture，Folder 留给本地文件夹画册，避免两者混淆
   if (node.type === "local_folder") return Folder;
+  if (node.type === "label_dir") return Folder;
   if (node.type === "label") return PriceTag;
   return Picture;
 }
 function folderIconClass(node: AlbumTreeNode): string {
   if (node.type === "local_folder") return "text-[#7c3aed]";
+  if (node.type === "label_dir") return "text-[#0891b2]";
   if (node.type === "label") return "text-[#0d9488]";
   if (node.id === FAVORITE_ALBUM_ID) return "text-[#e11d48]";
   return "album-tree-dim";
@@ -312,9 +318,14 @@ function onRowContextMenu(element: AlbumTreeNode, event: MouseEvent) {
 function onTitleMenuCommand(command: string) {
   const id = props.selectedId;
   const album = id ? albumStore.albums.find((a) => a.id === id) : null;
-  if (command === "create-label") {
-    // 选中的是标签画册时建成它的子标签，否则建在标签分区顶层
-    emit("create-label", album?.type === "label" ? album.id : null);
+  if (command === "create-label" || command === "create-label-dir") {
+    // 目录下直接创建；选中叶子时回到它的父目录；其它分区则创建在标签森林根级。
+    const parentId = album?.type === "label_dir"
+      ? album.id
+      : album?.type === "label"
+        ? album.parentId
+        : null;
+    emit("create-label", parentId, command === "create-label-dir");
     return;
   }
   if (command !== "create-album") return;
@@ -335,7 +346,8 @@ const dnd: TreeDndController<AlbumTreeNode> = {
     if (target.id === FAVORITE_ALBUM_ID || target.id === HIDDEN_ALBUM_ID) return false;
     if (target.type === "local_folder") return false;
     // 标签森林与普通画册互不嵌套（后端 move_album 同款守卫）
-    if ((src.type === "label") !== (target.type === "label")) return false;
+    if (isLabelForestKind(src.type) !== isLabelForestKind(target.type)) return false;
+    if (isLabelForestKind(src.type) && target.type === "label") return false;
     if (albumStore.getDescendantIds(src.id).includes(target.id)) return false;
     return { accept: true, position: "inside", autoExpand: true };
   },

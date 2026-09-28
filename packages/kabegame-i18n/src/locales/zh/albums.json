@@ -139,5 +139,11 @@
   "imageLabelsFilterPlaceholder": "按名称或 key 筛选标签",
   "imageLabelsNoCandidate": "没有可添加的标签",
   "imageLabelsAdd": "添加标签",
-  "imageLabelsCreate": "新建标签"
+  "imageLabelsCreate": "新建标签",
+  "kindLabelDir": "标签目录",
+  "treeAddLabelDir": "新建标签目录",
+  "detailLabelDir": "标签目录",
+  "labelDirChildCount": "{count} 个子画册",
+  "labelDirNoImagesHint": "标签目录不能放图片，请放到其下的标签里",
+  "selectParentLabelDir": "上级标签目录（可选）"
 }

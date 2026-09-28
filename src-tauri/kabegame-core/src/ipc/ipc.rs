@@ -143,6 +143,7 @@ pub enum IpcRequest {
         key: String,
         name: Option<String>,
         parent_id: Option<String>,
+        directory: bool,
     },
 
     /// 删除画册

@@ -64,6 +64,9 @@ albums:
     labelForestIsolated: 标签画册只能嵌套在标签画册下，其他画册不能进入标签森林
     labelKeyInvalid: "标签 key 只允许 ASCII 字母、数字、'_'、'-'、英文括号和空格（空格不能在首尾或连续），且不能超过 64 字节"
     labelKeyExists: 当前层级已存在相同 key 的标签画册
+    labelLeafNoChildren: 标签是叶子节点，不能包含子画册
+    labelDirNoImages: 标签目录不能放图片，请放到其下的标签里
+    labelKindConflict: 标签路径与已有节点类型冲突，已跳过该标签
   localFolderErrors:
     androidUnsupported: 安卓平台不支持本地文件夹同步
     notLocalFolder: 只有本地文件夹画册可以转换为普通画册

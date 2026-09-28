@@ -24,7 +24,7 @@ pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
 /// metadata 行，逐行调用可选的 `migrate(input)` / `provideLabels(input)`。
 /// 不论脚本装载或行级执行是否成功，都会把行版本盖为当前 packed 版本；
 /// 失败时写回原始 data，避免坏脚本在每次启动时无限重试。
-pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
+fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
     let Some(script) = plugin.metadata_migration.as_deref() else {
         return Ok(false);
     };
@@ -116,12 +116,22 @@ async fn run_metadata_migrations(
                     if !specs.is_empty() {
                         let image_ids = storage.image_ids_by_metadata(row_id);
                         match image_ids.and_then(|image_ids| {
-                            let album_ids = storage.apply_labels_to_images(&specs, &image_ids)?;
-                            Ok((album_ids, image_ids))
+                            let applied = storage.apply_labels_to_images(&specs, &image_ids)?;
+                            Ok((applied, image_ids))
                         }) {
-                            Ok((album_ids, image_ids)) => {
-                                let changed_membership = !album_ids.is_empty();
-                                for album_id in album_ids {
+                            Ok((applied, image_ids)) => {
+                                for (spec, error) in applied.skipped {
+                                    let path = format!(
+                                        "{}/{}",
+                                        spec.segments.join("/"),
+                                        spec.key
+                                    );
+                                    eprintln!(
+                                        "[metadata-migration] plugin `{plugin_id}` row {row_id} label `{path}` skipped: {error}"
+                                    );
+                                }
+                                let changed_membership = !applied.album_ids.is_empty();
+                                for album_id in applied.album_ids {
                                     if touched_seen.insert(album_id.clone()) {
                                         touched.push(album_id);
                                     }

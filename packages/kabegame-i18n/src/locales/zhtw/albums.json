@@ -139,5 +139,11 @@
   "imageLabelsFilterPlaceholder": "依名稱或 key 篩選標籤",
   "imageLabelsNoCandidate": "沒有可新增的標籤",
   "imageLabelsAdd": "新增標籤",
-  "imageLabelsCreate": "建立標籤"
+  "imageLabelsCreate": "建立標籤",
+  "kindLabelDir": "標籤目錄",
+  "treeAddLabelDir": "新增標籤目錄",
+  "detailLabelDir": "標籤目錄",
+  "labelDirChildCount": "{count} 個子畫冊",
+  "labelDirNoImagesHint": "標籤目錄不能放圖片，請放到其下的標籤裡",
+  "selectParentLabelDir": "上層標籤目錄（可選）"
 }

@@ -39,7 +39,10 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
             key,
             name,
             parent_id,
-        } => Some(albums::add_label_album(key, name.as_deref(), parent_id.as_deref()).await),
+            directory,
+        } => Some(
+            albums::add_label_album(key, name.as_deref(), parent_id.as_deref(), *directory).await,
+        ),
         IpcRequest::StorageDeleteAlbum { album_id } => Some(albums::delete_album(album_id).await),
         IpcRequest::StorageRenameAlbum { album_id, new_name } => {
             Some(albums::rename_album(album_id, new_name).await)

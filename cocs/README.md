@@ -46,7 +46,7 @@
   - 适用场景：排查翻页/offset、每页条数切换不刷新、列表加载失败；区分 SimplePage 与 VD Greedy 的 `LEAF_SIZE` 行为；排查画册/任务/畅游视图刷新与事件过滤；排查详情区插件描述/metadata 未显示或缓存未失效。
 
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
-  - 主题：图片标签即 `type='label'` 的标签画册。涵盖独立标签森林与同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、内容只含直接成员、计数不汇总子标签、`storage/labels.rs` 标识符规则（标签 key 允许括号与空格，插件 id 用更严的子集 `is_plugin_ident`）、`ensure_label_path` 插件寻址与撞名退化、三条标签来源（下载 `labels` / 去重命中受开关控制 / 迁移 `provideLabels`）、`search/label` 与 `search/label-tree` 的关系除法 SQL 与 `kb_label_tokens`、前端树分区 / 新建对话框 / 预览标签面板 slot。
+  - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子计数口径、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 与 `search/label-tree`，以及前端树 / 选择器 / 预览面板。
   - 适用场景：新增或排查标签画册的建立、移动、改 key；插件下载或迁移没有挂上标签；标签搜索结果不对；给预览弹窗注入 app 侧信息面板。
 
 ## 本地文件夹（`local-folder/`）

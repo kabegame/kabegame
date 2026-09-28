@@ -11,6 +11,7 @@ import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChang
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import type { AlbumKind, AlbumSyncMode, AlbumTreeNode } from "@kabegame/core/types/album";
+import { isLabelForestKind } from "@kabegame/core/types/album";
 import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
 import {
   buildAlbumMediaNodes,
@@ -90,7 +91,7 @@ function parseAlbumSyncMode(raw: unknown): AlbumSyncMode {
 }
 
 function parseAlbumKind(raw: unknown): AlbumKind {
-  return raw === "local_folder" || raw === "label" ? raw : "normal";
+  return raw === "local_folder" || raw === "label" || raw === "label_dir" ? raw : "normal";
 }
 
 function parseOptionalString(raw: unknown): string | null {
@@ -123,8 +124,8 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
     folderStatus,
     syncMode,
     ancestorPath,
-    labelKey: type === "label" ? parseOptionalString(a.label_key ?? a.labelKey) : null,
-    labelPath: type === "label" ? parseOptionalString(a.label_path ?? a.labelPath) : null,
+    labelKey: isLabelForestKind(type) ? parseOptionalString(a.label_key ?? a.labelKey) : null,
+    labelPath: isLabelForestKind(type) ? parseOptionalString(a.label_path ?? a.labelPath) : null,
   };
 }
 
@@ -179,8 +180,13 @@ export const useAlbumStore = defineStore("albums", () => {
     return albums.value.some((a) => a.id === albumId && a.type === "local_folder");
   };
 
-  /** 全部标签画册（标签森林的扁平列表） */
+  /** 可挂图的标签叶子；预览面板候选与复制标签只使用这一列表。 */
   const labelAlbums = computed<Album[]>(() => albums.value.filter((a) => a.type === "label"));
+
+  /** 标签森林的全部目录与叶子，供树分区展示。 */
+  const labelForestAlbums = computed<Album[]>(() =>
+    albums.value.filter((a) => isLabelForestKind(a.type)),
+  );
 
   const isLabelAlbum = (albumId: string | null | undefined): boolean => {
     if (!albumId) return false;
@@ -271,7 +277,10 @@ export const useAlbumStore = defineStore("albums", () => {
   const getAlbumStats = (hide = false) => aggregateStatsRef(hide).value;
 
   const refreshAlbumDirectCounts = async (hide = false, albumIds?: Iterable<string>) => {
-    const ids = albumIds ?? albums.value.map((album) => album.id);
+    const requested = new Set(albumIds ?? albums.value.map((album) => album.id));
+    const ids = albums.value
+      .filter((album) => album.type !== "label_dir" && requested.has(album.id))
+      .map((album) => album.id);
     patchAlbumDirectCounts(await fetchAlbumDirectCounts(ids, hide), hide);
   };
 
@@ -279,12 +288,16 @@ export const useAlbumStore = defineStore("albums", () => {
    * 排除若干画册（仅从扁平列表过滤后再建树）。
    * `excludeLocalFolder`：本地文件夹画册的父子关系由磁盘路径唯一决定，不能作为
    * 新建/移动的目标父级——传 true 时连同其整棵子树一起从候选树中剔除。
-   * `excludeLabel` / `onlyLabel`：标签画册自成一片森林，不与普通画册互相嵌套——
-   * 普通画册的父级候选排除标签森林，标签画册的父级候选只留标签森林。
+   * `excludeLabel` / `onlyLabel`：按整个标签森林过滤；`onlyLabelDir` 只保留可作父级的标签目录。
    */
   const getAlbumTreeExcluding = (
     excludeIds: string[],
-    opts?: { excludeLocalFolder?: boolean; excludeLabel?: boolean; onlyLabel?: boolean },
+    opts?: {
+      excludeLocalFolder?: boolean;
+      excludeLabel?: boolean;
+      onlyLabel?: boolean;
+      onlyLabelDir?: boolean;
+    },
   ): AlbumTreeNode[] => {
     const exclude = new Set(excludeIds);
     return buildAlbumTreeFromFlat(
@@ -292,8 +305,9 @@ export const useAlbumStore = defineStore("albums", () => {
         (a) =>
           !exclude.has(a.id) &&
           !(opts?.excludeLocalFolder && a.type === "local_folder") &&
-          !(opts?.excludeLabel && a.type === "label") &&
-          !(opts?.onlyLabel && a.type !== "label"),
+          !(opts?.excludeLabel && isLabelForestKind(a.type)) &&
+          !(opts?.onlyLabel && !isLabelForestKind(a.type)) &&
+          !(opts?.onlyLabelDir && a.type !== "label_dir"),
       ),
     );
   };
@@ -330,10 +344,10 @@ export const useAlbumStore = defineStore("albums", () => {
     const memo = new Map<string, string | null>();
     const pathOf = (album: Album, seen: Set<string>): string | null => {
       if (memo.has(album.id)) return memo.get(album.id)!;
-      if (album.type !== "label" || !album.labelKey) return null;
+      if (!isLabelForestKind(album.type) || !album.labelKey) return null;
       const parent = album.parentId ? byId.get(album.parentId) : undefined;
       const parentPath =
-        parent && parent.type === "label" && !seen.has(parent.id)
+        parent && isLabelForestKind(parent.type) && !seen.has(parent.id)
           ? pathOf(parent, new Set(seen).add(parent.id))
           : null;
       const path = parentPath ? `${parentPath}/${album.labelKey}` : album.labelKey;
@@ -341,7 +355,7 @@ export const useAlbumStore = defineStore("albums", () => {
       return path;
     };
     for (const album of albums.value) {
-      if (album.type === "label") album.labelPath = pathOf(album, new Set([album.id]));
+      if (isLabelForestKind(album.type)) album.labelPath = pathOf(album, new Set([album.id]));
     }
   };
 
@@ -489,7 +503,7 @@ export const useAlbumStore = defineStore("albums", () => {
         .map(albumFromProviderRow)
         .filter((a): a is Album => !!a);
       albums.value = rows.sort((a, b) => b.createdAt - a.createdAt);
-      const ids = rows.map((a) => a.id);
+      const ids = rows.filter((a) => a.type !== "label_dir").map((a) => a.id);
       try {
         setAlbumDirectCounts(await fetchAlbumDirectCounts(ids, false), false);
       } catch (e) {
@@ -541,7 +555,12 @@ export const useAlbumStore = defineStore("albums", () => {
 
   /** 新建标签画册：父级只能为空（标签分区顶层）或另一个标签画册；名称缺省等于 key。 */
   const createLabelAlbum = async (
-    args: { key: string; name?: string | null; parentId?: string | null },
+    args: {
+      key: string;
+      name?: string | null;
+      parentId?: string | null;
+      directory?: boolean;
+    },
   ): Promise<Album> => {
     await initEventListeners();
     try {
@@ -549,6 +568,7 @@ export const useAlbumStore = defineStore("albums", () => {
         key: args.key,
         name: args.name?.trim() || null,
         parentId: args.parentId ?? null,
+        directory: args.directory ?? false,
       });
       const row = normalizeAlbumRow(created);
       if (!albums.value.some((a) => a.id === row.id)) {
@@ -770,6 +790,7 @@ export const useAlbumStore = defineStore("albums", () => {
     localFolderAlbumIds,
     isLocalFolderAlbum,
     labelAlbums,
+    labelForestAlbums,
     isLabelAlbum,
     getAlbumTreeExcluding,
     createAlbum,

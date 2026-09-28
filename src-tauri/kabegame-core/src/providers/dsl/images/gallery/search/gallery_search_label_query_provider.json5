@@ -7,7 +7,7 @@
         "tree": { "type": "string", "default": "0", "optional": false }
     },
     "query": {
-        "where": "json_array_length(kb_label_tokens(${properties.query})) > 0 AND NOT EXISTS (SELECT 1 FROM json_each(kb_label_tokens(${properties.query})) tok WHERE NOT EXISTS (SELECT 1 FROM album_images lai JOIN albums la ON la.id = lai.album_id AND la.type = 'label' JOIN albums lm ON lm.type = 'label' AND (CASE WHEN instr(tok.value, '/') > 0 THEN LOWER(lm.label_path) ELSE LOWER(lm.label_key) END) = tok.value WHERE lai.image_id = images.id AND (la.id = lm.id OR (${properties.tree} = '1' AND instr(la.ancestor_path, '/' || lm.id || '/') > 0))))"
+        "where": "json_array_length(kb_label_tokens(${properties.query})) > 0 AND NOT EXISTS (SELECT 1 FROM json_each(kb_label_tokens(${properties.query})) tok WHERE NOT EXISTS (SELECT 1 FROM album_images lai JOIN albums la ON la.id = lai.album_id AND la.type = 'label' JOIN albums lm ON lm.type IN ('label', 'label_dir') AND (CASE WHEN instr(tok.value, '/') > 0 THEN LOWER(lm.label_path) ELSE LOWER(lm.label_key) END) = tok.value WHERE lai.image_id = images.id AND (la.id = lm.id OR (${properties.tree} = '1' AND instr(la.ancestor_path, '/' || lm.id || '/') > 0))))"
     },
     "resolve": {
         ".*": {

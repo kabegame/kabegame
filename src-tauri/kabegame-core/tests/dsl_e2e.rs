@@ -19,7 +19,6 @@ const FAVORITE_ALBUM_ID: &str = kabegame_core::storage::FAVORITE_ALBUM_ID;
 const HIDDEN_ALBUM_ID: &str = kabegame_core::storage::HIDDEN_ALBUM_ID;
 const ALBUM_A_ID: &str = "11111111-1111-1111-1111-111111111111";
 const TASK_A_ID: &str = "22222222-2222-2222-2222-222222222222";
-const LABEL_CHARACTER_ID: &str = "55555555-5555-5555-5555-555555555555";
 const LABEL_HATSUNE_ID: &str = "66666666-6666-6666-6666-666666666666";
 const LABEL_VOCALOID_ID: &str = "77777777-7777-7777-7777-777777777777";
 static LOCALE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -328,8 +327,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL, '/11111111-1111-1111-1111-111111111111/'),
             ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111', '/11111111-1111-1111-1111-111111111111/33333333-3333-3333-3333-333333333333/');
         INSERT INTO albums(id, name, created_at, parent_id, type, ancestor_path, label_key, label_path) VALUES
-            ('44444444-4444-4444-4444-444444444444', 'Pixiv', 3, NULL, 'label', '/44444444-4444-4444-4444-444444444444/', 'Pixiv', 'Pixiv'),
-            ('55555555-5555-5555-5555-555555555555', '角色', 4, '44444444-4444-4444-4444-444444444444', 'label', '/44444444-4444-4444-4444-444444444444/55555555-5555-5555-5555-555555555555/', 'Character', 'Pixiv/Character'),
+            ('44444444-4444-4444-4444-444444444444', 'Pixiv', 3, NULL, 'label_dir', '/44444444-4444-4444-4444-444444444444/', 'Pixiv', 'Pixiv'),
+            ('55555555-5555-5555-5555-555555555555', '角色', 4, '44444444-4444-4444-4444-444444444444', 'label_dir', '/44444444-4444-4444-4444-444444444444/55555555-5555-5555-5555-555555555555/', 'Character', 'Pixiv/Character'),
             ('66666666-6666-6666-6666-666666666666', '初音未来', 5, '55555555-5555-5555-5555-555555555555', 'label', '/44444444-4444-4444-4444-444444444444/55555555-5555-5555-5555-555555555555/66666666-6666-6666-6666-666666666666/', 'Hatsune', 'Pixiv/Character/Hatsune'),
             ('77777777-7777-7777-7777-777777777777', 'Vocaloid', 6, '44444444-4444-4444-4444-444444444444', 'label', '/44444444-4444-4444-4444-444444444444/77777777-7777-7777-7777-777777777777/', 'Vocaloid', 'Pixiv/Vocaloid');
         INSERT INTO metadata(id, data, plugin_version, plugin_id) VALUES
@@ -458,7 +457,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
     for (album_id, image_id) in [
         (LABEL_HATSUNE_ID, 1_i64),
         (LABEL_VOCALOID_ID, 1_i64),
-        (LABEL_CHARACTER_ID, 2_i64),
+        (LABEL_HATSUNE_ID, 2_i64),
         (LABEL_HATSUNE_ID, 3_i64),
     ] {
         conn.execute(
@@ -1014,17 +1013,29 @@ fn gallery_label_search_supports_and_paths_case_and_tree_semantics() {
         ids(runtime
             .fetch(r"images://gallery/search/label/Pixiv\/CHARACTER\/Hatsune/sort/by-id")
             .unwrap()),
-        ["1", "3"]
+        ["1", "2", "3"]
     );
     assert_eq!(
         ids(runtime
             .fetch("images://gallery/search/label/character/sort/by-id")
             .unwrap()),
-        ["2"]
+        Vec::<String>::new()
     );
     assert_eq!(
         ids(runtime
             .fetch("images://gallery/search/label-tree/CHARACTER/sort/by-id")
+            .unwrap()),
+        ["1", "2", "3"]
+    );
+}
+
+#[test]
+fn gallery_label_tree_search_by_directory_key_matches_descendant_labels() {
+    let runtime = build_runtime();
+
+    assert_eq!(
+        ids(runtime
+            .fetch("images://gallery/search/label-tree/character/sort/by-id")
             .unwrap()),
         ["1", "2", "3"]
     );
