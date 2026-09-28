@@ -20,7 +20,7 @@ index 382047b9672084af59ad245bdbeffa0ba9a7cec2..3bf45d8c231a053a4aaf2a02f5fae250
  
  #endif  // CEF_INCLUDE_CEF_DRAG_DATA_H_
 diff --git a/include/cef_drag_handler.h b/include/cef_drag_handler.h
-index ca449ca76f7b0d05daef35376e6073377a261f1f..76ae104f9c5ec541124c774acf1e86839f9012a2 100644
+index ca449ca76f7b0d05daef35376e6073377a261f1f..d32faeef487318358f47ea8f50813a05f08210e3 100644
 --- a/include/cef_drag_handler.h
 +++ b/include/cef_drag_handler.h
 @@ -100,6 +100,19 @@ class CefDragHandler : public virtual CefBaseRefCounted {
@@ -34,7 +34,7 @@ index ca449ca76f7b0d05daef35376e6073377a261f1f..76ae104f9c5ec541124c774acf1e8683
 +  /// the platform advertise a file drag and drops the drag's URL, text and file
 +  /// contents payloads. A renderer-initiated drag can never carry filenames on
 +  /// its own, so this is the only way for a client to hand out real files from
-+  /// page content. Currently only called on Linux for windowed browsers.
++  /// page content. Currently called on Linux and macOS for windowed browsers.
 +  ///
 +  /*--cef(added=experimental)--*/
 +  virtual void OnStartDragging(CefRefPtr<CefBrowser> browser,
@@ -137,10 +137,10 @@ index 33e372fc3016ff6125663107b7ee81af1fe8d497..d610d7463c5e1730e45a57b3657ca513
  ]
 diff --git a/patch/patches/kabegame_drag_source_filenames.patch b/patch/patches/kabegame_drag_source_filenames.patch
 new file mode 100644
-index 0000000000000000000000000000000000000000..9f7ddf3ce381946cada5e259758b3aacb8362d90
+index 0000000000000000000000000000000000000000..8754ba59813253346fe1e10f30f8eed966eea5fb
 --- /dev/null
 +++ b/patch/patches/kabegame_drag_source_filenames.patch
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,209 @@
 +diff --git content/public/browser/web_contents_view_delegate.h content/public/browser/web_contents_view_delegate.h
 +--- content/public/browser/web_contents_view_delegate.h
 ++++ content/public/browser/web_contents_view_delegate.h
@@ -166,8 +166,8 @@ index 0000000000000000000000000000000000000000..9f7ddf3ce381946cada5e259758b3aac
 ++  // to express that. Returning a non-empty vector makes the view build the
 ++  // platform payload from those files instead of from the drag's URLs.
 ++  //
-++  // Called on the UI thread from the view's StartDragging(), before the data is
-++  // handed to the platform drag loop. Currently only called on Linux.
+++  // Called on the UI thread from the view's StartDragging(), before the data
+++  // is handed to the platform drag loop. Called on Linux and macOS only.
 ++  virtual std::vector<ui::FileInfo> GetDragFilenames(const DropData& drop_data);
 ++
 +   // Performs the actions needed for a drop and then calls the completion
@@ -230,3 +230,123 @@ index 0000000000000000000000000000000000000000..9f7ddf3ce381946cada5e259758b3aac
 + 
 +   auto data = std::make_unique<ui::OSExchangeData>(std::move(provider));
 +   data->SetSource(std::make_unique<ui::DataTransferEndpoint>(
++diff --git content/browser/web_contents/web_contents_view_mac.mm content/browser/web_contents/web_contents_view_mac.mm
++--- content/browser/web_contents/web_contents_view_mac.mm
+++++ content/browser/web_contents/web_contents_view_mac.mm
++@@ -250,14 +250,48 @@ void SetReadWritePermissionsForFile(base::File& file) {
++       source_rfh.GetProcess()->GetID();
++   const blink::DocumentToken& document_token =
++       static_cast<RenderFrameHostImpl&>(source_rfh).GetDocumentToken();
+++
+++  // A renderer-initiated drag can never carry filenames (they are cleared in
+++  // RenderWidgetHostImpl::FilterDropData), so give the delegate a chance to
+++  // supply them out-of-band.
+++  //
+++  // When it does, every payload that WebDragSource would offer as a competing
+++  // flavor has to go away. A destination takes the first flavor it understands
+++  // out of -writableTypesForPasteboard:, so a leftover URL or the dragged
+++  // element's own bytes can win over the file: for an <img> drag in a gallery
+++  // grid those bytes are the thumbnail, not the original behind it.
+++  // `download_metadata` matters more here than it does on Linux, where nothing
+++  // consumes it -- WebDragSource turns it into a promised-file flavor, and the
+++  // destination would then trigger a fresh download into the drop location
+++  // instead of taking the file that is already on disk. `html` goes for the
+++  // same reason: rich text destinations such as Mail and TextEdit prefer it
+++  // over public.file-url and would embed the <img> markup, which points back
+++  // at the local HTTP server, rather than attach the file.
+++  DropData delegate_drop_data;
+++  const DropData* effective_drop_data = &drop_data;
+++  if (delegate() && drop_data.filenames.empty()) {
+++    std::vector<ui::FileInfo> delegate_filenames =
+++        delegate()->GetDragFilenames(drop_data);
+++    if (!delegate_filenames.empty()) {
+++      delegate_drop_data = drop_data;
+++      delegate_drop_data.filenames = std::move(delegate_filenames);
+++      delegate_drop_data.url_infos.clear();
+++      delegate_drop_data.text.reset();
+++      delegate_drop_data.html.reset();
+++      delegate_drop_data.file_contents.clear();
+++      delegate_drop_data.download_metadata.reset();
+++      effective_drop_data = &delegate_drop_data;
+++    }
+++  }
+++
++   if (remote_ns_view_) {
++     remote_ns_view_->StartDrag(render_process_id, document_token, source_origin,
++-                               drop_data, mask, image, cursor_offset,
+++                               *effective_drop_data, mask, image, cursor_offset,
++                                is_privileged);
++   } else {
++-    in_process_ns_view_bridge_->StartDrag(render_process_id, document_token,
++-                                          source_origin, drop_data, mask, image,
++-                                          cursor_offset, is_privileged);
+++    in_process_ns_view_bridge_->StartDrag(
+++        render_process_id, document_token, source_origin, *effective_drop_data,
+++        mask, image, cursor_offset, is_privileged);
++   }
++ }
++ 
++diff --git content/app_shim_remote_cocoa/web_drag_source_mac.mm content/app_shim_remote_cocoa/web_drag_source_mac.mm
++--- content/app_shim_remote_cocoa/web_drag_source_mac.mm
+++++ content/app_shim_remote_cocoa/web_drag_source_mac.mm
++@@ -96,15 +96,43 @@ - (void)webContentsIsGone {
++   // accept.
++   [writableTypes addObject:ui::kUTTypeChromiumInitiatedDrag];
++ 
++-  // Always add kUTTypeChromiumRendererInitiatedDrag as all drags initiated here
++-  // are drags from the web.
++-  [writableTypes addObject:ui::kUTTypeChromiumRendererInitiatedDrag];
+++  // Add kUTTypeChromiumRendererInitiatedDrag as all drags initiated here are
+++  // drags from the web -- unless the WebContentsViewDelegate vouched for local
+++  // files (see WebContentsViewMac::StartDragging).
+++  //
+++  // On macOS this flavor is how the taint crosses to another application: a
+++  // receiving Chromium reads it back as DropData::did_originate_from_renderer,
+++  // and RenderWidgetHostImpl::FilterDropData() then drops every filename. Left
+++  // on, the file would be invisible to Chrome, to Electron apps and to this
+++  // browser itself, while native apps still saw it. Linux has no such leak --
+++  // there the taint lives in a member of OSExchangeDataProviderNonBacked that
+++  // never reaches the wire -- so omitting it here only gives the delegate path
+++  // the behavior the aura path already has. The paths are not renderer data:
+++  // the delegate produced them, and every renderer-authored payload was
+++  // cleared alongside them.
+++  if (_dropData.filenames.empty()) {
+++    [writableTypes addObject:ui::kUTTypeChromiumRendererInitiatedDrag];
+++  }
++ 
++   // Tag the drag as coming from a privileged WebContents if needed.
++   if (_privileged) {
++     [writableTypes addObject:ui::kUTTypeChromiumPrivilegedInitiatedDrag];
++   }
++ 
+++  // Local files supplied by the WebContentsViewDelegate (see
+++  // WebContentsViewMac::StartDragging). Declared ahead of the URL and file
+++  // contents flavors below: this array is the preference order a destination
+++  // resolves against, and a file drag is only a file drag if the receiver
+++  // reaches public.file-url first.
+++  //
+++  // Only the first file is offered. One WebDragSource is one
+++  // NSPasteboardWriting object, which -startDragWithDropData: wraps in a single
+++  // NSDraggingItem; expressing several files means several NSPasteboardItems,
+++  // each needing its own dragging item and frame.
+++  if (!_dropData.filenames.empty()) {
+++    [writableTypes addObject:NSPasteboardTypeFileURL];
+++  }
+++
++   // URL (and title).
++   if (!_dropData.url_infos.empty()) {
++     [writableTypes addObject:NSPasteboardTypeURL];
++@@ -210,6 +238,13 @@ - (id)pasteboardPropertyListForType:(NSPasteboardType)type {
++     return base::SysUTF16ToNSString(kHtmlHeader + *_dropData.html);
++   }
++ 
+++  // Local file.
+++  if ([type isEqualToString:NSPasteboardTypeFileURL]) {
+++    DCHECK(!_dropData.filenames.empty());
+++    return base::apple::FilePathToNSURL(_dropData.filenames.front().path)
+++        .absoluteString;
+++  }
+++
++   // URL.
++   if ([type isEqualToString:NSPasteboardTypeURL]) {
++     DCHECK(!_dropData.url_infos.empty());

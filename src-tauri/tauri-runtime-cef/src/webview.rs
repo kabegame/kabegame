@@ -830,7 +830,7 @@ mod imp {
                 _browser: Option<&mut Browser>,
                 drag_data: Option<&mut DragData>,
             ) {
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
                     let Some(drag_data) = drag_data else { return };
                     let custom_data = drag_data
@@ -858,8 +858,9 @@ mod imp {
                     let Some(path_str) = path.to_str() else {
                         return;
                     };
-                    // Linux 三条落地路径都按 path 的 basename 命名并忽略 display_name;
-                    // 仍填入 basename,保证 CEF 的 GetFileNames() 语义自洽。
+                    // 两个平台的落地路径都按 path 的 basename 命名、忽略 display_name
+                    // (macOS 侧是 public.file-url,接收端取 lastPathComponent);仍填入
+                    // basename,保证 CEF 的 GetFileNames() 语义自洽。
                     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
                     drag_data.add_file(
                         Some(&CefString::from(path_str)),

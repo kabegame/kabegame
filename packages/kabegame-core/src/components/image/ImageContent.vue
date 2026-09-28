@@ -107,7 +107,7 @@ import { sendDebugEvent } from "../../debugIngest";
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { fileToUrl, thumbnailToUrl, compatibleToUrl, downloadToUrl } from "../../utils/fileUrl";
-import { IS_ANDROID, IS_LINUX } from "../../env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS } from "../../env";
 
 /**
  * 资源开始加载
@@ -229,7 +229,10 @@ const onDragStart = (event: DragEvent) => {
   beginInternalDrag();
   const dt = event.dataTransfer;
   if (!dt) return;
-  if (IS_LINUX) {
+  // Linux / macOS 走真实文件拖出：只提议 image id，由 browser process 侧授权后注入
+  // 本地路径（见 cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md）。这里写 HTTP URL 是徒劳的
+  // ——链路生效时 Chromium patch 会把 URL、text 与缩略图字节一并清掉。
+  if (IS_LINUX || IS_MACOS) {
     if (props.image.id) dt.setData(DRAG_IMAGE_ID_MIME, props.image.id);
     return;
   }

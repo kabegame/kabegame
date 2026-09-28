@@ -199,16 +199,18 @@ web 与 Android 不开放；路径白名单与 `/file` 完全一致（必须真�
 | [ ] | 多显示器与缩放 | Linux Wayland 会话 | 在不同缩放比的显示器间移动窗口 | 不模糊、不错位；拖入热区命中仍然准 | Wayland 的缩放语义与 X11 不同，这里最容易出偏移 |
 | [ ] | 壁纸设置 | Linux Wayland 会话 | 设置一张静态壁纸和一张视频壁纸 | 设置成功并生效 | 壁纸走桌面环境接口，与 ozone 后端无关，属兜底 |
 
-## Linux 拖出真实本地文件
+## Linux / macOS 拖出真实本地文件
 
 本节验证的是浏览器进程授权并注入真实本地路径的新链路，与上一节的 ozone 会话探测和
 `/download` URL 文件名修复是两批独立改动，不能用上一节的结果代替。
 
 **前置条件：必须先应用 `third-patches/cef/0003-drag-source-filenames.patch`，用它重新构建
 CEF/Chromium，再用该 CEF 构建并运行应用。** 如果仍使用旧 CEF，新的 delegate 回调根本不会被
-调用，拖拽会退化成 Blink 为 `<img>` 自动填充的缩略图载荷——前端在 Linux 上已不再写
-`DownloadURL` / `text/uri-list` / `text/plain`，没有 HTTP URL 兜底了。这表示前置条件未满足，
-不是本功能失效。
+调用，拖拽会退化成 Blink 为 `<img>` 自动填充的缩略图载荷——前端在 Linux 与 macOS 上均已
+不再写 `DownloadURL` / `text/uri-list` / `text/plain`，没有 HTTP URL 兜底了。这表示前置条件
+未满足，不是本功能失效。
+
+### Linux
 
 除明确写为 Windows 的用例外，下面每条 Linux 用例都必须在 **原生 Wayland 与 X11 会话各跑
 一遍**，不能只用 `KABEGAME_OZONE_PLATFORM` 在同一会话下代替完整的双会话验证。
@@ -225,8 +227,36 @@ CEF/Chromium，再用该 CEF 构建并运行应用。** 如果仍使用旧 CEF�
 | [ ] | 不存在的 image id | Linux Wayland / X11（各一次） | 在 `main` 的调试会话中把 custom mime 值替换为 DB 中不存在的 id，再拖到外部目标 | 拖拽中**不带本地文件**：没有 filename / `file://` 项；Linux 上也不再有 HTTP URL 回落，目标端只会拿到 Blink 默认的缩略图载荷 | 同时确认应用不崩溃、拖拽线程不卡死 |
 | [ ] | 原图内容校验 | Linux Wayland / X11（各一次） | 选择一张已生成不同内容缩略图的图片，拖到文件管理器，分别对库内原图、落地文件和缩略图计算 sha256 | 落地文件 sha256 与库内原图完全一致，并与缩略图不同 | 验证 `file_contents` 没有让目标静默优先消费缩略图字节 |
 | [ ] | Linux 载荷不含 localhost URL | Linux Wayland / X11（各一次） | 用最小 GTK 接收器（`Gtk.DropTarget`）打印全部 offered mime 与 `text/uri-list` 逐行内容 | 不出现任何 `http://127.0.0.1` 项；`text/uri-list` 第一行即 `file://` 指向库内原图 | 前端已不再写 `DownloadURL` / `text/uri-list` / `text/plain`，这条直接证明载荷来源只剩注入的 filename |
-| [ ] | Windows DownloadURL 回归 | Windows | 从图库拖图到资源管理器及一个支持文件拖放的目标 | 行为与改动前一致，继续通过 `DownloadURL` 交付虚拟文件，文件名、扩展名与内容正确 | Linux resolver 不会安装，Windows 不应进入真实路径注入链路；`/download` 端点与 `downloadToUrl` 为此保留，务必确认未被一并删除 |
+| [ ] | Windows DownloadURL 回归 | Windows | 从图库拖图到资源管理器及一个支持文件拖放的目标 | 行为与改动前一致，继续通过 `DownloadURL` 交付虚拟文件，文件名、扩展名与内容正确 | Windows 不安装 resolver，不应进入真实路径注入链路；`/download` 端点与 `downloadToUrl` 为此保留，务必确认未被一并删除 |
 | [ ] | 拖入回归 | Linux Wayland / X11（各一次） | 从文件管理器拖若干图片进入画廊、画册等现有拖入热区，依次检查 Enter / Over / Drop / Leave | 浮层、落点命中、导入与离开清理均正常；不会导航到被拖入文件 | 验证 `TauriCefDragHandler` 原有落点侧行为不受新增起手侧回调影响 |
+
+### macOS
+
+macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍。注意本平台特有的三个失效
+形态：目标拿到的是**缩略图字节**（`file_contents` 没清干净）；落点触发了一次**下载**而不是
+交出磁盘上的文件（`download_metadata` 没清干净，被转成 promised-file flavor）；以及**只有
+原生应用收得到文件、所有 Chromium 系应用一概无反应**（`org.chromium.renderer-initiated-drag`
+没摘掉，接收端 `FilterDropData()` 清空了 filenames）。第三种最具迷惑性——鼠标照常显示绿色
+加号，因此下表专门为 Chromium 系接收方留了用例，验收时**必须**跑。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 访达复制 | macOS | 从图库拖图到访达的某个目录；再拖一次触发同名冲突 | 文件按本地文件的**复制**语义落地，同名时走访达自己的冲突处理；不出现下载进度、不生成 `.download` 之类中间物 | 这是最能区分「文件拖拽」与「promised file 下载」的用例 |
+| [ ] | 预览/图像程序 | macOS | 把图拖到「预览」的图标或打开区域 | 直接打开库内原图 | 选择一张原图与缩略图肉眼可区分的图片 |
+| [ ] | 邮件正文 | macOS | 把图拖进「邮件」新邮件正文 | 以附件形式插入，文件名与库内原文件一致 | 邮件对 HTML/图片 flavor 敏感，能暴露 flavor 顺序问题 |
+| [ ] | Safari 上传框 | macOS | 从图库拖图到 Safari 测试页的 `<input type="file">` | 上传框选中该本地文件，文件名与原文件一致；不是 URL 文本 | 用只在本机运行的最小测试页即可 |
+| [ ] | Chrome 上传框 | macOS | 从图库拖图到 Chrome 测试页的 `<input type="file">` | 同上 | 与 Safari 分开验证，两者拖放接收实现不同 |
+| [ ] | 文本编辑器 | macOS | 把图片拖到「文本编辑」或「备忘录」 | 收到本地文件并按自身规则插入；不得收到 `http://127.0.0.1` | 只检查它识别到的来源 |
+| [ ] | 关闭 HTTP server 后拖出 | macOS | 停止或阻断应用本地 HTTP server，确认原 `/download/...` URL 已无法访问，再从图库重拖到访达与一个浏览器上传框 | 两个目标仍成功收到文件 | 证明新链路不再依赖下载；应用进程与 CEF 必须保持运行 |
+| [ ] | pasteboard flavor 列表 | macOS | 用最小 AppKit 接收器（`-draggingEntered:` 中打印 `sender.draggingPasteboard.types`）接住一次拖出 | `public.file-url` 出现且排在首位；不出现 `public.url`、`public.html`、`org.chromium.renderer-initiated-drag`、`com.apple.pasteboard.promised-file-url`、`com.apple.pasteboard.promised-file-content-type`，也不出现以图片 UTType（如 `public.png`）命名的 file contents flavor | 这条直接验证 patch 的载荷清理与 flavor 顺序 |
+| [ ] | 原图内容校验 | macOS | 选一张已生成不同内容缩略图的图片，拖到访达，分别对库内原图、落地文件和缩略图计算 sha256 | 落地文件 sha256 与库内原图完全一致，并与缩略图不同 | 验证目标没有静默优先消费缩略图字节 |
+| [ ] | 第三方页面伪造 custom mime | macOS | 在畅游的第三方内容页中，用测试元素的 `dragstart` 写入 `application/x-kabegame-image-id`，值取 DB 中真实存在的图片 id，再拖到外部目标 | 拖拽中**不带本地文件**：flavor 列表里没有 `public.file-url` | 必须用真实 id，才能证明拦截来自 webview label 白名单而不是 DB 查询失败 |
+| [ ] | 不存在的 image id | macOS | 在 `main` 的调试会话中把 custom mime 值替换为 DB 中不存在的 id，再拖到外部目标 | 拖拽中**不带本地文件**；也不再有 HTTP URL 回落，目标端只会拿到 Blink 默认的缩略图载荷 | 同时确认应用不崩溃、拖拽线程不卡死 |
+| [ ] | 多文件不回归 | macOS | 在图库多选若干图片后发起拖拽 | 行为不比改动前更差：要么交付第一张，要么与改动前一致；不得崩溃或拖出空文件 | 当前实现只提供 `filenames.front()`，多文件需要多个 `NSDraggingItem`，属已知限制 |
+| [ ] | Chrome 页面区 | macOS | 从图库拖一张图到 Chrome 的网页内容区（不是地址栏） | Chrome 打开/导航到该 `file://` 图片 | 这条是污染标记回归的主哨兵：标记若还在，地址栏能收到而页面区毫无反应 |
+| [ ] | VSCode | macOS | 从图库拖一张图到 VSCode 窗口 | VSCode 打开该文件（图片预览） | Electron 即 Chromium，与 Chrome 页面区同源失效 |
+| [ ] | 自家 webview 拖回 | macOS | 从图库拖一张图，再拖回本应用自己的窗口内容区 | 按普通系统文件拖入处理，与从访达拖入同一文件的行为一致 | 摘掉污染标记的已知副作用，Linux 一直如此；确认不会误导航、不会重复导入 |
+| [ ] | 拖入回归 | macOS | 从访达拖若干图片进入画廊、画册等现有拖入热区，依次检查 Enter / Over / Drop / Leave | 浮层、落点命中、导入与离开清理均正常；不会导航到被拖入文件 | 验证 `TauriCefDragHandler` 原有落点侧行为不受新增起手侧回调影响 |
 
 ## anime-pictures 插件 Cloudflare 403
 

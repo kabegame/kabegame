@@ -163,14 +163,17 @@ fn init(
             });
         });
     }
-    // 只在 Linux CEF standard 模式安装 resolver:不安装即关闭真实文件注入,
-    // Windows 的 DownloadURL 虚拟文件路径因此完全不受影响。平台启用门控集中在
+    // 只在 Linux / macOS 的 CEF standard 模式安装 resolver:不安装即关闭真实文件
+    // 注入,Windows 的 DownloadURL 虚拟文件路径因此完全不受影响。平台启用门控集中在
     // 此处一次完成;CEF API 与三份 cef-rs bindings 保持相同 struct 布局,避免按平台
     // 分叉 ABI 并成倍增加维护成本。
     //
     // label 使用白名单而不是黑名单:漏加白名单只会造成拖拽不可用这一可见 bug;
     // 黑名单漏加则会让第三方页面静默获得图库文件导出能力。目前只有 main 渲染图库。
-    #[cfg(all(not(feature = "web"), target_os = "linux", feature = "standard"))]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos"),
+        feature = "standard"
+    ))]
     tauri_runtime_cef::set_drag_file_resolver(|label, image_id| {
         if label != "main" {
             return None;

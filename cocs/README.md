@@ -132,11 +132,11 @@
   - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（官方 pin + patch series re-vendor）、调整 `tauri-runtime-cef` trait 适配；排查从外部拖入文件被 CEF 直接打开成预览页、`onDragDropEvent` 不触发；排查并发双开（如开机自启竞态）凭空多出一个带应用图标的 Chrome 窗口、或第二实例以 status=101 崩溃；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包；确认自编的 CEF 里到底有没有 kabegame patch。
 
 - [tauri/LINUX_REAL_FILE_DRAG_OUT.md](tauri/LINUX_REAL_FILE_DRAG_OUT.md)
-  - 主题：Linux CEF standard 从图库拖出真实本地文件的完整链路。涵盖 Chromium `FilterDropData` 安全边界、前端 image id → Chromium/CEF delegate → Rust DB 授权的三段式权责、Wayland/X11 的 URL/text/缩略图载荷清理、Chromium/CEF/cef-rs/runtime 四层维护位置、label 与 DB 两道安全门、跨平台 ABI 和 HTTP URL 回落行为。
+  - 主题：Linux 与 macOS 的 CEF standard 从图库拖出真实本地文件的完整链路。涵盖 Chromium `FilterDropData` 安全边界、前端 image id → Chromium/CEF delegate → Rust DB 授权的三段式权责、Linux「推」(`OSExchangeData`) 与 macOS「拉」(`NSPasteboardWriting` + `public.file-url`) 两种载荷模型的差异、Wayland/X11 的 URL/text/缩略图载荷清理与 macOS 额外要清的 html/download promise、macOS 必须摘掉的 `org.chromium.renderer-initiated-drag` 污染标记（不摘则所有 Chromium 系接收方都收不到文件）、Chromium/CEF/cef-rs/runtime 四层维护位置、label 与 DB 两道安全门、跨平台 ABI 和 HTTP URL 回落行为。
   - 适用场景：排查 Linux 拖到 GIMP/Krita、浏览器上传框或文件管理器仍得到 localhost URL；升级 CEF/Chromium 或 cef-rs bindings；修改拖出授权、webview label 白名单或 custom mime；确认 Windows `DownloadURL` 为什么不受影响。
 
 - [../third-patches/cef/README.md](../third-patches/cef/README.md)
-  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` reset/apply 模型与 re-vendor 流程。现有三个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补完整的落点侧回调；0003 给 Linux Chromium/CEF 补真实文件拖出的起手侧 delegate、`OnStartDragging` 与 custom data 读取。生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
+  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` reset/apply 模型与 re-vendor 流程。现有三个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补完整的落点侧回调；0003 给 Linux 与 macOS Chromium/CEF 补真实文件拖出的起手侧 delegate、`OnStartDragging` 与 custom data 读取（macOS 另需让 `WebDragSource` 提供 `public.file-url` 并摘掉 renderer 污染标记）。生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
   - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移；给 CEF client 加新回调；维护 Linux 真实文件拖出的 Chromium/CEF 两半 patch。
 
 ## 调试（`debug/`）

@@ -38,7 +38,7 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events |
 | Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
-| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在 Linux 上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件，**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
+| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在 Linux 与 macOS 上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件，**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
 | 渲染进程看门狗 | `TauriCefRequestHandler` 对所有 webview 无条件挂载（导航闸门为可选字段）。`on_render_process_unresponsive`（渲染进程约 15s 未回执输入）直接 `terminate()`；`on_render_process_terminated`（含真崩溃）自动 `browser.reload()` 恢复。`crawler-*` 标签的隐藏爬虫窗口在两个回调中均被排除——其卡死由 kabegame-core 调度器的 60s/120s 心跳看门狗判定并结束任务（见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.6） |
 
 ## 平台门控
@@ -199,11 +199,16 @@ submodule 的 gitlink 永远不提交本地改动：
     `OnDragLeave` / `OnDrop`（`added=experimental`），让 client 能观察完整拖放序列
     并消费落点。详见 `third-patches/cef/README.md`。生成的 C API 与 `libcef_dll`
     胶水不入 patch——它们由 `cef_create_projects.sh` 里的 `version_manager.py` 产出。
-  - `0003-drag-source-filenames.patch`：在 Linux Chromium 的起手侧加入
+  - `0003-drag-source-filenames.patch`：在 Linux 与 macOS Chromium 的起手侧加入
     `WebContentsViewDelegate::GetDragFilenames`，并通过 CEF 的
     `CefDragHandler::OnStartDragging` / `CefDragData::GetCustomData` 暴露给 client，允许
-    app 将前端声明的图片 id 授权为真实本地文件。其 Chromium 内层 patch 与 CEF API
-    是同一功能的两半，必须同进同退；生成的 C API 与胶水同样由构建流程产出。
+    app 将前端声明的图片 id 授权为真实本地文件。macOS 侧还需教 `WebDragSource`
+    声明并提供 `NSPasteboardTypeFileURL`——它原本没有任何 filenames 通路——并在 delegate
+    已背书文件时摘掉 `org.chromium.renderer-initiated-drag`；该 flavor 在 macOS 上会随
+    pasteboard 传到接收方，令其 `FilterDropData()` 清空 filenames，不摘则只有原生应用
+    收得到文件，Chrome 与所有 Electron 应用一概无反应。其 Chromium
+    内层 patch 与 CEF API 是同一功能的两半，必须同进同退；生成的 C API 与胶水同样
+    由构建流程产出。
 
 `scripts/build-chromium.ts` 在构建前以仓库内 `third/cef` 为本地源码引用:
 把它的路径和当前提交分别传给 `automate-git.py --url` / `--checkout`。首次或

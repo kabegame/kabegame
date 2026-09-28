@@ -37,6 +37,8 @@
  *
  * macOS 关键前提：完整 Xcode/macOS SDK；构建空间必须是 APFS/HFS+ 等支持符号链接的
  * 文件系统，不能是 exFAT。Apple Silicon 上可经 --target x86_64 跨编 Intel 版。
+ * Xcode 27+ 自带的 SDK 超出 Chromium 支持范围，会自动回退到机器上的 26.x SDK（见
+ * resolveMacSdkPath），MAC_SDK_PATH 可显式指定用哪一份。
  */
 
 import fs from "node:fs";
@@ -731,6 +733,105 @@ function bootstrap(ctx: BuildContext): void {
   }
 }
 
+// ===== macOS SDK 档位 =====
+//
+// Chromium 的 macOS clang-module 依赖图按 Xcode 版本分档维护，而
+// build/config/c++/modules.gni 的 xcode_version_buckets 至今只有 [2600]（主干亦然，
+// build/modules/ 下只有 mac_xcode2600），mac_sdk.gni 的 mac_sdk_official_version 是 26.x。
+// Xcode 27 的 SDK 把 math.h 改成经 clang 的 float.h 引 _Builtin_float，而手工维护的那张
+// 图里 _DarwinFoundation1 缺这条边，叠加 -fno-implicit-modules ⇒ DarwinFoundation1.pcm
+// 直接编不出来。升 CEF 分支绕不开：154 和主干这两处配置与 149 完全一致。
+//
+// find_sdk.py 只扫 $(xcode-select -p) 下的 SDK，Xcode 原地升级后旧 SDK 就没了。于是在
+// 选中的 SDK 超纲时显式钉 mac_sdk_path 到机器上仍在范围内的那份（Command Line Tools 的
+// SDKs 目录通常留着旧版）。mac_bin_path 仍取当前 Xcode 的，新 linker/libtool 配旧 SDK 没问题。
+const MAC_SDK_MAX_MAJOR = 26;
+
+interface MacSdk {
+  path: string;
+  version: [number, number];
+}
+
+/** 按 find_sdk.py 的口径列目录下带版本号的 SDK（忽略 MacOSX.sdk 这类符号链接），版本升序。 */
+function listMacSdks(dir: string): MacSdk[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .flatMap((name) => {
+      const matched = /^MacOSX(\d+)\.(\d+)\.sdk$/.exec(name);
+      if (!matched) return [];
+      const version: [number, number] = [
+        Number(matched[1]),
+        Number(matched[2]),
+      ];
+      return [{ path: path.join(dir, name), version }];
+    })
+    .sort((a, b) => a.version[0] - b.version[0] || a.version[1] - b.version[1]);
+}
+
+function macSdkLabel(sdk: MacSdk | undefined): string {
+  return sdk ? `MacOSX${sdk.version[0]}.${sdk.version[1]}` : "未知";
+}
+
+/** 需要显式钉住的 SDK；Xcode 选中的那份已在支持范围内则返回 undefined（保持默认行为）。 */
+function resolveMacSdkPath(): string | undefined {
+  const override = process.env.MAC_SDK_PATH;
+  if (override) {
+    if (!fs.existsSync(override)) {
+      die(`MAC_SDK_PATH 指向的 SDK 不存在: ${override}`);
+    }
+    return override;
+  }
+
+  const xcodeSdkDir = path.join(
+    capture("xcode-select", ["-p"]),
+    "Platforms/MacOSX.platform/Developer/SDKs",
+  );
+  const xcodeSdks = listMacSdks(xcodeSdkDir);
+  // find_sdk.py 取的是 >= mac_sdk_min 里版本最低的一份
+  const selected = xcodeSdks[0];
+  if (selected && selected.version[0] <= MAC_SDK_MAX_MAJOR) return undefined;
+
+  const usable = [
+    ...xcodeSdks,
+    ...listMacSdks("/Library/Developer/CommandLineTools/SDKs"),
+  ].filter((sdk) => sdk.version[0] <= MAC_SDK_MAX_MAJOR);
+  const fallback = usable.at(-1);
+  if (!fallback) {
+    die(
+      `Xcode 选中的 SDK 是 ${macSdkLabel(selected)}，超出 Chromium 支持的 ` +
+        `MacOSX${MAC_SDK_MAX_MAJOR}.x；机器上也找不到可用的旧 SDK。装一份带旧 SDK 的 ` +
+        "Command Line Tools，或用 MAC_SDK_PATH=/path/to/MacOSX26.x.sdk 指定。",
+    );
+  }
+  log(
+    `Xcode 选中的 ${macSdkLabel(selected)} SDK 超出 Chromium 支持范围，改用 ` +
+      fallback.path,
+  );
+  return fallback.path;
+}
+
+// Xcode 26 起 Metal 编译器不再随 Xcode 一起装，改成按需下载的组件，而且每升一次 Xcode 就要
+// 重下一次；XcodeDefault.xctoolchain 里的 metal 只是个会报错的壳子。缺它要等到 ANGLE 编
+// mtl_internal_shaders_autogen.metal 才炸，那时同步已经跑完、上千步也编完了，报错还埋在几千行
+// ninja 日志中间，所以提前拦一道。
+function checkMacMetalToolchain(): void {
+  if (BUILD_PLATFORM !== "macos") return;
+  const result = spawnSync("xcodebuild", ["-showComponent", "MetalToolchain"], {
+    shell: false,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  // 更早的 Xcode 没有 -showComponent，那些版本 metal 随工具链安装，跳过即可
+  if (result.error || result.status !== 0) return;
+  if (/Status:\s*installed/i.test(result.stdout)) return;
+  die(
+    "Metal Toolchain 未安装，ANGLE 的 .metal 着色器无法编译。先执行：\n" +
+      "  xcodebuild -downloadComponent MetalToolchain\n" +
+      "（几 GB，每次升级 Xcode 后都要重新下载）",
+  );
+}
+
 function configureGnArgs(ctx: BuildContext): void {
   // CEF 7827 的 gn_args.py 硬性要求 optimize_webui=true、enable_widevine=true，
   // //cef/BUILD.gn 还有 assert 兜底，不能在这里覆盖。NaCl 已从 Chromium 149 移除，
@@ -740,6 +841,12 @@ function configureGnArgs(ctx: BuildContext): void {
   if (BUILD_PLATFORM === "linux") defines += " use_sysroot=true";
   defines += " is_official_build=true optimize_for_size=true symbol_level=0";
   if (BUILD_PLATFORM === "linux") defines += " use_cups=false";
+  if (BUILD_PLATFORM === "macos") {
+    // 引号是给 gn_args.py 的 shlex.split 分词用的（路径含空格时必需），它随后会被
+    // ParseValue 剥掉、由 FormatValue 在写 args.gn 时补回。
+    const macSdkPath = resolveMacSdkPath();
+    if (macSdkPath) defines += ` mac_sdk_path="${macSdkPath}"`;
+  }
 
   ctx.env.GN_DEFINES = defines;
   // 不传 --distrib-subdir-suffix:只有一套档位,distrib 目录名就是无后缀的
@@ -1310,6 +1417,7 @@ async function main(): Promise<void> {
   ensureBuildDir(ctx);
   checkNoNodeModulesAncestor(ctx);
   checkBuildDir(ctx);
+  checkMacMetalToolchain();
   prepareCefReference(ctx);
   setupEnv(ctx);
   bootstrap(ctx);
