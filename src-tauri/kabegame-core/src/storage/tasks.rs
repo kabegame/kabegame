@@ -1,4 +1,5 @@
 use crate::emitter::GlobalEmitter;
+use crate::storage::labels::LabelSpec;
 use crate::storage::Storage;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -116,6 +117,14 @@ where
     }
 }
 
+fn deserialize_json_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    deserialize_optional_json_string(deserializer).map(|value| value.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskFailedImage {
@@ -131,6 +140,8 @@ pub struct TaskFailedImage {
     pub metadata_id: Option<i64>,
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_json_vec")]
+    pub labels: Vec<LabelSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -718,6 +729,7 @@ impl Storage {
         header_snapshot: Option<&HashMap<String, String>>,
         metadata_id: Option<i64>,
         display_name: Option<&str>,
+        labels: &[LabelSpec],
     ) -> Result<TaskFailedImage, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let now = std::time::SystemTime::now()
@@ -730,9 +742,11 @@ impl Storage {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|e| format!("Failed to serialize failed image header snapshot: {}", e))?;
+        let labels_json = serde_json::to_string(labels)
+            .map_err(|e| format!("Failed to serialize failed image labels: {e}"))?;
         conn.execute(
-            "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id, display_name, labels)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 task_id,
                 plugin_id,
@@ -743,7 +757,8 @@ impl Storage {
                 now,
                 header_snapshot_json,
                 metadata_id,
-                display_name
+                display_name,
+                labels_json,
             ],
         )
         .map_err(|e| format!("Failed to add failed image: {}", e))?;
@@ -764,6 +779,7 @@ impl Storage {
             header_snapshot: header_snapshot_owned,
             metadata_id,
             display_name: display_name.map(str::to_string),
+            labels: labels.to_vec(),
         })
     }
 

@@ -316,6 +316,10 @@ pub enum DaemonEvent {
         sync_mode: String,
         #[serde(rename = "ancestorPath")]
         ancestor_path: String,
+        #[serde(rename = "labelKey", skip_serializing_if = "Option::is_none")]
+        label_key: Option<String>,
+        #[serde(rename = "labelPath", skip_serializing_if = "Option::is_none")]
+        label_path: Option<String>,
     },
     /// 画册属性变更（重命名、移动父级等；`changes` 为增量，如 `{ "name": "..." }`、`{ "parentId": "..." | null }`）
     AlbumChanged {
@@ -413,6 +417,8 @@ mod tests {
             folder_status: Some(r#"{"state":"ok"}"#.to_string()),
             sync_mode: "delegated".to_string(),
             ancestor_path: "/parent-id/child-id/".to_string(),
+            label_key: None,
+            label_path: None,
         };
 
         let payload = serde_json::to_value(event).expect("AlbumAdded 应可序列化");

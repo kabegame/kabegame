@@ -46,5 +46,7 @@
   "hideFailed": "隐藏失败",
   "unhide": "取消隐藏",
   "unhideSuccess": "已取消隐藏",
-  "unhideFailed": "取消隐藏失败"
+  "unhideFailed": "取消隐藏失败",
+  "setLabelKey": "修改 key",
+  "copyLabels": "复制标签"
 }

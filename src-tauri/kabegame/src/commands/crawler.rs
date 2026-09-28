@@ -12,6 +12,7 @@ use kabegame_core::plugin::{
     ffmpeg::FfmpegProbeResult,
     vfs::PluginVfs,
 };
+use kabegame_core::storage::labels::{validate_label_values, LabelSpec};
 use kabegame_core::storage::page_snapshot::SURF_METADATA_VERSION;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
@@ -1218,6 +1219,7 @@ pub async fn crawl_download_image<R: Runtime>(
     metadata: Option<Value>,
     metadata_id: Option<i64>,
     source_url: Option<String>,
+    labels: Option<Value>,
 ) -> Result<(), String> {
     let (task_id, run) = run_of(&webview)?;
 
@@ -1237,6 +1239,7 @@ pub async fn crawl_download_image<R: Runtime>(
     } else {
         None
     };
+    let labels = validate_crawler_download_labels(labels, &run.params.plugin.id, &task_id)?;
 
     let dq = TaskScheduler::global().download_queue();
     // 与 V8 op 同形：统一经容量门控入队；worker 再按插件 backend 选择 CEF 或 scheme downloader。
@@ -1252,12 +1255,30 @@ pub async fn crawl_download_image<R: Runtime>(
         name,
         metadata_id,
         source_url,
+        labels,
     );
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err("Task canceled".to_string()),
         result = download => result.map_err(|error| format!("Failed to download image: {error}")),
     }
+}
+
+fn validate_crawler_download_labels(
+    value: Option<Value>,
+    plugin_id: &str,
+    task_id: &str,
+) -> Result<Vec<LabelSpec>, String> {
+    let (specs, rejected) = validate_label_values(value.as_ref(), plugin_id)
+        .map_err(|error| format!("downloadImage {error}"))?;
+    for (index, reason) in rejected {
+        GlobalEmitter::global().emit_task_log(
+            task_id,
+            "warn",
+            &format!("[labels] 跳过 labels[{index}]：{reason}"),
+        );
+    }
+    Ok(specs)
 }
 
 /// 畅游右键下载 / 一键下载统一入队；worker 仍会在所属 surf WebView 中调用 CEF 下载以保留会话。
@@ -1316,6 +1337,7 @@ pub async fn surf_download_image<R: Runtime>(
         metadata_id,
         collect_run_id.is_some(),
         source_url,
+        Vec::new(),
     )
     .await
 }

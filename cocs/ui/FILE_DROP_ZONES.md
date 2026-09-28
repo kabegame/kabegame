@@ -78,7 +78,7 @@ scale factor，而 webview 所在窗口可能在副屏。`useFileDrop.resolveZon
 | 页面 | 热区元素 | 图片/视频 | 文件夹 | `.kgpg` |
 |---|---|---|---|---|
 | `Gallery.vue` | `.gallery-grid-pane` | `local-import` 导入画廊（无 `outputAlbumId`） | `local-import` 递归展开后扁平导入画廊 | ✗ |
-| `Albums.vue`（普通画册） | 根 `.albums-page` | `local-import` 导入选中画册 | `local-import` 递归展开后扁平导入选中画册 | ✗ |
+| `Albums.vue`（普通画册 / 标签画册） | 根 `.albums-page` | `local-import` 导入选中画册（标签画册即给导入的图片打上该标签） | `local-import` 递归展开后扁平导入选中画册 | ✗ |
 | `Albums.vue`（local_folder） | 根 `.albums-page` | 复制进 `sync_folder` 后导入选中画册 | 递归展开、扁平复制进 `sync_folder` 后导入选中画册 | ✗ |
 | `Albums.vue`（收藏 / 隐藏 / 无选中） | — | ✗ | ✗ | ✗ |
 | `PluginBrowser.vue` | 根 `.plugin-browser-container` | ✗ | ✗ | 安装插件 |

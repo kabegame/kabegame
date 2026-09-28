@@ -22,7 +22,7 @@
     "list": {
         // 根画册 (parent_id IS NULL); meta 由 runtime 按 SQL 行字段构造。
         "${out.id}": {
-            "sql": "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+            "sql": "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, label_key, label_path FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             "data_var": "out",
             "provider": "gallery_album_provider",
             "properties": {
@@ -37,7 +37,9 @@
                     "parentId": "${out.parent_id}",
                     "type": "${out.type}",
                     "syncFolder": "${out.sync_folder}",
-                    "folderStatus": "${out.folder_status}"
+                    "folderStatus": "${out.folder_status}",
+                    "labelKey": "${out.label_key}",
+                    "labelPath": "${out.label_path}"
                 }
             }
         }

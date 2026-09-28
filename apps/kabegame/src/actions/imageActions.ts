@@ -13,6 +13,7 @@ import {
   Share,
   Hide,
   View,
+  PriceTag,
 } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@kabegame/core/types/image";
@@ -103,6 +104,17 @@ export function createImageActions(
       },
     },
     {
+      key: "copyLabels",
+      label: t("contextMenu.copyLabels"),
+      icon: PriceTag,
+      command: "copyLabels",
+      // 单选桌面端：标签需异步查询，无标签时点击后提示而非预先禁用
+      visible: (ctx) =>
+        !hideSet.has("copyLabels") &&
+        !uiStore.isCompact &&
+        (!ctx.selectedCount || ctx.selectedCount === 1),
+    },
+    {
       key: "open",
       label: t("contextMenu.open"),
       icon: FolderOpened,
@@ -177,6 +189,13 @@ export function createImageActions(
               icon: IS_WEB ? Download : DocumentCopy,
               command: IS_WEB ? "download" : "copy",
               visible: () => !hideSet.has("copy"),
+            },
+            {
+              key: "copyLabels",
+              label: t("contextMenu.copyLabels"),
+              icon: PriceTag,
+              command: "copyLabels",
+              visible: () => !hideSet.has("copyLabels"),
             },
             {
               key: "addToAlbum",

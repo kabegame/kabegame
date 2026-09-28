@@ -46,5 +46,7 @@
   "hideFailed": "非表示に失敗",
   "unhide": "再表示",
   "unhideSuccess": "再表示しました",
-  "unhideFailed": "再表示に失敗"
+  "unhideFailed": "再表示に失敗",
+  "setLabelKey": "キーを変更",
+  "copyLabels": "ラベルをコピー"
 }

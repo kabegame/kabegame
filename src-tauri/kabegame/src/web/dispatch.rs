@@ -81,6 +81,25 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "get_image_album_ids",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        image_id: String,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::album::get_image_album_ids(args.image_id)
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_album_preview",
         MethodEntry {
             requires_super: false,
@@ -819,6 +838,26 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "set_label_key",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        album_id: String,
+                        new_key: String,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::album::set_label_key(args.album_id, args.new_key)
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "delete_album",
         MethodEntry {
             requires_super: true,
@@ -1067,6 +1106,31 @@ pub fn init_registry() {
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_album(args.name, args.parent_id)
                         .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "add_label_album",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        key: String,
+                        name: Option<String>,
+                        parent_id: Option<String>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::album::add_label_album(
+                        args.key,
+                        args.name,
+                        args.parent_id,
+                    )
+                    .map_err(RpcError::internal)
                 })
             }),
         },

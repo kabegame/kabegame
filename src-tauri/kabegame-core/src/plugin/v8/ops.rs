@@ -4,6 +4,7 @@ use crate::emitter::GlobalEmitter;
 use crate::plugin::archive::{ExtractOptions, ExtractResult};
 use crate::plugin::ffmpeg::FfmpegProbeResult;
 use crate::settings::Settings;
+use crate::storage::labels::{validate_label_values, LabelSpec};
 use crate::storage::Storage;
 use deno_core::{op2, OpState};
 use deno_error::JsErrorBox;
@@ -590,7 +591,7 @@ pub async fn op_kabegame_download_image(
     let output_album_id = run.params.output_album_id.clone();
     let headers = run.headers_snapshot();
 
-    let (custom_name, metadata_id, post_url) = parse_download_opts(opts, &run)?;
+    let opts = parse_download_opts(opts, &run)?;
     let parsed_url = crate::plugin::parse_download_image_url(&url, run.fs_handle)
         .map_err(JsErrorBox::generic)?;
     let download_start_time = now_ms();
@@ -602,9 +603,10 @@ pub async fn op_kabegame_download_image(
         download_start_time,
         output_album_id,
         headers,
-        custom_name,
-        metadata_id,
-        post_url,
+        opts.name,
+        opts.metadata_id,
+        opts.post_url,
+        opts.labels,
     );
     tokio::select! {
         biased;
@@ -674,12 +676,17 @@ async fn resolve_url_for_task_async(task_id: &str, url: &str) -> Result<String, 
         .map_err(|e| JsErrorBox::generic(format!("Failed to resolve URL: {e}")))
 }
 
-fn parse_download_opts(
-    opts: Option<JsonValue>,
-    run: &Task,
-) -> Result<(Option<String>, Option<i64>, Option<String>), JsErrorBox> {
+#[derive(Debug, Default)]
+struct DownloadOpts {
+    name: Option<String>,
+    metadata_id: Option<i64>,
+    post_url: Option<String>,
+    labels: Vec<LabelSpec>,
+}
+
+fn parse_download_opts(opts: Option<JsonValue>, run: &Task) -> Result<DownloadOpts, JsErrorBox> {
     let Some(opts) = opts else {
-        return Ok((None, None, None));
+        return Ok(DownloadOpts::default());
     };
     let opts = opts
         .as_object()
@@ -689,6 +696,12 @@ fn parse_download_opts(
     let post_url = optional_string(opts, "url", "download_image")?;
     let metadata_id = optional_i64(opts, "metadata_id", "download_image")?;
     let metadata = opts.get("metadata").filter(|v| !v.is_null()).cloned();
+    let labels = parse_download_labels(
+        opts.get("labels"),
+        &run.params.plugin.id,
+        &run.task_id,
+        "download_image opts.labels",
+    )?;
     // 版本由应用盖章（图片下载时的插件版本），插件不可传入；旧 `metadata_version` 键静默忽略。
     let metadata_id = if let Some(id) = metadata_id {
         Some(id)
@@ -698,7 +711,32 @@ fn parse_download_opts(
         None
     };
 
-    Ok((custom_name, metadata_id, post_url))
+    Ok(DownloadOpts {
+        name: custom_name,
+        metadata_id,
+        post_url,
+        labels,
+    })
+}
+
+fn parse_download_labels(
+    value: Option<&JsonValue>,
+    plugin_id: &str,
+    task_id: &str,
+    label: &str,
+) -> Result<Vec<LabelSpec>, JsErrorBox> {
+    let (specs, rejected) = validate_label_values(value, plugin_id)
+        .map_err(|error| JsErrorBox::generic(format!("{label}: {error}")))?;
+    for (index, reason) in rejected {
+        emit_label_warning(task_id, format!("[labels] 跳过 {label}[{index}]：{reason}"));
+    }
+    Ok(specs)
+}
+
+fn emit_label_warning(task_id: &str, message: String) {
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        emitter.emit_task_log(task_id, "warn", &message);
+    }
 }
 
 /// Parse a `fetch` init object into `(method, headers, body)`.
@@ -1084,4 +1122,38 @@ fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>) ->
         map.insert(name, value);
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_download_opts_labels_default_category_uses_plugin_id() {
+        let value = json!([{ "key": "hatsune", "name": "初音未来" }]);
+        let specs = parse_download_labels(Some(&value), "pixiv", "task", "labels").unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].segments, ["pixiv"]);
+        assert_eq!(specs[0].key, "hatsune");
+    }
+
+    #[test]
+    fn parse_download_opts_labels_rejections_do_not_reject_download() {
+        let value = json!([
+            { "key": "bad.key" },
+            { "key": "valid", "category": "custom/path" },
+            42
+        ]);
+        let specs = parse_download_labels(Some(&value), "pixiv", "task", "labels").unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].key, "valid");
+        assert_eq!(specs[0].segments, ["custom", "path"]);
+    }
+
+    #[test]
+    fn parse_download_opts_labels_non_array_is_an_argument_error() {
+        let value = json!({ "key": "hatsune" });
+        assert!(parse_download_labels(Some(&value), "pixiv", "task", "labels").is_err());
+    }
 }

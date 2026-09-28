@@ -11,7 +11,9 @@
             { "sql": "albums.sync_folder", "as": "sync_folder" },
             { "sql": "albums.folder_status", "as": "folder_status" },
             { "sql": "albums.ancestor_path", "as": "ancestor_path" },
-            { "sql": "albums.sync_mode", "as": "sync_mode" }
+            { "sql": "albums.sync_mode", "as": "sync_mode" },
+            { "sql": "albums.label_key", "as": "label_key" },
+            { "sql": "albums.label_path", "as": "label_path" }
         ],
     },
     "resolve": {

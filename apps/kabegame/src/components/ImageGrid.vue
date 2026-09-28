@@ -35,6 +35,10 @@
         <EmptyState />
       </slot>
     </template>
+    <!-- 预览弹窗信息区：图片标签（依赖应用侧画册 store，故由 app 层注入） -->
+    <template #preview-info-extra="{ image }">
+      <ImageLabelsPanel v-if="image" :image="image" @navigate="coreRef?.closePreview?.()" />
+    </template>
   </CoreImageGrid>
 
   <!-- 详情弹窗：view 层 onContextCommand return 'detail' 或未拦截时由本层打开 -->
@@ -78,6 +82,8 @@ import { computed, onActivated, onDeactivated, onMounted, ref, shallowRef, useAt
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
+import ImageLabelsPanel from "@/components/image/ImageLabelsPanel.vue";
+import { labelKeysText, pickLabelAlbums, writeClipboardText } from "@/utils/imageLabels";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import ImageDetailDialog from "@kabegame/core/components/common/ImageDetailDialog.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -125,7 +131,7 @@ import type {
 import type { ActionItem } from "@kabegame/core/actions/types";
 
 // 扩展 ContextCommand 类型，添加 kabegame 特有的命令
-export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "addToHidden" | "share" | "deleteFile";
+export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "addToHidden" | "share" | "deleteFile" | "copyLabels";
 type ImageInfo = CoreImageInfo;
 
 // 扩展 ContextCommandPayload 类型
@@ -724,6 +730,23 @@ const confirmRemoveImages = async () => {
   adapter.analytics?.trackAction(pending.mode, pending.images);
 };
 
+/** 右键「复制标签」：标签 key 以 ", " 连接写入剪贴板，无标签时提示。 */
+const copyImageLabels = async (image: ImageInfo) => {
+  try {
+    const ids = await albumStore.getImageAlbumIds(image.id);
+    const text = labelKeysText(pickLabelAlbums(ids, albumStore.albums));
+    if (!text) {
+      ElMessage.info(t("albums.imageLabelsEmpty"));
+      return;
+    }
+    await writeClipboardText(text);
+    ElMessage.success(t("common.copySuccess"));
+  } catch (error) {
+    console.error("复制标签失败:", error);
+    ElMessage.error(t("common.copyFailed"));
+  }
+};
+
 const runDefaultCommand = async (
   command: ContextCommand,
   payload: CoreContextCommandPayload,
@@ -786,6 +809,12 @@ const runDefaultCommand = async (
       if (!isMultiSelect && imagesToProcess[0]) {
         await shareImage(imagesToProcess[0]);
         track("share", imagesToProcess.slice(0, 1));
+      }
+      break;
+    case "copyLabels":
+      if (!isMultiSelect && imagesToProcess[0]) {
+        await copyImageLabels(imagesToProcess[0]);
+        track("copyLabels", imagesToProcess.slice(0, 1));
       }
       break;
     case "addToAlbum":

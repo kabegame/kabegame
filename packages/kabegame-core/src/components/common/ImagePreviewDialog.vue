@@ -71,6 +71,8 @@
               @open-gallery-filter="handleOpenGalleryFilter"
               @open-surf-record="emit('open-surf-record', $event)"
             />
+            <!-- 宿主（app）注入的附加信息面板，如图片标签；core 拿不到应用侧 store 与路由 -->
+            <slot name="info-extra" :image="previewImage" />
             <ImageNativeMetadataPanel
               v-if="isNativeMetadataEligible(previewImage?.type)"
               :image="previewImage"
@@ -1444,6 +1446,11 @@ body.image-preview-hides-kamechan .kamechan-host {
     flex-direction: column;
     gap: 12px;
     overflow: hidden;
+  }
+
+  /* 高度由侧栏给定；声明为 size 容器，供 info-extra 面板用 cqh 按侧栏高度限高 */
+  .preview-detail-drawer-scroll-left {
+    container-type: size;
   }
 
   .preview-loading {

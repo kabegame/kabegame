@@ -470,7 +470,7 @@ mod tests {
 
     fn test_plugin(base_url: &str) -> Plugin {
         Plugin {
-            id: "plugin.test".to_string(),
+            id: "plugin-test".to_string(),
             name: json!("Test Plugin"),
             description: json!("Test plugin"),
             version: "0.0.0".to_string(),
@@ -522,7 +522,7 @@ mod tests {
         let run = test_run("v8-sync-ops", "https://example.test");
         let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         rt.run_crawl(
-            "plugin.test",
+            "plugin-test",
             entry,
             json!({ "base_url": "https://example.test" }),
             json!({ "page": 2, "keep": null }),
@@ -537,7 +537,7 @@ mod tests {
         let run = test_run("v8-missing-export", "");
         let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         let err = rt
-            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect_err("missing crawl export must error");
 
@@ -556,7 +556,7 @@ mod tests {
         let run = test_run("v8-import-rejected", "");
         let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         let err = rt
-            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect_err("imports must be rejected");
 
@@ -600,7 +600,7 @@ mod tests {
         );
 
         let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
-        rt.run_crawl("plugin.test", entry, json!({}), json!({}))
+        rt.run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect("fetch should resolve");
 
@@ -636,7 +636,7 @@ mod tests {
             JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         runtime
             .run_crawl(
-                "plugin.test",
+                "plugin-test",
                 entry,
                 json!({ "root": format!("/{}", run.fs_handle) }),
                 json!({}),
@@ -660,7 +660,7 @@ mod tests {
         let mut runtime =
             JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
         runtime
-            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect("downloadImage should accept its task VFS path");
 
@@ -721,7 +721,7 @@ mod tests {
 
         runtime
             .run_crawl(
-                "plugin.test",
+                "plugin-test",
                 entry,
                 json!({ "root": format!("/{}", run.fs_handle) }),
                 json!({}),
@@ -785,7 +785,7 @@ mod tests {
         );
 
         runtime
-            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect("restored runtime should execute crawler");
     }
@@ -816,7 +816,7 @@ mod tests {
         );
 
         let mut rt = JsPluginRuntime::new(test_state(&run), run.vfs.clone()).expect("runtime init");
-        rt.run_crawl("plugin.test", entry, json!({}), json!({}))
+        rt.run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect("to should resolve");
     }
@@ -843,7 +843,7 @@ mod tests {
             cancel.cancel();
         });
         let err = rt
-            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect_err("cancelled op should reject");
         cancel_task.await.expect("cancel task");
@@ -867,7 +867,7 @@ mod tests {
 
         let mut rt = JsPluginRuntime::new(state, run.vfs.clone()).expect("runtime init");
         let err = rt
-            .run_crawl("plugin.test", entry, json!({}), json!({}))
+            .run_crawl("plugin-test", entry, json!({}), json!({}))
             .await
             .expect_err("cancelled download should reject");
 

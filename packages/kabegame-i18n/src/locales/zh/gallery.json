@@ -317,5 +317,10 @@
   "chipSettings": "自定义显示哪些 chip",
   "chipVisibleTitle": "显示在工具条上的 chip",
   "chipHiddenHelp": "关掉的维度仍能在「高级」里用，只是不占工具条。",
-  "sortOrderToggle": "{current}（点击切换{next}）"
+  "sortOrderToggle": "{current}（点击切换{next}）",
+  "searchModeLabel": "标签",
+  "searchModeLabelTree": "标签（含子标签）",
+  "searchLabelIncludeChildren": "包含子标签",
+  "searchPlaceholderLabel": "标签 key，多个用英文逗号分隔",
+  "searchModeHelpLabel": "按标签 key 精确匹配，不区分大小写；多个 key 用英文逗号分隔，需同时命中。含 / 的写法按完整路径匹配，如 pixiv/character/miku。"
 }

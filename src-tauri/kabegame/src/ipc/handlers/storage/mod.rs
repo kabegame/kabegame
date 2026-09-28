@@ -28,13 +28,24 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
 
         // Albums
         IpcRequest::StorageGetAlbums => Some(albums::get_albums().await),
+        IpcRequest::StorageGetImageAlbumIds { image_id } => {
+            Some(albums::get_image_album_ids(image_id).await)
+        }
         IpcRequest::StorageAddAlbum { name } => {
             // TODO: 蜑咲ｫｯ螟・炊 album_add 莠倶ｻｶ
             Some(albums::add_album(name).await)
         }
+        IpcRequest::StorageAddLabelAlbum {
+            key,
+            name,
+            parent_id,
+        } => Some(albums::add_label_album(key, name.as_deref(), parent_id.as_deref()).await),
         IpcRequest::StorageDeleteAlbum { album_id } => Some(albums::delete_album(album_id).await),
         IpcRequest::StorageRenameAlbum { album_id, new_name } => {
             Some(albums::rename_album(album_id, new_name).await)
+        }
+        IpcRequest::StorageSetLabelKey { album_id, new_key } => {
+            Some(albums::set_label_key(album_id, new_key).await)
         }
         IpcRequest::StorageAddImagesToAlbum {
             album_id,

@@ -2,6 +2,7 @@ use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
+use crate::storage::labels::LabelSpec;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -12,8 +13,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use url::Url;
 
-use super::{postprocess_downloaded_image, rebind_deduped_metadata};
 use super::{download_with_retry, emit_task_log, wait_after_download_if_needed};
+use super::{postprocess_downloaded_image, rebind_deduped_metadata};
 
 static DOWNLOAD_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -96,6 +97,8 @@ pub struct ActiveDownloadInfo {
     pub metadata_id: Option<i64>,
     #[serde(skip)]
     pub post_url: Option<String>,
+    #[serde(skip)]
+    pub labels: Vec<LabelSpec>,
     /// CEF 原生下载的完成信号：worker 等待接收，Finished 回调取出后发送终态。
     /// `(Option<PathBuf>, bool)` 分别表示落盘路径与成功标记。
     #[serde(skip)]
@@ -138,6 +141,7 @@ pub(super) fn upsert_failed_image_on_failure(
     http_headers: &HashMap<String, String>,
     metadata_id: Option<i64>,
     custom_display_name: Option<&str>,
+    labels: &[LabelSpec],
 ) {
     if let Some(fid) = failed_image_id {
         let _ = Storage::global().update_task_failed_image_attempt(fid, error);
@@ -156,6 +160,7 @@ pub(super) fn upsert_failed_image_on_failure(
         Some(http_headers),
         metadata_id,
         custom_display_name,
+        labels,
     ) {
         GlobalEmitter::global().emit_failed_image_added(task_id, &failed_image);
         emit_task_image_counts_snapshot(task_id);
@@ -181,6 +186,8 @@ pub struct DownloadRequest {
     pub metadata_id: Option<i64>,
     /// 帖子/页面地址（与下载 URL 分开）；爬虫传入时为当前页面 URL。
     pub post_url: Option<String>,
+    /// 入库成功后挂载的已校验标签。
+    pub labels: Vec<LabelSpec>,
 }
 
 #[derive(Clone)]
@@ -571,6 +578,7 @@ impl DownloadQueue {
         custom_display_name: Option<String>,
         metadata_id: Option<i64>,
         post_url: Option<String>,
+        labels: Vec<LabelSpec>,
     ) -> Result<(), String> {
         self.download(
             url,
@@ -586,6 +594,7 @@ impl DownloadQueue {
             metadata_id,
             true,
             post_url,
+            labels,
         )
         .await
     }
@@ -603,6 +612,7 @@ impl DownloadQueue {
         metadata_id: Option<i64>,
         custom_display_name: Option<String>,
         post_url: Option<String>,
+        labels: Vec<LabelSpec>,
     ) -> Result<(), String> {
         if self.is_retrying(failed_image_id).await {
             return Err("Has been restarted".to_string());
@@ -621,6 +631,7 @@ impl DownloadQueue {
             metadata_id,
             false,
             post_url,
+            labels,
         )
         .await
     }
@@ -642,6 +653,7 @@ impl DownloadQueue {
         metadata_id: Option<i64>,
         blocking: bool,
         post_url: Option<String>,
+        labels: Vec<LabelSpec>,
     ) -> Result<(), String> {
         let download_id = next_download_id();
 
@@ -659,6 +671,7 @@ impl DownloadQueue {
             custom_display_name,
             metadata_id,
             post_url,
+            labels,
         };
 
         if !blocking {
@@ -724,6 +737,7 @@ impl DownloadQueue {
             custom_display_name: job.custom_display_name.clone(),
             metadata_id: job.metadata_id,
             post_url: job.post_url.clone(),
+            labels: job.labels.clone(),
             native_completion: Arc::new(StdMutex::new(None)),
         };
         self.active_downloads.lock().unwrap().push(info);
@@ -1005,6 +1019,12 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     job.surf_record_id.as_deref(),
                     job.post_url.as_deref(),
                 );
+                super::apply_download_labels(
+                    Some(task_id_clone.as_str()),
+                    &existing.id,
+                    &job.labels,
+                    true,
+                );
                 if !task_id_clone.trim().is_empty() {
                     if let Ok(new_count) =
                         Storage::global().increment_task_dedup_count(&task_id_clone)
@@ -1053,6 +1073,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         job.custom_display_name.as_deref(),
                         job.metadata_id,
                         job.post_url.as_deref(),
+                        &job.labels,
                     )
                     .await;
                 }
@@ -1068,6 +1089,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         &job.http_headers,
                         job.metadata_id,
                         job.custom_display_name.as_deref(),
+                        &job.labels,
                     );
                     dq.switch_state(job.id, DownloadState::Failed, Some(e))
                         .await;
@@ -1098,6 +1120,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 job.custom_display_name.as_deref(),
                 job.metadata_id,
                 job.post_url.as_deref(),
+                &job.labels,
             )
             .await;
             dq.wait_then_finish_download(job.id, true).await;
@@ -1186,6 +1209,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         job.custom_display_name.as_deref(),
                         job.metadata_id,
                         job.post_url.as_deref(),
+                        &job.labels,
                     )
                     .await;
                 } else {
@@ -1221,6 +1245,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         &job.http_headers,
                         job.metadata_id,
                         job.custom_display_name.as_deref(),
+                        &job.labels,
                     );
                     dq.switch_state(job.id, DownloadState::Failed, Some(&e))
                         .await;

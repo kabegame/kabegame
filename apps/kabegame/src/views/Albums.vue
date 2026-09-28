@@ -40,6 +40,7 @@
             :selected-id="selectedAlbumId"
             @select="onTreeSelect"
             @create-album="openCreateDialogWithParent"
+            @create-label="(pid) => openCreateDialogWithParent(pid, 'label')"
             @contextmenu="onTreeContextMenu"
             @dblclick="onTreeDblclick"
           />
@@ -130,6 +131,7 @@
         :selected-id="selectedAlbumId"
         @select="(id) => { onTreeSelect(id); treeDrawer.close(); }"
         @create-album="(pid) => { openCreateDialogWithParent(pid); treeDrawer.close(); }"
+        @create-label="(pid) => { openCreateDialogWithParent(pid, 'label'); treeDrawer.close(); }"
         @contextmenu="onTreeContextMenu"
         @dblclick="(id) => { onTreeDblclick(id); treeDrawer.close(); }"
       />
@@ -178,24 +180,44 @@
       @closed="resetCreateAlbumDialog"
     >
       <el-form label-width="0" @submit.prevent>
+        <el-radio-group v-model="newAlbumKind" size="small" class="mb-3">
+          <el-radio-button value="normal">{{ $t('albums.kindNormal') }}</el-radio-button>
+          <el-radio-button value="label">{{ $t('albums.kindLabel') }}</el-radio-button>
+          <el-radio-button v-if="!IS_ANDROID" value="local_folder">{{ $t('albums.kindLocalFolder') }}</el-radio-button>
+        </el-radio-group>
+
+        <template v-if="newAlbumKind === 'label'">
+          <el-input
+            v-model="newLabelKey"
+            :placeholder="$t('albums.labelKeyPlaceholder')"
+            @keyup.enter="handleCreateAlbum"
+          />
+          <p v-if="newLabelKey && !newLabelKeyValid" class="local-folder-error">
+            {{ $t('albums.labelKeyInvalidHint') }}
+          </p>
+          <el-input
+            v-model="newAlbumName"
+            class="mt-3"
+            :placeholder="$t('albums.labelNamePlaceholder')"
+            @keyup.enter="handleCreateAlbum"
+          />
+        </template>
         <el-input
+          v-else
           v-model="newAlbumName"
           :placeholder="$t('albums.placeholderName')"
           @keyup.enter="handleCreateAlbum"
         />
 
         <AlbumPickerField
+          v-if="newAlbumKind !== 'local_folder'"
           v-model="newAlbumParentId"
           class="mt-3"
           :album-tree="createAlbumParentTree"
           :album-counts="displayedAlbumCountsForPicker"
-          :placeholder="$t('albums.selectParentAlbum')"
+          :placeholder="newAlbumKind === 'label' ? $t('albums.selectParentLabel') : $t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
-
-        <el-checkbox v-if="!IS_ANDROID" v-model="newAlbumIsLocalFolder" class="mt-3">
-          {{ $t('albums.localFolder.create') }}
-        </el-checkbox>
 
         <div v-if="newAlbumIsLocalFolder" class="mt-2 flex flex-col gap-2">
           <div class="flex items-center gap-2">
@@ -310,7 +332,8 @@ import {
   setAlbumSyncMode,
   syncLocalFolderAlbum,
 } from "@/api/syncLocalFolder";
-import type { AlbumSyncMode } from "@kabegame/core/types/album";
+import type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
+import { isLabelKey } from "@/utils/labelKey";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { DragFileOptions } from "@/directives/dragFile";
 import { buildDropPlan, importDroppedFiles } from "@/utils/dragFileImport";
@@ -579,8 +602,9 @@ const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaper
 // ---------- 新建画册弹窗 ----------
 const createDialog = useModal();
 
-/** 树三点菜单 /「+」按钮入口：预填父级后打开创建弹窗。 */
-const openCreateDialogWithParent = (parentId: string | null) => {
+/** 树三点菜单 /「+」按钮入口：预填父级与类型后打开创建弹窗。 */
+const openCreateDialogWithParent = (parentId: string | null, kind: AlbumKind = "normal") => {
+  newAlbumKind.value = kind;
   newAlbumParentId.value = parentId;
   createDialog.open();
 };
@@ -594,7 +618,10 @@ const moveAlbumTree = computed(() => {
   const a = moveDlgAlbum.value;
   if (!a) return [];
   const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID];
-  return albumStore.getAlbumTreeExcluding(exclude, { excludeLocalFolder: true });
+  // 标签森林与普通画册互不嵌套：标签只能移到标签下，普通画册不能移进标签森林
+  return a.type === "label"
+    ? albumStore.getAlbumTreeExcluding(exclude, { onlyLabel: true })
+    : albumStore.getAlbumTreeExcluding(exclude, { excludeLocalFolder: true, excludeLabel: true });
 });
 
 watch(moveDialog.isOpen, (open) => {
@@ -631,7 +658,18 @@ const confirmMoveAlbum = async () => {
 };
 const newAlbumName = ref("");
 const newAlbumParentId = ref<string | null>(null);
-const newAlbumIsLocalFolder = ref(false);
+const newAlbumKind = ref<AlbumKind>("normal");
+const newAlbumIsLocalFolder = computed(() => newAlbumKind.value === "local_folder");
+const newLabelKey = ref("");
+const newLabelKeyValid = computed(() => isLabelKey(newLabelKey.value.trim()));
+// 切换类型时，旧父级可能不在新类型的候选森林里，清掉避免提交跨森林的父级
+watch(newAlbumKind, (kind, prev) => {
+  if (!prev) return;
+  const parent = newAlbumParentId.value
+    ? albums.value.find((a) => a.id === newAlbumParentId.value)
+    : null;
+  if (parent && (parent.type === "label") !== (kind === "label")) newAlbumParentId.value = null;
+});
 const newAlbumSyncFolder = ref("");
 const newAlbumRecursive = ref(false);
 const creatingAlbum = ref(false);
@@ -657,8 +695,10 @@ const syncFolderDuplicate = computed(() => {
   return existingSyncFolders.value.has(normalizeSyncPath(newAlbumSyncFolder.value));
 });
 const canSubmitCreateAlbum = computed(() => {
-  if (!newAlbumName.value.trim()) return false;
   if (creatingAlbum.value) return false;
+  // 标签的名称可选（缺省等于 key），key 必须合规
+  if (newAlbumKind.value === "label") return newLabelKeyValid.value;
+  if (!newAlbumName.value.trim()) return false;
   if (newAlbumIsLocalFolder.value && !newAlbumSyncFolder.value) return false;
   if (syncFolderDuplicate.value) return false;
   return true;
@@ -668,9 +708,15 @@ const isRefreshing = ref(false);
 const displayedAlbumCountsForPicker = computed(() => ({
   ...albumStore.getAlbumCounts(false),
 }));
-// 新建画册的父级候选：排除系统画册与文件夹画册（其成员只能经同步产生）
+// 新建画册的父级候选：排除系统画册与文件夹画册（其成员只能经同步产生）；
+// 标签只能建在标签森林里，普通画册不能建进标签森林
 const createAlbumParentTree = computed(() =>
-  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID], { excludeLocalFolder: true }),
+  newAlbumKind.value === "label"
+    ? albumStore.getAlbumTreeExcluding([], { onlyLabel: true })
+    : albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID], {
+        excludeLocalFolder: true,
+        excludeLabel: true,
+      }),
 );
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
@@ -713,7 +759,8 @@ const handleRefresh = async () => {
 const resetCreateAlbumDialog = () => {
   newAlbumName.value = "";
   newAlbumParentId.value = null;
-  newAlbumIsLocalFolder.value = false;
+  newAlbumKind.value = "normal";
+  newLabelKey.value = "";
   newAlbumSyncFolder.value = "";
   newAlbumRecursive.value = false;
   creatingAlbum.value = false;
@@ -741,7 +788,13 @@ const handleCreateAlbum = async () => {
   creatingAlbum.value = true;
   try {
     const parentId = newAlbumParentId.value?.trim() || null;
-    if (newAlbumIsLocalFolder.value) {
+    if (newAlbumKind.value === "label") {
+      await albumStore.createLabelAlbum({
+        key: newLabelKey.value.trim(),
+        name: newAlbumName.value.trim() || null,
+        parentId,
+      });
+    } else if (newAlbumIsLocalFolder.value) {
       // parent_id 已废弃：文件夹画册的层级由 sync_folder 的祖先串联唯一决定
       await albumStore.createLocalFolderAlbum(
         {
@@ -804,6 +857,7 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     albumImageCount: album ? (albumStore.getAlbumCounts(false)[album.id] || 0) : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
     isLocalFolder: album?.type === "local_folder",
+    isLabel: album?.type === "label",
     albumDriveEnabled: albumDriveEnabled.value,
   };
 });
@@ -829,6 +883,7 @@ type AlbumCommand =
   | "openLocalFolder"
   | "convertToNormal"
   | "createSubAlbum"
+  | "setLabelKey"
   | "openVirtualDrive"
   | `setSyncMode:${AlbumSyncMode}`;
 
@@ -881,7 +936,32 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   }
 
   if (command === "createSubAlbum") {
-    openCreateDialogWithParent(id);
+    // 标签画册的子画册只能是标签
+    openCreateDialogWithParent(id, album.type === "label" ? "label" : "normal");
+    return;
+  }
+
+  if (command === "setLabelKey") {
+    try {
+      const { value } = await ElMessageBox.prompt(
+        t("albums.labelKeyPlaceholder"),
+        t("contextMenu.setLabelKey"),
+        {
+          inputValue: album.labelKey ?? "",
+          inputValidator: (v) => isLabelKey(String(v || "").trim()) || t("albums.labelKeyInvalidHint"),
+        },
+      );
+      const newKey = String(value || "").trim();
+      if (!newKey || newKey === album.labelKey) return;
+      await albumStore.setLabelKey(id, newKey);
+      ElMessage.success(t("albums.labelKeyUpdated"));
+    } catch (error) {
+      if (error !== "cancel" && error !== "close") {
+        const errorMessage =
+          typeof error === "string" ? error : (error as any)?.message || String(error);
+        ElMessage.error(errorMessage);
+      }
+    }
     return;
   }
 

@@ -51,8 +51,11 @@ export function buildAlbumMediaNodes(
       album,
       path: buildGalleryAlbumPath(album.id, hide),
       directTotal,
+      // 标签画册不汇总子标签：同一张图会挂在多个子标签上，加总出的数字没有意义，只取直接成员数
       aggregateTotal:
-        directTotal + children.reduce((sum, child) => sum + child.aggregateTotal, 0),
+        album.type === "label"
+          ? directTotal
+          : directTotal + children.reduce((sum, child) => sum + child.aggregateTotal, 0),
       children,
     };
   };

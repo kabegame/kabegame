@@ -54,6 +54,14 @@
           <span class="flex-none">· {{ typeLabel }}</span>
         </div>
         <div
+          v-if="isLabel && album.labelPath"
+          class="mt-1 flex min-w-0 items-center gap-1 text-[12px]"
+          :title="album.labelPath"
+        >
+          <span class="flex-none text-[var(--anime-text-muted)]">{{ t("albums.labelKeyPrefix") }}</span>
+          <code class="truncate text-[var(--anime-text-secondary)]">{{ album.labelPath }}</code>
+        </div>
+        <div
           v-if="isLocalFolder && album.syncFolder"
           class="mt-1 flex min-w-0 items-center gap-1 text-[12px]"
           :title="album.syncFolder"
@@ -188,15 +196,18 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const isLocalFolder = computed(() => props.album?.type === "local_folder");
+const isLabel = computed(() => props.album?.type === "label");
 
 const displayName = computed(() => {
   if (!props.album) return "";
   return props.album.id === HIDDEN_ALBUM_ID ? t("albums.hiddenAlbumName") : props.album.name;
 });
 
-const typeLabel = computed(() =>
-  isLocalFolder.value ? t("albums.detailLocalFolderAlbum") : t("albums.detailManualAlbum"),
-);
+const typeLabel = computed(() => {
+  if (isLocalFolder.value) return t("albums.detailLocalFolderAlbum");
+  if (isLabel.value) return t("albums.detailLabelAlbum");
+  return t("albums.detailManualAlbum");
+});
 
 const folderStatusBad = computed(() => {
   const state = props.album?.folderStatus?.state;

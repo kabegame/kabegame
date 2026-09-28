@@ -316,5 +316,10 @@
   "chipSettings": "表示するチップを選択",
   "chipVisibleTitle": "ツールバーに表示するチップ",
   "chipHiddenHelp": "非表示にした項目も「高度」から利用できます。ツールバーの場所を取らなくなるだけです。",
-  "sortOrderToggle": "{current}（クリックで{next}に切り替え）"
+  "sortOrderToggle": "{current}（クリックで{next}に切り替え）",
+  "searchModeLabel": "ラベル",
+  "searchModeLabelTree": "ラベル（子ラベルを含む）",
+  "searchLabelIncludeChildren": "子ラベルを含める",
+  "searchPlaceholderLabel": "ラベルキー（複数はカンマ区切り）",
+  "searchModeHelpLabel": "ラベルキーの完全一致（大文字小文字を区別しない）。複数はカンマ区切りで、すべてに一致する必要があります。/ を含むと完全パスで照合します（例: pixiv/character/miku）。"
 }

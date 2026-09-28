@@ -239,16 +239,13 @@ impl AppPaths {
 
 /// 校验可安全用作插件私有目录名的插件 ID。
 ///
-/// 仅允许非空的 ASCII 字母、数字、`.`、`_`、`-`，并拒绝 `.` 与 `..`。
+/// 规则见 `storage::labels::is_plugin_ident`：`[a-zA-Z0-9_-]+`，不超过 64 字节（比标签 key 严格）。
 pub fn validate_plugin_id(plugin_id: &str) -> Result<(), String> {
-    if plugin_id.is_empty() || plugin_id == "." || plugin_id == ".." {
-        return Err("plugin_id 不能为空、`.` 或 `..`".to_string());
-    }
-    if !plugin_id
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return Err("plugin_id 只能包含 ASCII 字母、数字、`.`、`_`、`-`".to_string());
+    if !crate::storage::labels::is_plugin_ident(plugin_id) {
+        return Err(format!(
+            "plugin_id 只能包含 ASCII 字母、数字、`_`、`-`，且不超过 {} 字节",
+            crate::storage::labels::LABEL_KEY_MAX_BYTES
+        ));
     }
     Ok(())
 }
@@ -300,11 +297,21 @@ mod tests {
     }
 
     #[test]
-    fn validates_plugin_ids_for_directory_names() {
-        for valid in ["a", "Plugin-1_test.example", "0.1.2"] {
+    fn validate_plugin_id_rejects_dots_and_unsafe_directory_names() {
+        for valid in ["a", "Plugin-1_test", "0_1_2"] {
             assert!(validate_plugin_id(valid).is_ok(), "{valid}");
         }
-        for invalid in ["", ".", "..", "a/b", "a\\b", "space id", "插件"] {
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "Plugin-1_test.example",
+            "0.1.2",
+            "a/b",
+            "a\\b",
+            "space id",
+            "插件",
+        ] {
             assert!(validate_plugin_id(invalid).is_err(), "{invalid}");
         }
     }
@@ -313,16 +320,16 @@ mod tests {
     fn builds_isolated_plugin_directories() {
         let paths = test_paths();
         assert_eq!(
-            paths.plugin_data_dir("plugin.test").unwrap(),
-            PathBuf::from("data/plugins-data/plugin.test")
+            paths.plugin_data_dir("plugin-test").unwrap(),
+            PathBuf::from("data/plugins-data/plugin-test")
         );
         assert_eq!(
-            paths.plugin_cache_dir("plugin.test").unwrap(),
-            PathBuf::from("cache/plugins-cache/plugin.test")
+            paths.plugin_cache_dir("plugin-test").unwrap(),
+            PathBuf::from("cache/plugins-cache/plugin-test")
         );
         assert_eq!(
-            paths.plugin_temp_dir("plugin.test").unwrap(),
-            PathBuf::from("tmp/plugins-tmp/plugin.test")
+            paths.plugin_temp_dir("plugin-test").unwrap(),
+            PathBuf::from("tmp/plugins-tmp/plugin-test")
         );
         assert_eq!(
             paths.surf_session_temp_dir(4242),

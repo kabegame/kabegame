@@ -61,6 +61,9 @@ albums:
     parentIsLocalFolder: 本地文件夹画册的内容由文件夹同步管理，不能在其下手动创建子画册
     cannotMoveLocalFolder: 本地文件夹画册的位置由其磁盘路径决定，不能手动移动
     cannotMoveIntoLocalFolder: 不能将画册移动到本地文件夹画册下
+    labelForestIsolated: 标签画册只能嵌套在标签画册下，其他画册不能进入标签森林
+    labelKeyInvalid: "标签 key 只允许 ASCII 字母、数字、'_'、'-'、英文括号和空格（空格不能在首尾或连续），且不能超过 64 字节"
+    labelKeyExists: 当前层级已存在相同 key 的标签画册
   localFolderErrors:
     androidUnsupported: 安卓平台不支持本地文件夹同步
     notLocalFolder: 只有本地文件夹画册可以转换为普通画册

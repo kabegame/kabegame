@@ -755,9 +755,9 @@ mod tests {
 
     fn test_vfs() -> TestVfs {
         let temp = tempfile::tempdir().unwrap();
-        let data_root = temp.path().join("data/plugin.test");
-        let cache_root = temp.path().join("cache/plugin.test");
-        let tmp_root = temp.path().join("tmp/plugin.test");
+        let data_root = temp.path().join("data/plugin-test");
+        let cache_root = temp.path().join("cache/plugin-test");
+        let tmp_root = temp.path().join("tmp/plugin-test");
         let vfs = PluginVfs::from_roots(HANDLE, data_root.clone(), cache_root, tmp_root);
         TestVfs {
             _temp: temp,

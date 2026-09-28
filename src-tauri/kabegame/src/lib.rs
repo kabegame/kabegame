@@ -157,10 +157,8 @@ fn init(
                     }
                 }
                 if let Some(path) = argv.iter().skip(1).find(|arg| arg.ends_with(".kgpg")) {
-                    let _ = app_handle.emit(
-                        "app-import-plugin",
-                        serde_json::json!({ "kgpgPath": path }),
-                    );
+                    let _ = app_handle
+                        .emit("app-import-plugin", serde_json::json!({ "kgpgPath": path }));
                 }
             });
         });
@@ -264,7 +262,6 @@ fn init(
         .map_err(|e| format!("Cannot start http server: {}", e))?;
     Ok(())
 }
-
 
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 fn spawn_local_folder_sync() {
@@ -466,9 +463,12 @@ pub(crate) fn configure_app(
         .invoke_handler(tauri::generate_handler![
             // --- Albums ---
             get_albums,
+            get_image_album_ids,
             add_album,
+            add_label_album,
             delete_album,
             rename_album,
+            set_label_key,
             move_album,
             get_album_preview,
             add_images_to_album,

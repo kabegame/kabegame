@@ -14,8 +14,22 @@ pub fn get_albums() -> Result<Value, String> {
 }
 
 #[tauri::command]
+pub fn get_image_album_ids(image_id: String) -> Result<Value, String> {
+    commands::album::get_image_album_ids(image_id)
+}
+
+#[tauri::command]
 pub fn add_album(name: String, parent_id: Option<String>) -> Result<Value, String> {
     commands::album::add_album(name, parent_id)
+}
+
+#[tauri::command]
+pub fn add_label_album(
+    key: String,
+    name: Option<String>,
+    parent_id: Option<String>,
+) -> Result<Value, String> {
+    commands::album::add_label_album(key, name, parent_id)
 }
 
 #[tauri::command]
@@ -26,6 +40,11 @@ pub fn delete_album(album_id: String) -> Result<Value, String> {
 #[tauri::command]
 pub fn rename_album(album_id: String, new_name: String) -> Result<Value, String> {
     commands::album::rename_album(album_id, new_name)
+}
+
+#[tauri::command]
+pub fn set_label_key(album_id: String, new_key: String) -> Result<Value, String> {
+    commands::album::set_label_key(album_id, new_key)
 }
 
 #[tauri::command]

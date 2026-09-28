@@ -19,6 +19,9 @@ const FAVORITE_ALBUM_ID: &str = kabegame_core::storage::FAVORITE_ALBUM_ID;
 const HIDDEN_ALBUM_ID: &str = kabegame_core::storage::HIDDEN_ALBUM_ID;
 const ALBUM_A_ID: &str = "11111111-1111-1111-1111-111111111111";
 const TASK_A_ID: &str = "22222222-2222-2222-2222-222222222222";
+const LABEL_CHARACTER_ID: &str = "55555555-5555-5555-5555-555555555555";
+const LABEL_HATSUNE_ID: &str = "66666666-6666-6666-6666-666666666666";
+const LABEL_VOCALOID_ID: &str = "77777777-7777-7777-7777-777777777777";
 static LOCALE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn lock_locale_tests() -> MutexGuard<'static, ()> {
@@ -190,6 +193,25 @@ fn register_fixture_functions(conn: &Connection) {
     )
     .unwrap();
 
+    conn.create_scalar_function(
+        "kb_label_tokens",
+        1,
+        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| -> rusqlite::Result<String> {
+            let query: String = ctx.get(0)?;
+            Ok(serde_json::to_string(
+                &query
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_lowercase)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap())
+        },
+    )
+    .unwrap();
+
     for fn_name in ["get_album", "get_task", "get_surf_record"] {
         conn.create_scalar_function(
             fn_name,
@@ -255,7 +277,9 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             sync_folder TEXT,
             folder_status TEXT,
             ancestor_path TEXT NOT NULL DEFAULT '',
-            sync_mode TEXT NOT NULL DEFAULT 'none'
+            sync_mode TEXT NOT NULL DEFAULT 'none',
+            label_key TEXT,
+            label_path TEXT
         );
         CREATE TABLE tasks (
             id TEXT PRIMARY KEY,
@@ -287,7 +311,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             last_attempted_at INTEGER,
             header_snapshot TEXT,
             metadata_id INTEGER,
-            display_name TEXT
+            display_name TEXT,
+            labels TEXT
         );
         CREATE TABLE surf_records (
             id TEXT PRIMARY KEY,
@@ -302,6 +327,11 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         INSERT INTO albums(id, name, created_at, parent_id, ancestor_path) VALUES
             ('11111111-1111-1111-1111-111111111111', 'AlbumA', 1, NULL, '/11111111-1111-1111-1111-111111111111/'),
             ('33333333-3333-3333-3333-333333333333', 'AlbumChild', 2, '11111111-1111-1111-1111-111111111111', '/11111111-1111-1111-1111-111111111111/33333333-3333-3333-3333-333333333333/');
+        INSERT INTO albums(id, name, created_at, parent_id, type, ancestor_path, label_key, label_path) VALUES
+            ('44444444-4444-4444-4444-444444444444', 'Pixiv', 3, NULL, 'label', '/44444444-4444-4444-4444-444444444444/', 'Pixiv', 'Pixiv'),
+            ('55555555-5555-5555-5555-555555555555', '角色', 4, '44444444-4444-4444-4444-444444444444', 'label', '/44444444-4444-4444-4444-444444444444/55555555-5555-5555-5555-555555555555/', 'Character', 'Pixiv/Character'),
+            ('66666666-6666-6666-6666-666666666666', '初音未来', 5, '55555555-5555-5555-5555-555555555555', 'label', '/44444444-4444-4444-4444-444444444444/55555555-5555-5555-5555-555555555555/66666666-6666-6666-6666-666666666666/', 'Hatsune', 'Pixiv/Character/Hatsune'),
+            ('77777777-7777-7777-7777-777777777777', 'Vocaloid', 6, '44444444-4444-4444-4444-444444444444', 'label', '/44444444-4444-4444-4444-444444444444/77777777-7777-7777-7777-777777777777/', 'Vocaloid', 'Pixiv/Vocaloid');
         INSERT INTO metadata(id, data, plugin_version, plugin_id) VALUES
             (1, '{"source":"table","tags":["a"]}', 0, 'pixiv');
         INSERT INTO tasks VALUES
@@ -325,8 +355,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
                 NULL
             );
         INSERT INTO task_failed_images VALUES
-            (1, '22222222-2222-2222-2222-222222222222', 'pixiv', 'https://example.test/fail-1.jpg', 10, 30, 'network', 31, '{"User-Agent":"Kabegame"}', 1, 'failed-1'),
-            (2, 'other-task', 'pixiv', 'https://example.test/fail-2.jpg', 20, 32, 'timeout', NULL, NULL, NULL, 'failed-2');
+            (1, '22222222-2222-2222-2222-222222222222', 'pixiv', 'https://example.test/fail-1.jpg', 10, 30, 'network', 31, '{"User-Agent":"Kabegame"}', 1, 'failed-1', '[{"segments":["pixiv"],"key":"hatsune","name":null}]'),
+            (2, 'other-task', 'pixiv', 'https://example.test/fail-2.jpg', 20, 32, 'timeout', NULL, NULL, NULL, 'failed-2', NULL);
         INSERT INTO surf_records (
             id, host, root_url, icon, last_visit_at, created_at, name, cookie
         ) VALUES (
@@ -424,6 +454,19 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         [TASK_A_ID],
     )
     .unwrap();
+
+    for (album_id, image_id) in [
+        (LABEL_HATSUNE_ID, 1_i64),
+        (LABEL_VOCALOID_ID, 1_i64),
+        (LABEL_CHARACTER_ID, 2_i64),
+        (LABEL_HATSUNE_ID, 3_i64),
+    ] {
+        conn.execute(
+            "INSERT INTO album_images(album_id, image_id, \"order\") VALUES (?1, ?2, NULL)",
+            (album_id, image_id),
+        )
+        .unwrap();
+    }
 
     Arc::new(Mutex::new(conn))
 }
@@ -604,6 +647,11 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
     let header_snapshot: serde_json::Value =
         serde_json::from_str(failed["header_snapshot"].as_str().unwrap()).unwrap();
     assert_eq!(header_snapshot["User-Agent"], "Kabegame");
+    let labels: Vec<kabegame_core::storage::labels::LabelSpec> =
+        serde_json::from_str(failed["labels"].as_str().unwrap()).unwrap();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].segments, ["pixiv"]);
+    assert_eq!(labels[0].key, "hatsune");
 
     let failed_ids = ids(runtime
         .fetch("fail-images://tasks/id_22222222-2222-2222-2222-222222222222")
@@ -687,9 +735,7 @@ fn gallery_static_routes_are_enumerable_without_changing_alias_or_meta_semantics
     assert_eq!(sort.len(), 7);
 
     assert_eq!(
-        runtime
-            .count("images://gallery/plugins/pixiv")
-            .unwrap(),
+        runtime.count("images://gallery/plugins/pixiv").unwrap(),
         runtime.count("images://gallery/plugin/pixiv").unwrap()
     );
 
@@ -698,7 +744,10 @@ fn gallery_static_routes_are_enumerable_without_changing_alias_or_meta_semantics
         "images://gallery/plugin",
         "images://gallery/sort",
     ] {
-        assert!(runtime.note(path).unwrap().is_some(), "missing note: {path}");
+        assert!(
+            runtime.note(path).unwrap().is_some(),
+            "missing note: {path}"
+        );
     }
 
     let plugins = runtime.list("images://gallery/plugin").unwrap();
@@ -952,6 +1001,60 @@ fn gallery_local_path_search_normalizes_forward_and_backslashes() {
 }
 
 #[test]
+fn gallery_label_search_supports_and_paths_case_and_tree_semantics() {
+    let runtime = build_runtime();
+
+    assert_eq!(
+        ids(runtime
+            .fetch("images://gallery/search/label/HATSUNE,Vocaloid/sort/by-id")
+            .unwrap()),
+        ["1"]
+    );
+    assert_eq!(
+        ids(runtime
+            .fetch(r"images://gallery/search/label/Pixiv\/CHARACTER\/Hatsune/sort/by-id")
+            .unwrap()),
+        ["1", "3"]
+    );
+    assert_eq!(
+        ids(runtime
+            .fetch("images://gallery/search/label/character/sort/by-id")
+            .unwrap()),
+        ["2"]
+    );
+    assert_eq!(
+        ids(runtime
+            .fetch("images://gallery/search/label-tree/CHARACTER/sort/by-id")
+            .unwrap()),
+        ["1", "2", "3"]
+    );
+}
+
+#[test]
+fn gallery_label_search_quotes_are_bound_without_sql_or_json_errors() {
+    let runtime = build_runtime();
+    for query in [r#"a"b"#, "c'd"] {
+        let path = format!(
+            "images://gallery/search/label/{}/sort/by-id",
+            pathql_rs::escape_path_segment(query)
+        );
+        assert!(runtime.fetch(&path).unwrap().is_empty(), "path={path}");
+    }
+}
+
+#[test]
+fn gallery_label_search_with_only_separators_matches_nothing() {
+    let runtime = build_runtime();
+    for query in [",", " , ,", "  "] {
+        let path = format!(
+            "images://gallery/search/label/{}/sort/by-id",
+            pathql_rs::escape_path_segment(query)
+        );
+        assert!(runtime.fetch(&path).unwrap().is_empty(), "path={path}");
+    }
+}
+
+#[test]
 fn gallery_search_sort_paths_allow_empty_results() {
     let runtime = build_runtime();
 
@@ -1117,7 +1220,9 @@ fn images_metadata_path_reads_table_metadata() {
 fn album_sort_path_paginates_and_rejects_legacy_entries() {
     let runtime = build_runtime();
     let paged = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1")
+        .fetch(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1",
+        )
         .unwrap();
     let desc = runtime
         .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/desc/x3x/1")
@@ -1146,7 +1251,9 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
         .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
         .unwrap();
     let limited = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l")
+        .fetch(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l",
+        )
         .unwrap();
     assert_eq!(ids(paged), ["8", "7", "6"]);
     assert_eq!(ids(desc), ["6", "7", "8"]);
@@ -1171,19 +1278,25 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
     );
 
     let page_node = runtime
-        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1")
+        .resolve(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1",
+        )
         .unwrap();
     assert!(page_node.composed.offset_terms.len() == 1);
     let limit_node = runtime
-        .resolve("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l")
+        .resolve(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l",
+        )
         .unwrap();
     assert!(limit_node.composed.offset_terms.is_empty());
 
     for legacy in ["order", "album-order"] {
-        let path = format!(
-            "images://gallery/album/33333333-3333-3333-3333-333333333333/{legacy}/x3x/1"
-        );
-        assert!(matches!(runtime.fetch(&path), Err(EngineError::PathNotFound(_))));
+        let path =
+            format!("images://gallery/album/33333333-3333-3333-3333-333333333333/{legacy}/x3x/1");
+        assert!(matches!(
+            runtime.fetch(&path),
+            Err(EngineError::PathNotFound(_))
+        ));
     }
 
     let album_children = runtime
@@ -1450,7 +1563,10 @@ fn image_collection_paths_decode_into_image_info() {
         let rows = runtime
             .fetch(path)
             .unwrap_or_else(|e| panic!("fetch {path} failed: {e}"));
-        assert!(!rows.is_empty(), "{path} returned no rows; fixture changed?");
+        assert!(
+            !rows.is_empty(),
+            "{path} returned no rows; fixture changed?"
+        );
 
         for row in &rows {
             // 先单独盯住 type：它是唯一一个别名与列名不同的字段，也是最容易再次漂移的地方。

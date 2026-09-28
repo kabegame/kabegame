@@ -381,6 +381,30 @@ impl Storage {
             .map_err(|e| format!("collect metadata_rows_below_plugin_version: {e}"))
     }
 
+    /// 返回当前引用指定 metadata 行的全部图片 id。
+    /// 迁移挂标签必须在 metadata 合并重定向前调用。
+    pub fn image_ids_by_metadata(&self, metadata_id: i64) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM images WHERE metadata_id = ?1 ORDER BY id")
+            .map_err(|e| format!("prepare image_ids_by_metadata: {e}"))?;
+        let rows = stmt
+            .query_map(params![metadata_id], |row| {
+                let id = row.get_ref(0)?;
+                Ok(match id {
+                    rusqlite::types::ValueRef::Integer(value) => value.to_string(),
+                    rusqlite::types::ValueRef::Text(value) => {
+                        String::from_utf8_lossy(value).into_owned()
+                    }
+                    _ => String::new(),
+                })
+            })
+            .map_err(|e| format!("query image_ids_by_metadata: {e}"))?;
+        rows.filter(|row| row.as_ref().map_or(true, |id| !id.is_empty()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect image_ids_by_metadata: {e}"))
+    }
+
     /// 写回迁移后的 metadata 行；如命中已有复合键，则重定向引用并删除当前行。
     pub fn writeback_migrated_metadata_row(
         &self,
@@ -1497,8 +1521,12 @@ mod metadata_search_text_override_tests {
     }
 
     fn search_text_of(conn: &rusqlite::Connection, id: i64) -> String {
-        conn.query_row("SELECT search_text FROM metadata WHERE id = ?1", params![id], |row| row.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT search_text FROM metadata WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1568,7 +1596,12 @@ mod rebind_image_metadata_tests {
         }
 
         storage
-            .rebind_image_metadata("image-plugin", 2, Some("new-plugin"), Some("https://new/post"))
+            .rebind_image_metadata(
+                "image-plugin",
+                2,
+                Some("new-plugin"),
+                Some("https://new/post"),
+            )
             .unwrap();
         storage
             .rebind_image_metadata("image-shared", 4, None, None)
@@ -1632,14 +1665,18 @@ mod rebind_image_metadata_tests {
         );
 
         let unique_old_exists: bool = conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 1)", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 1)",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         let shared_old_exists: bool = conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 3)", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 3)",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert!(!unique_old_exists);
         assert!(shared_old_exists);

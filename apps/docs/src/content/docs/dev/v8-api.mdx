@@ -123,6 +123,27 @@ await Kabegame.downloadImage(imageUrl, {
 - `opts.metadata` 是任意 JSON，写入 `image_metadata` 行，用于详情页展示（配合 `templates/description.ejs`）。存储时会由应用自动盖上**运行插件的版本号**；请在 metadata 里自带一个 `schema` 标记供迁移脚本判断。
 - 多张图共享一行 metadata，或需要在解析出图片 URL 前先写 metadata 时，用 `createImageMetadata` 拿到 `metadata_id` 再传给 `downloadImage(url, { metadata_id })`。
 
+### 图片标签
+
+`downloadImage` 可带 `labels`，图片入库成功后会出现在应用的「标签」分区里（标签就是一种画册），用户可按标签浏览和搜索：
+
+```ts
+await Kabegame.downloadImage(imageUrl, {
+  url: postUrl,
+  labels: [
+    { key: "hatsune_miku", category: "pixiv/character", name: "初音ミク" },
+    { key: "vocaloid" },                  // category 缺省为插件 id → 挂在「<插件 id>」下
+  ],
+});
+```
+
+- `key` 必填，只能是 `[a-zA-Z0-9_-]`、英文括号 `()` 和空格（空格不能在首尾或连续），不超过 64 字节；同一级下不区分大小写唯一。`category` 各段同规则。
+- `category` 是用 `/` 分隔的上级 key 链（每段同样的字符集），缺省为插件 id；缺失的上级会自动建出来。
+- `name` 只在**首次创建**该标签时作为显示名，缺省等于 `key`；已存在的标签永远不会被插件改名（用户可能改过）。
+- 不合规的标签会写一条任务日志警告后跳过，**不会被自动修正**，也不影响图片本身的下载；`labels` 不是数组时整次调用报参数错误。
+- 标签只增不减。命中去重时，只有开启「去重时更新元数据」才会给已有图片补标签。
+- 只挂叶子标签：上级由 `category` 隐含，搜索时勾选「包含子标签」即可按目录搜。
+
 ### 请求头与 Cookie
 
 ```ts
@@ -238,6 +259,19 @@ export function migrate(json) {
 ```
 
 迁移后的行按 `(plugin_id, version, content_hash)` 去重；迁移成功会发出作用域为该插件的 `metadata-migrate` 变更事件刷新详情缓存。
+
+每一行无论迁移成功与否都只处理一次：失败时保留原数据并同样盖上当前插件版本，不会在每次启动时反复重试；修好脚本后需要再发一个新版本。
+
+### 给历史图片补标签
+
+同一个脚本可以再导出 `provideLabels(json)`（允许 `async`），返回与 `downloadImage` 的 `labels` 相同结构的数组。应用只在 `migrate` 成功后，用**迁移后的** metadata 调用它，并把标签挂到引用这行 metadata 的所有图片上。`migrate` 与 `provideLabels` 至少导出一个；只导出 `provideLabels` 时按原数据调用。
+
+```js
+export function provideLabels(json) {
+  const m = JSON.parse(json);
+  return (m.characters ?? []).map((c) => ({ key: c.slug, category: "my-plugin/character", name: c.name }));
+}
+```
 
 :::note
 旧的 `metadata_migrations/v{N}.rhai` 逐版本迁移与数组键 `kbMetadataMigrations` 已废弃、不再解析。用单一 `migrate.js` + `kbMetadataMigration`。

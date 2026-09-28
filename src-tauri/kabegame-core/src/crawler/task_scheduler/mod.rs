@@ -1,22 +1,22 @@
 use crate::crawler::downloader::{
-    ActiveDownloadInfo, DownloadQueue, get_default_images_dir, resolve_crawl_output_dir,
+    get_default_images_dir, resolve_crawl_output_dir, ActiveDownloadInfo, DownloadQueue,
 };
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use crate::plugin::webpage::WEBPAGE_PLUGIN_ID;
-use crate::plugin::{PluginManager, VarDefinition, VarOption, check_min_app_version};
+use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
-use crate::storage::Storage;
 use crate::storage::tasks::TaskStatus;
+use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock as StdRwLock};
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{mpsc, Mutex, Notify};
 use url::Url;
 
 pub mod task;
@@ -358,6 +358,7 @@ impl TaskScheduler {
                 item.metadata_id,
                 item.display_name,
                 None,
+                item.labels,
             )
             .await
     }
@@ -755,8 +756,12 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
     // V8 后端：桌面 + Android 均可用。
     #[cfg(feature = "plugin-runtime")]
     if plugin.script.v8_source().is_some() {
-        return run_v8_and_drain(&download_queue, &run, crate::plugin::v8::execute_crawler_script_v8)
-            .await;
+        return run_v8_and_drain(
+            &download_queue,
+            &run,
+            crate::plugin::v8::execute_crawler_script_v8,
+        )
+        .await;
     }
 
     #[cfg(not(feature = "plugin-runtime"))]

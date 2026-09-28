@@ -46,5 +46,7 @@
   "hideFailed": "Hide failed",
   "unhide": "Unhide",
   "unhideSuccess": "Unhidden",
-  "unhideFailed": "Unhide failed"
+  "unhideFailed": "Unhide failed",
+  "setLabelKey": "Change key",
+  "copyLabels": "Copy labels"
 }

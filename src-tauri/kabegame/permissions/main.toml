@@ -3,9 +3,12 @@ identifier = "main"
 description = "Main app permissions"
 commands.allow = [
   "get_albums",
+  "get_image_album_ids",
   "add_album",
+  "add_label_album",
   "delete_album",
   "rename_album",
+  "set_label_key",
   "move_album",
   "get_album_preview",
   "add_images_to_album",

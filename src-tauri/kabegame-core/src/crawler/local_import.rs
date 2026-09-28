@@ -94,7 +94,11 @@ impl LocalImportHook {
 
     /// 复制到目标目录，重名时生成不冲突的文件名。
     #[cfg(not(target_os = "android"))]
-    async fn copy_into(&self, src: &std::path::Path, dest_dir: &std::path::Path) -> Result<PathBuf, String> {
+    async fn copy_into(
+        &self,
+        src: &std::path::Path,
+        dest_dir: &std::path::Path,
+    ) -> Result<PathBuf, String> {
         let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
         let fallback_ext = crate::media::image_type::mime_type_from_path(src)
             .as_deref()
@@ -154,6 +158,7 @@ impl LocalImportHook {
             None,
             None,
             None,
+            &[],
         )
         .await;
         wait_after_download_if_needed(download_start_time, None).await;
@@ -233,6 +238,7 @@ impl LocalImportHook {
             custom_display_name.as_deref(),
             None,
             None,
+            &[],
         )
         .await;
         wait_after_download_if_needed(download_start_time, None).await;

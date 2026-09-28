@@ -106,7 +106,11 @@
           @preview-close="emit('preview-close', $event)"
           @open-task="emit('open-task', $event)"
           @open-surf-record="emit('open-surf-record', $event)"
-          @open-gallery-filter="emit('open-gallery-filter', $event)" />
+          @open-gallery-filter="emit('open-gallery-filter', $event)">
+          <template v-if="$slots['preview-info-extra']" #info-extra="{ image }">
+            <slot name="preview-info-extra" :image="image" />
+          </template>
+        </ImagePreviewDialog>
         </div>
       </div>
       </div>

@@ -83,7 +83,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | `kbAssets` | 否 | 文档与更新日志共用的资源白名单，值为插件根相对路径字符串数组。Markdown 本地资源引用未声明会报错，未引用的预留项只警告；归一化路径以 `banner` 开头的项按数组声明顺序进入轮播。 |
 | `kbRecommendedConfigs` | 否 | 推荐运行配置文件路径数组。 |
 | `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。 |
-| `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，`export function migrate(input)`，需幂等一步到位；详见 cocs/crawler/METADATA_MIGRATION.md）。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
+| `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，导出 `migrate(input)` 与 / 或 `provideLabels(input)`（给历史图片补标签），需幂等一步到位，每行无论成败只处理一次；详见 cocs/crawler/METADATA_MIGRATION.md）。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
 | `kbDescriptionTemplate` | 否 | 图片详情 EJS 模板路径。 |
 
 ### 插件标签（`kbLabels`）

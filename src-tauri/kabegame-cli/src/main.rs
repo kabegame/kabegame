@@ -1257,6 +1257,8 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "package.json 缺少 \"name\" 字段".to_string())?;
+    kabegame_core::app_paths::validate_plugin_id(pkg_name)
+        .map_err(|reason| format!("插件 ID \"{pkg_name}\" 不合规: {reason}"))?;
     let dir_name = plugin_dir
         .file_name()
         .and_then(|s| s.to_str())

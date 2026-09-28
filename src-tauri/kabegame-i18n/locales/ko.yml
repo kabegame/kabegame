@@ -61,6 +61,9 @@ albums:
     parentIsLocalFolder: 로컬 폴더 앨범의 내용은 폴더 동기화로 관리되므로 그 아래에 하위 앨범을 수동으로 만들 수 없습니다
     cannotMoveLocalFolder: 로컬 폴더 앨범의 위치는 디스크 경로에 따라 결정되므로 수동으로 이동할 수 없습니다
     cannotMoveIntoLocalFolder: 앨범을 로컬 폴더 앨범 아래로 이동할 수 없습니다
+    labelForestIsolated: 라벨 앨범은 라벨 앨범 아래에만 둘 수 있으며 다른 앨범은 라벨 트리에 넣을 수 없습니다
+    labelKeyInvalid: "라벨 키에는 ASCII 영문자, 숫자, '_', '-', 영문 괄호, 공백(앞뒤·연속 불가)만 사용할 수 있으며 64바이트를 넘을 수 없습니다"
+    labelKeyExists: 이 계층에 같은 키의 라벨 앨범이 이미 있습니다
   localFolderErrors:
     androidUnsupported: Android에서는 로컬 폴더 동기화를 지원하지 않습니다
     notLocalFolder: 로컬 폴더 앨범만 일반 앨범으로 변환할 수 있습니다

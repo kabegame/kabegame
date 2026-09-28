@@ -157,6 +157,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 - 记录 `taskLogDedupByUrl`
 - 如果指定了输出画册，把已存在图片加入该画册并发送 `album-images-change`
 - `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启且本次带插件标签（`DownloadRequest.labels`）时，给已有图片补挂标签（见 §6「插件标签」）
 - 增加 `tasks.dedup_count` 并通过 `tasks-change` / `TaskChanged` 发送新的 `dedupCount`
 - 发送 Completed，清理对应失败记录，跳过下载读取
 
@@ -167,6 +168,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 - 记录 `taskLogDedupByHash`
 - 按需加入输出画册
 - `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启时同样给已有图片补挂插件标签
 - 后处理最终分支收到 `imported = false` 后增加 `tasks.dedup_count`
 - 发送 Completed，清理对应失败记录
 
@@ -186,6 +188,12 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 4. 未命中去重时，根据格式键计算最终目标路径/文件名，落盘（或映射回标准 MIME 后执行 Android MediaStore copy）。
 5. 生成缩略图/预览，写入 `images` 表，广播事件。
 6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`；先按 `hash` 查同哈希图片是否已挂 `parser_version` 匹配的 `image_metadata` 行（命中则共享 id 回填所有同哈希图片，不重复解析），未命中才解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算）。任何失败仅 log，不阻断入库。注意 `image_metadata` 表现指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
+
+### 插件标签
+
+插件在 `downloadImage` 的 `labels` 里声明标签（V8 经 `parse_download_opts`，WebView 经 `crawl_download_image`，两处都调用 `storage::labels::validate_label_values`）。入口**只校验、不建画册**——下载可能失败；校验后的 `Vec<LabelSpec>` 随 `DownloadRequest` / `ActiveDownloadInfo` 搬运，失败时序列化进 `task_failed_images.labels`，重试时还原。
+
+入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建标签画册，只在叶子上挂图，随后发 `album-added`（新建的画册）与一次 `album-images-change`。去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息：失败只写任务日志警告，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
 
 `images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
 
@@ -337,6 +345,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 - `header_snapshot`
 - `display_name`
 - `metadata_id`
+- `labels`：已校验的插件标签 JSON 数组，重试时还原
 
 失败时 `upsert_failed_image_on_failure`：
 
@@ -347,7 +356,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 重试入口在 `TaskScheduler::retry_failed_image`。它读取失败记录与任务：
 
 - header 优先使用失败记录的 `header_snapshot`，为空时回退任务级 headers
-- display name 与 metadata_id 从失败记录回放
+- display name、metadata_id 与 labels 从失败记录回放
 - 每个 failed image id 维护一个 `download_handles` 句柄，防止重复重试并支持等待入队时取消
 - 重试成功后清理失败记录并发送 removed/count 事件
 

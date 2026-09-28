@@ -1941,13 +1941,22 @@ impl PluginManager {
                 if !(path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
                     continue;
                 }
+                let Some(plugin_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                    eprintln!(
+                        "[plugin] 跳过无法解析文件名为插件 ID 的 kgpg: {}",
+                        path.display()
+                    );
+                    continue;
+                };
+                if let Err(reason) = crate::app_paths::validate_plugin_id(plugin_id) {
+                    eprintln!(
+                        "[plugin] 跳过插件 ID \"{plugin_id}\" 不合规的 kgpg {}: {reason}",
+                        path.display()
+                    );
+                    continue;
+                }
                 // 与内建插件同名的 kgpg 直接跳过（parse_kgpg 会拒绝它；这里先跳，避免一颗文件炸掉整次刷新）
-                if path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|stem| builtin::builtin_plugins().contains_key(stem))
-                    .unwrap_or(false)
-                {
+                if builtin::builtin_plugins().contains_key(plugin_id) {
                     eprintln!("[plugin] 跳过与内建插件同名的 kgpg: {}", path.display());
                     continue;
                 }
@@ -1975,6 +1984,8 @@ impl PluginManager {
     /// 安装/更新/删除后：按 pluginId 局部刷新（部分刷新）
     /// 仅从用户目录（data）查找指定 plugin_id
     pub async fn refresh_plugin(&self, plugin_id: &str) -> Result<(), String> {
+        crate::app_paths::validate_plugin_id(plugin_id)
+            .map_err(|reason| format!("插件 ID \"{plugin_id}\" 不合规: {reason}"))?;
         // 内建插件不落盘也不进已安装缓存，无需刷新/清理
         if builtin::builtin_plugins().contains_key(plugin_id) {
             return Ok(());
@@ -2001,6 +2012,13 @@ impl PluginManager {
                             .and_then(|s| s.to_str())
                             .unwrap_or("")
                             .to_string();
+                        if let Err(reason) = crate::app_paths::validate_plugin_id(&stem) {
+                            eprintln!(
+                                "[plugin] 跳过插件 ID \"{stem}\" 不合规的 kgpg {}: {reason}",
+                                path.display()
+                            );
+                            continue;
+                        }
                         if stem == plugin_id {
                             found_path = Some(path);
                             break;
@@ -2048,6 +2066,12 @@ impl PluginManager {
             .filter(|s| !s.is_empty())
             .ok_or_else(|| format!("无法从路径提取插件 ID: {}", path.display()))?
             .to_string();
+        crate::app_paths::validate_plugin_id(&plugin_id).map_err(|reason| {
+            format!(
+                "插件文件 {} 的 ID \"{plugin_id}\" 不合规: {reason}",
+                path.display()
+            )
+        })?;
 
         // 内建插件 id 保留：磁盘 kgpg 不得与内建插件同名（安装/临时运行/商店缓存统一在此拒绝；
         // 运行时查找另有 get() 内建优先兜底）。refresh 扫描对同名文件先行跳过，不会撞到这里。
@@ -3271,7 +3295,8 @@ pub fn extract_kgpg_filename_from_url(url_str: &str) -> Option<String> {
         return None;
     }
     let stem = file_name.trim_end_matches(".kgpg");
-    if stem.is_empty() {
+    if let Err(reason) = crate::app_paths::validate_plugin_id(stem) {
+        eprintln!("[plugin] 跳过 URL 中不合规的插件 ID \"{stem}\": {reason}");
         return None;
     }
     Some(stem.to_string())

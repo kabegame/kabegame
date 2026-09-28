@@ -13,7 +13,8 @@
             { "sql": "task_failed_images.last_attempted_at", "as": "last_attempted_at" },
             { "sql": "task_failed_images.header_snapshot", "as": "header_snapshot" },
             { "sql": "task_failed_images.metadata_id", "as": "metadata_id" },
-            { "sql": "task_failed_images.display_name", "as": "display_name" }
+            { "sql": "task_failed_images.display_name", "as": "display_name" },
+            { "sql": "task_failed_images.labels", "as": "labels" }
         ],
     },
     "resolve": {

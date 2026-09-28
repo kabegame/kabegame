@@ -8,6 +8,10 @@
 - 新增设置“去重时更新元数据”（下载分区，默认关闭）：重复下载命中已有图片时，可用本次下载的新元数据、来源插件与帖子地址更新该图片
 - 画廊“开始收集”新增“网页”来源：粘贴一个网页地址即可收集页面上的图片与视频，可选 V8（静态 HTML，可自定义 HTTP 头，默认自动注入畅游 Cookie 与浏览器 UA）或 WebView（浏览器渲染并自动滚动，保留登录态）两种后端；Android 仅支持 V8，Web 版暂不开放
 - 新增 v8 api: `cefUA()` 函数，可以获取cef的默认UA拼到http header.
+- 新增图片标签：画册页新增「标签」分区，标签是一种可以分层的画册（有英文 key，可含空格与英文括号，如 `sua (alien stage)`；可改名、改 key、移动、删除），可在图片预览的「标签」面板里查看、添加、新建、删除、复制标签（复制内容按 SD 提示词转义括号，可直接粘贴使用），点击标签跳到对应标签画册；图片右键新增「复制标签」
+- 搜索新增「标签」tab：按标签 key 搜索，多个 key 用英文逗号分隔（需同时命中），可勾选「包含子标签」；写成 `a/b/c` 按完整路径匹配
+- anime-pictures 插件 0.5.0：下载时把作品、角色、画师、参考、物体标签写入标签分区，历史图片升级后自动补标签
+- konachan 插件 1.3.0：下载时按标签颜色（画师 / 版权 / 角色 / 社团 / 风格 / 通用）写入标签分区，历史图片升级后自动补标签
 
 ### Fixed
 - 修复本地文件夹中单个文件变化会触发整目录重扫、阻塞应用事件刷新，以及同步在飞时可能漏掉后续文件变化的问题
@@ -34,9 +38,14 @@
 - 畅游一键下载：`surf_collect.rs` 以 Tauri Channel 与内容页通信（Rust 权威 run 状态机，内容页脚本 `concat!` 成封闭 IIFE、不挂 window 全局）；页面发现脚本 `page_discover.js` 供后续 webpage runner 复用；快照写入 metadata 表并只以标题与 URL 建搜索索引
 - 新增本地文件夹 `fs_listener` + `synchronizer` 双管道与跨画册 CPU 核数并发限制
 - 添加了 cef 、 cef-rs 补丁，为了实现linux的拖拽，维护负担增加
+- 标签画册：`albums.type = 'label'` + `label_key` / 派生列 `label_path`（v031），标签与画册共享树、成员、事件与计数，见 `cocs/gallery/LABEL_ALBUMS.md`
+- 插件 API：`Kabegame.downloadImage` 新增 `labels`；迁移脚本新增可选导出 `provideLabels(input)`，`migrate` 变为可选
+- 新增 PathQL 搜索 `search/label/<q>` 与 `search/label-tree/<q>`，宿主 SQL 函数 `kb_label_tokens`
 - V8 插件新增 `Kabegame.cefUserAgent()`，返回畅游（桌面 CEF）的默认 UA，配合 `requireCookie()` 解决 Cloudflare `cf_clearance` 绑定 UA 导致的 403；Chrome 大版本号写死在 `ops.rs` 的 `CEF_CHROME_MAJOR`，升级 CEF 时同步
 
 ### Changed
 
+- 插件 id 收紧为 `[a-zA-Z0-9_-]`、不超过 64 字节（去掉 `.`），规则在 `storage::labels::is_plugin_ident`（标签 key 另用更宽的 `is_label_key`，额外允许英文括号与空格）；不合规的 `.kgpg` 安装 / 打包时被拒绝
+- 元数据迁移改为「失败也盖版本」：每行无论成败只处理一次，失败行保留原数据，不再每次启动重试
 - `changelog.md` 放到了 [versions](/versions/) 文件夹下方
 - windows下拖动文件通过新的download端点下载，可以显示真实文件名称。

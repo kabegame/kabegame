@@ -7,6 +7,7 @@ use crate::crawler::webview::get_webview_handler;
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
+use crate::storage::labels::LabelSpec;
 use crate::storage::{ImageInfo, Storage};
 use async_trait::async_trait;
 use serde_json::json;
@@ -97,15 +98,51 @@ pub(super) fn rebind_deduped_metadata(
                 "change",
                 std::slice::from_ref(&existing.id),
                 existing.task_id.as_ref().map(std::slice::from_ref),
-                existing
-                    .surf_record_id
-                    .as_ref()
-                    .map(std::slice::from_ref),
+                existing.surf_record_id.as_ref().map(std::slice::from_ref),
                 (!plugin_ids.is_empty()).then_some(plugin_ids.as_slice()),
             );
         }
         Err(e) => eprintln!("[downloader] rebind deduped metadata failed: {e}"),
     }
+}
+
+/// 为新图或去重命中的旧图补充标签，并汇总发送一次成员变更事件。
+/// 标签是附加信息：失败只写任务日志警告，不影响图片本身的入库结果。
+fn apply_download_labels(
+    task_id: Option<&str>,
+    image_id: &str,
+    labels: &[LabelSpec],
+    dedup_hit: bool,
+) {
+    if !should_apply_download_labels(
+        labels,
+        dedup_hit,
+        Settings::global().get_dedup_update_metadata(),
+    ) {
+        return;
+    }
+    let image_ids = vec![image_id.to_string()];
+    match Storage::global().apply_labels_to_images(labels, &image_ids) {
+        Ok(touched) => {
+            if !touched.is_empty() {
+                GlobalEmitter::global().emit_album_images_change("add", &touched, &image_ids);
+            }
+        }
+        Err(error) => {
+            eprintln!("[labels] 图片 {image_id} 挂载标签失败: {error}");
+            if let Some(task_id) = task_id {
+                emit_task_log(task_id, "warn", format!("[labels] 挂载标签失败：{error}"));
+            }
+        }
+    }
+}
+
+fn should_apply_download_labels(
+    labels: &[LabelSpec],
+    dedup_hit: bool,
+    dedup_update_metadata: bool,
+) -> bool {
+    !labels.is_empty() && (!dedup_hit || dedup_update_metadata)
 }
 
 /// 搜索语义：url 搜索维度使用 = 去重集合 **+ file://**。
@@ -785,8 +822,7 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
     if !crate::media::native_metadata::supports_native_metadata(format_key) {
         return;
     }
-    let Some(expected_version) =
-        crate::media::native_metadata::parser_version_for(format_key)
+    let Some(expected_version) = crate::media::native_metadata::parser_version_for(format_key)
     else {
         return;
     };
@@ -865,6 +901,7 @@ pub async fn postprocess_downloaded_image(
     custom_display_name: Option<&str>,
     metadata_id: Option<i64>,
     post_url: Option<&str>,
+    labels: &[LabelSpec],
 ) -> Result<bool, String> {
     match async {
         let is_surf_mode = surf_record_id.is_some();
@@ -939,6 +976,7 @@ pub async fn postprocess_downloaded_image(
                     }
                 }
                 rebind_deduped_metadata(existing, metadata_id, plugin_id, surf_record_id, post_url);
+                apply_download_labels(task_id, &existing.id, labels, true);
                 if let Some(task_id) = task_id {
                     emit_task_log(
                         task_id,
@@ -1112,6 +1150,7 @@ pub async fn postprocess_downloaded_image(
                 if file_created {
                     let _ = tokio::fs::remove_file(&path).await;
                 }
+                apply_download_labels(task_id, &existing.id, labels, true);
                 return Ok(false);
             }
 
@@ -1238,6 +1277,7 @@ pub async fn postprocess_downloaded_image(
                             http_headers,
                             metadata_id,
                             custom_display_name,
+                            labels,
                         );
                     }
                     dq.switch_state(id, DownloadState::Failed, Some(e.as_str())).await;
@@ -1417,6 +1457,7 @@ pub async fn postprocess_downloaded_image(
                             }
                         }
                     }
+                    apply_download_labels(task_id, &image_id, labels, false);
                     let album_ms = t_album.map(|t| t.elapsed().as_millis() as u64);
                     if !auto_deduplicate {
                         let th = thumb_ms.unwrap_or(0);
@@ -1490,6 +1531,7 @@ pub async fn postprocess_downloaded_image(
                     http_headers,
                     metadata_id,
                     custom_display_name,
+                    labels,
                 );
             }
             dq.switch_state(id, DownloadState::Failed, Some(err.as_str())).await;
@@ -1537,11 +1579,27 @@ pub async fn clear_downloads_temp_dir() {
 
 #[cfg(test)]
 mod spill_writer_tests {
-    use super::{DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD};
+    use super::{
+        should_apply_download_labels, DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD,
+    };
+    use crate::storage::labels::LabelSpec;
     use std::path::PathBuf;
     use tokio::io::AsyncWriteExt;
 
     const MIB: usize = 1024 * 1024;
+
+    #[test]
+    fn dedup_labels_follow_update_metadata_setting() {
+        let labels = vec![LabelSpec {
+            segments: vec!["pixiv".to_string()],
+            key: "hatsune".to_string(),
+            name: None,
+        }];
+        assert!(!should_apply_download_labels(&labels, true, false));
+        assert!(should_apply_download_labels(&labels, true, true));
+        assert!(should_apply_download_labels(&labels, false, false));
+        assert!(!should_apply_download_labels(&[], false, true));
+    }
 
     /// 每个用例独立的落盘目录，避免相互干扰且不依赖全局 AppPaths。
     fn temp_dir(tag: &str) -> PathBuf {

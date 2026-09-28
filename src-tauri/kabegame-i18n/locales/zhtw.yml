@@ -61,6 +61,9 @@ albums:
     parentIsLocalFolder: 本機資料夾畫冊的內容由資料夾同步管理，不能在其下手動建立子畫冊
     cannotMoveLocalFolder: 本機資料夾畫冊的位置由其磁碟路徑決定，不能手動移動
     cannotMoveIntoLocalFolder: 不能將畫冊移動到本機資料夾畫冊下
+    labelForestIsolated: 標籤畫冊只能巢狀放在標籤畫冊下，其他畫冊不能進入標籤森林
+    labelKeyInvalid: "標籤 key 只允許 ASCII 字母、數字、'_'、'-'、英文括號和空格（空格不能在首尾或連續），且不能超過 64 位元組"
+    labelKeyExists: 目前層級已存在相同 key 的標籤畫冊
   localFolderErrors:
     androidUnsupported: Android 平台不支援本機資料夾同步
     notLocalFolder: 只有本機資料夾畫冊可以轉換為一般畫冊

@@ -61,6 +61,9 @@ albums:
     parentIsLocalFolder: Local folder album contents are managed by folder sync, so child albums cannot be created manually under them.
     cannotMoveLocalFolder: A local folder album's location is determined by its disk path and cannot be moved manually.
     cannotMoveIntoLocalFolder: Albums cannot be moved under a local folder album.
+    labelForestIsolated: Label albums can only be nested under label albums, and other albums cannot be placed in the label forest.
+    labelKeyInvalid: "Label keys may contain only ASCII letters, numbers, '_', '-', parentheses, and single spaces (not at either end), and must not exceed 64 bytes."
+    labelKeyExists: A label with the same key already exists at this level.
   localFolderErrors:
     androidUnsupported: Local folder sync is not supported on Android
     notLocalFolder: Only local folder albums can be converted to normal albums

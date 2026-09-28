@@ -316,5 +316,10 @@
   "chipSettings": "표시할 칩 선택",
   "chipVisibleTitle": "툴바에 표시할 칩",
   "chipHiddenHelp": "숨긴 항목도 '고급'에서 계속 사용할 수 있으며, 툴바 자리만 차지하지 않습니다.",
-  "sortOrderToggle": "{current} (클릭하면 {next}(으)로 전환)"
+  "sortOrderToggle": "{current} (클릭하면 {next}(으)로 전환)",
+  "searchModeLabel": "라벨",
+  "searchModeLabelTree": "라벨 (하위 포함)",
+  "searchLabelIncludeChildren": "하위 라벨 포함",
+  "searchPlaceholderLabel": "라벨 키, 여러 개는 쉼표로 구분",
+  "searchModeHelpLabel": "라벨 키를 대소문자 구분 없이 정확히 일치시킵니다. 여러 키는 쉼표로 구분하며 모두 일치해야 합니다. / 가 포함되면 전체 경로로 일치시킵니다 (예: pixiv/character/miku)."
 }

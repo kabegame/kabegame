@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_search_label_router",
+    "resolve": {
+        "(.+)": {
+            "alias": "query",
+            "provider": "gallery_search_label_query_provider",
+            "properties": { "query": "${capture[1]}", "tree": "0" }
+        }
+    }
+}

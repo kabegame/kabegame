@@ -17,9 +17,9 @@
            max-content 更宽，任一个都会把 w-max 撑回去），定完宽再撑满。 -->
       <div class="w-max max-w-[calc(100vw-48px)] p-3">
         <KbTab
-          :model-value="mode"
+          :model-value="tabMode"
           :items="searchModeItems"
-          @update:model-value="(next) => emit('update:mode', next)"
+          @update:model-value="onTabSelect"
         />
         <KbText
           :model-value="draft"
@@ -29,6 +29,14 @@
           @update:model-value="onInput"
           @keyup.enter="close"
         />
+        <el-checkbox
+          v-if="isLabelSearchMode(mode)"
+          class="mt-2"
+          :model-value="mode === 'label-tree'"
+          @update:model-value="(checked) => emit('update:mode', checked ? 'label-tree' : 'label')"
+        >
+          {{ t("gallery.searchLabelIncludeChildren") }}
+        </el-checkbox>
         <p class="mb-0 mt-3 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-secondary)]">
           {{ help }}
         </p>
@@ -46,6 +54,7 @@ import KbText from "@kabegame/core/components/common/form/KbText.vue";
 import {
   GALLERY_SEARCH_ANY,
   GALLERY_SEARCH_MODES,
+  isLabelSearchMode,
   type GallerySearchMode,
   type GallerySearchPathMode,
 } from "@/utils/galleryPath";
@@ -137,18 +146,37 @@ function searchModeLabel(mode: GallerySearchMode): string {
   if (mode === "native-metadata") return t("gallery.searchModeNativeMetadata");
   if (mode === "local-path") return t("gallery.searchModeLocalPath");
   if (mode === "url") return t("gallery.searchModeUrl");
+  if (mode === "label") return t("gallery.searchModeLabel");
+  if (mode === "label-tree") return t("gallery.searchModeLabelTree");
   return t("gallery.searchModeDisplayName");
+}
+
+/** tab 上 `label` / `label-tree` 合并为一个「标签」tab，差别由面板里的勾选表达。 */
+const tabMode = computed<GallerySearchMode>(() =>
+  props.mode === "label-tree" ? "label" : props.mode,
+);
+
+function onTabSelect(next: GallerySearchMode) {
+  // 再点一次「标签」tab 不丢掉「包含子标签」
+  if (next === "label" && props.mode === "label-tree") return;
+  emit("update:mode", next);
 }
 
 /** 当前 mode 不在允许集合里（分享来的 URL 落到受限页）时把它临时补进 tab 列表：
  *  既不静默改写用户的查询语义，也让人能一眼看见并切走；切走后该 tab 自然消失。 */
 const visibleModes = computed<readonly GallerySearchMode[]>(() => {
-  const modes: GallerySearchMode[] = [GALLERY_SEARCH_ANY, ...props.modes];
-  return modes.includes(props.mode) ? modes : [...modes, props.mode];
+  const modes: GallerySearchMode[] = [
+    GALLERY_SEARCH_ANY,
+    ...props.modes.filter((mode) => mode !== "label-tree"),
+  ];
+  return modes.includes(tabMode.value) ? modes : [...modes, tabMode.value];
 });
 
 const searchModeItems = computed<KbTabItem<GallerySearchMode>[]>(() =>
-  visibleModes.value.map((mode) => ({ name: mode, label: searchModeLabel(mode) })),
+  visibleModes.value.map((mode) => ({
+    name: mode,
+    label: mode === "label" ? t("gallery.searchModeLabel") : searchModeLabel(mode),
+  })),
 );
 
 const placeholder = computed(() => {
@@ -157,6 +185,7 @@ const placeholder = computed(() => {
   if (props.mode === "native-metadata") return t("gallery.searchPlaceholderNativeMetadata");
   if (props.mode === "local-path") return t("gallery.searchPlaceholderLocalPath");
   if (props.mode === "url") return t("gallery.searchPlaceholderUrl");
+  if (isLabelSearchMode(props.mode)) return t("gallery.searchPlaceholderLabel");
   return t("gallery.searchPlaceholder");
 });
 
@@ -165,13 +194,17 @@ const help = computed(() => {
   // 「任意」把覆盖了哪些 tab 说出来，否则读的人不知道它到底搜了什么。
   if (props.mode === GALLERY_SEARCH_ANY) {
     return t("gallery.searchModeHelpAny", {
-      modes: props.modes.map(searchModeLabel).join(" / "),
+      modes: props.modes
+        .filter((mode) => !isLabelSearchMode(mode))
+        .map(searchModeLabel)
+        .join(" / "),
     });
   }
   if (props.mode === "metadata") return t("gallery.searchModeHelpMetadata");
   if (props.mode === "native-metadata") return t("gallery.searchModeHelpNativeMetadata");
   if (props.mode === "local-path") return t("gallery.searchModeHelpLocalPath");
   if (props.mode === "url") return t("gallery.searchModeHelpUrl");
+  if (isLabelSearchMode(props.mode)) return t("gallery.searchModeHelpLabel");
   return t("gallery.searchModeHelpDisplayName");
 });
 </script>

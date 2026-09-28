@@ -1,5 +1,6 @@
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::SyncMode;
+use crate::storage::labels::{is_label_key, LabelSpec};
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use kabegame_i18n::t;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -29,7 +30,7 @@ pub struct Album {
     pub name: String,
     pub created_at: u64,
     pub parent_id: Option<String>,
-    /// "normal" | "local_folder"（未来可扩展）
+    /// "normal" | "local_folder" | "label"（未来可扩展）
     #[serde(rename(serialize = "type"), alias = "type")]
     pub kind: String,
     /// 仅 kind=="local_folder" 时为 Some，存绝对路径
@@ -40,6 +41,10 @@ pub struct Album {
     pub ancestor_path: String,
     /// 本地文件夹画册的逐画册同步状态
     pub sync_mode: String,
+    /// 仅 kind=="label" 时为 Some，用于插件定位与搜索
+    pub label_key: Option<String>,
+    /// 从标签森林根到自身的 key 链，格式为 `root/.../self`
+    pub label_path: Option<String>,
 }
 
 fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
@@ -53,6 +58,8 @@ fn album_from_storage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
         folder_status: row.get(6)?,
         ancestor_path: row.get(7)?,
         sync_mode: row.get(8)?,
+        label_key: row.get(9)?,
+        label_path: row.get(10)?,
     })
 }
 
@@ -63,6 +70,12 @@ pub struct AddToAlbumResult {
     pub attempted: usize,
     pub can_add: usize,
     pub current_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnsuredLabel {
+    pub album_id: String,
+    pub created: Vec<Album>,
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +295,18 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
+    pub fn get_image_album_ids(&self, image_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT album_id FROM album_images WHERE image_id = ?1 ORDER BY rowid")
+            .map_err(|e| format!("Failed to prepare image album query: {e}"))?;
+        let rows = stmt
+            .query_map(params![image_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query image albums: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read image albums: {e}"))
+    }
+
     // 确保收藏文件夹存在，可以不用走provider
     pub fn ensure_favorite_album(&self) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -370,6 +395,9 @@ impl Storage {
                 Some("local_folder") => {
                     return Err(t!("albums.errors.parentIsLocalFolder").to_string());
                 }
+                Some("label") => {
+                    return Err(t!("albums.errors.labelForestIsolated").to_string());
+                }
                 _ => {}
             }
         }
@@ -406,6 +434,8 @@ impl Storage {
             folder_status: None,
             ancestor_path,
             sync_mode: SyncMode::None.as_str().to_string(),
+            label_key: None,
+            label_path: None,
         };
         if let Some(emitter) = GlobalEmitter::try_global() {
             emitter.emit_album_added(&album);
@@ -413,14 +443,144 @@ impl Storage {
         Ok(album)
     }
 
+    pub fn add_label_album(
+        &self,
+        key: &str,
+        name: Option<&str>,
+        parent_id: Option<&str>,
+    ) -> Result<Album, String> {
+        if !is_label_key(key) {
+            return Err(t!("albums.errors.labelKeyInvalid").to_string());
+        }
+        let name = name.filter(|name| !name.trim().is_empty()).unwrap_or(key);
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let album = Self::insert_label_album(&conn, key, name, parent_id)?;
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_album_added(&album);
+        }
+        Ok(album)
+    }
+
+    pub fn set_label_key(&self, album_id: &str, new_key: &str) -> Result<(), String> {
+        if !is_label_key(new_key) {
+            return Err(t!("albums.errors.labelKeyInvalid").to_string());
+        }
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {e}"))?;
+        let (kind, parent_id): (String, Option<String>) = tx
+            .query_row(
+                "SELECT type, parent_id FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query label album: {e}"))?
+            .ok_or_else(|| "画册不存在".to_string())?;
+        if kind != "label" {
+            return Err(t!("albums.errors.labelForestIsolated").to_string());
+        }
+        Self::ensure_label_key_unique_ci(&tx, new_key, parent_id.as_deref(), Some(album_id))?;
+        tx.execute(
+            "UPDATE albums SET label_key = ?1 WHERE id = ?2",
+            params![new_key, album_id],
+        )
+        .map_err(|e| format!("Failed to update label key: {e}"))?;
+        Self::rebuild_album_ancestor_paths(&tx)?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {e}"))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_album_changed(album_id, json!({ "labelKey": new_key }));
+        }
+        Ok(())
+    }
+
+    pub fn ensure_label_path(&self, spec: &LabelSpec) -> Result<EnsuredLabel, String> {
+        if !is_label_key(&spec.key)
+            || spec.segments.is_empty()
+            || spec.segments.iter().any(|segment| !is_label_key(segment))
+        {
+            return Err(t!("albums.errors.labelKeyInvalid").to_string());
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {e}"))?;
+        let mut parent_id: Option<String> = None;
+        let mut created = Vec::new();
+
+        for segment in &spec.segments {
+            if let Some(existing) =
+                Self::find_label_child_by_key_ci(&tx, parent_id.as_deref(), segment)?
+            {
+                parent_id = Some(existing.id);
+                continue;
+            }
+            let name =
+                Self::resolve_new_label_name_ci(&tx, parent_id.as_deref(), segment, segment)?;
+            let album = Self::insert_label_album(&tx, segment, &name, parent_id.as_deref())?;
+            parent_id = Some(album.id.clone());
+            created.push(album);
+        }
+
+        let leaf = if let Some(existing) =
+            Self::find_label_child_by_key_ci(&tx, parent_id.as_deref(), &spec.key)?
+        {
+            existing
+        } else {
+            let requested_name = spec.name.as_deref().unwrap_or(&spec.key);
+            let name = Self::resolve_new_label_name_ci(
+                &tx,
+                parent_id.as_deref(),
+                requested_name,
+                &spec.key,
+            )?;
+            let album = Self::insert_label_album(&tx, &spec.key, &name, parent_id.as_deref())?;
+            created.push(album.clone());
+            album
+        };
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {e}"))?;
+        Ok(EnsuredLabel {
+            album_id: leaf.id,
+            created,
+        })
+    }
+
+    pub fn apply_labels_to_images(
+        &self,
+        specs: &[LabelSpec],
+        image_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut album_ids = Vec::new();
+        let mut seen = HashSet::new();
+        for spec in specs {
+            let ensured = self.ensure_label_path(spec)?;
+            if let Some(emitter) = GlobalEmitter::try_global() {
+                for album in &ensured.created {
+                    emitter.emit_album_added(album);
+                }
+            }
+            let result = self.add_images_to_album(&ensured.album_id, image_ids)?;
+            if result.added > 0 && seen.insert(ensured.album_id.clone()) {
+                album_ids.push(ensured.album_id);
+            }
+        }
+        Ok(album_ids)
+    }
+
     pub fn get_albums(&self, parent_id: Option<&str>) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = match parent_id {
             None => conn.prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path FROM albums WHERE parent_id IS NULL ORDER BY created_at ASC",
             ),
             Some(_) => conn.prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path FROM albums WHERE parent_id = ?1 ORDER BY created_at ASC",
             ),
         }
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -443,7 +603,7 @@ impl Storage {
     pub fn list_all_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums ORDER BY created_at DESC")
+            .prepare("SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path FROM albums ORDER BY created_at DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
         let rows = stmt
             .query_map([], album_from_storage_row)
@@ -793,6 +953,164 @@ impl Storage {
         Ok(())
     }
 
+    fn ensure_label_key_unique_ci(
+        conn: &Connection,
+        key: &str,
+        parent_id: Option<&str>,
+        exclude_album_id: Option<&str>,
+    ) -> Result<(), String> {
+        let count: i64 = match (parent_id, exclude_album_id) {
+            (None, None) => conn.query_row(
+                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1)",
+                params![key],
+                |row| row.get(0),
+            ),
+            (None, Some(exclude)) => conn.query_row(
+                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1) AND id != ?2",
+                params![key, exclude],
+                |row| row.get(0),
+            ),
+            (Some(parent_id), None) => conn.query_row(
+                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2)",
+                params![parent_id, key],
+                |row| row.get(0),
+            ),
+            (Some(parent_id), Some(exclude)) => conn.query_row(
+                "SELECT COUNT(*) FROM albums WHERE type = 'label' AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2) AND id != ?3",
+                params![parent_id, key, exclude],
+                |row| row.get(0),
+            ),
+        }
+        .map_err(|e| format!("Failed to query label key uniqueness: {e}"))?;
+        if count > 0 {
+            return Err(t!("albums.errors.labelKeyExists").to_string());
+        }
+        Ok(())
+    }
+
+    fn insert_label_album(
+        conn: &Connection,
+        key: &str,
+        name: &str,
+        parent_id: Option<&str>,
+    ) -> Result<Album, String> {
+        let (ancestor_prefix, label_prefix) = match parent_id {
+            None => (String::new(), None),
+            Some(parent_id) => {
+                let parent: Option<(String, String, Option<String>)> = conn
+                    .query_row(
+                        "SELECT type, ancestor_path, label_path FROM albums WHERE id = ?1",
+                        params![parent_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(|e| format!("Failed to verify label parent: {e}"))?;
+                let Some((kind, ancestor_path, label_path)) = parent else {
+                    return Err(t!("albums.errors.parentNotFound", id = parent_id).to_string());
+                };
+                if kind != "label" {
+                    return Err(t!("albums.errors.labelForestIsolated").to_string());
+                }
+                let label_path =
+                    label_path.ok_or_else(|| "标签父画册缺少 label_path".to_string())?;
+                (ancestor_path, Some(label_path))
+            }
+        };
+
+        Self::ensure_label_key_unique_ci(conn, key, parent_id, None)?;
+        Self::ensure_album_name_unique_ci(conn, name, parent_id, None)?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {e}"))?
+            .as_secs();
+        let ancestor_path = if ancestor_prefix.is_empty() {
+            format!("/{id}/")
+        } else {
+            format!("{ancestor_prefix}{id}/")
+        };
+        let label_path = match label_prefix {
+            Some(prefix) => format!("{prefix}/{key}"),
+            None => key.to_string(),
+        };
+        conn.execute(
+            "INSERT INTO albums (id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path)
+             VALUES (?1, ?2, ?3, ?4, 'label', NULL, NULL, ?5, 'none', ?6, ?7)",
+            params![id, name, created_at as i64, parent_id, ancestor_path, key, label_path],
+        )
+        .map_err(|e| format!("Failed to add label album: {e}"))?;
+
+        Ok(Album {
+            id,
+            name: name.to_string(),
+            created_at,
+            parent_id: parent_id.map(str::to_string),
+            kind: "label".to_string(),
+            sync_folder: None,
+            folder_status: None,
+            ancestor_path,
+            sync_mode: SyncMode::None.as_str().to_string(),
+            label_key: Some(key.to_string()),
+            label_path: Some(label_path),
+        })
+    }
+
+    fn find_label_child_by_key_ci(
+        conn: &Connection,
+        parent_id: Option<&str>,
+        key: &str,
+    ) -> Result<Option<Album>, String> {
+        let sql = if parent_id.is_some() {
+            "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path
+               FROM albums
+              WHERE type = 'label' AND parent_id = ?1 AND LOWER(label_key) = LOWER(?2)
+              LIMIT 1"
+        } else {
+            "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path
+               FROM albums
+              WHERE type = 'label' AND parent_id IS NULL AND LOWER(label_key) = LOWER(?1)
+              LIMIT 1"
+        };
+        let album = match parent_id {
+            Some(parent_id) => conn
+                .query_row(sql, params![parent_id, key], album_from_storage_row)
+                .optional(),
+            None => conn
+                .query_row(sql, params![key], album_from_storage_row)
+                .optional(),
+        }
+        .map_err(|e| format!("Failed to query label child: {e}"))?;
+        Ok(album)
+    }
+
+    fn resolve_new_label_name_ci(
+        conn: &Connection,
+        parent_id: Option<&str>,
+        requested_name: &str,
+        key: &str,
+    ) -> Result<String, String> {
+        let mut candidates = vec![
+            requested_name.to_string(),
+            format!("{requested_name} ({key})"),
+            key.to_string(),
+        ];
+        let mut seen = HashSet::new();
+        candidates.retain(|candidate| seen.insert(candidate.to_lowercase()));
+        for candidate in candidates {
+            if !Self::scoped_album_name_exists_ci(conn, parent_id, &candidate, None)? {
+                return Ok(candidate);
+            }
+        }
+        for suffix in 2usize.. {
+            let candidate = format!("{key} ({suffix})");
+            if !Self::scoped_album_name_exists_ci(conn, parent_id, &candidate, None)? {
+                return Ok(candidate);
+            }
+        }
+        unreachable!("an unbounded numeric suffix always has an available value")
+    }
+
     fn scoped_album_name_exists_ci(
         conn: &Connection,
         parent_id: Option<&str>,
@@ -851,18 +1169,20 @@ impl Storage {
         unreachable!("an unbounded numeric suffix always has an available value")
     }
 
-    /// 自顶向下重算全表 `albums.ancestor_path`。
+    /// 自顶向下重算全表 `albums.ancestor_path` 与标签画册的 `label_path`。
     /// 画册数量级小（几百至几千），全表重算换掉所有增量维护逻辑。
     pub(crate) fn rebuild_album_ancestor_paths(conn: &Connection) -> Result<(), String> {
         conn.execute(
             r#"
-WITH RECURSIVE tree(id, path) AS (
-    SELECT id, '/' || id || '/' FROM albums WHERE parent_id IS NULL
+WITH RECURSIVE tree(id, path, lpath) AS (
+    SELECT id, '/' || id || '/', CASE WHEN type = 'label' THEN label_key END
+      FROM albums WHERE parent_id IS NULL
     UNION ALL
-    SELECT a.id, tree.path || a.id || '/'
+    SELECT a.id, tree.path || a.id || '/',
+           CASE WHEN a.type = 'label' THEN tree.lpath || '/' || a.label_key END
       FROM albums a JOIN tree ON a.parent_id = tree.id
 )
-UPDATE albums SET ancestor_path = tree.path
+UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
   FROM tree WHERE albums.id = tree.id
 "#,
             [],
@@ -893,7 +1213,7 @@ UPDATE albums SET ancestor_path = tree.path
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode FROM albums WHERE id = ?1",
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path FROM albums WHERE id = ?1",
                 params![id],
                 album_from_storage_row,
             )
@@ -920,7 +1240,7 @@ UPDATE albums SET ancestor_path = tree.path
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode
+                "SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path
                  FROM albums WHERE type = 'local_folder' ORDER BY created_at ASC",
             )
             .map_err(|e| format!("prepare list_local_folder_albums: {e}"))?;
@@ -1044,9 +1364,8 @@ UPDATE albums
         )
         .map_err(|e| format!("convert local folder album subtree: {e}"))?;
 
-        // 普通画册不能挂在本地文件夹画册下（`add_album` 拒绝该组合，v029 迁移专门清理它）。
-        // 只转子树时父级仍是 local_folder，若原地不动就会制造这种非法状态，并且父级下一次
-        // 递归同步重建同名子画册时会撞上它，被迫改名成「X (2)」，两个画册指向同一个目录。
+        // 普通画册不能挂在本地文件夹或标签画册下。只转子树时若保留这两类父级，
+        // 会直接破坏画册树不变量；本地文件夹父级下还会在下一次递归同步时撞上同名画册。
         // 照 v029 `lift_normal_albums_from_local_folders` 的语义：把子树根提到根级并解重名，
         // 子树内部父子关系保持不变（它们一起变 normal，内部组合是合法的）。
         let mut lifted: Option<(String, Option<String>)> = None;
@@ -1059,7 +1378,7 @@ UPDATE albums
                 )
                 .optional()
                 .map_err(|e| format!("query converted album parent type: {e}"))?;
-            if parent_kind.as_deref() == Some("local_folder") {
+            if matches!(parent_kind.as_deref(), Some("local_folder" | "label")) {
                 let resolved = Self::resolve_scoped_name_ci(&tx, None, &root_name, Some(album_id))?;
                 tx.execute(
                     "UPDATE albums SET parent_id = NULL, name = ?1 WHERE id = ?2",
@@ -1241,15 +1560,24 @@ UPDATE albums
         for entry in entries {
             if let Some(parent_id) = entry.parent_id.as_deref() {
                 if !batch_ids.contains(parent_id) {
-                    let exists: bool = tx
+                    let parent_kind: Option<String> = tx
                         .query_row(
-                            "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                            "SELECT type FROM albums WHERE id = ?1",
                             params![parent_id],
                             |row| row.get(0),
                         )
+                        .optional()
                         .map_err(|e| format!("verify external parent: {e}"))?;
-                    if !exists {
-                        return Err(t!("albums.errors.parentNotFound", id = parent_id).to_string());
+                    match parent_kind.as_deref() {
+                        None => {
+                            return Err(
+                                t!("albums.errors.parentNotFound", id = parent_id).to_string()
+                            );
+                        }
+                        Some("label") => {
+                            return Err(t!("albums.errors.labelForestIsolated").to_string());
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1287,6 +1615,8 @@ UPDATE albums
                 folder_status: None,
                 ancestor_path: String::new(),
                 sync_mode: entry.sync_mode.as_str().to_string(),
+                label_key: None,
+                label_path: None,
             });
         }
 
@@ -1386,6 +1716,9 @@ UPDATE albums
             if parent.kind == "local_folder" {
                 return Err(t!("albums.errors.cannotMoveIntoLocalFolder").to_string());
             }
+            if (album.kind == "label") != (parent.kind == "label") {
+                return Err(t!("albums.errors.labelForestIsolated").to_string());
+            }
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
             let would_cycle: bool = conn
                 .query_row(
@@ -1406,6 +1739,13 @@ UPDATE albums
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         Self::ensure_album_name_unique_ci(&conn, &album.name, new_parent_id, Some(album_id))?;
+        if album.kind == "label" {
+            let key = album
+                .label_key
+                .as_deref()
+                .ok_or_else(|| t!("albums.errors.labelKeyInvalid").to_string())?;
+            Self::ensure_label_key_unique_ci(&conn, key, new_parent_id, Some(album_id))?;
+        }
 
         match new_parent_id {
             None => conn.execute(
@@ -1493,6 +1833,261 @@ mod tests {
 
         let d = storage.add_album("d", Some(&c.id)).unwrap();
         assert_eq!(d.ancestor_path, format!("/{}/{}/{}/", b.id, c.id, d.id));
+    }
+
+    #[test]
+    fn rebuild_album_ancestor_paths_tracks_label_add_move_and_key_change() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute_batch(
+                r#"
+INSERT INTO albums
+    (id, name, created_at, parent_id, type, ancestor_path, sync_mode, label_key)
+VALUES
+    ('pixiv', 'Pixiv', 1, NULL, 'label', '', 'none', 'pixiv'),
+    ('character', '角色', 2, 'pixiv', 'label', '', 'none', 'character'),
+    ('booru', 'Booru', 3, NULL, 'label', '', 'none', 'booru');
+"#,
+            )
+            .unwrap();
+            Storage::rebuild_album_ancestor_paths(&conn).unwrap();
+        }
+
+        let character = storage.get_album_by_id("character").unwrap().unwrap();
+        assert_eq!(character.label_path.as_deref(), Some("pixiv/character"));
+
+        storage.move_album("character", Some("booru")).unwrap();
+        let moved = storage.get_album_by_id("character").unwrap().unwrap();
+        assert_eq!(moved.label_path.as_deref(), Some("booru/character"));
+
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "UPDATE albums SET label_key = 'person' WHERE id = 'character'",
+                [],
+            )
+            .unwrap();
+            Storage::rebuild_album_ancestor_paths(&conn).unwrap();
+        }
+        let renamed = storage.get_album_by_id("character").unwrap().unwrap();
+        assert_eq!(renamed.label_key.as_deref(), Some("person"));
+        assert_eq!(renamed.label_path.as_deref(), Some("booru/person"));
+    }
+
+    #[test]
+    fn label_album_create_and_key_change_enforce_invariants() {
+        let storage = test_storage();
+        let root = storage
+            .add_label_album("Root", Some("标签根"), None)
+            .unwrap();
+        let child = storage
+            .add_label_album("Child", None, Some(&root.id))
+            .unwrap();
+        let grandchild = storage
+            .add_label_album("Leaf", Some("叶子"), Some(&child.id))
+            .unwrap();
+        assert_eq!(child.name, "Child");
+        assert_eq!(grandchild.label_path.as_deref(), Some("Root/Child/Leaf"));
+
+        storage.set_label_key(&root.id, "renamed").unwrap();
+        assert_eq!(
+            storage
+                .get_album_by_id(&grandchild.id)
+                .unwrap()
+                .unwrap()
+                .label_path
+                .as_deref(),
+            Some("renamed/Child/Leaf")
+        );
+
+        storage.add_label_album("Other", None, None).unwrap();
+        assert!(storage.add_label_album("other", None, None).is_err());
+        assert!(storage.set_label_key(&root.id, "OTHER").is_err());
+        let arbitrary_name = storage
+            .add_label_album("display", Some("任意 / 名称"), None)
+            .unwrap();
+        assert_eq!(arbitrary_name.name, "任意 / 名称");
+        let default_name = storage
+            .add_label_album("default-name", Some("  "), None)
+            .unwrap();
+        assert_eq!(default_name.name, "default-name");
+        for key in ["bad.key", "bad/key", "bad,key", " bad", "bad  key", "中文"] {
+            assert!(storage.add_label_album(key, None, None).is_err(), "{key}");
+            assert!(storage.set_label_key(&root.id, key).is_err(), "{key}");
+        }
+
+        assert!(storage.add_album("normal-child", Some(&root.id)).is_err());
+        let normal = storage.add_album("normal", None).unwrap();
+        assert!(storage
+            .add_label_album("nested", None, Some(&normal.id))
+            .is_err());
+    }
+
+    #[test]
+    fn move_album_keeps_label_forest_isolated_and_checks_keys() {
+        let storage = test_storage();
+        let normal = storage.add_album("normal", None).unwrap();
+        let label_a = storage.add_label_album("a", None, None).unwrap();
+        let label_b = storage.add_label_album("b", None, None).unwrap();
+        let child_a = storage
+            .add_label_album("same", Some("a-same"), Some(&label_a.id))
+            .unwrap();
+        storage
+            .add_label_album("SAME", Some("b-same"), Some(&label_b.id))
+            .unwrap();
+
+        assert!(storage.move_album(&normal.id, Some(&label_a.id)).is_err());
+        assert!(storage.move_album(&label_a.id, Some(&normal.id)).is_err());
+        assert!(storage.move_album(&child_a.id, Some(&label_b.id)).is_err());
+        assert_eq!(
+            storage
+                .get_album_by_id(&child_a.id)
+                .unwrap()
+                .unwrap()
+                .parent_id,
+            Some(label_a.id)
+        );
+    }
+
+    fn label_spec(segments: &[&str], key: &str, name: Option<&str>) -> LabelSpec {
+        LabelSpec {
+            segments: segments.iter().map(|segment| segment.to_string()).collect(),
+            key: key.to_string(),
+            name: name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn ensure_label_path_reuses_paths_and_resolves_name_collisions() {
+        let storage = test_storage();
+        let spec = label_spec(&["plugin", "character"], "miku", Some("初音未来"));
+        let first = storage.ensure_label_path(&spec).unwrap();
+        assert_eq!(first.created.len(), 3);
+        assert_eq!(
+            storage
+                .get_album_by_id(&first.album_id)
+                .unwrap()
+                .unwrap()
+                .label_path
+                .as_deref(),
+            Some("plugin/character/miku")
+        );
+        let reused = storage
+            .ensure_label_path(&label_spec(
+                &["PLUGIN", "CHARACTER"],
+                "MIKU",
+                Some("不应改名"),
+            ))
+            .unwrap();
+        assert_eq!(reused.album_id, first.album_id);
+        assert!(reused.created.is_empty());
+        assert_eq!(
+            storage
+                .get_album_by_id(&first.album_id)
+                .unwrap()
+                .unwrap()
+                .name,
+            "初音未来"
+        );
+
+        let c1 = storage.add_label_album("c1", None, None).unwrap();
+        storage
+            .add_label_album("occupied", Some("Pretty"), Some(&c1.id))
+            .unwrap();
+        let leaf = storage
+            .ensure_label_path(&label_spec(&["c1"], "leaf", Some("Pretty")))
+            .unwrap();
+        assert_eq!(
+            storage
+                .get_album_by_id(&leaf.album_id)
+                .unwrap()
+                .unwrap()
+                .name,
+            "Pretty (leaf)"
+        );
+
+        let c2 = storage.add_label_album("c2", None, None).unwrap();
+        storage
+            .add_label_album("occupied1", Some("Pretty"), Some(&c2.id))
+            .unwrap();
+        storage
+            .add_label_album("occupied2", Some("Pretty (leaf)"), Some(&c2.id))
+            .unwrap();
+        let leaf = storage
+            .ensure_label_path(&label_spec(&["c2"], "leaf", Some("Pretty")))
+            .unwrap();
+        assert_eq!(
+            storage
+                .get_album_by_id(&leaf.album_id)
+                .unwrap()
+                .unwrap()
+                .name,
+            "leaf"
+        );
+
+        let c3 = storage.add_label_album("c3", None, None).unwrap();
+        for (key, name) in [
+            ("occupied1", "Pretty"),
+            ("occupied2", "Pretty (leaf)"),
+            ("occupied3", "leaf"),
+        ] {
+            storage
+                .add_label_album(key, Some(name), Some(&c3.id))
+                .unwrap();
+        }
+        let leaf = storage
+            .ensure_label_path(&label_spec(&["c3"], "leaf", Some("Pretty")))
+            .unwrap();
+        assert_eq!(
+            storage
+                .get_album_by_id(&leaf.album_id)
+                .unwrap()
+                .unwrap()
+                .name,
+            "leaf (2)"
+        );
+    }
+
+    #[test]
+    fn apply_labels_and_delete_label_subtree_remove_memberships() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO images (id, local_path, crawled_at) VALUES (1, '/tmp/label.jpg', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let image_ids = vec!["1".to_string()];
+        let album_ids = storage
+            .apply_labels_to_images(
+                &[
+                    label_spec(&["plugin"], "first", None),
+                    label_spec(&["plugin", "nested"], "second", None),
+                ],
+                &image_ids,
+            )
+            .unwrap();
+        assert_eq!(album_ids.len(), 2);
+        let memberships = storage.get_image_album_ids("1").unwrap();
+        assert_eq!(memberships.len(), 2);
+        assert!(album_ids.iter().all(|id| memberships.contains(id)));
+
+        let root = storage
+            .get_albums(None)
+            .unwrap()
+            .into_iter()
+            .find(|album| album.label_key.as_deref() == Some("plugin"))
+            .unwrap();
+        storage.delete_album(&root.id).unwrap();
+        assert!(storage.get_image_album_ids("1").unwrap().is_empty());
+        assert!(storage
+            .list_all_albums()
+            .unwrap()
+            .into_iter()
+            .all(|album| album.kind != "label"));
     }
 
     #[test]

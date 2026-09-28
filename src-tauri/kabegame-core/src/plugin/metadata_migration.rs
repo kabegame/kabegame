@@ -2,7 +2,9 @@ use deno_core::{resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, Runt
 
 use super::Plugin;
 use crate::emitter::GlobalEmitter;
+use crate::storage::labels::{validate_labels, LabelInput};
 use crate::storage::Storage;
+use std::collections::HashSet;
 
 pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
     if plugin.metadata_migration.is_none() {
@@ -19,8 +21,9 @@ pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
 }
 
 /// 单一脚本 + packed 插件版本门控：选出 `plugin_version < 当前插件 packed 版本` 的
-/// metadata 行，逐行调用 `migrate(input)`，成功后把行的 plugin_version 盖为 packed。
-/// 行级失败只记录并跳过（版本不动，下次触发重试）；脚本装载失败整体报错。
+/// metadata 行，逐行调用可选的 `migrate(input)` / `provideLabels(input)`。
+/// 不论脚本装载或行级执行是否成功，都会把行版本盖为当前 packed 版本；
+/// 失败时写回原始 data，避免坏脚本在每次启动时无限重试。
 pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
     let Some(script) = plugin.metadata_migration.as_deref() else {
         return Ok(false);
@@ -38,37 +41,16 @@ pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, Strin
     // is driven with `block_on` on the current thread. Both entry points reach
     // here from a `spawn_blocking` worker, where `Handle::current()` is valid and
     // `block_on` is permitted.
-    let changed = tokio::runtime::Handle::current().block_on(async move {
-        let mut engine = MigrationEngine::new();
-        let func = engine
-            .load_script(&script)
-            .await
-            .map_err(|e| format!("迁移脚本装载失败: {e}"))?;
+    let storage = Storage::global();
+    let (changed, touched_albums, touched_images) = tokio::runtime::Handle::current().block_on(
+        run_metadata_migrations(storage, &plugin_id, target, &script, rows),
+    )?;
 
-        let mut changed = false;
-        for (row_id, data, _row_version) in rows {
-            match engine.call_migrate(&func, data).await {
-                Ok(migrated) => {
-                    if Storage::global()
-                        .writeback_migrated_metadata_row(row_id, &plugin_id, target, &migrated)?
-                    {
-                        changed = true;
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[metadata-migration] plugin `{}` row {} migrate failed: {}",
-                        plugin_id, row_id, e
-                    );
-                }
-            }
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        if !touched_albums.is_empty() {
+            emitter.emit_album_images_change("add", &touched_albums, &touched_images);
         }
-
-        Ok::<bool, String>(changed)
-    })?;
-
-    if changed {
-        if let Some(emitter) = GlobalEmitter::try_global() {
+        if changed {
             let plugin_ids = vec![plugin.id.clone()];
             emitter.emit_images_change("metadata-migrate", &[], None, None, Some(&plugin_ids));
         }
@@ -76,16 +58,120 @@ pub fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, Strin
     Ok(changed)
 }
 
+async fn run_metadata_migrations(
+    storage: &Storage,
+    plugin_id: &str,
+    target: u32,
+    script: &str,
+    rows: Vec<(i64, String, u32)>,
+) -> Result<(bool, Vec<String>, Vec<String>), String> {
+    let mut engine = MigrationEngine::new();
+    let exports = match engine.load_script(script).await {
+        Ok(exports) => Some(exports),
+        Err(error) => {
+            eprintln!(
+                "[metadata-migration] plugin `{plugin_id}` script load failed: {error}; stamping all rows"
+            );
+            None
+        }
+    };
+
+    let mut changed = false;
+    let mut touched = Vec::new();
+    let mut touched_seen = HashSet::new();
+    let mut touched_images = Vec::new();
+    let mut touched_image_seen = HashSet::new();
+    for (row_id, data, _row_version) in rows {
+        let migrated = match exports
+            .as_ref()
+            .and_then(|exports| exports.migrate.as_ref())
+        {
+            Some(function) => match engine.call_migrate(function, data.clone()).await {
+                Ok(migrated) => Some(migrated),
+                Err(error) => {
+                    eprintln!(
+                        "[metadata-migration] plugin `{plugin_id}` row {row_id} migrate failed: {error}"
+                    );
+                    None
+                }
+            },
+            None if exports.is_some() => Some(data.clone()),
+            None => None,
+        };
+
+        if let (Some(migrated), Some(function)) = (
+            migrated.as_ref(),
+            exports
+                .as_ref()
+                .and_then(|exports| exports.provide_labels.as_ref()),
+        ) {
+            match engine.call_provide_labels(function, migrated.clone()).await {
+                Ok(inputs) => {
+                    let (specs, rejected) = validate_labels(&inputs, plugin_id);
+                    for (index, reason) in rejected {
+                        eprintln!(
+                            "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels[{index}] skipped: {reason}"
+                        );
+                    }
+                    if !specs.is_empty() {
+                        let image_ids = storage.image_ids_by_metadata(row_id);
+                        match image_ids.and_then(|image_ids| {
+                            let album_ids = storage.apply_labels_to_images(&specs, &image_ids)?;
+                            Ok((album_ids, image_ids))
+                        }) {
+                            Ok((album_ids, image_ids)) => {
+                                let changed_membership = !album_ids.is_empty();
+                                for album_id in album_ids {
+                                    if touched_seen.insert(album_id.clone()) {
+                                        touched.push(album_id);
+                                    }
+                                }
+                                if changed_membership {
+                                    for image_id in image_ids {
+                                        if touched_image_seen.insert(image_id.clone()) {
+                                            touched_images.push(image_id);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => eprintln!(
+                                "[metadata-migration] plugin `{plugin_id}` row {row_id} label apply failed: {error}"
+                            ),
+                        }
+                    }
+                }
+                Err(error) => eprintln!(
+                    "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels failed: {error}"
+                ),
+            }
+        }
+
+        if storage.writeback_migrated_metadata_row(
+            row_id,
+            plugin_id,
+            target,
+            migrated.as_deref().unwrap_or(&data),
+        )? {
+            changed = true;
+        }
+    }
+    Ok((changed, touched, touched_images))
+}
+
 /// CLI 本地测试入口：对 `input` JSON 跑一次 `migrate(input)` 并返回结果。
 pub fn test_metadata_migration(input: String, script: String) -> Result<String, String> {
     tokio::runtime::Handle::current().block_on(async move {
         let mut engine = MigrationEngine::new();
-        let func = engine
+        let exports = engine
             .load_script(&script)
             .await
             .map_err(|e| format!("迁移脚本装载失败: {e}"))?;
+        let func = exports
+            .migrate
+            .as_ref()
+            .ok_or_else(|| "迁移脚本缺少 `migrate` 导出".to_string())?;
         engine
-            .call_migrate(&func, input)
+            .call_migrate(func, input)
             .await
             .map_err(|e| format!("迁移脚本执行失败: {e}"))
     })
@@ -103,6 +189,11 @@ struct MigrationEngine {
     runtime: JsRuntime,
 }
 
+struct MigrationExports {
+    migrate: Option<v8::Global<v8::Function>>,
+    provide_labels: Option<v8::Global<v8::Function>>,
+}
+
 impl MigrationEngine {
     fn new() -> Self {
         Self {
@@ -110,9 +201,9 @@ impl MigrationEngine {
         }
     }
 
-    /// Load the migration script (`metadata_migrations/migrate.js`) as a side
-    /// module and return its `migrate` export.
-    async fn load_script(&mut self, source: &str) -> Result<v8::Global<v8::Function>, String> {
+    /// 装载迁移脚本并返回可选的 `migrate` / `provideLabels` 导出。
+    /// 两者都缺失时才视为脚本装载失败。
+    async fn load_script(&mut self, source: &str) -> Result<MigrationExports, String> {
         let specifier = resolve_url("file:///metadata_migrations/migrate.js")
             .map_err(|e| format!("解析模块地址失败: {e}"))?;
         let mod_id = self
@@ -133,14 +224,39 @@ impl MigrationEngine {
             .map_err(|e| e.to_string())?;
         deno_core::scope!(scope, &mut self.runtime);
         let ns = v8::Local::new(scope, namespace);
-        let key =
-            v8::String::new(scope, "migrate").ok_or_else(|| "无法分配 `migrate` 键".to_string())?;
-        let value = ns
-            .get(scope, key.into())
-            .ok_or_else(|| "迁移脚本缺少 `migrate` 导出".to_string())?;
-        let func = v8::Local::<v8::Function>::try_from(value)
-            .map_err(|_| "迁移脚本的 `migrate` 导出不是函数".to_string())?;
-        Ok(v8::Global::new(scope, func))
+        let migrate = {
+            let key = v8::String::new(scope, "migrate")
+                .ok_or_else(|| "无法分配 `migrate` 键".to_string())?;
+            match ns.get(scope, key.into()) {
+                None => None,
+                Some(value) if value.is_undefined() => None,
+                Some(value) => {
+                    let function = v8::Local::<v8::Function>::try_from(value)
+                        .map_err(|_| "迁移脚本的 `migrate` 导出不是函数".to_string())?;
+                    Some(v8::Global::new(scope, function))
+                }
+            }
+        };
+        let provide_labels = {
+            let key = v8::String::new(scope, "provideLabels")
+                .ok_or_else(|| "无法分配 `provideLabels` 键".to_string())?;
+            match ns.get(scope, key.into()) {
+                None => None,
+                Some(value) if value.is_undefined() => None,
+                Some(value) => {
+                    let function = v8::Local::<v8::Function>::try_from(value)
+                        .map_err(|_| "迁移脚本的 `provideLabels` 导出不是函数".to_string())?;
+                    Some(v8::Global::new(scope, function))
+                }
+            }
+        };
+        if migrate.is_none() && provide_labels.is_none() {
+            return Err("迁移脚本必须导出 `migrate` 或 `provideLabels` 函数".to_string());
+        }
+        Ok(MigrationExports {
+            migrate,
+            provide_labels,
+        })
     }
 
     /// Call `migrate(input) -> String`. `migrate` may be async; the returned
@@ -166,11 +282,36 @@ impl MigrationEngine {
         serde_v8::from_v8::<String>(scope, local)
             .map_err(|_| "migrate() 必须返回 JSON 字符串".to_string())
     }
+
+    /// 调用 `provideLabels(input) -> LabelInput[]`，同步与 Promise 返回都支持。
+    async fn call_provide_labels(
+        &mut self,
+        func: &v8::Global<v8::Function>,
+        input: String,
+    ) -> Result<Vec<LabelInput>, String> {
+        let arg: v8::Global<v8::Value> = {
+            deno_core::scope!(scope, &mut self.runtime);
+            let local = serde_v8::to_v8(scope, input).map_err(|e| e.to_string())?;
+            v8::Global::new(scope, local)
+        };
+        let call = self.runtime.call_with_args(func, &[arg]);
+        let result = self
+            .runtime
+            .with_event_loop_promise(call, PollEventLoopOptions::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        deno_core::scope!(scope, &mut self.runtime);
+        let local = v8::Local::new(scope, result);
+        serde_v8::from_v8::<Vec<LabelInput>>(scope, local)
+            .map_err(|_| "provideLabels() 必须返回标签数组".to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
 
     /// Migration engines drive their `JsRuntime` with `block_on`, which panics on
     /// an async worker thread. Run each case on a blocking-pool thread, mirroring
@@ -182,6 +323,54 @@ mod tests {
     {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async { tokio::task::spawn_blocking(f).await.unwrap() })
+    }
+
+    fn test_storage(row_count: i64) -> Storage {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::storage::migrations::init::create_all_tables(&conn);
+        for id in 1..=row_count {
+            conn.execute(
+                "INSERT INTO metadata (id, data, plugin_version, plugin_id) VALUES (?1, ?2, 0, 'demo')",
+                (id, format!(r#"{{"id":{id}}}"#)),
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO images (id, local_path, crawled_at, metadata_id) VALUES (?1, ?2, 1, ?1)",
+                (id, format!("/tmp/migration-{id}.jpg")),
+            )
+            .unwrap();
+        }
+        Storage {
+            db: Arc::new(Mutex::new(conn)),
+            cached_images_total: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn run_runner(
+        storage: Storage,
+        script: String,
+        target: u32,
+    ) -> (bool, Vec<String>, Vec<String>) {
+        run_blocking(move || {
+            let rows = storage
+                .metadata_rows_below_plugin_version("demo", target)
+                .unwrap();
+            tokio::runtime::Handle::current()
+                .block_on(run_metadata_migrations(
+                    &storage, "demo", target, &script, rows,
+                ))
+                .unwrap()
+        })
+    }
+
+    fn metadata_row(storage: &Storage, id: i64) -> (String, u32) {
+        let conn = storage.db.lock().unwrap();
+        conn.query_row(
+            "SELECT data, plugin_version FROM metadata WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u32)),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -265,5 +454,75 @@ export async function migrate(input) {
         let err = run_blocking(move || test_metadata_migration("{}".to_string(), script))
             .expect_err("non-string return should error");
         assert!(err.contains("字符串"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn provide_labels_only_sync_applies_labels_and_stamps_version() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let script = r#"
+export function provideLabels(input) {
+  const value = JSON.parse(input);
+  return [{ key: `tag_${value.id}`, name: "Tag" }];
+}
+"#
+        .to_string();
+        let (changed, albums, images) = run_runner(storage, script, 2);
+        assert!(changed);
+        assert_eq!(images, ["1"]);
+        assert_eq!(albums.len(), 1);
+        assert_eq!(metadata_row(&check, 1).1, 2);
+        assert_eq!(check.get_image_album_ids("1").unwrap(), albums);
+    }
+
+    #[test]
+    fn provide_labels_async_uses_migrated_output() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let script = r#"
+export async function migrate(input) {
+  const value = JSON.parse(input);
+  value.tag = await Promise.resolve("async_tag");
+  return JSON.stringify(value);
+}
+export async function provideLabels(input) {
+  return [{ key: JSON.parse(input).tag, category: "custom" }];
+}
+"#
+        .to_string();
+        let (_, albums, _) = run_runner(storage, script, 3);
+        assert_eq!(albums.len(), 1);
+        let album = check.get_album_by_id(&albums[0]).unwrap().unwrap();
+        assert_eq!(album.label_key.as_deref(), Some("async_tag"));
+        assert_eq!(metadata_row(&check, 1).1, 3);
+    }
+
+    #[test]
+    fn migrate_failure_skips_provide_labels_but_stamps_original_data() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let original = metadata_row(&check, 1).0;
+        let script = r#"
+export function migrate(_input) { throw new Error("broken"); }
+export function provideLabels(_input) { return [{ key: "must_not_run" }]; }
+"#
+        .to_string();
+        let (changed, albums, _) = run_runner(storage, script, 4);
+        assert!(changed);
+        assert!(albums.is_empty());
+        assert!(check.get_image_album_ids("1").unwrap().is_empty());
+        assert_eq!(metadata_row(&check, 1), (original, 4));
+    }
+
+    #[test]
+    fn script_load_failure_stamps_all_rows_with_original_data() {
+        let storage = test_storage(2);
+        let check = storage.clone();
+        let originals = [metadata_row(&check, 1).0, metadata_row(&check, 2).0];
+        let (changed, albums, _) = run_runner(storage, "export function migrate( {".to_string(), 5);
+        assert!(changed);
+        assert!(albums.is_empty());
+        assert_eq!(metadata_row(&check, 1), (originals[0].clone(), 5));
+        assert_eq!(metadata_row(&check, 2), (originals[1].clone(), 5));
     }
 }

@@ -61,6 +61,9 @@ albums:
     parentIsLocalFolder: ローカルフォルダアルバムの内容はフォルダ同期で管理されるため、その配下に子アルバムを手動で作成できません
     cannotMoveLocalFolder: ローカルフォルダアルバムの位置はディスク上のパスで決まるため、手動で移動できません
     cannotMoveIntoLocalFolder: アルバムをローカルフォルダアルバムの配下へ移動できません
+    labelForestIsolated: ラベルアルバムはラベルアルバムの配下にのみ配置でき、他のアルバムをラベルツリーに入れることはできません
+    labelKeyInvalid: "ラベルキーには ASCII 英数字、'_'、'-'、半角括弧、スペース（先頭・末尾・連続は不可）のみ使用でき、64 バイト以内である必要があります"
+    labelKeyExists: この階層には同じキーのラベルアルバムが既にあります
   localFolderErrors:
     androidUnsupported: Android ではローカルフォルダ同期に対応していません
     notLocalFolder: ローカルフォルダアルバムのみ通常のアルバムに変換できます

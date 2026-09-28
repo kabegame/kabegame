@@ -16,6 +16,11 @@ pub fn get_albums() -> Result<Value, String> {
     serde_json::to_value(albums).map_err(|e| e.to_string())
 }
 
+pub fn get_image_album_ids(image_id: String) -> Result<Value, String> {
+    let album_ids = Storage::global().get_image_album_ids(&image_id)?;
+    serde_json::to_value(album_ids).map_err(|e| e.to_string())
+}
+
 pub fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String> {
     let images = Storage::global().get_album_preview(&album_id, limit)?;
     serde_json::to_value(images).map_err(|e| e.to_string())
@@ -25,6 +30,11 @@ pub fn rename_album(album_id: String, new_name: String) -> Result<Value, String>
     Storage::global().rename_album(&album_id, &new_name)?;
     #[cfg(feature = "virtual-driver")]
     crate::virtual_driver::VirtualDriveService::global().bump_albums();
+    Ok(Value::Null)
+}
+
+pub fn set_label_key(album_id: String, new_key: String) -> Result<Value, String> {
+    Storage::global().set_label_key(&album_id, &new_key)?;
     Ok(Value::Null)
 }
 
@@ -96,6 +106,15 @@ pub async fn convert_local_folder_album_to_normal(_album_id: String) -> Result<V
 
 pub fn add_album(name: String, parent_id: Option<String>) -> Result<Value, String> {
     let album = Storage::global().add_album(&name, parent_id.as_deref())?;
+    serde_json::to_value(album).map_err(|e| e.to_string())
+}
+
+pub fn add_label_album(
+    key: String,
+    name: Option<String>,
+    parent_id: Option<String>,
+) -> Result<Value, String> {
+    let album = Storage::global().add_label_album(&key, name.as_deref(), parent_id.as_deref())?;
     serde_json::to_value(album).map_err(|e| e.to_string())
 }
 

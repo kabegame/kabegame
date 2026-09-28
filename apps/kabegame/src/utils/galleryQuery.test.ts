@@ -153,3 +153,23 @@ describe("任意搜（虚拟模式 any）", () => {
     expect(parseQueryBody(["search", "any", "sakura"])).toBeNull();
   });
 });
+
+describe("标签搜索（label / label-tree）", () => {
+  it.each(["label", "label-tree"] as const)("%s 往返保持，逗号分隔的 token 原样保留", (mode) => {
+    const query: GalleryQuery = [{ is: { search: { mode, query: "miku, pixiv/character" }, plugin: { pluginId: "pixiv" } } }];
+    expect(serializeQueryBody(query).body.startsWith(`search/${mode}/`)).toBe(true);
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("「任意」不展开标签模式，即使范围里给了标签", () => {
+    const term = makeSearchTerm("any", "miku", ["display-name", "label", "label-tree"]);
+    expect(term).toEqual({ mode: "any", query: "miku", modes: ["display-name"] });
+    expect(serializeQueryBody([{ is: { search: makeSearchTerm("any", "x", []) } }]).body).not.toContain("label");
+  });
+
+  it("含标签分支的同词 OR 组不折叠为 any", () => {
+    const parsed = parseQueryBody("~any/search/display-name/a/~or/search/label/a/~end".split("/"));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.every((node) => "any" in node)).toBe(true);
+  });
+});

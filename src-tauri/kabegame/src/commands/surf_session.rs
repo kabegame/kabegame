@@ -110,8 +110,7 @@ pub async fn surf_import_media<R: Runtime>(
         .len();
     let parsed = Url::parse(&source_url).map_err(|error| format!("Invalid media URL: {error}"))?;
     let custom_name = name.or_else(|| super::crawler::surf_download_name_from_url(&parsed));
-    let metadata_id =
-        super::crawler::insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?;
+    let metadata_id = super::crawler::insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?;
     let download_id = next_download_id();
     let download_start_time = super::crawler::now_ms();
     let http_headers = HashMap::new();
@@ -133,6 +132,7 @@ pub async fn surf_import_media<R: Runtime>(
         custom_display_name: custom_name.clone(),
         metadata_id,
         post_url: page_url.clone(),
+        labels: Vec::new(),
         native_completion: Arc::new(Mutex::new(None)),
     })?;
 
@@ -155,6 +155,7 @@ pub async fn surf_import_media<R: Runtime>(
         custom_name.as_deref(),
         metadata_id,
         page_url.as_deref(),
+        &[],
     )
     .await;
     dq.wait_then_finish_download(download_id, false).await;

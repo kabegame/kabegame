@@ -1,0 +1,364 @@
+<template>
+  <CollapsibleDrawerPanel
+    class="image-labels-panel"
+    storage-key="kabegame-image-detail-labels-open"
+    :fill-when-expanded="false"
+    :toggle-aria-label="t('albums.imageLabelsTitle')"
+  >
+    <template #title>
+      {{ t("albums.imageLabelsTitle") }}
+    </template>
+    <template #trailing>
+      <button
+        type="button"
+        class="image-labels-icon-btn"
+        :title="t('albums.imageLabelsCopy')"
+        :disabled="labels.length === 0"
+        @click.stop="copyLabels"
+      >
+        <el-icon><CopyDocument /></el-icon>
+      </button>
+    </template>
+
+    <div class="flex flex-col gap-2 px-3 pb-3">
+      <div v-if="labels.length > 0" class="image-labels-list flex flex-wrap content-start gap-1.5">
+        <el-tag
+          v-for="label in labels"
+          :key="label.id"
+          class="image-labels-tag"
+          closable
+          disable-transitions
+          :title="label.labelPath ?? undefined"
+          @click="openLabel(label)"
+          @close="removeLabel(label)"
+        >
+          {{ label.name }}
+        </el-tag>
+      </div>
+      <p v-else class="m-0 text-xs text-[var(--anime-text-muted)]">
+        {{ t("albums.imageLabelsEmpty") }}
+      </p>
+
+      <div v-if="picking" class="flex flex-col gap-1.5">
+        <el-input
+          ref="filterInputRef"
+          v-model="filterText"
+          size="small"
+          clearable
+          :placeholder="t('albums.imageLabelsFilterPlaceholder')"
+          @keyup.esc="picking = false"
+        />
+        <div class="image-labels-candidates">
+          <button
+            v-for="candidate in candidates"
+            :key="candidate.id"
+            type="button"
+            class="image-labels-candidate"
+            :title="candidate.labelPath ?? undefined"
+            @click="addLabel(candidate)"
+          >
+            <span class="truncate">{{ candidate.name }}</span>
+            <code class="ml-auto flex-none truncate text-[11px] text-[var(--anime-text-muted)]">
+              {{ candidate.labelPath }}
+            </code>
+          </button>
+          <p v-if="candidates.length === 0" class="m-0 px-2 py-1 text-xs text-[var(--anime-text-muted)]">
+            {{ t("albums.imageLabelsNoCandidate") }}
+          </p>
+        </div>
+      </div>
+
+      <div class="flex gap-2">
+        <el-button size="small" :icon="picking ? Close : Plus" @click="togglePicking">
+          {{ picking ? t("common.cancel") : t("albums.imageLabelsAdd") }}
+        </el-button>
+        <el-button size="small" :icon="PriceTag" @click="openCreateDialog">
+          {{ t("albums.imageLabelsCreate") }}
+        </el-button>
+      </div>
+    </div>
+  </CollapsibleDrawerPanel>
+
+  <el-dialog
+    :model-value="createDialog.isOpen.value"
+    :z-index="createDialog.zIndex.value"
+    :title="t('albums.imageLabelsCreate')"
+    width="380px"
+    append-to-body
+    @update:model-value="createDialog.close"
+    @closed="resetCreateForm"
+  >
+    <el-form label-width="0" @submit.prevent>
+      <el-input
+        v-model="newKey"
+        :placeholder="t('albums.labelKeyPlaceholder')"
+        @keyup.enter="submitCreate"
+      />
+      <p v-if="newKey && !newKeyValid" class="image-labels-error">
+        {{ t("albums.labelKeyInvalidHint") }}
+      </p>
+      <el-input
+        v-model="newName"
+        class="mt-3"
+        :placeholder="t('albums.labelNamePlaceholder')"
+        @keyup.enter="submitCreate"
+      />
+      <AlbumPickerField
+        v-model="newParentId"
+        class="mt-3"
+        :album-tree="labelTree"
+        :album-counts="albumStore.getAlbumCounts(false)"
+        :placeholder="t('albums.selectParentLabel')"
+        :picker-title="t('albums.parentAlbum')"
+      />
+    </el-form>
+    <template #footer>
+      <el-button @click="createDialog.close()">{{ t("common.cancel") }}</el-button>
+      <el-button type="primary" :disabled="!newKeyValid" :loading="creating" @click="submitCreate">
+        {{ t("albums.create") }}
+      </el-button>
+    </template>
+  </el-dialog>
+</template>
+
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { useI18n } from "@kabegame/i18n";
+import { Close, CopyDocument, Plus, PriceTag } from "@kabegame/element-plus-icons";
+import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import CollapsibleDrawerPanel from "@kabegame/core/components/common/CollapsibleDrawerPanel.vue";
+import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import { useModal } from "@kabegame/core/composables/useModal";
+import type { ImageInfo } from "@kabegame/core/types/image";
+import { listen, type UnlistenFn } from "@/api/rpc";
+import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import { useAlbumStore, type Album } from "@/stores/albums";
+import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
+import { isLabelKey } from "@/utils/labelKey";
+import { labelKeysText, pickLabelAlbums, writeClipboardText } from "@/utils/imageLabels";
+
+/**
+ * 预览弹窗信息区的「标签」面板：列出图片直接打上的标签画册，支持删除、从已有标签添加、
+ * 当场新建、复制 key 与点击跳转。数据来自已全量加载的 albumStore，只额外查一次
+ * 「这张图片属于哪些画册」。
+ */
+const props = defineProps<{ image: ImageInfo }>();
+const emit = defineEmits<{
+  /** 点击标签跳到画册页后：宿主据此关闭预览弹窗 */
+  navigate: [];
+}>();
+
+const { t } = useI18n();
+const router = useRouter();
+const albumStore = useAlbumStore();
+const albumPath = useAlbumIdPathState();
+
+// 切图时要重置 picking，必须在 immediate watch 之前声明（否则 TDZ）
+const picking = ref(false);
+const filterText = ref("");
+const filterInputRef = ref<{ focus: () => void } | null>(null);
+
+const albumIds = ref<string[]>([]);
+const labels = computed(() => pickLabelAlbums(albumIds.value, albumStore.albums));
+
+let loadSeq = 0;
+async function load() {
+  const imageId = props.image.id;
+  const seq = ++loadSeq;
+  try {
+    const ids = await albumStore.getImageAlbumIds(imageId);
+    // 快速切图时丢弃过期结果
+    if (seq === loadSeq) albumIds.value = ids;
+  } catch (error) {
+    console.warn("load image labels failed", error);
+    if (seq === loadSeq) albumIds.value = [];
+  }
+}
+
+watch(() => props.image.id, () => {
+  picking.value = false;
+  void load();
+}, { immediate: true });
+
+// 其它入口（插件下载、迁移、画册页移除）改动成员时同步刷新
+let unlisten: UnlistenFn | null = null;
+void listen<AlbumImagesChangePayload>("album-images-change", (event) => {
+  const imageIds = (event.payload?.imageIds ?? []).map(String);
+  if (imageIds.length === 0 || imageIds.includes(props.image.id)) void load();
+}).then((fn) => {
+  unlisten = fn;
+});
+onBeforeUnmount(() => unlisten?.());
+
+function errorMessage(error: unknown): string {
+  return typeof error === "string" ? error : (error as Error)?.message || String(error);
+}
+
+async function removeLabel(label: Album) {
+  try {
+    await albumStore.removeImagesFromAlbum(label.id, [props.image.id]);
+    albumIds.value = albumIds.value.filter((id) => id !== label.id);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+
+async function addLabel(label: Album) {
+  try {
+    await albumStore.addImagesToAlbum(label.id, [props.image.id]);
+    if (!albumIds.value.includes(label.id)) albumIds.value = [...albumIds.value, label.id];
+    picking.value = false;
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+
+async function copyLabels() {
+  const text = labelKeysText(labels.value);
+  if (!text) return;
+  try {
+    await writeClipboardText(text);
+    ElMessage.success(t("common.copySuccess"));
+  } catch (error) {
+    console.error("复制标签失败:", error);
+    ElMessage.error(t("common.copyFailed"));
+  }
+}
+
+async function openLabel(label: Album) {
+  await albumPath.set(label.ancestorPath, { history: "push" });
+  if (router.currentRoute.value.name !== "Albums") await router.push({ name: "Albums" });
+  emit("navigate");
+}
+
+// ---------- 从已有标签添加 ----------
+
+const candidates = computed(() => {
+  const owned = new Set(albumIds.value);
+  const q = filterText.value.trim().toLowerCase();
+  return albumStore.labelAlbums
+    .filter((label) => !owned.has(label.id))
+    .filter(
+      (label) =>
+        !q ||
+        label.name.toLowerCase().includes(q) ||
+        (label.labelPath ?? "").toLowerCase().includes(q),
+    )
+    .sort((a, b) => (a.labelPath ?? "").localeCompare(b.labelPath ?? ""))
+    .slice(0, 50);
+});
+
+async function togglePicking() {
+  picking.value = !picking.value;
+  filterText.value = "";
+  if (picking.value) {
+    await nextTick();
+    filterInputRef.value?.focus();
+  }
+}
+
+// ---------- 当场新建 ----------
+const createDialog = useModal();
+const newKey = ref("");
+const newName = ref("");
+const newParentId = ref<string | null>(null);
+const creating = ref(false);
+const newKeyValid = computed(() => isLabelKey(newKey.value.trim()));
+const labelTree = computed(() => albumStore.getAlbumTreeExcluding([], { onlyLabel: true }));
+
+function openCreateDialog() {
+  createDialog.open();
+}
+
+function resetCreateForm() {
+  newKey.value = "";
+  newName.value = "";
+  newParentId.value = null;
+  creating.value = false;
+}
+
+async function submitCreate() {
+  if (!newKeyValid.value || creating.value) return;
+  creating.value = true;
+  try {
+    const created = await albumStore.createLabelAlbum({
+      key: newKey.value.trim(),
+      name: newName.value.trim() || null,
+      parentId: newParentId.value,
+    });
+    await addLabel(created);
+    createDialog.close();
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    creating.value = false;
+  }
+}
+</script>
+
+<style scoped>
+.image-labels-tag {
+  cursor: pointer;
+}
+
+/* 标签多时不撑高侧栏：最多占预览侧栏高度的 25%，内部滚动（cqh 基于 ImagePreviewDialog 左侧栏容器） */
+.image-labels-list {
+  max-height: 25cqh;
+  overflow-y: auto;
+}
+
+.image-labels-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--anime-text-muted);
+  cursor: pointer;
+}
+
+.image-labels-icon-btn:hover:not(:disabled) {
+  color: var(--anime-text-secondary);
+  background: rgba(167, 139, 250, 0.16);
+}
+
+.image-labels-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.image-labels-candidates {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.image-labels-candidate {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--anime-text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.image-labels-candidate:hover {
+  background: rgba(167, 139, 250, 0.16);
+}
+
+.image-labels-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--el-color-danger);
+}
+</style>

@@ -308,6 +308,12 @@ fn json_row_to_task_failed_image(row: &Value) -> Result<TaskFailedImage, String>
         header_snapshot: json_header_snapshot(row)?,
         metadata_id: json_i64(row, "metadata_id"),
         display_name: json_string(row, "display_name"),
+        labels: json_string(row, "labels")
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| format!("invalid failed-image labels JSON: {error}"))?
+            .unwrap_or_default(),
     })
 }
 
@@ -646,7 +652,9 @@ mod tests {
                 sync_folder TEXT,
                 folder_status TEXT,
                 ancestor_path TEXT NOT NULL DEFAULT '',
-                sync_mode TEXT NOT NULL DEFAULT 'none'
+                sync_mode TEXT NOT NULL DEFAULT 'none',
+                label_key TEXT,
+                label_path TEXT
             );
             INSERT INTO albums (id, name, created_at, parent_id, ancestor_path) VALUES
                 ('album-a', '星穹铁道', 1, NULL, '/album-a/'),

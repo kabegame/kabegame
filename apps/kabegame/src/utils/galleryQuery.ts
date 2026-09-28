@@ -58,7 +58,9 @@ export type GallerySearchPathMode =
   | "metadata"
   | "native-metadata"
   | "local-path"
-  | "url";
+  | "url"
+  | "label"
+  | "label-tree";
 
 /**
  * 「任意搜」：前端虚拟模式，后端没有对应 provider。序列化时展开成
@@ -68,21 +70,33 @@ export const GALLERY_SEARCH_ANY = "any";
 
 export type GallerySearchMode = GallerySearchPathMode | typeof GALLERY_SEARCH_ANY;
 
-/** 下拉顺序：名称类三项在前（显示名 → 路径 → 链接），内容类元数据在后。 */
+/** 下拉顺序：名称类三项在前（显示名 → 路径 → 链接），内容类元数据在后，标签最后。 */
 export const GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = [
   "display-name",
   "local-path",
   "url",
   "metadata",
   "native-metadata",
+  "label",
+  "label-tree",
 ];
 
-/** 任务详情 / 畅游详情只暴露基础三项。 */
+/** 任务详情 / 畅游详情只暴露基础三项 + 标签。 */
 export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchPathMode[] = [
   "display-name",
   "metadata",
   "native-metadata",
+  "label",
+  "label-tree",
 ];
+
+/**
+ * 标签搜索：`label` 精确匹配，`label-tree` 同时匹配子标签。UI 上合并成一个「标签」tab +
+ * 「包含子标签」勾选。输入语法（逗号分隔、token 之间为且）与其它模式不同，故不参与「任意」展开。
+ */
+export function isLabelSearchMode(mode: string | undefined): mode is "label" | "label-tree" {
+  return mode === "label" || mode === "label-tree";
+}
 
 export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
 
@@ -105,10 +119,15 @@ export interface GallerySearchTerm {
   modes?: GallerySearchPathMode[];
 }
 
+/** 「任意」可展开的真实模式：全部模式去掉标签。 */
+const GALLERY_SEARCH_ANY_MODES: readonly GallerySearchPathMode[] = GALLERY_SEARCH_MODES.filter(
+  (mode) => !isLabelSearchMode(mode),
+);
+
 function canonicalSearchScope(
   scope: readonly GallerySearchPathMode[],
 ): GallerySearchPathMode[] {
-  return GALLERY_SEARCH_MODES.filter((mode) => scope.includes(mode));
+  return GALLERY_SEARCH_ANY_MODES.filter((mode) => scope.includes(mode));
 }
 
 /**
@@ -122,14 +141,14 @@ export function makeSearchTerm(
 ): GallerySearchTerm {
   if (mode !== GALLERY_SEARCH_ANY) return { mode, query };
   const modes = canonicalSearchScope(scope);
-  return { mode, query, modes: modes.length > 0 ? modes : [...GALLERY_SEARCH_MODES] };
+  return { mode, query, modes: modes.length > 0 ? modes : [...GALLERY_SEARCH_ANY_MODES] };
 }
 
-/** 「任意」项实际覆盖的真实模式；缺省范围按全部五种兜底。 */
+/** 「任意」项实际覆盖的真实模式；缺省范围按全部非标签模式兜底。 */
 export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[] {
   if (term.mode !== GALLERY_SEARCH_ANY) return [term.mode];
   const modes = canonicalSearchScope(term.modes ?? []);
-  return modes.length > 0 ? modes : [...GALLERY_SEARCH_MODES];
+  return modes.length > 0 ? modes : [...GALLERY_SEARCH_ANY_MODES];
 }
 
 /** 搜索项 → 查询体片段。单模式是一个搜索段；「任意」展开成同词多模式的 OR 组。
@@ -922,6 +941,8 @@ function foldAnySearch(branches: readonly GalleryQuery[]): GallerySearchTerm | n
     if (!node || !isIsNode(node)) return null;
     const { search, ...rest } = node.is;
     if (!search || search.mode === GALLERY_SEARCH_ANY || !hasSearch(node.is)) return null;
+    // 标签模式不参与「任意」展开，含标签分支的组保持为普通 OR 组
+    if (isLabelSearchMode(search.mode)) return null;
     if (Object.keys(rest).length > 0) return null;
     if (query !== null && search.query !== query) return null;
     if (modes.includes(search.mode)) return null;

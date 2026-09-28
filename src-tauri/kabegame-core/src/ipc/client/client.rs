@@ -165,10 +165,32 @@ impl IpcClient {
         self.request_data(IpcRequest::StorageGetAlbums).await
     }
 
+    pub async fn storage_get_image_album_ids(
+        &self,
+        image_id: String,
+    ) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::StorageGetImageAlbumIds { image_id })
+            .await
+    }
+
     /// 添加画册
     pub async fn storage_add_album(&self, name: String) -> Result<serde_json::Value, String> {
         self.request_data(IpcRequest::StorageAddAlbum { name })
             .await
+    }
+
+    pub async fn storage_add_label_album(
+        &self,
+        key: String,
+        name: Option<String>,
+        parent_id: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::StorageAddLabelAlbum {
+            key,
+            name,
+            parent_id,
+        })
+        .await
     }
 
     /// 删除画册
@@ -183,6 +205,15 @@ impl IpcClient {
         new_name: String,
     ) -> Result<(), String> {
         self.request_ok(IpcRequest::StorageRenameAlbum { album_id, new_name })
+            .await
+    }
+
+    pub async fn storage_set_label_key(
+        &self,
+        album_id: String,
+        new_key: String,
+    ) -> Result<(), String> {
+        self.request_ok(IpcRequest::StorageSetLabelKey { album_id, new_key })
             .await
     }
 

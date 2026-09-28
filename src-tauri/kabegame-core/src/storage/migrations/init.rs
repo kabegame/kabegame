@@ -100,10 +100,16 @@ CREATE TABLE albums (
     sync_folder   TEXT,
     folder_status TEXT,
     ancestor_path TEXT    NOT NULL DEFAULT '',
-    sync_mode     TEXT    NOT NULL DEFAULT 'none'
+    sync_mode     TEXT    NOT NULL DEFAULT 'none',
+    label_key     TEXT,
+    label_path    TEXT
 );
 CREATE UNIQUE INDEX idx_albums_name_scoped
     ON albums(COALESCE(parent_id, ''), LOWER(name));
+CREATE UNIQUE INDEX idx_albums_label_key
+    ON albums(COALESCE(parent_id, ''), LOWER(label_key)) WHERE type = 'label';
+CREATE INDEX idx_albums_label_path
+    ON albums(LOWER(label_path)) WHERE type = 'label';
 -- 本地文件夹同步画册：同一物理目录只能对应一个同步画册
 CREATE UNIQUE INDEX idx_albums_sync_folder
     ON albums(sync_folder) WHERE sync_folder IS NOT NULL;
@@ -130,7 +136,8 @@ CREATE TABLE task_failed_images (
     last_attempted_at INTEGER,
     metadata_id       INTEGER REFERENCES metadata(id),
     display_name      TEXT,
-    header_snapshot   TEXT
+    header_snapshot   TEXT,
+    labels            TEXT
 );
 CREATE INDEX idx_task_failed_images_task ON task_failed_images(task_id);
 

@@ -393,6 +393,8 @@ impl GlobalEmitter {
             folder_status: album.folder_status.clone(),
             sync_mode: album.sync_mode.clone(),
             ancestor_path: album.ancestor_path.clone(),
+            label_key: album.label_key.clone(),
+            label_path: album.label_path.clone(),
         });
         EventBroadcaster::global().broadcast(event);
     }

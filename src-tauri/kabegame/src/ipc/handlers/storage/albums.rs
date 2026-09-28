@@ -12,9 +12,31 @@ pub async fn get_albums() -> IpcResponse {
     }
 }
 
+pub async fn get_image_album_ids(image_id: &str) -> IpcResponse {
+    match Storage::global().get_image_album_ids(image_id) {
+        Ok(album_ids) => {
+            IpcResponse::ok_with_data("ok", serde_json::to_value(album_ids).unwrap_or_default())
+        }
+        Err(e) => IpcResponse::err(e),
+    }
+}
+
 pub async fn add_album(name: &str) -> IpcResponse {
     let storage = Storage::global();
     match storage.add_album(name, None) {
+        Ok(album) => {
+            IpcResponse::ok_with_data("created", serde_json::to_value(album).unwrap_or_default())
+        }
+        Err(e) => IpcResponse::err(e),
+    }
+}
+
+pub async fn add_label_album(
+    key: &str,
+    name: Option<&str>,
+    parent_id: Option<&str>,
+) -> IpcResponse {
+    match Storage::global().add_label_album(key, name, parent_id) {
         Ok(album) => {
             IpcResponse::ok_with_data("created", serde_json::to_value(album).unwrap_or_default())
         }
@@ -34,6 +56,13 @@ pub async fn rename_album(album_id: &str, new_name: &str) -> IpcResponse {
     let storage = Storage::global();
     match storage.rename_album(album_id, new_name) {
         Ok(()) => IpcResponse::ok("renamed"),
+        Err(e) => IpcResponse::err(e),
+    }
+}
+
+pub async fn set_label_key(album_id: &str, new_key: &str) -> IpcResponse {
+    match Storage::global().set_label_key(album_id, new_key) {
+        Ok(()) => IpcResponse::ok("updated"),
         Err(e) => IpcResponse::err(e),
     }
 }

@@ -470,6 +470,8 @@ const props = withDefaults(defineProps<Props>(), {
     "url",
     "metadata",
     "native-metadata",
+    "label",
+    "label-tree",
   ],
   enableSearch: true,
   enablePageSize: true,

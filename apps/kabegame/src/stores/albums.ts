@@ -10,7 +10,7 @@ import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
-import type { AlbumSyncMode, AlbumTreeNode } from "@kabegame/core/types/album";
+import type { AlbumKind, AlbumSyncMode, AlbumTreeNode } from "@kabegame/core/types/album";
 import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
 import {
   buildAlbumMediaNodes,
@@ -19,14 +19,12 @@ import {
 } from "@/utils/albumMediaTree";
 
 export type { AlbumTreeNode };
-export type { AlbumSyncMode } from "@kabegame/core/types/album";
+export type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
 
 /** 隐藏画册的固定 UUID（与后端 `HIDDEN_ALBUM_ID` 常量一致） */
 export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
 /** 收藏画册的固定 UUID（与后端 `FAVORITE_ALBUM_ID` 常量一致） */
 export const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
-
-export type AlbumKind = "normal" | "local_folder";
 
 export interface FolderStatus {
   state: "ok" | "missing" | "denied" | "not_a_dir" | "io_error";
@@ -48,6 +46,10 @@ export interface Album {
   syncMode: AlbumSyncMode;
   /** 从根画册到自身的 id 链，格式为 `/root-id/.../self-id/`（与后端 `albums.ancestor_path` 同构） */
   ancestorPath: string;
+  /** 仅标签画册：标签 key（同级唯一，不区分大小写） */
+  labelKey: string | null;
+  /** 仅标签画册：从标签森林根到自身的 key 链，如 `pixiv/character/hatsune`（与后端 `albums.label_path` 同构） */
+  labelPath: string | null;
 }
 
 export interface AlbumStats {
@@ -87,13 +89,20 @@ function parseAlbumSyncMode(raw: unknown): AlbumSyncMode {
   }
 }
 
+function parseAlbumKind(raw: unknown): AlbumKind {
+  return raw === "local_folder" || raw === "label" ? raw : "normal";
+}
+
+function parseOptionalString(raw: unknown): string | null {
+  return raw == null || raw === "" ? null : String(raw);
+}
+
 function normalizeAlbumRow(a: Record<string, unknown>): Album {
   const createdAt =
     (a.created_at as number | undefined) ??
     (a.createdAt as number | undefined) ??
     0;
-  const rawType = String(a.type ?? "normal");
-  const type: AlbumKind = rawType === "local_folder" ? "local_folder" : "normal";
+  const type = parseAlbumKind(a.type);
   const syncFolder = ((): string | null => {
     const v = a.sync_folder ?? a.syncFolder;
     return v == null ? null : String(v);
@@ -114,6 +123,8 @@ function normalizeAlbumRow(a: Record<string, unknown>): Album {
     folderStatus,
     syncMode,
     ancestorPath,
+    labelKey: type === "label" ? parseOptionalString(a.label_key ?? a.labelKey) : null,
+    labelPath: type === "label" ? parseOptionalString(a.label_path ?? a.labelPath) : null,
   };
 }
 
@@ -166,6 +177,14 @@ export const useAlbumStore = defineStore("albums", () => {
   const isLocalFolderAlbum = (albumId: string | null | undefined): boolean => {
     if (!albumId) return false;
     return albums.value.some((a) => a.id === albumId && a.type === "local_folder");
+  };
+
+  /** 全部标签画册（标签森林的扁平列表） */
+  const labelAlbums = computed<Album[]>(() => albums.value.filter((a) => a.type === "label"));
+
+  const isLabelAlbum = (albumId: string | null | undefined): boolean => {
+    if (!albumId) return false;
+    return albums.value.some((a) => a.id === albumId && a.type === "label");
   };
 
   const albumTree = computed((): AlbumTreeNode[] => buildAlbumTreeFromFlat(albums.value));
@@ -260,15 +279,21 @@ export const useAlbumStore = defineStore("albums", () => {
    * 排除若干画册（仅从扁平列表过滤后再建树）。
    * `excludeLocalFolder`：本地文件夹画册的父子关系由磁盘路径唯一决定，不能作为
    * 新建/移动的目标父级——传 true 时连同其整棵子树一起从候选树中剔除。
+   * `excludeLabel` / `onlyLabel`：标签画册自成一片森林，不与普通画册互相嵌套——
+   * 普通画册的父级候选排除标签森林，标签画册的父级候选只留标签森林。
    */
   const getAlbumTreeExcluding = (
     excludeIds: string[],
-    opts?: { excludeLocalFolder?: boolean },
+    opts?: { excludeLocalFolder?: boolean; excludeLabel?: boolean; onlyLabel?: boolean },
   ): AlbumTreeNode[] => {
     const exclude = new Set(excludeIds);
     return buildAlbumTreeFromFlat(
       albums.value.filter(
-        (a) => !exclude.has(a.id) && !(opts?.excludeLocalFolder && a.type === "local_folder"),
+        (a) =>
+          !exclude.has(a.id) &&
+          !(opts?.excludeLocalFolder && a.type === "local_folder") &&
+          !(opts?.excludeLabel && a.type === "label") &&
+          !(opts?.onlyLabel && a.type !== "label"),
       ),
     );
   };
@@ -294,6 +319,30 @@ export const useAlbumStore = defineStore("albums", () => {
       return path;
     };
     for (const album of albums.value) album.ancestorPath = pathOf(album.id, new Set([album.id]));
+  };
+
+  /**
+   * 按当前 parentId / labelKey 整表补算标签画册的 labelPath（`root/.../self`）。
+   * 移动或改 key 后后端会全量重算，本地乐观 patch 需同步，否则树 tooltip 与搜索提示停在旧值。
+   */
+  const recomputeLabelPaths = () => {
+    const byId = new Map(albums.value.map((a) => [a.id, a]));
+    const memo = new Map<string, string | null>();
+    const pathOf = (album: Album, seen: Set<string>): string | null => {
+      if (memo.has(album.id)) return memo.get(album.id)!;
+      if (album.type !== "label" || !album.labelKey) return null;
+      const parent = album.parentId ? byId.get(album.parentId) : undefined;
+      const parentPath =
+        parent && parent.type === "label" && !seen.has(parent.id)
+          ? pathOf(parent, new Set(seen).add(parent.id))
+          : null;
+      const path = parentPath ? `${parentPath}/${album.labelKey}` : album.labelKey;
+      memo.set(album.id, path);
+      return path;
+    };
+    for (const album of albums.value) {
+      if (album.type === "label") album.labelPath = pathOf(album, new Set([album.id]));
+    }
   };
 
   /** 画册列表页仅展示根画册（无 parent），并隐藏"隐藏画册"本体（通过独立入口访问） */
@@ -339,13 +388,19 @@ export const useAlbumStore = defineStore("albums", () => {
       album.name = changes.name;
     }
     if (Object.prototype.hasOwnProperty.call(changes, "albumType")) {
-      album.type = changes.albumType === "local_folder" ? "local_folder" : "normal";
+      album.type = parseAlbumKind(changes.albumType);
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "labelKey")) {
+      album.labelKey = parseOptionalString(changes.labelKey);
+      // 改 key 会连带改变整棵子树的 labelPath
+      recomputeLabelPaths();
     }
     if (Object.prototype.hasOwnProperty.call(changes, "syncFolder")) {
       album.syncFolder = changes.syncFolder == null ? null : String(changes.syncFolder);
     }
     if (Object.prototype.hasOwnProperty.call(changes, "parentId")) {
       album.parentId = parseParentId(changes.parentId);
+      recomputeLabelPaths();
       recomputeAllAlbumCounts();
     }
     if (Object.prototype.hasOwnProperty.call(changes, "folderStatus")) {
@@ -484,6 +539,55 @@ export const useAlbumStore = defineStore("albums", () => {
     }
   };
 
+  /** 新建标签画册：父级只能为空（标签分区顶层）或另一个标签画册；名称缺省等于 key。 */
+  const createLabelAlbum = async (
+    args: { key: string; name?: string | null; parentId?: string | null },
+  ): Promise<Album> => {
+    await initEventListeners();
+    try {
+      const created = await invoke<Record<string, unknown>>("add_label_album", {
+        key: args.key,
+        name: args.name?.trim() || null,
+        parentId: args.parentId ?? null,
+      });
+      const row = normalizeAlbumRow(created);
+      if (!albums.value.some((a) => a.id === row.id)) {
+        albums.value.unshift(row);
+      }
+      albumDirectCounts.value[row.id] = albumDirectCounts.value[row.id] ?? 0;
+      albumHiddenDirectCounts.value[row.id] = albumHiddenDirectCounts.value[row.id] ?? 0;
+      recomputeAllAlbumCounts();
+      return albums.value.find((a) => a.id === row.id) ?? row;
+    } catch (error: any) {
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
+      throw new Error(errorMessage);
+    }
+  };
+
+  /** 修改标签画册的 key；子孙的 labelPath 随之改变。 */
+  const setLabelKey = async (albumId: string, newKey: string) => {
+    await initEventListeners();
+    try {
+      await invoke("set_label_key", { albumId, newKey });
+      const album = albums.value.find((a) => a.id === albumId);
+      if (album) {
+        album.labelKey = newKey;
+        recomputeLabelPaths();
+      }
+    } catch (error: any) {
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
+      throw new Error(errorMessage);
+    }
+  };
+
+  /** 这张图片直接所属的全部画册 id（含普通、文件夹、标签画册，调用方自行按类型过滤）。 */
+  const getImageAlbumIds = async (imageId: string): Promise<string[]> => {
+    const ids = await invoke<unknown>("get_image_album_ids", { imageId });
+    return Array.isArray(ids) ? ids.map((id) => String(id)) : [];
+  };
+
   const createLocalFolderAlbum = async (
     args: {
       name: string;
@@ -569,8 +673,9 @@ export const useAlbumStore = defineStore("albums", () => {
       const album = albums.value.find((a) => a.id === albumId);
       if (album) {
         album.parentId = newParentId;
-        // 自身与整棵后代的 ancestorPath 都随之改变
+        // 自身与整棵后代的 ancestorPath / labelPath 都随之改变
         recomputeAncestorPaths();
+        recomputeLabelPaths();
         recomputeAllAlbumCounts();
       }
     } catch (error: any) {
@@ -664,9 +769,14 @@ export const useAlbumStore = defineStore("albums", () => {
     getDescendantIds,
     localFolderAlbumIds,
     isLocalFolderAlbum,
+    labelAlbums,
+    isLabelAlbum,
     getAlbumTreeExcluding,
     createAlbum,
     createLocalFolderAlbum,
+    createLabelAlbum,
+    setLabelKey,
+    getImageAlbumIds,
     deleteAlbum,
     renameAlbum,
     moveAlbum,

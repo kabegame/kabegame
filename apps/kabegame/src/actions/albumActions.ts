@@ -1,4 +1,4 @@
-import { Connection, FolderOpened, Folder, FolderAdd, FolderChecked, Picture, Edit, Rank, Delete, Refresh, VideoPause } from "@kabegame/element-plus-icons";
+import { Connection, FolderOpened, Folder, FolderAdd, FolderChecked, Picture, Edit, Rank, Delete, Refresh, VideoPause, PriceTag } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import type { Album } from "@/stores/albums";
@@ -20,6 +20,8 @@ export interface AlbumActionContext extends ActionContext<Album> {
   albumImageCount: number;
   favoriteAlbumId: string;
   isLocalFolder: boolean;
+  /** 标签画册：多出「修改 key」 */
+  isLabel: boolean;
   /** 虚拟盘门禁（宿主已算好：Albums.vue albumDriveEnabled） */
   albumDriveEnabled: boolean;
 }
@@ -187,6 +189,13 @@ export function createAlbumActions(): ActionItem<Album>[] {
       command: "rename",
       visible: () => true,
       dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
+    },
+    {
+      key: "setLabelKey",
+      label: t("contextMenu.setLabelKey"),
+      icon: PriceTag,
+      command: "setLabelKey",
+      visible: (ctx) => (ctx as AlbumActionContext).isLabel,
     },
     {
       key: "moveTo",

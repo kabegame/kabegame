@@ -44,6 +44,7 @@
       metadata: o.metadata ?? undefined,
       metadataId: o.metadata_id ?? undefined,
       sourceUrl,
+      labels: o.labels ?? undefined,
     });
   };
   // 页面自发原生下载的终态由 Rust eval 到这里；每次页面加载都会重装监听集合。
@@ -416,6 +417,7 @@
         metadata: o.metadata ?? undefined,
         metadataId: o.metadata_id ?? undefined,
         sourceUrl: o.url ?? undefined,
+        labels: o.labels ?? undefined,
       }));
     },
     // 监听页面自发触发的浏览器原生下载。成功时 path 可直接交给 downloadImage；

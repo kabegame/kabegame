@@ -128,9 +128,21 @@ pub enum IpcRequest {
     /// 获取所有画册
     StorageGetAlbums,
 
+    /// 获取图片所属的全部画册 ID
+    StorageGetImageAlbumIds {
+        image_id: String,
+    },
+
     /// 添加画册
     StorageAddAlbum {
         name: String,
+    },
+
+    /// 添加标签画册
+    StorageAddLabelAlbum {
+        key: String,
+        name: Option<String>,
+        parent_id: Option<String>,
     },
 
     /// 删除画册
@@ -142,6 +154,12 @@ pub enum IpcRequest {
     StorageRenameAlbum {
         album_id: String,
         new_name: String,
+    },
+
+    /// 修改标签画册 key
+    StorageSetLabelKey {
+        album_id: String,
+        new_key: String,
     },
 
     /// 添加图片到画册
