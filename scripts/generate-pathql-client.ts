@@ -1,7 +1,7 @@
 /**
  * 生成 PathQL TypeScript 客户端（packages/kabegame-pathql-client/index.ts）。
  *
- * provider DSL（*.provider.json5）在编译期内嵌进 kabegame-cli，旧二进制会静默生成
+ * provider DSL（dsl/**/*.json5 / *.yaml）在编译期内嵌进 kabegame-cli，旧二进制会静默生成
  * 旧客户端——因此默认每次先增量构建 debug CLI（无改动时秒级完成）再执行
  * `pathql generate`。外壳 packages/kabegame-pathql-client/package.json 入库
  * （workspace 成员，`deno install` 链接进 node_modules），index.ts 为生成物不入库。

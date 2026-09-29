@@ -112,7 +112,7 @@ DB 只有 `images.plugin_id`（ID 字符串），但 VD 的"按插件"需要展�
 
 ### 3.3 落地文件
 
-#### 3.3.1 `plugins_provider.json5`（数据层）
+#### 3.3.1 `plugins_provider`（数据层；现为 `shared/plugins_provider.yaml`，下为设计期草稿）
 
 ```json5
 {

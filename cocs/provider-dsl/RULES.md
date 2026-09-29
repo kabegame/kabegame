@@ -18,7 +18,7 @@
 ## Phase 7c completion note
 
 Kabegame core built-in providers are DSL-backed. The host loader recursively scans
-`src/providers/dsl/**/*.json{,5}`, and skips explicit
+`src/providers/dsl/**/*.{json,json5,yaml,yml}` (loader picked by extension), and skips explicit
 non-provider assets through `EXCLUDED_DSL_FILES` (for example `schema.json5`). The v0.7 engine
 features used by the built-in providers include globals, field shorthand, path-only fetch/count,
 delegate symmetry, instance-static keys, typed JSON meta bridges, host SQL functions, and
@@ -27,9 +27,17 @@ delegate symmetry, instance-static keys, typed JSON meta bridges, host SQL funct
 
 ## 1. 文件与位置
 
-- 后缀：`.json5`（推荐 `.provider.json5` 后缀以便 IDE 区分）
-- 顶层 `$schema` 字段建议指向 `./schema.json5` 相对路径，启用 IDE 补全
-- 位置约定：`src-tauri/kabegame-core/src/providers/dsl/<scope>/<name>.json5`
+- 后缀：`.json5` 或 `.yaml`（也接受 `.json` / `.yml`）。两种格式产出**同一份** `ProviderDef` AST，
+  由 `LoaderType::from_path` 按扩展名选择 loader（pathql-rs 的 `json5` / `yaml` feature）。
+  - **含长 SQL（子查询、多段 UNION、长 CASE）的 provider 用 YAML**：SQL 写成块标量 `|-`，按子句换行缩进；
+    YAML 块里没有转义：SQL 字面量 `'\'` 就原样写 `'\'`（json5 字符串里得转义成 `'\\'`）。
+  - SQL 块里**不要写 `--` 注释**：where 片段会被 ` AND ` 拼接、`${composed}` 会被内联，行尾注释可能吞掉后续条件；
+    说明一律写在 YAML 的 `#` 注释里。
+  - 换行不能拆开被 `where_clear` 按子串匹配的片段（如 `ai.album_id =`、`instr(LOWER(albums.name)`）。
+  - 模板值（`"${out.id}"`）与 `${...}` 作键时一律加双引号；`"0"` 这类字符串默认值也要引号，否则会被解析成数字。
+  - YAML 的 `note` 用折叠块 `>-`，折叠后与单行字符串逐字节相同。
+- 顶层 `$schema` 字段建议指向 `./schema.json5` 相对路径，启用 IDE 补全（仅 json5）
+- 位置约定：`src-tauri/kabegame-core/src/providers/dsl/<scope>/<name>.{json5,yaml}`
   - `<scope>` 为 `root` / `shared` / `gallery` / `vd` 之一
   - 文件 `name` 字段必须等于文件名（不含后缀），便于反查
 - `__` 前缀路径段为**约定上的私有路径**（非引擎强制），不期望被外部 list 暴露
@@ -622,7 +630,7 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 
 ## 10. 加载期校验清单（实现引擎时逐项执行）
 
-引擎 loader 在解析每个 *.json5 后必须依次检查：
+引擎 loader 在解析每个 *.json5 / *.yaml 后必须依次检查：
 
 - [ ] schema.json5 校验通过
 - [ ] `name` 字段等于文件名（不含后缀）
@@ -782,7 +790,7 @@ RegistryEntry =
   | ProgrammaticEntry  // 终端编程注册的 factory
 ```
 
-**DSL 注册**：从 .json5 文件加载（或其他 Loader 适配器），产出 `ProviderDef` AST。
+**DSL 注册**：从 .json5 / .yaml 文件加载（`Json5Loader` / `YamlLoader`，或其他 Loader 适配器），产出 `ProviderDef` AST。
 实例化时引擎根据 ProviderInvocation.properties 构造 DslProvider 解释执行。
 
 **编程注册**：终端语言绑定层提供 `register_provider(namespace, name, factory)` 接口，

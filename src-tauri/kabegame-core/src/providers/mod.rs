@@ -1,7 +1,7 @@
 //! Provider 体系 (7c 起: 全 DSL)。
 //!
 //! - [`provider`] — pathql-rs 类型 reexport + 前端 wire format helper
-//! - [`dsl_loader`] — include_dir 嵌入的 dsl/**/*.json5 全量加载
+//! - [`dsl_loader`] — include_dir 嵌入的 dsl/**/*.{json5,yaml} 全量加载（按扩展名选 loader）
 //! - [`init`] — provider_runtime() 单例
 //! - [`query`] — Tauri IPC 边界 (pathql_entry / pathql_list / pathql_fetch)
 //! - [`sql_executor`] — pathql_rs::SqlExecutor 的 rusqlite 实现 (注入 Storage db)

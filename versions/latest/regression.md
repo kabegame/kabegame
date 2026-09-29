@@ -547,3 +547,17 @@ macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍�
 | [ ] | 画册树与分页 | 桌面 / Android | 展开画册树并翻「加载更多」；打开「加入画册」选择器；拖拽移动画册 | 展开、翻页、选中、右键、拖拽均正常，无控制台报错 | 本版改动最集中的业务文件之一 |
 | [x] | 长文本与自动换行 | 桌面 | 查看插件说明、任务日志、设置项描述这类长段落 | 折行位置合理，无溢出、无横向滚动 | printWidth 由无约束变为 120 |
 | [ ] | 编辑器与 CI 一致 | 任一平台 | 用编辑器保存一个 `.vue` 文件，再跑 `deno task format:check` | 保存后无需再格式化（编辑器读取同一份 `.prettierrc.json`） | 编辑器插件配置由各自负责，本仓不提交 `.vscode` 强制项 |
+
+## PathQL YAML loader 与长 SQL provider 迁移
+
+pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 与插件 `providers/` 按扩展名选 loader。11 个长 SQL provider 由 json5 迁到 YAML（`aspect_bucket_router`、`size_bucket_router`、`aspect_bucket_provider`、`tasks_provider`、`plugins_provider`、`albums_page_provider`、`albums_search_provider`、`gallery_size_range_provider`、`gallery_search_label_query_provider`、`vd_name_provider`、`vd_sub_album_gate_provider`）。迁移前后 AST 逐字段比对：除 SQL 的空白外完全一致，`where_clear` 子串命中不变。自动化：pathql-rs 全量测试（`--features json5,yaml,validate`）已过；`check-kabegame` 与 `test-kabegame kabegame-core --test dsl_e2e` 待在完整环境复核。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 启动注册 | 任一平台 | 启动应用 | 无 `register DSL` / `DSL validate` panic | 启动期注册 + validate 已在探针中跑通 |
+| [ ] | 按比例 / 大小分组 | 桌面 | 画廊「按比例」「按大小」分组，并进入任一分组 | 只列非空分组，计数与进入后的图片数一致；`50MB-` 等范围过滤正确 | aspect/size bucket router、size_range_provider |
+| [ ] | 画册目录分页与计数 | 桌面 / Android | 画册树展开、翻页；`album_page_hide_` 下看 image_count | 排序、计数与迁移前一致，标签目录计数为空 | albums_page_provider |
+| [ ] | 画册搜索 | 桌面 | 画册选择器搜索名称 / 标签路径，含 `%`、`_`、`\` | 全等、前缀优先，父级路径 `A / B` 正确；特殊字符按字面匹配 | albums_search_provider |
+| [ ] | 标签搜索 | 桌面 | 标签 tab 搜索 `chara, miku`，开关「包含子标签」 | 与迁移前结果一致；只输入逗号时无结果 | gallery_search_label_query_provider |
+| [ ] | 按任务 / 按插件 / VD | 桌面 | 画廊「按任务」「按插件」；VD 按名称、子画册目录 | 显示名为「插件名 - id」；VD 语种目录与子画册正常 | tasks/plugins/vd_name/vd_sub_album_gate |
+| [ ] | 插件 YAML provider | 任一平台 | 打包一个 `kbPathQLProviders` 指向 `providers/*.yaml` 的插件并安装 | 正常加载；扩展名不支持时给出可读错误 | `parse_plugin_provider_entries` |

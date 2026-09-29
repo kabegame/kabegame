@@ -1,6 +1,6 @@
 //! ProviderRuntime 启动期初始化 (OnceLock 单例)。
 //!
-//! 基于 SQL 的 provider 由 DSL (`dsl_loader::register_embedded_dsl`, 内嵌 .json5) 提供;
+//! 基于 SQL 的 provider 由 DSL (`dsl_loader::register_embedded_dsl`, 内嵌 .json5 / .yaml) 提供;
 //! `plugin://` schema 的行数据来自 PluginManager 而非 SQL, 由 programmatic provider
 //! (`programmatic::plugin_resource`) 提供。
 //!

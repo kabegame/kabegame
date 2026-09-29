@@ -1,0 +1,40 @@
+namespace: kabegame
+name: albums_search_provider
+note: >-
+  Albums whose name or label path contains the query (ASCII case-insensitive).
+  Rows gain parent_path_names; exact and prefix name matches sort first.
+properties:
+  query: { type: string, default: "", optional: false }
+query:
+  # 父级名称链：ancestor_path 为 `/根/.../自身/`，按祖先深度拼接。
+  fields:
+    - sql: |-
+        (
+          SELECT group_concat(anc.name, ' / ')
+          FROM (
+            SELECT p.name
+            FROM albums AS p
+            WHERE p.id != albums.id AND instr(albums.ancestor_path, '/' || p.id || '/') > 0
+            ORDER BY length(p.ancestor_path) ASC
+          ) AS anc
+        )
+      as: parent_path_names
+  # instr 做子串匹配，查询里的 % _ \ 都按字面处理，无需 LIKE 转义；label_path 已含 label_key。
+  # 列举项计数（albums_child_count_provider）按 `instr(LOWER(albums.name)` 整条清除本谓词。
+  where:
+    - instr(LOWER(albums.name), LOWER(${properties.query})) > 0
+    - instr(LOWER(COALESCE(albums.label_path, '')), LOWER(${properties.query})) > 0
+  order:
+    - sql: |-
+        CASE
+          WHEN LOWER(albums.name) = LOWER(${properties.query}) THEN 0
+          WHEN instr(LOWER(albums.name), LOWER(${properties.query})) = 1 THEN 1
+          ELSE 2
+        END
+      order: asc
+resolve:
+  ".*":
+    delegate: { provider: albums_filter_router }
+    child_var: child
+    provider: "${child.provider}"
+    meta: "${child.meta}"

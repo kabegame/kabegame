@@ -1,0 +1,57 @@
+namespace: kabegame
+name: albums_page_provider
+note: >-
+  One page of the albums selected by the preceding filter segments, sorted by name.
+  Each row gains image_count: member rows of the album and its descendants
+  (a label leaf's direct image count; NULL for label_dir).
+  album_page_hide_x<N>x_<page> leaves images in the hidden album out of image_count,
+  like the images:// hide/ prefix.
+  List with counts: each entry's total is its direct child album count under the same album_kind filters.
+properties:
+  page: { type: number, default: 1, optional: false }
+  page_size: { type: number, default: 100, min: 1, optional: true }
+  exclude_hidden: { type: boolean, default: false, optional: false }
+query:
+  # 追加而非 clear：search 贡献的相关度排序保持在最前。
+  order:
+    - { sql: "name_language_rank(name_language_bucket(COALESCE(albums.name, '')))", order: asc }
+    - { sql: albums.name COLLATE NOCASE, order: asc }
+    - { sql: albums.id, order: asc }
+list:
+  # 过滤全部来自上游段折叠出的 ${composed}；本节点先切页（RULES §4.2：列举分页写在 list.sql），
+  # 再只对这一页的行 join album_images 计数，不让关联子查询跑遍整个过滤结果。
+  # image_count 与 images://gallery/[hide/]album/<id>（标签叶子）、album-tree/<id>（其余）的
+  # entry 总数同口径：按成员行计、只数 images 里存在的图片；标签目录不能挂图，取 NULL。
+  # hid_ai 的 ON 带上 exclude_hidden：关闭时永不命中，等价于不排除。
+  "${album.id}":
+    sql: |-
+      SELECT page.*,
+        CASE page.type
+          WHEN 'label_dir' THEN NULL
+          WHEN 'label' THEN (
+            SELECT COUNT(*)
+            FROM album_images AS cnt_ai
+            JOIN images ON images.id = cnt_ai.image_id
+            LEFT JOIN album_images AS hid_ai ON hid_ai.image_id = cnt_ai.image_id
+              AND hid_ai.album_id = ${global.hidden_album_id} AND ${properties.exclude_hidden}
+            WHERE cnt_ai.album_id = page.id AND hid_ai.image_id IS NULL
+          )
+          ELSE (
+            SELECT COUNT(*)
+            FROM albums AS tree
+            JOIN album_images AS cnt_ai ON cnt_ai.album_id = tree.id
+            JOIN images ON images.id = cnt_ai.image_id
+            LEFT JOIN album_images AS hid_ai ON hid_ai.image_id = cnt_ai.image_id
+              AND hid_ai.album_id = ${global.hidden_album_id} AND ${properties.exclude_hidden}
+            WHERE instr(tree.ancestor_path, '/' || page.id || '/') > 0 AND hid_ai.image_id IS NULL
+          )
+        END AS image_count
+      FROM (
+        SELECT * FROM (${composed})
+        LIMIT ${properties.page_size}
+        OFFSET (${properties.page} - 1) * ${properties.page_size}
+      ) AS page
+    data_var: album
+    provider: albums_child_count_provider
+    properties: { album_id: "${album.id}" }
+    meta: "${album}"
