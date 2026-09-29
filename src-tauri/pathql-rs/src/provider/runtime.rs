@@ -556,7 +556,7 @@ impl ProviderRuntime {
         // 全 miss: 从 root cold start
         let key_mark = ctx.provider_key_mark();
         let mut initial = ProviderQuery::new();
-        initial.from = Some(schema.from.clone());
+        initial.from = Some(crate::compose::FromSource::Table(schema.from.clone()));
         let composed = schema.provider.apply_query(initial, ctx);
         let mut provider_keys = schema.provider_keys.clone();
         extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
@@ -941,7 +941,7 @@ mod tests {
         fn apply_query(&self, mut q: ProviderQuery, _ctx: &ProviderContext) -> ProviderQuery {
             self.apply_count.fetch_add(1, Ordering::SeqCst);
             if let Some(t) = &self.from {
-                q.from = Some(SqlExpr(t.clone()));
+                q.from = Some(crate::compose::FromSource::Table(SqlExpr(t.clone())));
             }
             q
         }
@@ -983,7 +983,7 @@ mod tests {
     impl Provider for NoteLeaf {
         fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
             if let Some(from) = self.from {
-                q.from = Some(SqlExpr(from.into()));
+                q.from = Some(crate::compose::FromSource::Table(SqlExpr(from.into())));
             }
             q
         }
@@ -1111,7 +1111,7 @@ mod tests {
             .register_schema("test", "schema_table", "", "__root")
             .unwrap();
         let resolved = runtime.resolve("test://").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "images");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "images");
     }
 
     #[test]
@@ -1194,7 +1194,7 @@ mod tests {
         );
         assert_eq!(
             runtime.resolve("dsl://").unwrap().composed.from,
-            Some(SqlExpr("dsl_table".into()))
+            Some(crate::compose::FromSource::table("dsl_table"))
         );
     }
 
@@ -1299,8 +1299,8 @@ mod tests {
         let albums = runtime.resolve("albums://x").unwrap();
 
         assert_eq!(runtime.cache_size(), 2);
-        assert_eq!(images.composed.from, Some(SqlExpr("images".into())));
-        assert_eq!(albums.composed.from, Some(SqlExpr("albums_test".into())));
+        assert_eq!(images.composed.from, Some(crate::compose::FromSource::table("images")));
+        assert_eq!(albums.composed.from, Some(crate::compose::FromSource::table("albums_test")));
         let cache = runtime.cache.lock().unwrap();
         assert!(cache.contains_key("images://x"));
         assert!(cache.contains_key("albums://x"));
@@ -1358,7 +1358,7 @@ mod tests {
             }),
         }));
         let resolved = runtime.resolve("test://mid/leaf").unwrap();
-        assert_eq!(resolved.composed.from, Some(SqlExpr("schema_table".into())));
+        assert_eq!(resolved.composed.from, Some(crate::compose::FromSource::table("schema_table")));
         assert_eq!(resolved.composed.joins.len(), 1);
         assert_eq!(resolved.composed.wheres.len(), 1);
         assert_eq!(resolved.composed.order.entries.len(), 1);
@@ -1388,7 +1388,7 @@ mod tests {
 
         runtime.register_provider(child_def).unwrap();
         let resolved = runtime.resolve("test://child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
     }
 
     #[test]
@@ -1418,14 +1418,14 @@ mod tests {
 
         runtime.register_provider(child_v1).unwrap();
         let resolved = runtime.resolve("test://child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
 
         assert!(runtime.unregister_provider("", "child"));
         assert!(!runtime.unregister_provider("", "child"));
         runtime.register_provider(child_v2).unwrap();
 
         let resolved = runtime.resolve("test://child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
     }
 
     #[test]
@@ -1453,7 +1453,7 @@ mod tests {
         assert!(runtime.unregister_provider("", "one"));
         assert_eq!(runtime.cache_size(), 1);
         let resolved = runtime.resolve("test://two").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
     }
 
     #[cfg(feature = "json5")]
@@ -1483,7 +1483,7 @@ mod tests {
             .unwrap();
 
         let resolved = runtime.resolve("test://json5_child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
     }
 
     #[cfg(feature = "yaml")]
@@ -1508,14 +1508,14 @@ mod tests {
             .unwrap();
 
         let resolved = runtime.resolve("test://yaml_child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
     }
 
     #[test]
     fn resolves_root() {
         let (runtime, _) = three_layer_runtime();
         let r = runtime.resolve("test://").unwrap();
-        assert_eq!(r.composed.from.unwrap().0, "root_table");
+        assert_eq!(r.composed.from.unwrap().as_table().unwrap().0, "root_table");
     }
 
     #[test]
@@ -1524,7 +1524,7 @@ mod tests {
         let r = runtime.resolve("test://b").unwrap();
         // mid has from=None, so root_table cascades through (mid does set q.from to None? No: it sets from only if Some)
         // Actually mid's apply_query keeps current.from since its from is None
-        assert_eq!(r.composed.from.unwrap().0, "root_table");
+        assert_eq!(r.composed.from.unwrap().as_table().unwrap().0, "root_table");
     }
 
     #[test]
@@ -1532,7 +1532,7 @@ mod tests {
         let (runtime, _) = three_layer_runtime();
         let r = runtime.resolve("test://b/c").unwrap();
         // leaf overrides from to "leaf_table"
-        assert_eq!(r.composed.from.unwrap().0, "leaf_table");
+        assert_eq!(r.composed.from.unwrap().as_table().unwrap().0, "leaf_table");
     }
 
     #[test]
@@ -1588,7 +1588,7 @@ mod tests {
         struct Leaf;
         impl Provider for Leaf {
             fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
-                q.from = Some(SqlExpr("leaf_table".into()));
+                q.from = Some(crate::compose::FromSource::table("leaf_table"));
                 q
             }
         }
@@ -1675,7 +1675,7 @@ mod tests {
         assert_eq!(runtime.cache_size(), 2);
 
         let resolved = runtime.resolve("test://parent/page-1").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "leaf_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "leaf_table");
         assert!(resolved
             .composed
             .fields
@@ -1992,7 +1992,7 @@ mod tests {
         struct Target;
         impl Provider for Target {
             fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
-                q.from = Some(crate::ast::SqlExpr("target_table".into()));
+                q.from = Some(crate::compose::FromSource::table("target_table"));
                 q
             }
             fn list(
@@ -2039,7 +2039,7 @@ mod tests {
         }));
         let resolved = runtime.resolve("test://delegated").unwrap();
         assert!(resolved.provider.is_none());
-        assert_eq!(resolved.composed.from.unwrap().0, "target_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "target_table");
         let err = runtime.list("test://delegated").unwrap_err();
         assert!(matches!(err, EngineError::NoProvider(p) if p == "test://delegated"));
     }
@@ -2153,7 +2153,7 @@ mod tests {
         }));
 
         let resolved = runtime.resolve("test://x").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "outer_a_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "outer_a_table");
         assert!(resolved
             .composed
             .fields
@@ -2280,7 +2280,7 @@ mod tests {
         }));
 
         let resolved = runtime.resolve("test://x").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().0, "outer_a_table");
+        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "outer_a_table");
         assert!(resolved
             .composed
             .fields
@@ -2675,7 +2675,7 @@ mod tests {
     struct ImagesLeaf;
     impl Provider for ImagesLeaf {
         fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
-            q.from = Some(crate::ast::SqlExpr("images".into()));
+            q.from = Some(crate::compose::FromSource::table("images"));
             q
         }
         fn list(
@@ -2789,7 +2789,7 @@ mod tests {
         struct LimitZeroLeaf;
         impl Provider for LimitZeroLeaf {
             fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
-                q.from = Some(crate::ast::SqlExpr("images".into()));
+                q.from = Some(crate::compose::FromSource::table("images"));
                 q.limit = Some(crate::ast::NumberOrTemplate::Number(0.0));
                 q
             }

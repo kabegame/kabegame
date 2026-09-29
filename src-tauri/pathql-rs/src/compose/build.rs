@@ -6,7 +6,7 @@
 use thiserror::Error;
 
 use crate::ast::{JoinKind, NumberOrTemplate, OrderDirection};
-use crate::compose::query::{JoinFrag, ProviderQuery};
+use crate::compose::query::{FromSource, JoinFrag, ProviderQuery};
 use crate::compose::render::{render_template_sql, RenderError};
 use crate::provider::SqlDialect;
 use crate::template::eval::{TemplateContext, TemplateValue};
@@ -47,15 +47,26 @@ impl ProviderQuery {
 
         // FROM
         sql.push_str(" FROM ");
-        let from = self.from.as_ref().ok_or(BuildError::MissingFrom)?;
-        render_template_sql(
-            &from.0,
-            ctx_ref,
-            &self.aliases,
-            dialect,
-            &mut sql,
-            &mut params,
-        )?;
+        match self.from.as_ref().ok_or(BuildError::MissingFrom)? {
+            FromSource::Table(from) => render_template_sql(
+                &from.0,
+                ctx_ref,
+                &self.aliases,
+                dialect,
+                &mut sql,
+                &mut params,
+            )?,
+            FromSource::Subquery { inner, alias } => {
+                // 内层用未合并本层 adhoc 的原始 ctx 独立渲染：各层 `__pq_prop_N` 计数器互不串号，
+                // 别名表也各自作用域。FROM 在 SELECT 之后、JOIN 之前，参数按文本顺序接在这里。
+                let (inner_sql, inner_params) = inner.build_sql(ctx, dialect)?;
+                sql.push('(');
+                sql.push_str(&inner_sql);
+                sql.push_str(") AS ");
+                render_alias_identifier(&mut sql, alias, dialect);
+                params.extend(inner_params);
+            }
+        }
 
         // JOIN
         for j in &self.joins {
@@ -82,14 +93,17 @@ impl ProviderQuery {
         dialect: SqlDialect,
     ) -> Result<(), BuildError> {
         if self.fields.is_empty() {
-            if let Some(from) = &self.from {
-                if is_simple_identifier(&from.0) {
+            match &self.from {
+                Some(FromSource::Table(from)) if is_simple_identifier(&from.0) => {
                     sql.push_str(&from.0);
                     sql.push_str(".*");
-                    return Ok(());
                 }
+                Some(FromSource::Subquery { alias, .. }) => {
+                    render_alias_identifier(sql, alias, dialect);
+                    sql.push_str(".*");
+                }
+                _ => sql.push('*'),
             }
-            sql.push('*');
             return Ok(());
         }
         for (i, f) in self.fields.iter().enumerate() {
@@ -323,7 +337,7 @@ mod tests {
     use super::*;
     use crate::ast::{NumberOrTemplate, OrderDirection, SqlExpr, TemplateExpr};
     use crate::compose::aliases::{AliasTable, ResolvedAlias};
-    use crate::compose::query::{FieldFrag, JoinFrag, ProviderQuery};
+    use crate::compose::query::{FieldFrag, FromSource, JoinFrag, ProviderQuery};
     use std::collections::HashMap;
 
     fn empty_ctx() -> TemplateContext {
@@ -340,7 +354,7 @@ mod tests {
 
     fn q_with_from(from: &str) -> ProviderQuery {
         let mut q = ProviderQuery::new();
-        q.from = Some(SqlExpr(from.into()));
+        q.from = Some(crate::compose::FromSource::Table(SqlExpr(from.into())));
         q
     }
 
@@ -771,6 +785,142 @@ mod tests {
         assert!(sql.contains("INNER JOIN album_images AS _a0 ON _a0.image_id = images.id"));
     }
 
+    // ----- FromSource::Subquery（子查询边界）-----
+
+    fn albums_inner_page() -> ProviderQuery {
+        // 内层：一页画册（WHERE 走 raw-bind，intern 出 `__pq_raw_0`）
+        let mut inner = ProviderQuery::new()
+            .with_where_raw("albums.parent_id = ?", &[TemplateValue::Text("P".into())]);
+        inner.from = Some(FromSource::table("albums"));
+        inner.limit = Some(NumberOrTemplate::Number(2.0));
+        inner.offset_terms.push(NumberOrTemplate::Number(0.0));
+        inner
+    }
+
+    fn wrap(inner: ProviderQuery, alias: &str) -> ProviderQuery {
+        let mut outer = ProviderQuery::new();
+        outer.from = Some(FromSource::Subquery {
+            inner: std::sync::Arc::new(inner),
+            alias: alias.into(),
+        });
+        outer
+    }
+
+    #[test]
+    fn subquery_from_renders_nested_select_with_alias() {
+        let outer = wrap(albums_inner_page(), "albums");
+        let (sql, params) = outer
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        // 无 fields 时外层以别名展开；分页留在内层，外层不带 LIMIT
+        assert_eq!(
+            sql,
+            "SELECT albums.* FROM (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) AS albums"
+        );
+        assert_eq!(params, vec![TemplateValue::Text("P".into())]);
+    }
+
+    #[test]
+    fn subquery_from_keeps_adhoc_isolated_and_params_in_text_order() {
+        let mut inner = albums_inner_page()
+            .with_where_raw("albums.w = ${properties.base}", &[]);
+        inner.wheres.push(SqlExpr("albums.type = ${properties.kind}".into()));
+        inner
+            .adhoc_properties
+            .insert("kind".into(), TemplateValue::Text("normal".into()));
+
+        // 外层自己的 raw-bind 计数从 0 开始，与内层 `__pq_raw_0` 同名但值不同
+        let mut outer = wrap(inner, "albums")
+            .with_field_raw("?", Some("tag"), &[TemplateValue::Text("field".into())]);
+        outer = outer
+            .with_join_raw(
+                JoinKind::Inner,
+                "album_images",
+                "ai",
+                Some("ai.album_id = albums.id AND ai.image_id > ?"),
+                &[TemplateValue::Text("join".into())],
+            )
+            .unwrap()
+            .with_where_raw("ai.image_id < ?", &[TemplateValue::Int(9)]);
+        outer.limit = Some(NumberOrTemplate::Number(5.0));
+
+        // 基础 ctx 的属性对内层可见（未被外层 adhoc 遮挡）
+        let ctx = props(&[("base", TemplateValue::Int(7))]);
+        let (sql, params) = outer
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT ? AS tag FROM (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) AND (albums.w = ?) AND (albums.type = ?) LIMIT 2 OFFSET (0)) AS albums \
+             INNER JOIN album_images AS ai ON ai.album_id = albums.id AND ai.image_id > ? WHERE (ai.image_id < ?) LIMIT 5"
+        );
+        // 外层 SELECT → 内层全部 → 外层 JOIN → 外层 WHERE
+        assert_eq!(
+            params,
+            vec![
+                TemplateValue::Text("field".into()),
+                TemplateValue::Text("P".into()),
+                TemplateValue::Int(7),
+                TemplateValue::Text("normal".into()),
+                TemplateValue::Text("join".into()),
+                TemplateValue::Int(9),
+            ]
+        );
+    }
+
+    #[test]
+    fn subquery_from_ref_aliases_scoped_per_level() {
+        // 两层各自 fold 出 `${ref:ai}` → `_a0`，渲染时各查各的别名表
+        let ref_join = |q: &mut ProviderQuery| {
+            q.aliases.allocate("ai");
+            q.joins.push(JoinFrag {
+                kind: JoinKind::Inner,
+                table: SqlExpr("album_images".into()),
+                alias: ResolvedAlias::Literal("_a0".into()),
+                on: Some(SqlExpr("${ref:ai}.album_id = albums.id".into())),
+                in_need: false,
+            });
+        };
+        let mut inner = ProviderQuery::new();
+        inner.from = Some(FromSource::table("albums"));
+        ref_join(&mut inner);
+        let mut outer = wrap(inner, "albums");
+        ref_join(&mut outer);
+        let (sql, _) = outer
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT albums.* FROM (SELECT albums.* FROM albums INNER JOIN album_images AS _a0 ON _a0.album_id = albums.id) AS albums \
+             INNER JOIN album_images AS _a0 ON _a0.album_id = albums.id"
+        );
+    }
+
+    #[test]
+    fn subquery_from_nests_multiple_levels_and_quotes_alias() {
+        // C(from B(from A))；别名是关键字时按方言加引号
+        let level_b = wrap(albums_inner_page(), "albums");
+        let level_c = wrap(level_b, "order");
+        let (sql, params) = level_c
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT \"order\".* FROM (SELECT albums.* FROM (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) AS albums) AS \"order\""
+        );
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn subquery_from_propagates_inner_build_error() {
+        // 内层缺 FROM 时外层 build 失败，而不是渲染出残缺 SQL
+        let outer = wrap(ProviderQuery::new(), "albums");
+        assert!(matches!(
+            outer.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite),
+            Err(BuildError::MissingFrom)
+        ));
+    }
+
     // ----- order: full pipeline test of clause sequencing -----
 
     // ----- ${composed} subquery embed end-to-end -----
@@ -779,7 +929,7 @@ mod tests {
     fn composed_subquery_merges_params() {
         // Inner: SELECT images.* FROM images WHERE (images.album_id = ?)
         let mut inner = ProviderQuery::new();
-        inner.from = Some(SqlExpr("images".into()));
+        inner.from = Some(crate::compose::FromSource::table("images"));
         inner
             .wheres
             .push(SqlExpr("images.album_id = ${properties.aid}".into()));
@@ -823,7 +973,7 @@ mod tests {
         // Outer is a ProviderQuery whose `from` references ${composed}
         // (mirrors page_size_provider's dynamic SQL: FROM (${composed}) AS composed_result)
         let mut outer = ProviderQuery::new();
-        outer.from = Some(SqlExpr("(${composed}) AS sub".into()));
+        outer.from = Some(crate::compose::FromSource::table("(${composed}) AS sub"));
         outer
             .wheres
             .push(SqlExpr("sub.id > ${properties.threshold}".into()));
@@ -885,7 +1035,7 @@ mod tests {
     fn build_sql_merges_adhoc_into_ctx() {
         let q = ProviderQuery::new().with_where_raw("x = ?", &[TemplateValue::Int(7)]);
         let mut q = q;
-        q.from = Some(SqlExpr("images".into()));
+        q.from = Some(crate::compose::FromSource::table("images"));
         let (sql, params) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
@@ -899,7 +1049,7 @@ mod tests {
         // they don't conflict; this verifies adhoc is added without disturbing ctx
         let q = ProviderQuery::new().with_where_raw("a = ?", &[TemplateValue::Int(99)]);
         let mut q = q;
-        q.from = Some(SqlExpr("t".into()));
+        q.from = Some(crate::compose::FromSource::table("t"));
         let ctx = props(&[("x", TemplateValue::Int(1))]);
         let (sql, params) = q
             .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
@@ -919,7 +1069,7 @@ mod tests {
                 &[TemplateValue::Text("foo".into())],
             )
             .unwrap();
-        q.from = Some(SqlExpr("images".into()));
+        q.from = Some(crate::compose::FromSource::table("images"));
         let (sql, params) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
@@ -934,7 +1084,7 @@ mod tests {
             Some("y"),
             &[TemplateValue::Int(10)],
         );
-        q.from = Some(SqlExpr("images".into()));
+        q.from = Some(crate::compose::FromSource::table("images"));
         let (sql, params) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();

@@ -175,12 +175,12 @@ mod tests {
     #[test]
     fn child_contrib_cannot_change_from() {
         let mut s = ProviderQuery::new();
-        s.from = Some(SqlExpr("images".into()));
+        s.from = Some(crate::compose::FromSource::table("images"));
         let q1 = empty_q();
         let q2 = empty_q();
         fold_contrib(&mut s, &q1).unwrap();
         fold_contrib(&mut s, &q2).unwrap();
-        assert_eq!(s.from, Some(SqlExpr("images".into())));
+        assert_eq!(s.from, Some(crate::compose::FromSource::table("images")));
     }
 
     // ===== fields =====

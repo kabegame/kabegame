@@ -11,5 +11,5 @@ pub use aliases::{AliasTable, AllocatedAlias, ResolvedAlias};
 pub use build::BuildError;
 pub use fold::{fold_contrib, FoldError};
 pub use order::OrderState;
-pub use query::{FieldFrag, JoinFrag, ProviderQuery};
+pub use query::{FieldFrag, FromSource, JoinFrag, ProviderQuery};
 pub use render::{render_template_sql, render_template_to_string, render_to_owned, RenderError};

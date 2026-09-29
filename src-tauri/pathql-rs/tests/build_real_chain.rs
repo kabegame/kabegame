@@ -45,7 +45,7 @@ fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, n
 
 fn fold_gallery_page_chain(registry: &ProviderRegistry) -> ProviderQuery {
     let mut state = ProviderQuery::new();
-    state.from = Some(pathql_rs::ast::SqlExpr("images".into()));
+    state.from = Some(pathql_rs::compose::FromSource::table("images"));
     fold_provider_query(&mut state, registry, "gallery_route");
     fold_provider_query(&mut state, registry, "gallery_all_router"); // delegate, skipped
     fold_provider_query(&mut state, registry, "gallery_paginate_router");
@@ -230,7 +230,7 @@ fn standalone_provider_query_with_join_executes() {
     use pathql_rs::compose::{FieldFrag, JoinFrag, ResolvedAlias};
 
     let mut q = ProviderQuery::new();
-    q.from = Some(SqlExpr("images".into()));
+    q.from = Some(pathql_rs::compose::FromSource::table("images"));
     q.fields.push(FieldFrag {
         sql: SqlExpr("images.title".into()),
         alias: None,

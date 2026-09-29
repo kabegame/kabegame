@@ -6,7 +6,7 @@
 
 mod common;
 
-use pathql_rs::ast::{Namespace, NumberOrTemplate, ProviderName, Query, SqlExpr};
+use pathql_rs::ast::{Namespace, NumberOrTemplate, ProviderName, Query};
 use pathql_rs::compose::{fold_contrib, ProviderQuery};
 use pathql_rs::ProviderRegistry;
 
@@ -28,7 +28,7 @@ fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, n
 fn fold_gallery_page_chain() {
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
-    state.from = Some(SqlExpr("images".into()));
+    state.from = Some(pathql_rs::compose::FromSource::table("images"));
 
     // Schema seeds from=images; gallery_route contributes fields, joins, and order.
     fold_provider_query(&mut state, &r, "gallery_route");
@@ -43,7 +43,7 @@ fn fold_gallery_page_chain() {
     // ----- snapshot -----
 
     // from is owned by the schema seed; child contribs cannot replace it.
-    assert_eq!(state.from, Some(SqlExpr("images".into())));
+    assert_eq!(state.from, Some(pathql_rs::compose::FromSource::table("images")));
 
     // limit last-wins: query_page_provider's "${properties.page_size}"
     match state.limit {
@@ -96,9 +96,9 @@ fn fold_skipping_root_and_delegates_only_contrib_applies() {
 fn fold_gallery_route_alone_keeps_schema_from() {
     let r = build_full_registry();
     let mut state = ProviderQuery::new();
-    state.from = Some(SqlExpr("images".into()));
+    state.from = Some(pathql_rs::compose::FromSource::table("images"));
     fold_provider_query(&mut state, &r, "gallery_route");
-    assert_eq!(state.from, Some(SqlExpr("images".into())));
+    assert_eq!(state.from, Some(pathql_rs::compose::FromSource::table("images")));
     assert_eq!(state.limit, None);
     assert_eq!(state.fields.len(), 21);
     assert_eq!(state.joins.len(), 3);

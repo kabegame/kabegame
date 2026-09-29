@@ -311,12 +311,11 @@ pub enum EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::SqlExpr;
 
     struct Mock;
     impl Provider for Mock {
         fn apply_query(&self, mut q: ProviderQuery, _ctx: &ProviderContext) -> ProviderQuery {
-            q.from = Some(SqlExpr("mock_table".into()));
+            q.from = Some(crate::compose::FromSource::table("mock_table"));
             q
         }
         fn list(

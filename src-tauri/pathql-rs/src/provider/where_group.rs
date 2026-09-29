@@ -329,7 +329,7 @@ mod tests {
 
     fn q_with_wheres(list: &[&str]) -> ProviderQuery {
         let mut q = ProviderQuery::new();
-        q.from = Some(SqlExpr("images".into()));
+        q.from = Some(crate::compose::FromSource::table("images"));
         for w in list {
             q.wheres.push(SqlExpr((*w).into()));
         }
@@ -533,8 +533,37 @@ mod tests {
         let base = q_with_wheres(&[]);
         stack.open(GroupKind::Any, None, &base);
         let mut b = base.clone();
-        b.from = Some(SqlExpr("albums".into()));
+        b.from = Some(crate::compose::FromSource::table("albums"));
         let err = expect_err(stack.close("p", &b));
+        assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("`from`")));
+    }
+
+    /// 子查询来源按「是否同一份内层」判等：分支从基线 clone 出的同一来源放行，
+    /// 换成内容相同的另一份内层视为改了 from。
+    #[test]
+    fn branch_over_subquery_from_keeps_same_source() {
+        let subquery_base = || {
+            let mut q = ProviderQuery::new();
+            q.from = Some(crate::compose::FromSource::Subquery {
+                inner: Arc::new(q_with_wheres(&["albums.parent_id = 1"])),
+                alias: "albums".into(),
+            });
+            q
+        };
+
+        let mut stack = GroupStack::default();
+        let base = subquery_base();
+        stack.open(GroupKind::Any, None, &base);
+        let mut b = base.clone();
+        b.wheres.push(SqlExpr("albums.type = 'label'".into()));
+        let (_, carry) = stack.close("p", &b).expect("same subquery source is not a from change");
+        assert_eq!(carry.from, base.from);
+
+        let mut stack = GroupStack::default();
+        stack.open(GroupKind::Any, None, &base);
+        let mut swapped = subquery_base();
+        swapped.wheres.push(SqlExpr("albums.type = 'label'".into()));
+        let err = expect_err(stack.close("p", &swapped));
         assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("`from`")));
     }
 

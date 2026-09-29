@@ -864,7 +864,7 @@ mod intern_props_tests {
     #[test]
     fn same_property_name_two_providers_keep_distinct_binds() {
         let mut state = ProviderQuery::new();
-        state.from = Some(SqlExpr("images".into()));
+        state.from = Some(crate::compose::FromSource::table("images"));
 
         let a = intern_props_in_sql(
             "name_bucket = ${properties.bucket}",

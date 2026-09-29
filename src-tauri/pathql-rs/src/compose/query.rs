@@ -4,6 +4,7 @@ use super::order::OrderState;
 use crate::ast::{JoinKind, NumberOrTemplate, OrderDirection, SqlExpr};
 use crate::template::eval::TemplateValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldFrag {
@@ -22,11 +23,53 @@ pub struct JoinFrag {
     pub in_need: bool,
 }
 
+/// FROM 来源。由引擎计算，provider 贡献里没有 `from`。
+#[derive(Debug, Clone)]
+pub enum FromSource {
+    /// 一段 SQL 模板：schema 注册的表名，或宿主 / 测试手写的片段（如 `(${composed}) AS sub`）。
+    Table(SqlExpr),
+    /// 子查询边界：内层完整查询冻结后作为 FROM，外层以 `alias` 引用。
+    /// 用 Arc 包内层：fold 期 ProviderQuery 被频繁 clone，只拷指针。
+    Subquery {
+        inner: Arc<ProviderQuery>,
+        alias: String,
+    },
+}
+
+impl FromSource {
+    pub fn table(sql: impl Into<SqlExpr>) -> Self {
+        FromSource::Table(sql.into())
+    }
+
+    /// `Table` 时返回其 SQL；`Subquery` 返回 None。
+    pub fn as_table(&self) -> Option<&SqlExpr> {
+        match self {
+            FromSource::Table(sql) => Some(sql),
+            FromSource::Subquery { .. } => None,
+        }
+    }
+}
+
+/// `Table` 按 SQL 文本比较；`Subquery` 按内层是否为**同一份**（Arc 指针）且别名相同比较。
+/// 用途是判断「来源有没有被换掉」（如 where 组分支不得改 from），同一来源 clone 出来的都相等。
+impl PartialEq for FromSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (FromSource::Table(a), FromSource::Table(b)) => a == b,
+            (
+                FromSource::Subquery { inner: a, alias: x },
+                FromSource::Subquery { inner: b, alias: y },
+            ) => Arc::ptr_eq(a, b) && x == y,
+            _ => false,
+        }
+    }
+}
+
 /// fold 累积的结构化中间表示。SQL 渲染（含模板求值与 bind params）留给 Phase 5。
 #[derive(Debug, Clone, Default)]
 pub struct ProviderQuery {
-    /// FROM 子句; cascading-replace。
-    pub from: Option<SqlExpr>,
+    /// FROM 来源; cascading-replace。
+    pub from: Option<FromSource>,
     /// SELECT 字段累积; 按 alias 字面去重。
     pub fields: Vec<FieldFrag>,
     /// JOIN 累积; 按 alias 字面去重。
@@ -182,6 +225,38 @@ fn next_char_boundary(s: &str, i: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_source_equality() {
+        assert_eq!(FromSource::table("images"), FromSource::table("images"));
+        assert_ne!(FromSource::table("images"), FromSource::table("albums"));
+
+        let inner = Arc::new(ProviderQuery::new());
+        let a = FromSource::Subquery {
+            inner: inner.clone(),
+            alias: "albums".into(),
+        };
+        // 同一份内层 clone 出来的来源相等
+        assert_eq!(a.clone(), a);
+        assert_ne!(
+            a,
+            FromSource::Subquery {
+                inner: inner.clone(),
+                alias: "other".into(),
+            }
+        );
+        // 内容相同但不是同一份内层：视为换了来源
+        assert_ne!(
+            a,
+            FromSource::Subquery {
+                inner: Arc::new(ProviderQuery::new()),
+                alias: "albums".into(),
+            }
+        );
+        assert_ne!(a, FromSource::table("albums"));
+        assert!(a.as_table().is_none());
+        assert_eq!(FromSource::table("images").as_table(), Some(&SqlExpr("images".into())));
+    }
 
     #[test]
     fn default_empty() {

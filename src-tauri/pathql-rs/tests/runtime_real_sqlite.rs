@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pathql_rs::ast::{JoinKind, Namespace, ProviderName, SimpleName, SqlExpr};
+use pathql_rs::ast::{JoinKind, Namespace, ProviderName, SimpleName};
 use pathql_rs::compose::ProviderQuery;
 use pathql_rs::provider::{
     ChildEntry, ClosureExecutor, EngineError, ListRef, Provider, ProviderContext, ProviderRuntime,
@@ -57,7 +57,7 @@ fn fixture_db() -> Connection {
 struct GalleryRoot;
 impl Provider for GalleryRoot {
     fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
-        q.from = Some(SqlExpr("images".into()));
+        q.from = Some(pathql_rs::compose::FromSource::table("images"));
         q
     }
     fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
