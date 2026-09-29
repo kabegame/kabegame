@@ -112,6 +112,8 @@ CREATE INDEX idx_albums_label_path
     ON albums(LOWER(label_path)) WHERE type IN ('label', 'label_dir');
 -- 按父画册列举 / 数子画册；idx_albums_name_scoped 建在 COALESCE(parent_id, '') 表达式上，`parent_id = ?` 用不上
 CREATE INDEX idx_albums_parent ON albums(parent_id);
+-- 子树前缀区间：ancestor_path >= 祖先路径 AND ancestor_path < 祖先路径去尾 '/' || '0'
+CREATE INDEX idx_albums_ancestor_path ON albums(ancestor_path);
 -- 本地文件夹同步画册：同一物理目录只能对应一个同步画册
 CREATE UNIQUE INDEX idx_albums_sync_folder
     ON albums(sync_folder) WHERE sync_folder IS NOT NULL;

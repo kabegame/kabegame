@@ -1,7 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "albums_filter_router",
-    "note": "Composable album filters. Each segment folds one WHERE into the path (parent/<id>, roots, album_kind/<kind>, search/<query>); OR several kinds with ~any/album_kind/label/~or/album_kind/label_dir/~end. End with x<pageSize>x/<page> to fetch one page sorted by name, then /~~/images[/hide] or /~~/children[/album_kind/...] to count per album on that page.",
+    "note": "Composable album filters. Each segment folds one WHERE into the path (parent/<id>, roots, album_kind/<kind>, search/<query>); OR several kinds with ~any/album_kind/label/~or/album_kind/label_dir/~end. End with x<pageSize>x/<page> to fetch one page (oldest first), then /~~/images[/hide] or /~~/children[/album_kind/...] to count per album on that page.",
     // 纯路由表：自身不贡献 query，供 albums_root_provider 与各过滤 provider 以 delegate 共用，
     // 使过滤段可以任意顺序叠加（每段各折叠一条 where，路径上天然 AND）。
     "list": {

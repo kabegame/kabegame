@@ -1,16 +1,16 @@
 namespace: kabegame
 name: albums_paginate_router
 note: >-
-  Pages of the albums selected so far, sorted by name. Next segment is the page number;
-  fetch it for that page's album rows. Append /~~/images[/hide] or /~~/children/... to count
+  Pages of the albums selected so far, oldest first (created_at, then id). Next segment is the
+  page number; fetch it for that page's album rows. Append /~~/images[/hide] or /~~/children/... to count
   per album on that page only.
 properties:
   page_size: { type: number, default: 100, min: 1, optional: false }
 query:
-  # 追加而非 clear：search 贡献的相关度排序保持在最前。
+  # 默认按创建时间（与画册树原先按父目录列子画册的顺序一致），id 兜底保证翻页稳定；
+  # 专门的排序功能以后单独做。追加而非 clear：search 贡献的相关度排序保持在最前。
   order:
-    - { sql: "name_language_rank(name_language_bucket(COALESCE(albums.name, '')))", order: asc }
-    - { sql: albums.name COLLATE NOCASE, order: asc }
+    - { sql: albums.created_at, order: asc }
     - { sql: albums.id, order: asc }
 list:
   # 页号按上游行数枚举（空结果也保留第 1 页）。

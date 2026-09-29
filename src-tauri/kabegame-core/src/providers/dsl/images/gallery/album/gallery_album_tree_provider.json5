@@ -21,7 +21,8 @@
                 "in_need": true
             }
         ],
-        "where": "substr(tree_album.ancestor_path, 1, length((SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}))) = (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id})"
+        // 子树（含自身）的前缀区间，走 idx_albums_ancestor_path；`/` 的下一个字符是 `0`
+        "where": "tree_album.ancestor_path >= (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}) AND tree_album.ancestor_path < (SELECT substr(ancestor_path, 1, length(ancestor_path) - 1) || '0' FROM albums WHERE id = ${properties.album_id})"
     },
     "resolve": {
         // 分页段（desc / x<N>x / 页号）必须自己接住：gallery_route 不处理分页，

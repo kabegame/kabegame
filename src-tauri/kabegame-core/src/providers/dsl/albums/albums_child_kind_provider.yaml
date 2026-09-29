@@ -6,9 +6,3 @@ properties:
 query:
   # 只贡献 where，可以放进 ~any 组内作分支；child 由 albums_children_provider 贡献。
   where: child.type = ${properties.kind}
-list:
-  "${row.id}":
-    sql: SELECT DISTINCT sub.id FROM (${composed}) AS sub
-    data_var: row
-    provider: albums_row_provider
-    properties: { album_id: "${row.id}" }

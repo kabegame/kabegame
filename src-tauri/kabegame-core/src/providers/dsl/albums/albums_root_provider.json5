@@ -18,8 +18,8 @@
     },
     "resolve": {
         "all": { "provider": "albums_all_provider" },
-        // `~~` 之后从根重新折叠：images / children 按画册分项计数（见各自 note）。
-        // 故意不放进 list：不带分页直接列举带计数时会对全表画册做子树 join（MCP include_counts 会触发）。
+        // `~~` 之后从根重新折叠：images / children 以 COUNT + group_by 按画册出计数行（见各自 note）。
+        // 故意不放进 list：不先切页就发现 / 计数会对全表画册做子树 join（MCP 懒树发现会触发）。
         "images": { "provider": "albums_images_provider" },
         "children": { "provider": "albums_children_provider" },
         "id_([^/]+)": {

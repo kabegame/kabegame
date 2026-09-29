@@ -3,6 +3,7 @@
     "name": "albums_subtree_provider",
     "properties": { "album_id": { "type": "string", "default": "", "optional": false } },
     "query": {
-        "where": "albums.id != ${properties.album_id} AND substr(albums.ancestor_path, 1, length((SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}))) = (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id})"
+        // 子树前缀区间（不含自身），走 idx_albums_ancestor_path；`/` 的下一个字符是 `0`
+        "where": "albums.id != ${properties.album_id} AND albums.ancestor_path >= (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}) AND albums.ancestor_path < (SELECT substr(ancestor_path, 1, length(ancestor_path) - 1) || '0' FROM albums WHERE id = ${properties.album_id})"
     }
 }

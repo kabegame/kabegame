@@ -1624,6 +1624,23 @@ fn image_collection_paths_decode_into_image_info() {
     }
 }
 
+/// `~~` 之后按画册 `GROUP BY` 的计数行 → id → `column`。没有行的画册不在表里（即 0）；
+/// 顺带断言 count 口径 = 行数（有计数的画册数）。
+fn counts_by_id(runtime: &ProviderRuntime, path: &str, column: &str) -> HashMap<String, usize> {
+    let rows = runtime
+        .fetch(path)
+        .unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert_eq!(runtime.count(path).unwrap(), rows.len(), "{path}");
+    rows.into_iter()
+        .map(|row| {
+            (
+                row["id"].as_str().unwrap().to_string(),
+                row[column].as_u64().unwrap() as usize,
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     let runtime = build_runtime();
@@ -1682,15 +1699,9 @@ fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     assert_eq!(ids(tiny_first), vec![first_ids[0].clone()]);
     assert_eq!(ids(tiny_second), vec![first_ids[1].clone()]);
 
-    // 子画册数：`~~` 之后 join 直接子画册，按画册分项；album_kind 作用于子画册，缺项即 0。
-    let totals = |path: &str| -> HashMap<String, usize> {
-        runtime
-            .list_with_count(path)
-            .unwrap_or_else(|e| panic!("{path}: {e}"))
-            .into_iter()
-            .map(|entry| (entry.name, entry.total.unwrap()))
-            .collect()
-    };
+    // 子画册数：`~~` 之后 join 直接子画册，按画册 GROUP BY 出 child_count；album_kind 作用于子画册，
+    // 没有行即 0。
+    let totals = |path: &str| counts_by_id(&runtime, path, "child_count");
     let normal_children =
         totals("albums://roots/album_kind/normal/x100x/1/~~/children/album_kind/normal");
     assert_eq!(normal_children.get(ALBUM_A_ID), Some(&1));
@@ -1757,9 +1768,10 @@ fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     );
 }
 
-/// 分页之后经 `~~` 边界 join 成员行计数：`…/x<N>x/<页>/~~/images[/hide]` 各项必须与 images:// 侧的
-/// 单画册计数同口径（标签叶子 = `gallery/[hide/]album/<id>`，其余 = `gallery/[hide/]album-tree/<id>`），
-/// `hide` 对应 `hide/` 前缀；列不出来的画册计为 0，计数只落在这一页的画册上。
+/// 分页之后经 `~~` 边界 join 成员行、按画册 GROUP BY：`…/x<N>x/<页>/~~/images[/hide]` 各行的
+/// `image_count` 必须与 images:// 侧的单画册计数同口径（标签叶子 = `gallery/[hide/]album/<id>`，
+/// 其余 = `gallery/[hide/]album-tree/<id>`），`hide` 对应 `hide/` 前缀；没有行的画册计为 0，
+/// 计数行只落在这一页的画册上。
 #[test]
 fn album_page_image_counts_match_images_paths() {
     let runtime = build_runtime();
@@ -1773,12 +1785,8 @@ fn album_page_image_counts_match_images_paths() {
             "albums://search/pix/x100x/1".to_string(),
         ] {
             let rows = runtime.fetch(&page).unwrap();
-            let counts: HashMap<String, usize> = runtime
-                .list_with_count(&format!("{page}/~~/{images_seg}"))
-                .unwrap()
-                .into_iter()
-                .map(|entry| (entry.name, entry.total.unwrap()))
-                .collect();
+            let counts =
+                counts_by_id(&runtime, &format!("{page}/~~/{images_seg}"), "image_count");
             let page_ids = ids(rows.clone());
             assert!(counts.keys().all(|id| page_ids.contains(id)), "{page}");
             for row in &rows {
@@ -1815,14 +1823,8 @@ fn album_page_image_counts_match_images_paths() {
     }
 
     // 具体数值兜底：AlbumA 自身 5 张 + 子画册 3 张；初音未来直接 3 张。
-    let count_of = |path: &str, id: &str| {
-        runtime
-            .list_with_count(path)
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.name == id)
-            .and_then(|entry| entry.total)
-    };
+    let count_of =
+        |path: &str, id: &str| counts_by_id(&runtime, path, "image_count").get(id).copied();
     assert_eq!(
         count_of(
             "albums://roots/album_kind/normal/x100x/1/~~/images",
@@ -1879,9 +1881,10 @@ fn album_search_matches_metacharacters_literally_and_label_paths() {
         serde_json::json!("Pixiv / 角色")
     );
     // 子画册数在 `~~` 之后计，搜索谓词封在内层，数到的仍是全部直接子画册。
-    let children = runtime
-        .list_with_count("albums://search/pix/x100x/1/~~/children")
-        .unwrap();
-    let pixiv_children = children.iter().find(|entry| entry.name == pixiv).unwrap();
-    assert_eq!(pixiv_children.total, Some(2));
+    let children = counts_by_id(
+        &runtime,
+        "albums://search/pix/x100x/1/~~/children",
+        "child_count",
+    );
+    assert_eq!(children.get(pixiv), Some(&2));
 }

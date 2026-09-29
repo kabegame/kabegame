@@ -1,19 +1,23 @@
 namespace: kabegame
 name: albums_images_provider
 note: >-
-  Member images of each album selected so far, including its descendants (a label leaf's own
-  images). Use after ~~ so a page is cut first: .../x<N>x/<page>/~~/images. List with counts:
-  one entry per album with at least one image; total is its member-row count, the same as
-  images://gallery/album-tree/<id>. Append /hide to leave out images in the hidden album.
+  Image counts of the albums selected so far, including their descendants (a label leaf counts
+  its own images). Use after ~~ so a page is cut first: .../x<N>x/<page>/~~/images. Fetch returns
+  one row per album that has at least one image, with image_count = its member-row count (the
+  same as images://gallery/album-tree/<id>); albums without images have no row. Append /hide to
+  leave out images in the hidden album.
 query:
   fields:
-    - { sql: images.id, as: image_id, in_need: true }
+    - { sql: COUNT(images.id), as: image_count, in_need: true }
   join:
-    # 子树成员：ancestor_path 为 `/根/.../自身/`，含自身，所以标签叶子即直接成员。
+    # 子树成员（含自身，所以标签叶子即直接成员）：ancestor_path 为 `/根/.../自身/`，
+    # 后代的路径以它为前缀，写成索引上的一段区间（`/` 的下一个字符是 `0`），走 idx_albums_ancestor_path。
     - kind: INNER
       table: albums
       as: tree
-      "on": "instr(tree.ancestor_path, '/' || albums.id || '/') > 0"
+      "on": >-
+        tree.ancestor_path >= albums.ancestor_path
+        AND tree.ancestor_path < substr(albums.ancestor_path, 1, length(albums.ancestor_path) - 1) || '0'
       in_need: true
     - { kind: INNER, table: album_images, as: tree_ai, "on": tree_ai.album_id = tree.id, in_need: true }
     - { kind: INNER, table: images, as: images, "on": images.id = tree_ai.image_id, in_need: true }
@@ -23,15 +27,6 @@ query:
       as: hid_ai
       "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}"
       in_need: true
-list:
-  "${row.id}":
-    sql: SELECT DISTINCT sub.id FROM (${composed}) AS sub
-    data_var: row
-    provider: albums_row_provider
-    properties: { album_id: "${row.id}" }
+  group_by: [albums.id]
 resolve:
   hide: { provider: albums_images_hide_provider }
-  # 动态列举的兜底：没有图片的画册列不出来，但按 id 仍可寻址（计数为 0）。
-  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}":
-    provider: albums_row_provider
-    properties: { album_id: "${capture[0]}" }

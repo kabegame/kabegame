@@ -2,7 +2,7 @@ import { invoke } from "@/api/rpc";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { albumChangeBatch, publishLocal, type ChangeBatch } from "@/services/dataChangeHub";
 import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
-import { pathqlEntry, pathqlFetch, pathqlList, type ProviderListChild } from "@/services/pathql";
+import { pathqlEntry, pathqlFetch } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -134,14 +134,16 @@ function albumPageBase(
   return `albums://${scope}/${albumKindSegment(kinds)}x${pageSize}x/${page}`;
 }
 
-function totalsById(entries: ProviderListChild[]): Map<string, number> {
-  return new Map(entries.map((entry) => [entry.name, entry.total ?? 0]));
+/** `~~` 之后的计数行（每个画册一行，`id` + 计数列）→ id → 计数；没有行的画册计数为 0。 */
+function countsById(rows: Record<string, unknown>[], column: "child_count" | "image_count"): Map<string, number> {
+  return new Map(rows.map((row) => [String(row.id), Number(row[column] ?? 0)]));
 }
 
 /**
- * 一页画册与逐项计数，三路并行。计数都在 `~~` 子查询边界之后，只作用于这一页：
- * `~~/children/<类型段>` 是同一组类型过滤下的直接子画册数，`~~/images[/hide]` 是子树成员行数
- * （标签叶子即直接图片数；`hide` 与 images:// 的 `hide/` 前缀同口径）。列不出来的画册记 0。
+ * 一页画册与逐项计数，三路并行，各一条 SQL。计数都在 `~~` 子查询边界之后，只作用于这一页，
+ * 按画册 `GROUP BY` 出行：`~~/children/<类型段>` 的 `child_count` 是同一组类型过滤下的直接子画册数，
+ * `~~/images[/hide]` 的 `image_count` 是子树成员行数（标签叶子即直接图片数；`hide` 与 images://
+ * 的 `hide/` 前缀同口径）。没有计数行的画册记 0。
  */
 async function fetchPageWithCounts(
   base: string,
@@ -151,11 +153,11 @@ async function fetchPageWithCounts(
   const childKinds = albumKindSegment(kinds).replace(/\/$/, "");
   const [rows, children, images] = await Promise.all([
     pathqlFetch<Record<string, unknown>>(base),
-    pathqlList(`${base}/~~/children${childKinds ? `/${childKinds}` : ""}`, true),
-    pathqlList(`${base}/~~/images${prefix === "hide/" ? "/hide" : ""}`, true),
+    pathqlFetch<Record<string, unknown>>(`${base}/~~/children${childKinds ? `/${childKinds}` : ""}`),
+    pathqlFetch<Record<string, unknown>>(`${base}/~~/images${prefix === "hide/" ? "/hide" : ""}`),
   ]);
-  const childCounts = totalsById(children);
-  const imageCounts = totalsById(images);
+  const childCounts = countsById(children, "child_count");
+  const imageCounts = countsById(images, "image_count");
   return rows.map((row) => {
     const album = normalizeAlbumRow(row);
     const childCount = childCounts.get(album.id) ?? 0;

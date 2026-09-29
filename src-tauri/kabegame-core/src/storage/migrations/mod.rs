@@ -46,6 +46,7 @@ mod v029_local_folder_rechain;
 mod v030_album_sync_mode;
 mod v031_label_albums;
 mod v032_album_parent_index;
+mod v033_album_ancestor_path_index;
 
 use rusqlite::Connection;
 
@@ -186,13 +187,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "album_parent_index",
         up: v032_album_parent_index::up,
     },
+    Migration {
+        version: 33,
+        name: "album_ancestor_path_index",
+        up: v033_album_ancestor_path_index::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 32;
+pub const LATEST_VERSION: u32 = 33;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
