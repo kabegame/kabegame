@@ -28,22 +28,6 @@
             "provider": "albums_by_sub_tree_provider",
             "properties": { "parent_id": "" }
         },
-        "children_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})": {
-            "provider": "albums_page_router",
-            "properties": {
-                "section": "children",
-                "parent_id": "${capture[1]}",
-                "kinds": ""
-            }
-        },
-        "root_(normal|label|local_folder)": {
-            "provider": "albums_page_router",
-            "properties": {
-                "section": "${capture[1]}",
-                "parent_id": "",
-                "kinds": ""
-            }
-        },
         "subtree_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})": {
             "provider": "albums_subtree_provider",
             "properties": { "album_id": "${capture[1]}" }
@@ -56,8 +40,12 @@
             "provider": "albums_of_image_provider",
             "properties": { "image_id": "${capture[1]}" }
         },
-        "search": {
-            "provider": "albums_search_router"
+        // 可组合过滤段与分页段：parent/<id>、roots、album_kind/<kind>、search/<query>、album_page_x<N>x_<页>。
+        "parent|roots|album_kind|search|album_page_x[1-9][0-9]*x_[1-9][0-9]*": {
+            "delegate": { "provider": "albums_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
         }
     }
 }

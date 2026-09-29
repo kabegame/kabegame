@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_kind_router",
+    "list": {
+        "normal": { "provider": "albums_kind_provider", "properties": { "kind": "normal" } },
+        "label": { "provider": "albums_kind_provider", "properties": { "kind": "label" } },
+        "label_dir": { "provider": "albums_kind_provider", "properties": { "kind": "label_dir" } },
+        "local_folder": { "provider": "albums_kind_provider", "properties": { "kind": "local_folder" } }
+    }
+}

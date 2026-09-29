@@ -28,9 +28,9 @@ alwaysApply: false
 
 - 前端不设全量画册 store，也不持有全量画册计数。目录树与所有画册选择器复用 app 侧
   `AlbumTreeView` / `AlbumPicker`，按目录分页查询；单个详情用 `services/albums.ts` 查询并订阅 hub。
-- 计数由调用侧组合 PathQL 路径，不新增 SQL 视图、计数列或专用计数命令：画册目录的直接图片数来自
-  `images://gallery/[前缀/]album/...` 的 `list(with_count)`，直接子画册数来自 `albums://...` 的
-  `list(with_count)`；普通画册的自身与子孙成员行之和来自 `images://gallery/[前缀/]album-tree/<id>`
-  的 entry 总数。
+- 计数由调用侧组合 PathQL 路径，不新增 SQL 视图、计数列或专用计数命令：直接子画册数来自
+  `albums://<过滤段>/album_page_x<N>x_<页>` 的 `list(with_count)`；标签叶子的直接图片数来自
+  `images://gallery/[前缀/]album/<id>` 的 entry 总数；普通画册的自身与子孙成员行之和来自
+  `images://gallery/[前缀/]album-tree/<id>` 的 entry 总数。
 - 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行
   单画册查询并通过 `dataChangeHub` 的 `ancestorPath` 相关性订阅刷新；不得重新引入全量列表。

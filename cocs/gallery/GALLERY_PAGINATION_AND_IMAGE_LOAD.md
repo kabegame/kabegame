@@ -168,10 +168,10 @@ ImageGrid 把数据变化分成两条通道：
   `directCounts`。
 - 隐藏/取消隐藏除精确画册成员事件外，一定再发一条 `images-change("change", ids)`，供任务、畅游、工具栏和
   过滤树等其它可见性视图兜底刷新。
-- 前端不增量维护全量计数。目录页并行列举图片与画册命名空间：前者的 `with_count` 给出每个子画册的
-  直接图片数，后者的 `with_count` 给出直接子画册数；普通 / 本地文件夹画册再读取
-  `images://gallery/[hide/]album-tree/<id>` 的 entry 总数得到子树成员行之和。标签目录显示直接子画册数，
-  标签叶子显示直接成员数。隐藏口径只由 `hide/` 路径前缀表达。
+- 前端不增量维护全量计数。目录页只列举 `albums://<过滤段>/album_page_x<N>x_<页>`，其 `with_count`
+  给出直接子画册数（标签目录直接显示它）；标签叶子读取 `images://gallery/[hide/]album/<id>` 的 entry
+  总数得到直接成员数；普通 / 本地文件夹画册读取 `images://gallery/[hide/]album-tree/<id>` 的 entry 总数
+  得到子树成员行之和。隐藏口径只由 `hide/` 路径前缀表达。
 - Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 
 ## 排查清单

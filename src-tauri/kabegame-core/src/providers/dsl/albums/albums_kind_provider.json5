@@ -1,0 +1,20 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_kind_provider",
+    "note": "Albums of one kind. Several kinds are OR-ed with the path combinator: ~any/album_kind/label/~or/album_kind/label_dir/~end.",
+    "properties": {
+        "kind": { "type": "string", "default": "normal", "optional": false }
+    },
+    "query": {
+        // 只贡献 where，可以放进 ~any 组内作分支。
+        "where": "albums.type = ${properties.kind}"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "albums_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

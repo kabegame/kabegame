@@ -3,8 +3,8 @@
     "name": "albums_search_router",
     "resolve": {
         "(.+)": {
-            "provider": "albums_search_query_router",
-            "properties": { "query": "${capture[1]}", "kinds": "" }
+            "provider": "albums_search_provider",
+            "properties": { "query": "${capture[1]}" }
         }
     }
 }

@@ -1,0 +1,22 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_parent_provider",
+    "note": "Direct child albums of one album. Combine with album_kind/<kind> to stay inside one forest (e.g. local_folder children of a normal album are listed under roots instead).",
+    "properties": {
+        "parent_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        // 嵌套目录模式（RULES §4.2）：先清掉上一层的层级条件（parent/<父>、roots 都引用
+        // albums.parent_id），否则 parent/A/parent/B 会叠成 parent_id = A AND parent_id = B。
+        "where_clear": ["albums.parent_id"],
+        "where": "albums.parent_id = ${properties.parent_id}"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "albums_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

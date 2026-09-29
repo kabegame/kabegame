@@ -2,12 +2,12 @@
     "namespace": "kabegame",
     "name": "albums_child_count_provider",
     "properties": {
-        "album_id": { "type": "string", "default": "", "optional": false },
-        "album_type": { "type": "string", "default": "normal", "optional": false },
-        "kinds": { "type": "string", "default": "", "optional": false }
+        "album_id": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "where_clear": ["albums.parent_id"],
-        "where": "albums.parent_id = ${properties.album_id} AND (CASE ${properties.album_type} WHEN 'normal' THEN albums.type = 'normal' WHEN 'local_folder' THEN albums.type = 'local_folder' ELSE albums.type IN ('label', 'label_dir') END) AND (${properties.kinds} = '' OR instr(',' || ${properties.kinds} || ',', ',' || albums.type || ',') > 0)"
+        // 列举项叠在分页节点的 composed 上计数：清掉层级（parent/<id>、roots）与 search 谓词，
+        // 换成「父 = 本项」；album_kind 条件保留，所以子画册数与树里展开后看到的一致。
+        "where_clear": ["albums.parent_id", "instr(LOWER(albums.name)"],
+        "where": "albums.parent_id = ${properties.album_id}"
     }
 }

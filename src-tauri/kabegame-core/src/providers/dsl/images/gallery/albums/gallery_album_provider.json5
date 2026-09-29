@@ -36,23 +36,6 @@
         }
     },
     "resolve": {
-        "album_page_x([1-9][0-9]*)x_([1-9][0-9]*)": {
-            "provider": "gallery_album_page_provider",
-            "properties": {
-                "section": "children",
-                "parent_id": "${properties.album_id}",
-                "page": "${capture[2]}",
-                "page_size": "${capture[1]}",
-                "kinds": ""
-            }
-        },
-        "kind_((?:normal|label|label_dir|local_folder)(?:,(?:normal|label|label_dir|local_folder))*)": {
-            "provider": "gallery_album_children_kind_router",
-            "properties": {
-                "parent_id": "${properties.album_id}",
-                "kinds": "${capture[1]}"
-            }
-        },
         "image-only": {
             "provider": "gallery_album_media_type_provider",
             "properties": { "kind": "image" }

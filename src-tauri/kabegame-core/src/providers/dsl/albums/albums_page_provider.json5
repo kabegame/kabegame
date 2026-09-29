@@ -1,19 +1,26 @@
 {
     "namespace": "kabegame",
     "name": "albums_page_provider",
+    "note": "One page of the albums selected by the preceding filter segments, sorted by name. List with counts: each entry's total is its direct child album count under the same album_kind filters.",
     "properties": {
-        "section": { "type": "string", "default": "children", "optional": false },
-        "parent_id": { "type": "string", "default": "", "optional": false },
         "page": { "type": "number", "default": 1, "optional": false },
-        "page_size": { "type": "number", "default": 100, "min": 1, "optional": true },
-        "kinds": { "type": "string", "default": "", "optional": false }
+        "page_size": { "type": "number", "default": 100, "min": 1, "optional": true }
+    },
+    "query": {
+        // 追加而非 clear：search 贡献的相关度排序保持在最前。
+        "order": [
+            { "sql": "name_language_rank(name_language_bucket(COALESCE(albums.name, '')))", "order": "asc" },
+            { "sql": "albums.name COLLATE NOCASE", "order": "asc" },
+            { "sql": "albums.id", "order": "asc" }
+        ]
     },
     "list": {
+        // 过滤全部来自上游段折叠出的 ${composed}；本节点只切页（RULES §4.2：列举分页写在 list.sql）。
         "${album.id}": {
-            "sql": "SELECT albums.id, albums.name, albums.created_at, albums.parent_id, albums.type, albums.sync_folder, albums.folder_status, albums.ancestor_path, albums.sync_mode, albums.label_key, albums.label_path FROM albums WHERE ((((${properties.section} = 'children') AND albums.parent_id = ${properties.parent_id}) OR ((${properties.section} = 'normal') AND albums.parent_id IS NULL AND albums.type = 'normal' AND albums.id NOT IN (${global.favorite_album_id}, ${global.hidden_album_id})) OR ((${properties.section} = 'label') AND albums.parent_id IS NULL AND albums.type IN ('label', 'label_dir')) OR ((${properties.section} = 'local_folder') AND albums.type = 'local_folder' AND (albums.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM albums parent WHERE parent.id = albums.parent_id AND parent.type = 'local_folder')))) AND ((${properties.section} != 'children') OR CASE (SELECT type FROM albums parent WHERE parent.id = ${properties.parent_id}) WHEN 'normal' THEN albums.type = 'normal' WHEN 'local_folder' THEN albums.type = 'local_folder' ELSE albums.type IN ('label', 'label_dir') END) AND (${properties.kinds} = '' OR instr(',' || ${properties.kinds} || ',', ',' || albums.type || ',') > 0)) ORDER BY name_language_rank(name_language_bucket(COALESCE(albums.name, ''))) ASC, albums.name COLLATE NOCASE ASC, albums.id ASC LIMIT ${properties.page_size} OFFSET (${properties.page} - 1) * ${properties.page_size}",
+            "sql": "SELECT * FROM (${composed}) AS page LIMIT ${properties.page_size} OFFSET (${properties.page} - 1) * ${properties.page_size}",
             "data_var": "album",
             "provider": "albums_child_count_provider",
-            "properties": { "album_id": "${album.id}", "album_type": "${album.type}", "kinds": "${properties.kinds}" },
+            "properties": { "album_id": "${album.id}" },
             "meta": "${album}"
         }
     }
