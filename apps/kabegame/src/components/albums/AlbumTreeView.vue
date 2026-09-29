@@ -36,10 +36,11 @@
       :model="model"
       :dnd="dnd"
       :row-state="rowState"
+      :row-click-toggles="expandOnly"
       :indent-px="18"
       :get-row-label="(node: AlbumNode) => node.name"
       @row-click="select"
-      @row-dblclick="(node: AlbumNode) => emit('dblclick', node.id)"
+      @row-dblclick="(node: AlbumNode) => !expandOnly(node) && emit('dblclick', node.id)"
       @row-contextmenu="(node: AlbumNode, event: MouseEvent) => emit('contextmenu', node, event)"
     >
       <template #section-header="{ sectionId }">
@@ -122,6 +123,8 @@ const props = withDefaults(
     selectedId: string | null;
     scope?: AlbumTreeViewScope;
     isSelectable?: (node: AlbumNode) => boolean;
+    /** 画册浏览时标签目录只展开；选择器仍可选作标签父目录。 */
+    expandLabelDirs?: boolean;
     prependOptions?: { value: string; label: string; desc?: string }[];
     allowCreate?: boolean;
     dnd?: TreeDndController<AlbumNode>;
@@ -133,6 +136,7 @@ const props = withDefaults(
     scope: () => ({}),
     prependOptions: () => [],
     allowCreate: false,
+    expandLabelDirs: false,
     showStatus: false,
   },
 );
@@ -224,6 +228,9 @@ async function ensureSelectedExpanded() {
   const selected = props.selectedId ? await fetchAlbum(props.selectedId) : null;
   selectedPath.value = selected?.ancestorPath ?? "";
   if (!selected) return;
+  await ensureAlbumExpanded(selected);
+}
+async function ensureAlbumExpanded(selected: Album) {
   const rootSection =
     selected.id === FAVORITE_ALBUM_ID || selected.id === HIDDEN_ALBUM_ID ? "system" : sectionOf(selected);
   const ids =
@@ -308,8 +315,17 @@ function loadMoreSearch() {
 function selectable(node: AlbumNode) {
   return props.isSelectable?.(node) ?? true;
 }
-function select(node: AlbumNode) {
+function expandOnly(node: AlbumNode) {
+  return props.expandLabelDirs && node.type === "label_dir";
+}
+async function select(node: AlbumNode) {
   if (!selectable(node)) return;
+  if (expandOnly(node)) {
+    // 搜索结果中的目录先展开祖先链和自身，再返回树，不切换当前画册。
+    await ensureAlbumExpanded(node);
+    emit("update:searchText", "");
+    return;
+  }
   emit("select", node.id, node);
   if (searchMode.value) emit("update:searchText", "");
 }

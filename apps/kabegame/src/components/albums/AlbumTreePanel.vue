@@ -38,6 +38,7 @@
       v-model:search-text="searchText"
       :selected-id="selectedId"
       :dnd="dnd"
+      expand-label-dirs
       show-status
       @select="(id, album) => emit('select', id, album)"
       @dblclick="emit('dblclick', $event)"
