@@ -22,11 +22,7 @@ export const useAutoConfigDialogStore = defineStore("autoConfigDialog", () => {
     visible.value = true;
   }
 
-  function openExisting(
-    id: string,
-    panel: "view" | "edit" = "view",
-    opts?: { scrollSchedule?: boolean },
-  ) {
+  function openExisting(id: string, panel: "view" | "edit" = "view", opts?: { scrollSchedule?: boolean }) {
     const sid = String(id || "").trim();
     if (!sid) return;
     isCreate.value = false;

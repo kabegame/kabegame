@@ -1,16 +1,23 @@
 <template>
   <SettingRow :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
-    <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="enabledDisabled"
-      @change="(v) => handleToggle(v === true)" />
+    <el-switch
+      v-model="enabled"
+      :loading="showEnabledLoading"
+      :disabled="enabledDisabled"
+      @change="(v) => handleToggle(v === true)"
+    />
   </SettingRow>
 
   <!-- 挂载点是独立一项：盘已挂载时不能改，必须先关掉画册盘 -->
-  <SettingRow :label="$t('settings.albumDriveMountPoint')"
-    :description="$t('settings.albumDriveMountPointDesc')">
-    <el-input v-model="mountPoint" class="mount-point-input" size="default"
+  <SettingRow :label="$t('settings.albumDriveMountPoint')" :description="$t('settings.albumDriveMountPointDesc')">
+    <el-input
+      v-model="mountPoint"
+      class="mount-point-input"
+      size="default"
       :disabled="enabled || showEnabledLoading || showMountPointLoading"
       :placeholder="$t('settings.albumDriveMountPointPlaceholder')"
-      @blur="handleMountPointBlur" />
+      @blur="handleMountPointBlur"
+    />
   </SettingRow>
 </template>
 
@@ -33,7 +40,7 @@ const {
   settingValue: enabledValue,
   set: setEnabled,
   showDisabled: showEnabledLoading,
-  disabled: enabledDisabled
+  disabled: enabledDisabled,
 } = useSettingKeyState("albumDriveEnabled");
 
 const {
@@ -42,9 +49,7 @@ const {
   showDisabled: showMountPointLoading,
 } = useSettingKeyState("albumDriveMountPoint");
 
-const {
-  settingValue: driverInstalled,
-} = useSettingKeyState("albumDriveDriverInstalled");
+const { settingValue: driverInstalled } = useSettingKeyState("albumDriveDriverInstalled");
 
 const enabled = ref<boolean>(!!enabledValue.value);
 const mountPoint = ref<string>((mountPointValue.value as string) ?? "K:\\");
@@ -54,7 +59,7 @@ watch(
   (v) => {
     enabled.value = !!v;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(
@@ -68,7 +73,7 @@ watch(
       mountPoint.value = newVal;
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const normalizedMountPoint = computed(() => mountPoint.value.trim());
@@ -109,10 +114,7 @@ const installDriver = async () => {
       ? "settings.albumDriveInstallDriverManualMac"
       : "settings.albumDriveInstallDriverManualLinux";
     try {
-      await ElMessageBox.alert(
-        t(messageKey),
-        t("settings.albumDriveInstallDriverManualTitle"),
-      );
+      await ElMessageBox.alert(t(messageKey), t("settings.albumDriveInstallDriverManualTitle"));
     } finally {
       await refreshDriverStatus();
     }

@@ -1,28 +1,40 @@
 <template>
   <div class="task-counts-inline">
-    <span class="count-item count-success" :class="{ 'is-zero': success === 0 }"
-      :title="t('tasks.totalCount', { n: success })">
+    <span
+      class="count-item count-success"
+      :class="{ 'is-zero': success === 0 }"
+      :title="t('tasks.totalCount', { n: success })"
+    >
       <el-icon>
         <CircleCheck />
       </el-icon>
       <span>{{ success }}</span>
     </span>
-    <span class="count-item count-failed" :class="{ 'is-zero': failed === 0 }"
-      :title="t('tasks.failedCount', { n: failed })">
+    <span
+      class="count-item count-failed"
+      :class="{ 'is-zero': failed === 0 }"
+      :title="t('tasks.failedCount', { n: failed })"
+    >
       <el-icon>
         <WarningFilled />
       </el-icon>
       <span>{{ failed }}</span>
     </span>
-    <span class="count-item count-deleted" :class="{ 'is-zero': deleted === 0 }"
-      :title="t('tasks.deletedCount', { n: deleted })">
+    <span
+      class="count-item count-deleted"
+      :class="{ 'is-zero': deleted === 0 }"
+      :title="t('tasks.deletedCount', { n: deleted })"
+    >
       <el-icon>
         <Delete />
       </el-icon>
       <span>{{ deleted }}</span>
     </span>
-    <span class="count-item count-dedup" :class="{ 'is-zero': dedup === 0 }"
-      :title="t('tasks.dedupCount', { n: dedup })">
+    <span
+      class="count-item count-dedup"
+      :class="{ 'is-zero': dedup === 0 }"
+      :title="t('tasks.dedupCount', { n: dedup })"
+    >
       <el-icon>
         <CopyDocument />
       </el-icon>

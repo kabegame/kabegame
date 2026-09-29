@@ -4,7 +4,8 @@
     :placeholder="placeholder"
     style="width: 100%"
     :clearable="clearable"
-    :disabled="props.disabled || disabled" :loading="showDisabled"
+    :disabled="props.disabled || disabled"
+    :loading="showDisabled"
     @update:model-value="onChange"
   >
     <el-option v-for="opt in options" :key="String(opt.value)" :label="opt.label" :value="opt.value" />
@@ -27,11 +28,10 @@ const props = defineProps<{
 }>();
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
-const selectValue = computed(() => settingValue.value == null ? null : String(settingValue.value));
+const selectValue = computed(() => (settingValue.value == null ? null : String(settingValue.value)));
 
 const onChange = async (v: any) => {
   const val = v == null ? null : String(v);
   await set(val);
 };
 </script>
-

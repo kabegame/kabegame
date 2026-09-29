@@ -133,16 +133,13 @@ function resetPull(el: HTMLElement) {
   if (!state) return;
   state.pullDistance = 0;
   state.isDragging = false;
-  const opts = getOptions(
-    (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue
-  );
+  const opts = getOptions((el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue);
   updateIndicator(state, opts);
 }
 
 export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = {
   mounted(el, binding: DirectiveBinding<PullToRefreshValue>) {
-    (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue =
-      binding.value;
+    (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue = binding.value;
 
     const head = createSpinnerHead();
     head.root.style.display = "none";
@@ -159,8 +156,7 @@ export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = 
     setState(el, state);
 
     const handleTouchStart = (e: TouchEvent) => {
-      const value = (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })
-        ._vPullToRefreshValue;
+      const value = (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue;
       const opts = getOptions(value);
       if (opts.disabled || opts.refreshing) return;
 
@@ -182,8 +178,7 @@ export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = 
     const handleTouchMove = (e: TouchEvent) => {
       if (!state.isDragging) return;
 
-      const value = (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })
-        ._vPullToRefreshValue;
+      const value = (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue;
       const opts = getOptions(value);
       if (opts.disabled || opts.refreshing) return;
 
@@ -207,8 +202,7 @@ export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = 
     const handleTouchEnd = () => {
       if (!state.isDragging) return;
 
-      const value = (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })
-        ._vPullToRefreshValue;
+      const value = (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue;
       const opts = getOptions(value);
 
       state.isDragging = false;
@@ -221,16 +215,14 @@ export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = 
     };
 
     const handlers = { handleTouchStart, handleTouchMove, handleTouchEnd };
-    (el as unknown as { _vPullToRefreshHandlers?: typeof handlers })._vPullToRefreshHandlers =
-      handlers;
+    (el as unknown as { _vPullToRefreshHandlers?: typeof handlers })._vPullToRefreshHandlers = handlers;
     el.addEventListener("touchstart", handleTouchStart, { passive: true });
     el.addEventListener("touchmove", handleTouchMove, { passive: false });
     el.addEventListener("touchend", handleTouchEnd, { passive: true });
   },
 
   updated(el, binding) {
-    (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue =
-      binding.value;
+    (el as unknown as { _vPullToRefreshValue?: PullToRefreshValue })._vPullToRefreshValue = binding.value;
     const state = getState(el);
     if (state) {
       const opts = getOptions(binding.value);
@@ -247,13 +239,15 @@ export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = 
       state.head.root.parentNode.removeChild(state.head.root);
     }
     delete (el as unknown as { _vPullToRefresh?: State })._vPullToRefresh;
-    const handlers = (el as unknown as {
-      _vPullToRefreshHandlers?: {
-        handleTouchStart: (e: TouchEvent) => void;
-        handleTouchMove: (e: TouchEvent) => void;
-        handleTouchEnd: () => void;
-      };
-    })._vPullToRefreshHandlers;
+    const handlers = (
+      el as unknown as {
+        _vPullToRefreshHandlers?: {
+          handleTouchStart: (e: TouchEvent) => void;
+          handleTouchMove: (e: TouchEvent) => void;
+          handleTouchEnd: () => void;
+        };
+      }
+    )._vPullToRefreshHandlers;
     if (handlers) {
       el.removeEventListener("touchstart", handlers.handleTouchStart);
       el.removeEventListener("touchmove", handlers.handleTouchMove);
@@ -261,4 +255,3 @@ export const vPullToRefresh: ObjectDirective<HTMLElement, PullToRefreshValue> = 
     }
   },
 };
-

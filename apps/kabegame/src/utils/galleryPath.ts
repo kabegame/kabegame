@@ -43,14 +43,7 @@ export type GalleryTimeSort = "asc" | "desc";
 export type GalleryStoredSort = GalleryTimeSort | "";
 
 export type GallerySortField =
-  | "by-id"
-  | "by-time"
-  | "by-size"
-  | "by-name"
-  | "by-aspect"
-  | "by-set-time"
-  | "by-album-order"
-  | "random";
+  "by-id" | "by-time" | "by-size" | "by-name" | "by-aspect" | "by-set-time" | "by-album-order" | "random";
 
 export interface GallerySort {
   field: GallerySortField;
@@ -66,9 +59,7 @@ export function newRandomSortSeed(): string {
 
 export const DEFAULT_GALLERY_SORT: GallerySort = { field: "by-time", desc: false };
 
-export function normalizeGallerySort(
-  sort: GallerySort | GalleryStoredSort | undefined,
-): GallerySort {
+export function normalizeGallerySort(sort: GallerySort | GalleryStoredSort | undefined): GallerySort {
   if (sort && typeof sort === "object") {
     const field = isGallerySortField(sort.field) ? sort.field : "by-time";
     return {
@@ -141,16 +132,11 @@ export interface ComposablePathParams {
 // ---------------------------------------------------------------------------
 
 function sortBodyPath(sort: GallerySort): string {
-  return sort.field === "random"
-    ? `sort/random-${sort.seed || newRandomSortSeed()}`
-    : `sort/${sort.field}`;
+  return sort.field === "random" ? `sort/random-${sort.seed || newRandomSortSeed()}` : `sort/${sort.field}`;
 }
 
 /** noAlbum + 查询体 折成一个片段（无排序/分页），count 路径与整路径共用。 */
-function foldContextAndQuery(
-  noAlbum: boolean,
-  query: GalleryQuery,
-): QueryBodyPart {
+function foldContextAndQuery(noAlbum: boolean, query: GalleryQuery): QueryBodyPart {
   let result: QueryBodyPart = { body: "", endsAtHub: true };
   if (noAlbum) {
     result = appendQueryBodyPart(result, { body: NO_ALBUM, endsAtHub: false });
@@ -159,14 +145,7 @@ function foldContextAndQuery(
 }
 
 export function buildComposablePath(params: ComposablePathParams): string {
-  const {
-    rootPrefix = "",
-    noAlbum = false,
-    query,
-    sort: sortOrOrder,
-    page,
-    pageSize = DEFAULT_PAGE_SIZE,
-  } = params;
+  const { rootPrefix = "", noAlbum = false, query, sort: sortOrOrder, page, pageSize = DEFAULT_PAGE_SIZE } = params;
   const sort = normalizeGallerySort(sortOrOrder);
   const body = appendQueryBodyPart(foldContextAndQuery(noAlbum, query), {
     body: sortBodyPath(sort),
@@ -179,19 +158,12 @@ export function buildComposablePath(params: ComposablePathParams): string {
 }
 
 /** 无排序/分页的计数路径；空查询回退 `all`。 */
-export function buildComposableCountPath(
-  rootPrefix: string,
-  noAlbum: boolean,
-  query: GalleryQuery,
-): string {
+export function buildComposableCountPath(rootPrefix: string, noAlbum: boolean, query: GalleryQuery): string {
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${rp}${foldContextAndQuery(noAlbum, query).body || "all"}`;
 }
 
-export function buildGalleryCountPath(
-  noAlbum: boolean,
-  query: GalleryQuery,
-): string {
+export function buildGalleryCountPath(noAlbum: boolean, query: GalleryQuery): string {
   return buildComposableCountPath("", noAlbum, query);
 }
 
@@ -203,14 +175,9 @@ export function buildGalleryCountPath(
  * 返回值为空或以 `/` 结尾；搜索段在 root 之前（search provider 是全局枢纽，
  * 与既有后端路由形态一致）。
  */
-export function buildComposableContextPrefix(
-  rootPrefix: string,
-  query: GalleryQuery,
-): string {
+export function buildComposableContextPrefix(rootPrefix: string, query: GalleryQuery): string {
   const term = asSingleFilterSet(query)?.search;
-  const searchPrefix = term?.query.trim()
-    ? `${serializeSearchTerm(term)}/`
-    : "";
+  const searchPrefix = term?.query.trim() ? `${serializeSearchTerm(term)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${searchPrefix}${rp}`;
 }
@@ -225,10 +192,7 @@ export function noAlbumContextPrefix(noAlbum: boolean): string {
 }
 
 /** 把查询体/列表的相对 body 接到完整 gallery 上下文，供 facet、计数与路径条共用。 */
-export function queryRuntimePath(
-  body: string,
-  contextPrefix = "images://gallery/",
-): string {
+export function queryRuntimePath(body: string, contextPrefix = "images://gallery/"): string {
   const normalizedBody = body.replace(/^\/+/, "") || "all";
   let prefix = contextPrefix.trim().replace(/\/+$/, "");
   if (!prefix) prefix = "images://gallery";
@@ -301,9 +265,7 @@ export function parseComposablePath(
   const sort: GallerySort = {
     field: sortField,
     desc: order === "desc",
-    ...(sortField === "random" && parsedSort.sortSeed
-      ? { seed: parsedSort.sortSeed }
-      : {}),
+    ...(sortField === "random" && parsedSort.sortSeed ? { seed: parsedSort.sortSeed } : {}),
   };
   return { noAlbum, query, sort, page, pageSize };
 }
@@ -368,21 +330,15 @@ export function buildFilterSetCountPath(filters: GalleryFilterSet): string {
   return serializeFilterSet(filters) || "all";
 }
 
-export function buildDimensionCountPath(
-  filters: GalleryFilterSet,
-  dimSeg: string,
-): string {
+export function buildDimensionCountPath(filters: GalleryFilterSet, dimSeg: string): string {
   const segment = normalizePath(dimSeg);
   if (!segment || segment === "all") {
     return buildFilterSetCountPath(filters);
   }
   // 本维度自身段必须是最后一段：引擎据此落到该维度 provider 去 list children；
   // 其余已选维度作前缀（WHERE 可交换，结果不变）。
-  const dimension =
-    dimensionForIncompletePathSegment(segment) ?? dimensionForPathSegment(segment);
-  const base = serializeQueryBody([
-    { is: dimension ? removeFilterDimension(filters, dimension) : filters },
-  ]);
+  const dimension = dimensionForIncompletePathSegment(segment) ?? dimensionForPathSegment(segment);
+  const base = serializeQueryBody([{ is: dimension ? removeFilterDimension(filters, dimension) : filters }]);
   if (!base.body) return segment;
   return `${base.body}${base.endsAtHub ? "/" : `/${FILTER_COMB}/`}${segment}`;
 }
@@ -390,10 +346,10 @@ export function buildDimensionCountPath(
 function dimensionForIncompletePathSegment(segment: string): GalleryBrowseDimension | null {
   const parts = normalizePath(segment).split("/").filter(Boolean);
   const root = parts[0]?.toLowerCase();
-  if ((root === "plugin" || root === "plugins") && (!parts[1] || parts[2] === "extend" && !parts[3])) {
+  if ((root === "plugin" || root === "plugins") && (!parts[1] || (parts[2] === "extend" && !parts[3]))) {
     return "plugin";
   }
-  if ((root === "media-type") && !parts[1]) return "mediaType";
+  if (root === "media-type" && !parts[1]) return "mediaType";
   if ((root === "date" || root === "dates") && !parts[1]) return "date";
   if (root === "size" && !parts[1]) return "size";
   if ((root === "aspect" || root === "dimension" || root === "dimensions") && !parts[1]) {

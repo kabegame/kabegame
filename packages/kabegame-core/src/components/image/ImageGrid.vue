@@ -1,10 +1,17 @@
 <template>
-  <div ref="containerEl" class="image-grid-container" :class="[
+  <div
+    ref="containerEl"
+    class="image-grid-container"
+    :class="[
       { 'hide-scrollbar': hideScrollbar },
       { 'scrolls-whole-container': scrollWholeContainer && !isHorizontal },
       { 'has-aside': !!$slots.aside || !!$slots['aside-right'] },
       `layout-${layoutDirection}`,
-    ]" v-bind="$attrs" tabindex="0" @keydown="handleKeyDown">
+    ]"
+    v-bind="$attrs"
+    tabindex="0"
+    @keydown="handleKeyDown"
+  >
     <!-- 页头 slot：滚动流内的全宽区（宿主用 sticky 钉顶）。必须保持容器直接子元素——
          包一层与页头等高的容器会让 position: sticky 失去可移动空间而失效 -->
     <slot name="header" />
@@ -20,99 +27,137 @@
         <slot name="before-grid" />
 
         <div ref="innerScrollEl" class="image-grid-scroll" :class="`layout-${layoutDirection}`">
-      <div class="image-grid-root" v-loading="isLoadingOverlay" :class="{ 'is-zooming': isZoomingLayout }"
-        @click="handleRootClick" @contextmenu.prevent>
-        <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
-        <div class="image-grid-items" v-show="hasImages">
-          <template v-if="layoutMode === 'grid'">
-            <div v-if="virtualScrollActive" class="image-grid" :class="`layout-${layoutDirection}`" :style="gridStyle">
-              <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
-                :prefer="gridPrefer" :selected="selectedIds.has(item.image.id)"
-                :is-entering="item.isEntering"
-                :horizontal="isHorizontal"
-                :hover-original="gridHoverOriginal"
-                :fit="gridFit"
-                :video-playing="playingVideoId === item.image.id"
-                @click="(e) => handleItemClick(item.image, item.index, e)"
-                @dblclick="() => handleItemDblClick(item.image, item.index)"
-                @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(item.image.id)"
-                @hover-video-preview="(active) => handleHoverVideoPreview(item.image.id, active)"
-                @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
+          <div
+            class="image-grid-root"
+            v-loading="isLoadingOverlay"
+            :class="{ 'is-zooming': isZoomingLayout }"
+            @click="handleRootClick"
+            @contextmenu.prevent
+          >
+            <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
+            <div class="image-grid-items" v-show="hasImages">
+              <template v-if="layoutMode === 'grid'">
+                <div
+                  v-if="virtualScrollActive"
+                  class="image-grid"
+                  :class="`layout-${layoutDirection}`"
+                  :style="gridStyle"
+                >
+                  <ImageItem
+                    v-for="item in renderedItems"
+                    :key="item.image.id"
+                    :image="item.image"
+                    :prefer="gridPrefer"
+                    :selected="selectedIds.has(item.image.id)"
+                    :is-entering="item.isEntering"
+                    :horizontal="isHorizontal"
+                    :hover-original="gridHoverOriginal"
+                    :fit="gridFit"
+                    :video-playing="playingVideoId === item.image.id"
+                    @click="(e) => handleItemClick(item.image, item.index, e)"
+                    @dblclick="() => handleItemDblClick(item.image, item.index)"
+                    @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
+                    @toggle-video-play="() => handleToggleVideoPlay(item.image.id)"
+                    @hover-video-preview="(active) => handleHoverVideoPreview(item.image.id, active)"
+                    @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)"
+                  />
+                </div>
+
+                <transition-group
+                  v-else
+                  name="fade-in-list"
+                  tag="div"
+                  class="image-grid"
+                  :class="`layout-${layoutDirection}`"
+                  :style="gridStyle"
+                >
+                  <ImageItem
+                    v-for="(image, index) in images"
+                    :key="image.id"
+                    :image="image"
+                    :prefer="gridPrefer"
+                    :selected="selectedIds.has(image.id)"
+                    :horizontal="isHorizontal"
+                    :hover-original="gridHoverOriginal"
+                    :fit="gridFit"
+                    :video-playing="playingVideoId === image.id"
+                    @click="(e) => handleItemClick(image, index, e)"
+                    @dblclick="() => handleItemDblClick(image, index)"
+                    @contextmenu="(e) => handleItemContextMenu(image, index, e)"
+                    @toggle-video-play="() => handleToggleVideoPlay(image.id)"
+                    @hover-video-preview="(active) => handleHoverVideoPreview(image.id, active)"
+                  />
+                </transition-group>
+              </template>
+
+              <div v-else class="image-gallery" :class="`layout-${layoutDirection}`" :style="galleryStyle">
+                <div
+                  v-for="(bucket, bi) in galleryBuckets"
+                  :key="bi"
+                  :class="isHorizontal ? 'image-gallery-row' : 'image-gallery-column'"
+                  :style="{ gap: gridGapPx + 'px' }"
+                >
+                  <ImageItem
+                    v-for="entry in bucket"
+                    :key="entry.image.id"
+                    :image="entry.image"
+                    :prefer="gridPrefer"
+                    :selected="selectedIds.has(entry.image.id)"
+                    :window-aspect-ratio="aspectRatioOf(entry.image)"
+                    fill-box
+                    :horizontal="isHorizontal"
+                    :hover-original="gridHoverOriginal"
+                    :fit="gridFit"
+                    :video-playing="playingVideoId === entry.image.id"
+                    @click="(e) => handleItemClick(entry.image, entry.index, e)"
+                    @dblclick="() => handleItemDblClick(entry.image, entry.index)"
+                    @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)"
+                    @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)"
+                    @hover-video-preview="(active) => handleHoverVideoPreview(entry.image.id, active)"
+                  />
+                </div>
+              </div>
             </div>
 
-            <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
-              :class="`layout-${layoutDirection}`" :style="gridStyle">
-              <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-                :prefer="gridPrefer" :selected="selectedIds.has(image.id)"
-                :horizontal="isHorizontal"
-                :hover-original="gridHoverOriginal"
-                :fit="gridFit"
-                :video-playing="playingVideoId === image.id"
-                @click="(e) => handleItemClick(image, index, e)"
-                @dblclick="() => handleItemDblClick(image, index)"
-                @contextmenu="(e) => handleItemContextMenu(image, index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(image.id)"
-                @hover-video-preview="(active) => handleHoverVideoPreview(image.id, active)" />
-            </transition-group>
-          </template>
-
-          <div v-else class="image-gallery" :class="`layout-${layoutDirection}`" :style="galleryStyle">
-            <div v-for="(bucket, bi) in galleryBuckets" :key="bi"
-              :class="isHorizontal ? 'image-gallery-row' : 'image-gallery-column'"
-              :style="{ gap: gridGapPx + 'px' }">
-              <ImageItem v-for="entry in bucket" :key="entry.image.id" :image="entry.image"
-                :prefer="gridPrefer" :selected="selectedIds.has(entry.image.id)"
-                :window-aspect-ratio="aspectRatioOf(entry.image)" fill-box :horizontal="isHorizontal"
-                :hover-original="gridHoverOriginal"
-                :fit="gridFit"
-                :video-playing="playingVideoId === entry.image.id"
-                @click="(e) => handleItemClick(entry.image, entry.index, e)"
-                @dblclick="() => handleItemDblClick(entry.image, entry.index)"
-                @contextmenu="(e) => handleItemContextMenu(entry.image, entry.index, e)"
-                @toggle-video-play="() => handleToggleVideoPlay(entry.image.id)"
-                @hover-video-preview="(active) => handleHoverVideoPreview(entry.image.id, active)" />
+            <!-- 空状态：overlay（插槽可自定义），不影响 before-grid/footer 等插槽的挂载 -->
+            <div v-if="showEmptyOverlay" class="empty-overlay">
+              <slot name="empty">
+                <EmptyState />
+              </slot>
             </div>
+
+            <!-- New action-based context menu -->
+            <ActionRenderer
+              v-if="enableContextMenu && actions && actions.length > 0"
+              :visible="contextMenu.isOpen.value"
+              :position="contextMenuPosition"
+              :actions="actions"
+              :context="contextMenuActionContext"
+              :zIndex="contextMenu.zIndex.value"
+              @close="closeContextMenu"
+              @command="handleContextMenuCommand"
+            />
+
+            <ImagePreviewDialog
+              ref="previewRef"
+              :images="images"
+              :actions="actions"
+              :plugins="plugins"
+              @context-command="handlePreviewContextCommand"
+              @preview-navigate="emit('preview-navigate', $event)"
+              @preview-page-boundary="emit('preview-page-boundary', $event)"
+              @preview-detail-toggle="emit('preview-detail-toggle', $event)"
+              @preview-close="emit('preview-close', $event)"
+              @open-task="emit('open-task', $event)"
+              @open-surf-record="emit('open-surf-record', $event)"
+              @open-gallery-filter="emit('open-gallery-filter', $event)"
+            >
+              <template v-if="$slots['preview-info-extra']" #info-extra="{ image }">
+                <slot name="preview-info-extra" :image="image" />
+              </template>
+            </ImagePreviewDialog>
           </div>
         </div>
-
-        <!-- 空状态：overlay（插槽可自定义），不影响 before-grid/footer 等插槽的挂载 -->
-        <div v-if="showEmptyOverlay" class="empty-overlay">
-          <slot name="empty">
-            <EmptyState />
-          </slot>
-        </div>
-
-        <!-- New action-based context menu -->
-        <ActionRenderer
-          v-if="enableContextMenu && actions && actions.length > 0"
-          :visible="contextMenu.isOpen.value"
-          :position="contextMenuPosition"
-          :actions="actions"
-          :context="contextMenuActionContext"
-          :zIndex="contextMenu.zIndex.value"
-          @close="closeContextMenu"
-          @command="handleContextMenuCommand" />
-
-        <ImagePreviewDialog
-          ref="previewRef"
-          :images="images"
-          :actions="actions"
-          :plugins="plugins"
-          @context-command="handlePreviewContextCommand"
-          @preview-navigate="emit('preview-navigate', $event)"
-          @preview-page-boundary="emit('preview-page-boundary', $event)"
-          @preview-detail-toggle="emit('preview-detail-toggle', $event)"
-          @preview-close="emit('preview-close', $event)"
-          @open-task="emit('open-task', $event)"
-          @open-surf-record="emit('open-surf-record', $event)"
-          @open-gallery-filter="emit('open-gallery-filter', $event)">
-          <template v-if="$slots['preview-info-extra']" #info-extra="{ image }">
-            <slot name="preview-info-extra" :image="image" />
-          </template>
-        </ImagePreviewDialog>
-        </div>
-      </div>
       </div>
 
       <!-- 右侧列（如画册信息面板）：与左列共享同一套 sticky/flex 契约，参见下方 .image-grid-aside -->
@@ -135,10 +180,7 @@ import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
-import type {
-  ImageDetailGalleryFilterTarget,
-  ImageDetailSurfRecordTarget,
-} from "../common/ImageBasicInfoPanel.vue";
+import type { ImageDetailGalleryFilterTarget, ImageDetailSurfRecordTarget } from "../common/ImageBasicInfoPanel.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useModal } from "../../composables/useModal";
@@ -191,7 +233,7 @@ interface Props {
   /** Actions for context menu / action sheet. */
   actions?: ActionItem<ImageInfo>[];
   onContextCommand?: (
-    payload: ContextCommandPayload
+    payload: ContextCommandPayload,
   ) => ContextCommand | null | undefined | Promise<ContextCommand | null | undefined>;
   loading?: boolean; // 加载状态：为 true 时不显示空状态，避免加载过程中闪现空占位符
   /**
@@ -234,18 +276,22 @@ const emit = defineEmits<{
   "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
   "open-surf-record": [target: ImageDetailSurfRecordTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
-  "preview-navigate": [payload: {
-    direction: "prev" | "next";
-    fromIndex: number;
-    toIndex: number;
-    wrapped: boolean;
-    image: ImageInfo;
-  }];
-  "preview-page-boundary": [payload: {
-    direction: "prev" | "next";
-    index: number;
-    image: ImageInfo;
-  }];
+  "preview-navigate": [
+    payload: {
+      direction: "prev" | "next";
+      fromIndex: number;
+      toIndex: number;
+      wrapped: boolean;
+      image: ImageInfo;
+    },
+  ];
+  "preview-page-boundary": [
+    payload: {
+      direction: "prev" | "next";
+      index: number;
+      image: ImageInfo;
+    },
+  ];
   "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
   "preview-close": [payload: { image: ImageInfo | null }];
   "preview-open": [payload: { image: ImageInfo }];
@@ -313,15 +359,11 @@ const gridColumnsCount = computed(() => {
   return imageGridColumns.value > 0 ? imageGridColumns.value : 1;
 });
 // 非web且列数少（<3）时优先加载原图（缩略图打底，原图流式覆盖）；列数多则只用缩略图省带宽。
-const gridPrefer = computed<ImagePrefer>(() =>
-  (gridColumnsCount.value <= 2 && !IS_WEB) ? "original" : "thumbnail"
-);
+const gridPrefer = computed<ImagePrefer>(() => (gridColumnsCount.value <= 2 && !IS_WEB ? "original" : "thumbnail"));
 // 列数过多（>=5）时 hover 不再升级为原图，因为没有意义；视频 hover 预览不受影响。
 const gridHoverOriginal = computed(() => gridColumnsCount.value < 5);
 // 网格媒体填充方式：由 imageFit 设置解析（fit→contain / fill→cover），透传给 ImageItem/ImageContent。
-const gridFit = computed<"contain" | "cover">(() =>
-  settingsStore.values.imageFit === "fill" ? "cover" : "contain"
-);
+const gridFit = computed<"contain" | "cover">(() => (settingsStore.values.imageFit === "fill" ? "cover" : "contain"));
 // 紧凑布局：栅格更紧凑，空白更少。整体间距为历史值的 1/3，让网格更紧凑。
 const gridGapPx = computed(() => {
   const base = isCompact.value
@@ -344,7 +386,7 @@ const innerScrollEl = ref<HTMLElement | null>(null);
 // sticky 上下文（aside 列同样以 sticky 钉在这条滚动流里，不另设滚动容器）。
 // 水平布局依赖内部 scroll 的固定高度链条，仍保持旧滚动容器。
 const scrollEl = computed(() =>
-  props.scrollWholeContainer && !isHorizontal.value ? containerEl.value : innerScrollEl.value
+  props.scrollWholeContainer && !isHorizontal.value ? containerEl.value : innerScrollEl.value,
 );
 
 // keep-alive/Tab 切换时，组件可能“已挂载但不可见/尺寸为 0”。
@@ -448,9 +490,7 @@ const layoutDirection = computed<"vertical" | "horizontal">(() => {
 const isHorizontal = computed(() => layoutDirection.value === "horizontal");
 
 // grid 布局可虚拟化：纵向按行，横向按列组；masonry/gallery 每项尺寸不定，不启用。
-const virtualScrollActive = computed(
-  () => props.enableVirtualScroll && layoutMode.value === "grid"
-);
+const virtualScrollActive = computed(() => props.enableVirtualScroll && layoutMode.value === "grid");
 
 // gallery 模式下每张图的宽高比（带 fallback）
 const aspectRatioOf = (image: ImageInfo) => {
@@ -573,7 +613,6 @@ const updateVirtualRange = () => {
 
   virtualStartRow.value = isFinite(nextStart) ? nextStart : 0;
   virtualEndRow.value = isFinite(nextEnd) ? nextEnd : 0;
-
 };
 
 const measureItemHeight = () => {
@@ -648,9 +687,12 @@ const closeContextMenu = () => {
   contextMenuImage.value = null;
 };
 
-watch(() => selectedIds.value.size, (size) => {
-  if (size === 0) closeContextMenu();
-});
+watch(
+  () => selectedIds.value.size,
+  (size) => {
+    if (size === 0) closeContextMenu();
+  },
+);
 
 const openContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   contextMenuImage.value = image;
@@ -785,28 +827,29 @@ const handleRootClick = (event: MouseEvent) => {
   }
 };
 
-const resolveImageClickAction = () => resolveSettingWithPrompt("imageClickAction", {
-  title: t("common.chooseImageClickAction"),
-  options: [
-    {
-      id: "preview",
-      title: t('common["imageClick.preview.title"]'),
-      desc: t('common["imageClick.preview.desc"]'),
-      icon: markRaw(ZoomIn),
-    },
-    {
-      id: "open",
-      title: t('common["imageClick.open.title"]'),
-      desc: t('common["imageClick.open.desc"]'),
-      icon: markRaw(FolderOpened),
-    },
-  ],
-});
+const resolveImageClickAction = () =>
+  resolveSettingWithPrompt("imageClickAction", {
+    title: t("common.chooseImageClickAction"),
+    options: [
+      {
+        id: "preview",
+        title: t('common["imageClick.preview.title"]'),
+        desc: t('common["imageClick.preview.desc"]'),
+        icon: markRaw(ZoomIn),
+      },
+      {
+        id: "open",
+        title: t('common["imageClick.open.title"]'),
+        desc: t('common["imageClick.open.desc"]'),
+        icon: markRaw(FolderOpened),
+      },
+    ],
+  });
 
 const handleItemClick = async (image: ImageInfo, index: number, event?: MouseEvent) => {
   if (!event) return;
   focusGrid();
-  
+
   // 紧凑模式选择模式下的点击行为
   if (isCompact.value && androidSelectionMode.value) {
     toggleSelection(image.id, index);
@@ -826,7 +869,7 @@ const handleItemClick = async (image: ImageInfo, index: number, event?: MouseEve
     }
     return;
   }
-  
+
   // 桌面端原有逻辑
   if (event.shiftKey) {
     rangeSelect(index);
@@ -925,7 +968,6 @@ const clearSelection = () => {
   lastSelectedIndex.value = -1;
 };
 
-
 // Blob URL 的生成/失效/重建统一交给上层 loader + 全局缓存；
 // core ImageGrid 不再维护局部 override。
 
@@ -939,17 +981,20 @@ const pulseZoomAnimation = () => {
       { transform: "scale(0.985)", opacity: 0.96 },
       { transform: "scale(1)", opacity: 1 },
     ],
-    { duration: 160, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+    { duration: 160, easing: "cubic-bezier(0.2, 0, 0, 1)" },
   );
 };
 
 const markZoomingLayout = (durationMs = 200) => {
   isZoomingLayout.value = true;
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
-  zoomAnimTimer = setTimeout(() => {
-    isZoomingLayout.value = false;
-    zoomAnimTimer = null;
-  }, Math.max(0, durationMs));
+  zoomAnimTimer = setTimeout(
+    () => {
+      isZoomingLayout.value = false;
+      zoomAnimTimer = null;
+    },
+    Math.max(0, durationMs),
+  );
   pulseZoomAnimation();
 };
 
@@ -958,7 +1003,7 @@ watch(
   () => {
     markZoomingLayout();
     scheduleVirtualUpdate();
-  }
+  },
 );
 
 // 虚拟滚动测量更新：合并到单个 rAF，避免短时间内多处触发导致重复测量/抖动
@@ -979,7 +1024,7 @@ watch(
   () => props.enableVirtualScroll,
   () => {
     scheduleVirtualUpdate();
-  }
+  },
 );
 
 // 布局/方向变化：重新测量行高 + 滚动范围
@@ -1049,12 +1094,7 @@ const handleSmoothWheel = (event: WheelEvent) => {
   // 预览 / 弹窗 / 抽屉打开时不接管滚动（避免底层 grid 跟着滚）
   if (isPreviewOpen.value) return;
   const target = event.target as HTMLElement | null;
-  if (
-    target?.closest(
-      ".image-preview-dialog,.el-dialog,.el-drawer,.el-popper,.el-overlay,.pswp"
-    )
-  )
-    return;
+  if (target?.closest(".image-preview-dialog,.el-dialog,.el-drawer,.el-popper,.el-overlay,.pswp")) return;
   // 事件目标不在当前 scrollEl 内部（例如冒泡自 teleport 的弹层）也不处理
   if (target && !el.contains(target)) return;
   // 嵌套滚动区（aside 树列、面包屑横滚等）优先消费 wheel：目标到 scrollEl 之间
@@ -1164,7 +1204,7 @@ onMounted(async () => {
         const delta = e.deltaY > 0 ? 1 : -1;
         uiStore.adjustImageGridColumn(delta);
       },
-      { passive: true }
+      { passive: true },
     );
   }
 });
@@ -1286,7 +1326,7 @@ watch(
     // 更新上一次的图片 ID 集合
     previousImageIds.value = newIds;
   },
-  { deep: false, immediate: true }
+  { deep: false, immediate: true },
 );
 
 // 入场动画结束回调
@@ -1373,31 +1413,28 @@ const scrollToIndex = (index: number) => {
 };
 
 // 监听预览索引变化，同步选中项和视口
-watch(
-  currentPreviewIndex,
-  (newIndex) => {
-    // 仅在预览打开且非多选时执行
-    if (!isPreviewOpen.value || selectedIds.value.size > 1) return;
-    const list = props.images ?? [];
-    if (newIndex < 0 || newIndex >= list.length) return;
+watch(currentPreviewIndex, (newIndex) => {
+  // 仅在预览打开且非多选时执行
+  if (!isPreviewOpen.value || selectedIds.value.size > 1) return;
+  const list = props.images ?? [];
+  if (newIndex < 0 || newIndex >= list.length) return;
 
-    const image = list[newIndex];
-    if (!image) return;
+  const image = list[newIndex];
+  if (!image) return;
 
-    // 紧凑模式下预览与选择解耦，不同步选中项
-    if (isCompact.value) {
-      // 仅滚动到目标图片
-      scrollToIndex(newIndex);
-      return;
-    }
-
-    // 更新选中项为当前预览图片
-    setSingleSelection(image.id, newIndex);
-
-    // 滚动到目标图片
+  // 紧凑模式下预览与选择解耦，不同步选中项
+  if (isCompact.value) {
+    // 仅滚动到目标图片
     scrollToIndex(newIndex);
+    return;
   }
-);
+
+  // 更新选中项为当前预览图片
+  setSingleSelection(image.id, newIndex);
+
+  // 滚动到目标图片
+  scrollToIndex(newIndex);
+});
 
 // 退出紧凑模式选择模式（清空选择）
 const exitAndroidSelectionMode = () => {
@@ -1407,7 +1444,13 @@ const exitAndroidSelectionMode = () => {
 
 // Android：选择模式用 useModal bridge，弹栈时通过 onClose 清除选择状态
 const androidSelectionModal = useModal({ onClose: clearSelection });
-watch(androidSelectionMode, (v) => { if (IS_ANDROID) v ? androidSelectionModal.open() : androidSelectionModal.close(); }, { immediate: true });
+watch(
+  androidSelectionMode,
+  (v) => {
+    if (IS_ANDROID) v ? androidSelectionModal.open() : androidSelectionModal.close();
+  },
+  { immediate: true },
+);
 
 const getContainerEl = () => scrollEl.value ?? containerEl.value;
 
@@ -1419,7 +1462,7 @@ defineExpose({
   /** 按图片 id 打开预览（用于 URL pvwimgid 同步）；id 不在当前列表时为 no-op。 */
   openPreviewById: (id: string) => {
     const idx = (props.images ?? []).findIndex((i) => i.id === id);
-    console.log('open preview', id);
+    console.log("open preview", id);
     if (idx >= 0) openPreview(idx);
   },
   closePreview: () => previewRef.value?.close?.(),

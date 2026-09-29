@@ -1,7 +1,18 @@
 <template>
-  <el-dialog :model-value="open" :z-index="zIndex" :title="title" :width="width" destroy-on-close @update:model-value="(v: boolean) => { if (!v) emit('close') }">
-    <div style="margin-bottom: 16px;">
-      <p style="margin-bottom: 8px;">{{ message }}</p>
+  <el-dialog
+    :model-value="open"
+    :z-index="zIndex"
+    :title="title"
+    :width="width"
+    destroy-on-close
+    @update:model-value="
+      (v: boolean) => {
+        if (!v) emit('close');
+      }
+    "
+  >
+    <div style="margin-bottom: 16px">
+      <p style="margin-bottom: 8px">{{ message }}</p>
       <el-checkbox v-model="deleteFiles" :label="checkboxLabel" v-if="!hideCheckbox" />
       <p v-if="!hideCheckbox" class="var-description" :style="{ color: deleteFiles ? 'var(--el-color-danger)' : '' }">
         {{ deleteFiles ? dangerText : safeText }}
@@ -72,24 +83,27 @@ const removeKeyHandler = () => {
   }
 };
 
-watch(() => props.open, (isOpen) => {
-  if (!isOpen) {
-    removeKeyHandler();
-    return;
-  }
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (!isOpen) {
+      removeKeyHandler();
+      return;
+    }
 
-  keyHandler = (e: KeyboardEvent) => {
-    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
-    const activeElement = document.activeElement;
-    if (activeElement?.tagName === "INPUT" && (activeElement as HTMLInputElement).type === "checkbox") return;
-    e.preventDefault();
-    emitConfirm();
-  };
+    keyHandler = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+      const activeElement = document.activeElement;
+      if (activeElement?.tagName === "INPUT" && (activeElement as HTMLInputElement).type === "checkbox") return;
+      e.preventDefault();
+      emitConfirm();
+    };
 
-  nextTick(() => {
-    document.addEventListener("keydown", keyHandler!);
-  });
-});
+    nextTick(() => {
+      document.addEventListener("keydown", keyHandler!);
+    });
+  },
+);
 
 onBeforeUnmount(() => {
   removeKeyHandler();

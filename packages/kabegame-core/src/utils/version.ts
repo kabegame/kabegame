@@ -44,10 +44,7 @@ export const compareVersions = (a: string, b: string): number => {
   return String(pa.pre).localeCompare(String(pb.pre));
 };
 
-export const isUpdateAvailable = (
-  installedVersion: string | null | undefined,
-  newVersion: string,
-): boolean => {
+export const isUpdateAvailable = (installedVersion: string | null | undefined, newVersion: string): boolean => {
   if (!installedVersion) return false;
   return compareVersions(newVersion, installedVersion) > 0;
 };

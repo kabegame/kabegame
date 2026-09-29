@@ -6,7 +6,7 @@
       class="plugin-defaults-select"
       clearable
       :placeholder="$t('settings.pluginDefaultsSelectPlugin')"
-      @update:model-value="(value) => selectedPluginId = value ?? ''"
+      @update:model-value="(value) => (selectedPluginId = value ?? '')"
     />
 
     <div v-if="selectedPluginId" v-loading="loading" class="plugin-defaults-editor">
@@ -42,10 +42,7 @@ import { invoke } from "@/api/rpc";
 import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { usePluginConfig } from "@/composables/usePluginConfig";
-import {
-  matchesPluginVarWhen,
-  coerceOptionsVarsToVisibleChoices,
-} from "@kabegame/core/utils/pluginVarWhen";
+import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@kabegame/core/utils/pluginVarWhen";
 import {
   expandVarsForBackend,
   normalizeVarsForUI,
@@ -58,12 +55,7 @@ import PluginPickerField from "@/components/PluginPickerField.vue";
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 
-const {
-  form,
-  pluginVars,
-  loadPluginVars,
-  loadPluginVarDefs,
-} = usePluginConfig();
+const { form, pluginVars, loadPluginVars, loadPluginVarDefs } = usePluginConfig();
 
 const selectedPluginId = ref("");
 /** 面板不显示的两个字段：保存/重置时原样回写，不能用面板输入清掉用户已有的默认值 */
@@ -123,11 +115,9 @@ async function handleSave() {
 async function handleReset() {
   if (!selectedPluginId.value) return;
   try {
-    await ElMessageBox.confirm(
-      t("settings.pluginDefaultsResetConfirm"),
-      t("settings.pluginDefaultsReset"),
-      { type: "warning" },
-    );
+    await ElMessageBox.confirm(t("settings.pluginDefaultsResetConfirm"), t("settings.pluginDefaultsReset"), {
+      type: "warning",
+    });
   } catch {
     return;
   }
@@ -139,10 +129,7 @@ async function handleReset() {
       outputDir?: string | null;
     }>("reset_plugin_default_config", { pluginId: selectedPluginId.value });
     await loadPluginVarDefs(selectedPluginId.value);
-    const raw = (json?.userConfig && typeof json.userConfig === "object" ? json.userConfig : {}) as Record<
-      string,
-      any
-    >;
+    const raw = (json?.userConfig && typeof json.userConfig === "object" ? json.userConfig : {}) as Record<string, any>;
     const matched = matchUserConfigFromDefaults(raw, pluginVars.value as PluginVarDef[]);
     form.value.vars = normalizeVarsForUI(matched, pluginVars.value as PluginVarDef[]);
     keptHttpHeaders.value = { ...(json?.httpHeaders ?? {}) };

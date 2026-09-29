@@ -49,9 +49,7 @@ export async function init(): Promise<void> {
         }),
       );
     } else {
-      ElMessage.success(
-        i18n.global.t("gallery.hiddenCleanupDone", { removed: payload.removed ?? 0 }),
-      );
+      ElMessage.success(i18n.global.t("gallery.hiddenCleanupDone", { removed: payload.removed ?? 0 }));
     }
   });
 }

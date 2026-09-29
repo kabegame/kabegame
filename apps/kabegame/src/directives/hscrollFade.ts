@@ -35,8 +35,7 @@ export const vHscrollFade: Directive<HTMLElement> = {
     const onWheel = (event: WheelEvent) => {
       const maxScroll = scroller.scrollWidth - scroller.clientWidth;
       if (maxScroll <= 0) return;
-      const delta =
-        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       if (!delta) return;
       const next = Math.min(Math.max(scroller.scrollLeft + delta, 0), maxScroll);
       if (next === scroller.scrollLeft) return; // 已到端点：让页面继续接管滚动

@@ -6,9 +6,7 @@ import { useApp } from "@/stores/app";
 const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";
 
 /** 读取后端在插件加载期计算的最低应用版本兼容状态。 */
-export function isPluginMinAppNotSatisfied(
-  plugin: { minAppIncompatible?: boolean } | null | undefined,
-): boolean {
+export function isPluginMinAppNotSatisfied(plugin: { minAppIncompatible?: boolean } | null | undefined): boolean {
   return !!plugin?.minAppIncompatible;
 }
 

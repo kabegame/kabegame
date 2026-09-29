@@ -61,10 +61,7 @@ export function tryResolveStoredLanguage(lang: string | null | undefined): Suppo
 export function resolveBrowserLanguage(): SupportedLocale {
   const candidates =
     typeof navigator !== "undefined"
-      ? [
-          ...(Array.isArray(navigator.languages) ? navigator.languages : []),
-          navigator.language,
-        ]
+      ? [...(Array.isArray(navigator.languages) ? navigator.languages : []), navigator.language]
       : [];
   for (const candidate of candidates) {
     const resolved = tryResolveStoredLanguage(candidate);

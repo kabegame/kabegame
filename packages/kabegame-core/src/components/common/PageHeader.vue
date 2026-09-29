@@ -1,5 +1,5 @@
 <template>
-  <div class="page-header" :class="{ 'sticky': props.sticky }">
+  <div class="page-header" :class="{ sticky: props.sticky }">
     <div class="left">
       <el-button v-if="showBack" circle @click="$emit('back')">
         <el-icon>
@@ -32,12 +32,20 @@
       <!-- 自动渲染 show features -->
       <template v-else>
         <template v-for="featureId in show" :key="featureId">
-          <component v-if="getShowComponent(featureId)" :is="getShowComponent(featureId)"
-            v-bind="getShowProps(featureId)" @action="(data: any) => $emit('action', { id: featureId, data })" />
+          <component
+            v-if="getShowComponent(featureId)"
+            :is="getShowComponent(featureId)"
+            v-bind="getShowProps(featureId)"
+            @action="(data: any) => $emit('action', { id: featureId, data })"
+          />
         </template>
         <!-- fold overflow dropdown -->
-        <el-dropdown v-if="fold && fold.length > 0" trigger="click" placement="bottom-end"
-          @command="(id: string) => $emit('action', { id, data: { type: 'click' } })">
+        <el-dropdown
+          v-if="fold && fold.length > 0"
+          trigger="click"
+          placement="bottom-end"
+          @command="(id: string) => $emit('action', { id, data: { type: 'click' } })"
+        >
           <el-button circle>
             <el-icon>
               <MoreFilled />
@@ -46,7 +54,7 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item v-for="featureId in fold" :key="featureId" :command="featureId">
-                <el-icon v-if="getFoldIcon(featureId)" style="margin-right: 8px; vertical-align: middle;">
+                <el-icon v-if="getFoldIcon(featureId)" style="margin-right: 8px; vertical-align: middle">
                   <component :is="getFoldIcon(featureId)" />
                 </el-icon>
                 <span>{{ getFoldLabel(featureId) }}</span>
@@ -64,22 +72,25 @@ import { ArrowLeft, MoreFilled } from "@kabegame/element-plus-icons";
 import { useHeaderStore } from "../../stores/header";
 import HeaderActionButton from "./HeaderActionButton.vue";
 
-const props = withDefaults(defineProps<{
-  title: string;
-  subtitle?: string;
-  showBack?: boolean;
-  sticky?: boolean;
-  show?: string[];
-  fold?: string[];
-}>(), {
-  sticky: true,
-  show: () => [],
-  fold: () => [],
-});
+const props = withDefaults(
+  defineProps<{
+    title: string;
+    subtitle?: string;
+    showBack?: boolean;
+    sticky?: boolean;
+    show?: string[];
+    fold?: string[];
+  }>(),
+  {
+    sticky: true,
+    show: () => [],
+    fold: () => [],
+  },
+);
 
 defineEmits<{
   back: [];
-  action: [payload: { id: string; data: { type: string;[key: string]: any } }];
+  action: [payload: { id: string; data: { type: string; [key: string]: any } }];
 }>();
 
 const headerStore = useHeaderStore();
@@ -149,7 +160,7 @@ const getFoldLabel = (featureId: string) => headerStore.getFoldLabel(featureId);
     gap: 8px;
     margin-left: auto;
 
-    &>* {
+    & > * {
       margin: 0;
     }
   }
@@ -159,7 +170,7 @@ const getFoldLabel = (featureId: string) => headerStore.getFoldLabel(featureId);
     align-items: center;
     gap: 8px;
 
-    &>* {
+    & > * {
       margin: 0;
     }
   }

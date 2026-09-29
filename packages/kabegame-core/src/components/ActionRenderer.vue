@@ -9,7 +9,8 @@
       :items="menuItems"
       :z-index="effectiveZIndex"
       @close="$emit('close')"
-      @command="handleCommand" />
+      @command="handleCommand"
+    />
 
     <!-- Android: Action Sheet -->
     <ActionSheet
@@ -22,7 +23,8 @@
       :modal-back="modalBack"
       :z-index="effectiveZIndex"
       @close="$emit('close')"
-      @command="handleCommand" />
+      @command="handleCommand"
+    />
   </div>
 </template>
 
@@ -68,8 +70,8 @@ const uiStore = useUiStore();
 const fallbackModal = useModal();
 watch(
   () => props.visible && props.zIndex == null,
-  (v) => v ? fallbackModal.open() : fallbackModal.close(),
-  { immediate: true }
+  (v) => (v ? fallbackModal.open() : fallbackModal.close()),
+  { immediate: true },
 );
 const effectiveZIndex = computed(() => props.zIndex ?? fallbackModal.zIndex.value);
 
@@ -85,14 +87,9 @@ const resolveAction = (action: ActionItem<any>): ActionItem<any> => ({
   //@ts-expect-error ActionItem 的函数型 icon 是基于当前上下文的解析器
   icon: typeof action.icon === "function" ? action.icon(props.context) : action.icon,
   suffix: typeof action.suffix === "function" ? action.suffix(props.context) : action.suffix,
-  disabled:
-    typeof action.disabled === "function"
-      ? action.disabled(props.context)
-      : action.disabled ?? false,
+  disabled: typeof action.disabled === "function" ? action.disabled(props.context) : (action.disabled ?? false),
   dividerBefore:
-    typeof action.dividerBefore === "function"
-      ? action.dividerBefore(props.context)
-      : action.dividerBefore ?? false,
+    typeof action.dividerBefore === "function" ? action.dividerBefore(props.context) : (action.dividerBefore ?? false),
   visible: undefined,
   children: action.children
     ?.filter((child) => child.visible === undefined || child.visible(props.context))
@@ -101,21 +98,19 @@ const resolveAction = (action: ActionItem<any>): ActionItem<any> => ({
 
 /** 桌面菜单与 Android ActionSheet 共用同一份上下文解析结果，子项也递归解析。 */
 const resolvedActions = computed<ActionItem<any>[]>(() =>
-  props.actions
-    .filter((action) => action.visible === undefined || action.visible(props.context))
-    .map(resolveAction),
+  props.actions.filter((action) => action.visible === undefined || action.visible(props.context)).map(resolveAction),
 );
 
 // Convert ActionItem[] to MenuItem[] for ContextMenu compatibility
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
-  
+
   for (const action of resolvedActions.value) {
     // Add divider if needed
     const shouldShowDivider =
       typeof action.dividerBefore === "function"
         ? action.dividerBefore(props.context)
-        : action.dividerBefore ?? false;
+        : (action.dividerBefore ?? false);
     if (shouldShowDivider && items.length > 0) {
       items.push({
         key: `${action.key}_divider`,
@@ -125,10 +120,10 @@ const menuItems = computed<MenuItem[]>(() => {
 
     // Resolve label
     const label = typeof action.label === "function" ? action.label(props.context) : action.label;
-    
+
     //@ts-expect-error Resolve icon
     const icon = typeof action.icon === "function" ? action.icon(props.context) : action.icon;
-    
+
     // Resolve suffix
     const suffix = typeof action.suffix === "function" ? action.suffix(props.context) : action.suffix;
 

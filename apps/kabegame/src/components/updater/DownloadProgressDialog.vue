@@ -8,7 +8,11 @@
     :close-on-click-modal="false"
     :show-close="!store.isDownloading"
     class="download-progress-dialog"
-    @update:model-value="v => { if (!v) close() }"
+    @update:model-value="
+      (v) => {
+        if (!v) close();
+      }
+    "
   >
     <div class="dl-body">
       <el-progress
@@ -23,8 +27,8 @@
     </div>
 
     <template #footer>
-      <el-button v-if="store.isDownloading" @click="onCancel">{{ t('common.cancel') }}</el-button>
-      <el-button v-else type="primary" @click="close()">{{ t('common.close') }}</el-button>
+      <el-button v-if="store.isDownloading" @click="onCancel">{{ t("common.cancel") }}</el-button>
+      <el-button v-else type="primary" @click="close()">{{ t("common.close") }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -83,15 +87,11 @@ async function onCancel() {
 
 async function promptRestart() {
   try {
-    await ElMessageBox.confirm(
-      t("updater.restartReadyMessage"),
-      t("updater.restartReadyTitle"),
-      {
-        confirmButtonText: t("updater.restartNow"),
-        cancelButtonText: t("updater.restartLater"),
-        type: "success",
-      },
-    );
+    await ElMessageBox.confirm(t("updater.restartReadyMessage"), t("updater.restartReadyTitle"), {
+      confirmButtonText: t("updater.restartNow"),
+      cancelButtonText: t("updater.restartLater"),
+      type: "success",
+    });
   } catch {
     return; // 稍后重启
   }

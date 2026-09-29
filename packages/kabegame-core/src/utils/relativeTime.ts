@@ -25,10 +25,7 @@ function toMillis(value: number | Date) {
  * key 不能带 `.`——vue-i18n 会把它当路径解析，扁平点号 key 得写成
  * `t('common["a.b"]')` 才认（见 openExternalLink.ts），这里统一用无点命名。
  */
-function ago(
-  unit: "Minutes" | "Hours" | "Days" | "Weeks" | "Months" | "Years",
-  n: number,
-) {
+function ago(unit: "Minutes" | "Hours" | "Days" | "Weeks" | "Months" | "Years", n: number) {
   return i18n.global.t(`common.time${unit}Ago`, { n }, n);
 }
 

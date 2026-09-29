@@ -6,9 +6,7 @@
         <span class="truncate text-[13px] font-700 text-[var(--anime-text-primary)]">
           {{ t("albums.syncCardTitle") }}
         </span>
-        <span class="truncate text-xs text-[#8b6b8f]">
-          {{ task.albumName }} · {{ detail }}
-        </span>
+        <span class="truncate text-xs text-[#8b6b8f]">{{ task.albumName }} · {{ detail }}</span>
       </div>
       <button
         type="button"

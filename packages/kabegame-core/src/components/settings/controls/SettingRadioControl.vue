@@ -22,10 +22,9 @@ const props = defineProps<{
 }>();
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
-const radioValue = computed(() => settingValue.value == null ? "" : String(settingValue.value));
+const radioValue = computed(() => (settingValue.value == null ? "" : String(settingValue.value)));
 
 const onChange = async (v: string) => {
   await set(v);
 };
 </script>
-

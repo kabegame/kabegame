@@ -1,13 +1,9 @@
 <template>
-  <el-button
-    class="check-update-trigger"
-    :disabled="store.busy"
-    @click="onClick"
-  >
+  <el-button class="check-update-trigger" :disabled="store.busy" @click="onClick">
     <el-icon class="check-update-icon" :class="{ spinning: store.isChecking }">
       <Refresh />
     </el-icon>
-    <span class="check-update-label">{{ t('updater.checkUpdate') }}</span>
+    <span class="check-update-label">{{ t("updater.checkUpdate") }}</span>
   </el-button>
 </template>
 

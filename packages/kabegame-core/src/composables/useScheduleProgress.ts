@@ -43,9 +43,7 @@ const getScheduleProgressParts = (config: RunConfig, nowSecs: number) => {
   return { percent, remaining, total };
 };
 
-export function useScheduleProgress(
-  config: Ref<RunConfig>,
-): Readonly<Ref<ScheduleProgress>> {
+export function useScheduleProgress(config: Ref<RunConfig>): Readonly<Ref<ScheduleProgress>> {
   const nowSecs = ref(nowInSecs());
   let timer: number | null = null;
 
@@ -85,10 +83,7 @@ export function useScheduleProgress(
     if (!active) {
       return { percent: 0, remaining: 0, total: 0, active };
     }
-    const { percent, remaining, total } = getScheduleProgressParts(
-      cfg,
-      nowSecs.value,
-    );
+    const { percent, remaining, total } = getScheduleProgressParts(cfg, nowSecs.value);
     if (total <= 0) {
       return { percent: 0, remaining: 0, total: 0, active: false };
     }

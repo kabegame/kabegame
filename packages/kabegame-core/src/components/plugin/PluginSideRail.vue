@@ -9,15 +9,21 @@
     <!-- 滚动放在内层：把手是相对本组件根定位的，根一起滚会让它跟着内容跑掉 -->
     <div class="flex-1 min-w-0 flex flex-col gap-3.5 py-3 px-3 overflow-y-auto [scrollbar-width:none]">
       <div v-if="tagChips.length">
-        <div class="text-12px font-700 tracking-[0.08em] text-[var(--anime-text-muted)] mb-1.5">{{ t("plugins.detail.tags") }}</div>
+        <div class="text-12px font-700 tracking-[0.08em] text-[var(--anime-text-muted)] mb-1.5">
+          {{ t("plugins.detail.tags") }}
+        </div>
         <div class="flex flex-wrap gap-1">
-          <span v-for="chip in tagChips" :key="chip.key" class="kb-chip text-white" :style="{ background: chip.bg }">{{ chip.text }}</span>
+          <span v-for="chip in tagChips" :key="chip.key" class="kb-chip text-white" :style="{ background: chip.bg }">
+            {{ chip.text }}
+          </span>
           <PluginLabelTags v-if="plugin?.labels?.length" :labels="plugin.labels" />
         </div>
       </div>
 
       <div v-if="prereqItems.length">
-        <div class="text-12px font-700 tracking-[0.08em] text-[var(--anime-text-muted)] mb-1.5">{{ t("plugins.detail.prerequisites") }}</div>
+        <div class="text-12px font-700 tracking-[0.08em] text-[var(--anime-text-muted)] mb-1.5">
+          {{ t("plugins.detail.prerequisites") }}
+        </div>
         <div class="flex flex-col gap-1.5 text-13.5px">
           <div v-for="item in prereqItems" :key="item.key" class="flex items-center gap-2">
             <span
@@ -70,9 +76,17 @@ const tagChips = computed(() => {
   const chips: Array<{ key: string; text: string; bg: string }> = [];
   const scriptType = props.plugin?.scriptType;
   if (scriptType === "v8") {
-    chips.push({ key: "script-v8", text: t("plugins.detail.scriptTypeV8"), bg: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)" });
+    chips.push({
+      key: "script-v8",
+      text: t("plugins.detail.scriptTypeV8"),
+      bg: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
+    });
   } else if (scriptType === "js") {
-    chips.push({ key: "script-js", text: t("plugins.detail.scriptTypeJs"), bg: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)" });
+    chips.push({
+      key: "script-js",
+      text: t("plugins.detail.scriptTypeJs"),
+      bg: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
+    });
   }
   const minAppVersion = (props.plugin?.minAppVersion ?? "").trim();
   if (minAppVersion) {
@@ -119,7 +133,9 @@ const prereqItems = computed(() => {
     const incompatible = !!props.plugin?.minAppIncompatible;
     items.push({
       key: "app-version",
-      color: incompatible ? "linear-gradient(135deg, #ef4444 0%, #f87171 100%)" : "linear-gradient(135deg, #10b981 0%, #34d399 100%)",
+      color: incompatible
+        ? "linear-gradient(135deg, #ef4444 0%, #f87171 100%)"
+        : "linear-gradient(135deg, #10b981 0%, #34d399 100%)",
       icon: incompatible ? WarningFilled : CircleCheckFilled,
       text: incompatible
         ? t("plugins.detail.appVersionBad", { app: props.appVersion ?? "?", min: minAppVersion })

@@ -8,17 +8,17 @@
     :toggle-aria-label="t('gallery.imageDetailFieldsToggle')"
   >
     <template #title>
-      {{ t('gallery.imageDetailBasicSection') }}
+      {{ t("gallery.imageDetailBasicSection") }}
     </template>
     <div class="detail-fields-body">
       <div v-if="image.displayName" class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailDisplayName') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailDisplayName") }}</span>
         <span class="detail-value line-clamp-2" :title="image.displayName">
           {{ image.displayName }}
         </span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailSource") }}</span>
         <div class="detail-value-row">
           <button
             v-if="sourceClickEnabled"
@@ -26,7 +26,9 @@
             class="detail-filter-link"
             :title="sourceTitle"
             @click="handleOpenSource"
-          >{{ sourceLabel }}</button>
+          >
+            {{ sourceLabel }}
+          </button>
           <span v-else class="detail-value">{{ sourceLabel }}</span>
           <el-button
             v-if="image.taskId"
@@ -46,14 +48,16 @@
         </div>
       </div>
       <div class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailType') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailType") }}</span>
         <div class="detail-value detail-inline-links">
           <button
             type="button"
             class="detail-filter-link"
             :title="t('gallery.filterByMediaType')"
             @click="emitGalleryFilter(mediaKindFilterTarget)"
-          >{{ mediaTypeParts.kind }}</button>
+          >
+            {{ mediaTypeParts.kind }}
+          </button>
           <template v-if="mediaTypeParts.format">
             <span class="detail-link-separator">/</span>
             <button
@@ -61,70 +65,86 @@
               class="detail-filter-link"
               :title="t('gallery.filterByMediaType')"
               @click="emitGalleryFilter(mediaFormatFilterTarget)"
-            >{{ mediaTypeParts.format }}</button>
+            >
+              {{ mediaTypeParts.format }}
+            </button>
           </template>
         </div>
       </div>
       <div v-if="image.postUrl && !isFileUrl(image.postUrl)" class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailUrl') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailUrl") }}</span>
         <span
           class="detail-value line-clamp-2 clickable-link"
           :title="image.postUrl"
           @click="handleOpenUrl(image.postUrl)"
-        >{{ image.postUrl }}</span>
+        >
+          {{ image.postUrl }}
+        </span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailLocalPath') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailLocalPath") }}</span>
         <span
           class="detail-value line-clamp-2 clickable-link"
           :title="image.localPath"
           @click="handleOpenPath(image.localPath)"
           @contextmenu.prevent.stop="handleCopyLocalPath(image.localPath)"
-        >{{ image.localPath }}</span>
+        >
+          {{ image.localPath }}
+        </span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailCrawledAt') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailCrawledAt") }}</span>
         <div v-if="dateParts" class="detail-value detail-inline-links">
           <button
             type="button"
             class="detail-filter-link"
             :title="t('gallery.filterByTime')"
             @click="emitGalleryFilter(dateYearFilterTarget)"
-          >{{ dateParts.year }}</button>
+          >
+            {{ dateParts.year }}
+          </button>
           <span class="detail-link-separator">-</span>
           <button
             type="button"
             class="detail-filter-link"
             :title="t('gallery.filterByTime')"
             @click="emitGalleryFilter(dateMonthFilterTarget)"
-          >{{ dateParts.month }}</button>
+          >
+            {{ dateParts.month }}
+          </button>
           <span class="detail-link-separator">-</span>
           <button
             type="button"
             class="detail-filter-link"
             :title="t('gallery.filterByTime')"
             @click="emitGalleryFilter(dateDayFilterTarget)"
-          >{{ dateParts.day }}</button>
+          >
+            {{ dateParts.day }}
+          </button>
           <span v-if="dateParts.time" class="detail-date-time">{{ dateParts.time }}</span>
         </div>
         <span v-else class="detail-value">{{ formatDate(image.crawledAt) }}</span>
       </div>
       <div v-if="image.size != null" class="detail-item">
-        <span class="detail-label">{{ t('gallery.imageDetailSize') }}</span>
+        <span class="detail-label">{{ t("gallery.imageDetailSize") }}</span>
         <div class="detail-value-row detail-value-row-wrap">
           <button
             type="button"
             class="detail-filter-link"
             :title="t('gallery.filterBySize')"
             @click="emitGalleryFilter(sizeFilterTarget)"
-          >{{ imageFileSizeLabel }}</button>
+          >
+            {{ imageFileSizeLabel }}
+          </button>
           <button
             v-if="aspectFilterTarget"
             type="button"
             class="detail-filter-link detail-filter-link-muted"
             :title="t('gallery.filterByAspect')"
             @click="emitGalleryFilter(aspectFilterTarget)"
-          >({{ imageDimensionsLabel }})</button>
+          >
+            ({{ imageDimensionsLabel }})
+          </button>
         </div>
       </div>
     </div>
@@ -230,7 +250,7 @@ watch(
 
 const surfSourceHost = computed(() => {
   const id = surfRecordId.value;
-  return id ? surfStore.hostById(id) ?? "" : "";
+  return id ? (surfStore.hostById(id) ?? "") : "";
 });
 
 const sourceKind = computed<"plugin" | "surf" | "unknown">(() => {
@@ -431,11 +451,7 @@ const handleOpenPath = async (path?: string) => {
   if (IS_WEB) return;
   try {
     if (IS_ANDROID) {
-      const uri = path.startsWith("content://")
-        ? path
-        : path.startsWith("/")
-          ? `file://${path}`
-          : `file:///${path}`;
+      const uri = path.startsWith("content://") ? path : path.startsWith("/") ? `file://${path}` : `file:///${path}`;
       await openImage(uri);
     } else {
       await invoke("open_path", { path });
@@ -574,6 +590,5 @@ const handleCopyLocalPath = async (path?: string) => {
       color: var(--anime-primary);
     }
   }
-
 }
 </style>

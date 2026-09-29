@@ -33,7 +33,11 @@
           type="primary"
           round
           :disabled="!!plugin.minAppIncompatible"
-          :title="plugin.minAppIncompatible ? t('plugins.detail.appVersionBad', { app: appVersion ?? '?', min: plugin.minAppVersion }) : undefined"
+          :title="
+            plugin.minAppIncompatible
+              ? t('plugins.detail.appVersionBad', { app: appVersion ?? '?', min: plugin.minAppVersion })
+              : undefined
+          "
           @click="emit('install')"
         >
           {{ installButtonText }}
@@ -78,12 +82,12 @@ const displayName = computed(() =>
     ? resolveManifestText(props.plugin.name, locale.value) ||
       (typeof props.plugin.name === "object" && props.plugin.name["default"]) ||
       ""
-    : ""
+    : "",
 );
 
 const { actionState } = usePluginActionState(
   () => props.plugin,
-  () => props.isRemote
+  () => props.isRemote,
 );
 
 const installButtonText = computed(() => {

@@ -41,9 +41,7 @@ export interface CreateImageActionsOptions {
  * This replaces the duplicate definitions in SingleImageContextMenu, MultiImageContextMenu,
  * and the androidActionItems in Gallery.vue, Albums.vue, TaskDetail.vue.
  */
-export function createImageActions(
-  options: CreateImageActionsOptions = {}
-): ActionItem<ImageInfo>[] {
+export function createImageActions(options: CreateImageActionsOptions = {}): ActionItem<ImageInfo>[] {
   // 没办法，这样写最简单
   const uiStore = useUiStore();
   const t = (key: string) => i18n.global.t(key);
@@ -73,7 +71,7 @@ export function createImageActions(
       key: "favorite",
       label: (ctx: ActionContext<ImageInfo>) =>
         ctx.target?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"),
-      icon: (ctx: ActionContext<ImageInfo>) => ctx.target?.favorite ? StarFilled : Star,
+      icon: (ctx: ActionContext<ImageInfo>) => (ctx.target?.favorite ? StarFilled : Star),
       command: "favorite",
       visible: () => !hideSet.has("favorite"),
     },
@@ -110,9 +108,7 @@ export function createImageActions(
       command: "copyLabels",
       // 单选桌面端：标签需异步查询，无标签时点击后提示而非预先禁用
       visible: (ctx) =>
-        !hideSet.has("copyLabels") &&
-        !uiStore.isCompact &&
-        (!ctx.selectedCount || ctx.selectedCount === 1),
+        !hideSet.has("copyLabels") && !uiStore.isCompact && (!ctx.selectedCount || ctx.selectedCount === 1),
     },
     {
       key: "open",
@@ -142,9 +138,10 @@ export function createImageActions(
       icon: FolderAdd,
       command: "addToAlbum",
       // On Android single-select: only in more submenu
-      visible: (ctx) => !hideSet.has("addToAlbum") && (!multiHideSet.has("addToAlbum") 
-        || !ctx.selectedCount 
-        || ctx.selectedCount === 1) && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      visible: (ctx) =>
+        !hideSet.has("addToAlbum") &&
+        (!multiHideSet.has("addToAlbum") || !ctx.selectedCount || ctx.selectedCount === 1) &&
+        (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
     },
     {
       key: "addToHidden",
@@ -238,7 +235,8 @@ export function createImageActions(
       command: "remove",
       dividerBefore: true,
       // On Android single-select: only in more submenu
-      visible: (ctx) => !hideSet.has("remove") && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      visible: (ctx) =>
+        !hideSet.has("remove") && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
       suffix: (ctx) => {
         const count = ctx.selectedCount ?? 1;
         return count > 1 ? `(${count})` : "";
@@ -251,8 +249,7 @@ export function createImageActions(
       command: "deleteFile",
       dividerBefore: (ctx) => {
         const removeVisible =
-          !hideSet.has("remove") &&
-          (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1));
+          !hideSet.has("remove") && (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1));
         return !removeVisible;
       },
       visible: (ctx) =>
@@ -283,7 +280,7 @@ export function createImageActions(
         if (hideSet.has("favorite") || multiHideSet.has("favorite")) return false;
         return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
       },
-      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+      suffix: (ctx) => (ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : ""),
     },
     {
       key: "addToAlbum",
@@ -294,7 +291,7 @@ export function createImageActions(
         if (hideSet.has("addToAlbum") || multiHideSet.has("addToAlbum")) return false;
         return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
       },
-      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+      suffix: (ctx) => (ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : ""),
     },
     {
       key: "addToHidden",
@@ -311,7 +308,7 @@ export function createImageActions(
         if (hideSet.has("addToHidden") || multiHideSet.has("addToHidden")) return false;
         return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
       },
-      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+      suffix: (ctx) => (ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : ""),
     },
     {
       key: "wallpaper",
@@ -333,7 +330,7 @@ export function createImageActions(
         if (hideSet.has("remove")) return false;
         return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
       },
-      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+      suffix: (ctx) => (ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : ""),
     },
     {
       key: "deleteFile",
@@ -348,7 +345,7 @@ export function createImageActions(
         if (!showDelete || hideSet.has("deleteFile")) return false;
         return ctx.selectedCount !== undefined && ctx.selectedCount > 1;
       },
-      suffix: (ctx) => ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : "",
+      suffix: (ctx) => (ctx.selectedCount && ctx.selectedCount > 1 ? `(${ctx.selectedCount})` : ""),
     },
   ];
 
@@ -360,7 +357,7 @@ export function createImageActions(
 
   // Combine single and multi actions - visibility predicates handle the filtering
   const allActions = [...singleActions];
-  
+
   // Add multi-select specific actions (they'll be filtered by visibility)
   for (const multiAction of multiActions) {
     const existingIndex = allActions.findIndex((a) => a.key === multiAction.key);

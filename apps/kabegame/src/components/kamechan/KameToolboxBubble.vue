@@ -56,16 +56,19 @@ import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistr
 import { useBusyTasks } from "@/composables/useBusyTasks";
 import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";
 
-const props = withDefaults(defineProps<{
-  visible: boolean;
-  side?: "left" | "right";
-  maxWidth?: string;
-  compact?: boolean;
-}>(), {
-  side: "right",
-  maxWidth: "320px",
-  compact: false,
-});
+const props = withDefaults(
+  defineProps<{
+    visible: boolean;
+    side?: "left" | "right";
+    maxWidth?: string;
+    compact?: boolean;
+  }>(),
+  {
+    side: "right",
+    maxWidth: "320px",
+    compact: false,
+  },
+);
 
 const emit = defineEmits<{
   "open-settings": [];
@@ -284,7 +287,9 @@ const handleItemClick = (item: GlobalToolItem) => {
 
 .kame-bubble-enter-active,
 .kame-bubble-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
 }
 
 .kame-bubble-enter-from,

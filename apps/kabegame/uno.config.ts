@@ -1,2 +1,2 @@
-import config from "../../uno.config.pub"
+import config from "../../uno.config.pub";
 export default config;

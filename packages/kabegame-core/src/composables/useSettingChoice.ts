@@ -1,9 +1,5 @@
 import { type Component, computed, shallowRef } from "vue";
-import {
-  type AppSettingKey,
-  type AppSettings,
-  useSettingsStore,
-} from "../stores/settings";
+import { type AppSettingKey, type AppSettings, useSettingsStore } from "../stores/settings";
 
 type OptionItem = {
   id: string;
@@ -34,15 +30,10 @@ type StringSettingKey = {
 
 const currentChoice = shallowRef<PendingSettingChoice | null>(null);
 const choiceQueue: PendingSettingChoice[] = [];
-const pendingPromiseByKey = new Map<
-  string,
-  Promise<SettingChoiceResult | null>
->();
+const pendingPromiseByKey = new Map<string, Promise<SettingChoiceResult | null>>();
 let advanceScheduled = false;
 
-export const settingChoiceRequest = computed(
-  () => currentChoice.value?.request ?? null,
-);
+export const settingChoiceRequest = computed(() => currentChoice.value?.request ?? null);
 
 function showNextChoice() {
   if (currentChoice.value || choiceQueue.length === 0) return;
@@ -58,9 +49,7 @@ function scheduleNextChoice() {
   });
 }
 
-export function askSettingChoice(
-  req: SettingChoiceRequest,
-): Promise<SettingChoiceResult | null> {
+export function askSettingChoice(req: SettingChoiceRequest): Promise<SettingChoiceResult | null> {
   const existing = pendingPromiseByKey.get(req.key);
   if (existing) return existing;
 
@@ -99,9 +88,7 @@ export async function resolveSettingWithPrompt<K extends StringSettingKey>(
   const selected = picked.id as AppSettings[K];
   if (picked.persist) {
     // 只有用户勾选「下次保持」才写入设置；不勾选时只执行本次选择。
-    void store.save(key, selected, { source: "unconfigured_prompt" }).catch(
-      () => undefined,
-    );
+    void store.save(key, selected, { source: "unconfigured_prompt" }).catch(() => undefined);
   }
   return selected;
 }

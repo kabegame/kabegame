@@ -30,12 +30,7 @@
       </template>
 
       <template v-if="!isCompact" #aside>
-        <KbResizable
-          side="right"
-          class="albums-tree-pane"
-          v-model="treeWidth"
-          :default-size="TREE_DEFAULT_WIDTH"
-        >
+        <KbResizable side="right" class="albums-tree-pane" v-model="treeWidth" :default-size="TREE_DEFAULT_WIDTH">
           <AlbumTreePanel
             ref="albumTreePanelRef"
             :selected-id="selectedAlbumId"
@@ -49,12 +44,7 @@
       </template>
 
       <template v-if="!isCompact && detailOpen" #aside-right>
-        <KbResizable
-          side="left"
-          class="albums-detail-pane"
-          v-model="detailWidth"
-          :default-size="DETAIL_DEFAULT_WIDTH"
-        >
+        <KbResizable side="left" class="albums-detail-pane" v-model="detailWidth" :default-size="DETAIL_DEFAULT_WIDTH">
           <AlbumDetailPanel
             :album="selectedAlbum"
             :is-hidden="selectedAlbumId === HIDDEN_ALBUM_ID"
@@ -72,10 +62,7 @@
 
       <template #empty>
         <div class="album-empty fade-in">
-          <EmptyState
-            v-if="selectedAlbum?.type === 'label_dir'"
-            :primary-tip="t('albums.labelDirNoImagesHint')"
-          />
+          <EmptyState v-if="selectedAlbum?.type === 'label_dir'" :primary-tip="t('albums.labelDirNoImagesHint')" />
           <EmptyState v-else />
         </div>
       </template>
@@ -88,7 +75,14 @@
             </el-breadcrumb-item>
             <el-breadcrumb-item>
               <span class="album-breadcrumb-current">{{ selectedAlbumName || "…" }}</span>
-              <span class="album-breadcrumb-stats">{{ t("albums.detailCrumbStats", { images: selectedAlbumStats.imageCount, subAlbums: selectedAlbumStats.subAlbumCount }) }}</span>
+              <span class="album-breadcrumb-stats">
+                {{
+                  t("albums.detailCrumbStats", {
+                    images: selectedAlbumStats.imageCount,
+                    subAlbums: selectedAlbumStats.subAlbumCount,
+                  })
+                }}
+              </span>
             </el-breadcrumb-item>
           </el-breadcrumb>
         </nav>
@@ -135,11 +129,31 @@
       <AlbumTreePanel
         ref="compactAlbumTreePanelRef"
         :selected-id="selectedAlbumId"
-        @select="(id, album) => { onTreeSelect(id, album); treeDrawer.close(); }"
-        @create-album="(pid) => { openCreateDialogWithParent(pid); treeDrawer.close(); }"
-        @create-label="(pid, directory) => { openCreateDialogWithParent(pid, directory ? 'label_dir' : 'label'); treeDrawer.close(); }"
+        @select="
+          (id, album) => {
+            onTreeSelect(id, album);
+            treeDrawer.close();
+          }
+        "
+        @create-album="
+          (pid) => {
+            openCreateDialogWithParent(pid);
+            treeDrawer.close();
+          }
+        "
+        @create-label="
+          (pid, directory) => {
+            openCreateDialogWithParent(pid, directory ? 'label_dir' : 'label');
+            treeDrawer.close();
+          }
+        "
         @contextmenu="onTreeContextMenu"
-        @dblclick="(id) => { onTreeDblclick(id); treeDrawer.close(); }"
+        @dblclick="
+          (id) => {
+            onTreeDblclick(id);
+            treeDrawer.close();
+          }
+        "
       />
     </el-drawer>
 
@@ -171,11 +185,12 @@
     <ActionRenderer
       :visible="albumMenu.visible.value"
       :position="albumMenu.position.value"
-      :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
+      :actions="albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[]"
       :context="albumMenuContext"
       :z-index="albumMenu.zIndex.value"
       @close="albumMenu.hide"
-      @command="(cmd) => runAlbumCommand(cmd as AlbumCommand, albumMenuContext.target)" />
+      @command="(cmd) => runAlbumCommand(cmd as AlbumCommand, albumMenuContext.target)"
+    />
 
     <el-dialog
       :model-value="createDialog.isOpen.value"
@@ -187,10 +202,10 @@
     >
       <el-form label-width="0" @submit.prevent>
         <el-radio-group v-model="newAlbumKind" size="small" class="mb-3">
-          <el-radio-button value="normal">{{ $t('albums.kindNormal') }}</el-radio-button>
-          <el-radio-button value="label">{{ $t('albums.kindLabel') }}</el-radio-button>
-          <el-radio-button value="label_dir">{{ $t('albums.kindLabelDir') }}</el-radio-button>
-          <el-radio-button v-if="!IS_ANDROID" value="local_folder">{{ $t('albums.kindLocalFolder') }}</el-radio-button>
+          <el-radio-button value="normal">{{ $t("albums.kindNormal") }}</el-radio-button>
+          <el-radio-button value="label">{{ $t("albums.kindLabel") }}</el-radio-button>
+          <el-radio-button value="label_dir">{{ $t("albums.kindLabelDir") }}</el-radio-button>
+          <el-radio-button v-if="!IS_ANDROID" value="local_folder">{{ $t("albums.kindLocalFolder") }}</el-radio-button>
         </el-radio-group>
 
         <template v-if="isNewLabelForestAlbum">
@@ -200,7 +215,7 @@
             @keyup.enter="handleCreateAlbum"
           />
           <p v-if="newLabelKey && !newLabelKeyValid" class="local-folder-error">
-            {{ $t('albums.labelKeyInvalidHint') }}
+            {{ $t("albums.labelKeyInvalidHint") }}
           </p>
           <el-input
             v-model="newAlbumName"
@@ -228,45 +243,47 @@
         <div v-if="newAlbumIsLocalFolder" class="mt-2 flex flex-col gap-2">
           <div class="flex items-center gap-2">
             <el-button size="small" @click="pickLocalFolder">
-              {{ $t('albums.localFolder.choosePath') }}
+              {{ $t("albums.localFolder.choosePath") }}
             </el-button>
             <span class="local-folder-path" :title="newAlbumSyncFolder">
-              {{ newAlbumSyncFolder || $t('albums.localFolder.noPathSelected') }}
+              {{ newAlbumSyncFolder || $t("albums.localFolder.noPathSelected") }}
             </span>
           </div>
           <p v-if="syncFolderDuplicate" class="local-folder-error">
-            {{ $t('albums.localFolder.duplicatePathHint') }}
+            {{ $t("albums.localFolder.duplicatePathHint") }}
           </p>
           <el-checkbox v-model="newAlbumRecursive">
-            {{ $t('albums.localFolder.recursive') }}
+            {{ $t("albums.localFolder.recursive") }}
           </el-checkbox>
           <p class="local-folder-hint">
-            {{ $t('albums.localFolder.recursiveHint') }}
+            {{ $t("albums.localFolder.recursiveHint") }}
           </p>
           <p v-if="newAlbumRecursive" class="local-folder-hint">
-            {{ $t('albums.localFolder.recursiveLimits', { maxDepth: 16 }) }}
+            {{ $t("albums.localFolder.recursiveLimits", { maxDepth: 16 }) }}
           </p>
           <p class="local-folder-hint">
-            {{ $t('albums.localFolder.skipNotice') }}
+            {{ $t("albums.localFolder.skipNotice") }}
           </p>
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="createDialog.close()">{{ $t('common.cancel') }}</el-button>
-        <el-button
-          type="primary"
-          :disabled="!canSubmitCreateAlbum"
-          :loading="creatingAlbum"
-          @click="handleCreateAlbum"
-        >
-          {{ $t('albums.create') }}
+        <el-button @click="createDialog.close()">{{ $t("common.cancel") }}</el-button>
+        <el-button type="primary" :disabled="!canSubmitCreateAlbum" :loading="creatingAlbum" @click="handleCreateAlbum">
+          {{ $t("albums.create") }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog :model-value="moveDialog.isOpen.value" :z-index="moveDialog.zIndex.value" :title="$t('albums.moveToTitle')" width="420px" @update:model-value="moveDialog.close" @closed="onMoveAlbumDialogClosed">
+    <el-dialog
+      :model-value="moveDialog.isOpen.value"
+      :z-index="moveDialog.zIndex.value"
+      :title="$t('albums.moveToTitle')"
+      width="420px"
+      @update:model-value="moveDialog.close"
+      @closed="onMoveAlbumDialogClosed"
+    >
       <div class="mb-3">
-        <el-checkbox v-model="moveToRoot">{{ $t('albums.moveToRoot') }}</el-checkbox>
+        <el-checkbox v-model="moveToRoot">{{ $t("albums.moveToRoot") }}</el-checkbox>
       </div>
       <AlbumPicker
         v-show="!moveToRoot"
@@ -276,8 +293,8 @@
         :placeholder="$t('albums.selectTargetAlbum')"
       />
       <template #footer>
-        <el-button @click="moveDialog.close()">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" @click="confirmMoveAlbum">{{ $t('common.ok') }}</el-button>
+        <el-button @click="moveDialog.close()">{{ $t("common.cancel") }}</el-button>
+        <el-button type="primary" @click="confirmMoveAlbum">{{ $t("common.ok") }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -325,17 +342,9 @@ import {
   albumDetailStickySearchMode,
   rememberAlbumDetailSearchMode,
 } from "@/stores/albumDetailRoute";
-import {
-  useAlbumIdPathState,
-  lastAlbumIdOf,
-  segmentsOfAlbumIdPath,
-} from "@/composables/useAlbumIdPathState";
+import { useAlbumIdPathState, lastAlbumIdOf, segmentsOfAlbumIdPath } from "@/composables/useAlbumIdPathState";
 import { openFilePicker } from "@/api/dialog";
-import {
-  convertLocalFolderAlbumToNormal,
-  setAlbumSyncMode,
-  syncLocalFolderAlbum,
-} from "@/api/syncLocalFolder";
+import { convertLocalFolderAlbumToNormal, setAlbumSyncMode, syncLocalFolderAlbum } from "@/api/syncLocalFolder";
 import type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
 import { isLabelForestKind } from "@kabegame/core/types/album";
 import { isLabelKey } from "@/utils/labelKey";
@@ -367,9 +376,7 @@ const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
 
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID
-    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
-    : undefined
+  IS_ANDROID ? { onRefresh: handleRefresh, refreshing: isRefreshing.value } : undefined,
 );
 
 function currentUrl() {
@@ -483,10 +490,7 @@ watch(
  * 画册）；自动回落（存活校验、删除上溯）传 `history: "replace"`,修正非法状态
  * 不产生历史记录。
  */
-const selectAlbum = async (
-  id: string,
-  opts?: { history?: "push" | "replace" },
-) => {
+const selectAlbum = async (id: string, opts?: { history?: "push" | "replace" }) => {
   const target = await fetchAlbum(id);
   const chain = target?.ancestorPath || `/${id}/`;
   // 必须先 await album 落地再写查询 path：两者是同一 URL 上的两个 query 参数,
@@ -506,13 +510,15 @@ const selectAlbum = async (
 
 const onTreeSelect = async (id: string, node?: AlbumNode) => {
   if (id !== selectedAlbumId.value) {
-    const album = node ?? await fetchAlbum(id);
+    const album = node ?? (await fetchAlbum(id));
     trackAlbumEnter({ id, name: album?.name ?? "" }, "tree");
   }
   if (node?.ancestorPath) {
     await setAlbumIdPath(node.ancestorPath, { history: "push" });
     await albumDetailRouteStore.navigate({
-      query: [], sort: { field: "by-album-order", desc: false }, page: 1,
+      query: [],
+      sort: { field: "by-album-order", desc: false },
+      page: 1,
     });
   } else {
     await selectAlbum(id);
@@ -526,22 +532,19 @@ const onTreeDblclick = (id: string) => {
 };
 
 // 选中画册被删（含事件驱动删除）→ 沿祖先链上溯最近存活者，无则回落收藏
-watch(
-  [selectedAlbum, selectedAlbumLoading],
-  async ([album, loading]) => {
-    if (album || loading) return;
-    if (!selectedAlbumId.value) return;
-    const chain = segmentsOfAlbumIdPath(albumIdPath.value);
-    let fallback: string | null = null;
-    for (const id of [...chain].reverse().slice(1)) {
-      if (await fetchAlbum(id)) {
-        fallback = id;
-        break;
-      }
+watch([selectedAlbum, selectedAlbumLoading], async ([album, loading]) => {
+  if (album || loading) return;
+  if (!selectedAlbumId.value) return;
+  const chain = segmentsOfAlbumIdPath(albumIdPath.value);
+  let fallback: string | null = null;
+  for (const id of [...chain].reverse().slice(1)) {
+    if (await fetchAlbum(id)) {
+      fallback = id;
+      break;
     }
-    await selectAlbum(fallback ?? FAVORITE_ALBUM_ID, { history: "replace" });
-  },
-);
+  }
+  await selectAlbum(fallback ?? FAVORITE_ALBUM_ID, { history: "replace" });
+});
 
 // ---------- 中栏：ImageGrid adapter ----------
 const analytics = createImageAnalytics(() => ({
@@ -563,11 +566,15 @@ const albumBrowseToolbarRef = ref<InstanceType<typeof GalleryQueryBar> | null>(n
 const albumTreePanelRef = ref<InstanceType<typeof AlbumTreePanel> | null>(null);
 const compactAlbumTreePanelRef = ref<InstanceType<typeof AlbumTreePanel> | null>(null);
 
-const albumFilterFeatures: GalleryBrowseDimension[] = [
-  "plugin", "mediaType", "date", "size", "aspect",
-];
+const albumFilterFeatures: GalleryBrowseDimension[] = ["plugin", "mediaType", "date", "size", "aspect"];
 const albumSortFeatures: GallerySortField[] = [
-  "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "by-album-order",
+  "by-id",
+  "by-time",
+  "by-size",
+  "by-name",
+  "by-aspect",
+  "by-set-time",
+  "by-album-order",
 ];
 
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
@@ -580,7 +587,9 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
-const albumDriveEnabled = computed(() => !IS_ANDROID && !IS_WEB && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled);
+const albumDriveEnabled = computed(
+  () => !IS_ANDROID && !IS_WEB && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled,
+);
 const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
 
 const openVirtualDrive = async () => {
@@ -639,7 +648,7 @@ const onMoveAlbumDialogClosed = () => {
 const confirmMoveAlbum = async () => {
   const album = moveDlgAlbum.value;
   if (!album) return;
-  const pid = moveToRoot.value ? null : (moveTargetParentId.value?.trim() || null);
+  const pid = moveToRoot.value ? null : moveTargetParentId.value?.trim() || null;
   if (!moveToRoot.value && !pid) {
     ElMessage.warning(t("albums.selectTargetAlbum"));
     return;
@@ -651,9 +660,7 @@ const confirmMoveAlbum = async () => {
     ElMessage.success(t("albums.moveSuccess"));
   } catch (e: unknown) {
     const msg =
-      typeof e === "object" && e !== null && "message" in e
-        ? String((e as { message: unknown }).message)
-        : String(e);
+      typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e);
     ElMessage.error(msg || t("albums.moveFailed"));
   }
 };
@@ -686,9 +693,14 @@ const localFolderAlbums = ref<Album[]>([]);
 watch([createDialog.isOpen, newAlbumKind], async ([open, kind]) => {
   if (open && kind === "local_folder") localFolderAlbums.value = await fetchLocalFolderAlbums();
 });
-const existingSyncFolders = computed(() => new Set(localFolderAlbums.value
-  .map((album) => album.syncFolder ? normalizeSyncPath(album.syncFolder) : "")
-  .filter(Boolean)));
+const existingSyncFolders = computed(
+  () =>
+    new Set(
+      localFolderAlbums.value
+        .map((album) => (album.syncFolder ? normalizeSyncPath(album.syncFolder) : ""))
+        .filter(Boolean),
+    ),
+);
 /** 选中的同步目录已存在对应的本地文件夹画册：禁用创建并在弹窗提示。 */
 const syncFolderDuplicate = computed(() => {
   if (!newAlbumIsLocalFolder.value || !newAlbumSyncFolder.value) return false;
@@ -708,9 +720,7 @@ const isRefreshing = ref(false);
 // 新建画册的父级候选：排除系统画册与文件夹画册（其成员只能经同步产生）；
 // 标签只能建在标签森林里，普通画册不能建进标签森林
 const createAlbumParentScope = computed<AlbumTreeViewScope>(() =>
-  isNewLabelForestAlbum.value
-    ? { sections: ["label"], kinds: ["label_dir"] }
-    : { sections: ["normal"] },
+  isNewLabelForestAlbum.value ? { sections: ["label"], kinds: ["label_dir"] } : { sections: ["normal"] },
 );
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
@@ -807,9 +817,8 @@ const handleCreateAlbum = async () => {
   } catch (error: any) {
     console.error("创建画册失败:", error);
     // 提取友好的错误信息
-    const errorMessage = typeof error === "string"
-      ? error
-      : error?.message || String(error) || t("albums.createAlbumFailed");
+    const errorMessage =
+      typeof error === "string" ? error : error?.message || String(error) || t("albums.createAlbumFailed");
     ElMessage.error(errorMessage);
   } finally {
     creatingAlbum.value = false;
@@ -820,12 +829,7 @@ const handleCreateAlbum = async () => {
 const dropZone = computed<DragFileOptions>(() => ({
   plan: (items) => {
     const target = selectedAlbum.value;
-    if (
-      !target ||
-      target.id === FAVORITE_ALBUM_ID ||
-      target.id === HIDDEN_ALBUM_ID ||
-      target.type === "label_dir"
-    ) {
+    if (!target || target.id === FAVORITE_ALBUM_ID || target.id === HIDDEN_ALBUM_ID || target.type === "label_dir") {
       return null;
     }
     return buildDropPlan(items, selectedAlbumName.value);
@@ -927,11 +931,8 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       ElMessage.success(t("albums.localFolder.convertToNormalSuccess"));
     } catch (error) {
       if (error !== "cancel") {
-        const errorMessage =
-          typeof error === "string" ? error : (error as any)?.message || String(error);
-        ElMessage.error(
-          t("albums.localFolder.convertToNormalFailed", { error: errorMessage }),
-        );
+        const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
+        ElMessage.error(t("albums.localFolder.convertToNormalFailed", { error: errorMessage }));
       }
     }
     return;
@@ -949,22 +950,17 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "setLabelKey") {
     try {
-      const { value } = await ElMessageBox.prompt(
-        t("albums.labelKeyPlaceholder"),
-        t("contextMenu.setLabelKey"),
-        {
-          inputValue: album.labelKey ?? "",
-          inputValidator: (v) => isLabelKey(String(v || "").trim()) || t("albums.labelKeyInvalidHint"),
-        },
-      );
+      const { value } = await ElMessageBox.prompt(t("albums.labelKeyPlaceholder"), t("contextMenu.setLabelKey"), {
+        inputValue: album.labelKey ?? "",
+        inputValidator: (v) => isLabelKey(String(v || "").trim()) || t("albums.labelKeyInvalidHint"),
+      });
       const newKey = String(value || "").trim();
       if (!newKey || newKey === album.labelKey) return;
       await setLabelKey(id, newKey);
       ElMessage.success(t("albums.labelKeyUpdated"));
     } catch (error) {
       if (error !== "cancel" && error !== "close") {
-        const errorMessage =
-          typeof error === "string" ? error : (error as any)?.message || String(error);
+        const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
         ElMessage.error(errorMessage);
       }
     }
@@ -1003,10 +999,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   if (command === "syncNowRecursiveExisting" || command === "syncNowRecursiveFull") {
     try {
-      await syncLocalFolderAlbum(
-        id,
-        command === "syncNowRecursiveFull" ? "createMissing" : "existing",
-      );
+      await syncLocalFolderAlbum(id, command === "syncNowRecursiveFull" ? "createMissing" : "existing");
     } catch (e: any) {
       ElMessage.error(e?.message || String(e));
     }
@@ -1041,25 +1034,20 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "rename") {
     // 树上改名走 prompt
     try {
-      const { value } = await ElMessageBox.prompt(
-        t("albums.placeholderName"),
-        t("albums.title"),
-        {
-          inputValue: name,
-          inputValidator: (v) => {
-            if (!String(v || "").trim()) return t("albums.albumNameCannotBeEmpty");
-            return true;
-          },
-        }
-      );
+      const { value } = await ElMessageBox.prompt(t("albums.placeholderName"), t("albums.title"), {
+        inputValue: name,
+        inputValidator: (v) => {
+          if (!String(v || "").trim()) return t("albums.albumNameCannotBeEmpty");
+          return true;
+        },
+      });
       const newName = String(value || "").trim();
       if (!newName || newName === name) return;
       await renameAlbum(id, newName);
       ElMessage.success(t("albums.renameSuccess"));
     } catch (error) {
       if (error !== "cancel") {
-        const errorMessage =
-          typeof error === "string" ? error : (error as any)?.message || String(error);
+        const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
         ElMessage.error(errorMessage || t("albums.renameFailed"));
       }
     }
@@ -1084,7 +1072,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
         ? t("albums.deleteLocalFolderAlbumConfirm", { name })
         : t("albums.deleteAlbumConfirm", { name }),
       t("albums.confirmDelete"),
-      { type: "warning" }
+      { type: "warning" },
     );
     await deleteAlbum(id);
     // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
@@ -1097,7 +1085,6 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
     }
   }
 };
-
 </script>
 
 <style scoped lang="scss">
@@ -1133,9 +1120,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
  * 整页也会凭空多出 20px 可滚区间。两个值同源，改页头常量即整体跟着走。 */
 .albums-page :deep(.albums-grid-body.has-aside) {
   --kb-image-grid-aside-top: var(--albums-header-block);
-  --kb-image-grid-aside-height: calc(
-    100vh - var(--albums-page-pad) * 2 - var(--albums-header-block)
-  );
+  --kb-image-grid-aside-height: calc(100vh - var(--albums-page-pad) * 2 - var(--albums-header-block));
 }
 
 /* 三栏模式中栏：树列与内容之间留 20px；右侧靠页内边距收口（与 Gallery 同缘）。

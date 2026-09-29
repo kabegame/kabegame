@@ -11,11 +11,7 @@
       <template v-for="card in cards" :key="card.kind === 'folderSync' ? `${card.kind}-${card.albumId}` : card.kind">
         <BusyOrganizeCard v-if="card.kind === 'organize'" />
         <BusyHiddenCleanupCard v-else-if="card.kind === 'hiddenCleanup'" />
-        <BusyFolderSyncCard
-          v-else-if="card.kind === 'folderSync'"
-          :album-id="card.albumId"
-          @close="emit('close')"
-        />
+        <BusyFolderSyncCard v-else-if="card.kind === 'folderSync'" :album-id="card.albumId" @close="emit('close')" />
         <BusyUpdaterCard v-else />
       </template>
     </div>

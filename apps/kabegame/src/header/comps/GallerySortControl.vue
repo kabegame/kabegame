@@ -11,16 +11,10 @@
     </el-button>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item
-          command="asc"
-          :class="{ 'is-active': !galleryRouteStore.sort.desc }"
-        >
+        <el-dropdown-item command="asc" :class="{ 'is-active': !galleryRouteStore.sort.desc }">
           {{ sortAscLabel }}
         </el-dropdown-item>
-        <el-dropdown-item
-          command="desc"
-          :class="{ 'is-active': galleryRouteStore.sort.desc }"
-        >
+        <el-dropdown-item command="desc" :class="{ 'is-active': galleryRouteStore.sort.desc }">
           {{ sortDescLabel }}
         </el-dropdown-item>
       </el-dropdown-menu>
@@ -39,12 +33,8 @@ import { queryUsesDimension } from "@/utils/galleryPath";
 const route = useRoute();
 const galleryRouteStore = useGalleryRouteStore();
 
-const isSizeRoot = computed(() =>
-  queryUsesDimension(galleryRouteStore.query, "size")
-);
-const isAspectRoot = computed(() =>
-  queryUsesDimension(galleryRouteStore.query, "aspect")
-);
+const isSizeRoot = computed(() => queryUsesDimension(galleryRouteStore.query, "size"));
+const isAspectRoot = computed(() => queryUsesDimension(galleryRouteStore.query, "aspect"));
 
 const { t } = useI18n();
 

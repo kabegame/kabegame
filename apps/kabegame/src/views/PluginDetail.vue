@@ -77,7 +77,8 @@ const goBack = () => {
 // 与页面头部同一套判据：决定确认弹窗与成功提示用「安装/更新/重新安装」哪一套文案
 const installedMatch = computed(() => pluginStore.plugins.find((p) => p.id === plugin.value?.id) ?? null);
 const isUpdateFlow = computed(
-  () => !!installedMatch.value && !!plugin.value && isUpdateAvailable(installedMatch.value.version, plugin.value.version)
+  () =>
+    !!installedMatch.value && !!plugin.value && isUpdateAvailable(installedMatch.value.version, plugin.value.version),
 );
 const isReinstallFlow = computed(() => !!installedMatch.value && !isUpdateFlow.value);
 
@@ -117,9 +118,13 @@ const handleUninstall = async () => {
   if (!plugin.value) return;
 
   try {
-    await ElMessageBox.confirm(t("plugins.confirmUninstall", { name: pluginName(plugin.value) }), t("plugins.confirmDelete"), {
-      type: "warning",
-    });
+    await ElMessageBox.confirm(
+      t("plugins.confirmUninstall", { name: pluginName(plugin.value) }),
+      t("plugins.confirmDelete"),
+      {
+        type: "warning",
+      },
+    );
 
     const installed = pluginStore.plugins.find((p) => p.id === plugin.value!.id);
     if (installed) {
@@ -232,7 +237,7 @@ function currentUrl() {
 
 function trackDocImageAction(
   command: "previewOpen" | "previewClose",
-  payload: { index: number; count: number; src: string; alt: string }
+  payload: { index: number; count: number; src: string; alt: string },
 ) {
   if (!IS_WEB) return;
   trackEvent("plugin_detail_doc_image_action", {
@@ -257,7 +262,7 @@ watch(
   () => pluginStore.plugins.length,
   () => {
     if (!isRemote.value) void reload();
-  }
+  },
 );
 </script>
 

@@ -35,12 +35,8 @@ export function useImageOperations(
 ) {
   const settingsStore = useSettingsStore();
 
-  const { set: setWallpaperRotationEnabled } = useSettingKeyState(
-    "wallpaperRotationEnabled",
-  );
-  const { set: setWallpaperRotationAlbumId } = useSettingKeyState(
-    "wallpaperRotationAlbumId",
-  );
+  const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
+  const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
   const detectImageMimeByPath = (path: string): string => {
     const ext = (path.split(".").pop() || "").toLowerCase();
     if (ext === "png") return "image/png";
@@ -159,11 +155,7 @@ export function useImageOperations(
             if (!ctx) throw new Error("Failed to create canvas context");
             ctx.drawImage(bitmap, 0, 0);
             return await new Promise<Blob>((resolve, reject) => {
-              canvas.toBlob(
-                (b) =>
-                  b ? resolve(b) : reject(new Error("canvas.toBlob failed")),
-                "image/png",
-              );
+              canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("canvas.toBlob failed"))), "image/png");
             });
           } finally {
             try {
@@ -189,11 +181,7 @@ export function useImageOperations(
           if (!ctx) throw new Error("Failed to create canvas context");
           ctx.drawImage(img, 0, 0);
           return await new Promise<Blob>((resolve, reject) => {
-            canvas.toBlob(
-              (b) =>
-                b ? resolve(b) : reject(new Error("canvas.toBlob failed")),
-              "image/png",
-            );
+            canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("canvas.toBlob failed"))), "image/png");
           });
         } finally {
           URL.revokeObjectURL(url);
@@ -264,8 +252,7 @@ export function useImageOperations(
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
       const includesCurrent =
-        !!currentWallpaperImageId.value &&
-        imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
+        !!currentWallpaperImageId.value && imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
       const result = await mutate((view) =>
         invoke<{
@@ -279,9 +266,7 @@ export function useImageOperations(
         currentWallpaperImageId.value = null;
       }
 
-      ElMessage.success(
-        i18n.global.t("common.deletedCountSuccess", { count }),
-      );
+      ElMessage.success(i18n.global.t("common.deletedCountSuccess", { count }));
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
       console.error("删除失败:", error);
@@ -298,14 +283,10 @@ export function useImageOperations(
 
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
-      await mutate((view) =>
-        addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds, { view }),
-      );
+      await mutate((view) => addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds, { view }));
 
       ElMessage.success(
-        count > 1
-          ? i18n.global.t("contextMenu.hiddenCount", { count })
-          : i18n.global.t("contextMenu.hiddenOne"),
+        count > 1 ? i18n.global.t("contextMenu.hiddenCount", { count }) : i18n.global.t("contextMenu.hiddenOne"),
       );
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
@@ -321,15 +302,9 @@ export function useImageOperations(
   const toggleFavoriteForImages = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length === 0) return;
     const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
-    const toChange = imagesToProcess.filter(
-      (img) => (img.favorite ?? false) !== desiredFavorite,
-    );
+    const toChange = imagesToProcess.filter((img) => (img.favorite ?? false) !== desiredFavorite);
     if (toChange.length === 0) {
-      ElMessage.info(
-        desiredFavorite
-          ? i18n.global.t("common.favorited")
-          : i18n.global.t("common.unfavorited"),
-      );
+      ElMessage.info(desiredFavorite ? i18n.global.t("common.favorited") : i18n.global.t("common.unfavorited"));
       return;
     }
 
@@ -346,7 +321,10 @@ export function useImageOperations(
       ElMessage.error(i18n.global.t("common.operationFailed"));
       return;
     }
-    patch(succeeded.map((image) => image.id), { favorite: desiredFavorite });
+    patch(
+      succeeded.map((image) => image.id),
+      { favorite: desiredFavorite },
+    );
 
     ElMessage.success(
       desiredFavorite
@@ -413,17 +391,13 @@ export function useImageOperations(
         // 3. 将选中的图片添加到画册
         const imageIds = imagesToProcess.map((img) => img.id);
         try {
-          await mutate((view) =>
-            addImagesToAlbum(createdAlbum.id, imageIds, { view }),
-          );
+          await mutate((view) => addImagesToAlbum(createdAlbum.id, imageIds, { view }));
         } catch (error: any) {
           // 提取友好的错误信息
           const errorMessage =
             typeof error === "string"
               ? error
-              : error?.message ||
-                String(error) ||
-                i18n.global.t("common.addToAlbumFailed");
+              : error?.message || String(error) || i18n.global.t("common.addToAlbumFailed");
           ElMessage.error(errorMessage);
           throw error;
         }
@@ -453,10 +427,7 @@ export function useImageOperations(
     } catch (error: any) {
       console.error("设置壁纸失败:", error);
       // 提取友好的错误信息
-      const errorMessage =
-        typeof error === "string"
-          ? error
-          : error?.message || String(error) || "未知错误";
+      const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "未知错误";
       ElMessage.error(`${i18n.global.t("common.wallpaperSetFailed")}: ${errorMessage}`);
     }
   };

@@ -20,11 +20,5 @@ export function displayImageMimeType(t: string | undefined): string {
  * 必须与 Rust `native_metadata::supports_native_metadata` 的格式集保持一致。
  */
 export function isNativeMetadataEligible(t?: string): boolean {
-  return [
-    "image/jpg",
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "image/gif",
-  ].includes((t ?? "").trim().toLowerCase());
+  return ["image/jpg", "image/jpeg", "image/png", "image/webp", "image/gif"].includes((t ?? "").trim().toLowerCase());
 }

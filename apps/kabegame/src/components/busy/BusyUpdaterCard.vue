@@ -5,15 +5,8 @@
       <span class="min-w-0 truncate text-[13px] font-700 text-[var(--anime-text-primary)]">
         {{ t("updater.downloadingTitle") }}
       </span>
-      <span class="ml-auto shrink-0 font-mono text-xs text-[#8b6b8f]">
-        {{ store.downloadPercent }}%
-      </span>
-      <button
-        type="button"
-        class="busy-task-cancel"
-        :title="t('common.cancel')"
-        @click.stop="cancelDownload"
-      >
+      <span class="ml-auto shrink-0 font-mono text-xs text-[#8b6b8f]">{{ store.downloadPercent }}%</span>
+      <button type="button" class="busy-task-cancel" :title="t('common.cancel')" @click.stop="cancelDownload">
         <el-icon class="text-[13px]"><Close /></el-icon>
       </button>
     </div>

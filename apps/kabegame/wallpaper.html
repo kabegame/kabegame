@@ -95,7 +95,9 @@
       .top.slide.enter {
         opacity: 1;
         transform: translateX(0);
-        transition: opacity 800ms ease, transform 800ms ease;
+        transition:
+          opacity 800ms ease,
+          transform 800ms ease;
       }
 
       .top.zoom.prep {
@@ -106,7 +108,9 @@
       .top.zoom.enter {
         opacity: 1;
         transform: scale(1);
-        transition: opacity 900ms ease, transform 900ms ease;
+        transition:
+          opacity 900ms ease,
+          transform 900ms ease;
       }
 
       /* debug panel */
@@ -115,8 +119,7 @@
         left: 12px;
         top: 12px;
         z-index: 999999;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-          monospace;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         font-size: 12px;
         line-height: 1.35;
         padding: 10px 12px;
@@ -163,21 +166,13 @@
             loop
             playsinline
           ></video>
-          <video
-            id="top-video"
-            class="wallpaper-img top"
-            style="display: none"
-            autoplay
-            muted
-            loop
-            playsinline
-          ></video>
+          <video id="top-video" class="wallpaper-img top" style="display: none" autoplay muted loop playsinline></video>
           <!-- Tile 模式元素（默认隐藏，由 JS 控制显示） -->
-          <div id="base-tile" class="wallpaper-tile base" style="display: none;"></div>
-          <div id="top-tile" class="wallpaper-tile top" style="display: none;"></div>
+          <div id="base-tile" class="wallpaper-tile base" style="display: none"></div>
+          <div id="top-tile" class="wallpaper-tile top" style="display: none"></div>
         </div>
         <!-- 调试面板（开发模式） -->
-        <div id="debug-panel" class="debug-panel" style="display: none;"></div>
+        <div id="debug-panel" class="debug-panel" style="display: none"></div>
       </div>
     </div>
     <script type="module" src="/src/wallpaper.ts"></script>

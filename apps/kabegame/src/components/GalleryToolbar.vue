@@ -15,7 +15,9 @@
           @click="clearAllFilters"
         >
           <el-icon><Filter /></el-icon>
-          <span class="subtitle-clear-filter__badge"><el-icon><Close /></el-icon></span>
+          <span class="subtitle-clear-filter__badge">
+            <el-icon><Close /></el-icon>
+          </span>
         </button>
       </span>
     </template>
@@ -64,10 +66,7 @@ import {
   type GalleryQueryPatch,
   type GallerySort,
 } from "@/utils/galleryPath";
-import {
-  galleryLabelForFilter,
-  gallerySortOrderLabels,
-} from "@/utils/galleryFilterLabels";
+import { galleryLabelForFilter, gallerySortOrderLabels } from "@/utils/galleryFilterLabels";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import {
@@ -93,7 +92,7 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
-  sort: () => ({ field: "by-id", desc: false } as GallerySort),
+  sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   pageSize: 100,
   providerContextPrefix: "",
 });
@@ -133,9 +132,7 @@ function onQueryNavigate(patch: GalleryQueryPatch, options?: { push?: boolean })
 }
 
 // no-album 与 hide 并列，是路由上下文不是查询：天然不点亮过滤指示、不被清除。
-const isFilterIndicatorActive = computed(() =>
-  hasActiveQuery(galleryRouteStore.query)
-);
+const isFilterIndicatorActive = computed(() => hasActiveQuery(galleryRouteStore.query));
 
 function clearAllFilters() {
   onQueryNavigate({ query: [], page: 1 }, { push: true });
@@ -149,10 +146,7 @@ const labelContext = computed(() => ({
 }));
 
 const filterFoldLabel = computed(() =>
-  galleryLabelForFilter(
-    filterSetToSingleFilter(simpleFilters.value ?? {}),
-    labelContext.value,
-  ),
+  galleryLabelForFilter(filterSetToSingleFilter(simpleFilters.value ?? {}), labelContext.value),
 );
 
 const sortFoldLabel = computed(() => {
@@ -207,12 +201,7 @@ const showIds = computed(() => {
   if (uiStore.isCompact) {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
-  return [
-    HeaderFeatureId.Refresh,
-    HeaderFeatureId.FailedImages,
-    HeaderFeatureId.TaskDrawer,
-    HeaderFeatureId.Collect,
-  ];
+  return [HeaderFeatureId.Refresh, HeaderFeatureId.FailedImages, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
 });
 
 const foldIds = computed(() => {
@@ -227,12 +216,7 @@ const foldIds = computed(() => {
 
 const headerStore = useHeaderStore();
 watch(
-  [
-    sortFoldLabel,
-    filterFoldLabel,
-    () => props.pageSize,
-    () => failedImagesStore.allFailed.length,
-  ],
+  [sortFoldLabel, filterFoldLabel, () => props.pageSize, () => failedImagesStore.allFailed.length],
   () => {
     if (!uiStore.isCompact) return;
     headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
@@ -335,7 +319,9 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
   background: var(--anime-bg-card);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color 0.18s ease, background-color 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease;
 
   &:hover {
     border-color: var(--anime-primary);

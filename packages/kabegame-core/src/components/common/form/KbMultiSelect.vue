@@ -36,7 +36,7 @@ const props = withDefaults(
     placeholder?: string;
     allowUnset?: boolean;
   }>(),
-  { allowUnset: false }
+  { allowUnset: false },
 );
 
 const emit = defineEmits<{
@@ -63,7 +63,9 @@ const normalizedOptions = computed(() => {
 });
 
 const currentList = computed<string[]>(() => {
-  return Array.isArray(props.modelValue) ? (props.modelValue as unknown[]).map((x) => `${x}`.trim()).filter(Boolean) : [];
+  return Array.isArray(props.modelValue)
+    ? (props.modelValue as unknown[]).map((x) => `${x}`.trim()).filter(Boolean)
+    : [];
 });
 
 /** 区分「插件预设选项」与「用户手打新增」，后者用虚线 pill 标出 */
@@ -98,7 +100,9 @@ function onAddSelect(value: string | null) {
   border: 1px solid var(--anime-border);
   border-radius: 12px;
   background: #fff;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  transition:
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
 }
 .var-multi:focus-within {
   border-color: var(--anime-primary);

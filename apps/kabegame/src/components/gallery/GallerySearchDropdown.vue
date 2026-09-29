@@ -8,7 +8,11 @@
     :chip-display="chipDisplay"
     :title="chipTitle"
     :negated="negated"
-    @update:model-value="(value) => { if (value === null) commit(''); }"
+    @update:model-value="
+      (value) => {
+        if (value === null) commit('');
+      }
+    "
   >
     <template #icon><Search /></template>
     <template #panel="{ close }">
@@ -16,11 +20,7 @@
            w-0!+min-w-full 退出宽度测量（el-input 的固有宽度有 440px、整段说明的
            max-content 更宽，任一个都会把 w-max 撑回去），定完宽再撑满。 -->
       <div class="w-max max-w-[calc(100vw-48px)] p-3">
-        <KbTab
-          :model-value="tabMode"
-          :items="searchModeItems"
-          @update:model-value="onTabSelect"
-        />
+        <KbTab :model-value="tabMode" :items="searchModeItems" @update:model-value="onTabSelect" />
         <KbText
           :model-value="draft"
           class="mt-3 w-0! min-w-full"
@@ -134,9 +134,7 @@ onBeforeUnmount(clearDebounce);
 /** chip 上省掉的维度名与取值在 tooltip 里补回来（工具条的 value / icon 档）。 */
 const chipTitle = computed(() => {
   const label = t("gallery.advancedChipSearch");
-  const value = props.query.trim()
-    ? `${searchModeLabel(props.mode)}：${props.query}`
-    : t("gallery.filterAnyKeyword");
+  const value = props.query.trim() ? `${searchModeLabel(props.mode)}：${props.query}` : t("gallery.filterAnyKeyword");
   return `${label} · ${value}`;
 });
 
@@ -152,9 +150,7 @@ function searchModeLabel(mode: GallerySearchMode): string {
 }
 
 /** tab 上 `label` / `label-tree` 合并为一个「标签」tab，差别由面板里的勾选表达。 */
-const tabMode = computed<GallerySearchMode>(() =>
-  props.mode === "label-tree" ? "label" : props.mode,
-);
+const tabMode = computed<GallerySearchMode>(() => (props.mode === "label-tree" ? "label" : props.mode));
 
 function onTabSelect(next: GallerySearchMode) {
   // 再点一次「标签」tab 不丢掉「包含子标签」
@@ -165,10 +161,7 @@ function onTabSelect(next: GallerySearchMode) {
 /** 当前 mode 不在允许集合里（分享来的 URL 落到受限页）时把它临时补进 tab 列表：
  *  既不静默改写用户的查询语义，也让人能一眼看见并切走；切走后该 tab 自然消失。 */
 const visibleModes = computed<readonly GallerySearchMode[]>(() => {
-  const modes: GallerySearchMode[] = [
-    GALLERY_SEARCH_ANY,
-    ...props.modes.filter((mode) => mode !== "label-tree"),
-  ];
+  const modes: GallerySearchMode[] = [GALLERY_SEARCH_ANY, ...props.modes.filter((mode) => mode !== "label-tree")];
   return modes.includes(tabMode.value) ? modes : [...modes, tabMode.value];
 });
 

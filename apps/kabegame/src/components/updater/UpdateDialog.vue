@@ -17,23 +17,23 @@
       <div class="update-footer">
         <span class="footer-info">
           <span v-if="store.currentVersion" class="current-version">
-            {{ t('updater.currentVersion', { version: store.currentVersion }) }}
+            {{ t("updater.currentVersion", { version: store.currentVersion }) }}
           </span>
           <span v-if="store.lastDownloadError" class="download-error">{{ store.lastDownloadError }}</span>
-          <span v-else-if="showNoAssetHint" class="no-asset-hint">{{ t('updater.noAssetHint') }}</span>
+          <span v-else-if="showNoAssetHint" class="no-asset-hint">{{ t("updater.noAssetHint") }}</span>
         </span>
         <span class="footer-actions">
-          <el-button text @click="active && openRelease(active)">{{ t('updater.viewOnGithub') }}</el-button>
+          <el-button text @click="active && openRelease(active)">{{ t("updater.viewOnGithub") }}</el-button>
           <el-button
             v-if="active && canDownload(active)"
             type="primary"
             :loading="store.busy"
             @click="onDownload(active)"
           >
-            {{ t('updater.download') }}
+            {{ t("updater.download") }}
           </el-button>
           <el-button v-else type="primary" @click="active && openRelease(active)">
-            {{ t('updater.openReleasePage') }}
+            {{ t("updater.openReleasePage") }}
           </el-button>
         </span>
       </div>
@@ -56,7 +56,11 @@ const { t } = useI18n();
 const store = useUpdaterStore();
 
 const modal = useModal({ onClose: () => store.closeDialog() });
-watch(() => store.dialogOpen, (v) => v ? modal.open() : modal.close(), { immediate: true });
+watch(
+  () => store.dialogOpen,
+  (v) => (v ? modal.open() : modal.close()),
+  { immediate: true },
+);
 
 const releases = computed(() => store.releases);
 const activeTab = ref("");
@@ -72,13 +76,9 @@ watch(
   { immediate: true },
 );
 
-const active = computed(
-  () => releases.value.find((r) => r.tag === activeTab.value) ?? releases.value[0] ?? null,
-);
+const active = computed(() => releases.value.find((r) => r.tag === activeTab.value) ?? releases.value[0] ?? null);
 
-const tabItems = computed<KbTabItem[]>(() =>
-  releases.value.map((r) => ({ name: r.tag, label: r.tag })),
-);
+const tabItems = computed<KbTabItem[]>(() => releases.value.map((r) => ({ name: r.tag, label: r.tag })));
 
 // changelog 渲染缓存：按 tag 缓存，但 body 变化（如发布后编辑了 release notes）时失效重渲染
 const bodyCache = new Map<string, { body: string; html: string }>();

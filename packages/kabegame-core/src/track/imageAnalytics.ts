@@ -33,9 +33,7 @@ export function imageAnalyticsPayload(images: ImageInfo[]): Record<string, unkno
     const image = images[0];
     return {
       ...base,
-      image: image
-        ? imageAnalyticsItem(image)
-        : null,
+      image: image ? imageAnalyticsItem(image) : null,
     };
   }
   return {

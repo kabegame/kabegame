@@ -1,31 +1,15 @@
 <template>
   <!-- 缩进量只有 indentPx 一个来源：行的 padding-left 与 DnD 命中/插入线共用，
        避免 CSS 里写死 16px 而 DnD 按另一个值算 -->
-  <div
-    class="kb-tree-panel relative flex min-h-0 flex-1 flex-col"
-    :style="{ '--kb-tree-indent': `${indentPx}px` }"
-  >
+  <div class="kb-tree-panel relative flex min-h-0 flex-1 flex-col" :style="{ '--kb-tree-indent': `${indentPx}px` }">
     <!-- el-scrollbar 美化滚动条（浮层滑块不占位）；滚动元素是内部 wrap，
          scrollerRef 经 wrapRef 继续供 DnD / sticky 使用，坐标契约不变 -->
-    <el-scrollbar
-      ref="scrollbarRef"
-      class="min-h-0 flex-1"
-      wrap-class="kb-tree-panel__scroller"
-      view-class="relative"
-    >
+    <el-scrollbar ref="scrollbarRef" class="min-h-0 flex-1" wrap-class="kb-tree-panel__scroller" view-class="relative">
       <template v-for="row in rows" :key="row.key">
-        <div
-          v-if="row.kind === 'separator'"
-          class="flex items-center px-1.5"
-          :style="{ height: `${rowHeight}px` }"
-        >
+        <div v-if="row.kind === 'separator'" class="flex items-center px-1.5" :style="{ height: `${rowHeight}px` }">
           <div class="kb-tree-panel__separator h-px flex-1" />
         </div>
-        <div
-          v-else-if="row.kind === 'section-header'"
-          class="flex items-center"
-          :style="{ height: `${rowHeight}px` }"
-        >
+        <div v-else-if="row.kind === 'section-header'" class="flex items-center" :style="{ height: `${rowHeight}px` }">
           <slot name="section-header" :section-id="row.sectionId" />
         </div>
         <button
@@ -134,24 +118,27 @@ import type { TreeDndController, TreeNodeHandle, TreeRowState } from "./types";
  * 模型由宿主创建（useTreeModel）后经 `model` prop 传入——数据获取、
  * 展开策略、过滤全在宿主侧，本组件只负责渲染与手势。
  */
-const props = withDefaults(defineProps<{
-  model: TreeModel<T>;
-  dnd?: TreeDndController<T> | null;
-  /** 等高行常量：sticky 与 DnD 命中共用；行（含分隔线/小节标题）一律此高度。 */
-  rowHeight?: number;
-  stickyHeaders?: boolean;
-  rowState?: (element: T) => TreeRowState;
-  /** 返回 true 时行点击视为展开/折叠而非选择（对应旧 selectable=false 的行为）。 */
-  rowClickToggles?: (element: T) => boolean;
-  /** 行名（DnD 浮影缺省文本用）。 */
-  getRowLabel?: (element: T) => string;
-  indentPx?: number;
-}>(), {
-  dnd: null,
-  rowHeight: 32,
-  stickyHeaders: true,
-  indentPx: 16,
-});
+const props = withDefaults(
+  defineProps<{
+    model: TreeModel<T>;
+    dnd?: TreeDndController<T> | null;
+    /** 等高行常量：sticky 与 DnD 命中共用；行（含分隔线/小节标题）一律此高度。 */
+    rowHeight?: number;
+    stickyHeaders?: boolean;
+    rowState?: (element: T) => TreeRowState;
+    /** 返回 true 时行点击视为展开/折叠而非选择（对应旧 selectable=false 的行为）。 */
+    rowClickToggles?: (element: T) => boolean;
+    /** 行名（DnD 浮影缺省文本用）。 */
+    getRowLabel?: (element: T) => string;
+    indentPx?: number;
+  }>(),
+  {
+    dnd: null,
+    rowHeight: 32,
+    stickyHeaders: true,
+    indentPx: 16,
+  },
+);
 
 const emit = defineEmits<{
   "row-click": [element: T];

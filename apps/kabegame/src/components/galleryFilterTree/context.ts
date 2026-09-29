@@ -1,10 +1,4 @@
-import {
-  computed,
-  inject,
-  provide,
-  type ComputedRef,
-  type InjectionKey,
-} from "vue";
+import { computed, inject, provide, type ComputedRef, type InjectionKey } from "vue";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
 import { listen } from "@/api/rpc";
 import { withGalleryPrefix } from "@/utils/path";
@@ -56,8 +50,7 @@ export interface GalleryFilterTreeContext {
   registerRefreshTarget: (target: RefreshTarget) => () => void;
 }
 
-export const GalleryFilterTreeContextKey: InjectionKey<GalleryFilterTreeContext> =
-  Symbol("GalleryFilterTreeContext");
+export const GalleryFilterTreeContextKey: InjectionKey<GalleryFilterTreeContext> = Symbol("GalleryFilterTreeContext");
 
 /**
  * @deprecated 树基座迁移后 ctx 改为显式传参（createGalleryFacetSource(ctx, deps)），
@@ -90,11 +83,7 @@ export function joinProviderPath(...parts: Array<string | undefined | null>) {
 }
 
 export function providerPathSegment(path = "") {
-  return normalizeProviderPath(path)
-    .split("/")
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join("/");
+  return normalizeProviderPath(path).split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
 export function pluginExtendKey(pluginId: string, extendPath = "") {
@@ -113,13 +102,7 @@ export function pluginPath(prefix: string, pluginId: string) {
 }
 
 export function pluginExtendPath(prefix: string, pluginId: string, extendPath = "") {
-  return joinProviderPath(
-    prefix,
-    "plugin",
-    encodeURIComponent(pluginId),
-    "extend",
-    providerPathSegment(extendPath)
-  );
+  return joinProviderPath(prefix, "plugin", encodeURIComponent(pluginId), "extend", providerPathSegment(extendPath));
 }
 
 export function isProviderLeaf(entry: ProviderChildDir) {
@@ -130,16 +113,10 @@ export function isProviderPlain(entry: ProviderChildDir) {
   return entry.meta?.plain === true;
 }
 
-export async function listProviderDirs(
-  path: string,
-  withCount = true,
-): Promise<ProviderChildDir[]> {
+export async function listProviderDirs(path: string, withCount = true): Promise<ProviderChildDir[]> {
   const entries = await pathqlList(withGalleryPrefix(path), withCount);
   return (Array.isArray(entries) ? entries : []).filter(
-    (entry): entry is ProviderChildDir =>
-      !!entry &&
-      typeof entry.name === "string" &&
-      entry.name.trim().length > 0
+    (entry): entry is ProviderChildDir => !!entry && typeof entry.name === "string" && entry.name.trim().length > 0,
   );
 }
 
@@ -180,10 +157,8 @@ export function listProviderDirsPure(path: string): Promise<ProviderChildDir[]> 
 export function useProviderTreeList() {
   const context = useGalleryFilterTreeContext();
   const deltaMode = computed(() => !!context.countBaseline);
-  const listPathForSegment = (segment: string) =>
-    (context.listPathForSegment ?? context.pathForSegment)(segment);
-  const listDirs = (path: string) =>
-    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(path);
+  const listPathForSegment = (segment: string) => (context.listPathForSegment ?? context.pathForSegment)(segment);
+  const listDirs = (path: string) => (deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(path));
   return { deltaMode, listPathForSegment, listDirs };
 }
 
@@ -242,12 +217,8 @@ export function filterFromTreeSegment(segment: string): GalleryFilter {
     case "plugin": {
       const pluginId = decodeURIComponent(segs[1] ?? "");
       if (!pluginId) return { type: "all" };
-      const extendPath = segs[2] === "extend"
-        ? segs.slice(3).map(decodeURIComponent).join("/")
-        : "";
-      return extendPath
-        ? { type: "plugin", pluginId, extendPath }
-        : { type: "plugin", pluginId };
+      const extendPath = segs[2] === "extend" ? segs.slice(3).map(decodeURIComponent).join("/") : "";
+      return extendPath ? { type: "plugin", pluginId, extendPath } : { type: "plugin", pluginId };
     }
     case "date": {
       const dateSegment = dateFilterSegment(segs.slice(1));
@@ -257,9 +228,7 @@ export function filterFromTreeSegment(segment: string): GalleryFilter {
       const kind = segs[1];
       if (kind !== "image" && kind !== "video") return { type: "all" };
       const format = segs[2] ? decodeURIComponent(segs[2]) : "";
-      return format
-        ? { type: "media-type", kind, format }
-        : { type: "media-type", kind };
+      return format ? { type: "media-type", kind, format } : { type: "media-type", kind };
     }
     case "size":
       return segs[1] ? { type: "size", range: segs[1] } : { type: "all" };
@@ -278,7 +247,7 @@ export function pathForTreeSegment(
 ) {
   const normalized = normalizeProviderPath(segment);
   // 上下文可能结束于 no-album/filter_comb；空过滤应计数该叶，而非不存在的 all 子项。
-  const countPath = (body: string) => prefix ? queryRuntimePath(body, prefix) : body;
+  const countPath = (body: string) => (prefix ? queryRuntimePath(body, prefix) : body);
   if (!dimension) {
     return countPath(normalized || "all");
   }
@@ -305,8 +274,7 @@ export function isSameGalleryFilter(a: GalleryFilter, b: GalleryFilter) {
       return (
         b.type === "plugin" &&
         b.pluginId === a.pluginId &&
-        normalizeProviderPath(b.extendPath ?? "") ===
-          normalizeProviderPath(a.extendPath ?? "")
+        normalizeProviderPath(b.extendPath ?? "") === normalizeProviderPath(a.extendPath ?? "")
       );
     case "date-range":
       return b.type === "date-range" && b.start === a.start && b.end === a.end;

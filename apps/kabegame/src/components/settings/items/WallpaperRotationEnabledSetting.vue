@@ -1,7 +1,11 @@
 <template>
   <div class="flex items-center gap-1">
-    <el-switch v-model="localValue" :disabled="props.disabled || disabled || wallpaperModeSwitching"
-      :loading="showDisabled" @change="(v) => handleChange(v === true)" />
+    <el-switch
+      v-model="localValue"
+      :disabled="props.disabled || disabled || wallpaperModeSwitching"
+      :loading="showDisabled"
+      @change="(v) => handleChange(v === true)"
+    />
     <el-tooltip v-if="IS_ANDROID && isOptimized" :content="$t('common.batteryOptimizationTooltip')" placement="top">
       <el-button link type="warning" class="!p-1 shrink-0" @click="onBatteryIconClick">
         <el-icon :size="18"><Lightning /></el-icon>
@@ -40,7 +44,7 @@ watch(
   (v) => {
     localValue.value = !!v;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const handleChange = async (value: boolean) => {

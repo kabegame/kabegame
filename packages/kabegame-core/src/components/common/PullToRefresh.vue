@@ -9,10 +9,7 @@
   >
     <!-- 出现容器：圆圈从该区域顶部向下出现 -->
     <div class="pull-to-refresh-head">
-      <div
-        class="pull-to-refresh-indicator"
-        :style="{ transform: `translateX(-50%) translateY(${pullDistance}px)` }"
-      >
+      <div class="pull-to-refresh-indicator" :style="{ transform: `translateX(-50%) translateY(${pullDistance}px)` }">
         <div class="spinner-wrapper">
           <div class="spinner" :class="{ 'is-spinning': isRefreshing }">
             <svg viewBox="0 0 24 24" class="spinner-svg">
@@ -25,7 +22,7 @@
                 stroke-width="2"
                 stroke-linecap="round"
                 :stroke-dasharray="circumference"
-                :stroke-dashoffset="circumference - (pullProgress * circumference)"
+                :stroke-dashoffset="circumference - pullProgress * circumference"
                 class="spinner-circle"
               />
             </svg>
@@ -84,31 +81,31 @@ const circumference = computed(() => 2 * Math.PI * 10); // r=10
 
 const handleTouchStart = (e: TouchEvent) => {
   if (props.disabled || isRefreshing.value) return;
-  
+
   const touch = e.touches[0];
   if (!touch) return;
-  
+
   const container = containerRef.value;
   if (!container) return;
-  
+
   // 从触摸目标向上遍历 DOM 树，找到最近的滚动容器
   // 这样可以正确检测嵌套滚动容器（如 ImageGrid 的 .image-grid-container）
   let scrollable: Element | null = null;
   let current: Element | null = e.target as Element;
-  
+
   while (current && current !== container) {
     // 检查元素是否可滚动
     if (current.scrollHeight > current.clientHeight) {
       const style = window.getComputedStyle(current);
       const overflowY = style.overflowY;
-      if (overflowY === 'auto' || overflowY === 'scroll') {
+      if (overflowY === "auto" || overflowY === "scroll") {
         scrollable = current;
         break;
       }
     }
     current = current.parentElement;
   }
-  
+
   // 如果找到了滚动容器且不在顶部，不触发下拉刷新
   if (scrollable) {
     const scrollTop = (scrollable as HTMLElement).scrollTop || 0;
@@ -122,7 +119,7 @@ const handleTouchStart = (e: TouchEvent) => {
       if (scrollTop > 1) return;
     }
   }
-  
+
   startY.value = touch.clientY;
   currentY.value = touch.clientY;
   isDragging.value = true;
@@ -131,17 +128,17 @@ const handleTouchStart = (e: TouchEvent) => {
 
 const handleTouchMove = (e: TouchEvent) => {
   if (!isDragging.value || props.disabled || isRefreshing.value) return;
-  
+
   const touch = e.touches[0];
   if (!touch) return;
-  
+
   currentY.value = touch.clientY;
   const deltaY = currentY.value - startY.value;
-  
+
   // 只允许向下拉
   if (deltaY > 0) {
     e.preventDefault(); // 阻止默认滚动行为
-    
+
     // 计算下拉距离（带阻尼效果）
     const rawDistance = deltaY;
     // 阻尼：超过阈值后增加阻力
@@ -150,7 +147,7 @@ const handleTouchMove = (e: TouchEvent) => {
       const excess = rawDistance - props.threshold;
       distance = props.threshold + excess * 0.3; // 超过阈值后阻力增加
     }
-    
+
     pullDistance.value = Math.min(distance, props.maxDistance);
     isPulling.value = pullDistance.value > 10; // 超过 10px 才显示指示器
   }
@@ -158,9 +155,9 @@ const handleTouchMove = (e: TouchEvent) => {
 
 const handleTouchEnd = () => {
   if (!isDragging.value) return;
-  
+
   isDragging.value = false;
-  
+
   // 如果下拉距离超过阈值，触发刷新
   if (pullDistance.value >= props.threshold && !isRefreshing.value) {
     emit("refresh");
@@ -177,14 +174,17 @@ const resetPull = () => {
 };
 
 // 监听 refreshing 状态变化，刷新完成后回弹
-watch(() => props.refreshing, (newVal) => {
-  if (!newVal) {
-    // 刷新完成，延迟回弹以显示完成状态
-    setTimeout(() => {
-      resetPull();
-    }, 300);
-  }
-});
+watch(
+  () => props.refreshing,
+  (newVal) => {
+    if (!newVal) {
+      // 刷新完成，延迟回弹以显示完成状态
+      setTimeout(() => {
+        resetPull();
+      }, 300);
+    }
+  },
+);
 
 // 清理
 onUnmounted(() => {
@@ -244,7 +244,7 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   transition: transform 0.3s ease;
-  
+
   &.is-spinning {
     animation: spin 1s linear infinite;
   }

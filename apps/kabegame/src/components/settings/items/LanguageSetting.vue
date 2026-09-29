@@ -11,7 +11,17 @@
       </el-icon>
     </div>
     <Teleport to="body">
-      <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
+      <van-popup
+        :show="isOpen"
+        position="bottom"
+        round
+        :z-index="zIndex"
+        @update:show="
+          (v) => {
+            if (!v) close();
+          }
+        "
+      >
         <van-picker
           v-model="languagePickerSelected"
           :title="$t('settings.language')"
@@ -32,12 +42,7 @@
     :disabled="props.disabled || disabled"
     @change="handleChange"
   >
-    <el-option
-      v-for="opt in options"
-      :key="String(opt.value ?? '')"
-      :label="opt.label"
-      :value="opt.value"
-    />
+    <el-option v-for="opt in options" :key="String(opt.value ?? '')" :label="opt.label" :value="opt.value" />
   </el-select>
 </template>
 
@@ -55,16 +60,12 @@ const props = defineProps<{
 
 const { settingValue, disabled, set } = useSettingKeyState("language");
 
-const options = computed(() =>
-  SUPPORTED_LANGUAGES.map((l) => ({ label: l.label, value: l.value })),
-);
+const options = computed(() => SUPPORTED_LANGUAGES.map((l) => ({ label: l.label, value: l.value })));
 
 const uiStore = useUiStore();
 
 /** 与解析链一致，保证选项中始终有合法选中值 */
-const effectiveLocale = computed(() =>
-  resolveLanguage(settingValue.value as string | null | undefined),
-);
+const effectiveLocale = computed(() => resolveLanguage(settingValue.value as string | null | undefined));
 
 const displayLanguageLabel = computed(() => {
   const v = effectiveLocale.value;
@@ -72,9 +73,7 @@ const displayLanguageLabel = computed(() => {
   return opt?.label ?? v;
 });
 
-const languagePickerColumns = computed(() =>
-  options.value.map((o) => ({ text: o.label, value: o.value })),
-);
+const languagePickerColumns = computed(() => options.value.map((o) => ({ text: o.label, value: o.value })));
 
 const { isOpen, zIndex, open, close } = useModal();
 
@@ -90,7 +89,7 @@ watch(
     if (isOpen.value) {
       languagePickerSelected.value = [effectiveLocale.value];
     }
-  }
+  },
 );
 
 function onAndroidTriggerClick() {
@@ -98,11 +97,7 @@ function onAndroidTriggerClick() {
   open();
 }
 
-function onLanguagePickerConfirm({
-  selectedValues,
-}: {
-  selectedValues: (string | number)[];
-}) {
+function onLanguagePickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
   close();
   const raw = selectedValues[0];
   if (raw === null || raw === undefined) return;

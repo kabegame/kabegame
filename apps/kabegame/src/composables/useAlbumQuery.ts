@@ -1,11 +1,5 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
-import {
-  fetchAlbum,
-  fetchAlbumAncestors,
-  fetchAlbumCount,
-  fetchDescendantCount,
-  type Album,
-} from "@/services/albums";
+import { fetchAlbum, fetchAlbumAncestors, fetchAlbumCount, fetchDescendantCount, type Album } from "@/services/albums";
 import { affectsAlbumDir, subscribeChanges } from "@/services/dataChangeHub";
 import { GRID_REFRESH_WAIT_MS } from "@/services/liveQuery";
 
@@ -64,7 +58,7 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
     waitMs: GRID_REFRESH_WAIT_MS,
     filter: (batch) =>
       (!!albumId.value && batch.albumIds.has(albumId.value)) ||
-      batch.albumStructure.size > 0 && affectsAlbumDir(batch, parentPath.value),
+      (batch.albumStructure.size > 0 && affectsAlbumDir(batch, parentPath.value)),
     onBatch: refresh,
   });
   onBeforeUnmount(unsubscribe);

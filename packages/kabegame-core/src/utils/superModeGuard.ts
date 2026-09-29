@@ -11,15 +11,11 @@ export async function guardSuperRequired(): Promise<boolean> {
   if (!IS_WEB) return false;
   const t = i18n.global.t;
   try {
-    await ElMessageBox.alert(
-      t("web.superRequiredDesc"),
-      t("web.superRequiredTitle"),
-      {
-        confirmButtonText: t("common.ok"),
-        type: "warning",
-        center: true,
-      },
-    );
+    await ElMessageBox.alert(t("web.superRequiredDesc"), t("web.superRequiredTitle"), {
+      confirmButtonText: t("common.ok"),
+      type: "warning",
+      center: true,
+    });
   } catch {
     // 用户关闭
   }

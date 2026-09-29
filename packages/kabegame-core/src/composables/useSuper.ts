@@ -12,9 +12,7 @@ export function useSuper(): {
   setSuper: (v: boolean) => Promise<void>;
 } {
   const settingsStore = useSettingsStore();
-  const isSuper = computed<boolean>(() =>
-    IS_WEB ? settingsStore.values.superMode ?? getIsSuper() : true
-  );
+  const isSuper = computed<boolean>(() => (IS_WEB ? (settingsStore.values.superMode ?? getIsSuper()) : true));
 
   async function setSuper(v: boolean): Promise<void> {
     if (!IS_WEB) return;

@@ -21,17 +21,14 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
         task.status === "waiting_downloads" ||
         task.status === "failed" ||
         task.status === "canceled" ||
-        task.status === "completed"
+        task.status === "completed",
     );
   });
 
   // 右上角徽章显示：排队中 + 运行中
   const activeTasksCount = computed(() => {
     return crawlerStore.tasks.filter(
-      (task) =>
-        task.status === "pending" ||
-        task.status === "running" ||
-        task.status === "waiting_downloads"
+      (task) => task.status === "pending" || task.status === "running" || task.status === "waiting_downloads",
     ).length;
   });
 

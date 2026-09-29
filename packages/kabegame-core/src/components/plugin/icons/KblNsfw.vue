@@ -10,7 +10,9 @@
       font-size="12.4"
       font-weight="700"
       fill="#D92D2D"
-    >18</text>
+    >
+      18
+    </text>
     <path d="M6.4 17.6 17.6 6.4" stroke="#fff" stroke-width="2.6" stroke-linecap="round" />
     <path d="M6.4 17.6 17.6 6.4" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round" />
   </svg>

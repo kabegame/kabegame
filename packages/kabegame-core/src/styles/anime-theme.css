@@ -3,27 +3,27 @@
   --anime-primary: #ff6b9d;
   --anime-primary-light: #ff8fb3;
   --anime-primary-dark: #e8557f;
-  
+
   /* 辅助色 - 柔和的蓝紫色 */
   --anime-secondary: #a78bfa;
   --anime-secondary-light: #c4b5fd;
   --anime-secondary-dark: #8b5cf6;
-  
+
   /* 背景色 - 柔和的渐变 */
   --anime-bg-main: linear-gradient(135deg, #fef3f8 0%, #f0e9ff 100%);
   --anime-bg-card: rgba(255, 255, 255, 0.9);
   --anime-bg-sidebar: linear-gradient(180deg, #fff0f5 0%, #f5f0ff 100%);
-  
+
   /* 文字颜色 */
   --anime-text-primary: #4a154b;
   --anime-text-secondary: #7c3aed;
   --anime-text-muted: #a78bfa;
-  
+
   /* 边框和阴影 */
   --anime-border: rgba(255, 107, 157, 0.3);
   --anime-shadow: 0 4px 20px rgba(255, 107, 157, 0.15);
   --anime-shadow-hover: 0 8px 30px rgba(255, 107, 157, 0.25);
-  
+
   /* 成功/警告/错误 - 二次元风格 */
   --anime-success: #10b981;
   --anime-warning: #f59e0b;
@@ -279,4 +279,3 @@ textarea,
 .gallery-container .image-grid-root {
   overflow: visible;
 }
-

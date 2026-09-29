@@ -3,10 +3,20 @@ import { affectsAlbumDir, type ChangeBatch } from "./dataChangeHub";
 
 function batch(paths: string[], wildcard = false): ChangeBatch {
   return {
-    images: new Set(), imageIds: new Set(), taskIds: new Set(), surfRecordIds: new Set(), pluginIds: new Set(),
-    albumImages: new Set(), albumIds: new Set(), albumImageIds: new Set(), favoriteOps: [], albumStructure: new Set(),
-    albumPaths: new Set(paths), albumPathsWildcard: wildcard,
-    wildcard: { task: false, surf: false, plugin: false }, maxSeq: 0,
+    images: new Set(),
+    imageIds: new Set(),
+    taskIds: new Set(),
+    surfRecordIds: new Set(),
+    pluginIds: new Set(),
+    albumImages: new Set(),
+    albumIds: new Set(),
+    albumImageIds: new Set(),
+    favoriteOps: [],
+    albumStructure: new Set(),
+    albumPaths: new Set(paths),
+    albumPathsWildcard: wildcard,
+    wildcard: { task: false, surf: false, plugin: false },
+    maxSeq: 0,
   };
 }
 

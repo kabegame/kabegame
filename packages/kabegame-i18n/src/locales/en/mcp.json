@@ -50,11 +50,20 @@
         "list": { "name": "Plugin list", "desc": "Browse installed plugins" },
         "info": { "name": "Plugin info", "desc": "Read basic information for one plugin" },
         "icon": { "name": "Plugin icon", "desc": "Read the plugin icon image" },
-        "description_template": { "name": "Plugin description template", "desc": "Read the plugin description page template" },
+        "description_template": {
+          "name": "Plugin description template",
+          "desc": "Read the plugin description page template"
+        },
         "doc": { "name": "Plugin documentation", "desc": "Read the default plugin documentation" },
         "changelog": { "name": "Plugin changelog", "desc": "Read the default plugin changelog" },
-        "asset": { "name": "Plugin asset", "desc": "Read a resource file referenced by plugin documentation and changelogs" },
-        "provider": { "name": "Plugin PathQL provider", "desc": "Read PathQL provider definitions and source contributed by a plugin" }
+        "asset": {
+          "name": "Plugin asset",
+          "desc": "Read a resource file referenced by plugin documentation and changelogs"
+        },
+        "provider": {
+          "name": "Plugin PathQL provider",
+          "desc": "Read PathQL provider definitions and source contributed by a plugin"
+        }
       }
     }
   }

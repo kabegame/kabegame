@@ -13,12 +13,7 @@
   >
     <div class="option-picker-content">
       <div class="picker-options">
-        <div
-          v-for="opt in options"
-          :key="opt.id"
-          class="picker-option"
-          @click="handleSelect(opt.id)"
-        >
+        <div v-for="opt in options" :key="opt.id" class="picker-option" @click="handleSelect(opt.id)">
           <div class="option-icon">
             <el-icon :size="32">
               <component :is="opt.icon" />
@@ -63,7 +58,7 @@ const props = withDefaults(defineProps<Props>(), {
   title: undefined,
 });
 const { t } = useI18n();
-const resolvedTitle = computed(() => props.title ?? t('common.selectPlaceholder'));
+const resolvedTitle = computed(() => props.title ?? t("common.selectPlaceholder"));
 
 const uiStore = useUiStore();
 
@@ -73,7 +68,11 @@ const emit = defineEmits<{
 }>();
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
-watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
+watch(
+  () => props.modelValue,
+  (v) => (v ? modal.open() : modal.close()),
+  { immediate: true },
+);
 
 const handleSelect = (id: string) => {
   emit("select", id);
@@ -121,11 +120,7 @@ const handleSelect = (id: string) => {
   user-select: none;
 
   &:hover {
-    background: linear-gradient(
-      135deg,
-      rgba(255, 107, 157, 0.1) 0%,
-      rgba(167, 139, 250, 0.1) 100%
-    );
+    background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
     border-color: var(--anime-primary);
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(255, 107, 157, 0.15);
@@ -143,11 +138,7 @@ const handleSelect = (id: string) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 107, 157, 0.15) 0%,
-    rgba(167, 139, 250, 0.15) 100%
-  );
+  background: linear-gradient(135deg, rgba(255, 107, 157, 0.15) 0%, rgba(167, 139, 250, 0.15) 100%);
   border-radius: 12px;
   color: var(--anime-primary);
 }

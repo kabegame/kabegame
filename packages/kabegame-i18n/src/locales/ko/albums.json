@@ -73,9 +73,18 @@
     "convertToNormalFailed": "변환 실패: {error}",
     "syncMode": {
       "none": { "label": "동기화 안 함", "description": "폴더 변경을 감시하지 않으며 자동으로 동기화하지 않습니다" },
-      "shallow": { "label": "얕은 동기화", "description": "이 폴더의 현재 단계 파일만 자동으로 동기화하고 하위 앨범은 만들지 않습니다" },
-      "recursive": { "label": "재귀 동기화", "description": "전체 폴더 하위 트리를 자동으로 동기화하고 하위 폴더에 맞춰 앨범을 만듭니다" },
-      "delegated": { "label": "동기화 위임", "description": "상위 앨범의 재귀 동기화가 관리하므로 개별적으로 변경할 수 없습니다" }
+      "shallow": {
+        "label": "얕은 동기화",
+        "description": "이 폴더의 현재 단계 파일만 자동으로 동기화하고 하위 앨범은 만들지 않습니다"
+      },
+      "recursive": {
+        "label": "재귀 동기화",
+        "description": "전체 폴더 하위 트리를 자동으로 동기화하고 하위 폴더에 맞춰 앨범을 만듭니다"
+      },
+      "delegated": {
+        "label": "동기화 위임",
+        "description": "상위 앨범의 재귀 동기화가 관리하므로 개별적으로 변경할 수 없습니다"
+      }
     },
     "readOnlyHint": "로컬 폴더 동기화 앨범에서는 이 제스처를 지원하지 않습니다. Delete 키 또는 마우스 오른쪽 버튼의 \"파일 삭제\"를 사용하세요",
     "syncDone": "동기화됨: 추가 {added}, 삭제 {deleted}, 업데이트 {reimported}",

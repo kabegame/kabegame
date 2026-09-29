@@ -9,7 +9,8 @@
     >
       <KbMenuList v-model:active="selectedName" :groups="menuGroups" class="flex-1 min-w-0 min-h-0">
         <template v-if="namespace" #title>
-          {{ t("plugins.detail.providerNamespace") }} <span class="font-mono">{{ namespace }}</span>
+          {{ t("plugins.detail.providerNamespace") }}
+          <span class="font-mono">{{ namespace }}</span>
         </template>
         <!-- 选中 provider 的 note 摘要卡（设计稿左栏底部） -->
         <template v-if="selectedSummaryNote" #footer>
@@ -21,8 +22,18 @@
     </KbResizable>
 
     <div class="flex-1 min-w-0 min-h-0 overflow-y-auto [scrollbar-width:none]">
-      <el-empty v-if="!canQuery" :description="t('plugins.detail.providerInstallFirst')" :image-size="80" class="mt-10" />
-      <el-empty v-else-if="!loading && !summaries.length" :description="t('plugins.detail.noProviders')" :image-size="80" class="mt-10" />
+      <el-empty
+        v-if="!canQuery"
+        :description="t('plugins.detail.providerInstallFirst')"
+        :image-size="80"
+        class="mt-10"
+      />
+      <el-empty
+        v-else-if="!loading && !summaries.length"
+        :description="t('plugins.detail.noProviders')"
+        :image-size="80"
+        class="mt-10"
+      />
       <div v-else-if="detail" class="flex flex-col h-full min-h-0">
         <div class="flex items-center gap-2.5 py-3 px-5.5">
           <div class="font-800 text-15px">{{ detail.name }}</div>
@@ -54,13 +65,15 @@
           <template v-if="viewMode === 'pretty'">
             <!-- 概览卡：设计稿是「固定标签列 + 值列」的两列对齐，不是标签值混排 -->
             <div class="kb-card py-3.5 px-4 flex flex-col gap-2.5">
-              <div class="text-13px font-600 text-[var(--anime-text-muted)]">{{ t("plugins.detail.providerOverview") }}</div>
+              <div class="text-13px font-600 text-[var(--anime-text-muted)]">
+                {{ t("plugins.detail.providerOverview") }}
+              </div>
               <div class="grid gap-x-3 gap-y-2 items-baseline" style="grid-template-columns: 104px minmax(0, 1fr)">
                 <template v-if="noteTitle">
                   <div class="text-14px text-[var(--anime-text-muted)]">note</div>
                   <div class="text-14px leading-[1.6]">
                     <span class="font-700">{{ noteTitle }}</span>
-                    <span v-if="noteContent"> · {{ noteContent }}</span>
+                    <span v-if="noteContent">· {{ noteContent }}</span>
                   </div>
                 </template>
                 <template v-if="fields.length">
@@ -68,9 +81,9 @@
                   <div class="flex flex-col gap-1.5 min-w-0">
                     <div v-for="(f, i) in fields" :key="i" class="text-13px font-mono leading-[1.6] break-all">
                       <span class="font-700">{{ f.alias ?? "?" }}</span>
-                      <span class="text-[var(--anime-text-muted)]"> ← </span>
+                      <span class="text-[var(--anime-text-muted)]">←</span>
                       <span class="text-[var(--anime-text-secondary)]">{{ f.sql }}</span>
-                      <span v-if="f.inNeed" class="text-[var(--anime-text-muted)]"> · in_need</span>
+                      <span v-if="f.inNeed" class="text-[var(--anime-text-muted)]">· in_need</span>
                     </div>
                   </div>
                 </template>
@@ -100,20 +113,29 @@
                 </template>
                 <template v-if="entry.sql">
                   <div class="text-14px text-[var(--anime-text-muted)]">sql</div>
-                  <pre class="m-0 py-2 px-2.5 min-w-0 rounded-8px bg-[color-mix(in_srgb,white_55%,transparent)] border border-solid border-[var(--anime-border)] overflow-x-auto text-12.5px font-mono leading-[1.6] max-h-28">{{ entry.sql }}</pre>
+                  <pre
+                    class="m-0 py-2 px-2.5 min-w-0 rounded-8px bg-[color-mix(in_srgb,white_55%,transparent)] border border-solid border-[var(--anime-border)] overflow-x-auto text-12.5px font-mono leading-[1.6] max-h-28"
+                    >{{ entry.sql }}</pre>
                 </template>
                 <template v-if="entry.properties">
                   <div class="text-14px text-[var(--anime-text-muted)]">properties</div>
-                  <div class="text-12.5px font-mono text-[var(--anime-text-secondary)] leading-[1.6] break-all">{{ entry.properties }}</div>
+                  <div class="text-12.5px font-mono text-[var(--anime-text-secondary)] leading-[1.6] break-all">
+                    {{ entry.properties }}
+                  </div>
                 </template>
                 <template v-if="entry.meta">
                   <div class="text-14px text-[var(--anime-text-muted)]">meta</div>
-                  <div class="text-12.5px font-mono text-[var(--anime-text-secondary)] leading-[1.6] break-all">{{ entry.meta }}</div>
+                  <div class="text-12.5px font-mono text-[var(--anime-text-secondary)] leading-[1.6] break-all">
+                    {{ entry.meta }}
+                  </div>
                 </template>
               </div>
             </div>
           </template>
-          <pre v-else class="m-0 py-2.5 px-3 rounded-10px bg-[color-mix(in_srgb,white_55%,transparent)] border border-solid border-[var(--anime-border)] overflow-auto text-13px font-mono leading-[1.6]">{{ sourceText }}</pre>
+          <pre
+            v-else
+            class="m-0 py-2.5 px-3 rounded-10px bg-[color-mix(in_srgb,white_55%,transparent)] border border-solid border-[var(--anime-border)] overflow-auto text-13px font-mono leading-[1.6]"
+            >{{ sourceText }}</pre>
         </div>
       </div>
     </div>
@@ -175,7 +197,7 @@ const menuGroups = computed<KbMenuGroup[]>(() => [
     items: summaries.value.map((item) => ({ name: item.name, label: item.name, mono: true })),
   },
 ]);
-const detail = computed(() => (selectedName.value ? detailByName.value[selectedName.value] ?? null : null));
+const detail = computed(() => (selectedName.value ? (detailByName.value[selectedName.value] ?? null) : null));
 /** 左栏底部摘要卡：选中 provider 的 note（优先正文，退化到标题） */
 const selectedSummaryNote = computed(() => {
   const note = summaries.value.find((s) => s.name === selectedName.value)?.note;
@@ -213,7 +235,7 @@ watch(
   () => {
     void loadSummaries();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(selectedName, async (name) => {

@@ -36,11 +36,7 @@ const DEFAULT_OPTIONS: PanzoomOptions = {
  * 桌面端图片预览的 Panzoom 封装：根据 visible + enabled 创建/销毁实例，
  * 暴露 wrapperRef、handleWheel、reset、destroy，并驱动 onPanzoomStart/End 回调。
  */
-export function usePanzoomPreview(
-  visible: Ref<boolean>,
-  enabled: Ref<boolean>,
-  options?: UsePanzoomPreviewOptions
-) {
+export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, options?: UsePanzoomPreviewOptions) {
   const wrapperRef = ref<HTMLElement | null>(null);
   const scale = ref(1);
   let instance: PanzoomObject | null = null;
@@ -139,7 +135,7 @@ export function usePanzoomPreview(
         create(wrapper);
       });
     },
-    { immediate: true }
+    { immediate: true },
   );
 
   onUnmounted(destroy);

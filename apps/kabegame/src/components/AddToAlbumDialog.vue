@@ -1,5 +1,16 @@
 <template>
-  <el-dialog append-to-body :model-value="open" :z-index="zIndex" :title="$t('albums.addToAlbumTitle')" width="420px" @update:model-value="(v: boolean) => { if (!v) emit('close') }">
+  <el-dialog
+    append-to-body
+    :model-value="open"
+    :z-index="zIndex"
+    :title="$t('albums.addToAlbumTitle')"
+    width="420px"
+    @update:model-value="
+      (v: boolean) => {
+        if (!v) emit('close');
+      }
+    "
+  >
     <el-form label-width="80px">
       <el-form-item :label="$t('albums.selectAlbum')">
         <AlbumPicker
@@ -12,8 +23,14 @@
         />
       </el-form-item>
       <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
-          @keyup.enter="handleCreateAndAddAlbum" ref="newAlbumNameInputRef" />
+        <el-input
+          v-model="newAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          maxlength="50"
+          show-word-limit
+          @keyup.enter="handleCreateAndAddAlbum"
+          ref="newAlbumNameInputRef"
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.parentAlbum')">
         <AlbumPicker
@@ -25,10 +42,18 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="emit('close')">{{ $t('common.cancel') }}</el-button>
-      <el-button v-if="isCreatingNewAlbum" type="primary" :disabled="!newAlbumName.trim()"
-        @click="handleCreateAndAddAlbum">{{ $t('common.confirm') }}</el-button>
-      <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">{{ $t('common.confirm') }}</el-button>
+      <el-button @click="emit('close')">{{ $t("common.cancel") }}</el-button>
+      <el-button
+        v-if="isCreatingNewAlbum"
+        type="primary"
+        :disabled="!newAlbumName.trim()"
+        @click="handleCreateAndAddAlbum"
+      >
+        {{ $t("common.confirm") }}
+      </el-button>
+      <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">
+        {{ $t("common.confirm") }}
+      </el-button>
     </template>
   </el-dialog>
 </template>
@@ -66,10 +91,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const excludedAlbumIds = computed(() => [
-  HIDDEN_ALBUM_ID,
-  ...(props.excludeAlbumIds ?? []),
-]);
+const excludedAlbumIds = computed(() => [HIDDEN_ALBUM_ID, ...(props.excludeAlbumIds ?? [])]);
 const albumScope = computed(() => ({
   sections: ["system", "normal", "label"] as const,
   excludeIds: excludedAlbumIds.value,
@@ -83,9 +105,8 @@ const newAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
 
-const runMutation = <T extends { view?: ViewSnapshot | null }>(
-  operation: (view: ViewQuery | null) => Promise<T>,
-) => props.mutate ? props.mutate(operation) : operation(null);
+const runMutation = <T extends { view?: ViewSnapshot | null }>(operation: (view: ViewQuery | null) => Promise<T>) =>
+  props.mutate ? props.mutate(operation) : operation(null);
 
 watch(
   () => props.open,
@@ -95,7 +116,7 @@ watch(
       newAlbumName.value = "";
       newAlbumParentId.value = null;
     }
-  }
+  },
 );
 
 // 如果排除列表变化，且当前选中的 album 被排除了，则重置选择
@@ -108,7 +129,7 @@ watch(
       selectedAlbumId.value = null;
     }
   },
-  { deep: true }
+  { deep: true },
 );
 
 // 监听画册选择变化，当选择"新建"时自动聚焦输入框
@@ -136,7 +157,7 @@ const handleCreateAndAddAlbum = async () => {
   }
 
   if (!newAlbumName.value.trim()) {
-    ElMessage.warning(t('albums.enterAlbumNameFirst'));
+    ElMessage.warning(t("albums.enterAlbumNameFirst"));
     return;
   }
 
@@ -148,24 +169,18 @@ const handleCreateAndAddAlbum = async () => {
     });
 
     if (isTaskMode) {
-      const result = await runMutation((view) =>
-        addTaskImagesToAlbum(props.taskId!, created.id, { view }),
-      );
-      ElMessage.success(t('albums.createAlbumAndAddTask', { name: created.name, count: result.added }));
+      const result = await runMutation((view) => addTaskImagesToAlbum(props.taskId!, created.id, { view }));
+      ElMessage.success(t("albums.createAlbumAndAddTask", { name: created.name, count: result.added }));
     } else {
-      const result = await runMutation((view) =>
-        addImagesToAlbum(created.id, props.imageIds, { view }),
-      );
-      ElMessage.success(t('albums.createAlbumAndAdd', { name: created.name, count: result.added }));
+      const result = await runMutation((view) => addImagesToAlbum(created.id, props.imageIds, { view }));
+      ElMessage.success(t("albums.createAlbumAndAdd", { name: created.name, count: result.added }));
     }
 
     emit("close");
     emit("added");
   } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
-    const errorMessage = typeof error === "string"
-      ? error
-      : error?.message || String(error) || "操作失败";
+    const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "操作失败";
     ElMessage.error(errorMessage);
   }
 };
@@ -179,36 +194,32 @@ const confirmAddToAlbum = async () => {
 
   const albumId = selectedAlbumId.value;
   if (!albumId) {
-    ElMessage.warning(t('albums.selectAlbumFirst'));
+    ElMessage.warning(t("albums.selectAlbumFirst"));
     return;
   }
 
   try {
     if (isTaskMode) {
-      const result = await runMutation((view) =>
-        addTaskImagesToAlbum(props.taskId!, albumId, { view }),
-      );
+      const result = await runMutation((view) => addTaskImagesToAlbum(props.taskId!, albumId, { view }));
       if (result.added === 0) {
-        ElMessage.info(t('albums.allInAlbum'));
+        ElMessage.info(t("albums.allInAlbum"));
       } else {
-        ElMessage.success(t('albums.addedToAlbum', { count: result.added }));
+        ElMessage.success(t("albums.addedToAlbum", { count: result.added }));
       }
       emit("close");
       emit("added");
       return;
     }
 
-    const result = await runMutation((view) =>
-      addImagesToAlbum(albumId, props.imageIds, { view }),
-    );
+    const result = await runMutation((view) => addImagesToAlbum(albumId, props.imageIds, { view }));
     const skippedCount = result.attempted - result.added;
     if (result.added === 0) {
-      ElMessage.info(t('albums.allInAlbum'));
+      ElMessage.info(t("albums.allInAlbum"));
     } else {
       if (skippedCount > 0) {
-        ElMessage.warning(t('albums.skippedInAlbum', { count: skippedCount }));
+        ElMessage.warning(t("albums.skippedInAlbum", { count: skippedCount }));
       }
-      ElMessage.success(t('albums.addedToAlbum', { count: result.added }));
+      ElMessage.success(t("albums.addedToAlbum", { count: result.added }));
     }
     emit("close");
     emit("added");

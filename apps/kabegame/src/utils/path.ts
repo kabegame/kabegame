@@ -16,7 +16,5 @@ export function withGalleryPrefix(path: string): string {
   const normalized = normalizeProviderPath(path);
   if (!normalized) return "gallery";
   if (normalized.includes("://")) return normalized;
-  return normalized === "gallery" || normalized.startsWith("gallery/")
-    ? normalized
-    : `gallery/${normalized}`;
+  return normalized === "gallery" || normalized.startsWith("gallery/") ? normalized : `gallery/${normalized}`;
 }

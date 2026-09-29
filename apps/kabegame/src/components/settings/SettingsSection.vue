@@ -10,13 +10,16 @@
 </template>
 
 <script setup lang="ts">
-withDefaults(defineProps<{
-  title: string;
-  /** @deprecated 分组不再使用卡片背景，保留仅为兼容旧调用点 */
-  transparent?: boolean;
-}>(), {
-  transparent: false,
-});
+withDefaults(
+  defineProps<{
+    title: string;
+    /** @deprecated 分组不再使用卡片背景，保留仅为兼容旧调用点 */
+    transparent?: boolean;
+  }>(),
+  {
+    transparent: false,
+  },
+);
 </script>
 
 <style scoped>

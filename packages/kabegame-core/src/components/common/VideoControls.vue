@@ -1,6 +1,12 @@
 <template>
   <PreviewControlBar ref="barRef" :is-fullscreen="isFullscreen" :keep-visible="keepVisible">
-    <button v-if="showPlayPause" class="control-btn" type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" @click="togglePlay">
+    <button
+      v-if="showPlayPause"
+      class="control-btn"
+      type="button"
+      :aria-label="isPlaying ? 'Pause' : 'Play'"
+      @click="togglePlay"
+    >
       <svg v-if="!isPlaying" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M8 5v14l11-7z" />
       </svg>
@@ -54,7 +60,12 @@
       </div>
     </div>
 
-    <button class="control-btn" type="button" :aria-label="isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'" @click="toggleFullscreen">
+    <button
+      class="control-btn"
+      type="button"
+      :aria-label="isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'"
+      @click="toggleFullscreen"
+    >
       <svg v-if="!isFullscreen" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M7 14H5v5h5v-2H7v-3zm0-4h2V7h3V5H5v5zm10 7h-3v2h5v-5h-2v3zm0-12v3h2V5h-5v2h3z" />
       </svg>
@@ -78,7 +89,7 @@ const props = withDefaults(
     showPlayPause?: boolean;
     isFullscreen?: boolean;
   }>(),
-  { showPlayPause: true, isFullscreen: false }
+  { showPlayPause: true, isFullscreen: false },
 );
 
 const emit = defineEmits<{
@@ -103,7 +114,16 @@ let volumePanelTimer: ReturnType<typeof setTimeout> | null = null;
 let progressRaf: number | null = null;
 let currentVideo: HTMLVideoElement | null = null;
 
-const trackedMediaEvents = ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied", "seeking", "seeked"] as const;
+const trackedMediaEvents = [
+  "loadstart",
+  "loadeddata",
+  "canplay",
+  "play",
+  "pause",
+  "emptied",
+  "seeking",
+  "seeked",
+] as const;
 
 const handleDebugMediaEvent = (event: Event) => {
   const video = event.currentTarget as HTMLVideoElement | null;
@@ -123,9 +143,7 @@ const effectiveCurrentTime = computed(() => {
   return currentTime.value;
 });
 
-const displayTime = computed(
-  () => `${formatTime(effectiveCurrentTime.value)} / ${formatTime(duration.value)}`
-);
+const displayTime = computed(() => `${formatTime(effectiveCurrentTime.value)} / ${formatTime(duration.value)}`);
 
 const seekPercent = computed(() => {
   if (!duration.value) return 0;
@@ -299,7 +317,7 @@ watch(
   (video) => {
     attachVideo(video);
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(
@@ -308,7 +326,7 @@ watch(
     if (dragging) {
       showControls();
     }
-  }
+  },
 );
 
 const togglePlay = async () => {
@@ -466,7 +484,9 @@ document.addEventListener("touchend", handleDocumentPointerUp, { passive: true }
   opacity: 0;
   transform: translate(-50%, 6px);
   pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 
   &.visible {
     opacity: 1;
@@ -474,5 +494,4 @@ document.addEventListener("touchend", handleDocumentPointerUp, { passive: true }
     pointer-events: auto;
   }
 }
-
 </style>

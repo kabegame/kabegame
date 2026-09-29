@@ -10,9 +10,7 @@ import type { GridAdapter } from "../types";
  * TaskDetail（`/tasks/:id`）的 grid adapter。
  * 必须在 TaskDetail.vue 的 setup 中调用（route store 不能过早实例化）。
  */
-export function createTaskDetailAdapter(params: {
-  taskId: () => string;
-}): GridAdapter {
+export function createTaskDetailAdapter(params: { taskId: () => string }): GridAdapter {
   const routeStore = useTaskDetailRouteStore();
   const failedImagesStore = useFailedImagesStore();
   const t = i18n.global.t;
@@ -20,10 +18,8 @@ export function createTaskDetailAdapter(params: {
   return {
     id: "task",
     routeStore,
-    isActive: () =>
-      router.currentRoute.value.name === "TaskDetail" && !!params.taskId(),
-    rootPathFallback: () =>
-      params.taskId() ? `task/${params.taskId()}/1` : "",
+    isActive: () => router.currentRoute.value.name === "TaskDetail" && !!params.taskId(),
+    rootPathFallback: () => (params.taskId() ? `task/${params.taskId()}/1` : ""),
     computeCountPath: stripComposablePathTail,
     onCountError: (error) => {
       console.error("加载任务总图片数失败:", error);
@@ -36,8 +32,7 @@ export function createTaskDetailAdapter(params: {
     changes: {
       relevant: (batch) => {
         const tid = params.taskId();
-        return !!tid && batch.images.size > 0 &&
-          (batch.wildcard.task || batch.taskIds.has(tid));
+        return !!tid && batch.images.size > 0 && (batch.wildcard.task || batch.taskIds.has(tid));
       },
     },
     // 失败图片计数与当前页数据同源刷新
@@ -51,10 +46,7 @@ export function createTaskDetailAdapter(params: {
     remove: {
       dialogText: (count) => ({
         title: t("tasks.confirmDelete"),
-        message:
-          count > 1
-            ? t("tasks.removeDialogMessageMulti", { count })
-            : t("tasks.removeDialogMessageSingle"),
+        message: count > 1 ? t("tasks.removeDialogMessageMulti", { count }) : t("tasks.removeDialogMessageSingle"),
       }),
     },
   };

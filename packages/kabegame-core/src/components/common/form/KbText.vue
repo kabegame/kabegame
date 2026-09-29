@@ -16,7 +16,7 @@ const props = withDefaults(
     placeholder?: string;
     allowUnset?: boolean;
   }>(),
-  { allowUnset: false }
+  { allowUnset: false },
 );
 
 defineEmits<{

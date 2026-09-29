@@ -15,13 +15,7 @@ export interface ReleaseInfo {
 }
 
 /** 状态机阶段，对齐后端 `UpdaterPhase`。`unchecked` 为瞬时锚点。 */
-export type UpdaterPhase =
-  | "unchecked"
-  | "checking"
-  | "checked"
-  | "updateAvailable"
-  | "downloading"
-  | "restartable";
+export type UpdaterPhase = "unchecked" | "checking" | "checked" | "updateAvailable" | "downloading" | "restartable";
 
 /** 后端 `UpdaterState` 完整快照（serde camelCase）。 */
 export interface UpdaterState {
@@ -74,9 +68,7 @@ export const useUpdaterStore = defineStore("updater", () => {
   const isChecking = computed(() => phase.value === "checking");
   const isDownloading = computed(() => phase.value === "downloading");
   /** restartable 期间若被瞬时 checking 覆盖，靠 downloadedTag 让「重启更新」按钮不闪走。 */
-  const canShowRestart = computed(
-    () => phase.value === "restartable" || downloadedTag.value != null,
-  );
+  const canShowRestart = computed(() => phase.value === "restartable" || downloadedTag.value != null);
   /** checking / downloading 期间禁用「检查更新」「下载」入口。 */
   const busy = computed(() => phase.value === "checking" || phase.value === "downloading");
   const latestRelease = computed(() => releases.value[0] ?? null);

@@ -13,12 +13,7 @@
             </span>
           </div>
         </div>
-        <el-switch
-          size="large"
-          :model-value="enabled"
-          :loading="toggling"
-          :before-change="onBeforeToggle"
-        />
+        <el-switch size="large" :model-value="enabled" :loading="toggling" :before-change="onBeforeToggle" />
       </div>
 
       <div class="mcp-hero__meta">
@@ -157,8 +152,7 @@ const { t } = useI18n();
 // ── 三个 MCP 设置项，统一走 settings 架构（useSettingKeyState）──
 const { settingValue: enabledValue, set: setEnabledValue } = useSettingKeyState("mcpEnabled");
 const { settingValue: portValue, set: setPortValue } = useSettingKeyState("mcpPort");
-const { settingValue: disabledValue, set: setDisabledValue } =
-  useSettingKeyState("mcpDisabledCapabilities");
+const { settingValue: disabledValue, set: setDisabledValue } = useSettingKeyState("mcpDisabledCapabilities");
 
 const enabled = computed(() => enabledValue.value === true);
 const port = computed(() => (typeof portValue.value === "number" ? portValue.value : 7490));
@@ -180,9 +174,13 @@ async function onBeforeToggle(): Promise<boolean> {
 
 // ── 端口 ──
 const localPort = ref(port.value);
-watch(port, (p) => {
-  localPort.value = p;
-}, { immediate: true });
+watch(
+  port,
+  (p) => {
+    localPort.value = p;
+  },
+  { immediate: true },
+);
 const portSaving = ref(false);
 async function onPortChange(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return;
@@ -338,11 +336,17 @@ void loadCaps();
   padding: 22px 24px;
   border: 1px solid color-mix(in srgb, var(--anime-primary) 26%, transparent);
   background:
-    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--anime-primary) 16%, transparent) 0%, transparent 55%),
+    radial-gradient(
+      120% 140% at 100% 0%,
+      color-mix(in srgb, var(--anime-primary) 16%, transparent) 0%,
+      transparent 55%
+    ),
     color-mix(in srgb, var(--anime-bg-card, #1c1c28) 88%, transparent);
   backdrop-filter: blur(8px);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--anime-primary) 8%, transparent) inset;
-  transition: border-color 0.3s, box-shadow 0.3s;
+  transition:
+    border-color 0.3s,
+    box-shadow 0.3s;
 }
 .mcp-hero.is-running {
   border-color: color-mix(in srgb, #22d3ee 40%, transparent);
@@ -404,8 +408,17 @@ void loadCaps();
   animation: mcp-pulse 1.8s ease-in-out infinite;
 }
 @keyframes mcp-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, #22d3ee 30%, transparent), 0 0 8px 1px color-mix(in srgb, #22d3ee 55%, transparent); }
-  50% { box-shadow: 0 0 0 6px color-mix(in srgb, #22d3ee 8%, transparent), 0 0 16px 3px color-mix(in srgb, #22d3ee 70%, transparent); }
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, #22d3ee 30%, transparent),
+      0 0 8px 1px color-mix(in srgb, #22d3ee 55%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px color-mix(in srgb, #22d3ee 8%, transparent),
+      0 0 16px 3px color-mix(in srgb, #22d3ee 70%, transparent);
+  }
 }
 .mcp-hero__meta {
   display: flex;
@@ -520,7 +533,9 @@ void loadCaps();
   background:
     radial-gradient(130% 100% at 0% 0%, color-mix(in srgb, var(--anime-primary) 10%, transparent) 0%, transparent 60%),
     color-mix(in srgb, var(--anime-bg-card, #1c1c28) 50%, transparent);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 .mcp-cat:hover {
   border-color: color-mix(in srgb, var(--anime-primary) 32%, transparent);
@@ -631,7 +646,9 @@ void loadCaps();
   background:
     radial-gradient(130% 100% at 0% 0%, color-mix(in srgb, var(--anime-primary) 10%, transparent) 0%, transparent 60%),
     color-mix(in srgb, var(--anime-bg-card, #1c1c28) 50%, transparent);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 .mcp-connect__card:hover {
   border-color: color-mix(in srgb, var(--anime-primary) 32%, transparent);

@@ -25,13 +25,8 @@ const isDirectChildOf = (path: string, folder: string): boolean => {
 };
 
 /** 统一生成媒体/文件夹拖入计划；targetName 为空表示导入画廊。 */
-export function buildDropPlan(
-  items: DragFileItem[],
-  targetName: string | null,
-): DragFilePlan | null {
-  const media = items.filter(
-    (item) => !item.isDirectory && (item.isImage || item.isVideo),
-  );
+export function buildDropPlan(items: DragFileItem[], targetName: string | null): DragFilePlan | null {
+  const media = items.filter((item) => !item.isDirectory && (item.isImage || item.isVideo));
   const folders = items.filter((item) => item.isDirectory);
   if (media.length === 0 && folders.length === 0) return null;
 
@@ -68,17 +63,11 @@ export function buildDropPlan(
  * 把计划中的媒体与文件夹统一交给 local-import 扁平递归导入。
  * 文件夹画册额外先复制到同步目录，并立即把导入结果挂到目标画册。
  */
-export async function importDroppedFiles(
-  plan: DragFilePlan,
-  target: Album | null,
-): Promise<void> {
-  const folderAlbum =
-    target?.type === "local_folder" && target.syncFolder ? target : null;
+export async function importDroppedFiles(plan: DragFilePlan, target: Album | null): Promise<void> {
+  const folderAlbum = target?.type === "local_folder" && target.syncFolder ? target : null;
   let paths = [...plan.media, ...plan.folders].map((item) => item.path);
   if (folderAlbum) {
-    paths = paths.filter(
-      (path) => !isDirectChildOf(path, folderAlbum.syncFolder!),
-    );
+    paths = paths.filter((path) => !isDirectChildOf(path, folderAlbum.syncFolder!));
   }
   if (paths.length === 0) return;
 

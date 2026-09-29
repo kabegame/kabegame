@@ -44,9 +44,7 @@ export const useDownloadStateStore = defineStore("downloadState", () => {
   let unlistenRemoved: UnlistenFn | null = null;
 
   const progressFromBytes = (received?: number, total?: number | null): number | undefined =>
-    total != null && total > 0 && received != null
-      ? Math.min(100, Math.round((received / total) * 100))
-      : undefined;
+    total != null && total > 0 && received != null ? Math.min(100, Math.round((received / total) * 100)) : undefined;
 
   const applyState = (p: DownloadStatePayload) => {
     const id = p.id;
@@ -89,15 +87,14 @@ export const useDownloadStateStore = defineStore("downloadState", () => {
       applyState(event.payload);
     });
     unlistenProgress = await listen<DownloadProgressPayload>("download-progress", (event) =>
-      applyProgress(event.payload)
+      applyProgress(event.payload),
     );
     unlistenRemoved = await listen<{ id: number }>("download-removed", (event) =>
-      applyRemoved(Number(event.payload.id))
+      applyRemoved(Number(event.payload.id)),
     );
   };
 
-  const getByUrl = (url: string): DownloadEntry | undefined =>
-    Object.values(map).find((e) => e.url === url);
+  const getByUrl = (url: string): DownloadEntry | undefined => Object.values(map).find((e) => e.url === url);
 
   const getByFailedImageId = (failedImageId: number): DownloadEntry | undefined =>
     Object.values(map).find((e) => e.retriedFor === failedImageId);

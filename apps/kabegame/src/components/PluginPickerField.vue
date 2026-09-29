@@ -19,7 +19,12 @@
           <div class="plugin-picker-option">
             <!-- 图标瓦片：优先真实图标，回退首字符 + 色相渐变 -->
             <div class="plugin-picker-option__tile" :style="tileStyle(option)">
-              <img v-if="showIcons && option.iconSrc" :src="option.iconSrc" class="plugin-picker-option__tile-img" alt="" />
+              <img
+                v-if="showIcons && option.iconSrc"
+                :src="option.iconSrc"
+                class="plugin-picker-option__tile-img"
+                alt=""
+              />
               <span v-else>{{ tileInitial(option.label) }}</span>
             </div>
             <div class="plugin-picker-option__main">
@@ -28,7 +33,8 @@
               <!-- Webview 项：警告 pill；其余：真实插件标签 -->
               <div class="plugin-picker-option__tagrow">
                 <span v-if="option.warning" class="plugin-picker-option__warn-pill">
-                  <span class="plugin-picker-option__warn-dot">!</span>{{ $t('plugins.webviewNeedsDesktop') }}
+                  <span class="plugin-picker-option__warn-dot">!</span>
+                  {{ $t("plugins.webviewNeedsDesktop") }}
                 </span>
                 <PluginLabelTags v-else-if="option.labels?.length" :labels="option.labels" size="small" />
               </div>
@@ -90,10 +96,7 @@
       </el-icon>
     </div>
 
-    <PluginLabelTags
-      v-if="showLabels && modelValue"
-      :labels="labelsFor(selectedPluginObj)"
-    />
+    <PluginLabelTags v-if="showLabels && modelValue" :labels="labelsFor(selectedPluginObj)" />
   </div>
 </template>
 
@@ -108,10 +111,7 @@ import PluginQuickPreviewPanel, {
   type QuickPreviewPluginLike,
 } from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
 import { bannerPreviewImages } from "@kabegame/core/utils/assetPath";
-import {
-  VERSION_INCOMPATIBLE_LABEL_ID,
-  type PluginLabel,
-} from "@kabegame/core/stores/pluginLabels";
+import { VERSION_INCOMPATIBLE_LABEL_ID, type PluginLabel } from "@kabegame/core/stores/pluginLabels";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 
@@ -174,9 +174,7 @@ const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 
 const isCompact = computed(() => uiStore.isCompact);
-const pickerTitleResolved = computed(
-  () => props.pickerTitle ?? props.placeholder ?? t("common.selectPlaceholder"),
-);
+const pickerTitleResolved = computed(() => props.pickerTitle ?? props.placeholder ?? t("common.selectPlaceholder"));
 
 function emitValue(value: string | null | undefined) {
   emit("update:modelValue", value ? String(value) : null);
@@ -199,9 +197,7 @@ function valueForPlugin(plugin: Plugin) {
 function labelsFor(p?: Plugin): PluginLabel[] {
   if (!p) return [];
   const base = p.labels ?? [];
-  return p.minAppIncompatible
-    ? [...base, { id: VERSION_INCOMPATIBLE_LABEL_ID }]
-    : base;
+  return p.minAppIncompatible ? [...base, { id: VERSION_INCOMPATIBLE_LABEL_ID }] : base;
 }
 
 /**
@@ -220,29 +216,29 @@ function quickPreviewProps(plugin: Plugin) {
 
 const pluginRows = computed((): PluginPickerOption[] => {
   if (props.pluginIds) {
-    return props.pluginIds
-      .map((pluginId) => ({
-        pluginId,
-        plugin: pluginStore.plugins.find((p) => p.id === pluginId),
-      }))
-      // 过滤掉内建插件（如 local-import），选择器不应展示
-      .filter(({ plugin }) => plugin?.scriptType !== "builtin")
-      .map(({ pluginId, plugin }) => ({
-        value: pluginId,
-        label: pluginStore.pluginLabel(pluginId),
-        pluginId,
-        iconSrc: pluginStore.pluginIconSrc(pluginId),
-        warning: props.showJsWarning && plugin?.scriptType === "js",
-        count: rowCount(pluginId),
-        plugin,
-      }));
+    return (
+      props.pluginIds
+        .map((pluginId) => ({
+          pluginId,
+          plugin: pluginStore.plugins.find((p) => p.id === pluginId),
+        }))
+        // 过滤掉内建插件（如 local-import），选择器不应展示
+        .filter(({ plugin }) => plugin?.scriptType !== "builtin")
+        .map(({ pluginId, plugin }) => ({
+          value: pluginId,
+          label: pluginStore.pluginLabel(pluginId),
+          pluginId,
+          iconSrc: pluginStore.pluginIconSrc(pluginId),
+          warning: props.showJsWarning && plugin?.scriptType === "js",
+          count: rowCount(pluginId),
+          plugin,
+        }))
+    );
   }
 
   const rows: PluginPickerOption[] = [];
   // 过滤掉内建插件（如 local-import），选择器不应展示
-  const source = (props.plugins ?? pluginStore.visiblePlugins).filter(
-    (plugin) => plugin.scriptType !== "builtin",
-  );
+  const source = (props.plugins ?? pluginStore.visiblePlugins).filter((plugin) => plugin.scriptType !== "builtin");
   for (const plugin of source) {
     const value = valueForPlugin(plugin);
     if (!value) continue;

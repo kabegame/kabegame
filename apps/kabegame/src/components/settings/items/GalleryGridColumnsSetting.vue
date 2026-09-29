@@ -1,7 +1,7 @@
 <template>
   <div class="gallery-grid-columns-setting">
     <div class="controls-row">
-      <span class="label">{{ $t('settings.fixedColumns') }}</span>
+      <span class="label">{{ $t("settings.fixedColumns") }}</span>
       <el-switch
         :model-value="fixedModeEnabled"
         :disabled="disabled"
@@ -20,7 +20,7 @@
       />
     </div>
     <div class="hint">
-      {{ $t('settings.fixedColumnsHint') }}
+      {{ $t("settings.fixedColumnsHint") }}
     </div>
   </div>
 </template>
@@ -54,7 +54,7 @@ watch(
       fixedColumns.value = clampFixedColumns(n);
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const onToggleFixedMode = async (enabled: boolean | string | number) => {

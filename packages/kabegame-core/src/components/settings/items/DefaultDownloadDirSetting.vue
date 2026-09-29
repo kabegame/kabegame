@@ -1,6 +1,13 @@
 <template>
   <div class="default-download-dir-setting">
-    <el-input v-model="localDir" placeholder="留空使用默认位置" clearable :disabled="disabled" :loading="showDisabled" @clear="handleClear">
+    <el-input
+      v-model="localDir"
+      placeholder="留空使用默认位置"
+      clearable
+      :disabled="disabled"
+      :loading="showDisabled"
+      @clear="handleClear"
+    >
       <template #append>
         <el-button :disabled="disabled" :loading="showDisabled" @click="handleChoose">
           <el-icon>
@@ -19,7 +26,14 @@
         </el-icon>
         <span class="path-text">{{ effectiveDownloadDir || "（未知）" }}</span>
       </el-button>
-      <el-button v-if="(settingValue as any)" link type="warning" :disabled="disabled" :loading="showDisabled" @click="handleClear">
+      <el-button
+        v-if="settingValue as any"
+        link
+        type="warning"
+        :disabled="disabled"
+        :loading="showDisabled"
+        @click="handleClear"
+      >
         恢复默认
       </el-button>
     </div>
@@ -48,7 +62,7 @@ watch(
   (v) => {
     localDir.value = (v as any as string | null) || "";
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 onMounted(async () => {

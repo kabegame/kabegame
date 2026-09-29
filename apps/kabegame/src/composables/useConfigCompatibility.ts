@@ -27,7 +27,7 @@ export function useConfigCompatibility(
   form: Ref<{ pluginId: string; outputDir: string; vars: Record<string, any> }>,
   selectedRunConfigId: Ref<string | null>,
   loadPluginVarDefs: (pluginId: string) => Promise<void>,
-  showCrawlerDialog?: Ref<boolean>
+  showCrawlerDialog?: Ref<boolean>,
 ) {
   const { locale } = useI18n();
   const crawlerStore = useCrawlerStore();
@@ -36,19 +36,13 @@ export function useConfigCompatibility(
   const plugins = computed(() => pluginStore.plugins);
 
   // 配置兼容性状态（用于UI显示）
-  const configCompatibilityStatus = ref<Record<string, ConfigCompatibility>>(
-    {}
-  );
+  const configCompatibilityStatus = ref<Record<string, ConfigCompatibility>>({});
 
   // 配置兼容性缓存（用于避免重复计算）
-  const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(
-    new Map()
-  );
+  const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(new Map());
 
   // 检查配置兼容性（两步验证）
-  const checkConfigCompatibility = async (
-    config: RunConfig
-  ): Promise<ConfigCompatibility> => {
+  const checkConfigCompatibility = async (config: RunConfig): Promise<ConfigCompatibility> => {
     const result: ConfigCompatibility = {
       versionCompatible: true,
       contentCompatible: true,
@@ -91,10 +85,8 @@ export function useConfigCompatibility(
         // 验证字段值
         const validation = validateVarValue(value, varDef);
         if (!validation.valid) {
-        result.contentCompatible = false;
-        result.contentErrors.push(
-          `${resolveConfigText(varDef.name, locale.value)} (${key}): ${validation.error}`
-        );
+          result.contentCompatible = false;
+          result.contentErrors.push(`${resolveConfigText(varDef.name, locale.value)} (${key}): ${validation.error}`);
         }
       }
 
@@ -103,9 +95,7 @@ export function useConfigCompatibility(
         if (!(varDef.key in userConfig)) {
           if (isRequired(varDef) && varDef.default === undefined) {
             result.contentCompatible = false;
-            result.contentErrors.push(
-              `缺少必填字段: ${resolveConfigText(varDef.name, locale.value)} (${varDef.key})`
-            );
+            result.contentErrors.push(`缺少必填字段: ${resolveConfigText(varDef.name, locale.value)} (${varDef.key})`);
           }
         }
       }
@@ -119,9 +109,7 @@ export function useConfigCompatibility(
   };
 
   // 智能匹配配置到表单（尽量匹配能匹配的字段）
-  const smartMatchConfigToForm = async (
-    config: RunConfig
-  ): Promise<{ success: boolean; message?: string }> => {
+  const smartMatchConfigToForm = async (config: RunConfig): Promise<{ success: boolean; message?: string }> => {
     // 检查插件是否存在
     const pluginExists = plugins.value.some((p) => p.id === config.pluginId);
     if (!pluginExists) {
@@ -167,10 +155,7 @@ export function useConfigCompatibility(
     }
 
     // 转换为 UI 格式
-    const cfgUiVars = normalizeVarsForUI(
-      matchedVars,
-      pluginVars.value as PluginVarDef[]
-    );
+    const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
 
     // 更新表单
     form.value.pluginId = config.pluginId;
@@ -181,9 +166,7 @@ export function useConfigCompatibility(
   };
 
   // 获取配置兼容性（带缓存）
-  const getConfigCompatibility = async (
-    configId: string
-  ): Promise<ConfigCompatibility> => {
+  const getConfigCompatibility = async (configId: string): Promise<ConfigCompatibility> => {
     if (configCompatibilityCache.value.has(configId)) {
       return configCompatibilityCache.value.get(configId)!;
     }
@@ -238,7 +221,7 @@ export function useConfigCompatibility(
           cfg ? `「${resolveConfigText(cfg.name as any, locale.value)}」` : "该配置"
         }吗？`,
         "删除配置",
-        { type: "warning" }
+        { type: "warning" },
       );
       await crawlerStore.deleteRunConfig(configId);
       if (selectedRunConfigId.value === configId) {
@@ -268,11 +251,9 @@ export function useConfigCompatibility(
     // 如果版本不兼容，直接提示
     if (!compatibility.versionCompatible) {
       await ElMessageBox.alert(
-        `该配置关联的插件不存在：${
-          compatibility.versionReason || "未知错误"
-        }\n无法载入配置。`,
+        `该配置关联的插件不存在：${compatibility.versionReason || "未知错误"}\n无法载入配置。`,
         "插件缺失",
-        { type: "error" }
+        { type: "error" },
       );
       return;
     }
@@ -281,14 +262,9 @@ export function useConfigCompatibility(
     if (!compatibility.contentCompatible) {
       const errorMsg =
         compatibility.contentErrors.length > 0
-          ? `配置内容与当前插件版本不兼容：\n${compatibility.contentErrors.join(
-              "\n"
-            )}`
+          ? `配置内容与当前插件版本不兼容：\n${compatibility.contentErrors.join("\n")}`
           : "配置内容与当前插件版本不兼容";
-      const warningMsg =
-        compatibility.warnings.length > 0
-          ? `\n\n警告：\n${compatibility.warnings.join("\n")}`
-          : "";
+      const warningMsg = compatibility.warnings.length > 0 ? `\n\n警告：\n${compatibility.warnings.join("\n")}` : "";
 
       try {
         await ElMessageBox.confirm(
@@ -298,7 +274,7 @@ export function useConfigCompatibility(
             type: "warning",
             confirmButtonText: "继续载入",
             cancelButtonText: "取消",
-          }
+          },
         );
       } catch (error) {
         if (error === "cancel") {
@@ -340,7 +316,7 @@ export function useConfigCompatibility(
         clearCompatibilityCache();
         await checkAllConfigsCompatibility();
       },
-      { immediate: true }
+      { immediate: true },
     );
 
     // 打开导入对话框时，兜底刷新一次（保证下拉打开时就能看到兼容性提示）
@@ -406,18 +382,14 @@ export async function checkRecommendedPresetCompatibility(
       const validation = validateVarValue(value, varDef);
       if (!validation.valid) {
         result.contentCompatible = false;
-        result.contentErrors.push(
-          `${resolveConfigText(varDef.name, locale)} (${key}): ${validation.error}`,
-        );
+        result.contentErrors.push(`${resolveConfigText(varDef.name, locale)} (${key}): ${validation.error}`);
       }
     }
     for (const varDef of vars) {
       if (!(varDef.key in uc)) {
         if (isRequiredVar(varDef)) {
           result.contentCompatible = false;
-          result.contentErrors.push(
-            `缺少必填字段: ${resolveConfigText(varDef.name, locale)} (${varDef.key})`,
-          );
+          result.contentErrors.push(`缺少必填字段: ${resolveConfigText(varDef.name, locale)} (${varDef.key})`);
         }
       }
     }

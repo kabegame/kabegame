@@ -37,7 +37,7 @@ const props = withDefaults(
     placeholder?: string;
     allowUnset?: boolean;
   }>(),
-  { allowUnset: false }
+  { allowUnset: false },
 );
 
 const emit = defineEmits<{
@@ -65,9 +65,7 @@ const dropText = computed(() => (effectiveMode.value === "folder" ? "点击选�
 
 function normalizeExtensions(extensions?: string[]): string[] {
   if (!extensions || extensions.length === 0) return ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "zip"];
-  const exts = extensions
-    .map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase())
-    .filter(Boolean);
+  const exts = extensions.map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase()).filter(Boolean);
   return exts.length > 0 ? exts : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "zip"];
 }
 
@@ -138,7 +136,12 @@ async function pick() {
   text-overflow: ellipsis;
   direction: rtl;
   text-align: left;
-  font: 500 12.5px/1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font:
+    500 12.5px/1 ui-monospace,
+    "SFMono-Regular",
+    Menlo,
+    Consolas,
+    monospace;
   color: var(--anime-text-primary);
 }
 

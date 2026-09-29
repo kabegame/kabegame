@@ -1,21 +1,36 @@
 <template>
-  <el-card class="config-card"
-    :class="variant === 'android' ? 'config-card--layout-android' : 'config-card--layout-desktop'" role="button"
-    tabindex="0" @click="onCardClick($event)" @keydown.enter.prevent="emit('open-view', config.id)"
-    @keydown.space.prevent="emit('open-view', config.id)">
-    <div class="config-card-grid"
-      :class="variant === 'android' ? 'config-card-grid--android' : 'config-card-grid--desktop'">
+  <el-card
+    class="config-card"
+    :class="variant === 'android' ? 'config-card--layout-android' : 'config-card--layout-desktop'"
+    role="button"
+    tabindex="0"
+    @click="onCardClick($event)"
+    @keydown.enter.prevent="emit('open-view', config.id)"
+    @keydown.space.prevent="emit('open-view', config.id)"
+  >
+    <div
+      class="config-card-grid"
+      :class="variant === 'android' ? 'config-card-grid--android' : 'config-card-grid--desktop'"
+    >
       <div class="cg-icon" @click.stop>
         <div class="plugin-icon-frame" :class="{ 'plugin-icon-frame--placeholder': !pluginIconUrl(config.pluginId) }">
-          <img v-if="pluginIconUrl(config.pluginId)" class="plugin-icon-img" :src="pluginIconUrl(config.pluginId)"
-            alt="" />
+          <img
+            v-if="pluginIconUrl(config.pluginId)"
+            class="plugin-icon-img"
+            :src="pluginIconUrl(config.pluginId)"
+            alt=""
+          />
           <el-icon v-else :size="26" class="plugin-icon-fallback">
             <AlarmClock />
           </el-icon>
         </div>
-        <el-switch class="schedule-enable-switch" size="small" :model-value="config.scheduleEnabled"
+        <el-switch
+          class="schedule-enable-switch"
+          size="small"
+          :model-value="config.scheduleEnabled"
           :disabled="scheduleTogglingId === config.id"
-          @update:model-value="(v: string | number | boolean) => emit('schedule-enabled', config, Boolean(v))" />
+          @update:model-value="(v: string | number | boolean) => emit('schedule-enabled', config, Boolean(v))"
+        />
       </div>
 
       <div class="cg-main cg-main--scroll">
@@ -28,26 +43,31 @@
         <p class="config-meta-line">
           <span class="config-plugin">{{ pluginName(config.pluginId) }}</span>
           <span class="config-meta-sep" aria-hidden="true">·</span>
-          <span class="config-last-run">
-            {{ t("autoConfig.lastRunAt") }} {{ formatTs(config.scheduleLastRunAt) }}
-          </span>
+          <span class="config-last-run">{{ t("autoConfig.lastRunAt") }} {{ formatTs(config.scheduleLastRunAt) }}</span>
         </p>
         <p class="config-summary" :class="{ 'config-summary--muted': !config.scheduleEnabled }">
           {{ scheduleSummary(config) }}
         </p>
-        <AutoConfigCardScheduleEditor v-if="
-          config.scheduleEnabled ||
-          config.scheduleSpec?.mode === 'interval' ||
-          config.scheduleSpec?.mode === 'daily' ||
-          config.scheduleSpec?.mode === 'weekly'
-        " :config="config" />
+        <AutoConfigCardScheduleEditor
+          v-if="
+            config.scheduleEnabled ||
+            config.scheduleSpec?.mode === 'interval' ||
+            config.scheduleSpec?.mode === 'daily' ||
+            config.scheduleSpec?.mode === 'weekly'
+          "
+          :config="config"
+        />
         <ScheduleProgressBar :config="config" />
       </div>
 
       <div class="cg-tasks" @click.stop>
         <div class="config-tasks-head">{{ t("autoConfig.relatedTasks") }}</div>
-        <AutoConfigRelatedTasks :config-id="config.id" :variant="variant"
-          @open-task-images="emit('open-task-images', $event)" @open-task-log="emit('open-task-log', $event)" />
+        <AutoConfigRelatedTasks
+          :config-id="config.id"
+          :variant="variant"
+          @open-task-images="emit('open-task-images', $event)"
+          @open-task-log="emit('open-task-log', $event)"
+        />
       </div>
 
       <div class="cg-actions" @click.stop>
@@ -182,11 +202,7 @@ const scheduleSummary = (cfg: RunConfig) => {
 function onCardClick(e: MouseEvent) {
   const el = e.target as HTMLElement | null;
   if (!el) return;
-  if (
-    el.closest(
-      ".cg-icon, .cg-tasks, .cg-actions, .cg-schedule, .el-switch, .el-button, .el-dropdown",
-    )
-  ) {
+  if (el.closest(".cg-icon, .cg-tasks, .cg-actions, .cg-schedule, .el-switch, .el-button, .el-dropdown")) {
     return;
   }
   emit("card-click", props.config, e);
@@ -312,9 +328,7 @@ function onCardClick(e: MouseEvent) {
   margin-top: 0;
   padding: 10px 10px 8px;
   border-radius: 10px;
-  background: linear-gradient(160deg,
-      rgba(255, 107, 157, 0.06) 0%,
-      rgba(167, 139, 250, 0.08) 100%);
+  background: linear-gradient(160deg, rgba(255, 107, 157, 0.06) 0%, rgba(167, 139, 250, 0.08) 100%);
   border: 1px solid rgba(255, 107, 157, 0.15);
 }
 
@@ -408,9 +422,7 @@ function onCardClick(e: MouseEvent) {
   color: var(--anime-primary-dark, var(--anime-primary));
   line-height: 1.45;
   border-radius: 10px;
-  background: linear-gradient(125deg,
-      rgba(255, 107, 157, 0.16) 0%,
-      rgba(167, 139, 250, 0.14) 100%);
+  background: linear-gradient(125deg, rgba(255, 107, 157, 0.16) 0%, rgba(167, 139, 250, 0.14) 100%);
   border: 1px solid rgba(255, 107, 157, 0.28);
   box-shadow: 0 1px 6px rgba(124, 58, 237, 0.1);
 }

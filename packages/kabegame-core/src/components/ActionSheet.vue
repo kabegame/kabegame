@@ -9,7 +9,8 @@
           class="action-sheet-button"
           :class="[item.className, disabledClass(item)]"
           :disabled="isDisabled(item)"
-          @click.stop="handleClick(item)">
+          @click.stop="handleClick(item)"
+        >
           <el-icon class="action-sheet-icon">
             <component :is="getIcon(item)" />
           </el-icon>
@@ -28,7 +29,8 @@
           v-if="showSelectAllButton"
           type="button"
           class="action-sheet-button action-sheet-select-all"
-          @click.stop="handleSelectAllClick">
+          @click.stop="handleSelectAllClick"
+        >
           <el-icon class="action-sheet-icon">
             <component :is="selectAllButtonIcon" />
           </el-icon>
@@ -45,20 +47,24 @@
         v-if="visible && expandedItem && expandedChildren.length > 0"
         class="submenu-overlay"
         :style="submenuOverlayStyle"
-        @click.stop="closeSubmenu">
+        @click.stop="closeSubmenu"
+      >
         <div class="submenu-panel" @click.stop>
-          <div
-            v-for="child in expandedChildren"
-            :key="child.key">
+          <div v-for="child in expandedChildren" :key="child.key">
             <div
-              v-if="child.type === 'divider' || (typeof child.dividerBefore === 'function' ? child.dividerBefore(props.context) : child.dividerBefore)"
-              class="submenu-divider"></div>
+              v-if="
+                child.type === 'divider' ||
+                (typeof child.dividerBefore === 'function' ? child.dividerBefore(props.context) : child.dividerBefore)
+              "
+              class="submenu-divider"
+            ></div>
             <button
               v-if="child.type !== 'divider'"
               class="submenu-item"
               :class="[child.className, disabledClass(child)]"
               :disabled="isDisabled(child)"
-              @click.stop="handleChildClick(child)">
+              @click.stop="handleChildClick(child)"
+            >
               <el-icon v-if="child.icon" class="submenu-icon">
                 <component :is="getChildIcon(child)" />
               </el-icon>
@@ -111,14 +117,26 @@ const emit = defineEmits<{
 const expandedItem = ref<ActionItem | null>(null);
 
 // Android: sheet is parent-controlled; submenu uses useModal for back-stack ordering.
-const sheetModal = useModal({ onClose: () => { expandedItem.value = null; if (props.modalBack) emit("close"); } });
+const sheetModal = useModal({
+  onClose: () => {
+    expandedItem.value = null;
+    if (props.modalBack) emit("close");
+  },
+});
 watch(
   () => props.visible && (props.modalBack || props.zIndex == null),
-  (v) => v ? sheetModal.open() : sheetModal.close(),
-  { immediate: true }
+  (v) => (v ? sheetModal.open() : sheetModal.close()),
+  { immediate: true },
 );
-const submenuModal = useModal({ onClose: () => { expandedItem.value = null; } });
-watch(() => !!expandedItem.value, (v) => v ? submenuModal.open() : submenuModal.close());
+const submenuModal = useModal({
+  onClose: () => {
+    expandedItem.value = null;
+  },
+});
+watch(
+  () => !!expandedItem.value,
+  (v) => (v ? submenuModal.open() : submenuModal.close()),
+);
 const actionSheetZIndex = computed(() => props.zIndex ?? sheetModal.zIndex.value);
 const submenuOverlayZIndex = computed(() => submenuModal.zIndex.value || actionSheetZIndex.value + 10);
 const actionSheetStyle = computed<CSSProperties>(() => ({
@@ -139,25 +157,16 @@ const resolvedActions = computed(() => {
 const uiStore = useUiStore();
 // 紧凑模式（Android/web 窄屏）：全选/取消全选按钮（仅当 totalCount 有值且已有选中时显示）
 const showSelectAllButton = computed(
-  () =>
-    uiStore.isCompact &&
-    props.context.totalCount != null &&
-    props.context.selectedCount >= 1
+  () => uiStore.isCompact && props.context.totalCount != null && props.context.selectedCount >= 1,
 );
 
 const isAllSelected = computed(
-  () =>
-    props.context.totalCount != null &&
-    props.context.selectedCount >= props.context.totalCount
+  () => props.context.totalCount != null && props.context.selectedCount >= props.context.totalCount,
 );
 
-const selectAllButtonLabel = computed(() =>
-  isAllSelected.value ? "取消全选" : "全选"
-);
+const selectAllButtonLabel = computed(() => (isAllSelected.value ? "取消全选" : "全选"));
 
-const selectAllButtonIcon = computed<Component>(() =>
-  isAllSelected.value ? CloseBold : Select
-);
+const selectAllButtonIcon = computed<Component>(() => (isAllSelected.value ? CloseBold : Select));
 
 const handleSelectAllClick = () => {
   emit("command", isAllSelected.value ? "deselectAll" : "selectAll");
@@ -167,27 +176,25 @@ const handleSelectAllClick = () => {
 // Get visible children for expanded item
 const expandedChildren = computed(() => {
   if (!expandedItem.value || !expandedItem.value.children) return [];
-  
+
   const children: Array<ActionItem & { type?: "divider" }> = [];
-  
+
   for (const child of expandedItem.value.children) {
     // Check visibility
     if (child.visible !== undefined && !child.visible(props.context)) {
       continue;
     }
-    
+
     // Add divider before if needed
     const shouldShowDivider =
-      typeof child.dividerBefore === "function"
-        ? child.dividerBefore(props.context)
-        : child.dividerBefore ?? false;
+      typeof child.dividerBefore === "function" ? child.dividerBefore(props.context) : (child.dividerBefore ?? false);
     if (shouldShowDivider && children.length > 0) {
       children.push({ key: `${child.key}_divider`, type: "divider" } as ActionItem & { type: "divider" });
     }
-    
+
     children.push(child);
   }
-  
+
   return children;
 });
 
@@ -197,10 +204,7 @@ const getIcon = (item: ActionItem): Component => {
     // Return a placeholder component if no icon
     return {} as Component;
   }
-  const comp =
-    typeof icon === "function"
-      ? (icon as (ctx: ActionContext) => Component)(props.context)
-      : icon;
+  const comp = typeof icon === "function" ? (icon as (ctx: ActionContext) => Component)(props.context) : icon;
   // toRaw: item may come from reactive props.actions, so icon can be a reactive proxy
   return markRaw(toRaw(comp));
 };
@@ -219,10 +223,7 @@ const getChildIcon = (child: ActionItem): Component => {
     // Return a placeholder component if no icon
     return {} as Component;
   }
-  const comp =
-    typeof icon === "function"
-      ? (icon as (ctx: ActionContext) => Component)(props.context)
-      : icon;
+  const comp = typeof icon === "function" ? (icon as (ctx: ActionContext) => Component)(props.context) : icon;
   // toRaw: child may come from reactive props.actions, so icon can be a reactive proxy
   return markRaw(toRaw(comp));
 };
@@ -247,14 +248,10 @@ const getChildSuffix = (child: ActionItem): string => {
 const getSuffix = (item: ActionItem): string => getChildSuffix(item);
 
 const isDisabled = (item: ActionItem): boolean =>
-  typeof item.disabled === "function"
-    ? item.disabled(props.context)
-    : item.disabled ?? false;
+  typeof item.disabled === "function" ? item.disabled(props.context) : (item.disabled ?? false);
 
 const disabledClass = (item: ActionItem): string =>
-  isDisabled(item)
-    ? "!cursor-not-allowed !opacity-45 active:!bg-transparent"
-    : "";
+  isDisabled(item) ? "!cursor-not-allowed !opacity-45 active:!bg-transparent" : "";
 
 const handleClick = (item: ActionItem) => {
   if (isDisabled(item)) return;
@@ -264,13 +261,13 @@ const handleClick = (item: ActionItem) => {
       if (child.visible === undefined) return true;
       return child.visible(props.context);
     });
-    
+
     if (visibleChildren.length > 0) {
       expandedItem.value = item;
       return;
     }
   }
-  
+
   // Otherwise, emit command as usual
   if (item.command) {
     emit("command", item.command);
@@ -322,7 +319,9 @@ const closeSubmenu = () => {
   background: transparent;
   color: var(--anime-text-primary);
   cursor: pointer;
-  transition: opacity 0.2s ease, background 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    background 0.2s ease;
   min-width: 0;
   -webkit-tap-highlight-color: transparent;
 }
@@ -349,7 +348,9 @@ const closeSubmenu = () => {
 
 .action-sheet-slide-enter-active,
 .action-sheet-slide-leave-active {
-  transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+  transition:
+    transform 0.2s ease-out,
+    opacity 0.2s ease-out;
 }
 
 .action-sheet-slide-enter-from,

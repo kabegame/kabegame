@@ -34,18 +34,14 @@ const store = useUpdaterStore();
 
 // restartable 优先于 updateAvailable（已下载就绪时即便瞬时 checking 也显示重启按钮）
 const showButton = computed(() => store.canShowRestart || store.hasUpdate);
-const pillLabel = computed(() =>
-  store.canShowRestart ? t("updater.restartUpdate") : t("updater.new"),
-);
+const pillLabel = computed(() => (store.canShowRestart ? t("updater.restartUpdate") : t("updater.new")));
 
 async function onClick() {
   if (store.canShowRestart) {
     try {
-      await ElMessageBox.confirm(
-        t("updater.restartConfirmMessage"),
-        t("updater.restartConfirmTitle"),
-        { type: "warning" },
-      );
+      await ElMessageBox.confirm(t("updater.restartConfirmMessage"), t("updater.restartConfirmTitle"), {
+        type: "warning",
+      });
     } catch {
       return; // 用户取消
     }

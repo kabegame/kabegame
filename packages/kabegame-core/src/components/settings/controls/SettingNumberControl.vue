@@ -39,15 +39,9 @@ const isCompact = computed(() => useUiStore().isCompact);
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
 const localValue = ref<number>(0);
 
-const effectiveMin = computed(() =>
-  typeof props.min === "number" && !Number.isNaN(props.min) ? props.min : 0
-);
-const effectiveMax = computed(() =>
-  typeof props.max === "number" && !Number.isNaN(props.max) ? props.max : 100
-);
-const effectiveStep = computed(() =>
-  typeof props.step === "number" && props.step > 0 ? props.step : 1
-);
+const effectiveMin = computed(() => (typeof props.min === "number" && !Number.isNaN(props.min) ? props.min : 0));
+const effectiveMax = computed(() => (typeof props.max === "number" && !Number.isNaN(props.max) ? props.max : 100));
+const effectiveStep = computed(() => (typeof props.step === "number" && props.step > 0 ? props.step : 1));
 
 watch(
   () => settingValue.value,
@@ -55,7 +49,7 @@ watch(
     const n = typeof v === "number" ? v : Number(v);
     localValue.value = Number.isFinite(n) ? n : 0;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const onChange = async (v: number | undefined) => {

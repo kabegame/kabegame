@@ -70,7 +70,7 @@ export function useImagesChangeRefresh(params: {
   onMounted(() => void sync(params.enabled.value));
   watch(
     () => params.enabled.value,
-    (v) => void sync(v)
+    (v) => void sync(v),
   );
   onBeforeUnmount(() => {
     stop();

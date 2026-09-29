@@ -68,7 +68,7 @@ const props = withDefaults(
     disabled: false,
     handleTitle: undefined,
     tag: "div",
-  }
+  },
 );
 
 /** 当前尺寸（px）。宿主可接 useLocalStorage 直接持久化 */
@@ -94,7 +94,7 @@ const isHorizontal = computed(() => props.side === "left" || props.side === "rig
 const sign = computed(() => (props.side === "right" || props.side === "bottom" ? 1 : -1));
 
 const sizeStyle = computed(() =>
-  size.value != null && Number.isFinite(size.value) ? { "--kb-resizable-size": `${size.value}px` } : undefined
+  size.value != null && Number.isFinite(size.value) ? { "--kb-resizable-size": `${size.value}px` } : undefined,
 );
 
 /** 元素当前实际渲染尺寸（已经过 CSS clamp / flex 布局） */
@@ -127,8 +127,7 @@ function setDragGuard(active: boolean) {
   }
   if (dragStyleEl) return;
   dragStyleEl = document.createElement("style");
-  dragStyleEl.textContent =
-    `*{cursor:${isHorizontal.value ? "col-resize" : "row-resize"}!important;user-select:none!important}`;
+  dragStyleEl.textContent = `*{cursor:${isHorizontal.value ? "col-resize" : "row-resize"}!important;user-select:none!important}`;
   document.head.appendChild(dragStyleEl);
 }
 

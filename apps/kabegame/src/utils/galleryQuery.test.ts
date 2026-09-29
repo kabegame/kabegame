@@ -17,10 +17,14 @@ const simple: GalleryFilterSet = {
   plugin: { pluginId: "pixiv" },
   aspect: { range: "landscape-4x3-16x9" },
 };
-const advanced: GalleryQuery = [{ any: [
-  [{ is: { search: { mode: "native-metadata", query: "sakura" } } }],
-  [{ is: { mediaType: { kind: "image" } } }],
-] }];
+const advanced: GalleryQuery = [
+  {
+    any: [
+      [{ is: { search: { mode: "native-metadata", query: "sakura" } } }],
+      [{ is: { mediaType: { kind: "image" } } }],
+    ],
+  },
+];
 
 function roundTrip(query: GalleryQuery): GalleryQuery {
   const parsed = parseQueryBody(serializeQueryBody(query).body.split("/"));
@@ -31,11 +35,15 @@ function roundTrip(query: GalleryQuery): GalleryQuery {
 describe("简单 chip + 追加高级条件", () => {
   it("Pixiv + 横图后追加 OR 组，路径保持 AND 顺序", () => {
     const query = composeQueryFilters(simple, advanced);
-    expect(buildComposablePath({
-      query, sort: { field: "by-time", desc: true }, page: 1,
-    })).toBe(
+    expect(
+      buildComposablePath({
+        query,
+        sort: { field: "by-time", desc: true },
+        page: 1,
+      }),
+    ).toBe(
       "plugin/pixiv/filter_comb/aspect/landscape-4x3-16x9/filter_comb/" +
-      "~any/search/native-metadata/sakura/~or/media-type/image/~end/sort/by-time/desc/1",
+        "~any/search/native-metadata/sakura/~or/media-type/image/~end/sort/by-time/desc/1",
     );
     expect(splitQueryFilters(roundTrip(query))).toEqual({ simple, advanced });
   });
@@ -60,18 +68,21 @@ describe("简单 chip + 追加高级条件", () => {
     const original = splitQueryFilters(composeQueryFilters(simple, advanced));
     const changed = composeQueryFilters({ ...original.simple, size: { range: "1MB-2MB" } }, original.advanced);
     expect(splitQueryFilters(roundTrip(changed)).advanced).toEqual(advanced);
-    expect(splitQueryFilters(roundTrip(composeQueryFilters({}, original.advanced))))
-      .toEqual({ simple: {}, advanced });
-    expect(splitQueryFilters(roundTrip(composeQueryFilters(original.simple, []))))
-      .toEqual({ simple, advanced: [] });
+    expect(splitQueryFilters(roundTrip(composeQueryFilters({}, original.advanced)))).toEqual({ simple: {}, advanced });
+    expect(splitQueryFilters(roundTrip(composeQueryFilters(original.simple, [])))).toEqual({ simple, advanced: [] });
     expect(composeQueryFilters({}, [])).toEqual([]);
   });
 
   it.each(["", "album/42", "task/42", "surf/example.com"])(
-    "路由 %s 往返保留边界、排序、分页和 no-album", (rootPrefix) => {
+    "路由 %s 往返保留边界、排序、分页和 no-album",
+    (rootPrefix) => {
       const path = buildComposablePath({
-        rootPrefix, noAlbum: true, query: composeQueryFilters(simple, advanced),
-        sort: { field: "by-time", desc: true }, page: 3, pageSize: 500,
+        rootPrefix,
+        noAlbum: true,
+        query: composeQueryFilters(simple, advanced),
+        sort: { field: "by-time", desc: true },
+        page: 3,
+        pageSize: 500,
       });
       const parsed = parseComposablePath(path, rootPrefix ? rootPrefix.split("/") : []);
       expect(splitQueryFilters(parsed.query)).toEqual({ simple, advanced });
@@ -132,7 +143,10 @@ describe("任意搜（虚拟模式 any）", () => {
 
   it.each(["", "task/42"])("路由 %s 下 any 搜索往返保持", (rootPrefix) => {
     const path = buildComposablePath({
-      rootPrefix, query: [{ is: { search: anyTerm } }], sort: { field: "by-time", desc: false }, page: 1,
+      rootPrefix,
+      query: [{ is: { search: anyTerm } }],
+      sort: { field: "by-time", desc: false },
+      page: 1,
     });
     const parsed = parseComposablePath(path, rootPrefix ? rootPrefix.split("/") : []);
     expect(parsed.query).toEqual([{ is: { search: anyTerm } }]);
@@ -156,7 +170,9 @@ describe("任意搜（虚拟模式 any）", () => {
 
 describe("标签搜索（label / label-tree）", () => {
   it.each(["label", "label-tree"] as const)("%s 往返保持，逗号分隔的 token 原样保留", (mode) => {
-    const query: GalleryQuery = [{ is: { search: { mode, query: "miku, pixiv/character" }, plugin: { pluginId: "pixiv" } } }];
+    const query: GalleryQuery = [
+      { is: { search: { mode, query: "miku, pixiv/character" }, plugin: { pluginId: "pixiv" } } },
+    ];
     expect(serializeQueryBody(query).body.startsWith(`search/${mode}/`)).toBe(true);
     expect(roundTrip(query)).toEqual(query);
   });

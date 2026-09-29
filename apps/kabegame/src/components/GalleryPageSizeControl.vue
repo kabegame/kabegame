@@ -12,22 +12,13 @@
       </el-button>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item
-            v-for="n in options"
-            :key="n"
-            :command="String(n)"
-            :class="{ 'is-active': pageSize === n }"
-          >
+          <el-dropdown-item v-for="n in options" :key="n" :command="String(n)" :class="{ 'is-active': pageSize === n }">
             {{ n }}
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>
-    <el-button
-      v-else-if="androidUi === 'inline'"
-      :class="btnClass"
-      @click="openPicker"
-    >
+    <el-button v-else-if="androidUi === 'inline'" :class="btnClass" @click="openPicker">
       <el-icon :class="iconClass">
         <Histogram />
       </el-icon>
@@ -35,7 +26,17 @@
     </el-button>
 
     <Teleport v-if="uiStore.isCompact" to="body">
-      <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
+      <van-popup
+        :show="isOpen"
+        position="bottom"
+        round
+        :z-index="zIndex"
+        @update:show="
+          (v) => {
+            if (!v) close();
+          }
+        "
+      >
         <van-picker
           v-model="pickerSelected"
           :title="$t('gallery.pageSize')"
@@ -83,12 +84,8 @@ const uiStore = useUiStore();
 const { t } = useI18n();
 const options = [100, 500, 1000] as const;
 const pageSizeLabel = computed(() => String(props.pageSize));
-const btnClass = computed(() =>
-  props.variant === "album" ? "album-browse-btn" : "gallery-browse-btn",
-);
-const iconClass = computed(() =>
-  props.variant === "album" ? "album-browse-icon" : "gallery-browse-icon",
-);
+const btnClass = computed(() => (props.variant === "album" ? "album-browse-btn" : "gallery-browse-btn"));
+const iconClass = computed(() => (props.variant === "album" ? "album-browse-icon" : "gallery-browse-icon"));
 
 async function onDesktopCommand(cmd: string) {
   const n = Number(cmd);
@@ -98,9 +95,7 @@ async function onDesktopCommand(cmd: string) {
 
 const { isOpen, zIndex, open, close } = useModal();
 
-const pickerColumns = computed(() =>
-  options.map((n) => ({ text: String(n), value: String(n) })),
-);
+const pickerColumns = computed(() => options.map((n) => ({ text: String(n), value: String(n) })));
 const pickerSelected = ref<string[]>(["100"]);
 watch(isOpen, (v) => {
   if (v) pickerSelected.value = [String(props.pageSize)];

@@ -9,9 +9,7 @@ export type CrawlerBeforeAddTaskGuard = (pluginId: string) => Promise<boolean>;
 
 let beforeAddTaskGuard: CrawlerBeforeAddTaskGuard | null = null;
 
-export function setCrawlerBeforeAddTaskGuard(
-  guard: CrawlerBeforeAddTaskGuard | null,
-) {
+export function setCrawlerBeforeAddTaskGuard(guard: CrawlerBeforeAddTaskGuard | null) {
   beforeAddTaskGuard = guard;
 }
 
@@ -24,13 +22,7 @@ export interface CrawlTask {
   outputAlbumId?: string;
   runConfigId?: string;
   triggerSource: "manual" | "scheduled";
-  status:
-    | "pending"
-    | "running"
-    | "waiting_downloads"
-    | "completed"
-    | "failed"
-    | "canceled";
+  status: "pending" | "running" | "waiting_downloads" | "completed" | "failed" | "canceled";
   progress: number;
   deletedCount: number;
   dedupCount: number;
@@ -75,10 +67,7 @@ export interface MissedRunItem {
 }
 
 /** 与后端 `AutoConfigChange.reason` 一致 */
-export type AutoConfigChangeReason =
-  | "configadd"
-  | "configdelete"
-  | "configchange";
+export type AutoConfigChangeReason = "configadd" | "configdelete" | "configchange";
 
 function numOpt(v: unknown): number | undefined {
   if (v == null || v === "") return undefined;
@@ -134,10 +123,7 @@ export interface PluginRecommendedPreset {
   httpHeaders?: Record<string, string>;
 }
 
-function parseFlatI18nText(
-  obj: Record<string, unknown>,
-  baseKey: string,
-): Record<string, string> | string | undefined {
+function parseFlatI18nText(obj: Record<string, unknown>, baseKey: string): Record<string, string> | string | undefined {
   const rawBase = obj[baseKey];
   const out: Record<string, string> = {};
   if (rawBase && typeof rawBase === "object" && !Array.isArray(rawBase)) {
@@ -196,19 +182,12 @@ export function parseRunConfigRaw(raw: unknown): RunConfig | null {
   return {
     id,
     name: String(o.name ?? ""),
-    description:
-      o.description != null && o.description !== ""
-        ? String(o.description)
-        : undefined,
+    description: o.description != null && o.description !== "" ? String(o.description) : undefined,
     pluginId,
     url: String(o.url ?? ""),
     outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
-    userConfig: (o.userConfig ?? o.user_config) as
-      | Record<string, any>
-      | undefined,
-    httpHeaders: (o.httpHeaders ?? o.http_headers) as
-      | Record<string, string>
-      | undefined,
+    userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
+    httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
     createdAt: Number(o.createdAt ?? o.created_at ?? 0),
     scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
@@ -240,14 +219,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
       pluginId,
       outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
       userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
-      httpHeaders: (o.httpHeaders ?? o.http_headers) as
-        | Record<string, string>
-        | undefined,
+      httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
       outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
       runConfigId: (o.runConfigId ?? o.run_config_id) as string | undefined,
-      triggerSource: (o.triggerSource ??
-        o.trigger_source ??
-        "manual") as CrawlTask["triggerSource"],
+      triggerSource: (o.triggerSource ?? o.trigger_source ?? "manual") as CrawlTask["triggerSource"],
       status: (o.status || "pending") as CrawlTask["status"],
       progress: Number(o.progress ?? 0),
       deletedCount: Number(o.deletedCount ?? o.deleted_count ?? 0),
@@ -344,9 +319,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
         httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
         outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
         runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
-        triggerSource: (raw.triggerSource ??
-          raw.trigger_source ??
-          "manual") as CrawlTask["triggerSource"],
+        triggerSource: (raw.triggerSource ?? raw.trigger_source ?? "manual") as CrawlTask["triggerSource"],
         status: (raw.status || "pending") as CrawlTask["status"],
         progress: Number(raw.progress ?? 0),
         deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
@@ -376,10 +349,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
       }
       const idx = runConfigs.value.findIndex((c) => c.id === id);
       if (idx === -1) {
-        runConfigs.value = [
-          ...runConfigs.value.filter((c) => c.id !== id),
-          cfg,
-        ].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+        runConfigs.value = [...runConfigs.value.filter((c) => c.id !== id), cfg].sort(
+          (a, b) => Number(b.createdAt) - Number(a.createdAt),
+        );
       } else {
         const next = runConfigs.value.slice();
         next[idx] = cfg;
@@ -405,9 +377,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           return;
         }
         if (type === "TaskDeleted") {
-          const taskId = String(
-            payload?.taskId ?? payload?.task_id ?? "",
-          ).trim();
+          const taskId = String(payload?.taskId ?? payload?.task_id ?? "").trim();
           if (!taskId) return;
           const idx = tasks.value.findIndex((t) => t.id === taskId);
           if (idx !== -1) {
@@ -417,9 +387,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           return;
         }
         if (type === "TaskChanged") {
-          const taskId = String(
-            payload?.taskId ?? payload?.task_id ?? "",
-          ).trim();
+          const taskId = String(payload?.taskId ?? payload?.task_id ?? "").trim();
           if (!taskId) return;
           const diffRaw = payload?.diff;
           const diff =
@@ -439,9 +407,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           const mergedProgress = merged.progress;
           if (mergedProgress != null) {
             const diffKeys = Object.keys(diff).filter((k) => diff[k] != null);
-            const onlyProgress =
-              diffKeys.length > 0 &&
-              diffKeys.every((k) => k === "progress");
+            const onlyProgress = diffKeys.length > 0 && diffKeys.every((k) => k === "progress");
             if (onlyProgress) {
               if (mergedProgress <= (cur.progress ?? 0)) {
                 return;
@@ -459,12 +425,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           const next: CrawlTask = {
             ...cur,
             ...merged,
-            progress:
-              nextStatus === "completed"
-                ? 100
-                : merged.progress != null
-                  ? merged.progress
-                  : cur.progress,
+            progress: nextStatus === "completed" ? 100 : merged.progress != null ? merged.progress : cur.progress,
           };
           tasks.value[idx] = next;
 
@@ -487,9 +448,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await listen("auto-config-change", async (event) => {
         const payload: any = event.payload as any;
         const reason = String(payload?.reason ?? "");
-        const configId = String(
-          payload?.configId ?? payload?.config_id ?? "",
-        ).trim();
+        const configId = String(payload?.configId ?? payload?.config_id ?? "").trim();
         if (!configId) {
           await loadRunConfigs();
           return;
@@ -510,11 +469,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           const list = tasks.value;
           for (let i = 0; i < list.length; i++) {
             const t = list[i];
-            if (
-              t.status === "running" ||
-              t.status === "waiting_downloads" ||
-              t.status === "pending"
-            ) {
+            if (t.status === "running" || t.status === "waiting_downloads" || t.status === "pending") {
               void syncTaskFromBackend(t.id);
             }
           }
@@ -577,9 +532,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     try {
       const raw = await invoke<unknown[]>("get_run_configs");
       const list = Array.isArray(raw) ? raw : [];
-      runConfigs.value = list
-        .map((x) => parseRunConfigRaw(x))
-        .filter((c): c is RunConfig => c != null);
+      runConfigs.value = list.map((x) => parseRunConfigRaw(x)).filter((c): c is RunConfig => c != null);
     } catch (error) {
       console.error("加载运行配置失败:", error);
       runConfigs.value = [];
@@ -603,9 +556,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           if (parsed) collected.push(parsed);
         }
       }
-      collected.sort((a, b) =>
-        a.pluginId.localeCompare(b.pluginId) || a.filename.localeCompare(b.filename),
-      );
+      collected.sort((a, b) => a.pluginId.localeCompare(b.pluginId) || a.filename.localeCompare(b.filename));
       pluginRecommendedConfigs.value = collected;
     } catch (error) {
       console.error("加载插件推荐配置失败:", error);
@@ -622,13 +573,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
       importScheduleDefault = true;
     }
     const locale = String(unref(i18n.global.locale) ?? "zh");
-    const nameStr =
-      resolveConfigText(preset.name as any, locale).trim() || preset.filename;
+    const nameStr = resolveConfigText(preset.name as any, locale).trim() || preset.filename;
     const descRaw = preset.description;
     const description =
-      descRaw != null && descRaw !== ""
-        ? resolveConfigText(descRaw as any, locale).trim() || undefined
-        : undefined;
+      descRaw != null && descRaw !== "" ? resolveConfigText(descRaw as any, locale).trim() || undefined : undefined;
     const spec = preset.scheduleSpec;
     const scheduleEnabled = Boolean(importScheduleDefault && spec);
     return await addRunConfig({
@@ -668,10 +616,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
       scheduleLastRunAt: config.scheduleLastRunAt,
     };
     await invoke("add_run_config", { config: cfg });
-    runConfigs.value = [
-      cfg,
-      ...runConfigs.value.filter((c) => c.id !== cfg.id),
-    ].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+    runConfigs.value = [cfg, ...runConfigs.value.filter((c) => c.id !== cfg.id)].sort(
+      (a, b) => Number(b.createdAt) - Number(a.createdAt),
+    );
     return cfg;
   }
 
@@ -697,10 +644,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await loadRunConfigs();
       throw new Error("copy_run_config: invalid payload");
     }
-    runConfigs.value = [
-      copied,
-      ...runConfigs.value.filter((c) => c.id !== copied.id),
-    ].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+    runConfigs.value = [copied, ...runConfigs.value.filter((c) => c.id !== copied.id)].sort(
+      (a, b) => Number(b.createdAt) - Number(a.createdAt),
+    );
     return copied;
   }
 
@@ -826,10 +772,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   /** 分页加载任务（用于任务抽屉触底加载，减轻首次打开卡顿） */
-  async function loadTasksPage(
-    limit: number,
-    offset: number,
-  ): Promise<{ total: number } | null> {
+  async function loadTasksPage(limit: number, offset: number): Promise<{ total: number } | null> {
     try {
       const res = await invoke<{
         tasks: Array<{
@@ -889,10 +832,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
   /** 与后端 clear_finished_tasks 一致：本地只保留未结束任务 */
   function applyKeepOnlyPendingAndRunningTasks() {
     tasks.value = tasks.value.filter(
-      (t) =>
-        t.status === "pending" ||
-        t.status === "running" ||
-        t.status === "waiting_downloads",
+      (t) => t.status === "pending" || t.status === "running" || t.status === "waiting_downloads",
     );
     tasksTotal.value = tasks.value.length;
   }

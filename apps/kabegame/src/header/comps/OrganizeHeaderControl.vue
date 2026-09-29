@@ -8,10 +8,7 @@
     >
       <el-icon><FolderOpened /></el-icon>
       <span>{{ t("header.organize") }}</span>
-      <span
-        v-if="organizeStore.running"
-        class="ml-auto text-xs text-[var(--anime-text-muted)]"
-      >
+      <span v-if="organizeStore.running" class="ml-auto text-xs text-[var(--anime-text-muted)]">
         {{ t("header.organizeInProgress") }}
       </span>
     </el-button>

@@ -65,9 +65,7 @@ export const useSurfStore = defineStore("surf", () => {
   let unlistenSession: UnlistenFn | null = null;
 
   const records = computed(() =>
-    orderedIds.value
-      .map((id) => recordsById.value[id])
-      .filter((record): record is SurfRecord => !!record),
+    orderedIds.value.map((id) => recordsById.value[id]).filter((record): record is SurfRecord => !!record),
   );
   const total = computed(() => orderedIds.value.length);
 
@@ -127,22 +125,14 @@ export const useSurfStore = defineStore("surf", () => {
   async function ensureRecordsByIds(ids: string[]): Promise<SurfRecord[]> {
     if (IS_ANDROID) return [];
     const missingIds = Array.from(
-      new Set(
-        ids
-          .map((id) => String(id ?? "").trim())
-          .filter((id) => id && !recordsById.value[id]),
-      ),
+      new Set(ids.map((id) => String(id ?? "").trim()).filter((id) => id && !recordsById.value[id])),
     );
     if (missingIds.length === 0) {
-      return ids
-        .map((id) => recordById(id))
-        .filter((record): record is SurfRecord => !!record);
+      return ids.map((id) => recordById(id)).filter((record): record is SurfRecord => !!record);
     }
     const fetched = await invoke<SurfRecord[]>("surf_get_records_by_ids", { ids: missingIds });
     for (const raw of fetched) upsertRecordRaw(raw);
-    return ids
-      .map((id) => recordById(id))
-      .filter((record): record is SurfRecord => !!record);
+    return ids.map((id) => recordById(id)).filter((record): record is SurfRecord => !!record);
   }
 
   async function ensureRecordByHost(host: string): Promise<SurfRecord | null> {
@@ -194,14 +184,11 @@ export const useSurfStore = defineStore("surf", () => {
       }
     });
 
-    unlistenSession = await listen<{ active?: boolean; surfHost?: string | null }>(
-      "surf-session-changed",
-      (event) => {
-        const payload = event.payload ?? {};
-        sessionActive.value = !!payload.active;
-        activeHost.value = payload.surfHost ? normalizeHost(payload.surfHost) : null;
-      },
-    );
+    unlistenSession = await listen<{ active?: boolean; surfHost?: string | null }>("surf-session-changed", (event) => {
+      const payload = event.payload ?? {};
+      sessionActive.value = !!payload.active;
+      activeHost.value = payload.surfHost ? normalizeHost(payload.surfHost) : null;
+    });
   }
 
   async function checkSession() {
@@ -225,10 +212,7 @@ export const useSurfStore = defineStore("surf", () => {
         return;
       }
       await initListeners();
-      const [allRecords] = await Promise.all([
-        invoke<SurfRecord[]>("surf_get_all_records"),
-        checkSession(),
-      ]);
+      const [allRecords] = await Promise.all([invoke<SurfRecord[]>("surf_get_all_records"), checkSession()]);
       recordsById.value = {};
       idByHost.value = {};
       for (const raw of allRecords) upsertRecordRaw(raw);

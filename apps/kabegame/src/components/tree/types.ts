@@ -90,10 +90,6 @@ export interface TreeDndController<T> {
   canDrag(element: T): boolean;
   /** 浮影文本；缺省用消费者行内容无从得知，故建议提供。 */
   getDragLabel?(element: T): string;
-  onDragOver(
-    source: T,
-    target: T | null,
-    sector: TreeDropPosition,
-  ): boolean | TreeDragOverReaction;
+  onDragOver(source: T, target: T | null, sector: TreeDropPosition): boolean | TreeDragOverReaction;
   drop(source: T, target: T | null, position: TreeDropPosition): void | Promise<void>;
 }

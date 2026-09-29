@@ -11,10 +11,7 @@ export interface UseDragScrollOptions {
   maxVelocityPxPerMs?: DragScrollOptions["maxVelocityPxPerMs"];
 }
 
-export function useDragScroll(
-  container: Ref<HTMLElement | null>,
-  options?: UseDragScrollOptions
-) {
+export function useDragScroll(container: Ref<HTMLElement | null>, options?: UseDragScrollOptions) {
   let dropScroll: (() => void) | null = null;
   watch(
     container,
@@ -36,6 +33,6 @@ export function useDragScroll(
         });
       }
     },
-    { immediate: true, flush: "post" }
+    { immediate: true, flush: "post" },
   );
 }

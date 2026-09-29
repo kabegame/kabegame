@@ -22,11 +22,7 @@ type KameMessageApi = {
 };
 
 const normalizeText = (message: unknown) => {
-  if (
-    message &&
-    typeof message === "object" &&
-    "message" in message
-  ) {
+  if (message && typeof message === "object" && "message" in message) {
     return normalizeText((message as { message?: unknown }).message);
   }
   if (message == null) return "";

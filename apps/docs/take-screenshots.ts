@@ -5,11 +5,11 @@ const BASE = "http://localhost:1420";
 const OUT = join(import.meta.dir, "src/assets/screenshots");
 
 const VIEWS = [
-  { url: "/gallery",        file: "gallery.png" },
-  { url: "/albums",         file: "albums.png" },
+  { url: "/gallery", file: "gallery.png" },
+  { url: "/albums", file: "albums.png" },
   { url: "/plugins", file: "plugins.png" },
-  { url: "/settings",       file: "settings.png" },
-  { url: "/surf",           file: "surf.png" },
+  { url: "/settings", file: "settings.png" },
+  { url: "/surf", file: "surf.png" },
 ];
 
 const browser = await chromium.launch({ headless: true });

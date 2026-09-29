@@ -10,10 +10,7 @@
       <div v-if="showLoading" class="ic-loading-overlay absolute inset-0 z-3 pointer-events-none">
         <el-skeleton :rows="0" animated class="absolute inset-0">
           <template #template>
-            <el-skeleton-item
-              :variant="isVideo ? 'rect' : 'image'"
-              :style="{ width: '100%', height: '100%' }"
-            />
+            <el-skeleton-item :variant="isVideo ? 'rect' : 'image'" :style="{ width: '100%', height: '100%' }" />
           </template>
         </el-skeleton>
       </div>
@@ -156,7 +153,10 @@ import { IS_ANDROID, IS_LINUX, IS_MACOS } from "../../env";
 
 // ---- Path → URL helpers (pure) ----
 const normalizeDesktopPath = (path: string | undefined): string =>
-  (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
+  (path || "")
+    .trimStart()
+    .replace(/^\\\\\?\\/, "")
+    .trim();
 
 interface Props {
   image: ImageInfo;
@@ -220,7 +220,11 @@ const dragFileName = (): string => {
  */
 const onDragStart = (event: DragEvent) => {
   // #region debug-drag
-  void sendDebugEvent("img_dragstart", { nativeDrag: props.nativeDrag, id: props.image.id }, { sessionId: "drag-internal" });
+  void sendDebugEvent(
+    "img_dragstart",
+    { nativeDrag: props.nativeDrag, id: props.image.id },
+    { sessionId: "drag-internal" },
+  );
   // #endregion debug-drag
   if (!props.nativeDrag) {
     event.preventDefault();
@@ -340,7 +344,7 @@ const origSlot = useSlot(() => buildChain(compPath.value, localPath.value));
 const videoSlot = useSlot(() =>
   props.prefer === "original"
     ? buildChain(compPath.value, localPath.value, thumbPath.value)
-    : buildChain(thumbPath.value, compPath.value, localPath.value)
+    : buildChain(thumbPath.value, compPath.value, localPath.value),
 );
 
 // stale 守卫：已被 key 换掉的旧元素卸载后仍可能派发迟到的 load/error 事件，
@@ -349,7 +353,7 @@ const isStaleMediaEvent = (e: Event): boolean => !(e.target as Element | null)?.
 
 const onImgError = (slot: typeof thumbSlot, e: Event) => {
   if (isStaleMediaEvent(e)) return;
-  console.error('[image-error]', e);
+  console.error("[image-error]", e);
   slot.onError();
 };
 
@@ -367,9 +371,7 @@ const isLost = computed(() => {
       return thumbSlot.dead;
     case "image":
       // 安卓：原图层死亡即视为丢失（缩略图可能仍在，但源文件已不可达）
-      return IS_ANDROID
-        ? origEngaged.value && origSlot.dead
-        : thumbSlot.dead && origSlot.dead;
+      return IS_ANDROID ? origEngaged.value && origSlot.dead : thumbSlot.dead && origSlot.dead;
   }
 });
 
@@ -383,10 +385,11 @@ watch(
     origSlot.reset();
     videoSlot.reset();
     failedSources.value = [];
-    if (isLost.value) finishLoading(); // 一条可加载的链都没有
+    if (isLost.value)
+      finishLoading(); // 一条可加载的链都没有
     else startLoading();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(
@@ -397,7 +400,7 @@ watch(
       emit("error");
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // ---- Handlers ----
@@ -409,7 +412,7 @@ const onLoad = (e: Event) => {
 
 const onVideoError = (e: Event) => {
   if (isStaleMediaEvent(e)) return;
-  console.error('[video-error]', e);
+  console.error("[video-error]", e);
   videoSlot.onError();
 };
 
@@ -428,7 +431,11 @@ watchEffect(() => {
   } else {
     el.pause();
     if (props.resetVideoOnPause) {
-      try { el.currentTime = 0; } catch { /* some platforms throw on currentTime write */ }
+      try {
+        el.currentTime = 0;
+      } catch {
+        /* some platforms throw on currentTime write */
+      }
     }
   }
 });

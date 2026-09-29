@@ -180,11 +180,7 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
    * 投影一个节点子树。返回该节点贡献的可见行数（含自身）。
    * 过滤模式下忽略 expanded：命中行 + 祖先链可见（只搜已加载子树）。
    */
-  function projectNode(
-    handle: TreeNodeHandle<T>,
-    out: TreeRow<T>[],
-    filterLower: string,
-  ): number {
+  function projectNode(handle: TreeNodeHandle<T>, out: TreeRow<T>[], filterLower: string): number {
     if (options.isRowHidden?.(handle.element)) {
       handle.subtreeRowCount = 0;
       return 0;
@@ -319,13 +315,8 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   async function reload(): Promise<void> {
     const sections = options.sections();
     // 分区结构变化（增删分区）时整体重建分区表，句柄按 key 复用
-    if (
-      sectionStates.length !== sections.length ||
-      sectionStates.some((s, i) => s.section.id !== sections[i].id)
-    ) {
-      const prevRoots = new Map(
-        sectionStates.flatMap((s) => s.roots.map((r) => [r.key, r] as const)),
-      );
+    if (sectionStates.length !== sections.length || sectionStates.some((s, i) => s.section.id !== sections[i].id)) {
+      const prevRoots = new Map(sectionStates.flatMap((s) => s.roots.map((r) => [r.key, r] as const)));
       sectionStates.length = 0;
       for (const section of sections) {
         sectionStates.push({ section, roots: [], loadedPages: 0, hasMore: false, loading: false });
@@ -379,7 +370,8 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     try {
       const chunks = await Promise.all(
         Array.from({ length: handle.loadedPages }, (_, index) =>
-          dataSource.getChildrenPage!(handle.element, index + 1)),
+          dataSource.getChildrenPage!(handle.element, index + 1),
+        ),
       );
       if (loadTokens.get(handle.key) !== token || !handles.has(handle.key)) return;
       const unique = new Map<string, T>();

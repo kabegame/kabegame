@@ -13,7 +13,13 @@ describe("validateWebpageUrl", () => {
   it("rejects empty, relative, non-http and credential URLs", () => {
     expect(validateWebpageUrl("   ")).toEqual({ ok: false, error: "empty" });
     expect(validateWebpageUrl("example.com/a")).toEqual({ ok: false, error: "invalid" });
-    for (const raw of ["ftp://example.com/", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "blob:https://a.com/x"]) {
+    for (const raw of [
+      "ftp://example.com/",
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "blob:https://a.com/x",
+    ]) {
       expect(validateWebpageUrl(raw)).toEqual({ ok: false, error: "scheme" });
     }
     expect(validateWebpageUrl("https://user:pw@example.com/")).toEqual({ ok: false, error: "credentials" });
@@ -38,7 +44,9 @@ describe("canOpenTaskWebview", () => {
     const webview = { pluginId: "webpage", userConfig: { backend: "webview" } };
     expect(canOpenTaskWebview({ ...webview, status: "running" }, plugins)).toBe(true);
     expect(canOpenTaskWebview({ ...webview, status: "waiting_downloads" }, plugins)).toBe(true);
-    expect(canOpenTaskWebview({ pluginId: "webpage", status: "running", userConfig: { backend: "v8" } }, plugins)).toBe(false);
+    expect(canOpenTaskWebview({ pluginId: "webpage", status: "running", userConfig: { backend: "v8" } }, plugins)).toBe(
+      false,
+    );
     expect(canOpenTaskWebview({ pluginId: "webpage", status: "running", userConfig: {} }, plugins)).toBe(false);
     expect(canOpenTaskWebview({ pluginId: "webpage", status: "running", userConfig: null }, plugins)).toBe(false);
   });
@@ -46,7 +54,9 @@ describe("canOpenTaskWebview", () => {
   it("never shows for pending or terminal tasks", () => {
     for (const status of ["pending", "completed", "failed", "canceled"]) {
       expect(canOpenTaskWebview({ pluginId: "js-plugin", status }, plugins)).toBe(false);
-      expect(canOpenTaskWebview({ pluginId: "webpage", status, userConfig: { backend: "webview" } }, plugins)).toBe(false);
+      expect(canOpenTaskWebview({ pluginId: "webpage", status, userConfig: { backend: "webview" } }, plugins)).toBe(
+        false,
+      );
     }
   });
 });

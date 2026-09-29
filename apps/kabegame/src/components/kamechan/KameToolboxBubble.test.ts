@@ -6,7 +6,7 @@ import KameToolboxBubble from "./KameToolboxBubble.vue";
 
 const CustomTool = defineComponent({
   name: "CustomTool",
-  template: "<button type=\"button\">整理</button>",
+  template: '<button type="button">整理</button>',
 });
 
 vi.mock("@kabegame/i18n", () => ({
@@ -14,17 +14,21 @@ vi.mock("@kabegame/i18n", () => ({
 }));
 vi.mock("@/header/globalToolsRegistry", () => ({
   useGlobalTools: () => ({
-    groups: [{
-      id: "maintenance",
-      title: "maintenance",
-      items: [{
-        id: "organize",
-        group: "maintenance",
-        label: "整理",
-        comp: CustomTool,
-        kind: "action",
-      }],
-    }],
+    groups: [
+      {
+        id: "maintenance",
+        title: "maintenance",
+        items: [
+          {
+            id: "organize",
+            group: "maintenance",
+            label: "整理",
+            comp: CustomTool,
+            kind: "action",
+          },
+        ],
+      },
+    ],
   }),
 }));
 vi.mock("@/composables/useBusyTasks", () => ({

@@ -1,7 +1,12 @@
 <template>
   <div class="task-run-params">
-    <el-descriptions :title="t('tasks.taskRunParamsSectionPlugin')" :column="2" border size="small"
-      class="params-desc-block">
+    <el-descriptions
+      :title="t('tasks.taskRunParamsSectionPlugin')"
+      :column="2"
+      border
+      size="small"
+      class="params-desc-block"
+    >
       <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
         <div class="plugin-source-cell">
           <div class="plugin-icon-box" aria-hidden="true">
@@ -15,8 +20,14 @@
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions v-if="showTimeSection" :title="t('tasks.taskRunParamsSectionTime')" :column="2" border size="small"
-      class="params-desc-block">
+    <el-descriptions
+      v-if="showTimeSection"
+      :title="t('tasks.taskRunParamsSectionTime')"
+      :column="2"
+      border
+      size="small"
+      class="params-desc-block"
+    >
       <el-descriptions-item v-if="hasStartTime" :label="t('tasks.taskRunParamsColStartTime')">
         <span class="cell-with-icon">
           <el-icon class="cell-icon">
@@ -36,14 +47,18 @@
         <span v-else class="text-muted">—</span>
       </el-descriptions-item>
       <el-descriptions-item v-if="hasStartTime" :label="t('tasks.taskRunParamsColDuration')" :span="2">
-        {{
-          formatDuration(task.startTime!, task.endTime != null ? task.endTime : undefined)
-        }}
+        {{ formatDuration(task.startTime!, task.endTime != null ? task.endTime : undefined) }}
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions v-if="showStatsSection" :title="t('tasks.taskRunParamsSectionStats')" :column="2" border
-      size="small" class="params-desc-block">
+    <el-descriptions
+      v-if="showStatsSection"
+      :title="t('tasks.taskRunParamsSectionStats')"
+      :column="2"
+      border
+      size="small"
+      class="params-desc-block"
+    >
       <el-descriptions-item v-if="(task.deletedCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDeleted')">
         {{ t("tasks.drawerDeletedCount", { n: task.deletedCount ?? 0 }) }}
       </el-descriptions-item>
@@ -52,23 +67,45 @@
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions v-if="task.outputDir" :title="t('tasks.taskRunParamsSectionOutput')" :column="1" border
-      size="small" class="params-desc-block">
+    <el-descriptions
+      v-if="task.outputDir"
+      :title="t('tasks.taskRunParamsSectionOutput')"
+      :column="1"
+      border
+      size="small"
+      class="params-desc-block"
+    >
       <el-descriptions-item :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
         <span class="break-all">{{ task.outputDir }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions v-if="visibleConfigEntries.length > 0" :title="t('tasks.taskRunParamsSectionConfig')" :column="1"
-      border size="small" class="params-desc-block">
-      <el-descriptions-item v-for="[key, value] in visibleConfigEntries" :key="key"
-        :label="getVarDisplayName(task.pluginId, String(key))" :span="2">
+    <el-descriptions
+      v-if="visibleConfigEntries.length > 0"
+      :title="t('tasks.taskRunParamsSectionConfig')"
+      :column="1"
+      border
+      size="small"
+      class="params-desc-block"
+    >
+      <el-descriptions-item
+        v-for="[key, value] in visibleConfigEntries"
+        :key="key"
+        :label="getVarDisplayName(task.pluginId, String(key))"
+        :span="2"
+      >
         <span class="break-all">{{ formatConfigValue(task.pluginId, String(key), value) }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
-    <el-descriptions v-if="task.status === 'failed'" :title="t('tasks.taskRunParamsSectionError')" :column="1" border
-      size="small" class="params-desc-block params-desc-block--error">
+    <el-descriptions
+      v-if="task.status === 'failed'"
+      :title="t('tasks.taskRunParamsSectionError')"
+      :column="1"
+      border
+      size="small"
+      class="params-desc-block params-desc-block--error"
+    >
       <el-descriptions-item :label="t('tasks.taskRunParamsColErrorDetail')" :span="2">
         <div class="error-detail-cell">
           <div v-if="(task.progress ?? 0) > 0" class="error-progress">
@@ -79,8 +116,13 @@
               <WarningFilled />
             </el-icon>
             <span class="error-text">{{ task.error || t("tasks.drawerExecFailed") }}</span>
-            <el-button text size="small" class="copy-error-btn" :title="t('tasks.drawerCopyErrorTooltip')"
-              @click="handleCopyError(task)">
+            <el-button
+              text
+              size="small"
+              class="copy-error-btn"
+              :title="t('tasks.drawerCopyErrorTooltip')"
+              @click="handleCopyError(task)"
+            >
               <el-icon>
                 <CopyDocument />
               </el-icon>
@@ -97,10 +139,7 @@ import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@kabegame/element-plus-icons";
-import {
-  buildVarMetaMapFromPluginConfig,
-  usePluginStore,
-} from "../../stores/plugins";
+import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
 import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
 import { IS_WEB } from "@kabegame/core/env";
@@ -145,9 +184,7 @@ const varMetaByPluginId = computed(() => {
   return out;
 });
 
-const visibleConfigEntries = computed((): [string, any][] =>
-  getVisibleUserConfigEntries(props.task),
-);
+const visibleConfigEntries = computed((): [string, any][] => getVisibleUserConfigEntries(props.task));
 
 const hasStartTime = computed(() => {
   const st = props.task.startTime;
@@ -158,9 +195,7 @@ const showTimeSection = computed(
   () => hasStartTime.value || (props.task.endTime != null && Number(props.task.endTime) > 0),
 );
 
-const showStatsSection = computed(
-  () => (props.task.deletedCount ?? 0) > 0 || (props.task.dedupCount ?? 0) > 0,
-);
+const showStatsSection = computed(() => (props.task.deletedCount ?? 0) > 0 || (props.task.dedupCount ?? 0) > 0);
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 
@@ -216,9 +251,7 @@ const formatConfigValue = (pluginId: string, key: string, value: any, raw = fals
       return t("tasks.drawerListCount", { n: value.length });
     }
     return value
-      .map((v) =>
-        raw ? String(v) : typeof v === "string" ? resolveConfigText(map[v], locale.value) || v : String(v),
-      )
+      .map((v) => (raw ? String(v) : typeof v === "string" ? resolveConfigText(map[v], locale.value) || v : String(v)))
       .join(", ");
   }
   if (typeof value === "object") {

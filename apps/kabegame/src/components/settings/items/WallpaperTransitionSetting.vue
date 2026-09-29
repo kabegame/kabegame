@@ -50,7 +50,7 @@ const options = computed(() =>
   capabilities.transitionsFor(mode.value).map((opt) => ({
     value: opt.value,
     label: resolveManifestText(opt.label, locale.value),
-  }))
+  })),
 );
 
 const localValue = ref<string>("none");
@@ -59,7 +59,7 @@ watch(
   (v) => {
     localValue.value = (v as any as string) || "none";
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 onMounted(async () => {

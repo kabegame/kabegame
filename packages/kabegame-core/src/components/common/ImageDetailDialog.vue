@@ -8,7 +8,11 @@
     :class="{ 'is-compact': isCompact }"
     align-center
     append-to-body
-    @update:model-value="(v: boolean) => { if (!v) emit('close') }"
+    @update:model-value="
+      (v: boolean) => {
+        if (!v) emit('close');
+      }
+    "
   >
     <div class="image-detail-columns" :class="{ 'is-compact': isCompact }">
       <div class="detail-col-basic">
@@ -22,23 +26,12 @@
           @open-surf-record="emit('open-surf-record', $event)"
         />
       </div>
-      <div
-        v-if="isNativeMetadataEligible(image?.type)"
-        class="detail-col-meta"
-      >
-        <ImageNativeMetadataPanel
-          :image="image"
-          :collapsible="isCompact"
-          :fill-when-expanded="!isCompact"
-        />
+      <div v-if="isNativeMetadataEligible(image?.type)" class="detail-col-meta">
+        <ImageNativeMetadataPanel :image="image" :collapsible="isCompact" :fill-when-expanded="!isCompact" />
       </div>
       <!-- 面板壳恒定存在（无插件数据时显示空态），列不随内容有无出现/消失 -->
       <div class="detail-col-plugin">
-        <ImagePluginDescriptionPanel
-          :image="image"
-          :collapsible="isCompact"
-          :fill-when-expanded="!isCompact"
-        />
+        <ImagePluginDescriptionPanel :image="image" :collapsible="isCompact" :fill-when-expanded="!isCompact" />
       </div>
     </div>
   </el-dialog>

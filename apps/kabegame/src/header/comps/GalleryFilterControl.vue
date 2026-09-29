@@ -11,10 +11,7 @@
     </el-button>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item
-          command="all"
-          :class="{ 'is-active': legacyFilter.type === 'all' }"
-        >
+        <el-dropdown-item command="all" :class="{ 'is-active': legacyFilter.type === 'all' }">
           {{ t("gallery.filterAll") }}
         </el-dropdown-item>
         <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
@@ -54,15 +51,8 @@
           </el-dropdown>
         </el-dropdown-item>
         <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
-          <el-dropdown
-            trigger="hover"
-            placement="right-start"
-            @command="handlePluginCommand"
-          >
-            <span
-              class="plugin-submenu-trigger"
-              :class="{ 'is-active': isPluginFilterActive }"
-            >
+          <el-dropdown trigger="hover" placement="right-start" @command="handlePluginCommand">
+            <span class="plugin-submenu-trigger" :class="{ 'is-active': isPluginFilterActive }">
               {{ t("gallery.filterByPlugin") }}
               <el-icon class="plugin-submenu-chevron">
                 <ArrowRight />
@@ -91,15 +81,8 @@
           </el-dropdown>
         </el-dropdown-item>
         <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
-          <el-dropdown
-            trigger="hover"
-            placement="right-start"
-            @command="handleSizeCommand"
-          >
-            <span
-              class="plugin-submenu-trigger"
-              :class="{ 'is-active': isSizeFilterActive }"
-            >
+          <el-dropdown trigger="hover" placement="right-start" @command="handleSizeCommand">
+            <span class="plugin-submenu-trigger" :class="{ 'is-active': isSizeFilterActive }">
               {{ t("gallery.filterBySize") }}
               <el-icon class="plugin-submenu-chevron">
                 <ArrowRight />
@@ -120,15 +103,8 @@
           </el-dropdown>
         </el-dropdown-item>
         <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
-          <el-dropdown
-            trigger="hover"
-            placement="right-start"
-            @command="handleAspectCommand"
-          >
-            <span
-              class="plugin-submenu-trigger"
-              :class="{ 'is-active': isAspectFilterActive }"
-            >
+          <el-dropdown trigger="hover" placement="right-start" @command="handleAspectCommand">
+            <span class="plugin-submenu-trigger" :class="{ 'is-active': isAspectFilterActive }">
               {{ t("gallery.filterByAspect") }}
               <el-icon class="plugin-submenu-chevron">
                 <ArrowRight />
@@ -149,15 +125,8 @@
           </el-dropdown>
         </el-dropdown-item>
         <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
-          <el-dropdown
-            trigger="hover"
-            placement="right-start"
-            @command="handleMediaTypeCommand"
-          >
-            <span
-              class="plugin-submenu-trigger"
-              :class="{ 'is-active': isMediaTypeFilterActive }"
-            >
+          <el-dropdown trigger="hover" placement="right-start" @command="handleMediaTypeCommand">
+            <span class="plugin-submenu-trigger" :class="{ 'is-active': isMediaTypeFilterActive }">
               {{ t("gallery.filterByMediaType") }}
               <el-icon class="plugin-submenu-chevron">
                 <ArrowRight />
@@ -251,9 +220,7 @@ const galleryRouteStore = useGalleryRouteStore();
 const { computedContextPath: filterContextPrefix } = storeToRefs(galleryRouteStore);
 /** 查询的单原子投影；null = 组合查询，此时快捷过滤控件不展示。 */
 const simpleFilters = computed(() => asSingleFilterSet(galleryRouteStore.query));
-const legacyFilter = computed(() =>
-  filterSetToSingleFilter(simpleFilters.value ?? {})
-);
+const legacyFilter = computed(() => filterSetToSingleFilter(simpleFilters.value ?? {}));
 
 const showSimpleFilter = computed(() => simpleFilters.value !== null);
 
@@ -265,27 +232,21 @@ const isPluginFilterActive = computed(() => currentPluginId.value != null);
 
 const isTimeFilterActive = computed(() => dateTail.value != null);
 
-const isMediaTypeFilterActive = computed(
-  () => filterMediaKind(legacyFilter.value) != null
-);
+const isMediaTypeFilterActive = computed(() => filterMediaKind(legacyFilter.value) != null);
 
-const isSizeFilterActive = computed(
-  () => filterSizeRange(legacyFilter.value) != null
-);
+const isSizeFilterActive = computed(() => filterSizeRange(legacyFilter.value) != null);
 
-const isAspectFilterActive = computed(
-  () => filterAspectRange(legacyFilter.value) != null
-);
+const isAspectFilterActive = computed(() => filterAspectRange(legacyFilter.value) != null);
 
 const SIZE_BUCKETS: Array<{ range: string; labelKey: string }> = [
-  { range: "unknown",   labelKey: "filterSize_unknown" },
-  { range: "1B-512KB",  labelKey: "filterSize_lt512k" },
+  { range: "unknown", labelKey: "filterSize_unknown" },
+  { range: "1B-512KB", labelKey: "filterSize_lt512k" },
   { range: "512KB-1MB", labelKey: "filterSize_512k_1m" },
-  { range: "1MB-2MB",   labelKey: "filterSize_1m_2m" },
-  { range: "2MB-5MB",   labelKey: "filterSize_2m_5m" },
-  { range: "5MB-10MB",  labelKey: "filterSize_5m_10m" },
+  { range: "1MB-2MB", labelKey: "filterSize_1m_2m" },
+  { range: "2MB-5MB", labelKey: "filterSize_2m_5m" },
+  { range: "5MB-10MB", labelKey: "filterSize_5m_10m" },
   { range: "10MB-50MB", labelKey: "filterSize_10m_50m" },
-  { range: "50MB-",     labelKey: "filterSize_gte50m" },
+  { range: "50MB-", labelKey: "filterSize_gte50m" },
 ];
 
 const pluginGroups = ref<PluginGroupRow[]>([]);
@@ -305,8 +266,8 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
     dayGroups.value,
     buildTimeMenuScopeLabels(t, String(locale.value)),
     yearGroups.value,
-    { collapse: false }
-  )
+    { collapse: false },
+  ),
 );
 
 async function countProviderPath(path: string): Promise<number> {
@@ -319,8 +280,7 @@ async function countProviderPath(path: string): Promise<number> {
 async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
   const entries = await pathqlList(withGalleryPrefix(path), true);
   return (Array.isArray(entries) ? entries : []).filter(
-    (e): e is ProviderChildDir =>
-      !!e && typeof e.name === "string" && !!e.name
+    (e): e is ProviderChildDir => !!e && typeof e.name === "string" && !!e.name,
   );
 }
 
@@ -332,7 +292,7 @@ async function loadPluginGroups() {
       entries.map(async (e) => ({
         plugin_id: e.name,
         count: await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
-      }))
+      })),
     );
     pluginGroups.value = groups.filter((r) => r.count > 0);
   } catch {
@@ -407,7 +367,7 @@ async function loadTimeRootData() {
         yearCandidates.map(async (y) => ({
           ...y,
           total: await countProviderPath(`${prefix}date/${y.seg}`),
-        }))
+        })),
       )
     ).filter((y) => y.total > 0);
     if (prefix !== filterContextPrefix.value) return;
@@ -444,14 +404,11 @@ async function ensureTimeYearMonthsLoaded(year: string) {
           monthCandidates.map(async (mo) => ({
             year_month: `${year}-${mo.month}`,
             count: await countProviderPath(`${prefix}date/${yearSeg}/${mo.seg}`),
-          }))
+          })),
         )
       ).filter((mo) => mo.count > 0);
       if (prefix !== filterContextPrefix.value) return;
-      monthGroups.value = [
-        ...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)),
-        ...months,
-      ];
+      monthGroups.value = [...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)), ...months];
       dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
       replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
     } catch {
@@ -486,14 +443,11 @@ async function ensureTimeMonthDaysLoaded(yearMonth: string) {
           dayCandidates.map(async (d) => ({
             ymd: `${yearMonth}-${d.day}`,
             count: await countProviderPath(`${prefix}date/${yearSeg}/${monthSeg}/${d.seg}`),
-          }))
+          })),
         )
       ).filter((d) => d.count > 0);
       if (prefix !== filterContextPrefix.value) return;
-      dayGroups.value = [
-        ...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)),
-        ...days,
-      ];
+      dayGroups.value = [...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)), ...days];
       replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
     } catch {
       if (prefix === filterContextPrefix.value) {
@@ -539,14 +493,11 @@ onMounted(() => void loadFilterCounts());
 
 watch(filterContextPrefix, () => void loadFilterCounts());
 
-const pluginSignature = computed(() =>
-  pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|")
-);
+const pluginSignature = computed(() => pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|"));
 
 watch(pluginSignature, () => {
   pluginGroups.value = [];
-  const current =
-    legacyFilter.value.type === "plugin" ? legacyFilter.value.pluginId : "";
+  const current = legacyFilter.value.type === "plugin" ? legacyFilter.value.pluginId : "";
   if (current && !pluginStore.plugins.some((p) => p.id === current)) {
     void galleryRouteStore.navigate({ query: [], page: 1 }, { push: true });
     return;
@@ -574,10 +525,7 @@ const filterLabel = computed(() => {
   }
   const pid = currentPluginId.value;
   if (pid) {
-    const ext =
-      legacyFilter.value.type === "plugin"
-        ? legacyFilter.value.extendPath?.trim()
-        : "";
+    const ext = legacyFilter.value.type === "plugin" ? legacyFilter.value.extendPath?.trim() : "";
     const name = pluginStore.pluginLabel(pid);
     return ext ? `${name} / ${ext}` : t("gallery.filterByPluginWithName", { name });
   }
@@ -613,7 +561,7 @@ function handleCommand(command: string) {
       query: [],
       page: 1,
     },
-    { push: true }
+    { push: true },
   );
 }
 
@@ -622,14 +570,12 @@ function handlePluginCommand(pluginId: string) {
   if (!id) return;
   void galleryRouteStore.navigate(
     {
-      query: queryFromFilterSet(singleFilterToSet(
-        extendPath
-          ? { type: "plugin", pluginId: id, extendPath }
-          : { type: "plugin", pluginId: id }
-      )),
+      query: queryFromFilterSet(
+        singleFilterToSet(extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }),
+      ),
       page: 1,
     },
-    { push: true }
+    { push: true },
   );
 }
 
@@ -638,7 +584,7 @@ function handleTimeCommand(name: string) {
   if (!seg) return;
   void galleryRouteStore.navigate(
     { query: queryFromFilterSet(singleFilterToSet({ type: "date", segment: seg })), page: 1 },
-    { push: true }
+    { push: true },
   );
 }
 
@@ -646,7 +592,7 @@ function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
   void galleryRouteStore.navigate(
     { query: queryFromFilterSet(singleFilterToSet({ type: "media-type", kind })), page: 1 },
-    { push: true }
+    { push: true },
   );
 }
 
@@ -654,7 +600,7 @@ function handleSizeCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
     { query: queryFromFilterSet(singleFilterToSet({ type: "size", range })), page: 1 },
-    { push: true }
+    { push: true },
   );
 }
 
@@ -662,7 +608,7 @@ function handleAspectCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
     { query: queryFromFilterSet(singleFilterToSet({ type: "aspect", range })), page: 1 },
-    { push: true }
+    { push: true },
   );
 }
 </script>

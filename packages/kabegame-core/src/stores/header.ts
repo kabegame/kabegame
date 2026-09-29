@@ -49,12 +49,12 @@ export enum HeaderFeatureId {
 
 export interface HeaderFeatureDef {
   id: HeaderFeatureId;
-  label?: string;     // fold 下拉菜单显示用；show 模式下作为 tooltip
-  icon?: Component;   // fold 下拉菜单图标；无 comp 时用于 show 模式默认按钮
-  comp?: Component;   // 自定义组件（show 模式专用）；缺失时自动用 icon+label 生成 HeaderActionButton
+  label?: string; // fold 下拉菜单显示用；show 模式下作为 tooltip
+  icon?: Component; // fold 下拉菜单图标；无 comp 时用于 show 模式默认按钮
+  comp?: Component; // 自定义组件（show 模式专用）；缺失时自动用 icon+label 生成 HeaderActionButton
 }
 
-export const useHeaderStore = defineStore('header', () => {
+export const useHeaderStore = defineStore("header", () => {
   const features = new Map<string, HeaderFeatureDef>();
   /** fold 项 label 覆盖，浅响应式；未覆盖时用 register 的 feature.label */
   const foldLabels = shallowReactive<Record<string, string>>({});

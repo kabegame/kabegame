@@ -5,18 +5,12 @@ import { IS_WEB } from "@kabegame/core/env";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 function isRequiresWindowModeError(error: unknown): boolean {
-  const msg =
-    typeof error === "string"
-      ? error
-      : (error as any)?.message || String(error);
+  const msg = typeof error === "string" ? error : (error as any)?.message || String(error);
   return msg.includes("REQUIRES_WINDOW_MODE");
 }
 
 function isRequiresPluginModeError(error: unknown): boolean {
-  const msg =
-    typeof error === "string"
-      ? error
-      : (error as any)?.message || String(error);
+  const msg = typeof error === "string" ? error : (error as any)?.message || String(error);
   return msg.includes("REQUIRES_PLUGIN_MODE");
 }
 
@@ -48,9 +42,7 @@ async function ensurePluginModeByUserConfirm(): Promise<void> {
   await invoke("set_wallpaper_mode", { mode: "plasma-plugin" });
 }
 
-export async function setWallpaperByImageIdWithModeFallback(
-  imageId: string,
-): Promise<void> {
+export async function setWallpaperByImageIdWithModeFallback(imageId: string): Promise<void> {
   try {
     await invoke("set_wallpaper_by_image_id", { imageId });
   } catch (error) {

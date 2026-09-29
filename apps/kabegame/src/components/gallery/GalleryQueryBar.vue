@@ -23,7 +23,11 @@
         chip-display="icon"
         :title="chipTitle(t('gallery.sort'), sortFieldChipValue)"
         :clearable="false"
-        @update:model-value="(value) => { if (value) onSortFieldCommand(value); }"
+        @update:model-value="
+          (value) => {
+            if (value) onSortFieldCommand(value);
+          }
+        "
       >
         <!-- 复合图标：底是通用的「排序」双箭头（一眼认出这颗管排序），
              右下角挂当前维度的小徽章（再认出按什么排）。只给维度图标的话，
@@ -64,66 +68,75 @@
         class="filter-chip-row query-main"
         view-class="flex flex-nowrap items-center gap-3 pt-2 pb-2.5"
       >
-          <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
+        <!-- 搜索与其它维度同列，与高级查询条件行共用同一个组件；
                这里每次提交都会 navigate + 重查，所以要防抖 -->
-          <GallerySearchDropdown
-            v-if="showSearchChip"
-            :query="searchText"
-            :mode="searchModeView"
-            :modes="searchFeatures"
-            :chip-display="searchText.trim() ? 'value' : 'icon'"
-            :debounce="300"
-            @update:query="onSearchInput"
-            @update:mode="onSearchModeSelect"
-          />
+        <GallerySearchDropdown
+          v-if="showSearchChip"
+          :query="searchText"
+          :mode="searchModeView"
+          :modes="searchFeatures"
+          :chip-display="searchText.trim() ? 'value' : 'icon'"
+          :debounce="300"
+          @update:query="onSearchInput"
+          @update:mode="onSearchModeSelect"
+        />
 
-          <KbFilterDropdown
-            v-for="dimension in filterDimensions"
-            :key="dimension.key"
-            :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
-            :chip-label="dimension.chipLabel"
-            :selected-label="dimensionChipValue(dimension.key)"
-            :any-label="dimension.anyLabel"
-            :chip-display="isDimensionActive(dimension.key) ? 'value' : 'icon'"
-            :title="chipTitle(dimension.title, dimensionChipTitleValue(dimension))"
-            @open="setDimensionPopoverOpen(dimension.key, true)"
-            @close="setDimensionPopoverOpen(dimension.key, false)"
-            @update:model-value="(value) => { if (value === null) clearDimension(dimension.key); }"
-          >
-            <template #icon>
-              <component :is="dimension.icon" />
-            </template>
-            <template #panel="{ close }">
-              <!-- 「任意」不再手写：树自己的 AnyProviderChildrenNode 就是它，
+        <KbFilterDropdown
+          v-for="dimension in filterDimensions"
+          :key="dimension.key"
+          :model-value="isDimensionActive(dimension.key) ? dimension.key : null"
+          :chip-label="dimension.chipLabel"
+          :selected-label="dimensionChipValue(dimension.key)"
+          :any-label="dimension.anyLabel"
+          :chip-display="isDimensionActive(dimension.key) ? 'value' : 'icon'"
+          :title="chipTitle(dimension.title, dimensionChipTitleValue(dimension))"
+          @open="setDimensionPopoverOpen(dimension.key, true)"
+          @close="setDimensionPopoverOpen(dimension.key, false)"
+          @update:model-value="
+            (value) => {
+              if (value === null) clearDimension(dimension.key);
+            }
+          "
+        >
+          <template #icon>
+            <component :is="dimension.icon" />
+          </template>
+          <template #panel="{ close }">
+            <!-- 「任意」不再手写：树自己的 AnyProviderChildrenNode 就是它，
                    而且带计数（pathForTreeSegment 对单维度的 all 段会算「去掉本维度后」的总数）。 -->
-              <div class="p-1.5">
-                <GalleryFilterTree
-                  ref="providerTreeRef"
-                  :context-prefix="simpleContextPrefix"
-                  :filters="activeFilters"
-                  :filter="filterForDimension(activeFilters, dimension.key)"
-                  :dimension="dimension.key"
-                  :visible="!!dimensionPopoverOpen[dimension.key]"
-                  @update:filter="(f) => { onDimensionFilter(dimension.key, f); close(); }"
-                />
-              </div>
-            </template>
-          </KbFilterDropdown>
-          <KbFilterDropdown
-            v-if="enableAdvanced"
-            :model-value="isAdvancedActive ? 'advanced' : null"
-            :chip-label="t('gallery.advancedQuery')"
-            :selected-label="t('gallery.advancedQueryShort')"
-            :badge="advancedConditionCount > 0 ? String(advancedConditionCount) : undefined"
-            :any-label="t(isAdvancedActive ? 'gallery.advancedClear' : 'gallery.advancedQueryShort')"
-            :title="t('gallery.advancedQuery')"
-            chip-display="value"
-            chip-action="toggle"
-            @toggle="openAdvancedQuery"
-            @update:model-value="clearAdvancedQuery"
-          >
-            <template #icon><LetterA /></template>
-          </KbFilterDropdown>
+            <div class="p-1.5">
+              <GalleryFilterTree
+                ref="providerTreeRef"
+                :context-prefix="simpleContextPrefix"
+                :filters="activeFilters"
+                :filter="filterForDimension(activeFilters, dimension.key)"
+                :dimension="dimension.key"
+                :visible="!!dimensionPopoverOpen[dimension.key]"
+                @update:filter="
+                  (f) => {
+                    onDimensionFilter(dimension.key, f);
+                    close();
+                  }
+                "
+              />
+            </div>
+          </template>
+        </KbFilterDropdown>
+        <KbFilterDropdown
+          v-if="enableAdvanced"
+          :model-value="isAdvancedActive ? 'advanced' : null"
+          :chip-label="t('gallery.advancedQuery')"
+          :selected-label="t('gallery.advancedQueryShort')"
+          :badge="advancedConditionCount > 0 ? String(advancedConditionCount) : undefined"
+          :any-label="t(isAdvancedActive ? 'gallery.advancedClear' : 'gallery.advancedQueryShort')"
+          :title="t('gallery.advancedQuery')"
+          chip-display="value"
+          chip-action="toggle"
+          @toggle="openAdvancedQuery"
+          @update:model-value="clearAdvancedQuery"
+        >
+          <template #icon><LetterA /></template>
+        </KbFilterDropdown>
       </el-scrollbar>
 
       <span class="query-divider" />
@@ -139,7 +152,9 @@
         @click="clearAllFilters"
       >
         <el-icon><Filter /></el-icon>
-        <span class="query-clear-filter__badge"><el-icon><Close /></el-icon></span>
+        <span class="query-clear-filter__badge">
+          <el-icon><Close /></el-icon>
+        </span>
       </button>
 
       <!-- chip 自定义入口：借 chip 下拉的弹层与开合逻辑，trigger 用 icon 档收成方形。
@@ -177,10 +192,7 @@
     </div>
 
     <!-- 紧凑模式没有上面那行，行首控件与「高级查询」按钮共用这一行 -->
-    <div
-      v-if="uiStore.isCompact && (enableAdvanced || !!$slots.leading)"
-      class="mb-2 flex items-center gap-2"
-    >
+    <div v-if="uiStore.isCompact && (enableAdvanced || !!$slots.leading)" class="mb-2 flex items-center gap-2">
       <slot name="leading" />
       <KbFilterDropdown
         v-if="enableAdvanced"
@@ -202,7 +214,13 @@
 
     <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
     <Teleport v-if="uiStore.isCompact" to="body">
-      <van-popup :show="filterPicker.isOpen.value" position="bottom" round :z-index="filterPicker.zIndex.value" @update:show="filterPicker.close">
+      <van-popup
+        :show="filterPicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="filterPicker.zIndex.value"
+        @update:show="filterPicker.close"
+      >
         <van-picker
           v-model="filterPickerSelected"
           :title="$t('gallery.filter')"
@@ -213,7 +231,13 @@
           @cancel="filterPicker.close()"
         />
       </van-popup>
-      <van-popup :show="timeFilterPicker.isOpen.value" position="bottom" round :z-index="timeFilterPicker.zIndex.value" @update:show="timeFilterPicker.close">
+      <van-popup
+        :show="timeFilterPicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="timeFilterPicker.zIndex.value"
+        @update:show="timeFilterPicker.close"
+      >
         <van-picker
           v-model="timeFilterPickerSelected"
           :title="timeFilterPickerTitle"
@@ -225,7 +249,13 @@
           @cancel="timeFilterPicker.close()"
         />
       </van-popup>
-      <van-popup :show="pluginFilterPicker.isOpen.value" position="bottom" round :z-index="pluginFilterPicker.zIndex.value" @update:show="pluginFilterPicker.close">
+      <van-popup
+        :show="pluginFilterPicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="pluginFilterPicker.zIndex.value"
+        @update:show="pluginFilterPicker.close"
+      >
         <van-picker
           v-model="pluginFilterPickerSelected"
           :title="t('gallery.filterByPlugin')"
@@ -236,7 +266,13 @@
           @cancel="pluginFilterPicker.close()"
         />
       </van-popup>
-      <van-popup :show="mediaTypeFilterPicker.isOpen.value" position="bottom" round :z-index="mediaTypeFilterPicker.zIndex.value" @update:show="mediaTypeFilterPicker.close">
+      <van-popup
+        :show="mediaTypeFilterPicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="mediaTypeFilterPicker.zIndex.value"
+        @update:show="mediaTypeFilterPicker.close"
+      >
         <van-picker
           v-model="mediaTypeFilterPickerSelected"
           :title="t('gallery.filterByMediaType')"
@@ -247,7 +283,13 @@
           @cancel="mediaTypeFilterPicker.close()"
         />
       </van-popup>
-      <van-popup :show="aspectFilterPicker.isOpen.value" position="bottom" round :z-index="aspectFilterPicker.zIndex.value" @update:show="aspectFilterPicker.close">
+      <van-popup
+        :show="aspectFilterPicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="aspectFilterPicker.zIndex.value"
+        @update:show="aspectFilterPicker.close"
+      >
         <van-picker
           v-model="aspectFilterPickerSelected"
           :title="t('gallery.filterByAspect')"
@@ -258,7 +300,14 @@
           @cancel="aspectFilterPicker.close()"
         />
       </van-popup>
-      <van-popup v-if="sortFeatures.length > 0" :show="sortPicker.isOpen.value" position="bottom" round :z-index="sortPicker.zIndex.value" @update:show="sortPicker.close">
+      <van-popup
+        v-if="sortFeatures.length > 0"
+        :show="sortPicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="sortPicker.zIndex.value"
+        @update:show="sortPicker.close"
+      >
         <van-picker
           v-model="sortPickerSelected"
           :title="$t('gallery.byTime')"
@@ -269,7 +318,14 @@
           @cancel="sortPicker.close()"
         />
       </van-popup>
-      <van-popup v-if="enablePageSize" :show="pageSizePicker.isOpen.value" position="bottom" round :z-index="pageSizePicker.zIndex.value" @update:show="pageSizePicker.close">
+      <van-popup
+        v-if="enablePageSize"
+        :show="pageSizePicker.isOpen.value"
+        position="bottom"
+        round
+        :z-index="pageSizePicker.zIndex.value"
+        @update:show="pageSizePicker.close"
+      >
         <van-picker
           v-model="pageSizePickerSelected"
           :title="$t('gallery.pageSize')"
@@ -296,21 +352,9 @@
 </template>
 
 <script setup lang="ts">
-import {
-  computed,
-  markRaw,
-  onUnmounted,
-  provide,
-  ref,
-  useSlots,
-  watch,
-  type Component,
-} from "vue";
+import { computed, markRaw, onUnmounted, provide, ref, useSlots, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import {
-  KbFilterDropdown,
-  type KbFilterDropdownOption,
-} from "@kabegame/element-plus";
+import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
 import {
   Clock,
   Close,
@@ -367,11 +411,7 @@ import {
   type GallerySort,
   type GallerySortField,
 } from "@/utils/galleryPath";
-import {
-  galleryDimensionChipValue,
-  gallerySortFieldLabel,
-  gallerySortOrderLabels,
-} from "@/utils/galleryFilterLabels";
+import { galleryDimensionChipValue, gallerySortFieldLabel, gallerySortOrderLabels } from "@/utils/galleryFilterLabels";
 import {
   buildGalleryTimeMenuTree,
   buildTimeMenuScopeLabels,
@@ -441,38 +481,16 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   query: () => [],
   noAlbum: false,
-  sort: () => ({ field: "by-id", desc: false } as GallerySort),
+  sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   page: 1,
   pageSize: 100,
   searchMode: DEFAULT_GALLERY_SEARCH_MODE,
   providerContextPrefix: "",
   contextBase: "",
   // withDefaults 的工厂会被提升到 setup 外，只能写字面量：引用模块内常量会编译失败。
-  filterFeatures: () => [
-    "date",
-    "plugin",
-    "mediaType",
-    "aspect",
-    "size",
-  ],
-  sortFeatures: () => [
-    "by-id",
-    "by-time",
-    "by-size",
-    "by-name",
-    "by-aspect",
-    "by-set-time",
-    "random",
-  ],
-  searchFeatures: () => [
-    "display-name",
-    "local-path",
-    "url",
-    "metadata",
-    "native-metadata",
-    "label",
-    "label-tree",
-  ],
+  filterFeatures: () => ["date", "plugin", "mediaType", "aspect", "size"],
+  sortFeatures: () => ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "random"],
+  searchFeatures: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label", "label-tree"],
   enableSearch: true,
   enablePageSize: true,
   enableAdvanced: true,
@@ -499,7 +517,10 @@ const sortField = computed<GallerySortField>(() => props.sort.field);
 const sortOrder = computed<"asc" | "desc">(() => (props.sort.desc ? "desc" : "asc"));
 
 // 高级弹窗内的搜索 chip（ConditionRow）通过 inject 拿这份可见集合，不逐层透传。
-provide(GallerySearchModesKey, computed(() => props.searchFeatures));
+provide(
+  GallerySearchModesKey,
+  computed(() => props.searchFeatures),
+);
 
 const labelContext = computed(() => ({
   t,
@@ -515,9 +536,7 @@ function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
 const searchTerm = computed(() => activeFilters.value.search ?? null);
 const searchText = computed(() => searchTerm.value?.query ?? "");
 /** 展示模式：有搜索词跟词走，没有用各页传入的 sticky 兜底。 */
-const searchModeView = computed<GallerySearchMode>(
-  () => searchTerm.value?.mode ?? props.searchMode,
-);
+const searchModeView = computed<GallerySearchMode>(() => searchTerm.value?.mode ?? props.searchMode);
 
 function onSearchInput(value: string) {
   const next = { ...activeFilters.value };
@@ -534,10 +553,13 @@ function onSearchModeSelect(mode: GallerySearchMode) {
   // 有搜索词时模式是查询的一部分，改模式即改查询；空词时只记 sticky。
   if (searchTerm.value?.query.trim()) {
     navigate({
-      query: composeQueryFilters({
-        ...activeFilters.value,
-        search: makeSearchTerm(mode, searchTerm.value.query, props.searchFeatures),
-      }, advancedQuery.value),
+      query: composeQueryFilters(
+        {
+          ...activeFilters.value,
+          search: makeSearchTerm(mode, searchTerm.value.query, props.searchFeatures),
+        },
+        advancedQuery.value,
+      ),
       page: 1,
     });
   }
@@ -551,17 +573,11 @@ const advancedConditionCount = computed(() => conditionCount(advancedQuery.value
 function contextWithQuery(query: GalleryQuery): string {
   const part = serializeQueryBody(query);
   const base = `${withGalleryPrefix(props.contextBase)}/${noAlbumContextPrefix(props.noAlbum)}`;
-  return part.body
-    ? `${base}${part.body}/${part.endsAtHub ? "" : `${FILTER_COMB}/`}`
-    : base;
+  return part.body ? `${base}${part.body}/${part.endsAtHub ? "" : `${FILTER_COMB}/`}` : base;
 }
 
-const simpleContextPrefix = computed(() => contextWithQuery(
-  composeQueryFilters({}, advancedQuery.value),
-));
-const advancedContextPrefix = computed(() =>
-  `images://${contextWithQuery(queryFromFilterSet(activeFilters.value))}`,
-);
+const simpleContextPrefix = computed(() => contextWithQuery(composeQueryFilters({}, advancedQuery.value)));
+const advancedContextPrefix = computed(() => `images://${contextWithQuery(queryFromFilterSet(activeFilters.value))}`);
 
 const advancedDialogVisible = ref(false);
 const advancedDialogInitialQuery = ref<GalleryQuery>([]);
@@ -598,11 +614,41 @@ const ALL_FILTER_DIMENSIONS: Array<{
   anyKey: string;
   setting: ChipSettingKey;
 }> = [
-  { key: "date", titleKey: "gallery.filterByTime", chipKey: "gallery.advancedChipTime", anyKey: "gallery.filterAnyTime", setting: "galleryChipDate" },
-  { key: "plugin", titleKey: "gallery.filterByPlugin", chipKey: "gallery.advancedChipPlugin", anyKey: "gallery.filterAnyPlugin", setting: "galleryChipPlugin" },
-  { key: "mediaType", titleKey: "gallery.filterByMediaType", chipKey: "gallery.advancedChipMediaType", anyKey: "gallery.filterAnyMediaType", setting: "galleryChipMediaType" },
-  { key: "aspect", titleKey: "gallery.filterByAspect", chipKey: "gallery.advancedChipAspect", anyKey: "gallery.filterAnyAspect", setting: "galleryChipAspect" },
-  { key: "size", titleKey: "gallery.filterBySize", chipKey: "gallery.advancedChipSize", anyKey: "gallery.filterAnySize", setting: "galleryChipSize" },
+  {
+    key: "date",
+    titleKey: "gallery.filterByTime",
+    chipKey: "gallery.advancedChipTime",
+    anyKey: "gallery.filterAnyTime",
+    setting: "galleryChipDate",
+  },
+  {
+    key: "plugin",
+    titleKey: "gallery.filterByPlugin",
+    chipKey: "gallery.advancedChipPlugin",
+    anyKey: "gallery.filterAnyPlugin",
+    setting: "galleryChipPlugin",
+  },
+  {
+    key: "mediaType",
+    titleKey: "gallery.filterByMediaType",
+    chipKey: "gallery.advancedChipMediaType",
+    anyKey: "gallery.filterAnyMediaType",
+    setting: "galleryChipMediaType",
+  },
+  {
+    key: "aspect",
+    titleKey: "gallery.filterByAspect",
+    chipKey: "gallery.advancedChipAspect",
+    anyKey: "gallery.filterAnyAspect",
+    setting: "galleryChipAspect",
+  },
+  {
+    key: "size",
+    titleKey: "gallery.filterBySize",
+    chipKey: "gallery.advancedChipSize",
+    anyKey: "gallery.filterAnySize",
+    setting: "galleryChipSize",
+  },
 ];
 
 /**
@@ -611,26 +657,24 @@ const ALL_FILTER_DIMENSIONS: Array<{
  * 关掉的维度只要**当前真的在过滤**就强行显示：否则查询被一条看不见的条件夹着，
  * 人既不知道为什么少了图，也没地方把它清掉。
  */
-const filterDimensions = computed<Array<{
-  key: GalleryBrowseDimension;
-  title: string;
-  chipLabel: string;
-  anyLabel: string;
-  icon: Component;
-}>>(() =>
-  ALL_FILTER_DIMENSIONS
-    .filter(
-      (d) =>
-        props.filterFeatures.includes(d.key) &&
-        (isChipEnabled(d.setting) || isDimensionActive(d.key)),
-    )
-    .map((d) => ({
-      key: d.key,
-      title: t(d.titleKey),
-      chipLabel: t(d.chipKey),
-      anyLabel: t(d.anyKey),
-      icon: FILTER_DIMENSION_ICONS[d.key],
-    })),
+const filterDimensions = computed<
+  Array<{
+    key: GalleryBrowseDimension;
+    title: string;
+    chipLabel: string;
+    anyLabel: string;
+    icon: Component;
+  }>
+>(() =>
+  ALL_FILTER_DIMENSIONS.filter(
+    (d) => props.filterFeatures.includes(d.key) && (isChipEnabled(d.setting) || isDimensionActive(d.key)),
+  ).map((d) => ({
+    key: d.key,
+    title: t(d.titleKey),
+    chipLabel: t(d.chipKey),
+    anyLabel: t(d.anyKey),
+    icon: FILTER_DIMENSION_ICONS[d.key],
+  })),
 );
 
 // ---------- 工具条 chip：显隐与信息密度 ----------
@@ -656,29 +700,18 @@ function chipTitle(label: string, value?: string) {
 }
 
 function dimensionChipTitleValue(dimension: { key: GalleryBrowseDimension; anyLabel: string }) {
-  return isDimensionActive(dimension.key)
-    ? dimensionChipValue(dimension.key)
-    : dimension.anyLabel;
+  return isDimensionActive(dimension.key) ? dimensionChipValue(dimension.key) : dimension.anyLabel;
 }
 
 /** 搜索同理：关掉的搜索框只要还兜着关键词，就得留在条上让人看得见、清得掉。 */
 const showSearchChip = computed(
   () => props.enableSearch && (isChipEnabled("galleryChipSearch") || !!searchText.value.trim()),
 );
-const showSortFieldChip = computed(
-  () => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortField"),
-);
-const showSortOrderChip = computed(
-  () => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortOrder"),
-);
+const showSortFieldChip = computed(() => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortField"));
+const showSortOrderChip = computed(() => props.sortFeatures.length > 0 && isChipEnabled("galleryChipSortOrder"));
 
 /** 左端固定区是否有内容——空的话它后面那条分隔线就成了行首一根孤立竖线。 */
-const hasFixedSection = computed(
-  () =>
-    !!slots.leading ||
-    showSortFieldChip.value ||
-    showSortOrderChip.value,
-);
+const hasFixedSection = computed(() => !!slots.leading || showSortFieldChip.value || showSortOrderChip.value);
 
 /**
  * 排序维度的图标。纯图标 chip 下，通用的「排序」双箭头说不出到底按什么排，
@@ -695,13 +728,9 @@ const SORT_FIELD_ICONS: Record<GallerySortField, Component> = {
   random: markRaw(MagicStick),
 };
 
-const sortFieldIcon = computed<Component>(
-  () => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort),
-);
+const sortFieldIcon = computed<Component>(() => SORT_FIELD_ICONS[sortField.value] ?? markRaw(Sort));
 const sortFieldChipValue = computed(() => gallerySortFieldLabel(sortField.value, t));
-const sortOrderChipValue = computed(() =>
-  props.sort.desc ? t("gallery.sortDescending") : t("gallery.sortAscending"),
-);
+const sortOrderChipValue = computed(() => (props.sort.desc ? t("gallery.sortDescending") : t("gallery.sortAscending")));
 /** 顺序 chip 点了就翻，tooltip 得把「翻过去是什么」说清楚。 */
 const sortOrderToggleHint = computed(() =>
   t("gallery.sortOrderToggle", {
@@ -867,10 +896,9 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
 );
 
 /** Android 单维度 picker 的枚举保留高级条件与简单搜索。 */
-const filterContextPrefix = computed(() => contextWithQuery(composeQueryFilters(
-  searchTerm.value ? { search: searchTerm.value } : {},
-  advancedQuery.value,
-)));
+const filterContextPrefix = computed(() =>
+  contextWithQuery(composeQueryFilters(searchTerm.value ? { search: searchTerm.value } : {}, advancedQuery.value)),
+);
 
 async function countProviderPath(path: string): Promise<number> {
   const p = path.trim().replace(/\/+$/, "");
@@ -891,12 +919,7 @@ const MONTH_SEG_RE = /^(\d{2})m$/;
 const DAY_SEG_RE = /^(\d{2})d$/;
 
 type LazyScope =
-  | "plugin"
-  | "media-type"
-  | "time-root"
-  | `time-year:${string}`
-  | `time-month:${string}`
-  | `plugin-extend:${string}`;
+  "plugin" | "media-type" | "time-root" | `time-year:${string}` | `time-month:${string}` | `plugin-extend:${string}`;
 
 const lazyLoadedKeys = ref(new Set<string>());
 const lazyDirtyKeys = ref(new Set<string>());
@@ -1054,9 +1077,7 @@ async function markFilterLazyDataDirty(payload: ImagesChangePayload = { seq: 0 }
     await ensurePluginGroupsLoaded();
   }
   await Promise.all(
-    shouldReloadPluginExtends.map(({ pluginId, extendPath }) =>
-      ensurePluginExtendLoaded(pluginId, extendPath)
-    ),
+    shouldReloadPluginExtends.map(({ pluginId, extendPath }) => ensurePluginExtendLoaded(pluginId, extendPath)),
   );
 }
 
@@ -1066,9 +1087,7 @@ useImagesChangeRefresh({
   onRefresh: markFilterLazyDataDirty,
 });
 
-const pluginSignature = computed(() =>
-  pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|")
-);
+const pluginSignature = computed(() => pluginStore.plugins.map((p) => `${p.id}:${p.version}`).join("|"));
 
 function resetPluginLazyData() {
   for (const timer of lazyLoadingTimers.values()) {
@@ -1081,9 +1100,7 @@ function resetPluginLazyData() {
   lazyLoadedKeys.value = new Set([...lazyLoadedKeys.value].filter((key) => !key.includes("|plugin")));
   lazyDirtyKeys.value = new Set([...lazyDirtyKeys.value].filter((key) => !key.includes("|plugin")));
   lazyPendingKeys.value = new Set([...lazyPendingKeys.value].filter((key) => !key.includes("|plugin")));
-  lazyVisibleLoadingKeys.value = new Set(
-    [...lazyVisibleLoadingKeys.value].filter((key) => !key.includes("|plugin"))
-  );
+  lazyVisibleLoadingKeys.value = new Set([...lazyVisibleLoadingKeys.value].filter((key) => !key.includes("|plugin")));
   pluginGroups.value = [];
   pluginExtendChildren.value = {};
 }
@@ -1108,9 +1125,10 @@ async function ensurePluginGroupsLoaded() {
       const groups = await Promise.all(
         entries.map(async (e) => ({
           plugin_id: e.name,
-          count: typeof e.total === "number"
-            ? e.total
-            : await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
+          count:
+            typeof e.total === "number"
+              ? e.total
+              : await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
         })),
       );
       if (prefix !== filterContextPrefix.value) return;
@@ -1141,11 +1159,7 @@ function pluginExtendScope(pluginId: string, extendPath = ""): LazyScope {
 }
 
 function pluginExtendPathForProvider(extendPath = "") {
-  return normalizeExtendPath(extendPath)
-    .split("/")
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join("/");
+  return normalizeExtendPath(extendPath).split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
 function isProviderLeaf(entry: ProviderChildDir) {
@@ -1172,9 +1186,7 @@ async function ensurePluginExtendLoaded(pluginId: string, extendPath = "") {
   await ensureLazyLoaded(pluginExtendScope(id, path), async (prefix) => {
     try {
       const providerPath = pluginExtendPathForProvider(path);
-      const entries = await listProviderDirs(
-        `${prefix}plugin/${encodeURIComponent(id)}/extend/${providerPath}`,
-      );
+      const entries = await listProviderDirs(`${prefix}plugin/${encodeURIComponent(id)}/extend/${providerPath}`);
       if (prefix !== filterContextPrefix.value) return;
       pluginExtendChildren.value = {
         ...pluginExtendChildren.value,
@@ -1207,7 +1219,7 @@ async function ensurePluginExtendTreeLoaded(pluginId: string, extendPath = "", d
           pluginId,
           [normalizeExtendPath(extendPath), child.name].filter(Boolean).join("/"),
           depth + 1,
-        )
+        ),
       ),
   );
 }
@@ -1280,10 +1292,7 @@ async function ensureTimeYearMonthsLoaded(year: string) {
         )
       ).filter((mo) => mo.count > 0);
       if (prefix !== filterContextPrefix.value) return;
-      monthGroups.value = [
-        ...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)),
-        ...months,
-      ];
+      monthGroups.value = [...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)), ...months];
       dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
     } catch {
       if (prefix === filterContextPrefix.value) {
@@ -1318,10 +1327,7 @@ async function ensureTimeMonthDaysLoaded(yearMonth: string) {
         )
       ).filter((d) => d.count > 0);
       if (prefix !== filterContextPrefix.value) return;
-      dayGroups.value = [
-        ...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)),
-        ...days,
-      ];
+      dayGroups.value = [...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)), ...days];
     } catch {
       if (prefix === filterContextPrefix.value) {
         dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`));
@@ -1365,9 +1371,10 @@ const PICKER_DIMENSIONS: Array<{
 
 const filterPickerColumns = computed(() => [
   { text: t("gallery.filterAll"), value: "all" },
-  ...PICKER_DIMENSIONS
-    .filter((d) => props.filterFeatures.includes(d.key))
-    .map((d) => ({ text: t(d.labelKey), value: d.value })),
+  ...PICKER_DIMENSIONS.filter((d) => props.filterFeatures.includes(d.key)).map((d) => ({
+    text: t(d.labelKey),
+    value: d.value,
+  })),
 ]);
 
 const filterPickerSelected = ref<string[]>(["all"]);
@@ -1453,10 +1460,7 @@ watch(timeFilterPicker.isOpen, (open) => {
   applyTimeMenuPickerState(initial);
 });
 
-async function onTimeFilterPickerChange(payload: {
-  selectedValues: (string | number)[];
-  columnIndex: number;
-}) {
+async function onTimeFilterPickerChange(payload: { selectedValues: (string | number)[]; columnIndex: number }) {
   const { columnIndex, selectedValues } = payload;
   const maxD = getTimeMenuMaxDepth(timeMenuRoots.value);
   if (columnIndex >= maxD - 1) return;
@@ -1468,10 +1472,7 @@ async function onTimeFilterPickerChange(payload: {
 
 function onTimeFilterPickerConfirm(payload: { selectedValues: (string | number)[] }) {
   timeFilterPicker.close();
-  const tail = resolveTimeMenuPickToDateTail(
-    timeMenuRoots.value,
-    payload.selectedValues.map(String),
-  );
+  const tail = resolveTimeMenuPickToDateTail(timeMenuRoots.value, payload.selectedValues.map(String));
   if (!tail) return;
   applyFilters(singleFilterToSet({ type: "date", segment: tail }));
 }
@@ -1546,9 +1547,7 @@ function onPluginFilterPickerConfirm() {
   const { pluginId: id, extendPath } = parsePluginCommand(command);
   if (!id) return;
   applyFilters(
-    singleFilterToSet(
-      extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id },
-    ),
+    singleFilterToSet(extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }),
   );
 }
 
@@ -1582,9 +1581,7 @@ const aspectFilterPickerColumns = computed(() =>
 const aspectFilterPickerSelected = ref<string[]>([GALLERY_ASPECT_BUCKETS[0].range]);
 watch(aspectFilterPicker.isOpen, (open) => {
   if (!open) return;
-  aspectFilterPickerSelected.value = [
-    filterAspectRange(activeFilters.value) ?? GALLERY_ASPECT_BUCKETS[0].range,
-  ];
+  aspectFilterPickerSelected.value = [filterAspectRange(activeFilters.value) ?? GALLERY_ASPECT_BUCKETS[0].range];
 });
 
 function onAspectFilterPickerConfirm() {
@@ -1613,9 +1610,7 @@ function onSortPickerConfirm() {
   if (v === "asc" || v === "desc") onSortOrderChange(v);
 }
 
-const pageSizePickerColumns = computed(() =>
-  pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })),
-);
+const pageSizePickerColumns = computed(() => pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })));
 
 const pageSizePickerSelected = ref<string[]>(["100"]);
 watch(pageSizePicker.isOpen, (open) => {
@@ -1632,9 +1627,7 @@ function onPageSizePickerConfirm() {
 
 // ---------- 对外接口（安卓折叠菜单从各页 header 触发）----------
 async function refreshProviderFilterTree() {
-  const target = Array.isArray(providerTreeRef.value)
-    ? providerTreeRef.value[0]
-    : providerTreeRef.value;
+  const target = Array.isArray(providerTreeRef.value) ? providerTreeRef.value[0] : providerTreeRef.value;
   await target?.refresh?.();
 }
 
@@ -1810,7 +1803,9 @@ defineExpose({
   background: var(--anime-bg-card);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color 0.18s ease, background-color 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease;
 
   &:hover {
     border-color: var(--anime-primary);

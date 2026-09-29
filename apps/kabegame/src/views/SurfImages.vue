@@ -48,8 +48,12 @@
 
         <template #empty>
           <div class="surf-empty fade-in">
-            <EmptyState :lines="[t('surf.surfImagesEmptyTip')]" show-button :button-text="t('surf.openSurf')"
-              @button-click="handleOpenSurf" />
+            <EmptyState
+              :lines="[t('surf.surfImagesEmptyTip')]"
+              show-button
+              :button-text="t('surf.openSurf')"
+              @button-click="handleOpenSurf"
+            />
           </div>
         </template>
       </ImageGrid>
@@ -92,12 +96,8 @@ const { isCompact } = storeToRefs(useUiStore());
 const surfStore = useSurfStore();
 const surfImagesRouteStore = useSurfImagesRouteStore();
 
-const surfFilterFeatures: GalleryBrowseDimension[] = [
-  "plugin", "mediaType", "date", "size", "aspect",
-];
-const surfSortFeatures: GallerySortField[] = [
-  "by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time",
-];
+const surfFilterFeatures: GalleryBrowseDimension[] = ["plugin", "mediaType", "date", "size", "aspect"];
+const surfSortFeatures: GallerySortField[] = ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time"];
 const surfSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
@@ -110,7 +110,7 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
 /** 路由与 VD 路径使用的站点 host（与 `surf_records.host` 一致） */
 const surfHost = ref("");
 const record = computed<SurfRecord | null>(() =>
-  surfHost.value ? surfStore.recordByHost(surfHost.value) ?? null : null
+  surfHost.value ? (surfStore.recordByHost(surfHost.value) ?? null) : null,
 );
 
 // 数据加载 / 菜单命令 / 事件刷新均由 ImageGrid connected 模式接管
@@ -133,9 +133,7 @@ onUnmounted(() => {
 });
 
 // 与畅游列表/详情一致：优先展示用户起的名字，没起过才退回 host
-const recordTitle = computed(
-  () => record.value?.name || record.value?.host || t("surf.surfImagesTitle")
-);
+const recordTitle = computed(() => record.value?.name || record.value?.host || t("surf.surfImagesTitle"));
 
 /**
  * 副标题只给总图片数，与画册详情页一致——直接复用 ImageGrid 已经算好的 totalCount，
@@ -182,7 +180,7 @@ watch(
       await initRecord(newHost);
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(record, (next, prev) => {
@@ -224,5 +222,4 @@ onActivated(async () => {
   gap: 12px;
   padding: 24px 16px;
 }
-
 </style>

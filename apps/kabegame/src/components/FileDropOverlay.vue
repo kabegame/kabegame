@@ -13,7 +13,7 @@
           {{ label }}
         </div>
         <div class="drop-hint">
-          {{ hint || $t('common.releaseToImport') }}
+          {{ hint || $t("common.releaseToImport") }}
         </div>
       </div>
     </div>
@@ -30,11 +30,11 @@ const { t } = useI18n();
 const fileDropModal = useModal();
 
 const visible = ref(false);
-const label = ref(t('common.dragDropText'));
+const label = ref(t("common.dragDropText"));
 const hint = ref<string | undefined>(undefined);
 const overlayRect = ref<DOMRect | null>(null);
 
-watch(visible, (v) => v ? fileDropModal.open() : fileDropModal.close());
+watch(visible, (v) => (v ? fileDropModal.open() : fileDropModal.close()));
 
 const overlayStyle = computed(() => {
   const rect = overlayRect.value;

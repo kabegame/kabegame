@@ -9,11 +9,7 @@ export function useKamechanMachine() {
   const state = ref<KamechanState>("standing");
   let waveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const imageSrc = computed(() =>
-    state.value === "waving"
-      ? "/kamechan/wave/wave.png"
-      : "/kamechan/stand/stand.png"
-  );
+  const imageSrc = computed(() => (state.value === "waving" ? "/kamechan/wave/wave.png" : "/kamechan/stand/stand.png"));
 
   function clearWaveTimer() {
     if (waveTimer === null) {

@@ -76,12 +76,9 @@ export const useFailedImagesStore = defineStore("failedImages", () => {
     if (listenersInited) return;
     listenersInited = true;
     await loadAll();
-    unlistenFailedImagesChange = await listen<FailedImagesChangePayload>(
-      "failed-images-change",
-      (event) => {
-        applyFailedImagesChange(event.payload ?? {});
-      }
-    );
+    unlistenFailedImagesChange = await listen<FailedImagesChangePayload>("failed-images-change", (event) => {
+      applyFailedImagesChange(event.payload ?? {});
+    });
   };
 
   const retryFailed = async (failedId: number) => {
@@ -111,8 +108,7 @@ export const useFailedImagesStore = defineStore("failedImages", () => {
     await invoke("delete_failed_images", { ids });
   };
 
-  const byTaskId = (taskId: string) =>
-    allFailed.value.filter((item) => item.taskId === taskId);
+  const byTaskId = (taskId: string) => allFailed.value.filter((item) => item.taskId === taskId);
 
   return {
     allFailed,

@@ -44,9 +44,7 @@ import { ElIcon } from "@kabegame/element-plus";
 import { ArrowRight, Grid } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import PluginLabelTags from "./PluginLabelTags.vue";
-import PluginQuickPreviewCarousel, {
-  type PluginQuickPreviewImage,
-} from "./PluginQuickPreviewCarousel.vue";
+import PluginQuickPreviewCarousel, { type PluginQuickPreviewImage } from "./PluginQuickPreviewCarousel.vue";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { PluginLabel } from "../../stores/pluginLabels";
 
@@ -104,7 +102,9 @@ const metaLine = computed(() => {
   border-radius: 18px;
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-lighter);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.06);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -170,7 +170,10 @@ const metaLine = computed(() => {
 
 .qp-meta {
   margin-top: 3px;
-  font: 400 11.5px/1.3 ui-monospace, Menlo, monospace;
+  font:
+    400 11.5px/1.3 ui-monospace,
+    Menlo,
+    monospace;
   color: var(--el-text-color-secondary);
 }
 

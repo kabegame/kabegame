@@ -12,22 +12,17 @@ export async function fetchSurfImageCount(host: string, hide: boolean): Promise<
   return typeof total === "number" && Number.isFinite(total) ? Math.max(0, total) : 0;
 }
 
-export async function fetchSurfImageCounts(
-  hosts: Iterable<string>,
-  hide: boolean,
-): Promise<Record<string, number>> {
+export async function fetchSurfImageCounts(hosts: Iterable<string>, hide: boolean): Promise<Record<string, number>> {
   const uniqueHosts = Array.from(new Set(Array.from(hosts).filter(Boolean)));
   const pairs = await Promise.all(
-    uniqueHosts.map(
-      async (host) => {
-        try {
-          return [host, await fetchSurfImageCount(host, hide)] as const;
-        } catch (error) {
-          console.warn("fetch surf image count failed:", host, error);
-          return [host, 0] as const;
-        }
-      },
-    ),
+    uniqueHosts.map(async (host) => {
+      try {
+        return [host, await fetchSurfImageCount(host, hide)] as const;
+      } catch (error) {
+        console.warn("fetch surf image count failed:", host, error);
+        return [host, 0] as const;
+      }
+    }),
   );
   return Object.fromEntries(pairs);
 }

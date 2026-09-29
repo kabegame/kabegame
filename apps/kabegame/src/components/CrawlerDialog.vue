@@ -1,6 +1,13 @@
 <template>
   <!-- Android：自研全宽抽屉 -->
-  <AndroidDrawer v-if="uiStore.isCompact" :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" show-close-button class="crawl-dialog" @update:model-value="modal.close">
+  <AndroidDrawer
+    v-if="uiStore.isCompact"
+    :model-value="modal.isOpen.value"
+    :z-index="modal.zIndex.value"
+    show-close-button
+    class="crawl-dialog"
+    @update:model-value="modal.close"
+  >
     <template #header>
       <div class="crawl-drawer-header">
         <h3>{{ $t("plugins.startCollect") }}</h3>
@@ -9,9 +16,14 @@
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
       <el-form-item :label="$t('plugins.runConfig')">
         <div class="run-config-row">
-          <AndroidPickerSelect :model-value="selectedRunConfigId ?? null" :options="runConfigPickerOptions"
-            :title="$t('plugins.runConfig')" :placeholder="$t('plugins.selectConfigOptional')" clearable
-            @update:model-value="setRunConfigId" />
+          <AndroidPickerSelect
+            :model-value="selectedRunConfigId ?? null"
+            :options="runConfigPickerOptions"
+            :title="$t('plugins.runConfig')"
+            :placeholder="$t('plugins.selectConfigOptional')"
+            clearable
+            @update:model-value="setRunConfigId"
+          />
           <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
             {{ $t("plugins.addConfig") }}
           </el-button>
@@ -22,9 +34,16 @@
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
-          <PluginPickerField :model-value="form.pluginId || null" :plugins="plugins"
-            :picker-title="$t('plugins.selectSource')" :placeholder="$t('plugins.selectSourcePlaceholder')"
-            show-js-warning show-selected-js-warning show-labels @update:model-value="onPluginChange" />
+          <PluginPickerField
+            :model-value="form.pluginId || null"
+            :plugins="plugins"
+            :picker-title="$t('plugins.selectSource')"
+            :placeholder="$t('plugins.selectSourcePlaceholder')"
+            show-js-warning
+            show-selected-js-warning
+            show-labels
+            @update:model-value="onPluginChange"
+          />
           <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
             {{ crawlDialogMinAppErrorText }}
           </div>
@@ -44,20 +63,33 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPicker v-model="selectedOutputAlbumId" :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
+        <AlbumPicker
+          v-model="selectedOutputAlbumId"
+          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
-          allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
-          clearable />
+          allow-create
+          :placeholder="$t('plugins.defaultGalleryOnly')"
+          :picker-title="$t('albums.outputAlbum')"
+          clearable
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input ref="newOutputAlbumNameInputRef" v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
-          @keyup.enter="handleCreateOutputAlbum" />
+        <el-input
+          ref="newOutputAlbumNameInputRef"
+          v-model="newOutputAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          maxlength="50"
+          show-word-limit
+          @keyup.enter="handleCreateOutputAlbum"
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPicker v-model="newOutputAlbumParentId" :scope="{ sections: ['normal'] }"
+        <AlbumPicker
+          v-model="newOutputAlbumParentId"
+          :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')" />
+          :picker-title="$t('albums.parentAlbum')"
+        />
       </el-form-item>
 
       <template v-if="pluginVars.length > 0">
@@ -108,8 +140,12 @@
           <div class="mode-line">
             <el-select v-model="dailyHour">
               <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-              <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option
+                v-for="h in 24"
+                :key="`h-${h - 1}`"
+                :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`"
+              />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -119,12 +155,20 @@
         <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
           <div class="mode-line">
             <el-select v-model="weeklyWeekday">
-              <el-option v-for="wd in 7" :key="`awd-${wd - 1}`" :value="wd - 1"
-                :label="$t(`autoConfig.weekday${wd - 1}`)" />
+              <el-option
+                v-for="wd in 7"
+                :key="`awd-${wd - 1}`"
+                :value="wd - 1"
+                :label="$t(`autoConfig.weekday${wd - 1}`)"
+              />
             </el-select>
             <el-select v-model="dailyHour">
-              <el-option v-for="h in 24" :key="`awh-${h - 1}`" :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option
+                v-for="h in 24"
+                :key="`awh-${h - 1}`"
+                :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`"
+              />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`awm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -141,37 +185,62 @@
     </div>
   </AndroidDrawer>
 
-  <ElDialog v-else :model-value="modal.isOpen.value" :z-index="modal.zIndex.value" :title="$t('plugins.startCollect')" width="600px" class="crawl-dialog" align-center
-    :show-close="true" @update:model-value="modal.close">
+  <ElDialog
+    v-else
+    :model-value="modal.isOpen.value"
+    :z-index="modal.zIndex.value"
+    :title="$t('plugins.startCollect')"
+    width="600px"
+    class="crawl-dialog"
+    align-center
+    :show-close="true"
+    @update:model-value="modal.close"
+  >
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
       <el-form-item :label="$t('plugins.runConfig')">
         <div class="run-config-row">
-          <el-select v-model="selectedRunConfigId" class="run-config-select"
-            :placeholder="$t('plugins.selectConfigOptional')" clearable popper-class="run-config-select-dropdown"
+          <el-select
+            v-model="selectedRunConfigId"
+            class="run-config-select"
+            :placeholder="$t('plugins.selectConfigOptional')"
+            clearable
+            popper-class="run-config-select-dropdown"
             fit-input-width
-            @change="(v: string | null) => void setRunConfigId(v)">
+            @change="(v: string | null) => void setRunConfigId(v)"
+          >
             <template #label>
-              <span v-if="selectedRunConfig" class="run-config-selected-title"
-                :title="runConfigDescription(selectedRunConfig) || undefined">
+              <span
+                v-if="selectedRunConfig"
+                class="run-config-selected-title"
+                :title="runConfigDescription(selectedRunConfig) || undefined"
+              >
                 <span class="plugin-name">{{ runConfigPluginName(selectedRunConfig) }}</span>
-                <span class="config-name"> - {{ runConfigName(selectedRunConfig) }}</span>
+                <span class="config-name">- {{ runConfigName(selectedRunConfig) }}</span>
               </span>
             </template>
             <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="runConfigLabel(cfg)" :value="cfg.id">
               <div class="run-config-option">
                 <div class="run-config-info">
                   <div class="name">
-                    <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false" type="danger"
-                      size="small" style="margin-right: 6px">
+                    <el-tag
+                      v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
+                      type="danger"
+                      size="small"
+                      style="margin-right: 6px"
+                    >
                       {{ $t("plugins.incompatible") }}
                     </el-tag>
-                    <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false" type="warning"
-                      size="small" style="margin-right: 6px">
+                    <el-tag
+                      v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
+                      type="warning"
+                      size="small"
+                      style="margin-right: 6px"
+                    >
                       {{ $t("plugins.incompatible") }}
                     </el-tag>
                     <span class="run-config-title" :title="runConfigDescription(cfg) || undefined">
                       <span class="plugin-name">{{ runConfigPluginName(cfg) }}</span>
-                      <span class="config-name"> - {{ runConfigName(cfg) }}</span>
+                      <span class="config-name">- {{ runConfigName(cfg) }}</span>
                     </span>
                   </div>
                 </div>
@@ -200,13 +269,23 @@
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
           <div class="flex w-full min-w-0 items-start gap-2">
-            <PluginPickerField class="min-w-0 flex-1" :model-value="form.pluginId || null" :plugins="plugins"
-              :placeholder="$t('plugins.selectSourcePlaceholder')" popper-class="crawl-plugin-select-dropdown"
-              show-labels @update:model-value="onPluginChange" />
+            <PluginPickerField
+              class="min-w-0 flex-1"
+              :model-value="form.pluginId || null"
+              :plugins="plugins"
+              :placeholder="$t('plugins.selectSourcePlaceholder')"
+              popper-class="crawl-plugin-select-dropdown"
+              show-labels
+              @update:model-value="onPluginChange"
+            />
             <el-tooltip :content="$t('plugins.detail.goSurfLogin')" placement="top">
               <span class="inline-flex flex-none">
-                <el-button class="!m-0 h-32px w-40px !p-0" :aria-label="$t('plugins.detail.goSurfLogin')"
-                  :disabled="!selectedPluginSurfUrl" @click="openSelectedPluginInSurf">
+                <el-button
+                  class="!m-0 h-32px w-40px !p-0"
+                  :aria-label="$t('plugins.detail.goSurfLogin')"
+                  :disabled="!selectedPluginSurfUrl"
+                  @click="openSelectedPluginInSurf"
+                >
                   <span class="inline-flex items-center gap-0.5">
                     <Compass class="h-18px w-18px" />
                     <TopRight class="h-11px w-11px" />
@@ -234,20 +313,33 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPicker v-model="selectedOutputAlbumId" :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
+        <AlbumPicker
+          v-model="selectedOutputAlbumId"
+          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
-          allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
-          clearable />
+          allow-create
+          :placeholder="$t('plugins.defaultGalleryOnly')"
+          :picker-title="$t('albums.outputAlbum')"
+          clearable
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input ref="newOutputAlbumNameInputRef" v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
-          @keyup.enter="handleCreateOutputAlbum" />
+        <el-input
+          ref="newOutputAlbumNameInputRef"
+          v-model="newOutputAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          maxlength="50"
+          show-word-limit
+          @keyup.enter="handleCreateOutputAlbum"
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPicker v-model="newOutputAlbumParentId" :scope="{ sections: ['normal'] }"
+        <AlbumPicker
+          v-model="newOutputAlbumParentId"
+          :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')" />
+          :picker-title="$t('albums.parentAlbum')"
+        />
       </el-form-item>
 
       <template v-if="pluginVars.length > 0">
@@ -298,8 +390,12 @@
           <div class="mode-line">
             <el-select v-model="dailyHour">
               <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-              <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option
+                v-for="h in 24"
+                :key="`h-${h - 1}`"
+                :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`"
+              />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -309,12 +405,20 @@
         <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
           <div class="mode-line">
             <el-select v-model="weeklyWeekday">
-              <el-option v-for="wd in 7" :key="`bwd-${wd - 1}`" :value="wd - 1"
-                :label="$t(`autoConfig.weekday${wd - 1}`)" />
+              <el-option
+                v-for="wd in 7"
+                :key="`bwd-${wd - 1}`"
+                :value="wd - 1"
+                :label="$t(`autoConfig.weekday${wd - 1}`)"
+              />
             </el-select>
             <el-select v-model="dailyHour">
-              <el-option v-for="h in 24" :key="`bwh-${h - 1}`" :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+              <el-option
+                v-for="h in 24"
+                :key="`bwh-${h - 1}`"
+                :value="h - 1"
+                :label="`${String(h - 1).padStart(2, '0')}:xx`"
+              />
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`bwm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
@@ -334,16 +438,31 @@
   </ElDialog>
 
   <!-- 新增配置弹窗 -->
-  <ElDialog :model-value="addConfigModal.isOpen.value" :z-index="addConfigModal.zIndex.value" :title="$t('plugins.newConfig')" width="400px" :close-on-click-modal="false"
-    @update:model-value="addConfigModal.close" @closed="onAddConfigDialogClosed">
+  <ElDialog
+    :model-value="addConfigModal.isOpen.value"
+    :z-index="addConfigModal.zIndex.value"
+    :title="$t('plugins.newConfig')"
+    width="400px"
+    :close-on-click-modal="false"
+    @update:model-value="addConfigModal.close"
+    @closed="onAddConfigDialogClosed"
+  >
     <el-form label-width="80px">
       <el-form-item :label="$t('common.name')" required>
-        <el-input v-model="newConfigName" :placeholder="$t('common.configNamePlaceholder')" maxlength="80"
-          show-word-limit />
+        <el-input
+          v-model="newConfigName"
+          :placeholder="$t('common.configNamePlaceholder')"
+          maxlength="80"
+          show-word-limit
+        />
       </el-form-item>
       <el-form-item :label="$t('common.description')">
-        <el-input v-model="newConfigDescription" type="textarea" :placeholder="$t('common.configDescPlaceholder')"
-          :rows="2" />
+        <el-input
+          v-model="newConfigDescription"
+          type="textarea"
+          :placeholder="$t('common.configDescPlaceholder')"
+          :rows="2"
+        />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -382,10 +501,7 @@ import { IS_WEB } from "@kabegame/core/env";
 import { trackEvent } from "@kabegame/core/track/umami";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { guardPluginPlatform, enqueueTask } from "@/composables/useCrawlTaskLauncher";
-import {
-  matchesPluginVarWhen,
-  coerceOptionsVarsToVisibleChoices,
-} from "@kabegame/core/utils/pluginVarWhen";
+import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@kabegame/core/utils/pluginVarWhen";
 import { useApp } from "@/stores/app";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSurfStore } from "@kabegame/core/stores/surf";
@@ -411,9 +527,7 @@ const emit = defineEmits<{
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
-const recommendedPresetCount = computed(
-  () => crawlerStore.pluginRecommendedConfigs.length,
-);
+const recommendedPresetCount = computed(() => crawlerStore.pluginRecommendedConfigs.length);
 
 function goImportRecommendedPresets() {
   modal.close();
@@ -524,11 +638,7 @@ const schedulePreview = computed(() => {
   if (!scheduleEnabled.value) return t("autoConfig.scheduleDisabled");
   if (scheduleMode.value === "interval") {
     const unitKey =
-      intervalUnit.value === "minutes"
-        ? "unitMinutes"
-        : intervalUnit.value === "hours"
-          ? "unitHours"
-          : "unitDays";
+      intervalUnit.value === "minutes" ? "unitMinutes" : intervalUnit.value === "hours" ? "unitHours" : "unitDays";
     return t("autoConfig.intervalSummary", {
       n: intervalValue.value,
       unit: t(`autoConfig.${unitKey}`),
@@ -565,9 +675,7 @@ function loadScheduleFromConfig(cfg: RunConfig | undefined) {
   scheduleEnabled.value = !!cfg.scheduleEnabled;
   const spec = cfg.scheduleSpec;
   scheduleMode.value =
-    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly"
-      ? spec.mode
-      : "interval";
+    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly" ? spec.mode : "interval";
   weeklyWeekday.value = 0;
   if (spec?.mode === "interval") {
     const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
@@ -715,13 +823,15 @@ async function updateCurrentConfig() {
 }
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
-watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
+watch(
+  () => props.modelValue,
+  (v) => (v ? modal.open() : modal.close()),
+  { immediate: true },
+);
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
-const selectedRunConfig = computed(() =>
-  runConfigs.value.find((cfg) => cfg.id === selectedRunConfigId.value),
-);
+const selectedRunConfig = computed(() => runConfigs.value.find((cfg) => cfg.id === selectedRunConfigId.value));
 
 const runConfigPickerOptions = computed(() =>
   runConfigs.value.map((cfg) => ({
@@ -858,18 +968,8 @@ watch(
   { deep: true },
 );
 
-const {
-  configCompatibilityStatus,
-  loadConfigToForm,
-  confirmDeleteRunConfig,
-  checkAllConfigsCompatibility,
-} = useConfigCompatibility(
-  pluginVars,
-  form,
-  selectedRunConfigId,
-  loadPluginVarDefs,
-  modal.isOpen,
-);
+const { configCompatibilityStatus, loadConfigToForm, confirmDeleteRunConfig, checkAllConfigsCompatibility } =
+  useConfigCompatibility(pluginVars, form, selectedRunConfigId, loadPluginVarDefs, modal.isOpen);
 
 const handleDeleteConfig = async (configId: string) => {
   await confirmDeleteRunConfig(configId);
@@ -892,8 +992,7 @@ const createOutputAlbum = async (showSuccess = true) => {
     return created;
   } catch (error: any) {
     console.error("创建画册失败:", error);
-    const errorMessage =
-      typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
+    const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
     ElMessage.error(errorMessage);
     return null;
   }
@@ -1012,7 +1111,9 @@ const handleStartCrawl = async () => {
       plugin_id: form.value.pluginId,
       has_output_dir: !!form.value.outputDir,
       output_album: selectedOutputAlbumId.value
-        ? selectedOutputAlbumId.value === "__create_new__" ? "new" : "existing"
+        ? selectedOutputAlbumId.value === "__create_new__"
+          ? "new"
+          : "existing"
         : "none",
       run_config_id: runConfigIdForTask ?? selectedRunConfigId.value ?? null,
       has_run_config: !!(runConfigIdForTask ?? selectedRunConfigId.value),
@@ -1038,8 +1139,7 @@ const handleStartCrawl = async () => {
     emit("started");
   } catch (error: any) {
     console.error("添加任务失败:", error);
-    const errorMessage =
-      typeof error === "string" ? error : error?.message || String(error) || "添加任务失败";
+    const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "添加任务失败";
     ElMessage.error(errorMessage);
   }
 };
@@ -1068,7 +1168,10 @@ watch(modal.isOpen, async (open) => {
     if (props.initialConfig.outputDir !== undefined) {
       form.value.outputDir = props.initialConfig.outputDir ?? "";
     }
-    httpHeaderRows.value = Object.entries(props.initialConfig.httpHeaders ?? {}).map(([k, v]) => ({ key: k, value: v }));
+    httpHeaderRows.value = Object.entries(props.initialConfig.httpHeaders ?? {}).map(([k, v]) => ({
+      key: k,
+      value: v,
+    }));
     if (props.initialConfig.outputAlbumId !== undefined) {
       selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
     }
@@ -1163,7 +1266,7 @@ watch(selectedOutputAlbumId, (newValue) => {
   width: 100%;
 }
 
-.mode-line>* {
+.mode-line > * {
   flex: 1;
 }
 
@@ -1193,7 +1296,7 @@ watch(selectedOutputAlbumId, (newValue) => {
 }
 
 .run-config-row .run-config-select,
-.run-config-row>*:first-child {
+.run-config-row > *:first-child {
   flex: 1;
   min-width: 0;
 }

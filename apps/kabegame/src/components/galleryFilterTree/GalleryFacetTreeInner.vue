@@ -15,9 +15,9 @@
         type="button"
         tabindex="-1"
       >
-        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{{
-          source.descriptor(element).name
-        }}</span>
+        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+          {{ source.descriptor(element).name }}
+        </span>
         <span
           class="flex-none text-[var(--anime-text-secondary)] text-xs"
           :class="{
@@ -25,7 +25,9 @@
             '!text-[var(--el-color-success)]': counts.deltaSignOf(keyOf(element)) > 0,
             '!text-[var(--anime-text-muted)]': counts.isEmptyOf(keyOf(element)),
           }"
-        >({{ counts.displayOf(keyOf(element)) }})</span>
+        >
+          ({{ counts.displayOf(keyOf(element)) }})
+        </span>
       </button>
     </template>
   </KbTreePanel>

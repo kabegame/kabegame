@@ -23,10 +23,7 @@ export function pathqlEntry(path: string): Promise<ProviderEntry> {
   return invoke<ProviderEntry>("pathql_entry", { path });
 }
 
-export function pathqlList(
-  path: string,
-  withCount = false,
-): Promise<ProviderListChild[]> {
+export function pathqlList(path: string, withCount = false): Promise<ProviderListChild[]> {
   return invoke<ProviderListChild[]>("pathql_list", { path, withCount });
 }
 

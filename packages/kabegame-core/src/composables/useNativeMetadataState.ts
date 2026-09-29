@@ -12,9 +12,7 @@ export function useNativeMetadataState(imageId: Ref<string | undefined>) {
   const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
   let loadSequence = 0;
 
-  const displayGroups = computed(() =>
-    (payload.value?.groups ?? []).filter((group) => group.entries.length > 0),
-  );
+  const displayGroups = computed(() => (payload.value?.groups ?? []).filter((group) => group.entries.length > 0));
 
   async function load(): Promise<void> {
     const sequence = ++loadSequence;

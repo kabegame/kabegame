@@ -11,10 +11,7 @@ export type FolderSyncDescend = "none" | "existing" | "createMissing";
 
 export type SettableAlbumSyncMode = Exclude<AlbumSyncMode, "delegated">;
 
-export async function syncLocalFolderAlbum(
-  albumId: string,
-  descend: FolderSyncDescend = "none",
-): Promise<void> {
+export async function syncLocalFolderAlbum(albumId: string, descend: FolderSyncDescend = "none"): Promise<void> {
   if (LOCAL_FOLDER_UNSUPPORTED) return;
   try {
     await invoke("sync_local_folder_album", { albumId, descend });
@@ -25,18 +22,13 @@ export async function syncLocalFolderAlbum(
 }
 
 /** 设置画册的持续同步意图；delegated 仅由后端状态机维护，不能由调用方直接设置。 */
-export async function setAlbumSyncMode(
-  albumId: string,
-  mode: SettableAlbumSyncMode,
-): Promise<void> {
+export async function setAlbumSyncMode(albumId: string, mode: SettableAlbumSyncMode): Promise<void> {
   if (LOCAL_FOLDER_UNSUPPORTED) return;
   await invoke("set_album_sync_mode", { albumId, mode });
 }
 
 /** 将本地文件夹画册及其全部后代脱钩并转换为普通画册。 */
-export async function convertLocalFolderAlbumToNormal(
-  albumId: string,
-): Promise<void> {
+export async function convertLocalFolderAlbumToNormal(albumId: string): Promise<void> {
   if (LOCAL_FOLDER_UNSUPPORTED) return;
   await invoke("convert_local_folder_album_to_normal", { albumId });
 }

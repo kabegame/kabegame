@@ -17,12 +17,8 @@ const options = [100, 500, 1000] as const;
 
 const { settingValue, set, disabled, showDisabled } = useSettingKeyState("galleryPageSize");
 // KbSegmentedControl 以字符串比对选中项，这里统一用字符串，落库前再转回数字
-const localValue = computed(
-  () => String((settingValue.value as number | undefined) ?? 100),
-);
-const segmentOptions = computed(() =>
-  options.map((n) => ({ label: String(n), value: String(n) })),
-);
+const localValue = computed(() => String((settingValue.value as number | undefined) ?? 100));
+const segmentOptions = computed(() => options.map((n) => ({ label: String(n), value: String(n) })));
 
 const onChange = async (v: string) => {
   const n = Number(v);

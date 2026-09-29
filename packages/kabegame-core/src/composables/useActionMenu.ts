@@ -27,7 +27,11 @@ export function useActionMenu<T>(_options?: UseActionMenuOptions<T>): UseActionM
   const visible = ref(false);
   const position = ref({ x: 0, y: 0 });
   const context = ref<ActionMenuContext<T>>({ target: null });
-  const modal = useModal({ onClose: () => { visible.value = false; } });
+  const modal = useModal({
+    onClose: () => {
+      visible.value = false;
+    },
+  });
 
   const show = (target: T, event: MouseEvent) => {
     context.value = { target };

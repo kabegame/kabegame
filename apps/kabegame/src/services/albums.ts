@@ -112,9 +112,7 @@ export function normalizeAlbumRow(row: Record<string, unknown>): Album {
 }
 
 function metaRow(entry: ProviderListChild): Record<string, unknown> {
-  return entry.meta && typeof entry.meta === "object"
-    ? (entry.meta as Record<string, unknown>)
-    : {};
+  return entry.meta && typeof entry.meta === "object" ? (entry.meta as Record<string, unknown>) : {};
 }
 
 function kindSegment(kinds?: ReadonlyArray<AlbumKind>): string {
@@ -152,10 +150,7 @@ export async function fetchAlbumPage(
   kinds?: ReadonlyArray<AlbumKind>,
 ): Promise<AlbumNode[]> {
   const paths = albumPagePaths(target, page, prefix, kinds);
-  const [imageRows, albumRows] = await Promise.all([
-    pathqlList(paths.images, true),
-    pathqlList(paths.albums, true),
-  ]);
+  const [imageRows, albumRows] = await Promise.all([pathqlList(paths.images, true), pathqlList(paths.albums, true)]);
   const imagesById = new Map(imageRows.map((entry) => [entry.name, entry.total ?? 0]));
   const albumsById = new Map(albumRows.map((entry) => [entry.name, entry]));
   const rows = albumRows.map((entry) => normalizeAlbumRow(metaRow(entry)));
@@ -257,10 +252,20 @@ function publishAlbumChanges(changes: AlbumImagesChangePayload[]) {
 function structuralBatch(album: Album | null, kind: string, extraPath?: string): ChangeBatch {
   const paths = [album?.ancestorPath, extraPath].filter((path): path is string => !!path);
   return {
-    images: new Set(), imageIds: new Set(), taskIds: new Set(), surfRecordIds: new Set(), pluginIds: new Set(),
-    albumImages: new Set(), albumIds: new Set(album ? [album.id] : []), albumImageIds: new Set(), favoriteOps: [],
-    albumStructure: new Set([kind]), albumPaths: new Set(paths), albumPathsWildcard: paths.length === 0,
-    wildcard: { task: false, surf: false, plugin: false }, maxSeq: 0,
+    images: new Set(),
+    imageIds: new Set(),
+    taskIds: new Set(),
+    surfRecordIds: new Set(),
+    pluginIds: new Set(),
+    albumImages: new Set(),
+    albumIds: new Set(album ? [album.id] : []),
+    albumImageIds: new Set(),
+    favoriteOps: [],
+    albumStructure: new Set([kind]),
+    albumPaths: new Set(paths),
+    albumPathsWildcard: paths.length === 0,
+    wildcard: { task: false, surf: false, plugin: false },
+    maxSeq: 0,
   };
 }
 
@@ -270,20 +275,36 @@ function errorMessage(error: unknown): Error {
 
 export async function createAlbum(name: string, opts: { reload?: boolean; parentId?: string | null } = {}) {
   try {
-    const created = normalizeAlbumRow(await invoke<Record<string, unknown>>("add_album", { name, parentId: opts.parentId ?? null }));
+    const created = normalizeAlbumRow(
+      await invoke<Record<string, unknown>>("add_album", { name, parentId: opts.parentId ?? null }),
+    );
     publishLocal(structuralBatch(created, "added"));
     return created;
-  } catch (error) { throw errorMessage(error); }
+  } catch (error) {
+    throw errorMessage(error);
+  }
 }
 
-export async function createLabelAlbum(args: { key: string; name?: string | null; parentId?: string | null; directory?: boolean }) {
+export async function createLabelAlbum(args: {
+  key: string;
+  name?: string | null;
+  parentId?: string | null;
+  directory?: boolean;
+}) {
   try {
-    const created = normalizeAlbumRow(await invoke<Record<string, unknown>>("add_label_album", {
-      key: args.key, name: args.name?.trim() || null, parentId: args.parentId ?? null, directory: args.directory ?? false,
-    }));
+    const created = normalizeAlbumRow(
+      await invoke<Record<string, unknown>>("add_label_album", {
+        key: args.key,
+        name: args.name?.trim() || null,
+        parentId: args.parentId ?? null,
+        directory: args.directory ?? false,
+      }),
+    );
     publishLocal(structuralBatch(created, "added"));
     return created;
-  } catch (error) { throw errorMessage(error); }
+  } catch (error) {
+    throw errorMessage(error);
+  }
 }
 
 export async function createLocalFolderAlbum(
@@ -292,12 +313,17 @@ export async function createLocalFolderAlbum(
 ) {
   try {
     const raw = await invoke<unknown>("add_local_folder_album", {
-      name: args.name, parentId: args.parentId ?? null, syncFolder: args.syncFolder, recursive: args.recursive,
+      name: args.name,
+      parentId: args.parentId ?? null,
+      syncFolder: args.syncFolder,
+      recursive: args.recursive,
     });
     const rows = (Array.isArray(raw) ? raw : [raw]).map((row) => normalizeAlbumRow(row as Record<string, unknown>));
     for (const row of rows) publishLocal(structuralBatch(row, "added"));
     return rows;
-  } catch (error) { throw errorMessage(error); }
+  } catch (error) {
+    throw errorMessage(error);
+  }
 }
 
 export async function renameAlbum(albumId: string, newName: string) {
@@ -305,7 +331,9 @@ export async function renameAlbum(albumId: string, newName: string) {
   try {
     await invoke("rename_album", { albumId, newName });
     publishLocal(structuralBatch(album, "name"));
-  } catch (error) { throw errorMessage(error); }
+  } catch (error) {
+    throw errorMessage(error);
+  }
 }
 
 export async function moveAlbum(albumId: string, newParentId: string | null) {
@@ -314,7 +342,9 @@ export async function moveAlbum(albumId: string, newParentId: string | null) {
     await invoke("move_album", { albumId, newParentId });
     const after = await fetchAlbum(albumId);
     publishLocal(structuralBatch(after, "parentId", before?.ancestorPath));
-  } catch (error) { throw errorMessage(error); }
+  } catch (error) {
+    throw errorMessage(error);
+  }
 }
 
 export async function setLabelKey(albumId: string, newKey: string) {
@@ -322,7 +352,9 @@ export async function setLabelKey(albumId: string, newKey: string) {
   try {
     await invoke("set_label_key", { albumId, newKey });
     publishLocal(structuralBatch(album, "labelKey"));
-  } catch (error) { throw errorMessage(error); }
+  } catch (error) {
+    throw errorMessage(error);
+  }
 }
 
 export async function deleteAlbum(albumId: string) {
@@ -332,28 +364,53 @@ export async function deleteAlbum(albumId: string) {
     await ElMessageBox.confirm(
       i18n.global.t("albums.deleteAlbumRotationConfirm"),
       i18n.global.t("albums.deleteAlbumRotationTitle"),
-      { type: "warning", dangerouslyUseHTMLString: true, confirmButtonText: i18n.global.t("common.ok"), cancelButtonText: i18n.global.t("common.cancel") },
+      {
+        type: "warning",
+        dangerouslyUseHTMLString: true,
+        confirmButtonText: i18n.global.t("common.ok"),
+        cancelButtonText: i18n.global.t("common.cancel"),
+      },
     );
   }
   await invoke("delete_album", { albumId });
   publishLocal(structuralBatch(album, "deleted"));
 }
 
-export async function addImagesToAlbum(albumId: string, imageIds: string[], opts?: { view?: ViewQuery | null }): Promise<AddToAlbumResult> {
+export async function addImagesToAlbum(
+  albumId: string,
+  imageIds: string[],
+  opts?: { view?: ViewQuery | null },
+): Promise<AddToAlbumResult> {
   const result = await invoke<AddToAlbumResult>("add_images_to_album", { albumId, imageIds, view: opts?.view ?? null });
   publishAlbumChanges(result.albumChanges);
   return result;
 }
 
-export async function addTaskImagesToAlbum(taskId: string, albumId: string, opts?: { view?: ViewQuery | null }): Promise<AddToAlbumResult> {
-  const result = await invoke<AddToAlbumResult>("add_task_images_to_album", { taskId, albumId, view: opts?.view ?? null });
+export async function addTaskImagesToAlbum(
+  taskId: string,
+  albumId: string,
+  opts?: { view?: ViewQuery | null },
+): Promise<AddToAlbumResult> {
+  const result = await invoke<AddToAlbumResult>("add_task_images_to_album", {
+    taskId,
+    albumId,
+    view: opts?.view ?? null,
+  });
   publishAlbumChanges(result.albumChanges);
   return result;
 }
 
-export async function removeImagesFromAlbum(albumId: string, imageIds: string[], opts?: { view?: ViewQuery | null }): Promise<RemoveFromAlbumResult> {
+export async function removeImagesFromAlbum(
+  albumId: string,
+  imageIds: string[],
+  opts?: { view?: ViewQuery | null },
+): Promise<RemoveFromAlbumResult> {
   if (!imageIds.length) return { removed: 0, albumChanges: [] };
-  const result = await invoke<RemoveFromAlbumResult>("remove_images_from_album", { albumId, imageIds, view: opts?.view ?? null });
+  const result = await invoke<RemoveFromAlbumResult>("remove_images_from_album", {
+    albumId,
+    imageIds,
+    view: opts?.view ?? null,
+  });
   publishAlbumChanges(result.albumChanges);
   return result;
 }

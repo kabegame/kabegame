@@ -74,9 +74,18 @@
     "convertToNormalFailed": "Conversion failed: {error}",
     "syncMode": {
       "none": { "label": "No sync", "description": "Do not watch folder changes or sync automatically" },
-      "shallow": { "label": "Shallow sync", "description": "Sync files in this folder only, without creating child albums" },
-      "recursive": { "label": "Recursive sync", "description": "Sync the entire folder tree and create albums for subfolders" },
-      "delegated": { "label": "Delegated sync", "description": "Managed by recursive sync from a parent album and cannot be changed independently" }
+      "shallow": {
+        "label": "Shallow sync",
+        "description": "Sync files in this folder only, without creating child albums"
+      },
+      "recursive": {
+        "label": "Recursive sync",
+        "description": "Sync the entire folder tree and create albums for subfolders"
+      },
+      "delegated": {
+        "label": "Delegated sync",
+        "description": "Managed by recursive sync from a parent album and cannot be changed independently"
+      }
     },
     "readOnlyHint": "This gesture isn't supported for local folder sync albums. Press Delete or right-click and choose \"Delete Files\".",
     "syncDone": "Synced: +{added} -{deleted} ~{reimported}",

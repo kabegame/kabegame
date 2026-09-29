@@ -14,12 +14,17 @@
       class="flex items-center gap-2 py-2 px-4 flex-none border-b border-b-solid border-[var(--anime-border)] text-13.5px"
       style="background: rgba(239, 68, 68, 0.08)"
     >
-      <span class="kb-chip text-white whitespace-nowrap" style="background: linear-gradient(135deg, #ef4444 0%, #f87171 100%)">
+      <span
+        class="kb-chip text-white whitespace-nowrap"
+        style="background: linear-gradient(135deg, #ef4444 0%, #f87171 100%)"
+      >
         {{ t("plugins.detail.requireAppVersion", { version: plugin.minAppVersion }) }}
       </span>
       <span>{{ t("plugins.detail.appVersionBad", { app: appVersionText ?? "?", min: plugin.minAppVersion }) }}</span>
       <div class="flex-1" />
-      <a href="#" class="underline whitespace-nowrap" @click.prevent="handleOpenReleaseLink">{{ t("plugins.docReleaseLinkText") }}</a>
+      <a href="#" class="underline whitespace-nowrap" @click.prevent="handleOpenReleaseLink">
+        {{ t("plugins.docReleaseLinkText") }}
+      </a>
     </div>
 
     <div class="flex items-center gap-3 px-4 pt-2.5 pb-2 flex-none">
@@ -125,7 +130,11 @@
       <span
         v-if="plugin.minAppVersion"
         class="kb-chip text-white"
-        :style="{ background: plugin.minAppIncompatible ? 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)' : 'linear-gradient(135deg, #10b981 0%, #34d399 100%)' }"
+        :style="{
+          background: plugin.minAppIncompatible
+            ? 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)'
+            : 'linear-gradient(135deg, #10b981 0%, #34d399 100%)',
+        }"
       >
         {{ t("plugins.detail.requireAppVersion", { version: plugin.minAppVersion }) }}
       </span>
@@ -136,7 +145,12 @@
 
     <div v-if="displayDesc" class="text-14px text-[var(--anime-text-secondary)]">{{ displayDesc }}</div>
     <PluginLabelTags v-if="plugin.labels?.length" :labels="plugin.labels" />
-    <a v-if="plugin.baseUrl" href="#" class="text-13.5px underline font-mono break-all" @click.prevent="handleOpenBaseUrl">
+    <a
+      v-if="plugin.baseUrl"
+      href="#"
+      class="text-13.5px underline font-mono break-all"
+      @click.prevent="handleOpenBaseUrl"
+    >
       {{ plugin.baseUrl }}
     </a>
 
@@ -191,13 +205,13 @@ const props = withDefaults(
   }>(),
   {
     isRemote: false,
-  }
+  },
 );
 
 const emit = defineEmits<{
   (
     e: "start-task",
-    payload: { pluginId: string; vars?: Record<string, any>; httpHeaders?: Record<string, string> }
+    payload: { pluginId: string; vars?: Record<string, any>; httpHeaders?: Record<string, string> },
   ): void;
   (e: "import-all-presets", presets: PluginRecommendedPreset[]): void;
   (e: "doc-image-preview-open", payload: { index: number; count: number; src: string; alt: string }): void;
@@ -209,7 +223,7 @@ const displayDesc = computed(() =>
     ? resolveManifestText(props.plugin.description, locale.value) ||
       (typeof props.plugin.description === "object" && props.plugin.description["default"]) ||
       ""
-    : ""
+    : "",
 );
 const displayDoc = computed(() => resolveManifestDoc(props.plugin?.doc ?? null, locale.value ?? "zh"));
 const displayChangelog = computed(() => resolveManifestDoc(props.plugin?.changelog ?? null, locale.value ?? "zh"));
@@ -219,7 +233,7 @@ const appVersionText = computed(() => APP_VERSION ?? undefined);
 // 按钮态（紧凑端的已安装/未安装 chip 用）——判据与页面头部共用同一个 composable
 const { actionState } = usePluginActionState(
   () => props.plugin,
-  () => props.isRemote
+  () => props.isRemote,
 );
 
 // PathQL provider 只反映「已安装表」里的定义；isRemote 时该表要么查不到、要么是另一个版本，一律不查
@@ -252,7 +266,7 @@ watch(
   () => {
     activeTab.value = "doc";
     pathqlCount.value = null;
-  }
+  },
 );
 
 const configVarsCount = computed(() => {
@@ -282,13 +296,13 @@ const activeHeadings = computed(() => (activeTab.value === "changelog" ? changel
 const docPanelRef = ref<InstanceType<typeof PluginDocPanel> | null>(null);
 const changelogPanelRef = ref<InstanceType<typeof PluginDocPanel> | null>(null);
 const activeScrollEl = computed<HTMLElement | null>(
-  () => (activeTab.value === "changelog" ? changelogPanelRef.value?.scrollEl : docPanelRef.value?.scrollEl) ?? null
+  () => (activeTab.value === "changelog" ? changelogPanelRef.value?.scrollEl : docPanelRef.value?.scrollEl) ?? null,
 );
 
 const docActiveHeadingId = ref<string | null>(null);
 const changelogActiveHeadingId = ref<string | null>(null);
 const activeHeadingId = computed(() =>
-  activeTab.value === "changelog" ? changelogActiveHeadingId.value : docActiveHeadingId.value
+  activeTab.value === "changelog" ? changelogActiveHeadingId.value : docActiveHeadingId.value,
 );
 
 /** scrollspy：找到「顶部已越过容器顶部一小段距离」的最后一个标题作为当前高亮项 */
@@ -317,14 +331,14 @@ watch(
   (el, oldEl) => {
     oldEl?.removeEventListener("scroll", throttledDocScroll);
     el?.addEventListener("scroll", throttledDocScroll);
-  }
+  },
 );
 watch(
   () => changelogPanelRef.value?.scrollEl,
   (el, oldEl) => {
     oldEl?.removeEventListener("scroll", throttledChangelogScroll);
     el?.addEventListener("scroll", throttledChangelogScroll);
-  }
+  },
 );
 watch(docHeadings, () => {
   docActiveHeadingId.value = computeActiveHeading(docPanelRef.value?.scrollEl, docHeadings.value);
@@ -348,14 +362,16 @@ watch(
   () => props.plugin?.id,
   () => {
     compactTab.value = "doc";
-  }
+  },
 );
 const compactTabItems = computed<KbTabItem<CompactTab>[]>(() => [
   { name: "doc", label: t("plugins.detail.tabDoc") },
   { name: "changelog", label: t("plugins.detail.tabChangelog") },
 ]);
 const compactDocText = computed(() => (compactTab.value === "changelog" ? displayChangelog.value : displayDoc.value));
-const compactAnchorPrefix = computed(() => (compactTab.value === "changelog" ? "kbchangelog-compact" : "kbdoc-compact"));
+const compactAnchorPrefix = computed(() =>
+  compactTab.value === "changelog" ? "kbchangelog-compact" : "kbdoc-compact",
+);
 </script>
 
 <style scoped>

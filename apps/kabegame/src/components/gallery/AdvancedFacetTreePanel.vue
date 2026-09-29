@@ -23,27 +23,23 @@ import {
   type GalleryFilter,
   type GalleryFilterSet,
 } from "@/utils/galleryPath";
-import {
-  getNode,
-  type GalleryQuery,
-  type NodePath,
-} from "@/utils/galleryQuery";
+import { getNode, type GalleryQuery, type NodePath } from "@/utils/galleryQuery";
 import GalleryFacetTreeInner from "@/components/galleryFilterTree/GalleryFacetTreeInner.vue";
-import type {
-  GalleryFilterTreeContext,
-  RefreshTarget,
-} from "@/components/galleryFilterTree/context";
+import type { GalleryFilterTreeContext, RefreshTarget } from "@/components/galleryFilterTree/context";
 
-const props = withDefaults(defineProps<{
-  tree: GalleryQuery;
-  nodePath: NodePath;
-  dimension: FacetDimension;
-  contextPrefix?: string;
-  visible?: boolean;
-}>(), {
-  contextPrefix: "images://gallery/",
-  visible: false,
-});
+const props = withDefaults(
+  defineProps<{
+    tree: GalleryQuery;
+    nodePath: NodePath;
+    dimension: FacetDimension;
+    contextPrefix?: string;
+    visible?: boolean;
+  }>(),
+  {
+    contextPrefix: "images://gallery/",
+    visible: false,
+  },
+);
 
 const emit = defineEmits<{
   select: [filter: GalleryFilter];
@@ -52,12 +48,7 @@ const emit = defineEmits<{
 const tree = toRef(props, "tree");
 const nodePath = toRef(props, "nodePath");
 const contextPrefix = toRef(props, "contextPrefix");
-const facet = useDimensionFacet(
-  tree,
-  nodePath,
-  props.dimension,
-  contextPrefix,
-);
+const facet = useDimensionFacet(tree, nodePath, props.dimension, contextPrefix);
 const refreshTargets = new Set<RefreshTarget>();
 
 const atom = computed<GalleryFilterSet>(() => {

@@ -93,7 +93,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       if (currentPage.value > totalPages) {
         await handleJumpToPage(totalPages);
       }
-    }
+    },
   );
 
   let ensuringPage = false;
@@ -109,10 +109,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
         return;
       }
 
-      const targetPage = Math.min(
-        currentPage.value,
-        Math.max(1, Math.ceil(totalImagesCount.value / pageSize.value)),
-      );
+      const targetPage = Math.min(currentPage.value, Math.max(1, Math.ceil(totalImagesCount.value / pageSize.value)));
       await handleJumpToPage(targetPage);
     } finally {
       ensuringPage = false;
@@ -134,9 +131,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     }
 
     const totalPages = Math.max(1, Math.ceil((totalImagesCount.value || 0) / pageSize.value));
-    const targetPage = payload.direction === "next"
-      ? currentPage.value + 1
-      : currentPage.value - 1;
+    const targetPage = payload.direction === "next" ? currentPage.value + 1 : currentPage.value - 1;
     if (targetPage < 1 || targetPage > totalPages) return;
 
     pendingPreviewBoundary.value = {
@@ -167,7 +162,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       params.viewRef.value?.openPreviewById?.(image.id);
       ElMessage.info(pending.direction === "next" ? messages.next : messages.prev);
     },
-    { flush: "post" }
+    { flush: "post" },
   );
 
   watch(
@@ -187,7 +182,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
         params.loading.finishLoading();
       }
     },
-    { immediate: true }
+    { immediate: true },
   );
 
   return {

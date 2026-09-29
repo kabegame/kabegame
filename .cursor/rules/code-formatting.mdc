@@ -1,0 +1,41 @@
+---
+description: 前端代码统一走 Prettier，别手调缩进 / 引号 / 换行
+globs: "**/*.vue, **/*.ts, **/*.tsx, **/*.scss, **/*.css, **/*.json"
+alwaysApply: false
+---
+
+# 代码格式：Prettier
+
+`apps/` 与 `packages/` 的前端源码已由 **Prettier 3** 统一格式化，配置在根目录 `.prettierrc.json`
+（printWidth 120、双引号、分号、2 空格缩进、尾逗号 `all`、LF、`htmlWhitespaceSensitivity: ignore`）。
+
+## 规则
+
+- 写完代码跑 `deno task format`（写入）或 `deno task format:check`（只检查）。**不要手工对齐缩进 / 引号 / 换行**——与配置冲突的排版会在下次 format 时被改回去，只留下无意义 diff。
+- **不要把 Prettier 挂成 pre-commit 钩子。** 本仓 husky 只挂了 `pre-push`（标签校验）与 `post-merge`（third-patches 重同步），格式化和它们一样是**显式动作**，不进提交路径。
+- **不要为了绕开某段代码的排版而往 `.prettierignore` 加条目。** 确实需要保留原样时，用 `prettier-ignore` 就近标注，并写明原因。
+
+## Vue 模板的空白：`htmlWhitespaceSensitivity: "ignore"`
+
+这一项**刻意偏离** Prettier 默认的 `css`。默认值下 Prettier 把 `el-dropdown-item`、`el-button` 这类自定义组件当作行内元素（它不认识组件、也不解析 UnoCSS 工具类），为保护元素间空白只能产出「标签内折行」：
+
+```vue
+<el-dropdown-item command="create-album"
+  ><el-icon><Plus /></el-icon>{{ t("albums.treeAddAlbum") }}</el-dropdown-item
+>
+```
+
+`ignore` 让模板按正常方式换行（全仓这类折行从 46 处降到 8 处）。**代价是 Prettier 不再保护空白**，因此：
+
+- 需要**紧贴**的文本拼接必须用**精确的一行** `<!-- prettier-ignore -->` 钉住 —— 多一个字（包括在指令后面加中文说明）就会失效，说明要写到它**上面**那条普通注释里。已知唯一一处：`apps/kabegame/src/views/Surf.vue` 的 `.surf-suggest-label`（搜索高亮的 `pre`/`hit`/`post` 三段必须无缝，否则 "kabegame" 会显示成 "ka begame"）。
+- 元素**内容**首尾被加上或去掉换行时，只要该元素前后本来就有空白，或父容器是 flex / inline-flex（纯空白文本节点不生成 flex item），或元素被 blockify（如 flex item、`display: block`），渲染就与 `css` 模式一致。本项目全量切换时逐处核对过 30 个受影响文件：只有上面那一处是真实的渲染变化。
+- 加 `prettier-ignore` 的那一行会连注释一起进入 DOM（Vue 默认保留模板注释），无害但需知情。
+
+## 范围
+
+- **整包排除**（见 `.prettierignore`）：
+  - 三个 git submodule —— `packages/kabegame-plugin-sdk`、`packages/kabegame-types`、`packages/photoswipe-vue`。Prettier 只认目录树、不认 submodule，会直接写进这些独立仓库留下无法随本仓提交的脏改动（初次配置时已实测踩到）。
+  - 两个 vendored fork —— `packages/kabegame-element-plus`、`packages/kabegame-element-plus-icons`。跟随上游维护，整包格式化会让同步 diff 不可读。
+  - 生成物 `packages/kabegame-pathql-client/index.ts`。
+- 只含**代码文件**：`*.md` / `*.mdx` 在 `.prettierignore` 中显式忽略。将来要把文档也纳入，删掉那两行即可，`package.json` 里的脚本不必改 —— 脚本是直接把 `apps packages` 两个目录交给 Prettier 的。
+- Prettier 装在根 `devDependencies`，用 **`deno install`** 安装并落进 `deno.lock`（本仓没有 npm / yarn 的 lockfile）。

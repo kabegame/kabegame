@@ -79,7 +79,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, useAttrs, watch } from "vue";
+import {
+  computed,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  shallowRef,
+  useAttrs,
+  watch,
+} from "vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
@@ -95,12 +105,7 @@ import type {
 } from "@kabegame/core/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
-import {
-  singleFilterToSet,
-  queryFromFilterSet,
-  type GalleryFilter,
-  type GalleryQuery,
-} from "@/utils/galleryPath";
+import { singleFilterToSet, queryFromFilterSet, type GalleryFilter, type GalleryQuery } from "@/utils/galleryPath";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -113,22 +118,13 @@ import { createImageActions } from "@/actions/imageActions";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
 import { subscribeChanges } from "@/services/dataChangeHub";
-import {
-  GRID_REFRESH_WAIT_MS,
-  useLiveQuery,
-  type ViewQuery,
-  type ViewSnapshot,
-} from "@/services/liveQuery";
+import { GRID_REFRESH_WAIT_MS, useLiveQuery, type ViewQuery, type ViewSnapshot } from "@/services/liveQuery";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, fetchImageAlbums, removeImagesFromAlbum } from "@/services/albums";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
-import type {
-  GridRefreshContext,
-  GridRemoveDialogText,
-  GridAdapter,
-} from "@/components/imageGrid/types";
+import type { GridRefreshContext, GridRemoveDialogText, GridAdapter } from "@/components/imageGrid/types";
 
 import type {
   ContextCommand as CoreContextCommand,
@@ -137,13 +133,14 @@ import type {
 import type { ActionItem } from "@kabegame/core/actions/types";
 
 // 扩展 ContextCommand 类型，添加 kabegame 特有的命令
-export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "addToHidden" | "share" | "deleteFile" | "copyLabels";
+export type ContextCommand =
+  CoreContextCommand | "favorite" | "addToAlbum" | "addToHidden" | "share" | "deleteFile" | "copyLabels";
 type ImageInfo = CoreImageInfo;
 
 // 扩展 ContextCommandPayload 类型
 // 对于扩展命令，payload 结构与 core 一致，只是 command 字段不同
-export type ContextCommandPayload<T extends ContextCommand = ContextCommand> =
-  T extends "favorite" | "addToAlbum" | "addToHidden" | "share" | "deleteFile"
+export type ContextCommandPayload<T extends ContextCommand = ContextCommand> = T extends
+  "favorite" | "addToAlbum" | "addToHidden" | "share" | "deleteFile"
   ? Omit<CoreContextCommandPayload, "command"> & { command: T }
   : CoreContextCommandPayload;
 
@@ -163,12 +160,8 @@ interface Props {
    * 不传时所有命令直接走内置默认实现。
    */
   onContextCommand?: (
-    payload: ContextCommandPayload
-  ) =>
-    | ContextCommand
-    | null
-    | undefined
-    | Promise<ContextCommand | null | undefined>;
+    payload: ContextCommandPayload,
+  ) => ContextCommand | null | undefined | Promise<ContextCommand | null | undefined>;
   showEmptyState?: boolean;
   loading?: boolean; // 外部附加的加载状态（如手动刷新中）
   loadingOverlay?: boolean; // 外部附加的加载遮罩；不传则默认等同于 loading
@@ -227,9 +220,7 @@ async function handleOpenSurfRecord(target: ImageDetailSurfRecordTarget) {
   coreRef.value?.closePreview?.();
 }
 
-function galleryFilterTargetToQuery(
-  target: ImageDetailGalleryFilterTarget,
-): GalleryQuery | null {
+function galleryFilterTargetToQuery(target: ImageDetailGalleryFilterTarget): GalleryQuery | null {
   let filter: GalleryFilter;
   switch (target.type) {
     case "plugin":
@@ -292,8 +283,7 @@ const loadedKey = ref("");
 // metadata per-page 缓存：本组件是详情/预览的公共祖先，在此 provide
 const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 
-const { loading: internalLoading, showLoading: showInternalLoading, startLoading, finishLoading } =
-  useLoadingDelay();
+const { loading: internalLoading, showLoading: showInternalLoading, startLoading, finishLoading } = useLoadingDelay();
 
 const currentWallpaperImageId = computed<string | null>({
   get: () => settingsStore.values.currentWallpaperImageId ?? null,
@@ -308,8 +298,7 @@ let lastRemovedIds: string[] = [];
 let ensurePageAfterRemoval: () => Promise<void> = async () => {};
 let refreshCtx!: GridRefreshContext;
 
-const rawViewPath = () =>
-  adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
+const rawViewPath = () => adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
 
 const currentViewQuery = (): ViewQuery | null => {
   if (!isRouteActive.value || !adapter.isActive()) return null;
@@ -343,10 +332,7 @@ const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
   if (removedIds.length > 0) {
     const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
     if (selected && removedIds.some((id) => selected.has(id))) clearSelection();
-    if (
-      currentWallpaperImageId.value &&
-      removedIds.includes(currentWallpaperImageId.value)
-    ) {
+    if (currentWallpaperImageId.value && removedIds.includes(currentWallpaperImageId.value)) {
       currentWallpaperImageId.value = null;
     }
   }
@@ -426,19 +412,30 @@ const mutate: GridRefreshContext["mutate"] = async (op) => {
   const result = await op(view);
   const t1 = performance.now(); // DEBUG-PERF
   const current = liveQuery.view();
-  const stillCurrent =
-    !!view && !!current && view.rows === current.rows && view.count === current.count;
+  const stillCurrent = !!view && !!current && view.rows === current.rows && view.count === current.count;
   if (result.view && stillCurrent) await liveQuery.apply(result.view);
-  void sendDebugEvent("grid_mutate", { adapter: adapter.id, rows: view?.rows, hasView: !!result.view, stillCurrent, seq: result.view?.seq, n: result.view?.rows.length, total: result.view?.total, opMs: +(t1 - t0).toFixed(1), applyMs: +(performance.now() - t1).toFixed(1) }, { sessionId: "eventworker-perf" }); // DEBUG-PERF
+  void sendDebugEvent(
+    "grid_mutate",
+    {
+      adapter: adapter.id,
+      rows: view?.rows,
+      hasView: !!result.view,
+      stillCurrent,
+      seq: result.view?.seq,
+      n: result.view?.rows.length,
+      total: result.view?.total,
+      opMs: +(t1 - t0).toFixed(1),
+      applyMs: +(performance.now() - t1).toFixed(1),
+    },
+    { sessionId: "eventworker-perf" },
+  ); // DEBUG-PERF
   return result;
 };
 
 const patch: GridRefreshContext["patch"] = (ids, fields) => {
   const idSet = new Set(ids);
   if (idSet.size === 0) return;
-  images.value = images.value.map((image) =>
-    idSet.has(image.id) ? { ...image, ...fields } : image,
-  );
+  images.value = images.value.map((image) => (idSet.has(image.id) ? { ...image, ...fields } : image));
 };
 
 refreshCtx = {
@@ -475,19 +472,11 @@ const {
   shareImage,
   openImageFolder,
   setWallpaper,
-} = useImageOperations(
-  images,
-  currentWallpaperImageId,
-  coreRef,
-  mutate,
-  patch,
-);
+} = useImageOperations(images, currentWallpaperImageId, coreRef, mutate, patch);
 
 const readRouteQueryPath = (): string => {
   const rawPath = route.query.path;
-  return Array.isArray(rawPath)
-    ? String(rawPath[0] ?? "")
-    : String(rawPath ?? "");
+  return Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
 };
 
 const syncActivePathFromUrl = () => {
@@ -534,7 +523,7 @@ watch(
         finishLoading();
       }
     })();
-  }
+  },
 );
 
 // route.query.path → routeStore 同步（预览跨页 pendingPreviewBoundary 特判见下）
@@ -546,15 +535,11 @@ watch(
     if (!qp.trim()) {
       // 见 syncActivePathFromUrl：gallery 空 path = 回默认，把默认 state
       // 写回 URL（replace）；其余 adapter 无 syncEmptyQueryPath，不处理。
-      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({ page: 1, });
+      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({ page: 1 });
       return;
     }
     const pending = paged.pendingPreviewBoundary.value;
-    if (
-      pending?.targetPath &&
-      gridCurrentPath.value === pending.targetPath &&
-      qp !== pending.targetPath
-    ) {
+    if (pending?.targetPath && gridCurrentPath.value === pending.targetPath && qp !== pending.targetPath) {
       void router.replace({
         path: route.path,
         query: { ...route.query, path: pending.targetPath },
@@ -565,7 +550,7 @@ watch(
       adapter.routeStore.syncFromUrl(qp);
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]，避免泛型不兼容
@@ -589,8 +574,7 @@ const coreGridBind = computed(() => {
     ...rest,
     images: images.value,
     loading: (props.loading ?? false) || internalLoading.value,
-    loadingOverlay:
-      (props.loadingOverlay ?? props.loading ?? false) || showInternalLoading.value,
+    loadingOverlay: (props.loadingOverlay ?? props.loading ?? false) || showInternalLoading.value,
     actions: effectiveActions.value as ActionItem<CoreImageInfo>[] | undefined,
     plugins: plugins.value,
   };
@@ -643,7 +627,7 @@ const applyPreviewFromUrl = async () => {
 onMounted(applyPreviewFromUrl);
 onActivated(() => {
   isRouteActive.value = true;
-  console.log('grid reactivate');
+  console.log("grid reactivate");
   syncActivePathFromUrl();
   void applyPreviewFromUrl();
   // keep-alive 重新激活：路径已变或列表为空时按当前路由 path 刷新，
@@ -669,12 +653,16 @@ onDeactivated(() => {
   clearSelection();
 });
 watch(() => previewImageId.value, applyPreviewFromUrl); // 前进/后退、外部改动
-watch(images, () => {
-  // 列表异步加载完成后再尝试一次（仅在仍有待打开 id 且未预览时）
-  if (readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
-}, {
-  flush: 'post'
-});
+watch(
+  images,
+  () => {
+    // 列表异步加载完成后再尝试一次（仅在仍有待打开 id 且未预览时）
+    if (readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
+  },
+  {
+    flush: "post",
+  },
+);
 
 function handlePreviewOpen(payload: { image: ImageInfo }) {
   previewedId.value = payload.image.id;
@@ -746,9 +734,7 @@ const resolveCommandTargets = (payload: CoreContextCommandPayload) => {
       ? payload.selectedImageIds
       : new Set([image.id]);
   const isMultiSelect = selectedSet.size > 1;
-  const imagesToProcess: ImageInfo[] = isMultiSelect
-    ? list.filter((img) => selectedSet.has(img.id))
-    : [image];
+  const imagesToProcess: ImageInfo[] = isMultiSelect ? list.filter((img) => selectedSet.has(img.id)) : [image];
   return { image, imagesToProcess, isMultiSelect };
 };
 
@@ -757,8 +743,7 @@ const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) =>
   if (!cfg) return;
   if (cfg.guard?.()) return;
   const includesCurrentWallpaper =
-    !!currentWallpaperImageId.value &&
-    images.some((img) => img.id === currentWallpaperImageId.value);
+    !!currentWallpaperImageId.value && images.some((img) => img.id === currentWallpaperImageId.value);
   pendingRemove.value = { mode, images };
   removeDialogText.value = cfg.dialogText(images.length, { includesCurrentWallpaper });
   removeDialog.open();
@@ -782,10 +767,12 @@ const confirmRemoveImages = async () => {
 const copyImageLabels = async (image: ImageInfo) => {
   try {
     const albums = await fetchImageAlbums(image.id);
-    const text = labelKeysText(pickLabelAlbums(
-      albums.map((album) => album.id),
-      albums,
-    ));
+    const text = labelKeysText(
+      pickLabelAlbums(
+        albums.map((album) => album.id),
+        albums,
+      ),
+    );
     if (!text) {
       ElMessage.info(t("albums.imageLabelsEmpty"));
       return;
@@ -798,10 +785,7 @@ const copyImageLabels = async (image: ImageInfo) => {
   }
 };
 
-const runDefaultCommand = async (
-  command: ContextCommand,
-  payload: CoreContextCommandPayload,
-): Promise<void> => {
+const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCommandPayload): Promise<void> => {
   if (command === "detail") {
     detailImage.value = payload.image;
     imageDetailDialog.open();
@@ -813,11 +797,8 @@ const runDefaultCommand = async (
 
   const { image, imagesToProcess, isMultiSelect } = resolveCommandTargets(payload);
   if (!image || imagesToProcess.length === 0) return;
-  const track = (
-    cmd: string,
-    targets: ImageInfo[] = imagesToProcess,
-    data?: Record<string, unknown>,
-  ) => adapter.analytics?.trackAction(cmd, targets, data);
+  const track = (cmd: string, targets: ImageInfo[] = imagesToProcess, data?: Record<string, unknown>) =>
+    adapter.analytics?.trackAction(cmd, targets, data);
 
   switch (command) {
     case "download":
@@ -878,18 +859,12 @@ const runDefaultCommand = async (
       const isUnhide = !!image.isHidden || (adapter.forceUnhide?.() ?? false);
       try {
         if (isUnhide) {
-          await refreshCtx.mutate((view) =>
-            removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids, { view }),
-          );
+          await refreshCtx.mutate((view) => removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids, { view }));
           ElMessage.success(t("contextMenu.unhideSuccess"));
         } else {
-          await refreshCtx.mutate((view) =>
-            addImagesToAlbum(HIDDEN_ALBUM_ID, ids, { view }),
-          );
+          await refreshCtx.mutate((view) => addImagesToAlbum(HIDDEN_ALBUM_ID, ids, { view }));
           ElMessage.success(
-            ids.length > 1
-              ? t("contextMenu.hiddenCount", { count: ids.length })
-              : t("contextMenu.hiddenOne"),
+            ids.length > 1 ? t("contextMenu.hiddenCount", { count: ids.length }) : t("contextMenu.hiddenOne"),
           );
         }
         clearSelection();
@@ -920,7 +895,9 @@ const runDefaultCommand = async (
   }
 };
 
-async function handleContextCommand(payload: CoreContextCommandPayload): Promise<CoreContextCommand | null | undefined> {
+async function handleContextCommand(
+  payload: CoreContextCommandPayload,
+): Promise<CoreContextCommand | null | undefined> {
   // view 的覆盖钩子先执行：返回命令 = 委托内置默认实现；返回 null = 已处理/抑制
   const res = props.onContextCommand
     ? await props.onContextCommand(payload as ContextCommandPayload)

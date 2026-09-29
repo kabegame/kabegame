@@ -9,12 +9,7 @@
     @update:model-value="modal.close"
   >
     <div class="setting-choice-options">
-      <div
-        v-for="opt in options"
-        :key="opt.id"
-        class="setting-choice-option"
-        @click="handleSelect(opt.id)"
-      >
+      <div v-for="opt in options" :key="opt.id" class="setting-choice-option" @click="handleSelect(opt.id)">
         <el-icon>
           <component :is="opt.icon" />
         </el-icon>

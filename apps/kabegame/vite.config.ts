@@ -4,16 +4,7 @@ import path from "path";
 import { merge } from "lodash-es";
 
 const webDevApiTarget = "http://127.0.0.1:7490";
-const webDevApiProxyPaths = [
-  "/rpc",
-  "/events",
-  "/api",
-  "/file",
-  "/thumbnail",
-  "/proxy",
-  "/mcp",
-  "/__ping",
-];
+const webDevApiProxyPaths = ["/rpc", "/events", "/api", "/file", "/thumbnail", "/proxy", "/mcp", "/__ping"];
 function ensureWebEnv(mode: string) {
   if (mode !== "web") return;
   process.env.KABEGAME_MODE ??= "web";

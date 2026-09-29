@@ -7,11 +7,7 @@
       :duration="lineDuration"
       class="schedule-progress"
     />
-    <el-countdown
-      class="schedule-countdown"
-      format="HH:mm:ss"
-      :value="countdownDeadlineMs"
-    >
+    <el-countdown class="schedule-countdown" format="HH:mm:ss" :value="countdownDeadlineMs">
       <template #prefix>
         <span class="countdown-prefix">{{ t("autoConfig.progress.countdownPrefix") }}</span>
       </template>
@@ -50,9 +46,7 @@ const targetPercentInt = computed(() =>
   progress.value.active ? Math.min(100, Math.max(0, Math.round(progress.value.percent * 100))) : 0,
 );
 
-const displayPercentClamped = computed(() =>
-  Math.min(100, Math.max(0, Math.round(displayPercent.value))),
-);
+const displayPercentClamped = computed(() => Math.min(100, Math.max(0, Math.round(displayPercent.value))));
 
 /** 正在播放「开启定时」进度条动画时，不同步 tick，避免打断过渡 */
 let enableAnimating = false;
@@ -94,7 +88,6 @@ watch(
   },
   { flush: "post" },
 );
-
 </script>
 
 <style scoped lang="scss">

@@ -1,174 +1,183 @@
 <template>
   <el-config-provider :locale="elementPlusLocale" :z-index="3000">
-  <!-- 主窗口 -->
-  <el-container class="app-container" :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }">
-    <div
-      v-if="bgVisible && bgImage"
-      class="app-background-layer fixed inset-0 z-0 pointer-events-none overflow-hidden"
-      aria-hidden="true"
+    <!-- 主窗口 -->
+    <el-container
+      class="app-container"
+      :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }"
     >
-      <ImageContent
-        ref="bgContentRef"
-        :native-drag="false"
-        :key="`bg-${bgImageToken}`"
-        :image="bgImage"
-        prefer="original"
-        class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
-        :style="bgImageStyle"
-        :video-playing="bgVisible && bgMediaType === 'video'"
-        video-muted
-        video-loop
-        reset-video-on-pause
-        @ready="handleBgMediaReady"
-        @error="handleBgMediaError"
-      />
-    </div>
-    <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
-    <FileDropOverlay ref="fileDropOverlayRef" />
-    <!-- 外部插件导入弹窗 -->
-    <PluginImportDialog
-      :visible="importDialog.isOpen.value"
-      :kgpg-path="importKgpgPath"
-      @update:visible="importDialog.close"
-    />
-    <!-- 全局唯一的未配置设置选择宿主 -->
-    <SettingChoiceHost />
-    <!-- 桌面端完整设置弹窗；紧凑布局继续使用全屏设置页 -->
-    <SettingsDialog
-      v-if="!uiStore.isCompact"
-      :open="settingsModal.isOpen.value"
-      :z-index="settingsModal.zIndex.value"
-      @close="settingsModal.close()"
-    />
-    <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
-    <template v-if="!uiStore.isCompact && !IS_WEB">
-      <UpdateDialog />
-      <DownloadProgressDialog />
-    </template>
-    <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
-    <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
-    <AutoConfigDialog />
-    <!-- 全局任务重跑弹窗宿主；页面内原有实例继续服务各自入口 -->
-    <CrawlerDialog v-model="crawlerDrawerVisible"
-      :initial-config="crawlerDrawerInitialConfig" />
-    <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible"
-      :initial-config="webpageInitial" />
-    <LocalImportDialog v-if="!IS_WEB && !uiStore.isCompact" v-model="localImportVisible"
-      :initial-config="localImportInitial" />
-    <MissedRunsDialog
-      :open="missedRunsModal.isOpen.value"
-      :z-index="missedRunsModal.zIndex.value"
-      :items="missedRunItems"
-      :system-sleep="wasSystemSleep"
-      @close="missedRunsModal.close()"
-      @run-now="handleRunMissedNow"
-      @dismiss="handleDismissMissed"
-    />
-    <!-- 非紧凑布局：侧边栏 + 主内容 -->
-    <template v-if="!uiStore.isCompact">
-      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '170px'">
-        <div class="sidebar-header">
-          <span class="app-logo-wrap">
-            <img :src="appLogoUrl" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" draggable="false" />
-            <UpdateButton v-if="isCollapsed" :collapsed="true" />
-          </span>
-          <div v-if="!isCollapsed" class="sidebar-title-section">
-            <h1>Kabegame</h1>
-            <UpdateButton :collapsed="false" />
-          </div>
-        </div>
-        <div class="sidebar-menu-wrapper">
-          <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-            <el-menu-item :index="galleryMenuRoute">
-              <el-icon>
-                <Picture />
-              </el-icon>
-              <span>{{ $t('route.gallery') }}</span>
-            </el-menu-item>
-            <el-menu-item index="/albums">
-              <el-icon>
-                <Collection />
-              </el-icon>
-              <span>{{ $t('route.albums') }}</span>
-            </el-menu-item>
-            <el-menu-item index="/plugins">
-              <el-icon>
-                <FilterPlugin />
-              </el-icon>
-              <span>{{ $t('route.pluginBrowser') }}</span>
-            </el-menu-item>
-            <el-menu-item index="/surf" v-if="!IS_WEB">
-              <el-icon>
-                <Compass />
-              </el-icon>
-              <span>{{ $t('route.surf') }}</span>
-            </el-menu-item>
-            <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
-              <el-icon>
-                <AlarmClock />
-              </el-icon>
-              <span>{{ $t('route.autoConfigs') }}</span>
-            </el-menu-item>
-          </el-menu>
-        </div>
-        <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
-        <div v-if="!kamechanEnabled" class="sidebar-bottom-dock" :class="{ 'is-collapsed': isCollapsed }">
-          <SidebarActivityBar
-            v-if="busyEntryVisible"
-            :collapsed="isCollapsed"
-          />
-          <div
-            class="dock-row"
-            :class="{ 'is-active': settingsModal.isOpen.value }"
-            @click="openSettingsEntry()"
-          >
-            <el-icon class="dock-icon">
-              <Setting />
-            </el-icon>
-            <template v-if="!isCollapsed">
-              <span class="dock-label">{{ $t('route.settings') }}</span>
-              <span class="dock-shortcut">{{ shortcutLabel('openSettings') }}</span>
-            </template>
-          </div>
-          <GlobalToolsPopover variant="sidebar" :collapsed="isCollapsed" @open-settings="openSettingsEntry()" />
-        </div>
-        <div v-else class="sidebar-kamechan-space" aria-hidden="true" />
-      </el-aside>
-    </template>
-    <el-main class="app-main">
-      <router-view v-slot="{ Component }" :key="routerViewKey">
-        <!-- <keep-alive> -->
-          <component :is="Component" />
-        <!-- </keep-alive> -->
-      </router-view>
-    </el-main>
-    <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
-    <nav
-      v-if="uiStore.isCompact"
-      class="app-bottom-tabs flex-none flex flex-row relative w-full border-t-2 border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] pb-[var(--sab,env(safe-area-inset-bottom,0px))] shadow-[0_-4px_20px_rgba(255,107,157,0.08)]"
-      aria-label="主导航"
-    >
-      <router-link
-        v-for="tab in bottomTabs"
-        :key="tab.index"
-        :to="tab.index"
-        class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-[var(--anime-text-secondary)] transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-[var(--anime-primary)] [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
-        :class="{ 'is-active': activeRoute === tab.index }"
+      <div
+        v-if="bgVisible && bgImage"
+        class="app-background-layer fixed inset-0 z-0 pointer-events-none overflow-hidden"
+        aria-hidden="true"
       >
-        <el-icon class="text-[22px] shrink-0">
-          <component :is="tab.icon" />
-        </el-icon>
-        <span class="text-[11px] leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap max-w-full">{{ tab.label }}</span>
-      </router-link>
-      <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
-      <div v-if="!kamechanEnabled" class="flex-1 flex flex-col items-center justify-center min-w-0">
-        <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面挂载），走路由而非弹窗 -->
-        <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
+        <ImageContent
+          ref="bgContentRef"
+          :native-drag="false"
+          :key="`bg-${bgImageToken}`"
+          :image="bgImage"
+          prefer="original"
+          class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
+          :style="bgImageStyle"
+          :video-playing="bgVisible && bgMediaType === 'video'"
+          video-muted
+          video-loop
+          reset-video-on-pause
+          @ready="handleBgMediaReady"
+          @error="handleBgMediaError"
+        />
       </div>
-    </nav>
-    <KamechanMascot @open-settings="openSettingsEntry()" />
-  </el-container>
-  <FrameMonitor />
+      <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
+      <FileDropOverlay ref="fileDropOverlayRef" />
+      <!-- 外部插件导入弹窗 -->
+      <PluginImportDialog
+        :visible="importDialog.isOpen.value"
+        :kgpg-path="importKgpgPath"
+        @update:visible="importDialog.close"
+      />
+      <!-- 全局唯一的未配置设置选择宿主 -->
+      <SettingChoiceHost />
+      <!-- 桌面端完整设置弹窗；紧凑布局继续使用全屏设置页 -->
+      <SettingsDialog
+        v-if="!uiStore.isCompact"
+        :open="settingsModal.isOpen.value"
+        :z-index="settingsModal.zIndex.value"
+        @close="settingsModal.close()"
+      />
+      <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
+      <template v-if="!uiStore.isCompact && !IS_WEB">
+        <UpdateDialog />
+        <DownloadProgressDialog />
+      </template>
+      <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
+      <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+      <AutoConfigDialog />
+      <!-- 全局任务重跑弹窗宿主；页面内原有实例继续服务各自入口 -->
+      <CrawlerDialog v-model="crawlerDrawerVisible" :initial-config="crawlerDrawerInitialConfig" />
+      <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
+      <LocalImportDialog
+        v-if="!IS_WEB && !uiStore.isCompact"
+        v-model="localImportVisible"
+        :initial-config="localImportInitial"
+      />
+      <MissedRunsDialog
+        :open="missedRunsModal.isOpen.value"
+        :z-index="missedRunsModal.zIndex.value"
+        :items="missedRunItems"
+        :system-sleep="wasSystemSleep"
+        @close="missedRunsModal.close()"
+        @run-now="handleRunMissedNow"
+        @dismiss="handleDismissMissed"
+      />
+      <!-- 非紧凑布局：侧边栏 + 主内容 -->
+      <template v-if="!uiStore.isCompact">
+        <el-aside
+          class="app-sidebar"
+          :class="{ 'sidebar-collapsed': isCollapsed }"
+          :width="isCollapsed ? '64px' : '170px'"
+        >
+          <div class="sidebar-header">
+            <span class="app-logo-wrap">
+              <img
+                :src="appLogoUrl"
+                alt="Logo"
+                class="app-logo logo-clickable"
+                @click="toggleCollapse"
+                draggable="false"
+              />
+              <UpdateButton v-if="isCollapsed" :collapsed="true" />
+            </span>
+            <div v-if="!isCollapsed" class="sidebar-title-section">
+              <h1>Kabegame</h1>
+              <UpdateButton :collapsed="false" />
+            </div>
+          </div>
+          <div class="sidebar-menu-wrapper">
+            <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
+              <el-menu-item :index="galleryMenuRoute">
+                <el-icon>
+                  <Picture />
+                </el-icon>
+                <span>{{ $t("route.gallery") }}</span>
+              </el-menu-item>
+              <el-menu-item index="/albums">
+                <el-icon>
+                  <Collection />
+                </el-icon>
+                <span>{{ $t("route.albums") }}</span>
+              </el-menu-item>
+              <el-menu-item index="/plugins">
+                <el-icon>
+                  <FilterPlugin />
+                </el-icon>
+                <span>{{ $t("route.pluginBrowser") }}</span>
+              </el-menu-item>
+              <el-menu-item index="/surf" v-if="!IS_WEB">
+                <el-icon>
+                  <Compass />
+                </el-icon>
+                <span>{{ $t("route.surf") }}</span>
+              </el-menu-item>
+              <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
+                <el-icon>
+                  <AlarmClock />
+                </el-icon>
+                <span>{{ $t("route.autoConfigs") }}</span>
+              </el-menu-item>
+            </el-menu>
+          </div>
+          <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
+          <div v-if="!kamechanEnabled" class="sidebar-bottom-dock" :class="{ 'is-collapsed': isCollapsed }">
+            <SidebarActivityBar v-if="busyEntryVisible" :collapsed="isCollapsed" />
+            <div class="dock-row" :class="{ 'is-active': settingsModal.isOpen.value }" @click="openSettingsEntry()">
+              <el-icon class="dock-icon">
+                <Setting />
+              </el-icon>
+              <template v-if="!isCollapsed">
+                <span class="dock-label">{{ $t("route.settings") }}</span>
+                <span class="dock-shortcut">{{ shortcutLabel("openSettings") }}</span>
+              </template>
+            </div>
+            <GlobalToolsPopover variant="sidebar" :collapsed="isCollapsed" @open-settings="openSettingsEntry()" />
+          </div>
+          <div v-else class="sidebar-kamechan-space" aria-hidden="true" />
+        </el-aside>
+      </template>
+      <el-main class="app-main">
+        <router-view v-slot="{ Component }" :key="routerViewKey">
+          <!-- <keep-alive> -->
+          <component :is="Component" />
+          <!-- </keep-alive> -->
+        </router-view>
+      </el-main>
+      <!-- 紧凑布局：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
+      <nav
+        v-if="uiStore.isCompact"
+        class="app-bottom-tabs flex-none flex flex-row relative w-full border-t-2 border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] pb-[var(--sab,env(safe-area-inset-bottom,0px))] shadow-[0_-4px_20px_rgba(255,107,157,0.08)]"
+        aria-label="主导航"
+      >
+        <router-link
+          v-for="tab in bottomTabs"
+          :key="tab.index"
+          :to="tab.index"
+          class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-[var(--anime-text-secondary)] transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-[var(--anime-primary)] [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
+          :class="{ 'is-active': activeRoute === tab.index }"
+        >
+          <el-icon class="text-[22px] shrink-0">
+            <component :is="tab.icon" />
+          </el-icon>
+          <span class="text-[11px] leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap max-w-full">
+            {{ tab.label }}
+          </span>
+        </router-link>
+        <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
+        <div v-if="!kamechanEnabled" class="flex-1 flex flex-col items-center justify-center min-w-0">
+          <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面挂载），走路由而非弹窗 -->
+          <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
+        </div>
+      </nav>
+      <KamechanMascot @open-settings="openSettingsEntry()" />
+    </el-container>
+    <FrameMonitor />
   </el-config-provider>
 </template>
 
@@ -201,7 +210,7 @@ import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@/api/rpc";
 import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
@@ -282,13 +291,8 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 
 // kamechan 开着时它承载全局工具箱入口，侧栏底部 / 紧凑端 tab 的入口让位
 const { settingValue: kamechanEnabled } = useSettingKeyState("kamechanEnabled");
-const {
-  count: busyCount,
-  hasUnseenFailure: hasUnseenBusyFailure,
-} = useBusyTasks();
-const busyEntryVisible = computed(
-  () => busyCount.value > 0 || hasUnseenBusyFailure.value,
-);
+const { count: busyCount, hasUnseenFailure: hasUnseenBusyFailure } = useBusyTasks();
+const busyEntryVisible = computed(() => busyCount.value > 0 || hasUnseenBusyFailure.value);
 
 // 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
 const openSettingsEntry = () => {
@@ -301,12 +305,7 @@ useGlobalShortcuts({ openSettings: openSettingsEntry });
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig } = storeToRefs(crawlerDrawerStore);
 const collectDialogsStore = useCollectDialogsStore();
-const {
-  webpageVisible,
-  webpageInitial,
-  localImportVisible,
-  localImportInitial,
-} = storeToRefs(collectDialogsStore);
+const { webpageVisible, webpageInitial, localImportVisible, localImportInitial } = storeToRefs(collectDialogsStore);
 
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
@@ -339,7 +338,12 @@ const importKgpgPath = ref<string | null>(null);
 const routerViewKey = ref(0);
 const appStore = useApp();
 if (IS_WEB) {
-  watch(() => appStore.isSuper, () => { routerViewKey.value += 1; });
+  watch(
+    () => appStore.isSuper,
+    () => {
+      routerViewKey.value += 1;
+    },
+  );
 }
 // 漏跑任务检测（启动检查 + 休眠/恢复后自动重查），逻辑集中在 composable 内
 const {
@@ -372,8 +376,7 @@ const bgImageToken = ref(0);
 const bgContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 let bgResolveToken = 0;
 
-const isVideoBackground = (image: ImageInfo | undefined) =>
-  isVideoMediaType(image?.type);
+const isVideoBackground = (image: ImageInfo | undefined) => isVideoMediaType(image?.type);
 
 const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
   !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
@@ -502,43 +505,45 @@ onMounted(async () => {
     try {
       const { onBackButtonPress } = await import("@tauri-apps/api/app");
       const EXIT_COOLDOWN_MS = 400;
-      await onBackButtonPress(useThrottleFn(async () => {
-        if (confirmingExit) {
-          ElMessageBox.close();
-          confirmingExit = false;
-          return;
-        }
-        // 1. Modal Stack
-        if (await modalStack.closeTop()) {
-          return;
-        }
+      await onBackButtonPress(
+        useThrottleFn(async () => {
+          if (confirmingExit) {
+            ElMessageBox.close();
+            confirmingExit = false;
+            return;
+          }
+          // 1. Modal Stack
+          if (await modalStack.closeTop()) {
+            return;
+          }
 
-        // 2. Router Back
-        const currentPath = router.currentRoute.value.path;
-        const rootPaths = bottomTabs.value.map((t) => t.index);
-        // If not at root, go back
-        if (!rootPaths.includes(currentPath) && currentPath !== "/") {
-          router.back();
-          return;
-        }
+          // 2. Router Back
+          const currentPath = router.currentRoute.value.path;
+          const rootPaths = bottomTabs.value.map((t) => t.index);
+          // If not at root, go back
+          if (!rootPaths.includes(currentPath) && currentPath !== "/") {
+            router.back();
+            return;
+          }
 
-        // 3. Exit Confirm
-        try {
-          confirmingExit = true;
-          await ElMessageBox.confirm(i18n.global.t("common.exitConfirm"), i18n.global.t("common.exitTitle"), {
-            confirmButtonText: i18n.global.t("common.bye"),
-            cancelButtonText: i18n.global.t("common.cancel"),
-            type: "warning",
-            center: true,
-            customClass: "exit-confirm-dialog",
-          });
-          await invoke("exit_app");
-        } catch {
-          // Cancelled
-        } finally {
-          confirmingExit = false;
-        }
-      }, EXIT_COOLDOWN_MS));
+          // 3. Exit Confirm
+          try {
+            confirmingExit = true;
+            await ElMessageBox.confirm(i18n.global.t("common.exitConfirm"), i18n.global.t("common.exitTitle"), {
+              confirmButtonText: i18n.global.t("common.bye"),
+              cancelButtonText: i18n.global.t("common.cancel"),
+              type: "warning",
+              center: true,
+              customClass: "exit-confirm-dialog",
+            });
+            await invoke("exit_app");
+          } catch {
+            // Cancelled
+          } finally {
+            confirmingExit = false;
+          }
+        }, EXIT_COOLDOWN_MS),
+      );
     } catch (e) {
       console.warn("Failed to register Android back button listener:", e);
     }
@@ -584,18 +589,22 @@ onMounted(async () => {
 
   // 监听设置变更事件（事件驱动更新设置）
   // 当后端设置变化时，自动更新本地设置 store
-  unlistenSettingChange = await listen<{ changes?: Record<string, any> } & Record<string, unknown>>("setting-change", async (event) => {
-    const raw = event.payload as Record<string, unknown> | undefined;
-    const changes = raw && typeof raw === "object" ? (raw.changes as Record<string, unknown> | undefined) ?? raw : undefined;
-    if (changes && typeof changes === "object") {
-      settingsStore.applyChanges(changes);
-      if ("language" in changes) {
-        applyLanguageSetting(settingsStore.values.language);
-        registerHeaderFeatures();
+  unlistenSettingChange = await listen<{ changes?: Record<string, any> } & Record<string, unknown>>(
+    "setting-change",
+    async (event) => {
+      const raw = event.payload as Record<string, unknown> | undefined;
+      const changes =
+        raw && typeof raw === "object" ? ((raw.changes as Record<string, unknown> | undefined) ?? raw) : undefined;
+      if (changes && typeof changes === "object") {
+        settingsStore.applyChanges(changes);
+        if ("language" in changes) {
+          applyLanguageSetting(settingsStore.values.language);
+          registerHeaderFeatures();
+        }
+        console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
       }
-      console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
-    }
-  });
+    },
+  );
 
   // Web mode 无 setting-change 事件，改用 watch 响应语言切换
   if (IS_WEB) {
@@ -609,17 +618,17 @@ onMounted(async () => {
   }
 
   // 监听显示窗口事件（IPC）
-  await listen('app-show-window', async () => {
+  await listen("app-show-window", async () => {
     const win = getCurrentWindow();
     await win.show();
     await win.setFocus();
   });
 
   // 监听插件导入事件（IPC）
-  await listen<{ kgpgPath: string }>('app-import-plugin', async (event) => {
+  await listen<{ kgpgPath: string }>("app-import-plugin", async (event) => {
     console.log("Received app-import-plugin:", event.payload);
     const win = getCurrentWindow();
-    
+
     // 尝试显示窗口并获取焦点（如果窗口被隐藏或最小化）
     // 使用 try-catch 包裹，避免权限错误或窗口状态异常
     try {
@@ -632,7 +641,7 @@ onMounted(async () => {
       console.warn("无法显示窗口或设置焦点:", error);
       // 即使失败也继续显示 dialog
     }
-    
+
     importKgpgPath.value = event.payload.kgpgPath;
     importDialog.open();
   });
@@ -646,7 +655,7 @@ onMounted(async () => {
       importDialog.open();
     };
   }
-  
+
   // 桌面端应用自动更新：hydrate 后端状态 + 订阅事件（调度在后端；web / android 内部 noop）
   void updaterService.init();
   void organizeService.init();
@@ -654,7 +663,7 @@ onMounted(async () => {
   void folderSyncService.init();
 
   // 通知后端已准备好接收事件
-  emit('app-ready');
+  emit("app-ready");
 });
 
 onUnmounted(() => {
@@ -678,7 +687,6 @@ onUnmounted(() => {
   folderSyncService.dispose();
   downloadStateStore.dispose();
 });
-
 </script>
 
 <style lang="scss">
@@ -780,7 +788,7 @@ body,
     }
 
     .app-logo {
-      width:40px;
+      width: 40px;
       height: 40px;
       object-fit: contain;
       transition: all 0.3s ease;
@@ -900,7 +908,6 @@ body,
           height: auto !important;
         }
       }
-
     }
   }
 
@@ -1011,7 +1018,10 @@ body,
       text-align: left;
 
       span {
-        transition: opacity 0.3s ease, width 0.3s ease, margin 0.3s ease;
+        transition:
+          opacity 0.3s ease,
+          width 0.3s ease,
+          margin 0.3s ease;
         overflow: hidden;
         opacity: 1;
         width: auto;
@@ -1050,7 +1060,6 @@ body,
 
 // Daemon 加载态样式
 @keyframes pulse {
-
   0%,
   100% {
     opacity: 1;

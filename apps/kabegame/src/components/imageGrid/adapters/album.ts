@@ -39,35 +39,32 @@ export function createAlbumDetailAdapter(params: {
       settingsStore.values.currentWallpaperImageId = null;
     }
   };
-  const wallpaperHint = (included: boolean) =>
-    included ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
+  const wallpaperHint = (included: boolean) => (included ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "");
 
   const deleteFileConfig: GridRemoveConfig = {
     dialogText: (count, extra) => ({
       title: t("gallery.deleteImageFiles"),
       message:
-        (count > 1
-          ? t("gallery.deleteDialogMessageMulti", { count })
-          : t("gallery.deleteDialogMessageSingle")) +
+        (count > 1 ? t("gallery.deleteDialogMessageMulti", { count }) : t("gallery.deleteDialogMessageSingle")) +
         wallpaperHint(extra.includesCurrentWallpaper),
       confirmText: t("common.delete"),
     }),
     confirm: async (images, ctx) => {
       const count = images.length;
       try {
-        const result = await ctx.mutate((view) => invoke<{
-          view?: ViewSnapshot | null;
-          albumChanges: AlbumImagesChangePayload[];
-        }>("batch_delete_images", {
-          imageIds: images.map((img) => img.id),
-          view,
-        }));
+        const result = await ctx.mutate((view) =>
+          invoke<{
+            view?: ViewSnapshot | null;
+            albumChanges: AlbumImagesChangePayload[];
+          }>("batch_delete_images", {
+            imageIds: images.map((img) => img.id),
+            view,
+          }),
+        );
         for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
         clearCurrentWallpaperIfIncluded(images);
         ElMessage.success(
-          count > 1
-            ? t("gallery.deletedAndRemovedCountSuccess", { count })
-            : t("gallery.deletedAndRemovedSuccess"),
+          count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess"),
         );
       } catch (error) {
         console.error("操作失败:", error);
@@ -85,12 +82,9 @@ export function createAlbumDetailAdapter(params: {
       const id = params.albumId();
       return !!id && (!routeAlbumId || routeAlbumId === id) && !!params.albumName();
     },
-    rootPathFallback: () =>
-      params.albumId() ? `album/${params.albumId()}/1` : "",
+    rootPathFallback: () => (params.albumId() ? `album/${params.albumId()}/1` : ""),
     validatePath: (rawPath) => {
-      const inner = rawPath.startsWith("hide/")
-        ? rawPath.slice("hide/".length)
-        : rawPath;
+      const inner = rawPath.startsWith("hide/") ? rawPath.slice("hide/".length) : rawPath;
       return inner.startsWith("album/") && !inner.startsWith("album//");
     },
     computeCountPath: stripComposablePathTail,
@@ -125,8 +119,7 @@ export function createAlbumDetailAdapter(params: {
               message:
                 (count > 1
                   ? t("gallery.removeDialogMessageMulti", { count })
-                  : t("gallery.removeDialogMessageSingle")) +
-                wallpaperHint(extra.includesCurrentWallpaper),
+                  : t("gallery.removeDialogMessageSingle")) + wallpaperHint(extra.includesCurrentWallpaper),
               confirmText: t("common.remove"),
             },
       confirm: async (images, ctx) => {
@@ -138,16 +131,16 @@ export function createAlbumDetailAdapter(params: {
         if (!id) return;
         const count = images.length;
         try {
-          await ctx.mutate((view) => removeImagesFromAlbum(
-            id,
-            images.map((img) => img.id),
-            { view },
-          ));
+          await ctx.mutate((view) =>
+            removeImagesFromAlbum(
+              id,
+              images.map((img) => img.id),
+              { view },
+            ),
+          );
           clearCurrentWallpaperIfIncluded(images);
           ElMessage.success(
-            count > 1
-              ? t("gallery.removedFromAlbumCountSuccess", { count })
-              : t("gallery.removedFromAlbumSuccess"),
+            count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess"),
           );
         } catch (error) {
           console.error("操作失败:", error);
@@ -165,11 +158,13 @@ export function createAlbumDetailAdapter(params: {
       const id = params.albumId();
       if (!id || images.length === 0) return;
       try {
-        await ctx.mutate((view) => removeImagesFromAlbum(
-          id,
-          images.map((img) => img.id),
-          { view },
-        ));
+        await ctx.mutate((view) =>
+          removeImagesFromAlbum(
+            id,
+            images.map((img) => img.id),
+            { view },
+          ),
+        );
         clearCurrentWallpaperIfIncluded(images);
       } catch (error) {
         console.error("移除图片失败:", error);

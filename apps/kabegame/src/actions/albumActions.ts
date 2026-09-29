@@ -1,4 +1,17 @@
-import { Connection, FolderOpened, Folder, FolderAdd, FolderChecked, Picture, Edit, Rank, Delete, Refresh, VideoPause, PriceTag } from "@kabegame/element-plus-icons";
+import {
+  Connection,
+  FolderOpened,
+  Folder,
+  FolderAdd,
+  FolderChecked,
+  Picture,
+  Edit,
+  Rank,
+  Delete,
+  Refresh,
+  VideoPause,
+  PriceTag,
+} from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
 import { i18n } from "@kabegame/i18n";
@@ -123,10 +136,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
       icon: Connection,
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
       disabled: (ctx) => ctx.target?.syncMode === "delegated",
-      suffix: (ctx) =>
-        ctx.target?.syncMode === "delegated"
-          ? t("contextMenu.syncModeDelegatedReason")
-          : "",
+      suffix: (ctx) => (ctx.target?.syncMode === "delegated" ? t("contextMenu.syncModeDelegatedReason") : ""),
       children: [
         {
           key: "setSyncModeNone",
@@ -176,10 +186,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
       dividerBefore: true,
       visible: (ctx) => LOCAL_FOLDER_SUPPORTED && (ctx as AlbumActionContext).isLocalFolder,
       disabled: (ctx) => ctx.target?.syncMode === "delegated",
-      suffix: (ctx) =>
-        ctx.target?.syncMode === "delegated"
-          ? t("contextMenu.convertDelegatedReason")
-          : "",
+      suffix: (ctx) => (ctx.target?.syncMode === "delegated" ? t("contextMenu.convertDelegatedReason") : ""),
     },
     {
       key: "setWallpaperRotation",
@@ -188,10 +195,7 @@ export function createAlbumActions(): ActionItem<Album>[] {
       command: "setWallpaperRotation",
       visible: (ctx) => {
         const ext = ctx as AlbumActionContext;
-        const isCurrent =
-          ext.wallpaperRotationEnabled &&
-          ext.target &&
-          ext.currentRotationAlbumId === ext.target.id;
+        const isCurrent = ext.wallpaperRotationEnabled && ext.target && ext.currentRotationAlbumId === ext.target.id;
         return ext.albumImageCount > 0 && !isCurrent;
       },
     },

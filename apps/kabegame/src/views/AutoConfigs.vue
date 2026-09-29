@@ -1,8 +1,13 @@
 <template>
   <div class="auto-configs-container">
     <TaskLogDialog ref="taskLogDialogRef" />
-    <PageHeader :title="$t('autoConfig.tabTitle')" :show="headerShowFeatures" :fold="[]" sticky
-      @action="handleHeaderAction">
+    <PageHeader
+      :title="$t('autoConfig.tabTitle')"
+      :show="headerShowFeatures"
+      :fold="[]"
+      sticky
+      @action="handleHeaderAction"
+    >
       <template #subtitle>
         <span>{{ headerSubtitle }}</span>
       </template>
@@ -17,12 +22,7 @@
     </PageHeader>
 
     <div class="auto-configs-list-tabs">
-      <KbTab
-        v-model="listTab"
-        :items="listTabItems"
-        class="auto-configs-list-tabs__nav"
-        @select="onTabChange"
-      />
+      <KbTab v-model="listTab" :items="listTabItems" class="auto-configs-list-tabs__nav" @select="onTabChange" />
       <div v-show="listTab === 'mine'" class="auto-configs-tab-pane">
         <div class="auto-configs-mine-pane">
           <div class="auto-configs-browse-toolbar" role="toolbar">
@@ -71,14 +71,26 @@
           <div v-else class="auto-configs-vlist-wrap">
             <div v-bind="configListContainerProps" class="auto-configs-vlist-scroll">
               <div v-bind="configListWrapperProps">
-                <div v-for="item in virtualConfigRows" :key="item.data.id" class="auto-configs-vrow"
-                  :style="{ height: `${configListItemHeightPx}px` }">
-                  <AutoConfigListCard class="auto-configs-vrow-card" :config="item.data" :variant="configCardVariant"
-                    :class="appBackgroundCardClass" :schedule-toggling-id="scheduleTogglingId"
+                <div
+                  v-for="item in virtualConfigRows"
+                  :key="item.data.id"
+                  class="auto-configs-vrow"
+                  :style="{ height: `${configListItemHeightPx}px` }"
+                >
+                  <AutoConfigListCard
+                    class="auto-configs-vrow-card"
+                    :config="item.data"
+                    :variant="configCardVariant"
+                    :class="appBackgroundCardClass"
+                    :schedule-toggling-id="scheduleTogglingId"
                     @card-click="(cfg) => autoConfigDialog.openExisting(cfg.id, 'view')"
                     @open-view="(id: string) => autoConfigDialog.openExisting(id, 'view')"
-                    @schedule-enabled="handleScheduleEnabled" @run-now="handleRunNow" @more-command="handleMoreCommand"
-                    @open-task-images="openTaskImages" @open-task-log="openTaskLog" />
+                    @schedule-enabled="handleScheduleEnabled"
+                    @run-now="handleRunNow"
+                    @more-command="handleMoreCommand"
+                    @open-task-images="openTaskImages"
+                    @open-task-log="openTaskLog"
+                  />
                 </div>
               </div>
             </div>
@@ -94,16 +106,30 @@
             </el-empty>
           </div>
           <div v-else class="auto-configs-recommended">
-            <el-collapse v-model="activeRecommendedPluginId" accordion class="recommended-plugin-collapse"
-              @change="onRecommendedPluginChange">
-              <el-collapse-item v-for="group in recommendedGrouped" :key="group.pluginId" :name="group.pluginId"
-                class="recommended-plugin-block">
+            <el-collapse
+              v-model="activeRecommendedPluginId"
+              accordion
+              class="recommended-plugin-collapse"
+              @change="onRecommendedPluginChange"
+            >
+              <el-collapse-item
+                v-for="group in recommendedGrouped"
+                :key="group.pluginId"
+                :name="group.pluginId"
+                class="recommended-plugin-block"
+              >
                 <template #title>
                   <div class="recommended-plugin-title">
-                    <div class="plugin-icon-frame recommended-plugin-icon-frame"
-                      :class="{ 'plugin-icon-frame--placeholder': !pluginIconUrl(group.pluginId) }">
-                      <img v-if="pluginIconUrl(group.pluginId)" class="plugin-icon-img"
-                        :src="pluginIconUrl(group.pluginId)" alt="" />
+                    <div
+                      class="plugin-icon-frame recommended-plugin-icon-frame"
+                      :class="{ 'plugin-icon-frame--placeholder': !pluginIconUrl(group.pluginId) }"
+                    >
+                      <img
+                        v-if="pluginIconUrl(group.pluginId)"
+                        class="plugin-icon-img"
+                        :src="pluginIconUrl(group.pluginId)"
+                        alt=""
+                      />
                       <el-icon v-else :size="18" class="plugin-icon-fallback">
                         <AlarmClock />
                       </el-icon>
@@ -113,8 +139,12 @@
                   </div>
                 </template>
                 <div class="recommended-presets">
-                  <el-card v-for="preset in group.presets" :key="preset.filename"
-                    :class="['recommended-preset-card', appBackgroundCardClass]" shadow="hover">
+                  <el-card
+                    v-for="preset in group.presets"
+                    :key="preset.filename"
+                    :class="['recommended-preset-card', appBackgroundCardClass]"
+                    shadow="hover"
+                  >
                     <div class="recommended-preset-head">
                       <span class="recommended-preset-name">{{ resolvePresetTitle(preset) }}</span>
                       <div class="recommended-preset-actions">
@@ -138,23 +168,46 @@
       </div>
     </div>
 
-    <el-dialog :model-value="presetPreviewDialog.isOpen.value" :z-index="presetPreviewDialog.zIndex.value" :title="$t('autoConfig.recommendedPreviewTitle')"
-      class="auto-config-dialog task-params-dialog auto-config-preset-preview-dialog" width="min(560px, 92vw)"
-      destroy-on-close append-to-body @update:model-value="presetPreviewDialog.close">
-      <AutoConfigDetailContent v-if="presetPreviewRunConfig" :config="presetPreviewRunConfig"
-        :show-schedule-last-run="false" />
+    <el-dialog
+      :model-value="presetPreviewDialog.isOpen.value"
+      :z-index="presetPreviewDialog.zIndex.value"
+      :title="$t('autoConfig.recommendedPreviewTitle')"
+      class="auto-config-dialog task-params-dialog auto-config-preset-preview-dialog"
+      width="min(560px, 92vw)"
+      destroy-on-close
+      append-to-body
+      @update:model-value="presetPreviewDialog.close"
+    >
+      <AutoConfigDetailContent
+        v-if="presetPreviewRunConfig"
+        :config="presetPreviewRunConfig"
+        :show-schedule-last-run="false"
+      />
       <template #footer>
         <el-button @click="presetPreviewDialog.close()">{{ $t("common.cancel") }}</el-button>
-        <el-button v-if="presetPreviewTarget" type="primary"
-          @click="importPreset(presetPreviewTarget); presetPreviewDialog.close()">
+        <el-button
+          v-if="presetPreviewTarget"
+          type="primary"
+          @click="
+            importPreset(presetPreviewTarget);
+            presetPreviewDialog.close();
+          "
+        >
           {{ $t("autoConfig.importRecommended") }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog :model-value="scheduleHelpDialog.isOpen.value" :z-index="scheduleHelpDialog.zIndex.value" :title="$t('autoConfig.scheduleHelpTitle')"
-      class="auto-config-dialog task-params-dialog auto-config-schedule-help-dialog" width="min(480px, 92vw)"
-      destroy-on-close append-to-body @update:model-value="scheduleHelpDialog.close">
+    <el-dialog
+      :model-value="scheduleHelpDialog.isOpen.value"
+      :z-index="scheduleHelpDialog.zIndex.value"
+      :title="$t('autoConfig.scheduleHelpTitle')"
+      class="auto-config-dialog task-params-dialog auto-config-schedule-help-dialog"
+      width="min(480px, 92vw)"
+      destroy-on-close
+      append-to-body
+      @update:model-value="scheduleHelpDialog.close"
+    >
       <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP1") }}</p>
       <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP2") }}</p>
       <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP3") }}</p>
@@ -163,9 +216,16 @@
       </template>
     </el-dialog>
 
-    <el-dialog :model-value="recommendedHelpDialog.isOpen.value" :z-index="recommendedHelpDialog.zIndex.value" :title="$t('autoConfig.recommendedHelpTitle')"
-      class="auto-config-dialog task-params-dialog auto-config-recommended-help-dialog" width="min(480px, 92vw)"
-      destroy-on-close append-to-body @update:model-value="recommendedHelpDialog.close">
+    <el-dialog
+      :model-value="recommendedHelpDialog.isOpen.value"
+      :z-index="recommendedHelpDialog.zIndex.value"
+      :title="$t('autoConfig.recommendedHelpTitle')"
+      class="auto-config-dialog task-params-dialog auto-config-recommended-help-dialog"
+      width="min(480px, 92vw)"
+      destroy-on-close
+      append-to-body
+      @update:model-value="recommendedHelpDialog.close"
+    >
       <p class="acd-schedule-help-p">{{ $t("autoConfig.recommendedHelpP1") }}</p>
       <p class="acd-schedule-help-p">{{ $t("autoConfig.recommendedHelpP2") }}</p>
       <template #footer>
@@ -174,8 +234,16 @@
     </el-dialog>
 
     <!-- 安卓不显示这个页面，所以不做判断 -->
-    <CrawlerDialog :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
-    <LocalImportDialog v-if="!IS_WEB" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
+    <CrawlerDialog
+      :model-value="crawlerDialog.isOpen.value"
+      :initial-config="crawlerDialogInitialConfig"
+      @update:model-value="crawlerDialog.close"
+    />
+    <LocalImportDialog
+      v-if="!IS_WEB"
+      :model-value="localImportDialog.isOpen.value"
+      @update:model-value="localImportDialog.close"
+    />
   </div>
 </template>
 
@@ -216,23 +284,21 @@ const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const { settingValue: autoConfigTab, set: setAutoConfigTab } = useSettingKeyState("autoConfigTab");
 const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled
-    ? "!bg-transparent [--el-card-bg-color:transparent]"
-    : ""
+  settingsStore.values.appBackgroundEnabled ? "!bg-transparent [--el-card-bg-color:transparent]" : "",
 );
 
-const headerShowFeatures = [
-  HeaderFeatureId.TaskDrawer,
-  HeaderFeatureId.Collect,
-];
+const headerShowFeatures = [HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
 
 const crawlerDialog = useModal();
 const localImportDialog = useModal();
-const crawlerDialogInitialConfig = ref<{
-  pluginId?: string;
-  outputDir?: string;
-  vars?: Record<string, any>;
-} | undefined>(undefined);
+const crawlerDialogInitialConfig = ref<
+  | {
+      pluginId?: string;
+      outputDir?: string;
+      vars?: Record<string, any>;
+    }
+  | undefined
+>(undefined);
 
 const onlyEnabled = ref(false);
 const filterPluginId = ref<string | null>(null);
@@ -253,9 +319,7 @@ const presetPreviewRunConfig = computed((): RunConfig | null => {
   if (!preset) return null;
   const descRaw = preset.description;
   const descStr =
-    descRaw != null && descRaw !== ""
-      ? resolveConfigText(descRaw as any, locale.value).trim() || undefined
-      : undefined;
+    descRaw != null && descRaw !== "" ? resolveConfigText(descRaw as any, locale.value).trim() || undefined : undefined;
   return {
     id: `preset:${preset.pluginId}:${preset.filename}`,
     name: preset.name as any,
@@ -314,9 +378,7 @@ const recommendedGrouped = computed(() => {
       pluginId,
       presets: presets.sort((a, b) => a.filename.localeCompare(b.filename)),
     }))
-    .sort((a, b) =>
-      pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)),
-    );
+    .sort((a, b) => pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)));
 });
 
 function resolvePresetTitle(preset: PluginRecommendedPreset) {
@@ -442,9 +504,7 @@ const filteredConfigs = computed(() => {
   return list;
 });
 
-const configListItemHeightPx = IS_ANDROID
-  ? 640
-  : 312;
+const configListItemHeightPx = IS_ANDROID ? 640 : 312;
 
 const configCardVariant = IS_ANDROID ? "android" : "desktop";
 
@@ -464,9 +524,7 @@ const configsForScheduleMenu = computed(() => {
 });
 
 const scheduleMenuAllCount = computed(() => configsForScheduleMenu.value.length);
-const scheduleMenuEnabledCount = computed(
-  () => configsForScheduleMenu.value.filter((c) => c.scheduleEnabled).length,
-);
+const scheduleMenuEnabledCount = computed(() => configsForScheduleMenu.value.filter((c) => c.scheduleEnabled).length);
 
 /** 仅按定时开关过滤（用于「插件」下拉中的数量） */
 const configsForPluginMenu = computed(() =>
@@ -483,9 +541,7 @@ const pluginFilterRows = computed(() => {
   }
   return [...map.entries()]
     .map(([pluginId, count]) => ({ pluginId, count }))
-    .sort((a, b) =>
-      pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)),
-    );
+    .sort((a, b) => pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)));
 });
 
 const pluginFilterPluginIds = computed(() => pluginFilterRows.value.map((row) => row.pluginId));
@@ -613,9 +669,7 @@ function openAutoConfigHelp() {
   }
 }
 const autoConfigHelpTitle = computed(() =>
-  listTab.value === "recommended"
-    ? t("autoConfig.recommendedHelpTitle")
-    : t("autoConfig.scheduleHelpTitle")
+  listTab.value === "recommended" ? t("autoConfig.recommendedHelpTitle") : t("autoConfig.scheduleHelpTitle"),
 );
 
 const handleHeaderAction = (payload: { id: string; data?: { type: string; value?: string } }) => {
@@ -650,7 +704,6 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
   display: flex;
   flex-direction: column;
   overflow: hidden;
-
 }
 
 /* KbTab 是 inline-flex，放进 column flex 容器会被 stretch 成整行，

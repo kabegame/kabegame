@@ -2,14 +2,14 @@ import Dexie, { type Table } from "dexie";
 import type { Plugin } from "../stores/plugins";
 
 export interface CachedStorePluginIcon {
-  key: string;       // `${sourceId}:${pluginId}`
+  key: string; // `${sourceId}:${pluginId}`
   version: string;
   iconBase64: string;
   cachedAt: number;
 }
 
 export interface CachedStorePluginDetail {
-  key: string;       // `${sourceId}:${pluginId}`
+  key: string; // `${sourceId}:${pluginId}`
   version: string;
   data: Plugin;
   cachedAt: number;

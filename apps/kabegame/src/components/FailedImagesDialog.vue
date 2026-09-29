@@ -18,25 +18,21 @@
         <div class="fid-header-right">
           <el-dropdown v-if="pluginGroups.length > 1" trigger="click" @command="onPluginFilterCommand">
             <el-button size="small" plain>
-              {{ pluginFilterLabel }}<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              {{ pluginFilterLabel }}
+              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="">{{ t('gallery.filterAll') }}</el-dropdown-item>
-                <el-dropdown-item
-                  v-for="g in pluginGroups"
-                  :key="g.pluginId"
-                  :command="g.pluginId"
-                >{{ getFailedPluginName(g.pluginId) }} ({{ g.count }})</el-dropdown-item>
+                <el-dropdown-item command="">{{ t("gallery.filterAll") }}</el-dropdown-item>
+                <el-dropdown-item v-for="g in pluginGroups" :key="g.pluginId" :command="g.pluginId">
+                  {{ getFailedPluginName(g.pluginId) }} ({{ g.count }})
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button
-            v-if="hasPendingInFilter"
-            size="small"
-            :icon="CircleClose"
-            @click="handleCancelAll"
-          >{{ t('header.failedImagesCancelWaiting') }}</el-button>
+          <el-button v-if="hasPendingInFilter" size="small" :icon="CircleClose" @click="handleCancelAll">
+            {{ t("header.failedImagesCancelWaiting") }}
+          </el-button>
           <el-button
             v-if="hasIdleInFilter"
             size="small"
@@ -44,7 +40,9 @@
             :icon="Refresh"
             :loading="bulkRetryLoading"
             @click="handleRetryAll"
-          >{{ t('header.failedImagesRetryAll') }}</el-button>
+          >
+            {{ t("header.failedImagesRetryAll") }}
+          </el-button>
           <el-button
             v-if="hasIdleInFilter"
             size="small"
@@ -53,34 +51,21 @@
             :icon="Delete"
             :loading="bulkDeleteLoading"
             @click="handleDeleteAll"
-          >{{ t('header.failedImagesDeleteAll') }}</el-button>
+          >
+            {{ t("header.failedImagesDeleteAll") }}
+          </el-button>
         </div>
       </div>
     </template>
 
     <el-skeleton v-if="loading" :rows="5" animated />
-    <el-empty
-      v-else-if="baseList.length === 0"
-      :description="t('tasks.allFailedImagesEmpty')"
-    />
-    <el-empty
-      v-else-if="filteredFailed.length === 0"
-      :description="t('tasks.failedFilterEmpty')"
-    />
+    <el-empty v-else-if="baseList.length === 0" :description="t('tasks.allFailedImagesEmpty')" />
+    <el-empty v-else-if="filteredFailed.length === 0" :description="t('tasks.failedFilterEmpty')" />
     <div v-else v-bind="containerProps" class="fid-list">
       <div v-bind="wrapperProps">
-        <div
-          v-for="{ data: failed } in virtualList"
-          :key="failed.id"
-          class="fid-item-wrap"
-        >
+        <div v-for="{ data: failed } in virtualList" :key="failed.id" class="fid-item-wrap">
           <div class="fid-item">
-            <el-image
-              :src="failed.url"
-              fit="contain"
-              class="fid-thumb"
-              :preview-src-list="[failed.url]"
-            >
+            <el-image :src="failed.url" fit="contain" class="fid-thumb" :preview-src-list="[failed.url]">
               <template #placeholder>
                 <div class="fid-thumb-slot">
                   <el-icon class="is-loading"><Loading /></el-icon>
@@ -97,11 +82,13 @@
               <div class="fid-info-head">
                 <div class="fid-tags">
                   <el-tag size="small" type="warning">{{ getFailedPluginName(failed.pluginId) }}</el-tag>
-                  <el-tag v-if="itemStateTag(failed)" size="small" :type="itemStateTagType(failed)">{{ itemStateTag(failed) }}</el-tag>
+                  <el-tag v-if="itemStateTag(failed)" size="small" :type="itemStateTagType(failed)">
+                    {{ itemStateTag(failed) }}
+                  </el-tag>
                   <span class="fid-time">{{ formatFailedTime(failed.createdAt) }}</span>
                 </div>
                 <el-button link size="small" type="primary" @click="openTaskDetail(failed.taskId)">
-                  {{ t('tasks.viewTask') }}
+                  {{ t("tasks.viewTask") }}
                 </el-button>
               </div>
 
@@ -111,12 +98,20 @@
                 target="_blank"
                 rel="noopener"
                 @click.prevent="openFailedUrl(failed.url)"
-              >{{ failed.url }}</a>
+              >
+                {{ failed.url }}
+              </a>
 
               <div class="fid-error-row">
                 <el-icon class="fid-error-icon"><WarningFilled /></el-icon>
-                <span class="fid-error-text">{{ failed.lastError || '-' }}</span>
-                <el-button text size="small" class="fid-copy-btn" :title="t('tasks.copyErrorDetails')" @click="copyFailedError(failed)">
+                <span class="fid-error-text">{{ failed.lastError || "-" }}</span>
+                <el-button
+                  text
+                  size="small"
+                  class="fid-copy-btn"
+                  :title="t('tasks.copyErrorDetails')"
+                  @click="copyFailedError(failed)"
+                >
                   <el-icon><CopyDocument /></el-icon>
                 </el-button>
               </div>
@@ -124,7 +119,7 @@
               <div class="fid-actions">
                 <template v-if="getItemState(failed).isActive && getItemState(failed).state === 'preparing'">
                   <el-button size="small" @click="handleCancelRetry(failed.id)">
-                    {{ t('tasks.cancelRetry') }}
+                    {{ t("tasks.cancelRetry") }}
                   </el-button>
                 </template>
                 <template v-else-if="!getItemState(failed).isActive">
@@ -133,13 +128,12 @@
                     size="small"
                     :loading="getItemState(failed).isActive"
                     @click="handleRetryFailedImage(failed)"
-                  >{{ t('tasks.retryDownload') }}</el-button>
-                  <el-button
-                    type="danger"
-                    plain
-                    size="small"
-                    @click="handleDeleteFailedImage(failed.id)"
-                  >{{ t('tasks.deleteFailedRecord') }}</el-button>
+                  >
+                    {{ t("tasks.retryDownload") }}
+                  </el-button>
+                  <el-button type="danger" plain size="small" @click="handleDeleteFailedImage(failed.id)">
+                    {{ t("tasks.deleteFailedRecord") }}
+                  </el-button>
                 </template>
               </div>
             </div>
@@ -149,7 +143,9 @@
               v-if="getItemState(failed).isActive && getItemState(failed).state !== 'waiting'"
               class="fid-progress-bar"
               :class="getItemState(failed).progress != null ? 'fid-progress-bar--det' : 'fid-progress-bar--indet'"
-              :style="getItemState(failed).progress != null ? { width: getItemState(failed).progress + '%' } : undefined"
+              :style="
+                getItemState(failed).progress != null ? { width: getItemState(failed).progress + '%' } : undefined
+              "
             />
           </div>
         </div>
@@ -212,7 +208,7 @@ const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(
   () => props.modelValue,
   (v) => (v ? modal.open() : modal.close()),
-  { immediate: true }
+  { immediate: true },
 );
 
 const activeTaskId = ref<string | undefined>(undefined);
@@ -239,14 +235,10 @@ const loading = computed(() => failedImagesStore.loading);
 
 /** Source list: scoped to taskId (if provided), otherwise all failures */
 const baseList = computed(() =>
-  effectiveTaskId.value
-    ? allFailed.value.filter((f) => f.taskId === effectiveTaskId.value)
-    : allFailed.value
+  effectiveTaskId.value ? allFailed.value.filter((f) => f.taskId === effectiveTaskId.value) : allFailed.value,
 );
 
-const dialogTitle = computed(() =>
-  effectiveTaskId.value ? t("tasks.failedImagesForTask") : t("header.failedImages")
-);
+const dialogTitle = computed(() => (effectiveTaskId.value ? t("tasks.failedImagesForTask") : t("header.failedImages")));
 
 const pluginGroups = computed(() => {
   const map = new Map<string, number>();
@@ -303,7 +295,7 @@ const itemStateTagType = (item: TaskFailedImage): "info" | "warning" | "success"
 
 const hasIdleInFilter = computed(() => filteredFailed.value.some((f) => !getItemState(f).isActive));
 const hasPendingInFilter = computed(() =>
-  filteredFailed.value.some((f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing")
+  filteredFailed.value.some((f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing"),
 );
 
 function onPluginFilterCommand(cmd: string) {
@@ -311,7 +303,11 @@ function onPluginFilterCommand(cmd: string) {
 }
 
 const FAILED_ITEM_HEIGHT = 140;
-const { list: virtualList, containerProps, wrapperProps } = useVirtualList(filteredFailed, {
+const {
+  list: virtualList,
+  containerProps,
+  wrapperProps,
+} = useVirtualList(filteredFailed, {
   itemHeight: FAILED_ITEM_HEIGHT,
   overscan: 4,
 });
@@ -399,7 +395,7 @@ const handleRetryAll = async () => {
 
 const handleCancelAll = async () => {
   const preparingItems = filteredFailed.value.filter(
-    (f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing"
+    (f) => downloadStore.getByFailedImageId(f.id)?.state === "preparing",
   );
   if (!preparingItems.length) return;
   try {
@@ -417,7 +413,7 @@ const handleDeleteAll = async () => {
     await ElMessageBox.confirm(
       t("tasks.deleteAllConfirmMessage", { n: idleItems.length }),
       t("tasks.deleteAllConfirm"),
-      { type: "warning" }
+      { type: "warning" },
     );
   } catch {
     return;
@@ -639,7 +635,11 @@ const handleDeleteFailedImage = async (failedId: number) => {
 }
 
 @keyframes fid-shimmer {
-  0% { left: -40%; }
-  100% { left: 100%; }
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
 }
 </style>

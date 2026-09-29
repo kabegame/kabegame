@@ -1,9 +1,11 @@
 <template>
   <div
     class="relative rounded-xl border border-solid bg-[var(--el-bg-color)] p-3 shadow-[0_1px_3px_rgba(124,58,237,0.06)]"
-    :class="negated
-      ? 'border-[color-mix(in_srgb,var(--el-color-error)_35%,transparent)]'
-      : 'border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)]'"
+    :class="
+      negated
+        ? 'border-[color-mix(in_srgb,var(--el-color-error)_35%,transparent)]'
+        : 'border-[color-mix(in_srgb,var(--anime-secondary)_45%,transparent)]'
+    "
   >
     <div v-if="compact" class="mb-2 text-xs font-medium text-[var(--anime-text-secondary)]">
       {{ title }}
@@ -13,7 +15,8 @@
         type="button"
         class="h-9 flex-none rounded-lg border border-dashed border-[var(--anime-border)] bg-transparent px-3 text-sm text-[var(--anime-text-secondary)] transition-colors cursor-pointer"
         :class="{
-          '!border-solid !border-[color-mix(in_srgb,var(--el-color-error)_45%,transparent)] !bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] !font-bold !text-[var(--el-color-error)]': negated,
+          '!border-solid !border-[color-mix(in_srgb,var(--el-color-error)_45%,transparent)] !bg-[color-mix(in_srgb,var(--el-color-error)_10%,transparent)] !font-bold !text-[var(--el-color-error)]':
+            negated,
         }"
         :aria-pressed="negated"
         @click="toggleNegation"
@@ -58,9 +61,7 @@
             />
           </template>
         </KbFilterDropdown>
-
       </div>
-
     </div>
 
     <!-- 删除条件:浮在卡片右上角的圆形徽章(设计稿) -->
@@ -78,22 +79,9 @@
 <script setup lang="ts">
 import { computed, markRaw, ref, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import {
-  ElIcon,
-  KbFilterDropdown,
-} from "@kabegame/element-plus";
-import {
-  Close,
-  FilterAspect,
-  FilterDate,
-  FilterMedia,
-  FilterPlugin,
-  FilterSize,
-} from "@kabegame/element-plus-icons";
-import {
-  facetValueLabel,
-  type FacetDimension,
-} from "@/composables/useAdvancedQueryFacets";
+import { ElIcon, KbFilterDropdown } from "@kabegame/element-plus";
+import { Close, FilterAspect, FilterDate, FilterMedia, FilterPlugin, FilterSize } from "@kabegame/element-plus-icons";
+import { facetValueLabel, type FacetDimension } from "@/composables/useAdvancedQueryFacets";
 import { usePluginStore } from "@/stores/plugins";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import {
@@ -140,11 +128,13 @@ const atom = computed<GalleryFilterSet>(() => {
 });
 const negated = computed(() => notParity(props.tree, props.nodePath));
 
-const facetItems = computed<Array<{
-  dimension: FacetDimension;
-  label: string;
-  icon: Component;
-}>>(() => [
+const facetItems = computed<
+  Array<{
+    dimension: FacetDimension;
+    label: string;
+    icon: Component;
+  }>
+>(() => [
   { dimension: "date", label: t("gallery.advancedChipTime"), icon: markRaw(FilterDate) },
   { dimension: "plugin", label: t("gallery.advancedChipPlugin"), icon: markRaw(FilterPlugin) },
   { dimension: "mediaType", label: t("gallery.advancedChipMediaType"), icon: markRaw(FilterMedia) },
@@ -158,17 +148,16 @@ const searchMode = computed<GallerySearchMode>({
 });
 
 function updateAtom(updater: (atom: GalleryFilterSet) => GalleryFilterSet): void {
-  emit("update:tree", updateNode(props.tree, props.nodePath, (node) => {
-    if (!("is" in node)) return node;
-    return { is: updater(node.is) };
-  }));
+  emit(
+    "update:tree",
+    updateNode(props.tree, props.nodePath, (node) => {
+      if (!("is" in node)) return node;
+      return { is: updater(node.is) };
+    }),
+  );
 }
 
-function updateSearch(
-  query: string,
-  mode = searchMode.value,
-  preserveEmpty = false,
-): void {
+function updateSearch(query: string, mode = searchMode.value, preserveEmpty = false): void {
   updateAtom((current) => {
     const next = { ...current };
     const trimmed = query.trim();
@@ -205,23 +194,13 @@ function closeFacetPanel(dimension: FacetDimension): void {
   if (openedFacet.value === dimension) openedFacet.value = null;
 }
 
-function clearDimensionFromDropdown(
-  dimension: FacetDimension,
-  value: string | null,
-): void {
+function clearDimensionFromDropdown(dimension: FacetDimension, value: string | null): void {
   if (value === null) updateDimensionFilter(dimension, null);
 }
 
-function selectDimensionFilter(
-  dimension: FacetDimension,
-  filter: GalleryFilter,
-  close: () => void,
-): void {
+function selectDimensionFilter(dimension: FacetDimension, filter: GalleryFilter, close: () => void): void {
   let nextFilter = filter;
-  if (
-    filter.type === "plugin" &&
-    filter.extendPath?.trim()
-  ) {
+  if (filter.type === "plugin" && filter.extendPath?.trim()) {
     // 追加的根原子也可能包装为单分支组；插件细分的 fields 贡献不被组引擎支持。
     ElMessage.warning(t("gallery.advancedPluginExtendRestricted"));
     nextFilter = { type: "plugin", pluginId: filter.pluginId };
@@ -231,10 +210,7 @@ function selectDimensionFilter(
   close();
 }
 
-function updateDimensionFilter(
-  dimension: FacetDimension,
-  filter: GalleryFilter | null,
-): void {
+function updateDimensionFilter(dimension: FacetDimension, filter: GalleryFilter | null): void {
   updateAtom((current) => {
     const next: GalleryFilterSet = { ...current };
     delete next[dimension];
@@ -270,7 +246,10 @@ function toggleNegation(): void {
     emit("update:tree", next);
     return;
   }
-  emit("update:tree", updateNode(props.tree, props.nodePath, (node) => ({ not: [node] })));
+  emit(
+    "update:tree",
+    updateNode(props.tree, props.nodePath, (node) => ({ not: [node] })),
+  );
 }
 
 function removeCondition(): void {

@@ -66,10 +66,7 @@ const DEFAULT_IGNORE_SELECTOR =
  * - 鼠标/触控笔：自定义惯性
  * - 触摸（安卓/iOS）：默认不接管
  */
-export function enableDragScroll(
-  container: HTMLElement,
-  opts: DragScrollOptions = {}
-) {
+export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions = {}) {
   const enableForPointerTypes = opts.enableForPointerTypes ?? ["mouse", "pen"];
   const requireSpaceKey = opts.requireSpaceKey ?? true;
   const friction = opts.friction ?? 0.92;
@@ -79,18 +76,14 @@ export function enableDragScroll(
   const classActive = opts.classActive ?? "drag-scroll-active";
   const suppressClickAfterDrag = opts.suppressClickAfterDrag ?? true;
   const overspeedEventName = opts.overspeedEventName ?? "dragscroll-overspeed";
-  const overspeedVelocityThresholdPxPerMs =
-    opts.overspeedVelocityThresholdPxPerMs ?? 10;
-  const overspeedAccelThresholdPxPerMs2 =
-    opts.overspeedAccelThresholdPxPerMs2 ?? 0.05;
+  const overspeedVelocityThresholdPxPerMs = opts.overspeedVelocityThresholdPxPerMs ?? 10;
+  const overspeedAccelThresholdPxPerMs2 = opts.overspeedAccelThresholdPxPerMs2 ?? 0.05;
   const maxVelocityOpt = opts.maxVelocityPxPerMs;
 
   // 获取当前最大速度（支持动态值）
   const getMaxVelocity = (): number | null => {
     if (maxVelocityOpt == null) return null;
-    return typeof maxVelocityOpt === "function"
-      ? maxVelocityOpt()
-      : maxVelocityOpt;
+    return typeof maxVelocityOpt === "function" ? maxVelocityOpt() : maxVelocityOpt;
   };
 
   // 截断速度到最大值
@@ -124,9 +117,7 @@ export function enableDragScroll(
 
   const emitActiveChange = (active: boolean) => {
     try {
-      container.dispatchEvent(
-        new CustomEvent("dragscroll-active-change", { detail: { active } })
-      );
+      container.dispatchEvent(new CustomEvent("dragscroll-active-change", { detail: { active } }));
     } catch {
       // ignore
     }
@@ -165,8 +156,7 @@ export function enableDragScroll(
     };
 
     container.addEventListener("click", onClickCapture, true);
-    cleanupClickCapture = () =>
-      container.removeEventListener("click", onClickCapture, true);
+    cleanupClickCapture = () => container.removeEventListener("click", onClickCapture, true);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -175,13 +165,7 @@ export function enableDragScroll(
 
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
-    if (
-      tag === "INPUT" ||
-      tag === "TEXTAREA" ||
-      tag === "SELECT" ||
-      target?.isContentEditable
-    )
-      return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
 
     e.preventDefault();
     if (!spaceDown) {
@@ -277,7 +261,7 @@ export function enableDragScroll(
         container.dispatchEvent(
           new CustomEvent(overspeedEventName, {
             detail: { velocity: velocityY, absVelocity: absV, absAccel },
-          })
+          }),
         );
         overspeedShownThisDrag = true;
       }

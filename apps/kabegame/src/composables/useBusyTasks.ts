@@ -11,10 +11,7 @@ const SHOW_DELAY_MS = 1_800;
 const CLOCK_INTERVAL_MS = 500;
 
 export type BusyCard =
-  | { kind: "organize" }
-  | { kind: "hiddenCleanup" }
-  | { kind: "folderSync"; albumId: string }
-  | { kind: "updater" };
+  { kind: "organize" } | { kind: "hiddenCleanup" } | { kind: "folderSync"; albumId: string } | { kind: "updater" };
 
 const now = ref(Date.now());
 const hasUnseenFailure = ref(false);
@@ -94,15 +91,11 @@ export function useBusyTasks(): BusyTasksAggregation {
     });
   }
 
-  const organizeVisible = computed(
-    () => organizeStore.running && isDelayElapsed(organizeStore.startedAtMs),
-  );
+  const organizeVisible = computed(() => organizeStore.running && isDelayElapsed(organizeStore.startedAtMs));
   const hiddenCleanupVisible = computed(
     () => hiddenCleanupStore.running && isDelayElapsed(hiddenCleanupStore.startedAtMs),
   );
-  const updaterVisible = computed(
-    () => updaterStore.isDownloading && isDelayElapsed(updaterStore.downloadStartedAtMs),
-  );
+  const updaterVisible = computed(() => updaterStore.isDownloading && isDelayElapsed(updaterStore.downloadStartedAtMs));
 
   const cards = computed<BusyCard[]>(() => {
     const result: BusyCard[] = [];

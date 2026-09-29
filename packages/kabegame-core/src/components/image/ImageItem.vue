@@ -1,18 +1,32 @@
 <template>
-  <div ref="rootEl" class="image-item" :class="{
-    'image-item-selected': selected,
-    'item-entering': enteringClassActive,
-    'item-leaving': isLeaving,
-    'image-item-android': isCompact,
-    'image-item-hidden': image.isHidden,
-    'image-item-fill': fillBox,
-    'image-item-horizontal': horizontal,
-  }" :style="rootStyle" :data-id="image.id" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
-    @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
+  <div
+    ref="rootEl"
+    class="image-item"
+    :class="{
+      'image-item-selected': selected,
+      'item-entering': enteringClassActive,
+      'item-leaving': isLeaving,
+      'image-item-android': isCompact,
+      'image-item-hidden': image.isHidden,
+      'image-item-fill': fillBox,
+      'image-item-horizontal': horizontal,
+    }"
+    :style="rootStyle"
+    :data-id="image.id"
+    @mouseenter="handleMouseEnter"
+    @mouseleave="handleMouseLeave"
+    @contextmenu.prevent="$emit('contextmenu', $event)"
+    @animationend="handleAnimationEnd"
+  >
     <!-- 文件异常标识：thumb/comp/local 三级失败标记（蓝/黄/红），最多三个全亮；不阻挡点击/选择/右键 -->
     <div v-if="failedSources.length" class="missing-file-badges">
-      <el-tooltip v-for="tag in failedSources" :key="tag" :content="fileWarningText(tag)" placement="top"
-        :show-after="300">
+      <el-tooltip
+        v-for="tag in failedSources"
+        :key="tag"
+        :content="fileWarningText(tag)"
+        placement="top"
+        :show-after="300"
+      >
         <div class="missing-file-badge" :class="`missing-file-badge-${tag}`">
           <el-icon :size="14">
             <WarningFilled />
@@ -21,9 +35,15 @@
       </el-tooltip>
     </div>
     <!-- 视频标识：右上角播放/暂停切换按钮（可控视频） -->
-    <div v-if="isControllableVideo" class="video-play-badge video-play-badge-interactive"
-      role="button" :aria-label="videoShouldPlay ? '暂停' : '播放'"
-      @click.stop="handleToggleVideoPlay" @dblclick.stop @contextmenu.stop.prevent>
+    <div
+      v-if="isControllableVideo"
+      class="video-play-badge video-play-badge-interactive"
+      role="button"
+      :aria-label="videoShouldPlay ? '暂停' : '播放'"
+      @click.stop="handleToggleVideoPlay"
+      @dblclick.stop
+      @contextmenu.stop.prevent
+    >
       <el-icon :size="14">
         <VideoPause v-if="videoShouldPlay" />
         <VideoPlay v-else />
@@ -35,12 +55,25 @@
         <VideoPlay />
       </el-icon>
     </div>
-    <div class="image-wrapper" :style="aspectRatioStyle"
-      @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
-      @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
-      @touchend="handleTouchEnd">
-      <ImageContent ref="contentRef" :image="image" :prefer="effectivePrefer" :fit="fit"
-        :video-playing="videoShouldPlay" video-muted reset-video-on-pause />
+    <div
+      class="image-wrapper"
+      :style="aspectRatioStyle"
+      @dblclick.stop="$emit('dblclick', $event)"
+      @contextmenu.prevent.stop="$emit('contextmenu', $event)"
+      @click.stop="handleWrapperClick"
+      @touchstart="handleTouchStart"
+      @touchmove="handleTouchMove"
+      @touchend="handleTouchEnd"
+    >
+      <ImageContent
+        ref="contentRef"
+        :image="image"
+        :prefer="effectivePrefer"
+        :fit="fit"
+        :video-playing="videoShouldPlay"
+        video-muted
+        reset-video-on-pause
+      />
     </div>
   </div>
 </template>
@@ -94,9 +127,7 @@ const { t } = useI18n();
 
 // 三级失败标记来自 ImageContent 状态机（thumb 蓝 / comp 黄 / local 红），按固定顺序展示
 const SOURCE_TAG_ORDER: ImageSourceTag[] = ["thumb", "comp", "local"];
-const failedSources = computed(() =>
-  SOURCE_TAG_ORDER.filter((tag) => contentRef.value?.failedSources.includes(tag))
-);
+const failedSources = computed(() => SOURCE_TAG_ORDER.filter((tag) => contentRef.value?.failedSources.includes(tag)));
 
 const THUMBNAIL_REGEN_RANGE_SIZE = 1000;
 const thumbnailRegenRange = computed(() => {
@@ -140,7 +171,7 @@ watch(
       enteringClassActive.value = false;
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // Android 长按检测
@@ -262,13 +293,14 @@ const effectivePrefer = computed<ImagePrefer>(() => {
   if (isVideo.value) return "thumbnail";
   return hoverOriginalActive.value ? "original" : props.prefer;
 });
-const canHoverOriginalPreview = computed(() =>
-  props.hoverOriginal &&
-  !isCompact.value &&
-  !isVideo.value &&
-  props.prefer === "thumbnail" &&
-  // 原始文件已确认失败（原图链末环 local 已死）时不再升级为原图
-  !failedSources.value.includes("local")
+const canHoverOriginalPreview = computed(
+  () =>
+    props.hoverOriginal &&
+    !isCompact.value &&
+    !isVideo.value &&
+    props.prefer === "thumbnail" &&
+    // 原始文件已确认失败（原图链末环 local 已死）时不再升级为原图
+    !failedSources.value.includes("local"),
 );
 
 const clearHoverPreviewTimer = () => {
@@ -283,7 +315,7 @@ const clearHoverImageOriginalTimer = () => {
     clearTimeout(hoverImageOriginalTimer);
     hoverImageOriginalTimer = null;
   }
-}
+};
 
 const stopHoverPreview = () => {
   clearHoverPreviewTimer();
@@ -307,7 +339,6 @@ const handleMouseEnter = () => {
         emit("hoverVideoPreview", true);
         return;
       }
-      
     }, HOVER_PREVIEW_DELAY_MS);
   } else {
     hoverImageOriginalTimer = setTimeout(() => {
@@ -323,15 +354,10 @@ const handleMouseLeave = () => {
 };
 
 watch(
-  [
-    () => props.image.id,
-    () => props.image.localPath,
-    () => props.image.thumbnailPath,
-    () => props.image.type,
-  ],
+  [() => props.image.id, () => props.image.localPath, () => props.image.thumbnailPath, () => props.image.type],
   () => {
     stopHoverPreview();
-  }
+  },
 );
 
 watch(isCompact, (compact) => {
@@ -371,7 +397,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   overflow: hidden;
   cursor: pointer;
   position: relative;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease;
+  transition:
+    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.25s ease;
   box-sizing: border-box;
   will-change: transform, box-shadow;
   user-select: none;
@@ -466,7 +494,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
       border-radius: 0;
     }
   }
-
 }
 
 .missing-file-badges {
@@ -540,7 +567,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 .video-play-badge-interactive {
   pointer-events: auto;
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.15s ease;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
 
   &:hover {
     background: rgba(0, 0, 0, 0.7);

@@ -28,7 +28,7 @@ const props = withDefaults(
     options?: VarOption[];
     allowUnset?: boolean;
   }>(),
-  { allowUnset: false }
+  { allowUnset: false },
 );
 
 const emit = defineEmits<{
@@ -94,7 +94,10 @@ function toggleOne(value: string) {
   font: inherit;
   font-size: 13px;
   white-space: nowrap;
-  transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 .var-checkbox-group-field__tag:not(.is-on):hover {
   color: var(--anime-primary);
@@ -113,5 +116,4 @@ function toggleOne(value: string) {
   width: 14px;
   margin-right: 4px;
 }
-
 </style>

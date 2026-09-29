@@ -9,19 +9,19 @@
     <!-- 空态：区分“确实没有示例图”与“未安装故未读取” -->
     <div v-else-if="emptyReason" class="qp-carousel-box qp-carousel-empty">
       <el-icon class="qp-carousel-empty-icon"><Picture /></el-icon>
-      <span class="qp-carousel-empty-text">{{
-        emptyReason === "not-installed"
-          ? t("plugins.quickPreview.installToPreview")
-          : t("plugins.quickPreview.noSampleImages")
-      }}</span>
+      <span class="qp-carousel-empty-text">
+        {{
+          emptyReason === "not-installed"
+            ? t("plugins.quickPreview.installToPreview")
+            : t("plugins.quickPreview.noSampleImages")
+        }}
+      </span>
     </div>
 
     <template v-else-if="images.length">
       <div class="qp-carousel-box" @mouseenter="paused = true" @mouseleave="paused = false">
         <img :src="images[activeIndex].src" alt="" class="qp-carousel-img" />
-        <div v-if="images.length > 1" class="qp-carousel-counter">
-          {{ activeIndex + 1 }} / {{ images.length }}
-        </div>
+        <div v-if="images.length > 1" class="qp-carousel-counter">{{ activeIndex + 1 }} / {{ images.length }}</div>
         <button
           v-if="images.length > 1"
           type="button"
@@ -90,7 +90,7 @@ const props = withDefaults(
     resetToken?: string;
     autoplayMs?: number;
   }>(),
-  { loading: false, emptyReason: null, resetToken: "", autoplayMs: 2600 }
+  { loading: false, emptyReason: null, resetToken: "", autoplayMs: 2600 },
 );
 
 const { t } = useI18n();
@@ -123,7 +123,7 @@ watch(
   () => props.resetToken,
   () => {
     activeIndex.value = 0;
-  }
+  },
 );
 
 watch(
@@ -132,7 +132,7 @@ watch(
     if (activeIndex.value >= props.images.length) activeIndex.value = 0;
     startTimer();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 onBeforeUnmount(clearTimer);
@@ -210,7 +210,10 @@ onBeforeUnmount(clearTimer);
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.5);
   color: #fff;
-  font: 600 10.5px/19px ui-monospace, Menlo, monospace;
+  font:
+    600 10.5px/19px ui-monospace,
+    Menlo,
+    monospace;
 }
 
 .qp-carousel-arrow {
@@ -257,7 +260,9 @@ onBeforeUnmount(clearTimer);
   border-radius: 3px;
   background: var(--el-border-color-darker);
   cursor: pointer;
-  transition: width 0.15s, background 0.15s;
+  transition:
+    width 0.15s,
+    background 0.15s;
 }
 
 .qp-carousel-dot--active {
@@ -279,7 +284,9 @@ onBeforeUnmount(clearTimer);
   background: var(--kb-qp-carousel-bg, #f4eff7);
   box-shadow: 0 0 0 1.5px transparent;
   opacity: 0.45;
-  transition: opacity 0.15s, box-shadow 0.15s;
+  transition:
+    opacity 0.15s,
+    box-shadow 0.15s;
 }
 
 .qp-carousel-thumb--active {

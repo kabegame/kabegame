@@ -8,7 +8,8 @@
     :show-close="true"
     @update:model-value="modal.close"
     @open="handleOpen"
-    @closed="handleClosed">
+    @closed="handleClosed"
+  >
     <el-form label-width="110px" class="local-import-form">
       <el-form-item :label="$t('albums.outputAlbum')">
         <AlbumPicker
@@ -43,25 +44,21 @@
         <div class="path-picker-actions">
           <el-button @click="handleAddFiles">
             <el-icon><Document /></el-icon>
-            {{ $t('common.addFiles') }}
+            {{ $t("common.addFiles") }}
           </el-button>
           <el-button @click="handleAddFolder">
             <el-icon><FolderOpened /></el-icon>
-            {{ $t('common.addFolder') }}
+            {{ $t("common.addFolder") }}
           </el-button>
         </div>
       </el-form-item>
 
       <el-form-item v-if="displayItems.length > 0" :label="$t('common.selectedPaths')">
         <div class="paths-list">
-          <div
-            v-for="(label, idx) in displayItems"
-            :key="idx"
-            class="path-item"
-          >
+          <div v-for="(label, idx) in displayItems" :key="idx" class="path-item">
             <span class="path-text">{{ label }}</span>
             <el-button type="danger" link size="small" @click="removeItem(idx)">
-              {{ $t('common.remove') }}
+              {{ $t("common.remove") }}
             </el-button>
           </div>
         </div>
@@ -69,16 +66,16 @@
 
       <el-form-item :label="$t('albums.recursiveSubdirsLabel')">
         <el-checkbox v-model="recursive">
-          {{ $t('albums.recursiveSubdirs') }}
+          {{ $t("albums.recursiveSubdirs") }}
         </el-checkbox>
       </el-form-item>
     </el-form>
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button @click="modal.close()">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="modal.close()">{{ $t("common.cancel") }}</el-button>
         <el-button type="primary" :disabled="displayItems.length === 0" @click="handleSubmit">
-          {{ $t('albums.startImport') }}
+          {{ $t("albums.startImport") }}
         </el-button>
       </div>
     </template>
@@ -111,7 +108,11 @@ const emit = defineEmits<{
 }>();
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
-watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
+watch(
+  () => props.modelValue,
+  (v) => (v ? modal.open() : modal.close()),
+  { immediate: true },
+);
 
 const crawlerStore = useCrawlerStore();
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
@@ -121,9 +122,7 @@ const newOutputAlbumName = ref("");
 const newOutputAlbumParentId = ref<string | null>(null);
 const paths = ref<string[]>([]);
 const recursive = ref(true);
-const isCreatingNewOutputAlbum = computed(
-  () => selectedOutputAlbumId.value === "__create_new__"
-);
+const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
 watch(selectedOutputAlbumId, (value) => {
   if (value !== "__create_new__") {
     newOutputAlbumName.value = "";
@@ -135,13 +134,13 @@ const displayItems = computed(() => paths.value);
 async function handleAddFiles() {
   try {
     await loadImageTypes();
-    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "mp4", "mov"];
+    const exts = imageExtensions.value.length
+      ? imageExtensions.value
+      : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "mp4", "mov"];
     const selected = await open({
       directory: false,
       multiple: true,
-      filters: [
-        { name: t('common.media'), extensions: exts },
-      ],
+      filters: [{ name: t("common.media"), extensions: exts }],
     });
 
     if (!selected) return;
@@ -155,7 +154,7 @@ async function handleAddFiles() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件失败:", e);
-      ElMessage.error(t('albums.selectFileFailed'));
+      ElMessage.error(t("albums.selectFileFailed"));
     }
   }
 }
@@ -176,7 +175,7 @@ async function handleAddFolder() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件夹失败:", e);
-      ElMessage.error(t('albums.selectFolderFailed'));
+      ElMessage.error(t("albums.selectFolderFailed"));
     }
   }
 }
@@ -188,7 +187,7 @@ function removeItem(idx: number) {
 async function createOutputAlbum(showSuccess = true) {
   const name = newOutputAlbumName.value.trim();
   if (!name) {
-    ElMessage.warning(t('albums.enterAlbumNameFirst'));
+    ElMessage.warning(t("albums.enterAlbumNameFirst"));
     return null;
   }
   try {
@@ -197,12 +196,12 @@ async function createOutputAlbum(showSuccess = true) {
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
     if (showSuccess) {
-      ElMessage.success(t('albums.albumCreated'));
+      ElMessage.success(t("albums.albumCreated"));
     }
     return album;
   } catch (e) {
     console.error("创建画册失败:", e);
-    ElMessage.error(t('albums.createAlbumFailed'));
+    ElMessage.error(t("albums.createAlbumFailed"));
     return null;
   }
 }
@@ -216,7 +215,7 @@ async function handleCreateOutputAlbum() {
 
 async function handleSubmit() {
   if (displayItems.value.length === 0) {
-    ElMessage.warning(t('albums.addPathFirst'));
+    ElMessage.warning(t("albums.addPathFirst"));
     return;
   }
 
@@ -237,15 +236,20 @@ async function handleSubmit() {
     typeof initialOutputAlbumId === "string" &&
     selectedOutputAlbumId.value === initialOutputAlbumId;
 
-  crawlerStore.addTask("local-import", preserveCopyToDir ? props.initialConfig?.outputDir : undefined, {
-    paths: paths.value,
-    recursive: recursive.value,
-    ...(preserveCopyToDir ? { copy_to_dir: true } : {}),
-  }, outputAlbumId);
+  crawlerStore.addTask(
+    "local-import",
+    preserveCopyToDir ? props.initialConfig?.outputDir : undefined,
+    {
+      paths: paths.value,
+      recursive: recursive.value,
+      ...(preserveCopyToDir ? { copy_to_dir: true } : {}),
+    },
+    outputAlbumId,
+  );
 
   modal.close();
   paths.value = [];
-  ElMessage.success(t('gallery.localImportTaskAdded'));
+  ElMessage.success(t("gallery.localImportTaskAdded"));
 }
 
 function handleOpen() {

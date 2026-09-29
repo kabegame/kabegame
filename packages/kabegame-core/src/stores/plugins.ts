@@ -18,17 +18,11 @@ export const LOCAL_IMPORT_PLUGIN_ID = "local-import" as const;
 export const WEBPAGE_PLUGIN_ID = "webpage" as const;
 
 /** 单条插件记录的展示名（当前全局 locale + manifest）。 */
-export function resolvePluginRecordDisplayName(plugin: {
-  id: string;
-  name?: PluginManifestText;
-}): string {
+export function resolvePluginRecordDisplayName(plugin: { id: string; name?: PluginManifestText }): string {
   const locale = String(unref(i18n.global.locale) ?? "en");
   const raw = plugin.name;
   if (!raw || typeof raw !== "object") return plugin.id;
-  const n =
-    resolveManifestText(raw, locale) ||
-    ((raw as Record<string, string>)["default"] ?? plugin.id) ||
-    plugin.id;
+  const n = resolveManifestText(raw, locale) || ((raw as Record<string, string>)["default"] ?? plugin.id) || plugin.id;
   if (String(n).trim()) return String(n);
   return plugin.id;
 }
@@ -52,9 +46,7 @@ export type PluginManifestDoc = Record<string, string>;
 export type PluginConfigText = Record<string, string>;
 
 /** 将插件 icon_png_base64 转为 data URL */
-export function pluginIconToDataUrl(
-  iconPngBase64: string | null | undefined,
-): string | undefined {
+export function pluginIconToDataUrl(iconPngBase64: string | null | undefined): string | undefined {
   if (!iconPngBase64) return undefined;
   return `data:image/png;base64,${iconPngBase64}`;
 }
@@ -128,9 +120,7 @@ export function buildVarMetaMapFromPluginConfig(
           if (!variable) continue;
           const name = o.name;
           optionNameByVariable[variable] =
-            name !== undefined && name !== null
-              ? (name as PluginConfigText | string)
-              : variable;
+            name !== undefined && name !== null ? (name as PluginConfigText | string) : variable;
         }
       }
     }
@@ -140,17 +130,12 @@ export function buildVarMetaMapFromPluginConfig(
         ? (whenRaw as Record<string, string[]>)
         : undefined;
     metaMap[key] = {
-      name:
-        ((raw as Record<string, unknown>).name as PluginConfigText | string) ??
-        key,
+      name: ((raw as Record<string, unknown>).name as PluginConfigText | string) ?? key,
       type:
         typeof (raw as Record<string, unknown>).type === "string"
           ? String((raw as Record<string, unknown>).type)
           : undefined,
-      optionNameByVariable:
-        Object.keys(optionNameByVariable).length > 0
-          ? optionNameByVariable
-          : undefined,
+      optionNameByVariable: Object.keys(optionNameByVariable).length > 0 ? optionNameByVariable : undefined,
       when,
     };
   }
@@ -164,9 +149,7 @@ export function resolvePluginVarDisplayName(
   localeCode: string,
   installed: ReadonlyArray<Plugin>,
 ): string {
-  const meta = buildVarMetaMapFromPluginConfig(
-    installed.find((p) => p.id === pluginId)?.config,
-  )[varKey];
+  const meta = buildVarMetaMapFromPluginConfig(installed.find((p) => p.id === pluginId)?.config)[varKey];
   const rawName = meta?.name;
   if (rawName == null) return varKey;
   if (typeof rawName === "string") return rawName;
@@ -179,9 +162,7 @@ export function resolvePluginVarDisplayName(
 
 export const usePluginStore = defineStore("plugins", () => {
   const plugins = ref<Plugin[]>([]);
-  const visiblePlugins = computed(() =>
-    plugins.value.filter((p) => p.scriptType !== "builtin"),
-  );
+  const visiblePlugins = computed(() => plugins.value.filter((p) => p.scriptType !== "builtin"));
   const activePlugin = ref<Plugin | null>(null);
   /** 插件详情页缓存（按路由 key 存；已安装和商店插件共用） */
   const pluginDetailCache = ref<Record<string, Plugin>>({});
@@ -241,9 +222,7 @@ export const usePluginStore = defineStore("plugins", () => {
       await listen<{ pluginId: string }>("plugin-deleted", (event) => {
         const id = String(event.payload?.pluginId ?? "").trim();
         if (!id) return;
-        plugins.value = sortPluginsById(
-          plugins.value.filter((p) => p.id !== id),
-        );
+        plugins.value = sortPluginsById(plugins.value.filter((p) => p.id !== id));
         if (activePlugin.value?.id === id) activePlugin.value = null;
         delete pluginDetailCache.value[id];
         if (IS_WEB) {
@@ -285,8 +264,7 @@ export const usePluginStore = defineStore("plugins", () => {
     await initEventListeners();
     try {
       if (IS_WEB) {
-        const index =
-          await invoke<Array<{ id: string; version: string }>>("get_plugins");
+        const index = await invoke<Array<{ id: string; version: string }>>("get_plugins");
         const list = await Promise.all(
           index.map(async ({ id, version }) => {
             const cached = await pluginCacheDb.plugins.get(id);
@@ -378,17 +356,8 @@ export const usePluginStore = defineStore("plugins", () => {
   }
 
   /** 使用当前 store 中的插件列表解析变量展示名。 */
-  function resolveVarDisplayName(
-    pluginId: string,
-    varKey: string,
-    localeCode: string,
-  ): string {
-    return resolvePluginVarDisplayName(
-      pluginId,
-      varKey,
-      localeCode,
-      plugins.value,
-    );
+  function resolveVarDisplayName(pluginId: string, varKey: string, localeCode: string): string {
+    return resolvePluginVarDisplayName(pluginId, varKey, localeCode, plugins.value);
   }
 
   return {

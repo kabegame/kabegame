@@ -48,10 +48,7 @@
               {{ summaryPercent }}%
             </span>
           </div>
-          <span
-            class="activity-line-track block w-full"
-            :class="{ 'is-failure': hasUnseenFailure }"
-          >
+          <span class="activity-line-track block w-full" :class="{ 'is-failure': hasUnseenFailure }">
             <span
               class="activity-line"
               :class="{ 'is-indeterminate': summaryPercent === null && count > 0 }"
@@ -91,13 +88,7 @@ const { t } = useI18n();
 const panelVisible = ref(false);
 useModalBack(panelVisible);
 
-const {
-  count,
-  summaryPercent,
-  hasUnseenFailure,
-  markFailuresSeen,
-  cancelAll,
-} = useBusyTasks();
+const { count, summaryPercent, hasUnseenFailure, markFailuresSeen, cancelAll } = useBusyTasks();
 
 const ringStyle = computed(() => ({
   "--activity-angle": `${Math.max(0, summaryPercent.value ?? 0) * 3.6}deg`,
@@ -125,10 +116,7 @@ function togglePanel() {
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  background: conic-gradient(
-    var(--activity-color) var(--activity-angle),
-    rgba(167, 139, 250, 0.28) 0
-  );
+  background: conic-gradient(var(--activity-color) var(--activity-angle), rgba(167, 139, 250, 0.28) 0);
 }
 
 .activity-ring::after {
@@ -140,10 +128,7 @@ function togglePanel() {
 }
 
 .activity-ring.is-indeterminate::before {
-  background: repeating-conic-gradient(
-    var(--activity-color) 0deg 26deg,
-    transparent 26deg 48deg
-  );
+  background: repeating-conic-gradient(var(--activity-color) 0deg 26deg, transparent 26deg 48deg);
   animation: busy-ring-spin 1.1s linear infinite;
 }
 

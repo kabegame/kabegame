@@ -1,10 +1,5 @@
 <template>
-  <PageHeader
-    :title="t('plugins.manageTitle')"
-    :show="showIds"
-    :fold="foldIds"
-    @action="handleAction"
-  />
+  <PageHeader :title="t('plugins.manageTitle')" :show="showIds" :fold="foldIds" @action="handleAction" />
 </template>
 
 <script setup lang="ts">
@@ -21,8 +16,8 @@ const { t } = useI18n();
 
 const emit = defineEmits<{
   refresh: [];
-  'import-source': [];
-  'manage-sources': [];
+  "import-source": [];
+  "manage-sources": [];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());
@@ -35,7 +30,7 @@ watch(
   (v) => {
     pageBridge.setRefresh(v ? () => emit("refresh") : null);
   },
-  { immediate: true }
+  { immediate: true },
 );
 onUnmounted(() => {
   pageBridge.setRefresh(null);

@@ -26,10 +26,7 @@ function sseUrl(): string {
 
 let rpcIdCounter = 0;
 
-export async function invoke<T>(
-  method: string,
-  params?: Record<string, unknown>,
-): Promise<T> {
+export async function invoke<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const id = ++rpcIdCounter;
   const res = await fetch(rpcUrl(), {
     method: "POST",
@@ -92,10 +89,7 @@ export async function emit(_event: string, _payload?: unknown): Promise<void> {
   // Web mode has no bidirectional frontend→backend event bus; no-op.
 }
 
-export async function listen<T>(
-  event: string,
-  cb: EventCallback<T>,
-): Promise<UnlistenFn> {
+export async function listen<T>(event: string, cb: EventCallback<T>): Promise<UnlistenFn> {
   let set = eventListeners.get(event);
   if (!set) {
     set = new Set();

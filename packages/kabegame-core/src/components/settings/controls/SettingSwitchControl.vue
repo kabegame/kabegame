@@ -19,7 +19,6 @@ const props = defineProps<{
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState(props.settingKey);
 
 const onChange = async (v: string | number | boolean) => {
-  await set(v === true);   // el-switch 只抛 activeValue / inactiveValue，本控件用默认值，运行时恒为 boolean
+  await set(v === true); // el-switch 只抛 activeValue / inactiveValue，本控件用默认值，运行时恒为 boolean
 };
 </script>
-

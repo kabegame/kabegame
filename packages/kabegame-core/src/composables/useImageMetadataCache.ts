@@ -10,22 +10,15 @@ export type ImageMetadataResolver = (
   pluginVersion?: number | null,
 ) => Promise<unknown | null>;
 
-export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
-  Symbol("imageMetadataResolver");
+export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> = Symbol("imageMetadataResolver");
 
 const MAX_CACHE_SIZE = 1024;
 
 function normalizePluginVersion(version: number | null | undefined): number {
-  return typeof version === "number" && Number.isFinite(version) && version >= 0
-    ? Math.floor(version)
-    : 0;
+  return typeof version === "number" && Number.isFinite(version) && version >= 0 ? Math.floor(version) : 0;
 }
 
-function cacheKeyFor(
-  imageId: string,
-  metadataId?: number | null,
-  pluginVersion?: number | null,
-): string {
+function cacheKeyFor(imageId: string, metadataId?: number | null, pluginVersion?: number | null): string {
   return `${imageId}@m${metadataId ?? 0}@v${normalizePluginVersion(pluginVersion)}`;
 }
 
@@ -111,18 +104,14 @@ export function useProvideImageMetadataCache() {
     if (IS_WEB) {
       if (evictedKey) {
         // 原子事务：删除被淘汰条目并写入新条目，Dexie 始终 ≤ 1024
-        void imageMetadataCacheDb.transaction(
-          "rw",
-          imageMetadataCacheDb.entries,
-          async () => {
-            await imageMetadataCacheDb.entries.delete(evictedKey);
-            await imageMetadataCacheDb.entries.put({
-              cacheKey: key,
-              data: v,
-              cachedAt: Date.now(),
-            });
-          },
-        );
+        void imageMetadataCacheDb.transaction("rw", imageMetadataCacheDb.entries, async () => {
+          await imageMetadataCacheDb.entries.delete(evictedKey);
+          await imageMetadataCacheDb.entries.put({
+            cacheKey: key,
+            data: v,
+            cachedAt: Date.now(),
+          });
+        });
       } else {
         void imageMetadataCacheDb.entries.put({
           cacheKey: key,

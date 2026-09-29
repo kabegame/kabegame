@@ -78,10 +78,7 @@ import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?
 import type { ImageDetailLike } from "./ImageBasicInfoPanel.vue";
 import { invoke } from "../../api";
 import { getEjsBridgeCache, setEjsBridgeCache } from "../../cache/ejsBridgeCache";
-import {
-  imageMetadataResolverKey,
-  type ImageMetadataResolver,
-} from "../../composables/useImageMetadataCache";
+import { imageMetadataResolverKey, type ImageMetadataResolver } from "../../composables/useImageMetadataCache";
 import { usePluginStore, WEBPAGE_PLUGIN_ID } from "../../stores/plugins";
 import { openExternalLink } from "../../utils/openExternalLink";
 import { Refresh } from "@kabegame/element-plus-icons";
@@ -110,10 +107,7 @@ function isRenderableMetadata(v: unknown): boolean {
   return true;
 }
 
-const injectedResolveMetadata = inject<ImageMetadataResolver | null>(
-  imageMetadataResolverKey,
-  null,
-);
+const injectedResolveMetadata = inject<ImageMetadataResolver | null>(imageMetadataResolverKey, null);
 
 /** 列表未带 metadata 时由懒加载写入；undefined 表示尚未完成一次解析 */
 const resolvedMetadata = ref<unknown | null | undefined>(undefined);
@@ -126,9 +120,7 @@ type ImageMetadataFullPayload = {
 
 function pluginVersionForImage(img: ImageDetailLike | null): number {
   const version = img?.pluginVersion;
-  return typeof version === "number" && Number.isFinite(version) && version >= 0
-    ? Math.floor(version)
-    : 0;
+  return typeof version === "number" && Number.isFinite(version) && version >= 0 ? Math.floor(version) : 0;
 }
 
 async function loadMetadataForImage(img: ImageDetailLike | null) {
@@ -149,20 +141,14 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
   }
   try {
     if (injectedResolveMetadata) {
-      const m = await injectedResolveMetadata(
-        img.id,
-        img.metadataId,
-        resolvedPluginVersion.value,
-      );
+      const m = await injectedResolveMetadata(img.id, img.metadataId, resolvedPluginVersion.value);
       resolvedMetadata.value = m ?? null;
     } else {
       const full = await invoke<ImageMetadataFullPayload>("get_image_metadata_full", {
         imageId: img.id,
       });
       resolvedPluginVersion.value =
-        typeof full?.pluginVersion === "number" &&
-        Number.isFinite(full.pluginVersion) &&
-        full.pluginVersion >= 0
+        typeof full?.pluginVersion === "number" && Number.isFinite(full.pluginVersion) && full.pluginVersion >= 0
           ? Math.floor(full.pluginVersion)
           : resolvedPluginVersion.value;
       resolvedMetadata.value = full?.data ?? null;
@@ -176,7 +162,7 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
 watch(
   [() => props.image?.metadataId],
   () => {
-    console.log('reload metadata');
+    console.log("reload metadata");
     void loadMetadataForImage(props.image ?? null);
   },
   { immediate: true },
@@ -272,19 +258,13 @@ function onIframeBridgeMessage(event: MessageEvent) {
     const id = d.id as number;
     const action = d.action as string;
     if (action === "getLocale") {
-      iframeWin.postMessage(
-        { type: "ejs-bridge-response", id, data: locale.value ?? "en" },
-        "*",
-      );
+      iframeWin.postMessage({ type: "ejs-bridge-response", id, data: locale.value ?? "en" }, "*");
       return;
     }
     if (action === "getPluginData") {
       const pluginId = props.image?.pluginId ?? "";
       if (!pluginId) {
-        iframeWin.postMessage(
-          { type: "ejs-bridge-response", id, error: "missing plugin id" },
-          "*",
-        );
+        iframeWin.postMessage({ type: "ejs-bridge-response", id, error: "missing plugin id" }, "*");
         return;
       }
       void invoke("get_plugin_data", { pluginId })
@@ -292,10 +272,7 @@ function onIframeBridgeMessage(event: MessageEvent) {
           iframeWin.postMessage({ type: "ejs-bridge-response", id, data }, "*");
         })
         .catch((err: unknown) => {
-          iframeWin.postMessage(
-            { type: "ejs-bridge-response", id, error: String(err) },
-            "*",
-          );
+          iframeWin.postMessage({ type: "ejs-bridge-response", id, error: String(err) }, "*");
         });
       return;
     }
@@ -303,10 +280,7 @@ function onIframeBridgeMessage(event: MessageEvent) {
       const pluginId = props.image?.pluginId ?? "";
       const key = typeof d.key === "string" ? d.key.trim() : "";
       if (!pluginId || !key || key.length > 200) {
-        iframeWin.postMessage(
-          { type: "ejs-bridge-response", id, error: "invalid cache key" },
-          "*",
-        );
+        iframeWin.postMessage({ type: "ejs-bridge-response", id, error: "invalid cache key" }, "*");
         return;
       }
       if (action === "getCache") {
@@ -315,10 +289,7 @@ function onIframeBridgeMessage(event: MessageEvent) {
             iframeWin.postMessage({ type: "ejs-bridge-response", id, data }, "*");
           })
           .catch((err: unknown) => {
-            iframeWin.postMessage(
-              { type: "ejs-bridge-response", id, error: String(err) },
-              "*",
-            );
+            iframeWin.postMessage({ type: "ejs-bridge-response", id, error: String(err) }, "*");
           });
         return;
       }
@@ -327,20 +298,14 @@ function onIframeBridgeMessage(event: MessageEvent) {
           iframeWin.postMessage({ type: "ejs-bridge-response", id, data: true }, "*");
         })
         .catch((err: unknown) => {
-          iframeWin.postMessage(
-            { type: "ejs-bridge-response", id, error: String(err) },
-            "*",
-          );
+          iframeWin.postMessage({ type: "ejs-bridge-response", id, error: String(err) }, "*");
         });
       return;
     }
     if (action === "openUrl") {
       const url = typeof d.url === "string" ? d.url : "";
       if (!isAllowedOpenUrl(url)) {
-        iframeWin.postMessage(
-          { type: "ejs-bridge-response", id, error: "invalid url" },
-          "*",
-        );
+        iframeWin.postMessage({ type: "ejs-bridge-response", id, error: "invalid url" }, "*");
         return;
       }
       void openExternalLink(url)
@@ -348,10 +313,7 @@ function onIframeBridgeMessage(event: MessageEvent) {
           iframeWin.postMessage({ type: "ejs-bridge-response", id }, "*");
         })
         .catch((err: unknown) => {
-          iframeWin.postMessage(
-            { type: "ejs-bridge-response", id, error: String(err) },
-            "*",
-          );
+          iframeWin.postMessage({ type: "ejs-bridge-response", id, error: String(err) }, "*");
         });
     }
   }
@@ -460,7 +422,6 @@ function formatMetadataValue(v: unknown): string {
     return String(v);
   }
 }
-
 </script>
 
 <style scoped lang="scss">

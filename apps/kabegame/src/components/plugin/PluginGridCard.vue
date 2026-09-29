@@ -133,7 +133,10 @@ defineProps<{
 
 .plugin-card-version {
   margin-top: 3px;
-  font: 400 11px/1.3 ui-monospace, Menlo, monospace;
+  font:
+    400 11px/1.3 ui-monospace,
+    Menlo,
+    monospace;
   color: var(--anime-text-muted);
 }
 </style>

@@ -1,28 +1,12 @@
 <template>
-  <el-badge
-    v-if="activeTasksCount > 0"
-    :value="activeTasksCount"
-    :max="99"
-    class="tasks-badge"
-  >
-    <el-button
-      @click="handleClick"
-      class="tasks-drawer-trigger"
-      circle
-      type="primary"
-    >
+  <el-badge v-if="activeTasksCount > 0" :value="activeTasksCount" :max="99" class="tasks-badge">
+    <el-button @click="handleClick" class="tasks-drawer-trigger" circle type="primary">
       <el-icon>
         <List />
       </el-icon>
     </el-button>
   </el-badge>
-  <el-button
-    v-else
-    @click="handleClick"
-    class="tasks-drawer-trigger"
-    circle
-    type="primary"
-  >
+  <el-button v-else @click="handleClick" class="tasks-drawer-trigger" circle type="primary">
     <el-icon>
       <List />
     </el-icon>
@@ -74,4 +58,3 @@ const handleClick = () => {
   }
 }
 </style>
-

@@ -20,11 +20,7 @@ import { useApp } from "@/stores/app";
 
 const app = useApp();
 
-const tooltipText = computed(() =>
-  app.isSuper
-    ? "Super mode ON — 写操作已启用"
-    : "Super mode OFF — 只读模式",
-);
+const tooltipText = computed(() => (app.isSuper ? "Super mode ON — 写操作已启用" : "Super mode OFF — 只读模式"));
 </script>
 
 <style lang="scss" scoped>
@@ -43,7 +39,9 @@ const tooltipText = computed(() =>
   transition: box-shadow 0.2s;
 
   &.is-on {
-    box-shadow: 0 0 0 1px var(--el-color-primary), var(--el-box-shadow-light);
+    box-shadow:
+      0 0 0 1px var(--el-color-primary),
+      var(--el-box-shadow-light);
   }
 }
 </style>

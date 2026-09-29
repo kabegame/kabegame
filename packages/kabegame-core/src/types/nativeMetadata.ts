@@ -32,15 +32,11 @@ export const NATIVE_METADATA_PARSER_VERSIONS = {
  * 所以任一解析器升版都整体失效——前端这层只是读取缓存，重取代价小；
  * 后端仍按格式精确判断，不会因此重算解析结果。
  */
-export const NATIVE_METADATA_CACHE_VERSION = Object.values(
-  NATIVE_METADATA_PARSER_VERSIONS,
-).join(".");
+export const NATIVE_METADATA_CACHE_VERSION = Object.values(NATIVE_METADATA_PARSER_VERSIONS).join(".");
 
-export type NativeMetadataPayload =
-  | {
-      v: number;
-      format: NativeMetadataFormat;
-      partial?: boolean;
-      groups: NativeGroup[];
-    }
-  | null;
+export type NativeMetadataPayload = {
+  v: number;
+  format: NativeMetadataFormat;
+  partial?: boolean;
+  groups: NativeGroup[];
+} | null;

@@ -12,12 +12,7 @@
       <div v-if="messages.length === 0" class="kamechan-history-empty">
         {{ t("kamechan.historyEmpty") }}
       </div>
-      <div
-        v-for="message in messages"
-        :key="message.id"
-        class="kamechan-history-entry"
-        :class="`is-${message.type}`"
-      >
+      <div v-for="message in messages" :key="message.id" class="kamechan-history-entry" :class="`is-${message.type}`">
         <div class="kamechan-history-main">
           <el-tag :type="tagType(message.type)" size="small">{{ message.type }}</el-tag>
           <span class="kamechan-history-text">{{ message.text }}</span>

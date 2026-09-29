@@ -3,11 +3,7 @@ import { shallowMount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GalleryQueryBar from "./GalleryQueryBar.vue";
-import {
-  composeQueryFilters,
-  splitQueryFilters,
-  type GalleryQuery,
-} from "@/utils/galleryQuery";
+import { composeQueryFilters, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
 
 const ui = vi.hoisted(() => ({ isCompact: false }));
 vi.mock("@kabegame/core/stores/ui", () => ({ useUiStore: () => ui }));
@@ -27,10 +23,14 @@ vi.mock("@kabegame/i18n", () => ({
 }));
 
 const simple = { plugin: { pluginId: "pixiv" } };
-const extra: GalleryQuery = [{ any: [
-  [{ is: { search: { mode: "native-metadata", query: "sakura" } } }],
-  [{ is: { mediaType: { kind: "image" } } }],
-] }];
+const extra: GalleryQuery = [
+  {
+    any: [
+      [{ is: { search: { mode: "native-metadata", query: "sakura" } } }],
+      [{ is: { mediaType: { kind: "image" } } }],
+    ],
+  },
+];
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 function render(query: GalleryQuery = composeQueryFilters(simple, extra)) {
   const wrapper = shallowMount(GalleryQueryBar, {
@@ -41,7 +41,7 @@ function render(query: GalleryQuery = composeQueryFilters(simple, extra)) {
       directives: { "hscroll-fade": {} },
       renderStubDefaultSlot: true,
       stubs: {
-        ElScrollbar: { template: '<div><slot /></div>' },
+        ElScrollbar: { template: "<div><slot /></div>" },
         ElIcon: true,
         ElSwitch: true,
         VanPicker: true,
@@ -106,7 +106,8 @@ describe("查询条追加高级 chip", () => {
     wrapper.findComponent({ name: "GallerySearchDropdown" }).vm.$emit("update:query", "春");
     const patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery };
     expect(splitQueryFilters(patch.query)).toEqual({
-      simple: { ...simple, search: { mode: "display-name", query: "春" } }, advanced: extra,
+      simple: { ...simple, search: { mode: "display-name", query: "春" } },
+      advanced: extra,
     });
     await wrapper.get(".query-clear-filter").trigger("click");
     expect(wrapper.emitted("navigate")!.at(-1)![0]).toEqual({ query: [], page: 1 });

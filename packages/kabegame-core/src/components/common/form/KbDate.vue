@@ -16,11 +16,7 @@
 import { computed } from "vue";
 import { useNow } from "@vueuse/core";
 import dayjs from "dayjs";
-import {
-  PLUGIN_DATE_PICKER_FORMAT,
-  parsePluginDateBound,
-  parsePluginDateStored,
-} from "../../../utils/pluginDateVar";
+import { PLUGIN_DATE_PICKER_FORMAT, parsePluginDateBound, parsePluginDateStored } from "../../../utils/pluginDateVar";
 
 const props = withDefaults(
   defineProps<{
@@ -37,7 +33,7 @@ const props = withDefaults(
     /** 可选：最晚可选日：`YYYY-MM-DD` 或 `today` / `yesterday` */
     dateMax?: string;
   }>(),
-  { allowUnset: false, dateStorageFormat: PLUGIN_DATE_PICKER_FORMAT }
+  { allowUnset: false, dateStorageFormat: PLUGIN_DATE_PICKER_FORMAT },
 );
 
 const emit = defineEmits<{
@@ -57,9 +53,7 @@ const usesRelativeBounds = computed(() => {
 const clock = useNow({ interval: 60_000 });
 
 const pickerKey = computed(() =>
-  usesRelativeBounds.value
-    ? `rel-${dayjs(clock.value).format("YYYY-MM-DD")}`
-    : "fixed"
+  usesRelativeBounds.value ? `rel-${dayjs(clock.value).format("YYYY-MM-DD")}` : "fixed",
 );
 
 const modelValueForPicker = computed(() => {
@@ -75,16 +69,12 @@ function disabledDate(d: Date) {
   const refNow = usesRelativeBounds.value ? clock.value : undefined;
   if (props.dateMin && props.dateMin.trim() !== "") {
     const min =
-      refNow !== undefined
-        ? parsePluginDateBound(props.dateMin, refNow)
-        : parsePluginDateBound(props.dateMin);
+      refNow !== undefined ? parsePluginDateBound(props.dateMin, refNow) : parsePluginDateBound(props.dateMin);
     if (min && day.isBefore(min, "day")) return true;
   }
   if (props.dateMax && props.dateMax.trim() !== "") {
     const max =
-      refNow !== undefined
-        ? parsePluginDateBound(props.dateMax, refNow)
-        : parsePluginDateBound(props.dateMax);
+      refNow !== undefined ? parsePluginDateBound(props.dateMax, refNow) : parsePluginDateBound(props.dateMax);
     if (max && day.isAfter(max, "day")) return true;
   }
   return false;

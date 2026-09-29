@@ -20,10 +20,7 @@ export interface GalleryTimeMenuTreeOptions {
 }
 
 /** `@kabegame/i18n` / `useI18n().t`（仅用于时间菜单文案） */
-export type TimeMenuTranslateFn = (
-  key: string,
-  values?: Record<string, string | number>
-) => string;
+export type TimeMenuTranslateFn = (key: string, values?: Record<string, string | number>) => string;
 
 /** 构建树时注入「全年」「全月」及月/日展示格式（i18n） */
 export interface TimeMenuScopeLabels {
@@ -38,10 +35,7 @@ export interface TimeMenuScopeLabels {
 /**
  * 与 `buildGalleryTimeMenuTree` 配套，在调用方传入 `t` 与当前 `locale`。
  */
-export function buildTimeMenuScopeLabels(
-  t: TimeMenuTranslateFn,
-  locale: string
-): TimeMenuScopeLabels {
+export function buildTimeMenuScopeLabels(t: TimeMenuTranslateFn, locale: string): TimeMenuScopeLabels {
   return {
     fullYear: t("gallery.timeScopeFullYear"),
     fullMonth: t("gallery.timeScopeFullMonth"),
@@ -74,11 +68,7 @@ export function englishOrdinalDay(n: number): string {
 /**
  * 月行展示：`YYYY-MM` → 简中/繁中「03月」、英「Jan」等（避免裸数字 1/2/3 歧义）。
  */
-export function formatTimeMenuMonthRow(
-  yearMonth: string,
-  locale: string,
-  t: TimeMenuTranslateFn
-): string {
+export function formatTimeMenuMonthRow(yearMonth: string, locale: string, t: TimeMenuTranslateFn): string {
   const y = Number(yearMonth.slice(0, 4));
   const mm = yearMonth.slice(5, 7);
   const mNum = Number(mm);
@@ -100,11 +90,7 @@ export function formatTimeMenuMonthRow(
 /**
  * 日行展示：简中/繁中「15日」、英序数 1st / 2nd / 3rd…
  */
-export function formatTimeMenuDayRow(
-  ymd: string,
-  locale: string,
-  t: TimeMenuTranslateFn
-): string {
+export function formatTimeMenuDayRow(ymd: string, locale: string, t: TimeMenuTranslateFn): string {
   const dd = ymd.slice(8, 10);
   const dayNum = Number(dd);
 
@@ -120,11 +106,7 @@ export function formatTimeMenuDayRow(
   return englishOrdinalDay(dayNum);
 }
 
-export function formatTimeFilterDetail(
-  segment: string,
-  locale: string,
-  t: TimeMenuTranslateFn
-): string {
+export function formatTimeFilterDetail(segment: string, locale: string, t: TimeMenuTranslateFn): string {
   const parts = segment.trim().split("-");
   const year = parts[0] ?? "";
   if (!/^\d{4}$/.test(year)) return segment;
@@ -177,7 +159,7 @@ export interface GalleryTimeIndex {
 export function buildGalleryTimeIndex(
   monthGroups: DateGroupRow[],
   dayGroups: DayGroupRow[],
-  yearGroups: YearGroupRow[] = []
+  yearGroups: YearGroupRow[] = [],
 ): GalleryTimeIndex {
   const daysByYm = new Map<string, DayGroupRow[]>();
   for (const d of dayGroups) {
@@ -214,9 +196,7 @@ export function buildGalleryTimeIndex(
     }
   }
 
-  const years = [...new Set([...yearCounts.keys(), ...yearToMonths.keys()])].sort((a, b) =>
-    a.localeCompare(b)
-  );
+  const years = [...new Set([...yearCounts.keys(), ...yearToMonths.keys()])].sort((a, b) => a.localeCompare(b));
   return { daysByYm, yearToMonths, yearCounts, years };
 }
 
@@ -237,13 +217,9 @@ export function buildGalleryTimeMenuTree(
   dayGroups: DayGroupRow[],
   labels: TimeMenuScopeLabels,
   yearGroups: YearGroupRow[] = [],
-  options: GalleryTimeMenuTreeOptions = {}
+  options: GalleryTimeMenuTreeOptions = {},
 ): TimeMenuNode[] {
-  const { daysByYm, yearToMonths, yearCounts, years } = buildGalleryTimeIndex(
-    monthGroups,
-    dayGroups,
-    yearGroups
-  );
+  const { daysByYm, yearToMonths, yearCounts, years } = buildGalleryTimeIndex(monthGroups, dayGroups, yearGroups);
 
   const roots: TimeMenuNode[] = years.map((year) => {
     const months = yearToMonths.get(year) ?? [];
@@ -260,8 +236,7 @@ export function buildGalleryTimeMenuTree(
         count: m.count,
         key: `${m.year_month}:full-month`,
       };
-      const monthChildren: TimeMenuNode[] =
-        dayChildren.length > 0 ? [fullMonth, ...dayChildren] : [fullMonth];
+      const monthChildren: TimeMenuNode[] = dayChildren.length > 0 ? [fullMonth, ...dayChildren] : [fullMonth];
       return {
         name: m.year_month,
         label: labels.labelMonthRow(m.year_month),
@@ -277,8 +252,7 @@ export function buildGalleryTimeMenuTree(
       count: total,
       key: `${year}:full-year`,
     };
-    const yearChildren: TimeMenuNode[] =
-      monthNodes.length > 0 ? [fullYear, ...monthNodes] : [fullYear];
+    const yearChildren: TimeMenuNode[] = monthNodes.length > 0 ? [fullYear, ...monthNodes] : [fullYear];
     return {
       name: year,
       label: year,
@@ -290,10 +264,7 @@ export function buildGalleryTimeMenuTree(
   return options.collapse === false ? roots : collapseTimeMenuTree(roots);
 }
 
-export function isTimeMenuNodeActive(
-  node: TimeMenuNode,
-  dateTail: string | null
-): boolean {
+export function isTimeMenuNodeActive(node: TimeMenuNode, dateTail: string | null): boolean {
   if (!dateTail) return false;
   if (dateTail === node.name) return true;
   return dateTail.startsWith(`${node.name}-`);
@@ -302,15 +273,7 @@ export function isTimeMenuNodeActive(
 /** 折叠后菜单最长路径深度（与桌面子菜单层级数一致） */
 export function getTimeMenuMaxDepth(nodes: TimeMenuNode[]): number {
   if (!nodes.length) return 0;
-  return (
-    1 +
-    Math.max(
-      0,
-      ...nodes.map((n) =>
-        n.children?.length ? getTimeMenuMaxDepth(n.children) : 0
-      )
-    )
-  );
+  return 1 + Math.max(0, ...nodes.map((n) => (n.children?.length ? getTimeMenuMaxDepth(n.children) : 0)));
 }
 
 // --- Android：列数 = `getTimeMenuMaxDepth(timeMenuRoots)`，与桌面折叠树一致 ---
@@ -345,7 +308,7 @@ export function nodesToTimePickerOptions(nodes: TimeMenuNode[]): AndroidTimePick
  */
 export function syncTimeMenuPickerState(
   roots: TimeMenuNode[],
-  rawValues: readonly string[]
+  rawValues: readonly string[],
 ): { columns: AndroidTimePickerOption[][]; values: string[] } {
   const maxD = getTimeMenuMaxDepth(roots);
   if (!maxD) return { columns: [], values: [] };
@@ -383,7 +346,7 @@ export function todayYmdParts(d = new Date()): {
 export function findBestPathMatchingTail(
   nodes: TimeMenuNode[],
   targetTail: string,
-  path: string[] = []
+  path: string[] = [],
 ): string[] | null {
   let best: string[] | null = null;
   for (const n of nodes) {
@@ -412,16 +375,11 @@ function firstLeafPath(nodes: TimeMenuNode[], path: string[] = []): string[] | n
 /**
  * 打开 picker 时的初始路径：优先当前 `dateTail`，否则按「今年 / 本月 / 本日」在树中匹配。
  */
-export function resolveInitialTimePickPath(
-  roots: TimeMenuNode[],
-  dateTail: string | null
-): string[] {
+export function resolveInitialTimePickPath(roots: TimeMenuNode[], dateTail: string | null): string[] {
   const maxD = getTimeMenuMaxDepth(roots);
   if (!maxD) return [];
   const o = todayYmdParts();
-  const prefer =
-    dateTail?.trim() ||
-    (maxD >= 1 ? o.ymd : o.y);
+  const prefer = dateTail?.trim() || (maxD >= 1 ? o.ymd : o.y);
   let path =
     findBestPathMatchingTail(roots, prefer) ??
     findBestPathMatchingTail(roots, o.ymd) ??
@@ -436,10 +394,7 @@ export function resolveInitialTimePickPath(
 }
 
 /** 各列选中 value → `date/` 路径段（不含前缀） */
-export function resolveTimeMenuPickToDateTail(
-  roots: TimeMenuNode[],
-  values: readonly string[]
-): string {
+export function resolveTimeMenuPickToDateTail(roots: TimeMenuNode[], values: readonly string[]): string {
   let nodes = roots;
   let lastName = "";
   const maxD = getTimeMenuMaxDepth(roots);

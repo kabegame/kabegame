@@ -47,7 +47,6 @@ window.addEventListener(
   { capture: true },
 );
 
-
 const app = createApp(App);
 
 app.directive("pull-to-refresh", vPullToRefresh);

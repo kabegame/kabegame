@@ -12,11 +12,7 @@
       @touchend.passive="cancelLongPress"
       @touchcancel.passive="cancelLongPress"
     >
-      <KamechanBusyBadge
-        v-if="badgeVisible"
-        :minimized="minimized"
-        @click="toggleToolbox"
-      />
+      <KamechanBusyBadge v-if="badgeVisible" :minimized="minimized" @click="toggleToolbox" />
 
       <!-- 工具箱气泡打开时替换消息气泡，关闭后消息气泡自动恢复 -->
       <KameBubble
@@ -60,14 +56,8 @@
         @pointerdown="startDrag"
         @click="handleMascotClick"
       >
-        <img
-          class="kamechan-mascot__image"
-          :src="imageSrc"
-          alt=""
-          draggable="false"
-        />
+        <img class="kamechan-mascot__image" :src="imageSrc" alt="" draggable="false" />
       </button>
-
     </div>
     <ActionRenderer
       :visible="menuVisible"
@@ -78,7 +68,11 @@
       @close="hideMenu"
       @command="handleCommand"
     />
-    <KamechanHistoryDialog :open="historyModal.isOpen.value" :z-index="historyModal.zIndex.value" @close="historyModal.close()" />
+    <KamechanHistoryDialog
+      :open="historyModal.isOpen.value"
+      :z-index="historyModal.zIndex.value"
+      @close="historyModal.close()"
+    />
   </Teleport>
 </template>
 
@@ -108,21 +102,13 @@ const { t } = useI18n();
 const store = useKameMessageStore();
 const settingsStore = useSettingsStore();
 const { queue } = storeToRefs(store);
-const {
-  state,
-  imageSrc,
-  wave,
-} = useKamechanMachine();
+const { state, imageSrc, wave } = useKamechanMachine();
 
 const minimized = ref(false);
 const historyModal = useModal();
 /** kamechan 开着时它就是全局工具箱的入口（方案 2a），点击 toggle 气泡 */
 const toolboxModal = useModal();
-const {
-  count: busyCount,
-  hasUnseenFailure,
-  markFailuresSeen,
-} = useBusyTasks();
+const { count: busyCount, hasUnseenFailure, markFailuresSeen } = useBusyTasks();
 const badgeVisible = computed(() => busyCount.value > 0 || hasUnseenFailure.value);
 const hostEl = ref<HTMLElement | null>(null);
 const position = ref<{ left: number; bottom: number } | null>(null);
@@ -164,11 +150,9 @@ const {
 
 const currentMessage = computed(() => queue.value[queue.value.length - 1] ?? null);
 const queuedExtraCount = computed(() => Math.max(0, queue.value.length - 1));
-const { settingValue: kamechanEnabled } = useSettingKeyState('kamechanEnabled');
+const { settingValue: kamechanEnabled } = useSettingKeyState("kamechanEnabled");
 const moreText = computed(() =>
-  queuedExtraCount.value > 0
-    ? t("kamechan.moreMessages", { count: queuedExtraCount.value })
-    : ""
+  queuedExtraCount.value > 0 ? t("kamechan.moreMessages", { count: queuedExtraCount.value }) : "",
 );
 
 const actions = computed<ActionItem<"kamechan">[]>(() => [
@@ -180,18 +164,22 @@ const actions = computed<ActionItem<"kamechan">[]>(() => [
   },
   // 点击已让位给工具箱气泡，「恢复立绘」改由右键菜单承载
   ...(minimized.value
-    ? [{
-        key: "restore",
-        command: "restore",
-        label: t("kamechan.restore"),
-        icon: FullScreen,
-      } as ActionItem<"kamechan">]
-    : [{
-        key: "minimize",
-        command: "minimize",
-        label: t("kamechan.minimize"),
-        icon: Minus,
-      } as ActionItem<"kamechan">]),
+    ? [
+        {
+          key: "restore",
+          command: "restore",
+          label: t("kamechan.restore"),
+          icon: FullScreen,
+        } as ActionItem<"kamechan">,
+      ]
+    : [
+        {
+          key: "minimize",
+          command: "minimize",
+          label: t("kamechan.minimize"),
+          icon: Minus,
+        } as ActionItem<"kamechan">,
+      ]),
   {
     key: "disable",
     command: "disable",
@@ -217,9 +205,7 @@ const hostStyle = computed<CSSProperties>(() => {
 
 const hostMetrics = computed(() => {
   const rect = hostEl.value?.getBoundingClientRect();
-  const fallbackWidth = viewportSize.value.width <= 520
-    ? minimized.value ? 48 : 96
-    : minimized.value ? 54 : 128;
+  const fallbackWidth = viewportSize.value.width <= 520 ? (minimized.value ? 48 : 96) : minimized.value ? 54 : 128;
   const fallbackLeft = position.value?.left ?? (viewportSize.value.width <= 520 ? 10 : 18);
 
   return {
@@ -240,9 +226,10 @@ const bubbleSide = computed<"left" | "right">(() => {
 const bubbleMaxWidth = computed(() => {
   const { left, width } = hostMetrics.value;
   const anchorInset = getBubbleAnchorInset(width);
-  const availableWidth = bubbleSide.value === "right"
-    ? viewportSize.value.width - (left + width - anchorInset) - bubbleViewportMarginPx
-    : left + anchorInset - bubbleViewportMarginPx;
+  const availableWidth =
+    bubbleSide.value === "right"
+      ? viewportSize.value.width - (left + width - anchorInset) - bubbleViewportMarginPx
+      : left + anchorInset - bubbleViewportMarginPx;
   return `${Math.max(bubbleMinWidthPx, Math.min(bubbleMaxWidthPx, availableWidth))}px`;
 });
 
@@ -362,10 +349,14 @@ function handleDragMove(event: PointerEvent) {
   dragState.dragged = true;
   suppressNextClick = true;
   isDragging.value = true;
-  position.value = clampPosition({
-    left: dragState.startLeft + dx,
-    bottom: dragState.startBottom - dy,
-  }, dragState.hostWidth, dragState.hostHeight);
+  position.value = clampPosition(
+    {
+      left: dragState.startLeft + dx,
+      bottom: dragState.startBottom - dy,
+    },
+    dragState.hostWidth,
+    dragState.hostHeight,
+  );
 }
 
 function stopDrag(event: PointerEvent) {
@@ -397,7 +388,7 @@ function consumeSuppressedClick(event: MouseEvent) {
 function clampPosition(
   nextPosition: { left: number; bottom: number },
   hostWidth = hostEl.value?.getBoundingClientRect().width ?? 0,
-  hostHeight = hostEl.value?.getBoundingClientRect().height ?? 0
+  hostHeight = hostEl.value?.getBoundingClientRect().height ?? 0,
 ) {
   const maxLeft = Math.max(viewportMarginPx, viewportSize.value.width - hostWidth - viewportMarginPx);
   const maxBottom = Math.max(viewportMarginPx, viewportSize.value.height - hostHeight - viewportMarginPx);
@@ -475,14 +466,17 @@ function handleDocumentPointerDown(event: PointerEvent) {
   toolboxModal.close();
 }
 
-watch(() => toolboxModal.isOpen.value, (open) => {
-  if (open) {
-    markFailuresSeen();
-    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
-  } else {
-    document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
-  }
-});
+watch(
+  () => toolboxModal.isOpen.value,
+  (open) => {
+    if (open) {
+      markFailuresSeen();
+      document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    } else {
+      document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
+    }
+  },
+);
 
 watch(kamechanEnabled, (enabled) => {
   if (!enabled) {

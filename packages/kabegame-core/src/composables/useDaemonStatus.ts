@@ -30,7 +30,6 @@ export function useDaemonStatus() {
       // 但为了兼容性，我们仍然监听事件
       daemonReady.value = true;
       daemonOffline.value = false;
-
     } catch (error) {
       console.error("注册后端事件监听失败:", error);
     }

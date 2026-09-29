@@ -19,11 +19,7 @@
       />
 
       <div class="settings-layout">
-        <nav
-          v-if="!isCompact"
-          class="settings-category-nav"
-          :aria-label="$t('settings.title')"
-        >
+        <nav v-if="!isCompact" class="settings-category-nav" :aria-label="$t('settings.title')">
           <button
             v-for="category in settingsCategories"
             :key="category.name"
@@ -73,29 +69,40 @@
               :title="$t('settings.categoryGeneral')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-                <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
-                  <LanguageSetting />
-                </SettingRow>
-                <SettingRow :label="$t('settings.kamechanEnabled')"
-                  :description="$t('settings.kamechanEnabledDesc')">
-                  <SettingSwitchControl setting-key="kamechanEnabled" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.autoLaunch')"
-                  :description="$t('settings.autoLaunchDesc')">
-                  <SettingSwitchControl setting-key="autoLaunch" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageClickAction')"
-                  :description="$t('settings.imageClickActionDesc')">
-                  <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.linkOpenMode')"
-                  :description="$t('settings.linkOpenModeDesc')">
-                  <SettingRadioControl setting-key="linkOpenMode" :options="linkOpenModeOptions" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID && !IS_WEB" :label="$t('settings.fastFolderSync')"
-                  :description="$t('settings.fastFolderSyncDesc')">
-                  <SettingSwitchControl setting-key="fastFolderSync" />
-                </SettingRow>
+              <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
+                <LanguageSetting />
+              </SettingRow>
+              <SettingRow :label="$t('settings.kamechanEnabled')" :description="$t('settings.kamechanEnabledDesc')">
+                <SettingSwitchControl setting-key="kamechanEnabled" />
+              </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID && !IS_WEB"
+                :label="$t('settings.autoLaunch')"
+                :description="$t('settings.autoLaunchDesc')"
+              >
+                <SettingSwitchControl setting-key="autoLaunch" />
+              </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID"
+                :label="$t('settings.imageClickAction')"
+                :description="$t('settings.imageClickActionDesc')"
+              >
+                <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
+              </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID && !IS_WEB"
+                :label="$t('settings.linkOpenMode')"
+                :description="$t('settings.linkOpenModeDesc')"
+              >
+                <SettingRadioControl setting-key="linkOpenMode" :options="linkOpenModeOptions" />
+              </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID && !IS_WEB"
+                :label="$t('settings.fastFolderSync')"
+                :description="$t('settings.fastFolderSyncDesc')"
+              >
+                <SettingSwitchControl setting-key="fastFolderSync" />
+              </SettingRow>
             </SettingsSection>
 
             <SettingsSection
@@ -103,46 +110,59 @@
               :title="$t('settings.categoryAppearance')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-                <SettingRow v-if="!IS_ANDROID"
-                  :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
-                  :description="isHorizontal ? $t('settings.galleryRowsDesc') : $t('settings.galleryColumnsDesc')">
-                  <GalleryGridColumnsSetting />
-                </SettingRow>
-                <SettingRow :label="$t('settings.galleryPageSize')"
-                  :description="$t('settings.galleryPageSizeDesc')">
-                  <GalleryPageSizeSetting />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID"
-                  :label="$t('settings.galleryLayoutMode')"
-                  :description="$t('settings.galleryLayoutModeDesc')">
-                  <SettingRadioControl setting-key="galleryLayoutMode" :options="galleryLayoutModeOptions" />
-                </SettingRow>
-                <SettingRow v-if="!IS_ANDROID"
-                  :label="$t('settings.galleryLayoutDirection')"
-                  :description="$t('settings.galleryLayoutDirectionDesc')">
-                  <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
+              <SettingRow
+                v-if="!IS_ANDROID"
+                :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
+                :description="isHorizontal ? $t('settings.galleryRowsDesc') : $t('settings.galleryColumnsDesc')"
+              >
+                <GalleryGridColumnsSetting />
+              </SettingRow>
+              <SettingRow :label="$t('settings.galleryPageSize')" :description="$t('settings.galleryPageSizeDesc')">
+                <GalleryPageSizeSetting />
+              </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID"
+                :label="$t('settings.galleryLayoutMode')"
+                :description="$t('settings.galleryLayoutModeDesc')"
+              >
+                <SettingRadioControl setting-key="galleryLayoutMode" :options="galleryLayoutModeOptions" />
+              </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID"
+                :label="$t('settings.galleryLayoutDirection')"
+                :description="$t('settings.galleryLayoutDirectionDesc')"
+              >
+                <SettingRadioControl setting-key="galleryLayoutDirection" :options="galleryLayoutDirectionOptions" />
+              </SettingRow>
+              <SettingRow :label="$t('settings.imageFit')" :description="$t('settings.imageFitDesc')">
+                <SettingRadioControl setting-key="imageFit" :options="imageFitOptions" />
+              </SettingRow>
+              <SettingRow
+                :label="$t('settings.appBackgroundEnabled')"
+                :description="$t('settings.appBackgroundEnabledDesc')"
+              >
+                <SettingSwitchControl setting-key="appBackgroundEnabled" />
+              </SettingRow>
+              <template v-if="settingsStore.values.appBackgroundEnabled">
+                <SettingRow
+                  :label="$t('settings.appBackgroundOpacity')"
+                  :description="$t('settings.appBackgroundOpacityDesc')"
+                >
+                  <SettingSliderControl
+                    setting-key="appBackgroundOpacity"
+                    :min="0.05"
+                    :max="1"
+                    :step="0.05"
+                    :precision="2"
+                  />
                 </SettingRow>
                 <SettingRow
-                  :label="$t('settings.imageFit')"
-                  :description="$t('settings.imageFitDesc')">
-                  <SettingRadioControl setting-key="imageFit" :options="imageFitOptions" />
+                  :label="$t('settings.appBackgroundBlur')"
+                  :description="$t('settings.appBackgroundBlurDesc')"
+                >
+                  <SettingSliderControl setting-key="appBackgroundBlur" :min="0" :max="20" :step="1" :precision="0" />
                 </SettingRow>
-                <SettingRow :label="$t('settings.appBackgroundEnabled')"
-                  :description="$t('settings.appBackgroundEnabledDesc')">
-                  <SettingSwitchControl setting-key="appBackgroundEnabled" />
-                </SettingRow>
-                <template v-if="settingsStore.values.appBackgroundEnabled">
-                  <SettingRow :label="$t('settings.appBackgroundOpacity')"
-                    :description="$t('settings.appBackgroundOpacityDesc')">
-                    <SettingSliderControl setting-key="appBackgroundOpacity" :min="0.05" :max="1" :step="0.05"
-                      :precision="2" />
-                  </SettingRow>
-                  <SettingRow :label="$t('settings.appBackgroundBlur')"
-                    :description="$t('settings.appBackgroundBlurDesc')">
-                    <SettingSliderControl setting-key="appBackgroundBlur" :min="0" :max="20" :step="1"
-                      :precision="0" />
-                  </SettingRow>
-                </template>
+              </template>
             </SettingsSection>
 
             <SettingsSection
@@ -151,19 +171,22 @@
               :title="$t('settings.categoryWallpaper')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-                <SettingRow :label="$t('settings.wallpaperDisabled')"
-                  :description="$t('settings.wallpaperDisabledDesc')">
-                  <SettingSwitchControl setting-key="wallpaperDisabled" />
-                </SettingRow>
+              <SettingRow :label="$t('settings.wallpaperDisabled')" :description="$t('settings.wallpaperDisabledDesc')">
+                <SettingSwitchControl setting-key="wallpaperDisabled" />
+              </SettingRow>
 
-                <div :class="{ 'pointer-events-none opacity-50': wallpaperDisabled }">
-                <SettingRow :label="$t('settings.wallpaperRotationEnabled')"
-                  :description="$t('settings.wallpaperRotationEnabledDesc')">
+              <div :class="{ 'pointer-events-none opacity-50': wallpaperDisabled }">
+                <SettingRow
+                  :label="$t('settings.wallpaperRotationEnabled')"
+                  :description="$t('settings.wallpaperRotationEnabledDesc')"
+                >
                   <WallpaperRotationEnabledSetting />
                 </SettingRow>
 
-                <SettingRow :label="$t('settings.wallpaperSelectAlbum')"
-                  :description="$t('settings.wallpaperSelectAlbumDesc')">
+                <SettingRow
+                  :label="$t('settings.wallpaperSelectAlbum')"
+                  :description="$t('settings.wallpaperSelectAlbumDesc')"
+                >
                   <WallpaperRotationTargetSetting />
                 </SettingRow>
                 <SettingRow
@@ -174,50 +197,76 @@
                   <SettingSwitchControl setting-key="wallpaperRotationIncludeSubalbums" />
                 </SettingRow>
                 <SettingRow v-if="currentWallpaperPath" :label="$t('settings.wallpaperCurrent')">
-                    <button type="button" class="setting-current-wallpaper-path" @click="openCurrentWallpaperPath">
-                      {{ currentWallpaperPath }}
-                    </button>
+                  <button type="button" class="setting-current-wallpaper-path" @click="openCurrentWallpaperPath">
+                    {{ currentWallpaperPath }}
+                  </button>
                 </SettingRow>
 
-                <SettingRow :label="$t('settings.wallpaperRotationInterval')"
-                  :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })">
-                  <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="rotationIntervalMin"
-                    :max="1440" :step="10" />
+                <SettingRow
+                  :label="$t('settings.wallpaperRotationInterval')"
+                  :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })"
+                >
+                  <SettingNumberControl
+                    setting-key="wallpaperRotationIntervalMinutes"
+                    :min="rotationIntervalMin"
+                    :max="1440"
+                    :step="10"
+                  />
                 </SettingRow>
 
-                <SettingRow :label="$t('settings.wallpaperRotationMode')"
-                  :description="$t('settings.wallpaperRotationModeDesc')">
+                <SettingRow
+                  :label="$t('settings.wallpaperRotationMode')"
+                  :description="$t('settings.wallpaperRotationModeDesc')"
+                >
                   <SettingRadioControl setting-key="wallpaperRotationMode" :options="wallpaperModeOptions" />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS || IS_LINUX || IS_MACOS" :label="$t('settings.wallpaperStyle')"
-                  :description="$t('settings.wallpaperStyleDesc')">
+                <SettingRow
+                  v-if="IS_WINDOWS || IS_LINUX || IS_MACOS"
+                  :label="$t('settings.wallpaperStyle')"
+                  :description="$t('settings.wallpaperStyleDesc')"
+                >
                   <WallpaperStyleSetting />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)" :label="$t('settings.wallpaperTransition')"
-                  :description="$t('settings.wallpaperTransitionDesc')">
+                <SettingRow
+                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
+                  :label="$t('settings.wallpaperTransition')"
+                  :description="$t('settings.wallpaperTransitionDesc')"
+                >
                   <WallpaperTransitionSetting />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)" :label="$t('settings.wallpaperVolume')"
-                  :description="$t('settings.wallpaperVolumeDesc')">
+                <SettingRow
+                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
+                  :label="$t('settings.wallpaperVolume')"
+                  :description="$t('settings.wallpaperVolumeDesc')"
+                >
                   <SettingSliderControl setting-key="wallpaperVolume" :min="0" :max="1" :step="0.1" :precision="1" />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
+                <SettingRow
+                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
                   :label="$t('settings.wallpaperVideoPlaybackRate')"
-                  :description="$t('settings.wallpaperVideoPlaybackRateDesc')">
-                  <SettingSliderControl setting-key="wallpaperVideoPlaybackRate" :min="0.25" :max="3" :step="0.25"
-                    :precision="2" />
+                  :description="$t('settings.wallpaperVideoPlaybackRateDesc')"
+                >
+                  <SettingSliderControl
+                    setting-key="wallpaperVideoPlaybackRate"
+                    :min="0.25"
+                    :max="3"
+                    :step="0.25"
+                    :precision="2"
+                  />
                 </SettingRow>
 
-                <SettingRow v-if="IS_WINDOWS || IS_MACOS || IS_LINUX" :label="$t('settings.wallpaperModeLabel')"
-                  :description="$t('settings.wallpaperModeDesc')">
+                <SettingRow
+                  v-if="IS_WINDOWS || IS_MACOS || IS_LINUX"
+                  :label="$t('settings.wallpaperModeLabel')"
+                  :description="$t('settings.wallpaperModeDesc')"
+                >
                   <WallpaperModeSetting />
                 </SettingRow>
-
-                </div>
+              </div>
             </SettingsSection>
 
             <SettingsSection
@@ -225,43 +274,54 @@
               :title="$t('settings.categoryDownload')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-                <SettingRow :label="$t('settings.maxConcurrentTasks')"
-                  :description="$t('settings.maxConcurrentTasksDesc')">
-                  <SettingNumberControl setting-key="maxConcurrentTasks" :min="1" :max="10" :step="1" />
-                </SettingRow>
+              <SettingRow
+                :label="$t('settings.maxConcurrentTasks')"
+                :description="$t('settings.maxConcurrentTasksDesc')"
+              >
+                <SettingNumberControl setting-key="maxConcurrentTasks" :min="1" :max="10" :step="1" />
+              </SettingRow>
 
-                <SettingRow :label="$t('settings.maxConcurrentDownloads')"
-                  :description="$t('settings.maxConcurrentDownloadsDesc')">
-                  <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
-                </SettingRow>
+              <SettingRow
+                :label="$t('settings.maxConcurrentDownloads')"
+                :description="$t('settings.maxConcurrentDownloadsDesc')"
+              >
+                <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
+              </SettingRow>
 
-                <SettingRow :label="$t('settings.downloadInterval')" :description="$t('settings.downloadIntervalDesc')">
-                  <DownloadIntervalSetting />
-                </SettingRow>
+              <SettingRow :label="$t('settings.downloadInterval')" :description="$t('settings.downloadIntervalDesc')">
+                <DownloadIntervalSetting />
+              </SettingRow>
 
-                <SettingRow :label="$t('settings.networkRetryCount')"
-                  :description="$t('settings.networkRetryCountDesc')">
-                  <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
-                </SettingRow>
+              <SettingRow :label="$t('settings.networkRetryCount')" :description="$t('settings.networkRetryCountDesc')">
+                <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
+              </SettingRow>
 
-                <SettingRow :label="$t('settings.autoDeduplicate')" :description="$t('settings.autoDeduplicateDesc')">
-                  <SettingSwitchControl setting-key="autoDeduplicate" />
-                </SettingRow>
+              <SettingRow :label="$t('settings.autoDeduplicate')" :description="$t('settings.autoDeduplicateDesc')">
+                <SettingSwitchControl setting-key="autoDeduplicate" />
+              </SettingRow>
 
-                <SettingRow :label="$t('settings.dedupUpdateMetadata')"
-                  :description="$t('settings.dedupUpdateMetadataDesc')">
-                  <SettingSwitchControl setting-key="dedupUpdateMetadata" />
-                </SettingRow>
+              <SettingRow
+                :label="$t('settings.dedupUpdateMetadata')"
+                :description="$t('settings.dedupUpdateMetadataDesc')"
+              >
+                <SettingSwitchControl setting-key="dedupUpdateMetadata" />
+              </SettingRow>
 
-                <SettingRow v-if="!IS_WEB" :label="$t('settings.surfFreezePage')"
-                  :description="$t('settings.surfFreezePageDesc')">
-                  <SettingSwitchControl setting-key="surfFreezePage" />
-                </SettingRow>
+              <SettingRow
+                v-if="!IS_WEB"
+                :label="$t('settings.surfFreezePage')"
+                :description="$t('settings.surfFreezePageDesc')"
+              >
+                <SettingSwitchControl setting-key="surfFreezePage" />
+              </SettingRow>
 
-                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.defaultDownloadDir')"
-                  :description="$t('settings.defaultDownloadDirDesc')">
-                  <DefaultDownloadDirSetting />
-                </SettingRow>
+              <SettingRow
+                v-if="!IS_ANDROID"
+                :label="$t('settings.defaultDownloadDir')"
+                :description="$t('settings.defaultDownloadDirDesc')"
+              >
+                <DefaultDownloadDirSetting />
+              </SettingRow>
             </SettingsSection>
 
             <SettingsSection
@@ -269,13 +329,13 @@
               :title="$t('settings.categoryPlugins')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-                <SettingRow
-                  :label="$t('settings.importRecommendedScheduleEnabled')"
-                  :description="$t('settings.importRecommendedScheduleEnabledDesc')"
-                >
-                  <SettingSwitchControl setting-key="importRecommendedScheduleEnabled" />
-                </SettingRow>
-                <PluginDefaultConfigsPanel />
+              <SettingRow
+                :label="$t('settings.importRecommendedScheduleEnabled')"
+                :description="$t('settings.importRecommendedScheduleEnabledDesc')"
+              >
+                <SettingSwitchControl setting-key="importRecommendedScheduleEnabled" />
+              </SettingRow>
+              <PluginDefaultConfigsPanel />
             </SettingsSection>
 
             <SettingsSection
@@ -284,8 +344,7 @@
               :title="$t('settings.categoryAdvanced')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
-              <SettingRow v-if="IS_WEB" :label="$t('settings.superMode')"
-                :description="$t('settings.superModeDesc')">
+              <SettingRow v-if="IS_WEB" :label="$t('settings.superMode')" :description="$t('settings.superModeDesc')">
                 <SuperModeSetting />
               </SettingRow>
               <!-- 画册盘自带两行（开关 + 挂载点），不再套外层 SettingRow -->
@@ -341,11 +400,14 @@ import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfig
 import SettingsSection from "@/components/settings/SettingsSection.vue";
 import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
 
-const props = withDefaults(defineProps<{
-  embedded?: boolean;
-}>(), {
-  embedded: false,
-});
+const props = withDefaults(
+  defineProps<{
+    embedded?: boolean;
+  }>(),
+  {
+    embedded: false,
+  },
+);
 const { embedded } = props;
 
 const { t } = useI18n();
@@ -389,24 +451,56 @@ import { useDesktop } from "@/composables/useDesktop";
 const { loading, showLoading } = useLoadingDelay(300);
 
 const settingsStore = useSettingsStore();
-const isHorizontal = computed(
-  () => settingsStore.values.galleryLayoutDirection === "horizontal"
-);
+const isHorizontal = computed(() => settingsStore.values.galleryLayoutDirection === "horizontal");
 
 // 持久化用户最后访问的设置分类，并兼容旧版 app / mcp tab 值。
 const SETTINGS_TAB_NAMES = ["general", "appearance", "wallpaper", "download", "plugins", "advanced"] as const;
 type SettingsTabName = (typeof SETTINGS_TAB_NAMES)[number];
 const storedSettingsTab = useLocalStorage("kabegame-settings-last-tab", "general");
 const settingsCategories = computed(() => [
-  { name: "general" as const, label: t("settings.categoryGeneral"), icon: Operation, summary: t("settings.categoryGeneralSummary") },
-  { name: "appearance" as const, label: t("settings.categoryAppearance"), icon: Brush, summary: t("settings.categoryAppearanceSummary") },
+  {
+    name: "general" as const,
+    label: t("settings.categoryGeneral"),
+    icon: Operation,
+    summary: t("settings.categoryGeneralSummary"),
+  },
+  {
+    name: "appearance" as const,
+    label: t("settings.categoryAppearance"),
+    icon: Brush,
+    summary: t("settings.categoryAppearanceSummary"),
+  },
   ...(!IS_WEB
-    ? [{ name: "wallpaper" as const, label: t("settings.categoryWallpaper"), icon: PictureRounded, summary: t("settings.categoryWallpaperSummary") }]
+    ? [
+        {
+          name: "wallpaper" as const,
+          label: t("settings.categoryWallpaper"),
+          icon: PictureRounded,
+          summary: t("settings.categoryWallpaperSummary"),
+        },
+      ]
     : []),
-  { name: "download" as const, label: t("settings.categoryDownload"), icon: Download, summary: t("settings.categoryDownloadSummary") },
-  { name: "plugins" as const, label: t("settings.categoryPlugins"), icon: Connection, summary: t("settings.categoryPluginsSummary") },
+  {
+    name: "download" as const,
+    label: t("settings.categoryDownload"),
+    icon: Download,
+    summary: t("settings.categoryDownloadSummary"),
+  },
+  {
+    name: "plugins" as const,
+    label: t("settings.categoryPlugins"),
+    icon: Connection,
+    summary: t("settings.categoryPluginsSummary"),
+  },
   ...(!IS_ANDROID
-    ? [{ name: "advanced" as const, label: t("settings.categoryAdvanced"), icon: Tools, summary: t("settings.categoryAdvancedSummary") }]
+    ? [
+        {
+          name: "advanced" as const,
+          label: t("settings.categoryAdvanced"),
+          icon: Tools,
+          summary: t("settings.categoryAdvancedSummary"),
+        },
+      ]
     : []),
 ]);
 
@@ -414,7 +508,7 @@ const settingsCategories = computed(() => [
 const mobileCategory = ref<SettingsTabName | null>(null);
 const mobileDetailOpen = computed(() => isCompact.value && mobileCategory.value !== null);
 const mobileCategoryLabel = computed(
-  () => settingsCategories.value.find((category) => category.name === mobileCategory.value)?.label ?? ""
+  () => settingsCategories.value.find((category) => category.name === mobileCategory.value)?.label ?? "",
 );
 function closeMobileCategory() {
   mobileCategory.value = null;
@@ -432,9 +526,7 @@ const activeTab = computed({
     };
     const value = legacyMap[storedSettingsTab.value] ?? storedSettingsTab.value;
     const available = settingsCategories.value.some((category) => category.name === value);
-    return SETTINGS_TAB_NAMES.includes(value as SettingsTabName) && available
-      ? value as SettingsTabName
-      : "general";
+    return SETTINGS_TAB_NAMES.includes(value as SettingsTabName) && available ? (value as SettingsTabName) : "general";
   },
   set: (v: SettingsTabName) => {
     if (isCompact.value) {
@@ -487,7 +579,7 @@ watch(
   () => settingsStore.values.currentWallpaperImageId,
   () => {
     void refreshCurrentWallpaperPath();
-  }
+  },
 );
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 // 关闭壁纸：禁用期间将其余壁纸控件置灰
@@ -502,9 +594,7 @@ const isLightMode = IS_LIGHT_MODE;
 
 const settingsShowIds = computed(() => []);
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID
-    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
-    : undefined
+  IS_ANDROID ? { onRefresh: handleRefresh, refreshing: isRefreshing.value } : undefined,
 );
 
 function handleSettingsAction(_payload: { id: string; data: { type: string } }) {
@@ -541,7 +631,6 @@ onActivated(async () => {
   if (!IS_ANDROID) return;
   await batteryOptimizationStore.checkAndPromptIfNeeded();
 });
-
 </script>
 
 <style scoped lang="scss">
@@ -602,7 +691,10 @@ onActivated(async () => {
   background: transparent;
   cursor: pointer;
   text-align: left;
-  transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
 
   &:hover {
     background: color-mix(in srgb, var(--anime-primary) 8%, transparent);

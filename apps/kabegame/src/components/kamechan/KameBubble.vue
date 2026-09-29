@@ -22,20 +22,23 @@ import { computed } from "vue";
 import { CircleCheck, InfoFilled, WarningFilled, CircleCloseFilled } from "@kabegame/element-plus-icons";
 import type { KameMessageType } from "@kabegame/core/stores/kameMessage";
 
-const props = withDefaults(defineProps<{
-  text: string;
-  type: KameMessageType;
-  visible: boolean;
-  moreText?: string;
-  side?: "left" | "right";
-  maxWidth?: string;
-  compact?: boolean;
-}>(), {
-  moreText: "",
-  side: "right",
-  maxWidth: "320px",
-  compact: false,
-});
+const props = withDefaults(
+  defineProps<{
+    text: string;
+    type: KameMessageType;
+    visible: boolean;
+    moreText?: string;
+    side?: "left" | "right";
+    maxWidth?: string;
+    compact?: boolean;
+  }>(),
+  {
+    moreText: "",
+    side: "right",
+    maxWidth: "320px",
+    compact: false,
+  },
+);
 
 const iconComponent = computed(() => {
   switch (props.type) {
@@ -153,7 +156,9 @@ const bubbleStyle = computed(() => ({
 
 .kame-bubble-enter-active,
 .kame-bubble-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
 }
 
 .kame-bubble-enter-from,

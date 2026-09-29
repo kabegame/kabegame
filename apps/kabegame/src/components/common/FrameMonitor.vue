@@ -47,12 +47,8 @@ onUnmounted(() => {
   }
 });
 
-const displayAvgFps = computed(() => (
-  snapshot.value === null ? "--" : String(snapshot.value.avgFps)
-));
-const displayMinFps = computed(() => (
-  snapshot.value === null ? "--" : String(snapshot.value.minFps)
-));
+const displayAvgFps = computed(() => (snapshot.value === null ? "--" : String(snapshot.value.avgFps)));
+const displayMinFps = computed(() => (snapshot.value === null ? "--" : String(snapshot.value.minFps)));
 
 const getFpsClass = (level: FrameMonitorLevel) => {
   switch (level) {

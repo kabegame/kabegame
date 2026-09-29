@@ -5,15 +5,8 @@
       <span class="min-w-0 truncate text-[13px] font-700 text-[var(--anime-text-primary)]">
         {{ t("gallery.organizeGallery") }}
       </span>
-      <span class="ml-auto shrink-0 font-mono text-xs text-[#8b6b8f]">
-        {{ store.progressPercentage }}%
-      </span>
-      <button
-        type="button"
-        class="busy-task-cancel"
-        :title="t('common.cancel')"
-        @click.stop="organizeService.cancel()"
-      >
+      <span class="ml-auto shrink-0 font-mono text-xs text-[#8b6b8f]">{{ store.progressPercentage }}%</span>
+      <button type="button" class="busy-task-cancel" :title="t('common.cancel')" @click.stop="organizeService.cancel()">
         <el-icon class="text-[13px]"><Close /></el-icon>
       </button>
     </div>
@@ -25,10 +18,12 @@
         {{ store.progress.processedGlobal.toLocaleString() }} / {{ store.progress.libraryTotal.toLocaleString() }}
       </span>
       <span class="ml-auto min-w-0 truncate">
-        {{ t("gallery.organizingDetail", {
-          removed: store.progress.removed,
-          regenerated: store.progress.regenerated,
-        }) }}
+        {{
+          t("gallery.organizingDetail", {
+            removed: store.progress.removed,
+            regenerated: store.progress.regenerated,
+          })
+        }}
       </span>
     </div>
   </article>

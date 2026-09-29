@@ -1,5 +1,5 @@
-import { ref, computed, onBeforeUnmount, type ComputedRef } from 'vue';
-import { useModalStackStore } from '../stores/modalStack';
+import { ref, computed, onBeforeUnmount, type ComputedRef } from "vue";
+import { useModalStackStore } from "../stores/modalStack";
 
 export interface UseModalOptions {
   onOpen?: () => void;

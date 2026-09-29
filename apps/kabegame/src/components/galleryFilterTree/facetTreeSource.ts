@@ -2,15 +2,8 @@ import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
 import type { usePluginStore } from "@/stores/plugins";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
-import {
-  GALLERY_ASPECT_BUCKETS,
-  type GalleryBrowseDimension,
-  type GalleryFilter,
-} from "@/utils/galleryPath";
-import {
-  buildTimeMenuScopeLabels,
-  type TimeMenuScopeLabels,
-} from "@/utils/galleryTimeFilterMenu";
+import { GALLERY_ASPECT_BUCKETS, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
+import { buildTimeMenuScopeLabels, type TimeMenuScopeLabels } from "@/utils/galleryTimeFilterMenu";
 import {
   countProviderPath,
   dateFilterSegment,
@@ -111,10 +104,8 @@ export function createGalleryFacetSource(
 
   // 旧 useProviderTreeList 的显式版：diff 模式走纯净缓存列表，侧栏减格 + 带 count。
   const deltaMode = computed(() => !!ctx.countBaseline);
-  const listPathForSegment = (segment: string) =>
-    (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
-  const listDirs = (path: string) =>
-    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(path);
+  const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
+  const listDirs = (path: string) => (deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(path));
 
   const timeLabels: ComputedRef<TimeMenuScopeLabels> = computed(() =>
     buildTimeMenuScopeLabels(t, String(deps.locale.value)),
@@ -150,11 +141,7 @@ export function createGalleryFacetSource(
       "plugin",
       encodeURIComponent(node.pluginId),
       "extend",
-      normalizeProviderPath(node.extendPath)
-        .split("/")
-        .filter(Boolean)
-        .map(encodeURIComponent)
-        .join("/"),
+      normalizeProviderPath(node.extendPath).split("/").filter(Boolean).map(encodeURIComponent).join("/"),
     ]
       .filter(Boolean)
       .join("/");
@@ -219,17 +206,13 @@ export function createGalleryFacetSource(
       case "date":
         return dateLabel(node.segments);
       case "media-kind":
-        return node.mediaKind === "image"
-          ? t("gallery.filterImageOnly")
-          : t("gallery.filterVideoOnly");
+        return node.mediaKind === "image" ? t("gallery.filterImageOnly") : t("gallery.filterVideoOnly");
       case "media-format":
         return node.format;
       case "size":
         return t(`gallery.${SIZE_BUCKETS.find((b) => b.range === node.range)?.labelKey ?? ""}`);
       case "aspect":
-        return t(
-          `gallery.${GALLERY_ASPECT_BUCKETS.find((b) => b.range === node.range)?.labelKey ?? ""}`,
-        );
+        return t(`gallery.${GALLERY_ASPECT_BUCKETS.find((b) => b.range === node.range)?.labelKey ?? ""}`);
       case "plugin":
         return pluginStore.pluginLabel(node.pluginId);
       case "plugin-extend":
@@ -261,15 +244,9 @@ export function createGalleryFacetSource(
         return !!current && activeSegment.startsWith(`${current}-`);
       }
       case "media-kind":
-        return (
-          filter.type === "media-type" && filter.kind === node.mediaKind && !!filter.format
-        );
+        return filter.type === "media-type" && filter.kind === node.mediaKind && !!filter.format;
       case "plugin":
-        return (
-          filter.type === "plugin" &&
-          filter.pluginId === node.pluginId &&
-          !!filter.extendPath?.trim()
-        );
+        return filter.type === "plugin" && filter.pluginId === node.pluginId && !!filter.extendPath?.trim();
       case "plugin-extend": {
         if (filter.type !== "plugin" || filter.pluginId !== node.pluginId) return false;
         const current = normalizeProviderPath(node.extendPath);
@@ -369,16 +346,10 @@ export function createGalleryFacetSource(
                       count:
                         typeof entry.total === "number"
                           ? entry.total
-                          : await countProviderPath(
-                              ctx.pathForSegment(
-                                `plugin/${encodeURIComponent(entry.name)}`,
-                              ),
-                            ),
+                          : await countProviderPath(ctx.pathForSegment(`plugin/${encodeURIComponent(entry.name)}`)),
                     })),
                   );
-                  ids = groups
-                    .filter((group) => group.pluginId && group.count > 0)
-                    .map((group) => group.pluginId);
+                  ids = groups.filter((group) => group.pluginId && group.count > 0).map((group) => group.pluginId);
                 }
                 return ids.map((pluginId) => ({
                   kind: "plugin",
@@ -390,17 +361,13 @@ export function createGalleryFacetSource(
             return [];
           case "date": {
             const pattern = dateChildPattern(node.segments);
-            const entries = await listDirs(
-              `${listPathForSegment(["date", ...node.segments].join("/"))}/`,
-            );
+            const entries = await listDirs(`${listPathForSegment(["date", ...node.segments].join("/"))}/`);
             return entries
               .filter((entry) => !pattern || pattern.test(entry.name))
               .map((entry) => ({ kind: "date", segments: [...node.segments, entry.name] }));
           }
           case "media-kind": {
-            const entries = await listDirs(
-              `${listPathForSegment(`media-type/${node.mediaKind}`)}/`,
-            );
+            const entries = await listDirs(`${listPathForSegment(`media-type/${node.mediaKind}`)}/`);
             return entries.map((entry) => ({
               kind: "media-format",
               mediaKind: node.mediaKind,
@@ -443,8 +410,7 @@ export function createGalleryFacetSource(
   };
 
   function descriptor(node: FacetNode): FacetDescriptor {
-    const selectable =
-      node.kind !== "dim" && !(node.kind === "plugin-extend" && node.isPlain);
+    const selectable = node.kind !== "dim" && !(node.kind === "plugin-extend" && node.isPlain);
     const filter = filterOnSelect(node);
     return {
       name: nodeName(node),
@@ -483,10 +449,7 @@ export function createGalleryFacetSource(
   return {
     dataSource,
     roots(dimensions) {
-      return [
-        { kind: "any" },
-        ...dimensions.map((dimension) => ({ kind: "dim", dimension }) as FacetNode),
-      ];
+      return [{ kind: "any" }, ...dimensions.map((dimension) => ({ kind: "dim", dimension }) as FacetNode)];
     },
     descriptor,
     childrenRefreshFilter,

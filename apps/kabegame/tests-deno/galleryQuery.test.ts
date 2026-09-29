@@ -30,11 +30,7 @@ function assert(condition: unknown, message = "断言失败"): asserts condition
   if (!condition) fail(message);
 }
 
-function assertEquals(
-  actual: unknown,
-  expected: unknown,
-  message = "值不相等",
-): void {
+function assertEquals(actual: unknown, expected: unknown, message = "值不相等"): void {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
   if (actualJson !== expectedJson) {
@@ -65,27 +61,18 @@ Deno.test("序列化：原子内部与原子到组遵循叶游标规则", () => 
     "wallpaper-order/filter_comb/plugin/pixiv",
   );
   assertEquals(
-    body([
-      { is: { plugin: { pluginId: "pixiv" } } },
-      { any: [[{ is: { name: { bucket: "japanese" } } }]] },
-    ]),
+    body([{ is: { plugin: { pluginId: "pixiv" } } }, { any: [[{ is: { name: { bucket: "japanese" } } }]] }]),
     "plugin/pixiv/filter_comb/~any/name/japanese/~end",
   );
 });
 
 Deno.test("序列化：组与 search 收尾使用枢纽游标", () => {
   assertEquals(
-    body([
-      { any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] },
-      { is: { name: { bucket: "japanese" } } },
-    ]),
+    body([{ any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] }, { is: { name: { bucket: "japanese" } } }]),
     "~any/plugin/pixiv/~end/name/japanese",
   );
   assertEquals(
-    body([
-      { any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] },
-      { not: [{ is: { size: { range: "large" } } }] },
-    ]),
+    body([{ any: [[{ is: { plugin: { pluginId: "pixiv" } } }]] }, { not: [{ is: { size: { range: "large" } } }] }]),
     "~any/plugin/pixiv/~end/~not/size/large/~end",
   );
   assertEquals(
@@ -107,9 +94,11 @@ Deno.test("构建路径：sort 根据叶/枢纽收尾选择连接符", () => {
     }),
     "plugin/pixiv/filter_comb/sort/by-time/1",
   );
-  const group: GalleryAdvancedQuery = [{
-    any: [[{ is: { plugin: { pluginId: "pixiv" } } }]],
-  }];
+  const group: GalleryAdvancedQuery = [
+    {
+      any: [[{ is: { plugin: { pluginId: "pixiv" } } }]],
+    },
+  ];
   assertEquals(
     buildComposablePath({
       filters: group,
@@ -122,9 +111,11 @@ Deno.test("构建路径：sort 根据叶/枢纽收尾选择连接符", () => {
 });
 
 Deno.test("构建与解析：advanced 显式参数保留 noAlbum 与全局 search 上下文", () => {
-  const tree: GalleryAdvancedQuery = [{
-    any: [[{ is: { plugin: { pluginId: "pixiv" } } }]],
-  }];
+  const tree: GalleryAdvancedQuery = [
+    {
+      any: [[{ is: { plugin: { pluginId: "pixiv" } } }]],
+    },
+  ];
   const path = buildComposablePath({
     filters: { noAlbum: true },
     advanced: tree,
@@ -133,10 +124,7 @@ Deno.test("构建与解析：advanced 显式参数保留 noAlbum 与全局 searc
     search: "星空",
     searchMode: "metadata",
   });
-  assertEquals(
-    path,
-    "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/~any/plugin/pixiv/~end/sort/by-time/1",
-  );
+  assertEquals(path, "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/~any/plugin/pixiv/~end/sort/by-time/1");
 
   const parsed = parseComposablePath(path);
   assertEquals(parsed.filters, { noAlbum: true });
@@ -144,52 +132,24 @@ Deno.test("构建与解析：advanced 显式参数保留 noAlbum 与全局 searc
   assertEquals(parsed.searchMode, "metadata");
   assertEquals(parsed.advanced, tree);
   assertEquals(
-    buildComposableCountPath(
-      "",
-      { noAlbum: true },
-      "星空",
-      "metadata",
-      tree,
-    ),
+    buildComposableCountPath("", { noAlbum: true }, "星空", "metadata", tree),
     "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/~any/plugin/pixiv/~end",
   );
   assertEquals(
-    buildAdvancedQueryContextPrefix(
-      { noAlbum: true },
-      "星空",
-      "metadata",
-    ),
+    buildAdvancedQueryContextPrefix({ noAlbum: true }, "星空", "metadata"),
     "no-album/filter_comb/search/metadata/%E6%98%9F%E7%A9%BA/",
   );
 });
 
 Deno.test("高级空树计数：无上下文用 all，noAlbum 上下文用其合法叶", () => {
+  assertEquals(buildComposableCountPath("", {}, "", "display-name", []), "all");
+  assertEquals(buildComposableCountPath("", { noAlbum: true }, "", "display-name", []), "no-album");
   assertEquals(
-    buildComposableCountPath("", {}, "", "display-name", []),
-    "all",
-  );
-  assertEquals(
-    buildComposableCountPath(
-      "",
-      { noAlbum: true },
-      "",
-      "display-name",
-      [],
-    ),
-    "no-album",
-  );
-  assertEquals(
-    advancedQueryRuntimePath(
-      "all",
-      "images://gallery/hide/no-album/filter_comb/",
-    ),
+    advancedQueryRuntimePath("all", "images://gallery/hide/no-album/filter_comb/"),
     "images://gallery/hide/no-album",
   );
   assertEquals(
-    advancedQueryRuntimePath(
-      "plugin",
-      "images://gallery/hide/no-album/filter_comb/",
-    ),
+    advancedQueryRuntimePath("plugin", "images://gallery/hide/no-album/filter_comb/"),
     "images://gallery/hide/no-album/filter_comb/plugin",
   );
 });
@@ -213,19 +173,23 @@ Deno.test("解析：noAlbum + 全局 search 后的单原子仍完整保留", () 
 });
 
 Deno.test("序列化：not、三层嵌套与 any 多分支", () => {
-  const tree: GalleryAdvancedQuery = [{
-    not: [{
-      any: [
-        [
-          {
-            is: { plugin: { pluginId: "pixiv" }, mediaType: { kind: "image" } },
-          },
-          { not: [{ is: { name: { bucket: "japanese" } } }] },
-        ],
-        [{ any: [[{ is: { size: { range: "large" } } }]] }],
+  const tree: GalleryAdvancedQuery = [
+    {
+      not: [
+        {
+          any: [
+            [
+              {
+                is: { plugin: { pluginId: "pixiv" }, mediaType: { kind: "image" } },
+              },
+              { not: [{ is: { name: { bucket: "japanese" } } }] },
+            ],
+            [{ any: [[{ is: { size: { range: "large" } } }]] }],
+          ],
+        },
       ],
-    }],
-  }];
+    },
+  ];
   assertEquals(
     body(tree),
     "~not/~any/plugin/pixiv/filter_comb/media-type/image/filter_comb/~not/name/japanese/~end/~or/~any/size/large/~end/~end/~end",
@@ -233,11 +197,7 @@ Deno.test("序列化：not、三层嵌套与 any 多分支", () => {
 });
 
 Deno.test("规范化：空树、空原子、空分支与空 not 被剔除", () => {
-  const tree: GalleryAdvancedQuery = [
-    { is: {} },
-    { any: [[], [{ is: {} }]] },
-    { not: [{ is: {} }] },
-  ];
+  const tree: GalleryAdvancedQuery = [{ is: {} }, { any: [[], [{ is: {} }]] }, { not: [{ is: {} }] }];
   assert(isEmptyQuery(tree));
   assertEquals(normalizeQuery(tree), []);
   assertEquals(serializeAdvancedQuery(tree), { body: "all", endsAtHub: false });
@@ -281,19 +241,20 @@ Deno.test("解析：未闭合组、错位记号与未知记号返回 null", () =
 
 Deno.test("stripSearchPrefix：全局前缀照剥，原子 search 守卫不剥", () => {
   const global = parseComposablePath("search/metadata/星空/sort/by-time/1");
-  assertEquals({
-    search: global.search,
-    mode: global.searchMode,
-    advanced: global.advanced,
-  }, {
-    search: "星空",
-    mode: "metadata",
-    advanced: undefined,
-  });
-
-  const local = parseComposablePath(
-    "search/metadata/星空/filter_comb/~any/plugin/pixiv/~end/sort/by-time/1",
+  assertEquals(
+    {
+      search: global.search,
+      mode: global.searchMode,
+      advanced: global.advanced,
+    },
+    {
+      search: "星空",
+      mode: "metadata",
+      advanced: undefined,
+    },
   );
+
+  const local = parseComposablePath("search/metadata/星空/filter_comb/~any/plugin/pixiv/~end/sort/by-time/1");
   assertEquals(local.search, "");
   assertEquals(local.advanced, [
     { is: { search: { mode: "metadata", query: "星空" } } },
@@ -320,12 +281,14 @@ Deno.test("stripSearchPrefix：全局搜索与原子 search 可同时存在", ()
 });
 
 Deno.test("NodePath：定位、不可变更新、删除与 not 奇偶", () => {
-  const tree: GalleryAdvancedQuery = [{
-    any: [
-      [{ not: [{ not: [{ is: { plugin: { pluginId: "pixiv" } } }] }] }],
-      [{ not: [{ is: { name: { bucket: "japanese" } } }] }],
-    ],
-  }];
+  const tree: GalleryAdvancedQuery = [
+    {
+      any: [
+        [{ not: [{ not: [{ is: { plugin: { pluginId: "pixiv" } } }] }] }],
+        [{ not: [{ is: { name: { bucket: "japanese" } } }] }],
+      ],
+    },
+  ];
   const evenPath = [0, 0, 0, 0, 0];
   const oddPath = [0, 1, 0, 0];
   assertEquals(getNode(tree, evenPath), {
@@ -334,22 +297,25 @@ Deno.test("NodePath：定位、不可变更新、删除与 not 奇偶", () => {
   assertEquals(notParity(tree, evenPath), false);
   assertEquals(notParity(tree, oddPath), true);
 
-  const updated = updateNode(
-    tree,
-    evenPath,
-    () => ({ is: { size: { range: "large" } } }),
-  );
+  const updated = updateNode(tree, evenPath, () => ({ is: { size: { range: "large" } } }));
   assertEquals(getNode(updated, evenPath), {
     is: { size: { range: "large" } },
   });
   assertEquals(getNode(tree, evenPath), {
     is: { plugin: { pluginId: "pixiv" } },
   });
-  assertEquals(removeNode(updated, evenPath), [{
-    any: [[{ not: [{ not: [] }] }], [{
-      not: [{ is: { name: { bucket: "japanese" } } }],
-    }]],
-  }]);
+  assertEquals(removeNode(updated, evenPath), [
+    {
+      any: [
+        [{ not: [{ not: [] }] }],
+        [
+          {
+            not: [{ is: { name: { bucket: "japanese" } } }],
+          },
+        ],
+      ],
+    },
+  ]);
 });
 
 Deno.test("conditionCount 统计所有 is 节点", () => {
@@ -362,38 +328,28 @@ Deno.test("conditionCount 统计所有 is 节点", () => {
 
 Deno.test("facetListPath：普通减格、not 解包与 mediaType 映射", () => {
   assertEquals(facetListPath([{ is: {} }], [0], "plugin"), "plugin");
-  assertEquals(
-    facetListPath(
-      [{ is: { plugin: { pluginId: "pixiv" } } }],
-      [0],
-      "plugin",
-    ),
-    "plugin",
-  );
+  assertEquals(facetListPath([{ is: { plugin: { pluginId: "pixiv" } } }], [0], "plugin"), "plugin");
 
-  const ordinary: GalleryAdvancedQuery = [{
-    is: { plugin: { pluginId: "pixiv" }, date: { segment: "2026-08" } },
-  }];
-  assertEquals(
-    facetListPath(ordinary, [0], "plugin"),
-    "date/2026y/08m/filter_comb/plugin",
-  );
+  const ordinary: GalleryAdvancedQuery = [
+    {
+      is: { plugin: { pluginId: "pixiv" }, date: { segment: "2026-08" } },
+    },
+  ];
+  assertEquals(facetListPath(ordinary, [0], "plugin"), "date/2026y/08m/filter_comb/plugin");
 
-  const negated: GalleryAdvancedQuery = [{
-    not: [{ is: { plugin: { pluginId: "pixiv" }, date: { segment: "2026" } } }],
-  }];
-  assertEquals(
-    facetListPath(negated, [0, 0], "plugin"),
-    "date/2026y/filter_comb/plugin",
-  );
+  const negated: GalleryAdvancedQuery = [
+    {
+      not: [{ is: { plugin: { pluginId: "pixiv" }, date: { segment: "2026" } } }],
+    },
+  ];
+  assertEquals(facetListPath(negated, [0, 0], "plugin"), "date/2026y/filter_comb/plugin");
 
-  const media: GalleryAdvancedQuery = [{
-    is: { plugin: { pluginId: "pixiv" }, mediaType: { kind: "image" } },
-  }];
-  assertEquals(
-    facetListPath(media, [0], "mediaType"),
-    "plugin/pixiv/filter_comb/media-type",
-  );
+  const media: GalleryAdvancedQuery = [
+    {
+      is: { plugin: { pluginId: "pixiv" }, mediaType: { kind: "image" } },
+    },
+  ];
+  assertEquals(facetListPath(media, [0], "mediaType"), "plugin/pixiv/filter_comb/media-type");
   assertThrows(() => facetListPath(media, [0], "wallpaperOrder"));
 });
 
@@ -409,13 +365,15 @@ Deno.test("简单过滤转高级首行：保留媒体格式与壁纸，noAlbum/e
         plugin: { pluginId: "pixiv", extendPath: "ranking/daily" },
         mediaType: { kind: "video", format: "mp4" },
       }),
-      [{
-        is: {
-          wallpaperOrder: true,
-          plugin: { pluginId: "pixiv" },
-          mediaType: { kind: "video", format: "mp4" },
+      [
+        {
+          is: {
+            wallpaperOrder: true,
+            plugin: { pluginId: "pixiv" },
+            mediaType: { kind: "video", format: "mp4" },
+          },
         },
-      }],
+      ],
     );
     assertEquals(warnings.length, 1);
     assert(warnings[0]!.includes("extendPath"));
@@ -427,15 +385,19 @@ Deno.test("简单过滤转高级首行：保留媒体格式与壁纸，noAlbum/e
 Deno.test("search 使用双层编码（pathql 转义 + percent）并可逆", () => {
   // 双层编码：先 encodeSeg（`~星空` 前导 `~` 转义为 `\~`），再 percent——
   // 反斜线与中文都落进传输层，body 里不再出现裸反斜线或裸 `/`。
-  const tilde: GalleryAdvancedQuery = [{
-    any: [[{ is: { search: { mode: "metadata", query: "~星空" } } }]],
-  }];
+  const tilde: GalleryAdvancedQuery = [
+    {
+      any: [[{ is: { search: { mode: "metadata", query: "~星空" } } }]],
+    },
+  ];
   assert(body(tilde).includes("search/metadata/%5C~%E6%98%9F%E7%A9%BA"));
   assertEquals(roundTrip(tilde), normalizeQuery(tilde));
 
-  const slash: GalleryAdvancedQuery = [{
-    any: [[{ is: { search: { mode: "metadata", query: "a/b" } } }]],
-  }];
+  const slash: GalleryAdvancedQuery = [
+    {
+      any: [[{ is: { search: { mode: "metadata", query: "a/b" } } }]],
+    },
+  ];
   assert(body(slash).includes("search/metadata/a%5C%2Fb"));
   assertEquals(roundTrip(slash), normalizeQuery(slash));
 });
@@ -446,24 +408,13 @@ Deno.test("解析严格性：不可表达的路径整体回退为 null", () => {
   // 空 ~not = NOT(恒真)。
   assertEquals(parseAdvancedBody("~not/~end".split("/")), null);
   // 树上无法表达的维度 chunk(no-album / date-range / 未知段)整体回退。
-  assertEquals(
-    parseAdvancedBody("~any/no-album/~or/plugin/pixiv/~end".split("/")),
-    null,
-  );
-  assertEquals(
-    parseAdvancedBody("~any/date-range/2024~2025/~or/plugin/pixiv/~end".split("/")),
-    null,
-  );
-  assertEquals(
-    parseAdvancedBody("~any/bogus-dimension/x/~or/plugin/pixiv/~end".split("/")),
-    null,
-  );
+  assertEquals(parseAdvancedBody("~any/no-album/~or/plugin/pixiv/~end".split("/")), null);
+  assertEquals(parseAdvancedBody("~any/date-range/2024~2025/~or/plugin/pixiv/~end".split("/")), null);
+  assertEquals(parseAdvancedBody("~any/bogus-dimension/x/~or/plugin/pixiv/~end".split("/")), null);
 });
 
 Deno.test("解析降级：parseComposablePath 对坏高级路径给空过滤而非平铺", () => {
-  const parsed = parseComposablePath(
-    "~any/plugin/pixiv/filter_comb/date/2024y/~or/~end/sort/by-time/1",
-  );
+  const parsed = parseComposablePath("~any/plugin/pixiv/filter_comb/date/2024y/~or/~end/sort/by-time/1");
   assertEquals(parsed.advanced, undefined);
   // 不许把组内的 plugin/date 摊平进简单过滤。
   assertEquals(parsed.filters, {});
@@ -474,27 +425,23 @@ Deno.test("降解：单条 is 可以还原成简单过滤，或/非/多条件不
   // 工具栏「高级 → 简单」靠这个判断决定是平移还是清空。
   assertEquals(simpleFiltersFromAdvancedQuery([]), { filters: {}, search: null });
 
-  const single: GalleryAdvancedQuery = [{
-    is: {
-      plugin: { pluginId: "pixiv" },
-      search: { mode: "metadata", query: "初音" },
+  const single: GalleryAdvancedQuery = [
+    {
+      is: {
+        plugin: { pluginId: "pixiv" },
+        search: { mode: "metadata", query: "初音" },
+      },
     },
-  }];
+  ];
   assertEquals(simpleFiltersFromAdvancedQuery(single), {
     filters: { plugin: { pluginId: "pixiv" } },
     search: { mode: "metadata", query: "初音" },
   });
 
   // 或组：简单过滤行没有「或」，只能清空。
-  assertEquals(
-    simpleFiltersFromAdvancedQuery([{ any: [[{ is: { wallpaperOrder: true } }]] }]),
-    null,
-  );
+  assertEquals(simpleFiltersFromAdvancedQuery([{ any: [[{ is: { wallpaperOrder: true } }]] }]), null);
   // 取非同理。
-  assertEquals(
-    simpleFiltersFromAdvancedQuery([{ not: [{ is: { wallpaperOrder: true } }] }]),
-    null,
-  );
+  assertEquals(simpleFiltersFromAdvancedQuery([{ not: [{ is: { wallpaperOrder: true } }] }]), null);
   // 同一维度两次取值，归一化后是两个节点，简单过滤只能存一个。
   assertEquals(
     simpleFiltersFromAdvancedQuery([
@@ -505,13 +452,7 @@ Deno.test("降解：单条 is 可以还原成简单过滤，或/非/多条件不
   );
 });
 
-const DOUBLE_LAYER_ROUND_TRIP_QUERIES = [
-  "C:\\Users\\me",
-  "https://x.com/a/",
-  "%E8%90%A4",
-  "50%off",
-  "~tilde",
-];
+const DOUBLE_LAYER_ROUND_TRIP_QUERIES = ["C:\\Users\\me", "https://x.com/a/", "%E8%90%A4", "50%off", "~tilde"];
 
 Deno.test("双层编码往返：简单模式 search 原样还原，且不吞后续 tail 段", () => {
   for (const q of DOUBLE_LAYER_ROUND_TRIP_QUERIES) {

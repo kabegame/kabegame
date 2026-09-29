@@ -6,7 +6,11 @@ export function useDragScroll(container: Ref<HTMLElement | null>) {
   watch(
     container,
     (newVal) => {
-      console.log("[拖拽滚动调试] useDragScroll watch 触发", { hasContainer: !!newVal, containerTag: newVal?.tagName, containerClass: newVal?.className });
+      console.log("[拖拽滚动调试] useDragScroll watch 触发", {
+        hasContainer: !!newVal,
+        containerTag: newVal?.tagName,
+        containerClass: newVal?.className,
+      });
       if (dropScroll) {
         console.log("[拖拽滚动调试] 清理旧的拖拽滚动");
         dropScroll();
@@ -33,6 +37,6 @@ export function useDragScroll(container: Ref<HTMLElement | null>) {
         console.log("[拖拽滚动调试] 容器为空，跳过启用");
       }
     },
-    { immediate: true, flush: "post" }
+    { immediate: true, flush: "post" },
   );
 }

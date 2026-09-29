@@ -185,6 +185,17 @@ ModePlugin 注入的环境变量算出，测试环境必须与应用一致，不
 
 ### 其他
 ```bash
+deno task format                 # Prettier 格式化前端源码（apps/ 与 packages/ 的代码文件）
+                                 # 配置：根目录 .prettierrc.json（printWidth 120、双引号、分号、
+                                 # 2 空格、尾逗号 all、LF、htmlWhitespaceSensitivity=ignore）。
+                                 # 排除（见 .prettierignore）：3 个 submodule（plugin-sdk /
+                                 # kabegame-types / photoswipe-vue，格式化会污染独立仓库）、
+                                 # 2 个 vendored fork（element-plus / element-plus-icons）、
+                                 # 生成物 pathql-client/index.ts；*.md 不在范围内。
+                                 # 模板里需要紧贴的拼接用精确的 <!-- prettier-ignore --> 钉住。
+                                 # 不挂 pre-commit 钩子，属显式动作。规则见
+                                 # .cursor/rules/code-formatting.mdc
+deno task format:check           # 同上但只检查不写入（prettier --check），退出码非 0 即有文件不合规
 deno task set-version            # 在整个 workspace 中更新版本号
 deno task pathql:generate        # 生成 PathQL 客户端 packages/kabegame-pathql-client/index.ts
                                  # (deno TS 脚本 scripts/generate-pathql-client.ts:默认先增量

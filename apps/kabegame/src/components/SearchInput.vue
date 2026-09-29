@@ -32,7 +32,7 @@ watch(
   () => props.modelValue,
   (v) => {
     if ((v ?? "") !== local.value) local.value = v ?? "";
-  }
+  },
 );
 
 let debounceTimer: number | null = null;

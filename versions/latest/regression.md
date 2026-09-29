@@ -511,3 +511,24 @@ macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍�
 | [ ] | anime-pictures 星数与主色 | 画廊筛选树 → anime-pictures | 展开 `stars`、`color` 并选中 | 星数档同上；color 按图片数降序列出站点颜色名（含 `indian red` 这类带空格的名字）且可选中 | 早期无 details 颜色项的图不出现在 color 下 |
 | [ ] | danbooru 详情侧栏 | 任一 danbooru 图详情 | 打开图片详情 | 不再显示 Prompt 文本框与复制按钮；标签、统计、画师评论、快照提示正常 | |
 | [ ] | VD 插件扩展目录 | Windows / macOS / Linux 虚拟盘 | 打开 插件 → 三个插件 → Extend | 目录与画廊树一致；`5+` 等目录名可正常打开 | |
+
+## 前端统一格式化（Prettier）
+
+本版引入 Prettier 3 作为前端统一格式化器（配置 `.prettierrc.json`：printWidth 120、双引号、分号、2 空格、尾逗号 all、LF、**`htmlWhitespaceSensitivity: "ignore"`**），并对 `apps/` 与 `packages/` 全量执行过一次。命令 `deno task format` / `deno task format:check`，**不挂 pre-commit 钩子**。
+
+排除项（`.prettierignore`）：三个 git **submodule**（`kabegame-plugin-sdk`、`kabegame-types`、`photoswipe-vue`——Prettier 只认目录树不认 submodule，首次配置时实测把脏改动写进了这三个独立仓库，用 `git -C <dir> checkout -- .` 还原后加入排除）、两个 vendored fork（`kabegame-element-plus`、`kabegame-element-plus-icons`）、生成物 `packages/kabegame-pathql-client/index.ts`；`*.md` 不在范围内。
+
+**模板空白策略**：`htmlWhitespaceSensitivity` 由默认的 `css` 改为 `ignore`。默认值下 Prettier 把 `el-dropdown-item` 这类自定义组件当行内元素（它不解析 UnoCSS 工具类），只能产出 `><el-icon>…</el-icon></el-dropdown-item\n>` 这种标签内折行，全仓 46 处 / 16 个文件。改 `ignore` 后降到 8 处，代价是 Prettier 不再保护空白——切换时对 30 个受影响文件逐处核对（判据：元素内容首尾的空格增删，在该元素前后本就有空白、或父容器是 flex / inline-flex、或元素被 blockify 时渲染不变），**只有一处是真实渲染变化**：`apps/kabegame/src/views/Surf.vue` 搜索建议的 `pre`/`hit`/`post` 三段拼接，已用精确的一行 `<!-- prettier-ignore -->` 钉住（该指令多一个字即失效，说明写在它上面的普通注释里）。
+
+自动化已通过：`deno task format:check` 全绿（退出码 0）、`format` 二次执行改写 0 个文件（幂等）、`check-kabegame --skip cargo` 报 0 个 error（19s）、三个 submodule 工作区干净。**未做真机渲染回归**，下表是需要上设备确认的部分。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 格式化检查幂等 | 任一平台 | 依次执行 `deno task format:check`、`deno task format`，再 check | 两次都报 All matched files use Prettier code style；第二次 format 改写 0 个文件 | 已实测 |
+| [x] | 类型检查 | 任一平台 | `check-kabegame --skip cargo` | 0 个 error | 已实测，19s |
+| [x] | submodule 未被触碰 | 任一平台 | `git -C packages/kabegame-plugin-sdk status --porcelain`（kabegame-types、photoswipe-vue 同理） | 三个都是空 | 已实测；首次配置时曾写入，已还原并加入 `.prettierignore` |
+| [x] | 搜索建议高亮紧贴 | 桌面 | 畅游输入框输入会命中插件 / 历史的关键词，观察候选行高亮片段 | 高亮段与前后文字无缝（"kabegame" 的 "kabe" 加粗后整体仍是一个词），不出现 "ka begame" 这类被空格撑开的情况 | `.surf-suggest-label`；本版唯一被 `prettier-ignore` 钉住的一行 |
+| [ ] | 下拉菜单与按钮内间距 | 桌面 / Android | 打开画册树「⋯」菜单、失败图片弹窗的下拉、各类 `el-button` | 图标与文字间距与格式化前一致，无粘连或多余空隙 | `el-dropdown-item`、`el-button > span` 均为 flex，空白文本节点被忽略，此处做复核 |
+| [ ] | 画册树与分页 | 桌面 / Android | 展开画册树并翻「加载更多」；打开「加入画册」选择器；拖拽移动画册 | 展开、翻页、选中、右键、拖拽均正常，无控制台报错 | 本版改动最集中的业务文件之一 |
+| [x] | 长文本与自动换行 | 桌面 | 查看插件说明、任务日志、设置项描述这类长段落 | 折行位置合理，无溢出、无横向滚动 | printWidth 由无约束变为 120 |
+| [ ] | 编辑器与 CI 一致 | 任一平台 | 用编辑器保存一个 `.vue` 文件，再跑 `deno task format:check` | 保存后无需再格式化（编辑器读取同一份 `.prettierrc.json`） | 编辑器插件配置由各自负责，本仓不提交 `.vscode` 强制项 |

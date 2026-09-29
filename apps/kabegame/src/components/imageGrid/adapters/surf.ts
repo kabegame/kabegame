@@ -19,8 +19,7 @@ export function createSurfImagesAdapter(params: {
   return {
     id: "surf",
     routeStore,
-    isActive: () =>
-      router.currentRoute.value.name === "SurfImages" && !!routeStore.host,
+    isActive: () => router.currentRoute.value.name === "SurfImages" && !!routeStore.host,
     rootPathFallback: () => (routeStore.host ? `surf/${routeStore.host}/1` : ""),
     computeCountPath: stripComposablePathTail,
     onCountError: (_error, ctx) => ctx.images.value.length,
@@ -31,8 +30,7 @@ export function createSurfImagesAdapter(params: {
     changes: {
       relevant: (batch) => {
         const rid = params.recordId();
-        return !!rid && batch.images.size > 0 &&
-          (batch.wildcard.surf || batch.surfRecordIds.has(rid));
+        return !!rid && batch.images.size > 0 && (batch.wildcard.surf || batch.surfRecordIds.has(rid));
       },
     },
     actionsOptions: () => ({
@@ -42,10 +40,7 @@ export function createSurfImagesAdapter(params: {
     remove: {
       dialogText: (count) => ({
         title: t("surf.confirmDelete"),
-        message:
-          count > 1
-            ? t("surf.removeMessageMulti", { count })
-            : t("surf.removeMessageSingle"),
+        message: count > 1 ? t("surf.removeMessageMulti", { count }) : t("surf.removeMessageSingle"),
       }),
     },
   };

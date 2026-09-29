@@ -1,16 +1,6 @@
-import {
-  computed,
-  type MaybeRefOrGetter,
-  onScopeDispose,
-  ref,
-  toValue,
-  watch,
-} from "vue";
+import { computed, type MaybeRefOrGetter, onScopeDispose, ref, toValue, watch } from "vue";
 import { pathqlEntry } from "@/services/pathql";
-import {
-  queryRuntimePath,
-  GALLERY_ASPECT_BUCKETS,
-} from "@/utils/galleryPath";
+import { queryRuntimePath, GALLERY_ASPECT_BUCKETS } from "@/utils/galleryPath";
 import {
   type GalleryFilter,
   type GalleryQuery,
@@ -48,11 +38,7 @@ const SIZE_LABEL_KEYS: Record<string, string> = {
  * 维度选中值 → 本地化展示文案(chip 未打开下拉时也要有正确文案)。
  * plugin 由调用侧经 pluginLabel 解析(store 依赖不进本纯函数)。
  */
-export function facetValueLabel(
-  dimension: FacetDimension,
-  value: string,
-  t: (key: string) => string,
-): string {
+export function facetValueLabel(dimension: FacetDimension, value: string, t: (key: string) => string): string {
   if (dimension === "mediaType") {
     if (value === "image") return t("gallery.filterImageOnlyLabel");
     if (value === "video") return t("gallery.filterVideoOnlyLabel");
@@ -87,16 +73,11 @@ export function useDimensionFacet(
   dimension: FacetDimension,
   contextPrefix: MaybeRefOrGetter<string> = "images://gallery/",
 ) {
-  const treeRootPath = computed(() =>
-    queryRuntimePath(FACET_SEGMENTS[dimension], toValue(contextPrefix))
-  );
+  const treeRootPath = computed(() => queryRuntimePath(FACET_SEGMENTS[dimension], toValue(contextPrefix)));
   const baseline = useAdvancedHitCount(tree, contextPrefix);
 
   function listPathForSegment(segment: string): string {
-    return queryRuntimePath(
-      segment.replace(/^\/+|\/+$/g, ""),
-      toValue(contextPrefix),
-    );
+    return queryRuntimePath(segment.replace(/^\/+|\/+$/g, ""), toValue(contextPrefix));
   }
 
   function pathForSegment(segment: string): string {
@@ -107,10 +88,7 @@ export function useDimensionFacet(
     if (normalized && normalized !== "all") {
       filter = filterFromTreeSegment(normalized);
       // 追加高级条件可能包装进组；插件细分在选择时降级为裸插件，预测保持同一口径。
-      if (
-        filter.type === "plugin" &&
-        filter.extendPath?.trim()
-      ) {
+      if (filter.type === "plugin" && filter.extendPath?.trim()) {
         filter = { type: "plugin", pluginId: filter.pluginId };
       }
     }
@@ -158,10 +136,7 @@ export function useAdvancedHitCount(
           if (token === requestToken) count.value = entry.total ?? 0;
         } catch (error) {
           if (token === requestToken) count.value = undefined;
-          console.error(
-            `[advanced-query] hit count failed: ${nextPath}`,
-            error,
-          );
+          console.error(`[advanced-query] hit count failed: ${nextPath}`, error);
         } finally {
           if (token === requestToken) loading.value = false;
         }

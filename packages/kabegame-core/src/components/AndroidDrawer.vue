@@ -2,16 +2,9 @@
   <div v-bind="$attrs">
     <Teleport to="body">
       <Transition name="android-drawer-fade">
-        <div
-          v-show="showWrap"
-          class="android-drawer-wrap"
-          @click.self="handleBackdropClick">
+        <div v-show="showWrap" class="android-drawer-wrap" @click.self="handleBackdropClick">
           <!-- 背景遮罩：透明度随 offset 变化 -->
-          <div
-            class="android-drawer-backdrop"
-            :style="{ opacity: backdropOpacity }"
-            @click="handleBackdropClick"
-          />
+          <div class="android-drawer-backdrop" :style="{ opacity: backdropOpacity }" @click="handleBackdropClick" />
           <!-- 抽屉面板：宽度 100%，可拖拽滑出 -->
           <div
             ref="panelRef"
@@ -63,7 +56,7 @@ const props = withDefaults(
     showCloseButton?: boolean;
     zIndex?: number;
   }>(),
-  { closeThreshold: 0.25, showCloseButton: true }
+  { closeThreshold: 0.25, showCloseButton: true },
 );
 
 const emit = defineEmits<{
@@ -77,8 +70,8 @@ const emit = defineEmits<{
 const fallbackModal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(
   () => props.modelValue && props.zIndex == null,
-  (v) => v ? fallbackModal.open() : fallbackModal.close(),
-  { immediate: true }
+  (v) => (v ? fallbackModal.open() : fallbackModal.close()),
+  { immediate: true },
 );
 const effectiveZIndex = computed(() => props.zIndex ?? fallbackModal.zIndex.value);
 
@@ -222,7 +215,7 @@ watch(
         isClosing.value = false;
       }
     }
-  }
+  },
 );
 
 let touchMoveCleanup: (() => void) | null = null;
@@ -238,7 +231,7 @@ watch(
       };
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 onUnmounted(() => {
   touchMoveCleanup?.();
@@ -315,7 +308,9 @@ onUnmounted(() => {
   background: transparent;
   color: var(--el-text-color-regular, rgba(255, 255, 255, 0.85));
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   -webkit-tap-highlight-color: transparent;
   position: relative;
   z-index: 1;

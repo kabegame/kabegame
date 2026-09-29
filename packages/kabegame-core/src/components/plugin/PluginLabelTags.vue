@@ -1,12 +1,7 @@
 <template>
   <!-- 固定槽位：每枚内置标签占一列，插件没有的留等宽空位，好让各行同列可纵向对比 -->
   <div v-if="fixedSlots" class="flex gap-1">
-    <KbLabel
-      v-for="id in PLUGIN_LABEL_IDS"
-      :key="id"
-      :label="byId.get(id) ?? null"
-      :size="size"
-    />
+    <KbLabel v-for="id in PLUGIN_LABEL_IDS" :key="id" :label="byId.get(id) ?? null" :size="size" />
   </div>
 
   <div v-else-if="dedupedSorted.length" class="flex flex-wrap gap-1">
@@ -17,11 +12,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import KbLabel from "./KbLabel.vue";
-import {
-  comparePluginLabels,
-  PLUGIN_LABEL_IDS,
-  type PluginLabel,
-} from "../../stores/pluginLabels";
+import { comparePluginLabels, PLUGIN_LABEL_IDS, type PluginLabel } from "../../stores/pluginLabels";
 
 const props = withDefaults(
   defineProps<{
@@ -52,7 +43,5 @@ const byId = computed(() => {
 // 非固定槽位模式：仍按 registry 顺序紧凑排列（见 comparePluginLabels），
 // 插件声明顺序、后端合成标签（如 app.versionIncompatible）的追加位置
 // 都不该影响展示顺序，否则同一插件在不同入口里标签顺序会跳。
-const dedupedSorted = computed(() =>
-  [...byId.value.values()].sort(comparePluginLabels),
-);
+const dedupedSorted = computed(() => [...byId.value.values()].sort(comparePluginLabels));
 </script>

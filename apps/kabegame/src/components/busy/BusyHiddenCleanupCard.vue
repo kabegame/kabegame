@@ -5,9 +5,7 @@
       <span class="min-w-0 truncate text-[13px] font-700 text-[var(--anime-text-primary)]">
         {{ t("gallery.hiddenCleanupTitle") }}
       </span>
-      <span class="ml-auto shrink-0 font-mono text-xs text-[#8b6b8f]">
-        {{ store.progressPercentage }}%
-      </span>
+      <span class="ml-auto shrink-0 font-mono text-xs text-[#8b6b8f]">{{ store.progressPercentage }}%</span>
       <button
         type="button"
         class="busy-task-cancel"

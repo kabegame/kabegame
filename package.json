@@ -26,7 +26,9 @@
     "build:v8": "deno run -A scripts/build-v8.ts",
     "build:web": "deno run -A scripts/build-web.ts",
     "pathql:generate": "deno run -A scripts/generate-pathql-client.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "format": "prettier --write apps packages",
+    "format:check": "prettier --check apps packages"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
@@ -51,6 +53,7 @@
     "glob": "^13.0.6",
     "handlebars": "^4.7.9",
     "husky": "^9.1.7",
+    "prettier": "^3.9.9",
     "sass": "^1.102.0",
     "sharp": "^0.34.5",
     "tapable": "^2.3.3",

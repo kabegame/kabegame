@@ -31,15 +31,11 @@ export const useBatteryOptimizationStore = defineStore("batteryOptimization", ()
     if (!isOptimized.value) return;
     if (!options?.force && hasShownAutoPromptThisSession.value) return;
     try {
-      await ElMessageBox.confirm(
-        t("common.batteryOptimizationDesc"),
-        t("common.batteryOptimizationTitle"),
-        {
-          confirmButtonText: t("common.batteryOptimizationConfirm"),
-          cancelButtonText: t("common.batteryOptimizationCancel"),
-          type: "warning",
-        },
-      );
+      await ElMessageBox.confirm(t("common.batteryOptimizationDesc"), t("common.batteryOptimizationTitle"), {
+        confirmButtonText: t("common.batteryOptimizationConfirm"),
+        cancelButtonText: t("common.batteryOptimizationCancel"),
+        type: "warning",
+      });
       hasShownAutoPromptThisSession.value = true;
       await requestBatteryOptimizationExemption();
       window.setTimeout(() => {

@@ -2,12 +2,7 @@ import { Ref, onUnmounted } from "vue";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@/api/rpc";
-import {
-  DragFileItem,
-  DragFilePlan,
-  DragFileZone,
-  hitTestDragZone,
-} from "@/directives/dragFile";
+import { DragFileItem, DragFilePlan, DragFileZone, hitTestDragZone } from "@/directives/dragFile";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import { claimInternalDrag } from "@kabegame/core/utils/dragExport";
 // #region debug-drag
@@ -85,19 +80,27 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
 
       fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
         // #region debug-drag
-        void sendDebugEvent("tauri_drag", {
-          type: event.payload.type,
-          sessionInternal,
-          hasItems: !!sessionItems,
-          paths: "paths" in event.payload ? event.payload.paths : undefined,
-        }, { sessionId: "drag-internal" });
+        void sendDebugEvent(
+          "tauri_drag",
+          {
+            type: event.payload.type,
+            sessionInternal,
+            hasItems: !!sessionItems,
+            paths: "paths" in event.payload ? event.payload.paths : undefined,
+          },
+          { sessionId: "drag-internal" },
+        );
         // #endregion debug-drag
         // 会话开始：认领应用内起手。Linux CEF 上内部拖拽有时不发 enter，首个事件就是 over。
         if (event.payload.type === "enter" || (!sessionStarted && event.payload.type !== "leave")) {
           sessionStarted = true;
           sessionInternal = claimInternalDrag();
           // #region debug-drag
-          void sendDebugEvent("session_start", { via: event.payload.type, sessionInternal }, { sessionId: "drag-internal" });
+          void sendDebugEvent(
+            "session_start",
+            { via: event.payload.type, sessionInternal },
+            { sessionId: "drag-internal" },
+          );
           // #endregion debug-drag
         }
 
@@ -184,7 +187,11 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
 
           if (!zone || !plan) {
             // #region debug-drag
-            void sendDebugEvent("drop_unsupported", { zone: !!zone, plan: !!plan, items: items?.length }, { sessionId: "drag-internal" });
+            void sendDebugEvent(
+              "drop_unsupported",
+              { zone: !!zone, plan: !!plan, items: items?.length },
+              { sessionId: "drag-internal" },
+            );
             // #endregion debug-drag
             ElMessage.info(i18n.global.t("import.dropUnsupportedHere"));
             return;
@@ -195,9 +202,7 @@ export function useFileDrop(fileDropOverlayRef: Ref<any>) {
           } catch (error) {
             console.error("[FileDrop] 处理文件拖入失败:", error);
             ElMessage.error(
-              `${i18n.global.t("import.fileDropFailed")}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
+              `${i18n.global.t("import.fileDropFailed")}: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
         } else if (event.payload.type === "leave") {

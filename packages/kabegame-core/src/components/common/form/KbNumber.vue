@@ -119,7 +119,7 @@ watch(
     if (isEditing.value) return;
     inputText.value = formatNumber(numberValue.value ?? effectiveMin.value);
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 /** 滑杆接管：输入框退出编辑态，回到跟随 modelValue 的受控显示 */

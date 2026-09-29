@@ -1,26 +1,36 @@
 <template>
-    <div class="android-picker-number" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
-        <span class="android-picker-number__value" :class="{ 'is-placeholder': numberValue === undefined }">
-            {{ numberValue !== undefined ? numberValue : resolvedPlaceholder }}
-        </span>
-        <el-icon class="android-picker-number__arrow">
-            <ArrowDown />
-        </el-icon>
-    </div>
+  <div class="android-picker-number" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
+    <span class="android-picker-number__value" :class="{ 'is-placeholder': numberValue === undefined }">
+      {{ numberValue !== undefined ? numberValue : resolvedPlaceholder }}
+    </span>
+    <el-icon class="android-picker-number__arrow">
+      <ArrowDown />
+    </el-icon>
+  </div>
 
-    <Teleport to="body">
-        <van-popup :show="isOpen" position="bottom" round :z-index="zIndex" @update:show="v => { if (!v) close() }">
-            <van-picker
-                v-model="pickerSelectedValues"
-                :title="resolvedTitle"
-                :columns="pickerColumns"
-                :confirm-button-text="t('common.confirm')"
-                :cancel-button-text="t('common.cancel')"
-                @confirm="onPickerConfirm"
-                @cancel="close()"
-            />
-        </van-popup>
-    </Teleport>
+  <Teleport to="body">
+    <van-popup
+      :show="isOpen"
+      position="bottom"
+      round
+      :z-index="zIndex"
+      @update:show="
+        (v) => {
+          if (!v) close();
+        }
+      "
+    >
+      <van-picker
+        v-model="pickerSelectedValues"
+        :title="resolvedTitle"
+        :columns="pickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onPickerConfirm"
+        @cancel="close()"
+      />
+    </van-popup>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -30,16 +40,16 @@ import { ArrowDown } from "@kabegame/element-plus-icons";
 import { useModal } from "../composables/useModal";
 
 const props = withDefaults(
-    defineProps<{
-        modelValue: number | undefined;
-        min?: number;
-        max?: number;
-        step?: number;
-        title?: string;
-        placeholder?: string;
-        disabled?: boolean;
-    }>(),
-    { min: 0, max: 100, step: 1, title: undefined, placeholder: undefined, disabled: false }
+  defineProps<{
+    modelValue: number | undefined;
+    min?: number;
+    max?: number;
+    step?: number;
+    title?: string;
+    placeholder?: string;
+    disabled?: boolean;
+  }>(),
+  { min: 0, max: 100, step: 1, title: undefined, placeholder: undefined, disabled: false },
 );
 
 const { t } = useI18n();
@@ -47,110 +57,110 @@ const resolvedTitle = computed(() => props.title ?? t("common.selectPlaceholder"
 const resolvedPlaceholder = computed(() => props.placeholder ?? t("common.selectPlaceholder"));
 
 const emit = defineEmits<{
-    "update:modelValue": [value: number | undefined];
+  "update:modelValue": [value: number | undefined];
 }>();
 
 const { isOpen, zIndex, open, close } = useModal();
 
 const numberValue = computed(() => {
-    const v = props.modelValue;
-    if (typeof v !== "number" || Number.isNaN(v)) return undefined;
-    return v;
+  const v = props.modelValue;
+  if (typeof v !== "number" || Number.isNaN(v)) return undefined;
+  return v;
 });
 
 const pickerColumns = computed(() => {
-    const min = typeof props.min === "number" && !Number.isNaN(props.min) ? props.min : 0;
-    const max = typeof props.max === "number" && !Number.isNaN(props.max) ? props.max : 100;
-    const step = typeof props.step === "number" && props.step > 0 ? props.step : 1;
-    const options: { text: string; value: number }[] = [];
-    for (let n = min; n <= max; n += step) {
-        options.push({ text: String(n), value: n });
-    }
-    return options;
+  const min = typeof props.min === "number" && !Number.isNaN(props.min) ? props.min : 0;
+  const max = typeof props.max === "number" && !Number.isNaN(props.max) ? props.max : 100;
+  const step = typeof props.step === "number" && props.step > 0 ? props.step : 1;
+  const options: { text: string; value: number }[] = [];
+  for (let n = min; n <= max; n += step) {
+    options.push({ text: String(n), value: n });
+  }
+  return options;
 });
 
 const pickerSelectedValues = ref<number[]>([]);
 
 watch(isOpen, (v) => {
-    if (v) {
-        const v = props.modelValue;
-        const num = typeof v === "number" && !Number.isNaN(v) ? v : props.min ?? 0;
-        const clamped = Math.max(props.min ?? 0, Math.min(props.max ?? 100, num));
-        const step = props.step ?? 1;
-        const aligned = Math.round((clamped - (props.min ?? 0)) / step) * step + (props.min ?? 0);
-        const final = Math.max(props.min ?? 0, Math.min(props.max ?? 100, aligned));
-        pickerSelectedValues.value = [final];
-    }
+  if (v) {
+    const v = props.modelValue;
+    const num = typeof v === "number" && !Number.isNaN(v) ? v : (props.min ?? 0);
+    const clamped = Math.max(props.min ?? 0, Math.min(props.max ?? 100, num));
+    const step = props.step ?? 1;
+    const aligned = Math.round((clamped - (props.min ?? 0)) / step) * step + (props.min ?? 0);
+    const final = Math.max(props.min ?? 0, Math.min(props.max ?? 100, aligned));
+    pickerSelectedValues.value = [final];
+  }
 });
 
 watch(
-    () => [props.modelValue, props.min, props.max, props.step] as const,
-    () => {
-        if (isOpen.value) {
-            const v = props.modelValue;
-            const num = typeof v === "number" && !Number.isNaN(v) ? v : props.min ?? 0;
-            const clamped = Math.max(props.min ?? 0, Math.min(props.max ?? 100, num));
-            const step = props.step ?? 1;
-            const aligned = Math.round((clamped - (props.min ?? 0)) / step) * step + (props.min ?? 0);
-            const final = Math.max(props.min ?? 0, Math.min(props.max ?? 100, aligned));
-            pickerSelectedValues.value = [final];
-        }
+  () => [props.modelValue, props.min, props.max, props.step] as const,
+  () => {
+    if (isOpen.value) {
+      const v = props.modelValue;
+      const num = typeof v === "number" && !Number.isNaN(v) ? v : (props.min ?? 0);
+      const clamped = Math.max(props.min ?? 0, Math.min(props.max ?? 100, num));
+      const step = props.step ?? 1;
+      const aligned = Math.round((clamped - (props.min ?? 0)) / step) * step + (props.min ?? 0);
+      const final = Math.max(props.min ?? 0, Math.min(props.max ?? 100, aligned));
+      pickerSelectedValues.value = [final];
     }
+  },
 );
 
 function onTriggerClick() {
-    if (props.disabled) return;
-    open();
+  if (props.disabled) return;
+  open();
 }
 
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
-    close();
-    const raw = selectedValues[0];
-    if (raw === undefined || raw === null) return;
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return;
-    emit("update:modelValue", value);
+  close();
+  const raw = selectedValues[0];
+  if (raw === undefined || raw === null) return;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return;
+  emit("update:modelValue", value);
 }
 </script>
 
 <style scoped lang="scss">
 .android-picker-number {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    justify-content: space-between;
-    min-height: 32px;
-    padding: 6px 12px;
-    border: 1px solid var(--el-border-color);
-    border-radius: var(--el-border-radius-base);
-    background: var(--el-fill-color-blank);
-    cursor: pointer;
-    user-select: none;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: var(--el-border-radius-base);
+  background: var(--el-fill-color-blank);
+  cursor: pointer;
+  user-select: none;
 
-    &.is-disabled {
-        cursor: not-allowed;
-        opacity: 0.6;
-    }
+  &.is-disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
 }
 
 .android-picker-number__value {
-    flex: 1;
-    min-width: 0;
-    font-size: 14px;
-    color: var(--anime-text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--anime-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 
-    &.is-placeholder {
-        color: var(--anime-text-muted);
-    }
+  &.is-placeholder {
+    color: var(--anime-text-muted);
+  }
 }
 
 .android-picker-number__arrow {
-    flex-shrink: 0;
-    margin-left: 8px;
-    font-size: 14px;
-    color: var(--anime-text-secondary);
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 14px;
+  color: var(--anime-text-secondary);
 }
 </style>

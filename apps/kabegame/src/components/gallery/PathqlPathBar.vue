@@ -1,14 +1,13 @@
 <template>
   <div class="flex min-w-0 items-center gap-2">
     <slot name="prefix" />
-    <span
-      v-if="showLabel"
-      class="flex-none text-sm font-medium text-[var(--anime-secondary)]"
-    >
+    <span v-if="showLabel" class="flex-none text-sm font-medium text-[var(--anime-secondary)]">
       {{ label ?? t("gallery.advancedPath") }}
     </span>
     <el-tooltip :content="t('gallery.pathqlHelp')" placement="top">
-      <el-icon class="flex-none cursor-help text-base text-[var(--anime-text-muted)] hover:text-[var(--anime-secondary)]">
+      <el-icon
+        class="flex-none cursor-help text-base text-[var(--anime-text-muted)] hover:text-[var(--anime-secondary)]"
+      >
         <QuestionFilled />
       </el-icon>
     </el-tooltip>

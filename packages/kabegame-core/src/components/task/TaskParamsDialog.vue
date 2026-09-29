@@ -7,7 +7,11 @@
     :append-to-body="true"
     class="task-params-dialog"
     destroy-on-close
-    @update:model-value="(v: boolean) => { if (!v) emit('close') }"
+    @update:model-value="
+      (v: boolean) => {
+        if (!v) emit('close');
+      }
+    "
     @closed="emit('closed')"
   >
     <TaskRunParamsContent v-if="task" :key="task.id" :task="task" />

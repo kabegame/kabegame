@@ -36,9 +36,7 @@ const currentTaskId = computed(() => {
 });
 const failedCount = computed(() => {
   const taskId = currentTaskId.value;
-  return taskId
-    ? failedImagesStore.byTaskId(taskId).length
-    : failedImagesStore.failedCount;
+  return taskId ? failedImagesStore.byTaskId(taskId).length : failedImagesStore.failedCount;
 });
 
 const dialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
@@ -49,9 +47,8 @@ const openDialog = () => {
 };
 
 defineEmits<{
-  action: []
-}>()
-
+  action: [];
+}>();
 </script>
 
 <style scoped lang="scss">

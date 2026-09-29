@@ -54,19 +54,20 @@ import { ArrowRight } from "@kabegame/element-plus-icons";
 import type { TimeMenuNode } from "@/utils/galleryTimeFilterMenu";
 import { isTimeMenuNodeActive } from "@/utils/galleryTimeFilterMenu";
 
-const GalleryTimeFilterSubmenuAsync = defineAsyncComponent(
-  () => import("./GalleryTimeFilterSubmenu.vue")
-);
+const GalleryTimeFilterSubmenuAsync = defineAsyncComponent(() => import("./GalleryTimeFilterSubmenu.vue"));
 
-withDefaults(defineProps<{
-  nodes: TimeMenuNode[];
-  dateTail: string | null;
-  loadingNames?: ReadonlySet<string>;
-  loadingText?: string;
-}>(), {
-  loadingNames: () => new Set<string>(),
-  loadingText: "Loading",
-});
+withDefaults(
+  defineProps<{
+    nodes: TimeMenuNode[];
+    dateTail: string | null;
+    loadingNames?: ReadonlySet<string>;
+    loadingText?: string;
+  }>(),
+  {
+    loadingNames: () => new Set<string>(),
+    loadingText: "Loading",
+  },
+);
 
 const emit = defineEmits<{
   command: [name: string];

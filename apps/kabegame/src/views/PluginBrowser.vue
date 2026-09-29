@@ -1,24 +1,32 @@
 <template>
   <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
     <div class="plugin-browser-content">
-      <PluginBrowserPageHeader @refresh="handleRefresh" @import-source="handleImportSource"
-        @manage-sources="openManageSources" />
+      <PluginBrowserPageHeader
+        @refresh="handleRefresh"
+        @import-source="handleImportSource"
+        @manage-sources="openManageSources"
+      />
 
       <div v-if="sourcesLoadedOnce && sources.length === 0" class="plugin-sources-empty-hint">
         <el-alert type="info" :closable="false" show-icon>
           <template #title>
-            {{ $t('plugins.noStoreSourcesHint') }}
+            {{ $t("plugins.noStoreSourcesHint") }}
           </template>
           <el-button type="primary" size="small" style="margin-top: 8px" @click="goToOfficialGitHubStoreTab">
-            {{ $t('plugins.goToOfficialGitHubStore') }}
+            {{ $t("plugins.goToOfficialGitHubStore") }}
           </el-button>
         </el-alert>
       </div>
 
       <!-- Tab 切换：分段式胶囊组，右侧搜索框与其同排 -->
       <div class="plugin-tabs-row">
-        <KbTab v-model="activeTab" :items="tabItems" :close-title="$t('plugins.delete')"
-          @close="handleDeleteSourceById" @select="handleTabSelect" />
+        <KbTab
+          v-model="activeTab"
+          :items="tabItems"
+          :close-title="$t('plugins.delete')"
+          @close="handleDeleteSourceById"
+          @select="handleTabSelect"
+        />
 
         <div class="plugin-search">
           <el-input v-model="searchKeyword" :placeholder="$t('plugins.quickPreview.searchPlaceholder')" clearable>
@@ -40,7 +48,7 @@
           <div v-else-if="installedPlugins.length === 0" class="empty">
             <el-empty :description="$t('plugins.noInstalled')">
               <el-button type="primary" @click="goToOfficialGitHubStoreTab">
-                {{ $t('plugins.goToOfficialGitHubStore') }}
+                {{ $t("plugins.goToOfficialGitHubStore") }}
               </el-button>
             </el-empty>
           </div>
@@ -51,13 +59,26 @@
 
           <!-- 已安装：布局与商店一致 -->
           <div v-else>
-            <transition-group name="fade-in-list" tag="div" class="plugin-grid"
-              :class="{ 'plugin-grid-android': uiStore.isCompact }">
-              <HoverRevealPanel v-for="plugin in filteredInstalledPlugins" :key="plugin.id"
-                @panel-click="openDetailDialog(plugin)">
-                <PluginGridCard :card-class="appBackgroundCardClass" :name="pluginName(plugin)"
-                  :version="plugin.version" :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
-                  :update-available="hasKnownUpdateFor(plugin.id, plugin.version)" @click="openDetailDialog(plugin)" />
+            <transition-group
+              name="fade-in-list"
+              tag="div"
+              class="plugin-grid"
+              :class="{ 'plugin-grid-android': uiStore.isCompact }"
+            >
+              <HoverRevealPanel
+                v-for="plugin in filteredInstalledPlugins"
+                :key="plugin.id"
+                @panel-click="openDetailDialog(plugin)"
+              >
+                <PluginGridCard
+                  :card-class="appBackgroundCardClass"
+                  :name="pluginName(plugin)"
+                  :version="plugin.version"
+                  :icon-src="getPluginIconSrc(plugin)"
+                  :icon-loading="isIconLoading(plugin)"
+                  :update-available="hasKnownUpdateFor(plugin.id, plugin.version)"
+                  @click="openDetailDialog(plugin)"
+                />
                 <template #panel>
                   <PluginQuickPreviewPanel v-bind="quickPreviewProps(plugin)" />
                 </template>
@@ -75,23 +96,54 @@
                 <el-skeleton :rows="0" animated>
                   <template #template>
                     <div
-                      style="display: flex; flex-direction: column; align-items: center; width: 100%; height: 100%; min-height: 0; gap: 0; box-sizing: border-box;">
+                      style="
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        width: 100%;
+                        height: 100%;
+                        min-height: 0;
+                        gap: 0;
+                        box-sizing: border-box;
+                      "
+                    >
                       <div
-                        style="flex: 0 0 40%; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center;">
-                        <el-skeleton-item variant="image"
-                          style="width: 48px; height: 48px; border-radius: 8px; flex-shrink: 0;" />
+                        style="
+                          flex: 0 0 40%;
+                          min-height: 0;
+                          width: 100%;
+                          display: flex;
+                          align-items: center;
+                          justify-content: center;
+                        "
+                      >
+                        <el-skeleton-item
+                          variant="image"
+                          style="width: 48px; height: 48px; border-radius: 8px; flex-shrink: 0"
+                        />
                       </div>
-                      <el-skeleton-item variant="h3"
-                        style="width: 92%; height: 15px; margin: 2px 0 0; flex-shrink: 0;" />
+                      <el-skeleton-item
+                        variant="h3"
+                        style="width: 92%; height: 15px; margin: 2px 0 0; flex-shrink: 0"
+                      />
                       <div
-                        style="flex: 0 0 auto; width: 100%; height: 14px; display: flex; flex-flow: row nowrap; gap: 3px; align-items: center; overflow: hidden;">
-                        <el-skeleton-item variant="text" style="width: 28%; height: 12px; margin: 0; flex-shrink: 0;" />
-                        <el-skeleton-item variant="text" style="width: 32%; height: 12px; margin: 0; flex-shrink: 0;" />
-                        <el-skeleton-item variant="text" style="width: 24%; height: 12px; margin: 0; flex-shrink: 0;" />
+                        style="
+                          flex: 0 0 auto;
+                          width: 100%;
+                          height: 14px;
+                          display: flex;
+                          flex-flow: row nowrap;
+                          gap: 3px;
+                          align-items: center;
+                          overflow: hidden;
+                        "
+                      >
+                        <el-skeleton-item variant="text" style="width: 28%; height: 12px; margin: 0; flex-shrink: 0" />
+                        <el-skeleton-item variant="text" style="width: 32%; height: 12px; margin: 0; flex-shrink: 0" />
+                        <el-skeleton-item variant="text" style="width: 24%; height: 12px; margin: 0; flex-shrink: 0" />
                       </div>
-                      <div style="flex: 1 1 auto; min-height: 0; width: 100%;" />
-                      <el-skeleton-item variant="button"
-                        style="width: 100%; height: 26px; margin: 0; flex-shrink: 0;" />
+                      <div style="flex: 1 1 auto; min-height: 0; width: 100%" />
+                      <el-skeleton-item variant="button" style="width: 100%; height: 26px; margin: 0; flex-shrink: 0" />
                     </div>
                   </template>
                 </el-skeleton>
@@ -101,15 +153,15 @@
               <div v-for="i in 12" :key="i" class="skeleton-card">
                 <el-skeleton :rows="0" animated>
                   <template #template>
-                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                      <el-skeleton-item variant="image" style="width: 48px; height: 48px; border-radius: 8px;" />
-                      <div style="flex: 1;">
-                        <el-skeleton-item variant="h3" style="width: 60%; margin-bottom: 8px;" />
-                        <el-skeleton-item variant="text" style="width: 80%;" />
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
+                      <el-skeleton-item variant="image" style="width: 48px; height: 48px; border-radius: 8px" />
+                      <div style="flex: 1">
+                        <el-skeleton-item variant="h3" style="width: 60%; margin-bottom: 8px" />
+                        <el-skeleton-item variant="text" style="width: 80%" />
                       </div>
                     </div>
-                    <el-skeleton-item variant="text" style="width: 40%; margin-bottom: 12px;" />
-                    <el-skeleton-item variant="button" style="width: 100%;" />
+                    <el-skeleton-item variant="text" style="width: 40%; margin-bottom: 12px" />
+                    <el-skeleton-item variant="button" style="width: 100%" />
                   </template>
                 </el-skeleton>
               </div>
@@ -124,14 +176,27 @@
             <el-empty :description="$t('plugins.quickPreview.noSearchResult')" :image-size="100" />
           </div>
 
-          <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid"
-            :class="{ 'plugin-grid-android': uiStore.isCompact }">
-            <HoverRevealPanel v-for="plugin in filteredStorePlugins(s.id)" :key="plugin.id"
-              @panel-click="openDetailDialog(plugin)">
-              <PluginGridCard :card-class="appBackgroundCardClass" :name="pluginName(plugin)"
-                :version="plugin.version" :icon-src="getPluginIconSrc(plugin)" :icon-loading="isIconLoading(plugin)"
+          <transition-group
+            v-else
+            name="fade-in-list"
+            tag="div"
+            class="plugin-grid"
+            :class="{ 'plugin-grid-android': uiStore.isCompact }"
+          >
+            <HoverRevealPanel
+              v-for="plugin in filteredStorePlugins(s.id)"
+              :key="plugin.id"
+              @panel-click="openDetailDialog(plugin)"
+            >
+              <PluginGridCard
+                :card-class="appBackgroundCardClass"
+                :name="pluginName(plugin)"
+                :version="plugin.version"
+                :icon-src="getPluginIconSrc(plugin)"
+                :icon-loading="isIconLoading(plugin)"
                 :update-available="isUpdateAvailable(plugin.installedVersion, plugin.version)"
-                @click="openDetailDialog(plugin)" />
+                @click="openDetailDialog(plugin)"
+              />
               <template #panel>
                 <PluginQuickPreviewPanel v-bind="quickPreviewProps(plugin)" />
               </template>
@@ -142,10 +207,16 @@
     </div>
 
     <!-- 商店源管理 -->
-    <el-dialog v-if="!IS_LIGHT_MODE" :model-value="sourcesDialog.isOpen.value" :z-index="sourcesDialog.zIndex.value" :title="$t('plugins.sourcesDialogTitle')"
-      width="720px" @update:model-value="sourcesDialog.close">
+    <el-dialog
+      v-if="!IS_LIGHT_MODE"
+      :model-value="sourcesDialog.isOpen.value"
+      :z-index="sourcesDialog.zIndex.value"
+      :title="$t('plugins.sourcesDialogTitle')"
+      width="720px"
+      @update:model-value="sourcesDialog.close"
+    >
       <div class="sources-hint">
-        {{ $t('plugins.sourcesIntro') }}
+        {{ $t("plugins.sourcesIntro") }}
       </div>
       <el-table :data="sources" style="width: 100%" :empty-text="$t('plugins.noSources')">
         <!-- @vue-generic {PluginSource} -->
@@ -158,22 +229,34 @@
         <!-- @vue-generic {PluginSource} -->
         <el-table-column :label="$t('plugins.action')" width="140">
           <template #default="{ row, $index }">
-            <el-button size="small" @click="editSource($index)">{{ $t('plugins.edit') }}</el-button>
-            <el-button v-if="row.id !== OFFICIAL_PLUGIN_SOURCE_ID" size="small" type="danger"
-              @click="removeSource($index)">{{ $t('plugins.delete') }}</el-button>
+            <el-button size="small" @click="editSource($index)">{{ $t("plugins.edit") }}</el-button>
+            <el-button
+              v-if="row.id !== OFFICIAL_PLUGIN_SOURCE_ID"
+              size="small"
+              type="danger"
+              @click="removeSource($index)"
+            >
+              {{ $t("plugins.delete") }}
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
       <template #footer>
-        <el-button @click="sourcesDialog.close()">{{ $t('common.close') }}</el-button>
-        <el-button @click="addSource">{{ $t('plugins.newSource') }}</el-button>
+        <el-button @click="sourcesDialog.close()">{{ $t("common.close") }}</el-button>
+        <el-button @click="addSource">{{ $t("plugins.newSource") }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 新增/编辑源 -->
-    <el-dialog v-if="!IS_LIGHT_MODE" :model-value="editSourceDialog.isOpen.value" :z-index="editSourceDialog.zIndex.value"
-      :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')" width="620px" @update:model-value="editSourceDialog.close">
+    <el-dialog
+      v-if="!IS_LIGHT_MODE"
+      :model-value="editSourceDialog.isOpen.value"
+      :z-index="editSourceDialog.zIndex.value"
+      :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')"
+      width="620px"
+      @update:model-value="editSourceDialog.close"
+    >
       <el-form label-width="110px">
         <el-form-item label="ID">
           <el-input v-model="editSourceForm.id" :placeholder="$t('plugins.idPlaceholder')" />
@@ -182,41 +265,51 @@
           <el-input v-model="editSourceForm.name" :placeholder="$t('plugins.namePlaceholder')" />
         </el-form-item>
         <el-form-item label="index.json">
-          <el-input v-model="editSourceForm.indexUrl" placeholder="https://.../index.json"
-            :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID" />
+          <el-input
+            v-model="editSourceForm.indexUrl"
+            placeholder="https://.../index.json"
+            :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="editSourceDialog.close()">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="isValidatingSource" :disabled="isValidatingSource"
-          @click="confirmEditSource">
-          {{ $t('common.confirm') }}
+        <el-button @click="editSourceDialog.close()">{{ $t("common.cancel") }}</el-button>
+        <el-button
+          type="primary"
+          :loading="isValidatingSource"
+          :disabled="isValidatingSource"
+          @click="confirmEditSource"
+        >
+          {{ $t("common.confirm") }}
         </el-button>
       </template>
     </el-dialog>
 
     <!-- 导入源对话框 -->
-    <el-dialog :model-value="importDialog.isOpen.value" :z-index="importDialog.zIndex.value" :title="$t('plugins.importDialogTitle')" width="500px" @update:model-value="importDialog.close">
+    <el-dialog
+      :model-value="importDialog.isOpen.value"
+      :z-index="importDialog.zIndex.value"
+      :title="$t('plugins.importDialogTitle')"
+      width="500px"
+      @update:model-value="importDialog.close"
+    >
       <div class="import-instructions">
-        <p>{{ $t('plugins.selectFileHint') }}</p>
+        <p>{{ $t("plugins.selectFileHint") }}</p>
         <el-button type="primary" @click="selectPluginFile">
           <el-icon>
             <Upload />
           </el-icon>
-          {{ $t('plugins.selectFile') }}
+          {{ $t("plugins.selectFile") }}
         </el-button>
-        <p v-if="selectedFilePath" class="selected-file">
-          {{ $t('plugins.selected') }} {{ selectedFilePath }}
-        </p>
+        <p v-if="selectedFilePath" class="selected-file">{{ $t("plugins.selected") }} {{ selectedFilePath }}</p>
       </div>
       <template #footer>
-        <el-button @click="importDialog.close()">{{ $t('common.cancel') }}</el-button>
+        <el-button @click="importDialog.close()">{{ $t("common.cancel") }}</el-button>
         <el-button type="primary" @click="handleImport" :disabled="!selectedFilePath">
-          {{ $t('plugins.importButton') }}
+          {{ $t("plugins.importButton") }}
         </el-button>
       </template>
     </el-dialog>
-
   </div>
 </template>
 
@@ -225,14 +318,7 @@ import { ref, computed, onMounted, onUnmounted, reactive, watch, nextTick } from
 import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import {
-  Refresh,
-  Upload,
-  Plus,
-  Search,
-  Setting,
-  QuestionFilled,
-} from "@kabegame/element-plus-icons";
+import { Refresh, Upload, Plus, Search, Setting, QuestionFilled } from "@kabegame/element-plus-icons";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import type { PluginManifestText } from "@kabegame/core/stores/plugins";
 import type { PluginLabel } from "@kabegame/core/stores/pluginLabels";
@@ -290,7 +376,6 @@ interface StorePluginResolved {
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
 type PluginListItem = Plugin | StorePluginResolved;
 
-
 const pluginStore = usePluginStore();
 const { t } = useI18n();
 const { pluginName } = usePluginManifestI18n();
@@ -298,9 +383,7 @@ const { pluginName } = usePluginManifestI18n();
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled
-    ? "!bg-transparent [--el-card-bg-color:transparent]"
-    : ""
+  settingsStore.values.appBackgroundEnabled ? "!bg-transparent [--el-card-bg-color:transparent]" : "",
 );
 
 function currentUrl() {
@@ -333,9 +416,7 @@ const pluginSourceDisplayName = (s: PluginSource) => {
 };
 
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID
-    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
-    : undefined
+  IS_ANDROID ? { onRefresh: handleRefresh, refreshing: isRefreshing.value } : undefined,
 );
 
 const handleImportSource = () => {
@@ -349,7 +430,6 @@ const handleImportSource = () => {
 const openManageSources = () => {
   sourcesDialog.open();
 };
-
 
 const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的loading状态
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
@@ -421,10 +501,7 @@ const searchKeyword = ref("");
 const matchesSearch = (p: PluginListItem): boolean => {
   const kw = searchKeyword.value.trim().toLowerCase();
   if (!kw) return true;
-  const haystack = [p.id, pluginName(p), "baseUrl" in p ? p.baseUrl : null]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  const haystack = [p.id, pluginName(p), "baseUrl" in p ? p.baseUrl : null].filter(Boolean).join(" ").toLowerCase();
   return haystack.includes(kw);
 };
 
@@ -448,10 +525,10 @@ const pluginAnalyticsItem = (plugin: PluginListItem) => {
     source: isStore ? "store" : "installed",
     ...(isStore
       ? {
-        sourceId: (plugin as StorePluginResolved).sourceId,
-        sourceName: (plugin as StorePluginResolved).sourceName,
-        installedVersion: (plugin as StorePluginResolved).installedVersion ?? null,
-      }
+          sourceId: (plugin as StorePluginResolved).sourceId,
+          sourceName: (plugin as StorePluginResolved).sourceName,
+          installedVersion: (plugin as StorePluginResolved).installedVersion ?? null,
+        }
       : {}),
   };
 };
@@ -623,7 +700,7 @@ const prefetchRemoteIconsForSource = async (sourceId: string) => {
   const targets = arr
     .filter((p) => {
       if (installedIds.has(p.id)) return false;
-      const pv = typeof p.packageVersion === 'number' ? p.packageVersion : 1;
+      const pv = typeof p.packageVersion === "number" ? p.packageVersion : 1;
       return pv >= 2 && !p.iconUrl && !!p.downloadUrl;
     })
     .slice(0, 24);
@@ -682,10 +759,7 @@ watch(
       const keys = Object.keys(storePluginsBySource.value).sort();
       for (const k of keys) {
         const arr = storePluginsBySource.value[k] || [];
-        parts.push(
-          `${k}=` +
-          arr.map((p) => `${p.id}:${p.installedVersion ?? ""}:${p.version}`).join(",")
-        );
+        parts.push(`${k}=` + arr.map((p) => `${p.id}:${p.installedVersion ?? ""}:${p.version}`).join(","));
       }
       return parts.join("|");
     },
@@ -693,7 +767,7 @@ watch(
   () => {
     refreshPluginIcons();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // 当“已安装源”变化时，同步刷新所有已加载商店列表的 installedVersion（否则会出现只有本地源显示已安装的现象）
@@ -706,17 +780,11 @@ watch(
     }
     storePluginsBySource.value = next;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
-
 const escapeHtml = (s: string) =>
-  s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
 const formatBytes = (bytes: number) => {
   if (!bytes || bytes <= 0) return "0 B";
@@ -751,11 +819,11 @@ const loadSources = async (): Promise<{ success: boolean; error?: string }> => {
     sources.value = [];
     // 提取错误消息
     let errorMessage = "加载商店源失败";
-    if (typeof e === 'string') {
+    if (typeof e === "string") {
       errorMessage = e;
     } else if (e instanceof Error) {
       errorMessage = e.message || e.toString();
-    } else if (e && typeof e === 'object' && 'message' in e) {
+    } else if (e && typeof e === "object" && "message" in e) {
       errorMessage = String((e as any).message);
     }
     return { success: false, error: errorMessage };
@@ -804,8 +872,7 @@ const confirmEditSource = async () => {
   const indexUrl = editSourceForm.indexUrl.trim();
   isValidatingSource.value = true;
   try {
-    const skipValidate =
-      editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID && editingSourceIndex.value !== null;
+    const skipValidate = editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID && editingSourceIndex.value !== null;
     if (!skipValidate) {
       await invoke("validate_plugin_source", { indexUrl });
     }
@@ -828,7 +895,7 @@ const confirmEditSource = async () => {
           confirmButtonText: t("plugins.stillAdd"),
           cancelButtonText: t("plugins.backToEdit"),
           distinguishCancelAndClose: true,
-        }
+        },
       );
       // 用户确认：继续添加
     } catch {
@@ -845,8 +912,7 @@ const confirmEditSource = async () => {
     let name = editSourceForm.name.trim();
     const isOfficial =
       editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID ||
-      (editingSourceIndex.value !== null &&
-        sources.value[editingSourceIndex.value]?.id === OFFICIAL_PLUGIN_SOURCE_ID);
+      (editingSourceIndex.value !== null && sources.value[editingSourceIndex.value]?.id === OFFICIAL_PLUGIN_SOURCE_ID);
     if (isOfficial) {
       const localizedDefault = t("plugins.officialGithubReleaseSourceName");
       if (name === localizedDefault || name === OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME) {
@@ -875,11 +941,11 @@ const confirmEditSource = async () => {
   } catch (e) {
     console.error("保存商店源失败:", e);
     let errorMessage = t("plugins.saveSourceFailed");
-    if (typeof e === 'string') {
+    if (typeof e === "string") {
       errorMessage = e;
     } else if (e instanceof Error) {
       errorMessage = e.message || e.toString();
-    } else if (e && typeof e === 'object' && 'message' in e) {
+    } else if (e && typeof e === "object" && "message" in e) {
       errorMessage = String((e as any).message);
     }
     ElMessage.error(errorMessage);
@@ -895,7 +961,9 @@ const removeSource = async (idx: number) => {
   }
 
   try {
-    await ElMessageBox.confirm(t("plugins.confirmDeleteStoreSource"), t("plugins.deleteStoreSourceTitle"), { type: "warning" });
+    await ElMessageBox.confirm(t("plugins.confirmDeleteStoreSource"), t("plugins.deleteStoreSourceTitle"), {
+      type: "warning",
+    });
     sources.value.splice(idx, 1);
   } catch {
     // cancel
@@ -911,14 +979,14 @@ const handleDeleteSource = async (source: PluginSource) => {
     await ElMessageBox.confirm(
       t("plugins.confirmDeleteStoreSourceWithName", { name: pluginSourceDisplayName(source) }),
       t("plugins.deleteStoreSourceTitle"),
-      { type: "warning" }
+      { type: "warning" },
     );
 
     // 调用后端删除
     await invoke("delete_plugin_source", { id: source.id });
 
     // 从前端列表移除
-    const idx = sources.value.findIndex(s => s.id === source.id);
+    const idx = sources.value.findIndex((s) => s.id === source.id);
     if (idx !== -1) {
       sources.value.splice(idx, 1);
     }
@@ -934,13 +1002,12 @@ const handleDeleteSource = async (source: PluginSource) => {
 
     ElMessage.success(t("plugins.sourceDeleted"));
   } catch (e) {
-    if (e !== 'cancel') {
+    if (e !== "cancel") {
       console.error("删除商店源失败:", e);
       ElMessage.error(t("plugins.deleteSourceFailed"));
     }
   }
 };
-
 
 /**
  * 加载商店插件列表
@@ -950,10 +1017,7 @@ const handleDeleteSource = async (source: PluginSource) => {
  *   - true: 用户手动刷新时使用，强制从远程获取最新数据
  *   - false: 首次加载或自动加载时使用，优先使用本地缓存
  */
-const loadStorePlugins = async (
-  sourceId: string,
-  options: { showMessage?: boolean; forceRefresh?: boolean } = {}
-) => {
+const loadStorePlugins = async (sourceId: string, options: { showMessage?: boolean; forceRefresh?: boolean } = {}) => {
   const { showMessage = true, forceRefresh = false } = options;
 
   loadingBySource.value = { ...loadingBySource.value, [sourceId]: true };
@@ -992,11 +1056,11 @@ const loadStorePlugins = async (
     console.error("加载商店失败:", error);
     // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
     let errorMessage = t("plugins.loadStoreFailed");
-    if (typeof error === 'string') {
+    if (typeof error === "string") {
       errorMessage = error;
     } else if (error instanceof Error) {
       errorMessage = error.message || error.toString();
-    } else if (error && typeof error === 'object' && 'message' in error) {
+    } else if (error && typeof error === "object" && "message" in error) {
       errorMessage = String((error as any).message);
     }
     ElMessage.error(errorMessage);
@@ -1095,12 +1159,12 @@ const handleImport = async () => {
 
   try {
     const filePath = selectedFilePath.value;
-    const fileExt = filePath.split('.').pop()?.toLowerCase();
+    const fileExt = filePath.split(".").pop()?.toLowerCase();
 
     if (fileExt === "kgpg") {
       const parsed = await invoke<Plugin>("preview_import_plugin", { zipPath: filePath });
 
-      const existing = pluginStore.plugins.find(p => p.id === parsed.id);
+      const existing = pluginStore.plugins.find((p) => p.id === parsed.id);
       const alreadyExists = !!existing;
       const existingVersion = existing?.version;
 
@@ -1138,9 +1202,7 @@ const handleImport = async () => {
     }
   } catch (error) {
     console.error("导入源失败:", error);
-    ElMessage.error(
-      error instanceof Error ? error.message : t("plugins.importFailed")
-    );
+    ElMessage.error(error instanceof Error ? error.message : t("plugins.importFailed"));
   }
 };
 
@@ -1224,11 +1286,11 @@ const handleRefresh = async () => {
         console.error("刷新已安装源失败:", error);
         // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
         let errorMessage = t("plugins.installedRefreshFailed");
-        if (typeof error === 'string') {
+        if (typeof error === "string") {
           errorMessage = error;
         } else if (error instanceof Error) {
           errorMessage = error.message || error.toString();
-        } else if (error && typeof error === 'object' && 'message' in error) {
+        } else if (error && typeof error === "object" && "message" in error) {
           errorMessage = String((error as any).message);
         }
         ElMessage.error(errorMessage);
@@ -1269,11 +1331,11 @@ const handleRefresh = async () => {
     if (isStoreTab(activeTab.value)) {
       // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
       let errorMessage = t("plugins.refreshFailed");
-      if (typeof error === 'string') {
+      if (typeof error === "string") {
         errorMessage = error;
       } else if (error instanceof Error) {
         errorMessage = error.message || error.toString();
-      } else if (error && typeof error === 'object' && 'message' in error) {
+      } else if (error && typeof error === "object" && "message" in error) {
         errorMessage = String((error as any).message);
       }
       ElMessage.error(errorMessage);
@@ -1297,7 +1359,7 @@ onMounted(async () => {
           "plugin-sources-changed",
           () => {
             void loadSources();
-          }
+          },
         );
       }
     } catch {
@@ -1413,11 +1475,17 @@ onUnmounted(() => {
 
 /* 列表淡入动画 */
 .fade-in-list-enter-active {
-  transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.26s ease-out, filter 0.26s ease-out;
+  transition:
+    transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 0.26s ease-out,
+    filter 0.26s ease-out;
 }
 
 .fade-in-list-leave-active {
-  transition: transform 0.22s ease-in, opacity 0.22s ease-in, filter 0.22s ease-in;
+  transition:
+    transform 0.22s ease-in,
+    opacity 0.22s ease-in,
+    filter 0.22s ease-in;
   pointer-events: none;
 }
 
@@ -1551,5 +1619,4 @@ onUnmounted(() => {
   color: var(--el-text-color-regular);
   word-break: break-all;
 }
-
 </style>

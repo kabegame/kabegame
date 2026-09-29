@@ -10,22 +10,33 @@
             hide-scrollbar
             :enable-ctrl-key-adjust-columns="!isCompact"
             :enable-virtual-scroll="true"
-            :loading="isRefreshing" :loading-overlay="isRefreshing"
+            :loading="isRefreshing"
+            :loading-overlay="isRefreshing"
             scroll-whole-container
           >
             <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
               <!-- 顶部工具栏 -->
-              <GalleryToolbar :total-count="totalCount" :big-page-enabled="totalCount > pageSize"
-                :sort="galleryRouteStore.sort" :page-size="pageSize"
+              <GalleryToolbar
+                :total-count="totalCount"
+                :big-page-enabled="totalCount > pageSize"
+                :sort="galleryRouteStore.sort"
+                :page-size="pageSize"
                 :provider-context-prefix="galleryRouteStore.computedContextPath"
                 @refresh="handleManualRefresh"
-                @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="handleShowLocalImport"
+                @show-crawler-dialog="handleShowCrawlerDialog"
+                @show-local-import="handleShowLocalImport"
                 @show-webpage-collect="handleShowWebpageCollect"
-                @open-collect-menu="handleOpenCollectMenu" />
+                @open-collect-menu="handleOpenCollectMenu"
+              />
 
               <!-- 大页分页器 -->
-              <GalleryBigPaginator :total-count="totalCount" :current-page="currentPage" :big-page-size="pageSize"
-                :is-sticky="true" @jump-to-page="jumpToPage" />
+              <GalleryBigPaginator
+                :total-count="totalCount"
+                :current-page="currentPage"
+                :big-page-size="pageSize"
+                :is-sticky="true"
+                @jump-to-page="jumpToPage"
+              />
             </template>
 
             <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
@@ -36,7 +47,7 @@
                   <el-icon>
                     <Plus />
                   </el-icon>
-                  {{ $t('gallery.startCollect') }}
+                  {{ $t("gallery.startCollect") }}
                 </el-button>
               </div>
             </template>
@@ -46,43 +57,77 @@
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog v-if="!isCompact" :model-value="crawlerDialog.isOpen.value" :initial-config="crawlerDialogInitialConfig" @update:model-value="crawlerDialog.close" />
-    <LocalImportDialog v-if="!isCompact && !IS_WEB" :model-value="localImportDialog.isOpen.value" @update:model-value="localImportDialog.close" />
+    <CrawlerDialog
+      v-if="!isCompact"
+      :model-value="crawlerDialog.isOpen.value"
+      :initial-config="crawlerDialogInitialConfig"
+      @update:model-value="crawlerDialog.close"
+    />
+    <LocalImportDialog
+      v-if="!isCompact && !IS_WEB"
+      :model-value="localImportDialog.isOpen.value"
+      @update:model-value="localImportDialog.close"
+    />
     <!-- 网页收集：桌面 dialog / 紧凑 drawer 由组件自身切换；Web 发布版不开放（避免服务端 SSRF） -->
-    <WebpageCollectDialog v-if="!IS_WEB" :model-value="webpageCollectDialog.isOpen.value" @update:model-value="webpageCollectDialog.close" />
+    <WebpageCollectDialog
+      v-if="!IS_WEB"
+      :model-value="webpageCollectDialog.isOpen.value"
+      @update:model-value="webpageCollectDialog.close"
+    />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
-    <el-dialog :model-value="collectMenuDialog.isOpen.value" :z-index="collectMenuDialog.zIndex.value" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
-      class="collect-menu-dialog" @update:model-value="collectMenuDialog.close">
+    <el-dialog
+      :model-value="collectMenuDialog.isOpen.value"
+      :z-index="collectMenuDialog.zIndex.value"
+      :title="$t('gallery.chooseCollectMethod')"
+      width="360px"
+      destroy-on-close
+      class="collect-menu-dialog"
+      @update:model-value="collectMenuDialog.close"
+    >
       <div class="collect-menu-options">
         <div v-if="!IS_WEB" class="collect-menu-option" @click="onDesktopCollectLocal">
           <el-icon>
             <FolderOpened />
           </el-icon>
-          <span>{{ $t('gallery.local') }}</span>
+          <span>{{ $t("gallery.local") }}</span>
         </div>
         <div class="collect-menu-option" @click="onDesktopCollectNetwork">
           <el-icon>
             <Connection />
           </el-icon>
-          <span>{{ $t('gallery.network') }}</span>
+          <span>{{ $t("gallery.network") }}</span>
         </div>
         <div v-if="!IS_WEB" class="collect-menu-option" @click="onDesktopCollectWebpage">
           <el-icon>
             <Link />
           </el-icon>
-          <span>{{ $t('gallery.webpage') }}</span>
+          <span>{{ $t("gallery.webpage") }}</span>
         </div>
       </div>
     </el-dialog>
 
     <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
-    <CollectSourcePicker v-if="uiStore.isCompact" :model-value="collectSourcePicker.isOpen.value" @update:model-value="collectSourcePicker.close" @select="handleCollectSourceSelect" />
+    <CollectSourcePicker
+      v-if="uiStore.isCompact"
+      :model-value="collectSourcePicker.isOpen.value"
+      @update:model-value="collectSourcePicker.close"
+      @select="handleCollectSourceSelect"
+    />
     <!-- 安卓媒体选择器（本地导入） -->
-    <MediaPicker v-if="uiStore.isCompact && !IS_WEB" :model-value="mediaPicker.isOpen.value" @update:model-value="mediaPicker.close" @select="handleMediaPickerSelect" />
+    <MediaPicker
+      v-if="uiStore.isCompact && !IS_WEB"
+      :model-value="mediaPicker.isOpen.value"
+      @update:model-value="mediaPicker.close"
+      @select="handleMediaPickerSelect"
+    />
 
     <!-- 整理对话框：由 header 触发打开，确认后交给全局 organize service 启动 -->
-    <OrganizeDialog :model-value="organizeStore.dialogOpen" @update:model-value="onOrganizeDialogVisible" @confirm="onOrganizeConfirm" />
+    <OrganizeDialog
+      :model-value="organizeStore.dialogOpen"
+      @update:model-value="onOrganizeDialogVisible"
+      @confirm="onOrganizeConfirm"
+    />
   </div>
 </template>
 
@@ -153,7 +198,7 @@ watch(
     lastTrackedGalleryPath = path;
     analytics.track("gallery_path");
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // ---------- Dialog and import flow ----------
@@ -164,11 +209,14 @@ const webpageCollectDialog = useModal();
 const mediaPicker = useModal();
 const collectSourcePicker = useModal();
 const collectMenuDialog = useModal();
-const crawlerDialogInitialConfig = ref<{
-  pluginId?: string;
-  outputDir?: string;
-  vars?: Record<string, any>;
-} | undefined>(undefined);
+const crawlerDialogInitialConfig = ref<
+  | {
+      pluginId?: string;
+      outputDir?: string;
+      vars?: Record<string, any>;
+    }
+  | undefined
+>(undefined);
 
 // 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
 const handleShowCrawlerDialog = () => {
@@ -262,22 +310,16 @@ const handleCollectSourceSelect = (source: "local" | "remote" | "webpage") => {
 };
 
 // 处理媒体选择器的选择事件（先关闭抽屉，再处理）
-const handleMediaPickerSelect = async (
-  type: "image" | "folder" | "video",
-  payload?: PickFolderResult
-) => {
+const handleMediaPickerSelect = async (type: "image" | "folder" | "video", payload?: PickFolderResult) => {
   mediaPicker.close();
   await handleAndroidMediaSelection(type, payload);
 };
 
 // 紧凑模式下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
-const handleAndroidMediaSelection = async (
-  type: "image" | "folder" | "video",
-  folderResult?: PickFolderResult
-) => {
+const handleAndroidMediaSelection = async (type: "image" | "folder" | "video", folderResult?: PickFolderResult) => {
   if (await guardDesktopOnly("picker")) return;
   try {
-    if (type === 'image') {
+    if (type === "image") {
       const uris = await pickImages();
       if (!uris || uris.length === 0) {
         return; // 用户取消或无选择
@@ -287,7 +329,7 @@ const handleAndroidMediaSelection = async (
         recursive: false,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === 'video') {
+    } else if (type === "video") {
       const uris = await pickVideos();
       if (!uris || uris.length === 0) {
         return;
@@ -297,7 +339,7 @@ const handleAndroidMediaSelection = async (
         recursive: false,
       });
       ElMessage.success(t("gallery.localImportTaskAdded"));
-    } else if (type === 'folder' && folderResult) {
+    } else if (type === "folder" && folderResult) {
       const folderPath = folderResult.uri ?? folderResult.path;
       if (!folderPath) return;
       crawlerStore.addTask("local-import", undefined, {
@@ -307,8 +349,8 @@ const handleAndroidMediaSelection = async (
       ElMessage.success(t("gallery.localImportTaskAdded"));
     }
   } catch (error) {
-    console.error('[Gallery] 安卓媒体选择失败:', error);
-    if (error !== 'cancel' && error !== 'close') {
+    console.error("[Gallery] 安卓媒体选择失败:", error);
+    if (error !== "cancel" && error !== "close") {
       ElMessage.error(t("gallery.selectFailed") + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }

@@ -26,16 +26,10 @@ export function useAlbumIdPathState() {
   const settings = useSettingsStore();
 
   const albumIdPath = computed(
-    () =>
-      (settings.values.albumIdPath ||
-        (IS_WEB ? "" : settings.values.albumIdPathLocal) ||
-        "") as string,
+    () => (settings.values.albumIdPath || (IS_WEB ? "" : settings.values.albumIdPathLocal) || "") as string,
   );
 
-  const set = async (
-    chain: string,
-    opts?: { history?: "push" | "replace" },
-  ): Promise<void> => {
+  const set = async (chain: string, opts?: { history?: "push" | "replace" }): Promise<void> => {
     const saveQuery = settings.save("albumIdPath", chain, {
       history: opts?.history ?? "replace",
     });

@@ -40,9 +40,12 @@
       </p>
 
       <div v-if="picking" class="flex flex-col gap-1.5">
-        <AlbumPicker v-model="pickedLabelId" :scope="{ sections: ['label'] }"
+        <AlbumPicker
+          v-model="pickedLabelId"
+          :scope="{ sections: ['label'] }"
           :is-selectable="(node) => node.type === 'label' && !labels.some((label) => label.id === node.id)"
-          :placeholder="t('albums.imageLabelsFilterPlaceholder')" />
+          :placeholder="t('albums.imageLabelsFilterPlaceholder')"
+        />
       </div>
 
       <div class="flex gap-2">
@@ -66,11 +69,7 @@
     @closed="resetCreateForm"
   >
     <el-form label-width="0" @submit.prevent>
-      <el-input
-        v-model="newKey"
-        :placeholder="t('albums.labelKeyPlaceholder')"
-        @keyup.enter="submitCreate"
-      />
+      <el-input v-model="newKey" :placeholder="t('albums.labelKeyPlaceholder')" @keyup.enter="submitCreate" />
       <p v-if="newKey && !newKeyValid" class="image-labels-error">
         {{ t("albums.labelKeyInvalidHint") }}
       </p>
@@ -109,7 +108,14 @@ import { useModal } from "@kabegame/core/composables/useModal";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { listen, type UnlistenFn } from "@/api/rpc";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-import { addImagesToAlbum, createLabelAlbum, fetchAlbum, fetchImageAlbums, removeImagesFromAlbum, type Album } from "@/services/albums";
+import {
+  addImagesToAlbum,
+  createLabelAlbum,
+  fetchAlbum,
+  fetchImageAlbums,
+  removeImagesFromAlbum,
+  type Album,
+} from "@/services/albums";
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { isLabelKey } from "@/utils/labelKey";
 import { labelKeysText, writeClipboardText } from "@/utils/imageLabels";
@@ -146,10 +152,14 @@ async function load() {
   }
 }
 
-watch(() => props.image.id, () => {
-  picking.value = false;
-  void load();
-}, { immediate: true });
+watch(
+  () => props.image.id,
+  () => {
+    picking.value = false;
+    void load();
+  },
+  { immediate: true },
+);
 
 // 其它入口（插件下载、迁移、画册页移除）改动成员时同步刷新
 let unlisten: UnlistenFn | null = null;

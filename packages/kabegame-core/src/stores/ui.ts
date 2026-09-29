@@ -11,9 +11,7 @@ export const useUiStore = defineStore("ui", () => {
   // 单例紧凑布局信号：Android 恒紧凑；其余平台跟随视口宽度（Tauri 桌面缩窗至 <768 也响应）。
   // 所有组件从 useUiStore().isCompact 读取，避免每组件独立订阅 resize。
   const { width: viewportWidth } = useWindowSize();
-  const isCompact = computed(
-    () => IS_ANDROID || IS_WEB && viewportWidth.value < COMPACT_BREAKPOINT
-  );
+  const isCompact = computed(() => IS_ANDROID || (IS_WEB && viewportWidth.value < COMPACT_BREAKPOINT));
 
   // 全局维护一个列数状态，用于控制图片网格的列数
   // 紧凑布局下固定为 2 列；桌面最大 6 列
@@ -54,7 +52,7 @@ export const useUiStore = defineStore("ui", () => {
         imageGridColumns.value = clampDesktopColumns(v);
       }
     },
-    { immediate: true }
+    { immediate: true },
   );
 
   // web mode 视口从宽屏切到紧凑时，强制把列数夹到 2；反之恢复到 settings 或默认 4
@@ -63,8 +61,7 @@ export const useUiStore = defineStore("ui", () => {
       if (imageGridColumns.value > 2) imageGridColumns.value = 2;
     } else {
       const v = settingsStore.values.galleryGridColumns;
-      imageGridColumns.value =
-        typeof v === "number" && v > 0 ? clampDesktopColumns(v) : 4;
+      imageGridColumns.value = typeof v === "number" && v > 0 ? clampDesktopColumns(v) : 4;
     }
   });
 
@@ -75,5 +72,3 @@ export const useUiStore = defineStore("ui", () => {
     isCompact,
   };
 });
-
-

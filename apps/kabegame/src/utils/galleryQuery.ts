@@ -41,11 +41,7 @@ function normalizePath(path = "") {
 }
 
 function providerPathSegment(path = "") {
-  return normalizePath(path)
-    .split("/")
-    .filter(Boolean)
-    .map(encodeUserSegment)
-    .join("/");
+  return normalizePath(path).split("/").filter(Boolean).map(encodeUserSegment).join("/");
 }
 
 // ---------------------------------------------------------------------------
@@ -54,13 +50,7 @@ function providerPathSegment(path = "") {
 
 /** 后端真实存在的搜索目标：路径段 `search/<mode>/<q>` 的合法取值。 */
 export type GallerySearchPathMode =
-  | "display-name"
-  | "metadata"
-  | "native-metadata"
-  | "local-path"
-  | "url"
-  | "label"
-  | "label-tree";
+  "display-name" | "metadata" | "native-metadata" | "local-path" | "url" | "label" | "label-tree";
 
 /**
  * 「任意搜」：前端虚拟模式，后端没有对应 provider。序列化时展开成
@@ -101,9 +91,7 @@ export function isLabelSearchMode(mode: string | undefined): mode is "label" | "
 export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
 
 /** 路径段里的搜索模式：只认后端真实存在的五种，`search/any/…` 不合法。 */
-export function isGallerySearchPathMode(
-  value: string | undefined,
-): value is GallerySearchPathMode {
+export function isGallerySearchPathMode(value: string | undefined): value is GallerySearchPathMode {
   return GALLERY_SEARCH_MODES.includes(value as GallerySearchPathMode);
 }
 
@@ -124,9 +112,7 @@ const GALLERY_SEARCH_ANY_MODES: readonly GallerySearchPathMode[] = GALLERY_SEARC
   (mode) => !isLabelSearchMode(mode),
 );
 
-function canonicalSearchScope(
-  scope: readonly GallerySearchPathMode[],
-): GallerySearchPathMode[] {
+function canonicalSearchScope(scope: readonly GallerySearchPathMode[]): GallerySearchPathMode[] {
   return GALLERY_SEARCH_ANY_MODES.filter((mode) => scope.includes(mode));
 }
 
@@ -178,10 +164,7 @@ export interface GalleryFilterSet {
   search?: GallerySearchTerm;
 }
 
-export type GalleryQueryNode =
-  | { is: GalleryFilterSet }
-  | { any: GalleryQuery[] }
-  | { not: GalleryQuery };
+export type GalleryQueryNode = { is: GalleryFilterSet } | { any: GalleryQuery[] } | { not: GalleryQuery };
 
 export type GalleryQuery = GalleryQueryNode[];
 
@@ -199,13 +182,7 @@ export type NodePath = number[];
 
 export const MAX_GROUP_DEPTH = 3;
 
-export const DIMENSION_ORDER: GalleryBrowseDimension[] = [
-  "plugin",
-  "mediaType",
-  "date",
-  "size",
-  "aspect",
-];
+export const DIMENSION_ORDER: GalleryBrowseDimension[] = ["plugin", "mediaType", "date", "size", "aspect"];
 
 // ---------------------------------------------------------------------------
 // 单维度取值（chip 行 / 树面板用的 per-dimension 值对象）
@@ -232,9 +209,7 @@ export const GALLERY_ASPECT_BUCKETS = [
 ] as const;
 
 function cleanObject<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, v]) => v !== undefined && v !== ""),
-  ) as T;
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined && v !== "")) as T;
 }
 
 export function singleFilterToSet(filter: GalleryFilter): GalleryFilterSet {
@@ -273,10 +248,7 @@ export function filterSetToSingleFilter(filters: GalleryFilterSet): GalleryFilte
   return DEFAULT_GALLERY_FILTER;
 }
 
-export function filterForDimension(
-  filters: GalleryFilterSet,
-  dimension: GalleryBrowseDimension,
-): GalleryFilter {
+export function filterForDimension(filters: GalleryFilterSet, dimension: GalleryBrowseDimension): GalleryFilter {
   switch (dimension) {
     case "plugin":
       return filters.plugin?.pluginId
@@ -295,17 +267,11 @@ export function filterForDimension(
           }
         : DEFAULT_GALLERY_FILTER;
     case "date":
-      return filters.date?.segment
-        ? { type: "date", segment: filters.date.segment }
-        : DEFAULT_GALLERY_FILTER;
+      return filters.date?.segment ? { type: "date", segment: filters.date.segment } : DEFAULT_GALLERY_FILTER;
     case "size":
-      return filters.size?.range
-        ? { type: "size", range: filters.size.range }
-        : DEFAULT_GALLERY_FILTER;
+      return filters.size?.range ? { type: "size", range: filters.size.range } : DEFAULT_GALLERY_FILTER;
     case "aspect":
-      return filters.aspect?.range
-        ? { type: "aspect", range: filters.aspect.range }
-        : DEFAULT_GALLERY_FILTER;
+      return filters.aspect?.range ? { type: "aspect", range: filters.aspect.range } : DEFAULT_GALLERY_FILTER;
   }
 }
 
@@ -319,10 +285,7 @@ export function setFilterDimension(
   return { ...next, ...singleFilterToSet(filter) };
 }
 
-export function removeFilterDimension(
-  filters: GalleryFilterSet,
-  dimension: GalleryFilterDimension,
-): GalleryFilterSet {
+export function removeFilterDimension(filters: GalleryFilterSet, dimension: GalleryFilterDimension): GalleryFilterSet {
   const next: GalleryFilterSet = { ...filters };
   delete next[dimension];
   return next;
@@ -332,16 +295,12 @@ function hasSearch(atom: GalleryFilterSet): boolean {
   return !!atom.search?.query.trim();
 }
 
-function hasDimension(
-  atom: GalleryFilterSet,
-  dimension: GalleryBrowseDimension,
-): boolean {
+function hasDimension(atom: GalleryFilterSet, dimension: GalleryBrowseDimension): boolean {
   return filterForDimension(atom, dimension).type !== "all";
 }
 
 function isEmptyAtom(atom: GalleryFilterSet): boolean {
-  return !hasSearch(atom) &&
-    !DIMENSION_ORDER.some((dimension) => hasDimension(atom, dimension));
+  return !hasSearch(atom) && !DIMENSION_ORDER.some((dimension) => hasDimension(atom, dimension));
 }
 
 /** FilterSet 是否有任何生效条件（含搜索）。 */
@@ -367,9 +326,7 @@ export function filterDateSegment(input: GalleryFilter | GalleryFilterSet): stri
   return fromFilterLike(input).date?.segment ?? null;
 }
 
-export function filterMediaKind(
-  input: GalleryFilter | GalleryFilterSet,
-): "image" | "video" | null {
+export function filterMediaKind(input: GalleryFilter | GalleryFilterSet): "image" | "video" | null {
   return fromFilterLike(input).mediaType?.kind ?? null;
 }
 
@@ -429,22 +386,15 @@ export function splitQueryFilters(query: GalleryQuery): {
   const tail = first && isIsNode(first) ? normalized.slice(1) : normalized;
   // composeQueryFilters 为以原子开头的高级条件保留单分支组边界。
   const only = tail.length === 1 ? tail[0] : undefined;
-  const advanced = only && isAnyNode(only) && only.any.length === 1
-    ? only.any[0]!
-    : tail;
+  const advanced = only && isAnyNode(only) && only.any.length === 1 ? only.any[0]! : tail;
   return { simple, advanced };
 }
 
 /** 两部分以 AND 组合；单分支 ~any 防止高级原子被归一化合入简单 chip。 */
-export function composeQueryFilters(
-  simple: GalleryFilterSet,
-  advanced: GalleryQuery,
-): GalleryQuery {
+export function composeQueryFilters(simple: GalleryFilterSet, advanced: GalleryQuery): GalleryQuery {
   const extra = normalizeQuery(advanced);
   const first = extra[0];
-  const suffix: GalleryQuery = first && isIsNode(first)
-    ? [{ any: [extra] }]
-    : extra;
+  const suffix: GalleryQuery = first && isIsNode(first) ? [{ any: [extra] }] : extra;
   return normalizeQuery([...queryFromFilterSet(simple), ...suffix]);
 }
 
@@ -467,15 +417,10 @@ export function querySearchTerm(query: GalleryQuery): GallerySearchTerm | null {
 }
 
 /** 查询的任意原子是否用到了某维度（grid adapter 刷新启发式用）。 */
-export function queryUsesDimension(
-  query: GalleryQuery,
-  dimension: GalleryFilterDimension,
-): boolean {
+export function queryUsesDimension(query: GalleryQuery, dimension: GalleryFilterDimension): boolean {
   return query.some((node) => {
     if (isIsNode(node)) {
-      return dimension === "search"
-        ? hasSearch(node.is)
-        : hasDimension(node.is, dimension);
+      return dimension === "search" ? hasSearch(node.is) : hasDimension(node.is, dimension);
     }
     if (isAnyNode(node)) {
       return node.any.some((branch) => queryUsesDimension(branch, dimension));
@@ -492,22 +437,13 @@ function isIsNode(node: GalleryQueryNode): node is { is: GalleryFilterSet } {
   return "is" in node;
 }
 
-function isAnyNode(
-  node: GalleryQueryNode,
-): node is { any: GalleryQuery[] } {
+function isAnyNode(node: GalleryQueryNode): node is { any: GalleryQuery[] } {
   return "any" in node;
 }
 
-function mergeAtoms(
-  left: GalleryFilterSet,
-  right: GalleryFilterSet,
-): GalleryFilterSet | null {
+function mergeAtoms(left: GalleryFilterSet, right: GalleryFilterSet): GalleryFilterSet | null {
   if (hasSearch(left) && hasSearch(right)) return null;
-  if (
-    DIMENSION_ORDER.some((dimension) =>
-      hasDimension(left, dimension) && hasDimension(right, dimension)
-    )
-  ) {
+  if (DIMENSION_ORDER.some((dimension) => hasDimension(left, dimension) && hasDimension(right, dimension))) {
     return null;
   }
   const merged = { ...left };
@@ -528,9 +464,7 @@ function normalizeSequence(sequence: GalleryQuery): GalleryQuery {
     if (isIsNode(node)) {
       next = isEmptyAtom(node.is) ? null : { is: normalizeAtom(node.is) };
     } else if (isAnyNode(node)) {
-      const branches = node.any.map(normalizeSequence).filter((branch) =>
-        branch.length > 0
-      );
+      const branches = node.any.map(normalizeSequence).filter((branch) => branch.length > 0);
       next = branches.length > 0 ? { any: branches } : null;
     } else {
       const childSequence = normalizeSequence(node.not);
@@ -615,17 +549,11 @@ function locateNode(query: GalleryQuery, path: NodePath): NodeLocation {
   throw new Error(`无效 NodePath: ${path.join(".")}`);
 }
 
-export function getNode(
-  query: GalleryQuery,
-  path: NodePath,
-): GalleryQueryNode {
+export function getNode(query: GalleryQuery, path: NodePath): GalleryQueryNode {
   return locateNode(query, path).node;
 }
 
-export function notParity(
-  query: GalleryQuery,
-  nodePath: NodePath,
-): boolean {
+export function notParity(query: GalleryQuery, nodePath: NodePath): boolean {
   return locateNode(query, nodePath).notDepth % 2 === 1;
 }
 
@@ -649,9 +577,7 @@ function updateInSequence(
 
   if (isAnyNode(node)) {
     const branchIndex = path[position + 1];
-    const branch = branchIndex === undefined
-      ? undefined
-      : node.any[branchIndex];
+    const branch = branchIndex === undefined ? undefined : node.any[branchIndex];
     if (!branch || position + 2 >= path.length) {
       throw new Error(`无效 NodePath: ${path.join(".")}`);
     }
@@ -677,11 +603,7 @@ export function updateNode(
   return updateInSequence(query, path, 0, fn);
 }
 
-function removeFromSequence(
-  sequence: GalleryQuery,
-  path: NodePath,
-  position: number,
-): GalleryQuery {
+function removeFromSequence(sequence: GalleryQuery, path: NodePath, position: number): GalleryQuery {
   const nodeIndex = path[position];
   const node = nodeIndex === undefined ? undefined : sequence[nodeIndex];
   if (nodeIndex === undefined || !node) {
@@ -695,17 +617,16 @@ function removeFromSequence(
   const nextSequence = [...sequence];
   if (isAnyNode(node)) {
     const branchIndex = path[position + 1];
-    const branch = branchIndex === undefined
-      ? undefined
-      : node.any[branchIndex];
+    const branch = branchIndex === undefined ? undefined : node.any[branchIndex];
     if (!branch || position + 2 >= path.length) {
       throw new Error(`无效 NodePath: ${path.join(".")}`);
     }
     const nextBranch = removeFromSequence(branch, path, position + 2);
     // 分支删空即删掉该分支，否则 UI 会残留一条指向空分支的「或」分隔线
-    const branches = nextBranch.length > 0
-      ? node.any.map((current, index) => index === branchIndex ? nextBranch : current)
-      : node.any.filter((_, index) => index !== branchIndex);
+    const branches =
+      nextBranch.length > 0
+        ? node.any.map((current, index) => (index === branchIndex ? nextBranch : current))
+        : node.any.filter((_, index) => index !== branchIndex);
     if (branches.length === 0) {
       return sequence.filter((_, index) => index !== nodeIndex);
     }
@@ -723,10 +644,7 @@ function removeFromSequence(
   return nextSequence;
 }
 
-export function removeNode(
-  query: GalleryQuery,
-  path: NodePath,
-): GalleryQuery {
+export function removeNode(query: GalleryQuery, path: NodePath): GalleryQuery {
   if (path.length === 0) throw new Error("NodePath 不能为空");
   return removeFromSequence(query, path, 0);
 }
@@ -774,16 +692,11 @@ export interface QueryBodyPart {
 }
 
 /** 依 endsAtHub 语义拼接两个查询体片段，空片段自动跳过。 */
-export function appendQueryBodyPart(
-  current: QueryBodyPart,
-  next: QueryBodyPart,
-): QueryBodyPart {
+export function appendQueryBodyPart(current: QueryBodyPart, next: QueryBodyPart): QueryBodyPart {
   if (!next.body) return current;
   if (!current.body) return next;
   return {
-    body: `${current.body}${
-      current.endsAtHub ? "/" : `/${FILTER_COMB}/`
-    }${next.body}`,
+    body: `${current.body}${current.endsAtHub ? "/" : `/${FILTER_COMB}/`}${next.body}`,
     endsAtHub: next.endsAtHub,
   };
 }
@@ -841,9 +754,7 @@ function serializeSequence(sequence: GalleryQuery): QueryBodyPart {
       serialized = serializeAtom(node.is);
     } else if (isAnyNode(node)) {
       serialized = {
-        body: `~any/${
-          node.any.map((branch) => serializeSequence(branch).body).join("/~or/")
-        }/~end`,
+        body: `~any/${node.any.map((branch) => serializeSequence(branch).body).join("/~or/")}/~end`,
         endsAtHub: true,
       };
     } else {
@@ -875,11 +786,7 @@ export function serializeFilterSet(filters: GalleryFilterSet): string {
 // 被盲切），对新形态（双层编码后段内不再有裸 `/`）退化为恒等。
 function hasEscapedSlash(segment: string): boolean {
   let backslashes = 0;
-  for (
-    let index = segment.length - 1;
-    index >= 0 && segment[index] === "\\";
-    index--
-  ) {
+  for (let index = segment.length - 1; index >= 0 && segment[index] === "\\"; index--) {
     backslashes += 1;
   }
   return backslashes % 2 === 1;
@@ -900,26 +807,18 @@ function joinEscapedSegments(segments: readonly string[]): string[] {
 
 function chunkEnd(segments: readonly string[], start: number): number {
   let end = start;
-  while (
-    end < segments.length && segments[end] !== FILTER_COMB &&
-    !segments[end]!.startsWith("~")
-  ) {
+  while (end < segments.length && segments[end] !== FILTER_COMB && !segments[end]!.startsWith("~")) {
     end += 1;
   }
   return end;
 }
 
-function appendAtom(
-  sequence: GalleryQuery,
-  dimension: GalleryFilterDimension,
-  atom: GalleryFilterSet,
-): void {
+function appendAtom(sequence: GalleryQuery, dimension: GalleryFilterDimension, atom: GalleryFilterSet): void {
   const previous = sequence.at(-1);
-  const occupied = previous && isIsNode(previous) && (
-    dimension === "search"
-      ? hasSearch(previous.is)
-      : hasDimension(previous.is, dimension)
-  );
+  const occupied =
+    previous &&
+    isIsNode(previous) &&
+    (dimension === "search" ? hasSearch(previous.is) : hasDimension(previous.is, dimension));
   if (previous && isIsNode(previous) && !occupied) {
     previous.is = { ...previous.is, ...atom };
   } else {
@@ -1053,8 +952,7 @@ export function parseDimensionChunk(
     const pluginId = decodeUserSegment(chunk[1] ?? "").trim();
     if (!pluginId) return null;
     const extendIndex = chunk[2] === "extend" ? 3 : -1;
-    const extendPath =
-      extendIndex >= 0 ? chunk.slice(extendIndex).map(decodeUserSegment).join("/") : "";
+    const extendPath = extendIndex >= 0 ? chunk.slice(extendIndex).map(decodeUserSegment).join("/") : "";
     return {
       filter: extendPath
         ? { type: "plugin", pluginId, extendPath: normalizePath(extendPath) }
@@ -1109,9 +1007,7 @@ function encodeDateSegment(segment: string): string {
   return `${y}y`;
 }
 
-function decodeDateSegments(
-  segs: readonly string[],
-): { segment: string; consumed: number } | null {
+function decodeDateSegments(segs: readonly string[]): { segment: string; consumed: number } | null {
   const y = segs[0]?.match(/^(\d{4})y$/)?.[1];
   if (!y) return null;
   const m = segs[1]?.match(/^(\d{2})m$/)?.[1];

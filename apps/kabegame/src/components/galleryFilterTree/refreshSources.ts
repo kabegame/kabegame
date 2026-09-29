@@ -10,11 +10,7 @@ export function defaultGalleryTreeRefreshSources(): TreeRefreshSource[] {
 }
 
 /** 插件列表分支额外关心的事件（旧 PluginsProviderChildrenNode 的裸监听）。 */
-export const PLUGIN_LIST_EVENTS = [
-  "plugin-added",
-  "plugin-updated",
-  "plugin-deleted",
-] as const;
+export const PLUGIN_LIST_EVENTS = ["plugin-added", "plugin-updated", "plugin-deleted"] as const;
 
 export function pluginListRefreshSources(): TreeRefreshSource[] {
   return PLUGIN_LIST_EVENTS.map((event) => ({ event }));

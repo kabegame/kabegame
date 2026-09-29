@@ -26,18 +26,21 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 
-const props = withDefaults(defineProps<{
-  modelValue: number;
-  min: number;
-  max: number;
-  stepSize: number;
-  disabled?: boolean;
-  /** 展示的小数位数，默认 0（整数） */
-  precision?: number;
-}>(), {
-  disabled: false,
-  precision: 0,
-});
+const props = withDefaults(
+  defineProps<{
+    modelValue: number;
+    min: number;
+    max: number;
+    stepSize: number;
+    disabled?: boolean;
+    /** 展示的小数位数，默认 0（整数） */
+    precision?: number;
+  }>(),
+  {
+    disabled: false,
+    precision: 0,
+  },
+);
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: number): void;
@@ -46,7 +49,7 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const displayValue = computed(() =>
-  props.precision > 0 ? props.modelValue.toFixed(props.precision) : String(Math.round(props.modelValue))
+  props.precision > 0 ? props.modelValue.toFixed(props.precision) : String(Math.round(props.modelValue)),
 );
 
 function step(direction: 1 | -1) {

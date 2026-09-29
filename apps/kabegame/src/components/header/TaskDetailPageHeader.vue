@@ -41,13 +41,13 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   refresh: [];
-  'stop-task': [];
-  'delete-task': [];
-  'add-to-album': [];
-  'view-task-log': [];
-  'view-task-params': [];
-  'open-task-webview': [];
-  'failed-images': [];
+  "stop-task": [];
+  "delete-task": [];
+  "add-to-album": [];
+  "view-task-log": [];
+  "view-task-params": [];
+  "open-task-webview": [];
+  "failed-images": [];
   back: [];
 }>();
 

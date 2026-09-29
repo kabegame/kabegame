@@ -4,17 +4,13 @@ import { mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import PreviewControlBar from "./PreviewControlBar.vue";
 
-const controlBar = (wrapper: ReturnType<typeof mount>) =>
-  wrapper.get(".preview-control-bar");
+const controlBar = (wrapper: ReturnType<typeof mount>) => wrapper.get(".preview-control-bar");
 
 const exposedApi = (wrapper: ReturnType<typeof mount>) =>
   wrapper.vm as unknown as {
     show: () => void;
     scheduleHide: (delay?: number) => void;
-    refreshPointerPosition: (
-      event?: MouseEvent | PointerEvent | null,
-      delay?: number,
-    ) => void;
+    refreshPointerPosition: (event?: MouseEvent | PointerEvent | null, delay?: number) => void;
   };
 
 afterEach(() => {
@@ -111,38 +107,24 @@ describe("PreviewControlBar 显隐", () => {
       bottom: 80,
     } as DOMRect;
 
-    vi.spyOn(
-      wrapper.get(".preview-control-bar-hover-zone").element,
-      "getBoundingClientRect",
-    ).mockReturnValue(hotzoneRect);
-    vi.spyOn(
-      controlBar(wrapper).element,
-      "getBoundingClientRect",
-    ).mockReturnValue(controlsRect);
-
-    api.refreshPointerPosition(
-      new MouseEvent("mousemove", { clientX: 50, clientY: 50 }),
+    vi.spyOn(wrapper.get(".preview-control-bar-hover-zone").element, "getBoundingClientRect").mockReturnValue(
+      hotzoneRect,
     );
+    vi.spyOn(controlBar(wrapper).element, "getBoundingClientRect").mockReturnValue(controlsRect);
+
+    api.refreshPointerPosition(new MouseEvent("mousemove", { clientX: 50, clientY: 50 }));
     await wrapper.vm.$nextTick();
     expect(controlBar(wrapper).classes()).not.toContain("hidden");
 
-    api.refreshPointerPosition(
-      new MouseEvent("mousemove", { clientX: 200, clientY: 200 }),
-      100,
-    );
+    api.refreshPointerPosition(new MouseEvent("mousemove", { clientX: 200, clientY: 200 }), 100);
     await vi.advanceTimersByTimeAsync(100);
     expect(controlBar(wrapper).classes()).toContain("hidden");
 
-    api.refreshPointerPosition(
-      new MouseEvent("mousemove", { clientX: 150, clientY: 50 }),
-    );
+    api.refreshPointerPosition(new MouseEvent("mousemove", { clientX: 150, clientY: 50 }));
     await wrapper.vm.$nextTick();
     expect(controlBar(wrapper).classes()).not.toContain("hidden");
 
-    api.refreshPointerPosition(
-      new MouseEvent("mousemove", { clientX: 200, clientY: 200 }),
-      100,
-    );
+    api.refreshPointerPosition(new MouseEvent("mousemove", { clientX: 200, clientY: 200 }), 100);
     await vi.advanceTimersByTimeAsync(100);
     expect(controlBar(wrapper).classes()).toContain("hidden");
   });

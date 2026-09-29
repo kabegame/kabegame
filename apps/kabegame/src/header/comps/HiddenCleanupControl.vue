@@ -1,23 +1,12 @@
 <template>
   <div class="hidden-cleanup-control flex w-full items-center">
-    <el-button
-      class="w-full"
-      :disabled="disabled"
-      :title="buttonTitle"
-      @click="handleClick"
-    >
+    <el-button class="w-full" :disabled="disabled" :title="buttonTitle" @click="handleClick">
       <el-icon><Delete /></el-icon>
       <span>{{ t("header.cleanHidden") }}</span>
-      <span
-        v-if="store.running"
-        class="ml-auto text-xs text-[var(--anime-text-muted)]"
-      >
+      <span v-if="store.running" class="ml-auto text-xs text-[var(--anime-text-muted)]">
         {{ t("header.cleanHiddenInProgress") }}
       </span>
-      <span
-        v-else-if="hiddenCount > 0"
-        class="ml-auto font-mono text-xs text-[var(--anime-text-muted)]"
-      >
+      <span v-else-if="hiddenCount > 0" class="ml-auto font-mono text-xs text-[var(--anime-text-muted)]">
         {{ hiddenCount.toLocaleString() }}
       </span>
     </el-button>
@@ -44,7 +33,11 @@ async function refreshCount() {
   hiddenCount.value = (await pathqlEntry(`images://gallery/album/${HIDDEN_ALBUM_ID}`)).total ?? 0;
 }
 void refreshCount();
-const unsubscribe = subscribeChanges({ waitMs: 500, filter: (batch) => batch.albumIds.has(HIDDEN_ALBUM_ID), onBatch: refreshCount });
+const unsubscribe = subscribeChanges({
+  waitMs: 500,
+  filter: (batch) => batch.albumIds.has(HIDDEN_ALBUM_ID),
+  onBatch: refreshCount,
+});
 onBeforeUnmount(unsubscribe);
 
 const disabled = computed(() => store.running || hiddenCount.value <= 0);
@@ -59,11 +52,9 @@ async function handleClick() {
   if (disabled.value) return;
   const count = hiddenCount.value;
   try {
-    await ElMessageBox.confirm(
-      t("gallery.hiddenCleanupConfirm", { count }),
-      t("gallery.hiddenCleanupConfirmTitle"),
-      { type: "warning" },
-    );
+    await ElMessageBox.confirm(t("gallery.hiddenCleanupConfirm", { count }), t("gallery.hiddenCleanupConfirmTitle"), {
+      type: "warning",
+    });
   } catch {
     return; // 用户取消
   }

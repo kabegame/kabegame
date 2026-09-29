@@ -1,35 +1,57 @@
 <template>
-  <div class="edge-arrows-container" ref="containerRef" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave"
-    @mousemove="handleMouseMove">
+  <div
+    class="edge-arrows-container"
+    ref="containerRef"
+    @mouseenter="handleMouseEnter"
+    @mouseleave="handleMouseLeave"
+    @mousemove="handleMouseMove"
+  >
     <slot />
     <transition name="fade">
       <div v-if="showArrows" class="edge-arrows">
         <transition name="fade">
-          <button v-if="showUp && onMove" class="arrow-btn arrow-up" @click.stop="handleArrowClick('up')" title="向上移动">
+          <button
+            v-if="showUp && onMove"
+            class="arrow-btn arrow-up"
+            @click.stop="handleArrowClick('up')"
+            title="向上移动"
+          >
             <el-icon>
               <ArrowUp />
             </el-icon>
           </button>
         </transition>
         <transition name="fade">
-          <button v-if="showDown && onMove" class="arrow-btn arrow-down" @click.stop="handleArrowClick('down')"
-            title="向下移动">
+          <button
+            v-if="showDown && onMove"
+            class="arrow-btn arrow-down"
+            @click.stop="handleArrowClick('down')"
+            title="向下移动"
+          >
             <el-icon>
               <ArrowDown />
             </el-icon>
           </button>
         </transition>
         <transition name="fade">
-          <button v-if="showLeft && onMove" class="arrow-btn arrow-left" @click.stop="handleArrowClick('left')"
-            title="向左移动">
+          <button
+            v-if="showLeft && onMove"
+            class="arrow-btn arrow-left"
+            @click.stop="handleArrowClick('left')"
+            title="向左移动"
+          >
             <el-icon>
               <ArrowLeft />
             </el-icon>
           </button>
         </transition>
         <transition name="fade">
-          <button v-if="showRight && onMove" class="arrow-btn arrow-right" @click.stop="handleArrowClick('right')"
-            title="向右移动">
+          <button
+            v-if="showRight && onMove"
+            class="arrow-btn arrow-right"
+            @click.stop="handleArrowClick('right')"
+            title="向右移动"
+          >
             <el-icon>
               <ArrowRight />
             </el-icon>
@@ -157,7 +179,9 @@ function handleArrowClick(direction: "up" | "down" | "left" | "right") {
   justify-content: center;
   cursor: pointer;
   pointer-events: all;
-  transition: opacity 0.2s ease, background 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    background 0.2s ease;
   box-shadow: none;
 
   &:hover {
@@ -218,4 +242,3 @@ function handleArrowClick(direction: "up" | "down" | "left" | "right") {
   border-radius: 50% 0 0 50%;
 }
 </style>
-

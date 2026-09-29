@@ -36,7 +36,7 @@ watch(
     const n = typeof v === "number" ? v : Number(v);
     localValue.value = Number.isFinite(n) ? clamp(n) : 500;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const uiStore = useUiStore();

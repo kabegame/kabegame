@@ -8,8 +8,13 @@
     <el-form :model="form" label-position="top" class="px-1" @submit.prevent>
       <el-divider content-position="left">{{ $t("gallery.webpageSectionPage") }}</el-divider>
       <el-form-item v-if="urlVarDef" :label="varDisplayName(urlVarDef)" required :error="urlErrorText">
-        <el-input v-model="form.url" :placeholder="varDescripts(urlVarDef) || 'https://'" clearable
-          @input="urlError = null" @keyup.enter="handleSubmit" />
+        <el-input
+          v-model="form.url"
+          :placeholder="varDescripts(urlVarDef) || 'https://'"
+          clearable
+          @input="urlError = null"
+          @keyup.enter="handleSubmit"
+        />
       </el-form-item>
       <PluginVarsForm v-model="form.vars" :plugin-vars="visibleVarDefs" />
       <div v-if="IS_ANDROID" class="mb-3 text-xs text-[var(--anime-text-secondary)]">
@@ -30,19 +35,31 @@
         </el-input>
       </el-form-item>
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPicker v-model="selectedOutputAlbumId" :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
+        <AlbumPicker
+          v-model="selectedOutputAlbumId"
+          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
-          allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
-          clearable />
+          allow-create
+          :placeholder="$t('plugins.defaultGalleryOnly')"
+          :picker-title="$t('albums.outputAlbum')"
+          clearable
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input v-model="newOutputAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50"
-          show-word-limit />
+        <el-input
+          v-model="newOutputAlbumName"
+          :placeholder="$t('albums.placeholderName')"
+          maxlength="50"
+          show-word-limit
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPicker v-model="newOutputAlbumParentId" :scope="{ sections: ['normal'] }"
+        <AlbumPicker
+          v-model="newOutputAlbumParentId"
+          :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')" />
+          :picker-title="$t('albums.parentAlbum')"
+        />
       </el-form-item>
 
       <!-- Header 只对 V8 后端生效；WebView 的身份只来自浏览器会话 -->
@@ -167,7 +184,10 @@ function resetForm() {
   form.value = {
     url: "",
     outputDir: "",
-    vars: normalizeVarsForUI({}, varDefs.value.filter((def) => def.key !== "url")),
+    vars: normalizeVarsForUI(
+      {},
+      varDefs.value.filter((def) => def.key !== "url"),
+    ),
   };
   headers.value = {};
   urlError.value = null;
@@ -244,9 +264,7 @@ async function handleSubmit() {
 
     // 只提交当前可见的变量（切到 WebView 后 Cookie / UA 开关不入任务参数）
     const visibleKeys = new Set(visibleVarDefs.value.map((def) => def.key));
-    const visibleVars = Object.fromEntries(
-      Object.entries(form.value.vars).filter(([key]) => visibleKeys.has(key)),
-    );
+    const visibleVars = Object.fromEntries(Object.entries(form.value.vars).filter(([key]) => visibleKeys.has(key)));
     const userConfig: Record<string, any> = {
       ...expandVarsForBackend(visibleVars, visibleVarDefs.value),
       url: checked.url,
@@ -271,7 +289,9 @@ async function handleSubmit() {
         backend: userConfig.backend,
         has_output_dir: !!form.value.outputDir,
         output_album: selectedOutputAlbumId.value
-          ? selectedOutputAlbumId.value === "__create_new__" ? "new" : "existing"
+          ? selectedOutputAlbumId.value === "__create_new__"
+            ? "new"
+            : "existing"
           : "none",
         has_http_headers: Object.keys(httpHeaders).length > 0,
         http_header_count: Object.keys(httpHeaders).length,

@@ -30,7 +30,7 @@ const props = withDefaults(defineProps<Props>(), {
   title: undefined,
 });
 const { t } = useI18n();
-const resolvedTitle = computed(() => props.title ?? t('gallery.chooseImportMethod'));
+const resolvedTitle = computed(() => props.title ?? t("gallery.chooseImportMethod"));
 const appStore = useApp();
 
 const emit = defineEmits<{
@@ -41,28 +41,32 @@ const emit = defineEmits<{
 const mediaOptions = computed<OptionItem[]>(() => [
   {
     id: "image",
-    title: t('gallery.selectImage'),
-    desc: t('gallery.selectImageDesc'),
+    title: t("gallery.selectImage"),
+    desc: t("gallery.selectImageDesc"),
     icon: Picture,
   },
   {
     id: "video",
-    title: t('gallery.selectVideo'),
-    desc: t('gallery.selectVideoDesc'),
+    title: t("gallery.selectVideo"),
+    desc: t("gallery.selectVideoDesc"),
     icon: VideoPlay,
   },
-  ...(IS_WEB ? [] : [{
-    id: "folder",
-    title: t('gallery.selectFolder'),
-    desc: t('gallery.selectFolderDesc'),
-    icon: FolderOpened,
-  }]),
+  ...(IS_WEB
+    ? []
+    : [
+        {
+          id: "folder",
+          title: t("gallery.selectFolder"),
+          desc: t("gallery.selectFolderDesc"),
+          icon: FolderOpened,
+        },
+      ]),
 ]);
 
 // 受控：仅通过 modelValue 控制显示；选择时发 select，由父组件关闭
 // 移动端选文件夹时在此调用 picker 插件并带上结果
 const handleSelect = async (id: string) => {
-  if (!appStore.isSuper && await guardDesktopOnly("picker")) return;
+  if (!appStore.isSuper && (await guardDesktopOnly("picker"))) return;
   const type = id as "image" | "folder" | "video";
   if (type === "folder") {
     const result = await pickFolder();

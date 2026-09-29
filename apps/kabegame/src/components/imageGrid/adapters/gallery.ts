@@ -1,14 +1,8 @@
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
-import {
-  resetGalleryRouteToDefault,
-  useGalleryRouteStore,
-} from "@/stores/galleryRoute";
-import {
-  buildGalleryCountPath,
-  hasActiveQuery,
-} from "@/utils/galleryPath";
+import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
+import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
 import type { GridAdapter } from "../types";
 import { IS_WEB } from "@kabegame/core/env";
@@ -17,14 +11,11 @@ import { IS_WEB } from "@kabegame/core/env";
  * Gallery（`/gallery`）的 grid adapter。
  * 必须在 Gallery.vue 的 setup 中调用。
  */
-export function createGalleryAdapter(params: {
-  analytics: ImageAnalytics;
-}): GridAdapter {
+export function createGalleryAdapter(params: { analytics: ImageAnalytics }): GridAdapter {
   const routeStore = useGalleryRouteStore();
   const t = i18n.global.t;
 
-  const isDefaultGalleryRoute = () =>
-    !hasActiveQuery(routeStore.query) && routeStore.page === 1;
+  const isDefaultGalleryRoute = () => !hasActiveQuery(routeStore.query) && routeStore.page === 1;
 
   const resetGalleryRouteAfterLoadError = async () => {
     if (isDefaultGalleryRoute()) return;

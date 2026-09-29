@@ -37,25 +37,28 @@
 <script setup lang="ts">
 import { ArrowRight } from "@kabegame/element-plus-icons";
 
-const props = withDefaults(defineProps<{
-  depth: number;
-  expandable?: boolean;
-  expanded?: boolean;
-  active?: boolean;
-  disabled?: boolean;
-  muted?: boolean;
-  busy?: boolean;
-  /** DnD inside 落点高亮。 */
-  dropTarget?: boolean;
-}>(), {
-  expandable: false,
-  expanded: false,
-  active: false,
-  disabled: false,
-  muted: false,
-  busy: false,
-  dropTarget: false,
-});
+const props = withDefaults(
+  defineProps<{
+    depth: number;
+    expandable?: boolean;
+    expanded?: boolean;
+    active?: boolean;
+    disabled?: boolean;
+    muted?: boolean;
+    busy?: boolean;
+    /** DnD inside 落点高亮。 */
+    dropTarget?: boolean;
+  }>(),
+  {
+    expandable: false,
+    expanded: false,
+    active: false,
+    disabled: false,
+    muted: false,
+    busy: false,
+    dropTarget: false,
+  },
+);
 
 const emit = defineEmits<{
   toggle: [];

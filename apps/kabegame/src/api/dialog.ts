@@ -34,9 +34,7 @@ function openWebPicker(opts: FilePickerOptions): Promise<FilePickerResult | null
     if (opts.directory) {
       (input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
     } else if (opts.filters && opts.filters.length > 0) {
-      input.accept = opts.filters
-        .flatMap((f) => f.extensions.map((ext) => `.${ext.replace(/^\./, "")}`))
-        .join(",");
+      input.accept = opts.filters.flatMap((f) => f.extensions.map((ext) => `.${ext.replace(/^\./, "")}`)).join(",");
     }
     input.style.display = "none";
     let settled = false;

@@ -22,11 +22,7 @@
 import { computed } from "vue";
 import { ElTooltip } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
-import {
-  resolvePluginLabel,
-  type PluginLabel,
-  type ResolvedPluginLabel,
-} from "../../stores/pluginLabels";
+import { resolvePluginLabel, type PluginLabel, type ResolvedPluginLabel } from "../../stores/pluginLabels";
 
 const props = withDefaults(
   defineProps<{
@@ -42,9 +38,7 @@ const { t } = useI18n();
 const EMPTY: ResolvedPluginLabel = { text: "", desc: "" };
 
 const resolved = computed(() =>
-  props.label
-    ? resolvePluginLabel(props.label, t as (k: string, params?: Record<string, unknown>) => string)
-    : EMPTY,
+  props.label ? resolvePluginLabel(props.label, t as (k: string, params?: Record<string, unknown>) => string) : EMPTY,
 );
 
 const tooltipText = computed(() =>

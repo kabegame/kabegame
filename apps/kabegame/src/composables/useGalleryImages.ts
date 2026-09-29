@@ -8,10 +8,7 @@ import type { ImageInfo } from "@kabegame/core/types/image";
  * 画廊图片列表管理（基于路径的查询）。
  * @param onBeforeFetch 每次拉取前调用（如清空 per-page metadata 缓存）
  */
-export function useGalleryImages(
-  galleryContainerRef: Ref<HTMLElement | null>,
-  onBeforeFetch?: () => void,
-) {
+export function useGalleryImages(galleryContainerRef: Ref<HTMLElement | null>, onBeforeFetch?: () => void) {
   // 本地图片列表：由视图直接消费，避免引入额外全局同步开销
   const displayedImages = shallowRef<ImageInfo[]>([]);
   let displayedImageIds = new Set<string>();
@@ -37,10 +34,7 @@ export function useGalleryImages(
    * 根据路径加载图片列表
    * @returns { total: number } - 图片总数
    */
-  const fetchByPath = async (
-    path: string,
-    opts?: { loadKey?: string },
-  ) => {
+  const fetchByPath = async (path: string, opts?: { loadKey?: string }) => {
     onBeforeFetch?.();
     const p = withGalleryPrefix(path);
     const [rows, entry] = await Promise.all([

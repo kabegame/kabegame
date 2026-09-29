@@ -39,8 +39,7 @@ export function usePluginConfig() {
   const pluginVars = ref<PluginVarDef[]>([]);
 
   /** 取选项展示名（按当前 locale 解析 i18n 对象） */
-  const optionLabel = (opt: VarOption) =>
-    typeof opt === "string" ? opt : resolveConfigText(opt.name, locale.value);
+  const optionLabel = (opt: VarOption) => (typeof opt === "string" ? opt : resolveConfigText(opt.name, locale.value));
 
   // 仅加载插件变量定义到 pluginVars，不修改 form.vars（用于载入配置等场景）
   const loadPluginVarDefs = async (pluginId: string) => {
@@ -52,10 +51,7 @@ export function usePluginConfig() {
 
   // 根据当前 pluginVars 用默认值重置 form.vars
   const resetFormVarsToDefaults = () => {
-    form.value.vars = normalizeVarsForUI(
-      {},
-      pluginVars.value as PluginVarDef[]
-    );
+    form.value.vars = normalizeVarsForUI({}, pluginVars.value as PluginVarDef[]);
   };
 
   /** 解析磁盘默认配置 JSON 中的 httpHeaders */
@@ -72,9 +68,7 @@ export function usePluginConfig() {
    * 加载插件变量定义并优先应用用户数据目录下的默认配置；
    * 默认配置缺失时由后端生成；解析失败时回退到 config.json 中的 var 默认值。
    */
-  const loadPluginVars = async (
-    pluginId: string
-  ): Promise<PluginDefaultLoadResult> => {
+  const loadPluginVars = async (pluginId: string): Promise<PluginDefaultLoadResult> => {
     await loadPluginVarDefs(pluginId);
     const defs = pluginVars.value as PluginVarDef[];
     const emptyResult = (): PluginDefaultLoadResult => ({
@@ -165,16 +159,11 @@ export function usePluginConfig() {
 
   // 选择文件（用于插件变量，可按扩展名过滤）
   // - extensions: 不带点号，例如 ["jpg","png","zip"]
-  const selectFileByExtensions = async (
-    varKey: string,
-    extensions?: string[]
-  ) => {
+  const selectFileByExtensions = async (varKey: string, extensions?: string[]) => {
     try {
       let exts: string[];
       if (extensions && extensions.length > 0) {
-        exts = extensions
-          .map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase())
-          .filter(Boolean);
+        exts = extensions.map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase()).filter(Boolean);
       } else {
         await loadImageTypes();
         exts = imageExtensions.value.length

@@ -5,7 +5,7 @@
         <el-icon v-if="!loading">
           <Plus />
         </el-icon>
-        {{ $t('common.loadMore') }}
+        {{ $t("common.loadMore") }}
       </el-button>
     </template>
     <template v-else-if="showNextPage">
@@ -13,11 +13,11 @@
         <el-icon>
           <ArrowRight />
         </el-icon>
-        {{ $t('common.enterNextPage') }}
+        {{ $t("common.enterNextPage") }}
       </el-button>
     </template>
     <template v-else>
-      <div class="load-more-placeholder">{{ $t('common.noMore') }}</div>
+      <div class="load-more-placeholder">{{ $t("common.noMore") }}</div>
     </template>
   </div>
 </template>

@@ -49,11 +49,7 @@ export const useFolderSyncStore = defineStore("folderSync", () => {
   }
 
   function applyRunState(state: FolderSyncRunState) {
-    tasks.value = new Map(
-      (Array.isArray(state.tasks) ? state.tasks : []).map((
-        task,
-      ) => [task.albumId, { ...task }]),
-    );
+    tasks.value = new Map((Array.isArray(state.tasks) ? state.tasks : []).map((task) => [task.albumId, { ...task }]));
   }
 
   function clearError() {

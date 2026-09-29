@@ -13,16 +13,17 @@
     @update:model-value="modal.close"
     @close="handleClose"
   >
-    <PluginDetailContent
-      v-if="preview"
-      :loading="false"
-      :show-skeleton="false"
-      :plugin="preview"
-      :is-remote="true"
+    <PluginDetailContent v-if="preview" :loading="false" :show-skeleton="false" :plugin="preview" :is-remote="true" />
+    <el-alert
+      v-else-if="errorMsg"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="t('common.parseFailed')"
+      :description="errorMsg"
     />
-    <el-alert v-else-if="errorMsg" type="error" :closable="false" show-icon :title="t('common.parseFailed')" :description="errorMsg" />
     <div v-else v-loading="loading" class="loading-container">
-      {{ t('common.loading') }}
+      {{ t("common.loading") }}
     </div>
 
     <!-- 详情组件不再自带标题栏/操作区（已下沉到页面 PageHeader），导入这条路径由本弹窗提供 -->
@@ -31,7 +32,7 @@
         <span class="kb-chip bg-[#ecf5ff] text-[#409eff] font-mono">{{ preview.id }}</span>
         <span class="kb-chip bg-[#f4f4f5] text-[#909399]">v{{ preview.version }}</span>
         <div class="flex-1" />
-        <el-button @click="handleClose">{{ t('common.cancel') }}</el-button>
+        <el-button @click="handleClose">{{ t("common.cancel") }}</el-button>
         <el-button type="primary" :disabled="!!preview.minAppIncompatible" @click="doInstall">
           {{ installButtonText }}
         </el-button>
@@ -41,16 +42,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
-import { ElMessageBox } from '@kabegame/element-plus';
-import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
+import { ref, computed, watch } from "vue";
+import { ElMessageBox } from "@kabegame/element-plus";
+import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import type { Plugin } from '@kabegame/core/stores/plugins';
-import { usePluginActionState } from '@kabegame/core/composables/usePluginActionState';
-import { useUiStore } from '@kabegame/core/stores/ui';
-import { useModal } from '@kabegame/core/composables/useModal';
-import PluginDetailContent from '@kabegame/core/components/plugin/PluginDetailContent.vue';
+import type { Plugin } from "@kabegame/core/stores/plugins";
+import { usePluginActionState } from "@kabegame/core/composables/usePluginActionState";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { useModal } from "@kabegame/core/composables/useModal";
+import PluginDetailContent from "@kabegame/core/components/plugin/PluginDetailContent.vue";
 
 const props = defineProps<{
   kgpgPath: string | null;
@@ -58,19 +59,23 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'update:visible', val: boolean): void;
-  (e: 'success'): void;
+  (e: "update:visible", val: boolean): void;
+  (e: "success"): void;
 }>();
 
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
 
 const handleClose = () => {
-  emit('update:visible', false);
+  emit("update:visible", false);
 };
 
-const modal = useModal({ onClose: () => emit('update:visible', false) });
-watch(() => props.visible, (v) => v ? modal.open() : modal.close(), { immediate: true });
+const modal = useModal({ onClose: () => emit("update:visible", false) });
+watch(
+  () => props.visible,
+  (v) => (v ? modal.open() : modal.close()),
+  { immediate: true },
+);
 
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
@@ -91,11 +96,14 @@ const installButtonText = computed(() => {
   }
 });
 
-watch(() => props.kgpgPath, async (newPath) => {
-  if (newPath && modal.isOpen) {
-    await loadPreview(newPath);
-  }
-});
+watch(
+  () => props.kgpgPath,
+  async (newPath) => {
+    if (newPath && modal.isOpen) {
+      await loadPreview(newPath);
+    }
+  },
+);
 
 watch(modal.isOpen, async (val) => {
   if (val && props.kgpgPath) {
@@ -112,9 +120,9 @@ const loadPreview = async (path: string) => {
   errorMsg.value = null;
   preview.value = null;
   try {
-    preview.value = await invoke<Plugin>('preview_import_plugin', { zipPath: path });
+    preview.value = await invoke<Plugin>("preview_import_plugin", { zipPath: path });
   } catch (e: any) {
-    errorMsg.value = typeof e === 'string' ? e : String(e?.message || e);
+    errorMsg.value = typeof e === "string" ? e : String(e?.message || e);
   } finally {
     loading.value = false;
   }
@@ -128,37 +136,36 @@ const doInstall = async () => {
   if (!props.kgpgPath || !preview.value) return;
 
   const confirmTitle = isReinstallFlow.value
-    ? t('plugins.confirmReinstall')
+    ? t("plugins.confirmReinstall")
     : isUpdateFlow.value
-      ? t('plugins.confirmUpdate')
-      : t('plugins.confirmInstall');
+      ? t("plugins.confirmUpdate")
+      : t("plugins.confirmInstall");
   const successMsg = isReinstallFlow.value
-    ? t('plugins.reinstallSuccess')
+    ? t("plugins.reinstallSuccess")
     : isUpdateFlow.value
-      ? t('plugins.updateSuccess')
-      : t('common.importSuccess');
+      ? t("plugins.updateSuccess")
+      : t("common.importSuccess");
 
   try {
-    await ElMessageBox.confirm(
-      t('plugins.installLocalConfirm', { name: pluginName(preview.value) }),
-      confirmTitle,
-      { type: 'warning', confirmButtonText: t('plugins.installButton'), cancelButtonText: t('common.cancel') }
-    );
+    await ElMessageBox.confirm(t("plugins.installLocalConfirm", { name: pluginName(preview.value) }), confirmTitle, {
+      type: "warning",
+      confirmButtonText: t("plugins.installButton"),
+      cancelButtonText: t("common.cancel"),
+    });
   } catch {
     return;
   }
 
   try {
-    await invoke('import_plugin_from_zip', { zipPath: props.kgpgPath });
+    await invoke("import_plugin_from_zip", { zipPath: props.kgpgPath });
     ElMessage.success(successMsg);
     // plugin-added / plugin-updated event auto-updates the store
-    emit('success');
+    emit("success");
     modal.close();
   } catch (e: any) {
-    ElMessage.error(typeof e === 'string' ? e : String(e?.message || e));
+    ElMessage.error(typeof e === "string" ? e : String(e?.message || e));
   }
 };
-
 </script>
 
 <style scoped>

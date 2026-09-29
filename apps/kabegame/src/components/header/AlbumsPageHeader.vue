@@ -1,10 +1,5 @@
 <template>
-  <PageHeader
-    :title="t('albums.title')"
-    :show="showIds"
-    :fold="foldIds"
-    @action="handleAction"
-  />
+  <PageHeader :title="t('albums.title')" :show="showIds" :fold="foldIds" @action="handleAction" />
 </template>
 
 <script setup lang="ts">
@@ -18,19 +13,16 @@ import { usePageBridgeStore } from "@/stores/pageBridge";
 
 const { t } = useI18n();
 
-const props = withDefaults(
-  defineProps<{ albumDriveEnabled?: boolean }>(),
-  { albumDriveEnabled: false }
-);
+const props = withDefaults(defineProps<{ albumDriveEnabled?: boolean }>(), { albumDriveEnabled: false });
 
 const emit = defineEmits<{
-  'view-vd': [];
+  "view-vd": [];
   refresh: [];
-  'create-album': [];
+  "create-album": [];
   /** 紧凑模式：唤起画册树抽屉（桌面左树常驻，无此按钮） */
-  'open-tree': [];
+  "open-tree": [];
   /** 桌面：开合画册信息右栏；紧凑模式：唤起画册信息抽屉 */
-  'toggle-detail': [];
+  "toggle-detail": [];
 }>();
 
 const { isCompact } = storeToRefs(useUiStore());
@@ -52,7 +44,13 @@ const showIds = computed(() => {
   if (isCompact.value) {
     return [HeaderFeatureId.AlbumTree, HeaderFeatureId.AlbumInfo, HeaderFeatureId.TaskDrawer];
   } else {
-    return withVd([HeaderFeatureId.AlbumInfo, HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.TaskDrawer]);
+    return withVd([
+      HeaderFeatureId.AlbumInfo,
+      HeaderFeatureId.OpenVirtualDrive,
+      HeaderFeatureId.Refresh,
+      HeaderFeatureId.CreateAlbum,
+      HeaderFeatureId.TaskDrawer,
+    ]);
   }
 });
 

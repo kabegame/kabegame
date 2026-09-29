@@ -64,7 +64,7 @@ const props = withDefaults(
   }>(),
   {
     anchorPrefix: "kbdoc",
-  }
+  },
 );
 
 const { t } = useI18n();
@@ -197,12 +197,7 @@ onBeforeUnmount(() => {
 const md = computed(() => (props.markdown || "").trim());
 
 const escapeHtml = (s: string): string =>
-  s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 const sanitizeHtml = (rawHtml: string): string => {
   const sanitized = DOMPurify.sanitize(rawHtml, {
@@ -220,13 +215,13 @@ const sanitizeHtml = (rawHtml: string): string => {
       }
       // 添加target="_blank"和rel属性
       return `<a ${beforeHref}href="${href}"${afterHref} target="_blank" rel="noopener noreferrer">`;
-    }
+    },
   );
 };
 
 const renderMarkdown = async (
   markdown: string,
-  assets?: PluginAsset[] | null
+  assets?: PluginAsset[] | null,
 ): Promise<{ html: string; headings: DocHeading[] }> => {
   if (!markdown) return { html: "", headings: [] };
 
@@ -281,14 +276,12 @@ const renderMarkdown = async (
       const url = `data:${guessAssetMime(key)};base64,${base64}`;
       processed = processed.replace(
         new RegExp(escapedMatch, "g"),
-        `<img src="${url}" alt="${escapeHtml(
-          img.alt
-        )}" style="max-width: 100%; height: auto;" />`
+        `<img src="${url}" alt="${escapeHtml(img.alt)}" style="max-width: 100%; height: auto;" />`,
       );
     } else {
       processed = processed.replace(
         new RegExp(escapedMatch, "g"),
-        `[${escapeHtml(t("plugins.detail.imageLoadFailed", { path: img.path }))}]`
+        `[${escapeHtml(t("plugins.detail.imageLoadFailed", { path: img.path }))}]`,
       );
     }
   }
@@ -297,11 +290,11 @@ const renderMarkdown = async (
   //    序号即锚点下标——TOC 项与 DOM 锚点共用同一个 i，不存在对不上的可能。
   const headings: DocHeading[] = [];
   const renderer = new marked.Renderer();
-  renderer.link = function(token) {
+  renderer.link = function (token) {
     const href = token.href;
     const title = token.title;
     const text = this.parser.parseInline(token.tokens || []);
-    const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
+    const titleAttr = title ? ` title="${title.replace(/"/g, "&quot;")}"` : "";
     return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
   };
   renderer.heading = function (token) {

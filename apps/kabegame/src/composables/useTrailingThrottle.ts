@@ -7,7 +7,7 @@
  */
 export function useTrailingThrottleFn<TArgs extends any[]>(
   fn: (...args: TArgs) => void | Promise<void>,
-  waitMs: number
+  waitMs: number,
 ) {
   let lastRunAt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -27,13 +27,16 @@ export function useTrailingThrottleFn<TArgs extends any[]>(
 
   const scheduleTrailing = (delayMs: number) => {
     if (timer) return;
-    timer = setTimeout(async () => {
-      timer = null;
-      if (!pendingArgs) return;
-      const args = pendingArgs;
-      pendingArgs = null;
-      await run(args);
-    }, Math.max(0, delayMs));
+    timer = setTimeout(
+      async () => {
+        timer = null;
+        if (!pendingArgs) return;
+        const args = pendingArgs;
+        pendingArgs = null;
+        await run(args);
+      },
+      Math.max(0, delayMs),
+    );
   };
 
   const trigger = async (...args: TArgs) => {

@@ -259,7 +259,13 @@ function ensureSourcesStarted() {
   for (const source of sources) {
     void listen<unknown>(source.event, (event) => {
       const payload = (event?.payload ?? {}) as Record<string, unknown>;
-      perf("hub_event", { event: source.event, seq: payload.seq, reason: payload.reason, nImageIds: Array.isArray(payload.imageIds) ? payload.imageIds.length : 0, subscribers: subscribers.size }); // DEBUG-PERF
+      perf("hub_event", {
+        event: source.event,
+        seq: payload.seq,
+        reason: payload.reason,
+        nImageIds: Array.isArray(payload.imageIds) ? payload.imageIds.length : 0,
+        subscribers: subscribers.size,
+      }); // DEBUG-PERF
       const batch = source.toBatch(payload);
       if (!batch) return;
       if (batch.maxSeq > 0 && deliveredSeqs.has(batch.maxSeq)) return;

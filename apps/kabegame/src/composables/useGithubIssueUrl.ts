@@ -32,9 +32,7 @@ function platformLabel(): string {
 }
 
 function renderSection(section: GithubIssueSection): string | null {
-  const rows = section.fields.filter(
-    (f) => f.value !== null && f.value !== undefined && String(f.value).trim() !== "",
-  );
+  const rows = section.fields.filter((f) => f.value !== null && f.value !== undefined && String(f.value).trim() !== "");
   if (!rows.length) return null;
   return [`### ${section.heading}`, ...rows.map((f) => `- ${f.label}: ${f.value}`)].join("\n");
 }
@@ -53,11 +51,9 @@ export function useGithubIssueUrl() {
       ],
     });
 
-    const blocks = [
-      options.description?.trim(),
-      envSection,
-      ...(options.sections ?? []).map(renderSection),
-    ].filter((block): block is string => !!block);
+    const blocks = [options.description?.trim(), envSection, ...(options.sections ?? []).map(renderSection)].filter(
+      (block): block is string => !!block,
+    );
 
     const params = new URLSearchParams({ title: options.title, body: blocks.join("\n\n") });
     return `${KABEGAME_NEW_ISSUE_URL}?${params.toString()}`;

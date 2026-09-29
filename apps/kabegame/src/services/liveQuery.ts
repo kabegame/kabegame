@@ -64,14 +64,33 @@ export function useLiveQuery(opts: {
     let snapshot = shared ? await fetchView(query) : await pathqlView(query);
     const t1 = performance.now(); // DEBUG-PERF
     let refetched = false; // DEBUG-PERF
-    if (snapshot.seq < minSeq) { snapshot = await pathqlView(query); refetched = true; } // DEBUG-PERF 仅加了 refetched 标记
+    if (snapshot.seq < minSeq) {
+      snapshot = await pathqlView(query);
+      refetched = true;
+    } // DEBUG-PERF 仅加了 refetched 标记
     const t2 = performance.now(); // DEBUG-PERF
     const current = opts.key();
-    if (!current || queryKey(current) !== key) { perf("lq_drop_key_changed", { rows: query.rows }); return; } // DEBUG-PERF 仅加了埋点
+    if (!current || queryKey(current) !== key) {
+      perf("lq_drop_key_changed", { rows: query.rows });
+      return;
+    } // DEBUG-PERF 仅加了埋点
     dirty = false;
     const prevApplied = appliedSeq; // DEBUG-PERF
     await apply(snapshot);
-    perf("lq_fetch", { rows: query.rows, shared, minSeq, seq: snapshot.seq, prevApplied, dropped: snapshot.seq < prevApplied, refetched, n: snapshot.rows.length, total: snapshot.total, ipcMs: +(t1 - t0).toFixed(1), refetchMs: +(t2 - t1).toFixed(1), applyMs: +(performance.now() - t2).toFixed(1) }); // DEBUG-PERF
+    perf("lq_fetch", {
+      rows: query.rows,
+      shared,
+      minSeq,
+      seq: snapshot.seq,
+      prevApplied,
+      dropped: snapshot.seq < prevApplied,
+      refetched,
+      n: snapshot.rows.length,
+      total: snapshot.total,
+      ipcMs: +(t1 - t0).toFixed(1),
+      refetchMs: +(t2 - t1).toFixed(1),
+      applyMs: +(performance.now() - t2).toFixed(1),
+    }); // DEBUG-PERF
   };
 
   /** 显式拉取（首次加载、翻页、手动刷新）：不合并在途请求，错误抛给调用方。 */
@@ -83,7 +102,14 @@ export function useLiveQuery(opts: {
       waitMs: opts.waitMs,
       filter: opts.relevant,
       onBatch: async (batch) => {
-        perf("lq_batch", { maxSeq: batch.maxSeq, appliedSeq, skip: batch.maxSeq <= appliedSeq, reasons: [...batch.images], nImageIds: batch.imageIds.size, active: !!opts.key() }); // DEBUG-PERF
+        perf("lq_batch", {
+          maxSeq: batch.maxSeq,
+          appliedSeq,
+          skip: batch.maxSeq <= appliedSeq,
+          reasons: [...batch.images],
+          nImageIds: batch.imageIds.size,
+          active: !!opts.key(),
+        }); // DEBUG-PERF
         if (batch.maxSeq <= appliedSeq) return;
         if (!opts.key()) {
           dirty = true;

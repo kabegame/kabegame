@@ -34,7 +34,7 @@ const props = withDefaults(
     step: 0.1,
     ariaLabel: undefined,
     vertical: false,
-  }
+  },
 );
 
 const emit = defineEmits<{

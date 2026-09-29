@@ -50,12 +50,10 @@ const options = computed(() =>
     value: opt.value,
     label: resolveManifestText(opt.label, locale.value),
     desc: resolveManifestText(opt.desc, locale.value),
-  }))
+  })),
 );
 
-const pickerOptions = computed(() =>
-  options.value.map((o) => ({ label: o.label, value: o.value }))
-);
+const pickerOptions = computed(() => options.value.map((o) => ({ label: o.label, value: o.value })));
 
 const localValue = ref<string>("fill");
 watch(
@@ -63,7 +61,7 @@ watch(
   (v) => {
     localValue.value = (v as any as string) || "fill";
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const handleChange = async (style: string) => {

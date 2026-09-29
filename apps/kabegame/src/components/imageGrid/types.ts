@@ -30,9 +30,7 @@ export interface GridRefreshContext {
    */
   refreshPage: () => Promise<{ removedIds: string[] }>;
   /** 影响结果集的写操作唯一入口：携带当前视图并立即应用返回快照。 */
-  mutate: <T extends { view?: ViewSnapshot | null }>(
-    op: (view: ViewQuery | null) => Promise<T>,
-  ) => Promise<T>;
+  mutate: <T extends { view?: ViewSnapshot | null }>(op: (view: ViewQuery | null) => Promise<T>) => Promise<T>;
   /** 仅修改展示字段，不重新查询视图。 */
   patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;
   loadTotalImagesCount: () => Promise<void>;
@@ -50,10 +48,7 @@ export interface GridRemoveDialogText {
 export interface GridRemoveConfig {
   /** 返回 true：拦截本次操作（adapter 自行提示原因，如本地文件夹画册只读） */
   guard?: () => boolean;
-  dialogText: (
-    count: number,
-    extra: { includesCurrentWallpaper: boolean },
-  ) => GridRemoveDialogText;
+  dialogText: (count: number, extra: { includesCurrentWallpaper: boolean }) => GridRemoveDialogText;
   /** 确认后的执行；缺省 = `batch_delete_images`（含当前壁纸清理与成功提示） */
   confirm?: (images: ImageInfo[], ctx: GridRefreshContext) => Promise<void>;
 }
@@ -75,10 +70,7 @@ export interface GridAdapter {
   /** 返回 false 则跳过本次路径加载（如 album 校验 `album/` 前缀） */
   validatePath?: (path: string) => boolean;
   computeCountPath: (path: string) => string;
-  onCountError?: (
-    error: unknown,
-    ctx: GridRefreshContext,
-  ) => Promise<number | void> | number | void;
+  onCountError?: (error: unknown, ctx: GridRefreshContext) => Promise<number | void> | number | void;
   onLoadError?: (error: unknown, path: string) => Promise<void> | void;
   /** usePagedGallery 透传：预览跨页边界的目标 path（album 用） */
   computeTargetPath?: (page: number) => string;
@@ -87,10 +79,7 @@ export interface GridAdapter {
 
   changes?: { relevant?: (batch: ChangeBatch) => boolean };
   /** 事件默认刷新完成后的追加动作（task: failedImagesStore.loadAll） */
-  onAfterRefresh?: (
-    ctx: GridRefreshContext,
-    info: { removedIds: string[] },
-  ) => Promise<void> | void;
+  onAfterRefresh?: (ctx: GridRefreshContext, info: { removedIds: string[] }) => Promise<void> | void;
 
   /** 菜单项配置；view 未显式传 actions prop 时由 ImageGrid 生成 */
   actionsOptions?: () => CreateImageActionsOptions;

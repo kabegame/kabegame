@@ -60,10 +60,7 @@ const badgeStyle = computed(() => ({
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: conic-gradient(
-    var(--busy-color) var(--busy-angle),
-    rgba(167, 139, 250, 0.28) 0
-  );
+  background: conic-gradient(var(--busy-color) var(--busy-angle), rgba(167, 139, 250, 0.28) 0);
 }
 
 .kamechan-busy-badge::after {
@@ -99,10 +96,7 @@ const badgeStyle = computed(() => ({
 }
 
 .kamechan-busy-badge.is-indeterminate::before {
-  background: repeating-conic-gradient(
-    var(--busy-color) 0deg 24deg,
-    transparent 24deg 46deg
-  );
+  background: repeating-conic-gradient(var(--busy-color) 0deg 24deg, transparent 24deg 46deg);
   animation: kamechan-busy-spin 1.1s linear infinite;
 }
 

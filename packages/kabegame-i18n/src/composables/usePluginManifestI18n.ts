@@ -12,10 +12,7 @@ export function usePluginManifestI18n() {
     return resolveManifestText(plugin?.name, locale.value);
   }
 
-  function pluginDescription(plugin: {
-    description?: Record<string, string>;
-    desp?: Record<string, string>;
-  }): string {
+  function pluginDescription(plugin: { description?: Record<string, string>; desp?: Record<string, string> }): string {
     const raw =
       (plugin as { description?: Record<string, string> }).description ??
       (plugin as { desp?: Record<string, string> }).desp;

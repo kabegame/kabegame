@@ -48,8 +48,12 @@
           @change="persist"
         >
           <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-          <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1"
-            :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+          <el-option
+            v-for="h in 24"
+            :key="`h-${h - 1}`"
+            :value="h - 1"
+            :label="`${String(h - 1).padStart(2, '0')}:xx`"
+          />
         </el-select>
         <el-select
           v-model="dailyMinute"
@@ -79,8 +83,12 @@
           :disabled="fieldsDisabled"
           @change="persist"
         >
-          <el-option v-for="h in 24" :key="`wh-${h - 1}`" :value="h - 1"
-            :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+          <el-option
+            v-for="h in 24"
+            :key="`wh-${h - 1}`"
+            :value="h - 1"
+            :label="`${String(h - 1).padStart(2, '0')}:xx`"
+          />
         </el-select>
         <el-select
           v-model="dailyMinute"
@@ -239,8 +247,7 @@ function onIntervalFieldsChange() {
 
 async function persist() {
   if (syncing.value || !props.config.scheduleEnabled) return;
-  const base =
-    crawlerStore.runConfigs.find((c) => c.id === props.config.id) ?? props.config;
+  const base = crawlerStore.runConfigs.find((c) => c.id === props.config.id) ?? props.config;
   if (saving.value) return;
   saving.value = true;
   try {
@@ -285,7 +292,7 @@ async function persist() {
       };
     }
     await crawlerStore.updateRunConfig(next);
-  } catch(e) {
+  } catch (e) {
     ElMessage.error(t("common.operationFailed"));
     console.error(e);
     syncFromConfig(base);

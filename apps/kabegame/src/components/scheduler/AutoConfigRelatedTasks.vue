@@ -5,17 +5,11 @@
       v-bind="containerProps"
       class="config-tasks-scroll config-tasks-scroll--virtual"
       :class="
-        props.variant === 'android'
-          ? 'config-tasks-scroll--virtual--android'
-          : 'config-tasks-scroll--virtual--desktop'
+        props.variant === 'android' ? 'config-tasks-scroll--virtual--android' : 'config-tasks-scroll--virtual--desktop'
       "
     >
       <div v-bind="wrapperProps">
-        <div
-          v-for="item in virtualList"
-          :key="item.data.id"
-          class="config-task-virtual-item"
-        >
+        <div v-for="item in virtualList" :key="item.data.id" class="config-task-virtual-item">
           <TaskSummaryRow
             :task="item.data"
             layout="inline"
@@ -82,7 +76,11 @@ const tasks = computed(() => {
 /** 单行 TaskSummaryRow（inline + 多枚操作图标 + 状态 tag）固定高度，须与 itemHeight 一致 */
 const RELATED_TASK_ROW_PX = 60;
 
-const { list: virtualList, containerProps, wrapperProps } = useVirtualList(tasks, {
+const {
+  list: virtualList,
+  containerProps,
+  wrapperProps,
+} = useVirtualList(tasks, {
   itemHeight: RELATED_TASK_ROW_PX,
   overscan: 6,
 });

@@ -73,9 +73,18 @@
     "convertToNormalFailed": "変換に失敗しました：{error}",
     "syncMode": {
       "none": { "label": "同期しない", "description": "フォルダの変更を監視せず、自動同期もしません" },
-      "shallow": { "label": "浅い同期", "description": "このフォルダ直下のファイルだけを自動同期し、子アルバムは作成しません" },
-      "recursive": { "label": "再帰同期", "description": "フォルダツリー全体を自動同期し、サブフォルダに対応するアルバムを作成します" },
-      "delegated": { "label": "同期を委任", "description": "上位アルバムの再帰同期によって管理されているため、個別には変更できません" }
+      "shallow": {
+        "label": "浅い同期",
+        "description": "このフォルダ直下のファイルだけを自動同期し、子アルバムは作成しません"
+      },
+      "recursive": {
+        "label": "再帰同期",
+        "description": "フォルダツリー全体を自動同期し、サブフォルダに対応するアルバムを作成します"
+      },
+      "delegated": {
+        "label": "同期を委任",
+        "description": "上位アルバムの再帰同期によって管理されているため、個別には変更できません"
+      }
     },
     "readOnlyHint": "ローカルフォルダ同期アルバムではこのジェスチャーを使用できません。Delete キーまたは右クリックの「ファイルを削除」を使用してください",
     "syncDone": "同期しました：追加 {added}、削除 {deleted}、更新 {reimported}",

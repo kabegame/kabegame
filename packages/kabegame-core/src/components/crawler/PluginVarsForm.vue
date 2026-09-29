@@ -37,11 +37,9 @@
           :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined"
           :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined"
           :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined"
-          :placeholder="varDescripts(varDef) ||
-            (varDef.type === 'options' ||
-              varDef.type === 'list' ||
-              varDef.type === 'checkbox' ||
-              varDef.type === 'date'
+          :placeholder="
+            varDescripts(varDef) ||
+            (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' || varDef.type === 'date'
               ? `请选择${varDisplayName(varDef)}`
               : `请输入${varDisplayName(varDef)}`)
           "

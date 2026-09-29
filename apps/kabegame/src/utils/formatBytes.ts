@@ -1,6 +1,10 @@
-export function formatBytes(bytes: number, decimals: number = 2, options?: {
-  delimiter?: string;
-}): string {
+export function formatBytes(
+  bytes: number,
+  decimals: number = 2,
+  options?: {
+    delimiter?: string;
+  },
+): string {
   if (bytes <= 0) return "0 B";
   const finalOptions = {
     delimiter: " ",

@@ -6,16 +6,15 @@
     width="640px"
     :append-to-body="true"
     class="task-log-dialog"
-    @update:model-value="(v: boolean) => { if (!v) close() }"
+    @update:model-value="
+      (v: boolean) => {
+        if (!v) close();
+      }
+    "
   >
     <div class="task-log-list kb-selectable">
-      <div v-if="currentTaskLogs.length === 0" class="task-log-empty">{{ t('tasks.drawerNoLogs') }}</div>
-      <div
-        v-for="log in currentTaskLogs"
-        :key="log.id"
-        class="task-log-entry"
-        :class="`log-level-${log.level}`"
-      >
+      <div v-if="currentTaskLogs.length === 0" class="task-log-empty">{{ t("tasks.drawerNoLogs") }}</div>
+      <div v-for="log in currentTaskLogs" :key="log.id" class="task-log-entry" :class="`log-level-${log.level}`">
         <div class="task-log-main">
           <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
           <span class="log-content">{{ formatTaskLogLine(log.content) }}</span>

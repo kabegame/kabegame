@@ -19,12 +19,7 @@
             <el-icon class="is-loading"><Loading /></el-icon>
             <span>{{ t("gallery.nativeMetaLoading") }}</span>
           </div>
-          <div
-            v-for="index in 6"
-            :key="index"
-            class="native-meta-skeleton"
-            aria-hidden="true"
-          />
+          <div v-for="index in 6" :key="index" class="native-meta-skeleton" aria-hidden="true" />
         </template>
       </template>
 
@@ -51,11 +46,7 @@
       </div>
 
       <template v-else>
-        <div
-          v-if="payload?.partial"
-          class="native-meta-warning"
-          role="status"
-        >
+        <div v-if="payload?.partial" class="native-meta-warning" role="status">
           <el-icon><WarningFilled /></el-icon>
           <span>{{ t("gallery.nativeMetaPartialWarning") }}</span>
         </div>
@@ -93,28 +84,20 @@
           </div>
 
           <div class="native-meta-entries">
-            <div
-              v-for="(entry, index) in group.entries"
-              :key="`${entry.tag}-${index}`"
-              class="native-meta-entry"
-            >
+            <div v-for="(entry, index) in group.entries" :key="`${entry.tag}-${index}`" class="native-meta-entry">
               <div class="native-meta-tag">{{ entry.tag }}</div>
               <div class="native-meta-value-wrap min-w-0 flex-1">
-                <div
-                  v-if="entry.long"
-                  class="native-meta-long-value"
-                >{{ entry.value }}</div>
+                <div v-if="entry.long" class="native-meta-long-value">{{ entry.value }}</div>
                 <div v-else class="native-meta-short-value">
                   <span class="native-meta-value">{{ entry.value }}</span>
                   <span v-if="entry.note" class="native-meta-note">{{ entry.note }}</span>
-                  <span
-                    v-if="entry.byteLen != null"
-                    class="native-meta-note native-meta-byte-len"
-                  >{{ byteLengthLabel(entry.byteLen) }}</span>
+                  <span v-if="entry.byteLen != null" class="native-meta-note native-meta-byte-len">
+                    {{ byteLengthLabel(entry.byteLen) }}
+                  </span>
                 </div>
                 <div v-if="entry.long && (entry.note || entry.byteLen != null)" class="native-meta-note mt-1">
                   <span v-if="entry.note">{{ entry.note }}</span>
-                  <span v-if="entry.note && entry.byteLen != null"> · </span>
+                  <span v-if="entry.note && entry.byteLen != null">·</span>
                   <span v-if="entry.byteLen != null">{{ byteLengthLabel(entry.byteLen) }}</span>
                 </div>
               </div>
@@ -142,21 +125,12 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import DetailPanelEmptyState from "./DetailPanelEmptyState.vue";
-import {
-  CopyDocument,
-  Loading,
-  Refresh,
-  WarningFilled,
-} from "@kabegame/element-plus-icons";
+import { CopyDocument, Loading, Refresh, WarningFilled } from "@kabegame/element-plus-icons";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { kameMessage as ElMessage } from "../../utils/kameMessage";
 import { useNativeMetadataState } from "../../composables/useNativeMetadataState";
 import { IS_WEB } from "../../env";
-import type {
-  NativeEntry,
-  NativeGroup,
-  NativeMetadataFormat,
-} from "../../types/nativeMetadata";
+import type { NativeEntry, NativeGroup, NativeMetadataFormat } from "../../types/nativeMetadata";
 import { displayImageMimeType } from "../../utils/mediaMime";
 
 type NativeMetadataImageLike = {
@@ -180,14 +154,7 @@ const props = withDefaults(
 
 const { t } = useI18n();
 const imageId = computed(() => props.image?.id);
-const {
-  state,
-  showLoading,
-  payload,
-  errorDetail,
-  displayGroups,
-  load,
-} = useNativeMetadataState(imageId);
+const { state, showLoading, payload, errorDetail, displayGroups, load } = useNativeMetadataState(imageId);
 
 const mimeLabel = computed(() => displayImageMimeType(props.image?.type));
 
@@ -262,7 +229,6 @@ async function copyText(text: string): Promise<void> {
     ElMessage.error(t("common.copyFailed"));
   }
 }
-
 </script>
 
 <style scoped lang="scss">

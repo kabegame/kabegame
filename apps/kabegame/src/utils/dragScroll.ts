@@ -43,10 +43,7 @@ const DEFAULT_IGNORE_SELECTOR =
  * - 鼠标/触控笔：自定义惯性（更像手机）。
  * - 触摸（安卓/iOS）：默认不接管，保持 WebView 原生惯性与回弹。
  */
-export function enableDragScroll(
-  container: HTMLElement,
-  opts: DragScrollOptions = {}
-) {
+export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions = {}) {
   const enableForPointerTypes = opts.enableForPointerTypes ?? ["mouse", "pen"];
   const requireSpaceKey = opts.requireSpaceKey ?? true;
   const friction = opts.friction ?? 0.92;
@@ -71,9 +68,7 @@ export function enableDragScroll(
   let cleanupClickCapture: (() => void) | null = null;
   const emitActiveChange = (active: boolean) => {
     try {
-      container.dispatchEvent(
-        new CustomEvent("dragscroll-active-change", { detail: { active } })
-      );
+      container.dispatchEvent(new CustomEvent("dragscroll-active-change", { detail: { active } }));
     } catch {
       // ignore
     }
@@ -114,8 +109,7 @@ export function enableDragScroll(
     };
 
     container.addEventListener("click", onClickCapture, true);
-    cleanupClickCapture = () =>
-      container.removeEventListener("click", onClickCapture, true);
+    cleanupClickCapture = () => container.removeEventListener("click", onClickCapture, true);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -124,13 +118,7 @@ export function enableDragScroll(
 
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
-    if (
-      tag === "INPUT" ||
-      tag === "TEXTAREA" ||
-      tag === "SELECT" ||
-      target?.isContentEditable
-    )
-      return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
 
     // 避免空格触发页面滚动
     e.preventDefault();

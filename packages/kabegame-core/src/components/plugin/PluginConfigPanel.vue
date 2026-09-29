@@ -39,7 +39,9 @@
         </template>
       </div>
 
-      <div class="flex-none flex items-center justify-end py-3 px-5.5 border-t border-t-solid border-[var(--anime-border)]">
+      <div
+        class="flex-none flex items-center justify-end py-3 px-5.5 border-t border-t-solid border-[var(--anime-border)]"
+      >
         <button
           type="button"
           class="h-9 px-5 border-none rounded-12px kb-grad text-white font-600 text-14.5px shadow-[var(--anime-shadow)] cursor-pointer hover:brightness-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:brightness-100"
@@ -60,15 +62,8 @@ import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";
 import PluginVarsForm from "../crawler/PluginVarsForm.vue";
 import type { Plugin } from "../../stores/plugins";
-import {
-  parsePluginRecommendedPreset,
-  type PluginRecommendedPreset,
-} from "../../stores/crawler";
-import {
-  normalizeVarsForUI,
-  expandVarsForBackend,
-  type PluginVarDef,
-} from "../../utils/pluginVarForm";
+import { parsePluginRecommendedPreset, type PluginRecommendedPreset } from "../../stores/crawler";
+import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "../../utils/pluginVarForm";
 import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "../../utils/pluginVarWhen";
 
 const props = withDefaults(
@@ -83,14 +78,17 @@ const props = withDefaults(
   }>(),
   {
     isRemote: false,
-  }
+  },
 );
 
 /** 左栏宽度（px），与其它 tab 共用同一个值，由宿主持久化 */
 const menuWidth = defineModel<number>("menuWidth");
 
 const emit = defineEmits<{
-  (e: "start-task", payload: { pluginId: string; vars?: Record<string, any>; httpHeaders?: Record<string, string> }): void;
+  (
+    e: "start-task",
+    payload: { pluginId: string; vars?: Record<string, any>; httpHeaders?: Record<string, string> },
+  ): void;
   (e: "import-all-presets", presets: PluginRecommendedPreset[]): void;
 }>();
 
@@ -149,7 +147,7 @@ watch(
     formVars.value = props.initialVars ?? normalizeVarsForUI({}, vars.value);
     presetHeaders.value = undefined;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const visibleVars = computed(() => vars.value.filter((v) => matchesPluginVarWhen(v.when, formVars.value)));
@@ -159,7 +157,7 @@ watch(
   () => {
     coerceOptionsVarsToVisibleChoices(vars.value, formVars.value);
   },
-  { deep: true }
+  { deep: true },
 );
 
 // 左栏选择「配置」= 复位到初值；选择某个推荐配置 = 把它的 userConfig/httpHeaders 灌进表单

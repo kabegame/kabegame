@@ -48,17 +48,10 @@
       </el-form-item>
 
       <el-form-item v-if="!IS_ANDROID" :label="t('plugins.outputDir')">
-        <OutputDirSelect
-          v-model="form.outputDir"
-          :placeholder="t('plugins.outputDirPlaceholder')"
-        />
+        <OutputDirSelect v-model="form.outputDir" :placeholder="t('plugins.outputDirPlaceholder')" />
       </el-form-item>
 
-      <PluginVarsForm
-        v-if="visiblePluginVars.length > 0"
-        v-model="form.vars"
-        :plugin-vars="visiblePluginVars"
-      />
+      <PluginVarsForm v-if="visiblePluginVars.length > 0" v-model="form.vars" :plugin-vars="visiblePluginVars" />
 
       <el-form-item :label="t('plugins.httpHeaders')">
         <HttpHeadersEditor v-model="headersModel" />
@@ -106,12 +99,7 @@
                 />
               </el-select>
               <el-select v-model="dailyMinute" :disabled="scheduleFieldsReadonly">
-                <el-option
-                  v-for="m in 60"
-                  :key="`m-${m - 1}`"
-                  :value="m - 1"
-                  :label="String(m - 1).padStart(2, '0')"
-                />
+                <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
               </el-select>
             </div>
           </el-form-item>
@@ -188,15 +176,8 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { usePluginConfig } from "@/composables/usePluginConfig";
-import {
-  matchesPluginVarWhen,
-  coerceOptionsVarsToVisibleChoices,
-} from "@kabegame/core/utils/pluginVarWhen";
-import {
-  normalizeVarsForUI,
-  expandVarsForBackend,
-  type PluginVarDef,
-} from "@kabegame/core/utils/pluginVarForm";
+import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@kabegame/core/utils/pluginVarWhen";
+import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@kabegame/core/utils/pluginVarForm";
 import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
@@ -205,13 +186,7 @@ const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
 const dialogStore = useAutoConfigDialogStore();
 
-const {
-  form,
-  formRef,
-  pluginVars,
-  loadPluginVarDefs,
-  loadPluginVars,
-} = usePluginConfig();
+const { form, formRef, pluginVars, loadPluginVarDefs, loadPluginVars } = usePluginConfig();
 
 const panelMode = ref<"view" | "edit">("view");
 const detailRef = ref<InstanceType<typeof AutoConfigDetailContent> | null>(null);
@@ -230,7 +205,11 @@ const weeklyWeekday = ref(0);
 const headersModel = ref<Record<string, string>>({});
 
 const modal = useModal({ onClose: () => dialogStore.close() });
-watch(() => dialogStore.visible, (v) => v ? modal.open() : modal.close(), { immediate: true });
+watch(
+  () => dialogStore.visible,
+  (v) => (v ? modal.open() : modal.close()),
+  { immediate: true },
+);
 
 const viewConfig = computed(() => {
   const id = dialogStore.configId;
@@ -245,15 +224,11 @@ const showScheduleDetailFields = computed(() => {
   const id = dialogStore.configId;
   const c = id ? crawlerStore.runConfigById(id) : undefined;
   return (
-    c?.scheduleSpec?.mode === "interval" ||
-    c?.scheduleSpec?.mode === "daily" ||
-    c?.scheduleSpec?.mode === "weekly"
+    c?.scheduleSpec?.mode === "interval" || c?.scheduleSpec?.mode === "daily" || c?.scheduleSpec?.mode === "weekly"
   );
 });
 
-const scheduleFieldsReadonly = computed(
-  () => !scheduleEnabled.value && showScheduleDetailFields.value,
-);
+const scheduleFieldsReadonly = computed(() => !scheduleEnabled.value && showScheduleDetailFields.value);
 
 const showMissing = computed(
   () =>
@@ -333,9 +308,7 @@ const loadFromConfig = async (cfg: RunConfig) => {
   scheduleEnabled.value = !!cfg.scheduleEnabled;
   const spec = cfg.scheduleSpec;
   scheduleMode.value =
-    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly"
-      ? spec.mode
-      : "interval";
+    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly" ? spec.mode : "interval";
   weeklyWeekday.value = 0;
   if (spec?.mode === "interval") {
     const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
@@ -394,13 +367,7 @@ const buildScheduleFields = (): Pick<
     const id = dialogStore.configId;
     const cur = id ? crawlerStore.runConfigById(id) : undefined;
     const curSpec = cur?.scheduleSpec;
-    if (
-      !cur ||
-      !curSpec ||
-      (curSpec.mode !== "interval" &&
-        curSpec.mode !== "daily" &&
-        curSpec.mode !== "weekly")
-    ) {
+    if (!cur || !curSpec || (curSpec.mode !== "interval" && curSpec.mode !== "daily" && curSpec.mode !== "weekly")) {
       return {
         scheduleEnabled: false,
         scheduleSpec: undefined,

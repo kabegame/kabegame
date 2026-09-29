@@ -21,7 +21,8 @@
         class="text-13px font-600 text-[var(--anime-text-muted)] px-2.5 pb-1.5"
         :class="gi > 0 ? 'pt-3' : ''"
       >
-        {{ group.title }}<template v-if="group.count != null"> · {{ group.count }}</template>
+        {{ group.title }}
+        <template v-if="group.count != null">· {{ group.count }}</template>
       </div>
       <button
         v-for="item in group.items"

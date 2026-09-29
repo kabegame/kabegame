@@ -73,10 +73,7 @@ function ensureInit(): Promise<void> {
   return initPromise;
 }
 
-export async function getEjsBridgeCache(
-  pluginId: string,
-  key: string,
-): Promise<unknown | null> {
+export async function getEjsBridgeCache(pluginId: string, key: string): Promise<unknown | null> {
   await ensureInit();
   const cacheKey = scopedKey(pluginId, key);
   if (mem.has(cacheKey)) {
@@ -92,11 +89,7 @@ export async function getEjsBridgeCache(
   }
 }
 
-export async function setEjsBridgeCache(
-  pluginId: string,
-  key: string,
-  data: unknown,
-): Promise<void> {
+export async function setEjsBridgeCache(pluginId: string, key: string, data: unknown): Promise<void> {
   await ensureInit();
   const cacheKey = scopedKey(pluginId, key);
   const evictedKey = mem.set(cacheKey, data);

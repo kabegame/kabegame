@@ -7,5 +7,8 @@ export const GallerySearchModesKey: InjectionKey<ComputedRef<readonly GallerySea
   Symbol("GallerySearchModes");
 
 export function useGallerySearchModes(): ComputedRef<readonly GallerySearchPathMode[]> {
-  return inject(GallerySearchModesKey, computed(() => GALLERY_SEARCH_MODES));
+  return inject(
+    GallerySearchModesKey,
+    computed(() => GALLERY_SEARCH_MODES),
+  );
 }

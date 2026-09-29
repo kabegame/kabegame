@@ -4,14 +4,14 @@
     <el-icon>
       <Plus />
     </el-icon>
-    {{ t('gallery.startCollect') }}
+    {{ t("gallery.startCollect") }}
   </el-button>
   <el-dropdown v-else trigger="click" @command="handleCommand">
     <el-button type="primary" class="collect-btn">
       <el-icon>
         <Plus />
       </el-icon>
-      {{ t('gallery.startCollect') }}
+      {{ t("gallery.startCollect") }}
       <el-icon class="el-icon--right">
         <ArrowDown />
       </el-icon>
@@ -20,15 +20,15 @@
       <el-dropdown-menu>
         <el-dropdown-item v-if="!IS_WEB" command="local">
           <el-icon><FolderOpened /></el-icon>
-          {{ t('gallery.local') }}
+          {{ t("gallery.local") }}
         </el-dropdown-item>
         <el-dropdown-item command="network">
           <el-icon><Connection /></el-icon>
-          {{ t('gallery.network') }}
+          {{ t("gallery.network") }}
         </el-dropdown-item>
         <el-dropdown-item v-if="!IS_WEB" command="webpage">
           <el-icon><Link /></el-icon>
-          {{ t('gallery.webpage') }}
+          {{ t("gallery.webpage") }}
         </el-dropdown-item>
       </el-dropdown-menu>
     </template>

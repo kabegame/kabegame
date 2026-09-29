@@ -43,7 +43,7 @@ const props = withDefaults(
     anchorPrefix: "kbdoc",
     showCarousel: false,
     resetToken: "",
-  }
+  },
 );
 
 const emit = defineEmits<{

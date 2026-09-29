@@ -55,10 +55,7 @@ export function useImageTypes() {
   };
 
   /** 分享/剪贴板用：按扩展名推断 MIME，最后回退 application/octet-stream */
-  const getMimeTypeForImage = (
-    _image: unknown,
-    ext: string | undefined
-  ): string => {
+  const getMimeTypeForImage = (_image: unknown, ext: string | undefined): string => {
     return getMimeType(ext);
   };
 

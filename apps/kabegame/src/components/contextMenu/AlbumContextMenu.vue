@@ -1,6 +1,11 @@
 <template>
-  <ContextMenu :visible="visible" :position="position" :items="menuItems" @close="$emit('close')"
-    @command="(cmd: string) => $emit('command', cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename')" />
+  <ContextMenu
+    :visible="visible"
+    :position="position"
+    :items="menuItems"
+    @close="$emit('close')"
+    @command="(cmd: string) => $emit('command', cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename')"
+  />
 </template>
 
 <script setup lang="ts">

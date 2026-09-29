@@ -1,11 +1,5 @@
 import { onBeforeUnmount, shallowRef, type Ref, type ShallowRef } from "vue";
-import type {
-  TreeDndController,
-  TreeDragOverReaction,
-  TreeDropPosition,
-  TreeNodeHandle,
-  TreeRow,
-} from "./types";
+import type { TreeDndController, TreeDragOverReaction, TreeDropPosition, TreeNodeHandle, TreeRow } from "./types";
 
 /**
  * 树内节点拖拽：接口学 vscode ITreeDragAndDrop，运输层为 pointer 事件状态机。
@@ -100,7 +94,10 @@ export function useTreeDnd<T>(options: {
     return "inside";
   }
 
-  function hitTest(clientX: number, clientY: number): {
+  function hitTest(
+    clientX: number,
+    clientY: number,
+  ): {
     target: TreeNodeHandle<T> | null;
     sector: TreeDropPosition;
     rowTop: number | null;
@@ -108,12 +105,7 @@ export function useTreeDnd<T>(options: {
     const scroller = options.scroller.value;
     if (!scroller) return { target: null, sector: "inside", rowTop: null };
     const rect = scroller.getBoundingClientRect();
-    if (
-      clientX < rect.left ||
-      clientX > rect.right ||
-      clientY < rect.top ||
-      clientY > rect.bottom
-    ) {
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
       return { target: null, sector: "inside", rowTop: null };
     }
     const yInContent = clientY - rect.top + scroller.scrollTop;
@@ -141,10 +133,11 @@ export function useTreeDnd<T>(options: {
     const rect = scroller.getBoundingClientRect();
     let speed = 0;
     if (clientY < rect.top + EDGE_SCROLL_ZONE_PX) {
-      speed = -EDGE_SCROLL_MAX_PX_PER_FRAME *
-        Math.min(1, (rect.top + EDGE_SCROLL_ZONE_PX - clientY) / EDGE_SCROLL_ZONE_PX);
+      speed =
+        -EDGE_SCROLL_MAX_PX_PER_FRAME * Math.min(1, (rect.top + EDGE_SCROLL_ZONE_PX - clientY) / EDGE_SCROLL_ZONE_PX);
     } else if (clientY > rect.bottom - EDGE_SCROLL_ZONE_PX) {
-      speed = EDGE_SCROLL_MAX_PX_PER_FRAME *
+      speed =
+        EDGE_SCROLL_MAX_PX_PER_FRAME *
         Math.min(1, (clientY - (rect.bottom - EDGE_SCROLL_ZONE_PX)) / EDGE_SCROLL_ZONE_PX);
     }
     edgeScrollSpeed = speed;
@@ -175,20 +168,13 @@ export function useTreeDnd<T>(options: {
     const { target, sector, rowTop } = hitTest(clientX, clientY);
     // 落到源自身：视为无效落点（原地）
     const isSelf = target?.key === state.sourceKey;
-    const raw = isSelf
-      ? false
-      : controller.onDragOver(source.element, target?.element ?? null, sector);
-    const reaction: TreeDragOverReaction =
-      typeof raw === "boolean" ? { accept: raw } : raw;
+    const raw = isSelf ? false : controller.onDragOver(source.element, target?.element ?? null, sector);
+    const reaction: TreeDragOverReaction = typeof raw === "boolean" ? { accept: raw } : raw;
     const position = reaction.position ?? sector;
 
     // 悬停自动展开（同一节点持续悬停 AUTO_EXPAND_DELAY_MS）
     const wantAutoExpand =
-      reaction.accept !== false &&
-      reaction.autoExpand &&
-      target &&
-      target.hasChildren &&
-      !target.expanded;
+      reaction.accept !== false && reaction.autoExpand && target && target.hasChildren && !target.expanded;
     if (wantAutoExpand && target) {
       if (autoExpandKey !== target.key) {
         clearAutoExpand();
@@ -239,9 +225,7 @@ export function useTreeDnd<T>(options: {
       }
       dragging = true;
       document.body.style.userSelect = "none";
-      const label =
-        controller.getDragLabel?.(handle.element) ??
-        options.getDefaultLabel(handle.element);
+      const label = controller.getDragLabel?.(handle.element) ?? options.getDefaultLabel(handle.element);
       dragState.value = {
         sourceKey: pending.key,
         label,

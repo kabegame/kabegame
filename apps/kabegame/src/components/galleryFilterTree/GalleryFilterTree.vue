@@ -22,23 +22,22 @@ import {
   type GalleryFilterSet,
 } from "@/utils/galleryPath";
 import GalleryFacetTreeInner from "./GalleryFacetTreeInner.vue";
-import {
-  pathForTreeSegment,
-  type GalleryFilterTreeContext,
-  type RefreshTarget,
-} from "./context";
+import { pathForTreeSegment, type GalleryFilterTreeContext, type RefreshTarget } from "./context";
 
-const props = withDefaults(defineProps<{
-  contextPrefix?: string;
-  filter: GalleryFilter;
-  filters?: GalleryFilterSet;
-  dimension?: GalleryBrowseDimension | null;
-  visible?: boolean;
-}>(), {
-  contextPrefix: "",
-  dimension: null,
-  visible: true,
-});
+const props = withDefaults(
+  defineProps<{
+    contextPrefix?: string;
+    filter: GalleryFilter;
+    filters?: GalleryFilterSet;
+    dimension?: GalleryBrowseDimension | null;
+    visible?: boolean;
+  }>(),
+  {
+    contextPrefix: "",
+    dimension: null,
+    visible: true,
+  },
+);
 
 const emit = defineEmits<{
   "update:filter": [filter: GalleryFilter];
@@ -64,16 +63,14 @@ function selectFilter(filter: GalleryFilter) {
 const filters = computed(() => props.filters ?? singleFilterToSet(props.filter));
 const dimension = computed(() => props.dimension ?? null);
 const activeFilter = computed(() =>
-  dimension.value ? filterForDimension(filters.value, dimension.value) : props.filter
+  dimension.value ? filterForDimension(filters.value, dimension.value) : props.filter,
 );
 const treeKey = computed(() =>
-  [props.contextPrefix ?? "", dimension.value ?? "all", serializeFilterSet(filters.value)].join("|")
+  [props.contextPrefix ?? "", dimension.value ?? "all", serializeFilterSet(filters.value)].join("|"),
 );
 
 const ALL_DIMENSIONS: GalleryBrowseDimension[] = ["date", "mediaType", "size", "aspect", "plugin"];
-const dimensions = computed(() =>
-  ALL_DIMENSIONS.filter((value) => !dimension.value || dimension.value === value)
-);
+const dimensions = computed(() => ALL_DIMENSIONS.filter((value) => !dimension.value || dimension.value === value));
 
 // 旧 provide/inject 注入链改为显式传参（特化节点删除后注入无消费者）
 const ctx: GalleryFilterTreeContext = {

@@ -21,14 +21,14 @@ function toValue<T>(source: MaybeRefOrGetter<T>): T {
 
 export function usePluginActionState(
   plugin: MaybeRefOrGetter<Plugin | null | undefined>,
-  isRemote: MaybeRefOrGetter<boolean>
+  isRemote: MaybeRefOrGetter<boolean>,
 ) {
   const pluginStore = usePluginStore();
 
   /** store 里同 id 的已安装插件（plugin-added/updated/deleted 事件驱动保鲜） */
   const installedMatch = computed(() => {
     const id = toValue(plugin)?.id;
-    return id ? pluginStore.plugins.find((p) => p.id === id) ?? null : null;
+    return id ? (pluginStore.plugins.find((p) => p.id === id) ?? null) : null;
   });
 
   const actionState = computed<PluginActionState>(() => {

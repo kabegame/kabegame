@@ -1,12 +1,7 @@
 <template>
   <div class="surf-page">
     <div class="surf-scroll-container" :class="{ 'has-records': hasRecords }">
-      <PageHeader
-        :title="$t('surf.title')"
-        :show="surfHeaderShowIds"
-        sticky
-        @action="handleSurfHeaderAction"
-      >
+      <PageHeader :title="$t('surf.title')" :show="surfHeaderShowIds" sticky @action="handleSurfHeaderAction">
         <template #extra>
           <el-button circle :title="$t('surf.surfHelpTitle')" @click="helpDialog.open()">
             <el-icon><QuestionFilled /></el-icon>
@@ -72,6 +67,11 @@
                   <span v-else-if="item.kind === 'plugin'" class="letter">{{ item.letter }}</span>
                   <el-icon v-else><Clock /></el-icon>
                 </span>
+                <!-- pre/hit/post 是同一个词的连续片段，必须紧贴：本项目
+                     htmlWhitespaceSensitivity=ignore，Prettier 会把三个子节点各放一行，
+                     中间的空隙渲染时折叠成一个空格，把 "kabegame" 显示成 "ka begame"。
+                     注意指令注释必须精确为下述一行，多一个字都会失效。 -->
+                <!-- prettier-ignore -->
                 <span class="surf-suggest-label">{{ item.pre }}<b>{{ item.hit }}</b>{{ item.post }}</span>
                 <span class="surf-suggest-meta">{{ item.meta }}</span>
               </div>
@@ -97,28 +97,31 @@
                   <div class="root-url">{{ record.rootUrl }}</div>
                 </div>
                 <div class="surf-card-tags">
-                  <el-tag size="small" type="info">{{ $t('surf.imageCount') }} {{ surfCounts.countOf(record.host) }}</el-tag>
+                  <el-tag size="small" type="info">
+                    {{ $t("surf.imageCount") }} {{ surfCounts.countOf(record.host) }}
+                  </el-tag>
                 </div>
               </div>
               <div class="card-foot">
                 <span :title="formatAbsolute(record.lastVisitAt)">
-                  {{ $t('surf.lastVisit') }}{{ formatRelative(record.lastVisitAt) }}
+                  {{ $t("surf.lastVisit") }}{{ formatRelative(record.lastVisitAt) }}
                 </span>
-                  <div class="card-actions">
-                    <el-button
-                      size="small"
-                      type="primary"
-                      @click.stop="handleRecordClick(record)"
-                    >
-                      {{ isActiveSurf(record) ? $t('surf.openSurf') : $t('surf.startSurf') }}
-                    </el-button>
-                    <el-button v-if="isActiveSurf(record)" size="small" type="danger" @click.stop="handleCloseSurf(record)">
-                      {{ $t('surf.closeSurf') }}
-                    </el-button>
-                    <el-button size="small" @click.stop="openDetailDialog(record)">
-                      {{ $t('surf.recordDetails') }}
-                    </el-button>
-                  </div>
+                <div class="card-actions">
+                  <el-button size="small" type="primary" @click.stop="handleRecordClick(record)">
+                    {{ isActiveSurf(record) ? $t("surf.openSurf") : $t("surf.startSurf") }}
+                  </el-button>
+                  <el-button
+                    v-if="isActiveSurf(record)"
+                    size="small"
+                    type="danger"
+                    @click.stop="handleCloseSurf(record)"
+                  >
+                    {{ $t("surf.closeSurf") }}
+                  </el-button>
+                  <el-button size="small" @click.stop="openDetailDialog(record)">
+                    {{ $t("surf.recordDetails") }}
+                  </el-button>
+                </div>
               </div>
             </el-card>
           </transition-group>
@@ -129,7 +132,7 @@
     <ActionRenderer
       :visible="recordMenu.visible.value"
       :position="recordMenu.position.value"
-      :actions="(surfRecordActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
+      :actions="surfRecordActions as import('@kabegame/core/actions/types').ActionItem<unknown>[]"
       :context="recordMenuContext"
       :z-index="recordMenu.zIndex.value"
       @close="recordMenu.hide"
@@ -210,16 +213,16 @@
       @update:model-value="helpDialog.close"
     >
       <p class="surf-help-p">
-        {{ $t('surf.surfHelpIntro') }}
+        {{ $t("surf.surfHelpIntro") }}
       </p>
       <p class="surf-help-p">
-        {{ $t('surf.surfHelpRecord') }}
+        {{ $t("surf.surfHelpRecord") }}
       </p>
       <p v-if="IS_LINUX" class="surf-help-p surf-help-linux">
-        {{ $t('surf.linuxHintHelp') }}
+        {{ $t("surf.linuxHintHelp") }}
       </p>
       <template #footer>
-        <el-button type="primary" @click="helpDialog.close()">{{ $t('surf.gotIt') }}</el-button>
+        <el-button type="primary" @click="helpDialog.close()">{{ $t("surf.gotIt") }}</el-button>
       </template>
     </ElDialog>
   </div>
@@ -246,14 +249,8 @@ import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import PluginPickerField from "@/components/PluginPickerField.vue";
-import {
-  useImagesChangeRefresh,
-  type ImagesChangePayload,
-} from "@/composables/useImagesChangeRefresh";
-import {
-  formatAbsoluteTime,
-  formatRelativeTime,
-} from "@kabegame/core/utils/relativeTime";
+import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
+import { formatAbsoluteTime, formatRelativeTime } from "@kabegame/core/utils/relativeTime";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -263,9 +260,7 @@ const globalRoute = useGlobalPathRoute();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
-  settingsStore.values.appBackgroundEnabled
-    ? "!bg-transparent [--el-card-bg-color:transparent]"
-    : ""
+  settingsStore.values.appBackgroundEnabled ? "!bg-transparent [--el-card-bg-color:transparent]" : "",
 );
 const surfHeaderShowIds = computed(() => [HeaderFeatureId.TaskDrawer]);
 
@@ -327,14 +322,13 @@ const recordMenuContext = computed(() => ({
 
 /** 声明了以 http 开头的根 URL 的插件（用于快速填入输入框） */
 const pluginsWithHttpRoot = computed(() =>
-  pluginStore.plugins.filter((p) => p.baseUrl && p.baseUrl.toLowerCase().startsWith("http"))
+  pluginStore.plugins.filter((p) => p.baseUrl && p.baseUrl.toLowerCase().startsWith("http")),
 );
 
 const onPluginQuickSelect = (baseUrl: string | null) => {
   inputUrl.value = baseUrl ?? "";
   pluginQuickSelect.value = "";
 };
-
 
 const hasRecords = computed(() => surfStore.records.length > 0);
 
@@ -428,10 +422,7 @@ const handleStart = async () => {
  * 空输入 → 只出历史；有输入 → 插件 / 历史混排。当前输入由回车或右侧按钮直接打开，
  * 不再伪装成一条匿名候选。
  */
-const fetchSuggestions = (
-  queryString: string,
-  cb: (data: SurfSuggestion[]) => void
-) => {
+const fetchSuggestions = (queryString: string, cb: (data: SurfSuggestion[]) => void) => {
   const q = (queryString || "").trim();
   const lower = q.toLowerCase();
   const out: SurfSuggestion[] = [];
@@ -557,11 +548,11 @@ async function copyDetailCookie() {
 }
 
 async function confirmAndDeleteRecord(record: SurfRecord) {
-  await ElMessageBox.confirm(
-    t("surf.deleteRecordConfirm", { host: record.host }),
-    t("surf.deleteRecordTitle"),
-    { confirmButtonText: t("surf.deleteButton"), cancelButtonText: t("common.cancel"), type: "warning" }
-  );
+  await ElMessageBox.confirm(t("surf.deleteRecordConfirm", { host: record.host }), t("surf.deleteRecordTitle"), {
+    confirmButtonText: t("surf.deleteButton"),
+    cancelButtonText: t("common.cancel"),
+    type: "warning",
+  });
   await surfStore.deleteRecord(record.host);
   ElMessage.success(t("surf.deleteSuccess"));
 }
@@ -589,8 +580,7 @@ const handleRecordClick = async (record: SurfRecord) => {
   }
 };
 
-const isActiveSurf = (record: SurfRecord) =>
-  surfStore.sessionActive && surfStore.activeHost === record.host;
+const isActiveSurf = (record: SurfRecord) => surfStore.sessionActive && surfStore.activeHost === record.host;
 
 const handleCloseSurf = async (record: SurfRecord) => {
   try {
@@ -637,16 +627,12 @@ const allSurfHosts = () => surfStore.records.map((record) => record.host);
 useImagesChangeRefresh({
   enabled: ref(true),
   onRefresh: async (payload: ImagesChangePayload) => {
-    const recordIds = (payload.surfRecordIds ?? [])
-      .map((id) => String(id).trim())
-      .filter(Boolean);
+    const recordIds = (payload.surfRecordIds ?? []).map((id) => String(id).trim()).filter(Boolean);
     if (recordIds.length === 0) {
       await surfCounts.refreshAll(allSurfHosts());
       return;
     }
-    const hosts = recordIds
-      .map((id) => surfStore.hostById(id))
-      .filter((host): host is string => !!host);
+    const hosts = recordIds.map((id) => surfStore.hostById(id)).filter((host): host is string => !!host);
     await surfCounts.refreshSome(hosts);
   },
 });
@@ -776,7 +762,9 @@ onMounted(async () => {
     border: 1px solid rgba(74, 21, 75, 0.08);
     box-shadow: 0 1px 4px rgba(74, 21, 75, 0.06);
     overflow: hidden;
-    transition: box-shadow 0.18s ease, border-color 0.18s ease,
+    transition:
+      box-shadow 0.18s ease,
+      border-color 0.18s ease,
       border-radius 0.18s ease;
 
     &:hover {
@@ -855,7 +843,9 @@ onMounted(async () => {
       background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
       box-shadow: 0 2px 10px rgba(255, 107, 157, 0.35);
       color: #fff;
-      transition: transform 0.15s ease, opacity 0.15s ease;
+      transition:
+        transform 0.15s ease,
+        opacity 0.15s ease;
 
       &:hover:not(.is-disabled) {
         transform: scale(1.06);
@@ -1045,7 +1035,9 @@ onMounted(async () => {
 /* 列表进入/离开/重排动画 */
 .surf-list-enter-active,
 .surf-list-leave-active {
-  transition: opacity 0.25s ease, transform 0.25s ease;
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
 }
 
 .surf-list-enter-from {

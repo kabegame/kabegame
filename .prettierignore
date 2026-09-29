@@ -1,0 +1,34 @@
+# Prettier 忽略清单。
+# 只作用于 `format` / `format:check` 脚本（脚本本身把范围限定在
+# apps/ 与 packages/，故这里只管「范围内但不该动的」文件）。
+
+# ---- git submodule：独立仓库，不在本仓提交范围内 ----
+# Prettier 只认目录树、不认 submodule，遍历 packages/ 时会直接写进这些独立仓库的
+# 工作区，留下无法随本仓提交的脏改动（初次配置时已实测踩到，需 `git -C <dir>
+# checkout -- .` 还原）。改动它们要单独去各自仓库提交。
+packages/kabegame-plugin-sdk
+packages/kabegame-types
+packages/photoswipe-vue
+
+# ---- vendored fork（普通目录）：保持与上游 diff 可比 ----
+# 这两个包是 fork 上游并手工维护的，整包格式化会让后续跟上游同步无法阅读 diff。
+packages/kabegame-element-plus
+packages/kabegame-element-plus-icons
+
+# ---- 生成物：由代码生成，改了也会被下次生成覆盖 ----
+packages/kabegame-pathql-client/index.ts
+
+# ---- Markdown：本次不纳入格式化范围 ----
+# scripts 直接把 apps/ packages/ 两个目录交给 prettier，Prettier 认识的每种语言都会
+# 被处理，所以「只格式化代码、不动文档」要靠这两行表达。将来想连文档一起格式化，
+# 删掉本段即可，不必改脚本。
+*.md
+*.mdx
+
+# ---- 依赖与构建产物（正常也不会被遍历到，显式兜底）----
+node_modules
+**/dist
+**/dist-*
+**/.astro
+**/.vite
+**/coverage

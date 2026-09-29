@@ -27,7 +27,7 @@ const props = withDefaults(defineProps<Props>(), {
   title: undefined,
 });
 const { t } = useI18n();
-const resolvedTitle = computed(() => props.title ?? t('gallery.chooseCollectMethod'));
+const resolvedTitle = computed(() => props.title ?? t("gallery.chooseCollectMethod"));
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
@@ -35,24 +35,32 @@ const emit = defineEmits<{
 }>();
 
 const sourceOptions = computed<OptionItem[]>(() => [
-  ...(!IS_WEB ? [{
-    id: "local",
-    title: t('gallery.local'),
-    desc: t('gallery.localDesc'),
-    icon: FolderOpened,
-  }] : []),
+  ...(!IS_WEB
+    ? [
+        {
+          id: "local",
+          title: t("gallery.local"),
+          desc: t("gallery.localDesc"),
+          icon: FolderOpened,
+        },
+      ]
+    : []),
   {
     id: "remote",
-    title: t('gallery.network'),
-    desc: t('gallery.remoteDesc'),
+    title: t("gallery.network"),
+    desc: t("gallery.remoteDesc"),
     icon: Connection,
   },
-  ...(!IS_WEB ? [{
-    id: "webpage",
-    title: t('gallery.webpage'),
-    desc: t('gallery.webpageDesc'),
-    icon: Link,
-  }] : []),
+  ...(!IS_WEB
+    ? [
+        {
+          id: "webpage",
+          title: t("gallery.webpage"),
+          desc: t("gallery.webpageDesc"),
+          icon: Link,
+        },
+      ]
+    : []),
 ]);
 
 const handleSelect = (id: string) => {

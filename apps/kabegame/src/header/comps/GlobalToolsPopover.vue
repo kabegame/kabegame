@@ -93,11 +93,7 @@ const emit = defineEmits<{ "open-settings": [] }>();
 const { t } = useI18n();
 const modal = useModal();
 const { groups } = useGlobalTools();
-const {
-  count: busyCount,
-  hasUnseenFailure,
-  markFailuresSeen,
-} = useBusyTasks();
+const { count: busyCount, hasUnseenFailure, markFailuresSeen } = useBusyTasks();
 
 watch(
   () => modal.isOpen.value,

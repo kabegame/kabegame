@@ -34,7 +34,7 @@ export interface GalleryLabelContext {
 }
 
 const SIZE_RANGE_LABEL_KEYS: Record<string, string> = {
-  "unknown": "filterSize_unknown",
+  unknown: "filterSize_unknown",
   "1B-512KB": "filterSize_lt512k",
   "512KB-1MB": "filterSize_512k_1m",
   "1MB-2MB": "filterSize_1m_2m",
@@ -70,10 +70,7 @@ export function gallerySortFieldLabel(field: GallerySortField, t: TFn): string {
 }
 
 /** 某个排序维度下「升序 / 降序」各自的完整说法（安卓 picker 与折叠菜单标签用）。 */
-export function gallerySortOrderLabels(
-  field: GallerySortField,
-  t: TFn,
-): { asc: string; desc: string } {
+export function gallerySortOrderLabels(field: GallerySortField, t: TFn): { asc: string; desc: string } {
   switch (field) {
     case "by-id":
       return { asc: t("gallery.byDefaultAsc"), desc: t("gallery.byDefaultDesc") };
@@ -101,10 +98,7 @@ export function gallerySortOrderLabels(
 }
 
 /** 带维度名前缀的完整说法：给没有 chip 承载维度名的地方（安卓折叠菜单）用。 */
-export function galleryLabelForFilter(
-  filter: GalleryFilter | GalleryFilterSet,
-  ctx: GalleryLabelContext,
-): string {
+export function galleryLabelForFilter(filter: GalleryFilter | GalleryFilterSet, ctx: GalleryLabelContext): string {
   const { t, locale, pluginLabel } = ctx;
   const single = filter as GalleryFilter;
   const sr = filterSizeRange(filter);
@@ -135,9 +129,7 @@ export function galleryLabelForFilter(
   const mk = filterMediaKind(filter);
   const mf = filterMediaFormat(filter);
   if (mk === "image" || mk === "video") {
-    const label = mk === "image"
-      ? t("gallery.filterImageOnlyLabel")
-      : t("gallery.filterVideoOnlyLabel");
+    const label = mk === "image" ? t("gallery.filterImageOnlyLabel") : t("gallery.filterVideoOnlyLabel");
     return mf ? `${label} / ${mf}` : label;
   }
   return t("gallery.filterAll");
@@ -174,9 +166,7 @@ export function galleryDimensionChipValue(
     const label = facetValueLabel("mediaType", kind, t);
     return format ? `${label} / ${format}` : label;
   }
-  const value = dimension === "size"
-    ? filterSizeRange(filter)
-    : filterAspectRange(filter);
+  const value = dimension === "size" ? filterSizeRange(filter) : filterAspectRange(filter);
   if (value == null) return undefined;
   return facetValueLabel(dimension, value, t);
 }

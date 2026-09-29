@@ -100,14 +100,16 @@ export interface PluginAsset {
 
 /** 判断持久缓存中的资源字段是否已使用当前数组协议。 */
 export function isPluginAssetList(value: unknown): value is PluginAsset[] | null | undefined {
-  return value == null || (
-    Array.isArray(value) &&
-    value.every((asset) =>
-      typeof asset === "object" &&
-      asset !== null &&
-      typeof (asset as PluginAsset).key === "string" &&
-      typeof (asset as PluginAsset).dataBase64 === "string"
-    )
+  return (
+    value == null ||
+    (Array.isArray(value) &&
+      value.every(
+        (asset) =>
+          typeof asset === "object" &&
+          asset !== null &&
+          typeof (asset as PluginAsset).key === "string" &&
+          typeof (asset as PluginAsset).dataBase64 === "string",
+      ))
   );
 }
 
@@ -125,9 +127,7 @@ export function isBannerAsset(key: string): boolean {
 /**
  * 从已安装插件的 `Plugin.assets` 挑出展示位图，并按数组原顺序转成走马灯素材。
  */
-export function bannerPreviewImages(
-  assets?: PluginAsset[] | null,
-): { key: string; src: string }[] {
+export function bannerPreviewImages(assets?: PluginAsset[] | null): { key: string; src: string }[] {
   if (!assets) return [];
   return assets
     .filter((asset) => isBannerAsset(asset.key))

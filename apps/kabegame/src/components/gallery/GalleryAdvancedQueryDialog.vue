@@ -14,7 +14,9 @@
           <h2 class="m-0 text-xl font-semibold text-[var(--anime-text-primary)]">
             {{ t("gallery.advancedQuery") }}
           </h2>
-          <span class="inline-flex items-center gap-1.5 rounded-lg border border-solid border-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_8%,transparent)] px-2.5 py-1 text-sm font-semibold text-[var(--anime-primary)]">
+          <span
+            class="inline-flex items-center gap-1.5 rounded-lg border border-solid border-[color-mix(in_srgb,var(--anime-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-primary)_8%,transparent)] px-2.5 py-1 text-sm font-semibold text-[var(--anime-primary)]"
+          >
             <el-icon v-if="hitCountLoading" class="animate-spin"><Loading /></el-icon>
             <!-- 请求失败时 hitCount 是 undefined：显示 "—" 而不是冒充 0（"一张不剩"）。 -->
             <span v-else>
@@ -61,32 +63,26 @@ import { Loading } from "@kabegame/element-plus-icons";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useAdvancedHitCount } from "@/composables/useAdvancedQueryFacets";
-import {
-  queryRuntimePath,
-  buildComposablePath,
-  type GallerySort,
-} from "@/utils/galleryPath";
-import {
-  cloneQuery,
-  composeQueryFilters,
-  normalizeQuery,
-  type GalleryQuery,
-} from "@/utils/galleryQuery";
+import { queryRuntimePath, buildComposablePath, type GallerySort } from "@/utils/galleryPath";
+import { cloneQuery, composeQueryFilters, normalizeQuery, type GalleryQuery } from "@/utils/galleryQuery";
 import GalleryAdvancedQuerySequence from "./GalleryAdvancedQuerySequence.vue";
 import PathqlPathBar from "./PathqlPathBar.vue";
 
-const props = withDefaults(defineProps<{
-  query?: GalleryQuery;
-  sort: GallerySort;
-  page?: number;
-  pageSize?: number;
-  contextPrefix?: string;
-}>(), {
-  query: () => [],
-  page: 1,
-  pageSize: 100,
-  contextPrefix: "images://gallery/",
-});
+const props = withDefaults(
+  defineProps<{
+    query?: GalleryQuery;
+    sort: GallerySort;
+    page?: number;
+    pageSize?: number;
+    contextPrefix?: string;
+  }>(),
+  {
+    query: () => [],
+    page: 1,
+    pageSize: 100,
+    contextPrefix: "images://gallery/",
+  },
+);
 
 const emit = defineEmits<{
   apply: [tree: GalleryQuery];
@@ -98,10 +94,7 @@ const uiStore = useUiStore();
 const draft = ref<GalleryQuery>([]);
 const effectiveQuery = computed(() => normalizeQuery(draft.value));
 const contextPrefix = toRef(props, "contextPrefix");
-const { count: hitCount, loading: hitCountLoading } = useAdvancedHitCount(
-  effectiveQuery,
-  contextPrefix,
-);
+const { count: hitCount, loading: hitCountLoading } = useAdvancedHitCount(effectiveQuery, contextPrefix);
 
 useModalBack(visible);
 
@@ -124,7 +117,7 @@ const previewPath = computed(() =>
       pageSize: props.pageSize,
     }),
     contextPrefix.value,
-  )
+  ),
 );
 
 function cloneTree(tree: GalleryQuery): GalleryQuery {

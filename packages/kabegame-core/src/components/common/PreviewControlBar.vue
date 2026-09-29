@@ -28,7 +28,7 @@ const props = withDefaults(
   {
     isFullscreen: false,
     keepVisible: false,
-  }
+  },
 );
 
 const controlsVisible = ref(false);

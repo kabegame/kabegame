@@ -99,16 +99,11 @@ type StateComputedRefs<TState extends object> = {
 
 /**
  * 将 url 中的 `?path=xxx` 解析成 state，并保持两者双向同步，其中path可配置
- * 不负责keepalive页面跨页面guard,如有需求由调用方保证 
- */ 
-export function createPathRouteStore<TState extends object>(
-  storeId: string,
-  config: PathRouteStoreConfig<TState>
-) {
+ * 不负责keepalive页面跨页面guard,如有需求由调用方保证
+ */
+export function createPathRouteStore<TState extends object>(storeId: string, config: PathRouteStoreConfig<TState>) {
   const getDefault = (): TState =>
-    typeof config.defaultState === "function"
-      ? (config.defaultState as () => TState)()
-      : ({ ...config.defaultState });
+    typeof config.defaultState === "function" ? (config.defaultState as () => TState)() : { ...config.defaultState };
 
   return defineStore(storeId, () => {
     const globalStore = useGlobalPathRoute();
@@ -141,11 +136,7 @@ export function createPathRouteStore<TState extends object>(
       };
     };
 
-    const fullPathFor = (
-      nextState: TState,
-      overrideHide = hide.value,
-      overrideNoAlbum = noAlbum.value,
-    ): string => {
+    const fullPathFor = (nextState: TState, overrideHide = hide.value, overrideNoAlbum = noAlbum.value): string => {
       const eff = effectiveGlobals(nextState, overrideHide, overrideNoAlbum);
       const inner = config.build(nextState, { noAlbum: eff.noAlbum });
       return eff.hide ? HIDE_PREFIX + inner : inner;
@@ -163,10 +154,7 @@ export function createPathRouteStore<TState extends object>(
       return eff.hide ? HIDE_PREFIX + inner : inner;
     };
 
-    const writeState = async (
-      nextState: TState,
-      options?: { history?: "push" | "replace" },
-    ): Promise<boolean> => {
+    const writeState = async (nextState: TState, options?: { history?: "push" | "replace" }): Promise<boolean> => {
       const nextPath = fullPathFor(nextState);
       if (nextPath === String(path.value ?? "")) {
         console.log(`[path-route] repeated path`);
@@ -175,9 +163,7 @@ export function createPathRouteStore<TState extends object>(
       const ok = await setPath(nextPath as any, options);
       if (ok) {
         config.onStateChange?.(
-          { ...nextState, hide: hide.value, noAlbum: noAlbum.value } as
-            & TState
-            & GlobalRouteState,
+          { ...nextState, hide: hide.value, noAlbum: noAlbum.value } as TState & GlobalRouteState,
           nextPath,
         );
       }
@@ -190,11 +176,11 @@ export function createPathRouteStore<TState extends object>(
         return path.value ? parsePathState(String(path.value)) : getDefault();
       },
       // 写：全量赋值路径
-      set: value => {
+      set: (value) => {
         void writeState(value).catch((e) => {
           console.error(`[path-route] state set failed: ${e}`);
         });
-      }
+      },
     });
 
     type StateKey = Extract<keyof TState, string>;
@@ -202,15 +188,15 @@ export function createPathRouteStore<TState extends object>(
     const createStateComputedRef = <K extends StateKey>(key: K): StateComputedRefs<TState>[K] =>
       computed<TState[K]>({
         get: () => {
-          return state.value[key]
+          return state.value[key];
         },
-        set: value => {
+        set: (value) => {
           if (value === state.value[key]) return;
           state.value = {
             ...state.value,
-            [key]: value
-          }
-        }
+            [key]: value,
+          };
+        },
       });
 
     // 逐字段赋值路径
@@ -219,17 +205,9 @@ export function createPathRouteStore<TState extends object>(
       stateComputedKeys[key] = createStateComputedRef(key);
     }
 
-    const pathFor = (
-      overrideState: Partial<TState>,
-      overrideHide?: boolean,
-      overrideNoAlbum?: boolean,
-    ): string => {
+    const pathFor = (overrideState: Partial<TState>, overrideHide?: boolean, overrideNoAlbum?: boolean): string => {
       const mergedState = { ...state.value, ...overrideState } as TState;
-      return fullQueryPathFor(
-        mergedState,
-        overrideHide ?? hide.value,
-        overrideNoAlbum ?? noAlbum.value,
-      );
+      return fullQueryPathFor(mergedState, overrideHide ?? hide.value, overrideNoAlbum ?? noAlbum.value);
     };
 
     const computedPath = computed(() => pathFor({}));
@@ -242,10 +220,7 @@ export function createPathRouteStore<TState extends object>(
      * 不含 `no-album` 段：它是查询体首的随行段，由消费侧（GalleryQueryBar）按
      * `effectiveNoAlbum` 自行接在基址后面。
      */
-    const contextPathFor = (
-      overrideLocal: Partial<TState> = {},
-      overrideHide?: boolean
-    ): string => {
+    const contextPathFor = (overrideLocal: Partial<TState> = {}, overrideHide?: boolean): string => {
       const ml = { ...state.value, ...overrideLocal } as TState;
       const h = overrideHide ?? hide.value;
       const effHide = effectiveGlobals(ml, h, noAlbum.value).hide;
@@ -259,9 +234,7 @@ export function createPathRouteStore<TState extends object>(
      * 当前路由下 no-album 的生效值（已扣赦免）。消费侧（计数路径、查询行的高级
      * 前缀、事件刷新判定）一律读它，别直接读全局 store。
      */
-    const effectiveNoAlbum = computed(
-      () => effectiveGlobals(state.value, hide.value, noAlbum.value).noAlbum,
-    );
+    const effectiveNoAlbum = computed(() => effectiveGlobals(state.value, hide.value, noAlbum.value).noAlbum);
 
     /**
      * 计算"**若用给定 overrides 调 navigate/push，最终会路由到哪条 path**"——
@@ -345,7 +318,7 @@ export function createPathRouteStore<TState extends object>(
     /** 批量 replace：一次性修改多个字段，由 state→URL watcher 统一触发 replace */
     const patch = async (u: Partial<TState & GlobalRouteState>) => {
       console.log(`[${storeId}] patch`, u);
-      const draft = { ...state.value }
+      const draft = { ...state.value };
       let nextHide = hide.value;
       let nextNoAlbum = noAlbum.value;
       for (const [k, v] of Object.entries(u)) {
@@ -377,11 +350,7 @@ export function createPathRouteStore<TState extends object>(
         }
       }
       const nextState = { ...state.value, ...overrideState } as TState;
-      const path = fullPathFor(
-        nextState,
-        overrideHide ?? hide.value,
-        overrideNoAlbum ?? noAlbum.value,
-      );
+      const path = fullPathFor(nextState, overrideHide ?? hide.value, overrideNoAlbum ?? noAlbum.value);
       console.log(`[${storeId}] push → `, path);
       await setPath(path as any, { history: "push" });
     };
@@ -400,16 +369,13 @@ export function createPathRouteStore<TState extends object>(
       contextPathFor,
       // 从某个state算一个path
       computePath,
-      // 
+      //
       syncFromUrl,
       patch,
       push,
       /** 此接口最完整。`store.field = v`(replace) / `patch`(replace) / `push` */
-      navigate: (
-        u: Partial<TState & GlobalRouteState>,
-        o?: { push?: boolean }
-      ) => (o?.push ? push(u) : patch(u)),
-      clear: () => setPath('')
+      navigate: (u: Partial<TState & GlobalRouteState>, o?: { push?: boolean }) => (o?.push ? push(u) : patch(u)),
+      clear: () => setPath(""),
     };
   });
 }

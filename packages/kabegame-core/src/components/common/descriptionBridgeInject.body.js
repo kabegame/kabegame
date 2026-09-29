@@ -39,40 +39,28 @@
         var id = ++_id;
         var opts = options || {};
         _cbs[id] = { resolve: resolve, reject: reject, opts: opts };
-        window.parent.postMessage(
-          { type: "ejs-fetch", id: id, url: url, options: opts },
-          "*"
-        );
+        window.parent.postMessage({ type: "ejs-fetch", id: id, url: url, options: opts }, "*");
       });
     },
     getLocale: function () {
       return new Promise(function (resolve, reject) {
         var id = ++_id;
         _cbs[id] = { resolve: resolve, reject: reject };
-        window.parent.postMessage(
-          { type: "ejs-bridge", id: id, action: "getLocale" },
-          "*"
-        );
+        window.parent.postMessage({ type: "ejs-bridge", id: id, action: "getLocale" }, "*");
       });
     },
     getPluginData: function () {
       return new Promise(function (resolve, reject) {
         var id = ++_id;
         _cbs[id] = { resolve: resolve, reject: reject };
-        window.parent.postMessage(
-          { type: "ejs-bridge", id: id, action: "getPluginData" },
-          "*"
-        );
+        window.parent.postMessage({ type: "ejs-bridge", id: id, action: "getPluginData" }, "*");
       });
     },
     getCache: function (key) {
       return new Promise(function (resolve, reject) {
         var id = ++_id;
         _cbs[id] = { resolve: resolve, reject: reject };
-        window.parent.postMessage(
-          { type: "ejs-bridge", id: id, action: "getCache", key: String(key) },
-          "*"
-        );
+        window.parent.postMessage({ type: "ejs-bridge", id: id, action: "getCache", key: String(key) }, "*");
       });
     },
     setCache: function (key, data) {
@@ -81,7 +69,7 @@
         _cbs[id] = { resolve: resolve, reject: reject };
         window.parent.postMessage(
           { type: "ejs-bridge", id: id, action: "setCache", key: String(key), data: data },
-          "*"
+          "*",
         );
       });
     },
@@ -89,10 +77,7 @@
       return new Promise(function (resolve, reject) {
         var id = ++_id;
         _cbs[id] = { resolve: resolve, reject: reject };
-        window.parent.postMessage(
-          { type: "ejs-bridge", id: id, action: "openUrl", url: String(url) },
-          "*"
-        );
+        window.parent.postMessage({ type: "ejs-bridge", id: id, action: "openUrl", url: String(url) }, "*");
       });
     },
   };
@@ -102,11 +87,7 @@
     if (u && /^https?:\/\//i.test(u)) return u;
     var h = (a.getAttribute("href") || "").trim();
     if (!h || h === "#" || h.charAt(0) === "#") return "";
-    if (
-      /^javascript:/i.test(h) ||
-      /^mailto:/i.test(h) ||
-      /^tel:/i.test(h)
-    ) {
+    if (/^javascript:/i.test(h) || /^mailto:/i.test(h) || /^tel:/i.test(h)) {
       return "";
     }
     if (/^https?:\/\//i.test(h)) return h;
@@ -136,6 +117,6 @@
         window.open(u, "_blank", "noopener,noreferrer");
       }
     },
-    true
+    true,
   );
 })();

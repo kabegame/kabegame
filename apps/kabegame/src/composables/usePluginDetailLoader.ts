@@ -118,7 +118,7 @@ export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
       if (!isActive || !pluginId.value) return;
       void load();
     },
-    { immediate: true }
+    { immediate: true },
   );
 
   return { plugin, loading, showSkeleton, isInstalled, reload: load };

@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const BASE = "http://127.0.0.1:41619";
 
 /** 取自真实图库的恶劣文件名：中文 + 书名号 + 省略号 + 括号。 */
-const CJK_PATH =
-  "/home/cm/Pictures/Kabegame/【约稿】这一脚下去你可能会……(2).png";
+const CJK_PATH = "/home/cm/Pictures/Kabegame/【约稿】这一脚下去你可能会……(2).png";
 
 type FileUrlModule = typeof import("./fileUrl");
 
@@ -13,9 +12,7 @@ type FileUrlModule = typeof import("./fileUrl");
  * - `httpServerBaseUrl` 是模块级单例，一旦初始化就不再变，跨用例复用会串味；
  * - `IS_WEB` 在真实构建里是编译期常量，只能在模块加载**之前**用 doMock 顶掉。
  */
-async function loadModule(
-  opts: { isWeb?: boolean; invoke?: () => Promise<unknown> } = {},
-) {
+async function loadModule(opts: { isWeb?: boolean; invoke?: () => Promise<unknown> } = {}) {
   vi.resetModules();
   const invoke = vi.fn(opts.invoke ?? (() => Promise.resolve(BASE)));
   vi.doMock("../env", () => ({ IS_WEB: opts.isWeb ?? false }));
@@ -89,9 +86,7 @@ describe("initHttpServerBaseUrl", () => {
     await mod.initHttpServerBaseUrl();
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(mod.fileToUrl("/a.png")).toBe(
-      "https://cdn.example.com/file?path=%2Fa.png",
-    );
+    expect(mod.fileToUrl("/a.png")).toBe("https://cdn.example.com/file?path=%2Fa.png");
   });
 
   it("web 态缺省 VITE_API_ROOT 时回落到同源", async () => {
@@ -114,16 +109,12 @@ describe("fileToUrl", () => {
     const { mod } = await loadReady();
     const cdn = "https://cdn.example.com/img/a.png";
     expect(mod.fileToUrl(cdn)).toBe(cdn);
-    expect(mod.fileToUrl("http://example.com/b.png")).toBe(
-      "http://example.com/b.png",
-    );
+    expect(mod.fileToUrl("http://example.com/b.png")).toBe("http://example.com/b.png");
   });
 
   it("把路径整条编码进 query", async () => {
     const { mod } = await loadReady();
-    expect(mod.fileToUrl(CJK_PATH)).toBe(
-      `${BASE}/file?path=${encodeURIComponent(CJK_PATH)}`,
-    );
+    expect(mod.fileToUrl(CJK_PATH)).toBe(`${BASE}/file?path=${encodeURIComponent(CJK_PATH)}`);
   });
 
   it("base 尚未初始化时返回空串", async () => {
@@ -135,9 +126,7 @@ describe("fileToUrl", () => {
 describe("downloadToUrl", () => {
   it("把路径接在 /download 之后，且不产生双斜杠", async () => {
     const { mod } = await loadReady();
-    expect(mod.downloadToUrl("/home/cm/Pictures/a.png")).toBe(
-      `${BASE}/download/home/cm/Pictures/a.png`,
-    );
+    expect(mod.downloadToUrl("/home/cm/Pictures/a.png")).toBe(`${BASE}/download/home/cm/Pictures/a.png`);
   });
 
   it("保留 / 作为路径分隔符——绝不能整条编码", async () => {
@@ -148,9 +137,7 @@ describe("downloadToUrl", () => {
     // `encodeURIComponent(整条路径)`，`/` 会变成 %2F，URL 退化成单段，
     // 文件名就不再是末段，下载方拿到的落地文件名会全错。
     expect(url).not.toContain("%2F");
-    expect(url.startsWith(`${BASE}/download/home/cm/Pictures/Kabegame/`)).toBe(
-      true,
-    );
+    expect(url.startsWith(`${BASE}/download/home/cm/Pictures/Kabegame/`)).toBe(true);
   });
 
   it("文件名保持为 URL 末段，解码后与原文件名逐字相等", async () => {
@@ -158,9 +145,7 @@ describe("downloadToUrl", () => {
     const url = mod.downloadToUrl(CJK_PATH);
     const lastSegment = url.slice(url.lastIndexOf("/") + 1);
 
-    expect(decodeURIComponent(lastSegment)).toBe(
-      "【约稿】这一脚下去你可能会……(2).png",
-    );
+    expect(decodeURIComponent(lastSegment)).toBe("【约稿】这一脚下去你可能会……(2).png");
   });
 
   it("会破坏 URL 结构的字符被编码掉", async () => {
@@ -232,12 +217,8 @@ describe("downloadToUrl 与后端通配路由的往返契约", () => {
 describe("thumbnailToUrl / compatibleToUrl", () => {
   it("各自走自己的端点并整条编码进 query", async () => {
     const { mod } = await loadReady();
-    expect(mod.thumbnailToUrl(CJK_PATH)).toBe(
-      `${BASE}/thumbnail?path=${encodeURIComponent(CJK_PATH)}`,
-    );
-    expect(mod.compatibleToUrl(CJK_PATH)).toBe(
-      `${BASE}/compatible?path=${encodeURIComponent(CJK_PATH)}`,
-    );
+    expect(mod.thumbnailToUrl(CJK_PATH)).toBe(`${BASE}/thumbnail?path=${encodeURIComponent(CJK_PATH)}`);
+    expect(mod.compatibleToUrl(CJK_PATH)).toBe(`${BASE}/compatible?path=${encodeURIComponent(CJK_PATH)}`);
   });
 
   it("空值返回空串，绝对地址透传", async () => {

@@ -41,9 +41,7 @@ export const useModalStackStore = defineStore("modalStack", () => {
   // Android back button: close the topmost modal (highest reserved layer)
   async function closeTop(): Promise<boolean> {
     if (slots.value.length === 0) return false;
-    const top = slots.value.reduce((a, b) =>
-      a.slotIndex + a.layers - 1 > b.slotIndex + b.layers - 1 ? a : b
-    );
+    const top = slots.value.reduce((a, b) => (a.slotIndex + a.layers - 1 > b.slotIndex + b.layers - 1 ? a : b));
     if (top.close) await top.close();
     return true;
   }

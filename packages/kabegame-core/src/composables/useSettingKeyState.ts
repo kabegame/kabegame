@@ -95,12 +95,20 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
   const isReadonly = computed(() => settingsStore.isReadonly(key));
 
   // 延迟显示的状态（300ms）
-  const { showLoading: showLoadingState, startLoading: startLoadingDelay, finishLoading: finishLoadingDelay } = useLoadingDelay(300);
-  const { showLoading: showSavingState, startLoading: startSavingDelay, finishLoading: finishSavingDelay } = useLoadingDelay(300);
+  const {
+    showLoading: showLoadingState,
+    startLoading: startLoadingDelay,
+    finishLoading: finishLoadingDelay,
+  } = useLoadingDelay(300);
+  const {
+    showLoading: showSavingState,
+    startLoading: startSavingDelay,
+    finishLoading: finishSavingDelay,
+  } = useLoadingDelay(300);
 
   // watch isLoading/isSaving 驱动延迟状态
-  watch(isLoading, (v) => v ? startLoadingDelay() : finishLoadingDelay(), { immediate: true });
-  watch(isSaving, (v) => v ? startSavingDelay() : finishSavingDelay(), { immediate: true });
+  watch(isLoading, (v) => (v ? startLoadingDelay() : finishLoadingDelay()), { immediate: true });
+  watch(isSaving, (v) => (v ? startSavingDelay() : finishSavingDelay()), { immediate: true });
 
   // 设置值（响应式引用）
   const settingValue = computed({
@@ -127,10 +135,7 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
    * await set(true, { source: "settings_page", extra: { section: "wallpaper" } });
    * ```
    */
-  const set = async (
-    value: AppSettings[K],
-    opts?: SettingsSaveOptions,
-  ): Promise<boolean> => {
+  const set = async (value: AppSettings[K], opts?: SettingsSaveOptions): Promise<boolean> => {
     if (isReadonly.value) {
       void guardDesktopOnly(webReadonlyFeatureKey(key));
       return false;

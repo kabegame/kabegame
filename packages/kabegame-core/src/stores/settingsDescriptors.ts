@@ -98,10 +98,10 @@ const frontendLocal = <K extends AppSettingKey>(
   defaultValue: AppSettings[K],
 ): [K, LocalStorageSettingDescriptor<K>] => [key, { backend: "localStorage", defaultValue }];
 
-const readonly = <K extends AppSettingKey>(
-  key: K,
-  defaultValue: AppSettings[K],
-): [K, ReadonlySettingDescriptor<K>] => [key, { backend: "readonly", defaultValue }];
+const readonly = <K extends AppSettingKey>(key: K, defaultValue: AppSettings[K]): [K, ReadonlySettingDescriptor<K>] => [
+  key,
+  { backend: "readonly", defaultValue },
+];
 
 const tauri = <K extends AppSettingKey>(
   key: K,
@@ -117,13 +117,13 @@ const query = <K extends AppSettingKey>(
 ): [K, QuerySettingDescriptor<K>] => [key, { backend: "query", param, codec }];
 
 const booleanQueryCodec: QuerySettingCodec<boolean> = {
-  encode: (value) => value ? "1" : "",
+  encode: (value) => (value ? "1" : ""),
   decode: (raw) => raw === "1",
 };
 
 const autoConfigTabCodec: QuerySettingCodec<AppSettings["autoConfigTab"]> = {
-  encode: (value) => value === "recommended" ? "recommended" : "",
-  decode: (raw) => raw === "recommended" ? "recommended" : "mine",
+  encode: (value) => (value === "recommended" ? "recommended" : ""),
+  decode: (raw) => (raw === "recommended" ? "recommended" : "mine"),
 };
 
 function assignEntry<K extends AppSettingKey>(
@@ -151,7 +151,12 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
 
   const entries: Array<[AppSettingKey, SettingDescriptor]> = [
     tauri("language", "get_language", "set_language", "language"),
-    tauri("importRecommendedScheduleEnabled", "get_import_recommended_schedule_enabled", "set_import_recommended_schedule_enabled", "enabled"),
+    tauri(
+      "importRecommendedScheduleEnabled",
+      "get_import_recommended_schedule_enabled",
+      "set_import_recommended_schedule_enabled",
+      "enabled",
+    ),
     tauri("maxConcurrentDownloads", "get_max_concurrent_downloads", "set_max_concurrent_downloads", "count"),
     tauri("maxConcurrentTasks", "get_max_concurrent_tasks", "set_max_concurrent_tasks", "count"),
     tauri("downloadIntervalMs", "get_download_interval_ms", "set_download_interval_ms", "intervalMs"),
@@ -160,17 +165,37 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     tauri("dedupUpdateMetadata", "get_dedup_update_metadata", "set_dedup_update_metadata", "enabled"),
     tauri("wallpaperRotationEnabled", "get_wallpaper_rotation_enabled", "set_wallpaper_rotation_enabled", "enabled"),
     tauri("wallpaperRotationAlbumId", "get_wallpaper_rotation_album_id", "set_wallpaper_rotation_album_id", "albumId"),
-    tauri("wallpaperRotationIncludeSubalbums", "get_wallpaper_rotation_include_subalbums", "set_wallpaper_rotation_include_subalbums", "includeSubalbums"),
-    tauri("wallpaperRotationIntervalMinutes", "get_wallpaper_rotation_interval_minutes", "set_wallpaper_rotation_interval_minutes", "minutes"),
+    tauri(
+      "wallpaperRotationIncludeSubalbums",
+      "get_wallpaper_rotation_include_subalbums",
+      "set_wallpaper_rotation_include_subalbums",
+      "includeSubalbums",
+    ),
+    tauri(
+      "wallpaperRotationIntervalMinutes",
+      "get_wallpaper_rotation_interval_minutes",
+      "set_wallpaper_rotation_interval_minutes",
+      "minutes",
+    ),
     tauri("wallpaperRotationMode", "get_wallpaper_rotation_mode", "set_wallpaper_rotation_mode", "mode"),
     tauri("wallpaperStyle", "get_wallpaper_rotation_style", "set_wallpaper_style", "style"),
-    tauri("wallpaperRotationTransition", "get_wallpaper_rotation_transition", "set_wallpaper_rotation_transition", "transition"),
+    tauri(
+      "wallpaperRotationTransition",
+      "get_wallpaper_rotation_transition",
+      "set_wallpaper_rotation_transition",
+      "transition",
+    ),
     tauri("wallpaperStyleByMode", "get_wallpaper_style_by_mode", "set_wallpaper_style_by_mode"),
     tauri("wallpaperTransitionByMode", "get_wallpaper_transition_by_mode", "set_wallpaper_transition_by_mode"),
     tauri("wallpaperMode", "get_wallpaper_mode", "set_wallpaper_mode", "mode"),
     tauri("wallpaperDisabled", "get_wallpaper_disabled", "set_wallpaper_disabled", "disabled"),
     tauri("wallpaperVolume", "get_wallpaper_volume", "set_wallpaper_volume", "volume"),
-    tauri("wallpaperVideoPlaybackRate", "get_wallpaper_video_playback_rate", "set_wallpaper_video_playback_rate", "rate"),
+    tauri(
+      "wallpaperVideoPlaybackRate",
+      "get_wallpaper_video_playback_rate",
+      "set_wallpaper_video_playback_rate",
+      "rate",
+    ),
     tauri("windowState", "get_window_state", "set_window_state"),
     tauri("currentWallpaperImageId", "get_current_wallpaper_image_id", "set_current_wallpaper_image_id"),
   ];
@@ -245,10 +270,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   for (const entry of localEntries) assignEntry(map, entry);
 
   if (IS_WEB) {
-    const webLocalEntries = [
-      frontendLocal("language", null),
-      frontendLocal("currentWallpaperImageId", null),
-    ];
+    const webLocalEntries = [frontendLocal("language", null), frontendLocal("currentWallpaperImageId", null)];
     for (const entry of webLocalEntries) assignEntry(map, entry);
 
     const webReadonlyEntries = [
@@ -289,7 +311,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       // @ts-expect-error 非web下用localStorage
       query("gallery-path", "path"),
       query("album-detail-path", "path"),
-    )
+    );
   }
   for (const entry of queryEntries) assignEntry(map, entry);
 

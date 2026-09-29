@@ -1,40 +1,82 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
-  <PhotoSwipe v-if="uiStore.isCompact" ref="pswpRef" :open="previewModal.isOpen.value" v-model:index="previewIndex"
-    :data-source="pswpDataSource" :loop="false" :z-index="previewFullscreenZIndex" :close-on-vertical-drag="true"
+  <PhotoSwipe
+    v-if="uiStore.isCompact"
+    ref="pswpRef"
+    :open="previewModal.isOpen.value"
+    v-model:index="previewIndex"
+    :data-source="pswpDataSource"
+    :loop="false"
+    :z-index="previewFullscreenZIndex"
+    :close-on-vertical-drag="true"
     @update:open="previewModal.close"
-    :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
-    @close="handlePswpClose" @reach-boundary="handlePswpReachBoundary"
-    @video-double-tap="handleVideoDoubleTap">
-	    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频双击切换播放/暂停，与控件显隐无关） -->
-	    <template #slide="{ item, active, onReady, onError }">
-	      <PswpSlideContent v-if="item && imageById(item.id)" :image="imageById(item.id)!" :active="active"
-	        :paused="videoPaused" @ready="onReady" @error="onError" @video-play-fail="handleVideoPlayFail" />
-	    </template>
+    :on-vertical-drag="handlePswpVerticalDrag"
+    :on-before-close="handlePswpBeforeClose"
+    @change="handlePswpChange"
+    @close="handlePswpClose"
+    @reach-boundary="handlePswpReachBoundary"
+    @video-double-tap="handleVideoDoubleTap"
+  >
+    <!-- 每张幻灯片统一用 PswpSlideContent 渲染（缩略图→原图流式覆盖；视频双击切换播放/暂停，与控件显隐无关） -->
+    <template #slide="{ item, active, onReady, onError }">
+      <PswpSlideContent
+        v-if="item && imageById(item.id)"
+        :image="imageById(item.id)!"
+        :active="active"
+        :paused="videoPaused"
+        @ready="onReady"
+        @error="onError"
+        @video-play-fail="handleVideoPlayFail"
+      />
+    </template>
     <!-- 安卓：图片标题居中覆盖显示 -->
-    <div v-if="previewImage?.displayName"
-      class="pswp-image-title-container">
+    <div v-if="previewImage?.displayName" class="pswp-image-title-container">
       <span class="pswp-image-title-text">
         {{ previewImage.displayName }}
       </span>
     </div>
     <!-- ActionSheet 通过 default slot 放入 PswpUI 的 .pswp__hide-on-close 中 -->
     <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
-    <ActionRenderer v-if="actions.length > 0" visible :position="previewContextMenuPosition" :actions="actions"
-      :context="previewActionContext" mode="actionsheet" :teleport="false" :no-transition="true"
-      :zIndex="previewControlZIndex" :modal-back="false" @close="handlePswpActionClose" @command="handlePreviewActionCommand" />
+    <ActionRenderer
+      v-if="actions.length > 0"
+      visible
+      :position="previewContextMenuPosition"
+      :actions="actions"
+      :context="previewActionContext"
+      mode="actionsheet"
+      :teleport="false"
+      :no-transition="true"
+      :zIndex="previewControlZIndex"
+      :modal-back="false"
+      @close="handlePswpActionClose"
+      @command="handlePreviewActionCommand"
+    />
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
     <template #overlay>
       <Transition name="swipe-delete-zone">
-        <div v-show="swipeDeleteActive" class="swipe-delete-zone" :class="{ ready: swipeDeleteReady }" :style="{ zIndex: previewOverlayZIndex + 10 }">
+        <div
+          v-show="swipeDeleteActive"
+          class="swipe-delete-zone"
+          :class="{ ready: swipeDeleteReady }"
+          :style="{ zIndex: previewOverlayZIndex + 10 }"
+        >
           <div class="swipe-delete-zone-content">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
               <line x1="10" y1="11" x2="10" y2="17" />
               <line x1="14" y1="11" x2="14" y2="17" />
             </svg>
-            <span>{{ swipeDeleteReady ? '释放删除' : '上划删除' }}</span>
+            <span>{{ swipeDeleteReady ? "释放删除" : "上划删除" }}</span>
           </div>
         </div>
       </Transition>
@@ -43,11 +85,23 @@
 
   <!-- 桌面端 Dialog 预览 -->
   <template v-else>
-    <el-dialog :model-value="previewModal.isOpen.value" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
-      class="image-preview-dialog" :show-close="true" :lock-scroll="true"
-      :z-index="previewFullscreenZIndex" @update:model-value="previewModal.close" @close="closePreview">
-      <div v-if="previewModal.isOpen.value" class="preview-desktop-body"
-        :class="{ 'is-app-fullscreen': isAppFullscreen }">
+    <el-dialog
+      :model-value="previewModal.isOpen.value"
+      :title="previewDialogTitle"
+      width="90%"
+      :close-on-click-modal="true"
+      class="image-preview-dialog"
+      :show-close="true"
+      :lock-scroll="true"
+      :z-index="previewFullscreenZIndex"
+      @update:model-value="previewModal.close"
+      @close="closePreview"
+    >
+      <div
+        v-if="previewModal.isOpen.value"
+        class="preview-desktop-body"
+        :class="{ 'is-app-fullscreen': isAppFullscreen }"
+      >
         <KbResizable
           v-model="detailDrawerLeftWidth"
           tag="aside"
@@ -82,48 +136,91 @@
         </KbResizable>
         <!-- 全屏层的 z-index 必须走内联 style：SFC 的 v-bind() 只把自定义属性下发到组件根节点，
              el-dialog 的根是 Teleport，Vue 不会往里遍历，写在 <style> 里的 v-bind 恒为 auto -->
-        <div ref="previewContainerRef" class="preview-container" :class="{ 'is-app-fullscreen': isAppFullscreen }"
+        <div
+          ref="previewContainerRef"
+          class="preview-container"
+          :class="{ 'is-app-fullscreen': isAppFullscreen }"
           :style="isAppFullscreen ? { zIndex: previewFullscreenZIndex } : undefined"
-          @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
-          @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
-          <button v-if="!isAppFullscreen" type="button"
+          @contextmenu.prevent.stop="handlePreviewDialogContextMenu"
+          @mousemove="handlePreviewMouseMove"
+          @mouseleave="handlePreviewMouseLeave"
+          @wheel.prevent="handlePreviewWheel"
+        >
+          <button
+            v-if="!isAppFullscreen"
+            type="button"
             class="preview-detail-toggle preview-detail-toggle-left"
             :class="{ visible: previewHoverSide === 'left' || detailDrawerLeftOpen }"
-            :title="t('gallery.toggleImageInfoPanel')" :aria-expanded="detailDrawerLeftOpen"
-            :aria-label="t('gallery.toggleImageInfoPanel')" @click.stop="toggleDetailDrawerLeft">
-            <svg class="preview-detail-drawer-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true">
-              <path fill="currentColor"
-                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z" />
+            :title="t('gallery.toggleImageInfoPanel')"
+            :aria-expanded="detailDrawerLeftOpen"
+            :aria-label="t('gallery.toggleImageInfoPanel')"
+            @click.stop="toggleDetailDrawerLeft"
+          >
+            <svg
+              class="preview-detail-drawer-icon"
+              viewBox="0 0 1024 1024"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z"
+              />
             </svg>
           </button>
-          <button v-if="!isAppFullscreen" type="button" class="preview-detail-toggle"
+          <button
+            v-if="!isAppFullscreen"
+            type="button"
+            class="preview-detail-toggle"
             :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
-            :title="t('gallery.toggleDetailPanel')" :aria-expanded="detailDrawerOpen"
+            :title="t('gallery.toggleDetailPanel')"
+            :aria-expanded="detailDrawerOpen"
             :aria-label="t('gallery.toggleDetailPanel')"
-            @click.stop="toggleDetailDrawer">
-            <svg class="preview-detail-drawer-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true">
-              <path fill="currentColor"
-                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z" />
+            @click.stop="toggleDetailDrawer"
+          >
+            <svg
+              class="preview-detail-drawer-icon"
+              viewBox="0 0 1024 1024"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z"
+              />
             </svg>
           </button>
-          <button v-if="isAppFullscreen" type="button" class="preview-fullscreen-close"
-            :aria-label="t('gallery.exitFullscreen')" @click.stop="toggleAppFullscreen">
+          <button
+            v-if="isAppFullscreen"
+            type="button"
+            class="preview-fullscreen-close"
+            :aria-label="t('gallery.exitFullscreen')"
+            @click.stop="toggleAppFullscreen"
+          >
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.3 19.7 2.89 18.29 9.17 12 2.89 5.71 4.3 4.3l6.29 6.29 6.3-6.29z" />
+              <path
+                d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.3 19.7 2.89 18.29 9.17 12 2.89 5.71 4.3 4.3l6.29 6.29 6.3-6.29z"
+              />
             </svg>
           </button>
-          <div v-if="props.images.length > 1" class="preview-nav-zone left"
-            :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
+          <div
+            v-if="props.images.length > 1"
+            class="preview-nav-zone left"
+            :class="{ visible: previewHoverSide === 'left' }"
+            @click.stop="goPrev"
+          >
             <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
               <el-icon>
                 <ArrowLeftBold />
               </el-icon>
             </button>
           </div>
-          <div v-if="props.images.length > 1" class="preview-nav-zone right"
-            :class="{ visible: previewHoverSide === 'right' }" @click.stop="goNext">
+          <div
+            v-if="props.images.length > 1"
+            class="preview-nav-zone right"
+            :class="{ visible: previewHoverSide === 'right' }"
+            @click.stop="goNext"
+          >
             <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
               <el-icon>
                 <ArrowRightBold />
@@ -132,8 +229,13 @@
           </div>
           <div v-if="previewImage && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
             <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
-            <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
-              :native-drag="!panzoomCanPan" @ready="handlePreviewReady" />
+            <ImageContent
+              ref="previewContentRef"
+              :image="previewImage"
+              prefer="original"
+              :native-drag="!panzoomCanPan"
+              @ready="handlePreviewReady"
+            />
           </div>
           <PreviewControlBar
             ref="imageControlBarRef"
@@ -164,9 +266,12 @@
               />
               <span class="zoom-progress-text">{{ zoomPercentText }}</span>
             </div>
-            <button class="control-btn" type="button"
+            <button
+              class="control-btn"
+              type="button"
               :aria-label="isAppFullscreen ? t('gallery.exitFullscreen') : t('gallery.fullscreen')"
-              @click="toggleAppFullscreen">
+              @click="toggleAppFullscreen"
+            >
               <svg v-if="!isAppFullscreen" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M7 14H5v5h5v-2H7v-3zm0-4h2V7h3V5H5v5zm10 7h-3v2h5v-5h-2v3zm0-12v3h2V5h-5v2h3z" />
               </svg>
@@ -176,10 +281,20 @@
             </button>
           </PreviewControlBar>
           <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
-            <ImageContent ref="previewContentRef" :image="previewImage" prefer="original"
-              video-playing video-loop @ready="handlePreviewReady" />
-            <VideoControls :video="previewVideoEl" :show-play-pause="true" :is-fullscreen="isAppFullscreen"
-              @toggle-fullscreen="toggleAppFullscreen" />
+            <ImageContent
+              ref="previewContentRef"
+              :image="previewImage"
+              prefer="original"
+              video-playing
+              video-loop
+              @ready="handlePreviewReady"
+            />
+            <VideoControls
+              :video="previewVideoEl"
+              :show-play-pause="true"
+              :is-fullscreen="isAppFullscreen"
+              @toggle-fullscreen="toggleAppFullscreen"
+            />
           </div>
         </div>
         <!-- 抽屉开关只由用户控制，不随内容有无自动收起（避免切图时闪出/闪收）；
@@ -204,11 +319,18 @@
       </div>
     </el-dialog>
     <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
-    <ActionRenderer v-if="actions.length > 0" :visible="previewContextMenu.isOpen.value"
-      :position="previewContextMenuPosition" :actions="actions" :context="previewActionContext" mode="contextmenu"
-      :z-index="previewContextMenu.zIndex.value" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
+    <ActionRenderer
+      v-if="actions.length > 0"
+      :visible="previewContextMenu.isOpen.value"
+      :position="previewContextMenuPosition"
+      :actions="actions"
+      :context="previewActionContext"
+      mode="contextmenu"
+      :z-index="previewContextMenu.zIndex.value"
+      @close="closePreviewContextMenu"
+      @command="handlePreviewActionCommand"
+    />
   </template>
-
 </template>
 
 <script setup lang="ts">
@@ -252,38 +374,33 @@ const previewOverlayZIndex = computed(() => previewModal.zIndex.value + 10);
 const previewControlZIndex = computed(() => previewModal.zIndex.value + 20);
 const previewHidesKamechanClass = "image-preview-hides-kamechan";
 
-const props = withDefaults(defineProps<{
-  images: ImageInfo[];
-  /** Actions for context menu / action sheet. */
-  actions?: ActionItem<ImageInfo>[];
-  /** 用于预览内详情抽屉解析插件名（与 ImageDetailDialog 一致） */
-  plugins?: Array<Plugin>;
-}>(), {
-  actions: () => [],
-  plugins: () => [],
-});
+const props = withDefaults(
+  defineProps<{
+    images: ImageInfo[];
+    /** Actions for context menu / action sheet. */
+    actions?: ActionItem<ImageInfo>[];
+    /** 用于预览内详情抽屉解析插件名（与 ImageDetailDialog 一致） */
+    plugins?: Array<Plugin>;
+  }>(),
+  {
+    actions: () => [],
+    plugins: () => [],
+  },
+);
 
 /** 桌面端预览内详情侧栏开关（localStorage，与 mergeDefaults 容错非法值） */
 const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, {
   mergeDefaults: true,
 });
-const detailDrawerLeftOpen = useLocalStorage(
-  "kabegame-preview-detail-left-open",
-  false,
-  { mergeDefaults: true },
-);
+const detailDrawerLeftOpen = useLocalStorage("kabegame-preview-detail-left-open", false, { mergeDefaults: true });
 /** 双击把手复位用；上下限由 CSS（`--kb-resizable-min/max`）给，见下方样式 */
 const PREVIEW_DRAWER_DEFAULT_WIDTH = 320;
-const detailDrawerLeftWidth = useLocalStorage(
-  "kabegame-preview-detail-left-width",
-  PREVIEW_DRAWER_DEFAULT_WIDTH,
-  { mergeDefaults: true },
-);
-const detailDrawerRightWidth = useLocalStorage(
-  "kabegame-preview-detail-right-width",
-  PREVIEW_DRAWER_DEFAULT_WIDTH,
-  { mergeDefaults: true },
-);
+const detailDrawerLeftWidth = useLocalStorage("kabegame-preview-detail-left-width", PREVIEW_DRAWER_DEFAULT_WIDTH, {
+  mergeDefaults: true,
+});
+const detailDrawerRightWidth = useLocalStorage("kabegame-preview-detail-right-width", PREVIEW_DRAWER_DEFAULT_WIDTH, {
+  mergeDefaults: true,
+});
 type PreviewDrawerSide = "left" | "right";
 /** 仅用于「拖拽期间别让 ResizeObserver 抢着重置 Panzoom」，尺寸本身由 KbResizable 管 */
 const resizingDrawer = ref<PreviewDrawerSide | null>(null);
@@ -319,9 +436,7 @@ const previewImagePath = ref("");
 const previewIndex = ref<number>(-1);
 const currentImageId = ref<string | null>(null);
 /** 紧凑模式（Android/web 窄屏）：PhotoSwipe 使用的索引列表，映射回 props.images 原始索引。 */
-const androidFilteredIndices = computed(() =>
-  props.images.map((_, i) => i),
-);
+const androidFilteredIndices = computed(() => props.images.map((_, i) => i));
 
 // previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
 const previewImage = computed<ImageInfo | null>(() => {
@@ -339,9 +454,7 @@ const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type)
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
 const audioKeepAlive = useAudioKeepAlive();
-const desktopVideoActive = computed(
-  () => !uiStore.isCompact && previewVisible.value && isPreviewVideo.value
-);
+const desktopVideoActive = computed(() => !uiStore.isCompact && previewVisible.value && isPreviewVideo.value);
 watch(desktopVideoActive, (active) => {
   if (active) audioKeepAlive.start();
   else audioKeepAlive.stop();
@@ -349,9 +462,7 @@ watch(desktopVideoActive, (active) => {
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 const isAppFullscreen = ref(false);
-const previewShouldHideKamechan = computed(() =>
-  uiStore.isCompact ? previewVisible.value : isAppFullscreen.value
-);
+const previewShouldHideKamechan = computed(() => (uiStore.isCompact ? previewVisible.value : isAppFullscreen.value));
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
@@ -392,9 +503,11 @@ const zoomSliderDragging = ref(false);
 const videoPaused = ref(false);
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
-
 const normalizeDesktopPath = (path: string | undefined) =>
-  (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
+  (path || "")
+    .trimStart()
+    .replace(/^\\\\\?\\/, "")
+    .trim();
 
 const toFileUrl = (path: string | undefined) => {
   const normalized = normalizeDesktopPath(path);
@@ -402,8 +515,7 @@ const toFileUrl = (path: string | undefined) => {
   return fileToUrl(normalized);
 };
 
-const getOriginalPreviewUrl = (image: ImageInfo) =>
-  toFileUrl(image.localPath);
+const getOriginalPreviewUrl = (image: ImageInfo) => toFileUrl(image.localPath);
 
 const getThumbnailPreviewUrl = (image: ImageInfo) => {
   const thumbPath = image.thumbnailPath;
@@ -422,9 +534,7 @@ const notifyPreviewInteracting = (active: boolean) => {
   if (previewInteracting.value === active) return;
   previewInteracting.value = active;
   try {
-    window.dispatchEvent(
-      new CustomEvent("preview-interacting-change", { detail: { active } })
-    );
+    window.dispatchEvent(new CustomEvent("preview-interacting-change", { detail: { active } }));
   } catch {
     // ignore
   }
@@ -455,7 +565,7 @@ const markPreviewInteracting = () => {
   {
     onPanzoomStart: () => notifyPreviewInteracting(true),
     onPanzoomEnd: markPreviewInteracting,
-  }
+  },
 ));
 
 const zoomPercent = computed(() => Math.round((panzoomScale?.value ?? 1) * 100));
@@ -622,10 +732,7 @@ const pswpDataSource = computed(() => {
   return items;
 });
 
-const setPreviewByIndex = (
-  index: number,
-  opts?: { resetPanzoom?: boolean }
-) => {
+const setPreviewByIndex = (index: number, opts?: { resetPanzoom?: boolean }) => {
   const img = props.images[index];
   if (!img) return;
 
@@ -681,7 +788,6 @@ const getAdjacentImageUrl = (offset: number): string => {
   return getThumbnailPreviewUrl(img);
 };
 
-
 // Pager offset（用于滑动切换动画）
 const pagerOffset = ref(0);
 const pagerSettling = ref(false);
@@ -705,7 +811,7 @@ const emitPreviewNavigate = (
   fromIndex: number,
   toIndex: number,
   wrapped: boolean,
-  image: ImageInfo | undefined
+  image: ImageInfo | undefined,
 ) => {
   if (!image) return;
   emit("preview-navigate", {
@@ -722,10 +828,7 @@ const getOriginalIndexForPreviewIndex = (index: number) => {
   return androidFilteredIndices.value[index] ?? -1;
 };
 
-const emitPreviewPageBoundary = (
-  direction: "prev" | "next",
-  previewListIndex = previewIndex.value
-) => {
+const emitPreviewPageBoundary = (direction: "prev" | "next", previewListIndex = previewIndex.value) => {
   const origIndex = getOriginalIndexForPreviewIndex(previewListIndex);
   const image = origIndex >= 0 ? props.images[origIndex] : undefined;
   if (!image) return;
@@ -846,7 +949,6 @@ const handlePreviewWheel = (event: WheelEvent) => {
 
 // Android 触摸手势处理
 
-
 // ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
 const handlePreviewReady = () => {
   previewImageLoading.value = false;
@@ -860,9 +962,7 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (!previewVisible.value) return;
   const target = event.target as HTMLInputElement | null;
   const isRangeArrow =
-    target?.tagName === "INPUT" &&
-    target.type === "range" &&
-    (event.key === "ArrowLeft" || event.key === "ArrowRight");
+    target?.tagName === "INPUT" && target.type === "range" && (event.key === "ArrowLeft" || event.key === "ArrowRight");
   if (isTextInputLike(event.target) && !isRangeArrow) return;
   if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
     if (!previewImage.value) return;
@@ -976,10 +1076,10 @@ watch(
           const newPswpIdx = Math.max(0, filteredLen - 1);
           previewIndex.value = newPswpIdx;
           const origIdx = androidFilteredIndices.value[newPswpIdx];
-          currentImageId.value = origIdx != null ? props.images[origIdx]?.id ?? null : null;
+          currentImageId.value = origIdx != null ? (props.images[origIdx]?.id ?? null) : null;
         } else {
           const origIdx = androidFilteredIndices.value[previewIndex.value];
-          currentImageId.value = origIdx != null ? props.images[origIdx]?.id ?? null : null;
+          currentImageId.value = origIdx != null ? (props.images[origIdx]?.id ?? null) : null;
         }
       } else {
         if (props.images.length <= previewIndex.value) {
@@ -991,7 +1091,7 @@ watch(
         }
       }
     }
-  }
+  },
 );
 
 watch(
@@ -1001,7 +1101,7 @@ watch(
       await nextTick();
       await measureContainerAfterRender();
     }
-  }
+  },
 );
 
 watch(
@@ -1011,7 +1111,7 @@ watch(
       if (isPreviewVideo.value) return;
       panzoomReset();
     }
-  }
+  },
 );
 
 // 桌面端：预览区尺寸变化（抽屉、窗口缩放）时更新缓存 rect 并重置 Panzoom，使图片与容器对齐
@@ -1072,16 +1172,19 @@ const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preven
 };
 
 // 重置初始 panY：关闭预览时见下方 watch；左右切换时见 handlePswpChange；上划删除成功后见 handlePswpBeforeClose
-watch(() => previewVisible.value, (visible) => {
-  if (!visible) {
-    initialPanY = null;
-  }
-});
+watch(
+  () => previewVisible.value,
+  (visible) => {
+    if (!visible) {
+      initialPanY = null;
+    }
+  },
+);
 
 watch(previewShouldHideKamechan, syncKamechanVisibilityForPreview, { immediate: true });
 
 const handlePswpBeforeClose = (source?: string): boolean => {
-  if (source === 'verticalDrag') {
+  if (source === "verticalDrag") {
     if (isFromVerticalDrag) {
       const wasDeleteReady = swipeDeleteReady.value;
       swipeDeleteActive.value = false;
@@ -1109,9 +1212,7 @@ const handlePswpChange = ({ index }: { index: number }) => {
     const previousOrigIdx = currentImageId.value
       ? props.images.findIndex((img) => img.id === currentImageId.value)
       : -1;
-    const previousFilteredIdx = previousOrigIdx >= 0
-      ? androidFilteredIndices.value.indexOf(previousOrigIdx)
-      : -1;
+    const previousFilteredIdx = previousOrigIdx >= 0 ? androidFilteredIndices.value.indexOf(previousOrigIdx) : -1;
     const origIdx = androidFilteredIndices.value[index];
     if (origIdx == null || origIdx >= props.images.length) return;
     initialPanY = null;
@@ -1209,14 +1310,13 @@ if (!uiStore.isCompact) {
         resizeObserver = null;
       }
     },
-    { immediate: true }
+    { immediate: true },
   );
 }
 
-
 const open = (index: number) => {
   if (uiStore.isCompact) {
-    console.log('open preview');
+    console.log("open preview");
     const img = props.images[index];
     const pswpIndex = androidFilteredIndices.value.indexOf(index);
     if (pswpIndex < 0) return;
@@ -1588,7 +1688,10 @@ body.image-preview-hides-kamechan .kamechan-host {
     justify-content: center;
     cursor: pointer;
     box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
-    transition: transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    transition:
+      transform 0.12s ease,
+      background-color 0.12s ease,
+      box-shadow 0.12s ease;
     user-select: none;
 
     &:hover {
@@ -1649,7 +1752,9 @@ body.image-preview-hides-kamechan .kamechan-host {
 // 删除警告区域过渡动画
 .swipe-delete-zone-enter-active,
 .swipe-delete-zone-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .swipe-delete-zone-enter-from {
@@ -1797,7 +1902,10 @@ body.image-preview-hides-kamechan .kamechan-host {
     justify-content: center;
     cursor: pointer;
     box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
-    transition: transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    transition:
+      transform 0.12s ease,
+      background-color 0.12s ease,
+      box-shadow 0.12s ease;
     user-select: none;
     backdrop-filter: blur(8px);
 
@@ -1815,7 +1923,6 @@ body.image-preview-hides-kamechan .kamechan-host {
       font-size: 18px;
     }
   }
-
 }
 
 .pswp-image-title-container {
