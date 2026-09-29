@@ -172,8 +172,9 @@ fn walk_meta(
 }
 
 fn looks_like_sql(s: &str) -> bool {
-    let upper = s.to_uppercase();
-    let trimmed = upper.trim_start();
+    // 先归一化空白：YAML 块标量里动词后面常是换行而不是空格（`SELECT\n  ...`）
+    let upper = crate::template::collapse_whitespace(s).to_uppercase();
+    let trimmed = upper.as_str();
     // strict heuristic: must START with a SQL verb
     for prefix in &[
         "SELECT ",
@@ -268,6 +269,18 @@ mod tests {
     #[test]
     fn meta_bad_sql_rejected() {
         let errs = run_static(json!("DROP TABLE images"));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, ValidateErrorKind::SqlDdlNotAllowed(_))));
+    }
+
+    /// YAML 块标量写的多行 SQL meta 也要走 SQL 校验（动词后面是换行不是空格）。
+    #[test]
+    fn meta_multiline_sql_is_validated_as_sql() {
+        assert!(
+            run_static(json!("SELECT\n  id\nFROM albums\nWHERE id = ${capture[1]}")).is_empty()
+        );
+        let errs = run_static(json!("DROP\n  TABLE images"));
         assert!(errs
             .iter()
             .any(|e| matches!(e.kind, ValidateErrorKind::SqlDdlNotAllowed(_))));

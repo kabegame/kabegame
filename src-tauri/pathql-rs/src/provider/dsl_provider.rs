@@ -130,8 +130,7 @@ impl DslProvider {
             if s.contains("${") {
                 match render_template_to_string(s, &tctx) {
                     Ok(rendered) => {
-                        let lower = rendered.trim_start().to_ascii_lowercase();
-                        if lower.starts_with("select") && lower.contains(" from ") {
+                        if crate::template::meta_looks_like_select(&rendered) {
                             if dbg {
                                 eprintln!(
                                     "[pathql] eval_meta SQL provider={}::{} sql={:?}",
