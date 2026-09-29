@@ -168,11 +168,12 @@ ImageGrid 把数据变化分成两条通道：
   `directCounts`。
 - 隐藏/取消隐藏除精确画册成员事件外，一定再发一条 `images-change("change", ids)`，供任务、畅游、工具栏和
   过滤树等其它可见性视图兜底刷新。
-- 前端不增量维护全量计数。目录页只调一次 `albums://<过滤段>/album_page_[hide_]x<N>x_<页>` 的
-  `list(with_count)`：列举项 total 是直接子画册数（标签目录直接显示它）；分页节点切完页后只对该页
-  join `album_images` 得到行内 `image_count`——标签叶子为直接成员数，普通 / 本地文件夹为子树成员行之和，
-  与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数同口径。`hide_` 对应 `hide/`
-  前缀（不数隐藏画册里的图片）。
+- 前端不增量维护全量计数。目录页一次三路 fetch：`albums://<过滤段>/x<N>x/<页>` 取这一页的画册行
+  （默认按创建时间排序）；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册
+  `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录直接显示它）与 `image_count`
+  （子树成员行数，标签叶子即直接成员数），没有行的画册计 0；与 `images://gallery/[hide/]album/<id>`、
+  `album-tree/<id>` 的 entry 总数同口径。`/hide` 对应 `hide/` 前缀（不数隐藏画册里的图片）。每页固定 3 条 SQL，
+  内层分页物化为 CTE、子树走 `idx_albums_ancestor_path` 区间，见 [../provider-dsl/RULES.md](../provider-dsl/RULES.md) §2.1。
 - Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 
 ## 排查清单

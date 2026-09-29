@@ -41,17 +41,31 @@
 
 ## 画册目录查询改为分段折叠（`albums://` 过滤段）
 
-自动化：pathql-rs `validate_real` / `load_real_providers` 通过；`--test dsl_e2e` 的 `album_query_primitives_*` 与 `album_search_*` 改用新路径（`roots` / `parent/<id>` / `album_kind/<kind>` / `~any` 组合 / `search/<q>`），覆盖分页切片、子项计数清除层级与搜索谓词、嵌套 `parent` 清除、段顺序可交换、搜索元字符按字面匹配、父级名称链与前缀优先。images:// 侧的 `album_page_*` / `kind_*` / `search` 分页列举已删除；分页节点切页后 join `album_images` 给出行内 `image_count`，`album_page_image_count_matches_images_paths` 逐项与 `images://gallery/[hide/]album/<id>` / `album-tree/<id>` 比对（含 `hide_`），目录页只剩一次 IPC。
+自动化：pathql-rs `validate_real` / `load_real_providers` 通过；`--test dsl_e2e` 的 `album_query_primitives_*` 与 `album_search_*` 改用新路径（`roots` / `parent/<id>` / `album_kind/<kind>` / `~any` 组合 / `search/<q>`），覆盖分页切片、子项计数清除层级与搜索谓词、嵌套 `parent` 清除、段顺序可交换、搜索元字符按字面匹配、父级名称链与前缀优先。images:// 侧的 `album_page_*` / `kind_*` / `search` 分页列举已删除；画册按 `x<N>x/<页>` 分页，计数在 `~~` 边界之后按画册 `GROUP BY`（见下一节），`album_page_image_counts_match_images_paths` 逐项与 `images://gallery/[hide/]album/<id>` / `album-tree/<id>` 比对（含 `/hide`），目录页每页 3 次 fetch。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | 三个分区的根 | 桌面 / Android | 打开画册页，依次展开普通、标签、本地文件夹分区并滚动加载下一页 | 普通分区不含收藏 / 隐藏；本地文件夹分区含挂在普通画册下的本地文件夹根；翻页不重不漏、顺序与之前一致 | `roots` + `album_kind` |
-| [ ] | 子画册与计数 | 桌面 / Android | 展开普通画册（其下同时有本地文件夹子项）、标签目录、嵌套本地文件夹 | 普通画册下只列普通子画册，展开箭头与子项数一致；标签目录显示直接子画册数；叶子显示直接图片数；普通 / 本地文件夹显示子树成员数 | 计数来自同一次列举的 `image_count` |
-| [ ] | 隐藏口径 | 桌面 | 把某画册里的一张图加入隐藏，开关画廊「隐藏」后查看画册树与标签叶子计数 | 开启隐藏时该画册（及祖先普通画册）计数少 1，关闭后恢复；与点进画册后的图片总数一致 | 走 `album_page_hide_*` |
-| [ ] | 计数随写入刷新 | 桌面 | 往展开中的标签叶子 / 普通子画册加图、移出图片 | 树上计数随 hub 刷新后更新 | 计数不再单独请求 |
+| [ ] | 三个分区的根 | 桌面 / Android | 打开画册页，依次展开普通、标签、本地文件夹分区并滚动加载下一页 | 普通分区不含收藏 / 隐藏；本地文件夹分区含挂在普通画册下的本地文件夹根；翻页不重不漏、按创建时间先后排列 | `roots` + `album_kind` + `x<N>x/<页>` |
+| [ ] | 子画册与计数 | 桌面 / Android | 展开普通画册（其下同时有本地文件夹子项）、标签目录、嵌套本地文件夹 | 普通画册下只列普通子画册，展开箭头与子项数一致；标签目录显示直接子画册数；叶子显示直接图片数；普通 / 本地文件夹显示子树成员数 | `~~/children` 的 `child_count`、`~~/images` 的 `image_count` |
+| [ ] | 隐藏口径 | 桌面 | 把某画册里的一张图加入隐藏，开关画廊「隐藏」后查看画册树与标签叶子计数 | 开启隐藏时该画册（及祖先普通画册）计数少 1，关闭后恢复；与点进画册后的图片总数一致 | 走 `~~/images/hide` |
+| [ ] | 计数随写入刷新 | 桌面 | 往展开中的标签叶子 / 普通子画册加图、移出图片 | 树上计数随 hub 刷新后更新 | 刷新时每页重发 3 次 fetch |
 | [ ] | 画册搜索 | 桌面 | 画册树搜索框输入名称片段、`%`、`_`、`\`、标签 key 路径片段 | 名称完全 / 前缀命中排前；元字符按字面匹配；结果显示父级名称链；子项数为全部直接子画册数（不受搜索词影响） | |
 | [ ] | 选择器范围 | 桌面 | 「移动到」「新建标签的父级」选择器，预览面板「从已有添加」 | 前两者只列标签目录；添加候选只含叶子 | 单类型走 `album_kind/<kind>`，多类型走 `~any` |
 | [ ] | 新建画册查重名 | 桌面 | 用「加入新画册」连续新建两个同名画册 | 第二个自动追加序号 | `searchAlbums(..., ["normal"])` |
+
+## PathQL 子查询边界 `~~` 与画册计数性能
+
+画册页计数改为「先切页（物化 CTE）→ `~~` 之后 join → `GROUP BY` 一条出整页」，子树判断改用 `ancestor_path` 前缀区间 + 新索引（迁移 v033），画册分页默认按创建时间排序。
+自动化：pathql-rs 全量（`nest_segment_sqlite` 覆盖物化计划无 `CO-ROUTINE`、`group_by` 整页计数与不跨边界；`subquery_from_sqlite`；三种方言形态与 Postgres 连续编号）通过；core `--test dsl_e2e album` 与 `--lib migrations` 已在本地通过。scratch 生产量级基准（1.3 万画册、12 万成员行）：`roots/<标签类型>/x10x/1/~~/images/hide` 从超时（> 5s）降到约 0.02s，`~~/children` 约 0.006s，`album-tree/<id>` / `subtree_<id>` 走区间扫描，计数与逐项参考实现一致。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 大库画册页 | 桌面 / Android | 在上万画册（大量标签）的库里打开画册页，展开标签分区、翻页、开关隐藏 | 秒级加载，没有持续满 CPU 或一直转圈 | 分页物化为 `pq_nest_1` |
+| [ ] | 计数一致 | 桌面 / Android | 普通 / 标签 / 本地文件夹分区各点几项，开关隐藏 | 树上计数等于点进画册后的图片总数；标签目录显示子画册数；没有图片的画册显示 0 | 没有计数行即 0 |
+| [ ] | 默认按创建时间排序 | 桌面 / Android | 在某分区新建画册；再用画册搜索输入名称片段 | 新画册排在该分区末尾；搜索结果仍是名称完全 / 前缀命中排前 | 以后会出专门的排序功能 |
+| [ ] | 升级迁移 v033 | 桌面 / Android | 用旧版数据库升级后启动 | 正常启动；`albums` 表上有 `idx_albums_ancestor_path` | `LATEST_VERSION = 33` |
+| [ ] | 单画册计数与子孙数 | 桌面 | 查看画册详情的图片数；删除含子画册的画册，看确认文案里的子孙数 | 与树上计数一致 | `album-tree/<id>`、`subtree_<id>` 改走区间 |
+| [ ] | PathQL 直查 | 桌面 | CLI 或 MCP 执行 `albums://roots/album_kind/normal/x10x/1/~~/images` 与 `…/~~/children/album_kind/normal` | 每个有图片 / 有子画册的画册一行，分别带 `image_count` / `child_count` | 路径含 `~~` 不再报保留段错误 |
 
 ## 去重时更新元数据
 
@@ -457,7 +471,7 @@ macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍�
 | --- | --- | --- | --- | --- | --- |
 | [ ] | 标签迁移折叠性能 | 桌面；danbooru 1000 张迁移 | 迁移期间先折叠 general，再展开 general | 折叠时界面流畅、帧率不受影响；展开后最多每 0.5s 刷新一次且仍可操作 | 对比第二期帧率记录 |
 | [ ] | 子画册分页与事件刷新 | 桌面 / Android | 展开含数百子画册的目录，加载至第 3 页后从其它入口触发结构变更 | 首屏 100 项；每次“加载更多”追加且无重复；总数与父级子画册数一致；刷新后仍保留已加载的 300 项 | 根级各分区超过 100 项时同样验证 |
-| [ ] | 画册分页页大小经路径段下发 | 桌面 / Android | 展开画册树翻「加载更多」；再用 `pathql query` 直接列举 `albums://root_normal/album_page_x1x_1` 与 `..._x1x_2`、`images://gallery/albums/album_page_normal_x1x_1` | 每页条数由最后一段 `album_page_[<分区>_]x<页大小>x_<页码>` 决定；`x1x` 时每页 1 项且第二页与第一页不重叠；前端仍固定 100，树行为与旧版一致 | 段格式替换旧 `subpage_*`，不留兼容别名 |
+| [ ] | 画册分页页大小经路径段下发 | 桌面 / Android | 展开画册树翻「加载更多」；再用 `pathql query` 直接取 `albums://roots/album_kind/normal/x1x/1` 与 `…/x1x/2` | 每页条数由 `x<页大小>x/<页码>` 两段决定；`x1x` 时每页 1 项且第二页与第一页不重叠；前端仍固定 100，树行为与旧版一致 | 段格式替换旧 `subpage_*`，不留兼容别名 |
 | [ ] | 后端树搜索 | 桌面 / Android | 搜索从未展开的深层画册/标签；分别输入名称、标签 key、标签路径及含 `%`、`_`、`/`、`\` 的关键字 | 返回深层结果与所在路径；超过 100 条可继续加载；特殊字符按字面匹配 | 点击结果后退出搜索并展开祖先链；清空搜索保留原展开态 |
 | [ ] | 画册树计数口径 | 桌面 / Android | 对普通、标签目录、标签叶子、隐藏、收藏逐项核对；切换“显示隐藏” | 普通画册为自身与子孙成员行之和；标签目录为直接子画册数；标签叶子为直接成员数；隐藏画册固定全量，其它画册随 `hide/` 前缀切换 | 同图挂多个子画册按成员行多次计数 |
 | [ ] | 成员写入立即刷新 | 桌面 / Android / Web | 隐藏、取消隐藏、加入、移出图片并观察已展开祖先目录 | 相关目录计数在命令返回后立即更新，不等待 0.5s；随后同 `seq` 事件不重复刷新 | |
@@ -550,13 +564,13 @@ macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍�
 
 ## PathQL YAML loader 与长 SQL provider 迁移
 
-pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 与插件 `providers/` 按扩展名选 loader。11 个长 SQL provider 由 json5 迁到 YAML（`aspect_bucket_router`、`size_bucket_router`、`aspect_bucket_provider`、`tasks_provider`、`plugins_provider`、`albums_page_provider`、`albums_search_provider`、`gallery_size_range_provider`、`gallery_search_label_query_provider`、`vd_name_provider`、`vd_sub_album_gate_provider`）。迁移前后 AST 逐字段比对：除 SQL 的空白外完全一致，`where_clear` 子串命中不变。自动化：pathql-rs 全量测试（`--features json5,yaml,validate`）已过；`check-kabegame` 与 `test-kabegame kabegame-core --test dsl_e2e` 待在完整环境复核。
+pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 与插件 `providers/` 按扩展名选 loader。11 个长 SQL provider 由 json5 迁到 YAML（`aspect_bucket_router`、`size_bucket_router`、`aspect_bucket_provider`、`tasks_provider`、`plugins_provider`、`albums_page_provider`（其后已被 `~~` 方案删除）、`albums_search_provider`、`gallery_size_range_provider`、`gallery_search_label_query_provider`、`vd_name_provider`、`vd_sub_album_gate_provider`）。迁移前后 AST 逐字段比对：除 SQL 的空白外完全一致，`where_clear` 子串命中不变。自动化：pathql-rs 全量测试（`--features json5,yaml,validate`）已过；`check-kabegame` 与 `test-kabegame kabegame-core --test dsl_e2e` 待在完整环境复核。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [ ] | 启动注册 | 任一平台 | 启动应用 | 无 `register DSL` / `DSL validate` panic | 启动期注册 + validate 已在探针中跑通 |
 | [ ] | 按比例 / 大小分组 | 桌面 | 画廊「按比例」「按大小」分组，并进入任一分组 | 只列非空分组，计数与进入后的图片数一致；`50MB-` 等范围过滤正确 | aspect/size bucket router、size_range_provider |
-| [ ] | 画册目录分页与计数 | 桌面 / Android | 画册树展开、翻页；`album_page_hide_` 下看 image_count | 排序、计数与迁移前一致，标签目录计数为空 | albums_page_provider |
+| [ ] | 画册目录分页与计数 | 桌面 / Android | 画册树展开、翻页；开关隐藏看计数 | 计数与点进画册后一致；标签目录显示子画册数 | `albums_page_provider` 已被 `~~` 方案取代（见「PathQL 子查询边界」一节） |
 | [ ] | 画册搜索 | 桌面 | 画册选择器搜索名称 / 标签路径，含 `%`、`_`、`\` | 全等、前缀优先，父级路径 `A / B` 正确；特殊字符按字面匹配 | albums_search_provider |
 | [ ] | 标签搜索 | 桌面 | 标签 tab 搜索 `chara, miku`，开关「包含子标签」 | 与迁移前结果一致；只输入逗号时无结果 | gallery_search_label_query_provider |
 | [ ] | 按任务 / 按插件 / VD | 桌面 | 画廊「按任务」「按插件」；VD 按名称、子画册目录 | 显示名为「插件名 - id」；VD 语种目录与子画册正常 | tasks/plugins/vd_name/vd_sub_album_gate |

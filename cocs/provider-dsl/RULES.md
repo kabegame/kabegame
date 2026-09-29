@@ -12,8 +12,8 @@
   `ProviderRuntime` construction time; pathql treats them like bind parameters in SQL templates.
 - `fields[]` accepts either full object form `{ "sql": "...", "as": "...", "in_need": true }`
   or shorthand string form `"images.url"`, equivalent to `{ "sql": "images.url" }`.
-- When a query has no selected fields, SQL rendering emits `SELECT <schema.from>.*` if the
-  schema-provided `from` is a simple ASCII identifier; otherwise it falls back to `SELECT *`.
+- When a query has no selected fields, SQL rendering emits `SELECT <table>.*` for a registered
+  table, `SELECT <alias>.*` after a `~~` boundary, and `SELECT *` otherwise.
 
 ## Phase 7c completion note
 
@@ -62,11 +62,16 @@ resolve 一条路径 `<scheme>://<seg₁>/<seg₂>/.../<segₙ>` 时引擎执行
 ```text
 schema    = schemas[scheme]
 composed  = ProviderQuery::new()
-composed.from = schema.from                              // host schema 固定 FROM
+composed.from = Table(schema.table)                      // 引擎按注册的表名计算 FROM（程序化 schema 无 FROM）
 provider  = schema.root_provider
 composed  = provider.query.apply(composed)               // schema root 贡献
 
 for seg in segments:
+    if seg == "~~":                                      // 子查询边界，见 §2.1
+        composed = ProviderQuery { from: Subquery(composed, alias = schema.table) }
+        provider = schema.root_provider
+        composed = provider.query.apply(composed)        // 从根重新折叠
+        continue
     child = provider.resolve(seg, composed)             // 字面 / 正则 / dyn fallback
     composed = child.query.apply(composed)              // 折叠
     provider = child
@@ -79,6 +84,62 @@ return ResolvedNode { provider, composed }
 - 无 `scheme://` 的路径由运行时拒绝；Kabegame IPC 边界会把历史 gallery 相对路径提升为 `images://...`
 - **路径段大小写敏感**：`By-Album` ≠ `by-album`。i18n 翻译文本 / 插件 ID 等都按字面字节匹配，避免大小写折叠造成的二义性
 
+### 2.1 子查询边界 `~~`
+
+折叠只产出**一条扁平 SELECT**：`LIMIT/OFFSET` 渲染在所有 JOIN 之后。于是「先切一页画册，再对这一页 join
+成员行计数」没法直接折叠——join 之后再切页，切的是「画册 × 图片」成员行，翻页串页、计数被截断。保留段
+`~~` 解决这件事：**到此为止的全部 composed 冻结为内层查询，成为下一段的 FROM**。
+
+```text
+albums://roots/album_kind/normal/x10x/1  /~~/  images/hide
+         内层：过滤 + 排序 + 切页         边界  外层：join 成员行、hide 谓词、GROUP BY
+
+A/~~/B/~~/C  ⇒  C(from B(from A))
+```
+
+语义：
+
+- 走到 `~~` 时，引擎把当前 composed 原样冻结，新建一个空查询，令其 FROM 为内层、别名为 schema 的**表名**，
+  然后**回到 schema 根 provider 重新折叠**（根的 fields 等贡献再施加一次）。provider 因此永远只写
+  `albums.xxx`，不知道自己在第几层；也不需要任何 provider 声明子查询（provider 没有全局视角）。
+- 回到根而不是停在当前 provider：分页等终端 provider 没有后续路由，根持有该 scheme 的完整路由表；外层
+  行结构也与内层一致。`list("…/~~")` 即根的列举。
+- 新一层从空查询开始：内层的 `where` / `order` / `limit` / `offset` / `group_by` 都不继承，
+  `where_clear` 也清不到内层（已冻结）。
+- 约束：`~any` / `~not` 组内不得出现 `~~`（分支是旁路，封进去的只是当前分支视角）；程序化 schema
+  （§3.1）没有 SQL 可封装，出现 `~~` 报 `SubqueryUnsupported`；`~~x` 这类以 `~` 开头的非记号段仍报错，
+  字面段写 `\~~`。
+- 缓存：`…/~~` 所在前缀是合法缓存边界；provider key 跨层累积，内层任一 provider 被重新注册都会让外层
+  路径的缓存失效。
+- TS 客户端：`pql.albums.….x10x.$page(1).$nest(pql.albums).images`。
+
+渲染（方言差异，见 `pathql-rs/src/compose/dialect.rs`）：
+
+```sql
+WITH pq_nest_1 AS MATERIALIZED (SELECT … FROM albums WHERE … ORDER BY … LIMIT ? OFFSET …)
+SELECT … FROM pq_nest_1 AS albums INNER JOIN albums AS tree ON … WHERE (hid_ai.image_id IS NULL) GROUP BY albums.id
+```
+
+- SQLite / Postgres 写 `AS MATERIALIZED`，MySQL 没有该关键字，写普通 CTE。多层边界输出**扁平** WITH 列表，
+  最内层在前（`pq_nest_1 AS …, pq_nest_2 AS (… FROM pq_nest_1 …)`）；各层共用一个参数向量，参数顺序即
+  文本顺序，Postgres 的 `$N` 跨层连续编号。
+- **不用派生表** `FROM (<内层>) AS albums`：SQLite 会把它当 co-routine 放进最内层循环，外层每一行都重跑一遍
+  分页子查询。实测 1.3 万画册、12 万成员行下画册页的计数查询超时（> 5s）；物化后内层只算一次。
+- CTE 名用 `pq_nest_<深度>` 而不是表名：外层还要 `JOIN albums AS tree` 引用真实表，同名 CTE 会把它遮住。
+- `${composed}` 内联与 COUNT 包装会得到 `((WITH …))` / `FROM (WITH …) AS pq_sub`，三种方言都合法。
+
+性能提示：物化只保证内层只算一次，边界之后的 join 条件仍要能走索引。子树判断用前缀区间
+
+```sql
+tree.ancestor_path >= a.ancestor_path
+AND tree.ancestor_path < substr(a.ancestor_path, 1, length(a.ancestor_path) - 1) || '0'   -- `/` 的下一个字符是 `0`
+```
+
+它依赖 `ancestor_path` 非空、以 `/` 结尾、按 BINARY 比较，配合 `idx_albums_ancestor_path`（v033）走区间扫描；
+不要写 `instr(tree.ancestor_path, '/' || a.id || '/') > 0` 或 `substr(...) = ...`（走不了索引）。
+逐行计数用 `group_by`（§3.6）一条 SQL 出整页，不要对边界之后的路径 `list_with_count`——那会对每一项再包一层
+COUNT，把整个结构重跑 N 次。
+
 ---
 
 ## 3. ContribQuery 各字段累积规则
@@ -90,6 +151,7 @@ return ResolvedNode { provider, composed }
 | `join[]` | **additive with as-dedup** — 累积到 FROM 之后，按 `as` 去重 / 共享 |
 | `where` | **谓词树 + additive AND** — 单个 provider 的 where 是一棵 [WhereQuery](#33-wherewherequery-谓词树) 树（字符串/数组/`{not}`），fold 期坍缩成一条；路径上各 provider 之间仍用 AND 拼接 |
 | `fields[]` | **additive with as-dedup** — 累积到 SELECT 列表，按 `as` 去重 / 共享 |
+| `group_by` | **additive，按表达式文本去重** — 见 §3.6 |
 | `order` | **见 §3.4** — 数组项 `{ sql, order, prepend?, clear? }`；或全局 `{all: ...}` 指令 |
 | `offset` | **additive `+`** — 多次声明按路径顺序串接为 `(o₁) + (o₂) + ...`，实现嵌套分页 |
 | `limit` | **last-wins** — 一般仅终端 provider 设置 |
@@ -97,9 +159,13 @@ return ResolvedNode { provider, composed }
 ### 3.1 schema-provided from
 
 - `from` 不再是 ContribQuery 字段；DSL `query` 中出现 `"from"` 会被 schema/serde 拒绝。
-- FROM 由 host 调用 `register_schema(scheme, from, namespace, provider_name)` 固定注入。
-- Kabegame 当前注册 `images://` → `from = images`，`albums://` → `from = albums`。
-- 所有 JOIN 应通过 `join[]` 声明，不能把 JOIN 藏在 schema `from` 字符串里。
+- FROM 由引擎计算：host 调用 `register_schema(scheme, table, namespace, provider_name)` 只登记**数据表名**
+  （必须是非 SQL 关键字的简单标识符，加载期校验），冷启动时 FROM 即该表；遇到 `~~` 时 FROM 是上一层
+  查询、别名仍是表名（§2.1）。
+- Kabegame 当前注册 `images://` → `images`，`albums://` → `albums`，`fail-images://` → `task_failed_images` 等。
+- 行不来自 SQL 的 schema 用 `register_programmatic_schema(scheme, namespace, provider_name)`（如 `plugin://`，
+  行由 Rust provider 的 `fetch_rows` 给出）：没有 FROM，`count` 取 `fetch_rows` 的行数，路径里不能用 `~~`。
+- 所有 JOIN 应通过 `join[]` 声明；表名之外的任何 SQL 都不能塞进 schema 注册。
 
 ### 3.2 join / fields 的 `as + in_need` 共享机制
 
@@ -176,8 +242,8 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 
 **组内贡献约束**（fold 期强制，违反即报错）：
 
-- 只允许 `where` 与 **LEFT JOIN**。出现 `from` / `fields` / `order` / `limit` /
-  `offset` / **INNER JOIN** 一律拒绝。
+- 只允许 `where` 与 **LEFT JOIN**。出现 `from` / `fields` / `group_by` / `order` / `limit` /
+  `offset` / **INNER JOIN** 一律拒绝；组内也不得出现 `~~`（§2.1）。
   - 为什么单挑 INNER JOIN：它是全局 AND 语义的行过滤，放进 OR 分支会把「或」悄悄变成
     「且」；LEFT JOIN 只补列不滤行，谓词引用它是安全的。
 - 分支贡献的 LEFT JOIN 合并进外层查询并**跨分支保留**，别名冲突沿用 `as + in_need`
@@ -247,6 +313,33 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
   - 一般仅终端 provider（如分页节点）声明
   - `limit: 0` 走 SQL 自然语义（空集），不特殊化
 
+### 3.6 group_by
+
+- **additive，按表达式文本去重**：路径上各 provider 的 `group_by: [<sql>, …]` 依次累积，同一文本只保留首次，
+  保留首次出现的顺序。渲染在 `WHERE` 之后、`ORDER BY` 之前。
+- 与 `order.sql` 一样不改写其中的 `${properties.*}`（分组键按文本去重，改写会扰动去重）；`${ref:x}` 照常解析。
+- where 组分支内不得贡献（§3.3.1）；`~~` 之后的新一层从空开始，不继承内层的分组。
+- `count` = 分组数；没有行的分组键（例如没有图片的画册）即计数 0，调用方自己补 0。
+- 典型用法是配合 `~~` 按外层行计数，一条 SQL 出整页：
+
+```yaml
+# albums_images_provider：…/x<N>x/<页>/~~/images → 这一页每个有图片的画册一行
+query:
+  fields:
+    - { sql: COUNT(images.id), as: image_count, in_need: true }
+  join:
+    - kind: INNER
+      table: albums
+      as: tree
+      "on": >-
+        tree.ancestor_path >= albums.ancestor_path
+        AND tree.ancestor_path < substr(albums.ancestor_path, 1, length(albums.ancestor_path) - 1) || '0'
+      in_need: true
+    - { kind: INNER, table: album_images, as: tree_ai, "on": tree_ai.album_id = tree.id, in_need: true }
+    - { kind: INNER, table: images, as: images, "on": images.id = tree_ai.image_id, in_need: true }
+  group_by: [albums.id]
+```
+
 ---
 
 ## 4. List 语义
@@ -309,26 +402,23 @@ key 形态分两类（7b 起）：
 
 可访问的模板变量：`${properties.X}` + `${<data_var>.<col>(.<sub>)*}` + `${composed}`（仅 sql 字段内）。
 
-列举节点需要分页时，分页必须写在该节点的 `list.sql` 中，而不是在其后追加 query 的
-`x<N>x/<page>` 段；后者分页的是 `fetch` 行，不是 `list` 的子项。统一使用
+**列举子项**需要分页时，分页写在该节点的 `list.sql` 中，而不是在其后追加 query 的 `x<N>x/<page>` 段；
+后者分页的是 `fetch` 行，不是 `list` 的子项。统一使用
 `LIMIT ${properties.page_size} OFFSET (${properties.page} - 1) * ${properties.page_size}` 这类模板，
-页码与页大小都经 `${properties.*}` 绑定，禁止把捕获值直接拼进 SQL。
+页码与页大小都经 `${properties.*}` 绑定，禁止把捕获值直接拼进 SQL。要分页的是**行**时（如画册树按页取
+画册），直接用 query 分页段 `x<N>x/<页>`（`page_size_provider` + `query_page_provider`），不写 `list.sql`。
 
-**分页列举节点只切页，不重写过滤**：过滤条件必须由上游路径段各自折叠进 composed（每段一条 `where`，
-需要关联表时用 `join` + `in_need` 共享别名），分页节点的 `list.sql` 只写
-`SELECT * FROM (${composed}) AS page LIMIT … OFFSET …`，排序作为该节点 `query.order` 追加。不要把
+**分页节点只切页，不重写过滤**：过滤条件必须由上游路径段各自折叠进 composed（每段一条 `where`，
+需要关联表时用 `join` + `in_need` 共享别名），分页节点只追加排序与 `LIMIT/OFFSET`。不要把
 「分区 / 父级 / 类型 / 搜索」揉进一条带 `CASE ${properties.section}` 的大 SQL——那等于绕开折叠自己造
-一套路由，列举项计数也无法按段清除条件。范例是 `albums://`：`parent/<id>` / `roots` /
-`album_kind/<kind>` / `search/<q>` 各折叠一条 where（多个类型用 `~any/album_kind/a/~or/album_kind/b/~end`
-取 OR），末段 `album_page_x<页大小>x_<页码>` 只用白名单正则捕获页大小与页码。列举项的 provider 叠在
-分页节点的 composed 上计数，因此要按下面的嵌套目录规则 `where_clear` 掉层级与搜索谓词再写自己的条件
-（见 `albums_child_count_provider`）。
+一套路由。范例是 `albums://`：`parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where
+（多个类型用 `~any/album_kind/a/~or/album_kind/b/~end` 取 OR），末尾 `x<页大小>x/<页码>` 切页
+（`albums_paginate_router`，默认按 `created_at, id` 排序，搜索的相关度排序排在前面）。
 
-需要逐行附加的聚合（如画册的图片数）写成**切页之后**的投影：
-`SELECT page.*, (<关联子查询>) AS x FROM (SELECT * FROM (${composed}) LIMIT … OFFSET …) AS page`。
-不要把它做成上游 `fields` 贡献——那样关联子查询会在排序前对整个过滤结果逐行执行，而不是只对这一页；
-投影只加列不滤行，不破坏折叠语义。口径开关（如 `album_page_hide_*` 的 `exclude_hidden`）放进子查询
-`LEFT JOIN ... ON ... AND ${properties.x}`，关闭时 join 永不命中，避免 `(${properties.x} = 0 OR ...)`。
+**逐行聚合**（如这一页每个画册的图片数、子画册数）不要写成 `list.sql` 里的关联子查询投影，也不要对分页
+节点的列举项 `list_with_count`：在分页路径后接 `~~`（§2.1），外层 join 需要的表并用 `group_by`（§3.6）
+按外层行分组，一次 fetch 出整页计数，例如 `albums://roots/album_kind/normal/x10x/1/~~/images/hide`
+（`image_count`）与 `…/~~/children/album_kind/normal`（`child_count`）。
 
 嵌套目录 provider 若在每一层贡献同一列的等值条件，进入下一层前必须用精确的 `where_clear` 清掉上一层
 条件。例如画册路径要清除 `ai.album_id =` 再写当前 id；否则会折叠为 `album_id = 父 AND album_id = 子`
@@ -564,9 +654,10 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
   - 明显注入模式（如 `'; --` 等）
 - `${composed}` 由引擎构造，可信任直接嵌入子查询
 - `${properties.X}` 等模板值在最终拼接 SQL 时**走 bind param**，不做字符串拼接
-- `list.sql` 中的 `LIMIT` / `OFFSET` 同样必须通过 `${properties.*}` 绑定；即使页大小与页码都来自
-  只匹配数字的 `album_page_x<N>x_<页>` 路由，也不例外。
-- `join.table` 字面量表名必须在引擎白名单；`(SELECT ...)` 子查询形式豁免。schema `from` 由 host 代码负责注册与审计。
+- `list.sql` / query 中的 `LIMIT` / `OFFSET` 同样必须通过 `${properties.*}` 绑定；即使页大小与页码都来自
+  只匹配数字的路由段（如 `x<N>x/<页>`），也不例外。
+- `join.table` 字面量表名必须在引擎白名单；`(SELECT ...)` 子查询形式豁免。schema 只登记表名（§3.1），
+  由 host 代码负责注册与审计；子查询边界 `~~` 的内层是引擎构造的 composed，与 `${composed}` 同等可信。
 
 ### 7.2 路径安全
 
@@ -610,7 +701,7 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 加载期检测；冲突立即拒绝。
 
 **路径段保留前缀**：路径段的 `~` 前缀整体保留给引擎语法（当前记号 `~any` / `~or` /
-`~not` / `~end`，见 §3.3.1）。字面名以 `~` 开头的节点在路径中写 `\~<原名>`（反斜线统
+`~not` / `~end`，见 §3.3.1；子查询边界 `~~`，见 §2.1）。字面名以 `~` 开头的节点在路径中写 `\~<原名>`（反斜线统
 一转义：`\X` = 字面 X，`\/` 把斜线放进段内，`\\` = 字面反斜线）；未转义的前导 `~` 且非
 记号的段在 walk 期报错。宿主用数据拼段一律过 `escape_path_segment`。
 
@@ -897,12 +988,15 @@ Host must register every runtime root before resolving paths:
 ```rust
 runtime.register_schema("images", "images", "kabegame", "images_root_provider")?;
 runtime.register_schema("albums", "albums", "kabegame", "albums_root_provider")?;
+// rows come from Rust `fetch_rows`, not SQL: no table, `~~` rejected
+runtime.register_programmatic_schema("plugin", "kabegame", "plugin_resource_root_provider")?;
 ```
 
 Contract:
 
 - `scheme` is the public path prefix before `://`.
-- `from` seeds `ProviderQuery.from` before the schema root provider contributes query fragments.
+- `table` must be a plain identifier (not an SQL keyword). The engine seeds `ProviderQuery.from` with it before
+  the schema root provider contributes query fragments, and uses it as the alias of the previous level after `~~`.
 - `namespace` + `provider_name` locate the schema root provider in the registry.
 - Re-registering a scheme is an error. Missing schemes are runtime errors.
 - Plain slash paths are not part of the pathql contract; hosts may keep boundary-level compatibility shims, but core runtime requires a scheme.
