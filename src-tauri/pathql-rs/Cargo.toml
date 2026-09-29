@@ -2,7 +2,7 @@
 name = "pathql-rs"
 edition = { workspace = true }
 version = { workspace = true }
-description = "Path-folding query DSL — AST + Loader + Registry + template eval + SQL build + Provider runtime; json5 / validate features (dialect-agnostic, no driver dep)"
+description = "Path-folding query DSL — AST + Loader + Registry + template eval + SQL build + Provider runtime; json5 / yaml / validate features (dialect-agnostic, no driver dep)"
 
 [dependencies]
 serde = { workspace = true }
@@ -11,6 +11,7 @@ indexmap = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 json5 = { workspace = true, optional = true }
+serde-saphyr = { workspace = true, optional = true }
 regex-automata = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
 arc-swap = { workspace = true }
@@ -19,6 +20,7 @@ arc-swap = { workspace = true }
 default = []
 client-codegen = []
 json5 = ["dep:json5"]
+yaml = ["dep:serde-saphyr"]
 validate = ["dep:regex-automata", "dep:sqlparser"]
 
 [dev-dependencies]

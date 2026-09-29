@@ -62,6 +62,8 @@ serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"
 serde_cbor = "0.11"
 serde_json = "1.0"
+# pathql-rs YAML loader；0.0.x 版本与 rust-i18n-support 间接依赖保持同一份。
+serde-saphyr = { version = "0.0.29", default-features = false, features = ["deserialize"] }
 sevenz-rust2 = { version = "0.21", default-features = false, features = [
   "aes256", "bzip2", "deflate", "ppmd",
 ] }

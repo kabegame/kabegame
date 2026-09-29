@@ -19,12 +19,10 @@ use super::{
 use crate::ast::{Namespace, ProviderName, SimpleName};
 use crate::compose::ProviderQuery;
 use crate::template::eval::{TemplateContext, TemplateValue};
-#[cfg(feature = "json5")]
+#[cfg(any(feature = "json5", feature = "yaml"))]
 use crate::LoaderType;
-#[cfg(feature = "json5")]
+#[cfg(any(feature = "json5", feature = "yaml"))]
 use crate::Source;
-#[cfg(feature = "json5")]
-use crate::{Json5Loader, Loader};
 use crate::{ProviderDef, ProviderRegistry};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
@@ -180,17 +178,14 @@ impl ProviderRuntime {
     }
 
     /// 动态注册一个dsl
-    #[cfg(feature = "json5")]
+    #[cfg(any(feature = "json5", feature = "yaml"))]
     pub fn register_provider_dsl(
         &self,
         loader_type: LoaderType,
         source: Source<'_>,
     ) -> Result<(), EngineError> {
         let mut registry = (*self.registry.load_full()).clone();
-        let provider = match loader_type {
-            #[cfg(feature = "json5")]
-            LoaderType::JSON5 => Json5Loader {}.load(source),
-        }?;
+        let provider = loader_type.load(source)?;
         let key = provider_key_from_def(&provider);
         registry.register(provider)?;
 
@@ -1488,6 +1483,31 @@ mod tests {
             .unwrap();
 
         let resolved = runtime.resolve("test://json5_child").unwrap();
+        assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn register_provider_dsl_loads_yaml() {
+        let root_def: ProviderDef = serde_json::from_str(
+            r#"{
+                "name": "root",
+                "list": {
+                    "yaml_child": { "provider": "yaml_child" }
+                }
+            }"#,
+        )
+        .unwrap();
+        let runtime = runtime_with_root_def(root_def);
+
+        runtime
+            .register_provider_dsl(
+                LoaderType::YAML,
+                Source::Str("# exercise YAML loader path\nname: yaml_child\n"),
+            )
+            .unwrap();
+
+        let resolved = runtime.resolve("test://yaml_child").unwrap();
         assert_eq!(resolved.composed.from.unwrap().0, "schema_table");
     }
 

@@ -2,7 +2,7 @@
 //! 霍ｯ蠕・ｼ嗷oot_provider 竊・gallery_route 竊・gallery_all_router (delegate) 竊・//!       gallery_paginate_router 竊・gallery_page_router (delegate) 竊・query_page_provider
 //!
 //! Delegate query 闃らせ荳榊盾荳・fold・郁ｷｯ蠕・㍾螳壼髄・檎罰 Phase 6 ProviderRuntime 螟・炊・峨・//! 譛ｬ豬玖ｯ募宵蟇ｹ ContribQuery 闃らせ蛛・fold_contrib・悟ｯｹ扈捺棡 ProviderQuery 蟄玲ｮｵ蛛・snapshot 譬｡鬪後・
-#![cfg(feature = "json5")]
+#![cfg(all(feature = "json5", feature = "yaml"))]
 
 mod common;
 

@@ -5803,6 +5803,7 @@ dependencies = [
  "regex-automata",
  "rusqlite",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sqlparser",
  "thiserror 1.0.69",

@@ -22,5 +22,7 @@ pub use registry::{ProviderRegistry, RegistryError};
 
 #[cfg(feature = "json5")]
 pub use loaders::Json5Loader;
+#[cfg(feature = "yaml")]
+pub use loaders::YamlLoader;
 
 pub use loaders::LoaderType;

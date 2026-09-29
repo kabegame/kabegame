@@ -1,10 +1,10 @@
-//! 端到端：用 Json5Loader 把真实 src-tauri/kabegame-core/src/providers/dsl/**/*.json{,5}
+//! 端到端：按扩展名选 Loader（json5 / yaml）把真实 src-tauri/kabegame-core/src/providers/dsl/**/*.{json,json5,yaml,yml}
 //! 一份一份喂给 Loader, 再 register 到 ProviderRegistry。
 //!
 //! 这模拟 Phase 6 中 kabegame-core 用 include_dir 嵌入 + 运行期注册的
 //! 完整流程, 但从测试侧递归扫描磁盘 DSL 根目录。
 
-#![cfg(feature = "json5")]
+#![cfg(all(feature = "json5", feature = "yaml"))]
 
 mod common;
 
@@ -27,6 +27,7 @@ fn recursive_scan_excludes_non_provider_files() {
     assert!(rels.contains(&"images/images_root_provider.json5".to_string()));
     assert!(rels.contains(&"images/image_basic_provider.json5".to_string()));
     assert!(rels.contains(&"images/vd/zh_CN/vd_zh_CN_root_router.json5".to_string()));
+    assert!(rels.contains(&"shared/tasks_provider.yaml".to_string()));
     assert!(!rels.contains(&"schema.json5".to_string()));
     assert!(
         !rels.contains(&"images/gallery/all_router/x_page_x/gallery_page_router.json5".to_string())
@@ -66,6 +67,20 @@ fn loads_with_bytes_source() {
         .load(Source::Bytes(sanitized.as_bytes()))
         .expect("bytes load");
     assert_eq!(def.name.0, "images_root_provider");
+}
+
+#[test]
+fn yaml_provider_registers_with_multiline_sql() {
+    let r = common::build_real_registry();
+    let ns = Namespace("kabegame".into());
+    let def = r
+        .resolve(&ns, &ProviderName("tasks_provider".into()))
+        .expect("tasks_provider.yaml should be registered");
+    let json = serde_json::to_string(&*def).unwrap();
+    assert!(
+        json.contains("FROM tasks t\\n"),
+        "block scalar keeps newlines: {json}"
+    );
 }
 
 #[test]

@@ -10,6 +10,7 @@ This crate is the standalone engine for the provider DSL described in [`cocs/pro
 |---|---|
 | _(default)_ | AST types, `Loader` trait, `ProviderRegistry`, `LoadError`, `Source`, `template::parse` (`${...}` parser, no external deps) |
 | `json5` | `loaders::Json5Loader` — `serde` deserialization of `.json5` (comments, trailing comma, single quotes, unquoted keys) into `ProviderDef` |
+| `yaml` | `loaders::YamlLoader` — `serde` deserialization of `.yaml` / `.yml` into the same `ProviderDef` via `serde-saphyr` (pure Rust, YAML 1.2). Long SQL can be written across lines with block scalars (`|-` keeps newlines). |
 | `validate` | `validate(registry, &cfg)` semantic checks (RULES §10): name/namespace patterns, `${ref:X}` resolution, dynamic-binding scoping, path expressions, SQL via `sqlparser` SQLite dialect (DDL/multi-stmt/whitelist), regex compile + intersection (regex-automata DFA product BFS), capture index bounds, optional cross-provider reference checks, recursive meta validation |
 | `compose` | `ProviderQuery` structured IR + `fold_contrib(state, &q)` cumulative semantics (RULES §3) + `template::eval` evaluator + `compose::render` template-to-SQL renderer + `ProviderQuery::build_sql(&ctx, dialect)` → `(String, Vec<TemplateValue>)`. `${ref:X}` and `${composed}` are inlined; `${properties.X}` / `${capture[N]}` / `${data_var.col}` / `${child_var.field}` become `?` (Sqlite/Mysql) or `$N` (Postgres) bind placeholders. Dialect-agnostic — no DB driver. |
 
@@ -38,6 +39,21 @@ registry.register(def)?;
         .with_cross_refs(true);
     validate(&registry, &cfg).expect("provider DSL invariants");
 }
+```
+
+Pick the loader by file extension with `LoaderType::from_path(path)` (`json` / `json5` → JSON5, `yaml` / `yml` → YAML), then `loader_type.load(source)`; `ProviderRuntime::register_provider_dsl(loader_type, source)` does the same for dynamic registration.
+
+```yaml
+# some.provider.yaml —— 与 json5 产出同一份 AST
+namespace: kabegame
+name: tasks_provider
+list:
+  "${out.id}":
+    sql: |-
+      SELECT t.id, t.status
+      FROM tasks t
+      ORDER BY COALESCE(t.start_time, 0) DESC
+    data_var: out
 ```
 
 `Source` has three forms — `Path(&Path)` (convenience for dev/CLI), `Bytes(&[u8])` (the include_dir path), and `Str(&str)` (the testing/literal path).

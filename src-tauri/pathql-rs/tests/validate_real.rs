@@ -1,7 +1,7 @@
 //! 端到端：递归加载 kabegame-core 的真实 DSL provider 语料后,
 //! `validate` 必须返回 `Ok(())`。
 
-#![cfg(all(feature = "json5", feature = "validate"))]
+#![cfg(all(feature = "json5", feature = "yaml", feature = "validate"))]
 
 mod common;
 

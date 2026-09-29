@@ -2,9 +2,9 @@
 //!
 //! 用 `::json5::` 绝对路径调用外部 crate, 避免与本模块同名歧义。
 
-use std::fs;
 use std::path::PathBuf;
 
+use super::read_source_text;
 use crate::ast::ProviderDef;
 use crate::loader::{LoadError, Loader, Source};
 
@@ -14,26 +14,7 @@ pub struct Json5Loader;
 
 impl Loader for Json5Loader {
     fn load(&self, source: Source<'_>) -> Result<ProviderDef, LoadError> {
-        let (text, path) = match source {
-            Source::Path(p) => {
-                let text = fs::read_to_string(p).map_err(|e| LoadError::Io {
-                    path: p.to_path_buf(),
-                    source: e,
-                })?;
-                (text, Some(p.to_path_buf()))
-            }
-            Source::Str(s) => (s.to_string(), None),
-            Source::Bytes(b) => {
-                let text = std::str::from_utf8(b)
-                    .map_err(|e| LoadError::Type {
-                        path: None,
-                        msg: format!("invalid utf-8: {}", e),
-                    })?
-                    .to_string();
-                (text, None)
-            }
-        };
-
+        let (text, path) = read_source_text(source)?;
         ::json5::from_str::<ProviderDef>(&text).map_err(|e| map_json5_error(e, path))
     }
 }

@@ -3,7 +3,7 @@
 //! 路径：gallery_route → gallery_paginate_router → query_page_provider。
 //! Delegate 节点 (gallery_all_router, query_page_provider) 跳过 (Phase 6 ProviderRuntime 处理)。
 
-#![cfg(feature = "json5")]
+#![cfg(all(feature = "json5", feature = "yaml"))]
 
 mod common;
 

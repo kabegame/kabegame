@@ -1,5 +1,6 @@
-//! DSL 加载: 用 [`include_dir!`] 把 `core/src/providers/dsl/**/*.json5` 编进二进制,
-//! 启动期递归扫描嵌入目录, 依次喂给 pathql-rs 的 runtime 动态注册接口。
+//! DSL 加载: 用 [`include_dir!`] 把 `core/src/providers/dsl/**/*.{json5,yaml}` 编进二进制,
+//! 启动期递归扫描嵌入目录, 按扩展名选 loader（[`LoaderType::from_path`]）,
+//! 依次喂给 pathql-rs 的 runtime 动态注册接口。含长 SQL 的 provider 用 YAML 块标量分行书写。
 //!
 //! 启用 `validate` feature 时, 注册完后跑一次 [`pathql_rs::validate::validate`]
 //! 做交叉引用 / SQL 形态体检, 失败直接 panic — DSL 是源码资产, 启动期就该挂。
@@ -9,7 +10,7 @@ use pathql_rs::{validate::ValidateConfig, LoaderType, ProviderRuntime, Source};
 use std::path::Path;
 
 /// Provider DSL files supported inside plugin `providers/` directories.
-pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5"];
+pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5", "yaml", "yml"];
 
 pub fn is_provider_file_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
@@ -73,9 +74,13 @@ fn embedded_dsl_files() -> Vec<&'static File<'static>> {
 pub fn register_embedded_dsl(runtime: &ProviderRuntime) {
     for file in embedded_dsl_files() {
         let rel = file.path().display();
-        let bytes = file.contents();
+        let loader = file
+            .path()
+            .to_str()
+            .and_then(LoaderType::from_path)
+            .unwrap_or_else(|| panic!("no DSL loader for `{}`", rel));
         runtime
-            .register_provider_dsl(LoaderType::JSON5, Source::Bytes(bytes))
+            .register_provider_dsl(loader, Source::Bytes(file.contents()))
             .unwrap_or_else(|e| panic!("register DSL `{}` failed: {}", rel, e));
     }
 }

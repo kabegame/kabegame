@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use pathql_rs::{Json5Loader, Loader, ProviderDef, ProviderRegistry, Source};
+use pathql_rs::{LoaderType, ProviderDef, ProviderRegistry, Source};
 
-pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5"];
+pub const PROVIDER_FILE_EXTENSIONS: &[&str] = &["json", "json5", "yaml", "yml"];
 
 // Keep this list aligned with kabegame-core's embedded DSL loader. These files
 // live under the DSL root but are not provider definitions.
@@ -56,7 +56,9 @@ pub fn load_provider_for_phase1(path: &Path) -> Result<ProviderDef, pathql_rs::L
         path: path.to_path_buf(),
         source,
     })?;
-    Json5Loader.load(Source::Str(&strip_legacy_from_fields(&raw)))
+    let loader = LoaderType::from_path(&path.to_string_lossy())
+        .unwrap_or_else(|| panic!("no loader for {}", path.display()));
+    loader.load(Source::Str(&strip_legacy_from_fields(&raw)))
 }
 
 pub fn strip_legacy_from_fields(raw: &str) -> String {

@@ -34,8 +34,8 @@ use url::Url;
 use zip::ZipArchive;
 
 use pathql_rs::{
-    ContribQuery, InvokeByName, Json5Loader, List, Loader, Namespace, ProviderDef,
-    ProviderInvocation, ProviderName, Query, Resolve, SimpleName, Source, SqlExpr, WhereQuery,
+    ContribQuery, InvokeByName, List, LoaderType, Namespace, ProviderDef, ProviderInvocation,
+    ProviderName, Query, Resolve, SimpleName, Source, SqlExpr, WhereQuery,
 };
 
 /// 脚本后端枚举（core 权威定义）。kbBackend 字符串解析目标。
@@ -2577,9 +2577,14 @@ fn parse_plugin_provider_entries(
     mut entries: Vec<(String, String)>,
 ) -> Result<Vec<PluginProviderDef>, String> {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    let loader = Json5Loader;
     let mut providers = Vec::new();
     for (source_path, source) in entries {
+        let loader = LoaderType::from_path(&source_path).ok_or_else(|| {
+            format!(
+                "插件 `{}` provider `{}` 的扩展名不受支持",
+                plugin_id, source_path
+            )
+        })?;
         let def = loader.load(Source::Str(&source)).map_err(|err| {
             format!(
                 "解析插件 `{}` provider `{}` 失败: {}",
