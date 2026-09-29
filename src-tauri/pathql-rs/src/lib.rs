@@ -16,7 +16,7 @@ pub use loader::{LoadError, Loader, Source};
 pub use provider::{
     escape_path_segment, unescape_path_segment, ChildEntry, ClosureExecutor, DslProvider,
     EmptyDslProvider, EngineError, ListRef, Provider, ProviderContext, ProviderKey,
-    ProviderRuntime, ResolveRef, ResolvedNode, SchemaRoot, SqlDialect, SqlExecutor,
+    ProviderRuntime, ResolveRef, ResolvedNode, SchemaKind, SchemaRoot, SqlDialect, SqlExecutor,
 };
 pub use registry::{ProviderRegistry, RegistryError};
 

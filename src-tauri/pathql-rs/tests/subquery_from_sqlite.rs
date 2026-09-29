@@ -49,14 +49,21 @@ fn album_page(page: i64) -> ProviderQuery {
         .with_order_raw("albums.name", OrderDirection::Asc);
     q.from = Some(FromSource::table("albums"));
     q.limit = Some(NumberOrTemplate::Number(2.0));
-    q.offset_terms.push(NumberOrTemplate::Number(((page - 1) * 2) as f64));
+    q.offset_terms
+        .push(NumberOrTemplate::Number(((page - 1) * 2) as f64));
     q
 }
 
 /// 在 `base` 之上 join 成员行并按画册分组计数（外层只加 join 与 fields，模拟 `images` 段）。
 fn with_image_join(mut q: ProviderQuery) -> ProviderQuery {
     q = q
-        .with_join_raw(JoinKind::Inner, "album_images", "ai", Some("ai.album_id = albums.id"), &[])
+        .with_join_raw(
+            JoinKind::Inner,
+            "album_images",
+            "ai",
+            Some("ai.album_id = albums.id"),
+            &[],
+        )
         .unwrap();
     q
 }
@@ -65,7 +72,9 @@ fn run(conn: &Connection, q: &ProviderQuery) -> Vec<(String, i64)> {
     let (inner_sql, values) = q
         .build_sql(&TemplateContext::default(), SqlDialect::Sqlite)
         .unwrap();
-    let sql = format!("SELECT sub.id, COUNT(*) FROM ({inner_sql}) AS sub GROUP BY sub.id ORDER BY sub.id");
+    let sql = format!(
+        "SELECT sub.id, COUNT(*) FROM ({inner_sql}) AS sub GROUP BY sub.id ORDER BY sub.id"
+    );
     let mut stmt = conn.prepare(&sql).unwrap();
     stmt.query_map(rusqlite::params_from_iter(params_for(&values)), |row| {
         Ok((row.get(0)?, row.get(1)?))
@@ -88,7 +97,10 @@ fn nested(page: i64) -> ProviderQuery {
 fn subquery_pages_albums_before_join() {
     let conn = fixture();
     // 第 1 页 = [A, B]，第 2 页 = [C, D]；C 没有图片所以 INNER JOIN 后不出现
-    assert_eq!(run(&conn, &nested(1)), vec![("A".into(), 3), ("B".into(), 2)]);
+    assert_eq!(
+        run(&conn, &nested(1)),
+        vec![("A".into(), 3), ("B".into(), 2)]
+    );
     assert_eq!(run(&conn, &nested(2)), vec![("D".into(), 1)]);
 }
 

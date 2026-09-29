@@ -255,7 +255,10 @@ mod tests {
         );
         assert_ne!(a, FromSource::table("albums"));
         assert!(a.as_table().is_none());
-        assert_eq!(FromSource::table("images").as_table(), Some(&SqlExpr("images".into())));
+        assert_eq!(
+            FromSource::table("images").as_table(),
+            Some(&SqlExpr("images".into()))
+        );
     }
 
     #[test]

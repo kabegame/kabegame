@@ -261,6 +261,11 @@ impl ProviderQuery {
     }
 }
 
+/// schema 注册的表名：简单标识符且不是 SQL 关键字（会原样出现在 FROM 与子查询别名处）。
+pub(crate) fn is_plain_table_name(s: &str) -> bool {
+    is_simple_identifier(s) && !is_sql_keyword(s)
+}
+
 fn is_simple_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
@@ -822,16 +827,20 @@ mod tests {
 
     #[test]
     fn subquery_from_keeps_adhoc_isolated_and_params_in_text_order() {
-        let mut inner = albums_inner_page()
-            .with_where_raw("albums.w = ${properties.base}", &[]);
-        inner.wheres.push(SqlExpr("albums.type = ${properties.kind}".into()));
+        let mut inner = albums_inner_page().with_where_raw("albums.w = ${properties.base}", &[]);
+        inner
+            .wheres
+            .push(SqlExpr("albums.type = ${properties.kind}".into()));
         inner
             .adhoc_properties
             .insert("kind".into(), TemplateValue::Text("normal".into()));
 
         // 外层自己的 raw-bind 计数从 0 开始，与内层 `__pq_raw_0` 同名但值不同
-        let mut outer = wrap(inner, "albums")
-            .with_field_raw("?", Some("tag"), &[TemplateValue::Text("field".into())]);
+        let mut outer = wrap(inner, "albums").with_field_raw(
+            "?",
+            Some("tag"),
+            &[TemplateValue::Text("field".into())],
+        );
         outer = outer
             .with_join_raw(
                 JoinKind::Inner,

@@ -576,12 +576,7 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         .unwrap();
     register_plugin_resource_provider(&runtime).unwrap();
     runtime
-        .register_schema(
-            "plugin",
-            "(SELECT 1)",
-            "kabegame",
-            "plugin_resource_root_provider",
-        )
+        .register_programmatic_schema("plugin", "kabegame", "plugin_resource_root_provider")
         .unwrap();
     runtime
 }

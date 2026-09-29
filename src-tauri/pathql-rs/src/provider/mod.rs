@@ -9,7 +9,7 @@ pub mod runtime;
 pub mod where_group;
 
 pub use dsl_provider::{DslProvider, EmptyDslProvider};
-pub use runtime::{ProviderRuntime, ResolvedNode, SchemaRoot};
+pub use runtime::{ProviderRuntime, ResolvedNode, SchemaKind, SchemaRoot};
 pub use where_group::{escape_path_segment, unescape_path_segment};
 
 use crate::compose::{BuildError, FoldError, ProviderQuery, RenderError};
@@ -294,6 +294,10 @@ pub enum EngineError {
     MissingScheme(String),
     #[error("scheme `{0}` is not a valid identifier (must match [a-z][a-z0-9_-]*)")]
     InvalidScheme(String),
+    /// SQL schema 的表名必须是纯表名（简单、非关键字标识符）：它既是 FROM，也是子查询层的别名。
+    /// 没有数据表的 schema 用 `register_programmatic_schema`。
+    #[error("schema `{0}`: table `{1}` must be a plain table name (simple, non-keyword identifier); use register_programmatic_schema for a schema without a table")]
+    InvalidSchemaTable(String, String),
     #[error("load provider error: {0}")]
     Load(#[from] LoadError),
     #[error("register provider error: {0}")]

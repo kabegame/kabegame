@@ -111,12 +111,7 @@ fn init_runtime() -> Arc<ProviderRuntime> {
     register_plugin_resource_provider(&runtime)
         .unwrap_or_else(|e| panic!("register `plugin` provider failed: {}", e));
     runtime
-        .register_schema(
-            "plugin",
-            "(SELECT 1)",
-            "kabegame",
-            "plugin_resource_root_provider",
-        )
+        .register_programmatic_schema("plugin", "kabegame", "plugin_resource_root_provider")
         .unwrap_or_else(|e| panic!("register `plugin` schema failed: {}", e));
     runtime
 }

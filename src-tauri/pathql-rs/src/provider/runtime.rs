@@ -1,8 +1,9 @@
 //! ProviderRuntime — schema-based path routing + longest-prefix cache.
 //!
 //! Hosts register schema roots keyed by a `scheme://` prefix. Resolution starts
-//! from the matching schema root, seeds `ProviderQuery.from` from that schema,
-//! then folds provider contributions along the path. ctx-passing keeps runtime
+//! from the matching schema root, and the engine computes `ProviderQuery.from`
+//! (the schema's table, or none for a programmatic schema), then folds provider
+//! contributions along the path. ctx-passing keeps runtime
 //! state out of provider instances: runtime holds `Weak<Self>`, entrypoints
 //! build a short-lived `ProviderContext`, and calls do not create long-lived
 //! reference cycles.
@@ -61,9 +62,19 @@ struct CachedNode {
     provider_keys: Vec<ProviderKey>,
 }
 
+/// schema 的数据来源。FROM 由引擎按它计算，provider 贡献里没有 `from`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaKind {
+    /// SQL schema：路径查询的 FROM 就是这张数据表。
+    Table(String),
+    /// 无数据表：行由 provider 的 [`Provider::fetch_rows`] 直接给出（如 `plugin://`），
+    /// 没有 SQL 可渲染。
+    Programmatic,
+}
+
 #[derive(Clone)]
 pub struct SchemaRoot {
-    pub from: crate::ast::SqlExpr,
+    pub kind: SchemaKind,
     pub(crate) provider: Arc<dyn Provider>,
     pub(crate) provider_keys: Vec<ProviderKey>,
 }
@@ -106,16 +117,49 @@ impl ProviderRuntime {
         })
     }
 
-    /// Register a schema root for paths beginning with `scheme://`.
+    /// Register a SQL schema root for paths beginning with `scheme://`.
     ///
-    /// `scheme` must match `[a-z][a-z0-9_-]*`. The named provider is
-    /// instantiated immediately and used as the root for that scheme. During
-    /// `resolve`, the schema's `from` value seeds `ProviderQuery.from` before
-    /// the root provider's query contribution is folded.
+    /// `scheme` must match `[a-z][a-z0-9_-]*`; `table` must be a plain table
+    /// name (a simple, non-keyword identifier) — it becomes the FROM of every
+    /// query under this scheme, and later the alias of subquery levels.
+    /// The named provider is instantiated immediately and used as the root.
     pub fn register_schema(
         &self,
         scheme: &str,
-        from: impl Into<crate::ast::SqlExpr>,
+        table: &str,
+        namespace: &str,
+        provider_name: &str,
+    ) -> Result<(), EngineError> {
+        if !crate::compose::build::is_plain_table_name(table) {
+            return Err(EngineError::InvalidSchemaTable(
+                scheme.to_string(),
+                table.to_string(),
+            ));
+        }
+        self.register_schema_root(
+            scheme,
+            SchemaKind::Table(table.to_string()),
+            namespace,
+            provider_name,
+        )
+    }
+
+    /// Register a programmatic schema root: no backing table, rows come from
+    /// the providers' [`Provider::fetch_rows`]. Queries under it have no FROM,
+    /// so a provider that does not return rows cannot be fetched or counted.
+    pub fn register_programmatic_schema(
+        &self,
+        scheme: &str,
+        namespace: &str,
+        provider_name: &str,
+    ) -> Result<(), EngineError> {
+        self.register_schema_root(scheme, SchemaKind::Programmatic, namespace, provider_name)
+    }
+
+    fn register_schema_root(
+        &self,
+        scheme: &str,
+        kind: SchemaKind,
         namespace: &str,
         provider_name: &str,
     ) -> Result<(), EngineError> {
@@ -135,7 +179,7 @@ impl ProviderRuntime {
             &ctx,
         )?;
         let schema = SchemaRoot {
-            from: from.into(),
+            kind,
             provider,
             provider_keys: ctx.provider_keys_since(key_mark),
         };
@@ -284,7 +328,7 @@ impl ProviderRuntime {
     /// The scheme must be registered with [`ProviderRuntime::register_schema`].
     /// Schemeless paths return [`EngineError::MissingScheme`], unknown schemes
     /// return [`EngineError::SchemaNotFound`], and valid schema roots seed
-    /// `ProviderQuery.from` before the provider chain is folded.
+    /// the engine-computed `ProviderQuery.from` before the provider chain is folded.
     pub fn resolve(&self, path: &str) -> Result<ResolvedNode, EngineError> {
         let (scheme, rest) =
             parse_scheme(path)?.ok_or_else(|| EngineError::MissingScheme(path.to_string()))?;
@@ -556,7 +600,10 @@ impl ProviderRuntime {
         // 全 miss: 从 root cold start
         let key_mark = ctx.provider_key_mark();
         let mut initial = ProviderQuery::new();
-        initial.from = Some(crate::compose::FromSource::Table(schema.from.clone()));
+        initial.from = match &schema.kind {
+            SchemaKind::Table(table) => Some(crate::compose::FromSource::table(table.as_str())),
+            SchemaKind::Programmatic => None,
+        };
         let composed = schema.provider.apply_query(initial, ctx);
         let mut provider_keys = schema.provider_keys.clone();
         extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
@@ -615,8 +662,8 @@ impl ProviderRuntime {
                 ListRef::Direct(mut child) => {
                     if with_count {
                         child.total = child.provider.as_ref().and_then(|provider| {
-                            self.count_composed(&provider.apply_query(composed.clone(), ctx))
-                                .ok()
+                            let child_composed = provider.apply_query(composed.clone(), ctx);
+                            self.count_provider(provider, &child_composed, ctx).ok()
                         });
                     }
                     out.push(child)
@@ -660,9 +707,9 @@ impl ProviderRuntime {
                             );
 
                             if with_count {
-                                outer_child.total = child_provider
-                                    .as_ref()
-                                    .and_then(|_| self.count_composed(&child_composed).ok());
+                                outer_child.total = child_provider.as_ref().and_then(|provider| {
+                                    self.count_provider(provider, &child_composed, ctx).ok()
+                                });
                             }
                             if cache_expanded_children && cacheable {
                                 // 缓存键与查找键同用原始转义态: 字面名 `a/b` 若不转义,
@@ -755,10 +802,25 @@ impl ProviderRuntime {
     pub fn count(&self, path: &str) -> Result<usize, EngineError> {
         let node = self.resolve(path)?;
         reject_open_groups(path, &node)?;
-        if node.provider.is_none() {
-            return Err(EngineError::NoProvider(path.to_string()));
+        let provider = node
+            .provider
+            .as_ref()
+            .ok_or_else(|| EngineError::NoProvider(path.to_string()))?;
+        self.count_provider(provider, &node.composed, &self.make_ctx())
+    }
+
+    /// 某个 provider 节点的行数：provider 自己给行（`fetch_rows` 返回 Some，程序化 schema）
+    /// 时取行数，否则走 SQL `COUNT(*)`。与 [`fetch`](Self::fetch) 取行的分派一致。
+    fn count_provider(
+        &self,
+        provider: &Arc<dyn Provider>,
+        composed: &ProviderQuery,
+        ctx: &ProviderContext,
+    ) -> Result<usize, EngineError> {
+        if let Some(rows) = provider.fetch_rows(composed, ctx)? {
+            return Ok(rows.len());
         }
-        self.count_composed(&node.composed)
+        self.count_composed(composed)
     }
 
     /// 已 fold 好的 composed → 行数（`SELECT COUNT(*) FROM (<inner>) AS pq_sub`）。
@@ -1111,7 +1173,10 @@ mod tests {
             .register_schema("test", "schema_table", "", "__root")
             .unwrap();
         let resolved = runtime.resolve("test://").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "images");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "images"
+        );
     }
 
     #[test]
@@ -1121,7 +1186,7 @@ mod tests {
             .register_programmatic_provider("", "__root", |_| Ok(Arc::new(RowsProvider)))
             .unwrap();
         runtime
-            .register_schema("test", "(SELECT 1)", "", "__root")
+            .register_programmatic_schema("test", "", "__root")
             .unwrap();
         let rows = runtime.fetch("test://").unwrap();
         assert_eq!(rows, vec![serde_json::json!({ "id": 1 })]);
@@ -1153,7 +1218,7 @@ mod tests {
         .unwrap();
         runtime.register_provider(root).unwrap();
         runtime
-            .register_schema("test", "(SELECT 1)", "test_ns", "root")
+            .register_programmatic_schema("test", "test_ns", "root")
             .unwrap();
 
         let rows = runtime.fetch("test://id_abc").unwrap();
@@ -1182,7 +1247,7 @@ mod tests {
         .unwrap();
         runtime.register_provider(dsl_root).unwrap();
         runtime
-            .register_schema("prog", "(SELECT 1)", "test_ns", "programmatic_root")
+            .register_programmatic_schema("prog", "test_ns", "programmatic_root")
             .unwrap();
         runtime
             .register_schema("dsl", "dsl_table", "test_ns", "dsl_root")
@@ -1196,6 +1261,144 @@ mod tests {
             runtime.resolve("dsl://").unwrap().composed.from,
             Some(crate::compose::FromSource::table("dsl_table"))
         );
+    }
+
+    // ===== 点 2：schema 的数据来源由引擎计算 =====
+
+    #[test]
+    fn register_schema_requires_plain_table_name() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(RowsProvider)))
+            .unwrap();
+        for bad in [
+            "(SELECT 1)",
+            "images i",
+            "images;",
+            "1images",
+            "",
+            "order",
+            "Select",
+        ] {
+            let err = runtime.register_schema("t", bad, "", "__root").unwrap_err();
+            assert!(
+                matches!(&err, EngineError::InvalidSchemaTable(scheme, table) if scheme == "t" && table == bad),
+                "{bad:?} → {err:?}"
+            );
+        }
+        // 表名校验失败不占用 scheme；scheme 与表名可以不同
+        runtime
+            .register_schema("t", "task_failed_images", "", "__root")
+            .unwrap();
+        assert_eq!(
+            runtime.resolve("t://").unwrap().composed.from,
+            Some(crate::compose::FromSource::table("task_failed_images"))
+        );
+    }
+
+    /// 返回固定多行、并列出一个同样自带行的子节点的程序化 provider。
+    struct ManyRowsProvider(usize);
+    impl Provider for ManyRowsProvider {
+        fn list(
+            &self,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ListRef>, EngineError> {
+            Ok(vec![ListRef::Direct(ChildEntry {
+                total: None,
+                name: "child".into(),
+                provider: Some(Arc::new(ManyRowsProvider(self.0 + 1))),
+                meta: None,
+            })])
+        }
+        fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
+            ResolveRef::Terminal((name == "child").then(|| ChildEntry {
+                total: None,
+                name: "child".into(),
+                provider: Some(Arc::new(ManyRowsProvider(self.0 + 1))),
+                meta: None,
+            }))
+        }
+        fn fetch_rows(
+            &self,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Option<Vec<serde_json::Value>>, EngineError> {
+            Ok(Some(
+                (0..self.0).map(|i| serde_json::json!({ "i": i })).collect(),
+            ))
+        }
+    }
+
+    /// 任何 SQL 都判失败：证明程序化 schema 的取行 / 计数没有走 SQL。
+    fn failing_executor() -> Arc<dyn crate::provider::SqlExecutor> {
+        Arc::new(crate::provider::ClosureExecutor::new(
+            crate::provider::SqlDialect::Sqlite,
+            |sql, _params| {
+                Err(EngineError::FactoryFailed(
+                    "test".into(),
+                    "sql".into(),
+                    format!("unexpected SQL: {sql}"),
+                ))
+            },
+        ))
+    }
+
+    #[test]
+    fn programmatic_schema_has_no_from_and_counts_fetched_rows() {
+        let runtime = ProviderRuntime::new(failing_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(ManyRowsProvider(3))))
+            .unwrap();
+        runtime
+            .register_programmatic_schema("prog", "", "__root")
+            .unwrap();
+
+        assert!(runtime.resolve("prog://").unwrap().composed.from.is_none());
+        assert_eq!(runtime.fetch("prog://").unwrap().len(), 3);
+        // count 与 fetch 同一分派：取 fetch_rows 的行数，不拼 SQL（旧注册 `(SELECT 1)` 时恒为 1）
+        assert_eq!(runtime.count("prog://").unwrap(), 3);
+        assert_eq!(runtime.count("prog://child").unwrap(), 4);
+        let children = runtime.list_with_count("prog://").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].total, Some(4));
+    }
+
+    #[test]
+    fn programmatic_schema_rejects_sql_fetch_and_count() {
+        // 程序化 schema 下没有自带行的 provider 没有 FROM，取行 / 计数都报错而不是拼出残缺 SQL
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        let dsl_root: ProviderDef =
+            serde_json::from_str(r#"{ "namespace": "test_ns", "name": "dsl_root" }"#).unwrap();
+        runtime.register_provider(dsl_root).unwrap();
+        runtime
+            .register_programmatic_schema("prog", "test_ns", "dsl_root")
+            .unwrap();
+        for err in [
+            runtime.fetch("prog://").unwrap_err(),
+            runtime.count("prog://").unwrap_err(),
+        ] {
+            assert!(err.to_string().contains("no FROM clause"), "{err}");
+        }
+    }
+
+    #[test]
+    fn programmatic_schema_shares_scheme_namespace_with_sql_schemas() {
+        let runtime = ProviderRuntime::new(no_op_executor(), HashMap::new());
+        runtime
+            .register_programmatic_provider("", "__root", |_| Ok(Arc::new(RowsProvider)))
+            .unwrap();
+        runtime
+            .register_schema("dup", "images", "", "__root")
+            .unwrap();
+        assert!(matches!(
+            runtime.register_programmatic_schema("dup", "", "__root"),
+            Err(EngineError::SchemaAlreadyRegistered(_))
+        ));
+        assert!(matches!(
+            runtime.register_programmatic_schema("Bad", "", "__root"),
+            Err(EngineError::InvalidScheme(_))
+        ));
     }
 
     #[test]
@@ -1299,8 +1502,14 @@ mod tests {
         let albums = runtime.resolve("albums://x").unwrap();
 
         assert_eq!(runtime.cache_size(), 2);
-        assert_eq!(images.composed.from, Some(crate::compose::FromSource::table("images")));
-        assert_eq!(albums.composed.from, Some(crate::compose::FromSource::table("albums_test")));
+        assert_eq!(
+            images.composed.from,
+            Some(crate::compose::FromSource::table("images"))
+        );
+        assert_eq!(
+            albums.composed.from,
+            Some(crate::compose::FromSource::table("albums_test"))
+        );
         let cache = runtime.cache.lock().unwrap();
         assert!(cache.contains_key("images://x"));
         assert!(cache.contains_key("albums://x"));
@@ -1358,7 +1567,10 @@ mod tests {
             }),
         }));
         let resolved = runtime.resolve("test://mid/leaf").unwrap();
-        assert_eq!(resolved.composed.from, Some(crate::compose::FromSource::table("schema_table")));
+        assert_eq!(
+            resolved.composed.from,
+            Some(crate::compose::FromSource::table("schema_table"))
+        );
         assert_eq!(resolved.composed.joins.len(), 1);
         assert_eq!(resolved.composed.wheres.len(), 1);
         assert_eq!(resolved.composed.order.entries.len(), 1);
@@ -1388,7 +1600,10 @@ mod tests {
 
         runtime.register_provider(child_def).unwrap();
         let resolved = runtime.resolve("test://child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "schema_table"
+        );
     }
 
     #[test]
@@ -1418,14 +1633,20 @@ mod tests {
 
         runtime.register_provider(child_v1).unwrap();
         let resolved = runtime.resolve("test://child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "schema_table"
+        );
 
         assert!(runtime.unregister_provider("", "child"));
         assert!(!runtime.unregister_provider("", "child"));
         runtime.register_provider(child_v2).unwrap();
 
         let resolved = runtime.resolve("test://child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "schema_table"
+        );
     }
 
     #[test]
@@ -1453,7 +1674,10 @@ mod tests {
         assert!(runtime.unregister_provider("", "one"));
         assert_eq!(runtime.cache_size(), 1);
         let resolved = runtime.resolve("test://two").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "schema_table"
+        );
     }
 
     #[cfg(feature = "json5")]
@@ -1483,7 +1707,10 @@ mod tests {
             .unwrap();
 
         let resolved = runtime.resolve("test://json5_child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "schema_table"
+        );
     }
 
     #[cfg(feature = "yaml")]
@@ -1508,7 +1735,10 @@ mod tests {
             .unwrap();
 
         let resolved = runtime.resolve("test://yaml_child").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "schema_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "schema_table"
+        );
     }
 
     #[test]
@@ -1675,7 +1905,10 @@ mod tests {
         assert_eq!(runtime.cache_size(), 2);
 
         let resolved = runtime.resolve("test://parent/page-1").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "leaf_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "leaf_table"
+        );
         assert!(resolved
             .composed
             .fields
@@ -2039,7 +2272,10 @@ mod tests {
         }));
         let resolved = runtime.resolve("test://delegated").unwrap();
         assert!(resolved.provider.is_none());
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "target_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "target_table"
+        );
         let err = runtime.list("test://delegated").unwrap_err();
         assert!(matches!(err, EngineError::NoProvider(p) if p == "test://delegated"));
     }
@@ -2153,7 +2389,10 @@ mod tests {
         }));
 
         let resolved = runtime.resolve("test://x").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "outer_a_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "outer_a_table"
+        );
         assert!(resolved
             .composed
             .fields
@@ -2280,7 +2519,10 @@ mod tests {
         }));
 
         let resolved = runtime.resolve("test://x").unwrap();
-        assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "outer_a_table");
+        assert_eq!(
+            resolved.composed.from.unwrap().as_table().unwrap().0,
+            "outer_a_table"
+        );
         assert!(resolved
             .composed
             .fields

@@ -431,7 +431,10 @@ fn resolve_delegate_child_ref_folds_target_contrib_on_descent() {
     let runtime = runtime_with_registry(reg, root, no_op_executor());
 
     let resolved = runtime.resolve("test://alpha").unwrap();
-    assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "plugins");
+    assert_eq!(
+        resolved.composed.from.unwrap().as_table().unwrap().0,
+        "plugins"
+    );
     assert!(resolved
         .composed
         .fields
@@ -488,7 +491,10 @@ fn resolve_delegate_name_override_folds_target_contrib_on_descent() {
     let runtime = runtime_with_registry(reg, root, no_op_executor());
 
     let resolved = runtime.resolve("test://alpha").unwrap();
-    assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "plugins");
+    assert_eq!(
+        resolved.composed.from.unwrap().as_table().unwrap().0,
+        "plugins"
+    );
     assert!(resolved
         .composed
         .fields

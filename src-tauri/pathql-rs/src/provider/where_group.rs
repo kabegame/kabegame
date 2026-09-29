@@ -556,7 +556,9 @@ mod tests {
         stack.open(GroupKind::Any, None, &base);
         let mut b = base.clone();
         b.wheres.push(SqlExpr("albums.type = 'label'".into()));
-        let (_, carry) = stack.close("p", &b).expect("same subquery source is not a from change");
+        let (_, carry) = stack
+            .close("p", &b)
+            .expect("same subquery source is not a from change");
         assert_eq!(carry.from, base.from);
 
         let mut stack = GroupStack::default();

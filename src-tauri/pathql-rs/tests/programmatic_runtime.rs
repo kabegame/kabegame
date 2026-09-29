@@ -119,7 +119,10 @@ fn three_level_chain_via_register_provider() {
     let runtime = runtime_with_registry(registry, root);
 
     let resolved = runtime.resolve("test://b/c").unwrap();
-    assert_eq!(resolved.composed.from.unwrap().as_table().unwrap().0, "leaf_table");
+    assert_eq!(
+        resolved.composed.from.unwrap().as_table().unwrap().0,
+        "leaf_table"
+    );
     assert_eq!(runtime.cache_size(), 2); // /b 和 /b/c
 
     // 第二次命中缓存 (cache size 不变)
@@ -190,7 +193,10 @@ fn factory_uses_properties() {
     }
     impl Provider for AlbumProvider {
         fn apply_query(&self, mut q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
-            q.from = Some(pathql_rs::compose::FromSource::Table(SqlExpr(format!("images_for_album_{}", self.album_id))));
+            q.from = Some(pathql_rs::compose::FromSource::Table(SqlExpr(format!(
+                "images_for_album_{}",
+                self.album_id
+            ))));
             q
         }
         fn list(
@@ -260,8 +266,14 @@ fn factory_uses_properties() {
     let r1 = runtime.resolve("test://A1").unwrap();
     let r2 = runtime.resolve("test://B7").unwrap();
 
-    assert_eq!(r1.composed.from.unwrap().as_table().unwrap().0, "images_for_album_A1");
-    assert_eq!(r2.composed.from.unwrap().as_table().unwrap().0, "images_for_album_B7");
+    assert_eq!(
+        r1.composed.from.unwrap().as_table().unwrap().0,
+        "images_for_album_A1"
+    );
+    assert_eq!(
+        r2.composed.from.unwrap().as_table().unwrap().0,
+        "images_for_album_B7"
+    );
 }
 
 #[test]
