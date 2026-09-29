@@ -1842,7 +1842,7 @@ fn album_page_image_counts_match_images_paths() {
 }
 
 #[test]
-fn album_search_matches_metacharacters_literally_and_label_paths() {
+fn album_search_matches_metacharacters_literally_and_keeps_tree_shape() {
     let runtime = build_runtime();
     for (query, expected) in [
         ("%", "90000000-0000-0000-0000-000000000001"),
@@ -1868,23 +1868,62 @@ fn album_search_matches_metacharacters_literally_and_label_paths() {
         HashSet::from([LABEL_HATSUNE_ID.to_string(), LABEL_VOCALOID_ID.to_string()])
     );
 
-    // 搜索结果带父级名称链；名称前缀命中排在子串命中之前。
+    // 搜索只是一条 where：不再附带父级名称链（旧的逐行全表扫描），也不再按相关度重排。
     let pixiv = "44444444-4444-4444-4444-444444444444";
+    let character = "55555555-5555-5555-5555-555555555555";
     let rows = runtime.fetch("albums://search/pix/x100x/1").unwrap();
-    assert_eq!(rows[0]["id"], serde_json::json!(pixiv));
-    let hatsune = rows
+    assert!(rows
         .iter()
-        .find(|row| row["id"] == LABEL_HATSUNE_ID)
-        .unwrap();
-    assert_eq!(
-        hatsune["parent_path_names"],
-        serde_json::json!("Pixiv / 角色")
-    );
-    // 子画册数在 `~~` 之后计，搜索谓词封在内层，数到的仍是全部直接子画册。
+        .all(|row| row.get("parent_path_names").is_none()));
+    // 不加搜索段的子画册计数不受影响：Pixiv 仍数到全部直接子画册。
     let children = counts_by_id(
         &runtime,
         "albums://search/pix/x100x/1/~~/children",
         "child_count",
     );
     assert_eq!(children.get(pixiv), Some(&2));
+
+    // 树形不变：每层叠加 search/<q>，自身或子孙命中才保留。hatsune 只命中叶子「初音未来」的
+    // label_path，祖先 Pixiv、角色 因子孙命中保留，兄弟 Vocaloid 被过滤掉。
+    let label_kinds = "~any/album_kind/label/~or/album_kind/label_dir/~end";
+    let level = |scope: &str, q: &str| {
+        ids(runtime
+            .fetch(&format!(
+                "albums://{scope}/search/{q}/{label_kinds}/x100x/1"
+            ))
+            .unwrap())
+    };
+    assert_eq!(level("roots", "hatsune"), vec![pixiv.to_string()]);
+    assert_eq!(
+        level(&format!("parent/{pixiv}"), "hatsune"),
+        vec![character.to_string()]
+    );
+    assert_eq!(
+        level(&format!("parent/{character}"), "hatsune"),
+        vec![LABEL_HATSUNE_ID.to_string()]
+    );
+    // 名称命中同理（「初音」只在叶子的名称里）；没有命中则整层为空。
+    assert_eq!(level("roots", "初音"), vec![pixiv.to_string()]);
+    assert!(level("roots", "nomatch").is_empty());
+    // 自身命中的画册保留，但不命中的子项照样过滤：Vocaloid 命中后其父 Pixiv 下只剩它。
+    assert_eq!(
+        level(&format!("parent/{pixiv}"), "vocaloid"),
+        vec![LABEL_VOCALOID_ID.to_string()]
+    );
+
+    // 带搜索的子画册计数与展开后看到的子项一致：Pixiv 下只有「角色」一支含 hatsune。
+    let filtered = counts_by_id(
+        &runtime,
+        &format!(
+            "albums://roots/search/hatsune/{label_kinds}/x100x/1/~~/children/search/hatsune/{label_kinds}"
+        ),
+        "child_count",
+    );
+    assert_eq!(filtered.get(pixiv), Some(&1));
+    let unfiltered = counts_by_id(
+        &runtime,
+        &format!("albums://roots/search/hatsune/{label_kinds}/x100x/1/~~/children/{label_kinds}"),
+        "child_count",
+    );
+    assert_eq!(unfiltered.get(pixiv), Some(&2));
 }

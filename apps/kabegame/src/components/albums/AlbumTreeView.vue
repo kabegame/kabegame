@@ -1,37 +1,6 @@
 <template>
   <div class="album-tree-view flex min-h-0 flex-1 flex-col">
-    <div v-if="searchMode" class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-      <button
-        v-for="row in searchRows"
-        :key="row.id"
-        class="flex min-h-12 w-full items-center gap-2 rounded-lg border-0 bg-transparent px-2 text-left hover:bg-[rgba(255,107,157,0.07)] disabled:opacity-50"
-        :disabled="!selectable(row)"
-        type="button"
-        @click="select(row)"
-        @contextmenu.prevent="emit('contextmenu', row, $event)"
-      >
-        <el-icon class="flex-none"><component :is="iconOf(row)" /></el-icon>
-        <span class="min-w-0 flex-1">
-          <span class="block truncate text-[13px]">{{ displayName(row) }}</span>
-          <span class="album-tree-dim block truncate text-[11px] text-[var(--anime-text-muted)]">
-            {{ row.labelPath || row.parentPathNames || "" }}
-          </span>
-        </span>
-        <span class="album-tree-dim text-[11px] text-[var(--anime-text-muted)]">{{ row.count }}</span>
-      </button>
-      <button
-        v-if="searchHasMore"
-        class="flex h-8 w-full items-center justify-center gap-1 border-0 bg-transparent text-xs text-[var(--anime-primary)]"
-        :disabled="searchLoading"
-        type="button"
-        @click="loadMoreSearch"
-      >
-        <el-icon v-if="searchLoading" class="is-loading"><Loading /></el-icon>
-        {{ t("albums.loadMore") }}
-      </button>
-    </div>
     <KbTreePanel
-      v-else
       class="min-h-0 flex-1"
       :model="model"
       :dnd="dnd"
@@ -90,9 +59,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { Delete, Folder, Loading, Monitor, Picture, PriceTag, StarFilled } from "@kabegame/element-plus-icons";
+import { Delete, Folder, Monitor, Picture, PriceTag, StarFilled } from "@kabegame/element-plus-icons";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { syncModeIcon, syncModeIconClass, syncModeTooltip } from "@/utils/albumSyncMode";
 import KbTreePanel from "@/components/tree/KbTreePanel.vue";
@@ -108,12 +77,10 @@ import {
   fetchAlbumAncestors,
   fetchAlbumCount,
   fetchAlbumPage,
-  searchAlbums,
   type Album,
   type AlbumKind,
   type AlbumNode,
   type AlbumRootSection,
-  type AlbumSearchNode,
 } from "@/services/albums";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import type { AlbumTreeViewScope } from "./types";
@@ -166,10 +133,19 @@ function sectionKinds(section: AlbumRootSection): AlbumKind[] | undefined {
     ? implicit[section].filter((kind) => props.scope.kinds!.includes(kind))
     : implicit[section];
 }
+/**
+ * 搜索词（防抖后）。非空时树的每一层查询都叠加 `search/<q>` 过滤：自身或子孙命中才保留，树形不变。
+ * 必须在 dataSource 之前声明：useTreeModel 创建时就会同步调用 dataSource。
+ */
+const searchQuery = ref(props.searchText.trim());
 async function systemRows(page: number): Promise<AlbumNode[]> {
   if (page !== 1) return [];
   const ids = [FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].filter((id) => !props.scope.excludeIds?.includes(id));
-  const albums = (await Promise.all(ids.map(fetchAlbum))).filter((album): album is Album => !!album);
+  const query = searchQuery.value.toLowerCase();
+  // 系统画册只有两个，搜索时在前端按显示名过滤
+  const albums = (await Promise.all(ids.map(fetchAlbum))).filter(
+    (album): album is Album => !!album && (!query || displayName(album).toLowerCase().includes(query)),
+  );
   return Promise.all(
     albums.map(async (album) => ({
       ...album,
@@ -183,26 +159,32 @@ function sectionOf(node: Album): AlbumRootSection {
   if (node.type === "label" || node.type === "label_dir") return "label";
   return "normal";
 }
+function childrenPage(node: AlbumNode, page: number): Promise<AlbumNode[]> {
+  return fetchAlbumPage(
+    { parentId: node.id },
+    page,
+    prefix.value,
+    sectionKinds(sectionOf(node)),
+    ALBUM_PAGE_SIZE,
+    searchQuery.value,
+  ).then((rows) => rows.filter(allowed));
+}
 const dataSource: TreeDataSource<AlbumNode> = {
   getKey: (node) => node.id,
   hasChildren: (node) => node.childCount > 0,
-  // 页大小经分页段 x<页大小>x/<页码> 传给 albums:// 查询；当前固定
-  // 默认值，将来要让用户可选，只需把这里与 runSearch 的 ALBUM_PAGE_SIZE 换成同一份可配值。
-  getChildren: (node) =>
-    fetchAlbumPage({ parentId: node.id }, 1, prefix.value, sectionKinds(sectionOf(node)), ALBUM_PAGE_SIZE).then(
-      (rows) => rows.filter(allowed),
-    ),
-  getChildrenPage: (node, page) =>
-    fetchAlbumPage({ parentId: node.id }, page, prefix.value, sectionKinds(sectionOf(node)), ALBUM_PAGE_SIZE).then(
-      (rows) => rows.filter(allowed),
-    ),
+  // 页大小经分页段 x<页大小>x/<页码> 传给 albums:// 查询；当前固定默认值，
+  // 将来要让用户可选，只需把这里的 ALBUM_PAGE_SIZE 换成可配值。
+  getChildren: (node) => childrenPage(node, 1),
+  getChildrenPage: childrenPage,
   totalChildren: (node) => node.childCount,
   getRootsPage: (sectionId, page) => {
     if (sectionId === "system") return systemRows(page);
     const section = sectionId as AlbumRootSection;
     const kinds = sectionKinds(section);
     if (kinds?.length === 0) return Promise.resolve([]);
-    return fetchAlbumPage({ section }, page, prefix.value, kinds, ALBUM_PAGE_SIZE).then((rows) => rows.filter(allowed));
+    return fetchAlbumPage({ section }, page, prefix.value, kinds, ALBUM_PAGE_SIZE, searchQuery.value).then((rows) =>
+      rows.filter(allowed),
+    );
   },
   pageSize: ALBUM_PAGE_SIZE,
 };
@@ -227,7 +209,8 @@ const model = useTreeModel<AlbumNode>({
 async function ensureSelectedExpanded() {
   const selected = props.selectedId ? await fetchAlbum(props.selectedId) : null;
   selectedPath.value = selected?.ancestorPath ?? "";
-  if (!selected) return;
+  // 搜索中选中项可能被过滤掉，逐页找它只会白发请求；清空搜索时再展开
+  if (!selected || searchQuery.value) return;
   await ensureAlbumExpanded(selected);
 }
 async function ensureAlbumExpanded(selected: Album) {
@@ -264,70 +247,25 @@ watch(
   { deep: true },
 );
 
-const searchMode = computed(() => props.searchText.trim().length > 0);
-const searchRows = shallowRef<AlbumSearchNode[]>([]);
-const searchPage = ref(1);
-const searchHasMore = ref(false);
-const searchLoading = ref(false);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
-let searchToken = 0;
-function searchKinds(): AlbumKind[] | undefined {
-  const kinds = visibleSections.value.flatMap((section) => (section === "system" ? [] : (sectionKinds(section) ?? [])));
-  return [...new Set(kinds)];
-}
-function rowInSections(row: Album): boolean {
-  if (row.id === FAVORITE_ALBUM_ID || row.id === HIDDEN_ALBUM_ID) return visibleSections.value.includes("system");
-  return visibleSections.value.includes(sectionOf(row));
-}
-async function runSearch(page: number, append = false) {
-  const query = props.searchText.trim();
-  if (!query) {
-    searchRows.value = [];
-    searchHasMore.value = false;
-    return;
-  }
-  const token = ++searchToken;
-  searchLoading.value = true;
-  try {
-    const rows = (await searchAlbums(query, page, prefix.value, searchKinds(), ALBUM_PAGE_SIZE)).filter(
-      (row) => allowed(row) && rowInSections(row),
-    );
-    if (token !== searchToken) return;
-    const merged = append ? [...searchRows.value, ...rows] : rows;
-    searchRows.value = [...new Map(merged.map((row) => [row.id, row])).values()];
-    searchPage.value = page;
-    searchHasMore.value = rows.length >= ALBUM_PAGE_SIZE;
-  } finally {
-    if (token === searchToken) searchLoading.value = false;
-  }
-}
 watch(
   () => props.searchText,
-  () => {
+  (text) => {
     if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => void runSearch(1), 300);
+    searchTimer = setTimeout(() => (searchQuery.value = text.trim()), 300);
   },
-  { immediate: true },
 );
-function loadMoreSearch() {
-  void runSearch(searchPage.value + 1, true);
-}
+// 按 key diff 重载：仍在的节点保留句柄与展开态，被过滤掉的节点清空搜索后按 key 恢复用户的展开态
+watch(searchQuery, () => void reloadAndExpand());
 function selectable(node: AlbumNode) {
   return props.isSelectable?.(node) ?? true;
 }
 function expandOnly(node: AlbumNode) {
   return props.expandLabelDirs && node.type === "label_dir";
 }
-async function select(node: AlbumNode) {
+function select(node: AlbumNode) {
   if (!selectable(node)) return;
-  if (expandOnly(node)) {
-    // 搜索结果中的目录先展开祖先链和自身，再返回树，不切换当前画册。
-    await ensureAlbumExpanded(node);
-    emit("update:searchText", "");
-    return;
-  }
   emit("select", node.id, node);
-  if (searchMode.value) emit("update:searchText", "");
 }
 function rowState(node: AlbumNode): TreeRowState {
   return {
@@ -371,7 +309,6 @@ function sectionLabel(id: string) {
 const unsubscribe = subscribeChanges({
   waitMs: GRID_REFRESH_WAIT_MS,
   onBatch: async (batch) => {
-    if (searchMode.value && batch.albumStructure.size > 0) await runSearch(1);
     if (affectsAlbumDir(batch, null)) await model.reloadRoots();
     await Promise.all(
       model

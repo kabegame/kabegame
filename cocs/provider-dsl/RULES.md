@@ -413,7 +413,12 @@ key 形态分两类（7b 起）：
 「分区 / 父级 / 类型 / 搜索」揉进一条带 `CASE ${properties.section}` 的大 SQL——那等于绕开折叠自己造
 一套路由。范例是 `albums://`：`parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where
 （多个类型用 `~any/album_kind/a/~or/album_kind/b/~end` 取 OR），末尾 `x<页大小>x/<页码>` 切页
-（`albums_paginate_router`，默认按 `created_at, id` 排序，搜索的相关度排序排在前面）。
+（`albums_paginate_router`，默认按 `created_at, id` 排序）。`search/<q>` 只贡献一条 where：自身或子孙的名称 /
+标签路径命中才保留（子树 `EXISTS` 走 §2.1 的前缀区间），所以树的每一层都能叠加它、树形不变。
+
+**分页之前贡献的 `fields` 会对全部匹配行求值**：SQLite 做 `ORDER BY … LIMIT` 时先算出每一行的输出列再排序切页，
+不是只算这一页。不要在分页节点之前放逐行全表扫描的相关子查询——画册搜索曾给每行附带父级名称链（`instr` 扫全表
+找祖先），短搜索词匹配几千行时三路查询合计十几秒；需要逐行附加的信息放到 `~~` 之后，或改成走索引的写法。
 
 **逐行聚合**（如这一页每个画册的图片数、子画册数）不要写成 `list.sql` 里的关联子查询投影，也不要对分页
 节点的列举项 `list_with_count`：在分页路径后接 `~~`（§2.1），外层 join 需要的表并用 `group_by`（§3.6）

@@ -3,8 +3,9 @@ name: albums_children_provider
 note: >-
   Direct child counts of the albums selected so far. Use after ~~ so a page is cut first:
   .../x<N>x/<page>/~~/children. album_kind/<kind> below filters the children (OR several with
-  ~any/album_kind/label/~or/album_kind/label_dir/~end). Fetch returns one row per album with at
-  least one matching child, with child_count = the number of those children.
+  ~any/album_kind/label/~or/album_kind/label_dir/~end); search/<query> before it keeps only children
+  whose subtree matches the query, like albums://…/search/<query>. Fetch returns one row per album
+  with at least one matching child, with child_count = the number of those children.
 query:
   fields:
     - { sql: COUNT(child.id), as: child_count, in_need: true }
@@ -13,3 +14,4 @@ query:
   group_by: [albums.id]
 resolve:
   album_kind: { provider: albums_child_kind_router }
+  search: { provider: albums_child_search_router }

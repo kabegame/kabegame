@@ -8,7 +8,7 @@ properties:
   page_size: { type: number, default: 100, min: 1, optional: false }
 query:
   # 默认按创建时间（与画册树原先按父目录列子画册的顺序一致），id 兜底保证翻页稳定；
-  # 专门的排序功能以后单独做。追加而非 clear：search 贡献的相关度排序保持在最前。
+  # 专门的排序功能以后单独做。追加而非 clear：上游若贡献排序项仍排在前面。
   order:
     - { sql: albums.created_at, order: asc }
     - { sql: albums.id, order: asc }

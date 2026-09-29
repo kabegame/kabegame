@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_child_search_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "albums_child_search_provider",
+            "properties": { "query": "${capture[1]}" }
+        }
+    }
+}

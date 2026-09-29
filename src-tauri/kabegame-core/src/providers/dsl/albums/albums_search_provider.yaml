@@ -1,36 +1,25 @@
 namespace: kabegame
 name: albums_search_provider
 note: >-
-  Albums whose name or label path contains the query (ASCII case-insensitive).
-  Rows gain parent_path_names; exact and prefix name matches sort first.
+  Albums whose subtree (the album itself or any descendant) has a name or label path containing
+  the query (ASCII case-insensitive). Keeps the tree shape: ancestors of a match stay, branches
+  without a match drop out. Combine with roots / parent/<id> to filter one tree level.
 properties:
   query: { type: string, default: "", optional: false }
 query:
-  # 父级名称链：ancestor_path 为 `/根/.../自身/`，按祖先深度拼接。
-  fields:
-    - sql: |-
-        (
-          SELECT group_concat(anc.name, ' / ')
-          FROM (
-            SELECT p.name
-            FROM albums AS p
-            WHERE p.id != albums.id AND instr(albums.ancestor_path, '/' || p.id || '/') > 0
-            ORDER BY length(p.ancestor_path) ASC
-          ) AS anc
+  # 自身或子孙命中：子树（含自身）是 ancestor_path 以本画册路径为前缀的一段区间，走 idx_albums_ancestor_path，
+  # 每行只扫自己的子树，不做全表扫描。instr 做子串匹配，% _ \ 按字面处理；label_path 已含 label_key。
+  # 同一句的 child 版本在 albums_child_search_provider（~~/children/search/<q>）。
+  where: |-
+    EXISTS (
+      SELECT 1 FROM albums AS hit
+      WHERE hit.ancestor_path >= albums.ancestor_path
+        AND hit.ancestor_path < substr(albums.ancestor_path, 1, length(albums.ancestor_path) - 1) || '0'
+        AND (
+          instr(LOWER(hit.name), LOWER(${properties.query})) > 0
+          OR instr(LOWER(COALESCE(hit.label_path, '')), LOWER(${properties.query})) > 0
         )
-      as: parent_path_names
-  # instr 做子串匹配，查询里的 % _ \ 都按字面处理，无需 LIKE 转义；label_path 已含 label_key。
-  where:
-    - instr(LOWER(albums.name), LOWER(${properties.query})) > 0
-    - instr(LOWER(COALESCE(albums.label_path, '')), LOWER(${properties.query})) > 0
-  order:
-    - sql: |-
-        CASE
-          WHEN LOWER(albums.name) = LOWER(${properties.query}) THEN 0
-          WHEN instr(LOWER(albums.name), LOWER(${properties.query})) = 1 THEN 1
-          ELSE 2
-        END
-      order: asc
+    )
 resolve:
   ".*":
     delegate: { provider: albums_filter_router }

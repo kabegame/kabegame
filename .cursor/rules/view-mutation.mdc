@@ -27,7 +27,8 @@ alwaysApply: false
 ## 画册查询与计数
 
 - 前端不设全量画册 store，也不持有全量画册计数。目录树与所有画册选择器复用 app 侧
-  `AlbumTreeView` / `AlbumPicker`，按目录分页查询；单个详情用 `services/albums.ts` 查询并订阅 hub。
+  `AlbumTreeView` / `AlbumPicker`，按目录分页查询；搜索时每层与 `~~/children` 都叠加 `search/<q>`
+  （自身或子孙命中才保留，树形与展开态不变）。单个详情用 `services/albums.ts` 查询并订阅 hub。
 - 计数由 PathQL 路径表达，不新增 SQL 视图、计数列或专用计数命令：目录页一次三路 fetch——
   `albums://<过滤段>/x<N>x/<页>` 取这一页的画册行（默认按创建时间排序）；`…/~~/children[/<类型段>]` 与
   `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的

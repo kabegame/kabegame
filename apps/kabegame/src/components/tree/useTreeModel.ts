@@ -26,7 +26,7 @@ export interface TreeModel<T> {
   reloadRoots(): Promise<void>;
   loadMore(target: string | { sectionId: string }): Promise<void>;
   loadedHandles(): TreeNodeHandle<T>[];
-  /** 重新枚举各分区根与所有已加载分支（key diff 保留句柄）。 */
+  /** 重新枚举各分区根与所有已加载分支（key diff 保留句柄；用户展开态按 key 记忆，重建的句柄照样恢复）。 */
   reload(): Promise<void>;
 }
 
@@ -60,6 +60,11 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   const sectionStates: SectionState<T>[] = [];
   /** 每节点子项枚举的防竞态 token（对应旧实现的 listToken）。 */
   const loadTokens = new Map<string, number>();
+  /**
+   * 用户展开过的 key（expand 记入、collapse 移除），独立于句柄存活：
+   * 节点被过滤掉（句柄释放）或暂时没有子项（被迫收起）后再出现时，按 key 恢复展开态。
+   */
+  const expandedMemory = new Set<string>();
 
   function createHandle(
     element: T,
@@ -77,7 +82,7 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       sectionId,
       hasChildren,
       children: null,
-      expanded: hasChildren ? (options.defaultExpanded?.(element, depth) ?? false) : false,
+      expanded: hasChildren ? expandedMemory.has(key) || (options.defaultExpanded?.(element, depth) ?? false) : false,
       loading: false,
       loaded: false,
       hasMore: false,
@@ -135,6 +140,8 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   function syncExistingHandle(handle: TreeNodeHandle<T>, element: T) {
     handle.element = element;
     handle.hasChildren = dataSource.hasChildren(element);
+    // 之前因为没有子项被迫收起、但用户展开过：子项回来后恢复展开（由调用方级联加载）
+    if (handle.hasChildren && !handle.expanded && expandedMemory.has(handle.key)) handle.expanded = true;
     if (!handle.hasChildren) {
       for (const child of handle.children ?? []) dropSubtree(child);
       handle.children = null;
@@ -335,6 +342,7 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     const handle = handles.get(key);
     if (!handle || !handle.hasChildren || handle.expanded) return;
     handle.expanded = true;
+    expandedMemory.add(key);
     if (handle.children === null) {
       rebuild(); // 先把 loading 态行投出去
       await loadChildren(handle);
@@ -347,6 +355,7 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     const handle = handles.get(key);
     if (!handle || !handle.expanded) return;
     handle.expanded = false;
+    expandedMemory.delete(key);
     rebuild();
   }
 

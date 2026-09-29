@@ -104,7 +104,9 @@ token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `lab
   （子目录把 `roots` 换成 `parent/<id>`；只选目录时单写 `album_kind/label_dir`，默认按创建时间排序）；
   目录计数取 `…/~~/children/<同一类型段>` 的 `child_count`（同类型过滤下的直接子画册数），标签叶子计数取
   `…/~~/images` 的 `image_count`（与 `images://gallery/[hide/]album/<id>` 同口径），两者都在 `~~` 边界之后
-  按画册 `GROUP BY`，没有行即 0。隐藏口径用 `…/~~/images/hide`。
+  按画册 `GROUP BY`，没有行即 0。隐藏口径用 `…/~~/images/hide`。搜索时树形不变：每层查询与
+  `~~/children` 都叠加 `search/<q>`（自身或子孙的名称 / 标签路径命中才保留，命中项的祖先一路保留），
+  不自动展开；重载按 key diff，用户的展开态按 key 记忆，清空搜索后恢复。
 - `AlbumTreePanel.vue` 包装同一棵查询树并提供 DnD；只允许同森林移动且拒绝把节点放到标签叶子下。
 - `Albums.vue`：新建对话框类型选择（普通 / 标签 / 标签目录 / 本地文件夹）；移动与父级候选通过
   `AlbumPicker` 的 `scope` 只列标签目录。

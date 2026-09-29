@@ -1,0 +1,22 @@
+namespace: kabegame
+name: albums_child_search_provider
+note: >-
+  Children whose subtree (the child itself or any descendant) has a name or label path containing
+  the query, so tree expanders and child counts match what a search shows. album_kind/<kind> may
+  follow.
+properties:
+  query: { type: string, default: "", optional: false }
+query:
+  # 与 albums_search_provider 同一句，只是作用在 child 上；child 由 albums_children_provider 贡献。
+  where: |-
+    EXISTS (
+      SELECT 1 FROM albums AS hit
+      WHERE hit.ancestor_path >= child.ancestor_path
+        AND hit.ancestor_path < substr(child.ancestor_path, 1, length(child.ancestor_path) - 1) || '0'
+        AND (
+          instr(LOWER(hit.name), LOWER(${properties.query})) > 0
+          OR instr(LOWER(COALESCE(hit.label_path, '')), LOWER(${properties.query})) > 0
+        )
+    )
+resolve:
+  album_kind: { provider: albums_child_kind_router }
