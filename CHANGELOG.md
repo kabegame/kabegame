@@ -10,7 +10,7 @@
 
 ## 版本索引
 
-- [v4.4.1](versions/v4.4.1/changelog.md)
+- [v4.5.0](versions/v4.5.0/changelog.md)
 - [v4.4.0](versions/v4.4.0/changelog.md)
 - [v4.3.0](versions/v4.3.0/changelog.md)
 - [v4.2.1](versions/v4.2.1/changelog.md)

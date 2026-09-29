@@ -24,6 +24,17 @@
         "where": "substr(tree_album.ancestor_path, 1, length((SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}))) = (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id})"
     },
     "resolve": {
+        // 分页段（desc / x<N>x / 页号）必须自己接住：gallery_route 不处理分页，
+        // 只落到下面的 .* 会以 `path not found` 收场（画册封面取 1 张就走这条）。
+        // 与 gallery_album_provider 保持一致。
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        },
         ".*": {
             "delegate": { "provider": "gallery_route" },
             "child_var": "child",

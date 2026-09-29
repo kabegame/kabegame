@@ -13,12 +13,7 @@
       >
         <el-icon><MoreFilled /></el-icon>
       </button>
-      <button
-        class="album-detail-panel-btn"
-        type="button"
-        :title="t('common.close')"
-        @click="emit('close')"
-      >
+      <button class="album-detail-panel-btn" type="button" :title="t('common.close')" @click="emit('close')">
         <el-icon><Close /></el-icon>
       </button>
     </div>
@@ -32,14 +27,7 @@
         <!-- 封面是静态大图，不需要 ImageItem 的选中/hover/右键/视频控件那一整套
              （AlbumCard 当年正是为此写了一堆 :deep 去中和它的边框阴影）。
              直接用 ImageContent，并显式 fit="cover" —— 它默认 contain，会给横图留上下灰边。 -->
-        <ImageContent
-          v-if="cover"
-          :key="cover.id"
-          :image="cover"
-          prefer="thumbnail"
-          fit="cover"
-          :native-drag="false"
-        />
+        <ImageContent v-if="cover" :key="cover.id" :image="cover" prefer="thumbnail" fit="cover" :native-drag="false" />
         <div v-else class="album-detail-cover-empty">
           <img src="/album-empty.png" alt="" class="album-detail-cover-empty-img" />
         </div>
@@ -69,10 +57,7 @@
           <span v-if="folderStatusBad" class="album-detail-status-dot flex-none" />
           <span class="truncate text-[var(--anime-text-muted)]">{{ album.syncFolder }}</span>
         </div>
-        <div
-          v-if="isLocalFolder"
-          class="mt-1.5 flex min-w-0 items-center gap-1.5 text-[12px]"
-        >
+        <div v-if="isLocalFolder" class="mt-1.5 flex min-w-0 items-center gap-1.5 text-[12px]">
           <el-icon
             v-if="syncModeIcon(album.syncMode)"
             class="flex-none text-[13px]"
@@ -83,10 +68,7 @@
           <span class="flex-none font-medium text-[var(--anime-text-secondary)]">
             {{ syncModeLabel(album.syncMode) }}
           </span>
-          <span
-            class="min-w-0 truncate text-[var(--anime-text-muted)]"
-            :title="syncModeTooltip(album.syncMode)"
-          >
+          <span class="min-w-0 truncate text-[var(--anime-text-muted)]" :title="syncModeTooltip(album.syncMode)">
             · {{ syncModeTooltip(album.syncMode) }}
           </span>
         </div>
@@ -124,12 +106,7 @@
           {{ isRotating ? t("albums.detailStopRotation") : t("albums.detailStartRotation") }}
         </button>
         <div class="grid grid-cols-2 gap-2">
-          <button
-            v-if="canRename"
-            class="album-detail-secondary-btn"
-            type="button"
-            @click="emit('command', 'rename')"
-          >
+          <button v-if="canRename" class="album-detail-secondary-btn" type="button" @click="emit('command', 'rename')">
             {{ t("contextMenu.rename") }}
           </button>
           <button
@@ -161,12 +138,7 @@ import { Close, Monitor, MoreFilled } from "@kabegame/element-plus-icons";
 import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
-import {
-  syncModeIcon,
-  syncModeIconClass,
-  syncModeLabel,
-  syncModeTooltip,
-} from "@/utils/albumSyncMode";
+import { syncModeIcon, syncModeIconClass, syncModeLabel, syncModeTooltip } from "@/utils/albumSyncMode";
 
 /**
  * 画册页右栏「画册信息」面板：纯展示 + 派发，无副作用。
@@ -175,11 +147,7 @@ import {
  */
 
 export type AlbumPanelCommand =
-  | "setWallpaperRotation"
-  | "stopWallpaperRotation"
-  | "rename"
-  | "createSubAlbum"
-  | "syncNow";
+  "setWallpaperRotation" | "stopWallpaperRotation" | "rename" | "createSubAlbum" | "syncNow";
 
 interface Props {
   album: Album | null;
@@ -248,7 +216,9 @@ const formatDate = (ts?: number) => {
   color: var(--anime-text-muted);
   font-size: 14px;
   cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
 .album-detail-panel-btn:hover {

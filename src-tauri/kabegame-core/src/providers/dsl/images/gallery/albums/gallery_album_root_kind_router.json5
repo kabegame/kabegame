@@ -5,12 +5,13 @@
         "kinds": { "type": "string", "default": "", "optional": false }
     },
     "resolve": {
-        "subpage_(normal|label|local_folder)_([1-9][0-9]*)": {
+        "album_page_(normal|label|local_folder)_x([1-9][0-9]*)x_([1-9][0-9]*)": {
             "provider": "gallery_album_page_provider",
             "properties": {
                 "section": "${capture[1]}",
                 "parent_id": "",
-                "page": "${capture[2]}",
+                "page": "${capture[3]}",
+                "page_size": "${capture[2]}",
                 "kinds": "${properties.kinds}"
             }
         }

@@ -1653,10 +1653,10 @@ fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     assert_eq!(runtime.count(&format!("albums://subtree_{ALBUM_A_ID}")).unwrap(), 1);
 
     let first = runtime
-        .list_with_count("albums://root_normal/subpage_1")
+        .list_with_count("albums://root_normal/album_page_x100x_1")
         .unwrap();
     let second = runtime
-        .list_with_count("albums://root_normal/subpage_2")
+        .list_with_count("albums://root_normal/album_page_x100x_2")
         .unwrap();
     assert_eq!(first.len(), 100);
     assert!(!second.is_empty());
@@ -1664,27 +1664,54 @@ fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     let first_ids = first.iter().map(|entry| &entry.name).collect::<HashSet<_>>();
     assert!(second.iter().all(|entry| !first_ids.contains(&entry.name)));
 
+    // 页大小由路径段下发（album_page_x<页大小>x_<页码>）：x1x 时每页只剩 1 项，
+    // OFFSET 必须按路径里的页大小步进；页大小只影响切片、不影响排序，故首项与 x100x 一致。
+    let tiny_first = runtime.list("albums://root_normal/album_page_x1x_1").unwrap();
+    let tiny_second = runtime.list("albums://root_normal/album_page_x1x_2").unwrap();
+    assert_eq!(tiny_first.len(), 1);
+    assert_eq!(tiny_second.len(), 1);
+    assert_eq!(tiny_first[0].name, first[0].name);
+    assert_ne!(tiny_first[0].name, tiny_second[0].name);
+
     let label_dirs = runtime
-        .list_with_count("albums://root_label/kind_label_dir/subpage_1")
+        .list_with_count("albums://root_label/kind_label_dir/album_page_x100x_1")
         .unwrap();
     assert!(!label_dirs.is_empty());
     assert!(label_dirs.iter().all(|entry| {
         entry.meta.as_ref().and_then(|meta| meta.get("type")).and_then(|v| v.as_str())
             == Some("label_dir")
     }));
-    let normal = runtime.list("albums://root_normal/subpage_1").unwrap();
+    let normal = runtime.list("albums://root_normal/album_page_x100x_1").unwrap();
     assert!(normal.iter().all(|entry| {
         entry.meta.as_ref().and_then(|meta| meta.get("type")).and_then(|v| v.as_str())
             == Some("normal")
     }));
-    let local = runtime.list("albums://root_local_folder/subpage_1").unwrap();
+    let local = runtime.list("albums://root_local_folder/album_page_x100x_1").unwrap();
     assert_eq!(local.len(), 1);
     assert_eq!(local[0].name, "90000000-0000-0000-0000-000000000004");
 
     let gallery_page = runtime
-        .list_with_count("images://gallery/albums/subpage_normal_1")
+        .list_with_count("images://gallery/albums/album_page_normal_x100x_1")
         .unwrap();
     assert_eq!(gallery_page.len(), 100);
+
+    // images:// 根分区把分区名编在同一段内，页大小同样生效。
+    let gallery_tiny = runtime.list("images://gallery/albums/album_page_normal_x1x_1").unwrap();
+    assert_eq!(gallery_tiny.len(), 1);
+
+    // 两条 kind 子路由（根分区 / 子画册）也要接得住新的页大小段，且页大小照样生效。
+    let gallery_root_kind = runtime
+        .list("images://gallery/albums/kind_label_dir/album_page_label_x1x_1")
+        .unwrap();
+    assert_eq!(gallery_root_kind.len(), 1);
+    assert!(gallery_root_kind.iter().all(|entry| {
+        entry.meta.as_ref().and_then(|meta| meta.get("type")).and_then(|v| v.as_str())
+            == Some("label_dir")
+    }));
+    let gallery_children_kind = runtime
+        .list(&format!("images://gallery/album/{ALBUM_A_ID}/kind_normal/album_page_x1x_1"))
+        .unwrap();
+    assert!(gallery_children_kind.len() <= 1);
 }
 
 #[test]
@@ -1696,7 +1723,7 @@ fn album_search_escapes_like_metacharacters_and_matches_label_paths() {
         (r"\", "90000000-0000-0000-0000-000000000003"),
     ] {
         let path = format!(
-            "albums://search/{}/subpage_1",
+            "albums://search/{}/album_page_x100x_1",
             pathql_rs::escape_path_segment(query)
         );
         let rows = runtime.list(&path).unwrap();
@@ -1705,7 +1732,7 @@ fn album_search_escapes_like_metacharacters_and_matches_label_paths() {
     }
 
     let slash_path = format!(
-        "albums://search/{}/kind_label/subpage_1",
+        "albums://search/{}/kind_label/album_page_x100x_1",
         pathql_rs::escape_path_segment("/")
     );
     let rows = runtime.list(&slash_path).unwrap();

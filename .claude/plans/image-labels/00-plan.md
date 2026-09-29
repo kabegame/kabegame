@@ -452,7 +452,7 @@ type KabegameProvideLabelsFn = (input: string) => KabegameLabelInput[] | Promise
 - **新增** `cocs/gallery/LABEL_ALBUMS.md`（数据模型、与文件夹画册同口径的内容与计数、`label_path` 维护、插件寻址与撞名退化、
   搜索 SQL、前端入口）并登记到 `cocs/README.md`；**修改** `METADATA_MIGRATION.md`、`DOWNLOADER_FLOW.md`（标签在
   入库时挂载、失败记录持久化）、`FILE_DROP_ZONES.md`（标签画册可拖入）、`docs/PLUGIN_FORMAT.md` / `apps/docs`。
-- **新增** `versions/v4.4.1/regression.md` 回归项：新建 / 改 key / 改名 / 移动 / 删除标签画册；跨森林拖动被拒；
+- **新增** `versions/v4.5.0/regression.md` 回归项：新建 / 改 key / 改名 / 移动 / 删除标签画册；跨森林拖动被拒；
   标签画册只显示直接成员、计数逐级加总；预览里增删 / 新建 / 复制 / 跳转，删上级不影响子级；
   标签搜索（且、包含子标签、完整路径）；插件下载带标签、去重命中受开关控制、已有标签的名称不被插件改动；
   插件升级后历史图片补标签、失败也盖版本；含 `.` 的插件 id 被拒绝；壁纸轮播使用标签画册。

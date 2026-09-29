@@ -33,8 +33,3 @@
 1. 拍板上述决策 → 更新计划"决策点"一节。
 2. 按计划 P1 动工:trait 扩展 + `ScreenInfo` + Controller scoped 入口 + settings Json 键 + capabilities features + IPC(全后端探针 false,行为零回归)。
 3. 验证只跑 `deno task check -c kabegame`(勿 build;app 运行中 check 会 os error 32,先杀 kabegame.exe)。
-
-## 环境备注
-
-- 用户显示器:Windows 双屏(main + 副屏),macOS 单屏 13"(多屏逻辑无法本机全验),Linux 用 Hyprland。
-- 工作区另有**未完成的 MCP 设置改动**(Settings.vue / mcp.json 五语言 / mcp_server.rs / mcp-settings-tab.md 等)——与本任务无关,提交时不要混入。

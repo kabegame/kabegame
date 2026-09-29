@@ -301,8 +301,10 @@ key 形态分两类（7b 起）：
 
 列举节点需要分页时，分页必须写在该节点的 `list.sql` 中，而不是在其后追加 query 的
 `x<N>x/<page>` 段；后者分页的是 `fetch` 行，不是 `list` 的子项。统一使用
-`LIMIT 100 OFFSET (${properties.page} - 1) * 100` 这类模板，页码经 `${properties.*}` 绑定，禁止把
-捕获值直接拼进 SQL。`subpage_<n>` 路由只负责用白名单正则捕获页码并实例化列举 provider。
+`LIMIT ${properties.page_size} OFFSET (${properties.page} - 1) * ${properties.page_size}` 这类模板，
+页码与页大小都经 `${properties.*}` 绑定，禁止把捕获值直接拼进 SQL。画册列举的
+`album_page_[<分区>_]x<页大小>x_<页码>` 路由只负责用白名单正则捕获页大小与页码并实例化列举 provider，
+两侧命名空间共用同一段格式（`images://` 的根分区把分区名编进段内，`albums://` 的已在 `root_<分区>` 段里）。
 
 嵌套目录 provider 若在每一层贡献同一列的等值条件，进入下一层前必须用精确的 `where_clear` 清掉上一层
 条件。例如画册路径要清除 `ai.album_id =` 再写当前 id；否则会折叠为 `album_id = 父 AND album_id = 子`
@@ -538,8 +540,8 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
   - 明显注入模式（如 `'; --` 等）
 - `${composed}` 由引擎构造，可信任直接嵌入子查询
 - `${properties.X}` 等模板值在最终拼接 SQL 时**走 bind param**，不做字符串拼接
-- `list.sql` 中的 `LIMIT` / `OFFSET` 同样必须通过 `${properties.*}` 绑定；即使值来自只匹配数字的
-  `subpage_` 路由，也不例外。
+- `list.sql` 中的 `LIMIT` / `OFFSET` 同样必须通过 `${properties.*}` 绑定；即使页大小与页码都来自
+  只匹配数字的 `album_page_..._x<N>x_<页>` 路由，也不例外。
 - `join.table` 字面量表名必须在引擎白名单；`(SELECT ...)` 子查询形式豁免。schema `from` 由 host 代码负责注册与审计。
 
 ### 7.2 路径安全

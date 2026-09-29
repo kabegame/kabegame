@@ -99,7 +99,8 @@ token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `lab
 - `services/albums.ts` 提供无状态的单画册、祖先、图片所属画册与分页目录查询，以及标签创建 / 改 key
   写入口；前端不缓存全量画册或全量计数。`album-added` 事件携带 `labelKey` / `labelPath` /
   `ancestorPath`。
-- `AlbumTreeView.vue` 的「标签」分区按目录每页 100 项查询；目录计数取 `albums://` 列举项的
+- `AlbumTreeView.vue` 的「标签」分区按目录每页 100 项查询（页大小与页码都在最后一段
+  `album_page_[<分区>_]x<页大小>x_<页码>` 里，当前前端固定传 100）；目录计数取 `albums://` 列举项的
   `with_count`，标签叶子计数取 `images://gallery/[hide/]album/...` 列举项的 `with_count`。全局隐藏
   过滤只由路径前缀表达。
 - `AlbumTreePanel.vue` 包装同一棵查询树并提供 DnD；只允许同森林移动且拒绝把节点放到标签叶子下。

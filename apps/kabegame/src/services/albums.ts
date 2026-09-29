@@ -12,7 +12,7 @@ export type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
 
 export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
 export const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
-export const ALBUM_PAGE_SIZE = 100;
+export const ALBUM_PAGE_SIZE = 10;
 
 export type AlbumRootSection = "normal" | "label" | "local_folder";
 export type GalleryPrefix = "" | "hide/" | string;
@@ -124,18 +124,21 @@ function albumPagePaths(
   page: number,
   prefix: GalleryPrefix,
   kinds?: ReadonlyArray<AlbumKind>,
+  pageSize: number = ALBUM_PAGE_SIZE,
 ) {
   const kind = kindSegment(kinds);
+  // 两侧复用同一段格式 `album_page_[<分区>_]x<页大小>x_<页码>`：images:// 的根分区把分区名
+  // 编进段内（albums:// 的分区已在 root_<分区> 段里，段内不再重复）；子画册/搜索段内无分区。
   if ("parentId" in target) {
     const id = encodeURIComponent(target.parentId);
     return {
-      images: `images://gallery/${prefix}album/${id}/${kind}subpage_${page}`,
-      albums: `albums://children_${id}/${kind}subpage_${page}`,
+      images: `images://gallery/${prefix}album/${id}/${kind}album_page_x${pageSize}x_${page}`,
+      albums: `albums://children_${id}/${kind}album_page_x${pageSize}x_${page}`,
     };
   }
   return {
-    images: `images://gallery/${prefix}albums/${kind}subpage_${target.section}_${page}`,
-    albums: `albums://root_${target.section}/${kind}subpage_${page}`,
+    images: `images://gallery/${prefix}albums/${kind}album_page_${target.section}_x${pageSize}x_${page}`,
+    albums: `albums://root_${target.section}/${kind}album_page_x${pageSize}x_${page}`,
   };
 }
 
@@ -148,8 +151,9 @@ export async function fetchAlbumPage(
   page: number,
   prefix: GalleryPrefix,
   kinds?: ReadonlyArray<AlbumKind>,
+  pageSize: number = ALBUM_PAGE_SIZE,
 ): Promise<AlbumNode[]> {
-  const paths = albumPagePaths(target, page, prefix, kinds);
+  const paths = albumPagePaths(target, page, prefix, kinds, pageSize);
   const [imageRows, albumRows] = await Promise.all([pathqlList(paths.images, true), pathqlList(paths.albums, true)]);
   const imagesById = new Map(imageRows.map((entry) => [entry.name, entry.total ?? 0]));
   const albumsById = new Map(albumRows.map((entry) => [entry.name, entry]));
@@ -177,12 +181,13 @@ export async function searchAlbums(
   page: number,
   prefix: GalleryPrefix,
   kinds?: ReadonlyArray<AlbumKind>,
+  pageSize: number = ALBUM_PAGE_SIZE,
 ): Promise<AlbumSearchNode[]> {
   const encoded = encodeURIComponent(query);
   const kind = kindSegment(kinds);
   const [imageRows, albumRows] = await Promise.all([
-    pathqlList(`images://gallery/${prefix}albums/search/${encoded}/${kind}subpage_${page}`, true),
-    pathqlList(`albums://search/${encoded}/${kind}subpage_${page}`, true),
+    pathqlList(`images://gallery/${prefix}albums/search/${encoded}/${kind}album_page_x${pageSize}x_${page}`, true),
+    pathqlList(`albums://search/${encoded}/${kind}album_page_x${pageSize}x_${page}`, true),
   ]);
   const imagesById = new Map(imageRows.map((entry) => [entry.name, entry.total ?? 0]));
   const albumById = new Map(albumRows.map((entry) => [entry.name, entry]));

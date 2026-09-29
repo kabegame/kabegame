@@ -42,7 +42,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 **ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate` 携带可选 `view`，并立即应用后端返回的 `{ rows, total, seq }` 快照；只改展示字段的操作走 `ctx.patch`，不得依赖事件回刷自身操作。带 `view` 的后端写命令必须在写库前取得 `GlobalEmitter::hold()`，快照读完后才放行事件。被动 `images-change` / `album-images-change` 统一经 `dataChangeHub` / `liveQuery`。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
 
-**画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录每页 100 项查询；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数由调用侧组合 PathQL：直接图片数取 `images://gallery/[前缀/]album/...` 列举的 `with_count`，直接子画册数取 `albums://...` 列举的 `with_count`，普通画册子树数取 `images://gallery/[前缀/]album-tree/<id>` 的 entry 总数；隐藏等全局过滤只能用路径前缀表达，不得新增计数列、SQL 视图或专用计数命令。
+**画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询（页大小与页码都在最后一段 `album_page_[<分区>_]x<页大小>x_<页码>` 里，前端当前固定 100）；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数由调用侧组合 PathQL：直接图片数取 `images://gallery/[前缀/]album/...` 列举的 `with_count`，直接子画册数取 `albums://...` 列举的 `with_count`，普通画册子树数取 `images://gallery/[前缀/]album-tree/<id>` 的 entry 总数；隐藏等全局过滤只能用路径前缀表达，不得新增计数列、SQL 视图或专用计数命令。
 
 **桌面端和 Android 端的视频导入都使用 rsmpeg/FFmpeg（仅排除 iOS）：**
 - 桌面端构建（Windows/macOS/Linux 上的标准版/CLI）会链接 rsmpeg/FFmpeg，用于预览图压缩和视频尺寸读取（使用 `deno task build:ffmpeg` 产生的本机静态库）。
@@ -268,7 +268,7 @@ struct Foo {
 }
 ```
 ````
-在进行更改后要把回归补充到 @versions/vX.X.X/regression.md，格式参考 [v4.4.1回归](./versions/v4.4.1/regression.md). 
+在进行更改后要把回归补充到 @versions/vX.X.X/regression.md，格式参考 [最新版本回归](./versions/latest/regression.md). 
 检查用 `kabegame-chromium` 技能，如果是指出开发web版本才使用 `agent-browser` 技能。
 
 ## 语言规范
