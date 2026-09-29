@@ -1,0 +1,36 @@
+---
+description: ImageGrid 写操作必须通过视图快照主动更新，展示字段改动使用就地 patch
+globs: "apps/kabegame/src/**/*.{ts,vue}, src-tauri/kabegame*/src/**/*.rs"
+alwaysApply: false
+---
+
+# ImageGrid 视图写操作
+
+- 凡从 `ImageGrid` 发起、可能改变当前查询结果集的写操作，必须走
+  `GridRefreshContext.mutate(view => ...)`，并把 `view` 传给后端命令；命令完成后直接应用返回的
+  `ViewSnapshot`，禁止依赖变更事件回刷用户自己的操作。
+- 只改变当前行展示字段、不会改变结果集的写操作走 `GridRefreshContext.patch`。当前只有收藏符合此规则。
+- 新增可能影响 ImageGrid 结果集的写命令时，core、Tauri 薄包装与 web dispatch 都必须支持可选
+  `view: ViewQuery`；未传 `view` 时必须保持原行为，传入时在写入并发出事件后返回最新视图快照。
+- 带 `view` 的写命令必须在写库前调用 `GlobalEmitter::hold()`；写入期间的 `images-change` /
+  `album-images-change` 照常分配 `seq` 但延迟广播，必须等快照读完、守卫析构后再按序放行。
+- 快照必须先读取全局 `seq`，再读取 rows 与 count。`images-change` 携带递增 `seq`；
+  `album-images-change` 同样携带递增 `seq`。
+- 被动更新统一经 `dataChangeHub` / `liveQuery`，ImageGrid 不得重新建立独立的
+  `images-change` / `album-images-change` 监听。
+
+## 已知例外
+
+`ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页，保留 500ms
+被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入主动快照协议。
+
+## 画册查询与计数
+
+- 前端不设全量画册 store，也不持有全量画册计数。目录树与所有画册选择器复用 app 侧
+  `AlbumTreeView` / `AlbumPicker`，按目录分页查询；单个详情用 `services/albums.ts` 查询并订阅 hub。
+- 计数由调用侧组合 PathQL 路径，不新增 SQL 视图、计数列或专用计数命令：画册目录的直接图片数来自
+  `images://gallery/[前缀/]album/...` 的 `list(with_count)`，直接子画册数来自 `albums://...` 的
+  `list(with_count)`；普通画册的自身与子孙成员行之和来自 `images://gallery/[前缀/]album-tree/<id>`
+  的 entry 总数。
+- 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行
+  单画册查询并通过 `dataChangeHub` 的 `ancestorPath` 相关性订阅刷新；不得重新引入全量列表。

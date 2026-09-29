@@ -120,6 +120,9 @@ pub struct ChildEntry {
     pub name: String,
     pub provider: Option<Arc<dyn Provider>>,
     pub meta: Option<serde_json::Value>,
+    /// 子路径的行数。只有 `ProviderRuntime::list_with_count` 会填充（用子项已实例化的 provider
+    /// 直接叠加父节点的 composed 计数，不再逐个重新 resolve 子路径）；其余入口恒为 None。
+    pub total: Option<usize>,
 }
 
 pub type DelegateTransform =
@@ -193,6 +196,7 @@ impl std::fmt::Debug for ChildEntry {
             .field("name", &self.name)
             .field("provider", &self.provider.as_ref().map(|_| "<Provider>"))
             .field("meta", &self.meta)
+            .field("total", &self.total)
             .finish()
     }
 }
@@ -321,6 +325,7 @@ mod tests {
             _ctx: &ProviderContext,
         ) -> Result<Vec<ListRef>, EngineError> {
             Ok(vec![ListRef::Direct(ChildEntry {
+                total: None,
                 name: "child".into(),
                 provider: None,
                 meta: None,
@@ -338,6 +343,7 @@ mod tests {
     #[test]
     fn child_entry_clone_and_construct() {
         let c = ChildEntry {
+            total: None,
             name: "x".into(),
             provider: None,
             meta: Some(serde_json::json!({"k": "v"})),

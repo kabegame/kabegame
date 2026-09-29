@@ -16,9 +16,8 @@
 
 datasource db {
   provider = "sqlite"
-  // 仅为满足 PSL 校验（Prisma 6 要求 datasource.url 必填）；本文件不生成 client，
-  // 运行时路径由 tauri-plugin-pathes 决定，实际库位于 {app_data_dir}/images.db。
-  url      = "file:./images.db"
+  // Prisma 7 起 datasource 不再接受 url（连接串归 prisma.config.ts）；本文件不生成 client、
+  // 不跑 Migrate，故不配置。运行时路径由 tauri-plugin-pathes 决定，实际库位于 {app_data_dir}/images.db。
 }
 
 /// 任务表

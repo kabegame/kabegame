@@ -4,7 +4,6 @@
   "placeholderUrl": "Enter URL to surf, e.g. https://pixiv.net",
   "startSurf": "Start surfing",
   "suggestPlugin": "Installed plugin",
-  "suggestOpen": "Open directly",
   "openSurf": "Open surfing",
   "closeSurf": "Close surfing",
   "sessionClosed": "Surf session closed",

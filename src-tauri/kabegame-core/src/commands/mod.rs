@@ -8,3 +8,4 @@ pub mod proxy;
 pub mod settings;
 pub mod surf;
 pub mod task;
+pub mod view;

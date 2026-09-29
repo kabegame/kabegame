@@ -155,7 +155,8 @@ worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker l
 worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中时：
 
 - 记录 `taskLogDedupByUrl`
-- 如果指定了输出画册，把已存在图片加入该画册并发送 `album-images-change`
+- 如果指定了输出画册，把已存在图片加入该画册；只有成员实际插入时才发送按单画册拆分的
+  `album-images-change`
 - `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
 - `dedupUpdateMetadata` 开启且本次带插件标签（`DownloadRequest.labels`）时，给已有图片补挂标签（见 §6「插件标签」）
 - 增加 `tasks.dedup_count` 并通过 `tasks-change` / `TaskChanged` 发送新的 `dedupCount`
@@ -193,7 +194,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 插件在 `downloadImage` 的 `labels` 里声明标签（V8 经 `parse_download_opts`，WebView 经 `crawl_download_image`，两处都调用 `storage::labels::validate_label_values`）。入口**只校验、不建画册**——下载可能失败；校验后的 `Vec<LabelSpec>` 随 `DownloadRequest` / `ActiveDownloadInfo` 搬运，失败时序列化进 `task_failed_images.labels`，重试时还原。
 
-入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建 `label_dir`，末端找或建 `label`，只在叶子上挂图，随后发 `album-added`（新建的画册）与一次 `album-images-change`。某项撞到相反类型时只跳过该标签并写任务 warn，同批其它标签继续；去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
+入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建 `label_dir`，末端找或建 `label`，只在叶子上挂图，随后发 `album-added`（新建的画册），并为每个实际新增成员的标签叶子分别发送 `album-images-change`。某项撞到相反类型时只跳过该标签并写任务 warn，同批其它标签继续；去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
 
 `images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
 
@@ -386,7 +387,9 @@ Android 下载池也走 `postprocess_downloaded_image`：
 下载器入库时按表拆分事件：
 
 - 新增或刷新 `images`：发送 `images-change`
-- 输出画册或去重补画册影响 `album_images`：发送 `album-images-change`
+- 输出画册、标签或去重补画册影响 `album_images`：统一走 `emit_membership_added`，只对实际插入的 id
+  发送单画册 `album-images-change`。payload 带 `seq`、该画册的 `ancestorPath`，不带 `directCounts`；
+  前端 hub 按祖先路径刷新已加载目录，计数由目录 PathQL 列举的 `with_count` 与 `album-tree` entry 组合得到。
 
 画廊分页、任务视图和 Plasma 依赖这两个事件区分刷新范围。详情见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
 

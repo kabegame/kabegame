@@ -189,6 +189,27 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "pathql_view",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    struct Args {
+                        q: kabegame_core::commands::view::ViewQuery,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    let mut result = kabegame_core::commands::view::pathql_view(args.q)
+                        .await
+                        .map_err(RpcError::internal)?;
+                    crate::web::image_rewrite::rewrite_image_value(&mut result.rows);
+                    serde_json::to_value(result).map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_images_count",
         MethodEntry {
             requires_super: false,
@@ -1021,11 +1042,19 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         image_ids: Vec<String>,
+                        view: Option<kabegame_core::commands::view::ViewQuery>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::image::batch_delete_images(args.image_ids)
-                        .await
-                        .map_err(RpcError::internal)
+                    let mut result = kabegame_core::commands::image::batch_delete_images(
+                        args.image_ids,
+                        args.view,
+                    )
+                    .await
+                    .map_err(RpcError::internal)?;
+                    if let Some(rows) = result.pointer_mut("/view/rows") {
+                        crate::web::image_rewrite::rewrite_image_value(rows);
+                    }
+                    Ok(result)
                 })
             }),
         },
@@ -1041,11 +1070,19 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         image_ids: Vec<String>,
+                        view: Option<kabegame_core::commands::view::ViewQuery>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::image::batch_remove_images(args.image_ids)
-                        .await
-                        .map_err(RpcError::internal)
+                    let mut result = kabegame_core::commands::image::batch_remove_images(
+                        args.image_ids,
+                        args.view,
+                    )
+                    .await
+                    .map_err(RpcError::internal)?;
+                    if let Some(rows) = result.pointer_mut("/view/rows") {
+                        crate::web::image_rewrite::rewrite_image_value(rows);
+                    }
+                    Ok(result)
                 })
             }),
         },
@@ -1247,12 +1284,21 @@ pub fn init_registry() {
                     struct Args {
                         album_id: String,
                         image_ids: Vec<String>,
+                        view: Option<kabegame_core::commands::view::ViewQuery>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_images_to_album(
                         args.album_id,
                         args.image_ids,
+                        args.view,
                     )
+                    .await
+                    .map(|mut result| {
+                        if let Some(rows) = result.pointer_mut("/view/rows") {
+                            crate::web::image_rewrite::rewrite_image_value(rows);
+                        }
+                        result
+                    })
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1270,12 +1316,21 @@ pub fn init_registry() {
                     struct Args {
                         task_id: String,
                         album_id: String,
+                        view: Option<kabegame_core::commands::view::ViewQuery>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_task_images_to_album(
                         args.task_id,
                         args.album_id,
+                        args.view,
                     )
+                    .await
+                    .map(|mut result| {
+                        if let Some(rows) = result.pointer_mut("/view/rows") {
+                            crate::web::image_rewrite::rewrite_image_value(rows);
+                        }
+                        result
+                    })
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1293,12 +1348,21 @@ pub fn init_registry() {
                     struct Args {
                         album_id: String,
                         image_ids: Vec<String>,
+                        view: Option<kabegame_core::commands::view::ViewQuery>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::remove_images_from_album(
                         args.album_id,
                         args.image_ids,
+                        args.view,
                     )
+                    .await
+                    .map(|mut result| {
+                        if let Some(rows) = result.pointer_mut("/view/rows") {
+                            crate::web::image_rewrite::rewrite_image_value(rows);
+                        }
+                        result
+                    })
                     .map_err(RpcError::internal)
                 })
             }),

@@ -45,6 +45,20 @@
         }
     },
     "resolve": {
+        "subpage_(normal|label|local_folder)_([1-9][0-9]*)": {
+            "provider": "gallery_album_page_provider",
+            "properties": {
+                "section": "${capture[1]}",
+                "parent_id": "",
+                "page": "${capture[2]}",
+                "kinds": ""
+            }
+        },
+        "kind_((?:normal|label|label_dir|local_folder)(?:,(?:normal|label|label_dir|local_folder))*)": {
+            "provider": "gallery_album_root_kind_router",
+            "properties": { "kinds": "${capture[1]}" }
+        },
+        "search": { "provider": "gallery_album_search_router" },
         // album_id 是 UUID v4 (uuid::Uuid::new_v4()) 或 FAVORITE_ALBUM_ID/HIDDEN_ALBUM_ID
         // (亦 UUID 形态: 0...001 / 0...000)。用 UUID 正则避免与 "desc" / "x100x" 等
         // 静态/数字段冲突 (DSL resolve regex 在静态 list 之前生效)。不存在的 UUID 走空集

@@ -13,11 +13,13 @@
 
 ## Provider DSL（`provider-dsl/`）
 
-- 状态：Phase 7c 后内置 Provider 已全量 DSL 化，`src-tauri/kabegame-core/src/providers/programmatic/`
-  已删除；core 启动时只加载 `dsl_loader::DSL_FILES` 中的 root/gallery/shared/VD provider。
+- 状态：基于 SQL 的内置 Provider（root/gallery/shared/VD）均由 `dsl_loader::DSL_FILES` 中的 DSL 提供；
+  唯一保留的 programmatic provider 是 `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs`
+  （`plugin://` schema，行数据来自 `PluginManager` 而非 SQL），由 `providers/init.rs` 经
+  `register_programmatic_provider` 注册。
 
 - [provider-dsl/RULES.md](provider-dsl/RULES.md)
-  - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖路径折叠、ContribQuery 累积语义（fields/from/join/where/order 各自规则；offset 累加、limit 末次胜）、**`where` 的 WhereQuery 谓词树**（字符串=原子 / 数组=OR / `{not}`=取非；fold 期坍缩成一条，树上无 AND 节点；`where_clear` 按坍缩串整棵匹配）、**路径 WHERE 组合器 `~any`/`~or`/`~not`/`~end`**（分支旁路语义、游标回到组入口、组内只许 where + LEFT JOIN、`~~` 转义、尾部不自动闭合、缓存只在深度 0 边界）、List 静态/动态项、Resolve 正则解析、`${...}` 模板语义（命名空间取值 + 方法标记）、`as + in_need` 共享机制、缓存契约（只缓存命中）、安全契约、保留标识符（含路径段 `~` 前缀）、主机协调模式抽象。
+  - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖路径折叠、ContribQuery 累积语义（fields/from/join/where/order 各自规则；offset 累加、limit 末次胜）、**`where` 的 WhereQuery 谓词树**（字符串=原子 / 数组=OR / `{not}`=取非；fold 期坍缩成一条，树上无 AND 节点；`where_clear` 按坍缩串整棵匹配）、嵌套目录清除上一层等值条件、`subpage_` 列举分页的 `list.sql` / bind 参数写法、**路径 WHERE 组合器 `~any`/`~or`/`~not`/`~end`**（分支旁路语义、游标回到组入口、组内只许 where + LEFT JOIN、`~~` 转义、尾部不自动闭合、缓存只在深度 0 边界）、List 静态/动态项、Resolve 正则解析、`${...}` 模板语义（命名空间取值 + 方法标记）、`as + in_need` 共享机制、缓存契约（只缓存命中）、安全契约、保留标识符（含路径段 `~` 前缀）、主机协调模式抽象。
   - 适用场景：实现引擎 loader / 解析器；编写 *.provider.json5 文件；给 where 写 OR / NOT 或用路径组合器拼跨分支条件；排查跨字段约束错误、组内贡献被拒、未闭合组报错；设计第三方插件可贡献的 provider。
   - 配套：[../src-tauri/kabegame-core/src/providers/schema.json5](../src-tauri/kabegame-core/src/providers/schema.json5) 为语法 schema。
 
@@ -42,11 +44,11 @@
   - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
-  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流、设置持久化、`browse_gallery_provider` 与 `invoke` 参数约定；**列表不带 `metadata`**、`get_image_metadata` 与前端 per-page 缓存；**`images-change`（images 表）与 `album-images-change`（album_images 表）** 事件拆分与前端/Plasma 订阅要点。
-  - 适用场景：排查翻页/offset、每页条数切换不刷新、列表加载失败；区分 SimplePage 与 VD Greedy 的 `LEAF_SIZE` 行为；排查画册/任务/畅游视图刷新与事件过滤；排查详情区插件描述/metadata 未显示或缓存未失效。
+  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, total, seq }` 单次快照；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`EventHold` 先快照后广播；500ms 批次合并、画册 `ancestorPath` 相关性、wildcard 粗过滤和 `seq` 防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `with_count` / `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存。
+  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异，以及详情 metadata 缓存。
 
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
-  - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子计数口径、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 与 `search/label-tree`，以及前端树 / 选择器 / 预览面板。
+  - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 与 `search/label-tree`，以及分页查询树 / 选择器 / 预览面板。
   - 适用场景：新增或排查标签画册的建立、移动、改 key；插件下载或迁移没有挂上标签；标签搜索结果不对；给预览弹窗注入 app 侧信息面板。
 
 ## 本地文件夹（`local-folder/`）
@@ -58,7 +60,7 @@
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
-  - 主题：当前下载器全链路与模块边界。涵盖 `mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定、入库后 best-effort 原生元数据（EXIF/PNG chunk）计算与同哈希共享（`image_metadata` 表）、桌面落盘、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理以及 **`images-change` / `album-images-change` / `hidden-cleanup-*`** 事件。
+  - 主题：当前下载器全链路与模块边界。涵盖 `mod.rs` scheme registry / `queue.rs` worker / `content.rs` Android content downloader 的分工，`download_with_retry` 通过 `DownloadSink` 溢写（5 MiB 阈值）返回 `DownloadOutcome`（Bytes/Path）、Fatal/Retriable/Resumable 三级错误重试、crawler/surf 捕获 blob/data/MSE 后经会话 VFS Raw IPC 分块落盘、显式 FFmpeg 合流、页面自发原生下载落 VFS `tmp/Downloads` 后经事件出口交给 crawler 插件或 surf 自动导入（含压缩包解压）、crawler 通过 task-vfs 流式提交与 surf 通过 `surf_import_media` Path 直通、surf `DownloadState` 终态 toast、畅游一键下载（Rust 权威 run 状态机 + Tauri Channel、无 window 全局的页面媒体发现、HTML+CSS 页面快照入 metadata 与详情回看；快照详情按畅游 / 内建 webpage 图片来源识别，快照上限与搜索索引规则下沉 core `storage::page_snapshot`，冻结开关同时作用于网页收集）、DRM 拒绝、统一 `postprocess_downloaded_image`（`PostprocessSource` 枚举）、URL 与 hash 两级去重及可选的去重 metadata 来源重绑定、入库后 best-effort 原生元数据（EXIF/PNG chunk）计算与同哈希共享（`image_metadata` 表）、桌面落盘、Android MediaStore copy 与 content URI 沿用、统一源文件清除（桌面回收站分块/降级、Android MediaStore 直删/批量授权）、隐藏图片分批清理服务、失败重试、任务计数经 `tasks-change` / `TaskChanged` diff 同步、`Task.cancel` 取消语义、启动临时文件清理，以及只对实际成员变化发送、按单画册拆分且不带 `directCounts` 的 **`album-images-change`**（连同 `images-change` / `hidden-cleanup-*`）。
   - 适用场景：下载任务生命周期、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)

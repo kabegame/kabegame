@@ -8,7 +8,7 @@ export function isLabelForestKind(type: AlbumKind | string | null | undefined): 
   return type === "label" || type === "label_dir";
 }
 
-/** 画册树节点（与 apps/kabegame `stores/albums` 中结构一致，供 core 组件使用） */
+/** 通用画册树节点结构；app 的分页查询树使用自身的 `AlbumNode`。 */
 export interface AlbumTreeNode {
   id: string;
   name: string;

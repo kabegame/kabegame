@@ -33,13 +33,12 @@
             :fetch-suggestions="fetchSuggestions"
             :placeholder="$t('surf.placeholderUrl')"
             :trigger-on-focus="true"
-            :highlight-first-item="true"
             fit-input-width
             popper-class="surf-suggest-popper"
             size="large"
             clearable
             @select="onSuggestionSelect"
-            @keydown.enter="onEnterKey"
+            @keydown.enter.capture="onEnterKey"
           >
             <template #prepend>
               <PluginPickerField
@@ -71,8 +70,7 @@
                 <span class="surf-suggest-icon">
                   <img v-if="item.icon" :src="item.icon" alt="" />
                   <span v-else-if="item.kind === 'plugin'" class="letter">{{ item.letter }}</span>
-                  <el-icon v-else-if="item.kind === 'history'"><Clock /></el-icon>
-                  <el-icon v-else><Link /></el-icon>
+                  <el-icon v-else><Clock /></el-icon>
                 </span>
                 <span class="surf-suggest-label">{{ item.pre }}<b>{{ item.hit }}</b>{{ item.post }}</span>
                 <span class="surf-suggest-meta">{{ item.meta }}</span>
@@ -233,7 +231,7 @@ import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { ElDialog } from "@kabegame/element-plus";
-import { QuestionFilled, Right, Clock, Link } from "@kabegame/element-plus-icons";
+import { QuestionFilled, Right, Clock } from "@kabegame/element-plus-icons";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
@@ -290,7 +288,7 @@ const suggestOpen = computed(() => {
 });
 
 type SurfSuggestion = {
-  kind: "plugin" | "history" | "url";
+  kind: "plugin" | "history";
   /** 选中后填入输入框的值（el-autocomplete 默认 value-key = "value"） */
   value: string;
   pre: string;
@@ -427,7 +425,8 @@ const handleStart = async () => {
 
 /**
  * 建议列表：只消费已有数据源（pluginsWithHttpRoot、surfStore.records），不新增接口。
- * 空输入 → 只出历史；有输入 → 插件 / 历史 / 直接打开三类混排。
+ * 空输入 → 只出历史；有输入 → 插件 / 历史混排。当前输入由回车或右侧按钮直接打开，
+ * 不再伪装成一条匿名候选。
  */
 const fetchSuggestions = (
   queryString: string,
@@ -469,29 +468,12 @@ const fetchSuggestions = (
     });
   }
 
-  // ③ 直接打开 —— 复用已有的 normalizeAndValidateUrl，跟上面不重复才加
-  if (lower && !out.some((s) => s.value.toLowerCase() === lower)) {
-    const direct = normalizeAndValidateUrl(q);
-    if ("url" in direct) {
-      out.push({
-        kind: "url",
-        value: direct.url,
-        ...highlight(direct.url, q),
-        meta: t("surf.suggestOpen"),
-      });
-    }
-  }
-
   cb(out.slice(0, 8));
 };
 
-/** EP 在 keydown 阶段就处理了 Enter 选中；标记一下，避免我们的 Enter 处理重复起会话 */
-let selectGuard = false;
-
+/** 候选仅在用户点击时生效；回车始终由 onEnterKey 提交输入框原文。 */
 const onSuggestionSelect = async (item: Record<string, any>) => {
   const s = item as SurfSuggestion;
-  selectGuard = true;
-  setTimeout(() => (selectGuard = false), 0);
   inputUrl.value = s.value;
   // 历史记录走 handleRecordClick（它带上记录自己的 rootUrl 语义）
   if (s.kind === "history" && s.host) {
@@ -502,12 +484,14 @@ const onSuggestionSelect = async (item: Record<string, any>) => {
 };
 
 /**
- * Enter：若面板里已有高亮项，交给 el-autocomplete 走 select（-> onSuggestionSelect），
- * 我们不再重复起一次会话；否则按输入框里的原文开始畅游。
+ * 在捕获阶段拦住 el-autocomplete 自带的 Enter 选中。候选结果有 300ms 防抖，
+ * 若让组件继续处理，快速输入后回车会选中上一轮的高亮候选并覆盖当前输入。
  */
-const onEnterKey = () => {
-  const highlighted = autocompleteRef.value?.highlightedIndex;
-  if (selectGuard || (typeof highlighted === "number" && highlighted >= 0)) return;
+const onEnterKey = (event: KeyboardEvent) => {
+  if (event.isComposing) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  autocompleteRef.value?.close();
   void handleStart();
 };
 

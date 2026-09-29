@@ -37,7 +37,9 @@ impl SqlExecutor for KabegameSqlExecutor {
                 format!("storage mutex poisoned: {e}"),
             )
         })?;
-        let mut stmt = conn.prepare(sql).map_err(|e| {
+        // 同一 SQL 文本（只是绑定参数不同）反复执行时复用已编译语句：
+        // 例如带计数列举，每个子项的 COUNT 语句文本相同，重复编译曾占该调用约一半耗时
+        let mut stmt = conn.prepare_cached(sql).map_err(|e| {
             EngineError::FactoryFailed(
                 "core".into(),
                 "sql_executor".into(),

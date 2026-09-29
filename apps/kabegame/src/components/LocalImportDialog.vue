@@ -11,10 +11,9 @@
     @closed="handleClosed">
     <el-form label-width="110px" class="local-import-form">
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField
+        <AlbumPicker
           v-model="selectedOutputAlbumId"
-          :album-tree="outputAlbumTree"
-          :album-counts="albumCounts"
+          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create
           :placeholder="$t('albums.notSpecifiedAddToGallery')"
@@ -32,10 +31,9 @@
         />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPickerField
+        <AlbumPicker
           v-model="newOutputAlbumParentId"
-          :album-tree="outputAlbumParentTree"
-          :album-counts="albumCounts"
+          :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
@@ -94,13 +92,12 @@ import { Document, FolderOpened } from "@kabegame/element-plus-icons";
 import { ElDialog } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { open } from "@tauri-apps/plugin-dialog";
-import { storeToRefs } from "pinia";
 import { useCrawlerStore } from "@/stores/crawler";
-import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import type { LocalImportInitialConfig } from "@/stores/collectDialogs";
 
 const { t } = useI18n();
@@ -117,14 +114,8 @@ const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(() => props.modelValue, (v) => v ? modal.open() : modal.close(), { immediate: true });
 
 const crawlerStore = useCrawlerStore();
-const albumStore = useAlbumStore();
-const { albumCounts } = storeToRefs(albumStore);
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
 
-const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
-const outputAlbumParentTree = computed(() =>
-  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
-);
 const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref("");
 const newOutputAlbumParentId = ref<string | null>(null);
@@ -140,14 +131,6 @@ watch(selectedOutputAlbumId, (value) => {
   }
 });
 const displayItems = computed(() => paths.value);
-
-async function loadAlbums() {
-  try {
-    await albumStore.loadAlbums();
-  } catch (e) {
-    console.error("加载画册列表失败:", e);
-  }
-}
 
 async function handleAddFiles() {
   try {
@@ -210,7 +193,7 @@ async function createOutputAlbum(showSuccess = true) {
   }
   try {
     const parentId = newOutputAlbumParentId.value?.trim() || null;
-    const album = await albumStore.createAlbum(name, { parentId, reload: false });
+    const album = await createAlbum(name, { parentId, reload: false });
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
     if (showSuccess) {
@@ -266,7 +249,6 @@ async function handleSubmit() {
 }
 
 function handleOpen() {
-  void loadAlbums();
   if (props.initialConfig) {
     paths.value = [...(props.initialConfig.paths ?? [])];
     recursive.value = props.initialConfig.recursive ?? true;

@@ -1,7 +1,8 @@
 //! ProviderRuntime 启动期初始化 (OnceLock 单例)。
 //!
-//! 7c 起: 全部 provider 由 DSL (`dsl_loader::register_embedded_dsl`, 35+ 个 .json5) 提供。
-//! 6c 时期的 programmatic 模块已删除。
+//! 基于 SQL 的 provider 由 DSL (`dsl_loader::register_embedded_dsl`, 内嵌 .json5) 提供;
+//! `plugin://` schema 的行数据来自 PluginManager 而非 SQL, 由 programmatic provider
+//! (`programmatic::plugin_resource`) 提供。
 //!
 //! 运行期 SqlExecutor 通过 `Storage::global().db` 注入, 让 DSL 动态 SQL list 能跑真实 sqlite。
 

@@ -1007,8 +1007,11 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             .add_images_to_album_silent(album_id, &[existing.id.clone()]);
                         if added > 0 {
                             let ids = vec![existing.id.clone()];
-                            let alb = vec![album_id.clone()];
-                            GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
+                            if let Err(error) =
+                                crate::storage::image_events::emit_membership_added(album_id, &ids)
+                            {
+                                eprintln!("[album-event] 发射队列去重成员事件失败: {error}");
+                            }
                         }
                     }
                 }

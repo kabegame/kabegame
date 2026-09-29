@@ -42,14 +42,11 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
     // here from a `spawn_blocking` worker, where `Handle::current()` is valid and
     // `block_on` is permitted.
     let storage = Storage::global();
-    let (changed, touched_albums, touched_images) = tokio::runtime::Handle::current().block_on(
+    let (changed, _touched_albums, _touched_images) = tokio::runtime::Handle::current().block_on(
         run_metadata_migrations(storage, &plugin_id, target, &script, rows),
     )?;
 
     if let Some(emitter) = GlobalEmitter::try_global() {
-        if !touched_albums.is_empty() {
-            emitter.emit_album_images_change("add", &touched_albums, &touched_images);
-        }
         if changed {
             let plugin_ids = vec![plugin.id.clone()];
             emitter.emit_images_change("metadata-migrate", &[], None, None, Some(&plugin_ids));

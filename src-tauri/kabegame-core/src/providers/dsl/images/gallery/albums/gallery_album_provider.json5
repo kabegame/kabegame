@@ -5,6 +5,10 @@
         "album_id": { "type": "string", "default": "", "optional": false }
     },
     "query": {
+        // 进入子画册时先清掉父画册的同名条件，否则 gallery/album/<父>/<子> 叠成
+        // `ai.album_id = 父 AND ai.album_id = 子` 恒为空（where_clear 按子串匹配，带上 " =" 避免误清
+        // no-album 的 `nai.album_id <>` 与标签搜索的 `lai.album_id AND`）
+        "where_clear": ["ai.album_id ="],
         "where": "ai.album_id = ${properties.album_id}"
     },
     "list": {
@@ -32,6 +36,22 @@
         }
     },
     "resolve": {
+        "subpage_([1-9][0-9]*)": {
+            "provider": "gallery_album_page_provider",
+            "properties": {
+                "section": "children",
+                "parent_id": "${properties.album_id}",
+                "page": "${capture[1]}",
+                "kinds": ""
+            }
+        },
+        "kind_((?:normal|label|label_dir|local_folder)(?:,(?:normal|label|label_dir|local_folder))*)": {
+            "provider": "gallery_album_children_kind_router",
+            "properties": {
+                "parent_id": "${properties.album_id}",
+                "kinds": "${capture[1]}"
+            }
+        },
         "image-only": {
             "provider": "gallery_album_media_type_provider",
             "properties": { "kind": "image" }

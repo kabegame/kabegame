@@ -2,10 +2,9 @@
   <el-dialog append-to-body :model-value="open" :z-index="zIndex" :title="$t('albums.addToAlbumTitle')" width="420px" @update:model-value="(v: boolean) => { if (!v) emit('close') }">
     <el-form label-width="80px">
       <el-form-item :label="$t('albums.selectAlbum')">
-        <AlbumPickerField
+        <AlbumPicker
           v-model="selectedAlbumId"
-          :album-tree="albumTreeForPicker"
-          :album-counts="albumCounts"
+          :scope="albumScope"
           :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create
           :placeholder="$t('albums.chooseAlbumPlaceholder')"
@@ -17,10 +16,9 @@
           @keyup.enter="handleCreateAndAddAlbum" ref="newAlbumNameInputRef" />
       </el-form-item>
       <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPickerField
+        <AlbumPicker
           v-model="newAlbumParentId"
-          :album-tree="newAlbumParentTree"
-          :album-counts="albumCounts"
+          :scope="{ sections: ['normal'] }"
           :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
@@ -39,9 +37,10 @@
 import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { storeToRefs } from "pinia";
-import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import { HIDDEN_ALBUM_ID, addImagesToAlbum, addTaskImagesToAlbum, createAlbum } from "@/services/albums";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
+import type { GridRefreshContext } from "@/components/imageGrid/types";
+import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
 
 interface Props {
   open: boolean;
@@ -56,6 +55,8 @@ interface Props {
    * 可选：排除一些画册（例如在画册详情页里，不要让用户选“当前画册”，避免无意义操作）
    */
   excludeAlbumIds?: string[];
+  /** ImageGrid 内传入主动视图更新；其它调用方缺省为不带 view 的写入。 */
+  mutate?: GridRefreshContext["mutate"];
 }
 
 const props = defineProps<Props>();
@@ -65,21 +66,14 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const albumStore = useAlbumStore();
-const { albumCounts } = storeToRefs(albumStore);
-
 const excludedAlbumIds = computed(() => [
   HIDDEN_ALBUM_ID,
-  ...albumStore.localFolderAlbumIds,
   ...(props.excludeAlbumIds ?? []),
 ]);
-
-const albumTreeForPicker = computed(() =>
-  albumStore.getAlbumTreeExcluding(excludedAlbumIds.value),
-);
-const newAlbumParentTree = computed(() =>
-  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
-);
+const albumScope = computed(() => ({
+  sections: ["system", "normal", "label"] as const,
+  excludeIds: excludedAlbumIds.value,
+}));
 
 const selectedAlbumId = ref<string | null>(null);
 const newAlbumName = ref<string>("");
@@ -89,13 +83,14 @@ const newAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
 
+const runMutation = <T extends { view?: ViewSnapshot | null }>(
+  operation: (view: ViewQuery | null) => Promise<T>,
+) => props.mutate ? props.mutate(operation) : operation(null);
+
 watch(
   () => props.open,
   async (v) => {
-    if (v) {
-      // 确保画册列表可用
-      await albumStore.loadAlbums();
-    } else {
+    if (!v) {
       selectedAlbumId.value = null;
       newAlbumName.value = "";
       newAlbumParentId.value = null;
@@ -147,14 +142,21 @@ const handleCreateAndAddAlbum = async () => {
 
   try {
     const parentId = newAlbumParentId.value?.trim() || null;
-    const created = await albumStore.createAlbum(newAlbumName.value.trim(), { parentId });
+    const created = await createAlbum(newAlbumName.value.trim(), {
+      parentId,
+      reload: false,
+    });
 
     if (isTaskMode) {
-      const result = await albumStore.addTaskImagesToAlbum(props.taskId!, created.id);
+      const result = await runMutation((view) =>
+        addTaskImagesToAlbum(props.taskId!, created.id, { view }),
+      );
       ElMessage.success(t('albums.createAlbumAndAddTask', { name: created.name, count: result.added }));
     } else {
-      await albumStore.addImagesToAlbum(created.id, props.imageIds);
-      ElMessage.success(t('albums.createAlbumAndAdd', { name: created.name, count: props.imageIds.length }));
+      const result = await runMutation((view) =>
+        addImagesToAlbum(created.id, props.imageIds, { view }),
+      );
+      ElMessage.success(t('albums.createAlbumAndAdd', { name: created.name, count: result.added }));
     }
 
     emit("close");
@@ -183,7 +185,9 @@ const confirmAddToAlbum = async () => {
 
   try {
     if (isTaskMode) {
-      const result = await albumStore.addTaskImagesToAlbum(props.taskId!, albumId);
+      const result = await runMutation((view) =>
+        addTaskImagesToAlbum(props.taskId!, albumId, { view }),
+      );
       if (result.added === 0) {
         ElMessage.info(t('albums.allInAlbum'));
       } else {
@@ -194,30 +198,18 @@ const confirmAddToAlbum = async () => {
       return;
     }
 
-    // 非任务模式：过滤掉已经在画册中的图片
-    let idsToAdd = props.imageIds;
-    try {
-      const existingIds = await albumStore.getAlbumImageIds(albumId);
-      const existingSet = new Set(existingIds);
-      idsToAdd = props.imageIds.filter(id => !existingSet.has(id));
-
-      if (idsToAdd.length === 0) {
-        ElMessage.info(t('albums.allInAlbum'));
-        emit("close");
-        emit("added");
-        return;
-      }
-
-      if (idsToAdd.length < props.imageIds.length) {
-        const skippedCount = props.imageIds.length - idsToAdd.length;
+    const result = await runMutation((view) =>
+      addImagesToAlbum(albumId, props.imageIds, { view }),
+    );
+    const skippedCount = result.attempted - result.added;
+    if (result.added === 0) {
+      ElMessage.info(t('albums.allInAlbum'));
+    } else {
+      if (skippedCount > 0) {
         ElMessage.warning(t('albums.skippedInAlbum', { count: skippedCount }));
       }
-    } catch (error) {
-      console.error("获取画册图片列表失败:", error);
+      ElMessage.success(t('albums.addedToAlbum', { count: result.added }));
     }
-
-    await albumStore.addImagesToAlbum(albumId, idsToAdd);
-    ElMessage.success(t('albums.addedToAlbum', { count: idsToAdd.length }));
     emit("close");
     emit("added");
   } catch (error: any) {

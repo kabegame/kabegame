@@ -25,20 +25,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { Delete } from "@kabegame/element-plus-icons";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID } from "@/services/albums";
+import { pathqlEntry } from "@/services/pathql";
+import { subscribeChanges } from "@/services/dataChangeHub";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
 
 const { t } = useI18n();
-const albumStore = useAlbumStore();
 const store = useHiddenCleanupStore();
 
 // 隐藏画册的直接图片数由 album-images-change 事件持续刷新，不需要单独的计数命令
-const hiddenCount = computed(() => albumStore.albumDirectCounts[HIDDEN_ALBUM_ID] ?? 0);
+const hiddenCount = ref(0);
+async function refreshCount() {
+  hiddenCount.value = (await pathqlEntry(`images://gallery/album/${HIDDEN_ALBUM_ID}`)).total ?? 0;
+}
+void refreshCount();
+const unsubscribe = subscribeChanges({ waitMs: 500, filter: (batch) => batch.albumIds.has(HIDDEN_ALBUM_ID), onBatch: refreshCount });
+onBeforeUnmount(unsubscribe);
 
 const disabled = computed(() => store.running || hiddenCount.value <= 0);
 

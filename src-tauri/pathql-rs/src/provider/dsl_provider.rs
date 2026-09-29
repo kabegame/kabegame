@@ -278,6 +278,7 @@ impl DslProvider {
 
             let meta = self.eval_meta_in_ctx(&entry.meta, &row_ctx)?;
             out.push(ChildEntry {
+                total: None,
                 name,
                 provider,
                 meta,
@@ -330,6 +331,7 @@ impl DslProvider {
             };
             let meta = eval_meta_in_ctx(&entry_meta, &tctx)?;
             Ok(Some(ChildEntry {
+                total: None,
                 name,
                 provider,
                 meta,
@@ -375,6 +377,7 @@ impl DslProvider {
                 };
                 let meta = self.eval_meta(&b.meta, captures, ctx)?;
                 return Ok(Some(ChildEntry {
+                    total: None,
                     name: key.to_string(),
                     provider: Some(provider),
                     meta,
@@ -384,6 +387,7 @@ impl DslProvider {
             ProviderInvocation::ByDelegate(_) => unreachable!("rejected above"),
         };
         Ok(Some(ChildEntry {
+            total: None,
             name: key.to_string(),
             provider: Some(Arc::new(EmptyDslProvider) as Arc<dyn Provider>),
             meta,
@@ -587,6 +591,7 @@ impl Provider for DslProvider {
                             };
 
                             Some(ChildEntry {
+                                total: None,
                                 name: name_owned.clone(),
                                 provider: final_provider,
                                 meta: final_meta,

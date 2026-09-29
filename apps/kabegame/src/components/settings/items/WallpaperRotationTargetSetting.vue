@@ -1,28 +1,24 @@
 <template>
   <div class="rotation-target-setting">
-    <AlbumPickerField
+    <AlbumPicker
       :model-value="pickerAlbumId"
-      :album-tree="albumStore.albumTree"
-      :album-counts="albumStore.albumCounts"
       :is-selectable="(node) => node.type !== 'label_dir'"
       :prepend-options="rotationPrependOptions"
       :disabled="disabled || keyDisabled || wallpaperModeSwitching"
       :placeholder="t('settings.rotationTargetPlaceholder')"
       :picker-title="t('settings.rotationTargetTitle')"
       :clearable="false"
-      frosted
       @update:model-value="onPickerAlbumId"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
-import { useAlbumStore } from "@/stores/albums";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const { t } = useI18n();
@@ -31,7 +27,6 @@ const props = defineProps<{
   disabled?: boolean;
 }>();
 
-const albumStore = useAlbumStore();
 const { wallpaperModeSwitching } = useUiStore();
 
 const { settingValue, set, disabled: keyDisabled } = useSettingKeyState("wallpaperRotationAlbumId");
@@ -53,10 +48,6 @@ const pickerAlbumId = computed((): string | null => {
   if (v === null || v === undefined) return WALLPAPER_ROTATION_ALL_GALLERY;
   const s = String(v).trim();
   return s === "" ? WALLPAPER_ROTATION_ALL_GALLERY : s;
-});
-
-onMounted(() => {
-  albumStore.loadAlbums();
 });
 
 const onPickerAlbumId = async (v: string | null) => {

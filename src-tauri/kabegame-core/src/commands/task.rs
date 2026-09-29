@@ -2,7 +2,6 @@ use crate::emitter::GlobalEmitter;
 use crate::scheduler::Scheduler;
 use crate::storage::{RunConfig, Storage, TaskInfo, TaskStatus};
 use serde_json::Value;
-use std::collections::HashSet;
 
 pub fn get_run_configs() -> Result<Value, String> {
     let configs = Storage::global().get_run_configs()?;
@@ -127,23 +126,9 @@ pub async fn cancel_task(task_id: String) -> Result<Value, String> {
 
 pub fn delete_task(task_id: String) -> Result<Value, String> {
     let storage = Storage::global();
-    let image_ids = Storage::get_task_image_ids(&task_id)?;
-    let plugin_ids = storage
-        .get_task(&task_id)?
-        .map(|t| vec![t.plugin_id])
-        .unwrap_or_default();
     storage.delete_task(&task_id)?;
     GlobalEmitter::global().emit_task_deleted(&task_id);
-    if !image_ids.is_empty() {
-        let tids = vec![task_id];
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &image_ids,
-            Some(&tids),
-            None,
-            Some(&plugin_ids),
-        );
-    }
+    GlobalEmitter::global().emit_images_change("change", &[], Some(&[task_id]), None, None);
     Ok(Value::Null)
 }
 
@@ -266,31 +251,12 @@ pub fn add_task(task: Value) -> Result<Value, String> {
 pub fn clear_finished_tasks() -> Result<Value, String> {
     let storage = Storage::global();
     let task_ids = storage.get_finished_task_ids()?;
-    let mut all_image_ids: Vec<String> = Vec::new();
-    for tid in &task_ids {
-        let ids = Storage::get_task_image_ids(tid)?;
-        all_image_ids.extend(ids);
-    }
-    let mut plugin_seen = HashSet::new();
-    let plugin_ids: Vec<String> = task_ids
-        .iter()
-        .filter_map(|tid| storage.get_task(tid).ok().flatten().map(|t| t.plugin_id))
-        .filter(|pid| plugin_seen.insert(pid.clone()))
-        .collect();
     let count = storage.clear_finished_tasks()?;
     for tid in &task_ids {
         GlobalEmitter::global().emit_task_deleted(tid);
     }
-    if !all_image_ids.is_empty() {
-        let mut seen = HashSet::new();
-        all_image_ids.retain(|id| seen.insert(id.clone()));
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &all_image_ids,
-            Some(&task_ids),
-            None,
-            Some(&plugin_ids),
-        );
+    if !task_ids.is_empty() {
+        GlobalEmitter::global().emit_images_change("change", &[], Some(&task_ids), None, None);
     }
     serde_json::to_value(count).map_err(|e| e.to_string())
 }

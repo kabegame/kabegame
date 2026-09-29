@@ -81,8 +81,7 @@ pub fn register_embedded_dsl(runtime: &ProviderRuntime) {
 }
 
 /// 启动期 sanity: 跑一次完整 validate。失败直接 panic, 让构建立刻挂。
-/// Phase 7c 后 core 内置 provider 已全量 DSL 化; 这里仍沿用默认配置, 只检查
-/// reserved / SQL shape 等本地约束。跨引用严格模式留给后续第三方 DSL namespace
+/// 这里沿用默认配置, 只检查 reserved / SQL shape 等本地约束。跨引用严格模式留给后续第三方 DSL namespace
 /// 装载策略一起开启。
 pub fn validate_dsl(runtime: &ProviderRuntime) {
     let cfg = ValidateConfig::with_default_reserved();

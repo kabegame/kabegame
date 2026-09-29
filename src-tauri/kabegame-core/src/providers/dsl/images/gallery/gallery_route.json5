@@ -168,6 +168,9 @@
         "album": {
             "provider": "gallery_albums_router"
         },
+        "album-tree": {
+            "provider": "gallery_album_tree_router"
+        },
         "hide": {
             "provider": "gallery_hide_router"
         },

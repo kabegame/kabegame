@@ -1,7 +1,8 @@
-//! Phase 6a 真实 sqlite 端到端: programmatic provider + ProviderRuntime + 真 in-memory sqlite。
+//! 真实 sqlite 端到端: programmatic provider + ProviderRuntime + 真 in-memory sqlite。
 //! 验证: 路径解析 → ProviderQuery 累积 → build_sql → params_for → rusqlite 执行 → 结果集。
 //!
-//! 不接 DSL, 不接 SqlExecutor 注入 (那是 6c)。本期 sqlite 直接由测试代码持有 + 在 build_sql 后手动执行。
+//! 不经 DSL loader, provider 均为测试内手写的 Rust 实现。runtime 注入的是空操作 SqlExecutor
+//! (解析路径时不触发真实查询); sqlite 连接由测试代码持有, 拿到 composed 查询后手动 build_sql 并执行。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::ProviderRegistry;
 use rusqlite::Connection;
 
-/// 6d: pathql-rs 不再附 driver 桥; 集成测试本地内联 TemplateValue → rusqlite::Value 转换。
+/// pathql-rs 不附带数据库 driver 桥, 集成测试在本地把 TemplateValue 转换成 rusqlite::Value。
 fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
     use rusqlite::types::Value;
     values
@@ -62,11 +63,13 @@ impl Provider for GalleryRoot {
     fn list(&self, _: &ProviderQuery, _: &ProviderContext) -> Result<Vec<ListRef>, EngineError> {
         Ok(vec![
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "albums".into(),
                 provider: None,
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "plugins".into(),
                 provider: None,
                 meta: None,
@@ -88,6 +91,7 @@ impl Provider for GalleryRoot {
                     ctx,
                 )
                 .map(|provider| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(provider),
                     meta: None,
@@ -114,6 +118,7 @@ impl Provider for AlbumsRouter {
                     ctx,
                 )
                 .map(|provider| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(provider),
                     meta: None,

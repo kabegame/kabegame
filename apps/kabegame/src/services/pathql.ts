@@ -1,4 +1,5 @@
 import { invoke } from "@/api/rpc";
+import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
 
 export interface ProviderNote {
   title: string;
@@ -31,4 +32,8 @@ export function pathqlList(
 
 export function pathqlFetch<T = Record<string, unknown>>(path: string): Promise<T[]> {
   return invoke<T[]>("pathql_fetch", { path });
+}
+
+export function pathqlView(q: ViewQuery): Promise<ViewSnapshot> {
+  return invoke<ViewSnapshot>("pathql_view", { q });
 }

@@ -5,9 +5,12 @@
 //! 返回 `ImageInfo`（或嵌套）的函数一律回**原始本地路径**；web 模式的 CDN 改写
 //! 由 `kabegame::web::dispatch` 在本层返回之后施加，本层不感知 web。
 
+use crate::commands::view::{snapshot_view, ViewQuery};
 use crate::providers::{decode_provider_path_segments, query_entry, query_fetch, query_list};
 use crate::settings::Settings;
-use crate::storage::image_events::{delete_images_with_events, toggle_image_favorite_with_event};
+use crate::storage::image_events::{
+    begin_delete_images_with_events, delete_images_with_events, toggle_image_favorite_with_event,
+};
 use crate::storage::Storage;
 use serde_json::{json, Value};
 
@@ -173,14 +176,46 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
-    delete_images_with_events(&image_ids, true).await?;
+pub async fn batch_delete_images(
+    image_ids: Vec<String>,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    let hold = view
+        .as_ref()
+        .map(|_| crate::emitter::GlobalEmitter::global().hold());
+    let pending = begin_delete_images_with_events(&image_ids, true)?;
     clear_current_wallpaper_if_removed(&image_ids);
-    Ok(Value::Null)
+    let snapshot = match view {
+        Some(query) => Some(snapshot_view(query).await),
+        None => None,
+    };
+    drop(hold);
+    let result = pending.finish().await;
+    let mut out = json!({ "albumChanges": result.album_changes });
+    if let Some(snapshot) = snapshot {
+        out["view"] = serde_json::to_value(snapshot?).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
 
-pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
-    delete_images_with_events(&image_ids, false).await?;
+pub async fn batch_remove_images(
+    image_ids: Vec<String>,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    let hold = view
+        .as_ref()
+        .map(|_| crate::emitter::GlobalEmitter::global().hold());
+    let pending = begin_delete_images_with_events(&image_ids, false)?;
     clear_current_wallpaper_if_removed(&image_ids);
-    Ok(Value::Null)
+    let snapshot = match view {
+        Some(query) => Some(snapshot_view(query).await),
+        None => None,
+    };
+    drop(hold);
+    let result = pending.finish().await;
+    let mut out = json!({ "albumChanges": result.album_changes });
+    if let Some(snapshot) = snapshot {
+        out["view"] = serde_json::to_value(snapshot?).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }

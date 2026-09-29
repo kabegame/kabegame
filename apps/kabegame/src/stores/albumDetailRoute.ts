@@ -10,7 +10,7 @@ import {
   type GallerySort,
   querySearchTerm,
 } from "@/utils/galleryPath";
-import { HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID } from "@/services/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useAlbumIdPathState, lastAlbumIdOf } from "@/composables/useAlbumIdPathState";
 

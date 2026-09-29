@@ -247,11 +247,13 @@ fn dynamic_delegate_list_enumerates_target_children() {
         ) -> Result<Vec<ListRef>, EngineError> {
             Ok(vec![
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "alpha".into(),
                     provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({"label":"A"})),
                 }),
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "beta".into(),
                     provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({"label":"B"})),
@@ -266,6 +268,7 @@ fn dynamic_delegate_list_enumerates_target_children() {
         ) -> ResolveRef {
             ResolveRef::Terminal(if name == "alpha" || name == "beta" {
                 Some(ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(Arc::new(Self) as Arc<dyn Provider>),
                     meta: Some(serde_json::json!({
@@ -305,11 +308,13 @@ fn dynamic_delegate_list_enumerates_target_children() {
         ) -> Result<Vec<ListRef>, EngineError> {
             Ok(vec![
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "src".into(),
                     provider: Some(self.src.clone()),
                     meta: None,
                 }),
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "facade".into(),
                     provider: Some(self.facade.clone()),
                     meta: None,
@@ -324,11 +329,13 @@ fn dynamic_delegate_list_enumerates_target_children() {
         ) -> ResolveRef {
             ResolveRef::Terminal(match name {
                 "src" => Some(ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.src.clone()),
                     meta: None,
                 }),
                 "facade" => Some(ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.facade.clone()),
                     meta: None,
@@ -570,6 +577,7 @@ fn resolve_delegate_legacy_defaults_to_null_provider_and_meta() {
             _: &ProviderContext,
         ) -> ResolveRef {
             ResolveRef::Terminal((name == "alpha").then(|| ChildEntry {
+                total: None,
                 name: name.to_string(),
                 provider: Some(self.provider.clone()),
                 meta: Some(serde_json::json!({"label":"A"})),
@@ -661,6 +669,7 @@ fn resolve_delegate_transforms_target_child_provider_and_meta() {
             _: &ProviderContext,
         ) -> ResolveRef {
             ResolveRef::Terminal((name == "alpha").then(|| ChildEntry {
+                total: None,
                 name: name.to_string(),
                 provider: Some(self.provider.clone()),
                 meta: Some(serde_json::json!({"label":"A"})),
@@ -760,6 +769,7 @@ fn resolve_delegate_can_replace_target_child_provider() {
             _: &ProviderContext,
         ) -> ResolveRef {
             ResolveRef::Terminal((name == "alpha").then(|| ChildEntry {
+                total: None,
                 name: name.to_string(),
                 provider: Some(self.provider.clone()),
                 meta: Some(serde_json::json!({"id":"alpha"})),
@@ -824,4 +834,100 @@ fn resolve_delegate_can_replace_target_child_provider() {
             .get_note(&pathql_rs::compose::ProviderQuery::new(), &ctx),
         Some("replacement".into())
     );
+}
+
+/// list_with_count 的每个子项计数必须与 count(子路径) 一致；
+/// 覆盖「子项清掉父项同名条件」的嵌套路径（`where_clear`）与静态空项。
+#[test]
+fn list_with_count_matches_count_of_child_path() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "
+        CREATE TABLE groups (id TEXT PRIMARY KEY, parent TEXT);
+        INSERT INTO groups VALUES ('g1', NULL), ('g2', 'g1'), ('g3', 'g1'), ('g4', 'g1');
+        CREATE TABLE items (id INTEGER PRIMARY KEY, group_id TEXT);
+        INSERT INTO items (group_id) VALUES ('g1'), ('g2'), ('g2'), ('g3');
+        ",
+    )
+    .unwrap();
+    let executor = make_executor(Arc::new(Mutex::new(conn)));
+
+    let mut registry = ProviderRegistry::new();
+    registry
+        .register(
+            serde_json::from_str(
+                r#"{
+                "namespace": "test",
+                "name": "group",
+                "properties": { "gid": { "type": "string", "default": "", "optional": false } },
+                "query": {
+                    "where_clear": ["items.group_id ="],
+                    "where": "items.group_id = ${properties.gid}"
+                },
+                "list": {
+                    "${row.id}": {
+                        "sql": "SELECT id FROM groups WHERE parent = ${properties.gid} ORDER BY id",
+                        "data_var": "row",
+                        "provider": "group",
+                        "properties": { "gid": "${row.id}" }
+                    }
+                }
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let root_def: ProviderDef = serde_json::from_str(
+        r#"{
+        "namespace": "test",
+        "name": "root",
+        "list": {
+            "${row.id}": {
+                "sql": "SELECT id FROM groups WHERE parent IS NULL ORDER BY id",
+                "data_var": "row",
+                "provider": "group",
+                "properties": { "gid": "${row.id}" }
+            },
+            "empty": {}
+        }
+    }"#,
+    )
+    .unwrap();
+    let root: Arc<dyn Provider> = Arc::new(DslProvider {
+        def: Arc::new(root_def),
+        properties: HashMap::new(),
+    });
+    let runtime = runtime_with_registry(registry, root, executor);
+    runtime
+        .register_schema("items", "items", "", "__root")
+        .unwrap();
+
+    // 嵌套一层：items://g1 下列出 g2/g3/g4，子路径 items://g1/gX 必须清掉 g1 的条件
+    let children = runtime.list_with_count("items://g1").unwrap();
+    let got: Vec<(&str, Option<usize>)> = children
+        .iter()
+        .map(|c| (c.name.as_str(), c.total))
+        .collect();
+    assert_eq!(got, vec![("g2", Some(2)), ("g3", Some(1)), ("g4", Some(0))]);
+    for child in &children {
+        let by_path = runtime
+            .count(&format!("items://g1/{}", child.name))
+            .unwrap();
+        assert_eq!(child.total, Some(by_path), "child {}", child.name);
+    }
+
+    // 普通 list 不填 total
+    assert!(runtime
+        .list("items://g1")
+        .unwrap()
+        .iter()
+        .all(|c| c.total.is_none()));
+
+    // 根级（含静态空项 `empty`，它被实例化为空 provider，计数即父级行数）：同样逐项与 count(子路径) 一致
+    let roots = runtime.list_with_count("items://").unwrap();
+    for child in &roots {
+        let by_path = runtime.count(&format!("items://{}", child.name)).ok();
+        assert_eq!(child.total, by_path, "root child {}", child.name);
+    }
+    assert!(roots.iter().any(|c| c.name == "g1" && c.total == Some(1)));
 }

@@ -37,6 +37,7 @@
           :default-size="TREE_DEFAULT_WIDTH"
         >
           <AlbumTreePanel
+            ref="albumTreePanelRef"
             :selected-id="selectedAlbumId"
             @select="onTreeSelect"
             @create-album="openCreateDialogWithParent"
@@ -132,8 +133,9 @@
       @update:model-value="treeDrawer.close"
     >
       <AlbumTreePanel
+        ref="compactAlbumTreePanelRef"
         :selected-id="selectedAlbumId"
-        @select="(id) => { onTreeSelect(id); treeDrawer.close(); }"
+        @select="(id, album) => { onTreeSelect(id, album); treeDrawer.close(); }"
         @create-album="(pid) => { openCreateDialogWithParent(pid); treeDrawer.close(); }"
         @create-label="(pid, directory) => { openCreateDialogWithParent(pid, directory ? 'label_dir' : 'label'); treeDrawer.close(); }"
         @contextmenu="onTreeContextMenu"
@@ -214,12 +216,11 @@
           @keyup.enter="handleCreateAlbum"
         />
 
-        <AlbumPickerField
+        <AlbumPicker
           v-if="newAlbumKind !== 'local_folder'"
           v-model="newAlbumParentId"
           class="mt-3"
-          :album-tree="createAlbumParentTree"
-          :album-counts="displayedAlbumCountsForPicker"
+          :scope="createAlbumParentScope"
           :placeholder="isNewLabelForestAlbum ? $t('albums.selectParentLabelDir') : $t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')"
         />
@@ -267,11 +268,10 @@
       <div class="mb-3">
         <el-checkbox v-model="moveToRoot">{{ $t('albums.moveToRoot') }}</el-checkbox>
       </div>
-      <AlbumPickerField
+      <AlbumPicker
         v-show="!moveToRoot"
         v-model="moveTargetParentId"
-        :album-tree="moveAlbumTree"
-        :album-counts="displayedAlbumCountsForPicker"
+        :scope="moveAlbumScope"
         :clearable="false"
         :placeholder="$t('albums.selectTargetAlbum')"
       />
@@ -284,7 +284,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onActivated, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { useLocalStorage } from "@vueuse/core";
@@ -292,17 +292,16 @@ import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
-import { useAlbumStore, HIDDEN_ALBUM_ID, FAVORITE_ALBUM_ID } from "@/stores/albums";
 import AlbumTreePanel from "@/components/albums/AlbumTreePanel.vue";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
+import type { AlbumTreeViewScope } from "@/components/albums/types";
 import AlbumDetailPanel from "@/components/albums/AlbumDetailPanel.vue";
 import type { AlbumPanelCommand } from "@/components/albums/AlbumDetailPanel.vue";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import KbResizable from "@kabegame/core/components/common/KbResizable.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import type { Album } from "@/stores/albums";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { storeToRefs } from "pinia";
 import { trackEvent } from "@kabegame/core/track/umami";
@@ -343,15 +342,27 @@ import { isLabelKey } from "@/utils/labelKey";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { DragFileOptions } from "@/directives/dragFile";
 import { buildDropPlan, importDroppedFiles } from "@/utils/dragFileImport";
+import { pathqlFetch } from "@/services/pathql";
+import { rowToImageInfo } from "@/utils/imageRow";
+import { useAlbumQuery } from "@/composables/useAlbumQuery";
 import {
-  buildAlbumMediaNodes,
-  loadAlbumMediaPreview,
-  type AlbumMediaNode,
-} from "@/utils/albumMediaTree";
+  FAVORITE_ALBUM_ID,
+  HIDDEN_ALBUM_ID,
+  createAlbum,
+  createLabelAlbum,
+  createLocalFolderAlbum,
+  deleteAlbum,
+  fetchAlbum,
+  fetchDescendantCount,
+  fetchLocalFolderAlbums,
+  moveAlbum,
+  renameAlbum,
+  setLabelKey,
+  type Album,
+  type AlbumNode,
+} from "@/services/albums";
 
 const { t } = useI18n();
-const albumStore = useAlbumStore();
-const { albums } = storeToRefs(albumStore);
 const uiStore = useUiStore();
 const { isCompact } = storeToRefs(uiStore);
 
@@ -402,9 +413,14 @@ const toggleDetailPanel = () => {
 const albumDetailRouteStore = useAlbumDetailRouteStore();
 const { albumIdPath, set: setAlbumIdPath } = useAlbumIdPathState();
 const selectedAlbumId = computed(() => lastAlbumIdOf(albumIdPath.value));
-const selectedAlbum = computed<Album | null>(
-  () => albums.value.find((a) => a.id === selectedAlbumId.value) ?? null,
-);
+const {
+  album: selectedAlbum,
+  ancestors: selectedAlbumAncestors,
+  imageCount: selectedAlbumImageCount,
+  descendantCount: selectedAlbumDescendantCount,
+  loading: selectedAlbumLoading,
+  refresh: refreshSelectedAlbum,
+} = useAlbumQuery(selectedAlbumId);
 const selectedAlbumName = computed(() => {
   if (selectedAlbumId.value === HIDDEN_ALBUM_ID) return t("albums.hiddenAlbumName");
   return selectedAlbum.value?.name ?? "";
@@ -412,10 +428,10 @@ const selectedAlbumName = computed(() => {
 
 // ---------- 右栏（画册信息面板）派生数据 ----------
 const selectedAlbumStats = computed(() => {
-  const id = selectedAlbumId.value;
-  if (!id) return { imageCount: 0, subAlbumCount: 0 };
-  const stats = albumStore.getAlbumStats(false)[id];
-  return { imageCount: stats?.imageCount ?? 0, subAlbumCount: stats?.subAlbumCount ?? 0 };
+  return {
+    imageCount: selectedAlbumImageCount.value,
+    subAlbumCount: selectedAlbumDescendantCount.value,
+  };
 });
 
 const isSelectedAlbumRotating = computed(
@@ -436,50 +452,24 @@ const canCreateSubAlbumForSelected = computed(() => {
 /** 从根到直接父级（不含当前画册），供面包屑中间段；
  * 链接切换选中态（selectAlbum）而非路由跳转——本页不整页跳转。 */
 const selectedAlbumAncestorCrumbs = computed((): { id: string; name: string }[] => {
-  const id = selectedAlbumId.value;
-  if (!id) return [];
-  const map = new Map(albums.value.map((a) => [a.id, a]));
-  const up: { id: string; name: string }[] = [];
-  let cur = map.get(id);
-  if (!cur) return [];
-  while (cur.parentId) {
-    const p = map.get(cur.parentId);
-    if (!p) break;
-    up.push({ id: p.id, name: p.name });
-    cur = p;
-  }
-  up.reverse();
-  return up;
+  return selectedAlbumAncestors.value.map(({ id, name }) => ({ id, name }));
 });
 
-// 封面：按选中画册取 1 张预览图。走 loadAlbumMediaPreview（与子画册卡片同源，
-// 自身没图时会递归到子画册补齐）；`get_album_preview` 那条 Tauri 命令的 provider
-// 路径已过时（images://gallery/album/<id>/order 不存在），不能用。
+// 普通画册路径包含整个子树；标签与标签目录仍沿用各自 provider 语义。
 const albumCover = ref<ImageInfo | null>(null);
-const selectedAlbumMediaNode = computed<AlbumMediaNode | null>(() => {
-  const album = selectedAlbum.value;
-  if (!album) return null;
-  return (
-    buildAlbumMediaNodes(
-      [album],
-      albums.value,
-      albumStore.getAlbumDirectCounts(false),
-      false,
-    )[0] ?? null
-  );
-});
 watch(
   [selectedAlbumId, () => selectedAlbumStats.value.imageCount],
   async ([id]) => {
-    const node = selectedAlbumMediaNode.value;
-    if (!id || !node) {
+    if (!id) {
       albumCover.value = null;
       return;
     }
     try {
-      const preview = await loadAlbumMediaPreview(node, 1);
+      const rows = await pathqlFetch<Record<string, unknown>>(
+        `images://gallery/album-tree/${encodeURIComponent(id)}/x1x/1`,
+      );
       if (selectedAlbumId.value !== id) return; // 过期响应
-      albumCover.value = preview[0] ?? null;
+      albumCover.value = rows[0] ? rowToImageInfo(rows[0]) : null;
     } catch (e) {
       console.error("加载画册封面失败:", e);
       if (selectedAlbumId.value === id) albumCover.value = null;
@@ -487,9 +477,6 @@ watch(
   },
   { immediate: true },
 );
-
-const albumExists = (id: string) =>
-  !!id && (id === HIDDEN_ALBUM_ID || albums.value.some((a) => a.id === id));
 
 /**
  * 切换选中画册。默认 push 一条 history 记录（用户主动切换,浏览器可后退回上一个
@@ -500,7 +487,8 @@ const selectAlbum = async (
   id: string,
   opts?: { history?: "push" | "replace" },
 ) => {
-  const chain = albums.value.find((a) => a.id === id)?.ancestorPath || `/${id}/`;
+  const target = await fetchAlbum(id);
+  const chain = target?.ancestorPath || `/${id}/`;
   // 必须先 await album 落地再写查询 path：两者是同一 URL 上的两个 query 参数,
   // 各自发起 router 导航,并发时后发导航会取消先发的(album 写入丢失,点击
   // 「不生效」);且 path 的 hide 前缀(ignoreHide)读 currentAlbumId(),只有
@@ -516,11 +504,19 @@ const selectAlbum = async (
   });
 };
 
-const onTreeSelect = (id: string) => {
+const onTreeSelect = async (id: string, node?: AlbumNode) => {
   if (id !== selectedAlbumId.value) {
-    trackAlbumEnter({ id, name: albums.value.find((a) => a.id === id)?.name ?? "" }, "tree");
+    const album = node ?? await fetchAlbum(id);
+    trackAlbumEnter({ id, name: album?.name ?? "" }, "tree");
   }
-  void selectAlbum(id);
+  if (node?.ancestorPath) {
+    await setAlbumIdPath(node.ancestorPath, { history: "push" });
+    await albumDetailRouteStore.navigate({
+      query: [], sort: { field: "by-album-order", desc: false }, page: 1,
+    });
+  } else {
+    await selectAlbum(id);
+  }
 };
 
 /** 双击树上的画册：选中它并开合详情面板（第一次点击已由 row-click 选中） */
@@ -529,28 +525,21 @@ const onTreeDblclick = (id: string) => {
   toggleDetailPanel();
 };
 
-onMounted(async () => {
-  await albumStore.loadAlbums();
-  // 「query 优先、localStorage 兜底」在 useAlbumIdPathState 读取端完成；
-  // 这里只做存活校验与最终回落收藏。
-  if (!albumExists(selectedAlbumId.value)) {
-    void selectAlbum(FAVORITE_ALBUM_ID, { history: "replace" });
-  }
-});
-
-onActivated(async () => {
-  await albumStore.loadAlbums();
-});
-
 // 选中画册被删（含事件驱动删除）→ 沿祖先链上溯最近存活者，无则回落收藏
 watch(
-  () => albumExists(selectedAlbumId.value),
-  (ok) => {
-    if (ok || albumStore.loading) return;
+  [selectedAlbum, selectedAlbumLoading],
+  async ([album, loading]) => {
+    if (album || loading) return;
     if (!selectedAlbumId.value) return;
     const chain = segmentsOfAlbumIdPath(albumIdPath.value);
-    const fallback = [...chain].reverse().find((cid) => albumExists(cid));
-    void selectAlbum(fallback ?? FAVORITE_ALBUM_ID, { history: "replace" });
+    let fallback: string | null = null;
+    for (const id of [...chain].reverse().slice(1)) {
+      if (await fetchAlbum(id)) {
+        fallback = id;
+        break;
+      }
+    }
+    await selectAlbum(fallback ?? FAVORITE_ALBUM_ID, { history: "replace" });
   },
 );
 
@@ -565,12 +554,14 @@ const analytics = createImageAnalytics(() => ({
 const adapter = createAlbumDetailAdapter({
   albumId: () => selectedAlbumId.value,
   albumName: () => selectedAlbumName.value,
-  isLocalFolder: () => albumStore.isLocalFolderAlbum(selectedAlbumId.value),
+  isLocalFolder: () => selectedAlbum.value?.type === "local_folder",
   analytics,
 });
 
 const albumViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 const albumBrowseToolbarRef = ref<InstanceType<typeof GalleryQueryBar> | null>(null);
+const albumTreePanelRef = ref<InstanceType<typeof AlbumTreePanel> | null>(null);
+const compactAlbumTreePanelRef = ref<InstanceType<typeof AlbumTreePanel> | null>(null);
 
 const albumFilterFeatures: GalleryBrowseDimension[] = [
   "plugin", "mediaType", "date", "size", "aspect",
@@ -625,14 +616,13 @@ const moveDialog = useModal();
 const moveToRoot = ref(false);
 const moveTargetParentId = ref<string | null>(null);
 
-const moveAlbumTree = computed(() => {
+const moveAlbumScope = computed<AlbumTreeViewScope>(() => {
   const a = moveDlgAlbum.value;
-  if (!a) return [];
-  const exclude = [a.id, ...albumStore.getDescendantIds(a.id), FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID];
+  if (!a) return { sections: [] };
   // 标签森林与普通画册互不嵌套：标签只能移到标签下，普通画册不能移进标签森林
   return isLabelForestKind(a.type)
-    ? albumStore.getAlbumTreeExcluding(exclude, { onlyLabelDir: true })
-    : albumStore.getAlbumTreeExcluding(exclude, { excludeLocalFolder: true, excludeLabel: true });
+    ? { sections: ["label"], kinds: ["label_dir"], excludeSubtreeOf: [a.id] }
+    : { sections: ["normal"], excludeSubtreeOf: [a.id] };
 });
 
 watch(moveDialog.isOpen, (open) => {
@@ -655,7 +645,7 @@ const confirmMoveAlbum = async () => {
     return;
   }
   try {
-    await albumStore.moveAlbum(album.id, pid);
+    await moveAlbum(album.id, pid);
     moveDialog.close();
     moveDlgAlbum.value = null;
     ElMessage.success(t("albums.moveSuccess"));
@@ -677,12 +667,10 @@ const newLabelKeyValid = computed(() => isLabelKey(newLabelKey.value.trim()));
 // 切换类型时，旧父级可能不在新类型的候选森林里，清掉避免提交跨森林的父级
 watch(newAlbumKind, (kind, prev) => {
   if (!prev) return;
-  const parent = newAlbumParentId.value
-    ? albums.value.find((a) => a.id === newAlbumParentId.value)
-    : null;
-  if (parent && isLabelForestKind(parent.type) !== isLabelForestKind(kind)) {
-    newAlbumParentId.value = null;
-  }
+  void (async () => {
+    const parent = newAlbumParentId.value ? await fetchAlbum(newAlbumParentId.value) : null;
+    if (parent && isLabelForestKind(parent.type) !== isLabelForestKind(kind)) newAlbumParentId.value = null;
+  })();
 });
 const newAlbumSyncFolder = ref("");
 const newAlbumRecursive = ref(false);
@@ -694,15 +682,13 @@ const normalizeSyncPath = (p: string): string => {
   const stripped = trimmed.replace(/[/\\]+$/, "");
   return stripped || trimmed;
 };
-const existingSyncFolders = computed(() => {
-  const set = new Set<string>();
-  for (const a of albums.value) {
-    if (a.type === "local_folder" && a.syncFolder) {
-      set.add(normalizeSyncPath(a.syncFolder));
-    }
-  }
-  return set;
+const localFolderAlbums = ref<Album[]>([]);
+watch([createDialog.isOpen, newAlbumKind], async ([open, kind]) => {
+  if (open && kind === "local_folder") localFolderAlbums.value = await fetchLocalFolderAlbums();
 });
+const existingSyncFolders = computed(() => new Set(localFolderAlbums.value
+  .map((album) => album.syncFolder ? normalizeSyncPath(album.syncFolder) : "")
+  .filter(Boolean)));
 /** 选中的同步目录已存在对应的本地文件夹画册：禁用创建并在弹窗提示。 */
 const syncFolderDuplicate = computed(() => {
   if (!newAlbumIsLocalFolder.value || !newAlbumSyncFolder.value) return false;
@@ -719,18 +705,12 @@ const canSubmitCreateAlbum = computed(() => {
 });
 const isRefreshing = ref(false);
 
-const displayedAlbumCountsForPicker = computed(() => ({
-  ...albumStore.getAlbumCounts(false),
-}));
 // 新建画册的父级候选：排除系统画册与文件夹画册（其成员只能经同步产生）；
 // 标签只能建在标签森林里，普通画册不能建进标签森林
-const createAlbumParentTree = computed(() =>
+const createAlbumParentScope = computed<AlbumTreeViewScope>(() =>
   isNewLabelForestAlbum.value
-    ? albumStore.getAlbumTreeExcluding([], { onlyLabelDir: true })
-    : albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID], {
-        excludeLocalFolder: true,
-        excludeLabel: true,
-      }),
+    ? { sections: ["label"], kinds: ["label_dir"] }
+    : { sections: ["normal"] },
 );
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
@@ -746,15 +726,14 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
 const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
-    await albumStore.loadAlbums();
-    // 清除画册详情缓存，确保图片流拿到最新内容
-    for (const album of albums.value) {
-      delete albumStore.albumImages[album.id];
-    }
-    delete albumStore.albumImages[FAVORITE_ALBUM_ID];
+    await Promise.all([
+      refreshSelectedAlbum(),
+      albumTreePanelRef.value?.reload(),
+      compactAlbumTreePanelRef.value?.reload(),
+    ]);
     await albumViewRef.value?.refresh?.();
 
-    const selected = albums.value.find((album) => album.id === selectedAlbumId.value);
+    const selected = selectedAlbum.value;
     if (IS_ANDROID || IS_WEB || selected?.type !== "local_folder") {
       ElMessage.success(t("albums.refreshSuccess"));
     } else {
@@ -803,7 +782,7 @@ const handleCreateAlbum = async () => {
   try {
     const parentId = newAlbumParentId.value?.trim() || null;
     if (isNewLabelForestAlbum.value) {
-      await albumStore.createLabelAlbum({
+      await createLabelAlbum({
         key: newLabelKey.value.trim(),
         name: newAlbumName.value.trim() || null,
         parentId,
@@ -811,7 +790,7 @@ const handleCreateAlbum = async () => {
       });
     } else if (newAlbumIsLocalFolder.value) {
       // parent_id 已废弃：文件夹画册的层级由 sync_folder 的祖先串联唯一决定
-      await albumStore.createLocalFolderAlbum(
+      await createLocalFolderAlbum(
         {
           name: newAlbumName.value.trim(),
           parentId: null,
@@ -821,7 +800,7 @@ const handleCreateAlbum = async () => {
         { reload: false },
       );
     } else {
-      await albumStore.createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
+      await createAlbum(newAlbumName.value.trim(), { parentId, reload: false });
     }
     createDialog.close();
     ElMessage.success(t("albums.albumCreated"));
@@ -870,7 +849,11 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     selectedCount: 0,
     currentRotationAlbumId: currentRotationAlbumId.value,
     wallpaperRotationEnabled: wallpaperRotationEnabled.value,
-    albumImageCount: album ? (albumStore.getAlbumCounts(false)[album.id] || 0) : 0,
+    albumImageCount: album
+      ? album.id === selectedAlbumId.value
+        ? selectedAlbumImageCount.value
+        : ((album as AlbumNode).count ?? 0)
+      : 0,
     favoriteAlbumId: FAVORITE_ALBUM_ID,
     isLocalFolder: album?.type === "local_folder",
     isLabel: album?.type === "label",
@@ -879,7 +862,7 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
   };
 });
 
-const onTreeContextMenu = (album: Album, event: MouseEvent) => {
+const onTreeContextMenu = (album: AlbumNode, event: MouseEvent) => {
   if (album.id === HIDDEN_ALBUM_ID) {
     event.preventDefault();
     return;
@@ -932,7 +915,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   }
 
   if (command === "convertToNormal") {
-    const descendantCount = albumStore.getDescendantIds(id).length;
+    const descendantCount = await fetchDescendantCount(id);
     try {
       await ElMessageBox.confirm(
         t("albums.localFolder.convertToNormalConfirm", { count: descendantCount }),
@@ -940,7 +923,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
         { type: "warning" },
       );
       await convertLocalFolderAlbumToNormal(id);
-      await albumStore.loadAlbums();
+      await refreshSelectedAlbum();
       ElMessage.success(t("albums.localFolder.convertToNormalSuccess"));
     } catch (error) {
       if (error !== "cancel") {
@@ -976,7 +959,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       );
       const newKey = String(value || "").trim();
       if (!newKey || newKey === album.labelKey) return;
-      await albumStore.setLabelKey(id, newKey);
+      await setLabelKey(id, newKey);
       ElMessage.success(t("albums.labelKeyUpdated"));
     } catch (error) {
       if (error !== "cancel" && error !== "close") {
@@ -1071,7 +1054,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
       );
       const newName = String(value || "").trim();
       if (!newName || newName === name) return;
-      await albumStore.renameAlbum(id, newName);
+      await renameAlbum(id, newName);
       ElMessage.success(t("albums.renameSuccess"));
     } catch (error) {
       if (error !== "cancel") {
@@ -1097,13 +1080,13 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 
   try {
     await ElMessageBox.confirm(
-      albumStore.isLocalFolderAlbum(id)
+      album.type === "local_folder"
         ? t("albums.deleteLocalFolderAlbumConfirm", { name })
         : t("albums.deleteAlbumConfirm", { name }),
       t("albums.confirmDelete"),
       { type: "warning" }
     );
-    await albumStore.deleteAlbum(id);
+    await deleteAlbum(id);
     // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
     await handleDeletedRotationAlbum(id);
     ElMessage.success(t("albums.albumDeleted"));

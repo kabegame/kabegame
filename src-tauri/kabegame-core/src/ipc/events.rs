@@ -263,6 +263,7 @@ pub enum DaemonEvent {
 
     /// `images` 表增删改（reason: `add` | `delete` | `change`）
     ImagesChange {
+        seq: u64,
         reason: String,
         #[serde(rename = "imageIds")]
         image_ids: Vec<String>,
@@ -274,15 +275,16 @@ pub enum DaemonEvent {
         plugin_ids: Option<Vec<String>>,
     },
 
-    /// `album_images` 表增删（reason: `add` | `delete`）
+    /// `album_images` 成员或顺序变更。
     AlbumImagesChange {
+        seq: u64,
         reason: String,
         #[serde(rename = "albumIds")]
         album_ids: Vec<String>,
         #[serde(rename = "imageIds")]
         image_ids: Vec<String>,
-        #[serde(rename = "directCounts", skip_serializing_if = "Option::is_none")]
-        direct_counts: Option<std::collections::HashMap<String, usize>>,
+        #[serde(rename = "ancestorPath")]
+        ancestor_path: String,
     },
 
     /// 壁纸图片更新事件
@@ -323,6 +325,7 @@ pub enum DaemonEvent {
     },
     /// 画册属性变更（重命名、移动父级等；`changes` 为增量，如 `{ "name": "..." }`、`{ "parentId": "..." | null }`）
     AlbumChanged {
+        seq: u64,
         #[serde(rename = "albumId")]
         album_id: String,
         changes: serde_json::Value,
@@ -331,6 +334,10 @@ pub enum DaemonEvent {
     AlbumDeleted {
         #[serde(rename = "albumId")]
         album_id: String,
+        #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
+        parent_id: Option<String>,
+        #[serde(rename = "ancestorPath")]
+        ancestor_path: String,
     },
     /// 畅游记录新增（完整 JSON，与前端 `SurfRecord` 对齐）
     #[serde(rename = "SurfRecordAdded")]

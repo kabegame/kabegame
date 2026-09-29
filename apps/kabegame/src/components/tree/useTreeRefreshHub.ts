@@ -13,7 +13,7 @@ import { useTrailingThrottleFn } from "@/composables/useTrailingThrottle";
  */
 export interface TreeRefreshSource {
   event: string;
-  /** source 级过滤（如 album-images-change 只认隐藏画册的增删）。 */
+  /** source 级过滤（例如只接收某一类结构或成员事件）。 */
   filter?: (payload: unknown) => boolean;
 }
 

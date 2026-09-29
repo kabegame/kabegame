@@ -1,0 +1,18 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_album_root_kind_router",
+    "properties": {
+        "kinds": { "type": "string", "default": "", "optional": false }
+    },
+    "resolve": {
+        "subpage_(normal|label|local_folder)_([1-9][0-9]*)": {
+            "provider": "gallery_album_page_provider",
+            "properties": {
+                "section": "${capture[1]}",
+                "parent_id": "",
+                "page": "${capture[2]}",
+                "kinds": "${properties.kinds}"
+            }
+        }
+    }
+}

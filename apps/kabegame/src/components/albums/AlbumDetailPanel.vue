@@ -160,8 +160,7 @@ import { useI18n } from "@kabegame/i18n";
 import { Close, Monitor, MoreFilled } from "@kabegame/element-plus-icons";
 import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import type { Album } from "@/stores/albums";
-import { HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
 import {
   syncModeIcon,
   syncModeIconClass,

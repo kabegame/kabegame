@@ -6,10 +6,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { storeToRefs } from "pinia";
 import { Delete, FolderOpened, Picture, Edit } from "@kabegame/element-plus-icons";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
-import { useAlbumStore, FAVORITE_ALBUM_ID } from "@/stores/albums";
+import { FAVORITE_ALBUM_ID } from "@/services/albums";
 
 interface Props {
   visible: boolean;
@@ -21,7 +20,6 @@ interface Props {
   albumImageCount?: number; // 画册图片数量
 }
 
-const albumStore = useAlbumStore();
 const props = defineProps<Props>();
 const { t } = useI18n();
 

@@ -170,10 +170,7 @@ fn init(
     //
     // label 使用白名单而不是黑名单:漏加白名单只会造成拖拽不可用这一可见 bug;
     // 黑名单漏加则会让第三方页面静默获得图库文件导出能力。目前只有 main 渲染图库。
-    #[cfg(all(
-        any(target_os = "linux", target_os = "macos"),
-        feature = "standard"
-    ))]
+    #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "standard"))]
     tauri_runtime_cef::set_drag_file_resolver(|label, image_id| {
         if label != "main" {
             return None;
@@ -505,6 +502,7 @@ pub(crate) fn configure_app(
             pathql_entry,
             pathql_list,
             pathql_fetch,
+            pathql_view,
             toggle_image_favorite,
             // --- Tasks ---
             get_all_tasks,

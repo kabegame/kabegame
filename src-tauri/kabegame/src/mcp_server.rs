@@ -1155,11 +1155,11 @@ impl ServerHandler for KabegameMcpServer {
                 }
 
                 if result.added > 0 {
-                    GlobalEmitter::global().emit_album_images_change(
-                        "add",
-                        &[args.album_id.clone()],
-                        &args.image_ids,
-                    );
+                    kabegame_core::storage::image_events::emit_membership_added(
+                        &args.album_id,
+                        &result.inserted_ids,
+                    )
+                    .map_err(|e| McpError::internal_error(e, None))?;
                 }
 
                 Ok(CallToolResult::success(vec![ContentBlock::text(format!(
@@ -1178,18 +1178,12 @@ impl ServerHandler for KabegameMcpServer {
                 Storage::global()
                     .update_image_display_name(&args.image_id, &args.display_name)
                     .map_err(|e| McpError::internal_error(e, None))?;
-                let plugin_ids = Storage::find_image_by_id(&args.image_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|image| image.plugin_id)
-                    .map(|plugin_id| vec![plugin_id])
-                    .unwrap_or_default();
                 GlobalEmitter::global().emit_images_change(
                     "rename",
                     &[args.image_id.clone()],
                     None,
                     None,
-                    Some(&plugin_ids),
+                    None,
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Renamed image '{}' to '{}'.",

@@ -33,25 +33,13 @@ export function createTaskDetailAdapter(params: {
       // 兜底：避免“静默 0 张”让用户误判，提示可能是 provider-path 解析/缓存导致的问题
       ElMessage.error(t("tasks.loadImagesFailed"));
     },
-    imagesChange: {
-      waitMs: 1000,
-      filter: (p, ctx) => {
+    changes: {
+      relevant: (batch) => {
         const tid = params.taskId();
-        if (p.taskIds && p.taskIds.length > 0 && tid && !p.taskIds.includes(tid)) {
-          return false;
-        }
-        const taskScoped =
-          !!tid && !!p.taskIds && p.taskIds.length > 0 && p.taskIds.includes(tid);
-        if (taskScoped) return true;
-        // 无任务维度 hint：仅当 imageIds 命中当前页时刷新（减少无关全局事件）
-        const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
-        if (ids.length > 0) {
-          return ids.some((id) => ctx.images.value.some((img) => img.id === id));
-        }
-        return true;
+        return !!tid && batch.images.size > 0 &&
+          (batch.wildcard.task || batch.taskIds.has(tid));
       },
     },
-    albumImagesChange: { waitMs: 500 },
     // 失败图片计数与当前页数据同源刷新
     onAfterRefresh: async () => {
       await failedImagesStore.loadAll();

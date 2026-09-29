@@ -414,6 +414,13 @@ impl Storage {
             .map_err(|e| format!("Failed to delete surf_record: {}", e))?;
         drop(conn);
         GlobalEmitter::global().emit_surf_record_deleted(id);
+        GlobalEmitter::global().emit_images_change(
+            "change",
+            &[],
+            None,
+            Some(&[id.to_string()]),
+            None,
+        );
         Ok(())
     }
 

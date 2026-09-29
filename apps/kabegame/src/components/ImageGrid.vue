@@ -72,13 +72,14 @@
     :image-ids="addToAlbumImageIds"
     :task-id="addToAlbumTaskId"
     :exclude-album-ids="addToAlbumExcludeIds"
+    :mutate="mutate"
     @close="addToAlbumDialog.close()"
     @added="handleAddedToAlbum"
   />
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, ref, shallowRef, useAttrs, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, useAttrs, watch } from "vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
@@ -104,18 +105,23 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
+import { sendDebugEvent } from "@kabegame/core/debugIngest"; // DEBUG-PERF
 import { withGalleryPrefix } from "@/utils/path";
 import { diffById } from "@/utils/listDiff";
 import { createImageActions } from "@/actions/imageActions";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
-import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
-import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
+import { subscribeChanges } from "@/services/dataChangeHub";
+import {
+  GRID_REFRESH_WAIT_MS,
+  useLiveQuery,
+  type ViewQuery,
+  type ViewSnapshot,
+} from "@/services/liveQuery";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID, addImagesToAlbum, fetchImageAlbums, removeImagesFromAlbum } from "@/services/albums";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
 import type {
@@ -206,7 +212,6 @@ const route = useRoute();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
 const settingsStore = useSettingsStore();
-const albumStore = useAlbumStore();
 
 const adapter = props.adapter;
 
@@ -297,31 +302,78 @@ const currentWallpaperImageId = computed<string | null>({
   },
 });
 
-// 图片操作
-const {
-  handleOpenImagePath,
-  handleDownloadImage,
-  handleCopyImage,
-  handleBatchDeleteImages,
-  handleBatchHideImages,
-  toggleFavoriteForImages,
-  shareImage,
-  openImageFolder,
-  setWallpaper,
-} = useImageOperations(images, currentWallpaperImageId, coreRef);
-
 let loadImagesInFlight = false;
-// 加载路径数据。调用点有三个：path变化、事件驱动、手动刷新
+const totalImagesCount = ref(0);
+let lastRemovedIds: string[] = [];
+let ensurePageAfterRemoval: () => Promise<void> = async () => {};
+let refreshCtx!: GridRefreshContext;
+
+const rawViewPath = () =>
+  adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
+
+const currentViewQuery = (): ViewQuery | null => {
+  if (!isRouteActive.value || !adapter.isActive()) return null;
+  const rows = rawViewPath();
+  if (!rows || (adapter.validatePath && !adapter.validatePath(rows))) return null;
+  const count = adapter.computeCountPath(rows);
+  if (!count) return null;
+  return {
+    rows: withGalleryPrefix(rows),
+    count: withGalleryPrefix(count),
+  };
+};
+
+const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
+  const raw = rawViewPath();
+  const sameView = loadedKey.value === raw;
+  const previous = sameView ? images.value.slice() : [];
+  const container = sameView ? getContainerEl() : null;
+  const previousScrollTop = container?.scrollTop ?? 0;
+
+  clearImageMetadataCache();
+  images.value = snapshot.rows.map(rowToImageInfo);
+  totalImagesCount.value = snapshot.total;
+  loadedKey.value = raw;
+  lastRemovedIds = [];
+
+  if (!sameView) return;
+  if (container) container.scrollTop = previousScrollTop;
+  const { removedIds } = diffById(previous, images.value);
+  lastRemovedIds = removedIds;
+  if (removedIds.length > 0) {
+    const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
+    if (selected && removedIds.some((id) => selected.has(id))) clearSelection();
+    if (
+      currentWallpaperImageId.value &&
+      removedIds.includes(currentWallpaperImageId.value)
+    ) {
+      currentWallpaperImageId.value = null;
+    }
+  }
+  if (removedIds.length > 0 || images.value.length === 0) {
+    await ensurePageAfterRemoval();
+  }
+  await adapter.onAfterRefresh?.(refreshCtx, { removedIds });
+};
+
+const liveQuery = useLiveQuery({
+  key: currentViewQuery,
+  waitMs: GRID_REFRESH_WAIT_MS,
+  relevant: (batch) => adapter.changes?.relevant?.(batch) ?? true,
+  onResult: applyViewSnapshot,
+  onError: (error) => {
+    void adapter.onLoadError?.(error, rawViewPath());
+  },
+});
+
+// 加载路径数据。行与总数由同一个带 seq 的视图快照返回。
 const loadImages = async (path?: string) => {
   const raw = path || adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
   if (!raw) return;
   if (adapter.validatePath && !adapter.validatePath(raw)) return;
   loadImagesInFlight = true;
   try {
-    clearImageMetadataCache();
-    const rows = await pathqlFetch<Record<string, unknown>>(withGalleryPrefix(raw));
-    images.value = rows.map(rowToImageInfo);
-    loadedKey.value = raw;
+    await liveQuery.refetch();
   } finally {
     loadImagesInFlight = false;
   }
@@ -329,6 +381,7 @@ const loadImages = async (path?: string) => {
 
 const paged = usePagedGallery({
   routeStore: adapter.routeStore,
+  totalImagesCount,
   images,
   loadedKey,
   viewRef: coreRef,
@@ -343,7 +396,6 @@ const paged = usePagedGallery({
 });
 
 const {
-  totalImagesCount,
   currentPage: gridCurrentPage,
   pageSize: gridPageSize,
   currentPath: gridCurrentPath,
@@ -351,51 +403,85 @@ const {
   loadTotalImagesCount,
   ensureValidPageAfterMassRemoval,
 } = paged;
+ensurePageAfterRemoval = paged.ensureValidPageAfterMassRemoval;
 
 /**
  * 事件驱动的当前页刷新：保留滚动位置，重算总数；对被移除的图片做
  * 选中清理、当前壁纸清理与页码越界回退。
  */
 const refreshPage = async (): Promise<{ removedIds: string[] }> => {
-  const prevList = images.value.slice();
-  const container = getContainerEl();
-  const prevScrollTop = container?.scrollTop ?? 0;
+  lastRemovedIds = [];
   try {
-    await loadImages(gridCurrentPath.value);
+    await liveQuery.refetch();
   } catch (error) {
-    await adapter.onLoadError?.(error, gridCurrentPath.value);
+    await adapter.onLoadError?.(error, rawViewPath());
     return { removedIds: [] };
   }
-  if (container) container.scrollTop = prevScrollTop;
-  await loadTotalImagesCount();
-
-  const { removedIds } = diffById(prevList, images.value);
-  if (removedIds.length > 0) {
-    const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
-    if (selected && selected.size > 0 && removedIds.some((id) => selected.has(id))) {
-      clearSelection();
-    }
-    if (
-      currentWallpaperImageId.value &&
-      removedIds.includes(currentWallpaperImageId.value)
-    ) {
-      currentWallpaperImageId.value = null;
-    }
-  }
-  if (removedIds.length > 0 || images.value.length === 0) {
-    await ensureValidPageAfterMassRemoval();
-  }
-  return { removedIds };
+  return { removedIds: lastRemovedIds };
 };
 
-const refreshCtx: GridRefreshContext = {
+const mutate: GridRefreshContext["mutate"] = async (op) => {
+  const view = liveQuery.view();
+  const t0 = performance.now(); // DEBUG-PERF
+  const result = await op(view);
+  const t1 = performance.now(); // DEBUG-PERF
+  const current = liveQuery.view();
+  const stillCurrent =
+    !!view && !!current && view.rows === current.rows && view.count === current.count;
+  if (result.view && stillCurrent) await liveQuery.apply(result.view);
+  void sendDebugEvent("grid_mutate", { adapter: adapter.id, rows: view?.rows, hasView: !!result.view, stillCurrent, seq: result.view?.seq, n: result.view?.rows.length, total: result.view?.total, opMs: +(t1 - t0).toFixed(1), applyMs: +(performance.now() - t1).toFixed(1) }, { sessionId: "eventworker-perf" }); // DEBUG-PERF
+  return result;
+};
+
+const patch: GridRefreshContext["patch"] = (ids, fields) => {
+  const idSet = new Set(ids);
+  if (idSet.size === 0) return;
+  images.value = images.value.map((image) =>
+    idSet.has(image.id) ? { ...image, ...fields } : image,
+  );
+};
+
+refreshCtx = {
   images,
   computedPath: gridCurrentPath,
   refreshPage,
-  loadTotalImagesCount,
+  mutate,
+  patch,
+  loadTotalImagesCount: liveQuery.refetch,
   ensureValidPageAfterMassRemoval,
   clearSelection,
 };
+
+let unsubscribeFavoriteChanges: (() => void) | null = null;
+onMounted(() => {
+  unsubscribeFavoriteChanges = subscribeChanges({
+    waitMs: GRID_REFRESH_WAIT_MS,
+    filter: (batch) => batch.favoriteOps.length > 0,
+    onBatch: (batch) => {
+      for (const op of batch.favoriteOps) patch(op.imageIds, { favorite: op.favorite });
+    },
+  });
+});
+onBeforeUnmount(() => unsubscribeFavoriteChanges?.());
+
+// 图片操作通过 mutate / patch 接入主动更新通道。
+const {
+  handleOpenImagePath,
+  handleDownloadImage,
+  handleCopyImage,
+  handleBatchDeleteImages,
+  handleBatchHideImages,
+  toggleFavoriteForImages,
+  shareImage,
+  openImageFolder,
+  setWallpaper,
+} = useImageOperations(
+  images,
+  currentWallpaperImageId,
+  coreRef,
+  mutate,
+  patch,
+);
 
 const readRouteQueryPath = (): string => {
   const rawPath = route.query.path;
@@ -422,8 +508,7 @@ const syncActivePathFromUrl = () => {
 
 /** 手动刷新：重拉当前页 + 总数（错误向上抛，由 view 决定提示文案） */
 const refresh = async (opts?: { resetScroll?: boolean }) => {
-  await loadImages(gridCurrentPath.value);
-  void loadTotalImagesCount();
+  await liveQuery.refetch();
   if (opts?.resetScroll) {
     const el = getContainerEl();
     if (el) el.scrollTop = 0;
@@ -448,7 +533,6 @@ watch(
       } finally {
         finishLoading();
       }
-      void loadTotalImagesCount();
     })();
   }
 );
@@ -483,40 +567,6 @@ watch(
   },
   { immediate: true }
 );
-
-// 统一图片变更事件：不做增量同步，收到事件后刷新“当前页”（trailing 节流）。
-// 始终启用（含 keep-alive 后台），保证返回页面时数据已反映删除/新增。
-const defaultEventRefresh = async () => {
-  const { removedIds } = await refreshPage();
-  await adapter.onAfterRefresh?.(refreshCtx, { removedIds });
-};
-useImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: adapter.imagesChange?.waitMs ?? 1000,
-  filter: (p) => adapter.imagesChange?.filter?.(p, refreshCtx) ?? true,
-  onRefresh: async (p) => {
-    if (adapter.imagesChange?.onRefresh) {
-      await adapter.imagesChange.onRefresh(p, refreshCtx);
-    } else {
-      await defaultEventRefresh();
-    }
-  },
-});
-// album_images 表变更：默认只关心 HIDDEN 画册（HideGate 影响可见性）
-useAlbumImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: adapter.albumImagesChange?.waitMs ?? 500,
-  filter: (p) => adapter.albumImagesChange?.filter
-      ? adapter.albumImagesChange.filter(p, refreshCtx)
-      : (p.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
-  onRefresh: async (p) => {
-    if (adapter.albumImagesChange?.onRefresh) {
-      await adapter.albumImagesChange.onRefresh(p, refreshCtx);
-    } else {
-      await defaultEventRefresh();
-    }
-  },
-});
 
 // 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]，避免泛型不兼容
 const effectiveActions = computed(() => {
@@ -608,7 +658,6 @@ onActivated(() => {
     void (async () => {
       try {
         await loadImages(pathToLoad);
-        await loadTotalImagesCount();
       } catch (error) {
         await adapter.onLoadError?.(error, pathToLoad);
       }
@@ -681,7 +730,6 @@ const handleAddedToAlbum = async () => {
   pendingAddToAlbumImages.value = [];
   addToAlbumTaskId.value = undefined;
   clearSelection();
-  await adapter.onAddedToAlbum?.();
   emit("addedToAlbum");
 };
 
@@ -733,8 +781,11 @@ const confirmRemoveImages = async () => {
 /** 右键「复制标签」：标签 key 以 ", " 连接写入剪贴板，无标签时提示。 */
 const copyImageLabels = async (image: ImageInfo) => {
   try {
-    const ids = await albumStore.getImageAlbumIds(image.id);
-    const text = labelKeysText(pickLabelAlbums(ids, albumStore.albums));
+    const albums = await fetchImageAlbums(image.id);
+    const text = labelKeysText(pickLabelAlbums(
+      albums.map((album) => album.id),
+      albums,
+    ));
     if (!text) {
       ElMessage.info(t("albums.imageLabelsEmpty"));
       return;
@@ -827,10 +878,14 @@ const runDefaultCommand = async (
       const isUnhide = !!image.isHidden || (adapter.forceUnhide?.() ?? false);
       try {
         if (isUnhide) {
-          await albumStore.removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids);
+          await refreshCtx.mutate((view) =>
+            removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids, { view }),
+          );
           ElMessage.success(t("contextMenu.unhideSuccess"));
         } else {
-          await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, ids);
+          await refreshCtx.mutate((view) =>
+            addImagesToAlbum(HIDDEN_ALBUM_ID, ids, { view }),
+          );
           ElMessage.success(
             ids.length > 1
               ? t("contextMenu.hiddenCount", { count: ids.length })

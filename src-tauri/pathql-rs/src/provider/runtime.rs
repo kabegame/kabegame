@@ -445,6 +445,7 @@ impl ProviderRuntime {
                     &list_provider_keys,
                     &ctx,
                     no_delegate,
+                    false,
                 )?;
                 let found = expanded.into_iter().find(|ch| ch.name == seg.as_str());
                 from_list_fallback = found.is_some();
@@ -569,6 +570,19 @@ impl ProviderRuntime {
 
     /// 顶层 list 入口。
     pub fn list(&self, path: &str) -> Result<Vec<ChildEntry>, EngineError> {
+        self.list_inner(path, false)
+    }
+
+    /// 同 [`list`](Self::list)，并为每个子项填充 `total` = 子路径的行数。
+    ///
+    /// 计数直接用子项已实例化的 provider 叠加父节点的 composed（与 resolve 走到该子段时的 fold
+    /// 等价），不再为每个子项从头 resolve 子路径——后者对按名称寻址的动态列举要重跑父列举 SQL，
+    /// 子项数为 N 时是 O(N²)。无 provider 的子项、计数失败的子项 `total` 为 None。
+    pub fn list_with_count(&self, path: &str) -> Result<Vec<ChildEntry>, EngineError> {
+        self.list_inner(path, true)
+    }
+
+    fn list_inner(&self, path: &str, with_count: bool) -> Result<Vec<ChildEntry>, EngineError> {
         let node = self.resolve(path)?;
         let provider = node
             .provider
@@ -585,6 +599,7 @@ impl ProviderRuntime {
             &list_provider_keys,
             &ctx,
             true,
+            with_count,
         )
     }
 
@@ -597,11 +612,20 @@ impl ProviderRuntime {
         list_provider_keys: &[ProviderKey],
         ctx: &ProviderContext,
         cache_expanded_children: bool,
+        with_count: bool,
     ) -> Result<Vec<ChildEntry>, EngineError> {
         let mut out = Vec::new();
         for list_ref in list_refs {
             match list_ref {
-                ListRef::Direct(child) => out.push(child),
+                ListRef::Direct(mut child) => {
+                    if with_count {
+                        child.total = child.provider.as_ref().and_then(|provider| {
+                            self.count_composed(&provider.apply_query(composed.clone(), ctx))
+                                .ok()
+                        });
+                    }
+                    out.push(child)
+                }
                 ListRef::DelegateExpand { target, expand } => {
                     let target_composed = target.apply_query(composed.clone(), ctx);
                     let nested_key_mark = ctx.provider_key_mark();
@@ -620,11 +644,12 @@ impl ProviderRuntime {
                         &[],
                         ctx,
                         false,
+                        false,
                     )?;
 
                     for target_child in &target_children {
                         let child_key_mark = ctx.provider_key_mark();
-                        if let Some(outer_child) = (expand)(target_child, ctx)? {
+                        if let Some(mut outer_child) = (expand)(target_child, ctx)? {
                             let (child_provider, child_composed, cacheable) =
                                 if let Some(provider) = &outer_child.provider {
                                     let child_composed =
@@ -639,6 +664,11 @@ impl ProviderRuntime {
                                 ctx.provider_keys_since(child_key_mark),
                             );
 
+                            if with_count {
+                                outer_child.total = child_provider
+                                    .as_ref()
+                                    .and_then(|_| self.count_composed(&child_composed).ok());
+                            }
                             if cache_expanded_children && cacheable {
                                 // 缓存键与查找键同用原始转义态: 字面名 `a/b` 若不转义,
                                 // 会与合法两段路径 `a/b` 撞键。
@@ -733,9 +763,14 @@ impl ProviderRuntime {
         if node.provider.is_none() {
             return Err(EngineError::NoProvider(path.to_string()));
         }
+        self.count_composed(&node.composed)
+    }
+
+    /// 已 fold 好的 composed → 行数（`SELECT COUNT(*) FROM (<inner>) AS pq_sub`）。
+    fn count_composed(&self, composed: &ProviderQuery) -> Result<usize, EngineError> {
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
-        let (inner_sql, values) = node.composed.build_sql(&ctx, dialect).map_err(|e| {
+        let (inner_sql, values) = composed.build_sql(&ctx, dialect).map_err(|e| {
             EngineError::FactoryFailed("<runtime>".into(), "count".into(), e.to_string())
         })?;
         let sql = format!("SELECT COUNT(*) AS n FROM ({}) AS pq_sub", inner_sql);
@@ -925,6 +960,7 @@ mod tests {
                 .iter()
                 .map(|(name, p)| {
                     ListRef::Direct(ChildEntry {
+                        total: None,
                         name: name.clone(),
                         provider: Some(p.clone()),
                         meta: None,
@@ -935,6 +971,7 @@ mod tests {
         fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
             ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
                 ChildEntry {
+                    total: None,
                     name: n.clone(),
                     provider: Some(p.clone()),
                     meta: None,
@@ -1232,6 +1269,7 @@ mod tests {
         impl Provider for Root {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "x").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.child.clone()),
                     meta: None,
@@ -1298,6 +1336,7 @@ mod tests {
             }
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "leaf").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.leaf.clone()),
                     meta: None,
@@ -1310,6 +1349,7 @@ mod tests {
         impl Provider for Root {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "mid").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.mid.clone()),
                     meta: None,
@@ -1550,6 +1590,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "x".into(),
                     provider: None,
                     meta: Some(serde_json::json!({"page_num": 1})),
@@ -1578,6 +1619,7 @@ mod tests {
                             .and_then(|value| value.as_i64())
                             .unwrap();
                         Ok(Some(ChildEntry {
+                            total: None,
                             name: format!("page-{page}"),
                             provider: Some(leaf.clone()),
                             meta: child.meta.clone(),
@@ -1593,6 +1635,7 @@ mod tests {
         impl Provider for Root {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "parent").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.parent.clone()),
                     meta: None,
@@ -1630,6 +1673,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "x".into(),
                     provider: None,
                     meta: None,
@@ -1650,6 +1694,7 @@ mod tests {
                     target: self.target.clone(),
                     expand: Arc::new(|_, _| {
                         Ok(Some(ChildEntry {
+                            total: None,
                             name: "page-1".into(),
                             provider: Some(Arc::new(
                                 crate::provider::dsl_provider::EmptyDslProvider,
@@ -1667,6 +1712,7 @@ mod tests {
         impl Provider for Root {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "parent").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.parent.clone()),
                     meta: None,
@@ -1694,6 +1740,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "inner".into(),
                     provider: None,
                     meta: None,
@@ -1714,6 +1761,7 @@ mod tests {
                     target: self.inner.clone(),
                     expand: Arc::new(|child, _| {
                         Ok(Some(ChildEntry {
+                            total: None,
                             name: format!("mid-{}", child.name),
                             provider: None,
                             meta: None,
@@ -1736,6 +1784,7 @@ mod tests {
                     target: self.target.clone(),
                     expand: Arc::new(|child, _| {
                         Ok(Some(ChildEntry {
+                            total: None,
                             name: format!("page-{}", child.name),
                             provider: None,
                             meta: None,
@@ -1820,6 +1869,7 @@ mod tests {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
                     ChildEntry {
+                        total: None,
                         name: n.clone(),
                         provider: Some(p.clone()),
                         meta: None,
@@ -1851,6 +1901,7 @@ mod tests {
             }
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "no_prov").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: None,
                     meta: None,
@@ -1877,6 +1928,7 @@ mod tests {
             }
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "no_prov").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: None,
                     meta: None,
@@ -1902,6 +1954,7 @@ mod tests {
             }
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "no_prov").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: None,
                     meta: None,
@@ -1948,6 +2001,7 @@ mod tests {
                         target: self.target.clone(),
                         transform: Arc::new(|_, _| {
                             Some(ChildEntry {
+                                total: None,
                                 name: "delegated".to_string(),
                                 provider: None,
                                 meta: None,
@@ -1987,6 +2041,7 @@ mod tests {
 
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "x").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.leaf.clone()),
                     meta: Some(serde_json::json!({"leaf": true})),
@@ -2024,6 +2079,7 @@ mod tests {
                             .and_then(|value| value.as_bool())
                             .filter(|ok| *ok)?;
                         Some(ChildEntry {
+                            total: None,
                             name: child.name.clone(),
                             provider: Some(leaf.clone()),
                             meta: Some(serde_json::json!({"mid": true})),
@@ -2054,6 +2110,7 @@ mod tests {
                             .and_then(|value| value.as_bool())
                             .filter(|ok| *ok)?;
                         Some(ChildEntry {
+                            total: None,
                             name: "x".into(),
                             provider: Some(leaf.clone()),
                             meta: Some(serde_json::json!({"outer": true})),
@@ -2111,6 +2168,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "x".into(),
                     provider: Some(self.leaf.clone()),
                     meta: Some(serde_json::json!({"origin": "c-list"})),
@@ -2138,6 +2196,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "x".into(),
                     provider: Some(self.wrong_leaf.clone()),
                     meta: Some(serde_json::json!({"origin": "b-list"})),
@@ -2153,6 +2212,7 @@ mod tests {
                     transform: Arc::new(move |child, _| {
                         let child = child?;
                         (child.meta.as_ref()?.get("origin")? == "c-list").then(|| ChildEntry {
+                            total: None,
                             name: child.name.clone(),
                             provider: child.provider.clone(),
                             meta: Some(serde_json::json!({"via": "b"})),
@@ -2177,6 +2237,7 @@ mod tests {
                     transform: Arc::new(move |child, _| {
                         let child = child?;
                         (child.meta.as_ref()?.get("via")? == "b").then(|| ChildEntry {
+                            total: None,
                             name: "x".into(),
                             provider: Some(leaf.clone()),
                             meta: None,
@@ -2225,6 +2286,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "x".into(),
                     provider: Some(self.leaf.clone()),
                     meta: None,
@@ -2274,6 +2336,7 @@ mod tests {
                     .into_iter()
                     .map(|name| {
                         ListRef::Direct(ChildEntry {
+                            total: None,
                             name: name.into(),
                             provider: Some(self.raw_leaf.clone()),
                             meta: None,
@@ -2298,6 +2361,7 @@ mod tests {
                     transform: Arc::new(move |child, _| {
                         let child = child?;
                         Some(ChildEntry {
+                            total: None,
                             name: child.name.clone(),
                             provider: Some(outer_leaf.clone()),
                             meta: None,
@@ -2376,6 +2440,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "k".into(),
                     provider: Some(self.child.clone()),
                     meta: Some(serde_json::json!({"foo":"bar"})),
@@ -2384,6 +2449,7 @@ mod tests {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal(if name == "k" {
                     Some(ChildEntry {
+                        total: None,
                         name: "k".into(),
                         provider: Some(self.child.clone()),
                         meta: Some(serde_json::json!({"foo":"bar"})),
@@ -2425,6 +2491,7 @@ mod tests {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
                     ChildEntry {
+                        total: None,
                         name: n.clone(),
                         provider: Some(p.clone()),
                         meta: None,
@@ -2483,6 +2550,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "a/b".into(),
                     provider: Some(self.child.clone()),
                     meta: None,
@@ -2511,6 +2579,7 @@ mod tests {
                 _: &ProviderContext,
             ) -> Result<Vec<ListRef>, EngineError> {
                 Ok(vec![ListRef::Direct(ChildEntry {
+                    total: None,
                     name: "x".into(),
                     provider: None,
                     meta: None,
@@ -2533,6 +2602,7 @@ mod tests {
                     target: self.target.clone(),
                     expand: Arc::new(move |_child, _ctx| {
                         Ok(Some(ChildEntry {
+                            total: None,
                             name: "a/b".into(),
                             provider: Some(leaf.clone()),
                             meta: None,
@@ -2548,6 +2618,7 @@ mod tests {
         impl Provider for Root {
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "parent").then(|| ChildEntry {
+                    total: None,
                     name: name.to_string(),
                     provider: Some(self.parent.clone()),
                     meta: None,

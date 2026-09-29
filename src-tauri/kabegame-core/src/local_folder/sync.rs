@@ -294,11 +294,10 @@ impl FullDirHook {
                 let linked =
                     storage.add_images_to_album_silent(&self.album_id, &[existing.id.clone()]);
                 if linked > 0 {
-                    GlobalEmitter::global().emit_album_images_change(
-                        "add",
-                        std::slice::from_ref(&self.album_id),
+                    crate::storage::image_events::emit_membership_added(
+                        &self.album_id,
                         std::slice::from_ref(&existing.id),
-                    );
+                    )?;
                     self.record_added();
                     wrote = true;
                 }
@@ -354,11 +353,15 @@ impl FullDirHook {
             }
         }
         if !unlink.is_empty() {
-            Storage::global().remove_images_from_album(&self.album_id, &unlink)?;
-            GlobalEmitter::global().emit_album_images_change(
-                "delete",
-                std::slice::from_ref(&self.album_id),
-                &unlink,
+            let (pairs_before, ancestor_paths) =
+                Storage::global().collect_album_memberships_with_paths(&unlink)?;
+            let removed = Storage::global().remove_images_from_album(&self.album_id, &unlink)?;
+            crate::storage::image_events::emit_membership_removed(
+                &self.album_id,
+                &removed,
+                &pairs_before,
+                &ancestor_paths,
+                crate::storage::image_events::MembershipRemovalContext::AlbumMutation,
             );
         }
         if !missing.is_empty() {

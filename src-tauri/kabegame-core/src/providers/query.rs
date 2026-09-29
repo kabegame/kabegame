@@ -150,10 +150,6 @@ fn append_path_segment(base: &str, segment: &str) -> String {
     }
 }
 
-fn child_engine_path(base: &str, child_name: &str) -> String {
-    append_path_segment(base, &pathql_rs::escape_path_segment(child_name))
-}
-
 /// 构造供客户端传输的子节点 URI。
 ///
 /// 反斜线转义属于 PathQL 引擎语法层，percent 编码只属于 URI 传输层。
@@ -194,27 +190,21 @@ fn query_list_with_runtime(
     with_count: bool,
 ) -> Result<Vec<ProviderListChild>, String> {
     let rt_path = normalize_for_runtime(&trim_provider_path(raw_path));
-    let base = if rt_path.ends_with("://") {
-        rt_path.clone()
+    // with_count 时由运行时在列举的同时计数（复用子项已实例化的 provider），不再逐个 resolve 子路径
+    let children = if with_count {
+        rt.list_with_count(&rt_path)
     } else {
-        rt_path.trim_end_matches('/').to_string()
-    };
-    let children = rt
-        .list(&rt_path)
-        .map_err(|e| format!("list children failed: {}", e))?;
+        rt.list(&rt_path)
+    }
+    .map_err(|e| format!("list children failed: {}", e))?;
 
     children
         .into_iter()
         .map(|child| {
-            let total = if with_count {
-                rt.count(&child_engine_path(&base, &child.name)).ok()
-            } else {
-                None
-            };
             Ok(ProviderListChild {
                 name: child.name,
                 meta: child.meta,
-                total,
+                total: child.total,
             })
         })
         .collect()

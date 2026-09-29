@@ -40,32 +40,9 @@
       </p>
 
       <div v-if="picking" class="flex flex-col gap-1.5">
-        <el-input
-          ref="filterInputRef"
-          v-model="filterText"
-          size="small"
-          clearable
-          :placeholder="t('albums.imageLabelsFilterPlaceholder')"
-          @keyup.esc="picking = false"
-        />
-        <div class="image-labels-candidates">
-          <button
-            v-for="candidate in candidates"
-            :key="candidate.id"
-            type="button"
-            class="image-labels-candidate"
-            :title="candidate.labelPath ?? undefined"
-            @click="addLabel(candidate)"
-          >
-            <span class="truncate">{{ candidate.name }}</span>
-            <code class="ml-auto flex-none truncate text-[11px] text-[var(--anime-text-muted)]">
-              {{ candidate.labelPath }}
-            </code>
-          </button>
-          <p v-if="candidates.length === 0" class="m-0 px-2 py-1 text-xs text-[var(--anime-text-muted)]">
-            {{ t("albums.imageLabelsNoCandidate") }}
-          </p>
-        </div>
+        <AlbumPicker v-model="pickedLabelId" :scope="{ sections: ['label'] }"
+          :is-selectable="(node) => node.type === 'label' && !labels.some((label) => label.id === node.id)"
+          :placeholder="t('albums.imageLabelsFilterPlaceholder')" />
       </div>
 
       <div class="flex gap-2">
@@ -103,11 +80,10 @@
         :placeholder="t('albums.labelNamePlaceholder')"
         @keyup.enter="submitCreate"
       />
-      <AlbumPickerField
+      <AlbumPicker
         v-model="newParentId"
         class="mt-3"
-        :album-tree="labelTree"
-        :album-counts="albumStore.getAlbumCounts(false)"
+        :scope="{ sections: ['label'], kinds: ['label_dir'] }"
         :placeholder="t('albums.selectParentLabel')"
         :picker-title="t('albums.parentAlbum')"
       />
@@ -122,26 +98,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@kabegame/i18n";
 import { Close, CopyDocument, Plus, PriceTag } from "@kabegame/element-plus-icons";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import CollapsibleDrawerPanel from "@kabegame/core/components/common/CollapsibleDrawerPanel.vue";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { listen, type UnlistenFn } from "@/api/rpc";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-import { useAlbumStore, type Album } from "@/stores/albums";
+import { addImagesToAlbum, createLabelAlbum, fetchAlbum, fetchImageAlbums, removeImagesFromAlbum, type Album } from "@/services/albums";
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { isLabelKey } from "@/utils/labelKey";
-import { labelKeysText, pickLabelAlbums, writeClipboardText } from "@/utils/imageLabels";
+import { labelKeysText, writeClipboardText } from "@/utils/imageLabels";
 
 /**
  * 预览弹窗信息区的「标签」面板：列出图片直接打上的标签画册，支持删除、从已有标签添加、
- * 当场新建、复制 key 与点击跳转。数据来自已全量加载的 albumStore，只额外查一次
- * 「这张图片属于哪些画册」。
+ * 当场新建、复制 key 与点击跳转。已挂标签按当前图片 id 即时查询，不保留全量画册列表。
  */
 const props = defineProps<{ image: ImageInfo }>();
 const emit = defineEmits<{
@@ -151,28 +126,23 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const router = useRouter();
-const albumStore = useAlbumStore();
 const albumPath = useAlbumIdPathState();
 
 // 切图时要重置 picking，必须在 immediate watch 之前声明（否则 TDZ）
 const picking = ref(false);
-const filterText = ref("");
-const filterInputRef = ref<{ focus: () => void } | null>(null);
-
-const albumIds = ref<string[]>([]);
-const labels = computed(() => pickLabelAlbums(albumIds.value, albumStore.albums));
+const labels = ref<Album[]>([]);
 
 let loadSeq = 0;
 async function load() {
   const imageId = props.image.id;
   const seq = ++loadSeq;
   try {
-    const ids = await albumStore.getImageAlbumIds(imageId);
+    const albums = (await fetchImageAlbums(imageId)).filter((album) => album.type === "label");
     // 快速切图时丢弃过期结果
-    if (seq === loadSeq) albumIds.value = ids;
+    if (seq === loadSeq) labels.value = albums;
   } catch (error) {
     console.warn("load image labels failed", error);
-    if (seq === loadSeq) albumIds.value = [];
+    if (seq === loadSeq) labels.value = [];
   }
 }
 
@@ -197,8 +167,8 @@ function errorMessage(error: unknown): string {
 
 async function removeLabel(label: Album) {
   try {
-    await albumStore.removeImagesFromAlbum(label.id, [props.image.id]);
-    albumIds.value = albumIds.value.filter((id) => id !== label.id);
+    await removeImagesFromAlbum(label.id, [props.image.id]);
+    labels.value = labels.value.filter((item) => item.id !== label.id);
   } catch (error) {
     ElMessage.error(errorMessage(error));
   }
@@ -206,8 +176,8 @@ async function removeLabel(label: Album) {
 
 async function addLabel(label: Album) {
   try {
-    await albumStore.addImagesToAlbum(label.id, [props.image.id]);
-    if (!albumIds.value.includes(label.id)) albumIds.value = [...albumIds.value, label.id];
+    await addImagesToAlbum(label.id, [props.image.id]);
+    if (!labels.value.some((item) => item.id === label.id)) labels.value = [...labels.value, label];
     picking.value = false;
   } catch (error) {
     ElMessage.error(errorMessage(error));
@@ -234,28 +204,16 @@ async function openLabel(label: Album) {
 
 // ---------- 从已有标签添加 ----------
 
-const candidates = computed(() => {
-  const owned = new Set(albumIds.value);
-  const q = filterText.value.trim().toLowerCase();
-  return albumStore.labelAlbums
-    .filter((label) => !owned.has(label.id))
-    .filter(
-      (label) =>
-        !q ||
-        label.name.toLowerCase().includes(q) ||
-        (label.labelPath ?? "").toLowerCase().includes(q),
-    )
-    .sort((a, b) => (a.labelPath ?? "").localeCompare(b.labelPath ?? ""))
-    .slice(0, 50);
+const pickedLabelId = ref<string | null>(null);
+watch(pickedLabelId, async (id) => {
+  if (!id) return;
+  const label = await fetchAlbum(id);
+  pickedLabelId.value = null;
+  if (label?.type === "label") await addLabel(label);
 });
 
 async function togglePicking() {
   picking.value = !picking.value;
-  filterText.value = "";
-  if (picking.value) {
-    await nextTick();
-    filterInputRef.value?.focus();
-  }
 }
 
 // ---------- 当场新建 ----------
@@ -265,7 +223,6 @@ const newName = ref("");
 const newParentId = ref<string | null>(null);
 const creating = ref(false);
 const newKeyValid = computed(() => isLabelKey(newKey.value.trim()));
-const labelTree = computed(() => albumStore.getAlbumTreeExcluding([], { onlyLabelDir: true }));
 
 function openCreateDialog() {
   createDialog.open();
@@ -282,7 +239,7 @@ async function submitCreate() {
   if (!newKeyValid.value || creating.value) return;
   creating.value = true;
   try {
-    const created = await albumStore.createLabelAlbum({
+    const created = await createLabelAlbum({
       key: newKey.value.trim(),
       name: newName.value.trim() || null,
       parentId: newParentId.value,

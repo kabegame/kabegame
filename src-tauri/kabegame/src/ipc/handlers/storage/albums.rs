@@ -81,9 +81,10 @@ pub async fn add_images_to_album(album_id: &str, image_ids: &[String]) -> IpcRes
 pub async fn remove_images_from_album(album_id: &str, image_ids: &[String]) -> IpcResponse {
     let storage = Storage::global();
     match storage.remove_images_from_album(album_id, image_ids) {
-        Ok(removed) => {
-            IpcResponse::ok_with_data("ok", serde_json::to_value(removed).unwrap_or_default())
-        }
+        Ok(removed) => IpcResponse::ok_with_data(
+            "ok",
+            serde_json::to_value(removed.len()).unwrap_or_default(),
+        ),
         Err(e) => IpcResponse::err(e),
     }
 }

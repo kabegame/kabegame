@@ -45,9 +45,8 @@ pub async fn import_local_file(
                 storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
             }
             if added > 0 {
-                let album_ids = vec![album_id.to_string()];
                 let image_ids = vec![image_id.clone()];
-                GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+                crate::storage::image_events::emit_membership_added(album_id, &image_ids)?;
             }
         }
         wait_after_download_if_needed(import_start_time, None).await;
@@ -120,19 +119,21 @@ pub async fn import_local_file(
     let storage = Storage::global();
     let inserted = storage.add_image(image)?;
     let image_id = inserted.id.clone();
-    if let Some(album_id) = album_id {
-        storage.add_images_to_album(album_id, &[image_id.clone()])?;
+    let membership = if let Some(album_id) = album_id {
+        let result = storage.add_images_to_album(album_id, &[image_id.clone()])?;
         if let Some(order) = carry.as_ref().and_then(|old| old.order) {
             storage.update_album_images_order(album_id, &[(image_id.clone(), order)])?;
         }
-    }
+        Some(result)
+    } else {
+        None
+    };
 
     let image_ids = vec![image_id.clone()];
     let plugin_ids = vec![LOCAL_FOLDER_PLUGIN_ID.to_string()];
     GlobalEmitter::global().emit_images_change("add", &image_ids, None, None, Some(&plugin_ids));
-    if let Some(album_id) = album_id {
-        let album_ids = vec![album_id.to_string()];
-        GlobalEmitter::global().emit_album_images_change("add", &album_ids, &image_ids);
+    if let (Some(album_id), Some(membership)) = (album_id, membership) {
+        crate::storage::image_events::emit_membership_added(album_id, &membership.inserted_ids)?;
     }
 
     wait_after_download_if_needed(import_start_time, None).await;

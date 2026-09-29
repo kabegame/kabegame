@@ -28,6 +28,17 @@
         >
           <slot name="section-header" :section-id="row.sectionId" />
         </div>
+        <button
+          v-else-if="row.kind === 'load-more'"
+          class="flex w-full items-center justify-center gap-1 border-0 bg-transparent text-xs text-[var(--anime-primary)] hover:opacity-75 disabled:opacity-50"
+          :style="{ height: `${rowHeight}px` }"
+          :disabled="row.loading"
+          type="button"
+          @click="model.loadMore(row.parentKey ?? { sectionId: row.sectionId })"
+        >
+          <el-icon v-if="row.loading" class="is-loading"><Loading /></el-icon>
+          {{ t("albums.loadMore") }}
+        </button>
         <KbTreeRow
           v-else
           :depth="row.node.depth"
@@ -110,6 +121,8 @@
 <script setup lang="ts" generic="T">
 import { computed, ref } from "vue";
 import { ElScrollbar } from "@kabegame/element-plus";
+import { Loading } from "@kabegame/element-plus-icons";
+import { useI18n } from "@kabegame/i18n";
 import KbTreeRow from "./KbTreeRow.vue";
 import type { TreeModel } from "./useTreeModel";
 import { useTreeDnd } from "./useTreeDnd";
@@ -153,6 +166,7 @@ defineSlots<{
 }>();
 
 const scrollbarRef = ref<InstanceType<typeof ElScrollbar> | null>(null);
+const { t } = useI18n();
 /** 真正滚动的元素是 el-scrollbar 的 wrap；DnD / sticky 的滚动几何都从它读 */
 const scrollerRef = computed<HTMLElement | null>(() => scrollbarRef.value?.wrapRef ?? null);
 const rows = computed(() => props.model.rows.value);

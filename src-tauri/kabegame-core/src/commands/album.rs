@@ -1,9 +1,12 @@
 //! 相册命令的共享实现层。返回 `ImageInfo` 的函数一律回**原始本地路径**；
 //! web 模式的 CDN 改写由调用方（`kabegame::web::dispatch`）在本层返回之后施加。
 
+use crate::commands::view::{snapshot_view, ViewQuery};
+use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::image_events::{
-    add_images_to_album_with_event, remove_images_from_album_with_event,
+    add_images_to_album_with_event, emit_album_images_order_changed,
+    remove_images_from_album_with_event,
 };
 use crate::storage::Storage;
 #[cfg(feature = "virtual-driver")]
@@ -124,37 +127,76 @@ pub fn add_label_album(
     serde_json::to_value(album).map_err(|e| e.to_string())
 }
 
-pub fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
+pub async fn add_images_to_album(
+    album_id: String,
+    image_ids: Vec<String>,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    let _hold = view.as_ref().map(|_| GlobalEmitter::global().hold());
     Storage::global().ensure_album_is_writable(&album_id)?;
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
-    serde_json::to_value(r).map_err(|e| e.to_string())
+    let mut out = serde_json::to_value(r).map_err(|e| e.to_string())?;
+    if let Some(query) = view {
+        out["view"] =
+            serde_json::to_value(snapshot_view(query).await?).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
 
-pub fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
+pub async fn add_task_images_to_album(
+    task_id: String,
+    album_id: String,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    let _hold = view.as_ref().map(|_| GlobalEmitter::global().hold());
     Storage::global().ensure_album_is_writable(&album_id)?;
     let image_ids = Storage::get_task_image_ids(&task_id)?;
     if image_ids.is_empty() {
-        return Ok(serde_json::json!({
+        let mut out = serde_json::json!({
             "added": 0,
             "attempted": 0,
             "canAdd": 0,
-            "currentCount": 0
-        }));
+            "currentCount": 0,
+            "albumChanges": []
+        });
+        if let Some(query) = view {
+            out["view"] =
+                serde_json::to_value(snapshot_view(query).await?).map_err(|e| e.to_string())?;
+        }
+        return Ok(out);
     }
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
-    serde_json::to_value(r).map_err(|e| e.to_string())
+    let mut out = serde_json::to_value(r).map_err(|e| e.to_string())?;
+    if let Some(query) = view {
+        out["view"] =
+            serde_json::to_value(snapshot_view(query).await?).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
 
-pub fn remove_images_from_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
+pub async fn remove_images_from_album(
+    album_id: String,
+    image_ids: Vec<String>,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    let _hold = view.as_ref().map(|_| GlobalEmitter::global().hold());
     Storage::global().ensure_album_is_writable(&album_id)?;
-    let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
+    let (removed, album_changes) = remove_images_from_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
-    serde_json::to_value(removed).map_err(|e| e.to_string())
+    let mut out = serde_json::json!({
+        "removed": removed.len(),
+        "albumChanges": album_changes,
+    });
+    if let Some(query) = view {
+        out["view"] =
+            serde_json::to_value(snapshot_view(query).await?).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
 
 pub fn update_album_images_order(
@@ -162,6 +204,11 @@ pub fn update_album_images_order(
     image_orders: Vec<(String, i64)>,
 ) -> Result<Value, String> {
     Storage::global().update_album_images_order(&album_id, &image_orders)?;
+    let image_ids: Vec<String> = image_orders
+        .into_iter()
+        .map(|(image_id, _)| image_id)
+        .collect();
+    emit_album_images_order_changed(&album_id, &image_ids);
     Ok(Value::Null)
 }
 

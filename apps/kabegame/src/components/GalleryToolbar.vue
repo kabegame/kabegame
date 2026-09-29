@@ -47,11 +47,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
-import { useAlbumImagesChangeRefresh, type AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { Close, Filter } from "@kabegame/element-plus-icons";
 import { pathqlEntry } from "@/services/pathql";
-import { HIDDEN_ALBUM_ID } from "@/stores/albums";
 import { withGalleryPrefix } from "@/utils/path";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -189,16 +187,6 @@ watch(galleryHide, () => void refreshUnfilteredTotal(), { immediate: true });
 useImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 500,
-  onRefresh: refreshUnfilteredTotal,
-});
-
-// 隐藏/取消隐藏走 album_images 而不是 images：只订阅前者的话，藏掉一张图后
-// 分子会掉、分母不动，副标题就长期停在 "16876 / 16877" 这种差一。
-useAlbumImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: 500,
-  filter: (payload: AlbumImagesChangePayload) =>
-    (payload.albumIds ?? []).includes(HIDDEN_ALBUM_ID),
   onRefresh: refreshUnfilteredTotal,
 });
 

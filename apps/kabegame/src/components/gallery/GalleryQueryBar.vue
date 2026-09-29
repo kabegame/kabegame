@@ -1019,7 +1019,7 @@ function imageChangePluginIds(payload: ImagesChangePayload) {
   return ids.length ? new Set(ids) : null;
 }
 
-async function markFilterLazyDataDirty(payload: ImagesChangePayload = {}) {
+async function markFilterLazyDataDirty(payload: ImagesChangePayload = { seq: 0 }) {
   const changedPluginIds = imageChangePluginIds(payload);
   const shouldReloadPlugins = isLazyLoaded("plugin");
   const shouldReloadPluginExtends = loadedPluginExtendScopes().filter(

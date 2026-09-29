@@ -1,9 +1,9 @@
 import type { Ref, ShallowRef } from "vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
+import type { ChangeBatch } from "@/services/dataChangeHub";
+import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
 
 export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
@@ -29,6 +29,12 @@ export interface GridRefreshContext {
    * 当前壁纸清理与页码越界回退。返回本次刷新被移除的 id。
    */
   refreshPage: () => Promise<{ removedIds: string[] }>;
+  /** 影响结果集的写操作唯一入口：携带当前视图并立即应用返回快照。 */
+  mutate: <T extends { view?: ViewSnapshot | null }>(
+    op: (view: ViewQuery | null) => Promise<T>,
+  ) => Promise<T>;
+  /** 仅修改展示字段，不重新查询视图。 */
+  patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;
   loadTotalImagesCount: () => Promise<void>;
   ensureValidPageAfterMassRemoval: () => Promise<void>;
   clearSelection: () => void;
@@ -50,14 +56,6 @@ export interface GridRemoveConfig {
   ) => GridRemoveDialogText;
   /** 确认后的执行；缺省 = `batch_delete_images`（含当前壁纸清理与成功提示） */
   confirm?: (images: ImageInfo[], ctx: GridRefreshContext) => Promise<void>;
-}
-
-export interface GridEventRefreshConfig<TPayload> {
-  waitMs?: number;
-  /** 返回 false 忽略此次事件；缺省不过滤 */
-  filter?: (payload: TPayload, ctx: GridRefreshContext) => boolean;
-  /** 缺省实现 = `ctx.refreshPage()`（含 removedIds 处理）+ adapter.onAfterRefresh */
-  onRefresh?: (payload: TPayload, ctx: GridRefreshContext) => Promise<void> | void;
 }
 
 /**
@@ -87,8 +85,7 @@ export interface GridAdapter {
   /** route.query.path 为空串时是否也执行 syncFromUrl（gallery 需要重置为默认路径） */
   syncEmptyQueryPath?: boolean;
 
-  imagesChange?: GridEventRefreshConfig<ImagesChangePayload>;
-  albumImagesChange?: GridEventRefreshConfig<AlbumImagesChangePayload>;
+  changes?: { relevant?: (batch: ChangeBatch) => boolean };
   /** 事件默认刷新完成后的追加动作（task: failedImagesStore.loadAll） */
   onAfterRefresh?: (
     ctx: GridRefreshContext,
@@ -105,8 +102,6 @@ export interface GridAdapter {
   /** addToHidden 强制视为「取消隐藏」（HIDDEN 画册详情内） */
   forceUnhide?: () => boolean;
   addToAlbumExcludeIds?: () => string[];
-  /** 加入画册成功后的追加动作（album: loadAlbums） */
-  onAddedToAlbum?: () => Promise<void> | void;
   /** 传入时 ImageGrid 会对菜单动作与预览交互自动埋点 */
   analytics?: ImageAnalytics;
 }

@@ -96,12 +96,15 @@ token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `lab
 
 ## 前端入口
 
-- `stores/albums.ts`：`Album.labelKey / labelPath`，`createLabelAlbum`、`setLabelKey`、`getImageAlbumIds`、
-  叶子列表 `labelAlbums` 与全森林 `labelForestAlbums`；`getAlbumTreeExcluding` 的
-  `excludeLabel` / `onlyLabel` / `onlyLabelDir`。本地乐观 patch 后用
-  `recomputeLabelPaths` 补算路径。`album-added` 事件携带 `labelKey` / `labelPath`。
-- `AlbumTreePanel.vue`：「标签」分区展示目录与叶子；DnD 只允许同森林移动且拒绝把节点放到叶子下。
-- `Albums.vue`：新建对话框类型选择（普通 / 标签 / 标签目录 / 本地文件夹）；移动与父级候选只列目录。
+- `services/albums.ts` 提供无状态的单画册、祖先、图片所属画册与分页目录查询，以及标签创建 / 改 key
+  写入口；前端不缓存全量画册或全量计数。`album-added` 事件携带 `labelKey` / `labelPath` /
+  `ancestorPath`。
+- `AlbumTreeView.vue` 的「标签」分区按目录每页 100 项查询；目录计数取 `albums://` 列举项的
+  `with_count`，标签叶子计数取 `images://gallery/[hide/]album/...` 列举项的 `with_count`。全局隐藏
+  过滤只由路径前缀表达。
+- `AlbumTreePanel.vue` 包装同一棵查询树并提供 DnD；只允许同森林移动且拒绝把节点放到标签叶子下。
+- `Albums.vue`：新建对话框类型选择（普通 / 标签 / 标签目录 / 本地文件夹）；移动与父级候选通过
+  `AlbumPicker` 的 `scope` 只列标签目录。
 - 预览弹窗：core `ImagePreviewDialog` 开 `#info-extra` slot、`ImageGrid` 透传为 `#preview-info-extra`，
   由 app 层 `components/ImageGrid.vue` 渲染 `ImageLabelsPanel.vue`（列出 / 删除 / 从已有添加 / 当场新建 /
   复制 key / 点击跳转）。紧凑布局（PhotoSwipe）没有信息区，标签面板仅桌面预览可见。

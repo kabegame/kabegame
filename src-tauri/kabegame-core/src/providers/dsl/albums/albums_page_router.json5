@@ -1,0 +1,22 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_page_router",
+    "properties": {
+        "section": { "type": "string", "default": "children", "optional": false },
+        "parent_id": { "type": "string", "default": "", "optional": false },
+        "kinds": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "(((((${properties.section} = 'children') AND albums.parent_id = ${properties.parent_id}) OR ((${properties.section} = 'normal') AND albums.parent_id IS NULL AND albums.type = 'normal' AND albums.id NOT IN (${global.favorite_album_id}, ${global.hidden_album_id})) OR ((${properties.section} = 'label') AND albums.parent_id IS NULL AND albums.type IN ('label', 'label_dir')) OR ((${properties.section} = 'local_folder') AND albums.type = 'local_folder' AND (albums.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM albums parent WHERE parent.id = albums.parent_id AND parent.type = 'local_folder')))) AND ((${properties.section} != 'children') OR CASE (SELECT type FROM albums parent WHERE parent.id = ${properties.parent_id}) WHEN 'normal' THEN albums.type = 'normal' WHEN 'local_folder' THEN albums.type = 'local_folder' ELSE albums.type IN ('label', 'label_dir') END) AND (${properties.kinds} = '' OR instr(',' || ${properties.kinds} || ',', ',' || albums.type || ',') > 0)))"
+    },
+    "resolve": {
+        "subpage_([1-9][0-9]*)": {
+            "provider": "albums_page_provider",
+            "properties": { "section": "${properties.section}", "parent_id": "${properties.parent_id}", "page": "${capture[1]}", "kinds": "${properties.kinds}" }
+        },
+        "kind_((?:normal|label|label_dir|local_folder)(?:,(?:normal|label|label_dir|local_folder))*)": {
+            "provider": "albums_page_router",
+            "properties": { "section": "${properties.section}", "parent_id": "${properties.parent_id}", "kinds": "${capture[1]}" }
+        }
+    }
+}

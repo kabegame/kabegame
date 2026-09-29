@@ -30,7 +30,7 @@
         </el-input>
       </el-form-item>
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="outputAlbumTree" :album-counts="albumCounts"
+        <AlbumPicker v-model="selectedOutputAlbumId" :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
           clearable />
@@ -40,8 +40,8 @@
           show-word-limit />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
-          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+        <AlbumPicker v-model="newOutputAlbumParentId" :scope="{ sections: ['normal'] }"
+          :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')" />
       </el-form-item>
 
@@ -76,14 +76,13 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { storeToRefs } from "pinia";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { ElDialog } from "@kabegame/element-plus";
 import { FolderOpened } from "@kabegame/element-plus-icons";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
@@ -98,7 +97,7 @@ import {
 } from "@kabegame/core/utils/pluginVarForm";
 import { usePluginStore } from "@/stores/plugins";
 import { WEBPAGE_PLUGIN_ID } from "@kabegame/core/stores/plugins";
-import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
 import { enqueueTask } from "@/composables/useCrawlTaskLauncher";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { validateWebpageUrl, type WebpageUrlError } from "@/utils/webpageCollect";
@@ -115,8 +114,6 @@ const { t } = useI18n();
 const { varDisplayName, varDescripts } = usePluginConfigI18n();
 const uiStore = useUiStore();
 const pluginStore = usePluginStore();
-const albumStore = useAlbumStore();
-const { albumCounts } = storeToRefs(albumStore);
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 
@@ -161,8 +158,6 @@ const submitting = ref(false);
 const isV8 = computed(() => form.value.vars.backend !== "webview");
 const urlErrorText = computed(() => (urlError.value ? t(`gallery.webpageUrlError.${urlError.value}`) : ""));
 
-const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
-const outputAlbumParentTree = computed(() => albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]));
 const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref("");
 const newOutputAlbumParentId = ref<string | null>(null);
@@ -198,7 +193,6 @@ watch(
         headers.value = { ...(props.initialConfig.httpHeaders ?? {}) };
         selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
       }
-      void albumStore.loadAlbums().catch((e) => console.error("加载画册列表失败:", e));
       modal.open();
     } else {
       modal.close();
@@ -227,7 +221,7 @@ async function resolveOutputAlbumId(): Promise<string | undefined | null> {
   }
   try {
     const parentId = newOutputAlbumParentId.value?.trim() || null;
-    const album = await albumStore.createAlbum(name, { parentId, reload: false });
+    const album = await createAlbum(name, { parentId, reload: false });
     return album.id;
   } catch (error) {
     console.error("创建画册失败:", error);

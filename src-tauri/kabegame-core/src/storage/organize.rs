@@ -394,6 +394,16 @@ fn emit_organize_finished(
     );
 }
 
+fn emit_organize_images_change(image_ids: &mut Vec<String>) {
+    if image_ids.is_empty() {
+        return;
+    }
+    image_ids.sort();
+    image_ids.dedup();
+    GlobalEmitter::global().emit_images_change("change", image_ids, None, None, None);
+    image_ids.clear();
+}
+
 fn organize_range_upper_bound(offset: Option<usize>, limit: Option<usize>) -> Option<usize> {
     match (offset, limit) {
         (Some(o), Some(l)) => Some(o + l),
@@ -571,6 +581,7 @@ fn run_organize(
 
         let mut remove_ids: Vec<String> = Vec::new();
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
+        let mut changed_image_ids: Vec<String> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
         let mut native_metadata_list: Vec<(i64, String, String, String)> = Vec::new();
         let mut native_metadata_hashes: HashSet<String> = HashSet::new();
@@ -701,6 +712,7 @@ fn run_organize(
         // 执行缩略图补充（进度仅在整批——含缩略图——结束后发送，避免扫描已 100% 仍在补图）
         for action in refresh_list {
             if cancel.load(Ordering::Relaxed) {
+                emit_organize_images_change(&mut changed_image_ids);
                 emit_organize_finished(
                     removed_total,
                     regenerated_total,
@@ -713,6 +725,7 @@ fn run_organize(
             match action {
                 ThumbnailRefreshAction::UseOriginal { id, local_path } => {
                     storage.replace_image_thumbnail_path(&id.to_string(), &local_path)?;
+                    changed_image_ids.push(id.to_string());
                     regenerated_total += 1;
                 }
                 ThumbnailRefreshAction::Regenerate { id, local_path } => {
@@ -724,6 +737,7 @@ fn run_organize(
                             .map(|path| path.to_string_lossy().to_string())
                             .unwrap_or_else(|| local_path.clone());
                         storage.replace_image_thumbnail_path(&id.to_string(), &thumb_str)?;
+                        changed_image_ids.push(id.to_string());
                         regenerated_total += 1;
                     }
                 }
@@ -748,6 +762,7 @@ fn run_organize(
                                 result.preview_path.to_string_lossy().to_string();
                             storage
                                 .replace_image_thumbnail_path(&id.to_string(), &preview_path_str)?;
+                            changed_image_ids.push(id.to_string());
                             regenerated_total += 1;
                         }
                         Err(e) => {
@@ -762,6 +777,7 @@ fn run_organize(
         #[cfg(not(target_os = "android"))]
         for (id, local_path, previous_compatible_path) in compat_list {
             if cancel.load(Ordering::Relaxed) {
+                emit_organize_images_change(&mut changed_image_ids);
                 emit_organize_finished(
                     removed_total,
                     regenerated_total,
@@ -839,6 +855,7 @@ fn run_organize(
                         eprintln!("[organize] compatible_path update failed for {id}: {e}");
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &path_str);
+                        changed_image_ids.push(id.to_string());
                         regenerated_total += 1;
                     }
                 }
@@ -851,6 +868,7 @@ fn run_organize(
                         );
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &local_path);
+                        changed_image_ids.push(id.to_string());
                     }
                 }
                 CompatResult::Unknown => {}
@@ -865,6 +883,7 @@ fn run_organize(
                 continue;
             };
             if cancel.load(Ordering::Relaxed) {
+                emit_organize_images_change(&mut changed_image_ids);
                 emit_organize_finished(
                     removed_total,
                     regenerated_total,
@@ -940,6 +959,8 @@ fn run_organize(
                 }
             }
         }
+
+        emit_organize_images_change(&mut changed_image_ids);
 
         // 本批（扫描 + 删除 + 缩略图 + 兼容格式 + 原生元数据）完成后发送进度
         push_organize_progress(

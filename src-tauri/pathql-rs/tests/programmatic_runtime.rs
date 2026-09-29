@@ -65,6 +65,7 @@ impl Provider for StaticProvider {
             .iter()
             .map(|(name, p)| {
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: name.clone(),
                     provider: Some(p.clone()),
                     meta: None,
@@ -75,6 +76,7 @@ impl Provider for StaticProvider {
     fn resolve(&self, name: &str, _: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
         ResolveRef::Terminal(self.children.iter().find(|(n, _)| n == name).map(|(n, p)| {
             ChildEntry {
+                total: None,
                 name: n.clone(),
                 provider: Some(p.clone()),
                 meta: None,
@@ -222,6 +224,7 @@ fn factory_uses_properties() {
                         ctx,
                     )
                     .map(|provider| ChildEntry {
+                        total: None,
                         name: name.to_string(),
                         provider: Some(provider),
                         meta: None,

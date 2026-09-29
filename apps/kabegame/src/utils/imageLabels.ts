@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import type { Album } from "@/stores/albums";
+import type { Album } from "@/services/albums";
 
 /** 从图片所属画册 id 中挑出标签画册（保持画册 id 的原顺序）。 */
 export function pickLabelAlbums(albumIds: readonly string[], albums: readonly Album[]): Album[] {

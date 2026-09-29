@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_album_tree_router",
+    "resolve": {
+        "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})": {
+            "provider": "gallery_album_tree_provider",
+            "properties": { "album_id": "${capture[1]}" }
+        }
+    }
+}

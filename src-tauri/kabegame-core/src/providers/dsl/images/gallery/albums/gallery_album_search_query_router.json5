@@ -1,0 +1,18 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_album_search_query_router",
+    "properties": {
+        "query": { "type": "string", "default": "", "optional": false },
+        "kinds": { "type": "string", "default": "", "optional": false }
+    },
+    "resolve": {
+        "subpage_([1-9][0-9]*)": {
+            "provider": "gallery_album_search_page_provider",
+            "properties": { "query": "${properties.query}", "page": "${capture[1]}", "kinds": "${properties.kinds}" }
+        },
+        "kind_((?:normal|label|label_dir|local_folder)(?:,(?:normal|label|label_dir|local_folder))*)": {
+            "provider": "gallery_album_search_query_router",
+            "properties": { "query": "${properties.query}", "kinds": "${capture[1]}" }
+        }
+    }
+}

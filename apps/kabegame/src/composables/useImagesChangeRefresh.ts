@@ -4,6 +4,7 @@ import { listen } from "@/api/rpc";
 
 /** 后端 `DaemonEvent::ImagesChange` / `images` 表（reason: add | delete | change | rename | metadata-migrate） */
 export type ImagesChangePayload = {
+  seq: number;
   reason?: "add" | "delete" | "change" | "rename" | "metadata-migrate" | string;
   imageIds?: string[];
   taskIds?: string[];

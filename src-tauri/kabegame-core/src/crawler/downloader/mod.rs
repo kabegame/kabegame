@@ -7,6 +7,7 @@ use crate::crawler::webview::get_webview_handler;
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
+use crate::storage::image_events::emit_membership_added;
 use crate::storage::labels::LabelSpec;
 use crate::storage::{ImageInfo, Storage};
 use async_trait::async_trait;
@@ -124,13 +125,6 @@ fn apply_download_labels(
     let image_ids = vec![image_id.to_string()];
     match Storage::global().apply_labels_to_images(labels, &image_ids) {
         Ok(applied) => {
-            if !applied.album_ids.is_empty() {
-                GlobalEmitter::global().emit_album_images_change(
-                    "add",
-                    &applied.album_ids,
-                    &image_ids,
-                );
-            }
             for (spec, error) in applied.skipped {
                 let path = format!("{}/{}", spec.segments.join("/"), spec.key);
                 eprintln!("[labels] 图片 {image_id} 跳过标签 `{path}`: {error}");
@@ -985,8 +979,9 @@ pub async fn postprocess_downloaded_image(
                             .add_images_to_album_silent(album_id, &[existing.id.clone()]);
                         if added > 0 {
                             let ids = vec![existing.id.clone()];
-                            let alb = vec![album_id.to_string()];
-                            GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
+                            if let Err(error) = emit_membership_added(album_id, &ids) {
+                                eprintln!("[album-event] 发射下载去重成员事件失败: {error}");
+                            }
                         }
                     }
                 }
@@ -1157,8 +1152,9 @@ pub async fn postprocess_downloaded_image(
                             .add_images_to_album_silent(album_id, &[existing.id.clone()]);
                         if added > 0 {
                             let ids = vec![existing.id.clone()];
-                            let alb = vec![album_id.to_string()];
-                            GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
+                            if let Err(error) = emit_membership_added(album_id, &ids) {
+                                eprintln!("[album-event] 发射路径去重成员事件失败: {error}");
+                            }
                         }
                     }
                 }
@@ -1467,8 +1463,9 @@ pub async fn postprocess_downloaded_image(
                             let added = Storage::global()
                                 .add_images_to_album_silent(album_id, &[image_id.clone()]);
                             if added > 0 {
-                                let alb = vec![album_id.to_string()];
-                                GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
+                                if let Err(error) = emit_membership_added(album_id, &ids) {
+                                    eprintln!("[album-event] 发射下载成员事件失败: {error}");
+                                }
                             }
                         }
                     }

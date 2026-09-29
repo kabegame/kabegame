@@ -467,6 +467,30 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         .unwrap();
     }
 
+    // 画册目录分页与 LIKE 字面转义夹具；UUID 保持可由新节点按 id 寻址。
+    for i in 0..105_u32 {
+        let id = format!("80000000-0000-0000-0000-{i:012}");
+        conn.execute(
+            "INSERT INTO albums(id, name, created_at, parent_id, type, ancestor_path)
+             VALUES (?1, ?2, ?3, NULL, 'normal', '/' || ?1 || '/')",
+            (&id, format!("Paged {i:03}"), 1000 + i as i64),
+        )
+        .unwrap();
+    }
+    for (id, name, kind) in [
+        ("90000000-0000-0000-0000-000000000001", "literal%mark", "normal"),
+        ("90000000-0000-0000-0000-000000000002", "literal_under_", "normal"),
+        ("90000000-0000-0000-0000-000000000003", r"literal\slash", "normal"),
+        ("90000000-0000-0000-0000-000000000004", "Local root", "local_folder"),
+    ] {
+        conn.execute(
+            "INSERT INTO albums(id, name, created_at, parent_id, type, ancestor_path)
+             VALUES (?1, ?2, 2000, NULL, ?3, '/' || ?1 || '/')",
+            (id, name, kind),
+        )
+        .unwrap();
+    }
+
     Arc::new(Mutex::new(conn))
 }
 
@@ -1603,4 +1627,90 @@ fn image_collection_paths_decode_into_image_info() {
             );
         }
     }
+}
+
+#[test]
+fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
+    let runtime = build_runtime();
+    let child_id = "33333333-3333-3333-3333-333333333333";
+
+    assert_eq!(
+        ids(runtime
+            .fetch(&format!("images://gallery/album/{ALBUM_A_ID}/{child_id}"))
+            .unwrap()),
+        ids(runtime
+            .fetch(&format!("images://gallery/album/{child_id}"))
+            .unwrap())
+    );
+
+    // Pixiv 子树中 image 1 同时属于两个叶子，按成员行应计 4 而不是按图片去重后的 3。
+    assert_eq!(
+        runtime
+            .count("images://gallery/album-tree/44444444-4444-4444-4444-444444444444")
+            .unwrap(),
+        4
+    );
+    assert_eq!(runtime.count(&format!("albums://subtree_{ALBUM_A_ID}")).unwrap(), 1);
+
+    let first = runtime
+        .list_with_count("albums://root_normal/subpage_1")
+        .unwrap();
+    let second = runtime
+        .list_with_count("albums://root_normal/subpage_2")
+        .unwrap();
+    assert_eq!(first.len(), 100);
+    assert!(!second.is_empty());
+    assert!(first.iter().all(|entry| entry.total.is_some()));
+    let first_ids = first.iter().map(|entry| &entry.name).collect::<HashSet<_>>();
+    assert!(second.iter().all(|entry| !first_ids.contains(&entry.name)));
+
+    let label_dirs = runtime
+        .list_with_count("albums://root_label/kind_label_dir/subpage_1")
+        .unwrap();
+    assert!(!label_dirs.is_empty());
+    assert!(label_dirs.iter().all(|entry| {
+        entry.meta.as_ref().and_then(|meta| meta.get("type")).and_then(|v| v.as_str())
+            == Some("label_dir")
+    }));
+    let normal = runtime.list("albums://root_normal/subpage_1").unwrap();
+    assert!(normal.iter().all(|entry| {
+        entry.meta.as_ref().and_then(|meta| meta.get("type")).and_then(|v| v.as_str())
+            == Some("normal")
+    }));
+    let local = runtime.list("albums://root_local_folder/subpage_1").unwrap();
+    assert_eq!(local.len(), 1);
+    assert_eq!(local[0].name, "90000000-0000-0000-0000-000000000004");
+
+    let gallery_page = runtime
+        .list_with_count("images://gallery/albums/subpage_normal_1")
+        .unwrap();
+    assert_eq!(gallery_page.len(), 100);
+}
+
+#[test]
+fn album_search_escapes_like_metacharacters_and_matches_label_paths() {
+    let runtime = build_runtime();
+    for (query, expected) in [
+        ("%", "90000000-0000-0000-0000-000000000001"),
+        ("_", "90000000-0000-0000-0000-000000000002"),
+        (r"\", "90000000-0000-0000-0000-000000000003"),
+    ] {
+        let path = format!(
+            "albums://search/{}/subpage_1",
+            pathql_rs::escape_path_segment(query)
+        );
+        let rows = runtime.list(&path).unwrap();
+        assert_eq!(rows.len(), 1, "query={query:?}, rows={rows:?}");
+        assert_eq!(rows[0].name, expected);
+    }
+
+    let slash_path = format!(
+        "albums://search/{}/kind_label/subpage_1",
+        pathql_rs::escape_path_segment("/")
+    );
+    let rows = runtime.list(&slash_path).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<HashSet<_>>(),
+        HashSet::from([LABEL_HATSUNE_ID, LABEL_VOCALOID_ID])
+    );
 }

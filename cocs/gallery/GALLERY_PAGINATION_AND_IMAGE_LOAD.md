@@ -71,10 +71,13 @@
 
 ### 拉取当前页图片
 
-- **Composable**：[`apps/kabegame/src/composables/useGalleryImages.ts`](/apps/kabegame/src/composables/useGalleryImages.ts)  
-  - `invoke("browse_gallery_provider", { path, pageSize: unref(pageSize) })`  
-  - `jumpToBigPage` 等内部与 `pageSize` 对齐。
-  - 可选第 4 个参数 `onBeforeFetch`：在每次 `browse_gallery_provider` 请求前调用；画廊页传入 **`useProvideImageMetadataCache` 的 `clearCache`**，换页时清空 per-page metadata 缓存。
+- **组件**：[`apps/kabegame/src/components/ImageGrid.vue`](/apps/kabegame/src/components/ImageGrid.vue)。
+- 首次加载、翻页与事件刷新统一调用 `pathql_view({ rows, count })`，一次 IPC 返回
+  `{ rows, total, seq }`，不再把 `pathql_fetch(rows)` 与 `pathql_entry(count)` 分成两次请求。
+- `rows` 是带页码的当前列表路径；`count` 由 adapter 的 `computeCountPath` 从同一视图推导。
+- 每次应用快照前清空 `useProvideImageMetadataCache` 的 per-page 缓存；列表行仍不内联 metadata。
+- [`apps/kabegame/src/composables/usePagedGallery.ts`](/apps/kabegame/src/composables/usePagedGallery.ts)
+  只负责页码、越界回退与预览跨页，数据和总数由同一个视图快照更新。
 
 ### Metadata 详情与前端缓存
 
@@ -85,14 +88,14 @@
 
 ### 使用 SimplePage 列表的视图（需统一）
 
-以下视图从设置读取 `galleryPageSize`，传入 `useProviderPathRoute` 与 `useGalleryImages`，并在 **`pageSize` 变化时回到第 1 页并刷新**（`watch` 内 `navigateToPage(1)` 等）：
+以下视图从设置读取 `galleryPageSize`，经各自 route store 与 `ImageGrid` adapter 构造 PathQL 路径，并在 **`pageSize` 变化时回到第 1 页并刷新**：
 
 - [`apps/kabegame/src/views/Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)
 - [`apps/kabegame/src/views/Albums.vue`](/apps/kabegame/src/views/Albums.vue)
 - [`apps/kabegame/src/views/TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)
 - [`apps/kabegame/src/views/SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)
 
-部分视图还会直接 `invoke("browse_gallery_provider", { path, pageSize })` 做「仅取 total」或「月份列表」等辅助请求，**同样需要传 `pageSize`**。
+过滤树等辅助请求仍可独立读取计数；ImageGrid 的列表与分页总数必须走 `pathql_view`，不能重新拆成两次请求。
 
 ### UI：每页条数入口
 
@@ -111,17 +114,64 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 
 ## 图片与画册成员变更事件
 
+### ImageGrid 的主动 / 被动双通道
+
+ImageGrid 把数据变化分成两条通道：
+
+- **主动通道**：当前网格发起且会改变结果集的写操作走 `ctx.mutate`。命令携带当前
+  `ViewQuery { rows, count }`，写入并发出事件后立即读取并返回 `ViewSnapshot`，前端直接应用，不等待防抖。
+  永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
+- **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
+- **被动通道**：下载、同步、整理、其他窗口或 MCP 引起的 `images-change`、`album-images-change` 与
+  画册结构字段变更进入全局单例
+  [`dataChangeHub.ts`](/apps/kabegame/src/services/dataChangeHub.ts)。hub 对每个订阅者按 500ms 时间窗合并
+  reason 与各 id 集合；画册维度另含 `albumIds` / `albumImageIds`、按到达顺序保存的 `favoriteOps`，以及
+  `albumPaths` / `albumPathsWildcard` 和结构字段集合。画册成员事件携带画册 `ancestorPath`；新增、删除、
+  改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。任一 `images-change` 缺少
+  task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
+- [`liveQuery.ts`](/apps/kabegame/src/services/liveQuery.ts) 以 `{ rows, count }` 为 key 共享同一在途请求；
+  inactive 时只标脏，恢复后补拉。gallery/album 全部相关，task 与 surf 只按免费维度或 wildcard 粗过滤。
+
+画册写命令除 `view` 外始终返回本次已发送事件的 `albumChanges` 副本。无状态 `services/albums.ts` 把返回的
+成员事件用 `publishLocal` 立即投递；hub 记录其 `seq`，随后到达的同序号后端事件直接丢弃。画册树不维护全量
+列表或全量计数，只重拉相关的已加载目录；画册视图仍由主动快照或被动查询决定过滤、排序和分页后的最终行位置。
+预览中的 `ImageLabelsPanel` 为避免替换底层列表导致跳页，保留 500ms 被动刷新。
+
+### `seq` 一致性协议
+
+后端 `GlobalEmitter` 为 `images-change`、`album-images-change` 与进入 hub 的 `album-changed` 共用一个
+单调递增计数器，三者 payload 都携带 `seq`。
+
+读取视图快照时必须**先读取 `seq`，再执行 rows/count 查询**。带 `view` 的写命令在写库前取得全局
+`EventHold`：期间两类视图事件照常分配 `seq` 但暂存，快照读完、守卫析构后才按序广播。因此事件不会触发
+查询来插队同一次主动快照，且出错路径也会由 `Drop` 放行：
+
+- `liveQuery` 的 `appliedSeq` 已覆盖某事件时，`maxSeq <= appliedSeq` 的回声批次不再重拉；
+- 任意返回快照的 `seq < appliedSeq` 时丢弃，旧的在途请求不会覆盖新列表；
+- 读数据期间新发出的事件具有更大的序号，随后会再触发一次拉取，允许多拉但不会漏变更。
+
 ### `images-change`（`DaemonEvent::ImagesChange`，`images` 表）
 
-- 后端通过 `GlobalEmitter::emit_images_change` 广播，**`reason` 仅为** `add` / `delete` / `change`（如原 `wallpaper-set` 已并入 `change`）。
-- Payload：`imageIds`，以及可选的 **`taskIds` / `surfRecordIds`**（用于任务详情 / 畅游等视图过滤）；**不再包含画册维度**（已拆出见下）。
-- 前端：`apps/kabegame/src/composables/useImagesChangeRefresh.ts`。
+- 后端通过 `GlobalEmitter::emit_images_change` 广播，reason 包括 `add` / `delete` / `change` / `rename` /
+  `metadata-migrate`。
+- Payload：必带 `seq`、`reason`、`imageIds`，可选 `taskIds` / `surfRecordIds` / `pluginIds`。
+  这些可选维度只是免费 hint：删除图片不再为 payload 额外查询 surf/plugin，删除任务只带 task；维度缺失表示
+  无法排除当前视图，而不是“不相关”。
+- 删除畅游记录会补发带 `surfRecordIds` 的 `change`；整理每批重写缩略图/兼容路径后会按批补发 `change`。
+- ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
 
 ### `album-images-change`（`DaemonEvent::AlbumImagesChange`，`album_images` 表）
 
-- 后端通过 `emit_album_images_change`，`reason` 为 `add` / `delete`（对应收藏/画册增删成员等）。
-- Payload：`albumIds`、`imageIds`。
-- 前端：`apps/kabegame/src/composables/useAlbumImagesChangeRefresh.ts`；画册列表预览、收藏星标就地更新等依赖此事件。
+- `image_events.rs` 的私有发送器保证每条事件只描述一个画册；公开写入口统一为
+  `emit_membership_added` / `emit_membership_removed`，`imageIds` 只含实际插入或删除的成员。
+- Payload：`seq`、`reason`、单元素 `albumIds`、该画册实际变化的 `imageIds` 与 `ancestorPath`；不再携带
+  `directCounts`。
+- 隐藏/取消隐藏除精确画册成员事件外，一定再发一条 `images-change("change", ids)`，供任务、畅游、工具栏和
+  过滤树等其它可见性视图兜底刷新。
+- 前端不增量维护全量计数。目录页并行列举图片与画册命名空间：前者的 `with_count` 给出每个子画册的
+  直接图片数，后者的 `with_count` 给出直接子画册数；普通 / 本地文件夹画册再读取
+  `images://gallery/[hide/]album-tree/<id>` 的 entry 总数得到子树成员行之和。标签目录显示直接子画册数，
+  标签叶子显示直接成员数。隐藏口径只由 `hide/` 路径前缀表达。
 - Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 
 ## 排查清单
@@ -129,6 +179,9 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 1. **翻页页码不对**：确认 `query.path` 末尾页码与 `useProviderPathRoute.currentPage` 一致，且切页后有触发 `navigateToPage`。
 2. **改每页条数后仍显示旧页**：确认对应视图对 `pageSize` 有 `watch`，并 `navigateToPage(1)` 或重新 `loadCurrentPage`。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
+4. **删除后列表延迟或闪回**：确认调用从 `ctx.mutate` 传入了 `view`，返回快照的 `seq` 被
+   `liveQuery.apply` 接收；不要靠 `images-change` 回刷当前操作。
+5. **任务/畅游详情收到无关刷新**：检查 hub 批次的 `wildcard.task/surf`。缺维度必须刷新，带维度时才允许按 id 排除。
 
 ## 涉及文件（速查）
 
@@ -140,4 +193,7 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 | 设置 | `src-tauri/kabegame-core/src/settings.rs` |
 | 前端设置 | `packages/core/src/stores/settings.ts` |
 | 路由 offset | `apps/kabegame/src/composables/useProviderPathRoute.ts` |
-| 列表加载 | `apps/kabegame/src/composables/useGalleryImages.ts` |
+| 视图快照 | `src-tauri/kabegame-core/src/commands/view.rs` |
+| 变更聚合 | `apps/kabegame/src/services/dataChangeHub.ts` |
+| 实时查询 | `apps/kabegame/src/services/liveQuery.ts` |
+| 列表加载 | `apps/kabegame/src/components/ImageGrid.vue` |

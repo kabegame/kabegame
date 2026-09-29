@@ -1,5 +1,8 @@
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::SyncMode;
+#[cfg(feature = "ipc-server")]
+use crate::storage::image_events::emit_membership_added;
+use crate::storage::image_events::{emit_album_images_order_changed, AlbumImagesChangePayload};
 use crate::storage::labels::{is_label_key, LabelSpec};
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use kabegame_i18n::t;
@@ -7,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     path::PathBuf,
 };
@@ -75,6 +78,9 @@ pub struct AddToAlbumResult {
     pub attempted: usize,
     pub can_add: usize,
     pub current_count: usize,
+    #[serde(skip)]
+    pub inserted_ids: Vec<String>,
+    pub album_changes: Vec<AlbumImagesChangePayload>,
 }
 
 #[derive(Debug, Clone)]
@@ -282,30 +288,53 @@ impl Storage {
             .and_then(|image| image.album_order))
     }
 
-    /// 批量图片在删除/移除前涉及的画册 id（去重），用于 `images-change` 事件。
-    pub fn collect_album_ids_for_images(
+    /// 批量图片当前所属的全部画册成员对；查询按 `album_images(image_id)` 索引执行。
+    pub fn collect_album_memberships(
         &self,
         image_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<(String, String)>, String> {
+        self.collect_album_memberships_with_paths(image_ids)
+            .map(|(memberships, _)| memberships)
+    }
+
+    /// 批量图片当前所属的成员对及各画册祖先路径；两者在同一次数据库加锁中读取。
+    pub fn collect_album_memberships_with_paths(
+        &self,
+        image_ids: &[String],
+    ) -> Result<(Vec<(String, String)>, HashMap<String, String>), String> {
         if image_ids.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), HashMap::new()));
         }
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut set = HashSet::new();
+        let mut seen = HashSet::new();
+        let mut memberships = Vec::new();
+        let mut ancestor_paths = HashMap::new();
         let mut stmt = conn
-            .prepare("SELECT DISTINCT album_id FROM album_images WHERE image_id = ?1")
-            .map_err(|e| format!("Failed to prepare album_ids query: {}", e))?;
+            .prepare(
+                "SELECT ai.album_id, COALESCE(a.ancestor_path, '/' || ai.album_id || '/')
+                 FROM album_images ai
+                 LEFT JOIN albums a ON a.id = ai.album_id
+                 WHERE ai.image_id = ?1
+                 ORDER BY ai.rowid",
+            )
+            .map_err(|e| format!("Failed to prepare album memberships query: {}", e))?;
         for id in image_ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
             let rows = stmt
-                .query_map(params![id], |row| row.get::<_, String>(0))
-                .map_err(|e| format!("Failed to query album IDs: {}", e))?;
+                .query_map(params![id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Failed to query album memberships: {}", e))?;
             for row in rows {
-                if let Ok(aid) = row {
-                    set.insert(aid);
+                if let Ok((aid, ancestor_path)) = row {
+                    ancestor_paths.entry(aid.clone()).or_insert(ancestor_path);
+                    memberships.push((aid, id.clone()));
                 }
             }
         }
-        Ok(set.into_iter().collect())
+        Ok((memberships, ancestor_paths))
     }
 
     pub fn get_image_album_ids(&self, image_id: &str) -> Result<Vec<String>, String> {
@@ -597,6 +626,10 @@ impl Storage {
             }
             let result = self.add_images_to_album(&ensured.album_id, image_ids)?;
             if result.added > 0 && seen.insert(ensured.album_id.clone()) {
+                #[cfg(feature = "ipc-server")]
+                if GlobalEmitter::try_global().is_some() {
+                    emit_membership_added(&ensured.album_id, &result.inserted_ids)?;
+                }
                 album_ids.push(ensured.album_id);
             }
         }
@@ -650,6 +683,10 @@ impl Storage {
             return Err("不能删除系统默认画册".to_string());
         }
 
+        let deleted_album = self
+            .get_album_by_id(album_id)?
+            .ok_or_else(|| "画册不存在".to_string())?;
+        let subtree_ids = self.collect_subtree_album_ids_bfs(album_id)?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
             "WITH RECURSIVE sub(id) AS (
@@ -663,8 +700,12 @@ impl Storage {
         .map_err(|e| format!("Failed to delete album images: {}", e))?;
         conn.execute("DELETE FROM albums WHERE id = ?1", params![album_id])
             .map_err(|e| format!("Failed to delete album: {}", e))?;
+        drop(conn);
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_deleted(album_id);
+            emitter.emit_album_deleted(&deleted_album);
+            for id in subtree_ids {
+                emit_album_images_order_changed(&id, &[]);
+            }
         }
         Ok(())
     }
@@ -814,7 +855,7 @@ impl Storage {
             )
             .unwrap_or(0);
 
-        let mut added = 0;
+        let mut inserted_ids = Vec::new();
         for id in image_ids {
             max_order += 1;
             let result = tx.execute(
@@ -823,7 +864,7 @@ impl Storage {
             );
             if let Ok(n) = result {
                 if n > 0 {
-                    added += 1;
+                    inserted_ids.push(id.clone());
                 }
             }
         }
@@ -831,11 +872,14 @@ impl Storage {
         tx.commit()
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
+        let added = inserted_ids.len();
         Ok(AddToAlbumResult {
             added,
             attempted: image_ids.len(),
             can_add: image_ids.len(),
             current_count: current_count + added,
+            inserted_ids,
+            album_changes: Vec::new(),
         })
     }
 
@@ -849,13 +893,13 @@ impl Storage {
         &self,
         album_id: &str,
         image_ids: &[String],
-    ) -> Result<usize, String> {
+    ) -> Result<Vec<String>, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
-        let mut removed = 0usize;
+        let mut removed = Vec::new();
         for id in image_ids {
             let changed = tx
                 .execute(
@@ -863,7 +907,9 @@ impl Storage {
                     params![album_id, id],
                 )
                 .map_err(|e| format!("Failed to remove image from album: {}", e))?;
-            removed += changed as usize;
+            if changed > 0 {
+                removed.push(id.clone());
+            }
         }
 
         tx.commit()
@@ -1816,10 +1862,25 @@ UPDATE albums
         }
         .map_err(|e| format!("Failed to move album: {}", e))?;
 
+        let old_ancestor_path = album.ancestor_path.clone();
         Self::rebuild_album_ancestor_paths(&conn)?;
+        let new_ancestor_path: String = conn
+            .query_row(
+                "SELECT ancestor_path FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to read moved album ancestor path: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_changed(album_id, json!({ "parentId": new_parent_id }));
+            emitter.emit_album_changed(
+                album_id,
+                json!({
+                    "parentId": new_parent_id,
+                    "ancestorPath": new_ancestor_path,
+                    "oldAncestorPath": old_ancestor_path,
+                }),
+            );
         }
         Ok(())
     }

@@ -4,7 +4,6 @@
   "placeholderUrl": "サーフするURLを入力、例: https://pixiv.net",
   "startSurf": "サーフを開始",
   "suggestPlugin": "インストール済み",
-  "suggestOpen": "そのまま開く",
   "openSurf": "サーフを開く",
   "closeSurf": "サーフを閉じる",
   "sessionClosed": "サーフセッションを終了しました",

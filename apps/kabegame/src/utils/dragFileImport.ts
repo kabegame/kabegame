@@ -3,7 +3,7 @@ import { IS_WINDOWS } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
-import type { Album } from "@/stores/albums";
+import type { Album } from "@/services/albums";
 import type { DragFileItem, DragFilePlan } from "@/directives/dragFile";
 
 const normalizeLocalPath = (path: string): string => {

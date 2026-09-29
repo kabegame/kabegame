@@ -1,0 +1,8 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_subtree_provider",
+    "properties": { "album_id": { "type": "string", "default": "", "optional": false } },
+    "query": {
+        "where": "albums.id != ${properties.album_id} AND substr(albums.ancestor_path, 1, length((SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}))) = (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id})"
+    }
+}

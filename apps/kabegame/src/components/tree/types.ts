@@ -16,6 +16,10 @@ export interface TreeDataSource<T> {
   hasChildren(element: T): boolean;
   /** 可同步可异步；抛错视为空子集（由调用方决定是否在源内自行兜底）。 */
   getChildren(element: T): T[] | Promise<T[]>;
+  getChildrenPage?(element: T, page: number): Promise<T[]>;
+  totalChildren?(element: T): number;
+  getRootsPage?(sectionId: string, page: number): Promise<T[]>;
+  pageSize?: number;
 }
 
 /**
@@ -36,6 +40,9 @@ export interface TreeNodeHandle<T> {
   loading: boolean;
   /** 至少成功枚举过一次子项（对应旧实现的 loaded ref）。 */
   loaded: boolean;
+  /** 分页数据源中是否仍有未加载子项。 */
+  hasMore: boolean;
+  loadedPages: number;
   /** rebuild 时回填：本节点在当前投影中的可见行数（含自身），供 sticky 推走与 DnD 反馈。 */
   subtreeRowCount: number;
 }
@@ -43,7 +50,8 @@ export interface TreeNodeHandle<T> {
 export type TreeRow<T> =
   | { kind: "node"; key: string; node: TreeNodeHandle<T> }
   | { kind: "section-header"; key: string; sectionId: string }
-  | { kind: "separator"; key: string; sectionId: string };
+  | { kind: "separator"; key: string; sectionId: string }
+  | { kind: "load-more"; key: string; parentKey: string | null; sectionId: string; loading: boolean };
 
 /** 分区：一个面板内多段独立森林（如「系统项区 + 分隔线 + 树区 + 本地文件夹区」）。 */
 export interface TreeSection<T> {

@@ -8,7 +8,8 @@ import WebpageCollectDialog from "./WebpageCollectDialog.vue";
 const env = vi.hoisted(() => ({ android: false }));
 const enqueueTask = vi.hoisted(() => vi.fn(async (_params: Record<string, any>) => true));
 
-vi.mock("@kabegame/core/env", () => ({
+vi.mock("@kabegame/core/env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@kabegame/core/env")>()),
   get IS_ANDROID() {
     return env.android;
   },
@@ -35,15 +36,9 @@ vi.mock("@kabegame/core/track/umami", () => ({ trackEvent: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@/utils/desktopOnlyGuard", () => ({ guardDesktopOnly: vi.fn(async () => false) }));
 vi.mock("@/composables/useCrawlTaskLauncher", () => ({ enqueueTask }));
-vi.mock("@/stores/albums", () => ({
-  FAVORITE_ALBUM_ID: "fav",
+vi.mock("@/services/albums", () => ({
   HIDDEN_ALBUM_ID: "hidden",
-  useAlbumStore: () => ({
-    albumCounts: {},
-    getAlbumTreeExcluding: () => [],
-    loadAlbums: async () => {},
-    createAlbum: vi.fn(),
-  }),
+  createAlbum: vi.fn(),
 }));
 
 // 与 Rust builtin `webpage` 下发给前端的 config.vars 同形

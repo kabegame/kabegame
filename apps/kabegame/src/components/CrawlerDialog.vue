@@ -44,7 +44,7 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="outputAlbumTree" :album-counts="albumCounts"
+        <AlbumPicker v-model="selectedOutputAlbumId" :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
           clearable />
@@ -55,8 +55,8 @@
           @keyup.enter="handleCreateOutputAlbum" />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
-          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+        <AlbumPicker v-model="newOutputAlbumParentId" :scope="{ sections: ['normal'] }"
+          :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')" />
       </el-form-item>
 
@@ -234,7 +234,7 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPickerField v-model="selectedOutputAlbumId" :album-tree="outputAlbumTree" :album-counts="albumCounts"
+        <AlbumPicker v-model="selectedOutputAlbumId" :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
           :is-selectable="(node) => node.type !== 'label_dir'"
           allow-create :placeholder="$t('plugins.defaultGalleryOnly')" :picker-title="$t('albums.outputAlbum')"
           clearable />
@@ -245,8 +245,8 @@
           @keyup.enter="handleCreateOutputAlbum" />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPickerField v-model="newOutputAlbumParentId" :album-tree="outputAlbumParentTree"
-          :album-counts="albumCounts" :placeholder="$t('albums.selectParentAlbum')"
+        <AlbumPicker v-model="newOutputAlbumParentId" :scope="{ sections: ['normal'] }"
+          :placeholder="$t('albums.selectParentAlbum')"
           :picker-title="$t('albums.parentAlbum')" />
       </el-form-item>
 
@@ -373,9 +373,9 @@ import {
 import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
-import { useAlbumStore, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
 import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
-import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import { IS_WEB } from "@kabegame/core/env";
@@ -442,7 +442,6 @@ function runConfigLabel(cfg: RunConfig): string {
   return `${runConfigPluginName(cfg)} - ${runConfigName(cfg)}`;
 }
 
-const albumStore = useAlbumStore();
 const uiStore = useUiStore();
 const surfStore = useSurfStore();
 
@@ -723,11 +722,6 @@ const runConfigs = computed(() => crawlerStore.runConfigs);
 const selectedRunConfig = computed(() =>
   runConfigs.value.find((cfg) => cfg.id === selectedRunConfigId.value),
 );
-const { albumCounts } = storeToRefs(albumStore);
-const outputAlbumTree = computed(() => albumStore.getAlbumTreeExcluding([HIDDEN_ALBUM_ID]));
-const outputAlbumParentTree = computed(() =>
-  albumStore.getAlbumTreeExcluding([FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID]),
-);
 
 const runConfigPickerOptions = computed(() =>
   runConfigs.value.map((cfg) => ({
@@ -889,7 +883,7 @@ const createOutputAlbum = async (showSuccess = true) => {
 
   try {
     const parentId = newOutputAlbumParentId.value?.trim() || null;
-    const created = await albumStore.createAlbum(newOutputAlbumName.value.trim(), { parentId });
+    const created = await createAlbum(newOutputAlbumName.value.trim(), { parentId });
     newOutputAlbumName.value = "";
     newOutputAlbumParentId.value = null;
     if (showSuccess) {
@@ -1058,12 +1052,6 @@ watch(modal.isOpen, async (open) => {
     await pluginStore.loadPlugins();
   } catch (e) {
     console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
-  }
-
-  try {
-    await albumStore.loadAlbums();
-  } catch (e) {
-    console.debug("导入弹窗打开时刷新画册列表失败（忽略）：", e);
   }
 
   if (props.initialConfig) {

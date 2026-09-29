@@ -1,6 +1,4 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
-import { pathqlEntry } from "@/services/pathql";
-import { withGalleryPrefix } from "@/utils/path";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 
@@ -30,6 +28,7 @@ type PagedGalleryMessages = {
 
 type UsePagedGalleryParams = {
   routeStore: PagedRouteStore;
+  totalImagesCount: Ref<number>;
   images: Ref<ImageInfo[]>;
   loadedKey: Ref<string>;
   viewRef: Ref<any>;
@@ -45,7 +44,7 @@ type UsePagedGalleryParams = {
 
 // 页面导航、clamp
 export function usePagedGallery(params: UsePagedGalleryParams) {
-  const totalImagesCount = ref(0);
+  const totalImagesCount = params.totalImagesCount;
   // 各页面不同 :path/
   const currentPath = computed(() => params.routeStore.computedPath);
   // {path/x{pageSize}x/{page}
@@ -62,10 +61,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
 
   const loadTotalImagesCount = async () => {
     try {
-      const countPath = params.computeCountPath(currentPath.value);
-      if (!countPath) return;
-      const res = await pathqlEntry(withGalleryPrefix(countPath));
-      totalImagesCount.value = res?.total ?? 0;
+      await params.load(currentPath.value);
     } catch (error) {
       const fallback = await params.onCountError?.(error);
       if (typeof fallback === "number") {
@@ -106,8 +102,6 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     if (ensuringPage) return;
     ensuringPage = true;
     try {
-      await loadTotalImagesCount();
-
       if (params.images.value.length > 0) return;
 
       if (totalImagesCount.value <= 0) {
@@ -192,7 +186,6 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       } finally {
         params.loading.finishLoading();
       }
-      void loadTotalImagesCount();
     },
     { immediate: true }
   );

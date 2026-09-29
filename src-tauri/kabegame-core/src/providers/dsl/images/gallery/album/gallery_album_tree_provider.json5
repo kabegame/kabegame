@@ -1,0 +1,34 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_album_tree_provider",
+    "properties": {
+        "album_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "join": [
+            {
+                "kind": "INNER",
+                "table": "album_images",
+                "as": "tree_ai",
+                "on": "images.id = tree_ai.image_id",
+                "in_need": true
+            },
+            {
+                "kind": "INNER",
+                "table": "albums",
+                "as": "tree_album",
+                "on": "tree_album.id = tree_ai.album_id",
+                "in_need": true
+            }
+        ],
+        "where": "substr(tree_album.ancestor_path, 1, length((SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}))) = (SELECT ancestor_path FROM albums WHERE id = ${properties.album_id})"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "gallery_route" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

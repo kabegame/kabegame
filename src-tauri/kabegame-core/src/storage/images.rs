@@ -867,54 +867,6 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
-    /// 批量图片涉及的插件 id（去重）。
-    pub fn collect_plugin_ids_for_images(
-        &self,
-        image_ids: &[String],
-    ) -> Result<Vec<String>, String> {
-        let mut set = HashSet::new();
-        for id in image_ids {
-            if let Some(image) = Self::find_image_by_id(id)? {
-                if let Some(plugin_id) = image.plugin_id {
-                    let plugin_id = plugin_id.trim().to_string();
-                    if !plugin_id.is_empty() {
-                        set.insert(plugin_id);
-                    }
-                }
-            }
-        }
-        Ok(set.into_iter().collect())
-    }
-
-    /// 批量图片在删除/移除前涉及的畅游记录 id（去重），用于 `images-change` 事件。
-    pub fn collect_surf_record_ids_for_images(
-        &self,
-        image_ids: &[String],
-    ) -> Result<Vec<String>, String> {
-        if image_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut set = HashSet::new();
-        let mut stmt = conn
-            .prepare(
-                "SELECT surf_record_id FROM images WHERE id = ?1 \
-                 AND surf_record_id IS NOT NULL AND surf_record_id != ''",
-            )
-            .map_err(|e| format!("Failed to prepare surf_record_ids query: {}", e))?;
-        for id in image_ids {
-            let rows = stmt
-                .query_map(params![id], |row| row.get::<_, String>(0))
-                .map_err(|e| format!("Failed to query surf record IDs: {}", e))?;
-            for row in rows {
-                if let Ok(srid) = row {
-                    set.insert(srid);
-                }
-            }
-        }
-        Ok(set.into_iter().collect())
-    }
-
     pub fn delete_image(&self, image_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut local_paths_to_purge = Vec::new();
@@ -1319,22 +1271,23 @@ impl Storage {
         self.get_images_total_cached(&conn)
     }
 
-    pub fn toggle_image_favorite(&self, image_id: &str, favorite: bool) -> Result<(), String> {
+    pub fn toggle_image_favorite(&self, image_id: &str, favorite: bool) -> Result<bool, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        if favorite {
-            let _ = conn.execute(
+        let changed = if favorite {
+            conn.execute(
                 "INSERT OR IGNORE INTO album_images (album_id, image_id, \"order\") VALUES (?1, ?2, ?3)",
                 params![FAVORITE_ALBUM_ID, image_id, SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64],
-            );
+            )
         } else {
-            let _ = conn.execute(
+            conn.execute(
                 "DELETE FROM album_images WHERE album_id = ?1 AND image_id = ?2",
                 params![FAVORITE_ALBUM_ID, image_id],
-            );
+            )
         }
+        .map_err(|e| format!("Failed to update favorite membership: {e}"))?;
 
-        Ok(())
+        Ok(changed > 0)
     }
 
     pub fn update_image_thumbnail_path(

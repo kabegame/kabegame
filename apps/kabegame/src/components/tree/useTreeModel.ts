@@ -23,6 +23,9 @@ export interface TreeModel<T> {
   refreshChildren(key: string): Promise<void>;
   /** 刷新所有已加载分支的子项枚举（整树集中刷新入口用）。 */
   refreshLoadedChildren(): Promise<void>;
+  reloadRoots(): Promise<void>;
+  loadMore(target: string | { sectionId: string }): Promise<void>;
+  loadedHandles(): TreeNodeHandle<T>[];
   /** 重新枚举各分区根与所有已加载分支（key diff 保留句柄）。 */
   reload(): Promise<void>;
 }
@@ -44,6 +47,9 @@ export interface TreeModelOptions<T> {
 interface SectionState<T> {
   section: TreeSection<T>;
   roots: TreeNodeHandle<T>[];
+  loadedPages: number;
+  hasMore: boolean;
+  loading: boolean;
 }
 
 export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
@@ -74,6 +80,8 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       expanded: hasChildren ? (options.defaultExpanded?.(element, depth) ?? false) : false,
       loading: false,
       loaded: false,
+      hasMore: false,
+      loadedPages: 0,
       subtreeRowCount: 0,
     }) as TreeNodeHandle<T>;
     handles.set(key, handle);
@@ -97,13 +105,21 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     handle.loading = true;
     let elements: T[] = [];
     try {
-      elements = await dataSource.getChildren(handle.element);
+      elements = dataSource.getChildrenPage
+        ? await dataSource.getChildrenPage(handle.element, 1)
+        : await dataSource.getChildren(handle.element);
     } catch {
       elements = [];
     }
     // 竞态/已被移除：丢弃结果
     if (loadTokens.get(handle.key) !== token || !handles.has(handle.key)) return;
     applyChildren(handle, elements);
+    handle.loadedPages = 1;
+    handle.hasMore = dataSource.getChildrenPage
+      ? dataSource.totalChildren
+        ? elements.length < dataSource.totalChildren(handle.element)
+        : elements.length >= (dataSource.pageSize ?? 100)
+      : false;
     handle.loading = false;
     const firstLoad = !handle.loaded;
     handle.loaded = true;
@@ -124,6 +140,8 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       handle.children = null;
       handle.expanded = false;
       handle.loaded = false;
+      handle.hasMore = false;
+      handle.loadedPages = 0;
     }
   }
 
@@ -176,6 +194,15 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       out.push({ kind: "node", key: handle.key, node: handle });
       if (handle.expanded && handle.children) {
         for (const child of handle.children) projectNode(child, out, filterLower);
+        if (handle.hasMore) {
+          out.push({
+            kind: "load-more",
+            key: `__more:${handle.key}`,
+            parentKey: handle.key,
+            sectionId: handle.sectionId,
+            loading: handle.loading,
+          });
+        }
       }
       handle.subtreeRowCount = out.length - start;
       return handle.subtreeRowCount;
@@ -213,6 +240,16 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       for (const root of state.roots) {
         contributed += projectNode(root, out, filterLower);
       }
+      if (!filterLower && state.hasMore) {
+        out.push({
+          kind: "load-more",
+          key: `__more-root:${section.id}`,
+          parentKey: null,
+          sectionId: section.id,
+          loading: state.loading,
+        });
+        contributed += 1;
+      }
       // 整段无内容（数据为空或过滤无命中）：连同分隔线/小节标题一起隐藏
       if (contributed === 0) {
         out.length = sectionStart;
@@ -231,7 +268,7 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   async function refreshLoadedBranches(): Promise<void> {
     const walk = async (nodes: TreeNodeHandle<T>[]): Promise<void> => {
       for (const node of nodes) {
-        if (node.loaded) await loadChildren(node);
+        if (node.loaded) await refreshChildren(node.key);
         if (node.children) await walk(node.children);
       }
     };
@@ -241,7 +278,18 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   async function reloadSection(state: SectionState<T>): Promise<void> {
     let elements: T[] = [];
     try {
-      elements = await state.section.roots();
+      if (dataSource.getRootsPage) {
+        const pages = Math.max(1, state.loadedPages);
+        const chunks = await Promise.all(
+          Array.from({ length: pages }, (_, index) => dataSource.getRootsPage!(state.section.id, index + 1)),
+        );
+        elements = chunks.flat();
+        state.loadedPages = pages;
+        state.hasMore = (chunks.at(-1)?.length ?? 0) >= (dataSource.pageSize ?? 100);
+      } else {
+        elements = await state.section.roots();
+        state.hasMore = false;
+      }
     } catch {
       elements = [];
     }
@@ -280,7 +328,7 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       );
       sectionStates.length = 0;
       for (const section of sections) {
-        sectionStates.push({ section, roots: [] });
+        sectionStates.push({ section, roots: [], loadedPages: 0, hasMore: false, loading: false });
       }
       // 旧根句柄整棵释放（分区变化视为结构性重置）
       for (const root of prevRoots.values()) dropSubtree(root);
@@ -321,12 +369,81 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   async function refreshChildren(key: string): Promise<void> {
     const handle = handles.get(key);
     if (!handle || !handle.hasChildren) return;
-    await loadChildren(handle);
+    if (!dataSource.getChildrenPage || handle.loadedPages <= 1) {
+      await loadChildren(handle);
+      return;
+    }
+    const token = (loadTokens.get(handle.key) ?? 0) + 1;
+    loadTokens.set(handle.key, token);
+    handle.loading = true;
+    try {
+      const chunks = await Promise.all(
+        Array.from({ length: handle.loadedPages }, (_, index) =>
+          dataSource.getChildrenPage!(handle.element, index + 1)),
+      );
+      if (loadTokens.get(handle.key) !== token || !handles.has(handle.key)) return;
+      const unique = new Map<string, T>();
+      for (const element of chunks.flat()) unique.set(dataSource.getKey(element), element);
+      applyChildren(handle, [...unique.values()]);
+      handle.hasMore = dataSource.totalChildren
+        ? unique.size < dataSource.totalChildren(handle.element)
+        : (chunks.at(-1)?.length ?? 0) >= (dataSource.pageSize ?? 100);
+      rebuild();
+    } finally {
+      handle.loading = false;
+    }
   }
 
   async function refreshLoadedChildren(): Promise<void> {
     const loaded = [...handles.values()].filter((h) => h.loaded);
-    await Promise.all(loaded.map((h) => loadChildren(h)));
+    await Promise.all(loaded.map((h) => refreshChildren(h.key)));
+  }
+
+  async function reloadRoots(): Promise<void> {
+    await Promise.all(sectionStates.map(reloadSection));
+    rebuild();
+  }
+
+  async function loadMore(target: string | { sectionId: string }): Promise<void> {
+    if (typeof target !== "string") {
+      const state = sectionStates.find((item) => item.section.id === target.sectionId);
+      if (!state || !dataSource.getRootsPage || state.loading || !state.hasMore) return;
+      state.loading = true;
+      rebuild();
+      try {
+        const nextPage = state.loadedPages + 1;
+        const elements = await dataSource.getRootsPage(state.section.id, nextPage);
+        const existing = new Set(state.roots.map((root) => root.key));
+        for (const element of elements) {
+          const key = dataSource.getKey(element);
+          if (!existing.has(key)) state.roots.push(createHandle(element, 0, null, state.section.id));
+        }
+        state.loadedPages = nextPage;
+        state.hasMore = elements.length >= (dataSource.pageSize ?? 100);
+      } finally {
+        state.loading = false;
+        rebuild();
+      }
+      return;
+    }
+    const handle = handles.get(target);
+    if (!handle || !dataSource.getChildrenPage || handle.loading || !handle.hasMore) return;
+    handle.loading = true;
+    rebuild();
+    try {
+      const nextPage = handle.loadedPages + 1;
+      const elements = await dataSource.getChildrenPage(handle.element, nextPage);
+      const combined = [...(handle.children ?? []).map((child) => child.element), ...elements];
+      const unique = new Map(combined.map((element) => [dataSource.getKey(element), element]));
+      applyChildren(handle, [...unique.values()]);
+      handle.loadedPages = nextPage;
+      handle.hasMore = dataSource.totalChildren
+        ? unique.size < dataSource.totalChildren(handle.element)
+        : elements.length >= (dataSource.pageSize ?? 100);
+    } finally {
+      handle.loading = false;
+      rebuild();
+    }
   }
 
   if (options.filterText) {
@@ -345,6 +462,9 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     toggle,
     refreshChildren,
     refreshLoadedChildren,
+    reloadRoots,
+    loadMore,
+    loadedHandles: () => [...handles.values()].filter((handle) => handle.loaded),
     reload,
   };
 }

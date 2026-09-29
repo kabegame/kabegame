@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Album } from "@/stores/albums";
+import type { Album } from "@/services/albums";
 import { escapeSdPrompt, labelKeysText } from "./imageLabels";
 import { isLabelKey } from "./labelKey";
 

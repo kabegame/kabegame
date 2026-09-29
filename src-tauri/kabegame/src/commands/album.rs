@@ -7,6 +7,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Runtime};
 
 use kabegame_core::commands;
+use kabegame_core::commands::view::ViewQuery;
 
 #[tauri::command]
 pub fn get_albums() -> Result<Value, String> {
@@ -58,14 +59,22 @@ pub fn move_album<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Result<Value, String> {
-    commands::album::add_images_to_album(album_id, image_ids)
+pub async fn add_images_to_album(
+    album_id: String,
+    image_ids: Vec<String>,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    commands::album::add_images_to_album(album_id, image_ids, view).await
 }
 
 /// 将任务的全部图片加入画册（后端根据 task_id 取图，前端只负责选画册）
 #[tauri::command]
-pub fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
-    commands::album::add_task_images_to_album(task_id, album_id)
+pub async fn add_task_images_to_album(
+    task_id: String,
+    album_id: String,
+    view: Option<ViewQuery>,
+) -> Result<Value, String> {
+    commands::album::add_task_images_to_album(task_id, album_id, view).await
 }
 
 #[tauri::command]
@@ -73,8 +82,9 @@ pub async fn remove_images_from_album<R: Runtime>(
     _app: AppHandle<R>,
     album_id: String,
     image_ids: Vec<String>,
+    view: Option<ViewQuery>,
 ) -> Result<Value, String> {
-    commands::album::remove_images_from_album(album_id, image_ids)
+    commands::album::remove_images_from_album(album_id, image_ids, view).await
 }
 
 #[tauri::command]

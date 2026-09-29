@@ -1,0 +1,18 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_search_page_provider",
+    "properties": {
+        "query": { "type": "string", "default": "", "optional": false },
+        "page": { "type": "number", "default": 1, "optional": false },
+        "kinds": { "type": "string", "default": "", "optional": false }
+    },
+    "list": {
+        "${album.id}": {
+            "sql": "SELECT albums.id, albums.name, albums.created_at, albums.parent_id, albums.type, albums.sync_folder, albums.folder_status, albums.ancestor_path, albums.sync_mode, albums.label_key, albums.label_path, (WITH RECURSIVE parents(id, name, parent_id, depth) AS (SELECT p.id, p.name, p.parent_id, 1 FROM albums p WHERE p.id = albums.parent_id UNION ALL SELECT p.id, p.name, p.parent_id, parents.depth + 1 FROM albums p JOIN parents ON p.id = parents.parent_id) SELECT group_concat(name, ' / ') FROM (SELECT name FROM parents ORDER BY depth DESC)) AS parent_path_names FROM albums WHERE ((LOWER(albums.name) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\') OR (LOWER(COALESCE(albums.label_key, '')) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\') OR (LOWER(COALESCE(albums.label_path, '')) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\')) AND (${properties.kinds} = '' OR instr(',' || ${properties.kinds} || ',', ',' || albums.type || ',') > 0) ORDER BY CASE WHEN LOWER(albums.name) = LOWER(${properties.query}) THEN 0 WHEN LOWER(albums.name) LIKE LOWER(REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\' THEN 1 ELSE 2 END, name_language_rank(name_language_bucket(COALESCE(albums.name, ''))) ASC, albums.name COLLATE NOCASE ASC, albums.id ASC LIMIT 100 OFFSET (${properties.page} - 1) * 100",
+            "data_var": "album",
+            "provider": "albums_child_count_provider",
+            "properties": { "album_id": "${album.id}", "album_type": "${album.type}", "kinds": "${properties.kinds}" },
+            "meta": "${album}"
+        }
+    }
+}

@@ -1,9 +1,226 @@
 //! 在修改 `images` / `album_images` 后统一发射 `images-change` / `album-images-change`。
 
-use crate::emitter::GlobalEmitter;
+#[cfg(feature = "ipc-server")]
+use crate::emitter::dispatch_view_event;
+use crate::emitter::{next_change_seq, GlobalEmitter};
+#[cfg(feature = "ipc-server")]
+use crate::ipc::events::DaemonEvent;
 use crate::storage::albums::AddToAlbumResult;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
-use crate::storage::{Storage, FAVORITE_ALBUM_ID};
+use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "ipc-server")]
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumImagesChangePayload {
+    pub seq: u64,
+    pub reason: String,
+    pub album_ids: Vec<String>,
+    pub image_ids: Vec<String>,
+    pub ancestor_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipRemovalContext {
+    /// 单独从某个画册移出；移出 HIDDEN 时需要为其它画册发 `unhide`。
+    AlbumMutation,
+    /// 图片整行被删除；所有原成员只按删除前隐藏状态分类，不产生 `unhide`。
+    ImagesDeleted,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteImagesResult {
+    pub purge: PurgeReport,
+    pub album_changes: Vec<AlbumImagesChangePayload>,
+}
+
+/// 已完成数据库删除与事件生成、尚未回收源文件的中间结果。
+pub struct PendingImageDelete {
+    paths: Vec<String>,
+    album_changes: Vec<AlbumImagesChangePayload>,
+}
+
+impl PendingImageDelete {
+    pub async fn finish(self) -> DeleteImagesResult {
+        DeleteImagesResult {
+            purge: purge_source_files(&self.paths).await,
+            album_changes: self.album_changes,
+        }
+    }
+}
+
+impl std::ops::Deref for DeleteImagesResult {
+    type Target = PurgeReport;
+
+    fn deref(&self) -> &Self::Target {
+        &self.purge
+    }
+}
+
+fn emit_album_images_change(
+    reason: &str,
+    album_id: &str,
+    image_ids: &[String],
+    ancestor_paths: &HashMap<String, String>,
+) -> Option<AlbumImagesChangePayload> {
+    if album_id.trim().is_empty() || (image_ids.is_empty() && reason != "order") {
+        return None;
+    }
+    debug_assert!(matches!(
+        reason,
+        "add" | "add-hidden" | "delete" | "delete-hidden" | "hide" | "unhide" | "order"
+    ));
+    if GlobalEmitter::try_global().is_none() {
+        return None;
+    }
+    let payload = AlbumImagesChangePayload {
+        seq: next_change_seq(),
+        reason: reason.to_string(),
+        album_ids: vec![album_id.to_string()],
+        image_ids: image_ids.to_vec(),
+        ancestor_path: ancestor_paths
+            .get(album_id)
+            .cloned()
+            .unwrap_or_else(|| format!("/{album_id}/")),
+    };
+    #[cfg(feature = "ipc-server")]
+    dispatch_view_event(Arc::new(DaemonEvent::AlbumImagesChange {
+        seq: payload.seq,
+        reason: payload.reason.clone(),
+        album_ids: payload.album_ids.clone(),
+        image_ids: payload.image_ids.clone(),
+        ancestor_path: payload.ancestor_path.clone(),
+    }));
+    Some(payload)
+}
+
+fn grouped_memberships(pairs: &[(String, String)]) -> BTreeMap<String, Vec<String>> {
+    let mut grouped = BTreeMap::<String, Vec<String>>::new();
+    for (album_id, image_id) in pairs {
+        let ids = grouped.entry(album_id.clone()).or_default();
+        if !ids.iter().any(|id| id == image_id) {
+            ids.push(image_id.clone());
+        }
+    }
+    grouped
+}
+
+fn hidden_image_ids(pairs: &[(String, String)]) -> HashSet<&str> {
+    pairs
+        .iter()
+        .filter_map(|(album_id, image_id)| {
+            (album_id == HIDDEN_ALBUM_ID).then_some(image_id.as_str())
+        })
+        .collect()
+}
+
+fn split_by_hidden(changed: &[String], pairs: &[(String, String)]) -> (Vec<String>, Vec<String>) {
+    let hidden = hidden_image_ids(pairs);
+    changed
+        .iter()
+        .cloned()
+        .partition(|image_id| hidden.contains(image_id.as_str()))
+}
+
+/// 实际新增的成员写库后调用；按画册与隐藏状态拆分并返回已发送 payload 的副本。
+pub fn emit_membership_added(
+    album_id: &str,
+    changed: &[String],
+) -> Result<Vec<AlbumImagesChangePayload>, String> {
+    if changed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (pairs, ancestor_paths) = Storage::global().collect_album_memberships_with_paths(changed)?;
+    let mut out = Vec::new();
+    if album_id == HIDDEN_ALBUM_ID {
+        if let Some(payload) = emit_album_images_change("add-hidden", album_id, changed, &ancestor_paths) {
+            out.push(payload);
+        }
+        for (affected_album, ids) in grouped_memberships(&pairs) {
+            if affected_album == HIDDEN_ALBUM_ID {
+                continue;
+            }
+            if let Some(payload) = emit_album_images_change("hide", &affected_album, &ids, &ancestor_paths) {
+                out.push(payload);
+            }
+        }
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_images_change("change", changed, None, None, None);
+        }
+    } else {
+        let (hidden_ids, visible_ids) = split_by_hidden(changed, &pairs);
+        if let Some(payload) = emit_album_images_change("add", album_id, &visible_ids, &ancestor_paths) {
+            out.push(payload);
+        }
+        if let Some(payload) = emit_album_images_change("add-hidden", album_id, &hidden_ids, &ancestor_paths) {
+            out.push(payload);
+        }
+    }
+    Ok(out)
+}
+
+/// 实际移除的成员写库后调用；`pairs_before` 必须来自写库前状态。
+pub fn emit_membership_removed(
+    album_id: &str,
+    changed: &[String],
+    pairs_before: &[(String, String)],
+    ancestor_paths: &HashMap<String, String>,
+    context: MembershipRemovalContext,
+) -> Vec<AlbumImagesChangePayload> {
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if context == MembershipRemovalContext::AlbumMutation && album_id == HIDDEN_ALBUM_ID {
+        if let Some(payload) = emit_album_images_change("delete-hidden", album_id, changed, ancestor_paths) {
+            out.push(payload);
+        }
+        let changed_set: HashSet<&str> = changed.iter().map(String::as_str).collect();
+        for (affected_album, ids) in grouped_memberships(pairs_before) {
+            if affected_album == HIDDEN_ALBUM_ID {
+                continue;
+            }
+            let affected: Vec<String> = ids
+                .into_iter()
+                .filter(|image_id| changed_set.contains(image_id.as_str()))
+                .collect();
+            if let Some(payload) = emit_album_images_change("unhide", &affected_album, &affected, ancestor_paths) {
+                out.push(payload);
+            }
+        }
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_images_change("change", changed, None, None, None);
+        }
+    } else {
+        let (hidden_ids, visible_ids) = split_by_hidden(changed, pairs_before);
+        if let Some(payload) = emit_album_images_change("delete", album_id, &visible_ids, ancestor_paths) {
+            out.push(payload);
+        }
+        if let Some(payload) = emit_album_images_change("delete-hidden", album_id, &hidden_ids, ancestor_paths) {
+            out.push(payload);
+        }
+    }
+    out
+}
+
+/// 排序不改变计数，但会使画册视图失效。
+pub fn emit_album_images_order_changed(
+    album_id: &str,
+    image_ids: &[String],
+) -> Vec<AlbumImagesChangePayload> {
+    let ancestor_paths = Storage::global()
+        .get_album_by_id(album_id)
+        .ok()
+        .flatten()
+        .map(|album| HashMap::from([(album.id, album.ancestor_path)]))
+        .unwrap_or_default();
+    emit_album_images_change("order", album_id, image_ids, &ancestor_paths)
+        .into_iter()
+        .collect()
+}
 
 fn emit_task_image_counts_full(task_id: &str) {
     if let Ok(Some(t)) = Storage::global().get_task(task_id) {
@@ -17,18 +234,14 @@ fn emit_task_image_counts_full(task_id: &str) {
     }
 }
 
-/// 删除 `images` 表行（删文件或仅删记录），并发射 `images-change(delete)` + 必要时 `album-images-change(delete)`。
-///
-/// 源文件 purge 固定在 DB 事务与事件发射之后执行，避免未来调用方遗漏异步清除。
-pub async fn delete_images_with_events(
+/// 删除 `images` 表行并发射精确事件，但把可能耗时的源文件回收留给调用方。
+pub fn begin_delete_images_with_events(
     image_ids: &[String],
     delete_files: bool,
-) -> Result<PurgeReport, String> {
+) -> Result<PendingImageDelete, String> {
     let storage = Storage::global();
-    let album_ids = storage.collect_album_ids_for_images(image_ids)?;
+    let (pairs_before, ancestor_paths) = storage.collect_album_memberships_with_paths(image_ids)?;
     let task_ids = storage.collect_task_ids_for_images(image_ids)?;
-    let plugin_ids = storage.collect_plugin_ids_for_images(image_ids)?;
-    let surf_record_ids = storage.collect_surf_record_ids_for_images(image_ids)?;
     let paths = if delete_files {
         storage.batch_delete_images(image_ids)?
     } else {
@@ -38,49 +251,109 @@ pub async fn delete_images_with_events(
     for tid in &task_ids {
         emit_task_image_counts_full(tid);
     }
-    GlobalEmitter::global().emit_images_change(
-        "delete",
-        image_ids,
-        Some(&task_ids),
-        Some(&surf_record_ids),
-        Some(&plugin_ids),
-    );
-    if !album_ids.is_empty() {
-        GlobalEmitter::global().emit_album_images_change("delete", &album_ids, image_ids);
+    GlobalEmitter::global().emit_images_change("delete", image_ids, Some(&task_ids), None, None);
+
+    let mut album_changes = Vec::new();
+    for (album_id, changed) in grouped_memberships(&pairs_before) {
+        album_changes.extend(emit_membership_removed(
+            &album_id,
+            &changed,
+            &pairs_before,
+            &ancestor_paths,
+            MembershipRemovalContext::ImagesDeleted,
+        ));
     }
-    Ok(purge_source_files(&paths).await)
+    Ok(PendingImageDelete {
+        paths,
+        album_changes,
+    })
 }
 
-/// 加入画册并发 `album-images-change(add)`。
+/// 删除 `images` 表行、发射精确事件并回收源文件。
+pub async fn delete_images_with_events(
+    image_ids: &[String],
+    delete_files: bool,
+) -> Result<DeleteImagesResult, String> {
+    Ok(begin_delete_images_with_events(image_ids, delete_files)?
+        .finish()
+        .await)
+}
+
+/// 加入画册并发射精确成员变更。
 pub fn add_images_to_album_with_event(
     album_id: &str,
     image_ids: &[String],
 ) -> Result<AddToAlbumResult, String> {
     Storage::global().ensure_album_is_writable(album_id)?;
-    let r = Storage::global().add_images_to_album(album_id, image_ids)?;
-    let aids = vec![album_id.to_string()];
-    GlobalEmitter::global().emit_album_images_change("add", &aids, image_ids);
-    Ok(r)
+    let mut result = Storage::global().add_images_to_album(album_id, image_ids)?;
+    result.album_changes = emit_membership_added(album_id, &result.inserted_ids)?;
+    Ok(result)
 }
 
-/// 从画册移除并发 `album-images-change(delete)`。
+/// 从画册移除并发射精确成员变更。
 pub fn remove_images_from_album_with_event(
     album_id: &str,
     image_ids: &[String],
-) -> Result<usize, String> {
+) -> Result<(Vec<String>, Vec<AlbumImagesChangePayload>), String> {
     Storage::global().ensure_album_is_writable(album_id)?;
+    let (pairs_before, ancestor_paths) =
+        Storage::global().collect_album_memberships_with_paths(image_ids)?;
     let removed = Storage::global().remove_images_from_album(album_id, image_ids)?;
-    let aids = vec![album_id.to_string()];
-    GlobalEmitter::global().emit_album_images_change("delete", &aids, image_ids);
-    Ok(removed)
+    let album_changes = emit_membership_removed(
+        album_id,
+        &removed,
+        &pairs_before,
+        &ancestor_paths,
+        MembershipRemovalContext::AlbumMutation,
+    );
+    Ok((removed, album_changes))
 }
 
-/// 切换收藏并发 `album-images-change`。
+/// 切换收藏；重复设置同一状态时不发成员增量。
 pub fn toggle_image_favorite_with_event(image_id: &str, favorite: bool) -> Result<(), String> {
-    Storage::global().toggle_image_favorite(image_id, favorite)?;
-    let aids = vec![FAVORITE_ALBUM_ID.to_string()];
-    let ids = vec![image_id.to_string()];
-    let reason = if favorite { "add" } else { "delete" };
-    GlobalEmitter::global().emit_album_images_change(reason, &aids, &ids);
+    let (pairs_before, ancestor_paths) = (!favorite)
+        .then(|| Storage::global().collect_album_memberships_with_paths(&[image_id.to_string()]))
+        .transpose()?
+        .unwrap_or_default();
+    if !Storage::global().toggle_image_favorite(image_id, favorite)? {
+        return Ok(());
+    }
+    let changed = vec![image_id.to_string()];
+    if favorite {
+        emit_membership_added(FAVORITE_ALBUM_ID, &changed)?;
+    } else {
+        emit_membership_removed(
+            FAVORITE_ALBUM_ID,
+            &changed,
+            &pairs_before,
+            &ancestor_paths,
+            MembershipRemovalContext::AlbumMutation,
+        );
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn membership_change_classification_uses_each_images_hidden_state() {
+        let changed = vec!["visible".to_string(), "hidden".to_string()];
+        let pairs = vec![
+            ("album-a".to_string(), "visible".to_string()),
+            ("album-a".to_string(), "hidden".to_string()),
+            (HIDDEN_ALBUM_ID.to_string(), "hidden".to_string()),
+            ("album-b".to_string(), "hidden".to_string()),
+        ];
+
+        let (hidden, visible) = split_by_hidden(&changed, &pairs);
+        assert_eq!(hidden, vec!["hidden"]);
+        assert_eq!(visible, vec!["visible"]);
+
+        let grouped = grouped_memberships(&pairs);
+        assert_eq!(grouped["album-a"], vec!["visible", "hidden"]);
+        assert_eq!(grouped["album-b"], vec!["hidden"]);
+        assert_eq!(grouped[HIDDEN_ALBUM_ID], vec!["hidden"]);
+    }
 }

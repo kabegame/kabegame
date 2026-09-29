@@ -25,6 +25,7 @@
 - 本地文件夹同步改为文件级增量事件；长任务延迟显示并提供逐目录百分比与取消能力
 - 进度条里的进度文案放到进度条下方，不挤空间
 - 进度条宽度调整，在极端窄的情况下隐藏。
+- 畅游网址输入框体验优化，不会防抖打开一个不一样的网址
 
 ### Changed
 - 本地文件夹目录消失时删除对应画册树但保留图片记录；文件消失时只删除图片记录，不删除磁盘文件
@@ -37,7 +38,7 @@
 ### Added
 - 畅游一键下载：`surf_collect.rs` 以 Tauri Channel 与内容页通信（Rust 权威 run 状态机，内容页脚本 `concat!` 成封闭 IIFE、不挂 window 全局）；页面发现脚本 `page_discover.js` 供后续 webpage runner 复用；快照写入 metadata 表并只以标题与 URL 建搜索索引
 - 新增本地文件夹 `fs_listener` + `synchronizer` 双管道与跨画册 CPU 核数并发限制
-- 添加了 cef 、 cef-rs 补丁，为了实现linux的拖拽，维护负担增加
+- 添加了 cef 、 cef-rs 补丁，为了实现linux、macos的拖拽，维护负担增加
 - 标签画册：`albums.type IN ('label', 'label_dir')` + `label_key` / 派生列 `label_path`（v031），目录只装子画册、叶子只挂图片，见 `cocs/gallery/LABEL_ALBUMS.md`
 - 插件 API：`Kabegame.downloadImage` 新增 `labels`；迁移脚本新增可选导出 `provideLabels(input)`，`migrate` 变为可选
 - 新增 PathQL 搜索 `search/label/<q>` 与 `search/label-tree/<q>`，宿主 SQL 函数 `kb_label_tokens`

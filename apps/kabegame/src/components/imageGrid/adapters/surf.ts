@@ -28,14 +28,13 @@ export function createSurfImagesAdapter(params: {
       const e = error as { message?: string } | null;
       ElMessage.error(e?.message || String(error) || t("surf.loadImagesFailed"));
     },
-    imagesChange: {
-      waitMs: 500,
-      filter: (p) => {
+    changes: {
+      relevant: (batch) => {
         const rid = params.recordId();
-        return !!rid && (p.surfRecordIds?.includes(rid) ?? false);
+        return !!rid && batch.images.size > 0 &&
+          (batch.wildcard.surf || batch.surfRecordIds.has(rid));
       },
     },
-    albumImagesChange: { waitMs: 500 },
     actionsOptions: () => ({
       removeText: t("surf.removeText"),
       multiHide: ["favorite", "addToAlbum"],

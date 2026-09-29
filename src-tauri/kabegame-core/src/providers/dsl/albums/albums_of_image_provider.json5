@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_of_image_provider",
+    "properties": { "image_id": { "type": "string", "default": "", "optional": false } },
+    "query": {
+        "join": [{ "kind": "INNER", "table": "album_images", "as": "owned_ai", "on": "albums.id = owned_ai.album_id", "in_need": true }],
+        "where": "CAST(owned_ai.image_id AS TEXT) = ${properties.image_id}",
+        "order": [{ "sql": "albums.created_at", "order": "asc", "clear": "all" }]
+    }
+}

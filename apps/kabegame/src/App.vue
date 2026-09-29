@@ -212,7 +212,6 @@ import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useDownloadStateStore } from "./stores/downloadState";
-import { useAlbumStore } from "./stores/albums";
 import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { useModal } from "@kabegame/core/composables/useModal";
@@ -312,7 +311,6 @@ const {
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const downloadStateStore = useDownloadStateStore();
-const albumStore = useAlbumStore();
 
 const router = useRouter();
 const route = useRoute();
@@ -550,11 +548,6 @@ onMounted(async () => {
   await settingsStore.loadAll();
 
   initializeLanguageSetting();
-  try {
-    await albumStore.loadAlbums();
-  } catch (e) {
-    console.error("初始化画册树失败:", e);
-  }
   registerHeaderFeatures();
   console.log("[App.vue] about to call pluginStore.loadPlugins()");
   try {

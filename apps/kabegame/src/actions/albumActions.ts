@@ -1,7 +1,6 @@
 import { Connection, FolderOpened, Folder, FolderAdd, FolderChecked, Picture, Edit, Rank, Delete, Refresh, VideoPause, PriceTag } from "@kabegame/element-plus-icons";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
-import { HIDDEN_ALBUM_ID } from "@/stores/albums";
-import type { Album } from "@/stores/albums";
+import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
 import { i18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import type { AlbumSyncMode } from "@kabegame/core/types/album";

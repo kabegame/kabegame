@@ -16,9 +16,72 @@ use crate::storage::Storage;
 #[cfg(feature = "ipc-server")]
 use serde_json::json;
 #[cfg(feature = "ipc-server")]
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "ipc-server")]
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+
+#[cfg(feature = "ipc-server")]
+static CHANGE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "ipc-server")]
+static HELD_VIEW_EVENTS: Mutex<(usize, Vec<Arc<DaemonEvent>>)> = Mutex::new((0, Vec::new()));
+
+/// 持有期间，视图相关事件仍分配序号，但延迟到最后一个守卫析构时广播。
+pub struct EventHold(());
+
+/// 返回最近一次已发出的图片或画册图片变更序号。
+#[cfg(feature = "ipc-server")]
+pub fn current_change_seq() -> u64 {
+    CHANGE_SEQ.load(Ordering::SeqCst)
+}
+
+#[cfg(feature = "ipc-server")]
+pub(crate) fn next_change_seq() -> u64 {
+    CHANGE_SEQ.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// 未启用事件服务时没有变更序号。
+#[cfg(not(feature = "ipc-server"))]
+pub fn current_change_seq() -> u64 {
+    0
+}
+
+#[cfg(not(feature = "ipc-server"))]
+pub(crate) fn next_change_seq() -> u64 {
+    0
+}
+
+#[cfg(feature = "ipc-server")]
+pub(crate) fn dispatch_view_event(event: Arc<DaemonEvent>) {
+    let mut held = HELD_VIEW_EVENTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if held.0 > 0 {
+        held.1.push(event);
+    } else {
+        EventBroadcaster::global().broadcast(event);
+    }
+}
+
+#[cfg(feature = "ipc-server")]
+impl Drop for EventHold {
+    fn drop(&mut self) {
+        let mut held = HELD_VIEW_EVENTS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        held.0 = held.0.saturating_sub(1);
+        if held.0 == 0 {
+            for event in held.1.drain(..) {
+                EventBroadcaster::global().broadcast(event);
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "ipc-server"))]
+impl Drop for EventHold {
+    fn drop(&mut self) {}
+}
 
 // ==================== IPC 实现 ====================
 
@@ -57,6 +120,14 @@ impl GlobalEmitter {
     /// 如果已初始化返回 Some，否则返回 None
     pub fn try_global() -> Option<&'static GlobalEmitter> {
         GLOBAL_EMITTER.get()
+    }
+
+    pub fn hold(&self) -> EventHold {
+        let mut held = HELD_VIEW_EVENTS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        held.0 += 1;
+        EventHold(())
     }
 
     /// 发送任务日志事件
@@ -242,34 +313,19 @@ impl GlobalEmitter {
         surf_record_ids: Option<&[String]>,
         plugin_ids: Option<&[String]>,
     ) {
+        let seq = next_change_seq();
         let opt_vec = |s: Option<&[String]>| {
             s.and_then(|v| if v.is_empty() { None } else { Some(v.to_vec()) })
         };
         let event = std::sync::Arc::new(DaemonEvent::ImagesChange {
+            seq,
             reason: reason.to_string(),
             image_ids: image_ids.to_vec(),
             task_ids: opt_vec(task_ids),
             surf_record_ids: opt_vec(surf_record_ids),
             plugin_ids: opt_vec(plugin_ids),
         });
-        EventBroadcaster::global().broadcast(event);
-    }
-
-    /// 发送 `album_images` 表变更事件（reason: `add` | `delete`）
-    pub fn emit_album_images_change(
-        &self,
-        reason: &str,
-        album_ids: &[String],
-        image_ids: &[String],
-    ) {
-        let direct_counts = album_direct_counts(album_ids);
-        let event = std::sync::Arc::new(DaemonEvent::AlbumImagesChange {
-            reason: reason.to_string(),
-            album_ids: album_ids.to_vec(),
-            image_ids: image_ids.to_vec(),
-            direct_counts,
-        });
-        EventBroadcaster::global().broadcast(event);
+        dispatch_view_event(event);
     }
 
     /// 畅游记录新增（完整 record JSON）
@@ -374,7 +430,9 @@ impl GlobalEmitter {
 
     /// 发送画册属性变更事件（重命名、移动等；`changes` 为增量 JSON）
     pub fn emit_album_changed(&self, album_id: &str, changes: serde_json::Value) {
+        let seq = next_change_seq();
         let event = std::sync::Arc::new(DaemonEvent::AlbumChanged {
+            seq,
             album_id: album_id.to_string(),
             changes,
         });
@@ -400,9 +458,11 @@ impl GlobalEmitter {
     }
 
     /// 发送画册删除事件（底层 DB 删除后由 storage 调用）
-    pub fn emit_album_deleted(&self, album_id: &str) {
+    pub fn emit_album_deleted(&self, album: &crate::storage::Album) {
         let event = std::sync::Arc::new(DaemonEvent::AlbumDeleted {
-            album_id: album_id.to_string(),
+            album_id: album.id.clone(),
+            parent_id: album.parent_id.clone(),
+            ancestor_path: album.ancestor_path.clone(),
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -461,25 +521,6 @@ impl GlobalEmitter {
     }
 }
 
-#[cfg(feature = "ipc-server")]
-fn album_direct_counts(album_ids: &[String]) -> Option<HashMap<String, usize>> {
-    let mut counts = HashMap::new();
-    for id in album_ids {
-        let id = id.trim();
-        if id.is_empty() || counts.contains_key(id) {
-            continue;
-        }
-        let path = format!(
-            "images://gallery/album/{}",
-            pathql_rs::escape_path_segment(id)
-        );
-        if let Ok(count) = crate::providers::count_at(&path) {
-            counts.insert(id.to_string(), count);
-        }
-    }
-    (!counts.is_empty()).then_some(counts)
-}
-
 /// 全局 emitter 单例存储
 #[cfg(feature = "ipc-server")]
 static GLOBAL_EMITTER: OnceLock<GlobalEmitter> = OnceLock::new();
@@ -509,6 +550,10 @@ impl GlobalEmitter {
     /// 尝试获取全局 emitter 引用（No-op）
     pub fn try_global() -> Option<&'static GlobalEmitter> {
         Some(Self::global())
+    }
+
+    pub fn hold(&self) -> EventHold {
+        EventHold(())
     }
 
     pub fn emit_task_log(&self, _task_id: &str, _level: &str, _message: &str) {}
@@ -599,14 +644,6 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_album_images_change(
-        &self,
-        _reason: &str,
-        _album_ids: &[String],
-        _image_ids: &[String],
-    ) {
-    }
-
     pub fn emit_surf_record_added(&self, _record: serde_json::Value) {}
 
     pub fn emit_surf_record_deleted(&self, _surf_record_id: &str) {}
@@ -637,7 +674,7 @@ impl GlobalEmitter {
 
     pub fn emit_album_added(&self, _album: &crate::storage::Album) {}
 
-    pub fn emit_album_deleted(&self, _album_id: &str) {}
+    pub fn emit_album_deleted(&self, _album: &crate::storage::Album) {}
 
     pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) {}
 

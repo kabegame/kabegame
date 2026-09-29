@@ -1,10 +1,10 @@
-import { computed, type Ref } from "vue";
+import { type Ref } from "vue";
 import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { useAlbumStore, HIDDEN_ALBUM_ID } from "@/stores/albums";
-import { storeToRefs } from "pinia";
+import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/services/albums";
+import { albumChangeBatch, publishLocal } from "@/services/dataChangeHub";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl } from "@kabegame/core/utils/fileUrl";
@@ -14,6 +14,9 @@ import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
+import type { GridRefreshContext } from "@/components/imageGrid/types";
+import type { ViewSnapshot } from "@/services/liveQuery";
+import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -26,12 +29,12 @@ export type FavoriteStatusChangedDetail = {
 export function useImageOperations(
   _displayedImages: Readonly<Ref<ImageInfo[]>>,
   currentWallpaperImageId: Ref<string | null>,
-  galleryViewRef: Ref<any>
+  galleryViewRef: Ref<any>,
+  mutate: GridRefreshContext["mutate"],
+  patch: GridRefreshContext["patch"],
 ) {
-  const albumStore = useAlbumStore();
   const settingsStore = useSettingsStore();
 
-  const albums = computed(() => albumStore.albums);
   const { set: setWallpaperRotationEnabled } = useSettingKeyState(
     "wallpaperRotationEnabled",
   );
@@ -264,7 +267,13 @@ export function useImageOperations(
         !!currentWallpaperImageId.value &&
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
-      await invoke("batch_delete_images", { imageIds });
+      const result = await mutate((view) =>
+        invoke<{
+          view?: ViewSnapshot | null;
+          albumChanges: AlbumImagesChangePayload[];
+        }>("batch_delete_images", { imageIds, view }),
+      );
+      for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
 
       if (includesCurrent) {
         currentWallpaperImageId.value = null;
@@ -289,7 +298,9 @@ export function useImageOperations(
 
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
-      await albumStore.addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds);
+      await mutate((view) =>
+        addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds, { view }),
+      );
 
       ElMessage.success(
         count > 1
@@ -306,7 +317,7 @@ export function useImageOperations(
   // 注意：按 hash 去重已改为后端“分批后台任务 + 事件驱动 UI 同步”，逻辑迁移到 Gallery.vue
 
   // 批量切换收藏：任一未收藏 → 全部收藏，否则全部取消收藏。
-  // 列表与画册缓存由 album-images-change / images-change 事件驱动刷新。
+  // 当前列表在命令成功后就地更新；其他入口仍由 album-images-change 同步。
   const toggleFavoriteForImages = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length === 0) return;
     const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
@@ -335,6 +346,7 @@ export function useImageOperations(
       ElMessage.error(i18n.global.t("common.operationFailed"));
       return;
     }
+    patch(succeeded.map((image) => image.id), { favorite: desiredFavorite });
 
     ElMessage.success(
       desiredFavorite
@@ -388,21 +400,22 @@ export function useImageOperations(
       if (imagesToProcess.length > 1) {
         // 多选：创建"桌面画册x"，添加到画册，开启轮播
         // 1. 找到下一个可用的"桌面画册x"名称
-        await albumStore.loadAlbums();
         let counter = 1;
         let albumName = i18n.global.t("gallery.desktopAlbumName", { n: counter });
-        while (albums.value.some((a) => a.name === albumName)) {
+        while ((await searchAlbums(albumName, 1, "", ["normal"])).some((album) => album.name === albumName)) {
           counter++;
           albumName = i18n.global.t("gallery.desktopAlbumName", { n: counter });
         }
 
         // 2. 创建画册
-        const createdAlbum = await albumStore.createAlbum(albumName);
+        const createdAlbum = await createAlbum(albumName);
 
         // 3. 将选中的图片添加到画册
         const imageIds = imagesToProcess.map((img) => img.id);
         try {
-          await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
+          await mutate((view) =>
+            addImagesToAlbum(createdAlbum.id, imageIds, { view }),
+          );
         } catch (error: any) {
           // 提取友好的错误信息
           const errorMessage =

@@ -65,6 +65,7 @@ impl Provider for PluginRootProvider {
             .into_iter()
             .map(|plugin| {
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: plugin.id.clone(),
                     provider: Some(Arc::new(PluginEntryProvider {
                         plugin_id: plugin.id.clone(),
@@ -80,6 +81,7 @@ impl Provider for PluginRootProvider {
             return ResolveRef::Terminal(None);
         }
         ResolveRef::Terminal(Some(ChildEntry {
+            total: None,
             name: name.to_string(),
             provider: Some(Arc::new(PluginEntryProvider {
                 plugin_id: name.to_string(),
@@ -111,6 +113,7 @@ impl Provider for PluginEntryProvider {
     ) -> Result<Vec<ListRef>, EngineError> {
         Ok(vec![
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "icon".into(),
                 provider: Some(Arc::new(PluginIconProvider {
                     plugin_id: self.plugin_id.clone(),
@@ -118,6 +121,7 @@ impl Provider for PluginEntryProvider {
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "description_template".into(),
                 provider: Some(Arc::new(PluginDescriptionTemplateProvider {
                     plugin_id: self.plugin_id.clone(),
@@ -125,6 +129,7 @@ impl Provider for PluginEntryProvider {
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "doc".into(),
                 provider: Some(Arc::new(PluginDocProvider {
                     plugin_id: self.plugin_id.clone(),
@@ -132,6 +137,7 @@ impl Provider for PluginEntryProvider {
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "changelog".into(),
                 provider: Some(Arc::new(PluginChangelogProvider {
                     plugin_id: self.plugin_id.clone(),
@@ -139,6 +145,7 @@ impl Provider for PluginEntryProvider {
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "asset".into(),
                 provider: Some(Arc::new(PluginAssetRootProvider {
                     plugin_id: self.plugin_id.clone(),
@@ -146,6 +153,7 @@ impl Provider for PluginEntryProvider {
                 meta: None,
             }),
             ListRef::Direct(ChildEntry {
+                total: None,
                 name: "provider".into(),
                 provider: Some(Arc::new(PluginProviderRootProvider {
                     plugin_id: self.plugin_id.clone(),
@@ -178,6 +186,7 @@ impl Provider for PluginEntryProvider {
             _ => None,
         };
         ResolveRef::Terminal(provider.map(|provider| ChildEntry {
+            total: None,
             name: name.to_string(),
             provider: Some(provider),
             meta: None,
@@ -290,6 +299,7 @@ impl Provider for PluginAssetRootProvider {
             .into_iter()
             .map(|key| {
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: key.clone(),
                     provider: Some(Arc::new(PluginAssetProvider {
                         plugin_id: self.plugin_id.clone(),
@@ -303,6 +313,7 @@ impl Provider for PluginAssetRootProvider {
 
     fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
         ResolveRef::Terminal(Some(ChildEntry {
+            total: None,
             name: name.to_string(),
             provider: Some(Arc::new(PluginAssetProvider {
                 plugin_id: self.plugin_id.clone(),
@@ -365,6 +376,7 @@ impl Provider for PluginProviderRootProvider {
             .map(|provider| {
                 let name = provider.def.name.0.clone();
                 ListRef::Direct(ChildEntry {
+                    total: None,
                     name: name.clone(),
                     provider: Some(Arc::new(PluginProviderItemProvider {
                         plugin_id: self.plugin_id.clone(),
@@ -387,6 +399,7 @@ impl Provider for PluginProviderRootProvider {
             return ResolveRef::Terminal(None);
         }
         ResolveRef::Terminal(Some(ChildEntry {
+            total: None,
             name: name.to_string(),
             provider: Some(Arc::new(PluginProviderItemProvider {
                 plugin_id: self.plugin_id.clone(),
