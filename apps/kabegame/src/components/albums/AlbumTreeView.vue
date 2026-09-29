@@ -182,7 +182,7 @@ function sectionOf(node: Album): AlbumRootSection {
 const dataSource: TreeDataSource<AlbumNode> = {
   getKey: (node) => node.id,
   hasChildren: (node) => node.childCount > 0,
-  // 页大小经末段 album_page_x<页大小>x_<页码> 传给 albums:// 列举 provider；当前固定
+  // 页大小经分页段 x<页大小>x/<页码> 传给 albums:// 查询；当前固定
   // 默认值，将来要让用户可选，只需把这里与 runSearch 的 ALBUM_PAGE_SIZE 换成同一份可配值。
   getChildren: (node) =>
     fetchAlbumPage({ parentId: node.id }, 1, prefix.value, sectionKinds(sectionOf(node)), ALBUM_PAGE_SIZE).then(

@@ -11,7 +11,7 @@
             "in_need": true
         }],
         // 同一森林：类型相同，或同属标签森林（label / label_dir）。
-        // 整条都引用 albums.parent_id，便于 parent/<id> 与列举项计数按嵌套目录模式整条清除。
+        // 整条都引用 albums.parent_id，便于其后的 parent/<id> 按嵌套目录模式整条清除。
         "where_clear": ["albums.parent_id"],
         "where": "(albums.parent_id IS NULL OR (parent_album.type <> albums.type AND NOT (parent_album.type IN ('label', 'label_dir') AND albums.type IN ('label', 'label_dir')))) AND albums.id NOT IN (${global.favorite_album_id}, ${global.hidden_album_id})"
     },

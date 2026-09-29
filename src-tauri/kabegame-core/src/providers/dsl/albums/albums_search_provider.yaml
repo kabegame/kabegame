@@ -20,7 +20,6 @@ query:
         )
       as: parent_path_names
   # instr 做子串匹配，查询里的 % _ \ 都按字面处理，无需 LIKE 转义；label_path 已含 label_key。
-  # 列举项计数（albums_child_count_provider）按 `instr(LOWER(albums.name)` 整条清除本谓词。
   where:
     - instr(LOWER(albums.name), LOWER(${properties.query})) > 0
     - instr(LOWER(COALESCE(albums.label_path, '')), LOWER(${properties.query})) > 0

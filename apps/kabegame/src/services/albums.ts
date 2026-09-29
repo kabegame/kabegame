@@ -111,10 +111,6 @@ export function normalizeAlbumRow(row: Record<string, unknown>): Album {
   };
 }
 
-function metaRow(entry: ProviderListChild): Record<string, unknown> {
-  return entry.meta && typeof entry.meta === "object" ? (entry.meta as Record<string, unknown>) : {};
-}
-
 const SECTION_KINDS: Record<AlbumRootSection, AlbumKind[]> = {
   normal: ["normal"],
   label: ["label", "label_dir"],
@@ -128,38 +124,45 @@ function albumKindSegment(kinds?: ReadonlyArray<AlbumKind>): string {
   return `~any/${kinds.map((kind) => `album_kind/${kind}`).join("/~or/")}/~end/`;
 }
 
-/** 末段分页：切完页再对该页计 `image_count`；`hide_` 与 images:// 的 `hide/` 前缀同口径。 */
-function albumPageSegment(page: number, prefix: GalleryPrefix, pageSize: number): string {
-  return `album_page_${prefix === "hide/" ? "hide_" : ""}x${pageSize}x_${page}`;
-}
-
-/**
- * 画册目录的一页：过滤段各自折叠一条 where（`parent/<id>` 或 `roots`，
- * 再叠 `album_kind/<kind>`），末段只负责切页与计数。根分区的类型集合即分区本身。
- */
-function albumPagePath(
-  target: { parentId: string } | { section: AlbumRootSection },
-  page: number,
-  prefix: GalleryPrefix,
+/** 过滤段 + 分页段：`<scope>/<类型段>x<页大小>x/<页>`；fetch 它即这一页的画册行。 */
+function albumPageBase(
+  scope: string,
   kinds: ReadonlyArray<AlbumKind> | undefined,
+  page: number,
   pageSize: number,
 ): string {
-  const scope = "parentId" in target ? `parent/${encodeURIComponent(target.parentId)}` : "roots";
-  const sectionKinds = "section" in target ? SECTION_KINDS[target.section] : undefined;
-  const effectiveKinds = kinds?.length ? kinds : sectionKinds;
-  return `albums://${scope}/${albumKindSegment(effectiveKinds)}${albumPageSegment(page, prefix, pageSize)}`;
+  return `albums://${scope}/${albumKindSegment(kinds)}x${pageSize}x/${page}`;
+}
+
+function totalsById(entries: ProviderListChild[]): Map<string, number> {
+  return new Map(entries.map((entry) => [entry.name, entry.total ?? 0]));
 }
 
 /**
- * 列举项 total 即同类型过滤下的直接子画册数（标签目录直接显示它）；其余类型显示行内的
- * `image_count`（标签叶子为直接图片数，普通 / 本地文件夹为子树成员行数）。
+ * 一页画册与逐项计数，三路并行。计数都在 `~~` 子查询边界之后，只作用于这一页：
+ * `~~/children/<类型段>` 是同一组类型过滤下的直接子画册数，`~~/images[/hide]` 是子树成员行数
+ * （标签叶子即直接图片数；`hide` 与 images:// 的 `hide/` 前缀同口径）。列不出来的画册记 0。
  */
-function toAlbumNode(entry: ProviderListChild): AlbumNode {
-  const raw = metaRow(entry);
-  const album = normalizeAlbumRow(raw);
-  const childCount = entry.total ?? 0;
-  const count = album.type === "label_dir" ? childCount : Number(raw.image_count ?? 0) || 0;
-  return { ...album, childCount, count };
+async function fetchPageWithCounts(
+  base: string,
+  kinds: ReadonlyArray<AlbumKind> | undefined,
+  prefix: GalleryPrefix,
+): Promise<Array<{ row: Record<string, unknown>; node: AlbumNode }>> {
+  const childKinds = albumKindSegment(kinds).replace(/\/$/, "");
+  const [rows, children, images] = await Promise.all([
+    pathqlFetch<Record<string, unknown>>(base),
+    pathqlList(`${base}/~~/children${childKinds ? `/${childKinds}` : ""}`, true),
+    pathqlList(`${base}/~~/images${prefix === "hide/" ? "/hide" : ""}`, true),
+  ]);
+  const childCounts = totalsById(children);
+  const imageCounts = totalsById(images);
+  return rows.map((row) => {
+    const album = normalizeAlbumRow(row);
+    const childCount = childCounts.get(album.id) ?? 0;
+    // 标签目录不能挂图，显示子画册数
+    const count = album.type === "label_dir" ? childCount : (imageCounts.get(album.id) ?? 0);
+    return { row, node: { ...album, childCount, count } };
+  });
 }
 
 export async function fetchAlbumPage(
@@ -169,8 +172,13 @@ export async function fetchAlbumPage(
   kinds?: ReadonlyArray<AlbumKind>,
   pageSize: number = ALBUM_PAGE_SIZE,
 ): Promise<AlbumNode[]> {
-  const entries = await pathqlList(albumPagePath(target, page, prefix, kinds, pageSize), true);
-  return entries.map(toAlbumNode);
+  // 根分区的类型集合即分区本身
+  const scope = "parentId" in target ? `parent/${encodeURIComponent(target.parentId)}` : "roots";
+  const sectionKinds = "section" in target ? SECTION_KINDS[target.section] : undefined;
+  const effectiveKinds = kinds?.length ? kinds : sectionKinds;
+  const base = albumPageBase(scope, effectiveKinds, page, pageSize);
+  const items = await fetchPageWithCounts(base, effectiveKinds, prefix);
+  return items.map(({ node }) => node);
 }
 
 export async function searchAlbums(
@@ -180,12 +188,9 @@ export async function searchAlbums(
   kinds?: ReadonlyArray<AlbumKind>,
   pageSize: number = ALBUM_PAGE_SIZE,
 ): Promise<AlbumSearchNode[]> {
-  const path = `albums://search/${encodeURIComponent(query)}/${albumKindSegment(kinds)}`;
-  const entries = await pathqlList(`${path}${albumPageSegment(page, prefix, pageSize)}`, true);
-  return entries.map((entry) => ({
-    ...toAlbumNode(entry),
-    parentPathNames: optionalString(metaRow(entry).parent_path_names),
-  }));
+  const base = albumPageBase(`search/${encodeURIComponent(query)}`, kinds, page, pageSize);
+  const items = await fetchPageWithCounts(base, kinds, prefix);
+  return items.map(({ row, node }) => ({ ...node, parentPathNames: optionalString(row.parent_path_names) }));
 }
 
 export async function fetchAlbum(id: string): Promise<Album | null> {
