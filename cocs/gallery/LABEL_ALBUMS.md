@@ -110,6 +110,10 @@ token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `lab
 - 预览弹窗：core `ImagePreviewDialog` 开 `#info-extra` slot、`ImageGrid` 透传为 `#preview-info-extra`，
   由 app 层 `components/ImageGrid.vue` 渲染 `ImageLabelsPanel.vue`（列出 / 删除 / 从已有添加 / 当场新建 /
   复制 key / 点击跳转）。紧凑布局（PhotoSwipe）没有信息区，标签面板仅桌面预览可见。
+  标签按完整父目录 key 路径、不区分大小写的字母序排列，目录内按标签 key 排序；根级标签排在最前。
+  `utils/imageLabelPresentation.ts` 对小写目录路径执行 FNV-1a 与雪崩混合，再投射至 OKLCH
+  的浅亮低色度区间（L 0.94–0.96、C 0.025–0.035）；同目录共用色板，根级标签使用中性色。
+  完整目录路径参与哈希，不受列表顺序、标签增删、切图影响；复制 key 仍沿用原数据顺序。
 - 图片右键「复制标签」：标签需异步查询，因此单选时恒显示，无标签时点击给出提示。
 - 复制内容面向 SD 提示词：key 用 `, ` 连接，`\ ( ) [ ]` 转义为 `\(` 等（`utils/imageLabels.ts`
   的 `escapeSdPrompt`），空格不转义。

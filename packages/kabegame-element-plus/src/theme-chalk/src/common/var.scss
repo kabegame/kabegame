@@ -1197,6 +1197,11 @@ $skeleton: map.merge(
 $tag: () !default;
 $tag: map.merge(
   (
+    // 局部目录色板从应用主题输入，未提供时保持各 type / effect 的原有配色。
+    'palette-bg-color': var(--anime-tag-bg-color, #{getCssVar('tag-bg-color')}),
+    'palette-border-color': var(--anime-tag-border-color, #{getCssVar('tag-border-color')}),
+    'palette-text-color': var(--anime-tag-text-color, #{getCssVar('tag-text-color')}),
+    'palette-hover-color': var(--anime-tag-hover-color, #{getCssVar('tag-hover-color')}),
     'font-size': 12px,
     'border-radius': 4px,
     'border-radius-rounded': 9999px,

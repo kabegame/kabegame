@@ -89,6 +89,10 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 
 ## 自有组件放哪
 
+**tag 的局部色板**：`$tag` 中的 `palette-*` token 将 `--anime-tag-{bg,border,text,hover}-color`
+桥接到组件内部；未提供时回退到既有 type / effect 色彩。预览标签按目录注入这些主题变量，
+正文与关闭按钮（含 hover）共用色板，业务侧不覆盖 `.el-*` 选择器。
+
 既然是自有组件库，**新写的通用组件可以直接进 vendored 包**，不必挤在 `kabegame-core`。
 已有先例：`ElTabs` / `ElTabPane` 整个删掉，换成
 `@kabegame/element-plus/components/kb-tab` 的 `KbTab`（只管 tab 头本身，内容由调用方按

@@ -23,9 +23,10 @@
     <div class="flex flex-col gap-2 px-3 pb-3">
       <div v-if="labels.length > 0" class="image-labels-list flex flex-wrap content-start gap-1.5">
         <el-tag
-          v-for="label in labels"
+          v-for="{ label, style } in presentedLabels"
           :key="label.id"
           class="image-labels-tag"
+          :style="style"
           closable
           disable-transitions
           :title="label.labelPath ?? undefined"
@@ -119,6 +120,7 @@ import {
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { isLabelKey } from "@/utils/labelKey";
 import { labelKeysText, writeClipboardText } from "@/utils/imageLabels";
+import { presentImageLabels } from "@/utils/imageLabelPresentation";
 
 /**
  * 预览弹窗信息区的「标签」面板：列出图片直接打上的标签画册，支持删除、从已有标签添加、
@@ -137,6 +139,7 @@ const albumPath = useAlbumIdPathState();
 // 切图时要重置 picking，必须在 immediate watch 之前声明（否则 TDZ）
 const picking = ref(false);
 const labels = ref<Album[]>([]);
+const presentedLabels = computed(() => presentImageLabels(labels.value));
 
 let loadSeq = 0;
 async function load() {

@@ -64,9 +64,9 @@ $tag-icon-span-gap: map.merge(
 }
 
 @include b(tag) {
-  background-color: getCssVar('tag-bg-color');
-  border-color: getCssVar('tag-border-color');
-  color: getCssVar('tag-text-color');
+  background-color: getCssVar('tag-palette-bg-color');
+  border-color: getCssVar('tag-palette-border-color');
+  color: getCssVar('tag-palette-text-color');
 
   display: inline-flex;
   justify-content: center;
@@ -96,11 +96,11 @@ $tag-icon-span-gap: map.merge(
 
   .#{$namespace}-tag__close {
     flex-shrink: 0;
-    color: getCssVar('tag', 'text-color');
+    color: getCssVar('tag-palette-text-color');
 
     &:hover {
       color: getCssVar('color-white');
-      background-color: getCssVar('tag-hover-color');
+      background-color: getCssVar('tag-palette-hover-color');
     }
   }
 

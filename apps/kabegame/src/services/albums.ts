@@ -12,7 +12,7 @@ export type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
 
 export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
 export const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
-export const ALBUM_PAGE_SIZE = 10;
+export const ALBUM_PAGE_SIZE = 500;
 
 export type AlbumRootSection = "normal" | "label" | "local_folder";
 export type GalleryPrefix = "" | "hide/" | string;

@@ -43,6 +43,8 @@ workspace**，故已平铺成单包：
 
 ## 本仓已做的改动
 
+- Tag 支持通过 `--anime-tag-{bg,border,text,hover}-color` 提供局部色板，由 `$tag` token map 桥接；未设置时保持 type / effect 的默认颜色。
+
 - `src/version.ts` —— 上游由构建脚本从 package.json 生成，这里手写常量。
 - `src/env.d.ts` —— 删去 `declare global { const process }`（与根 `@types/node` 冲突）；
   补 `/// <reference types="vue/jsx" />`，本包的 `.tsx`（table-v2 / avatar 等）需要全局
