@@ -111,18 +111,7 @@ mod tests {
     const HANDLE: u64 = 7_654_321;
 
     fn init_paths() {
-        let root =
-            std::env::temp_dir().join(format!("kabegame-task-vfs-tests-{}", std::process::id()));
-        let _ = AppPaths::init(AppPaths {
-            data_dir: root.join("data"),
-            cache_dir: root.join("cache"),
-            temp_dir: root.join("tmp"),
-            resource_dir: root.join("resources"),
-            exe_dir: None,
-            external_data_dir: None,
-            pictures_dir: Some(root.join("pictures")),
-            compatibles_dir_path: root.join("compatibles"),
-        });
+        AppPaths::init_for_tests();
     }
 
     fn test_vfs(plugin_id: &str) -> PluginVfs {

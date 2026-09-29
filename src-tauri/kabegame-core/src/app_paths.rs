@@ -40,6 +40,36 @@ impl AppPaths {
             .expect("AppPaths not initialized. Call AppPaths::init() at startup.")
     }
 
+    /// 测试用：整个测试进程共用一个临时根，只初始化一次。
+    ///
+    /// `AppPaths` 是进程级单例，同一个测试二进制里各模块若各自 `AppPaths::init`，先到者赢、
+    /// 后到者要么报「already initialized」要么悄悄用上别人的目录，结果随测试调度顺序变化。
+    /// 单元测试一律调这里，不要再直接 `AppPaths::init`。
+    #[cfg(test)]
+    pub(crate) fn init_for_tests() -> &'static AppPaths {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let root =
+                std::env::temp_dir().join(format!("kabegame-core-tests-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("create kabegame-core test root");
+            AppPaths::init(AppPaths {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+                temp_dir: root.join("tmp"),
+                resource_dir: root.join("resources"),
+                exe_dir: None,
+                external_data_dir: None,
+                pictures_dir: Some(root.join("pictures")),
+                compatibles_dir_path: root.join("compatibles"),
+            })
+            .expect(
+                "AppPaths must only be initialized through AppPaths::init_for_tests in unit tests",
+            );
+        });
+        AppPaths::global()
+    }
+
     // ========== 数据目录下的文件/目录 ==========
 
     /// settings.json 文件路径

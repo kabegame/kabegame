@@ -28,25 +28,10 @@ fn test_guard() -> MutexGuard<'static, ()> {
 }
 
 fn init_test_runtime() {
-    let root = std::env::temp_dir().join(format!(
-        "kabegame-core-local-folder-tests-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
-    AppPaths::init(AppPaths {
-        data_dir: root.join("data"),
-        cache_dir: root.join("cache"),
-        temp_dir: root.join("tmp"),
-        resource_dir: root.join("resources"),
-        exe_dir: None,
-        external_data_dir: None,
-        pictures_dir: Some(root.join("pictures")),
-        compatibles_dir_path: root.join("compatibles"),
-    })
-    .unwrap();
+    // 路径与 Storage 都是进程级单例，可能已被同一测试二进制里的其它模块（v8、task_vfs）初始化
+    AppPaths::init_for_tests();
     let _ = Settings::init_global();
-    Storage::init_global().unwrap();
+    let _ = Storage::init_global();
     #[cfg(feature = "ipc-server")]
     {
         let _ = crate::ipc::server::EventBroadcaster::init_global(1000);

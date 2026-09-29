@@ -388,7 +388,6 @@ mod tests {
     use crate::storage::Storage;
     use serde_json::json;
     use std::collections::HashMap;
-    use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::PathBuf;
@@ -411,20 +410,7 @@ mod tests {
             // the dedicated snapshot round-trip test calls the restore path
             // directly and is unaffected by this kill switch.
             std::env::set_var("KABEGAME_DISABLE_V8_SNAPSHOT", "1");
-            let root =
-                std::env::temp_dir().join(format!("kabegame-core-v8-tests-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&root);
-            fs::create_dir_all(&root).expect("create v8 test root");
-            let _ = AppPaths::init(AppPaths {
-                data_dir: root.join("data"),
-                cache_dir: root.join("cache"),
-                temp_dir: root.join("tmp"),
-                resource_dir: root.join("resources"),
-                exe_dir: None,
-                external_data_dir: None,
-                pictures_dir: Some(root.join("pictures")),
-                compatibles_dir_path: root.join("compatibles"),
-            });
+            AppPaths::init_for_tests();
             let _ = Settings::init_global();
             let _ = Storage::init_global();
             let _ = TaskScheduler::init_global(Arc::new(DownloadQueue::new()));
