@@ -35,6 +35,8 @@ delegate symmetry, instance-static keys, typed JSON meta bridges, host SQL funct
     说明一律写在 YAML 的 `#` 注释里。
   - 换行不能拆开被 `where_clear` 按子串匹配的片段（如 `ai.album_id =`、`instr(LOWER(albums.name)`）。
   - 模板值（`"${out.id}"`）与 `${...}` 作键时一律加双引号；`"0"` 这类字符串默认值也要引号，否则会被解析成数字。
+  - join 的 **`on` 键必须写成 `"on":`**：YAML 1.1 把裸 `on`（以及 `yes` / `no` / `off`）当布尔值，键会变成
+    `true`，报 `data did not match any variant of untagged enum Query`。
   - YAML 的 `note` 用折叠块 `>-`，折叠后与单行字符串逐字节相同。
 - 顶层 `$schema` 字段建议指向 `./schema.json5` 相对路径，启用 IDE 补全（仅 json5）
 - 位置约定：`src-tauri/kabegame-core/src/providers/dsl/<scope>/<name>.{json5,yaml}`

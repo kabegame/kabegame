@@ -1777,6 +1777,138 @@ fn album_page_image_count_matches_images_paths() {
     assert_eq!(leaves[0].meta.as_ref().unwrap().get("image_count"), Some(&serde_json::json!(3)));
 }
 
+/// `x<N>x/<页>` + `~~/images[/hide]` + `~~/children/...`：分页与计数改由路径折叠表达后，
+/// 与旧的 `album_page_*` 列举（手写 list.sql）逐项等价。
+#[test]
+fn album_nest_paths_match_album_page_listing() {
+    let runtime = build_runtime();
+    let label_kinds = "~any/album_kind/label/~or/album_kind/label_dir/~end";
+    let meta_of = |entry: &pathql_rs::ChildEntry, key: &str| {
+        entry.meta.as_ref().and_then(|meta| meta.get(key)).cloned()
+    };
+    let totals = |path: &str| -> HashMap<String, usize> {
+        runtime
+            .list_with_count(path)
+            .unwrap_or_else(|e| panic!("{path}: {e}"))
+            .into_iter()
+            .map(|entry| (entry.name, entry.total.unwrap()))
+            .collect()
+    };
+
+    for (filters, child_kinds) in [
+        (
+            "roots/album_kind/normal".to_string(),
+            "album_kind/normal".to_string(),
+        ),
+        (format!("roots/{label_kinds}"), label_kinds.to_string()),
+        (
+            format!("parent/44444444-4444-4444-4444-444444444444/{label_kinds}"),
+            label_kinds.to_string(),
+        ),
+        (
+            format!("parent/{ALBUM_A_ID}/album_kind/normal"),
+            "album_kind/normal".to_string(),
+        ),
+        ("search/pix".to_string(), String::new()),
+    ] {
+        for page in [1, 2] {
+            let old = runtime
+                .list_with_count(&format!("albums://{filters}/album_page_x100x_{page}"))
+                .unwrap();
+            let old_hide = runtime
+                .list(&format!("albums://{filters}/album_page_hide_x100x_{page}"))
+                .unwrap();
+
+            // 页内容与顺序一致；搜索行照样带 parent_path_names
+            let rows = runtime
+                .fetch(&format!("albums://{filters}/x100x/{page}"))
+                .unwrap();
+            assert_eq!(
+                ids(rows.clone()),
+                old.iter()
+                    .map(|entry| entry.name.clone())
+                    .collect::<Vec<_>>(),
+                "{filters} page {page}"
+            );
+            if filters.starts_with("search/") {
+                for (row, entry) in rows.iter().zip(&old) {
+                    assert_eq!(
+                        row.get("parent_path_names").cloned(),
+                        meta_of(entry, "parent_path_names")
+                    );
+                }
+            }
+
+            // 图片数：列不出来的画册记 0；标签目录旧口径为 NULL，新口径不再区分（前端用子画册数）
+            let images = totals(&format!("albums://{filters}/x100x/{page}/~~/images"));
+            let images_hide = totals(&format!("albums://{filters}/x100x/{page}/~~/images/hide"));
+            for (entries, counts) in [(&old, &images), (&old_hide, &images_hide)] {
+                for entry in entries.iter() {
+                    if meta_of(entry, "type") == Some(serde_json::json!("label_dir")) {
+                        continue;
+                    }
+                    let expected = meta_of(entry, "image_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap() as usize;
+                    assert_eq!(
+                        counts.get(&entry.name).copied().unwrap_or(0),
+                        expected,
+                        "{filters} page {page} image count of {}",
+                        entry.name
+                    );
+                }
+                // 计数只落在这一页的画册上
+                assert!(counts
+                    .keys()
+                    .all(|id| entries.iter().any(|entry| &entry.name == id)));
+            }
+
+            // 子画册数：与旧列举项 total 一致（同一组类型过滤；搜索不带类型过滤）
+            let children_path = if child_kinds.is_empty() {
+                format!("albums://{filters}/x100x/{page}/~~/children")
+            } else {
+                format!("albums://{filters}/x100x/{page}/~~/children/{child_kinds}")
+            };
+            let children = totals(&children_path);
+            for entry in &old {
+                assert_eq!(
+                    children.get(&entry.name).copied().unwrap_or(0),
+                    entry.total.unwrap(),
+                    "{filters} page {page} child count of {}",
+                    entry.name
+                );
+            }
+        }
+    }
+
+    // 越过末页：取行为空，而不是 path not found
+    assert!(runtime
+        .fetch("albums://roots/album_kind/normal/x100x/9")
+        .unwrap()
+        .is_empty());
+    // 页大小生效，且与 x100x 的顺序一致
+    let tiny = runtime
+        .fetch("albums://roots/album_kind/normal/x1x/2")
+        .unwrap();
+    let full = runtime
+        .fetch("albums://roots/album_kind/normal/x100x/1")
+        .unwrap();
+    assert_eq!(ids(tiny), vec![ids(full)[1].clone()]);
+    // 具体数值兜底：Pixiv 目录下两个子项；初音未来直接 3 张
+    assert_eq!(
+        totals(&format!(
+            "albums://roots/{label_kinds}/x100x/1/~~/children/{label_kinds}"
+        ))
+        .get("44444444-4444-4444-4444-444444444444"),
+        Some(&2)
+    );
+    assert_eq!(
+        totals("albums://parent/55555555-5555-5555-5555-555555555555/album_kind/label/x100x/1/~~/images")
+            .get(LABEL_HATSUNE_ID),
+        Some(&3)
+    );
+}
+
 #[test]
 fn album_search_matches_metacharacters_literally_and_label_paths() {
     let runtime = build_runtime();

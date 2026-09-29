@@ -1,0 +1,14 @@
+namespace: kabegame
+name: albums_child_kind_provider
+note: Children of one kind. Several kinds are OR-ed with ~any/album_kind/label/~or/album_kind/label_dir/~end.
+properties:
+  kind: { type: string, default: normal, optional: false }
+query:
+  # 只贡献 where，可以放进 ~any 组内作分支；child 由 albums_children_provider 贡献。
+  where: child.type = ${properties.kind}
+list:
+  "${row.id}":
+    sql: SELECT DISTINCT sub.id FROM (${composed}) AS sub
+    data_var: row
+    provider: albums_row_provider
+    properties: { album_id: "${row.id}" }

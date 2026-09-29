@@ -1,0 +1,23 @@
+namespace: kabegame
+name: albums_children_provider
+note: >-
+  Direct child albums of each album selected so far. Use after ~~ so a page is cut first:
+  .../x<N>x/<page>/~~/children. album_kind/<kind> below filters the children (OR several with
+  ~any/album_kind/label/~or/album_kind/label_dir/~end). List with counts: one entry per album
+  with at least one matching child; total is its child count.
+query:
+  fields:
+    - { sql: child.id, as: child_id, in_need: true }
+  join:
+    - { kind: INNER, table: albums, as: child, "on": child.parent_id = albums.id, in_need: true }
+list:
+  "${row.id}":
+    sql: SELECT DISTINCT sub.id FROM (${composed}) AS sub
+    data_var: row
+    provider: albums_row_provider
+    properties: { album_id: "${row.id}" }
+resolve:
+  album_kind: { provider: albums_child_kind_router }
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}":
+    provider: albums_row_provider
+    properties: { album_id: "${capture[0]}" }

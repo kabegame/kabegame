@@ -1,0 +1,16 @@
+namespace: kabegame
+name: albums_images_hide_provider
+note: Same as images, leaving out images in the hidden album (the images:// hide/ prefix).
+query:
+  # 与 gallery_hide_router 同一句；hid_ai 由 albums_images_provider 贡献。
+  where: hid_ai.image_id IS NULL
+list:
+  "${row.id}":
+    sql: SELECT DISTINCT sub.id FROM (${composed}) AS sub
+    data_var: row
+    provider: albums_row_provider
+    properties: { album_id: "${row.id}" }
+resolve:
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}":
+    provider: albums_row_provider
+    properties: { album_id: "${capture[0]}" }

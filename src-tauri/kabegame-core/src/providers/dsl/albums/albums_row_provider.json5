@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "albums_row_provider",
+    // images / children 层按画册分项时每项的 provider：只留下这一个画册的行，计数即该画册的行数。
+    "properties": {
+        "album_id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "albums.id = ${properties.album_id}"
+    }
+}

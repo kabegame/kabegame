@@ -1,0 +1,37 @@
+namespace: kabegame
+name: albums_images_provider
+note: >-
+  Member images of each album selected so far, including its descendants (a label leaf's own
+  images). Use after ~~ so a page is cut first: .../x<N>x/<page>/~~/images. List with counts:
+  one entry per album with at least one image; total is its member-row count, the same as
+  images://gallery/album-tree/<id>. Append /hide to leave out images in the hidden album.
+query:
+  fields:
+    - { sql: images.id, as: image_id, in_need: true }
+  join:
+    # 子树成员：ancestor_path 为 `/根/.../自身/`，含自身，所以标签叶子即直接成员。
+    - kind: INNER
+      table: albums
+      as: tree
+      "on": "instr(tree.ancestor_path, '/' || albums.id || '/') > 0"
+      in_need: true
+    - { kind: INNER, table: album_images, as: tree_ai, "on": tree_ai.album_id = tree.id, in_need: true }
+    - { kind: INNER, table: images, as: images, "on": images.id = tree_ai.image_id, in_need: true }
+    # 与 gallery_route 同名同条件，hide 段因此可以写成与画廊一样的谓词。
+    - kind: LEFT
+      table: album_images
+      as: hid_ai
+      "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}"
+      in_need: true
+list:
+  "${row.id}":
+    sql: SELECT DISTINCT sub.id FROM (${composed}) AS sub
+    data_var: row
+    provider: albums_row_provider
+    properties: { album_id: "${row.id}" }
+resolve:
+  hide: { provider: albums_images_hide_provider }
+  # 动态列举的兜底：没有图片的画册列不出来，但按 id 仍可寻址（计数为 0）。
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}":
+    provider: albums_row_provider
+    properties: { album_id: "${capture[0]}" }
