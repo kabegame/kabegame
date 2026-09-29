@@ -1,11 +1,12 @@
-//! ProviderQuery → SQL 渲染。dialect-agnostic; 占位符 `?`。
+//! ProviderQuery → SQL 渲染。占位符与方言差异语法见 `compose/dialect.rs`。
 //!
-//! 渲染顺序：SELECT → FROM → JOIN → WHERE → ORDER BY → OFFSET → LIMIT。
-//! bind params 按文本扫描顺序 push。
+//! 渲染顺序：[WITH 子查询边界] → SELECT → FROM → JOIN → WHERE → ORDER BY → LIMIT → OFFSET。
+//! 所有层共用一个 bind params 向量，按文本扫描顺序 push（Postgres 的 `$N` 因此跨层连续编号）。
 
 use thiserror::Error;
 
 use crate::ast::{JoinKind, NumberOrTemplate, OrderDirection};
+use crate::compose::dialect::nest_cte_name;
 use crate::compose::query::{FromSource, JoinFrag, ProviderQuery};
 use crate::compose::render::{render_template_sql, RenderError};
 use crate::provider::SqlDialect;
@@ -25,6 +26,64 @@ impl ProviderQuery {
         ctx: &TemplateContext,
         dialect: SqlDialect,
     ) -> Result<(String, Vec<TemplateValue>), BuildError> {
+        let mut sql = String::new();
+        let mut params = Vec::new();
+        self.render_into(ctx, dialect, &mut sql, &mut params)?;
+        Ok((sql, params))
+    }
+
+    /// 整条语句追加到 `sql` / `params`。FROM 链上有子查询边界时先输出扁平的 WITH 列表
+    /// （最内层在前：`WITH pq_nest_1 AS …, pq_nest_2 AS … SELECT …`），再输出本层 SELECT。
+    fn render_into(
+        &self,
+        ctx: &TemplateContext,
+        dialect: SqlDialect,
+        sql: &mut String,
+        params: &mut Vec<TemplateValue>,
+    ) -> Result<(), BuildError> {
+        if matches!(self.from, Some(FromSource::Subquery { .. })) {
+            sql.push_str("WITH ");
+            self.render_nest_ctes(ctx, dialect, sql, params)?;
+            sql.push(' ');
+        }
+        self.render_select_stmt(ctx, dialect, sql, params)
+    }
+
+    /// 输出本层 FROM 链上的全部 CTE（逗号分隔、最内层在前）。本层的内层存进 `pq_nest_<本层深度>`。
+    ///
+    /// 各层 CTE 体用**未合并任何一层 adhoc 的原始 ctx** 渲染，每层只合并自己的 adhoc：
+    /// 各层 `__pq_prop_N` / `__pq_raw_N` 计数器互不串号，`${ref:x}` 别名表也各自作用域。
+    fn render_nest_ctes(
+        &self,
+        ctx: &TemplateContext,
+        dialect: SqlDialect,
+        sql: &mut String,
+        params: &mut Vec<TemplateValue>,
+    ) -> Result<(), BuildError> {
+        let Some(FromSource::Subquery { inner, .. }) = &self.from else {
+            return Ok(());
+        };
+        if matches!(inner.from, Some(FromSource::Subquery { .. })) {
+            inner.render_nest_ctes(ctx, dialect, sql, params)?;
+            sql.push_str(", ");
+        }
+        sql.push_str(&nest_cte_name(self.nest_depth()));
+        sql.push_str(" AS ");
+        sql.push_str(dialect.nest_style().keyword());
+        sql.push('(');
+        inner.render_select_stmt(ctx, dialect, sql, params)?;
+        sql.push(')');
+        Ok(())
+    }
+
+    /// 本层的 SELECT 语句（不含 WITH）。子查询边界的 FROM 渲染为 `pq_nest_<本层深度> AS <alias>`。
+    fn render_select_stmt(
+        &self,
+        ctx: &TemplateContext,
+        dialect: SqlDialect,
+        sql: &mut String,
+        params: &mut Vec<TemplateValue>,
+    ) -> Result<(), BuildError> {
         // 合并 adhoc_properties 进 effective ctx (adhoc 覆盖优先)
         let effective_ctx;
         let ctx_ref: &TemplateContext = if self.adhoc_properties.is_empty() {
@@ -38,51 +97,38 @@ impl ProviderQuery {
             &effective_ctx
         };
 
-        let mut sql = String::new();
-        let mut params = Vec::new();
-
         // SELECT
         sql.push_str("SELECT ");
-        self.render_select(&mut sql, &mut params, ctx_ref, dialect)?;
+        self.render_select(sql, params, ctx_ref, dialect)?;
 
         // FROM
         sql.push_str(" FROM ");
         match self.from.as_ref().ok_or(BuildError::MissingFrom)? {
-            FromSource::Table(from) => render_template_sql(
-                &from.0,
-                ctx_ref,
-                &self.aliases,
-                dialect,
-                &mut sql,
-                &mut params,
-            )?,
-            FromSource::Subquery { inner, alias } => {
-                // 内层用未合并本层 adhoc 的原始 ctx 独立渲染：各层 `__pq_prop_N` 计数器互不串号，
-                // 别名表也各自作用域。FROM 在 SELECT 之后、JOIN 之前，参数按文本顺序接在这里。
-                let (inner_sql, inner_params) = inner.build_sql(ctx, dialect)?;
-                sql.push('(');
-                sql.push_str(&inner_sql);
-                sql.push_str(") AS ");
-                render_alias_identifier(&mut sql, alias, dialect);
-                params.extend(inner_params);
+            FromSource::Table(from) => {
+                render_template_sql(&from.0, ctx_ref, &self.aliases, dialect, sql, params)?
+            }
+            FromSource::Subquery { alias, .. } => {
+                sql.push_str(&nest_cte_name(self.nest_depth()));
+                sql.push_str(" AS ");
+                render_alias_identifier(sql, alias, dialect);
             }
         }
 
         // JOIN
         for j in &self.joins {
-            self.render_one_join(j, &mut sql, &mut params, ctx_ref, dialect)?;
+            self.render_one_join(j, sql, params, ctx_ref, dialect)?;
         }
 
         // WHERE
-        self.render_where(&mut sql, &mut params, ctx_ref, dialect)?;
+        self.render_where(sql, params, ctx_ref, dialect)?;
 
         // ORDER BY
-        self.render_order(&mut sql, &mut params, ctx_ref, dialect)?;
+        self.render_order(sql, params, ctx_ref, dialect)?;
 
-        // OFFSET / LIMIT
-        self.render_pagination(&mut sql, &mut params, ctx_ref, dialect)?;
+        // LIMIT / OFFSET
+        self.render_pagination(sql, params, ctx_ref, dialect)?;
 
-        Ok((sql, params))
+        Ok(())
     }
 
     fn render_select(
@@ -817,16 +863,17 @@ mod tests {
         let (sql, params) = outer
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
-        // 无 fields 时外层以别名展开；分页留在内层，外层不带 LIMIT
+        // 内层物化成 CTE；无 fields 时外层以别名展开；分页留在内层，外层不带 LIMIT
         assert_eq!(
             sql,
-            "SELECT albums.* FROM (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) AS albums"
+            "WITH pq_nest_1 AS MATERIALIZED (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) \
+             SELECT albums.* FROM pq_nest_1 AS albums"
         );
         assert_eq!(params, vec![TemplateValue::Text("P".into())]);
     }
 
-    #[test]
-    fn subquery_from_keeps_adhoc_isolated_and_params_in_text_order() {
+    /// 两层都有参数的查询：内层 3 个（raw / 基础 ctx 属性 / 内层 adhoc），外层 SELECT / JOIN / WHERE 各 1 个。
+    fn two_level_with_params() -> ProviderQuery {
         let mut inner = albums_inner_page().with_where_raw("albums.w = ${properties.base}", &[]);
         inner
             .wheres
@@ -852,28 +899,63 @@ mod tests {
             .unwrap()
             .with_where_raw("ai.image_id < ?", &[TemplateValue::Int(9)]);
         outer.limit = Some(NumberOrTemplate::Number(5.0));
+        outer
+    }
 
+    #[test]
+    fn subquery_from_keeps_adhoc_isolated_and_params_in_text_order() {
         // 基础 ctx 的属性对内层可见（未被外层 adhoc 遮挡）
         let ctx = props(&[("base", TemplateValue::Int(7))]);
-        let (sql, params) = outer
+        let (sql, params) = two_level_with_params()
             .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
             .unwrap();
         assert_eq!(
             sql,
-            "SELECT ? AS tag FROM (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) AND (albums.w = ?) AND (albums.type = ?) LIMIT 2 OFFSET (0)) AS albums \
+            "WITH pq_nest_1 AS MATERIALIZED (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) AND (albums.w = ?) AND (albums.type = ?) LIMIT 2 OFFSET (0)) \
+             SELECT ? AS tag FROM pq_nest_1 AS albums \
              INNER JOIN album_images AS ai ON ai.album_id = albums.id AND ai.image_id > ? WHERE (ai.image_id < ?) LIMIT 5"
         );
-        // 外层 SELECT → 内层全部 → 外层 JOIN → 外层 WHERE
+        // 文本顺序：内层（CTE）全部 → 外层 SELECT → 外层 JOIN → 外层 WHERE
         assert_eq!(
             params,
             vec![
-                TemplateValue::Text("field".into()),
                 TemplateValue::Text("P".into()),
                 TemplateValue::Int(7),
                 TemplateValue::Text("normal".into()),
+                TemplateValue::Text("field".into()),
                 TemplateValue::Text("join".into()),
                 TemplateValue::Int(9),
             ]
+        );
+    }
+
+    #[test]
+    fn subquery_from_postgres_numbers_placeholders_across_levels() {
+        // 各层共用一个参数向量：`$N` 跨层连续编号，与参数向量一一对应
+        let ctx = props(&[("base", TemplateValue::Int(7))]);
+        let (sql, params) = two_level_with_params()
+            .build_sql(&ctx, crate::provider::SqlDialect::Postgres)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "WITH pq_nest_1 AS MATERIALIZED (SELECT albums.* FROM albums WHERE (albums.parent_id = $1) AND (albums.w = $2) AND (albums.type = $3) LIMIT 2 OFFSET (0)) \
+             SELECT $4 AS tag FROM pq_nest_1 AS albums \
+             INNER JOIN album_images AS ai ON ai.album_id = albums.id AND ai.image_id > $5 WHERE (ai.image_id < $6) LIMIT 5"
+        );
+        assert_eq!(params.len(), 6);
+    }
+
+    #[test]
+    fn subquery_from_mysql_uses_plain_cte() {
+        // MySQL 没有 MATERIALIZED 关键字；关键字别名用反引号
+        let outer = wrap(albums_inner_page(), "order");
+        let (sql, _) = outer
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Mysql)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "WITH pq_nest_1 AS (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) \
+             SELECT `order`.* FROM pq_nest_1 AS `order`"
         );
     }
 
@@ -900,22 +982,28 @@ mod tests {
             .unwrap();
         assert_eq!(
             sql,
-            "SELECT albums.* FROM (SELECT albums.* FROM albums INNER JOIN album_images AS _a0 ON _a0.album_id = albums.id) AS albums \
-             INNER JOIN album_images AS _a0 ON _a0.album_id = albums.id"
+            "WITH pq_nest_1 AS MATERIALIZED (SELECT albums.* FROM albums INNER JOIN album_images AS _a0 ON _a0.album_id = albums.id) \
+             SELECT albums.* FROM pq_nest_1 AS albums INNER JOIN album_images AS _a0 ON _a0.album_id = albums.id"
         );
     }
 
     #[test]
     fn subquery_from_nests_multiple_levels_and_quotes_alias() {
-        // C(from B(from A))；别名是关键字时按方言加引号
-        let level_b = wrap(albums_inner_page(), "albums");
+        // C(from B(from A))：扁平 WITH 列表、最内层在前，按深度编号互不遮挡；别名是关键字时按方言加引号
+        let level_a = albums_inner_page();
+        assert_eq!(level_a.nest_depth(), 0);
+        let level_b = wrap(level_a, "albums");
+        assert_eq!(level_b.nest_depth(), 1);
         let level_c = wrap(level_b, "order");
+        assert_eq!(level_c.nest_depth(), 2);
         let (sql, params) = level_c
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
         assert_eq!(
             sql,
-            "SELECT \"order\".* FROM (SELECT albums.* FROM (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) AS albums) AS \"order\""
+            "WITH pq_nest_1 AS MATERIALIZED (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)), \
+             pq_nest_2 AS MATERIALIZED (SELECT albums.* FROM pq_nest_1 AS albums) \
+             SELECT \"order\".* FROM pq_nest_2 AS \"order\""
         );
         assert_eq!(params.len(), 1);
     }

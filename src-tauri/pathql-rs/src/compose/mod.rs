@@ -2,6 +2,7 @@
 
 pub mod aliases;
 pub mod build;
+pub(crate) mod dialect;
 pub mod fold;
 pub mod order;
 pub mod query;

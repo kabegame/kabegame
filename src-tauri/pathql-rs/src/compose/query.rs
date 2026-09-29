@@ -29,6 +29,7 @@ pub enum FromSource {
     /// 一段 SQL 模板：schema 注册的表名，或宿主 / 测试手写的片段（如 `(${composed}) AS sub`）。
     Table(SqlExpr),
     /// 子查询边界：内层完整查询冻结后作为 FROM，外层以 `alias` 引用。
+    /// 渲染为按方言物化的 CTE `pq_nest_<深度>`，见 `compose/dialect.rs`。
     /// 用 Arc 包内层：fold 期 ProviderQuery 被频繁 clone，只拷指针。
     Subquery {
         inner: Arc<ProviderQuery>,
@@ -92,6 +93,15 @@ pub struct ProviderQuery {
 impl ProviderQuery {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// FROM 链上子查询边界的层数：`Table` / 无 FROM 为 0，每包一层 `Subquery` 加 1。
+    /// 渲染时第 d 层的 FROM 引用名为 `pq_nest_<d>` 的 CTE。
+    pub fn nest_depth(&self) -> usize {
+        match &self.from {
+            Some(FromSource::Subquery { inner, .. }) => inner.nest_depth() + 1,
+            _ => 0,
+        }
     }
 
     /// 路径上是否已有同字面 field alias。

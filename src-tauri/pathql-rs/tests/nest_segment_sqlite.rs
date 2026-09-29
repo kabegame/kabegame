@@ -282,14 +282,56 @@ fn nest_wraps_previous_query_as_from_aliased_by_table() {
         .composed
         .build_sql(&Default::default(), SqlDialect::Sqlite)
         .unwrap();
+    // 内层物化成 CTE，外层以表名作别名引用它
     assert!(
-        sql.contains("FROM (SELECT albums.id AS id, albums.name AS name, albums.parent_id AS parent_id FROM albums WHERE (albums.parent_id = ?) ORDER BY albums.name ASC LIMIT 2 OFFSET"),
+        sql.starts_with("WITH pq_nest_1 AS MATERIALIZED (SELECT albums.id AS id, albums.name AS name, albums.parent_id AS parent_id FROM albums WHERE (albums.parent_id = ?) ORDER BY albums.name ASC LIMIT 2 OFFSET"),
         "{sql}"
     );
     assert!(
-        sql.contains(") AS albums INNER JOIN album_images AS ai"),
+        sql.contains(") SELECT albums.id AS id, albums.name AS name, albums.parent_id AS parent_id, albums.id AS album_id, images.id AS image_id FROM pq_nest_1 AS albums INNER JOIN album_images AS ai"),
         "{sql}"
     );
+}
+
+#[test]
+fn nest_boundary_is_materialized_once_in_sqlite_plan() {
+    // 派生表会被当 co-routine 放进内层循环、每行外层重跑一遍分页；CTE 物化后只算一次
+    let rt = runtime();
+    let node = rt.resolve("t://parent/P/p_1/~~/images/hide").unwrap();
+    let (sql, values) = node
+        .composed
+        .build_sql(&Default::default(), SqlDialect::Sqlite)
+        .unwrap();
+    let conn = fixture_db();
+    let conn = conn.lock().unwrap();
+    let params = local_params_for(&values);
+    let plan: Vec<String> = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .unwrap()
+        .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            r.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(|d| d == "MATERIALIZE pq_nest_1"),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|d| d.starts_with("CO-ROUTINE")),
+        "{plan:?}"
+    );
+
+    // `${composed}` 内联与 COUNT 包装都会把整条 WITH 语句放进括号里，SQLite 须接受
+    let wrapped: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM (({sql})) AS sub"),
+            rusqlite::params_from_iter(params.iter()),
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(wrapped, 4); // A 的 1、2 号 + B 的 4、5 号（3 号隐藏）
 }
 
 #[test]
