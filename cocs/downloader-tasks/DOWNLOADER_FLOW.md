@@ -389,7 +389,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 - 新增或刷新 `images`：发送 `images-change`
 - 输出画册、标签或去重补画册影响 `album_images`：统一走 `emit_membership_added`，只对实际插入的 id
   发送单画册 `album-images-change`。payload 带 `seq`、该画册的 `ancestorPath`，不带 `directCounts`；
-  前端 hub 按祖先路径刷新已加载目录，计数由目录 PathQL 列举的 `with_count` 与 `album-tree` entry 组合得到。
+  前端 hub 按祖先路径刷新已加载目录，计数由目录页 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` entry 组合得到。
 
 画廊分页、任务视图和 Plasma 依赖这两个事件区分刷新范围。详情见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
 

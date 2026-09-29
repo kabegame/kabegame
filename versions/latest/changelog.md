@@ -35,6 +35,7 @@
 - 高级搜索被作为普通搜索的补充，而非替代
 - 对于更新元数据功能，会更新覆盖已有的相同的图片元数据，通常无害但会有数据更改。
 - 大批量画册现在需要分页拉取（加载更多）
+- 画册列表默认按创建时间排序（之后会提供专门的排序功能）
 
 ## 开发侧
 
@@ -45,10 +46,12 @@
 - 标签画册：`albums.type IN ('label', 'label_dir')` + `label_key` / 派生列 `label_path`（v031），目录只装子画册、叶子只挂图片，见 `cocs/gallery/LABEL_ALBUMS.md`
 - 插件 API：`Kabegame.downloadImage` 新增 `labels`；迁移脚本新增可选导出 `provideLabels(input)`，`migrate` 变为可选
 - 新增 PathQL 搜索 `search/label/<q>` 与 `search/label-tree/<q>`，宿主 SQL 函数 `kb_label_tokens`
+- PathQL 新增子查询边界段 `~~`（此前的查询整体成为下一段的 FROM，按方言渲染为物化 CTE）与 ContribQuery `group_by`；画册页计数改为分页后 `~~` + `GROUP BY` 一条出整页，子树判断改用 `ancestor_path` 前缀区间并新增迁移 v033 `idx_albums_ancestor_path`，见 `cocs/provider-dsl/RULES.md` §2.1
 - V8 插件新增 `Kabegame.cefUserAgent()`，返回畅游（桌面 CEF）的默认 UA，配合 `requireCookie()` 解决 Cloudflare `cf_clearance` 绑定 UA 导致的 403；Chrome 大版本号写死在 `ops.rs` 的 `CEF_CHROME_MAJOR`，升级 CEF 时同步
 
 ### Changed
 
+- PathQL `register_schema` 第二个参数收紧为数据表名（不再接受任意 FROM 片段），行不来自 SQL 的 schema（`plugin://`）改用 `register_programmatic_schema`
 - 插件 id 收紧为 `[a-zA-Z0-9_-]`、不超过 64 字节（去掉 `.`），规则在 `storage::labels::is_plugin_ident`（标签 key 另用更宽的 `is_label_key`，额外允许英文括号与空格）；不合规的 `.kgpg` 安装 / 打包时被拒绝
 - 元数据迁移改为「失败也盖版本」：每行无论成败只处理一次，失败行保留原数据，不再每次启动重试
 - `changelog.md` 放到了 [versions](/versions/) 文件夹下方

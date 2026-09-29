@@ -28,10 +28,11 @@ alwaysApply: false
 
 - 前端不设全量画册 store，也不持有全量画册计数。目录树与所有画册选择器复用 app 侧
   `AlbumTreeView` / `AlbumPicker`，按目录分页查询；单个详情用 `services/albums.ts` 查询并订阅 hub。
-- 计数由 PathQL 路径表达，不新增 SQL 视图、计数列或专用计数命令：目录页一次
-  `albums://<过滤段>/album_page_[hide_]x<N>x_<页>` 的 `list(with_count)` 同时给出直接子画册数
-  （列举项 total）与分页后 join `album_images` 算出的行内 `image_count`（标签叶子直接图片数 / 普通画册
-  自身与子孙成员行之和，与 `images://gallery/[前缀/]album/<id>`、`album-tree/<id>` 同口径）；单画册
-  入口仍读这两条 images:// 路径的 entry 总数。
+- 计数由 PathQL 路径表达，不新增 SQL 视图、计数列或专用计数命令：目录页一次三路 fetch——
+  `albums://<过滤段>/x<N>x/<页>` 取这一页的画册行（默认按创建时间排序）；`…/~~/children[/<类型段>]` 与
+  `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的
+  直接子画册数）与 `image_count`（子树成员行数，标签叶子即直接图片数），没有行的画册计 0；口径与
+  `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 一致。单画册入口仍读这两条 images:// 路径的
+  entry 总数。`~~` 之后的逐行计数用 `group_by`，不要 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
 - 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行
   单画册查询并通过 `dataChangeHub` 的 `ancestorPath` 相关性订阅刷新；不得重新引入全量列表。
