@@ -76,6 +76,11 @@ class NodeBase {
     return this._spawn([...this._segments, ...grouped]);
   }
 
+  /** `~~` 子查询边界：此前的查询整体成为 FROM，从该 scheme 的根重新开始；传入 `pql.<scheme>`。 */
+  $nest<T extends NodeBase>(root: T): T {
+    return root._spawn([...this._segments, "~~"]);
+  }
+
   $not(cb: (b: this) => BranchNode): this {
     const branch = cb(this._spawn([]));
     return this._spawn([
@@ -96,6 +101,7 @@ type AnyProviderMethods = {
   readonly $not: (
     cb: (b: AnyProviderNode) => AnyProviderNode,
   ) => AnyProviderNode;
+  readonly $nest: <T extends NodeBase>(root: T) => T;
 };
 
 type AnyProviderNode = AnyProviderMethods & {

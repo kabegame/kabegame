@@ -310,6 +310,10 @@ pub enum EngineError {
     /// 第一项是出错处的路径, 第二项是可直接展示给用户的原因。
     #[error("reserved path segment at `{0}`: {1}")]
     ReservedPathSegment(String, String),
+    /// `~~` 子查询边界只能用在 SQL schema 下：程序化 schema 的行来自 `fetch_rows`，没有查询可封装。
+    /// 第一项是出错处的路径, 第二项是 scheme。
+    #[error("subquery boundary `~~` at `{0}` needs a SQL schema; `{1}` is programmatic (rows come from fetch_rows, there is no query to nest)")]
+    SubqueryUnsupported(String, String),
 }
 
 #[cfg(test)]

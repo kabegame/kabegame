@@ -37,6 +37,8 @@ pub(crate) enum SegmentKind {
     Branch,
     /// 闭合当前组。
     Close,
+    /// `~~` 子查询边界：此前的 composed 整体成为 FROM，从 schema 根重新折叠。
+    Nest,
     /// 未转义的 `~` 前缀保留段。
     Reserved(String),
     /// 普通路径段（已解反斜线转义，或无需转义而原样保留）。
@@ -66,6 +68,7 @@ pub(crate) fn classify_segment(seg: &str) -> SegmentKind {
         "~or" => SegmentKind::Branch,
         "~not" => SegmentKind::OpenNot,
         "~end" => SegmentKind::Close,
+        "~~" => SegmentKind::Nest,
         _ if seg.starts_with('~') => SegmentKind::Reserved(seg.to_string()),
         _ if seg.contains('\\') => SegmentKind::Literal(unescape_path_segment(seg)),
         // percent-decode 过渡兜底已移除：percent 是传输层职责，在 URI 边界
@@ -344,6 +347,23 @@ mod tests {
         assert_eq!(classify_segment("~or"), SegmentKind::Branch);
         assert_eq!(classify_segment("~not"), SegmentKind::OpenNot);
         assert_eq!(classify_segment("~end"), SegmentKind::Close);
+        assert_eq!(classify_segment("~~"), SegmentKind::Nest);
+    }
+
+    #[test]
+    fn nest_marker_is_exact_and_escapable() {
+        // 只有恰好 `~~` 是边界; 带后缀仍是保留段 (见下), 转义后是字面
+        assert_eq!(classify_segment(r"\~~"), SegmentKind::Literal("~~".into()));
+        assert_eq!(escape_path_segment("~~"), r"\~~");
+        assert_eq!(
+            classify_segment(&escape_path_segment("~~")),
+            SegmentKind::Literal("~~".into())
+        );
+        // 边界不改变组深度
+        assert_eq!(
+            group_depths(&["~any".into(), "~~".into(), "~end".into(), "~~".into()]),
+            vec![1, 1, 0, 0]
+        );
     }
 
     #[test]

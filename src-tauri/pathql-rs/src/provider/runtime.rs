@@ -18,7 +18,7 @@ use super::{
     ResolveRef, SqlExecutor,
 };
 use crate::ast::{Namespace, ProviderName, SimpleName};
-use crate::compose::ProviderQuery;
+use crate::compose::{FromSource, ProviderQuery};
 use crate::template::eval::{TemplateContext, TemplateValue};
 #[cfg(any(feature = "json5", feature = "yaml"))]
 use crate::LoaderType;
@@ -418,6 +418,36 @@ impl ProviderRuntime {
                     }
                     continue;
                 }
+                SegmentKind::Nest => {
+                    // 组内不许封边界: 分支是旁路, 此刻的 composed 只是当前分支视角。
+                    if !group_stack.is_empty() {
+                        return Err(EngineError::WhereGroup(
+                            path_so_far.clone(),
+                            "`~~` cannot appear inside an open where group; close it with `~end` first"
+                                .into(),
+                        ));
+                    }
+                    let SchemaKind::Table(table) = &schema.kind else {
+                        return Err(EngineError::SubqueryUnsupported(
+                            path_so_far.clone(),
+                            scheme.to_string(),
+                        ));
+                    };
+                    // 此前的查询整体冻结为子查询, 以表名为别名; 从 schema 根重新折叠,
+                    // provider 只写 `<表名>.xxx`, 不感知自己在第几层。
+                    let from = FromSource::Subquery {
+                        inner: Arc::new(std::mem::take(&mut composed)),
+                        alias: table.clone(),
+                    };
+                    let (next, root_keys) = self.root_query(&schema, Some(from), &ctx);
+                    composed = next;
+                    current = Some(schema.provider.clone());
+                    // 保留外层已有的 key: 内层任一 provider 变更都要让本路径失效。
+                    extend_provider_keys(&mut provider_keys, root_keys);
+                    // 深度 0 边界, 可缓存。
+                    self.cache_node(&path_so_far, &current, &composed, &provider_keys);
+                    continue;
+                }
                 SegmentKind::Reserved(raw) => {
                     return Err(EngineError::ReservedPathSegment(
                         path_so_far.clone(),
@@ -598,16 +628,29 @@ impl ProviderRuntime {
         }
         drop(cache);
         // 全 miss: 从 root cold start
-        let key_mark = ctx.provider_key_mark();
-        let mut initial = ProviderQuery::new();
-        initial.from = match &schema.kind {
-            SchemaKind::Table(table) => Some(crate::compose::FromSource::table(table.as_str())),
+        let from = match &schema.kind {
+            SchemaKind::Table(table) => Some(FromSource::table(table.as_str())),
             SchemaKind::Programmatic => None,
         };
+        let (composed, provider_keys) = self.root_query(schema, from, ctx);
+        Ok((0, Some(schema.provider.clone()), composed, provider_keys))
+    }
+
+    /// 以给定 FROM 起一条新查询，施加 schema 根 provider 的贡献。冷启动与 `~~` 边界共用。
+    /// 返回折叠结果与这一步涉及的 provider key。
+    fn root_query(
+        &self,
+        schema: &SchemaRoot,
+        from: Option<FromSource>,
+        ctx: &ProviderContext,
+    ) -> (ProviderQuery, Vec<ProviderKey>) {
+        let key_mark = ctx.provider_key_mark();
+        let mut initial = ProviderQuery::new();
+        initial.from = from;
         let composed = schema.provider.apply_query(initial, ctx);
         let mut provider_keys = schema.provider_keys.clone();
         extend_provider_keys(&mut provider_keys, ctx.provider_keys_since(key_mark));
-        Ok((0, Some(schema.provider.clone()), composed, provider_keys))
+        (composed, provider_keys)
     }
 
     /// 顶层 list 入口。

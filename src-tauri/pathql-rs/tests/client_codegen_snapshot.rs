@@ -159,6 +159,10 @@ fn typescript_snapshot_contains_expected_runtime_types_and_edges() {
     assert!(output.contains("export const decodeSeg = (seg: string): string =>"));
     assert!(!output.contains("encodeURIComponent"));
     assert!(output.contains("type AnyProviderNode = AnyProviderMethods & {"));
+    // `~~` 子查询边界: 具体节点与占位节点都能接回某个 scheme 的根
+    assert!(output.contains("$nest<T extends NodeBase>(root: T): T {"));
+    assert!(output.contains("return root._spawn([...this._segments, \"~~\"]);"));
+    assert!(output.contains("readonly $nest: <T extends NodeBase>(root: T) => T;"));
 
     assert!(output.contains("class TestGalleryRouteNode extends NodeBase"));
     assert!(output.contains("get all(): TestAllProviderNode"));
