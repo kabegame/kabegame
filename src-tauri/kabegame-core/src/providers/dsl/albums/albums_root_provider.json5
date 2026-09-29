@@ -40,8 +40,8 @@
             "provider": "albums_of_image_provider",
             "properties": { "image_id": "${capture[1]}" }
         },
-        // 可组合过滤段与分页段：parent/<id>、roots、album_kind/<kind>、search/<query>、album_page_x<N>x_<页>。
-        "parent|roots|album_kind|search|album_page_x[1-9][0-9]*x_[1-9][0-9]*": {
+        // 可组合过滤段与分页段：parent/<id>、roots、album_kind/<kind>、search/<query>、album_page_[hide_]x<N>x_<页>。
+        "parent|roots|album_kind|search|album_page_(hide_)?x[1-9][0-9]*x_[1-9][0-9]*": {
             "delegate": { "provider": "albums_filter_router" },
             "child_var": "child",
             "provider": "${child.provider}",

@@ -102,8 +102,8 @@ token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `lab
 - `AlbumTreeView.vue` 的「标签」分区按目录分页查询
   `albums://roots/~any/album_kind/label/~or/album_kind/label_dir/~end/album_page_x<页大小>x_<页码>`
   （子目录把 `roots` 换成 `parent/<id>`；只选目录时单写 `album_kind/label_dir`）；目录计数取该列举项的
-  `with_count`（同类型过滤下的直接子画册数），标签叶子计数取 `images://gallery/[hide/]album/<id>` 的
-  entry 总数。全局隐藏过滤只由路径前缀表达。
+  `with_count`（同类型过滤下的直接子画册数），标签叶子计数取行内 `image_count`（分页后 join
+  `album_images`，与 `images://gallery/[hide/]album/<id>` 同口径）。隐藏口径用 `album_page_hide_*`。
 - `AlbumTreePanel.vue` 包装同一棵查询树并提供 DnD；只允许同森林移动且拒绝把节点放到标签叶子下。
 - `Albums.vue`：新建对话框类型选择（普通 / 标签 / 标签目录 / 本地文件夹）；移动与父级候选通过
   `AlbumPicker` 的 `scope` 只列标签目录。

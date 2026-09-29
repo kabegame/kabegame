@@ -314,6 +314,12 @@ key 形态分两类（7b 起）：
 分页节点的 composed 上计数，因此要按下面的嵌套目录规则 `where_clear` 掉层级与搜索谓词再写自己的条件
 （见 `albums_child_count_provider`）。
 
+需要逐行附加的聚合（如画册的图片数）写成**切页之后**的投影：
+`SELECT page.*, (<关联子查询>) AS x FROM (SELECT * FROM (${composed}) LIMIT … OFFSET …) AS page`。
+不要把它做成上游 `fields` 贡献——那样关联子查询会在排序前对整个过滤结果逐行执行，而不是只对这一页；
+投影只加列不滤行，不破坏折叠语义。口径开关（如 `album_page_hide_*` 的 `exclude_hidden`）放进子查询
+`LEFT JOIN ... ON ... AND ${properties.x}`，关闭时 join 永不命中，避免 `(${properties.x} = 0 OR ...)`。
+
 嵌套目录 provider 若在每一层贡献同一列的等值条件，进入下一层前必须用精确的 `where_clear` 清掉上一层
 条件。例如画册路径要清除 `ai.album_id =` 再写当前 id；否则会折叠为 `album_id = 父 AND album_id = 子`
 而恒为空。匹配串应包含足以避免误伤相邻语义的运算符片段，并补嵌套路径等价测试。

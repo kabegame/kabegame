@@ -1,7 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "albums_filter_router",
-    "note": "Composable album filters. Each segment folds one WHERE into the path (parent/<id>, roots, album_kind/<kind>, search/<query>); OR several kinds with ~any/album_kind/label/~or/album_kind/label_dir/~end. End with album_page_x<pageSize>x_<page> to list one sorted page.",
+    "note": "Composable album filters. Each segment folds one WHERE into the path (parent/<id>, roots, album_kind/<kind>, search/<query>); OR several kinds with ~any/album_kind/label/~or/album_kind/label_dir/~end. End with album_page_x<pageSize>x_<page> (or album_page_hide_x<pageSize>x_<page> to leave hidden images out of image_count) to list one sorted page.",
     // 纯路由表：自身不贡献 query，供 albums_root_provider 与各过滤 provider 以 delegate 共用，
     // 使过滤段可以任意顺序叠加（每段各折叠一条 where，路径上天然 AND）。
     "list": {
@@ -13,7 +13,12 @@
     "resolve": {
         "album_page_x([1-9][0-9]*)x_([1-9][0-9]*)": {
             "provider": "albums_page_provider",
-            "properties": { "page": "${capture[2]}", "page_size": "${capture[1]}" }
+            "properties": { "page": "${capture[2]}", "page_size": "${capture[1]}", "exclude_hidden": false }
+        },
+        // 与 images:// 的 hide/ 前缀同口径：image_count 不数隐藏画册里的图片（只影响计数，不滤画册）。
+        "album_page_hide_x([1-9][0-9]*)x_([1-9][0-9]*)": {
+            "provider": "albums_page_provider",
+            "properties": { "page": "${capture[2]}", "page_size": "${capture[1]}", "exclude_hidden": true }
         }
     }
 }

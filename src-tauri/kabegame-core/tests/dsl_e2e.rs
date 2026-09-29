@@ -1730,6 +1730,58 @@ fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     );
 }
 
+/// 分页节点先切页、再对这一页 join album_images 计数：`image_count` 必须与 images:// 侧的单画册计数
+/// 同口径（标签叶子 = `gallery/[hide/]album/<id>`，普通画册 = `gallery/[hide/]album-tree/<id>`），
+/// `album_page_hide_*` 对应 `hide/` 前缀；标签目录不能挂图，取 NULL。
+#[test]
+fn album_page_image_count_matches_images_paths() {
+    let runtime = build_runtime();
+    for (page_seg, prefix) in [
+        ("album_page_x100x_1", ""),
+        ("album_page_hide_x100x_1", "hide/"),
+    ] {
+        let mut kinds = HashSet::new();
+        for path in [
+            format!("albums://roots/album_kind/normal/{page_seg}"),
+            format!("albums://parent/{ALBUM_A_ID}/album_kind/normal/{page_seg}"),
+            format!(
+                "albums://parent/44444444-4444-4444-4444-444444444444/~any/album_kind/label/~or/album_kind/label_dir/~end/{page_seg}"
+            ),
+            format!(
+                "albums://parent/55555555-5555-5555-5555-555555555555/album_kind/label/{page_seg}"
+            ),
+            format!("albums://search/pix/{page_seg}"),
+        ] {
+            for entry in runtime.list(&path).unwrap() {
+                let meta = entry.meta.as_ref().unwrap();
+                let kind = meta.get("type").and_then(|v| v.as_str()).unwrap().to_string();
+                let image_count = meta.get("image_count").cloned().unwrap();
+                let expected = match kind.as_str() {
+                    "label_dir" => serde_json::Value::Null,
+                    "label" => serde_json::json!(runtime
+                        .count(&format!("images://gallery/{prefix}album/{}", entry.name))
+                        .unwrap()),
+                    _ => serde_json::json!(runtime
+                        .count(&format!("images://gallery/{prefix}album-tree/{}", entry.name))
+                        .unwrap()),
+                };
+                assert_eq!(image_count, expected, "{path} {} ({kind})", entry.name);
+                kinds.insert(kind);
+            }
+        }
+        assert_eq!(kinds, HashSet::from(["normal", "label", "label_dir"].map(String::from)));
+    }
+
+    // 具体数值兜底：AlbumA 自身 5 张 + 子画册 3 张；初音未来直接 3 张。
+    let roots = runtime.list("albums://roots/album_kind/normal/album_page_x100x_1").unwrap();
+    let album_a = roots.iter().find(|entry| entry.name == ALBUM_A_ID).unwrap();
+    assert_eq!(album_a.meta.as_ref().unwrap().get("image_count"), Some(&serde_json::json!(8)));
+    let leaves = runtime
+        .list("albums://parent/55555555-5555-5555-5555-555555555555/album_kind/label/album_page_x100x_1")
+        .unwrap();
+    assert_eq!(leaves[0].meta.as_ref().unwrap().get("image_count"), Some(&serde_json::json!(3)));
+}
+
 #[test]
 fn album_search_matches_metacharacters_literally_and_label_paths() {
     let runtime = build_runtime();
