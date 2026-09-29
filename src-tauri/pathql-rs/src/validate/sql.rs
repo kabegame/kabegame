@@ -12,7 +12,7 @@ use sqlparser::parser::Parser;
 ///
 /// 策略：
 /// - **完整语句位置** (DynamicSqlEntry.sql)：经 sqlparser parse, 拒绝多语句 / DDL, 提取字面表名做白名单。
-/// - **片段位置** (ContribQuery join.table / join.on / where / fields.sql / order[].sql)：
+/// - **片段位置** (ContribQuery join.table / join.on / where / fields.sql / group_by[] / order[].sql)：
 ///   只做轻量字符串级 DDL 关键字 / 多语句分号检查（pathql 内部生成, 风险低）。
 pub fn validate_sql_exprs(
     registry: &crate::ProviderRegistry,
@@ -41,6 +41,11 @@ pub fn validate_sql_exprs(
             if let Some(fields) = &c.fields {
                 for (i, f) in fields.iter().enumerate() {
                     check_fragment(&fqn, &format!("query.fields[{}].sql", i), &f.sql, errors);
+                }
+            }
+            if let Some(group_by) = &c.group_by {
+                for (i, expr) in group_by.iter().enumerate() {
+                    check_fragment(&fqn, &format!("query.group_by[{}]", i), expr, errors);
                 }
             }
             if let Some(OrderForm::Array(items)) = &c.order {

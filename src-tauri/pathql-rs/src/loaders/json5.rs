@@ -43,6 +43,16 @@ mod tests {
     }
 
     #[test]
+    fn loads_group_by() {
+        let src = r#"{ name: "g", query: { group_by: ["albums.id"] } }"#;
+        let def = Json5Loader.load(Source::Str(src)).expect("parse");
+        let Some(crate::ast::Query::Contrib(q)) = def.query else {
+            panic!("expected contrib query");
+        };
+        assert_eq!(q.group_by.unwrap()[0].0, "albums.id");
+    }
+
+    #[test]
     fn loads_with_comments() {
         let src = "// 注释\n{\"name\":\"foo\"}";
         let def = Json5Loader.load(Source::Str(src)).expect("parse");

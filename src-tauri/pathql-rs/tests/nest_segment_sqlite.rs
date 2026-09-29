@@ -36,6 +36,8 @@ fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
 ///      ├ p_<n>              → 按名称每页 2 个
 ///      ├ images             → join 成员行与图片; 按画册列举, with_count = 图片数
 ///      │   └ hide           → where hid_ai.image_id IS NULL（与画廊 hide 同句）
+///      ├ counts             → 同样的 join + COUNT + group_by albums.id: fetch 一次出整页计数
+///      │   └ hide           → 同 images/hide 的 where
 ///      ├ unclear            → where_clear 掉 albums.parent_id（验证清不到内层）
 ///      └ "~~"（字面）        → where albums.name = 'A'（验证 `\~~` 转义）
 /// ```
@@ -57,7 +59,22 @@ const PROVIDERS: &[&str] = &[
         },
         resolve: {
             "p_([1-9][0-9]*)": { provider: "page_provider", properties: { page: "${capture[1]}" } },
+            counts: { provider: "image_counts_provider" },
         },
+    }"#,
+    r#"{
+        name: "image_counts_provider",
+        query: {
+            fields: [{ sql: "COUNT(images.id)", as: "image_count" }],
+            join: [
+                { kind: "INNER", table: "album_images", as: "ai", on: "ai.album_id = albums.id" },
+                { kind: "INNER", table: "images", as: "images", on: "images.id = ai.image_id" },
+                { kind: "LEFT", table: "album_images", as: "hid_ai", in_need: true,
+                  on: "images.id = hid_ai.image_id and hid_ai.album_id = 'HID'" },
+            ],
+            group_by: ["albums.id"],
+        },
+        resolve: { hide: { provider: "images_hide_provider" } },
     }"#,
     r#"{
         name: "parent_router",
@@ -430,4 +447,68 @@ fn nest_node_lists_like_root_and_serves_meta() {
     assert_eq!(under_nest, at_root);
     // `…/~~/images` 的 meta 取自父路径 `…/~~` 的列举项, 静态项无 meta
     assert_eq!(rt.meta("t://parent/P/~~/images").unwrap(), None);
+}
+
+// ===== group_by: 边界之后按外层行分组, 一次 fetch 出整页计数 =====
+
+fn image_counts(rt: &ProviderRuntime, path: &str) -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = rt
+        .fetch(path)
+        .unwrap_or_else(|e| panic!("fetch({path}) failed: {e}"))
+        .into_iter()
+        .map(|row| {
+            (
+                row["id"].as_str().unwrap().to_string(),
+                row["image_count"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn group_by_after_nest_counts_whole_page_in_one_fetch() {
+    let rt = runtime();
+    // 与 list_with_count 的逐项计数一致, 但只发一条 SQL; C 没有图片不出行
+    assert_eq!(
+        image_counts(&rt, "t://parent/P/p_1/~~/counts"),
+        vec![("A".into(), 3), ("B".into(), 2)]
+    );
+    assert_eq!(
+        image_counts(&rt, "t://parent/P/p_2/~~/counts"),
+        vec![("D".into(), 1)]
+    );
+    assert_eq!(
+        image_counts(&rt, "t://parent/P/p_1/~~/counts/hide"),
+        vec![("A".into(), 2), ("B".into(), 2)]
+    );
+    // count = 分组数（有图片的画册数）
+    assert_eq!(rt.count("t://parent/P/p_1/~~/counts").unwrap(), 2);
+
+    let node = rt.resolve("t://parent/P/p_1/~~/counts/hide").unwrap();
+    let (sql, _) = node
+        .composed
+        .build_sql(&Default::default(), SqlDialect::Sqlite)
+        .unwrap();
+    assert!(
+        sql.ends_with("WHERE (hid_ai.image_id IS NULL) GROUP BY albums.id"),
+        "{sql}"
+    );
+}
+
+#[test]
+fn group_by_does_not_cross_nest_boundary() {
+    // 新一层从空查询开始: 内层的 group_by 留在 CTE 里, 外层不继承
+    let rt = runtime();
+    let node = rt.resolve("t://counts/~~").unwrap();
+    assert!(node.composed.group_by.is_empty());
+    match &node.composed.from {
+        Some(FromSource::Subquery { inner, .. }) => {
+            assert_eq!(inner.group_by.len(), 1);
+        }
+        other => panic!("expected subquery FROM, got {other:?}"),
+    }
+    // 外层是根的行结构, 行数 = 内层分组数（有图片的 A、B、D、HID）
+    assert_eq!(rt.count("t://counts/~~").unwrap(), 4);
 }

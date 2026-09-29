@@ -1,6 +1,6 @@
 //! ProviderQuery → SQL 渲染。占位符与方言差异语法见 `compose/dialect.rs`。
 //!
-//! 渲染顺序：[WITH 子查询边界] → SELECT → FROM → JOIN → WHERE → ORDER BY → LIMIT → OFFSET。
+//! 渲染顺序：[WITH 子查询边界] → SELECT → FROM → JOIN → WHERE → GROUP BY → ORDER BY → LIMIT → OFFSET。
 //! 所有层共用一个 bind params 向量，按文本扫描顺序 push（Postgres 的 `$N` 因此跨层连续编号）。
 
 use thiserror::Error;
@@ -122,6 +122,9 @@ impl ProviderQuery {
         // WHERE
         self.render_where(sql, params, ctx_ref, dialect)?;
 
+        // GROUP BY
+        self.render_group_by(sql, params, ctx_ref, dialect)?;
+
         // ORDER BY
         self.render_order(sql, params, ctx_ref, dialect)?;
 
@@ -212,6 +215,26 @@ impl ProviderQuery {
             sql.push('(');
             render_template_sql(&w.0, ctx, &self.aliases, dialect, sql, params)?;
             sql.push(')');
+        }
+        Ok(())
+    }
+
+    fn render_group_by(
+        &self,
+        sql: &mut String,
+        params: &mut Vec<TemplateValue>,
+        ctx: &TemplateContext,
+        dialect: SqlDialect,
+    ) -> Result<(), BuildError> {
+        if self.group_by.is_empty() {
+            return Ok(());
+        }
+        sql.push_str(" GROUP BY ");
+        for (i, expr) in self.group_by.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            render_template_sql(&expr.0, ctx, &self.aliases, dialect, sql, params)?;
         }
         Ok(())
     }
@@ -1016,6 +1039,72 @@ mod tests {
             outer.build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite),
             Err(BuildError::MissingFrom)
         ));
+    }
+
+    // ----- GROUP BY -----
+
+    #[test]
+    fn group_by_renders_between_where_and_order() {
+        let mut q = q_with_from("albums");
+        q.fields.push(FieldFrag {
+            sql: SqlExpr("COUNT(ai.image_id)".into()),
+            alias: Some(ResolvedAlias::Literal("n".into())),
+            in_need: false,
+        });
+        q.joins.push(join_frag(
+            JoinKind::Inner,
+            "album_images",
+            "ai",
+            Some("ai.album_id = albums.id"),
+        ));
+        q.wheres
+            .push(SqlExpr("albums.type = ${properties.kind}".into()));
+        q.group_by.push(SqlExpr("albums.id".into()));
+        q.group_by.push(SqlExpr("albums.type".into()));
+        q.order.entries.push(("n".into(), OrderDirection::Desc));
+        q.limit = Some(NumberOrTemplate::Number(3.0));
+        let ctx = props(&[("kind", TemplateValue::Text("label".into()))]);
+        let (sql, params) = q
+            .build_sql(&ctx, crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT COUNT(ai.image_id) AS n FROM albums INNER JOIN album_images AS ai ON ai.album_id = albums.id \
+             WHERE (albums.type = ?) GROUP BY albums.id, albums.type ORDER BY n DESC LIMIT 3"
+        );
+        assert_eq!(params, vec![TemplateValue::Text("label".into())]);
+    }
+
+    #[test]
+    fn group_by_on_outer_level_of_subquery_boundary() {
+        // 边界之后按外层行分组：分组只作用于外层，内层（CTE）照旧切页
+        let mut outer = wrap(albums_inner_page(), "albums");
+        outer.fields.push(FieldFrag {
+            sql: SqlExpr("albums.id".into()),
+            alias: Some(ResolvedAlias::Literal("id".into())),
+            in_need: false,
+        });
+        outer.fields.push(FieldFrag {
+            sql: SqlExpr("COUNT(ai.image_id)".into()),
+            alias: Some(ResolvedAlias::Literal("image_count".into())),
+            in_need: false,
+        });
+        outer.joins.push(join_frag(
+            JoinKind::Inner,
+            "album_images",
+            "ai",
+            Some("ai.album_id = albums.id"),
+        ));
+        outer.group_by.push(SqlExpr("albums.id".into()));
+        let (sql, _) = outer
+            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
+            .unwrap();
+        assert_eq!(
+            sql,
+            "WITH pq_nest_1 AS MATERIALIZED (SELECT albums.* FROM albums WHERE (albums.parent_id = ?) LIMIT 2 OFFSET (0)) \
+             SELECT albums.id AS id, COUNT(ai.image_id) AS image_count FROM pq_nest_1 AS albums \
+             INNER JOIN album_images AS ai ON ai.album_id = albums.id GROUP BY albums.id"
+        );
     }
 
     // ----- order: full pipeline test of clause sequencing -----

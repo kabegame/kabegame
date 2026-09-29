@@ -81,6 +81,17 @@ query:
     }
 
     #[test]
+    fn loads_group_by() {
+        let src = "name: g\nquery:\n  group_by: [albums.id, albums.type]\n";
+        let def = YamlLoader.load(Source::Str(src)).expect("parse");
+        let Some(crate::ast::Query::Contrib(q)) = def.query else {
+            panic!("expected contrib query");
+        };
+        let group_by: Vec<_> = q.group_by.unwrap().into_iter().map(|e| e.0).collect();
+        assert_eq!(group_by, vec!["albums.id", "albums.type"]);
+    }
+
+    #[test]
     fn plain_scalars_stay_strings() {
         // YAML 1.2：`on` / `yes` 不是布尔；数字键作为 map key 仍按字符串反序列化。
         let src = r#"

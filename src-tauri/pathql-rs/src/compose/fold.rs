@@ -21,6 +21,7 @@ pub fn fold_contrib(state: &mut ProviderQuery, q: &ContribQuery) -> Result<(), F
     fold_joins(state, &q.join)?;
     fold_where_clear(state, &q.where_clear);
     fold_where(state, &q.where_);
+    fold_group_by(state, &q.group_by);
     fold_order(state, &q.order);
     fold_offset(state, &q.offset);
     fold_limit(state, &q.limit);
@@ -121,6 +122,15 @@ fn fold_joins(state: &mut ProviderQuery, joins: &Option<Vec<Join>>) -> Result<()
 fn fold_where(state: &mut ProviderQuery, w: &Option<WhereQuery>) {
     if let Some(expr) = w.as_ref().and_then(|tree| tree.collapse()) {
         state.wheres.push(expr);
+    }
+}
+
+/// additive; 同一表达式文本只保留首次 (不同 provider 各自声明同一分组键时不重复)。
+fn fold_group_by(state: &mut ProviderQuery, group_by: &Option<Vec<SqlExpr>>) {
+    for expr in group_by.iter().flatten() {
+        if !state.group_by.contains(expr) {
+            state.group_by.push(expr.clone());
+        }
     }
 }
 
@@ -411,6 +421,26 @@ mod tests {
         fold_contrib(&mut s, &q2).unwrap();
         // 清除粒度是整棵树, 不是树内某一支。
         assert!(s.wheres.is_empty());
+    }
+
+    // ===== group_by =====
+
+    fn group_by_q(exprs: &[&str]) -> ContribQuery {
+        let mut q = empty_q();
+        q.group_by = Some(exprs.iter().map(|e| SqlExpr((*e).into())).collect());
+        q
+    }
+
+    #[test]
+    fn group_by_accumulates_and_dedups_by_text() {
+        let mut s = ProviderQuery::new();
+        fold_contrib(&mut s, &group_by_q(&["albums.id"])).unwrap();
+        fold_contrib(&mut s, &group_by_q(&["albums.type", "albums.id"])).unwrap();
+        fold_contrib(&mut s, &empty_q()).unwrap();
+        assert_eq!(
+            s.group_by,
+            vec![SqlExpr("albums.id".into()), SqlExpr("albums.type".into())]
+        );
     }
 
     // ===== order =====

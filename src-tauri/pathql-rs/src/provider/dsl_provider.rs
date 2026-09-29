@@ -59,7 +59,7 @@ impl DslProvider {
     ///
     /// 只改写承载 SQL 值/bind 的位置 (where / join.on / fields.sql / offset / limit)。
     /// `join.table` (白名单表名) / `fields|join.as` (别名/ref) / `order.sql` (排序去重键, 几乎不含
-    /// 属性) 保持不动。非 `properties.*` 引用 (composed/global/ref/capture/未声明属性) 原样保留,
+    /// 属性) / `group_by` (按文本去重的分组键) 保持不动。非 `properties.*` 引用 (composed/global/ref/capture/未声明属性) 原样保留,
     /// 仍走 build 期解析。
     fn intern_contrib_properties(
         &self,

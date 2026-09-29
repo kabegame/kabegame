@@ -27,6 +27,11 @@ pub struct ContribQuery {
     /// 永远空的 `A AND B`。
     #[serde(default)]
     pub where_clear: Option<Vec<SqlExpr>>,
+    /// GROUP BY 表达式; 路径累积 additive, 按表达式文本去重。常与 `~~` 配合:
+    /// 边界之后按外层行分组计数 (`COUNT(images.id) AS image_count` + `group_by: [albums.id]`)。
+    /// 新一层 (`~~` 之后) 从空开始; where 组分支不得贡献。
+    #[serde(default)]
+    pub group_by: Option<Vec<SqlExpr>>,
     #[serde(default)]
     pub order: Option<OrderForm>,
     #[serde(default)]
@@ -79,6 +84,21 @@ mod tests {
             Query::Contrib(c) => {
                 assert_eq!(c.limit, Some(NumberOrTemplate::Number(0.0)));
             }
+            _ => panic!("expected Contrib"),
+        }
+    }
+
+    #[test]
+    fn contrib_group_by() {
+        let v: Query = serde_json::from_str(r#"{"group_by":["albums.id","albums.type"]}"#).unwrap();
+        match v {
+            Query::Contrib(c) => assert_eq!(
+                c.group_by,
+                Some(vec![
+                    SqlExpr("albums.id".into()),
+                    SqlExpr("albums.type".into())
+                ])
+            ),
             _ => panic!("expected Contrib"),
         }
     }

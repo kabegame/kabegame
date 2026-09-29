@@ -92,6 +92,11 @@ fn check_contrib(fqn: &str, c: &ContribQuery, errors: &mut Vec<ValidateError>) {
             check_refs(&expr.0, field, errors);
         });
     }
+    if let Some(group_by) = &c.group_by {
+        for (i, expr) in group_by.iter().enumerate() {
+            check_refs(&expr.0, &format!("query.group_by[{}]", i), errors);
+        }
+    }
 }
 
 fn is_ref_alias(s: &str) -> bool {

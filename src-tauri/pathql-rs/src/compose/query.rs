@@ -77,6 +77,8 @@ pub struct ProviderQuery {
     pub joins: Vec<JoinFrag>,
     /// WHERE 谓词累积; 渲染时用 AND 串接。
     pub wheres: Vec<SqlExpr>,
+    /// GROUP BY 累积; 按表达式文本去重, 保留首次出现的顺序。
+    pub group_by: Vec<SqlExpr>,
     /// ORDER BY 累积。
     pub order: OrderState,
     /// OFFSET 累加项; 渲染时用 + 串接。

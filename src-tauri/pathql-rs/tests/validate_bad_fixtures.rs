@@ -316,6 +316,41 @@ fn ddl_in_order_sql() {
 }
 
 #[test]
+fn ddl_in_group_by() {
+    let q = ContribQuery {
+        group_by: Some(vec![
+            SqlExpr("albums.id".into()),
+            SqlExpr("albums.type; DROP TABLE images".into()),
+        ]),
+        ..Default::default()
+    };
+    let mut d = base_def("p");
+    d.query = Some(Query::Contrib(q));
+    let errs = run_one(d);
+    assert!(
+        errs.iter().any(|e| e.field == "query.group_by[1]"
+            && matches!(e.kind, ValidateErrorKind::SqlDdlNotAllowed(_))),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn undefined_ref_in_group_by() {
+    let q = ContribQuery {
+        group_by: Some(vec![SqlExpr("${ref:nope}.id".into())]),
+        ..Default::default()
+    };
+    let mut d = base_def("p");
+    d.query = Some(Query::Contrib(q));
+    let errs = run_one(d);
+    assert!(
+        errs.iter().any(|e| e.field == "query.group_by[0]"
+            && matches!(e.kind, ValidateErrorKind::UndefinedRef(_))),
+        "{errs:?}"
+    );
+}
+
+#[test]
 fn invalid_regex_in_resolve() {
     let mut resolve = Resolve::default();
     resolve.0.insert(

@@ -261,6 +261,9 @@ fn finish_branch(
     if current.fields.len() != base.fields.len() {
         return reject("`fields`");
     }
+    if current.group_by != base.group_by {
+        return reject("`group_by`");
+    }
     if current.order != base.order {
         return reject("`order`");
     }
@@ -598,6 +601,17 @@ mod tests {
         b.limit = Some(crate::ast::NumberOrTemplate::Number(10.0));
         let err = expect_err(stack.close("p", &b));
         assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("`limit`")));
+    }
+
+    #[test]
+    fn branch_changing_group_by_rejected() {
+        let mut stack = GroupStack::default();
+        let base = q_with_wheres(&[]);
+        stack.open(GroupKind::Any, None, &base);
+        let mut b = base.clone();
+        b.group_by.push(SqlExpr("albums.id".into()));
+        let err = expect_err(stack.close("p", &b));
+        assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("`group_by`")));
     }
 
     #[test]
