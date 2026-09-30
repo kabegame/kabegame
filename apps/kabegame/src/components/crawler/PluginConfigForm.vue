@@ -1,8 +1,10 @@
 <template>
-  <template v-if="defs.length > 0">
-    <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-    <PluginVarsForm v-model="formVars" :plugin-vars="visibleDefs" @var-change="onPluginVarChange" />
-  </template>
+  <PluginVarsForm
+    v-if="defs.length > 0"
+    v-model="formVars"
+    :plugin-vars="visibleDefs"
+    @var-change="onPluginVarChange"
+  />
 </template>
 
 <script setup lang="ts">

@@ -111,6 +111,8 @@
   "outputDirPlaceholder": "기본값은 비워두기",
   "defaultGalleryOnly": "기본: 갤러리에만 추가",
   "pluginConfig": "플러그인 설정",
+  "taskSettings": "작업 설정",
+  "pluginSettings": "플러그인 설정",
   "advancedSettings": "고급 설정",
   "httpHeaders": "HTTP 헤더",
   "headerNamePlaceholder": "헤더 이름 (예: Authorization)",

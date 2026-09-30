@@ -111,6 +111,8 @@
   "outputDirPlaceholder": "空欄でデフォルト",
   "defaultGalleryOnly": "デフォルト：ギャラリーのみに追加",
   "pluginConfig": "プラグイン設定",
+  "taskSettings": "タスク設定",
+  "pluginSettings": "プラグイン設定",
   "advancedSettings": "詳細設定",
   "httpHeaders": "HTTPヘッダー",
   "headerNamePlaceholder": "ヘッダー名（例：Authorization）",

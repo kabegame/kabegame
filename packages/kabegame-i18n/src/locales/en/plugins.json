@@ -111,6 +111,8 @@
   "outputDirPlaceholder": "Leave empty for default",
   "defaultGalleryOnly": "Default: add to gallery only",
   "pluginConfig": "Plugin config",
+  "taskSettings": "Task settings",
+  "pluginSettings": "Plugin settings",
   "advancedSettings": "Advanced settings",
   "httpHeaders": "HTTP headers",
   "headerNamePlaceholder": "Header name (e.g. Authorization)",

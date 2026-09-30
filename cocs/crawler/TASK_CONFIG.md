@@ -75,9 +75,22 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 
 ## 5. Dialog 交互
 
+表单分三段，顺序固定：
+
+1. **任务设置**（最上）：输出目录（仅非紧凑）、输出画册（含「新建画册」）。
+2. **插件设置**（中间）：选择源 + 插件变量。
+3. **高级设置**（最下）：HTTP 头。
+
+**没有选源时三段都显示**：任务设置/高级设置编辑的是组件内的本地草稿
+（`draftOutputDir` / `draftOutputAlbumId` / `draftHttpHeaders`），`taskConfig` 仍为 `null`；
+一旦选到源，草稿随 `writeTaskConfig({ pluginId, ...draft })` 一并并入 task config，
+不会白填。（已经选过源之后再换插件不带草稿，避免把上一个任务的目录/头带给新插件。）
+
+其余交互：
+
 - **header 右侧「运行配置」**：任何入口都显示，`modal.close()` 后跳自动配置页。
 - **footer 左下「保存为配置」**：弹名称 + 描述小对话框，写入 `addRunConfig({ ...tc, scheduleEnabled: false })`；
-  未选插件时禁用。
+  未选插件时禁用。保存的内容与提交一样按可见字段裁剪。
 - **无运行配置下拉、无定时表单**：定时只在自动配置页编辑。
 - 「开始收集」发起的任务一律是手动任务，**不带 `runConfigId`**；成功后关闭且不重置 `taskConfig`。
 

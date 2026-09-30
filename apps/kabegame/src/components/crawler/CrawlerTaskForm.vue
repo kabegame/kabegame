@@ -1,107 +1,100 @@
 <template>
   <el-form ref="formRef" :model="formModel" label-position="top" class="crawl-form">
-    <template v-if="tc">
-      <el-form-item :label="$t('plugins.selectSource')">
-        <div class="plugin-source-field">
-          <div class="flex w-full min-w-0 items-start gap-2">
-            <PluginPickerField
-              class="min-w-0 flex-1"
-              :model-value="tc.pluginId || null"
-              :plugins="plugins"
-              :placeholder="$t('plugins.selectSourcePlaceholder')"
-              :popper-class="uiStore.isCompact ? undefined : 'crawl-plugin-select-dropdown'"
-              :show-js-warning="uiStore.isCompact"
-              :show-selected-js-warning="uiStore.isCompact"
-              show-labels
-              @update:model-value="onPluginChange"
-            />
-            <el-tooltip v-if="!uiStore.isCompact" :content="$t('plugins.detail.goSurfLogin')" placement="top">
-              <span class="inline-flex flex-none">
-                <el-button
-                  class="!m-0 h-32px w-40px !p-0"
-                  :aria-label="$t('plugins.detail.goSurfLogin')"
-                  :disabled="!selectedPluginSurfUrl"
-                  @click="openSelectedPluginInSurf"
-                >
-                  <span class="inline-flex items-center gap-0.5">
-                    <Compass class="h-18px w-18px" />
-                    <TopRight class="h-11px w-11px" />
-                  </span>
-                </el-button>
-              </span>
-            </el-tooltip>
-          </div>
-          <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
-            {{ crawlDialogMinAppErrorText }}
-          </div>
+    <!-- 任务设置（最上）：输出目录 / 输出画册。未选源时同样显示，选到源后并入 taskConfig -->
+    <el-divider content-position="left">{{ $t("plugins.taskSettings") }}</el-divider>
+    <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
+      <el-input v-model="outputDirValue" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
+        <template #append>
+          <el-button @click="selectOutputDir">
+            <el-icon>
+              <FolderOpened />
+            </el-icon>
+            {{ $t("common.chooseFolder") }}
+          </el-button>
+        </template>
+      </el-input>
+    </el-form-item>
+
+    <el-form-item :label="$t('albums.outputAlbum')">
+      <AlbumPicker
+        v-model="albumValue"
+        :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
+        :is-selectable="(node) => node.type !== 'label_dir'"
+        allow-create
+        :placeholder="$t('plugins.defaultGalleryOnly')"
+        :picker-title="$t('albums.outputAlbum')"
+        clearable
+      />
+    </el-form-item>
+    <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
+      <el-input
+        ref="newOutputAlbumNameInputRef"
+        v-model="newOutputAlbumName"
+        :placeholder="$t('albums.placeholderName')"
+        maxlength="50"
+        show-word-limit
+        @keyup.enter="handleCreateOutputAlbum"
+      />
+    </el-form-item>
+    <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
+      <AlbumPicker
+        v-model="newOutputAlbumParentId"
+        :scope="{ sections: ['normal'] }"
+        :placeholder="$t('albums.selectParentAlbum')"
+        :picker-title="$t('albums.parentAlbum')"
+      />
+    </el-form-item>
+
+    <!-- 插件设置（中间）：选择源 + 插件变量 -->
+    <el-divider content-position="left">{{ $t("plugins.pluginSettings") }}</el-divider>
+    <el-form-item :label="$t('plugins.selectSource')">
+      <div class="plugin-source-field">
+        <div class="flex w-full min-w-0 items-start gap-2">
+          <PluginPickerField
+            class="min-w-0 flex-1"
+            :model-value="tc?.pluginId || null"
+            :plugins="plugins"
+            :placeholder="$t('plugins.selectSourcePlaceholder')"
+            :popper-class="uiStore.isCompact ? undefined : 'crawl-plugin-select-dropdown'"
+            :show-js-warning="uiStore.isCompact"
+            :show-selected-js-warning="uiStore.isCompact"
+            show-labels
+            @update:model-value="onPluginChange"
+          />
+          <el-tooltip v-if="!uiStore.isCompact" :content="$t('plugins.detail.goSurfLogin')" placement="top">
+            <span class="inline-flex flex-none">
+              <el-button
+                class="!m-0 h-32px w-40px !p-0"
+                :aria-label="$t('plugins.detail.goSurfLogin')"
+                :disabled="!selectedPluginSurfUrl"
+                @click="openSelectedPluginInSurf"
+              >
+                <span class="inline-flex items-center gap-0.5">
+                  <Compass class="h-18px w-18px" />
+                  <TopRight class="h-11px w-11px" />
+                </span>
+              </el-button>
+            </span>
+          </el-tooltip>
         </div>
-      </el-form-item>
+        <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
+          {{ crawlDialogMinAppErrorText }}
+        </div>
+      </div>
+    </el-form-item>
 
-      <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
-        <el-input v-model="tc.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
-          <template #append>
-            <el-button @click="selectOutputDir">
-              <el-icon>
-                <FolderOpened />
-              </el-icon>
-              {{ $t("common.chooseFolder") }}
-            </el-button>
-          </template>
-        </el-input>
-      </el-form-item>
+    <PluginConfigForm
+      v-if="tc"
+      ref="pluginConfigFormRef"
+      :key="crawlerStore.taskConfigRevision"
+      v-model="tc.userConfig"
+      :plugin-id="tc.pluginId"
+    />
 
-      <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPicker
-          v-model="tc.outputAlbumId"
-          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
-          :is-selectable="(node) => node.type !== 'label_dir'"
-          allow-create
-          :placeholder="$t('plugins.defaultGalleryOnly')"
-          :picker-title="$t('albums.outputAlbum')"
-          clearable
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
-          ref="newOutputAlbumNameInputRef"
-          v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          maxlength="50"
-          show-word-limit
-          @keyup.enter="handleCreateOutputAlbum"
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPicker
-          v-model="newOutputAlbumParentId"
-          :scope="{ sections: ['normal'] }"
-          :placeholder="$t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')"
-        />
-      </el-form-item>
-
-      <PluginConfigForm
-        ref="pluginConfigFormRef"
-        :key="crawlerStore.taskConfigRevision"
-        v-model="tc.userConfig"
-        :plugin-id="tc.pluginId"
-      />
-
-      <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
-      <el-form-item :label="$t('plugins.httpHeaders')">
-        <HttpHeadersEditor v-model="tc.httpHeaders" />
-      </el-form-item>
-    </template>
-
-    <!-- 还没有 task config（首次打开且无上次值）：先选源，选完由调用方写入配置后展开表单 -->
-    <el-form-item v-else :label="$t('plugins.selectSource')">
-      <PluginPickerField
-        :model-value="null"
-        :plugins="plugins"
-        :placeholder="$t('plugins.selectSourcePlaceholder')"
-        show-labels
-        @update:model-value="(id: string | null) => writeTaskConfig(id ? { pluginId: id } : null)"
-      />
+    <!-- 高级设置（最下）：HTTP 头 -->
+    <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
+    <el-form-item :label="$t('plugins.httpHeaders')">
+      <HttpHeadersEditor v-model="headersValue" />
     </el-form-item>
   </el-form>
 
@@ -227,15 +220,58 @@ async function openSelectedPluginInSurf() {
 /** 改选来源插件本身也是一次外部写入：vars / outputDir / headers 取用户默认 > 插件默认 */
 function onPluginChange(id: string | null | undefined) {
   trackCrawlerEvent("gallery_import_plugin_select", { plugin_id: id ?? "", has_plugin: !!id });
-  void writeTaskConfig(id ? { pluginId: id } : null);
+  if (!id) {
+    void writeTaskConfig(null);
+    return;
+  }
+  // 还没选源时用户可能先填了任务设置/高级设置，选到源后并入，避免这两块的白填
+  const carried = tc.value
+    ? {}
+    : {
+        outputDir: draftOutputDir.value,
+        outputAlbumId: draftOutputAlbumId.value,
+        httpHeaders: draftHttpHeaders.value,
+      };
+  void writeTaskConfig({ pluginId: id, ...carried });
 }
+
+/* ---------- 任务设置：未选源时先存在本地草稿，选到源后并入 taskConfig ---------- */
+
+/** 未选源时的草稿（通路 3：`taskConfig` 为 null，但任务设置/高级设置仍可编辑） */
+const draftOutputDir = ref("");
+const draftOutputAlbumId = ref<string | null>(null);
+const draftHttpHeaders = ref<Record<string, string>>({});
+
+const outputDirValue = computed<string>({
+  get: () => tc.value?.outputDir ?? draftOutputDir.value,
+  set: (value) => {
+    if (tc.value) tc.value.outputDir = value;
+    else draftOutputDir.value = value;
+  },
+});
+
+const albumValue = computed<string | null>({
+  get: () => tc.value?.outputAlbumId ?? draftOutputAlbumId.value,
+  set: (value) => {
+    if (tc.value) tc.value.outputAlbumId = value;
+    else draftOutputAlbumId.value = value;
+  },
+});
+
+const headersValue = computed<Record<string, string>>({
+  get: () => tc.value?.httpHeaders ?? draftHttpHeaders.value,
+  set: (value) => {
+    if (tc.value) tc.value.httpHeaders = value;
+    else draftHttpHeaders.value = value;
+  },
+});
 
 const selectOutputDir = async () => {
   if (await guardDesktopOnly("openLocal")) return;
   try {
     const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === "string" && tc.value) {
-      tc.value.outputDir = selected;
+    if (selected && typeof selected === "string") {
+      outputDirValue.value = selected;
     }
   } catch (error) {
     console.error("选择目录失败:", error);
@@ -247,19 +283,16 @@ const selectOutputDir = async () => {
 const newOutputAlbumName = ref<string>("");
 const newOutputAlbumParentId = ref<string | null>(null);
 const newOutputAlbumNameInputRef = ref<any>(null);
-const isCreatingNewOutputAlbum = computed(() => tc.value?.outputAlbumId === "__create_new__");
+const isCreatingNewOutputAlbum = computed(() => albumValue.value === "__create_new__");
 
-watch(
-  () => tc.value?.outputAlbumId,
-  (newValue) => {
-    if (newValue === "__create_new__") {
-      nextTick(() => newOutputAlbumNameInputRef.value?.focus?.());
-    } else {
-      newOutputAlbumName.value = "";
-      newOutputAlbumParentId.value = null;
-    }
-  },
-);
+watch(albumValue, (newValue) => {
+  if (newValue === "__create_new__") {
+    nextTick(() => newOutputAlbumNameInputRef.value?.focus?.());
+  } else {
+    newOutputAlbumName.value = "";
+    newOutputAlbumParentId.value = null;
+  }
+});
 
 const createOutputAlbum = async (showSuccess = true) => {
   if (!newOutputAlbumName.value.trim()) {
@@ -283,7 +316,7 @@ const createOutputAlbum = async (showSuccess = true) => {
 
 const handleCreateOutputAlbum = async () => {
   const created = await createOutputAlbum();
-  if (created && tc.value) tc.value.outputAlbumId = created.id;
+  if (created) albumValue.value = created.id;
 };
 
 /* ---------- 保存为配置 ---------- */
@@ -348,7 +381,7 @@ async function submit() {
   if (isCreatingNewOutputAlbum.value) {
     const created = await createOutputAlbum(false);
     if (!created) return;
-    cfg.outputAlbumId = created.id;
+    albumValue.value = created.id;
   }
 
   if (formRef.value) {

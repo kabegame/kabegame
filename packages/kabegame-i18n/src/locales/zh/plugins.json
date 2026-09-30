@@ -111,6 +111,8 @@
   "outputDirPlaceholder": "留空使用默认位置",
   "defaultGalleryOnly": "默认仅添加到画廊",
   "pluginConfig": "插件配置",
+  "taskSettings": "任务设置",
+  "pluginSettings": "插件设置",
   "advancedSettings": "高级设置",
   "httpHeaders": "HTTP 头",
   "headerNamePlaceholder": "Header 名（如 Authorization）",
