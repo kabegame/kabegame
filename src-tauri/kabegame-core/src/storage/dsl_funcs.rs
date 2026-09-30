@@ -11,7 +11,6 @@
 //! - `name_language_bucket(name)` / `name_language_rank(bucket)` → 名称语言分桶与排序。
 //! - `kb_rand(seed, id)` → 基于 SplitMix64 finalizer 的确定性随机排序值。
 //! - `is_search_dummy_url(url)` → url 搜索维度的占位/本地 url 判定。
-//! - `kb_label_tokens(q)` → 按英文逗号切分的小写标签 token JSON 数组。
 //!
 //! 约束: host SQL function 不得访问当前 Storage/SQLite 连接。数据库中可查的数据应直接写
 //! SQL；否则会在 `KabegameSqlExecutor` 持有连接 mutex 期间重入同一把锁。
@@ -66,40 +65,7 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_vd_display_name(conn)?;
     register_name_language_functions(conn)?;
     register_is_search_dummy_url(conn)?;
-    register_kb_label_tokens(conn)?;
     Ok(())
-}
-
-/// `kb_label_tokens(q)` — 按英文逗号切分、trim、丢弃空项并转小写。
-/// 返回 JSON 数组交给 SQLite `json_each` 展开，避免手拼 JSON 被引号输入破坏。
-fn register_kb_label_tokens(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.create_scalar_function(
-        "kb_label_tokens",
-        1,
-        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
-        |ctx| -> rusqlite::Result<String> {
-            let query: String = ctx.get(0)?;
-            // 标签 key 可含单个内部空格（见 `labels::is_label_key`）：每个 `/` 段去首尾空白、
-            // 折叠连续空白，使 `sua  (alien stage) / x` 与存储的 `sua (alien stage)/x` 对得上
-            let tokens = query
-                .split(',')
-                .map(|token| {
-                    token
-                        .split('/')
-                        .map(|segment| segment.split_whitespace().collect::<Vec<_>>().join(" "))
-                        .collect::<Vec<_>>()
-                        .join("/")
-                })
-                .filter(|token| !token.replace('/', "").is_empty())
-                .map(|token| token.to_lowercase())
-                .collect::<Vec<_>>();
-            serde_json::to_string(&tokens).map_err(|error| {
-                rusqlite::Error::UserFunctionError(
-                    format!("kb_label_tokens: failed to serialize tokens: {error}").into(),
-                )
-            })
-        },
-    )
 }
 
 /// `is_search_dummy_url(url)` — url 搜索维度的占位/本地 url 判定。
@@ -370,36 +336,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(values, (1, 1, 0, 1));
-    }
-
-    #[test]
-    fn label_tokens_split_trim_lowercase_and_escape_quotes() {
-        let conn = Connection::open_in_memory().unwrap();
-        register_kb_label_tokens(&conn).unwrap();
-        let value: String = conn
-            .query_row(
-                r#"SELECT kb_label_tokens(' Hatsune, ,PIXIV/Character/Miku, a"b, c''d ')"#,
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let tokens: Vec<String> = serde_json::from_str(&value).unwrap();
-        assert_eq!(tokens, ["hatsune", "pixiv/character/miku", "a\"b", "c'd"]);
-    }
-
-    #[test]
-    fn label_tokens_normalize_spaces_per_path_segment() {
-        let conn = Connection::open_in_memory().unwrap();
-        register_kb_label_tokens(&conn).unwrap();
-        let value: String = conn
-            .query_row(
-                "SELECT kb_label_tokens('Sua   (Alien Stage) ,  AP / character /  long  hair , / ')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let tokens: Vec<String> = serde_json::from_str(&value).unwrap();
-        assert_eq!(tokens, ["sua (alien stage)", "ap/character/long hair"]);
     }
 
     #[test]

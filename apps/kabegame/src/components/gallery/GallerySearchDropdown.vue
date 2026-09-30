@@ -29,14 +29,6 @@
           @update:model-value="onInput"
           @keyup.enter="close"
         />
-        <el-checkbox
-          v-if="isLabelSearchMode(mode)"
-          class="mt-2"
-          :model-value="mode === 'label-tree'"
-          @update:model-value="(checked) => emit('update:mode', checked ? 'label-tree' : 'label')"
-        >
-          {{ t("gallery.searchLabelIncludeChildren") }}
-        </el-checkbox>
         <p class="mb-0 mt-3 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-secondary)]">
           {{ help }}
         </p>
@@ -145,23 +137,19 @@ function searchModeLabel(mode: GallerySearchMode): string {
   if (mode === "local-path") return t("gallery.searchModeLocalPath");
   if (mode === "url") return t("gallery.searchModeUrl");
   if (mode === "label") return t("gallery.searchModeLabel");
-  if (mode === "label-tree") return t("gallery.searchModeLabelTree");
   return t("gallery.searchModeDisplayName");
 }
 
-/** tab 上 `label` / `label-tree` 合并为一个「标签」tab，差别由面板里的勾选表达。 */
-const tabMode = computed<GallerySearchMode>(() => (props.mode === "label-tree" ? "label" : props.mode));
+const tabMode = computed<GallerySearchMode>(() => props.mode);
 
 function onTabSelect(next: GallerySearchMode) {
-  // 再点一次「标签」tab 不丢掉「包含子标签」
-  if (next === "label" && props.mode === "label-tree") return;
   emit("update:mode", next);
 }
 
 /** 当前 mode 不在允许集合里（分享来的 URL 落到受限页）时把它临时补进 tab 列表：
  *  既不静默改写用户的查询语义，也让人能一眼看见并切走；切走后该 tab 自然消失。 */
 const visibleModes = computed<readonly GallerySearchMode[]>(() => {
-  const modes: GallerySearchMode[] = [GALLERY_SEARCH_ANY, ...props.modes.filter((mode) => mode !== "label-tree")];
+  const modes: GallerySearchMode[] = [GALLERY_SEARCH_ANY, ...props.modes];
   return modes.includes(tabMode.value) ? modes : [...modes, tabMode.value];
 });
 

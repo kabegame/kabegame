@@ -1,4 +1,3 @@
-import { isNil } from "lodash-es";
 import type { PluginConfigText } from "../stores/plugins";
 import {
   formatPluginDateForBackend,
@@ -18,8 +17,8 @@ export type PluginVarDef = {
   descripts?: PluginConfigText | string;
   default?: any;
   options?: VarOption[];
-  min?: number;
-  max?: number;
+  min?: number | null;
+  max?: number | null;
   when?: Record<string, (string | boolean)[]>;
   /** type 为 date 时可选：dayjs 格式，提交给后端的日期字符串（默认 YYYY-MM-DD） */
   format?: string;
@@ -34,6 +33,11 @@ export function optionValue(opt: VarOption) {
   return typeof opt === "string" ? opt : opt.variable;
 }
 
+/** 插件清单来自 JSON，`min` / `max` 可能显式为 null；只有有限数字才是有效边界。 */
+function finiteBound(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 // 判断配置项是否必填（没有 default 值则为必填）
 export function isRequired(varDef: { default?: any }) {
   return varDef.default === undefined || varDef.default === null;
@@ -41,27 +45,29 @@ export function isRequired(varDef: { default?: any }) {
 
 /** 校验单个插件变量值是否与定义兼容（与 useConfigCompatibility 逻辑一致） */
 export function validateVarValue(value: any, varDef: PluginVarDef): { valid: boolean; error?: string } {
+  const min = finiteBound(varDef.min);
+  const max = finiteBound(varDef.max);
   switch (varDef.type) {
     case "int":
       if (typeof value !== "number" || !Number.isInteger(value)) {
         return { valid: false, error: "值必须是整数" };
       }
-      if (!isNil(varDef.min) && value < varDef.min) {
-        return { valid: false, error: `值不能小于 ${varDef.min}` };
+      if (min !== undefined && value < min) {
+        return { valid: false, error: `值不能小于 ${min}` };
       }
-      if (!isNil(varDef.max) && value > varDef.max) {
-        return { valid: false, error: `值不能大于 ${varDef.max}` };
+      if (max !== undefined && value > max) {
+        return { valid: false, error: `值不能大于 ${max}` };
       }
       break;
     case "float":
       if (typeof value !== "number") {
         return { valid: false, error: "值必须是数字" };
       }
-      if (!isNil(varDef.min) && value < varDef.min) {
-        return { valid: false, error: `值不能小于 ${varDef.min}` };
+      if (min !== undefined && value < min) {
+        return { valid: false, error: `值不能小于 ${min}` };
       }
-      if (!isNil(varDef.max) && value > varDef.max) {
-        return { valid: false, error: `值不能大于 ${varDef.max}` };
+      if (max !== undefined && value > max) {
+        return { valid: false, error: `值不能大于 ${max}` };
       }
       break;
     case "boolean":
@@ -253,12 +259,13 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
 export function getValidationRules(varDef: PluginVarDef, displayName: string) {
   const label = displayName;
   const required = isRequired(varDef);
+  const min = finiteBound(varDef.min);
+  const max = finiteBound(varDef.max);
 
   if (varDef.type === "int") {
     return [
       {
         required,
-        message: `请输入${label}`,
         trigger: "change",
         validator: (_rule: any, value: any, callback: any) => {
           if (value === undefined || value === null || value === "") {
@@ -270,12 +277,12 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
             callback(new Error(`${label}必须是整数`));
             return;
           }
-          if (varDef.min !== undefined && value < varDef.min) {
-            callback(new Error(`${label}不能小于 ${varDef.min}`));
+          if (min !== undefined && value < min) {
+            callback(new Error(`${label}不能小于 ${min}`));
             return;
           }
-          if (varDef.max !== undefined && value > varDef.max) {
-            callback(new Error(`${label}不能大于 ${varDef.max}`));
+          if (max !== undefined && value > max) {
+            callback(new Error(`${label}不能大于 ${max}`));
             return;
           }
           callback();
@@ -309,7 +316,6 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
     return [
       {
         required: true,
-        message: `请输入${label}`,
         trigger: varDef.type === "options" || varDef.type === "date" ? "change" : "blur",
         validator: (_rule: any, value: any, callback: any) => {
           if (value === undefined || value === null || value === "") {
@@ -317,13 +323,12 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
             return;
           }
           if (varDef.type === "float" && typeof value === "number") {
-            const varDefWithMinMax = varDef as PluginVarDef;
-            if (varDefWithMinMax.min !== undefined && value < varDefWithMinMax.min) {
-              callback(new Error(`${label}不能小于 ${varDefWithMinMax.min}`));
+            if (min !== undefined && value < min) {
+              callback(new Error(`${label}不能小于 ${min}`));
               return;
             }
-            if (varDefWithMinMax.max !== undefined && value > varDefWithMinMax.max) {
-              callback(new Error(`${label}不能大于 ${varDefWithMinMax.max}`));
+            if (max !== undefined && value > max) {
+              callback(new Error(`${label}不能大于 ${max}`));
               return;
             }
           }

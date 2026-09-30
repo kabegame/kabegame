@@ -55,7 +55,7 @@
 - 添加了 cef 、 cef-rs 补丁，为了实现linux、macos的拖拽，维护负担增加
 - 标签画册：`albums.type IN ('label', 'label_dir')` + `label_key` / 派生列 `label_path`（v031），目录只装子画册、叶子只挂图片，见 `cocs/gallery/LABEL_ALBUMS.md`
 - 插件 API：`Kabegame.downloadImage` 新增 `labels`；迁移脚本新增可选导出 `provideLabels(input)`，`migrate` 变为可选
-- 新增 PathQL 搜索 `search/label/<q>` 与 `search/label-tree/<q>`，宿主 SQL 函数 `kb_label_tokens`
+- 新增 PathQL 搜索 `search/label/<q>`；统一按图片叶子标签的完整 `label_path` 做不区分大小写的子串匹配，多个前端输入条件通过 `filter_comb` 叠加
 - PathQL 新增子查询边界段 `~~`（此前的查询整体成为下一段的 FROM，按方言渲染为物化 CTE）与 ContribQuery `group_by`；画册页计数改为分页后 `~~` + `GROUP BY` 一条出整页，子树判断改用 `ancestor_path` 前缀区间并新增迁移 v033 `idx_albums_ancestor_path`，见 `cocs/provider-dsl/RULES.md` §2.1
 - V8 插件新增 `Kabegame.cefUserAgent()`，返回畅游（桌面 CEF）的默认 UA，配合 `requireCookie()` 解决 Cloudflare `cf_clearance` 绑定 UA 导致的 403；Chrome 大版本号写死在 `ops.rs` 的 `CEF_CHROME_MAJOR`，升级 CEF 时同步
 

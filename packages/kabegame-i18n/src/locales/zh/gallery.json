@@ -319,8 +319,6 @@
   "chipHiddenHelp": "关掉的维度仍能在「高级」里用，只是不占工具条。",
   "sortOrderToggle": "{current}（点击切换{next}）",
   "searchModeLabel": "标签",
-  "searchModeLabelTree": "标签（含子标签）",
-  "searchLabelIncludeChildren": "包含子标签",
-  "searchPlaceholderLabel": "标签 key，多个用英文逗号分隔",
-  "searchModeHelpLabel": "按标签 key 精确匹配，不区分大小写；多个 key 用英文逗号分隔，需同时命中。含 / 的写法按完整路径匹配，如 pixiv/character/miku。"
+  "searchPlaceholderLabel": "标签完整路径片段，多个用英文逗号分隔",
+  "searchModeHelpLabel": "在图片标签的完整 key 路径中做不区分大小写的包含匹配，如 umi、character 或 character/umi；多个条件用英文逗号分隔，需同时命中。"
 }

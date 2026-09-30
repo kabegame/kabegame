@@ -49,8 +49,7 @@ function providerPathSegment(path = "") {
 // ---------------------------------------------------------------------------
 
 /** 后端真实存在的搜索目标：路径段 `search/<mode>/<q>` 的合法取值。 */
-export type GallerySearchPathMode =
-  "display-name" | "metadata" | "native-metadata" | "local-path" | "url" | "label" | "label-tree";
+export type GallerySearchPathMode = "display-name" | "metadata" | "native-metadata" | "local-path" | "url" | "label";
 
 /**
  * 「任意搜」：前端虚拟模式，后端没有对应 provider。序列化时展开成
@@ -68,7 +67,6 @@ export const GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = [
   "metadata",
   "native-metadata",
   "label",
-  "label-tree",
 ];
 
 /** 任务详情 / 畅游详情只暴露基础三项 + 标签。 */
@@ -77,15 +75,14 @@ export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchPathMode[] = [
   "metadata",
   "native-metadata",
   "label",
-  "label-tree",
 ];
 
 /**
- * 标签搜索：`label` 精确匹配，`label-tree` 同时匹配子标签。UI 上合并成一个「标签」tab +
- * 「包含子标签」勾选。输入语法（逗号分隔、token 之间为且）与其它模式不同，故不参与「任意」展开。
+ * 标签搜索：`label` 对图片叶子标签的完整 `label_path` 做大小写不敏感的子串匹配。
+ * 输入语法（逗号分隔、token 之间为且）与其它模式不同，故不参与「任意」展开。
  */
-export function isLabelSearchMode(mode: string | undefined): mode is "label" | "label-tree" {
-  return mode === "label" || mode === "label-tree";
+export function isLabelSearchMode(mode: string | undefined): mode is "label" {
+  return mode === "label";
 }
 
 export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
@@ -139,7 +136,25 @@ export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[
 
 /** 搜索项 → 查询体片段。单模式是一个搜索段；「任意」展开成同词多模式的 OR 组。
  *  两种形态都结束在 gallery 枢纽（search 委派回枢纽，`~end` 游标回到组入口）。 */
+export function labelSearchTokens(query: string): string[] {
+  return query
+    .split(",")
+    .map((token) =>
+      token
+        .split("/")
+        .map((segment) => segment.trim().replace(/\s+/g, " "))
+        .join("/"),
+    )
+    .filter((token) => token.replace(/\//g, "").length > 0);
+}
+
 export function serializeSearchTerm(term: GallerySearchTerm): string {
+  if (isLabelSearchMode(term.mode)) {
+    // 标签 key 不允许逗号；仅分隔符输入用逗号作为必不命中的字面条件，避免空条件变成全集。
+    const tokens = labelSearchTokens(term.query);
+    const effectiveTokens = tokens.length > 0 ? tokens : [","];
+    return effectiveTokens.map((token) => `search/label/${encodeUserSegment(token)}`).join(`/${FILTER_COMB}/`);
+  }
   const query = encodeUserSegment(term.query);
   if (term.mode !== GALLERY_SEARCH_ANY) return `search/${term.mode}/${query}`;
   const branches = searchTermModes(term).map((mode) => `search/${mode}/${query}`);
@@ -815,6 +830,22 @@ function chunkEnd(segments: readonly string[], start: number): number {
 
 function appendAtom(sequence: GalleryQuery, dimension: GalleryFilterDimension, atom: GalleryFilterSet): void {
   const previous = sequence.at(-1);
+  if (
+    dimension === "search" &&
+    previous &&
+    isIsNode(previous) &&
+    isLabelSearchMode(previous.is.search?.mode) &&
+    isLabelSearchMode(atom.search?.mode)
+  ) {
+    previous.is = {
+      ...previous.is,
+      search: {
+        mode: "label",
+        query: `${previous.is.search!.query}, ${atom.search!.query}`,
+      },
+    };
+    return;
+  }
   const occupied =
     previous &&
     isIsNode(previous) &&

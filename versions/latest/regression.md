@@ -3,6 +3,16 @@
 本版回归 checklist。任何改动可预见的回归路径，要在上线前 check 完毕。
 按「操作」一步步点，对照「预期」，通过就把第一列勾上。
 
+## anihonet 单个作品页数范围
+
+自动化：插件打包会重新编译 `anihonet-wallpaper`；桌面 CEF 按下表确认配置联动与任务日志。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 作品页数参数联动 | 桌面 CEF | 打开收集弹窗，选择 anihonet →「单个作品」 | 「作品列表起始页 / 结束页」随模式显示，默认值为 `1 / 10`；切换排行榜或主题模式后隐藏 | 两个字段各占半行 |
+| [ ] | 范围内抓取与日志 | 桌面 CEF | 选择「プロジェクトセカイ」，起止页均填 `2` 后运行 | 只处理 `/images/project_sekai/page/2`；日志包含输入范围 `2-2` 和检测范围 `1-163`，不打印范围警告 | 实际总页数随站点更新，以任务日志为准 |
+| [ ] | 超出实际范围警告 | 桌面 CEF | 对同一作品输入结束页 `9999` 后运行 | warning 指出站点实际范围未覆盖输入范围；到站点末页后正常结束，超出部分不请求 | 不把越界视为任务失败 |
+
 ## 移除 macOS x86_64 交叉编译
 
 自动化：Deno 类型检查覆盖构建脚本；参数扫描确认桌面构建入口不再声明 macOS `--target`。
@@ -16,7 +26,7 @@
 
 ## 图片标签（标签画册）
 
-自动化：`test-kabegame kabegame-core --lib labels|albums|metadata_migration|parse_download|dedup_labels`、`--test dsl_e2e`（标签搜索的且语义、完整路径、大小写、引号、空 token）与 `deno task test -c kabegame --skip cargo`（标签搜索序列化往返、不参与「任意」）。Linux CEF 已按下表勾选项实测；其余需人工回归。
+自动化：`test-kabegame kabegame-core --lib labels|albums|metadata_migration|parse_download|dedup_labels`、`--test dsl_e2e`（标签完整路径包含匹配、前端 AND 路径形态、大小写、引号、空 token 与 SQL 形态）与 `deno task test -c kabegame --skip cargo`（标签分词、`filter_comb` 序列化往返、不参与「任意」）。Linux CEF 已按下表勾选项实测；其余需人工回归。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -34,8 +44,8 @@
 | [ ] | 复制标签 | Linux CEF | 面板复制按钮；图片右键「复制标签」；对无标签图片右键复制 | 提示已复制，剪贴板为 `key, key` 形式，括号转义为 `\(` `\)`（可直接粘进 SD 提示词），空格原样；无标签时提示「还没有标签」 | 仅确认了成功提示，剪贴板内容未能在本机读取；转义有 vitest 覆盖 |
 | [x] | 点击标签跳转 | Linux CEF | 在预览面板点击某个标签 | 预览关闭，画册页选中该标签画册 | |
 | [ ] | key 含括号与空格 | 任一平台 | 新建 key 为 `sua (alien stage)` 的标签；再试 ` a`、`a  b`、`a,b` | 前者可建；后三者即时提示且「创建」禁用；搜索输入 `SUA  (alien stage)` 也能命中 | 插件 id 仍只允许 `[a-zA-Z0-9_-]` |
-| [ ] | 标签搜索 | Linux CEF | 搜索 chip 输入目录 key `character`，分别关闭/打开「包含子标签」 | 精确模式无结果；包含子标签时命中其下所有叶子的图片 | 注意其它过滤（如大小）会叠加 |
-| [ ] | 搜索且语义与完整路径 | 桌面 | 输入 `chara, miku`；输入 `pixiv/chara/miku`；只输入 `,` | 同时命中才返回；完整路径只按全路径匹配；只有逗号时无结果 | e2e 已覆盖 SQL 语义 |
+| [ ] | 标签完整路径包含搜索 | Linux CEF | 搜索 chip 依次输入 `umi`、`character`、`character/umi` | 都按图片叶子标签的完整 key 路径做不区分大小写的子串包含匹配；没有「包含子标签」开关 | 注意其它过滤（如大小）会叠加 |
+| [ ] | 搜索且语义 | 桌面 | 输入 `chara, miku`；只输入 `,` | 前端生成两个 `search/label` 条件并以 `filter_comb` 叠加，图片需同时命中；只有逗号时无结果 | e2e 已覆盖 SQL 与路径语义 |
 | [ ] | 「任意」不含标签 | 桌面 | 「任意」tab 搜索 | 说明文字不列标签，路径不含 `search/label` | |
 | [ ] | 受限页标签搜索 | 任务详情 / 畅游详情 / 画册详情 | 在标签 tab 搜索 | 正常路由与计数 | detail provider 整体委派 search |
 | [ ] | 插件下载带标签 | 任一平台 | 用 anime-pictures 0.5.0 下载一张带角色 tag 的图 | `anime-pictures` 与 `character` 自动建成目录，末端 `<key>` 为叶子并挂图 | 任务日志有 `[labels]` 警告 |
@@ -45,6 +55,7 @@
 | [ ] | 失败重试还原标签 | 任一平台 | 让带标签的下载失败，修复网络后重试 | 成功后标签正常挂上 | `task_failed_images.labels` |
 | [ ] | 迁移补标签 | 任一平台 | 旧版 anime-pictures 下载若干图后升级到 0.5.0 | 历史图片自动补上作品 / 角色 / 画师 / 参考 / 物体五类标签；迁移失败的行也盖版本、下次启动不重跑 | `provideLabels`；Linux 开发库 1830 行已实测补齐五类，失败盖版本未测 |
 | [ ] | konachan 按类型补标签 | 任一平台 | 用 1.2.9 下载过的库装上 konachan 1.3.0 后启动 | 历史图片补上 `konachan/{artist,copyright,character,circle,style,general}` 下的标签，key 为站点标签名（如 `futaba_akane_(pentagon)`），显示名为页面文字 | 1.2.9 之前下载、metadata 里没有标签的图片补不到 |
+| [ ] | Gelbooru 按类型补标签 | 任一平台 | 用 gelbooru 1.0.0 下载过的库装上 1.1.0 后启动，再新下载一张，并查看画廊插件扩展 | 历史图片与新图片都挂到 `gelbooru/{artist,copyright,character,general,metadata}` 下，key 为站点标签名（如 `hakurei_reimu`），显示名为页面文字；插件扩展不再显示旧标签树 | metadata 里没有 `tags` 的图片补不到；未知类型回落到 `general` |
 | [ ] | Pixiv 标签与作者迁移 | 任一平台 | 用 1.2.11 下载含“有英文翻译”、纯假名及汉字混合标签的作品后升级到 pixiv 1.3.2 | 历史图片与新下载图片的作品标签数量都与 Pixiv metadata 中的非空 tag 数量一致，并额外带一个 `pixiv/artist/<作者 UID>`；作品标签显示名严格按默认日文名、英文翻译、key 回落，作者显示用户名 | 详情请求使用 `lang=en`；英文翻译优先生成 key；无翻译时假名转罗马字、`ー` / `—` 转 `-`、剩余汉字编码为 `u-...`，不能折叠为 `()`；作者 UID 不随改名变化 |
 | [ ] | Pixiv 数值分段 provider | 任一桌面平台 | 在画廊插件扩展中展开 Pixiv，依次进入 `likes`、`bookmarks`、`views`，再测试路径 `likes/100+` 与 `views/1000-5000` | 三个维度分别按 `likeCount`、`bookmarkCount`、`viewCount` 显示非空累计 `N+` 分段；区间端点包含在结果内，旧标签树不再出现 | 标签浏览统一走应用级 `pixiv/tag` / `pixiv/artist` 标签画册 |
 | [ ] | PixAI 标签与作者迁移 | 任一平台 | 用 PixAI 0.5.0 下载含多个 tags 的作品后升级到 0.6.0 | 历史图片与新下载图片都挂到 `pixai/tag/<归一化 codeName>`，并额外挂到 `pixai/artist/<作者 ID>`；标签名优先显示站点显示名，作者名优先显示 displayName | codeName 无法派生合法 key 时回退 tack id；作者 ID 不随改名变化 |
@@ -608,7 +619,7 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [ ] | 按比例 / 大小分组 | 桌面 | 画廊「按比例」「按大小」分组，并进入任一分组 | 只列非空分组，计数与进入后的图片数一致；`50MB-` 等范围过滤正确 | aspect/size bucket router、size_range_provider |
 | [ ] | 画册目录分页与计数 | 桌面 / Android | 画册树展开、翻页；开关隐藏看计数 | 计数与点进画册后一致；标签目录显示子画册数 | `albums_page_provider` 已被 `~~` 方案取代（见「PathQL 子查询边界」一节） |
 | [ ] | 画册搜索 | 桌面 | 画册选择器搜索名称 / 标签路径，含 `%`、`_`、`\` | 全等、前缀优先，父级路径 `A / B` 正确；特殊字符按字面匹配 | albums_search_provider |
-| [ ] | 标签搜索 | 桌面 | 标签 tab 搜索 `chara, miku`，开关「包含子标签」 | 与迁移前结果一致；只输入逗号时无结果 | gallery_search_label_query_provider |
+| [ ] | 标签搜索 | 桌面 | 标签 tab 搜索 `chara, miku` | 按完整标签路径包含匹配且两个条件同时命中；只输入逗号时无结果 | gallery_search_label_query_provider |
 | [ ] | 按任务 / 按插件 / VD | 桌面 | 画廊「按任务」「按插件」；VD 按名称、子画册目录 | 显示名为「插件名 - id」；VD 语种目录与子画册正常 | tasks/plugins/vd_name/vd_sub_album_gate |
 | [ ] | 插件 YAML provider | 任一平台 | 打包一个 `kbPathQLProviders` 指向 `providers/*.yaml` 的插件并安装 | 正常加载；扩展名不支持时给出可读错误 | `parse_plugin_provider_entries` |
 
@@ -636,6 +647,7 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [ ] | 整数输入外框 | 桌面 / Android | 查看任意 `int` 配置项，并分别聚焦输入、点击加减按钮 | 整个 `− / 数字输入 / +` 控件外围显示一圈连续的主题色细边框，圆角和内部按钮分隔线正常 | 外框使用 `--anime-border` |
 | [ ] | 边界按钮状态 | 桌面 / Android | 分别用按钮或键盘输入达到 `min`、`max` | 达到 `min` 时减号禁用，达到 `max` 时加号禁用；离开边界后恢复 | 缺失对应边界时该方向不因范围禁用 |
 | [ ] | 非法输入保留与校验 | 桌面 / Android | 键盘依次输入空值、小数、字母及超出上下限的整数 | 原始文本不被取整、夹取或回滚；值每次变化只校验一次并显示错误，修正后错误消失；非法值不能提交 | |
+| [x] | `null` 边界与准确错误 | Linux CEF dev | Gelbooru 的「終了ページ」依次输入 `4`、`0`、`1.5`，最后恢复 `4` | 插件 JSON 的 `max: null` 不参与范围比较；`4` 通过，`0` 立即提示不能小于 1，`1.5` 立即提示必须是整数，恢复 `4` 后错误消失 | `async-validator` 不再用通用“请输入”覆盖具体错误；相关前端测试 54/54 通过 |
 
 ## 下拉弹层宽度统一下沉（`fitInputWidth` 默认 `true`）
 

@@ -490,7 +490,7 @@ const props = withDefaults(defineProps<Props>(), {
   // withDefaults 的工厂会被提升到 setup 外，只能写字面量：引用模块内常量会编译失败。
   filterFeatures: () => ["date", "plugin", "mediaType", "aspect", "size"],
   sortFeatures: () => ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time", "random"],
-  searchFeatures: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label", "label-tree"],
+  searchFeatures: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label"],
   enableSearch: true,
   enablePageSize: true,
   enableAdvanced: true,

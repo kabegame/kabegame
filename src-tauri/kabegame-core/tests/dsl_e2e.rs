@@ -192,25 +192,6 @@ fn register_fixture_functions(conn: &Connection) {
     )
     .unwrap();
 
-    conn.create_scalar_function(
-        "kb_label_tokens",
-        1,
-        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
-        |ctx| -> rusqlite::Result<String> {
-            let query: String = ctx.get(0)?;
-            Ok(serde_json::to_string(
-                &query
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|token| !token.is_empty())
-                    .map(str::to_lowercase)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap())
-        },
-    )
-    .unwrap();
-
     for fn_name in ["get_album", "get_task", "get_surf_record"] {
         conn.create_scalar_function(
             fn_name,
@@ -1019,12 +1000,14 @@ fn gallery_local_path_search_normalizes_forward_and_backslashes() {
 }
 
 #[test]
-fn gallery_label_search_supports_and_paths_case_and_tree_semantics() {
+fn gallery_label_search_matches_full_path_substrings_and_frontend_and_shape() {
     let runtime = build_runtime();
 
     assert_eq!(
         ids(runtime
-            .fetch("images://gallery/search/label/HATSUNE,Vocaloid/sort/by-id")
+            .fetch(
+                "images://gallery/search/label/HATSUNE/filter_comb/search/label/Vocaloid/sort/by-id"
+            )
             .unwrap()),
         ["1"]
     );
@@ -1038,26 +1021,41 @@ fn gallery_label_search_supports_and_paths_case_and_tree_semantics() {
         ids(runtime
             .fetch("images://gallery/search/label/character/sort/by-id")
             .unwrap()),
-        Vec::<String>::new()
+        ["1", "2", "3"]
     );
     assert_eq!(
         ids(runtime
-            .fetch("images://gallery/search/label-tree/CHARACTER/sort/by-id")
+            .fetch("images://gallery/search/label/acter/sort/by-id")
             .unwrap()),
         ["1", "2", "3"]
     );
 }
 
 #[test]
-fn gallery_label_tree_search_by_directory_key_matches_descendant_labels() {
+fn gallery_label_tree_route_is_removed() {
     let runtime = build_runtime();
+    assert!(runtime
+        .fetch("images://gallery/search/label-tree/character/sort/by-id")
+        .is_err());
+}
 
-    assert_eq!(
-        ids(runtime
-            .fetch("images://gallery/search/label-tree/character/sort/by-id")
-            .unwrap()),
-        ["1", "2", "3"]
-    );
+#[test]
+fn gallery_label_search_sql_has_no_token_udf_or_label_self_join() {
+    let runtime = build_runtime();
+    let resolved = runtime
+        .resolve("images://gallery/search/label/character/sort/by-id")
+        .unwrap();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    let (sql, params) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+
+    assert!(sql.contains("instr(LOWER(COALESCE(la.label_path, '')), LOWER(?)) > 0"));
+    assert!(!sql.contains("kb_label_tokens"));
+    assert!(!sql.contains("JOIN albums AS lm"));
+    assert!(format!("{params:?}").contains("character"));
 }
 
 #[test]

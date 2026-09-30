@@ -318,8 +318,6 @@
   "chipHiddenHelp": "非表示にした項目も「高度」から利用できます。ツールバーの場所を取らなくなるだけです。",
   "sortOrderToggle": "{current}（クリックで{next}に切り替え）",
   "searchModeLabel": "ラベル",
-  "searchModeLabelTree": "ラベル（子ラベルを含む）",
-  "searchLabelIncludeChildren": "子ラベルを含める",
-  "searchPlaceholderLabel": "ラベルキー（複数はカンマ区切り）",
-  "searchModeHelpLabel": "ラベルキーの完全一致（大文字小文字を区別しない）。複数はカンマ区切りで、すべてに一致する必要があります。/ を含むと完全パスで照合します（例: pixiv/character/miku）。"
+  "searchPlaceholderLabel": "ラベルのフルパス文字列（複数はカンマ区切り）",
+  "searchModeHelpLabel": "画像ラベルのキーフルパスを大文字小文字を区別せず部分一致で検索します（例: umi、character、character/umi）。複数はカンマ区切りで、すべてに一致する必要があります。"
 }

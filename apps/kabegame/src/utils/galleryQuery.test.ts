@@ -168,17 +168,23 @@ describe("任意搜（虚拟模式 any）", () => {
   });
 });
 
-describe("标签搜索（label / label-tree）", () => {
-  it.each(["label", "label-tree"] as const)("%s 往返保持，逗号分隔的 token 原样保留", (mode) => {
+describe("标签搜索", () => {
+  it("把逗号分隔的 token 序列化成 filter_comb AND，并在解析时折回一个输入值", () => {
     const query: GalleryQuery = [
-      { is: { search: { mode, query: "miku, pixiv/character" }, plugin: { pluginId: "pixiv" } } },
+      { is: { search: { mode: "label", query: "miku, pixiv/character" }, plugin: { pluginId: "pixiv" } } },
     ];
-    expect(serializeQueryBody(query).body.startsWith(`search/${mode}/`)).toBe(true);
+    expect(serializeQueryBody(query).body).toBe(
+      "search/label/miku/filter_comb/search/label/pixiv%5C%2Fcharacter/plugin/pixiv",
+    );
     expect(roundTrip(query)).toEqual(query);
   });
 
+  it("label-tree 不再是合法模式", () => {
+    expect(parseQueryBody("search/label-tree/character".split("/"))).toBeNull();
+  });
+
   it("「任意」不展开标签模式，即使范围里给了标签", () => {
-    const term = makeSearchTerm("any", "miku", ["display-name", "label", "label-tree"]);
+    const term = makeSearchTerm("any", "miku", ["display-name", "label"]);
     expect(term).toEqual({ mode: "any", query: "miku", modes: ["display-name"] });
     expect(serializeQueryBody([{ is: { search: makeSearchTerm("any", "x", []) } }]).body).not.toContain("label");
   });

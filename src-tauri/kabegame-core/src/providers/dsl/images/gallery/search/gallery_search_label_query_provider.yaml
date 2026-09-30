@@ -2,25 +2,17 @@ namespace: kabegame
 name: gallery_search_label_query_provider
 properties:
   query: { type: string, default: "", optional: false }
-  tree: { type: string, default: "0", optional: false }
 query:
-  # 且语义：每个 token 都要命中该图片的某个叶子标签（含 `/` 的 token 按完整 label_path 比，
-  # 否则按 label_key 比）；tree = '1' 时 token 命中标签目录 / 祖先标签也算。
-  # 空 token 集（如只输入逗号）时「不存在未命中的 token」恒真，需显式排除，否则会命中全部图片。
+  # 单个条件只负责一次大小写不敏感的完整标签路径子串匹配。多个输入词的 AND 语义由前端
+  # 拆成多个 search/label/<token>，经 filter_comb 让 PathQL 累积多条 WHERE，不在 SQL 中分词。
+  # 图片只挂在叶子标签上；label_path 已包含全部祖先 key，例如 pixiv/character/umi。
   where: |-
-    json_array_length(kb_label_tokens(${properties.query})) > 0
-    AND NOT EXISTS (
+    EXISTS (
       SELECT 1
-      FROM json_each(kb_label_tokens(${properties.query})) tok
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM album_images lai
-        JOIN albums la ON la.id = lai.album_id AND la.type = 'label'
-        JOIN albums lm ON lm.type IN ('label', 'label_dir')
-          AND (CASE WHEN instr(tok.value, '/') > 0 THEN LOWER(lm.label_path) ELSE LOWER(lm.label_key) END) = tok.value
-        WHERE lai.image_id = images.id
-          AND (la.id = lm.id OR (${properties.tree} = '1' AND instr(la.ancestor_path, '/' || lm.id || '/') > 0))
-      )
+      FROM album_images lai
+      JOIN albums la ON la.id = lai.album_id AND la.type = 'label'
+      WHERE lai.image_id = images.id
+        AND instr(LOWER(COALESCE(la.label_path, '')), LOWER(${properties.query})) > 0
     )
 resolve:
   ".*":

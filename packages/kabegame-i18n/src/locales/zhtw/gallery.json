@@ -320,8 +320,6 @@
   "chipHiddenHelp": "關掉的維度仍能在「進階」裡使用，只是不佔工具列。",
   "sortOrderToggle": "{current}（點擊切換{next}）",
   "searchModeLabel": "標籤",
-  "searchModeLabelTree": "標籤（含子標籤）",
-  "searchLabelIncludeChildren": "包含子標籤",
-  "searchPlaceholderLabel": "標籤 key，多個以英文逗號分隔",
-  "searchModeHelpLabel": "依標籤 key 精確比對，不區分大小寫；多個 key 以英文逗號分隔，需同時符合。含 / 的寫法依完整路徑比對，如 pixiv/character/miku。"
+  "searchPlaceholderLabel": "標籤完整路徑片段，多個以英文逗號分隔",
+  "searchModeHelpLabel": "在圖片標籤的完整 key 路徑中進行不區分大小寫的包含比對，例如 umi、character 或 character/umi；多個條件以英文逗號分隔，需同時符合。"
 }

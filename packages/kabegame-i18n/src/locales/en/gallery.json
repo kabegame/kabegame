@@ -316,8 +316,6 @@
   "chipHiddenHelp": "Hidden dimensions are still available under Advanced — they just don't take up toolbar space.",
   "sortOrderToggle": "{current} — click to switch to {next}",
   "searchModeLabel": "Label",
-  "searchModeLabelTree": "Label (incl. children)",
-  "searchLabelIncludeChildren": "Include child labels",
-  "searchPlaceholderLabel": "Label keys, separated by commas",
-  "searchModeHelpLabel": "Matches label keys exactly, case-insensitively. Separate multiple keys with commas; all must match. A key containing / matches the full path, e.g. pixiv/character/miku."
+  "searchPlaceholderLabel": "Full label path text, separated by commas",
+  "searchModeHelpLabel": "Case-insensitive substring match against each image label's full key path, e.g. umi, character, or character/umi. Separate multiple terms with commas; all must match."
 }

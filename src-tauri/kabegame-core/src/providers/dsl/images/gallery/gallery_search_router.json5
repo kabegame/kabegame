@@ -1,7 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_search_router",
-    "note": "Search by display name, plugin metadata, native metadata, local path, source URL, or labels. Label modes are search/label/<query> and search/label-tree/<query>. Each is a PREFIX, so filtering and pagination may continue after it.",
+    "note": "Search by display name, plugin metadata, native metadata, local path, source URL, or labels. search/label/<query> performs a case-insensitive substring match against each image label's full key path. Each is a PREFIX, so filtering and pagination may continue after it.",
     // 7a: 纯 router 壳 — 仅持 list 路由表, 无 apply_query 贡献 (search 本身不变换 query;
     // search 子项 /<query>/ 才会注入 LIKE WHERE). 严格遵守 router/provider 分工:
     // 这一层只负责枚举五种搜索目标，不混业务逻辑。
@@ -11,7 +11,6 @@
         "native-metadata": { "provider": "gallery_search_native_metadata_router" },
         "local-path": { "provider": "gallery_search_local_path_router" },
         "url": { "provider": "gallery_search_url_router" },
-        "label": { "provider": "gallery_search_label_router" },
-        "label-tree": { "provider": "gallery_search_label_tree_router" }
+        "label": { "provider": "gallery_search_label_router" }
     }
 }

@@ -209,6 +209,9 @@
         }
     },
     "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
         "names": {
             "provider": "gallery_name_router"
         },

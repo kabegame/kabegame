@@ -192,25 +192,6 @@ fn register_fixture_functions(conn: &Connection) {
     )
     .unwrap();
 
-    conn.create_scalar_function(
-        "kb_label_tokens",
-        1,
-        FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
-        |ctx| -> rusqlite::Result<String> {
-            let query: String = ctx.get(0)?;
-            Ok(serde_json::to_string(
-                &query
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|token| !token.is_empty())
-                    .map(str::to_lowercase)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap())
-        },
-    )
-    .unwrap();
-
     for fn_name in ["get_album", "get_task", "get_surf_record"] {
         conn.create_scalar_function(
             fn_name,
