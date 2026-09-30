@@ -1,7 +1,6 @@
 <template>
   <div
-    class="flex h-9 w-full min-w-0 items-stretch overflow-hidden rounded-xl border bg-[var(--anime-bg-card)] transition-colors"
-    :style="{ borderColor: 'var(--anime-border)' }"
+    class="flex h-9 w-full min-w-0 items-stretch overflow-hidden rounded-xl border border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] transition-colors"
   >
     <button
       type="button"
