@@ -56,13 +56,7 @@
       </div>
     </div>
 
-    <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog
-      v-if="!isCompact"
-      :model-value="crawlerDialog.isOpen.value"
-      :initial-config="crawlerDialogInitialConfig"
-      @update:model-value="crawlerDialog.close"
-    />
+    <!-- 收集弹窗由 App.vue 全局唯一承载；本页只走 crawlerDrawerStore.open() -->
     <LocalImportDialog
       v-if="!isCompact && !IS_WEB"
       :model-value="localImportDialog.isOpen.value"
@@ -132,7 +126,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
@@ -142,7 +136,6 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
-import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import WebpageCollectDialog from "@/components/WebpageCollectDialog.vue";
 import MediaPicker from "@/components/MediaPicker.vue";
@@ -203,25 +196,16 @@ watch(
 
 // ---------- Dialog and import flow ----------
 const listenersCreated = ref(false);
-const crawlerDialog = useModal();
 const localImportDialog = useModal();
 const webpageCollectDialog = useModal();
 const mediaPicker = useModal();
 const collectSourcePicker = useModal();
 const collectMenuDialog = useModal();
-const crawlerDialogInitialConfig = ref<
-  | {
-      pluginId?: string;
-      outputDir?: string;
-      vars?: Record<string, any>;
-    }
-  | undefined
->(undefined);
 
-// 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
+// 打开收集弹窗（网络）：不写 taskConfig，直接打开——自然是上次的值或空表单
 const handleShowCrawlerDialog = () => {
   analytics.track("gallery_import_entry", { entry: "network" });
-  crawlerDialog.open();
+  crawlerDrawerStore.open();
 };
 
 const handleShowLocalImport = () => {
@@ -280,7 +264,7 @@ const onDesktopCollectLocal = () => {
 const onDesktopCollectNetwork = () => {
   analytics.track("gallery_import_entry", { entry: "network", source: "empty_state_dialog" });
   collectMenuDialog.close();
-  crawlerDialog.open();
+  crawlerDrawerStore.open();
 };
 
 // 桌面：选择收集方式对话框 → 网页（先关选择层，再开独立表单）
@@ -386,15 +370,6 @@ const handleManualRefresh = async () => {
 };
 
 // ---------- Event-driven refresh ----------
-// 监听 CrawlerDialog 关闭，清空初始配置
-watch(crawlerDialog.isOpen, (isOpen) => {
-  if (!isOpen) {
-    // 延迟清空，确保对话框已经处理完初始配置
-    nextTick(() => {
-      crawlerDialogInitialConfig.value = undefined;
-    });
-  }
-});
 
 // ---------- Lifecycle ----------
 onMounted(async () => {

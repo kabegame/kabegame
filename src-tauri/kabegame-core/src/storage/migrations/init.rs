@@ -153,6 +153,7 @@ CREATE TABLE run_configs (
     plugin_id            TEXT    NOT NULL,
     url                  TEXT    NOT NULL,
     output_dir           TEXT,
+    output_album_id      TEXT,
     user_config          TEXT,
     http_headers         TEXT,
     created_at           INTEGER NOT NULL,

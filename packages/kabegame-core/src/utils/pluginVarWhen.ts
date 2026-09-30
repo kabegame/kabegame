@@ -45,3 +45,13 @@ export function coerceOptionsVarsToVisibleChoices(defs: Array<PluginVarDef>, var
     }
   }
 }
+
+/**
+ * `coerceOptionsVarsToVisibleChoices` 的无副作用版本：返回应用选项级回退后的浅拷贝，
+ * 供展示/提交使用，不改动调用方持有的原值（原值只由用户手动改选才写回）。
+ */
+export function withCoercedOptions(vars: Record<string, any>, defs: Array<PluginVarDef>): Record<string, any> {
+  const copy: Record<string, any> = { ...(vars ?? {}) };
+  coerceOptionsVarsToVisibleChoices(defs, copy);
+  return copy;
+}

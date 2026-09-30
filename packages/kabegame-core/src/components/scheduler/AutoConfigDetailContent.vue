@@ -45,15 +45,18 @@
     </el-descriptions>
 
     <el-descriptions
-      v-if="config.outputDir"
+      v-if="config.outputDir || config.outputAlbumId"
       :title="t('tasks.taskRunParamsSectionOutput')"
       :column="1"
       border
       size="small"
       class="params-desc-block"
     >
-      <el-descriptions-item :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
+      <el-descriptions-item v-if="config.outputDir" :label="t('tasks.taskRunParamsColOutputDir')" :span="2">
         <span class="break-all">{{ config.outputDir }}</span>
+      </el-descriptions-item>
+      <el-descriptions-item v-if="config.outputAlbumId" :label="t('albums.outputAlbum')" :span="2">
+        <span class="break-all">{{ outputAlbumName || config.outputAlbumId }}</span>
       </el-descriptions-item>
     </el-descriptions>
 
@@ -166,6 +169,8 @@ const props = withDefaults(
     config: RunConfig;
     /** 推荐预设预览等尚未导入运行前不展示「上次运行」 */
     showScheduleLastRun?: boolean;
+    /** 输出画册展示名（由 app 侧解析后传入；缺省时退回画册 id） */
+    outputAlbumName?: string;
   }>(),
   { showScheduleLastRun: true },
 );

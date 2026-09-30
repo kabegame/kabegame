@@ -4,8 +4,6 @@
   "edit": "Edit Config",
   "copy": "Copy",
   "delete": "Delete",
-  "runNow": "Run Now",
-  "runNowSuccess": "Manual task created",
   "onlyEnabled": "Enabled schedules only",
   "filterPluginAll": "All plugins",
   "enabled": "Enabled",
@@ -104,5 +102,6 @@
   "scheduleHelpTitle": "About scheduled runs",
   "scheduleHelpP1": "A run config can turn on scheduled runs: repeat on an interval, daily at a fixed time, or weekly on a chosen weekday and time. Each trigger creates a crawl task automatically.",
   "scheduleHelpP2": "Scheduling needs the app process to stay running (foreground or background). Runs fire at the planned time when the device is awake and the app is not force-stopped.",
-  "scheduleHelpP3": "If the app was not running at the scheduled time, that run may be missed. On the next launch you may see a prompt to run missed schedules now or dismiss and continue from the next planned time."
+  "scheduleHelpP3": "If the app was not running at the scheduled time, that run may be missed. On the next launch you may see a prompt to run missed schedules now or dismiss and continue from the next planned time.",
+  "runWithConfig": "Run with this config"
 }

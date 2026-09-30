@@ -19,6 +19,7 @@
       ref="detailRef"
       :key="viewConfig.id"
       :config="viewConfig"
+      :output-album-name="viewAlbumName"
     />
 
     <el-form v-else ref="formRef" :model="form" label-position="top" class="acd-edit-form">
@@ -49,6 +50,17 @@
 
       <el-form-item v-if="!IS_ANDROID" :label="t('plugins.outputDir')">
         <OutputDirSelect v-model="form.outputDir" :placeholder="t('plugins.outputDirPlaceholder')" />
+      </el-form-item>
+
+      <el-form-item :label="t('albums.outputAlbum')">
+        <AlbumPicker
+          v-model="outputAlbumId"
+          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
+          :is-selectable="(node) => node.type !== 'label_dir'"
+          :placeholder="t('plugins.defaultGalleryOnly')"
+          :picker-title="t('albums.outputAlbum')"
+          clearable
+        />
       </el-form-item>
 
       <PluginVarsForm v-if="visiblePluginVars.length > 0" v-model="form.vars" :plugin-vars="visiblePluginVars" />
@@ -171,6 +183,8 @@ import ScheduleProgressBar from "@kabegame/core/components/scheduler/SchedulePro
 import OutputDirSelect from "@kabegame/core/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
+import AlbumPicker from "@/components/albums/AlbumPicker.vue";
+import { HIDDEN_ALBUM_ID, fetchAlbum } from "@/services/albums";
 import { useModal } from "@kabegame/core/composables/useModal";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
@@ -203,6 +217,9 @@ const dailyMinute = ref(0);
 /** 0=周一 … 6=周日 */
 const weeklyWeekday = ref(0);
 const headersModel = ref<Record<string, string>>({});
+/** 输出画册：与 task config 同义，定时任务也写入该画册 */
+const outputAlbumId = ref<string | null>(null);
+const viewAlbumName = ref("");
 
 const modal = useModal({ onClose: () => dialogStore.close() });
 watch(
@@ -216,6 +233,24 @@ const viewConfig = computed(() => {
   if (!id) return null;
   return crawlerStore.runConfigById(id) ?? null;
 });
+
+/** 查看态展示画册名；解析失败退回 id */
+watch(
+  viewConfig,
+  async (cfg) => {
+    const id = cfg?.outputAlbumId ?? "";
+    if (!id) {
+      viewAlbumName.value = "";
+      return;
+    }
+    try {
+      viewAlbumName.value = (await fetchAlbum(id))?.name ?? "";
+    } catch {
+      viewAlbumName.value = "";
+    }
+  },
+  { immediate: true },
+);
 
 /** 定时已关但后端仍有 mode 时仍展示表单项（只读灰色）；新建且未启用则不展示 */
 const showScheduleDetailFields = computed(() => {
@@ -304,6 +339,7 @@ const loadFromConfig = async (cfg: RunConfig) => {
   await loadPluginVarDefs(cfg.pluginId);
   form.value.vars = normalizeVarsForUI(cfg.userConfig ?? {}, pluginVars.value as PluginVarDef[]);
   headersModel.value = { ...(cfg.httpHeaders ?? {}) };
+  outputAlbumId.value = cfg.outputAlbumId ?? null;
 
   scheduleEnabled.value = !!cfg.scheduleEnabled;
   const spec = cfg.scheduleSpec;
@@ -345,6 +381,7 @@ const resetCreateForm = () => {
   dailyMinute.value = 0;
   weeklyWeekday.value = 0;
   headersModel.value = {};
+  outputAlbumId.value = null;
   form.value.pluginId = "";
   form.value.outputDir = "";
   form.value.vars = {};
@@ -601,6 +638,7 @@ const handleSave = async () => {
     outputDir: form.value.outputDir || undefined,
     userConfig,
     httpHeaders: { ...headersModel.value },
+    outputAlbumId: outputAlbumId.value || undefined,
     ...schedule,
   };
 

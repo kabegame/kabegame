@@ -58,11 +58,14 @@
 
 “再次执行”只打开表单并回填原任务参数，不直接提交，也不继承原任务的 `runConfigId`：
 
-- 普通插件通过全局 `crawlerDrawer` store 打开 `App.vue` 常驻的 `CrawlerDialog`。
+- 普通插件走「先写再打开」：`await writeTaskConfig(taskConfigFromTask(task))` 把任务参数写进全局
+  `crawlerStore.taskConfig`（含输出画册），再 `crawlerDrawerStore.open()` 打开 `App.vue` 常驻的
+  `CrawlerDialog`——后者对来源无感，只响应式编辑这份全局对象。详见
+  [../crawler/TASK_CONFIG.md](../crawler/TASK_CONFIG.md)。
 - 内建 `webpage` 通过 `collectDialogs.openWebpage` 打开全局 `WebpageCollectDialog`。
 - 内建 `local-import` 仅在桌面端通过 `collectDialogs.openLocalImport` 打开全局
   `LocalImportDialog`；若原任务来自文件夹画册拖入，只有提交时画册仍是原画册，才继续透传
   `outputDir` 与 `copy_to_dir: true`。
 
-全局弹窗实例由 `App.vue` 承载，页面内原有实例保留并继续服务各页面入口。Web 版不显示内建
-`webpage` / `local-import` 的再次执行；Android 不显示桌面专用的 `local-import` 再次执行。
+全局弹窗实例由 `App.vue` 唯一承载。Web 版不显示内建 `webpage` / `local-import` 的再次执行；
+Android 不显示桌面专用的 `local-import` 再次执行。

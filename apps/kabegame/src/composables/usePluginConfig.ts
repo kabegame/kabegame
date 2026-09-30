@@ -18,6 +18,55 @@ export type PluginDefaultLoadResult = {
   outputDir: string;
 };
 
+/** 用户数据目录下插件默认配置的原始形态（userConfig 未与 var 定义对齐） */
+export interface PluginUserDefault {
+  userConfig: Record<string, any>;
+  outputDir: string;
+  httpHeaders: Record<string, string>;
+}
+
+/** 解析磁盘默认配置 JSON 中的 httpHeaders */
+export function parseHttpHeadersFromDefault(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    out[k] = v == null ? "" : String(v);
+  }
+  return out;
+}
+
+/**
+ * 读取插件用户默认配置：先 get，缺失时 ensure 生成；任一环节失败返回 `null`。
+ * 这是「用户默认配置」这一优先级的唯一来源，供 `writeTaskConfig` 与表单载入共用。
+ */
+export async function fetchPluginUserDefault(pluginId: string): Promise<PluginUserDefault | null> {
+  let disk: unknown = undefined;
+  try {
+    disk = await invoke<unknown | null>("get_plugin_default_config", { pluginId });
+  } catch {
+    return null;
+  }
+  if (disk == null) {
+    try {
+      disk = await invoke<unknown>("ensure_plugin_default_config", { pluginId });
+    } catch {
+      return null;
+    }
+  }
+  if (disk == null || typeof disk !== "object" || Array.isArray(disk)) return null;
+  const obj = disk as Record<string, unknown>;
+  const rawUser =
+    obj.userConfig && typeof obj.userConfig === "object" && !Array.isArray(obj.userConfig)
+      ? (obj.userConfig as Record<string, any>)
+      : {};
+  const od = obj.outputDir;
+  return {
+    userConfig: rawUser,
+    outputDir: typeof od === "string" ? od : "",
+    httpHeaders: parseHttpHeadersFromDefault(obj.httpHeaders),
+  };
+}
+
 /**
  * 插件配置管理 composable
  */
@@ -54,16 +103,6 @@ export function usePluginConfig() {
     form.value.vars = normalizeVarsForUI({}, pluginVars.value as PluginVarDef[]);
   };
 
-  /** 解析磁盘默认配置 JSON 中的 httpHeaders */
-  function parseHttpHeadersFromDefault(raw: unknown): Record<string, string> {
-    const out: Record<string, string> = {};
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      out[k] = v == null ? "" : String(v);
-    }
-    return out;
-  }
-
   /**
    * 加载插件变量定义并优先应用用户数据目录下的默认配置；
    * 默认配置缺失时由后端生成；解析失败时回退到 config.json 中的 var 默认值。
@@ -82,41 +121,18 @@ export function usePluginConfig() {
       return emptyResult();
     }
 
-    let disk: unknown = undefined;
-    try {
-      disk = await invoke<unknown | null>("get_plugin_default_config", {
-        pluginId,
-      });
-    } catch {
+    const disk = await fetchPluginUserDefault(pluginId);
+    if (!disk) {
       resetFormVarsToDefaults();
       form.value.outputDir = "";
       return emptyResult();
     }
 
-    if (disk == null) {
-      try {
-        disk = await invoke<unknown>("ensure_plugin_default_config", { pluginId });
-      } catch {
-        resetFormVarsToDefaults();
-        form.value.outputDir = "";
-        return emptyResult();
-      }
-    }
-
-    const obj = disk as Record<string, unknown>;
-    const rawUser =
-      obj.userConfig && typeof obj.userConfig === "object" && !Array.isArray(obj.userConfig)
-        ? (obj.userConfig as Record<string, any>)
-        : {};
-    const matched = matchUserConfigFromDefaults(rawUser, defs);
+    const matched = matchUserConfigFromDefaults(disk.userConfig, defs);
     form.value.vars = normalizeVarsForUI(matched, defs);
+    form.value.outputDir = disk.outputDir;
 
-    const od = obj.outputDir;
-    const outputDir = typeof od === "string" ? od : "";
-    form.value.outputDir = outputDir;
-
-    const httpHeaders = parseHttpHeadersFromDefault(obj.httpHeaders);
-    return { httpHeaders, outputDir };
+    return { httpHeaders: disk.httpHeaders, outputDir: disk.outputDir };
   };
 
   // 选择输出目录

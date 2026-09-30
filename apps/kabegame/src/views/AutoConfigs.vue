@@ -86,7 +86,7 @@
                     @card-click="(cfg) => autoConfigDialog.openExisting(cfg.id, 'view')"
                     @open-view="(id: string) => autoConfigDialog.openExisting(id, 'view')"
                     @schedule-enabled="handleScheduleEnabled"
-                    @run-now="handleRunNow"
+                    @run-with-config="handleRunWithConfig"
                     @more-command="handleMoreCommand"
                     @open-task-images="openTaskImages"
                     @open-task-log="openTaskLog"
@@ -234,11 +234,6 @@
     </el-dialog>
 
     <!-- 安卓不显示这个页面，所以不做判断 -->
-    <CrawlerDialog
-      :model-value="crawlerDialog.isOpen.value"
-      :initial-config="crawlerDialogInitialConfig"
-      @update:model-value="crawlerDialog.close"
-    />
     <LocalImportDialog
       v-if="!IS_WEB"
       :model-value="localImportDialog.isOpen.value"
@@ -261,14 +256,15 @@ import { useModal } from "@kabegame/core/composables/useModal";
 import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
-import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
+import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
+import { taskConfigFromRunConfig, writeTaskConfig } from "@/composables/taskConfig";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
@@ -280,6 +276,7 @@ const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
+const crawlerDrawerStore = useCrawlerDrawerStore();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const { settingValue: autoConfigTab, set: setAutoConfigTab } = useSettingKeyState("autoConfigTab");
@@ -289,16 +286,7 @@ const appBackgroundCardClass = computed(() =>
 
 const headerShowFeatures = [HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
 
-const crawlerDialog = useModal();
 const localImportDialog = useModal();
-const crawlerDialogInitialConfig = ref<
-  | {
-      pluginId?: string;
-      outputDir?: string;
-      vars?: Record<string, any>;
-    }
-  | undefined
->(undefined);
 
 const onlyEnabled = ref(false);
 const filterPluginId = ref<string | null>(null);
@@ -611,12 +599,13 @@ const handleCopy = async (id: string) => {
   ElMessage.success(t("autoConfig.copied"));
 };
 
-const handleRunNow = async (id: string) => {
+/** 通路 4：只把该配置的 task config 写入全局 taskConfig 再打开弹窗，不写配置 id、不关联该配置 */
+const handleRunWithConfig = async (id: string) => {
   if (await guardDesktopOnly("runConfig", { needSuper: true })) return;
-  const ok = await crawlerStore.runFromConfig(id);
-  if (ok) {
-    ElMessage.success(t("autoConfig.runNowSuccess"));
-  }
+  const cfg = crawlerStore.runConfigById(id);
+  if (!cfg) return;
+  await writeTaskConfig(taskConfigFromRunConfig(cfg));
+  crawlerDrawerStore.open();
 };
 
 const handleMoreCommand = (cmd: string, cfg: RunConfig) => {
@@ -680,7 +669,7 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
         if (IS_WEB) return;
         localImportDialog.open();
       } else if (d.value === "network") {
-        crawlerDialog.open();
+        crawlerDrawerStore.open();
       }
     }
   }

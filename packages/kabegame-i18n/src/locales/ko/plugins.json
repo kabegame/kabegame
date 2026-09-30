@@ -100,11 +100,6 @@
   "startCollect": "수집 시작",
   "pluginVarSelectAll": "모두 선택",
   "runConfig": "실행 설정",
-  "importRecommendedConfigs": "추천 구성 가져오기",
-  "selectConfigOptional": "설정 선택 (선택)",
-  "addConfig": "설정 추가",
-  "updateToConfig": "현재 설정으로 업데이트",
-  "saveToConfig": "설정에 저장",
   "selectSource": "소스 선택",
   "selectSourcePlaceholder": "소스를 선택해 주세요",
   "selectSourceSubtitle": "수집을 시작할 소스를 선택하세요",
@@ -122,9 +117,6 @@
   "headerValuePlaceholder": "헤더 값 (예: Bearer xxx)",
   "addHeader": "헤더 추가",
   "httpHeadersHint": "이 HTTP 헤더는 크롤러 요청(to/fetch_json/fetch)과 이미지 다운로드(download_image)에 사용되며 스크립트 변수에 주입되지 않습니다.",
-  "newConfig": "새 설정",
-  "configNotExist": "설정이 존재하지 않습니다",
-  "updatedToConfig": "현재 설정으로 업데이트됨",
   "selectSourceFirst": "먼저 소스를 선택해 주세요",
   "selectSourceBeforeSave": "저장 전에 소스를 선택해 주세요",
   "jsPluginAndroidNotSupported": "선택한 플러그인은 JS 기반입니다. Android는 지원하지 않습니다. Rhai 플러그인을 선택하거나 데스크톱에서 JS 플러그인을 사용하세요.",
@@ -226,5 +218,6 @@
     "imageLoadFailed": "이미지 로드 실패: {path}",
     "importAllPresetsSuccess": "실행 설정 {success}개를 가져왔습니다",
     "importAllPresetsPartial": "{success}개를 가져왔고, {failed}개는 실패했습니다"
-  }
+  },
+  "saveAsConfig": "설정으로 저장"
 }

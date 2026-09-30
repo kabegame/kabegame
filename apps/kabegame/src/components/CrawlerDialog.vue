@@ -11,175 +11,19 @@
     <template #header>
       <div class="crawl-drawer-header">
         <h3>{{ $t("plugins.startCollect") }}</h3>
+        <el-button link type="primary" class="crawl-header-link" @click="goRunConfigs">
+          {{ $t("plugins.runConfig") }}
+        </el-button>
       </div>
     </template>
-    <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
-      <el-form-item :label="$t('plugins.runConfig')">
-        <div class="run-config-row">
-          <AndroidPickerSelect
-            :model-value="selectedRunConfigId ?? null"
-            :options="runConfigPickerOptions"
-            :title="$t('plugins.runConfig')"
-            :placeholder="$t('plugins.selectConfigOptional')"
-            clearable
-            @update:model-value="setRunConfigId"
-          />
-          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
-            {{ $t("plugins.addConfig") }}
-          </el-button>
-          <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
-            {{ $t("plugins.updateToConfig") }}
-          </el-button>
-        </div>
-      </el-form-item>
-      <el-form-item :label="$t('plugins.selectSource')">
-        <div class="plugin-source-field">
-          <PluginPickerField
-            :model-value="form.pluginId || null"
-            :plugins="plugins"
-            :picker-title="$t('plugins.selectSource')"
-            :placeholder="$t('plugins.selectSourcePlaceholder')"
-            show-js-warning
-            show-selected-js-warning
-            show-labels
-            @update:model-value="onPluginChange"
-          />
-          <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
-            {{ crawlDialogMinAppErrorText }}
-          </div>
-        </div>
-      </el-form-item>
-      <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
-        <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
-          <template #append>
-            <el-button @click="selectOutputDir">
-              <el-icon>
-                <FolderOpened />
-              </el-icon>
-              {{ $t("common.chooseFolder") }}
-            </el-button>
-          </template>
-        </el-input>
-      </el-form-item>
 
-      <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPicker
-          v-model="selectedOutputAlbumId"
-          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
-          :is-selectable="(node) => node.type !== 'label_dir'"
-          allow-create
-          :placeholder="$t('plugins.defaultGalleryOnly')"
-          :picker-title="$t('albums.outputAlbum')"
-          clearable
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
-          ref="newOutputAlbumNameInputRef"
-          v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          maxlength="50"
-          show-word-limit
-          @keyup.enter="handleCreateOutputAlbum"
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPicker
-          v-model="newOutputAlbumParentId"
-          :scope="{ sections: ['normal'] }"
-          :placeholder="$t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')"
-        />
-      </el-form-item>
+    <CrawlerTaskForm ref="taskFormRef" @close="modal.close" />
 
-      <template v-if="pluginVars.length > 0">
-        <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-        <PluginVarsForm v-model="form.vars" :plugin-vars="visiblePluginVars" @var-change="onPluginVarChange" />
-      </template>
-
-      <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
-      <el-form-item :label="$t('plugins.httpHeaders')">
-        <div class="headers-editor">
-          <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
-            <el-input v-model="row.key" :placeholder="$t('plugins.headerNamePlaceholder')" />
-            <el-input v-model="row.value" :placeholder="$t('plugins.headerValuePlaceholder')" />
-            <el-button type="danger" link @click="removeHeaderRow(idx)">{{ $t("plugins.delete") }}</el-button>
-          </div>
-          <div class="header-actions">
-            <el-button size="small" @click="addHeaderRow">{{ $t("plugins.addHeader") }}</el-button>
-          </div>
-          <div class="config-hint">
-            {{ $t("plugins.httpHeadersHint") }}
-          </div>
-        </div>
-      </el-form-item>
-
-      <el-divider content-position="left">{{ $t("autoConfig.schedule") }}</el-divider>
-      <el-form-item :label="$t('autoConfig.scheduleEnabled')">
-        <el-switch v-model="scheduleEnabled" />
-      </el-form-item>
-      <template v-if="scheduleEnabled">
-        <el-form-item :label="$t('autoConfig.mode')">
-          <el-radio-group v-model="scheduleMode">
-            <el-radio value="interval">{{ $t("autoConfig.modeInterval") }}</el-radio>
-            <el-radio value="daily">{{ $t("autoConfig.modeDaily") }}</el-radio>
-            <el-radio value="weekly">{{ $t("autoConfig.modeWeekly") }}</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="scheduleMode === 'interval'" :label="$t('autoConfig.modeInterval')">
-          <div class="mode-line">
-            <el-input-number v-model="intervalValue" :min="1" />
-            <el-select v-model="intervalUnit">
-              <el-option value="minutes" :label="$t('autoConfig.unitMinutes')" />
-              <el-option value="hours" :label="$t('autoConfig.unitHours')" />
-              <el-option value="days" :label="$t('autoConfig.unitDays')" />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="scheduleMode === 'daily'" :label="$t('autoConfig.modeDaily')">
-          <div class="mode-line">
-            <el-select v-model="dailyHour">
-              <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-              <el-option
-                v-for="h in 24"
-                :key="`h-${h - 1}`"
-                :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`"
-              />
-            </el-select>
-            <el-select v-model="dailyMinute">
-              <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
-          <div class="mode-line">
-            <el-select v-model="weeklyWeekday">
-              <el-option
-                v-for="wd in 7"
-                :key="`awd-${wd - 1}`"
-                :value="wd - 1"
-                :label="$t(`autoConfig.weekday${wd - 1}`)"
-              />
-            </el-select>
-            <el-select v-model="dailyHour">
-              <el-option
-                v-for="h in 24"
-                :key="`awh-${h - 1}`"
-                :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`"
-              />
-            </el-select>
-            <el-select v-model="dailyMinute">
-              <el-option v-for="m in 60" :key="`awm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-alert type="info" :closable="false" :title="schedulePreview" />
-      </template>
-    </el-form>
     <div class="crawl-dialog-footer crawl-dialog-footer--android">
-      <el-button type="primary" :disabled="!selectedRunConfigId && !form.pluginId" @click="handleStartCrawl">
+      <el-button :disabled="!hasPlugin" @click="taskFormRef?.openSaveConfigDialog()">
+        {{ $t("plugins.saveAsConfig") }}
+      </el-button>
+      <el-button type="primary" :disabled="!hasPlugin" @click="taskFormRef?.submit()">
         {{ $t("plugins.startCollect") }}
       </el-button>
     </div>
@@ -189,638 +33,69 @@
     v-else
     :model-value="modal.isOpen.value"
     :z-index="modal.zIndex.value"
-    :title="$t('plugins.startCollect')"
     width="600px"
     class="crawl-dialog"
     align-center
     :show-close="true"
     @update:model-value="modal.close"
   >
-    <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
-      <el-form-item :label="$t('plugins.runConfig')">
-        <div class="run-config-row">
-          <el-select
-            v-model="selectedRunConfigId"
-            class="run-config-select"
-            :placeholder="$t('plugins.selectConfigOptional')"
-            clearable
-            popper-class="run-config-select-dropdown"
-            fit-input-width
-            @change="(v: string | null) => void setRunConfigId(v)"
-          >
-            <template #label>
-              <span
-                v-if="selectedRunConfig"
-                class="run-config-selected-title"
-                :title="runConfigDescription(selectedRunConfig) || undefined"
-              >
-                <span class="plugin-name">{{ runConfigPluginName(selectedRunConfig) }}</span>
-                <span class="config-name">- {{ runConfigName(selectedRunConfig) }}</span>
-              </span>
-            </template>
-            <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="runConfigLabel(cfg)" :value="cfg.id">
-              <div class="run-config-option">
-                <div class="run-config-info">
-                  <div class="name">
-                    <el-tag
-                      v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
-                      type="danger"
-                      size="small"
-                      style="margin-right: 6px"
-                    >
-                      {{ $t("plugins.incompatible") }}
-                    </el-tag>
-                    <el-tag
-                      v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
-                      type="warning"
-                      size="small"
-                      style="margin-right: 6px"
-                    >
-                      {{ $t("plugins.incompatible") }}
-                    </el-tag>
-                    <span class="run-config-title" :title="runConfigDescription(cfg) || undefined">
-                      <span class="plugin-name">{{ runConfigPluginName(cfg) }}</span>
-                      <span class="config-name">- {{ runConfigName(cfg) }}</span>
-                    </span>
-                  </div>
-                </div>
-                <div class="run-config-actions">
-                  <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
-                    {{ $t("plugins.delete") }}
-                  </el-button>
-                </div>
-              </div>
-            </el-option>
-          </el-select>
-          <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="addConfigModal.open()">
-            {{ $t("plugins.saveToConfig") }}
-          </el-button>
-          <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
-            {{ $t("plugins.updateToConfig") }}
-          </el-button>
-        </div>
-        <div class="run-config-recommended-row">
-          <el-button type="primary" link class="run-config-rec-btn" @click="goImportRecommendedPresets">
-            {{ $t("plugins.importRecommendedConfigs") }}
-            <span v-if="recommendedPresetCount > 0" class="run-config-rec-count">({{ recommendedPresetCount }})</span>
-          </el-button>
-        </div>
-      </el-form-item>
-      <el-form-item :label="$t('plugins.selectSource')">
-        <div class="plugin-source-field">
-          <div class="flex w-full min-w-0 items-start gap-2">
-            <PluginPickerField
-              class="min-w-0 flex-1"
-              :model-value="form.pluginId || null"
-              :plugins="plugins"
-              :placeholder="$t('plugins.selectSourcePlaceholder')"
-              popper-class="crawl-plugin-select-dropdown"
-              show-labels
-              @update:model-value="onPluginChange"
-            />
-            <el-tooltip :content="$t('plugins.detail.goSurfLogin')" placement="top">
-              <span class="inline-flex flex-none">
-                <el-button
-                  class="!m-0 h-32px w-40px !p-0"
-                  :aria-label="$t('plugins.detail.goSurfLogin')"
-                  :disabled="!selectedPluginSurfUrl"
-                  @click="openSelectedPluginInSurf"
-                >
-                  <span class="inline-flex items-center gap-0.5">
-                    <Compass class="h-18px w-18px" />
-                    <TopRight class="h-11px w-11px" />
-                  </span>
-                </el-button>
-              </span>
-            </el-tooltip>
-          </div>
-          <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
-            {{ crawlDialogMinAppErrorText }}
-          </div>
-        </div>
-      </el-form-item>
-      <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
-        <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
-          <template #append>
-            <el-button @click="selectOutputDir">
-              <el-icon>
-                <FolderOpened />
-              </el-icon>
-              {{ $t("common.chooseFolder") }}
-            </el-button>
-          </template>
-        </el-input>
-      </el-form-item>
-
-      <el-form-item :label="$t('albums.outputAlbum')">
-        <AlbumPicker
-          v-model="selectedOutputAlbumId"
-          :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
-          :is-selectable="(node) => node.type !== 'label_dir'"
-          allow-create
-          :placeholder="$t('plugins.defaultGalleryOnly')"
-          :picker-title="$t('albums.outputAlbum')"
-          clearable
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
-        <el-input
-          ref="newOutputAlbumNameInputRef"
-          v-model="newOutputAlbumName"
-          :placeholder="$t('albums.placeholderName')"
-          maxlength="50"
-          show-word-limit
-          @keyup.enter="handleCreateOutputAlbum"
-        />
-      </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.parentAlbum')">
-        <AlbumPicker
-          v-model="newOutputAlbumParentId"
-          :scope="{ sections: ['normal'] }"
-          :placeholder="$t('albums.selectParentAlbum')"
-          :picker-title="$t('albums.parentAlbum')"
-        />
-      </el-form-item>
-
-      <template v-if="pluginVars.length > 0">
-        <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-        <PluginVarsForm v-model="form.vars" :plugin-vars="visiblePluginVars" @var-change="onPluginVarChange" />
-      </template>
-
-      <el-divider content-position="left">{{ $t("plugins.advancedSettings") }}</el-divider>
-      <el-form-item :label="$t('plugins.httpHeaders')">
-        <div class="headers-editor">
-          <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
-            <el-input v-model="row.key" :placeholder="$t('plugins.headerNamePlaceholder')" />
-            <el-input v-model="row.value" :placeholder="$t('plugins.headerValuePlaceholder')" />
-            <el-button type="danger" link @click="removeHeaderRow(idx)">{{ $t("plugins.delete") }}</el-button>
-          </div>
-          <div class="header-actions">
-            <el-button size="small" @click="addHeaderRow">{{ $t("plugins.addHeader") }}</el-button>
-          </div>
-          <div class="config-hint">
-            {{ $t("plugins.httpHeadersHint") }}
-          </div>
-        </div>
-      </el-form-item>
-
-      <el-divider content-position="left">{{ $t("autoConfig.schedule") }}</el-divider>
-      <el-form-item :label="$t('autoConfig.scheduleEnabled')">
-        <el-switch v-model="scheduleEnabled" />
-      </el-form-item>
-      <template v-if="scheduleEnabled">
-        <el-form-item :label="$t('autoConfig.mode')">
-          <el-radio-group v-model="scheduleMode">
-            <el-radio value="interval">{{ $t("autoConfig.modeInterval") }}</el-radio>
-            <el-radio value="daily">{{ $t("autoConfig.modeDaily") }}</el-radio>
-            <el-radio value="weekly">{{ $t("autoConfig.modeWeekly") }}</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="scheduleMode === 'interval'" :label="$t('autoConfig.modeInterval')">
-          <div class="mode-line">
-            <el-input-number v-model="intervalValue" :min="1" />
-            <el-select v-model="intervalUnit">
-              <el-option value="minutes" :label="$t('autoConfig.unitMinutes')" />
-              <el-option value="hours" :label="$t('autoConfig.unitHours')" />
-              <el-option value="days" :label="$t('autoConfig.unitDays')" />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="scheduleMode === 'daily'" :label="$t('autoConfig.modeDaily')">
-          <div class="mode-line">
-            <el-select v-model="dailyHour">
-              <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
-              <el-option
-                v-for="h in 24"
-                :key="`h-${h - 1}`"
-                :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`"
-              />
-            </el-select>
-            <el-select v-model="dailyMinute">
-              <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
-          <div class="mode-line">
-            <el-select v-model="weeklyWeekday">
-              <el-option
-                v-for="wd in 7"
-                :key="`bwd-${wd - 1}`"
-                :value="wd - 1"
-                :label="$t(`autoConfig.weekday${wd - 1}`)"
-              />
-            </el-select>
-            <el-select v-model="dailyHour">
-              <el-option
-                v-for="h in 24"
-                :key="`bwh-${h - 1}`"
-                :value="h - 1"
-                :label="`${String(h - 1).padStart(2, '0')}:xx`"
-              />
-            </el-select>
-            <el-select v-model="dailyMinute">
-              <el-option v-for="m in 60" :key="`bwm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-alert type="info" :closable="false" :title="schedulePreview" />
-      </template>
-    </el-form>
-
-    <template #footer>
-      <el-button @click="modal.close()">{{ $t("common.close") }}</el-button>
-      <el-button type="primary" :disabled="!selectedRunConfigId && !form.pluginId" @click="handleStartCrawl">
-        {{ $t("plugins.startCollect") }}
-      </el-button>
+    <template #header>
+      <div class="crawl-dialog-header">
+        <span class="crawl-dialog-header__title">{{ $t("plugins.startCollect") }}</span>
+        <el-button link type="primary" class="crawl-header-link" @click="goRunConfigs">
+          {{ $t("plugins.runConfig") }}
+        </el-button>
+      </div>
     </template>
-  </ElDialog>
 
-  <!-- 新增配置弹窗 -->
-  <ElDialog
-    :model-value="addConfigModal.isOpen.value"
-    :z-index="addConfigModal.zIndex.value"
-    :title="$t('plugins.newConfig')"
-    width="400px"
-    :close-on-click-modal="false"
-    @update:model-value="addConfigModal.close"
-    @closed="onAddConfigDialogClosed"
-  >
-    <el-form label-width="80px">
-      <el-form-item :label="$t('common.name')" required>
-        <el-input
-          v-model="newConfigName"
-          :placeholder="$t('common.configNamePlaceholder')"
-          maxlength="80"
-          show-word-limit
-        />
-      </el-form-item>
-      <el-form-item :label="$t('common.description')">
-        <el-input
-          v-model="newConfigDescription"
-          type="textarea"
-          :placeholder="$t('common.configDescPlaceholder')"
-          :rows="2"
-        />
-      </el-form-item>
-    </el-form>
+    <CrawlerTaskForm ref="taskFormRef" @close="modal.close" />
+
     <template #footer>
-      <el-button @click="addConfigModal.close()">{{ $t("common.cancel") }}</el-button>
-      <el-button type="primary" @click="handleAddConfig">{{ $t("common.save") }}</el-button>
+      <div class="crawl-dialog-footer">
+        <el-button :disabled="!hasPlugin" @click="taskFormRef?.openSaveConfigDialog()">
+          {{ $t("plugins.saveAsConfig") }}
+        </el-button>
+        <div class="crawl-dialog-footer__actions">
+          <el-button @click="modal.close()">{{ $t("common.close") }}</el-button>
+          <el-button type="primary" :disabled="!hasPlugin" @click="taskFormRef?.submit()">
+            {{ $t("plugins.startCollect") }}
+          </el-button>
+        </div>
+      </div>
     </template>
   </ElDialog>
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref, nextTick } from "vue";
+/**
+ * 收集弹窗：对来源无感。全局 crawler store 只存一份 `taskConfig`，
+ * 调用方「先写再打开」（`writeTaskConfig` + `crawlerDrawerStore.open()`），
+ * 这里只响应式地编辑这份对象。
+ */
+import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { storeToRefs } from "pinia";
-import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
-import { Compass, FolderOpened, TopRight } from "@kabegame/element-plus-icons";
 import { ElDialog } from "@kabegame/element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
-import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
-import { usePluginConfig } from "@/composables/usePluginConfig";
-import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
-import {
-  isRequired,
-  expandVarsForBackend,
-  normalizeVarsForUI,
-  type PluginVarDef,
-} from "@kabegame/core/utils/pluginVarForm";
-import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
-import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
-import { usePluginStore } from "@/stores/plugins";
-import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
-import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
-import AlbumPicker from "@/components/albums/AlbumPicker.vue";
-import PluginPickerField from "@/components/PluginPickerField.vue";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { IS_WEB } from "@kabegame/core/env";
-import { trackEvent } from "@kabegame/core/track/umami";
 import { useModal } from "@kabegame/core/composables/useModal";
-import { guardPluginPlatform, enqueueTask } from "@/composables/useCrawlTaskLauncher";
-import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@kabegame/core/utils/pluginVarWhen";
-import { useApp } from "@/stores/app";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { useSurfStore } from "@kabegame/core/stores/surf";
+import { useCrawlerStore } from "@/stores/crawler";
+import { usePluginStore } from "@/stores/plugins";
+import CrawlerTaskForm from "@/components/crawler/CrawlerTaskForm.vue";
 
 interface Props {
   modelValue: boolean;
-  initialConfig?: {
-    pluginId?: string;
-    outputDir?: string;
-    vars?: Record<string, any>;
-    httpHeaders?: Record<string, string>;
-    outputAlbumId?: string | null;
-  };
 }
 
-const { t } = useI18n();
 const props = defineProps<Props>();
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
-  (e: "started"): void;
 }>();
 
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
-const crawlerDrawerStore = useCrawlerDrawerStore();
-const recommendedPresetCount = computed(() => crawlerStore.pluginRecommendedConfigs.length);
-
-function goImportRecommendedPresets() {
-  modal.close();
-  void router.push({ name: "AutoConfigs", query: { tab: "recommended" } });
-}
 const pluginStore = usePluginStore();
-const appStore = useApp();
-const { version: crawlDialogAppVersion } = storeToRefs(appStore);
-const { varDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
-
-function trackCrawlerEvent(name: string, data: Record<string, unknown> = {}) {
-  if (!IS_WEB) return;
-  trackEvent(name, data);
-}
-
-function runConfigName(cfg: { name?: unknown }): string {
-  return resolveConfigText(cfg.name as any, locale.value);
-}
-function runConfigDescription(cfg: { description?: unknown }): string {
-  return resolveConfigText(cfg.description as any, locale.value);
-}
-function runConfigPluginName(cfg: Pick<RunConfig, "pluginId">): string {
-  return pluginStore.pluginLabel(cfg.pluginId);
-}
-function runConfigLabel(cfg: RunConfig): string {
-  return `${runConfigPluginName(cfg)} - ${runConfigName(cfg)}`;
-}
-
 const uiStore = useUiStore();
-const surfStore = useSurfStore();
-
-type HttpHeaderRow = { key: string; value: string };
-const httpHeaderRows = ref<HttpHeaderRow[]>([]);
-const addHeaderRow = () => httpHeaderRows.value.push({ key: "", value: "" });
-const removeHeaderRow = (idx: number) => httpHeaderRows.value.splice(idx, 1);
-const toHttpHeadersMap = () => {
-  const out: Record<string, string> = {};
-  for (const r of httpHeaderRows.value) {
-    const k = `${r.key ?? ""}`.trim();
-    if (!k) continue;
-    out[k] = `${r.value ?? ""}`;
-  }
-  return out;
-};
-const loadHeadersFromConfig = (cfgId: string | null) => {
-  if (!cfgId) {
-    httpHeaderRows.value = [];
-    return;
-  }
-  const cfg = crawlerStore.runConfigs.find((c) => c.id === cfgId);
-  const headers = cfg?.httpHeaders || {};
-  httpHeaderRows.value = Object.entries(headers).map(([k, v]) => ({ key: k, value: v }));
-};
-
-const addConfigModal = useModal();
-const newConfigName = ref("");
-const newConfigDescription = ref("");
-
-function onAddConfigDialogClosed() {
-  newConfigName.value = "";
-  newConfigDescription.value = "";
-}
-
-const scheduleEnabled = ref(false);
-const scheduleMode = ref<"interval" | "daily" | "weekly">("interval");
-const intervalValue = ref(1);
-const intervalUnit = ref<"minutes" | "hours" | "days">("hours");
-const dailyHour = ref(-1);
-const dailyMinute = ref(0);
-const weeklyWeekday = ref(0);
-
-const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
-  if (unit === "days") return 86400;
-  if (unit === "hours") return 3600;
-  return 60;
-};
-
-function monday0FromDate(d: Date): number {
-  const w = d.getDay();
-  return w === 0 ? 6 : w - 1;
-}
-
-watch(
-  () => scheduleMode.value,
-  (mode) => {
-    if (mode === "interval") {
-      dailyHour.value = -1;
-      dailyMinute.value = 0;
-      weeklyWeekday.value = 0;
-    } else if (mode === "daily") {
-      intervalValue.value = 1;
-      intervalUnit.value = "hours";
-      weeklyWeekday.value = 0;
-      dailyHour.value = -1;
-      dailyMinute.value = 0;
-    } else {
-      intervalValue.value = 1;
-      intervalUnit.value = "hours";
-      const d = new Date();
-      weeklyWeekday.value = monday0FromDate(d);
-      dailyHour.value = d.getHours();
-      dailyMinute.value = d.getMinutes();
-    }
-  },
-);
-
-const schedulePreview = computed(() => {
-  if (!scheduleEnabled.value) return t("autoConfig.scheduleDisabled");
-  if (scheduleMode.value === "interval") {
-    const unitKey =
-      intervalUnit.value === "minutes" ? "unitMinutes" : intervalUnit.value === "hours" ? "unitHours" : "unitDays";
-    return t("autoConfig.intervalSummary", {
-      n: intervalValue.value,
-      unit: t(`autoConfig.${unitKey}`),
-    });
-  }
-  if (scheduleMode.value === "weekly") {
-    const wd = Math.min(6, Math.max(0, weeklyWeekday.value));
-    return t("autoConfig.weeklyAt", {
-      weekday: t(`autoConfig.weekday${wd}`),
-      hour: String(dailyHour.value).padStart(2, "0"),
-      minute: String(dailyMinute.value).padStart(2, "0"),
-    });
-  }
-  if (dailyHour.value === -1) {
-    return t("autoConfig.dailyHourly", { minute: String(dailyMinute.value).padStart(2, "0") });
-  }
-  return t("autoConfig.dailyAt", {
-    hour: String(dailyHour.value).padStart(2, "0"),
-    minute: String(dailyMinute.value).padStart(2, "0"),
-  });
-});
-
-function loadScheduleFromConfig(cfg: RunConfig | undefined) {
-  if (!cfg) {
-    scheduleEnabled.value = false;
-    scheduleMode.value = "interval";
-    intervalValue.value = 1;
-    intervalUnit.value = "hours";
-    dailyHour.value = -1;
-    dailyMinute.value = 0;
-    weeklyWeekday.value = 0;
-    return;
-  }
-  scheduleEnabled.value = !!cfg.scheduleEnabled;
-  const spec = cfg.scheduleSpec;
-  scheduleMode.value =
-    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly" ? spec.mode : "interval";
-  weeklyWeekday.value = 0;
-  if (spec?.mode === "interval") {
-    const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
-    if (secs % 86400 === 0) {
-      intervalUnit.value = "days";
-      intervalValue.value = Math.max(1, Math.round(secs / 86400));
-    } else if (secs % 3600 === 0) {
-      intervalUnit.value = "hours";
-      intervalValue.value = Math.max(1, Math.round(secs / 3600));
-    } else {
-      intervalUnit.value = "minutes";
-      intervalValue.value = Math.max(1, Math.round(secs / 60));
-    }
-  }
-  if (spec?.mode === "daily") {
-    dailyHour.value = Number(spec.hour ?? -1);
-    dailyMinute.value = Number(spec.minute ?? 0);
-  }
-  if (spec?.mode === "weekly") {
-    weeklyWeekday.value = Math.min(6, Math.max(0, Number(spec.weekday ?? 0)));
-    dailyHour.value = Math.min(23, Math.max(0, Number(spec.hour ?? 0)));
-    dailyMinute.value = Math.min(59, Math.max(0, Number(spec.minute ?? 0)));
-  }
-}
-
-function buildScheduleFields(): Pick<
-  RunConfig,
-  "scheduleEnabled" | "scheduleSpec" | "schedulePlannedAt" | "scheduleLastRunAt"
-> {
-  if (!scheduleEnabled.value) {
-    return {
-      scheduleEnabled: false,
-      scheduleSpec: undefined,
-      schedulePlannedAt: undefined,
-      scheduleLastRunAt: undefined,
-    };
-  }
-  if (scheduleMode.value === "interval") {
-    const scheduleSpec: ScheduleSpec = {
-      mode: "interval",
-      intervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
-    };
-    return {
-      scheduleEnabled: true,
-      scheduleSpec,
-      schedulePlannedAt: undefined,
-      scheduleLastRunAt: undefined,
-    };
-  }
-  if (scheduleMode.value === "weekly") {
-    const scheduleSpec: ScheduleSpec = {
-      mode: "weekly",
-      weekday: Math.min(6, Math.max(0, weeklyWeekday.value)),
-      hour: Math.min(23, Math.max(0, dailyHour.value)),
-      minute: Math.min(59, Math.max(0, dailyMinute.value)),
-    };
-    return {
-      scheduleEnabled: true,
-      scheduleSpec,
-      schedulePlannedAt: undefined,
-      scheduleLastRunAt: undefined,
-    };
-  }
-  const scheduleSpec: ScheduleSpec = {
-    mode: "daily",
-    hour: dailyHour.value,
-    minute: dailyMinute.value,
-  };
-  return {
-    scheduleEnabled: true,
-    scheduleSpec,
-    schedulePlannedAt: undefined,
-    scheduleLastRunAt: undefined,
-  };
-}
-
-function isFormDirtyFromConfig(cfg: RunConfig, backendVars: Record<string, any>, httpHeaders: Record<string, string>) {
-  if (cfg.pluginId !== form.value.pluginId) return true;
-  if ((cfg.outputDir ?? "") !== (form.value.outputDir ?? "")) return true;
-  if (JSON.stringify(cfg.userConfig ?? {}) !== JSON.stringify(backendVars)) return true;
-  if (JSON.stringify(cfg.httpHeaders ?? {}) !== JSON.stringify(httpHeaders)) return true;
-  return false;
-}
-
-async function handleAddConfig() {
-  const name = newConfigName.value.trim();
-  if (!name) {
-    ElMessage.warning(t("common.configNamePlaceholder"));
-    return;
-  }
-  if (!form.value.pluginId) {
-    ElMessage.warning(t("plugins.selectSourceBeforeSave"));
-    return;
-  }
-  const backendVars =
-    pluginVars.value.length > 0 ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[]) : {};
-  const httpHeaders = toHttpHeadersMap();
-  try {
-    const cfg = await crawlerStore.addRunConfig({
-      name,
-      description: newConfigDescription.value?.trim() || undefined,
-      pluginId: form.value.pluginId,
-      url: "",
-      outputDir: form.value.outputDir || undefined,
-      userConfig: backendVars,
-      httpHeaders,
-      scheduleEnabled: false,
-    });
-    addConfigModal.close();
-    selectedRunConfigId.value = cfg.id;
-  } catch (e) {
-    console.error("新增配置失败:", e);
-    ElMessage.error(t("plugins.saveFailed"));
-  }
-}
-
-async function updateCurrentConfig() {
-  const cfgId = selectedRunConfigId.value;
-  if (!cfgId) return;
-  const cfg = crawlerStore.runConfigs.find((c) => c.id === cfgId);
-  if (!cfg) {
-    ElMessage.error(t("plugins.configNotExist"));
-    return;
-  }
-  if (!form.value.pluginId) {
-    ElMessage.warning(t("plugins.selectSourceBeforeSave"));
-    return;
-  }
-  const backendVars =
-    pluginVars.value.length > 0 ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[]) : {};
-  const httpHeaders = toHttpHeadersMap();
-  try {
-    await crawlerStore.updateRunConfig({
-      ...cfg,
-      pluginId: form.value.pluginId,
-      outputDir: form.value.outputDir || undefined,
-      userConfig: backendVars,
-      httpHeaders,
-    });
-    ElMessage.success(t("plugins.updatedToConfig"));
-  } catch (e) {
-    console.error("更新配置失败:", e);
-    ElMessage.error(t("plugins.saveFailed"));
-  }
-}
+const taskFormRef = ref<InstanceType<typeof CrawlerTaskForm> | null>(null);
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(
@@ -829,403 +104,42 @@ watch(
   { immediate: true },
 );
 
-const plugins = computed(() => pluginStore.plugins);
-const runConfigs = computed(() => crawlerStore.runConfigs);
-const selectedRunConfig = computed(() => runConfigs.value.find((cfg) => cfg.id === selectedRunConfigId.value));
+const hasPlugin = computed(() => !!crawlerStore.taskConfig?.pluginId);
 
-const runConfigPickerOptions = computed(() =>
-  runConfigs.value.map((cfg) => ({
-    label: runConfigLabel(cfg),
-    value: cfg.id,
-  })),
-);
-const selectedPlugin = computed(() => {
-  const id = form.value.pluginId;
-  return id ? plugins.value.find((p) => p.id === id) : null;
-});
-const selectedPluginSurfUrl = computed(() => selectedPlugin.value?.baseUrl?.trim() ?? "");
-
-async function openSelectedPluginInSurf() {
-  const url = selectedPluginSurfUrl.value;
-  if (!url) return;
-  try {
-    await surfStore.startSession(url);
-    ElMessage.success(t("surf.sessionStartSuccess"));
-  } catch (error: any) {
-    ElMessage.error(error?.message || String(error) || t("surf.sessionStartFailed"));
-  }
+/** 任何入口都显示：跳自动配置页（定时只在那边编辑） */
+function goRunConfigs() {
+  modal.close();
+  void router.push({ name: "AutoConfigs" });
 }
-
-const selectedPluginMinAppIncompatible = computed(() => !!selectedPlugin.value?.minAppIncompatible);
-
-const crawlDialogMinAppErrorText = computed(() => {
-  if (!selectedPluginMinAppIncompatible.value) return "";
-  const minV = (selectedPlugin.value?.minAppVersion ?? "").trim();
-  const cur = (crawlDialogAppVersion.value ?? "").trim();
-  return t("plugins.crawlDialogMinAppError", { required: minV, current: cur });
-});
-const selectedOutputAlbumId = ref<string | null>(null);
-const newOutputAlbumName = ref<string>("");
-const newOutputAlbumParentId = ref<string | null>(null);
-const newOutputAlbumNameInputRef = ref<any>(null);
-const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
-
-const pluginConfig = usePluginConfig();
-const {
-  form,
-  selectedRunConfigId,
-  formRef,
-  pluginVars,
-  loadPluginVars,
-  loadPluginVarDefs,
-  resetFormVarsToDefaults,
-  selectOutputDir,
-  resetForm,
-} = pluginConfig;
-
-async function setRunConfigId(v: string | null) {
-  selectedRunConfigId.value = v ?? null;
-  if (v) {
-    await loadConfigToForm(v);
-    loadHeadersFromConfig(v);
-    const cfg = crawlerStore.runConfigs.find((c) => c.id === v);
-    loadScheduleFromConfig(cfg);
-  } else {
-    loadScheduleFromConfig(undefined);
-  }
-}
-
-async function onPluginChange(v: string | null | undefined) {
-  const id = v ?? "";
-  form.value.pluginId = id;
-  trackCrawlerEvent("gallery_import_plugin_select", {
-    plugin_id: id,
-    has_plugin: !!id,
-  });
-  if (id) {
-    const { httpHeaders } = await loadPluginVars(id);
-    httpHeaderRows.value = Object.entries(httpHeaders).map(([k, v]) => ({ key: k, value: v }));
-  } else {
-    pluginVars.value = [];
-    form.value.vars = {};
-    httpHeaderRows.value = [];
-  }
-}
-
-function summarizePluginVarValue(varDef: PluginVarDef, value: unknown): Record<string, unknown> {
-  const type = String(varDef.type ?? "");
-  if (Array.isArray(value)) {
-    const primitiveValues = value
-      .filter((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")
-      .slice(0, 5)
-      .map(String);
-    return {
-      has_value: value.length > 0,
-      value_count: value.length,
-      values: primitiveValues,
-    };
-  }
-  if (typeof value === "boolean") {
-    return { has_value: true, value };
-  }
-  if (type === "options" && (typeof value === "string" || typeof value === "number")) {
-    return { has_value: String(value).trim() !== "", value: String(value) };
-  }
-  if (value === null || value === undefined) {
-    return { has_value: false };
-  }
-  if (typeof value === "string") {
-    return { has_value: value.trim() !== "", value_length: value.length };
-  }
-  return { has_value: true };
-}
-
-const lastPluginVarTrackSignature = new Map<string, string>();
-
-function onPluginVarChange(varDef: PluginVarDef, value: unknown) {
-  form.value.vars[varDef.key] = value;
-  const summary = summarizePluginVarValue(varDef, value);
-  const signature = JSON.stringify(summary);
-  if (lastPluginVarTrackSignature.get(varDef.key) === signature) return;
-  lastPluginVarTrackSignature.set(varDef.key, signature);
-  trackCrawlerEvent("gallery_import_param_change", {
-    plugin_id: form.value.pluginId,
-    key: varDef.key,
-    type: varDef.type ?? "",
-    ...summary,
-  });
-}
-
-const visiblePluginVars = computed(() =>
-  pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
-);
-
-watch(
-  () => form.value.vars,
-  () => {
-    coerceOptionsVarsToVisibleChoices(pluginVars.value, form.value.vars);
-  },
-  { deep: true },
-);
-
-const { configCompatibilityStatus, loadConfigToForm, confirmDeleteRunConfig, checkAllConfigsCompatibility } =
-  useConfigCompatibility(pluginVars, form, selectedRunConfigId, loadPluginVarDefs, modal.isOpen);
-
-const handleDeleteConfig = async (configId: string) => {
-  await confirmDeleteRunConfig(configId);
-};
-
-const createOutputAlbum = async (showSuccess = true) => {
-  if (!newOutputAlbumName.value.trim()) {
-    ElMessage.warning(t("albums.enterAlbumNameFirst"));
-    return null;
-  }
-
-  try {
-    const parentId = newOutputAlbumParentId.value?.trim() || null;
-    const created = await createAlbum(newOutputAlbumName.value.trim(), { parentId });
-    newOutputAlbumName.value = "";
-    newOutputAlbumParentId.value = null;
-    if (showSuccess) {
-      ElMessage.success(t("albums.albumCreated"));
-    }
-    return created;
-  } catch (error: any) {
-    console.error("创建画册失败:", error);
-    const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "创建画册失败";
-    ElMessage.error(errorMessage);
-    return null;
-  }
-};
-
-const handleCreateOutputAlbum = async () => {
-  const created = await createOutputAlbum();
-  if (created) {
-    selectedOutputAlbumId.value = created.id;
-  }
-};
-
-const handleStartCrawl = async () => {
-  if (!(await guardPluginPlatform(form.value.pluginId))) return;
-  try {
-    if (!form.value.pluginId) {
-      ElMessage.warning(t("plugins.selectSourcePlaceholder"));
-      return;
-    }
-
-    if (selectedOutputAlbumId.value === "__create_new__") {
-      const created = await createOutputAlbum(false);
-      if (!created) {
-        return;
-      }
-      selectedOutputAlbumId.value = created.id;
-    }
-
-    if (formRef.value) {
-      try {
-        await formRef.value.validate();
-      } catch {
-        ElMessage.warning(t("plugins.fillRequired"));
-        return;
-      }
-    }
-
-    for (const varDef of visiblePluginVars.value) {
-      if (isRequired(varDef)) {
-        const value = form.value.vars[varDef.key];
-        if (
-          value === undefined ||
-          value === null ||
-          value === "" ||
-          ((varDef.type === "list" || varDef.type === "checkbox") && Array.isArray(value) && value.length === 0)
-        ) {
-          ElMessage.warning(t("plugins.fillRequiredField", { name: varDisplayName(varDef) }));
-          return;
-        }
-      }
-    }
-
-    const backendVars =
-      pluginVars.value.length > 0 ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[]) : {};
-    const httpHeaders = toHttpHeadersMap();
-
-    let runConfigIdForTask: string | undefined;
-
-    if (scheduleEnabled.value) {
-      if (!scheduleMode.value) {
-        ElMessage.warning(t("autoConfig.needScheduleMode"));
-        return;
-      }
-      const schedule = buildScheduleFields();
-      const descPreview = schedulePreview.value;
-      const cfgId = selectedRunConfigId.value;
-      const selectedCfg = cfgId ? crawlerStore.runConfigs.find((c) => c.id === cfgId) : undefined;
-      const needNew = !cfgId || !selectedCfg || isFormDirtyFromConfig(selectedCfg, backendVars, httpHeaders);
-      const autoName = pluginStore.pluginLabel(form.value.pluginId);
-
-      if (needNew) {
-        const created = await crawlerStore.addRunConfig({
-          name: autoName,
-          description: descPreview,
-          pluginId: form.value.pluginId,
-          url: "",
-          outputDir: form.value.outputDir || undefined,
-          userConfig: backendVars,
-          httpHeaders,
-          ...schedule,
-        });
-        runConfigIdForTask = created.id;
-        selectedRunConfigId.value = created.id;
-        if (cfgId) {
-          ElMessage.info(t("autoConfig.autoCreatedConfigDesc", { name: autoName }));
-        } else {
-          ElMessage.info(t("autoConfig.autoCreatedConfig", { name: autoName }));
-        }
-      } else {
-        await crawlerStore.updateRunConfig({
-          ...selectedCfg!,
-          pluginId: form.value.pluginId,
-          outputDir: form.value.outputDir || undefined,
-          userConfig: backendVars,
-          httpHeaders,
-          ...schedule,
-        });
-        runConfigIdForTask = selectedCfg!.id;
-        ElMessage.success(t("autoConfig.keepRunningHint"));
-      }
-    }
-
-    const taskAdded = await enqueueTask({
-      pluginId: form.value.pluginId,
-      outputDir: form.value.outputDir || undefined,
-      userConfig: backendVars,
-      outputAlbumId: selectedOutputAlbumId.value || undefined,
-      httpHeaders,
-      runConfigId: runConfigIdForTask,
-      triggerSource: "manual",
-    });
-    if (!taskAdded) return;
-
-    trackCrawlerEvent("gallery_import_start", {
-      source: "network",
-      plugin_id: form.value.pluginId,
-      has_output_dir: !!form.value.outputDir,
-      output_album: selectedOutputAlbumId.value
-        ? selectedOutputAlbumId.value === "__create_new__"
-          ? "new"
-          : "existing"
-        : "none",
-      run_config_id: runConfigIdForTask ?? selectedRunConfigId.value ?? null,
-      has_run_config: !!(runConfigIdForTask ?? selectedRunConfigId.value),
-      schedule_enabled: scheduleEnabled.value,
-      visible_param_count: visiblePluginVars.value.length,
-      http_header_count: Object.keys(httpHeaders).length,
-    });
-
-    crawlerDrawerStore.setLastRunConfig({
-      pluginId: form.value.pluginId,
-      outputDir: form.value.outputDir || "",
-      vars: { ...form.value.vars },
-      httpHeaders: { ...httpHeaders },
-      outputAlbumId: selectedOutputAlbumId.value ?? null,
-      runConfigId: runConfigIdForTask ?? null,
-    });
-
-    resetForm();
-    selectedOutputAlbumId.value = null;
-    newOutputAlbumName.value = "";
-    newOutputAlbumParentId.value = null;
-    modal.close();
-    emit("started");
-  } catch (error: any) {
-    console.error("添加任务失败:", error);
-    const errorMessage = typeof error === "string" ? error : error?.message || String(error) || "添加任务失败";
-    ElMessage.error(errorMessage);
-  }
-};
 
 watch(modal.isOpen, async (open) => {
   if (!open) return;
-  lastPluginVarTrackSignature.clear();
-  await crawlerStore.runConfigsReady;
   try {
     await pluginStore.loadPlugins();
   } catch (e) {
     console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
   }
-
-  if (props.initialConfig) {
-    selectedRunConfigId.value = null;
-    if (props.initialConfig.pluginId) {
-      form.value.pluginId = props.initialConfig.pluginId;
-      await loadPluginVarDefs(props.initialConfig.pluginId);
-      if (props.initialConfig.vars) {
-        form.value.vars = normalizeVarsForUI(props.initialConfig.vars, pluginVars.value as PluginVarDef[]);
-      } else {
-        resetFormVarsToDefaults();
-      }
-    }
-    if (props.initialConfig.outputDir !== undefined) {
-      form.value.outputDir = props.initialConfig.outputDir ?? "";
-    }
-    httpHeaderRows.value = Object.entries(props.initialConfig.httpHeaders ?? {}).map(([k, v]) => ({
-      key: k,
-      value: v,
-    }));
-    if (props.initialConfig.outputAlbumId !== undefined) {
-      selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
-    }
-    loadScheduleFromConfig(undefined);
-  } else if (crawlerDrawerStore.lastRunConfig) {
-    const last = crawlerDrawerStore.lastRunConfig;
-    const id = last.runConfigId;
-    if (id && runConfigs.value.some((c) => c.id === id)) {
-      await setRunConfigId(id);
-    } else {
-      selectedRunConfigId.value = null;
-      if (last.pluginId) {
-        form.value.pluginId = last.pluginId;
-        form.value.outputDir = last.outputDir ?? "";
-        await loadPluginVarDefs(last.pluginId);
-        form.value.vars = normalizeVarsForUI(last.vars || {}, pluginVars.value as PluginVarDef[]);
-        httpHeaderRows.value =
-          last.httpHeaders && Object.keys(last.httpHeaders).length > 0
-            ? Object.entries(last.httpHeaders).map(([k, v]) => ({ key: k, value: v }))
-            : [];
-        selectedOutputAlbumId.value = last.outputAlbumId ?? null;
-      }
-      loadScheduleFromConfig(undefined);
-    }
-  } else if (form.value.pluginId) {
-    await loadPluginVarDefs(form.value.pluginId);
-    loadScheduleFromConfig(undefined);
-  }
-
-  await checkAllConfigsCompatibility();
-});
-
-watch(modal.isOpen, (isOpen) => {
-  if (!isOpen) {
-    selectedOutputAlbumId.value = null;
-    newOutputAlbumName.value = "";
-    newOutputAlbumParentId.value = null;
-  }
-});
-
-watch(selectedOutputAlbumId, (newValue) => {
-  if (newValue === "__create_new__") {
-    nextTick(() => {
-      newOutputAlbumNameInputRef.value?.focus?.();
-    });
-  } else {
-    newOutputAlbumName.value = "";
-    newOutputAlbumParentId.value = null;
-  }
 });
 </script>
 
 <style lang="scss" scoped>
+.crawl-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crawl-dialog-header__title {
+  font-weight: 600;
+}
+
 .crawl-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
   h3 {
     margin: 0;
     font-size: 18px;
@@ -1236,201 +150,25 @@ watch(selectedOutputAlbumId, (newValue) => {
 
 .crawl-dialog-footer {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.crawl-dialog-footer__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.crawl-dialog-footer--android {
+  display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 20px 0;
   margin-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.crawl-dialog-footer--android {
-  justify-content: center;
-}
-
-.crawl-form {
-  margin-bottom: 20px;
-
-  :deep(.el-form-item__label) {
-    color: var(--anime-text-primary);
-    font-weight: 500;
-  }
-
-  :deep(.el-form-item__content) {
-    width: 100%;
-  }
-}
-
-.mode-line {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-
-.mode-line > * {
-  flex: 1;
-}
-
-.run-config-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-}
-
-.run-config-recommended-row {
-  margin-top: 8px;
-}
-
-.run-config-rec-btn {
-  padding-left: 0;
-  height: auto;
-  align-items: baseline;
-}
-
-.run-config-rec-count {
-  margin-left: 4px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--anime-text-muted);
-  opacity: 0.9;
-}
-
-.run-config-row .run-config-select,
-.run-config-row > *:first-child {
-  flex: 1;
-  min-width: 0;
-}
-
-.run-config-btn {
-  flex-shrink: 0;
-  background-color: #fff !important;
-  color: var(--el-text-color-primary);
-}
-
-.run-config-selected-title {
-  display: flex;
-  min-width: 0;
-  overflow: hidden;
-
-  .plugin-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .config-name {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--el-text-color-secondary);
-    font-size: 12px;
-    font-weight: normal;
-    text-overflow: ellipsis;
-  }
-}
-
-.run-config-btn:hover {
-  background-color: var(--el-fill-color-light) !important;
-  color: var(--el-text-color-primary);
-}
-
-.config-hint {
-  font-size: 12px;
-  color: var(--anime-text-secondary);
-  margin-top: 4px;
-}
-
-.headers-editor {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.header-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.header-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.plugin-source-field {
-  width: 100%;
-}
-
-.plugin-min-app-error {
-  color: var(--el-color-danger);
-  font-size: 12px;
-  line-height: 1.45;
-  margin-top: 6px;
-}
-
-.run-config-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 32px;
-  width: 100%;
-  max-width: 100%;
-  overflow: hidden;
-  box-sizing: border-box;
-}
-
-.run-config-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-
-  .name {
-    font-weight: 600;
-    color: var(--el-text-color-primary);
-    line-height: 1.4;
-    display: flex;
-    align-items: center;
-    font-size: 14px;
-    white-space: nowrap;
-    overflow: hidden;
-    min-width: 0;
-
-    .run-config-title {
-      display: flex;
-      min-width: 0;
-      overflow: hidden;
-    }
-
-    .plugin-name {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .config-name {
-      min-width: 0;
-      overflow: hidden;
-      color: var(--el-text-color-secondary);
-      font-size: 12px;
-      font-weight: normal;
-      text-overflow: ellipsis;
-    }
-  }
-}
-
-.run-config-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  align-self: flex-start;
-  padding-top: 2px;
 }
 </style>
 
@@ -1477,113 +215,6 @@ watch(selectedOutputAlbumId, (newValue) => {
       color: var(--el-button-disabled-text-color) !important;
       box-shadow: none !important;
     }
-  }
-}
-
-.crawl-plugin-select-dropdown {
-  .el-select-dropdown__item {
-    padding: 8px 12px;
-  }
-
-  .plugin-picker-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 24px;
-  }
-
-  .plugin-picker-option__icon {
-    width: 18px;
-    height: 18px;
-    object-fit: contain;
-    flex-shrink: 0;
-    border-radius: 4px;
-  }
-
-  .plugin-picker-option__icon-placeholder {
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--anime-text-secondary);
-  }
-
-  .plugin-picker-option span {
-    line-height: 1.2;
-    color: var(--anime-text-primary);
-  }
-}
-
-.run-config-select-dropdown {
-  .el-select-dropdown__item {
-    padding: 6px 12px;
-    min-height: 40px;
-  }
-
-  .run-config-option {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-height: 32px;
-    width: 100%;
-    max-width: 100%;
-    overflow: hidden;
-    box-sizing: border-box;
-  }
-
-  .run-config-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-
-    .name {
-      font-weight: 600;
-      color: var(--el-text-color-primary);
-      line-height: 1.4;
-      display: flex;
-      align-items: center;
-      font-size: 14px;
-      white-space: nowrap;
-      overflow: hidden;
-      min-width: 0;
-
-      .run-config-title {
-        display: flex;
-        min-width: 0;
-        overflow: hidden;
-      }
-
-      .plugin-name {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .config-name {
-        min-width: 0;
-        overflow: hidden;
-        color: var(--el-text-color-secondary);
-        font-size: 12px;
-        font-weight: normal;
-        text-overflow: ellipsis;
-      }
-    }
-  }
-
-  .run-config-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-    align-self: flex-start;
-    padding-top: 2px;
   }
 }
 </style>

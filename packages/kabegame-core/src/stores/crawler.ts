@@ -51,11 +51,25 @@ export interface RunConfig {
   outputDir?: string;
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
+  /** 输出画册：定时任务与手动任务写入同一画册 */
+  outputAlbumId?: string;
   createdAt: number;
   scheduleEnabled: boolean;
   scheduleSpec?: ScheduleSpec;
   schedulePlannedAt?: number;
   scheduleLastRunAt?: number;
+}
+
+/**
+ * task config：一次收集任务的全部参数。
+ * `userConfig` 即 plugin config，统一存后端格式（与 `RunConfig.userConfig` / `Task.userConfig` 同形）。
+ */
+export interface TaskConfig {
+  pluginId: string;
+  userConfig: Record<string, any>;
+  outputDir: string;
+  httpHeaders: Record<string, string>;
+  outputAlbumId: string | null;
 }
 
 export interface MissedRunItem {
@@ -188,6 +202,7 @@ export function parseRunConfigRaw(raw: unknown): RunConfig | null {
     outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
     userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
     httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
+    outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
     createdAt: Number(o.createdAt ?? o.created_at ?? 0),
     scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
@@ -204,6 +219,19 @@ export const useCrawlerStore = defineStore("crawler", () => {
   const runConfigs = ref<RunConfig[]>([]);
   /** 已安装插件包内 `configs/*.json` 推荐配置（启动与插件列表刷新时拉取） */
   const pluginRecommendedConfigs = ref<PluginRecommendedPreset[]>([]);
+  /**
+   * 全局唯一的 task config：收集弹窗只响应式地编辑这一份对象，
+   * 调用方「先写再打开」（见 apps 侧 `writeTaskConfig`）。
+   */
+  const taskConfig = ref<TaskConfig | null>(null);
+  /** 仅外部写入时递增；用于以 `:key` 重建插件变量表单（用户编辑不触发） */
+  const taskConfigRevision = ref(0);
+
+  /** 整体替换 task config，并让插件变量表单按新值重建 */
+  function setTaskConfig(cfg: TaskConfig | null) {
+    taskConfig.value = cfg;
+    taskConfigRevision.value++;
+  }
 
   const lastProgressUpdateAt = new Map<string, number>();
   const loadingTaskPromises = new Map<string, Promise<void>>();
@@ -610,6 +638,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       outputDir: config.outputDir,
       userConfig: config.userConfig ?? {},
       httpHeaders: config.httpHeaders ?? {},
+      outputAlbumId: config.outputAlbumId,
       scheduleEnabled: config.scheduleEnabled ?? false,
       scheduleSpec: config.scheduleSpec,
       schedulePlannedAt: config.schedulePlannedAt,
@@ -658,22 +687,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
     return (id: string): RunConfig | undefined => map.get(id);
   });
 
-  async function runFromConfig(configId: string): Promise<boolean> {
-    const cfg = runConfigById.value(configId);
-    if (!cfg) {
-      throw new Error("运行配置不存在");
-    }
-    return await addTask(
-      cfg.pluginId,
-      cfg.outputDir,
-      cfg.userConfig ?? {},
-      undefined,
-      cfg.httpHeaders ?? {},
-      cfg.id,
-      "manual",
-    );
-  }
-
   async function getMissedRuns(): Promise<MissedRunItem[]> {
     try {
       const items = await invoke<MissedRunItem[]>("get_missed_runs");
@@ -690,11 +703,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
   async function dismissMissedConfigs(configIds: string[]): Promise<void> {
     await invoke("dismiss_missed_configs", { configIds });
-  }
-
-  // 兼容旧调用名
-  async function runConfig(configId: string): Promise<boolean> {
-    return runFromConfig(configId);
   }
 
   async function deleteTask(taskId: string) {
@@ -850,6 +858,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
     retryTask,
     runConfigs,
     pluginRecommendedConfigs,
+    taskConfig,
+    taskConfigRevision,
+    setTaskConfig,
     loadRunConfigs,
     loadPluginRecommendedConfigs,
     importRecommendedPreset,
@@ -858,8 +869,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
     deleteRunConfig,
     copyRunConfig,
     runConfigById,
-    runFromConfig,
-    runConfig,
     getMissedRuns,
     runMissedConfigs,
     dismissMissedConfigs,

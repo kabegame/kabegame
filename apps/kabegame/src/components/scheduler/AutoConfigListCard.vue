@@ -71,8 +71,8 @@
       </div>
 
       <div class="cg-actions" @click.stop>
-        <el-button type="primary" size="small" @click="emit('run-now', config.id)">
-          {{ t("autoConfig.runNow") }}
+        <el-button type="primary" size="small" @click="emit('run-with-config', config.id)">
+          {{ t("autoConfig.runWithConfig") }}
         </el-button>
         <el-dropdown trigger="click" @command="(cmd: string) => emit('more-command', cmd, config)">
           <el-button size="small">
@@ -115,7 +115,7 @@ const emit = defineEmits<{
   (e: "card-click", cfg: RunConfig, ev: MouseEvent): void;
   (e: "open-view", id: string): void;
   (e: "schedule-enabled", cfg: RunConfig, enabled: boolean): void;
-  (e: "run-now", id: string): void;
+  (e: "run-with-config", id: string): void;
   (e: "more-command", cmd: string, cfg: RunConfig): void;
   (e: "open-task-images", taskId: string): void;
   (e: "open-task-log", taskId: string): void;

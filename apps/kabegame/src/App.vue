@@ -51,8 +51,8 @@
       <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
       <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
       <AutoConfigDialog />
-      <!-- 全局任务重跑弹窗宿主；页面内原有实例继续服务各自入口 -->
-      <CrawlerDialog v-model="crawlerDrawerVisible" :initial-config="crawlerDrawerInitialConfig" />
+      <!-- 全局唯一的收集弹窗：参数经全局 taskConfig 传递，见 writeTaskConfig -->
+      <CrawlerDialog v-model="crawlerDrawerVisible" />
       <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
       <LocalImportDialog
         v-if="!IS_WEB && !uiStore.isCompact"
@@ -298,7 +298,7 @@ useGlobalShortcuts({ openSettings: openSettingsEntry });
 
 // 全局导入弹窗 store
 const crawlerDrawerStore = useCrawlerDrawerStore();
-const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig } = storeToRefs(crawlerDrawerStore);
+const { visible: crawlerDrawerVisible } = storeToRefs(crawlerDrawerStore);
 const collectDialogsStore = useCollectDialogsStore();
 const { webpageVisible, webpageInitial, localImportVisible, localImportInitial } = storeToRefs(collectDialogsStore);
 

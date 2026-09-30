@@ -55,6 +55,8 @@ pub struct RunConfig {
     pub url: String,
     #[serde(rename = "outputDir")]
     pub output_dir: Option<String>,
+    #[serde(default)]
+    pub output_album_id: Option<String>,
     #[serde(rename = "userConfig")]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
     #[serde(rename = "httpHeaders")]
@@ -73,7 +75,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT
-                    id, name, description, plugin_id, url, output_dir, user_config, http_headers, created_at,
+                    id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
                     schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
                  FROM run_configs
                  WHERE id = ?1
@@ -91,12 +93,12 @@ impl Storage {
             return Ok(None);
         };
 
-        let user_config_json: Option<String> = row.get(6).ok();
+        let user_config_json: Option<String> = row.get(7).ok();
         let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
-        let http_headers_json: Option<String> = row.get(7).ok();
+        let http_headers_json: Option<String> = row.get(8).ok();
         let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
 
-        let schedule_spec_raw: Option<String> = row.get(10).ok();
+        let schedule_spec_raw: Option<String> = row.get(11).ok();
         let schedule_spec = parse_schedule_spec_cell(schedule_spec_raw)?;
 
         Ok(Some(RunConfig {
@@ -118,22 +120,25 @@ impl Storage {
             output_dir: row
                 .get(5)
                 .map_err(|e| format!("Failed to parse output_dir: {}", e))?,
+            output_album_id: row
+                .get(6)
+                .map_err(|e| format!("Failed to parse output_album_id: {}", e))?,
             user_config,
             http_headers,
             created_at: row
-                .get::<_, i64>(8)
+                .get::<_, i64>(9)
                 .map_err(|e| format!("Failed to parse created_at: {}", e))?
                 as u64,
             schedule_enabled: row
-                .get::<_, i64>(9)
+                .get::<_, i64>(10)
                 .map_err(|e| format!("Failed to parse schedule_enabled: {}", e))?
                 != 0,
             schedule_spec,
             schedule_planned_at: row
-                .get(11)
+                .get(12)
                 .map_err(|e| format!("Failed to parse schedule_planned_at: {}", e))?,
             schedule_last_run_at: row
-                .get(12)
+                .get(13)
                 .map_err(|e| format!("Failed to parse schedule_last_run_at: {}", e))?,
         }))
     }
@@ -196,10 +201,10 @@ impl Storage {
 
         conn.execute(
             "INSERT INTO run_configs (
-                id, name, description, plugin_id, url, output_dir, user_config, http_headers, created_at,
+                id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
                 schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 config.id,
                 config.name,
@@ -207,6 +212,7 @@ impl Storage {
                 config.plugin_id,
                 config.url,
                 config.output_dir,
+                config.output_album_id,
                 user_config_json,
                 http_headers_json,
                 config.created_at as i64,
@@ -225,7 +231,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT
-                    id, name, description, plugin_id, url, output_dir, user_config, http_headers, created_at,
+                    id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
                     schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
                  FROM run_configs
                  ORDER BY created_at DESC",
@@ -234,11 +240,11 @@ impl Storage {
 
         let rows = stmt
             .query_map([], |row| {
-                let user_config_json: Option<String> = row.get(6)?;
+                let user_config_json: Option<String> = row.get(7)?;
                 let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
-                let http_headers_json: Option<String> = row.get(7)?;
+                let http_headers_json: Option<String> = row.get(8)?;
                 let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
-                let schedule_spec_raw: Option<String> = row.get(10)?;
+                let schedule_spec_raw: Option<String> = row.get(11)?;
                 let schedule_spec = parse_schedule_spec_cell(schedule_spec_raw).map_err(|e| {
                     rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                         std::io::ErrorKind::Other,
@@ -252,13 +258,14 @@ impl Storage {
                     plugin_id: row.get(3)?,
                     url: row.get(4)?,
                     output_dir: row.get(5)?,
+                    output_album_id: row.get(6)?,
                     user_config,
                     http_headers,
-                    created_at: row.get::<_, i64>(8)? as u64,
-                    schedule_enabled: row.get::<_, i64>(9)? != 0,
+                    created_at: row.get::<_, i64>(9)? as u64,
+                    schedule_enabled: row.get::<_, i64>(10)? != 0,
                     schedule_spec,
-                    schedule_planned_at: row.get(11)?,
-                    schedule_last_run_at: row.get(12)?,
+                    schedule_planned_at: row.get(12)?,
+                    schedule_last_run_at: row.get(13)?,
                 })
             })
             .map_err(|e| format!("Failed to query run configs: {}", e))?;
@@ -280,15 +287,17 @@ impl Storage {
 
         conn.execute(
             "UPDATE run_configs
-             SET name = ?1, description = ?2, plugin_id = ?3, url = ?4, output_dir = ?5, user_config = ?6, http_headers = ?7,
-                 schedule_enabled = ?8, schedule_spec = ?9, schedule_planned_at = ?10, schedule_last_run_at = ?11
-             WHERE id = ?12",
+             SET name = ?1, description = ?2, plugin_id = ?3, url = ?4, output_dir = ?5, output_album_id = ?6,
+                 user_config = ?7, http_headers = ?8,
+                 schedule_enabled = ?9, schedule_spec = ?10, schedule_planned_at = ?11, schedule_last_run_at = ?12
+             WHERE id = ?13",
             params![
                 config.name,
                 config.description,
                 config.plugin_id,
                 config.url,
                 config.output_dir,
+                config.output_album_id,
                 user_config_json,
                 http_headers_json,
                 if config.schedule_enabled { 1 } else { 0 },
@@ -314,7 +323,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT
-                    name, description, plugin_id, url, output_dir, user_config, http_headers, created_at,
+                    name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
                     schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
                  FROM run_configs
                  WHERE id = ?1",
@@ -322,11 +331,11 @@ impl Storage {
             .map_err(|e| format!("Failed to prepare copy query: {}", e))?;
 
         let copied = stmt.query_row(params![config_id], |row| {
-            let user_config_json: Option<String> = row.get(5)?;
+            let user_config_json: Option<String> = row.get(6)?;
             let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
-            let http_headers_json: Option<String> = row.get(6)?;
+            let http_headers_json: Option<String> = row.get(7)?;
             let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
-            let schedule_spec_raw: Option<String> = row.get(9)?;
+            let schedule_spec_raw: Option<String> = row.get(10)?;
             let schedule_spec = parse_schedule_spec_cell(schedule_spec_raw).map_err(|e| {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -340,6 +349,7 @@ impl Storage {
                 plugin_id: row.get(2)?,
                 url: row.get(3)?,
                 output_dir: row.get(4)?,
+                output_album_id: row.get(5)?,
                 user_config,
                 http_headers,
                 created_at: std::time::SystemTime::now()
@@ -364,10 +374,10 @@ impl Storage {
         let schedule_spec_json = schedule_spec_to_cell(&copied.schedule_spec)?;
         conn.execute(
             "INSERT INTO run_configs (
-                id, name, description, plugin_id, url, output_dir, user_config, http_headers, created_at,
+                id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
                 schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 copied.id,
                 copied.name,
@@ -375,6 +385,7 @@ impl Storage {
                 copied.plugin_id,
                 copied.url,
                 copied.output_dir,
+                copied.output_album_id,
                 user_config_json,
                 http_headers_json,
                 copied.created_at as i64,
@@ -387,5 +398,127 @@ impl Storage {
         .map_err(|e| format!("Failed to insert copied run config: {}", e))?;
 
         Ok(copied)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
+
+    fn test_storage() -> Storage {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::storage::migrations::init::create_all_tables(&conn);
+        Storage {
+            db: Arc::new(Mutex::new(conn)),
+            cached_images_total: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn sample_config(id: &str, output_album_id: Option<&str>) -> RunConfig {
+        RunConfig {
+            id: id.to_string(),
+            name: format!("config-{id}"),
+            description: Some("desc".to_string()),
+            plugin_id: "plugin".to_string(),
+            url: "https://example.com".to_string(),
+            output_dir: Some("/tmp/out".to_string()),
+            output_album_id: output_album_id.map(str::to_string),
+            user_config: None,
+            http_headers: None,
+            created_at: 1,
+            schedule_enabled: false,
+            schedule_spec: None,
+            schedule_planned_at: None,
+            schedule_last_run_at: None,
+        }
+    }
+
+    #[test]
+    fn output_album_id_round_trips_through_add_get_update_and_copy() {
+        let storage = test_storage();
+
+        // add + get/get_run_configs：Some 与 None 两种取值都要原样读回
+        for (id, album) in [("with", Some("album-1")), ("without", None)] {
+            storage.add_run_config(sample_config(id, album)).unwrap();
+
+            let got = storage.get_run_config(id).unwrap().unwrap();
+            assert_eq!(got.output_album_id.as_deref(), album, "get_run_config {id}");
+
+            let listed = storage
+                .get_run_configs()
+                .unwrap()
+                .into_iter()
+                .find(|c| c.id == id)
+                .unwrap();
+            assert_eq!(
+                listed.output_album_id.as_deref(),
+                album,
+                "get_run_configs {id}"
+            );
+        }
+
+        // update：Some -> None
+        let mut config = storage.get_run_config("with").unwrap().unwrap();
+        config.output_album_id = None;
+        storage.update_run_config(config).unwrap();
+        assert_eq!(
+            storage
+                .get_run_config("with")
+                .unwrap()
+                .unwrap()
+                .output_album_id,
+            None
+        );
+
+        // update：None -> Some
+        let mut config = storage.get_run_config("without").unwrap().unwrap();
+        config.output_album_id = Some("album-2".to_string());
+        storage.update_run_config(config).unwrap();
+        assert_eq!(
+            storage
+                .get_run_config("without")
+                .unwrap()
+                .unwrap()
+                .output_album_id
+                .as_deref(),
+            Some("album-2")
+        );
+
+        // copy：副本沿用原配置的 output_album_id，且默认关闭定时
+        let copied = storage.copy_run_config("without", "copied").unwrap();
+        assert_eq!(copied.output_album_id.as_deref(), Some("album-2"));
+        assert!(!copied.schedule_enabled);
+        assert_eq!(
+            storage
+                .get_run_config("copied")
+                .unwrap()
+                .unwrap()
+                .output_album_id
+                .as_deref(),
+            Some("album-2")
+        );
+    }
+
+    #[test]
+    fn output_album_id_defaults_to_none_for_legacy_json() {
+        let value: RunConfig = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "name": "legacy",
+            "description": null,
+            "pluginId": "plugin",
+            "url": "https://example.com",
+            "outputDir": null,
+            "userConfig": null,
+            "httpHeaders": null,
+            "createdAt": 1,
+            "scheduleEnabled": false,
+            "scheduleSpec": null,
+            "schedulePlannedAt": null,
+            "scheduleLastRunAt": null
+        }))
+        .unwrap();
+        assert_eq!(value.output_album_id, None);
     }
 }

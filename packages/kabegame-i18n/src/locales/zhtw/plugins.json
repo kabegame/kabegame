@@ -100,11 +100,6 @@
   "startCollect": "開始收集",
   "pluginVarSelectAll": "全選",
   "runConfig": "執行配置",
-  "importRecommendedConfigs": "匯入推薦設定",
-  "selectConfigOptional": "選擇配置（可選）",
-  "addConfig": "新增配置",
-  "updateToConfig": "更新至目前配置",
-  "saveToConfig": "儲存至配置",
   "selectSource": "選擇源",
   "selectSourcePlaceholder": "請選擇源",
   "selectSourceSubtitle": "挑選一個圖源開始採集",
@@ -122,9 +117,6 @@
   "headerValuePlaceholder": "Header 值（如 Bearer xxx）",
   "addHeader": "新增 Header",
   "httpHeadersHint": "提示：此處的 HTTP 標頭會用於爬蟲請求（to/fetch_json/fetch）與圖片下載（download_image），不會注入到腳本變數中。",
-  "newConfig": "新增配置",
-  "configNotExist": "配置不存在",
-  "updatedToConfig": "已更新至目前配置",
   "selectSourceFirst": "請先選擇源",
   "selectSourceBeforeSave": "請先選擇源",
   "jsPluginAndroidNotSupported": "目前選擇的是 JS 插件，安卓端暫不支援執行。請選擇 Rhai 插件，或在桌面端使用 JS 插件。",
@@ -226,5 +218,6 @@
     "imageLoadFailed": "圖片載入失敗：{path}",
     "importAllPresetsSuccess": "已匯入 {success} 項執行配置",
     "importAllPresetsPartial": "已匯入 {success} 項，{failed} 項匯入失敗"
-  }
+  },
+  "saveAsConfig": "儲存為設定"
 }

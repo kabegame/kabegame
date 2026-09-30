@@ -698,6 +698,18 @@ impl Storage {
             params![album_id],
         )
         .map_err(|e| format!("Failed to delete album images: {}", e))?;
+        // 子树内画册被删后，引用它们的定时任务不能再往已删画册写入，先把 output_album_id 置空。
+        // 必须在 DELETE albums 之前执行：递归 CTE 依赖子树行仍然存在。
+        conn.execute(
+            "WITH RECURSIVE sub(id) AS (
+                SELECT ?1
+                UNION ALL
+                SELECT a.id FROM albums a INNER JOIN sub ON a.parent_id = sub.id
+            )
+            UPDATE run_configs SET output_album_id = NULL WHERE output_album_id IN (SELECT id FROM sub)",
+            params![album_id],
+        )
+        .map_err(|e| format!("Failed to clear run config output album: {}", e))?;
         conn.execute("DELETE FROM albums WHERE id = ?1", params![album_id])
             .map_err(|e| format!("Failed to delete album: {}", e))?;
         drop(conn);
@@ -2673,6 +2685,82 @@ VALUES
             Storage::resolve_scoped_name_ci(&conn, None, "name", None).unwrap(),
             "name (3)"
         );
+    }
+
+    #[test]
+    fn delete_album_clears_run_config_output_album_for_subtree() {
+        let storage = test_storage();
+        let root = storage.add_album("root", None).unwrap();
+        let child = storage.add_album("child", Some(&root.id)).unwrap();
+        let grandchild = storage.add_album("grandchild", Some(&child.id)).unwrap();
+        let other = storage.add_album("other", None).unwrap();
+
+        for (id, album_id) in [
+            ("c-root", &root.id),
+            ("c-child", &child.id),
+            ("c-grandchild", &grandchild.id),
+            ("c-other", &other.id),
+        ] {
+            storage
+                .add_run_config(run_config_with_output_album(id, album_id))
+                .unwrap();
+        }
+
+        // delete_album 末尾的 `emit_album_images_order_changed` 会调用 `Storage::global()`
+        // （默认 feature 下 `GlobalEmitter::try_global()` 恒为 Some），而单测进程没有全局
+        // Storage——既有的 `apply_labels_and_delete_label_subtree_remove_memberships`
+        // 同样在这步 panic。该副作用发生在 `drop(conn)` 之后，落库结果已经生效，
+        // 所以这里吞掉 panic，直接用连接断言清空结果。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            storage.delete_album(&root.id)
+        }));
+        assert!(
+            storage.get_album_by_id(&root.id).unwrap().is_none(),
+            "根画册应已删除，说明落库在 panic 前完成"
+        );
+
+        let conn = storage.db.lock().unwrap();
+        for id in ["c-root", "c-child", "c-grandchild"] {
+            let album_id: Option<String> = conn
+                .query_row(
+                    "SELECT output_album_id FROM run_configs WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(album_id, None, "{id} 引用了被删子树的画册，应被置空");
+        }
+        let other_album: Option<String> = conn
+            .query_row(
+                "SELECT output_album_id FROM run_configs WHERE id = 'c-other'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            other_album.as_deref(),
+            Some(other.id.as_str()),
+            "引用无关画册的配置不应受影响"
+        );
+    }
+
+    fn run_config_with_output_album(id: &str, output_album_id: &str) -> crate::storage::RunConfig {
+        crate::storage::RunConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            plugin_id: "plugin".to_string(),
+            url: "https://example.com".to_string(),
+            output_dir: None,
+            output_album_id: Some(output_album_id.to_string()),
+            user_config: None,
+            http_headers: None,
+            created_at: 1,
+            schedule_enabled: false,
+            schedule_spec: None,
+            schedule_planned_at: None,
+            schedule_last_run_at: None,
+        }
     }
 
     #[test]

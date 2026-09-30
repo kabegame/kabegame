@@ -125,6 +125,7 @@ import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
+import { taskConfigFromTask, writeTaskConfig } from "@/composables/taskConfig";
 import { useCollectDialogsStore } from "@/stores/collectDialogs";
 
 interface Props {
@@ -235,7 +236,7 @@ const canRerun = (task: CrawlTask) => {
   return true;
 };
 
-const rerunTask = (task: CrawlTask) => {
+const rerunTask = async (task: CrawlTask) => {
   const userConfig = task.userConfig ?? {};
   if (task.pluginId === WEBPAGE_PLUGIN_ID) {
     collectDialogs.openWebpage({
@@ -256,13 +257,9 @@ const rerunTask = (task: CrawlTask) => {
     });
     return;
   }
-  crawlerDrawerStore.open({
-    pluginId: task.pluginId,
-    outputDir: task.outputDir,
-    vars: { ...userConfig },
-    httpHeaders: { ...(task.httpHeaders ?? {}) },
-    outputAlbumId: task.outputAlbumId ?? null,
-  });
+  // 通路 1：先把任务参数写进全局 taskConfig，再打开收集弹窗
+  await writeTaskConfig(taskConfigFromTask(task));
+  crawlerDrawerStore.open();
 };
 
 const handleContextAction = async (action: string) => {
@@ -280,7 +277,7 @@ const handleContextAction = async (action: string) => {
       await drawerContentRef.value?.openTaskLog(task.id);
       break;
     case "rerun":
-      rerunTask(task);
+      await rerunTask(task);
       break;
     case "stop":
       await handleCancelTaskById(task.id);
@@ -327,6 +324,7 @@ const confirmSaveTaskAsConfig = async () => {
       outputDir: task.outputDir,
       userConfig: task.userConfig ?? {},
       httpHeaders: task.httpHeaders ?? {},
+      outputAlbumId: task.outputAlbumId,
       scheduleEnabled: false,
     });
     ElMessage.success(t("tasks.saveConfigSuccess"));

@@ -129,7 +129,7 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         output_dir: config.output_dir.clone(),
         user_config: config.user_config.clone(),
         http_headers: config.http_headers.clone(),
-        output_album_id: None,
+        output_album_id: config.output_album_id.clone(),
         run_config_id: Some(config.id.clone()),
         trigger_source: "scheduled".to_string(),
         status: TaskStatus::Pending,
