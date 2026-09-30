@@ -31,12 +31,12 @@
     :sort="props.sort"
     :page="galleryRouteStore.page"
     :page-size="props.pageSize"
-    :search-mode="stickySearchMode"
+    :search-modes="stickySearchModes"
     :provider-context-prefix="props.providerContextPrefix"
     :context-base="galleryRouteStore.contextPathFor({ query: [] })"
     hug-top
     @navigate="onQueryNavigate"
-    @search-mode-change="rememberGallerySearchMode"
+    @search-modes-change="rememberGallerySearchModes"
   />
 
   <!-- 紧凑模式下 FailedImages 在 fold 菜单里，FailedImagesHeaderButton comp 不渲染，
@@ -71,8 +71,8 @@ import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import {
   useGalleryRouteStore,
-  galleryStickySearchMode as stickySearchMode,
-  rememberGallerySearchMode,
+  galleryStickySearchModes as stickySearchModes,
+  rememberGallerySearchModes,
 } from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -127,7 +127,7 @@ const isNoAlbumBrowse = computed(() => galleryRouteStore.effectiveNoAlbum);
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 function onQueryNavigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
   const term = patch.query ? querySearchTerm(patch.query) : null;
-  if (term?.query.trim()) rememberGallerySearchMode(term.mode);
+  if (term?.query.trim()) rememberGallerySearchModes(term.modes);
   void galleryRouteStore.navigate(patch, options);
 }
 

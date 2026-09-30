@@ -73,12 +73,12 @@
         <GallerySearchDropdown
           v-if="showSearchChip"
           :query="searchText"
-          :mode="searchModeView"
+          :selected-modes="searchModesView"
           :modes="searchFeatures"
           :chip-display="searchText.trim() ? 'value' : 'icon'"
           :debounce="300"
           @update:query="onSearchInput"
-          @update:mode="onSearchModeSelect"
+          @update:selected-modes="onSearchModesSelect"
         />
 
         <KbFilterDropdown
@@ -390,7 +390,6 @@ import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/
 import {
   GALLERY_ASPECT_BUCKETS,
   FILTER_COMB,
-  DEFAULT_GALLERY_SEARCH_MODE,
   filterAspectRange,
   filterDateSegment,
   filterForDimension,
@@ -405,7 +404,6 @@ import {
   type GalleryFilter,
   type GalleryFilterSet,
   type GalleryQueryPatch,
-  type GallerySearchMode,
   type GallerySearchPathMode,
   makeSearchTerm,
   type GallerySort,
@@ -454,8 +452,8 @@ interface Props {
   sort?: GallerySort;
   page?: number;
   pageSize?: number;
-  /** 搜索词为空时搜索下拉展示的模式兜底（各页的会话 sticky 模式）。 */
-  searchMode?: GallerySearchMode;
+  /** 搜索词为空时搜索下拉勾选维度的兜底（各页的会话 sticky 勾选）。 */
+  searchModes?: readonly GallerySearchPathMode[];
   /** 兼容调用侧的旧参数；计数上下文现由 contextBase + 两部分查询构造。 */
   providerContextPrefix?: string;
   /**
@@ -484,7 +482,7 @@ const props = withDefaults(defineProps<Props>(), {
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   page: 1,
   pageSize: 100,
-  searchMode: DEFAULT_GALLERY_SEARCH_MODE,
+  searchModes: () => ["display-name"],
   providerContextPrefix: "",
   contextBase: "",
   // withDefaults 的工厂会被提升到 setup 外，只能写字面量：引用模块内常量会编译失败。
@@ -500,8 +498,8 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   navigate: [patch: GalleryQueryPatch, options?: { push?: boolean }];
-  /** 搜索模式切换（含搜索词为空时）：各页借此维护会话 sticky 模式。 */
-  searchModeChange: [mode: GallerySearchMode];
+  /** 搜索维度勾选变化（含搜索词为空时）：各页借此维护会话 sticky 勾选。 */
+  searchModesChange: [modes: GallerySearchPathMode[]];
 }>();
 
 const { t, locale } = useI18n();
@@ -535,28 +533,28 @@ function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
 // ---------- 搜索（查询原子的 search 维度）----------
 const searchTerm = computed(() => activeFilters.value.search ?? null);
 const searchText = computed(() => searchTerm.value?.query ?? "");
-/** 展示模式：有搜索词跟词走，没有用各页传入的 sticky 兜底。 */
-const searchModeView = computed<GallerySearchMode>(() => searchTerm.value?.mode ?? props.searchMode);
+/** 展示勾选：有搜索词跟词走，没有用各页传入的 sticky 兜底。 */
+const searchModesView = computed<GallerySearchPathMode[]>(() => searchTerm.value?.modes ?? [...props.searchModes]);
 
 function onSearchInput(value: string) {
   const next = { ...activeFilters.value };
   if (value.trim()) {
-    next.search = makeSearchTerm(searchModeView.value, value, props.searchFeatures);
+    next.search = makeSearchTerm(searchModesView.value, value);
   } else {
     delete next.search;
   }
   navigate({ query: composeQueryFilters(next, advancedQuery.value), page: 1 });
 }
 
-function onSearchModeSelect(mode: GallerySearchMode) {
-  emit("searchModeChange", mode);
-  // 有搜索词时模式是查询的一部分，改模式即改查询；空词时只记 sticky。
+function onSearchModesSelect(modes: GallerySearchPathMode[]) {
+  emit("searchModesChange", modes);
+  // 有搜索词时勾选是查询的一部分，改勾选即改查询；空词时只记 sticky。
   if (searchTerm.value?.query.trim()) {
     navigate({
       query: composeQueryFilters(
         {
           ...activeFilters.value,
-          search: makeSearchTerm(mode, searchTerm.value.query, props.searchFeatures),
+          search: makeSearchTerm(modes, searchTerm.value.query),
         },
         advancedQuery.value,
       ),

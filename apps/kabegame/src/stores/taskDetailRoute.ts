@@ -5,9 +5,9 @@ import {
   parseComposablePath,
   buildComposableContextPrefix,
   extractRootIdAndBody,
-  DEFAULT_GALLERY_SEARCH_MODE,
+  DEFAULT_GALLERY_SEARCH_MODES,
   type GalleryQuery,
-  type GallerySearchMode,
+  type GallerySearchPathMode,
   type GallerySort,
   querySearchTerm,
 } from "@/utils/galleryPath";
@@ -16,11 +16,11 @@ import router from "@/router";
 
 const DEFAULT_PAGE_SIZE = 100;
 
-/** 会话内记忆的搜索模式，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
-export const taskDetailStickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+/** 会话内记忆的搜索维度勾选，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
+export const taskDetailStickySearchModes = ref<GallerySearchPathMode[]>([...DEFAULT_GALLERY_SEARCH_MODES]);
 
-export function rememberTaskDetailSearchMode(mode: GallerySearchMode): void {
-  taskDetailStickySearchMode.value = mode;
+export function rememberTaskDetailSearchModes(modes: readonly GallerySearchPathMode[]): void {
+  taskDetailStickySearchModes.value = [...modes];
 }
 
 type TaskDetailRouteState = {
@@ -57,7 +57,7 @@ export const useTaskDetailRouteStore = createPathRouteStore<TaskDetailRouteState
     const parsed = parseComposablePath(body);
     const term = querySearchTerm(parsed.query);
     if (term?.query.trim()) {
-      taskDetailStickySearchMode.value = term.mode;
+      taskDetailStickySearchModes.value = [...term.modes];
     }
     return {
       taskId,

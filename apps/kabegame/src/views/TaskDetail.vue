@@ -42,7 +42,7 @@
           :sort="taskDetailRouteStore.sort"
           :page="taskDetailRouteStore.page"
           :page-size="pageSize"
-          :search-mode="taskDetailStickySearchMode"
+          :search-modes="taskDetailStickySearchModes"
           :provider-context-prefix="taskDetailRouteStore.computedContextPath"
           :context-base="taskDetailRouteStore.contextPathFor({ query: [] })"
           :filter-features="taskFilterFeatures"
@@ -50,7 +50,7 @@
           :search-features="taskSearchFeatures"
           enable-clear-all
           @navigate="onQueryNavigate"
-          @search-mode-change="rememberTaskDetailSearchMode"
+          @search-modes-change="rememberTaskDetailSearchModes"
         />
 
         <GalleryBigPaginator
@@ -99,6 +99,7 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import { createTaskDetailAdapter } from "@/components/imageGrid/adapters/task";
 import {
+  DEFAULT_GALLERY_SEARCH_MODES,
   GALLERY_SEARCH_MODES_BASIC,
   querySearchTerm,
   type GalleryBrowseDimension,
@@ -118,8 +119,8 @@ import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import {
   useTaskDetailRouteStore,
-  rememberTaskDetailSearchMode,
-  taskDetailStickySearchMode,
+  rememberTaskDetailSearchModes,
+  taskDetailStickySearchModes,
 } from "@/stores/taskDetailRoute";
 import { IS_WEB } from "@kabegame/core/env";
 import { canOpenTaskWebview } from "@/utils/webpageCollect";
@@ -217,7 +218,7 @@ const taskViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
   const term = patch.query ? querySearchTerm(patch.query) : null;
-  if (term?.query.trim()) rememberTaskDetailSearchMode(term.mode);
+  if (term?.query.trim()) rememberTaskDetailSearchModes(term.modes);
   void taskDetailRouteStore.navigate(patch, options);
 };
 
@@ -356,7 +357,7 @@ watch(
       // 清理旧的定时器和监听器
       stopTimersAndListeners();
       // 切换到新任务（列表与总数由 ImageGrid 按 isActive/currentPath 自动加载）
-      rememberTaskDetailSearchMode("display-name");
+      rememberTaskDetailSearchModes(DEFAULT_GALLERY_SEARCH_MODES);
       taskDetailRouteStore.patch({
         taskId: newId,
         // 换任务就是换数据源：上一个任务的查询不该跟过来

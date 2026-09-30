@@ -97,8 +97,9 @@ token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `lab
 - WHERE 是关系除法「不存在未命中的 token」；token 集为空（只输入逗号）时显式判空，否则会恒真命中全部。
 - 三个 detail provider 整体委派 `search`，画册 / 任务 / 畅游详情自动支持。
 
-前端（`galleryQuery.ts` / `GallerySearchDropdown.vue`）把两种模式合并成一个「标签」tab +
-「包含子标签」勾选；「任意」模式**不**展开标签模式（输入语法不同），含标签分支的 OR 组也不折叠为任意搜。
+前端（`galleryQuery.ts` / `GallerySearchDropdown.vue`）里「标签」是搜索勾选框中的一个普通维度：
+逗号 AND 语法对所有维度通用（每个词一条 `search/<mode>/<词>`，以 `filter_comb` 叠加），标签只额外把词内
+`/` 两侧空白规整掉；与其它维度同时勾选时按维度 OR（`~any/…/~or/…/~end`），解析时能折叠回同一个搜索项。
 
 ## 前端入口
 

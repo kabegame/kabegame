@@ -26,7 +26,7 @@ const simple = { plugin: { pluginId: "pixiv" } };
 const extra: GalleryQuery = [
   {
     any: [
-      [{ is: { search: { mode: "native-metadata", query: "sakura" } } }],
+      [{ is: { search: { modes: ["native-metadata"], query: "sakura" } } }],
       [{ is: { mediaType: { kind: "image" } } }],
     ],
   },
@@ -106,7 +106,7 @@ describe("查询条追加高级 chip", () => {
     wrapper.findComponent({ name: "GallerySearchDropdown" }).vm.$emit("update:query", "春");
     const patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery };
     expect(splitQueryFilters(patch.query)).toEqual({
-      simple: { ...simple, search: { mode: "display-name", query: "春" } },
+      simple: { ...simple, search: { modes: ["display-name"], query: "春" } },
       advanced: extra,
     });
     await wrapper.get(".query-clear-filter").trigger("click");

@@ -94,14 +94,14 @@
           :sort="albumDetailRouteStore.sort"
           :page="albumDetailRouteStore.page"
           :page-size="gridPageSize"
-          :search-mode="albumDetailStickySearchMode"
+          :search-modes="albumDetailStickySearchModes"
           :provider-context-prefix="albumDetailRouteStore.computedContextPath"
           :context-base="albumDetailRouteStore.contextPathFor({ query: [] })"
           :filter-features="albumFilterFeatures"
           :sort-features="albumSortFeatures"
           enable-clear-all
           @navigate="onQueryNavigate"
-          @search-mode-change="rememberAlbumDetailSearchMode"
+          @search-modes-change="rememberAlbumDetailSearchModes"
         />
 
         <!-- 与 Gallery 同款：查询行随内容滚走，分页条 sticky（top:64）贴在 sticky 页头下方 -->
@@ -339,8 +339,8 @@ import {
 import { createAlbumDetailAdapter } from "@/components/imageGrid/adapters/album";
 import {
   useAlbumDetailRouteStore,
-  albumDetailStickySearchMode,
-  rememberAlbumDetailSearchMode,
+  albumDetailStickySearchModes,
+  rememberAlbumDetailSearchModes,
 } from "@/stores/albumDetailRoute";
 import { useAlbumIdPathState, lastAlbumIdOf, segmentsOfAlbumIdPath } from "@/composables/useAlbumIdPathState";
 import { openFilePicker } from "@/api/dialog";
@@ -579,7 +579,7 @@ const albumSortFeatures: GallerySortField[] = [
 
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
   const term = patch.query ? querySearchTerm(patch.query) : null;
-  if (term?.query.trim()) rememberAlbumDetailSearchMode(term.mode);
+  if (term?.query.trim()) rememberAlbumDetailSearchModes(term.modes);
   void albumDetailRouteStore.navigate(patch, options);
 };
 
