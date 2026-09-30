@@ -263,6 +263,7 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
+import { useCollectDialogsStore } from "@/stores/collectDialogs";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
 import { taskConfigFromRunConfig, writeTaskConfig } from "@/composables/taskConfig";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
@@ -277,6 +278,7 @@ const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
+const collectDialogsStore = useCollectDialogsStore();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const { settingValue: autoConfigTab, set: setAutoConfigTab } = useSettingKeyState("autoConfigTab");
@@ -670,6 +672,9 @@ const handleHeaderAction = (payload: { id: string; data?: { type: string; value?
         localImportDialog.open();
       } else if (d.value === "network") {
         crawlerDrawerStore.open();
+      } else if (d.value === "webpage") {
+        if (IS_WEB) return;
+        collectDialogsStore.openWebpage({});
       }
     }
   }

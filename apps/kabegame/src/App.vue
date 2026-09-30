@@ -51,6 +51,8 @@
       <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
       <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
       <AutoConfigDialog />
+      <!-- 全局唯一的整理对话框：页面路由切换时仍可由页头/工具箱打开 -->
+      <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
       <!-- 全局唯一的收集弹窗：参数经全局 taskConfig 传递，见 writeTaskConfig -->
       <CrawlerDialog v-model="crawlerDrawerVisible" />
       <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
@@ -199,6 +201,7 @@ import WebpageCollectDialog from "./components/WebpageCollectDialog.vue";
 import LocalImportDialog from "./components/LocalImportDialog.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
+import OrganizeDialog from "./components/OrganizeDialog.vue";
 import FrameMonitor from "./components/common/FrameMonitor.vue";
 import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
@@ -237,6 +240,7 @@ import SettingsDialog from "./components/settings/SettingsDialog.vue";
 import { useGlobalShortcuts } from "./composables/useGlobalShortcuts";
 import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
 import { useBusyTasks } from "./composables/useBusyTasks";
+import { useOrganizeStore, type OrganizeOptions } from "./stores/organize";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -301,6 +305,13 @@ const crawlerDrawerStore = useCrawlerDrawerStore();
 const { visible: crawlerDrawerVisible } = storeToRefs(crawlerDrawerStore);
 const collectDialogsStore = useCollectDialogsStore();
 const { webpageVisible, webpageInitial, localImportVisible, localImportInitial } = storeToRefs(collectDialogsStore);
+const organizeStore = useOrganizeStore();
+const { dialogOpen: organizeDialogOpen } = storeToRefs(organizeStore);
+
+const handleOrganizeConfirm = (options: OrganizeOptions) => {
+  organizeStore.closeDialog();
+  void organizeService.start(options);
+};
 
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();

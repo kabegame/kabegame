@@ -115,13 +115,6 @@
       @update:model-value="mediaPicker.close"
       @select="handleMediaPickerSelect"
     />
-
-    <!-- 整理对话框：由 header 触发打开，确认后交给全局 organize service 启动 -->
-    <OrganizeDialog
-      :model-value="organizeStore.dialogOpen"
-      @update:model-value="onOrganizeDialogVisible"
-      @confirm="onOrganizeConfirm"
-    />
   </div>
 </template>
 
@@ -140,9 +133,6 @@ import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import WebpageCollectDialog from "@/components/WebpageCollectDialog.vue";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
-import OrganizeDialog from "@/components/OrganizeDialog.vue";
-import { useOrganizeStore, type OrganizeOptions } from "@/stores/organize";
-import * as organizeService from "@/services/organize";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { createGalleryAdapter } from "@/components/imageGrid/adapters/gallery";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
@@ -223,17 +213,6 @@ const handleShowWebpageCollect = () => {
 const handleOpenCollectMenu = () => {
   analytics.track("gallery_import_entry", { entry: "collect_menu" });
   collectSourcePicker.open();
-};
-
-// 整理对话框：本体渲染在 Gallery；运行与事件生命周期由全局 organize service 承载
-const organizeStore = useOrganizeStore();
-const onOrganizeDialogVisible = (visible: boolean) => {
-  if (visible) organizeStore.openDialog();
-  else organizeStore.closeDialog();
-};
-const onOrganizeConfirm = (options: OrganizeOptions) => {
-  organizeStore.closeDialog();
-  void organizeService.start(options);
 };
 
 // ---------- 区域级文件拖入（画廊网格区域）----------
