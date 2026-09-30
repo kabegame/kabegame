@@ -5,6 +5,7 @@
       :key="`${item}-${idx}`"
       class="var-multi__pill"
       :class="{ 'is-custom': !knownValues.has(item) }"
+      :title="item"
     >
       {{ item }}
       <span class="var-multi__pill-x" @click="removeAt(idx)">×</span>
@@ -19,7 +20,13 @@
       clearable
       @change="onAddSelect"
     >
-      <el-option v-for="opt in normalizedOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+      <el-option
+        v-for="opt in normalizedOptions"
+        :key="opt.value"
+        :label="opt.label"
+        :value="opt.value"
+        :title="opt.label"
+      />
     </el-select>
   </div>
 </template>

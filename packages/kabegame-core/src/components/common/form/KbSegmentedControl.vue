@@ -9,6 +9,7 @@
       :aria-checked="opt.value === modelValue"
       :class="{ 'is-active': opt.value === modelValue }"
       :disabled="disabled"
+      :title="opt.label"
       @click="onSelect(opt.value)"
     >
       {{ opt.label }}

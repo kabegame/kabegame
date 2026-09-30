@@ -86,6 +86,10 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 >    focus 变色时要 `:not(.el-select__clear)` 排除，否则它的粉底徽章会被一起染色。
 > 4. `--el-select-*` 由 `set-component-css-var` 挂在 `.el-select` 上，而下拉面板 teleport 到
 >    body **不在其内**——面板侧一律用 `map.get($select-dropdown, ...)` 编译期取值，不能用 `getCssVar`。
+> 5. **下拉宽度是 fork 改过的默认值**：`select/src/select.ts` 的 `fitInputWidth` 默认 `true`
+>    （上游 `false`，与 `select-v2` 对齐），下拉恒等于输入框宽度，不再按选项文案自撑。
+>    选项放不下时由 `.el-select-dropdown__item` 的 `ellipsis` 截断，所以**不要在窄触发器里塞长选项**
+>    （畅游的插件快速选择就是这种场景，需要内容宽度时显式传 `:fit-input-width="false"`）。
 
 ## 自有组件放哪
 

@@ -18,6 +18,7 @@
       inputmode="numeric"
       :value="inputText"
       :placeholder="placeholder"
+      :title="placeholder"
       @input="onInput"
     />
     <button

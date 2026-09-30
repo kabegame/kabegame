@@ -3,6 +3,7 @@
     :model-value="valueForInput"
     :placeholder="placeholder"
     :clearable="allowUnset"
+    :title="placeholder"
     @update:model-value="$emit('update:modelValue', $event)"
   />
 </template>

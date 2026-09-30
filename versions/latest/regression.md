@@ -620,3 +620,24 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [ ] | 统一整数步进输入 | 桌面 / Android | 在任务创建、自动配置、插件详情和默认配置中找到带上下限的 `int` 项 | 不再显示滑块或 Android 选择弹层，统一显示 `− / 数字输入 / +` | `float` 保持原交互 |
 | [ ] | 边界按钮状态 | 桌面 / Android | 分别用按钮或键盘输入达到 `min`、`max` | 达到 `min` 时减号禁用，达到 `max` 时加号禁用；离开边界后恢复 | 缺失对应边界时该方向不因范围禁用 |
 | [ ] | 非法输入保留与校验 | 桌面 / Android | 键盘依次输入空值、小数、字母及超出上下限的整数 | 原始文本不被取整、夹取或回滚；值每次变化只校验一次并显示错误，修正后错误消失；非法值不能提交 | |
+
+## 下拉弹层宽度统一下沉（`fitInputWidth` 默认 `true`）
+
+把 vendored element-plus 里 `ElSelect` 的 `fitInputWidth` 默认值从上游的 `false` 改成 `true`
+（与 `ElSelectV2` 一致），所有未显式传入该 prop 的下拉弹层宽度都等于输入框宽度，长选项不再把
+下拉撑得比输入框宽。收窄后被省略号截断的文案，在插件表单与设置页的两个壁纸下拉上补了原生
+`title`（鼠标悬停看全）。macOS dev（CEF）下用 CDP 实测了各页面的实际像素宽度与截断条数
+（截断按选项 `li` 的 `scrollWidth > clientWidth` 判定，不能用行内 `span`——它的 `clientWidth` 恒为 0）。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 插件变量长选项下拉 | macOS dev | 画廊「开始收集 → 网络」，选 anihonet，爬取模式切「单个作品」，展开「作品」 | 下拉宽度等于输入框：528px 输入 → 526px 下拉（修复前 973px）；391 项里 15 条超长文案被省略号截断，每条都带 `title` 可悬停看全 | 触发本次修改的场景 |
+| [x] | 弹窗变量下拉全量 | macOS dev | 在爬取弹窗里逐一选择 17 个插件，展开每个 options 型下拉（含 anihonet 的「作品」） | 19 个下拉全部 ≤ 输入框宽度；只有 anihonet「作品」（15/391）与米游社「游戏分区」（1/7）的选项被截断，且都带 `title` | 截断口径按选项 `li` 的 `scrollWidth > clientWidth` 统计 |
+| [x] | 弹窗固定下拉 | macOS dev | 展开爬取弹窗的「运行配置」与「选择源」 | 运行配置 416 → 414px、选择源 480 → 414px | 这两个原本已显式传 `fit-input-width` |
+| [x] | 设置页下拉 | macOS dev | 设置 → 通用 / 壁纸 / 插件，逐个展开分区里的下拉 | 宽度等于输入框（180 → 178px、420 → 418px）；「壁纸显示方式」5/5 项被截断但都带 `title`，「过渡效果」与语言下拉无截断 | 壁纸两个下拉由本次改动新增 `:title` |
+| [x] | 截断文案的原生 title | macOS dev | 悬浮被截断的选项行、分段器选项、复选标签与文本框（米游社 / 哲风壁纸 / anihonet） | 选项 `li`、`KbSegmentedControl` 按钮、复选标签按钮的 `title` 为完整文案；`KbText`/`KbIntegerInput`/`KbDate` 的 `title` 为字段描述（= placeholder） | `KbSelect`/`KbMultiSelect`/`KbSegmentedControl`/`KbCheckboxGroup`/`KbText`/`KbIntegerInput`/`KbDate`；`KbPath` 早有 title |
+| [x] | 定时配置下拉 | macOS dev | 新建自动配置 → 打开定时 → 切「每周」 | 周期 / 星期 / 小时 / 分钟四个下拉 171 → 169px，无截断 | |
+| [ ] | 畅游插件快速选择 | 桌面 | 畅游页点「从插件快速进入」，展开插件列表 | 下拉 148px（= 150px 触发器），`anihonet…` / `anime-pic…` / `Danbooru…` 等 22 项中 14 项被截断 | 本次唯一的可见取舍；要恢复按内容宽度就给该处传 `:fit-input-width="false"`。该行悬浮时会弹出插件预览面板（完整信息），故未加原生 `title`，避免两个提示叠在一起 |
+| [ ] | 画廊 / 画册 / 任务页 | 桌面 / Android | 浏览各页面的下拉（排序、每页条数、画册选择等） | 均为 chip 弹层（`KbFilterDropdown`）或 `el-dropdown`，不经过 `ElSelect`，行为不变 | 弹层宽度由自身 `clamp(260px, 24vw, 340px)` 决定 |
+| [ ] | Android 插件配置 | Android | 打开任务创建 / 自动配置的插件变量表单 | 与桌面一致，不超过输入框 | Android 的 options 型走 `AndroidPickerSelect`，不经 `ElSelect`；`list` 型 `KbMultiSelect` 无候选选项 |
+| [ ] | Web 版 | Web | 浏览器里复核上述下拉 | 同桌面 | 未实测；同一份 vendored 源码，预期一致 |

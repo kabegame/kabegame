@@ -16,7 +16,13 @@
     :disabled="props.disabled || disabled || wallpaperModeSwitching"
     @change="handleChange"
   >
-    <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
+    <el-option
+      v-for="opt in options"
+      :key="opt.value"
+      :label="opt.label"
+      :value="opt.value"
+      :title="opt.desc || opt.label"
+    >
       <span>{{ opt.desc }}</span>
     </el-option>
   </el-select>

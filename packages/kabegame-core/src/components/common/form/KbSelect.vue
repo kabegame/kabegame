@@ -22,9 +22,17 @@
     :clearable="allowUnset"
     :filterable="normalizedOptions.length >= 9"
     style="width: 100%"
+    :title="selectedLabel || placeholder"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <el-option v-for="opt in normalizedOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+    <!-- 下拉宽度已统一为输入框宽度，长文案会被 ellipsis 截断；补原生 title 让鼠标能看全 -->
+    <el-option
+      v-for="opt in normalizedOptions"
+      :key="opt.value"
+      :label="opt.label"
+      :value="opt.value"
+      :title="opt.label"
+    />
   </el-select>
 </template>
 
@@ -72,4 +80,9 @@ const normalizedOptions = computed(() => {
 const valueForSelect = computed<string | undefined>(() => {
   return typeof props.modelValue === "string" ? props.modelValue : undefined;
 });
+
+/** 触发器里显示的选项文案（窄栅格里会被截断，靠 title 看全） */
+const selectedLabel = computed(
+  () => normalizedOptions.value.find((o) => o.value === valueForSelect.value)?.label ?? "",
+);
 </script>

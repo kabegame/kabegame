@@ -8,6 +8,7 @@
     :value-format="PLUGIN_DATE_PICKER_FORMAT"
     :disabled-date="disabledDate"
     style="width: 100%"
+    :title="placeholder"
     @update:model-value="onUpdate"
   />
 </template>

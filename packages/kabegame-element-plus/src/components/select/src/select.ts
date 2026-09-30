@@ -243,7 +243,14 @@ export const selectProps = buildProps({
   /**
    * @description whether the width of the dropdown is the same as the input
    */
-  fitInputWidth: Boolean,
+  // Kabegame fork 改动：上游默认 false，弹层按选项内容自撑，长选项（如 anihonet
+  // 的「作品」391 项日文标题）会把下拉撑到接近输入框的两倍宽。这里默认改成 true，
+  // 与 ElSelectV2（defaults.ts 里已是 true）保持一致；需要按内容宽度的调用方
+  // 显式传 :fit-input-width="false" 关掉。
+  fitInputWidth: {
+    type: Boolean,
+    default: true,
+  },
   /**
    * @description custom suffix icon component
    */

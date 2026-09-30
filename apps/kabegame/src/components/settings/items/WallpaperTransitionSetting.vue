@@ -16,7 +16,8 @@
     :disabled="props.disabled || wallpaperModeSwitching || disabled"
     @change="handleChange"
   >
-    <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
+    <!-- 下拉宽度已统一为输入框宽度，长文案会被 ellipsis 截断；补原生 title 让鼠标能看全 -->
+    <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" :title="opt.label" />
   </el-select>
 </template>
 

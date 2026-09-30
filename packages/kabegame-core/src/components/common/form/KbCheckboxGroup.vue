@@ -7,6 +7,7 @@
       type="button"
       class="var-checkbox-group-field__tag"
       :class="{ 'is-on': valueForGroup.includes(opt.value) }"
+      :title="opt.label"
       @click="toggleOne(opt.value)"
     >
       <span class="var-checkbox-group-field__check">
