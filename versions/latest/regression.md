@@ -45,7 +45,7 @@
 | [ ] | 失败重试还原标签 | 任一平台 | 让带标签的下载失败，修复网络后重试 | 成功后标签正常挂上 | `task_failed_images.labels` |
 | [ ] | 迁移补标签 | 任一平台 | 旧版 anime-pictures 下载若干图后升级到 0.5.0 | 历史图片自动补上作品 / 角色 / 画师 / 参考 / 物体五类标签；迁移失败的行也盖版本、下次启动不重跑 | `provideLabels`；Linux 开发库 1830 行已实测补齐五类，失败盖版本未测 |
 | [ ] | konachan 按类型补标签 | 任一平台 | 用 1.2.9 下载过的库装上 konachan 1.3.0 后启动 | 历史图片补上 `konachan/{artist,copyright,character,circle,style,general}` 下的标签，key 为站点标签名（如 `futaba_akane_(pentagon)`），显示名为页面文字 | 1.2.9 之前下载、metadata 里没有标签的图片补不到 |
-| [ ] | Pixiv 标签与作者迁移 | 任一平台 | 用 1.2.11 下载含“有英文翻译”和“纯日语无翻译”标签的作品后升级到 pixiv 1.3.1 | 历史图片与新下载图片的作品标签数量都与 Pixiv metadata 中的非空 tag 数量一致，并额外带一个 `pixiv/artist/<作者 UID>`；作品标签显示名严格按默认日文名、英文翻译、key 回落，作者显示用户名 | 英文翻译优先生成可读 key；纯日语原始名确定性编码为合法 key，不能折叠为 `()`；作者 UID 不随改名变化 |
+| [ ] | Pixiv 标签与作者迁移 | 任一平台 | 用 1.2.11 下载含“有英文翻译”、纯假名及汉字混合标签的作品后升级到 pixiv 1.3.2 | 历史图片与新下载图片的作品标签数量都与 Pixiv metadata 中的非空 tag 数量一致，并额外带一个 `pixiv/artist/<作者 UID>`；作品标签显示名严格按默认日文名、英文翻译、key 回落，作者显示用户名 | 详情请求使用 `lang=en`；英文翻译优先生成 key；无翻译时假名转罗马字、`ー` / `—` 转 `-`、剩余汉字编码为 `u-...`，不能折叠为 `()`；作者 UID 不随改名变化 |
 | [ ] | Pixiv 数值分段 provider | 任一桌面平台 | 在画廊插件扩展中展开 Pixiv，依次进入 `likes`、`bookmarks`、`views`，再测试路径 `likes/100+` 与 `views/1000-5000` | 三个维度分别按 `likeCount`、`bookmarkCount`、`viewCount` 显示非空累计 `N+` 分段；区间端点包含在结果内，旧标签树不再出现 | 标签浏览统一走应用级 `pixiv/tag` / `pixiv/artist` 标签画册 |
 | [ ] | PixAI 标签与作者迁移 | 任一平台 | 用 PixAI 0.5.0 下载含多个 tags 的作品后升级到 0.6.0 | 历史图片与新下载图片都挂到 `pixai/tag/<归一化 codeName>`，并额外挂到 `pixai/artist/<作者 ID>`；标签名优先显示站点显示名，作者名优先显示 displayName | codeName 无法派生合法 key 时回退 tack id；作者 ID 不随改名变化 |
 | [ ] | 哲风标签与作者迁移 | 任一平台 | 用哲风壁纸 0.3.0 下载含中文 tags 与作者的图片后升级到 0.4.0，再用 0.4.0 新下载一张 | 历史图片与新图片都挂到 `haowallpaper/tag/<拼音 key>`，并额外挂到 `haowallpaper/artist/<作者 ID>`；中文标签名和作者昵称作为显示名 | `tiny-pinyin` 不保证多音字准确；同一 metadata 内重复标签去重 |
@@ -318,8 +318,21 @@ macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍�
 | [ ] | 使用畅游 Cookie | Linux | 在畅游中打开 anime-pictures 并通过验证，然后运行任务 | 日志出现「已从畅游注入 anime-pictures.net 的 Cookie」 | 畅游没有该站记录时会 warn 并回退到内置 Cookie |
 | [ ] | `cefUserAgent` 各平台取值 | Windows / macOS / Linux | 运行 anime-pictures 任务，查看日志中的「User-Agent 来源」 | 显示「畅游 CEF」，平台段分别为 `Windows NT 10.0; Win64; x64` / `Macintosh; Intel Mac OS X 10_15_7` / `X11; Linux x86_64`，版本段为 `Chrome/149.0.0.0`，且与该平台畅游里 `navigator.userAgent` 逐字一致 | 在畅游 devtools 执行 `navigator.userAgent` 对照 |
 | [ ] | Android 上 `cefUserAgent` | Android | 运行调用 `Kabegame.cefUserAgent()` 的插件 | 返回 `null`，插件回退到内置 UA，不报错 | Android 畅游是系统 WebView，不走 CEF |
-| [ ] | V8 snapshot 重建 | 任意桌面 | 升级后首次运行任意 V8 插件 | 生成 `runtime@6.bin` 并正常运行；`Kabegame.cefUserAgent` 可调用 | prelude.js 有改动，fingerprint 已从 5 升到 6 |
+| [ ] | V8 runtime 初始化 | 任意桌面 | 升级后首次运行任意 V8 插件 | runtime 直接初始化并正常运行；`Kabegame.cefUserAgent` 可调用，不生成 `runtime@*.bin` | startup snapshot 机制已删除 |
 | [ ] | 原图下载 | Linux | 同上任务继续执行到详情页下载 | `api.anime-pictures.net/pictures/download_image/...` 307 到 `oimages`，下载器合并重定向响应里的 `kira=1` 后拿到 `image/jpeg` | 缺 `kira` cookie 时 `oimages` 会 302 回首页，得到的是 HTML |
+
+## 启动后立即运行漏跑定时任务
+
+启动期 metadata migration 与用户点击「马上运行」都会创建 V8 isolate。原先的 startup snapshot 生成/恢复
+会访问进程级 read-only heap，与 CEF 或其它任务的 V8 初始化重叠时会在
+`Deserializer::ReadReadOnlyHeapRef` 内触发 libc++ `vector[] index out of bounds` 或 SIGSEGV。
+现在所有平台统一即时初始化 runtime，不再生成或恢复 startup snapshot；任务执行、网络和下载仍并发。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 立即运行全部漏跑任务 | Linux CEF | 使用 `images-before-pixiv.db` 启动，弹窗按钮一出现就点「马上运行」 | 所有漏跑任务开始执行，主进程不退出；无 libc++ 越界断言 | 实测页面加载 3.05 秒点击；3 个 fresh runtime 为 14/21/16 ms，持续运行稳定 |
+| [ ] | 不再读写 snapshot | 桌面 / Android / CLI | 保留旧 `runtime@6.bin` 并运行多个 V8 插件，再删除缓存后重试 | 两次均直接初始化 runtime，不读取或生成 `runtime@*.bin` | 旧缓存可随普通缓存清理 |
+| [ ] | V8 runtime 能力 | 任一平台 | 运行 V8 runtime 单测 | Web API、crypto、DOM、timer、fetch 与任务 VFS 均正常 | snapshot 专用 round-trip 测试已随机制删除 |
 
 ## 手动刷新重试失败图片
 

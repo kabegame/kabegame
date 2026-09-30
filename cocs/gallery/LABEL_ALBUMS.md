@@ -77,8 +77,9 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 
 样例：`src-crawler-plugins/plugins/anime-pictures` 把作品 / 角色 / 画师 / 参考 / 物体 tag 映射为
 `anime-pictures/{copyright,character,artist,reference,object}` 下的标签（下载与 `provideLabels` 各一份同规则实现）。
-`src-crawler-plugins/plugins/pixiv` 把作品 tag 映射到 `pixiv/tag`：英文翻译优先派生 ASCII key，无翻译时
-把默认原始名确定性编码为合法 key；Pixiv 默认原始名（通常为日语）作为显示名。作者映射到
+`src-crawler-plugins/plugins/pixiv` 把作品 tag 映射到 `pixiv/tag`：作品详情固定请求 `lang=en`，英文翻译
+优先派生 ASCII key；无翻译时把假名转成罗马字、长音符转成 `-`，仅将其余非 ASCII 字符确定性编码为
+`u-...`。Pixiv 默认原始名（通常为日语）优先作为显示名，缺失时才回落英文与 key。作者映射到
 `pixiv/artist`，以 UID 作稳定 key、用户名作显示名。
 `src-crawler-plugins/plugins/pixai` 把作品 tack 映射到 `pixai/tag`（优先用 codeName 归一化派生 key，
 无法派生时回退到 tack id），作者映射到 `pixai/artist`，以作者 id 作稳定 key、显示名或用户名作名称。

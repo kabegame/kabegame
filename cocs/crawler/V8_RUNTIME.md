@@ -47,9 +47,8 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - **网络全部走宿主 `reqwest`**，V8 侧不做任何 socket/TLS。`fetch` 是 `op_kabegame_fetch`（代理感知、跟随重定向 ≤10），`Kabegame.to`/页面抓取是 `op_kabegame_to`（手动重定向 + 重试），两者都在 `ops.rs` 用 `reqwest` 实现。因此 **不引入 `deno_fetch` / `deno_net` / `deno_tls`**，也就没有 hyper/其自带 TLS 的编译与体积负担。
 - 因为不再从 `deno_fetch` 取 `Headers` / `Response`，这两个类在 `prelude.js` 里**自实现**（`Headers` 为大小写不敏感多值 map；`Response` 由宿主返回的 `Uint8Array` 承载 body，支持 `text()`/`json()`/`arrayBuffer()`/`bytes()`，无流式 body / `clone`）。`Request` 仍是归一化 fetch 入参用的最小实现。改这三个类只需改 `prelude.js`。
 - 保留的 deno 扩展为 `deno_webidl` / `deno_web`（URL/编码/timer/base64/DOMException）/ `deno_crypto`（`crypto.subtle`）/ `deno_io` / `deno_fs`；`deno_io` 不注册 stdio，`deno_fs` 注入每任务的 `PluginVfs`。`deno_crypto` 的 `00_crypto.js` 是 lazy JS 且创建 cppgc 对象，在 `JsPluginRuntime::new` 里 isolate 建好后用 `loadExtScript` 显式加载并挂全局。
-- **设备端共享 baseline 快照缓存**：Android 交叉编译不能在 x86_64 宿主生成可供 arm64 V8 加载的快照，因此运行时在设备自身后台生成并缓存到 `cache_dir/plugins/snapshots/runtime@<fingerprint>.bin`。任一 V8 插件加载/安装会触发生成；首任务缺缓存时仍走 fresh 初始化，不额外阻塞，后续任务和进程重启后优先从磁盘快照恢复。快照只烘焙 `deno_webidl` / `deno_web` / `deno_crypto` / `deno_io` / `deno_fs` / `kabegame_v8` 的扩展 JS；`Arc<PluginVfs>` 等 Rust state 在恢复后按相同 extension 顺序补入，插件模块仍按任务加载。
-- 快照文件有独立 magic、内容指纹、V8 精确版本、payload 长度和 CRC32；验证失败会删除并重建，restore 失败则本进程禁用快照并回退 fresh。`KABEGAME_DISABLE_V8_SNAPSHOT=1` 可强制关闭。修改 vendored `deno_core` 快照布局、deno 扩展版本/顺序或 `kabegame_v8` ESM 时，必须同步递增 `snapshot.rs` 的 `SNAPSHOT_FINGERPRINT`；当前因加入 `Kabegame.ffmpeg` 为 **4**。
-- `deno_crypto` 的 `Crypto` / `SubtleCrypto` / `CryptoKey` 是 cppgc 对象，不能进入 V8 startup snapshot；`00_crypto.js` 始终在 fresh/restore isolate 建成后执行并挂载 globals。扩展 JS 继续以 `IncludedInBinary` 内嵌，既保证首次 fresh 初始化，也保证设备端快照生成不依赖构建机路径；仍无 residual 表或 `build.rs` 快照步骤。
+- **不使用 V8 startup snapshot**：桌面、Android 与 CLI 的每个插件任务都通过 `JsRuntime::new` 即时初始化独立 isolate 和全部 extension。应用不生成、读取或校验 `runtime@*.bin`，也没有 snapshot 指纹、后台生成任务、恢复分支和环境变量开关。旧版本留下的缓存文件不会再被访问，可随普通缓存清理。
+- `deno_crypto` 的 `Crypto` / `SubtleCrypto` / `CryptoKey` 是 cppgc 对象；`00_crypto.js` 在 isolate 建成后执行并挂载 globals。扩展 JS 继续以 `IncludedInBinary` 内嵌，确保 Android 交叉编译产物不依赖构建机路径；仍无 residual 表或 `build.rs` 快照步骤。
 
 ## Android 交叉编译
 

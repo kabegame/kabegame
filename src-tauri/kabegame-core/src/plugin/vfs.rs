@@ -20,7 +20,6 @@ enum Access {
 #[derive(Debug)]
 pub struct PluginVfs {
     handle: u64,
-    snapshot_placeholder: bool,
     data_root: PathBuf,
     cache_root: PathBuf,
     tmp_root: PathBuf,
@@ -113,26 +112,9 @@ impl PluginVfs {
         )
     }
 
-    /// 仅用于生成 V8 baseline snapshot 的不可用占位文件系统。
-    ///
-    /// 快照生成只求值 extension JS，不应执行任何文件操作；`resolve` 会在读取这些
-    /// 空根路径前直接拒绝访问，因此该实例不会映射到任何真实目录。
-    pub(crate) fn snapshot_placeholder() -> Self {
-        Self {
-            handle: 0,
-            snapshot_placeholder: true,
-            data_root: PathBuf::new(),
-            cache_root: PathBuf::new(),
-            tmp_root: PathBuf::new(),
-            inner: RealFs,
-            bytes_written: AtomicU64::new(0),
-        }
-    }
-
     fn from_roots(handle: u64, data_root: PathBuf, cache_root: PathBuf, tmp_root: PathBuf) -> Self {
         Self {
             handle,
-            snapshot_placeholder: false,
             data_root,
             cache_root,
             tmp_root,
@@ -189,19 +171,10 @@ impl PluginVfs {
         ]
     }
 
-    fn ensure_available(&self) -> FsResult<()> {
-        if self.snapshot_placeholder {
-            Err(permission_denied("V8 快照占位文件系统不可访问"))
-        } else {
-            Ok(())
-        }
-    }
-
     /// 校验虚拟路径并翻译为插件私有的宿主路径。
     ///
     /// `..` 只允许在 `/{handle}` 内折叠；尝试越过该会话根会立即失败。
     fn resolve(&self, virtual_path: &Path, need: Access) -> FsResult<PathBuf> {
-        self.ensure_available()?;
         if !virtual_path.has_root() {
             return Err(permission_denied("插件 VFS 只接受绝对路径"));
         }
@@ -412,12 +385,10 @@ fn normalize_absolute_path(path: &Path) -> FsResult<PathBuf> {
 #[async_trait::async_trait(?Send)]
 impl FileSystem for PluginVfs {
     fn cwd(&self) -> FsResult<PathBuf> {
-        self.ensure_available()?;
         Ok(self.virtual_root())
     }
 
     fn tmp_dir(&self) -> FsResult<PathBuf> {
-        self.ensure_available()?;
         Ok(self.virtual_tmp_dir())
     }
 
@@ -990,21 +961,4 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
-    #[test]
-    fn snapshot_placeholder_denies_all_paths() {
-        let vfs = PluginVfs::snapshot_placeholder();
-        assert_eq!(
-            vfs.cwd().unwrap_err().kind(),
-            io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(
-            vfs.tmp_dir().unwrap_err().kind(),
-            io::ErrorKind::PermissionDenied
-        );
-        let error = vfs
-            .resolve(Path::new("/0/data/file"), Access::ReadOnly)
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-        assert!(!vfs.exists_sync(&checked("/0/data/file")));
-    }
 }

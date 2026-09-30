@@ -206,16 +206,6 @@ impl AppPaths {
         Ok(self.cache_dir.join("plugins-cache").join(plugin_id))
     }
 
-    /// 插件 V8 baseline snapshot 缓存目录：`cache_dir/snapshots`
-    pub fn plugin_snapshots_dir(&self) -> PathBuf {
-        self.cache_dir.join("snapshots")
-    }
-
-    /// 迁移前的插件 V8 baseline snapshot 缓存目录。
-    pub(crate) fn legacy_plugin_snapshots_dir(&self) -> PathBuf {
-        self.cache_dir.join("plugins").join("snapshots")
-    }
-
     // ========== 临时目录 ==========
 
     /// 插件下载临时目录（返回 temp_dir 根目录）

@@ -28,17 +28,6 @@ pub struct KabegameOpState {
     pub cancel: CancellationToken,
 }
 
-impl KabegameOpState {
-    /// Native state used only while baking the plugin-independent baseline
-    /// snapshot. Extension ESM initialization must not invoke host ops.
-    pub(crate) fn snapshot_placeholder() -> Self {
-        Self {
-            task_id: String::new(),
-            cancel: CancellationToken::new(),
-        }
-    }
-}
-
 #[op2]
 #[string]
 pub async fn op_kabegame_to(

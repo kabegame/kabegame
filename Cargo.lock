@@ -4556,7 +4556,6 @@ dependencies = [
  "bzip2",
  "chrono",
  "core-foundation 0.10.1",
- "crc32fast",
  "deno_core",
  "deno_crypto",
  "deno_error",

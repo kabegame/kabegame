@@ -4,8 +4,8 @@
 
 use deno_core::{
     anyhow::{anyhow, Result as AnyhowResult},
-    extension, resolve_url, serde_v8, v8, Extension, ExtensionArguments, JsRuntime,
-    PollEventLoopOptions, RuntimeOptions,
+    extension, resolve_url, serde_v8, v8, Extension, JsRuntime, PollEventLoopOptions,
+    RuntimeOptions,
 };
 use deno_fs::FileSystemRc;
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
@@ -20,7 +20,6 @@ use crate::crawler::task_scheduler::{Task, TaskError, TaskResult};
 use crate::plugin::Plugin;
 
 mod ops;
-pub(crate) mod snapshot;
 pub use ops::KabegameOpState;
 
 extension!(
@@ -70,9 +69,8 @@ extension!(
 /// Entry module file name for in-memory, self-contained V8 crawler code.
 const ENTRY_FILE_NAME: &str = "crawl.v8.js";
 
-// deno_crypto creates cppgc objects which cannot be serialized into a V8
-// startup snapshot. Both fresh and restored runtimes attach these globals only
-// after their isolate has a live CppHeap.
+// deno_crypto ships its globals as lazy-loaded JS. Attach them after the
+// runtime isolate has a live CppHeap.
 const CRYPTO_INIT_SCRIPT: &str = r#"const _cm = Deno.core.loadExtScript("ext:deno_crypto/00_crypto.js");
 Object.assign(globalThis, {
   Crypto: _cm.Crypto,
@@ -81,12 +79,9 @@ Object.assign(globalThis, {
   SubtleCrypto: _cm.SubtleCrypto,
 });"#;
 
-/// Full initialization used by fresh runtimes and baseline snapshot creation.
-///
-/// INVARIANT: this list, `lazy_extensions`, and `lazy_extension_args` must keep
-/// identical names/order, with `kabegame_v8` last. Snapshot sidecar validation
-/// and V8 external-reference indexing both depend on it.
-pub(crate) fn base_extensions(ctx: KabegameOpState, fs: FileSystemRc) -> Vec<Extension> {
+/// Runtime extensions, with `kabegame_v8` last so its prelude can use the
+/// globals registered by the Deno extensions before it.
+fn base_extensions(ctx: KabegameOpState, fs: FileSystemRc) -> Vec<Extension> {
     let blob_store = BlobStore::default_arc();
     vec![
         deno_webidl::deno_webidl::init(),
@@ -98,29 +93,6 @@ pub(crate) fn base_extensions(ctx: KabegameOpState, fs: FileSystemRc) -> Vec<Ext
     ]
 }
 
-fn lazy_extensions() -> Vec<Extension> {
-    vec![
-        deno_webidl::deno_webidl::lazy_init(),
-        deno_web::deno_web::lazy_init(),
-        deno_crypto::deno_crypto::lazy_init(),
-        deno_io::deno_io::lazy_init(),
-        deno_fs::deno_fs::lazy_init(),
-        kabegame_v8::lazy_init(),
-    ]
-}
-
-fn lazy_extension_args(ctx: KabegameOpState, fs: FileSystemRc) -> Vec<ExtensionArguments> {
-    let blob_store = BlobStore::default_arc();
-    vec![
-        deno_webidl::deno_webidl::args(),
-        deno_web::deno_web::args(blob_store, None, false, InMemoryBroadcastChannel::default()),
-        deno_crypto::deno_crypto::args(None),
-        deno_io::deno_io::args(None),
-        deno_fs::deno_fs::args(fs),
-        kabegame_v8::args(ctx),
-    ]
-}
-
 /// Embedded V8 plugin runtime.
 pub struct JsPluginRuntime {
     runtime: JsRuntime,
@@ -129,61 +101,9 @@ pub struct JsPluginRuntime {
 impl JsPluginRuntime {
     /// Assemble a runtime with Kabegame host ops wired into OpState.
     pub fn new(ctx: KabegameOpState, fs: FileSystemRc) -> AnyhowResult<Self> {
-        if let Some(blob) = snapshot::try_load() {
-            match Self::with_snapshot(ctx.clone(), fs.clone(), blob) {
-                Ok(runtime) => return Ok(runtime),
-                Err(error) => {
-                    eprintln!("[v8-snapshot] restore failed, falling back to fresh init: {error}");
-                    snapshot::disable_and_invalidate();
-                }
-            }
-        } else {
-            // Do not add snapshot generation latency to the first task.
-            snapshot::spawn_generate_if_missing();
-        }
-
-        Self::fresh(ctx, fs)
-    }
-
-    /// Restore extension ESM from the shared baseline snapshot, then inject
-    /// per-task native state and initialize crypto in the new isolate's CppHeap.
-    fn with_snapshot(
-        ctx: KabegameOpState,
-        fs: FileSystemRc,
-        blob: &'static [u8],
-    ) -> AnyhowResult<Self> {
         let started = std::time::Instant::now();
-        let mut runtime = JsRuntime::try_new(RuntimeOptions {
-            module_loader: None,
-            startup_snapshot: Some(blob),
-            extensions: lazy_extensions(),
-            ..Default::default()
-        })?;
-        runtime.lazy_init_extensions(lazy_extension_args(ctx, fs))?;
-        runtime.execute_script("<kabegame_crypto_init>", CRYPTO_INIT_SCRIPT)?;
-        eprintln!(
-            "[v8-snapshot] restored runtime in {} ms",
-            started.elapsed().as_millis()
-        );
-        Ok(Self { runtime })
-    }
-
-    /// Build a runtime without a snapshot. This retains the previous eager
-    /// extension initialization behavior as the compatibility fallback.
-    fn fresh(ctx: KabegameOpState, fs: FileSystemRc) -> AnyhowResult<Self> {
-        let started = std::time::Instant::now();
-        // No V8 startup snapshot: extensions are initialized eagerly with `init(...)`,
-        // which registers their lazy_loaded_js and evaluates their ESM — including the
-        // kabegame_v8 prelude — during `JsRuntime::new`. The prelude's
-        // `Deno.core.loadExtScript` calls resolve against those normally-registered
-        // sources, so no separate `residual_lazy_js_sources` table is needed.
-        // `kabegame_v8` stays LAST so deno_web/deno_crypto/deno_io/deno_fs are
-        // registered before the prelude runs. Networking is host-side
-        // (op_kabegame_fetch), so there is no
-        // deno_fetch: Headers/Response are implemented in prelude.js.
         let mut runtime = JsRuntime::new(RuntimeOptions {
             module_loader: None,
-            startup_snapshot: None,
             extensions: base_extensions(ctx, fs),
             ..Default::default()
         });
@@ -192,7 +112,7 @@ impl JsPluginRuntime {
         // deliberately omits.
         runtime.execute_script("<kabegame_crypto_init>", CRYPTO_INIT_SCRIPT)?;
         eprintln!(
-            "[v8-snapshot] fresh runtime initialized in {} ms",
+            "[v8-runtime] initialized in {} ms",
             started.elapsed().as_millis()
         );
         Ok(Self { runtime })
@@ -406,10 +326,6 @@ mod tests {
             std::env::remove_var("https_proxy");
             std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
             std::env::set_var("no_proxy", "127.0.0.1,localhost");
-            // Existing runtime tests exercise the fresh path deterministically;
-            // the dedicated snapshot round-trip test calls the restore path
-            // directly and is unaffected by this kill switch.
-            std::env::set_var("KABEGAME_DISABLE_V8_SNAPSHOT", "1");
             AppPaths::init_for_tests();
             let _ = Settings::init_global();
             let _ = Storage::init_global();
@@ -682,98 +598,6 @@ mod tests {
                 panic!("small task VFS file should stay in memory")
             }
         }
-    }
-
-    #[tokio::test]
-    async fn snapshot_round_trip_restores_task_fs() {
-        let run = test_run("v8-snapshot-fs", "");
-        let blob: &'static [u8] =
-            Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
-        let mut runtime = JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
-            .expect("restore snapshot runtime");
-        let entry = r#"
-            export async function crawl(common) {
-                if (Kabegame.fs.getRoot() !== common.root) {
-                    throw new Error("bad restored fs root: " + Kabegame.fs.getRoot());
-                }
-                const path = Kabegame.fs.getRoot() + "/cache/snapshot-fs.txt";
-                await Kabegame.fs.writeTextFile(path, "snapshot-fs");
-                if (await Kabegame.fs.readTextFile(path) !== "snapshot-fs") {
-                    throw new Error("bad restored fs round trip");
-                }
-            }
-        "#
-        .to_string();
-
-        runtime
-            .run_crawl(
-                "plugin-test",
-                entry,
-                json!({ "root": format!("/{}", run.fs_handle) }),
-                json!({}),
-            )
-            .await
-            .expect("restored runtime should use the task VFS");
-    }
-
-    #[tokio::test]
-    async fn snapshot_round_trip_restores_crypto_web_dom_timer_fetch_and_fs() {
-        init_scheduler();
-        let task_id = "v8-snapshot-round-trip";
-        let run = test_run(task_id, "");
-        let server = spawn_http_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}",
-        );
-
-        let blob: &'static [u8] =
-            Box::leak(snapshot::generate_snapshot_bytes().expect("generate baseline snapshot"));
-        let mut runtime = JsPluginRuntime::with_snapshot(test_state(&run), run.vfs.clone(), blob)
-            .expect("restore snapshot runtime");
-        let expected_root = format!("/{}", run.fs_handle);
-        let entry = format!(
-            r#"
-            export async function crawl() {{
-                if (typeof Crypto !== "function" || typeof CryptoKey !== "function" ||
-                    typeof SubtleCrypto !== "function" || !(crypto instanceof Crypto)) {{
-                    throw new Error("crypto globals unavailable after restore");
-                }}
-                const first = crypto.getRandomValues(new Uint8Array(16));
-                const second = crypto.getRandomValues(new Uint8Array(16));
-                if (first.every((value, index) => value === second[index])) {{
-                    throw new Error("getRandomValues repeated output");
-                }}
-                const digest = new Uint8Array(await crypto.subtle.digest(
-                    "SHA-256", new TextEncoder().encode("abc")
-                ));
-                const hex = Array.from(digest, value => value.toString(16).padStart(2, "0")).join("");
-                if (hex !== "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") {{
-                    throw new Error("bad SHA-256: " + hex);
-                }}
-                if (new URL("/x", "https://example.test/base").href !== "https://example.test/x") {{
-                    throw new Error("URL unavailable");
-                }}
-                const document = new DOMParser().parseFromString("<main>ok</main>", "text/html");
-                if (document.querySelector("main")?.textContent !== "ok") {{
-                    throw new Error("DOMParser unavailable");
-                }}
-                await new Promise(resolve => setTimeout(resolve, 1));
-                const response = await (await fetch("{server}/snapshot")).json();
-                if (!response.ok) throw new Error("fetch unavailable");
-                if (Kabegame.fs.getRoot() !== "{expected_root}") {{
-                    throw new Error("fs root unavailable after restore");
-                }}
-                await Kabegame.fs.writeTextFile("{expected_root}/cache/snapshot.txt", "ok");
-                if (await Kabegame.fs.readTextFile("{expected_root}/cache/snapshot.txt") !== "ok") {{
-                    throw new Error("fs unavailable after restore");
-                }}
-            }}
-            "#
-        );
-
-        runtime
-            .run_crawl("plugin-test", entry, json!({}), json!({}))
-            .await
-            .expect("restored runtime should execute crawler");
     }
 
     #[tokio::test]
