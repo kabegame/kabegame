@@ -1,5 +1,5 @@
 /**
- * 构建路径与目标平台/架构解析。
+ * 构建路径、平台与宿主架构解析。
  *
  * 本文件只依赖 Node 内建模块，确保没有 node_modules 的构建阶段也能直接引用。
  */
@@ -14,89 +14,12 @@ const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..");
 export const THIRD_DIR = path.join(ROOT, "third");
 
-/**
- * 目标架构（**仅 macOS**）。由 `--target x86_64|arm64` 指定，用于在 Apple Silicon 上
- * 交叉编译 Intel 版（或反之）。不传 `--target` 或目标为 native/android 时为 undefined。
- *
- * 第三方依赖按目标架构统一落到 `bin/macos/{arch}/{repo}-build`，不同架构完全隔离；
- * cargo/tauri 侧则一律落在 `TARGET_DIR/<triple>/`（见 ARTIFACT_DIR）。
- */
-export type TargetArch = "x86_64" | "arm64";
+/** 宿主架构，用于第三方构建产物的目录命名。 */
+export type BuildArch = "x86_64" | "arm64";
 
-export const TARGET_ARCH_ALIASES: Record<string, TargetArch> = {
-  x86_64: "x86_64",
-  x64: "x86_64",
-  amd64: "x86_64",
-  "x86_64-apple-darwin": "x86_64",
-  arm64: "arm64",
-  aarch64: "arm64",
-  "aarch64-apple-darwin": "arm64",
-};
-
-export function normalizeTargetArch(raw: string): TargetArch {
-  const arch = TARGET_ARCH_ALIASES[raw.trim().toLowerCase()];
-  if (!arch) {
-    throw new Error(
-      `未知的 --target: '${raw}'（允许 x86_64 | arm64，也接受 x64/aarch64 与完整 triple）`,
-    );
-  }
-  return arch;
-}
-
-/**
- * 只解析 argv 中第一个裸 `--` **之前**的 macOS 架构 `--target`；native/android
- * 由各自入口处理。`--` 之后的参数是原样透传给 tauri/cargo 的，由调用方自己负责，
- * 这里不消费也不重复注入。
- */
-export function parseTargetArchFromArgv(): TargetArch | undefined {
-  const argv = process.argv.slice(2);
-  const sep = argv.indexOf("--");
-  const scope = sep === -1 ? argv : argv.slice(0, sep);
-  for (let i = 0; i < scope.length; i++) {
-    const a = scope[i];
-    if (a === "--target") {
-      const target = scope[i + 1];
-      return target && target !== "native" && target !== "android"
-        ? normalizeTargetArch(target)
-        : undefined;
-    }
-    if (a.startsWith("--target=")) {
-      const target = a.slice("--target=".length);
-      return target !== "native" && target !== "android"
-        ? normalizeTargetArch(target)
-        : undefined;
-    }
-  }
-  return undefined;
-}
-
-/** 宿主架构（macOS 之外仅用于第三方构建产物目录命名）。 */
-export const HOST_ARCH: TargetArch = process.arch === "arm64"
+export const HOST_ARCH: BuildArch = process.arch === "arm64"
   ? "arm64"
   : "x86_64";
-
-/** 显式指定的 macOS 目标架构；未传或目标为 native/android 时为 undefined。 */
-export const TARGET_ARCH: TargetArch | undefined = (() => {
-  const env = process.env.KB_TARGET_ARCH;
-  const arch = env ? normalizeTargetArch(env) : parseTargetArchFromArgv();
-  if (!arch) return undefined;
-  if (process.platform !== "darwin") {
-    throw new Error(
-      `--target 仅在 macOS 上支持（跨编 x86_64 / arm64）；当前平台: ${process.platform}`,
-    );
-  }
-  process.env.KB_TARGET_ARCH = arch; // 回写，供 package-plugin 等子进程继承
-  return arch;
-})();
-
-/** rustc target triple；未指定 `--target` 时为 undefined（cargo 不加 --target）。 */
-export const TARGET_TRIPLE: string | undefined = TARGET_ARCH
-  ? `${TARGET_ARCH === "x86_64" ? "x86_64" : "aarch64"}-apple-darwin`
-  : undefined;
-
-/** 是否为真正的交叉编译（目标架构 ≠ 宿主架构）。 */
-export const IS_CROSS_COMPILE = TARGET_ARCH !== undefined &&
-  TARGET_ARCH !== HOST_ARCH;
 
 /** process.platform → 目录命名 token。 */
 export const BUILD_PLATFORM: string = (() => {
@@ -114,14 +37,14 @@ export const BUILD_PLATFORM: string = (() => {
 
 /**
  * 第三方仓库编译产物目录（唯一命名公式）：bin/{platform}/{arch}/{repo}-build
- * 不传 platform/arch 时取当前构建目标（TARGET_ARCH ?? HOST_ARCH）。
+ * 不传 platform/arch 时取当前宿主架构。
  */
 export function repoBuildDir(
   repo: string,
-  opts?: { platform?: string; arch?: TargetArch },
+  opts?: { platform?: string; arch?: BuildArch },
 ): string {
   const platform = opts?.platform ?? BUILD_PLATFORM;
-  const arch = opts?.arch ?? TARGET_ARCH ?? HOST_ARCH;
+  const arch = opts?.arch ?? HOST_ARCH;
   return path.join(ROOT, "bin", platform, arch, `${repo}-build`);
 }
 
@@ -193,15 +116,5 @@ export const TARGET_DIR = (() => {
   return dir;
 })();
 
-/**
- * 本次构建**实际产物**所在目录。传了 `--target` 时 cargo/tauri 会多套一层 triple
- * (`target/<triple>/{debug,release}/`),所有"找产物/搬产物"的路径都必须用它而不是
- * TARGET_DIR——否则跨编时会静默打包上一次 native 构建的残留(架构混合的 .app)。
- * 未传 `--target` 时等同 TARGET_DIR。
- */
-export const ARTIFACT_DIR = TARGET_TRIPLE
-  ? path.join(TARGET_DIR, TARGET_TRIPLE)
-  : TARGET_DIR;
-
-// 供子进程(如 src-crawler-plugins/package-plugin.ts)定位产物,无需重复解析 --target。
-process.env.KB_ARTIFACT_DIR = ARTIFACT_DIR;
+/** 本次原生构建的产物目录。 */
+export const ARTIFACT_DIR = TARGET_DIR;

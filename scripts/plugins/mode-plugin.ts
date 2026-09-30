@@ -2,13 +2,11 @@ import { BasePlugin } from "./base-plugin.ts";
 import {
   CRAWLER_PLUGINS_DIR,
   FFMPEG_INSTALL_DIR,
-  IS_CROSS_COMPILE,
   RELEASE_PLUGINS_DIR,
   repoBuildDir,
   requireUbuntu2204,
   ROOT,
   run,
-  TARGET_ARCH,
 } from "../utils.ts";
 import { Component } from "./component-plugin.ts";
 import chalk from "chalk";
@@ -249,7 +247,7 @@ export class ModePlugin extends BasePlugin {
         // `cargo tauri android {dev,build,check}`,由 cargo-mobile2 的 NDK Env 从 NDK 推导
         // 并注入(三者同源、随 minSdk/NDK 版本自动正确)。见 cocs/tauri/TAURI_CLI_FORK.md。
       } else {
-        // 桌面 FFmpeg 安装前缀按平台与目标架构取：
+        // 桌面 FFmpeg 安装前缀按平台与宿主架构取：
         // bin/{platform}/{arch}/FFmpeg-build/install。见 utils.FFMPEG_INSTALL_DIR。
         this.setEnv(
           "FFMPEG_PKG_CONFIG_PATH",
@@ -272,10 +270,8 @@ export class ModePlugin extends BasePlugin {
           !this.mode!.isWeb &&
           bs.context.component!.isMain
         ) {
-          // dev/check/test/build 共用同一份 cef-build(只有一套构建档位;check/test
-          // 本来也只需要任意有效 CEF 目录做编译,不打包)。
-          // macOS 跨编时 CEF runtime 也必须换成对应架构那一份:framework 的架构不匹配
-          // 会在链接期失败，因此默认目录直接使用当前目标架构。
+          // dev/check/test/build 共用宿主架构的 cef-build（只有一套构建档位；
+          // check/test 本来也只需要任意有效 CEF 目录做编译，不打包）。
           const cefPath = process.env.CEF_PATH || repoBuildDir("cef");
           // macOS 的 CEF runtime 是 framework(见 build-chromium.ts 导出结构),
           // Linux/Windows 是单个 libcef.so/dll。
@@ -296,11 +292,7 @@ export class ModePlugin extends BasePlugin {
                 "Set CEF_PATH to an exported cef-rs runtime directory" +
                 (OSPlugin.isLinux || OSPlugin.isMacOS ? ", or run:" : "."),
                 ...(OSPlugin.isLinux || OSPlugin.isMacOS
-                  ? [
-                    `deno task build:chromium${
-                      TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
-                    }`,
-                  ]
+                  ? ["deno task build:chromium"]
                   : []),
               ].join("\n"),
             );
@@ -330,16 +322,9 @@ export class ModePlugin extends BasePlugin {
             const sdkPath = execSync("xcrun --sdk macosx --show-sdk-path", {
               encoding: "utf8",
             }).trim();
-            // 跨编时还必须显式给 target,否则 bindgen 用宿主 arch 解析 FFmpeg 头文件,
-            // 与实际链接的另一架构静态库对不上(仿 android 分支的 --sysroot + -target 注入)。
-            const crossTarget = IS_CROSS_COMPILE && TARGET_ARCH
-              ? ` -target ${
-                TARGET_ARCH === "x86_64" ? "x86_64" : "arm64"
-              }-apple-darwin`
-              : "";
             this.setEnv(
               "BINDGEN_EXTRA_CLANG_ARGS",
-              `-isysroot ${sdkPath}${crossTarget}`,
+              `-isysroot ${sdkPath}`,
             );
           } catch {
             this.log(
@@ -347,14 +332,6 @@ export class ModePlugin extends BasePlugin {
                 "Warning: xcrun failed — BINDGEN_EXTRA_CLANG_ARGS not set. bindgen may fail to find system headers.",
               ),
             );
-          }
-          // 跨编时 rusty_ffmpeg 的 build.rs 用 pkg-config crate 静态探测,而它默认
-          // 拒绝交叉编译(host≠target)直接 panic。我们自编的 x64 .pc 用的是 x64 install
-          // 的绝对路径(无需 sysroot 前缀改写),放行即可直接消费(仿 android 分支)。
-          // 非跨编(--target 同宿主架构或不传)时 host==target,pkg-config crate 根本
-          // 不检查该 env,设了也无副作用——但仅在跨编时设,语义更清晰。
-          if (IS_CROSS_COMPILE) {
-            this.setEnv("PKG_CONFIG_ALLOW_CROSS", "1");
           }
         } // windows: libs dir
         else if (OSPlugin.isWindows) {

@@ -6,18 +6,10 @@
  * 用法：
  *   deno task build:chromium
  *   deno task build:chromium --clean
- *   deno task build:chromium --target x86_64   # 仅 macOS，跨编 Intel 版 CEF
  *
  * 只有一套构建档位（official build + PGO）。曾经的 dev/prod variant 已删除：
  * 两份产物意味着两份 GN 配置抢同一个 out/Release_GN_*，每次切换都退化成全量重编，
  * 而 dev 档位省下的编译时间抵不上这个代价——CEF 产物本就只需编一次。
- *
- * --target x86_64|arm64（仅 macOS）：在一台 Mac 上为另一架构编 CEF。默认宿主架构，
- * 即 Apple Silicon 上不传时行为与以往完全一致。两种架构共用 Chromium checkout，
- * 只用 out/Release_GN_{arm64,x64} 隔离 GN 输出；runtime 则分别导出到：
- *   bin/macos/arm64/cef-build
- *   bin/macos/x86_64/cef-build
- * 想彻底分开 checkout 可用 CEFBUILD 环境变量各指一处，代价是多一份数十 G 的源码树。
  *
  * 默认路径（路径公式全部来自 scripts/paths.ts）：
  *   构建根：third/chromium（CHROMIUM_DIR，不带 platform/arch 维度）
@@ -36,7 +28,7 @@
  * msys2_shell.cmd -mingw64/-msys -use-full-path，并确保构建根位于 NTFS 盘。
  *
  * macOS 关键前提：完整 Xcode/macOS SDK；构建空间必须是 APFS/HFS+ 等支持符号链接的
- * 文件系统，不能是 exFAT。Apple Silicon 上可经 --target x86_64 跨编 Intel 版。
+ * 文件系统，不能是 exFAT。CEF 只按当前宿主架构构建。
  * Xcode 27+ 自带的 SDK 超出 Chromium 支持范围，会自动回退到机器上的 26.x SDK（见
  * resolveMacSdkPath），MAC_SDK_PATH 可显式指定用哪一份。
  */
@@ -50,12 +42,10 @@ import {
   BUILD_PLATFORM,
   CHROMIUM_DIR,
   HOST_ARCH,
-  normalizeTargetArch,
   repoBuildDir,
   ROOT,
-  TARGET_ARCH,
   THIRD_DIR,
-  type TargetArch,
+  type BuildArch,
 } from "./paths.ts";
 import {
   CEF_FALLBACK_PAK,
@@ -66,7 +56,6 @@ import {
 
 interface ParsedArgs {
   clean: boolean;
-  targetArch?: TargetArch;
 }
 
 interface WindowsPathBridge {
@@ -78,7 +67,7 @@ interface WindowsPathBridge {
 
 interface BuildContext {
   clean: boolean;
-  targetArch?: TargetArch;
+  macArch?: BuildArch;
   archivePlatform: string;
   archFlag: "--x64-build" | "--arm64-build";
   gnOut: string;
@@ -123,45 +112,22 @@ function die(message: string, code = 1): never {
 
 function usageError(message?: string): never {
   if (message) console.error(message);
-  console.error(
-    "用法: deno task build:chromium [--clean] [--target x86_64|arm64]",
-  );
+  console.error("用法: deno task build:chromium [--clean]");
   process.exit(2);
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   let clean = false;
-  let rawTarget: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--clean") {
       clean = true;
-    } else if (arg === "--target") {
-      rawTarget = argv[++i];
-      if (!rawTarget) usageError("--target 缺少参数");
-    } else if (arg.startsWith("--target=")) {
-      rawTarget = arg.slice("--target=".length);
-      if (!rawTarget) usageError("--target 缺少参数");
     } else {
       usageError(`未知参数: ${arg}`);
     }
   }
 
-  let targetArch = TARGET_ARCH;
-  if (rawTarget) {
-    try {
-      targetArch = normalizeTargetArch(rawTarget);
-    } catch (error) {
-      die(error instanceof Error ? error.message : String(error));
-    }
-    if (BUILD_PLATFORM !== "macos") {
-      die(
-        `--target 仅在 macOS 上支持（跨编 x86_64 / arm64）；当前宿主: ${process.platform}`,
-      );
-    }
-  }
-
-  return { clean, targetArch };
+  return { clean };
 }
 
 function capture(
@@ -264,8 +230,8 @@ function createContext(parsed: ParsedArgs): BuildContext {
   const windows = BUILD_PLATFORM === "windows"
     ? createWindowsPathBridge()
     : undefined;
-  const targetArch = BUILD_PLATFORM === "macos"
-    ? parsed.targetArch ?? HOST_ARCH
+  const macArch = BUILD_PLATFORM === "macos"
+    ? HOST_ARCH
     : undefined;
 
   let archivePlatform: string;
@@ -286,9 +252,9 @@ function createContext(parsed: ParsedArgs): BuildContext {
     runtimeLib = "libcef.dll";
     pythonBin = envOr("PYTHON_BIN", "python");
   } else {
-    archivePlatform = targetArch === "arm64" ? "macosarm64" : "macosx64";
-    archFlag = targetArch === "arm64" ? "--arm64-build" : "--x64-build";
-    gnOut = targetArch === "arm64"
+    archivePlatform = macArch === "arm64" ? "macosarm64" : "macosx64";
+    archFlag = macArch === "arm64" ? "--arm64-build" : "--x64-build";
+    gnOut = macArch === "arm64"
       ? "Release_GN_arm64"
       : "Release_GN_x64";
     runtimeLib = "Chromium Embedded Framework.framework";
@@ -308,17 +274,18 @@ function createContext(parsed: ParsedArgs): BuildContext {
       resolveConfiguredPath(process.env.CEF_EXPORT_ROOT, windows),
       "cef-build",
     )
-    : repoBuildDir("cef", { arch: targetArch });
+    : repoBuildDir("cef", { arch: macArch });
   const env: NodeJS.ProcessEnv = { ...process.env };
 
   if (BUILD_PLATFORM === "macos") {
-    // automate 的 arch flag 只决定它读取哪个 out 目录，不会告诉 gn_args.py 生成哪个
-    // 架构。gn_args.py 默认只看宿主 machine，所以必须按目标注入 CEF_ENABLE_*，并用
-    // GN_OUT_CONFIGS 收敛到目标 Release 配置，否则跨编时 args.gn 根本不会生成。
-    const enableName = targetArch === "x86_64" ? "AMD64" : "ARM64";
+    // 显式收敛到宿主架构的 Release 配置，避免复用 checkout 时
+    // CEF_ENABLE_* / GN_OUT_CONFIGS 遗留值让 automate 选错 out 目录。
+    const enableName = macArch === "x86_64" ? "AMD64" : "ARM64";
+    const disableName = macArch === "x86_64" ? "ARM64" : "AMD64";
+    delete env[`CEF_ENABLE_${disableName}`];
     env[`CEF_ENABLE_${enableName}`] = "1";
     env.GN_OUT_CONFIGS = gnOut;
-    log(`目标架构: ${targetArch}（宿主 ${HOST_ARCH}）`);
+    log(`宿主架构: ${macArch}`);
     log(`GN 输出目录: out/${gnOut}   distrib 平台名: ${archivePlatform}`);
     log(
       `gn_args 放行: CEF_ENABLE_${enableName}=1   GN_OUT_CONFIGS=${gnOut}`,
@@ -327,7 +294,7 @@ function createContext(parsed: ParsedArgs): BuildContext {
 
   return {
     clean: parsed.clean,
-    targetArch,
+    macArch,
     archivePlatform,
     archFlag,
     gnOut,
@@ -892,15 +859,15 @@ function configureUpdate(ctx: BuildContext): void {
 }
 
 function ensurePgoProfile(ctx: BuildContext): void {
-  // 增量构建不会重跑负责 PGO profile 的 gclient hook；切到另一目标架构时，所需
-  // profile 往往从未下载。这里按 chrome/build/<target>.pgo.txt 幂等补齐；全量构建
-  // 在源码目录尚不存在时直接返回，仍交给 --with-pgo-profiles。
+  // 增量构建不会重跑负责 PGO profile 的 gclient hook，这里按
+  // chrome/build/<target>.pgo.txt 幂等补齐；全量构建在源码目录尚不存在时
+  // 直接返回，仍交给 --with-pgo-profiles。
   const sourceDir = chromiumSourceDir(ctx);
   if (!fs.existsSync(sourceDir)) return;
 
   let pgoTarget: string;
   if (BUILD_PLATFORM === "macos") {
-    pgoTarget = ctx.targetArch === "x86_64" ? "mac" : "mac-arm";
+    pgoTarget = ctx.macArch === "x86_64" ? "mac" : "mac-arm";
   } else if (BUILD_PLATFORM === "linux") {
     pgoTarget = "linux";
   } else {

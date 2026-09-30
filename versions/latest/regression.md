@@ -3,6 +3,17 @@
 本版回归 checklist。任何改动可预见的回归路径，要在上线前 check 完毕。
 按「操作」一步步点，对照「预期」，通过就把第一列勾上。
 
+## 移除 macOS x86_64 交叉编译
+
+自动化：Deno 类型检查覆盖构建脚本；参数扫描确认桌面构建入口不再声明 macOS `--target`。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Apple Silicon 原生构建 | macOS arm64 | 准备 arm64 FFmpeg / CEF 后运行 `deno task check -c kabegame --skip vue` | 只从 `bin/macos/arm64/` 取依赖，Cargo 产物位于宿主 `target/` | 不再注入 macOS target triple |
+| [x] | 拒绝旧的主构建参数 | macOS arm64 | 运行 `deno task b -c kabegame --target x86_64` | Commander 报未知选项，不进入构建 | 不执行实际 build |
+| [x] | 拒绝旧的 FFmpeg 参数 | macOS arm64 | 运行 `deno task build:ffmpeg --target x86_64` | 在配置前报 `--target` 只允许 `native \| android` | Android 交叉编译仍保留 |
+| [x] | 拒绝旧的 Chromium 参数 | macOS arm64 | 运行 `deno task build:chromium --target x86_64` | 立即报未知参数，不拉取或编译 Chromium | Intel Mac 仍可在 x86_64 宿主原生构建 |
+
 ## 图片标签（标签画册）
 
 自动化：`test-kabegame kabegame-core --lib labels|albums|metadata_migration|parse_download|dedup_labels`、`--test dsl_e2e`（标签搜索的且语义、完整路径、大小写、引号、空 token）与 `deno task test -c kabegame --skip cargo`（标签搜索序列化往返、不参与「任意」）。Linux CEF 已按下表勾选项实测；其余需人工回归。
@@ -35,7 +46,8 @@
 | [ ] | 迁移补标签 | 任一平台 | 旧版 anime-pictures 下载若干图后升级到 0.5.0 | 历史图片自动补上作品 / 角色 / 画师 / 参考 / 物体五类标签；迁移失败的行也盖版本、下次启动不重跑 | `provideLabels`；Linux 开发库 1830 行已实测补齐五类，失败盖版本未测 |
 | [ ] | konachan 按类型补标签 | 任一平台 | 用 1.2.9 下载过的库装上 konachan 1.3.0 后启动 | 历史图片补上 `konachan/{artist,copyright,character,circle,style,general}` 下的标签，key 为站点标签名（如 `futaba_akane_(pentagon)`），显示名为页面文字 | 1.2.9 之前下载、metadata 里没有标签的图片补不到 |
 | [ ] | Pixiv 标签与作者迁移 | 任一平台 | 用 1.2.11 下载含“有英文翻译”和“纯日语无翻译”标签的作品后升级到 pixiv 1.3.1 | 历史图片与新下载图片的作品标签数量都与 Pixiv metadata 中的非空 tag 数量一致，并额外带一个 `pixiv/artist/<作者 UID>`；作品标签显示名严格按默认日文名、英文翻译、key 回落，作者显示用户名 | 英文翻译优先生成可读 key；纯日语原始名确定性编码为合法 key，不能折叠为 `()`；作者 UID 不随改名变化 |
-| [ ] | Pixiv 数值桶 provider | 任一桌面平台 | 在画廊插件扩展中展开 Pixiv，依次进入 `likes`、`bookmarks`、`views`，再测试路径 `likes/100+` 与 `views/1000-5000` | 三个维度分别按 `likeCount`、`bookmarkCount`、`viewCount` 显示非空累计 `N+` 桶；区间端点包含在结果内，旧标签树不再出现 | 标签浏览统一走应用级 `pixiv/tag` / `pixiv/artist` 标签画册 |
+| [ ] | Pixiv 数值分段 provider | 任一桌面平台 | 在画廊插件扩展中展开 Pixiv，依次进入 `likes`、`bookmarks`、`views`，再测试路径 `likes/100+` 与 `views/1000-5000` | 三个维度分别按 `likeCount`、`bookmarkCount`、`viewCount` 显示非空累计 `N+` 分段；区间端点包含在结果内，旧标签树不再出现 | 标签浏览统一走应用级 `pixiv/tag` / `pixiv/artist` 标签画册 |
+| [ ] | PixAI 标签与作者迁移 | 任一平台 | 用 PixAI 0.5.0 下载含多个 tags 的作品后升级到 0.6.0 | 历史图片与新下载图片都挂到 `pixai/tag/<归一化 codeName>`，并额外挂到 `pixai/artist/<作者 ID>`；标签名优先显示站点显示名，作者名优先显示 displayName | codeName 无法派生合法 key 时回退 tack id；作者 ID 不随改名变化 |
 | [ ] | 插件 id 收紧 | 任一平台 | 安装 / 打包文件名含 `.` 的插件（如 `a.b.kgpg`） | 被拒绝并给出可读错误；现有插件与内建 `local-import`、`webpage` 不受影响 | |
 | [ ] | 拖入标签画册 | 桌面 | 选中标签画册，拖入图片 | 导入并挂上该标签 | 与普通画册同一 `local-import` 路径 |
 | [ ] | 壁纸轮播使用标签画册 | 桌面 | 把标签画册设为轮播 | 按直接成员轮播 | |
@@ -533,19 +545,20 @@ macOS 只有一种窗口系统，不需要像 Linux 那样双会话各跑一遍�
 | [x] | 移除匿名网站候选 | Windows / macOS / Linux | 输入一个不匹配插件或历史记录的新网址并等待候选刷新 | 列表中不出现“直接打开”的通用匿名网站候选 | Linux CEF 实测候选为空；仍可用回车或右侧按钮打开当前输入 |
 | [x] | 右侧按钮打开当前输入 | Windows / macOS / Linux | 输入新网址后点击输入框右侧箭头按钮 | 始终打开输入框当前的完整网址 | Linux CEF 实测；不受候选列表状态影响 |
 
-## 插件扩展维度（danbooru / konachan / anime-pictures）
+## 插件扩展维度（danbooru / konachan / anime-pictures / PixAI）
 
-三个插件去掉自带的标签分类 provider（由应用级标签取代），改为站点数值 / 分类维度。SQL 已在 dev 库上模拟 `${composed}` 跑通；`kabegame-cli pathql query` 独立模式不注册插件 provider，无法用它校验，以下需在应用里回归。
+四个插件去掉自带的标签分类 provider（由应用级标签取代），改为站点数值 / 分类维度。SQL 已在 dev 库上模拟 `${composed}` 跑通；`kabegame-cli pathql query` 独立模式不注册插件 provider，无法用它校验，以下需在应用里回归。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | 旧标签树消失 | 画廊筛选树 → 插件 | 展开 danbooru / konachan / anime-pictures | 不再出现标签分类 → 标签的两级目录；标签改在「标签」分区浏览 | |
+| [ ] | 旧标签树消失 | 画廊筛选树 → 插件 | 展开 danbooru / konachan / anime-pictures / PixAI | 不再出现标签分类 → 标签的两级目录；标签改在「标签」分区浏览 | |
 | [ ] | danbooru 分数 / 收藏档位 | 画廊筛选树 → danbooru | 展开 `score`、`favorites`，逐个选中档位 | 只列非空档（`5+` … `1000+`）；`N+` 为 ≥ N 的累计集合，数量随档位单调不增 | `score` / `favorites` 目录本身不可选 |
 | [ ] | 区间路径段 | 任一路径 / MCP | 访问 `…/extend/score/0-5`、`…/extend/score/10+`、`…/extend/score/-0`、`…/extend/favorites/-5-5` | 分别为闭区间 [0,5]、≥10、≤0、[-5,5] | 负数分数只能用区间写法表达下界 |
 | [ ] | konachan 分数与分级 | 画廊筛选树 → konachan | 展开 `score`、`rating` 并选中 | 分数档同上；rating 按 Safe / Questionable / Explicit 顺序列出非空项 | konachan.net 只有 Safe |
 | [ ] | anime-pictures 星数与主色 | 画廊筛选树 → anime-pictures | 展开 `stars`、`color` 并选中 | 星数档同上；color 按图片数降序列出站点颜色名（含 `indian red` 这类带空格的名字）且可选中 | 早期无 details 颜色项的图不出现在 color 下 |
+| [ ] | PixAI 喜欢数与评论数 | 画廊筛选树 → PixAI | 展开 `likes`、`comments` 并选中档位，再访问 `likes/100+`、`comments/1-10` | 两个维度按 `v2.likedCount`、`v2.commentCount` 只列非空累计 `N+` 分段；区间端点包含在结果内，旧 tag provider 树不再出现 | tags 与作者改在应用级 `pixai/tag`、`pixai/artist` 标签画册浏览 |
 | [ ] | danbooru 详情侧栏 | 任一 danbooru 图详情 | 打开图片详情 | 不再显示 Prompt 文本框与复制按钮；标签、统计、画师评论、快照提示正常 | |
-| [ ] | VD 插件扩展目录 | Windows / macOS / Linux 虚拟盘 | 打开 插件 → 三个插件 → Extend | 目录与画廊树一致；`5+` 等目录名可正常打开 | |
+| [ ] | VD 插件扩展目录 | Windows / macOS / Linux 虚拟盘 | 打开 插件 → 四个插件 → Extend | 目录与画廊树一致；`5+` 等目录名可正常打开 | |
 
 ## 前端统一格式化（Prettier）
 

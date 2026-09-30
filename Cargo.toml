@@ -100,8 +100,8 @@ windows-sys = {version = "0.52", features = [
 # 全部 feature 均为纯 Rust:deflate-flate2-zlib-rs→zlib-rs、bzip2→libbz2-rs-sys(≥0.6)、
 # lzma/xz→lzma-rust2、ppmd→ppmd-rust、aes-crypto→RustCrypto。
 # **永远不要开 zstd**(zip 8 默认开着,必须 default-features = false 关掉):它走 zstd-sys(C),
-# 会被 scripts/plugins/mode-plugin.ts 全局的 PKG_CONFIG_ALLOW_CROSS=1 带去命中宿主 .pc,
-# Android/macOS 跨编在 ld 期炸。同理不要用 deflate-flate2-zlib / -zlib-ng 这两个 deflate
+# 会被 Android 模式下的 PKG_CONFIG_ALLOW_CROSS=1 带去命中宿主 .pc,
+# Android 交叉编译会在 ld 期炸。同理不要用 deflate-flate2-zlib / -zlib-ng 这两个 deflate
 # 后端变体(链系统 zlib)。
 zip = { version = "8", default-features = false, features = [
   "deflate", "deflate-flate2-zlib-rs", "deflate64",

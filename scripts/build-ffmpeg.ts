@@ -8,22 +8,21 @@
  *   1. third/x264 → bin/{platform}/{arch}/x264-build/install/
  *   2. 以前者为 PKG_CONFIG_PATH 前缀编译 third/FFmpeg
  *      → bin/{platform}/{arch}/FFmpeg-build/install/
- *   3. Android 固定用 platform=android、arch=arm64；macOS 显式目标按 arch 隔离。
+ *   3. Android 固定用 platform=android、arch=arm64；桌面端按宿主平台与架构隔离。
  * Unix 安装静态库；Windows 在 MSYS2/MinGW 中安装 libav* DLL，再用 gendef + MSVC
  * lib.exe 生成导入库。x264 静态嵌入 libavcodec，不依赖系统 libx264。
  *
  * 调用：
  *   deno task build:ffmpeg
- *   deno task build:ffmpeg --target x86_64
  *   deno task build:ffmpeg --target android
  *   deno task build:ffmpeg --skip-x264 [...透传给两个 configure 的参数]
  *
  * 参数：
  *   --skip-x264  复用对应落点已有的 x264.pc，只重编 FFmpeg。
- *   --target      native | android | x86_64 | arm64（含 paths.ts 支持的别名/完整 triple）。
+ *   --target      native | android。
  *   其余裸参数   同时追加给 x264 与 FFmpeg configure。
  *
- * 依赖：两个源码 submodule；macOS x86_64 目标需要 nasm；Windows 需要 MSYS2 MinGW
+ * 依赖：两个源码 submodule；Windows 需要 MSYS2 MinGW
  * toolchain、gendef、make（nasm 可选），以及 x64 Native Tools 环境里的 lib.exe。Windows 可在
  * MSYS2 shell 中直接执行 `deno task build:ffmpeg`，TS 入口会再次桥接到 bash -lc。
  * Android 需要 host pkg-config 和 NDK；定位顺序为 NDK_HOME → ANDROID_NDK_HOME →
@@ -31,7 +30,7 @@
  *
  * 关键坑：Linux native 发布产物只允许在 Ubuntu 22.04 构建，以守住 glibc 2.35 地板；
  * 同时关闭 asm，将 NATIVE_ALIGN 限为 16，并把生成的 HAVE_THP 从 1 改为 0，避免 CEF
- * PartitionAlloc 无法满足大对齐请求。macOS 目标必须使用 Xcode 的 `cc` shim，避免 PATH 中
+ * PartitionAlloc 无法满足大对齐请求。macOS 必须使用 Xcode 的 `cc` shim，避免 PATH 中
  * Android NDK 的 clang/ld 劫持后报 `ld: library 'System' not found`。Windows autotools
  * 必须留在 MSYS2 bash 内运行，原生 lib.exe 则只接收 Windows 路径。
  */
@@ -42,20 +41,15 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   BUILD_PLATFORM,
-  HOST_ARCH,
-  normalizeTargetArch,
   repoBuildDir,
   requireUbuntu2204,
   ROOT,
-  TARGET_ARCH,
   THIRD_DIR,
-  type TargetArch,
 } from "./paths.ts";
 
 type BuildTarget =
   | { kind: "native" }
-  | { kind: "android" }
-  | { kind: "macos"; arch: TargetArch };
+  | { kind: "android" };
 
 interface ParsedArgs {
   skipX264: boolean;
@@ -77,8 +71,6 @@ interface BuildContext {
   env: NodeJS.ProcessEnv;
   jobs: number;
   makeCommand: string;
-  macCross: boolean;
-  macHostTriple?: string;
   android?: AndroidToolchain;
   msys?: MsysBridge;
 }
@@ -125,16 +117,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     return { skipX264, target: { kind: "android" }, configureArgs };
   }
 
-  let arch: TargetArch;
-  try {
-    arch = TARGET_ARCH ?? normalizeTargetArch(rawTarget);
-  } catch (error) {
-    die(error instanceof Error ? error.message : String(error));
-  }
-  if (BUILD_PLATFORM !== "macos") {
-    die(`--target ${arch} 仅在 macOS 宿主上支持（跨编 x86_64 / arm64）`);
-  }
-  return { skipX264, target: { kind: "macos", arch }, configureArgs };
+  die(`未知的 --target: '${rawTarget}'（允许 native | android）`);
 }
 
 function run(
@@ -373,9 +356,6 @@ function createContext(parsed: ParsedArgs): BuildContext {
   if (parsed.target.kind === "android") {
     buildDir = repoBuildDir("FFmpeg", { platform: "android", arch: "arm64" });
     x264BuildDir = repoBuildDir("x264", { platform: "android", arch: "arm64" });
-  } else if (parsed.target.kind === "macos") {
-    buildDir = repoBuildDir("FFmpeg", { arch: parsed.target.arch });
-    x264BuildDir = repoBuildDir("x264", { arch: parsed.target.arch });
   } else {
     buildDir = repoBuildDir("FFmpeg");
     x264BuildDir = repoBuildDir("x264");
@@ -386,19 +366,10 @@ function createContext(parsed: ParsedArgs): BuildContext {
   const android = parsed.target.kind === "android"
     ? configureAndroid(env)
     : undefined;
-  const macArch = parsed.target.kind === "macos"
-    ? parsed.target.arch
-    : BUILD_PLATFORM === "macos" ? HOST_ARCH : undefined;
-  const macCross = parsed.target.kind === "macos" && macArch !== HOST_ARCH;
-
   if (BUILD_PLATFORM === "macos" && parsed.target.kind !== "android") {
     // 必须使用 Xcode 的 cc shim；裸 clang 可能被 PATH 中的 Android NDK 劫持。
     env.CC = "cc";
-    if (macCross) {
-      console.log(`=== macOS 跨编: 目标 ${macArch} / 宿主 ${HOST_ARCH} ===`);
-    } else {
-      console.log(`=== macOS 原生构建: ${macArch} ===`);
-    }
+    console.log(`=== macOS 原生构建: ${process.arch} ===`);
   }
 
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -429,10 +400,6 @@ function createContext(parsed: ParsedArgs): BuildContext {
     env,
     jobs,
     makeCommand,
-    macCross,
-    macHostTriple: macArch
-      ? `${macArch === "arm64" ? "aarch64" : "x86_64"}-apple-darwin`
-      : undefined,
     android,
     msys,
   };
@@ -468,19 +435,6 @@ function buildX264(ctx: BuildContext): void {
     return;
   }
 
-  if (
-    ctx.target.kind === "macos" && ctx.target.arch === "x86_64"
-  ) {
-    const nasm = spawnSync("nasm", ["-v"], {
-      env: ctx.env,
-      shell: false,
-      stdio: "inherit",
-    });
-    if (nasm.error || nasm.status !== 0) {
-      die("x86_64 目标需要 nasm 汇编器（x264 缺它会直接失败）。请先安装: brew install nasm");
-    }
-  }
-
   console.log("=== 构建 x264 ===");
   fs.mkdirSync(ctx.x264BuildDir, { recursive: true });
   const flags = [
@@ -495,13 +449,6 @@ function buildX264(ctx: BuildContext): void {
       `--host=${ctx.android!.triple}`,
       `--sysroot=${ctx.android!.toolchainDir}/sysroot`,
     );
-  } else if (ctx.target.kind === "macos") {
-    flags.push(
-      "--enable-pic",
-      `--extra-cflags=-arch ${ctx.target.arch}`,
-      `--extra-ldflags=-arch ${ctx.target.arch}`,
-    );
-    if (ctx.macCross) flags.push(`--host=${ctx.macHostTriple}`);
   } else if (BUILD_PLATFORM === "linux") {
     flags.push(
       "--enable-pic",
@@ -676,17 +623,6 @@ function buildFfmpeg(ctx: BuildContext): void {
       "--pkg-config=pkg-config",
       "--pkg-config-flags=--static",
     );
-  } else if (ctx.target.kind === "macos") {
-    crossFlags.push(
-      `--arch=${ctx.target.arch}`,
-      "--target-os=darwin",
-      `--cc=cc -arch ${ctx.target.arch}`,
-      `--extra-cflags=-arch ${ctx.target.arch}`,
-      `--extra-ldflags=-arch ${ctx.target.arch}`,
-      "--host-cc=cc",
-      "--pkg-config-flags=--static",
-    );
-    if (ctx.macCross) crossFlags.push("--enable-cross-compile");
   }
 
   const linuxNative = ctx.target.kind === "native" && BUILD_PLATFORM === "linux";

@@ -33,7 +33,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 **第三方补丁序列**——Kabegame 对 vendored `third/` 仓库的改动应放在对应的 `third-patches/<dir>/NNNN-*.patch` 文件中。对于由补丁管理器管理的仓库，`deno task patch <dir>` 会将子模块重置到干净的锁定基线，然后按文件名排序应用完整补丁序列；`deno task patch <dir> -r` 会执行重置，但不应用补丁。因为每次操作都从基线开始，所以可以修改、删除或重新编号补丁文件。`--check` 会在一次性 worktree 中预检按顺序排列的补丁序列。重置会丢弃子模块中未提交的工作，因此请先将本地 `third/` 开发内容提交到分支。`rusty_v8` 是唯一的手动例外（它是原地复用的大型构建树，补丁由 `scripts/build-v8.ts` 应用），详见 `.cursor/rules/third-patches-workflow.mdc`。`cef` 遵循标准流程——`automate-git.py` 只认可提交，但 `scripts/build-chromium.ts` 会自动将应用补丁后的 worktree 暂存到 `kabegame-build` 分支，因此 `third/cef` 的 gitlink 始终指向官方上游锁定点。
 
-**脚本仓库路径**——`scripts/paths.ts` 是 `ROOT`、`THIRD_DIR`、目标架构及 `bin/{platform}/{arch}/{repo}-build` 这些内容的轻依赖唯一事实来源；`scripts/utils.ts` 重新导出这些符号以保持现有导入界面，构建插件不得自行重新计算。
+**脚本仓库路径**——`scripts/paths.ts` 是 `ROOT`、`THIRD_DIR`、宿主架构及 `bin/{platform}/{arch}/{repo}-build` 这些内容的轻依赖唯一事实来源；`scripts/utils.ts` 重新导出这些符号以保持现有导入界面，构建插件不得自行重新计算。
 
 **文件类型的唯一事实来源：**
 - `kabegame_core::media::image_type::MEDIA_FORMATS` 是唯一的格式表，包含格式键、标准 MIME 值、扩展名、别名和支持标志。`images.type` 存储 `image/jpg` 和 `video/mov` 等格式键；仅在需要标准 MIME 的边界（HTTP Content-Type / Android MediaStore）使用 `mime_from_format`。
@@ -103,12 +103,6 @@ deno task b -c kabegame                    # 仅构建主应用
 deno task b -c kabegame --skip cargo       # 仅构建 Vue
 deno task b -c kabegame --skip vue         # 仅构建 Cargo
 deno task b --release                  # 将产物复制到 release/
-deno task b -c kabegame --target x86_64    # 仅限 macOS：为 Intel 交叉编译（也适用于 check/start）。
-                                       # 产物输出到 target/<triple>/；FFmpeg/CEF 依赖按架构从
-                                       # bin/macos/x86_64/{FFmpeg-build,cef-build} 中解析。
-                                       # 请先准备依赖：deno task build:ffmpeg --target x86_64 和
-                                       # deno task build:chromium --target x86_64。
-                                       # 参见 cocs/build/MACOS_CROSS_BUILD.md。
 deno task b -c kabegame --mode android     # 构建 Android APK/AAB（除非传入 --target/-t，
                                        # 否则 mode-plugin 会注入 --target aarch64；gen/android RustPlugin.kt 仅有 arm64 flavor）
 deno task build:web                    # Web 发布版（demo.kabegame.com）：宿主机负责构建全部 JS（Vite 的 dist-kabegame-web

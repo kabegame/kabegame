@@ -13,7 +13,6 @@ import {
   RESOURCES_DIR,
   ROOT,
   stageResourceFile,
-  TARGET_ARCH,
 } from "../utils.ts";
 import { CEF_FALLBACK_PAK, CEF_LOCALE_PAKS } from "../cef-locales.ts";
 import chalk from "chalk";
@@ -218,9 +217,7 @@ export class OSPlugin extends BasePlugin {
         throw new Error(
           [
             `❌ 未找到 FFmpeg 构建产物: ${path.relative(ROOT, archive)}`,
-            `请先运行: deno task build:ffmpeg${
-              TARGET_ARCH ? ` --target ${TARGET_ARCH}` : ""
-            }`,
+            "请先运行: deno task build:ffmpeg",
             `(脚本 scripts/build-ffmpeg.ts 会把 libav*.a 编到上述 install/lib/;` +
             `各平台与架构的产物独立落在 bin/{platform}/{arch}/FFmpeg-build/)`,
           ].join("\n"),

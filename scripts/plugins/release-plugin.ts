@@ -9,7 +9,7 @@ import { BuildSystem } from "../build-system.ts";
 import { Component } from "./component-plugin.ts";
 import { OSPlugin } from "./os-plugin.ts";
 import { ensureDir, platformExeExt, readCargoTomlVersion, run } from "../utils.ts";
-import { ARTIFACT_DIR, RELEASE_DIR, ROOT, TARGET_ARCH } from "../utils.ts";
+import { ARTIFACT_DIR, RELEASE_DIR, ROOT } from "../utils.ts";
 
 function walkFiles(dir: string): string[] {
   return glob.sync("**/*", {
@@ -31,10 +31,7 @@ function archForDeb(): string {
   return process.arch;
 }
 
-// macOS 可跨编(--target x86_64|arm64),资产名必须跟**目标**架构而非宿主架构走,
-// 否则在 Apple Silicon 上编出的 Intel dmg 会被命名成 _aarch64。
 function archForMacOS(): string {
-  if (TARGET_ARCH) return TARGET_ARCH === "x86_64" ? "x64" : "aarch64";
   if (process.arch === "x64") return "x64";
   if (process.arch === "arm64") return "aarch64";
   return process.arch;

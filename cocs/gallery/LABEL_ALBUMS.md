@@ -80,6 +80,8 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 `src-crawler-plugins/plugins/pixiv` 把作品 tag 映射到 `pixiv/tag`：英文翻译优先派生 ASCII key，无翻译时
 把默认原始名确定性编码为合法 key；Pixiv 默认原始名（通常为日语）作为显示名。作者映射到
 `pixiv/artist`，以 UID 作稳定 key、用户名作显示名。
+`src-crawler-plugins/plugins/pixai` 把作品 tack 映射到 `pixai/tag`（优先用 codeName 归一化派生 key，
+无法派生时回退到 tack id），作者映射到 `pixai/artist`，以作者 id 作稳定 key、显示名或用户名作名称。
 
 ## 搜索
 

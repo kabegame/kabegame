@@ -208,7 +208,7 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
 
 ## 涉及文件
 
-- `scripts/paths.ts` —— 路径命名公式、目标架构解析、`TARGET_DIR`、构建属地守卫（零 npm 依赖）。
+- `scripts/paths.ts` —— 路径命名公式、宿主架构解析、`TARGET_DIR`、构建属地守卫（零 npm 依赖）。
 - `scripts/utils.ts` —— re-export paths.ts + `FFMPEG_INSTALL_DIR` 等派生常量、`stageResourceBinary`。
 - `scripts/build-system.ts` —— macOS run 的 exe 路径。
 - `scripts/plugins/mode-plugin.ts` —— `CEF_PATH`/`FFMPEG_PKG_CONFIG_PATH` 注入、release 守卫调用。
