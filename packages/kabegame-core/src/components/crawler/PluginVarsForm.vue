@@ -9,7 +9,11 @@
         :required="isRequired(varDef)"
         :rules="getValidationRules(varDef, varDisplayName(varDef))"
         :style="{ gridColumn: `span ${spanOf(varDef)}` }"
-        :class="{ 'plugin-vars-item--checkbox': varDef.type === 'checkbox' }"
+        class="transition-opacity duration-200 ease-out"
+        :class="{
+          'plugin-vars-item--checkbox': varDef.type === 'checkbox',
+          'opacity-40': isIgnoredByWhen(varDef),
+        }"
       >
         <!-- checkbox 型：全选与计数挤占字段高度，收进 label 行右侧 -->
         <template v-if="varDef.type === 'checkbox'" #label>
@@ -63,7 +67,7 @@
 import { computed } from "vue";
 import PluginVar from "../plugin/var-fields/PluginVar.vue";
 import { usePluginConfigI18n, useI18n } from "@kabegame/i18n";
-import { filterVarOptionsByWhen } from "../../utils/pluginVarWhen";
+import { filterVarOptionsByWhen, matchesPluginVarWhen } from "../../utils/pluginVarWhen";
 import { isRequired, getValidationRules, type PluginVarDef } from "../../utils/pluginVarForm";
 import { useUiStore } from "../../stores/ui";
 
@@ -72,9 +76,12 @@ const props = withDefaults(
     pluginVars: PluginVarDef[];
     modelValue: Record<string, any>;
     allowUnsetAll?: boolean;
+    /** 默认配置等总览场景可忽略选项级 `when`，展示插件声明的全部候选值。 */
+    ignoreWhen?: boolean;
   }>(),
   {
     allowUnsetAll: false,
+    ignoreWhen: false,
   },
 );
 
@@ -102,6 +109,11 @@ function spanOf(v: PluginVarDef): number {
 
 /** 底部说明区只列出「当前可见且有描述」的字段，顺序与表单一致 */
 const describedVars = computed(() => props.pluginVars.filter((v) => varDescripts(v)));
+
+/** 总览模式下仍展示不满足 `when` 的字段，并用较低不透明度标明其当前处于非激活条件。 */
+function isIgnoredByWhen(varDef: PluginVarDef): boolean {
+  return props.ignoreWhen && !matchesPluginVarWhen(varDef.when, props.modelValue ?? {});
+}
 
 /* ---- checkbox 型的全选/计数（渲染在 label 行，逻辑归表单层） ---- */
 
@@ -134,7 +146,9 @@ function toggleAllCheckbox(varDef: PluginVarDef) {
 }
 
 const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
-  const filtered = filterVarOptionsByWhen(varDef.options, props.modelValue ?? {});
+  const filtered = props.ignoreWhen
+    ? (varDef.options ?? [])
+    : filterVarOptionsByWhen(varDef.options, props.modelValue ?? {});
   return filtered.map((opt) =>
     typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
   );

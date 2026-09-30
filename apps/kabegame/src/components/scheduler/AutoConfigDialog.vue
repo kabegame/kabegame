@@ -21,7 +21,7 @@
       :config="viewConfig"
     />
 
-    <el-form v-else ref="formRef" label-position="top" class="acd-edit-form">
+    <el-form v-else ref="formRef" :model="form" label-position="top" class="acd-edit-form">
       <el-divider content-position="left">{{ t("autoConfig.basicInfo") }}</el-divider>
       <el-form-item :label="t('common.name')" required>
         <el-input v-model="name" maxlength="80" />

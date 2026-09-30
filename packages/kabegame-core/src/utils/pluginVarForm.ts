@@ -251,10 +251,42 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
 
 /** 获取验证规则。displayName 为已按 locale 解析好的展示名（由调用方通过 i18n composable 解析后传入） */
 export function getValidationRules(varDef: PluginVarDef, displayName: string) {
+  const label = displayName;
+  const required = isRequired(varDef);
+
+  if (varDef.type === "int") {
+    return [
+      {
+        required,
+        message: `请输入${label}`,
+        trigger: "change",
+        validator: (_rule: any, value: any, callback: any) => {
+          if (value === undefined || value === null || value === "") {
+            if (required) callback(new Error(`请输入${label}`));
+            else callback();
+            return;
+          }
+          if (typeof value !== "number" || !Number.isInteger(value)) {
+            callback(new Error(`${label}必须是整数`));
+            return;
+          }
+          if (varDef.min !== undefined && value < varDef.min) {
+            callback(new Error(`${label}不能小于 ${varDef.min}`));
+            return;
+          }
+          if (varDef.max !== undefined && value > varDef.max) {
+            callback(new Error(`${label}不能大于 ${varDef.max}`));
+            return;
+          }
+          callback();
+        },
+      },
+    ];
+  }
+
   if (!isRequired(varDef)) {
     return [];
   }
-  const label = displayName;
 
   if (varDef.type === "list" || varDef.type === "checkbox") {
     return [
@@ -284,7 +316,7 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
             callback(new Error(`请输入${label}`));
             return;
           }
-          if ((varDef.type === "int" || varDef.type === "float") && typeof value === "number") {
+          if (varDef.type === "float" && typeof value === "number") {
             const varDefWithMinMax = varDef as PluginVarDef;
             if (varDefWithMinMax.min !== undefined && value < varDefWithMinMax.min) {
               callback(new Error(`${label}不能小于 ${varDefWithMinMax.min}`));

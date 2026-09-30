@@ -1,6 +1,14 @@
 <template>
+  <KbIntegerInput
+    v-if="type === 'int'"
+    :model-value="modelValue"
+    :min="min"
+    :max="max"
+    :placeholder="placeholder"
+    @update:model-value="$emit('update:modelValue', $event)"
+  />
   <AndroidPickerNumber
-    v-if="isCompact"
+    v-else-if="isCompact"
     :model-value="numberValue"
     :min="effectiveMin"
     :max="effectiveMax"
@@ -9,7 +17,7 @@
     :placeholder="placeholder"
     @update:model-value="$emit('update:modelValue', $event)"
   />
-  <!-- 上下限都给了：滑杆直观展示范围内的位置，右侧数字框可直接输入 -->
+  <!-- float 上下限都给了：滑杆直观展示范围内的位置，右侧数字框可直接输入 -->
   <div v-else-if="hasFiniteMin && hasFiniteMax" class="kb-number">
     <div class="kb-number__slider-col">
       <el-slider
@@ -35,7 +43,7 @@
       @keyup.enter="onInputCommit"
     />
   </div>
-  <!-- 缺上限或下限：没法画一条有尽头的滑杆，用步进器 -->
+  <!-- float 缺上限或下限：没法画一条有尽头的滑杆，用步进器 -->
   <KbStepper
     v-else
     :model-value="numberValue ?? effectiveMin"
@@ -51,6 +59,7 @@
 import { computed, ref, watch } from "vue";
 import { useUiStore } from "../../../stores/ui";
 import AndroidPickerNumber from "../../AndroidPickerNumber.vue";
+import KbIntegerInput from "./KbIntegerInput.vue";
 import KbStepper from "./KbStepper.vue";
 
 const isCompact = computed(() => useUiStore().isCompact);
@@ -64,7 +73,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  "update:modelValue": [value: number | undefined];
+  "update:modelValue": [value: number | string | undefined];
 }>();
 
 const numberValue = computed<number | undefined>(() => {

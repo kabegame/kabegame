@@ -13,6 +13,8 @@
         v-if="variant === 'sidebar'"
         class="global-tools-trigger global-tools-trigger--sidebar"
         :class="{ 'is-active': modal.isOpen.value, 'is-collapsed': collapsed }"
+        :title="collapsed ? t('header.toolbox') : undefined"
+        :aria-label="collapsed ? t('header.toolbox') : undefined"
         @click="modal.toggle()"
       >
         <el-icon class="trigger-icon"><Tools /></el-icon>

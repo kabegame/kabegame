@@ -10,10 +10,10 @@
     />
 
     <div v-if="selectedPluginId" v-loading="loading" class="plugin-defaults-editor">
-      <el-form label-position="top" class="plugin-defaults-form">
+      <el-form ref="formRef" :model="form" label-position="top" class="plugin-defaults-form">
         <template v-if="pluginVars.length > 0">
           <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-          <PluginVarsForm v-model="form.vars" :plugin-vars="visiblePluginVars" allow-unset-all />
+          <PluginVarsForm v-model="form.vars" :plugin-vars="pluginVars" allow-unset-all ignore-when />
         </template>
 
         <div class="plugin-defaults-actions">
@@ -42,7 +42,6 @@ import { invoke } from "@/api/rpc";
 import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { usePluginConfig } from "@/composables/usePluginConfig";
-import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@kabegame/core/utils/pluginVarWhen";
 import {
   expandVarsForBackend,
   normalizeVarsForUI,
@@ -55,7 +54,7 @@ import PluginPickerField from "@/components/PluginPickerField.vue";
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 
-const { form, pluginVars, loadPluginVars, loadPluginVarDefs } = usePluginConfig();
+const { form, formRef, pluginVars, loadPluginVars, loadPluginVarDefs } = usePluginConfig();
 
 const selectedPluginId = ref("");
 /** 面板不显示的两个字段：保存/重置时原样回写，不能用面板输入清掉用户已有的默认值 */
@@ -67,10 +66,6 @@ const resetting = ref(false);
 const loadingPlugins = ref(true);
 
 const plugins = computed(() => pluginStore.plugins);
-
-const visiblePluginVars = computed(() =>
-  pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
-);
 
 async function loadEditorForPlugin(pluginId: string) {
   if (!pluginId) return;
@@ -91,6 +86,12 @@ async function loadEditorForPlugin(pluginId: string) {
 
 async function handleSave() {
   if (!selectedPluginId.value) return;
+  try {
+    await formRef.value?.validate();
+  } catch {
+    ElMessage.warning(t("plugins.fillRequired"));
+    return;
+  }
   saving.value = true;
   try {
     const userConfig = expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[]);
@@ -160,14 +161,6 @@ watch(selectedPluginId, (id) => {
     keptOutputDir.value = "";
   }
 });
-
-watch(
-  () => form.value.vars,
-  () => {
-    coerceOptionsVarsToVisibleChoices(pluginVars.value, form.value.vars);
-  },
-  { deep: true },
-);
 
 onMounted(async () => {
   try {

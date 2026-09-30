@@ -12,6 +12,8 @@
       <button
         type="button"
         class="relative appearance-none border border-solid rounded-xl cursor-pointer overflow-hidden transition-colors"
+        :title="collapsed ? t('header.busyBackground', { count }) : undefined"
+        :aria-label="collapsed ? t('header.busyBackground', { count }) : undefined"
         :class="[
           collapsed ? 'h-10 w-10 mx-auto grid place-items-center p-0' : 'w-full flex flex-col gap-2 px-3 py-2.5',
           hasUnseenFailure

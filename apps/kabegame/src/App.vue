@@ -70,54 +70,44 @@
       />
       <!-- 非紧凑布局：侧边栏 + 主内容 -->
       <template v-if="!uiStore.isCompact">
-        <el-aside
-          class="app-sidebar"
-          :class="{ 'sidebar-collapsed': isCollapsed }"
-          :width="isCollapsed ? '64px' : '170px'"
-        >
+        <el-aside class="app-sidebar sidebar-collapsed" width="64px">
           <div class="sidebar-header">
             <span class="app-logo-wrap">
-              <img
-                :src="appLogoUrl"
-                alt="Logo"
-                class="app-logo logo-clickable"
-                @click="toggleCollapse"
-                draggable="false"
-              />
-              <UpdateButton v-if="isCollapsed" :collapsed="true" />
+              <img :src="appLogoUrl" alt="Logo" class="app-logo" title="Kabegame" draggable="false" />
             </span>
-            <div v-if="!isCollapsed" class="sidebar-title-section">
-              <h1>Kabegame</h1>
-              <UpdateButton :collapsed="false" />
-            </div>
           </div>
           <div class="sidebar-menu-wrapper">
-            <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-              <el-menu-item :index="galleryMenuRoute">
+            <el-menu :default-active="activeRoute" router class="sidebar-menu" collapse>
+              <el-menu-item :index="galleryMenuRoute" :title="$t('route.gallery')" :aria-label="$t('route.gallery')">
                 <el-icon>
                   <Picture />
                 </el-icon>
                 <span>{{ $t("route.gallery") }}</span>
               </el-menu-item>
-              <el-menu-item index="/albums">
+              <el-menu-item index="/albums" :title="$t('route.albums')" :aria-label="$t('route.albums')">
                 <el-icon>
                   <Collection />
                 </el-icon>
                 <span>{{ $t("route.albums") }}</span>
               </el-menu-item>
-              <el-menu-item index="/plugins">
+              <el-menu-item index="/plugins" :title="$t('route.pluginBrowser')" :aria-label="$t('route.pluginBrowser')">
                 <el-icon>
                   <FilterPlugin />
                 </el-icon>
                 <span>{{ $t("route.pluginBrowser") }}</span>
               </el-menu-item>
-              <el-menu-item index="/surf" v-if="!IS_WEB">
+              <el-menu-item v-if="!IS_WEB" index="/surf" :title="$t('route.surf')" :aria-label="$t('route.surf')">
                 <el-icon>
                   <Compass />
                 </el-icon>
                 <span>{{ $t("route.surf") }}</span>
               </el-menu-item>
-              <el-menu-item index="/auto-configs" v-if="!uiStore.isCompact">
+              <el-menu-item
+                v-if="!uiStore.isCompact"
+                index="/auto-configs"
+                :title="$t('route.autoConfigs')"
+                :aria-label="$t('route.autoConfigs')"
+              >
                 <el-icon>
                   <AlarmClock />
                 </el-icon>
@@ -126,20 +116,26 @@
             </el-menu>
           </div>
           <!-- kamechan 开着时它就是工具箱入口（方案 2a），底部只留空白给立绘；隐藏后才回落到这里 -->
-          <div v-if="!kamechanEnabled" class="sidebar-bottom-dock" :class="{ 'is-collapsed': isCollapsed }">
-            <SidebarActivityBar v-if="busyEntryVisible" :collapsed="isCollapsed" />
-            <div class="dock-row" :class="{ 'is-active': settingsModal.isOpen.value }" @click="openSettingsEntry()">
-              <el-icon class="dock-icon">
-                <Setting />
-              </el-icon>
-              <template v-if="!isCollapsed">
-                <span class="dock-label">{{ $t("route.settings") }}</span>
-                <span class="dock-shortcut">{{ shortcutLabel("openSettings") }}</span>
-              </template>
+          <template v-if="!kamechanEnabled">
+            <UpdateButton />
+            <div class="sidebar-bottom-dock is-collapsed">
+              <SidebarActivityBar v-if="busyEntryVisible" :collapsed="true" />
+              <div
+                class="dock-row"
+                :class="{ 'is-active': settingsModal.isOpen.value }"
+                :title="$t('route.settings')"
+                :aria-label="$t('route.settings')"
+                @click="openSettingsEntry()"
+              >
+                <el-icon class="dock-icon">
+                  <Setting />
+                </el-icon>
+              </div>
+              <GlobalToolsPopover variant="sidebar" :collapsed="true" @open-settings="openSettingsEntry()" />
             </div>
-            <GlobalToolsPopover variant="sidebar" :collapsed="isCollapsed" @open-settings="openSettingsEntry()" />
-          </div>
+          </template>
           <div v-else class="sidebar-kamechan-space" aria-hidden="true" />
+          <UpdateButton v-if="kamechanEnabled" corner />
         </el-aside>
       </template>
       <el-main class="app-main">
@@ -208,7 +204,6 @@ import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
-import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@/api/rpc";
@@ -239,7 +234,7 @@ import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.
 import ImageContent from "@kabegame/core/components/image/ImageContent.vue";
 import SettingChoiceHost from "@kabegame/core/components/common/SettingChoiceHost.vue";
 import SettingsDialog from "./components/settings/SettingsDialog.vue";
-import { useGlobalShortcuts, shortcutLabel } from "./composables/useGlobalShortcuts";
+import { useGlobalShortcuts } from "./composables/useGlobalShortcuts";
 import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
 import { useBusyTasks } from "./composables/useBusyTasks";
 
@@ -360,9 +355,6 @@ const { init: initWindowEvents } = useWindowEvents();
 
 // 文件拖拽
 const { init: initFileDrop } = useFileDrop(fileDropOverlayRef);
-
-// 侧边栏
-const { isCollapsed, toggleCollapse } = useSidebar();
 
 // 紧凑布局信号（Android 恒紧凑；web mode 跟随视口；Tauri 桌面永不紧凑）
 const uiStore = useUiStore();
@@ -763,7 +755,6 @@ body,
   flex-direction: column;
   height: 100dvh;
   box-shadow: 4px 0 20px rgba(255, 107, 157, 0.1);
-  transition: width 0.3s ease;
   // 菜单区域单独负责滚动，侧栏本体只负责裁剪溢出内容
   overflow: hidden;
 
@@ -791,20 +782,7 @@ body,
       width: 40px;
       height: 40px;
       object-fit: contain;
-      transition: all 0.3s ease;
       flex-shrink: 0;
-
-      &.logo-clickable {
-        cursor: pointer;
-        border-radius: 8px;
-        padding: 4px;
-        transition: all 0.3s ease;
-
-        &:hover {
-          filter: drop-shadow(0 0 8px rgba(255, 107, 157, 0.6)) drop-shadow(0 0 16px rgba(167, 139, 250, 0.4));
-          transform: scale(1.05);
-        }
-      }
     }
 
     .sidebar-title-section {
