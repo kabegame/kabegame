@@ -271,6 +271,7 @@ function rowState(node: AlbumNode): TreeRowState {
   return {
     active: node.id === props.selectedId,
     disabled: !selectable(node),
+    clickable: selectable(node) && !expandOnly(node),
     muted: node.id === HIDDEN_ALBUM_ID,
   };
 }

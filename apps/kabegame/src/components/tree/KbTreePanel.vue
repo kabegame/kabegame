@@ -30,6 +30,7 @@
           :expanded="row.node.expanded"
           :active="stateOf(row.node).active"
           :disabled="stateOf(row.node).disabled"
+          :clickable="stateOf(row.node).clickable"
           :muted="stateOf(row.node).muted"
           :busy="row.node.loading"
           :drop-target="isDropTarget(row.key)"
@@ -71,6 +72,7 @@
         :expanded="entry.node.expanded"
         :active="stateOf(entry.node).active"
         :disabled="stateOf(entry.node).disabled"
+        :clickable="stateOf(entry.node).clickable"
         :muted="stateOf(entry.node).muted"
         :busy="entry.node.loading"
         :style="{
@@ -233,14 +235,12 @@ defineExpose({ scrollerRef });
 .kb-tree-panel__sticky-row {
   background: var(--kb-tree-sticky-bg, var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96)));
   backdrop-filter: var(--kb-tree-sticky-backdrop, blur(8px));
+  --kb-tree-row-hover-bg: var(--kb-tree-sticky-bg, var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96)));
+  --kb-tree-row-hover-color: var(--kb-tree-sticky-hover-color, var(--anime-primary));
 }
 
 /* sticky 行悬停不能套用普通行的半透明 hover 底——会透出底下滑过的内容。
- * 底色维持不透明的 sticky 背景，只变文字色提示可点。 */
-.kb-tree-panel__sticky-row.kb-tree-row:hover {
-  background: var(--kb-tree-sticky-bg, var(--el-bg-color-overlay, rgba(255, 255, 255, 0.96)));
-  color: var(--kb-tree-sticky-hover-color, var(--anime-primary));
-}
+ * 通过上面的行 token 维持不透明 sticky 背景，只变文字色提示可点；展开按钮悬浮恢复由行组件统一处理。 */
 
 /* 选中的 sticky 行同理：把半透明选中底叠在不透明底之上（gradient 当纯色层用） */
 .kb-tree-panel__sticky-row.kb-tree-row--active,

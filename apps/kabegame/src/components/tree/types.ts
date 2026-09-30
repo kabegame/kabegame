@@ -66,6 +66,8 @@ export interface TreeSection<T> {
 export interface TreeRowState {
   active?: boolean;
   disabled?: boolean;
+  /** 点击会选择 / 应用此节点；控制 hover 选择提示，不影响展开等其它交互。 */
+  clickable?: boolean;
   /** 计数 0 之类的弱化态（整行灰字，但仍可交互）。 */
   muted?: boolean;
   /** 从投影中剔除（对应旧 emptyState="hide"）。 */

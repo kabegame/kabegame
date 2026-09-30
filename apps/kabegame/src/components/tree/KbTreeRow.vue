@@ -4,6 +4,7 @@
     :class="{
       'kb-tree-row--active': active,
       'kb-tree-row--disabled': disabled,
+      'kb-tree-row--clickable': clickable && !disabled,
       // 计数为 0:整行灰字弱化,但仍可选(排除语境下选 0 也有意义)。
       'kb-tree-row--muted': muted && !active,
       'kb-tree-row--drop': dropTarget,
@@ -44,6 +45,8 @@ const props = withDefaults(
     expanded?: boolean;
     active?: boolean;
     disabled?: boolean;
+    /** 点击行会选择 / 应用节点；只控制 hover 选择提示。 */
+    clickable?: boolean;
     muted?: boolean;
     busy?: boolean;
     /** DnD inside 落点高亮。 */
@@ -54,6 +57,7 @@ const props = withDefaults(
     expanded: false,
     active: false,
     disabled: false,
+    clickable: false,
     muted: false,
     busy: false,
     dropTarget: false,
@@ -93,8 +97,19 @@ function onRowDblclick() {
   color: var(--anime-text-primary);
 }
 
+.kb-tree-row--clickable {
+  cursor: pointer;
+}
+
+/* 原有的整行 hover 底色对所有节点保留。 */
 .kb-tree-row:hover {
   background: var(--kb-tree-row-hover-bg, rgba(255, 107, 157, 0.07));
+}
+
+/* 只有点击会选择 / 应用节点的行才额外改变文字色。展开按钮是独立操作，
+ * 指针进入按钮时只撤销文字提示，整行 hover 底色保持不变。 */
+.kb-tree-row--clickable:hover:not(:has(> .kb-tree-row__twistie:hover)) {
+  color: var(--kb-tree-row-hover-color, var(--anime-primary));
 }
 
 .kb-tree-row--muted {

@@ -122,8 +122,10 @@ watch(
 );
 
 function rowState(element: FacetNode): TreeRowState {
+  const descriptor = source.descriptor(element);
   return {
-    active: source.descriptor(element).active,
+    active: descriptor.active,
+    clickable: descriptor.selectable,
     muted: counts.isEmptyOf(keyOf(element)),
   };
 }
