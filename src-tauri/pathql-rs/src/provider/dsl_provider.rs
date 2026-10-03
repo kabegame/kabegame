@@ -431,8 +431,9 @@ impl Provider for DslProvider {
                         state.adhoc_properties.keys().collect::<Vec<_>>(),
                     );
                 }
-                // fold 失败时静默返回原 state (apply_query 没有 Result 通道)
-                let _ = fold_contrib(&mut state, &q_interned);
+                if let Err(error) = fold_contrib(&mut state, &q_interned) {
+                    state.fold_errors.push(error);
+                }
                 state
             }
             Some(Query::Delegate(d)) => {

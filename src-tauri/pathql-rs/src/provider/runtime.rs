@@ -374,6 +374,9 @@ impl ProviderRuntime {
                 eprintln!("[pathql]   ← full-path cache hit, return");
             }
             // 完整路径能命中缓存 ⇒ 它是深度 0 的边界 (组内不写缓存), 故无未闭合组。
+            if let Some(error) = composed.fold_errors.first() {
+                return Err(EngineError::Fold(error.clone()));
+            }
             return Ok(ResolvedNode {
                 provider: current,
                 composed,
@@ -433,17 +436,12 @@ impl ProviderRuntime {
                             scheme.to_string(),
                         ));
                     };
-                    // 此前的查询整体冻结为子查询, 以表名为别名; 从 schema 根重新折叠,
-                    // provider 只写 `<表名>.xxx`, 不感知自己在第几层。
-                    let from = FromSource::Subquery {
-                        inner: Arc::new(std::mem::take(&mut composed)),
-                        alias: table.clone(),
-                    };
-                    let (next, root_keys) = self.root_query(&schema, Some(from), &ctx);
-                    composed = next;
+                    // 此前的查询整体冻结为子查询，以表名为别名；新层承接内层全部列，
+                    // 只把 provider 视角切回根，不重放根贡献。
+                    composed = ProviderQuery::from_nested(std::mem::take(&mut composed), table);
                     current = Some(schema.provider.clone());
                     // 保留外层已有的 key: 内层任一 provider 变更都要让本路径失效。
-                    extend_provider_keys(&mut provider_keys, root_keys);
+                    extend_provider_keys(&mut provider_keys, schema.provider_keys.clone());
                     // 深度 0 边界, 可缓存。
                     self.cache_node(&path_so_far, &current, &composed, &provider_keys);
                     continue;
@@ -558,6 +556,9 @@ impl ProviderRuntime {
         }
 
         let open_groups = group_stack.open_markers();
+        if let Some(error) = composed.fold_errors.first() {
+            return Err(EngineError::Fold(error.clone()));
+        }
         Ok(ResolvedNode {
             provider: current,
             composed,
@@ -636,7 +637,7 @@ impl ProviderRuntime {
         Ok((0, Some(schema.provider.clone()), composed, provider_keys))
     }
 
-    /// 以给定 FROM 起一条新查询，施加 schema 根 provider 的贡献。冷启动与 `~~` 边界共用。
+    /// 以给定 FROM 冷启动一条新查询，并施加 schema 根 provider 的贡献。
     /// 返回折叠结果与这一步涉及的 provider key。
     fn root_query(
         &self,
@@ -1579,7 +1580,6 @@ mod tests {
                     Some("ai.image_id = images.id"),
                     &[],
                 )
-                .unwrap()
             }
             fn resolve(&self, name: &str, _: &ProviderQuery, _: &ProviderContext) -> ResolveRef {
                 ResolveRef::Terminal((name == "leaf").then(|| ChildEntry {

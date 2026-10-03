@@ -5,8 +5,19 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, openSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { homedir } from "node:os";
 
 const argv = process.argv.slice(2);
+
+/// ~/.codex/config.toml 里是否真的声明了 kabegame MCP server。
+function declaresKabegameMcp() {
+  const cfg = join(homedir(), ".codex", "config.toml");
+  if (!existsSync(cfg)) return false;
+  const text = readFileSync(cfg, "utf8");
+  return /^\s*\[mcp_servers\.kabegame\]/m.test(text)
+    || /^\s*mcp_servers\.kabegame\b/m.test(text)
+    || /^\s*kabegame\s*=/m.test(text.split(/^\s*\[mcp_servers\]\s*$/m)[1] ?? "");
+}
 const opts = {
   write: false,
   full: false,
@@ -15,7 +26,7 @@ const opts = {
   resume: "",
   cd: process.cwd(),
   timeout: 900,
-  mcp: false,
+  noMcp: false,
   quiet: false,
   ephemeral: false,
   prompt: "",
@@ -25,7 +36,8 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--write") opts.write = true;
   else if (a === "--full") opts.full = true;
-  else if (a === "--mcp") opts.mcp = true;
+  else if (a === "--no-mcp") opts.noMcp = true;
+  else if (a === "--mcp") { /* 默认行为，保留为 no-op 兼容旧调用 */ }
   else if (a === "--quiet") opts.quiet = true;
   else if (a === "--ephemeral") opts.ephemeral = true;
   else if (a === "--model" || a === "-m") opts.model = argv[++i];
@@ -47,7 +59,9 @@ for (let i = 0; i < argv.length; i++) {
   -f, --prompt-file <f> 从文件读取任务描述（长 prompt 用这个）
   --timeout <秒>        默认 900
   --ephemeral          不把会话 rollout 落到 ~/.codex（用完即弃，之后不能 --resume）
-  --mcp                不禁用 ~/.codex/config.toml 里的 MCP server（默认禁用）
+  --no-mcp             禁用 config.toml 里的 kabegame MCP server（默认不禁用；
+                       仅当 config 真的声明了它时才生效，否则跳过并提示）
+  --mcp                no-op，保留兼容（不禁用已是默认）
   --quiet              不打印中间进度，只打印最终答案
 
 产物写到 <cd>/ignore/codex-runs/<时间戳>/：events.jsonl · last-message.txt · meta.json`);
@@ -83,10 +97,15 @@ if (opts.resume) {
 }
 args.push("--json", "-o", lastMsgPath);
 if (opts.ephemeral && !opts.resume) args.push("--ephemeral");
-// 默认禁用 config.toml 里的 kabegame MCP server：应用没跑时它会每几秒刷一条 HTTP 502 ERROR。
+// --no-mcp 时才禁用 config.toml 里的 kabegame MCP server（应用没跑时它会每几秒刷一条 HTTP 502 ERROR）。
 // `enabled` 是官方文档里 mcp_servers 条目的字段（"Set false to disable a server without deleting it"），
-// 这里用 -c 把它按次覆盖，不动用户的 ~/.codex/config.toml。
-if (!opts.mcp) args.push("-c", "mcp_servers.kabegame.enabled=false");
+// 用 -c 按次覆盖，不动用户的 ~/.codex/config.toml。
+// 但 config 里没声明这个 server 时**不能**加：codex ≥ 0.157 会把 -c 造出的「只有 enabled」的条目
+// 当成一个缺 transport 的 server，报 `invalid transport in mcp_servers.kabegame` 并 exit 1。
+if (opts.noMcp) {
+  if (declaresKabegameMcp()) args.push("-c", "mcp_servers.kabegame.enabled=false");
+  else console.error("[driver] --no-mcp 跳过：~/.codex/config.toml 里没有 mcp_servers.kabegame，无需禁用");
+}
 if (opts.model) args.push("-m", opts.model);
 if (opts.schema) args.push("--output-schema", opts.schema);
 // resume 的位置参数顺序是 [SESSION_ID] [PROMPT]，必须排在所有选项之后。

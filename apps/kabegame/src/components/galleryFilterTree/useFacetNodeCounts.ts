@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, shallowReactive, watch } from "vue";
 import { serializeFilterSet } from "@/utils/galleryPath";
 import type { TreeModel } from "@/components/tree/useTreeModel";
-import type { TreeRefreshHub } from "@/components/tree/useTreeRefreshHub";
+import type { EventRefreshHub } from "@/composables/useEventRefreshHub";
 import { countProviderPath, type GalleryFilterTreeContext } from "./context";
 import type { FacetNode, GalleryFacetSource } from "./facetTreeSource";
 
@@ -26,7 +26,7 @@ interface TrackedNode {
 
 export function useFacetNodeCounts(options: {
   ctx: GalleryFilterTreeContext;
-  hub: TreeRefreshHub;
+  hub: EventRefreshHub;
   model: TreeModel<FacetNode>;
   source: GalleryFacetSource;
 }) {

@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::ast::{JoinKind, NumberOrTemplate, OrderDirection};
 use crate::compose::dialect::nest_cte_name;
+use crate::compose::fold::FoldError;
 use crate::compose::query::{FromSource, JoinFrag, ProviderQuery};
 use crate::compose::render::{render_template_sql, RenderError};
 use crate::provider::SqlDialect;
@@ -14,6 +15,8 @@ use crate::template::eval::{TemplateContext, TemplateValue};
 
 #[derive(Debug, Error)]
 pub enum BuildError {
+    #[error("fold error: {0}")]
+    Fold(#[from] FoldError),
     #[error("render error: {0}")]
     Render(#[from] RenderError),
     #[error("no FROM clause; ProviderQuery requires from to be set by some provider in path")]
@@ -84,6 +87,10 @@ impl ProviderQuery {
         sql: &mut String,
         params: &mut Vec<TemplateValue>,
     ) -> Result<(), BuildError> {
+        if let Some(error) = self.fold_errors.first() {
+            return Err(BuildError::Fold(error.clone()));
+        }
+
         // 合并 adhoc_properties 进 effective ctx (adhoc 覆盖优先)
         let effective_ctx;
         let ctx_ref: &TemplateContext = if self.adhoc_properties.is_empty() {
@@ -919,7 +926,6 @@ mod tests {
                 Some("ai.album_id = albums.id AND ai.image_id > ?"),
                 &[TemplateValue::Text("join".into())],
             )
-            .unwrap()
             .with_where_raw("ai.image_id < ?", &[TemplateValue::Int(9)]);
         outer.limit = Some(NumberOrTemplate::Number(5.0));
         outer
@@ -1246,15 +1252,13 @@ mod tests {
 
     #[test]
     fn build_sql_raw_join_with_param() {
-        let mut q = ProviderQuery::new()
-            .with_join_raw(
-                JoinKind::Inner,
-                "tags",
-                "t",
-                Some("t.image_id = images.id AND t.name = ?"),
-                &[TemplateValue::Text("foo".into())],
-            )
-            .unwrap();
+        let mut q = ProviderQuery::new().with_join_raw(
+            JoinKind::Inner,
+            "tags",
+            "t",
+            Some("t.image_id = images.id AND t.name = ?"),
+            &[TemplateValue::Text("foo".into())],
+        );
         q.from = Some(crate::compose::FromSource::table("images"));
         let (sql, params) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)

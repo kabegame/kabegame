@@ -61,6 +61,7 @@
 
 ### Changed
 
+- PathQL `~~` 边界改为通过 `<表名>.*` 继承内层全部 fields，不再重放根 provider 贡献；fields / join 的同名字面别名改为后到原位覆盖，`${ref:}` 重名则明确报错
 - PathQL `register_schema` 第二个参数收紧为数据表名（不再接受任意 FROM 片段），行不来自 SQL 的 schema（`plugin://`）改用 `register_programmatic_schema`
 - 插件 id 收紧为 `[a-zA-Z0-9_-]`、不超过 64 字节（去掉 `.`），规则在 `storage::labels::is_plugin_ident`（标签 key 另用更宽的 `is_label_key`，额外允许英文括号与空格）；不合规的 `.kgpg` 安装 / 打包时被拒绝
 - 元数据迁移改为「失败也盖版本」：每行无论成败只处理一次，失败行保留原数据，不再每次启动重试

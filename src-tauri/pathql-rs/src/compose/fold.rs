@@ -44,12 +44,14 @@ fn fold_fields(state: &mut ProviderQuery, fields: &Option<Vec<Field>>) -> Result
     };
     for f in fields {
         let in_need = f.in_need.unwrap_or(false);
+        let mut incoming_is_ref = false;
         let resolved_alias: Option<ResolvedAlias> = match &f.alias {
             None => None,
             Some(name) => {
                 let resolved = ResolvedAlias::from_alias_name(name);
                 let resolved = match resolved {
                     ResolvedAlias::UnresolvedRef(ident) => {
+                        incoming_is_ref = true;
                         if in_need {
                             return Err(FoldError::RefAliasWithInNeed(ident));
                         }
@@ -61,22 +63,29 @@ fn fold_fields(state: &mut ProviderQuery, fields: &Option<Vec<Field>>) -> Result
                 Some(resolved)
             }
         };
-        // collision detection on literal aliases
-        if let Some(alias) = &resolved_alias {
-            if let Some(lit) = alias.as_literal() {
-                if state.has_field_alias(lit) {
-                    if in_need {
-                        continue; // share upstream; skip accumulation
-                    }
-                    return Err(FoldError::AliasCollision(lit.to_string()));
-                }
-            }
-        }
-        state.fields.push(FieldFrag {
+        let field = FieldFrag {
             sql: f.sql.clone(),
             alias: resolved_alias,
             in_need,
-        });
+        };
+        if let Some(lit) = field
+            .alias
+            .as_ref()
+            .and_then(|alias| alias.as_literal())
+            .map(str::to_string)
+        {
+            if let Some(pos) = state.field_alias_pos(&lit) {
+                if in_need {
+                    continue; // share upstream; skip accumulation
+                }
+                if incoming_is_ref {
+                    return Err(FoldError::AliasCollision(lit));
+                }
+                state.fields[pos] = field;
+                continue;
+            }
+        }
+        state.fields.push(field);
     }
     Ok(())
 }
@@ -88,6 +97,7 @@ fn fold_joins(state: &mut ProviderQuery, joins: &Option<Vec<Join>>) -> Result<()
     for j in joins {
         let in_need = j.in_need.unwrap_or(false);
         let resolved = ResolvedAlias::from_alias_name(&j.alias);
+        let incoming_is_ref = matches!(&resolved, ResolvedAlias::UnresolvedRef(_));
         let resolved = match resolved {
             ResolvedAlias::UnresolvedRef(ident) => {
                 if in_need {
@@ -100,20 +110,26 @@ fn fold_joins(state: &mut ProviderQuery, joins: &Option<Vec<Join>>) -> Result<()
         };
         let lit = resolved
             .as_literal()
-            .expect("Join alias is required and must resolve to a literal after fold");
-        if state.has_join_alias(lit) {
-            if in_need {
-                continue;
-            }
-            return Err(FoldError::AliasCollision(lit.to_string()));
-        }
-        state.joins.push(JoinFrag {
+            .expect("Join alias is required and must resolve to a literal after fold")
+            .to_string();
+        let join = JoinFrag {
             kind: j.kind.unwrap_or(JoinKind::Inner),
             table: j.table.clone(),
             alias: resolved,
             on: j.on.clone(),
             in_need,
-        });
+        };
+        if let Some(pos) = state.join_alias_pos(&lit) {
+            if in_need {
+                continue;
+            }
+            if incoming_is_ref {
+                return Err(FoldError::AliasCollision(lit));
+            }
+            state.joins[pos] = join;
+            continue;
+        }
+        state.joins.push(join);
     }
     Ok(())
 }
@@ -228,15 +244,18 @@ mod tests {
     }
 
     #[test]
-    fn fields_collision_no_in_need_errors() {
+    fn fields_collision_no_in_need_overwrites_in_place() {
         let mut s = ProviderQuery::new();
         let mut q = empty_q();
         q.fields = Some(vec![
             field("x", Some("ax"), None),
+            field("middle", Some("middle"), None),
             field("y", Some("ax"), None), // collision
         ]);
-        let err = fold_contrib(&mut s, &q).unwrap_err();
-        assert!(matches!(err, FoldError::AliasCollision(_)));
+        fold_contrib(&mut s, &q).unwrap();
+        assert_eq!(s.fields.len(), 2);
+        assert_eq!(s.fields[0].sql, SqlExpr("y".into()));
+        assert_eq!(s.fields[1].sql, SqlExpr("middle".into()));
     }
 
     #[test]
@@ -327,12 +346,19 @@ mod tests {
     }
 
     #[test]
-    fn joins_collision_errors() {
+    fn joins_collision_overwrites_in_place() {
         let mut s = ProviderQuery::new();
         let mut q = empty_q();
-        q.join = Some(vec![join("t1", "ai", None), join("t2", "ai", None)]);
-        let err = fold_contrib(&mut s, &q).unwrap_err();
-        assert!(matches!(err, FoldError::AliasCollision(_)));
+        q.join = Some(vec![
+            join("t1", "ai", None),
+            join("middle", "middle", None),
+            join("t2", "ai", Some("ai.id = 2")),
+        ]);
+        fold_contrib(&mut s, &q).unwrap();
+        assert_eq!(s.joins.len(), 2);
+        assert_eq!(s.joins[0].table, SqlExpr("t2".into()));
+        assert_eq!(s.joins[0].on, Some(SqlExpr("ai.id = 2".into())));
+        assert_eq!(s.joins[1].table, SqlExpr("middle".into()));
     }
 
     #[test]

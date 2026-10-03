@@ -12,7 +12,7 @@
       <button
         type="button"
         class="image-labels-icon-btn"
-        :title="t('albums.imageLabelsCopy')"
+        :title="labelKeysText(labels)"
         :disabled="labels.length === 0"
         @click.stop="copyLabels"
       >

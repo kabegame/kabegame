@@ -3,21 +3,23 @@ import { listen } from "@/api/rpc";
 import { useTrailingThrottleFn } from "@/composables/useTrailingThrottle";
 
 /**
- * 树级刷新事件枢纽：集中订阅 N 个后端事件（监听哪些事件由消费者决定——
- * 这是「刷新事件参数化」的落点），节点/分支把刷新回调注册进来，
+ * 刷新事件枢纽：集中订阅 N 个后端事件（监听哪些事件由消费者决定——
+ * 这是「刷新事件参数化」的落点），消费者把刷新回调注册进来，
  * 按「每注册项独立 trailing-throttle + 项级 filter + when 门控」分发。
  *
- * 节流粒度与旧实现的 per-node useImagesChangeRefresh 完全等价，
- * 但监听器数量从 O(挂载节点数) 降到 O(事件数/树)。
- * 基座不认识任何具体事件名或业务 ID。
+ * 一个 hub 实例的生命周期 = 创建它的组件；其中的事件名、payload 形状、
+ * 业务 ID 一概不认识，与树/画廊/PathQL 均无耦合。
+ * 典型消费者是画廊过滤树（GalleryFacetTreeInner）：节流粒度与旧实现的
+ * per-node useImagesChangeRefresh 完全等价，但监听器数量从
+ * O(挂载节点数) 降到 O(事件数/宿主)。
  */
-export interface TreeRefreshSource {
+export interface EventRefreshSource {
   event: string;
   /** source 级过滤（例如只接收某一类结构或成员事件）。 */
   filter?: (payload: unknown) => boolean;
 }
 
-export interface TreeRefreshEntry {
+export interface EventRefreshEntry {
   /** 默认 3000ms（旧实现的 debounce 默认值）。 */
   waitMs?: number;
   /** 项级门控：false 时丢弃本次事件（等价旧实现 enabled 翻 false 时退订）。 */
@@ -27,18 +29,18 @@ export interface TreeRefreshEntry {
   onRefresh: () => void | Promise<void>;
 }
 
-export interface TreeRefreshHub {
-  register(entry: TreeRefreshEntry): () => void;
+export interface EventRefreshHub {
+  register(entry: EventRefreshEntry): () => void;
 }
 
 type UnlistenFn = () => void;
 
-export function useTreeRefreshHub(options: {
+export function useEventRefreshHub(options: {
   /** 枢纽总开关：false 时事件被丢弃（不退订，行为等价）。 */
   enabled?: Ref<boolean>;
-  sources: TreeRefreshSource[];
-}): TreeRefreshHub {
-  interface InternalEntry extends TreeRefreshEntry {
+  sources: EventRefreshSource[];
+}): EventRefreshHub {
+  interface InternalEntry extends EventRefreshEntry {
     throttled: ReturnType<typeof useTrailingThrottleFn>;
   }
 
@@ -46,7 +48,7 @@ export function useTreeRefreshHub(options: {
   let unlistens: UnlistenFn[] = [];
   let started = false;
 
-  function dispatch(source: TreeRefreshSource, payload: unknown) {
+  function dispatch(source: EventRefreshSource, payload: unknown) {
     if (options.enabled && !options.enabled.value) return;
     if (source.filter && !source.filter(payload)) return;
     for (const entry of entries) {
@@ -84,7 +86,7 @@ export function useTreeRefreshHub(options: {
   onBeforeUnmount(() => stop());
 
   return {
-    register(entry: TreeRefreshEntry) {
+    register(entry: EventRefreshEntry) {
       const internal: InternalEntry = {
         ...entry,
         throttled: useTrailingThrottleFn(async () => {
