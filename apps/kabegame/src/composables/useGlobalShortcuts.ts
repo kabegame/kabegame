@@ -1,5 +1,5 @@
 import { onBeforeUnmount, onMounted } from "vue";
-import { IS_MACOS } from "@kabegame/core/env";
+import { IS_MACOS } from "@/env";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 
 /**

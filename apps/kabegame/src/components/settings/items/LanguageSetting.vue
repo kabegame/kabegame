@@ -49,10 +49,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ArrowDown } from "@kabegame/element-plus-icons";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useModal } from "@/composables/useModal";
 import { SUPPORTED_LANGUAGES, resolveLanguage } from "@kabegame/i18n";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 
 const props = defineProps<{
   disabled?: boolean;

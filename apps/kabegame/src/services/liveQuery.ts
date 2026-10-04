@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted, watch } from "vue";
 import { subscribeChanges, type ChangeBatch } from "@/services/dataChangeHub";
 import { pathqlView } from "@/services/pathql";
-import { sendDebugEvent } from "@kabegame/core/debugIngest"; // DEBUG-PERF
+import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 const perf = (name: string, payload: unknown) => void sendDebugEvent(name, payload, { sessionId: "eventworker-perf" }); // DEBUG-PERF
 
 export const GRID_REFRESH_WAIT_MS = 500;

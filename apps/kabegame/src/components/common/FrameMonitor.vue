@@ -17,7 +17,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { IS_DEV } from "@kabegame/core/env";
+import { IS_DEV } from "@/env";
 import {
   FRAME_MONITOR_SAMPLE_MS,
   getFrameMonitorLevel,

@@ -99,11 +99,11 @@
 <script setup lang="ts">
 import { AlarmClock, ArrowDown } from "@kabegame/element-plus-icons";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
+import ScheduleProgressBar from "@/components/scheduler/ScheduleProgressBar.vue";
 import AutoConfigCardScheduleEditor from "@/components/scheduler/AutoConfigCardScheduleEditor.vue";
 import AutoConfigRelatedTasks from "@/components/scheduler/AutoConfigRelatedTasks.vue";
 import { usePluginStore } from "@/stores/plugins";
-import type { RunConfig } from "@kabegame/core/stores/crawler";
+import type { RunConfig } from "@/stores/crawler";
 
 const props = defineProps<{
   config: RunConfig;

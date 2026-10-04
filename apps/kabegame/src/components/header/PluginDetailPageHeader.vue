@@ -51,12 +51,12 @@
 import { computed } from "vue";
 import { Delete, DocumentCopy, Grid } from "@kabegame/element-plus-icons";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import type { Plugin } from "@kabegame/core/stores/plugins";
-import { pluginIconToDataUrl } from "@kabegame/core/stores/plugins";
-import { usePluginActionState } from "@kabegame/core/composables/usePluginActionState";
-import { APP_VERSION } from "@kabegame/core/env";
+import PageHeader from "@/components/common/PageHeader.vue";
+import { HeaderFeatureId } from "@/stores/header";
+import type { Plugin } from "@/stores/plugins";
+import { pluginIconToDataUrl } from "@/stores/plugins";
+import { usePluginActionState } from "@/composables/usePluginActionState";
+import { APP_VERSION } from "@/env";
 
 const props = defineProps<{
   plugin: Plugin | null;

@@ -2,8 +2,8 @@
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { cancelFolderSync } from "@/api/syncLocalFolder";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import {
   type FolderSyncFinished,

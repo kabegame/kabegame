@@ -15,11 +15,11 @@ import {
   View,
   PriceTag,
 } from "@kabegame/element-plus-icons";
-import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
-import type { ImageInfo } from "@kabegame/core/types/image";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import type { ActionItem, ActionContext } from "@/actions/types";
+import type { ImageInfo } from "@/types/image";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { i18n } from "@kabegame/i18n";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */
@@ -59,14 +59,6 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
 
   // Single-select actions
   const singleActions: ActionItem<ImageInfo>[] = [
-    {
-      key: "detail",
-      label: t("contextMenu.detail"),
-      icon: InfoFilled,
-      command: "detail",
-      // On Android: only in "更多" submenu
-      visible: () => !hideSet.has("detail") && !uiStore.isCompact,
-    },
     {
       key: "favorite",
       label: (ctx: ActionContext<ImageInfo>) =>
@@ -171,7 +163,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
               label: t("contextMenu.detail"),
               icon: InfoFilled,
               command: "detail",
-              visible: () => !hideSet.has("detail"),
+              visible: () => IS_ANDROID && !hideSet.has("detail"),
             },
             {
               key: "share",

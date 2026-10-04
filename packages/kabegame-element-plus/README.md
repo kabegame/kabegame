@@ -34,7 +34,7 @@ workspace**，故已平铺成单包：
 
 ## 消费方式
 
-纯源码消费，无构建产物，与 `@kabegame/core` 同一套约定：
+纯源码消费，无构建产物：
 
 - vite alias：`vite.config.pub.ts` 里 `@kabegame/element-plus` → 本目录 `src/`
 - 类型：根 `tsconfig.json` 与 `apps/kabegame/tsconfig.json` 的 `paths`（后者会整体覆盖前者的

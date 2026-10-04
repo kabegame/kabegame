@@ -27,9 +27,8 @@
     "npm:@vue/shared@^3.5.26": "3.5.40",
     "npm:@vue/test-utils@^2.4.6": "2.4.11_@vue+compiler-dom@3.5.40_vue@3.5.40__typescript@5.9.3",
     "npm:@vue/tsconfig@~0.5.1": "0.5.1",
-    "npm:@vueuse/core@^14.1.0": "14.4.0_vue@3.5.40__typescript@5.9.3_typescript@5.9.3",
-    "npm:@vueuse/core@^14.2.1": "14.4.0_vue@3.5.40__typescript@5.9.3_typescript@5.9.3",
-    "npm:@vueuse/core@^14.4.0": "14.4.0_vue@3.5.40__typescript@5.9.3_typescript@5.9.3",
+    "npm:@vueuse/core@^14.1.0": "14.4.0_vue@3.5.40__typescript@5.9.3",
+    "npm:@vueuse/core@^14.4.0": "14.4.0_vue@3.5.40__typescript@5.9.3",
     "npm:agent-browser@~0.33.2": "0.33.2",
     "npm:astro@5": "5.18.1_@types+node@22.20.1_sass@1.102.0",
     "npm:async-validator@^4.2.5": "4.2.5",
@@ -2179,7 +2178,7 @@
     "@vue/tsconfig@0.5.1": {
       "integrity": "sha512-VcZK7MvpjuTPx2w6blwnwZAu5/LgBUtejFOi3pPGQFXQN5Ela03FUtd2Qtg4yWGGissVL0dr6Ro1LfOFh+PCuQ=="
     },
-    "@vueuse/core@14.4.0_vue@3.5.40__typescript@5.9.3_typescript@5.9.3": {
+    "@vueuse/core@14.4.0_vue@3.5.40__typescript@5.9.3": {
       "integrity": "sha512-X4WHz1HlCzCBoYXesUkifzzWBAcZgXG8Fi5iNPQg/epdzOB3gu8Fawj3hvuwYR1nGcXGnvxwYYcUC/71++svtQ==",
       "dependencies": [
         "@types/web-bluetooth",
@@ -2191,7 +2190,7 @@
     "@vueuse/metadata@14.4.0": {
       "integrity": "sha512-swx/255R6JyHZFJhx845iz5CRWDZdCfvkZOpACWc5+c5WHcG24mv8gUT1WIdFQaHt6dq79rvILd9QnCWiyVm9g=="
     },
-    "@vueuse/shared@14.4.0_vue@3.5.40__typescript@5.9.3_typescript@5.9.3": {
+    "@vueuse/shared@14.4.0_vue@3.5.40__typescript@5.9.3": {
       "integrity": "sha512-JRgY90Sz8DDtPMsaDflvPMp9xYk69JZAmbuDvAquUVXKr2gEjqtzGNTTthLfckH0BzBqvnu31gb4a8TGLRe79g==",
       "dependencies": [
         "vue"
@@ -7077,13 +7076,23 @@
       "apps/kabegame": {
         "packageJson": {
           "dependencies": [
+            "npm:@panzoom/panzoom@^4.6.1",
             "npm:@tauri-apps/api@^2.11.0",
             "npm:@tauri-apps/plugin-dialog@2",
             "npm:@tauri-apps/plugin-opener@2",
+            "npm:@types/ejs@^3.1.5",
+            "npm:@vitejs/plugin-vue-jsx@^4.2.0",
             "npm:@vitejs/plugin-vue@^5.0.4",
+            "npm:@vue/test-utils@^2.4.6",
             "npm:@vue/tsconfig@~0.5.1",
             "npm:@vueuse/core@^14.1.0",
             "npm:axios@^1.6.7",
+            "npm:dayjs@^1.11.20",
+            "npm:dexie@^4.2.0",
+            "npm:dompurify@^3.3.2",
+            "npm:ejs@^3.1.10",
+            "npm:happy-dom@^20.7.0",
+            "npm:marked@^17.0.4",
             "npm:pinia@^2.1.7",
             "npm:sass@^1.97.1",
             "npm:tauri-plugin-android-battery-optimization-api@0.1",
@@ -7093,25 +7102,6 @@
             "npm:vue-router@^4.3.0",
             "npm:vue-tsc@^2.0.6",
             "npm:vue@^3.4.21"
-          ]
-        }
-      },
-      "packages/kabegame-core": {
-        "packageJson": {
-          "dependencies": [
-            "npm:@panzoom/panzoom@^4.6.1",
-            "npm:@tauri-apps/plugin-opener@2",
-            "npm:@types/ejs@^3.1.5",
-            "npm:@vitejs/plugin-vue-jsx@^4.2.0",
-            "npm:@vitejs/plugin-vue@^5.2.4",
-            "npm:@vue/test-utils@^2.4.6",
-            "npm:@vueuse/core@^14.2.1",
-            "npm:dayjs@^1.11.20",
-            "npm:dexie@^4.2.0",
-            "npm:dompurify@^3.3.2",
-            "npm:ejs@^3.1.10",
-            "npm:happy-dom@^20.7.0",
-            "npm:marked@^17.0.4"
           ]
         }
       },

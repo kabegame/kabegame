@@ -169,7 +169,7 @@ program
   .requiredOption(
     "-c, --component <component>",
     "要测试的组件：kabegame | kabegame-cli | kabegame-core" +
-      "（kabegame-core 同时覆盖 Rust crate 与前端包 @kabegame/core）",
+      "（kabegame 同时覆盖 Rust crate 与前端 vitest；kabegame-core 为纯 Rust crate）",
     Component.CORE,
   )
   .option(

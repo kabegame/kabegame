@@ -131,11 +131,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { DocumentCopy } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
-import { IS_WEB } from "@kabegame/core/env";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { IS_WEB } from "@/env";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import CodeBlock from "@/components/common/CodeBlock.vue";
 
 interface McpCapability {

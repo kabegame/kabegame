@@ -1,6 +1,6 @@
 import { i18n } from "@kabegame/i18n";
-import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { openExternalLink } from "@/utils/openExternalLink";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { useApp } from "@/stores/app";
 
 const KABEGAME_NEW_ISSUE_URL = "https://github.com/kabegame/kabegame/issues/new";

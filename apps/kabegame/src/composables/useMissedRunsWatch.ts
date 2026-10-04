@@ -1,10 +1,10 @@
 import { onUnmounted, ref } from "vue";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { useI18n } from "@kabegame/i18n";
-import { IS_WEB, IS_ANDROID } from "@kabegame/core/env";
+import { IS_WEB, IS_ANDROID } from "@/env";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { kameMessage } from "@kabegame/core/utils/kameMessage";
-import type { MissedRunItem } from "@kabegame/core/stores/crawler";
+import { kameMessage } from "@/utils/kameMessage";
+import type { MissedRunItem } from "@/stores/crawler";
 import { useCrawlerStore } from "@/stores/crawler";
 
 // 看门狗轮询间隔（毫秒）。每分钟比对一次墙钟时间。

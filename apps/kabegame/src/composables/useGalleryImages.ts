@@ -2,7 +2,7 @@ import { nextTick, ref, shallowRef, type Ref } from "vue";
 import { pathqlEntry, pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
 import { withGalleryPrefix } from "@/utils/path";
-import type { ImageInfo } from "@kabegame/core/types/image";
+import type { ImageInfo } from "@/types/image";
 
 /**
  * 画廊图片列表管理（基于路径的查询）。

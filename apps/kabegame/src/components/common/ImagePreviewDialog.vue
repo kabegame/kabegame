@@ -361,7 +361,7 @@ import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
-import type { Plugin } from "@kabegame/core/stores/plugins";
+import type { Plugin } from "@/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();

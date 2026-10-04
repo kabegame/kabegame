@@ -62,7 +62,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Delete, Folder, Monitor, Picture, PriceTag, StarFilled } from "@kabegame/element-plus-icons";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { syncModeIcon, syncModeIconClass, syncModeTooltip } from "@/utils/albumSyncMode";
 import KbTreePanel from "@/components/tree/KbTreePanel.vue";
 import type { TreeDataSource, TreeDndController, TreeRowState, TreeSection } from "@/components/tree/types";

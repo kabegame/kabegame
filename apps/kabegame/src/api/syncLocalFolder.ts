@@ -1,8 +1,8 @@
 import { invoke } from "@/api/rpc";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import type { AlbumSyncMode } from "@kabegame/core/types/album";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import type { AlbumSyncMode } from "@/types/album";
 
-export type { AlbumSyncMode } from "@kabegame/core/types/album";
+export type { AlbumSyncMode } from "@/types/album";
 
 /** 本地文件夹同步仅桌面端支持（排除 Android 与 Web）。 */
 const LOCAL_FOLDER_UNSUPPORTED = IS_ANDROID || IS_WEB;

@@ -11,7 +11,7 @@ import {
   type GallerySort,
   querySearchTerm,
 } from "@/utils/galleryPath";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import router from "@/router";
 
 const DEFAULT_PAGE_SIZE = 100;

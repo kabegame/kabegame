@@ -175,24 +175,24 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
-import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
-import OutputDirSelect from "@kabegame/core/components/crawler/OutputDirSelect.vue";
-import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
-import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import AutoConfigDetailContent from "@/components/scheduler/AutoConfigDetailContent.vue";
+import ScheduleProgressBar from "@/components/scheduler/ScheduleProgressBar.vue";
+import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
+import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
+import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { HIDDEN_ALBUM_ID, fetchAlbum } from "@/services/albums";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { usePluginConfig } from "@/composables/usePluginConfig";
-import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@kabegame/core/utils/pluginVarWhen";
-import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@kabegame/core/utils/pluginVarForm";
-import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
+import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@/utils/pluginVarWhen";
+import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/utils/pluginVarForm";
+import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 const { t } = useI18n();

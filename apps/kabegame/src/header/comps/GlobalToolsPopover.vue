@@ -82,7 +82,7 @@
 import { watch } from "vue";
 import { Tools, Setting } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
 import { useBusyTasks } from "@/composables/useBusyTasks";
 import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";

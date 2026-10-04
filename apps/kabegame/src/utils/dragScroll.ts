@@ -1,18 +1,18 @@
 export interface DragScrollOptions {
   /**
-   * 只对鼠标/触控笔生效；触摸设备（手机/安卓）默认走系统原生滚动与惯性，避免手势冲突。
+   * 只对鼠标/触控笔生效；触摸设备默认走系统原生滚动与惯性，避免手势冲突。
    */
   enableForPointerTypes?: Array<"mouse" | "pen">;
   /**
-   * 是否需要按住空格才能拖拽滚动（推荐：避免与图片点击/拖拽/选择冲突）。
+   * 是否需要按住空格才能拖拽滚动。
    */
   requireSpaceKey?: boolean;
   /**
-   * 拖拽滚动时的惯性减速系数（越接近 1 越“滑”）。
+   * 拖拽滚动时的惯性减速系数（越接近 1 越"滑"）。
    */
   friction?: number; // per ~16ms
   /**
-   * 触发“认为是在拖拽滚动”的最小移动距离（px）
+   * 触发"认为是在拖拽滚动"的最小移动距离（px）
    */
   dragThresholdPx?: number;
   /**
@@ -25,23 +25,46 @@ export interface DragScrollOptions {
   classReady?: string;
   classActive?: string;
   /**
-   * 拖拽过后拦截紧随其后的 click（防止“拖动时误触发点击打开图片”等）
+   * 拖拽过后拦截紧随其后的 click（防止"拖动时误触发点击打开图片"等）
    */
   suppressClickAfterDrag?: boolean;
+
+  /**
+   * 当拖拽滚动"太快且仍在加速"时派发事件：
+   * `new CustomEvent(overspeedEventName, { detail: { velocity, absVelocity, absAccel } })`
+   *
+   * - velocity: px/ms（scrollTop 方向：正=向下滚）
+   * - absVelocity: |velocity|
+   * - absAccel: d(|v|)/dt，单位 px/ms^2（仅用于判断"是否在加速"）
+   */
+  overspeedEventName?: string;
+  /**
+   * 触发 overspeed 的最小瞬时速度阈值（px/ms）
+   */
+  overspeedVelocityThresholdPxPerMs?: number;
+  /**
+   * 触发 overspeed 的最小加速度阈值（px/ms^2）
+   */
+  overspeedAccelThresholdPxPerMs2?: number;
+
+  /**
+   * 限制拖拽滚动的最大速度（px/ms）。
+   * - 可以是固定数值，也可以是返回数值的函数（支持动态行高等场景）
+   * - 例如：每 0.2 秒滚动一行 => maxVelocityPxPerMs = rowHeight / 200
+   */
+  maxVelocityPxPerMs?: number | (() => number);
 }
 
 const DEFAULT_IGNORE_SELECTOR =
-  // 交互控件
   "a,button,input,textarea,select,label,summary,[contenteditable='true']," +
-  // element-plus
   ".el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box," +
   // 拖拽把手：手势归 KbResizable 独占，拖拽滚动不能在这里起手
   ".kb-resizable-handle";
 
 /**
  * 为一个可滚动容器启用“按住空格 + 鼠标拖拽滚动 + 惯性”。
- * - 鼠标/触控笔：自定义惯性（更像手机）。
- * - 触摸（安卓/iOS）：默认不接管，保持 WebView 原生惯性与回弹。
+ * - 鼠标/触控笔：自定义惯性
+ * - 触摸（安卓/iOS）：默认不接管
  */
 export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions = {}) {
   const enableForPointerTypes = opts.enableForPointerTypes ?? ["mouse", "pen"];
@@ -52,20 +75,46 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
   const classReady = opts.classReady ?? "drag-scroll-ready";
   const classActive = opts.classActive ?? "drag-scroll-active";
   const suppressClickAfterDrag = opts.suppressClickAfterDrag ?? true;
+  const overspeedEventName = opts.overspeedEventName ?? "dragscroll-overspeed";
+  const overspeedVelocityThresholdPxPerMs = opts.overspeedVelocityThresholdPxPerMs ?? 10;
+  const overspeedAccelThresholdPxPerMs2 = opts.overspeedAccelThresholdPxPerMs2 ?? 0.05;
+  const maxVelocityOpt = opts.maxVelocityPxPerMs;
+
+  // 获取当前最大速度（支持动态值）
+  const getMaxVelocity = (): number | null => {
+    if (maxVelocityOpt == null) return null;
+    return typeof maxVelocityOpt === "function" ? maxVelocityOpt() : maxVelocityOpt;
+  };
+
+  // 截断速度到最大值
+  const clampVelocity = (v: number): number => {
+    const maxV = getMaxVelocity();
+    if (maxV == null || maxV <= 0) return v;
+    return Math.max(-maxV, Math.min(maxV, v));
+  };
 
   let spaceDown = false;
   let isDown = false;
   let pointerId: number | null = null;
+  let startX = 0;
   let startY = 0;
+  let startScrollLeft = 0;
   let startScrollTop = 0;
+  let lastX = 0;
   let lastY = 0;
   let lastT = 0;
-  let velocity = 0; // px/ms (scrollTop 方向：正=向下滚)
+  // px/ms。正 vx = 向右滚；正 vy = 向下滚。
+  let velocityX = 0;
+  let velocityY = 0;
+  let prevAbsVelocity = 0; // 用于计算“加速”（d|v|/dt），取 |v| 模长
+  // “一次拖拽（按下到松开）内只提示一次”
+  let overspeedShownThisDrag = false;
   let raf: number | null = null;
   let moved = false;
   let hasPointerCapture = false;
   let suppressClickUntil = 0;
   let cleanupClickCapture: (() => void) | null = null;
+
   const emitActiveChange = (active: boolean) => {
     try {
       container.dispatchEvent(new CustomEvent("dragscroll-active-change", { detail: { active } }));
@@ -90,7 +139,6 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
   const armSuppressClick = () => {
     if (!suppressClickAfterDrag) return;
-    // 只屏蔽很短的一段时间内的 click（一次性）
     suppressClickUntil = performance.now() + 350;
     if (cleanupClickCapture) return;
 
@@ -102,7 +150,6 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
       }
       ev.preventDefault();
       ev.stopPropagation();
-      // 同时阻断后续监听器
       ev.stopImmediatePropagation();
       cleanupClickCapture?.();
       cleanupClickCapture = null;
@@ -120,7 +167,6 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     const tag = target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
 
-    // 避免空格触发页面滚动
     e.preventDefault();
     if (!spaceDown) {
       spaceDown = true;
@@ -138,18 +184,10 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
   };
 
   const onPointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) {
-      return; // 只响应左键
-    }
-    if (!enableForPointerTypes.includes(e.pointerType as any)) {
-      return;
-    }
-    if (requireSpaceKey && !spaceDown) {
-      return;
-    }
-    if (shouldIgnoreTarget(e.target)) {
-      return;
-    }
+    if (e.button !== 0) return;
+    if (!enableForPointerTypes.includes(e.pointerType as any)) return;
+    if (requireSpaceKey && !spaceDown) return;
+    if (shouldIgnoreTarget(e.target)) return;
 
     stopInertia();
     cleanupClickCapture?.();
@@ -158,30 +196,28 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     moved = false;
     hasPointerCapture = false;
     pointerId = e.pointerId;
+    startX = e.clientX;
     startY = e.clientY;
+    startScrollLeft = container.scrollLeft;
     startScrollTop = container.scrollTop;
+    lastX = e.clientX;
     lastY = e.clientY;
     lastT = performance.now();
-    velocity = 0;
+    velocityX = 0;
+    velocityY = 0;
+    prevAbsVelocity = 0;
+    overspeedShownThisDrag = false;
   };
 
   const onPointerMove = (e: PointerEvent) => {
-    if (!isDown) {
-      // console.log("[拖拽滚动调试] pointermove: isDown=false");
-      return;
-    }
-    if (pointerId !== e.pointerId) {
-      return;
-    }
+    if (!isDown) return;
+    if (pointerId !== e.pointerId) return;
 
+    const dx = e.clientX - startX;
     const dy = e.clientY - startY;
+    const dist = Math.hypot(dx, dy);
     if (!moved) {
-      // 还没超过阈值：不要滚动、不要 preventDefault，让"单击"正常触发
-      if (Math.abs(dy) < dragThresholdPx) {
-        // console.log("[拖拽滚动调试] pointermove: 未超过阈值", Math.abs(dy), dragThresholdPx);
-        return;
-      }
-      // 超过阈值：从这一刻开始进入拖拽滚动模式
+      if (dist < dragThresholdPx) return;
       moved = true;
       container.classList.add(classActive);
       emitActiveChange(true);
@@ -189,25 +225,52 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
         try {
           container.setPointerCapture(e.pointerId);
           hasPointerCapture = true;
-        } catch (err) {}
+        } catch {}
       }
+      lastX = e.clientX;
       lastY = e.clientY;
       lastT = performance.now();
-      velocity = 0;
+      velocityX = 0;
+      velocityY = 0;
+      prevAbsVelocity = 0;
+      overspeedShownThisDrag = false;
     }
 
-    // 进入拖拽滚动后：阻止文本选择等默认行为
     e.preventDefault();
-
-    const newScrollTop = startScrollTop - dy;
-    container.scrollTop = newScrollTop;
-    // console.log("[拖拽滚动调试] 滚动中", { startScrollTop, dy, newScrollTop });
+    // “抓取拖动”：按下位置跟随手指，scrollLeft/Top 与 dx/dy 反向移动。
+    // 不可滚动的轴浏览器会忽略写入，无需额外判断。
+    container.scrollLeft = startScrollLeft - dx;
+    container.scrollTop = startScrollTop - dy;
 
     const now = performance.now();
     const dt = Math.max(1, now - lastT);
+    const deltaX = e.clientX - lastX;
     const deltaY = e.clientY - lastY;
-    // scrollTop 方向：鼠标向下拖 => 内容向上 => scrollTop 变小（负），因此取反
-    velocity = -deltaY / dt;
+    velocityX = clampVelocity(-deltaX / dt);
+    velocityY = clampVelocity(-deltaY / dt);
+
+    // “太快且仍在加速”提示：按 |v| 模长 和 d|v|/dt 判断
+    // - 用户需求：只在加速状态弹（absAccel > 0），且速度足够大
+    // - 且：一次拖拽（按下到松开）内只提示一次
+    try {
+      const absV = Math.hypot(velocityX, velocityY);
+      const absAccel = (absV - prevAbsVelocity) / dt; // px/ms^2
+      const isAccelerating = absAccel >= overspeedAccelThresholdPxPerMs2;
+      const isTooFast = absV >= overspeedVelocityThresholdPxPerMs;
+      if (isTooFast && isAccelerating && !overspeedShownThisDrag) {
+        container.dispatchEvent(
+          new CustomEvent(overspeedEventName, {
+            detail: { velocity: velocityY, absVelocity: absV, absAccel },
+          }),
+        );
+        overspeedShownThisDrag = true;
+      }
+      prevAbsVelocity = absV;
+    } catch {
+      // ignore
+    }
+
+    lastX = e.clientX;
     lastY = e.clientY;
     lastT = now;
   };
@@ -218,8 +281,8 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
     isDown = false;
     pointerId = null;
+    overspeedShownThisDrag = false;
 
-    // 没有发生明显移动就不做惯性
     if (!moved) return;
 
     container.classList.remove(classActive);
@@ -234,13 +297,14 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
       }
     }
 
-    // 拖拽过：避免 mouseup 后触发点击（图片打开/选择等）
     armSuppressClick();
 
-    const minV = 0.02; // px/ms
-    if (Math.abs(velocity) < minV) return;
+    const minV = 0.02;
+    if (Math.hypot(velocityX, velocityY) < minV) return;
 
-    let v = velocity;
+    // 惯性阶段开始时也截断速度
+    let vx = clampVelocity(velocityX);
+    let vy = clampVelocity(velocityY);
     let last = performance.now();
 
     const tick = () => {
@@ -248,60 +312,51 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
       const dt = now - last;
       last = now;
 
-      container.scrollTop += v * dt;
+      container.scrollLeft += vx * dt;
+      container.scrollTop += vy * dt;
+      const decay = Math.pow(friction, dt / 16.0);
+      vx *= decay;
+      vy *= decay;
 
-      // 按帧率归一化的指数衰减：dt=16ms 时约等于 friction
-      const decay = Math.pow(friction, dt / 16);
-      v *= decay;
-
-      if (Math.abs(v) < minV) {
+      if (Math.hypot(vx, vy) < minV) {
         raf = null;
         return;
       }
       raf = requestAnimationFrame(tick);
     };
-
     raf = requestAnimationFrame(tick);
   };
 
-  // 绑定事件（pointermove 需要 non-passive 才能 preventDefault）
-  // 使用 capture 阶段，避免子元素（图片/组件）吞掉事件导致“拖不动”
-  container.addEventListener("pointerdown", onPointerDown, {
-    passive: true,
-    capture: true,
-  });
-  container.addEventListener("pointermove", onPointerMove, {
-    passive: false,
-    capture: true,
-  });
-  container.addEventListener("pointerup", endPointer, {
-    passive: true,
-    capture: true,
-  });
-  container.addEventListener("pointercancel", endPointer, {
-    passive: true,
-    capture: true,
-  });
+  const onPointerUp = (e: PointerEvent) => endPointer(e);
+  const onPointerCancel = (e: PointerEvent) => endPointer(e);
 
-  if (requireSpaceKey) {
-    window.addEventListener("keydown", onKeyDown, { passive: false });
-    window.addEventListener("keyup", onKeyUp, { passive: true });
-  }
+  const onBlur = () => {
+    if (spaceDown) {
+      spaceDown = false;
+      container.classList.remove(classReady);
+    }
+  };
+
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", onBlur);
+  container.addEventListener("pointerdown", onPointerDown, { capture: true });
+  container.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
+  container.addEventListener("pointerup", onPointerUp, { capture: true });
+  container.addEventListener("pointercancel", onPointerCancel, { capture: true });
 
   return () => {
     stopInertia();
     cleanupClickCapture?.();
     cleanupClickCapture = null;
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
+    window.removeEventListener("blur", onBlur);
+    container.removeEventListener("pointerdown", onPointerDown, { capture: true } as any);
+    container.removeEventListener("pointermove", onPointerMove, { capture: true } as any);
+    container.removeEventListener("pointerup", onPointerUp, { capture: true } as any);
+    container.removeEventListener("pointercancel", onPointerCancel, { capture: true } as any);
     container.classList.remove(classReady);
     container.classList.remove(classActive);
-    emitActiveChange(false);
-    container.removeEventListener("pointerdown", onPointerDown as any, true);
-    container.removeEventListener("pointermove", onPointerMove as any, true);
-    container.removeEventListener("pointerup", endPointer as any, true);
-    container.removeEventListener("pointercancel", endPointer as any, true);
-    if (requireSpaceKey) {
-      window.removeEventListener("keydown", onKeyDown as any);
-      window.removeEventListener("keyup", onKeyUp as any);
-    }
   };
 }

@@ -132,7 +132,7 @@
     <ActionRenderer
       :visible="recordMenu.visible.value"
       :position="recordMenu.position.value"
-      :actions="surfRecordActions as import('@kabegame/core/actions/types').ActionItem<unknown>[]"
+      :actions="surfRecordActions as import('@/actions/types').ActionItem<unknown>[]"
       :context="recordMenuContext"
       :z-index="recordMenu.zIndex.value"
       @close="recordMenu.hide"
@@ -232,25 +232,25 @@
 import { onMounted, ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { ElDialog } from "@kabegame/element-plus";
 import { QuestionFilled, Right, Clock } from "@kabegame/element-plus-icons";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_LINUX } from "@kabegame/core/env";
+import PageHeader from "@/components/common/PageHeader.vue";
+import { useModal } from "@/composables/useModal";
+import { HeaderFeatureId } from "@/stores/header";
+import { IS_LINUX } from "@/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { useSurfImageCountsStore } from "@/stores/surfImageCounts";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { usePluginStore } from "@/stores/plugins";
 import { useI18n } from "@kabegame/i18n";
-import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
-import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
+import { useActionMenu } from "@/composables/useActionMenu";
+import ActionRenderer from "@/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
-import { formatAbsoluteTime, formatRelativeTime } from "@kabegame/core/utils/relativeTime";
+import { formatAbsoluteTime, formatRelativeTime } from "@/utils/relativeTime";
 
 const { t } = useI18n();
 const router = useRouter();

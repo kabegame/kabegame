@@ -55,8 +55,8 @@ import { pathqlEntry } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
+import PageHeader from "@/components/common/PageHeader.vue";
+import { useHeaderStore, HeaderFeatureId } from "@/stores/header";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
   splitQueryFilters,
@@ -75,7 +75,7 @@ import {
   rememberGallerySearchMode,
 } from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 
 interface Props {
   isLoadingAll?: boolean;

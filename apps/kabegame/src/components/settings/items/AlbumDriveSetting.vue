@@ -25,12 +25,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { invoke } from "@/api/rpc";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@/env";
+import { useSettingsStore } from "@/stores/settings";
+import SettingRow from "@/components/settings/SettingRow.vue";
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();

@@ -39,7 +39,7 @@ import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "../../composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 import { openExternalLink } from "../../utils/openExternalLink";
 import { guessAssetMime, normalizeAssetPath, type PluginAsset } from "../../utils/assetPath";
 

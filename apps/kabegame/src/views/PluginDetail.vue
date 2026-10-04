@@ -30,18 +30,18 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
-import { IS_WEB } from "@kabegame/core/env";
-import { isUpdateAvailable } from "@kabegame/core/utils/version";
+import { IS_WEB } from "@/env";
+import { isUpdateAvailable } from "@/utils/version";
 import { usePluginStore } from "@/stores/plugins";
 import { useCrawlerStore, type PluginRecommendedPreset } from "@/stores/crawler";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
 import { usePluginConfig } from "@/composables/usePluginConfig";
 import { guardPluginPlatform, enqueueTask } from "@/composables/useCrawlTaskLauncher";
-import { trackEvent } from "@kabegame/core/track/umami";
-import PluginDetailContent from "@kabegame/core/components/plugin/PluginDetailContent.vue";
+import { trackEvent } from "@/track/umami";
+import PluginDetailContent from "@/components/plugin/PluginDetailContent.vue";
 import PluginDetailPageHeader from "@/components/header/PluginDetailPageHeader.vue";
 import { usePluginDetailLoader } from "@/composables/usePluginDetailLoader";
 

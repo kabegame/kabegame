@@ -185,7 +185,7 @@
     <ActionRenderer
       :visible="albumMenu.visible.value"
       :position="albumMenu.position.value"
-      :actions="albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[]"
+      :actions="albumActions as import('@/actions/types').ActionItem<unknown>[]"
       :context="albumMenuContext"
       :z-index="albumMenu.zIndex.value"
       @close="albumMenu.hide"
@@ -303,32 +303,32 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "@/api/rpc";
 import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
-import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
-import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
+import { useActionMenu } from "@/composables/useActionMenu";
+import ActionRenderer from "@/components/ActionRenderer.vue";
 import AlbumTreePanel from "@/components/albums/AlbumTreePanel.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import type { AlbumTreeViewScope } from "@/components/albums/types";
 import AlbumDetailPanel from "@/components/albums/AlbumDetailPanel.vue";
 import type { AlbumPanelCommand } from "@/components/albums/AlbumDetailPanel.vue";
-import KbResizable from "@kabegame/core/components/common/KbResizable.vue";
+import KbResizable from "@/components/common/KbResizable.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import type { ImageInfo } from "@kabegame/core/types/image";
+import type { ImageInfo } from "@/types/image";
 import { storeToRefs } from "pinia";
-import { trackEvent } from "@kabegame/core/track/umami";
-import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
+import { trackEvent } from "@/track/umami";
+import { createImageAnalytics } from "@/track/imageAnalytics";
 import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useSettingsStore } from "@/stores/settings";
+import { useUiStore } from "@/stores/ui";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
+import { useModal } from "@/composables/useModal";
 import { useI18n } from "@kabegame/i18n";
 import {
   querySearchTerm,
@@ -345,8 +345,8 @@ import {
 import { useAlbumIdPathState, lastAlbumIdOf, segmentsOfAlbumIdPath } from "@/composables/useAlbumIdPathState";
 import { openFilePicker } from "@/api/dialog";
 import { convertLocalFolderAlbumToNormal, setAlbumSyncMode, syncLocalFolderAlbum } from "@/api/syncLocalFolder";
-import type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
-import { isLabelForestKind } from "@kabegame/core/types/album";
+import type { AlbumKind, AlbumSyncMode } from "@/types/album";
+import { isLabelForestKind } from "@/types/album";
 import { isLabelKey } from "@/utils/labelKey";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import type { DragFileOptions } from "@/directives/dragFile";
@@ -1090,7 +1090,7 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
 <style scoped lang="scss">
 .albums-page {
   /* 三栏几何的三个常量：整页内缩，以及 PageHeader 的高度与其下外边距
-   * （真源在 packages/kabegame-core/src/components/common/PageHeader.vue）。
+   * （真源在 apps/kabegame/src/components/common/PageHeader.vue）。
    * 下面 aside 的 sticky 偏移与高度全部由它们派生，不再各写各的字面量。 */
   --albums-page-pad: 20px;
   --albums-header-h: 64px;

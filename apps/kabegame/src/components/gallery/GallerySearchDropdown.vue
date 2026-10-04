@@ -42,7 +42,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { Search } from "@kabegame/element-plus-icons";
-import KbText from "@kabegame/core/components/common/form/KbText.vue";
+import KbText from "@/components/common/form/KbText.vue";
 import {
   GALLERY_SEARCH_ANY,
   GALLERY_SEARCH_MODES,

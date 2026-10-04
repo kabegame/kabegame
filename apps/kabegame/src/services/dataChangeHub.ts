@@ -1,9 +1,9 @@
 import { listen } from "@/api/rpc";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-const FAVORITE_ALBUM_ID = "favorite";
+import { FAVORITE_ALBUM_ID } from "./albums";
 import { BoundedSet } from "@/utils/BoundedSet";
-import { sendDebugEvent } from "@kabegame/core/debugIngest"; // DEBUG-PERF
+import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 const perf = (name: string, payload: unknown) => void sendDebugEvent(name, payload, { sessionId: "eventworker-perf" }); // DEBUG-PERF
 
 export interface ChangeBatch {

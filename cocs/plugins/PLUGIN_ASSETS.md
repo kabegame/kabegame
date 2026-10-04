@@ -102,7 +102,7 @@
 | 侧 | 文件 | 用途 |
 |---|---|---|
 | Rust | `src-tauri/kabegame-core/src/plugin/assets.rs::normalize_asset_path` | 打包校验、加载建表 |
-| TS | `packages/kabegame-core/src/utils/assetPath.ts::normalizeAssetPath` | 文档渲染时查表、判外链 |
+| TS | `apps/kabegame/src/utils/assetPath.ts::normalizeAssetPath` | 文档渲染时查表、判外链 |
 
 改规则必须同时改两处，顺序也要一致。两边漂移只影响「这张图找不找得到」，不涉及安全边界
 —— 包内路径合法性由 `validate_kb_rel_path` 在打包期与加载期各把一次。
@@ -183,7 +183,7 @@ package.json (kbAssets + kbDoc + kbChangelog)
 
 `banner.png` / `banner-1.jpg` / `banner/home.webp` 都算；`images/banner-home.webp` 不算，
 因为它的完整路径不是以 `banner` 开头。判定实现在
-`packages/kabegame-core/src/utils/assetPath.ts::isBannerAsset`，两个装配点共用。
+`apps/kabegame/src/utils/assetPath.ts::isBannerAsset`，两个装配点共用。
 **存量插件没有迁移**，因此它们当前都命中「没有示例图」空态 —— 这是预期的，
 补图时按新约定命名即可。
 
@@ -204,10 +204,10 @@ best-effort：
 
 | 层 | 文件 |
 |---|---|
-| 走马灯 | `packages/kabegame-core/src/components/plugin/PluginQuickPreviewCarousel.vue` |
-| 悬浮面板 | `packages/kabegame-core/src/components/plugin/PluginQuickPreviewPanel.vue` |
-| 交互（hover 延迟/长按/定位翻转/抽屉形态） | `packages/kabegame-core/src/components/common/HoverRevealPanel.vue` |
-| 示例图装配 | `packages/kabegame-core/src/utils/assetPath.ts::bannerPreviewImages` |
+| 走马灯 | `apps/kabegame/src/components/plugin/PluginQuickPreviewCarousel.vue` |
+| 悬浮面板 | `apps/kabegame/src/components/plugin/PluginQuickPreviewPanel.vue` |
+| 交互（hover 延迟/长按/定位翻转/抽屉形态） | `apps/kabegame/src/components/common/HoverRevealPanel.vue` |
+| 示例图装配 | `apps/kabegame/src/utils/assetPath.ts::bannerPreviewImages` |
 | 接入 | `apps/kabegame/src/views/PluginBrowser.vue`、`apps/kabegame/src/components/PluginPickerField.vue` |
 
 > **弹出容器是组件不是 composable**：`HoverRevealPanel` 把触发器放默认插槽、面板内容放
@@ -247,8 +247,8 @@ best-effort：
 | PathQL | `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs` | `plugin://{id}/asset/{path}`、`plugin://{id}/changelog`，MIME 复用 `mime_for_asset` |
 | MCP | `src-tauri/kabegame/src/mcp_capabilities.rs`、`mcp_server.rs` | capability `plugin.read.asset` / `plugin.read.changelog`，资源模板与说明文案 |
 | MCP bundle | `mcpb/kabegame-gallery-node/server/index.js` | `read_plugin` 工具的 `resource` 枚举（`asset` / `changelog`） |
-| 前端归一化 | `packages/kabegame-core/src/utils/assetPath.ts` | `normalizeAssetPath`、`guessAssetMime`、`humanizeAssetLabel` |
-| 文档渲染 | `packages/kabegame-core/src/components/plugin/PluginDocRenderer.vue` | 查 `assets` 内联 base64 图片 |
+| 前端归一化 | `apps/kabegame/src/utils/assetPath.ts` | `normalizeAssetPath`、`guessAssetMime`、`humanizeAssetLabel` |
+| 文档渲染 | `apps/kabegame/src/components/plugin/PluginDocRenderer.vue` | 查 `assets` 内联 base64 图片 |
 
 格式规范另见 `docs/PLUGIN_FORMAT.md`、`apps/docs/src/content/docs/dev/format.mdx`、
 `.../dev/packaging.md`、`.../reference/plugin-schema.mdx`。

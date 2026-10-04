@@ -137,12 +137,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
 import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
-import { IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@/env";
 
 export type TaskRunParamsTask = {
   id: string;

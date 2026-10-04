@@ -1,6 +1,6 @@
 import { onUnmounted } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@/env";
 import { invoke } from "@/api/rpc";
 /**
  * 窗口事件监听 composable

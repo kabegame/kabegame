@@ -47,7 +47,7 @@ import ImageBasicInfoPanel, {
 } from "./ImageBasicInfoPanel.vue";
 import ImageNativeMetadataPanel from "./ImageNativeMetadataPanel.vue";
 import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
-import type { Plugin } from "@kabegame/core/stores/plugins";
+import type { Plugin } from "@/stores/plugins";
 import { useUiStore } from "../../stores/ui";
 import { isNativeMetadataEligible } from "../../utils/mediaMime";
 

@@ -18,9 +18,9 @@
 import { ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { Lightning } from "@kabegame/element-plus-icons";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useUiStore } from "@/stores/ui";
+import { IS_ANDROID } from "@/env";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 
 const props = defineProps<{

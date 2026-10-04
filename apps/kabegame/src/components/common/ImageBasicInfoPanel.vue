@@ -157,7 +157,7 @@ import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "../../api";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { List } from "@kabegame/element-plus-icons";
 import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";

@@ -5,9 +5,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import PageHeader from "@/components/common/PageHeader.vue";
+import { HeaderFeatureId } from "@/stores/header";
+import { useUiStore } from "@/stores/ui";
 import { storeToRefs } from "pinia";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 

@@ -159,7 +159,7 @@ import { computed, ref, watch } from "vue";
 import { useVirtualList } from "@vueuse/core";
 import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import {
   ArrowDown,
   CircleClose,
@@ -176,10 +176,10 @@ import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useDownloadStateStore } from "@/stores/downloadState";
-import type { TaskFailedImage } from "@kabegame/core/types/image";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
+import type { TaskFailedImage } from "@/types/image";
+import { useModal } from "@/composables/useModal";
+import { useUiStore } from "@/stores/ui";
+import { openExternalLink } from "@/utils/openExternalLink";
 
 interface Props {
   modelValue?: boolean;

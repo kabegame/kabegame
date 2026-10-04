@@ -51,7 +51,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - Android 通过 `ContentIoProvider.open_fd(uri)`（PickerPlugin 中的 `openFileDescriptor().detachFd()`）读取 `content://` 视频，然后由 FFmpeg 打开 `/proc/self/fd/N`。绝不能将 `content://` URI 当作普通路径，也不能先将其落盘。视频**尺寸**仍来自 `ContentIoProvider.get_video_dimensions`（`MediaMetadataRetriever`），而非 FFmpeg。
 - `mode-plugin.ts` 会注入 Android FFmpeg 环境（`FFMPEG_PKG_CONFIG_PATH`、`FFMPEG_LINK_MODE=static`、包含 NDK sysroot+target 的 `BINDGEN_EXTRA_CLANG_ARGS`、`PKG_CONFIG_ALLOW_CROSS=1`、NDK 交叉链接器/CC）。支持 `deno task check -c kabegame --mode android`（实际运行 `cargo check --target aarch64-linux-android`）。参见 `cocs/downloader-tasks/VIDEO_INGEST.md`。
 
-**Android 模态层**——所有覆盖层（对话框、抽屉、ActionSheet、预览）都必须调用 `@kabegame/core/composables/useModalBack` 中的 `useModalBack(visibleRef)`，以便 Android 返回键按堆栈顺序关闭各层。该 composable 在桌面端为空操作；无论平台如何，都应在所有相关位置使用它。
+**Android 模态层**——所有覆盖层（对话框、抽屉、ActionSheet、预览）都必须调用 `@/composables/useModalBack` 中的 `useModalBack(visibleRef)`，以便 Android 返回键按堆栈顺序关闭各层。该 composable 在桌面端为空操作；无论平台如何，都应在所有相关位置使用它。
 
 ### 组件库——fork 自 element-plus
 本仓**不再依赖 npm 的 `element-plus` / `@element-plus/icons-vue`**，两者已 vendor 成自有组件库并 fork 维护（不跟上游）。**不要从 `"element-plus"` 导入任何东西**：
@@ -156,13 +156,12 @@ kabegame-core），剩余参数自动补 `--` 传给 cargo test；全量套件�
 **前端**（vitest）：
 
 ```bash
-deno task test -c kabegame-core --skip cargo        # 跑 @kabegame/core 的全部单测
 deno task test -c kabegame --skip cargo             # 跑应用查询模型与 Vue 组件的 Vitest 测试
-deno task --cwd packages/kabegame-core test:watch   # watch 模式，改哪跑哪
+deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑哪
 ```
 
-`kabegame-core` 这个名字下挂着两套互不相干的代码：Rust crate `src-tauri/kabegame-core`
-与 npm 包 `packages/kabegame-core`，test 命令把两者都算作该组件。
+前端只有 `apps/kabegame` 一个应用包（原 `@kabegame/core` 已并入它的 `src/`），
+`kabegame-core` 现在只是 Rust crate `src-tauri/kabegame-core`，没有前端那一半。
 
 测试文件就近放（`src/**/*.test.ts`）。各包自己的 `vitest.config.ts` **从
 `vite.config.pub.ts` 取 `define` / `resolve` / `css`**——平台常量（`__WEB__` 等）由

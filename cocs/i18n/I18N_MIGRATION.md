@@ -231,7 +231,7 @@
 | `apps/kabegame/src/components/help/HelpDrawer.vue` | 帮助抽屉标题、分类 |
 | `apps/kabegame/src/components/help/CodeBlock.vue` | 若有「复制」等按钮 |
 | `apps/kabegame/src/components/common/EmptyState.vue` | 空状态标题/描述 |
-| `packages/kabegame-core/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
+| `apps/kabegame/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
 | `apps/kabegame/src/components/FileDropOverlay.vue` | 拖拽提示文案 |
 | `apps/kabegame/src/components/ImageGrid.vue` | 加载中、错误提示等 |
 | **`packages/core/.../ImageDetailDialog.vue`** | 图片详情弹窗标题与字段标签（**见 7.1.10**，位于 core 未迁移） |
@@ -537,7 +537,7 @@
 
 - **后端**：`get_plugin_vars` 返回的每条变量定义中，`name`、`descripts`、`options[].name` 均为 **Record** 结构：`{ "default": "单语言或默认文案", "zh": "可选", "en": "可选", ... }`。当前 config.json 仍为单语言（`name`/`descripts` 为 string），后端在序列化给前端时通过 `var_definition_to_frontend_value` 包装为 `{ default: value }`，以便前端统一按 locale 解析。
 - **前端**：
-  - **类型**：`PluginConfigText`（与 `PluginManifestText` 同构，`Record<string, string>`）在 `@kabegame/core/stores/plugins` 导出；`PluginVarDef` 的 `name`/`descripts` 及 `options[].name` 类型为 `PluginConfigText | string`（兼容旧数据）。
+  - **类型**：`PluginConfigText`（与 `PluginManifestText` 同构，`Record<string, string>`）在 `@/stores/plugins` 导出；`PluginVarDef` 的 `name`/`descripts` 及 `options[].name` 类型为 `PluginConfigText | string`（兼容旧数据）。
   - **解析**：`resolveConfigText(value, locale)` 与 manifest 的 `resolveManifestText` 同构，优先 `value[locale]`，否则 `value["default"]`；兼容 `value` 为 string。
   - **Composable**：`usePluginConfigI18n()`（`@kabegame/i18n`）提供 `varDisplayName(varDef)`、`varDescripts(varDef)`、`optionDisplayName(opt)`、`resolveConfigText`、`locale`，用于按当前语言解析并得到响应式展示文案。
   - **Record 存储与使用**：任务抽屉（TaskDrawerContent）中 `pluginVarMetaMap` 按插件存储原始变量定义（`name`/`optionNameByVariable` 为 record），展示时用 `resolveConfigText(..., locale.value)` 计算 `getVarDisplayName`/`formatConfigValue`；CrawlerDialog 中 `visiblePluginVars` 为 computed，在过滤 when 后对每条变量用 `varDisplayName`/`varDescripts`/`optionDisplayName` 解析为展示用字符串。

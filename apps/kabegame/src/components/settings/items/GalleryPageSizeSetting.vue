@@ -10,8 +10,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import KbSegmentedControl from "@kabegame/core/components/common/form/KbSegmentedControl.vue";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import KbSegmentedControl from "@/components/common/form/KbSegmentedControl.vue";
 
 const options = [100, 500, 1000] as const;
 

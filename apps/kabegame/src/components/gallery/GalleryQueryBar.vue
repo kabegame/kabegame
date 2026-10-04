@@ -382,9 +382,9 @@ import GalleryFilterTree from "@/components/galleryFilterTree/GalleryFilterTree.
 import GalleryAdvancedQueryDialog from "@/components/gallery/GalleryAdvancedQueryDialog.vue";
 import GallerySearchDropdown from "@/components/gallery/GallerySearchDropdown.vue";
 import { GallerySearchModesKey } from "@/components/gallery/searchModesContext";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/settings";
+import { useModal } from "@/composables/useModal";
+import { useUiStore } from "@/stores/ui";
+import { useSettingsStore, type AppSettingKey } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import {

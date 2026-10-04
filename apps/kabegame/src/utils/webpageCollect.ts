@@ -1,4 +1,4 @@
-import { WEBPAGE_PLUGIN_ID } from "@kabegame/core/stores/plugins";
+import { WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
 
 /** URL 校验失败原因，对应 i18n `gallery.webpageUrlError.<reason>` */
 export type WebpageUrlError = "empty" | "invalid" | "scheme" | "credentials";

@@ -24,14 +24,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useUiStore } from "@/stores/ui";
+import { useSettingsStore } from "@/stores/settings";
+import { IS_ANDROID } from "@/env";
 import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
-import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
+import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;

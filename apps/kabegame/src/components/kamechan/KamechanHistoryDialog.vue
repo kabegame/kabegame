@@ -34,7 +34,7 @@
 import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "@kabegame/i18n";
-import { useKameMessageStore, type KameMessageType } from "@kabegame/core/stores/kameMessage";
+import { useKameMessageStore, type KameMessageType } from "@/stores/kameMessage";
 
 defineProps<{ open: boolean; zIndex: number }>();
 const emit = defineEmits<{ close: [] }>();

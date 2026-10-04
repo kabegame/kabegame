@@ -371,19 +371,19 @@ import {
 } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { trackEvent } from "@kabegame/core/track/umami";
-import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
-import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
-import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
-import SettingSliderControl from "@kabegame/core/components/settings/controls/SettingSliderControl.vue";
-import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
-import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
+import PageHeader from "@/components/common/PageHeader.vue";
+import { useLoadingDelay } from "@/composables/useLoadingDelay";
+import { useSettingsStore } from "@/stores/settings";
+import { useUiStore } from "@/stores/ui";
+import { trackEvent } from "@/track/umami";
+import SettingRow from "@/components/settings/SettingRow.vue";
+import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
+import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
+import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
+import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
+import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
@@ -398,7 +398,7 @@ import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
 import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
 import SettingsSection from "@/components/settings/SettingsSection.vue";
-import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@kabegame/core/env";
+import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
 
 const props = withDefaults(
   defineProps<{

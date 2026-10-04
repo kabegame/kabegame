@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID } from "@/env";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { fetchSurfImageCounts } from "@/utils/surfMediaCount";
 

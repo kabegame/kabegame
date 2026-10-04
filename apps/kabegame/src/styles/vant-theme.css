@@ -3,9 +3,9 @@
  *
  * 使用方式：
  * 1. 在入口（如 apps/kabegame/src/main.ts）中按顺序引入：
- *    - @kabegame/core/styles/anime-theme.css
+ *    - @/styles/anime-theme.css
  *    - vant 的样式（若已使用 Vant 组件，例如：import "vant/lib/index.css" 或按需引入组件的 CSS）
- *    - @kabegame/core/styles/vant-theme.css
+ *    - @/styles/vant-theme.css
  * 2. 或通过 ConfigProvider + theme-vars 在 JS 中注入相同变量（见文档）。
  *
  * 使用 :root:root 提高优先级，确保覆盖 Vant 默认 :root 变量。

@@ -83,7 +83,7 @@ import { ElIcon, KbFilterDropdown } from "@kabegame/element-plus";
 import { Close, FilterAspect, FilterDate, FilterMedia, FilterPlugin, FilterSize } from "@kabegame/element-plus-icons";
 import { facetValueLabel, type FacetDimension } from "@/composables/useAdvancedQueryFacets";
 import { usePluginStore } from "@/stores/plugins";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import {
   getNode,
   notParity,

@@ -7,17 +7,17 @@ import * as ElementPlusIconsVue from "@kabegame/element-plus-icons";
 import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";
-import "@kabegame/core/styles/anime-theme.css";
+import "@/styles/anime-theme.css";
 import "./styles/dialogs.css";
 import "./styles/hscroll-fade.css";
 /** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */
 import "vant/lib/toast/style";
 /** Vant 使用项目配色。若使用 Vant，请在其样式之后引入，顺序：anime-theme → vant 样式 → vant-theme */
-import "@kabegame/core/styles/vant-theme.css";
-import { vPullToRefresh } from "@kabegame/core/directives/pullToRefresh";
+import "@/styles/vant-theme.css";
+import { vPullToRefresh } from "@/directives/pullToRefresh";
 import { vDragFile } from "@/directives/dragFile";
 import { vHscrollFade } from "@/directives/hscrollFade";
-import { IS_ANDROID, IS_MACOS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_MACOS } from "@/env";
 import { Toast, Picker, Popup, Button } from "vant";
 import "vant/lib/picker/style";
 import "vant/lib/popup/style";
@@ -25,7 +25,7 @@ import "vant/lib/button/style";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAppVersionGate";
 import { usePluginStore } from "@/stores/plugins";
-import { setCrawlerBeforeAddTaskGuard } from "@kabegame/core/stores/crawler";
+import { setCrawlerBeforeAddTaskGuard } from "@/stores/crawler";
 import { i18n } from "@kabegame/i18n";
 
 if (IS_ANDROID) {

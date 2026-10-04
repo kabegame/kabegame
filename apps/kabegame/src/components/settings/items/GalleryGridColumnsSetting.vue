@@ -27,8 +27,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useUiStore } from "@/stores/ui";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("galleryGridColumns");
 const uiStore = useUiStore();

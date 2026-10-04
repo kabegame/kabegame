@@ -1,8 +1,8 @@
 import { defineStore, storeToRefs } from "pinia";
 import { computed, type WritableComputedRef } from "vue";
 import { useLocalStorage } from "@vueuse/core";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import type { AppSettingKey } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import type { AppSettingKey } from "@/stores/settings";
 
 const HIDE_PREFIX = "hide/";
 const GLOBAL_HIDE_KEY = "pathRoute.hide";

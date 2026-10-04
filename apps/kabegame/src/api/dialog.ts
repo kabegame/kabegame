@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@/env";
 
 export interface FilePickerOptions {
   directory?: boolean;

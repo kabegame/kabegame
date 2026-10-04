@@ -12,7 +12,7 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Delete, FolderOpened, Picture, Edit } from "@kabegame/element-plus-icons";
-import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
 import { FAVORITE_ALBUM_ID } from "@/services/albums";
 
 interface Props {

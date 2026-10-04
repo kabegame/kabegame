@@ -24,7 +24,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Upload } from "@kabegame/element-plus-icons";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 
 const { t } = useI18n();
 const fileDropModal = useModal();

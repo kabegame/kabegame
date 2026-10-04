@@ -65,7 +65,7 @@
 import { onActivated, onMounted, onUnmounted, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import PageHeader from "@/components/common/PageHeader.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -85,9 +85,9 @@ import {
   type GallerySortField,
 } from "@/utils/galleryPath";
 import { usePageBridgeStore } from "@/stores/pageBridge";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 
 const { t } = useI18n();
 const route = useRoute();

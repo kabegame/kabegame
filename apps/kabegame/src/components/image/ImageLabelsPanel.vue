@@ -102,11 +102,11 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@kabegame/i18n";
 import { Close, CopyDocument, Plus, PriceTag } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import CollapsibleDrawerPanel from "@kabegame/core/components/common/CollapsibleDrawerPanel.vue";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
-import { useModal } from "@kabegame/core/composables/useModal";
-import type { ImageInfo } from "@kabegame/core/types/image";
+import { useModal } from "@/composables/useModal";
+import type { ImageInfo } from "@/types/image";
 import {
   addImagesToAlbum,
   createLabelAlbum,

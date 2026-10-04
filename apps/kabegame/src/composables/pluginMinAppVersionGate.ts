@@ -1,5 +1,5 @@
 import { i18n } from "@kabegame/i18n";
-import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
+import { openExternalLink } from "@/utils/openExternalLink";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { useApp } from "@/stores/app";
 

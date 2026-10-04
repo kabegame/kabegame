@@ -106,10 +106,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
-import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
+import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 
 const props = defineProps<{ config: RunConfig }>();
 

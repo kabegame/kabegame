@@ -81,7 +81,7 @@
 import { computed, ref } from "vue";
 import { Loading, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModalBack } from "@/composables/useModalBack";
 import { useBusyTasks } from "@/composables/useBusyTasks";
 import BusyTasksSection from "./BusyTasksSection.vue";
 

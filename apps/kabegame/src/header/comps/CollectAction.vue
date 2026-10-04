@@ -38,8 +38,8 @@
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
 import { Plus, ArrowDown, FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WEB } from "@kabegame/core/env";
+import { useUiStore } from "@/stores/ui";
+import { IS_WEB } from "@/env";
 
 const { t } = useI18n();
 

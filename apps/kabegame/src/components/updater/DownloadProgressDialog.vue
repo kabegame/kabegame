@@ -37,7 +37,7 @@
 import { computed, watch } from "vue";
 import { ElButton, ElDialog, ElMessageBox, ElProgress } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore } from "@/stores/updater";
 

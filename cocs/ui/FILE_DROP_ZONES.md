@@ -163,7 +163,7 @@ local-import 的结果保持扁平，不再为拖入目录创建同步画册或�
 - `apps/kabegame/src/utils/dragFileImport.ts` —— 共用拖入计划 / local-import 参数
 - `apps/kabegame/src/components/FileDropOverlay.vue` —— 浮层
 - `apps/kabegame/src/views/{Gallery,Albums,PluginBrowser}.vue` —— 三个热区
-- `packages/kabegame-core/src/utils/dragExport.ts`、`components/image/ImageContent.vue` —— 内部拖拽标记
+- `apps/kabegame/src/utils/dragExport.ts`、`components/image/ImageContent.vue` —— 内部拖拽标记
 - `src-tauri/kabegame/src/commands/misc.rs` —— `get_file_drop_kinds`
 - `src-tauri/tauri-runtime-cef/src/webview.rs` —— `TauriCefDragHandler`
 - `third-patches/cef/0002-drag-drop-client-events.patch` —— CEF 侧的 over/leave/drop 回调

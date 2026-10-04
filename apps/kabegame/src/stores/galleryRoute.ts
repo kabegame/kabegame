@@ -12,8 +12,8 @@ import {
   parseGalleryPath,
   querySearchTerm,
 } from "@/utils/galleryPath";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_WEB } from "@kabegame/core/env";
+import { useSettingsStore } from "@/stores/settings";
+import { IS_WEB } from "@/env";
 
 /**
  * web 版默认随机排序的种子：每次加载页面换一批图，但整个会话内保持同一次洗牌

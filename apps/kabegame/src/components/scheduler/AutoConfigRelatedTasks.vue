@@ -34,13 +34,13 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
-import TaskSummaryRow from "@kabegame/core/components/task/TaskSummaryRow.vue";
-import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vue";
-import type { CrawlTask } from "@kabegame/core/stores/crawler";
+import TaskSummaryRow from "@/components/task/TaskSummaryRow.vue";
+import TaskParamsDialog from "@/components/task/TaskParamsDialog.vue";
+import type { CrawlTask } from "@/stores/crawler";
 
 const props = withDefaults(
   defineProps<{

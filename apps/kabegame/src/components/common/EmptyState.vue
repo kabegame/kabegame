@@ -11,7 +11,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 
 const props = defineProps<{
   /** 传入时替换主提示（用于壁纸顺序空状态等）；不传则使用默认 emptyStateTip */

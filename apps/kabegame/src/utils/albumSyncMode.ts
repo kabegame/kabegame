@@ -1,7 +1,7 @@
 import type { Component } from "vue";
 import { Connection, FolderChecked, Link } from "@kabegame/element-plus-icons";
 import { i18n } from "@kabegame/i18n";
-import type { AlbumSyncMode } from "@kabegame/core/types/album";
+import type { AlbumSyncMode } from "@/types/album";
 
 export function syncModeLabel(mode: AlbumSyncMode): string {
   return i18n.global.t(`albums.localFolder.syncMode.${mode}.label`);

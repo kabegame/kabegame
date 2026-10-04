@@ -13,13 +13,13 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Picture, FolderOpened, VideoPlay } from "@kabegame/element-plus-icons";
-import OptionPickerDrawer from "@kabegame/core/components/common/OptionPickerDrawer.vue";
-import type { OptionItem } from "@kabegame/core/components/common/OptionPickerDrawer.vue";
+import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
+import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useApp } from "@/stores/app";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WEB } from "@kabegame/core/env";
+import { useUiStore } from "@/stores/ui";
+import { IS_WEB } from "@/env";
 
 interface Props {
   modelValue: boolean;

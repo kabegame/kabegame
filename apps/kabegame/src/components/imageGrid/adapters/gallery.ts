@@ -1,11 +1,11 @@
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
 import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
-import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
+import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter } from "../types";
-import { IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@/env";
 
 /**
  * Gallery（`/gallery`）的 grid adapter。

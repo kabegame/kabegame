@@ -104,15 +104,13 @@
 import { computed } from "vue";
 import { Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
-import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
-import HoverRevealPanel from "@kabegame/core/components/common/HoverRevealPanel.vue";
-import PluginLabelTags from "@kabegame/core/components/plugin/PluginLabelTags.vue";
-import PluginQuickPreviewPanel, {
-  type QuickPreviewPluginLike,
-} from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
-import { bannerPreviewImages } from "@kabegame/core/utils/assetPath";
-import { VERSION_INCOMPATIBLE_LABEL_ID, type PluginLabel } from "@kabegame/core/stores/pluginLabels";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
+import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
+import PluginLabelTags from "@/components/plugin/PluginLabelTags.vue";
+import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
+import { bannerPreviewImages } from "@/utils/assetPath";
+import { VERSION_INCOMPATIBLE_LABEL_ID, type PluginLabel } from "@/stores/pluginLabels";
+import { useUiStore } from "@/stores/ui";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 
 type PluginPickerValueKey = "id" | "baseUrl";

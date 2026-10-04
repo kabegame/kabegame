@@ -88,12 +88,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onActivated, onDeactivated, watch } from "vue";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
 import { listen } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -107,13 +107,13 @@ import {
 } from "@/utils/galleryPath";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 import { storeToRefs } from "pinia";
 import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
-import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
-import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vue";
-import type { TaskRunParamsTask } from "@kabegame/core/components/task/TaskRunParamsContent.vue";
-import TaskCountsInline from "@kabegame/core/components/task/TaskCountsInline.vue";
+import TaskLogDialog from "@/components/task/TaskLogDialog.vue";
+import TaskParamsDialog from "@/components/task/TaskParamsDialog.vue";
+import type { TaskRunParamsTask } from "@/components/task/TaskRunParamsContent.vue";
+import TaskCountsInline from "@/components/task/TaskCountsInline.vue";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import {
@@ -121,9 +121,9 @@ import {
   rememberTaskDetailSearchMode,
   taskDetailStickySearchMode,
 } from "@/stores/taskDetailRoute";
-import { IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@/env";
 import { canOpenTaskWebview } from "@/utils/webpageCollect";
-import { createImageAnalytics } from "@kabegame/core/track/imageAnalytics";
+import { createImageAnalytics } from "@/track/imageAnalytics";
 import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGithubIssueUrl, type GithubIssueField } from "@/composables/useGithubIssueUrl";

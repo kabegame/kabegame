@@ -45,10 +45,10 @@
 import { computed, ref, watch } from "vue";
 import { ElButton, ElDialog, KbTab, type KbTabItem } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
-import { IS_LINUX } from "@kabegame/core/env";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { renderBasicMarkdown } from "@kabegame/core/utils/renderMarkdown";
-import { openExternalLink } from "@kabegame/core/utils/openExternalLink";
+import { IS_LINUX } from "@/env";
+import { useModal } from "@/composables/useModal";
+import { renderBasicMarkdown } from "@/utils/renderMarkdown";
+import { openExternalLink } from "@/utils/openExternalLink";
 import * as updaterService from "@/services/updater";
 import { useUpdaterStore, type ReleaseInfo } from "@/stores/updater";
 

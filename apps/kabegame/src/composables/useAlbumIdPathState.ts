@@ -1,6 +1,6 @@
 import { computed } from "vue";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_WEB } from "@kabegame/core/env";
+import { useSettingsStore } from "@/stores/settings";
+import { IS_WEB } from "@/env";
 
 /** 祖先 id 链（`/root/.../self/`）→ 各段 id（从根到自身，均非空）。 */
 export function segmentsOfAlbumIdPath(chain: string): string[] {

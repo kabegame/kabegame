@@ -1,5 +1,5 @@
 import { invoke } from "@/api/rpc";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { openImage } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "./desktopOnlyGuard";
 

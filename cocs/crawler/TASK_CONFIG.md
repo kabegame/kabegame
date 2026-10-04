@@ -10,7 +10,7 @@ plugin config（插件变量 JSON，后端格式）
 
 - **plugin config**：插件脚本读到的 `userConfig`，键值由插件 `config.json` 的 `vars` 决定。
   checkbox 在后端是对象 `{ a: true }`，表单内部用的是数组 `["a"]`（`normalizeVarsForUI` / `expandVarsForBackend`）。
-- **task config**：`TaskConfig`（`packages/kabegame-core/src/stores/crawler.ts`）——
+- **task config**：`TaskConfig`（`apps/kabegame/src/stores/crawler.ts`）——
   `pluginId` / `userConfig` / `outputDir` / `httpHeaders` / `outputAlbumId`。
 - **自动任务 config**：`RunConfig`，等于 task config 再加 `name` / `description` / `url` /
   `scheduleEnabled` / `scheduleSpec` / `schedulePlannedAt` / `scheduleLastRunAt`。
@@ -103,4 +103,4 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 | `apps/kabegame/src/components/crawler/PluginConfigForm.vue` | 插件变量区（UI 格式 ↔ 后端格式） |
 | `apps/kabegame/src/composables/taskConfig.ts` | `writeTaskConfig` / 优先级纯函数 / 翻译函数 |
 | `apps/kabegame/src/stores/crawlerDrawer.ts` | 只剩 `visible` / `open()` / `close()` |
-| `packages/kabegame-core/src/stores/crawler.ts` | `taskConfig` / `taskConfigRevision` / `RunConfig.outputAlbumId` |
+| `apps/kabegame/src/stores/crawler.ts` | `taskConfig` / `taskConfigRevision` / `RunConfig.outputAlbumId` |

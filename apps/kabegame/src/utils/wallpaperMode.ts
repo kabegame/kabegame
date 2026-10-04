@@ -1,8 +1,8 @@
 import { invoke } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
-import { IS_WEB } from "@kabegame/core/env";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { IS_WEB } from "@/env";
+import { useSettingsStore } from "@/stores/settings";
 
 function isRequiresWindowModeError(error: unknown): boolean {
   const msg = typeof error === "string" ? error : (error as any)?.message || String(error);

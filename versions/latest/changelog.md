@@ -46,6 +46,7 @@
 - 整数输入编程可输入框，上下界也不用滑块
 - 开始收集弹窗去掉定时设置、配置选择配置，添加跳转配置页面，移动保存到配置按钮到左下方
 - 运行配置页面一键运行改成打开配置弹窗
+- 图片详情弹窗仅在 Android 提供，桌面端图片右键菜单不再显示“详情”入口
 
 ## 开发侧
 
@@ -69,3 +70,4 @@
 - windows下拖动文件通过新的download端点下载，可以显示真实文件名称。
 - 重构前端pathql查询视图为eventWorker统一收集、refetch、转发
 - vendored element-plus 的 `ElSelect` 默认 `fit-input-width`（`select/src/select.ts` 里 `fitInputWidth` 默认改 `true`，与 `ElSelectV2` 对齐），业务侧不再逐个传该 prop；需要按内容宽度的调用方显式传 `false`
+- 重构去掉前端 kabegame-core，并入kabegame

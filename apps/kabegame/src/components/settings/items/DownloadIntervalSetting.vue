@@ -21,9 +21,9 @@
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import AndroidPickerDuration from "@kabegame/core/components/AndroidPickerDuration.vue";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import AndroidPickerDuration from "@/components/AndroidPickerDuration.vue";
+import { useUiStore } from "@/stores/ui";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("downloadIntervalMs");
 const localValue = ref<number>(500);

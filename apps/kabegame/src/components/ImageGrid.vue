@@ -41,8 +41,9 @@
     </template>
   </CoreImageGrid>
 
-  <!-- 详情弹窗：view 层 onContextCommand return 'detail' 或未拦截时由本层打开 -->
+  <!-- Android 详情弹窗：view 层 onContextCommand return 'detail' 或未拦截时由本层打开 -->
   <ImageDetailDialog
+    v-if="IS_ANDROID"
     :open="imageDetailDialog.isOpen.value"
     :z-index="imageDetailDialog.zIndex.value"
     :image="detailImage"
@@ -90,28 +91,28 @@ import {
   useAttrs,
   watch,
 } from "vue";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
-import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
+import CoreImageGrid from "@/components/image/ImageGrid.vue";
 import ImageLabelsPanel from "@/components/image/ImageLabelsPanel.vue";
 import { labelKeysText, pickLabelAlbums, writeClipboardText } from "@/utils/imageLabels";
-import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
-import ImageDetailDialog from "@kabegame/core/components/common/ImageDetailDialog.vue";
-import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
+import type { ImageInfo as CoreImageInfo } from "@/types/image";
+import ImageDetailDialog from "@/components/common/ImageDetailDialog.vue";
+import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import type {
   ImageDetailGalleryFilterTarget,
   ImageDetailSurfRecordTarget,
-} from "@kabegame/core/components/common/ImageBasicInfoPanel.vue";
+} from "@/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { singleFilterToSet, queryFromFilterSet, type GalleryFilter, type GalleryQuery } from "@/utils/galleryPath";
 import EmptyState from "@/components/common/EmptyState.vue";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useSettingsStore } from "@/stores/settings";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { rowToImageInfo } from "@/utils/imageRow";
-import { sendDebugEvent } from "@kabegame/core/debugIngest"; // DEBUG-PERF
+import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 import { withGalleryPrefix } from "@/utils/path";
 import { diffById } from "@/utils/listDiff";
 import { createImageActions } from "@/actions/imageActions";
@@ -119,18 +120,19 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
 import { subscribeChanges } from "@/services/dataChangeHub";
 import { GRID_REFRESH_WAIT_MS, useLiveQuery, type ViewQuery, type ViewSnapshot } from "@/services/liveQuery";
-import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
-import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
+import { useProvideImageMetadataCache } from "@/composables/useImageMetadataCache";
+import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, fetchImageAlbums, removeImagesFromAlbum } from "@/services/albums";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { IS_ANDROID } from "@/env";
 import { useI18n } from "@kabegame/i18n";
 import type { GridRefreshContext, GridRemoveDialogText, GridAdapter } from "@/components/imageGrid/types";
 
 import type {
   ContextCommand as CoreContextCommand,
   ContextCommandPayload as CoreContextCommandPayload,
-} from "@kabegame/core/components/image/ImageGrid.vue";
-import type { ActionItem } from "@kabegame/core/actions/types";
+} from "@/components/image/ImageGrid.vue";
+import type { ActionItem } from "@/actions/types";
 
 // 扩展 ContextCommand 类型，添加 kabegame 特有的命令
 export type ContextCommand =
@@ -787,6 +789,7 @@ const copyImageLabels = async (image: ImageInfo) => {
 
 const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCommandPayload): Promise<void> => {
   if (command === "detail") {
+    if (!IS_ANDROID) return;
     detailImage.value = payload.image;
     imageDetailDialog.open();
     if (payload.image) {

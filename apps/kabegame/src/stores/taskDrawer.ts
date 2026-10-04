@@ -1,8 +1,8 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { useCrawlerStore } from "./crawler";
-import { IS_WEB } from "@kabegame/core/env";
-import { trackEvent } from "@kabegame/core/track/umami";
+import { IS_WEB } from "@/env";
+import { trackEvent } from "@/track/umami";
 
 function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;

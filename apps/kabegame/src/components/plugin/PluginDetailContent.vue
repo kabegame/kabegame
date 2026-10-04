@@ -188,7 +188,7 @@ import { useUiStore } from "../../stores/ui";
 import { usePluginActionState } from "../../composables/usePluginActionState";
 import { APP_VERSION } from "../../env";
 import { openExternalLink } from "../../utils/openExternalLink";
-import { PluginRecommendedPreset } from "@kabegame/core/stores/crawler.ts";
+import { PluginRecommendedPreset } from "@/stores/crawler.ts";
 
 const { t, locale } = useI18n();
 const uiStore = useUiStore();

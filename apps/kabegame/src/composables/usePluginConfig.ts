@@ -9,7 +9,7 @@ import {
   type PluginVarDef,
   normalizeVarsForUI,
   matchUserConfigFromDefaults,
-} from "@kabegame/core/utils/pluginVarForm";
+} from "@/utils/pluginVarForm";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 /** 从插件默认配置加载到表单时，一并返回 httpHeaders / outputDir */
