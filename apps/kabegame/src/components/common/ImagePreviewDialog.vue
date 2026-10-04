@@ -125,8 +125,8 @@
               @open-gallery-filter="handleOpenGalleryFilter"
               @open-surf-record="emit('open-surf-record', $event)"
             />
-            <!-- 宿主（app）注入的附加信息面板，如图片标签；core 拿不到应用侧 store 与路由 -->
-            <slot name="info-extra" :image="previewImage" />
+            <!-- 标签面板：点标签跳画册页后要顺手关掉预览，故把本地 closePreview 接到 navigate 上 -->
+            <ImageLabelsPanel v-if="previewImage" :image="previewImage" @navigate="closePreview" />
             <ImageNativeMetadataPanel
               v-if="isNativeMetadataEligible(previewImage?.type)"
               :image="previewImage"
@@ -339,6 +339,7 @@ import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
+import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
   type ImageDetailGalleryFilterTarget,
@@ -1546,7 +1547,7 @@ body.image-preview-hides-kamechan .kamechan-host {
     overflow: hidden;
   }
 
-  /* 高度由侧栏给定；声明为 size 容器，供 info-extra 面板用 cqh 按侧栏高度限高 */
+  /* 高度由侧栏给定；声明为 size 容器，供标签面板用 cqh 按侧栏高度限高 */
   .preview-detail-drawer-scroll-left {
     container-type: size;
   }

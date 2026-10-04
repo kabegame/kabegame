@@ -35,10 +35,6 @@
         <EmptyState />
       </slot>
     </template>
-    <!-- 预览弹窗信息区：图片标签（依赖应用侧画册 store，故由 app 层注入） -->
-    <template #preview-info-extra="{ image }">
-      <ImageLabelsPanel v-if="image" :image="image" @navigate="coreRef?.closePreview?.()" />
-    </template>
   </CoreImageGrid>
 
   <!-- Android 详情弹窗：view 层 onContextCommand return 'detail' 或未拦截时由本层打开 -->
@@ -94,7 +90,6 @@ import {
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import CoreImageGrid from "@/components/image/ImageGrid.vue";
-import ImageLabelsPanel from "@/components/image/ImageLabelsPanel.vue";
 import { labelKeysText, pickLabelAlbums, writeClipboardText } from "@/utils/imageLabels";
 import type { ImageInfo as CoreImageInfo } from "@/types/image";
 import ImageDetailDialog from "@/components/common/ImageDetailDialog.vue";
