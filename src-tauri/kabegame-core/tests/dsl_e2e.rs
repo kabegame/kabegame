@@ -1640,6 +1640,45 @@ fn counts_by_id(runtime: &ProviderRuntime, path: &str, column: &str) -> HashMap<
 }
 
 #[test]
+fn albums_of_image_composes_shared_album_filters() {
+    let runtime = build_runtime();
+
+    // image 1 直接属于 AlbumA(normal) + 两个 label，按 created_at asc 返回
+    assert_eq!(
+        ids(runtime.fetch("albums://of_image_1").unwrap()),
+        vec![ALBUM_A_ID, LABEL_HATSUNE_ID, LABEL_VOCALOID_ID]
+    );
+
+    // of_image_<id> 后可继续叠过滤段：album_kind 把 type 过滤折进同一条 SQL
+    assert_eq!(
+        ids(runtime
+            .fetch("albums://of_image_1/album_kind/label")
+            .unwrap()),
+        vec![LABEL_HATSUNE_ID, LABEL_VOCALOID_ID]
+    );
+    assert_eq!(
+        ids(runtime
+            .fetch("albums://of_image_1/album_kind/normal")
+            .unwrap()),
+        vec![ALBUM_A_ID]
+    );
+    assert_eq!(
+        runtime
+            .count("albums://of_image_1/album_kind/label")
+            .unwrap(),
+        2
+    );
+
+    // 多类型 OR 组合器同样可用
+    assert_eq!(
+        ids(runtime
+            .fetch("albums://of_image_1/~any/album_kind/label/~or/album_kind/label_dir/~end")
+            .unwrap()),
+        vec![LABEL_HATSUNE_ID, LABEL_VOCALOID_ID]
+    );
+}
+
+#[test]
 fn album_query_primitives_cover_nested_tree_counts_pages_kinds_and_sections() {
     let runtime = build_runtime();
     let child_id = "33333333-3333-3333-3333-333333333333";

@@ -107,8 +107,6 @@ import CollapsibleDrawerPanel from "@kabegame/core/components/common/Collapsible
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@kabegame/core/composables/useModal";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { listen, type UnlistenFn } from "@/api/rpc";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import {
   addImagesToAlbum,
   createLabelAlbum,
@@ -117,6 +115,7 @@ import {
   removeImagesFromAlbum,
   type Album,
 } from "@/services/albums";
+import { subscribeChanges } from "@/services/dataChangeHub";
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { isLabelKey } from "@/utils/labelKey";
 import { labelKeysText, writeClipboardText } from "@/utils/imageLabels";
@@ -146,7 +145,8 @@ async function load() {
   const imageId = props.image.id;
   const seq = ++loadSeq;
   try {
-    const albums = (await fetchImageAlbums(imageId)).filter((album) => album.type === "label");
+    // 只要标签画册：走 PathQL 的 album_kind/label 段由后端过滤
+    const albums = await fetchImageAlbums(imageId, ["label"]);
     // 快速切图时丢弃过期结果
     if (seq === loadSeq) labels.value = albums;
   } catch (error) {
@@ -164,15 +164,18 @@ watch(
   { immediate: true },
 );
 
-// 其它入口（插件下载、迁移、画册页移除）改动成员时同步刷新
-let unlisten: UnlistenFn | null = null;
-void listen<AlbumImagesChangePayload>("album-images-change", (event) => {
-  const imageIds = (event.payload?.imageIds ?? []).map(String);
-  if (imageIds.length === 0 || imageIds.includes(props.image.id)) void load();
-}).then((fn) => {
-  unlisten = fn;
+// 其它入口（插件下载、迁移、画册页移除）改动成员，或已挂标签被改名 / 删除时同步刷新。
+// 走 dataChangeHub 而非裸 listen：批次合并 + 回调串行 + 本地写命令去重都由枢纽负责。
+const unsubscribe = subscribeChanges({
+  waitMs: 500,
+  filter: (batch) =>
+    // 成员变更：命中当前图片，或事件未带 imageIds（全量）
+    (batch.albumImages.size > 0 && (batch.albumImageIds.size === 0 || batch.albumImageIds.has(props.image.id))) ||
+    // 结构变更：当前已挂的标签被改名 / 移动 / 删除，tag 文案要跟着变
+    labels.value.some((label) => batch.albumIds.has(label.id)),
+  onBatch: load,
 });
-onBeforeUnmount(() => unlisten?.());
+onBeforeUnmount(unsubscribe);
 
 function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : (error as Error)?.message || String(error);

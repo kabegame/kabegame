@@ -134,8 +134,6 @@
             />
           </div>
         </KbResizable>
-        <!-- 全屏层的 z-index 必须走内联 style：SFC 的 v-bind() 只把自定义属性下发到组件根节点，
-             el-dialog 的根是 Teleport，Vue 不会往里遍历，写在 <style> 里的 v-bind 恒为 auto -->
         <div
           ref="previewContainerRef"
           class="preview-container"
