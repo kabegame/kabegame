@@ -30,6 +30,8 @@ plugin-name.kgpg
 
 v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion >= 3`；当前打包器要求 `kbPackageVersion` 精确为 `3`。插件目录名、`.kgpg` 输出文件名 stem 和 `package.json.name` 必须一致。
 
+加载 `.kgpg` 时插件 ID 的取值顺序是：**调用方显式指定**（仅 `kabegame-cli plugin run --id`，用于临时运行/测试）→ `package.json.name` → `.kgpg` 文件名 stem。换言之包自己声明的 `name` 比文件名权威，改文件名不会改掉插件身份；安装落盘时文件名也会被归一成 `<ID>.kgpg`。
+
 ```json
 {
   "name": "anime-pictures",
@@ -65,7 +67,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `name` | 是 | 插件包名，必须等于插件目录名和输出 `.kgpg` stem。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
+| `name` | 是 | 插件包名，必须等于插件目录名和输出 `.kgpg` stem；它同时是加载时的插件 ID 首选来源（见上文取值顺序）。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
 | `version` | 是 | 插件 semver，必须是 `a.b.c` 且每段 ≤255（应用将其 packed 编码为 u32 记录到 `image_metadata.plugin_version` 并做迁移门控）。 |
 | `private` | 否 | 内置插件建议为 `true`，避免作为 npm 包发布。 |
 | `name.*` / `description.*` | 否 | 扁平 i18n 键。`name` 自身已被包名占用；本地化展示名使用 `name.zh`、`name.en` 等。`description` 可作为默认描述。 |

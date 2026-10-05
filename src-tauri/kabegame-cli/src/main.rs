@@ -135,14 +135,22 @@ struct NewPluginArgs {
 struct ImportPluginArgs {
     /// 本地插件文件路径（.kgpg）
     path: PathBuf,
+    /// 数据目录：dev = 仓库内 `.kabegame/debug`，prod = 系统用户数据目录。
+    /// 默认跟随编译期配置（release 构建即 prod）。
+    #[arg(long = "data", value_enum, default_value_t = DataMode::Auto)]
+    data: DataMode,
 }
 
 #[derive(Args, Debug)]
 struct RunPluginArgs {
-    /// 已安装插件的 id（等于插件目录名 / .kgpg 文件名 stem，如 kemono），
-    /// 或一个 `.kgpg` 文件路径——后者临时运行，不写进 plugins_directory。
-    /// 路径模式下插件 id 取文件名 stem（与安装后一致）。
+    /// 已安装插件的 id（如 kemono），或一个 `.kgpg` 文件路径——后者临时运行，
+    /// 不写进 plugins_directory。
     plugin: String,
+    /// 仅 `.kgpg` 路径模式：指定本次运行用的插件 id，顶掉包内 package.json 的 `name`
+    /// 与文件名。影响 provider namespace、插件数据目录与 `default-configs/<id>.json`
+    /// 的取用——想让同一个包跑成另一份互不干扰的数据时用它。
+    #[arg(long = "id", value_name = "PLUGIN_ID")]
+    id: Option<String>,
     /// 覆盖单个配置项，形如 `--var key=value`，可重复。
     /// 值按插件 kbConfig 里该 key 的类型自动转换（int/float/boolean 等）。
     #[arg(long = "var", value_name = "KEY=VALUE")]
@@ -259,63 +267,110 @@ fn eval_condition(cond: &str, backend_str: &str) -> bool {
 }
 
 /// 极简 Liquid 子集渲染：支持 {{ var }} 和 {% if var == "val" %} / {% elsif ... %} / {% else %} / {% endif %}
+/// 一个够用的 liquid 子集：`{{ var }}` 与 `{% if/elsif/else/endif %}`，含 `{%- -%}` 空白控制。
+///
+/// 两个坑都踩过，别回退：
+/// - 带 `-` 的空白控制标签要先剥掉 `-` 再认关键字。否则 `{%- if %}` 被当成未知标签整条跳过，
+///   if / else 两个分支会一起写出去——生成过带重复 `main` 键的非法 package.json。
+/// - 「当前该不该输出」看的是每层分支是否成立，不是「这层有没有分支命中过」；后者只用来决定
+///   elsif / else 要不要接管。混用会让 `{% if %}A{% elsif %}B{% endif %}` 把 A、B 都写出去。
+///
+/// 不认识的标签 / 条件直接报错：模板写错时宁可 `plugin new` 失败，也不要静默生成坏文件。
 fn render_liquid_template(
     template: &str,
     vars: &HashMap<String, String>,
 ) -> Result<String, String> {
-    let mut out = String::with_capacity(template.len());
-    let mut i = 0;
+    /// 一层 `{% if %}`：`parent_active` 是外层是否成立，`active` 是当前分支要不要输出，
+    /// `taken` 记录本层是否已经有分支命中（elsif / else 据此短路）。
+    struct Frame {
+        parent_active: bool,
+        active: bool,
+        taken: bool,
+    }
+
     let chars: Vec<char> = template.chars().collect();
     let len = chars.len();
-
-    // Stack: (in_true_branch, branch_has_rendered)
-    let mut stack: Vec<(bool, bool)> = Vec::new();
+    let mut out = String::with_capacity(template.len());
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut i = 0;
 
     while i < len {
-        if i + 2 < len && chars[i] == '{' && chars[i + 1] == '%' {
-            // Control tag: {% ... %}
-            let end = find_tag_end(&chars, i + 2, '%');
-            let tag_body = chars_to_string(&chars[i + 2..end]).trim().to_string();
-            i = end + 2;
-
-            if let Some(cond) = tag_body.strip_prefix("if ") {
-                let result = eval_liquid_cond(cond, vars);
-                stack.push((result, result));
-            } else if let Some(cond) = tag_body.strip_prefix("elsif ") {
-                let (in_branch, rendered) = stack.pop().ok_or("unexpected elsif")?;
-                if !rendered {
-                    let result = eval_liquid_cond(cond, vars);
-                    stack.push((result, !in_branch && result));
-                } else {
-                    stack.push((false, true));
+        let close = match (chars[i], chars.get(i + 1)) {
+            ('{', Some('%')) => '%',
+            ('{', Some('{')) => '}',
+            _ => {
+                if stack.iter().all(|f| f.active) {
+                    out.push(chars[i]);
                 }
-            } else if tag_body == "else" {
-                let (in_branch, rendered) = stack.pop().ok_or("unexpected else")?;
-                stack.push((!in_branch && !rendered, !rendered));
-            } else if tag_body == "endif" {
-                stack.pop().ok_or("unexpected endif")?;
+                i += 1;
+                continue;
             }
-        } else if i + 2 < len && chars[i] == '{' && chars[i + 1] == '{' {
-            // Variable: {{ var }}
-            let end = find_tag_end(&chars, i + 2, '}');
-            let var_name = chars_to_string(&chars[i + 2..end]).trim().to_string();
-            i = end + 2;
+        };
 
-            let should_render = stack.last().map(|(_, r)| *r).unwrap_or(true);
-            if should_render {
-                let raw = vars
-                    .get(&var_name)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{{{{ {} }}}}", var_name));
-                out.push_str(&raw);
+        let end = find_tag_end(&chars, i + 2, close);
+        let raw_body = chars_to_string(&chars[i + 2..end]);
+        i = (end + 2).min(len);
+
+        // 空白控制：`{%-` 吃掉前面已输出的空白，`-%}` 吃掉后面还没读的空白。
+        if raw_body.starts_with('-') {
+            while out.ends_with(|c: char| c.is_whitespace()) {
+                out.pop();
             }
-        } else {
-            let should_render = stack.last().map(|(_, r)| *r).unwrap_or(true);
-            if should_render {
-                out.push(chars[i]);
-            }
-            i += 1;
         }
+        if raw_body.ends_with('-') {
+            while i < len && chars[i].is_whitespace() {
+                i += 1;
+            }
+        }
+        let body = raw_body.trim_matches('-').trim();
+
+        if close == '}' {
+            if stack.iter().all(|f| f.active) {
+                // 认不出的变量原样留着：模板里可能有并非变量的双花括号。
+                out.push_str(
+                    &vars
+                        .get(body)
+                        .cloned()
+                        .unwrap_or_else(|| format!("{{{{ {body} }}}}")),
+                );
+            }
+            continue;
+        }
+
+        if let Some(cond) = body.strip_prefix("if ") {
+            let parent_active = stack.iter().all(|f| f.active);
+            let hit = eval_liquid_cond(cond, vars)?;
+            stack.push(Frame {
+                parent_active,
+                active: parent_active && hit,
+                taken: hit,
+            });
+        } else if let Some(cond) = body.strip_prefix("elsif ") {
+            let taken = stack
+                .last()
+                .ok_or_else(|| format!("模板里出现了没有 if 的 `{body}`"))?
+                .taken;
+            let hit = !taken && eval_liquid_cond(cond, vars)?;
+            let frame = stack.last_mut().expect("checked above");
+            frame.active = frame.parent_active && hit;
+            frame.taken = taken || hit;
+        } else if body == "else" {
+            let frame = stack
+                .last_mut()
+                .ok_or_else(|| "模板里出现了没有 if 的 `else`".to_string())?;
+            frame.active = frame.parent_active && !frame.taken;
+            frame.taken = true;
+        } else if body == "endif" {
+            stack
+                .pop()
+                .ok_or_else(|| "模板里出现了没有 if 的 `endif`".to_string())?;
+        } else {
+            return Err(format!("模板里有不支持的标签 `{{% {body} %}}`"));
+        }
+    }
+
+    if !stack.is_empty() {
+        return Err("模板里有未闭合的 `{% if %}`".to_string());
     }
 
     Ok(out)
@@ -339,17 +394,20 @@ fn chars_to_string(chars: &[char]) -> String {
     chars.iter().collect()
 }
 
-fn eval_liquid_cond(cond: &str, vars: &HashMap<String, String>) -> bool {
+/// 条件只支持 `<var> == "x"` / `<var> != "x"`，够模板用；其余报错而不是当成 false。
+fn eval_liquid_cond(cond: &str, vars: &HashMap<String, String>) -> Result<bool, String> {
     let cond = cond.trim();
-    if let Some(rest) = cond.strip_prefix("backend == ") {
-        let val = rest.trim().trim_matches('"');
-        return vars.get("backend").map(|s| s.as_str()) == Some(val);
+    for (op, want_eq) in [("==", true), ("!=", false)] {
+        if let Some((lhs, rhs)) = cond.split_once(op) {
+            let var = lhs.trim();
+            let val = rhs.trim().trim_matches('"');
+            let actual = vars
+                .get(var)
+                .ok_or_else(|| format!("模板条件 `{cond}` 引用了未知变量 `{var}`"))?;
+            return Ok((actual == val) == want_eq);
+        }
     }
-    if let Some(rest) = cond.strip_prefix("backend != ") {
-        let val = rest.trim().trim_matches('"');
-        return vars.get("backend").map(|s| s.as_str()) != Some(val);
-    }
-    false
+    Err(format!("模板里有不支持的条件 `{cond}`"))
 }
 
 #[tokio::main]
@@ -411,7 +469,7 @@ fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
     vars.insert("project-name".to_string(), project_name.clone());
     vars.insert("backend".to_string(), backend_clone);
 
-    write_template_files(&TEMPLATE_DIR, "", &plugin_dir, &vars, &ignored)?;
+    write_template_files(&TEMPLATE_DIR, &plugin_dir, &vars, &ignored)?;
 
     println!(
         "插件模板创建成功：{}（backend={}）",
@@ -421,49 +479,28 @@ fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
     Ok(())
 }
 
+/// 把内嵌模板目录递归写到 `out_dir`。
+///
+/// 注意 include_dir 的 `path()` 返回的是**相对模板根的完整路径**（`src/index.ts`），
+/// 不是单层名字。曾经按「父目录前缀 + path()」拼接，于是写出了 `src/src/index.ts`、
+/// `docs/docs/doc.md`——直接用 `path()` 即可。
 fn write_template_files(
     dir: &Dir<'_>,
-    rel_prefix: &str,
     out_dir: &Path,
     vars: &HashMap<String, String>,
     ignored: &[String],
 ) -> Result<(), String> {
     for entry in dir.entries() {
+        let rel = entry.path().to_string_lossy().to_string();
+        // cargo-generate.toml 只是模板自己的条件声明，不属于生成结果。
+        if rel == "cargo-generate.toml" || is_ignored_template_path(&rel, ignored) {
+            continue;
+        }
         match entry {
             include_dir::DirEntry::Dir(sub_dir) => {
-                let rel = if rel_prefix.is_empty() {
-                    sub_dir.path().to_string_lossy().to_string()
-                } else {
-                    format!(
-                        "{}/{}",
-                        rel_prefix,
-                        sub_dir.path().to_string_lossy().to_string()
-                    )
-                };
-                if rel == "src" && vars.get("backend").map(|s| s.as_str()) != Some("v8") {
-                    continue;
-                }
-                write_template_files(sub_dir, &rel, out_dir, vars, ignored)?;
+                write_template_files(sub_dir, out_dir, vars, ignored)?;
             }
             include_dir::DirEntry::File(file) => {
-                let rel = if rel_prefix.is_empty() {
-                    file.path().to_string_lossy().to_string()
-                } else {
-                    format!(
-                        "{}/{}",
-                        rel_prefix,
-                        file.path().to_string_lossy().to_string()
-                    )
-                };
-                if ignored
-                    .iter()
-                    .any(|p| rel.starts_with(p.as_str()) || rel == *p)
-                {
-                    continue;
-                }
-                if rel == "cargo-generate.toml" {
-                    continue;
-                }
                 let out_path = out_dir.join(&rel);
                 if let Some(parent) = out_path.parent() {
                     std::fs::create_dir_all(parent)
@@ -479,39 +516,29 @@ fn write_template_files(
                     "json" | "js" | "ts" | "mjs" | "md" | "toml" | "gitignore"
                 );
 
-                if is_text {
-                    if let Some(text) = file.contents_utf8() {
+                match file.contents_utf8().filter(|_| is_text) {
+                    Some(text) => {
                         let rendered = render_liquid_template(text, vars)?;
                         std::fs::write(&out_path, rendered)
                             .map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))?;
-                    } else {
+                    }
+                    None => {
                         std::fs::write(&out_path, file.contents())
                             .map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))?;
                     }
-                } else {
-                    std::fs::write(&out_path, file.contents())
-                        .map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))?;
                 }
             }
         }
     }
-    // Handle root-level files for the first level
-    if rel_prefix.is_empty() {
-        for entry in dir.files() {
-            let rel = entry.path().to_string_lossy().to_string();
-            if ignored
-                .iter()
-                .any(|p| rel.starts_with(p.as_str()) || rel == *p)
-            {
-                continue;
-            }
-            if rel == "cargo-generate.toml" {
-                continue;
-            }
-            // Already handled above
-        }
-    }
     Ok(())
+}
+
+/// cargo-generate.toml 的 `ignore` 项既可以是文件也可以是目录，按路径段匹配：
+/// `src` 命中 `src` 与 `src/index.ts`，但不命中 `srcfoo`。
+fn is_ignored_template_path(rel: &str, ignored: &[String]) -> bool {
+    ignored
+        .iter()
+        .any(|p| rel == p.as_str() || rel.starts_with(&format!("{p}/")))
 }
 
 fn is_valid_plugin_name(name: &str) -> bool {
@@ -540,6 +567,10 @@ fn init_standalone_globals() -> Result<(), String> {
 fn init_standalone_globals_with(mode: DataMode) -> Result<(), String> {
     use kabegame_core::app_paths::{is_dev, repo_root_dir, AppPaths};
     use kabegame_core::{emitter::GlobalEmitter, settings::Settings, storage::Storage};
+
+    // 必须早于 GlobalEmitter：emit_* 会取 EventBroadcaster 的全局单例，没初始化就 panic。
+    // 事件没人订阅也不要紧——sync_tx 是 unbounded，不转发只是攒在内存里。
+    init_event_runtime()?;
 
     let use_dev = match mode {
         DataMode::Auto => is_dev(),
@@ -600,12 +631,11 @@ fn init_standalone_globals_with(mode: DataMode) -> Result<(), String> {
     Ok(())
 }
 
-/// 在 `init_standalone_globals()` 之外，额外初始化「跑任务」需要的运行时。
+/// 事件运行时。由 `init_standalone_globals_with()` 在最前面调用，不要在外面再调一次
+/// （`init_global` 对重复初始化返回 Err）。
 ///
 /// 顺序与 GUI 的 `kabegame/src/core_init.rs:73-88` 一致：
 /// EventBroadcaster → SubscriptionManager → GlobalEmitter → DownloadQueue → TaskScheduler。
-/// GlobalEmitter 的 emit_* 会取 `EventBroadcaster::global()`，未初始化会 panic，
-/// 所以本函数必须在 `init_standalone_globals()`（内含 GlobalEmitter::init_global）之前调用。
 fn init_event_runtime() -> Result<(), String> {
     use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
     EventBroadcaster::init_global(1000).map_err(|e| format!("EventBroadcaster: {e}"))?;
@@ -788,13 +818,13 @@ async fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
         return Err(format!("不是 .kgpg 文件: {}", p.display()));
     }
 
-    import_plugin_no_ui(p).await
+    import_plugin_no_ui(p, args.data).await
 }
 
-async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
-    // PluginManager 依赖 AppPaths 定位 plugins_directory；与 plugin run 同用 DataMode::Auto，
-    // 保证 import 与 run 落在同一个数据目录。
-    init_standalone_globals()?;
+async fn import_plugin_no_ui(p: PathBuf, data: DataMode) -> Result<(), String> {
+    // PluginManager 依赖 AppPaths 定位 plugins_directory；import 与 run 的 --data 必须给同
+    // 一个值，否则装到 prod、跑的是 dev（或反过来）。
+    init_standalone_globals_with(data)?;
     PluginManager::init_global()?;
     let pm = PluginManager::global();
 
@@ -819,12 +849,16 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
 
 /// `plugin run <plugin>` 的目标解析：已安装插件 id，或一个 `.kgpg` 路径（临时运行）。
 ///
+/// 路径模式下插件 id 按「`--id` → 包内 package.json 的 `name` → 文件名 stem」回落
+/// （见 core 的 `resolve_kgpg_plugin_id`）。
+///
 /// 路径模式返回的 `PathBuf` 会随 `startTask` 的 `pluginFilePath` 传给调度器，后者 freeze
 /// 任务时按同一条路径重新解析插件（见 `resolve_plugin_for_task_request`），所以这里统一
 /// canonicalize 成绝对路径：worker 的 cwd 不保证和命令行一致，相对路径会找不到文件。
 async fn resolve_run_target(
     pm: &PluginManager,
     target: &str,
+    id_override: Option<&str>,
 ) -> Result<(core_plugin::Plugin, Option<PathBuf>), String> {
     let as_path = PathBuf::from(target);
     if as_path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
@@ -836,9 +870,16 @@ async fn resolve_run_target(
         let abs = std::fs::canonicalize(&as_path)
             .map_err(|e| format!("解析插件文件路径失败 {}: {e}", as_path.display()))?;
         let (plugin, file_path, _var_defs) = pm
-            .resolve_plugin_for_cli_run(&abs.to_string_lossy())
+            .resolve_plugin_for_cli_run(&abs.to_string_lossy(), id_override)
             .await?;
         return Ok((plugin, file_path));
+    }
+
+    // id 模式下 --id 无处可用：静默忽略会让人以为换了 id 在跑，直接报错。
+    if let Some(id) = id_override {
+        return Err(format!(
+            "--id {id} 只在 `.kgpg` 路径模式下有效；按已安装插件运行时请直接把 `{id}` 作为参数传给 `plugin run`。"
+        ));
     }
 
     let plugin = pm.get(target).ok_or_else(|| {
@@ -872,8 +913,7 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
     use kabegame_core::crawler::{TaskScheduler, MAX_TASK_WORKER_LOOPS};
     use kabegame_core::ipc::server::EventBroadcaster;
 
-    // EventBroadcaster 必须先于 GlobalEmitter：后者 emit 时会取前者的全局单例。
-    init_event_runtime()?;
+    // init_standalone_globals_with 里已经起了 EventBroadcaster / SubscriptionManager。
     init_standalone_globals_with(args.data)?;
     init_task_runtime()?;
 
@@ -891,7 +931,8 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         );
     }
 
-    let (plugin, plugin_file_path) = resolve_run_target(pm, &args.plugin).await?;
+    let (plugin, plugin_file_path) =
+        resolve_run_target(pm, &args.plugin, args.id.as_deref()).await?;
 
     // 暂时只支持 V8：WebView 后端要真实浏览器窗口，headless CLI 起不来。
     if plugin.script_type != "v8" {
@@ -1483,7 +1524,10 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
         }
     }
 
-    for (path, raw) in &assets {
+    // HashMap 迭代顺序每次都不同，排序后再报，日志才能逐行对得上。
+    let mut assets_sorted: Vec<(&String, &String)> = assets.iter().collect();
+    assets_sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (path, raw) in assets_sorted {
         // banner 图是走马灯橱窗图，本就不进 md，别为它报「未被引用」的噪音
         if !referenced.contains(path) && !core_plugin::assets::is_banner_asset(path) {
             eprintln!(
@@ -1657,22 +1701,30 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
         entries.push((mig_path.to_string(), plugin_dir.join(mig_path)));
     }
 
-    // 按 ZIP 内路径去重，保留首次出现。
-    // 多语言 kbDoc 会让同一张插图被每个语言的 doc 各收集一次（6 个语言 = 6 份），
+    // 按 ZIP 内路径排序后去重。
+    //
+    // 排序：条目顺序不再取决于 package.json 的字段 / kbDoc 语言键的书写顺序（serde_json 开了
+    // preserve_order，map 是按文件顺序迭代的），包内布局固定、`unzip -l` 好读。顺序对读取端
+    // 没有影响——加载一律走中央目录按名查找。
+    //
+    // 去重：多语言 kbDoc 会让同一张插图被每个语言的 doc 各收集一次（6 个语言 = 6 份），
     // 图标 / 模板等也可能被多个字段同时引用。重复条目在 zip 0.6 下只是白白撑大包体，
     // 到了 zip 8 会直接报 `Duplicate filename` 让打包失败。
-    {
-        let mut seen = std::collections::HashSet::new();
-        entries.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    entries.dedup_by(|(a, _), (b, _)| a == b);
 
     // write ZIP
     let mut buf: Vec<u8> = Vec::new();
     {
         let cursor = std::io::Cursor::new(&mut buf);
         let mut zip = zip::ZipWriter::new(cursor);
+        // mtime 必须显式钉成 1980-01-01（`DateTime::DEFAULT`），别用 `default()` 带来的那个：
+        // zip 的 `default()` 走 `default_for_write()`，一旦依赖图里有人打开 zip 的 `time`
+        // feature（feature 是叠加的，不需要我们自己开）就变成写入当前挂钟时间，同一份源码
+        // 每次打出来的包就都不一样了。配合上面的排序，pack 的输出只由内容决定。
         let opt = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
+            .last_modified_time(zip::DateTime::DEFAULT)
             .unix_permissions(0o644);
 
         for (name, path) in entries {
@@ -1878,6 +1930,223 @@ mod tests {
         let tmpl = "{% if backend == \"v8\" %}v8-block{% else %}web-block{% endif %}";
         let result = render_liquid_template(tmpl, &vars).unwrap();
         assert_eq!(result, "web-block");
+    }
+
+    /// elsif 只有第一个命中的分支该输出。曾经按「本层是否已命中」判断要不要输出，
+    /// 导致 v8 分支和 webview 分支一起写出去（生成的 tsconfig.json 是两个拼起来的 JSON）。
+    #[test]
+    fn test_render_liquid_elsif_takes_only_first_match() {
+        let mut vars = HashMap::new();
+        vars.insert("backend".to_string(), "v8".to_string());
+
+        let tmpl = "{% if backend == \"v8\" %}A{% elsif backend == \"webview\" %}B{% endif %}";
+        assert_eq!(render_liquid_template(tmpl, &vars).unwrap(), "A");
+
+        vars.insert("backend".to_string(), "webview".to_string());
+        assert_eq!(render_liquid_template(tmpl, &vars).unwrap(), "B");
+    }
+
+    /// `{%- ... %}` / `{% ... -%}` 要被认成普通标签（只是多吃掉周围空白）。曾经因为
+    /// `- if` 不匹配 `if ` 而把整条标签当未知内容跳过，if / else 两边都被写出去。
+    #[test]
+    fn test_render_liquid_whitespace_control() {
+        let mut vars = HashMap::new();
+        vars.insert("backend".to_string(), "v8".to_string());
+
+        let tmpl = "head\n{%- if backend == \"v8\" %},v8{%- else %},web{%- endif %}\ntail";
+        assert_eq!(
+            render_liquid_template(tmpl, &vars).unwrap(),
+            "head,v8\ntail"
+        );
+
+        let trim_after = "a{% if backend == \"v8\" -%}   \n  b{% endif %}";
+        assert_eq!(render_liquid_template(trim_after, &vars).unwrap(), "ab");
+    }
+
+    #[test]
+    fn test_render_liquid_rejects_broken_template() {
+        let mut vars = HashMap::new();
+        vars.insert("backend".to_string(), "v8".to_string());
+
+        // 不认识的标签 / 条件 / 未闭合的 if 都要报错，不能静默生成坏文件。
+        assert!(render_liquid_template("{% for x in y %}{% endfor %}", &vars).is_err());
+        assert!(render_liquid_template("{% if nope %}x{% endif %}", &vars).is_err());
+        assert!(render_liquid_template("{% if backend == \"v8\" %}x", &vars).is_err());
+        assert!(render_liquid_template("{% endif %}", &vars).is_err());
+    }
+
+    /// 模板目录要按原样展开。include_dir 的 `path()` 已经是相对模板根的完整路径，
+    /// 曾经再拼一层父前缀，写出了 `src/src/index.ts`、`docs/docs/doc.md`。
+    fn render_template_to_temp(backend: &str) -> (PathBuf, Vec<String>) {
+        let out_dir = std::env::temp_dir().join(format!(
+            "kabegame-cli-template-{backend}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&out_dir);
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let cargo_gen_toml = TEMPLATE_DIR
+            .get_file("cargo-generate.toml")
+            .and_then(|f| f.contents_utf8())
+            .unwrap();
+        let ignored = parse_cargo_generate_conditions(cargo_gen_toml, backend).unwrap();
+        let mut vars = HashMap::new();
+        vars.insert("project-name".to_string(), "my-plugin".to_string());
+        vars.insert("backend".to_string(), backend.to_string());
+        write_template_files(&TEMPLATE_DIR, &out_dir, &vars, &ignored).unwrap();
+
+        let mut files = Vec::new();
+        let mut stack = vec![out_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(
+                        path.strip_prefix(&out_dir)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        files.sort();
+        (out_dir, files)
+    }
+
+    #[test]
+    fn test_write_template_files_v8_layout() {
+        let (out_dir, files) = render_template_to_temp("v8");
+        assert_eq!(
+            files,
+            vec![
+                ".gitignore",
+                "docs/doc.md",
+                "icon.png",
+                "package.json",
+                "rspack.config.mjs",
+                "src/index.ts",
+                "tsconfig.json",
+            ]
+        );
+        for name in ["package.json", "tsconfig.json"] {
+            let raw = std::fs::read_to_string(out_dir.join(name)).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&raw)
+                .unwrap_or_else(|e| panic!("生成的 {name} 不是合法 JSON: {e}\n{raw}"));
+            if name == "package.json" {
+                assert_eq!(json["name"], "my-plugin");
+                assert_eq!(json["kbBackend"], "v8");
+                assert_eq!(json["main"], "dist/main.js");
+            }
+        }
+        std::fs::remove_dir_all(&out_dir).unwrap();
+    }
+
+    #[test]
+    fn test_write_template_files_webview_layout() {
+        let (out_dir, files) = render_template_to_temp("webview");
+        assert_eq!(
+            files,
+            vec![
+                ".gitignore",
+                "crawl.js",
+                "docs/doc.md",
+                "icon.png",
+                "package.json",
+                "tsconfig.json",
+            ]
+        );
+        let pkg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out_dir.join("package.json")).unwrap())
+                .unwrap();
+        assert_eq!(pkg["kbBackend"], "webview");
+        assert_eq!(pkg["main"], "crawl.js");
+        let ts = std::fs::read_to_string(out_dir.join("tsconfig.json")).unwrap();
+        let ts: serde_json::Value = serde_json::from_str(&ts).unwrap();
+        assert_eq!(ts["include"][0], "crawl.js");
+        std::fs::remove_dir_all(&out_dir).unwrap();
+    }
+
+    /// 造一个最小可打包的 v3 插件目录：name 必须等于目录名与输出 stem（pack 的 P3-7 校验）。
+    fn write_minimal_plugin(dir: &Path, name: &str) {
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::create_dir_all(dir.join("dist")).unwrap();
+        // 字段故意不按字母序写，且 kbDoc 的语言键也乱序：验证包内顺序不随书写顺序漂移。
+        std::fs::write(
+            dir.join("package.json"),
+            format!(
+                r#"{{
+  "name": "{name}",
+  "version": "1.0.0",
+  "engines": {{ "kabegame": ">=4.3.0" }},
+  "kbPackageVersion": 3,
+  "kbBackend": "v8",
+  "main": "dist/main.js",
+  "kbDoc": {{ "zhtw": "docs/zhtw.md", "default": "docs/doc.md", "en": "docs/en.md" }}
+}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("dist/main.js"),
+            "export async function crawl() {}\n",
+        )
+        .unwrap();
+        for f in ["doc.md", "en.md", "zhtw.md"] {
+            std::fs::write(dir.join("docs").join(f), format!("# {f}\n")).unwrap();
+        }
+    }
+
+    fn zip_entry_names(kgpg: &Path) -> Vec<String> {
+        let bytes = std::fs::read(kgpg).unwrap();
+        let offset = bytes
+            .windows(4)
+            .position(|w| w == [0x50, 0x4B, 0x03, 0x04])
+            .expect("kgpg 里应当有 ZIP 段");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[offset..])).unwrap();
+        (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect()
+    }
+
+    /// 同一份源码打两次必须字节一致，且条目按字母序。
+    ///
+    /// 两个前提都靠 `collect_v3_entries` 自己保证：条目显式排序，mtime 显式钉成 1980-01-01。
+    /// 后者尤其容易被破——zip 的 `FileOptions::default()` 在 `time` feature 打开时会写当前
+    /// 挂钟时间，而 feature 是整个依赖图叠加的。
+    #[test]
+    fn test_pack_v3_is_byte_reproducible_and_sorted() {
+        let base = std::env::temp_dir().join(format!("kabegame-cli-pack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let plugin_dir = base.join("repro-plugin");
+        write_minimal_plugin(&plugin_dir, "repro-plugin");
+
+        let pkg = read_optional_package_json(&plugin_dir).unwrap().unwrap();
+        let out_a = base.join("a/repro-plugin.kgpg");
+        let out_b = base.join("b/repro-plugin.kgpg");
+        pack_plugin_v3(&plugin_dir, &out_a, &pkg).unwrap();
+        pack_plugin_v3(&plugin_dir, &out_b, &pkg).unwrap();
+
+        assert_eq!(
+            zip_entry_names(&out_a),
+            vec![
+                "dist/main.js",
+                "docs/doc.md",
+                "docs/en.md",
+                "docs/zhtw.md",
+                "package.json",
+            ],
+            "条目应按 ZIP 内路径字母序，而不是 package.json 的书写顺序"
+        );
+        assert_eq!(
+            std::fs::read(&out_a).unwrap(),
+            std::fs::read(&out_b).unwrap(),
+            "同一份源码打两次应当字节一致"
+        );
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

@@ -1,4 +1,4 @@
-{% if backend == "v8" %}
+{%- if backend == "v8" -%}
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -14,7 +14,7 @@
   },
   "include": ["src"]
 }
-{% elsif backend == "webview" %}
+{%- elsif backend == "webview" -%}
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -28,4 +28,4 @@
   },
   "include": ["crawl.js"]
 }
-{% endif %}
+{%- endif %}

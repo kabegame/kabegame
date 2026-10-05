@@ -276,11 +276,15 @@ async fn handle_plugin_run(
 ) -> IpcResponse {
     // resolve plugin：支持 id 或 .kgpg 路径
     let plugin_manager = PluginManager::global();
-    let (plugin_obj, plugin_file_path, var_defs) =
-        match plugin_manager.resolve_plugin_for_cli_run(&plugin).await {
-            Ok(x) => x,
-            Err(e) => return IpcResponse::err(e),
-        };
+    // id_override 只有 CLI 的 `plugin run --id` 会用；这条 IPC 上没有对应字段，传 None
+    // 即按包内 name / 文件名回落。
+    let (plugin_obj, plugin_file_path, var_defs) = match plugin_manager
+        .resolve_plugin_for_cli_run(&plugin, None)
+        .await
+    {
+        Ok(x) => x,
+        Err(e) => return IpcResponse::err(e),
+    };
 
     // task_id：若未提供则生成
     let task_id = task_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());

@@ -33,7 +33,7 @@ plugin-name.kgpg
 
 | 字段 | 类型 | 必填 | 最低版本 | 说明 |
 |---|---|---|---|---|
-| `name` | string | 是 | 4.3.0 | 显示名回退（无点后缀）。**真实插件 ID 是目录名 / `.kgpg` 文件名，不是 `name`**。支持多语言点键。 |
+| `name` | string | 是 | 4.3.0 | 显示名回退（无点后缀），同时是**插件 ID 的首选来源**：加载 `.kgpg` 时 ID 按「调用方显式指定（`plugin run --id`）→ `name` → `.kgpg` 文件名 stem」回落，所以约定 `name` = 目录名 = 文件名 stem。支持多语言点键。 |
 | `version` | string | 是 | 4.3.0 | 语义化版本 `major.minor.patch`，每段 ≤255。同 ID 升级必须 bump。 |
 | `description` | string | 是 | 4.3.0 | 默认描述，支持多语言点键。 |
 | `author` | string \| object | 是 | 4.3.0 | 作者。对象形式取 `author.name`。 |

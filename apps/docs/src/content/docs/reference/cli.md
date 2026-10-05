@@ -39,7 +39,21 @@ kabegame-cli plugin new <name> [--backend v8|webview]
 | `name`      | 是   | 插件名，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。 |
 | `--backend` | 否   | `v8`（默认）或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。（Rhai 后端已移除，不可选。）                |
 
-目标目录若已存在则直接报错退出。脚手架会从模板生成 `package.json`、`icon.png`、`doc_root/doc.md` 等通用文件，并根据 backend 生成对应脚本。
+目标目录若已存在则直接报错退出。生成结果：
+
+```text
+my-site/
+├─ package.json       # v3 清单，name / kbBackend 已按参数填好
+├─ icon.png
+├─ docs/doc.md
+├─ tsconfig.json
+├─ .gitignore
+├─ src/index.ts       # 仅 v8：ES module 入口，产物 dist/main.js
+├─ rspack.config.mjs  # 仅 v8
+└─ crawl.js           # 仅 webview
+```
+
+v8 模板要先 `npm i && npm run build` 产出 `dist/main.js`，否则 `plugin pack` 会报 `main 脚本不存在`。
 
 ```bash
 kabegame-cli plugin new my-site
@@ -58,7 +72,8 @@ kabegame-cli plugin run <plugin> [选项]
 
 | 参数             | 必填 | 说明                                                                                             |
 | ---------------- | ---- | ------------------------------------------------------------------------------------------------ |
-| `<plugin>`       | 是   | 两种形态：**已安装**插件的 id（等于 `.kgpg` 文件名 stem），未安装会列出当前可用的 id；或一个 **`.kgpg` 文件路径**（按扩展名识别），临时运行、不安装。路径模式下插件 id 取文件名 stem，且必须与包内声明的 provider namespace 一致——随便改 `.kgpg` 文件名会报 `provider namespace ... 不能逃逸`。若 id 恰好也已安装，**以路径里的包为准**。 |
+| `<plugin>`       | 是   | 两种形态：**已安装**插件的 id，未安装会列出当前可用的 id；或一个 **`.kgpg` 文件路径**（按扩展名识别），临时运行、不安装。若路径里的包 id 恰好也已安装，**以路径里的包为准**。 |
+| `--id PLUGIN_ID` | 否   | 仅路径模式：指定本次运行用的插件 id（见下方「插件 id 怎么定」）。配已安装 id 使用会直接报错。 |
 | `--var KEY=VALUE`| 否   | 覆盖单个 `kbConfig` 项，可重复。值按该 key 在 `kbConfig` 里声明的类型自动转换（int/float/boolean 等），所以 `--var page=3` 会变成数字 `3`。未知 key 会直接报错并列出可用项。 |
 | `--data dev\|prod\|auto` | 否 | 数据目录。`dev` = 仓库内 `.kabegame/debug`（`repack-crawler-plugins` skill 投放插件的地方），`prod` = 系统用户数据目录，`auto`（默认）跟随编译期的 `kabegame_data` cfg。**release 构建的 CLI 默认是 prod**，测试仓库内的插件时通常要显式加 `--data dev`。 |
 | `--output-dir`   | 否   | 图片输出目录。优先级高于插件默认配置里保存的 `outputDir`。                                          |
@@ -72,12 +87,21 @@ kabegame-cli plugin run <plugin> [选项]
 2. 用户在应用里保存的插件默认配置（`plugins-directory/default-configs/<id>.json` 的 `userConfig`；同一文件里的 `httpHeaders` / `outputDir` 也会被采用）
 3. 本次命令行的 `--var`
 
+**插件 id 怎么定**：`--id` → 包内 `package.json` 的 `name` → `.kgpg` 文件名 stem，取第一个非空的。三者都要过 id 合法性校验（ASCII 字母/数字/`_`/`-`，≤ 64 字节），且不能撞内建插件 id；报错里会写明这个 id 是从哪儿来的。
+
+- 包自己声明的 `name` 比文件名权威，所以把 `konachan.kgpg` 改名成 `konachan-mytest.kgpg` 照样按 `konachan` 跑（provider 的 namespace 是 `plugins.<id>`，以前这种改名会报 `provider namespace ... 不能逃逸`）。
+- `--id` 用来让**同一个包跑成另一份互不干扰的数据**：插件数据目录、`default-configs/<id>.json` 的取用、入库的 `plugin_id`、provider namespace 全部跟着换（包内写死的 `plugins.<原 id>` 会自动改写到新 id 下）。
+- 这条回落链对安装也生效：`plugin import` 落盘时文件名统一归一成 `<id>.kgpg`。
+
 **限制**：只支持 `kbBackend: "v8"` 的插件。WebView 后端要真实浏览器窗口，headless CLI 起不来，遇到会直接报错。路径模式只认打好的 `.kgpg` 包，不支持直接指向插件源码目录或裸 `.js`——先 `plugin pack`。
 
 ```bash
 # 不安装，直接跑一个打好的包（配置仍按已存的 default-configs/<id>.json 叠加）
 kabegame-cli plugin pack --plugin-dir ./plugins/kemono --output /tmp/kemono.kgpg
 kabegame-cli plugin run /tmp/kemono.kgpg --data dev --var page=1
+
+# 换个 id 跑同一个包：数据目录 / 默认配置 / 入库 plugin_id 都隔离开，方便对照测试
+kabegame-cli plugin run /tmp/kemono.kgpg --id kemono-test --data dev
 
 # 先安装，再按 id 运行
 kabegame-cli plugin import ./packed/kemono.kgpg
@@ -121,19 +145,26 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 内部 ZIP 会收集 `package.json` 明确引用的脚本、文档、推荐配置、providers、metadata 迁移脚本与模板。`icon.png` 被单独编码进 KGPG 头部字段，失败时仅日志警告，不中断打包。
 
+**输出可复现**：同一份源码目录打多少次，`.kgpg` 都是同一串字节。两个前提由 pack 自己保证——条目按 ZIP 内路径**字母序**写入（不随 `package.json` 字段 / `kbDoc` 语言键的书写顺序漂移），每个条目的 mtime 显式钉成 1980-01-01（不取磁盘 mtime，也不取当前时间）。所以 `.kgpg` 的 sha256 只由内容决定，可以直接拿来做缓存键或校验。
+
+:::note
+跨 CLI 版本不保证字节一致：换了 zip / deflate 实现的版本，压缩结果就可能变。另外 v8 插件的 `dist/main.js` 本身是否可复现取决于打包器（rspack），不在 `plugin pack` 的职责内。
+:::
+
 ### plugin import
 
 把本地 `.kgpg` 安装到 `plugins_directory`。此命令直接初始化 `PluginManager`，离线可用。
 
 ```bash
-kabegame-cli plugin import <path.kgpg>
+kabegame-cli plugin import <path.kgpg> [--data dev|prod|auto]
 ```
 
 | 参数     | 必填 | 说明                                                        |
 | -------- | ---- | ----------------------------------------------------------- |
 | 位置参数 | 是   | `.kgpg` 文件路径。文件不存在或扩展名非 `.kgpg` 会立即报错。 |
+| `--data` | 否   | 同 `plugin run` 的 `--data`。**要和之后 `plugin run` 用的值一致**，否则会出现装到 prod、跑的是 dev。 |
 
-安装前会验证：v3 `package.json` 可解析、`main` 指向的脚本非空、`kbConfig` 若存在则可解析。成功时输出：
+安装前会验证：v3 `package.json` 可解析、`main` 指向的脚本非空、`kbConfig` 若存在则可解析。落盘文件名统一归一成 `<插件 id>.kgpg`（id 见 [plugin run 的「插件 id 怎么定」](#plugin-run)），所以源文件叫什么名字都不影响安装结果。成功时输出：
 
 ```text
 导入成功：id=…; name=…; version=…; 目标目录=…

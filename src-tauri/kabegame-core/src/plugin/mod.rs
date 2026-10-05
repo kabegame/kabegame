@@ -449,7 +449,7 @@ impl PluginManager {
                 if !(path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
                     continue;
                 }
-                match self.parse_kgpg(&path).await {
+                match self.parse_kgpg(&path, None).await {
                     Ok(plugin) => {
                         let pid = plugin.id.clone();
                         cache
@@ -515,6 +515,9 @@ impl PluginManager {
     }
 
     /// CLI 场景：支持传入插件 id（已安装）或 `.kgpg` 路径（临时运行）。
+    ///
+    /// `id_override` 只对路径模式有意义：临时运行时用它顶掉包内 `name` / 文件名推出来的
+    /// id（见 [`resolve_kgpg_plugin_id`]）；id 模式下忽略。
     /// 返回：
     /// - `Plugin`
     /// - `plugin_file_path`：若为临时运行则为 Some(path)，已安装则为 None
@@ -523,10 +526,11 @@ impl PluginManager {
     pub async fn resolve_plugin_for_cli_run(
         &self,
         id_or_path: &str,
+        id_override: Option<&str>,
     ) -> Result<(Plugin, Option<PathBuf>, Vec<VarDefinition>), String> {
         let p = PathBuf::from(id_or_path);
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            let plugin = self.parse_kgpg(&p).await?;
+            let plugin = self.parse_kgpg(&p, id_override).await?;
             let var_defs = plugin.var_defs.clone();
             return Ok((plugin, Some(p), var_defs));
         }
@@ -545,7 +549,9 @@ impl PluginManager {
     ) -> Result<(Plugin, Option<PathBuf>), String> {
         if let Some(p) = plugin_file_path {
             let path = PathBuf::from(p);
-            let plugin = self.parse_kgpg(&path).await?;
+            // 任务记录里的 plugin_id 是建任务时定下的（可能来自 CLI `--id`），拿它当
+            // override：否则 freeze 时按包内 name / 文件名重算，可能和任务对不上。
+            let plugin = self.parse_kgpg(&path, Some(plugin_id)).await?;
             return Ok((plugin, Some(path)));
         }
         self.ensure_installed_cache_initialized().await?;
@@ -708,21 +714,22 @@ impl PluginManager {
         Ok(Some(config))
     }
 
-    /// 安装 .kgpg 插件（复制文件到插件目录；若源文件已在插件目录则直接复用）
+    /// 安装 .kgpg 插件（复制文件到插件目录；若源文件已在插件目录则直接复用）。
+    /// 落盘文件名统一归一成 `<插件 id>.kgpg`，id 见 [`resolve_kgpg_plugin_id`]。
     pub async fn install_plugin_from_kgpg(&self, zip_path: &Path) -> Result<Plugin, String> {
         // 获取插件目录
         let plugins_dir = self.get_plugins_directory();
         fs::create_dir_all(&plugins_dir)
             .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
 
-        // 获取源文件名
-        let file_name = zip_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| "Invalid file name".to_string())?;
-
-        // 目标文件路径
-        let target_path = plugins_dir.join(file_name);
+        // 落盘文件名统一取解析出来的插件 id：refresh_plugin / delete 都按 `<id>.kgpg`
+        // 找文件，包内 name 与源文件名不一致时照搬源文件名会让插件装完就删不掉。
+        let plugin_id = resolve_kgpg_plugin_id(
+            zip_path,
+            None,
+            read_kgpg_package_name(zip_path).await?.as_deref(),
+        )?;
+        let target_path = plugins_dir.join(format!("{plugin_id}.kgpg"));
 
         let source_canon =
             fs::canonicalize(zip_path).map_err(|e| format!("Failed to access plugin file: {e}"))?;
@@ -742,11 +749,16 @@ impl PluginManager {
             // 复制 .kgpg 文件到插件目录
             fs::copy(zip_path, &target_path)
                 .map_err(|e| format!("Failed to copy plugin file: {}", e))?;
+
+            // 源文件就在插件目录里、只是名字和 id 不一样：拷完把它删掉，免得同一个插件
+            // 在目录里留两份（下次 refresh 又会把旧名字那份当成同一个 id 重装一遍）。
+            if zip_path.parent() == Some(plugins_dir.as_path()) {
+                let _ = fs::remove_file(zip_path);
+            }
         }
 
-        // 从目标路径解析完整 Plugin 并更新缓存
-        let plugin = self.parse_kgpg(&target_path).await?;
-        let plugin_id = plugin.id.clone();
+        // 从目标路径解析完整 Plugin 并更新缓存（id 已定，直接透传，避免再算一次）
+        let plugin = self.parse_kgpg(&target_path, Some(&plugin_id)).await?;
         let _ = self.ensure_default_config_file_if_missing(&plugin_id).await;
 
         // 原子更新已安装缓存
@@ -1787,7 +1799,7 @@ impl PluginManager {
         fs::write(&cache_file, &bytes).map_err(|e| format!("Failed to write cache file: {}", e))?;
 
         // 解析并刷新内存缓存
-        let plugin = self.parse_kgpg(&cache_file).await?;
+        let plugin = self.parse_kgpg(&cache_file, None).await?;
         {
             let current = self.store_plugin_cache.load();
             let mut map = (**current).clone();
@@ -1912,9 +1924,9 @@ impl PluginManager {
         Ok(plugin.clone())
     }
 
-    /// 从 kgpg 文件解析出 Plugin（plugin_id 从文件名提取）
+    /// 从 kgpg 文件解析出 Plugin（plugin_id 见 [`resolve_kgpg_plugin_id`] 的回落链）
     pub async fn preview_import_from_kgpg(&self, zip_path: &Path) -> Result<Plugin, String> {
-        self.parse_kgpg(zip_path).await
+        self.parse_kgpg(zip_path, None).await
     }
 
     /// 前端手动"刷新已安装源"：重扫插件目录并重建缓存（全量刷新）
@@ -2047,30 +2059,11 @@ impl PluginManager {
 
     /// kgpg 文件 → Plugin（含全量字段：icon base64、doc、template、recommended_configs）
     ///
-    /// plugin_id 从文件名（file_stem）提取，路径存在性由内部校验。
-    async fn parse_kgpg(&self, path: &Path) -> Result<Plugin, String> {
+    /// plugin_id 按 [`resolve_kgpg_plugin_id`] 的回落链确定：`id_override` → 包内
+    /// package.json 的 `name` → 文件名 stem。路径存在性由内部校验。
+    async fn parse_kgpg(&self, path: &Path, id_override: Option<&str>) -> Result<Plugin, String> {
         if !path.is_file() {
             return Err(format!("插件文件不存在: {}", path.display()));
-        }
-        let plugin_id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| format!("无法从路径提取插件 ID: {}", path.display()))?
-            .to_string();
-        crate::app_paths::validate_plugin_id(&plugin_id).map_err(|reason| {
-            format!(
-                "插件文件 {} 的 ID \"{plugin_id}\" 不合规: {reason}",
-                path.display()
-            )
-        })?;
-
-        // 内建插件 id 保留：磁盘 kgpg 不得与内建插件同名（安装/临时运行/商店缓存统一在此拒绝；
-        // 运行时查找另有 get() 内建优先兜底）。refresh 扫描对同名文件先行跳过，不会撞到这里。
-        if builtin::builtin_plugins().contains_key(&plugin_id) {
-            return Err(format!(
-                "插件 ID \"{plugin_id}\" 为内建插件保留，不能安装同名插件"
-            ));
         }
 
         let size_bytes = fs::metadata(path)
@@ -2082,20 +2075,24 @@ impl PluginManager {
 
         // ZIP 解析放到 blocking 线程池（单次遍历读取所有条目）
         let zip_path = path.to_path_buf();
-        let plugin_id_for_zip = plugin_id.clone();
+        let id_override = id_override.map(|s| s.to_string());
         let (
-            zip_manifest,
-            config,
-            doc,
-            changelog,
-            script_type,
-            icon_png_bytes,
-            description_template,
-            recommended_configs,
-            script,
-            asset_entries,
-            provider_entries,
-            metadata_migration_entry,
+            plugin_id,
+            declared_id,
+            (
+                zip_manifest,
+                config,
+                doc,
+                changelog,
+                script_type,
+                icon_png_bytes,
+                description_template,
+                recommended_configs,
+                script,
+                asset_entries,
+                provider_entries,
+                metadata_migration_entry,
+            ),
         ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let file = fs::File::open(&zip_path)
                 .map_err(|e| format!("Failed to open plugin file: {}", e))?;
@@ -2119,7 +2116,17 @@ impl PluginManager {
             if !is_v3 {
                 return Err("只支持 kbPackageVersion >= 3 的 package.json 插件格式".to_string());
             }
-            load_plugin_v3_from_zip(&mut archive, pkg.as_ref().unwrap(), &plugin_id_for_zip)
+            let pkg = pkg.as_ref().unwrap();
+            let pkg_name = pkg.get("name").and_then(|v| v.as_str());
+            // id 必须在 load_plugin_v3_from_zip 之前定下来：provider 的 namespace 按它生成。
+            let plugin_id = resolve_kgpg_plugin_id(&zip_path, id_override.as_deref(), pkg_name)?;
+            // 包不被改 id 时会用的那个 id：provider namespace 改写的来源。不合规就当没有
+            // （真要用到它时 id 本身早就报错了）。
+            let declared_id = resolve_kgpg_plugin_id(&zip_path, None, pkg_name)
+                .ok()
+                .filter(|declared| *declared != plugin_id);
+            let loaded = load_plugin_v3_from_zip(&mut archive, pkg, &plugin_id)?;
+            Ok((plugin_id, declared_id, loaded))
         })
         .await
         .map_err(|e| format!("Failed to join ZIP parser task: {}", e))??;
@@ -2170,7 +2177,8 @@ impl PluginManager {
             Some(entries)
         };
 
-        let providers = parse_plugin_provider_entries(&plugin_id, provider_entries)?;
+        let providers =
+            parse_plugin_provider_entries(&plugin_id, declared_id.as_deref(), provider_entries)?;
 
         // 版本无法 packed 编码的插件直接拒绝加载（写入盖章与迁移门控都依赖它）
         let version_packed = pack_plugin_version(&manifest.version)?;
@@ -2508,11 +2516,26 @@ fn validate_plugin_provider_defs(plugin_id: &str, defs: &[ProviderDef]) -> Resul
     Ok(())
 }
 
+/// `rename_from`：包里 DSL 自带的 namespace 前缀所用的 id（即包未被改 id 时的 id）。
+/// 临时运行带 `--id` 时，包内写死的 `plugins.<原 id>` 要跟着改写成 `plugins.<生效 id>`，
+/// 否则一律撞上下面的「不能逃逸」——同时也不能让它真去注册原 id 的 namespace，那会和
+/// 已安装的那个插件抢同一棵 provider 树。
 fn normalize_plugin_provider_def(
     plugin_id: &str,
+    rename_from: Option<&str>,
     mut def: ProviderDef,
 ) -> Result<ProviderDef, String> {
     let base = format!("plugins.{}", plugin_id);
+    if let Some(from) = rename_from.filter(|from| *from != plugin_id) {
+        let from_base = format!("plugins.{}", from);
+        if let Some(ns) = def.namespace.as_ref().map(|ns| ns.0.clone()) {
+            if ns == from_base {
+                def.namespace = Some(Namespace(base.clone()));
+            } else if let Some(rest) = ns.strip_prefix(&(from_base + ".")) {
+                def.namespace = Some(Namespace(format!("{}.{}", base, rest)));
+            }
+        }
+    }
     match def.namespace.as_ref().map(|ns| ns.0.as_str()) {
         None | Some("") => def.namespace = Some(Namespace(base)),
         Some(ns) if ns == base || ns.starts_with(&(base.clone() + ".")) => {}
@@ -2566,6 +2589,7 @@ fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
 
 fn parse_plugin_provider_entries(
     plugin_id: &str,
+    rename_from: Option<&str>,
     mut entries: Vec<(String, String)>,
 ) -> Result<Vec<PluginProviderDef>, String> {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2586,7 +2610,7 @@ fn parse_plugin_provider_entries(
         providers.push(PluginProviderDef {
             source_path,
             source: Some(source),
-            def: normalize_plugin_provider_def(plugin_id, def)?,
+            def: normalize_plugin_provider_def(plugin_id, rename_from, def)?,
         });
     }
 
@@ -2610,6 +2634,82 @@ fn parse_plugin_provider_entries(
 ///
 /// 说明：
 /// - 这是 `PluginManager::read_plugin_manifest()` 的可复用实现。
+/// 只读 `.kgpg` 里 package.json 的 `name`，不解析整包。
+///
+/// 给 [`PluginManager::install_plugin_from_kgpg`] 定落盘文件名用：那一步需要 id，但还没
+/// 到解析整包的时候。读不到 package.json / 不是 JSON / 没有 `name` 都返回 None，交给
+/// [`resolve_kgpg_plugin_id`] 往下回落（真正的格式校验在 parse_kgpg 里）。
+async fn read_kgpg_package_name(zip_path: &Path) -> Result<Option<String>, String> {
+    let zip_path = zip_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let file =
+            fs::File::open(&zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+        let Ok(mut f) = archive.by_name("package.json") else {
+            return Ok(None);
+        };
+        let mut raw = String::new();
+        f.read_to_string(&mut raw)
+            .map_err(|e| format!("Failed to read package.json: {}", e))?;
+        Ok(serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|pkg| {
+                pkg.get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            }))
+    })
+    .await
+    .map_err(|e| format!("Failed to join package.json reader task: {}", e))?
+}
+
+/// `.kgpg` → 插件 id 的回落链：显式指定 → 包内 package.json 的 `name` → 文件名 stem。
+///
+/// 包自己声明的 `name` 比文件名权威：provider 的 namespace（`plugins.<id>`）按 id 生成，
+/// 只改文件名就会撞上「namespace 不能逃逸」。`id_override` 给临时运行/测试用，让调用方
+/// 能把这两者都绕开（例如同一个包换个 id 跑第二份数据）。
+///
+/// 三个来源都要过 `validate_plugin_id` 与内建 id 保留检查；报错里带上来源，免得用户
+/// 盯着文件名找一个其实来自 package.json 的 id。
+fn resolve_kgpg_plugin_id(
+    path: &Path,
+    id_override: Option<&str>,
+    pkg_name: Option<&str>,
+) -> Result<String, String> {
+    let stem = path.file_stem().and_then(|s| s.to_str());
+    let (plugin_id, source) = [
+        (id_override, "显式指定"),
+        (pkg_name, "package.json 的 name"),
+        (stem, "文件名"),
+    ]
+    .into_iter()
+    .find_map(|(candidate, source)| {
+        candidate
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| (s.to_string(), source))
+    })
+    .ok_or_else(|| format!("无法从路径提取插件 ID: {}", path.display()))?;
+
+    crate::app_paths::validate_plugin_id(&plugin_id).map_err(|reason| {
+        format!(
+            "插件文件 {} 的 ID \"{plugin_id}\"（来源：{source}）不合规: {reason}",
+            path.display()
+        )
+    })?;
+
+    // 内建插件 id 保留：磁盘 kgpg 不得与内建插件同名（安装/临时运行/商店缓存统一在此拒绝；
+    // 运行时查找另有 get() 内建优先兜底）。refresh 扫描对同名文件先行跳过，不会撞到这里。
+    if builtin::builtin_plugins().contains_key(&plugin_id) {
+        return Err(format!(
+            "插件 ID \"{plugin_id}\"（来源：{source}）为内建插件保留，不能安装同名插件"
+        ));
+    }
+
+    Ok(plugin_id)
+}
+
 pub async fn read_plugin_manifest_from_kgpg_file(
     zip_path: &Path,
 ) -> Result<PluginManifest, String> {

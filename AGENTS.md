@@ -77,7 +77,7 @@ import { ArrowLeft } from "@kabegame/element-plus-icons";
 - **iOS**：不支持——不要添加 iOS 适配
 
 ### 爬虫插件开发
-插件是 JS/TS 脚本（V8 后端，自包含 ES 模块 `export async function crawl`），打包为 `.kgpg` ZIP 归档。参见 `docs/PLUGIN_FORMAT.md` 和 `cocs/crawler/V8_RUNTIME.md`。新写或修改插件**用 `kabegame-plugin` skill**（`.claude/skills/kabegame-plugin/`）：先用探针逐环实测「页面 → 结构 → 媒体」链路，再写代码，V8 插件经 release CLI `plugin import` + `plugin run` 验证，WebView 插件在 dev app 内经 CDP 验证。使用以下命令构建：
+插件是 JS/TS 脚本（V8 后端，自包含 ES 模块 `export async function crawl`），打包为 `.kgpg` ZIP 归档。参见 `docs/PLUGIN_FORMAT.md` 和 `cocs/crawler/V8_RUNTIME.md`。新写或修改插件**用 `kabegame-plugin` skill**（`.claude/skills/kabegame-plugin/`）：先用探针逐环实测「页面 → 结构 → 媒体」链路，再写代码，V8 插件打包到 dev 插件目录后由 release CLI `plugin run <kgpg> --id <测试id>` 直接验证，WebView 插件在 dev app 内经 CDP 验证。使用以下命令构建：
 ```bash
 deno task --cwd src-crawler-plugins package         # 打包所有插件
 deno task --cwd src-crawler-plugins generate-index  # 重新生成插件商店索引
