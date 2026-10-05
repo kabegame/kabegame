@@ -4,7 +4,7 @@
 //! - `plugin new`：创建爬虫插件模板
 //! - `plugin pack`：打包单个插件目录为 `.kgpg`（package.json v3）
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
-//! - `plugin run`：在本进程跑一个**已安装**的 V8 插件，实时渲染日志与进度
+//! - `plugin run`：在本进程跑一个 V8 插件（已安装的 id，或直接给 `.kgpg` 路径临时运行），实时渲染日志与进度
 //! - `data import-image`：直接导入单个本地图片或视频
 //! - `pathql generate`：生成 PathQL 客户端
 //! - `pathql query`：查询 PathQL 数据
@@ -53,7 +53,7 @@ enum PluginCommands {
     Pack(PackPluginArgs),
     /// 导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
     Import(ImportPluginArgs),
-    /// 运行一个已安装的 V8 插件（先 `plugin import` 安装）
+    /// 运行一个 V8 插件：已安装的 id，或直接给 `.kgpg` 路径临时运行（不安装）
     Run(RunPluginArgs),
 }
 
@@ -139,7 +139,9 @@ struct ImportPluginArgs {
 
 #[derive(Args, Debug)]
 struct RunPluginArgs {
-    /// 已安装插件的 id（等于插件目录名 / .kgpg 文件名 stem，如 kemono）
+    /// 已安装插件的 id（等于插件目录名 / .kgpg 文件名 stem，如 kemono），
+    /// 或一个 `.kgpg` 文件路径——后者临时运行，不写进 plugins_directory。
+    /// 路径模式下插件 id 取文件名 stem（与安装后一致）。
     plugin: String,
     /// 覆盖单个配置项，形如 `--var key=value`，可重复。
     /// 值按插件 kbConfig 里该 key 的类型自动转换（int/float/boolean 等）。
@@ -815,7 +817,53 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// 运行一个已安装的 V8 插件。
+/// `plugin run <plugin>` 的目标解析：已安装插件 id，或一个 `.kgpg` 路径（临时运行）。
+///
+/// 路径模式返回的 `PathBuf` 会随 `startTask` 的 `pluginFilePath` 传给调度器，后者 freeze
+/// 任务时按同一条路径重新解析插件（见 `resolve_plugin_for_task_request`），所以这里统一
+/// canonicalize 成绝对路径：worker 的 cwd 不保证和命令行一致，相对路径会找不到文件。
+async fn resolve_run_target(
+    pm: &PluginManager,
+    target: &str,
+) -> Result<(core_plugin::Plugin, Option<PathBuf>), String> {
+    let as_path = PathBuf::from(target);
+    if as_path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
+        // 扩展名已经表明意图，不存在就直接报错——别退回 id 模式，那只会给出
+        // 「插件未安装」这种更难懂的提示。
+        if !as_path.is_file() {
+            return Err(format!("插件文件不存在: {}", as_path.display()));
+        }
+        let abs = std::fs::canonicalize(&as_path)
+            .map_err(|e| format!("解析插件文件路径失败 {}: {e}", as_path.display()))?;
+        let (plugin, file_path, _var_defs) = pm
+            .resolve_plugin_for_cli_run(&abs.to_string_lossy())
+            .await?;
+        return Ok((plugin, file_path));
+    }
+
+    let plugin = pm.get(target).ok_or_else(|| {
+        let mut ids: Vec<String> = pm
+            .get_all()
+            .unwrap_or_default()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        ids.sort();
+        if ids.is_empty() {
+            format!(
+                "插件 {target} 未安装，且当前没有任何已安装插件。\n先用 `kabegame-cli plugin import <file.kgpg>` 安装，或直接把 `.kgpg` 路径传给 `plugin run`。"
+            )
+        } else {
+            format!(
+                "插件 {target} 未安装。已安装的有：{}\n用 `kabegame-cli plugin import <file.kgpg>` 安装，或直接把 `.kgpg` 路径传给 `plugin run`。",
+                ids.join(", ")
+            )
+        }
+    })?;
+    Ok(((*plugin).clone(), None))
+}
+
+/// 运行一个 V8 插件：已安装的 id，或直接给 `.kgpg` 路径临时运行。
 ///
 /// 整体链路与 GUI 一致：`start_task` 建任务 → TaskScheduler 冻结参数并入队 →
 /// worker 取出后在 `spawn_blocking` 里跑 V8。差别只在于 CLI 自己订阅
@@ -843,27 +891,7 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         );
     }
 
-    let plugin = pm.get(&args.plugin).ok_or_else(|| {
-        let mut ids: Vec<String> = pm
-            .get_all()
-            .unwrap_or_default()
-            .iter()
-            .map(|p| p.id.clone())
-            .collect();
-        ids.sort();
-        if ids.is_empty() {
-            format!(
-                "插件 {} 未安装，且当前没有任何已安装插件。\n先用 `kabegame-cli plugin import <file.kgpg>` 安装。",
-                args.plugin
-            )
-        } else {
-            format!(
-                "插件 {} 未安装。已安装的有：{}\n用 `kabegame-cli plugin import <file.kgpg>` 安装。",
-                args.plugin,
-                ids.join(", ")
-            )
-        }
-    })?;
+    let (plugin, plugin_file_path) = resolve_run_target(pm, &args.plugin).await?;
 
     // 暂时只支持 V8：WebView 后端要真实浏览器窗口，headless CLI 起不来。
     if plugin.script_type != "v8" {
@@ -887,6 +915,13 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         console::style(&plugin.id).bold(),
         plugin.version
     );
+    if let Some(path) = plugin_file_path.as_ref() {
+        println!(
+            "{} {}",
+            console::style("临时运行（未安装）：").dim(),
+            path.display()
+        );
+    }
     println!("{}", console::style("最终配置：").dim());
     println!("{config_json}");
 
@@ -913,6 +948,12 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         "userConfig": config,
         "triggerSource": "cli",
     });
+    // 临时运行的 .kgpg：调度器 freeze 任务时会按 pluginFilePath 再解析一次插件
+    // （plugin_id 在 plugins_directory 里根本不存在，只认这条路径）。
+    if let Some(path) = plugin_file_path.as_ref() {
+        task_param["pluginFilePath"] =
+            serde_json::Value::String(path.to_string_lossy().into_owned());
+    }
     if !resolved.http_headers.is_empty() {
         task_param["httpHeaders"] = serde_json::json!(resolved.http_headers);
     }

@@ -120,7 +120,7 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
 
 对于仅含 Cargo 的 `kabegame-cli` 组件，`deno task b` 默认执行 **debug** 构建；传入 `--release` 才会执行 release 构建。主应用的桌面端/Android 构建始终通过 `tauri build`，无论是否传入 `--release` 都是 release 构建。
 
-`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime` 和 `ipc-server` feature，因此会链接 deno_core/rusty_v8，并获得真正有效（非空操作）的 `GlobalEmitter`。这为 `kabegame-cli plugin run <id>` 提供支持；该命令会在自身进程内初始化任务与事件运行时、执行**已安装的 V8 插件**，并在固定的进度条上方渲染任务日志。可使用它在不启动 GUI 的情况下测试爬虫插件——请搭配 `repack-crawler-plugins` skill 和 `--data dev` 使用，否则 release CLI 会解析到系统数据目录。参见 `apps/docs/src/content/docs/reference/cli.md`。
+`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime` 和 `ipc-server` feature，因此会链接 deno_core/rusty_v8，并获得真正有效（非空操作）的 `GlobalEmitter`。这为 `kabegame-cli plugin run <id|path.kgpg>` 提供支持；该命令会在自身进程内初始化任务与事件运行时、执行 V8 插件（已安装的 id，或直接给 `.kgpg` 路径临时运行、不落盘安装），并在固定的进度条上方渲染任务日志。可使用它在不启动 GUI 的情况下测试爬虫插件——请搭配 `repack-crawler-plugins` skill 和 `--data dev` 使用，否则 release CLI 会解析到系统数据目录。参见 `apps/docs/src/content/docs/reference/cli.md`。
 
 在 macOS 上，两个二进制文件都是位于 `target/<profile>` 中的扁平 Cargo 产物；CEF framework 通过 cef-dll-sys 创建的 `target/Frameworks` 符号链接进行解析。参见 `src-tauri/tauri-runtime-cef/README.md`。
 

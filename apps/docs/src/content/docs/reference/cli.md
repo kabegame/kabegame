@@ -48,9 +48,9 @@ kabegame-cli plugin new my-site --backend webview
 
 ### plugin run
 
-在 CLI **本进程内**跑一个已安装的 V8 插件，实时渲染日志与进度。
+在 CLI **本进程内**跑一个 V8 插件，实时渲染日志与进度。目标既可以是已安装插件的 id，也可以直接给一个 `.kgpg` 文件路径。
 
-主要用途是插件开发期的快速验证：改完插件源码 → 重打包投放到 dev 数据目录 → 直接 `plugin run`，不用启动 GUI。
+主要用途是插件开发期的快速验证：改完插件源码 → 打包 → 直接 `plugin run`，不用启动 GUI。给路径时插件**不会**被装进 `plugins-directory`，只是这一次任务临时加载它。
 
 ```bash
 kabegame-cli plugin run <plugin> [选项]
@@ -58,7 +58,7 @@ kabegame-cli plugin run <plugin> [选项]
 
 | 参数             | 必填 | 说明                                                                                             |
 | ---------------- | ---- | ------------------------------------------------------------------------------------------------ |
-| `<plugin>`       | 是   | **已安装**插件的 id（等于 `.kgpg` 文件名 stem）。未安装会列出当前可用的 id。先用 `plugin import` 装。 |
+| `<plugin>`       | 是   | 两种形态：**已安装**插件的 id（等于 `.kgpg` 文件名 stem），未安装会列出当前可用的 id；或一个 **`.kgpg` 文件路径**（按扩展名识别），临时运行、不安装。路径模式下插件 id 取文件名 stem，且必须与包内声明的 provider namespace 一致——随便改 `.kgpg` 文件名会报 `provider namespace ... 不能逃逸`。若 id 恰好也已安装，**以路径里的包为准**。 |
 | `--var KEY=VALUE`| 否   | 覆盖单个 `kbConfig` 项，可重复。值按该 key 在 `kbConfig` 里声明的类型自动转换（int/float/boolean 等），所以 `--var page=3` 会变成数字 `3`。未知 key 会直接报错并列出可用项。 |
 | `--data dev\|prod\|auto` | 否 | 数据目录。`dev` = 仓库内 `.kabegame/debug`（`repack-crawler-plugins` skill 投放插件的地方），`prod` = 系统用户数据目录，`auto`（默认）跟随编译期的 `kabegame_data` cfg。**release 构建的 CLI 默认是 prod**，测试仓库内的插件时通常要显式加 `--data dev`。 |
 | `--output-dir`   | 否   | 图片输出目录。优先级高于插件默认配置里保存的 `outputDir`。                                          |
@@ -72,10 +72,14 @@ kabegame-cli plugin run <plugin> [选项]
 2. 用户在应用里保存的插件默认配置（`plugins-directory/default-configs/<id>.json` 的 `userConfig`；同一文件里的 `httpHeaders` / `outputDir` 也会被采用）
 3. 本次命令行的 `--var`
 
-**限制**：只支持 `kbBackend: "v8"` 的插件。WebView 后端要真实浏览器窗口，headless CLI 起不来，遇到会直接报错。
+**限制**：只支持 `kbBackend: "v8"` 的插件。WebView 后端要真实浏览器窗口，headless CLI 起不来，遇到会直接报错。路径模式只认打好的 `.kgpg` 包，不支持直接指向插件源码目录或裸 `.js`——先 `plugin pack`。
 
 ```bash
-# 先安装，再运行
+# 不安装，直接跑一个打好的包（配置仍按已存的 default-configs/<id>.json 叠加）
+kabegame-cli plugin pack --plugin-dir ./plugins/kemono --output /tmp/kemono.kgpg
+kabegame-cli plugin run /tmp/kemono.kgpg --data dev --var page=1
+
+# 先安装，再按 id 运行
 kabegame-cli plugin import ./packed/kemono.kgpg
 kabegame-cli plugin run kemono --data dev \
   --var source=creator --var service=patreon --var creator_id=44096704 \

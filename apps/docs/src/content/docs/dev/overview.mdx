@@ -147,6 +147,8 @@ deno task dev -c kabegame
 
 ```bash
 kabegame-cli plugin run <plugin-id> --data dev --var key=value
+# 或者不装，直接跑一个打好的包
+kabegame-cli plugin run ./packed/<plugin-id>.kgpg --data dev --var key=value
 ```
 
 它会在日志上方渲染一个常驻进度条。**只支持 V8 后端**（WebView 需要真实浏览器窗口，headless CLI 起不来）。详见 [命令行工具 · plugin run](/reference/cli/#plugin-run)。
