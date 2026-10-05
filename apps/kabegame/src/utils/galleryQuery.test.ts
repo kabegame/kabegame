@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   composeQueryFilters,
   GALLERY_SEARCH_MODES_BASIC,
+  isActiveSearchTerm,
   makeSearchTerm,
   normalizeQuery,
   parseQueryBody,
@@ -11,7 +12,7 @@ import {
   type GalleryFilterSet,
   type GalleryQuery,
 } from "./galleryQuery";
-import { buildComposablePath, parseComposablePath } from "./galleryPath";
+import { buildComposableContextPrefix, buildComposablePath, parseComposablePath } from "./galleryPath";
 
 const simple: GalleryFilterSet = {
   plugin: { pluginId: "pixiv" },
@@ -116,9 +117,17 @@ describe("removeNode", () => {
 describe("多维度搜索（勾选维度之间 OR）", () => {
   const multiTerm = makeSearchTerm(["url", "display-name", "url"], "sakura");
 
-  it("makeSearchTerm 按规范顺序去重，空勾选回退默认", () => {
+  it("makeSearchTerm 按规范顺序去重，空勾选保持为空", () => {
     expect(multiTerm).toEqual({ modes: ["display-name", "url"], query: "sakura" });
-    expect(makeSearchTerm([], "x")).toEqual({ modes: ["display-name"], query: "x" });
+    expect(makeSearchTerm([], "x")).toEqual({ modes: [], query: "x" });
+  });
+
+  it("全部取消勾选 = 不做搜索过滤：不进路径、归一化时移除", () => {
+    const query: GalleryQuery = [{ is: { search: makeSearchTerm([], "sakura"), plugin: { pluginId: "pixiv" } } }];
+    expect(isActiveSearchTerm(query[0] && "is" in query[0] ? query[0].is.search : null)).toBe(false);
+    expect(serializeQueryBody(query).body).toBe("plugin/pixiv");
+    expect(normalizeQuery(query)).toEqual([{ is: { plugin: { pluginId: "pixiv" } } }]);
+    expect(buildComposableContextPrefix("", query)).toBe("");
   });
 
   it("序列化展开为同词 OR 组，结束在枢纽可直接接维度", () => {

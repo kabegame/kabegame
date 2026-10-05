@@ -323,5 +323,8 @@
   "searchSummaryMatchAll": "尋找 {modes} 中同時包含 {terms} 的圖片。",
   "searchSummaryMatchAllAny": "尋找 {modes} 任一處同時包含 {terms} 的圖片。",
   "searchSummaryTerm": "「{term}」",
-  "searchSyntaxHint": "以英文逗號分隔的多個詞須同時符合；勾選多個範圍時，任一範圍符合即可。"
+  "searchSyntaxHint": "以英文逗號分隔的多個詞須同時符合；勾選多個範圍時，任一範圍符合即可；全部取消勾選則不進行搜尋篩選。",
+  "searchModesSelectAll": "全選",
+  "searchModesBadgeAll": "全部",
+  "searchSummaryNone": "未勾選任何範圍，不進行搜尋篩選。"
 }

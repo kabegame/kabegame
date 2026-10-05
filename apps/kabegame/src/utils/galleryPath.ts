@@ -3,6 +3,7 @@ import {
   asSingleFilterSet,
   serializeSearchTerm,
   FILTER_COMB,
+  isActiveSearchTerm,
   type GalleryBrowseDimension,
   type GalleryFilterSet,
   type GalleryQuery,
@@ -177,7 +178,7 @@ export function buildGalleryCountPath(noAlbum: boolean, query: GalleryQuery): st
  */
 export function buildComposableContextPrefix(rootPrefix: string, query: GalleryQuery): string {
   const term = asSingleFilterSet(query)?.search;
-  const searchPrefix = term?.query.trim() ? `${serializeSearchTerm(term)}/` : "";
+  const searchPrefix = isActiveSearchTerm(term) ? `${serializeSearchTerm(term)}/` : "";
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
   return `${searchPrefix}${rp}`;
 }

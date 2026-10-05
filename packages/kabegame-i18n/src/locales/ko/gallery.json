@@ -321,5 +321,8 @@
   "searchSummaryMatchAll": "{modes} 에 {terms} 이(가) 모두 포함된 이미지를 찾습니다.",
   "searchSummaryMatchAllAny": "{modes} 중 어느 하나에 {terms} 이(가) 모두 포함된 이미지를 찾습니다.",
   "searchSummaryTerm": "‘{term}’",
-  "searchSyntaxHint": "쉼표로 구분한 단어는 모두 일치해야 합니다. 여러 범위를 선택하면 어느 한 범위에서만 일치해도 됩니다."
+  "searchSyntaxHint": "쉼표로 구분한 단어는 모두 일치해야 합니다. 여러 범위를 선택하면 어느 한 범위에서만 일치해도 됩니다. 모든 선택을 해제하면 검색으로 필터링하지 않습니다.",
+  "searchModesSelectAll": "전체 선택",
+  "searchModesBadgeAll": "전체",
+  "searchSummaryNone": "선택한 범위가 없어 검색으로 필터링하지 않습니다."
 }

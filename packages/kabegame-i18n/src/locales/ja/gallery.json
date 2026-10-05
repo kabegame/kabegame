@@ -321,5 +321,8 @@
   "searchSummaryMatchAll": "{modes} に {terms} をすべて含む画像を検索します。",
   "searchSummaryMatchAllAny": "{modes} のいずれか一つに {terms} をすべて含む画像を検索します。",
   "searchSummaryTerm": "「{term}」",
-  "searchSyntaxHint": "カンマ区切りの語はすべて一致する必要があります。複数の範囲をチェックした場合は、いずれかの範囲で一致すれば対象になります。"
+  "searchSyntaxHint": "カンマ区切りの語はすべて一致する必要があります。複数の範囲をチェックした場合は、いずれかの範囲で一致すれば対象になります。すべてのチェックを外すと検索で絞り込みません。",
+  "searchModesSelectAll": "すべて選択",
+  "searchModesBadgeAll": "すべて",
+  "searchSummaryNone": "範囲が選択されていないため、検索で絞り込みません。"
 }

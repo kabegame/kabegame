@@ -195,8 +195,7 @@ function handlePointerDown(event: PointerEvent) {
   setDragGuard(true);
   emit("resize-start");
   event.preventDefault();
-  // 把手上的手势由本组件独占：不拦冒泡，祖先的手势识别器（如 enableDragScroll
-  // 的拖拽滚动）也会认下这次按下，一边抢捕获一边跟着滚动
+  // 把手上的手势由本组件独占：不拦冒泡时，祖先的手势识别器也可能认下这次按下。
   event.stopPropagation();
 }
 

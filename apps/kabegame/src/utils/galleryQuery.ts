@@ -77,8 +77,8 @@ export function isLabelSearchMode(mode: string | undefined): mode is "label" {
   return mode === "label";
 }
 
-/** 搜索词为空时勾选框的默认状态：只搜显示名。 */
-export const DEFAULT_GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = ["display-name"];
+/** 搜索词为空时勾选框的默认状态：全选（受限页再与可见集合取交集）。 */
+export const DEFAULT_GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = GALLERY_SEARCH_MODES;
 
 /** 路径段里的搜索模式：只认后端真实存在的六种。 */
 export function isGallerySearchPathMode(value: string | undefined): value is GallerySearchPathMode {
@@ -91,23 +91,22 @@ export function isGallerySearchPathMode(value: string | undefined): value is Gal
  * - 勾选的维度之间为 OR：每个维度各自要求「全部词都命中」，任一维度满足即可。
  */
 export interface GallerySearchTerm {
-  /** 勾选的维度：按 GALLERY_SEARCH_MODES 规范顺序、去重、非空（经 makeSearchTerm 构造）。 */
+  /** 勾选的维度：按 GALLERY_SEARCH_MODES 规范顺序、去重（经 makeSearchTerm 构造）。空集 = 不做搜索过滤。 */
   modes: GallerySearchPathMode[];
   query: string;
 }
 
-/** 规范化勾选集合：按 GALLERY_SEARCH_MODES 排序去重，空集回退默认。 */
+/** 规范化勾选集合：按 GALLERY_SEARCH_MODES 排序去重；空集保持为空（不过滤）。 */
 export function canonicalSearchModes(modes: readonly string[] | undefined): GallerySearchPathMode[] {
-  const picked = GALLERY_SEARCH_MODES.filter((mode) => modes?.includes(mode));
-  return picked.length > 0 ? picked : [...DEFAULT_GALLERY_SEARCH_MODES];
+  return GALLERY_SEARCH_MODES.filter((mode) => modes?.includes(mode));
 }
 
-/** 构造搜索项的唯一入口：保证 `modes` 规范、非空。 */
+/** 构造搜索项的唯一入口：保证 `modes` 规范。 */
 export function makeSearchTerm(modes: readonly GallerySearchPathMode[], query: string): GallerySearchTerm {
   return { modes: canonicalSearchModes(modes), query };
 }
 
-/** 搜索项实际覆盖的维度（兜底规范化，防御外部构造的项）。 */
+/** 搜索项实际覆盖的维度（兜底规范化，防御外部构造的项）；可能为空。 */
 export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[] {
   return canonicalSearchModes(term.modes);
 }
@@ -143,8 +142,13 @@ function serializeModeChain(mode: GallerySearchPathMode, tokens: readonly string
   return chain.map((token) => `search/${mode}/${encodeUserSegment(token)}`).join(`/${FILTER_COMB}/`);
 }
 
+/** 搜索项是否构成条件：有输入且至少勾选一个维度。全部取消勾选 = 不做搜索过滤。 */
+export function isActiveSearchTerm(term: GallerySearchTerm | undefined | null): term is GallerySearchTerm {
+  return !!term && term.query.trim().length > 0 && searchTermModes(term).length > 0;
+}
+
 /**
- * 搜索项 → 查询体片段。单维度是一条 AND 链；多维度各自成链、以 `~any/…/~or/…/~end` 取 OR。
+ * 搜索项 → 查询体片段（不构成条件时为空串）。单维度是一条 AND 链；多维度各自成链、以 `~any/…/~or/…/~end` 取 OR。
  * 两种形态都结束在 gallery 枢纽（search 委派回枢纽，`~end` 游标回到组入口）。
  * 例：`1girl, 1boy` 勾选元数据 + 标签 →
  * `~any/search/metadata/1girl/filter_comb/search/metadata/1boy/~or/search/label/1girl/filter_comb/search/label/1boy/~end`
@@ -152,6 +156,7 @@ function serializeModeChain(mode: GallerySearchPathMode, tokens: readonly string
 export function serializeSearchTerm(term: GallerySearchTerm): string {
   const tokens = searchTokens(term.query);
   const chains = searchTermModes(term).map((mode) => serializeModeChain(mode, tokens));
+  if (chains.length === 0 || !term.query.trim()) return "";
   return chains.length === 1 ? chains[0]! : `~any/${chains.join("/~or/")}/~end`;
 }
 
@@ -301,7 +306,7 @@ export function removeFilterDimension(filters: GalleryFilterSet, dimension: Gall
 }
 
 function hasSearch(atom: GalleryFilterSet): boolean {
-  return !!atom.search?.query.trim();
+  return isActiveSearchTerm(atom.search);
 }
 
 function hasDimension(atom: GalleryFilterSet, dimension: GalleryBrowseDimension): boolean {

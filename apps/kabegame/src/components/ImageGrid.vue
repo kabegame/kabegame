@@ -1,5 +1,5 @@
 <template>
-  <CoreImageGrid
+  <ImageGridCore
     ref="coreRef"
     v-bind="coreGridBind"
     :window-aspect-ratio="props.windowAspectRatio"
@@ -36,7 +36,7 @@
         <EmptyState />
       </slot>
     </template>
-  </CoreImageGrid>
+  </ImageGridCore>
 
   <!-- Android 详情弹窗：view 层 onContextCommand return 'detail' 或未拦截时由本层打开 -->
   <ImageDetailDialog
@@ -90,7 +90,7 @@ import {
 } from "vue";
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
-import CoreImageGrid from "@/components/image/ImageGrid.vue";
+import ImageGridCore from "@/components/image/ImageGridCore.vue";
 import { labelKeysText, pickLabelAlbums, writeClipboardText } from "@/utils/imageLabels";
 import type { ImageInfo as CoreImageInfo } from "@/types/image";
 import ImageDetailDialog from "@/components/common/ImageDetailDialog.vue";
@@ -127,7 +127,7 @@ import type { GridRefreshContext, GridRemoveDialogText, GridAdapter } from "@/co
 import type {
   ContextCommand as CoreContextCommand,
   ContextCommandPayload as CoreContextCommandPayload,
-} from "@/components/image/ImageGrid.vue";
+} from "@/components/image/ImageGridCore.vue";
 import type { ActionItem } from "@/actions/types";
 
 // 扩展 ContextCommand 类型，添加 kabegame 特有的命令
@@ -813,7 +813,9 @@ function handlePreviewSwitch(payload: { direction: "prev" | "next" }) {
  */
 function handlePreviewResolveFailed(payload: { id: string; reason: "missing" | "error" }) {
   if (previewedId.value !== payload.id) return; // 过期回报
-  ElMessage.warning(payload.reason === "missing" ? t("gallery.previewImageMissing") : t("gallery.previewImageLoadFailed"));
+  ElMessage.warning(
+    payload.reason === "missing" ? t("gallery.previewImageMissing") : t("gallery.previewImageLoadFailed"),
+  );
   previewedId.value = null;
 }
 function handlePreviewClose(payload: { image: ImageInfo | null }) {

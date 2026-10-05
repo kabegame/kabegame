@@ -1,9 +1,9 @@
 <template>
   <KbFilterDropdown
-    :model-value="query.trim() ? query : null"
+    :model-value="isActive ? query : null"
     :chip-label="t('gallery.advancedChipSearch')"
     :selected-label="query"
-    :badge="query.trim() ? badgeLabel : undefined"
+    :badge="isActive ? badgeLabel : undefined"
     :any-label="t('gallery.filterAnyKeyword')"
     :chip-display="chipDisplay"
     :title="chipTitle"
@@ -20,14 +20,24 @@
            w-0!+min-w-full 退出宽度测量（el-input 的固有宽度有 440px、整段说明的
            max-content 更宽，任一个都会把 w-max 撑回去），定完宽再撑满。 -->
       <div class="w-max min-w-[min(20rem,calc(100vw-48px))] max-w-[calc(100vw-48px)] p-3">
-        <KbText
-          :model-value="draft"
-          class="w-0! min-w-full"
-          allow-unset
-          :placeholder="t('gallery.searchPlaceholderKeywords')"
-          @update:model-value="onInput"
-          @keyup.enter="close"
-        />
+        <!-- 第一行：输入框 + 全选。外层 w-0!+min-w-full 退出宽度测量，同上。 -->
+        <div class="flex w-0! min-w-full items-center gap-3">
+          <KbText
+            :model-value="draft"
+            class="min-w-0 flex-1"
+            allow-unset
+            :placeholder="t('gallery.searchPlaceholderKeywords')"
+            @update:model-value="onInput"
+            @keyup.enter="close"
+          />
+          <el-checkbox
+            class="flex-none"
+            :model-value="allChecked"
+            :indeterminate="someChecked"
+            :label="t('gallery.searchModesSelectAll')"
+            @update:model-value="onSelectAll"
+          />
+        </div>
 
         <div class="mt-3 text-xs text-[var(--anime-text-secondary)]">{{ t("gallery.searchModesLabel") }}</div>
         <!-- 各维度的说明收进「?」：面板只留勾选本身，读说明是按需的事。 -->
@@ -37,7 +47,7 @@
           @update:model-value="onModesChange"
         >
           <div v-for="mode in visibleModes" :key="mode" class="flex items-center gap-1">
-            <el-checkbox :value="mode" :label="searchModeLabel(mode)" :disabled="isLastChecked(mode)" />
+            <el-checkbox :value="mode" :label="searchModeLabel(mode)" />
             <el-tooltip :content="searchModeHelp(mode)" placement="top" :trigger="IS_ANDROID ? 'click' : 'hover'">
               <el-icon
                 class="flex-none cursor-help text-sm text-[var(--anime-text-muted)] hover:text-[var(--anime-secondary)]"
@@ -82,7 +92,7 @@ import {
 const props = withDefaults(
   defineProps<{
     query: string;
-    /** 勾选的搜索维度（规范顺序、非空）。 */
+    /** 勾选的搜索维度（规范顺序）。空 = 不做搜索过滤，输入只留在框里。 */
     selectedModes: readonly GallerySearchPathMode[];
     /**
      * 面板里可勾选的维度：任务/畅游详情只暴露基础几项。当前勾选里有不在此列的
@@ -108,7 +118,8 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   "update:query": [value: string];
-  "update:selectedModes": [value: GallerySearchPathMode[]];
+  /** 带上输入框当前内容：全不选时搜索已不在查询里，重新勾选要靠它恢复。 */
+  "update:selectedModes": [value: GallerySearchPathMode[], query: string];
 }>();
 
 const { t, locale } = useI18n();
@@ -119,9 +130,14 @@ let debounceTimer: number | null = null;
 watch(
   () => props.query,
   (value) => {
+    // 全不选时搜索从查询里移除、query 变空，但输入框要保住内容，重新勾选时接着用。
+    if (value === "" && props.selectedModes.length === 0) return;
     if (value !== draft.value) draft.value = value;
   },
 );
+
+/** chip 是否点亮：有输入且至少勾选一个维度才构成过滤。 */
+const isActive = computed(() => !!props.query.trim() && props.selectedModes.length > 0);
 
 function clearDebounce() {
   if (debounceTimer === null) return;
@@ -158,15 +174,22 @@ const visibleModes = computed<GallerySearchPathMode[]>(() =>
   GALLERY_SEARCH_MODES.filter((mode) => props.modes.includes(mode) || props.selectedModes.includes(mode)),
 );
 
-/** 至少留一个维度：最后一个勾选项禁用，免得出现「搜了但哪儿都不搜」。 */
-function isLastChecked(mode: GallerySearchPathMode): boolean {
-  return props.selectedModes.length === 1 && props.selectedModes[0] === mode;
+const allChecked = computed(() => visibleModes.value.every((mode) => props.selectedModes.includes(mode)));
+const someChecked = computed(() => props.selectedModes.length > 0 && !allChecked.value);
+
+function emitModes(modes: readonly GallerySearchPathMode[]) {
+  // 勾选变化立即生效：挂起的防抖输入一并带上，不再单独提交。
+  clearDebounce();
+  emit("update:selectedModes", canonicalSearchModes(modes), draft.value);
 }
 
+/** 可以全部取消：一个维度都不勾 = 不做搜索过滤。 */
 function onModesChange(value: Array<string | number | boolean>) {
-  const picked = value.filter((mode): mode is GallerySearchPathMode => typeof mode === "string");
-  if (picked.length === 0) return;
-  emit("update:selectedModes", canonicalSearchModes(picked));
+  emitModes(value.filter((mode): mode is GallerySearchPathMode => typeof mode === "string"));
+}
+
+function onSelectAll(checked: string | number | boolean) {
+  emitModes(checked ? visibleModes.value : []);
 }
 
 function searchModeLabel(mode: GallerySearchPathMode): string {
@@ -189,17 +212,17 @@ function searchModeHelp(mode: GallerySearchPathMode): string {
 
 const modesText = computed(() => props.selectedModes.map(searchModeLabel).join(" / "));
 
-/** chip 徽章：单维度显示维度名，多维度显示个数（名字在 tooltip 里补全）。 */
-const badgeLabel = computed(() =>
-  props.selectedModes.length === 1
-    ? searchModeLabel(props.selectedModes[0]!)
-    : t("gallery.searchModesBadge", { n: props.selectedModes.length }),
-);
+/** chip 徽章：全选显示「全部」，单维度显示维度名，其余显示个数（名字在 tooltip 里补全）。 */
+const badgeLabel = computed(() => {
+  if (allChecked.value) return t("gallery.searchModesBadgeAll");
+  if (props.selectedModes.length === 1) return searchModeLabel(props.selectedModes[0]!);
+  return t("gallery.searchModesBadge", { n: props.selectedModes.length });
+});
 
 /** chip 上省掉的维度名与取值在 tooltip 里补回来（工具条的 value / icon 档）。 */
 const chipTitle = computed(() => {
   const label = t("gallery.advancedChipSearch");
-  const value = props.query.trim() ? `${modesText.value}：${props.query}` : t("gallery.filterAnyKeyword");
+  const value = isActive.value ? `${modesText.value}：${props.query}` : t("gallery.filterAnyKeyword");
   return `${label} · ${value}`;
 });
 
@@ -229,6 +252,7 @@ function formatTerms(tokens: readonly string[]): string {
 
 /** 按当前输入（未提交的草稿也算）与勾选，说清这一次到底怎么搜。 */
 const summary = computed(() => {
+  if (props.selectedModes.length === 0) return t("gallery.searchSummaryNone");
   const modes = modesText.value;
   const tokens = searchTokens(draft.value);
   if (tokens.length === 0) return t("gallery.searchSummaryIdle", { modes });

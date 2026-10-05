@@ -288,7 +288,6 @@
 | `apps/kabegame/src/actions/imageActions.ts` | 操作结果提示文案 |
 | `apps/kabegame/src/actions/albumActions.ts` | 同上 |
 | `apps/kabegame/src/actions/surfRecordActions.ts` | 同上 |
-| `apps/kabegame/src/utils/dragScroll.ts` | 若有用户可见提示 |
 | `apps/kabegame/src/composables/useImagesChangeRefresh.ts` | 若有提示 |
 | `apps/kabegame/src/composables/useFileDrop.ts` | 拖拽提示文案 |
 

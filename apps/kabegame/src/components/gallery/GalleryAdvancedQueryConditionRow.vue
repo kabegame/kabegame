@@ -32,7 +32,7 @@
           :modes="searchModes"
           :negated="negated"
           @update:query="updateSearch($event)"
-          @update:selected-modes="searchSelectedModes = $event"
+          @update:selected-modes="(modes, query) => updateSearch(query, modes, true)"
         />
 
         <KbFilterDropdown
@@ -94,12 +94,7 @@ import {
   type GalleryQueryNode,
   type NodePath,
 } from "@/utils/galleryQuery";
-import {
-  DEFAULT_GALLERY_SEARCH_MODES,
-  makeSearchTerm,
-  type GalleryFilter,
-  type GallerySearchPathMode,
-} from "@/utils/galleryPath";
+import { makeSearchTerm, type GalleryFilter, type GallerySearchPathMode } from "@/utils/galleryPath";
 import AdvancedFacetTreePanel from "./AdvancedFacetTreePanel.vue";
 import GallerySearchDropdown from "./GallerySearchDropdown.vue";
 import { useGallerySearchModes } from "./searchModesContext";
@@ -142,10 +137,8 @@ const facetItems = computed<
   { dimension: "size", label: t("gallery.advancedChipSize"), icon: markRaw(FilterSize) },
 ]);
 
-const searchSelectedModes = computed<GallerySearchPathMode[]>({
-  get: () => atom.value.search?.modes ?? [...DEFAULT_GALLERY_SEARCH_MODES],
-  set: (modes) => updateSearch(atom.value.search?.query ?? "", modes, true),
-});
+/** 新条件默认全选可见维度；全不选的搜索项留在草稿树里（保住输入），序列化时不构成条件。 */
+const searchSelectedModes = computed<GallerySearchPathMode[]>(() => atom.value.search?.modes ?? [...searchModes.value]);
 
 function updateAtom(updater: (atom: GalleryFilterSet) => GalleryFilterSet): void {
   emit(
@@ -157,7 +150,11 @@ function updateAtom(updater: (atom: GalleryFilterSet) => GalleryFilterSet): void
   );
 }
 
-function updateSearch(query: string, modes = searchSelectedModes.value, preserveEmpty = false): void {
+function updateSearch(
+  query: string,
+  modes: readonly GallerySearchPathMode[] = searchSelectedModes.value,
+  preserveEmpty = false,
+): void {
   updateAtom((current) => {
     const next = { ...current };
     const trimmed = query.trim();

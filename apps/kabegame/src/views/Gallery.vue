@@ -399,17 +399,6 @@ onMounted(async () => {
     height: 100%;
   }
 
-  /* 按住空格进入“拖拽滚动模式” */
-  &.drag-scroll-ready {
-    cursor: grab;
-  }
-
-  /* 正在拖拽滚动 */
-  &.drag-scroll-active {
-    cursor: grabbing;
-    user-select: none;
-  }
-
   .load-more-container {
     display: flex;
     justify-content: center;

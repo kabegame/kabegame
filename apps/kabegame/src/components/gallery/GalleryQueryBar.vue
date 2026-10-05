@@ -452,7 +452,7 @@ interface Props {
   sort?: GallerySort;
   page?: number;
   pageSize?: number;
-  /** 搜索词为空时搜索下拉勾选维度的兜底（各页的会话 sticky 勾选）。 */
+  /** 搜索词为空时搜索下拉勾选维度的兜底（各页的会话 sticky 勾选，默认全选；空 = 不过滤）。 */
   searchModes?: readonly GallerySearchPathMode[];
   /** 兼容调用侧的旧参数；计数上下文现由 contextBase + 两部分查询构造。 */
   providerContextPrefix?: string;
@@ -482,7 +482,7 @@ const props = withDefaults(defineProps<Props>(), {
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   page: 1,
   pageSize: 100,
-  searchModes: () => ["display-name"],
+  searchModes: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label"],
   providerContextPrefix: "",
   contextBase: "",
   // withDefaults 的工厂会被提升到 setup 外，只能写字面量：引用模块内常量会编译失败。
@@ -533,34 +533,39 @@ function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
 // ---------- 搜索（查询原子的 search 维度）----------
 const searchTerm = computed(() => activeFilters.value.search ?? null);
 const searchText = computed(() => searchTerm.value?.query ?? "");
-/** 展示勾选：有搜索词跟词走，没有用各页传入的 sticky 兜底。 */
-const searchModesView = computed<GallerySearchPathMode[]>(() => searchTerm.value?.modes ?? [...props.searchModes]);
+/**
+ * 展示勾选：有搜索词跟词走，没有用各页传入的 sticky 兜底。sticky 默认全选，受限页
+ * 与可见集合取交集；用户主动全不选（sticky 为空）时保持为空 = 不做搜索过滤。
+ */
+const searchModesView = computed<GallerySearchPathMode[]>(() => {
+  if (searchTerm.value) return searchTerm.value.modes;
+  if (props.searchModes.length === 0) return [];
+  const visible = props.searchModes.filter((mode) => props.searchFeatures.includes(mode));
+  return visible.length > 0 ? visible : [...props.searchFeatures];
+});
 
-function onSearchInput(value: string) {
+/** 按给定输入与勾选重写简单 chip 的搜索维度；未勾选任何维度时搜索不进查询。 */
+function navigateSearch(query: string, modes: readonly GallerySearchPathMode[]) {
   const next = { ...activeFilters.value };
-  if (value.trim()) {
-    next.search = makeSearchTerm(searchModesView.value, value);
+  if (query.trim() && modes.length > 0) {
+    next.search = makeSearchTerm(modes, query);
   } else {
     delete next.search;
   }
   navigate({ query: composeQueryFilters(next, advancedQuery.value), page: 1 });
 }
 
-function onSearchModesSelect(modes: GallerySearchPathMode[]) {
+function onSearchInput(value: string) {
+  // 全不选时输入只留在输入框里，不构成条件；本来就没有搜索条件时不必重查。
+  if (searchModesView.value.length === 0 && !searchTerm.value) return;
+  navigateSearch(value, searchModesView.value);
+}
+
+/** 勾选变化带上输入框里的当前内容：全不选时搜索已从查询里移除，重新勾选要靠它恢复。 */
+function onSearchModesSelect(modes: GallerySearchPathMode[], query: string) {
   emit("searchModesChange", modes);
-  // 有搜索词时勾选是查询的一部分，改勾选即改查询；空词时只记 sticky。
-  if (searchTerm.value?.query.trim()) {
-    navigate({
-      query: composeQueryFilters(
-        {
-          ...activeFilters.value,
-          search: makeSearchTerm(modes, searchTerm.value.query),
-        },
-        advancedQuery.value,
-      ),
-      page: 1,
-    });
-  }
+  // 有输入时勾选是查询的一部分，改勾选即改查询；空输入时只记 sticky。
+  if (query.trim() || searchTerm.value) navigateSearch(query, modes);
 }
 
 // ---------- 追加高级条件 ----------

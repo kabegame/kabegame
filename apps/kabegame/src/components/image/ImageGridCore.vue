@@ -185,13 +185,14 @@ import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "../../stores/ui";
-import { useDragScroll } from "../../composables/useDragScroll";
 import { resolveSettingWithPrompt } from "../../composables/useSettingChoice";
 import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import { Plugin } from "@/stores/plugins";
 import type { ImagePrefer } from "@/types/image";
+
+defineOptions({ name: "ImageGridCore" });
 
 // core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =
@@ -559,11 +560,6 @@ const estimatedItemHeight = () => {
 const rowHeightWithGap = computed(() => {
   const h = measuredItemHeight.value ?? estimatedItemHeight();
   return h + gridGapPx.value;
-});
-
-// 限制拖拽滚动最大速度：每 0.2 秒滚动一行
-useDragScroll(scrollEl, {
-  maxVelocityPxPerMs: () => rowHeightWithGap.value / 100,
 });
 
 const totalRows = computed(() => {
@@ -1181,7 +1177,7 @@ const bindScrollElement = (el: HTMLElement | null) => {
   el.addEventListener("wheel", handleSmoothWheel, { passive: false } as any);
   // 外部滚动按钮发起程序化滚动时，也要停止当前 wheel 动画，避免下一帧把 scrollTop 拉回旧目标。
   el.addEventListener("scroll-buttons-scroll-command", cancelSmoothWheel as any);
-  // 指针按下时终止 wheel 动画，避免与拖拽滚动/程序化滚动互相抢写 scrollLeft/Top
+  // 指针按下时终止 wheel 动画，避免与程序化滚动互相抢写 scrollLeft/Top
   el.addEventListener("pointerdown", cancelSmoothWheel, { passive: true, capture: true } as any);
   scheduleVirtualUpdate();
 };
