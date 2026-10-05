@@ -1,4 +1,4 @@
-//! IPC 客户端：封装与 daemon 的通信，供所有前端（kabegame、cli）复用
+//! IPC 客户端：封装与 Kabegame 主应用 IPC 服务的通信。
 //!
 //! 使用示例：
 //! ```rust,no_run
@@ -38,7 +38,7 @@ impl IpcClient {
         }
     }
 
-    /// 连接到 daemon
+    /// 连接到应用 IPC 服务。
     ///
     /// 在应用首次启动或用户手动重连时调用此方法建立连接。
     pub async fn connect(&self) -> Result<(), String> {
@@ -80,7 +80,7 @@ impl IpcClient {
 
     // ==================== Status ====================
 
-    /// 检查 daemon 状态
+    /// 检查应用 IPC 服务状态。
     pub async fn status(&self) -> Result<serde_json::Value, String> {
         let resp = self.request_raw(IpcRequest::Status).await?;
         if !resp.ok {
@@ -967,7 +967,7 @@ impl IpcClient {
     /// 自动处理连接状态变化
     pub async fn subscribe_events_stream<F, Fut>(
         &mut self,
-        kinds: &[crate::ipc::events::DaemonEventKind],
+        kinds: &[crate::ipc::events::AppEventKind],
         mut on_event: F,
     ) -> Result<(), String>
     where

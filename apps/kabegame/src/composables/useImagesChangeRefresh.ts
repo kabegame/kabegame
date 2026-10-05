@@ -3,7 +3,7 @@ import { useTrailingThrottleFn } from "@/composables/useTrailingThrottle";
 import { listen } from "@/api/rpc";
 import type { ImageInfo } from "@/types/image";
 
-/** 后端 `DaemonEvent::ImagesChange` / `images` 表粗粒度失效信号（reason: add | delete | change） */
+/** 后端 `AppEvent::ImagesChange` / `images` 表粗粒度失效信号（reason: add | delete | change） */
 export type ImagesChangePayload = {
   seq: number;
   reason?: "add" | "delete" | "change";

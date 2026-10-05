@@ -137,7 +137,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                     // 提示强化：Dokan 驱动未安装/安装失败（os error: can't install driver）
                     if msg.contains("can't install driver") {
                         let _ = tx.send(Err(
-                            "挂载失败：Dokan 驱动不可用（can't install driver）。\n\n请安装 Dokan 2.x Runtime/Driver（仅放置 dokan2.dll 不够，还需要内核驱动 dokan2.sys），安装后建议重启系统。\n安装完成后可在管理员终端运行 `kabegame-cli.exe vd daemon` 并用 `kabegame-cli.exe vd ipc-status` 验证 IPC 可用。"
+                            "挂载失败：Dokan 驱动不可用（can't install driver）。\n\n请安装 Dokan 2.x Runtime/Driver（仅放置 dokan2.dll 不够，还需要内核驱动 dokan2.sys），安装后建议重启系统，再从 Kabegame 设置中重新挂载画册盘。"
                                 .to_string(),
                         ));
                     } else if msg.contains("requested an incompatible version") {

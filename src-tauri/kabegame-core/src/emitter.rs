@@ -7,7 +7,7 @@
 
 use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-server")]
-use crate::ipc::events::DaemonEvent;
+use crate::ipc::events::AppEvent;
 use crate::ipc::events::ImagePatch;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 static CHANGE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(feature = "ipc-server")]
-static HELD_VIEW_EVENTS: Mutex<(usize, Vec<Arc<DaemonEvent>>)> = Mutex::new((0, Vec::new()));
+static HELD_VIEW_EVENTS: Mutex<(usize, Vec<Arc<AppEvent>>)> = Mutex::new((0, Vec::new()));
 
 /// 持有期间，视图相关事件仍分配序号，但延迟到最后一个守卫析构时广播。
 pub struct EventHold(());
@@ -53,7 +53,7 @@ pub(crate) fn next_change_seq() -> u64 {
 }
 
 #[cfg(feature = "ipc-server")]
-pub(crate) fn dispatch_view_event(event: Arc<DaemonEvent>) {
+pub(crate) fn dispatch_view_event(event: Arc<AppEvent>) {
     let mut held = HELD_VIEW_EVENTS
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -134,7 +134,7 @@ impl GlobalEmitter {
     /// 发送任务日志事件
     pub fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
         let _ = Storage::global().add_task_log(task_id, level, message);
-        let event = std::sync::Arc::new(DaemonEvent::TaskLog {
+        let event = std::sync::Arc::new(AppEvent::TaskLog {
             task_id: task_id.to_string(),
             level: level.to_string(),
             message: message.to_string(),
@@ -152,7 +152,7 @@ impl GlobalEmitter {
         error: Option<&str>,
         retried_for: Option<i64>,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::DownloadState {
+        let event = std::sync::Arc::new(AppEvent::DownloadState {
             id,
             url: url.to_string(),
             start_time,
@@ -166,13 +166,13 @@ impl GlobalEmitter {
 
     /// 发送下载条目移除事件（后端 wait 完成后调用，前端据此从活跃列表删除）
     pub fn emit_download_removed(&self, id: u64) {
-        let event = std::sync::Arc::new(DaemonEvent::DownloadRemoved { id });
+        let event = std::sync::Arc::new(AppEvent::DownloadRemoved { id });
         EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送通用事件（用于扩展）
     pub fn emit(&self, event: &str, payload: serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::Generic {
+        let event = std::sync::Arc::new(AppEvent::Generic {
             event: event.to_string(),
             payload,
         });
@@ -186,13 +186,13 @@ impl GlobalEmitter {
 
     /// 任务新增（完整任务 JSON）
     pub fn emit_task_added(&self, task: &serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskAdded { task: task.clone() });
+        let event = std::sync::Arc::new(AppEvent::TaskAdded { task: task.clone() });
         EventBroadcaster::global().broadcast(event);
     }
 
     /// 任务删除
     pub fn emit_task_deleted(&self, task_id: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskDeleted {
+        let event = std::sync::Arc::new(AppEvent::TaskDeleted {
             task_id: task_id.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -200,7 +200,7 @@ impl GlobalEmitter {
 
     /// 任务字段增量更新
     pub fn emit_task_changed(&self, task_id: &str, diff: serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskChanged {
+        let event = std::sync::Arc::new(AppEvent::TaskChanged {
             task_id: task_id.to_string(),
             diff,
         });
@@ -209,7 +209,7 @@ impl GlobalEmitter {
 
     /// 发送下载进度事件
     pub fn emit_download_progress(&self, id: u64, received_bytes: u64, total_bytes: Option<u64>) {
-        let event = std::sync::Arc::new(DaemonEvent::DownloadProgress {
+        let event = std::sync::Arc::new(AppEvent::DownloadProgress {
             id,
             received_bytes,
             total_bytes,
@@ -228,7 +228,7 @@ impl GlobalEmitter {
         regenerated: usize,
         backfilled: usize,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::OrganizeProgress {
+        let event = std::sync::Arc::new(AppEvent::OrganizeProgress {
             processed_global,
             library_total,
             range_start,
@@ -249,7 +249,7 @@ impl GlobalEmitter {
         canceled: bool,
         error: Option<String>,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::OrganizeFinished {
+        let event = std::sync::Arc::new(AppEvent::OrganizeFinished {
             removed,
             regenerated,
             backfilled,
@@ -266,7 +266,7 @@ impl GlobalEmitter {
         removed: usize,
         kept_files: usize,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::HiddenCleanupProgress {
+        let event = std::sync::Arc::new(AppEvent::HiddenCleanupProgress {
             processed,
             total,
             removed,
@@ -282,7 +282,7 @@ impl GlobalEmitter {
         canceled: bool,
         error: Option<String>,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::HiddenCleanupFinished {
+        let event = std::sync::Arc::new(AppEvent::HiddenCleanupFinished {
             removed,
             kept_files,
             canceled,
@@ -293,7 +293,7 @@ impl GlobalEmitter {
 
     /// 发送壁纸图片更新事件
     pub fn emit_wallpaper_update_image(&self, image_path: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::WallpaperUpdateImage {
+        let event = std::sync::Arc::new(AppEvent::WallpaperUpdateImage {
             image_path: image_path.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -301,7 +301,7 @@ impl GlobalEmitter {
 
     /// 发送设置变更事件
     pub fn emit_setting_change(&self, changes: serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::SettingChange { changes });
+        let event = std::sync::Arc::new(AppEvent::SettingChange { changes });
         EventBroadcaster::global().broadcast(event);
     }
 
@@ -311,7 +311,7 @@ impl GlobalEmitter {
             return;
         }
         let seq = next_change_seq();
-        let event = std::sync::Arc::new(DaemonEvent::ImageChanged { seq, patches });
+        let event = std::sync::Arc::new(AppEvent::ImageChanged { seq, patches });
         dispatch_view_event(event);
     }
 
@@ -339,7 +339,7 @@ impl GlobalEmitter {
         let opt_vec = |s: Option<&[String]>| {
             s.and_then(|v| if v.is_empty() { None } else { Some(v.to_vec()) })
         };
-        let event = std::sync::Arc::new(DaemonEvent::ImagesChange {
+        let event = std::sync::Arc::new(AppEvent::ImagesChange {
             seq,
             reason: reason.to_string(),
             image_ids: image_ids.to_vec(),
@@ -352,13 +352,13 @@ impl GlobalEmitter {
 
     /// 畅游记录新增（完整 record JSON）
     pub fn emit_surf_record_added(&self, record: serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::SurfRecordAdded { record });
+        let event = std::sync::Arc::new(AppEvent::SurfRecordAdded { record });
         EventBroadcaster::global().broadcast(event);
     }
 
     /// 畅游记录删除
     pub fn emit_surf_record_deleted(&self, surf_record_id: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::SurfRecordDeleted {
+        let event = std::sync::Arc::new(AppEvent::SurfRecordDeleted {
             surf_record_id: surf_record_id.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -366,7 +366,7 @@ impl GlobalEmitter {
 
     /// 畅游记录字段增量更新（与 `TaskChanged` 类似，diff 为绝对值快照）
     pub fn emit_surf_record_changed(&self, surf_record_id: &str, diff: serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::SurfRecordChanged {
+        let event = std::sync::Arc::new(AppEvent::SurfRecordChanged {
             surf_record_id: surf_record_id.to_string(),
             diff,
         });
@@ -375,7 +375,7 @@ impl GlobalEmitter {
 
     /// 发送失败图片新增事件
     pub fn emit_failed_image_added(&self, task_id: &str, failed_image: &TaskFailedImage) {
-        let event = std::sync::Arc::new(DaemonEvent::FailedImagesChange {
+        let event = std::sync::Arc::new(AppEvent::FailedImagesChange {
             reason: "added".to_string(),
             task_id: task_id.to_string(),
             failed_image_ids: Some(vec![failed_image.id]),
@@ -392,7 +392,7 @@ impl GlobalEmitter {
 
     /// 发送失败图片批量移除事件
     pub fn emit_failed_images_removed(&self, task_id: &str, failed_image_ids: &[i64]) {
-        let event = std::sync::Arc::new(DaemonEvent::FailedImagesChange {
+        let event = std::sync::Arc::new(AppEvent::FailedImagesChange {
             reason: "removed".to_string(),
             task_id: task_id.to_string(),
             failed_image_ids: Some(failed_image_ids.to_vec()),
@@ -404,7 +404,7 @@ impl GlobalEmitter {
 
     /// 发送失败图片更新事件
     pub fn emit_failed_image_updated(&self, task_id: &str, failed_image: &TaskFailedImage) {
-        let event = std::sync::Arc::new(DaemonEvent::FailedImagesChange {
+        let event = std::sync::Arc::new(AppEvent::FailedImagesChange {
             reason: "updated".to_string(),
             task_id: task_id.to_string(),
             failed_image_ids: Some(vec![failed_image.id]),
@@ -442,9 +442,9 @@ impl GlobalEmitter {
         self.emit_task_changed(task_id, serde_json::Value::Object(diff));
     }
 
-    /// 发送 Daemon 关闭事件（退出前通知 IPC 客户端）
-    pub fn emit_daemon_shutdown(&self, reason: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::DaemonShutdown {
+    /// 发送应用关闭事件（退出前通知 IPC 客户端）。
+    pub fn emit_app_shutdown(&self, reason: &str) {
+        let event = std::sync::Arc::new(AppEvent::AppShutdown {
             reason: reason.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -453,7 +453,7 @@ impl GlobalEmitter {
     /// 发送画册属性变更事件（重命名、移动等；`changes` 为增量 JSON）
     pub fn emit_album_changed(&self, album_id: &str, changes: serde_json::Value) {
         let seq = next_change_seq();
-        let event = std::sync::Arc::new(DaemonEvent::AlbumChanged {
+        let event = std::sync::Arc::new(AppEvent::AlbumChanged {
             seq,
             album_id: album_id.to_string(),
             changes,
@@ -463,7 +463,7 @@ impl GlobalEmitter {
 
     /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
     pub fn emit_album_added(&self, album: &crate::storage::Album) {
-        let event = std::sync::Arc::new(DaemonEvent::AlbumAdded {
+        let event = std::sync::Arc::new(AppEvent::AlbumAdded {
             id: album.id.clone(),
             name: album.name.clone(),
             created_at: album.created_at,
@@ -481,7 +481,7 @@ impl GlobalEmitter {
 
     /// 发送画册删除事件（底层 DB 删除后由 storage 调用）
     pub fn emit_album_deleted(&self, album: &crate::storage::Album) {
-        let event = std::sync::Arc::new(DaemonEvent::AlbumDeleted {
+        let event = std::sync::Arc::new(AppEvent::AlbumDeleted {
             album_id: album.id.clone(),
             parent_id: album.parent_id.clone(),
             ancestor_path: album.ancestor_path.clone(),
@@ -491,7 +491,7 @@ impl GlobalEmitter {
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
     pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::AutoConfigChange {
+        let event = std::sync::Arc::new(AppEvent::AutoConfigChange {
             reason: reason.to_string(),
             config_id: config_id.to_string(),
         });
@@ -500,7 +500,7 @@ impl GlobalEmitter {
 
     /// 插件新增安装（首次安装，完整 Plugin JSON）
     pub fn emit_plugin_added(&self, plugin: &serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::PluginAdded {
+        let event = std::sync::Arc::new(AppEvent::PluginAdded {
             plugin: plugin.clone(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -508,7 +508,7 @@ impl GlobalEmitter {
 
     /// 插件卸载
     pub fn emit_plugin_deleted(&self, plugin_id: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::PluginDeleted {
+        let event = std::sync::Arc::new(AppEvent::PluginDeleted {
             plugin_id: plugin_id.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -516,7 +516,7 @@ impl GlobalEmitter {
 
     /// 插件更新/重装（同 ID 覆盖安装，完整 Plugin JSON）
     pub fn emit_plugin_updated(&self, plugin: &serde_json::Value) {
-        let event = std::sync::Arc::new(DaemonEvent::PluginUpdated {
+        let event = std::sync::Arc::new(AppEvent::PluginUpdated {
             plugin: plugin.clone(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -694,7 +694,7 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_daemon_shutdown(&self, _reason: &str) {}
+    pub fn emit_app_shutdown(&self, _reason: &str) {}
 
     pub fn emit_album_changed(&self, _album_id: &str, _changes: serde_json::Value) {}
 

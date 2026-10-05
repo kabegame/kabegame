@@ -3,6 +3,16 @@
 本版回归 checklist。任何改动可预见的回归路径，要在上线前 check 完毕。
 按「操作」一步步点，对照「预期」，通过就把第一列勾上。
 
+## 应用进程模型与 IPC 命名
+
+自动化：`check-kabegame` 覆盖 Rust / Vue 引用改名；全库扫描确认一方架构文档、标识符、事件与端点统一使用 app / backend / IPC 语义。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 主应用 IPC 启动 | Windows / macOS / Linux | 启动 Kabegame，再启动第二个实例 | 第二个实例通过应用 IPC 唤起已有窗口并正常退出；首个实例保持可用 | Windows 命名管道为 `kabegame-app`，Unix socket 路径不变 |
+| [ ] | Plasma 壁纸插件事件 | Linux Plasma | 启动 Kabegame 与壁纸插件，切换壁纸后退出 Kabegame | 插件能连接、接收壁纸事件，并在 `app-shutdown` 后进入断线重连 | 事件类型与订阅名同步改名 |
+| [ ] | CLI 自包含运行 | 任一桌面平台 | 不启动 GUI，依次执行 `pathql query`、`data import-image` 与 `plugin run --dry-run` | 命令在 CLI 进程内完成，不尝试拉起其它可执行文件 | 使用测试数据时加 `--data dev` |
+
 ## anihonet 单个作品页数范围
 
 自动化：插件打包会重新编译 `anihonet-wallpaper`；桌面 CEF 按下表确认配置联动与任务日志。

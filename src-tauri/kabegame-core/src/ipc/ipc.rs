@@ -1,11 +1,11 @@
-//! CLI daemon IPC（跨平台）
+//! Kabegame 应用 IPC 协议（跨平台）。
 //!
 //! - Windows：命名管道（\\.\pipe\...）
 //! - Unix：Unix domain socket（临时目录）
 //! - 协议：长度前缀帧 + CBOR payload（二进制）
 //!
-//! 设计目的：给 `kabegame-cli daemon` 提供一个轻量常驻后台入口，
-//! 让外部（例如 KDE Plasma 壁纸插件）能触发"运行一次爬虫插件"并获取结果/状态。
+//! 主应用进程提供 IPC 服务，让外部集成（例如 KDE Plasma 壁纸插件）
+//! 能触发操作并获取结果与事件。
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
@@ -68,7 +68,7 @@ pub enum IpcRequest {
         #[serde(default)]
         output_dir: Option<String>,
 
-        /// 任务 ID（用于进度与日志归档）。None 表示由 daemon 生成。
+        /// 任务 ID（用于进度与日志归档）。None 表示由应用后端生成。
         #[serde(default)]
         task_id: Option<String>,
 
@@ -254,8 +254,8 @@ pub enum IpcRequest {
     /// 获取“按任务”分组（只返回包含图片的任务）
     StorageGetTasksWithImages,
 
-    // ======== Task 调度（daemon 侧）========
-    /// 入队一个任务（daemon 负责落库幂等 + 入队执行）
+    // ======== Task 调度（应用后端）========
+    /// 入队一个任务（应用后端负责落库幂等 + 入队执行）
     TaskStart {
         task: serde_json::Value,
     },
@@ -278,7 +278,7 @@ pub enum IpcRequest {
     /// 获取正在下载的任务列表
     GetActiveDownloads,
 
-    // ======== Organize（daemon 侧）========
+    // ======== Organize（应用后端）========
     /// 启动整理任务
     OrganizeStart {
         dedupe: bool,
@@ -511,7 +511,7 @@ pub struct IpcResponse {
     #[serde(default)]
     pub request_id: Option<u64>,
 
-    /// 对 PluginRun：实际使用的 task_id（若请求未提供则由 daemon 生成）
+    /// 对 PluginRun：实际使用的 task_id（若请求未提供则由应用后端生成）
     #[serde(default)]
     pub task_id: Option<String>,
 
@@ -525,7 +525,7 @@ pub struct IpcResponse {
     #[cfg(feature = "virtual-driver")]
     pub mount_point: Option<String>,
 
-    /// 对 Status：daemon 版本/能力信息（可选，后续扩展）
+    /// 对 Status：应用版本与能力信息（可选，后续扩展）
     #[serde(default)]
     pub info: Option<serde_json::Value>,
 
@@ -683,18 +683,18 @@ where
 
 #[cfg(target_os = "windows")]
 pub fn windows_pipe_name() -> &'static str {
-    r"\\.\pipe\kabegame-daemon"
+    r"\\.\pipe\kabegame-app"
 }
 
-/// daemon IPC 使用的 Unix socket 文件名（路径在桌面为 temp_dir/Kabegame，此处仅文件名）
+/// 应用 IPC 使用的 Unix socket 文件名（路径在桌面为 temp_dir/Kabegame，此处仅文件名）。
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const DAEMON_SOCKET_NAME: &str = "kabegame.sock";
+const APP_SOCKET_NAME: &str = "kabegame.sock";
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn unix_socket_path() -> std::path::PathBuf {
     std::env::temp_dir()
         .join("Kabegame")
-        .join(DAEMON_SOCKET_NAME)
+        .join(APP_SOCKET_NAME)
 }
 
 #[cfg(feature = "ipc-client")]

@@ -190,7 +190,7 @@ static CHANGE_SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn current_change_seq() -> u64 { CHANGE_SEQ.load(Ordering::SeqCst) }
 
 // emit_images_change：
-let seq = CHANGE_SEQ.fetch_add(1, Ordering::SeqCst) + 1; // 新增，写入 DaemonEvent::ImagesChange.seq
+let seq = CHANGE_SEQ.fetch_add(1, Ordering::SeqCst) + 1; // 新增，写入 AppEvent::ImagesChange.seq
 // emit_album_images_change：
 CHANGE_SEQ.fetch_add(1, Ordering::SeqCst);               // 新增，只递增、不写 payload（理由见总体设计思路）
 ```

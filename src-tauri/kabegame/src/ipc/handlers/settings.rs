@@ -262,7 +262,7 @@ fn set_auto_launch(enabled: bool) -> IpcResponse {
     }
 }
 
-/// 走 core：CLI 自身没有 plugin 运行时，改并发只能由 daemon 侧应用，
+/// 走 core：CLI 自身没有 plugin 运行时，改并发只能由主应用后端应用，
 /// 故必须与 Tauri 命令 / web dispatch 共用 `commands::settings` 的实现。
 async fn set_max_concurrent_downloads(count: u32) -> IpcResponse {
     match kabegame_core::commands::settings::set_max_concurrent_downloads(count).await {

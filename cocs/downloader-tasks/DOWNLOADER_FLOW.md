@@ -330,7 +330,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 - `get_hidden_cleanup_run_state`：运行时返回 `{ running, total, processed, removed, keptFiles }`；未运行时返回全零默认值。
 - `cancel_hidden_cleanup`：设置批次间检查的取消标志，返回是否确实存在运行任务。
 
-每批完成后发 `hidden-cleanup-progress`（`processed / total / removed / keptFiles`）；正常完成、取消或失败均发一次 `hidden-cleanup-finished`（`removed / keptFiles / canceled / error`）。事件统一构造为 `DaemonEvent` 并经 `GlobalEmitter` 广播，因此 Tauri 事件、Web SSE 与 daemon IPC 使用同一 payload。由于删除会同时移除 `album_images` 行，循环无需游标；连续两次读到相同 id 集合时会按错误停止，防止异常数据导致死循环。
+每批完成后发 `hidden-cleanup-progress`（`processed / total / removed / keptFiles`）；正常完成、取消或失败均发一次 `hidden-cleanup-finished`（`removed / keptFiles / canceled / error`）。事件统一构造为 `AppEvent` 并经 `GlobalEmitter` 广播，因此 Tauri 事件、Web SSE 与应用 IPC 使用同一 payload。由于删除会同时移除 `album_images` 行，循环无需游标；连续两次读到相同 id 集合时会按错误停止，防止异常数据导致死循环。
 
 ---
 

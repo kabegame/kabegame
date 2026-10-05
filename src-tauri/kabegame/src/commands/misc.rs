@@ -12,7 +12,7 @@ use tauri::{AppHandle, Runtime};
 #[tauri::command]
 pub fn exit_app<R: Runtime>(app: AppHandle<R>) {
     if let Some(emitter) = GlobalEmitter::try_global() {
-        emitter.emit_daemon_shutdown("exit");
+        emitter.emit_app_shutdown("exit");
     }
     app.exit(0);
 }

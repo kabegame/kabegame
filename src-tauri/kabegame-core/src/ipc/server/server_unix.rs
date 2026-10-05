@@ -10,8 +10,8 @@ use uuid;
 
 use super::connection_handler;
 
-/// 检查是否有其他 daemon 正在运行
-pub async fn check_other_daemon_running() -> bool {
+/// 检查是否已有 Kabegame 应用实例在运行。
+pub async fn check_existing_app_instance() -> bool {
     let path = unix_socket_path();
     // 尝试连接现有的 Unix socket
     let connect_result = timeout(Duration::from_millis(100), UnixStream::connect(&path)).await;
@@ -26,7 +26,7 @@ pub async fn check_other_daemon_running() -> bool {
                     .await
                     .is_ok()
                 {
-                    return true; // 成功连接并得到响应，说明有其他 daemon 在运行
+                    return true; // 成功连接并得到响应，说明已有应用实例在运行。
                 }
             }
         }
@@ -50,16 +50,16 @@ where
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
         Err(e) => {
-            // 绑定失败，检查是否有其他 daemon 正在运行
-            if check_other_daemon_running().await {
+            // 绑定失败，检查是否已有应用实例在运行。
+            if check_existing_app_instance().await {
                 eprintln!(
-                    "错误: 无法绑定 Unix socket {}，因为已有其他 daemon 正在运行。",
+                    "错误: 无法绑定 Unix socket {}，因为已有 Kabegame 实例正在运行。",
                     path.display()
                 );
-                eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
-                return Err(format!("另一个 daemon 实例正在运行: {}", e));
+                eprintln!("请先停止正在运行的 Kabegame，或确保只有一个应用实例。");
+                return Err(format!("另一个 Kabegame 实例正在运行: {}", e));
             }
-            // 如果没有其他 daemon 运行，可能是其他原因导致的绑定失败（如权限问题）
+            // 如果没有其他应用实例，可能是权限等原因导致绑定失败。
             return Err(format!("ipc bind failed ({}): {}", path.display(), e));
         }
     };

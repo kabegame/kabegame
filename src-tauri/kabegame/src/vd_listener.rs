@@ -2,7 +2,7 @@
 //!
 //! 监听 EventBroadcaster 的事件，并调用 VirtualDriveService 的相应方法更新虚拟磁盘状态。
 
-use kabegame_core::ipc::events::DaemonEvent;
+use kabegame_core::ipc::events::AppEvent;
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
@@ -17,16 +17,16 @@ use std::sync::Arc;
 /// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
 #[cfg(target_os = "windows")]
 pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
-    use kabegame_core::ipc::events::DaemonEventKind;
+    use kabegame_core::ipc::events::AppEventKind;
 
     // 订阅我们关心的事件类型
     let event_kinds = vec![
-        DaemonEventKind::AlbumAdded,
-        DaemonEventKind::AlbumChanged,
-        DaemonEventKind::AlbumDeleted,
-        DaemonEventKind::ImagesChange,
-        DaemonEventKind::AlbumImagesChange,
-        DaemonEventKind::TasksChange,
+        AppEventKind::AlbumAdded,
+        AppEventKind::AlbumChanged,
+        AppEventKind::AlbumDeleted,
+        AppEventKind::ImagesChange,
+        AppEventKind::AlbumImagesChange,
+        AppEventKind::TasksChange,
     ];
 
     let broadcaster = EventBroadcaster::global();
@@ -36,10 +36,10 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         match rx.recv().await {
             Some((_id, event)) => {
                 match &*event {
-                    DaemonEvent::AlbumAdded { .. } => {
+                    AppEvent::AlbumAdded { .. } => {
                         vd_service.bump_albums();
                     }
-                    DaemonEvent::ImagesChange { task_ids, .. } => {
+                    AppEvent::ImagesChange { task_ids, .. } => {
                         if let Some(ids) = task_ids {
                             for tid in ids {
                                 if !tid.is_empty() {
@@ -49,7 +49,7 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                         }
                         vd_service.notify_gallery_tree_changed();
                     }
-                    DaemonEvent::AlbumImagesChange { album_ids, .. } => {
+                    AppEvent::AlbumImagesChange { album_ids, .. } => {
                         for aid in album_ids {
                             if !aid.is_empty() {
                                 vd_service.notify_album_dir_changed(&aid);
@@ -57,16 +57,16 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                         }
                         vd_service.notify_gallery_tree_changed();
                     }
-                    DaemonEvent::AlbumChanged { .. } => {
+                    AppEvent::AlbumChanged { .. } => {
                         vd_service.bump_albums();
                     }
-                    DaemonEvent::AlbumDeleted { .. } => {
+                    AppEvent::AlbumDeleted { .. } => {
                         vd_service.bump_albums();
                     }
-                    DaemonEvent::TaskAdded { .. } | DaemonEvent::TaskDeleted { .. } => {
+                    AppEvent::TaskAdded { .. } | AppEvent::TaskDeleted { .. } => {
                         vd_service.bump_tasks();
                     }
-                    DaemonEvent::TaskChanged { .. } => {}
+                    AppEvent::TaskChanged { .. } => {}
                     _ => {
                         // 忽略其他事件类型
                     }

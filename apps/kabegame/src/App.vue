@@ -1047,7 +1047,7 @@ body,
   }
 }
 
-// Daemon 加载态样式
+// 后端加载态样式
 @keyframes pulse {
   0%,
   100% {

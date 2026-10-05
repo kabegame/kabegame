@@ -147,7 +147,7 @@ export async function fetchAlbumDirectCounts(albumIds: Iterable<string>, hide: b
 pub fn emit_album_images_change(&self, reason: &str, album_ids: &[String], image_ids: &[String]) {
     CHANGE_SEQ.fetch_add(1, Ordering::SeqCst);             // 现状：只递增，payload 不带 seq
     let direct_counts = album_direct_counts(album_ids);    // 现状：对每个画册跑一次 count_at，写命令返回前完成
-    let event = std::sync::Arc::new(DaemonEvent::AlbumImagesChange {
+    let event = std::sync::Arc::new(AppEvent::AlbumImagesChange {
         reason: reason.to_string(), album_ids: album_ids.to_vec(),
         image_ids: image_ids.to_vec(), direct_counts,
     });
@@ -214,7 +214,7 @@ onAddedToAlbum: async () => { await albumStore.loadAlbums(); },
 - **新增** 计数守卫，只拦 `ImagesChange` / `AlbumImagesChange` 两类事件
 ```rust
 #[cfg(feature = "ipc-server")]
-static HELD: Mutex<(usize, Vec<Arc<DaemonEvent>>)> = Mutex::new((0, Vec::new()));   // 新增：(深度, 暂存队列)
+static HELD: Mutex<(usize, Vec<Arc<AppEvent>>)> = Mutex::new((0, Vec::new()));   // 新增：(深度, 暂存队列)
 
 /// 新增：持有期间 images-change / album-images-change 照常分配 seq，但暂存到析构时按序广播。
 pub struct EventHold(());
@@ -227,7 +227,7 @@ impl Drop for EventHold {
 }
 
 /// 新增：两类视图事件的统一出口；深度 > 0 时入队，否则直接广播（锁内完成，保证与放行队列的相对顺序）
-fn dispatch_view_event(event: Arc<DaemonEvent>) { ... }
+fn dispatch_view_event(event: Arc<AppEvent>) { ... }
 ```
   > 说明：守卫是全局计数而不是线程局部，才能跨 `await`（`batch_delete_images` 是 async）。持有时间只有
   > 一次快照查询，期间别处（如下载）的同类事件也会被推迟到放行时，顺序不变。
@@ -299,7 +299,7 @@ fn emit(reason: &str, album_id: &str, image_ids: &[String]) -> Option<AlbumImage
   文件夹同步 2 处、迁移挂标签、MCP，清单见 [eventWorker.md](eventWorker.md) 第二期现状）逐个改走入口，
   并确保传入的是实际变更的 id。`emit_album_images_change` 降为 `image_events.rs` 私有，编译器保证不再有
   绕过分类的发送点。
-- **修改** `DaemonEvent::AlbumImagesChange`（`ipc/events.rs:279`）
+- **修改** `AppEvent::AlbumImagesChange`（`ipc/events.rs:279`）
 ```rust
 AlbumImagesChange {
     seq: u64,                    // 新增
@@ -406,7 +406,7 @@ export interface ChangeBatch {
   > 说明：纯画册批次不会让任务/畅游详情误判命中；`album-images-change` 恒为单画册，不需要 album 维度的 wildcard。
 - **新增** source `album-images-change`（带 `seq`）与 `album-changed`（只保留结构字段，其余字段的事件在
   source 入口丢弃，不产生批次）。
-- **修改** `DaemonEvent::AlbumChanged` 发送点（`emit_album_changed`）同样分配 `seq` 并写入 payload，使
+- **修改** `AppEvent::AlbumChanged` 发送点（`emit_album_changed`）同样分配 `seq` 并写入 payload，使
   hub 的所有批次都带 `seq`，`liveQuery` 的回声跳过规则无需特判。
 - **不改** `subscribeChanges` 的「首次立即 + 尾触发」语义：计数已改为同步应用增量，store 不再订阅 hub。
 

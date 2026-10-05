@@ -52,10 +52,10 @@ pub struct PersistentConnection {
 
 /// 连接句柄
 pub struct ConnectionHandle {
-    /// 发送请求的通道（客户端 -> daemon）
+    /// 发送请求的通道（客户端 -> 应用 IPC 服务）
     /// 不能并发发送请求
     pub request_tx: Arc<Mutex<mpsc::UnboundedSender<(u64, IpcRequest)>>>,
-    /// 事件接收通道spsc（客户端 <- daemon）
+    /// 事件接收通道 spsc（客户端 <- 应用 IPC 服务）
     pub event_rx: Arc<Mutex<mpsc::Receiver<serde_json::Value>>>,
 }
 
@@ -114,7 +114,7 @@ impl PersistentConnection {
         // 设置状态为正在连接
         self.set_status(ConnectionStatus::Connecting).await;
 
-        // 尝试连接，如果失败则返回错误。上层会处理重启daemon等操作
+        // 尝试连接，失败时由上层展示应用 IPC 服务不可用。
         let client = match Self::create_connection().await {
             Ok(c) => c,
             Err(e) => {
@@ -276,7 +276,7 @@ impl PersistentConnection {
         }
     }
 
-    /// 连接到 daemon
+    /// 连接到应用 IPC 服务。
     /// 不允许并发调用
     pub async fn connect(self: Arc<Self>) -> Result<(), String> {
         loop {
@@ -365,7 +365,7 @@ impl PersistentConnection {
 
         if let Err(_) = connection_result {
             let error_msg = "等待连接超时（10秒）".to_string();
-            super::daemon_status::handle_daemon_connection_error(&error_msg);
+            super::connection_status::handle_ipc_connection_error(&error_msg);
             return Err(error_msg);
         }
 
@@ -387,7 +387,7 @@ impl PersistentConnection {
         if let Err(e) = conn.request_tx.lock().await.send((request_id, req)) {
             // 发送失败，我们这里也不敢说连接断开了，只能返回错误
             let error_msg = format!("发送请求失败: {}", e);
-            super::daemon_status::handle_daemon_connection_error(&error_msg);
+            super::connection_status::handle_ipc_connection_error(&error_msg);
             return Err(error_msg);
         }
 
@@ -401,7 +401,7 @@ impl PersistentConnection {
                 // 等待响应失败（可能是连接断开），设置状态为断开
                 self.set_status(ConnectionStatus::Disconnected).await;
                 let error_msg = "请求被取消或连接已断开".to_string();
-                super::daemon_status::handle_daemon_connection_error(&error_msg);
+                super::connection_status::handle_ipc_connection_error(&error_msg);
                 Err(error_msg)
             }
         }
@@ -419,7 +419,7 @@ impl PersistentConnection {
 
         UnixStream::connect(uds_path).await.map_err(|e| {
             format!(
-                "连接 daemon 失败 ({}): {}\n请确保 kabegame-daemon 已启动",
+                "连接 Kabegame IPC 服务失败 ({}): {}\n请确保 Kabegame 主程序已启动",
                 uds_path.display(),
                 e
             )
@@ -437,7 +437,7 @@ impl PersistentConnection {
 
         ClientOptions::new().open(&pipe_name).map_err(|e| {
             format!(
-                "连接 daemon 失败 ({}): {}\n请确保 kabegame-daemon 已启动",
+                "连接 Kabegame IPC 服务失败 ({}): {}\n请确保 Kabegame 主程序已启动",
                 pipe_name, e
             )
         })

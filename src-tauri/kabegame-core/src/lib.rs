@@ -1,7 +1,6 @@
 //! Kabegame 后端核心库入口（供多个 app crate 复用）。
 
 pub mod app_paths;
-pub mod bin_finder;
 /// 命令后端层：Tauri 命令 / Web JSON-RPC / IPC 共用的实现（原 `kabegame::commands_core`）。
 pub mod commands;
 pub mod ipc;

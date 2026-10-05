@@ -771,26 +771,6 @@ const isAtLast = computed(() => {
   return idx === props.images.length - 1;
 });
 
-// 获取相邻图片的 URL（用于 pager）
-const getAdjacentImageUrl = (offset: number): string => {
-  const idx = previewIndex.value;
-  if (idx < 0) return "";
-  const targetIdx = idx + offset;
-  if (targetIdx < 0 || targetIdx >= props.images.length) return "";
-  const img = props.images[targetIdx];
-  if (!img) return "";
-
-  // 优先使用 original，否则使用 thumbnail
-  const originalUrl = getOriginalPreviewUrl(img);
-  if (originalUrl) return originalUrl;
-
-  return getThumbnailPreviewUrl(img);
-};
-
-// Pager offset（用于滑动切换动画）
-const pagerOffset = ref(0);
-const pagerSettling = ref(false);
-
 // 切换节流：100ms 内最多只执行一次切换，避免快速连击导致状态混乱
 let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 let isNavThrottled = false;
@@ -1788,29 +1768,6 @@ body.image-preview-hides-kamechan .kamechan-host {
     box-sizing: border-box;
     position: relative;
     touch-action: none;
-  }
-
-  .preview-pager {
-    width: 100%;
-    height: 100%;
-    position: relative;
-    will-change: transform;
-  }
-
-  .preview-pager-item {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .preview-pager-prev {
-    transform: translateX(-100%);
-  }
-
-  .preview-pager-next {
-    transform: translateX(100%);
   }
 
   .preview-image-android {

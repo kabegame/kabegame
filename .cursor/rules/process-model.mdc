@@ -1,0 +1,11 @@
+---
+description: 主应用进程统一持有业务状态，协议入口复用共享命令层
+alwaysApply: true
+---
+
+# Kabegame 进程模型
+
+- 核心业务、Storage、Provider、任务调度和事件广播由 `kabegame` 主应用进程持有。
+- HTTP、Tauri、Web JSON-RPC 与应用 IPC 是协议入口，统一复用 `kabegame_core::commands`、Provider runtime 与全局服务，不建立平行业务后端。
+- 外部集成通过应用 IPC 连接主程序；相关类型、变量、事件、端点和文档使用 app / backend / IPC 语义。
+- `kabegame-cli` 是自包含工具：各子命令在 CLI 进程内初始化所需的数据、事件与插件运行时。

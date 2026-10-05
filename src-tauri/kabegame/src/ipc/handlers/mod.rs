@@ -48,7 +48,7 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
         return handle_app_import_plugin(kgpg_path, app_handle).await;
     }
 
-    // PluginRun：daemon 侧实现（入队执行）
+    // PluginRun：应用后端实现（入队执行）
     if let IpcRequest::PluginRun {
         plugin,
         output_dir,
@@ -69,7 +69,7 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
         .await;
     }
 
-    // TaskStart / TaskCancel：daemon 侧调度
+    // TaskStart / TaskCancel：应用后端调度
     if let IpcRequest::TaskStart { task } = req {
         return handle_task_start(task).await;
     }
@@ -485,7 +485,7 @@ async fn handle_app_import_plugin<R: Runtime>(
 fn handle_status() -> IpcResponse {
     let mut resp = IpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
-        "name": "kabegame-daemon",
+        "name": "kabegame-app",
         "version": env!("CARGO_PKG_VERSION"),
         "features": {
             "storage": true,

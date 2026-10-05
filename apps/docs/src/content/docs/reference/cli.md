@@ -1,13 +1,9 @@
 ---
 title: kabegame-cli 命令行参考
-description: kabegame-cli 子命令、参数、退出码与守护进程依赖关系的完整参考。
+description: kabegame-cli 子命令、参数、数据目录与退出码的完整参考。
 ---
 
-`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，生成或查询 PathQL，或在脚本中控制虚拟磁盘。它**不随主程序打包**，需要时从发布页单独下载。本页列出当前代码实际存在的子命令与参数。
-
-:::note
-除 `plugin new` / `plugin pack` / `plugin import` / `plugin run` / `pathql generate` / `pathql query` 外，所有子命令都需要 `kabegame-daemon` 正在运行。通常启动 GUI 主应用即可同时启动 daemon；也可以手动启动 `kabegame-daemon`。详见下方[守护进程依赖](#守护进程依赖)。
-:::
+`kabegame-cli` 是 Kabegame 的自包含命令行可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，导入本地媒体，以及生成或查询 PathQL。各子命令在 CLI 进程内按需初始化数据、事件和插件运行时。它**不随主程序打包**，需要时从发布页单独下载。本页列出当前代码实际存在的子命令与参数。
 
 ## 启动与定位
 
@@ -32,7 +28,7 @@ kabegame-cli plugin run --help
 
 ### plugin new
 
-在当前目录脚手架一个新的插件目录。**离线可用，不需要 daemon。**
+在当前目录脚手架一个新的插件目录。此命令离线可用。
 
 ```bash
 kabegame-cli plugin new <name> [--backend v8|webview]
@@ -52,7 +48,7 @@ kabegame-cli plugin new my-site --backend webview
 
 ### plugin run
 
-在 CLI **本进程内**跑一个已安装的 V8 插件，实时渲染日志与进度。**不需要 daemon。**
+在 CLI **本进程内**跑一个已安装的 V8 插件，实时渲染日志与进度。
 
 主要用途是插件开发期的快速验证：改完插件源码 → 重打包投放到 dev 数据目录 → 直接 `plugin run`，不用启动 GUI。
 
@@ -102,7 +98,7 @@ kabegame-cli plugin run kemono --data dev --dry-run --var source=tag --var tag=n
 
 ### plugin pack
 
-把一个插件目录打包为 KGPG v3 格式的 `.kgpg`。**离线可用，不需要 daemon。**
+把一个插件目录打包为 KGPG v3 格式的 `.kgpg`。此命令离线可用。
 
 ```bash
 kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
@@ -123,7 +119,7 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 ### plugin import
 
-把本地 `.kgpg` 安装到 `plugins_directory`。**离线可用，不需要 daemon**（直接初始化 `PluginManager`）。
+把本地 `.kgpg` 安装到 `plugins_directory`。此命令直接初始化 `PluginManager`，离线可用。
 
 ```bash
 kabegame-cli plugin import <path.kgpg>
@@ -143,9 +139,27 @@ kabegame-cli plugin import <path.kgpg>
 CLI 层没有版本 / 冲突检查，重复导入同一 ID 可能覆盖已有插件。
 :::
 
+## data 子命令组
+
+### data import-image
+
+将单个本地图片或视频直接导入数据库，可选加入指定画册并附带 metadata。
+
+```bash
+kabegame-cli data import-image <path> [--album /父画册/子画册] [--metadata <文本>]
+```
+
+| 参数         | 必填 | 说明                                                                 |
+| ------------ | ---- | -------------------------------------------------------------------- |
+| `<path>`     | 是   | 本地图片或视频文件；不接受 URL 或文件夹。                            |
+| `--album`    | 否   | 现有画册的树路径，开头的 `/` 可省略。                               |
+| `--metadata` | 否   | 原样存储的 metadata 字符串；CLI 不校验它是否为 JSON。                |
+
+目标画册通过 `albums://by_sub_tree` 逐层解析；任一层不存在或同级重名时命令会报错，不会自动创建画册。
+
 ## pathql 子命令组
 
-`pathql` 命令在 CLI 进程内初始化数据与 provider runtime，不需要 daemon。
+`pathql` 命令在 CLI 进程内初始化数据与 provider runtime。
 
 ### pathql generate
 
@@ -178,72 +192,15 @@ kabegame-cli pathql query <path> [--list [--with-count] | --entry | --fetch]
 | `--entry`        | 否   | 查询节点自身 entry。              |
 | `--fetch`        | 否   | 拉取数据行；未指定模式时也是此行为。 |
 
-## vd 子命令组（桌面版）
-
-`vd *` 只在桌面版编译。虚拟磁盘当前实际可用平台以 Windows（Dokan）为主；macOS / Linux 相关实现处于实验状态。所有 `vd` 子命令都通过 IPC 走 daemon。
-
-### vd mount
-
-```bash
-kabegame-cli vd mount
-```
-
-无参数。挂载点由 daemon 端配置。
-
-### vd unmount
-
-```bash
-kabegame-cli vd unmount
-```
-
-无参数。
-
-### vd status
-
-```bash
-kabegame-cli vd status --mount-point <K|K:|K:\>
-```
-
-| 参数            | 必填 | 说明                                                                             |
-| --------------- | ---- | -------------------------------------------------------------------------------- |
-| `--mount-point` | 是   | 挂载点字符串。Windows 可写 `K`、`K:` 或 `K:\`；Unix 默认为 `$HOME/kabegame-vd`。 |
-
-## ipc-status
-
-向 daemon 发送一次 IPC Status 请求，把响应以 JSON 输出。用于排查 daemon 是否可达。**需要 daemon。**
-
-```bash
-kabegame-cli ipc-status
-```
-
-无参数。daemon 不可达时输出：
-
-```text
-无法连接 kabegame-daemon
-提示：请先启动 `<daemon-path>`
-```
-
 ## 退出码
 
 CLI 使用三种退出码：
 
 | 码  | 含义                                                                                                                                |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `0` | 成功。子命令返回 `Ok(())`，并打印 `ok` 或 daemon 返回消息。                                                                         |
-| `1` | 子命令执行失败。包括：插件名非法、文件缺失、daemon 不可达、daemon 返回 `ok=false`、IPC 解析错误、画册名未找到、webview 构建失败等。 |
+| `0` | 成功。子命令完成并输出结果或成功信息。                                                                                  |
+| `1` | 子命令执行失败。包括插件名非法、文件缺失、画册路径无法唯一解析、插件配置错误或 WebView 插件不受支持等。                 |
 | `2` | clap 参数解析错误，例如缺少必填参数或未知子命令。由 clap 在进入 `main()` 之前抛出。                                                 |
-
-## 守护进程依赖
-
-| 子命令                                  | 是否需要 daemon | 原因                                       |
-| --------------------------------------- | --------------- | ------------------------------------------ |
-| `plugin new`                            | 否              | 纯本地模板复制。                           |
-| `plugin pack`                           | 否              | 读取目录并打包，不执行 `scripts.build`。   |
-| `plugin import`                         | 否              | 本地初始化 `PluginManager`。               |
-| `plugin run`                            | 否              | 在本进程内初始化 TaskScheduler + V8 运行时执行，只订阅进程内的 `EventBroadcaster`。 |
-| `pathql generate` / `pathql query`      | 否              | 在本进程内初始化数据与 provider runtime。  |
-| `vd mount` / `vd unmount` / `vd status` | 是              | 全部走 IPC。                               |
-| `ipc-status`                            | 是              | 用来探测 daemon。                          |
 
 ## 平台差异
 
@@ -252,13 +209,12 @@ CLI 使用三种退出码：
 | 发布页单独下载 CLI               | 是          | 是    | 是       | 不适用  |
 | `plugin new` / `pack` / `import` | 是          | 是    | 是       | 不适用  |
 | `plugin run`                     | 是          | 是    | 是       | 不适用  |
+| `data import-image`              | 是          | 是    | 是       | 不适用  |
 | `pathql generate` / `pathql query` | 是        | 是    | 是       | 不适用  |
-| `vd *`                           | 是（Dokan） | 实验  | 实验     | 不适用  |
 
 ## 常见问题
 
-- **无法连接 kabegame-daemon** → daemon 未启动 → 启动 GUI 主应用，或在终端手动运行 `kabegame-daemon`，再重试。
-- **`--output-album` 未匹配到画册** → 名称拼写或大小写问题（匹配本身已做大小写不敏感与去空格）→ 在 GUI 中确认画册显示名，复制后再试。
+- **`--album` 无法解析画册** → 某层名称不存在或同级存在重名 → 在 GUI 中确认完整画册路径后重试。
 - **`plugin new` 拒绝名称** → 名称非 kebab-case → 使用 `my-plugin` 这类全小写、短横线分隔、首字符为字母的名称。
 
 ## 延伸阅读

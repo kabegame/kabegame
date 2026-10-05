@@ -207,7 +207,7 @@ async fn run_listener(
     mut raw_rx: mpsc::UnboundedReceiver<RawMsg>,
     raw_tx: mpsc::UnboundedSender<RawMsg>,
 ) {
-    use crate::ipc::events::DaemonEventKind;
+    use crate::ipc::events::AppEventKind;
     use crate::ipc::server::EventBroadcaster;
     use tokio::time::Instant;
 
@@ -217,9 +217,9 @@ async fn run_listener(
     let mut first_at: Option<Instant> = None;
     let mut last_at: Option<Instant> = None;
     let mut album_events = EventBroadcaster::global().subscribe_filtered_stream(&[
-        DaemonEventKind::AlbumAdded,
-        DaemonEventKind::AlbumChanged,
-        DaemonEventKind::AlbumDeleted,
+        AppEventKind::AlbumAdded,
+        AppEventKind::AlbumChanged,
+        AppEventKind::AlbumDeleted,
     ]);
 
     loop {

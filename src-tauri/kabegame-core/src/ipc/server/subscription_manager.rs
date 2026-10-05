@@ -4,12 +4,12 @@
 
 use std::sync::OnceLock;
 
-use crate::ipc::events::{ArcDaemonEvent, DaemonEventKind};
+use crate::ipc::events::{ArcAppEvent, AppEventKind};
 use crate::ipc::server::EventBroadcaster;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
 struct SubscriptionState {
-    kinds: Vec<DaemonEventKind>,
+    kinds: Vec<AppEventKind>,
     cancel_tx: broadcast::Sender<()>,
 }
 
@@ -42,8 +42,8 @@ impl SubscriptionManager {
     pub async fn subscribe(
         &self,
         client_id: &str,
-        kinds: Vec<DaemonEventKind>,
-    ) -> mpsc::UnboundedReceiver<(u64, ArcDaemonEvent)> {
+        kinds: Vec<AppEventKind>,
+    ) -> mpsc::UnboundedReceiver<(u64, ArcAppEvent)> {
         // 先取消注册了所有已经注册的
         {
             let mut subs = self.subscriptions.write().await;
@@ -53,14 +53,14 @@ impl SubscriptionManager {
         }
 
         let event_kinds = if kinds.is_empty() {
-            DaemonEventKind::ALL.to_vec()
+            AppEventKind::ALL.to_vec()
         } else {
             kinds
         };
 
         let (cancel_tx, _) = broadcast::channel::<()>(1);
 
-        let (forward_tx, forward_rx) = mpsc::unbounded_channel::<(u64, ArcDaemonEvent)>();
+        let (forward_tx, forward_rx) = mpsc::unbounded_channel::<(u64, ArcAppEvent)>();
 
         let broadcaster = EventBroadcaster::global();
         for kind in &event_kinds {
@@ -91,8 +91,8 @@ impl SubscriptionManager {
     }
 
     async fn forward_task(
-        mut brx: broadcast::Receiver<(u64, ArcDaemonEvent)>,
-        tx: mpsc::UnboundedSender<(u64, ArcDaemonEvent)>,
+        mut brx: broadcast::Receiver<(u64, ArcAppEvent)>,
+        tx: mpsc::UnboundedSender<(u64, ArcAppEvent)>,
         mut cancel_rx: broadcast::Receiver<()>,
     ) {
         loop {
@@ -144,12 +144,12 @@ impl SubscriptionManager {
     pub async fn update_subscription(
         &self,
         client_id: &str,
-        kinds: Vec<DaemonEventKind>,
-    ) -> mpsc::UnboundedReceiver<(u64, ArcDaemonEvent)> {
+        kinds: Vec<AppEventKind>,
+    ) -> mpsc::UnboundedReceiver<(u64, ArcAppEvent)> {
         self.subscribe(client_id, kinds).await
     }
 
-    pub async fn get_subscription(&self, client_id: &str) -> Option<Vec<DaemonEventKind>> {
+    pub async fn get_subscription(&self, client_id: &str) -> Option<Vec<AppEventKind>> {
         let subs = self.subscriptions.read().await;
         subs.get(client_id).map(|state| state.kinds.clone())
     }

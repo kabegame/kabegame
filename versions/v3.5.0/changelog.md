@@ -42,7 +42,7 @@
 - **Surf:** WebView **`initialization_script`** order is **`surf_bootstrap`** → **`surf_toast`** → **`surf_context_menu`** → **`surf_navbar`**; **`surf_context_menu.js`** only handles the custom context menu (download uses **`__kabegame_surf_triggerDownload`** when available).
 - **Gallery / routing:** Introduced `createPathRouteStore` and stores `galleryRoute`, `albumDetailRoute`, `taskDetailRoute`, `surfImagesRoute` for `query.path` parsing, navigation, and (gallery) localStorage persistence; removed `useProviderPathRoute` and `useGalleryPathState`.
 - **UI:** `GalleryToolbar` takes `root` / `sort` and syncs with `update:root` / `update:sort`; `GalleryFilterControl`, `GallerySortControl`, and `AlbumDetailBrowseToolbar` align with those stores.
-- **Organize / IPC:** `start_organize` and the CLI daemon `OrganizeStart` add `remove_unrecognized`, `range_start`, and `range_end`; IPC uses serde defaults for backward compatibility with older clients.
+- **Organize / IPC:** `start_organize` and the app IPC `OrganizeStart` add `remove_unrecognized`, `range_start`, and `range_end`; IPC uses serde defaults for backward compatibility with older clients.
 - **Tasks / frontend:** Crawler Pinia store listens only to **`tasks-change`**; `delete_task` relies on `TaskDeleted` to update the list; `TaskChanged` merges diffs (with progress throttling for progress-only updates) and dispatches `task-error-display` on non-canceled **failed** status.
 - **Tasks / backend:** Crawler scheduler and WebView crawl exit/error paths emit **`TaskChanged`** diffs; `emit_task_progress` and `emit_task_image_counts` are implemented via **`TaskChanged`**; `emit_task_status_from_storage` unchanged in name but emits **`TaskChanged`**.
 - **Virtual drive (Windows):** Event listener subscribes to **`TasksChange`**; **`TaskAdded`** / **`TaskDeleted`** trigger `bump_tasks()`; **`emit_task_deleted`** replaces the old Generic **`tasks-changed`** payload from the FUSE/Windows virtual driver hooks.
@@ -55,6 +55,6 @@
 ## Removed
 
 - **Tauri / run configs:** Command **`resolve_missed_runs`** (superseded by **`run_missed_configs`** and **`dismiss_missed_configs`**).
-- **IPC / events:** **`DaemonEventKind`** and **`DaemonEvent`** entries **`TaskStatus`**, **`TaskProgress`**, **`TaskError`**, **`TaskImageCounts`**; Tauri event names **`task-status`**, **`task-progress`**, **`task-error`**, **`task-image-counts`**. Downstream clients must use **`tasks-change`** only.
+- **IPC / events:** **`AppEventKind`** and **`AppEvent`** entries **`TaskStatus`**, **`TaskProgress`**, **`TaskError`**, **`TaskImageCounts`**; Tauri event names **`task-status`**, **`task-progress`**, **`task-error`**, **`task-image-counts`**. Downstream clients must use **`tasks-change`** only.
 - **`GlobalEmitter`:** **`emit_task_status`** and **`emit_task_error`** (superseded by **`emit_task_changed`** and related helpers).
 - **i18n:** **`gallery.imageDetailTaskLabel`** (source row uses **`imageDetailOpenTask`** for tooltip and accessibility only).

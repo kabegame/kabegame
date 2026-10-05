@@ -1,6 +1,6 @@
-//! IPC 和 Daemon 相关模块
+//! 应用 IPC 模块。
 //!
-//! 包含所有与 IPC 通信、daemon 服务相关的代码
+//! 包含请求分发、事件广播与订阅管理。
 
 #[cfg(not(target_os = "android"))]
 pub mod handlers;

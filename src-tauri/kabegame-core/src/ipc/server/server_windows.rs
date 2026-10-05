@@ -14,8 +14,8 @@ use windows_sys::Win32::Security::{
 
 use super::connection_handler;
 
-/// 检查是否有其他 daemon 正在运行
-pub async fn check_other_daemon_running() -> bool {
+/// 检查是否已有 Kabegame 应用实例在运行。
+pub async fn check_existing_app_instance() -> bool {
     // 尝试连接现有的命名管道
     let client_result = timeout(Duration::from_millis(100), async {
         ClientOptions::new().open(windows_pipe_name()).ok()
@@ -32,7 +32,7 @@ pub async fn check_other_daemon_running() -> bool {
                     .await
                     .is_ok()
                 {
-                    return true; // 成功连接并得到响应，说明有其他 daemon 在运行
+                    return true; // 成功连接并得到响应，说明已有应用实例在运行。
                 }
             }
         }
@@ -114,13 +114,13 @@ where
                         tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
                         continue;
                     }
-                    if check_other_daemon_running().await {
+                    if check_existing_app_instance().await {
                         eprintln!(
-                            "错误: 无法绑定命名管道 {}，因为已有其他 daemon 正在运行。",
+                            "错误: 无法绑定命名管道 {}，因为已有 Kabegame 实例正在运行。",
                             windows_pipe_name()
                         );
-                        eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
-                        return Err(format!("另一个 daemon 实例正在运行: {}", e));
+                        eprintln!("请先停止正在运行的 Kabegame，或确保只有一个应用实例。");
+                        return Err(format!("另一个 Kabegame 实例正在运行: {}", e));
                     }
                     return Err(format!("无法创建命名管道: {}", e));
                 }

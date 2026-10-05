@@ -10,7 +10,7 @@
 - **Pixiv plugin:** Ranking crawl uses separate mode/content/age fields, single `ranking_date`, JSON `next` pagination, Rhai `warn()` for shortfall, and R18 requires account UID + Cookie.
 - **Pixiv plugin:** Ranking `content_mode` shows whenever `source` is ranking; each `ranking_mode` option uses `when` on `content_mode` (illust/manga vs ugoira vs all-only modes).
 - **Pixiv plugin:** Multi-page illusts use download names `title(1)`, `title(2)`, …; single-page keeps plain `title` (fallback: illust id when detail missing).
-- **IPC / gallery:** `images-change` (`DaemonEvent::ImagesChange`) now includes optional `albumIds`, `taskIds`, and `surfRecordIds` so album/task/surf views and the Plasma wallpaper plugin can refresh selectively.
+- **IPC / gallery:** `images-change` (`AppEvent::ImagesChange`) now includes optional `albumIds`, `taskIds`, and `surfRecordIds` so album/task/surf views and the Plasma wallpaper plugin can refresh selectively.
 
 ## Fixed
 

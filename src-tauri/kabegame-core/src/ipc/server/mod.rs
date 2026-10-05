@@ -30,8 +30,8 @@ pub use subscription_manager::SubscriptionManager;
 
 #[cfg(feature = "ipc-server")]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use server_unix::check_other_daemon_running;
+pub use server_unix::check_existing_app_instance;
 
 #[cfg(feature = "ipc-server")]
 #[cfg(target_os = "windows")]
-pub use server_windows::check_other_daemon_running;
+pub use server_windows::check_existing_app_instance;

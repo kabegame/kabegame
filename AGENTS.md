@@ -29,6 +29,8 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块干净且接近上游
 
 ### 关键架构规则
+**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。外部集成通过应用 IPC 连接主程序，`kabegame-cli` 则在自身进程内初始化所需运行时。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
+
 **路径逻辑归属于 `tauri-plugin-pathes`**——所有路径/目录计算都必须放在 `src-tauri-plugins/tauri-plugin-pathes/` 中。其他模块通过 `AppPaths` 调用；切勿在其他位置硬编码或重新计算路径。
 
 **第三方补丁序列**——Kabegame 对 vendored `third/` 仓库的改动应放在对应的 `third-patches/<dir>/NNNN-*.patch` 文件中。对于由补丁管理器管理的仓库，`deno task patch <dir>` 会将子模块重置到干净的锁定基线，然后按文件名排序应用完整补丁序列；`deno task patch <dir> -r` 会执行重置，但不应用补丁。因为每次操作都从基线开始，所以可以修改、删除或重新编号补丁文件。`--check` 会在一次性 worktree 中预检按顺序排列的补丁序列。重置会丢弃子模块中未提交的工作，因此请先将本地 `third/` 开发内容提交到分支。`rusty_v8` 是唯一的手动例外（它是原地复用的大型构建树，补丁由 `scripts/build-v8.ts` 应用），详见 `.cursor/rules/third-patches-workflow.mdc`。`cef` 遵循标准流程——`automate-git.py` 只认可提交，但 `scripts/build-chromium.ts` 会自动将应用补丁后的 worktree 暂存到 `kabegame-build` 分支，因此 `third/cef` 的 gitlink 始终指向官方上游锁定点。
@@ -118,7 +120,7 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
 
 对于仅含 Cargo 的 `kabegame-cli` 组件，`deno task b` 默认执行 **debug** 构建；传入 `--release` 才会执行 release 构建。主应用的桌面端/Android 构建始终通过 `tauri build`，无论是否传入 `--release` 都是 release 构建。
 
-`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime` 和 `ipc-server` feature，因此会链接 deno_core/rusty_v8，并获得真正有效（非空操作）的 `GlobalEmitter`。这为 `kabegame-cli plugin run <id>` 提供支持；该命令会在进程内执行**已安装的 V8 插件**（不使用守护进程），并在固定的进度条上方渲染任务日志。可使用它在不启动 GUI 的情况下测试爬虫插件——请搭配 `repack-crawler-plugins` skill 和 `--data dev` 使用，否则 release CLI 会解析到系统数据目录。参见 `apps/docs/src/content/docs/reference/cli.md`。
+`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime` 和 `ipc-server` feature，因此会链接 deno_core/rusty_v8，并获得真正有效（非空操作）的 `GlobalEmitter`。这为 `kabegame-cli plugin run <id>` 提供支持；该命令会在自身进程内初始化任务与事件运行时、执行**已安装的 V8 插件**，并在固定的进度条上方渲染任务日志。可使用它在不启动 GUI 的情况下测试爬虫插件——请搭配 `repack-crawler-plugins` skill 和 `--data dev` 使用，否则 release CLI 会解析到系统数据目录。参见 `apps/docs/src/content/docs/reference/cli.md`。
 
 在 macOS 上，两个二进制文件都是位于 `target/<profile>` 中的扁平 Cargo 产物；CEF framework 通过 cef-dll-sys 创建的 `target/Frameworks` 符号链接进行解析。参见 `src-tauri/tauri-runtime-cef/README.md`。
 

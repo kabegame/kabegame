@@ -895,8 +895,8 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
     // 晚订阅会漏掉任务开头的日志。
     // 不订阅 ImagesChange：计数一律取 TasksChange 里的权威快照，见 render_task 的说明。
     let mut events = EventBroadcaster::global().subscribe_filtered_stream(&[
-        kabegame_core::ipc::events::DaemonEventKind::TaskLog,
-        kabegame_core::ipc::events::DaemonEventKind::TasksChange,
+        kabegame_core::ipc::events::AppEventKind::TaskLog,
+        kabegame_core::ipc::events::AppEventKind::TasksChange,
     ]);
 
     let scheduler = TaskScheduler::global();
@@ -955,12 +955,12 @@ async fn render_task(
     plugin_id: &str,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<(
         u64,
-        std::sync::Arc<kabegame_core::ipc::events::DaemonEvent>,
+        std::sync::Arc<kabegame_core::ipc::events::AppEvent>,
     )>,
     plain: bool,
 ) -> TaskOutcome {
     use indicatif::{ProgressBar, ProgressStyle};
-    use kabegame_core::ipc::events::DaemonEvent;
+    use kabegame_core::ipc::events::AppEvent;
 
     let bar = if plain {
         ProgressBar::hidden()
@@ -1010,7 +1010,7 @@ async fn render_task(
 
     while let Some((_id, ev)) = events.recv().await {
         match &*ev {
-            DaemonEvent::TaskLog {
+            AppEvent::TaskLog {
                 task_id: tid,
                 level,
                 message,
@@ -1025,7 +1025,7 @@ async fn render_task(
                     bar.suspend(|| println!("{line}"));
                 }
             }
-            DaemonEvent::TaskChanged { task_id: tid, diff } if tid == task_id => {
+            AppEvent::TaskChanged { task_id: tid, diff } if tid == task_id => {
                 if let Some(p) = diff.get("progress").and_then(|v| v.as_f64()) {
                     progress = p;
                 }

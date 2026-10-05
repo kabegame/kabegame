@@ -49,42 +49,36 @@ Kabegame 是一个基于 Tauri 的二次元壁纸管理器，核心架构包含�
                             │ HTTP API         │ HTTP 转发
                             │                  │
 ┌───────────────────────────┴──────────────────┴──────────┐
-│                    HTTP 服务器层(内嵌kabegame)                          │
+│                Kabegame 应用进程                        │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │ HTTP 请求 → IPC 请求转换                         │  │
-│  │ /api/provider/albums → IpcRequest::          │  │
-│  │   GalleryBrowseProvider { path: "albums" }       │  │
+│  │ HTTP 路由：认证、参数解析、响应序列化             │  │
 │  └────────────────────┬─────────────────────────────┘  │
-└───────────────────────┼─────────────────────────────────┘
-                        │ IPC (Unix Socket / Named Pipe)
-                        │
-┌───────────────────────┴─────────────────────────────────┐
-│                      Daemon 层(kabegame提供服务)                            │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │ 业务逻辑处理：                                    │  │
+│                       │ 进程内函数调用                 │
+│  ┌────────────────────┴─────────────────────────────┐  │
+│  │ 共享命令与 Provider 运行时：                      │  │
 │  │ - Storage 操作                                    │  │
 │  │ - Provider 解析                                   │  │
 │  │ - 任务调度                                        │  │
 │  │ - 事件广播                                        │  │
 │  └──────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────┘
 ```
 
 **设计要点**：
 
-- **HTTP 服务器作为前端**：只负责协议转换（HTTP ↔ IPC）
-- **Daemon 作为后端**：集中处理所有业务逻辑
-- **职责分离**：HTTP 层不包含业务逻辑，daemon 不关心传输协议
+- **单进程承载**：HTTP 服务器与业务后端都运行在 `kabegame` 应用进程中
+- **进程内复用**：HTTP handler 直接调用 `kabegame_core::commands` 与 Provider runtime
+- **职责分离**：HTTP 层只处理协议边界，业务规则集中在共享命令层
 
 ## 3. HTTP API 设计
 
 ### 3.1 架构原则
 
-**HTTP 服务器作为 daemon 的前端**：
+**HTTP 服务器作为应用内协议适配层**：
 
-- HTTP 服务器只负责协议转换（HTTP ↔ IPC）
-- 所有业务逻辑由 daemon 处理
-- 通过 IPC（Unix Socket / Named Pipe）与 daemon 通信
+- HTTP 服务器只负责认证、路由、参数解析和响应序列化
+- 所有业务逻辑由共享命令层与 Provider runtime 处理
+- HTTP handler 通过进程内函数调用复用业务实现
 
 ### 3.2 API 端点
 
@@ -103,13 +97,13 @@ HTTP 请求
     ↓
 HTTP 服务器接收
     ↓
-转换为 IPC 请求 (IpcRequest)
+解析为共享命令参数 / Provider 路径
     ↓
-通过 IPC 调用 daemon
+进程内调用共享命令层
     ↓
-Daemon 处理业务逻辑
+Storage / Provider runtime 处理业务逻辑
     ↓
-返回 IPC 响应 (IpcResponse)
+返回领域结果
     ↓
 转换为 HTTP 响应
     ↓
@@ -118,13 +112,13 @@ Daemon 处理业务逻辑
 
 ### 3.4 路径映射
 
-HTTP 路径转换为 IPC 请求：
+HTTP 路径转换为 Provider 查询路径：
 
 ```
-HTTP 路径                          IPC 请求
-/api/provider                     IpcRequest::GalleryBrowseProvider { path: "" }
-/api/provider/albums              IpcRequest::GalleryBrowseProvider { path: "albums" }
-/api/provider/albums/my-album     IpcRequest::GalleryBrowseProvider { path: "albums/my-album" }
+HTTP 路径                          Provider 查询路径
+/api/provider                     ""
+/api/provider/albums              "albums"
+/api/provider/albums/my-album     "albums/my-album"
 ```
 
 ### 3.5 响应格式
@@ -149,46 +143,29 @@ HTTP 路径                          IPC 请求
 ### 3.6 实现要点
 
 ```rust
-// HTTP 服务器：协议转换层
+// HTTP 服务器：协议适配层
 async fn handle_provider_path(
     Path(path): Path<String>,
-    State(state): State<Arc<HttpServerState>>,
 ) -> Result<Json<ProviderResponse>, StatusCode> {
-    // 1. 构建 IPC 请求
-    let ipc_request = IpcRequest::GalleryBrowseProvider {
-        path: path.clone(),
-    };
+    // 1. 解析 Provider 路径
+    let segments = kabegame_core::providers::decode_provider_path_segments(&path);
 
-    // 2. 通过 IPC 调用 daemon
-    let ipc_response = state.ipc_client
-        .request(ipc_request)
-        .await
+    // 2. 在应用进程内调用 Provider runtime
+    let rows = kabegame_core::providers::query_fetch(&segments)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // 3. 检查 IPC 响应
-    if !ipc_response.ok {
-        return Err(StatusCode::from(
-            ipc_response.message.unwrap_or_default()
-        ));
-    }
-
-    // 4. 提取数据并转换为 HTTP 响应
-    let data: GalleryBrowseResult = serde_json::from_value(
-        ipc_response.data.unwrap_or_default()
-    ).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // 5. 转换为 ProviderResponse 格式
-    let response = ProviderResponse::from(data);
+    // 3. 转换为网络 API 的响应格式
+    let response = ProviderResponse::from(rows);
     Ok(Json(response))
 }
 ```
 
 **关键优势**：
 
-- **职责分离**：HTTP 服务器只做协议转换，daemon 集中处理业务逻辑
-- **代码复用**：daemon 的 handler 可以被多种前端复用（HTTP、WebSocket、gRPC 等）
-- **易于测试**：可以独立测试 HTTP 层和 daemon 层
-- **易于扩展**：未来可以添加其他传输协议，无需修改 daemon
+- **职责分离**：HTTP 服务器只处理协议边界，共享命令层集中处理业务逻辑
+- **代码复用**：Tauri、Web JSON-RPC、HTTP 等入口复用同一组 core 命令
+- **易于测试**：可以分别测试 HTTP 映射与共享命令
+- **易于扩展**：新增传输协议时复用共享命令，无需复制业务逻辑
 
 ## 4. 网络虚拟盘设计
 
@@ -765,16 +742,16 @@ for album in albums["entries"] {
 1. **HTTP 服务器（axum）**
    - 创建 HTTP 服务器模块
    - 实现基础路由和中间件
-   - 集成 IPC 客户端
+   - 接入应用内共享命令层
 
-2. **IPC 请求转换**
-   - HTTP 请求 → IpcRequest 转换
-   - IpcResponse → HTTP 响应转换
+2. **请求与响应转换**
+   - HTTP 请求 → 共享命令参数转换
+   - 领域结果 → HTTP 响应转换
    - 错误处理和状态码映射
 
 3. **Provider API 端点**
    - `/api/provider` 端点实现
-   - 调用 daemon 的 `GalleryBrowseProvider` handler
+   - 调用 Provider runtime 的查询接口
    - 响应格式转换
 
 4. **基础安全机制**
@@ -820,11 +797,11 @@ for album in albums["entries"] {
 3. 循环检测
 4. 性能优化
 
-## 11. Daemon 集成
+## 11. 应用进程集成
 
-### 11.1 Daemon 职责
+### 11.1 共享业务层职责
 
-Daemon 作为统一的后台服务，处理所有业务逻辑：
+Kabegame 主应用进程初始化共享业务层，并由它处理所有核心逻辑：
 
 - **Storage 操作**：图片、画册、任务的增删改查
 - **Provider 解析**：通过 ProviderRuntime 解析路径
@@ -834,58 +811,35 @@ Daemon 作为统一的后台服务，处理所有业务逻辑：
 
 ### 11.2 HTTP 服务器职责
 
-HTTP 服务器作为 daemon 的前端，只负责：
+HTTP 服务器作为应用内协议适配层，只负责：
 
-- **协议转换**：HTTP ↔ IPC
-- **请求路由**：将 HTTP 路径映射到 IPC 请求
-- **响应格式化**：将 IPC 响应转换为 HTTP 响应
+- **协议转换**：HTTP 参数与领域参数互转
+- **请求路由**：将 HTTP 路径映射到共享命令或 Provider 查询
+- **响应格式化**：将领域结果转换为 HTTP 响应
 - **安全控制**：认证、授权、速率限制
 
-### 11.3 IPC 客户端
+### 11.3 进程内调用
 
-HTTP 服务器通过 IPC 客户端与 daemon 通信：
+HTTP handler 直接调用 `kabegame_core` 的共享命令或 Provider runtime：
 
 ```rust
-pub struct IpcClient {
-    socket_path: PathBuf,  // Unix Socket 或 Named Pipe
-}
-
-impl IpcClient {
-    pub async fn request(&self, req: IpcRequest) -> Result<IpcResponse, String> {
-        // 连接到 daemon
-        // 发送请求
-        // 接收响应
-    }
+async fn handle_provider(path: String) -> Result<ProviderResponse, ApiError> {
+    let segments = kabegame_core::providers::decode_provider_path_segments(&path);
+    let rows = kabegame_core::providers::query_fetch(&segments)?;
+    Ok(ProviderResponse::from(rows))
 }
 ```
 
-### 11.4 Daemon 启动 HTTP 服务器
+### 11.4 主应用启动 HTTP 服务器
 
-HTTP 服务器作为 daemon 的一部分启动：
+HTTP 服务器在共享全局状态初始化后，由主应用启动：
 
 ```rust
-// src-tauri/daemon/src/main.rs
-async fn daemon_main() -> Result<(), String> {
-    // ... 现有初始化代码 ...
-
-    // 启动 HTTP 服务器（作为 daemon 的前端）
-    let http_server = Arc::new(HttpServer::new(
-        ctx.clone(),  // RequestContext
-        settings.clone(),  // 安全设置
-    ));
-
-    // 在后台任务中启动 HTTP 服务器
-    let http_server_clone = http_server.clone();
-    tokio::spawn(async move {
-        if let Err(e) = http_server_clone.start().await {
-            eprintln!("HTTP server error: {}", e);
-        }
-    });
-
-    // 启动 IPC 服务（现有逻辑）
-    ipc::serve(move |req| {
-        // ... 现有 handler ...
-    }).await
+// src-tauri/kabegame/src/lib.rs
+fn init(app: &mut tauri::App<AppRuntime>) -> Result<(), String> {
+    crate::core_init::init_globals()?;
+    tauri::async_runtime::block_on(http_server::start_http_server())?;
+    Ok(())
 }
 ```
 
@@ -893,60 +847,60 @@ async fn daemon_main() -> Result<(), String> {
 
 **职责集中**：
 
-- Daemon 专注于业务逻辑，不关心传输协议
-- HTTP 服务器专注于协议转换，不包含业务逻辑
-- 所有业务逻辑集中在 daemon，便于维护
+- 共享命令层专注于业务逻辑，不关心传输协议
+- HTTP 服务器专注于协议转换，不复制业务逻辑
+- Storage、Provider、任务和事件由同一应用进程持有
 
 **易于扩展**：
 
-- 可以添加 WebSocket、gRPC 等前端，复用 daemon
-- 可以添加新的 IPC handler，自动支持所有前端
+- 可以添加 WebSocket、gRPC 等入口，复用共享命令层
+- 可以扩展共享命令，再由不同协议入口按需暴露
 - 前端和后端解耦，可以独立演进
 
 **易于测试**：
 
-- HTTP 层和 daemon 层可以独立测试
-- 可以 mock IPC 客户端进行单元测试
+- HTTP 映射与共享命令可以独立测试
+- 可直接构造命令参数测试业务层，不需要进程间通信桩
 - 可以测试 HTTP 协议转换逻辑
 
 **统一管理**：
 
-- HTTP 服务器和 IPC 服务器都在 daemon 中管理
-- 共享相同的 RequestContext 和资源
+- HTTP、Tauri、Web JSON-RPC 与应用 IPC 入口由主应用统一管理
+- 各入口共享相同的全局状态和资源
 - 统一的配置和安全设置
 
-## 11. 技术选型
+## 12. 技术选型
 
-### 11.1 HTTP 服务器
+### 12.1 HTTP 服务器
 
 - **axum**：基于 Tokio，性能好，API 简洁
 - **tower**：中间件支持（认证、CORS、日志）
 
-### 11.2 服务发现
+### 12.2 服务发现
 
 - **mdns** 或 **zeroconf**：跨平台 mDNS 支持
 - **可选**：UPnP/SSDP 库（如 `upnp-rs`）
 - **可选**：蓝牙库（如 `bluer`）
 
-### 11.3 序列化
+### 12.3 序列化
 
 - **serde_json**：与现有代码一致
 
-## 12. 优势总结
+## 13. 优势总结
 
-### 12.1 架构优势
+### 13.1 架构优势
 
 - **完全复用**：零侵入扩展，不修改现有 Provider 系统
 - **统一抽象**：远程数据与本地数据使用同一接口
 - **递归支持**：支持任意深度的嵌套访问
 
-### 12.2 开发优势
+### 13.2 开发优势
 
 - **实现简单**：HTTP 层只做路径转换和序列化
 - **易于测试**：各组件可独立测试
 - **易于维护**：代码结构清晰，职责分明
 
-### 12.3 用户体验
+### 13.3 用户体验
 
 - **统一体验**：网络设备像本地目录一样浏览
 - **透明访问**：嵌套访问对用户透明

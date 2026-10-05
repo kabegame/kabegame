@@ -83,7 +83,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use crate::ipc::handlers::dispatch_request;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
-use kabegame_core::ipc::events::{DaemonEvent, DaemonEventKind};
+use kabegame_core::ipc::events::{AppEvent, AppEventKind};
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]

@@ -27,7 +27,7 @@ pub async fn handle_connection<R, W, F, Fut>(
     let mut event_rx: Option<
         tokio::sync::mpsc::UnboundedReceiver<(
             u64,
-            std::sync::Arc<crate::ipc::events::DaemonEvent>,
+            std::sync::Arc<crate::ipc::events::AppEvent>,
         )>,
     > = None;
 
@@ -101,14 +101,14 @@ pub async fn handle_connection<R, W, F, Fut>(
 
                             // 使用 SubscriptionManager 订阅事件
                             // 解析事件类型列表：空列表 = 订阅全部
-                            let event_kinds: Vec<crate::ipc::events::DaemonEventKind> =
+                            let event_kinds: Vec<crate::ipc::events::AppEventKind> =
                                 if kinds.is_empty() {
-                                    crate::ipc::events::DaemonEventKind::ALL.to_vec()
+                                    crate::ipc::events::AppEventKind::ALL.to_vec()
                                 } else {
                                     kinds
                                     .iter()
                                     .filter_map(|s| {
-                                        crate::ipc::events::DaemonEventKind::from_str(s)
+                                        crate::ipc::events::AppEventKind::from_str(s)
                                     })
                                     .collect()
                                 };
@@ -171,7 +171,7 @@ pub async fn handle_connection<R, W, F, Fut>(
             } => {
                 match event_result {
                     Some((id, event)) => {
-                        // 传 &DaemonEvent 而不是 &Arc<DaemonEvent>：后者要求 serde 的 `rc`
+                        // 传 &AppEvent 而不是 &Arc<AppEvent>：后者要求 serde 的 `rc`
                         // feature，而那只是 tauri 间接开进来的。不解引用的话，不依赖 tauri 的
                         // 消费者（如 kabegame-cli 单独开 ipc-server）会编译失败。两者序列化结果一致。
                         match encode_frame(&*event) {

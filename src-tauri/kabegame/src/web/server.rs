@@ -13,7 +13,7 @@ use futures_util::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
-use kabegame_core::ipc::events::DaemonEventKind;
+use kabegame_core::ipc::events::AppEventKind;
 use kabegame_core::ipc::server::EventBroadcaster;
 
 use super::dispatch::{dispatch, JsonRpcRequest};
@@ -77,7 +77,7 @@ async fn rpc_handler(
 pub fn start_web_event_loop() {
     let bus = event_bus().clone();
     tokio::spawn(async move {
-        let mut rx = EventBroadcaster::global().subscribe_filtered_stream(&DaemonEventKind::ALL);
+        let mut rx = EventBroadcaster::global().subscribe_filtered_stream(&AppEventKind::ALL);
         let mut counter = 0u64;
         while let Some((_id, event)) = rx.recv().await {
             counter += 1;

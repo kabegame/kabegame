@@ -4,15 +4,15 @@
 
 use std::sync::OnceLock;
 
-use crate::ipc::events::{ArcDaemonEvent, DaemonEventKind};
+use crate::ipc::events::{ArcAppEvent, AppEventKind};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 /// 全局事件广播器单例
 pub struct EventBroadcaster {
     next_id: RwLock<u64>,
-    event_txs: Vec<broadcast::Sender<(u64, ArcDaemonEvent)>>,
-    sync_tx: mpsc::UnboundedSender<ArcDaemonEvent>,
-    sync_rx: Mutex<mpsc::UnboundedReceiver<ArcDaemonEvent>>,
+    event_txs: Vec<broadcast::Sender<(u64, ArcAppEvent)>>,
+    sync_tx: mpsc::UnboundedSender<ArcAppEvent>,
+    sync_rx: Mutex<mpsc::UnboundedReceiver<ArcAppEvent>>,
 }
 
 static EVENT_BROADCASTER: OnceLock<EventBroadcaster> = OnceLock::new();
@@ -20,13 +20,13 @@ static EVENT_BROADCASTER: OnceLock<EventBroadcaster> = OnceLock::new();
 impl EventBroadcaster {
     /// 初始化全局 EventBroadcaster（必须在首次使用前调用）
     pub fn init_global(_max_queue_size: usize) -> Result<(), String> {
-        let mut event_txs = Vec::with_capacity(DaemonEventKind::COUNT);
-        for _ in 0..DaemonEventKind::COUNT {
+        let mut event_txs = Vec::with_capacity(AppEventKind::COUNT);
+        for _ in 0..AppEventKind::COUNT {
             let (tx, _) = broadcast::channel(1024);
             event_txs.push(tx);
         }
 
-        let (sync_tx, sync_rx) = mpsc::unbounded_channel::<ArcDaemonEvent>();
+        let (sync_tx, sync_rx) = mpsc::unbounded_channel::<ArcAppEvent>();
 
         EVENT_BROADCASTER
             .set(EventBroadcaster {
@@ -89,28 +89,28 @@ impl EventBroadcaster {
     }
 
     /// 广播事件
-    pub fn broadcast(&self, event: ArcDaemonEvent) {
+    pub fn broadcast(&self, event: ArcAppEvent) {
         let broadcaster = Self::global();
         let _ = broadcaster.sync_tx.send(event);
     }
 
     /// 订阅指定类型的事件
-    pub fn subscribe(&self, kind: DaemonEventKind) -> broadcast::Receiver<(u64, ArcDaemonEvent)> {
+    pub fn subscribe(&self, kind: AppEventKind) -> broadcast::Receiver<(u64, ArcAppEvent)> {
         let broadcaster = Self::global();
         broadcaster.event_txs[kind.as_usize()].subscribe()
     }
 
     /// 订阅所有事件的流
-    pub fn subscribe_all_stream(&self) -> mpsc::UnboundedReceiver<(u64, ArcDaemonEvent)> {
-        self.subscribe_filtered_stream(&DaemonEventKind::ALL)
+    pub fn subscribe_all_stream(&self) -> mpsc::UnboundedReceiver<(u64, ArcAppEvent)> {
+        self.subscribe_filtered_stream(&AppEventKind::ALL)
     }
 
     /// 订阅过滤后的事件流
     pub fn subscribe_filtered_stream(
         &self,
-        kinds: &[DaemonEventKind],
-    ) -> mpsc::UnboundedReceiver<(u64, ArcDaemonEvent)> {
-        let (tx, rx) = mpsc::unbounded_channel::<(u64, ArcDaemonEvent)>();
+        kinds: &[AppEventKind],
+    ) -> mpsc::UnboundedReceiver<(u64, ArcAppEvent)> {
+        let (tx, rx) = mpsc::unbounded_channel::<(u64, ArcAppEvent)>();
 
         for kind in kinds {
             let mut brx = self.subscribe(*kind);
@@ -143,7 +143,7 @@ impl EventBroadcaster {
     }
 
     /// 获取指定事件类型的接收者数量
-    pub fn receiver_count(&self, kind: DaemonEventKind) -> usize {
+    pub fn receiver_count(&self, kind: AppEventKind) -> usize {
         let broadcaster = Self::global();
         let idx = kind.as_usize();
         match broadcaster.event_txs.get(idx) {

@@ -1,23 +1,23 @@
 //! IPC 事件监听器
 //!
 //! 提供统一的事件监听接口，让所有前端（kabegame、cli）都能
-//! 使用相同的 API 来监听 daemon 发送的事件。
+//! 使用相同的 API 来监听应用后端发送的事件。
 //!
 //! ## 使用示例
 //!
 //! ```rust,no_run
-//! use kabegame_core::ipc::events::{DaemonEventKind, EventListener};
+//! use kabegame_core::ipc::events::{AppEventKind, EventListener};
 //!
 //! fn main() -> Result<(), String> {
 //!     let rt = tokio::runtime::Runtime::new().unwrap();
 //!     rt.block_on(async {
 //!         let listener = EventListener::new();
 //!         listener
-//!             .on(DaemonEventKind::TaskLog, |payload| {
+//!             .on(AppEventKind::TaskLog, |payload| {
 //!                 println!("task-log: {}", payload);
 //!             })
 //!             .await;
-//!         listener.start(&[DaemonEventKind::TaskLog]).await?;
+//!         listener.start(&[AppEventKind::TaskLog]).await?;
 //!         Ok(())
 //!     })
 //! }
@@ -25,46 +25,46 @@
 
 use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-client")]
-use crate::ipc::client::daemon_startup;
+use crate::ipc::client::client_instance;
 use crate::storage::tasks::TaskFailedImage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-macro_rules! daemon_event_kinds {
+macro_rules! app_event_kinds {
     (
         $(
             $name:ident
         ),* $(,)?
     ) => {
-           /// Daemon 事件种类（不含 payload），用于做"事件 -> 广播器"的固定映射。
+        /// 应用事件种类（不含 payload），用于做“事件 -> 广播器”的固定映射。
         ///
-        /// 注意：这是 daemon -> client 的事件流里的"类型"，不是 Tauri 前端的事件名。
+        /// 注意：这是应用后端 -> 客户端事件流里的类型，不是 Tauri 前端的事件名。
         #[repr(usize)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[serde(rename_all = "kebab-case")]
-        pub enum DaemonEventKind {
+        pub enum AppEventKind {
             $($name),*
         }
 
-        impl DaemonEventKind {
+        impl AppEventKind {
             /// 已知事件数量（用于初始化固定大小映射表）。
-            pub const COUNT: usize = daemon_event_kinds!(@count $($name),*);
+            pub const COUNT: usize = app_event_kinds!(@count $($name),*);
             /// 已知事件数量（用于初始化固定大小映射表）。
 
-            pub const ALL: [DaemonEventKind; Self::COUNT] = [
-                $(DaemonEventKind::$name),*
+            pub const ALL: [AppEventKind; Self::COUNT] = [
+                $(AppEventKind::$name),*
             ];
         }
     };
 
     (@count $($name:ident),*) => {
-        <[()]>::len(&[$(daemon_event_kinds!(@unit $name)),*])
+        <[()]>::len(&[$(app_event_kinds!(@unit $name)),*])
     };
     (@unit $name:ident) => { () };
 }
 
-daemon_event_kinds! {
+app_event_kinds! {
     TaskLog,
     DownloadState,
     DownloadProgress,
@@ -85,7 +85,7 @@ daemon_event_kinds! {
     SurfRecordsChange,
     FailedImagesChange,
     TasksChange,
-    DaemonShutdown,
+    AppShutdown,
     AutoConfigChange,
     PluginAdded,
     PluginDeleted,
@@ -93,7 +93,7 @@ daemon_event_kinds! {
     DownloadRemoved,
 }
 
-impl DaemonEventKind {
+impl AppEventKind {
     #[inline]
     pub const fn as_usize(self) -> usize {
         self as usize
@@ -103,32 +103,32 @@ impl DaemonEventKind {
     /// 例如：TaskLog -> "task-log", SettingChange -> "setting-change"
     pub fn as_event_name(&self) -> String {
         match self {
-            DaemonEventKind::TaskLog => "task-log",
-            DaemonEventKind::DownloadState => "download-state",
-            DaemonEventKind::DownloadProgress => "download-progress",
-            DaemonEventKind::Generic => "generic",
-            DaemonEventKind::ConnectionStatus => "connection-status",
-            DaemonEventKind::OrganizeProgress => "organize-progress",
-            DaemonEventKind::OrganizeFinished => "organize-finished",
-            DaemonEventKind::HiddenCleanupProgress => "hidden-cleanup-progress",
-            DaemonEventKind::HiddenCleanupFinished => "hidden-cleanup-finished",
-            DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
-            DaemonEventKind::ImageChanged => "image-changed",
-            DaemonEventKind::ImagesChange => "images-change",
-            DaemonEventKind::AlbumImagesChange => "album-images-change",
-            DaemonEventKind::SettingChange => "setting-change",
-            DaemonEventKind::AlbumAdded => "album-added",
-            DaemonEventKind::AlbumChanged => "album-changed",
-            DaemonEventKind::AlbumDeleted => "album-deleted",
-            DaemonEventKind::SurfRecordsChange => "surf-records-change",
-            DaemonEventKind::FailedImagesChange => "failed-images-change",
-            DaemonEventKind::TasksChange => "tasks-change",
-            DaemonEventKind::DaemonShutdown => "daemon-shutdown",
-            DaemonEventKind::AutoConfigChange => "auto-config-change",
-            DaemonEventKind::PluginAdded => "plugin-added",
-            DaemonEventKind::PluginDeleted => "plugin-deleted",
-            DaemonEventKind::PluginUpdated => "plugin-updated",
-            DaemonEventKind::DownloadRemoved => "download-removed",
+            AppEventKind::TaskLog => "task-log",
+            AppEventKind::DownloadState => "download-state",
+            AppEventKind::DownloadProgress => "download-progress",
+            AppEventKind::Generic => "generic",
+            AppEventKind::ConnectionStatus => "connection-status",
+            AppEventKind::OrganizeProgress => "organize-progress",
+            AppEventKind::OrganizeFinished => "organize-finished",
+            AppEventKind::HiddenCleanupProgress => "hidden-cleanup-progress",
+            AppEventKind::HiddenCleanupFinished => "hidden-cleanup-finished",
+            AppEventKind::WallpaperUpdateImage => "wallpaper-update-image",
+            AppEventKind::ImageChanged => "image-changed",
+            AppEventKind::ImagesChange => "images-change",
+            AppEventKind::AlbumImagesChange => "album-images-change",
+            AppEventKind::SettingChange => "setting-change",
+            AppEventKind::AlbumAdded => "album-added",
+            AppEventKind::AlbumChanged => "album-changed",
+            AppEventKind::AlbumDeleted => "album-deleted",
+            AppEventKind::SurfRecordsChange => "surf-records-change",
+            AppEventKind::FailedImagesChange => "failed-images-change",
+            AppEventKind::TasksChange => "tasks-change",
+            AppEventKind::AppShutdown => "app-shutdown",
+            AppEventKind::AutoConfigChange => "auto-config-change",
+            AppEventKind::PluginAdded => "plugin-added",
+            AppEventKind::PluginDeleted => "plugin-deleted",
+            AppEventKind::PluginUpdated => "plugin-updated",
+            AppEventKind::DownloadRemoved => "download-removed",
         }
         .to_string()
     }
@@ -136,33 +136,33 @@ impl DaemonEventKind {
     /// 从事件名解析事件类型（kebab-case）
     pub fn from_event_name(s: &str) -> Option<Self> {
         match s {
-            "task-log" => Some(DaemonEventKind::TaskLog),
-            "download-state" => Some(DaemonEventKind::DownloadState),
-            "download-progress" => Some(DaemonEventKind::DownloadProgress),
-            "generic" => Some(DaemonEventKind::Generic),
-            "connection-status" => Some(DaemonEventKind::ConnectionStatus),
-            "organize-progress" => Some(DaemonEventKind::OrganizeProgress),
-            "organize-finished" => Some(DaemonEventKind::OrganizeFinished),
-            "hidden-cleanup-progress" => Some(DaemonEventKind::HiddenCleanupProgress),
-            "hidden-cleanup-finished" => Some(DaemonEventKind::HiddenCleanupFinished),
-            "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
-            "image-changed" => Some(DaemonEventKind::ImageChanged),
-            "images-change" => Some(DaemonEventKind::ImagesChange),
-            "album-images-change" => Some(DaemonEventKind::AlbumImagesChange),
-            "setting-change" => Some(DaemonEventKind::SettingChange),
-            "album-added" => Some(DaemonEventKind::AlbumAdded),
-            "album-changed" => Some(DaemonEventKind::AlbumChanged),
-            "album-deleted" => Some(DaemonEventKind::AlbumDeleted),
-            "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
-            "failed-images-change" => Some(DaemonEventKind::FailedImagesChange),
-            "tasks-change" => Some(DaemonEventKind::TasksChange),
-            "daemon-shutdown" => Some(DaemonEventKind::DaemonShutdown),
-            "auto-config-change" => Some(DaemonEventKind::AutoConfigChange),
-            "plugin-added" => Some(DaemonEventKind::PluginAdded),
-            "plugin-deleted" => Some(DaemonEventKind::PluginDeleted),
-            "plugin-updated" => Some(DaemonEventKind::PluginUpdated),
-            "download-removed" => Some(DaemonEventKind::DownloadRemoved),
-            "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(DaemonEventKind::TasksChange),
+            "task-log" => Some(AppEventKind::TaskLog),
+            "download-state" => Some(AppEventKind::DownloadState),
+            "download-progress" => Some(AppEventKind::DownloadProgress),
+            "generic" => Some(AppEventKind::Generic),
+            "connection-status" => Some(AppEventKind::ConnectionStatus),
+            "organize-progress" => Some(AppEventKind::OrganizeProgress),
+            "organize-finished" => Some(AppEventKind::OrganizeFinished),
+            "hidden-cleanup-progress" => Some(AppEventKind::HiddenCleanupProgress),
+            "hidden-cleanup-finished" => Some(AppEventKind::HiddenCleanupFinished),
+            "wallpaper-update-image" => Some(AppEventKind::WallpaperUpdateImage),
+            "image-changed" => Some(AppEventKind::ImageChanged),
+            "images-change" => Some(AppEventKind::ImagesChange),
+            "album-images-change" => Some(AppEventKind::AlbumImagesChange),
+            "setting-change" => Some(AppEventKind::SettingChange),
+            "album-added" => Some(AppEventKind::AlbumAdded),
+            "album-changed" => Some(AppEventKind::AlbumChanged),
+            "album-deleted" => Some(AppEventKind::AlbumDeleted),
+            "surf-records-change" => Some(AppEventKind::SurfRecordsChange),
+            "failed-images-change" => Some(AppEventKind::FailedImagesChange),
+            "tasks-change" => Some(AppEventKind::TasksChange),
+            "app-shutdown" => Some(AppEventKind::AppShutdown),
+            "auto-config-change" => Some(AppEventKind::AutoConfigChange),
+            "plugin-added" => Some(AppEventKind::PluginAdded),
+            "plugin-deleted" => Some(AppEventKind::PluginDeleted),
+            "plugin-updated" => Some(AppEventKind::PluginUpdated),
+            "download-removed" => Some(AppEventKind::DownloadRemoved),
+            "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(AppEventKind::TasksChange),
             _ => None,
         }
     }
@@ -186,10 +186,10 @@ pub struct ImagePatch {
     pub diff: serde_json::Value,
 }
 
-/// Daemon 事件类型，绝对不Clone
+/// 应用事件类型；payload 通过 `Arc` 共享，不直接 Clone。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum DaemonEvent {
+pub enum AppEvent {
     /// 任务日志事件
     TaskLog {
         task_id: String,
@@ -398,8 +398,8 @@ pub enum DaemonEvent {
         task_id: String,
         diff: serde_json::Value,
     },
-    /// Daemon 关闭事件（进程退出前发出）
-    DaemonShutdown { reason: String },
+    /// 应用关闭事件（进程退出前发出）。
+    AppShutdown { reason: String },
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
     AutoConfigChange {
@@ -425,11 +425,26 @@ pub enum DaemonEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::DaemonEvent;
+    use super::{AppEvent, AppEventKind};
+
+    #[test]
+    fn app_shutdown_uses_app_event_name() {
+        let event = AppEvent::AppShutdown {
+            reason: "exit".to_string(),
+        };
+        let payload = serde_json::to_value(event).expect("AppShutdown 应可序列化");
+
+        assert_eq!(payload["type"], "app-shutdown");
+        assert_eq!(AppEventKind::AppShutdown.as_event_name(), "app-shutdown");
+        assert_eq!(
+            AppEventKind::from_event_name("app-shutdown"),
+            Some(AppEventKind::AppShutdown)
+        );
+    }
 
     #[test]
     fn album_added_serializes_complete_album_fields_without_type_collision() {
-        let event = DaemonEvent::AlbumAdded {
+        let event = AppEvent::AlbumAdded {
             id: "child-id".to_string(),
             name: "child".to_string(),
             created_at: 123,
@@ -453,45 +468,45 @@ mod tests {
     }
 }
 
-/// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
-pub type ArcDaemonEvent = Arc<DaemonEvent>;
+/// 包装在 Arc 中的应用事件，用于零拷贝传递。
+pub type ArcAppEvent = Arc<AppEvent>;
 
-impl DaemonEvent {
+impl AppEvent {
     /// 获取事件种类（用于路由到对应广播器）。
     /// TODO: 这个函数太长不好维护
     #[inline]
-    pub fn kind(&self) -> DaemonEventKind {
+    pub fn kind(&self) -> AppEventKind {
         match self {
-            DaemonEvent::TaskLog { .. } => DaemonEventKind::TaskLog,
-            DaemonEvent::DownloadState { .. } => DaemonEventKind::DownloadState,
-            DaemonEvent::DownloadProgress { .. } => DaemonEventKind::DownloadProgress,
-            DaemonEvent::Generic { .. } => DaemonEventKind::Generic,
-            DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
-            DaemonEvent::OrganizeProgress { .. } => DaemonEventKind::OrganizeProgress,
-            DaemonEvent::OrganizeFinished { .. } => DaemonEventKind::OrganizeFinished,
-            DaemonEvent::HiddenCleanupProgress { .. } => DaemonEventKind::HiddenCleanupProgress,
-            DaemonEvent::HiddenCleanupFinished { .. } => DaemonEventKind::HiddenCleanupFinished,
-            DaemonEvent::ImageChanged { .. } => DaemonEventKind::ImageChanged,
-            DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
-            DaemonEvent::AlbumImagesChange { .. } => DaemonEventKind::AlbumImagesChange,
-            DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,
-            DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
-            DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
-            DaemonEvent::AlbumChanged { .. } => DaemonEventKind::AlbumChanged,
-            DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
-            DaemonEvent::SurfRecordAdded { .. }
-            | DaemonEvent::SurfRecordDeleted { .. }
-            | DaemonEvent::SurfRecordChanged { .. } => DaemonEventKind::SurfRecordsChange,
-            DaemonEvent::FailedImagesChange { .. } => DaemonEventKind::FailedImagesChange,
-            DaemonEvent::TaskAdded { .. }
-            | DaemonEvent::TaskDeleted { .. }
-            | DaemonEvent::TaskChanged { .. } => DaemonEventKind::TasksChange,
-            DaemonEvent::DaemonShutdown { .. } => DaemonEventKind::DaemonShutdown,
-            DaemonEvent::AutoConfigChange { .. } => DaemonEventKind::AutoConfigChange,
-            DaemonEvent::PluginAdded { .. } => DaemonEventKind::PluginAdded,
-            DaemonEvent::PluginDeleted { .. } => DaemonEventKind::PluginDeleted,
-            DaemonEvent::PluginUpdated { .. } => DaemonEventKind::PluginUpdated,
-            DaemonEvent::DownloadRemoved { .. } => DaemonEventKind::DownloadRemoved,
+            AppEvent::TaskLog { .. } => AppEventKind::TaskLog,
+            AppEvent::DownloadState { .. } => AppEventKind::DownloadState,
+            AppEvent::DownloadProgress { .. } => AppEventKind::DownloadProgress,
+            AppEvent::Generic { .. } => AppEventKind::Generic,
+            AppEvent::ConnectionStatus { .. } => AppEventKind::ConnectionStatus,
+            AppEvent::OrganizeProgress { .. } => AppEventKind::OrganizeProgress,
+            AppEvent::OrganizeFinished { .. } => AppEventKind::OrganizeFinished,
+            AppEvent::HiddenCleanupProgress { .. } => AppEventKind::HiddenCleanupProgress,
+            AppEvent::HiddenCleanupFinished { .. } => AppEventKind::HiddenCleanupFinished,
+            AppEvent::ImageChanged { .. } => AppEventKind::ImageChanged,
+            AppEvent::ImagesChange { .. } => AppEventKind::ImagesChange,
+            AppEvent::AlbumImagesChange { .. } => AppEventKind::AlbumImagesChange,
+            AppEvent::WallpaperUpdateImage { .. } => AppEventKind::WallpaperUpdateImage,
+            AppEvent::SettingChange { .. } => AppEventKind::SettingChange,
+            AppEvent::AlbumAdded { .. } => AppEventKind::AlbumAdded,
+            AppEvent::AlbumChanged { .. } => AppEventKind::AlbumChanged,
+            AppEvent::AlbumDeleted { .. } => AppEventKind::AlbumDeleted,
+            AppEvent::SurfRecordAdded { .. }
+            | AppEvent::SurfRecordDeleted { .. }
+            | AppEvent::SurfRecordChanged { .. } => AppEventKind::SurfRecordsChange,
+            AppEvent::FailedImagesChange { .. } => AppEventKind::FailedImagesChange,
+            AppEvent::TaskAdded { .. }
+            | AppEvent::TaskDeleted { .. }
+            | AppEvent::TaskChanged { .. } => AppEventKind::TasksChange,
+            AppEvent::AppShutdown { .. } => AppEventKind::AppShutdown,
+            AppEvent::AutoConfigChange { .. } => AppEventKind::AutoConfigChange,
+            AppEvent::PluginAdded { .. } => AppEventKind::PluginAdded,
+            AppEvent::PluginDeleted { .. } => AppEventKind::PluginDeleted,
+            AppEvent::PluginUpdated { .. } => AppEventKind::PluginUpdated,
+            AppEvent::DownloadRemoved { .. } => AppEventKind::DownloadRemoved,
         }
     }
 }
@@ -511,7 +526,7 @@ pub type DefaultEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 #[cfg(feature = "ipc-client")]
 pub struct EventListener {
     /// 按事件类型组织的回调表：kind -> Vec<callback>
-    callbacks: Arc<RwLock<HashMap<DaemonEventKind, Vec<EventCallback>>>>,
+    callbacks: Arc<RwLock<HashMap<AppEventKind, Vec<EventCallback>>>>,
     /// 默认事件发送器（当某个 kind 没有回调时使用）
     default_emitter: Arc<RwLock<Option<DefaultEmitter>>>,
 }
@@ -542,7 +557,7 @@ impl EventListener {
     /// # 行为
     /// - 如果某个 `kind` 注册了回调，则只执行回调（不自动转发）
     /// - 如果某个 `kind` 没有回调，且设置了默认 emitter，则自动转发
-    pub async fn on<F>(&self, kind: DaemonEventKind, callback: F)
+    pub async fn on<F>(&self, kind: AppEventKind, callback: F)
     where
         F: Fn(serde_json::Value) + Send + Sync + 'static,
     {
@@ -572,14 +587,14 @@ impl EventListener {
     ///
     /// 此方法会监听连接状态，当连接上时自动注册事件，断开时自动停止并释放资源
     /// 当连接状态通道关闭时，监听循环会自动退出
-    pub async fn start(&self, kinds: &[DaemonEventKind]) -> Result<(), String> {
+    pub async fn start(&self, kinds: &[AppEventKind]) -> Result<(), String> {
         let callbacks = self.callbacks.clone();
         let default_emitter = self.default_emitter.clone();
         let kinds_vec = kinds.to_vec();
 
         tokio::spawn(async move {
             // 使用全局 IpcClient（与请求共享连接）
-            let client = daemon_startup::get_ipc_client();
+            let client = client_instance::get_ipc_client();
 
             // 获取连接状态订阅
             let mut status_rx = client.subscribe_connection_status();
@@ -618,7 +633,7 @@ impl EventListener {
                                                     // 从 payload 解析事件类型
                                                     let kind = if let Some(type_val) = raw.get("type") {
                                                         if let Some(type_str) = type_val.as_str() {
-                                                            DaemonEventKind::from_str(type_str)
+                                                            AppEventKind::from_str(type_str)
                                                         } else {
                                                             None
                                                         }
@@ -658,7 +673,7 @@ impl EventListener {
                                                             let event_name = kind.as_event_name();
 
                                                             // Generic 事件特殊处理：使用 event 字段作为事件名，payload 用 payload 字段
-                                                            if kind == DaemonEventKind::Generic {
+                                                            if kind == AppEventKind::Generic {
                                                                 if let (Some(event_name_val), Some(payload_val)) = (
                                                                     raw.get("event").and_then(|v: &serde_json::Value| v.as_str()),
                                                                     raw.get("payload"),
@@ -724,6 +739,6 @@ pub fn get_global_listener() -> &'static EventListener {
 
 /// 简化的 API：启动监听（长连接模式，按事件类型过滤）
 #[cfg(feature = "ipc-client")]
-pub async fn start_listening(kinds: &[DaemonEventKind]) -> Result<(), String> {
+pub async fn start_listening(kinds: &[AppEventKind]) -> Result<(), String> {
     get_global_listener().start(kinds).await
 }

@@ -12,8 +12,8 @@ use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 #[cfg(feature = "web")]
 use crate::web::server::SseMessage;
-use kabegame_core::ipc::events::DaemonEventKind;
-use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
+use kabegame_core::ipc::events::AppEventKind;
+use kabegame_core::ipc::{AppEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
@@ -397,7 +397,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
 
     let broadcaster = EventBroadcaster::global();
     let event_loop_future = async move {
-        let mut rx = broadcaster.subscribe_filtered_stream(&DaemonEventKind::ALL);
+        let mut rx = broadcaster.subscribe_filtered_stream(&AppEventKind::ALL);
         eprintln!("[EVENT_LOOP] ready for receive event");
         while let Some((_, event)) = rx.recv().await {
             let kind = event.kind();
@@ -417,7 +417,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
             // （Android 的 TaskChanged 曾因此完全收不到事件）。
             #[cfg(not(feature = "web"))]
             {
-                let (name, payload) = if let DaemonEvent::Generic { event, payload } = &*event {
+                let (name, payload) = if let AppEvent::Generic { event, payload } = &*event {
                     (event.clone(), payload.clone())
                 } else {
                     (
@@ -431,14 +431,14 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
             match &*event {
                 // 落盘是所有设置写入方的公共收口（命令、爬虫、壁纸轮播……都会改设置），
                 // 只能留在事件循环里；语言与并发等按 key 的副作用已下沉到各自 command。
-                DaemonEvent::SettingChange { .. } => {
+                AppEvent::SettingChange { .. } => {
                     if let Err(e) = Settings::trigger_debounce_save() {
                         eprintln!("保存设置失败 {}", e);
                     }
                 }
                 // surf 的所有导入路径最终都会广播 DownloadState，在这里统一反馈终态。
                 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-                DaemonEvent::DownloadState {
+                AppEvent::DownloadState {
                     id, state, error, ..
                 } if matches!(state, DownloadState::Completed | DownloadState::Failed) => {
                     let dq = TaskScheduler::global().download_queue();
@@ -466,7 +466,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                     }
                 }
                 #[cfg(target_os = "android")]
-                DaemonEvent::TaskChanged { diff, .. } => {
+                AppEvent::TaskChanged { diff, .. } => {
                     // 任务状态变化时刷新汇总(运行数 + 下载快照);完成态由命令内「无下载+无运行」自动转「全部完成」。
                     if diff.get("status").is_some() {
                         refresh_notifications(&app).await;
@@ -479,9 +479,9 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
             #[cfg(all(target_os = "android", not(feature = "web")))]
             if matches!(
                 &*event,
-                DaemonEvent::DownloadState { .. }
-                    | DaemonEvent::DownloadProgress { .. }
-                    | DaemonEvent::DownloadRemoved { .. }
+                AppEvent::DownloadState { .. }
+                    | AppEvent::DownloadProgress { .. }
+                    | AppEvent::DownloadRemoved { .. }
             ) {
                 refresh_notifications(&app).await;
             }
@@ -502,7 +502,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
         Ok(r) => r,
         Err(_) => return,
     };
-    let another = rt.block_on(kabegame_core::ipc::server::check_other_daemon_running());
+    let another = rt.block_on(kabegame_core::ipc::server::check_existing_app_instance());
     if !another {
         return;
     }

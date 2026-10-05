@@ -33,7 +33,7 @@ boot/24h/手动 → unchecked(瞬时,自动 run_check) → checking ──succes
 - **不缓存**：后端内存态、不落盘，进程重启回 `unchecked`；但 **webview 刷新不丢状态**（重新 `get_updater_state` hydrate，下载进度延续）。
 - **Linux 特例**：弹更新弹窗、显示 changelog，但**不能下载**——主操作为「打开发布页」，无 `downloading`/`restartable`。
 
-## 事件（`GlobalEmitter::emit` → `DaemonEvent::Generic` → `app.emit`）
+## 事件（`GlobalEmitter::emit` → `AppEvent::Generic` → `app.emit`）
 
 | 事件名 | 载荷 | 说明 |
 |---|---|---|

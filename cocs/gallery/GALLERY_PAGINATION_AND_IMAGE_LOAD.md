@@ -151,7 +151,7 @@ ImageGrid 把数据变化分成两条通道：
 - 任意返回快照的 `seq < appliedSeq` 时丢弃，旧的在途请求不会覆盖新列表；
 - 读数据期间新发出的事件具有更大的序号，随后会再触发一次拉取，允许多拉但不会漏变更。
 
-### `images-change`（`DaemonEvent::ImagesChange`，`images` 表）
+### `images-change`（`AppEvent::ImagesChange`，`images` 表）
 
 - 后端通过 `GlobalEmitter::emit_images_change` 广播，reason 只包括 `add` / `delete` / `change`。
 - Payload：必带 `seq`、`reason`、`imageIds`，可选 `taskIds` / `surfRecordIds` / `pluginIds`。
@@ -160,7 +160,7 @@ ImageGrid 把数据变化分成两条通道：
 - 删除畅游记录会补发带 `surfRecordIds` 的 `change`；整理每批重写缩略图/兼容路径后会按批补发 `change`。
 - ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
 
-### `image-changed`（`DaemonEvent::ImageChanged`，`ImageInfo` 字段）
+### `image-changed`（`AppEvent::ImageChanged`，`ImageInfo` 字段）
 
 - Payload 为 `seq` + `patches[]`；每组 patch 用 `imageIds` 表示共享同一份 `diff` 的图片。`diff` 键为
   `ImageInfo` camelCase 字段，值是绝对值快照，不是增量。
@@ -172,7 +172,7 @@ ImageGrid 把数据变化分成两条通道：
 - Grid 用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` / `pluginVersion` 变化会自然改变
   metadata cache key，无需额外失效。
 
-### `album-images-change`（`DaemonEvent::AlbumImagesChange`，`album_images` 表）
+### `album-images-change`（`AppEvent::AlbumImagesChange`，`album_images` 表）
 
 - `image_events.rs` 的私有发送器保证每条事件只描述一个画册；公开写入口统一为
   `emit_membership_added` / `emit_membership_removed`，`imageIds` 只含实际插入或删除的成员。

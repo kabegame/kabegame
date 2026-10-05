@@ -1,4 +1,4 @@
-//! CLI daemon 模块：IPC 服务端、客户端和事件监听
+//! IPC 服务端、客户端和事件监听模块。
 //!
 //! 模块结构：
 //! - 公共部分（events, ipc）：所有模块共享
@@ -11,7 +11,7 @@ pub mod events;
 pub mod ipc;
 
 // 共享导出（客户端和服务端都需要）
-pub use events::DaemonEvent;
+pub use events::AppEvent;
 pub use ipc::{IpcRequest, IpcResponse};
 
 // ==================== 服务器模块（需要 ipc-server feature） ====================

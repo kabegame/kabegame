@@ -123,7 +123,7 @@ defineProps<{
 **f. 画册事件没有位置信息**（`src-tauri/kabegame-core/src/emitter.rs:461`、`storage/image_events.rs`）
 ```rust
 pub fn emit_album_deleted(&self, album_id: &str) {
-    let event = Arc::new(DaemonEvent::AlbumDeleted { album_id: album_id.to_string() });  // 现状：只有 id
+    let event = Arc::new(AppEvent::AlbumDeleted { album_id: album_id.to_string() });  // 现状：只有 id
     /* ... */
 }
 // AlbumImagesChangePayload { seq, reason, album_ids, image_ids }                      // 现状：无 ancestorPath
@@ -221,11 +221,11 @@ adapters/album.ts               removeImagesFromAlbum、applyAlbumImagesChanges
 
 ## 点 3 — 后端：画册类事件带 `ancestorPath`
 
-- **修改** `DaemonEvent::AlbumImagesChange` 增加 `#[serde(rename = "ancestorPath")] ancestor_path: String`；
+- **修改** `AppEvent::AlbumImagesChange` 增加 `#[serde(rename = "ancestorPath")] ancestor_path: String`；
   `image_events.rs` 的私有 `emit_album_images_change` 发送前取该画册的 `ancestor_path`。
   > 说明：`emit_membership_added/removed` 已有成员查询，实施时在同一次加锁里把涉及画册的 `ancestor_path`
   > 一并取出（`SELECT id, ancestor_path FROM albums WHERE id IN (...)`），不为每条事件单独查。
-- **修改** `DaemonEvent::AlbumDeleted` 增加 `parent_id` 与 `ancestor_path`（删除前取）；`emit_album_deleted`
+- **修改** `AppEvent::AlbumDeleted` 增加 `parent_id` 与 `ancestor_path`（删除前取）；`emit_album_deleted`
   改收 `&Album`。
 - **修改** `move_album` 发出的 `album-changed` 的 `changes` 同时带新的 `ancestorPath` 与 `oldAncestorPath`。
   > 说明：移动同时影响旧父链与新父链的计数与结构，两条路径都要让前端知道。

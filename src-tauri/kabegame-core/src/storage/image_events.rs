@@ -4,7 +4,7 @@
 use crate::emitter::dispatch_view_event;
 use crate::emitter::{next_change_seq, GlobalEmitter};
 #[cfg(feature = "ipc-server")]
-use crate::ipc::events::DaemonEvent;
+use crate::ipc::events::AppEvent;
 use crate::storage::albums::AddToAlbumResult;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
 use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
@@ -88,7 +88,7 @@ fn emit_album_images_change(
             .unwrap_or_else(|| format!("/{album_id}/")),
     };
     #[cfg(feature = "ipc-server")]
-    dispatch_view_event(Arc::new(DaemonEvent::AlbumImagesChange {
+    dispatch_view_event(Arc::new(AppEvent::AlbumImagesChange {
         seq: payload.seq,
         reason: payload.reason.clone(),
         album_ids: payload.album_ids.clone(),
@@ -381,14 +381,14 @@ mod tests {
     #[cfg(feature = "ipc-server")]
     #[tokio::test(flavor = "current_thread")]
     async fn hidden_field_change_emits_patch_before_view_invalidation() {
-        use crate::ipc::events::{DaemonEvent, DaemonEventKind};
+        use crate::ipc::events::{AppEvent, AppEventKind};
         use crate::ipc::server::EventBroadcaster;
         use tokio::time::{timeout, Duration};
 
         let _ = EventBroadcaster::init_global(16);
         let _ = GlobalEmitter::init_global();
-        let mut patch_rx = EventBroadcaster::global().subscribe(DaemonEventKind::ImageChanged);
-        let mut change_rx = EventBroadcaster::global().subscribe(DaemonEventKind::ImagesChange);
+        let mut patch_rx = EventBroadcaster::global().subscribe(AppEventKind::ImageChanged);
+        let mut change_rx = EventBroadcaster::global().subscribe(AppEventKind::ImagesChange);
         let forward = tokio::spawn(EventBroadcaster::start_forward_task());
 
         let image_ids = vec!["image-a".to_string(), "image-b".to_string()];
@@ -405,7 +405,7 @@ mod tests {
         forward.abort();
 
         let (patch_seq, patches) = match &*patch_event {
-            DaemonEvent::ImageChanged { seq, patches } => (*seq, patches),
+            AppEvent::ImageChanged { seq, patches } => (*seq, patches),
             event => panic!("unexpected patch event: {event:?}"),
         };
         assert_eq!(patches.len(), 1);
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(patches[0].diff, json!({ "isHidden": true }));
 
         let change_seq = match &*change_event {
-            DaemonEvent::ImagesChange {
+            AppEvent::ImagesChange {
                 seq,
                 reason,
                 image_ids: changed,
