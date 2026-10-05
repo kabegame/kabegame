@@ -115,7 +115,15 @@
                 "in_need": true
             }
         ],
-        "order": [{ "sql": "images.crawled_at", "order": "asc" }],
+        // `images.id` 是全序兜底,不是额外的排序维度:gallery 的每条排序都必须以它收尾。
+        // 单键排序在并列组上不是全序,ORDER BY ... LIMIT 的 top-N sorter 与全量 sort 可以给
+        // 同一组并列行不同次序 —— 那会让分页在并列跨页处重复/漏行,也会让
+        // `~~/rank/~~/id_<id>` 的定位落到相邻页。各 sort provider 用 clear:"all" 清掉本条后
+        // 要自己补回 images.id;`/desc` 的 {all:"revert"} 会连兜底一起翻转,正好是整个升序列的逆序。
+        "order": [
+            { "sql": "images.crawled_at", "order": "asc" },
+            { "sql": "images.id", "order": "asc" }
+        ],
         "join": [{
             "kind": "LEFT",
             "table": "album_images",

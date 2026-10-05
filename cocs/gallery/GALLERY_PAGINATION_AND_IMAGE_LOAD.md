@@ -79,6 +79,58 @@
 - [`apps/kabegame/src/composables/usePagedGallery.ts`](/apps/kabegame/src/composables/usePagedGallery.ts)
   只负责页码、越界回退与预览跨页，数据和总数由同一个视图快照更新。
 
+### 预览深链接定位（`pvwimgid` 指向视图外的图）
+
+`ImagePreviewDialog` 的 `image` prop 允许只传裸 id，但开启跟页时不提前走这条单图路线。
+带 `pvwimgid` 的链接先记录目标预览 id，等待当前路径的快照应用完成；在本页找到行就显示，
+否则按当前过滤与排序算出序号，换成页码跳过去，直到目标页快照确认后才传入 `ImageInfo`。
+
+序号由一条 PathQL 路径给出，形态是 `<当前视图去掉分页尾>/~~/rank/~~/id_<id>`：
+
+```
+images://gallery/hide/album/<id>/sort/by-time/desc  /~~/ rank /~~/ id_2719
+└───── 内层 pq_nest_1：过滤 + ORDER BY，无 LIMIT ─────┘      │         │
+                                     打 row_index 列 ───────┘         │
+                             既有 id_<id> 路由挑出目标行 ──────────────┘
+```
+
+- 必须分三层：窗口函数在 `WHERE` 之后求值，`WHERE id = ?` 与 `ROW_NUMBER()` 同层时序号恒为 1。
+- 内层**不能带分页**：定位要的是全集里的位置。前端用 `stripPageTail`（只剥 `[x<N>x/]<页码>`，
+  **保留 `desc` 与排序段**）从 `routeStore.computedPath` 推出内层；不要复用
+  `stripComposablePathTail`，它连 `desc` 一起剥，会把序号算反。
+- `ROW_NUMBER() OVER ()` 不写 ORDER BY，靠的是 `~~` 把内层冻结为物化 CTE 后、扫描序即内层
+  `ORDER BY` 序（见 `cocs/provider-dsl/RULES.md` §2.1）。**前提是排序为全序**：gallery 的每条
+  sort provider 都以 `images.id asc` 收尾，`gallery_route` 的默认排序同样带这条兜底。
+  少了它，`ORDER BY … LIMIT` 的 top-N sorter 与全量 sort 可能给同一并列组不同次序 —— 定位会落到
+  相邻页，分页本身也会在并列跨页处重复/漏行。
+- 空结果 = 这张图**不在该视图里**（被过滤掉、或 `hide/` 开着而它已隐藏），不是错误：保持单图模式。
+- `page = floor((row_index - 1) / pageSize) + 1`。页大小不进路径，换页大小不必重查。
+
+统一入口是 `reconcilePreviewForReadyPage`：观察目标 id、列表、路径、激活状态与跟页开关，
+只在 `loadedKey === rawViewPath()` 且 `!liveQuery.loading` 时协调。`liveQuery` 按查询 key 计数真实
+在途读取，必须等快照应用和当前 key 的全部请求结束；旧页返回不能提前结束新页 loading，
+同路径刷新也不会拿旧快照先定位。URL 入口只设置目标 id，不负责取图或定位；列表更新、
+手动翻页、过滤变化和重新开启开关都走同一个入口。用户隐藏/删除导致当前图离开视图时仍由
+下标锚点（`previewAnchor`）先接管，不能定位旧图。预览上/下一张跨页时，`pendingPreviewBoundary`
+持续到分页器交出新 id，跟页协调暂不介入，避免定位切换前的旧图。
+
+弹窗的 `ImageInfo` 保存在 `ImageGrid.previewImageInfo`，不直接由 `images` 的当前页成员计算。
+快照先更新网格，随后检查当前 id：找到就更新预览对象；没找到则保留上一份对象直到定位与翻页
+完成。`jumpToPage()` 只等待路由导航，不保证数据已到；必须等目标页快照实际包含同一 id，才能
+替换成目标页的行。整个阶段 `image` prop 不经过字符串/null，图片内容和 Panzoom 实例不会因
+所有权切换卸载，缩放和平移得以保留。首次打开没有旧对象时保持 `null`，目标页确认之前不打开
+弹窗；只有定位为空或关闭跟页时才交给裸 id 的单图路线。定位错误不等于不在视图中，保留旧预览
+或等待态，后续快照再次尝试。因等待新 URL 目标而收起旧弹窗的 close 回报，不得取消新目标。
+
+定位防重只覆盖在途请求及同一 `<分页路径, id, 页大小, 快照 seq>` 的重复尝试，不永久缓存
+`<视图>|<id>`。目标页到达时如果持续下载又改变了位置，按该快照重新定位；后续跨页同样可以
+重新定位。切图、关预览、停用视图、手动导航或关闭开关会使旧请求失效，迟到结果不能改页。
+手动导航后若目标 id 未取消且仍开启跟页，新页就绪后会重新定位到该 id；防重命中不代表不存在，
+不得清空旧对象或开启裸 id 模式。
+
+开关是「外观」里的 `previewFollowPage`（localStorage 后端，**默认开**）。关掉后不查序号、不跳页，
+弹窗仍以裸 id 把那张图画出来，只是没有左右箭头 —— 即重构后的单图模式本身。
+
 ### Metadata 详情与前端缓存
 
 - **Composable**：[`packages/core/src/composables/useImageMetadataCache.ts`](/packages/core/src/composables/useImageMetadataCache.ts) — `useProvideImageMetadataCache()` 向子组件树 `provide` 懒加载解析器（内部 `Map` 缓存 + `invoke("get_image_metadata", { imageId })`）。
@@ -196,6 +248,12 @@ ImageGrid 把数据变化分成两条通道：
 4. **删除后列表延迟或闪回**：确认调用从 `ctx.mutate` 传入了 `view`，返回快照的 `seq` 被
    `liveQuery.apply` 接收；不要靠 `images-change` 回刷当前操作。
 5. **任务/畅游详情收到无关刷新**：检查 hub 批次的 `wildcard.task/surf`。缺维度必须刷新，带维度时才允许按 id 排除。
+6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
+   `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在
+   该视图（检查 `hide/` 与过滤段）；有 `row_index` 但页码不对，查前端是否误用了
+   `stripComposablePathTail` 而把 `desc` 剥掉了。
+7. **定位落到相邻页 / 分页在某处重复或漏行**：当前排序不是全序。检查该 sort provider 的 `order` 是否
+   以 `images.id asc` 收尾 —— 用了 `clear: "all"` 的 provider 必须自己补回这条兜底。
 
 ## 涉及文件（速查）
 
@@ -211,3 +269,5 @@ ImageGrid 把数据变化分成两条通道：
 | 变更聚合 | `apps/kabegame/src/services/dataChangeHub.ts` |
 | 实时查询 | `apps/kabegame/src/services/liveQuery.ts` |
 | 列表加载 | `apps/kabegame/src/components/ImageGrid.vue` |
+| 深链接定位（前端） | `apps/kabegame/src/services/imageLocate.ts` |
+| 序号 provider | `src-tauri/kabegame-core/src/providers/dsl/shared/rank_provider.json5` |

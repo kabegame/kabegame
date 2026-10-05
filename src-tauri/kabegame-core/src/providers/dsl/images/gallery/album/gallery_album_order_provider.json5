@@ -2,7 +2,10 @@
     "namespace": "kabegame",
     "name": "gallery_album_order_provider",
     "query": {
-        "order": [{ "sql": "COALESCE(ai.\"order\", ai.rowid)", "order": "asc", "prepend": true, "clear": "all" }]
+        "order": [
+            { "sql": "COALESCE(ai.\"order\", ai.rowid)", "order": "asc", "prepend": true, "clear": "all" },
+            { "sql": "images.id", "order": "asc" }
+        ]
     },
     "resolve": {
         "desc|x[1-9][0-9]*x|[1-9][0-9]*": {

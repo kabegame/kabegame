@@ -137,6 +137,9 @@
               <SettingRow :label="$t('settings.imageFit')" :description="$t('settings.imageFitDesc')">
                 <SettingRadioControl setting-key="imageFit" :options="imageFitOptions" />
               </SettingRow>
+              <SettingRow :label="$t('settings.previewFollowPage')" :description="$t('settings.previewFollowPageDesc')">
+                <SettingSwitchControl setting-key="previewFollowPage" />
+              </SettingRow>
               <SettingRow
                 :label="$t('settings.appBackgroundEnabled')"
                 :description="$t('settings.appBackgroundEnabledDesc')"

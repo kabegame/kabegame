@@ -815,7 +815,7 @@ const startImageSubscription = (id: string) => {
       // 收藏 / 隐藏是画册成员变更，走 album-images-change，不在 imageIds 里
       batch.albumImageIds.has(id) ||
       batch.favoriteOps.some((op) => op.imageIds.includes(id)) ||
-      // 末项兜 wildcard：范围未知的批次必须当作命中自己，漏了会静默不刷新
+      // 末项兜 wildcard：范围未知的批次必须当作命中自己，漏了会静默不刷新，允许资源倾斜所以放着，建议打开跟页设置
       batch.images.size > 0,
     onBatch: async (batch) => {
       if (currentId.value !== id) return;

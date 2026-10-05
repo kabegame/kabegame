@@ -102,7 +102,14 @@ import type {
 } from "@/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
-import { singleFilterToSet, queryFromFilterSet, type GalleryFilter, type GalleryQuery } from "@/utils/galleryPath";
+import {
+  singleFilterToSet,
+  queryFromFilterSet,
+  stripPageTail,
+  type GalleryFilter,
+  type GalleryQuery,
+} from "@/utils/galleryPath";
+import { locateImageRowIndex, pageOfRowIndex } from "@/services/imageLocate";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
@@ -268,6 +275,22 @@ const clearSelection = () => {
 // （拿别的视图的 id 误开预览，或把 query 误写到当前其它路由）。非 keep-alive 场景下
 // onActivated/onDeactivated 不触发，保持默认 true 即原行为。
 const isRouteActive = ref(true);
+/** 当前预览中的图片 id（未预览为 null），先于数据层初始化。 */
+const previewedId = ref<string | null>(null);
+/** 弹窗持有的行：定位与目标页加载期间保留旧对象，不能随 images 缺行退化成裸 id。 */
+const previewImageInfo = shallowRef<CoreImageInfo | null>(null);
+/** 只有关闭跟页或 rank 确认不在视图中后，才允许弹窗走裸 id 单图路线。 */
+const previewSingleImage = ref(false);
+const previewAnchor = ref<{ id: string; index: number } | null>(null);
+let latestSnapshotSeq = 0;
+type PreviewLocateRequest = {
+  id: string;
+  viewBody: string;
+  path: string;
+  targetPage: number | null;
+};
+let pendingPreviewLocate: PreviewLocateRequest | null = null;
+let lastLocateAttempt: string | null = null;
 
 /* ---------------- 数据层 ----------------
  * 本组件持有 images / loadedKey，接管路径加载、usePagedGallery 分页、
@@ -319,7 +342,10 @@ const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
   images.value = snapshot.rows.map(rowToImageInfo);
   totalImagesCount.value = snapshot.total;
   loadedKey.value = raw;
+  latestSnapshotSeq = snapshot.seq;
   lastRemovedIds = [];
+  // 先结算用户主动操作，再决定是否跟页；预览对象仍是上一帧的 ImageInfo。
+  if (sameView) resolvePreviewAnchor();
 
   if (!sameView) return;
   if (container) container.scrollTop = previousScrollTop;
@@ -332,8 +358,6 @@ const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
       currentWallpaperImageId.value = null;
     }
   }
-  // 锚点必须在页码兜底之前结算：ensurePageAfterRemoval 可能再次换页换列表
-  resolvePreviewAnchor();
   if (removedIds.length > 0 || images.value.length === 0) {
     await ensurePageAfterRemoval();
   }
@@ -440,6 +464,13 @@ const patchMany = (patches: ReadonlyMap<string, Partial<CoreImageInfo>>) => {
     return { ...image, ...fields };
   });
   if (changed) images.value = next;
+  const previewFields = previewImageInfo.value && patches.get(previewImageInfo.value.id);
+  if (previewFields && previewImageInfo.value) {
+    previewImageInfo.value = images.value.find((image) => image.id === previewedId.value) ?? {
+      ...previewImageInfo.value,
+      ...previewFields,
+    };
+  }
 };
 
 const patch: GridRefreshContext["patch"] = (ids, fields) => {
@@ -468,7 +499,10 @@ onMounted(() => {
     },
   });
 });
-onBeforeUnmount(() => unsubscribeImageChanges?.());
+onBeforeUnmount(() => {
+  unsubscribeImageChanges?.();
+  pendingPreviewLocate = null;
+});
 
 // 图片操作通过 mutate / patch 接入主动更新通道。
 const {
@@ -618,14 +652,27 @@ const previewImageInView = computed<CoreImageInfo | null>(() => {
 
 /**
  * 列表里有就给 ImageInfo（弹窗以 props 为准、不取数，首帧不闪白；保鲜由 patchMany 负责），
- * 没有就只给 id，由弹窗自己解析并自行保鲜。
- * 上层因此不需要为视图外的图维护任何额外状态。
+ * 首次打开在页面就绪且找到行之前传 null；只有确认在视图外或关闭跟页才传裸 id。
+ * 跟页期间继续传入上一份 ImageInfo，目标快照包含该 id 时才替换为新行。
  */
 const previewProp = computed<string | CoreImageInfo | null>(() => {
   const id = previewedId.value;
   if (!id) return null;
-  return previewImageInView.value ?? id;
+  if (previewImageInfo.value?.id === id) return previewImageInfo.value;
+  return previewSingleImage.value ? id : null;
 });
+
+// 切图/关闭使旧定位失效；同一 id 的列表刷新只在快照协调中更新 ImageInfo。
+watch(
+  previewedId,
+  (id) => {
+    pendingPreviewLocate = null;
+    lastLocateAttempt = null;
+    previewSingleImage.value = false;
+    previewImageInfo.value = null;
+  },
+  { flush: "sync" },
+);
 
 const previewIdx = computed(() => {
   const id = previewedId.value;
@@ -665,10 +712,10 @@ const previewCanNext = computed(
  * 关着的时候隐藏当前图，图还留在视图里，这时不该跳；HIDDEN 画册详情内 forceUnhide
  * 又把语义翻成「取消隐藏」。唯一可靠的判据是「变更后该 id 还在不在视图里」。
  */
-const previewAnchor = ref<{ id: string; index: number } | null>(null);
-
 /** remove / deleteFile 要过确认对话框，所以锚点必须跨对话框存活，不能只包同步调用。 */
 const capturePreviewAnchor = () => {
+  pendingPreviewLocate = null;
+  lastLocateAttempt = null;
   const id = previewedId.value;
   if (!id) {
     previewAnchor.value = null;
@@ -682,8 +729,8 @@ const clearPreviewAnchor = () => {
 };
 
 /**
- * 在 applyViewSnapshot 尾部调用——那里是 images.value 被替换的唯一漏斗。
- * 无锚点时什么都不做：这正是「事件路线不搬用户视图」的落点。
+ * 在 applyViewSnapshot 更新列表后调用——那里是 images.value 被替换的唯一漏斗。
+ * 无锚点时保留当前 id，后台新增造成的跨页由快照协调负责。
  */
 const resolvePreviewAnchor = () => {
   const anchor = previewAnchor.value;
@@ -701,8 +748,6 @@ const resolvePreviewAnchor = () => {
  * emit preview-open/navigate/close 并暴露 openPreviewById/closePreview。
  */
 const { settingValue: previewImageId, set: setPreviewImageId } = useSettingKeyState("previewImageId");
-/** 当前预览中的图片 id（未预览为 null） */
-const previewedId = ref<string | null>(null);
 
 const readPreviewId = (): string | null => {
   const v = previewImageId.value;
@@ -719,21 +764,142 @@ watch(previewedId, (id) => {
 });
 
 /**
- * 列表就绪门控：预览只在当前视图列表加载完毕后才打开。
- *
- * 这不是优化，是正确性前提：列表没就绪时 previewProp 会先退化成裸 id 形式，
- * 等列表到了再翻成 ImageInfo —— 当前图的所有权在打开瞬间易手。门控之后，
- * 打开时 props 形式就是终态，canPrev/canNext 与邻居在首帧也是对的（箭头不会先隐后显）。
+ * 当前路径快照已应用且该查询的真实读取全部结束才算就绪；导航 promise 和延迟遮罩不是信号。
+ * URL 先记录目标 id，但没有确认行之前不传裸 id，让弹窗绕过跟页自行取图。
  */
-const previewListReady = computed(() => !!loadedKey.value && loadedKey.value === rawViewPath());
+const previewListReady = computed(
+  () => !!loadedKey.value && loadedKey.value === rawViewPath() && !liveQuery.loading.value,
+);
+
+/** 外观设置「预览自动跟随视图翻页」，默认开。 */
+const previewFollowPage = computed(() => settingsStore.values.previewFollowPage !== false);
+
+/**
+ * 快照协调只在确认当前行存在时更新预览对象。后台刷新使图离开本页时先定位，
+ * 定位成功后的导航不算落地；目标页快照找到同一 id 才结束保留旧对象的阶段。
+ */
+function reconcilePreviewForReadyPage() {
+  const id = previewedId.value;
+  if (!id || !previewListReady.value || !isRouteActive.value || !adapter.isActive()) return;
+  // 上/下一张跨页时，分页器会在目标页就绪后选择首/末张；不能定位切换前的旧 id。
+  if (paged.pendingPreviewBoundary.value) return;
+  const image = images.value.find((row) => row.id === id);
+  if (image) {
+    pendingPreviewLocate = null;
+    lastLocateAttempt = null;
+    previewSingleImage.value = false;
+    previewImageInfo.value = image;
+    return;
+  }
+
+  const pending = pendingPreviewLocate;
+  if (pending && pending.id === id && pending.viewBody === stripPageTail(rawViewPath())) {
+    if (pending.targetPage == null) return; // 序号请求仍在途，保留上一帧
+    if (pending.targetPage !== adapter.routeStore.page) return; // 仍在导航，等目标页快照
+    // 下载可能在 rank 与目标页 fetch 之间再次改变位置，用目标快照重算。
+    pendingPreviewLocate = null;
+  }
+
+  if (previewFollowPage.value) {
+    void locatePreviewedImage(id);
+    return;
+  }
+  pendingPreviewLocate = null;
+  previewImageInfo.value = null;
+  previewSingleImage.value = true; // 不跟页：交给弹窗的单图路线
+}
+
+// 唯一协调入口：每次当前页数据就绪，再检查目标 id，而不是由 URL/下载来源分别发起定位。
+watch(
+  () => [
+    previewedId.value,
+    previewListReady.value,
+    images.value,
+    rawViewPath(),
+    previewFollowPage.value,
+    isRouteActive.value,
+    paged.pendingPreviewBoundary.value,
+  ],
+  reconcilePreviewForReadyPage,
+  // 在渲染前完成同一轮协调，切图不会把中间的 null 传给已经打开的弹窗。
+  { flush: "pre" },
+);
+
+/** URL 深链接和后台刷新共用定位；只防在途请求与同一快照的重复尝试。 */
+async function locatePreviewedImage(id: string) {
+  if (!previewListReady.value || !previewFollowPage.value || !isRouteActive.value || !adapter.isActive()) return;
+  const image = images.value.find((row) => row.id === id);
+  if (image) {
+    previewImageInfo.value = image;
+    return;
+  }
+  const path = rawViewPath();
+  const viewBody = stripPageTail(path);
+  if (!viewBody) return;
+  if (pendingPreviewLocate?.id === id && pendingPreviewLocate.path === path) return;
+  const attempt = JSON.stringify([path, id, adapter.routeStore.pageSize, latestSnapshotSeq]);
+  if (lastLocateAttempt === attempt) return; // 防循环不是“找不到”，继续保留预览
+  lastLocateAttempt = attempt;
+  // 已确认在视图外的单图预览重查时也不先收起，直到新的页面确认再交接对象。
+  const request: PreviewLocateRequest = { id, viewBody, path, targetPage: null };
+  pendingPreviewLocate = request;
+  const isCurrent = () =>
+    pendingPreviewLocate === request &&
+    previewedId.value === id &&
+    previewFollowPage.value &&
+    isRouteActive.value &&
+    adapter.isActive() &&
+    rawViewPath() === path;
+  try {
+    const rowIndex = await locateImageRowIndex(viewBody, id);
+    if (!isCurrent()) return;
+    if (rowIndex == null) {
+      pendingPreviewLocate = null;
+      previewImageInfo.value = null;
+      previewSingleImage.value = true;
+      return;
+    }
+    const page = pageOfRowIndex(rowIndex, paged.pageSize.value);
+    request.targetPage = page;
+    if (page === paged.currentPage.value) {
+      // rank 已读到更新的数据，而本页快照还没跟上，重取本页后再协调。
+      await liveQuery.refetch();
+    } else {
+      await jumpToPage(page);
+    }
+    // 不在这里清 request / 替换 ImageInfo：navigate 完成不代表页面数据已加载。
+  } catch (error) {
+    if (pendingPreviewLocate !== request || previewedId.value !== id) return;
+    pendingPreviewLocate = null;
+    // 请求错误不等于图片不在视图中；保留旧预览，后续快照就绪可再次尝试。
+    console.warn("[preview] 定位失败", id, error);
+  }
+}
+
+// 用户手动换视图/页码、切走页面或关掉跟页时，取消旧请求，防止迟到结果搬回原视图。
+watch(
+  () => [rawViewPath(), isRouteActive.value, previewFollowPage.value] as const,
+  ([path, active, follow]) => {
+    const pending = pendingPreviewLocate;
+    const atRequestedPage =
+      pending?.targetPage != null &&
+      pending.targetPage === adapter.routeStore.page &&
+      pending.viewBody === stripPageTail(path);
+    if (!pending || !active || !follow || (path !== pending.path && !atRequestedPage)) {
+      pendingPreviewLocate = null;
+      lastLocateAttempt = null;
+      previewSingleImage.value = false;
+    }
+  },
+  { flush: "sync" },
+);
 
 // URL -> state
-const applyPreviewFromUrl = async () => {
-  if (!isRouteActive.value) return; // 仅激活视图响应全局 pvwimgid
+const applyPreviewFromUrl = () => {
+  if (!isRouteActive.value) return;
   const id = readPreviewId();
   if (id) {
-    if (id === previewedId.value) return; // 回声，忽略
-    if (!previewListReady.value) return; // 列表没就绪：等下面的 watch 兑现
+    if (id === previewedId.value) return;
     previewedId.value = id;
   } else if (previewedId.value != null) {
     previewedId.value = null;
@@ -768,14 +934,6 @@ onDeactivated(() => {
   clearSelection();
 });
 watch(() => previewImageId.value, applyPreviewFromUrl); // 前进/后退、外部改动
-// 列表就绪后兑现待打开的 id（见 previewListReady 的门控说明）
-watch(
-  previewListReady,
-  (ready) => {
-    if (ready && readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
-  },
-  { flush: "post" },
-);
 
 function handlePreviewOpen(payload: { image: ImageInfo }) {
   previewedId.value = payload.image.id;
@@ -819,6 +977,8 @@ function handlePreviewResolveFailed(payload: { id: string; reason: "missing" | "
   previewedId.value = null;
 }
 function handlePreviewClose(payload: { image: ImageInfo | null }) {
+  // 换入尚未确认的 URL 目标时，null prop 会关闭旧弹窗；这是展示清理，不是取消新目标。
+  if (previewedId.value && previewProp.value == null) return;
   previewedId.value = null;
   clearPreviewAnchor();
   adapter.analytics?.trackPreviewClose(payload);

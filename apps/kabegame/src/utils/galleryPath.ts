@@ -292,6 +292,26 @@ export function stripComposablePathTail(path: string): string {
   return segs.slice(0, i).join("/");
 }
 
+/**
+ * 只剥分页尾 `[x<N>x/]<页码>`，**保留 `desc` 与排序段**。
+ *
+ * 与 `stripComposablePathTail` 的区别就在 `desc`：计数路径不关心顺序，所以那边连 `desc`
+ * 一起剥；而「这张图在当前排序下排第几」必须保留完整排序，`desc` 被剥掉会把序号算反。
+ */
+export function stripPageTail(path: string): string {
+  const trimmed = (path || "").trim().replace(/\/+$/g, "");
+  if (!trimmed) return "";
+  const segs = trimmed.split("/").filter(Boolean);
+  let i = segs.length;
+  if (i > 0 && /^[1-9][0-9]*$/.test(segs[i - 1]!)) {
+    i--;
+    if (i > 0 && /^x[1-9][0-9]*x$/.test(segs[i - 1]!)) {
+      i--;
+    }
+  }
+  return segs.slice(0, i).join("/");
+}
+
 /** 从原始(未 decode)路径段数组中剥离形如 `search/<mode>/<q>/` 的前缀(若存在)。
  *  旧形态的路径把搜索段放在 root 之前，`extractRootIdAndBody` 靠它兼容。 */
 function splitLeadingSearchSegments(segs: string[]): { segments: string[]; rest: string[] } {

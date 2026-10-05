@@ -153,9 +153,17 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       const image = pending.direction === "next" ? list[0] : list[list.length - 1];
       if (!image) return;
 
-      pendingPreviewBoundary.value = null;
+      const loadedPath = params.loadedKey.value;
       await nextTick();
+      if (
+        pendingPreviewBoundary.value !== pending ||
+        currentPage.value !== pending.targetPage ||
+        params.loadedKey.value !== loadedPath ||
+        loadedPath !== currentPath.value
+      )
+        return;
       params.viewRef.value?.openPreviewById?.(image.id);
+      pendingPreviewBoundary.value = null;
       ElMessage.info(pending.direction === "next" ? messages.next : messages.prev);
     },
     { flush: "post" },
@@ -164,6 +172,13 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
   watch(
     currentPath,
     async (newPath) => {
+      const pending = pendingPreviewBoundary.value;
+      if (
+        pending &&
+        (currentPage.value !== pending.targetPage || (pending.targetPath && pending.targetPath !== newPath))
+      ) {
+        pendingPreviewBoundary.value = null;
+      }
       if (!params.isActive()) return;
       if (!newPath) return;
       if (params.loadedKey.value === newPath) return;

@@ -68,9 +68,12 @@ composed  = provider.query.apply(composed)               // schema root 贡献
 
 for seg in segments:
     if seg == "~~":                                      // 子查询边界，见 §2.1
-        composed = ProviderQuery { from: Subquery(composed, alias = schema.table) }
-        provider = schema.root_provider
-        composed = provider.query.apply(composed)        // 从根重新折叠
+        composed = ProviderQuery {                       // 全新一层：where/order/limit/group_by 皆空
+            from = Subquery(composed, alias = schema.table),
+            fields = [ "<alias>.*" ],                    // 唯一的初始贡献，承接内层全部列
+        }
+        provider = schema.root_provider                  // 只换 provider 视角
+        // 注意：**不** apply 根 provider 的 query —— 根的 fields/join/order 不重放
         continue
     child = provider.resolve(seg, composed)             // 字面 / 正则 / dyn fallback
     composed = child.query.apply(composed)              // 折叠
@@ -101,14 +104,25 @@ A/~~/B/~~/C  ⇒  C(from B(from A))
 
 - 走到 `~~` 时，引擎把当前 composed 原样冻结，新建一层令其 FROM 为内层、别名为 schema 的**表名**，并以
   一条 `<表名>.*` 承接内层 SELECT 的全部列；边界后只把 provider 视角切回 schema 根，**不重放**根 provider
-  的 fields 等贡献。provider 因此永远只写 `albums.xxx`，不知道自己在第几层；也不需要任何 provider 声明
+  的任何 query 贡献（fields / join / where / order 一概不重放，见 `runtime.rs` 的 `SegmentKind::Nest`
+  分支与 `ProviderQuery::from_nested`）。所以新一层的初始贡献**只有**那条 `<表名>.*`。
+  provider 因此永远只写 `albums.xxx`，不知道自己在第几层；也不需要任何 provider 声明
   子查询（provider 没有全局视角）。
 - 切回根而不是停在当前 provider：分页等终端 provider 没有后续路由，根持有该 scheme 的完整路由表；
   `list("…/~~")` 即根的列举。外层列名就是内层 SELECT 的列名；裸列或表达式列的列名由 SQL 方言决定，
   需要稳定列名时必须显式写 `as`。
-- 新一层只继承 fields：内层的 `where` / `order` / `limit` / `offset` / `group_by` 都不继承，`where_clear`
-  也清不到内层（已冻结）。`order.entries` 与 `order.global` 全部丢弃；`/desc` 等全局排序修饰符必须写在
-  边界之后那一层，边界之后没有 `ORDER BY` 时结果顺序不保证。
+- **内层照原样渲染，外层从空状态起步** —— 两件事别混：
+  - 内层已冻结，它自己的 `where` / `order` / `limit` / `offset` / `group_by` **全部保留并渲染进 CTE**
+    （`render_nest_ctes` 调的是 `inner.render_select_stmt`，该函数含 `render_order` 与
+    `render_pagination`）。所以边界**之前**的 `/desc`、排序段和分页段都照常生效，是内层结果集的一部分。
+  - 外层是全新一层：`order.entries` / `order.global` / `where` / `limit` / `group_by` 都从空开始，
+    不是"继承后丢弃"。`where_clear` 也清不到内层（已冻结）。
+  - 由此推论：**外层没写 `ORDER BY` 时，外层的输出顺序不保证**。需要稳定的输出顺序就在边界之后再排一次。
+    但 SQLite / Postgres 下 CTE 是 `AS MATERIALIZED`（物化成临时表），顺序敏感的窗口函数
+    （`ROW_NUMBER() OVER ()`）扫它拿到的就是内层 `ORDER BY` 的顺序 —— `images://…/~~/rank/~~/id_<id>`
+    的序号定位即建立在此，见 `shared/rank_provider.json5` 与 `dsl_e2e.rs` 的
+    `gallery_rank_locates_image_position_within_view`（含一个 122 行全并列组的逐项比对）。
+    依赖这一点的前提是内层排序为**全序**，否则并列组内次序可能与分页查询不一致。
 - 约束：`~any` / `~not` 组内不得出现 `~~`（分支是旁路，封进去的只是当前分支视角）；程序化 schema
   （§3.1）没有 SQL 可封装，出现 `~~` 报 `SubqueryUnsupported`；`~~x` 这类以 `~` 开头的非记号段仍报错，
   字面段写 `\~~`。

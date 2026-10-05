@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, watch } from "vue";
 import { subscribeChanges, type ChangeBatch } from "@/services/dataChangeHub";
 import { pathqlView } from "@/services/pathql";
 import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
@@ -43,6 +43,12 @@ export function useLiveQuery(opts: {
 }) {
   let appliedSeq = 0;
   let dirty = false;
+  const pendingQueries = reactive(new Map<string, number>());
+  /** 只统计当前查询的在途读取，旧路径的迟到请求不能改变新页的就绪状态。 */
+  const loading = computed(() => {
+    const query = opts.key();
+    return !!query && (pendingQueries.get(queryKey(query)) ?? 0) > 0;
+  });
 
   const apply = async (snapshot: ViewSnapshot) => {
     if (snapshot.seq < appliedSeq) return;
@@ -60,37 +66,44 @@ export function useLiveQuery(opts: {
     const query = opts.key();
     if (!query) return;
     const key = queryKey(query);
-    const t0 = performance.now(); // DEBUG-PERF
-    let snapshot = shared ? await fetchView(query) : await pathqlView(query);
-    const t1 = performance.now(); // DEBUG-PERF
-    let refetched = false; // DEBUG-PERF
-    if (snapshot.seq < minSeq) {
-      snapshot = await pathqlView(query);
-      refetched = true;
-    } // DEBUG-PERF 仅加了 refetched 标记
-    const t2 = performance.now(); // DEBUG-PERF
-    const current = opts.key();
-    if (!current || queryKey(current) !== key) {
-      perf("lq_drop_key_changed", { rows: query.rows });
-      return;
-    } // DEBUG-PERF 仅加了埋点
-    dirty = false;
-    const prevApplied = appliedSeq; // DEBUG-PERF
-    await apply(snapshot);
-    perf("lq_fetch", {
-      rows: query.rows,
-      shared,
-      minSeq,
-      seq: snapshot.seq,
-      prevApplied,
-      dropped: snapshot.seq < prevApplied,
-      refetched,
-      n: snapshot.rows.length,
-      total: snapshot.total,
-      ipcMs: +(t1 - t0).toFixed(1),
-      refetchMs: +(t2 - t1).toFixed(1),
-      applyMs: +(performance.now() - t2).toFixed(1),
-    }); // DEBUG-PERF
+    pendingQueries.set(key, (pendingQueries.get(key) ?? 0) + 1);
+    try {
+      const t0 = performance.now(); // DEBUG-PERF
+      let snapshot = shared ? await fetchView(query) : await pathqlView(query);
+      const t1 = performance.now(); // DEBUG-PERF
+      let refetched = false; // DEBUG-PERF
+      if (snapshot.seq < minSeq) {
+        snapshot = await pathqlView(query);
+        refetched = true;
+      } // DEBUG-PERF 仅加了 refetched 标记
+      const t2 = performance.now(); // DEBUG-PERF
+      const current = opts.key();
+      if (!current || queryKey(current) !== key) {
+        perf("lq_drop_key_changed", { rows: query.rows });
+        return;
+      } // DEBUG-PERF 仅加了埋点
+      dirty = false;
+      const prevApplied = appliedSeq; // DEBUG-PERF
+      await apply(snapshot);
+      perf("lq_fetch", {
+        rows: query.rows,
+        shared,
+        minSeq,
+        seq: snapshot.seq,
+        prevApplied,
+        dropped: snapshot.seq < prevApplied,
+        refetched,
+        n: snapshot.rows.length,
+        total: snapshot.total,
+        ipcMs: +(t1 - t0).toFixed(1),
+        refetchMs: +(t2 - t1).toFixed(1),
+        applyMs: +(performance.now() - t2).toFixed(1),
+      }); // DEBUG-PERF
+    } finally {
+      const remaining = (pendingQueries.get(key) ?? 1) - 1;
+      if (remaining > 0) pendingQueries.set(key, remaining);
+      else pendingQueries.delete(key);
+    }
   };
 
   /** 显式拉取（首次加载、翻页、手动刷新）：不合并在途请求，错误抛给调用方。 */
@@ -130,6 +143,7 @@ export function useLiveQuery(opts: {
   onBeforeUnmount(() => unsubscribe?.());
 
   return {
+    loading,
     refetch,
     apply,
     view: opts.key,

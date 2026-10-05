@@ -54,6 +54,8 @@
   "galleryLayoutDirectionHorizontal": "水平",
   "imageFit": "图片填充方式",
   "imageFitDesc": "适应=完整显示图片（可能留白）；填充=居中裁切填满格子",
+  "previewFollowPage": "预览自动跟随视图翻页",
+  "previewFollowPageDesc": "预览的图片不在当前页或因视图更新移到其他页时,自动跳到它所在的页;关闭则留在当前页,只显示这一张且不出现左右箭头",
   "imageFitContain": "适应",
   "imageFitCover": "填充",
   "galleryRows": "画廊行数",

@@ -1,0 +1,33 @@
+{
+    "$schema": "../schema.json5",
+    "namespace": "kabegame",
+    "name": "rank_provider",
+    // 给上游查询的每一行附加 1 起的序号列 row_index,用于「这张图在当前视图的第几位」。
+    //
+    // 只能写在子查询边界 `~~` 之后、并且后面还要再接一个 `~~`,形如
+    //   images://gallery/<过滤>/<排序>[/desc]/~~/rank/~~/id_<id>
+    // 三层各自的职责:
+    //   内层 pq_nest_1 — 过滤 + ORDER BY,**没有 LIMIT/OFFSET**(定位要的是全集里的序号)
+    //   中层 pq_nest_2 — 本 provider,按 CTE 的扫描序打 row_index
+    //   外层          — `id_<id>` 挑出目标行,读它的 row_index
+    //
+    // 为什么必须分三层:窗口函数在 WHERE 之后求值,`WHERE id = ?` 和 ROW_NUMBER() 同层时
+    // 序号恒为 1。中层也不能省掉外层自己带 WHERE,原因同上。
+    //
+    // 为什么 `OVER ()` 不写 ORDER BY:排序是上游各 provider 累积出来的,本 provider 看不到;
+    // 但 `~~` 把上游整体冻结成物化 CTE(`AS MATERIALIZED`,见 compose/dialect.rs),内层的
+    // ORDER BY 照常渲染进 CTE,中层扫的就是排好序的临时表。实测 2376 行 / 最大并列组 320 行
+    // 下,本形态算出的序号与逐页 LIMIT/OFFSET 拼出的顺序逐行一致。
+    //
+    // 并列前提:上游排序必须是全序,否则并列组内次序可能与分页查询不一致、定位落到相邻页。
+    // gallery 的各 sort provider 均以 `images.id asc` 收尾来保证这一点。
+    //
+    // 返回行的形态:`images://gallery/...` 的 SELECT 本来就同时有 `images.*` 和一组同名别名列
+    // (见 gallery_route 的 type 注释),单层查询下由 sql_executor 后写胜折成一份;但物化成 CTE 时
+    // SQLite 会把重名输出列消歧成 `width:1` 之类,外层 `images.*` 展开后两份都在。
+    // 消费方只读 `row_index`(名字唯一,不会被消歧),别指望这条路径的行能当普通 ImageInfo 用。
+    "query": {
+        "fields": [{ "sql": "ROW_NUMBER() OVER ()", "as": "row_index" }]
+    },
+    "note": "Attach a 1-based row_index to every row of the upstream query. Only meaningful right after a `~~` subquery boundary, and must itself be followed by another `~~` plus a row picker: images://gallery/<filters>/<sort>/~~/rank/~~/id_<id> returns that image's position in the view, from which the page number is floor((row_index - 1) / pageSize) + 1. An empty result means the image is not in that view at all. Do not append pagination before the first `~~`: the rank is the position within the whole filtered set."
+}

@@ -246,6 +246,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("galleryLayoutDirection", "vertical"),
     frontendLocal("kamechanEnabled", true),
     frontendLocal("imageFit", "fit"),
+    frontendLocal("previewFollowPage", true),
     frontendLocal("linkOpenMode", "unconfigured"),
     // 画廊工具条 chip：默认全开——新用户先看到完整工具条，再自己裁。
     frontendLocal("galleryChipSearch", true),

@@ -54,6 +54,8 @@
   "galleryLayoutDirectionHorizontal": "横",
   "imageFit": "画像の表示方法",
   "imageFitDesc": "フィット=画像全体を表示（余白が出る場合あり）；フィル=中央で切り抜いてセルを覆う",
+  "previewFollowPage": "プレビューがページに追従",
+  "previewFollowPageDesc": "プレビュー対象の画像が現在のページにない場合、その画像があるページへ自動で移動します。オフの場合は現在のページに留まり、その 1 枚だけを表示して前後の矢印は出ません",
   "imageFitContain": "フィット",
   "imageFitCover": "フィル",
   "galleryRows": "ギャラリー行数",

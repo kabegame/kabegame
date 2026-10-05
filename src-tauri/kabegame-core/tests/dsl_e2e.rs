@@ -920,6 +920,60 @@ fn gallery_sort_by_id_provider_orders_default_ids() {
     assert_eq!(ids(by_id_desc), ["122", "121", "120"]);
 }
 
+/// `<视图>/~~/rank/~~/id_<id>` 的 1 起序号；图不在该视图里时为 None。
+fn rank(runtime: &Arc<ProviderRuntime>, view: &str, image_id: &str) -> Option<i64> {
+    let rows = runtime
+        .fetch(&format!("{view}/~~/rank/~~/id_{image_id}"))
+        .unwrap();
+    assert!(rows.len() <= 1, "{view} id_{image_id} -> {rows:?}");
+    rows.first().map(|row| {
+        row.get("row_index")
+            .and_then(serde_json::Value::as_i64)
+            .expect("row carries row_index")
+    })
+}
+
+#[test]
+fn gallery_rank_locates_image_position_within_view() {
+    let runtime = build_runtime();
+
+    // fixture 的 crawled_at 与 id 同序，所以默认排序下序号就是 id。
+    assert_eq!(rank(&runtime, "images://gallery/all", "1"), Some(1));
+    assert_eq!(rank(&runtime, "images://gallery/all", "42"), Some(42));
+    assert_eq!(rank(&runtime, "images://gallery/all", "122"), Some(122));
+
+    // /desc 必须作用在边界之前的内层：整条升序列倒过来。
+    assert_eq!(rank(&runtime, "images://gallery/all/desc", "122"), Some(1));
+    assert_eq!(rank(&runtime, "images://gallery/all/desc", "1"), Some(122));
+
+    // hide/ 排除 id=9，它之后的图序号整体前移一位。
+    assert_eq!(rank(&runtime, "images://gallery/hide/all", "8"), Some(8));
+    assert_eq!(rank(&runtime, "images://gallery/hide/all", "10"), Some(9));
+    // 被隐藏的图根本不在该视图里 —— 空集，不是 0 也不是报错。
+    assert_eq!(rank(&runtime, "images://gallery/hide/all", "9"), None);
+    assert_eq!(rank(&runtime, "images://gallery/all", "99999"), None);
+
+    // fixture 里每张图 size 都是 10，by-size 是一个 122 行的并列组：
+    // 只有 images.id 全序兜底才能让 rank 与分页 fetch 同序。
+    let paged = ids(runtime
+        .fetch("images://gallery/sort/by-size/x200x/1")
+        .unwrap());
+    assert_eq!(paged.len(), 122);
+    for (i, id) in paged.iter().enumerate() {
+        assert_eq!(
+            rank(&runtime, "images://gallery/sort/by-size", id),
+            Some(i as i64 + 1),
+            "by-size: id {id} 的 rank 与分页位置不一致"
+        );
+    }
+
+    // 过滤段也必须被内层带上：画册 A 只有 id 1..=5。
+    let album_view = format!("images://gallery/album/{ALBUM_A_ID}/sort/by-id");
+    assert_eq!(rank(&runtime, &album_view, "1"), Some(1));
+    assert_eq!(rank(&runtime, &album_view, "5"), Some(5));
+    assert_eq!(rank(&runtime, &album_view, "6"), None);
+}
+
 #[test]
 fn gallery_seeded_random_sort_is_stable_and_reversible() {
     let runtime = build_runtime();

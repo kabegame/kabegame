@@ -54,6 +54,8 @@
   "galleryLayoutDirectionHorizontal": "Horizontal",
   "imageFit": "Image fit",
   "imageFitDesc": "Fit shows the whole image (may letterbox); Fill crops and centers to cover the cell",
+  "previewFollowPage": "Preview follows page",
+  "previewFollowPageDesc": "When the previewed image is not on the current page, jump to the page it belongs to. Off keeps the current page and shows just that image, without prev/next arrows",
   "imageFitContain": "Fit",
   "imageFitCover": "Fill",
   "galleryRows": "Gallery rows",

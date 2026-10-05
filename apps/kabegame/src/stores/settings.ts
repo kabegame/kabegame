@@ -94,6 +94,13 @@ export interface AppSettings {
   kamechanEnabled: boolean;
   /** 网格图片填充方式："fit"=完整显示(object-contain)；"fill"=居中裁切填满(object-cover) */
   imageFit: "fit" | "fill";
+  /**
+   * 预览自动跟随视图翻页：`pvwimgid` 指向的图不在当前页时，按当前排序算出它所在页码并跳过去。
+   * 关掉则留在当前页，弹窗仍把那张图画出来，只是没有左右箭头（单图模式）。
+   * 当前页读取完成后统一检查目标 id；URL 深链接、后台刷新、手动翻页和重新开关都参与协调。
+   * 隐藏/删除走下标锚点，与本开关无关。
+   */
+  previewFollowPage: boolean;
   /** 应用内点击外部链接的打开方式；unconfigured 时首次触发会弹选择框 */
   linkOpenMode: "surf" | "browser" | "unconfigured";
 

@@ -6,7 +6,10 @@
     },
     "list": {
         "gallery": { "provider": "gallery_route" },
-        "vd": { "provider": "vd_root_router" }
+        "vd": { "provider": "vd_root_router" },
+        // 只在 `~~` 之后有意义 —— 边界把 provider 视角切回本 schema 根,所以挂在这里。
+        // 用法见 rank_provider 的注释。
+        "rank": { "provider": "rank_provider" }
     },
     "resolve": {
         "x([1-9][0-9]*)x": {

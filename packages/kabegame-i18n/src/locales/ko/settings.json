@@ -54,6 +54,8 @@
   "galleryLayoutDirectionHorizontal": "수평",
   "imageFit": "이미지 맞춤",
   "imageFitDesc": "맞춤=이미지 전체 표시(여백이 생길 수 있음); 채우기=가운데를 잘라 셀을 채움",
+  "previewFollowPage": "미리보기가 페이지를 따라감",
+  "previewFollowPageDesc": "미리보기 대상 이미지가 현재 페이지에 없으면 해당 이미지가 있는 페이지로 자동 이동합니다. 끄면 현재 페이지에 머물며 그 한 장만 표시하고 이전/다음 화살표는 나타나지 않습니다",
   "imageFitContain": "맞춤",
   "imageFitCover": "채우기",
   "galleryRows": "갤러리 행 수",
