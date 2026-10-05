@@ -208,11 +208,29 @@
             :class="{ visible: previewHoverSide === 'left' }"
             @click.stop="goPrev"
           >
-            <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
-              <el-icon>
-                <ArrowLeftBold />
-              </el-icon>
-            </button>
+            <div class="preview-nav-stack">
+              <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
+                <el-icon>
+                  <ArrowLeftBold />
+                </el-icon>
+              </button>
+              <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+              <button
+                class="preview-slideshow-btn"
+                type="button"
+                :class="{ playing: slideshowDirection === 'prev' }"
+                :aria-label="
+                  slideshowDirection === 'prev' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayPrev')
+                "
+                :title="slideshowDirection === 'prev' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayPrev')"
+                @click.stop="toggleSlideshow('prev')"
+              >
+                <span class="preview-slideshow-track">
+                  <el-icon><DArrowLeft /></el-icon>
+                  <el-icon><DArrowLeft /></el-icon>
+                </span>
+              </button>
+            </div>
           </div>
           <div
             v-if="props.canNext"
@@ -220,11 +238,29 @@
             :class="{ visible: previewHoverSide === 'right' }"
             @click.stop="goNext"
           >
-            <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
-              <el-icon>
-                <ArrowRightBold />
-              </el-icon>
-            </button>
+            <div class="preview-nav-stack">
+              <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
+                <el-icon>
+                  <ArrowRightBold />
+                </el-icon>
+              </button>
+              <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+              <button
+                class="preview-slideshow-btn"
+                type="button"
+                :class="{ playing: slideshowDirection === 'next' }"
+                :aria-label="
+                  slideshowDirection === 'next' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayNext')
+                "
+                :title="slideshowDirection === 'next' ? t('gallery.slideshowStop') : t('gallery.slideshowPlayNext')"
+                @click.stop="toggleSlideshow('next')"
+              >
+                <span class="preview-slideshow-track">
+                  <el-icon><DArrowRight /></el-icon>
+                  <el-icon><DArrowRight /></el-icon>
+                </span>
+              </button>
+            </div>
           </div>
           <div v-if="previewImage && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
             <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
@@ -335,7 +371,7 @@
 <script setup lang="ts">
 import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ArrowLeftBold, ArrowRightBold } from "@kabegame/element-plus-icons";
+import { ArrowLeftBold, ArrowRightBold, DArrowLeft, DArrowRight } from "@kabegame/element-plus-icons";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
@@ -353,6 +389,7 @@ import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
 import { useUiStore } from "../../stores/ui";
+import { useSettingsStore } from "../../stores/settings";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -369,6 +406,7 @@ import type { Plugin } from "@/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
+const settingsStore = useSettingsStore();
 const previewModal = useModal({ layers: 3 });
 const previewContextMenu = useModal();
 const previewFullscreenZIndex = computed(() => previewModal.zIndex.value);
@@ -884,20 +922,96 @@ watch(
  * 发出请求后箭头与按键惰化，props.image 变化才解锁。
  */
 const navPending = ref(false);
-watch(currentId, () => {
+watch(currentId, (id) => {
   navPending.value = false;
+  // 上层清空 image 即关闭：停播放
+  if (!id) {
+    stopSlideshow();
+    return;
+  }
+  // 每次落地（自动 / 手动箭头 / 键盘 / 上层翻页回设）都从头计时；到头则停
+  if (!slideshowDirection.value) return;
+  if (!canGo(slideshowDirection.value)) stopSlideshow();
+  else restartSlideshowTimer();
 });
+
+const canGo = (direction: "prev" | "next") => (direction === "prev" ? props.canPrev : props.canNext);
 
 const requestSwitch = (direction: "prev" | "next") => {
   if (!previewVisible.value) return;
   if (navPending.value) return;
-  if (direction === "prev" ? !props.canPrev : !props.canNext) return;
+  if (!canGo(direction)) return;
   navPending.value = true;
   emit("switch", { direction });
 };
 
 const goPrev = () => requestSwitch("prev");
 const goNext = () => requestSwitch("next");
+
+/* ---------------- 幻灯片播放 ---------------- */
+
+/**
+ * 计时以「当前图落地」为起点（每次 currentId 变化重挂 setTimeout），而不是固定 setInterval：
+ * 跨页加载再慢也不会吃掉下一张的展示时间。到点直接走 requestSwitch，复用 pending 锁与边界判断。
+ */
+const SLIDESHOW_INTERVAL_MS = { fast: 5000, medium: 10000, slow: 20000 } as const;
+const slideshowDirection = ref<"prev" | "next" | null>(null);
+let slideshowTimer: ReturnType<typeof setTimeout> | null = null;
+
+const clearSlideshowTimer = () => {
+  if (slideshowTimer) clearTimeout(slideshowTimer);
+  slideshowTimer = null;
+};
+
+const stopSlideshow = () => {
+  clearSlideshowTimer();
+  slideshowDirection.value = null;
+};
+
+const restartSlideshowTimer = () => {
+  clearSlideshowTimer();
+  const direction = slideshowDirection.value;
+  if (!direction) return;
+  const ms = SLIDESHOW_INTERVAL_MS[settingsStore.values.previewSlideshowSpeed ?? "fast"] ?? SLIDESHOW_INTERVAL_MS.fast;
+  slideshowTimer = setTimeout(() => {
+    slideshowTimer = null;
+    // 关闭与计时竞争、或到头：直接停，不发 switch
+    if (!previewVisible.value || !currentId.value || !canGo(direction)) {
+      stopSlideshow();
+      return;
+    }
+    // 落地后由 currentId watcher 续挂下一轮
+    requestSwitch(direction);
+  }, ms);
+};
+
+/** 同向再点停止；否则切到该方向（含首次开始），并重置计时 */
+const toggleSlideshow = (direction: "prev" | "next") => {
+  if (slideshowDirection.value === direction) {
+    stopSlideshow();
+    return;
+  }
+  slideshowDirection.value = direction;
+  restartSlideshowTimer();
+};
+
+// 落地后上层才把 canPrev/canNext 收回的时序：方向不可达即停
+watch(
+  () => [props.canPrev, props.canNext] as const,
+  () => {
+    const direction = slideshowDirection.value;
+    if (direction && !navPending.value && !canGo(direction)) stopSlideshow();
+  },
+);
+watch(previewVisible, (visible) => {
+  if (!visible) stopSlideshow();
+});
+watch(
+  () => uiStore.isCompact,
+  (compact) => {
+    if (compact) stopSlideshow();
+  },
+);
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
   if (!previewImage.value) return;
@@ -1052,6 +1166,7 @@ const closePreview = () => {
   previewInteractTimer = null;
   notifyPreviewInteracting(false);
   navPending.value = false;
+  stopSlideshow();
   emit("preview-close", { image: closedImage });
 };
 
@@ -1232,6 +1347,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  stopSlideshow();
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
   document.removeEventListener("mouseup", handleDocumentZoomPointerUp);
   document.removeEventListener("touchend", handleDocumentZoomPointerUp);
@@ -1658,6 +1774,89 @@ body.image-preview-hides-kamechan .kamechan-host {
     .el-icon {
       font-size: 18px;
     }
+  }
+
+  // 箭头 + 幻灯片按钮：按钮绝对定位在箭头正下方，箭头本身仍垂直居中
+  .preview-nav-stack {
+    position: relative;
+    display: flex;
+  }
+
+  .preview-slideshow-btn {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 999px;
+    border: none;
+    background: rgba(255, 95, 184, 0.72);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(255, 95, 184, 0.24);
+    transform: translateX(-50%);
+    transition:
+      transform 0.12s ease,
+      background-color 0.12s ease,
+      box-shadow 0.12s ease;
+    user-select: none;
+
+    &:hover {
+      transform: translateX(-50%) scale(1.06);
+      box-shadow: 0 8px 20px rgba(255, 95, 184, 0.32);
+    }
+
+    &.playing {
+      background: #ff5fb8;
+    }
+
+    .el-icon {
+      flex: none;
+      width: 28px;
+      font-size: 14px;
+    }
+  }
+
+  // 两份图标横排、只露一份；播放时整条平移一个图标宽度循环，首尾相同所以无缝
+  .preview-slideshow-track {
+    display: flex;
+    flex: none;
+  }
+
+  .preview-nav-zone.right .preview-slideshow-btn.playing .preview-slideshow-track {
+    animation: preview-slideshow-scroll-next 0.9s linear infinite;
+  }
+
+  .preview-nav-zone.left .preview-slideshow-btn.playing .preview-slideshow-track {
+    animation: preview-slideshow-scroll-prev 0.9s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .preview-slideshow-btn.playing .preview-slideshow-track {
+      animation: none !important;
+    }
+  }
+}
+
+@keyframes preview-slideshow-scroll-next {
+  from {
+    transform: translateX(-28px);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes preview-slideshow-scroll-prev {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-28px);
   }
 }
 

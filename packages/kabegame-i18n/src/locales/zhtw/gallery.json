@@ -326,5 +326,8 @@
   "searchSyntaxHint": "以英文逗號分隔的多個詞須同時符合；勾選多個範圍時，任一範圍符合即可；全部取消勾選則不進行搜尋篩選。",
   "searchModesSelectAll": "全選",
   "searchModesBadgeAll": "全部",
-  "searchSummaryNone": "未勾選任何範圍，不進行搜尋篩選。"
+  "searchSummaryNone": "未勾選任何範圍，不進行搜尋篩選。",
+  "slideshowPlayPrev": "向前自動播放",
+  "slideshowPlayNext": "向後自動播放",
+  "slideshowStop": "停止自動播放"
 }

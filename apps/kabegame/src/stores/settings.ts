@@ -101,6 +101,8 @@ export interface AppSettings {
    * 隐藏/删除走下标锚点，与本开关无关。
    */
   previewFollowPage: boolean;
+  /** 预览幻灯片播放间隔档位：fast=5s / medium=10s / slow=20s（毫秒映射在 ImagePreviewDialog 内） */
+  previewSlideshowSpeed: "fast" | "medium" | "slow";
   /** 应用内点击外部链接的打开方式；unconfigured 时首次触发会弹选择框 */
   linkOpenMode: "surf" | "browser" | "unconfigured";
 

@@ -325,5 +325,8 @@
   "searchSyntaxHint": "英文逗号分隔的多个词须同时命中；勾选多个范围时，任一范围命中即可；全部取消勾选则不做搜索过滤。",
   "searchModesSelectAll": "全选",
   "searchModesBadgeAll": "全部",
-  "searchSummaryNone": "未勾选任何范围，不做搜索过滤。"
+  "searchSummaryNone": "未勾选任何范围，不做搜索过滤。",
+  "slideshowPlayPrev": "向前自动播放",
+  "slideshowPlayNext": "向后自动播放",
+  "slideshowStop": "停止自动播放"
 }

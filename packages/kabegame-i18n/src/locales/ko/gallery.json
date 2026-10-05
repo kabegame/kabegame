@@ -324,5 +324,8 @@
   "searchSyntaxHint": "쉼표로 구분한 단어는 모두 일치해야 합니다. 여러 범위를 선택하면 어느 한 범위에서만 일치해도 됩니다. 모든 선택을 해제하면 검색으로 필터링하지 않습니다.",
   "searchModesSelectAll": "전체 선택",
   "searchModesBadgeAll": "전체",
-  "searchSummaryNone": "선택한 범위가 없어 검색으로 필터링하지 않습니다."
+  "searchSummaryNone": "선택한 범위가 없어 검색으로 필터링하지 않습니다.",
+  "slideshowPlayPrev": "이전 방향 자동 재생",
+  "slideshowPlayNext": "다음 방향 자동 재생",
+  "slideshowStop": "자동 재생 중지"
 }

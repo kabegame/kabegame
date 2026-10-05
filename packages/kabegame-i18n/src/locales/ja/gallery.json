@@ -324,5 +324,8 @@
   "searchSyntaxHint": "カンマ区切りの語はすべて一致する必要があります。複数の範囲をチェックした場合は、いずれかの範囲で一致すれば対象になります。すべてのチェックを外すと検索で絞り込みません。",
   "searchModesSelectAll": "すべて選択",
   "searchModesBadgeAll": "すべて",
-  "searchSummaryNone": "範囲が選択されていないため、検索で絞り込みません。"
+  "searchSummaryNone": "範囲が選択されていないため、検索で絞り込みません。",
+  "slideshowPlayPrev": "前方向に自動再生",
+  "slideshowPlayNext": "次方向に自動再生",
+  "slideshowStop": "自動再生を停止"
 }

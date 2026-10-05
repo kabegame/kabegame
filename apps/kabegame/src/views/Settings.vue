@@ -90,6 +90,13 @@
                 <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
               </SettingRow>
               <SettingRow
+                v-if="!IS_ANDROID"
+                :label="$t('settings.previewSlideshowSpeed')"
+                :description="$t('settings.previewSlideshowSpeedDesc')"
+              >
+                <SettingRadioControl setting-key="previewSlideshowSpeed" :options="previewSlideshowSpeedOptions" />
+              </SettingRow>
+              <SettingRow
                 v-if="!IS_ANDROID && !IS_WEB"
                 :label="$t('settings.linkOpenMode')"
                 :description="$t('settings.linkOpenModeDesc')"
@@ -424,6 +431,11 @@ const imageClickActionOptions = computed(() => [
   { label: t("settings.imageClickPreview"), value: "preview" },
   { label: t("settings.imageClickOpen"), value: "open" },
   { label: t("settings.imageClickAsk"), value: "unconfigured" },
+]);
+const previewSlideshowSpeedOptions = computed(() => [
+  { label: t("settings.previewSlideshowSpeedFast"), value: "fast" },
+  { label: t("settings.previewSlideshowSpeedMedium"), value: "medium" },
+  { label: t("settings.previewSlideshowSpeedSlow"), value: "slow" },
 ]);
 const wallpaperModeOptions = computed(() => [
   { label: t("settings.wallpaperModeRandom"), value: "random" },
