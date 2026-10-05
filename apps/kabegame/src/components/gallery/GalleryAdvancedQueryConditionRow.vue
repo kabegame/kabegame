@@ -28,11 +28,11 @@
         <!-- 与画廊工具行同一个组件；这里改的是本地草稿树，不需要防抖 -->
         <GallerySearchDropdown
           :query="atom.search?.query ?? ''"
-          :mode="searchMode"
+          :selected-modes="searchSelectedModes"
           :modes="searchModes"
           :negated="negated"
           @update:query="updateSearch($event)"
-          @update:mode="searchMode = $event"
+          @update:selected-modes="searchSelectedModes = $event"
         />
 
         <KbFilterDropdown
@@ -95,10 +95,10 @@ import {
   type NodePath,
 } from "@/utils/galleryQuery";
 import {
-  DEFAULT_GALLERY_SEARCH_MODE,
+  DEFAULT_GALLERY_SEARCH_MODES,
   makeSearchTerm,
   type GalleryFilter,
-  type GallerySearchMode,
+  type GallerySearchPathMode,
 } from "@/utils/galleryPath";
 import AdvancedFacetTreePanel from "./AdvancedFacetTreePanel.vue";
 import GallerySearchDropdown from "./GallerySearchDropdown.vue";
@@ -142,9 +142,9 @@ const facetItems = computed<
   { dimension: "size", label: t("gallery.advancedChipSize"), icon: markRaw(FilterSize) },
 ]);
 
-const searchMode = computed<GallerySearchMode>({
-  get: () => atom.value.search?.mode ?? DEFAULT_GALLERY_SEARCH_MODE,
-  set: (mode) => updateSearch(atom.value.search?.query ?? "", mode, true),
+const searchSelectedModes = computed<GallerySearchPathMode[]>({
+  get: () => atom.value.search?.modes ?? [...DEFAULT_GALLERY_SEARCH_MODES],
+  set: (modes) => updateSearch(atom.value.search?.query ?? "", modes, true),
 });
 
 function updateAtom(updater: (atom: GalleryFilterSet) => GalleryFilterSet): void {
@@ -157,11 +157,11 @@ function updateAtom(updater: (atom: GalleryFilterSet) => GalleryFilterSet): void
   );
 }
 
-function updateSearch(query: string, mode = searchMode.value, preserveEmpty = false): void {
+function updateSearch(query: string, modes = searchSelectedModes.value, preserveEmpty = false): void {
   updateAtom((current) => {
     const next = { ...current };
     const trimmed = query.trim();
-    if (trimmed || preserveEmpty) next.search = makeSearchTerm(mode, query, searchModes.value);
+    if (trimmed || preserveEmpty) next.search = makeSearchTerm(modes, query);
     else delete next.search;
     return next;
   });

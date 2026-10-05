@@ -5,9 +5,9 @@ import {
   parseComposablePath,
   buildComposableContextPrefix,
   extractRootIdAndBody,
-  DEFAULT_GALLERY_SEARCH_MODE,
+  DEFAULT_GALLERY_SEARCH_MODES,
   type GalleryQuery,
-  type GallerySearchMode,
+  type GallerySearchPathMode,
   type GallerySort,
   querySearchTerm,
 } from "@/utils/galleryPath";
@@ -15,11 +15,11 @@ import { useSettingsStore } from "@/stores/settings";
 
 const DEFAULT_PAGE_SIZE = 100;
 
-/** 会话内记忆的搜索模式，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
-export const surfImagesStickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+/** 会话内记忆的搜索维度勾选，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
+export const surfImagesStickySearchModes = ref<GallerySearchPathMode[]>([...DEFAULT_GALLERY_SEARCH_MODES]);
 
-export function rememberSurfImagesSearchMode(mode: GallerySearchMode): void {
-  surfImagesStickySearchMode.value = mode;
+export function rememberSurfImagesSearchModes(modes: readonly GallerySearchPathMode[]): void {
+  surfImagesStickySearchModes.value = [...modes];
 }
 
 type SurfImagesRouteState = {
@@ -50,7 +50,7 @@ export const useSurfImagesRouteStore = createPathRouteStore<SurfImagesRouteState
     const parsed = parseComposablePath(body);
     const term = querySearchTerm(parsed.query);
     if (term?.query.trim()) {
-      surfImagesStickySearchMode.value = term.mode;
+      surfImagesStickySearchModes.value = [...term.modes];
     }
     return {
       host,
