@@ -51,15 +51,7 @@ function providerPathSegment(path = "") {
 /** 后端真实存在的搜索目标：路径段 `search/<mode>/<q>` 的合法取值。 */
 export type GallerySearchPathMode = "display-name" | "metadata" | "native-metadata" | "local-path" | "url" | "label";
 
-/**
- * 「任意搜」：前端虚拟模式，后端没有对应 provider。序列化时展开成
- * `~any/search/<m1>/<q>/~or/…/~end`，解析时再折叠回来（见 foldAnySearch）。
- */
-export const GALLERY_SEARCH_ANY = "any";
-
-export type GallerySearchMode = GallerySearchPathMode | typeof GALLERY_SEARCH_ANY;
-
-/** 下拉顺序：名称类三项在前（显示名 → 路径 → 链接），内容类元数据在后，标签最后。 */
+/** 勾选框顺序：名称类三项在前（显示名 → 路径 → 链接），内容类元数据在后，标签最后。 */
 export const GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = [
   "display-name",
   "local-path",
@@ -79,86 +71,88 @@ export const GALLERY_SEARCH_MODES_BASIC: readonly GallerySearchPathMode[] = [
 
 /**
  * 标签搜索：`label` 对图片叶子标签的完整 `label_path` 做大小写不敏感的子串匹配。
- * 输入语法（逗号分隔、token 之间为且）与其它模式不同，故不参与「任意」展开。
+ * 词内的 `/` 是标签路径分隔符，两侧空白会被规整掉。
  */
 export function isLabelSearchMode(mode: string | undefined): mode is "label" {
   return mode === "label";
 }
 
-export const DEFAULT_GALLERY_SEARCH_MODE: GallerySearchMode = "display-name";
+/** 搜索词为空时勾选框的默认状态：只搜显示名。 */
+export const DEFAULT_GALLERY_SEARCH_MODES: readonly GallerySearchPathMode[] = ["display-name"];
 
-/** 路径段里的搜索模式：只认后端真实存在的五种，`search/any/…` 不合法。 */
+/** 路径段里的搜索模式：只认后端真实存在的六种。 */
 export function isGallerySearchPathMode(value: string | undefined): value is GallerySearchPathMode {
   return GALLERY_SEARCH_MODES.includes(value as GallerySearchPathMode);
 }
 
-/** UI 层的搜索模式（含虚拟的「任意」）。 */
-export function isGallerySearchMode(value: string | undefined): value is GallerySearchMode {
-  return value === GALLERY_SEARCH_ANY || isGallerySearchPathMode(value);
-}
-
+/**
+ * 搜索项：一个输入框 + 一组勾选的维度。
+ * - 逗号分隔的词之间为 AND（所有维度通用）；
+ * - 勾选的维度之间为 OR：每个维度各自要求「全部词都命中」，任一维度满足即可。
+ */
 export interface GallerySearchTerm {
-  mode: GallerySearchMode;
+  /** 勾选的维度：按 GALLERY_SEARCH_MODES 规范顺序、去重、非空（经 makeSearchTerm 构造）。 */
+  modes: GallerySearchPathMode[];
   query: string;
-  /** 仅 `mode === "any"`：展开范围（写入时可见的真实模式，按 GALLERY_SEARCH_MODES 排序去重）。 */
-  modes?: GallerySearchPathMode[];
 }
 
-/** 「任意」可展开的真实模式：全部模式去掉标签。 */
-const GALLERY_SEARCH_ANY_MODES: readonly GallerySearchPathMode[] = GALLERY_SEARCH_MODES.filter(
-  (mode) => !isLabelSearchMode(mode),
-);
+/** 规范化勾选集合：按 GALLERY_SEARCH_MODES 排序去重，空集回退默认。 */
+export function canonicalSearchModes(modes: readonly string[] | undefined): GallerySearchPathMode[] {
+  const picked = GALLERY_SEARCH_MODES.filter((mode) => modes?.includes(mode));
+  return picked.length > 0 ? picked : [...DEFAULT_GALLERY_SEARCH_MODES];
+}
 
-function canonicalSearchScope(scope: readonly GallerySearchPathMode[]): GallerySearchPathMode[] {
-  return GALLERY_SEARCH_ANY_MODES.filter((mode) => scope.includes(mode));
+/** 构造搜索项的唯一入口：保证 `modes` 规范、非空。 */
+export function makeSearchTerm(modes: readonly GallerySearchPathMode[], query: string): GallerySearchTerm {
+  return { modes: canonicalSearchModes(modes), query };
+}
+
+/** 搜索项实际覆盖的维度（兜底规范化，防御外部构造的项）。 */
+export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[] {
+  return canonicalSearchModes(term.modes);
+}
+
+/** 输入 → 逗号分隔的 AND 词：去首尾空白、丢空词。 */
+export function searchTokens(query: string): string[] {
+  return query
+    .split(",")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+/** 标签词规整：路径段两侧空白去掉、段内连续空白压成一个。 */
+function normalizeLabelToken(token: string): string {
+  return token
+    .split("/")
+    .map((segment) => segment.trim().replace(/\s+/g, " "))
+    .join("/");
+}
+
+/** 某维度下实际下发的词：标签额外按路径规整，只剩分隔符的词丢弃。 */
+function modeTokens(mode: GallerySearchPathMode, tokens: readonly string[]): string[] {
+  if (!isLabelSearchMode(mode)) return [...tokens];
+  return tokens.map(normalizeLabelToken).filter((token) => token.replace(/\//g, "").length > 0);
+}
+
+/** 单维度的 AND 链：`search/<m>/<t1>/filter_comb/search/<m>/<t2>…`。 */
+function serializeModeChain(mode: GallerySearchPathMode, tokens: readonly string[]): string {
+  // 输入只剩分隔符（纯逗号，或标签词只有 `/`）时退化为字面逗号，避免空条件变成全集：
+  // 标签 key 不允许逗号，对标签必不命中；其它维度按字面逗号子串匹配。
+  const effective = modeTokens(mode, tokens);
+  const chain = effective.length > 0 ? effective : [","];
+  return chain.map((token) => `search/${mode}/${encodeUserSegment(token)}`).join(`/${FILTER_COMB}/`);
 }
 
 /**
- * 构造搜索项的唯一入口：切到「任意」时把当前可见 tab 固化为展开范围，
- * 切回单模式时不带 `modes`，避免 `{ ...term, mode }` 残留旧范围。
+ * 搜索项 → 查询体片段。单维度是一条 AND 链；多维度各自成链、以 `~any/…/~or/…/~end` 取 OR。
+ * 两种形态都结束在 gallery 枢纽（search 委派回枢纽，`~end` 游标回到组入口）。
+ * 例：`1girl, 1boy` 勾选元数据 + 标签 →
+ * `~any/search/metadata/1girl/filter_comb/search/metadata/1boy/~or/search/label/1girl/filter_comb/search/label/1boy/~end`
  */
-export function makeSearchTerm(
-  mode: GallerySearchMode,
-  query: string,
-  scope: readonly GallerySearchPathMode[],
-): GallerySearchTerm {
-  if (mode !== GALLERY_SEARCH_ANY) return { mode, query };
-  const modes = canonicalSearchScope(scope);
-  return { mode, query, modes: modes.length > 0 ? modes : [...GALLERY_SEARCH_ANY_MODES] };
-}
-
-/** 「任意」项实际覆盖的真实模式；缺省范围按全部非标签模式兜底。 */
-export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[] {
-  if (term.mode !== GALLERY_SEARCH_ANY) return [term.mode];
-  const modes = canonicalSearchScope(term.modes ?? []);
-  return modes.length > 0 ? modes : [...GALLERY_SEARCH_ANY_MODES];
-}
-
-/** 搜索项 → 查询体片段。单模式是一个搜索段；「任意」展开成同词多模式的 OR 组。
- *  两种形态都结束在 gallery 枢纽（search 委派回枢纽，`~end` 游标回到组入口）。 */
-export function labelSearchTokens(query: string): string[] {
-  return query
-    .split(",")
-    .map((token) =>
-      token
-        .split("/")
-        .map((segment) => segment.trim().replace(/\s+/g, " "))
-        .join("/"),
-    )
-    .filter((token) => token.replace(/\//g, "").length > 0);
-}
-
 export function serializeSearchTerm(term: GallerySearchTerm): string {
-  if (isLabelSearchMode(term.mode)) {
-    // 标签 key 不允许逗号；仅分隔符输入用逗号作为必不命中的字面条件，避免空条件变成全集。
-    const tokens = labelSearchTokens(term.query);
-    const effectiveTokens = tokens.length > 0 ? tokens : [","];
-    return effectiveTokens.map((token) => `search/label/${encodeUserSegment(token)}`).join(`/${FILTER_COMB}/`);
-  }
-  const query = encodeUserSegment(term.query);
-  if (term.mode !== GALLERY_SEARCH_ANY) return `search/${term.mode}/${query}`;
-  const branches = searchTermModes(term).map((mode) => `search/${mode}/${query}`);
-  return `~any/${branches.join("/~or/")}/~end`;
+  const tokens = searchTokens(term.query);
+  const chains = searchTermModes(term).map((mode) => serializeModeChain(mode, tokens));
+  return chains.length === 1 ? chains[0]! : `~any/${chains.join("/~or/")}/~end`;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +362,7 @@ function normalizeAtom(atom: GalleryFilterSet): GalleryFilterSet {
       Object.assign(normalized, { [dimension]: atom[dimension] });
     }
   }
-  if (hasSearch(atom)) normalized.search = { ...atom.search! };
+  if (hasSearch(atom)) normalized.search = makeSearchTerm(atom.search!.modes, atom.search!.query);
   return normalized;
 }
 
@@ -677,10 +671,7 @@ export function cloneQuery(query: GalleryQuery): GalleryQuery {
           ...(node.is.aspect ? { aspect: { ...node.is.aspect } } : {}),
           ...(node.is.search
             ? {
-                search: {
-                  ...node.is.search,
-                  ...(node.is.search.modes ? { modes: [...node.is.search.modes] } : {}),
-                },
+                search: { ...node.is.search, modes: [...node.is.search.modes] },
               }
             : {}),
         },
@@ -830,19 +821,20 @@ function chunkEnd(segments: readonly string[], start: number): number {
 
 function appendAtom(sequence: GalleryQuery, dimension: GalleryFilterDimension, atom: GalleryFilterSet): void {
   const previous = sequence.at(-1);
+  // 同一单维度的连续搜索段是一条逗号 AND 链（serializeModeChain 的逆），并回同一个词串。
+  const previousModes = previous && isIsNode(previous) ? previous.is.search?.modes : undefined;
+  const nextModes = atom.search?.modes;
   if (
     dimension === "search" &&
     previous &&
     isIsNode(previous) &&
-    isLabelSearchMode(previous.is.search?.mode) &&
-    isLabelSearchMode(atom.search?.mode)
+    previousModes?.length === 1 &&
+    nextModes?.length === 1 &&
+    previousModes[0] === nextModes[0]
   ) {
     previous.is = {
       ...previous.is,
-      search: {
-        mode: "label",
-        query: `${previous.is.search!.query}, ${atom.search!.query}`,
-      },
+      search: makeSearchTerm(previousModes, `${previous.is.search!.query}, ${atom.search!.query}`),
     };
     return;
   }
@@ -858,28 +850,34 @@ function appendAtom(sequence: GalleryQuery, dimension: GalleryFilterDimension, a
 }
 
 /**
- * `serializeSearchTerm` 展开「任意」的逆：≥2 个分支、每支恰为只含搜索的单原子、
- * 同一搜索词且模式互异 → 折叠回 `mode: "any"`。单分支组不折叠——那是
- * composeQueryFilters 保留高级原子边界的包装，不是任意搜。
+ * `serializeSearchTerm` 多维度展开的逆：≥2 个分支、每支恰为只含单维度搜索的单原子、
+ * 维度互异，且用同一词串按各维度重新序列化能逐字还原每一支 → 折叠回一个多维度搜索项。
+ * 单分支组不折叠——那是 composeQueryFilters 保留高级原子边界的包装，不是多维度搜索。
  */
 function foldAnySearch(branches: readonly GalleryQuery[]): GallerySearchTerm | null {
   if (branches.length < 2) return null;
-  const modes: GallerySearchPathMode[] = [];
-  let query: string | null = null;
+  const parts: Array<{ mode: GallerySearchPathMode; query: string }> = [];
   for (const branch of branches) {
     const node = branch.length === 1 ? branch[0]! : null;
     if (!node || !isIsNode(node)) return null;
     const { search, ...rest } = node.is;
-    if (!search || search.mode === GALLERY_SEARCH_ANY || !hasSearch(node.is)) return null;
-    // 标签模式不参与「任意」展开，含标签分支的组保持为普通 OR 组
-    if (isLabelSearchMode(search.mode)) return null;
+    if (!search || !hasSearch(node.is) || search.modes.length !== 1) return null;
     if (Object.keys(rest).length > 0) return null;
-    if (query !== null && search.query !== query) return null;
-    if (modes.includes(search.mode)) return null;
-    query = search.query;
-    modes.push(search.mode);
+    const mode = search.modes[0]!;
+    if (parts.some((part) => part.mode === mode)) return null;
+    parts.push({ mode, query: search.query });
   }
-  return makeSearchTerm(GALLERY_SEARCH_ANY, query!, modes);
+  // 标签词会被按路径规整，词串以非标签分支为准，才能无损还原其它分支。
+  const query = (parts.find((part) => !isLabelSearchMode(part.mode)) ?? parts[0]!).query;
+  const tokens = searchTokens(query);
+  const restorable = parts.every(
+    (part) => serializeModeChain(part.mode, searchTokens(part.query)) === serializeModeChain(part.mode, tokens),
+  );
+  if (!restorable) return null;
+  return makeSearchTerm(
+    parts.map((part) => part.mode),
+    query,
+  );
 }
 
 function parseSequence(
@@ -942,7 +940,7 @@ function parseSequence(
       const query = segments[position + 2];
       if (!isGallerySearchPathMode(mode) || query === undefined) return null;
       appendAtom(sequence, "search", {
-        search: { mode, query: decodeUserSegment(query) },
+        search: makeSearchTerm([mode], decodeUserSegment(query)),
       });
       position += 3;
       continue;

@@ -26,7 +26,7 @@
             :sort="surfImagesRouteStore.sort"
             :page="surfImagesRouteStore.page"
             :page-size="pageSize"
-            :search-mode="surfImagesStickySearchMode"
+            :search-modes="surfImagesStickySearchModes"
             :provider-context-prefix="surfImagesRouteStore.computedContextPath"
             :context-base="surfImagesRouteStore.contextPathFor({ query: [] })"
             :filter-features="surfFilterFeatures"
@@ -34,7 +34,7 @@
             :search-features="surfSearchFeatures"
             enable-clear-all
             @navigate="onQueryNavigate"
-            @search-mode-change="rememberSurfImagesSearchMode"
+            @search-modes-change="rememberSurfImagesSearchModes"
           />
 
           <GalleryBigPaginator
@@ -74,8 +74,8 @@ import { createSurfImagesAdapter } from "@/components/imageGrid/adapters/surf";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import {
   useSurfImagesRouteStore,
-  rememberSurfImagesSearchMode,
-  surfImagesStickySearchMode,
+  rememberSurfImagesSearchModes,
+  surfImagesStickySearchModes,
 } from "@/stores/surfImagesRoute";
 import {
   GALLERY_SEARCH_MODES_BASIC,
@@ -103,7 +103,7 @@ const surfSearchFeatures = GALLERY_SEARCH_MODES_BASIC;
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
 const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean }) => {
   const term = patch.query ? querySearchTerm(patch.query) : null;
-  if (term?.query.trim()) rememberSurfImagesSearchMode(term.mode);
+  if (term?.query.trim()) rememberSurfImagesSearchModes(term.modes);
   void surfImagesRouteStore.navigate(patch, options);
 };
 

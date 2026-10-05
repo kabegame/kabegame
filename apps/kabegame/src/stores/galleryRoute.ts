@@ -3,10 +3,10 @@ import { createPathRouteStore } from "./pathRoute";
 import {
   buildComposablePath,
   buildGalleryContextPrefix,
-  DEFAULT_GALLERY_SEARCH_MODE,
+  DEFAULT_GALLERY_SEARCH_MODES,
   GALLERY_STORAGE_KEY_PATH,
   type GalleryQuery,
-  type GallerySearchMode,
+  type GallerySearchPathMode,
   type GallerySort,
   newRandomSortSeed,
   parseGalleryPath,
@@ -23,16 +23,16 @@ let cachedWebRandomSeed: string | null = null;
 const webRandomSeed = () => (cachedWebRandomSeed ??= newRandomSortSeed());
 
 /**
- * 会话内记忆的搜索模式。搜索是查询原子的一个维度，query 为空时原子不存在，
+ * 会话内记忆的搜索维度勾选。搜索是查询原子的一个维度，query 为空时原子不存在，
  * 模式自然不进 path（后端 `normalize_segments` 会丢空段、空 query 的 LIKE 又
  * 恒非真，不能为纯 UI 偏好去动引擎）。所以模式在搜索词清空后由这个 ref 兜底：
- * 搜索下拉展示时读它，用户切换模式时写它（`rememberGallerySearchMode`）。
+ * 搜索下拉展示时读它，用户改勾选时写它（`rememberGallerySearchModes`）。
  */
-export const galleryStickySearchMode = ref<GallerySearchMode>(DEFAULT_GALLERY_SEARCH_MODE);
+export const galleryStickySearchModes = ref<GallerySearchPathMode[]>([...DEFAULT_GALLERY_SEARCH_MODES]);
 
-/** 手动记住当前搜索模式，供下拉框切换时调用（见 galleryStickySearchMode 注释）。 */
-export function rememberGallerySearchMode(mode: GallerySearchMode): void {
-  galleryStickySearchMode.value = mode;
+/** 手动记住当前勾选的搜索维度，供下拉框勾选变化时调用（见 galleryStickySearchModes 注释）。 */
+export function rememberGallerySearchModes(modes: readonly GallerySearchPathMode[]): void {
+  galleryStickySearchModes.value = [...modes];
 }
 
 type GalleryRouteState = {
@@ -49,7 +49,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
     const parsed = parseGalleryPath(path);
     const term = querySearchTerm(parsed.query);
     if (term?.query.trim()) {
-      galleryStickySearchMode.value = term.mode;
+      galleryStickySearchModes.value = [...term.modes];
     }
     // parsed.noAlbum 丢弃：no-album 与 hide 一样是全局路由参数，值只由
     // globalPathRoute 决定（见 pathRoute.ts 的 parse 契约）。
@@ -106,7 +106,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
 /** 回到默认「全部」第 1 页（用于错误兜底等） */
 export async function resetGalleryRouteToDefault() {
   const store = useGalleryRouteStore();
-  rememberGallerySearchMode(DEFAULT_GALLERY_SEARCH_MODE);
+  rememberGallerySearchModes(DEFAULT_GALLERY_SEARCH_MODES);
   await store.navigate({
     query: [],
     page: 1,
