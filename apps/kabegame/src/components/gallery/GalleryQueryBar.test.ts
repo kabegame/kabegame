@@ -3,7 +3,7 @@ import { shallowMount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GalleryQueryBar from "./GalleryQueryBar.vue";
-import { composeQueryFilters, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
+import { composeQueryFilters, GALLERY_SEARCH_MODES, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
 
 const ui = vi.hoisted(() => ({ isCompact: false }));
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ui }));
@@ -101,12 +101,27 @@ describe("查询条追加高级 chip", () => {
     expect(wrapper.findComponent({ name: "GalleryAdvancedQueryDialog" }).props("query")).toEqual([]);
   });
 
+  it("全部取消勾选即移除搜索条件，重新勾选用输入框内容恢复", () => {
+    const query = composeQueryFilters({ ...simple, search: { modes: ["url", "metadata"], query: "春" } }, extra);
+    const wrapper = render(query);
+    const dropdown = wrapper.findComponent({ name: "GallerySearchDropdown" });
+
+    dropdown.vm.$emit("update:selected-modes", [], "春");
+    expect(wrapper.emitted("searchModesChange")!.at(-1)).toEqual([[]]);
+    let patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery };
+    expect(splitQueryFilters(patch.query)).toEqual({ simple, advanced: extra });
+
+    dropdown.vm.$emit("update:selected-modes", ["label"], "春");
+    patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery };
+    expect(splitQueryFilters(patch.query).simple).toEqual({ ...simple, search: { modes: ["label"], query: "春" } });
+  });
+
   it("搜索更新保留高级条件，清除全部则同时移除两部分", async () => {
     const wrapper = render();
     wrapper.findComponent({ name: "GallerySearchDropdown" }).vm.$emit("update:query", "春");
     const patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery };
     expect(splitQueryFilters(patch.query)).toEqual({
-      simple: { ...simple, search: { modes: ["display-name"], query: "春" } },
+      simple: { ...simple, search: { modes: [...GALLERY_SEARCH_MODES], query: "春" } },
       advanced: extra,
     });
     await wrapper.get(".query-clear-filter").trigger("click");

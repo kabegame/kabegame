@@ -317,5 +317,8 @@
   "searchSummaryMatchAll": "Finds images whose {modes} contains all of {terms}.",
   "searchSummaryMatchAllAny": "Finds images where any one of {modes} contains all of {terms}.",
   "searchSummaryTerm": "“{term}”",
-  "searchSyntaxHint": "Comma-separated terms must all match; with several fields checked, a match in any one field counts."
+  "searchSyntaxHint": "Comma-separated terms must all match; with several fields checked, a match in any one field counts; uncheck every field to turn the search filter off.",
+  "searchModesSelectAll": "All",
+  "searchModesBadgeAll": "All",
+  "searchSummaryNone": "No field checked; search is not filtering."
 }
