@@ -71,3 +71,6 @@
 - 重构前端pathql查询视图为eventWorker统一收集、refetch、转发
 - vendored element-plus 的 `ElSelect` 默认 `fit-input-width`（`select/src/select.ts` 里 `fitInputWidth` 默认改 `true`，与 `ElSelectV2` 对齐），业务侧不再逐个传该 prop；需要按内容宽度的调用方显式传 `false`
 - 重构去掉前端 kabegame-core，并入kabegame
+
+### Removed
+- 去掉 Daemon 的概念
