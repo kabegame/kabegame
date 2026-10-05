@@ -63,8 +63,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { KbFilterDropdown, KbTab, type KbTabItem } from "@kabegame/element-plus";
-import { Search } from "@kabegame/element-plus-icons";
+import { ElCheckbox, ElCheckboxGroup, ElIcon, ElTooltip, KbFilterDropdown } from "@kabegame/element-plus";
+import { QuestionFilled, Search } from "@kabegame/element-plus-icons";
 import KbText from "@/components/common/form/KbText.vue";
 import { IS_ANDROID } from "@/env";
 import {
