@@ -48,9 +48,8 @@ export interface ImageAnalytics {
   trackDoubleOpen(payload: { action: "preview" | "open"; image: ImageInfo }): void;
   trackPreviewNavigate(payload: {
     direction: "prev" | "next";
-    fromIndex: number;
-    toIndex: number;
-    wrapped: boolean;
+    /** 切换前的图片 id（刚打开时为 null）；预览按 id 定位，不再有下标 */
+    fromId: string | null;
     image: ImageInfo;
   }): void;
   trackPreviewDetailToggle(payload: { open: boolean; image: ImageInfo | null }): void;
@@ -79,9 +78,7 @@ export function createImageAnalytics(getContext: () => Record<string, unknown>):
     trackPreviewNavigate: (payload) => {
       track("image_preview_navigate", {
         direction: payload.direction,
-        fromIndex: payload.fromIndex,
-        toIndex: payload.toIndex,
-        wrapped: payload.wrapped,
+        fromId: payload.fromId,
         ...imageAnalyticsPayload([payload.image]),
       });
     },

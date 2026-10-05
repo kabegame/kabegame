@@ -1,3 +1,4 @@
+import { pathqlFetch } from "@/services/pathql";
 import type { ImageInfo } from "@/types/image";
 
 type Row = Record<string, unknown>;
@@ -73,4 +74,21 @@ export function rowToImageInfo(row: Row): ImageInfo {
   }
 
   return image;
+}
+
+/**
+ * 按 id 取单张图片。走 `gallery/by_id`——与画廊视图查询同一个 provider，
+ * 所以 `is_favorite` / `is_hidden` 等画册派生字段都在。
+ *
+ * `images://id_<id>` 只给裸 image 行，缺这些字段（`rowToImageInfo` 会把收藏降级成
+ * false），所以**不作回退**，这里只有一条路。
+ *
+ * 返回 null 表示该行确认不存在；查询本身失败会抛出，由调用方区分这两种情况。
+ */
+export async function fetchImageById(imageId: string): Promise<ImageInfo | null> {
+  const id = imageId.trim();
+  if (!id) return null;
+  const rows = await pathqlFetch<Row>(`images://gallery/by_id/${encodeURIComponent(id)}`);
+  const row = rows[0];
+  return row ? rowToImageInfo(row) : null;
 }

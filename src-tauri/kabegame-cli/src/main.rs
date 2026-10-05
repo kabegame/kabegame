@@ -790,6 +790,9 @@ async fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
 }
 
 async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
+    // PluginManager 依赖 AppPaths 定位 plugins_directory；与 plugin run 同用 DataMode::Auto，
+    // 保证 import 与 run 落在同一个数据目录。
+    init_standalone_globals()?;
     PluginManager::init_global()?;
     let pm = PluginManager::global();
 

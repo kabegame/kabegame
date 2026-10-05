@@ -89,11 +89,6 @@ pub enum IpcRequest {
     /// 获取图片总数
     StorageGetImagesCount,
 
-    /// 根据 ID 获取图片
-    StorageGetImageById {
-        image_id: String,
-    },
-
     /// 根据本地路径查找图片（用于把“外部选择的壁纸路径”映射回 imageId）
     StorageFindImageByPath {
         path: String,

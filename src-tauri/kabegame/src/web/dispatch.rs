@@ -280,27 +280,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_image_by_id",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    #[serde(rename_all = "camelCase")]
-                    struct Args {
-                        image_id: String,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result = kabegame_core::commands::image::get_image_by_id(args.image_id)
-                        .map_err(RpcError::internal)?;
-                    crate::web::image_rewrite::rewrite_image_value(&mut result);
-                    Ok(result)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "get_image_metadata",
         MethodEntry {
             requires_super: false,

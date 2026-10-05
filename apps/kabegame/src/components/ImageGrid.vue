@@ -7,8 +7,9 @@
     @open-task="handleOpenTask"
     @image-dblclick="handleImageDblclick"
     @preview-open="handlePreviewOpen"
-    @preview-navigate="handlePreviewNavigate"
-    @preview-page-boundary="handlePreviewPageBoundary"
+    @preview-request="handlePreviewRequest"
+    @preview-switch="handlePreviewSwitch"
+    @preview-resolve-failed="handlePreviewResolveFailed"
     @preview-detail-toggle="handlePreviewDetailToggle"
     @preview-close="handlePreviewClose"
     @open-gallery-filter="handleOpenGalleryFilter"
@@ -58,7 +59,7 @@
     :title="removeDialogText?.title"
     :confirm-text="removeDialogText?.confirmText"
     hide-checkbox
-    @close="removeDialog.close()"
+    @close="cancelRemoveImages"
     @confirm="confirmRemoveImages"
   />
 
@@ -176,14 +177,12 @@ interface Props {
 const props = defineProps<Props>();
 type PreviewNavigatePayload = {
   direction: "prev" | "next";
-  fromIndex: number;
-  toIndex: number;
-  wrapped: boolean;
+  /** 切换前的图片 id（刚打开时为 null）。预览不再按下标定位，所以 payload 也是 id 语义。 */
+  fromId: string | null;
   image: ImageInfo;
 };
 type PreviewPageBoundaryPayload = {
   direction: "prev" | "next";
-  index: number;
   image: ImageInfo;
 };
 const emit = defineEmits<{
@@ -333,6 +332,8 @@ const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
       currentWallpaperImageId.value = null;
     }
   }
+  // 锚点必须在页码兜底之前结算：ensurePageAfterRemoval 可能再次换页换列表
+  resolvePreviewAnchor();
   if (removedIds.length > 0 || images.value.length === 0) {
     await ensurePageAfterRemoval();
   }
@@ -585,6 +586,11 @@ const coreGridBind = computed(() => {
     loadingOverlay: (props.loadingOverlay ?? props.loading ?? false) || showInternalLoading.value,
     actions: effectiveActions.value as ActionItem<CoreImageInfo>[] | undefined,
     plugins: plugins.value,
+    previewImage: previewProp.value,
+    previewCanPrev: previewCanPrev.value,
+    previewCanNext: previewCanNext.value,
+    previewPrev: previewPrevImage.value,
+    previewNext: previewNextImage.value,
   };
 });
 
@@ -597,6 +603,98 @@ const beforeGridSlotProps = computed(() => ({
   jumpToPage,
   refresh,
 }));
+
+/* ---------------- 预览：id 真相 + 邻居 + 销毁性操作锚点 ----------------
+ * 弹窗不持有列表。这里负责把 previewedId 解析成「弹窗能画的东西」，
+ * 并提供方向可用性与紧凑模式的三项窗口素材。
+ */
+
+/** 当前预览图若在本页列表里，就是这一行（深链接到视图外时为 null）。 */
+const previewImageInView = computed<CoreImageInfo | null>(() => {
+  const id = previewedId.value;
+  if (!id) return null;
+  return images.value.find((img) => img.id === id) ?? null;
+});
+
+/**
+ * 列表里有就给 ImageInfo（弹窗以 props 为准、不取数，首帧不闪白；保鲜由 patchMany 负责），
+ * 没有就只给 id，由弹窗自己解析并自行保鲜。
+ * 上层因此不需要为视图外的图维护任何额外状态。
+ */
+const previewProp = computed<string | CoreImageInfo | null>(() => {
+  const id = previewedId.value;
+  if (!id) return null;
+  return previewImageInView.value ?? id;
+});
+
+const previewIdx = computed(() => {
+  const id = previewedId.value;
+  if (!id) return -1;
+  return images.value.findIndex((img) => img.id === id);
+});
+
+const previewPrevImage = computed<CoreImageInfo | null>(() =>
+  previewIdx.value > 0 ? (images.value[previewIdx.value - 1] ?? null) : null,
+);
+const previewNextImage = computed<CoreImageInfo | null>(() =>
+  previewIdx.value >= 0 && previewIdx.value < images.value.length - 1
+    ? (images.value[previewIdx.value + 1] ?? null)
+    : null,
+);
+
+const previewTotalPages = computed(() =>
+  Math.max(1, Math.ceil((totalImagesCount.value || 0) / Math.max(1, paged.pageSize.value))),
+);
+/** 箭头有无 = 上层意图：视图内有邻居，或到了视图边界但还有下一页。视图外则两边都没有。 */
+const previewCanPrev = computed(
+  () => !!previewPrevImage.value || (previewIdx.value === 0 && paged.currentPage.value > 1),
+);
+const previewCanNext = computed(
+  () =>
+    !!previewNextImage.value ||
+    (previewIdx.value >= 0 &&
+      previewIdx.value === images.value.length - 1 &&
+      paged.currentPage.value < previewTotalPages.value),
+);
+
+/**
+ * 销毁性操作前记录当前预览图的下标；操作后该 id 若已不在视图里，就用同一下标接管
+ * ——下一张会自然滑进这个位置。
+ *
+ * 为什么不能按操作类型硬编码「隐藏 ⇒ 跳下一张」：`hide/` 是用户可切的可选前缀，
+ * 关着的时候隐藏当前图，图还留在视图里，这时不该跳；HIDDEN 画册详情内 forceUnhide
+ * 又把语义翻成「取消隐藏」。唯一可靠的判据是「变更后该 id 还在不在视图里」。
+ */
+const previewAnchor = ref<{ id: string; index: number } | null>(null);
+
+/** remove / deleteFile 要过确认对话框，所以锚点必须跨对话框存活，不能只包同步调用。 */
+const capturePreviewAnchor = () => {
+  const id = previewedId.value;
+  if (!id) {
+    previewAnchor.value = null;
+    return;
+  }
+  const index = images.value.findIndex((img) => img.id === id);
+  previewAnchor.value = index >= 0 ? { id, index } : null;
+};
+const clearPreviewAnchor = () => {
+  previewAnchor.value = null;
+};
+
+/**
+ * 在 applyViewSnapshot 尾部调用——那里是 images.value 被替换的唯一漏斗。
+ * 无锚点时什么都不做：这正是「事件路线不搬用户视图」的落点。
+ */
+const resolvePreviewAnchor = () => {
+  const anchor = previewAnchor.value;
+  if (!anchor) return;
+  previewAnchor.value = null;
+  if (previewedId.value !== anchor.id) return; // 期间已被别的来源改过
+  if (images.value.some((img) => img.id === anchor.id)) return; // 还在视图里：不跳
+  const next = images.value[Math.min(anchor.index, images.value.length - 1)];
+  // 只有真的要关闭时才置 null——中途经过 null 会让 pvwimgid 被 replace 两次
+  previewedId.value = next?.id ?? null;
+};
 
 /* ---------------- 预览图片 URL 参数 pvwimgid 双向同步 ----------------
  * router 由本（外层）组件持有，core 层保持 router-agnostic：core 仅
@@ -620,16 +718,25 @@ watch(previewedId, (id) => {
   void setPreviewImageId(id ?? "", { history: "replace" });
 });
 
+/**
+ * 列表就绪门控：预览只在当前视图列表加载完毕后才打开。
+ *
+ * 这不是优化，是正确性前提：列表没就绪时 previewProp 会先退化成裸 id 形式，
+ * 等列表到了再翻成 ImageInfo —— 当前图的所有权在打开瞬间易手。门控之后，
+ * 打开时 props 形式就是终态，canPrev/canNext 与邻居在首帧也是对的（箭头不会先隐后显）。
+ */
+const previewListReady = computed(() => !!loadedKey.value && loadedKey.value === rawViewPath());
+
 // URL -> state
 const applyPreviewFromUrl = async () => {
   if (!isRouteActive.value) return; // 仅激活视图响应全局 pvwimgid
   const id = readPreviewId();
   if (id) {
-    if (id === previewedId.value) return;
-    if (readPreviewId() !== id || previewedId.value != null || !isRouteActive.value) return;
-    coreRef.value?.openPreviewById?.(id); // id 不在当前列表时为 no-op
+    if (id === previewedId.value) return; // 回声，忽略
+    if (!previewListReady.value) return; // 列表没就绪：等下面的 watch 兑现
+    previewedId.value = id;
   } else if (previewedId.value != null) {
-    coreRef.value?.closePreview?.();
+    previewedId.value = null;
   }
 };
 onMounted(applyPreviewFromUrl);
@@ -661,27 +768,57 @@ onDeactivated(() => {
   clearSelection();
 });
 watch(() => previewImageId.value, applyPreviewFromUrl); // 前进/后退、外部改动
+// 列表就绪后兑现待打开的 id（见 previewListReady 的门控说明）
 watch(
-  images,
-  () => {
-    // 列表异步加载完成后再尝试一次（仅在仍有待打开 id 且未预览时）
-    if (readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
+  previewListReady,
+  (ready) => {
+    if (ready && readPreviewId() && previewedId.value == null) void applyPreviewFromUrl();
   },
-  {
-    flush: "post",
-  },
+  { flush: "post" },
 );
 
 function handlePreviewOpen(payload: { image: ImageInfo }) {
   previewedId.value = payload.image.id;
 }
-function handlePreviewNavigate(payload: PreviewNavigatePayload) {
-  previewedId.value = payload.image.id;
-  adapter.analytics?.trackPreviewNavigate(payload);
-  emit("preview-navigate", payload);
+
+/** core 请求打开某个 id（grid 点击 / openPreviewById）。id 可以不在列表里。 */
+function handlePreviewRequest(payload: { id: string }) {
+  previewedId.value = payload.id;
+}
+
+/**
+ * 弹窗要求切换：视图内直接挪 id；到了视图边界就交给分页器翻页，
+ * 由 usePagedGallery 在新页就绪后设首/末张。
+ */
+function handlePreviewSwitch(payload: { direction: "prev" | "next" }) {
+  const neighbor = payload.direction === "prev" ? previewPrevImage.value : previewNextImage.value;
+  if (neighbor) {
+    const from = previewedId.value;
+    previewedId.value = neighbor.id;
+    const navPayload: PreviewNavigatePayload = { direction: payload.direction, fromId: from, image: neighbor };
+    adapter.analytics?.trackPreviewNavigate(navPayload);
+    emit("preview-navigate", navPayload);
+    return;
+  }
+  const current = previewImageInView.value;
+  if (!current) return; // 视图外：没有邻居也没有页可翻
+  const boundary: PreviewPageBoundaryPayload = { direction: payload.direction, image: current };
+  void paged.handlePreviewPageBoundary(boundary);
+  emit("preview-page-boundary", boundary);
+}
+
+/**
+ * 弹窗按 id 解析失败。提示 + 清 previewedId（连带清 URL）→ previewProp 变 null → 弹窗关闭。
+ * 注意瞬时失败（daemon 重启中）也会清掉 URL 参数，这是「解析失败只有一处处理」的取舍。
+ */
+function handlePreviewResolveFailed(payload: { id: string; reason: "missing" | "error" }) {
+  if (previewedId.value !== payload.id) return; // 过期回报
+  ElMessage.warning(payload.reason === "missing" ? t("gallery.previewImageMissing") : t("gallery.previewImageLoadFailed"));
+  previewedId.value = null;
 }
 function handlePreviewClose(payload: { image: ImageInfo | null }) {
   previewedId.value = null;
+  clearPreviewAnchor();
   adapter.analytics?.trackPreviewClose(payload);
   emit("preview-close", payload);
 }
@@ -693,11 +830,6 @@ function handleImageDblclick(payload: { action: "preview" | "open"; image: Image
   adapter.analytics?.trackDoubleOpen(payload);
   emit("image-dblclick", payload);
 }
-function handlePreviewPageBoundary(payload: PreviewPageBoundaryPayload) {
-  void paged.handlePreviewPageBoundary(payload);
-  emit("preview-page-boundary", payload);
-}
-
 /* ---------------- 菜单命令默认实现与对话框 ---------------- */
 const imageDetailDialog = useModal();
 const detailImage = ref<CoreImageInfo | null>(null);
@@ -755,6 +887,13 @@ const openRemoveDialog = (mode: "remove" | "deleteFile", images: ImageInfo[]) =>
   pendingRemove.value = { mode, images };
   removeDialogText.value = cfg.dialogText(images.length, { includesCurrentWallpaper });
   removeDialog.open();
+};
+
+/** 取消删除：锚点是在打开确认框前记的，这里必须撤掉，不然会被之后一次无关刷新误消费。 */
+const cancelRemoveImages = () => {
+  removeDialog.close();
+  pendingRemove.value = null;
+  clearPreviewAnchor();
 };
 
 const confirmRemoveImages = async () => {
@@ -865,6 +1004,7 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
     case "addToHidden": {
       if (await guardDesktopOnly("hideImage", { needSuper: true })) break;
       const ids = imagesToProcess.map((img) => img.id);
+      capturePreviewAnchor();
       const isUnhide = !!image.isHidden || (adapter.forceUnhide?.() ?? false);
       try {
         if (isUnhide) {
@@ -879,6 +1019,7 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
         clearSelection();
         track(isUnhide ? "removeFromHidden" : "addToHidden");
       } catch (e) {
+        clearPreviewAnchor();
         console.error(isUnhide ? "取消隐藏失败:" : "隐藏失败:", e);
         ElMessage.error(t(isUnhide ? "contextMenu.unhideFailed" : "contextMenu.hideFailed"));
       }
@@ -886,9 +1027,12 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
     }
     case "remove":
     case "deleteFile":
+      // 锚点跨确认对话框存活，到真正执行删除后才由 applyViewSnapshot 结算
+      capturePreviewAnchor();
       openRemoveDialog(command, imagesToProcess);
       break;
     case "swipe-remove":
+      capturePreviewAnchor();
       if (adapter.swipeRemove) {
         await adapter.swipeRemove(imagesToProcess, refreshCtx);
       } else {

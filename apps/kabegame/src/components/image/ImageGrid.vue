@@ -140,12 +140,16 @@
 
             <ImagePreviewDialog
               ref="previewRef"
-              :images="images"
+              :image="previewImage"
+              :can-prev="previewCanPrev"
+              :can-next="previewCanNext"
+              :prev-image="previewPrev"
+              :next-image="previewNext"
               :actions="actions"
               :plugins="plugins"
               @context-command="handlePreviewContextCommand"
-              @preview-navigate="emit('preview-navigate', $event)"
-              @preview-page-boundary="emit('preview-page-boundary', $event)"
+              @switch="emit('preview-switch', $event)"
+              @resolve-failed="emit('preview-resolve-failed', $event)"
               @preview-detail-toggle="emit('preview-detail-toggle', $event)"
               @preview-close="emit('preview-close', $event)"
               @open-task="emit('open-task', $event)"
@@ -251,6 +255,14 @@ interface Props {
   scrollWholeContainer?: boolean;
   /** 插件列表（用于桌面预览内详情抽屉显示插件名称） */
   plugins?: Array<Plugin>;
+  /** 预览当前图：`ImageInfo` 表示上层已解析（props 为准），`string` 表示只知道 id（弹窗自解析） */
+  previewImage?: string | ImageInfo | null;
+  /** 预览方向可用性（含「到视图边界但还有下一页」）；false 则对应箭头不渲染 */
+  previewCanPrev?: boolean;
+  previewCanNext?: boolean;
+  /** 紧凑模式三项窗口的邻居 */
+  previewPrev?: ImageInfo | null;
+  previewNext?: ImageInfo | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -263,6 +275,11 @@ const props = withDefaults(defineProps<Props>(), {
   enableVirtualScroll: true,
   virtualOverscan: 2,
   scrollWholeContainer: false,
+  previewImage: null,
+  previewCanPrev: false,
+  previewCanNext: false,
+  previewPrev: null,
+  previewNext: null,
 });
 
 const emit = defineEmits<{
@@ -272,22 +289,12 @@ const emit = defineEmits<{
   "open-gallery-filter": [target: ImageDetailGalleryFilterTarget];
   "open-surf-record": [target: ImageDetailSurfRecordTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
-  "preview-navigate": [
-    payload: {
-      direction: "prev" | "next";
-      fromIndex: number;
-      toIndex: number;
-      wrapped: boolean;
-      image: ImageInfo;
-    },
-  ];
-  "preview-page-boundary": [
-    payload: {
-      direction: "prev" | "next";
-      index: number;
-      image: ImageInfo;
-    },
-  ];
+  /** 用户在预览里要求切换；由上层算出目标 id 并回设 previewImage */
+  "preview-switch": [payload: { direction: "prev" | "next" }];
+  /** 弹窗按 id 解析失败；上层弹提示并清 previewedId */
+  "preview-resolve-failed": [payload: { id: string; reason: "missing" | "error" }];
+  /** 请求打开某个 id 的预览（id 可以不在当前列表里，如深链接） */
+  "preview-request": [payload: { id: string }];
   "preview-detail-toggle": [payload: { open: boolean; image: ImageInfo | null }];
   "preview-close": [payload: { image: ImageInfo | null }];
   "preview-open": [payload: { image: ImageInfo }];
@@ -468,9 +475,14 @@ const isPreviewOpen = computed(() => {
   return typeof v === "object" && "value" in v ? !!v.value : !!v;
 });
 
-// 当前预览索引（响应式）
+/** 当前预览图在本列表中的下标（仅用于滚动/选中同步）；不在列表里时为 -1。 */
+const currentPreviewId = computed<string | null>(() =>
+  typeof props.previewImage === "string" ? props.previewImage : (props.previewImage?.id ?? null),
+);
 const currentPreviewIndex = computed(() => {
-  return previewRef.value?.previewIndex ?? -1;
+  const id = currentPreviewId.value;
+  if (!id) return -1;
+  return (props.images ?? []).findIndex((img) => img.id === id);
 });
 
 /*----------------- Gallery（masonry）布局 + 方向 -----------------*/
@@ -883,9 +895,10 @@ const handleItemClick = async (image: ImageInfo, index: number, event?: MouseEve
 
 /** 打开预览并通知上层（用于 URL pvwimgid 双向同步）。index 为 props.images 原始索引。 */
 function openPreview(index: number) {
-  previewRef.value?.open(index);
   const img = (props.images ?? [])[index];
-  if (img) emit("preview-open", { image: img });
+  if (!img) return;
+  emit("preview-request", { id: img.id });
+  emit("preview-open", { image: img });
 }
 
 const handleItemDblClick = async (image: ImageInfo, index: number) => {
@@ -1455,11 +1468,11 @@ defineExpose({
   getSelectedIds: () => new Set(selectedIds.value),
   clearSelection,
   exitAndroidSelectionMode,
-  /** 按图片 id 打开预览（用于 URL pvwimgid 同步）；id 不在当前列表时为 no-op。 */
+  /** 按图片 id 打开预览（用于 URL pvwimgid 同步）。id 不在当前列表也可以——弹窗会自己解析。 */
   openPreviewById: (id: string) => {
-    const idx = (props.images ?? []).findIndex((i) => i.id === id);
-    console.log("open preview", id);
-    if (idx >= 0) openPreview(idx);
+    emit("preview-request", { id });
+    const img = (props.images ?? []).find((i) => i.id === id);
+    if (img) emit("preview-open", { image: img });
   },
   closePreview: () => previewRef.value?.close?.(),
 });

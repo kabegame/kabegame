@@ -10,6 +10,8 @@
   "zoomRatio": "Zoom ratio",
   "fullscreen": "Fullscreen",
   "exitFullscreen": "Exit fullscreen",
+  "previewImageMissing": "This image no longer exists",
+  "previewImageLoadFailed": "Failed to load the image, please try again",
   "imageDetailDisplayName": "Name:",
   "imageDetailDescription": "Description:",
   "imageDetailPluginInfoToggle": "Show or hide plugin description",

@@ -10,6 +10,8 @@
   "zoomRatio": "拡大率",
   "fullscreen": "全画面",
   "exitFullscreen": "全画面を終了",
+  "previewImageMissing": "画像が存在しないか削除されています",
+  "previewImageLoadFailed": "画像の読み込みに失敗しました。後でもう一度お試しください",
   "imageDetailDisplayName": "名前: ",
   "imageDetailDescription": "説明: ",
   "imageDetailPluginInfoToggle": "プラグイン説明を表示または非表示",

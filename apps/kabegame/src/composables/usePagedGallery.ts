@@ -119,7 +119,6 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
   // 到达页面边界，尝试加载下一页或上一页
   const handlePreviewPageBoundary = async (payload: {
     direction: "prev" | "next";
-    index: number;
     image: ImageInfo;
   }) => {
     if (pendingPreviewBoundary.value) {

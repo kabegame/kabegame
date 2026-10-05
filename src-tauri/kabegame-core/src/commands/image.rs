@@ -63,11 +63,6 @@ pub fn get_gallery_time_filter_data() -> Result<Value, String> {
     serde_json::to_value(p).map_err(|e| e.to_string())
 }
 
-pub fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    let image = Storage::find_image_by_id(&image_id)?;
-    serde_json::to_value(image).map_err(|e| e.to_string())
-}
-
 pub fn get_image_metadata(image_id: String) -> Result<Value, String> {
     let meta = Storage::global().get_metadata(&image_id)?;
     serde_json::to_value(meta).map_err(|e| e.to_string())

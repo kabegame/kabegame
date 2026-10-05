@@ -19,9 +19,20 @@
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | 作品页数参数联动 | 桌面 CEF | 打开收集弹窗，选择 anihonet →「单个作品」 | 「作品列表起始页 / 结束页」随模式显示，默认值为 `1 / 10`；切换排行榜或主题模式后隐藏 | 两个字段各占半行 |
+| [ ] | 作品页数参数联动 | 桌面 CEF | 打开收集弹窗，选择 anihonet →「单个作品」 | 「作品列表起始页 / 结束页」随模式显示，默认值为 `1 / 10`；切换排行榜或搜索模式后隐藏 | 两个字段各占半行 |
 | [ ] | 范围内抓取与日志 | 桌面 CEF | 选择「プロジェクトセカイ」，起止页均填 `2` 后运行 | 只处理 `/images/project_sekai/page/2`；日志包含输入范围 `2-2` 和检测范围 `1-163`，不打印范围警告 | 实际总页数随站点更新，以任务日志为准 |
 | [ ] | 超出实际范围警告 | 桌面 CEF | 对同一作品输入结束页 `9999` 后运行 | warning 指出站点实际范围未覆盖输入范围；到站点末页后正常结束，超出部分不请求 | 不把越界视为任务失败 |
+
+## anihonet 站内搜索
+
+自动化：插件打包会重新编译 `anihonet-wallpaper`；站点实测确认 `s` / `order` / `orderby` 参数与分页 URL 会保留。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 搜索配置联动 | 桌面 CEF | 打开收集弹窗，选择 anihonet →「搜索」 | 显示搜索关键词、排列方向、排序方式、搜索起止页；不再显示主题关键词 / 主题列表字段 | 默认降序、发布日期、`1 / 10` |
+| [ ] | 发布日期方向 | 桌面 CEF | 关键词填 `ani`，排序方式选「发布日期」，分别以降序、升序抓取第 1 页 | 请求分别携带 `order=DESC&orderby=post_date` 与 `order=ASC&orderby=post_date`；降序先出最新内容，升序先出早期内容 | 站点每页当前为 20 条 |
+| [ ] | 随机搜索与分页 | 桌面 CEF | 关键词填 `ani`，排序方式选「随机」，起止页填 `2 / 2` 后运行 | 请求 URL 为 `/page/2?s=ani&order=DESC&orderby=rand`，只处理第 2 页，日志记录关键词、方向、排序与实际页数 | 随机排序下方向不影响结果 |
+| [ ] | 空关键词与越界 | 桌面 CEF | 先留空搜索关键词运行；再填有效词并把起止页设到实际末页之后 | 空关键词不请求站点并记录 warning；越界范围记录 warning、不请求越界页，任务进度正常结束 | |
 
 ## 移除 macOS x86_64 交叉编译
 
@@ -729,3 +740,15 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [ ] | MCP 重命名 | 桌面 | 调用 MCP `rename_image` | grid 标题在 500ms 对账前即时更新 | `displayName` patch |
 | [ ] | patch 不打断预览缩放 | 桌面紧凑模式 | PhotoSwipe 放大一张图，期间把它设为壁纸 | `lastSetWallpaperAt` 即时更新，预览缩放不重置 | patch 白名单不含 `width` / `height` |
 | [ ] | 现有 grid 回归 | 桌面 / Android | 切换收藏、翻页，再删除当页图片至页码越界 | 收藏星标立即更新；翻页正常；删除后 clamp 到有效页 | 现有 `favoriteOps` / `liveQuery` 链路保留 |
+
+## CLI `plugin import` 初始化数据目录
+
+`kabegame-cli plugin import` 原先直接 `PluginManager::init_global()`，没有先初始化 `AppPaths`，
+一运行就 panic `AppPaths not initialized`。现在与 `plugin run` / `data import-image` 一样先走
+`init_standalone_globals()`（`DataMode::Auto`），import 与 run 落在同一个数据目录。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译 | macOS arm64 | `check-kabegame -c kabegame-cli --skip vue` | 0 error | 已实测 |
+| [ ] | release 导入 | 桌面 release CLI | `kabegame-cli plugin import <id>.kgpg` | 输出 `导入成功：…; 目标目录=<系统数据目录>/plugins-directory`，不 panic | release 的 Auto = 系统用户数据目录 |
+| [ ] | 导入后直接运行 | 桌面 release CLI | import 后不带 `--data` 执行 `plugin run <id>` | 运行的是刚导入的版本（日志首行版本号一致） | import 与 run 同一数据目录 |

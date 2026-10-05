@@ -10,9 +10,6 @@ pub async fn handle_storage_request(req: &IpcRequest) -> Option<IpcResponse> {
     match req {
         // Images
         IpcRequest::StorageGetImagesCount => Some(images::get_images_count().await),
-        IpcRequest::StorageGetImageById { image_id } => {
-            Some(images::get_image_by_id(image_id).await)
-        }
         IpcRequest::StorageFindImageByPath { path } => Some(images::find_image_by_path(path).await),
         IpcRequest::StorageDeleteImage { image_id } => Some(images::delete_image(image_id).await),
         IpcRequest::StorageRemoveImage { image_id } => Some(images::remove_image(image_id).await),

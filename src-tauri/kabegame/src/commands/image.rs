@@ -30,11 +30,6 @@ pub async fn pathql_view(q: ViewQuery) -> Result<ViewSnapshot, String> {
 }
 
 #[tauri::command]
-pub async fn get_image_by_id(image_id: String) -> Result<Value, String> {
-    commands::image::get_image_by_id(image_id)
-}
-
-#[tauri::command]
 pub async fn get_image_metadata(image_id: String) -> Result<Value, String> {
     commands::image::get_image_metadata(image_id)
 }

@@ -210,8 +210,7 @@ import { useFileDrop } from "./composables/useFileDrop";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@/api/rpc";
-import { pathqlFetch } from "@/services/pathql";
-import { rowToImageInfo } from "@/utils/imageRow";
+import { fetchImageById } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@/env";
 import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
@@ -429,12 +428,9 @@ watch(
     }
 
     try {
-      let image = (await invoke<ImageInfo | null>("get_image_by_id", { imageId })) ?? undefined;
-
-      if (!image) {
-        const path = `images://id_${encodeURIComponent(imageId)}`;
-        image = (await pathqlFetch<Record<string, unknown>>(path)).map(rowToImageInfo)[0];
-      }
+      // 统一走 gallery/by_id：与画廊视图同一个 provider，带 is_favorite / is_hidden 等画册派生字段。
+      // `images://id_<id>` 只给裸 image 行，缺这些字段，不能作为回退。
+      const image = (await fetchImageById(imageId)) ?? undefined;
 
       const mediaType = isVideoBackground(image) ? "video" : "image";
       if (token !== bgResolveToken) return;

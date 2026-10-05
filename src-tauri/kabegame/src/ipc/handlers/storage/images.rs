@@ -15,15 +15,6 @@ pub async fn get_images_count() -> IpcResponse {
     }
 }
 
-pub async fn get_image_by_id(image_id: &str) -> IpcResponse {
-    match Storage::find_image_by_id(image_id) {
-        Ok(image) => {
-            IpcResponse::ok_with_data("ok", serde_json::to_value(image).unwrap_or_default())
-        }
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
 pub async fn find_image_by_path(path: &str) -> IpcResponse {
     match Storage::find_image_by_path(path) {
         Ok(image) => {

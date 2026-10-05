@@ -106,15 +106,6 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    /// 根据 ID 获取图片
-    pub async fn storage_get_image_by_id(
-        &self,
-        image_id: String,
-    ) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::StorageGetImageById { image_id })
-            .await
-    }
-
     /// 根据本地路径查找图片
     pub async fn storage_find_image_by_path(
         &self,

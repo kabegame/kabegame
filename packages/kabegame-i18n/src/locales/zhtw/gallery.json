@@ -10,6 +10,8 @@
   "zoomRatio": "縮放比例",
   "fullscreen": "全螢幕",
   "exitFullscreen": "退出全螢幕",
+  "previewImageMissing": "圖片不存在或已被刪除",
+  "previewImageLoadFailed": "圖片載入失敗，請稍後重試",
   "imageDetailDisplayName": "名稱：",
   "imageDetailDescription": "描述：",
   "imageDetailPluginInfoToggle": "顯示或隱藏外掛說明",

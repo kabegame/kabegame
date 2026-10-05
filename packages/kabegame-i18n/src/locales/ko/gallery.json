@@ -10,6 +10,8 @@
   "zoomRatio": "확대 비율",
   "fullscreen": "전체 화면",
   "exitFullscreen": "전체 화면 종료",
+  "previewImageMissing": "이미지가 존재하지 않거나 삭제되었습니다",
+  "previewImageLoadFailed": "이미지를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요",
   "imageDetailDisplayName": "이름: ",
   "imageDetailDescription": "설명: ",
   "imageDetailPluginInfoToggle": "플러그인 설명 표시 또는 숨기기",

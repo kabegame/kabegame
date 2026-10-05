@@ -4,7 +4,7 @@
     v-if="uiStore.isCompact"
     ref="pswpRef"
     :open="previewModal.isOpen.value"
-    v-model:index="previewIndex"
+    :index="pswpCommandIndex"
     :data-source="pswpDataSource"
     :loop="false"
     :z-index="previewFullscreenZIndex"
@@ -201,25 +201,26 @@
               />
             </svg>
           </button>
+          <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态 -->
           <div
-            v-if="props.images.length > 1"
+            v-if="props.canPrev"
             class="preview-nav-zone left"
             :class="{ visible: previewHoverSide === 'left' }"
             @click.stop="goPrev"
           >
-            <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
+            <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
               <el-icon>
                 <ArrowLeftBold />
               </el-icon>
             </button>
           </div>
           <div
-            v-if="props.images.length > 1"
+            v-if="props.canNext"
             class="preview-nav-zone right"
             :class="{ visible: previewHoverSide === 'right' }"
             @click.stop="goNext"
           >
-            <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
+            <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
               <el-icon>
                 <ArrowRightBold />
               </el-icon>
@@ -361,6 +362,8 @@ import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
+import { fetchImageById } from "../../utils/imageRow";
+import { subscribeChanges } from "../../services/dataChangeHub";
 import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
 
@@ -375,13 +378,29 @@ const previewHidesKamechanClass = "image-preview-hides-kamechan";
 
 const props = withDefaults(
   defineProps<{
-    images: ImageInfo[];
+    /**
+     * 唯一真相，也是开关：非空即打开。
+     * - `ImageInfo`：上层在当前列表里找到了。**以 props 为准，弹窗不取数、不订阅**
+     *   （上层的 `patchMany` 已经在保鲜它，props 会持续流下来）
+     * - `string`：上层只知道 id（深链接 / 图在视图外），弹窗自己解析并自行保鲜
+     */
+    image: string | ImageInfo | null;
+    /** 该方向有图可去（含「视图到边界但还有下一页」）；false 则箭头不渲染 */
+    canPrev?: boolean;
+    canNext?: boolean;
+    /** 紧凑模式动画素材：视图内的直接邻居；页边界或视图外为 null */
+    prevImage?: ImageInfo | null;
+    nextImage?: ImageInfo | null;
     /** Actions for context menu / action sheet. */
     actions?: ActionItem<ImageInfo>[];
     /** 用于预览内详情抽屉解析插件名（与 ImageDetailDialog 一致） */
     plugins?: Array<Plugin>;
   }>(),
   {
+    canPrev: false,
+    canNext: false,
+    prevImage: null,
+    nextImage: null,
     actions: () => [],
     plugins: () => [],
   },
@@ -409,46 +428,35 @@ const emit = defineEmits<{
   (e: "open-task", taskId: string): void;
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
   (e: "open-surf-record", target: ImageDetailSurfRecordTarget): void;
-  (e: "preview-navigate", payload: PreviewNavigatePayload): void;
-  (e: "preview-page-boundary", payload: PreviewPageBoundaryPayload): void;
+  /** 用户要求切换；上层算出目标并回设 props.image */
+  (e: "switch", payload: { direction: "prev" | "next" }): void;
+  /** 解析失败。上层据此弹 message 并清 previewedId（连带清 URL）；弹窗自己不写 URL */
+  (e: "resolve-failed", payload: { id: string; reason: "missing" | "error" }): void;
   (e: "preview-detail-toggle", payload: { open: boolean; image: ImageInfo | null }): void;
   (e: "preview-close", payload: { image: ImageInfo | null }): void;
 }>();
 
-type PreviewNavigatePayload = {
-  direction: "prev" | "next";
-  fromIndex: number;
-  toIndex: number;
-  wrapped: boolean;
-  image: ImageInfo;
-};
-
-type PreviewPageBoundaryPayload = {
-  direction: "prev" | "next";
-  index: number;
-  image: ImageInfo;
-};
-
 const previewVisible = previewModal.isOpen;
 const previewImageUrl = ref("");
 const previewImagePath = ref("");
-const previewIndex = ref<number>(-1);
-const currentImageId = ref<string | null>(null);
-/** 紧凑模式（Android/web 窄屏）：PhotoSwipe 使用的索引列表，映射回 props.images 原始索引。 */
-const androidFilteredIndices = computed(() => props.images.map((_, i) => i));
 
-// previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
-const previewImage = computed<ImageInfo | null>(() => {
-  const idx = previewIndex.value;
-  if (idx < 0) return null;
-  if (uiStore.isCompact) {
-    const origIdx = androidFilteredIndices.value[idx];
-    if (origIdx == null || origIdx >= props.images.length) return null;
-    return props.images[origIdx] ?? null;
-  }
-  if (idx >= props.images.length) return null;
-  return props.images[idx] ?? null;
-});
+/** props 的两种形式都能拿到 id——弹窗内部一切逻辑的锚。 */
+const currentId = computed<string | null>(() =>
+  typeof props.image === "string" ? props.image : (props.image?.id ?? null),
+);
+/** props 只给了 id 时，弹窗自己解析出来的那份（props 是 ImageInfo 时恒为 null）。 */
+const resolvedImage = ref<ImageInfo | null>(null);
+
+/**
+ * 归属按 props 形式分流：
+ * - `ImageInfo` → 上层所有，props 为准（上层的 patchMany 在保鲜它）
+ * - `string`    → 弹窗所有，用自己解析出来的那份
+ */
+const previewImage = computed<ImageInfo | null>(() =>
+  typeof props.image === "string" ? resolvedImage.value : props.image,
+);
+/** 只给了 id 且还没解析出来：画 loading，不是「不存在」。 */
+const previewResolving = computed(() => typeof props.image === "string" && !resolvedImage.value);
 const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type));
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
@@ -467,9 +475,9 @@ const previewContainerRef = ref<HTMLElement | null>(null);
 const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 /** 桌面预览视频：从 ImageContent 暴露的 videoEl 取，供 VideoControls 绑定 */
 const previewVideoEl = computed<HTMLVideoElement | null>(() => previewContentRef.value?.videoEl ?? null);
-/** 紧凑模式 PhotoSwipe slot：用 item.id 反查 props.images */
+/** 紧凑模式 PhotoSwipe slot：用 item.id 反查三项窗口 */
 const imageById = (id: string | number | undefined): ImageInfo | null =>
-  props.images.find((img) => img.id === id) ?? null;
+  [props.prevImage, previewImage.value, props.nextImage].find((img) => img && img.id === id) ?? null;
 const imageControlBarRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const pswpRef = ref<InstanceType<typeof PhotoSwipe> | null>(null);
 // Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
@@ -706,14 +714,26 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
-/** 紧凑模式 PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。 */
+/**
+ * 紧凑模式 PhotoSwipe：三项滑动窗口 `[prev, current, next]`，内容由上层按 id 实时算出。
+ * 页边界或视图外时不足三项，所以**当前位不恒为 1**，必须显式算（见 pswpCurrentIndex）。
+ */
+const pswpWindow = computed<ImageInfo[]>(() =>
+  [props.prevImage, previewImage.value, props.nextImage].filter((img): img is ImageInfo => !!img),
+);
+
+/** 当前图在窗口里的下标：首张时为 0，末张时为 1，视图外只有一项时为 0。 */
+const pswpCurrentIndex = computed(() => {
+  const id = currentId.value;
+  if (!id) return 0;
+  const idx = pswpWindow.value.findIndex((img) => img.id === id);
+  return idx >= 0 ? idx : 0;
+});
+
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
-  const source = uiStore.isCompact
-    ? androidFilteredIndices.value.map((idx) => props.images[idx]).filter(Boolean)
-    : props.images;
-  const items = source.map((img) => {
+  return pswpWindow.value.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
     const isVideo = isVideoMediaType(img.type);
     return {
@@ -728,135 +748,156 @@ const pswpDataSource = computed(() => {
       id: img.id,
     };
   });
-  return items;
 });
 
-const setPreviewByIndex = (index: number, opts?: { resetPanzoom?: boolean }) => {
-  const img = props.images[index];
-  if (!img) return;
+/**
+ * 传给 PhotoSwipe 的 index 是「命令」，不是派生值——只在需要主动导航时写。
+ *
+ * 绝不能把它做成 `currentId → index` 的 computed：窗口平移时该值会变，触发
+ * PhotoSwipe 的 props.index watcher → goTo() → 带动画倒退一张，并清掉用户当前缩放。
+ * 窗口平移应当走 PhotoSwipe 自己的 relocate（它按 delta 平移各 holder 逻辑索引，
+ * 保留内容相同那几张的缩放平移）。@change 只单向更新本地状态，不回写这里。
+ */
+const pswpCommandIndex = ref(0);
 
-  const resetPanzoom = opts?.resetPanzoom !== false;
-
-  previewIndex.value = index;
-  currentImageId.value = img.id;
+/** 把当前这张图的 URL / 路径同步到桌面侧渲染状态。 */
+const syncPreviewSource = (img: ImageInfo | null) => {
+  if (!img) {
+    previewImageUrl.value = "";
+    previewImagePath.value = "";
+    return;
+  }
   previewImagePath.value = img.localPath;
-  // previewImage 现在是 computed，无需手动赋值
-  previewNotFound.value = false;
-
-  const thumb = getThumbnailPreviewUrl(img);
-  const originalUrl = getOriginalPreviewUrl(img);
-
   previewNotFound.value = false;
   previewImageLoading.value = false;
-  previewImageUrl.value = (originalUrl || thumb || "").trim();
+  previewImageUrl.value = (getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "").trim();
+};
 
-  // 尺寸/缩放状态重置：切换图片时重置；仅列表重排（如同 id 的索引变化）时可保留 Panzoom
-  if (!isPreviewVideo.value && resetPanzoom) {
-    panzoomReset();
+/* ---------------- 按 id 解析与保鲜（仅 props 为裸 id 时） ----------------
+ * props 给了 ImageInfo 就什么都不做：那份归上层所有，由它的 patchMany 保鲜。
+ */
+
+let resolveToken = 0;
+let unsubscribeImageChanges: (() => void) | null = null;
+
+const stopImageSubscription = () => {
+  unsubscribeImageChanges?.();
+  unsubscribeImageChanges = null;
+};
+
+/** 返回 false 表示已 emit resolve-failed（调用方不必再处理）。 */
+const resolveCurrentImage = async (id: string): Promise<boolean> => {
+  const token = ++resolveToken;
+  try {
+    const image = await fetchImageById(id);
+    if (token !== resolveToken) return true; // 过期响应，丢弃
+    if (!image) {
+      emit("resolve-failed", { id, reason: "missing" });
+      return false;
+    }
+    resolvedImage.value = image;
+    return true;
+  } catch (error) {
+    if (token !== resolveToken) return true;
+    console.error("预览解析图片失败:", error);
+    emit("resolve-failed", { id, reason: "error" });
+    return false;
   }
 };
 
-// 仅用于 UI：首尾循环时，位于边界的方向箭头置灰（但仍可点击触发循环）
-const isAtFirst = computed(() => {
-  if (props.images.length <= 1) return false;
-  if (!previewVisible.value) return false;
-  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
-  return idx === 0;
-});
+const startImageSubscription = (id: string) => {
+  stopImageSubscription();
+  unsubscribeImageChanges = subscribeChanges({
+    waitMs: 300,
+    filter: (batch) =>
+      batch.imagePatches.has(id) ||
+      batch.imageIds.has(id) ||
+      // 收藏 / 隐藏是画册成员变更，走 album-images-change，不在 imageIds 里
+      batch.albumImageIds.has(id) ||
+      batch.favoriteOps.some((op) => op.imageIds.includes(id)) ||
+      // 末项兜 wildcard：范围未知的批次必须当作命中自己，漏了会静默不刷新
+      batch.images.size > 0,
+    onBatch: async (batch) => {
+      if (currentId.value !== id) return;
 
-const isAtLast = computed(() => {
-  if (props.images.length <= 1) return false;
-  if (!previewVisible.value) return false;
-  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
-  return idx === props.images.length - 1;
-});
-
-// 切换节流：100ms 内最多只执行一次切换，避免快速连击导致状态混乱
-let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
-let isNavThrottled = false;
-const NAV_THROTTLE_MS = 100;
-
-const startNavThrottle = () => {
-  isNavThrottled = true;
-  if (navThrottleTimer) clearTimeout(navThrottleTimer);
-  navThrottleTimer = setTimeout(() => {
-    navThrottleTimer = null;
-    isNavThrottled = false;
-  }, NAV_THROTTLE_MS);
-};
-
-const emitPreviewNavigate = (
-  direction: "prev" | "next",
-  fromIndex: number,
-  toIndex: number,
-  wrapped: boolean,
-  image: ImageInfo | undefined,
-) => {
-  if (!image) return;
-  emit("preview-navigate", {
-    direction,
-    fromIndex,
-    toIndex,
-    wrapped,
-    image,
+      // 事件只改「当前 id 的内容」，绝不改「当前 id 本身」
+      const fields: Partial<ImageInfo> = { ...batch.imagePatches.get(id) };
+      // favoriteOps 带真实值，按到达顺序取最后一次
+      for (const op of batch.favoriteOps) {
+        if (op.imageIds.includes(id)) fields.favorite = op.favorite;
+      }
+      if (Object.keys(fields).length > 0) {
+        if (resolvedImage.value) resolvedImage.value = { ...resolvedImage.value, ...fields };
+        // 画册成员变更还会影响 isHidden，粗信号仍要重拉；字段 patch 只是让 UI 先到位
+        if (!batch.albumImageIds.has(id) && !batch.imageIds.has(id) && batch.images.size === 0) return;
+      }
+      // 粗信号：重拉一次。确认 0 行才算消失——这里 emit resolve-failed，
+      // 不是跳下一张；跳不跳是上层的事（它有列表和用户意图）。
+      await resolveCurrentImage(id);
+    },
   });
 };
 
-const getOriginalIndexForPreviewIndex = (index: number) => {
-  if (!uiStore.isCompact) return index;
-  return androidFilteredIndices.value[index] ?? -1;
-};
+watch(
+  () => props.image,
+  (value, previous) => {
+    const id = typeof value === "string" ? value : (value?.id ?? null);
+    const prevId = typeof previous === "string" ? previous : (previous?.id ?? null);
 
-const emitPreviewPageBoundary = (direction: "prev" | "next", previewListIndex = previewIndex.value) => {
-  const origIndex = getOriginalIndexForPreviewIndex(previewListIndex);
-  const image = origIndex >= 0 ? props.images[origIndex] : undefined;
-  if (!image) return;
-  emit("preview-page-boundary", {
-    direction,
-    index: origIndex,
-    image,
-  });
-};
+    if (!id) {
+      resolveToken++;
+      resolvedImage.value = null;
+      stopImageSubscription();
+      return;
+    }
 
-const navigateWithPreloadGate = (targetIndex: number) => {
+    if (typeof value !== "string") {
+      // ImageInfo 形式：上层所有。丢掉本地副本并退订（可能刚从 string 形式翻转过来）
+      resolveToken++;
+      resolvedImage.value = null;
+      stopImageSubscription();
+      syncPreviewSource(value);
+      return;
+    }
+
+    // string 形式：弹窗所有。换了 id 才重新解析 / 重新订阅
+    if (id !== prevId || !unsubscribeImageChanges) {
+      resolvedImage.value = null;
+      void resolveCurrentImage(id);
+      startImageSubscription(id);
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => resolvedImage.value,
+  (img) => {
+    if (typeof props.image === "string") syncPreviewSource(img);
+  },
+);
+
+/* ---------------- 导航 ---------------- */
+
+/**
+ * 切换已经是异步的（上层可能要翻页，耗时可达秒级），所以用 pending 锁而不是固定节流：
+ * 发出请求后箭头与按键惰化，props.image 变化才解锁。
+ */
+const navPending = ref(false);
+watch(currentId, () => {
+  navPending.value = false;
+});
+
+const requestSwitch = (direction: "prev" | "next") => {
   if (!previewVisible.value) return;
-  setPreviewByIndex(targetIndex);
+  if (navPending.value) return;
+  if (direction === "prev" ? !props.canPrev : !props.canNext) return;
+  navPending.value = true;
+  emit("switch", { direction });
 };
 
-const goPrev = () => {
-  if (!previewVisible.value) return;
-  if (isNavThrottled) return;
-  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
-  if (idx <= 0) {
-    startNavThrottle();
-    emitPreviewPageBoundary("prev", idx);
-    return;
-  }
-  const targetIndex = idx - 1;
-
-  startNavThrottle();
-
-  navigateWithPreloadGate(targetIndex);
-  emitPreviewNavigate("prev", idx, targetIndex, false, props.images[targetIndex]);
-};
-
-const goNext = () => {
-  if (!previewVisible.value) return;
-  if (isNavThrottled) return;
-  const lastIndex = props.images.length - 1;
-  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
-  if (idx >= lastIndex) {
-    startNavThrottle();
-    emitPreviewPageBoundary("next", idx);
-    return;
-  }
-  const targetIndex = idx + 1;
-
-  startNavThrottle();
-
-  navigateWithPreloadGate(targetIndex);
-  emitPreviewNavigate("next", idx, targetIndex, false, props.images[targetIndex]);
-};
+const goPrev = () => requestSwitch("prev");
+const goNext = () => requestSwitch("next");
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
   if (!previewImage.value) return;
@@ -996,15 +1037,12 @@ const closePreview = () => {
   if (uiStore.isCompact) {
     previewModal.close();
     doAndroidPreviewCleanup();
-    previewIndex.value = -1;
     emit("preview-close", { image: closedImage });
     return;
   }
   previewModal.close();
   previewImageUrl.value = "";
   previewImagePath.value = "";
-  previewIndex.value = -1;
-  // previewImage 现在是 computed，设置 previewIndex = -1 即可
   previewHoverSide.value = null;
   closePreviewContextMenu();
   previewImageLoading.value = false;
@@ -1013,9 +1051,7 @@ const closePreview = () => {
   if (previewInteractTimer) clearTimeout(previewInteractTimer);
   previewInteractTimer = null;
   notifyPreviewInteracting(false);
-  if (navThrottleTimer) clearTimeout(navThrottleTimer);
-  navThrottleTimer = null;
-  isNavThrottled = false;
+  navPending.value = false;
   emit("preview-close", { image: closedImage });
 };
 
@@ -1023,55 +1059,6 @@ const performSwipeDelete = () => {
   if (!previewImage.value) return;
   emit("contextCommand", { command: "swipe-remove", image: previewImage.value });
 };
-
-// handlePreviewImageDeleted 已被删除，逻辑合并到下方的 props.images watcher 中
-
-watch(
-  () => props.images,
-  () => {
-    if (!previewVisible.value) return;
-    if (!currentImageId.value) return;
-
-    const foundIndex = props.images.findIndex((img) => img.id === currentImageId.value);
-
-    if (foundIndex !== -1) {
-      if (uiStore.isCompact) {
-        const pswpIdx = androidFilteredIndices.value.indexOf(foundIndex);
-        if (pswpIdx >= 0 && pswpIdx !== previewIndex.value) {
-          previewIndex.value = pswpIdx;
-        }
-      } else {
-        if (foundIndex !== previewIndex.value) {
-          // 前面插入项等导致索引右移：仍是同一张图，勿重置桌面端放缩/平移
-          setPreviewByIndex(foundIndex, { resetPanzoom: false });
-        }
-      }
-    } else {
-      if (props.images.length === 0) {
-        closePreview();
-      } else if (uiStore.isCompact) {
-        const filteredLen = androidFilteredIndices.value.length;
-        if (filteredLen <= previewIndex.value) {
-          const newPswpIdx = Math.max(0, filteredLen - 1);
-          previewIndex.value = newPswpIdx;
-          const origIdx = androidFilteredIndices.value[newPswpIdx];
-          currentImageId.value = origIdx != null ? (props.images[origIdx]?.id ?? null) : null;
-        } else {
-          const origIdx = androidFilteredIndices.value[previewIndex.value];
-          currentImageId.value = origIdx != null ? (props.images[origIdx]?.id ?? null) : null;
-        }
-      } else {
-        if (props.images.length <= previewIndex.value) {
-          const newIndex = props.images.length - 1;
-          previewIndex.value = newIndex;
-          setPreviewByIndex(newIndex);
-        } else {
-          setPreviewByIndex(previewIndex.value);
-        }
-      }
-    }
-  },
-);
 
 watch(
   () => previewVisible.value,
@@ -1186,41 +1173,31 @@ const handlePswpBeforeClose = (source?: string): boolean => {
 };
 
 const handlePswpChange = ({ index }: { index: number }) => {
-  if (index < 0) return;
-  if (uiStore.isCompact) {
-    const previousOrigIdx = currentImageId.value
-      ? props.images.findIndex((img) => img.id === currentImageId.value)
-      : -1;
-    const previousFilteredIdx = previousOrigIdx >= 0 ? androidFilteredIndices.value.indexOf(previousOrigIdx) : -1;
-    const origIdx = androidFilteredIndices.value[index];
-    if (origIdx == null || origIdx >= props.images.length) return;
-    initialPanY = null;
-    if (verticalDragResetTimer) {
-      clearTimeout(verticalDragResetTimer);
-      verticalDragResetTimer = null;
-    }
-    swipeDeleteActive.value = false;
-    swipeDeleteReady.value = false;
-    isFromVerticalDrag = false;
-    videoPaused.value = false;
-    previewIndex.value = index;
-    const img = props.images[origIdx];
-    if (img) currentImageId.value = img.id;
-    if (img && previousOrigIdx >= 0 && previousOrigIdx !== origIdx) {
-      const direction = index > previousFilteredIdx ? "next" : "prev";
-      emitPreviewNavigate(direction, previousOrigIdx, origIdx, false, img);
-    }
-  } else {
-    if (index >= props.images.length) return;
-    previewIndex.value = index;
-    const img = props.images[index];
-    if (img) currentImageId.value = img.id;
+  if (!uiStore.isCompact || index < 0) return;
+  const target = pswpWindow.value[index];
+  if (!target) return;
+
+  initialPanY = null;
+  if (verticalDragResetTimer) {
+    clearTimeout(verticalDragResetTimer);
+    verticalDragResetTimer = null;
   }
+  swipeDeleteActive.value = false;
+  swipeDeleteReady.value = false;
+  isFromVerticalDrag = false;
+  videoPaused.value = false;
+
+  // 窗口里换了一张 = 用户划到了邻居：请求上层把 props.image 挪过去。
+  // 这里不回写 pswpCommandIndex——窗口随后会平移，PhotoSwipe 自己用 relocate 跟上。
+  if (target.id === currentId.value) return;
+  if (target.id === props.nextImage?.id) requestSwitch("next");
+  else if (target.id === props.prevImage?.id) requestSwitch("prev");
 };
 
-const handlePswpReachBoundary = ({ direction, index }: { direction: "prev" | "next"; index: number }) => {
+const handlePswpReachBoundary = ({ direction }: { direction: "prev" | "next"; index: number }) => {
   if (!uiStore.isCompact) return;
-  emitPreviewPageBoundary(direction, index);
+  // 窗口边缘 ≠ 列表边界：是不是真的到头由上层的 canPrev / canNext 说了算
+  requestSwitch(direction);
 };
 
 /** Android：视频幻灯片双击切换播放/暂停（photoswipe-vue 只对 video 类型 slide 触发） */
@@ -1238,7 +1215,6 @@ const handleVideoPlayFail = () => {
 const handlePswpClose = () => {
   const closedImage = previewImage.value;
   doAndroidPreviewCleanup();
-  previewIndex.value = -1;
   swipeDeleteActive.value = false;
   swipeDeleteReady.value = false;
   isFromVerticalDrag = false;
@@ -1267,11 +1243,7 @@ onUnmounted(() => {
     previewInteractTimer = null;
   }
   notifyPreviewInteracting(false);
-  if (navThrottleTimer) {
-    clearTimeout(navThrottleTimer);
-    navThrottleTimer = null;
-  }
-  isNavThrottled = false;
+  stopImageSubscription();
   if (resizeObserver) {
     resizeObserver.disconnect();
     resizeObserver = null;
@@ -1293,30 +1265,30 @@ if (!uiStore.isCompact) {
   );
 }
 
-const open = (index: number) => {
-  if (uiStore.isCompact) {
-    console.log("open preview");
-    const img = props.images[index];
-    const pswpIndex = androidFilteredIndices.value.indexOf(index);
-    if (pswpIndex < 0) return;
-    previewIndex.value = pswpIndex;
-    if (img) {
-      currentImageId.value = img.id;
+/**
+ * props.image 非空即打开。弹窗不再有命令式 open()——开关是上层 previewedId 的投影。
+ * 打开瞬间把 PhotoSwipe 的命令索引对准当前图；之后窗口平移一律走 relocate，不再写这里。
+ */
+watch(
+  () => props.image,
+  async (value) => {
+    if (value) {
+      if (!previewVisible.value) {
+        previewModal.open();
+        videoPaused.value = false;
+      }
+      await nextTick();
+      pswpCommandIndex.value = pswpCurrentIndex.value;
+    } else if (previewVisible.value) {
+      closePreview();
     }
-    previewModal.open();
-    videoPaused.value = false;
-    return;
-  }
-  // 桌面端：先打开 dialog，再触发 setPreviewByIndex
-  previewModal.open();
-  setPreviewByIndex(index);
-};
+  },
+  { immediate: true },
+);
 
 defineExpose({
-  open,
   close: closePreview,
   previewVisible,
-  previewIndex,
 });
 </script>
 

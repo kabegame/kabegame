@@ -484,7 +484,6 @@ pub(crate) fn configure_app(
             get_folder_sync_run_state,
             cancel_folder_sync,
             // --- Images ---
-            get_image_by_id,
             get_image_metadata,
             get_image_metadata_full,
             get_image_native_metadata,
