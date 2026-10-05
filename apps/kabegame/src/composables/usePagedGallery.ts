@@ -1,6 +1,6 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
-import type { ImageInfo } from "@kabegame/core/types/image";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import type { ImageInfo } from "@/types/image";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 
 type PagedRouteStore = {
   computedPath: string;

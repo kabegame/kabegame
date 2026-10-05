@@ -26,7 +26,7 @@ mod imp {
 
     use crate::{ipc, protocol, runtime, Cef};
 
-    // 前端同名常量见 `packages/kabegame-core/src/utils/dragExport.ts`。
+    // 前端同名常量见 `apps/kabegame/src/utils/dragExport.ts`。
     const DRAG_IMAGE_ID_MIME: &str = "application/x-kabegame-image-id";
 
     static WEBVIEW_BROWSER_IDS: std::sync::OnceLock<Mutex<BTreeMap<String, i32>>> =

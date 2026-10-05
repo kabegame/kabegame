@@ -38,7 +38,7 @@ deno run -A packages/kabegame-element-plus-icons/scripts/generate.ts
 
 ## 消费方式
 
-与 `@kabegame/core` 同一套约定（alias 指向 `src/`，无构建产物）：
+约定与其他 vendored 包一致（alias 指向 `src/`，无构建产物）：
 
 - vite alias：`vite.config.pub.ts` 里 `@kabegame/element-plus-icons` → 本目录 `src/`
 - 类型：根 `tsconfig.json` 与 `apps/kabegame/tsconfig.json` 的 `paths`（后者整体覆盖前者的

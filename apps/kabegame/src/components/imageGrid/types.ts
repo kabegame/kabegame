@@ -1,7 +1,7 @@
 import type { Ref, ShallowRef } from "vue";
-import type { ImageInfo } from "@kabegame/core/types/image";
+import type { ImageInfo } from "@/types/image";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
-import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
+import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { ChangeBatch } from "@/services/dataChangeHub";
 import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
 

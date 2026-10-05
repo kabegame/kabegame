@@ -86,7 +86,7 @@ import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
 import { isVideoMediaType } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 import { useI18n } from "@kabegame/i18n";
 
 interface Props {

@@ -51,8 +51,8 @@
 import { ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Folder, MoreFilled, Plus, PriceTag, Search } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { isLabelForestKind } from "@kabegame/core/types/album";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { isLabelForestKind } from "@/types/album";
 import AlbumTreeView from "./AlbumTreeView.vue";
 import type { TreeDndController } from "@/components/tree/types";
 import {

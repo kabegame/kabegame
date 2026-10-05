@@ -99,13 +99,16 @@ A/~~/B/~~/C  ⇒  C(from B(from A))
 
 语义：
 
-- 走到 `~~` 时，引擎把当前 composed 原样冻结，新建一个空查询，令其 FROM 为内层、别名为 schema 的**表名**，
-  然后**回到 schema 根 provider 重新折叠**（根的 fields 等贡献再施加一次）。provider 因此永远只写
-  `albums.xxx`，不知道自己在第几层；也不需要任何 provider 声明子查询（provider 没有全局视角）。
-- 回到根而不是停在当前 provider：分页等终端 provider 没有后续路由，根持有该 scheme 的完整路由表；外层
-  行结构也与内层一致。`list("…/~~")` 即根的列举。
-- 新一层从空查询开始：内层的 `where` / `order` / `limit` / `offset` / `group_by` 都不继承，
-  `where_clear` 也清不到内层（已冻结）。
+- 走到 `~~` 时，引擎把当前 composed 原样冻结，新建一层令其 FROM 为内层、别名为 schema 的**表名**，并以
+  一条 `<表名>.*` 承接内层 SELECT 的全部列；边界后只把 provider 视角切回 schema 根，**不重放**根 provider
+  的 fields 等贡献。provider 因此永远只写 `albums.xxx`，不知道自己在第几层；也不需要任何 provider 声明
+  子查询（provider 没有全局视角）。
+- 切回根而不是停在当前 provider：分页等终端 provider 没有后续路由，根持有该 scheme 的完整路由表；
+  `list("…/~~")` 即根的列举。外层列名就是内层 SELECT 的列名；裸列或表达式列的列名由 SQL 方言决定，
+  需要稳定列名时必须显式写 `as`。
+- 新一层只继承 fields：内层的 `where` / `order` / `limit` / `offset` / `group_by` 都不继承，`where_clear`
+  也清不到内层（已冻结）。`order.entries` 与 `order.global` 全部丢弃；`/desc` 等全局排序修饰符必须写在
+  边界之后那一层，边界之后没有 `ORDER BY` 时结果顺序不保证。
 - 约束：`~any` / `~not` 组内不得出现 `~~`（分支是旁路，封进去的只是当前分支视角）；程序化 schema
   （§3.1）没有 SQL 可封装，出现 `~~` 报 `SubqueryUnsupported`；`~~x` 这类以 `~` 开头的非记号段仍报错，
   字面段写 `\~~`。
@@ -127,6 +130,15 @@ SELECT … FROM pq_nest_1 AS albums INNER JOIN albums AS tree ON … WHERE (hid_
   分页子查询。实测 1.3 万画册、12 万成员行下画册页的计数查询超时（> 5s）；物化后内层只算一次。
 - CTE 名用 `pq_nest_<深度>` 而不是表名：外层还要 `JOIN albums AS tree` 引用真实表，同名 CTE 会把它遮住。
 - `${composed}` 内联与 COUNT 包装会得到 `((WITH …))` / `FROM (WITH …) AS pq_sub`，三种方言都合法。
+
+已知限制：
+
+- `in_need` 看不穿 `<表名>.*` 里实际包含哪些列。边界后再次贡献同名字段时，字段及其依赖的 join 仍会加入，
+  SQL 可能出现重名列；行对象按执行器既有的后写胜规则取值。这与此前 `images://` 的通配行为一致。
+- `SELECT <表名>.*` 配合 `GROUP BY` 在 Postgres 或启用 `ONLY_FULL_GROUP_BY` 的 MySQL 下可能非法，因为数据库
+  无法从 CTE 识别主键函数依赖；此前根 provider 的显式字段也有相同限制。
+- 对 Kabegame 现有路径，改动前后列集合不变：`albums://` 中贡献 fields 的 children / images provider 都在
+  边界之后，`images://` 根本来就使用 `images.*`。新语义主要避免以后在边界前新增的字段静默消失。
 
 性能提示：物化只保证内层只算一次，边界之后的 join 条件仍要能走索引。子树判断用前缀区间
 
@@ -169,12 +181,14 @@ COUNT，把整个结构重跑 N 次。
 
 ### 3.2 join / fields 的 `as + in_need` 共享机制
 
-- `as: 'ab'` → 字面别名；路径上同名 `as` 已存在则**报错**（默认 `in_need = false`）
+- `as: 'ab'` → 字面别名；路径上同名 `as` 已存在时**后到覆盖、保持原位置**（默认 `in_need = false`）。
+  字面别名拼错并意外撞名时不会另行报警，这是覆盖语义的代价
 - `as: 'ab', in_need: true` → 同名已存在则**放弃本贡献**，跳过累积
   - 用途：跨 provider 共享同一 join。约定共同 `as` 名，所有需要它的 provider 都用 `in_need: true` 贡献
 - `as: '${ref:my_id}'` → 引擎自动分配唯一别名
   - 同 ContribQuery 内其他位置（join.on / where / fields.sql）用 `${ref:my_id}` 引用
   - 不与 `in_need` 同时使用（auto-allocated 必然唯一，`in_need` 无意义 → 加载期拒绝）
+  - 同一 ident 在一条路径上只能声明一次，二次声明即报错；建议 ident 带 provider 前缀，避免跨 provider 撞名
 
 ### 3.3 where（WhereQuery 谓词树）
 

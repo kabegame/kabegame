@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
 import { invoke } from "@/api/rpc";
-import { IS_LINUX } from "@kabegame/core/env";
+import { IS_LINUX } from "@/env";
 
 export type DesktopEnv = "plasma" | "gnome" | "unknown";
 

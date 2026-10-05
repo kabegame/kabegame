@@ -65,8 +65,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElCheckbox, ElCheckboxGroup, ElIcon, ElTooltip, KbFilterDropdown } from "@kabegame/element-plus";
 import { QuestionFilled, Search } from "@kabegame/element-plus-icons";
-import KbText from "@kabegame/core/components/common/form/KbText.vue";
-import { IS_ANDROID } from "@kabegame/core/env";
+import KbText from "@/components/common/form/KbText.vue";
+import { IS_ANDROID } from "@/env";
 import {
   canonicalSearchModes,
   GALLERY_SEARCH_MODES,

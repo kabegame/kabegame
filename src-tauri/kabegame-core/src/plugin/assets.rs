@@ -11,7 +11,7 @@ pub const ASSET_MAX_TOTAL_SIZE: usize = 10 * 1024 * 1024;
 
 /// 资源路径归一化。None = 「不是本地资源引用」或非法。
 /// 这是 kbAssets 项、md 引用、assets 键三者的唯一裁决者。
-/// 同构 TS 实现:packages/kabegame-core/src/utils/assetPath.ts —— 改规则必须同时改两处。
+/// 同构 TS 实现:apps/kabegame/src/utils/assetPath.ts —— 改规则必须同时改两处。
 pub fn normalize_asset_path(raw: &str) -> Option<String> {
     static TITLE_SUFFIX_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -86,7 +86,7 @@ pub fn mime_for_asset(key_or_path: &str) -> &'static str {
 /// 是否是「展示位」资源：完整归一化路径以 `banner` 开头，大小写不敏感。
 ///
 /// 这类图供「源」页面的快捷预览走马灯当橱窗图用，通常不被任何 md 引用；
-/// 同构 TS 实现：`packages/kabegame-core/src/utils/assetPath.ts::isBannerAsset`。
+/// 同构 TS 实现：`apps/kabegame/src/utils/assetPath.ts::isBannerAsset`。
 pub fn is_banner_asset(key_or_path: &str) -> bool {
     key_or_path.to_ascii_lowercase().starts_with("banner")
 }

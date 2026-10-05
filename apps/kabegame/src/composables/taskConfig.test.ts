@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PluginVarDef } from "@kabegame/core/utils/pluginVarForm";
+import type { PluginVarDef } from "@/utils/pluginVarForm";
 
 vi.mock("@/stores/crawler", () => ({
   useCrawlerStore: () => ({ setTaskConfig: vi.fn() }),

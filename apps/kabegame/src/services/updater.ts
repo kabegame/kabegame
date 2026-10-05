@@ -4,8 +4,8 @@
 //! 转发用户操作（手动检查 / 下载 / 取消 / 重启）。调度在后端，前端不再 setInterval。
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
-import { IS_WEB, IS_ANDROID } from "@kabegame/core/env";
-import { kameMessage } from "@kabegame/core/utils/kameMessage";
+import { IS_WEB, IS_ANDROID } from "@/env";
+import { kameMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import {
   useUpdaterStore,

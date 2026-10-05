@@ -37,7 +37,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
@@ -47,8 +47,8 @@ import {
   normalizeVarsForUI,
   matchUserConfigFromDefaults,
   type PluginVarDef,
-} from "@kabegame/core/utils/pluginVarForm";
-import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
+} from "@/utils/pluginVarForm";
+import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 
 const { t } = useI18n();

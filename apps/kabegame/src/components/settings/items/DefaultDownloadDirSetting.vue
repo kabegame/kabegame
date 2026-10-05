@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { FolderOpened } from "@kabegame/element-plus-icons";
 import { invoke } from "../../../api";
 import { open } from "@tauri-apps/plugin-dialog";

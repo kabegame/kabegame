@@ -89,6 +89,8 @@ pub struct ProviderQuery {
     pub aliases: AliasTable,
     /// raw-bind API 内部生成的 properties（`__pq_raw_N`）；build_sql 时合并到 ctx.properties。
     pub adhoc_properties: HashMap<String, TemplateValue>,
+    /// 折叠期间产生的错误；由 resolve 与 SQL 渲染统一转成硬失败。
+    pub fold_errors: Vec<FoldError>,
     pub(crate) adhoc_counter: u32,
 }
 
@@ -106,18 +108,35 @@ impl ProviderQuery {
         }
     }
 
-    /// 路径上是否已有同字面 field alias。
-    pub(crate) fn has_field_alias(&self, name: &str) -> bool {
-        self.fields
-            .iter()
-            .any(|f| f.alias.as_ref().and_then(|a| a.as_literal()) == Some(name))
+    /// `~~` 边界：内层整体成为 FROM，新一层以一条 `<alias>.*` 承接内层全部列；fold 错误粘过来。
+    pub fn from_nested(mut inner: ProviderQuery, alias: &str) -> Self {
+        let fold_errors = std::mem::take(&mut inner.fold_errors);
+        let mut outer = Self::new();
+        outer.from = Some(FromSource::Subquery {
+            inner: Arc::new(inner),
+            alias: alias.to_string(),
+        });
+        outer.fields.push(FieldFrag {
+            sql: SqlExpr(format!("{alias}.*")),
+            alias: None,
+            in_need: false,
+        });
+        outer.fold_errors = fold_errors;
+        outer
     }
 
-    /// 路径上是否已有同字面 join alias。
-    pub(crate) fn has_join_alias(&self, name: &str) -> bool {
+    /// 路径上同字面 field alias 的位置。
+    pub(crate) fn field_alias_pos(&self, name: &str) -> Option<usize> {
+        self.fields
+            .iter()
+            .position(|f| f.alias.as_ref().and_then(|a| a.as_literal()) == Some(name))
+    }
+
+    /// 路径上同字面 join alias 的位置。
+    pub(crate) fn join_alias_pos(&self, name: &str) -> Option<usize> {
         self.joins
             .iter()
-            .any(|j| j.alias.as_literal() == Some(name))
+            .position(|j| j.alias.as_literal() == Some(name))
     }
 
     // ============================================================================
@@ -171,7 +190,7 @@ impl ProviderQuery {
     }
 
     /// 追加一条 JOIN；on 内部 `?` 占位用 params 填。
-    /// alias 字面冲突按 fold 同样规则报错。
+    /// alias 字面冲突按 fold 同样规则就地覆盖。
     pub fn with_join_raw(
         mut self,
         kind: JoinKind,
@@ -179,21 +198,23 @@ impl ProviderQuery {
         alias: &str,
         on: Option<&str>,
         params: &[TemplateValue],
-    ) -> Result<Self, FoldError> {
-        if self.has_join_alias(alias) {
-            return Err(FoldError::AliasCollision(alias.to_string()));
-        }
+    ) -> Self {
         // table 不接受 `?` 占位（避免在 SQL 表名位置参数化）；params 全部用于 on
         let table_expr = SqlExpr(table.to_string());
         let on_expr = on.map(|o| self.intern_raw(o, params));
-        self.joins.push(JoinFrag {
+        let join = JoinFrag {
             kind,
             table: table_expr,
             alias: ResolvedAlias::Literal(alias.to_string()),
             on: on_expr,
             in_need: false,
-        });
-        Ok(self)
+        };
+        if let Some(pos) = self.join_alias_pos(alias) {
+            self.joins[pos] = join;
+        } else {
+            self.joins.push(join);
+        }
+        self
     }
 
     /// 追加一项 ORDER BY 字段；同名 field 后声明覆盖方向但保持原位置。
@@ -285,22 +306,23 @@ mod tests {
         assert!(q.offset_terms.is_empty());
         assert!(q.limit.is_none());
         assert_eq!(q.aliases.counter, 0);
+        assert!(q.fold_errors.is_empty());
     }
 
     #[test]
-    fn has_field_alias_finds_literal() {
+    fn field_alias_pos_finds_literal() {
         let mut q = ProviderQuery::new();
         q.fields.push(FieldFrag {
             sql: SqlExpr("x".into()),
             alias: Some(ResolvedAlias::Literal("ax".into())),
             in_need: false,
         });
-        assert!(q.has_field_alias("ax"));
-        assert!(!q.has_field_alias("ay"));
+        assert_eq!(q.field_alias_pos("ax"), Some(0));
+        assert_eq!(q.field_alias_pos("ay"), None);
     }
 
     #[test]
-    fn has_field_alias_skips_unresolved() {
+    fn field_alias_pos_skips_unresolved() {
         let mut q = ProviderQuery::new();
         q.fields.push(FieldFrag {
             sql: SqlExpr("x".into()),
@@ -308,11 +330,11 @@ mod tests {
             in_need: false,
         });
         // unresolved should not count as literal alias
-        assert!(!q.has_field_alias("foo"));
+        assert_eq!(q.field_alias_pos("foo"), None);
     }
 
     #[test]
-    fn has_join_alias_finds_literal() {
+    fn join_alias_pos_finds_literal() {
         let mut q = ProviderQuery::new();
         q.joins.push(JoinFrag {
             kind: JoinKind::Inner,
@@ -321,8 +343,8 @@ mod tests {
             on: None,
             in_need: false,
         });
-        assert!(q.has_join_alias("ai"));
-        assert!(!q.has_join_alias("aj"));
+        assert_eq!(q.join_alias_pos("ai"), Some(0));
+        assert_eq!(q.join_alias_pos("aj"), None);
     }
 
     // ===== raw-bind API =====
@@ -360,15 +382,13 @@ mod tests {
 
     #[test]
     fn with_join_raw_simple() {
-        let q = ProviderQuery::new()
-            .with_join_raw(
-                JoinKind::Inner,
-                "album_images",
-                "ai",
-                Some("ai.image_id = images.id"),
-                &[],
-            )
-            .unwrap();
+        let q = ProviderQuery::new().with_join_raw(
+            JoinKind::Inner,
+            "album_images",
+            "ai",
+            Some("ai.image_id = images.id"),
+            &[],
+        );
         assert_eq!(q.joins.len(), 1);
         assert_eq!(q.joins[0].alias.as_literal(), Some("ai"));
         assert_eq!(q.joins[0].kind, JoinKind::Inner);
@@ -376,15 +396,13 @@ mod tests {
 
     #[test]
     fn with_join_raw_with_param_in_on() {
-        let q = ProviderQuery::new()
-            .with_join_raw(
-                JoinKind::Left,
-                "tags",
-                "t",
-                Some("t.image_id = images.id AND t.kind = ?"),
-                &[TemplateValue::Text("primary".into())],
-            )
-            .unwrap();
+        let q = ProviderQuery::new().with_join_raw(
+            JoinKind::Left,
+            "tags",
+            "t",
+            Some("t.image_id = images.id AND t.kind = ?"),
+            &[TemplateValue::Text("primary".into())],
+        );
         let on = q.joins[0].on.as_ref().unwrap();
         assert!(on.0.contains("${properties.__pq_raw_0}"));
         assert_eq!(
@@ -394,12 +412,15 @@ mod tests {
     }
 
     #[test]
-    fn with_join_raw_dedup_collision() {
+    fn with_join_raw_collision_overwrites_in_place() {
         let q = ProviderQuery::new()
             .with_join_raw(JoinKind::Inner, "t1", "x", None, &[])
-            .unwrap();
-        let r = q.with_join_raw(JoinKind::Inner, "t2", "x", None, &[]);
-        assert!(matches!(r, Err(FoldError::AliasCollision(_))));
+            .with_join_raw(JoinKind::Left, "middle", "y", None, &[])
+            .with_join_raw(JoinKind::Full, "t2", "x", None, &[]);
+        assert_eq!(q.joins.len(), 2);
+        assert_eq!(q.joins[0].table, SqlExpr("t2".into()));
+        assert_eq!(q.joins[0].kind, JoinKind::Full);
+        assert_eq!(q.joins[1].table, SqlExpr("middle".into()));
     }
 
     #[test]

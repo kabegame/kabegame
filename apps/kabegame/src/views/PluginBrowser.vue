@@ -317,11 +317,11 @@
 import { ref, computed, onMounted, onUnmounted, reactive, watch, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { Refresh, Upload, Plus, Search, Setting, QuestionFilled } from "@kabegame/element-plus-icons";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
-import type { PluginManifestText } from "@kabegame/core/stores/plugins";
-import type { PluginLabel } from "@kabegame/core/stores/pluginLabels";
+import type { PluginManifestText } from "@/stores/plugins";
+import type { PluginLabel } from "@/stores/pluginLabels";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke, listen } from "@/api/rpc";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -330,18 +330,16 @@ import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
 import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
-import PluginQuickPreviewPanel, {
-  type QuickPreviewPluginLike,
-} from "@kabegame/core/components/plugin/PluginQuickPreviewPanel.vue";
-import HoverRevealPanel from "@kabegame/core/components/common/HoverRevealPanel.vue";
-import { bannerPreviewImages } from "@kabegame/core/utils/assetPath";
+import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
+import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
+import { bannerPreviewImages } from "@/utils/assetPath";
 import { isUpdateAvailable } from "@/utils/version";
-import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { storePluginCacheDb } from "@kabegame/core/cache/storePluginCache";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { trackEvent } from "@kabegame/core/track/umami";
+import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
+import { useModal } from "@/composables/useModal";
+import { storePluginCacheDb } from "@/cache/storePluginCache";
+import { useUiStore } from "@/stores/ui";
+import { useSettingsStore } from "@/stores/settings";
+import { trackEvent } from "@/track/umami";
 import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
 
 interface PluginSource {

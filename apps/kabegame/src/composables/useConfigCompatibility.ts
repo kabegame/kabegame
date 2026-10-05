@@ -1,7 +1,7 @@
 import { unref } from "vue";
 import { resolveConfigText, i18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
-import { validateVarValue, type PluginVarDef } from "@kabegame/core/utils/pluginVarForm";
+import { validateVarValue, type PluginVarDef } from "@/utils/pluginVarForm";
 
 export interface ConfigCompatibility {
   versionCompatible: boolean; // 第一步：插件是否存在

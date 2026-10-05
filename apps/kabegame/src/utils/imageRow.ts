@@ -1,4 +1,4 @@
-import type { ImageInfo } from "@kabegame/core/types/image";
+import type { ImageInfo } from "@/types/image";
 
 type Row = Record<string, unknown>;
 

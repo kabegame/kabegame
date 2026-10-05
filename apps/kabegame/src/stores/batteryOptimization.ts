@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID } from "@/env";
 import {
   checkBatteryOptimizationStatus,
   requestBatteryOptimizationExemption,

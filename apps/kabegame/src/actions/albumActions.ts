@@ -12,11 +12,11 @@ import {
   VideoPause,
   PriceTag,
 } from "@kabegame/element-plus-icons";
-import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
+import type { ActionItem, ActionContext } from "@/actions/types";
 import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
 import { i18n } from "@kabegame/i18n";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import type { AlbumSyncMode } from "@kabegame/core/types/album";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import type { AlbumSyncMode } from "@/types/album";
 import { syncModeIcon } from "@/utils/albumSyncMode";
 
 /** 本地文件夹同步仅桌面端支持（排除 Android 与 Web）。 */

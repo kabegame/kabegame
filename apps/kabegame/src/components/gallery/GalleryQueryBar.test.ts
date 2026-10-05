@@ -6,8 +6,8 @@ import GalleryQueryBar from "./GalleryQueryBar.vue";
 import { composeQueryFilters, splitQueryFilters, type GalleryQuery } from "@/utils/galleryQuery";
 
 const ui = vi.hoisted(() => ({ isCompact: false }));
-vi.mock("@kabegame/core/stores/ui", () => ({ useUiStore: () => ui }));
-vi.mock("@kabegame/core/stores/settings", () => ({
+vi.mock("@/stores/ui", () => ({ useUiStore: () => ui }));
+vi.mock("@/stores/settings", () => ({
   useSettingsStore: () => ({ values: {}, set: vi.fn() }),
 }));
 vi.mock("@/stores/plugins", () => ({

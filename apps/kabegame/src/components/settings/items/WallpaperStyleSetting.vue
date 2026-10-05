@@ -31,12 +31,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID } from "@kabegame/core/env";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useSettingsStore } from "@/stores/settings";
+import { IS_ANDROID } from "@/env";
+import { useUiStore } from "@/stores/ui";
 import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
-import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
+import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;

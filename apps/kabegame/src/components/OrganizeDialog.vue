@@ -156,10 +156,10 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from "vue";
 import { invoke } from "@/api/rpc";
-import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
+import AndroidDrawer from "@/components/AndroidDrawer.vue";
 import { useApp } from "@/stores/app";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 import { Arrayable } from "@kabegame/element-plus/utils";
 
 interface Props {

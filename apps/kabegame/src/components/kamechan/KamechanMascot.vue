@@ -78,21 +78,21 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { storeToRefs } from "pinia";
 import { Clock, FullScreen, Hide, Minus } from "@kabegame/element-plus-icons";
-import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
-import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
-import { useKameMessageStore } from "@kabegame/core/stores/kameMessage";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import type { ActionContext, ActionItem } from "@kabegame/core/actions/types";
+import ActionRenderer from "@/components/ActionRenderer.vue";
+import { useActionMenu } from "@/composables/useActionMenu";
+import { useKameMessageStore } from "@/stores/kameMessage";
+import { useSettingsStore } from "@/stores/settings";
+import type { ActionContext, ActionItem } from "@/actions/types";
 import { useI18n } from "@kabegame/i18n";
 import appLogoUrl from "@/assets/icon-small.png";
 import { useKamechanMachine } from "./useKamechanMachine";
 import KameBubble from "./KameBubble.vue";
 import KameToolboxBubble from "./KameToolboxBubble.vue";
 import KamechanHistoryDialog from "./KamechanHistoryDialog.vue";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState.ts";
+import { useSettingKeyState } from "@/composables/useSettingKeyState.ts";
 import KamechanBusyBadge from "./KamechanBusyBadge.vue";
 import { useBusyTasks } from "@/composables/useBusyTasks";
 

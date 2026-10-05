@@ -1,7 +1,7 @@
 import { listen, type UnlistenFn } from "@/api/rpc";
 import { invoke } from "@/api/rpc";
-import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/utils/fileUrl";
-import { IS_DEV } from "@kabegame/core/env";
+import { fileToUrl, initHttpServerBaseUrl } from "@/utils/fileUrl";
+import { IS_DEV } from "@/env";
 
 type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 type Transition = "none" | "fade" | "slide" | "zoom";

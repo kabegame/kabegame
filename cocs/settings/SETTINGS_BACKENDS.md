@@ -2,7 +2,7 @@
 
 ## 主题
 
-`packages/kabegame-core/src/stores/settings.ts` 统一管理前端设置状态。每个设置 key 的后端由
+`apps/kabegame/src/stores/settings.ts` 统一管理前端设置状态。每个设置 key 的后端由
 `settingsDescriptors.ts` 描述，调用方只通过 `useSettingKeyState(key)` 读写。
 
 ## 后端类型
@@ -46,8 +46,8 @@ setSettingsQueryAdapter({
 
 ## 涉及文件
 
-- `packages/kabegame-core/src/stores/settings.ts`
-- `packages/kabegame-core/src/stores/settingsDescriptors.ts`
-- `packages/kabegame-core/src/stores/localSettingsMigrations.ts`
-- `packages/kabegame-core/src/composables/useSettingKeyState.ts`
+- `apps/kabegame/src/stores/settings.ts`
+- `apps/kabegame/src/stores/settingsDescriptors.ts`
+- `apps/kabegame/src/stores/localSettingsMigrations.ts`
+- `apps/kabegame/src/composables/useSettingKeyState.ts`
 - `apps/kabegame/src/stores/pathRoute.ts`

@@ -11,7 +11,7 @@ import {
   querySearchTerm,
 } from "@/utils/galleryPath";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { useAlbumIdPathState, lastAlbumIdOf } from "@/composables/useAlbumIdPathState";
 
 /** 会话内记忆的搜索维度勾选，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */

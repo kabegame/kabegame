@@ -13,17 +13,12 @@
  * 由父级以 `:key="taskConfigRevision"` 重建——只有外部写入才重建，用户编辑不触发循环。
  */
 import { computed, ref, watch } from "vue";
-import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
+import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import { usePluginStore } from "@/stores/plugins";
-import {
-  isRequired,
-  normalizeVarsForUI,
-  expandVarsForBackend,
-  type PluginVarDef,
-} from "@kabegame/core/utils/pluginVarForm";
-import { matchesPluginVarWhen, withCoercedOptions } from "@kabegame/core/utils/pluginVarWhen";
-import { trackEvent } from "@kabegame/core/track/umami";
-import { IS_WEB } from "@kabegame/core/env";
+import { isRequired, normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/utils/pluginVarForm";
+import { matchesPluginVarWhen, withCoercedOptions } from "@/utils/pluginVarWhen";
+import { trackEvent } from "@/track/umami";
+import { IS_WEB } from "@/env";
 
 const props = defineProps<{
   pluginId: string;

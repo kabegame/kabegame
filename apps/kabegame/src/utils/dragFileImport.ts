@@ -1,5 +1,5 @@
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { IS_WINDOWS } from "@/env";
 import { i18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";

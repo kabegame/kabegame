@@ -1,6 +1,6 @@
 import { onBeforeUnmount, shallowRef, type Ref, type ShallowRef } from "vue";
 import type { TreeDndController, TreeDragOverReaction, TreeDropPosition, TreeNodeHandle, TreeRow } from "./types";
-import { IS_WEB } from "@kabegame/core/env";
+import { IS_WEB } from "@/env";
 
 /**
  * 树内节点拖拽：接口学 vscode ITreeDragAndDrop，运输层为 pointer 事件状态机。

@@ -1,10 +1,24 @@
 {
     "namespace": "kabegame",
     "name": "albums_of_image_provider",
+    "note": "Albums one image belongs to directly (oldest first). Composable with the shared album filters: of_image_<id>/album_kind/label keeps only label albums, and several kinds OR with ~any/album_kind/label/~or/album_kind/label_dir/~end.",
     "properties": { "image_id": { "type": "string", "default": "", "optional": false } },
     "query": {
         "join": [{ "kind": "INNER", "table": "album_images", "as": "owned_ai", "on": "albums.id = owned_ai.album_id", "in_need": true }],
         "where": "CAST(owned_ai.image_id AS TEXT) = ${properties.image_id}",
-        "order": [{ "sql": "albums.created_at", "order": "asc", "clear": "all" }]
+        // 批量导入的标签 created_at 常常全等，只按它排的话行序随执行计划漂移
+        // （叠了 album_kind 过滤段就会换计划）；补 id 作兜底键保证输出稳定。
+        "order": [
+            { "sql": "albums.created_at", "order": "asc", "clear": "all" },
+            { "sql": "albums.id", "order": "asc" }
+        ]
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "albums_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
     }
 }

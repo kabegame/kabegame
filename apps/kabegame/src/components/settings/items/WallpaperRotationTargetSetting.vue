@@ -16,10 +16,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 
 const { t } = useI18n();
 

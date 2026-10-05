@@ -47,6 +47,7 @@
 - 整数输入编程可输入框，上下界也不用滑块
 - 开始收集弹窗去掉定时设置、配置选择配置，添加跳转配置页面，移动保存到配置按钮到左下方
 - 运行配置页面一键运行改成打开配置弹窗
+- 图片详情弹窗仅在 Android 提供，桌面端图片右键菜单不再显示“详情”入口
 
 ## 开发侧
 
@@ -62,6 +63,7 @@
 
 ### Changed
 
+- PathQL `~~` 边界改为通过 `<表名>.*` 继承内层全部 fields，不再重放根 provider 贡献；fields / join 的同名字面别名改为后到原位覆盖，`${ref:}` 重名则明确报错
 - PathQL `register_schema` 第二个参数收紧为数据表名（不再接受任意 FROM 片段），行不来自 SQL 的 schema（`plugin://`）改用 `register_programmatic_schema`
 - 插件 id 收紧为 `[a-zA-Z0-9_-]`、不超过 64 字节（去掉 `.`），规则在 `storage::labels::is_plugin_ident`（标签 key 另用更宽的 `is_label_key`，额外允许英文括号与空格）；不合规的 `.kgpg` 安装 / 打包时被拒绝
 - 元数据迁移改为「失败也盖版本」：每行无论成败只处理一次，失败行保留原数据，不再每次启动重试
@@ -69,3 +71,4 @@
 - windows下拖动文件通过新的download端点下载，可以显示真实文件名称。
 - 重构前端pathql查询视图为eventWorker统一收集、refetch、转发
 - vendored element-plus 的 `ElSelect` 默认 `fit-input-width`（`select/src/select.ts` 里 `fitInputWidth` 默认改 `true`，与 `ElSelectV2` 对齐），业务侧不再逐个传该 prop；需要按内容宽度的调用方显式传 `false`
+- 重构去掉前端 kabegame-core，并入kabegame

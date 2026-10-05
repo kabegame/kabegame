@@ -6,8 +6,8 @@ import {
   normalizeVarsForUI,
   validateVarValue,
   type PluginVarDef,
-} from "@kabegame/core/utils/pluginVarForm";
-import { matchesPluginVarWhen, withCoercedOptions } from "@kabegame/core/utils/pluginVarWhen";
+} from "@/utils/pluginVarForm";
+import { matchesPluginVarWhen, withCoercedOptions } from "@/utils/pluginVarWhen";
 import { fetchPluginUserDefault, type PluginUserDefault } from "@/composables/usePluginConfig";
 
 /**

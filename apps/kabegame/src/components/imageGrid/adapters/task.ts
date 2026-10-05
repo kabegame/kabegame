@@ -1,4 +1,4 @@
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";

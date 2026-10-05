@@ -16,8 +16,8 @@
 import { ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { DocumentCopy, Check } from "@kabegame/element-plus-icons";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { IS_WEB } from "@kabegame/core/env";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { IS_WEB } from "@/env";
 
 const { t } = useI18n();
 const props = defineProps<{

@@ -1,14 +1,14 @@
 import { invoke } from "@/api/rpc";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID, removeImagesFromAlbum } from "@/services/albums";
 import { albumChangeBatch, publishLocal } from "@/services/dataChangeHub";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { stripComposablePathTail } from "@/utils/galleryPath";
-import type { ImageInfo } from "@kabegame/core/types/image";
-import type { ImageAnalytics } from "@kabegame/core/track/imageAnalytics";
+import type { ImageInfo } from "@/types/image";
+import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
 import type { ViewSnapshot } from "@/services/liveQuery";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";

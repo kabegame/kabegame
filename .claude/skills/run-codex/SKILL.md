@@ -5,7 +5,7 @@ description: 用 codex CLI（OpenAI Codex，codex exec）把一个具体任务�
 
 # 用 codex CLI 执行任务
 
-`codex` 是本机安装的 OpenAI Codex CLI（`~/.local/bin/codex`，v0.144.1，standalone 安装）。
+`codex` 是本机安装的 OpenAI Codex CLI（`~/.local/bin/codex`，v0.157.1，standalone 安装）。
 交互 TUI（直接敲 `codex`）对 agent 没用——它会占住终端等按键。**agent 一律走 `codex exec` 非交互模式**，
 并且统一通过本 skill 的 driver 调用：
 
@@ -13,8 +13,8 @@ description: 用 codex CLI（OpenAI Codex，codex exec）把一个具体任务�
 .claude/skills/run-codex/driver.mjs
 ```
 
-driver 负责：拼 `codex exec` 参数、禁掉会刷屏的 MCP、关 stdin、流式打印进度、把最终答案单独落文件回显、超时兜底。
-**本文所有路径相对仓库根 `/Volumes/KIOXIA/kabegame`。**
+driver 负责：拼 `codex exec` 参数、关 stdin、流式打印进度、把最终答案单独落文件回显、超时兜底。
+**本文所有路径相对仓库根 `/Users/didi/Code/kabegame`。**
 
 ## 前置检查
 
@@ -96,7 +96,7 @@ node .claude/skills/run-codex/driver.mjs --help
 ```
 
 `--write` / `--full` / `-m <模型>` / `--schema <file>` / `--resume <id|last>` / `-C <目录>` /
-`-f <prompt文件>` / `--timeout <秒>`（默认 900）/ `--ephemeral` / `--mcp` / `--quiet`。
+`-f <prompt文件>` / `--timeout <秒>`（默认 900）/ `--ephemeral` / `--no-mcp` / `--quiet`。
 
 ### 产物
 
@@ -121,15 +121,19 @@ node .claude/skills/run-codex/driver.mjs --help
   [官方文档](https://learn.chatgpt.com/docs/non-interactive-mode)明确 resume 复用原会话的设置（沙箱、模型、工作目录都继承）——
   原会话是 read-only，续跑就也是 read-only，想换只能开新会话。resume 只接受 `--json` / `-o` / `-m` / `-c` / `--output-schema`。
   driver 已按子命令分别拼参数。
-- **`~/.codex/config.toml` 里配了 MCP server `kabegame`（`http://127.0.0.1:7490/mcp`）**，kabegame 应用没跑时
-  每几秒刷一条 `ERROR rmcp::transport::worker: ... HTTP 502`，把输出淹了。driver 默认加
-  `-c 'mcp_servers.kabegame.enabled=false'` 禁掉——`enabled` 是
-  [官方文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)里 `mcp_servers` 条目的正式字段
-  （"Set `false` to disable a server without deleting it"），driver 只是用 `-c` 按次覆盖，不动你的 config.toml。
-  要用 MCP（应用正跑着）加 `--mcp`。注意 **`-c 'mcp_servers={}'` 没用**——试过，照样刷 502，必须点名到 server。
-  （想永久禁用可以在 config.toml 的 `[mcp_servers.kabegame]` 下写 `enabled = false`，或者放进项目级
-  `.codex/config.toml`；但那样应用真跑起来时也用不上 MCP 了，所以 driver 不这么干。目前没有
-  `codex mcp disable` 子命令，[还是个 open issue](https://github.com/openai/codex/issues/16439)。）
+- **`-c 'mcp_servers.<name>.enabled=false'` 只能用在 config 真的声明了该 server 时。** codex ≥ 0.157
+  会把这个 `-c` 造出的「只有 `enabled` 字段」的条目当成一个缺 `transport` 的 server，直接
+  `Error loading config.toml: invalid transport in mcp_servers.kabegame` + exit 1，任务一步都跑不了。
+  历史上 `~/.codex/config.toml` 里配过 MCP server `kabegame`（`http://127.0.0.1:7490/mcp`），应用没跑时
+  会每几秒刷一条 `ERROR rmcp::transport::worker: ... HTTP 502` 淹掉输出，所以 driver 以前**默认**加这个
+  覆盖；现在那段配置已经没了，于是 driver 改成**默认不加**，只有 `--no-mcp` 才加，且加之前先 grep
+  config.toml 确认 server 真的在（不在就打一行提示跳过）。
+  `enabled` 本身是 [官方文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)里 `mcp_servers`
+  条目的正式字段（"Set `false` to disable a server without deleting it"），`-c` 只是按次覆盖，不动你的
+  config.toml。注意 **`-c 'mcp_servers={}'` 没用**——试过，照样刷 502，必须点名到 server。
+  （想永久禁用就在 config.toml 的 `[mcp_servers.kabegame]` 下写 `enabled = false`，或放进项目级
+  `.codex/config.toml`。目前没有 `codex mcp disable` 子命令，
+  [还是个 open issue](https://github.com/openai/codex/issues/16439)。）
 - **stdin 必须给 `/dev/null`。** 非 tty 下 codex 会把 stdin 当追加输入读（打印 `Reading additional input from stdin...`），
   管道不关就一直等。driver 已经处理了。那行提示是 stderr 噪音，忽略即可。
 - **codex 遵守本仓库的 `AGENTS.md`**，每次开工会先读 `cocs/README.md` 和 `.cursor/rules/`，
@@ -143,7 +147,8 @@ node .claude/skills/run-codex/driver.mjs --help
 | 症状 | 原因 / 处理 |
 |---|---|
 | `error: unexpected argument '--sandbox'` + `Usage: codex exec resume ...` | resume 不支持这些全局 flag，见上。 |
-| 输出被 `ERROR rmcp::transport::worker ... HTTP 502` 刷屏 | MCP server 连不上，driver 默认已禁；你手搓 `codex exec` 才会遇到。 |
+| 输出被 `ERROR rmcp::transport::worker ... HTTP 502` 刷屏 | config.toml 里配的 MCP server 连不上（应用没跑）。加 `--no-mcp` 按次禁掉。 |
+| `Error loading config.toml: invalid transport in mcp_servers.<name>` + exit 1 | `-c '...enabled=false'` 指向了 config 里不存在的 server，见上。别手搓这个 `-c`，用 `--no-mcp` 让 driver 自己判断。 |
 | 挂住不动、只打印 `Reading additional input from stdin...` | stdin 没关，`< /dev/null`。 |
 | `error=patch rejected: writing is blocked by read-only sandbox` | 忘了加 `--write`。 |
 | 最终答案是 `(codex 没有产出最终消息...)` | codex 非正常退出，看同目录 `events.jsonl` 和上面的 stderr。 |

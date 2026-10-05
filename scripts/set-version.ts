@@ -50,7 +50,6 @@ function updateCargoTomlVersion(newVersion: string): void {
 }
 
 const VERSIONED_PACKAGE_JSON_PATHS = [
-  "packages/kabegame-core/package.json",
   "packages/kabegame-plugin-sdk/package.json",
   "packages/kabegame-types/package.json",
 ] as const;

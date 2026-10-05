@@ -96,24 +96,19 @@ import { computed, ref, watch } from "vue";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { ElDialog } from "@kabegame/element-plus";
 import { FolderOpened } from "@kabegame/element-plus-icons";
-import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
-import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
-import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
+import AndroidDrawer from "@/components/AndroidDrawer.vue";
+import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
+import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { trackEvent } from "@kabegame/core/track/umami";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
-import {
-  expandVarsForBackend,
-  normalizeVarsForUI,
-  optionValue,
-  type PluginVarDef,
-} from "@kabegame/core/utils/pluginVarForm";
+import { useModal } from "@/composables/useModal";
+import { useUiStore } from "@/stores/ui";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import { trackEvent } from "@/track/umami";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { matchesPluginVarWhen } from "@/utils/pluginVarWhen";
+import { expandVarsForBackend, normalizeVarsForUI, optionValue, type PluginVarDef } from "@/utils/pluginVarForm";
 import { usePluginStore } from "@/stores/plugins";
-import { WEBPAGE_PLUGIN_ID } from "@kabegame/core/stores/plugins";
+import { WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
 import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
 import { enqueueTask } from "@/composables/useCrawlTaskLauncher";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";

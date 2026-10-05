@@ -26,7 +26,7 @@ vendor 之后主题写进组件自身，覆盖层逐步消失。**升级路径�
 ## 接线（三处，改动时要一起改）
 
 1. **vite alias** —— `vite.config.pub.ts` `resolve.alias`，`@kabegame/element-plus{,-icons}` 指向各自
-   `src/`。与 `@kabegame/core` 同一套约定：纯源码消费，无构建产物。
+   `src/`。约定是纯源码消费，无构建产物。
 2. **tsconfig `paths`** —— 根 `tsconfig.json` **和** `apps/kabegame/tsconfig.json` **两处都要写**。
    app 的 `paths` 是**整体覆盖**而非与父级合并，只改根的不生效。
 3. **web 的 `manualChunks`** —— `apps/kabegame/vite.config.ts`。vendored 源码在 `packages/` 下
@@ -49,7 +49,7 @@ CSS 变量走同一个 `$namespace`（`--#{$namespace}-color-primary`）。所�
 DOM 就变 `.kb-el-button`、变量就变 `--kb-el-color-primary`，源码其余部分一行不用动。
 
 **翻开关前必须先清掉业务侧所有 `.el-*` 选择器**，否则那些覆盖会全部失效。目前业务侧还剩
-44 个文件、208 行 `.el-*`（大头：`packages/kabegame-core/src/styles/anime-theme.css` 46 行、
+44 个文件、208 行 `.el-*`（大头：`apps/kabegame/src/styles/anime-theme.css` 46 行、
 `apps/kabegame/src/views/Surf.vue` 16 行、`apps/kabegame/src/styles/dialogs.css`）。
 
 翻开关时另需逐项 grep 的漏网处：模板/JS 里字面量的 transition 名（`<transition name="el-zoom-in-top">`，
@@ -67,7 +67,7 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 已落地的范例是 **date-picker**：`$datepicker` token map 直接取 `--anime-*`，并按需追加了
 `active-bg` / `hover-bg-color` / `today-ring-color` / `disabled-text-color` / `cell-radius(-large)`；
 日/月/年表与 popper 的选择器改在组件自身的 scss 里。业务侧
-`packages/kabegame-core/src/components/common/form/KbDate.vue` 由此从 194 行日历皮肤降到 **0 行 `.el-*`**。
+`apps/kabegame/src/components/common/form/KbDate.vue` 由此从 194 行日历皮肤降到 **0 行 `.el-*`**。
 
 > 踩坑：`.el-picker__popper` 的 border 必须写成 `&.el-popper.is-light`——`popper.scss` 里的
 > `.el-popper.is-light` 特异性相同且排在后面，不加会被盖掉。
@@ -97,7 +97,7 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 桥接到组件内部；未提供时回退到既有 type / effect 色彩。预览标签按目录注入这些主题变量，
 正文与关闭按钮（含 hover）共用色板，业务侧不覆盖 `.el-*` 选择器。
 
-既然是自有组件库，**新写的通用组件可以直接进 vendored 包**，不必挤在 `kabegame-core`。
+既然是自有组件库，**新写的通用组件可以直接进 vendored 包**，不必挤在 `apps/kabegame/src/components` 里。
 已有先例：`ElTabs` / `ElTabPane` 整个删掉，换成
 `@kabegame/element-plus/components/kb-tab` 的 `KbTab`（只管 tab 头本身，内容由调用方按
 `v-model` 自行切换）。

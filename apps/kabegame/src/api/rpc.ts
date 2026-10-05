@@ -1,1 +1,1 @@
-export * from "@kabegame/core/api";
+export * from "@/api";

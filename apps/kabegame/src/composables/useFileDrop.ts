@@ -1,12 +1,12 @@
 import { Ref, onUnmounted } from "vue";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@/api/rpc";
 import { DragFileItem, DragFilePlan, DragFileZone, hitTestDragZone } from "@/directives/dragFile";
-import { IS_ANDROID, IS_WEB } from "@kabegame/core/env";
-import { claimInternalDrag } from "@kabegame/core/utils/dragExport";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import { claimInternalDrag } from "@/utils/dragExport";
 // #region debug-drag
-import { sendDebugEvent } from "@kabegame/core/debugIngest";
+import { sendDebugEvent } from "@/debugIngest";
 // #endregion debug-drag
 import { i18n } from "@kabegame/i18n";
 

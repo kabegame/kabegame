@@ -98,7 +98,7 @@ curl 'http://127.0.0.1:1420/__kabegame_debug/sessions/manual-smoke?lines=200'
 使用 `packages/core/src/debugIngest.ts`：
 
 ```ts
-import { sendDebugEvent } from "@kabegame/core/debugIngest";
+import { sendDebugEvent } from "@/debugIngest";
 
 await sendDebugEvent(
   "image_preview_open",

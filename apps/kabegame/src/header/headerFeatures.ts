@@ -18,7 +18,7 @@ import {
   Hide,
   Expand,
 } from "@kabegame/element-plus-icons";
-import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
+import { useHeaderStore, HeaderFeatureId } from "@/stores/header";
 import { i18n } from "@kabegame/i18n";
 
 import CollectAction from "./comps/CollectAction.vue";

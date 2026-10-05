@@ -21,7 +21,7 @@ import {
   RefreshRight,
   VideoPause,
 } from "@kabegame/element-plus-icons";
-import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
 
 interface Props {
   visible: boolean;

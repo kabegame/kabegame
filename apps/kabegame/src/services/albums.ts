@@ -5,10 +5,10 @@ import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
 import { pathqlEntry, pathqlFetch } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { isLabelForestKind, type AlbumKind, type AlbumSyncMode } from "@kabegame/core/types/album";
+import { useSettingsStore } from "@/stores/settings";
+import { isLabelForestKind, type AlbumKind, type AlbumSyncMode } from "@/types/album";
 
-export type { AlbumKind, AlbumSyncMode } from "@kabegame/core/types/album";
+export type { AlbumKind, AlbumSyncMode } from "@/types/album";
 
 export const HIDDEN_ALBUM_ID = "00000000-0000-0000-0000-000000000000";
 export const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
@@ -233,8 +233,12 @@ export async function fetchAlbumAncestors(id: string): Promise<Album[]> {
   return rows.map(normalizeAlbumRow);
 }
 
-export async function fetchImageAlbums(imageId: string): Promise<Album[]> {
-  const rows = await pathqlFetch<Record<string, unknown>>(`albums://of_image_${encodeURIComponent(imageId)}`);
+/** 图片直接所属的画册；`kinds` 走路径上的 `album_kind` 段由后端过滤，不在前端筛。 */
+export async function fetchImageAlbums(imageId: string, kinds?: ReadonlyArray<AlbumKind>): Promise<Album[]> {
+  // albumKindSegment 带尾斜杠（供拼分页段用），这里是路径末段，去掉它
+  const kindSegment = albumKindSegment(kinds).replace(/\/$/, "");
+  const scope = `of_image_${encodeURIComponent(imageId)}`;
+  const rows = await pathqlFetch<Record<string, unknown>>(`albums://${scope}${kindSegment ? `/${kindSegment}` : ""}`);
   return rows.map(normalizeAlbumRow);
 }
 

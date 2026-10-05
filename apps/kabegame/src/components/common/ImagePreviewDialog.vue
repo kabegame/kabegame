@@ -125,8 +125,8 @@
               @open-gallery-filter="handleOpenGalleryFilter"
               @open-surf-record="emit('open-surf-record', $event)"
             />
-            <!-- 宿主（app）注入的附加信息面板，如图片标签；core 拿不到应用侧 store 与路由 -->
-            <slot name="info-extra" :image="previewImage" />
+            <!-- 标签面板：点标签跳画册页后要顺手关掉预览，故把本地 closePreview 接到 navigate 上 -->
+            <ImageLabelsPanel v-if="previewImage" :image="previewImage" @navigate="closePreview" />
             <ImageNativeMetadataPanel
               v-if="isNativeMetadataEligible(previewImage?.type)"
               :image="previewImage"
@@ -134,8 +134,6 @@
             />
           </div>
         </KbResizable>
-        <!-- 全屏层的 z-index 必须走内联 style：SFC 的 v-bind() 只把自定义属性下发到组件根节点，
-             el-dialog 的根是 Teleport，Vue 不会往里遍历，写在 <style> 里的 v-bind 恒为 auto -->
         <div
           ref="previewContainerRef"
           class="preview-container"
@@ -341,6 +339,7 @@ import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
+import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
   type ImageDetailGalleryFilterTarget,
@@ -363,7 +362,7 @@ import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
-import type { Plugin } from "@kabegame/core/stores/plugins";
+import type { Plugin } from "@/stores/plugins";
 
 const { t } = useI18n();
 const uiStore = useUiStore();
@@ -1548,7 +1547,7 @@ body.image-preview-hides-kamechan .kamechan-host {
     overflow: hidden;
   }
 
-  /* 高度由侧栏给定；声明为 size 容器，供 info-extra 面板用 cqh 按侧栏高度限高 */
+  /* 高度由侧栏给定；声明为 size 容器，供标签面板用 cqh 按侧栏高度限高 */
   .preview-detail-drawer-scroll-left {
     container-type: size;
   }

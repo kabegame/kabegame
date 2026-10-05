@@ -1,28 +1,26 @@
-import { enableDragScroll } from "@/utils/dragScroll";
-import { Ref, watch } from "vue";
+import type { Ref } from "vue";
+import { watch } from "vue";
+import { enableDragScroll, type DragScrollOptions } from "../utils/dragScroll";
 
-export function useDragScroll(container: Ref<HTMLElement | null>) {
+export interface UseDragScrollOptions {
+  /**
+   * 限制拖拽滚动的最大速度（px/ms）。
+   * - 可以是固定数值，也可以是返回数值的函数（支持动态行高等场景）
+   * - 例如：每 0.2 秒滚动一行 => maxVelocityPxPerMs = () => rowHeight / 200
+   */
+  maxVelocityPxPerMs?: DragScrollOptions["maxVelocityPxPerMs"];
+}
+
+export function useDragScroll(container: Ref<HTMLElement | null>, options?: UseDragScrollOptions) {
   let dropScroll: (() => void) | null = null;
   watch(
     container,
     (newVal) => {
-      console.log("[拖拽滚动调试] useDragScroll watch 触发", {
-        hasContainer: !!newVal,
-        containerTag: newVal?.tagName,
-        containerClass: newVal?.className,
-      });
       if (dropScroll) {
-        console.log("[拖拽滚动调试] 清理旧的拖拽滚动");
         dropScroll();
         dropScroll = null;
       }
       if (newVal) {
-        console.log("[拖拽滚动调试] 启用拖拽滚动", {
-          container: newVal,
-          scrollHeight: newVal.scrollHeight,
-          clientHeight: newVal.clientHeight,
-          scrollTop: newVal.scrollTop,
-        });
         dropScroll = enableDragScroll(newVal, {
           requireSpaceKey: false,
           enableForPointerTypes: ["mouse", "pen"],
@@ -31,10 +29,8 @@ export function useDragScroll(container: Ref<HTMLElement | null>) {
             ".page-header,.el-button,.el-input,.el-select,.el-dropdown,.el-tooltip,.el-dialog,.el-drawer,.el-message-box," +
             // 拖拽把手：手势归 KbResizable 独占，拖拽滚动不能在这里起手
             ".kb-resizable-handle",
+          maxVelocityPxPerMs: options?.maxVelocityPxPerMs,
         });
-        console.log("[拖拽滚动调试] 拖拽滚动已启用");
-      } else {
-        console.log("[拖拽滚动调试] 容器为空，跳过启用");
       }
     },
     { immediate: true, flush: "post" },

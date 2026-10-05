@@ -75,9 +75,9 @@
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElDialog } from "@kabegame/element-plus";
-import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import AndroidDrawer from "@/components/AndroidDrawer.vue";
+import { useModal } from "@/composables/useModal";
+import { useUiStore } from "@/stores/ui";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import CrawlerTaskForm from "@/components/crawler/CrawlerTaskForm.vue";

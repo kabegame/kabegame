@@ -151,11 +151,7 @@
               @open-task="emit('open-task', $event)"
               @open-surf-record="emit('open-surf-record', $event)"
               @open-gallery-filter="emit('open-gallery-filter', $event)"
-            >
-              <template v-if="$slots['preview-info-extra']" #info-extra="{ image }">
-                <slot name="preview-info-extra" :image="image" />
-              </template>
-            </ImagePreviewDialog>
+            />
           </div>
         </div>
       </div>
@@ -190,8 +186,8 @@ import { resolveSettingWithPrompt } from "../../composables/useSettingChoice";
 import { IS_WEB, IS_ANDROID } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
-import { Plugin } from "@kabegame/core/stores/plugins";
-import type { ImagePrefer } from "@kabegame/core/types/image";
+import { Plugin } from "@/stores/plugins";
+import type { ImagePrefer } from "@/types/image";
 
 // core 版保留通用图片意图；favorite/addToAlbum 等 kabegame 专属入口仍在 wrapper 层扩展。
 export type ContextCommand =

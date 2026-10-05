@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-/// <reference path="../../../packages/kabegame-core/src/env.d.ts" />
+/// <reference path="./env.d.ts" />
 
 declare module "*.vue" {
   import type { DefineComponent } from "vue";

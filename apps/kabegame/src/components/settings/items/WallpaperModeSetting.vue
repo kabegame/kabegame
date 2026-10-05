@@ -12,11 +12,11 @@
 import { computed, ref, watch } from "vue";
 import { resolveManifestText, useI18n } from "@kabegame/i18n";
 import { ElMessageBox } from "@kabegame/element-plus";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { useUiStore } from "@/stores/ui";
 import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
-import KbSegmentedControl from "@kabegame/core/components/common/form/KbSegmentedControl.vue";
+import KbSegmentedControl from "@/components/common/form/KbSegmentedControl.vue";
 
 const { t, locale } = useI18n();
 const capabilities = useWallpaperCapabilities();

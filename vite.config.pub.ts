@@ -92,9 +92,8 @@ export default {
   resolve: {
     alias: {
       "@": path.resolve(process.cwd(), "src"),
-      "@kabegame/core": path.resolve(root, "packages", "kabegame-core", "src"),
       // vendored element-plus：单包平铺（deno 不认嵌套子 workspace），源码直接消费，
-      // 与 @kabegame/core 同一套约定（alias 指向 src/，无构建产物）。
+      // alias 指向 src/，无构建产物。
       "@kabegame/element-plus-icons": path.resolve(
         root,
         "packages",

@@ -8,15 +8,15 @@ import WebpageCollectDialog from "./WebpageCollectDialog.vue";
 const env = vi.hoisted(() => ({ android: false }));
 const enqueueTask = vi.hoisted(() => vi.fn(async (_params: Record<string, any>) => true));
 
-vi.mock("@kabegame/core/env", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@kabegame/core/env")>()),
+vi.mock("@/env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/env")>()),
   get IS_ANDROID() {
     return env.android;
   },
   IS_WEB: false,
 }));
-vi.mock("@kabegame/core/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
-vi.mock("@kabegame/core/composables/useModal", () => ({
+vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
+vi.mock("@/composables/useModal", () => ({
   useModal: () => {
     const isOpen = ref(false);
     return { isOpen, zIndex: ref(2000), open: () => (isOpen.value = true), close: () => (isOpen.value = false) };
@@ -29,10 +29,10 @@ vi.mock("@kabegame/i18n", () => ({
     varDescripts: () => "",
   }),
 }));
-vi.mock("@kabegame/core/utils/kameMessage", () => ({
+vi.mock("@/utils/kameMessage", () => ({
   kameMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
-vi.mock("@kabegame/core/track/umami", () => ({ trackEvent: vi.fn() }));
+vi.mock("@/track/umami", () => ({ trackEvent: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@/utils/desktopOnlyGuard", () => ({ guardDesktopOnly: vi.fn(async () => false) }));
 vi.mock("@/composables/useCrawlTaskLauncher", () => ({ enqueueTask }));
@@ -58,6 +58,7 @@ const webpageVars = [
   { key: "injectCefUserAgent", type: "boolean", default: true, when: { backend: ["v8"] }, name: { default: "UA" } },
 ];
 vi.mock("@/stores/plugins", () => ({
+  WEBPAGE_PLUGIN_ID: "webpage",
   usePluginStore: () => ({ plugins: [{ id: "webpage", scriptType: "builtin", config: { vars: webpageVars } }] }),
 }));
 

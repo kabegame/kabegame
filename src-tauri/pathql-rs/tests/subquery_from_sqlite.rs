@@ -56,15 +56,13 @@ fn album_page(page: i64) -> ProviderQuery {
 
 /// 在 `base` 之上 join 成员行并按画册分组计数（外层只加 join 与 fields，模拟 `images` 段）。
 fn with_image_join(mut q: ProviderQuery) -> ProviderQuery {
-    q = q
-        .with_join_raw(
-            JoinKind::Inner,
-            "album_images",
-            "ai",
-            Some("ai.album_id = albums.id"),
-            &[],
-        )
-        .unwrap();
+    q = q.with_join_raw(
+        JoinKind::Inner,
+        "album_images",
+        "ai",
+        Some("ai.album_id = albums.id"),
+        &[],
+    );
     q
 }
 

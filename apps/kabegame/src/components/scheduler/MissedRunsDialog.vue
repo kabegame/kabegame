@@ -30,7 +30,7 @@
 
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
-import type { MissedRunItem } from "@kabegame/core/stores/crawler";
+import type { MissedRunItem } from "@/stores/crawler";
 
 defineProps<{
   open: boolean;

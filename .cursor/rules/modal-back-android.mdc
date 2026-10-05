@@ -10,8 +10,8 @@ alwaysApply: true
 ## 要求
 
 - 弹层「打开状态」由 `Ref<boolean>` 或 `WritableComputedRef<boolean>` 表示时，在组件里调用 `useModalBack(该 ref)`。
-- 从 `@kabegame/core` 使用时：`import { useModalBack } from "@kabegame/core/composables/useModalBack";`
-- 在 core 包内使用时：`import { useModalBack } from "../composables/useModalBack";`（路径按实际调整）
+- 走别名：`import { useModalBack } from "@/composables/useModalBack";`；
+  同目录树内也可用相对路径 `import { useModalBack } from "../composables/useModalBack";`（路径按实际调整）。
 - `useModalBack` 内部已做 `IS_ANDROID` 判断，非安卓无副作用，可放心在桌面与安卓共用同一组件。
 
 ## 示例
@@ -19,7 +19,7 @@ alwaysApply: true
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useModalBack } from "@/composables/useModalBack";
 
 const visible = ref(false);
 useModalBack(visible);

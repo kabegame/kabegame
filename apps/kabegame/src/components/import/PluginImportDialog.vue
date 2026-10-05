@@ -46,12 +46,12 @@ import { ref, computed, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@/api/rpc";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
-import type { Plugin } from "@kabegame/core/stores/plugins";
-import { usePluginActionState } from "@kabegame/core/composables/usePluginActionState";
-import { useUiStore } from "@kabegame/core/stores/ui";
-import { useModal } from "@kabegame/core/composables/useModal";
-import PluginDetailContent from "@kabegame/core/components/plugin/PluginDetailContent.vue";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import type { Plugin } from "@/stores/plugins";
+import { usePluginActionState } from "@/composables/usePluginActionState";
+import { useUiStore } from "@/stores/ui";
+import { useModal } from "@/composables/useModal";
+import PluginDetailContent from "@/components/plugin/PluginDetailContent.vue";
 
 const props = defineProps<{
   kgpgPath: string | null;

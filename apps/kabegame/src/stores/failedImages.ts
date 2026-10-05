@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { invoke } from "@/api/rpc";
 import { listen, type UnlistenFn } from "@/api/rpc";
-import type { TaskFailedImage } from "@kabegame/core/types/image";
+import type { TaskFailedImage } from "@/types/image";
 
 type FailedImagesChangePayload = {
   reason?: "added" | "removed" | "updated";

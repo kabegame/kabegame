@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { APP_VERSION } from "@kabegame/core/env";
-import { useSuper } from "@kabegame/core/composables/useSuper";
+import { APP_VERSION } from "@/env";
+import { useSuper } from "@/composables/useSuper";
 
 /**
  * 主进程 / 壳层侧应用级状态（可在此扩展更多字段）。

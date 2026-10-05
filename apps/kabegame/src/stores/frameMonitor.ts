@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { IS_DEV } from "@kabegame/core/env";
+import { IS_DEV } from "@/env";
 
 export const FRAME_MONITOR_SAMPLE_MS = 300;
 export const FRAME_MONITOR_LOW_FPS = 20;

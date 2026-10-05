@@ -141,7 +141,6 @@ impl Provider for AlbumProvider {
                 Some("ai.image_id = images.id"),
                 &[],
             )
-            .expect("alias collision")
             .with_where_raw(
                 "ai.album_id = ?",
                 &[TemplateValue::Text(self.album_id.clone())],

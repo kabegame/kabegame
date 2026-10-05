@@ -77,9 +77,9 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowLeft, ArrowRight } from "@kabegame/element-plus-icons";
-import { useModal } from "@kabegame/core/composables/useModal";
+import { useModal } from "@/composables/useModal";
 import { storeToRefs } from "pinia";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useUiStore } from "@/stores/ui";
 
 interface Props {
   totalCount: number;

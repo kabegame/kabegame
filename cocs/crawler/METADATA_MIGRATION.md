@@ -67,8 +67,8 @@ L2 插件 / V8：
 L3 查询 / 前端：
 
 - `src-tauri/kabegame-core/src/providers/dsl/images/images_metadata_full_provider.json5`：`images://id_{id}/metadata_full` 的完整 metadata 行路径。
-- `packages/kabegame-core/src/components/common/ImageDetailContent.vue`：详情区读取 `get_image_metadata_full` 并把 `plugin_version` 交给模板渲染。
-- `packages/kabegame-core/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/composables/useImagesChangeRefresh.ts`：metadata 缓存（key 含 `pluginVersion`）与 `metadata-migrate` 刷新原因。
+- `apps/kabegame/src/components/common/ImageDetailContent.vue`：详情区读取 `get_image_metadata_full` 并把 `plugin_version` 交给模板渲染。
+- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/composables/useImagesChangeRefresh.ts`：metadata 缓存（key 含 `pluginVersion`）与 `metadata-migrate` 刷新原因。
 
 ## 排查要点
 

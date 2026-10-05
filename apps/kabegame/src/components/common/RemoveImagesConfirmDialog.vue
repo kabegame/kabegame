@@ -27,7 +27,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, watch } from "vue";
-import { guardDesktopOnly } from "@kabegame/core/utils/desktopOnlyGuard";
+import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 interface Props {
   open: boolean;

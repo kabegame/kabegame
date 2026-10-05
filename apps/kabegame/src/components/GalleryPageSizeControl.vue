@@ -55,8 +55,8 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Histogram } from "@kabegame/element-plus-icons";
-import { useModal } from "@kabegame/core/composables/useModal";
-import { useUiStore } from "@kabegame/core/stores/ui";
+import { useModal } from "@/composables/useModal";
+import { useUiStore } from "@/stores/ui";
 
 const props = withDefaults(
   defineProps<{

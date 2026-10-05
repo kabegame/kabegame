@@ -1,7 +1,7 @@
 //! 子查询边界段 `~~` 端到端。
 //!
 //! 用 DSL provider 搭一棵画册小路由树 + 真 in-memory sqlite, 验证 `~~` 把此前的查询
-//! 整体封成 FROM、从 schema 根重新折叠: 先切页再 join 计数、隐藏口径、多层嵌套、
+//! 整体封成 FROM、把 provider 视角切回 schema 根: 先切页再 join 计数、隐藏口径、多层嵌套、
 //! `where_clear` 跨不过边界、组内 / 程序化 schema 下报错、转义, 以及缓存与失效。
 
 #![cfg(feature = "json5")]
@@ -305,9 +305,22 @@ fn nest_wraps_previous_query_as_from_aliased_by_table() {
         "{sql}"
     );
     assert!(
-        sql.contains(") SELECT albums.id AS id, albums.name AS name, albums.parent_id AS parent_id, albums.id AS album_id, images.id AS image_id FROM pq_nest_1 AS albums INNER JOIN album_images AS ai"),
+        sql.contains(") SELECT albums.*, albums.id AS album_id, images.id AS image_id FROM pq_nest_1 AS albums INNER JOIN album_images AS ai"),
         "{sql}"
     );
+}
+
+#[test]
+fn fields_accumulated_before_nest_survive_the_next_boundary() {
+    let rt = runtime();
+    let rows = rt.fetch("t://parent/P/p_1/~~/images/~~").unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        let obj = row.as_object().unwrap();
+        for key in ["id", "name", "parent_id", "album_id", "image_id"] {
+            assert!(obj.contains_key(key), "missing `{key}` in {obj:?}");
+        }
+    }
 }
 
 #[test]
@@ -407,6 +420,35 @@ fn nest_marker_is_exact_and_escapable() {
     ));
     // 转义后是普通字面段, 路由到名为 `~~` 的静态项
     assert_eq!(names(&rt, r"t://\~~"), HashSet::from(["A".into()]));
+}
+
+#[test]
+fn duplicate_ref_alias_is_a_resolve_error_across_nest() {
+    let source = r#"{
+        name: "duplicate_ref_root",
+        query: {
+            join: [
+                { table: "album_images", as: "${ref:t1}" },
+                { table: "images", as: "${ref:t1}" },
+            ],
+        },
+    }"#;
+    let mut registry = ProviderRegistry::new();
+    registry
+        .register(Json5Loader {}.load(Source::Str(source)).unwrap())
+        .unwrap();
+    let rt = ProviderRuntime::with_registry(
+        Arc::new(registry),
+        make_executor(fixture_db()),
+        HashMap::new(),
+    );
+    rt.register_schema("fold-error", "albums", "", "duplicate_ref_root")
+        .unwrap();
+
+    let err = rt.resolve("fold-error://~~").unwrap_err();
+    assert!(
+        matches!(err, EngineError::Fold(pathql_rs::compose::FoldError::AliasCollision(alias)) if alias == "_a0")
+    );
 }
 
 // ===== 缓存、列举与 meta =====

@@ -61,7 +61,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, addTaskImagesToAlbum, createAlbum } from "@/services/albums";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import type { GridRefreshContext } from "@/components/imageGrid/types";

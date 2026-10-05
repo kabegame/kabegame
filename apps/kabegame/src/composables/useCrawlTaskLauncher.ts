@@ -1,6 +1,6 @@
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID } from "@/env";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { usePluginStore } from "@/stores/plugins";
 import { useCrawlerStore, type CrawlTask } from "@/stores/crawler";

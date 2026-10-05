@@ -40,7 +40,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { serializeFilterSet, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
 import KbTreePanel from "@/components/tree/KbTreePanel.vue";
 import { useTreeModel } from "@/components/tree/useTreeModel";
-import { useTreeRefreshHub } from "@/components/tree/useTreeRefreshHub";
+import { useEventRefreshHub } from "@/composables/useEventRefreshHub";
 import type { TreeRowState } from "@/components/tree/types";
 import type { GalleryFilterTreeContext } from "./context";
 import { createGalleryFacetSource, type FacetNode } from "./facetTreeSource";
@@ -67,7 +67,7 @@ const pluginStore = usePluginStore();
 const source = createGalleryFacetSource(props.ctx, { t, locale, pluginStore });
 const keyOf = source.dataSource.getKey;
 
-const hub = useTreeRefreshHub({
+const hub = useEventRefreshHub({
   sources: [
     ...defaultGalleryTreeRefreshSources(),
     // plugin-* 事件只在存在插件维度时监听（旧 PluginsProviderChildrenNode 的裸监听）

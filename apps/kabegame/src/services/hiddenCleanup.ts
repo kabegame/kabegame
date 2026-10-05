@@ -5,7 +5,7 @@
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { i18n } from "@kabegame/i18n";
-import { kameMessage as ElMessage } from "@kabegame/core/utils/kameMessage";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import {
   useHiddenCleanupStore,
   type HiddenCleanupFinished,
