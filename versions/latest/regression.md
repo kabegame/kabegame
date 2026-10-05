@@ -703,3 +703,19 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [x] | 删除画册后配置画册被清空 | macOS dev | 删除上面那条配置引用的画册（走应用 `deleteAlbum`） | 该配置的 `output_album_id` 变成 NULL，画册本身被删 | 实测 DB：删前 `1790761118321 \| f0fa97f7-…` → 删后 `1790761118321 \|`（空），`albums` 中该 id 计数 0。core 单测亦覆盖子树 |
 | [ ] | Android 抽屉布局 | Android | 打开收集抽屉 | header 左侧标题 + 右侧「运行配置」；底部「保存为配置 / 开始收集」；表单与桌面同源 | 表单主体由 `CrawlerTaskForm` 单份提供 |
 | [x] | 自动配置编辑态输出画册 | 桌面 | 自动配置卡片「更多 → 编辑」 | 输出目录下方多一行「输出画册」选择器（排除隐藏画册、标签目录不可选），保存后回写配置 | macOS dev 实测 |
+
+## `image-changed` 图片字段增量事件
+
+字段 patch 先即时更新当前页，随后的 `images-change` 保留 500ms 权威快照对账，用于排序与成员变化。
+自动化：`check-kabegame` 全量通过；`test-kabegame kabegame-core --lib --features ipc-server hidden_field_change_emits_patch_before_view_invalidation`
+与 `provide_labels_only_sync_applies_labels_and_stamps_version` 定向用例通过。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前后端类型与编译 | macOS arm64 | 运行 `check-kabegame` | `vue-tsc` 与 `cargo check` 均为 0 error | 已实测 |
+| [x] | 成对事件顺序 | kabegame-core | 运行定向单测 | `image-changed` 携带 `isHidden` 绝对值，且 `seq` 早于同批 `images-change` | 1 passed |
+| [ ] | organize 缩略图回填 | 桌面 / Android | 找一张 grid 上缩略图缺失或损坏、显示蓝色感叹号的图，执行 organize 缩略图重建 | 不刷新页面，感叹号消失并显示新缩略图 | `thumbnailPath` patch 清理 `failedSources` |
+| [ ] | 去重元数据改挂 | 桌面 | 下载一张与库内已有图片同 hash 的图，触发 `rebind_image_metadata` | 预览基础信息中的元数据跟随更新，页面不整页闪烁 | 覆盖 `metadataId` / `pluginId` / `postUrl` |
+| [ ] | MCP 重命名 | 桌面 | 调用 MCP `rename_image` | grid 标题在 500ms 对账前即时更新 | `displayName` patch |
+| [ ] | patch 不打断预览缩放 | 桌面紧凑模式 | PhotoSwipe 放大一张图，期间把它设为壁纸 | `lastSetWallpaperAt` 即时更新，预览缩放不重置 | patch 白名单不含 `width` / `height` |
+| [ ] | 现有 grid 回归 | 桌面 / Android | 切换收藏、翻页，再删除当页图片至页码越界 | 收藏星标立即更新；翻页正常；删除后 clamp 到有效页 | 现有 `favoriteOps` / `liveQuery` 链路保留 |

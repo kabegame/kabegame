@@ -8,6 +8,7 @@
 use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::DaemonEvent;
+use crate::ipc::events::ImagePatch;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
 use crate::storage::tasks::TaskFailedImage;
@@ -302,6 +303,27 @@ impl GlobalEmitter {
     pub fn emit_setting_change(&self, changes: serde_json::Value) {
         let event = std::sync::Arc::new(DaemonEvent::SettingChange { changes });
         EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送 `ImageInfo` 字段绝对值快照。
+    pub fn emit_image_changed(&self, patches: Vec<ImagePatch>) {
+        if patches.is_empty() {
+            return;
+        }
+        let seq = next_change_seq();
+        let event = std::sync::Arc::new(DaemonEvent::ImageChanged { seq, patches });
+        dispatch_view_event(event);
+    }
+
+    /// 发送一批图片共享同一份字段绝对值快照的增量事件。
+    pub fn emit_image_changed_uniform(&self, image_ids: &[String], diff: serde_json::Value) {
+        if image_ids.is_empty() {
+            return;
+        }
+        self.emit_image_changed(vec![ImagePatch {
+            image_ids: image_ids.to_vec(),
+            diff,
+        }]);
     }
 
     /// 发送 `images` 表变更事件（reason: `add` | `delete` | `change`）
@@ -633,6 +655,10 @@ impl GlobalEmitter {
     pub fn emit_wallpaper_update_image(&self, _image_path: &str) {}
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
+
+    pub fn emit_image_changed(&self, _patches: Vec<ImagePatch>) {}
+
+    pub fn emit_image_changed_uniform(&self, _image_ids: &[String], _diff: serde_json::Value) {}
 
     pub fn emit_images_change(
         &self,

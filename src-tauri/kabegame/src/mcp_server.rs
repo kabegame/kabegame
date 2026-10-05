@@ -1178,8 +1178,12 @@ impl ServerHandler for KabegameMcpServer {
                 Storage::global()
                     .update_image_display_name(&args.image_id, &args.display_name)
                     .map_err(|e| McpError::internal_error(e, None))?;
+                GlobalEmitter::global().emit_image_changed_uniform(
+                    std::slice::from_ref(&args.image_id),
+                    json!({ "displayName": args.display_name }),
+                );
                 GlobalEmitter::global().emit_images_change(
-                    "rename",
+                    "change",
                     &[args.image_id.clone()],
                     None,
                     None,

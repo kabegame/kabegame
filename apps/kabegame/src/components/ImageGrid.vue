@@ -429,10 +429,20 @@ const mutate: GridRefreshContext["mutate"] = async (op) => {
   return result;
 };
 
+const patchMany = (patches: ReadonlyMap<string, Partial<CoreImageInfo>>) => {
+  if (patches.size === 0) return;
+  let changed = false;
+  const next = images.value.map((image) => {
+    const fields = patches.get(image.id);
+    if (!fields) return image;
+    changed = true;
+    return { ...image, ...fields };
+  });
+  if (changed) images.value = next;
+};
+
 const patch: GridRefreshContext["patch"] = (ids, fields) => {
-  const idSet = new Set(ids);
-  if (idSet.size === 0) return;
-  images.value = images.value.map((image) => (idSet.has(image.id) ? { ...image, ...fields } : image));
+  patchMany(new Map(Array.from(ids, (id) => [id, fields])));
 };
 
 refreshCtx = {
@@ -446,17 +456,18 @@ refreshCtx = {
   clearSelection,
 };
 
-let unsubscribeFavoriteChanges: (() => void) | null = null;
+let unsubscribeImageChanges: (() => void) | null = null;
 onMounted(() => {
-  unsubscribeFavoriteChanges = subscribeChanges({
+  unsubscribeImageChanges = subscribeChanges({
     waitMs: GRID_REFRESH_WAIT_MS,
-    filter: (batch) => batch.favoriteOps.length > 0,
+    filter: (batch) => batch.imagePatches.size > 0 || batch.favoriteOps.length > 0,
     onBatch: (batch) => {
+      patchMany(batch.imagePatches);
       for (const op of batch.favoriteOps) patch(op.imageIds, { favorite: op.favorite });
     },
   });
 });
-onBeforeUnmount(() => unsubscribeFavoriteChanges?.());
+onBeforeUnmount(() => unsubscribeImageChanges?.());
 
 // 图片操作通过 mutate / patch 接入主动更新通道。
 const {

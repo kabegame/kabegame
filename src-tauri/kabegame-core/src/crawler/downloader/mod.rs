@@ -82,6 +82,14 @@ pub(super) fn rebind_deduped_metadata(
         new_post_url,
     ) {
         Ok(()) => {
+            let mut diff =
+                serde_json::Map::from_iter([("metadataId".to_string(), json!(metadata_id))]);
+            if let Some(new_plugin_id) = new_plugin_id {
+                diff.insert("pluginId".to_string(), json!(new_plugin_id));
+            }
+            if let Some(new_post_url) = new_post_url {
+                diff.insert("postUrl".to_string(), json!(new_post_url));
+            }
             let mut plugin_ids = Vec::new();
             if let Some(existing_plugin_id) = existing
                 .plugin_id
@@ -95,6 +103,10 @@ pub(super) fn rebind_deduped_metadata(
                     plugin_ids.push(new_plugin_id.to_string());
                 }
             }
+            GlobalEmitter::global().emit_image_changed_uniform(
+                std::slice::from_ref(&existing.id),
+                serde_json::Value::Object(diff),
+            );
             GlobalEmitter::global().emit_images_change(
                 "change",
                 std::slice::from_ref(&existing.id),

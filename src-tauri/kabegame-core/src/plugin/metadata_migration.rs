@@ -2,9 +2,10 @@ use deno_core::{resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, Runt
 
 use super::Plugin;
 use crate::emitter::GlobalEmitter;
+use crate::ipc::events::ImagePatch;
 use crate::storage::labels::{validate_labels, LabelInput};
 use crate::storage::Storage;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
     if plugin.metadata_migration.is_none() {
@@ -42,14 +43,19 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
     // here from a `spawn_blocking` worker, where `Handle::current()` is valid and
     // `block_on` is permitted.
     let storage = Storage::global();
-    let (changed, _touched_albums, _touched_images) = tokio::runtime::Handle::current().block_on(
+    let (changed, _touched_albums, image_patches) = tokio::runtime::Handle::current().block_on(
         run_metadata_migrations(storage, &plugin_id, target, &script, rows),
     )?;
 
     if let Some(emitter) = GlobalEmitter::try_global() {
         if changed {
             let plugin_ids = vec![plugin.id.clone()];
-            emitter.emit_images_change("metadata-migrate", &[], None, None, Some(&plugin_ids));
+            let image_ids = image_patches
+                .iter()
+                .flat_map(|patch| patch.image_ids.iter().cloned())
+                .collect::<Vec<_>>();
+            emitter.emit_image_changed(image_patches);
+            emitter.emit_images_change("change", &image_ids, None, None, Some(&plugin_ids));
         }
     }
     Ok(changed)
@@ -61,7 +67,7 @@ async fn run_metadata_migrations(
     target: u32,
     script: &str,
     rows: Vec<(i64, String, u32)>,
-) -> Result<(bool, Vec<String>, Vec<String>), String> {
+) -> Result<(bool, Vec<String>, Vec<ImagePatch>), String> {
     let mut engine = MigrationEngine::new();
     let exports = match engine.load_script(script).await {
         Ok(exports) => Some(exports),
@@ -76,8 +82,7 @@ async fn run_metadata_migrations(
     let mut changed = false;
     let mut touched = Vec::new();
     let mut touched_seen = HashSet::new();
-    let mut touched_images = Vec::new();
-    let mut touched_image_seen = HashSet::new();
+    let mut image_patch_groups = BTreeMap::<(i64, u32), Vec<String>>::new();
     for (row_id, data, _row_version) in rows {
         let migrated = match exports
             .as_ref()
@@ -116,7 +121,7 @@ async fn run_metadata_migrations(
                             let applied = storage.apply_labels_to_images(&specs, &image_ids)?;
                             Ok((applied, image_ids))
                         }) {
-                            Ok((applied, image_ids)) => {
+                            Ok((applied, _image_ids)) => {
                                 for (spec, error) in applied.skipped {
                                     let path = format!(
                                         "{}/{}",
@@ -127,17 +132,9 @@ async fn run_metadata_migrations(
                                         "[metadata-migration] plugin `{plugin_id}` row {row_id} label `{path}` skipped: {error}"
                                     );
                                 }
-                                let changed_membership = !applied.album_ids.is_empty();
                                 for album_id in applied.album_ids {
                                     if touched_seen.insert(album_id.clone()) {
                                         touched.push(album_id);
-                                    }
-                                }
-                                if changed_membership {
-                                    for image_id in image_ids {
-                                        if touched_image_seen.insert(image_id.clone()) {
-                                            touched_images.push(image_id);
-                                        }
                                     }
                                 }
                             }
@@ -153,16 +150,34 @@ async fn run_metadata_migrations(
             }
         }
 
-        if storage.writeback_migrated_metadata_row(
+        if let Some((metadata_id, image_ids)) = storage.writeback_migrated_metadata_row(
             row_id,
             plugin_id,
             target,
             migrated.as_deref().unwrap_or(&data),
         )? {
             changed = true;
+            let grouped = image_patch_groups.entry((metadata_id, target)).or_default();
+            for image_id in image_ids {
+                if !grouped.iter().any(|existing| existing == &image_id) {
+                    grouped.push(image_id);
+                }
+            }
         }
     }
-    Ok((changed, touched, touched_images))
+    let image_patches = image_patch_groups
+        .into_iter()
+        .filter_map(|((metadata_id, plugin_version), image_ids)| {
+            (!image_ids.is_empty()).then(|| ImagePatch {
+                image_ids,
+                diff: serde_json::json!({
+                    "metadataId": metadata_id,
+                    "pluginVersion": plugin_version,
+                }),
+            })
+        })
+        .collect();
+    Ok((changed, touched, image_patches))
 }
 
 /// CLI 本地测试入口：对 `input` JSON 跑一次 `migrate(input)` 并返回结果。
@@ -357,7 +372,7 @@ mod tests {
         storage: Storage,
         script: String,
         target: u32,
-    ) -> (bool, Vec<String>, Vec<String>) {
+    ) -> (bool, Vec<String>, Vec<ImagePatch>) {
         run_blocking(move || {
             let rows = storage
                 .metadata_rows_below_plugin_version("demo", target)
@@ -476,7 +491,15 @@ export function provideLabels(input) {
         .to_string();
         let (changed, albums, images) = run_runner(storage, script, 2);
         assert!(changed);
-        assert_eq!(images, ["1"]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].image_ids, ["1"]);
+        assert_eq!(
+            images[0].diff,
+            serde_json::json!({
+                "metadataId": 1,
+                "pluginVersion": 2,
+            })
+        );
         assert_eq!(albums.len(), 1);
         assert_eq!(metadata_row(&check, 1).1, 2);
         assert_eq!(check.get_image_album_ids("1").unwrap(), albums);

@@ -122,10 +122,11 @@ ImageGrid 把数据变化分成两条通道：
   `ViewQuery { rows, count }`，写入并发出事件后立即读取并返回 `ViewSnapshot`，前端直接应用，不等待防抖。
   永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
 - **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
-- **被动通道**：下载、同步、整理、其他窗口或 MCP 引起的 `images-change`、`album-images-change` 与
+- **被动通道**：下载、同步、整理、其他窗口或 MCP 引起的 `image-changed`、`images-change`、`album-images-change` 与
   画册结构字段变更进入全局单例
   [`dataChangeHub.ts`](/apps/kabegame/src/services/dataChangeHub.ts)。hub 对每个订阅者按 500ms 时间窗合并
-  reason 与各 id 集合；画册维度另含 `albumIds` / `albumImageIds`、按到达顺序保存的 `favoriteOps`，以及
+  reason 与各 id 集合，并按 imageId 浅合并 `imagePatches`（后到字段覆盖先到字段）；画册维度另含
+  `albumIds` / `albumImageIds`、按到达顺序保存的 `favoriteOps`，以及
   `albumPaths` / `albumPathsWildcard` 和结构字段集合。画册成员事件携带画册 `ancestorPath`；新增、删除、
   改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。任一 `images-change` 缺少
   task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
@@ -139,8 +140,8 @@ ImageGrid 把数据变化分成两条通道：
 
 ### `seq` 一致性协议
 
-后端 `GlobalEmitter` 为 `images-change`、`album-images-change` 与进入 hub 的 `album-changed` 共用一个
-单调递增计数器，三者 payload 都携带 `seq`。
+后端 `GlobalEmitter` 为 `image-changed`、`images-change`、`album-images-change` 与进入 hub 的
+`album-changed` 共用一个单调递增计数器，四者 payload 都携带 `seq`。
 
 读取视图快照时必须**先读取 `seq`，再执行 rows/count 查询**。带 `view` 的写命令在写库前取得全局
 `EventHold`：期间两类视图事件照常分配 `seq` 但暂存，快照读完、守卫析构后才按序广播。因此事件不会触发
@@ -152,13 +153,24 @@ ImageGrid 把数据变化分成两条通道：
 
 ### `images-change`（`DaemonEvent::ImagesChange`，`images` 表）
 
-- 后端通过 `GlobalEmitter::emit_images_change` 广播，reason 包括 `add` / `delete` / `change` / `rename` /
-  `metadata-migrate`。
+- 后端通过 `GlobalEmitter::emit_images_change` 广播，reason 只包括 `add` / `delete` / `change`。
 - Payload：必带 `seq`、`reason`、`imageIds`，可选 `taskIds` / `surfRecordIds` / `pluginIds`。
   这些可选维度只是免费 hint：删除图片不再为 payload 额外查询 surf/plugin，删除任务只带 task；维度缺失表示
   无法排除当前视图，而不是“不相关”。
 - 删除畅游记录会补发带 `surfRecordIds` 的 `change`；整理每批重写缩略图/兼容路径后会按批补发 `change`。
 - ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
+
+### `image-changed`（`DaemonEvent::ImageChanged`，`ImageInfo` 字段）
+
+- Payload 为 `seq` + `patches[]`；每组 patch 用 `imageIds` 表示共享同一份 `diff` 的图片。`diff` 键为
+  `ImageInfo` camelCase 字段，值是绝对值快照，不是增量。
+- 同一次写入先发 `image-changed`即时 patch 当前页，再发 `images-change("change", ids)`；后者保留
+  500ms 权威快照对账，处理排序、搜索成员与分面变化。`EventHold` 保持两条事件的顺序。
+- 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`pluginVersion`、`postUrl`、
+  `thumbnailPath`、`compatiblePath`、`localPath`、`surfRecordId`、`taskId`、`lastSetWallpaperAt`、
+  `isHidden`、`favorite`、`type`、`size`。`width` / `height` 刻意排除，避免正在预览时打断 PhotoSwipe 缩放。
+- Grid 用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` / `pluginVersion` 变化会自然改变
+  metadata cache key，无需额外失效。
 
 ### `album-images-change`（`DaemonEvent::AlbumImagesChange`，`album_images` 表）
 

@@ -405,6 +405,26 @@ impl Storage {
     /// 删除遨游记录：将关联图片的 surf_record_id 置空后删除记录。
     pub fn delete_surf_record(&self, id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let image_ids = {
+            let mut stmt = conn
+                .prepare("SELECT id FROM images WHERE surf_record_id = ?1 ORDER BY id")
+                .map_err(|e| format!("Failed to prepare affected surf images query: {e}"))?;
+            let rows = stmt
+                .query_map(params![id], |row| {
+                    let id = row.get_ref(0)?;
+                    Ok(match id {
+                        rusqlite::types::ValueRef::Integer(value) => value.to_string(),
+                        rusqlite::types::ValueRef::Text(value) => {
+                            String::from_utf8_lossy(value).into_owned()
+                        }
+                        _ => String::new(),
+                    })
+                })
+                .map_err(|e| format!("Failed to query affected surf images: {e}"))?;
+            rows.filter(|row| row.as_ref().map_or(true, |id| !id.is_empty()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Failed to collect affected surf images: {e}"))?
+        };
         conn.execute(
             "UPDATE images SET surf_record_id = NULL WHERE surf_record_id = ?1",
             params![id],
@@ -414,9 +434,11 @@ impl Storage {
             .map_err(|e| format!("Failed to delete surf_record: {}", e))?;
         drop(conn);
         GlobalEmitter::global().emit_surf_record_deleted(id);
+        GlobalEmitter::global()
+            .emit_image_changed_uniform(&image_ids, json!({ "surfRecordId": null }));
         GlobalEmitter::global().emit_images_change(
             "change",
-            &[],
+            &image_ids,
             None,
             Some(&[id.to_string()]),
             None,

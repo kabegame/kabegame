@@ -5,6 +5,7 @@ function batch(paths: string[], wildcard = false): ChangeBatch {
   return {
     images: new Set(),
     imageIds: new Set(),
+    imagePatches: new Map(),
     taskIds: new Set(),
     surfRecordIds: new Set(),
     pluginIds: new Set(),

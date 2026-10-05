@@ -9,6 +9,7 @@ use crate::storage::albums::AddToAlbumResult;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
 use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(feature = "ipc-server")]
 use std::sync::Arc;
@@ -125,6 +126,13 @@ fn split_by_hidden(changed: &[String], pairs: &[(String, String)]) -> (Vec<Strin
         .partition(|image_id| hidden.contains(image_id.as_str()))
 }
 
+fn emit_image_hidden_changed(changed: &[String], is_hidden: bool) {
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        emitter.emit_image_changed_uniform(changed, json!({ "isHidden": is_hidden }));
+        emitter.emit_images_change("change", changed, None, None, None);
+    }
+}
+
 /// 实际新增的成员写库后调用；按画册与隐藏状态拆分并返回已发送 payload 的副本。
 pub fn emit_membership_added(
     album_id: &str,
@@ -133,29 +141,36 @@ pub fn emit_membership_added(
     if changed.is_empty() {
         return Ok(Vec::new());
     }
-    let (pairs, ancestor_paths) = Storage::global().collect_album_memberships_with_paths(changed)?;
+    let (pairs, ancestor_paths) =
+        Storage::global().collect_album_memberships_with_paths(changed)?;
     let mut out = Vec::new();
     if album_id == HIDDEN_ALBUM_ID {
-        if let Some(payload) = emit_album_images_change("add-hidden", album_id, changed, &ancestor_paths) {
+        if let Some(payload) =
+            emit_album_images_change("add-hidden", album_id, changed, &ancestor_paths)
+        {
             out.push(payload);
         }
         for (affected_album, ids) in grouped_memberships(&pairs) {
             if affected_album == HIDDEN_ALBUM_ID {
                 continue;
             }
-            if let Some(payload) = emit_album_images_change("hide", &affected_album, &ids, &ancestor_paths) {
+            if let Some(payload) =
+                emit_album_images_change("hide", &affected_album, &ids, &ancestor_paths)
+            {
                 out.push(payload);
             }
         }
-        if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_images_change("change", changed, None, None, None);
-        }
+        emit_image_hidden_changed(changed, true);
     } else {
         let (hidden_ids, visible_ids) = split_by_hidden(changed, &pairs);
-        if let Some(payload) = emit_album_images_change("add", album_id, &visible_ids, &ancestor_paths) {
+        if let Some(payload) =
+            emit_album_images_change("add", album_id, &visible_ids, &ancestor_paths)
+        {
             out.push(payload);
         }
-        if let Some(payload) = emit_album_images_change("add-hidden", album_id, &hidden_ids, &ancestor_paths) {
+        if let Some(payload) =
+            emit_album_images_change("add-hidden", album_id, &hidden_ids, &ancestor_paths)
+        {
             out.push(payload);
         }
     }
@@ -175,7 +190,9 @@ pub fn emit_membership_removed(
     }
     let mut out = Vec::new();
     if context == MembershipRemovalContext::AlbumMutation && album_id == HIDDEN_ALBUM_ID {
-        if let Some(payload) = emit_album_images_change("delete-hidden", album_id, changed, ancestor_paths) {
+        if let Some(payload) =
+            emit_album_images_change("delete-hidden", album_id, changed, ancestor_paths)
+        {
             out.push(payload);
         }
         let changed_set: HashSet<&str> = changed.iter().map(String::as_str).collect();
@@ -187,19 +204,23 @@ pub fn emit_membership_removed(
                 .into_iter()
                 .filter(|image_id| changed_set.contains(image_id.as_str()))
                 .collect();
-            if let Some(payload) = emit_album_images_change("unhide", &affected_album, &affected, ancestor_paths) {
+            if let Some(payload) =
+                emit_album_images_change("unhide", &affected_album, &affected, ancestor_paths)
+            {
                 out.push(payload);
             }
         }
-        if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_images_change("change", changed, None, None, None);
-        }
+        emit_image_hidden_changed(changed, false);
     } else {
         let (hidden_ids, visible_ids) = split_by_hidden(changed, pairs_before);
-        if let Some(payload) = emit_album_images_change("delete", album_id, &visible_ids, ancestor_paths) {
+        if let Some(payload) =
+            emit_album_images_change("delete", album_id, &visible_ids, ancestor_paths)
+        {
             out.push(payload);
         }
-        if let Some(payload) = emit_album_images_change("delete-hidden", album_id, &hidden_ids, ancestor_paths) {
+        if let Some(payload) =
+            emit_album_images_change("delete-hidden", album_id, &hidden_ids, ancestor_paths)
+        {
             out.push(payload);
         }
     }
@@ -355,5 +376,55 @@ mod tests {
         assert_eq!(grouped["album-a"], vec!["visible", "hidden"]);
         assert_eq!(grouped["album-b"], vec!["hidden"]);
         assert_eq!(grouped[HIDDEN_ALBUM_ID], vec!["hidden"]);
+    }
+
+    #[cfg(feature = "ipc-server")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn hidden_field_change_emits_patch_before_view_invalidation() {
+        use crate::ipc::events::{DaemonEvent, DaemonEventKind};
+        use crate::ipc::server::EventBroadcaster;
+        use tokio::time::{timeout, Duration};
+
+        let _ = EventBroadcaster::init_global(16);
+        let _ = GlobalEmitter::init_global();
+        let mut patch_rx = EventBroadcaster::global().subscribe(DaemonEventKind::ImageChanged);
+        let mut change_rx = EventBroadcaster::global().subscribe(DaemonEventKind::ImagesChange);
+        let forward = tokio::spawn(EventBroadcaster::start_forward_task());
+
+        let image_ids = vec!["image-a".to_string(), "image-b".to_string()];
+        emit_image_hidden_changed(&image_ids, true);
+
+        let (_, patch_event) = timeout(Duration::from_secs(1), patch_rx.recv())
+            .await
+            .expect("image-changed timeout")
+            .expect("image-changed channel closed");
+        let (_, change_event) = timeout(Duration::from_secs(1), change_rx.recv())
+            .await
+            .expect("images-change timeout")
+            .expect("images-change channel closed");
+        forward.abort();
+
+        let (patch_seq, patches) = match &*patch_event {
+            DaemonEvent::ImageChanged { seq, patches } => (*seq, patches),
+            event => panic!("unexpected patch event: {event:?}"),
+        };
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].image_ids, image_ids);
+        assert_eq!(patches[0].diff, json!({ "isHidden": true }));
+
+        let change_seq = match &*change_event {
+            DaemonEvent::ImagesChange {
+                seq,
+                reason,
+                image_ids: changed,
+                ..
+            } => {
+                assert_eq!(reason, "change");
+                assert_eq!(changed, &image_ids);
+                *seq
+            }
+            event => panic!("unexpected change event: {event:?}"),
+        };
+        assert!(patch_seq < change_seq);
     }
 }

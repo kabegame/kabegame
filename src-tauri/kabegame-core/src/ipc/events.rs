@@ -75,6 +75,7 @@ daemon_event_kinds! {
     HiddenCleanupProgress,
     HiddenCleanupFinished,
     WallpaperUpdateImage,
+    ImageChanged,
     ImagesChange,
     AlbumImagesChange,
     SettingChange,
@@ -112,6 +113,7 @@ impl DaemonEventKind {
             DaemonEventKind::HiddenCleanupProgress => "hidden-cleanup-progress",
             DaemonEventKind::HiddenCleanupFinished => "hidden-cleanup-finished",
             DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
+            DaemonEventKind::ImageChanged => "image-changed",
             DaemonEventKind::ImagesChange => "images-change",
             DaemonEventKind::AlbumImagesChange => "album-images-change",
             DaemonEventKind::SettingChange => "setting-change",
@@ -144,6 +146,7 @@ impl DaemonEventKind {
             "hidden-cleanup-progress" => Some(DaemonEventKind::HiddenCleanupProgress),
             "hidden-cleanup-finished" => Some(DaemonEventKind::HiddenCleanupFinished),
             "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
+            "image-changed" => Some(DaemonEventKind::ImageChanged),
             "images-change" => Some(DaemonEventKind::ImagesChange),
             "album-images-change" => Some(DaemonEventKind::AlbumImagesChange),
             "setting-change" => Some(DaemonEventKind::SettingChange),
@@ -173,6 +176,14 @@ impl DaemonEventKind {
         // 再尝试 kebab-case 格式
         Self::from_event_name(s)
     }
+}
+
+/// 一组图片共享同一份字段绝对值快照。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePatch {
+    pub image_ids: Vec<String>,
+    pub diff: serde_json::Value,
 }
 
 /// Daemon 事件类型，绝对不Clone
@@ -274,6 +285,10 @@ pub enum DaemonEvent {
         #[serde(rename = "pluginIds", skip_serializing_if = "Option::is_none")]
         plugin_ids: Option<Vec<String>>,
     },
+
+    /// `ImageInfo` 字段增量更新；`diff` 是 camelCase 绝对值快照。
+    #[serde(rename_all = "camelCase")]
+    ImageChanged { seq: u64, patches: Vec<ImagePatch> },
 
     /// `album_images` 成员或顺序变更。
     AlbumImagesChange {
@@ -456,6 +471,7 @@ impl DaemonEvent {
             DaemonEvent::OrganizeFinished { .. } => DaemonEventKind::OrganizeFinished,
             DaemonEvent::HiddenCleanupProgress { .. } => DaemonEventKind::HiddenCleanupProgress,
             DaemonEvent::HiddenCleanupFinished { .. } => DaemonEventKind::HiddenCleanupFinished,
+            DaemonEvent::ImageChanged { .. } => DaemonEventKind::ImageChanged,
             DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
             DaemonEvent::AlbumImagesChange { .. } => DaemonEventKind::AlbumImagesChange,
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,

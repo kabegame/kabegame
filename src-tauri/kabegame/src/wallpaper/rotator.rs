@@ -591,19 +591,27 @@ impl WallpaperRotator {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                let _ = Storage::global()
-                    .update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
                 let ids = vec![selected_image.id.clone()];
-                if let Some(plugin_id) = selected_image.plugin_id.clone() {
-                    GlobalEmitter::global().emit_images_change(
-                        "change",
+                if Storage::global()
+                    .update_image_last_set_wallpaper_at(&ids[0], now_ts)
+                    .is_ok()
+                {
+                    GlobalEmitter::global().emit_image_changed_uniform(
                         &ids,
-                        None,
-                        None,
-                        Some(&[plugin_id]),
+                        serde_json::json!({ "lastSetWallpaperAt": now_ts }),
                     );
-                } else {
-                    GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+                    if let Some(plugin_id) = selected_image.plugin_id.clone() {
+                        GlobalEmitter::global().emit_images_change(
+                            "change",
+                            &ids,
+                            None,
+                            None,
+                            Some(&[plugin_id]),
+                        );
+                    } else {
+                        GlobalEmitter::global()
+                            .emit_images_change("change", &ids, None, None, None);
+                    }
                 }
 
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器
@@ -878,18 +886,26 @@ impl WallpaperRotator {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = Storage::global().update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
         let ids = vec![selected_image.id.clone()];
-        if let Some(plugin_id) = selected_image.plugin_id.clone() {
-            GlobalEmitter::global().emit_images_change(
-                "change",
+        if Storage::global()
+            .update_image_last_set_wallpaper_at(&ids[0], now_ts)
+            .is_ok()
+        {
+            GlobalEmitter::global().emit_image_changed_uniform(
                 &ids,
-                None,
-                None,
-                Some(&[plugin_id]),
+                serde_json::json!({ "lastSetWallpaperAt": now_ts }),
             );
-        } else {
-            GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+            if let Some(plugin_id) = selected_image.plugin_id.clone() {
+                GlobalEmitter::global().emit_images_change(
+                    "change",
+                    &ids,
+                    None,
+                    None,
+                    Some(&[plugin_id]),
+                );
+            } else {
+                GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+            }
         }
 
         // 如果轮播已启用但未运行，启动轮播器

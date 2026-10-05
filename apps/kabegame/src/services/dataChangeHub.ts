@@ -1,6 +1,7 @@
 import { listen } from "@/api/rpc";
-import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
+import type { ImageChangedPayload, ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import type { ImageInfo } from "@/types/image";
 import { FAVORITE_ALBUM_ID } from "./albums";
 import { BoundedSet } from "@/utils/BoundedSet";
 import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
@@ -9,6 +10,8 @@ const perf = (name: string, payload: unknown) => void sendDebugEvent(name, paylo
 export interface ChangeBatch {
   images: Set<string>;
   imageIds: Set<string>;
+  /** imageId → 该批次内合并后的字段 patch */
+  imagePatches: Map<string, Partial<ImageInfo>>;
   taskIds: Set<string>;
   surfRecordIds: Set<string>;
   pluginIds: Set<string>;
@@ -40,11 +43,18 @@ function setValues(target: Set<string>, values: Iterable<string>) {
   for (const value of values) target.add(value);
 }
 
+function mergeImagePatches(target: Map<string, Partial<ImageInfo>>, incoming: ReadonlyMap<string, Partial<ImageInfo>>) {
+  for (const [id, patch] of incoming) {
+    target.set(id, { ...target.get(id), ...patch });
+  }
+}
+
 function mergeBatch(target: ChangeBatch | null, incoming: ChangeBatch): ChangeBatch {
   if (!target) {
     return {
       images: new Set(incoming.images),
       imageIds: new Set(incoming.imageIds),
+      imagePatches: new Map([...incoming.imagePatches].map(([id, patch]) => [id, { ...patch }])),
       taskIds: new Set(incoming.taskIds),
       surfRecordIds: new Set(incoming.surfRecordIds),
       pluginIds: new Set(incoming.pluginIds),
@@ -61,6 +71,7 @@ function mergeBatch(target: ChangeBatch | null, incoming: ChangeBatch): ChangeBa
   }
   setValues(target.images, incoming.images);
   setValues(target.imageIds, incoming.imageIds);
+  mergeImagePatches(target.imagePatches, incoming.imagePatches);
   setValues(target.taskIds, incoming.taskIds);
   setValues(target.surfRecordIds, incoming.surfRecordIds);
   setValues(target.pluginIds, incoming.pluginIds);
@@ -152,6 +163,7 @@ function emptyBatch(seq = 0): ChangeBatch {
   return {
     images: new Set(),
     imageIds: new Set(),
+    imagePatches: new Map(),
     taskIds: new Set(),
     surfRecordIds: new Set(),
     pluginIds: new Set(),
@@ -168,6 +180,23 @@ function emptyBatch(seq = 0): ChangeBatch {
 }
 
 const sources: ChangeSource[] = [
+  {
+    event: "image-changed",
+    toBatch(raw): ChangeBatch {
+      const payload = raw as ImageChangedPayload;
+      const batch = emptyBatch(Number.isFinite(payload.seq) ? Number(payload.seq) : 0);
+      for (const patch of payload.patches ?? []) {
+        for (const imageId of patch.imageIds ?? []) {
+          if (!imageId) continue;
+          batch.imagePatches.set(imageId, {
+            ...batch.imagePatches.get(imageId),
+            ...(patch.diff ?? {}),
+          });
+        }
+      }
+      return batch;
+    },
+  },
   {
     event: "images-change",
     toBatch(raw): ChangeBatch {
@@ -286,6 +315,11 @@ export function affectsAlbumDir(batch: ChangeBatch, dirAncestorPath: string | nu
     if (path !== dirAncestorPath && path.startsWith(dirAncestorPath)) return true;
   }
   return false;
+}
+
+/** 返回某图片在当前合并批次中的字段 patch。 */
+export function imagePatchFor(batch: ChangeBatch, imageId: string): Partial<ImageInfo> | undefined {
+  return batch.imagePatches.get(imageId);
 }
 
 /** 将单条画册成员变更转换为可即时发布的批次。 */

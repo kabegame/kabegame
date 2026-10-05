@@ -328,8 +328,17 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                let _ = Storage::global().update_image_last_set_wallpaper_at(&id, now);
-                GlobalEmitter::global().emit_images_change("change", &[id], None, None, None);
+                let ids = vec![id];
+                if Storage::global()
+                    .update_image_last_set_wallpaper_at(&ids[0], now)
+                    .is_ok()
+                {
+                    GlobalEmitter::global().emit_image_changed_uniform(
+                        &ids,
+                        serde_json::json!({ "lastSetWallpaperAt": now }),
+                    );
+                    GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+                }
             }
             IpcResponse::ok("updated")
         }

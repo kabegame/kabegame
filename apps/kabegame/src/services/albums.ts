@@ -256,6 +256,7 @@ function structuralBatch(album: Album | null, kind: string, extraPath?: string):
   return {
     images: new Set(),
     imageIds: new Set(),
+    imagePatches: new Map(),
     taskIds: new Set(),
     surfRecordIds: new Set(),
     pluginIds: new Set(),

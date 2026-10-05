@@ -44,7 +44,7 @@
   - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
-  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, total, seq }` 单次快照；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`EventHold` 先快照后广播；500ms 批次合并、画册 `ancestorPath` 相关性、wildcard 粗过滤和 `seq` 防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存。
+  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, total, seq }` 单次快照；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先快照后广播；500ms 批次合并、画册 `ancestorPath` 相关性、wildcard 粗过滤和 `seq` 防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存。
   - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异，以及详情 metadata 缓存。
 
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
@@ -90,7 +90,7 @@
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
-  - 主题：插件图片 metadata 迁移流程——`kbMetadataMigration` 单一脚本契约（ES module，export migrate；裸 deno_core JsRuntime；schema 自检幂等、一步到位）+ packed 插件版本门控（`metadata.plugin_version`，每字节一段，应用维护、插件不可读写，写入自动盖章）、`metadata` 表去重合并、`metadata_full` 查询路径与 `metadata-migrate` 事件作用域。
+  - 主题：插件图片 metadata 迁移流程——`kbMetadataMigration` 单一脚本契约（ES module，export migrate；裸 deno_core JsRuntime；schema 自检幂等、一步到位）+ packed 插件版本门控（`metadata.plugin_version`，每字节一段，应用维护、插件不可读写，写入自动盖章）、`metadata` 表去重合并、`metadata_full` 查询路径，以及按最终 `metadataId + pluginVersion` 分组的 `image-changed` 与 `images-change(change)` 成对事件。
   - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)

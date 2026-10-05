@@ -412,7 +412,7 @@ impl Storage {
         plugin_id: &str,
         new_plugin_version: u32,
         new_data: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<(i64, Vec<String>)>, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
             .transaction()
@@ -431,14 +431,14 @@ impl Storage {
         let Some((current_data, current_version)) = current else {
             tx.commit()
                 .map_err(|e| format!("commit metadata writeback no-op: {e}"))?;
-            return Ok(false);
+            return Ok(None);
         };
 
         let new_version_i64 = i64::from(new_plugin_version);
         if current_data == new_data && current_version == new_version_i64 {
             tx.commit()
                 .map_err(|e| format!("commit metadata writeback unchanged: {e}"))?;
-            return Ok(false);
+            return Ok(None);
         }
 
         let target_id: Option<i64> = tx
@@ -452,6 +452,27 @@ impl Storage {
             )
             .optional()
             .map_err(|e| format!("select metadata merge target: {e}"))?;
+        let image_ids = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM images WHERE metadata_id = ?1 ORDER BY id")
+                .map_err(|e| format!("prepare migrated metadata image ids: {e}"))?;
+            let rows = stmt
+                .query_map(params![row_id], |row| {
+                    let id = row.get_ref(0)?;
+                    Ok(match id {
+                        rusqlite::types::ValueRef::Integer(value) => value.to_string(),
+                        rusqlite::types::ValueRef::Text(value) => {
+                            String::from_utf8_lossy(value).into_owned()
+                        }
+                        _ => String::new(),
+                    })
+                })
+                .map_err(|e| format!("query migrated metadata image ids: {e}"))?;
+            rows.filter(|row| row.as_ref().map_or(true, |id| !id.is_empty()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("collect migrated metadata image ids: {e}"))?
+        };
+        let final_metadata_id = target_id.unwrap_or(row_id);
 
         if let Some(target_id) = target_id {
             tx.execute(
@@ -479,7 +500,7 @@ impl Storage {
 
         tx.commit()
             .map_err(|e| format!("commit metadata writeback: {e}"))?;
-        Ok(true)
+        Ok(Some((final_metadata_id, image_ids)))
     }
 
     pub fn gc_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {

@@ -157,7 +157,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 - 记录 `taskLogDedupByUrl`
 - 如果指定了输出画册，把已存在图片加入该画册；只有成员实际插入时才发送按单画册拆分的
   `album-images-change`
-- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行，先发 `image-changed`（`metadataId` / 可选 `pluginId` / 可选 `postUrl`），再发 `images-change(change)`；`task_id` / `surf_record_id` 均不变
 - `dedupUpdateMetadata` 开启且本次带插件标签（`DownloadRequest.labels`）时，给已有图片补挂标签（见 §6「插件标签」）
 - 增加 `tasks.dedup_count` 并通过 `tasks-change` / `TaskChanged` 发送新的 `dedupCount`
 - 发送 Completed，清理对应失败记录，跳过下载读取
@@ -168,7 +168,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByHash`
 - 按需加入输出画册
-- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行并发送 `images-change(change)`，`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行，先发 `image-changed`（`metadataId` / 可选 `pluginId` / 可选 `postUrl`），再发 `images-change(change)`；`task_id` / `surf_record_id` 均不变
 - `dedupUpdateMetadata` 开启时同样给已有图片补挂插件标签
 - 后处理最终分支收到 `imported = false` 后增加 `tasks.dedup_count`
 - 发送 Completed，清理对应失败记录

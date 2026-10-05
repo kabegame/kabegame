@@ -258,7 +258,8 @@ export function migrate(json) {
 }
 ```
 
-迁移后的行按 `(plugin_id, version, content_hash)` 去重；迁移成功会发出作用域为该插件的 `metadata-migrate` 变更事件刷新详情缓存。
+迁移后的行按 `(plugin_id, version, content_hash)` 去重；迁移成功会先发出带最终 `metadataId` / `pluginVersion` 的
+`image-changed` 字段快照，再发出作用域为该插件的 `images-change(change)` 对账列表。
 
 每一行无论迁移成功与否都只处理一次：失败时保留原数据并同样盖上当前插件版本，不会在每次启动时反复重试；修好脚本后需要再发一个新版本。
 

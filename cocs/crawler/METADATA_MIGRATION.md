@@ -46,7 +46,8 @@
 5. 逐行调用 `migrate(data)`；成功后才调用 `provideLabels(migrated)`。标签先挂到当前 metadata 行引用的全部图片，然后才写回/合并 metadata，避免重定向后丢失原引用集。
 6. 无论装载或行级执行是否成功，都把 `plugin_version` 盖为 `version_packed`；失败时写回原 data，不在下次启动无限重试。
 7. 写回时如果目标 `(plugin_id, plugin_version, data)` 已有行，会把 `images.metadata_id` 与 `task_failed_images.metadata_id` 合并到既有行并删除重复行。
-8. 标签成员有变化时，结束后聚合发出一次 `album-images-change`；metadata 有实际变更时保持发出 `images-change`，`reason = "metadata-migrate"`。
+8. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，在事务内取出受影响图片，
+   按最终 `metadataId + pluginVersion` 分组发 `image-changed`，再发 `images-change`（`reason = "change"`）对账视图成员与排序。
 
 历史切换说明：`v021_image_metadata_plugin_version` 一次性把旧 `version` 计数器列改名为 `plugin_version` 并全部归 0（旧值作废），之后由迁移 runner 按上述流程收敛；脚本幂等保证重跑安全。
 
@@ -62,13 +63,13 @@ L2 插件 / V8：
 
 - `src-tauri/kabegame-core/src/plugin/mod.rs`：`kbMetadataMigration` 解析、`pack_plugin_version`、安装 / 启动后调度迁移。
 - `src-tauri/kabegame-core/src/plugin/v8/ops.rs`：写入自动盖章（从 `Task.params.plugin_version()` 读取）。
-- `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）与 `metadata-migrate` 事件；CLI 不再加载 V8，也不再提供 `plugin run migrate`。
+- `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）与 `image-changed` / `images-change(change)` 成对事件；CLI 不再加载 V8，也不再提供 `plugin run migrate`。
 
 L3 查询 / 前端：
 
 - `src-tauri/kabegame-core/src/providers/dsl/images/images_metadata_full_provider.json5`：`images://id_{id}/metadata_full` 的完整 metadata 行路径。
 - `apps/kabegame/src/components/common/ImageDetailContent.vue`：详情区读取 `get_image_metadata_full` 并把 `plugin_version` 交给模板渲染。
-- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/composables/useImagesChangeRefresh.ts`：metadata 缓存（key 含 `pluginVersion`）与 `metadata-migrate` 刷新原因。
+- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/dataChangeHub.ts`：metadata 缓存（key 含 `metadataId` / `pluginVersion`）与图片字段 patch 批处理。
 
 ## 排查要点
 
@@ -76,4 +77,5 @@ L3 查询 / 前端：
 - 标签未补上：查看 `[metadata-migration] ... provideLabels` / `label apply failed` 日志；确认返回值是数组，key/category 符合标识符约束。
 - 部分行内容未升级：查看日志里的 `[metadata-migration]` 装载 / 执行错误。失败行也会盖当前版本，不会自动重试；修复脚本后需提升插件版本才会再次入选。
 - 迁移反复执行：确认插件版本确实已提升；单个版本无论成败只处理一次。`migrate` 仍应幂等，以安全支持后续版本的再次执行。
-- 详情区仍显示旧内容：确认列表行的 `pluginVersion` 是否变化，以及前端是否收到 `reason = "metadata-migrate"` 且 `plugin_ids` 包含该插件。
+- 详情区仍显示旧内容：确认前端是否先收到含最终 `metadataId` / `pluginVersion` 的 `image-changed`，
+  以及随后的 `images-change` 是否为 `reason = "change"` 且 `pluginIds` 包含该插件。

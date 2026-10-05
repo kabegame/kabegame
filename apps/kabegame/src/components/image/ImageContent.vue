@@ -375,11 +375,11 @@ const isLost = computed(() => {
   }
 });
 
-// ---- Reset on image identity change (NOT on prefer — preserves hover no-flash) ----
+// ---- Reset on image identity or resource path change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
 // watch doesn't fire, showLoading stays false, and the already-cached thumbnail layer is instant.
 watch(
-  () => props.image.id,
+  () => [props.image.id, localPath.value, compPath.value, thumbPath.value].join("|"),
   () => {
     thumbSlot.reset();
     origSlot.reset();
