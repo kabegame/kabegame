@@ -280,11 +280,19 @@ function close() {
   emit('close')
 }
 
+/**
+ * 面板出现后把焦点收进来，键盘能直接导航、Escape 能关。
+ * tooltip 的 `show` 是 after-enter 才发的，比 `open` 晚一个过渡：自定义面板若在
+ * `open` 里自己聚焦了输入框，这里再 focus 容器就会把它顶掉（表现为「刚聚焦就失焦」），
+ * 所以焦点已经在面板里就不抢。
+ */
 function focusPanel() {
   nextTick(() => {
-    if (slots.panel) panelRef.value?.focus()
-    else if (props.searchable) searchInputRef.value?.focus()
-    else panelRef.value?.focus()
+    const panel = panelRef.value
+    if (!panel) return
+    if (panel.contains(document.activeElement)) return
+    if (!slots.panel && props.searchable) searchInputRef.value?.focus()
+    else panel.focus()
   })
 }
 

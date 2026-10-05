@@ -8,6 +8,7 @@
     :chip-display="chipDisplay"
     :title="chipTitle"
     :negated="negated"
+    @open="focusSearchInput"
     @update:model-value="
       (value) => {
         if (value === null) commit('');
@@ -23,6 +24,7 @@
         <!-- 第一行：输入框 + 全选。外层 w-0!+min-w-full 退出宽度测量，同上。 -->
         <div class="flex w-0! min-w-full items-center gap-3">
           <KbText
+            ref="searchInputRef"
             :model-value="draft"
             class="min-w-0 flex-1"
             allow-unset
@@ -71,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { ElCheckbox, ElCheckboxGroup, ElIcon, ElTooltip, KbFilterDropdown } from "@kabegame/element-plus";
 import { QuestionFilled, Search } from "@kabegame/element-plus-icons";
@@ -125,6 +127,7 @@ const emit = defineEmits<{
 const { t, locale } = useI18n();
 
 const draft = ref(props.query);
+const searchInputRef = ref<InstanceType<typeof KbText>>();
 let debounceTimer: number | null = null;
 
 watch(
@@ -163,6 +166,11 @@ function onInput(value: string) {
 }
 
 onBeforeUnmount(clearDebounce);
+
+async function focusSearchInput() {
+  await nextTick();
+  window.requestAnimationFrame(() => searchInputRef.value?.focus());
+}
 
 // ---------- 维度勾选 ----------
 
