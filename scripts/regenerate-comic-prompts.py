@@ -32,8 +32,15 @@ ALLOWED_LAYOUTS = {
     "4koma/layout-03-albums.prompt.md",
     "4koma/layout-04-plugins.prompt.md",
     "4koma/layout-05-tasks-auto-configs.prompt.md",
-    "4koma/layout-06-settings-help.prompt.md",
+    "4koma/layout-06-settings-dialog.prompt.md",
     "4koma/layout-07-mobile-compact.prompt.md",
+    "4koma/layout-08-image-preview.prompt.md",
+    "4koma/layout-09-webpage-collect.prompt.md",
+}
+
+# 布局文件改名后，旧版本 JSON 里的文件名映射到新文件，保证历史版本仍能重新生成。
+LAYOUT_ALIASES = {
+    "4koma/layout-06-settings-help.prompt.md": "4koma/layout-06-settings-dialog.prompt.md",
 }
 
 # Strip duplicate dialogue suggestions that the model may embed inside the
@@ -96,6 +103,10 @@ def extract_json(raw: str) -> dict:
         raise
 
 
+STORY_BEGIN = "━" * 24 + " 正式剧情 · 开始 " + "━" * 24
+STORY_END = "━" * 24 + " 正式剧情 · 结束 " + "━" * 24
+
+
 def build_body(
     *,
     worldview: str,
@@ -117,7 +128,7 @@ def build_body(
     parts: list[str] = []
     if worldview:
         parts += [worldview, "", "---", ""]
-    parts += [layout_text, "", "---", "", f"# {title}", ""]
+    parts += [layout_text, f"\n{STORY_BEGIN}\n", f"# {title}", ""]
     if comic.get("title"):
         parts.append(f"漫画主题：{str(comic['title']).strip()}\n")
     if tone_label:
@@ -130,8 +141,8 @@ def build_body(
         parts.append("对应更新点：\n" + "\n".join(f"- {u}" for u in updates) + "\n")
     parts += ["```text", prompt_text, "```", ""]
     if dialogue:
-        parts.append("可选对白：\n" + "\n".join(f"- {d}" for d in dialogue) + "\n")
-    parts += ["---", bo, ""]
+        parts.append("对白：\n" + "\n".join(f"- {d}" for d in dialogue) + "\n")
+    parts += [f"\n{STORY_END}\n", bo, ""]
 
     return "\n".join(p for p in parts if p != "") + "\n"
 
@@ -214,15 +225,15 @@ def main() -> None:
         comic_dir = out_dir / comic_id
         comic_dir.mkdir(parents=True, exist_ok=True)
 
-        layouts = as_list(comic.get("layouts"))
+        layouts = [LAYOUT_ALIASES.get(l, l) for l in as_list(comic.get("layouts"))]
         if not layouts:
             sys.exit(f"error: {comic_id}: layouts must contain at least one layout file")
         for layout in layouts:
             if layout not in ALLOWED_LAYOUTS:
                 sys.exit(f"error: {comic_id}: unsupported layout file: {layout}")
 
-        layout_text = "\n\n---\n\n".join(
-            f"## 页面布局设定\n\n{read_src(repo_root, layout)}" for layout in layouts
+        layout_text = "## 页面布局设定\n\n" + "\n\n---\n\n".join(
+            read_src(repo_root, layout) for layout in layouts
         )
 
         updates = as_list(comic.get("updates"))

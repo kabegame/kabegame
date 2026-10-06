@@ -1,4 +1,4 @@
-Kabegame 移动端 / 紧凑布局 prompt：
+### Kabegame 移动端 / 紧凑布局
 
 用途：
 
