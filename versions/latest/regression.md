@@ -885,3 +885,30 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [x] | 关闭预览即停 | 桌面 | 播放中分别点 ×、点遮罩、按 Esc、删除最后一张使上层清空 image | 播放停止；重新打开预览按钮为非播放态，不会自动切换 | 已实测 ×、遮罩、Esc、清 `pvwimgid`（上层清空 image）；未删除真实图片 |
 | [ ] | 五语言文案 | 桌面 | 切简中/繁中/英/日/韩看设置行与按钮 title | 均有译文，无 key 名裸露 | `settings.previewSlideshowSpeed*`、`gallery.slideshow*` |
 | [ ] | Android 不显示设置 | Android | 进入设置 → 常规 | 无「预览幻灯片播放速度」行 | |
+
+## Windows 画册命令补导入虚拟盘 trait
+
+`commands/album.rs` 调用 `bump_albums` / `notify_album_dir_changed` / `current_mount_point` 时未导入
+`VirtualDriveServiceTrait`。macOS/Linux 的 fuse 实现另有同名固有方法所以能编过，Windows 实现只有 trait impl，导致 Windows 编译失败。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Windows 编译通过 | Windows | `.claude/skills/check-kabegame/driver.sh --skip vue` | cargo 0 个 error | 已实测 |
+| [ ] | 画册增删改后虚拟盘刷新 | Windows 桌面（已挂载虚拟盘） | 新建、重命名、删除画册，向画册加/移图片 | 资源管理器中画册目录随之刷新 | |
+
+## 设置页数字输入改用 KbNumber
+
+设置页的四处 `el-input-number`（`SettingNumberControl`、下载间隔、固定列数、MCP 端口）改为 `KbNumber type="int"`。
+`KbIntegerInput`（KbNumber 的 int 实现）新增 `step` / `disabled` 与提交语义的 `change`（步进、失焦、回车时发出，
+整数 clamp 进范围、非法文本发 `undefined`）；设置项只在 `change` 时保存，键入过程不逐字保存，非法文本回退到已保存值。
+插件变量表单只监听 `update:modelValue`，行为不变。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | KbIntegerInput 单测 | 前端 Vitest | `npx vitest run src/components/common/form/KbIntegerInput.test.ts` | 6 个用例通过（含 step clamp、失焦 change） | 已实测；vue-tsc 源码 0 error |
+| [ ] | 轮播间隔步进到边界 | 桌面 | 设置 → 壁纸 → 轮播间隔，按 + 到 1440 附近 | 按 10 步进，最后一次 clamp 到 1440，每次点击保存一次 | |
+| [ ] | 键入只在提交时保存 | 桌面 | 最大并发任务数输入 `5`，失焦；再输入 `99` 回车 | 失焦后保存 5；`99` clamp 为 10 并保存，输入框显示 10 | |
+| [ ] | 非法文本回退 | 桌面 | 下载间隔输入框清空或输入 `abc` 后失焦 | 输入框回到原值，设置未变 | 下载间隔按 100 步进 |
+| [ ] | MCP 端口不中途保存 | 桌面 | 设置 → 高级 → MCP 端口输入 `12345` 回车 | 只保存一次 12345，不会在 `1234` 时保存 | 端口占用时提示并回退 |
+| [ ] | 固定列数 | 桌面 | 打开固定列数开关后调整列数 | 1~6 范围内步进与输入正常，画廊列数跟随 | |
+| [ ] | 插件变量数字表单不变 | 桌面 | 收集弹窗中编辑 int 变量，输入越界值 | 仍显示表单校验错误，失焦不自动修正 | |

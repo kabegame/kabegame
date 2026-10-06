@@ -8,14 +8,14 @@
         :loading="showDisabled"
         @change="onToggleFixedMode"
       />
-      <el-input-number
+      <KbNumber
         v-if="fixedModeEnabled"
-        v-model="fixedColumns"
+        v-model="inputColumns"
+        type="int"
+        class="!w-[120px]"
         :min="1"
         :max="6"
-        :step="1"
         :disabled="disabled"
-        :controls="true"
         @change="onFixedColumnsChange"
       />
     </div>
@@ -29,6 +29,7 @@
 import { computed, ref, watch } from "vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useUiStore } from "@/stores/ui";
+import KbNumber from "@/components/common/form/KbNumber.vue";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("galleryGridColumns");
 const uiStore = useUiStore();
@@ -40,6 +41,8 @@ const clampFixedColumns = (value: number) => {
 };
 
 const fixedColumns = ref(4);
+/** 输入框的原始值：编辑中可能是非法文本（string），提交后回到 fixedColumns */
+const inputColumns = ref<number | string | undefined>(4);
 
 const fixedModeEnabled = computed(() => {
   const current = Number(settingValue.value ?? 0);
@@ -52,6 +55,7 @@ watch(
     const n = Number(v ?? 0);
     if (Number.isFinite(n) && n > 0) {
       fixedColumns.value = clampFixedColumns(n);
+      inputColumns.value = fixedColumns.value;
     }
   },
   { immediate: true },
@@ -70,9 +74,14 @@ const onToggleFixedMode = async (enabled: boolean | string | number) => {
 
 const onFixedColumnsChange = async (value: number | undefined) => {
   if (!fixedModeEnabled.value) return;
-  if (typeof value !== "number" || !Number.isFinite(value)) return;
+  // 非法文本回退；值未变（如回车后再失焦）不重复保存
+  if (typeof value !== "number" || !Number.isFinite(value) || clampFixedColumns(value) === fixedColumns.value) {
+    inputColumns.value = fixedColumns.value;
+    return;
+  }
   const next = clampFixedColumns(value);
   fixedColumns.value = next;
+  inputColumns.value = next;
   await set(next);
   uiStore.imageGridColumns = next;
 };

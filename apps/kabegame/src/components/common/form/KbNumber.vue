@@ -5,7 +5,10 @@
     :min="min"
     :max="max"
     :placeholder="placeholder"
+    :step="step"
+    :disabled="disabled"
     @update:model-value="$emit('update:modelValue', $event)"
+    @change="$emit('change', $event)"
   />
   <AndroidPickerNumber
     v-else-if="isCompact"
@@ -70,10 +73,15 @@ const props = defineProps<{
   min?: number;
   max?: number;
   placeholder?: string;
+  /** 以下仅 int 模式生效：按钮步进量（默认 1）、禁用 */
+  step?: number;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: number | string | undefined];
+  /** 仅 int 模式：提交语义的 change，见 KbIntegerInput */
+  change: [value: number | undefined];
 }>();
 
 const numberValue = computed<number | undefined>(() => {

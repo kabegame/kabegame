@@ -10,6 +10,8 @@ use crate::storage::image_events::{
 };
 use crate::storage::Storage;
 #[cfg(feature = "virtual-driver")]
+use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
+#[cfg(feature = "virtual-driver")]
 use crate::virtual_driver::VirtualDriveService;
 use kabegame_i18n::t;
 use serde_json::Value;

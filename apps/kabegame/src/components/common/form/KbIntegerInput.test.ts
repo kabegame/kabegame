@@ -66,4 +66,31 @@ describe("KbIntegerInput", () => {
     expect(validate).toHaveBeenCalledTimes(1);
     expect(validate).toHaveBeenCalledWith("change");
   });
+
+  it("按 step 步进并 clamp 到边界，同时发出 change", async () => {
+    const wrapper = mount(KbIntegerInput, {
+      props: { modelValue: 1435, min: 1, max: 1440, step: 10 },
+    });
+    const [, increase] = wrapper.findAll("button");
+
+    await increase.trigger("click");
+    expect(wrapper.emitted("update:modelValue")?.at(-1)).toEqual([1440]);
+    expect(wrapper.emitted("change")?.at(-1)).toEqual([1440]);
+  });
+
+  it("失焦时 change 发 clamp 后的值，非法文本发 undefined，且不改写 modelValue", async () => {
+    const wrapper = mount(KbIntegerInput, {
+      props: { modelValue: 2, min: 1, max: 10 },
+    });
+    const input = wrapper.get("input");
+
+    await input.setValue("99");
+    await input.trigger("blur");
+    expect(wrapper.emitted("change")?.at(-1)).toEqual([10]);
+    expect(wrapper.emitted("update:modelValue")?.at(-1)).toEqual([99]);
+
+    await input.setValue("abc");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("change")?.at(-1)).toEqual([undefined]);
+  });
 });

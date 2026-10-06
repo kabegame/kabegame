@@ -1,6 +1,7 @@
 <template>
   <div
     class="flex h-9 w-full min-w-0 items-stretch overflow-hidden rounded-xl border border-solid border-[var(--anime-border)] bg-[var(--anime-bg-card)] transition-colors"
+    :class="{ 'opacity-60': disabled }"
   >
     <button
       type="button"
@@ -18,7 +19,10 @@
       :value="inputText"
       :placeholder="placeholder"
       :title="placeholder"
+      :disabled="disabled"
       @input="onInput"
+      @blur="commit"
+      @keydown.enter="commit"
     />
     <button
       type="button"
@@ -37,15 +41,27 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useFormItem } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 
-const props = defineProps<{
-  modelValue: unknown;
-  min?: number;
-  max?: number;
-  placeholder?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: unknown;
+    min?: number;
+    max?: number;
+    placeholder?: string;
+    /** 按钮步进量，默认 1 */
+    step?: number;
+    disabled?: boolean;
+  }>(),
+  { step: 1, disabled: false },
+);
 
 const emit = defineEmits<{
   "update:modelValue": [value: number | string];
+  /**
+   * 提交语义（对齐 el-input-number 的 change）：按钮步进、失焦、回车时发出。
+   * 键入的整数会 clamp 进范围；文本不是整数时发 undefined，由调用方决定回退。
+   * 只发事件、不改写 modelValue——需要「保存一次」的调用方（如设置项）监听它而非 update:modelValue。
+   */
+  change: [value: number | undefined];
 }>();
 
 const { t } = useI18n();
@@ -60,11 +76,24 @@ const numberValue = computed(() =>
 const hasMin = computed(() => typeof props.min === "number" && Number.isFinite(props.min));
 const hasMax = computed(() => typeof props.max === "number" && Number.isFinite(props.max));
 const decreaseDisabled = computed(
-  () => numberValue.value === undefined || (hasMin.value && numberValue.value <= (props.min as number)),
+  () =>
+    props.disabled ||
+    numberValue.value === undefined ||
+    (hasMin.value && numberValue.value <= (props.min as number)),
 );
 const increaseDisabled = computed(
-  () => numberValue.value === undefined || (hasMax.value && numberValue.value >= (props.max as number)),
+  () =>
+    props.disabled ||
+    numberValue.value === undefined ||
+    (hasMax.value && numberValue.value >= (props.max as number)),
 );
+
+function clamp(value: number): number {
+  let v = value;
+  if (hasMin.value) v = Math.max(props.min as number, v);
+  if (hasMax.value) v = Math.min(props.max as number, v);
+  return v;
+}
 
 function formatValue(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -86,11 +115,17 @@ function onInput(event: Event) {
 function step(direction: 1 | -1) {
   const current = numberValue.value;
   if (current === undefined) return;
-  const next = current + direction;
-  if (hasMin.value && next < (props.min as number)) return;
-  if (hasMax.value && next > (props.max as number)) return;
+  // clamp 而非越界即放弃：步进量 > 1 时仍能走到边界值（如 step=10 时 1435 → 1440）
+  const next = clamp(current + direction * props.step);
+  if (next === current) return;
   inputText.value = String(next);
   emit("update:modelValue", next);
+  emit("change", next);
+}
+
+function commit() {
+  const parsed = parseInput(inputText.value.trim());
+  emit("change", typeof parsed === "number" ? clamp(parsed) : undefined);
 }
 
 watch(

@@ -24,15 +24,13 @@
         </button>
         <div class="mcp-portbox">
           <span class="mcp-portbox__label">{{ $t("settings.mcpPort") }}</span>
-          <el-input-number
+          <KbNumber
             v-model="localPort"
+            type="int"
+            class="!w-[140px]"
             :min="1024"
             :max="65535"
-            :step="1"
-            :precision="0"
             :disabled="portSaving"
-            controls-position="right"
-            size="small"
             @change="onPortChange"
           />
           <span v-if="enabled" class="mcp-portbox__hint">
@@ -137,6 +135,7 @@ import { invoke } from "@/api/rpc";
 import { IS_WEB } from "@/env";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import CodeBlock from "@/components/common/CodeBlock.vue";
+import KbNumber from "@/components/common/form/KbNumber.vue";
 
 interface McpCapability {
   id: string;
@@ -173,7 +172,8 @@ async function onBeforeToggle(): Promise<boolean> {
 }
 
 // ── 端口 ──
-const localPort = ref(port.value);
+/** 输入框的原始值：编辑中可能是非法文本（string），只在 change 时提交 */
+const localPort = ref<number | string | undefined>(port.value);
 watch(
   port,
   (p) => {
@@ -183,8 +183,13 @@ watch(
 );
 const portSaving = ref(false);
 async function onPortChange(value: number | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return;
+  // 非法文本回退到当前端口
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    localPort.value = port.value;
+    return;
+  }
   const p = Math.trunc(value);
+  localPort.value = p;
   if (p < 1024 || p > 65535 || p === port.value) return;
   portSaving.value = true;
   try {

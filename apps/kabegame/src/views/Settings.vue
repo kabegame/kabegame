@@ -832,7 +832,6 @@ onActivated(async () => {
 
 :deep(.setting-control .el-input__wrapper),
 :deep(.setting-control .el-select .el-input__wrapper),
-:deep(.setting-control .el-input-number),
 :deep(.setting-control .android-picker-select) {
   min-height: 34px;
 }

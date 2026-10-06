@@ -7,15 +7,16 @@
     :disabled="disabled"
     @update:model-value="onChange"
   />
-  <el-input-number
+  <KbNumber
     v-else
-    v-model="localValue"
+    v-model="inputValue"
+    type="int"
+    class="!w-[150px]"
     :min="100"
     :max="10000"
     :step="100"
     :disabled="disabled"
-    :loading="showDisabled"
-    @change="onChange"
+    @change="onCommit"
   />
 </template>
 
@@ -23,10 +24,13 @@
 import { ref, watch } from "vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import AndroidPickerDuration from "@/components/AndroidPickerDuration.vue";
+import KbNumber from "@/components/common/form/KbNumber.vue";
 import { useUiStore } from "@/stores/ui";
 
-const { settingValue, disabled, showDisabled, set } = useSettingKeyState("downloadIntervalMs");
+const { settingValue, disabled, set } = useSettingKeyState("downloadIntervalMs");
 const localValue = ref<number>(500);
+/** 桌面输入框的原始值：编辑中可能是非法文本（string），提交后回到 localValue */
+const inputValue = ref<number | string | undefined>(500);
 
 const clamp = (v: number) => Math.max(100, Math.min(10000, Math.round(v / 100) * 100));
 
@@ -35,6 +39,7 @@ watch(
   (v) => {
     const n = typeof v === "number" ? v : Number(v);
     localValue.value = Number.isFinite(n) ? clamp(n) : 500;
+    inputValue.value = localValue.value;
   },
   { immediate: true },
 );
@@ -45,6 +50,16 @@ const onChange = async (v: number | undefined) => {
   if (typeof v !== "number" || !Number.isFinite(v)) return;
   const clamped = clamp(v);
   localValue.value = clamped;
+  inputValue.value = clamped;
   await set(clamped);
+};
+
+/** 非法文本回退到已保存值；值未变（如回车后再失焦）不重复保存 */
+const onCommit = async (v: number | undefined) => {
+  if (v === undefined || clamp(v) === localValue.value) {
+    inputValue.value = localValue.value;
+    return;
+  }
+  await onChange(v);
 };
 </script>
