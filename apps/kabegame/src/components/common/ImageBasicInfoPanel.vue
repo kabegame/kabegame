@@ -389,9 +389,10 @@ function galleryDateParts(timestamp?: number): {
   const seconds = raw > 253_402_300_799 ? Math.floor(raw / 1000) : raw;
   const d = new Date(seconds * 1000);
   if (Number.isNaN(d.getTime())) return null;
-  const y = `${d.getUTCFullYear()}`;
-  const m = `${d.getUTCMonth() + 1}`.padStart(2, "0");
-  const day = `${d.getUTCDate()}`.padStart(2, "0");
+  // 与后端 date/* provider 的 strftime(..., 'unixepoch', 'localtime') 同口径：按本地时区切日
+  const y = `${d.getFullYear()}`;
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
   const hh = `${d.getHours()}`.padStart(2, "0");
   const mm = `${d.getMinutes()}`.padStart(2, "0");
   const ss = `${d.getSeconds()}`.padStart(2, "0");

@@ -5,7 +5,7 @@
         "year_month": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "where": "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch') = ${properties.year_month}"
+        "where": "strftime('%Y-%m', crawled_at_seconds(images.crawled_at), 'unixepoch', 'localtime') = ${properties.year_month}"
     },
     "list": {
         "${out.meta.dd}d": {

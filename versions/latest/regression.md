@@ -912,3 +912,17 @@ pathql-rs 新增 `yaml` feature（`YamlLoader`，`serde-saphyr`），内置 DSL 
 | [ ] | MCP 端口不中途保存 | 桌面 | 设置 → 高级 → MCP 端口输入 `12345` 回车 | 只保存一次 12345，不会在 `1234` 时保存 | 端口占用时提示并回退 |
 | [ ] | 固定列数 | 桌面 | 打开固定列数开关后调整列数 | 1~6 范围内步进与输入正常，画廊列数跟随 | |
 | [ ] | 插件变量数字表单不变 | 桌面 | 收集弹窗中编辑 int 变量，输入越界值 | 仍显示表单校验错误，失焦不自动修正 | |
+
+## 日期分组按本地时区切日
+
+`date/*` 路径（画廊时间筛选、VD 日期目录、MCP）原先用 `strftime(..., 'unixepoch')` 按 UTC 切日，UTC+8 下 00:00–08:00 入库的图被归到前一天。6 个日期 provider（`shared/{year,month,day,dates}_provider`、`images/gallery/dates/gallery_date_{year,month}_provider`）的过滤与列举 SQL 统一改为 `'unixepoch', 'localtime'`。前端 `ImageBasicInfoPanel` 的「收集时间」年月日原先用 `getUTC*` 对齐旧口径（时分秒却是本地），显示成前一天同一时刻，同步改为本地 `getFullYear/getMonth/getDate`。
+自动化：`test-kabegame kabegame-core --test dsl_e2e date` 2 passed。Web 端取服务器进程时区，不是访问者时区。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | DSL 日期路径 | macOS arm64 | 运行 `dsl_e2e` 中的 date 用例 | 2 passed | 已实测 |
+| [ ] | 凌晨入库归当天 | 桌面 dev | 本地 00:00–08:00（UTC+8）下载图片后打开画廊时间筛选 | 归在本地当天，不在前一天 | 开发库实测：3 张图 UTC 为 10-06，本地应为 10-07 |
+| [ ] | 列举与过滤一致 | 桌面 | 点开某日期节点 | 列出的日期下点进去图片数与计数一致，无空日期 | 列举 SQL 与 where 同步改了 `localtime` |
+| [x] | 前端类型 | macOS arm64 | 运行 `check-kabegame --skip cargo` | 0 error | 已实测 |
+| [ ] | 详情收集时间 | 桌面 dev | 本地凌晨入库的图打开预览详情 | 「收集时间」显示本地当天日期与时刻；点年/月/日链接筛出的结果含该图 | 年月日与后端 `date/*` 同按本地时区 |
+| [ ] | VD 日期目录 | 桌面 | 打开虚拟盘按日期目录 | 与画廊时间筛选的日期一致 | |
