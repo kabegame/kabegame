@@ -97,6 +97,12 @@
                 <SettingRadioControl setting-key="previewSlideshowSpeed" :options="previewSlideshowSpeedOptions" />
               </SettingRow>
               <SettingRow
+                :label="$t('settings.previewSwitchDirection')"
+                :description="$t('settings.previewSwitchDirectionDesc')"
+              >
+                <SettingRadioControl setting-key="previewSwitchDirection" :options="previewSwitchDirectionOptions" />
+              </SettingRow>
+              <SettingRow
                 v-if="!IS_ANDROID && !IS_WEB"
                 :label="$t('settings.linkOpenMode')"
                 :description="$t('settings.linkOpenModeDesc')"
@@ -436,6 +442,11 @@ const previewSlideshowSpeedOptions = computed(() => [
   { label: t("settings.previewSlideshowSpeedFast"), value: "fast" },
   { label: t("settings.previewSlideshowSpeedMedium"), value: "medium" },
   { label: t("settings.previewSlideshowSpeedSlow"), value: "slow" },
+]);
+const previewSwitchDirectionOptions = computed(() => [
+  { label: t("settings.previewSwitchDirectionAuto"), value: "auto" },
+  { label: t("settings.previewSwitchDirectionPrev"), value: "prev" },
+  { label: t("settings.previewSwitchDirectionNext"), value: "next" },
 ]);
 const wallpaperModeOptions = computed(() => [
   { label: t("settings.wallpaperModeRandom"), value: "random" },

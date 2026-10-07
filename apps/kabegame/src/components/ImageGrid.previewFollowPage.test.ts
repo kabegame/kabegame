@@ -9,6 +9,7 @@ import type { ViewSnapshot } from "@/services/liveQuery";
 const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) => Promise<number | null>>());
 const jumpToPage = vi.hoisted(() => vi.fn<(page: number) => Promise<void>>());
 const refetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const handlePreviewPageBoundary = vi.hoisted(() => vi.fn());
 const previewImageId = ref("");
 const queryLoading = ref(false);
 const pendingPreviewBoundary = ref<{ targetPage: number; direction: "next" | "prev" } | null>(null);
@@ -23,7 +24,9 @@ const routeStore = reactive({
   syncFromUrl: vi.fn(),
 });
 let applySnapshot: ((snapshot: ViewSnapshot) => Promise<void>) | null = null;
-const settings = reactive({ values: { previewFollowPage: true, currentWallpaperImageId: null } });
+const settings = reactive({
+  values: { previewFollowPage: true, previewSwitchDirection: "auto", currentWallpaperImageId: null },
+});
 
 vi.mock("@/services/imageLocate", () => ({
   locateImageRowIndex,
@@ -43,7 +46,7 @@ vi.mock("@/composables/usePagedGallery", () => ({
     currentPath: computed(() => routeStore.computedPath),
     pendingPreviewBoundary,
     handleJumpToPage: jumpToPage,
-    handlePreviewPageBoundary: vi.fn(),
+    handlePreviewPageBoundary,
     loadTotalImagesCount: vi.fn(),
     ensureValidPageAfterMassRemoval: vi.fn(async () => {}),
   }),
@@ -112,11 +115,13 @@ beforeEach(() => {
   previewImageId.value = "";
   queryLoading.value = false;
   settings.values.previewFollowPage = true;
+  settings.values.previewSwitchDirection = "auto";
   routeStore.page = 1;
   routeStore.computedPath = "hide/sort/by-time/desc/x2x/1";
   applySnapshot = null;
   pendingPreviewBoundary.value = null;
   refetch.mockReset();
+  handlePreviewPageBoundary.mockReset();
   refetch.mockResolvedValue(undefined);
   locateImageRowIndex.mockReset();
   jumpToPage.mockReset();
@@ -429,5 +434,90 @@ describe("预览跟随后台新增图片", () => {
     await nextTick();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
     expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toMatchObject({ id: "older" });
+  });
+
+  it("最近一次往前切图时，删除后接续上一张而不是同下标那张", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    await applySnapshot!(snapshot(["first", "target", "older"], 2));
+    core.vm.$emit("preview-switch", { direction: "next" });
+    core.vm.$emit("preview-switch", { direction: "prev" });
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "target" });
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    await applySnapshot!(snapshot(["first", "older"], 3));
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "first" });
+    expect(handlePreviewPageBoundary).not.toHaveBeenCalled();
+  });
+
+  it("往前切图且本页前面已无图片时，交给分页器翻到上一页末张，期间保留旧图", async () => {
+    routeStore.page = 2;
+    routeStore.computedPath = "hide/sort/by-time/desc/x2x/2";
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    core.vm.$emit("preview-switch", { direction: "next" });
+    core.vm.$emit("preview-switch", { direction: "prev" });
+    await nextTick();
+    const shown = core.props("previewImage");
+    expect(shown).toMatchObject({ id: "target" });
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    handlePreviewPageBoundary.mockImplementation((payload: { direction: "prev" | "next" }) => {
+      pendingPreviewBoundary.value = { targetPage: 1, direction: payload.direction };
+    });
+    await applySnapshot!(snapshot(["older", "oldest"], 2));
+    await nextTick();
+    expect(handlePreviewPageBoundary).toHaveBeenCalledWith(expect.objectContaining({ direction: "prev" }));
+    expect(core.props("previewImage")).toBe(shown);
+    expect(locateImageRowIndex).not.toHaveBeenCalled();
+  });
+
+  it("关闭预览后方向复位：重新打开后删除默认接续同下标那张", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    core.vm.$emit("preview-switch", { direction: "next" });
+    core.vm.$emit("preview-switch", { direction: "prev" });
+    await nextTick();
+    core.vm.$emit("preview-close", { image: null });
+    await nextTick();
+    await applySnapshot!(snapshot(["first", "target", "older"], 2));
+    core.vm.$emit("preview-request", { id: "target" });
+    await nextTick();
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    await applySnapshot!(snapshot(["first", "older"], 3));
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "older" });
+  });
+
+  it("固定下一张时忽略最近一次往前切图", async () => {
+    settings.values.previewSwitchDirection = "next";
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    await applySnapshot!(snapshot(["first", "target", "older"], 2));
+    core.vm.$emit("preview-switch", { direction: "next" });
+    core.vm.$emit("preview-switch", { direction: "prev" });
+    await nextTick();
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    await applySnapshot!(snapshot(["first", "older"], 3));
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "older" });
+  });
+
+  it("固定上一张时无需先手动往前切图", async () => {
+    settings.values.previewSwitchDirection = "prev";
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    await applySnapshot!(snapshot(["first", "target", "older"], 2));
+    core.vm.$emit("preview-request", { id: "target" });
+    await nextTick();
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    await applySnapshot!(snapshot(["first", "older"], 3));
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "first" });
   });
 });

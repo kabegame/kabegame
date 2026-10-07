@@ -281,7 +281,17 @@ const previewedId = ref<string | null>(null);
 const previewImageInfo = shallowRef<CoreImageInfo | null>(null);
 /** 只有关闭跟页或 rank 确认不在视图中后，才允许弹窗走裸 id 单图路线。 */
 const previewSingleImage = ref(false);
-const previewAnchor = ref<{ id: string; index: number } | null>(null);
+type PreviewAnchor = {
+  id: string;
+  index: number;
+  /** 删除前的行，往上一页交接时作为分页器的边界图片。 */
+  image: CoreImageInfo;
+  /** 删除前排在它前面的 id，多选删除时下标不可靠，按旧顺序找仍存活的上一张。 */
+  beforeIds: string[];
+};
+const previewAnchor = ref<PreviewAnchor | null>(null);
+/** 本次预览里用户最近一次切图方向；删除当前图后沿这个方向接续，关闭预览时复位。 */
+let lastPreviewSwitchDirection: "prev" | "next" = "next";
 let latestSnapshotSeq = 0;
 type PreviewLocateRequest = {
   id: string;
@@ -666,6 +676,7 @@ const previewProp = computed<string | CoreImageInfo | null>(() => {
 watch(
   previewedId,
   (id) => {
+    if (!id) lastPreviewSwitchDirection = "next";
     pendingPreviewLocate = null;
     lastLocateAttempt = null;
     previewSingleImage.value = false;
@@ -722,7 +733,10 @@ const capturePreviewAnchor = () => {
     return;
   }
   const index = images.value.findIndex((img) => img.id === id);
-  previewAnchor.value = index >= 0 ? { id, index } : null;
+  previewAnchor.value =
+    index >= 0
+      ? { id, index, image: images.value[index]!, beforeIds: images.value.slice(0, index).map((img) => img.id) }
+      : null;
 };
 const clearPreviewAnchor = () => {
   previewAnchor.value = null;
@@ -731,14 +745,35 @@ const clearPreviewAnchor = () => {
 /**
  * 在 applyViewSnapshot 更新列表后调用——那里是 images.value 被替换的唯一漏斗。
  * 无锚点时保留当前 id，后台新增造成的跨页由快照协调负责。
+ *
+ * 接续方向由设置决定；自动模式跟随用户最近一次切图方向：
+ * - next：同下标那张（本页末尾由下一页补位），没有就退到上一张；
+ * - prev：旧顺序里最近一张仍在视图的上一张，本页前面没有了就交给分页器翻到上一页末张，
+ *   已是第一页才退到同下标那张。
  */
 const resolvePreviewAnchor = () => {
   const anchor = previewAnchor.value;
   if (!anchor) return;
   previewAnchor.value = null;
   if (previewedId.value !== anchor.id) return; // 期间已被别的来源改过
-  if (images.value.some((img) => img.id === anchor.id)) return; // 还在视图里：不跳
-  const next = images.value[Math.min(anchor.index, images.value.length - 1)];
+  const list = images.value;
+  if (list.some((img) => img.id === anchor.id)) return; // 还在视图里：不跳
+  const after = list[anchor.index] ?? null;
+  const alive = new Map(list.map((img) => [img.id, img]));
+  let before: CoreImageInfo | null = null;
+  for (let i = anchor.beforeIds.length - 1; i >= 0 && !before; i--) {
+    before = alive.get(anchor.beforeIds[i]!) ?? null;
+  }
+  // 本页已删空时只能往上一页走，与切图方向无关
+  const configuredDirection = settingsStore.values.previewSwitchDirection ?? "auto";
+  const resolvedDirection = configuredDirection === "auto" ? lastPreviewSwitchDirection : configuredDirection;
+  const preferPrev = resolvedDirection === "prev" || list.length === 0;
+  if (preferPrev && !before && paged.currentPage.value > 1) {
+    // 保持旧 id 与旧对象：pendingPreviewBoundary 期间 reconcilePreview 不定位，新页就绪后由分页器打开末张
+    void paged.handlePreviewPageBoundary({ direction: "prev", image: anchor.image });
+    return;
+  }
+  const next = preferPrev ? (before ?? after ?? list[0] ?? null) : (after ?? before ?? list[list.length - 1] ?? null);
   // 只有真的要关闭时才置 null——中途经过 null 会让 pvwimgid 被 replace 两次
   previewedId.value = next?.id ?? null;
 };
@@ -949,6 +984,7 @@ function handlePreviewRequest(payload: { id: string }) {
  * 由 usePagedGallery 在新页就绪后设首/末张。
  */
 function handlePreviewSwitch(payload: { direction: "prev" | "next" }) {
+  lastPreviewSwitchDirection = payload.direction;
   const neighbor = payload.direction === "prev" ? previewPrevImage.value : previewNextImage.value;
   if (neighbor) {
     const from = previewedId.value;
