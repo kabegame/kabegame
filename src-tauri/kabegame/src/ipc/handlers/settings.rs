@@ -47,6 +47,10 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsGetWindowState => Some(get_window_state()),
         IpcRequest::SettingsGetCurrentWallpaperImageId => Some(get_current_wallpaper_image_id()),
         IpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir()),
+        IpcRequest::SettingsGetLanguage => Some(IpcResponse::ok_with_data(
+            "ok",
+            serde_json::json!(Settings::global().get_resolved_language()),
+        )),
         #[cfg(feature = "standard")]
         IpcRequest::SettingsGetAlbumDriveEnabled => Some(get_album_drive_enabled()),
         #[cfg(feature = "standard")]

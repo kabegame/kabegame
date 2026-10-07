@@ -10,9 +10,11 @@ use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
 use crate::storage::tasks::TaskStatus;
 use crate::storage::Storage;
+use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock as StdRwLock};
 use std::time::Duration;
@@ -587,7 +589,24 @@ async fn worker_loop(
             },
         );
 
-        let res = run_task(Arc::clone(&download_queue), Arc::clone(&run)).await;
+        // panic 兜底：执行体 panic 不能带走 worker，否则任务永远停在 Running、
+        // 注册表项与运行名额都不释放，取消也无人处理。按失败收尾并清掉该任务残留的下载。
+        let res = match AssertUnwindSafe(run_task(Arc::clone(&download_queue), Arc::clone(&run)))
+            .catch_unwind()
+            .await
+        {
+            Ok(res) => res,
+            Err(payload) => {
+                let message = format!(
+                    "任务执行时发生内部错误（panic）：{}",
+                    panic_message(&*payload)
+                );
+                eprintln!("[TaskScheduler] task {task_id} {message}");
+                GlobalEmitter::global().emit_task_log(&task_id, "error", &message);
+                download_queue.cancel_task_downloads(&task_id).await;
+                Err(TaskError::Other(message))
+            }
+        };
 
         match res {
             Ok(()) => {
@@ -653,6 +672,14 @@ async fn worker_loop(
         running.fetch_sub(1, Ordering::Relaxed);
         scheduler.task_slot_notify.notify_one();
     }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "未知 panic".to_string())
 }
 
 /// 任务脚本结束前等待该任务全部排队及活跃下载落盘。

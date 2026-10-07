@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# 打包到 dev 插件目录 → release kabegame-cli 以另一个 id 直接运行该 .kgpg，限时后取消，给出可判定的摘要。
-#   run-cli.sh <plugin-id> [--id TEST_ID] [--secs N] [--out DIR] [--no-deploy] [--var k=v ...] [其它 plugin run 参数]
+# 打包到 dev 插件目录 → kabegame-cli 以另一个 id 直接运行该 .kgpg，限时后取消，给出可判定的摘要。
+#   run-cli.sh <plugin-id> [--release] [--id TEST_ID] [--secs N] [--out DIR] [--no-deploy] [--var k=v ...] [其它 plugin run 参数]
+#
+# CLI profile：默认 dev 版 target/debug/kabegame-cli（须以 `--data dev` 构建，库在仓库内 .kabegame/debug/data，
+# 与 dev app 共用）；--release 或 KB_CLI_PROFILE=release 切到 target/release（系统用户数据目录）。
+# CLI 没有运行时 --data 参数，数据目录只由构建时的 kabegame_data cfg 决定。
 #
 # 1. deploy.sh 打包到 .kabegame/debug/data/plugins-directory/<id>.kgpg（dev app 也能看到这一版）
-# 2. release CLI `plugin run <该 .kgpg> --id <TEST_ID>`：路径模式临时运行、不安装；
+# 2. CLI `plugin run <该 .kgpg> --id <TEST_ID>`：路径模式临时运行、不安装；
 #    --id（默认 <id>-test）让插件数据目录、default-configs、入库 plugin_id 与正式插件隔离。
-#    不传 --data：release 默认用系统用户数据目录。图片落到 --out（默认临时目录）。
+#    图片落到 --out（默认临时目录）。
 # 默认 60 秒后发 SIGINT：CLI 会把任务标记为 canceled，而不是留下永远 running 的任务。
-# --plain 模式下任务被取消时不打印计数，所以计数从系统数据目录的 images.db 读。
+# --plain 模式下任务被取消时不打印计数，所以计数从所用数据目录的 images.db 读。
 set -uo pipefail
 
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-ID="${1:?用法: run-cli.sh <plugin-id> [--id TEST_ID] [--secs N] [--out DIR] [--no-deploy] [--var k=v ...]}"; shift
-CLI="$ROOT/target/release/kabegame-cli"
+ID="${1:?用法: run-cli.sh <plugin-id> [--release] [--id TEST_ID] [--secs N] [--out DIR] [--no-deploy] [--var k=v ...]}"; shift
 KGPG="$ROOT/.kabegame/debug/data/plugins-directory/$ID.kgpg"
 TEST_ID="$ID-test"
 SECS=60
@@ -25,21 +28,30 @@ while [ $# -gt 0 ]; do
     --secs) SECS="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
     --no-deploy) DEPLOY=0; shift ;;
+    --release) KB_CLI_PROFILE=release; shift ;;
     *) PASS+=("$1"); shift ;;
   esac
 done
-# 与 CLI 的 DataMode::Auto（release）一致：dirs::data_local_dir()/Kabegame
-case "$(uname)" in
-  Darwin) DB="$HOME/Library/Application Support/Kabegame/images.db" ;;
-  *) DB="${XDG_DATA_HOME:-$HOME/.local/share}/Kabegame/images.db" ;;
-esac
+export KB_CLI_PROFILE="${KB_CLI_PROFILE:-debug}"
+CLI="$ROOT/target/$KB_CLI_PROFILE/kabegame-cli"
+if [ "$KB_CLI_PROFILE" = release ]; then
+  # 与 CLI 的 DataMode::Auto（release）一致：dirs::data_local_dir()/Kabegame
+  case "$(uname)" in
+    Darwin) DB="$HOME/Library/Application Support/Kabegame/images.db" ;;
+    *) DB="${XDG_DATA_HOME:-$HOME/.local/share}/Kabegame/images.db" ;;
+  esac
+  BUILD_HINT="deno task b -c kabegame-cli --release"
+else
+  DB="$ROOT/.kabegame/debug/data/images.db"
+  BUILD_HINT="deno task b -c kabegame-cli --data dev"
+fi
 mkdir -p "$OUT"
 LOG="$OUT/run-$(date +%H%M%S).log"
 MARK="$OUT/.run-start"; touch "$MARK"
 
 if [ "$DEPLOY" = 1 ]; then "$(dirname "$0")/deploy.sh" "$ID" || exit 1; fi
 [ -f "$KGPG" ] || { echo "✗ 找不到 $KGPG（去掉 --no-deploy）" >&2; exit 1; }
-[ -x "$CLI" ] || { echo "✗ 缺少 release CLI —— 请用户在仓库根执行 deno task b -c kabegame-cli --release" >&2; exit 1; }
+[ -x "$CLI" ] || { echo "✗ 缺少 $KB_CLI_PROFILE CLI —— 请用户在仓库根执行 $BUILD_HINT" >&2; exit 1; }
 
 "$CLI" plugin run "$KGPG" --id "$TEST_ID" --plain --output-dir "$OUT" ${PASS[@]+"${PASS[@]}"} >"$LOG" 2>&1 &
 PID=$!
@@ -55,7 +67,7 @@ fi
 wait "$PID" 2>/dev/null
 
 TASK=$(grep -o '"taskId":"[^"]*"' "$LOG" | head -1 | cut -d'"' -f4)
-echo "── 摘要 (${ID} 以 id=${TEST_ID} 运行) ──"
+echo "── 摘要 (${ID} 以 id=${TEST_ID} 运行，${KB_CLI_PROFILE} CLI) ──"
 echo "  运行：${STOPPED}   日志：${LOG}"
 grep -m1 "^插件 " "$LOG" | sed 's/^/  /'
 if grep -q "Hardening assertion\|panicked at\|SIGSEGV" "$LOG"; then

@@ -7,9 +7,11 @@
 //! - 并发请求支持
 //! - 防止并发创建多个连接
 
+use crate::ipc::events::AppEvent;
 use crate::ipc::ipc::{
     decode_frame, encode_frame, read_one_frame, IpcEnvelope, IpcRequest, IpcResponse,
 };
+use crate::ipc_dbg;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,9 +57,15 @@ pub struct ConnectionHandle {
     /// 发送请求的通道（客户端 -> 应用 IPC 服务）
     /// 不能并发发送请求
     pub request_tx: Arc<Mutex<mpsc::UnboundedSender<(u64, IpcRequest)>>>,
-    /// 事件接收通道 spsc（客户端 <- 应用 IPC 服务）
-    pub event_rx: Arc<Mutex<mpsc::Receiver<serde_json::Value>>>,
+    /// 事件接收通道（客户端 <- 应用 IPC 服务），每条连接只能取走一次。
+    pub event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Arc<AppEvent>>>>>,
 }
+
+#[cfg(target_os = "windows")]
+type ClientStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+type ClientStream = tokio::net::UnixStream;
 
 #[cfg(target_os = "windows")]
 type WriteHalf = tokio::io::WriteHalf<tokio::net::windows::named_pipe::NamedPipeClient>;
@@ -102,65 +110,54 @@ impl PersistentConnection {
         let _ = self.status_notify.send(status);
     }
 
-    /// 连接处理任务内部实现 - Unix
-    /// 真正处理连接，干活的
-    /// 1. 创建命名管道或者UnixSocket连接
-    /// 2. 写入全局连接句柄
-    /// 3. 启动读循环
-    /// 4. 进入主循环，处理请求队列和事件
-    async fn connection_loop(self: Arc<Self>) {
+    /// 安装已建立的连接，然后在后台启动读写循环。
+    async fn start_io(self: Arc<Self>, client: ClientStream) {
         use tokio::io::split;
 
-        // 设置状态为正在连接
-        self.set_status(ConnectionStatus::Connecting).await;
-
-        // 尝试连接，失败时由上层展示应用 IPC 服务不可用。
-        let client = match Self::create_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[ERROR] PersistentConnection 连接失败: {}", e);
-                // 重置状态为未连接
-                self.set_status(ConnectionStatus::Disconnected).await;
-                return;
-            }
-        };
-
         let (request_tx, mut request_rx) = mpsc::unbounded_channel();
-        let (event_tx, event_rx) = mpsc::channel(1);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let handle = ConnectionHandle {
             request_tx: Arc::new(Mutex::new(request_tx)),
-            event_rx: Arc::new(Mutex::new(event_rx)),
+            event_rx: Arc::new(Mutex::new(Some(event_rx))),
         };
 
-        eprintln!("[DEBUG] PersistentConnection 持久连接已建立 (Windows)");
-
-        // 连接成功，更新状态
         *self.handle.write().await = Some(handle);
         self.set_status(ConnectionStatus::Connected).await;
+        ipc_dbg!("[DEBUG] PersistentConnection 持久连接已建立");
 
-        // 使用 split 分离读写端
         let (read_half, mut write_half) = split(client);
-
-        // 启动读取任务
         let read_task = tokio::spawn(Self::recieve_message_loop(
             self.clone(),
             read_half,
             event_tx,
         ));
 
-        // 写入任务（处理请求队列）
-        while let Some((request_id, req)) = request_rx.recv().await {
-            if let Err(e) = Self::send_request(&mut write_half, request_id, req).await {
-                eprintln!("[ERROR] PersistentConnection 发送请求失败: {}, 关闭连接", e);
-                break;
+        let write_task = tokio::spawn(async move {
+            while let Some((request_id, req)) = request_rx.recv().await {
+                if let Err(e) = Self::send_request(&mut write_half, request_id, req).await {
+                    ipc_dbg!("[ERROR] PersistentConnection 发送请求失败: {}, 关闭连接", e);
+                    break;
+                }
             }
-        }
+        });
 
-        // 连接断开，清理
-        read_task.abort();
-        *self.handle.write().await = None;
-        self.set_status(ConnectionStatus::Disconnected).await;
-        eprintln!("[DEBUG] PersistentConnection 连接已关闭");
+        let connection = self.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = read_task => {}
+                _ = write_task => {}
+            }
+
+            *connection.handle.write().await = None;
+            connection
+                .request_state
+                .lock()
+                .await
+                .pending_requests
+                .clear();
+            connection.set_status(ConnectionStatus::Disconnected).await;
+            ipc_dbg!("[DEBUG] PersistentConnection 连接已关闭");
+        });
     }
 
     /// 发送请求
@@ -178,9 +175,10 @@ impl PersistentConnection {
 
         let frame = encode_frame(&envelope)?;
 
-        eprintln!(
+        ipc_dbg!(
             "[DEBUG] PersistentConnection 发送请求 #{}: {:?}",
-            request_id, req
+            request_id,
+            req
         );
 
         write_half
@@ -200,9 +198,9 @@ impl PersistentConnection {
     async fn recieve_message_loop(
         connection: Arc<PersistentConnection>,
         mut read_half: ReadHalf,
-        event_tx: mpsc::Sender<serde_json::Value>,
+        event_tx: mpsc::UnboundedSender<Arc<AppEvent>>,
     ) {
-        eprintln!("[DEBUG] PersistentConnection 接收消息循环已启动 (Windows)");
+        ipc_dbg!("[DEBUG] PersistentConnection 接收消息循环已启动");
 
         loop {
             match read_one_frame(&mut read_half).await {
@@ -212,9 +210,9 @@ impl PersistentConnection {
                 Err(e) => {
                     if e.contains("EOF") {
                         connection.set_status(ConnectionStatus::Disconnected).await;
-                        eprintln!("[DEBUG] PersistentConnection 连接关闭 (EOF)");
+                        ipc_dbg!("[DEBUG] PersistentConnection 连接关闭 (EOF)");
                     } else {
-                        eprintln!("[ERROR] PersistentConnection 读取失败: {}", e);
+                        ipc_dbg!("[ERROR] PersistentConnection 读取失败: {}", e);
                     }
                     break;
                 }
@@ -229,9 +227,9 @@ impl PersistentConnection {
     async fn process_message_frame(
         &self,
         payload: &[u8],
-        event_tx: &mpsc::Sender<serde_json::Value>,
+        event_tx: &mpsc::UnboundedSender<Arc<AppEvent>>,
     ) {
-        eprintln!(
+        ipc_dbg!(
             "[DEBUG] PersistentConnection 收到 CBOR 帧，长度: {}",
             payload.len()
         );
@@ -241,35 +239,36 @@ impl PersistentConnection {
             Ok(resp) => {
                 // 这是响应
                 if let Some(id) = resp.request_id {
-                    eprintln!(
+                    ipc_dbg!(
                         "[DEBUG] PersistentConnection 收到响应 #{}: ok={}",
-                        id, resp.ok
+                        id,
+                        resp.ok
                     );
 
                     let mut state = self.request_state.lock().await;
                     if let Some(tx) = state.pending_requests.remove(&id) {
                         let _ = tx.send(resp);
                     } else {
-                        eprintln!("[WARN] PersistentConnection 响应 #{} 找不到对应的请求", id);
+                        ipc_dbg!("[WARN] PersistentConnection 响应 #{} 找不到对应的请求", id);
                     }
                 } else {
-                    eprintln!(
+                    ipc_dbg!(
                         "[WARN] PersistentConnection 收到无 request_id 的响应: ok={}",
                         resp.ok
                     );
                 }
             }
             Err(_) => {
-                // 解析响应失败，尝试解析为事件（serde_json::Value）
-                match decode_frame::<serde_json::Value>(payload) {
-                    Ok(value) => {
-                        eprintln!("[DEBUG] PersistentConnection 收到事件");
-                        if let Err(e) = event_tx.send(value).await {
-                            eprintln!("[WARN] PersistentConnection 发送事件失败: {}", e);
+                // 解析响应失败，尝试解析为强类型事件。
+                match decode_frame::<AppEvent>(payload) {
+                    Ok(event) => {
+                        ipc_dbg!("[DEBUG] PersistentConnection 收到事件");
+                        if let Err(e) = event_tx.send(Arc::new(event)) {
+                            ipc_dbg!("[WARN] PersistentConnection 发送事件失败: {}", e);
                         }
                     }
                     Err(e) => {
-                        eprintln!("[WARN] PersistentConnection 收到无效 CBOR: {}", e);
+                        ipc_dbg!("[WARN] PersistentConnection 收到未知事件或无效 CBOR: {}", e);
                     }
                 }
             }
@@ -279,51 +278,21 @@ impl PersistentConnection {
     /// 连接到应用 IPC 服务。
     /// 不允许并发调用
     pub async fn connect(self: Arc<Self>) -> Result<(), String> {
-        loop {
-            match self.get_status().await {
-                ConnectionStatus::Connected => {
-                    // 已经连接，直接返回成功
-                    return Ok(());
-                }
-                //
-                ConnectionStatus::Connecting => {
-                    return Err("正在连接中".to_string());
-                }
-                ConnectionStatus::Disconnected => {
-                    // 需要启动连接，设置状态为 Connecting
-                    // let status_notify_clone = self.statuss_notify.clone();
-                    // Self::set_status(
-                    //     &self.status,
-                    //     &status_notify_clone,
-                    //     ConnectionStatus::Connecting,
-                    // )
-                    // .await;
-
-                    // // 创建连接通道
-                    // let (request_tx, request_rx) = mpsc::unbounded_channel();
-                    // let (event_tx, event_rx) = mpsc::unbounded_channel();
-                    // let handle = Arc::new(ConnectionHandle {
-                    //     request_tx,
-                    //     event_rx,
-                    // });
-
-                    // 创建连接就绪通知
-                    // let (ready_tx, ready_rx) = oneshot::channel();
-
-                    // 克隆需要的 Arc
-                    // let status_clone = self.status.clone();
-                    // let request_state_clone = self.request_state.clone();
-                    // let status_notify_clone = self.status_notify.clone();
-                    // let handle_clone = handle.clone();
-
-                    // 启动连接任务
-                    tokio::spawn(self.connection_loop());
-
-                    // 等待连接完成
-                    return Ok(());
-                }
-            }
+        match self.get_status().await {
+            ConnectionStatus::Connected => return Ok(()),
+            ConnectionStatus::Connecting => return Err("正在连接中".to_string()),
+            ConnectionStatus::Disconnected => {}
         }
+        self.set_status(ConnectionStatus::Connecting).await;
+        let stream = match Self::create_connection().await {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.set_status(ConnectionStatus::Disconnected).await;
+                return Err(error);
+            }
+        };
+        self.clone().start_io(stream).await;
+        Ok(())
     }
 
     /// 等待连接就绪（不主动创建连接）
@@ -352,25 +321,28 @@ impl PersistentConnection {
 
     /// 发送请求并等待响应
     ///
-    /// 此方法会等待连接进入 Connected 状态（最多10秒），但不会主动创建连接。
-    /// 如果请求失败（发送失败或等待响应超时），会自动将连接状态设置为 Disconnected。
-    /// 如果是连接相关错误，会弹出原生错误窗口提示用户先启动 kabegame。
+    /// Connected 时直接发送；Connecting 时最多等待 10 秒；Disconnected 立即失败。
     pub async fn request(&self, req: IpcRequest) -> Result<IpcResponse, String> {
-        // 等待连接就绪（最多10秒），但不主动创建连接
-        let connection_result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            self.wait_for_connection(),
-        )
-        .await;
-
-        if let Err(_) = connection_result {
-            let error_msg = "等待连接超时（10秒）".to_string();
-            super::connection_status::handle_ipc_connection_error(&error_msg);
-            return Err(error_msg);
+        match self.get_status().await {
+            ConnectionStatus::Connected => {}
+            ConnectionStatus::Disconnected => return Err("未连接到 Kabegame 主程序".to_string()),
+            ConnectionStatus::Connecting => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    self.wait_for_connection(),
+                )
+                .await
+                .map_err(|_| "等待连接超时（10秒）".to_string())??;
+            }
         }
 
-        let conn = self.handle.read().await;
-        let conn = conn.as_ref().unwrap();
+        let request_tx = {
+            let conn = self.handle.read().await;
+            conn.as_ref()
+                .ok_or_else(|| "连接已断开".to_string())?
+                .request_tx
+                .clone()
+        };
 
         // 分配请求 ID 并注册等待响应
         let (request_id, rx) = {
@@ -384,11 +356,14 @@ impl PersistentConnection {
         };
 
         // 发送请求
-        if let Err(e) = conn.request_tx.lock().await.send((request_id, req)) {
+        if let Err(e) = request_tx.lock().await.send((request_id, req)) {
             // 发送失败，我们这里也不敢说连接断开了，只能返回错误
-            let error_msg = format!("发送请求失败: {}", e);
-            super::connection_status::handle_ipc_connection_error(&error_msg);
-            return Err(error_msg);
+            self.request_state
+                .lock()
+                .await
+                .pending_requests
+                .remove(&request_id);
+            return Err(format!("发送请求失败: {}", e));
         }
 
         // 等待响应
@@ -400,9 +375,7 @@ impl PersistentConnection {
             Err(_) => {
                 // 等待响应失败（可能是连接断开），设置状态为断开
                 self.set_status(ConnectionStatus::Disconnected).await;
-                let error_msg = "请求被取消或连接已断开".to_string();
-                super::connection_status::handle_ipc_connection_error(&error_msg);
-                Err(error_msg)
+                Err("请求被取消或连接已断开".to_string())
             }
         }
     }

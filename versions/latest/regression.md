@@ -42,3 +42,28 @@
 | [x] | 主动移除锚点优先 | 前端 Vitest | 捕获移除锚点后应用不含当前图的快照 | 显示同下标图片，不定位旧 id | 已实测 |
 
 ## ImageGrid 移除拖动滑动
+
+## kabegame-cli 优先经应用 IPC 执行
+
+CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一套业务组合：同数据目录的主程序
+可用时走 IPC，否则回退 CLI 本地运行时。`PluginRun` 的解析、配置合并与任务提交统一在
+`commands::task::run_plugin`；`data import-image` 改为 `local-import` 任务并移除 `--metadata`。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` 与 `-c kabegame-cli --skip vue` | app/core/CLI 无 error | 已实测 |
+| [x] | core 参数解析单测 | 本机 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib commands::task` | key=value、positional、options 名称映射和未知 key 报错均通过 | `3 passed / 0 failed / 0 ignored` |
+| [x] | CLI 单测 | 本机 | `.claude/skills/test-kabegame/driver.sh kabegame-cli` | 全部通过；`--metadata` 已被 clap 拒绝 | `20 passed / 0 failed / 0 ignored` |
+| [x] | app/local PathQL 一致 | dev app + debug CLI | app 运行时用 `--data dev` 构建的 CLI 查询 `images://gallery/all/x10x/1`，再以 `--via local` 查询 | 两者输出一致；app 模式顶部显示主程序版本 | 已实测：`x5x/1` 两种模式输出逐字节一致，stderr 显示「经主程序执行（版本 4.5.1）」；单次约 0.04s |
+| [x] | 单文件导入与去重 | dev app + debug CLI | 向 `/父/子` 画册导入图片，再重复导入 | 任务抽屉出现 `local-import`；画廊/画册立即刷新；CLI 分别打印成功/去重计数 | 已实测（未加入画册）：画廊计数 1457→1458 实时刷新，任务抽屉出现本地导入；重复导入打印「去重 1」。`--album` 仅验证了不存在路径经 IPC 报「未找到画册树路径」，未向真实画册写入 |
+| [x] | 临时包与已安装插件 | dev app + debug CLI | 两种模式各运行 `.kgpg --id test-x --var k=v --dry-run` 和已安装 id | 最终配置一致；未知 key 均列出可用 key；实际运行日志/进度正常 | 已实测：konachan 已安装 id 与 `.kgpg --id konachan-ipc-test` 两种模式 dry-run 输出一致（含默认配置合并、`end_page` 转数字）；`--var max_pages=1` 两种模式报同样的可用 key；`--id` 用于 id 模式报错 |
+| [x] | 取消任务 | dev app + debug CLI | `plugin run` 执行中按 Ctrl-C | CLI 经选中后端取消，任务状态变为 canceled | 已实测：app 模式 konachan 运行 12s 后 SIGINT，CLI 打印「任务已取消」，任务抽屉显示已取消（下载 2 张）；stderr 无 `[DEBUG]` |
+| [x] | WebView 宿主能力 | dev app + debug CLI | app 模式运行 WebView 插件，再加 `--via local` | app 模式可运行；local 模式明确报只支持 V8 | 已实测：app 模式 `plugin run webpage --var url=https://konachan.net/post --var backend=webview` 发现 81 张、完成 81 张；`--via local` 报只支持 v8（`webpage` 的 script_type 为 builtin，改动前本地同样不可跑）。注意：运行期间不要用 playwright 连 CDP，会劫持 WebView 原生下载导致「Native download failed」 |
+| [x] | 插件导入 | dev app + debug CLI | 导入正常 `.kgpg`，再导入坏包 | 正常包使插件列表立即刷新；坏包在 CLI 本地解析阶段失败且无目录残留 | 已实测：随机字节 `.kgpg` 在本地解析阶段报「读取 KGPG v3 头部失败」，插件目录无残留；app 模式重新导入 konachan.kgpg 成功 |
+| [x] | 数据目录门控 | dev app + prod 构建的 CLI | app 运行时用默认（prod）构建的 CLI，再加 `--via app` | auto 提示目录不同并回退 local；app 强制模式报错 | 已实测：默认（prod）构建的 debug CLI 在 dev app 运行时 auto 提示「数据目录不同」并回退 local；`--via app` 报同样原因 |
+| [x] | 主程序未运行 | 关闭 app | 执行 auto 与 `--via app` 命令 | auto 立即本地执行，无 10s 等待/无弹窗；app 强制模式报未连接 | 已实测（以不同 `TMPDIR` 模拟 socket 不存在，未关闭 app）：auto 0.06s 内本地执行、无弹窗；`--via app` 报连接失败 |
+| [ ] | 任务 panic 兜底 | dev app（debug 构建） | 临时在某插件执行路径注入 `panic!`（或复现上一行的修复前场景）后运行任务 | 任务变为「失败」，日志含「任务执行时发生内部错误（panic）」；其余任务照常执行，运行名额被释放 | `worker_loop` 以 `catch_unwind` 包住 `run_task`；仅代码检查，未注入 panic 实测 |
+| [ ] | CLI 日志语言跟随应用设置 | dev app + 以 `--data dev` 构建的 debug CLI | 应用设置切到中文 / 英文后分别执行 `data import-image` 或 `plugin run` | 日志文案与应用界面语言一致，无 `{"_i18n":...}` 原文；`--via local` 同样跟随设置 | local 模式已实测（设置 zh → 中文日志）；app 模式待重启 dev app 后验证 |
+| [ ] | 重复导入不再卡死任务 | dev app（debug 构建）+ 下载间隔 > 0 | 对同一已入库文件反复执行 `data import-image`（或 GUI 拖入同一文件）数十次 | 每次都是「去重 1」并完成；终端无 `attempt to subtract with overflow`；任务抽屉无停在「运行中 0%」的本地导入 | 修复前偶发：`local-import` 的 start_time 比当前时间晚 1ms，`wait_after_download_if_needed` 下溢 panic 掉 task worker |
+| [ ] | IPC 调试与旧版协议 | 本机 | 设 `KABEGAME_IPC_DEBUG=1`；再用旧 app 配新 CLI | 开关打开时恢复 DEBUG；旧 app 下 auto 回退且不挂起 | `KABEGAME_IPC_DEBUG=1` 已实测恢复 DEBUG；旧版 app 未测（无旧版二进制） |
+| [x] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`，dev app 运行时走 app 模式 | 已实测：`--data dev` 退出码 2；不带参数的 `plugin run --dry-run`、`plugin import`、`pathql query` 均显示「经主程序执行」并使用 `.kabegame/debug/data`；`plugin run --help` 不再含 `--data` |

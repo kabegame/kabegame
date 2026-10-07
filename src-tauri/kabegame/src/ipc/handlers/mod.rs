@@ -8,16 +8,12 @@ pub mod plugin;
 pub mod settings;
 pub mod storage;
 
-use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse};
-#[cfg(not(target_os = "android"))]
-use kabegame_core::ipc::server::EventBroadcaster;
-use kabegame_core::plugin::PluginManager;
+use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse, IPC_PROTOCOL_VERSION};
 use kabegame_core::settings::Settings;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
-use kabegame_core::storage::tasks::{TaskInfo, TaskStatus};
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::VirtualDriveService;
@@ -48,30 +44,13 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
         return handle_app_import_plugin(kgpg_path, app_handle).await;
     }
 
-    // PluginRun：应用后端实现（入队执行）
-    if let IpcRequest::PluginRun {
-        plugin,
-        output_dir,
-        task_id,
-        output_album_id,
-        plugin_args,
-        http_headers,
-    } = req
-    {
-        return handle_plugin_run(
-            plugin,
-            output_dir,
-            task_id,
-            output_album_id,
-            plugin_args,
-            http_headers,
-        )
-        .await;
+    if let IpcRequest::PluginRun { params } = req {
+        return handle_plugin_run(params).await;
     }
 
     // TaskStart / TaskCancel：应用后端调度
-    if let IpcRequest::TaskStart { task } = req {
-        return handle_task_start(task).await;
+    if let IpcRequest::TaskStart { params } = req {
+        return handle_task_start(params).await;
     }
     if let IpcRequest::TaskCancel { task_id } = req {
         return handle_task_cancel(task_id).await;
@@ -149,35 +128,15 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
     IpcResponse::err(format!("Unknown request: {:?}", req))
 }
 
-async fn handle_task_start(task: serde_json::Value) -> IpcResponse {
-    let t: TaskInfo = match serde_json::from_value(task) {
-        Ok(t) => t,
-        Err(e) => return IpcResponse::err(format!("Invalid task data: {e}")),
-    };
-
-    // 确保任务在 DB 中存在（幂等）
-    match Storage::global().get_task(&t.id) {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            if let Err(e) = Storage::global().add_task(t.clone()) {
-                return IpcResponse::err(e);
-            }
+async fn handle_task_start(params: serde_json::Value) -> IpcResponse {
+    match kabegame_core::commands::task::start_task(params).await {
+        Ok(task_id) => {
+            let mut resp = IpcResponse::ok("queued");
+            resp.task_id = Some(task_id);
+            resp
         }
-        Err(e) => return IpcResponse::err(e),
+        Err(error) => IpcResponse::err(error),
     }
-
-    let req = CrawlTaskRequest {
-        task_id: t.id.clone(),
-        plugin_file_path: None,
-    };
-
-    if let Err(e) = TaskScheduler::global().enqueue(req).await {
-        return IpcResponse::err(e);
-    }
-
-    let mut resp = IpcResponse::ok("queued");
-    resp.task_id = Some(t.id);
-    resp
 }
 
 async fn handle_task_cancel(task_id: String) -> IpcResponse {
@@ -266,189 +225,22 @@ async fn handle_organize_cancel() -> IpcResponse {
     }
 }
 
-async fn handle_plugin_run(
-    plugin: String,
-    output_dir: Option<String>,
-    task_id: Option<String>,
-    output_album_id: Option<String>,
-    plugin_args: Vec<String>,
-    http_headers: Option<std::collections::HashMap<String, String>>,
-) -> IpcResponse {
-    // resolve plugin：支持 id 或 .kgpg 路径
-    let plugin_manager = PluginManager::global();
-    // id_override 只有 CLI 的 `plugin run --id` 会用；这条 IPC 上没有对应字段，传 None
-    // 即按包内 name / 文件名回落。
-    let (plugin_obj, plugin_file_path, var_defs) = match plugin_manager
-        .resolve_plugin_for_cli_run(&plugin, None)
-        .await
+async fn handle_plugin_run(params: kabegame_core::commands::task::PluginRunParams) -> IpcResponse {
+    match kabegame_core::commands::task::run_plugin(params, cfg!(not(target_os = "android"))).await
     {
-        Ok(x) => x,
-        Err(e) => return IpcResponse::err(e),
-    };
-
-    // task_id：若未提供则生成
-    let task_id = task_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-    // 解析 CLI plugin_args -> user_config（再由调度器用 var_defs 统一 normalize + 默认值合并）
-    let user_cfg = match parse_plugin_args_to_user_config(&var_defs, &plugin_args) {
-        Ok(m) => m,
-        Err(e) => return IpcResponse::err(e),
-    };
-    let user_config = if user_cfg.is_empty() {
-        None
-    } else {
-        Some(user_cfg)
-    };
-
-    // 确保任务在 DB 中存在（否则调度器的 update/persist 是 no-op）
-    match Storage::global().get_task(&task_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            let t = TaskInfo {
-                id: task_id.clone(),
-                plugin_id: plugin_obj.id.clone(),
-                output_dir: output_dir.clone(),
-                user_config: user_config.clone(),
-                http_headers: http_headers.clone(),
-                output_album_id: output_album_id.clone(),
-                run_config_id: None,
-                trigger_source: "manual".to_string(),
-                status: TaskStatus::Pending,
-                progress: 0.0,
-                deleted_count: 0,
-                dedup_count: 0,
-                success_count: 0,
-                failed_count: 0,
-                start_time: None,
-                end_time: None,
-                error: None,
-            };
-            if let Err(e) = Storage::global().add_task(t) {
-                return IpcResponse::err(e);
-            }
-        }
-        Err(e) => return IpcResponse::err(e),
-    }
-
-    // 入队执行
-    let req = CrawlTaskRequest {
-        task_id: task_id.clone(),
-        plugin_file_path: plugin_file_path.map(|p| p.to_string_lossy().to_string()),
-    };
-
-    if let Err(e) = TaskScheduler::global().enqueue(req).await {
-        return IpcResponse::err(e);
-    }
-
-    let mut resp = IpcResponse::ok("queued");
-    resp.task_id = Some(task_id);
-    resp
-}
-
-fn parse_plugin_args_to_user_config(
-    var_defs: &[kabegame_core::plugin::VarDefinition],
-    plugin_args: &[String],
-) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
-    use kabegame_core::plugin::{VarDefinition, VarOption};
-    use std::collections::HashMap;
-
-    fn parse_one(def: &VarDefinition, raw: &str) -> Result<serde_json::Value, String> {
-        let t = def.var_type.trim().to_ascii_lowercase();
-        match t.as_str() {
-            "int" => raw
-                .trim()
-                .parse::<i64>()
-                .map(serde_json::Value::from)
-                .map_err(|e| format!("参数 {} 解析为 int 失败: {raw} ({e})", def.key)),
-            "float" => raw
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .and_then(serde_json::Number::from_f64)
-                .map(serde_json::Value::Number)
-                .ok_or_else(|| format!("参数 {} 解析为 float 失败: {raw}", def.key)),
-            "boolean" => {
-                let v = match raw.trim().to_ascii_lowercase().as_str() {
-                    "1" | "true" | "yes" | "y" | "on" => true,
-                    "0" | "false" | "no" | "n" | "off" => false,
-                    _ => return Err(format!("参数 {} 解析为 boolean 失败: {raw}", def.key)),
-                };
-                Ok(serde_json::Value::Bool(v))
-            }
-            "list" => {
-                // 约定：用逗号分隔（也兼容单个值）
-                let items: Vec<serde_json::Value> = raw
-                    .split(',')
-                    .map(|s| serde_json::Value::String(s.trim().to_string()))
-                    .filter(|s| !s.as_str().unwrap_or("").is_empty())
-                    .collect();
-                Ok(serde_json::Value::Array(items))
-            }
-            "string" | "date" => Ok(serde_json::Value::String(raw.trim().to_string())),
-            "options" => {
-                // 直接接受 raw（variable/name 都行；normalize_var_value 会做进一步规范化）
-                // 若提供了 options 列表，优先把 name 映射到 variable
-                if let Some(opts) = def.options.as_ref() {
-                    let raw_trim = raw.trim();
-                    for o in opts {
-                        match o {
-                            VarOption::String(s) => {
-                                if s == raw_trim {
-                                    return Ok(serde_json::Value::String(raw_trim.to_string()));
-                                }
-                            }
-                            VarOption::Item { name, variable, .. } => {
-                                let name_matches = name.values().any(|v| v.as_str() == raw_trim);
-                                if name_matches || variable == raw_trim {
-                                    return Ok(serde_json::Value::String(variable.clone()));
-                                }
-                            }
-                        }
-                    }
+        Ok(output) => {
+            let task_id = output.task_id.clone();
+            match serde_json::to_value(output) {
+                Ok(data) => {
+                    let mut resp = IpcResponse::ok_with_data("ok", data);
+                    resp.task_id = task_id;
+                    resp
                 }
-                Ok(serde_json::Value::String(raw.trim().to_string()))
+                Err(error) => IpcResponse::err(error.to_string()),
             }
-            _ => Ok(serde_json::Value::String(raw.trim().to_string())),
         }
+        Err(error) => IpcResponse::err(error),
     }
-
-    let mut out: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut next_positional = 0usize;
-
-    for arg in plugin_args {
-        let a = arg.trim();
-        if a.is_empty() {
-            continue;
-        }
-
-        // key=value / --key=value
-        if let Some((k, v)) = a.split_once('=') {
-            let key = k.trim_start_matches('-').trim();
-            if key.is_empty() {
-                return Err(format!("无效参数: {a}"));
-            }
-            let def = var_defs.iter().find(|d| d.key == key);
-            if let Some(def) = def {
-                out.insert(key.to_string(), parse_one(def, v)?);
-            } else {
-                // 未在 var_defs 中声明的键：允许直接注入
-                out.insert(
-                    key.to_string(),
-                    serde_json::Value::String(v.trim().to_string()),
-                );
-            }
-            continue;
-        }
-
-        // positional：按 var_defs 顺序填充
-        let def = var_defs
-            .get(next_positional)
-            .ok_or_else(|| format!("多余的 positional 参数: {a}"))?;
-        out.insert(def.key.clone(), parse_one(def, a)?);
-        next_positional += 1;
-    }
-
-    Ok(out)
 }
 
 #[cfg(not(feature = "web"))]
@@ -491,12 +283,14 @@ fn handle_status() -> IpcResponse {
     resp.info = Some(serde_json::json!({
         "name": "kabegame-app",
         "version": env!("CARGO_PKG_VERSION"),
+        "dataDir": kabegame_core::app_paths::AppPaths::global().data_dir.to_string_lossy(),
+        "ipcProtocol": IPC_PROTOCOL_VERSION,
         "features": {
             "storage": true,
             "plugin": true,
             "settings": true,
             "events": true,
-            "pluginRun": false,  // 暂未实现
+            "pluginRun": true,
             "virtualDrive": cfg!(feature = "standard")
         }
     }));

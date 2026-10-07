@@ -4,7 +4,6 @@
 
 pub mod connection;
 pub mod client_instance;
-pub mod connection_status;
 
 // Re-export for convenience
 pub use connection::ConnectionStatus;

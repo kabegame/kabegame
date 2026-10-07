@@ -1,11 +1,13 @@
 #!/usr/bin/env -S deno run -A
 // 离线渲染插件详情模板 templates/description.ejs 并截图，用来和源站详情页对照。
 //
-//   render-desc.ts <plugin-id> <metadata.json | --db [--task-plugin <id>] [--where <sql>]> [-o out.png] [--width 600]
+//   render-desc.ts <plugin-id> <metadata.json | --db [--release] [--task-plugin <id>] [--where <sql>]> [-o out.png] [--width 600]
 //
 // metadata 来源：
 //   - 一个 JSON 文件（单个 metadata 对象）；
-//   - --db：从 release CLI 默认数据目录的 images.db 取最近一次 <task-plugin>（默认 <plugin-id>-test）
+//   - --db：从 run-cli.sh 所用数据目录的 images.db 取最近一次 <task-plugin>（默认 <plugin-id>-test）
+//     任务里的一条 metadata。默认 dev CLI 的 .kabegame/debug/data；--release 或 KB_CLI_PROFILE=release
+//     取 release CLI 的系统用户数据目录。
 //     任务里的一条 metadata，可用 --where 追加条件，如 "json_extract(m.data,'$.comment_count')>0"。
 // 渲染方式与 app 的 ImagePluginDescriptionPanel 一致：ejs.render(tpl, { metadata })，外面包一层
 // 同款 iframe 外壳样式（:root 的 --anime-* 取 app 默认值、body padding 8px）。
@@ -36,6 +38,7 @@ const width = Number(take("--width") ?? 600);
 const taskPlugin = take("--task-plugin");
 const where = take("--where");
 const fromDb = has("--db");
+const release = has("--release") || Deno.env.get("KB_CLI_PROFILE") === "release";
 const [pluginId, metaFile] = args;
 if (!pluginId || (!fromDb && !metaFile)) {
   console.error("用法: render-desc.ts <plugin-id> <metadata.json | --db [--task-plugin id] [--where sql]> [-o out.png] [--width 600]");
@@ -44,7 +47,9 @@ if (!pluginId || (!fromDb && !metaFile)) {
 
 let metadataText: string;
 if (fromDb) {
-  const db = Deno.build.os === "darwin"
+  const db = !release
+    ? `${root}/.kabegame/debug/data/images.db`
+    : Deno.build.os === "darwin"
     ? `${Deno.env.get("HOME")}/Library/Application Support/Kabegame/images.db`
     : `${Deno.env.get("XDG_DATA_HOME") ?? `${Deno.env.get("HOME")}/.local/share`}/Kabegame/images.db`;
   const pid = taskPlugin ?? `${pluginId}-test`;

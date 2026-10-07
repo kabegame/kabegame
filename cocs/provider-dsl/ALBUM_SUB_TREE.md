@@ -14,8 +14,8 @@
 
 `kabegame-cli data import-image --album /星穹铁道/萤 <file>` 会：
 
-1. 规范化为 `albums://by_sub_tree/星穹铁道/萤`。
-2. 查询父路径 `albums://by_sub_tree/星穹铁道`，取得其所有直接子画册。
+1. 在 CLI 中按原始路径切出父路径与目标名，目标名只解码一次。
+2. 经 `Backend.pathql_fetch` 查询父路径 `albums://by_sub_tree/星穹铁道`；app 模式走 IPC，local 模式直接调 core，两者返回相同的直接子画册。
 3. 在结果中查找 `name == "萤"` 的行并使用其 `id`。
 4. 找不到目标子画册时终止导入并返回错误，不自动创建画册。
 

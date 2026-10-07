@@ -61,11 +61,12 @@ await Kabegame.downloadImage(originalUrl, {
 
 ## 查库验证
 
-release CLI 的库在系统数据目录：macOS 是 `~/Library/Application Support/Kabegame/images.db`，
+默认的 dev CLI 以 `--data dev` 构建，库在仓库内 `.kabegame/debug/data/images.db`（与 dev app 共用）；
+切到 release CLI（`--release`）时库在系统数据目录：macOS 是 `~/Library/Application Support/Kabegame/images.db`，
 Linux 是 `~/.local/share/Kabegame/images.db`。`run-cli.sh` 的测试 id 默认是 `<id>-test`。
 
 ```bash
-DB="$HOME/Library/Application Support/Kabegame/images.db"
+DB=.kabegame/debug/data/images.db   # release CLI：DB="$HOME/Library/Application Support/Kabegame/images.db"
 T=$(sqlite3 -readonly "$DB" "select id from tasks where plugin_id='<id>-test' order by start_time desc limit 1")
 # 每张图都有 metadata
 sqlite3 -readonly "$DB" "select count(*), count(metadata_id) from images where task_id='$T'"

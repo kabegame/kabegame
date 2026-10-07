@@ -1,6 +1,6 @@
 //! 连接处理逻辑（Windows 和 Unix 通用）
 
-use crate::ipc::ipc::{decode_frame, encode_frame, read_one_frame};
+use crate::ipc::ipc::{decode_frame, encode_frame, read_one_frame, IpcEnvelope};
 use crate::ipc::{IpcRequest, IpcResponse};
 use crate::ipc_dbg;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -25,10 +25,7 @@ pub async fn handle_connection<R, W, F, Fut>(
 
     // 事件订阅状态
     let mut event_rx: Option<
-        tokio::sync::mpsc::UnboundedReceiver<(
-            u64,
-            std::sync::Arc<crate::ipc::events::AppEvent>,
-        )>,
+        tokio::sync::mpsc::UnboundedReceiver<(u64, std::sync::Arc<crate::ipc::events::AppEvent>)>,
     > = None;
 
     // 启动写入任务
@@ -54,25 +51,43 @@ pub async fn handle_connection<R, W, F, Fut>(
                     Ok(payload) => {
                         ipc_dbg!("[DEBUG] IPC 服务器读取 CBOR 帧，长度: {}", payload.len());
 
-                        // 尝试解析为 IpcEnvelope<IpcRequest>（带 request_id）
-                        let (req, request_id): (IpcRequest, Option<u64>) = match decode_frame::<crate::ipc::ipc::IpcEnvelope<IpcRequest>>(&payload) {
+                        // 先取出 request_id，再解析具体请求。这样新旧协议不兼容时也能立即回错。
+                        let (req, request_id): (IpcRequest, Option<u64>) = match decode_frame::<IpcEnvelope<serde_cbor::Value>>(&payload) {
                             Ok(envelope) => {
-                                ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcEnvelope，request_id={}", envelope.request_id);
-                                (envelope.payload, Some(envelope.request_id))
-                            }
-                            Err(_) => {
-                                // 回退：尝试直接解析为 IpcRequest（无 request_id）
-                                match decode_frame::<IpcRequest>(&payload) {
+                                let request_id = envelope.request_id;
+                                match serde_cbor::value::from_value::<IpcRequest>(envelope.payload) {
                                     Ok(req) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcRequest（无 request_id）");
-                                        (req, None)
+                                        ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcEnvelope，request_id={}", request_id);
+                                        (req, Some(request_id))
                                     }
-                                    Err(e) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", e);
+                                    Err(error) => {
+                                        ipc_dbg!("[DEBUG] IPC 服务器不支持请求: {}", error);
+                                        let mut resp = IpcResponse::err(format!("unsupported request: {error}"));
+                                        resp.request_id = Some(request_id);
+                                        let bytes = match encode_frame(&resp) {
+                                            Ok(bytes) => bytes,
+                                            Err(error) => {
+                                                ipc_dbg!("[DEBUG] IPC 服务器编码错误响应失败: {}", error);
+                                                continue;
+                                            }
+                                        };
+                                        if write_tx.send(bytes).is_err() {
+                                            break;
+                                        }
                                         continue;
                                     }
                                 }
                             }
+                            Err(_) => match decode_frame::<IpcRequest>(&payload) {
+                                Ok(req) => {
+                                    ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcRequest（无 request_id）");
+                                    (req, None)
+                                }
+                                Err(error) => {
+                                    ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", error);
+                                    continue;
+                                }
+                            },
                         };
 
                         // 检查是否是 SubscribeEvents 请求

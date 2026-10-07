@@ -22,8 +22,11 @@
 use std::sync::Arc;
 
 use super::connection::{ConnectionStatus, PersistentConnection};
+use crate::commands::task::{PluginRunOutput, PluginRunParams};
+use crate::ipc::events::{AppEvent, AppEventKind};
 use crate::ipc::ipc::{IpcRequest, IpcResponse};
-use tokio::sync::watch;
+use crate::ipc_dbg;
+use tokio::sync::{mpsc::UnboundedReceiver, watch};
 
 /// IPC 客户端（基于持久连接）
 #[derive(Clone)]
@@ -87,6 +90,23 @@ impl IpcClient {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
         Ok(resp.info.unwrap_or(serde_json::json!({})))
+    }
+
+    pub async fn pathql_entry(&self, path: String) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::PathqlEntry { path }).await
+    }
+
+    pub async fn pathql_list(
+        &self,
+        path: String,
+        with_count: bool,
+    ) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::PathqlList { path, with_count })
+            .await
+    }
+
+    pub async fn pathql_fetch(&self, path: String) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::PathqlFetch { path }).await
     }
 
     /// 获取当前连接状态
@@ -496,28 +516,9 @@ impl IpcClient {
     }
 
     /// 运行插件
-    pub async fn plugin_run(
-        &self,
-        plugin: String,
-        output_dir: Option<String>,
-        task_id: Option<String>,
-        output_album_id: Option<String>,
-        plugin_args: Vec<String>,
-    ) -> Result<String, String> {
-        let resp = self
-            .request_raw(IpcRequest::PluginRun {
-                plugin,
-                output_dir,
-                task_id: task_id.clone(),
-                output_album_id,
-                plugin_args,
-                http_headers: None,
-            })
-            .await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
-        }
-        Ok(resp.task_id.unwrap_or_else(|| task_id.unwrap_or_default()))
+    pub async fn plugin_run(&self, params: PluginRunParams) -> Result<PluginRunOutput, String> {
+        let data = self.request_data(IpcRequest::PluginRun { params }).await?;
+        serde_json::from_value(data).map_err(|e| format!("Failed to parse response: {e}"))
     }
 
     // ========== Settings Getter ==========
@@ -684,6 +685,11 @@ impl IpcClient {
         } else {
             serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
         }
+    }
+
+    pub async fn settings_get_language(&self) -> Result<String, String> {
+        let v = self.request_data(IpcRequest::SettingsGetLanguage).await?;
+        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     pub async fn settings_get_default_images_dir(&self) -> Result<String, String> {
@@ -860,8 +866,8 @@ impl IpcClient {
     }
 
     // ==================== Task scheduling ====================
-    pub async fn task_start(&self, task: serde_json::Value) -> Result<String, String> {
-        let resp = self.request_raw(IpcRequest::TaskStart { task }).await?;
+    pub async fn task_start(&self, params: serde_json::Value) -> Result<String, String> {
+        let resp = self.request_raw(IpcRequest::TaskStart { params }).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -945,6 +951,37 @@ impl IpcClient {
 
     // ==================== Events ====================
 
+    /// 订阅强类型事件。每条连接的接收端只能取走一次。
+    pub async fn subscribe_events(
+        &self,
+        kinds: &[AppEventKind],
+    ) -> Result<UnboundedReceiver<Arc<AppEvent>>, String> {
+        let kinds = kinds
+            .iter()
+            .map(|kind| serde_json::to_string(kind).unwrap_or_default())
+            .collect();
+        let resp = self
+            .connection
+            .request(IpcRequest::SubscribeEvents { kinds })
+            .await?;
+        if !resp.ok {
+            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
+        }
+
+        let event_rx = {
+            let handle = self.connection.handle.read().await;
+            handle
+                .as_ref()
+                .ok_or_else(|| "连接已断开".to_string())?
+                .event_rx
+                .clone()
+        };
+        let mut receiver = event_rx.lock().await;
+        receiver
+            .take()
+            .ok_or_else(|| "当前 IPC 连接已订阅过事件".to_string())
+    }
+
     /// 订阅事件并建立长连接，持续读取事件（按事件类型过滤）
     ///
     /// 参数 `kinds` 是感兴趣的事件类型列表，空列表表示订阅全部事件。
@@ -965,35 +1002,21 @@ impl IpcClient {
         F: FnMut(serde_json::Value) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send,
     {
-        // 将事件类型转为字符串列表
-        let kinds: Vec<String> = kinds
-            .iter()
-            .map(|k| serde_json::to_string(k).unwrap_or_default())
-            .collect();
-
-        // 使用统一的 PersistentConnection 订阅事件
-        self.connection
-            .request(IpcRequest::SubscribeEvents { kinds })
-            .await?;
-
-        eprintln!("[DEBUG] IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");
-
-        // 获取 event_rx 的克隆
-        let event_rx = {
-            let handle = self.connection.handle.read().await;
-            handle.as_ref().unwrap().event_rx.clone()
-        };
+        let mut event_rx = self.subscribe_events(kinds).await?;
+        ipc_dbg!("[DEBUG] IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");
 
         // 持续接收事件
-        while let Some(event) = event_rx.lock().await.recv().await {
-            eprintln!(
+        while let Some(event) = event_rx.recv().await {
+            ipc_dbg!(
                 "[DEBUG] IpcClient::subscribe_events_stream 收到事件: {:?}",
                 event
             );
-            on_event(event).await;
+            let raw = serde_json::to_value(&*event)
+                .map_err(|error| format!("序列化 IPC 事件失败: {error}"))?;
+            on_event(raw).await;
         }
 
-        eprintln!("[DEBUG] IpcClient::subscribe_events_stream 事件流结束");
+        ipc_dbg!("[DEBUG] IpcClient::subscribe_events_stream 事件流结束");
         Ok(())
     }
 }

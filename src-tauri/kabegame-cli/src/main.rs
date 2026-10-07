@@ -4,8 +4,8 @@
 //! - `plugin new`：创建爬虫插件模板
 //! - `plugin pack`：打包单个插件目录为 `.kgpg`（package.json v3）
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
-//! - `plugin run`：在本进程跑一个 V8 插件（已安装的 id，或直接给 `.kgpg` 路径临时运行），实时渲染日志与进度
-//! - `data import-image`：直接导入单个本地图片或视频
+//! - `plugin run`：运行已安装插件或临时 `.kgpg`，实时渲染日志与进度
+//! - `data import-image`：通过内建 local-import 任务导入单个本地图片或视频
 //! - `pathql generate`：生成 PathQL 客户端
 //! - `pathql query`：查询 PathQL 数据
 
@@ -18,8 +18,13 @@ use kabegame_core::{
 };
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+mod backend;
+mod task_log;
+
+use backend::{choose_backend, Backend, LocalNeeds, Via};
 
 const TEMPLATE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/template");
 
@@ -28,6 +33,9 @@ const TEMPLATE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/template");
 #[command(version)]
 #[command(about = "Kabegame 命令行工具", long_about = None)]
 struct Cli {
+    /// 数据类操作的执行方式：自动优先主程序，或强制主程序/本地。
+    #[arg(long, global = true, value_enum, default_value_t = Via::Auto)]
+    via: Via,
     #[command(subcommand)]
     command: Commands,
 }
@@ -53,13 +61,13 @@ enum PluginCommands {
     Pack(PackPluginArgs),
     /// 导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
     Import(ImportPluginArgs),
-    /// 运行一个 V8 插件：已安装的 id，或直接给 `.kgpg` 路径临时运行（不安装）
+    /// 运行插件：已安装的 id，或直接给 `.kgpg` 路径临时运行（不安装）
     Run(RunPluginArgs),
 }
 
 #[derive(Subcommand, Debug)]
 enum DataCommands {
-    /// 将单个本地文件（图片或视频）直接导入数据库
+    /// 通过 local-import 任务导入单个本地文件（图片或视频）
     ImportImage(ImportImageArgs),
 }
 
@@ -135,10 +143,6 @@ struct NewPluginArgs {
 struct ImportPluginArgs {
     /// 本地插件文件路径（.kgpg）
     path: PathBuf,
-    /// 数据目录：dev = 仓库内 `.kabegame/debug`，prod = 系统用户数据目录。
-    /// 默认跟随编译期配置（release 构建即 prod）。
-    #[arg(long = "data", value_enum, default_value_t = DataMode::Auto)]
-    data: DataMode,
 }
 
 #[derive(Args, Debug)]
@@ -167,10 +171,6 @@ struct RunPluginArgs {
     /// 不渲染进度条，日志逐行直出（适合 CI / 重定向到文件）
     #[arg(long = "plain")]
     plain: bool,
-    /// 数据目录：dev = 仓库内 .kabegame/debug（`repack-crawler-plugins` 投放插件的地方），
-    /// prod = 系统用户数据目录。默认跟随编译期配置。
-    #[arg(long = "data", value_enum, default_value_t = DataMode::Auto)]
-    data: DataMode,
 }
 
 #[derive(Args, Debug)]
@@ -180,9 +180,6 @@ struct ImportImageArgs {
     /// 目标画册树路径；前缀斜线可选，不传则不加入任何画册
     #[arg(long = "album")]
     album: Option<String>,
-    /// 附加到图片的 metadata 字符串（原样存储，不校验 JSON）
-    #[arg(long = "metadata")]
-    metadata: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -412,21 +409,21 @@ fn eval_liquid_cond(cond: &str, vars: &HashMap<String, String>) -> Result<bool, 
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let Cli { via, command } = Cli::parse();
 
-    let res = match cli.command {
+    let res = match command {
         Commands::Plugin(cmd) => match cmd {
             PluginCommands::New(args) => new_plugin(args),
             PluginCommands::Pack(args) => pack_plugin(args),
-            PluginCommands::Import(args) => import_plugin(args).await,
-            PluginCommands::Run(args) => run_plugin(args).await,
+            PluginCommands::Import(args) => import_plugin(args, via).await,
+            PluginCommands::Run(args) => run_plugin(args, via).await,
         },
         Commands::Data(cmd) => match cmd {
-            DataCommands::ImportImage(args) => data_import_image(args).await,
+            DataCommands::ImportImage(args) => data_import_image(args, via).await,
         },
         Commands::Pathql(cmd) => match cmd {
             PathqlCommands::Generate(args) => pathql_generate(args),
-            PathqlCommands::Query(args) => data_query(args),
+            PathqlCommands::Query(args) => data_query(args, via).await,
         },
     };
 
@@ -547,39 +544,19 @@ fn is_valid_plugin_name(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 数据目录模式。与构建系统的 `--data dev|prod`（见 CLAUDE.md）同义：
-/// dev = 仓库内 `.kabegame/debug/{data,cache,tmp}`，prod = 系统用户数据目录。
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
-enum DataMode {
-    /// 跟随编译期的 `kabegame_data` cfg（release 构建即 prod）
-    #[default]
-    Auto,
-    /// 强制用仓库内的 `.kabegame/debug` 目录
-    Dev,
-    /// 强制用系统用户数据目录
-    Prod,
-}
-
 fn init_standalone_globals() -> Result<(), String> {
-    init_standalone_globals_with(DataMode::Auto)
+    init_paths()?;
+    init_local_globals()
 }
 
-fn init_standalone_globals_with(mode: DataMode) -> Result<(), String> {
+/// 数据目录只由编译期的 `kabegame_data` cfg 决定（构建系统 `--data dev|prod`，见 AGENTS.md）：
+/// dev = 仓库内 `.kabegame/debug/{data,cache,tmp}`，prod = 系统用户数据目录。
+fn init_paths() -> Result<(), String> {
     use kabegame_core::app_paths::{is_dev, repo_root_dir, AppPaths};
-    use kabegame_core::{emitter::GlobalEmitter, settings::Settings, storage::Storage};
 
-    // 必须早于 GlobalEmitter：emit_* 会取 EventBroadcaster 的全局单例，没初始化就 panic。
-    // 事件没人订阅也不要紧——sync_tx 是 unbounded，不转发只是攒在内存里。
-    init_event_runtime()?;
-
-    let use_dev = match mode {
-        DataMode::Auto => is_dev(),
-        DataMode::Dev => true,
-        DataMode::Prod => false,
-    };
-    let dev_debug_dir = if use_dev {
+    let dev_debug_dir = if is_dev() {
         let root = repo_root_dir().ok_or_else(|| {
-            "--data dev 需要在 Kabegame 仓库内运行（要能定位到包含 package.json 与 src-tauri/ 的目录）"
+            "dev 数据模式的 CLI 需要在 Kabegame 仓库内运行（要能定位到包含 package.json 与 src-tauri/ 的目录）"
                 .to_string()
         })?;
         Some(root.join(".kabegame").join("debug"))
@@ -624,14 +601,21 @@ fn init_standalone_globals_with(mode: DataMode) -> Result<(), String> {
         external_data_dir: None,
         pictures_dir: dirs::picture_dir(),
         compatibles_dir_path,
-    })?;
+    })
+}
+
+fn init_local_globals() -> Result<(), String> {
+    use kabegame_core::{emitter::GlobalEmitter, settings::Settings, storage::Storage};
+
+    // 必须早于 GlobalEmitter：emit_* 会取 EventBroadcaster 的全局单例，没初始化就 panic。
+    init_event_runtime()?;
     Settings::init_global()?;
     Storage::init_global()?;
     GlobalEmitter::init_global()?;
     Ok(())
 }
 
-/// 事件运行时。由 `init_standalone_globals_with()` 在最前面调用，不要在外面再调一次
+/// 事件运行时。由本地后端初始化在最前面调用，不要在外面再调一次
 /// （`init_global` 对重复初始化返回 Err）。
 ///
 /// 顺序与 GUI 的 `kabegame/src/core_init.rs:73-88` 一致：
@@ -651,69 +635,87 @@ fn init_task_runtime() -> Result<(), String> {
     Ok(())
 }
 
-async fn data_import_image(args: ImportImageArgs) -> Result<(), String> {
-    if !args.path.is_file() {
-        return Err(format!("文件不存在或不是普通文件: {}", args.path.display()));
+pub(crate) async fn init_local_runtime(needs: LocalNeeds) -> Result<(), String> {
+    use kabegame_core::crawler::{TaskScheduler, MAX_TASK_WORKER_LOOPS};
+    use kabegame_core::ipc::server::EventBroadcaster;
+
+    init_local_globals()?;
+    if needs.plugin {
+        PluginManager::init_global()?;
     }
-
-    init_standalone_globals()?;
-    let album_id = args
-        .album
-        .as_deref()
-        .map(resolve_album_tree_path)
-        .transpose()?;
-    let carry = match args.metadata {
-        Some(metadata) => {
-            let metadata_id =
-                kabegame_core::storage::Storage::global().insert_metadata_text(&metadata)?;
-            let display_name = args
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("image")
-                .to_string();
-            Some(kabegame_core::local_folder::import::CarryFromOld {
-                display_name,
-                metadata_id: Some(metadata_id),
-                order: None,
-            })
-        }
-        None => None,
-    };
-    let size = std::fs::metadata(&args.path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    let image_id = kabegame_core::local_folder::import::import_local_file(
-        &args.path,
-        album_id.as_deref(),
-        size,
-        carry,
-    )
-    .await?;
-
-    if let Some(album_id) = album_id {
-        println!("导入成功：image_id={image_id}; 画册={album_id}");
-    } else {
-        println!("导入成功：image_id={image_id};（未加入画册）");
+    if needs.tasks {
+        init_task_runtime()?;
+        tokio::spawn(async { EventBroadcaster::start_forward_task().await });
+        let scheduler = TaskScheduler::global();
+        scheduler.start_workers(MAX_TASK_WORKER_LOOPS).await;
+        scheduler.start_download_workers_async().await;
     }
     Ok(())
 }
 
-fn data_query(args: DataQueryArgs) -> Result<(), String> {
-    use kabegame_core::providers::{
-        decode_provider_path_segments, query_entry, query_fetch, query_list,
-    };
-
-    init_standalone_globals()?;
-    let path = decode_provider_path_segments(&args.path);
-    let output = if args.list {
-        serde_json::to_value(query_list(&path, args.with_count)?)
-    } else if args.entry {
-        serde_json::to_value(query_entry(&path)?)
-    } else {
-        serde_json::to_value(query_fetch(&path)?)
+async fn data_import_image(args: ImportImageArgs, via: Via) -> Result<(), String> {
+    if !args.path.is_file() {
+        return Err(format!("文件不存在或不是普通文件: {}", args.path.display()));
     }
-    .map_err(|error| error.to_string())?;
+
+    let path = std::fs::canonicalize(&args.path)
+        .map_err(|error| format!("解析文件路径失败 {}: {error}", args.path.display()))?;
+    init_paths()?;
+    let backend = choose_backend(via, LocalNeeds::TASKS).await?;
+    let album_id = match args.album.as_deref() {
+        Some(tree_path) => Some(resolve_album_tree_path(&backend, tree_path).await?),
+        None => None,
+    };
+    let mut events = backend.subscribe_task_events().await?;
+    let task_id = backend
+        .start_task(serde_json::json!({
+            "pluginId": "local-import",
+            "userConfig": {
+                "paths": [path.to_string_lossy().into_owned()],
+                "recursive": false,
+            },
+            "outputAlbumId": album_id.clone(),
+            "triggerSource": "cli",
+        }))
+        .await?;
+    let cancel_backend = backend.clone();
+    let outcome = render_task(
+        &task_id,
+        "local-import",
+        &mut events,
+        !console::user_attended(),
+        move |task_id| async move { cancel_backend.cancel_task(&task_id).await },
+    )
+    .await;
+
+    match outcome {
+        TaskOutcome::Completed {
+            downloaded,
+            dedup,
+            failed,
+        } => {
+            let album = album_id
+                .as_deref()
+                .map(|id| format!("画册={id}"))
+                .unwrap_or_else(|| "（未加入画册）".to_string());
+            println!("导入完成：成功 {downloaded}，去重 {dedup}，失败 {failed}；{album}");
+            Ok(())
+        }
+        TaskOutcome::Canceled => Err("任务已取消".to_string()),
+        TaskOutcome::Failed(error) => Err(format!("任务失败：{error}")),
+    }
+}
+
+async fn data_query(args: DataQueryArgs, via: Via) -> Result<(), String> {
+    init_paths()?;
+    let backend = choose_backend(via, LocalNeeds::DATA).await?;
+    let output = if args.list {
+        backend.pathql_list(&args.path, args.with_count).await?
+    } else if args.entry {
+        backend.pathql_entry(&args.path).await?
+    } else {
+        backend.pathql_fetch(&args.path).await?
+    };
     println!(
         "{}",
         serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?
@@ -764,36 +766,37 @@ fn pathql_generate(args: GenerateArgs) -> Result<(), String> {
 }
 
 /// 画册树路径转换为 albums provider 路径；前缀斜线可选。
+#[cfg(test)]
 fn album_tree_path_to_pathql(tree_path: &str) -> String {
     format!("albums://by_sub_tree/{}", tree_path.trim_start_matches('/'))
 }
 
 /// 查询目标画册的父路径，并从父画册返回的直接子画册中按名称查找目标 id。
-fn resolve_album_tree_path(tree_path: &str) -> Result<String, String> {
-    use kabegame_core::providers::{decode_provider_path_segments, query_fetch};
+async fn resolve_album_tree_path(backend: &Backend, tree_path: &str) -> Result<String, String> {
+    use kabegame_core::providers::decode_provider_path_segments;
 
-    let full_path = decode_provider_path_segments(&album_tree_path_to_pathql(tree_path));
-    let relative_path = full_path
-        .strip_prefix("albums://by_sub_tree/")
-        .ok_or_else(|| format!("无效的画册树路径: {tree_path}"))?
-        .trim_end_matches('/');
+    let relative_path = tree_path.trim_start_matches('/').trim_end_matches('/');
     if relative_path.is_empty() {
         return Err("画册树路径不能为空".to_string());
     }
 
-    let (parent_path, target_name) = relative_path
+    let (parent_path, target_name_raw) = relative_path
         .rsplit_once('/')
         .map_or(("", relative_path), |(parent, name)| (parent, name));
-    if target_name.is_empty() {
+    if target_name_raw.is_empty() {
         return Err(format!("无效的画册树路径: {tree_path}"));
     }
+    let target_name = decode_provider_path_segments(target_name_raw);
     let query_path = if parent_path.is_empty() {
         "albums://by_sub_tree".to_string()
     } else {
         format!("albums://by_sub_tree/{parent_path}")
     };
-    let rows = query_fetch(&query_path)?;
-    album_id_from_children(&rows, target_name, tree_path)
+    let rows = backend.pathql_fetch(&query_path).await?;
+    let rows = rows
+        .as_array()
+        .ok_or_else(|| format!("画册查询返回了非数组数据: {query_path}"))?;
+    album_id_from_children(rows, &target_name, tree_path)
 }
 
 fn album_id_from_children(
@@ -809,7 +812,7 @@ fn album_id_from_children(
         .ok_or_else(|| format!("未找到画册树路径: {tree_path}"))
 }
 
-async fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
+async fn import_plugin(args: ImportPluginArgs, via: Via) -> Result<(), String> {
     let p = args.path;
     if !p.is_file() {
         return Err(format!("插件文件不存在: {}", p.display()));
@@ -818,150 +821,72 @@ async fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
         return Err(format!("不是 .kgpg 文件: {}", p.display()));
     }
 
-    import_plugin_no_ui(p, args.data).await
-}
+    let p = std::fs::canonicalize(&p)
+        .map_err(|error| format!("解析插件路径失败 {}: {error}", p.display()))?;
+    init_paths()?;
 
-async fn import_plugin_no_ui(p: PathBuf, data: DataMode) -> Result<(), String> {
-    // PluginManager 依赖 AppPaths 定位 plugins_directory；import 与 run 的 --data 必须给同
-    // 一个值，否则装到 prod、跑的是 dev（或反过来）。
-    init_standalone_globals_with(data)?;
-    PluginManager::init_global()?;
-    let pm = PluginManager::global();
-
-    if let Err(e) = pm.ensure_installed_cache_initialized().await {
-        eprintln!("[WARN] 初始化插件缓存失败（将继续导入）：{e}");
-    }
-
-    validate_kgpg_structure(pm, &p).await?;
-
-    let plugin = pm.install_plugin_from_kgpg(&p).await?;
-    let plugins_dir = pm.get_plugins_directory();
+    // 包解析是纯文件系统读取：无论最终选哪个后端，都先在 CLI 进程校验。
+    let preview = PluginManager::new().preview_import_from_kgpg(&p).await?;
+    let backend = choose_backend(via, LocalNeeds::PLUGIN).await?;
+    backend.install_plugin(&p).await?;
+    let plugins_dir = kabegame_core::app_paths::AppPaths::global().plugins_dir();
 
     println!(
         "导入成功：id={}; name={}; version={}; 目标目录={}",
-        plugin.id,
-        manifest_value_to_display_string(&plugin.name),
-        plugin.version,
+        preview.id,
+        manifest_value_to_display_string(&preview.name),
+        preview.version,
         plugins_dir.display()
     );
     Ok(())
 }
 
-/// `plugin run <plugin>` 的目标解析：已安装插件 id，或一个 `.kgpg` 路径（临时运行）。
-///
-/// 路径模式下插件 id 按「`--id` → 包内 package.json 的 `name` → 文件名 stem」回落
-/// （见 core 的 `resolve_kgpg_plugin_id`）。
-///
-/// 路径模式返回的 `PathBuf` 会随 `startTask` 的 `pluginFilePath` 传给调度器，后者 freeze
-/// 任务时按同一条路径重新解析插件（见 `resolve_plugin_for_task_request`），所以这里统一
-/// canonicalize 成绝对路径：worker 的 cwd 不保证和命令行一致，相对路径会找不到文件。
-async fn resolve_run_target(
-    pm: &PluginManager,
-    target: &str,
-    id_override: Option<&str>,
-) -> Result<(core_plugin::Plugin, Option<PathBuf>), String> {
-    let as_path = PathBuf::from(target);
-    if as_path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-        // 扩展名已经表明意图，不存在就直接报错——别退回 id 模式，那只会给出
-        // 「插件未安装」这种更难懂的提示。
-        if !as_path.is_file() {
-            return Err(format!("插件文件不存在: {}", as_path.display()));
+/// 运行已安装插件，或直接临时运行 `.kgpg`。
+async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
+    let plugin = if Path::new(&args.plugin)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        == Some("kgpg")
+    {
+        let path = PathBuf::from(&args.plugin);
+        if !path.is_file() {
+            return Err(format!("插件文件不存在: {}", path.display()));
         }
-        let abs = std::fs::canonicalize(&as_path)
-            .map_err(|e| format!("解析插件文件路径失败 {}: {e}", as_path.display()))?;
-        let (plugin, file_path, _var_defs) = pm
-            .resolve_plugin_for_cli_run(&abs.to_string_lossy(), id_override)
-            .await?;
-        return Ok((plugin, file_path));
-    }
+        std::fs::canonicalize(&path)
+            .map_err(|error| format!("解析插件文件路径失败 {}: {error}", path.display()))?
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        args.plugin.clone()
+    };
 
-    // id 模式下 --id 无处可用：静默忽略会让人以为换了 id 在跑，直接报错。
-    if let Some(id) = id_override {
-        return Err(format!(
-            "--id {id} 只在 `.kgpg` 路径模式下有效；按已安装插件运行时请直接把 `{id}` 作为参数传给 `plugin run`。"
-        ));
-    }
-
-    let plugin = pm.get(target).ok_or_else(|| {
-        let mut ids: Vec<String> = pm
-            .get_all()
-            .unwrap_or_default()
-            .iter()
-            .map(|p| p.id.clone())
-            .collect();
-        ids.sort();
-        if ids.is_empty() {
-            format!(
-                "插件 {target} 未安装，且当前没有任何已安装插件。\n先用 `kabegame-cli plugin import <file.kgpg>` 安装，或直接把 `.kgpg` 路径传给 `plugin run`。"
-            )
-        } else {
-            format!(
-                "插件 {target} 未安装。已安装的有：{}\n用 `kabegame-cli plugin import <file.kgpg>` 安装，或直接把 `.kgpg` 路径传给 `plugin run`。",
-                ids.join(", ")
-            )
-        }
-    })?;
-    Ok(((*plugin).clone(), None))
-}
-
-/// 运行一个 V8 插件：已安装的 id，或直接给 `.kgpg` 路径临时运行。
-///
-/// 整体链路与 GUI 一致：`start_task` 建任务 → TaskScheduler 冻结参数并入队 →
-/// worker 取出后在 `spawn_blocking` 里跑 V8。差别只在于 CLI 自己订阅
-/// `EventBroadcaster` 把事件渲染到终端，而不是转发给前端。
-async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
-    use kabegame_core::crawler::{TaskScheduler, MAX_TASK_WORKER_LOOPS};
-    use kabegame_core::ipc::server::EventBroadcaster;
-
-    // init_standalone_globals_with 里已经起了 EventBroadcaster / SubscriptionManager。
-    init_standalone_globals_with(args.data)?;
-    init_task_runtime()?;
-
-    // 扇出循环：不 spawn 的话所有事件只会堆在 mpsc 里，订阅者一条都收不到。
-    tokio::spawn(async { EventBroadcaster::start_forward_task().await });
-
-    PluginManager::init_global()?;
-    let pm = PluginManager::global();
-    // 刷新失败不致命：目录里若混有旧版容器（KGPG v2）等坏包，refresh_plugins 会在第一颗上
-    // 直接返回 Err。只要目标插件本身能解析出来，就不该挡住这次运行。
-    if let Err(e) = pm.ensure_installed_cache_initialized().await {
-        eprintln!(
-            "{} 插件目录扫描未全部成功：{e}",
-            console::style("[WARN]").yellow()
-        );
-    }
-
-    let (plugin, plugin_file_path) =
-        resolve_run_target(pm, &args.plugin, args.id.as_deref()).await?;
-
-    // 暂时只支持 V8：WebView 后端要真实浏览器窗口，headless CLI 起不来。
-    if plugin.script_type != "v8" {
-        return Err(format!(
-            "插件 {} 的后端是 `{}`，`plugin run` 目前只支持 v8 后端。",
-            plugin.id, plugin.script_type
-        ));
-    }
-    if let Some(min_ver) = plugin.min_app_version.as_deref() {
-        core_plugin::check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
-    }
-
-    let resolved = resolve_run_config(pm, &plugin, &args.vars)?;
-    let config = resolved.user_config;
-    // 用 BTreeMap 打印，保证 key 有序（HashMap 的迭代顺序每次都不同，diff 起来很烦）。
-    let sorted: std::collections::BTreeMap<_, _> = config.iter().collect();
-    let config_json = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())?;
+    init_paths()?;
+    let backend = choose_backend(via, LocalNeeds::TASKS).await?;
+    let mut events = if args.dry_run {
+        None
+    } else {
+        Some(backend.subscribe_task_events().await?)
+    };
+    let output = backend
+        .run_plugin(kabegame_core::commands::task::PluginRunParams {
+            plugin,
+            id_override: args.id,
+            args: args.vars,
+            output_dir: args.output_dir,
+            output_album_id: args.album_id,
+            http_headers: None,
+            dry_run: args.dry_run,
+        })
+        .await?;
+    let config_json = serde_json::to_string_pretty(&output.config).map_err(|e| e.to_string())?;
     println!(
         "{} {} v{}",
         console::style("插件").dim(),
-        console::style(&plugin.id).bold(),
-        plugin.version
+        console::style(&output.plugin_id).bold(),
+        output.plugin_version
     );
-    if let Some(path) = plugin_file_path.as_ref() {
-        println!(
-            "{} {}",
-            console::style("临时运行（未安装）：").dim(),
-            path.display()
-        );
+    if let Some(path) = output.plugin_file_path.as_ref() {
+        println!("{} {}", console::style("临时运行（未安装）：").dim(), path);
     }
     println!("{}", console::style("最终配置：").dim());
     println!("{config_json}");
@@ -969,53 +894,34 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
     if args.dry_run {
         return Ok(());
     }
-
-    // 订阅必须早于 start_task：forward task 在没有订阅者时会直接丢弃事件，
-    // 晚订阅会漏掉任务开头的日志。
-    // 不订阅 ImagesChange：计数一律取 TasksChange 里的权威快照，见 render_task 的说明。
-    let mut events = EventBroadcaster::global().subscribe_filtered_stream(&[
-        kabegame_core::ipc::events::AppEventKind::TaskLog,
-        kabegame_core::ipc::events::AppEventKind::TasksChange,
-    ]);
-
-    let scheduler = TaskScheduler::global();
-    scheduler.start_workers(MAX_TASK_WORKER_LOOPS).await;
-    scheduler.start_download_workers_async().await;
-
-    // 字段名必须是 camelCase：commands::task::start_task 的 StartTaskParams 带
-    // `#[serde(rename_all = "camelCase")]`。
-    let mut task_param = serde_json::json!({
-        "pluginId": plugin.id,
-        "userConfig": config,
-        "triggerSource": "cli",
-    });
-    // 临时运行的 .kgpg：调度器 freeze 任务时会按 pluginFilePath 再解析一次插件
-    // （plugin_id 在 plugins_directory 里根本不存在，只认这条路径）。
-    if let Some(path) = plugin_file_path.as_ref() {
-        task_param["pluginFilePath"] =
-            serde_json::Value::String(path.to_string_lossy().into_owned());
-    }
-    if !resolved.http_headers.is_empty() {
-        task_param["httpHeaders"] = serde_json::json!(resolved.http_headers);
-    }
-    // 命令行的 --output-dir 优先于默认配置里保存的 outputDir。
-    if let Some(dir) = args.output_dir.as_ref().or(resolved.output_dir.as_ref()) {
-        task_param["outputDir"] = serde_json::Value::String(dir.clone());
-    }
-    if let Some(album) = args.album_id.as_ref() {
-        task_param["outputAlbumId"] = serde_json::Value::String(album.clone());
-    }
-    let task_id = kabegame_core::commands::task::start_task(task_param).await?;
-
+    let task_id = output
+        .task_id
+        .ok_or_else(|| "插件运行未返回 task_id".to_string())?;
+    let mut events = events
+        .take()
+        .ok_or_else(|| "插件运行未建立事件订阅".to_string())?;
     let plain = args.plain || !console::user_attended();
-    let outcome = render_task(&task_id, &plugin.id, &mut events, plain).await;
+    let cancel_backend = backend.clone();
+    let outcome = render_task(
+        &task_id,
+        &output.plugin_id,
+        &mut events,
+        plain,
+        move |task_id| async move { cancel_backend.cancel_task(&task_id).await },
+    )
+    .await;
 
     match outcome {
-        TaskOutcome::Completed { downloaded, failed } => {
+        TaskOutcome::Completed {
+            downloaded,
+            dedup,
+            failed,
+        } => {
             println!(
-                "{} 下载 {} 张，失败 {}",
+                "{} 下载 {} 张，去重 {}，失败 {}",
                 console::style("完成").green().bold(),
                 downloaded,
+                dedup,
                 failed
             );
             Ok(())
@@ -1026,7 +932,11 @@ async fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
 }
 
 enum TaskOutcome {
-    Completed { downloaded: u64, failed: u64 },
+    Completed {
+        downloaded: u64,
+        dedup: u64,
+        failed: u64,
+    },
     Canceled,
     Failed(String),
 }
@@ -1035,15 +945,19 @@ enum TaskOutcome {
 ///
 /// 形态：进度条常驻最后一行，日志由 `ProgressBar::println` 从进度条**上方**滚出，
 /// 与 cargo / apt 一致。非 TTY（管道、CI）自动降级成逐行直出。
-async fn render_task(
+async fn render_task<C, Fut>(
     task_id: &str,
     plugin_id: &str,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<(
-        u64,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<
         std::sync::Arc<kabegame_core::ipc::events::AppEvent>,
-    )>,
+    >,
     plain: bool,
-) -> TaskOutcome {
+    cancel: C,
+) -> TaskOutcome
+where
+    C: FnOnce(String) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
     use indicatif::{ProgressBar, ProgressStyle};
     use kabegame_core::ipc::events::AppEvent;
 
@@ -1087,13 +1001,11 @@ async fn render_task(
     let cancel_task_id = task_id.to_string();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            kabegame_core::crawler::TaskScheduler::global()
-                .cancel_task(&cancel_task_id)
-                .await;
+            cancel(cancel_task_id).await;
         }
     });
 
-    while let Some((_id, ev)) = events.recv().await {
+    while let Some(ev) = events.recv().await {
         match &*ev {
             AppEvent::TaskLog {
                 task_id: tid,
@@ -1133,7 +1045,11 @@ async fn render_task(
 
                 if let Some(status) = diff.get("status").and_then(|v| v.as_str()) {
                     let outcome = match status {
-                        "completed" => Some(TaskOutcome::Completed { downloaded, failed }),
+                        "completed" => Some(TaskOutcome::Completed {
+                            downloaded,
+                            dedup,
+                            failed,
+                        }),
                         "canceled" | "cancelled" => Some(TaskOutcome::Canceled),
                         "failed" => Some(TaskOutcome::Failed(
                             diff.get("error")
@@ -1158,6 +1074,9 @@ async fn render_task(
 }
 
 fn format_log_line(level: &str, message: &str) -> String {
+    // core 的非插件日志是 i18n 载荷，先按应用设置的语言渲染成文本；插件日志原样保留。
+    let message = task_log::render(message);
+    let message = message.as_str();
     let tag = match level {
         "error" => console::style(" ERROR ").red().bold().to_string(),
         "warn" => console::style("  WARN ").yellow().bold().to_string(),
@@ -1172,112 +1091,6 @@ fn format_log_line(level: &str, message: &str) -> String {
     format!("{tag} {body}")
 }
 
-/// `--var key=value` → (key, 原始字符串值)。值里允许再出现 `=`。
-fn parse_var_arg(raw: &str) -> Result<(String, String), String> {
-    let (k, v) = raw
-        .split_once('=')
-        .ok_or_else(|| format!("--var 需要 key=value 形式，收到：{raw}"))?;
-    let k = k.trim();
-    if k.is_empty() {
-        return Err(format!("--var 的 key 不能为空：{raw}"));
-    }
-    Ok((k.to_string(), v.to_string()))
-}
-
-/// 解析本次运行的最终配置。
-///
-/// 与主应用一致的三层叠加：
-/// 1. `kbConfig` 里每项的 `default`
-/// 2. 用户在应用里保存的插件默认配置（`plugins-directory/default-configs/<id>.json`）
-/// 3. 本次命令行的 `--var` 覆盖
-///
-/// 第 1 层由 `build_effective_user_config_from_var_defs` 负责（同时做类型规范化，
-/// 所以 `--var page=3` 这种字符串会被转成数字），这里只负责 2、3 层的合并。
-struct ResolvedRun {
-    user_config: HashMap<String, serde_json::Value>,
-    http_headers: HashMap<String, String>,
-    output_dir: Option<String>,
-}
-
-fn resolve_run_config(
-    pm: &PluginManager,
-    plugin: &core_plugin::Plugin,
-    vars: &[String],
-) -> Result<ResolvedRun, String> {
-    // 用户在应用里保存的默认配置。文件结构是 { userConfig, httpHeaders, outputDir }
-    // （见 PluginManager::build_default_config_json）；不存在或坏了都退回空，不阻断运行。
-    let saved = pm
-        .read_plugin_default_config_file(&plugin.id)
-        .ok()
-        .flatten()
-        .unwrap_or(serde_json::Value::Null);
-
-    let mut user_cfg: HashMap<String, serde_json::Value> = saved
-        .get("userConfig")
-        .and_then(|v| v.as_object())
-        .map(|m| m.clone().into_iter().collect())
-        .unwrap_or_default();
-    let http_headers: HashMap<String, String> = saved
-        .get("httpHeaders")
-        .and_then(|v| v.as_object())
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
-    let output_dir = saved
-        .get("outputDir")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let known: std::collections::HashSet<&str> =
-        plugin.var_defs.iter().map(|d| d.key.as_str()).collect();
-    for raw in vars {
-        let (k, v) = parse_var_arg(raw)?;
-        if !known.contains(k.as_str()) {
-            let mut keys: Vec<&str> = known.iter().copied().collect();
-            keys.sort_unstable();
-            return Err(format!(
-                "插件 {} 没有配置项 `{}`。可用的有：{}",
-                plugin.id,
-                k,
-                keys.join(", ")
-            ));
-        }
-        // 一律先按字符串放进去，交给 normalize_var_value 按 var_defs 的类型转换。
-        user_cfg.insert(k, serde_json::Value::String(v));
-    }
-
-    Ok(ResolvedRun {
-        user_config:
-            kabegame_core::crawler::task_scheduler::build_effective_user_config_from_var_defs(
-                &plugin.var_defs,
-                user_cfg,
-            ),
-        http_headers,
-        output_dir,
-    })
-}
-
-async fn validate_kgpg_structure(
-    pm: &PluginManager,
-    zip_path: &std::path::Path,
-) -> Result<(), String> {
-    let _manifest = pm.read_plugin_manifest(zip_path).await?;
-
-    // 只支持 v3 package.json；旧清单格式与 Rhai 均不支持。
-    let pkg = read_optional_package_json_from_zip(zip_path)?
-        .filter(core_plugin::package_json_is_v3)
-        .ok_or_else(|| "只支持 package.json (v3) 插件格式；旧清单格式不受支持".to_string())?;
-    let main_path = pkg.get("main").and_then(|v| v.as_str()).unwrap_or("");
-    if main_path.is_empty() || !has_non_empty_zip_entry(zip_path, main_path)? {
-        return Err(format!("v3 插件包 `main` 脚本不存在或为空: {}", main_path));
-    }
-    let _ = pm.read_plugin_config_public(zip_path)?;
-    Ok(())
-}
-
 // ── Pack ──
 
 fn read_optional_package_json(plugin_dir: &Path) -> Result<Option<serde_json::Value>, String> {
@@ -1290,33 +1103,6 @@ fn read_optional_package_json(plugin_dir: &Path) -> Result<Option<serde_json::Va
     let val: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("解析 package.json 失败: {}", e))?;
     Ok(Some(val))
-}
-
-fn read_optional_package_json_from_zip(
-    zip_path: &Path,
-) -> Result<Option<serde_json::Value>, String> {
-    let file_bytes = std::fs::read(zip_path)
-        .map_err(|e| format!("读取插件包失败 {}: {e}", zip_path.display()))?;
-    let zip_offset = file_bytes
-        .windows(4)
-        .position(|w| w == [0x50, 0x4B, 0x03, 0x04])
-        .ok_or_else(|| format!("插件包不是有效 ZIP/KGPG 格式: {}", zip_path.display()))?;
-
-    let cursor = std::io::Cursor::new(file_bytes[zip_offset..].to_vec());
-    let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|e| format!("解析插件 ZIP 失败: {e}"))?;
-    let result = match archive.by_name("package.json") {
-        Ok(mut f) => {
-            let mut s = String::new();
-            f.read_to_string(&mut s)
-                .map_err(|e| format!("读取 package.json 失败: {e}"))?;
-            let val: serde_json::Value =
-                serde_json::from_str(&s).map_err(|e| format!("解析 package.json 失败: {e}"))?;
-            Ok(Some(val))
-        }
-        Err(_) => Ok(None),
-    };
-    result
 }
 
 fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
@@ -1741,28 +1527,6 @@ fn collect_v3_entries(plugin_dir: &Path, pkg: &serde_json::Value) -> Result<Vec<
     Ok(buf)
 }
 
-fn has_non_empty_zip_entry(zip_path: &Path, entry_name: &str) -> Result<bool, String> {
-    let bytes = std::fs::read(zip_path)
-        .map_err(|e| format!("读取插件包失败 {}: {e}", zip_path.display()))?;
-    let zip_offset = bytes
-        .windows(4)
-        .position(|w| w == [0x50, 0x4B, 0x03, 0x04])
-        .ok_or_else(|| format!("插件包不是有效 ZIP/KGPG 格式: {}", zip_path.display()))?;
-
-    let cursor = std::io::Cursor::new(&bytes[zip_offset..]);
-    let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|e| format!("解析插件 ZIP 失败: {e}"))?;
-    let mut file = match archive.by_name(entry_name) {
-        Ok(f) => f,
-        Err(_) => return Ok(false),
-    };
-
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|e| format!("读取 `{entry_name}` 失败: {e}"))?;
-    Ok(!content.trim().is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1775,7 +1539,6 @@ mod tests {
         };
         assert_eq!(args.path, PathBuf::from("./a.png"));
         assert!(args.album.is_none());
-        assert!(args.metadata.is_none());
     }
 
     #[test]
@@ -1787,15 +1550,35 @@ mod tests {
             "./a.png",
             "--album",
             "/星穹铁道/萤",
-            "--metadata",
-            r#"{"k":1}"#,
         ])
         .unwrap();
         let Commands::Data(DataCommands::ImportImage(args)) = cli.command else {
             panic!("expected data import-image");
         };
         assert_eq!(args.album.as_deref(), Some("/星穹铁道/萤"));
-        assert_eq!(args.metadata.as_deref(), Some(r#"{"k":1}"#));
+        assert!(Cli::try_parse_from([
+            "kabegame-cli",
+            "data",
+            "import-image",
+            "./a.png",
+            "--metadata",
+            "{}",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn test_via_is_global() {
+        let cli = Cli::try_parse_from([
+            "kabegame-cli",
+            "pathql",
+            "query",
+            "images://gallery/all",
+            "--via",
+            "local",
+        ])
+        .unwrap();
+        assert_eq!(cli.via, Via::Local);
     }
 
     #[test]

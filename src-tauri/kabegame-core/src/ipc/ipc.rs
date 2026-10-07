@@ -9,8 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::collections::HashMap;
 use std::sync::OnceLock;
+
+pub const IPC_PROTOCOL_VERSION: u32 = 1;
 
 pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -61,28 +62,7 @@ pub enum IpcRequest {
 
     /// 运行一次爬虫插件任务
     PluginRun {
-        /// 插件 ID（已安装的 .kgpg 文件名，不含扩展名）或插件文件路径（.kgpg）
-        plugin: String,
-
-        /// 输出目录（下载图片保存目录）。None 表示使用默认图片目录。
-        #[serde(default)]
-        output_dir: Option<String>,
-
-        /// 任务 ID（用于进度与日志归档）。None 表示由应用后端生成。
-        #[serde(default)]
-        task_id: Option<String>,
-
-        /// 输出画册 ID（可选）
-        #[serde(default)]
-        output_album_id: Option<String>,
-
-        /// 传给插件的参数（等价于 `--` 之后的 tokens）
-        #[serde(default)]
-        plugin_args: Vec<String>,
-
-        /// 运行时 HTTP 头（用于 to/fetch_json/download_image 等请求）
-        #[serde(default)]
-        http_headers: Option<HashMap<String, String>>,
+        params: crate::commands::task::PluginRunParams,
     },
 
     // ======== Storage 相关 ========
@@ -250,9 +230,9 @@ pub enum IpcRequest {
     StorageGetTasksWithImages,
 
     // ======== Task 调度（应用后端）========
-    /// 入队一个任务（应用后端负责落库幂等 + 入队执行）
+    /// 提交一个爬虫任务，参数与 GUI / web 的 start_task 相同。
     TaskStart {
-        task: serde_json::Value,
+        params: serde_json::Value,
     },
 
     /// 取消任务
@@ -398,6 +378,8 @@ pub enum IpcRequest {
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,
+    /// 解析后的界面语言（如 `zh` / `en`）
+    SettingsGetLanguage,
     #[cfg(feature = "virtual-driver")]
     SettingsGetAlbumDriveEnabled,
     #[cfg(feature = "virtual-driver")]
@@ -474,6 +456,22 @@ pub enum IpcRequest {
         path: String,
     },
 
+    /// 查询 PathQL 节点自身。
+    PathqlEntry {
+        path: String,
+    },
+
+    /// 列出 PathQL 子项。
+    PathqlList {
+        path: String,
+        with_count: bool,
+    },
+
+    /// 拉取 PathQL 数据行。
+    PathqlFetch {
+        path: String,
+    },
+
     // ======== 事件订阅 ========
     /// 订阅事件（建立长连接，服务器会持续推送事件）
     SubscribeEvents {
@@ -506,7 +504,7 @@ pub struct IpcResponse {
     #[serde(default)]
     pub request_id: Option<u64>,
 
-    /// 对 PluginRun：实际使用的 task_id（若请求未提供则由应用后端生成）
+    /// 对 PluginRun / TaskStart：实际使用的 task_id。
     #[serde(default)]
     pub task_id: Option<String>,
 
@@ -687,9 +685,7 @@ const APP_SOCKET_NAME: &str = "kabegame.sock";
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn unix_socket_path() -> std::path::PathBuf {
-    std::env::temp_dir()
-        .join("Kabegame")
-        .join(APP_SOCKET_NAME)
+    std::env::temp_dir().join("Kabegame").join(APP_SOCKET_NAME)
 }
 
 #[cfg(feature = "ipc-client")]

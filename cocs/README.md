@@ -11,6 +11,14 @@
 2. 进入对应文档了解流程与边界。
 3. 再打开文档中引用的代码文件做实现核对。
 
+## CLI（`cli/`）
+
+- [cli/CLI_IPC.md](cli/CLI_IPC.md)
+  - 主题：`kabegame-cli` 的 app 优先/local 回退进程模型，`Backend` 抽象、`--via`
+    选择、`ipcProtocol` / `dataDir` 门控、`PluginRun` 共享实现、`local-import`
+    任务以及 `IpcClient` 连接/事件语义。
+  - 适用场景：新增 CLI 数据命令、IPC 协议变体或排查 CLI 与运行中主程序数据/任务不同步。
+
 ## Provider DSL（`provider-dsl/`）
 
 - 状态：基于 SQL 的内置 Provider（root/gallery/shared/VD）均由 `dsl_loader::DSL_FILES` 中的 DSL 提供；

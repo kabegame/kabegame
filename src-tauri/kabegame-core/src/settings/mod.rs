@@ -1135,6 +1135,11 @@ impl Settings {
             .unwrap_or_else(|| Self::default_album_drive_mount_point())
     }
 
+    /// 解析后的界面语言（受支持的语言码；未设置时为系统语言），与 `sync_locale` 同口径。
+    pub fn get_resolved_language(&self) -> &'static str {
+        kabegame_i18n::resolve_language_setting(self.get_language().as_deref())
+    }
+
     pub fn get_language(&self) -> Option<String> {
         Self::cells()
             .get(&SettingKey::Language)

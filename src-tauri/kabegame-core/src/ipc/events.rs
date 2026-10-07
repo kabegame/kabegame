@@ -559,13 +559,15 @@ impl EventListener {
                 match status_rx.changed().await {
                     Ok(()) => {
                         let status = *status_rx.borrow();
-                        eprintln!("[DEBUG] EventListener 连接状态变化: {:?}", status);
+                        crate::ipc_dbg!("[DEBUG] EventListener 连接状态变化: {:?}", status);
 
                         match status {
                             crate::ipc::client::ConnectionStatus::Connected => {
                                 // 连接上：启动事件订阅任务
                                 if event_task_handle.is_none() {
-                                    eprintln!("[DEBUG] EventListener 连接已建立，开始订阅事件");
+                                    crate::ipc_dbg!(
+                                        "[DEBUG] EventListener 连接已建立，开始订阅事件"
+                                    );
 
                                     let callbacks_clone = callbacks.clone();
                                     let default_emitter_clone = default_emitter.clone();
@@ -580,7 +582,7 @@ impl EventListener {
                                                 let default_emitter = default_emitter_clone.clone();
 
                                                 async move {
-                                                    eprintln!("[DEBUG] EventListener 收到事件: {:?}", raw);
+                                                    crate::ipc_dbg!("[DEBUG] EventListener 收到事件: {:?}", raw);
 
                                                     // 从 payload 解析事件类型
                                                     let kind = if let Some(type_val) = raw.get("type") {
@@ -596,7 +598,7 @@ impl EventListener {
                                                     let kind = match kind {
                                                         Some(k) => k,
                                                         None => {
-                                                            eprintln!("[ipc-events] 无法解析事件类型，raw: {:?}", raw);
+                                                            crate::ipc_dbg!("[ipc-events] 无法解析事件类型，raw: {:?}", raw);
                                                             return;
                                                         }
                                                     };
@@ -642,7 +644,7 @@ impl EventListener {
                                             })
                                             .await;
 
-                                        eprintln!("[DEBUG] EventListener 事件流已结束");
+                                        crate::ipc_dbg!("[DEBUG] EventListener 事件流已结束");
                                     });
 
                                     event_task_handle = Some(task);
@@ -651,7 +653,9 @@ impl EventListener {
                             crate::ipc::client::ConnectionStatus::Disconnected => {
                                 // 断开连接：停止并释放事件订阅任务
                                 if let Some(handle) = event_task_handle.take() {
-                                    eprintln!("[DEBUG] EventListener 连接已断开，停止事件订阅");
+                                    crate::ipc_dbg!(
+                                        "[DEBUG] EventListener 连接已断开，停止事件订阅"
+                                    );
                                     handle.abort();
                                 }
                             }
@@ -662,7 +666,7 @@ impl EventListener {
                     }
                     Err(_) => {
                         // 连接状态通道已关闭，退出循环
-                        eprintln!("[DEBUG] EventListener 连接状态通道已关闭，退出监听循环");
+                        crate::ipc_dbg!("[DEBUG] EventListener 连接状态通道已关闭，退出监听循环");
                         // 取消当前事件订阅任务
                         if let Some(handle) = event_task_handle.take() {
                             handle.abort();
@@ -672,7 +676,7 @@ impl EventListener {
                 }
             }
 
-            eprintln!("[DEBUG] EventListener 主循环已退出");
+            crate::ipc_dbg!("[DEBUG] EventListener 主循环已退出");
         });
 
         Ok(())

@@ -11,9 +11,10 @@ dirs = "5.0"
 include_dir = "0.7"
 indicatif = "0.18"
 # plugin-runtime：`plugin run` 需要 V8 运行时（deno_core / rusty_v8）。
+# ipc-client：数据命令优先连接正在运行的主程序。
 # ipc-server：GlobalEmitter 在没有它时是 no-op 空壳（见 core/src/emitter.rs），
 #             CLI 要拿到 task-log / 进度事件就必须开它。
-kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "plugin-runtime"]}
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-client", "ipc-server", "plugin-runtime"]}
 pathql-rs = {workspace = true, features = ["client-codegen"]}
 regex = "1"
 serde_json = {workspace = true}

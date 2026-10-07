@@ -772,11 +772,13 @@ pub async fn wait_after_download_if_needed(start_time: u64, exit_notify: Option<
     if interval_ms == 0 {
         return;
     }
-    let elapsed = std::time::SystemTime::now()
+    // start_time 可能比现在还晚（local-import 为保证严格递增会 +1ms，去重路径又可能在这 1ms 内跑完），
+    // 必须饱和相减：debug 构建下溢会 panic 掉 task worker，任务永远停在 Running。
+    let elapsed = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64
-        - start_time;
+        .as_millis() as u64)
+        .saturating_sub(start_time);
     if elapsed < interval_ms {
         let remaining = interval_ms - elapsed;
         match exit_notify {

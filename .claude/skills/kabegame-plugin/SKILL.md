@@ -1,6 +1,6 @@
 ---
 name: kabegame-plugin
-description: 编写新的 Kabegame 爬虫插件、或修改已有插件（src-crawler-plugins/plugins/<id>/）的完整工作流 —— 先用 curl/探针把「列表页 → 详情页/JSON → 媒体 URL → 媒体字节」这条链路逐环实测打通，再写成 V8 或 WebView 插件代码（每张图都带能还原详情页的 JSON metadata、labels 标签数组，以及还原源站详情样式的 description.ejs），最后真跑验证（V8 用 release kabegame-cli 以测试 id 直接运行 .kgpg，WebView 在 dev app 里经 CDP 跑）。凡是要给某个网站加爬虫/收集源、适配站点改版、修插件抓不到图/下载失败/选择器失效、给插件加新模式或配置项、把 V8 插件改成 WebView（或反之）时都用本 skill，即使用户只说「帮我爬一下 xx 站」「这个插件坏了」。
+description: 编写新的 Kabegame 爬虫插件、或修改已有插件（src-crawler-plugins/plugins/<id>/）的完整工作流 —— 先用 curl/探针把「列表页 → 详情页/JSON → 媒体 URL → 媒体字节」这条链路逐环实测打通，再写成 V8 或 WebView 插件代码（每张图都带能还原详情页的 JSON metadata、labels 标签数组，以及还原源站详情样式的 description.ejs），最后真跑验证（V8 用 kabegame-cli（默认 dev 版）以测试 id 直接运行 .kgpg，WebView 在 dev app 里经 CDP 跑）。凡是要给某个网站加爬虫/收集源、适配站点改版、修插件抓不到图/下载失败/选择器失效、给插件加新模式或配置项、把 V8 插件改成 WebView（或反之）时都用本 skill，即使用户只说「帮我爬一下 xx 站」「这个插件坏了」。
 ---
 
 # Kabegame 插件编写
@@ -22,10 +22,10 @@ K=.claude/skills/kabegame-plugin/scripts
 | `$K/probe.ts sel <file\|url> <css> [attr\|@text\|@html]` | 选择器实测（与插件 V8 运行时同一个 deno-dom） |
 | `$K/probe.ts json <file\|url> [a.b.0]` | JSON 或 HTML 内嵌 state 的结构概览 |
 | `$K/probe.ts media <url> [--referer R]` | Range 拉前 64 字节，按魔数判定是不是真媒体 |
-| `$K/deploy.sh <id>` | 构建 + 打包到 `.kabegame/debug/data/plugins-directory/<id>.kgpg` |
-| `$K/run-cli.sh <id> [--id T] [--secs N] [--var k=v]…` | deploy → release CLI `plugin run <kgpg> --id <id>-test`，限时取消并摘要 |
+| `$K/deploy.sh <id> [--release]` | 构建 + 打包到 `.kabegame/debug/data/plugins-directory/<id>.kgpg` |
+| `$K/run-cli.sh <id> [--release] [--id T] [--secs N] [--var k=v]…` | deploy → CLI（默认 dev）`plugin run <kgpg> --id <id>-test`，限时取消并摘要 |
 | `$K/app-run.sh <id> '<userConfig JSON>' [--secs N]` | 在 dev app 里跑任务（WebView 插件唯一验证途径） |
-| `$K/render-desc.ts <id> --db [--where <sql>]` | 从库里取真实 metadata 渲染 `description.ejs` 并截图 |
+| `$K/render-desc.ts <id> --db [--release] [--where <sql>]` | 从库里取真实 metadata 渲染 `description.ejs` 并截图 |
 
 `probe.ts` 用 `deno run -A $K/probe.ts …` 调。所有 probe 都带 Chrome UA；需要时加
 `--referer` / `--cookie` / `-H "K: V"`。把中间文件放 scratchpad，别放仓库里。
@@ -169,7 +169,7 @@ WebView 选 `plugins/xhs-webview`。不要用 `kabegame-cli plugin new`，它的
 
 ## 第 5 步：真跑验证
 
-### V8 插件 —— release kabegame-cli
+### V8 插件 —— kabegame-cli（默认 dev 版）
 
 ```bash
 $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_page=1 --var end_page=1
@@ -178,11 +178,16 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 它会依次执行：
 1. `deploy.sh`：用 `package-plugin.ts` 打包到 `.kabegame/debug/data/plugins-directory/<id>.kgpg`。
    打包到 dev 目录是为了让开发中的 app 也能看到这一版；
-2. `target/release/kabegame-cli plugin run <该 .kgpg> --id <id>-test --plain --output-dir <临时目录>`：
+2. `target/debug/kabegame-cli plugin run <该 .kgpg> --id <id>-test --plain --output-dir <临时目录>`：
    路径模式临时运行，不安装。`--id` 换成测试 id，这样插件数据目录、`default-configs`、入库的
-   `plugin_id` 都和正式插件隔离开；不传 `--data`（release 默认用系统用户数据目录）。
+   `plugin_id` 都和正式插件隔离开；dev 版 CLI 以 `--data dev` 构建，库落在仓库内 `.kabegame/debug/data`（与 dev app 共用）。
+   dev app 正在运行时，CLI 会自动经 IPC 交给主程序执行（任务出现在 app 的任务抽屉里）。
    到了时限就发 SIGINT 取消；
-3. 从系统数据目录的 `images.db` 读任务计数，再汇总日志和本次新增的文件数。
+3. 从所用数据目录的 `images.db` 读任务计数，再汇总日志和本次新增的文件数。
+
+**切到 release CLI**：`run-cli.sh` / `deploy.sh` / `render-desc.ts` 都接受 `--release`
+（或 `export KB_CLI_PROFILE=release` 一次切全部）。此时用 `target/release/kabegame-cli`，
+库在系统用户数据目录。默认 profile 是 `debug`，打包（`plugin pack`）也用同一个 CLI。
 
 测试 id 可以用 `--id` 自己指定；连续改连续跑时，可以加 `--no-deploy` 跳过重新打包。
 `--var` 的 key 必须是 `kbConfig` 里的 key，写错时 CLI 会列出可用项。配置要尽量缩到一两页，
@@ -201,7 +206,7 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 
 **metadata / labels / 模板的验证门槛**（V8 跑完后，同样适用于 WebView）：
 - 查库：本次任务的每张图都有 `metadata_id`；抽一条 metadata 看字段齐全
-  （release CLI 的库在系统数据目录，查询写法见 metadata-labels.md）；
+  （dev CLI 的库在 `.kabegame/debug/data/images.db`，release 在系统数据目录，查询写法见 metadata-labels.md）；
 - labels：本次任务里图片关联的 label 数量约等于源数据的 tag 总数，被跳过的只该是 key 派生不出来的那些；
 - 模板：`$K/render-desc.ts <id> --db --where "<挑一条信息最全的，比如有评论的>"`，用 Read 看截图，
   和第 2 步的源站截图逐块对照（卡片、标签配色、信息表、评论）。要看到 app 里的真实效果，
@@ -213,12 +218,16 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
   ```
   看完再把 `pvwimgid` 从 query 里删掉，把用户的界面还原。
 
-改代码后重新跑 `run-cli.sh` 即可，它每次都会重新打包。release CLI 不存在或太旧时，
-请用户在仓库根执行 `deno task b -c kabegame-cli --release`。
+改代码后重新跑 `run-cli.sh` 即可，它每次都会重新打包。CLI 不存在或太旧时，请用户在仓库根执行
+`deno task b -c kabegame-cli --data dev`（dev 版；release 版用 `--release`）。CLI 没有运行时 `--data`
+参数，不带 `--data dev` 构建出的 CLI 会指向系统数据目录，跑不到 dev 插件目录。
 
 ### WebView 插件 —— dev app + CDP
 
-CLI 起不了浏览器窗口，WebView 插件只能在 app 里跑。需要用户先启动 `deno task dev -c kabegame`。
+CLI 本地模式起不了浏览器窗口；dev app 运行时 CLI 会经 IPC 交给主程序，`plugin run` 也能跑 WebView 插件
+（任务在 app 里执行）。下面是在 app 里直接验证的流程，需要用户先启动 `deno task dev -c kabegame`。
+注意 WebView 任务运行期间不要用 kabegame-chromium（playwright）连 CDP：它会劫持页面原生下载，导致
+「Native download failed」。
 
 ```bash
 $K/deploy.sh <id>

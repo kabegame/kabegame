@@ -3,7 +3,7 @@ title: kabegame-cli 命令行参考
 description: kabegame-cli 子命令、参数、数据目录与退出码的完整参考。
 ---
 
-`kabegame-cli` 是 Kabegame 的自包含命令行可执行文件，用于在不打开 GUI 的前提下脚手架、打包、导入并运行爬虫插件，导入本地媒体，以及生成或查询 PathQL。各子命令在 CLI 进程内按需初始化数据、事件和插件运行时。它**不随主程序打包**，需要时从发布页单独下载。本页列出当前代码实际存在的子命令与参数。
+`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于脚手架、打包、导入并运行爬虫插件，导入本地媒体，以及生成或查询 PathQL。碰数据库或主程序运行时状态的命令会优先经 IPC 交给正在运行的同数据目录主程序；连不上时才在 CLI 进程内初始化必要运行时。它**不随主程序打包**，需要时从发布页单独下载。
 
 ## 启动与定位
 
@@ -17,7 +17,18 @@ description: kabegame-cli 子命令、参数、数据目录与退出码的完整
 - **Windows / macOS / Linux**：从 [GitHub Releases](https://github.com/kabegame/kabegame/releases/latest) 单独下载对应平台的 `Kabegame-cli-standard_<版本>_<架构>` 资产（Windows 为 setup.exe，macOS / Linux 为可执行文件）。下载后放到 PATH 或直接用绝对路径调用。
 - **Android**：不提供 CLI。
 
-全局参数只有 clap 自带的 `--help` / `-h` 与 `--version` / `-V`。
+除 clap 自带的 `--help` / `-h` 与 `--version` / `-V` 外，还有全局参数 `--via`：
+
+| 值 | 语义 |
+| --- | --- |
+| `auto` | 默认。主程序连得上、`ipcProtocol` 兼容且两端 `dataDir` 相同时用 app；否则回退 local。单纯“未运行”静默回退，协议或目录不匹配会在 stderr 提示。 |
+| `app` | 强制经主程序执行；连接、协议或数据目录校验失败立即报错。 |
+| `local` | 强制在 CLI 进程初始化 Storage / Provider / 任务运行时。 |
+
+`plugin new`、`plugin pack` 和 `pathql generate` 是纯文件/生成操作，不经 `Backend`；`.kgpg` 的包解析也始终在 CLI 本地完成。
+
+**数据目录**没有运行时参数，由构建时的 `kabegame_data` 决定：发布页下载的 CLI 与默认构建都使用系统用户数据目录；
+仓库内用 `deno task b -c kabegame-cli --data dev` 构建的 CLI 使用 `.kabegame/debug/`（与 `deno task dev` 起的应用共用）。
 
 ```bash
 kabegame-cli --help
@@ -62,7 +73,7 @@ kabegame-cli plugin new my-site --backend webview
 
 ### plugin run
 
-在 CLI **本进程内**跑一个 V8 插件，实时渲染日志与进度。目标既可以是已安装插件的 id，也可以直接给一个 `.kgpg` 文件路径。
+运行一个插件并实时渲染日志与进度。目标既可以是已安装插件的 id，也可以直接给一个 `.kgpg` 文件路径。app 模式由主程序调度，任务抽屉与画廊会同步刷新；local 模式保持无 GUI 的自包含执行。
 
 主要用途是插件开发期的快速验证：改完插件源码 → 打包 → 直接 `plugin run`，不用启动 GUI。给路径时插件**不会**被装进 `plugins-directory`，只是这一次任务临时加载它。
 
@@ -75,7 +86,6 @@ kabegame-cli plugin run <plugin> [选项]
 | `<plugin>`       | 是   | 两种形态：**已安装**插件的 id，未安装会列出当前可用的 id；或一个 **`.kgpg` 文件路径**（按扩展名识别），临时运行、不安装。若路径里的包 id 恰好也已安装，**以路径里的包为准**。 |
 | `--id PLUGIN_ID` | 否   | 仅路径模式：指定本次运行用的插件 id（见下方「插件 id 怎么定」）。配已安装 id 使用会直接报错。 |
 | `--var KEY=VALUE`| 否   | 覆盖单个 `kbConfig` 项，可重复。值按该 key 在 `kbConfig` 里声明的类型自动转换（int/float/boolean 等），所以 `--var page=3` 会变成数字 `3`。未知 key 会直接报错并列出可用项。 |
-| `--data dev\|prod\|auto` | 否 | 数据目录。`dev` = 仓库内 `.kabegame/debug`（`repack-crawler-plugins` skill 投放插件的地方），`prod` = 系统用户数据目录，`auto`（默认）跟随编译期的 `kabegame_data` cfg。**release 构建的 CLI 默认是 prod**，测试仓库内的插件时通常要显式加 `--data dev`。 |
 | `--output-dir`   | 否   | 图片输出目录。优先级高于插件默认配置里保存的 `outputDir`。                                          |
 | `--album-id`     | 否   | 目标画册 id。                                                                                     |
 | `--dry-run`      | 否   | 只解析并打印最终配置，不真正建任务。                                                              |
@@ -93,24 +103,24 @@ kabegame-cli plugin run <plugin> [选项]
 - `--id` 用来让**同一个包跑成另一份互不干扰的数据**：插件数据目录、`default-configs/<id>.json` 的取用、入库的 `plugin_id`、provider namespace 全部跟着换（包内写死的 `plugins.<原 id>` 会自动改写到新 id 下）。
 - 这条回落链对安装也生效：`plugin import` 落盘时文件名统一归一成 `<id>.kgpg`。
 
-**限制**：只支持 `kbBackend: "v8"` 的插件。WebView 后端要真实浏览器窗口，headless CLI 起不来，遇到会直接报错。路径模式只认打好的 `.kgpg` 包，不支持直接指向插件源码目录或裸 `.js`——先 `plugin pack`。
+**后端能力**：app 模式支持 V8 与 WebView 插件；local 模式没有真实浏览器宿主，只支持 `kbBackend: "v8"`。路径模式只认打好的 `.kgpg` 包，不支持直接指向插件源码目录或裸 `.js`——先 `plugin pack`。
 
 ```bash
 # 不安装，直接跑一个打好的包（配置仍按已存的 default-configs/<id>.json 叠加）
 kabegame-cli plugin pack --plugin-dir ./plugins/kemono --output /tmp/kemono.kgpg
-kabegame-cli plugin run /tmp/kemono.kgpg --data dev --var page=1
+kabegame-cli plugin run /tmp/kemono.kgpg --var page=1
 
 # 换个 id 跑同一个包：数据目录 / 默认配置 / 入库 plugin_id 都隔离开，方便对照测试
-kabegame-cli plugin run /tmp/kemono.kgpg --id kemono-test --data dev
+kabegame-cli plugin run /tmp/kemono.kgpg --id kemono-test
 
 # 先安装，再按 id 运行
 kabegame-cli plugin import ./packed/kemono.kgpg
-kabegame-cli plugin run kemono --data dev \
+kabegame-cli plugin run kemono \
   --var source=creator --var service=patreon --var creator_id=44096704 \
   --var creator_page_start=1 --var creator_page_end=1
 
 # 只看最终配置，不跑
-kabegame-cli plugin run kemono --data dev --dry-run --var source=tag --var tag=nsfw
+kabegame-cli plugin run kemono --dry-run --var source=tag --var tag=nsfw
 ```
 
 输出形态：进度条常驻最后一行，日志从它上方滚出（同 cargo / apt）。
@@ -153,16 +163,15 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 ### plugin import
 
-把本地 `.kgpg` 安装到 `plugins_directory`。此命令直接初始化 `PluginManager`，离线可用。
+把本地 `.kgpg` 安装到 `plugins_directory`。CLI 先在本地解析包；校验通过后再由选中的 app/local 后端安装，因此 app 模式下插件列表会立即收到更新。
 
 ```bash
-kabegame-cli plugin import <path.kgpg> [--data dev|prod|auto]
+kabegame-cli plugin import <path.kgpg>
 ```
 
 | 参数     | 必填 | 说明                                                        |
 | -------- | ---- | ----------------------------------------------------------- |
 | 位置参数 | 是   | `.kgpg` 文件路径。文件不存在或扩展名非 `.kgpg` 会立即报错。 |
-| `--data` | 否   | 同 `plugin run` 的 `--data`。**要和之后 `plugin run` 用的值一致**，否则会出现装到 prod、跑的是 dev。 |
 
 安装前会验证：v3 `package.json` 可解析、`main` 指向的脚本非空、`kbConfig` 若存在则可解析。落盘文件名统一归一成 `<插件 id>.kgpg`（id 见 [plugin run 的「插件 id 怎么定」](#plugin-run)），所以源文件叫什么名字都不影响安装结果。成功时输出：
 
@@ -178,23 +187,22 @@ CLI 层没有版本 / 冲突检查，重复导入同一 ID 可能覆盖已有插
 
 ### data import-image
 
-将单个本地图片或视频直接导入数据库，可选加入指定画册并附带 metadata。
+将单个本地图片或视频交给内建 `local-import` 任务，可选加入指定画册。命令会渲染任务进度和日志，完成后打印成功、去重、失败计数。
 
 ```bash
-kabegame-cli data import-image <path> [--album /父画册/子画册] [--metadata <文本>]
+kabegame-cli data import-image <path> [--album /父画册/子画册]
 ```
 
-| 参数         | 必填 | 说明                                                                 |
-| ------------ | ---- | -------------------------------------------------------------------- |
-| `<path>`     | 是   | 本地图片或视频文件；不接受 URL 或文件夹。                            |
-| `--album`    | 否   | 现有画册的树路径，开头的 `/` 可省略。                               |
-| `--metadata` | 否   | 原样存储的 metadata 字符串；CLI 不校验它是否为 JSON。                |
+| 参数      | 必填 | 说明                                      |
+| --------- | ---- | ----------------------------------------- |
+| `<path>`  | 是   | 本地图片或视频文件；不接受 URL 或文件夹。 |
+| `--album` | 否   | 现有画册的树路径，开头的 `/` 可省略。    |
 
 目标画册通过 `albums://by_sub_tree` 逐层解析；任一层不存在或同级重名时命令会报错，不会自动创建画册。
 
 ## pathql 子命令组
 
-`pathql` 命令在 CLI 进程内初始化数据与 provider runtime。
+`pathql query` 经 app/local `Backend` 查询；`pathql generate` 仍在 CLI 进程内初始化 provider runtime。
 
 ### pathql generate
 
@@ -234,7 +242,7 @@ CLI 使用三种退出码：
 | 码  | 含义                                                                                                                                |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `0` | 成功。子命令完成并输出结果或成功信息。                                                                                  |
-| `1` | 子命令执行失败。包括插件名非法、文件缺失、画册路径无法唯一解析、插件配置错误或 WebView 插件不受支持等。                 |
+| `1` | 子命令执行失败。包括 IPC 校验失败、插件名非法、文件缺失、画册路径无法解析、插件配置错误或 local 模式运行 WebView 插件等。 |
 | `2` | clap 参数解析错误，例如缺少必填参数或未知子命令。由 clap 在进入 `main()` 之前抛出。                                                 |
 
 ## 平台差异

@@ -514,7 +514,7 @@ impl PluginManager {
         }
     }
 
-    /// CLI 场景：支持传入插件 id（已安装）或 `.kgpg` 路径（临时运行）。
+    /// 运行任务场景：支持传入插件 id（已安装）或 `.kgpg` 路径（临时运行）。
     ///
     /// `id_override` 只对路径模式有意义：临时运行时用它顶掉包内 `name` / 文件名推出来的
     /// id（见 [`resolve_kgpg_plugin_id`]）；id 模式下忽略。
@@ -522,7 +522,6 @@ impl PluginManager {
     /// - `Plugin`
     /// - `plugin_file_path`：若为临时运行则为 Some(path)，已安装则为 None
     /// - `var_defs`：用于 CLI 参数解析（来源于插件文件或已安装插件的 config.json var）
-    #[allow(dead_code)] // 仅被 sidecar/CLI bin 调用；主程序二进制未直接使用
     pub async fn resolve_plugin_for_cli_run(
         &self,
         id_or_path: &str,
@@ -2294,6 +2293,9 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         let mut source = String::new();
         f.read_to_string(&mut source)
             .map_err(|e| format!("读取 \"{}\" 失败: {}", main_path, e))?;
+        if source.trim().is_empty() {
+            return Err(format!("v3 插件包 `main` 脚本不存在或为空: {}", main_path));
+        }
         script = PluginScript::new(backend, source);
         script_type = script.script_type_str().to_string();
     }
@@ -3759,6 +3761,28 @@ mod tests {
     }
 
     // ── v3 zip 装载测试 ──
+
+    #[test]
+    fn test_v3_empty_main_script_is_rejected() {
+        let pkg = serde_json::json!({
+            "name": "t",
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+        });
+        let data = make_zip(&[
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
+            ("main.js", b"  \n\t"),
+        ]);
+
+        let mut archive = open_zip(&data);
+        let error = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap_err();
+        assert!(error.contains("不存在或为空"), "error: {error}");
+    }
 
     #[test]
     fn test_v3_assets_keep_markdown_verbatim_and_use_normalized_paths() {

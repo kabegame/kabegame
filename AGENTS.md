@@ -29,7 +29,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块干净且接近上游
 
 ### 关键架构规则
-**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。外部集成通过应用 IPC 连接主程序，`kabegame-cli` 则在自身进程内初始化所需运行时。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
+**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
 **路径逻辑归属于 `tauri-plugin-pathes`**——所有路径/目录计算都必须放在 `src-tauri-plugins/tauri-plugin-pathes/` 中。其他模块通过 `AppPaths` 调用；切勿在其他位置硬编码或重新计算路径。
 
@@ -120,7 +120,7 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
 
 对于仅含 Cargo 的 `kabegame-cli` 组件，`deno task b` 默认执行 **debug** 构建；传入 `--release` 才会执行 release 构建。主应用的桌面端/Android 构建始终通过 `tauri build`，无论是否传入 `--release` 都是 release 构建。
 
-`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime` 和 `ipc-server` feature，因此会链接 deno_core/rusty_v8，并获得真正有效（非空操作）的 `GlobalEmitter`。这为 `kabegame-cli plugin run <id|path.kgpg>` 提供支持；该命令会在自身进程内初始化任务与事件运行时、执行 V8 插件（已安装的 id，或直接给 `.kgpg` 路径临时运行、不落盘安装），并在固定的进度条上方渲染任务日志。可使用它在不启动 GUI 的情况下测试爬虫插件——请搭配 `repack-crawler-plugins` skill 和 `--data dev` 使用，否则 release CLI 会解析到系统数据目录。参见 `apps/docs/src/content/docs/reference/cli.md`。
+`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime`、`ipc-client` 和 `ipc-server` feature。`plugin run <id|path.kgpg>` 优先在同数据目录的主程序中执行（因此 app 模式支持 WebView）；回退本地模式时才在 CLI 进程初始化任务与事件运行时、执行 V8 插件。两种模式都支持已安装 id 与临时 `.kgpg` 路径，并在固定进度条上方渲染任务日志。CLI 没有运行时 `--data` 参数，数据目录只由构建时的 `kabegame_data` cfg 决定：插件开发请用 `deno task b -c kabegame-cli --data dev` 构建并搭配 `kabegame-plugin` skill；需要强制隔离运行时加 `--via local`。参见 `apps/docs/src/content/docs/reference/cli.md` 与 `cocs/cli/CLI_IPC.md`。
 
 在 macOS 上，两个二进制文件都是位于 `target/<profile>` 中的扁平 Cargo 产物；CEF framework 通过 cef-dll-sys 创建的 `target/Frameworks` 符号链接进行解析。参见 `src-tauri/tauri-runtime-cef/README.md`。
 
