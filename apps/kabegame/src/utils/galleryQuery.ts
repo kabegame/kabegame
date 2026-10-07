@@ -1,4 +1,5 @@
 import { decodeSeg, encodeSeg } from "@kabegame/pathql-client";
+import { parseSearchExpr, printSearchExpr, type SearchExpr } from "./searchExpr";
 
 /**
  * GalleryQuery —— 画廊查询的唯一对象模型。
@@ -86,9 +87,9 @@ export function isGallerySearchPathMode(value: string | undefined): value is Gal
 }
 
 /**
- * 搜索项：一个输入框 + 一组勾选的维度。
- * - 逗号分隔的词之间为 AND（所有维度通用）；
- * - 勾选的维度之间为 OR：每个维度各自要求「全部词都命中」，任一维度满足即可。
+ * 搜索项：一个输入框 + 一组勾选的维度。输入是搜索表达式（语法见 `searchExpr.ts`）：
+ * `,` 且、`;` 或、前置 `!` 非、`()` 分组，`\` 转义与 `"…"` 表示字面量。
+ * 勾选的维度作用在**每个词**上：一个词 = 任一勾选维度包含它，`!词` = 所有勾选维度都不含它。
  */
 export interface GallerySearchTerm {
   /** 勾选的维度：按 GALLERY_SEARCH_MODES 规范顺序、去重（经 makeSearchTerm 构造）。空集 = 不做搜索过滤。 */
@@ -111,12 +112,14 @@ export function searchTermModes(term: GallerySearchTerm): GallerySearchPathMode[
   return canonicalSearchModes(term.modes);
 }
 
-/** 输入 → 逗号分隔的 AND 词：去首尾空白、丢空词。 */
-export function searchTokens(query: string): string[] {
-  return query
-    .split(",")
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+/**
+ * 输入 → 语法树，供序列化使用。下拉面板不提交语法错误的输入，错误只会来自外部构造或旧数据：
+ * 整串按一个字面词处理。只剩分隔符（没有任何词）时退化为字面逗号，避免空条件变成全集。
+ */
+export function searchTermExpr(query: string): SearchExpr {
+  const parsed = parseSearchExpr(query);
+  if (!parsed.ok) return { kind: "term", value: query.trim() };
+  return parsed.expr ?? { kind: "term", value: "," };
 }
 
 /** 标签词规整：路径段两侧空白去掉、段内连续空白压成一个。 */
@@ -127,19 +130,64 @@ function normalizeLabelToken(token: string): string {
     .join("/");
 }
 
-/** 某维度下实际下发的词：标签额外按路径规整，只剩分隔符的词丢弃。 */
-function modeTokens(mode: GallerySearchPathMode, tokens: readonly string[]): string[] {
-  if (!isLabelSearchMode(mode)) return [...tokens];
-  return tokens.map(normalizeLabelToken).filter((token) => token.replace(/\//g, "").length > 0);
+/**
+ * 一个词在某维度下实际下发的值：标签额外按路径规整；规整后只剩 `/` 时退化为字面逗号——
+ * 标签 key 不允许逗号，必不命中，不会变成全集。
+ */
+function modeTermValue(mode: GallerySearchPathMode, value: string): string {
+  if (!isLabelSearchMode(mode)) return value;
+  const normalized = normalizeLabelToken(value);
+  return normalized.replace(/\//g, "").length > 0 ? normalized : ",";
 }
 
-/** 单维度的 AND 链：`search/<m>/<t1>/filter_comb/search/<m>/<t2>…`。 */
-function serializeModeChain(mode: GallerySearchPathMode, tokens: readonly string[]): string {
-  // 输入只剩分隔符（纯逗号，或标签词只有 `/`）时退化为字面逗号，避免空条件变成全集：
-  // 标签 key 不允许逗号，对标签必不命中；其它维度按字面逗号子串匹配。
-  const effective = modeTokens(mode, tokens);
-  const chain = effective.length > 0 ? effective : [","];
-  return chain.map((token) => `search/${mode}/${encodeUserSegment(token)}`).join(`/${FILTER_COMB}/`);
+/** 一个词的 OR 分支：每个勾选维度一支 `search/<m>/<词>`。 */
+function termBranches(value: string, modes: readonly GallerySearchPathMode[]): string[] {
+  return modes.map((mode) => `search/${mode}/${encodeUserSegment(modeTermValue(mode, value))}`);
+}
+
+interface SearchBodyPart {
+  body: string;
+  /** 以裸 `search/<m>/<词>` 结尾：下一个且项沿用旧形态，经 `filter_comb` 接上。 */
+  endsWithSearch: boolean;
+}
+
+/**
+ * 语法树 → 路径片段：
+ * - 词：单维度 `search/<m>/<词>`；多维度 `~any/<各维度>/~end`；
+ * - 且：各项顺序相接（同枢纽上 AND），裸搜索段之后经 `filter_comb`，与旧的逗号链逐字一致；
+ * - 或：`~any/…/~or/…/~end`，多维度的词把各维度分支直接平铺进来；
+ * - 非：`~not/…/~end`；引擎不许 `~not` 里直接出现 `~or`，或组本身是 `~any` 包着的，天然满足。
+ * 语法树已是规范形（无双重取非），展开结果不会长成高级条件边界 `~not/~not/…`。
+ */
+function serializeSearchExprPart(expr: SearchExpr, modes: readonly GallerySearchPathMode[]): SearchBodyPart {
+  switch (expr.kind) {
+    case "term": {
+      const branches = termBranches(expr.value, modes);
+      return branches.length === 1
+        ? { body: branches[0]!, endsWithSearch: true }
+        : { body: `~any/${branches.join("/~or/")}/~end`, endsWithSearch: false };
+    }
+    case "not":
+      return { body: `~not/${serializeSearchExprPart(expr.item, modes).body}/~end`, endsWithSearch: false };
+    case "and": {
+      let result: SearchBodyPart = { body: "", endsWithSearch: false };
+      for (const item of expr.items) {
+        const part = serializeSearchExprPart(item, modes);
+        const joint = result.endsWithSearch ? `/${FILTER_COMB}/` : "/";
+        result = {
+          body: result.body ? `${result.body}${joint}${part.body}` : part.body,
+          endsWithSearch: part.endsWithSearch,
+        };
+      }
+      return result;
+    }
+    case "or": {
+      const branches = expr.items.flatMap((item) =>
+        item.kind === "term" ? termBranches(item.value, modes) : [serializeSearchExprPart(item, modes).body],
+      );
+      return { body: `~any/${branches.join("/~or/")}/~end`, endsWithSearch: false };
+    }
+  }
 }
 
 /** 搜索项是否构成条件：有输入且至少勾选一个维度。全部取消勾选 = 不做搜索过滤。 */
@@ -148,16 +196,17 @@ export function isActiveSearchTerm(term: GallerySearchTerm | undefined | null): 
 }
 
 /**
- * 搜索项 → 查询体片段（不构成条件时为空串）。单维度是一条 AND 链；多维度各自成链、以 `~any/…/~or/…/~end` 取 OR。
- * 两种形态都结束在 gallery 枢纽（search 委派回枢纽，`~end` 游标回到组入口）。
- * 例：`1girl, 1boy` 勾选元数据 + 标签 →
- * `~any/search/metadata/1girl/filter_comb/search/metadata/1boy/~or/search/label/1girl/filter_comb/search/label/1boy/~end`
+ * 搜索项 → 查询体片段（不构成条件时为空串），结束在 gallery 枢纽（search 委派回枢纽，
+ * `~end` 游标回到组入口）。例：
+ * - `1girl, 1boy` 只勾元数据 → `search/metadata/1girl/filter_comb/search/metadata/1boy`；
+ * - `sakura` 勾元数据 + 标签 → `~any/search/metadata/sakura/~or/search/label/sakura/~end`；
+ * - `(girl; boy), !genshin` 只勾标签 →
+ *   `~any/search/label/girl/~or/search/label/boy/~end/~not/search/label/genshin/~end`。
  */
 export function serializeSearchTerm(term: GallerySearchTerm): string {
-  const tokens = searchTokens(term.query);
-  const chains = searchTermModes(term).map((mode) => serializeModeChain(mode, tokens));
-  if (chains.length === 0 || !term.query.trim()) return "";
-  return chains.length === 1 ? chains[0]! : `~any/${chains.join("/~or/")}/~end`;
+  const modes = searchTermModes(term);
+  if (modes.length === 0 || !term.query.trim()) return "";
+  return serializeSearchExprPart(searchTermExpr(term.query), modes).body;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +438,18 @@ export function asSingleFilterSet(query: GalleryQuery): GalleryFilterSet | null 
   return node.is;
 }
 
+/**
+ * 高级条件的边界包装：双重取非 `~not/~not/…/~end/~end`，语义恒等（NULL 行在两层
+ * NOT 后照样被排除）。旧版用单分支 `~any/…/~end`（只包以原子开头的高级条件），
+ * 拆分时一并识别，存量 URL / localStorage 不需要迁移。
+ */
+function unwrapAdvancedBoundary(node: GalleryQueryNode | undefined): GalleryQuery | null {
+  if (!node || isIsNode(node)) return null;
+  if (isAnyNode(node)) return node.any.length === 1 ? node.any[0]! : null;
+  const inner = node.not.length === 1 ? node.not[0] : undefined;
+  return inner && !isIsNode(inner) && !isAnyNode(inner) ? inner.not : null;
+}
+
 /** 查询条：首个顶层原子属于简单 chip，其余节点属于追加高级条件。 */
 export function splitQueryFilters(query: GalleryQuery): {
   simple: GalleryFilterSet;
@@ -398,17 +459,18 @@ export function splitQueryFilters(query: GalleryQuery): {
   const first = normalized[0];
   const simple = first && isIsNode(first) ? first.is : {};
   const tail = first && isIsNode(first) ? normalized.slice(1) : normalized;
-  // composeQueryFilters 为以原子开头的高级条件保留单分支组边界。
-  const only = tail.length === 1 ? tail[0] : undefined;
-  const advanced = only && isAnyNode(only) && only.any.length === 1 ? only.any[0]! : tail;
+  // composeQueryFilters 用双重取非标记高级条件的边界。
+  const advanced = (tail.length === 1 ? unwrapAdvancedBoundary(tail[0]) : null) ?? tail;
   return { simple, advanced };
 }
 
-/** 两部分以 AND 组合；单分支 ~any 防止高级原子被归一化合入简单 chip。 */
+/**
+ * 两部分以 AND 组合；高级条件整体包进双重取非，既不会被归一化并入简单原子，
+ * 也不会因其中的 OR 组被折叠成搜索项而在往返后变成简单 chip。
+ */
 export function composeQueryFilters(simple: GalleryFilterSet, advanced: GalleryQuery): GalleryQuery {
   const extra = normalizeQuery(advanced);
-  const first = extra[0];
-  const suffix: GalleryQuery = first && isIsNode(first) ? [{ any: [extra] }] : extra;
+  const suffix: GalleryQuery = extra.length > 0 ? [{ not: [{ not: extra }] }] : [];
   return normalizeQuery([...queryFromFilterSet(simple), ...suffix]);
 }
 
@@ -824,67 +886,173 @@ function chunkEnd(segments: readonly string[], start: number): number {
   return end;
 }
 
-function appendAtom(sequence: GalleryQuery, dimension: GalleryFilterDimension, atom: GalleryFilterSet): void {
-  const previous = sequence.at(-1);
-  // 同一单维度的连续搜索段是一条逗号 AND 链（serializeModeChain 的逆），并回同一个词串。
-  const previousModes = previous && isIsNode(previous) ? previous.is.search?.modes : undefined;
-  const nextModes = atom.search?.modes;
-  if (
-    dimension === "search" &&
-    previous &&
-    isIsNode(previous) &&
-    previousModes?.length === 1 &&
-    nextModes?.length === 1 &&
-    previousModes[0] === nextModes[0]
-  ) {
-    previous.is = {
-      ...previous.is,
-      search: makeSearchTerm(previousModes, `${previous.is.search!.query}, ${atom.search!.query}`),
-    };
-    return;
-  }
-  const occupied =
-    previous &&
-    isIsNode(previous) &&
-    (dimension === "search" ? hasSearch(previous.is) : hasDimension(previous.is, dimension));
-  if (previous && isIsNode(previous) && !occupied) {
-    previous.is = { ...previous.is, ...atom };
-  } else {
-    sequence.push({ is: atom });
+// ---------- 搜索折叠：serializeSearchTerm 的逆 ----------
+
+function sameModes(left: readonly GallerySearchPathMode[], right: readonly GallerySearchPathMode[]): boolean {
+  return left.length === right.length && left.every((mode, index) => mode === right[index]);
+}
+
+/** 原子只含搜索（没有其它维度）时返回搜索项。 */
+function pureSearch(atom: GalleryFilterSet): GallerySearchTerm | null {
+  if (!hasSearch(atom)) return null;
+  const { search, ...rest } = atom;
+  return Object.values(rest).some((value) => value !== undefined) ? null : search!;
+}
+
+/** 高级条件的边界外壳 `~not/~not/…`：既不折叠，也不能被当成搜索里的取非。 */
+function isBoundaryShell(node: { not: GalleryQuery }): boolean {
+  const only = node.not.length === 1 ? node.not[0] : undefined;
+  return !!only && !isIsNode(only) && !isAnyNode(only);
+}
+
+function collectSearchModes(sequence: GalleryQuery, into: Set<GallerySearchPathMode>): void {
+  for (const node of sequence) {
+    if (isIsNode(node)) node.is.search?.modes.forEach((mode) => into.add(mode));
+    else if (isAnyNode(node)) node.any.forEach((branch) => collectSearchModes(branch, into));
+    else collectSearchModes(node.not, into);
   }
 }
 
 /**
- * `serializeSearchTerm` 多维度展开的逆：≥2 个分支、每支恰为只含单维度搜索的单原子、
- * 维度互异，且用同一词串按各维度重新序列化能逐字还原每一支 → 折叠回一个多维度搜索项。
- * 单分支组不折叠——那是 composeQueryFilters 保留高级原子边界的包装，不是多维度搜索。
+ * 或组里从 index 起的连续 |modes| 支，若恰好是「同一个词在各勾选维度上各一支」（按规范顺序），
+ * 返回这个词。词值取非标签那支——标签分支是按路径规整过的，未必能还原原词。
  */
-function foldAnySearch(branches: readonly GalleryQuery[]): GallerySearchTerm | null {
-  if (branches.length < 2) return null;
-  const parts: Array<{ mode: GallerySearchPathMode; query: string }> = [];
-  for (const branch of branches) {
+function termGroupAt(
+  branches: readonly GalleryQuery[],
+  index: number,
+  modes: readonly GallerySearchPathMode[],
+): string | null {
+  if (index + modes.length > branches.length) return null;
+  const values: Array<{ mode: GallerySearchPathMode; value: string }> = [];
+  for (const [offset, mode] of modes.entries()) {
+    const branch = branches[index + offset]!;
     const node = branch.length === 1 ? branch[0]! : null;
-    if (!node || !isIsNode(node)) return null;
-    const { search, ...rest } = node.is;
-    if (!search || !hasSearch(node.is) || search.modes.length !== 1) return null;
-    if (Object.keys(rest).length > 0) return null;
-    const mode = search.modes[0]!;
-    if (parts.some((part) => part.mode === mode)) return null;
-    parts.push({ mode, query: search.query });
+    const search = node && isIsNode(node) ? pureSearch(node.is) : null;
+    if (!search || !sameModes(searchTermModes(search), [mode])) return null;
+    const expr = searchTermExpr(search.query);
+    if (expr.kind !== "term") return null;
+    values.push({ mode, value: expr.value });
   }
-  // 标签词会被按路径规整，词串以非标签分支为准，才能无损还原其它分支。
-  const query = (parts.find((part) => !isLabelSearchMode(part.mode)) ?? parts[0]!).query;
-  const tokens = searchTokens(query);
-  const restorable = parts.every(
-    (part) => serializeModeChain(part.mode, searchTokens(part.query)) === serializeModeChain(part.mode, tokens),
-  );
-  if (!restorable) return null;
-  return makeSearchTerm(
-    parts.map((part) => part.mode),
-    query,
-  );
+  return (values.find((item) => !isLabelSearchMode(item.mode)) ?? values[0]!).value;
 }
 
+/** 在给定勾选维度下把一个节点读成搜索语法树；读不成返回 null。 */
+function interpretSearchNode(node: GalleryQueryNode, modes: readonly GallerySearchPathMode[]): SearchExpr | null {
+  if (isIsNode(node)) {
+    const search = pureSearch(node.is);
+    return search && sameModes(searchTermModes(search), modes) ? searchTermExpr(search.query) : null;
+  }
+  if (isAnyNode(node)) {
+    // 单分支组是旧版边界包装 / 归一化的隔离包装，搜索展开不会产生它。
+    if (node.any.length < 2) return null;
+    const items: SearchExpr[] = [];
+    for (let index = 0; index < node.any.length;) {
+      const value = modes.length > 1 ? termGroupAt(node.any, index, modes) : null;
+      if (value !== null) {
+        items.push({ kind: "term", value });
+        index += modes.length;
+        continue;
+      }
+      const item = interpretSearchSequence(node.any[index]!, modes);
+      if (!item) return null;
+      items.push(item);
+      index += 1;
+    }
+    return items.length === 1 ? items[0]! : { kind: "or", items };
+  }
+  if (isBoundaryShell(node)) return null;
+  const inner = interpretSearchSequence(node.not, modes);
+  return inner ? { kind: "not", item: inner } : null;
+}
+
+function interpretSearchSequence(sequence: GalleryQuery, modes: readonly GallerySearchPathMode[]): SearchExpr | null {
+  const items: SearchExpr[] = [];
+  for (const node of sequence) {
+    const item = interpretSearchNode(node, modes);
+    if (!item) return null;
+    items.push(item);
+  }
+  if (items.length === 0) return null;
+  return items.length === 1 ? items[0]! : { kind: "and", items };
+}
+
+/** `filter_comb` 只是回枢纽的连接段，不影响语义：比较路径时去掉。 */
+function withoutFilterComb(body: string): string {
+  return body
+    .split("/")
+    .filter((segment) => segment !== FILTER_COMB)
+    .join("/");
+}
+
+/**
+ * 一段连续节点 → 一个搜索项。勾选维度取段内所有搜索的并集，按它把节点读成语法树，
+ * 再要求重新序列化能逐段还原原路径——只有这样折叠才不改变语义。
+ */
+function foldSearchRun(run: GalleryQuery): GallerySearchTerm | null {
+  const collected = new Set<GallerySearchPathMode>();
+  collectSearchModes(run, collected);
+  const modes = canonicalSearchModes([...collected]);
+  if (modes.length === 0) return null;
+  const expr = interpretSearchSequence(run, modes);
+  if (!expr) return null;
+  const term = makeSearchTerm(modes, printSearchExpr(expr));
+  return withoutFilterComb(serializeSearchTerm(term)) === withoutFilterComb(serializeSequence(run).body) ? term : null;
+}
+
+function isSearchCandidate(node: GalleryQueryNode): boolean {
+  if (isIsNode(node)) return pureSearch(node.is) !== null;
+  if (isAnyNode(node)) return node.any.every((branch) => branch.every(isSearchCandidate));
+  return !isBoundaryShell(node) && node.not.every(isSearchCandidate);
+}
+
+/** 同一层上贪心找最长的可折叠段；单个原子本来就是搜索项，不必折。 */
+function foldSearchRuns(sequence: GalleryQuery): GalleryQuery {
+  const result: GalleryQuery = [];
+  let index = 0;
+  while (index < sequence.length) {
+    let limit = index;
+    while (limit < sequence.length && isSearchCandidate(sequence[limit]!)) limit += 1;
+    let folded: { term: GallerySearchTerm; end: number } | null = null;
+    for (let end = limit; end > index; end -= 1) {
+      if (end - index === 1 && isIsNode(sequence[index]!)) break;
+      const term = foldSearchRun(sequence.slice(index, end));
+      if (term) {
+        folded = { term, end };
+        break;
+      }
+    }
+    if (folded) {
+      result.push({ is: { search: folded.term } });
+      index = folded.end;
+    } else {
+      result.push(sequence[index]!);
+      index += 1;
+    }
+  }
+  return result;
+}
+
+/**
+ * 自底向上折叠整棵树。高级条件的边界外壳 `~not/~not/…` 原样保留、只折它里面的内容；
+ * 搜索语法树是规范形（无双重取非），不会产生这种外壳，两者不会混淆。
+ */
+function foldSearchTree(sequence: GalleryQuery): GalleryQuery {
+  const children = sequence.map((node): GalleryQueryNode => {
+    if (isIsNode(node)) return node;
+    if (isAnyNode(node)) return { any: node.any.map(foldSearchTree) };
+    if (isBoundaryShell(node)) {
+      const shell = node.not[0] as { not: GalleryQuery };
+      return { not: [{ not: foldSearchTree(shell.not) }] };
+    }
+    return { not: foldSearchTree(node.not) };
+  });
+  return foldSearchRuns(children);
+}
+
+/**
+ * 路径段 → 未折叠的查询：每个搜索段、每个维度 chunk 各成一个原子，组合器照实成树。
+ * 维度并入相邻原子交给 normalizeQuery，搜索段的折叠交给 foldSearchTree。
+ */
 function parseSequence(
   segments: readonly string[],
   start: number,
@@ -921,9 +1089,7 @@ function parseSequence(
         position += 1;
         break;
       }
-      const anySearch = foldAnySearch(branches);
-      if (anySearch) appendAtom(sequence, "search", { search: anySearch });
-      else sequence.push({ any: branches });
+      sequence.push({ any: branches });
       continue;
     }
     if (segment === "~not") {
@@ -944,9 +1110,10 @@ function parseSequence(
       const mode = segments[position + 1];
       const query = segments[position + 2];
       if (!isGallerySearchPathMode(mode) || query === undefined) return null;
-      appendAtom(sequence, "search", {
-        search: makeSearchTerm([mode], decodeUserSegment(query)),
-      });
+      // 路径段是字面词：打印成表达式，`,;()!` 等字符经转义保持字面。
+      const value = decodeUserSegment(query);
+      const expr = value ? printSearchExpr({ kind: "term", value }) : "";
+      sequence.push({ is: { search: makeSearchTerm([mode], expr) } });
       position += 3;
       continue;
     }
@@ -958,7 +1125,7 @@ function parseSequence(
       // 写回的路径悄悄少一个谓词。
       return null;
     }
-    appendAtom(sequence, parsed.dimension, singleFilterToSet(parsed.filter));
+    sequence.push({ is: singleFilterToSet(parsed.filter) });
     position = Math.max(position + 1, end);
   }
 
@@ -973,7 +1140,7 @@ export function parseQueryBody(segs: readonly string[]): GalleryQuery | null {
   const segments = joinEscapedSegments(segs);
   const parsed = parseSequence(segments, 0, false);
   if (!parsed || parsed.position !== segments.length) return null;
-  return normalizeQuery(parsed.sequence);
+  return normalizeQuery(foldSearchTree(parsed.sequence));
 }
 
 export function parseDimensionChunk(

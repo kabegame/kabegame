@@ -244,7 +244,12 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             id INTEGER PRIMARY KEY,
             data TEXT NOT NULL,
             plugin_version INTEGER NOT NULL DEFAULT 0,
-            plugin_id TEXT NOT NULL DEFAULT ''
+            plugin_id TEXT NOT NULL DEFAULT '',
+            search_text TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE image_metadata (
+            id INTEGER PRIMARY KEY,
+            search_text TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX idx_metadata_dedup
             ON metadata(plugin_id, plugin_version);
@@ -1039,6 +1044,26 @@ fn gallery_url_search_matches_real_url_columns_and_excludes_dummy_urls() {
         .fetch("images://gallery/search/url/dummy/all/x10x/1")
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn gallery_negated_search_keeps_rows_with_null_columns() {
+    // 前端 `!词` 展开成 `~not/search/<mode>/<词>/~end`。元数据两个范围靠 LEFT JOIN 取
+    // search_text，只有 1 号图有 metadata、没有图有原生元数据：谓词若在 NULL 列上求出
+    // NULL，取非后这些行会被整批丢掉。post_url 只有 122 号图有，靠 UDF 把 NULL 判成占位。
+    let runtime = build_runtime();
+    let total = runtime.count("images://gallery/all").unwrap();
+    for mode in ["display-name", "metadata", "native-metadata", "local-path", "url", "label"] {
+        assert_eq!(
+            runtime
+                .count(&format!(
+                    "images://gallery/~not/search/{mode}/zz-no-such-term/~end/all"
+                ))
+                .unwrap(),
+            total,
+            "!<未命中词> 在 {mode} 上应保留全部图片"
+        );
+    }
 }
 
 #[test]

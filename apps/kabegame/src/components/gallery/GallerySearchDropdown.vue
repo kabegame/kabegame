@@ -61,7 +61,10 @@
         </el-checkbox-group>
 
         <!-- 底部：这一次搜索会做什么（随输入与勾选实时变化） + 通用语法提示 -->
-        <p class="mb-0 mt-3 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-primary)]">
+        <p
+          class="mb-0 mt-3 w-0! min-w-full text-xs leading-5"
+          :class="parsedDraft.ok ? 'text-[var(--anime-text-primary)]' : 'text-[var(--anime-danger)]'"
+        >
           {{ summary }}
         </p>
         <p class="mb-0 mt-1 w-0! min-w-full text-xs leading-5 text-[var(--anime-text-secondary)]">
@@ -79,16 +82,13 @@ import { ElCheckbox, ElCheckboxGroup, ElIcon, ElTooltip, KbFilterDropdown } from
 import { QuestionFilled, Search } from "@kabegame/element-plus-icons";
 import KbText from "@/components/common/form/KbText.vue";
 import { IS_ANDROID } from "@/env";
-import {
-  canonicalSearchModes,
-  GALLERY_SEARCH_MODES,
-  searchTokens,
-  type GallerySearchPathMode,
-} from "@/utils/galleryPath";
+import { canonicalSearchModes, GALLERY_SEARCH_MODES, type GallerySearchPathMode } from "@/utils/galleryPath";
+import { parseSearchExpr, type SearchExpr } from "@/utils/searchExpr";
 
 /**
  * 搜索维度的 chip 下拉：chip 里显示勾选维度徽章 + 关键词，面板里输入 + 勾选维度。
- * 逗号分隔的词之间为 AND（各维度通用），勾选的维度之间为 OR。
+ * 输入是搜索表达式：`,` 且、`;` 或、前置 `!` 非、`()` 分组，`\` 转义或 `"…"` 表示字面量；
+ * 勾选的维度作用在每个词上（任一维度包含即算含）。语法错误的输入不提交，底部说明指出错处。
  * 画廊工具行与高级查询条件行共用一份——两边只差「要不要防抖」。
  */
 const props = withDefaults(
@@ -154,11 +154,19 @@ function commit(value: string) {
   if (props.query !== value) emit("update:query", value);
 }
 
+const parsedDraft = computed(() => parseSearchExpr(draft.value));
+
 function onInput(value: string) {
   draft.value = value;
   clearDebounce();
   // 清空立即生效：等 300ms 才撤销过滤会让人以为没点上。
-  if (!props.debounce || !value) {
+  if (!value) {
+    commit(value);
+    return;
+  }
+  // 语法错误（多半是还没打完，如 `(girl;`）不提交：保持上一次有效的查询。
+  if (!parseSearchExpr(value).ok) return;
+  if (!props.debounce) {
     commit(value);
     return;
   }
@@ -188,7 +196,8 @@ const someChecked = computed(() => props.selectedModes.length > 0 && !allChecked
 function emitModes(modes: readonly GallerySearchPathMode[]) {
   // 勾选变化立即生效：挂起的防抖输入一并带上，不再单独提交。
   clearDebounce();
-  emit("update:selectedModes", canonicalSearchModes(modes), draft.value);
+  // 输入框里是语法错误的草稿时沿用已生效的查询，不把错误输入带进路由。
+  emit("update:selectedModes", canonicalSearchModes(modes), parsedDraft.value.ok ? draft.value : props.query);
 }
 
 /** 可以全部取消：一个维度都不勾 = 不做搜索过滤。 */
@@ -244,29 +253,61 @@ function listLocale(value: string): string {
 /** 项目 lib 不含 ES2021 的 Intl.ListFormat 类型；运行时（CEF / Android WebView）都有。 */
 type ListFormatCtor = new (
   locale: string,
-  options: { type: "conjunction" },
+  options: { type: "conjunction" | "disjunction" },
 ) => { format(list: readonly string[]): string };
 
-function formatTerms(tokens: readonly string[]): string {
-  const quoted = tokens.map((term) => t("gallery.searchSummaryTerm", { term }));
+function formatList(items: readonly string[], type: "conjunction" | "disjunction"): string {
   const ListFormat = (Intl as unknown as { ListFormat?: ListFormatCtor }).ListFormat;
   try {
-    if (ListFormat) return new ListFormat(listLocale(String(locale.value)), { type: "conjunction" }).format(quoted);
+    if (ListFormat) return new ListFormat(listLocale(String(locale.value)), { type }).format(items);
   } catch {
-    /* 语言码不被识别：退回逗号连接 */
+    /* 语言码不被识别：退回分隔符连接 */
   }
-  return quoted.join(", ");
+  return items.join(type === "conjunction" ? ", " : " / ");
+}
+
+function quoteTerm(value: string): string {
+  return t("gallery.searchSummaryTerm", { term: value });
+}
+
+/** 语法树 → 一句话：词读作「含」/「不含」，嵌套的且 / 或组加括号，免得「和」「或」混读。 */
+function describeExpr(expr: SearchExpr, nested = false): string {
+  switch (expr.kind) {
+    case "term":
+      return t("gallery.searchSummaryHas", { term: quoteTerm(expr.value) });
+    case "not":
+      return expr.item.kind === "term"
+        ? t("gallery.searchSummaryLacks", { term: quoteTerm(expr.item.value) })
+        : t("gallery.searchSummaryNot", { expr: describeExpr(expr.item) });
+    case "and":
+    case "or": {
+      const text = formatList(
+        expr.items.map((item) => describeExpr(item, true)),
+        expr.kind === "and" ? "conjunction" : "disjunction",
+      );
+      return nested ? t("gallery.searchSummaryGroup", { terms: text }) : text;
+    }
+  }
+}
+
+function errorMessage(code: string): string {
+  return t(`gallery.searchExprError_${code}`);
 }
 
 /** 按当前输入（未提交的草稿也算）与勾选，说清这一次到底怎么搜。 */
 const summary = computed(() => {
+  const parsed = parsedDraft.value;
+  if (!parsed.ok) {
+    return t("gallery.searchSummaryError", {
+      position: parsed.error.position + 1,
+      message: errorMessage(parsed.error.code),
+    });
+  }
   if (props.selectedModes.length === 0) return t("gallery.searchSummaryNone");
   const modes = modesText.value;
-  const tokens = searchTokens(draft.value);
-  if (tokens.length === 0) return t("gallery.searchSummaryIdle", { modes });
-  const terms = formatTerms(tokens);
-  if (tokens.length === 1) return t("gallery.searchSummaryMatch", { modes, terms });
-  if (props.selectedModes.length === 1) return t("gallery.searchSummaryMatchAll", { modes, terms });
-  return t("gallery.searchSummaryMatchAllAny", { modes, terms });
+  if (!parsed.expr) return t("gallery.searchSummaryIdle", { modes });
+  const expr = describeExpr(parsed.expr);
+  if (props.selectedModes.length === 1) return t("gallery.searchSummaryExpr", { modes, expr });
+  return t("gallery.searchSummaryExprAny", { modes, expr });
 });
 </script>

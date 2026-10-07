@@ -12,7 +12,9 @@
             "on": "images.metadata_id = metadata_im.id",
             "in_need": true
         }],
-        "where": "LOWER(metadata_im.search_text) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
+        // LEFT JOIN 没有元数据时列为 NULL：COALESCE 成空串，保证 `~not` 取非时谓词为假而不是 NULL
+        // （NOT NULL 仍是 NULL，会把没有元数据的图整批排除）。
+        "where": "LOWER(COALESCE(metadata_im.search_text, '')) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
     },
     "resolve": {
         ".*": {

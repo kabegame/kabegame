@@ -11,6 +11,7 @@ import {
   splitQueryFilters,
   type GalleryFilterSet,
   type GalleryQuery,
+  type GallerySearchPathMode,
 } from "./galleryQuery";
 import { buildComposableContextPrefix, buildComposablePath, parseComposablePath } from "./galleryPath";
 
@@ -44,7 +45,7 @@ describe("简单 chip + 追加高级条件", () => {
       }),
     ).toBe(
       "plugin/pixiv/filter_comb/aspect/landscape-4x3-16x9/filter_comb/" +
-        "~any/search/native-metadata/sakura/~or/media-type/image/~end/sort/by-time/desc/1",
+        "~not/~not/~any/search/native-metadata/sakura/~or/media-type/image/~end/~end/~end/sort/by-time/desc/1",
     );
     expect(splitQueryFilters(roundTrip(query))).toEqual({ simple, advanced });
   });
@@ -72,6 +73,28 @@ describe("简单 chip + 追加高级条件", () => {
     expect(splitQueryFilters(roundTrip(composeQueryFilters({}, original.advanced)))).toEqual({ simple: {}, advanced });
     expect(splitQueryFilters(roundTrip(composeQueryFilters(original.simple, [])))).toEqual({ simple, advanced: [] });
     expect(composeQueryFilters({}, [])).toEqual([]);
+  });
+
+  it("旧版单分支 ~any 边界包装仍能拆回高级条件", () => {
+    const parsed = parseQueryBody("plugin/pixiv/filter_comb/~any/media-type/image/~end".split("/"));
+    expect(splitQueryFilters(parsed!)).toEqual({
+      simple: { plugin: { pluginId: "pixiv" } },
+      advanced: [{ is: { mediaType: { kind: "image" } } }],
+    });
+  });
+
+  it("高级条件里同维度搜索的 OR 组往返后不会并入简单 chip", () => {
+    const extra: GalleryQuery = [
+      {
+        any: [
+          [{ is: { search: { modes: ["url"], query: "a" } } }],
+          [{ is: { search: { modes: ["url"], query: "b" } } }],
+        ],
+      },
+    ];
+    const parts = splitQueryFilters(roundTrip(composeQueryFilters(simple, extra)));
+    expect(parts.simple).toEqual(simple);
+    expect(parts.advanced).toEqual([{ is: { search: { modes: ["url"], query: "a; b" } } }]);
   });
 
   it.each(["", "album/42", "task/42", "surf/example.com"])(
@@ -164,7 +187,8 @@ describe("多维度搜索（勾选维度之间 OR）", () => {
   it.each([
     "~any/search/url/a/~end",
     "~any/search/url/a/~or/search/metadata/b/~end",
-    "~any/search/url/a/~or/search/url/a/~end",
+    "~any/search/url/a/~or/search/metadata/a/~or/search/url/b/~end",
+    "~any/search/metadata/a/~or/search/url/a/~end",
     "~any/search/url/a/~or/search/metadata/a/media-type/image/~end",
     "~any/search/url/a/filter_comb/search/url/b/~or/search/metadata/a/~end",
   ])("不满足折叠条件时保持普通 OR 组：%s", (body) => {
@@ -195,11 +219,11 @@ describe("逗号 AND 语法（所有维度通用）", () => {
     expect(roundTrip(query)).toEqual(query);
   });
 
-  it("多维度：每个维度各自一条 AND 链，维度之间 OR", () => {
+  it("多维度：逐词跨维度——每个词任一维度命中即可，词之间 AND", () => {
     const query: GalleryQuery = [{ is: { search: makeSearchTerm(["label", "metadata"], "1girl, 1boy") } }];
     expect(serializeQueryBody(query).body).toBe(
-      "~any/search/metadata/1girl/filter_comb/search/metadata/1boy" +
-        "/~or/search/label/1girl/filter_comb/search/label/1boy/~end",
+      "~any/search/metadata/1girl/~or/search/label/1girl/~end" +
+        "/~any/search/metadata/1boy/~or/search/label/1boy/~end",
     );
     expect(roundTrip(query)).toEqual(query);
   });
@@ -207,10 +231,20 @@ describe("逗号 AND 语法（所有维度通用）", () => {
   it("标签词按路径规整后仍能与其它维度折叠回同一输入", () => {
     const query: GalleryQuery = [{ is: { search: makeSearchTerm(["display-name", "label"], "a / b, c") } }];
     expect(serializeQueryBody(query).body).toBe(
-      "~any/search/display-name/a%20%5C%2F%20b/filter_comb/search/display-name/c" +
-        "/~or/search/label/a%5C%2Fb/filter_comb/search/label/c/~end",
+      "~any/search/display-name/a%20%5C%2F%20b/~or/search/label/a%5C%2Fb/~end" +
+        "/~any/search/display-name/c/~or/search/label/c/~end",
     );
     expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("旧版多维度逗号链（同一维度内同时命中）不再能写成搜索词，保留为普通条件、语义不变", () => {
+    const body =
+      "~any/search/metadata/1girl/filter_comb/search/metadata/1boy" +
+      "/~or/search/label/1girl/filter_comb/search/label/1boy/~end";
+    const parsed = parseQueryBody(body.split("/"));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.every((node) => "any" in node)).toBe(true);
+    expect(serializeQueryBody(parsed!).body).toBe(body);
   });
 
   it("不同维度的搜索段不会被并成一个词串", () => {
@@ -222,5 +256,124 @@ describe("逗号 AND 语法（所有维度通用）", () => {
 
   it("label-tree 不再是合法模式", () => {
     expect(parseQueryBody("search/label-tree/character".split("/"))).toBeNull();
+  });
+});
+
+describe("分号 OR 关键字组", () => {
+  it("单维度：每组一条 AND 链，组之间 OR", () => {
+    const query: GalleryQuery = [{ is: { search: { modes: ["metadata"], query: "1girl, 1boy; cat" } } }];
+    expect(serializeQueryBody(query).body).toBe(
+      "~any/search/metadata/1girl/filter_comb/search/metadata/1boy/~or/search/metadata/cat/~end",
+    );
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("多维度：按组优先、组内按维度规范顺序平铺进同一个 OR 组", () => {
+    const query: GalleryQuery = [
+      { is: { search: makeSearchTerm(["label", "display-name"], "a / b; c"), plugin: { pluginId: "pixiv" } } },
+    ];
+    expect(serializeQueryBody(query).body).toBe(
+      "~any/search/display-name/a%20%5C%2F%20b/~or/search/label/a%5C%2Fb" +
+        "/~or/search/display-name/c/~or/search/label/c/~end/plugin/pixiv",
+    );
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("空组被丢弃；只有一组时与无分号的形态逐字一致", () => {
+    const term = makeSearchTerm(["url"], " ; a, b ;");
+    expect(serializeQueryBody([{ is: { search: term } }]).body).toBe("search/url/a/filter_comb/search/url/b");
+  });
+
+  it("只剩分隔符时退化为字面逗号，不变成全集", () => {
+    expect(serializeQueryBody([{ is: { search: makeSearchTerm(["url"], ";,;") } }]).body).toBe("search/url/%2C");
+  });
+
+  it("作为高级条件时双重取非包装保留边界", () => {
+    const term = makeSearchTerm(["display-name", "url"], "a; b, c");
+    const extra: GalleryQuery = [{ is: { search: term } }];
+    const parts = splitQueryFilters(roundTrip(composeQueryFilters(simple, extra)));
+    expect(parts).toEqual({ simple, advanced: extra });
+  });
+});
+
+describe("搜索表达式（! 非、() 分组、转义）", () => {
+  const term = (modes: GallerySearchPathMode[], query: string): GalleryQuery => [
+    { is: { search: makeSearchTerm(modes, query) } },
+  ];
+
+  it("单维度：(girl; boy), cute, !genshin", () => {
+    const query = term(["label"], "(girl; boy), cute, !genshin");
+    expect(serializeQueryBody(query).body).toBe(
+      "~any/search/label/girl/~or/search/label/boy/~end/search/label/cute/filter_comb/~not/search/label/genshin/~end",
+    );
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("多维度：!词 = 所有勾选维度都不含，取非包住整个维度 OR", () => {
+    const query = term(["display-name", "label"], "cute, !genshin");
+    expect(serializeQueryBody(query).body).toBe(
+      "~any/search/display-name/cute/~or/search/label/cute/~end" +
+        "/~not/~any/search/display-name/genshin/~or/search/label/genshin/~end/~end",
+    );
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("取非或组写成 ~not/~any/…/~end/~end（~not 内不直接出现 ~or）", () => {
+    const query = term(["url"], "!(a; b)");
+    expect(serializeQueryBody(query).body).toBe("~not/~any/search/url/a/~or/search/url/b/~end/~end");
+    expect(roundTrip(query)).toEqual(query);
+  });
+
+  it("双重取非在输入层抵消，不会长成高级条件边界", () => {
+    const body = serializeQueryBody(term(["url"], "!!a")).body;
+    expect(body).toBe("search/url/a");
+    expect(serializeQueryBody(term(["url"], "!(!a, b)")).body).toBe("~not/~not/search/url/a/~end/search/url/b/~end");
+  });
+
+  it("!(!a, b) 作为简单搜索往返后仍是简单 chip，不被当成边界", () => {
+    const query: GalleryQuery = [
+      { is: { search: makeSearchTerm(["url"], "!(!a, b)"), plugin: { pluginId: "pixiv" } } },
+    ];
+    expect(roundTrip(query)).toEqual(query);
+    expect(splitQueryFilters(roundTrip(query))).toEqual({
+      simple: query[0] && "is" in query[0] ? query[0].is : {},
+      advanced: [],
+    });
+  });
+
+  it("简单搜索 + 高级搜索：各自的取非与边界互不干扰", () => {
+    const base: GalleryFilterSet = { search: makeSearchTerm(["label"], "cute, !genshin") };
+    for (const extra of [
+      term(["url"], "a"),
+      term(["url"], "!a"),
+      term(["display-name", "url"], "!(a; b), c"),
+      [{ not: term(["url"], "x") }] as GalleryQuery,
+    ]) {
+      const parts = splitQueryFilters(roundTrip(composeQueryFilters(base, extra)));
+      expect(parts.simple).toEqual(base);
+      expect(normalizeQuery(parts.advanced).length).toBeGreaterThan(0);
+      expect(serializeQueryBody(parts.advanced).body).toBe(serializeQueryBody(extra).body);
+    }
+  });
+
+  it("词里的特殊字符经转义保持字面，路径段里是原字符", () => {
+    const query = term(["local-path"], "Foo (1).jpg, a\\,b, \\!x");
+    expect(serializeQueryBody(query).body).toBe(
+      "search/local-path/Foo%20(1).jpg/filter_comb/search/local-path/a%2Cb/filter_comb/search/local-path/!x",
+    );
+    expect(roundTrip(query)).toEqual(query);
+    // 旧路径里带字面 `,` 的词折回时被转义，不会被拆成两个词。
+    expect(parseQueryBody(["search", "url", "a%2Cb"])).toEqual(term(["url"], "a\\,b"));
+  });
+
+  it("语法错误的外部输入整串按字面词处理，不会变成全集", () => {
+    expect(serializeQueryBody(term(["url"], "(a; b")).body).toBe("search/url/(a%3B%20b");
+  });
+
+  it("用户在高级里手搭的同维度搜索 OR / NOT 组会折成搜索词，语义不变", () => {
+    const body = "~any/search/url/a/~or/~not/search/url/b/~end/~end";
+    const parsed = parseQueryBody(body.split("/"));
+    expect(parsed).toEqual(term(["url"], "a; !b"));
+    expect(serializeQueryBody(parsed!).body).toBe(body);
   });
 });
