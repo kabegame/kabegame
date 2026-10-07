@@ -221,5 +221,6 @@
     "importAllPresetsSuccess": "{success} 件の実行設定をインポートしました",
     "importAllPresetsPartial": "{success} 件をインポート、{failed} 件失敗しました"
   },
-  "saveAsConfig": "設定として保存"
+  "saveAsConfig": "設定として保存",
+  "metadataMigrationFailed": "{name} のデータ移行に失敗しました"
 }

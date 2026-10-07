@@ -32,5 +32,6 @@
   "cleanHiddenInProgress": "进行中",
   "cleanHiddenEmpty": "没有隐藏图片",
   "albumTree": "画册树",
-  "albumInfo": "画册信息"
+  "albumInfo": "画册信息",
+  "metadataMigrationTitle": "迁移插件数据"
 }

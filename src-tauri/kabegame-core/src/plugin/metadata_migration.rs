@@ -5,18 +5,184 @@ use crate::emitter::GlobalEmitter;
 use crate::ipc::events::ImagePatch;
 use crate::storage::labels::{validate_labels, LabelInput};
 use crate::storage::Storage;
-use std::collections::{BTreeMap, HashSet};
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataMigrationTaskState {
+    pub plugin_id: String,
+    pub total: usize,
+    pub processed: usize,
+    pub started_at_ms: u64,
+}
+
+#[derive(Default)]
+pub struct MetadataMigrationService {
+    tasks: Mutex<HashMap<String, MetadataMigrationTaskState>>,
+    /// 同插件运行中再次触发时保留最新插件，当前轮结束后续跑一次。
+    pending: Mutex<HashMap<String, Plugin>>,
+    runners: Mutex<HashSet<String>>,
+}
+
+static METADATA_MIGRATION_SERVICE: OnceLock<MetadataMigrationService> = OnceLock::new();
+
+impl MetadataMigrationService {
+    pub fn global() -> &'static Self {
+        METADATA_MIGRATION_SERVICE.get_or_init(Self::default)
+    }
+
+    pub fn snapshot(&self) -> Vec<MetadataMigrationTaskState> {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        tasks.sort_by(|a, b| {
+            a.started_at_ms
+                .cmp(&b.started_at_ms)
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+        });
+        tasks
+    }
+
+    fn schedule(&self, plugin: Plugin) -> bool {
+        let mut runners = self
+            .runners
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if runners.contains(&plugin.id) {
+            self.pending
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(plugin.id.clone(), plugin);
+            return false;
+        }
+        runners.insert(plugin.id.clone());
+        true
+    }
+
+    fn take_pending_or_finish_runner(&self, plugin_id: &str) -> Option<Plugin> {
+        let mut runners = self
+            .runners
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(plugin_id);
+        if pending.is_none() {
+            runners.remove(plugin_id);
+        }
+        pending
+    }
+
+    fn begin(&self, plugin_id: &str, total: usize) -> MetadataMigrationRunGuard<'_> {
+        let started_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.tasks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                plugin_id.to_string(),
+                MetadataMigrationTaskState {
+                    plugin_id: plugin_id.to_string(),
+                    total,
+                    processed: 0,
+                    started_at_ms,
+                },
+            );
+        GlobalEmitter::global().emit_busy_tasks_change("metadataMigration");
+        MetadataMigrationRunGuard {
+            service: self,
+            plugin_id: plugin_id.to_string(),
+            finished: false,
+        }
+    }
+
+    fn advance(&self, plugin_id: &str) {
+        if let Some(task) = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(plugin_id)
+        {
+            task.processed = (task.processed + 1).min(task.total);
+        }
+    }
+
+    fn finish(&self, plugin_id: &str, error: Option<String>) {
+        let Some(task) = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|lock_error| lock_error.into_inner())
+            .remove(plugin_id)
+        else {
+            return;
+        };
+        GlobalEmitter::global().emit(
+            "metadata-migration-finished",
+            serde_json::json!({
+                "pluginId": task.plugin_id,
+                "total": task.total,
+                "processed": task.processed,
+                "error": error,
+            }),
+        );
+    }
+}
+
+struct MetadataMigrationRunGuard<'a> {
+    service: &'a MetadataMigrationService,
+    plugin_id: String,
+    finished: bool,
+}
+
+impl MetadataMigrationRunGuard<'_> {
+    fn finish(mut self, error: Option<String>) {
+        self.service.finish(&self.plugin_id, error);
+        self.finished = true;
+    }
+}
+
+impl Drop for MetadataMigrationRunGuard<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.service
+                .finish(&self.plugin_id, Some("aborted".to_string()));
+        }
+    }
+}
 
 pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
     if plugin.metadata_migration.is_none() {
         return;
     }
+    let service = MetadataMigrationService::global();
+    if !service.schedule(plugin.clone()) {
+        return;
+    }
     tokio::task::spawn_blocking(move || {
-        if let Err(e) = run_metadata_migrations_for_plugin(&plugin) {
-            eprintln!(
-                "[metadata-migration] plugin `{}` migration runner failed: {}",
-                plugin.id, e
-            );
+        let plugin_id = plugin.id.clone();
+        let mut current = plugin;
+        loop {
+            if let Err(error) = run_metadata_migrations_for_plugin(&current) {
+                eprintln!(
+                    "[metadata-migration] plugin `{}` migration runner failed: {}",
+                    current.id, error
+                );
+            }
+            let Some(next) = service.take_pending_or_finish_runner(&plugin_id) else {
+                break;
+            };
+            current = next;
         }
     });
 }
@@ -36,6 +202,8 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
         return Ok(false);
     }
 
+    let service = MetadataMigrationService::global();
+    let run_guard = service.begin(&plugin.id, rows.len());
     let plugin_id = plugin.id.clone();
     let script = script.to_string();
     // The migration engine owns a single-threaded `JsRuntime`, so the async body
@@ -43,9 +211,24 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
     // here from a `spawn_blocking` worker, where `Handle::current()` is valid and
     // `block_on` is permitted.
     let storage = Storage::global();
-    let (changed, _touched_albums, image_patches) = tokio::runtime::Handle::current().block_on(
-        run_metadata_migrations(storage, &plugin_id, target, &script, rows),
-    )?;
+    let result = tokio::runtime::Handle::current().block_on(run_metadata_migrations(
+        storage,
+        &plugin_id,
+        target,
+        &script,
+        rows,
+        || service.advance(&plugin_id),
+    ));
+    let (changed, _touched_albums, image_patches) = match result {
+        Ok(result) => {
+            run_guard.finish(None);
+            result
+        }
+        Err(error) => {
+            run_guard.finish(Some(error.clone()));
+            return Err(error);
+        }
+    };
 
     if let Some(emitter) = GlobalEmitter::try_global() {
         if changed {
@@ -67,6 +250,7 @@ async fn run_metadata_migrations(
     target: u32,
     script: &str,
     rows: Vec<(i64, String, u32)>,
+    mut on_row_done: impl FnMut(),
 ) -> Result<(bool, Vec<String>, Vec<ImagePatch>), String> {
     let mut engine = MigrationEngine::new();
     let exports = match engine.load_script(script).await {
@@ -164,6 +348,7 @@ async fn run_metadata_migrations(
                 }
             }
         }
+        on_row_done();
     }
     let image_patches = image_patch_groups
         .into_iter()
@@ -333,7 +518,8 @@ impl MigrationEngine {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, Mutex};
 
     /// Migration engines drive their `JsRuntime` with `block_on`, which panics on
     /// an async worker thread. Run each case on a blocking-pool thread, mirroring
@@ -379,7 +565,12 @@ mod tests {
                 .unwrap();
             tokio::runtime::Handle::current()
                 .block_on(run_metadata_migrations(
-                    &storage, "demo", target, &script, rows,
+                    &storage,
+                    "demo",
+                    target,
+                    &script,
+                    rows,
+                    || {},
                 ))
                 .unwrap()
         })
@@ -393,6 +584,73 @@ mod tests {
             |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u32)),
         )
         .unwrap()
+    }
+
+    fn test_plugin(version_packed: u32) -> Plugin {
+        let mut plugin: Plugin = serde_json::from_value(serde_json::json!({
+            "id": "demo",
+            "name": { "default": "Demo" },
+            "description": { "default": "Demo" },
+            "version": "1.0.0",
+            "baseUrl": "https://example.com",
+            "sizeBytes": 0,
+            "config": {},
+            "scriptType": "v8",
+            "minAppIncompatible": false
+        }))
+        .unwrap();
+        plugin.metadata_migration =
+            Some("export function migrate(input) { return input; }".to_string());
+        plugin.version_packed = version_packed;
+        plugin
+    }
+
+    #[test]
+    fn on_row_done_runs_once_per_written_row() {
+        let storage = test_storage(3);
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&count);
+        run_blocking(move || {
+            let rows = storage
+                .metadata_rows_below_plugin_version("demo", 2)
+                .unwrap();
+            tokio::runtime::Handle::current()
+                .block_on(run_metadata_migrations(
+                    &storage,
+                    "demo",
+                    2,
+                    "export function migrate(input) { return input; }",
+                    rows,
+                    || {
+                        observed.fetch_add(1, Ordering::Relaxed);
+                    },
+                ))
+                .unwrap();
+        });
+        assert_eq!(count.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn concurrent_spawn_schedules_one_runner_and_one_pending_rerun() {
+        let service = Arc::new(MetadataMigrationService::default());
+        let barrier = Arc::new(Barrier::new(3));
+        let mut handles = Vec::new();
+        for version in [1, 2] {
+            let service = Arc::clone(&service);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                service.schedule(test_plugin(version))
+            }));
+        }
+        barrier.wait();
+        let started = handles
+            .into_iter()
+            .map(|handle| usize::from(handle.join().unwrap()))
+            .sum::<usize>();
+        assert_eq!(started, 1);
+        assert!(service.take_pending_or_finish_runner("demo").is_some());
+        assert!(service.take_pending_or_finish_runner("demo").is_none());
     }
 
     #[test]

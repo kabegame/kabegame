@@ -70,6 +70,7 @@ impl HiddenCleanupService {
             self.clear_running();
             return Err(error);
         }
+        GlobalEmitter::global().emit_busy_tasks_change("hiddenCleanup");
 
         let handle = tokio::runtime::Handle::current();
         let service = Arc::clone(&self);
@@ -155,7 +156,7 @@ fn run_hidden_cleanup(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
     cancel: Arc<AtomicBool>,
-    total: usize,
+    _total: usize,
     service: Arc<HiddenCleanupService>,
 ) -> Result<(), String> {
     let mut processed = 0usize;
@@ -200,7 +201,6 @@ fn run_hidden_cleanup(
         kept_files += purge.kept;
 
         service.update_run_state(processed, removed, kept_files);
-        GlobalEmitter::global().emit_hidden_cleanup_progress(processed, total, removed, kept_files);
     }
 
     GlobalEmitter::global().emit_hidden_cleanup_finished(removed, kept_files, false, None);

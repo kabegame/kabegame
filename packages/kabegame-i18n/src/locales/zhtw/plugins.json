@@ -221,5 +221,6 @@
     "importAllPresetsSuccess": "已匯入 {success} 項執行配置",
     "importAllPresetsPartial": "已匯入 {success} 項，{failed} 項匯入失敗"
   },
-  "saveAsConfig": "儲存為設定"
+  "saveAsConfig": "儲存為設定",
+  "metadataMigrationFailed": "{name} 的資料遷移失敗"
 }

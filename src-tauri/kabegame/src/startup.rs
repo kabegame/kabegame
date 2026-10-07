@@ -19,6 +19,8 @@ use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 #[cfg(feature = "standard")]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+#[cfg(all(target_os = "android", not(feature = "web")))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
@@ -387,6 +389,50 @@ async fn refresh_notifications<R: Runtime>(app: &AppHandle<R>) {
         .await;
 }
 
+#[cfg(all(target_os = "android", not(feature = "web")))]
+static DOWNLOAD_NOTIFICATION_TICKER_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 下载进度不再依赖高频事件；首个状态事件启动单例 ticker，空闲后自行退出。
+#[cfg(all(target_os = "android", not(feature = "web")))]
+fn ensure_notification_ticker<R: Runtime>(app: AppHandle<R>) {
+    if DOWNLOAD_NOTIFICATION_TICKER_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            refresh_notifications(&app).await;
+            let has_active = TaskScheduler::global()
+                .download_queue()
+                .get_active_downloads()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .any(|download| !download.state.is_terminal());
+            if !has_active {
+                DOWNLOAD_NOTIFICATION_TICKER_RUNNING.store(false, Ordering::Release);
+
+                // 与状态事件并发退出时再确认一次：若事件已启动新 ticker，则当前任务退出；
+                // 若尚无人接手但队列又出现活动项，则当前任务重新取得所有权并继续。
+                let became_active = TaskScheduler::global()
+                    .download_queue()
+                    .get_active_downloads()
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .any(|download| !download.state.is_terminal());
+                if !became_active
+                    || DOWNLOAD_NOTIFICATION_TICKER_RUNNING
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+}
+
 pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
     #[cfg(not(feature = "web"))] app: AppHandle<R>,
 ) {
@@ -475,15 +521,15 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                 _ => {}
             }
 
-            // Android:下载事件追加副作用驱动通知刷新(emit 已在上面统一做过,前端 TaskDrawer 照常)。
+            // Android：状态变更立即刷新；非终态进度由后端 1s ticker 读取快照。
             #[cfg(all(target_os = "android", not(feature = "web")))]
-            if matches!(
-                &*event,
-                AppEvent::DownloadState { .. }
-                    | AppEvent::DownloadProgress { .. }
-                    | AppEvent::DownloadRemoved { .. }
-            ) {
-                refresh_notifications(&app).await;
+            match &*event {
+                AppEvent::DownloadState { .. } => {
+                    refresh_notifications(&app).await;
+                    ensure_notification_ticker(app.clone());
+                }
+                AppEvent::DownloadRemoved { .. } => refresh_notifications(&app).await,
+                _ => {}
             }
         }
     };

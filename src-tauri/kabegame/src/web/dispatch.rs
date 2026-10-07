@@ -1221,19 +1221,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_folder_sync_run_state",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    kabegame_core::commands::album::get_folder_sync_run_state()
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "cancel_folder_sync",
         MethodEntry {
             requires_super: true,
@@ -2104,19 +2091,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_organize_run_state",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    kabegame_core::commands::organize::get_organize_run_state()
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "cancel_organize",
         MethodEntry {
             requires_super: true,
@@ -2145,12 +2119,12 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "get_hidden_cleanup_run_state",
+        "get_busy_tasks_snapshot",
         MethodEntry {
             requires_super: false,
             handler: Arc::new(|_p| {
                 Box::pin(async move {
-                    kabegame_core::commands::hidden_cleanup::get_hidden_cleanup_run_state()
+                    kabegame_core::commands::busy_tasks::get_busy_tasks_snapshot()
                         .map_err(RpcError::internal)
                 })
             }),

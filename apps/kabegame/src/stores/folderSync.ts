@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
-/** 与 `folder-sync-progress` 及运行态快照中的单个任务字段一致。 */
+/** 文件夹同步运行态快照中的单个任务字段。 */
 export interface FolderSyncTask {
   albumId: string;
   albumName: string;
@@ -35,12 +35,6 @@ export const useFolderSyncStore = defineStore("folderSync", () => {
   const lastError = ref<string | null>(null);
   const runningCount = computed(() => tasks.value.size);
 
-  function applyProgress(task: FolderSyncTask) {
-    const next = new Map(tasks.value);
-    next.set(task.albumId, { ...task });
-    tasks.value = next;
-  }
-
   function applyFinished(payload: FolderSyncFinished) {
     const next = new Map(tasks.value);
     next.delete(payload.albumId);
@@ -60,7 +54,6 @@ export const useFolderSyncStore = defineStore("folderSync", () => {
     tasks,
     lastError,
     runningCount,
-    applyProgress,
     applyFinished,
     applyRunState,
     clearError,

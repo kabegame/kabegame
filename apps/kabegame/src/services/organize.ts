@@ -1,20 +1,14 @@
 //! 图库整理服务（前端镜像编排）。
 //!
-//! 运行状态由后端 `OrganizeService` 权威维护；本模块负责 hydrate、事件订阅、
+//! 运行状态由后端 `OrganizeService` 权威维护；本模块负责完成事件订阅、
 //! 用户操作转发，以及整理任务的所有 toast。
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { i18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import {
-  useOrganizeStore,
-  type OrganizeFinished,
-  type OrganizeOptions,
-  type OrganizeProgress,
-  type OrganizeRunState,
-} from "@/stores/organize";
+import { useOrganizeStore, type OrganizeFinished, type OrganizeOptions } from "@/stores/organize";
+import { busyPoller } from "@/services/busyTasks";
 
-let unlistenProgress: UnlistenFn | null = null;
 let unlistenFinished: UnlistenFn | null = null;
 
 function errorMessage(error: unknown): string {
@@ -25,17 +19,9 @@ function errorMessage(error: unknown): string {
 
 export async function init(): Promise<void> {
   const store = useOrganizeStore();
-  try {
-    store.applyRunState(await invoke<OrganizeRunState>("get_organize_run_state"));
-  } catch (error) {
-    console.warn("[organize] get_organize_run_state failed:", error);
-  }
-
-  unlistenProgress = await listen<OrganizeProgress>("organize-progress", (event) => {
-    store.applyProgress(event.payload);
-  });
   unlistenFinished = await listen<OrganizeFinished>("organize-finished", (event) => {
     const payload = event.payload;
+    busyPoller.invalidate();
     store.applyFinished(payload);
     if (payload.error) {
       ElMessage.error(i18n.global.t("gallery.organizeFailed"));
@@ -53,9 +39,8 @@ export async function init(): Promise<void> {
 }
 
 export function dispose(): void {
-  unlistenProgress?.();
   unlistenFinished?.();
-  unlistenProgress = unlistenFinished = null;
+  unlistenFinished = null;
 }
 
 export async function start(options: OrganizeOptions): Promise<void> {
@@ -88,6 +73,9 @@ export async function start(options: OrganizeOptions): Promise<void> {
       error: errorMessage(error),
     });
     ElMessage.error(i18n.global.t("gallery.startOrganizeFailed"));
+  } finally {
+    store.endStarting();
+    busyPoller.invalidate();
   }
 }
 

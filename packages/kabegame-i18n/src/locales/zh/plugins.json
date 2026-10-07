@@ -221,5 +221,6 @@
     "importAllPresetsSuccess": "已导入 {success} 项运行配置",
     "importAllPresetsPartial": "已导入 {success} 项，{failed} 项导入失败"
   },
-  "saveAsConfig": "保存为配置"
+  "saveAsConfig": "保存为配置",
+  "metadataMigrationFailed": "{name} 的数据迁移失败"
 }

@@ -1,18 +1,13 @@
 //! 文件夹画册同步服务（前端运行态镜像与 toast）。
 
-import { invoke, listen, type UnlistenFn } from "@/api/rpc";
+import { listen, type UnlistenFn } from "@/api/rpc";
 import { cancelFolderSync } from "@/api/syncLocalFolder";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { i18n } from "@kabegame/i18n";
-import {
-  type FolderSyncFinished,
-  type FolderSyncRunState,
-  type FolderSyncTask,
-  useFolderSyncStore,
-} from "@/stores/folderSync";
+import { type FolderSyncFinished, useFolderSyncStore } from "@/stores/folderSync";
+import { busyPoller } from "@/services/busyTasks";
 
-let unlistenProgress: UnlistenFn | null = null;
 let unlistenFinished: UnlistenFn | null = null;
 
 function disabled(): boolean {
@@ -22,17 +17,9 @@ function disabled(): boolean {
 export async function init(): Promise<void> {
   if (disabled()) return;
   const store = useFolderSyncStore();
-  try {
-    store.applyRunState(await invoke<FolderSyncRunState>("get_folder_sync_run_state"));
-  } catch (error) {
-    console.warn("[folderSync] get_folder_sync_run_state failed:", error);
-  }
-
-  unlistenProgress = await listen<FolderSyncTask>("folder-sync-progress", (event) => {
-    store.applyProgress(event.payload);
-  });
   unlistenFinished = await listen<FolderSyncFinished>("folder-sync-finished", (event) => {
     const payload = event.payload;
+    busyPoller.invalidate();
     store.applyFinished(payload);
     if (payload.preempted) return;
     if (payload.error) {
@@ -74,9 +61,8 @@ export async function init(): Promise<void> {
 }
 
 export function dispose(): void {
-  unlistenProgress?.();
   unlistenFinished?.();
-  unlistenProgress = unlistenFinished = null;
+  unlistenFinished = null;
 }
 
 /**

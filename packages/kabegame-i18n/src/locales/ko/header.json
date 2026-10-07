@@ -32,5 +32,6 @@
   "cleanHiddenInProgress": "진행 중",
   "cleanHiddenEmpty": "숨김 이미지가 없습니다",
   "albumTree": "앨범 트리",
-  "albumInfo": "앨범 정보"
+  "albumInfo": "앨범 정보",
+  "metadataMigrationTitle": "플러그인 데이터 마이그레이션"
 }

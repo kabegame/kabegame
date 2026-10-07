@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
-/** 与后端 `hidden-cleanup-progress` 事件字段一致。 */
+/** 隐藏清理运行态快照中的进度字段。 */
 export interface HiddenCleanupProgress {
   processed: number;
   total: number;
@@ -10,7 +10,7 @@ export interface HiddenCleanupProgress {
   keptFiles: number;
 }
 
-/** 与后端 `get_hidden_cleanup_run_state` 返回值一致。 */
+/** 与后端聚合忙碌任务快照中的隐藏清理字段一致。 */
 export interface HiddenCleanupRunState extends HiddenCleanupProgress {
   running: boolean;
 }
@@ -30,12 +30,13 @@ const emptyProgress = (): HiddenCleanupProgress => ({
   keptFiles: 0,
 });
 
-/** 清理隐藏图片任务的前端镜像；后端运行态通过 service hydrate 与事件持续同步。 */
+/** 清理隐藏图片任务的前端镜像；后端运行态通过快照轮询同步。 */
 export const useHiddenCleanupStore = defineStore("hiddenCleanup", () => {
   const running = ref(false);
   const progress = ref<HiddenCleanupProgress>(emptyProgress());
   const startedAtMs = ref<number | null>(null);
   const lastError = ref<string | null>(null);
+  const starting = ref(false);
 
   const progressPercentage = computed(() => {
     const p = progress.value;
@@ -43,21 +44,11 @@ export const useHiddenCleanupStore = defineStore("hiddenCleanup", () => {
     return Math.max(0, Math.min(100, Math.round((p.processed / p.total) * 100)));
   });
 
-  function applyProgress(payload: Partial<HiddenCleanupProgress>) {
-    if (!running.value) {
-      running.value = true;
-      startedAtMs.value ??= Date.now();
-    }
-    const current = progress.value;
-    progress.value = {
-      processed: payload.processed ?? current.processed,
-      total: payload.total ?? current.total,
-      removed: payload.removed ?? current.removed,
-      keptFiles: payload.keptFiles ?? current.keptFiles,
-    };
-  }
-
   function applyFinished(payload: HiddenCleanupFinished) {
+    if (!running.value) {
+      lastError.value = payload.error || null;
+      return;
+    }
     progress.value = {
       ...progress.value,
       removed: payload.removed ?? progress.value.removed,
@@ -69,6 +60,7 @@ export const useHiddenCleanupStore = defineStore("hiddenCleanup", () => {
   }
 
   function applyRunState(state: HiddenCleanupRunState) {
+    if (!state.running && starting.value) return;
     const wasRunning = running.value;
     running.value = !!state.running;
     progress.value = {
@@ -81,10 +73,15 @@ export const useHiddenCleanupStore = defineStore("hiddenCleanup", () => {
   }
 
   function begin(total: number) {
+    starting.value = true;
     running.value = true;
     progress.value = { ...emptyProgress(), total };
     startedAtMs.value = Date.now();
     lastError.value = null;
+  }
+
+  function endStarting() {
+    starting.value = false;
   }
 
   function clearError() {
@@ -96,11 +93,12 @@ export const useHiddenCleanupStore = defineStore("hiddenCleanup", () => {
     progress,
     startedAtMs,
     lastError,
+    starting,
     progressPercentage,
-    applyProgress,
     applyFinished,
     applyRunState,
     begin,
+    endStarting,
     clearError,
   };
 });

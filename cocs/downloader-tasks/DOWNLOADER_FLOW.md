@@ -31,13 +31,13 @@ JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通�
 |------|------|
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | downloader 模块门面；scheme downloader trait/注册表；`download_with_retry`；下载间隔 helper；统一 `postprocess_downloaded_image`；`DownloadSink` / `DownloadOutcome` / `PostprocessSource` 定义；最终目标路径与 Android Pictures copy / content URI 入库 |
 | `src-tauri/kabegame-core/src/crawler/downloader/queue.rs` | `DownloadQueue`、下载池、统一 active download 状态机、CEF worker 分派与完成 oneshot、worker loop、URL 前置去重、失败记录 upsert、任务图片计数快照 |
-| `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度事件、请求头处理 |
+| `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度快照、请求头处理 |
 | `src-tauri/kabegame-core/src/crawler/downloader/task_vfs.rs` | `task-vfs://` scheme downloader；校验当前任务 handle 后从 `PluginVfs` 分块读取并写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
 | `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助 |
 | `src-tauri/kabegame-core/src/storage/source_purge.rs`、`safe_delete.rs` | 图库源文件清除唯一入口；桌面回收站护栏、分块与逐条降级；Android MediaStore / 普通路径分流 |
-| `src-tauri/kabegame-core/src/storage/hidden_cleanup.rs` | 隐藏画册分批清理服务、运行状态、取消与进度/完成事件 |
+| `src-tauri/kabegame-core/src/storage/hidden_cleanup.rs` | 隐藏画册分批清理服务、运行状态快照、取消与完成事件 |
 | `src-tauri/kabegame-core/src/plugin/vfs.rs`、`src-tauri/kabegame-core/src/plugin/ffmpeg.rs` | 任务/会话虚拟路径安全边界；虚拟路径上的显式媒体合流与探测 |
 | `src-tauri/kabegame/src/webview_js/media_capture.js`、`src-tauri/kabegame/src/webview_js/media_download.js` | 捕获 Blob/MSE；以 Raw IPC 分块写入会话 VFS、显式合流并提交 |
 | `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs`、`src-tauri/kabegame/src/commands/surf_session.rs` | 桌面 WebView/CEF 下载投递与回传；fs/ffmpeg 命令按窗口 label 选择 VFS；surf 会话 VFS 与 Path 直通导入 |
@@ -327,10 +327,14 @@ Android 下载池也走 `postprocess_downloaded_image`：
 固定隐藏画册 `HIDDEN_ALBUM_ID` 的一键清理由 `HiddenCleanupService` 管理，命令契约为：
 
 - `start_hidden_cleanup`：不可重入，启动时固定记录隐藏图片总数，之后每批从画册头部读取 200 个 id 并删除。
-- `get_hidden_cleanup_run_state`：运行时返回 `{ running, total, processed, removed, keptFiles }`；未运行时返回全零默认值。
+- `get_busy_tasks_snapshot`：聚合返回隐藏清理 `{ running, total, processed, removed, keptFiles }`；未运行时为全零默认值。
 - `cancel_hidden_cleanup`：设置批次间检查的取消标志，返回是否确实存在运行任务。
 
-每批完成后发 `hidden-cleanup-progress`（`processed / total / removed / keptFiles`）；正常完成、取消或失败均发一次 `hidden-cleanup-finished`（`removed / keptFiles / canceled / error`）。事件统一构造为 `AppEvent` 并经 `GlobalEmitter` 广播，因此 Tauri 事件、Web SSE 与应用 IPC 使用同一 payload。由于删除会同时移除 `album_images` 行，循环无需游标；连续两次读到相同 id 集合时会按错误停止，防止异常数据导致死循环。
+启动时写好运行态并发送 `busy-tasks-change` 唤醒事件；每批只更新内存快照，前端通过
+`get_busy_tasks_snapshot` 每 500ms 读取进度。正常完成、取消或失败仍发一次
+`hidden-cleanup-finished`（`removed / keptFiles / canceled / error`），只负责 toast 与错误记录；快照中的
+`running=false` 才是卡片收尾的权威。由于删除会同时移除 `album_images` 行，循环无需游标；连续两次
+读到相同 id 集合时会按错误停止，防止异常数据导致死循环。
 
 ---
 
@@ -378,9 +382,13 @@ Android 下载池也走 `postprocess_downloaded_image`：
 - `canceled`
 - `failed`
 
-`download-progress` 由 HTTP/HTTPS downloader 在读取响应流时发送。`content://` 读取当前没有分块进度事件。
+writer 把 `receivedBytes / totalBytes` 直接写入 `DownloadQueue.active_downloads`。前端收到
+`download-state` 后唤醒 `get_active_downloads` 快照轮询，活跃期间每 500ms 对齐整表；不再发送
+逐项下载进度事件。`TaskDrawerContent` 与失败重试进度共用 `downloadState` store，不维护第二份镜像。
 
-`download-removed` 在终态等待下载间隔后发送，前端据此从 active 列表移除。
+`download-removed` 在终态等待下载间隔后发送并提前移除前端条目；快照整表对齐仍是生命周期兜底。
+Android 通知不依赖前端轮询：首个 `download-state` 启动后端单例 1s ticker，从
+`active_downloads` 刷新通知，检测不到非终态下载后退出；`download-state` / `download-removed` 仍立即刷新一次。
 
 ### 图片与画册事件
 

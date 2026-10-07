@@ -45,7 +45,7 @@ boot/24h/手动 → unchecked(瞬时,自动 run_check) → checking ──succes
 
 | 命令 | 行为 |
 |---|---|
-| `get_updater_state` | 返回当前快照（前端启动 hydrate，对位 `get_organize_run_state`） |
+| `get_updater_state` | 返回当前快照（前端启动 hydrate；后台忙碌任务则由聚合快照命令统一读取） |
 | `check_for_updates` | `run_check()`；`checking`/`downloading` 期间 no-op，返回当前快照 |
 | `download_update(tag, assetUrl, assetName)` | 仅可从 `updateAvailable` 进入；其它 phase → `Err("busy")` |
 | `cancel_download` | 仅 `downloading` 有效；置 cancel 信号 |

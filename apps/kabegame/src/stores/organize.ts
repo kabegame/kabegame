@@ -18,7 +18,7 @@ export interface OrganizeOptions {
   rangeEnd: number | null;
 }
 
-/** 与后端 `organize-progress` 事件字段一致。 */
+/** 整理运行态快照中的进度字段。 */
 export interface OrganizeProgress {
   processedGlobal: number;
   libraryTotal: number;
@@ -29,7 +29,7 @@ export interface OrganizeProgress {
   backfilled: number;
 }
 
-/** 与后端 `get_organize_run_state` 返回值一致。 */
+/** 与后端聚合忙碌任务快照中的整理字段一致。 */
 export interface OrganizeRunState extends OrganizeProgress, OrganizeOptions {
   running: boolean;
 }
@@ -53,7 +53,7 @@ const emptyProgress = (): OrganizeProgress => ({
   backfilled: 0,
 });
 
-/** 整理任务的前端镜像；后端运行态通过 service hydrate 与事件持续同步。 */
+/** 整理任务的前端镜像；后端运行态通过快照轮询同步。 */
 export const useOrganizeStore = defineStore("organize", () => {
   const dialogOpen = ref(false);
   const running = ref(false);
@@ -61,6 +61,7 @@ export const useOrganizeStore = defineStore("organize", () => {
   const lastRunOptions = ref<OrganizeOptions | null>(null);
   const startedAtMs = ref<number | null>(null);
   const lastError = ref<string | null>(null);
+  const starting = ref(false);
 
   const openDialog = () => {
     dialogOpen.value = true;
@@ -80,24 +81,11 @@ export const useOrganizeStore = defineStore("organize", () => {
     return Math.max(0, Math.min(100, Math.round((p.processedGlobal / p.libraryTotal) * 100)));
   });
 
-  function applyProgress(payload: Partial<OrganizeProgress> & { processed?: number; total?: number }) {
-    if (!running.value) {
-      running.value = true;
-      startedAtMs.value ??= Date.now();
-    }
-    const current = progress.value;
-    progress.value = {
-      processedGlobal: payload.processedGlobal ?? payload.processed ?? current.processedGlobal,
-      libraryTotal: payload.libraryTotal ?? payload.total ?? current.libraryTotal,
-      rangeStart: payload.rangeStart === undefined ? current.rangeStart : payload.rangeStart,
-      rangeEnd: payload.rangeEnd === undefined ? current.rangeEnd : payload.rangeEnd,
-      removed: payload.removed ?? current.removed,
-      regenerated: payload.regenerated ?? current.regenerated,
-      backfilled: payload.backfilled ?? current.backfilled,
-    };
-  }
-
   function applyFinished(payload: OrganizeFinished) {
+    if (!running.value) {
+      lastError.value = payload.error || null;
+      return;
+    }
     progress.value = {
       ...progress.value,
       removed: payload.removed ?? progress.value.removed,
@@ -111,6 +99,7 @@ export const useOrganizeStore = defineStore("organize", () => {
   }
 
   function applyRunState(state: OrganizeRunState) {
+    if (!state.running && starting.value) return;
     const wasRunning = running.value;
     running.value = !!state.running;
     progress.value = {
@@ -143,11 +132,16 @@ export const useOrganizeStore = defineStore("organize", () => {
   }
 
   function begin(options: OrganizeOptions) {
+    starting.value = true;
     running.value = true;
     progress.value = emptyProgress();
     lastRunOptions.value = { ...options };
     startedAtMs.value = Date.now();
     lastError.value = null;
+  }
+
+  function endStarting() {
+    starting.value = false;
   }
 
   function clearError() {
@@ -161,13 +155,14 @@ export const useOrganizeStore = defineStore("organize", () => {
     lastRunOptions,
     startedAtMs,
     lastError,
+    starting,
     progressPercentage,
     openDialog,
     closeDialog,
-    applyProgress,
     applyFinished,
     applyRunState,
     begin,
+    endStarting,
     clearError,
   };
 });

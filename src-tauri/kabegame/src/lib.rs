@@ -481,7 +481,6 @@ pub(crate) fn configure_app(
             sync_local_folder_album,
             set_album_sync_mode,
             convert_local_folder_album_to_normal,
-            get_folder_sync_run_state,
             cancel_folder_sync,
             // --- Images ---
             get_image_metadata,
@@ -817,6 +816,7 @@ pub(crate) fn configure_app(
             get_file_drop_kinds,
             proxy_fetch,
             get_supported_image_types,
+            get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,
             get_http_server_base_url,
@@ -825,11 +825,8 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             get_organize_total_count,
             #[cfg(not(target_os = "android"))]
-            get_organize_run_state,
-            #[cfg(not(target_os = "android"))]
             cancel_organize,
             start_hidden_cleanup,
-            get_hidden_cleanup_run_state,
             cancel_hidden_cleanup,
             // --- Share (Android) ---
             #[cfg(target_os = "android")]

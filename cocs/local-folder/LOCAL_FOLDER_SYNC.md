@@ -73,3 +73,8 @@ diff 对存在的媒体文件复用 `import_one`，对消失文件调用
 任务开始后满 1500ms 才进入 `FolderSyncService` 的可见快照并显示卡片，卡片展示本目录真实
 百分比。finished/toast 以单个任务为单位：错误、用户取消、目录删除、手动快速跳过和实际变化
 分别提示；抢占静默。Manual 即使在卡片出现前因目录未变化而跳过，也会收到 finished 反馈。
+
+`make_visible` 只把任务标为可见并发送一次 `busy-tasks-change` 唤醒事件；后续 `update` 只修改
+`FolderSyncTaskState`，不再维护 200ms 事件节流，也不发送逐任务进度事件。前端的通用 busy
+轮询器每 500ms 读取 `get_busy_tasks_snapshot.folderSync` 并整表替换，任务从快照消失即收尾；
+`folder-sync-finished` 只承担 toast、取消/错误信息与抢占静默。

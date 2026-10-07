@@ -170,7 +170,7 @@ pub struct OrganizeOptions {
     pub limit: Option<usize>,
 }
 
-/// 供前端刷新后同步：整理是否进行中及最近一次进度快照（与 `organize-progress` 事件字段一致）
+/// 整理是否进行中及最近一次进度快照。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrganizeRunState {
@@ -299,6 +299,7 @@ impl OrganizeService {
 
         let library_total = storage.get_images_total_count()?;
         self.init_run_state_from_start(&options, library_total)?;
+        GlobalEmitter::global().emit_busy_tasks_change("organize");
 
         let handle = tokio::runtime::Handle::current();
         let svc = Arc::clone(&self);
@@ -354,23 +355,13 @@ fn range_bounds_for_ui(options: &OrganizeOptions) -> (Option<usize>, Option<usiz
 }
 
 fn push_organize_progress(
-    library_total: usize,
-    options: &OrganizeOptions,
+    _library_total: usize,
+    _options: &OrganizeOptions,
     processed_global: usize,
     removed_total: usize,
     regenerated_total: usize,
     backfilled_total: usize,
 ) {
-    let (range_start, range_end) = range_bounds_for_ui(options);
-    GlobalEmitter::global().emit_organize_progress(
-        processed_global,
-        library_total,
-        range_start,
-        range_end,
-        removed_total,
-        regenerated_total,
-        backfilled_total,
-    );
     OrganizeService::global().update_run_state_progress(
         processed_global,
         removed_total,

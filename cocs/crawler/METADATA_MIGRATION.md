@@ -40,14 +40,20 @@
 ## 执行流程
 
 1. 插件解析阶段读取 `kbMetadataMigration` 脚本源码挂到 `Plugin.metadata_migration`，并把 `Plugin.version` pack 成 `Plugin.version_packed`。
-2. 插件安装 / 更新成功后触发后台迁移；应用启动加载已安装插件（`refresh_plugins` → `install_plugin_from_kgpg`）同样走该路径，所以每次启动都会检查（无待迁移行时一条 SELECT 早退）。
+2. 插件安装 / 更新成功后触发后台迁移；应用启动加载已安装插件（`refresh_plugins` → `install_plugin_from_kgpg`）同样走该路径，所以每次启动都会检查（无待迁移行时一条 SELECT 早退）。`MetadataMigrationService` 保证同一插件只有一个 runner；运行中再次 refresh / install 时覆盖保存最新 `Plugin` 到 `pending`，当前轮完成后续跑一轮。
 3. 运行器查询当前插件 `plugin_version < version_packed` 的 metadata 行；`data` 字段 trim 后为空串或字面量 `"null"` 视为没有 metadata，直接排除在外，不跑迁移脚本；结果为空直接结束。
-4. 装载一次脚本；两个导出都缺失才算装载失败，缺 `migrate` 按恒等处理。
+4. 有待处理行时先登记 `{ pluginId, total, processed, startedAtMs }` 并发送 `busy-tasks-change`；装载一次脚本，两个导出都缺失才算装载失败，缺 `migrate` 按恒等处理。
 5. 逐行调用 `migrate(data)`；成功后才调用 `provideLabels(migrated)`。标签先挂到当前 metadata 行引用的全部图片，然后才写回/合并 metadata，避免重定向后丢失原引用集。
 6. 无论装载或行级执行是否成功，都把 `plugin_version` 盖为 `version_packed`；失败时写回原 data，不在下次启动无限重试。
 7. 写回时如果目标 `(plugin_id, plugin_version, data)` 已有行，会把 `images.metadata_id` 与 `task_failed_images.metadata_id` 合并到既有行并删除重复行。
-8. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，在事务内取出受影响图片，
+8. 每行回写完成后 `processed += 1`。成功、错误或 guard 异常退出都会从运行态移除，并发送
+   `metadata-migration-finished { pluginId, total, processed, error }`；成功静默，失败由前端 toast。
+9. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，在事务内取出受影响图片，
    按最终 `metadataId + pluginVersion` 分组发 `image-changed`，再发 `images-change`（`reason = "change"`）对账视图成员与排序。
+
+前端通过聚合 `get_busy_tasks_snapshot.metadataMigrations` 每 500ms 拉取运行态，在忙碌面板中按插件显示
+图标、名称、百分比与 `processed / total`，不提供取消按钮。任务从快照消失即移除卡片；finished 事件
+只补失败提示与 `lastError`，成功不会打扰启动流程。
 
 历史切换说明：`v021_image_metadata_plugin_version` 一次性把旧 `version` 计数器列改名为 `plugin_version` 并全部归 0（旧值作废），之后由迁移 runner 按上述流程收敛；脚本幂等保证重跑安全。
 
@@ -63,13 +69,14 @@ L2 插件 / V8：
 
 - `src-tauri/kabegame-core/src/plugin/mod.rs`：`kbMetadataMigration` 解析、`pack_plugin_version`、安装 / 启动后调度迁移。
 - `src-tauri/kabegame-core/src/plugin/v8/ops.rs`：写入自动盖章（从 `Task.params.plugin_version()` 读取）。
-- `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）与 `image-changed` / `images-change(change)` 成对事件；CLI 不再加载 V8，也不再提供 `plugin run migrate`。
+- `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）、同插件串行/pending 续跑、运行态快照与 finished 事件，以及 `image-changed` / `images-change(change)` 成对事件；CLI 不再提供 `plugin run migrate`。
 
 L3 查询 / 前端：
 
 - `src-tauri/kabegame-core/src/providers/dsl/images/images_metadata_full_provider.json5`：`images://id_{id}/metadata_full` 的完整 metadata 行路径。
 - `apps/kabegame/src/components/common/ImageDetailContent.vue`：详情区读取 `get_image_metadata_full` 并把 `plugin_version` 交给模板渲染。
 - `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/dataChangeHub.ts`：metadata 缓存（key 含 `metadataId` / `pluginVersion`）与图片字段 patch 批处理。
+- `apps/kabegame/src/stores/metadataMigration.ts`、`components/busy/BusyMetadataMigrationCard.vue`：迁移运行态镜像与无取消按钮的忙碌卡片。
 
 ## 排查要点
 

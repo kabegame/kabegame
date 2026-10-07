@@ -84,6 +84,11 @@ pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
     kabegame_core::commands::misc::get_supported_image_types()
 }
 
+#[tauri::command]
+pub async fn get_busy_tasks_snapshot() -> Result<serde_json::Value, String> {
+    kabegame_core::commands::busy_tasks::get_busy_tasks_snapshot()
+}
+
 /// 读取后端缓存的 Linux 桌面环境（plasma|gnome|unknown）
 /// 仅在 Linux 平台有效，其他平台统一返回 "unknown"
 #[tauri::command]
@@ -136,13 +141,6 @@ pub async fn get_organize_total_count() -> Result<serde_json::Value, String> {
     kabegame_core::commands::organize::get_organize_total_count()
 }
 
-/// 页面刷新后同步：是否正在整理及当前进度快照（与 `organize-progress` 一致）
-#[tauri::command]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn get_organize_run_state() -> Result<serde_json::Value, String> {
-    kabegame_core::commands::organize::get_organize_run_state()
-}
-
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn cancel_organize() -> Result<serde_json::Value, String> {
@@ -152,11 +150,6 @@ pub async fn cancel_organize() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn start_hidden_cleanup() -> Result<serde_json::Value, String> {
     kabegame_core::commands::hidden_cleanup::start_hidden_cleanup().await
-}
-
-#[tauri::command]
-pub async fn get_hidden_cleanup_run_state() -> Result<serde_json::Value, String> {
-    kabegame_core::commands::hidden_cleanup::get_hidden_cleanup_run_state()
 }
 
 #[tauri::command]

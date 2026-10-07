@@ -2,6 +2,7 @@ import { computed, onScopeDispose, ref, watch, type ComputedRef, type Ref } from
 import { useOrganizeStore } from "@/stores/organize";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import { useFolderSyncStore } from "@/stores/folderSync";
+import { useMetadataMigrationStore } from "@/stores/metadataMigration";
 import { useUpdaterStore } from "@/stores/updater";
 import * as organizeService from "@/services/organize";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
@@ -11,7 +12,11 @@ const SHOW_DELAY_MS = 1_800;
 const CLOCK_INTERVAL_MS = 500;
 
 export type BusyCard =
-  { kind: "organize" } | { kind: "hiddenCleanup" } | { kind: "folderSync"; albumId: string } | { kind: "updater" };
+  | { kind: "organize" }
+  | { kind: "hiddenCleanup" }
+  | { kind: "folderSync"; albumId: string }
+  | { kind: "metadataMigration"; pluginId: string }
+  | { kind: "updater" };
 
 const now = ref(Date.now());
 const hasUnseenFailure = ref(false);
@@ -45,11 +50,12 @@ export interface BusyTasksAggregation {
   cancelAll: () => Promise<void>;
 }
 
-/** 只读聚合三个专用 store；任务详情仍由各自卡片直接读取对应 store。 */
+/** 只读聚合各专用 store；任务详情仍由各自卡片直接读取对应 store。 */
 export function useBusyTasks(): BusyTasksAggregation {
   const organizeStore = useOrganizeStore();
   const hiddenCleanupStore = useHiddenCleanupStore();
   const folderSyncStore = useFolderSyncStore();
+  const metadataMigrationStore = useMetadataMigrationStore();
   const updaterStore = useUpdaterStore();
 
   const anyRunning = computed(
@@ -57,6 +63,7 @@ export function useBusyTasks(): BusyTasksAggregation {
       organizeStore.running ||
       hiddenCleanupStore.running ||
       folderSyncStore.runningCount > 0 ||
+      metadataMigrationStore.runningCount > 0 ||
       updaterStore.isDownloading,
   );
 
@@ -75,10 +82,11 @@ export function useBusyTasks(): BusyTasksAggregation {
         () => organizeStore.lastError,
         () => hiddenCleanupStore.lastError,
         () => folderSyncStore.lastError,
+        () => metadataMigrationStore.lastError,
         () => updaterStore.lastDownloadError,
       ],
-      ([organizeError, hiddenCleanupError, folderError, updaterError], previous) => {
-        const errors = [organizeError, hiddenCleanupError, folderError, updaterError];
+      ([organizeError, hiddenCleanupError, folderError, metadataError, updaterError], previous) => {
+        const errors = [organizeError, hiddenCleanupError, folderError, metadataError, updaterError];
         if (errors.some((error, index) => !!error && error !== previous?.[index])) {
           hasUnseenFailure.value = true;
         }
@@ -105,6 +113,10 @@ export function useBusyTasks(): BusyTasksAggregation {
       .filter((task) => isDelayElapsed(task.startedAtMs))
       .sort((a, b) => a.startedAtMs - b.startedAtMs || a.albumId.localeCompare(b.albumId))
       .forEach((task) => result.push({ kind: "folderSync", albumId: task.albumId }));
+    [...metadataMigrationStore.tasks.values()]
+      .filter((task) => isDelayElapsed(task.startedAtMs))
+      .sort((a, b) => a.startedAtMs - b.startedAtMs || a.pluginId.localeCompare(b.pluginId))
+      .forEach((task) => result.push({ kind: "metadataMigration", pluginId: task.pluginId }));
     if (updaterVisible.value) result.push({ kind: "updater" });
     return result;
   });
@@ -114,6 +126,11 @@ export function useBusyTasks(): BusyTasksAggregation {
     const percentages: number[] = [];
     if (organizeVisible.value) percentages.push(organizeStore.progressPercentage);
     if (hiddenCleanupVisible.value) percentages.push(hiddenCleanupStore.progressPercentage);
+    for (const task of metadataMigrationStore.tasks.values()) {
+      if (isDelayElapsed(task.startedAtMs) && task.total > 0) {
+        percentages.push(Math.max(0, Math.min(100, Math.round((task.processed / task.total) * 100))));
+      }
+    }
     if (updaterVisible.value) percentages.push(updaterStore.downloadPercent);
     if (percentages.length === 0) return null;
     return Math.round(percentages.reduce((sum, value) => sum + value, 0) / percentages.length);
@@ -124,6 +141,7 @@ export function useBusyTasks(): BusyTasksAggregation {
     organizeStore.clearError();
     hiddenCleanupStore.clearError();
     folderSyncStore.clearError();
+    metadataMigrationStore.clearError();
     updaterStore.setDownloadError("");
   }
 

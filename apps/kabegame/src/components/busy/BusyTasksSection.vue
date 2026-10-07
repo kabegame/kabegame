@@ -8,10 +8,20 @@
       <slot name="extra" />
     </div>
     <div class="flex flex-col gap-1.5">
-      <template v-for="card in cards" :key="card.kind === 'folderSync' ? `${card.kind}-${card.albumId}` : card.kind">
+      <template
+        v-for="card in cards"
+        :key="
+          card.kind === 'folderSync'
+            ? `${card.kind}-${card.albumId}`
+            : card.kind === 'metadataMigration'
+              ? `${card.kind}-${card.pluginId}`
+              : card.kind
+        "
+      >
         <BusyOrganizeCard v-if="card.kind === 'organize'" />
         <BusyHiddenCleanupCard v-else-if="card.kind === 'hiddenCleanup'" />
         <BusyFolderSyncCard v-else-if="card.kind === 'folderSync'" :album-id="card.albumId" @close="emit('close')" />
+        <BusyMetadataMigrationCard v-else-if="card.kind === 'metadataMigration'" :plugin-id="card.pluginId" />
         <BusyUpdaterCard v-else />
       </template>
     </div>
@@ -24,6 +34,7 @@ import { useBusyTasks } from "@/composables/useBusyTasks";
 import BusyOrganizeCard from "./BusyOrganizeCard.vue";
 import BusyHiddenCleanupCard from "./BusyHiddenCleanupCard.vue";
 import BusyFolderSyncCard from "./BusyFolderSyncCard.vue";
+import BusyMetadataMigrationCard from "./BusyMetadataMigrationCard.vue";
 import BusyUpdaterCard from "./BusyUpdaterCard.vue";
 
 const emit = defineEmits<{ close: [] }>();

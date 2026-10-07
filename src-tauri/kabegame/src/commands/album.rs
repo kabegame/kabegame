@@ -133,11 +133,6 @@ pub async fn convert_local_folder_album_to_normal(album_id: String) -> Result<Va
 }
 
 #[tauri::command]
-pub async fn get_folder_sync_run_state() -> Result<Value, String> {
-    commands::album::get_folder_sync_run_state()
-}
-
-#[tauri::command]
 pub async fn cancel_folder_sync(album_id: Option<String>) -> Result<Value, String> {
     commands::album::cancel_folder_sync(album_id)
 }

@@ -32,5 +32,6 @@
   "cleanHiddenInProgress": "進行中",
   "cleanHiddenEmpty": "沒有隱藏圖片",
   "albumTree": "畫冊樹",
-  "albumInfo": "畫冊資訊"
+  "albumInfo": "畫冊資訊",
+  "metadataMigrationTitle": "遷移插件資料"
 }

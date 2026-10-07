@@ -32,5 +32,6 @@
   "cleanHiddenInProgress": "実行中",
   "cleanHiddenEmpty": "非表示画像はありません",
   "albumTree": "アルバムツリー",
-  "albumInfo": "アルバム情報"
+  "albumInfo": "アルバム情報",
+  "metadataMigrationTitle": "プラグインデータを移行中"
 }

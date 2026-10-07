@@ -345,17 +345,6 @@ pub async fn sync_local_folder_album(
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn get_folder_sync_run_state() -> Result<Value, String> {
-    let tasks = crate::local_folder::FolderSyncService::global().snapshot();
-    Ok(serde_json::json!({ "tasks": tasks }))
-}
-
-#[cfg(target_os = "android")]
-pub fn get_folder_sync_run_state() -> Result<Value, String> {
-    Ok(serde_json::json!({ "tasks": [] }))
-}
-
-#[cfg(not(target_os = "android"))]
 pub fn cancel_folder_sync(album_id: Option<String>) -> Result<Value, String> {
     let canceled = match album_id {
         Some(album_id) => usize::from(crate::local_folder::synchronizer::cancel(&album_id)),

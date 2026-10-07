@@ -61,12 +61,6 @@ pub fn get_organize_total_count() -> Result<Value, String> {
     serde_json::to_value(count).map_err(|e| e.to_string())
 }
 
-/// 页面刷新后同步：是否正在整理及当前进度快照（与 `organize-progress` 事件一致）。
-pub fn get_organize_run_state() -> Result<Value, String> {
-    let state = OrganizeService::global().get_run_state();
-    serde_json::to_value(state).map_err(|e| e.to_string())
-}
-
 /// 请求中止当前整理；返回是否确实有任务被取消。
 pub fn cancel_organize() -> Result<Value, String> {
     let canceled = OrganizeService::global().cancel()?;

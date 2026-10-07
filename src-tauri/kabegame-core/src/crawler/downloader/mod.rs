@@ -292,7 +292,7 @@ pub(crate) trait DownloadWriter: AsyncWrite + Send + Unpin {
 }
 
 /// [`DownloadWriter`] 的实现：内存缓冲 + 溢写临时文件，并在写路径上把进度经
-/// [`DownloadQueue::report_progress`] 上报（更新 `ActiveDownloadInfo` + 发 `download-progress`）。
+/// [`DownloadQueue::report_progress`] 上报到 `ActiveDownloadInfo` 快照。
 ///
 /// **由 `download_with_retry` 私有持有，以 `&mut dyn DownloadWriter` 形式传给 `download`。**
 /// 内存缓冲累计到 [`DOWNLOAD_SPILL_THRESHOLD`] 时落盘到 `downloads_temp_dir()/{id}.part` 并清空缓冲。

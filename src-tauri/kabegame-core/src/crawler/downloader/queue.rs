@@ -563,7 +563,6 @@ impl DownloadQueue {
                 t.total_bytes = total;
             }
         }
-        GlobalEmitter::global().emit_download_progress(download_id, received, total);
     }
 
     pub async fn download_image(

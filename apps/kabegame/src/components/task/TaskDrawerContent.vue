@@ -230,12 +230,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useModal } from "../../composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { Close, Grid, Loading } from "@kabegame/element-plus-icons";
-import { invoke, listen } from "../../api";
+import { invoke } from "../../api";
 import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";
 import TaskParamsDialog from "./TaskParamsDialog.vue";
@@ -246,10 +246,12 @@ import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
 import { trackEvent } from "../../track/umami";
 import { kameMessage as ElMessage } from "../../utils/kameMessage";
+import { downloadPoller, useDownloadStateStore, type ActiveDownloadInfo } from "../../stores/downloadState";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const crawlerStore = useCrawlerStore();
+const downloadStateStore = useDownloadStateStore();
 
 const TASK_PAGE_SIZE = 20;
 
@@ -270,31 +272,6 @@ type ScriptTask = {
   startTime?: number | null;
   endTime?: number | null;
   error?: string | null;
-};
-
-type ActiveDownloadInfo = {
-  id: number;
-  url: string;
-  pluginId: string;
-  startTime: number;
-  taskId: string;
-  state?: string;
-};
-
-type DownloadProgressPayload = {
-  id: number;
-  receivedBytes: number;
-  totalBytes?: number | null;
-};
-
-type DownloadStatePayload = {
-  id: number;
-  taskId: string;
-  url: string;
-  startTime: number;
-  pluginId: string;
-  state: string;
-  error?: string;
 };
 
 const props = withDefaults(
@@ -435,11 +412,8 @@ function handleTasksListScroll(e: Event) {
   }
 }
 
-// 下载信息：单一 map，download-state 到达 upsert，download-removed 到达删除
-type DownloadItem = ActiveDownloadInfo & { received?: number; total?: number | null };
-const downloadsMap = reactive<Record<number, DownloadItem>>({});
-
-const allDownloads = computed(() => Object.values(downloadsMap) as DownloadItem[]);
+type DownloadItem = ActiveDownloadInfo;
+const allDownloads = computed(() => downloadStateStore.entries);
 const activeDownloadsRunningCount = computed(
   () =>
     allDownloads.value.filter((d) => {
@@ -448,10 +422,6 @@ const activeDownloadsRunningCount = computed(
     }).length,
 );
 const orderedActiveDownloads = computed(() => allDownloads.value);
-
-let unlistenDownloadProgress: null | (() => void) = null;
-let unlistenDownloadState: null | (() => void) = null;
-let unlistenDownloadRemoved: null | (() => void) = null;
 
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
@@ -496,110 +466,15 @@ const formatBytes = (n: number) => {
 const shouldShowDownloadProgress = (d: DownloadItem) => (d.state ?? "") === "downloading";
 
 const downloadProgressPercent = (d: DownloadItem) => {
-  const total = d.total ?? null;
-  if (!total || total <= 0 || d.received == null) return 0;
-  return Math.max(0, Math.min(100, Math.floor((d.received / total) * 100)));
+  const total = d.totalBytes;
+  if (!total || total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.floor((d.receivedBytes / total) * 100)));
 };
 
 const downloadProgressText = (d: DownloadItem) => {
-  if (d.received == null) return null;
-  const total = d.total ?? null;
-  if (!total || total <= 0) return `${formatBytes(d.received)} / ?`;
-  return `${formatBytes(d.received)} / ${formatBytes(total)}`;
-};
-
-const loadDownloads = async () => {
-  try {
-    const downloads = await invoke<ActiveDownloadInfo[]>("get_active_downloads");
-    const aliveIds = new Set(downloads.map((d) => d.id));
-    for (const id of Object.keys(downloadsMap) as unknown as number[]) {
-      if (!aliveIds.has(Number(id))) delete downloadsMap[id];
-    }
-    for (const d of downloads) {
-      downloadsMap[d.id] = {
-        ...downloadsMap[d.id],
-        id: d.id,
-        url: d.url,
-        pluginId: d.pluginId,
-        startTime: d.startTime,
-        taskId: d.taskId,
-        state: d.state ?? "downloading",
-      };
-    }
-  } catch (error) {
-    console.error("加载下载列表失败:", error);
-  }
-};
-
-let eventListenersInitialized = false;
-
-/** 渐进式事件，挂载时统一监听，不依赖抽屉开关，避免丢失信息 */
-const initAllEventListeners = async () => {
-  if (eventListenersInitialized) return;
-  eventListenersInitialized = true;
-
-  const toId = (raw: any) => {
-    const id = Number(raw?.id);
-    return isNaN(id) ? null : id;
-  };
-
-  try {
-    unlistenDownloadProgress = await listen<DownloadProgressPayload>("download-progress", (event) => {
-      const raw = event.payload as any;
-      const id = toId(raw);
-      if (id == null || !downloadsMap[id]) return;
-      downloadsMap[id] = {
-        ...downloadsMap[id],
-        received: Number(raw.receivedBytes ?? 0),
-        total: raw.totalBytes ?? null,
-      };
-    });
-  } catch (error) {
-    console.error("监听下载进度失败:", error);
-  }
-  try {
-    unlistenDownloadState = await listen<DownloadStatePayload>("download-state", (event) => {
-      const raw = event.payload as any;
-      const id = toId(raw);
-      if (id == null) return;
-      const state = String(raw?.state ?? "").trim();
-      if (!state) return;
-      downloadsMap[id] = {
-        ...downloadsMap[id],
-        id,
-        url: String(raw.url ?? ""),
-        pluginId: String(raw.pluginId ?? ""),
-        startTime: Number(raw.startTime ?? 0),
-        taskId: String(raw.taskId ?? ""),
-        state,
-      };
-    });
-  } catch (error) {
-    console.error("监听下载状态失败:", error);
-  }
-  try {
-    unlistenDownloadRemoved = await listen<{ id: number; taskId?: string }>("download-removed", (event) => {
-      const id = toId(event.payload as any);
-      if (id != null) delete downloadsMap[id];
-    });
-  } catch (error) {
-    console.error("监听下载移除失败:", error);
-  }
-};
-
-const stopAllEventListeners = () => {
-  unlistenDownloadProgress?.();
-  unlistenDownloadState?.();
-  unlistenDownloadRemoved?.();
-  unlistenDownloadProgress = null;
-  unlistenDownloadState = null;
-  unlistenDownloadRemoved = null;
-  eventListenersInitialized = false;
-};
-
-/** 抽屉打开时同步一次快照，纠正可能错过的事件 */
-const syncDownloadsOnDrawerOpen = async () => {
-  await loadDownloads();
+  const total = d.totalBytes;
+  if (!total || total <= 0) return `${formatBytes(d.receivedBytes)} / ?`;
+  return `${formatBytes(d.receivedBytes)} / ${formatBytes(total)}`;
 };
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
@@ -688,21 +563,13 @@ function handleTaskContextMenu(event: MouseEvent, task: ScriptTask) {
   emit("task-contextmenu", { x: event.clientX, y: event.clientY, task });
 }
 
-onMounted(() => {
-  initAllEventListeners();
-});
-
 watch(
   () => !!props.active,
-  async (val) => {
-    if (val) await syncDownloadsOnDrawerOpen();
+  (val) => {
+    if (val) downloadPoller.wake();
   },
   { immediate: true },
 );
-
-onUnmounted(() => {
-  stopAllEventListeners();
-});
 </script>
 
 <style scoped lang="scss">

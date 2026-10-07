@@ -207,37 +207,9 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送下载进度事件
-    pub fn emit_download_progress(&self, id: u64, received_bytes: u64, total_bytes: Option<u64>) {
-        let event = std::sync::Arc::new(AppEvent::DownloadProgress {
-            id,
-            received_bytes,
-            total_bytes,
-        });
-        EventBroadcaster::global().broadcast(event);
-    }
-
-    /// 发送整理进度事件
-    pub fn emit_organize_progress(
-        &self,
-        processed_global: usize,
-        library_total: usize,
-        range_start: Option<usize>,
-        range_end: Option<usize>,
-        removed: usize,
-        regenerated: usize,
-        backfilled: usize,
-    ) {
-        let event = std::sync::Arc::new(AppEvent::OrganizeProgress {
-            processed_global,
-            library_total,
-            range_start,
-            range_end,
-            removed,
-            regenerated,
-            backfilled,
-        });
-        EventBroadcaster::global().broadcast(event);
+    /// 后台忙碌任务开始或变为可见时唤醒前端快照轮询。
+    pub fn emit_busy_tasks_change(&self, kind: &str) {
+        self.emit("busy-tasks-change", json!({ "kind": kind }));
     }
 
     /// 发送整理完成事件
@@ -255,22 +227,6 @@ impl GlobalEmitter {
             backfilled,
             canceled,
             error,
-        });
-        EventBroadcaster::global().broadcast(event);
-    }
-
-    pub fn emit_hidden_cleanup_progress(
-        &self,
-        processed: usize,
-        total: usize,
-        removed: usize,
-        kept_files: usize,
-    ) {
-        let event = std::sync::Arc::new(AppEvent::HiddenCleanupProgress {
-            processed,
-            total,
-            removed,
-            kept_files,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -604,25 +560,7 @@ impl GlobalEmitter {
 
     pub fn emit_task_changed(&self, _task_id: &str, _diff: serde_json::Value) {}
 
-    pub fn emit_download_progress(
-        &self,
-        _id: u64,
-        _received_bytes: u64,
-        _total_bytes: Option<u64>,
-    ) {
-    }
-
-    pub fn emit_organize_progress(
-        &self,
-        _processed_global: usize,
-        _library_total: usize,
-        _range_start: Option<usize>,
-        _range_end: Option<usize>,
-        _removed: usize,
-        _regenerated: usize,
-        _backfilled: usize,
-    ) {
-    }
+    pub fn emit_busy_tasks_change(&self, _kind: &str) {}
 
     pub fn emit_organize_finished(
         &self,
@@ -631,15 +569,6 @@ impl GlobalEmitter {
         _backfilled: usize,
         _canceled: bool,
         _error: Option<String>,
-    ) {
-    }
-
-    pub fn emit_hidden_cleanup_progress(
-        &self,
-        _processed: usize,
-        _total: usize,
-        _removed: usize,
-        _kept_files: usize,
     ) {
     }
 

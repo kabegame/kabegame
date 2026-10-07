@@ -32,5 +32,6 @@
   "cleanHiddenInProgress": "In progress",
   "cleanHiddenEmpty": "No hidden images",
   "albumTree": "Album tree",
-  "albumInfo": "Album info"
+  "albumInfo": "Album info",
+  "metadataMigrationTitle": "Migrating plugin data"
 }

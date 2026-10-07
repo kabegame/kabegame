@@ -67,12 +67,9 @@ macro_rules! app_event_kinds {
 app_event_kinds! {
     TaskLog,
     DownloadState,
-    DownloadProgress,
     Generic,
     ConnectionStatus,
-    OrganizeProgress,
     OrganizeFinished,
-    HiddenCleanupProgress,
     HiddenCleanupFinished,
     WallpaperUpdateImage,
     ImageChanged,
@@ -105,12 +102,9 @@ impl AppEventKind {
         match self {
             AppEventKind::TaskLog => "task-log",
             AppEventKind::DownloadState => "download-state",
-            AppEventKind::DownloadProgress => "download-progress",
             AppEventKind::Generic => "generic",
             AppEventKind::ConnectionStatus => "connection-status",
-            AppEventKind::OrganizeProgress => "organize-progress",
             AppEventKind::OrganizeFinished => "organize-finished",
-            AppEventKind::HiddenCleanupProgress => "hidden-cleanup-progress",
             AppEventKind::HiddenCleanupFinished => "hidden-cleanup-finished",
             AppEventKind::WallpaperUpdateImage => "wallpaper-update-image",
             AppEventKind::ImageChanged => "image-changed",
@@ -138,12 +132,9 @@ impl AppEventKind {
         match s {
             "task-log" => Some(AppEventKind::TaskLog),
             "download-state" => Some(AppEventKind::DownloadState),
-            "download-progress" => Some(AppEventKind::DownloadProgress),
             "generic" => Some(AppEventKind::Generic),
             "connection-status" => Some(AppEventKind::ConnectionStatus),
-            "organize-progress" => Some(AppEventKind::OrganizeProgress),
             "organize-finished" => Some(AppEventKind::OrganizeFinished),
-            "hidden-cleanup-progress" => Some(AppEventKind::HiddenCleanupProgress),
             "hidden-cleanup-finished" => Some(AppEventKind::HiddenCleanupFinished),
             "wallpaper-update-image" => Some(AppEventKind::WallpaperUpdateImage),
             "image-changed" => Some(AppEventKind::ImageChanged),
@@ -209,14 +200,6 @@ pub enum AppEvent {
         retried_for: Option<i64>,
     },
 
-    /// 下载进度事件（细粒度进度更新）
-    #[serde(rename_all = "camelCase")]
-    DownloadProgress {
-        id: u64,
-        received_bytes: u64,
-        total_bytes: Option<u64>,
-    },
-
     /// 通用事件
     Generic {
         event: String,
@@ -226,25 +209,6 @@ pub enum AppEvent {
     /// 连接状态变化
     ConnectionStatus { connected: bool, message: String },
 
-    /// 整理进度事件
-    OrganizeProgress {
-        /// 全局顺序下已扫描到的行序号（与内部 `row_index` 一致）
-        #[serde(rename = "processedGlobal")]
-        processed_global: usize,
-        /// 图库图片总数
-        #[serde(rename = "libraryTotal")]
-        library_total: usize,
-        /// 所选区间起点（含），全量时为 `None`
-        #[serde(rename = "rangeStart")]
-        range_start: Option<usize>,
-        /// 所选区间终点（不含），与对话框 `rangeEnd` 一致；全量时为 `None`
-        #[serde(rename = "rangeEnd")]
-        range_end: Option<usize>,
-        removed: usize,
-        regenerated: usize,
-        backfilled: usize,
-    },
-
     /// 整理完成事件
     OrganizeFinished {
         removed: usize,
@@ -252,15 +216,6 @@ pub enum AppEvent {
         backfilled: usize,
         canceled: bool,
         error: Option<String>,
-    },
-
-    /// 隐藏图片清理进度事件
-    #[serde(rename_all = "camelCase")]
-    HiddenCleanupProgress {
-        processed: usize,
-        total: usize,
-        removed: usize,
-        kept_files: usize,
     },
 
     /// 隐藏图片清理完成事件
@@ -479,12 +434,9 @@ impl AppEvent {
         match self {
             AppEvent::TaskLog { .. } => AppEventKind::TaskLog,
             AppEvent::DownloadState { .. } => AppEventKind::DownloadState,
-            AppEvent::DownloadProgress { .. } => AppEventKind::DownloadProgress,
             AppEvent::Generic { .. } => AppEventKind::Generic,
             AppEvent::ConnectionStatus { .. } => AppEventKind::ConnectionStatus,
-            AppEvent::OrganizeProgress { .. } => AppEventKind::OrganizeProgress,
             AppEvent::OrganizeFinished { .. } => AppEventKind::OrganizeFinished,
-            AppEvent::HiddenCleanupProgress { .. } => AppEventKind::HiddenCleanupProgress,
             AppEvent::HiddenCleanupFinished { .. } => AppEventKind::HiddenCleanupFinished,
             AppEvent::ImageChanged { .. } => AppEventKind::ImageChanged,
             AppEvent::ImagesChange { .. } => AppEventKind::ImagesChange,

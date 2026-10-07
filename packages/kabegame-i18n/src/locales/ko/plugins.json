@@ -221,5 +221,6 @@
     "importAllPresetsSuccess": "실행 설정 {success}개를 가져왔습니다",
     "importAllPresetsPartial": "{success}개를 가져왔고, {failed}개는 실패했습니다"
   },
-  "saveAsConfig": "설정으로 저장"
+  "saveAsConfig": "설정으로 저장",
+  "metadataMigrationFailed": "{name} 데이터 마이그레이션에 실패했습니다"
 }

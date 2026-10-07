@@ -4,9 +4,7 @@ use crate::local_folder::{SyncOrigin, DEBOUNCE_MS};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
-
-const PROGRESS_THROTTLE: Duration = Duration::from_millis(200);
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,7 +63,6 @@ static FINISHED_EVENTS: OnceLock<Mutex<Vec<FolderSyncFinished>>> = OnceLock::new
 #[derive(Default)]
 pub struct FolderSyncService {
     tasks: Mutex<HashMap<String, FolderSyncTask>>,
-    last_emit: Mutex<HashMap<String, Instant>>,
 }
 
 impl FolderSyncService {
@@ -119,7 +116,7 @@ impl FolderSyncService {
     }
 
     fn make_visible(&self, album_id: &str, started_at_ms: u64) {
-        let state = {
+        {
             let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
             let Some(task) = tasks.get_mut(album_id) else {
                 return;
@@ -128,43 +125,14 @@ impl FolderSyncService {
                 return;
             }
             task.visible = true;
-            task.state.clone()
-        };
-        self.last_emit
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(album_id.to_string(), Instant::now());
-        Self::emit_progress(&state);
+        }
+        GlobalEmitter::global().emit_busy_tasks_change("folderSync");
     }
 
     pub fn update(&self, album_id: &str, f: impl FnOnce(&mut FolderSyncTaskState)) {
-        let state = {
-            let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(task) = tasks.get_mut(album_id) else {
-                return;
-            };
+        let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(task) = tasks.get_mut(album_id) {
             f(&mut task.state);
-            if !task.visible {
-                return;
-            }
-
-            let now = Instant::now();
-            let mut last_emit = self.last_emit.lock().unwrap_or_else(|e| e.into_inner());
-            let should_emit = match last_emit.get_mut(album_id) {
-                Some(last) if last.elapsed() < PROGRESS_THROTTLE => false,
-                Some(last) => {
-                    *last = now;
-                    true
-                }
-                None => {
-                    last_emit.insert(album_id.to_string(), now);
-                    true
-                }
-            };
-            should_emit.then(|| task.state.clone())
-        };
-        if let Some(state) = state {
-            Self::emit_progress(&state);
         }
     }
 
@@ -179,10 +147,6 @@ impl FolderSyncService {
     ) {
         let task = self
             .tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(album_id);
-        self.last_emit
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(album_id);
@@ -261,12 +225,6 @@ impl FolderSyncService {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()),
         )
-    }
-
-    fn emit_progress(state: &FolderSyncTaskState) {
-        if let Ok(payload) = serde_json::to_value(state) {
-            GlobalEmitter::global().emit("folder-sync-progress", payload);
-        }
     }
 }
 

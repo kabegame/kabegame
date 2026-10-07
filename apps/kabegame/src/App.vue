@@ -230,6 +230,8 @@ import * as updaterService from "@/services/updater";
 import * as organizeService from "@/services/organize";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
 import * as folderSyncService from "@/services/folderSync";
+import * as metadataMigrationService from "@/services/metadataMigration";
+import { busyPoller } from "@/services/busyTasks";
 import UpdateButton from "./components/updater/UpdateButton.vue";
 import UpdateDialog from "./components/updater/UpdateDialog.vue";
 import DownloadProgressDialog from "./components/updater/DownloadProgressDialog.vue";
@@ -657,9 +659,13 @@ onMounted(async () => {
 
   // 桌面端应用自动更新：hydrate 后端状态 + 订阅事件（调度在后端；web / android 内部 noop）
   void updaterService.init();
-  void organizeService.init();
-  void hiddenCleanupService.init();
-  void folderSyncService.init();
+  await Promise.all([
+    organizeService.init(),
+    hiddenCleanupService.init(),
+    folderSyncService.init(),
+    metadataMigrationService.init(),
+  ]);
+  await busyPoller.start();
 
   // 通知后端已准备好接收事件
   emit("app-ready");
@@ -684,6 +690,8 @@ onUnmounted(() => {
   organizeService.dispose();
   hiddenCleanupService.dispose();
   folderSyncService.dispose();
+  metadataMigrationService.dispose();
+  busyPoller.dispose();
   downloadStateStore.dispose();
 });
 </script>

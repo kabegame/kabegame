@@ -221,5 +221,6 @@
     "importAllPresetsSuccess": "Imported {success} run config(s)",
     "importAllPresetsPartial": "Imported {success}, {failed} failed"
   },
-  "saveAsConfig": "Save as config"
+  "saveAsConfig": "Save as config",
+  "metadataMigrationFailed": "Failed to migrate data for {name}"
 }

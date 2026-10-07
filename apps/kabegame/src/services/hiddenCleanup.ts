@@ -1,19 +1,14 @@
 //! 清理隐藏图片服务（前端镜像编排）。
 //!
-//! 运行状态由后端 `HiddenCleanupService` 权威维护；本模块负责 hydrate、事件订阅、
+//! 运行状态由后端 `HiddenCleanupService` 权威维护；本模块负责完成事件订阅、
 //! 用户操作转发，以及清理任务的所有 toast。
 
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { i18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import {
-  useHiddenCleanupStore,
-  type HiddenCleanupFinished,
-  type HiddenCleanupProgress,
-  type HiddenCleanupRunState,
-} from "@/stores/hiddenCleanup";
+import { useHiddenCleanupStore, type HiddenCleanupFinished } from "@/stores/hiddenCleanup";
+import { busyPoller } from "@/services/busyTasks";
 
-let unlistenProgress: UnlistenFn | null = null;
 let unlistenFinished: UnlistenFn | null = null;
 
 function errorMessage(error: unknown): string {
@@ -24,17 +19,9 @@ function errorMessage(error: unknown): string {
 
 export async function init(): Promise<void> {
   const store = useHiddenCleanupStore();
-  try {
-    store.applyRunState(await invoke<HiddenCleanupRunState>("get_hidden_cleanup_run_state"));
-  } catch (error) {
-    console.warn("[hiddenCleanup] get_hidden_cleanup_run_state failed:", error);
-  }
-
-  unlistenProgress = await listen<HiddenCleanupProgress>("hidden-cleanup-progress", (event) => {
-    store.applyProgress(event.payload);
-  });
   unlistenFinished = await listen<HiddenCleanupFinished>("hidden-cleanup-finished", (event) => {
     const payload = event.payload;
+    busyPoller.invalidate();
     store.applyFinished(payload);
     if (payload.error) {
       ElMessage.error(i18n.global.t("gallery.hiddenCleanupFailed"));
@@ -55,12 +42,11 @@ export async function init(): Promise<void> {
 }
 
 export function dispose(): void {
-  unlistenProgress?.();
   unlistenFinished?.();
-  unlistenProgress = unlistenFinished = null;
+  unlistenFinished = null;
 }
 
-/** `total` 仅用于在首个进度事件到达前把分母填上，后端仍是权威。 */
+/** `total` 仅用于启动窗口内先填充进度分母，后端快照仍是权威。 */
 export async function start(total: number): Promise<void> {
   const store = useHiddenCleanupStore();
   if (store.running) return;
@@ -77,6 +63,9 @@ export async function start(total: number): Promise<void> {
       error: errorMessage(error),
     });
     ElMessage.error(i18n.global.t("gallery.startHiddenCleanupFailed"));
+  } finally {
+    store.endStarting();
+    busyPoller.invalidate();
   }
 }
 
