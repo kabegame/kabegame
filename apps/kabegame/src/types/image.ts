@@ -19,10 +19,12 @@ export interface ImageInfo {
   taskId?: string;
   surfRecordId?: string;
   crawledAt?: number;
-  /** 外键 `image_metadata.id`；列表常带此字段以合并懒加载请求 */
+  /** 外键 `metadata.id`（插件元数据）；列表常带此字段以合并懒加载请求 */
   metadataId?: number;
-  /** `image_metadata.version`；用于 metadata 缓存失效 */
+  /** `metadata.plugin_version`；用于 metadata 缓存失效 */
   pluginVersion?: number;
+  /** 外键 `image_metadata.id`（原生元数据）；查看时才懒解析，挂上后经 image-changed 补丁更新，用于原生元数据缓存失效 */
+  imageMetadataId?: number;
   hash?: string;
   order?: number;
   width?: number;

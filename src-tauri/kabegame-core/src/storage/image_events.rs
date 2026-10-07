@@ -5,7 +5,9 @@ use crate::emitter::dispatch_view_event;
 use crate::emitter::{next_change_seq, GlobalEmitter};
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
+use crate::ipc::events::ImagePatch;
 use crate::storage::albums::AddToAlbumResult;
+use crate::storage::images::NativeMetadataAttached;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
 use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use serde::{Deserialize, Serialize};
@@ -124,6 +126,42 @@ fn split_by_hidden(changed: &[String], pairs: &[(String, String)]) -> (Vec<Strin
         .iter()
         .cloned()
         .partition(|image_id| hidden.contains(image_id.as_str()))
+}
+
+/// 原生元数据挂载的补丁：`image_metadata_id` 是图片字段，按 `imageMetadataId` 下发绝对值。
+pub fn native_metadata_image_patch(attached: &NativeMetadataAttached) -> Option<ImagePatch> {
+    if attached.changed_image_ids.is_empty() {
+        return None;
+    }
+    Some(ImagePatch {
+        image_ids: attached.changed_image_ids.clone(),
+        diff: json!({ "imageMetadataId": attached.metadata_id }),
+    })
+}
+
+/// 原生元数据挂载写库后调用：先 `image-changed` 补丁当前页，再 `images-change("change")`——
+/// 原生元数据参与 `search/native-metadata`，搜索成员可能变了。`skip_image_id` 给下载链路排除
+/// 随后会发 `add` 的新图。
+pub fn emit_native_metadata_attached(
+    attached: &NativeMetadataAttached,
+    skip_image_id: Option<&str>,
+) {
+    let changed = attached
+        .changed_image_ids
+        .iter()
+        .filter(|id| Some(id.as_str()) != skip_image_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return;
+    }
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        emitter.emit_image_changed_uniform(
+            &changed,
+            json!({ "imageMetadataId": attached.metadata_id }),
+        );
+        emitter.emit_images_change("change", &changed, None, None, None);
+    }
 }
 
 fn emit_image_hidden_changed(changed: &[String], is_hidden: bool) {

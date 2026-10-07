@@ -233,12 +233,13 @@ describe("预览跟随后台新增图片", () => {
     settings.values.previewFollowPage = false;
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));
     await nextTick();
-    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toBe("target");
+    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toMatchObject({ id: "target" });
     locateImageRowIndex.mockResolvedValue(3);
     settings.values.previewFollowPage = true;
     await flushPromises();
     expect(jumpToPage).toHaveBeenCalledWith(2);
-    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toBeNull();
+    // 目标页快照到达前继续给同一个对象，弹窗不收起。
+    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toMatchObject({ id: "target" });
   });
 
   it("定位错误不等于不存在：保留旧图，下一个快照到达时允许重试", async () => {
@@ -368,13 +369,18 @@ describe("预览跟随后台新增图片", () => {
     expect(core.props("previewImage")).toMatchObject({ id: "target" });
   });
 
-  it("当前图确实不在视图中时，定位完成后转入单图模式", async () => {
+  it("当前图确实不在视图中时，定位完成后保留原对象继续显示", async () => {
     const wrapper = await render();
+    const shown = wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage");
     locateImageRowIndex.mockResolvedValue(null);
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));
     await flushPromises();
     expect(jumpToPage).not.toHaveBeenCalled();
-    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toBe("target");
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    // 同一个对象：弹窗不按裸 id 重取，Panzoom 不卸载；视图外没有邻居，两侧箭头都收起。
+    expect(core.props("previewImage")).toBe(shown);
+    expect(core.props("previewCanPrev")).toBe(false);
+    expect(core.props("previewCanNext")).toBe(false);
   });
 
   it("已确认视图外的单图遇到新快照重查，不先收起现有预览", async () => {
@@ -383,11 +389,11 @@ describe("预览跟随后台新增图片", () => {
     locateImageRowIndex.mockResolvedValueOnce(null);
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));
     await flushPromises();
-    expect(core.props("previewImage")).toBe("target");
+    expect(core.props("previewImage")).toMatchObject({ id: "target" });
     locateImageRowIndex.mockImplementation(() => new Promise(() => {}));
     await applySnapshot!(snapshot(["new-3", "new-2"], 3));
     await nextTick();
-    expect(core.props("previewImage")).toBe("target");
+    expect(core.props("previewImage")).toMatchObject({ id: "target" });
   });
 
   it("关掉跟页时不查询 rank、不自动翻页", async () => {
@@ -397,7 +403,7 @@ describe("预览跟随后台新增图片", () => {
     await nextTick();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
     expect(jumpToPage).not.toHaveBeenCalled();
-    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toBe("target");
+    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toMatchObject({ id: "target" });
   });
 
   it("rank 返回前用户已切图，迟到结果不能触发翻页或覆盖新图", async () => {

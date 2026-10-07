@@ -119,7 +119,10 @@ images://gallery/hide/album/<id>/sort/by-time/desc  /~~/ rank /~~/ id_2719
 完成。`jumpToPage()` 只等待路由导航，不保证数据已到；必须等目标页快照实际包含同一 id，才能
 替换成目标页的行。整个阶段 `image` prop 不经过字符串/null，图片内容和 Panzoom 实例不会因
 所有权切换卸载，缩放和平移得以保留。首次打开没有旧对象时保持 `null`，目标页确认之前不打开
-弹窗；只有定位为空或关闭跟页时才交给裸 id 的单图路线。定位错误不等于不在视图中，保留旧预览
+弹窗；定位为空或关闭跟页时进入单图模式：已持有这张图的对象（被动刷新刚把它移出视图，例如打开预览
+才回填原生元数据、不再满足 `!词` 搜索）就继续给同一个对象，弹窗不重取、缩放不丢；没有对象（深链接首开）
+才交给裸 id 的单图路线。视图外的图不给左右箭头（`previewCanPrev/Next` 只看它在当前列表里的位置）。
+定位错误不等于不在视图中，保留旧预览
 或等待态，后续快照再次尝试。因等待新 URL 目标而收起旧弹窗的 close 回报，不得取消新目标。
 
 定位防重只覆盖在途请求及同一 `<分页路径, id, 页大小, 快照 seq>` 的重复尝试，不永久缓存
@@ -210,6 +213,13 @@ ImageGrid 把数据变化分成两条通道：
   这些可选维度只是免费 hint：删除图片不再为 payload 额外查询 surf/plugin，删除任务只带 task；维度缺失表示
   无法排除当前视图，而不是“不相关”。
 - 删除畅游记录会补发带 `surfRecordIds` 的 `change`；整理每批重写缩略图/兼容路径后会按批补发 `change`。
+- 原生元数据挂载会改变 `search/native-metadata` 的成员：`ensure_native_metadata_for_hash/_for_image` 返回
+  `NativeMetadataAttached.changed_image_ids`（实际改了 `image_metadata_id` 的图片，已挂同一行的不算），
+  `image_metadata_id` 是图片字段，统一经 `image_events::emit_native_metadata_attached` 先发
+  `image-changed`（`imageMetadataId`）再发 `images-change("change")`：预览按需解析（`get_image_native_metadata`）
+  立即发，整理回填用 `native_metadata_image_patch` 并入本批补丁，下载入库只为同哈希的旧图补发（新图随后有 `add`）。
+  前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（同插件元数据的 `@m<metadataId>`），面板在同一张图只换
+  `imageMetadataId` 时保留旧内容重新取数，不闪。
 - ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
 
 ### `image-changed`（`AppEvent::ImageChanged`，`ImageInfo` 字段）
@@ -218,7 +228,7 @@ ImageGrid 把数据变化分成两条通道：
   `ImageInfo` camelCase 字段，值是绝对值快照，不是增量。
 - 同一次写入先发 `image-changed`即时 patch 当前页，再发 `images-change("change", ids)`；后者保留
   500ms 权威快照对账，处理排序、搜索成员与分面变化。`EventHold` 保持两条事件的顺序。
-- 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`pluginVersion`、`postUrl`、
+- 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`pluginVersion`、`imageMetadataId`、`postUrl`、
   `thumbnailPath`、`compatiblePath`、`localPath`、`surfRecordId`、`taskId`、`lastSetWallpaperAt`、
   `isHidden`、`favorite`、`type`、`size`。`width` / `height` 刻意排除，避免正在预览时打断 PhotoSwipe 缩放。
 - Grid 用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` / `pluginVersion` 变化会自然改变

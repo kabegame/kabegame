@@ -9,7 +9,8 @@ use crate::commands::view::{snapshot_view, ViewQuery};
 use crate::providers::{decode_provider_path_segments, query_entry, query_fetch, query_list};
 use crate::settings::Settings;
 use crate::storage::image_events::{
-    begin_delete_images_with_events, delete_images_with_events, toggle_image_favorite_with_event,
+    begin_delete_images_with_events, delete_images_with_events, emit_native_metadata_attached,
+    toggle_image_favorite_with_event,
 };
 use crate::storage::Storage;
 use serde_json::{json, Value};
@@ -93,10 +94,14 @@ pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String
         }
     }
 
-    if storage
-        .ensure_native_metadata_for_image(&image_id, &row.hash, expected_version, None)?
-        .is_some()
-    {
+    // 查看时才懒解析 / 挂载：挂载会改变 `search/native-metadata` 的成员，必须通知视图重查——
+    // 否则带原生元数据过滤的列表要等手动刷新才会把这张图移出（预览自己会保留它）。
+    let shared =
+        storage.ensure_native_metadata_for_image(&image_id, &row.hash, expected_version, None)?;
+    if let Some(attached) = &shared {
+        emit_native_metadata_attached(attached, None);
+    }
+    if shared.is_some() {
         if let Some(shared) = storage.get_image_native_metadata_row(&image_id)? {
             if shared.parser_version == Some(expected_version) {
                 if let Some(data) = shared.data.as_deref() {
@@ -111,12 +116,14 @@ pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String
         .ok_or_else(|| "native-metadata:unsupported-format".to_string())?;
     let json = serde_json::to_string(&parsed)
         .map_err(|e| format!("native-metadata:serialize-failed:{e}"))?;
-    storage.ensure_native_metadata_for_image(
+    if let Some(attached) = storage.ensure_native_metadata_for_image(
         &image_id,
         &row.hash,
         expected_version,
         Some(&json),
-    )?;
+    )? {
+        emit_native_metadata_attached(&attached, None);
+    }
 
     let stored = storage
         .get_image_native_metadata_row(&image_id)?

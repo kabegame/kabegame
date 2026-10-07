@@ -5,8 +5,9 @@ import { NATIVE_METADATA_CACHE_VERSION, type NativeMetadataPayload } from "../ty
 
 const MAX_CACHE_SIZE = 256;
 
-function cacheKeyFor(imageId: string): string {
-  return `${imageId}@nv${NATIVE_METADATA_CACHE_VERSION}`;
+/** 同插件元数据的 `imageId@m<metadataId>`：原生元数据行换了（懒解析挂上、整理回填、按哈希共享）就换 key。 */
+function cacheKeyFor(imageId: string, imageMetadataId?: number | null): string {
+  return `${imageId}@n${imageMetadataId ?? 0}@nv${NATIVE_METADATA_CACHE_VERSION}`;
 }
 
 class LruMap {
@@ -67,10 +68,13 @@ function ensureInit(): Promise<void> {
  * 解析图片原生元数据。成功结果（包括 null）进入全局 LRU；
  * Web 模式额外持久化到 IndexedDB，错误保持抛出且不缓存。
  */
-export async function resolveNativeMetadata(imageId: string): Promise<NativeMetadataPayload> {
+export async function resolveNativeMetadata(
+  imageId: string,
+  imageMetadataId?: number | null,
+): Promise<NativeMetadataPayload> {
   await ensureInit();
 
-  const key = cacheKeyFor(imageId);
+  const key = cacheKeyFor(imageId, imageMetadataId);
   if (mem.has(key)) {
     return mem.get(key) ?? null;
   }

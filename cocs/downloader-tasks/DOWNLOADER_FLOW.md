@@ -188,7 +188,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 3. 查 `Storage::find_image_by_hash` 做 hash 去重。
 4. 未命中去重时，根据格式键计算最终目标路径/文件名，落盘（或映射回标准 MIME 后执行 Android MediaStore copy）。
 5. 生成缩略图/预览，写入 `images` 表，广播事件。
-6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`；先按 `hash` 查同哈希图片是否已挂 `parser_version` 匹配的 `image_metadata` 行（命中则共享 id 回填所有同哈希图片，不重复解析），未命中才解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算）。任何失败仅 log，不阻断入库。注意 `image_metadata` 表现指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
+6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`；先按 `hash` 查同哈希图片是否已挂 `parser_version` 匹配的 `image_metadata` 行（命中则共享 id 回填所有同哈希图片，不重复解析），未命中才解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算）。任何失败仅 log，不阻断入库。按哈希共享会把元数据一并挂到同哈希的旧图上，改变它们的 `search/native-metadata` 成员，因此经 `image_events::emit_native_metadata_attached` 对这些旧图补发 `image-changed`（`imageMetadataId`）与 `images-change("change")`（新图本身随后的 `add` 已覆盖）。注意 `image_metadata` 表现指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
 
 ### 插件标签
 

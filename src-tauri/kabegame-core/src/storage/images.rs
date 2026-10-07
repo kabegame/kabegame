@@ -155,6 +155,15 @@ pub struct MetadataFull {
     pub plugin_id: String,
 }
 
+/// 原生元数据挂载结果。原生元数据参与 `search/native-metadata`，挂载会改变图片的搜索成员，
+/// 调用方要为 `changed_image_ids` 发 `images-change("change")`，否则正在显示的视图不会重查。
+#[derive(Debug, Clone)]
+pub struct NativeMetadataAttached {
+    pub metadata_id: i64,
+    /// 本次挂载实际改了 `image_metadata_id` 的图片；已挂着同一行的不算。
+    pub changed_image_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageNativeMetadataRow {
     pub image_metadata_id: Option<i64>,
@@ -577,7 +586,7 @@ impl Storage {
         hash: &str,
         expected_version: u32,
         json_if_missing: Option<&str>,
-    ) -> Result<Option<i64>, String> {
+    ) -> Result<Option<NativeMetadataAttached>, String> {
         let hash = hash.trim();
         if hash.is_empty() {
             return Ok(None);
@@ -626,6 +635,20 @@ impl Storage {
             return Ok(None);
         };
 
+        let changed_image_ids = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM images
+                     WHERE hash = ?1 AND image_metadata_id IS NOT ?2",
+                )
+                .map_err(|e| format!("prepare native metadata backfill targets: {e}"))?;
+            let rows = stmt
+                .query_map(params![hash, metadata_id], |row| row.get::<_, i64>(0))
+                .map_err(|e| format!("query native metadata backfill targets: {e}"))?;
+            rows.map(|row| row.map(|id| id.to_string()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("collect native metadata backfill targets: {e}"))?
+        };
         tx.execute(
             "UPDATE images SET image_metadata_id = ?1 WHERE hash = ?2",
             params![metadata_id, hash],
@@ -634,7 +657,10 @@ impl Storage {
         gc_native_metadata_candidates(&tx, &candidate_ids, Some(metadata_id))?;
         tx.commit()
             .map_err(|e| format!("commit shared native metadata: {e}"))?;
-        Ok(Some(metadata_id))
+        Ok(Some(NativeMetadataAttached {
+            metadata_id,
+            changed_image_ids,
+        }))
     }
 
     /// 空哈希历史数据退化为仅挂载当前图片；正常哈希仍走共享路径。
@@ -644,7 +670,7 @@ impl Storage {
         hash: &str,
         expected_version: u32,
         json_if_missing: Option<&str>,
-    ) -> Result<Option<i64>, String> {
+    ) -> Result<Option<NativeMetadataAttached>, String> {
         if !hash.trim().is_empty() {
             return self.ensure_native_metadata_for_hash(hash, expected_version, json_if_missing);
         }
@@ -669,10 +695,15 @@ impl Storage {
                 .map_err(|e| format!("commit missing image native metadata: {e}"))?;
             return Ok(None);
         };
-        if old_id.is_some() && old_version == Some(i64::from(expected_version)) {
-            tx.commit()
-                .map_err(|e| format!("commit current image native metadata: {e}"))?;
-            return Ok(old_id);
+        if let (Some(metadata_id), Some(version)) = (old_id, old_version) {
+            if version == i64::from(expected_version) {
+                tx.commit()
+                    .map_err(|e| format!("commit current image native metadata: {e}"))?;
+                return Ok(Some(NativeMetadataAttached {
+                    metadata_id,
+                    changed_image_ids: Vec::new(),
+                }));
+            }
         }
         let Some(json) = json_if_missing else {
             tx.commit()
@@ -691,7 +722,10 @@ impl Storage {
         }
         tx.commit()
             .map_err(|e| format!("commit image native metadata: {e}"))?;
-        Ok(Some(metadata_id))
+        Ok(Some(NativeMetadataAttached {
+            metadata_id,
+            changed_image_ids: vec![image_id.to_string()],
+        }))
     }
 
     pub fn get_image_native_metadata_row(
@@ -1654,5 +1688,92 @@ mod rebind_image_metadata_tests {
             .unwrap();
         assert!(!unique_old_exists);
         assert!(shared_old_exists);
+    }
+}
+
+#[cfg(test)]
+mod native_metadata_attach_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn storage() -> Storage {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE image_metadata (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                data           TEXT    NOT NULL,
+                search_text    TEXT    NOT NULL DEFAULT '',
+                parser_version INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE images (
+                id                INTEGER PRIMARY KEY,
+                hash              TEXT NOT NULL DEFAULT '',
+                image_metadata_id INTEGER
+            );
+            INSERT INTO images (id, hash) VALUES (1, 'h'), (2, 'h'), (3, 'other'), (4, '');",
+        )
+        .unwrap();
+        Storage {
+            db: Arc::new(Mutex::new(conn)),
+            cached_images_total: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn sorted(mut ids: Vec<String>) -> Vec<String> {
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn hash_attach_reports_only_images_whose_metadata_id_changed() {
+        let storage = storage();
+        // 未命中且不给 JSON：不写库，也就没有要通知的图片。
+        assert!(storage
+            .ensure_native_metadata_for_hash("h", 1, None)
+            .unwrap()
+            .is_none());
+
+        let first = storage
+            .ensure_native_metadata_for_hash("h", 1, Some(r#"{"prompt":"1girl"}"#))
+            .unwrap()
+            .unwrap();
+        assert_eq!(sorted(first.changed_image_ids), ["1", "2"]);
+
+        // 已挂着同一行：命中共享，但没有图片真的变了。
+        let again = storage
+            .ensure_native_metadata_for_image("1", "h", 1, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.metadata_id, first.metadata_id);
+        assert!(again.changed_image_ids.is_empty());
+
+        // 同哈希的新图入库后再共享：只报新图。
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute("INSERT INTO images (id, hash) VALUES (5, 'h')", [])
+            .unwrap();
+        let shared = storage
+            .ensure_native_metadata_for_hash("h", 1, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(shared.changed_image_ids, ["5"]);
+    }
+
+    #[test]
+    fn empty_hash_attach_reports_the_image_once() {
+        let storage = storage();
+        let attached = storage
+            .ensure_native_metadata_for_image("4", "", 1, Some("{}"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attached.changed_image_ids, ["4"]);
+        let current = storage
+            .ensure_native_metadata_for_image("4", "", 1, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.metadata_id, attached.metadata_id);
+        assert!(current.changed_image_ids.is_empty());
     }
 }

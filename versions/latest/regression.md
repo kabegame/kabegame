@@ -27,6 +27,24 @@
 | [ ] | 旧 URL 兼容 | 桌面 CEF / Web | 打开改动前保存的带单分支 `~any` 高级条件的链接 / 历史记录 | 高级条件仍显示在高级区 | |
 | [ ] | 详情页 | 桌面 CEF | 画册 / 任务 / 畅游详情里用 `!`、括号搜索并追加高级条件 | 路由正常、结果正确 | |
 
+## 原生元数据回填后视图实时刷新，预览保持显示
+
+原生元数据参与 `search/native-metadata`，但预览按需解析、整理回填、下载按哈希共享挂载都不发事件，
+带 `!词` 的视图要手动刷新才会把图移出。`ensure_native_metadata_*` 改为返回实际改动的图片 id，三处调用方
+先发 `image-changed`（`imageMetadataId`，前端 `ImageInfo` 新增该字段）再发 `images-change("change")`；
+原生元数据缓存 key 纳入 `imageMetadataId`，面板同图换 id 时保留内容重新取数。前端被动刷新把当前预览图移出视图、rank 定位为空时，继续给弹窗同一个
+`ImageInfo` 对象（不再退回裸 id 重取），视图外照旧不给左右箭头。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 挂载改动 id 单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib native_metadata_attach` | 2 个用例通过：只报告 `image_metadata_id` 真正变化的图片 | 已实测 |
+| [x] | 预览对象保留 / 面板不闪自动化 | 前端 Vitest | `npx vitest run`（apps/kabegame） | 24 个文件、232 个用例通过；定位为空时 `previewImage` 仍是同一对象、两侧箭头为 false；同图换 `imageMetadataId` 重新取数但不清空内容 | 已实测；vue-tsc、cargo check 通过 |
+| [x] | 整理回填实时更新视图 | 桌面 CEF dev | `!1girl` 搜索下运行整理 | 视图随批次实时缩减；最终界面「共 915 / 1648 张」与 CLI `pathql query --entry` 的 total 915 一致 | 用户实测 + CLI 核对 |
+| [x] | 打开预览触发回填 | 桌面 CEF dev | `!1girl` 搜索下打开一张原生元数据含 1girl、尚未解析的图 | 约 0.5s 后网格移出该图；预览仍显示它，左右箭头收起 | 用户实测 |
+| [ ] | 预览不闪烁 | 桌面 CEF dev | 同上，打开前先放大图片 | 移出视图后缩放与平移保持，图片不重新加载 | |
+| [ ] | 无关视图不受影响 | 桌面 CEF dev | 不带搜索的画廊里打开预览触发回填 | 列表成员与顺序不变，预览照常有箭头 | |
+| [ ] | 原生元数据面板不闪 | 桌面 CEF dev | 打开一张未解析过原生元数据的图并展开原生元数据面板 | 内容出现后不再闪一次空白 / 加载态 | 补丁把 `imageMetadataId` 从空改成新行会触发一次后台重取 |
+
 ## 预览中删除后按设置的切图方向接续
 
 「设置 → 通用 → 切图方向」提供自动（默认）、上一张、下一张三档。`ImageGrid.resolvePreviewAnchor`

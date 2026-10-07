@@ -4,6 +4,7 @@ use crate::crawler::downloader::{
 use crate::emitter::GlobalEmitter;
 use crate::ipc::events::ImagePatch;
 use crate::settings::Settings;
+use crate::storage::image_events::native_metadata_image_patch;
 use crate::storage::Storage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -908,8 +909,10 @@ fn run_organize(
             let image_id = id.to_string();
             match storage.ensure_native_metadata_for_image(&image_id, &hash, expected_version, None)
             {
-                Ok(Some(_)) => {
+                Ok(Some(attached)) => {
                     backfilled_total += 1;
+                    // 原生元数据参与搜索：随本批补丁一起发 image-changed + images-change。
+                    changed_image_patches.extend(native_metadata_image_patch(&attached));
                     continue;
                 }
                 Ok(None) => {}
@@ -955,8 +958,10 @@ fn run_organize(
                 expected_version,
                 Some(&json),
             ) {
-                Ok(Some(_)) => {
+                Ok(Some(attached)) => {
                     backfilled_total += 1;
+                    // 原生元数据参与搜索：随本批补丁一起发 image-changed + images-change。
+                    changed_image_patches.extend(native_metadata_image_patch(&attached));
                 }
                 Ok(None) => {
                     eprintln!(

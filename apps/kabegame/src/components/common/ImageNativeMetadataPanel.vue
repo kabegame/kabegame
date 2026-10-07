@@ -136,6 +136,7 @@ import { displayImageMimeType } from "../../utils/mediaMime";
 type NativeMetadataImageLike = {
   id?: string;
   type?: string;
+  imageMetadataId?: number;
 };
 
 const props = withDefaults(
@@ -154,7 +155,11 @@ const props = withDefaults(
 
 const { t } = useI18n();
 const imageId = computed(() => props.image?.id);
-const { state, showLoading, payload, errorDetail, displayGroups, load } = useNativeMetadataState(imageId);
+const imageMetadataId = computed(() => props.image?.imageMetadataId);
+const { state, showLoading, payload, errorDetail, displayGroups, load } = useNativeMetadataState(
+  imageId,
+  imageMetadataId,
+);
 
 const mimeLabel = computed(() => displayImageMimeType(props.image?.type));
 

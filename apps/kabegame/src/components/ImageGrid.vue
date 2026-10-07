@@ -840,8 +840,8 @@ function reconcilePreviewForReadyPage() {
     return;
   }
   pendingPreviewLocate = null;
-  previewImageInfo.value = null;
-  previewSingleImage.value = true; // 不跟页：交给弹窗的单图路线
+  // 不跟页：交给弹窗的单图路线。已有这张图的对象（刚被移出视图）就继续给它，不收起重取。
+  previewSingleImage.value = true;
 }
 
 // 唯一协调入口：每次当前页数据就绪，再检查目标 id，而不是由 URL/下载来源分别发起定位。
@@ -889,8 +889,9 @@ async function locatePreviewedImage(id: string) {
     const rowIndex = await locateImageRowIndex(viewBody, id);
     if (!isCurrent()) return;
     if (rowIndex == null) {
+      // 不在视图里。已有这张图的对象（被动刷新刚移出）就继续显示它，弹窗不重取、缩放不丢；
+      // 深链接首开没有对象，才由单图路线按裸 id 取图。
       pendingPreviewLocate = null;
-      previewImageInfo.value = null;
       previewSingleImage.value = true;
       return;
     }
