@@ -672,7 +672,7 @@ const previewProp = computed<string | CoreImageInfo | null>(() => {
   return previewSingleImage.value ? id : null;
 });
 
-// 切图/关闭使旧定位失效；同一 id 的列表刷新只在快照协调中更新 ImageInfo。
+// 切图/关闭使旧定位失效；新 id 的 ImageInfo 由 reconcilePreview 在同一轮渲染前接上。
 watch(
   previewedId,
   (id) => {
@@ -810,22 +810,29 @@ const previewListReady = computed(
 const previewFollowPage = computed(() => settingsStore.values.previewFollowPage !== false);
 
 /**
- * 快照协调只在确认当前行存在时更新预览对象。后台刷新使图离开本页时先定位，
+ * 每次 images 变化（或切图）后检查目标 id 还在不在视图，判定不对称：
+ * - 在当前快照里：直接采用，不等读取空闲——快照随时可能过时，等空闲也换不来更新的结论，
+ *   下一个快照落地时这里会再查一遍；
+ * - 不在：在途读取可能把它带回来，必须等列表就绪才定位 / 降级，期间保留上一帧。
  * 定位成功后的导航不算落地；目标页快照找到同一 id 才结束保留旧对象的阶段。
  */
-function reconcilePreviewForReadyPage() {
+function reconcilePreview() {
   const id = previewedId.value;
-  if (!id || !previewListReady.value || !isRouteActive.value || !adapter.isActive()) return;
-  // 上/下一张跨页时，分页器会在目标页就绪后选择首/末张；不能定位切换前的旧 id。
-  if (paged.pendingPreviewBoundary.value) return;
+  if (!id || !isRouteActive.value || !adapter.isActive()) return;
   const image = images.value.find((row) => row.id === id);
   if (image) {
-    pendingPreviewLocate = null;
-    lastLocateAttempt = null;
     previewSingleImage.value = false;
     previewImageInfo.value = image;
+    // 定位请求只在就绪页确认后结束；未就绪时命中的是旧快照，交给下一轮
+    if (previewListReady.value) {
+      pendingPreviewLocate = null;
+      lastLocateAttempt = null;
+    }
     return;
   }
+  // 上/下一张跨页时，分页器会在目标页就绪后选择首/末张；不能定位切换前的旧 id。
+  if (paged.pendingPreviewBoundary.value) return;
+  if (!previewListReady.value) return;
 
   const pending = pendingPreviewLocate;
   if (pending && pending.id === id && pending.viewBody === stripPageTail(rawViewPath())) {
@@ -844,7 +851,7 @@ function reconcilePreviewForReadyPage() {
   previewSingleImage.value = true;
 }
 
-// 唯一协调入口：每次当前页数据就绪，再检查目标 id，而不是由 URL/下载来源分别发起定位。
+// 唯一协调入口：切图或 images / 就绪态变化后都重查目标 id，而不是由 URL/下载来源分别发起定位。
 watch(
   () => [
     previewedId.value,
@@ -855,8 +862,8 @@ watch(
     isRouteActive.value,
     paged.pendingPreviewBoundary.value,
   ],
-  reconcilePreviewForReadyPage,
-  // 在渲染前完成同一轮协调，切图不会把中间的 null 传给已经打开的弹窗。
+  reconcilePreview,
+  // 在渲染前完成同一轮协调：目标在当前快照里时，切图不会把中间的 null 传给已经打开的弹窗。
   { flush: "pre" },
 );
 

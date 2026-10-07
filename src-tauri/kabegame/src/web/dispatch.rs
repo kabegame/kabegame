@@ -1400,23 +1400,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "add_task",
-        MethodEntry {
-            requires_super: true,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    struct Args {
-                        task: Value,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::task::add_task(args.task).map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "clear_finished_tasks",
         MethodEntry {
             requires_super: true,

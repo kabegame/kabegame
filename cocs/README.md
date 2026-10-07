@@ -53,7 +53,7 @@
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, total, seq }` 单次快照；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先快照后广播；500ms 批次合并、画册 `ancestorPath` 相关性、wildcard 粗过滤和 `seq` 防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
-  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、或并列排序下定位落到相邻页。预览统一等待当前路径快照应用与 `liveQuery.loading` 结束再协调；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
+  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `liveQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
 
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
   - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 与 `search/label-tree`，以及分页查询树 / 选择器 / 预览面板。

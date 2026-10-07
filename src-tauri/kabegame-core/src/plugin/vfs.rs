@@ -960,5 +960,4 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
-
 }

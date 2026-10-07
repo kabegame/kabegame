@@ -494,14 +494,6 @@ pub async fn dismiss_missed_configs(config_ids: Vec<String>) -> Result<Value, St
     Ok(Value::Null)
 }
 
-pub fn add_task(task: Value) -> Result<Value, String> {
-    let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
-    Storage::global().add_task(task_info.clone())?;
-    let payload = serde_json::to_value(&task_info).map_err(|e| e.to_string())?;
-    GlobalEmitter::global().emit_task_added(&payload);
-    Ok(Value::Null)
-}
-
 pub fn clear_finished_tasks() -> Result<Value, String> {
     let storage = Storage::global();
     let task_ids = storage.get_finished_task_ids()?;

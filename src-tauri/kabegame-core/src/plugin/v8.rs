@@ -250,12 +250,20 @@ pub fn execute_v8_entry(
         };
         let mut rt = JsPluginRuntime::new(ctx, fs).map_err(|e| TaskError::Other(e.to_string()))?;
         let isolate_handle = rt.runtime_mut().v8_isolate().thread_safe_handle();
+        // 同步 JS（如死循环）占住本线程时 select 无法轮询，只能由另一线程打断 isolate。
         let watcher = tokio::spawn(async move {
             cancel_for_watcher.cancelled().await;
             isolate_handle.terminate_execution();
         });
-        let result = rt.run_crawl(&plugin_id, entry_code, common, custom).await;
+        // 事件循环空闲（等 timer / 插件吞掉取消错误后继续 await）时 terminate 无从生效，
+        // 取消即丢弃整个 run_crawl future，连同未完成的 op 与运行时一起释放。
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(anyhow!("Task canceled")),
+            result = rt.run_crawl(&plugin_id, entry_code, common, custom) => result,
+        };
         watcher.abort();
+        drop(rt);
         normalize_cancel_error(result, &cancel)
     })
 }
@@ -706,6 +714,45 @@ mod tests {
             .expect_err("hard interrupt should fail as canceled");
 
         assert_eq!(err, TaskError::Canceled);
+    }
+
+    /// 事件循环空闲时（等 timer、或插件吞掉取消错误后继续 await）取消也必须立即结束为 Canceled。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn execute_entry_cancels_idle_event_loop_immediately() {
+        let server = spawn_hanging_http_server();
+        for (name, body) in [
+            (
+                "timer",
+                "await new Promise((r) => setTimeout(r, 30000));".to_string(),
+            ),
+            (
+                "swallow",
+                format!(
+                    "try {{ await Kabegame.to(\"{server}/slow\"); }} catch (e) {{}} \
+                     await new Promise((r) => setTimeout(r, 30000));"
+                ),
+            ),
+        ] {
+            let run = test_run_with_script(
+                &format!("v8-idle-cancel-{name}"),
+                "",
+                PluginScript::new(
+                    PluginBackend::V8,
+                    format!("export async function crawl() {{ {body} }}"),
+                ),
+                HashMap::new(),
+            );
+            let cancel = run.cancel.clone();
+            let join = tokio::task::spawn_blocking(move || execute_crawler_script_v8(run));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            cancel.cancel();
+            let result = tokio::time::timeout(Duration::from_secs(5), join)
+                .await
+                .unwrap_or_else(|_| panic!("{name}: cancel should finish promptly"))
+                .expect("blocking worker should not panic");
+
+            assert_eq!(result, Err(TaskError::Canceled), "{name}");
+        }
     }
 
     #[tokio::test]

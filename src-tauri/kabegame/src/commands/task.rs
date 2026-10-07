@@ -135,11 +135,6 @@ pub async fn get_task(task_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn add_task(task: Value) -> Result<Value, String> {
-    commands::task::add_task(task)
-}
-
-#[tauri::command]
 pub async fn delete_task(task_id: String) -> Result<Value, String> {
     commands::task::delete_task(task_id)
 }

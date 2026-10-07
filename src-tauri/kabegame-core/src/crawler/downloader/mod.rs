@@ -647,6 +647,17 @@ pub async fn download_with_retry(
     // download_with_retry 私有持有溢写状态：以抽象 DownloadWriter 形式传给 download，
     // 何时清空 / 落盘 / 收尾都在 download 返回后由本函数决定。
     let mut writer = SpillWriter::new(download_id, dq);
+    // 任务取消要立即打断常规下载（send() 等首包、慢流）与重试退避；
+    // SpillWriter 只在收到数据时检查取消，服务端卡住时会一直等到请求超时。
+    let task_cancel = TaskScheduler::global()
+        .get_run(task_id)
+        .map(|run| run.cancel.clone());
+    let task_canceled = || async {
+        match &task_cancel {
+            Some(cancel) => cancel.cancelled().await,
+            None => std::future::pending().await,
+        }
+    };
 
     for attempt in 1..=max_attempts {
         if dq.is_download_canceled(download_id).await {
@@ -663,8 +674,16 @@ pub async fn download_with_retry(
             }
             // 常规：按 scheme 的 downloader 直写 writer（支持 Range 续传）。
             (None, Some(d)) => {
-                d.download(&parsed, headers, &mut writer, already_received)
-                    .await
+                let canceled = tokio::select! {
+                    biased;
+                    _ = task_canceled() => None,
+                    result = d.download(&parsed, headers, &mut writer, already_received) => Some(result),
+                };
+                let Some(result) = canceled else {
+                    writer.clear();
+                    return Err("Task canceled".into());
+                };
+                result
             }
             (None, None) => unreachable!("non-native path always resolves a downloader"),
         };
@@ -686,7 +705,14 @@ pub async fn download_with_retry(
                 if e.should_clear() {
                     writer.clear();
                 }
-                sleep(Duration::from_millis(500 * attempt as u64)).await;
+                tokio::select! {
+                    biased;
+                    _ = task_canceled() => {
+                        writer.clear();
+                        return Err("Task canceled".into());
+                    }
+                    _ = sleep(Duration::from_millis(500 * attempt as u64)) => {}
+                }
             }
         }
     }

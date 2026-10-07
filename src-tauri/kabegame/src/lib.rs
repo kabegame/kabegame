@@ -506,7 +506,6 @@ pub(crate) fn configure_app(
             get_all_tasks,
             get_tasks_page,
             get_task,
-            add_task,
             delete_task,
             start_task,
             cancel_task,

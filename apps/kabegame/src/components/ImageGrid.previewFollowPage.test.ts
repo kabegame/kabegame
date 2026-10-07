@@ -527,3 +527,57 @@ describe("预览跟随后台新增图片", () => {
     expect(core.props("previewImage")).toMatchObject({ id: "first" });
   });
 });
+
+describe("列表读取在途时切图", () => {
+  it("视图内下一张：邻居在当前快照里就直接交给弹窗，不经过 null", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    const seen: unknown[] = [];
+    wrapper.vm.$watch(
+      () => core.props("previewImage"),
+      (value: unknown) => seen.push(value),
+      { flush: "sync" },
+    );
+    queryLoading.value = true; // 被动刷新在途（弱网下可能持续数秒）
+    core.vm.$emit("preview-switch", { direction: "next" });
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "older" });
+    expect(seen).not.toContain(null);
+    expect(locateImageRowIndex).not.toHaveBeenCalled();
+  });
+
+  it("切图后在途快照把目标移走：就绪前保留上一帧，就绪后再定位", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    queryLoading.value = true;
+    core.vm.$emit("preview-switch", { direction: "next" });
+    await nextTick();
+    const switched = core.props("previewImage");
+    expect(switched).toMatchObject({ id: "older" });
+    locateImageRowIndex.mockImplementation(() => new Promise(() => {}));
+    await applySnapshot!(snapshot(["new-2", "new-1"], 2));
+    await nextTick();
+    // 读取仍未结束：不能据此判定不在视图，也不能收起弹窗
+    expect(locateImageRowIndex).not.toHaveBeenCalled();
+    expect(core.props("previewImage")).toBe(switched);
+    queryLoading.value = false;
+    await nextTick();
+    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/desc", "older");
+    expect(core.props("previewImage")).toBe(switched);
+  });
+
+  it("跨页交接时读取计数尚未归零：新页首张在快照里即交给弹窗", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    pendingPreviewBoundary.value = { targetPage: 2, direction: "next" };
+    await routeStore.navigate({ page: 2 });
+    queryLoading.value = true;
+    await applySnapshot!(snapshot(["next-image", "other"], 2));
+    await nextTick();
+    core.vm.$emit("preview-request", { id: "next-image" });
+    pendingPreviewBoundary.value = null;
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "next-image" });
+    expect(locateImageRowIndex).not.toHaveBeenCalled();
+  });
+});

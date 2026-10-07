@@ -44,7 +44,6 @@ commands.allow = [
   "get_all_tasks",
   "get_tasks_page",
   "get_task",
-  "add_task",
   "update_task",
   "delete_task",
   "start_task",

@@ -1,4 +1,4 @@
-# v4.5.0 regression
+# v4.5.1 regression
 
 本版回归 checklist。任何改动可预见的回归路径，要在上线前 check 完毕。
 按「操作」一步步点，对照「预期」，通过就把第一列勾上。
@@ -39,11 +39,11 @@
 | --- | --- | --- | --- | --- | --- |
 | [x] | 挂载改动 id 单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib native_metadata_attach` | 2 个用例通过：只报告 `image_metadata_id` 真正变化的图片 | 已实测 |
 | [x] | 预览对象保留 / 面板不闪自动化 | 前端 Vitest | `npx vitest run`（apps/kabegame） | 24 个文件、232 个用例通过；定位为空时 `previewImage` 仍是同一对象、两侧箭头为 false；同图换 `imageMetadataId` 重新取数但不清空内容 | 已实测；vue-tsc、cargo check 通过 |
-| [x] | 整理回填实时更新视图 | 桌面 CEF dev | `!1girl` 搜索下运行整理 | 视图随批次实时缩减；最终界面「共 915 / 1648 张」与 CLI `pathql query --entry` 的 total 915 一致 | 用户实测 + CLI 核对 |
-| [x] | 打开预览触发回填 | 桌面 CEF dev | `!1girl` 搜索下打开一张原生元数据含 1girl、尚未解析的图 | 约 0.5s 后网格移出该图；预览仍显示它，左右箭头收起 | 用户实测 |
-| [ ] | 预览不闪烁 | 桌面 CEF dev | 同上，打开前先放大图片 | 移出视图后缩放与平移保持，图片不重新加载 | |
-| [ ] | 无关视图不受影响 | 桌面 CEF dev | 不带搜索的画廊里打开预览触发回填 | 列表成员与顺序不变，预览照常有箭头 | |
-| [ ] | 原生元数据面板不闪 | 桌面 CEF dev | 打开一张未解析过原生元数据的图并展开原生元数据面板 | 内容出现后不再闪一次空白 / 加载态 | 补丁把 `imageMetadataId` 从空改成新行会触发一次后台重取 |
+| [x] | 整理回填实时更新视图 | 桌面 CEF dev | 清空 dev 库原生元数据后，`!1girl` 搜索下只勾「补充原生元数据」运行整理 | 第 1 页先收到 53 行 `imageMetadataId` 补丁，总数随批次 1397→1342→…→911 实时缩减；终态界面 911 = CLI total 911，第 1 页 100 行 `imageMetadataId` 与库逐行一致 | 已实测（CDP 每 200ms 采样）；用户先前也实测过一次 |
+| [x] | 打开预览触发回填 | 桌面 CEF dev | `!1girl` 搜索第 5 页打开 627（PNG 含 1girl、未解析） | +60ms 收到 `image-changed`（`imageMetadataId` 1843）；+596ms 网格移出 627、总数 1399→1398；预览仍是 627，左右箭头收起 | 已实测（CDP 每 30ms 采样）；用户先前也实测过 |
+| [x] | 预览不闪烁 | 桌面 CEF dev | 同上，打开后 150ms 内放大到 2 倍 | 移出视图前后缩放保持 2 倍，预览 `<img>` 始终是同一个 DOM 节点 | 已实测 |
+| [x] | 无关视图不受影响 | 桌面 CEF dev | 不带搜索的画廊第 6 页打开 628（未解析） | 收到补丁（`imageMetadataId` 1844）后 3s 内列表成员、总数 1644、左右箭头均不变 | 已实测 |
+| [x] | 原生元数据面板不闪 | 桌面 CEF dev | 打开未解析过原生元数据的图（628） | +31ms 面板 `loaded`；+92ms 补丁触发后台重取，期间一直 `loaded`，没有回到 `loading` / 空白 | 已实测（30ms 采样） |
 
 ## 预览中删除后按设置的切图方向接续
 
@@ -65,25 +65,125 @@
 | [ ] | 关闭后方向复位 | 桌面 CEF / Web | 往前切后关闭预览，重新打开某张图直接删除 | 按下一张接续 | |
 | [ ] | 隐藏 / Android 滑动移除 | 桌面 CEF / Android | 往前切后用隐藏或上滑移除 | 同样按上一张接续 | |
 
-## 预览跟随下载刷新翻页并保留缩放
+## 预览切图不再先关闭再打开
 
-`ImageGrid` 先应用网格快照，再协调当前预览图的位置。图被挤出本页时保持传给弹窗的旧
-`ImageInfo`，按 rank 请求翻页；直到目标快照找到同一 id 才更新对象。空 rank 转单图，错误保留等待态，
-隐藏/删除继续优先结算锚点；在途定位防重随快照更新失效，支持持续下载期间多次跨页。
+`ImageGrid.reconcilePreview` 改为不对称协调：目标 id 在当前快照里就直接交给弹窗，不等
+`liveQuery.loading` 结束；只有不在快照里时才等列表就绪再定位或降级。修复被动刷新在途时
+（web 弱网尤甚）点上/下一张，`previewProp` 短暂为 `null` 导致弹窗关闭又重开、幻灯片被停、缩放重置。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [x] | 预览协调自动化 | 前端 Vitest | 执行 `deno task test -c kabegame --skip cargo` | 20 个文件、154 个用例通过；包括 21 个跟页用例、2 个分页边界交接用例、4 个实际加载状态用例 | 已实测；前端类型检查通过 |
-| [x] | URL 目标等待页面确认 | 桌面 CEF + CDP | 把列表/rank IPC 读取暂时延迟 250ms，在第 1 页加载时通过 URL 指定第 5 页的 id 2712 | 第 1 页就绪后才查 rank；目标页未就绪前 prop 为 null 且预览未打开，第 5 页确认后传对象并打开 | 已实测；读取与 URL 入口共用应用逻辑，未测试独立 Web 部署；恢复原页面 |
-| [x] | 就绪入口统一协调 | 前端 Vitest | 加载中换 URL、手动翻页、改过滤、重新开跟页；定位错误与同 seq 重复结果 | 不查旧页；新快照就绪后跟随目标；错误/防重不能当作不存在 | 已实测 |
-| [x] | 下一张跨页交接 | 桌面 CEF + Vitest | 预览页尾图，点下一张；等待交接期间改变页面 | 正常选择新页首图，不被跟页拉回；过期页的 id 不覆盖新视图 | 已实测 |
-| [x] | 真实跟页链路保持预览实例 | 桌面 CEF + CDP | 在第 5 页应用含 id 2610 的临时内存快照，放大 2 倍，再应用不含该图的真实快照 | 真实 rank/导航/查询自动回第 6 页；全程 2 倍，预览容器和图片 DOM 不变；目标快照到达后更新为对应行 | 已实测；无数据库写入，恢复原页码与缩放；不替代插件下载回归 |
-| [ ] | 下载挤出页面保留缩放 | 桌面 CEF | 在按时间倒序的页面末尾预览并缩放/拖动，运行插件下载直到图被挤出本页 | 自动翻到目标页；id、缩放和平移保持，箭头恢复 | 目标页快照到达之前也保持旧对象 |
-| [ ] | 持续下载多次跨页 | 桌面 CEF | 保持同一张图预览，持续下载足够多的新图 | 可多次自动跟页，没有一次性定位限制 | 自动化覆盖再次跨页和 rank/fetch 间再次位移 |
-| [x] | 竞态取消与降级 | 前端 Vitest | 延迟 rank 后切图/手动翻页；关闭跟页；rank 返回空集 | 迟到结果不导航；禁用时不查 rank；空集转单图 | 已实测 |
-| [x] | 主动移除锚点优先 | 前端 Vitest | 捕获移除锚点后应用不含当前图的快照 | 显示同下标图片，不定位旧 id | 已实测 |
+| [x] | 读取在途切图自动化 | 前端 Vitest | 执行 `deno task test -c kabegame --skip cargo` | 22 个文件、167 个用例通过；新增 3 个用例在修复前失败 | 已实测；前端类型检查通过 |
+| [ ] | web 弱网视图内切图 | Web + DevTools 限速（Slow 3G） | 有后台下载持续产生 `images-change` 时打开预览，连续点下一张 / 按方向键 | 弹窗始终不关闭、无闪烁；幻灯片播放不被打断 | 修复前高概率先关后开 |
+| [ ] | web 弱网跨页切图 | Web + DevTools 限速 | 预览页尾图点下一张跨到下一页 | 新页就绪后直接显示首张，弹窗不经历关闭 | |
+| [ ] | 切图后目标被刷新移走 | 桌面 CEF / Web | 切到邻居后，在途刷新返回时该图已被挤出本页（开跟页） | 返回前保持当前图；就绪后定位并翻到所在页，id 与缩放保持 | 关跟页时转单图模式 |
+| [ ] | 深链接首次打开不受影响 | 桌面 CEF / Web | 通过 URL `pvwimgid` 打开不在当前页的图 | 仍等当前页就绪后定位，目标页确认后才打开 | |
 
-## ImageGrid 移除拖动滑动
+## yande.re / konachan / danbooru 插件：标签、分数分级扩展与移除标签列表模式
+
+yande.re 插件升到 1.1.0：下载时把详情页侧栏标签按类型写入 `yandere/<类型>` 标签画册
+（artist / copyright / character / circle / faults / general，未知类型并入 general），key 为站点标签名；
+新增 `metadata_migrations/migrate.js` 的 `provideLabels`，给 1.0.0 下载的历史图片补标签。同时把插件自带的「标签类型 → 标签」PathQL 扩展换成与 konachan 相同的分数（score）、分级（rating）筛选。规则与 konachan 1.3.0 一致。
+konachan（1.4.0）与 yande.re 都移除「标签列表」爬取模式、对应配置项与推荐配置，只保留「全部」和「标签」。
+danbooru 升到 1.2.0，同样移除「标签列表」模式、对应配置项与推荐配置，只保留标签、人气榜和全部；「每页条数」只在全部和标签模式显示。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 新下载带标签 | 桌面 CEF | 用 yande.re 插件「全部」模式爬 1 页 | 画册页「标签」分区出现 `yandere/` 下各类型目录；单图标签数约等于侧栏标签数 | |
+| [ ] | 标签类型分组 | 桌面 CEF | 打开一张带画师、角色、版权标签的图的标签面板 | 画师在 `yandere/artist`、角色在 `yandere/character`、版权在 `yandere/copyright` | |
+| [ ] | 历史图片补标签 | 桌面 CEF | 用 1.0.0 下载若干图后升级到 1.1.0，等元数据迁移完成 | 旧图补上与新下载同规则的标签，metadata 内容不变 | |
+| [ ] | 按标签搜索 | 桌面 CEF | 画廊搜索里按某个 yande.re 标签筛选 | 只返回挂了该标签的图 | |
+| [ ] | yande.re 分数扩展 | 桌面 CEF | 画廊插件扩展进入 yande.re → score | 列出有图的 `N+` 档位且计数正确；手输 `100-500`、`-50` 路径能过滤 | |
+| [ ] | yande.re 分级扩展 | 桌面 CEF | 画廊插件扩展进入 yande.re → rating | 按 Safe / Questionable / Explicit 顺序列出且计数正确；不再出现「标签类型 → 标签」 | |
+| [ ] | 标签列表模式已移除 | 桌面 CEF | 打开 konachan、yande.re 与 danbooru 的收集弹窗 | konachan 与 yande.re 只有「全部」「标签」，danbooru 只有「标签」「人气榜」「全部」；标签匹配式、标签类型、排序、跳过数等配置项不再出现；推荐配置里没有标签列表示例 | |
+| [ ] | 旧标签列表配置 | 桌面 CEF | 用升级前保存的标签列表运行配置执行任务 | 任务报「未知的爬取模式」失败，不卡住 | |
+| [ ] | 剩余模式不受影响 | 桌面 CEF | 三个插件各跑一次剩余的每种模式 1 页 | 正常下载，带标签与元数据 | konachan.com 与 donmai.moe 需先在畅游过验证 |
+
+## zerochan 首页人气 500、随机排序与标签
+
+zerochan 插件升到 1.1.0。「浏览全部 + 人气」请求 `/?s=fav&p=1` 时站点返回 500：首页人气榜的「全部时间」档（`t=0`，也是不带 `t` 时的默认）在站点侧就坏了，
+站点菜单里的链接同样 500，标签页的人气不受影响。新增 `popular_range`（`t=1` 近一周 / `t=2` 近三个月，默认 2），只在全部 + 人气时显示，非法值回落到 2；
+新增 `random` 排序，首页可翻页，标签页和搜索只有一页。
+下载时把侧栏标签按类型写入 `zerochan/<类型>` 标签画册（类型集合同 description.ejs 的 TYPE_ORDER，未知并入 theme），key 由规范名派生：
+变音符折叠、撇号去掉、其余标点换空格、转小写，超过 64 字节跳过；新增 `metadata_migrations/migrate.js` 的 `provideLabels` 给历史图片补标签，最低应用版本 4.5.0。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 全部 + 人气 | dev CLI（`--data dev`） | `run-cli.sh zerochan --var crawl_mode=all --var sort_order=fav --var quality=medium`，限时 40s | 列表 URL 为 `/?s=fav&t=2&p=1`，第 1 页 48 条，正常下载 | 已实测；改前同配置报「打开页面失败（HTTP 500）」 |
+| [x] | 全部 + 随机 | dev CLI | `crawl_mode=all sort_order=random`，限时 40s | 列表 URL 为 `/?s=random&p=1`，第 1 页 48 条，正常下载 | 已实测；curl 确认第 2 页也有作品 |
+| [ ] | 时间范围显隐 | 桌面 CEF | 收集弹窗里切换爬取模式与排序 | 只有「浏览全部 + 人气」时显示「人气时间范围」，默认近三个月 | |
+| [ ] | 近一周 | 桌面 CEF | 全部 + 人气 + 近一周跑 1 页 | 列表 URL 带 `t=1`，正常下载 | |
+| [ ] | 标签 / 搜索 + 随机 | 桌面 CEF | 标签 `Arknights` 选随机，起止页 1~2 | 第 1 页正常下载，第 2 页为空时任务正常结束 | |
+| [ ] | 标签 + 人气不受影响 | 桌面 CEF | 标签 `Arknights` 选人气跑 1 页 | URL 不带 `t`，正常下载 | |
+| [x] | 下载带标签 | dev CLI | `crawl_mode=tag tag=Arknights sort_order=fav quality=medium`，限时 35s | 10 张均有 metadata；标签关联 112 条，等于元数据标签总数；`Kal'tsit` 落为 `zerochan/character/kaltsit` | 已实测 |
+| [x] | 迁移脚本派生 | deno 脚本 | 用 dev 库 126 条 zerochan metadata 调 `provideLabels` | 1056 个标签派生 1053 个，key 全部合规；只跳过 2 个超过 64 字节的系列名 | 已实测 |
+| [ ] | 历史图片补标签 | 桌面 CEF | 用 1.0.0 下载若干图后升级到 1.1.0，等元数据迁移完成 | 旧图补上 `zerochan/<类型>` 标签，metadata 不变 | |
+| [ ] | 标签分类与搜索 | 桌面 CEF | 画册页查看「标签」分区，并在画廊搜索里按某个 zerochan 标签筛选 | 角色、作品、画师、来源等分在对应目录；搜索只返回挂了该标签的图 | |
+
+## konachan / yande.re 排行榜与 danbooru 分级过滤
+
+konachan（1.4.0）与 yande.re（1.1.0）新增「排行榜」爬取模式，对应 Moebooru 的人气榜：日 / 周 / 月榜走 `popular_by_day|week|month`，
+可指定日期并往前回溯多期；最近 24 小时 / 一周 / 一月 / 一年走 `popular_recent?period=`，只有当期。每期只有一页、最多 40 张，`page` 参数无效。
+榜单页不接受 `tags`，分级过滤改由插件读页面脚本 `Post.register` 里的单字母 rating 筛选；konachan.net 本身只渲染全年龄作品。
+danbooru（1.2.0）新增「分级过滤」（g / s / q / e，只在全站显示）：全部与标签模式拼 `rating:` 元标签（实测不占 2 标签名额），
+人气榜按 `article[data-rating]` 筛，某页筛空时继续下一页；画廊插件扩展新增 `rating` 维度（`$.rating` 四档）。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | yande.re 往期日榜 + 分级 | dev CLI（经主程序） | `run-cli.sh yandere --var crawl_mode=popular --var popular_scale=day --var popular_date=2026-09-01 --var popular_periods=2 --var rating=questionable --var quality=medium`，限时 60s | 依次打开 9/1、8/31 日榜；分级过滤 40→27、40→21；入库全部 Questionable 且带标签 | 已实测：27 张全 Questionable，271 条标签关联；与站点页面脚本统计一致 |
+| [x] | konachan.com 年榜 + 限制级 | dev CLI | `source_site=com crawl_mode=popular popular_scale=1y rating=explicit`，限时 45s | 注入畅游 Cookie 与 CEF UA；40→32；入库全 Explicit | 已实测：29 张全 Explicit |
+| [x] | konachan.net 当期周榜 | dev CLI | `source_site=net crawl_mode=popular popular_scale=week`，限时 40s | 不注入 Cookie；只拿到全年龄作品 | 已实测：18 张全 Safe |
+| [x] | danbooru 标签 + 分级元标签 | dev CLI | donmai.moe 上 `crawl_mode=tags mode_tag_value=touhou,1girl rating=g` | 请求带 `rating%3Ag`；正常返回 20 张，不触发 2 标签上限 | 已实测；同环境 3 个普通标签返回 422 |
+| [x] | danbooru 人气榜筛空继续翻页 | dev CLI | donmai.moe 上 `crawl_mode=popular end_page=2 rating=s` | 两页都提示「没有分级为 s 的作品，继续下一页」，不在第 1 页就结束 | 已实测；donmai.moe 只有 General |
+| [x] | danbooru 分级扩展 SQL | dev 库直查 | 用等价的 composed 子查询执行 `rating_router` / `rating_provider` 的 SQL | 按 General / Sensitive / Questionable / Explicit 顺序列出且计数正确 | 已实测：197 / 21 / 4 / 17；按 Sensitive 筛出 21 |
+| [ ] | 排行榜表单显隐 | 桌面 CEF | 两插件收集弹窗选「排行榜」，在日 / 周 / 月与「最近」类型间切换 | 只有日 / 周 / 月显示「排行榜日期」「回溯期数」；起止页、标签组合不显示；yande.re「排序」不显示 | |
+| [ ] | 排行榜日期边界 | 桌面 CEF | 日期选今天、留空，各跑月榜 1 期 | 留空取当期；今天在站点时区尚未开始时榜单可能为空，任务正常结束不报错 | |
+| [ ] | danbooru 分级配置显隐 | 桌面 CEF | danbooru 收集弹窗在 donmai.moe / 全站之间切换 | 只有全站显示「分级过滤」；切回 donmai.moe 后提交参数里没有 `rating` | |
+| [ ] | danbooru 全站分级过滤 | 桌面 CEF | 先在畅游通过 danbooru.donmai.us 验证，再用全站跑标签与人气榜模式加分级 | 入库作品分级与所选一致 | 本机直连全站已被 Cloudflare 质询拦截，未能实测 |
+| [ ] | danbooru 分级扩展入口 | 桌面 CEF | 画廊插件扩展进入 Danbooru → rating | 列出四档分级与计数，点进后只剩对应分级 | CLI 的 pathql 查不到插件扩展，需在 app 里验证 |
+
+## V8 任务取消立即结束
+
+`execute_v8_entry` 让 `run_crawl` 与任务取消 token 做 `select!`，取消即丢弃整个运行时 future；
+同步死循环仍由 `terminate_execution` 打断。修复两种事件循环空闲时的取消失效：插件 `await` 计时器时要等计时器到点才结束；
+插件 `try/catch` 吞掉 `Task canceled` 后继续执行，最终以成功（`Ok`）收尾。常规 HTTP 下载的单次尝试与重试退避同样随任务取消立即中断，
+不再等首包或 600s 请求超时。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 空闲事件循环取消自动化 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib plugin::v8` | 17 个用例通过；新增 `execute_entry_cancels_idle_event_loop_immediately` 覆盖计时器与吞错两种情形 | 已实测；修复前探针分别 7.7s / 8s 才结束且吞错情形返回 `Ok(())`，修复后均 <1ms 返回 `Canceled` |
+| [x] | 下载器单测 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib downloader` | 21 个用例通过 | 已实测 |
+| [ ] | 插件 sleep 期间取消 | 桌面 CEF | 运行带分页间隔 sleep 的 V8 插件，在 sleep 期间点取消 | 任务立即变为已取消，不再发出后续请求 | |
+| [ ] | 慢下载取消 | 桌面 CEF | V8 插件下载大图或慢速源时取消任务 | 进行中的下载立即结束、不再计入成功；任务状态为已取消 | |
+| [ ] | 死循环插件取消 | 桌面 CEF / CLI | 运行 `for (;;) {}` 的插件后取消 | 仍能正常取消 | `terminate_execution` 路径未变 |
+
+## konachan R18 站借用畅游 Cookie 与分级过滤
+
+konachan 插件升到 1.4.0。源站选 konachan.com 时，页面、`post.json` 和 `/jpeg/` 原图都会被 Cloudflare 质询拦成 403，
+现在任务开始时会 `requireCookie("konachan.com")` 并换成畅游的 CEF UA（`cf_clearance` 绑定签发时的 UA）。原图和页面同域，所以浏览器身份全程保留，下载时也带着；
+返回 403 或验证页时任务报错，并提示先在畅游里通过验证。新增「分级过滤」配置（`rating:` 元标签拼进搜索串），「全部」和「标签」两种爬取模式都生效，只在源站选 com 时显示。konachan.net 不注入 Cookie。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | com 站标签模式 + 限制级 | dev CLI（`--data dev`） | `run-cli.sh konachan --var source_site=com --var crawl_mode=tags --var mode_tag_value=bikini --var rating=explicit --var quality=high`，限时 50s | 日志显示已注入 Cookie 与 CEF UA；31 张全部 Explicit，均带 metadata；标签数 757 与侧栏标签总数一致；原图约 6712×3509 / 12MB | 已实测；与 Chrome 中同一搜索页比对，31 个 ID 正是源站页前 31 条。改前同配置第一页就 403 |
+| [x] | com 站标签列表 + 存疑 | dev CLI | `crawl_mode=tag_list tag=genshin rating=questionable quality=medium`，限时 40s | 每个标签的列表 URL 带 `+rating%3Aquestionable`；25 张全部 Questionable | 已实测；标签列表模式已在本版移除，此项仅留作记录 |
+| [x] | net 站全部模式回归 | dev CLI | `source_site=net crawl_mode=all`，限时 30s | 不注入 Cookie，照常下载；16 张全部 Safe | 已实测 |
+| [ ] | 未通过验证的提示 | 桌面 CEF | 清掉畅游里 konachan.com 的 Cookie 后，用 com 站跑任务 | 出现「未从畅游取到 Cookie」警告；任务以「返回 403 / 返回了验证页，请先在畅游中打开 … 通过验证」失败 | |
+| [ ] | 分级配置显隐 | 桌面 CEF | 打开收集弹窗，在 net / com 之间切换源站 | 只有 com 时显示「分级过滤」；切回 net 后提交的参数里没有 `rating` | |
+
+## 移除 `add_task` 命令
+
+后端 `add_task`（只落库 + 发 `task-added`，不入调度队列）没有任何前端调用方，从 core `commands::task`、
+Tauri 命令注册、ACL 白名单与 web JSON-RPC 入口一并删除。创建任务统一走 `start_task`；
+`Storage::add_task` 与应用 IPC 的 `StorageAddTask` 不受影响。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Rust 编译 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | 无 error | 已实测 |
+| [ ] | 手动收集任务 | 桌面 CEF | 收集弹窗选插件提交 | 任务抽屉立即出现新任务并正常下载 | 走 `start_task` |
+| [ ] | 本地导入 / 拖入导入 | 桌面 CEF | 画廊拖入文件夹；「本地导入」弹窗提交 | 任务创建并导入成功 | |
+| [ ] | 定时任务 | 桌面 CEF | 运行配置设为 1 分钟后触发 | 到点创建任务并执行 | 调度器直接用 `Storage::add_task` |
+| [ ] | web 端建任务 | Web | web 端提交收集任务 | 正常创建；调用 `add_task` 返回方法不存在 | |
 
 ## kabegame-cli 优先经应用 IPC 执行
 
