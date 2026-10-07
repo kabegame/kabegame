@@ -8,7 +8,7 @@ import * as organizeService from "@/services/organize";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
 import * as updaterService from "@/services/updater";
 
-const SHOW_DELAY_MS = 1_800;
+const SHOW_DELAY_MS = 0;
 const CLOCK_INTERVAL_MS = 500;
 
 export type BusyCard =
