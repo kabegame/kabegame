@@ -15,6 +15,7 @@
           :task-name="taskName"
           :show-stop-task="shouldShowStopButton"
           :show-open-webview="showOpenWebview"
+          :show-rerun="showRerun"
           @refresh="handleRefresh"
           @stop-task="handleStopTask"
           @delete-task="handleDeleteTask"
@@ -22,6 +23,7 @@
           @view-task-log="handleViewTaskLog"
           @view-task-params="handleViewTaskParams"
           @open-task-webview="handleOpenTaskWebview"
+          @rerun="handleRerun"
           @failed-images="handleShowFailedImages"
           @back="goBack"
         >
@@ -128,6 +130,7 @@ import { createImageAnalytics } from "@/track/imageAnalytics";
 import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGithubIssueUrl, type GithubIssueField } from "@/composables/useGithubIssueUrl";
+import { useTaskRerun } from "@/composables/useTaskRerun";
 
 const { t } = useI18n();
 const { openIssue } = useGithubIssueUrl();
@@ -245,6 +248,12 @@ const showOpenWebview = computed(() => {
   const tsk = task.value;
   return !!tsk && canOpenTaskWebview(tsk, pluginStore.plugins);
 });
+
+const { canRerun, rerunTask } = useTaskRerun();
+const showRerun = computed(() => !!task.value && canRerun(task.value));
+const handleRerun = async () => {
+  if (task.value) await rerunTask(task.value);
+};
 
 async function handleOpenTaskWebview() {
   const id = String(taskId.value || "").trim();

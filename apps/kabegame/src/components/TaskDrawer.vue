@@ -114,8 +114,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { useCrawlerStore, type CrawlTask } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { LOCAL_IMPORT_PLUGIN_ID, WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
-import { IS_ANDROID, IS_WEB } from "@/env";
+import { IS_ANDROID } from "@/env";
 import { trackEvent } from "@/track/umami";
 import AndroidDrawer from "@/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@/components/task/TaskDrawerContent.vue";
@@ -124,9 +123,7 @@ import { useModal } from "@/composables/useModal";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@/stores/ui";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
-import { taskConfigFromTask, writeTaskConfig } from "@/composables/taskConfig";
-import { useCollectDialogsStore } from "@/stores/collectDialogs";
+import { useTaskRerun } from "@/composables/useTaskRerun";
 
 interface Props {
   modelValue: boolean;
@@ -147,8 +144,6 @@ const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
-const crawlerDrawerStore = useCrawlerDrawerStore();
-const collectDialogs = useCollectDialogsStore();
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(
@@ -230,37 +225,7 @@ const closeContextMenu = () => {
   contextMenuModal.close();
 };
 
-const canRerun = (task: CrawlTask) => {
-  if (task.pluginId === WEBPAGE_PLUGIN_ID) return !IS_WEB;
-  if (task.pluginId === LOCAL_IMPORT_PLUGIN_ID) return !IS_WEB && !uiStore.isCompact;
-  return true;
-};
-
-const rerunTask = async (task: CrawlTask) => {
-  const userConfig = task.userConfig ?? {};
-  if (task.pluginId === WEBPAGE_PLUGIN_ID) {
-    collectDialogs.openWebpage({
-      userConfig: { ...userConfig },
-      outputDir: task.outputDir,
-      httpHeaders: { ...(task.httpHeaders ?? {}) },
-      outputAlbumId: task.outputAlbumId ?? null,
-    });
-    return;
-  }
-  if (task.pluginId === LOCAL_IMPORT_PLUGIN_ID) {
-    collectDialogs.openLocalImport({
-      paths: Array.isArray(userConfig.paths) ? [...userConfig.paths] : [],
-      recursive: typeof userConfig.recursive === "boolean" ? userConfig.recursive : undefined,
-      copyToDir: userConfig.copy_to_dir === true,
-      outputDir: task.outputDir,
-      outputAlbumId: task.outputAlbumId ?? null,
-    });
-    return;
-  }
-  // 通路 1：先把任务参数写进全局 taskConfig，再打开收集弹窗
-  await writeTaskConfig(taskConfigFromTask(task));
-  crawlerDrawerStore.open();
-};
+const { canRerun, rerunTask } = useTaskRerun();
 
 const handleContextAction = async (action: string) => {
   const task = contextMenuTask.value;

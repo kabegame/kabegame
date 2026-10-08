@@ -29,6 +29,8 @@ interface Props {
   showStopTask?: boolean;
   /** 是否显示打开当前 JS 任务 WebView 窗口按钮 */
   showOpenWebview?: boolean;
+  /** 是否显示再次执行按钮 */
+  showRerun?: boolean;
 }
 
 const { t } = useI18n();
@@ -37,6 +39,7 @@ const props = withDefaults(defineProps<Props>(), {
   taskName: undefined,
   showStopTask: true,
   showOpenWebview: false,
+  showRerun: false,
 });
 
 const emit = defineEmits<{
@@ -47,6 +50,7 @@ const emit = defineEmits<{
   "view-task-log": [];
   "view-task-params": [];
   "open-task-webview": [];
+  rerun: [];
   "failed-images": [];
   back: [];
 }>();
@@ -88,6 +92,7 @@ const showIds = computed(() => {
     // StopTask 紧跟在 Refresh 之后
     if (props.showStopTask) ids.splice(1, 0, HeaderFeatureId.StopTask);
     if (props.showOpenWebview) ids.push(HeaderFeatureId.OpenTaskWebview);
+    if (props.showRerun) ids.push(HeaderFeatureId.TaskRerun);
     return ids;
   }
 });
@@ -103,6 +108,7 @@ const foldIds = computed(() => {
   ];
   if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
   if (props.showOpenWebview) ids.splice(props.showStopTask ? 3 : 2, 0, HeaderFeatureId.OpenTaskWebview);
+  if (props.showRerun) ids.push(HeaderFeatureId.TaskRerun);
   return ids;
 });
 
@@ -129,6 +135,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.OpenTaskWebview:
       emit("open-task-webview");
+      break;
+    case HeaderFeatureId.TaskRerun:
+      emit("rerun");
       break;
     case HeaderFeatureId.FailedImages:
       // 桌面由 show 区的 FailedImagesHeaderButton comp 直接处理；

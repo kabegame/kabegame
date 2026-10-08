@@ -17,6 +17,7 @@ import {
   InfoFilled,
   Hide,
   Expand,
+  RefreshRight,
 } from "@kabegame/element-plus-icons";
 import { useHeaderStore, HeaderFeatureId } from "@/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -105,6 +106,11 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.TaskViewParams,
       label: t("tasks.drawerViewParams"),
       icon: InfoFilled,
+    },
+    {
+      id: HeaderFeatureId.TaskRerun,
+      label: t("contextMenu.rerunTask"),
+      icon: RefreshRight,
     },
     {
       id: HeaderFeatureId.OpenTaskWebview,

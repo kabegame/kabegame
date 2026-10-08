@@ -17,6 +17,8 @@ export enum HeaderFeatureId {
   TaskViewLog = "taskViewLog",
   /** 任务详情页：查看运行参数（Android 放入 fold） */
   TaskViewParams = "taskViewParams",
+  /** 任务详情页：再次执行（按任务参数回填收集弹窗，与抽屉右键一致） */
+  TaskRerun = "taskRerun",
   /** 任务详情页：打开该 JS 任务的 WebView 窗口 */
   OpenTaskWebview = "openTaskWebview",
   FailedImages = "failedImages",

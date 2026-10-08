@@ -34,7 +34,7 @@ function setTaskConfig(cfg: TaskConfig | null) { taskConfig.value = cfg; taskCon
 
 | 通路 | 入口 | 做法 |
 | --- | --- | --- |
-| 1 | 任务右键「再次执行」 | `await writeTaskConfig(taskConfigFromTask(task))` 再 `crawlerDrawerStore.open()` |
+| 1 | 任务「再次执行」（抽屉右键 / 任务详情页 header） | `await writeTaskConfig(taskConfigFromTask(task))` 再 `crawlerDrawerStore.open()`；两处共用 `useTaskRerun` |
 | 2 | 其他任何方式直接打开 | 不写，直接 `open()` |
 | 3 | 首次打开、无上次值 | 同 2（`taskConfig` 为 `null`，弹窗只显示插件选择器） |
 | 4 | 自动配置卡片「以此配置运行」 | `await writeTaskConfig(taskConfigFromRunConfig(cfg))` 再 `open()` |
