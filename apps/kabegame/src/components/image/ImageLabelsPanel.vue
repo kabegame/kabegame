@@ -44,7 +44,8 @@
         <AlbumPicker
           v-model="pickedLabelId"
           :scope="{ sections: ['label'] }"
-          :is-selectable="(node) => node.type === 'label' && !labels.some((label) => label.id === node.id)"
+          :is-selectable="isLabelPickable"
+          expand-label-dirs
           :placeholder="t('albums.imageLabelsFilterPlaceholder')"
         />
       </div>
@@ -114,6 +115,7 @@ import {
   fetchImageAlbums,
   removeImagesFromAlbum,
   type Album,
+  type AlbumNode,
 } from "@/services/albums";
 import { subscribeChanges } from "@/services/dataChangeHub";
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
@@ -221,6 +223,12 @@ async function openLabel(label: Album) {
 // ---------- 从已有标签添加 ----------
 
 const pickedLabelId = ref<string | null>(null);
+// 目录不能挂图，但必须保持可用：禁用行连展开箭头一起锁死，插件建的目录下的标签就选不到了。
+// 配合 expand-label-dirs，目录行点击只展开、不会触发选择。
+function isLabelPickable(node: AlbumNode) {
+  if (node.type === "label_dir") return true;
+  return node.type === "label" && !labels.value.some((label) => label.id === node.id);
+}
 watch(pickedLabelId, async (id) => {
   if (!id) return;
   const label = await fetchAlbum(id);

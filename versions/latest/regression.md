@@ -228,3 +228,15 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | 重复导入不再卡死任务 | dev app（debug 构建）+ 下载间隔 > 0 | 对同一已入库文件反复执行 `data import-image`（或 GUI 拖入同一文件）数十次 | 每次都是「去重 1」并完成；终端无 `attempt to subtract with overflow`；任务抽屉无停在「运行中 0%」的本地导入 | 修复前偶发：`local-import` 的 start_time 比当前时间晚 1ms，`wait_after_download_if_needed` 下溢 panic 掉 task worker |
 | [ ] | IPC 调试与旧版协议 | 本机 | 设 `KABEGAME_IPC_DEBUG=1`；再用旧 app 配新 CLI | 开关打开时恢复 DEBUG；旧 app 下 auto 回退且不挂起 | `KABEGAME_IPC_DEBUG=1` 已实测恢复 DEBUG；旧版 app 未测（无旧版二进制） |
 | [x] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`，dev app 运行时走 app 模式 | 已实测：`--data dev` 退出码 2；不带参数的 `plugin run --dry-run`、`plugin import`、`pathql query` 均显示「经主程序执行」并使用 `.kabegame/debug/data`；`plugin run --help` 不再含 `--data` |
+
+## 预览标签面板「添加标签」可展开标签目录
+
+预览弹窗标签面板的「添加标签」选择器里，标签目录（含插件建的 `yandere/`、`konachan/` 等目录）此前被判为不可选，
+禁用行连展开箭头一起锁死，目录下的标签叶子无法选中。现在目录行保持可用、点击只展开不选择，叶子照常可选，已挂的标签仍禁用。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 展开插件目录 | 桌面 CEF | 预览一张图 → 标签面板「添加标签」→ 点插件目录行或其箭头 | 目录不变灰，逐级展开到叶子；点叶子即挂上该标签并收起选择器 | |
+| [ ] | 目录不可被选中 | 桌面 CEF | 点任一标签目录行 | 只展开 / 折叠，不会挂上目录、不报错 | |
+| [ ] | 已挂标签禁用 | 桌面 CEF | 展开到当前图已挂的标签 | 该叶子变灰不可点 | |
+| [ ] | 其它选择器不受影响 | 桌面 CEF | 新建标签对话框的「父目录」选择器、画册移动选择器 | 目录仍可被选为父级 | |

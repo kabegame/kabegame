@@ -52,6 +52,7 @@
         :selected-id="modelValue"
         :scope="scope"
         :is-selectable="isSelectable"
+        :expand-label-dirs="expandLabelDirs"
         @select="choose"
       />
     </div>
@@ -109,6 +110,7 @@
             :selected-id="modelValue"
             :scope="scope"
             :is-selectable="isSelectable"
+            :expand-label-dirs="expandLabelDirs"
             @select="choose"
           />
         </div>
@@ -134,6 +136,8 @@ const props = withDefaults(
     modelValue: string | null;
     scope?: AlbumTreeViewScope;
     isSelectable?: (node: AlbumNode) => boolean;
+    /** 标签目录行只展开不选择：只要叶子的选择器开启，目录需对 isSelectable 返回 true 才不被禁用折叠。 */
+    expandLabelDirs?: boolean;
     prependOptions?: { value: string; label: string; desc?: string }[];
     allowCreate?: boolean;
     placeholder?: string;
