@@ -157,6 +157,25 @@ danbooru（1.2.0）新增「分级过滤」（g / s / q / e，只在全站显示
 | [ ] | 慢下载取消 | 桌面 CEF | V8 插件下载大图或慢速源时取消任务 | 进行中的下载立即结束、不再计入成功；任务状态为已取消 | |
 | [ ] | 死循环插件取消 | 桌面 CEF / CLI | 运行 `for (;;) {}` 的插件后取消 | 仍能正常取消 | `terminate_execution` 路径未变 |
 
+## V8 任务偶发卡死 / 进程闪退（op 轮询跨线程竞争）
+
+`execute_v8_entry` 原先在调度器的多线程 runtime 上 `Handle::current().block_on`。deno_core 的 op driver 经 `deno_unsync::spawn`
+把 !Send 的 op 轮询任务派到「当前」runtime（前提是 current_thread），于是它落到别的 tokio worker 上，与 V8 线程并发借用同一个
+`RefCell` 提交队列：`futures_unordered_driver.rs:294/309` 报 `RefCell already borrowed`，轮询任务死掉后任务永久卡住
+（fetch 的 30s 超时也在被遗弃的 op 里，不会触发），或 panic 落在不可展开的 V8 回调里使**整个进程 abort**。
+与插件和配置无关，op 越多越容易撞上；`deno_unsync` 里的 `debug_assert` 因 dev profile 对依赖关了 `debug-assertions` 未能报出。
+改为每个任务在自己的 blocking 线程上新建 current_thread runtime 来 `block_on`，取消 watcher 挂在主 runtime 上。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 压测单测 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib execute_entry_async_ops_never_lose_wakeups` | 多线程 runtime 下 3000 轮 × 32 个并发 `crypto.subtle.digest` 在 1s 内完成 | 已实测：修复前 4/4 失败（2 次 panic 后卡满 60s、2 次进程 abort），修复后 6/6 通过，约 0.3s |
+| [x] | V8 单测回归 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib plugin::v8` | 18 个用例全部通过，含两条取消用例 | 已实测 |
+| [x] | 临时插件复现 / 对照 | dev app（`app-run.sh`） | 只做异步 op 的临时插件，四种模式各跑：并发 digest、串行 digest、并发 `setTimeout`、仅同步 | 全部 completed，app 不闪退 | 已实测：修复前用旧 CLI `--via local` 跑，并发 digest 7/7 失败（卡死或 abort 134）、串行 digest 3/8 失败，`setTimeout` 与仅同步全部完成；修复后在 dev app 中 6/6 completed，并发 digest 9.6 万个 op 约 0.25s |
+| [x] | 真实插件回归 | dev app | wallhaven 排行榜跑 1 页 | 正常完成并下载 | 已实测：20 张新下载 + 4 张去重，0 失败 |
+| [ ] | 长任务不再偶发卡住 | 桌面 CEF | 用 fetch 较多的插件（如 wallhaven 多页、anihonet）连续跑几个多页任务 | 没有任务停在某条日志后不动；任务抽屉进度正常推进 | 修复前偶发，需多跑几次 |
+| [ ] | 取消仍立即生效 | 桌面 CEF / CLI | 任务运行中、sleep 中、`for (;;) {}` 死循环中分别取消 | 均立即变为已取消 | watcher 改挂主 runtime 后需在真实环境确认死循环取消 |
+| [ ] | Android V8 任务 | Android | 跑一个 V8 插件 1 页 | 正常完成 | 线程模型改动同样作用于 Android |
+
 ## konachan R18 站借用畅游 Cookie 与分级过滤
 
 konachan 插件升到 1.4.0。源站选 konachan.com 时，页面、`post.json` 和 `/jpeg/` 原图都会被 Cloudflare 质询拦成 403，

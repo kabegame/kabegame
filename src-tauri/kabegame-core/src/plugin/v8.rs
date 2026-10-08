@@ -243,15 +243,26 @@ pub fn execute_v8_entry(
     let cancel_for_ctx = cancel.clone();
     let cancel_for_watcher = cancel.clone();
 
-    tokio::runtime::Handle::current().block_on(async move {
+    // deno_core 的 op driver 经 `deno_unsync::spawn` 把 !Send 的 op 轮询任务派到当前 runtime，
+    // 前提是 current_thread：轮询任务必须与 V8 同线程。若借用调用方的多线程 runtime，轮询任务
+    // 会落到别的 worker 上，与 V8 线程并发借用同一个 RefCell 提交队列，panic 后任务卡死或进程 abort。
+    // 所以每个任务在本 blocking 线程上独占一个 current_thread runtime。
+    let main_runtime = tokio::runtime::Handle::current();
+    let task_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| TaskError::Other(format!("创建 V8 任务 runtime 失败：{e}")))?;
+
+    task_runtime.block_on(async move {
         let ctx = KabegameOpState {
             task_id,
             cancel: cancel_for_ctx,
         };
         let mut rt = JsPluginRuntime::new(ctx, fs).map_err(|e| TaskError::Other(e.to_string()))?;
         let isolate_handle = rt.runtime_mut().v8_isolate().thread_safe_handle();
-        // 同步 JS（如死循环）占住本线程时 select 无法轮询，只能由另一线程打断 isolate。
-        let watcher = tokio::spawn(async move {
+        // 同步 JS（如死循环）占住本线程时 select 无法轮询，只能由另一线程打断 isolate；
+        // 任务 runtime 此时同样无人驱动，所以 watcher 挂在主 runtime 上。
+        let watcher = main_runtime.spawn(async move {
             cancel_for_watcher.cancelled().await;
             isolate_handle.terminate_execution();
         });
@@ -753,6 +764,53 @@ mod tests {
 
             assert_eq!(result, Err(TaskError::Canceled), "{name}");
         }
+    }
+
+    /// 生产环境在多线程 runtime 的 blocking 线程里跑 V8。deno_core 的 op driver 用
+    /// `deno_unsync::spawn` 派生轮询任务，前提是 current_thread runtime；前提不成立时轮询任务
+    /// 落到别的 worker 上，与 V8 线程并发读写非线程安全的提交队列，丢唤醒后 op 永远不再被轮询。
+    /// 用大量并发、首轮必为 Pending 的异步 op 放大竞争窗口，卡住即复现。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn execute_entry_async_ops_never_lose_wakeups() {
+        const ROUNDS: usize = 3000;
+        const BATCH: usize = 32;
+        let run = test_run_with_script(
+            "v8-op-wakeup-stress",
+            "",
+            PluginScript::new(
+                PluginBackend::V8,
+                format!(
+                    "export async function crawl() {{
+                        const data = new TextEncoder().encode('kabegame');
+                        for (let round = 0; round < {ROUNDS}; round += 1) {{
+                            await Promise.all(Array.from({{ length: {BATCH} }}, () =>
+                                crypto.subtle.digest('SHA-256', data)));
+                            if (round % 500 === 0) console.log('round ' + round);
+                        }}
+                    }}"
+                ),
+            ),
+            HashMap::new(),
+        );
+        let cancel = run.cancel.clone();
+        let started = std::time::Instant::now();
+        let join = tokio::task::spawn_blocking(move || execute_crawler_script_v8(run));
+        let result = tokio::time::timeout(Duration::from_secs(60), join).await;
+        if result.is_err() {
+            cancel.cancel();
+            panic!(
+                "V8 event loop stalled after {:?}: an async op was never polled again",
+                started.elapsed()
+            );
+        }
+        let result = result.unwrap().expect("blocking worker should not panic");
+        assert_eq!(result, Ok(()));
+        eprintln!(
+            "{} rounds × {} ops in {:?}",
+            ROUNDS,
+            BATCH,
+            started.elapsed()
+        );
     }
 
     #[tokio::test]

@@ -67,6 +67,8 @@ fi
 wait "$PID" 2>/dev/null
 
 TASK=$(grep -o '"taskId":"[^"]*"' "$LOG" | head -1 | cut -d'"' -f4)
+# 经主程序（IPC）执行时日志只有「开始执行任务（…, taskId=<uuid>）」
+[ -z "$TASK" ] && TASK=$(grep -o 'taskId=[0-9a-f-]*' "$LOG" | head -1 | cut -d= -f2)
 echo "── 摘要 (${ID} 以 id=${TEST_ID} 运行，${KB_CLI_PROFILE} CLI) ──"
 echo "  运行：${STOPPED}   日志：${LOG}"
 grep -m1 "^插件 " "$LOG" | sed 's/^/  /'
