@@ -120,7 +120,7 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
 
 对于仅含 Cargo 的 `kabegame-cli` 组件，`deno task b` 默认执行 **debug** 构建；传入 `--release` 才会执行 release 构建。主应用的桌面端/Android 构建始终通过 `tauri build`，无论是否传入 `--release` 都是 release 构建。
 
-`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime`、`ipc-client` 和 `ipc-server` feature。`plugin run <id|path.kgpg>` 优先在同数据目录的主程序中执行（因此 app 模式支持 WebView）；回退本地模式时才在 CLI 进程初始化任务与事件运行时、执行 V8 插件。两种模式都支持已安装 id 与临时 `.kgpg` 路径，并在固定进度条上方渲染任务日志。CLI 没有运行时 `--data` 参数，数据目录只由构建时的 `kabegame_data` cfg 决定：插件开发请用 `deno task b -c kabegame-cli --data dev` 构建并搭配 `kabegame-plugin` skill；需要强制隔离运行时加 `--via local`。参见 `apps/docs/src/content/docs/reference/cli.md` 与 `cocs/cli/CLI_IPC.md`。
+`kabegame-cli` 启用了 `kabegame-core` 的 `plugin-runtime`、`ipc-client` 和 `ipc-server` feature。`plugin run <id|path.kgpg>` 优先在同数据目录的主程序中执行（因此 app 模式支持 WebView）；回退本地模式时才在 CLI 进程初始化任务与事件运行时、执行 V8 插件。两种模式都支持已安装 id 与临时 `.kgpg` 路径，并在固定进度条上方渲染任务日志。CLI 没有运行时 `--data` 参数，数据目录只由构建时的 `kabegame_data` cfg 决定：插件开发请用 `deno task b -c kabegame-cli`（不带 `--release` 默认即 `--data dev`）构建并搭配 `kabegame-plugin` skill；需要强制隔离运行时加 `--via local`。参见 `apps/docs/src/content/docs/reference/cli.md` 与 `cocs/cli/CLI_IPC.md`。
 
 在 macOS 上，两个二进制文件都是位于 `target/<profile>` 中的扁平 Cargo 产物；CEF framework 通过 cef-dll-sys 创建的 `target/Frameworks` 符号链接进行解析。参见 `src-tauri/tauri-runtime-cef/README.md`。
 
@@ -173,8 +173,8 @@ ModePlugin 注入的环境变量算出，测试环境必须与应用一致，不
 按 cwd 查找它，缺了会刷 config-not-found 并退回默认配置）。
 
 ### 数据目录模式（`--data`）
-- `dev`（`deno task dev` 的默认值）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离
-- `prod`（其他所有命令的默认值）：使用系统用户数据目录（Windows 上为 `%LOCALAPPDATA%\Kabegame`，Linux/macOS 上为 `~/.local/share/Kabegame`）
+- `dev`（`deno task dev` 与不带 `--release` 的 `deno task b` 的默认值）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离
+- `prod`（带 `--release` 的 `deno task b`，以及 `start` / `check` / `test` 的默认值）：使用系统用户数据目录（Windows 上为 `%LOCALAPPDATA%\Kabegame`，Linux/macOS 上为 `~/.local/share/Kabegame`）
 - 开发时使用 `--data prod` 可针对实际安装数据进行测试；release 构建中使用 `--data dev` 可实现 CI/测试隔离
 - 由 `src-tauri/{kabegame-core,kabegame}/build.rs` 注入的 `kabegame_data` Rust cfg 控制
 

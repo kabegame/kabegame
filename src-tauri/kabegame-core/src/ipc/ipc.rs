@@ -682,14 +682,24 @@ where
     Ok(())
 }
 
+/// 应用 IPC 的 Windows 命名管道。debug 构建（dev）加 `-dev` 后缀，与已安装的 release 版互不抢占。
 #[cfg(target_os = "windows")]
 pub fn windows_pipe_name() -> &'static str {
-    r"\\.\pipe\kabegame-app"
+    if cfg!(debug_assertions) {
+        r"\\.\pipe\kabegame-app-dev"
+    } else {
+        r"\\.\pipe\kabegame-app"
+    }
 }
 
 /// 应用 IPC 使用的 Unix socket 文件名（路径在桌面为 temp_dir/Kabegame，此处仅文件名）。
+/// debug 构建（dev）加 `-dev` 后缀，与已安装的 release 版互不抢占。
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const APP_SOCKET_NAME: &str = "kabegame.sock";
+const APP_SOCKET_NAME: &str = if cfg!(debug_assertions) {
+    "kabegame-dev.sock"
+} else {
+    "kabegame.sock"
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn unix_socket_path() -> std::path::PathBuf {

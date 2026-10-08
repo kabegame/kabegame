@@ -23,8 +23,11 @@
    `PluginRunParams.max_concurrent_downloads`）；
 2. `Status.dataDir` 与 CLI 的数据目录规范化后相同。
 
-两项都满足才选 `App`。socket / 命名管道地址不区分 dev 与 prod，因此不能把“连得上”当成数据目录
-相同；`dataDir` 比对用于阻止 dev CLI 误操作 prod app（或反过来）。协议版本门控则保证新 CLI 不会
+两项都满足才选 `App`。socket / 命名管道地址按 `debug_assertions` 区分：debug 构建（`deno task dev` 的
+app、默认 debug 的 CLI）用 `kabegame-dev.sock` / `\\.\pipe\kabegame-app-dev`，release 构建用
+`kabegame.sock` / `\\.\pipe\kabegame-app`，dev app 不会与已安装的 release 版抢同一地址。但这只按构建
+profile 区分，不按 `kabegame_data` 区分（debug 构建可以是 `--data prod`，release 构建也可以显式 `--data dev`），
+因此仍不能把“连得上”当成数据目录相同；`dataDir` 比对用于阻止 dev CLI 误操作 prod app（或反过来）。协议版本门控则保证新 CLI 不会
 把改变过字段的请求发给旧主程序。
 
 `auto` 在主程序未运行时静默回退；协议过旧或目录不同时在 stderr 打印提示再回退。`app` 遇到任一

@@ -129,7 +129,7 @@ program
     "构建模式：standard | android",
     Mode.STANDARD,
   )
-  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .option("--data <data>", "数据目录模式：dev | prod（默认：带 --release 为 prod，否则 dev）")
   .option(
     "--release",
     "构建完成后复制安装包到 release/ 目录，只有构建 kabegame 获取全量的情况下才可用",

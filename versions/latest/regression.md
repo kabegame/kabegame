@@ -433,3 +433,31 @@ category + key；帖子地址取服务器 `post_url`，为空就留空，不填�
 | [ ] | 目录不可被选中 | 桌面 CEF | 点任一标签目录行 | 只展开 / 折叠，不会挂上目录、不报错 | |
 | [ ] | 已挂标签禁用 | 桌面 CEF | 展开到当前图已挂的标签 | 该叶子变灰不可点 | |
 | [ ] | 其它选择器不受影响 | 桌面 CEF | 新建标签对话框的「父目录」选择器、画册移动选择器 | 目录仍可被选为父级 | |
+
+## dev 构建使用独立的应用 IPC 地址
+
+`kabegame_core::ipc::ipc` 的应用 IPC 地址按 `debug_assertions` 加 `-dev` 后缀：Windows 命名管道
+`\\.\pipe\kabegame-app-dev`，Unix socket `temp_dir/Kabegame/kabegame-dev.sock`；release 构建保持
+`kabegame-app` / `kabegame.sock` 不变。dev app 与已安装的 release 版可同时运行，互不抢占 IPC 地址、
+第二实例唤起也只落到同 profile 的那个。debug CLI 只连 dev app，release CLI 只连 release app。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译检查 | 本机 macOS | `check-kabegame` driver `--skip vue` | cargo 0 个 error | 已实测 |
+| [ ] | dev 与 release 并存 | 桌面 Windows / macOS / Linux | 先启动已安装的 release 版，再 `deno task dev -c kabegame` | 两者都正常启动，dev 不再被当作第二实例退出或唤起 release 窗口；macOS/Linux 下 `$TMPDIR/Kabegame` 同时有 `kabegame.sock` 与 `kabegame-dev.sock` | |
+| [ ] | 同 profile 第二实例 | 桌面 | dev 运行时再启动一次 dev；release 运行时再启动一次 release | 各自唤起已有窗口并退出 | |
+| [ ] | CLI 路由 | 桌面 | debug CLI（`deno task b -c kabegame-cli --data dev`）与 release CLI 分别执行 `pathql query`，dev app 与 release app 同时运行 | debug CLI 经 dev app 执行，release CLI 经 release app 执行；只有一个 app 运行时，另一 profile 的 CLI 回退本地模式 | |
+
+## `deno task b` 的 `--data` 默认值随 `--release` 切换
+
+`scripts/plugins/data-plugin.ts` 计算 `--data` 默认值：带 `--release` 一律 `prod`；不带时 `dev` 与 `build`
+命令默认 `dev`，`start` / `check` / `test` 仍默认 `prod`。显式传入的 `--data` 优先。行为变化：不带 `--release`
+的 `deno task b`（含 `-c kabegame` 的 tauri build 与 CI 中的 `deno task b -c kabegame-cli`）此前默认 prod，现在默认 dev。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | b 不带 --release | 本机 | `deno task b -c kabegame-cli`，再执行 `target/debug/kabegame-cli pathql query …` | 输出 `[DataPlugin] KABEGAME_DATA=dev`，CLI 使用 `.kabegame/debug/data` | |
+| [ ] | b 带 --release | 本机 | `deno task b -c kabegame-cli --release` | 输出 `KABEGAME_DATA=prod`，CLI 使用系统用户数据目录 | |
+| [ ] | 显式优先 | 本机 | `deno task b -c kabegame-cli --release --data dev`；`deno task b -c kabegame-cli --data prod` | 分别为 `dev`、`prod` | |
+| [ ] | dev / check 不变 | 本机 | `deno task dev -c kabegame`；`check-kabegame` driver | 分别为 `dev`、`prod` | |
+| [ ] | 主应用 release 包 | 桌面 | `deno task b -c kabegame --release` | `KABEGAME_DATA=prod`，安装后使用系统用户数据目录 | |

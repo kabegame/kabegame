@@ -154,7 +154,7 @@ kabegame-cli plugin run ./packed/<plugin-id>.kgpg --var key=value
 它会在日志上方渲染一个常驻进度条。dev 应用正在运行时，CLI 会经 IPC 交给应用执行（此时 WebView 插件也能跑）；否则在 CLI 进程内运行，**只支持 V8 后端**。详见 [命令行工具 · plugin run](/reference/cli/#plugin-run)。
 
 :::caution
-CLI 没有运行时 `--data` 参数，数据目录由构建时决定：用 `deno task b -c kabegame-cli --data dev` 构建的 CLI 使用仓库内 `.kabegame/debug/`，默认构建与 release 构建的 CLI 使用系统数据目录。
+CLI 没有运行时 `--data` 参数，数据目录由构建时决定：`deno task b -c kabegame-cli`（不带 `--release` 时 `--data` 默认 `dev`）构建的 CLI 使用仓库内 `.kabegame/debug/`，带 `--release` 构建的 CLI 默认使用系统数据目录；显式 `--data` 优先。
 :::
 
 ## 打包与发布

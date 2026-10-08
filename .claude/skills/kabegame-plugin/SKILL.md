@@ -220,7 +220,7 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 
 改代码后重新跑 `run-cli.sh` 即可，它每次都会重新打包。CLI 不存在或太旧时，请用户在仓库根执行
 `deno task b -c kabegame-cli --data dev`（dev 版；release 版用 `--release`）。CLI 没有运行时 `--data`
-参数，不带 `--data dev` 构建出的 CLI 会指向系统数据目录，跑不到 dev 插件目录。
+参数；不带 `--release` 的 `deno task b` 默认就是 `--data dev`，而带 `--release` 默认 prod（系统数据目录），跑不到 dev 插件目录。
 
 ### WebView 插件 —— dev app + CDP
 
