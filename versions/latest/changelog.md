@@ -23,6 +23,7 @@
 - 原生元数据回填不发事件导致视图不刷新bug
 - gelbooru 插件在全部下排行无法爬图的 bug
 - ziworld 插件fetch json结构变化适配更新
+- 通过任务抽屉重复访问同一任务导致任务信息丢失的bug
 
 ### Optimized
 

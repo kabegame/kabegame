@@ -33,7 +33,7 @@ type TaskDetailRouteState = {
 
 function currentRouteTaskId(): string {
   if (router.currentRoute.value.name !== "TaskDetail") return "";
-  const raw = router.currentRoute.value.params.id;
+  const raw = router.currentRoute.value.params.taskId;
   return Array.isArray(raw) ? String(raw[0] ?? "") : String(raw ?? "");
 }
 

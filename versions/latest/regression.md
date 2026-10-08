@@ -234,6 +234,29 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | IPC 调试与旧版协议 | 本机 | 设 `KABEGAME_IPC_DEBUG=1`；再用旧 app 配新 CLI | 开关打开时恢复 DEBUG；旧 app 下 auto 回退且不挂起 | `KABEGAME_IPC_DEBUG=1` 已实测恢复 DEBUG；旧版 app 未测（无旧版二进制） |
 | [x] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`，dev app 运行时走 app 模式 | 已实测：`--data dev` 退出码 2；不带参数的 `plugin run --dry-run`、`plugin import`、`pathql query` 均显示「经主程序执行」并使用 `.kabegame/debug/data`；`plugin run --help` 不再含 `--data` |
 
+## konachan / yande.re / danbooru id 范围模式（konachan 1.5.0、yandere 1.2.0、danbooru 1.3.0）
+
+三个插件新增爬取模式 `id_range`：配置项 `id_start` / `id_end`（`int`，`min: 1`）只在该模式下显示。脚本校验两者为正整数、
+`id_end >= id_start` 且相差不超过 5000，然后用站点元标签 `id:A..B order:id` 升序翻列表页；总数（Moebooru 取
+`post.xml?…&limit=1` 的 `count`，danbooru 取 `/counts/posts.json`）只用来摊进度、并在抓满后停止，取不到时翻到空页或首条重复为止。
+分级过滤照常拼 `rating:`；yande.re 的「排序」在该模式下不拼。danbooru 列表页不渲染已删除作品但计数算它们，所以搜索串加
+`-status:deleted`；donmai.moe 列表页只渲染 General，所以该源站固定加 `rating:g`。danbooru 的「每页条数」在该模式下也显示。
+yande.re 列表里仍保留已删除作品（站点不支持搜索端排除），详情页取不到图时记 WARN 跳过。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | konachan 单页区间 | dev CLI | `run-cli.sh konachan --var crawl_mode=id_range --var id_start=380000 --var id_end=380060` | completed，新下载 14，与 `post.xml` count 一致 | 已实测 |
+| [x] | konachan 跨页区间 | dev CLI | 同上，`id_end=380300` | completed，新下载 94（= count），打开 3 页后停止，入库 id 在 380010..380300 内，进度 100% | 已实测 |
+| [x] | yande.re 跨页区间 | dev CLI | `run-cli.sh yandere --var crawl_mode=id_range --var id_start=1200000 --var id_end=1200050` | completed，count 51，新下载 50，打开 2 页后停止；1200015 为站点已删除作品，WARN「详情页没解析出图片地址」后跳过 | 已实测 |
+| [x] | danbooru 全站跨页 | dev CLI | `run-cli.sh danbooru --var source_site=danbooru --var crawl_mode=id_range --var id_start=9000000 --var id_end=9000060 --var per_page=20` | completed，新下载 49，与 `/counts/posts.json`（含 `-status:deleted`）一致，打开 3 页 | 已实测 |
+| [x] | danbooru 分级 + 每页 200 | dev CLI | 同上，`id_end=9000100 rating=g per_page=200` | completed，新下载 70（= count），只开 1 页 | 已实测 |
+| [x] | danbooru donmai.moe | dev CLI | 默认源站，`id_start=9000000 id_end=9000010` | completed，计数 6、新下载 6、只开 1 页（修正前计数 9 与页面 6 张不符，会多翻一页空页） | 已实测 |
+| [x] | 相差超过 5000 | dev CLI | konachan `1..5002`、yandere `10..5011` | 任务 failed：「id 范围最多相差 5000，当前 … 相差 5001」，不发任何请求 | 已实测 |
+| [x] | 结束小于起始 | dev CLI | konachan `500..400`、danbooru `500..499` | 任务 failed：「结束 id（…）需要不小于起始 id（…）」 | 已实测 |
+| [x] | 旧模式回归 | dev CLI | konachan / yandere `crawl_mode=all` 第 1 页；danbooru 全站 `crawl_mode=tags mode_tag_value=hatsune_miku` 第 1 页 | 正常打开列表页并下载 | 已实测（限时取消） |
+| [ ] | 表单显隐 | 桌面 CEF | 收集弹窗分别选三个插件，爬取模式切到「id 范围」 | 只显示起始 id / 结束 id（及源站、质量、分级；danbooru 另有每页条数），页数、排行榜字段与 yande.re 的排序隐藏 | |
+| [ ] | konachan R18 站 + 分级 | 桌面 CEF | 畅游通过 konachan.com 验证后，源站选 R18 站、分级选 Explicit，跑一个小区间 | 只下载 Explicit 作品；若 `post.xml` 被拦，日志总数显示「未知」但仍逐页抓完 | |
+
 ## wallhaven 插件：通用搜索与搜索 URL（插件 0.3.0）
 
 新增 V8 插件 `wallhaven`。站点的 `/latest`、`/toplist` 只是 `/search` 的预设（匿名默认 `categories=110&purity=100`）。插件提供「搜索条件」与
@@ -461,3 +484,13 @@ category + key；帖子地址取服务器 `post_url`，为空就留空，不填�
 | [ ] | 显式优先 | 本机 | `deno task b -c kabegame-cli --release --data dev`；`deno task b -c kabegame-cli --data prod` | 分别为 `dev`、`prod` | |
 | [ ] | dev / check 不变 | 本机 | `deno task dev -c kabegame`；`check-kabegame` driver | 分别为 `dev`、`prod` | |
 | [ ] | 主应用 release 包 | 桌面 | `deno task b -c kabegame --release` | `KABEGAME_DATA=prod`，安装后使用系统用户数据目录 | |
+
+## 抽屉重复路由到当前任务后标题只剩「任务」
+
+任务详情页的状态全部来自 `?path=task/<id>/...`。在任务详情页里从抽屉打开同一个任务时，抽屉会 `router.replace("/tasks/<id>")`，这一步不带 query，`?path=` 被清空，store 退回默认状态。默认状态的 `currentRouteTaskId()` 读的是 `params.id`，但路由参数名是 `taskId`，结果 taskId 变成空串；而 `route.params.taskId` 没变，TaskDetail 的 watch 不会再写回，于是 `task` 为 null，标题退回到「任务」。现在改为读 `params.taskId`。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 重复打开同一任务 | 桌面 CEF / Android | 从抽屉点任务的「查看图片」进入任务详情，再次打开抽屉点同一任务的「查看图片」 | 标题仍是插件名，计数与图片列表正常，不会变成「任务」+ 空列表 | |
+| [ ] | 切换到另一任务 | 桌面 CEF / Android | 在任务详情页里从抽屉打开另一个任务 | 标题、计数、图片切到新任务，搜索条件清空 | |
+| [ ] | 直接打开任务链接 | 桌面 CEF / Web | 直接访问 `/tasks/<id>`（不带 `?path=`） | 标题与图片正常 | |
