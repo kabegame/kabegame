@@ -1182,9 +1182,7 @@ pub async fn crawl_create_image_metadata<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn crawl_plugin_data<R: Runtime>(
-    webview: WebviewWindow<R>,
-) -> Result<Value, String> {
+pub async fn crawl_plugin_data<R: Runtime>(webview: WebviewWindow<R>) -> Result<Value, String> {
     let (_, run) = run_of(&webview)?;
     Storage::global()
         .plugin_data()

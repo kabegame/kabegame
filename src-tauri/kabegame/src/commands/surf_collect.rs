@@ -108,7 +108,11 @@ pub fn on_content_page_started<R: Runtime>(app: &AppHandle<R>, content_label: &s
     let had_run = SLOTS
         .lock()
         .ok()
-        .and_then(|mut slots| slots.get_mut(content_label).and_then(|s| s.active_run.take()))
+        .and_then(|mut slots| {
+            slots
+                .get_mut(content_label)
+                .and_then(|s| s.active_run.take())
+        })
         .is_some();
     if had_run {
         emit_state(app, content_label, false);
@@ -136,7 +140,10 @@ pub async fn surf_collect_attach<R: Runtime>(
 
 /// 导航栏按钮：空闲时开始一键下载，运行中则取消。
 #[tauri::command]
-pub async fn surf_collect_toggle<R: Runtime>(app: AppHandle<R>, host: String) -> Result<(), String> {
+pub async fn surf_collect_toggle<R: Runtime>(
+    app: AppHandle<R>,
+    host: String,
+) -> Result<(), String> {
     let label = surf_label(&normalize_surf_host(&host));
     let mut slots = SLOTS.lock().map_err(|e| format!("Lock error: {e}"))?;
     let slot = slots.entry(label.clone()).or_default();
@@ -214,7 +221,8 @@ pub async fn surf_save_page_snapshot<R: Runtime>(
     if !is_run_active(&label, run_id) {
         return Err(t!("surf.collect.canceled"));
     }
-    let host = host_from_surf_label(&label).ok_or_else(|| format!("Invalid surf label: {label}"))?;
+    let host =
+        host_from_surf_label(&label).ok_or_else(|| format!("Invalid surf label: {label}"))?;
 
     let text = |key: &str| {
         snapshot

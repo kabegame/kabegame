@@ -45,27 +45,28 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
             .get_run(task_id)
             .ok_or_else(|| format!("Crawler task not found for task {task_id}"))?;
         let plugin = &run.params.plugin;
-        let (crawl_js, vars) = if kabegame_core::crawler::webpage::is_webview_task(
-            &plugin.id,
-            &run.params.config,
-        ) {
-            // 网页收集 WebView：builtin 发现脚本 + 快照 + 公共编排 + WebView 入口，
-            // vars 额外带上宿主参数（冻结开关、扩展名）
-            let mut vars = serde_json::Map::from_iter(run.params.config.clone());
-            if let serde_json::Value::Object(extra) =
-                kabegame_core::crawler::webpage::collect_params(&run)
-            {
-                vars.extend(extra);
-            }
-            (webpage_webview_crawl_js(), serde_json::Value::Object(vars))
-        } else {
-            let js = plugin
-                .script
-                .js_source()
-                .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
-                .to_string();
-            (js, serde_json::to_value(&run.params.config).unwrap_or_default())
-        };
+        let (crawl_js, vars) =
+            if kabegame_core::crawler::webpage::is_webview_task(&plugin.id, &run.params.config) {
+                // 网页收集 WebView：builtin 发现脚本 + 快照 + 公共编排 + WebView 入口，
+                // vars 额外带上宿主参数（冻结开关、扩展名）
+                let mut vars = serde_json::Map::from_iter(run.params.config.clone());
+                if let serde_json::Value::Object(extra) =
+                    kabegame_core::crawler::webpage::collect_params(&run)
+                {
+                    vars.extend(extra);
+                }
+                (webpage_webview_crawl_js(), serde_json::Value::Object(vars))
+            } else {
+                let js = plugin
+                    .script
+                    .js_source()
+                    .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
+                    .to_string();
+                (
+                    js,
+                    serde_json::to_value(&run.params.config).unwrap_or_default(),
+                )
+            };
         let vars_json = serde_json::to_string(&vars)
             .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
         let task_id = task_id.to_string();

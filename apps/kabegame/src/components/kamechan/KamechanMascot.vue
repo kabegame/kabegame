@@ -79,6 +79,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
 import { useModal } from "@/composables/useModal";
+import { useModalStackStore } from "@/stores/modalStack";
 import { storeToRefs } from "pinia";
 import { Clock, FullScreen, Hide, Minus } from "@kabegame/element-plus-icons";
 import ActionRenderer from "@/components/ActionRenderer.vue";
@@ -105,9 +106,16 @@ const { queue } = storeToRefs(store);
 const { state, imageSrc, wave } = useKamechanMachine();
 
 const minimized = ref(false);
-const historyModal = useModal();
+/** kamechan 自己占的栈位都带这个 owner，置顶计算时排除，避免盖住自己的菜单与弹窗 */
+const KAMECHAN_MODAL_OWNER = "kamechan";
+/** 没有任何其它弹层时的常驻层级（与原样式一致） */
+const KAMECHAN_BASE_Z_INDEX = 1600;
+const historyModal = useModal({ owner: KAMECHAN_MODAL_OWNER });
 /** kamechan 开着时它就是全局工具箱的入口（方案 2a），点击 toggle 气泡 */
-const toolboxModal = useModal();
+const toolboxModal = useModal({ owner: KAMECHAN_MODAL_OWNER });
+const modalStack = useModalStackStore();
+/** 始终浮在其它弹层之上：消息气泡（如设置弹窗里的报错）不能被弹窗压住 */
+const hostZIndex = computed(() => modalStack.topZIndex(KAMECHAN_MODAL_OWNER) ?? KAMECHAN_BASE_Z_INDEX);
 const { count: busyCount, hasUnseenFailure, markFailuresSeen } = useBusyTasks();
 const badgeVisible = computed(() => busyCount.value > 0 || hasUnseenFailure.value);
 const hostEl = ref<HTMLElement | null>(null);
@@ -146,7 +154,7 @@ const {
   position: menuPosition,
   show: showActionMenu,
   hide: hideMenu,
-} = useActionMenu<"kamechan">();
+} = useActionMenu<"kamechan">({ owner: KAMECHAN_MODAL_OWNER });
 
 const currentMessage = computed(() => queue.value[queue.value.length - 1] ?? null);
 const queuedExtraCount = computed(() => Math.max(0, queue.value.length - 1));
@@ -196,8 +204,10 @@ const actionContext = computed<ActionContext<"kamechan">>(() => ({
 }));
 
 const hostStyle = computed<CSSProperties>(() => {
-  if (!position.value) return {};
+  const style: CSSProperties = { zIndex: hostZIndex.value };
+  if (!position.value) return style;
   return {
+    ...style,
     left: `${position.value.left}px`,
     bottom: `${position.value.bottom}px`,
   };

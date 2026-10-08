@@ -11,21 +11,23 @@ interface SlotEntry {
   slotIndex: number;
   layers: number;
   close?: ModalCloseCallback;
+  /** 占位方标记；`topZIndex(excludeOwner)` 据此排除某个组件自己的弹层 */
+  owner?: string;
 }
 
 export const useModalStackStore = defineStore("modalStack", () => {
   const slots = ref<SlotEntry[]>([]);
 
-  function _nextTopSlot(): number {
-    if (slots.value.length === 0) return 0;
-    return Math.max(...slots.value.map((e) => e.slotIndex + e.layers));
+  function _nextTopSlot(entries: SlotEntry[] = slots.value): number {
+    if (entries.length === 0) return 0;
+    return Math.max(...entries.map((e) => e.slotIndex + e.layers));
   }
 
-  function acquire(layers = 1, close?: ModalCloseCallback): { id: string; zIndex: number } {
+  function acquire(layers = 1, close?: ModalCloseCallback, owner?: string): { id: string; zIndex: number } {
     const id = crypto.randomUUID();
     const safeLayers = Math.max(1, Math.floor(layers));
     const slotIndex = _nextTopSlot();
-    slots.value.push({ id, slotIndex, layers: safeLayers, close });
+    slots.value.push({ id, slotIndex, layers: safeLayers, close, owner });
     return { id, zIndex: MODAL_Z_BASE + slotIndex * MODAL_Z_STEP };
   }
 
@@ -38,6 +40,17 @@ export const useModalStackStore = defineStore("modalStack", () => {
     return MODAL_Z_BASE + slotIndex * MODAL_Z_STEP;
   }
 
+  /**
+   * 压在所有已占栈位之上的 z-index；无栈位时返回 null。
+   * `excludeOwner` 排除该 owner 自己的栈位，供常驻浮层（kamechan）置顶又不盖住自己打开的菜单/弹窗：
+   * 自己的弹层与它同层时，靠 DOM 顺序（后 teleport 者在上）压住它。
+   */
+  function topZIndex(excludeOwner?: string): number | null {
+    const others = excludeOwner ? slots.value.filter((e) => e.owner !== excludeOwner) : slots.value;
+    if (others.length === 0) return null;
+    return zIndexForSlot(_nextTopSlot(others));
+  }
+
   // Android back button: close the topmost modal (highest reserved layer)
   async function closeTop(): Promise<boolean> {
     if (slots.value.length === 0) return false;
@@ -48,5 +61,5 @@ export const useModalStackStore = defineStore("modalStack", () => {
 
   const isEmpty = () => slots.value.length === 0;
 
-  return { slots, acquire, release, zIndexForSlot, closeTop, isEmpty };
+  return { slots, acquire, release, zIndexForSlot, topZIndex, closeTop, isEmpty };
 });

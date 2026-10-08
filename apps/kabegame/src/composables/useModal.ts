@@ -6,6 +6,8 @@ export interface UseModalOptions {
   onClose?: () => void;
   /** Reserve N consecutive z-index layers. Default 1. */
   layers?: number;
+  /** 栈位 owner 标记，见 `modalStack.topZIndex(excludeOwner)` */
+  owner?: string;
 }
 
 export interface UseModalReturn {
@@ -19,7 +21,7 @@ export interface UseModalReturn {
 }
 
 export function useModal(options: UseModalOptions = {}): UseModalReturn {
-  const { onOpen, onClose, layers = 1 } = options;
+  const { onOpen, onClose, layers = 1, owner } = options;
 
   const _isOpen = ref(false);
   const _zIndex = ref(0);
@@ -31,7 +33,7 @@ export function useModal(options: UseModalOptions = {}): UseModalReturn {
 
   function open() {
     if (_isOpen.value) return;
-    const { id, zIndex: z } = store.acquire(layers, close);
+    const { id, zIndex: z } = store.acquire(layers, close, owner);
     slotId = id;
     _zIndex.value = z;
     _isOpen.value = true;

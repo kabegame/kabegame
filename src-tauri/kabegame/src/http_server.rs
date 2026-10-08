@@ -111,9 +111,7 @@ fn set_immutable_cache(resp: &mut Response) {
 /// 通过时返回该图片的 `ImageInfo`(调用方要用它的 media_type 定 MIME);不通过时返回
 /// 已经构造好的错误响应,调用方直接 return 即可。
 #[cfg(not(target_os = "android"))]
-async fn authorize_local_path(
-    path: &str,
-) -> Result<kabegame_core::storage::ImageInfo, Response> {
+async fn authorize_local_path(path: &str) -> Result<kabegame_core::storage::ImageInfo, Response> {
     if path.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "missing path").into_response());
     }

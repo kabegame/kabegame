@@ -229,6 +229,40 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | IPC 调试与旧版协议 | 本机 | 设 `KABEGAME_IPC_DEBUG=1`；再用旧 app 配新 CLI | 开关打开时恢复 DEBUG；旧 app 下 auto 回退且不挂起 | `KABEGAME_IPC_DEBUG=1` 已实测恢复 DEBUG；旧版 app 未测（无旧版二进制） |
 | [x] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`，dev app 运行时走 app 模式 | 已实测：`--data dev` 退出码 2；不带参数的 `plugin run --dry-run`、`plugin import`、`pathql query` 均显示「经主程序执行」并使用 `.kabegame/debug/data`；`plugin run --help` 不再含 `--data` |
 
+## wallhaven 插件：通用搜索与搜索 URL（插件 0.3.0）
+
+新增 V8 插件 `wallhaven`。站点的 `/latest`、`/toplist` 只是 `/search` 的预设（匿名默认 `categories=110&purity=100`）。插件提供「搜索条件」与
+「搜索 URL」两种模式：前者直接暴露关键词、分类（综合 / 动漫 / 人物）、分级（SFW / 擦边）、排序（上传时间 / 相关度 / 随机 / 浏览 / 收藏 / 排行榜 / 热门）、
+顺序、排行范围（仅排行榜显示）、最低分辨率（任意 / 2K / 4K）、画面方向（横屏 / 竖屏 / 方形）与精确比例（站点比例表原值）；后者仿照 e-shuushuu
+接受 `https://wallhaven.cc/search?…`，原样转交搜索参数，只删除 `page`，由统一的起止页控制分页。Latest 与月度 Toplist 作为推荐配置提供。
+列表走 `/api/v1/search`，每张再调 `/api/v1/w/<id>` 补上传者与标签；API 匿名限流 45 次/分钟，
+所有请求串行节流到 1.5s 一次，429 时等 20s 重试。实测的站点行为：
+- `purity=000` 时网页与 API 都退回只搜 SFW（结果与 `purity=100` 逐项相同），插件显式发 `100` 并 warn；`categories=000` 时 API 返回全部分类，插件显式发 `111`；
+- `ratios` 里只要出现具体比例，`landscape` / `portrait` 就被整体忽略（`1x1,landscape` 只剩 1x1），所以与方形或精确比例混选时，
+  横屏 / 竖屏展开为比例表的宽 + 超宽列 / 竖屏列；只选横屏 / 竖屏时保留 token（覆盖 4:3、3:4 等表外比例，竖屏 6.7 万张，展开后只剩 7.6 千）；
+- 最低分辨率按比例换算：每个比例取「短边 1440 / 2160、长边按比例」的框（横屏 / 竖屏 token 按 16:9），`atleast` 取各框逐边最小值，未选比例为短边 × 短边；
+- API 忽略 `seed`（同 seed 同页两次结果不同），网页 `/search` 认 seed，所以随机排序由插件自生成 seed、改从网页列表取 ID，原图地址从详情接口拿。
+- 示例 URL `categories=110&purity=010&atleast=1280x800&ratios=16x9&sorting=date_added&order=desc&page=2` 的网页与 API 前两页均为 24 条，
+  ID 序列逐项一致；URL 模式删除 `page=2` 后，实际页码由 `start_page` / `end_page` 覆盖。
+
+标签统一挂到 `wallhaven/tag`，key 派生不出时退回 `tag-<id>`；`description.ejs` 还原源站暗色侧栏。站点在中国大陆直连超时，插件标记 `auth.needProxy`；
+宿主 fetch 只读 `HTTP_PROXY` 等环境变量，GUI 启动的 app 没有这些变量时请求会挂到超时。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 默认配置 = Latest | release CLI | `run-cli.sh wallhaven --release --var end_page=1` | 搜索参数为 `categories=110&purity=100&sorting=date_added&order=desc`；ID 序列与网页 `/latest` 第 1 页逐项一致 | 0.3.0 已回归：24 张全部按 URL 去重、0 失败；此前 API 同参数第 2 页与 `/latest?page=2`、`sorting=toplist&topRange=1M` 第 2 页与 `/toplist?page=2` 也逐项一致 |
+| [x] | 排行榜 + 横屏 + 2K | dev CLI（经主程序） | `--var sorting=toplist --var top_range=1w --var orientation=landscape --var min_resolution=2k --var end_page=1` | 参数带 `ratios=landscape&atleast=2560x1440`；ID 序列与网页同条件逐项一致 | 已实测：24/24 带 metadata，分辨率均 ≥ 2560×1440 |
+| [x] | 分级全不勾 + 多选比例 | dev app `app-run.sh` | `{"categories":["anime","people"],"purity":[],"sorting":"views","min_resolution":"2k","orientation":["portrait","square"]}` 跑 1 页 | warn「SFW 与擦边都未勾选」；参数为 `categories=011&purity=100&…&ratios=9x16,10x16,9x18,1x1,3x2,4x3,5x4&atleast=1440x1440`；ID 序列与网页 `purity=000` 同条件逐项一致 | 已实测：24 张全 SFW，短边均 ≥ 1440 |
+| [x] | 随机翻页 | dev CLI（经主程序） | `--var sorting=random --var end_page=2` | 两页互不重复；用日志里的 seed 请求网页，两页 ID 序列逐项一致 | 已实测：48 张新下载、0 去重，全部取到 `full/` 原图 |
+| [x] | 精确标签搜索 | dev CLI（经主程序） | `--var q=id:1 --var sorting=hot --var end_page=1` | 参数为 `q=id:1&…`；本页 24 张都带 anime 标签 | 已实测：24/24 带 anime。对照：`+anime` 在站点上模糊匹配标签名与别名，会命中别名含「Anime Cars」的 car 标签图（如 `lyg79p`），网页端结果相同，属站点行为，说明已写进关键词描述与 README |
+| [x] | 搜索 URL 去掉分页 | release CLI | `--var mode=url --var search_url='https://wallhaven.cc/search?categories=110&purity=010&atleast=1280x800&ratios=16x9&sorting=date_added&order=desc&page=2' --var start_page=1 --var end_page=1` | 日志参数不含 URL 自带的 `page=2`，实际抓第 1 页；24 张 ID 与网页第 1 页逐项一致，原图、metadata 与标签正常 | 已实测：24 张新下载、0 失败，ID 顺序逐项一致；24/24 有 metadata，共挂载 470 个标签 |
+| [x] | 搜索 URL 校验 | release CLI | URL 模式分别留空、输入非 URL、输入非 wallhaven 域名或非 `/search` 路径 | 任务给出明确 warn 并正常结束，不发列表请求 | 已实测：四种输入均 completed、各 1 条明确 warn、0 下载 |
+| [x] | 分页上限 | dev CLI（经主程序） | `--var page_size=2 --var start_page=50 --var end_page=50`；再跑 `start_page=1 end_page=11`；`--dry-run` 看默认值 | 第 50 页正常下载 2 张（页码不设上限）；1–11 页任务失败，提示「一次最多复制 10 页…请分几次运行」；默认 `page_size=20` | 已实测；CLI 不按 `max` 拦截，`page_size=500` 原样传入，由插件截到 100 |
+| [ ] | 表单显隐 | 桌面 CEF | 切换「搜索条件 / 搜索 URL」；在搜索条件中切换排序 | URL 模式只显示 URL 与起止页；搜索条件模式显示筛选项，且只有「排行榜」显示「排行范围」、「随机」不显示「顺序」 | |
+| [ ] | 推荐配置 | 桌面 CEF | 插件详情里分别以「最新」「月度排行榜」运行 | 表单回填对应条件，任务正常下载 3 页 | |
+| [x] | 详情模板 | `render-desc.ts wallhaven --db` | 渲染一张有来源、≥ 8 个标签的图 | 分辨率 / 来源 / 配色条 / 按纯度着色的标签 / Properties 与源站侧栏一致；非 JPEG 显示「5.1 MiB - PNG」 | 0.1.0 时实测截图对照，0.2.0 / 0.3.0 未改模板与 metadata |
+| [ ] | 多页限流 | debug CLI `--via local` | `--var start_page=1 --var end_page=3` | 不出现 429 重试日志，约 2 分钟跑完 3 页 | |
+
 ## 逐任务最大并发下载
 
 下载任务现在可单独设置最大并发，实际值不超过全局上限；收集弹窗、自动配置、任务抽屉与 CLI / app IPC 共用同一字段。运行中调大立即唤醒等待者，调小不打断在途下载；任务上限为空时随全局设置变化。
@@ -243,6 +277,59 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | 抽屉实时调整与任务公平性 | 桌面 CEF | 全局设 5；双任务分别设 1 与跟随全局，在抽屉连续按 −/+ | 在途/上限显示正确；A 不挤占 B；调小后自然降至上限，调回顶端显示跟随全局 | |
 | [ ] | 收集与运行配置回填 | 桌面 CEF | 收集弹窗设 2 后提交、再次执行、保存为配置并编辑自动配置 | 抽屉显示 x/2；各入口均保存并回显 2 | |
 | [ ] | CLI 与 app IPC 实时调整 | dev app + CLI | `plugin run <id> --max-downloads 2`，再执行 `task concurrency <id> 1` / `global` | 抽屉实时变化；主程序未运行或 `--via local` 时给出明确错误 | |
+
+## 2dwallpapers 插件停止收集（插件 0.2.5）
+
+2dwallpapers.com 约自 2026-04 起下线：域名仍注册在 Spaceship，但无 A 记录；ip138 解析历史中的原源站 `45.154.14.62`（首尔 MOACK）
+443 / 80 在全球节点均超时。原先任务报 `connection closed via error`（经代理 TLS 握手 EOF），含义不明。
+`crawl` 入口改为直接抛出中英双语的「站点已下线」错误，原抓取逻辑保留以便站点恢复；插件不下架，已有图片继续按插件索引、渲染 `description.ejs`。
+商店描述与五份插件 README、插件总览 README 均标注下线。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 入口报错 | debug CLI `--via local` | `run-cli.sh twodwallpapers --var orderby=date --var start_page=1 --var end_page=1 --via local` | 任务立即失败，错误为「2dwallpapers.com 已下线…」，无网络请求、无新增文件 | 已实测：v0.2.5，`at crawl (crawl.v8.js:323)`，新增文件 0 |
+| [ ] | app 内报错展示 | 桌面 CEF | 收集弹窗选 2dwallpapers 运行任意配置 | 任务卡片 / 错误详情显示下线说明，而非 TLS 连接错误 | |
+| [ ] | 已有图片不受影响 | 桌面 CEF（有 2dwallpapers 历史图的库） | 升级插件后打开画廊按插件过滤，预览一张旧图 | 插件维度仍列出 2dwallpapers 及其图片；「插件详情」面板正常渲染 | 本地 dev / prod 库均无该插件图片，未实测 |
+| [ ] | 商店与文档 | 桌面 CEF | 插件商店与插件详情弹窗查看 2dwallpapers | 描述带「站点已下线」；文档顶部显示 ⚠️ 下线说明（不出现 `[!WARNING]` 原文） | |
+
+## gelbooru「全部」模式选排序后抓不到图（插件 1.1.1）
+
+`tags=all` 只是站点空搜索的占位；`crawlAll` 恒定在搜索串前拼 `all`，选了非默认排序时请求变成 `tags=all+sort:…`，
+站点把 `all` 当真实标签去搜，列表为空，任务日志只有「第 1 页没有作品，结束」。改为只放排序 token，为空时才回落到 `all`。
+「高分精选」推荐配置（`crawl_mode=all` + `sort:score:desc`）同样受影响。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 全部 + 最近更新 | dev app + debug CLI | `run-cli.sh gelbooru --var crawl_mode=all --var sort_order=sort:updated:desc --var end_page=1 --var quality=medium` | 列表 URL 为 `tags=sort%3Aupdated%3Adesc`，正常下载 | 已实测：60s 内新增 27 个文件；curl 对照 `all+sort:…` 0 条、`sort:…` 42 条 |
+| [ ] | 高分精选推荐配置 | 桌面 CEF | 收集弹窗选 gelbooru 推荐配置「高分精选」运行 | 两页正常下载 | |
+| [ ] | 全部 + 最新（默认） | 桌面 CEF | 「全部」模式排序选「最新发布」运行第 2 页 | URL 仍为 `tags=all&pid=42`，正常下载 | |
+| [ ] | 标签 + 排序不受影响 | 桌面 CEF | 「标签」模式填 `kirisame_marisa`，排序「高分优先」 | URL 为 `tags=kirisame_marisa+sort%3Ascore%3Adesc`，正常下载 | |
+
+## ziworld 选任何目录都不下载（插件 0.3.6，随 0.4.0 发布）
+
+站点 `date.json` 从 `{ data: [...] }` 改为直接返回顶层数组，插件读 `res.data` 得到空列表，任务静默以成功结束、一张不下。
+改为两种结构都认；解析不出目录列表时直接报错，不再静默成功。同时把站点新增的「鬼刀」「初音未来」两个目录加进选项与默认勾选。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 单选一个目录 | dev app + debug CLI | `run-cli.sh ziworld --var category=鬼刀` | 下载该目录全部图片 | 已实测：新增 172 个文件，与 `date.json` 中鬼刀的 zid 数一致 |
+| [ ] | 全选 | 桌面 CEF | 收集弹窗 ziworld 保持默认全选运行 | 各目录依次下载，进度正常推进 | |
+| [ ] | 视频目录 | 桌面 CEF | 只勾 `video` 运行 | mp4 正常下载并生成预览 | probe 已确认 `files.zohopublic.com.cn` 返回 mp4 |
+| [ ] | 旧配置兼容 | 桌面 CEF | 用升级前保存的 ziworld 运行配置 / 「再次执行」旧任务 | 正常下载；新增的两个目录在旧配置里为未勾选 | |
+
+## ziworld 目录标签（插件 0.4.0）
+
+下载时把图片所属目录写成标签 `ziworld/category/<key>`，显示名为站点原目录名（`原神`、`未归类`…）。
+目录名多为中文、label key 只允许 ASCII，已知 17 个目录用固定英文 key（`genshin-impact`、`uncategorized`…），
+站点以后新增的目录按码点确定性编码为 `u-xxxx-…`。新增 `metadata_migrations/migrate.js` 的 `provideLabels`，按 `metadata.category`
+给历史图片补标签；最低应用版本提升至 `4.5.0`。原「目录」PathQL 浏览保留。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 新下载带标签 | dev app + debug CLI | `run-cli.sh ziworld --var category=未归类` 后查 `album_images` | 每张图挂一个 `ziworld/category/uncategorized`，名称「未归类」 | 已实测：38/38 |
+| [x] | 迁移脚本规则 | node | 用 dev 库 `ziworld-test` 的真实 metadata 调 `provideLabels` | `鬼刀` → `ghostblade`，`未归类` → `uncategorized`；未知中文目录 → `u-…`；空目录 → 不出标签 | 已实测；未经应用迁移 runner 跑（dev 库无已安装 `ziworld` 的历史图） |
+| [ ] | 历史图片补标签 | 桌面 CEF（有 0.3.x 下载的 ziworld 图） | 升级插件到 0.4.0 | 忙碌面板出现迁移进度；完成后画册「标签」分区出现 `ziworld/category` 下各目录，计数等于对应目录图片数 | |
+| [ ] | 标签浏览 | 桌面 CEF | 画册页标签分区进入 `ziworld → category → 原神` | 只列出原神目录的图 | |
 
 ## Web 模式每页条数 20 / 50 / 100（默认 20）
 
@@ -280,6 +367,55 @@ CORS。旧 `mcpEnabled` / `mcpPort` 不迁移，新服务仍保持关闭与默�
 | [x] | 拒绝浏览器请求 | curl + 浏览器 | 向全部端点分别添加 `Origin`、`Sec-Fetch-Mode`；地址栏打开 ping；网页发 fetch | 均失败或返回 403；响应没有 `Access-Control-*` 头；普通 curl 不受影响 | 已实测：curl 四种头对 `/rpc` `/__ping` `/events` `/mcp` `/file` 均 403、无 `Access-Control-*`；CEF 页面内 fetch `Failed to fetch`、EventSource error、`<img>` error |
 | [x] | 复制地址（服务器 / MCP） | 桌面 CEF | 设置 → 高级 → Web 服务器，查看并点击两个地址卡；开关局域网访问 | 仅两项：服务器地址 `http://127.0.0.1:<端口>`（局域网开启时变为本机局域网 IP）、MCP 地址 `http://127.0.0.1:<端口>/mcp`；地址整行可见、点击复制 | 已实测：局域网开启后显示 `http://192.168.5.137:7490`，MCP 仍为 127.0.0.1；`get_web_server_lan_ip` 返回 192.168.5.137 |
 | [ ] | 服务器地址喂给插件 | 桌面 CEF | 复制「服务器地址」粘贴到「Kabegame 服务器」插件的服务器地址并运行 | 能翻页复制图片 | |
+
+## Kamechan 浮在所有弹层之上
+
+`modalStack` 栈位新增 `owner`，`topZIndex(excludeOwner)` 返回压在「除该 owner 外」所有栈位之上的 z-index。
+kamechan 自己的工具箱 / 菜单 / 历史弹窗都带 `owner: "kamechan"`，host 取 `topZIndex("kamechan") ?? 1600`：
+其它弹窗打开时 kamechan（含消息气泡）始终在最上层；自己的菜单与历史弹窗与它同层时按 DOM 顺序压住它。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 设置弹窗内的消息可见 | 桌面 CEF | 打开设置弹窗，触发一条 kamechan 消息（如 Web 服务器重启失败） | kamechan 与气泡显示在弹窗遮罩之上 | 已实测：设置弹窗 overlay z=2000，kamechan z=2010，气泡完整可见 |
+| [x] | 自己的右键菜单不被挡 | 桌面 CEF | 设置弹窗开着时右键 kamechan | 菜单盖在 kamechan 之上 | 已实测 |
+| [ ] | 消息历史弹窗不被挡 | 桌面 CEF | 设置弹窗开着时右键 kamechan → 消息历史 | 历史弹窗在 kamechan 之上，可正常操作 | |
+| [ ] | 无弹窗时层级不变 | 桌面 CEF | 关闭所有弹窗 | kamechan 回到 z-index 1600，不遮挡 Element Plus 弹出层 | |
+| [ ] | 预览 / 其它 useModal 弹窗 | 桌面 CEF | 打开图片预览、画册选择等弹窗 | kamechan 均在最上层，不影响弹窗交互 | |
+
+## Kabegame 服务器插件（新插件 kabegame-server 0.2.0）
+
+新增 V8 插件 `kabegame-server`：经另一个 Kabegame 的 `POST /rpc`（Web 版，默认 `https://demo.kabegame.com`；或桌面端 Web 服务器）复制图片。
+两种模式都是一条 images:// 路径加 `/x<N>x/<页>` 分页（每页默认 20、最多 100，超出由插件截断；一次最多 10 页，像 konachan 的 100 页限制一样超出直接拒绝）：「全站」为 `images://gallery/[hide/]sort/<random-<种子> | by-time/desc | by-id>`，默认随机，种子每次运行生成一次、各页共用；「过滤」粘贴「高级查询」弹窗底部的路径，只剥末尾 `[x<N>x/]<页码>`，排序与 `desc` 保留，省略 scheme 时补 `images://gallery/`。
+先用 `images://gallery` 判断能否连上，再对查询取总数，两类错误分开提示。
+然后逐图并发 8 路取
+`get_image_metadata_full` 与 `albums://of_image_<id>/album_kind/label`：元数据按服务器 metadata 行共用一行本地 metadata，包成
+`{ schema, server, source: { pluginId, pluginVersion, surfRecordId, metadataId }, metadata }`；标签按服务器 `label_path` 原样拆成
+category + key；帖子地址取服务器 `post_url`，为空就留空，不填服务器地址；媒体 Web 版走 CDN 直链，桌面服务器的本地路径走同端口 `/file?path=`。
+详情模板执行**来源插件**的 `description.ejs`：爬虫把服务器上该插件的模板（`get_plugin_detail.descriptionTemplate`）与
+`get_plugin_data` 存进本插件 plugin_data（`servers[server].plugins[pluginId]`）；本插件模板在 iframe 内读出，用构建时内嵌的、
+与宿主同一份 ejs 3.1.10 按宿主参数渲染，脚本补 nonce 依次执行、补发 `DOMContentLoaded`；`__bridge.getPluginData` 换成来源插件的数据，
+`getCache` / `setCache` 的 key 加 `src:<pluginId>:` 前缀隔离；畅游 / 网页收集快照照宿主放进 `sandbox=""` + CSP 的内层 iframe；
+无模板时显示原始元数据。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 默认服务器分页 | dev CLI（本地） | `run-cli.sh kabegame-server --var page_size=5` | 新下载 5、0 失败；入库顺序为服务器 id 4/10/11/13/14，与 `gallery/hide/sort/by-id/x5x/1` 一致 | 已实测 |
+| [x] | 全站 · 默认随机 | dev CLI（经主程序） | 不传 `sort`，`--var page_size=2` | 日志路径为 `hide/sort/random-<种子>`，下载 2 张 | 已实测；排序下拉里随机排第一，原「默认」改名「ID 升序」 |
+| [x] | 全站 · 时间 | dev CLI（经主程序） | `--var sort=time --var page_size=3` | 与服务器 `hide/sort/by-time/desc/x3x/1`（29590 / 29588 / 29589）一致 | 已实测 |
+| [x] | 全站 · 随机 | dev CLI（经主程序） | `--var sort=random --var page_size=3` 跑两次；再跑 `--var end_page=2` | 两次结果不同，各与日志里种子的服务器结果一致；两页 6 张互不重复且与服务器两页一致 | 已实测 |
+| [x] | 过滤 · 弹窗路径 | dev CLI（经主程序） | `--var mode=filter --var pathql=images://gallery/hide/plugin/pixiv/filter_comb/sort/by-time/desc/1 --var page_size=3` | 日志的过滤路径去掉了末尾 `1`；总数 788；与服务器同路径 `x3x/1` 一致 | 已实测 |
+| [x] | 过滤 · 省略 scheme、带每页数量尾巴 | dev CLI（经主程序） | `pathql=hide/plugin/pixai/filter_comb/sort/by-id/x100x/7`，`start_page=end_page=2` | 补成 `images://gallery/…/sort/by-id`，`x100x/7` 被剥掉，按插件每页 3 取第 2 页（55 / 58 / 61） | 已实测 |
+| [x] | 过滤 · 组合器 | 桌面 Web 服务器 | `pathql=images://gallery/hide/~any/plugin/pixai/~or/plugin/pixiv/~end/sort/by-time/desc/1` | 总数 236，与服务器同路径第 1 页一致（含 emoji 文件名） | 已实测 |
+| [x] | 过滤 · 错误路径 | dev CLI | `pathql=images://gallery/nope/sort/by-id/1` | 任务失败，提示「服务器无法解析查询」而不是连不上服务器 | 已实测 |
+| [ ] | 表单显隐 | 桌面 CEF | 收集弹窗里切换模式 | 全站显示排序与「包含隐藏图片」；过滤只显示「PathQL 查询」；每页数量 / 起始页 / 结束页始终在同一行 | |
+| [x] | 元数据与标签原样复制 | dev CLI + sqlite | 对比上一条任务的 metadata 与服务器 `get_image_metadata_full` | 内层 `metadata` 与服务器逐字段相等；本地挂上的标签 141 个 = 服务器 5 张图标签总数，路径同为 `konachan/<分类>/<key>` | 已实测 |
+| [x] | 多来源插件 | dev CLI | `page_size=1` 分别取 pixai / miyoushe / bilibili / heybox / pixiv 各一张 | 全部成功；plugin_data 累积 6 个来源插件的模板与数据（miyoushe 数据约 390KB） | 已实测；demo 上所有图片 `post_url` 本就为空，本地也为空 |
+| [x] | 来源模板执行一致性 | 无头 Chrome 测试壳（宿主同款 bridge 注入、nonce 正则与 CSP） | 包装渲染 vs 直接按宿主流程渲染来源模板，比对 iframe 文本、错误与 bridge 调用 | konachan / pixai / miyoushe / bilibili / pixiv 文本逐字一致、无错误；miyoushe 读到来源插件 plugin_data 并以 `src:miyoushe:` 前缀读写缓存，pixiv 的 `__bridge.fetch` 正常发出 | 已实测；heybox 只差 `toLocaleString` 日期格式（测试壳的直渲在 Deno 里执行 EJS，app 里两者都在 CEF 执行） |
+| [x] | 兜底分支 | 无头 Chrome 测试壳 | 来源插件无模板 / 畅游快照（含脚本与 onerror） / 来源无元数据 | 分别显示原始元数据；快照在 `sandbox=""` + CSP iframe 内且脚本未执行；只显示来源条 | 已实测 |
+| [ ] | app 内详情面板 | 桌面 CEF | dev app 里打开上面任一张 kabegame-server 图片的预览 | 「插件详情」顶部显示来源条，下方为来源插件原样式；链接点击用外部浏览器打开 | |
+| [x] | 桌面 Web 服务器 | dev app 开 Web 服务器 + dev CLI（经主程序） | 关闭去重后以 `--var server_url=http://127.0.0.1:7490 --var page_size=3` 跑一页 | 媒体经 `/file?path=` 下载成功（含 1 个 mp4）；`post_url` 与服务器相同；标签 14 = 服务器 3 张图标签总数 | 已实测 |
+| [x] | 包含隐藏图片 | dev CLI | `--var include_hidden=true` 对比默认 | 路径不带 `hide/`，总数多出服务器隐藏图片数（demo 为 19979 vs 19970） | 已实测：日志总数 19979，前 2 张已存在被去重 |
+| [x] | 地址错误 | dev CLI | `--var server_url=http://127.0.0.1:1` | 任务失败，错误提示检查地址、桌面端需开启 Web 服务器 | 已实测 |
 
 ## 预览标签面板「添加标签」可展开标签目录
 

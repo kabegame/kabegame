@@ -8,6 +8,8 @@ export interface ActionMenuContext<T> {
 export interface UseActionMenuOptions<T> {
   /** Optional: called when a command is emitted (parent can also use @command on ActionRenderer) */
   onCommand?: (command: string, context: ActionMenuContext<T>) => void;
+  /** 栈位 owner 标记，透传给 `useModal` */
+  owner?: string;
 }
 
 export interface UseActionMenuReturn<T> {
@@ -28,6 +30,7 @@ export function useActionMenu<T>(_options?: UseActionMenuOptions<T>): UseActionM
   const position = ref({ x: 0, y: 0 });
   const context = ref<ActionMenuContext<T>>({ target: null });
   const modal = useModal({
+    owner: _options?.owner,
     onClose: () => {
       visible.value = false;
     },
