@@ -229,6 +229,21 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | IPC 调试与旧版协议 | 本机 | 设 `KABEGAME_IPC_DEBUG=1`；再用旧 app 配新 CLI | 开关打开时恢复 DEBUG；旧 app 下 auto 回退且不挂起 | `KABEGAME_IPC_DEBUG=1` 已实测恢复 DEBUG；旧版 app 未测（无旧版二进制） |
 | [x] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`，dev app 运行时走 app 模式 | 已实测：`--data dev` 退出码 2；不带参数的 `plugin run --dry-run`、`plugin import`、`pathql query` 均显示「经主程序执行」并使用 `.kabegame/debug/data`；`plugin run --help` 不再含 `--data` |
 
+## 逐任务最大并发下载
+
+下载任务现在可单独设置最大并发，实际值不超过全局上限；收集弹窗、自动配置、任务抽屉与 CLI / app IPC 共用同一字段。运行中调大立即唤醒等待者，调小不打断在途下载；任务上限为空时随全局设置变化。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 类型与编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh` 与 `-c kabegame-cli --skip vue` | Vue、app/core 与 CLI 均无 error | 已实测；两次均为 `vue-tsc 0 个 error / cargo 0 个 error` |
+| [x] | v035 迁移幂等 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib up_adds_task_max_concurrent_downloads_and_is_idempotent` | tasks / run_configs 新列只添加一次 | 已实测；`1 passed / 0 failed` |
+| [x] | 任务并发闸门 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib task_download_gate_admits_atomically_and_expands_after_limit_change` | limit=1 时并发提交不超发，调到 2 后第二个请求入队 | 已实测；`1 passed / 0 failed` |
+| [x] | 参数边界 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib validate_task_max_downloads_rejects_zero_only` | 只拒绝 0，接受 1、99 与跟随全局 | 已实测；`1 passed / 0 failed` |
+| [x] | 前端状态与控件 | Vitest | `deno task test -c kabegame --skip cargo` | 显式 null 不丢失，− 到 1 禁用，+ 到全局写 null | 已实测；`26 files / 237 tests` 全通过 |
+| [ ] | 抽屉实时调整与任务公平性 | 桌面 CEF | 全局设 5；双任务分别设 1 与跟随全局，在抽屉连续按 −/+ | 在途/上限显示正确；A 不挤占 B；调小后自然降至上限，调回顶端显示跟随全局 | |
+| [ ] | 收集与运行配置回填 | 桌面 CEF | 收集弹窗设 2 后提交、再次执行、保存为配置并编辑自动配置 | 抽屉显示 x/2；各入口均保存并回显 2 | |
+| [ ] | CLI 与 app IPC 实时调整 | dev app + CLI | `plugin run <id> --max-downloads 2`，再执行 `task concurrency <id> 1` / `global` | 抽屉实时变化；主程序未运行或 `--via local` 时给出明确错误 | |
+
 ## 预览标签面板「添加标签」可展开标签目录
 
 预览弹窗标签面板的「添加标签」选择器里，标签目录（含插件建的 `yandere/`、`konachan/` 等目录）此前被判为不可选，

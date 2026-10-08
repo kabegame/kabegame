@@ -55,6 +55,19 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
     if let IpcRequest::TaskCancel { task_id } = req {
         return handle_task_cancel(task_id).await;
     }
+    if let IpcRequest::TaskSetMaxConcurrentDownloads {
+        task_id,
+        max_concurrent_downloads,
+    } = req
+    {
+        return match kabegame_core::commands::task::set_task_max_concurrent_downloads(
+            task_id,
+            max_concurrent_downloads,
+        ) {
+            Ok(_) => IpcResponse::ok("ok"),
+            Err(error) => IpcResponse::err(error),
+        };
+    }
     if let IpcRequest::TaskRetryFailedImage { failed_id } = req {
         return handle_task_retry_failed_image(failed_id).await;
     }

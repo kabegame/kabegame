@@ -75,6 +75,11 @@ describe("resolveTaskConfig", () => {
     expect(resolveTaskConfig({ pluginId: "p" }, null, defs).outputAlbumId).toBeNull();
     expect(resolveTaskConfig({ pluginId: "p", outputAlbumId: "alb" }, null, defs).outputAlbumId).toBe("alb");
   });
+
+  it("逐任务并发没有用户默认层，缺省为 null", () => {
+    expect(resolveTaskConfig({ pluginId: "p" }, null, defs).maxConcurrentDownloads).toBeNull();
+    expect(resolveTaskConfig({ pluginId: "p", maxConcurrentDownloads: 2 }, null, defs).maxConcurrentDownloads).toBe(2);
+  });
 });
 
 describe("buildSubmitUserConfig", () => {

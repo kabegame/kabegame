@@ -39,6 +39,7 @@ model Task {
   startTime     Int?    @map("start_time")
   endTime       Int?    @map("end_time")
   error         String?
+  maxConcurrentDownloads Int? @map("max_concurrent_downloads")
 
   images Image[] @relation("TaskToImage")
 
@@ -189,6 +190,7 @@ model RunConfig {
   scheduleSpec         String? @map("schedule_spec")
   schedulePlannedAt    Int?    @map("schedule_planned_at")
   scheduleLastRunAt    Int?    @map("schedule_last_run_at")
+  maxConcurrentDownloads Int? @map("max_concurrent_downloads")
 
   @@map("run_configs")
 }

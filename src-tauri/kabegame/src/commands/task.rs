@@ -65,6 +65,14 @@ pub async fn cancel_task(task_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
+pub async fn set_task_max_concurrent_downloads(
+    task_id: String,
+    max_concurrent_downloads: Option<u32>,
+) -> Result<Value, String> {
+    commands::task::set_task_max_concurrent_downloads(task_id, max_concurrent_downloads)
+}
+
+#[tauri::command]
 pub async fn get_active_downloads() -> Result<Value, String> {
     commands::task::get_active_downloads().await
 }

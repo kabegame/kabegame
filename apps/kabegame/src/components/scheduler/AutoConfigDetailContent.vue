@@ -45,7 +45,7 @@
     </el-descriptions>
 
     <el-descriptions
-      v-if="config.outputDir || config.outputAlbumId"
+      v-if="config.outputDir || config.outputAlbumId || config.maxConcurrentDownloads != null"
       :title="t('tasks.taskRunParamsSectionOutput')"
       :column="1"
       border
@@ -57,6 +57,13 @@
       </el-descriptions-item>
       <el-descriptions-item v-if="config.outputAlbumId" :label="t('albums.outputAlbum')" :span="2">
         <span class="break-all">{{ outputAlbumName || config.outputAlbumId }}</span>
+      </el-descriptions-item>
+      <el-descriptions-item
+        v-if="config.maxConcurrentDownloads != null"
+        :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')"
+        :span="2"
+      >
+        {{ config.maxConcurrentDownloads }}
       </el-descriptions-item>
     </el-descriptions>
 

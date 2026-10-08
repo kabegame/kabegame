@@ -325,6 +325,7 @@ const confirmSaveTaskAsConfig = async () => {
       userConfig: task.userConfig ?? {},
       httpHeaders: task.httpHeaders ?? {},
       outputAlbumId: task.outputAlbumId,
+      maxConcurrentDownloads: task.maxConcurrentDownloads ?? null,
       scheduleEnabled: false,
     });
     ElMessage.success(t("tasks.saveConfigSuccess"));

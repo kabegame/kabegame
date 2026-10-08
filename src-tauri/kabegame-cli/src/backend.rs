@@ -203,6 +203,21 @@ impl Backend {
         }
     }
 
+    pub async fn set_task_max_concurrent_downloads(
+        &self,
+        task_id: &str,
+        value: Option<u32>,
+    ) -> Result<(), String> {
+        match self {
+            Self::App(client) => {
+                client
+                    .task_set_max_concurrent_downloads(task_id.to_string(), value)
+                    .await
+            }
+            Self::Local => Err("只能调整主程序中运行的任务".to_string()),
+        }
+    }
+
     pub async fn subscribe_task_events(&self) -> Result<UnboundedReceiver<Arc<AppEvent>>, String> {
         let kinds = [AppEventKind::TaskLog, AppEventKind::TasksChange];
         match self {

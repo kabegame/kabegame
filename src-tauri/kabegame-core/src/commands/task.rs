@@ -15,7 +15,17 @@ pub struct PluginRunParams {
     pub output_dir: Option<String>,
     pub output_album_id: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub max_concurrent_downloads: Option<u32>,
     pub dry_run: bool,
+}
+
+/// 0 会让任务永远无法入队；不设上界，超过全局值时按全局值生效。
+fn validate_task_max_downloads(value: Option<u32>) -> Result<Option<u32>, String> {
+    match value {
+        Some(0) => Err("任务最大并发下载数必须大于等于 1".to_string()),
+        value => Ok(value),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +165,9 @@ pub async fn run_plugin(
     }
     if let Some(album_id) = p.output_album_id {
         params["outputAlbumId"] = Value::String(album_id);
+    }
+    if let Some(limit) = validate_task_max_downloads(p.max_concurrent_downloads)? {
+        params["maxConcurrentDownloads"] = Value::from(limit);
     }
     let task_id = start_task(params).await?;
 
@@ -315,6 +328,8 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         run_config_id: Option<String>,
         #[serde(default = "default_trigger_source")]
         trigger_source: String,
+        #[serde(default)]
+        max_concurrent_downloads: Option<u32>,
     }
 
     fn default_trigger_source() -> String {
@@ -322,6 +337,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
     }
 
     let p: StartTaskParams = serde_json::from_value(task).map_err(|e| e.to_string())?;
+    let max_concurrent_downloads = validate_task_max_downloads(p.max_concurrent_downloads)?;
     // 网页收集：前端校验之外必须再校验一次，非法直接拒绝，不创建任务记录
     if p.plugin_id == crate::plugin::webpage::WEBPAGE_PLUGIN_ID {
         crate::crawler::webpage::validate_submission(
@@ -348,6 +364,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         output_album_id: p.output_album_id,
         run_config_id: p.run_config_id,
         trigger_source: p.trigger_source,
+        max_concurrent_downloads,
         status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,
@@ -375,6 +392,16 @@ pub async fn start_task(task: Value) -> Result<String, String> {
 pub async fn cancel_task(task_id: String) -> Result<Value, String> {
     use crate::crawler::TaskScheduler;
     TaskScheduler::global().cancel_task(&task_id).await;
+    Ok(Value::Null)
+}
+
+/// 实时调整运行中（pending / running / waiting_downloads）任务的下载并发上限。
+pub fn set_task_max_concurrent_downloads(
+    task_id: String,
+    max_concurrent_downloads: Option<u32>,
+) -> Result<Value, String> {
+    let limit = validate_task_max_downloads(max_concurrent_downloads)?;
+    crate::crawler::TaskScheduler::global().set_task_max_concurrent_downloads(&task_id, limit)?;
     Ok(Value::Null)
 }
 
@@ -574,5 +601,13 @@ mod tests {
             .expect_err("unknown key must fail");
         assert!(error.contains("missing"));
         assert!(error.contains("known"));
+    }
+
+    #[test]
+    fn validate_task_max_downloads_rejects_zero_only() {
+        assert!(validate_task_max_downloads(Some(0)).is_err());
+        assert_eq!(validate_task_max_downloads(Some(1)).unwrap(), Some(1));
+        assert_eq!(validate_task_max_downloads(Some(99)).unwrap(), Some(99));
+        assert_eq!(validate_task_max_downloads(None).unwrap(), None);
     }
 }

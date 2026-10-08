@@ -19,6 +19,7 @@ export interface CrawlTask {
   outputDir?: string;
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
+  maxConcurrentDownloads?: number | null;
   outputAlbumId?: string;
   runConfigId?: string;
   triggerSource: "manual" | "scheduled";
@@ -51,6 +52,7 @@ export interface RunConfig {
   outputDir?: string;
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
+  maxConcurrentDownloads?: number | null;
   /** 输出画册：定时任务与手动任务写入同一画册 */
   outputAlbumId?: string;
   createdAt: number;
@@ -70,6 +72,7 @@ export interface TaskConfig {
   outputDir: string;
   httpHeaders: Record<string, string>;
   outputAlbumId: string | null;
+  maxConcurrentDownloads: number | null;
 }
 
 export interface MissedRunItem {
@@ -87,6 +90,43 @@ function numOpt(v: unknown): number | undefined {
   if (v == null || v === "") return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function nullableNumOpt(v: unknown): number | null | undefined {
+  if (v === null) return null;
+  return numOpt(v);
+}
+
+function nullableNumField(o: Record<string, unknown>, camel: string, snake: string): number | null | undefined {
+  if (Object.prototype.hasOwnProperty.call(o, camel)) return nullableNumOpt(o[camel]);
+  if (Object.prototype.hasOwnProperty.call(o, snake)) return nullableNumOpt(o[snake]);
+  return undefined;
+}
+
+export function normalizeDiffKeys(diff: Record<string, unknown>): Partial<CrawlTask> {
+  const out: Partial<CrawlTask> = {};
+  const status = diff.status;
+  if (status != null && typeof status === "string") out.status = status as CrawlTask["status"];
+  const progress = diff.progress;
+  if (progress != null && Number.isFinite(Number(progress))) out.progress = Number(progress);
+  const st = diff.startTime ?? diff.start_time;
+  if (st != null && Number.isFinite(Number(st))) out.startTime = Number(st);
+  const et = diff.endTime ?? diff.end_time;
+  if (et != null && Number.isFinite(Number(et))) out.endTime = Number(et);
+  if (diff.error != null) out.error = String(diff.error);
+  const sc = diff.successCount ?? diff.success_count;
+  if (sc != null && Number.isFinite(Number(sc))) out.successCount = Number(sc);
+  const delc = diff.deletedCount ?? diff.deleted_count;
+  if (delc != null && Number.isFinite(Number(delc))) out.deletedCount = Number(delc);
+  const fc = diff.failedCount ?? diff.failed_count;
+  if (fc != null && Number.isFinite(Number(fc))) out.failedCount = Number(fc);
+  const ddc = diff.dedupCount ?? diff.dedup_count;
+  if (ddc != null && Number.isFinite(Number(ddc))) out.dedupCount = Number(ddc);
+  if (Object.prototype.hasOwnProperty.call(diff, "maxConcurrentDownloads")) {
+    const value = diff.maxConcurrentDownloads;
+    out.maxConcurrentDownloads = value == null ? null : Number(value);
+  }
+  return out;
 }
 
 /** 解析 `schedule_spec` JSON 对象或字符串 */
@@ -203,6 +243,7 @@ export function parseRunConfigRaw(raw: unknown): RunConfig | null {
     userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
     httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
     outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
+    maxConcurrentDownloads: nullableNumField(o, "maxConcurrentDownloads", "max_concurrent_downloads"),
     createdAt: Number(o.createdAt ?? o.created_at ?? 0),
     scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
@@ -248,6 +289,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
       userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
       httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
+      maxConcurrentDownloads: nullableNumField(o, "maxConcurrentDownloads", "max_concurrent_downloads"),
       outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
       runConfigId: (o.runConfigId ?? o.run_config_id) as string | undefined,
       triggerSource: (o.triggerSource ?? o.trigger_source ?? "manual") as CrawlTask["triggerSource"],
@@ -261,46 +303,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
       endTime: (o.endTime ?? o.end_time) as number | undefined,
       error: o.error != null ? String(o.error) : undefined,
     };
-  }
-
-  function normalizeDiffKeys(diff: Record<string, unknown>): Partial<CrawlTask> {
-    const out: Partial<CrawlTask> = {};
-    const status = diff.status;
-    if (status != null && typeof status === "string") {
-      out.status = status as CrawlTask["status"];
-    }
-    const progress = diff.progress;
-    if (progress != null && Number.isFinite(Number(progress))) {
-      out.progress = Number(progress);
-    }
-    const st = diff.startTime ?? diff.start_time;
-    if (st != null && Number.isFinite(Number(st))) {
-      out.startTime = Number(st);
-    }
-    const et = diff.endTime ?? diff.end_time;
-    if (et != null && Number.isFinite(Number(et))) {
-      out.endTime = Number(et);
-    }
-    if (diff.error != null) {
-      out.error = String(diff.error);
-    }
-    const sc = diff.successCount ?? diff.success_count;
-    if (sc != null && Number.isFinite(Number(sc))) {
-      out.successCount = Number(sc);
-    }
-    const delc = diff.deletedCount ?? diff.deleted_count;
-    if (delc != null && Number.isFinite(Number(delc))) {
-      out.deletedCount = Number(delc);
-    }
-    const fc = diff.failedCount ?? diff.failed_count;
-    if (fc != null && Number.isFinite(Number(fc))) {
-      out.failedCount = Number(fc);
-    }
-    const ddc = diff.dedupCount ?? diff.dedup_count;
-    if (ddc != null && Number.isFinite(Number(ddc))) {
-      out.dedupCount = Number(ddc);
-    }
-    return out;
   }
 
   const ensureTaskLoaded = async (taskId: string) => {
@@ -345,6 +347,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
         outputDir: raw.outputDir ?? raw.output_dir ?? undefined,
         userConfig: raw.userConfig ?? raw.user_config ?? undefined,
         httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
+        maxConcurrentDownloads: nullableNumField(raw, "maxConcurrentDownloads", "max_concurrent_downloads"),
         outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
         runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
         triggerSource: (raw.triggerSource ?? raw.trigger_source ?? "manual") as CrawlTask["triggerSource"],
@@ -517,6 +520,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     httpHeaders?: Record<string, string>,
     runConfigId?: string,
     triggerSource: CrawlTask["triggerSource"] = "manual",
+    maxConcurrentDownloads?: number | null,
   ): Promise<boolean> {
     if (beforeAddTaskGuard) {
       try {
@@ -538,6 +542,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           outputAlbumId,
           runConfigId,
           triggerSource,
+          maxConcurrentDownloads,
         },
       });
       return true;
@@ -554,6 +559,15 @@ export const useCrawlerStore = defineStore("crawler", () => {
       console.error("终止任务失败:", error);
       throw error;
     }
+  }
+
+  async function setTaskMaxConcurrentDownloads(taskId: string, value: number | null) {
+    await invoke("set_task_max_concurrent_downloads", {
+      taskId,
+      maxConcurrentDownloads: value,
+    });
+    const task = tasks.value.find((item) => item.id === taskId);
+    if (task) task.maxConcurrentDownloads = value;
   }
 
   async function loadRunConfigs() {
@@ -638,6 +652,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       outputDir: config.outputDir,
       userConfig: config.userConfig ?? {},
       httpHeaders: config.httpHeaders ?? {},
+      maxConcurrentDownloads: config.maxConcurrentDownloads ?? null,
       outputAlbumId: config.outputAlbumId,
       scheduleEnabled: config.scheduleEnabled ?? false,
       scheduleSpec: config.scheduleSpec,
@@ -719,6 +734,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     outputDir?: string;
     userConfig?: Record<string, any>;
     outputAlbumId?: string;
+    maxConcurrentDownloads?: number | null;
     runConfigId?: string;
     triggerSource?: CrawlTask["triggerSource"];
     status: string;
@@ -736,6 +752,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     outputDir: t.outputDir,
     userConfig: t.userConfig,
     outputAlbumId: t.outputAlbumId,
+    maxConcurrentDownloads: t.maxConcurrentDownloads ?? null,
     runConfigId: t.runConfigId,
     triggerSource: t.triggerSource ?? "manual",
     status: t.status as CrawlTask["status"],
@@ -758,6 +775,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           outputDir?: string;
           userConfig?: Record<string, any>;
           outputAlbumId?: string;
+          maxConcurrentDownloads?: number | null;
           runConfigId?: string;
           triggerSource?: CrawlTask["triggerSource"];
           status: string;
@@ -789,6 +807,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           outputDir?: string;
           userConfig?: Record<string, any>;
           outputAlbumId?: string;
+          maxConcurrentDownloads?: number | null;
           runConfigId?: string;
           triggerSource?: CrawlTask["triggerSource"];
           status: string;
@@ -834,6 +853,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       task.httpHeaders,
       task.runConfigId,
       "manual",
+      task.maxConcurrentDownloads ?? null,
     );
   }
 
@@ -855,6 +875,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     addTask,
     deleteTask,
     stopTask,
+    setTaskMaxConcurrentDownloads,
     retryTask,
     runConfigs,
     pluginRecommendedConfigs,

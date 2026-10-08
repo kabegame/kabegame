@@ -509,6 +509,7 @@ pub(crate) fn configure_app(
             delete_task,
             start_task,
             cancel_task,
+            set_task_max_concurrent_downloads,
             clear_finished_tasks,
             get_task_failed_images,
             get_all_failed_images,

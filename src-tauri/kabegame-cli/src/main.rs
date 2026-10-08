@@ -51,6 +51,46 @@ enum Commands {
     /// PathQL 相关命令
     #[command(subcommand)]
     Pathql(PathqlCommands),
+    /// 运行中任务控制
+    #[command(subcommand)]
+    Task(TaskCommands),
+}
+
+#[derive(Subcommand, Debug)]
+enum TaskCommands {
+    /// 调整运行中任务的下载并发上限
+    Concurrency(TaskConcurrencyArgs),
+}
+
+#[derive(Args, Debug)]
+struct TaskConcurrencyArgs {
+    /// 运行中任务 id
+    task_id: String,
+    /// 正整数，或 global（跟随应用全局设置）
+    value: TaskConcurrencyValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskConcurrencyValue {
+    Global,
+    Limit(u32),
+}
+
+impl std::str::FromStr for TaskConcurrencyValue {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        if raw.eq_ignore_ascii_case("global") {
+            return Ok(Self::Global);
+        }
+        let value = raw
+            .parse::<u32>()
+            .map_err(|_| "并发数必须是正整数或 global".to_string())?;
+        if value == 0 {
+            return Err("并发数必须大于等于 1".to_string());
+        }
+        Ok(Self::Limit(value))
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -165,6 +205,9 @@ struct RunPluginArgs {
     /// 目标画册 id；不传则不加入画册
     #[arg(long = "album-id")]
     album_id: Option<String>,
+    /// 本任务最大并发下载数（≥1，超过全局设置时按全局生效）；不传则跟随应用全局设置
+    #[arg(long = "max-downloads", value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    max_downloads: Option<u32>,
     /// 只解析并打印最终配置，不真正运行任务
     #[arg(long = "dry-run")]
     dry_run: bool,
@@ -424,6 +467,9 @@ async fn main() {
         Commands::Pathql(cmd) => match cmd {
             PathqlCommands::Generate(args) => pathql_generate(args),
             PathqlCommands::Query(args) => data_query(args, via).await,
+        },
+        Commands::Task(cmd) => match cmd {
+            TaskCommands::Concurrency(args) => task_concurrency(args, via).await,
         },
     };
 
@@ -875,6 +921,7 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
             output_dir: args.output_dir,
             output_album_id: args.album_id,
             http_headers: None,
+            max_concurrent_downloads: args.max_downloads,
             dry_run: args.dry_run,
         })
         .await?;
@@ -929,6 +976,29 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
         TaskOutcome::Canceled => Err("任务已取消".to_string()),
         TaskOutcome::Failed(err) => Err(format!("任务失败：{err}")),
     }
+}
+
+async fn task_concurrency(args: TaskConcurrencyArgs, via: Via) -> Result<(), String> {
+    if via == Via::Local {
+        return Err(
+            "task concurrency 只能调整主程序中运行的任务，不能使用 --via local".to_string(),
+        );
+    }
+    init_paths()?;
+    let backend = choose_backend(Via::App, LocalNeeds::DATA).await?;
+    let value = match args.value {
+        TaskConcurrencyValue::Global => None,
+        TaskConcurrencyValue::Limit(value) => Some(value),
+    };
+    backend
+        .set_task_max_concurrent_downloads(&args.task_id, value)
+        .await?;
+    println!(
+        "任务 {} 的下载并发已设为 {}",
+        args.task_id,
+        value.map_or_else(|| "跟随全局".to_string(), |value| value.to_string())
+    );
+    Ok(())
 }
 
 enum TaskOutcome {
@@ -1633,6 +1703,41 @@ mod tests {
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["kabegame-cli", "plugin", "import", "x.kgpg"]).is_ok());
+        let cli =
+            Cli::try_parse_from(["kabegame-cli", "plugin", "run", "x", "--max-downloads", "2"])
+                .unwrap();
+        let Commands::Plugin(PluginCommands::Run(args)) = cli.command else {
+            panic!("expected plugin run");
+        };
+        assert_eq!(args.max_downloads, Some(2));
+        assert!(Cli::try_parse_from([
+            "kabegame-cli",
+            "plugin",
+            "run",
+            "x",
+            "--max-downloads",
+            "0",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn test_task_concurrency_parse() {
+        for (raw, expected) in [
+            ("global", TaskConcurrencyValue::Global),
+            ("3", TaskConcurrencyValue::Limit(3)),
+        ] {
+            let cli = Cli::try_parse_from(["kabegame-cli", "task", "concurrency", "task-id", raw])
+                .unwrap();
+            let Commands::Task(TaskCommands::Concurrency(args)) = cli.command else {
+                panic!("expected task concurrency");
+            };
+            assert_eq!(args.task_id, "task-id");
+            assert_eq!(args.value, expected);
+        }
+        assert!(
+            Cli::try_parse_from(["kabegame-cli", "task", "concurrency", "task-id", "0",]).is_err()
+        );
     }
 
     #[test]

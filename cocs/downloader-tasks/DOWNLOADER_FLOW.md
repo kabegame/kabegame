@@ -122,7 +122,8 @@ pub enum PostprocessSource<'a> {
 
 - 若任务已取消，直接返回 `Task canceled`。
 - 若这是失败图片重试且相同 `failed_image_id` 已在 active downloads 中，跳过重复入队。
-- 等待下载池容量。容量由 `Settings::get_max_concurrent_downloads()` 动态决定；满载时等待 `capacity_notify`，被取消时退出等待。
+- 等待下载池容量。全局容量由 `Settings::get_max_concurrent_downloads()` 动态决定；任务可另设
+  `max_concurrent_downloads`，实际容量为两者较小值。满载时等待 `capacity_notify`，被取消时退出等待。
 
 worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker loop 同时监听：
 
@@ -142,7 +143,9 @@ worker 数量由 `start_download_workers` 与设置缩容逻辑维护。worker l
 - `Finished` 从 `.part` 文件名解析 id，取 tx 发送 `(path, success)`；worker 收到后统一执行 `Processing`、后处理和终态。
 - crawler/surf 窗口销毁会 take 并丢弃对应 tx，使等待中的 worker 立即以窗口销毁错误收尾。
 
-容量门控直接统计全部 active 条目，因此 CEF 与 reqwest 下载共享 `maxConcurrentDownloads`。任务取消以 `Task.cancel: CancellationToken` 为权威；`TaskScheduler::cancel_task` 先打 token，再调用 `DownloadQueue::cancel_task_downloads`，最后用 `Err(TaskError::Canceled)` 完成 WebView completion。worker 在持 pending 锁迁移前检查 token，加入 active 后再复查一次；CEF worker 额外 select 任务 token 与完成 rx。任务 worker收到 `TaskError::Canceled` 时统一把 DB error 写为 `"Task canceled"`；`TaskError::Other` 在 token 已取消时仍按取消终态保留原始错误文案。
+全局容量门控统计全部 active 条目，因此 CEF 与 reqwest 下载共享 `maxConcurrentDownloads`。任务级门控统计该任务的 pending + active；判断与 `push_front` 在同一把 pending 锁内完成，并按 pending → active 的固定顺序取锁，避免插件以 `Promise.all` 并发提交时超发，也不会漏算 worker 正在迁移的 job。阻塞入队每轮都重读任务上限；运行中调大后通过 `capacity_notify` 立即唤醒，调小不打断已在途下载，只阻止新 job 入队直到数量降到上限以下。失败重试沿用非阻塞入队，不受任务级闸门约束。
+
+任务取消以 `Task.cancel: CancellationToken` 为权威；`TaskScheduler::cancel_task` 先打 token，再调用 `DownloadQueue::cancel_task_downloads`，最后用 `Err(TaskError::Canceled)` 完成 WebView completion。worker 在持 pending 锁迁移前检查 token，加入 active 后再复查一次；CEF worker 额外 select 任务 token 与完成 rx。任务 worker收到 `TaskError::Canceled` 时统一把 DB error 写为 `"Task canceled"`；`TaskError::Other` 在 token 已取消时仍按取消终态保留原始错误文案。
 
 ---
 
@@ -423,7 +426,11 @@ Android 通知不依赖前端轮询：首个 `download-state` 启动后端单例
 
 ### 下载并发
 
-`maxConcurrentDownloads` 控制下载池 in-flight 上限。入队时读取当前设置；worker 缩容通过 `exit_notify` 唤醒，多余 worker 在下一轮退出。
+全局 `maxConcurrentDownloads` 控制下载池总 in-flight 上限。任务还可保存可空的
+`max_concurrent_downloads`：`null` 表示跟随全局，显式值的生效上限为
+`min(任务上限, 全局上限)`。该值冻结到运行中 `Task` 的原子字段，并可从任务抽屉、Tauri/web
+命令或 app IPC 实时修改；先写库，再更新内存并发送 `TaskChanged.maxConcurrentDownloads`。
+worker 缩容通过 `exit_notify` 唤醒，多余 worker 在下一轮退出。
 
 ### 下载间隔
 

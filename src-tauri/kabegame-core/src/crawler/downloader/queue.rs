@@ -190,6 +190,21 @@ pub struct DownloadRequest {
     pub labels: Vec<LabelSpec>,
 }
 
+fn task_inflight(
+    queue: &VecDeque<DownloadRequest>,
+    active: &[ActiveDownloadInfo],
+    task_id: &str,
+) -> usize {
+    queue
+        .iter()
+        .filter(|request| request.task_id == task_id)
+        .count()
+        + active
+            .iter()
+            .filter(|download| download.task_id == task_id)
+            .count()
+}
+
 #[derive(Clone)]
 pub struct DownloadQueue {
     /// 等待被 worker 取走的下载请求
@@ -219,6 +234,36 @@ impl DownloadQueue {
             exit_notify: Arc::new(Notify::new()),
             capacity_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// 在同一把 pending 锁内完成逐任务容量判断与入队，防止并发调用超发。
+    async fn try_admit_blocking(
+        &self,
+        request: &mut Option<DownloadRequest>,
+        desired: usize,
+        task_limit: Option<usize>,
+    ) -> bool {
+        let task_id = request
+            .as_ref()
+            .expect("download request must exist before admission")
+            .task_id
+            .clone();
+        let mut queue = self.pending_queue.lock().await;
+        let admitted = {
+            let active = self.active_downloads.lock().unwrap();
+            active.len() < desired
+                && task_limit.map_or(true, |limit| {
+                    task_inflight(&queue, &active, &task_id) < limit
+                })
+        };
+        if admitted {
+            queue.push_front(
+                request
+                    .take()
+                    .expect("download request admitted more than once"),
+            );
+        }
+        admitted
     }
 
     pub async fn cancel_retried_download(&self, failed_image_id: i64) -> bool {
@@ -466,21 +511,9 @@ impl DownloadQueue {
     /// 某任务在途（排队 + 活跃）的下载总数。必须先读 pending 后读 active：
     /// 配合 worker 持 pending 锁完成 pop→active 迁移，保证迁移中的 job 至少被一侧计入。
     pub async fn count_task_downloads(&self, task_id: &str) -> usize {
-        let pending = self
-            .pending_queue
-            .lock()
-            .await
-            .iter()
-            .filter(|request| request.task_id == task_id)
-            .count();
-        let active = self
-            .active_downloads
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|download| download.task_id == task_id)
-            .count();
-        pending + active
+        let pending = self.pending_queue.lock().await;
+        let active = self.active_downloads.lock().unwrap();
+        task_inflight(&pending, &active, task_id)
     }
 
     pub async fn is_active_downloading(&self, download_id: u64) -> bool {
@@ -683,6 +716,8 @@ impl DownloadQueue {
             return Ok(());
         }
 
+        let mut request = Some(request);
+
         loop {
             // webview 爬虫下载也经此等待容量；任务取消必须优先于容量判断。
             if TaskScheduler::global().is_task_canceled(&task_id) {
@@ -694,10 +729,12 @@ impl DownloadQueue {
             notified.as_mut().enable();
 
             let desired = Settings::global().get_max_concurrent_downloads().max(1) as usize;
-            let active_pool = self.active_downloads.lock().unwrap().len();
-            if active_pool < desired {
-                // 阻塞情况插前
-                self.pending_queue.lock().await.push_front(request);
+            // 每轮重新读取任务上限，让运行中的 +/- 对下一次入队立即生效。
+            let task_limit = TaskScheduler::global().task_max_concurrent_downloads(&task_id);
+            if self
+                .try_admit_blocking(&mut request, desired, task_limit)
+                .await
+            {
                 self.job_notify.notify_one();
                 return Ok(());
             }
@@ -1258,5 +1295,131 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         }
 
         dq.wait_then_finish_download(job.id, true).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_paths::AppPaths;
+    use crate::crawler::task_scheduler::{Task, TaskParams};
+    use crate::plugin::{Plugin, PluginScript};
+    use std::time::Duration;
+
+    fn test_plugin() -> Plugin {
+        Plugin {
+            id: "download-gate-test".to_string(),
+            name: json!("Download gate test"),
+            description: json!("Download gate test"),
+            version: "0.0.0".to_string(),
+            base_url: "https://example.com".to_string(),
+            size_bytes: 0,
+            config: HashMap::new(),
+            script_type: "v8".to_string(),
+            min_app_version: None,
+            labels: Vec::new(),
+            min_app_incompatible: false,
+            file_path: None,
+            doc: None,
+            changelog: None,
+            icon_png_base64: None,
+            description_template: None,
+            recommended_configs: Vec::new(),
+            var_defs: Vec::new(),
+            script: PluginScript::default(),
+            assets: None,
+            providers: Vec::new(),
+            metadata_migration: None,
+            version_packed: 0,
+        }
+    }
+
+    async fn enqueue_blocking(
+        queue: Arc<DownloadQueue>,
+        task_id: String,
+        index: u64,
+    ) -> Result<(), String> {
+        queue
+            .download(
+                Url::parse(&format!("https://example.com/{index}.jpg")).unwrap(),
+                PathBuf::new(),
+                "download-gate-test".to_string(),
+                task_id,
+                index,
+                None,
+                None,
+                HashMap::new(),
+                None,
+                None,
+                None,
+                true,
+                None,
+                Vec::new(),
+            )
+            .await
+    }
+
+    async fn wait_for_task_inflight(queue: &DownloadQueue, task_id: &str, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if queue.count_task_downloads(task_id).await == expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("任务下载数未在超时前达到预期");
+    }
+
+    #[tokio::test]
+    async fn task_download_gate_admits_atomically_and_expands_after_limit_change() {
+        AppPaths::init_for_tests();
+        let _ = Settings::init_global();
+        let _ = Storage::init_global();
+        let _ = TaskScheduler::init_global(Arc::new(DownloadQueue::new()));
+
+        let scheduler = TaskScheduler::global();
+        let queue = scheduler.download_queue();
+        let task_id = format!("download-gate-test-{}", std::process::id());
+        let run = Arc::new(
+            Task::new(
+                task_id.clone(),
+                TaskParams {
+                    plugin: Arc::new(test_plugin()),
+                    images_dir: PathBuf::new(),
+                    output_album_id: None,
+                    config: HashMap::new(),
+                },
+                None,
+            )
+            .with_max_concurrent_downloads(Some(1)),
+        );
+        scheduler.register_run(run).unwrap();
+
+        let previous_global = Settings::global().get_max_concurrent_downloads();
+        Settings::global().set_max_concurrent_downloads(10).unwrap();
+        let handles = (1..=3)
+            .map(|index| tokio::spawn(enqueue_blocking(Arc::clone(&queue), task_id.clone(), index)))
+            .collect::<Vec<_>>();
+
+        wait_for_task_inflight(&queue, &task_id, 1).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            assert_eq!(queue.count_task_downloads(&task_id).await, 1);
+        }
+
+        scheduler
+            .set_task_max_concurrent_downloads(&task_id, Some(2))
+            .unwrap();
+        wait_for_task_inflight(&queue, &task_id, 2).await;
+
+        for handle in handles {
+            handle.abort();
+        }
+        scheduler.remove_run(&task_id);
+        Settings::global()
+            .set_max_concurrent_downloads(previous_global)
+            .unwrap();
     }
 }

@@ -63,6 +63,10 @@
         />
       </el-form-item>
 
+      <el-form-item :label="t('plugins.maxConcurrentDownloads')">
+        <MaxDownloadsField v-model="maxConcurrentDownloads" />
+      </el-form-item>
+
       <PluginVarsForm v-if="visiblePluginVars.length > 0" v-model="form.vars" :plugin-vars="visiblePluginVars" />
 
       <el-form-item :label="t('plugins.httpHeaders')">
@@ -183,6 +187,7 @@ import ScheduleProgressBar from "@/components/scheduler/ScheduleProgressBar.vue"
 import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
+import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { HIDDEN_ALBUM_ID, fetchAlbum } from "@/services/albums";
 import { useModal } from "@/composables/useModal";
@@ -219,6 +224,8 @@ const weeklyWeekday = ref(0);
 const headersModel = ref<Record<string, string>>({});
 /** 输出画册：与 task config 同义，定时任务也写入该画册 */
 const outputAlbumId = ref<string | null>(null);
+const maxConcurrentDownloads = ref<number | null>(null);
+
 const viewAlbumName = ref("");
 
 const modal = useModal({ onClose: () => dialogStore.close() });
@@ -340,6 +347,7 @@ const loadFromConfig = async (cfg: RunConfig) => {
   form.value.vars = normalizeVarsForUI(cfg.userConfig ?? {}, pluginVars.value as PluginVarDef[]);
   headersModel.value = { ...(cfg.httpHeaders ?? {}) };
   outputAlbumId.value = cfg.outputAlbumId ?? null;
+  maxConcurrentDownloads.value = cfg.maxConcurrentDownloads ?? null;
 
   scheduleEnabled.value = !!cfg.scheduleEnabled;
   const spec = cfg.scheduleSpec;
@@ -382,6 +390,7 @@ const resetCreateForm = () => {
   weeklyWeekday.value = 0;
   headersModel.value = {};
   outputAlbumId.value = null;
+  maxConcurrentDownloads.value = null;
   form.value.pluginId = "";
   form.value.outputDir = "";
   form.value.vars = {};
@@ -639,6 +648,7 @@ const handleSave = async () => {
     userConfig,
     httpHeaders: { ...headersModel.value },
     outputAlbumId: outputAlbumId.value || undefined,
+    maxConcurrentDownloads: maxConcurrentDownloads.value,
     ...schedule,
   };
 

@@ -878,6 +878,18 @@ impl IpcClient {
         self.request_ok(IpcRequest::TaskCancel { task_id }).await
     }
 
+    pub async fn task_set_max_concurrent_downloads(
+        &self,
+        task_id: String,
+        max_concurrent_downloads: Option<u32>,
+    ) -> Result<(), String> {
+        self.request_ok(IpcRequest::TaskSetMaxConcurrentDownloads {
+            task_id,
+            max_concurrent_downloads,
+        })
+        .await
+    }
+
     pub async fn task_retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
         self.request_ok(IpcRequest::TaskRetryFailedImage { failed_id })
             .await

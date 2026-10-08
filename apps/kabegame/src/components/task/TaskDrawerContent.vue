@@ -145,6 +145,13 @@
                           </div>
                         </div>
                         <div class="task-drawer-footer-percent-slot">
+                          <TaskConcurrencyControl
+                            v-if="shouldShowTaskConcurrency(item.data)"
+                            :task-id="item.data.id"
+                            :limit="item.data.maxConcurrentDownloads ?? null"
+                            :in-flight="taskInFlight.get(item.data.id) ?? 0"
+                            :editable="item.data.status === 'pending' || item.data.status === 'running'"
+                          />
                           <span v-if="shouldShowTaskProgressBar(item.data)" class="task-drawer-footer-percent">
                             {{ taskProgressText(item.data) }}
                           </span>
@@ -240,6 +247,7 @@ import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";
 import TaskParamsDialog from "./TaskParamsDialog.vue";
 import TaskSummaryRow, { type TaskSummaryRowTask } from "./TaskSummaryRow.vue";
+import TaskConcurrencyControl from "./TaskConcurrencyControl.vue";
 import { useCrawlerStore } from "../../stores/crawler";
 import { usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
@@ -272,6 +280,7 @@ type ScriptTask = {
   startTime?: number | null;
   endTime?: number | null;
   error?: string | null;
+  maxConcurrentDownloads?: number | null;
 };
 
 const props = withDefaults(
@@ -422,6 +431,18 @@ const activeDownloadsRunningCount = computed(
     }).length,
 );
 const orderedActiveDownloads = computed(() => allDownloads.value);
+const taskInFlight = computed(() => {
+  const counts = new Map<string, number>();
+  for (const download of allDownloads.value) {
+    if ((download.state ?? "") === "completed" || download.state === "failed" || download.state === "canceled")
+      continue;
+    counts.set(download.taskId, (counts.get(download.taskId) ?? 0) + 1);
+  }
+  return counts;
+});
+
+const shouldShowTaskConcurrency = (task: ScriptTask) =>
+  task.status === "pending" || task.status === "running" || task.status === "waiting_downloads";
 
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
@@ -879,12 +900,13 @@ watch(
     max-height: var(--task-drawer-percent-slot-h);
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     box-sizing: border-box;
     overflow: hidden;
   }
 
   .task-drawer-footer-percent {
+    margin-left: auto;
     font-size: 11px;
     line-height: 1.2;
     color: var(--anime-text-muted, var(--el-text-color-secondary));

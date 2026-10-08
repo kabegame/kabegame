@@ -233,7 +233,9 @@ impl TaskScheduler {
             config,
         };
 
-        Task::try_new(req.task_id, params, task.http_headers.clone()).map(Arc::new)
+        Task::try_new(req.task_id, params, task.http_headers.clone())
+            .map(|run| run.with_max_concurrent_downloads(task.max_concurrent_downloads))
+            .map(Arc::new)
     }
 
     /// 取消任务（标记取消 + 唤醒等待中的下载）
@@ -256,6 +258,25 @@ impl TaskScheduler {
 
     pub fn get_run(&self, task_id: &str) -> Option<Arc<Task>> {
         self.task_registry.read().unwrap().get(task_id)
+    }
+
+    pub fn task_max_concurrent_downloads(&self, task_id: &str) -> Option<usize> {
+        self.get_run(task_id)
+            .and_then(|run| run.max_concurrent_downloads())
+            .map(|limit| limit as usize)
+    }
+
+    pub fn set_task_max_concurrent_downloads(
+        &self,
+        task_id: &str,
+        limit: Option<u32>,
+    ) -> Result<(), String> {
+        let run = self
+            .get_run(task_id)
+            .ok_or_else(|| "任务不在运行中".to_string())?;
+        run.set_max_concurrent_downloads(limit)?;
+        self.download_queue.capacity_notify.notify_waiters();
+        Ok(())
     }
 
     pub fn get_run_by_handle(&self, handle: u64) -> Option<Arc<Task>> {

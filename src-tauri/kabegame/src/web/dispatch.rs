@@ -1381,6 +1381,30 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "set_task_max_concurrent_downloads",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        task_id: String,
+                        #[serde(default)]
+                        max_concurrent_downloads: Option<u32>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    kabegame_core::commands::task::set_task_max_concurrent_downloads(
+                        args.task_id,
+                        args.max_concurrent_downloads,
+                    )
+                    .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "delete_task",
         MethodEntry {
             requires_super: true,

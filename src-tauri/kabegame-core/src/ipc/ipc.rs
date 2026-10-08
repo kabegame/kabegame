@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::sync::OnceLock;
 
-pub const IPC_PROTOCOL_VERSION: u32 = 1;
+/// v2 新增任务并发实时调整变体，并扩展 `PluginRunParams` 的逐任务上限字段。
+pub const IPC_PROTOCOL_VERSION: u32 = 2;
 
 pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -238,6 +239,13 @@ pub enum IpcRequest {
     /// 取消任务
     TaskCancel {
         task_id: String,
+    },
+
+    /// 实时调整运行中任务的下载并发上限；None 表示跟随全局设置。
+    TaskSetMaxConcurrentDownloads {
+        task_id: String,
+        #[serde(default)]
+        max_concurrent_downloads: Option<u32>,
     },
 
     /// 重试一条失败图片下载（task_failed_images.id）

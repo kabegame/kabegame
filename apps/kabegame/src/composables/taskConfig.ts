@@ -56,6 +56,7 @@ export function resolveTaskConfig(
     outputDir: input.outputDir ?? userDefault?.outputDir ?? "",
     httpHeaders: input.httpHeaders ?? userDefault?.httpHeaders ?? {},
     outputAlbumId: input.outputAlbumId ?? null,
+    maxConcurrentDownloads: input.maxConcurrentDownloads ?? null,
   };
 }
 
@@ -67,6 +68,7 @@ export function taskConfigFromTask(task: CrawlTask): TaskConfigInput {
     outputDir: task.outputDir ?? "",
     httpHeaders: task.httpHeaders ?? {},
     outputAlbumId: task.outputAlbumId ?? null,
+    maxConcurrentDownloads: task.maxConcurrentDownloads ?? null,
   };
 }
 
@@ -78,6 +80,7 @@ export function taskConfigFromRunConfig(cfg: RunConfig): TaskConfigInput {
     outputDir: cfg.outputDir ?? "",
     httpHeaders: cfg.httpHeaders ?? {},
     outputAlbumId: cfg.outputAlbumId ?? null,
+    maxConcurrentDownloads: cfg.maxConcurrentDownloads ?? null,
   };
 }
 

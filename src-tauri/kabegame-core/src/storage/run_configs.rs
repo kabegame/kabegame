@@ -61,6 +61,8 @@ pub struct RunConfig {
     pub user_config: Option<HashMap<String, serde_json::Value>>,
     #[serde(rename = "httpHeaders")]
     pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub max_concurrent_downloads: Option<u32>,
     pub created_at: u64,
     #[serde(default)]
     pub schedule_enabled: bool,
@@ -76,7 +78,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
                  FROM run_configs
                  WHERE id = ?1
                  LIMIT 1",
@@ -125,6 +127,9 @@ impl Storage {
                 .map_err(|e| format!("Failed to parse output_album_id: {}", e))?,
             user_config,
             http_headers,
+            max_concurrent_downloads: row
+                .get(14)
+                .map_err(|e| format!("Failed to parse max_concurrent_downloads: {}", e))?,
             created_at: row
                 .get::<_, i64>(9)
                 .map_err(|e| format!("Failed to parse created_at: {}", e))?
@@ -202,9 +207,9 @@ impl Storage {
         conn.execute(
             "INSERT INTO run_configs (
                 id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
+                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 config.id,
                 config.name,
@@ -220,6 +225,7 @@ impl Storage {
                 schedule_spec_json,
                 config.schedule_planned_at,
                 config.schedule_last_run_at,
+                config.max_concurrent_downloads,
             ],
         )
         .map_err(|e| format!("Failed to add run config: {}", e))?;
@@ -232,7 +238,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
                  FROM run_configs
                  ORDER BY created_at DESC",
             )
@@ -261,6 +267,7 @@ impl Storage {
                     output_album_id: row.get(6)?,
                     user_config,
                     http_headers,
+                    max_concurrent_downloads: row.get(14)?,
                     created_at: row.get::<_, i64>(9)? as u64,
                     schedule_enabled: row.get::<_, i64>(10)? != 0,
                     schedule_spec,
@@ -289,8 +296,9 @@ impl Storage {
             "UPDATE run_configs
              SET name = ?1, description = ?2, plugin_id = ?3, url = ?4, output_dir = ?5, output_album_id = ?6,
                  user_config = ?7, http_headers = ?8,
-                 schedule_enabled = ?9, schedule_spec = ?10, schedule_planned_at = ?11, schedule_last_run_at = ?12
-             WHERE id = ?13",
+                 schedule_enabled = ?9, schedule_spec = ?10, schedule_planned_at = ?11, schedule_last_run_at = ?12,
+                 max_concurrent_downloads = ?13
+             WHERE id = ?14",
             params![
                 config.name,
                 config.description,
@@ -304,6 +312,7 @@ impl Storage {
                 schedule_spec_json,
                 config.schedule_planned_at,
                 config.schedule_last_run_at,
+                config.max_concurrent_downloads,
                 config.id,
             ],
         )
@@ -324,7 +333,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
                  FROM run_configs
                  WHERE id = ?1",
             )
@@ -361,6 +370,7 @@ impl Storage {
                 schedule_spec,
                 schedule_planned_at: None,
                 schedule_last_run_at: None,
+                max_concurrent_downloads: row.get(13)?,
             })
         });
 
@@ -375,9 +385,9 @@ impl Storage {
         conn.execute(
             "INSERT INTO run_configs (
                 id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at
+                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 copied.id,
                 copied.name,
@@ -393,6 +403,7 @@ impl Storage {
                 schedule_spec_json,
                 copied.schedule_planned_at,
                 copied.schedule_last_run_at,
+                copied.max_concurrent_downloads,
             ],
         )
         .map_err(|e| format!("Failed to insert copied run config: {}", e))?;
@@ -427,6 +438,7 @@ mod tests {
             output_album_id: output_album_id.map(str::to_string),
             user_config: None,
             http_headers: None,
+            max_concurrent_downloads: None,
             created_at: 1,
             schedule_enabled: false,
             schedule_spec: None,

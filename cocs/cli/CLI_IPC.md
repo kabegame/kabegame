@@ -19,7 +19,8 @@
 `--data` 参数），再以
 短超时执行 `IpcClient::connect()` 与 `Status`：
 
-1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`；
+1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v2：加入任务并发实时调整变体和
+   `PluginRunParams.max_concurrent_downloads`）；
 2. `Status.dataDir` 与 CLI 的数据目录规范化后相同。
 
 两项都满足才选 `App`。socket / 命名管道地址不区分 dev 与 prod，因此不能把“连得上”当成数据目录
@@ -35,8 +36,16 @@
 
 `commands::task::run_plugin` 是 `PluginRun` 的唯一实现。它解析已安装 id 或临时 `.kgpg`，校验宿主是否
 能运行 WebView，合并插件默认值、用户保存的 `userConfig` / `httpHeaders` / `outputDir` 与本次参数，
-再通过 `commands::task::start_task` 提交。app handler 传 `webview_available=true`（Android 除外），
+并把 `--max-downloads` 写入 `PluginRunParams.max_concurrent_downloads`，再通过
+`commands::task::start_task` 提交。app handler 传 `webview_available=true`（Android 除外），
 CLI local 传 `false`；因此 app 模式可运行 WebView，local 模式只运行 V8。
+
+### TaskSetMaxConcurrentDownloads
+
+`task concurrency <task-id> <正整数|global>` 只调整主程序注册表中的运行中任务，因此强制使用 app
+IPC，不能回退 local。`TaskSetMaxConcurrentDownloads` 转发到唯一领域命令：先持久化任务列，再更新
+`Task` 的原子上限、广播 `TaskChanged` 差量并唤醒下载容量等待者。`global` 序列化为 `null`，表示跟随
+应用全局设置；主程序未运行、协议低于 v2 或任务已结束时返回明确错误。
 
 ### import-image
 

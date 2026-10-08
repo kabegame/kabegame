@@ -88,6 +88,7 @@ kabegame-cli plugin run <plugin> [选项]
 | `--var KEY=VALUE`| 否   | 覆盖单个 `kbConfig` 项，可重复。值按该 key 在 `kbConfig` 里声明的类型自动转换（int/float/boolean 等），所以 `--var page=3` 会变成数字 `3`。未知 key 会直接报错并列出可用项。 |
 | `--output-dir`   | 否   | 图片输出目录。优先级高于插件默认配置里保存的 `outputDir`。                                          |
 | `--album-id`     | 否   | 目标画册 id。                                                                                     |
+| `--max-downloads N` | 否 | 本任务最大并发下载数，必须为正整数；超过全局上限时仍按全局值生效。不传则跟随全局设置。              |
 | `--dry-run`      | 否   | 只解析并打印最终配置，不真正建任务。                                                              |
 | `--plain`        | 否   | 不渲染进度条，日志逐行直出。非 TTY（管道、CI）会自动进入此模式。                                    |
 
@@ -117,7 +118,8 @@ kabegame-cli plugin run /tmp/kemono.kgpg --id kemono-test
 kabegame-cli plugin import ./packed/kemono.kgpg
 kabegame-cli plugin run kemono \
   --var source=creator --var service=patreon --var creator_id=44096704 \
-  --var creator_page_start=1 --var creator_page_end=1
+  --var creator_page_start=1 --var creator_page_end=1 \
+  --max-downloads 2
 
 # 只看最终配置，不跑
 kabegame-cli plugin run kemono --dry-run --var source=tag --var tag=nsfw
@@ -200,6 +202,20 @@ kabegame-cli data import-image <path> [--album /父画册/子画册]
 
 目标画册通过 `albums://by_sub_tree` 逐层解析；任一层不存在或同级重名时命令会报错，不会自动创建画册。
 
+## task 子命令组
+
+### task concurrency
+
+实时修改主程序中运行中任务的最大下载并发。该命令必须通过 app IPC 执行，不支持
+`--via local`，主程序未运行、协议不兼容或任务已结束时会直接报错。
+
+```bash
+kabegame-cli task concurrency <task-id> <正整数|global>
+```
+
+正整数设置显式任务上限；`global` 清除显式值并恢复跟随全局。调大后等待中的下载立即继续入队；
+调小不会中断已在途下载，只会阻止新下载，直到在途数降到新上限以下。
+
 ## pathql 子命令组
 
 `pathql query` 经 app/local `Backend` 查询；`pathql generate` 仍在 CLI 进程内初始化 provider runtime。
@@ -252,6 +268,7 @@ CLI 使用三种退出码：
 | 发布页单独下载 CLI               | 是          | 是    | 是       | 不适用  |
 | `plugin new` / `pack` / `import` | 是          | 是    | 是       | 不适用  |
 | `plugin run`                     | 是          | 是    | 是       | 不适用  |
+| `task concurrency`               | 是          | 是    | 是       | 不适用  |
 | `data import-image`              | 是          | 是    | 是       | 不适用  |
 | `pathql generate` / `pathql query` | 是        | 是    | 是       | 不适用  |
 

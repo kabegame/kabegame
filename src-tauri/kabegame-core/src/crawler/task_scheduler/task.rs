@@ -7,6 +7,7 @@ use crate::storage::Storage;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -61,6 +62,8 @@ pub struct Task {
     pub vfs: Arc<PluginVfs>,
     progress: StdMutex<f64>,
     headers: StdMutex<HashMap<String, String>>,
+    /// 本任务下载并发上限，0 表示跟随全局；运行中可实时调整。
+    max_downloads: AtomicU32,
     pub page_stack: PageStack,
     webview: StdMutex<Option<WebviewSession>>,
 }
@@ -96,9 +99,36 @@ impl Task {
             vfs,
             progress: StdMutex::new(0.0),
             headers: StdMutex::new(http_headers.unwrap_or_default()),
+            max_downloads: AtomicU32::new(0),
             page_stack: Arc::new(StdMutex::new(Vec::new())),
             webview: StdMutex::new(None),
         })
+    }
+
+    /// freeze 时注入任务记录里的初始值；保留原构造器签名供测试辅助代码使用。
+    pub fn with_max_concurrent_downloads(self, limit: Option<u32>) -> Self {
+        self.max_downloads
+            .store(limit.unwrap_or(0), Ordering::Relaxed);
+        self
+    }
+
+    pub fn max_concurrent_downloads(&self) -> Option<u32> {
+        match self.max_downloads.load(Ordering::Relaxed) {
+            0 => None,
+            limit => Some(limit),
+        }
+    }
+
+    /// 先持久化，再更新运行时字段并广播差量，避免内存与数据库状态分叉。
+    pub fn set_max_concurrent_downloads(&self, limit: Option<u32>) -> Result<(), String> {
+        Storage::global().set_task_max_concurrent_downloads(&self.task_id, limit)?;
+        self.max_downloads
+            .store(limit.unwrap_or(0), Ordering::Relaxed);
+        GlobalEmitter::global().emit_task_changed(
+            &self.task_id,
+            serde_json::json!({ "maxConcurrentDownloads": limit }),
+        );
+        Ok(())
     }
 
     pub fn add_progress(&self, delta: f64) -> f64 {

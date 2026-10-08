@@ -26,6 +26,9 @@
         clearable
       />
     </el-form-item>
+    <el-form-item :label="$t('plugins.maxConcurrentDownloads')">
+      <MaxDownloadsField v-model="maxDownloadsValue" />
+    </el-form-item>
     <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
       <el-input
         ref="newOutputAlbumNameInputRef"
@@ -151,6 +154,7 @@ import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import PluginConfigForm from "@/components/crawler/PluginConfigForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
+import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
@@ -231,6 +235,7 @@ function onPluginChange(id: string | null | undefined) {
         outputDir: draftOutputDir.value,
         outputAlbumId: draftOutputAlbumId.value,
         httpHeaders: draftHttpHeaders.value,
+        maxConcurrentDownloads: draftMaxConcurrentDownloads.value,
       };
   void writeTaskConfig({ pluginId: id, ...carried });
 }
@@ -241,6 +246,7 @@ function onPluginChange(id: string | null | undefined) {
 const draftOutputDir = ref("");
 const draftOutputAlbumId = ref<string | null>(null);
 const draftHttpHeaders = ref<Record<string, string>>({});
+const draftMaxConcurrentDownloads = ref<number | null>(null);
 
 const outputDirValue = computed<string>({
   get: () => tc.value?.outputDir ?? draftOutputDir.value,
@@ -263,6 +269,14 @@ const headersValue = computed<Record<string, string>>({
   set: (value) => {
     if (tc.value) tc.value.httpHeaders = value;
     else draftHttpHeaders.value = value;
+  },
+});
+
+const maxDownloadsValue = computed<number | null>({
+  get: () => (tc.value ? tc.value.maxConcurrentDownloads : draftMaxConcurrentDownloads.value),
+  set: (value) => {
+    if (tc.value) tc.value.maxConcurrentDownloads = value;
+    else draftMaxConcurrentDownloads.value = value;
   },
 });
 
@@ -357,6 +371,7 @@ async function confirmSaveConfig() {
       userConfig: buildSubmitUserConfig(cfg.userConfig, pluginDefs(cfg.pluginId)),
       httpHeaders: { ...cfg.httpHeaders },
       outputAlbumId: cfg.outputAlbumId || undefined,
+      maxConcurrentDownloads: cfg.maxConcurrentDownloads,
       // Dialog 恒为手动任务：保存出来的配置默认不定时
       scheduleEnabled: false,
     });
@@ -410,6 +425,7 @@ async function submit() {
     userConfig,
     outputAlbumId: cfg.outputAlbumId || undefined,
     httpHeaders,
+    maxConcurrentDownloads: cfg.maxConcurrentDownloads,
     // Dialog 发起的任务一律是手动任务，不带 runConfigId
     triggerSource: "manual",
   });

@@ -2755,6 +2755,7 @@ VALUES
             output_album_id: Some(output_album_id.to_string()),
             user_config: None,
             http_headers: None,
+            max_concurrent_downloads: None,
             created_at: 1,
             schedule_enabled: false,
             schedule_spec: None,

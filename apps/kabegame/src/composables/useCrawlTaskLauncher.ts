@@ -34,6 +34,7 @@ export interface EnqueueTaskParams {
   userConfig?: Record<string, any>;
   outputAlbumId?: string;
   httpHeaders?: Record<string, string>;
+  maxConcurrentDownloads?: number | null;
   runConfigId?: string;
   triggerSource?: CrawlTask["triggerSource"];
 }
@@ -58,5 +59,6 @@ export async function enqueueTask(params: EnqueueTaskParams): Promise<boolean> {
     params.httpHeaders,
     params.runConfigId,
     params.triggerSource ?? "manual",
+    params.maxConcurrentDownloads,
   );
 }

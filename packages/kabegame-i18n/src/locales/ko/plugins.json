@@ -112,6 +112,8 @@
   "defaultGalleryOnly": "기본: 갤러리에만 추가",
   "pluginConfig": "플러그인 설정",
   "taskSettings": "작업 설정",
+  "maxConcurrentDownloads": "최대 동시 다운로드 수",
+  "maxConcurrentDownloadsFollowGlobal": "전역 설정 따르기(현재 {n})",
   "pluginSettings": "플러그인 설정",
   "advancedSettings": "고급 설정",
   "httpHeaders": "HTTP 헤더",

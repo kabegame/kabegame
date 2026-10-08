@@ -112,6 +112,8 @@
   "defaultGalleryOnly": "デフォルト：ギャラリーのみに追加",
   "pluginConfig": "プラグイン設定",
   "taskSettings": "タスク設定",
+  "maxConcurrentDownloads": "最大同時ダウンロード数",
+  "maxConcurrentDownloadsFollowGlobal": "グローバル設定に従う（現在 {n}）",
   "pluginSettings": "プラグイン設定",
   "advancedSettings": "詳細設定",
   "httpHeaders": "HTTPヘッダー",

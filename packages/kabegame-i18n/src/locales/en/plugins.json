@@ -112,6 +112,8 @@
   "defaultGalleryOnly": "Default: add to gallery only",
   "pluginConfig": "Plugin config",
   "taskSettings": "Task settings",
+  "maxConcurrentDownloads": "Maximum concurrent downloads",
+  "maxConcurrentDownloadsFollowGlobal": "Follow global setting (currently {n})",
   "pluginSettings": "Plugin settings",
   "advancedSettings": "Advanced settings",
   "httpHeaders": "HTTP headers",

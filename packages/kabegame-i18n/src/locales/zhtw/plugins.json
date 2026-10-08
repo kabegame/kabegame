@@ -112,6 +112,8 @@
   "defaultGalleryOnly": "預設僅新增至畫廊",
   "pluginConfig": "插件配置",
   "taskSettings": "任務設定",
+  "maxConcurrentDownloads": "最大同時下載數",
+  "maxConcurrentDownloadsFollowGlobal": "跟隨全域設定（目前 {n}）",
   "pluginSettings": "外掛設定",
   "advancedSettings": "進階設定",
   "httpHeaders": "HTTP 標頭",
