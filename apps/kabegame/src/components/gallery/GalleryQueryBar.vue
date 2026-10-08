@@ -410,6 +410,7 @@ import {
   type GallerySortField,
 } from "@/utils/galleryPath";
 import { galleryDimensionChipValue, gallerySortFieldLabel, gallerySortOrderLabels } from "@/utils/galleryFilterLabels";
+import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
 import {
   buildGalleryTimeMenuTree,
   buildTimeMenuScopeLabels,
@@ -481,7 +482,7 @@ const props = withDefaults(defineProps<Props>(), {
   noAlbum: false,
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   page: 1,
-  pageSize: 100,
+  pageSize: DEFAULT_GALLERY_PAGE_SIZE,
   searchModes: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label"],
   providerContextPrefix: "",
   contextBase: "",
@@ -833,7 +834,7 @@ const sortFieldItems = computed<KbFilterDropdownOption[]>(() =>
 );
 
 // 桌面工具条不再有每页条数 chip（改从设置页与安卓 picker 走）；这里只留 picker 用的候选。
-const pageSizeOptions = [100, 500, 1000] as const;
+const pageSizeOptions = GALLERY_PAGE_SIZE_OPTIONS;
 
 function onSortFieldCommand(cmd: string) {
   if (!props.sortFeatures.includes(cmd as GallerySortField)) return;
@@ -1615,7 +1616,7 @@ function onSortPickerConfirm() {
 
 const pageSizePickerColumns = computed(() => pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })));
 
-const pageSizePickerSelected = ref<string[]>(["100"]);
+const pageSizePickerSelected = ref<string[]>([String(DEFAULT_GALLERY_PAGE_SIZE)]);
 watch(pageSizePicker.isOpen, (open) => {
   if (open) pageSizePickerSelected.value = [String(props.pageSize)];
 });
@@ -1624,7 +1625,7 @@ function onPageSizePickerConfirm() {
   pageSizePicker.close();
   const v = pageSizePickerSelected.value[0];
   const n = Number(v);
-  if (n !== 100 && n !== 500 && n !== 1000) return;
+  if (!isGalleryPageSizeOption(n)) return;
   navigate({ pageSize: n, page: 1 });
 }
 

@@ -53,7 +53,7 @@
   "galleryColumns": "ギャラリー列数",
   "galleryColumnsDesc": "動的列はショートカットで調整可能；固定列はショートカット無効",
   "galleryPageSize": "1ページあたりの表示数",
-  "galleryPageSizeDesc": "ギャラリー一覧で1ページに読み込む画像数（100、500、1000）",
+  "galleryPageSizeDesc": "ギャラリー一覧で1ページに読み込む画像数",
   "galleryLayoutMode": "ギャラリーレイアウト",
   "galleryLayoutModeDesc": "グリッドは固定比率セル；ギャラリーは列/行に積み上げ、隙間なし",
   "galleryLayoutModeGrid": "グリッド",

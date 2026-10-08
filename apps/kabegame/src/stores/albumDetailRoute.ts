@@ -11,6 +11,7 @@ import {
   querySearchTerm,
 } from "@/utils/galleryPath";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
+import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { useSettingsStore } from "@/stores/settings";
 import { useAlbumIdPathState, lastAlbumIdOf } from "@/composables/useAlbumIdPathState";
 
@@ -43,7 +44,7 @@ function createDefaultState(): AlbumDetailRouteState {
     query: [],
     sort: { field: "by-album-order", desc: false },
     page: 1,
-    pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
+    pageSize: normalizeGalleryPageSize(settings.values.galleryPageSize as number | undefined),
   };
 }
 

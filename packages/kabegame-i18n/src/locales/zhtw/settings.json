@@ -53,7 +53,7 @@
   "galleryColumns": "畫廊列數",
   "galleryColumnsDesc": "動態列數支援快捷鍵調整；固定列數時快捷鍵不生效",
   "galleryPageSize": "每頁顯示數量",
-  "galleryPageSizeDesc": "畫廊清單每頁載入的圖片數量（100、500 或 1000）",
+  "galleryPageSizeDesc": "畫廊清單每頁載入的圖片數量",
   "galleryLayoutMode": "畫廊佈局",
   "galleryLayoutModeDesc": "網格使用固定寬高比格子；畫廊將圖片堆疊成多列/多行，不留空白",
   "galleryLayoutModeGrid": "網格",

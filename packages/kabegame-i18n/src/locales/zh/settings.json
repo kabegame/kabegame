@@ -53,7 +53,7 @@
   "galleryColumns": "画廊列数",
   "galleryColumnsDesc": "动态列数支持快捷键调整；固定列数时快捷键不生效",
   "galleryPageSize": "每页显示数量",
-  "galleryPageSizeDesc": "画廊列表每页加载的图片数量（100、500 或 1000）",
+  "galleryPageSizeDesc": "画廊列表每页加载的图片数量",
   "galleryLayoutMode": "画廊布局",
   "galleryLayoutModeDesc": "网格使用固定宽高比格子；画廊将图片堆叠成多列/多行，不留空白",
   "galleryLayoutModeGrid": "网格",

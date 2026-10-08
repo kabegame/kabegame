@@ -76,6 +76,7 @@ import {
 } from "@/stores/galleryRoute";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@/stores/ui";
+import { DEFAULT_GALLERY_PAGE_SIZE } from "@/utils/galleryPageSize";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -93,7 +94,7 @@ const props = withDefaults(defineProps<Props>(), {
   totalCount: 0,
   bigPageEnabled: false,
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
-  pageSize: 100,
+  pageSize: DEFAULT_GALLERY_PAGE_SIZE,
   providerContextPrefix: "",
 });
 

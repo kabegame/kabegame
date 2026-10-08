@@ -11,9 +11,8 @@ import {
   type GallerySort,
   querySearchTerm,
 } from "@/utils/galleryPath";
+import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { useSettingsStore } from "@/stores/settings";
-
-const DEFAULT_PAGE_SIZE = 100;
 
 /** 会话内记忆的搜索维度勾选，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
 export const surfImagesStickySearchModes = ref<GallerySearchPathMode[]>([...DEFAULT_GALLERY_SEARCH_MODES]);
@@ -38,7 +37,7 @@ function createDefaultState(): SurfImagesRouteState {
     query: [],
     sort: { field: "by-time", desc: false },
     page: 1,
-    pageSize: (settings.values.galleryPageSize as number | undefined) ?? DEFAULT_PAGE_SIZE,
+    pageSize: normalizeGalleryPageSize(settings.values.galleryPageSize as number | undefined),
   };
 }
 

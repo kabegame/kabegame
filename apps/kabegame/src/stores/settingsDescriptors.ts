@@ -1,5 +1,6 @@
 import { IS_ANDROID, IS_LIGHT_MODE, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "../env";
 import type { AppSettingKey, AppSettings } from "./settings";
+import { DEFAULT_GALLERY_PAGE_SIZE } from "../utils/galleryPageSize";
 
 export type SettingsHistoryMode = "push" | "replace";
 
@@ -241,7 +242,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     frontendLocal("appBackgroundEnabled", false),
     frontendLocal("appBackgroundBlur", 2),
     frontendLocal("appBackgroundOpacity", 0.25),
-    frontendLocal("galleryPageSize", 100),
+    frontendLocal("galleryPageSize", DEFAULT_GALLERY_PAGE_SIZE),
     frontendLocal("galleryGridColumns", 0),
     frontendLocal("galleryLayoutMode", "grid"),
     frontendLocal("galleryLayoutDirection", "vertical"),

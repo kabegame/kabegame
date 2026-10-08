@@ -12,6 +12,7 @@ import {
   parseGalleryPath,
   querySearchTerm,
 } from "@/utils/galleryPath";
+import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { useSettingsStore } from "@/stores/settings";
 import { IS_WEB } from "@/env";
 
@@ -80,7 +81,7 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
       query: parsed?.query ?? [],
       sort: parsed?.sort ?? defaultSort,
       page: 1, // 页码不持久化，由当前页面状态/URL 驱动
-      pageSize: (settings.values.galleryPageSize as number | undefined) ?? 100,
+      pageSize: normalizeGalleryPageSize(settings.values.galleryPageSize as number | undefined),
     };
   },
   onStateChange: (state) => {

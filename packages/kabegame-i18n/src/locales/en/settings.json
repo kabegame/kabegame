@@ -53,7 +53,7 @@
   "galleryColumns": "Gallery columns",
   "galleryColumnsDesc": "Dynamic columns support shortcut adjustment; fixed columns disable shortcut",
   "galleryPageSize": "Images per page",
-  "galleryPageSizeDesc": "How many images to load per page in the gallery list (100, 500, or 1000)",
+  "galleryPageSizeDesc": "How many images to load per page in the gallery list",
   "galleryLayoutMode": "Gallery layout",
   "galleryLayoutModeDesc": "Grid uses fixed-aspect cells; Gallery stacks items into columns/rows with no gaps",
   "galleryLayoutModeGrid": "Grid",

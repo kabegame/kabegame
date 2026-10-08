@@ -25,6 +25,7 @@
 
 ### Changed
 - `kabegame-cli` 数据操作现在优先经 IPC 交给正在运行的同数据目录主程序，连不上时自动回退本地执行，也可用 `--via` 强制选择。
+- web 模式下分页大小改成20/50/100。
 
 ### Removed
 - `kabegame-cli data import-image` 移除 `--metadata`；导入改由内建 `local-import` 任务执行，完成后输出成功、去重和失败计数。

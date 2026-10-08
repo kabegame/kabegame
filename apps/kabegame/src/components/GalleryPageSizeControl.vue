@@ -57,6 +57,7 @@ import { useI18n } from "@kabegame/i18n";
 import { ArrowDown, Histogram } from "@kabegame/element-plus-icons";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
+import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
 
 const props = withDefaults(
   defineProps<{
@@ -69,7 +70,7 @@ const props = withDefaults(
     androidUi?: "inline" | "header";
   }>(),
   {
-    pageSize: 100,
+    pageSize: DEFAULT_GALLERY_PAGE_SIZE,
     variant: "gallery",
     androidUi: "inline",
   },
@@ -82,21 +83,21 @@ const emit = defineEmits<{
 const uiStore = useUiStore();
 
 const { t } = useI18n();
-const options = [100, 500, 1000] as const;
+const options = GALLERY_PAGE_SIZE_OPTIONS;
 const pageSizeLabel = computed(() => String(props.pageSize));
 const btnClass = computed(() => (props.variant === "album" ? "album-browse-btn" : "gallery-browse-btn"));
 const iconClass = computed(() => (props.variant === "album" ? "album-browse-icon" : "gallery-browse-icon"));
 
 async function onDesktopCommand(cmd: string) {
   const n = Number(cmd);
-  if (n !== 100 && n !== 500 && n !== 1000) return;
+  if (!isGalleryPageSizeOption(n)) return;
   emit("update:pageSize", n);
 }
 
 const { isOpen, zIndex, open, close } = useModal();
 
 const pickerColumns = computed(() => options.map((n) => ({ text: String(n), value: String(n) })));
-const pickerSelected = ref<string[]>(["100"]);
+const pickerSelected = ref<string[]>([String(DEFAULT_GALLERY_PAGE_SIZE)]);
 watch(isOpen, (v) => {
   if (v) pickerSelected.value = [String(props.pageSize)];
 });
@@ -105,7 +106,7 @@ async function onPickerConfirm() {
   close();
   const v = pickerSelected.value[0];
   const n = Number(v);
-  if (n !== 100 && n !== 500 && n !== 1000) return;
+  if (!isGalleryPageSizeOption(n)) return;
   emit("update:pageSize", n);
 }
 
