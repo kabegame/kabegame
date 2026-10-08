@@ -15,14 +15,50 @@ description: Kabegame 本地 MCP 服务器的 URI scheme、分页规则与写入
 |---|---|
 | URL | `http://127.0.0.1:7490/mcp` |
 | 端口 | 默认 `7490`，可在设置中修改 |
-| 绑定 | `127.0.0.1`（仅回环，无鉴权） |
+| 绑定 | 默认 `127.0.0.1`；可允许局域网访问并改绑 `0.0.0.0`（无鉴权） |
 | Transport | StreamableHTTP（rmcp 3.0，`LocalSessionManager`） |
-| 启动时机 | 默认关闭；在「设置 → MCP」开启后启动（仅桌面） |
+| 启动时机 | 默认关闭；在「设置 → 高级 → Web 服务器」开启后启动（仅桌面） |
 | 平台 | Windows / macOS / Linux（仅桌面），Android 不暴露 MCP |
 
 :::caution
-服务仅绑定 `127.0.0.1`，没有任何鉴权层。一旦通过反向代理 / 隧道把 7490 暴露出去，远端可直接对你的画廊执行读取与写入操作。
+服务没有任何鉴权层。开启「允许局域网访问」后，同一网络内的设备可直接读取数据，并可通过 MCP 写工具修改图库；请只在可信网络使用。不要通过反向代理或隧道将端口暴露到互联网。
 :::
+
+Web 服务器只接受 curl、脚本、MCP Host 等**非网页客户端**。所有带 `Origin` 或
+`Sec-Fetch-*` 浏览器特征头的请求都会返回 `403`，且响应不包含任何 `Access-Control-*` 头；因此不能从
+网页的 `fetch`、EventSource、图片标签、表单或地址栏访问这些端点。
+
+设置页提供两个可点击复制的地址：
+
+- **服务器地址**（`http://<主机>:<端口>`）：粘贴到「Kabegame 服务器」插件的「服务器地址」，让另一个 Kabegame 的爬虫从这里复制图片。开启局域网访问时自动显示本机局域网 IP；探测不到时仍显示 `127.0.0.1`，需手动替换。
+- **MCP 地址**（`http://127.0.0.1:<端口>/mcp`）：给本机的 MCP 客户端使用。局域网内的 MCP 客户端可把主机换成局域网 IP。
+
+MCP、JSON-RPC 与事件订阅共用同一端口。
+
+## JSON-RPC 与事件订阅
+
+应用 Web 服务器同时提供 web 版同款接口：
+
+| 端点 | 用途 |
+|---|---|
+| `POST /rpc` | JSON-RPC 2.0；默认只读，写方法需在 URL 添加 `?super=1` |
+| `GET /events` | SSE 事件流；连接后先收到 `connected` |
+| `GET /file?path=...` | 读取图库中已登记的本地文件 |
+| `GET /thumbnail?path=...` | 读取图库缩略图 |
+| `GET /compatible?path=...` | 读取兼容格式 |
+| `GET /download/<path>` | 以下载响应读取图库文件 |
+| `GET /__ping` | 返回 `ok` 的存活探测 |
+
+桌面服务不提供 `/proxy`。下面是只读 RPC 调用示例：
+
+```bash
+curl -X POST http://127.0.0.1:7490/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"get_albums"}'
+```
+
+`?super=1` 只是允许调用写方法的客户端声明，并不是密码或鉴权机制。非 super 响应还会清洗插件配置中的
+`httpHeaders`。事件订阅可用 `curl -N http://127.0.0.1:7490/events` 调试。
 
 ### Server instructions
 

@@ -29,8 +29,6 @@ use crate::mcp_capabilities::{
     McpCapabilityKind,
 };
 
-pub const MCP_PORT: u16 = 7490;
-
 const MCP_INSTRUCTIONS: &str = r#"Kabegame read resources form a LAZY TREE. resources/list does NOT enumerate the
 gallery: use list_pathql_entry to walk PathQL one level at a time, then read a bounded leaf.
 
@@ -1288,15 +1286,20 @@ mod tests {
 }
 
 /// Returns a Router with `/mcp` (StreamableHTTP) nested, usable by both local and web modes.
-pub fn mcp_nest() -> axum::Router {
+pub fn mcp_nest(allow_any_host: bool) -> axum::Router {
     use rmcp::transport::streamable_http_server::{
         session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
     };
 
+    let mut config = StreamableHttpServerConfig::default();
+    if allow_any_host {
+        config = config.disable_allowed_hosts();
+    }
+
     let service = StreamableHttpService::new(
         || Ok(KabegameMcpServer),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default(),
+        config,
     );
 
     axum::Router::new().nest_service("/mcp", service)

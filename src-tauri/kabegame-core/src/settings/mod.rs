@@ -140,10 +140,12 @@ pub enum SettingKey {
     ImportRecommendedScheduleEnabled,
     /// 界面语言（空/None 表示跟随系统）
     Language,
-    /// MCP 服务启用状态
-    McpEnabled,
-    /// MCP 服务端口
-    McpPort,
+    /// 应用 Web 服务器启用状态
+    WebServerEnabled,
+    /// 应用 Web 服务器端口
+    WebServerPort,
+    /// 应用 Web 服务器是否允许局域网访问
+    WebServerLanAccess,
     /// MCP 禁用能力 id 列表
     McpDisabledCapabilities,
 }
@@ -353,8 +355,9 @@ impl Settings {
             }
             SettingKey::ImportRecommendedScheduleEnabled => SettingValue::Bool(true),
             SettingKey::Language => SettingValue::OptionString(None),
-            SettingKey::McpEnabled => SettingValue::Bool(false),
-            SettingKey::McpPort => SettingValue::U32(7490),
+            SettingKey::WebServerEnabled => SettingValue::Bool(false),
+            SettingKey::WebServerPort => SettingValue::U32(7490),
+            SettingKey::WebServerLanAccess => SettingValue::Bool(false),
             SettingKey::McpDisabledCapabilities => SettingValue::VecString(vec![]),
         }
     }
@@ -448,8 +451,9 @@ impl Settings {
             SettingKey::AlbumDriveMountPoint,
             SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
-            SettingKey::McpEnabled,
-            SettingKey::McpPort,
+            SettingKey::WebServerEnabled,
+            SettingKey::WebServerPort,
+            SettingKey::WebServerLanAccess,
             SettingKey::McpDisabledCapabilities,
         ];
 
@@ -534,7 +538,8 @@ impl Settings {
             | SettingKey::DedupUpdateMetadata
             | SettingKey::WallpaperRotationEnabled
             | SettingKey::WallpaperDisabled
-            | SettingKey::McpEnabled => {
+            | SettingKey::WebServerEnabled
+            | SettingKey::WebServerLanAccess => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::ImportRecommendedScheduleEnabled => {
@@ -553,9 +558,7 @@ impl Settings {
             | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
             | SettingKey::WallpaperRotationIntervalMinutes
-            | SettingKey::McpPort => {
-                Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
-            }
+            | SettingKey::WebServerPort => Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32)),
             SettingKey::DownloadIntervalMs => {
                 let v = json.as_u64().unwrap_or(500) as u32;
                 let v = v.clamp(100, 10000);
@@ -762,8 +765,9 @@ impl Settings {
                 "importRecommendedScheduleEnabled".to_string()
             }
             SettingKey::Language => "language".to_string(),
-            SettingKey::McpEnabled => "mcpEnabled".to_string(),
-            SettingKey::McpPort => "mcpPort".to_string(),
+            SettingKey::WebServerEnabled => "webServerEnabled".to_string(),
+            SettingKey::WebServerPort => "webServerPort".to_string(),
+            SettingKey::WebServerLanAccess => "webServerLanAccess".to_string(),
             SettingKey::McpDisabledCapabilities => "mcpDisabledCapabilities".to_string(),
         }
     }
@@ -1147,18 +1151,25 @@ impl Settings {
             .flatten()
     }
 
-    pub fn get_mcp_enabled(&self) -> bool {
+    pub fn get_web_server_enabled(&self) -> bool {
         Self::cells()
-            .get(&SettingKey::McpEnabled)
+            .get(&SettingKey::WebServerEnabled)
             .map(|c| c.load().as_bool().unwrap_or(false))
             .unwrap_or(false)
     }
 
-    pub fn get_mcp_port(&self) -> u32 {
+    pub fn get_web_server_port(&self) -> u32 {
         Self::cells()
-            .get(&SettingKey::McpPort)
+            .get(&SettingKey::WebServerPort)
             .map(|c| c.load().as_u32().unwrap_or(7490))
             .unwrap_or(7490)
+    }
+
+    pub fn get_web_server_lan_access(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::WebServerLanAccess)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     pub fn get_mcp_disabled_capabilities(&self) -> Vec<String> {
@@ -1224,23 +1235,33 @@ impl Settings {
         Ok(())
     }
 
-    pub fn set_mcp_enabled(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_web_server_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
-        if let Some(cell) = cells.get(&SettingKey::McpEnabled) {
+        if let Some(cell) = cells.get(&SettingKey::WebServerEnabled) {
             cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::McpEnabled, &new_value);
+        Self::emit_setting_change(SettingKey::WebServerEnabled, &new_value);
         Ok(())
     }
 
-    pub fn set_mcp_port(&self, port: u32) -> Result<(), String> {
+    pub fn set_web_server_port(&self, port: u32) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::U32(port);
-        if let Some(cell) = cells.get(&SettingKey::McpPort) {
+        if let Some(cell) = cells.get(&SettingKey::WebServerPort) {
             cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::McpPort, &new_value);
+        Self::emit_setting_change(SettingKey::WebServerPort, &new_value);
+        Ok(())
+    }
+
+    pub fn set_web_server_lan_access(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::WebServerLanAccess) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WebServerLanAccess, &new_value);
         Ok(())
     }
 
@@ -1750,5 +1771,56 @@ impl Settings {
         {
             "fill".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_legacy_mcp_listener_values_do_not_enable_web_server() {
+        let file = std::env::temp_dir().join(format!(
+            "kabegame-settings-legacy-mcp-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(
+            &file,
+            serde_json::json!({
+                "schemaVersion": migrations::LATEST_VERSION,
+                "mcpEnabled": true,
+                "mcpPort": 8123,
+                "mcpDisabledCapabilities": ["images.read.gallery"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let (cells, _) = Settings::load_settings_map(&file).unwrap();
+        let _ = fs::remove_file(&file);
+
+        assert!(!cells[&SettingKey::WebServerEnabled]
+            .load()
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            cells[&SettingKey::WebServerPort].load().as_u32(),
+            Some(7490)
+        );
+        assert!(!cells[&SettingKey::WebServerLanAccess]
+            .load()
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            cells[&SettingKey::McpDisabledCapabilities]
+                .load()
+                .as_vec_string()
+                .cloned(),
+            Some(vec!["images.read.gallery".to_string()])
+        );
     }
 }

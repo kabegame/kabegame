@@ -10,8 +10,8 @@ use kabegame_i18n::t;
 use crate::wallpaper::manager::WallpaperController;
 #[cfg(not(feature = "web"))]
 use crate::wallpaper::WallpaperRotator;
-#[cfg(feature = "web")]
-use crate::web::server::SseMessage;
+#[cfg(any(feature = "web", not(target_os = "android")))]
+use crate::web::server::{event_bus, SseMessage};
 use kabegame_core::ipc::events::AppEventKind;
 use kabegame_core::ipc::{AppEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
@@ -25,8 +25,6 @@ use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 
-#[cfg(feature = "web")]
-use crate::web::server::*;
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use kabegame_core::crawler::webview::{
     crawler_window_label, set_webview_handler, CrawlerWebViewHandler,
@@ -436,9 +434,9 @@ fn ensure_notification_ticker<R: Runtime>(app: AppHandle<R>) {
 pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
     #[cfg(not(feature = "web"))] app: AppHandle<R>,
 ) {
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", not(target_os = "android")))]
     let bus = event_bus().clone();
-    #[cfg(feature = "web")]
+    #[cfg(any(feature = "web", not(target_os = "android")))]
     let mut counter = 0u64;
 
     let broadcaster = EventBroadcaster::global();
@@ -448,8 +446,8 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
         while let Some((_, event)) = rx.recv().await {
             let kind = event.kind();
 
-            #[cfg(feature = "web")]
-            {
+            #[cfg(any(feature = "web", not(target_os = "android")))]
+            if bus.receiver_count() > 0 {
                 counter += 1;
                 let _ = bus.send(SseMessage {
                     event: kind.as_event_name(),

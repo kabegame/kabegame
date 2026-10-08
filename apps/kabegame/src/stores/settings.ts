@@ -69,11 +69,13 @@ export interface AppSettings {
   /** 界面语言（持久化为 canonical 语种码；缺失或非法时由前端解析链写回） */
   language: string | null;
 
-  // MCP 服务（仅桌面，走 tauri 设置；运行态用 mcpEnabled 表示，无独立 state）
-  /** 是否启用本机 MCP 服务（默认关闭；启动降级/端口占用会被后端置回 false） */
-  mcpEnabled: boolean;
-  /** MCP 监听端口（默认 7490，范围 1024-65535） */
-  mcpPort: number;
+  // 应用 Web 服务器（仅桌面，RPC / SSE / 文件 / MCP 共用一个监听器）
+  /** 是否启用 Web 服务器（默认关闭；启动降级/端口占用会被后端置回 false） */
+  webServerEnabled: boolean;
+  /** Web 服务器监听端口（默认 7490，范围 1024-65535） */
+  webServerPort: number;
+  /** 是否绑定 0.0.0.0 允许局域网设备访问（默认关闭） */
+  webServerLanAccess: boolean;
   /** 禁用的 MCP 能力 id 列表（UI 勾选=启用，未勾选进此列表） */
   mcpDisabledCapabilities: string[];
 

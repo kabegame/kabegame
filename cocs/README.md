@@ -42,8 +42,8 @@
 ## MCP（`mcp/`）
 
 - [mcp/MCP_SERVER.md](mcp/MCP_SERVER.md)
-  - 主题：桌面端 MCP Server 的模块分工、URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、500 行分页护栏，以及为什么不能在 `gallery_all_router.json5` 加 limit。
-  - 适用场景：新增或排查 MCP 资源/工具/能力开关；维护 PathQL 发现与分页；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
+  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由，MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、500 行分页护栏，以及为什么不能在 `gallery_all_router.json5` 加 limit。
+  - 适用场景：新增或排查桌面 Web 服务器、RPC/SSE、MCP 资源/工具/能力开关；维护 PathQL 发现与分页；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
 
 ## 画廊与查询（`gallery/`）
 

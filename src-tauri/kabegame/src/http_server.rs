@@ -1,9 +1,15 @@
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 use std::sync::Arc;
 #[cfg(not(target_os = "android"))]
 use std::{path::Path, sync::OnceLock};
 
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 use axum::middleware::{from_fn, Next};
 #[cfg(not(target_os = "android"))]
 use axum::{
@@ -26,7 +32,10 @@ use serde::Deserialize;
 use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 use tokio::sync::Semaphore;
 
 #[cfg(not(target_os = "android"))]
@@ -438,6 +447,27 @@ pub fn file_routes() -> Router {
         .route("/proxy", get(handle_proxy_query))
 }
 
+/// 桌面应用 Web 服务器暴露的媒体路由。
+///
+/// 只允许访问图库白名单内的文件，不包含会请求任意上游 URL 的 `/proxy`。
+#[cfg(not(target_os = "android"))]
+pub fn file_routes_media() -> Router {
+    let routes = Router::new()
+        .route("/file", get(handle_file_query))
+        .route("/download/{*path}", get(handle_download_path))
+        .route("/thumbnail", get(handle_thumbnail_query))
+        .route("/compatible", get(handle_compatible_query));
+
+    #[cfg(any(debug_assertions, not(feature = "web")))]
+    {
+        routes.layer(from_fn(image_concurrency_mw))
+    }
+    #[cfg(all(not(debug_assertions), feature = "web"))]
+    {
+        routes
+    }
+}
+
 /// web 模式专用路由。
 ///
 /// - **Release**：只保留 `/proxy`。图片和缩略图直接由 CDN 返回，web server
@@ -462,20 +492,32 @@ pub fn file_routes_web() -> Router {
 
 /// Debug-only：/file 与 /thumbnail 的并发闸（10 个并发 + 无限排队）。
 /// Release 下 /file /thumbnail 不挂载，这些符号一起编译掉。
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 const WEB_IMAGE_CONCURRENCY: usize = 10;
 
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 static WEB_IMAGE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 fn web_image_semaphore() -> Arc<Semaphore> {
     WEB_IMAGE_SEMAPHORE
         .get_or_init(|| Arc::new(Semaphore::new(WEB_IMAGE_CONCURRENCY)))
         .clone()
 }
 
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(
+    not(target_os = "android"),
+    any(debug_assertions, not(feature = "web"))
+))]
 async fn image_concurrency_mw(req: Request<Body>, next: Next) -> Response {
     let sem = web_image_semaphore();
     match sem.acquire_owned().await {

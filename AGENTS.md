@@ -29,7 +29,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块干净且接近上游
 
 ### 关键架构规则
-**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
+**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。桌面端可选的应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
 **路径逻辑归属于 `tauri-plugin-pathes`**——所有路径/目录计算都必须放在 `src-tauri-plugins/tauri-plugin-pathes/` 中。其他模块通过 `AppPaths` 调用；切勿在其他位置硬编码或重新计算路径。
 

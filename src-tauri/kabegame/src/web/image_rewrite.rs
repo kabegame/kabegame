@@ -42,7 +42,8 @@ pub fn rewrite_fs_path(p: &str) -> String {
 /// 开发时不希望 web RPC 返回 CDN URL（本地没挂 CDN、会打断断点调试时的路径观察）。
 /// release（`deno task b --release`，debug_assertions=false）才启用改写；上线生效。
 pub fn rewrite_image_value(v: &mut Value) {
-    if cfg!(debug_assertions) {
+    // 桌面 Web 服务器返回本地路径，客户端经同端口的 /file 读取文件。
+    if cfg!(debug_assertions) || !cfg!(feature = "web") {
         return;
     }
     match v {

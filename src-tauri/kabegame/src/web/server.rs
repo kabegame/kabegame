@@ -13,9 +13,6 @@ use futures_util::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
-use kabegame_core::ipc::events::AppEventKind;
-use kabegame_core::ipc::server::EventBroadcaster;
-
 use super::dispatch::{dispatch, JsonRpcRequest};
 
 #[derive(Clone)]
@@ -72,22 +69,4 @@ async fn rpc_handler(
 ) -> Json<serde_json::Value> {
     let is_super = params.get("super").map(|v| v == "1").unwrap_or(false);
     Json(dispatch(req, is_super).await)
-}
-
-pub fn start_web_event_loop() {
-    let bus = event_bus().clone();
-    tokio::spawn(async move {
-        let mut rx = EventBroadcaster::global().subscribe_filtered_stream(&AppEventKind::ALL);
-        let mut counter = 0u64;
-        while let Some((_id, event)) = rx.recv().await {
-            counter += 1;
-            let event_name = event.kind().as_event_name();
-            let data = serde_json::to_string(&*event).unwrap_or_else(|_| "null".into());
-            let _ = bus.send(SseMessage {
-                event: event_name,
-                data,
-                id: counter,
-            });
-        }
-    });
 }

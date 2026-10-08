@@ -1,7 +1,7 @@
 // Shared modules (local + web)
 pub(crate) mod core_init;
 
-#[cfg(feature = "web")]
+#[cfg(any(feature = "web", not(target_os = "android")))]
 pub(crate) mod web;
 
 // Web mode entry
@@ -29,8 +29,6 @@ mod linux_desktop;
 mod mcp_capabilities;
 #[cfg(not(target_os = "android"))]
 mod mcp_server;
-#[cfg(not(target_os = "android"))]
-mod mcp_service;
 pub mod startup;
 #[cfg(all(not(feature = "web"), not(mobile)))]
 mod tray;
@@ -42,6 +40,8 @@ mod utils;
 mod vd_listener;
 #[cfg(not(feature = "web"))]
 mod wallpaper;
+#[cfg(all(not(feature = "web"), not(target_os = "android")))]
+mod web_server_service;
 
 // ---- local-only imports ----
 #[cfg(not(feature = "web"))]
@@ -227,26 +227,31 @@ fn init(
     // 存量画册均为 none 时不会建立目录监听，也不会自动扫盘。
     spawn_local_folder_sync();
 
-    // 桌面端 MCP 与自动更新：初始化后端权威单例
+    // 桌面端 Web 服务器与自动更新：初始化后端权威单例
     #[cfg(all(not(feature = "web"), not(target_os = "android")))]
     {
-        let _ = mcp_service::McpService::init_global(std::sync::Arc::new(
-            mcp_service::McpService::new(),
+        let _ = web_server_service::WebServerService::init_global(std::sync::Arc::new(
+            web_server_service::WebServerService::new(),
         ));
         let _ = updater::UpdaterService::init_global(std::sync::Arc::new(
             updater::UpdaterService::new(),
         ));
 
         tauri::async_runtime::spawn(async {
-            if kabegame_core::settings::Settings::global().get_mcp_enabled() {
+            if kabegame_core::settings::Settings::global().get_web_server_enabled() {
                 let port: u16 = kabegame_core::settings::Settings::global()
-                    .get_mcp_port()
+                    .get_web_server_port()
                     .try_into()
-                    .unwrap_or(mcp_server::MCP_PORT);
-                if let Err(e) = mcp_service::McpService::global().start(port).await {
-                    eprintln!("[MCP] 启动失败，已降级关闭: {e}");
-                    let _ = kabegame_core::settings::Settings::global().set_mcp_enabled(false);
-                    mcp_service::McpService::global().stop().await;
+                    .unwrap_or(web_server_service::DEFAULT_SERVER_PORT);
+                let lan = kabegame_core::settings::Settings::global().get_web_server_lan_access();
+                if let Err(e) = web_server_service::WebServerService::global()
+                    .start(port, lan)
+                    .await
+                {
+                    eprintln!("[Web Server] 启动失败，已降级关闭: {e}");
+                    let _ =
+                        kabegame_core::settings::Settings::global().set_web_server_enabled(false);
+                    web_server_service::WebServerService::global().stop().await;
                 }
             }
         });
@@ -306,7 +311,7 @@ pub fn run() {
         let router = Router::new()
             .route("/__ping", get(|| async { "ok" }))
             .merge(crate::http_server::file_routes_web())
-            .merge(crate::mcp_server::mcp_nest())
+            .merge(crate::mcp_server::mcp_nest(false))
             .merge(crate::web::web_routes())
             .fallback_service(crate::web_assets::static_assets_router());
 
@@ -630,15 +635,21 @@ pub(crate) fn configure_app(
             get_surf_freeze_page,
             set_surf_freeze_page,
             #[cfg(not(target_os = "android"))]
-            get_mcp_enabled,
+            get_web_server_enabled,
             #[cfg(not(target_os = "android"))]
-            get_mcp_port,
+            get_web_server_port,
+            #[cfg(not(target_os = "android"))]
+            get_web_server_lan_access,
+            #[cfg(not(target_os = "android"))]
+            get_web_server_lan_ip,
             #[cfg(not(target_os = "android"))]
             get_mcp_disabled_capabilities,
             #[cfg(not(target_os = "android"))]
-            set_mcp_enabled,
+            set_web_server_enabled,
             #[cfg(not(target_os = "android"))]
-            set_mcp_port,
+            set_web_server_port,
+            #[cfg(not(target_os = "android"))]
+            set_web_server_lan_access,
             #[cfg(not(target_os = "android"))]
             set_mcp_disabled_capabilities,
             #[cfg(not(target_os = "android"))]

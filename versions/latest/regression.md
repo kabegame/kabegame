@@ -244,6 +244,28 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | 收集与运行配置回填 | 桌面 CEF | 收集弹窗设 2 后提交、再次执行、保存为配置并编辑自动配置 | 抽屉显示 x/2；各入口均保存并回显 2 | |
 | [ ] | CLI 与 app IPC 实时调整 | dev app + CLI | `plugin run <id> --max-downloads 2`，再执行 `task concurrency <id> 1` / `global` | 抽屉实时变化；主程序未运行或 `--via local` 时给出明确错误 | |
 
+## 桌面应用 Web 服务器（JSON-RPC / SSE / 文件 / MCP）
+
+原 MCP 独立监听器合并为默认关闭的应用 Web 服务器：默认只绑定 `127.0.0.1:7490`，同一端口提供
+`/rpc`、`/events`、图库文件路由、`/mcp` 与 `/__ping`，不提供 `/proxy`。允许局域网访问时改绑
+`0.0.0.0` 并放开 MCP Host 白名单。最外层拒绝带 `Origin` 或 `Sec-Fetch-*` 的浏览器请求，不添加
+CORS。旧 `mcpEnabled` / `mcpPort` 不迁移，新服务仍保持关闭与默认端口。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面与 web check | 本机 | `check-kabegame` 全量；再跑 `--mode web --skip vue` | Vue、桌面 Rust、web Rust 均无新增 error | 已实测：全量 `vue-tsc 0 / cargo 0`；web `cargo 0`；收尾分跑前端、桌面 Rust、web Rust 也均为 0 error |
+| [x] | 旧 MCP 设置不迁移 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib settings` | 旧 `mcpEnabled: true` / 自定义端口不启用新服务；能力禁用列表保留 | 已实测：`1 passed / 0 failed / 0 ignored` |
+| [x] | 默认回环与路由集合 | 桌面 CEF | 开启服务，依次请求 `/__ping`、`/rpc`、`/events`、`/file`、`/proxy` | 前五项按契约返回；`/proxy` 为 404；关闭开关后全部断开 | 已实测（dev app + curl）：`/__ping` ok；`/file` 图库图片 200 image/jpeg、`/thumbnail` 200；非图库路径 `/file?path=/etc/hosts` 404；`/proxy` 404；关闭后 7490 无监听 |
+| [x] | RPC super 语义 | curl | 调用只读方法；写方法分别不带/带 `?super=1` | 只读成功；不带 super 返回 `-32001`；带 super 执行写入 | 已实测：`get_settings` 成功（受 web 原有 `WEB_READABLE_SETTING_KEYS` 白名单过滤）；`set_auto_deduplicate` 不带 super → `-32001 forbidden`，带 super → `result:null`；未知方法 `-32601` |
+| [x] | SSE 双向事件 | curl + 桌面 CEF | `curl -N /events` 后在 app 改设置或建画册 | 先收到 `connected`，再收到对应事件；app 内部刷新仍正常 | 已实测：先收 `connected {"super":false}`，super 写入后收到 `setting-change` id=1 |
+| [ ] | MCP 合并监听 | Claude Code / Codex | 连接 `http://127.0.0.1:7490/mcp`，读取资源并调用允许的工具 | 与服务开关和端口同步启停；能力勾选仍生效 | 部分实测：curl `initialize` 200 并返回 `mcp-session-id`；回环模式下 `Host: 192.168.x` 403；真实 Claude Code / Codex 客户端未测 |
+| [x] | 局域网绑定与风险提示 | 两台同网段设备 | 开启局域网访问，以本机 LAN IP 请求 `/rpc` 和 `/mcp`；再关闭 | 开启时可连接且设置页显示无鉴权风险；关闭后 LAN IP 被拒 | 已实测（同机用 LAN IP 192.168.5.137 模拟）：开启后监听 `*:7490`，`/rpc`、`/mcp` 200，带 Origin 仍 403；关闭后回到 `127.0.0.1:7490`，LAN IP 连接被拒。切换瞬间的请求可能失败一次（重启窗口） |
+| [ ] | 开启失败回滚 | 桌面 CEF | 占用 7490 后打开 Web 服务器开关 | 后端返回错误，开关保持关闭并提示端口被占用 | |
+| [ ] | 运行时禁用监听设置 | 前端 Vitest + 桌面 CEF | 服务器关闭时修改端口与局域网访问；开启服务器后再次查看两个控件 | 关闭时均可修改；开启及开启请求期间两个控件禁用，并提示需关闭服务器后修改；关闭后恢复可编辑 | 组件测试已通过：关闭时两个控件均可用；开启时均 `disabled=true`，直接触发 change / before-change 也不保存；桌面交互待实测 |
+| [x] | 拒绝浏览器请求 | curl + 浏览器 | 向全部端点分别添加 `Origin`、`Sec-Fetch-Mode`；地址栏打开 ping；网页发 fetch | 均失败或返回 403；响应没有 `Access-Control-*` 头；普通 curl 不受影响 | 已实测：curl 四种头对 `/rpc` `/__ping` `/events` `/mcp` `/file` 均 403、无 `Access-Control-*`；CEF 页面内 fetch `Failed to fetch`、EventSource error、`<img>` error |
+| [x] | 复制地址（服务器 / MCP） | 桌面 CEF | 设置 → 高级 → Web 服务器，查看并点击两个地址卡；开关局域网访问 | 仅两项：服务器地址 `http://127.0.0.1:<端口>`（局域网开启时变为本机局域网 IP）、MCP 地址 `http://127.0.0.1:<端口>/mcp`；地址整行可见、点击复制 | 已实测：局域网开启后显示 `http://192.168.5.137:7490`，MCP 仍为 127.0.0.1；`get_web_server_lan_ip` 返回 192.168.5.137 |
+| [ ] | 服务器地址喂给插件 | 桌面 CEF | 复制「服务器地址」粘贴到「Kabegame 服务器」插件的服务器地址并运行 | 能翻页复制图片 | |
+
 ## 预览标签面板「添加标签」可展开标签目录
 
 预览弹窗标签面板的「添加标签」选择器里，标签目录（含插件建的 `yandere/`、`konachan/` 等目录）此前被判为不可选，

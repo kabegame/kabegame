@@ -1,44 +1,11 @@
 <template>
   <div class="mcp-panel">
-    <!-- ── 状态 Hero ── -->
-    <section class="mcp-hero" :class="{ 'is-running': enabled }">
-      <div class="mcp-hero__grid" aria-hidden="true"></div>
-      <div class="mcp-hero__row">
-        <div class="mcp-hero__id">
-          <span class="mcp-dot" :class="{ 'is-on': enabled }"></span>
-          <div class="mcp-hero__labels">
-            <span class="mcp-hero__title">{{ $t("settings.mcpSectionTitle") }}</span>
-            <span class="mcp-hero__state">
-              {{ enabled ? $t("settings.mcpRunning") : $t("settings.mcpStopped") }}
-            </span>
-          </div>
-        </div>
-        <el-switch size="large" :model-value="enabled" :loading="toggling" :before-change="onBeforeToggle" />
-      </div>
-
-      <div class="mcp-hero__meta">
-        <button type="button" class="mcp-endpoint" @click="copyText(endpoint)">
-          <span class="mcp-endpoint__tag">endpoint</span>
-          <span class="mcp-endpoint__url">{{ endpoint }}</span>
-          <el-icon class="mcp-endpoint__copy"><DocumentCopy /></el-icon>
-        </button>
-        <div class="mcp-portbox">
-          <span class="mcp-portbox__label">{{ $t("settings.mcpPort") }}</span>
-          <KbNumber
-            v-model="localPort"
-            type="int"
-            class="!w-[140px]"
-            :min="1024"
-            :max="65535"
-            :disabled="portSaving"
-            @change="onPortChange"
-          />
-          <span v-if="enabled" class="mcp-portbox__hint">
-            {{ $t("settings.mcpPortRestartHint") }}
-          </span>
-        </div>
-      </div>
-    </section>
+    <div
+      v-if="!enabled"
+      class="rounded-xl border border-[color-mix(in_srgb,var(--anime-warning,#e6a23c)_35%,transparent)] bg-[color-mix(in_srgb,var(--anime-warning,#e6a23c)_8%,transparent)] px-4 py-3 text-[12px] text-[var(--anime-text-muted)]"
+    >
+      {{ $t("settings.mcpRequiresWebServer") }}
+    </div>
 
     <!-- ── 能力矩阵 ── -->
     <section class="mcp-block">
@@ -127,15 +94,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { DocumentCopy } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
-import { IS_WEB } from "@/env";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import CodeBlock from "@/components/common/CodeBlock.vue";
-import KbNumber from "@/components/common/form/KbNumber.vue";
 
 interface McpCapability {
   id: string;
@@ -148,61 +112,14 @@ interface McpCapability {
 
 const { t } = useI18n();
 
-// ── 三个 MCP 设置项，统一走 settings 架构（useSettingKeyState）──
-const { settingValue: enabledValue, set: setEnabledValue } = useSettingKeyState("mcpEnabled");
-const { settingValue: portValue, set: setPortValue } = useSettingKeyState("mcpPort");
+const { settingValue: enabledValue } = useSettingKeyState("webServerEnabled");
+const { settingValue: portValue } = useSettingKeyState("webServerPort");
 const { settingValue: disabledValue, set: setDisabledValue } = useSettingKeyState("mcpDisabledCapabilities");
 
 const enabled = computed(() => enabledValue.value === true);
 const port = computed(() => (typeof portValue.value === "number" ? portValue.value : 7490));
 const disabledSet = computed(() => new Set(disabledValue.value ?? []));
 
-// ── 开关（before-change 异步：等后端确认；失败提示且不切换）──
-const toggling = ref(false);
-async function onBeforeToggle(): Promise<boolean> {
-  toggling.value = true;
-  try {
-    return await setEnabledValue(!enabled.value);
-  } catch {
-    ElMessage.error(t("settings.mcpPortInUse"));
-    return false;
-  } finally {
-    toggling.value = false;
-  }
-}
-
-// ── 端口 ──
-/** 输入框的原始值：编辑中可能是非法文本（string），只在 change 时提交 */
-const localPort = ref<number | string | undefined>(port.value);
-watch(
-  port,
-  (p) => {
-    localPort.value = p;
-  },
-  { immediate: true },
-);
-const portSaving = ref(false);
-async function onPortChange(value: number | undefined) {
-  // 非法文本回退到当前端口
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    localPort.value = port.value;
-    return;
-  }
-  const p = Math.trunc(value);
-  localPort.value = p;
-  if (p < 1024 || p > 65535 || p === port.value) return;
-  portSaving.value = true;
-  try {
-    await setPortValue(p);
-  } catch {
-    ElMessage.error(t("settings.mcpPortInUse"));
-    localPort.value = port.value;
-  } finally {
-    portSaving.value = false;
-  }
-}
-
-// ── endpoint ──
 const endpoint = computed(() => `http://127.0.0.1:${port.value}/mcp`);
 
 // ── 能力矩阵（capabilities 是后端元数据；启用/禁用是 mcpDisabledCapabilities 设置）──
@@ -308,20 +225,6 @@ const connectCommands = computed(() => [
   },
 ]);
 
-async function copyText(text: string) {
-  try {
-    if (!IS_WEB) {
-      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-      await writeText(text);
-    } else {
-      await navigator.clipboard.writeText(text);
-    }
-    ElMessage.success(t("common.copySuccess"));
-  } catch {
-    ElMessage.error(t("common.copyFailed"));
-  }
-}
-
 void loadCaps();
 </script>
 
@@ -331,154 +234,6 @@ void loadCaps();
   flex-direction: column;
   gap: 20px;
   width: 100%;
-}
-
-/* ── 状态 Hero ── */
-.mcp-hero {
-  position: relative;
-  overflow: hidden;
-  border-radius: 18px;
-  padding: 22px 24px;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 26%, transparent);
-  background:
-    radial-gradient(
-      120% 140% at 100% 0%,
-      color-mix(in srgb, var(--anime-primary) 16%, transparent) 0%,
-      transparent 55%
-    ),
-    color-mix(in srgb, var(--anime-bg-card, #1c1c28) 88%, transparent);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--anime-primary) 8%, transparent) inset;
-  transition:
-    border-color 0.3s,
-    box-shadow 0.3s;
-}
-.mcp-hero.is-running {
-  border-color: color-mix(in srgb, #22d3ee 40%, transparent);
-  box-shadow: 0 0 24px -6px color-mix(in srgb, #22d3ee 45%, transparent);
-}
-.mcp-hero__grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--anime-primary) 8%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--anime-primary) 8%, transparent) 1px, transparent 1px);
-  background-size: 26px 26px;
-  mask-image: radial-gradient(80% 80% at 90% 10%, #000 0%, transparent 70%);
-  pointer-events: none;
-}
-.mcp-hero__row,
-.mcp-hero__meta {
-  position: relative;
-  z-index: 1;
-}
-.mcp-hero__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.mcp-hero__id {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.mcp-hero__labels {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.mcp-hero__title {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--anime-text-primary);
-}
-.mcp-hero__state {
-  font-size: 12px;
-  font-family: var(--el-font-family-mono, ui-monospace, monospace);
-  color: var(--anime-text-muted);
-}
-.mcp-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: var(--anime-text-muted);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--anime-text-muted) 18%, transparent);
-  transition: all 0.3s;
-}
-.mcp-dot.is-on {
-  background: #22d3ee;
-  box-shadow: 0 0 0 4px color-mix(in srgb, #22d3ee 22%, transparent);
-  animation: mcp-pulse 1.8s ease-in-out infinite;
-}
-@keyframes mcp-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, #22d3ee 30%, transparent),
-      0 0 8px 1px color-mix(in srgb, #22d3ee 55%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 0 0 6px color-mix(in srgb, #22d3ee 8%, transparent),
-      0 0 16px 3px color-mix(in srgb, #22d3ee 70%, transparent);
-  }
-}
-.mcp-hero__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px 20px;
-  margin-top: 18px;
-}
-.mcp-endpoint {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--anime-primary) 22%, transparent);
-  background: color-mix(in srgb, var(--anime-primary) 8%, transparent);
-  cursor: pointer;
-  transition: all 0.2s;
-  max-width: 100%;
-}
-.mcp-endpoint:hover {
-  border-color: color-mix(in srgb, var(--anime-primary) 45%, transparent);
-  background: color-mix(in srgb, var(--anime-primary) 14%, transparent);
-}
-.mcp-endpoint__tag {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--anime-primary);
-  opacity: 0.85;
-}
-.mcp-endpoint__url {
-  font-family: var(--el-font-family-mono, ui-monospace, monospace);
-  font-size: 13px;
-  color: var(--anime-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mcp-endpoint__copy {
-  color: var(--anime-text-muted);
-  font-size: 14px;
-}
-.mcp-portbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.mcp-portbox__label {
-  font-size: 13px;
-  color: var(--anime-text-muted);
-}
-.mcp-portbox__hint {
-  font-size: 11px;
-  color: var(--anime-warning, #e6a23c);
 }
 
 /* ── 区块通用 ── */

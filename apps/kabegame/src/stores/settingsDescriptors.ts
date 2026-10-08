@@ -225,11 +225,12 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     );
   }
 
-  // MCP 服务（仅桌面）：复用 settings 架构，运行态用 mcpEnabled 表示，无独立 state
+  // 应用 Web 服务器（仅桌面）：一个端口同时提供 RPC、SSE、文件与 MCP
   if (!IS_ANDROID && !IS_WEB) {
     entries.push(
-      tauri("mcpEnabled", "get_mcp_enabled", "set_mcp_enabled", "enabled"),
-      tauri("mcpPort", "get_mcp_port", "set_mcp_port", "port"),
+      tauri("webServerEnabled", "get_web_server_enabled", "set_web_server_enabled", "enabled"),
+      tauri("webServerPort", "get_web_server_port", "set_web_server_port", "port"),
+      tauri("webServerLanAccess", "get_web_server_lan_access", "set_web_server_lan_access", "enabled"),
       tauri("mcpDisabledCapabilities", "get_mcp_disabled_capabilities", "set_mcp_disabled_capabilities", "disabled"),
     );
   }

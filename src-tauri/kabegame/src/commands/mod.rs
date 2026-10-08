@@ -20,6 +20,8 @@ pub mod task;
 #[cfg(not(target_os = "android"))]
 pub mod updater;
 pub mod wallpaper;
+#[cfg(not(target_os = "android"))]
+pub mod web_server;
 pub mod window;
 
 pub use album::*;
@@ -43,4 +45,6 @@ pub use task::*;
 #[cfg(not(target_os = "android"))]
 pub use updater::*;
 pub use wallpaper::*;
+#[cfg(not(target_os = "android"))]
+pub use web_server::*;
 pub use window::*;
