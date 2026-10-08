@@ -44,7 +44,7 @@
   "previewSlideshowSpeedSlow": "遅い（20 秒）",
   "previewSwitchDirection": "画像の切り替え方向",
   "previewSwitchDirectionDesc": "非表示や削除などで現在の画像がビューから外れた後、プレビューを続ける方向",
-  "previewSwitchDirectionAuto": "自動（直前の方向に追従）",
+  "previewSwitchDirectionAuto": "自動（直近 5 回の手動切り替えで多い方向）",
   "previewSwitchDirectionPrev": "前の画像",
   "previewSwitchDirectionNext": "次の画像",
   "imageClickPreview": "アプリ内プレビュー",

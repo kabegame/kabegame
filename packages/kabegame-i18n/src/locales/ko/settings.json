@@ -44,7 +44,7 @@
   "previewSlideshowSpeedSlow": "느림 (20초)",
   "previewSwitchDirection": "이미지 전환 방향",
   "previewSwitchDirectionDesc": "숨기기, 삭제 등의 작업으로 현재 이미지가 보기에서 사라진 뒤 미리보기를 이어갈 방향",
-  "previewSwitchDirectionAuto": "자동 (마지막 방향 따르기)",
+  "previewSwitchDirectionAuto": "자동 (최근 수동 전환 5회 중 많은 방향)",
   "previewSwitchDirectionPrev": "이전 이미지",
   "previewSwitchDirectionNext": "다음 이미지",
   "imageClickPreview": "앱 내 미리보기",

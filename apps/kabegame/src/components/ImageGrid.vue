@@ -290,8 +290,17 @@ type PreviewAnchor = {
   beforeIds: string[];
 };
 const previewAnchor = ref<PreviewAnchor | null>(null);
-/** 本次预览里用户最近一次切图方向；删除当前图后沿这个方向接续，关闭预览时复位。 */
-let lastPreviewSwitchDirection: "prev" | "next" = "next";
+/** 本次预览里用户最近几次手动切图方向（不含幻灯片自动播放）；删除当前图后沿多数方向接续，关闭预览时清空。 */
+const PREVIEW_SWITCH_HISTORY_SIZE = 5;
+const recentManualSwitchDirections: ("prev" | "next")[] = [];
+/** 最近 5 次手动切图里出现最多的方向；平票取最近一次，没有记录默认往后。 */
+const resolveAutoPreviewSwitchDirection = (): "prev" | "next" => {
+  const history = recentManualSwitchDirections;
+  const prevCount = history.filter((d) => d === "prev").length;
+  const nextCount = history.length - prevCount;
+  if (prevCount !== nextCount) return prevCount > nextCount ? "prev" : "next";
+  return history[history.length - 1] ?? "next";
+};
 let latestSnapshotSeq = 0;
 type PreviewLocateRequest = {
   id: string;
@@ -676,7 +685,7 @@ const previewProp = computed<string | CoreImageInfo | null>(() => {
 watch(
   previewedId,
   (id) => {
-    if (!id) lastPreviewSwitchDirection = "next";
+    if (!id) recentManualSwitchDirections.length = 0;
     pendingPreviewLocate = null;
     lastLocateAttempt = null;
     previewSingleImage.value = false;
@@ -766,7 +775,7 @@ const resolvePreviewAnchor = () => {
   }
   // 本页已删空时只能往上一页走，与切图方向无关
   const configuredDirection = settingsStore.values.previewSwitchDirection ?? "auto";
-  const resolvedDirection = configuredDirection === "auto" ? lastPreviewSwitchDirection : configuredDirection;
+  const resolvedDirection = configuredDirection === "auto" ? resolveAutoPreviewSwitchDirection() : configuredDirection;
   const preferPrev = resolvedDirection === "prev" || list.length === 0;
   if (preferPrev && !before && paged.currentPage.value > 1) {
     // 保持旧 id 与旧对象：pendingPreviewBoundary 期间 reconcilePreview 不定位，新页就绪后由分页器打开末张
@@ -991,8 +1000,11 @@ function handlePreviewRequest(payload: { id: string }) {
  * 弹窗要求切换：视图内直接挪 id；到了视图边界就交给分页器翻页，
  * 由 usePagedGallery 在新页就绪后设首/末张。
  */
-function handlePreviewSwitch(payload: { direction: "prev" | "next" }) {
-  lastPreviewSwitchDirection = payload.direction;
+function handlePreviewSwitch(payload: { direction: "prev" | "next"; source: "manual" | "slideshow" }) {
+  if (payload.source !== "slideshow") {
+    recentManualSwitchDirections.push(payload.direction);
+    if (recentManualSwitchDirections.length > PREVIEW_SWITCH_HISTORY_SIZE) recentManualSwitchDirections.shift();
+  }
   const neighbor = payload.direction === "prev" ? previewPrevImage.value : previewNextImage.value;
   if (neighbor) {
     const from = previewedId.value;

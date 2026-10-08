@@ -291,7 +291,7 @@ const emit = defineEmits<{
   "open-surf-record": [target: ImageDetailSurfRecordTarget];
   "image-dblclick": [payload: { action: "preview" | "open"; image: ImageInfo }];
   /** 用户在预览里要求切换；由上层算出目标 id 并回设 previewImage */
-  "preview-switch": [payload: { direction: "prev" | "next" }];
+  "preview-switch": [payload: { direction: "prev" | "next"; source: "manual" | "slideshow" }];
   /** 弹窗按 id 解析失败；上层弹提示并清 previewedId */
   "preview-resolve-failed": [payload: { id: string; reason: "missing" | "error" }];
   /** 请求打开某个 id 的预览（id 可以不在当前列表里，如深链接） */

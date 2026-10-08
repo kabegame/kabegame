@@ -467,7 +467,8 @@ const emit = defineEmits<{
   (e: "open-gallery-filter", target: ImageDetailGalleryFilterTarget): void;
   (e: "open-surf-record", target: ImageDetailSurfRecordTarget): void;
   /** 用户要求切换；上层算出目标并回设 props.image */
-  (e: "switch", payload: { direction: "prev" | "next" }): void;
+  /** source：用户手动（箭头 / 键盘 / 滑动）还是幻灯片自动播放；上层只用手动翻页推断「自动」切图方向 */
+  (e: "switch", payload: { direction: "prev" | "next"; source: "manual" | "slideshow" }): void;
   /** 解析失败。上层据此弹 message 并清 previewedId（连带清 URL）；弹窗自己不写 URL */
   (e: "resolve-failed", payload: { id: string; reason: "missing" | "error" }): void;
   (e: "preview-detail-toggle", payload: { open: boolean; image: ImageInfo | null }): void;
@@ -937,12 +938,12 @@ watch(currentId, (id) => {
 
 const canGo = (direction: "prev" | "next") => (direction === "prev" ? props.canPrev : props.canNext);
 
-const requestSwitch = (direction: "prev" | "next") => {
+const requestSwitch = (direction: "prev" | "next", source: "manual" | "slideshow" = "manual") => {
   if (!previewVisible.value) return;
   if (navPending.value) return;
   if (!canGo(direction)) return;
   navPending.value = true;
-  emit("switch", { direction });
+  emit("switch", { direction, source });
 };
 
 const goPrev = () => requestSwitch("prev");
@@ -981,7 +982,7 @@ const restartSlideshowTimer = () => {
       return;
     }
     // 落地后由 currentId watcher 续挂下一轮
-    requestSwitch(direction);
+    requestSwitch(direction, "slideshow");
   }, ms);
 };
 

@@ -44,7 +44,7 @@
   "previewSlideshowSpeedSlow": "慢（20 秒）",
   "previewSwitchDirection": "切圖方向",
   "previewSwitchDirectionDesc": "隱藏、刪除等操作使目前圖片離開檢視後，預覽切換到哪個方向",
-  "previewSwitchDirectionAuto": "自動（跟隨上一次）",
+  "previewSwitchDirectionAuto": "自動（跟隨最近 5 次手動切圖的多數方向）",
   "previewSwitchDirectionPrev": "上一張",
   "previewSwitchDirectionNext": "下一張",
   "imageClickPreview": "應用內預覽",

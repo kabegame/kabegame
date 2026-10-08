@@ -458,6 +458,40 @@ describe("预览跟随后台新增图片", () => {
     expect(handlePreviewPageBoundary).not.toHaveBeenCalled();
   });
 
+  it("自动方向取最近手动切图的多数方向，幻灯片切图不计入", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    await applySnapshot!(snapshot(["first", "target", "older"], 2));
+    core.vm.$emit("preview-switch", { direction: "next", source: "manual" });
+    core.vm.$emit("preview-switch", { direction: "prev", source: "slideshow" });
+    core.vm.$emit("preview-switch", { direction: "next", source: "manual" });
+    core.vm.$emit("preview-switch", { direction: "prev", source: "manual" });
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "target" });
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    await applySnapshot!(snapshot(["first", "older"], 3));
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "older" });
+  });
+
+  it("自动方向只统计最近 5 次手动切图", async () => {
+    const wrapper = await render();
+    const core = wrapper.getComponent({ name: "ImageGridCore" });
+    await applySnapshot!(snapshot(["first", "target", "older"], 2));
+    // 全部 6 次是 3:3 平票（会取最近一次 prev），最近 5 次则是 next 3 : prev 2
+    for (const direction of ["prev", "next", "prev", "next", "next", "prev"] as const) {
+      core.vm.$emit("preview-switch", { direction, source: "manual" });
+    }
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "target" });
+    const instance = wrapper.vm.$ as unknown as { setupState: { capturePreviewAnchor: () => void } };
+    instance.setupState.capturePreviewAnchor();
+    await applySnapshot!(snapshot(["first", "older"], 3));
+    await nextTick();
+    expect(core.props("previewImage")).toMatchObject({ id: "older" });
+  });
+
   it("往前切图且本页前面已无图片时，交给分页器翻到上一页末张，期间保留旧图", async () => {
     routeStore.page = 2;
     routeStore.computedPath = "hide/sort/by-time/desc/x2x/2";
