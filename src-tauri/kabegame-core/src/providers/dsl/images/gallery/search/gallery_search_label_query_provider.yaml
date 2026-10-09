@@ -6,12 +6,17 @@ query:
   # 单个条件只负责一次大小写不敏感的完整标签路径子串匹配。多个输入词的 AND 语义由前端
   # 拆成多个 search/label/<token>，经 filter_comb 让 PathQL 累积多条 WHERE，不在 SQL 中分词。
   # 图片只挂在叶子标签上；label_path 已包含全部祖先 key，例如 pixiv/character/umi。
+  # 用不相关的 IN 子查询：先扫一遍 albums 得到命中标签、经 (album_id, image_id) 主键取图并物化，
+  # 外层每行只探测一次。不要写回相关 EXISTS（lai.image_id = images.id）：每张图平均挂约 20 个标签，
+  # 逐图展开 album_images 再回表 albums 算 LOWER/instr，prod 2 万图三个 `~not` 词的 COUNT 约 205ms，
+  # IN 约 21ms。也不要用 JOIN + group_by：取非时逐行判断会让任一未命中标签行放行整张图，且组合器组内
+  # 不允许 group_by。images.id 与 album_images.image_id 均 NOT NULL，`~not` 下不触发 NOT IN 的 NULL 陷阱。
   where: |-
-    EXISTS (
-      SELECT 1
-      FROM album_images lai
-      JOIN albums la ON la.id = lai.album_id AND la.type = 'label'
-      WHERE lai.image_id = images.id
+    images.id IN (
+      SELECT lai.image_id
+      FROM albums la
+      JOIN album_images lai ON lai.album_id = la.id
+      WHERE la.type = 'label'
         AND instr(LOWER(COALESCE(la.label_path, '')), LOWER(${properties.query})) > 0
     )
 resolve:

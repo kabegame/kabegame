@@ -1,38 +1,29 @@
 {
     "namespace": "kabegame",
     "name": "gallery_aspect_router",
-    "note": "Filter by aspect-ratio bucket. List this node, then choose landscape-4x3-16x9, widescreen-16x9-21x9, square-3x4-4x3, portrait-9x16-3x4, or other. The legacy dimension and dimensions entry points are aliases of aspect.",
-    "list": {
-        "${root.name}": {
-            "child_var": "root",
-            "delegate": { "provider": "aspect_bucket_router" },
+    "note": "Filter by aspect ratio (width / height). Not listable: write the segment directly. Ratios are written <w>x<h> with positive integers; ranges are left-open and right-closed, so adjacent ranges never overlap. -9x16 = at most 9:16; 9x16-3x4 = above 9:16 and at most 3:4; 7x3- = above 7:3; unknown = width or height missing or not positive. The app's buckets are -3x4 (portrait), 3x4-4x3 (square-ish), 4x3-16x9 (landscape), 16x9- (widescreen) and unknown. The legacy dimension and dimensions entry points are aliases of aspect.",
+    // 不提供 list：段值是任意比值区间，没有可枚举的全集；前端与 VD 各自持有固定的桶表。
+    // 四种段型对应 aspect_range_provider 的上下界：缺下界补 0x1，缺上界补 1x0（∞），见该 provider 注释。
+    "resolve": {
+        "-([1-9][0-9]*)x([1-9][0-9]*)": {
+            "provider": "gallery_aspect_bucket_router",
+            "properties": { "min_w": 0, "min_h": 1, "max_w": "${capture[1]}", "max_h": "${capture[2]}" }
+        },
+        "([1-9][0-9]*)x([1-9][0-9]*)-([1-9][0-9]*)x([1-9][0-9]*)": {
             "provider": "gallery_aspect_bucket_router",
             "properties": {
-                "bucket": "${root.meta.bucket}"
-            },
-            "meta": "${root.meta}"
-        }
-    },
-    "resolve": {
-        "landscape-4x3-16x9": {
-            "provider": "gallery_aspect_bucket_router",
-            "properties": { "bucket": "landscape" }
+                "min_w": "${capture[1]}",
+                "min_h": "${capture[2]}",
+                "max_w": "${capture[3]}",
+                "max_h": "${capture[4]}"
+            }
         },
-        "widescreen-16x9-21x9": {
+        "([1-9][0-9]*)x([1-9][0-9]*)-": {
             "provider": "gallery_aspect_bucket_router",
-            "properties": { "bucket": "widescreen" }
+            "properties": { "min_w": "${capture[1]}", "min_h": "${capture[2]}", "max_w": 1, "max_h": 0 }
         },
-        "square-3x4-4x3": {
-            "provider": "gallery_aspect_bucket_router",
-            "properties": { "bucket": "square" }
-        },
-        "portrait-9x16-3x4": {
-            "provider": "gallery_aspect_bucket_router",
-            "properties": { "bucket": "portrait" }
-        },
-        "other": {
-            "provider": "gallery_aspect_bucket_router",
-            "properties": { "bucket": "other" }
+        "unknown": {
+            "provider": "gallery_aspect_unknown_router"
         }
     }
 }

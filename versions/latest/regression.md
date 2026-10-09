@@ -27,6 +27,82 @@
 | [ ] | 旧 URL 兼容 | 桌面 CEF / Web | 打开改动前保存的带单分支 `~any` 高级条件的链接 / 历史记录 | 高级条件仍显示在高级区 | |
 | [ ] | 详情页 | 桌面 CEF | 画册 / 任务 / 畅游详情里用 `!`、括号搜索并追加高级条件 | 路由正常、结果正确 | |
 
+## 标签搜索改用不相关 IN 子查询
+
+`search/label/<词>` 的 WHERE 从相关 `EXISTS (… lai.image_id = images.id …)` 改为
+`images.id IN (SELECT lai.image_id FROM albums la JOIN album_images lai … WHERE la.type = 'label' AND instr(…))`。
+每张图平均挂约 20 个标签，相关子查询会逐图展开全部标签行并回表求值；改后命中集合整条查询只算一次。
+prod 库副本实测 `gallery/hide/` 下三个 `!词`（原生元数据 OR 标签）+ 宽高比 + 大小：COUNT 205ms → 21ms、
+翻页 12.8ms → 7.1ms，完整结果集逐行一致（10188 行）；正向单词 COUNT 145ms → 2.5ms。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 标签搜索 e2e | Rust e2e | `test-kabegame` driver：`kabegame-core --test dsl_e2e` | 41 个用例通过；新增取非 / `~any` OR 原生元数据组合用例，SQL 形状断言含 `images.id IN (` 且不含相关条件 | 已实测 |
+| [ ] | 正向标签搜索 | 桌面 CEF / Web | 只勾「标签」搜一个常见词，再加一个词 | 结果与改动前一致，列表与总数明显更快出来 | |
+| [ ] | 标签取非 + 多维度 | 桌面 CEF / Web | 勾「原生元数据」+「标签」，输入 `!a, !b, !c` 并叠加宽高比 / 大小高级条件，翻到靠后页 | 总数与改动前一致，翻页不卡顿 | |
+| [ ] | 详情页标签搜索 | 桌面 CEF | 画册 / 任务 / 畅游详情里按标签搜索与取非 | 路由正常、结果正确 | |
+
+## 宽高比生成列 `images.aspect_ratio`（v036）
+
+新增 VIRTUAL 生成列 `aspect_ratio = width / height`（宽高无效为 NULL）+ 索引，SQLite 自动维护。
+`sort/by-aspect` 按 `aspect_ratio, id` 走索引，100 万图副本、引擎真实 SQL 实测按宽高比排序翻页 3.5s → 1ms。
+筛选与桶的改动见下一节「宽高比改为区间段」。`hide/` 改不相关 NOT IN 实测在真实查询里更慢，已放弃。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 迁移与分桶一致性 | Rust 单测 / e2e | `test-kabegame` driver：`kabegame-core --lib migrations`、`kabegame-core --test dsl_e2e` | 15 + 43 个用例通过；v036 幂等、自动维护、16:9 边界相等、排序走索引；e2e 逐桶与旧整数公式比对 | 已实测 |
+| [x] | 已有库升级 | CLI 本地模式 | dev 数据目录上 `kabegame-cli pathql query --via local --list --with-count images://gallery/.../aspect` | 打开时执行 v036，各桶计数正常返回 | 已实测 |
+| [ ] | 按宽高比排序 | 桌面 CEF / Web | 排序选「宽高比」，切升 / 降序并翻到靠后页，打开预览深链接 | 顺序正确、翻页立即出结果，预览定位到正确页 | 宽度为 0 的异常图现在与无宽高的图一起排在最前 |
+| [ ] | 新导入图片 | 桌面 CEF | 导入 / 下载新图后按宽高比筛选与排序 | 新图立即出现在正确的桶与位置（无需应用侧回填） | |
+
+## 宽高比改为区间段（`aspect/-3x4` 等）
+
+`aspect/` 不再列举，也不再是固定的五个名字，改为四种段：`-<w>x<h>`（≤）、`<w>x<h>-<w>x<h>`、`<w>x<h>-`（>）、`unknown`，
+区间左开右闭。应用的桶改为 `-3x4` / `3x4-4x3` / `4x3-16x9` / `16x9-` / `unknown`：过窄并入竖屏、过宽并入宽屏，
+「其他」只剩宽高缺失的图并改名「未知比例」，正好 3:4 的图从方正归入竖屏。VD「按尺寸」目录名随之更新，每项落到同一组桶。
+区间用整数交叉乘法并禁止走宽高比索引；旧段名（`landscape-4x3-16x9` 等）不再解析，旧链接不兼容。
+100 万图副本实测：各桶组合筛选一页约 20ms、COUNT 0.3～0.8s；`unknown` 走索引瞬时返回；五个桶计数之和等于总数。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 区间语义与分区 | Rust e2e | `test-kabegame` driver：`kabegame-core --test dsl_e2e` | 45 个用例通过；9 种段与有理数参考实现逐行一致（含 9:16、7:3 边界与宽高为 NULL / 0 / 负数）；五个桶互不重叠且合起来为全部；`~not` 保留未知比例；不可列举；旧段名与非法段报错 | 已实测 |
+| [x] | VD 与前端同桶 | Rust e2e | 同上 | 五种语言「按尺寸」各 5 个目录，逐目录结果集与对应画廊段一致；目录名不含 Windows 非法字符 | 已实测 |
+| [x] | 前端归桶与往返 | 前端 Vitest | `deno task test -c kabegame --skip cargo` | 27 个文件、244 个用例通过；`aspectBucketForDimensions` 边界、五个桶段解析 / 序列化往返 | 已实测；vue-tsc 通过 |
+| [ ] | 筛选下拉与 chip | 桌面 CEF / Web | 简单筛选与高级面板里逐个选五个宽高比桶 | 文案为新名称；URL 为 `aspect/-3x4` 等；计数之和等于总数 | |
+| [ ] | 过宽 / 过窄 / 3:4 归属 | 桌面 CEF / Web | 找一张超宽全景、一张 1:3 长图、一张 3:4 照片，分别打开详情点「按此宽高比筛选」 | 分别进入宽屏、竖屏、竖屏，且结果里包含该图 | |
+| [ ] | 未知比例 | 桌面 CEF / Web | 选「未知比例」 | 只有尺寸读取失败的图；正常库为空 | |
+| [ ] | VD 按尺寸 | 桌面 CEF（虚拟盘） | 打开挂载盘的「按尺寸」目录，切换应用语言 | 5 个本地化目录，内容与画廊对应桶一致 | |
+
+## PathQL 计数去掉最外层 ORDER BY
+
+`runtime.count()` 原样包 `SELECT COUNT(*) FROM (<inner>)`，inner 带着排序，SQLite 无法压平子查询：
+按排序索引扫全表、逐行做全部 LEFT JOIN 并算出所有字段再临时排序。`count_composed` 改为克隆 composed、
+清掉最外层 `order` 后再构建；`~~` 内层 CTE 的排序保留，ORDER BY 中的绑定参数随之消失不错位。
+100 万图副本同一条计数实测快 1.5～4.5 倍（随缓存状态波动），结果一致。画廊总数、`list_with_count`、
+日期等列举计数都经此路径。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 计数 SQL 形状 | Rust 单测 | `cargo test -p pathql-rs count_` | 带参数随机排序的计数 SQL 不含 ORDER BY 及 seed 参数，WHERE 参数与 LIMIT 保留 | 已实测；pathql-rs 419 通过 |
+| [x] | 计数 = 行数 | Rust e2e | `test-kabegame` driver：`kabegame-core --test dsl_e2e` | 随机排序 / 反序 / 分页 / `~~` 切页 / rank 定位 / 画册计数 hide 下 `count == fetch().len()` | 已实测；44 通过 |
+| [ ] | 画廊总数与页数 | 桌面 CEF / Web | 各排序（含随机、宽高比、降序）下看总数与末页 | 总数与改动前一致，末页条数正确 | |
+| [ ] | 画册树计数 / 带计数列举 | 桌面 CEF | 画册树、媒体类型 / 日期筛选下拉的计数 | 计数与改动前一致 | |
+| [ ] | 预览深链接定位 | 桌面 CEF | 带 `pvwimgid` 打开，后台刷新跟页 | 跳到目标图所在页（rank 依赖内层排序，不受影响） | |
+
+## 收藏 / 隐藏标记与 `hide/` 改用相关 EXISTS
+
+`is_favorite` / `is_hidden`（画廊与 VD）由 `LEFT JOIN album_images` 改为相关 `EXISTS`，`hide/` 与画册 `~~/images/hide`
+改为 `NOT EXISTS`。主键 `(album_id, image_id)` 保证 JOIN 最多一行，行数与取值不变。100 万图副本（三种写法交替 5 轮中位数）：
+翻页与原来同价，收藏 / 隐藏集合多大都不变（不相关 IN 在隐藏 50% 时一页 2.5ms → 57ms，故未采用）；
+`gallery/all` COUNT 1.7s → 0.86s，`gallery/hide/all` COUNT 1.3s → 1.0–1.2s。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 标记取值与 hide 计数 | Rust e2e | `test-kabegame` driver：`kabegame-core --test dsl_e2e` | 45 个用例通过；画廊与 VD 行的收藏 / 隐藏标记只在对应图上为 1；`hide/all` 少且只少隐藏图；SQL 不含 `LEFT JOIN album_images` | 已实测 |
+| [ ] | 收藏 / 隐藏图标 | 桌面 CEF / Web | 收藏、隐藏若干图后在画廊、画册详情、VD 挂载盘里查看 | 角标与菜单状态正确；取消收藏 / 隐藏后立即更新 | |
+| [ ] | 隐藏过滤与计数 | 桌面 CEF / Web | 开关「隐藏已隐藏的图」，看画廊总数、画册树 `image_count` | 计数与改动前一致 | |
+| [ ] | 未分类视图 | 桌面 CEF / Web | 打开「未归入画册」视图 | 仅在收藏画册的图仍出现，结果与改动前一致 | 依赖 `is_favorite` 别名 |
+
 ## 原生元数据回填后视图实时刷新，预览保持显示
 
 原生元数据参与 `search/native-metadata`，但预览按需解析、整理回填、下载按哈希共享挂载都不发事件，
@@ -507,3 +583,32 @@ category + key；帖子地址取服务器 `post_url`，为空就留空，不填�
 | [ ] | 本地导入任务 | 桌面 CEF | 本地导入任务详情页点「再次执行」 | 打开本地导入弹窗并回填路径、递归等参数 | |
 | [ ] | 紧凑模式 | Android | 任务详情页右上角折叠菜单 | 有「再次执行」，点击后打开收集弹窗；本地导入任务没有该项 | |
 | [ ] | Web | Web | 网页收集 / 本地导入任务详情页 | 不显示「再次执行」；普通插件任务显示 | |
+
+## Web 版 `/rpc` 接口埋点
+
+Web 发布版在 `rpc_handler` 里对每次 `POST /rpc` 计时，经有界队列异步向 umami 发 `rpc_call` 事件（`data.method` / `ok` / `code` / `ms`）。不读取、不转发客户端请求头，未注册方法记为 `(unknown)`。`web` feature 门控，由 `KABEGAME_UMAMI_SEND_URL` / `KABEGAME_UMAMI_WEBSITE_ID` / `KABEGAME_UMAMI_HOSTNAME` 环境变量开启。umami isbot 会丢弃 `名字/版本` 形式的 UA，因此服务端 UA 用 `Mozilla/5.0 (X11; Linux x86_64) kabegame-web/<版本>`。详见 `cocs/web/RPC_TRACKING.md`。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译门控 | Rust check | `check-kabegame` driver：`--mode web --skip vue` 与默认桌面 `--skip vue` | 两种模式均 0 error | 已实测 |
+| [x] | payload 通过 umami 校验 | umi.kabegame.com | 用代码同形 payload 与不存在的 website UUID POST `/api/send` | 返回 `Website not found.`（已过 schema 校验，不写入数据）；非法 UUID 对照组返回 schema 错误 | 已实测 |
+| [x] | UA 不被判 bot | umami 容器 | 用容器内 isbot 规则测试候选 UA | `Mozilla/5.0 (X11; Linux x86_64) kabegame-web/x` 不是 bot；`Kabegame/1.0`、`reqwest/0.11`、`kabegame-web/x` 都是 bot | 已实测 |
+| [ ] | 未配置时关闭 | Web | 不设环境变量启动 web 二进制 | 启动日志打印 `RPC tracking disabled`，`/rpc` 行为与改动前一致 | |
+| [x] | 配置后上报 | Web（demo） | 写入 systemd drop-in 后重启，网页里翻几页画廊 | 启动日志出现 `✓ RPC tracking → …`；umami 新 website 的 Events 里出现 `rpc_call`，按 `method` 可拆分 | 已在 demo 部署实测：启动日志出现 `✓ RPC tracking → …`，umami `kabegame-api` 收到 `get_plugins` 事件（hostname / url / ok 正确）；网页翻页未测 |
+| [ ] | 插件调用也被统计 | 桌面 CEF + Web（demo） | 桌面端用 `kabegame-server` 插件从 demo 复制 1 页 | umami 中 `pathql_entry`、`pathql_fetch`、`get_image_metadata_full`、`get_plugin_detail`、`get_plugin_data` 计数上涨 | |
+| [x] | 错误与未知方法 | Web（demo） | `curl -X POST https://demo.kabegame.com/rpc -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"nope"}'` | umami 记一条 `method=(unknown)`、`ok=false`、`code=-32601` | 已在 demo 实测：`method=(unknown)`、`ok=false`、`code=-32601` |
+| [ ] | umami 不可达不影响接口 | Web | 把 `KABEGAME_UMAMI_SEND_URL` 指向不可达地址后重启并访问网页 | 网页正常；日志只打一行 `[umami] RPC tracking failed`，不刷屏 | |
+| [ ] | 桌面 Web 服务器不上报 | 桌面 CEF | 「设置 → 高级」开启 Web 服务器，即使设了环境变量也调用 `/rpc` | 无任何上报（非 `web` feature 编译不含埋点） | |
+
+## Web 版 CDN 原图 URL 百分号编码
+
+`web/image_rewrite.rs` 的 `rewrite_fs_path` 把落盘文件名原样拼进 `https://cdn.kabegame.com/<目录>/<文件名>`。
+yandere 等插件落盘的文件名自带字面量 `%20`（如 `yande.re%20447155%20….jpg`），CDN 会把 URL 里的 `%20` 解码成空格，
+原图因此 404；缩略图是 UUID 文件名，不受影响。现在目录段与文件名段都按 RFC 3986 unreserved 之外的字符做百分号编码
+（字面量 `%` → `%25`，空格、`#`、`?`、非 ASCII 同理）。线上实测：`…/yande.re%20447155….jpg` 404，`…/yande.re%2520447155….jpg` 200。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 改写单测 | Rust 单测 | `kabegame --lib image_rewrite` | 6 个用例通过（含字面量 `%`、空格、`#?`、中文文件名） | 已实测；macOS 下测试二进制需 `DYLD_FALLBACK_FRAMEWORK_PATH=target/Frameworks` |
+| [ ] | yandere 任务原图 | Web（demo） | 打开 `/tasks/6df35cbc-43aa-4ef3-b6cb-b66db416408a`，点开任一图预览 / 下载 | 原图正常加载，Network 中 URL 为 `yande.re%2520…`，不再 404 | 需部署 web 后验证 |
+| [ ] | 普通文件名不变 | Web（demo） | 画廊中打开 UUID / 纯 ASCII 文件名的图 | URL 与改动前一致，正常加载 | |

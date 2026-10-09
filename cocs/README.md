@@ -45,19 +45,25 @@
   - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由，MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、500 行分页护栏，以及为什么不能在 `gallery_all_router.json5` 加 limit。
   - 适用场景：新增或排查桌面 Web 服务器、RPC/SSE、MCP 资源/工具/能力开关；维护 PathQL 发现与分页；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
 
+## Web 版（`web/`）
+
+- [web/RPC_TRACKING.md](web/RPC_TRACKING.md)
+  - 主题：Web 发布版在服务端对每次 `POST /rpc` 发 umami `rpc_call` 事件（method / ok / code / ms），不读取、不转发客户端请求头；`web` feature 门控，由 `KABEGAME_UMAMI_*` 环境变量开启（systemd drop-in）；有界队列丢弃策略、`no_proxy` 直连，以及 umami isbot 会静默丢弃 `名字/版本` 形式 UA 的坑。
+  - 适用场景：在 demo 服务器开启或排查接口埋点；umami 里看不到 `rpc_call` 事件（未配置环境变量、返回 `beep`、走了代理）；新增需要统计的服务端入口。
+
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`——前端状态统一为**唯一查询对象 `GalleryQuery`**（搜索是原子的一个维度；查询条以简单 chip + 追加高级 chip 叠加，高级部分以 `~not/~not` 双重取非保留持久化边界；搜索输入是表达式（`,` 且 `;` 或 `!` 非 `()` 分组、`\` 转义与引号，`utils/searchExpr.ts` 解析、按勾选维度逐词展开成 `~any`/`~not` 并折回）；`no-album` 与 `hide` 并列为随行路由上下文），唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工；以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
-  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对。
+  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`——前端状态统一为**唯一查询对象 `GalleryQuery`**（搜索是原子的一个维度；查询条以简单 chip + 追加高级 chip 叠加，高级部分以 `~not/~not` 双重取非保留持久化边界；搜索输入是表达式（`,` 且 `;` 或 `!` 非 `()` 分组、`\` 转义与引号，`utils/searchExpr.ts` 解析、按勾选维度逐词展开成 `~any`/`~not` 并折回）；`no-album` 与 `hide` 并列为随行路由上下文），唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工；宽高比 `images.aspect_ratio` VIRTUAL 生成列与 `aspect/` 区间段文法（`-3x4` / `3x4-4x3` / `16x9-` / `unknown`，左开右闭、不可列举、VD 友好名称落到具体桶、区间谓词为何禁用索引、排序走索引）；收藏 / 隐藏标记与 `hide/` 用相关 EXISTS 而非 LEFT JOIN 或不相关 IN 的理由与实测；以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
+  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对；排查宽高比筛选 / 排序变慢或分桶归属不一致；排查收藏 / 隐藏标记或 hide 计数变慢、不一致。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, total, seq }` 单次快照；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先快照后广播；500ms 批次合并、画册 `ancestorPath` 相关性、wildcard 粗过滤和 `seq` 防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
   - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `liveQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
 
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
-  - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 与 `search/label-tree`，以及分页查询树 / 选择器 / 预览面板。
-  - 适用场景：新增或排查标签画册的建立、移动、改 key；插件下载或迁移没有挂上标签；标签搜索结果不对；给预览弹窗注入 app 侧信息面板。
+  - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 的完整路径子串匹配与不相关 `IN` 子查询写法（为何不用相关 EXISTS / JOIN + group_by），以及分页查询树 / 选择器 / 预览面板。
+  - 适用场景：新增或排查标签画册的建立、移动、改 key；插件下载或迁移没有挂上标签；标签搜索结果不对或变慢；给预览弹窗注入 app 侧信息面板。
 
 ## 本地文件夹（`local-folder/`）
 

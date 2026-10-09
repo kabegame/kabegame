@@ -164,6 +164,7 @@ import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore, type Plugin } from "../../stores/plugins";
 import { useSurfStore } from "../../stores/surf";
 import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
+import { aspectBucketForDimensions } from "../../utils/galleryQuery";
 import { openExternalLink } from "../../utils/openExternalLink";
 
 const { t, locale } = useI18n();
@@ -340,7 +341,7 @@ const sizeFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({
 }));
 
 const aspectFilterTarget = computed<ImageDetailGalleryFilterTarget | null>(() => {
-  const range = aspectRangeForDimensions(props.image?.width, props.image?.height);
+  const range = aspectBucketForDimensions(props.image?.width, props.image?.height);
   return range ? { type: "aspect", range } : null;
 });
 
@@ -409,18 +410,6 @@ function sizeRangeForBytes(size?: number): string {
   if (n < 10_485_760) return "5MB-10MB";
   if (n < 52_428_800) return "10MB-50MB";
   return "50MB-";
-}
-
-function aspectRangeForDimensions(width?: number, height?: number): string | null {
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-  const w = Math.round(width as number);
-  const h = Math.round(height as number);
-  if (w <= 0 || h <= 0) return null;
-  if (w * 3 > h * 4 && w * 9 <= h * 16) return "landscape-4x3-16x9";
-  if (w * 9 > h * 16 && w * 3 <= h * 7) return "widescreen-16x9-21x9";
-  if (w * 4 >= h * 3 && w * 3 <= h * 4) return "square-3x4-4x3";
-  if (w * 16 >= h * 9 && w * 4 < h * 3) return "portrait-9x16-3x4";
-  return "other";
 }
 
 const formatDate = (timestamp?: number) => {

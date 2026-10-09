@@ -21,12 +21,6 @@ query:
       in_need: true
     - { kind: INNER, table: album_images, as: tree_ai, "on": tree_ai.album_id = tree.id, in_need: true }
     - { kind: INNER, table: images, as: images, "on": images.id = tree_ai.image_id, in_need: true }
-    # 与 gallery_route 同名同条件，hide 段因此可以写成与画廊一样的谓词。
-    - kind: LEFT
-      table: album_images
-      as: hid_ai
-      "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}"
-      in_need: true
   group_by: [albums.id]
 resolve:
   hide: { provider: albums_images_hide_provider }

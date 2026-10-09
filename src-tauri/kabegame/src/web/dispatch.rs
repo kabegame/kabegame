@@ -56,6 +56,12 @@ fn registry() -> &'static HashMap<&'static str, MethodEntry> {
         .expect("RPC registry not initialized; call init_registry() first")
 }
 
+/// 已注册方法的静态名；未注册返回 None。供埋点把任意请求方法名收敛到有限集合。
+#[cfg(feature = "web")]
+pub(crate) fn registered_method(name: &str) -> Option<&'static str> {
+    registry().get_key_value(name).map(|(k, _)| *k)
+}
+
 #[derive(Deserialize)]
 pub struct JsonRpcRequest {
     pub id: Option<Value>,

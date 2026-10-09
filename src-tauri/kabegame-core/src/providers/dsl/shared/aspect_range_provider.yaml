@@ -1,0 +1,20 @@
+namespace: kabegame
+name: aspect_range_provider
+# 宽高比左开右闭区间 (min, max]：min_w/min_h < width/height <= max_w/max_h。
+# 下界 0x1 表示不设下界（有效比值恒大于 0），上界 1x0 表示不设上界（交叉乘法下 w*0 <= h*1 恒真），
+# 相邻区间首尾相接、互不重叠。宽高无效的图（aspect_ratio 为 NULL）不落入任何区间，由 aspect_unknown_provider 负责。
+properties:
+  min_w: { type: number, default: 0, min: 0, optional: false }
+  min_h: { type: number, default: 1, min: 0, optional: false }
+  max_w: { type: number, default: 1, min: 0, optional: false }
+  max_h: { type: number, default: 0, min: 0, optional: false }
+query:
+  # 边界用整数交叉乘法：精确，没有浮点边界误差，0 与 ∞ 也不用特判。
+  # 有效性交给生成列判断（与列定义同源）。无效时整条谓词为 FALSE 而不是 NULL，`~not` 取非能留下这些图。
+  # `+images.aspect_ratio` 的一元加号让规划器不为这条谓词选 idx_images_aspect_ratio：没有 STAT4 统计时它会把
+  # 任何区间都估成高选择性（实测 landscape 约占 6 成），在组合筛选里走索引回表再临时排序，
+  # 100 万图一页从约 0.2s 变成 14s。宽高比排序仍走该索引（gallery_sort_by_aspect_provider）。
+  where: |-
+    +images.aspect_ratio IS NOT NULL
+    AND images.width * ${properties.min_h} > images.height * ${properties.min_w}
+    AND images.width * ${properties.max_h} <= images.height * ${properties.max_w}

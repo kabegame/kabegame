@@ -1,0 +1,6 @@
+namespace: kabegame
+name: aspect_unknown_provider
+# 宽高比未知：宽或高缺失、非正（v036 生成列 aspect_ratio 为 NULL）。与 aspect_range_provider 的各区间互补。
+query:
+  # 正常库里这类图极少，允许走 idx_images_aspect_ratio 直接取 NULL 段。
+  where: images.aspect_ratio IS NULL

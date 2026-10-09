@@ -13,6 +13,9 @@ set -euo pipefail
 #   2. 停服务 → 上传二进制 → 启动服务。
 #
 # 前置：deno task build:web（产出 .kabegame/release/{kabegame,plugins/}）
+#
+# /rpc 接口埋点由服务器上的 systemd drop-in（kabegame.service.d/umami.conf）里的
+# KABEGAME_UMAMI_* 环境变量开启，本脚本不改它；见 cocs/web/RPC_TRACKING.md。
 
 REMOTE_HOST="cmtheit.com"
 REMOTE_USER="cmtheit"

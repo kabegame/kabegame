@@ -2,5 +2,5 @@ namespace: kabegame
 name: albums_images_hide_provider
 note: Same as images, leaving out images in the hidden album (the images:// hide/ prefix).
 query:
-  # 与 gallery_hide_router 同一句；hid_ai 由 albums_images_provider 贡献。
-  where: hid_ai.image_id IS NULL
+  # 与 gallery_hide_router 同一句（相关 NOT EXISTS，不依赖 join 别名）。
+  where: "NOT EXISTS (SELECT 1 FROM album_images AS hid_ex WHERE hid_ex.album_id = ${global.hidden_album_id} AND hid_ex.image_id = images.id)"

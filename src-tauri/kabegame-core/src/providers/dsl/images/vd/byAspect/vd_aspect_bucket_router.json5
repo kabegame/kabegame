@@ -1,17 +1,25 @@
 {
     "namespace": "kabegame",
     "name": "vd_aspect_bucket_router",
+    // 各语言「按尺寸」目录的友好名称落到这里，带具体区间的上下界，含义同 aspect_range_provider。
     "properties": {
-        "bucket": { "type": "string", "default": "other", "optional": false }
+        "min_w": { "type": "number", "default": 0, "min": 0, "optional": false },
+        "min_h": { "type": "number", "default": 1, "min": 0, "optional": false },
+        "max_w": { "type": "number", "default": 1, "min": 0, "optional": false },
+        "max_h": { "type": "number", "default": 0, "min": 0, "optional": false }
     },
     "query": {
         "delegate": {
-            "provider": "aspect_bucket_provider",
+            "provider": "aspect_range_provider",
             "properties": {
-                "bucket": "${properties.bucket}"
+                "min_w": "${properties.min_w}",
+                "min_h": "${properties.min_h}",
+                "max_w": "${properties.max_w}",
+                "max_h": "${properties.max_h}"
             }
         }
     },
+    // 分页子项与 vd_aspect_unknown_router 相同，改一处要同步另一处。
     "list": {
         "${page.name}": {
             "child_var": "page",

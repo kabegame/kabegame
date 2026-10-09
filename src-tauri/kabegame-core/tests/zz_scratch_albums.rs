@@ -232,7 +232,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             compatible_path TEXT,
             post_url TEXT,
             wallpaper_compatible_path TEXT,
-            image_metadata_id INTEGER
+            image_metadata_id INTEGER,
+            aspect_ratio REAL GENERATED ALWAYS AS (CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END) VIRTUAL
         );
         CREATE TABLE album_images (
             album_id TEXT NOT NULL,

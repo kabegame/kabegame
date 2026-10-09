@@ -184,7 +184,7 @@ PathQL 是懒树，`resources/list` 只暴露少量静态入口，不能枚举�
 SELECT COUNT(*) FROM (<inner>) AS pq_sub
 ```
 
-而 `<inner>` 来自 `build_sql`。`src-tauri/pathql-rs/src/compose/build.rs:72` 会在 SQL 末尾调用
+而 `<inner>` 来自 `build_sql`（只清掉最外层 ORDER BY，其余原样）。`src-tauri/pathql-rs/src/compose/build.rs:72` 会在 SQL 末尾调用
 `render_pagination`，所以 DSL 中的 LIMIT 会被保留在 COUNT 的子查询内。结果不是“读取最多 100，
 计数仍为全量”，而是 `count("images://gallery/all")` 也塌成 100。
 

@@ -2,16 +2,23 @@
     "namespace": "kabegame",
     "name": "gallery_aspect_bucket_router",
     "properties": {
-        "bucket": { "type": "string", "default": "other", "optional": false }
+        "min_w": { "type": "number", "default": 0, "min": 0, "optional": false },
+        "min_h": { "type": "number", "default": 1, "min": 0, "optional": false },
+        "max_w": { "type": "number", "default": 1, "min": 0, "optional": false },
+        "max_h": { "type": "number", "default": 0, "min": 0, "optional": false }
     },
     "query": {
         "delegate": {
-            "provider": "aspect_bucket_provider",
+            "provider": "aspect_range_provider",
             "properties": {
-                "bucket": "${properties.bucket}"
+                "min_w": "${properties.min_w}",
+                "min_h": "${properties.min_h}",
+                "max_w": "${properties.max_w}",
+                "max_h": "${properties.max_h}"
             }
         }
     },
+    // 子段与 gallery_aspect_unknown_router 相同，改一处要同步另一处。
     "resolve": {
         "filter_comb": {
             "provider": "gallery_filter_comb"

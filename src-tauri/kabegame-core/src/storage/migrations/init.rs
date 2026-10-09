@@ -80,7 +80,11 @@ CREATE TABLE images (
     compatible_path       TEXT,
     wallpaper_compatible_path TEXT,
     post_url              TEXT,
-    image_metadata_id     INTEGER REFERENCES image_metadata(id)
+    image_metadata_id     INTEGER REFERENCES image_metadata(id),
+    -- 宽高比数值，SQLite 随 width/height 自动维护（同 v036）
+    aspect_ratio          REAL GENERATED ALWAYS AS (
+        CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END
+    ) VIRTUAL
 );
 CREATE INDEX idx_crawled_at                    ON images(crawled_at DESC);
 CREATE INDEX idx_plugin_id                     ON images(plugin_id);
@@ -90,6 +94,7 @@ CREATE INDEX idx_images_hash                   ON images(hash);
 CREATE UNIQUE INDEX idx_images_local_path      ON images(local_path);
 CREATE INDEX idx_images_thumbnail_path         ON images(thumbnail_path);
 CREATE INDEX idx_images_last_set_wallpaper_at  ON images(last_set_wallpaper_at DESC);
+CREATE INDEX idx_images_aspect_ratio          ON images(aspect_ratio);
 
 -- ───────────── albums ─────────────
 CREATE TABLE albums (

@@ -965,7 +965,7 @@ pathql 体系对终端暴露三个核心查询入口：
 | 接口 | 语义 |
 |---|---|
 | `list(path)` | 解析路径到末端 provider，调其 `list` 抽象操作；返回 `Vec<ChildEntry>` |
-| `count(path)` | 解析路径，对末端 provider 累积 ProviderQuery 包 `SELECT COUNT(*) FROM (...)` 执行；返回 `u64` |
+| `count(path)` | 解析路径，对末端 provider 累积 ProviderQuery **清掉最外层 ORDER BY** 后包 `SELECT COUNT(*) FROM (...)` 执行；返回 `u64`。排序不改行集（同层 LIMIT/OFFSET 的行数也与顺序无关），去掉后 SQLite 才能压平子查询；`~~` 内层 CTE 的 ORDER BY 保留（决定切页与 rank），字段 / JOIN / GROUP BY / LIMIT 不动 |
 | `query<T>(path)` | 解析路径，执行末端 build_sql 产物；按行类型化为 `T`（终端提供 row→T 映射）；返回 `Vec<T>` |
 
 **未闭合 WHERE 组的门槛**：`count` / `query<T>` 这类**执行类**入口在路径含未闭合 `~any`

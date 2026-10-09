@@ -613,7 +613,8 @@ mod tests {
                 compatible_path TEXT,
                 post_url TEXT,
                 wallpaper_compatible_path TEXT,
-                image_metadata_id INTEGER
+                image_metadata_id INTEGER,
+                aspect_ratio REAL GENERATED ALWAYS AS (CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END) VIRTUAL
             );
             CREATE TABLE album_images (
                 album_id TEXT NOT NULL,
@@ -919,7 +920,7 @@ mod tests {
             ("date/2024y/01m", &[1, 2, 4, 5, 6, 7, 9, 10]),
             ("name/chinese", &[1, 3, 4, 5, 6, 10, 12]),
             ("size/1B-1MB", &[1, 3, 4, 5, 6, 7, 8, 10, 12]),
-            ("aspect/landscape-4x3-16x9", &[1, 3, 4, 5, 6, 7, 10, 12]),
+            ("aspect/4x3-16x9", &[1, 3, 4, 5, 6, 7, 10, 12]),
         ];
 
         for (dimension, expected) in cases {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  aspectBucketForDimensions,
   composeQueryFilters,
+  GALLERY_ASPECT_BUCKETS,
   GALLERY_SEARCH_MODES_BASIC,
   isActiveSearchTerm,
   makeSearchTerm,
@@ -17,7 +19,7 @@ import { buildComposableContextPrefix, buildComposablePath, parseComposablePath 
 
 const simple: GalleryFilterSet = {
   plugin: { pluginId: "pixiv" },
-  aspect: { range: "landscape-4x3-16x9" },
+  aspect: { range: "4x3-16x9" },
 };
 const advanced: GalleryQuery = [
   {
@@ -44,7 +46,7 @@ describe("简单 chip + 追加高级条件", () => {
         page: 1,
       }),
     ).toBe(
-      "plugin/pixiv/filter_comb/aspect/landscape-4x3-16x9/filter_comb/" +
+      "plugin/pixiv/filter_comb/aspect/4x3-16x9/filter_comb/" +
         "~not/~not/~any/search/native-metadata/sakura/~or/media-type/image/~end/~end/~end/sort/by-time/desc/1",
     );
     expect(splitQueryFilters(roundTrip(query))).toEqual({ simple, advanced });
@@ -375,5 +377,33 @@ describe("搜索表达式（! 非、() 分组、转义）", () => {
     const parsed = parseQueryBody(body.split("/"));
     expect(parsed).toEqual(term(["url"], "a; !b"));
     expect(serializeQueryBody(parsed!).body).toBe(body);
+  });
+});
+
+describe("aspectBucketForDimensions", () => {
+  it("按左开右闭区间归桶，过宽 / 过窄并入宽屏 / 竖屏", () => {
+    expect(aspectBucketForDimensions(900, 1600)).toBe("-3x4"); // 9:16
+    expect(aspectBucketForDimensions(300, 400)).toBe("-3x4"); // 3:4 右闭
+    expect(aspectBucketForDimensions(100, 300)).toBe("-3x4"); // 1:3 过窄
+    expect(aspectBucketForDimensions(1000, 1000)).toBe("3x4-4x3");
+    expect(aspectBucketForDimensions(400, 300)).toBe("3x4-4x3"); // 4:3 右闭
+    expect(aspectBucketForDimensions(1920, 1080)).toBe("4x3-16x9"); // 16:9 右闭
+    expect(aspectBucketForDimensions(1921, 1080)).toBe("16x9-");
+    expect(aspectBucketForDimensions(3000, 1000)).toBe("16x9-"); // 3:1 过宽
+  });
+
+  it("宽高缺失或非正时不归桶", () => {
+    expect(aspectBucketForDimensions(undefined, 100)).toBeNull();
+    expect(aspectBucketForDimensions(0, 100)).toBeNull();
+    expect(aspectBucketForDimensions(100, -1)).toBeNull();
+  });
+
+  it("每个桶段都能被解析并往返", () => {
+    for (const { range } of GALLERY_ASPECT_BUCKETS) {
+      const body = `aspect/${range}`;
+      const parsed = parseQueryBody(body.split("/"));
+      expect(parsed).not.toBeNull();
+      expect(serializeQueryBody(parsed!).body).toBe(body);
+    }
   });
 });

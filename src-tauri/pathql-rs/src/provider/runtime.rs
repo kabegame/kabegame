@@ -868,10 +868,14 @@ impl ProviderRuntime {
     }
 
     /// 已 fold 好的 composed → 行数（`SELECT COUNT(*) FROM (<inner>) AS pq_sub`）。
+    ///
+    /// inner 清掉最外层 ORDER BY
     fn count_composed(&self, composed: &ProviderQuery) -> Result<usize, EngineError> {
         let ctx = self.template_context();
         let dialect = self.executor.dialect();
-        let (inner_sql, values) = composed.build_sql(&ctx, dialect).map_err(|e| {
+        let mut unordered = composed.clone();
+        unordered.order = Default::default();
+        let (inner_sql, values) = unordered.build_sql(&ctx, dialect).map_err(|e| {
             EngineError::FactoryFailed("<runtime>".into(), "count".into(), e.to_string())
         })?;
         let sql = format!("SELECT COUNT(*) AS n FROM ({}) AS pq_sub", inner_sql);
@@ -2972,6 +2976,31 @@ mod tests {
         }
     }
 
+    /// 带参数 WHERE、带参数 ORDER BY（随机排序式 seed）与 LIMIT 的叶子。
+    struct SortedImagesLeaf;
+    impl Provider for SortedImagesLeaf {
+        fn apply_query(&self, q: ProviderQuery, _: &ProviderContext) -> ProviderQuery {
+            let mut q =
+                q.with_where_raw("images.plugin_id = ?", &[TemplateValue::Text("p".into())]);
+            q.from = Some(crate::compose::FromSource::table("images"));
+            q.adhoc_properties
+                .insert("seed".into(), TemplateValue::Int(7));
+            q.order.entries.push((
+                "kb_rand(${properties.seed}, images.id)".into(),
+                crate::ast::OrderDirection::Asc,
+            ));
+            q.limit = Some(crate::ast::NumberOrTemplate::Number(5.0));
+            q
+        }
+        fn list(
+            &self,
+            _: &ProviderQuery,
+            _: &ProviderContext,
+        ) -> Result<Vec<ListRef>, EngineError> {
+            Ok(Vec::new())
+        }
+    }
+
     struct RowsProvider;
     impl Provider for RowsProvider {
         fn fetch_rows(
@@ -3066,6 +3095,40 @@ mod tests {
         );
         assert!(sql.contains("FROM images"), "inner sql missing: {}", sql);
         assert!(sql.ends_with(") AS pq_sub"), "sql: {}", sql);
+    }
+
+    #[test]
+    fn count_drops_top_level_order_and_its_params() {
+        let exec = Arc::new(CapturingExecutor {
+            captured: std::sync::Mutex::new(Vec::new()),
+            rows_for_inner: vec![],
+            rows_for_count: vec![serde_json::json!({"n": 3})],
+        });
+        let root: Arc<dyn Provider> = Arc::new(SortedImagesLeaf);
+        let runtime = runtime_with_root_and_executor(
+            root,
+            exec.clone() as Arc<dyn crate::provider::SqlExecutor>,
+        );
+
+        runtime.fetch("test://").expect("fetch ok");
+        assert_eq!(runtime.count("test://").expect("count ok"), 3);
+        let captured = exec.captured.lock().unwrap();
+        let (fetch_sql, fetch_params) = &captured[0];
+        assert!(
+            fetch_sql.contains("ORDER BY kb_rand(?, images.id) ASC LIMIT 5"),
+            "{fetch_sql}"
+        );
+        assert_eq!(
+            fetch_params,
+            &vec![TemplateValue::Text("p".into()), TemplateValue::Int(7)]
+        );
+        // 计数：排序及其 seed 参数一起消失，WHERE 参数与 LIMIT 保留
+        let (count_sql, count_params) = &captured[1];
+        assert_eq!(
+            count_sql,
+            "SELECT COUNT(*) AS n FROM (SELECT images.* FROM images WHERE (images.plugin_id = ?) LIMIT 5) AS pq_sub"
+        );
+        assert_eq!(count_params, &vec![TemplateValue::Text("p".into())]);
     }
 
     #[test]

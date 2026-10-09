@@ -22,11 +22,11 @@ describe("追加高级条件后的简单 facet 计数", () => {
         prefix,
         {
           plugin: { pluginId: "pixiv" },
-          aspect: { range: "landscape-4x3-16x9" },
+          aspect: { range: "4x3-16x9" },
         },
         "plugin",
         "plugin/konachan",
       ),
-    ).toBe(prefix + "aspect/landscape-4x3-16x9/filter_comb/plugin/konachan");
+    ).toBe(prefix + "aspect/4x3-16x9/filter_comb/plugin/konachan");
   });
 });

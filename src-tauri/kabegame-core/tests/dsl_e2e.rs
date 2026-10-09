@@ -232,7 +232,8 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             compatible_path TEXT,
             post_url TEXT,
             wallpaper_compatible_path TEXT,
-            image_metadata_id INTEGER
+            image_metadata_id INTEGER,
+            aspect_ratio REAL GENERATED ALWAYS AS (CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END) VIRTUAL
         );
         CREATE TABLE album_images (
             album_id TEXT NOT NULL,
@@ -522,6 +523,10 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn pathql_rs::SqlExecutor
 }
 
 fn build_runtime() -> Arc<ProviderRuntime> {
+    build_runtime_with(fixture_db())
+}
+
+fn build_runtime_with(conn: Arc<Mutex<Connection>>) -> Arc<ProviderRuntime> {
     let globals = HashMap::from([
         (
             "favorite_album_id".to_string(),
@@ -532,7 +537,7 @@ fn build_runtime() -> Arc<ProviderRuntime> {
             TemplateValue::Text(HIDDEN_ALBUM_ID.to_string()),
         ),
     ]);
-    let runtime = ProviderRuntime::new(make_executor(fixture_db()), globals);
+    let runtime = ProviderRuntime::new(make_executor(conn), globals);
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);
     runtime
@@ -1111,6 +1116,275 @@ fn gallery_label_search_matches_full_path_substrings_and_frontend_and_shape() {
 }
 
 #[test]
+fn gallery_label_search_negated_and_or_combinators() {
+    // 1/2/3 号图挂 Pixiv/Character/Hatsune：取非剔除且只剔除这三张；与原生元数据 OR 后再取非同样成立
+    let runtime = build_runtime();
+    let total = runtime.count("images://gallery/all").unwrap();
+    assert_eq!(
+        runtime
+            .count("images://gallery/~not/search/label/hatsune/~end/all")
+            .unwrap(),
+        total - 3
+    );
+    assert_eq!(
+        runtime
+            .count(
+                "images://gallery/~not/~any/search/native-metadata/hatsune/~or/search/label/hatsune/~end/~end/all"
+            )
+            .unwrap(),
+        total - 3
+    );
+    assert_eq!(
+        ids(runtime
+            .fetch(
+                "images://gallery/~any/search/native-metadata/hatsune/~or/search/label/hatsune/~end/sort/by-id"
+            )
+            .unwrap()),
+        ["1", "2", "3"]
+    );
+}
+
+/// 应用侧的宽高比桶（与前端 GALLERY_ASPECT_BUCKETS 一致）。
+const APP_ASPECT_BUCKETS: [&str; 5] = ["-3x4", "3x4-4x3", "4x3-16x9", "16x9-", "unknown"];
+
+/// 段 → 参考判定：`None` = unknown；区间 (min, max]，缺下界 0x1、缺上界 1x0。
+fn aspect_segment_bounds(segment: &str) -> Option<((i64, i64), (i64, i64))> {
+    if segment == "unknown" {
+        return None;
+    }
+    let ratio = |s: &str| -> Option<(i64, i64)> {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse().unwrap(), h.parse().unwrap()))
+    };
+    let (lo, hi) = segment.split_once('-').unwrap();
+    Some((ratio(lo).unwrap_or((0, 1)), ratio(hi).unwrap_or((1, 0))))
+}
+
+fn aspect_reference_ids(conn: &Arc<Mutex<Connection>>, segment: &str) -> Vec<String> {
+    let conn = conn.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, width, height FROM images ORDER BY id")
+        .unwrap();
+    let rows: Vec<(i64, Option<i64>, Option<i64>)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let bounds = aspect_segment_bounds(segment);
+    rows.into_iter()
+        .filter(|&(_, w, h)| {
+            let valid = matches!((w, h), (Some(w), Some(h)) if w > 0 && h > 0);
+            match (bounds, valid) {
+                (None, valid) => !valid,
+                (Some(_), false) => false,
+                (Some(((lo_w, lo_h), (hi_w, hi_h))), true) => {
+                    let (w, h) = (w.unwrap(), h.unwrap());
+                    w * lo_h > h * lo_w && w * hi_h <= h * hi_w
+                }
+            }
+        })
+        .map(|(id, _, _)| id.to_string())
+        .collect()
+}
+
+#[test]
+fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown() {
+    // 夹具之外补几张宽高无效的图与恰好落在边界上的图（9:16、7:3），逐段与有理数参考实现比对
+    let conn = fixture_db();
+    {
+        let c = conn.lock().unwrap();
+        for (id, w, h) in [
+            (201_i64, None, Some(100_i64)),
+            (202, Some(0), Some(100)),
+            (203, Some(100), Some(0)),
+            (204, Some(-5), Some(10)),
+            (205, Some(900), Some(1600)),
+            (206, Some(2100), Some(900)),
+        ] {
+            c.execute(
+                "INSERT INTO images
+                 (id, url, local_path, plugin_id, crawled_at, hash, type, width, height, display_name, size)
+                 VALUES (?1, ?2, ?3, 'pixiv', 1680700000, ?4, 'image/jpeg', ?5, ?6, ?7, 10)",
+                (
+                    id,
+                    format!("https://example.test/{id}.jpg"),
+                    format!("D:/extra/{id}.jpg"),
+                    format!("hash-{id}"),
+                    w,
+                    h,
+                    format!("extra-{id}"),
+                ),
+            )
+            .unwrap();
+        }
+    }
+    let runtime = build_runtime_with(conn.clone());
+    let gallery_ids = |segment: &str| {
+        ids(runtime
+            .fetch(&format!("images://gallery/aspect/{segment}/filter_comb/sort/by-id"))
+            .unwrap())
+    };
+
+    for segment in [
+        "-9x16", "9x16-3x4", "3x4-4x3", "4x3-16x9", "16x9-7x3", "7x3-", "-3x4", "16x9-", "unknown",
+    ] {
+        assert_eq!(
+            gallery_ids(segment),
+            aspect_reference_ids(&conn, segment),
+            "segment={segment}"
+        );
+    }
+    // 边界归属：恰为 9:16 的 205 属于 -9x16，恰为 7:3 的 206 属于 16x9-7x3
+    assert!(gallery_ids("-9x16").contains(&"205".to_string()));
+    assert!(gallery_ids("16x9-7x3").contains(&"206".to_string()));
+    assert_eq!(gallery_ids("unknown"), ["201", "202", "203", "204"]);
+
+    // 应用的五个桶互不重叠、合起来正好是全部图片
+    let mut union: Vec<String> = APP_ASPECT_BUCKETS.iter().flat_map(|s| gallery_ids(s)).collect();
+    let total = union.len();
+    union.sort();
+    union.dedup();
+    assert_eq!(union.len(), total, "buckets overlap");
+    assert_eq!(total, runtime.count("images://gallery/all").unwrap());
+
+    // 取非不丢宽高无效的图（谓词为 FALSE 而非 NULL）
+    assert_eq!(
+        runtime
+            .count("images://gallery/~not/aspect/4x3-16x9/~end/all")
+            .unwrap(),
+        total - gallery_ids("4x3-16x9").len()
+    );
+
+    // 段值不可枚举；非法段不解析
+    assert!(runtime.list("images://gallery/aspect").unwrap().is_empty());
+    for bad in ["landscape-4x3-16x9", "other", "0x1-3x4", "3x4", "-", "3x4-x"] {
+        assert!(
+            runtime
+                .fetch(&format!("images://gallery/aspect/{bad}/x10x/1"))
+                .is_err(),
+            "bad={bad}"
+        );
+    }
+
+    // VD 友好目录落到与前端同一组桶：逐个目录与对应画廊段的结果集一致
+    let _locale_guard = lock_locale_tests();
+    let vd_cases = [
+        ("zh", "images://vd/i18n-zh_CN/按尺寸", ["竖屏 (3x4 及更窄)", "方正 (3x4-4x3)", "横屏 (4x3-16x9)", "宽屏 (宽于 16x9)", "未知比例"]),
+        ("zhtw", "images://vd/i18n-zhtw/按尺寸", ["豎屏 (3x4 及更窄)", "方正 (3x4-4x3)", "橫屏 (4x3-16x9)", "寬屏 (寬於 16x9)", "未知比例"]),
+        ("en", "images://vd/i18n-en_US/By Dimensions", ["Portrait (3x4 or narrower)", "Square-ish (3x4-4x3)", "Landscape (4x3-16x9)", "Widescreen (wider than 16x9)", "Unknown ratio"]),
+        ("ja", "images://vd/i18n-ja/寸法別", ["縦長 (3x4 以下)", "スクエア寄り (3x4-4x3)", "横長 (4x3-16x9)", "ワイド (16x9 より横長)", "比率不明"]),
+        ("ko", "images://vd/i18n-ko/크기 비율별", ["세로형 (3x4 이하)", "정방형 (3x4-4x3)", "가로형 (4x3-16x9)", "와이드 (16x9보다 넓음)", "비율 알 수 없음"]),
+    ];
+    for (locale, root, names) in vd_cases {
+        kabegame_i18n::set_locale(locale);
+        let mut listed = runtime
+            .list(root)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect::<Vec<_>>();
+        listed.sort();
+        let mut expected_names = names.map(String::from).to_vec();
+        expected_names.sort();
+        assert_eq!(listed, expected_names, "{root}");
+        for (name, segment) in names.iter().zip(APP_ASPECT_BUCKETS) {
+            assert!(is_windows_safe_vd_dir_name(name), "{name}");
+            let mut vd = ids(runtime.fetch(&format!("{root}/{name}/x1000x/1")).unwrap());
+            vd.sort_by_key(|id| id.parse::<i64>().unwrap());
+            assert_eq!(vd, gallery_ids(segment), "{root}/{name} vs aspect/{segment}");
+        }
+    }
+}
+
+#[test]
+fn gallery_aspect_sort_sql_orders_by_generated_column() {
+    // (aspect_ratio, rowid) 索引覆盖「比值 + id 兜底」排序，翻页按索引顺序读
+    let runtime = build_runtime();
+    let resolved = runtime
+        .resolve("images://gallery/sort/by-aspect/x10x/1")
+        .unwrap();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    let (sql, _) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(sql.contains("ORDER BY images.aspect_ratio ASC, images.id ASC"), "{sql}");
+}
+
+#[test]
+fn count_without_top_order_matches_fetched_rows() {
+    // count 去掉最外层 ORDER BY：带参数的随机排序、反序、分页、`~~` 之后（内层排序 + LIMIT 切页）
+    // 与 rank 定位，计数都必须与 fetch 行数一致
+    let runtime = build_runtime();
+    for path in [
+        "images://gallery/sort/random-42",
+        "images://gallery/sort/random-42/desc",
+        "images://gallery/hide/sort/by-aspect/desc",
+        "images://gallery/search/display-name/image/sort/by-size",
+        "images://gallery/sort/random-42/x3x/2",
+        "images://gallery/sort/by-time/x3x/1/~~/rank/~~/id_3",
+        "albums://roots/x10x/1/~~/images",
+        "albums://roots/x10x/1/~~/images/hide",
+    ] {
+        let fetched = runtime.fetch(path).unwrap().len();
+        assert_eq!(runtime.count(path).unwrap(), fetched, "path={path}");
+    }
+    assert_eq!(
+        runtime.count("images://gallery/sort/random-42").unwrap(),
+        runtime.count("images://gallery/all").unwrap()
+    );
+}
+
+#[test]
+fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
+    // 夹具：9 号图在隐藏画册，10 号图在收藏画册。标记是 EXISTS 子查询，取值只有整数 0/1，
+    // 不再 LEFT JOIN album_images（行数与 JOIN 写法一致：主键保证 JOIN 最多匹配一行）。
+    let _locale_guard = lock_locale_tests();
+    let runtime = build_runtime();
+    kabegame_i18n::set_locale("zh");
+    let flags = |path: &str| -> Vec<(String, i64, i64)> {
+        runtime
+            .fetch(path)
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let id = row["id"].as_str().unwrap().to_string();
+                (id, row["is_favorite"].as_i64().unwrap(), row["is_hidden"].as_i64().unwrap())
+            })
+            .collect()
+    };
+    for path in [
+        "images://gallery/sort/by-id/x100x/1",
+        "images://vd/i18n-zh_CN/按媒体/所有格式/1",
+    ] {
+        let rows = flags(path);
+        assert!(rows.len() >= 10, "path={path}");
+        for (id, fav, hid) in rows {
+            assert_eq!(fav, i64::from(id == "10"), "path={path} id={id}");
+            assert_eq!(hid, i64::from(id == "9"), "path={path} id={id}");
+        }
+    }
+
+    let total = runtime.count("images://gallery/all").unwrap();
+    assert_eq!(runtime.count("images://gallery/hide/all").unwrap(), total - 1);
+    assert!(!ids(runtime.fetch("images://gallery/hide/sort/by-id/x100x/1").unwrap())
+        .contains(&"9".to_string()));
+
+    let resolved = runtime
+        .resolve("images://gallery/hide/sort/by-id/x10x/1")
+        .unwrap();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    let (sql, _) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(!sql.contains("LEFT JOIN album_images"), "{sql}");
+    assert!(sql.contains("NOT EXISTS (SELECT 1 FROM album_images AS hid_ex"), "{sql}");
+}
+
+#[test]
 fn gallery_label_tree_route_is_removed() {
     let runtime = build_runtime();
     assert!(runtime
@@ -1132,6 +1406,9 @@ fn gallery_label_search_sql_has_no_token_udf_or_label_self_join() {
         .unwrap();
 
     assert!(sql.contains("instr(LOWER(COALESCE(la.label_path, '')), LOWER(?)) > 0"));
+    // 不相关 IN 子查询：命中集合只算一次；相关 EXISTS 会逐图展开全部标签行（prod 上慢约 10 倍）
+    assert!(sql.contains("images.id IN ("));
+    assert!(!sql.contains("lai.image_id = images.id"));
     assert!(!sql.contains("kb_label_tokens"));
     assert!(!sql.contains("JOIN albums AS lm"));
     assert!(format!("{params:?}").contains("character"));
@@ -1190,55 +1467,38 @@ fn gallery_search_sort_paths_allow_empty_results() {
 fn gallery_aspect_buckets_filter_and_explicit_sort_by_ratio() {
     let runtime = build_runtime();
 
-    let buckets = runtime.list("images://gallery/aspect").unwrap();
-    let names = buckets
-        .iter()
-        .map(|child| child.name.as_str())
-        .collect::<Vec<_>>();
-    for expected in [
-        "landscape-4x3-16x9",
-        "widescreen-16x9-21x9",
-        "square-3x4-4x3",
-        "portrait-9x16-3x4",
-        "other",
-    ] {
-        assert!(names.contains(&expected), "aspect names={names:?}");
-    }
-
-    let portrait = runtime
-        .fetch("images://gallery/aspect/portrait-9x16-3x4/x10x/1")
-        .unwrap();
-    assert_eq!(ids(portrait), ["111"]);
+    // 111 = 9:16，112 = 3:4（右闭，归竖屏），117 = 1:3（过窄并入竖屏）
+    let portrait = runtime.fetch("images://gallery/aspect/-3x4/x10x/1").unwrap();
+    assert_eq!(ids(portrait), ["111", "112", "117"]);
 
     let landscape = runtime
-        .fetch("images://gallery/aspect/landscape-4x3-16x9/x10x/1")
+        .fetch("images://gallery/aspect/4x3-16x9/x10x/1")
         .unwrap();
     assert_eq!(ids(landscape), ["114", "118"]);
 
     let landscape_desc = runtime
-        .fetch("images://gallery/aspect/landscape-4x3-16x9/desc/x10x/1")
+        .fetch("images://gallery/aspect/4x3-16x9/desc/x10x/1")
         .unwrap();
     assert_eq!(ids(landscape_desc), ["118", "114"]);
 
-    let widescreen = runtime
-        .fetch("images://gallery/aspect/widescreen-16x9-21x9/x10x/1")
-        .unwrap();
-    assert_eq!(ids(widescreen), ["115"]);
+    // 115 ≈ 2.13，116 = 3:1（过宽并入宽屏）
+    let widescreen = runtime.fetch("images://gallery/aspect/16x9-/x10x/1").unwrap();
+    assert_eq!(ids(widescreen), ["115", "116"]);
 
-    let other = runtime
-        .fetch("images://gallery/aspect/other/x10x/1")
+    let unknown = runtime
+        .fetch("images://gallery/aspect/unknown/x10x/1")
         .unwrap();
-    assert_eq!(ids(other), ["116", "117"]);
+    assert!(unknown.is_empty());
 
-    let other_by_aspect = runtime
-        .fetch("images://gallery/aspect/other/filter_comb/sort/by-aspect/x10x/1")
+    let widescreen_by_aspect = runtime
+        .fetch("images://gallery/aspect/16x9-/filter_comb/sort/by-aspect/x10x/1")
         .unwrap();
-    assert_eq!(ids(other_by_aspect), ["117", "116"]);
+    assert_eq!(ids(widescreen_by_aspect), ["115", "116"]);
 
-    let other_by_aspect_desc = runtime
-        .fetch("images://gallery/aspect/other/filter_comb/sort/by-aspect/desc/x10x/1")
+    let widescreen_by_aspect_desc = runtime
+        .fetch("images://gallery/aspect/16x9-/filter_comb/sort/by-aspect/desc/x10x/1")
         .unwrap();
-    assert_eq!(ids(other_by_aspect_desc), ["116", "117"]);
+    assert_eq!(ids(widescreen_by_aspect_desc), ["116", "115"]);
 }
 
 #[test]
@@ -1246,12 +1506,12 @@ fn gallery_filter_combines_dimensions_and_sort() {
     let runtime = build_runtime();
 
     let image_landscape = runtime
-        .fetch("images://gallery/media-type/image/filter_comb/aspect/landscape-4x3-16x9/x10x/1")
+        .fetch("images://gallery/media-type/image/filter_comb/aspect/4x3-16x9/x10x/1")
         .unwrap();
     assert_eq!(ids(image_landscape), ["114"]);
 
     let image_landscape_by_size_desc = runtime
-        .fetch("images://gallery/media-type/image/filter_comb/aspect/landscape-4x3-16x9/filter_comb/sort/by-size/desc/x10x/1")
+        .fetch("images://gallery/media-type/image/filter_comb/aspect/4x3-16x9/filter_comb/sort/by-size/desc/x10x/1")
         .unwrap();
     assert_eq!(ids(image_landscape_by_size_desc), ["114"]);
 
@@ -1261,7 +1521,7 @@ fn gallery_filter_combines_dimensions_and_sort() {
     assert_eq!(ids(plugin_image_webp), ["119"]);
 
     let count = runtime
-        .count("images://gallery/media-type/image/filter_comb/aspect/other")
+        .count("images://gallery/media-type/image/filter_comb/aspect/16x9-")
         .unwrap();
     assert_eq!(count, 2);
 }
@@ -1467,7 +1727,7 @@ fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
         "{zh_names:?}"
     );
     assert!(zh_names.contains(&"横屏 (4x3-16x9)"), "{zh_names:?}");
-    assert!(zh_names.contains(&"宽屏 (16x9-21x9)"), "{zh_names:?}");
+    assert!(zh_names.contains(&"宽屏 (宽于 16x9)"), "{zh_names:?}");
     assert_eq!(zh_names.len(), 5, "{zh_names:?}");
     assert_eq!(
         ids(runtime

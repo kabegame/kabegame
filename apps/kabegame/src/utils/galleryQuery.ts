@@ -263,13 +263,37 @@ export type GalleryFilter =
 export const DEFAULT_GALLERY_FILTER: GalleryFilter = { type: "all" };
 export const DEFAULT_GALLERY_FILTER_SET: GalleryFilterSet = {};
 
+/**
+ * 宽高比桶 = 后端 `aspect/<段>` 的段值（文法见 gallery_aspect_router）：比值写成 `<宽>x<高>`，
+ * 区间左开右闭 `(min, max]`，`-3x4` 不设下界、`16x9-` 不设上界，`unknown` 为宽高缺失或非正。
+ * 五个桶互不重叠、合起来覆盖全部图片；VD「按尺寸」目录落到同一组桶。
+ */
 export const GALLERY_ASPECT_BUCKETS = [
-  { range: "landscape-4x3-16x9", labelKey: "filterAspect_landscape" },
-  { range: "widescreen-16x9-21x9", labelKey: "filterAspect_widescreen" },
-  { range: "square-3x4-4x3", labelKey: "filterAspect_square" },
-  { range: "portrait-9x16-3x4", labelKey: "filterAspect_portrait" },
-  { range: "other", labelKey: "filterAspect_other" },
+  { range: "4x3-16x9", labelKey: "filterAspect_landscape" },
+  { range: "16x9-", labelKey: "filterAspect_widescreen" },
+  { range: "3x4-4x3", labelKey: "filterAspect_square" },
+  { range: "-3x4", labelKey: "filterAspect_portrait" },
+  { range: "unknown", labelKey: "filterAspect_unknown" },
 ] as const;
+
+/**
+ * 按宽高找所属的宽高比桶，判定与后端 aspect_range_provider 同为整数交叉乘法。
+ * 宽高缺失或非正时返回 null（不给出 unknown，调用方据此隐藏「按此宽高比筛选」）。
+ */
+export function aspectBucketForDimensions(width?: number | null, height?: number | null): string | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  const w = Math.round(width as number);
+  const h = Math.round(height as number);
+  if (w <= 0 || h <= 0) return null;
+  for (const { range } of GALLERY_ASPECT_BUCKETS) {
+    const m = /^(?:(\d+)x(\d+))?-(?:(\d+)x(\d+))?$/.exec(range);
+    if (!m) continue;
+    const [minW, minH] = m[1] ? [Number(m[1]), Number(m[2])] : [0, 1];
+    const [maxW, maxH] = m[3] ? [Number(m[3]), Number(m[4])] : [1, 0];
+    if (w * minH > h * minW && w * maxH <= h * maxW) return range;
+  }
+  return null;
+}
 
 function cleanObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined && v !== "")) as T;

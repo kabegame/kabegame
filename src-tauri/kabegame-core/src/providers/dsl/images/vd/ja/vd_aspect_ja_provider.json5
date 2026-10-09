@@ -1,26 +1,29 @@
 {
     "namespace": "kabegame",
     "name": "vd_aspect_ja_provider",
+    // 友好名称 → 具体桶，桶与前端 GALLERY_ASPECT_BUCKETS 一致（注释里是对应的画廊段）；
+    // 名称里不能出现 Windows 文件名非法字符，比值写成 x 而不是冒号。
     "list": {
         "横長 (4x3-16x9)": {
+            // 4x3-16x9
             "provider": "vd_aspect_bucket_router",
-            "properties": { "bucket": "landscape" }
+            "properties": { "min_w": 4, "min_h": 3, "max_w": 16, "max_h": 9 }
         },
-        "ワイド (16x9-21x9)": {
+        "ワイド (16x9 より横長)": {
+            // 16x9-
             "provider": "vd_aspect_bucket_router",
-            "properties": { "bucket": "widescreen" }
+            "properties": { "min_w": 16, "min_h": 9, "max_w": 1, "max_h": 0 }
         },
         "スクエア寄り (3x4-4x3)": {
+            // 3x4-4x3
             "provider": "vd_aspect_bucket_router",
-            "properties": { "bucket": "square" }
+            "properties": { "min_w": 3, "min_h": 4, "max_w": 4, "max_h": 3 }
         },
-        "縦長 (9x16-3x4)": {
+        "縦長 (3x4 以下)": {
+            // -3x4
             "provider": "vd_aspect_bucket_router",
-            "properties": { "bucket": "portrait" }
+            "properties": { "min_w": 0, "min_h": 1, "max_w": 3, "max_h": 4 }
         },
-        "その他 (広すぎ-細すぎ-不正)": {
-            "provider": "vd_aspect_bucket_router",
-            "properties": { "bucket": "other" }
-        }
+        "比率不明": { "provider": "vd_aspect_unknown_router" }
     }
 }

@@ -97,6 +97,7 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 
 - 每个路径段都会继续收窄前一个节点，沿路径累积的过滤条件按 AND 组合；路径大小写敏感。
 - `filter_comb` 用于在已有过滤之后再组合一个维度，例如 `images://gallery/plugin/patreon/filter_comb/media-type/image/desc/x100x/1`。
+- `aspect` 不可枚举，直接写宽高比区间段：`-3x4`（≤ 3:4）、`3x4-4x3`、`4x3-16x9`、`16x9-`（大于 16:9）、`unknown`（尺寸缺失）。比值为正整数 `<宽>x<高>`，区间左开右闭，可写任意比值，例如 `images://gallery/aspect/16x9-7x3/x100x/1`。
 - `sort` 是 `all` 的**兄弟节点**，不是子节点。正确写法是 `gallery/sort/<key>/...`，不要写成 `gallery/all/sort/...`。
 - `/desc` 反转当前排序方向；默认画廊顺序为 `crawledAt` 升序，因此 `/desc` 表示最新在前。
 - `hide` 是排除隐藏图片的**前缀**。`gallery/hide/all/...` 有效，`gallery/all/hide/...` 无效。

@@ -1,0 +1,35 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_aspect_unknown_router",
+    "query": {
+        "delegate": { "provider": "aspect_unknown_provider" }
+    },
+    // 分页子项与 vd_aspect_bucket_router 相同，改一处要同步另一处。
+    "list": {
+        "${page.name}": {
+            "child_var": "page",
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            }
+        }
+    },
+    "resolve": {
+        "x([1-9][0-9]*)x": {
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        },
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

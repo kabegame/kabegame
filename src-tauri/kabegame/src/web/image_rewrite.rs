@@ -10,9 +10,19 @@
 
 use std::path::Path;
 
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
 
 pub const CDN_BASE: &str = "https://cdn.kabegame.com";
+
+/// URL 路径段编码集：只保留 RFC 3986 unreserved 字符。
+/// 文件名可能自带字面量 `%`（如 yandere 落盘的 `yande.re%20447155.jpg`），
+/// 不编码会被 CDN 解成空格而 404；空格、`#`、`?`、非 ASCII 同理。
+const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 /// 把文件系统路径改写成 CDN URL。空串 / 已是 http(s) URL 时原样返回。
 pub fn rewrite_fs_path(p: &str) -> String {
@@ -32,7 +42,12 @@ pub fn rewrite_fs_path(p: &str) -> String {
         .and_then(|pp| pp.file_name())
         .and_then(|s| s.to_str())
         .unwrap_or("images");
-    format!("{}/{}/{}", CDN_BASE, dir, filename)
+    format!(
+        "{}/{}/{}",
+        CDN_BASE,
+        utf8_percent_encode(dir, PATH_SEGMENT),
+        utf8_percent_encode(filename, PATH_SEGMENT)
+    )
 }
 
 /// 对 core 返回的图片 `Value` 就地改写 `local_path` / `thumbnail_path`。
@@ -81,6 +96,18 @@ mod tests {
         assert_eq!(
             rewrite_fs_path("/home/cmtheit/.local/share/Kabegame/thumbnails/xyz.webp"),
             format!("{}/thumbnails/xyz.webp", CDN_BASE),
+        );
+    }
+
+    #[test]
+    fn encodes_literal_percent_and_unsafe_chars() {
+        assert_eq!(
+            rewrite_fs_path("/home/cmtheit/.local/share/Kabegame/images/yande.re%20447155 a#b?.jpg"),
+            format!("{}/images/yande.re%2520447155%20a%23b%3F.jpg", CDN_BASE),
+        );
+        assert_eq!(
+            rewrite_fs_path("/data/images/壁纸.png"),
+            format!("{}/images/%E5%A3%81%E7%BA%B8.png", CDN_BASE),
         );
     }
 

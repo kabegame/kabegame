@@ -49,6 +49,7 @@ mod v032_album_parent_index;
 mod v033_album_ancestor_path_index;
 mod v034_run_config_output_album;
 mod v035_task_max_concurrent_downloads;
+mod v036_image_aspect_ratio;
 
 use rusqlite::Connection;
 
@@ -204,13 +205,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "task_max_concurrent_downloads",
         up: v035_task_max_concurrent_downloads::up,
     },
+    Migration {
+        version: 36,
+        name: "image_aspect_ratio",
+        up: v036_image_aspect_ratio::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 35;
+pub const LATEST_VERSION: u32 = 36;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

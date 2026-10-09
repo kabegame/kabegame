@@ -291,6 +291,7 @@ pub fn run() {
             eprintln!("服务器初始化失败: {}", e);
             process::exit(1);
         }
+        crate::web::track::init();
 
         // web 无前端弹窗确认：启动时自动触发所有漏跑的定时任务
         tokio::spawn(async {

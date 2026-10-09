@@ -86,15 +86,17 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 
 ## 搜索
 
-`search/label/<q>`（精确）与 `search/label-tree/<q>`（包含子标签），`q` 为英文逗号分隔的 token，
-token 之间为「且」，比较不区分大小写；含 `/` 的 token 按 `label_path` 匹配，否则按 `label_key`。
-`kb_label_tokens` 对每个 `/` 段去首尾空白并折叠连续空白，与 key 的空格规则对齐。
+`search/label/<q>` 对每个标签叶子的完整 `label_path` 做一次不区分大小写的子串匹配（`instr` + `LOWER`），
+一条 `search/label/<词>` 只表达一个词；多个词的「且」由前端拆成多段经 `filter_comb` 累积，SQL 内不分词。
+旧的 `search/label-tree` 与 `kb_label_tokens` 已移除。
 
-- `gallery_search_label_router` / `gallery_search_label_tree_router` → 共用
-  `gallery_search_label_query_provider`（`properties.tree = "0" | "1"`）。
-- 逗号拆分由宿主 SQL 函数 `kb_label_tokens(q)`（`storage/dsl_funcs.rs`）返回 JSON 数组，交给
-  `json_each` 展开，避免用户输入的引号破坏手拼 JSON。
-- WHERE 是关系除法「不存在未命中的 token」；token 集为空（只输入逗号）时显式判空，否则会恒真命中全部。
+- `gallery_search_label_router` → `gallery_search_label_query_provider`（YAML）。
+- WHERE 是**不相关**的 `images.id IN (SELECT lai.image_id FROM albums la JOIN album_images lai … WHERE la.type = 'label' AND instr(…))`：
+  命中集合整条查询只算一次（扫一遍 `albums` 求值字符串、按 `(album_id, image_id)` 主键取命中标签的图并物化），
+  外层每行一次探测。不要写回相关 `EXISTS (… lai.image_id = images.id …)`：每张图平均约 20 个标签，逐图展开
+  再回表算 `LOWER/instr`，prod 2 万图、三个 `~not` 词的 COUNT 约 205ms，IN 约 21ms。也不要换成 JOIN + `group_by`：
+  取非时逐行判断会让任一未命中的标签行放行整张图（需要 HAVING，DSL 没有），组合器组内也不允许 `group_by`。
+  `images.id` / `album_images.image_id` 均 NOT NULL，套在 `~not` 下没有 `NOT IN` 遇 NULL 的陷阱。
 - 三个 detail provider 整体委派 `search`，画册 / 任务 / 畅游详情自动支持。
 
 前端（`galleryQuery.ts` / `GallerySearchDropdown.vue`）里「标签」是搜索勾选框中的一个普通维度：

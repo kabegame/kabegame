@@ -58,12 +58,17 @@
                 "in_need": true
             },
             {
-                "sql": "CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
+                // 收藏 / 隐藏标记用相关 EXISTS 而不是 LEFT JOIN album_images:每行一次
+                // (album_id, image_id) 主键探测,与 JOIN 同价,且翻页不受收藏 / 隐藏集合大小影响
+                // (不相关 IN 每条查询都要先物化整个集合,隐藏 50 万张时一页从 2.5ms 涨到 57ms)。
+                // COUNT 包装下外层不读这两列,SQLite 不求值未用到的子查询列,探测随之省掉;
+                // LEFT JOIN 无论用不用都会执行。主键保证 JOIN 最多匹配一行,两种写法行数与取值一致。
+                "sql": "EXISTS (SELECT 1 FROM album_images AS fav_ex WHERE fav_ex.album_id = ${global.favorite_album_id} AND fav_ex.image_id = images.id)",
                 "as": "is_favorite",
                 "in_need": true,
             },
             {
-                "sql": "CASE WHEN hid_ai.image_id IS NOT NULL THEN 1 ELSE 0 END",
+                "sql": "EXISTS (SELECT 1 FROM album_images AS hid_ex WHERE hid_ex.album_id = ${global.hidden_album_id} AND hid_ex.image_id = images.id)",
                 "as": "is_hidden",
                 "in_need": true
             },
@@ -125,18 +130,6 @@
             { "sql": "images.id", "order": "asc" }
         ],
         "join": [{
-            "kind": "LEFT",
-            "table": "album_images",
-            "as": "fav_ai",
-            "on": "images.id = fav_ai.image_id and fav_ai.album_id = ${global.favorite_album_id}",
-            "in_need": true
-        }, {
-            "kind": "LEFT",
-            "table": "album_images",
-            "as": "hid_ai",
-            "on": "images.id = hid_ai.image_id and hid_ai.album_id = ${global.hidden_album_id}",
-            "in_need": true
-        }, {
             "kind": "LEFT",
             "table": "metadata",
             "as": "metadata_im",

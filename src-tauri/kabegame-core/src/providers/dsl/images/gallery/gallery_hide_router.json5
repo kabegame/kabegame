@@ -3,7 +3,8 @@
     "name": "gallery_hide_router",
     "note": "Exclude images in the hidden album. This is a PREFIX, so the next segment is another gallery route such as plugin, album, all, or sort; hide/all is valid, but all/hide is not.",
     "query": {
-        "where": "hid_ai.image_id IS NULL"
+        // 相关 NOT EXISTS:每行一次主键探测,不依赖任何 join 别名(与 is_hidden 字段同一个子查询)。
+        "where": "NOT EXISTS (SELECT 1 FROM album_images AS hid_ex WHERE hid_ex.album_id = ${global.hidden_album_id} AND hid_ex.image_id = images.id)"
     },
     "resolve": {
         ".*": {

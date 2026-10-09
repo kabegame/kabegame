@@ -144,6 +144,41 @@
 - count 与 list 必须共享同一查询来源，只在 `ORDER BY` 是否参与上区分。
 - 任何序列化结构变化都需要缓存版本升级。
 
+## 宽高比（`images.aspect_ratio` 生成列）
+
+- **列定义**（v036，[`v036_image_aspect_ratio.rs`](/src-tauri/kabegame-core/src/storage/migrations/v036_image_aspect_ratio.rs)，新库同步在 `init.rs`）：
+  `aspect_ratio REAL GENERATED ALWAYS AS (CASE WHEN width > 0 AND height > 0 THEN CAST(width AS REAL) / height END) VIRTUAL`
+  + `idx_images_aspect_ratio`。SQLite 随 width/height 自动维护，应用写入处不参与。宽高无效为 NULL。
+  只能是 VIRTUAL（`ALTER TABLE ADD COLUMN` 不支持 STORED，后者要重建 images 表）；逐行过滤时 VIRTUAL
+  现算与 STORED 只差约 20ms / 100 万行。
+- **段文法**（[`gallery_aspect_router`](/src-tauri/kabegame-core/src/providers/dsl/images/gallery/aspect/gallery_aspect_router.json5)，不可列举）：
+  比值写成 `<宽>x<高>`（正整数），四种 resolve：`-9x16` = ≤ 9:16；`9x16-3x4` = 大于 9:16 且 ≤ 3:4；`7x3-` = 大于 7:3；
+  `unknown` = 宽或高缺失、非正（列为 NULL）。区间一律左开右闭 `(min, max]`，相邻区间首尾相接、互不重叠。
+- **应用的桶**：`-3x4` 竖屏 / `3x4-4x3` 方正 / `4x3-16x9` 横屏 / `16x9-` 宽屏 / `unknown`（前端 `GALLERY_ASPECT_BUCKETS`）。
+  过窄、过宽分别并入竖屏、宽屏，五个桶合起来正好是全部图片；恰为 3:4 的图归竖屏（右闭）。
+  详情面板的「按此宽高比筛选」用 `aspectBucketForDimensions`，与后端同一判定。
+- **VD「按尺寸」** 目录显示各语言友好名称，每项带具体上下界落到 `vd_aspect_bucket_router`（区间）或
+  `vd_aspect_unknown_router`，与前端同一组桶；e2e 逐语言逐目录与对应画廊段比对结果集。
+- **筛选**：区间走 [`aspect_range_provider`](/src-tauri/kabegame-core/src/providers/dsl/shared/aspect_range_provider.yaml)，
+  整数交叉乘法 `w*min_h > h*min_w AND w*max_h <= h*max_w`，缺下界补 `0x1`、缺上界补 `1x0`（∞），不需特判；
+  有效性由 `+images.aspect_ratio IS NOT NULL` 判定，无效时整条谓词为 FALSE 而非 NULL，`~not` 取非留得住这些图。
+  `unknown` 走 [`aspect_unknown_provider`](/src-tauri/kabegame-core/src/providers/dsl/shared/aspect_unknown_provider.yaml)（`IS NULL`）。
+- **区间谓词禁止走索引**（`+` 一元加号）：没有 STAT4 统计时规划器把任何范围都估成高选择性，landscape 实占约 6 成，
+  100 万图组合筛选一页从约 0.2s 变成 14s。只有完整 `ANALYZE`（含 STAT4）能让它按桶选对；默认 `PRAGMA optimize`
+  与 `analysis_limit` 只写 stat1，效果等于没有统计，且近似重分析会清掉已有 STAT4，所以不依赖它。
+  `unknown` 允许走索引（正常库里极少，直接取 NULL 段）。100 万图实测：各桶组合筛选一页约 20ms、COUNT 0.3～0.8s。
+- **不提供列举**：原先按当前查询动态列举非空桶（100 万图 2～10s）已删除，前端与 VD 都持有固定桶表。
+- **排序** `sort/by-aspect` 为 `ORDER BY images.aspect_ratio, images.id`，索引（含 rowid）正好覆盖，翻页按索引顺序读
+  （100 万图一页约 3.5s → 1ms）；`/desc` 反向扫描同样走索引。
+- **收藏 / 隐藏标记与 `hide/` 用相关 `EXISTS`**（`gallery_route` / `vd_root_router` 的 `is_favorite` / `is_hidden`，
+  `gallery_hide_router` / `albums_images_hide_provider` 的 `NOT EXISTS`），不 LEFT JOIN `album_images`。
+  - **语义等价**：JOIN 的 ON 固定主键 `(album_id, image_id)` 两列，最多匹配一行，不改行数；两种写法都只给 0/1，不出 NULL。
+  - **为什么不是 JOIN**：COUNT 把整条查询包成子查询，外层不读这两列时 SQLite 不求值未用到的子查询列，探测随之省掉；
+    LEFT JOIN 不论用不用都逐行执行（聚合里也不会被 SQLite 的 noop-join 优化剪掉）。100 万图 `gallery/all` COUNT 约 1.7s → 0.86s。
+  - **为什么不是不相关 `IN` / `NOT IN`**：每条查询都要先物化整个集合。测试只在集合小时占优；隐藏 50%、收藏 30% 时
+    第 1 页 2.5ms → 57ms。EXISTS 每行一次主键探测，翻页与 JOIN 同价且不受集合大小影响。
+  - 计数路径的 COUNT 还整体带着字段列表与 ORDER BY；把这些从 COUNT 里去掉是引擎层的另一项优化（未做），
+    需要同时处理 WHERE 引用字段别名、聚合 / 窗口字段与 LIMIT，不能简单剪 join——引擎看不出 LEFT JOIN 是否会扇出。
 ## 抓取时间分组（gallery_time / main_date_browse）
 
 - **唯一数据源**：`Storage::get_gallery_day_groups()`（按自然日 `YYYY-MM-DD` 聚合计数，SQL 在 [`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)）。

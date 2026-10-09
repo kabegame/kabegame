@@ -1,0 +1,21 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_aspect_unknown_router",
+    "query": {
+        "delegate": { "provider": "aspect_unknown_provider" }
+    },
+    // 子段与 gallery_aspect_bucket_router 相同，改一处要同步另一处。
+    "resolve": {
+        "filter_comb": {
+            "provider": "gallery_filter_comb"
+        },
+        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
+            "delegate": {
+                "provider": "kabegame.gallery_desc_pagination_page_comb"
+            },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

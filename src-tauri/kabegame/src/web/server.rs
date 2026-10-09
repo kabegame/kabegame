@@ -68,5 +68,12 @@ async fn rpc_handler(
     Json(req): Json<JsonRpcRequest>,
 ) -> Json<serde_json::Value> {
     let is_super = params.get("super").map(|v| v == "1").unwrap_or(false);
-    Json(dispatch(req, is_super).await)
+    #[cfg(feature = "web")]
+    let timer = super::track::start(&req.method);
+    let resp = dispatch(req, is_super).await;
+    #[cfg(feature = "web")]
+    if let Some(timer) = timer {
+        timer.finish(&resp);
+    }
+    Json(resp)
 }

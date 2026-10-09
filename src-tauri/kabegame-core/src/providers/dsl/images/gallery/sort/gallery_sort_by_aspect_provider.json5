@@ -3,7 +3,9 @@
     "name": "gallery_sort_by_aspect_provider",
     "query": {
         "order": [
-            { "sql": "CAST(images.width AS REAL) / NULLIF(images.height, 0)", "order": "asc", "clear": "all" },
+            // images.aspect_ratio 是 v036 生成列,(aspect_ratio, rowid) 索引正好覆盖本排序 + id 兜底,
+            // 翻页按索引顺序读,不再全量计算后排序。宽高无效的图为 NULL,升序排在最前。
+            { "sql": "images.aspect_ratio", "order": "asc", "clear": "all" },
             { "sql": "images.id", "order": "asc" }
         ]
     },
