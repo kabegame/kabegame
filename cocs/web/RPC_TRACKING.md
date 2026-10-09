@@ -1,15 +1,15 @@
 # Web 版 `/rpc` 接口埋点
 
 Web 发布版（demo.kabegame.com）在服务端按接口统计 JSON-RPC 调用：每次 `POST /rpc` 都向 umami
-发一条 `rpc_call` 事件。插件和网页前端都不需要改动，也不需要额外的请求头。服务器不读取、不转发
+发一条以方法名命名的事件，umami 的 Events / Pages 直接按命令拆分。插件和网页前端都不需要改动，也不需要额外的请求头。服务器不读取、不转发
 客户端的请求头（IP、UA 等），所以 umami 里所有事件都归到服务器自己这一个访客，看不到是谁在调用。
 
 ## 事件
 
 | 字段 | 值 |
 | --- | --- |
-| `name` | `rpc_call` |
-| `url` | `/rpc` |
+| `name` | 方法名（如 `pathql_fetch`；未注册为 `(unknown)`） |
+| `url` | `/rpc/<方法名>` |
 | `hostname` | `KABEGAME_UMAMI_HOSTNAME`，未设置时 umami 记为 `localhost` |
 | `data.method` | 已注册的方法名；未注册的方法一律记为 `(unknown)`，避免任意字符串刷爆属性值 |
 | `data.ok` | 是否成功返回 `result` |

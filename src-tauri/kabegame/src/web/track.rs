@@ -1,4 +1,5 @@
-// Web 版 `/rpc` 接口埋点：每次调用发一条 umami `rpc_call` 事件（data: method / ok / code / ms）。
+// Web 版 `/rpc` 接口埋点：每次调用发一条 umami 事件，事件名为方法名、url 为 `/rpc/<方法名>`，
+// 使 umami 的 Events 与 Pages 直接按命令拆分（data: method / ok / code / ms）。
 // 只在服务端按接口统计，不读取、不转发任何客户端请求头（IP、UA 等），事件全部归到服务器自己这一个访客。
 // 配置走运行时环境变量（systemd drop-in），未配置即整体关闭：
 //   KABEGAME_UMAMI_SEND_URL    umami 收集端点，例如 https://umi.kabegame.com/api/send
@@ -151,8 +152,8 @@ async fn send(cfg: &Config, client: &reqwest::Client, call: &RpcCall) -> Result<
     }
     let mut payload = json!({
         "website": cfg.website,
-        "url": "/rpc",
-        "name": "rpc_call",
+        "url": format!("/rpc/{}", call.method),
+        "name": call.method,
         "data": data,
     });
     if let Some(hostname) = &cfg.hostname {

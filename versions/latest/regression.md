@@ -586,7 +586,7 @@ category + key；帖子地址取服务器 `post_url`，为空就留空，不填�
 
 ## Web 版 `/rpc` 接口埋点
 
-Web 发布版在 `rpc_handler` 里对每次 `POST /rpc` 计时，经有界队列异步向 umami 发 `rpc_call` 事件（`data.method` / `ok` / `code` / `ms`）。不读取、不转发客户端请求头，未注册方法记为 `(unknown)`。`web` feature 门控，由 `KABEGAME_UMAMI_SEND_URL` / `KABEGAME_UMAMI_WEBSITE_ID` / `KABEGAME_UMAMI_HOSTNAME` 环境变量开启。umami isbot 会丢弃 `名字/版本` 形式的 UA，因此服务端 UA 用 `Mozilla/5.0 (X11; Linux x86_64) kabegame-web/<版本>`。详见 `cocs/web/RPC_TRACKING.md`。
+Web 发布版在 `rpc_handler` 里对每次 `POST /rpc` 计时，经有界队列异步向 umami 发事件：事件名为方法名、url 为 `/rpc/<方法名>`（`data` 带 `method` / `ok` / `code` / `ms`）。不读取、不转发客户端请求头，未注册方法记为 `(unknown)`。`web` feature 门控，由 `KABEGAME_UMAMI_SEND_URL` / `KABEGAME_UMAMI_WEBSITE_ID` / `KABEGAME_UMAMI_HOSTNAME` 环境变量开启。umami isbot 会丢弃 `名字/版本` 形式的 UA，因此服务端 UA 用 `Mozilla/5.0 (X11; Linux x86_64) kabegame-web/<版本>`。详见 `cocs/web/RPC_TRACKING.md`。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -594,7 +594,7 @@ Web 发布版在 `rpc_handler` 里对每次 `POST /rpc` 计时，经有界队列
 | [x] | payload 通过 umami 校验 | umi.kabegame.com | 用代码同形 payload 与不存在的 website UUID POST `/api/send` | 返回 `Website not found.`（已过 schema 校验，不写入数据）；非法 UUID 对照组返回 schema 错误 | 已实测 |
 | [x] | UA 不被判 bot | umami 容器 | 用容器内 isbot 规则测试候选 UA | `Mozilla/5.0 (X11; Linux x86_64) kabegame-web/x` 不是 bot；`Kabegame/1.0`、`reqwest/0.11`、`kabegame-web/x` 都是 bot | 已实测 |
 | [ ] | 未配置时关闭 | Web | 不设环境变量启动 web 二进制 | 启动日志打印 `RPC tracking disabled`，`/rpc` 行为与改动前一致 | |
-| [x] | 配置后上报 | Web（demo） | 写入 systemd drop-in 后重启，网页里翻几页画廊 | 启动日志出现 `✓ RPC tracking → …`；umami 新 website 的 Events 里出现 `rpc_call`，按 `method` 可拆分 | 已在 demo 部署实测：启动日志出现 `✓ RPC tracking → …`，umami `kabegame-api` 收到 `get_plugins` 事件（hostname / url / ok 正确）；网页翻页未测 |
+| [x] | 配置后上报 | Web（demo） | 写入 systemd drop-in 后重启，网页里翻几页画廊 | 启动日志出现 `✓ RPC tracking → …`；umami 新 website 的 Events 里按命令名分列，Pages 里出现 `/rpc/<命令名>` | 已在 demo 部署实测：启动日志出现 `✓ RPC tracking → …`，umami `kabegame-api` 收到 `get_plugins` 事件（hostname / url / ok 正确）；网页翻页未测 |
 | [ ] | 插件调用也被统计 | 桌面 CEF + Web（demo） | 桌面端用 `kabegame-server` 插件从 demo 复制 1 页 | umami 中 `pathql_entry`、`pathql_fetch`、`get_image_metadata_full`、`get_plugin_detail`、`get_plugin_data` 计数上涨 | |
 | [x] | 错误与未知方法 | Web（demo） | `curl -X POST https://demo.kabegame.com/rpc -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"nope"}'` | umami 记一条 `method=(unknown)`、`ok=false`、`code=-32601` | 已在 demo 实测：`method=(unknown)`、`ok=false`、`code=-32601` |
 | [ ] | umami 不可达不影响接口 | Web | 把 `KABEGAME_UMAMI_SEND_URL` 指向不可达地址后重启并访问网页 | 网页正常；日志只打一行 `[umami] RPC tracking failed`，不刷屏 | |
