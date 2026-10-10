@@ -43,12 +43,23 @@ CREATE INDEX idx_tasks_start_time ON tasks(start_time DESC);
 CREATE TABLE metadata (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     data           TEXT    NOT NULL,
-    search_text    TEXT    NOT NULL DEFAULT '',
     plugin_version INTEGER NOT NULL DEFAULT 0,
     plugin_id      TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_metadata_dedup
     ON metadata(plugin_id, plugin_version);
+
+CREATE TABLE search_terms (
+    id   INTEGER PRIMARY KEY,
+    text TEXT    NOT NULL UNIQUE
+);
+CREATE TABLE metadata_search_terms (
+    metadata_id INTEGER NOT NULL REFERENCES metadata(id) ON DELETE CASCADE,
+    term_id     INTEGER NOT NULL REFERENCES search_terms(id),
+    PRIMARY KEY (term_id, metadata_id)
+) WITHOUT ROWID;
+CREATE INDEX idx_metadata_search_terms_metadata
+    ON metadata_search_terms(metadata_id);
 
 -- ───────────── image_metadata ─────────────
 CREATE TABLE image_metadata (

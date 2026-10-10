@@ -5,13 +5,14 @@
 权威来源：`packages/kabegame-types/lib.kabegame.d.ts`（`KabegameDownloadImageOptions` /
 `KabegameLabelInput`）、`cocs/gallery/LABEL_ALBUMS.md`、`cocs/plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md`。
 
-## 传给 downloadImage 的三样东西
+## 传给 downloadImage 的四样东西
 
 ```ts
 await Kabegame.downloadImage(originalUrl, {
   name: "角色名 #123",          // 展示名
   url: "https://site/post/123", // 作品页，app 里「源」链接
   metadata: { schema: 1, … },   // 或者 metadata_id: createImageMetadata(...)（一个作品多张图时共用）
+  searchTexts: ["角色名", "site_character_slug"],
   labels: [{ key, category, name }, …],
 });
 ```
@@ -28,6 +29,14 @@ await Kabegame.downloadImage(originalUrl, {
 - 额外请求（如评论接口）只在源数据表明有内容时才发（例如 `posts > 0`），失败就 `warn` 并留空，
   不要让下载本身失败。
 - 一个作品多张图时，用 `createImageMetadata(obj)` 建一次、各图传 `metadata_id`，不要每张重复存。
+
+## searchTexts：面向用户的元数据搜索片段
+
+- `downloadImage(url, { metadata, searchTexts })` 与 `createImageMetadata(obj, { searchTexts })` 只在新建 metadata 时使用列表；传 `metadata_id` 时会忽略它。缺省走默认 JSON 展开，空数组表示不参与元数据搜索。
+- 尽量覆盖 `description.ejs` 展示给用户的原文，例如标签显示名，让搜索符合直觉。
+- 可以增加 `<插件>_<字段>_<值>` 形式的前缀条目，供按字段精确筛选。
+- 不收录键名、页面上看不到的链接，以及会过期或没有信息量的文字。
+- 历史行在 `metadata_migrations/migrate.js` 导出同规则的 `provideSearchTextList(input)`；与实时写入规则保持两份同步。
 
 ## labels：站点标签 → 标签画册
 

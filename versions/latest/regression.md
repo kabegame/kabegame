@@ -676,3 +676,23 @@ Plasma 壁纸插件按 `kind: "image"` 取图，画廊页一直为空。主仓�
 | [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | app/core 无 error | |
 | [ ] | 未知命令报错 | 桌面 + Plasma 插件 | 在 Plasma 壁纸插件配置里打开画廊页 | 提示「Failed to load gallery: unsupported request: …」（服务端按信封里的 `request_id` 回错，插件不会干等），app 不崩溃；其他 IPC（画册、任务、当前壁纸）不受影响 | |
 | [ ] | PathQL IPC 不受影响 | dev app + debug CLI | `kabegame-cli` 经 app 解析 `--album /父/子` 导入图片 | 画册路径解析正常（走 `pathql-fetch`） | |
+
+## 元数据搜索索引（字典 + 映射）
+
+v037 删除 `metadata.search_text`，改为全局去重的 `search_terms` 字典和 `metadata_search_terms` 映射。
+元数据搜索先在字典上做 `LIKE`，再按主键取 metadata 集合，最后对 `images.metadata_id` 做嵌套 `IN`，
+并带 `IS NOT NULL` 守卫。插件可以在爬取时通过 `downloadImage` / `createImageMetadata` 的 `searchTexts`
+提供精选列表，历史数据由 `migrate.js` 的 `provideSearchTextList` 提供；不提供时沿用原展开规则。
+konachan 1.6.0 作为示范。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译与类型检查 | 本机 | `.claude/skills/check-kabegame/driver.sh` | vue-tsc 与 cargo 均 0 error | |
+| [x] | 单测与集成测试 | 本机 | 分别带过滤名 `search_terms` / `metadata_migration` / `v037` / `ops_search_texts` / `metadata_search_terms` / `providers::query` / `dsl_funcs` 跑 `test-kabegame`，再跑 `--test dsl_e2e` | 全部通过；`dsl_e2e` 含「能命中的词 + `~not` + 无 metadata 图片仍保留」 | |
+| [x] | 迁移耗时与结果一致 | prod 库副本（2.5 万图） | 对副本执行 v036→v037，对比迁移前后 10 个词的命中数与排除数，以及四维度排除 COUNT | 结果逐项一致；COUNT 变快 | 迁移阻塞启动 16.0s；搜 `konachan` 命中耗时 59→186ms（字典里几乎所有 konachan 站内 URL 都含这个词，konachan 1.6.0 迁移不再收录这些 URL 后应恢复） |
+| [ ] | app 升级后一致性 | 桌面 CEF + prod 库（先 `sqlite3 .backup` 备份） | 升级前后用 `pathql_count` 查四维度排除路径与若干单词搜索 | 总数完全一致；启动日志有 `[db-migration] v037` | |
+| [ ] | 元数据搜索性能 | 桌面 CEF | 单独执行四维度排除 `pathql_count`，再并发 2 条 | 约 365ms 降到约 200ms；并发时接近单独执行 | |
+| [ ] | konachan 迁移重建索引 | dev app | 用 `repack-crawler-plugins` 打包并安装 konachan 1.6.0 | 出现迁移忙碌卡片；结束后 konachan 映射行数明显下降，孤儿词条被清理 | |
+| [ ] | konachan 搜索命中 | dev app | 在元数据维度搜 `bikini`、`love live! school idol project`、`konachan_tags_bikini`、`konachan_rating_safe`、konachan 站内 URL 片段 | 前四个命中，站内 URL 片段不再命中 | |
+| [ ] | konachan 新爬数据 | dev CLI | 用 `run-crawler-plugin` 跑一页 | 新 metadata 的词条与 `searchTexts` 一致 | |
+| [ ] | CLI 只读查询 | CLI + 迁移后库 | `pathql query` 元数据搜索路径；再对 v036 的库执行 | 前者正常返回；后者报 schema 版本过旧并以非 0 退出 | |

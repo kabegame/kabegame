@@ -45,6 +45,7 @@
       metadataId: o.metadata_id ?? undefined,
       sourceUrl,
       labels: o.labels ?? undefined,
+      searchTexts: o.searchTexts ?? undefined,
     });
   };
   // 页面自发原生下载的终态由 Rust eval 到这里；每次页面加载都会重装监听集合。
@@ -392,7 +393,8 @@
       return invoke("crawl_add_progress", { percentage });
     },
     createImageMetadata(value, opts) {
-      return invoke("crawl_create_image_metadata", { value });
+      const o = typeof opts === "object" && opts !== null ? opts : {};
+      return invoke("crawl_create_image_metadata", { value, searchTexts: o.searchTexts ?? undefined });
     },
     pluginData() {
       return invoke("crawl_plugin_data");
@@ -402,7 +404,7 @@
     },
     // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
     // name（展示名）、metadata_id（已有 metadata 行）、metadata（任意 JSON）、
-    // url（source url）。metadata_id 优先于 metadata。
+    // url（source url）、searchTexts（元数据搜索片段）。metadata_id 优先于 metadata。
     // metadata 版本（plugin_version）由应用自动盖章，插件不可传入。
     async downloadImage(url, opts) {
       const rawUrl = String(url ?? "");
@@ -418,6 +420,7 @@
         metadataId: o.metadata_id ?? undefined,
         sourceUrl: o.url ?? undefined,
         labels: o.labels ?? undefined,
+        searchTexts: o.searchTexts ?? undefined,
       }));
     },
     // 监听页面自发触发的浏览器原生下载。成功时 path 可直接交给 downloadImage；

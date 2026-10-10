@@ -106,8 +106,8 @@
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
-  - 主题：插件图片 metadata 迁移流程——单一脚本契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 表去重合并，以及按最终 `metadataId + pluginVersion` 分组的变更事件。
-  - 适用场景：插件升级后历史图片详情结构变化；排查 metadata 迁移失败、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
+  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 表去重合并、搜索词典与映射重建，以及按最终 `metadataId + pluginVersion` 分组的变更事件。
+  - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
   - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛、无 WebView 后端）。

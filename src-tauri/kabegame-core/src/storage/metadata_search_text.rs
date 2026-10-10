@@ -12,22 +12,32 @@
 //! 片段间用 "\n" 连接，且片段内部的 \n / \r 一律替换为空格——两条合起来保证 "\n" 在结果里只可能是
 //! 分隔符。否则 {"author":{"name":"sb"}} 会拼成 authornamesb，搜 "rn" 就凭空命中。
 
+use super::search_terms::normalize_search_terms;
 use serde_json::Value;
 
 /// 非法 JSON（含空串）返回空串——与 `parse_metadata_json` 的宽松兜底一致，不阻塞写入。
 /// 页面快照（`page_snapshot::PAGE_SNAPSHOT_KIND`）例外：只索引标题与来源 URL。
 pub(crate) fn search_text_from_json_str(data_json: &str) -> String {
+    search_terms_from_json_str(data_json).join("\n")
+}
+
+/// 非法 JSON（含空串）返回空列表；页面快照只索引标题与来源 URL。
+pub(crate) fn search_terms_from_json_str(data_json: &str) -> Vec<String> {
     match serde_json::from_str::<Value>(data_json) {
-        Ok(value) => super::page_snapshot::search_text(&value)
-            .unwrap_or_else(|| flatten_json_for_search(&value)),
-        Err(_) => String::new(),
+        Ok(value) => super::page_snapshot::search_terms(&value)
+            .unwrap_or_else(|| flatten_json_search_terms(&value)),
+        Err(_) => Vec::new(),
     }
 }
 
 pub(crate) fn flatten_json_for_search(value: &Value) -> String {
+    flatten_json_search_terms(value).join("\n")
+}
+
+pub(crate) fn flatten_json_search_terms(value: &Value) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     collect_search_text_parts(value, &mut parts);
-    parts.join("\n")
+    normalize_search_terms(parts)
 }
 
 /// 片段内换行归一化为空格，保证换行只作为分隔符出现。
@@ -124,7 +134,10 @@ mod tests {
         }));
 
         for expected in ["comments", "insert", "大佬", "_(抱大腿)"] {
-            assert!(flattened.split('\n').any(|part| part == expected), "missing {expected:?} in {flattened:?}");
+            assert!(
+                flattened.split('\n').any(|part| part == expected),
+                "missing {expected:?} in {flattened:?}"
+            );
         }
         assert!(!flattened.contains('{'));
         assert!(!flattened.contains('}'));
@@ -142,7 +155,10 @@ mod tests {
         }));
 
         for expected in ["42", "true", "null"] {
-            assert!(flattened.split('\n').any(|part| part == expected), "missing {expected:?} in {flattened:?}");
+            assert!(
+                flattened.split('\n').any(|part| part == expected),
+                "missing {expected:?} in {flattened:?}"
+            );
         }
     }
 }

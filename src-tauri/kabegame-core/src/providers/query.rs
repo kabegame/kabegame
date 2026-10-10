@@ -625,10 +625,20 @@ mod tests {
             CREATE TABLE metadata (
                 id INTEGER PRIMARY KEY,
                 data TEXT NOT NULL,
-                search_text TEXT,
                 plugin_version INTEGER NOT NULL DEFAULT 0,
                 plugin_id TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE search_terms (
+                id INTEGER PRIMARY KEY,
+                text TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE metadata_search_terms (
+                metadata_id INTEGER NOT NULL REFERENCES metadata(id) ON DELETE CASCADE,
+                term_id INTEGER NOT NULL REFERENCES search_terms(id),
+                PRIMARY KEY (term_id, metadata_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX idx_metadata_search_terms_metadata
+                ON metadata_search_terms(metadata_id);
             CREATE TABLE image_metadata (
                 id INTEGER PRIMARY KEY,
                 data TEXT NOT NULL,
@@ -654,19 +664,27 @@ mod tests {
                 ('album-march', '三月七', 4, 'album-a', '/album-a/album-march/'),
                 ('album-secret', '秘密', 5, 'album-firefly', '/album-a/album-firefly/album-secret/');
 
-            INSERT INTO metadata (id, data, search_text, plugin_id) VALUES
-                (1,  '{"kind":"fav"}',   'star bright', 'p1'),
-                (2,  '{"kind":"fav"}',   'moon light',  'p1'),
-                (3,  '{"kind":"plain"}', 'star field',  'p1'),
-                (4,  '{"kind":"plain"}', 'cloud',       'p2'),
-                (5,  '{"kind":"plain"}', 'star trail',  'p2'),
-                (6,  '{"kind":"plain"}', 'mountain',    'p2'),
-                (7,  '{"kind":"plain"}', 'forest',      'p3'),
-                (8,  '{"kind":"plain"}', 'moon sea',    'p3'),
-                (9,  '{"kind":"plain"}', 'plain',       'p1'),
-                (10, '{"kind":"plain"}', 'star cloud',  'p2'),
-                (11, '{"kind":"plain"}', 'star night',  'p3'),
-                (12, '{"kind":"plain"}', 'river',       'p1');
+            INSERT INTO metadata (id, data, plugin_id) VALUES
+                (1,  '{"kind":"fav"}',   'p1'),
+                (2,  '{"kind":"fav"}',   'p1'),
+                (3,  '{"kind":"plain"}', 'p1'),
+                (4,  '{"kind":"plain"}', 'p2'),
+                (5,  '{"kind":"plain"}', 'p2'),
+                (6,  '{"kind":"plain"}', 'p2'),
+                (7,  '{"kind":"plain"}', 'p3'),
+                (8,  '{"kind":"plain"}', 'p3'),
+                (9,  '{"kind":"plain"}', 'p1'),
+                (10, '{"kind":"plain"}', 'p2'),
+                (11, '{"kind":"plain"}', 'p3'),
+                (12, '{"kind":"plain"}', 'p1');
+            INSERT INTO search_terms (id, text) VALUES
+                (1, 'star bright'), (2, 'moon light'), (3, 'star field'),
+                (4, 'cloud'), (5, 'star trail'), (6, 'mountain'),
+                (7, 'forest'), (8, 'moon sea'), (9, 'plain'),
+                (10, 'star cloud'), (11, 'star night'), (12, 'river');
+            INSERT INTO metadata_search_terms (metadata_id, term_id) VALUES
+                (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6),
+                (7, 7), (8, 8), (9, 9), (10, 10), (11, 11), (12, 12);
 
             INSERT INTO images
                 (id, url, local_path, plugin_id, crawled_at, metadata_id,

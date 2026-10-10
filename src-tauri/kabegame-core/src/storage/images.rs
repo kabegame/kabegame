@@ -1,4 +1,5 @@
-use crate::storage::metadata_search_text::search_text_from_json_str;
+use crate::storage::metadata_search_text::{search_terms_from_json_str, search_text_from_json_str};
+use crate::storage::search_terms::replace_metadata_search_terms;
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -237,17 +238,27 @@ pub(crate) fn insert_metadata_id(
     data_json: &str,
     plugin_id: &str,
     plugin_version: u32,
+    search_terms: Option<&[String]>,
 ) -> Result<i64, String> {
-    let search_text = search_text_from_json_str(data_json);
     let plugin_version_i64 = i64::from(plugin_version);
     conn.execute(
-        "INSERT INTO metadata (data, plugin_id, plugin_version, search_text)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![data_json, plugin_id, plugin_version_i64, &search_text],
+        "INSERT INTO metadata (data, plugin_id, plugin_version)
+         VALUES (?1, ?2, ?3)",
+        params![data_json, plugin_id, plugin_version_i64],
     )
     .map_err(|e| format!("insert metadata: {}", e))?;
 
-    Ok(conn.last_insert_rowid())
+    let metadata_id = conn.last_insert_rowid();
+    let default_terms;
+    let terms = match search_terms {
+        Some(terms) => terms,
+        None => {
+            default_terms = search_terms_from_json_str(data_json);
+            &default_terms
+        }
+    };
+    replace_metadata_search_terms(conn, metadata_id, terms)?;
+    Ok(metadata_id)
 }
 
 fn insert_image_metadata_row(
@@ -319,12 +330,20 @@ impl Storage {
         value: &Value,
         plugin_id: &str,
         plugin_version: u32,
+        search_terms: Option<Vec<String>>,
     ) -> Result<i64, String> {
         super::page_snapshot::validate(value)?;
         let s = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_metadata_id(&conn, &s, plugin_id, plugin_version)
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin insert metadata: {e}"))?;
+        let metadata_id =
+            insert_metadata_id(&tx, &s, plugin_id, plugin_version, search_terms.as_deref())?;
+        tx.commit()
+            .map_err(|e| format!("commit insert metadata: {e}"))?;
+        Ok(metadata_id)
     }
 
     /// 读取 metadata 行的 `plugin_id`；行不存在返回 `None`。
@@ -355,8 +374,14 @@ impl Storage {
     /// 按原始 JSON 文本写入 metadata 行并返回 id。
     /// 文件夹同步重导入用：删旧行后重写——若内容仍在则拿回原 id，若已被 GC 则得新 id。
     pub fn insert_metadata_text(&self, data_json: &str) -> Result<i64, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        insert_metadata_id(&conn, data_json, "", 0)
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin insert metadata text: {e}"))?;
+        let metadata_id = insert_metadata_id(&tx, data_json, "", 0, None)?;
+        tx.commit()
+            .map_err(|e| format!("commit insert metadata text: {e}"))?;
+        Ok(metadata_id)
     }
 
     /// 扫描某插件低于目标插件版本（packed）的 metadata 行，供迁移运行器逐行升级。
@@ -421,6 +446,7 @@ impl Storage {
         plugin_id: &str,
         new_plugin_version: u32,
         new_data: &str,
+        search_terms: Option<Vec<String>>,
     ) -> Result<Option<(i64, Vec<String>)>, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
@@ -497,14 +523,22 @@ impl Storage {
             tx.execute("DELETE FROM metadata WHERE id = ?1", params![row_id])
                 .map_err(|e| format!("delete merged metadata row: {e}"))?;
         } else {
-            let search_text = search_text_from_json_str(new_data);
             tx.execute(
                 "UPDATE metadata
-                 SET data = ?1, plugin_version = ?2, search_text = ?3
-                 WHERE id = ?4",
-                params![new_data, new_version_i64, search_text, row_id],
+                 SET data = ?1, plugin_version = ?2
+                 WHERE id = ?3",
+                params![new_data, new_version_i64, row_id],
             )
             .map_err(|e| format!("update migrated metadata row: {e}"))?;
+            let default_terms;
+            let terms = match search_terms.as_deref() {
+                Some(terms) => terms,
+                None => {
+                    default_terms = search_terms_from_json_str(new_data);
+                    &default_terms
+                }
+            };
+            replace_metadata_search_terms(&tx, row_id, terms)?;
         }
 
         tx.commit()
@@ -1510,48 +1544,73 @@ fn gc_native_metadata_candidates(
 }
 
 #[cfg(test)]
-mod metadata_search_text_override_tests {
+mod metadata_search_terms_override_tests {
     use super::*;
 
     fn conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE metadata (
+            "PRAGMA foreign_keys = ON;
+            CREATE TABLE metadata (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 data           TEXT    NOT NULL,
-                search_text    TEXT    NOT NULL DEFAULT '',
                 plugin_version INTEGER NOT NULL DEFAULT 0,
                 plugin_id      TEXT    NOT NULL DEFAULT ''
-            );",
+            );
+            CREATE TABLE search_terms (
+                id INTEGER PRIMARY KEY,
+                text TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE metadata_search_terms (
+                metadata_id INTEGER NOT NULL REFERENCES metadata(id) ON DELETE CASCADE,
+                term_id INTEGER NOT NULL REFERENCES search_terms(id),
+                PRIMARY KEY (term_id, metadata_id)
+            ) WITHOUT ROWID;",
         )
         .unwrap();
         conn
     }
 
-    fn search_text_of(conn: &rusqlite::Connection, id: i64) -> String {
-        conn.query_row(
-            "SELECT search_text FROM metadata WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        )
-        .unwrap()
+    fn search_terms_of(conn: &rusqlite::Connection, id: i64) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT search_terms.text
+                 FROM metadata_search_terms
+                 JOIN search_terms ON search_terms.id = metadata_search_terms.term_id
+                 WHERE metadata_search_terms.metadata_id = ?1
+                 ORDER BY search_terms.id",
+            )
+            .unwrap();
+        stmt.query_map(params![id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     #[test]
     fn page_snapshot_indexes_only_title_and_url() {
         let conn = conn();
         let data = r#"{"kind":"kabegame.surfPageSnapshot","title":"Title","sourceUrl":"https://example.com/p","pageHtml":"<html>huge body</html>"}"#;
-        let id = insert_metadata_id(&conn, data, "webpage", 0).unwrap();
-        let search_text = search_text_of(&conn, id);
-        assert_eq!(search_text, "Title\nhttps://example.com/p");
-        assert!(!search_text.contains("huge body"));
+        let id = insert_metadata_id(&conn, data, "webpage", 0, None).unwrap();
+        let terms = search_terms_of(&conn, id);
+        assert_eq!(terms, ["Title", "https://example.com/p"]);
+        assert!(!terms.iter().any(|term| term.contains("huge body")));
     }
 
     #[test]
     fn default_insert_still_flattens_json() {
         let conn = conn();
-        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0).unwrap();
-        assert!(search_text_of(&conn, id).contains("sakura"));
+        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0, None).unwrap();
+        assert!(search_terms_of(&conn, id)
+            .iter()
+            .any(|term| term == "sakura"));
+    }
+
+    #[test]
+    fn explicit_empty_search_terms_disable_metadata_search() {
+        let conn = conn();
+        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0, Some(&[])).unwrap();
+        assert!(search_terms_of(&conn, id).is_empty());
     }
 }
 

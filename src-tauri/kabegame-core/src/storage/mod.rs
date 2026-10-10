@@ -20,6 +20,7 @@ pub mod page_snapshot;
 pub mod plugin_data;
 pub mod plugin_sources;
 pub mod run_configs;
+pub mod search_terms;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod safe_delete;
 pub mod source_purge;
@@ -138,6 +139,10 @@ impl Storage {
         self.plugin_sources()
             .ensure_official_github_release()
             .map_err(|e| format!("Failed to ensure official plugin source: {}", e))?;
+        {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+            search_terms::gc_orphan_search_terms(&conn)?;
+        }
 
         Ok(())
     }

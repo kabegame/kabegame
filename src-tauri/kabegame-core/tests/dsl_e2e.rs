@@ -245,9 +245,19 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             id INTEGER PRIMARY KEY,
             data TEXT NOT NULL,
             plugin_version INTEGER NOT NULL DEFAULT 0,
-            plugin_id TEXT NOT NULL DEFAULT '',
-            search_text TEXT NOT NULL DEFAULT ''
+            plugin_id TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE search_terms (
+            id INTEGER PRIMARY KEY,
+            text TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE metadata_search_terms (
+            metadata_id INTEGER NOT NULL REFERENCES metadata(id) ON DELETE CASCADE,
+            term_id INTEGER NOT NULL REFERENCES search_terms(id),
+            PRIMARY KEY (term_id, metadata_id)
+        ) WITHOUT ROWID;
+        CREATE INDEX idx_metadata_search_terms_metadata
+            ON metadata_search_terms(metadata_id);
         CREATE TABLE image_metadata (
             id INTEGER PRIMARY KEY,
             search_text TEXT NOT NULL DEFAULT ''
@@ -320,6 +330,10 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             ('77777777-7777-7777-7777-777777777777', 'Vocaloid', 6, '44444444-4444-4444-4444-444444444444', 'label', '/44444444-4444-4444-4444-444444444444/77777777-7777-7777-7777-777777777777/', 'Vocaloid', 'Pixiv/Vocaloid');
         INSERT INTO metadata(id, data, plugin_version, plugin_id) VALUES
             (1, '{"source":"table","tags":["a"]}', 0, 'pixiv');
+        INSERT INTO search_terms(id, text) VALUES
+            (1, 'source'), (2, 'table'), (3, 'tags'), (4, 'a');
+        INSERT INTO metadata_search_terms(metadata_id, term_id) VALUES
+            (1, 1), (1, 2), (1, 3), (1, 4);
         INSERT INTO tasks VALUES
             (
                 '22222222-2222-2222-2222-222222222222',
@@ -465,10 +479,26 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         .unwrap();
     }
     for (id, name, kind) in [
-        ("90000000-0000-0000-0000-000000000001", "literal%mark", "normal"),
-        ("90000000-0000-0000-0000-000000000002", "literal_under_", "normal"),
-        ("90000000-0000-0000-0000-000000000003", r"literal\slash", "normal"),
-        ("90000000-0000-0000-0000-000000000004", "Local root", "local_folder"),
+        (
+            "90000000-0000-0000-0000-000000000001",
+            "literal%mark",
+            "normal",
+        ),
+        (
+            "90000000-0000-0000-0000-000000000002",
+            "literal_under_",
+            "normal",
+        ),
+        (
+            "90000000-0000-0000-0000-000000000003",
+            r"literal\slash",
+            "normal",
+        ),
+        (
+            "90000000-0000-0000-0000-000000000004",
+            "Local root",
+            "local_folder",
+        ),
     ] {
         conn.execute(
             "INSERT INTO albums(id, name, created_at, parent_id, type, ancestor_path)
@@ -1053,12 +1083,19 @@ fn gallery_url_search_matches_real_url_columns_and_excludes_dummy_urls() {
 
 #[test]
 fn gallery_negated_search_keeps_rows_with_null_columns() {
-    // 前端 `!词` 展开成 `~not/search/<mode>/<词>/~end`。元数据两个范围靠 LEFT JOIN 取
-    // search_text，只有 1 号图有 metadata、没有图有原生元数据：谓词若在 NULL 列上求出
-    // NULL，取非后这些行会被整批丢掉。post_url 只有 122 号图有，靠 UDF 把 NULL 判成占位。
+    // 前端 `!词` 展开成 `~not/search/<mode>/<词>/~end`。只有 1 号图有 metadata、没有图有
+    // 原生元数据；谓词若在 NULL 上求出 NULL，取非后这些行会被整批丢掉。post_url 只有
+    // 122 号图有，靠 UDF 把 NULL 判成占位。
     let runtime = build_runtime();
     let total = runtime.count("images://gallery/all").unwrap();
-    for mode in ["display-name", "metadata", "native-metadata", "local-path", "url", "label"] {
+    for mode in [
+        "display-name",
+        "metadata",
+        "native-metadata",
+        "local-path",
+        "url",
+        "label",
+    ] {
         assert_eq!(
             runtime
                 .count(&format!(
@@ -1069,6 +1106,19 @@ fn gallery_negated_search_keeps_rows_with_null_columns() {
             "!<未命中词> 在 {mode} 上应保留全部图片"
         );
     }
+}
+
+#[test]
+fn gallery_negated_metadata_search_keeps_null_rows_when_term_matches() {
+    let runtime = build_runtime();
+    let total = runtime.count("images://gallery/all").unwrap();
+    assert_eq!(
+        runtime
+            .count("images://gallery/~not/search/metadata/table/~end/all")
+            .unwrap(),
+        total - 1,
+        "命中的 metadata 行应被排除，没有 metadata 的行仍应保留"
+    );
 }
 
 #[test]
@@ -1221,7 +1271,9 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
     let runtime = build_runtime_with(conn.clone());
     let gallery_ids = |segment: &str| {
         ids(runtime
-            .fetch(&format!("images://gallery/aspect/{segment}/filter_comb/sort/by-id"))
+            .fetch(&format!(
+                "images://gallery/aspect/{segment}/filter_comb/sort/by-id"
+            ))
             .unwrap())
     };
 
@@ -1240,7 +1292,10 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
     assert_eq!(gallery_ids("unknown"), ["201", "202", "203", "204"]);
 
     // 应用的五个桶互不重叠、合起来正好是全部图片
-    let mut union: Vec<String> = APP_ASPECT_BUCKETS.iter().flat_map(|s| gallery_ids(s)).collect();
+    let mut union: Vec<String> = APP_ASPECT_BUCKETS
+        .iter()
+        .flat_map(|s| gallery_ids(s))
+        .collect();
     let total = union.len();
     union.sort();
     union.dedup();
@@ -1257,7 +1312,14 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
 
     // 段值不可枚举；非法段不解析
     assert!(runtime.list("images://gallery/aspect").unwrap().is_empty());
-    for bad in ["landscape-4x3-16x9", "other", "0x1-3x4", "3x4", "-", "3x4-x"] {
+    for bad in [
+        "landscape-4x3-16x9",
+        "other",
+        "0x1-3x4",
+        "3x4",
+        "-",
+        "3x4-x",
+    ] {
         assert!(
             runtime
                 .fetch(&format!("images://gallery/aspect/{bad}/x10x/1"))
@@ -1269,11 +1331,61 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
     // VD 友好目录落到与前端同一组桶：逐个目录与对应画廊段的结果集一致
     let _locale_guard = lock_locale_tests();
     let vd_cases = [
-        ("zh", "images://vd/i18n-zh_CN/按尺寸", ["竖屏 (3x4 及更窄)", "方正 (3x4-4x3)", "横屏 (4x3-16x9)", "宽屏 (宽于 16x9)", "未知比例"]),
-        ("zhtw", "images://vd/i18n-zhtw/按尺寸", ["豎屏 (3x4 及更窄)", "方正 (3x4-4x3)", "橫屏 (4x3-16x9)", "寬屏 (寬於 16x9)", "未知比例"]),
-        ("en", "images://vd/i18n-en_US/By Dimensions", ["Portrait (3x4 or narrower)", "Square-ish (3x4-4x3)", "Landscape (4x3-16x9)", "Widescreen (wider than 16x9)", "Unknown ratio"]),
-        ("ja", "images://vd/i18n-ja/寸法別", ["縦長 (3x4 以下)", "スクエア寄り (3x4-4x3)", "横長 (4x3-16x9)", "ワイド (16x9 より横長)", "比率不明"]),
-        ("ko", "images://vd/i18n-ko/크기 비율별", ["세로형 (3x4 이하)", "정방형 (3x4-4x3)", "가로형 (4x3-16x9)", "와이드 (16x9보다 넓음)", "비율 알 수 없음"]),
+        (
+            "zh",
+            "images://vd/i18n-zh_CN/按尺寸",
+            [
+                "竖屏 (3x4 及更窄)",
+                "方正 (3x4-4x3)",
+                "横屏 (4x3-16x9)",
+                "宽屏 (宽于 16x9)",
+                "未知比例",
+            ],
+        ),
+        (
+            "zhtw",
+            "images://vd/i18n-zhtw/按尺寸",
+            [
+                "豎屏 (3x4 及更窄)",
+                "方正 (3x4-4x3)",
+                "橫屏 (4x3-16x9)",
+                "寬屏 (寬於 16x9)",
+                "未知比例",
+            ],
+        ),
+        (
+            "en",
+            "images://vd/i18n-en_US/By Dimensions",
+            [
+                "Portrait (3x4 or narrower)",
+                "Square-ish (3x4-4x3)",
+                "Landscape (4x3-16x9)",
+                "Widescreen (wider than 16x9)",
+                "Unknown ratio",
+            ],
+        ),
+        (
+            "ja",
+            "images://vd/i18n-ja/寸法別",
+            [
+                "縦長 (3x4 以下)",
+                "スクエア寄り (3x4-4x3)",
+                "横長 (4x3-16x9)",
+                "ワイド (16x9 より横長)",
+                "比率不明",
+            ],
+        ),
+        (
+            "ko",
+            "images://vd/i18n-ko/크기 비율별",
+            [
+                "세로형 (3x4 이하)",
+                "정방형 (3x4-4x3)",
+                "가로형 (4x3-16x9)",
+                "와이드 (16x9보다 넓음)",
+                "비율 알 수 없음",
+            ],
+        ),
     ];
     for (locale, root, names) in vd_cases {
         kabegame_i18n::set_locale(locale);
@@ -1291,7 +1403,11 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
             assert!(is_windows_safe_vd_dir_name(name), "{name}");
             let mut vd = ids(runtime.fetch(&format!("{root}/{name}/x1000x/1")).unwrap());
             vd.sort_by_key(|id| id.parse::<i64>().unwrap());
-            assert_eq!(vd, gallery_ids(segment), "{root}/{name} vs aspect/{segment}");
+            assert_eq!(
+                vd,
+                gallery_ids(segment),
+                "{root}/{name} vs aspect/{segment}"
+            );
         }
     }
 }
@@ -1309,7 +1425,10 @@ fn gallery_aspect_sort_sql_orders_by_generated_column() {
         .composed
         .build_sql(&ctx, SqlDialect::Sqlite)
         .unwrap();
-    assert!(sql.contains("ORDER BY images.aspect_ratio ASC, images.id ASC"), "{sql}");
+    assert!(
+        sql.contains("ORDER BY images.aspect_ratio ASC, images.id ASC"),
+        "{sql}"
+    );
 }
 
 #[test]
@@ -1350,7 +1469,11 @@ fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
             .into_iter()
             .map(|row| {
                 let id = row["id"].as_str().unwrap().to_string();
-                (id, row["is_favorite"].as_i64().unwrap(), row["is_hidden"].as_i64().unwrap())
+                (
+                    id,
+                    row["is_favorite"].as_i64().unwrap(),
+                    row["is_hidden"].as_i64().unwrap(),
+                )
             })
             .collect()
     };
@@ -1367,9 +1490,14 @@ fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
     }
 
     let total = runtime.count("images://gallery/all").unwrap();
-    assert_eq!(runtime.count("images://gallery/hide/all").unwrap(), total - 1);
-    assert!(!ids(runtime.fetch("images://gallery/hide/sort/by-id/x100x/1").unwrap())
-        .contains(&"9".to_string()));
+    assert_eq!(
+        runtime.count("images://gallery/hide/all").unwrap(),
+        total - 1
+    );
+    assert!(!ids(runtime
+        .fetch("images://gallery/hide/sort/by-id/x100x/1")
+        .unwrap())
+    .contains(&"9".to_string()));
 
     let resolved = runtime
         .resolve("images://gallery/hide/sort/by-id/x10x/1")
@@ -1381,7 +1509,10 @@ fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
         .build_sql(&ctx, SqlDialect::Sqlite)
         .unwrap();
     assert!(!sql.contains("LEFT JOIN album_images"), "{sql}");
-    assert!(sql.contains("NOT EXISTS (SELECT 1 FROM album_images AS hid_ex"), "{sql}");
+    assert!(
+        sql.contains("NOT EXISTS (SELECT 1 FROM album_images AS hid_ex"),
+        "{sql}"
+    );
 }
 
 #[test]
@@ -1468,7 +1599,9 @@ fn gallery_aspect_buckets_filter_and_explicit_sort_by_ratio() {
     let runtime = build_runtime();
 
     // 111 = 9:16，112 = 3:4（右闭，归竖屏），117 = 1:3（过窄并入竖屏）
-    let portrait = runtime.fetch("images://gallery/aspect/-3x4/x10x/1").unwrap();
+    let portrait = runtime
+        .fetch("images://gallery/aspect/-3x4/x10x/1")
+        .unwrap();
     assert_eq!(ids(portrait), ["111", "112", "117"]);
 
     let landscape = runtime
@@ -1482,7 +1615,9 @@ fn gallery_aspect_buckets_filter_and_explicit_sort_by_ratio() {
     assert_eq!(ids(landscape_desc), ["118", "114"]);
 
     // 115 ≈ 2.13，116 = 3:1（过宽并入宽屏）
-    let widescreen = runtime.fetch("images://gallery/aspect/16x9-/x10x/1").unwrap();
+    let widescreen = runtime
+        .fetch("images://gallery/aspect/16x9-/x10x/1")
+        .unwrap();
     assert_eq!(ids(widescreen), ["115", "116"]);
 
     let unknown = runtime

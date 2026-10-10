@@ -5,16 +5,10 @@
         "query": { "type": "string", "default": "", "optional": false }
     },
     "query": {
-        "join": [{
-            "kind": "LEFT",
-            "table": "metadata",
-            "as": "metadata_im",
-            "on": "images.metadata_id = metadata_im.id",
-            "in_need": true
-        }],
-        // LEFT JOIN 没有元数据时列为 NULL：COALESCE 成空串，保证 `~not` 取非时谓词为假而不是 NULL
-        // （NOT NULL 仍是 NULL，会把没有元数据的图整批排除）。
-        "where": "LOWER(COALESCE(metadata_im.search_text, '')) LIKE LOWER('%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%') ESCAPE '\\'"
+        // 字典 + 映射：先在去重后的词条上做 LIKE（与图片数无关），再按 (term_id, metadata_id) 主键取 metadata 集合。
+        // 必须写成嵌套 IN：JOIN 写法在没有统计信息时会先扫整张映射表（实测 1.1s，嵌套 IN 为 0.16s）。
+        // metadata_id 可能为 NULL：先判 IS NOT NULL，否则 `~not` 下 NULL IN (...) 为 NULL，没有元数据的图会被整批排除。
+        "where": "images.metadata_id IS NOT NULL AND images.metadata_id IN (SELECT metadata_id FROM metadata_search_terms WHERE term_id IN (SELECT id FROM search_terms WHERE text LIKE '%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%' ESCAPE '\\'))"
     },
     "resolve": {
         ".*": {

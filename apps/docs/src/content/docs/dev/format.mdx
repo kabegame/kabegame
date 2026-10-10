@@ -89,7 +89,7 @@ Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用�
 
 ### metadata_migrations/migrate.js
 
-单一 metadata 迁移脚本，由 `kbMetadataMigration` 引用。ES module，可导出 `migrate(metadata)`（入参与返回值都是 **JSON 字符串**）与 `provideLabels(metadata)`（返回标签数组，给历史图片补标签），至少导出一个；运行在裸 V8（无 import、无宿主 API）。按 metadata 里的 `schema` 自检、幂等、一步到位；每行无论成败只处理一次。契约与示例见 [V8 脚本 · 元数据迁移](/dev/v8-api/#元数据迁移)。
+单一 metadata 迁移脚本，由 `kbMetadataMigration` 引用。ES module，可导出 `migrate(metadata)`（入参与返回值都是 **JSON 字符串**）、`provideLabels(metadata)`（给历史图片补标签）与 `provideSearchTextList(metadata)`（给历史图片提供搜索片段），至少导出一个；运行在裸 V8（无 import、无宿主 API）。搜索片段应覆盖 `description.ejs` 展示原文，可增加 `<插件>_<字段>_<值>` 前缀，不收录键名、不可见链接或过期文字。按 metadata 里的 `schema` 自检、幂等、一步到位；每行无论成败只处理一次。契约与示例见 [V8 脚本 · 元数据迁移](/dev/v8-api/#元数据迁移)。
 
 :::note
 旧的逐版本 `metadata_migrations/v{N}.rhai` 与数组键 `kbMetadataMigrations` 已废弃、不再解析。
@@ -97,7 +97,7 @@ Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用�
 
 ### templates/description.ejs
 
-由前端用 EJS 把图片的 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。`metadata` 来源是爬虫 `downloadImage(url, { metadata })` 写入的 `image_metadata` 行；模板随插件元数据一起加载到内存，由前端直接消费。
+由前端用 EJS 把图片的 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。`metadata` 来源是爬虫 `downloadImage(url, { metadata })` 写入的 `metadata` 行；模板随插件元数据一起加载到内存，由前端直接消费。
 
 模板渲染时只有一个变量 `metadata`：
 

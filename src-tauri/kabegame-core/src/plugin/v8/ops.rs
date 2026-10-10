@@ -5,6 +5,7 @@ use crate::plugin::archive::{ExtractOptions, ExtractResult};
 use crate::plugin::ffmpeg::FfmpegProbeResult;
 use crate::settings::Settings;
 use crate::storage::labels::{validate_label_values, LabelSpec};
+use crate::storage::search_terms::validate_search_text_values;
 use crate::storage::Storage;
 use deno_core::{op2, OpState};
 use deno_error::JsErrorBox;
@@ -609,12 +610,26 @@ pub async fn op_kabegame_download_image(
 pub fn op_kabegame_create_image_metadata(
     state: &mut OpState,
     #[serde] value: JsonValue,
-    #[serde] _opts: Option<JsonValue>,
+    #[serde] opts: Option<JsonValue>,
 ) -> Result<i64, JsErrorBox> {
     // plugin_version 由应用盖章（图片下载时的插件版本），插件不可传入；旧 opts.version 静默忽略。
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
+    let opts = match opts.as_ref() {
+        None | Some(JsonValue::Null) => None,
+        Some(JsonValue::Object(opts)) => Some(opts),
+        Some(_) => {
+            return Err(JsErrorBox::generic(
+                "create_image_metadata opts must be an object",
+            ))
+        }
+    };
+    let search_terms = parse_search_texts(
+        opts.and_then(|opts| opts.get("searchTexts")),
+        &task_id,
+        "create_image_metadata opts.searchTexts",
+    )?;
     run_of(&task_id)?
-        .insert_metadata(&value)
+        .insert_metadata(&value, search_terms)
         .map_err(|e| JsErrorBox::generic(format!("create_image_metadata: {e}")))
 }
 
@@ -691,11 +706,25 @@ fn parse_download_opts(opts: Option<JsonValue>, run: &Task) -> Result<DownloadOp
         &run.task_id,
         "download_image opts.labels",
     )?;
+    let search_terms = parse_search_texts(
+        opts.get("searchTexts"),
+        &run.task_id,
+        "download_image opts.searchTexts",
+    )?;
     // 版本由应用盖章（图片下载时的插件版本），插件不可传入；旧 `metadata_version` 键静默忽略。
     let metadata_id = if let Some(id) = metadata_id {
+        if search_terms.is_some() {
+            emit_label_warning(
+                &run.task_id,
+                "[searchTexts] 同时传入 metadata_id，已忽略 searchTexts".to_string(),
+            );
+        }
         Some(id)
     } else if let Some(value) = metadata {
-        Some(run.insert_metadata(&value).map_err(JsErrorBox::generic)?)
+        Some(
+            run.insert_metadata(&value, search_terms)
+                .map_err(JsErrorBox::generic)?,
+        )
     } else {
         None
     };
@@ -720,6 +749,22 @@ fn parse_download_labels(
         emit_label_warning(task_id, format!("[labels] 跳过 {label}[{index}]：{reason}"));
     }
     Ok(specs)
+}
+
+fn parse_search_texts(
+    value: Option<&JsonValue>,
+    task_id: &str,
+    label: &str,
+) -> Result<Option<Vec<String>>, JsErrorBox> {
+    let (terms, rejected) = validate_search_text_values(value)
+        .map_err(|error| JsErrorBox::generic(format!("{label}: {error}")))?;
+    for (index, reason) in rejected {
+        emit_label_warning(
+            task_id,
+            format!("[searchTexts] 跳过 {label}[{index}]：{reason}"),
+        );
+    }
+    Ok(terms)
 }
 
 fn emit_label_warning(task_id: &str, message: String) {
@@ -1144,5 +1189,19 @@ mod tests {
     fn parse_download_opts_labels_non_array_is_an_argument_error() {
         let value = json!({ "key": "hatsune" });
         assert!(parse_download_labels(Some(&value), "pixiv", "task", "labels").is_err());
+    }
+
+    #[test]
+    fn ops_search_texts_parse_normalize_and_skip_invalid_entries() {
+        let value = json!(["  alpha\nbeta ", 42, "", "alpha beta"]);
+        let terms = parse_search_texts(Some(&value), "task", "searchTexts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(terms, ["alpha beta"]);
+    }
+
+    #[test]
+    fn ops_search_texts_non_array_is_an_argument_error() {
+        assert!(parse_search_texts(Some(&json!({"text": "x"})), "task", "searchTexts").is_err());
     }
 }

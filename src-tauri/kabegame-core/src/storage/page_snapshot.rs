@@ -44,8 +44,8 @@ pub fn validate(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 快照只索引标题与来源 URL（整页 HTML 会让正文里的任意词误命中）；非快照返回 `None`。
-pub fn search_text(value: &Value) -> Option<String> {
+/// 快照只索引标题与来源 URL 两个片段（整页 HTML 会让正文里的任意词误命中）；非快照返回 `None`。
+pub fn search_terms(value: &Value) -> Option<Vec<String>> {
     let obj = as_snapshot(value)?;
     let text = |key: &str| {
         obj.get(key)
@@ -53,7 +53,11 @@ pub fn search_text(value: &Value) -> Option<String> {
             .unwrap_or_default()
             .replace(['\n', '\r'], " ")
     };
-    Some(format!("{}\n{}", text("title"), text("sourceUrl")))
+    Some(vec![text("title"), text("sourceUrl")])
+}
+
+pub fn search_text(value: &Value) -> Option<String> {
+    search_terms(value).map(|terms| terms.join("\n"))
 }
 
 #[cfg(test)]

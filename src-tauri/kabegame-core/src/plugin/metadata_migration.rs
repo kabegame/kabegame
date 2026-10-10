@@ -4,6 +4,7 @@ use super::Plugin;
 use crate::emitter::GlobalEmitter;
 use crate::ipc::events::ImagePatch;
 use crate::storage::labels::{validate_labels, LabelInput};
+use crate::storage::search_terms::validate_search_text_values;
 use crate::storage::Storage;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -219,12 +220,20 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
         rows,
         || service.advance(&plugin_id),
     ));
+    let gc_result = storage.gc_orphan_search_terms();
     let (changed, _touched_albums, image_patches) = match result {
         Ok(result) => {
+            gc_result?;
             run_guard.finish(None);
             result
         }
         Err(error) => {
+            if let Err(gc_error) = gc_result {
+                eprintln!(
+                    "[metadata-migration] plugin `{}` search term gc failed: {}",
+                    plugin.id, gc_error
+                );
+            }
             run_guard.finish(Some(error.clone()));
             return Err(error);
         }
@@ -334,11 +343,44 @@ async fn run_metadata_migrations(
             }
         }
 
+        let search_terms = if let (Some(migrated), Some(function)) = (
+            migrated.as_ref(),
+            exports
+                .as_ref()
+                .and_then(|exports| exports.provide_search_text_list.as_ref()),
+        ) {
+            match engine
+                .call_provide_search_text_list(function, migrated.clone())
+                .await
+            {
+                Ok(inputs) => {
+                    let value = serde_json::to_value(inputs)
+                        .map_err(|e| format!("serialize provideSearchTextList result: {e}"))?;
+                    let (terms, rejected) = validate_search_text_values(Some(&value))?;
+                    for (index, reason) in rejected {
+                        eprintln!(
+                            "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList[{index}] skipped: {reason}"
+                        );
+                    }
+                    terms
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList failed: {error}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         if let Some((metadata_id, image_ids)) = storage.writeback_migrated_metadata_row(
             row_id,
             plugin_id,
             target,
             migrated.as_deref().unwrap_or(&data),
+            search_terms,
         )? {
             changed = true;
             let grouped = image_patch_groups.entry((metadata_id, target)).or_default();
@@ -399,6 +441,7 @@ struct MigrationEngine {
 struct MigrationExports {
     migrate: Option<v8::Global<v8::Function>>,
     provide_labels: Option<v8::Global<v8::Function>>,
+    provide_search_text_list: Option<v8::Global<v8::Function>>,
 }
 
 impl MigrationEngine {
@@ -408,8 +451,8 @@ impl MigrationEngine {
         }
     }
 
-    /// 装载迁移脚本并返回可选的 `migrate` / `provideLabels` 导出。
-    /// 两者都缺失时才视为脚本装载失败。
+    /// 装载迁移脚本并返回可选的 `migrate` / `provideLabels` / `provideSearchTextList` 导出。
+    /// 三者都缺失时才视为脚本装载失败。
     async fn load_script(&mut self, source: &str) -> Result<MigrationExports, String> {
         let specifier = resolve_url("file:///metadata_migrations/migrate.js")
             .map_err(|e| format!("解析模块地址失败: {e}"))?;
@@ -457,12 +500,30 @@ impl MigrationEngine {
                 }
             }
         };
-        if migrate.is_none() && provide_labels.is_none() {
-            return Err("迁移脚本必须导出 `migrate` 或 `provideLabels` 函数".to_string());
+        let provide_search_text_list = {
+            let key = v8::String::new(scope, "provideSearchTextList")
+                .ok_or_else(|| "无法分配 `provideSearchTextList` 键".to_string())?;
+            match ns.get(scope, key.into()) {
+                None => None,
+                Some(value) if value.is_undefined() => None,
+                Some(value) => {
+                    let function = v8::Local::<v8::Function>::try_from(value).map_err(|_| {
+                        "迁移脚本的 `provideSearchTextList` 导出不是函数".to_string()
+                    })?;
+                    Some(v8::Global::new(scope, function))
+                }
+            }
+        };
+        if migrate.is_none() && provide_labels.is_none() && provide_search_text_list.is_none() {
+            return Err(
+                "迁移脚本必须导出 `migrate`、`provideLabels` 或 `provideSearchTextList` 函数"
+                    .to_string(),
+            );
         }
         Ok(MigrationExports {
             migrate,
             provide_labels,
+            provide_search_text_list,
         })
     }
 
@@ -512,6 +573,29 @@ impl MigrationEngine {
         serde_v8::from_v8::<Vec<LabelInput>>(scope, local)
             .map_err(|_| "provideLabels() 必须返回标签数组".to_string())
     }
+
+    /// 调用 `provideSearchTextList(input) -> string[]`，同步与 Promise 返回都支持。
+    async fn call_provide_search_text_list(
+        &mut self,
+        func: &v8::Global<v8::Function>,
+        input: String,
+    ) -> Result<Vec<String>, String> {
+        let arg: v8::Global<v8::Value> = {
+            deno_core::scope!(scope, &mut self.runtime);
+            let local = serde_v8::to_v8(scope, input).map_err(|e| e.to_string())?;
+            v8::Global::new(scope, local)
+        };
+        let call = self.runtime.call_with_args(func, &[arg]);
+        let result = self
+            .runtime
+            .with_event_loop_promise(call, PollEventLoopOptions::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        deno_core::scope!(scope, &mut self.runtime);
+        let local = v8::Local::new(scope, result);
+        serde_v8::from_v8::<Vec<String>>(scope, local)
+            .map_err(|_| "provideSearchTextList() 必须返回字符串数组".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -535,6 +619,7 @@ mod tests {
 
     fn test_storage(row_count: i64) -> Storage {
         let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         crate::storage::migrations::init::create_all_tables(&conn);
         for id in 1..=row_count {
             conn.execute(
@@ -581,6 +666,23 @@ mod tests {
             |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u32)),
         )
         .unwrap()
+    }
+
+    fn metadata_search_terms(storage: &Storage, id: i64) -> Vec<String> {
+        let conn = storage.db.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT search_terms.text
+                 FROM metadata_search_terms
+                 JOIN search_terms ON search_terms.id = metadata_search_terms.term_id
+                 WHERE metadata_search_terms.metadata_id = ?1
+                 ORDER BY search_terms.id",
+            )
+            .unwrap();
+        stmt.query_map([id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     fn test_plugin(version_packed: u32) -> Plugin {
@@ -780,6 +882,73 @@ export async function provideLabels(input) {
         let album = check.get_album_by_id(&albums[0]).unwrap().unwrap();
         assert_eq!(album.label_key.as_deref(), Some("async_tag"));
         assert_eq!(metadata_row(&check, 1).1, 3);
+    }
+
+    #[test]
+    fn metadata_migration_accepts_provide_search_text_list_only() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let script = r#"
+export function provideSearchTextList(input) {
+  return [`custom_${JSON.parse(input).id}`, "  display name  ", "custom_1"];
+}
+"#
+        .to_string();
+        let (changed, _, _) = run_runner(storage, script, 6);
+        assert!(changed);
+        assert_eq!(
+            metadata_search_terms(&check, 1),
+            ["custom_1", "display name"]
+        );
+    }
+
+    #[test]
+    fn metadata_migration_search_text_provider_failure_uses_default_terms() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let script = r#"
+export function provideSearchTextList(_input) { throw new Error("broken"); }
+"#
+        .to_string();
+        run_runner(storage, script, 7);
+        assert_eq!(metadata_search_terms(&check, 1), ["id"]);
+    }
+
+    #[test]
+    fn metadata_migration_merge_cascades_deleted_row_search_mappings() {
+        let storage = test_storage(2);
+        let check = storage.clone();
+        {
+            let conn = check.db.lock().unwrap();
+            crate::storage::search_terms::replace_metadata_search_terms(
+                &conn,
+                2,
+                &["obsolete".to_string()],
+            )
+            .unwrap();
+        }
+        let script = r#"
+export function migrate(_input) { return "{}"; }
+"#
+        .to_string();
+        run_runner(storage, script, 8);
+        let conn = check.db.lock().unwrap();
+        let row_two_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 2)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let row_two_mappings: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metadata_search_terms WHERE metadata_id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!row_two_exists);
+        assert_eq!(row_two_mappings, 0);
     }
 
     #[test]

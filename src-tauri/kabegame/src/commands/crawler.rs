@@ -14,6 +14,7 @@ use kabegame_core::plugin::{
 };
 use kabegame_core::storage::labels::{validate_label_values, LabelSpec};
 use kabegame_core::storage::page_snapshot::SURF_METADATA_VERSION;
+use kabegame_core::storage::search_terms::validate_search_text_values;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -130,6 +131,7 @@ pub(crate) fn insert_metadata(
             &value,
             plugin_id,
             plugin_version,
+            None,
         )?))
     } else {
         Ok(None)
@@ -1176,9 +1178,11 @@ pub async fn crawl_add_progress<R: Runtime>(
 pub async fn crawl_create_image_metadata<R: Runtime>(
     webview: WebviewWindow<R>,
     value: Value,
+    search_texts: Option<Value>,
 ) -> Result<i64, String> {
-    let (_, run) = run_of(&webview)?;
-    run.insert_metadata(&value)
+    let (task_id, run) = run_of(&webview)?;
+    let search_terms = validate_crawler_search_texts(search_texts, &task_id, "searchTexts")?;
+    run.insert_metadata(&value, search_terms)
 }
 
 #[tauri::command]
@@ -1207,7 +1211,7 @@ pub async fn crawl_set_plugin_data<R: Runtime>(
 }
 
 /// WebView `Kabegame.downloadImage(url, opts)`：支持与 V8 同形的
-/// `opts.name` / `opts.url` / `opts.metadata_id` / `opts.metadata`。
+/// `opts.name` / `opts.url` / `opts.metadata_id` / `opts.metadata` / `opts.searchTexts`。
 /// raw metadata 在入口处归一化为 `metadata_id`，下载队列只传 id。
 #[tauri::command]
 pub async fn crawl_download_image<R: Runtime>(
@@ -1218,6 +1222,7 @@ pub async fn crawl_download_image<R: Runtime>(
     metadata_id: Option<i64>,
     source_url: Option<String>,
     labels: Option<Value>,
+    search_texts: Option<Value>,
 ) -> Result<(), String> {
     let (task_id, run) = run_of(&webview)?;
 
@@ -1230,10 +1235,18 @@ pub async fn crawl_download_image<R: Runtime>(
     )?;
     let images_dir = run.params.images_dir.clone();
     let download_start_time = now_ms();
+    let search_terms = validate_crawler_search_texts(search_texts, &task_id, "searchTexts")?;
     let metadata_id = if let Some(id) = metadata_id {
+        if search_terms.is_some() {
+            GlobalEmitter::global().emit_task_log(
+                &task_id,
+                "warn",
+                "[searchTexts] 同时传入 metadata_id，已忽略 searchTexts",
+            );
+        }
         Some(id)
     } else if let Some(value) = metadata {
-        Some(run.insert_metadata(&value)?)
+        Some(run.insert_metadata(&value, search_terms)?)
     } else {
         None
     };
@@ -1277,6 +1290,23 @@ fn validate_crawler_download_labels(
         );
     }
     Ok(specs)
+}
+
+fn validate_crawler_search_texts(
+    value: Option<Value>,
+    task_id: &str,
+    label: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let (terms, rejected) =
+        validate_search_text_values(value.as_ref()).map_err(|error| format!("{label}: {error}"))?;
+    for (index, reason) in rejected {
+        GlobalEmitter::global().emit_task_log(
+            task_id,
+            "warn",
+            &format!("[searchTexts] 跳过 {label}[{index}]：{reason}"),
+        );
+    }
+    Ok(terms)
 }
 
 /// 畅游右键下载 / 一键下载统一入队；worker 仍会在所属 surf WebView 中调用 CEF 下载以保留会话。

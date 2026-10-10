@@ -116,12 +116,22 @@ await Kabegame.downloadImage(imageUrl, {
   name: "artist / character",   // 展示名 / 文件名
   url: postUrl,                 // 来源 URL
   metadata: { schema: 1, title: "Post title", tags: ["wallpaper"] },
+  searchTexts: ["Post title", "my-plugin_tags_wallpaper"],
 });
 ```
 
 - `downloadImage` 把资源加入下载队列。
-- `opts.metadata` 是任意 JSON，写入 `image_metadata` 行，用于详情页展示（配合 `templates/description.ejs`）。存储时会由应用自动盖上**运行插件的版本号**；请在 metadata 里自带一个 `schema` 标记供迁移脚本判断。
+- `opts.metadata` 是任意 JSON，写入 `metadata` 行，用于详情页展示（配合 `templates/description.ejs`）。存储时会由应用自动盖上**运行插件的版本号**；请在 metadata 里自带一个 `schema` 标记供迁移脚本判断。
 - 多张图共享一行 metadata，或需要在解析出图片 URL 前先写 metadata 时，用 `createImageMetadata` 拿到 `metadata_id` 再传给 `downloadImage(url, { metadata_id })`。
+
+### 元数据搜索片段
+
+`downloadImage(url, { metadata, searchTexts })` 与 `createImageMetadata(value, { searchTexts })` 可以为新 metadata 提供精选搜索片段。缺省时应用按键名与字符串叶子展开 JSON；空数组表示不参与元数据搜索。`downloadImage` 同时传 `metadata_id` 时不会新建 metadata，因此会忽略 `searchTexts` 并写警告。
+
+- 尽量覆盖 `description.ejs` 展示给用户的原文，例如标签显示名，让搜索符合直觉。
+- 可以增加 `<插件>_<字段>_<值>` 形式的前缀条目，支持 `my-plugin_rating_safe` 这类按字段筛选。
+- 不要收录键名、页面看不到的链接，以及会过期或没有信息量的文字。
+- 每项最多 1024 字符、最多 1000 项；片段会清理换行与首尾空白并去重，无效项记录警告后跳过。
 
 ### 图片标签
 
@@ -246,7 +256,7 @@ try {
 
 插件升级后，历史图片的 `metadata` 结构可能变化。提供 `metadata_migrations/migrate.js` 并在 `package.json` 声明 `kbMetadataMigration`，即可把旧行就地迁移到新结构。
 
-契约：一个 ES module，`export function migrate(metadata)`（或 `export default`），入参与返回值都是 **JSON 字符串**，运行在**裸 V8**（无 import、无 `Kabegame.*`、无宿主 API，只有原生 `JSON`/`String`/`RegExp` 等）。脚本应按 metadata 里的 `schema` 自检、**幂等、一步到位**。
+契约：一个 ES module，`export function migrate(metadata)` 的入参与返回值都是 **JSON 字符串**，运行在**裸 V8**（无 import、无 `Kabegame.*`、无宿主 API，只有原生 `JSON`/`String`/`RegExp` 等）。脚本应按 metadata 里的 `schema` 自检、**幂等、一步到位**。
 
 ```js
 // metadata_migrations/migrate.js
@@ -258,14 +268,14 @@ export function migrate(json) {
 }
 ```
 
-迁移后的行按 `(plugin_id, version, content_hash)` 去重；迁移成功会先发出带最终 `metadataId` / `pluginVersion` 的
+迁移后的行按 `(plugin_id, plugin_version, data)` 去重；迁移成功会先发出带最终 `metadataId` / `pluginVersion` 的
 `image-changed` 字段快照，再发出作用域为该插件的 `images-change(change)` 对账列表。
 
 每一行无论迁移成功与否都只处理一次：失败时保留原数据并同样盖上当前插件版本，不会在每次启动时反复重试；修好脚本后需要再发一个新版本。
 
 ### 给历史图片补标签
 
-同一个脚本可以再导出 `provideLabels(json)`（允许 `async`），返回与 `downloadImage` 的 `labels` 相同结构的数组。应用只在 `migrate` 成功后，用**迁移后的** metadata 调用它，并把标签挂到引用这行 metadata 的所有图片上。`migrate` 与 `provideLabels` 至少导出一个；只导出 `provideLabels` 时按原数据调用。
+同一个脚本可以再导出 `provideLabels(json)`（允许 `async`），返回与 `downloadImage` 的 `labels` 相同结构的数组。应用只在 `migrate` 成功后，用**迁移后的** metadata 调用它，并把标签挂到引用这行 metadata 的所有图片上。
 
 ```js
 export function provideLabels(json) {
@@ -273,6 +283,19 @@ export function provideLabels(json) {
   return (m.characters ?? []).map((c) => ({ key: c.slug, category: "my-plugin/character", name: c.name }));
 }
 ```
+
+### 给历史图片提供搜索片段
+
+脚本还可导出 `provideSearchTextList(json)`（允许 `async`），返回字符串数组。调用失败或未导出时回退到默认 JSON 展开；显式返回空数组表示不参与元数据搜索。编写原则与爬取时的 `searchTexts` 相同：覆盖模板展示原文，可增加字段前缀，不收录键名、不可见链接或过期文字。
+
+```js
+export function provideSearchTextList(json) {
+  const m = JSON.parse(json);
+  return [m.title, ...(m.tags ?? []).map((tag) => `my-plugin_tags_${tag}`)].filter(Boolean);
+}
+```
+
+`migrate`、`provideLabels` 与 `provideSearchTextList` 至少导出一个；没有 `migrate` 时，两个 provider 都按原数据调用。
 
 :::note
 旧的 `metadata_migrations/v{N}.rhai` 逐版本迁移与数组键 `kbMetadataMigrations` 已废弃、不再解析。用单一 `migrate.js` + `kbMetadataMigration`。
