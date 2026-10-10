@@ -696,3 +696,28 @@ konachan 1.6.0 作为示范。
 | [ ] | konachan 搜索命中 | dev app | 在元数据维度搜 `bikini`、`love live! school idol project`、`konachan_tags_bikini`、`konachan_rating_safe`、konachan 站内 URL 片段 | 前四个命中，站内 URL 片段不再命中 | |
 | [ ] | konachan 新爬数据 | dev CLI | 用 `run-crawler-plugin` 跑一页 | 新 metadata 的词条与 `searchTexts` 一致 | |
 | [ ] | CLI 只读查询 | CLI + 迁移后库 | `pathql query` 元数据搜索路径；再对 v036 的库执行 | 前者正常返回；后者报 schema 版本过旧并以非 0 退出 | |
+
+## 原生元数据只收值 + 搜索 `LIKE` 去 `LOWER`
+
+原生元数据（`image_metadata.search_text`）改为只收 JSON 字符串值、不收键名，v038 重算存量。
+画廊的文件名 / 本地路径 / url / 原生元数据搜索，`LIKE` 两侧不再包 `LOWER`；标签维度用 `instr`，保留 `LOWER`。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | cargo 0 error | |
+| [x] | 单测与集成测试 | 本机 | 分别带过滤名 `metadata_search_text` / `v038` / `native_metadata` / `providers::query` / `metadata_search_terms` 跑 `test-kabegame`，再跑 `--test dsl_e2e` | 全部通过 | |
+| [x] | 去 `LOWER` 结果一致 | prod 库副本（v037） | 同一条四维度排除 COUNT，带 `LOWER` 与去掉 `LOWER` 各执行一次 | 结果相同，耗时下降 | 203→163ms，结果都是 24014 |
+| [x] | v038 迁移 | prod 库副本 | 执行 v037→v038，再用 `value` / `entries` / `format` 和若干真实值搜原生元数据 | 键名不再全量命中，真实值命中数不变 | 迁移 354ms；`value` 1766→4、`format` 24793→276；`jpeg` / `GIMP` / `sRGB` / `Photoshop` 等不变 |
+| [ ] | app 升级到 v038 | 桌面 CEF + prod 库 | 重启 app，在原生元数据维度搜 `value` 与 `GIMP` | 启动日志有 `[db-migration] v038`；`value` 几乎不命中，`GIMP` 正常命中 | |
+| [ ] | 大小写不敏感 | 桌面 CEF | 文件名 / url / 原生元数据维度分别用大写与小写搜同一个词（如 `GIMP` / `gimp`） | 两种写法结果相同 | |
+
+## 画廊页号走 resolve，不再先列举页号
+
+`gallery_paginate_router`（`x<N>x` 之后的一层）新增 `([1-9][0-9]*)` resolve，直接实例化 `query_page_provider`。resolve 先于动态 list 反查，翻页解析 `x<N>x/<页>` 不再先跑一遍 `page_size_provider` 的页号列举 SQL（之前在 prod 实测约 106ms）。list 保留给 VD 目录与 MCP 枚举页号。越过末页的页号现在取行为空，不再是 path not found。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 集成测试 | 本机 | `test-kabegame kabegame-core --test dsl_e2e`（含新用例 `gallery_page_number_resolves_without_listing_pages`） | 47 个全部通过；第 99 页可解析且为空，`x100x` 仍能列出 1、2 两页 | |
+| [ ] | 翻页不再跑列举 SQL | 桌面 CEF + `KABEGAME_SQL_DEBUG=1` | 画廊翻到第 2 页、切换每页条数、带搜索翻页 | stderr 只有取行与 COUNT，没有 `SELECT page_num … ROW_NUMBER()` | |
+| [ ] | VD 与 MCP 列举页号 | 桌面 CEF | 资源管理器打开 VD 某个画册的 `x100x` 目录；MCP `list_pathql_entry("gallery/all/x100x")` | 页号目录与之前一致 | |
+| [ ] | 末页之后 | 桌面 CEF | 在最后一页删光图片，或手动打开超出页数的页 | 显示空页或回到有效页，不报错 | |

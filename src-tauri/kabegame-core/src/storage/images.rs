@@ -1,4 +1,6 @@
-use crate::storage::metadata_search_text::{search_terms_from_json_str, search_text_from_json_str};
+use crate::storage::metadata_search_text::{
+    native_search_text_from_json_str, search_terms_from_json_str,
+};
 use crate::storage::search_terms::replace_metadata_search_terms;
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
@@ -266,7 +268,7 @@ fn insert_image_metadata_row(
     data_json: &str,
     parser_version: u32,
 ) -> Result<i64, String> {
-    let search_text = search_text_from_json_str(data_json);
+    let search_text = native_search_text_from_json_str(data_json);
     conn.execute(
         "INSERT INTO image_metadata (data, parser_version, search_text) VALUES (?1, ?2, ?3)",
         params![data_json, i64::from(parser_version), search_text],

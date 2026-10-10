@@ -814,6 +814,33 @@ fn image_basic_delegate_contributes_fields_order_and_schema_from() {
 }
 
 #[test]
+fn gallery_page_number_resolves_without_listing_pages() {
+    let runtime = build_runtime();
+    let total = runtime.count("images://gallery/all").unwrap();
+    assert!(total > 100 && total < 200, "total={total}");
+    // x<N>x 后的页号由 resolve 直接实例化，不经 page_size_provider 列举：越过末页也能解析、取行为空。
+    // 若退回 list 反查，第 99 页枚举不出来，会是 path not found。
+    for path in [
+        "images://gallery/all/x100x/99",
+        "images://gallery/all/desc/x100x/99",
+        "images://x100x/99",
+    ] {
+        assert!(runtime.fetch(path).unwrap().is_empty(), "path={path}");
+        assert_eq!(runtime.count(path).unwrap(), 0, "path={path}");
+    }
+    assert_eq!(
+        runtime.fetch("images://gallery/all/x100x/2").unwrap().len(),
+        total - 100
+    );
+    // 列举仍保留给 VD 目录与 MCP。
+    let pages = runtime.list("images://gallery/all/x100x").unwrap();
+    assert_eq!(
+        pages.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["1", "2"]
+    );
+}
+
+#[test]
 fn dsl_loader_rejects_legacy_from_contribution() {
     let runtime = ProviderRuntime::new(make_executor(fixture_db()), HashMap::new());
     let err = runtime

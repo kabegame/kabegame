@@ -4,6 +4,7 @@
     "properties": {
         "page_size": { "type": "number", "default": 1, "optional": false }
     },
+    // list 只给 VD 目录 / MCP 枚举页号用：page_size_provider 会把上游结果整个跑一遍数行。
     "list": {
         "${out.name}": {
             "alias": "page",
@@ -16,6 +17,18 @@
             "properties": {
                 "page_size": "${properties.page_size}",
                 "page_num":  "${out.meta.page_num}"
+            }
+        }
+    },
+    // 解析页号时 resolve 先于动态 list 反查（RULES §5.2）：直接实例化分页节点，不跑上面的列举 SQL。
+    // 画廊每次翻页都解析 x<N>x/<页>，没有这条就会先把整个结果集数一遍；越过末页的页号也因此
+    // 取行为空，而不是 path not found。
+    "resolve": {
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": "${properties.page_size}",
+                "page_num":  "${capture[1]}"
             }
         }
     }

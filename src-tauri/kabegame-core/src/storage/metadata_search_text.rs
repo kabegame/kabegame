@@ -1,7 +1,9 @@
 //! 把 metadata / image_metadata 的 JSON `data` 展开成扁平可搜索文本，预存进 search_text 列。
 //!
-//! 收集规则（两张表通用，不按 schema 做字段白名单）：
-//! - object 的键全部收集（JSON 键必为字符串）
+//! 收集规则（不按 schema 做字段白名单）：
+//! - object 的键：插件 metadata（默认展开规则）全部收集；原生元数据（`image_metadata`）不收集——
+//!   解析器输出的结构键（format / groups / id / subtitle / entries / tag / value）每行都有，
+//!   收进去会让搜这些词命中全部图片，有用的只有值
 //! - 字符串叶子值全部收集；若该字符串本身又是一份合法 JSON（双重编码，如 ComfyUI 把整个
 //!   workflow 存成 PNG tEXt chunk 的字符串值、评论字段存成 Quill Delta JSON 字符串），
 //!   且解析结果是 object/array，则递归再拆一层——只在解析出容器类型时才递归，避免把
@@ -36,8 +38,18 @@ pub(crate) fn flatten_json_for_search(value: &Value) -> String {
 
 pub(crate) fn flatten_json_search_terms(value: &Value) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
-    collect_search_text_parts(value, &mut parts);
+    collect_search_text_parts(value, true, &mut parts);
     normalize_search_terms(parts)
+}
+
+/// 原生元数据 `image_metadata.search_text`：只收字符串值、不收键名。非法 JSON 返回空串。
+pub(crate) fn native_search_text_from_json_str(data_json: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(data_json) else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    collect_search_text_parts(&value, false, &mut parts);
+    normalize_search_terms(parts).join("\n")
 }
 
 /// 片段内换行归一化为空格，保证换行只作为分隔符出现。
@@ -49,22 +61,24 @@ fn sanitize_fragment(s: &str) -> String {
     }
 }
 
-fn collect_search_text_parts(value: &Value, parts: &mut Vec<String>) {
+fn collect_search_text_parts(value: &Value, include_keys: bool, parts: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, value) in map {
-                parts.push(sanitize_fragment(key));
-                collect_search_text_parts(value, parts);
+                if include_keys {
+                    parts.push(sanitize_fragment(key));
+                }
+                collect_search_text_parts(value, include_keys, parts);
             }
         }
         Value::Array(items) => {
             for value in items {
-                collect_search_text_parts(value, parts);
+                collect_search_text_parts(value, include_keys, parts);
             }
         }
         Value::String(s) => match serde_json::from_str::<Value>(s) {
             Ok(nested @ (Value::Object(_) | Value::Array(_))) => {
-                collect_search_text_parts(&nested, parts);
+                collect_search_text_parts(&nested, include_keys, parts);
             }
             _ => parts.push(sanitize_fragment(s)),
         },
@@ -74,7 +88,9 @@ fn collect_search_text_parts(value: &Value, parts: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{flatten_json_for_search, search_text_from_json_str};
+    use super::{
+        flatten_json_for_search, native_search_text_from_json_str, search_text_from_json_str,
+    };
     use serde_json::json;
 
     #[test]
@@ -118,6 +134,32 @@ mod tests {
 
         assert_eq!(flattened, "items\nfirst\nleaf\nsecond");
         assert!(!flattened.contains("42"));
+    }
+
+    #[test]
+    fn native_metadata_collects_values_without_structural_keys() {
+        let data = json!({
+            "format": "jpeg",
+            "partial": false,
+            "groups": [{
+                "id": "image",
+                "subtitle": "IFD0 · Primary",
+                "entries": [{ "tag": "Software", "value": "GIMP 2.10.36" }]
+            }]
+        })
+        .to_string();
+        let text = native_search_text_from_json_str(&data);
+
+        assert_eq!(text, "jpeg\nimage\nIFD0 · Primary\nSoftware\nGIMP 2.10.36");
+        for key in [
+            "format", "partial", "groups", "subtitle", "entries", "tag", "value",
+        ] {
+            assert!(
+                !text.split('\n').any(|part| part == key),
+                "key {key:?} leaked into {text:?}"
+            );
+        }
+        assert_eq!(native_search_text_from_json_str("{invalid"), "");
     }
 
     #[test]

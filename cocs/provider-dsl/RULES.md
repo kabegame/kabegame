@@ -382,6 +382,10 @@ query:
   路径就 `path not found`——但「命中数为 0」是合法查询结果，不是不存在的路径。凡是
   值域可由格式判定的维度段（年 `([0-9]{4})y`、月/日、媒体格式等），都要加一条正则
   resolve 直接实例化对应 provider；resolve 按声明顺序匹配（§5.2），兜底正则放最后。
+  兜底同时是性能要求：resolve 先于动态 list 反查（§5.2），命中就不跑列举数据源。分页页号是典型——
+  `page_size_provider` 的列举要把上游结果整个跑一遍数行，画廊每次翻页都要解析 `x<N>x/<页>`，
+  所以 `gallery_paginate_router` 等分页层的 list 只留给 VD 目录 / MCP 枚举，页号一律由
+  `([1-9][0-9]*)` resolve 直接实例化 `query_page_provider`（越过末页时取行为空）。
 - `note` 与 `meta` 职责分离：`note` 是面向人和模型的可读节点说明，写在**被说明的 provider
   自己身上**；`meta` 是 ChildEntry 的 JSON 实体数据，例如 album 行、plugin manifest 或
   路由所需结构化属性。不要把说明文字塞进 `meta`，也不要用 `note` 承载实体数据。
@@ -593,7 +597,7 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 - **${capture[N]} 越界**：invocation properties / meta 中 N 必须 ≤ 当前 regex captures 数
 
 **7b 起删除的检查**（false positive 比例过高）：
-- ~~regex 与静态 list key 字面碰撞~~ — `.*` 转发模式 + 任意静态项是合法的（runtime 解析顺序 list → regex → 反查保证作者意图）
+- ~~regex 与静态 list key 字面碰撞~~ — `.*` 转发模式 + 任意静态项是合法的（runtime 解析顺序 regex → 静态 list → 动态反查保证作者意图，见 §5.2）
 - ~~regex 与 regex 交集 (NFA intersection)~~ — `${properties.X}` instance-static pattern 实例化前未知 + 含字符类的 regex 在 NFA 实测误判
 
 多模式重叠由作者按 schema 出现顺序覆写决定；引擎不再插手。
