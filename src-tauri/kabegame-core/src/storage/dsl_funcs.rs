@@ -57,7 +57,7 @@ fn profile_get_plugin_call(plugin_id: &str, locale: Option<&str>, started: Insta
 }
 
 /// 在给定 connection 上注册所有 DSL 主机 SQL 函数。
-/// connection-scoped — 每个连接需独立注册。kabegame 当前单连接架构, 一次即可。
+/// connection-scoped — 写连接和读池中的每条连接都要独立注册。
 pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::Error> {
     register_kb_rand(conn)?;
     register_get_plugin(conn)?;

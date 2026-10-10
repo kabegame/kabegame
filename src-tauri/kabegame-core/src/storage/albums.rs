@@ -1903,15 +1903,11 @@ mod tests {
     use super::*;
     use crate::local_folder::create::build_entries_non_recursive;
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
 
     fn test_storage() -> Storage {
         let conn = Connection::open_in_memory().unwrap();
         crate::storage::migrations::init::create_all_tables(&conn);
-        Storage {
-            db: Arc::new(Mutex::new(conn)),
-            cached_images_total: Arc::new(Mutex::new(None)),
-        }
+        Storage::from_test_connection(conn)
     }
 
     fn add_local_folder(storage: &Storage, name: &str, path: &Path) -> Album {

@@ -11,3 +11,4 @@ alwaysApply: true
 - 外部集成通过应用 IPC 连接主程序；相关类型、变量、事件、端点和文档使用 app / backend / IPC 语义。
 - `kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序；主程序未运行、协议不兼容或数据目录不同时才在 CLI 进程内初始化所需运行时。`--via auto|app|local` 可显式控制。
 - `pathql query` 是只读例外：忽略 `--via`，总在 CLI 本进程通过不迁移的只读 Storage 执行。
+- PathQL 查询统一走只读连接池；写操作和 Storage 自身方法继续走单条写连接。写方法必须在事务提交或自动提交完成后才发送数据变更事件。Storage 在第一条 SQLite 连接打开前关闭全局内存统计（`SQLITE_CONFIG_MEMSTATUS`）；不要在 Storage 初始化之前打开别的 SQLite 连接，否则该配置失效、并发读会互相拖慢。

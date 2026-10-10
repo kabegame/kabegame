@@ -1558,7 +1558,6 @@ mod metadata_search_text_override_tests {
 #[cfg(test)]
 mod rebind_image_metadata_tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
     fn storage() -> Storage {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1581,10 +1580,7 @@ mod rebind_image_metadata_tests {
             );",
         )
         .unwrap();
-        Storage {
-            db: Arc::new(Mutex::new(conn)),
-            cached_images_total: Arc::new(Mutex::new(None)),
-        }
+        Storage::from_test_connection(conn)
     }
 
     #[test]
@@ -1694,7 +1690,6 @@ mod rebind_image_metadata_tests {
 #[cfg(test)]
 mod native_metadata_attach_tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
     fn storage() -> Storage {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1713,10 +1708,7 @@ mod native_metadata_attach_tests {
             INSERT INTO images (id, hash) VALUES (1, 'h'), (2, 'h'), (3, 'other'), (4, '');",
         )
         .unwrap();
-        Storage {
-            db: Arc::new(Mutex::new(conn)),
-            cached_images_total: Arc::new(Mutex::new(None)),
-        }
+        Storage::from_test_connection(conn)
     }
 
     fn sorted(mut ids: Vec<String>) -> Vec<String> {

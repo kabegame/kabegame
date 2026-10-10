@@ -328,6 +328,23 @@ PluginManager 关闭 metadata 迁移调度，迁移留给应用下次启动的�
 | [x] | 旧 schema 拒绝 | 数据库副本 | 只降低副本的 `user_version` 后执行 `pathql query` | 报 schema 版本过旧并以非 0 退出，不迁移副本 | |
 | [ ] | app SQL trace 与迁移保持 | 桌面 CEF | 分别带 / 不带 `KABEGAME_SQL_DEBUG=1` 启动 app，执行画廊查询和插件刷新 | 打开时可见迁移与查询 SQL；关闭时无 trace；app 仍调度 metadata 迁移 | 待用户实测 |
 
+## PathQL 只读连接池
+
+Storage 保留单条写连接供写操作和既有 Storage 方法使用，PathQL 改由最多 4 条 query-only SQLite
+连接并发读取；每条连接独立安装 SQL trace、公共 PRAGMA 与 DSL 标量函数。写连接完成迁移后才创建读池。
+打开第一条连接前关闭 SQLite 全局内存统计（`SQLITE_CONFIG_MEMSTATUS`），否则多条连接并发执行分配密集的
+查询会在全局分配锁上互相拖慢。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | 无 error | |
+| [x] | 读连接池单测 | Rust 单测 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib reader_pool` | 读连接能看到写连接已提交的数据、拒绝 `INSERT`，且可调用 `kb_rand(1, 2)` | |
+| [x] | 筛选切换并发 | 桌面 CEF dev + `DEBUG_INGEST` | 总数请求先发出时切换画廊筛选，用 `lq_fetch` 记录行请求 | 行请求 `ipcMs` 回到 100ms 以内，不再等待总数查询（原 615ms） | |
+| [x] | 并发读不互相拖慢 | 桌面 CEF dev | 在画廊页用 `invoke` 同时发起 2 / 4 个相同的 `pathql_count`，再并发一个总数与一个行读取 | 每条耗时接近单独执行（2 条约 1.2×、4 条约 1.4×），行读取不因并发变慢 | |
+| [x] | 外部变更并发 | 桌面 CEF dev + `DEBUG_INGEST` | 触发外部数据变更，用 `lq_fetch` 记录同一批次的行与总数请求 | 总数 `ipcMs` 接近单独执行耗时（约 400ms），不再叠加行查询耗时（原 820ms） | |
+| [x] | 分页与写后快照 | 桌面 CEF dev | 依次翻页、隐藏一张图、删除最后一页全部图片 | 行与总数保持一致，空末页正确回退，没有旧数据闪回 | 删空最后一页仍有约 1.3s 空白（已知问题，见上节：先等总数、再查深页 OFFSET，两步串行，与连接池无关） |
+| [ ] | CLI 只读池与 SQL trace | 带 `KABEGAME_SQL_DEBUG=1` 的 CLI + 数据库副本 | 执行 `pathql query`，对比前后 `user_version`；再对旧 schema 假库执行 | trace 正常输出；`user_version` 前后均为 36；旧 schema 报错退出 | |
+
 ## konachan / yande.re / danbooru id 范围模式（konachan 1.5.0、yandere 1.2.0、danbooru 1.3.0）
 
 三个插件新增爬取模式 `id_range`：配置项 `id_start` / `id_end`（`int`，`min: 1`）只在该模式下显示。脚本校验两者为正整数、

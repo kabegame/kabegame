@@ -79,7 +79,8 @@ IPC，不能回退 local。`TaskSetMaxConcurrentDownloads` 转发到唯一领域
 `KABEGAME_SQL_DEBUG` 已设置且不是空串、`0` 或 `false` 时，Storage 在 SQLite 连接打开后立即注册
 `SQLITE_TRACE_STMT | SQLITE_TRACE_PROFILE`。STMT 向 stderr 输出 SQLite 展开绑定参数后的完整 SQL，
 PROFILE 输出从语句开始到 reset/finalize 的毫秒耗时与 120 字符单行前缀。钩子早于公共 PRAGMA 和迁移，
-因此 app 初始化、迁移、PathQL resolve / fetch 和写操作都在同一条连接上可见；未启用时不注册回调。
+并挂在写连接和只读池的每条连接上，因此 app 初始化、迁移、PathQL resolve / fetch 和写操作都可见；
+并发读取的 trace 行可能交错，PROFILE 行可通过所带 SQL 前缀与对应语句配对。未启用时不注册回调。
 
 ### 任务日志渲染
 

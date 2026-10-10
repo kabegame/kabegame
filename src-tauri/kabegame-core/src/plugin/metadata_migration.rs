@@ -519,7 +519,7 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::{Arc, Barrier};
 
     /// Migration engines drive their `JsRuntime` with `block_on`, which panics on
     /// an async worker thread. Run each case on a blocking-pool thread, mirroring
@@ -548,10 +548,7 @@ mod tests {
             )
             .unwrap();
         }
-        Storage {
-            db: Arc::new(Mutex::new(conn)),
-            cached_images_total: Arc::new(Mutex::new(None)),
-        }
+        Storage::from_test_connection(conn)
     }
 
     fn run_runner(

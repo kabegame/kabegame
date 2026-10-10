@@ -4,7 +4,7 @@
 //! `plugin://` schema 的行数据来自 PluginManager 而非 SQL, 由 programmatic provider
 //! (`programmatic::plugin_resource`) 提供。
 //!
-//! 运行期 SqlExecutor 通过 `Storage::global().db` 注入, 让 DSL 动态 SQL list 能跑真实 sqlite。
+//! 运行期 SqlExecutor 通过 `Storage::global().readers` 注入，让 DSL 动态 SQL list 走只读连接池。
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -36,7 +36,7 @@ pub fn provider_template_context() -> TemplateContext {
 fn init_runtime() -> Arc<ProviderRuntime> {
     // executor 必填; ProviderRuntime::new 接 Arc<dyn SqlExecutor>。
     let executor: Arc<dyn SqlExecutor> = Arc::new(KabegameSqlExecutor::new(
-        crate::storage::Storage::global().db.clone(),
+        crate::storage::Storage::global().readers.clone(),
     ));
     let mut globals = HashMap::from([
         (

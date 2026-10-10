@@ -31,6 +31,8 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 ### 关键架构规则
 **进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。桌面端可选的应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。`pathql query` 是只读例外：它忽略 `--via`，总在 CLI 本进程以不迁移的只读 Storage 执行。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
+**数据库连接模型**——PathQL 查询统一走只读连接池；写操作和 Storage 自身方法继续走单条写连接。写方法必须在事务提交或自动提交完成后才发送数据变更事件，保证事件触发的 PathQL 重读能看到对应写入。Storage 在进程内第一条 SQLite 连接打开前关闭全局内存统计（`SQLITE_CONFIG_MEMSTATUS`），否则多连接并发查询会在全局分配锁上互相拖慢——不要在 Storage 初始化之前打开别的 SQLite 连接。
+
 **路径逻辑归属于 `tauri-plugin-pathes`**——所有路径/目录计算都必须放在 `src-tauri-plugins/tauri-plugin-pathes/` 中。其他模块通过 `AppPaths` 调用；切勿在其他位置硬编码或重新计算路径。
 
 **第三方补丁序列**——Kabegame 对 vendored `third/` 仓库的改动应放在对应的 `third-patches/<dir>/NNNN-*.patch` 文件中。对于由补丁管理器管理的仓库，`deno task patch <dir>` 会将子模块重置到干净的锁定基线，然后按文件名排序应用完整补丁序列；`deno task patch <dir> -r` 会执行重置，但不应用补丁。因为每次操作都从基线开始，所以可以修改、删除或重新编号补丁文件。`--check` 会在一次性 worktree 中预检按顺序排列的补丁序列。重置会丢弃子模块中未提交的工作，因此请先将本地 `third/` 开发内容提交到分支。`rusty_v8` 是唯一的手动例外（它是原地复用的大型构建树，补丁由 `scripts/build-v8.ts` 应用），详见 `.cursor/rules/third-patches-workflow.mdc`。`cef` 遵循标准流程——`automate-git.py` 只认可提交，但 `scripts/build-chromium.ts` 会自动将应用补丁后的 worktree 暂存到 `kabegame-build` 分支，因此 `third/cef` 的 gitlink 始终指向官方上游锁定点。

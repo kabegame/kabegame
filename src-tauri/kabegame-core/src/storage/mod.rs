@@ -1,3 +1,5 @@
+use r2d2::ManageConnection;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,9 +47,23 @@ pub const HIDDEN_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000000";
 // 全局 Storage 单例
 static STORAGE: OnceLock<Storage> = OnceLock::new();
 
+pub(crate) type ReaderPool = r2d2::Pool<SqliteConnectionManager>;
+
+const READER_POOL_SIZE: u32 = 4;
+const SHARED_PRAGMAS: &str = r#"
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+PRAGMA temp_store = MEMORY;
+PRAGMA cache_size = -20000;
+PRAGMA mmap_size = 268435456;
+"#;
+
 #[derive(Clone)]
 pub struct Storage {
     pub(crate) db: Arc<Mutex<Connection>>,
+    pub(crate) readers: ReaderPool,
     /// `SELECT COUNT(*) FROM images` 的缓存。
     pub(crate) cached_images_total: Arc<Mutex<Option<usize>>>,
 }
@@ -90,30 +106,22 @@ impl Storage {
         }
 
         // 7a: schema 就绪后注册 DSL 主机 SQL 函数 (get_plugin 等)。
-        // connection-scoped, 单连接架构注册一次即可。
+        // 函数是 connection-scoped：写连接在此注册，读池的每条连接在初始化时注册。
         dsl_funcs::register_dsl_functions(&conn).expect("Failed to register DSL scalar functions");
+        let readers = open_reader_pool(&db_path).expect("Failed to open reader pool");
 
         Self {
             db: Arc::new(Mutex::new(conn)),
+            readers,
             cached_images_total: Arc::new(Mutex::new(None)),
         }
     }
 
     fn open_connection(db_path: &Path) -> Result<Connection, String> {
+        disable_sqlite_memstatus();
         let conn = Connection::open(db_path)
             .map_err(|e| format!("Failed to open database {}: {e}", db_path.display()))?;
-        sql_debug::install_if_enabled(&conn);
-        let _ = conn.execute_batch(
-            r#"
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-PRAGMA temp_store = MEMORY;
-PRAGMA cache_size = -20000;
-PRAGMA mmap_size = 268435456;
-"#,
-        );
+        configure_connection(&conn);
         Ok(conn)
     }
 
@@ -214,12 +222,28 @@ PRAGMA mmap_size = 268435456;
 
         dsl_funcs::register_dsl_functions(&conn)
             .map_err(|e| format!("注册 DSL SQL 函数失败：{e}"))?;
+        let readers = open_reader_pool(&db_path)?;
         STORAGE
             .set(Storage {
                 db: Arc::new(Mutex::new(conn)),
+                readers,
                 cached_images_total: Arc::new(Mutex::new(None)),
             })
             .map_err(|_| "Storage already initialized".to_string())
+    }
+
+    /// 测试夹具：包装一条已建好表的连接（通常是内存库）。
+    /// 读池懒加载、不预建连接；内存库无法跨连接共享，这类 Storage 不走 PathQL。
+    #[cfg(test)]
+    pub(crate) fn from_test_connection(conn: Connection) -> Self {
+        Self {
+            db: Arc::new(Mutex::new(conn)),
+            readers: r2d2::Pool::builder()
+                .max_size(1)
+                .min_idle(Some(0))
+                .build_unchecked(SqliteConnectionManager::memory()),
+            cached_images_total: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// 获取全局 Storage 引用
@@ -230,37 +254,102 @@ PRAGMA mmap_size = 268435456;
     }
 }
 
-// 内部使用的 PRNG
-#[derive(Debug, Clone)]
-pub(crate) struct XorShift64 {
-    state: u64,
+/// 关闭 SQLite 全局内存统计，进程内只做一次，必须早于任何连接打开。
+///
+/// 默认开启时每次 sqlite3_malloc / free 都要持有同一把全局 mutex。多条读连接并发执行
+/// 分配密集的查询（搜索里的 LOWER / REPLACE / LIKE）会在这把锁上互相拖慢：实测同一条
+/// COUNT 两条并发各慢 2.5×、四条 6×，关闭后为 1.15× / 1.4×。本仓库不读
+/// `sqlite3_memory_used`、不设 soft / hard heap limit，关闭没有副作用。
+fn disable_sqlite_memstatus() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: sqlite3_config 只能在 sqlite3_initialize 之前调用；已初始化时返回
+        // SQLITE_MISUSE 且不改动任何状态。Storage 打开第一条连接时进程内还没有别的 SQLite 使用者。
+        let rc = unsafe {
+            rusqlite::ffi::sqlite3_config(
+                rusqlite::ffi::SQLITE_CONFIG_MEMSTATUS,
+                0 as std::os::raw::c_int,
+            )
+        };
+        if rc != rusqlite::ffi::SQLITE_OK {
+            eprintln!(
+                "[storage] 关闭 SQLite 内存统计失败（rc={rc}，SQLite 已先行初始化），并发读会在全局分配锁上互相拖慢"
+            );
+        }
+    });
 }
 
-impl XorShift64 {
-    pub(crate) fn new(seed: u64) -> Self {
-        let state = if seed == 0 { 0x9E3779B97F4A7C15 } else { seed };
-        Self { state }
-    }
+/// 读写连接共用：trace 钩子 + 公共 PRAGMA（PRAGMA 失败沿用现在的忽略策略）。
+fn configure_connection(conn: &Connection) {
+    sql_debug::install_if_enabled(conn);
+    let _ = conn.execute_batch(SHARED_PRAGMAS);
+}
 
-    pub(crate) fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.state = x;
-        x
-    }
-
-    pub(crate) fn gen_usize(&mut self, upper_exclusive: usize) -> usize {
-        if upper_exclusive == 0 {
-            return 0;
-        }
-        (self.next_u64() as usize) % upper_exclusive
-    }
+/// PathQL 只读连接池：每条连接 query_only，并独立注册 DSL 函数。
+fn open_reader_pool(db_path: &Path) -> Result<ReaderPool, String> {
+    disable_sqlite_memstatus();
+    let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
+        configure_connection(conn);
+        conn.execute_batch("PRAGMA query_only = ON;")?;
+        dsl_funcs::register_dsl_functions(conn)
+    });
+    // 先直连一次：r2d2 对初始化失败会重试到 connection_timeout，不能让启动卡 30s。
+    manager
+        .connect()
+        .map_err(|e| format!("打开只读连接失败：{e}"))?;
+    r2d2::Pool::builder()
+        .max_size(READER_POOL_SIZE)
+        .min_idle(Some(1))
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .build(manager)
+        .map_err(|e| format!("创建只读连接池失败：{e}"))
 }
 
 pub(crate) fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_pool_reads_committed_data_rejects_writes_and_registers_dsl() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("reader-pool.db");
+        let mut writer = Storage::open_connection(&db_path).unwrap();
+        writer
+            .execute_batch("CREATE TABLE reader_pool_items (value INTEGER NOT NULL);")
+            .unwrap();
+        let readers = open_reader_pool(&db_path).unwrap();
+
+        let tx = writer.transaction().unwrap();
+        tx.execute("INSERT INTO reader_pool_items (value) VALUES (42)", [])
+            .unwrap();
+        tx.commit().unwrap();
+
+        let reader = readers.get().unwrap();
+        let value: i64 = reader
+            .query_row("SELECT value FROM reader_pool_items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, 42);
+
+        let insert_error = reader
+            .execute("INSERT INTO reader_pool_items (value) VALUES (7)", [])
+            .unwrap_err();
+        assert!(
+            insert_error
+                .to_string()
+                .contains("attempt to write a readonly database"),
+            "unexpected query_only error: {insert_error}"
+        );
+
+        let random: i64 = reader
+            .query_row("SELECT kb_rand(1, 2)", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(random, dsl_funcs::kb_rand_value(1, 2));
+    }
 }
 
 // v4.0 删除说明：以下函数已在 v4.0 一并移除，不再需要。

@@ -1,26 +1,23 @@
 //! pathql-rs SqlExecutor 的 core 实现:
-//! 包装 Storage 共享的 rusqlite Connection, 6d 起用 trait 形态 (替代旧 Arc<Fn>)。
+//! 包装 Storage 的 PathQL 只读连接池, 6d 起用 trait 形态 (替代旧 Arc<Fn>)。
 //!
-//! 调用约定: 关闭 Storage 全局锁后再调用 `execute()` — 内部只 lock 本结构持有的
-//! `Arc<Mutex<Connection>>` 副本, 不回 Storage::global() 路径, 避免重入死锁。
+//! 读写连接已经分离：执行器只使用 query_only 读连接，看不到写连接上尚未提交的事务。
 //! `dialect()` 当前硬返 Sqlite (core DB 是 Sqlite-only); 多方言切换需另写 impl。
-
-use std::sync::{Arc, Mutex};
 
 use pathql_rs::provider::{EngineError, SqlDialect, SqlExecutor};
 use pathql_rs::template::eval::TemplateValue;
-use rusqlite::Connection;
 use serde_json::{Map, Value as JsonValue};
 
 use crate::storage::template_bridge::template_params_for;
+use crate::storage::ReaderPool;
 
 pub struct KabegameSqlExecutor {
-    db: Arc<Mutex<Connection>>,
+    readers: ReaderPool,
 }
 
 impl KabegameSqlExecutor {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(readers: ReaderPool) -> Self {
+        Self { readers }
     }
 }
 
@@ -30,11 +27,11 @@ impl SqlExecutor for KabegameSqlExecutor {
     }
 
     fn execute(&self, sql: &str, params: &[TemplateValue]) -> Result<Vec<JsonValue>, EngineError> {
-        let conn = self.db.lock().map_err(|e| {
+        let conn = self.readers.get().map_err(|e| {
             EngineError::FactoryFailed(
                 "core".into(),
                 "sql_executor".into(),
-                format!("storage mutex poisoned: {e}"),
+                format!("reader pool: {e}"),
             )
         })?;
         // 同一 SQL 文本（只是绑定参数不同）反复执行时复用已编译语句：

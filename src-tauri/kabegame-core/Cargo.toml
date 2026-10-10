@@ -24,6 +24,8 @@ infer = "0.22"
 kamadak-exif = { workspace = true }
 lru = "0.18"
 regex = "1.11"
+r2d2 = "0.8"
+r2d2_sqlite = "0.35"
 rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks", "trace"] }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
