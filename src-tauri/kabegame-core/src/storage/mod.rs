@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub mod albums;
@@ -21,6 +21,7 @@ pub mod run_configs;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod safe_delete;
 pub mod source_purge;
+mod sql_debug;
 pub mod surf_records;
 pub mod tasks;
 pub(crate) mod template_bridge;
@@ -70,19 +71,7 @@ impl Storage {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent).expect("Failed to create app data directory");
         }
-        let conn = Connection::open(&db_path).expect("Failed to open database");
-
-        let _ = conn.execute_batch(
-            r#"
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-PRAGMA temp_store = MEMORY;
-PRAGMA cache_size = -20000;
-PRAGMA mmap_size = 268435456;
-"#,
-        );
+        let conn = Self::open_connection(&db_path).expect("Failed to open database");
 
         let is_new_db = conn
             .query_row(
@@ -108,6 +97,24 @@ PRAGMA mmap_size = 268435456;
             db: Arc::new(Mutex::new(conn)),
             cached_images_total: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn open_connection(db_path: &Path) -> Result<Connection, String> {
+        let conn = Connection::open(db_path)
+            .map_err(|e| format!("Failed to open database {}: {e}", db_path.display()))?;
+        sql_debug::install_if_enabled(&conn);
+        let _ = conn.execute_batch(
+            r#"
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+PRAGMA temp_store = MEMORY;
+PRAGMA cache_size = -20000;
+PRAGMA mmap_size = 268435456;
+"#,
+        );
+        Ok(conn)
     }
 
     pub fn init(&self) -> Result<(), String> {
@@ -180,6 +187,39 @@ PRAGMA mmap_size = 268435456;
             .set(storage)
             .map_err(|_| "Storage already initialized".to_string())?;
         Ok(())
+    }
+
+    /// 初始化只读全局 Storage：不建表、不迁移、不写库。
+    ///
+    /// 数据库版本低于当前 CLI 所需版本时直接报错；更高版本保持兼容并放行。
+    pub fn init_global_read_only() -> Result<(), String> {
+        let db_path = Self::get_db_path();
+        if !db_path.is_file() {
+            return Err(format!(
+                "数据库不存在：{}（请先启动一次 Kabegame）",
+                db_path.display()
+            ));
+        }
+        let conn = Self::open_connection(&db_path)?;
+        conn.execute_batch("PRAGMA query_only = ON;")
+            .map_err(|e| format!("设置数据库只读模式失败：{e}"))?;
+
+        let version = migrations::current_version(&conn);
+        if version < migrations::LATEST_VERSION {
+            return Err(format!(
+                "数据库 schema 版本 v{version} 低于本 CLI 需要的 v{}，请先用新版 Kabegame 启动一次完成迁移",
+                migrations::LATEST_VERSION
+            ));
+        }
+
+        dsl_funcs::register_dsl_functions(&conn)
+            .map_err(|e| format!("注册 DSL SQL 函数失败：{e}"))?;
+        STORAGE
+            .set(Storage {
+                db: Arc::new(Mutex::new(conn)),
+                cached_images_total: Arc::new(Mutex::new(None)),
+            })
+            .map_err(|_| "Storage already initialized".to_string())
     }
 
     /// 获取全局 Storage 引用

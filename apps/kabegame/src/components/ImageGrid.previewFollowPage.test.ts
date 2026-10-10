@@ -4,11 +4,15 @@ import { computed, nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImageGrid from "./ImageGrid.vue";
 import type { GridAdapter } from "@/components/imageGrid/types";
-import type { ViewSnapshot } from "@/services/liveQuery";
+import type { RowsSnapshot } from "@/services/liveQuery";
+import { pathqlView } from "@/services/pathql";
 
 const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) => Promise<number | null>>());
 const jumpToPage = vi.hoisted(() => vi.fn<(page: number) => Promise<void>>());
 const refetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const totalRefetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
+const pathqlViewMock = vi.hoisted(() => vi.fn());
+const pathqlCountMock = vi.hoisted(() => vi.fn());
 const handlePreviewPageBoundary = vi.hoisted(() => vi.fn());
 const previewImageId = ref("");
 const queryLoading = ref(false);
@@ -23,7 +27,7 @@ const routeStore = reactive({
   }),
   syncFromUrl: vi.fn(),
 });
-let applySnapshot: ((snapshot: ViewSnapshot) => Promise<void>) | null = null;
+let applySnapshot: ((snapshot: RowsSnapshot) => Promise<void>) | null = null;
 const settings = reactive({
   values: { previewFollowPage: true, previewSwitchDirection: "auto", currentWallpaperImageId: null },
 });
@@ -32,11 +36,28 @@ vi.mock("@/services/imageLocate", () => ({
   locateImageRowIndex,
   pageOfRowIndex: (rowIndex: number, pageSize: number) => Math.floor((rowIndex - 1) / pageSize) + 1,
 }));
+vi.mock("@/services/pathql", () => ({
+  pathqlView: pathqlViewMock,
+  pathqlCount: pathqlCountMock,
+  pathqlEntry: vi.fn(),
+  pathqlList: vi.fn(),
+  pathqlFetch: vi.fn(),
+}));
 vi.mock("@/services/liveQuery", () => ({
   GRID_REFRESH_WAIT_MS: 500,
-  useLiveQuery: (opts: { onResult: (snapshot: ViewSnapshot) => Promise<void> }) => {
-    applySnapshot = opts.onResult;
-    return { loading: queryLoading, refetch, apply: opts.onResult, view: vi.fn(() => null) };
+  useLiveQuery: (opts: {
+    key: () => string | null;
+    read: unknown;
+    onResult: (snapshot: RowsSnapshot) => Promise<void> | void;
+  }) => {
+    const isRows = opts.read === pathqlView;
+    if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
+    return {
+      loading: isRows ? queryLoading : ref(false),
+      refetch: isRows ? refetch : totalRefetch,
+      apply: opts.onResult,
+      key: opts.key,
+    };
   },
 }));
 vi.mock("@/composables/usePagedGallery", () => ({
@@ -78,10 +99,9 @@ vi.mock("@/utils/kameMessage", () => ({
 
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 
-function snapshot(ids: string[], seq: number): ViewSnapshot {
+function snapshot(ids: string[], seq: number): RowsSnapshot {
   return {
     rows: ids.map((id) => ({ id, local_path: `/test/${id}.jpg`, display_name: id })),
-    total: 6,
     seq,
   };
 }
@@ -121,8 +141,10 @@ beforeEach(() => {
   applySnapshot = null;
   pendingPreviewBoundary.value = null;
   refetch.mockReset();
+  totalRefetch.mockReset();
   handlePreviewPageBoundary.mockReset();
   refetch.mockResolvedValue(undefined);
+  totalRefetch.mockResolvedValue(undefined);
   locateImageRowIndex.mockReset();
   jumpToPage.mockReset();
   jumpToPage.mockImplementation(async (page) => {

@@ -3,7 +3,7 @@ title: kabegame-cli 命令行参考
 description: kabegame-cli 子命令、参数、数据目录与退出码的完整参考。
 ---
 
-`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于脚手架、打包、导入并运行爬虫插件，导入本地媒体，以及生成或查询 PathQL。碰数据库或主程序运行时状态的命令会优先经 IPC 交给正在运行的同数据目录主程序；连不上时才在 CLI 进程内初始化必要运行时。它**不随主程序打包**，需要时从发布页单独下载。
+`kabegame-cli` 是 Kabegame 的命令行可执行文件，用于脚手架、打包、导入并运行爬虫插件，导入本地媒体，以及生成或查询 PathQL。碰数据库或主程序运行时状态的命令会优先经 IPC 交给正在运行的同数据目录主程序；连不上时才在 CLI 进程内初始化必要运行时。`pathql query` 是例外：它总在 CLI 进程内只读打开数据库并直接查询。CLI **不随主程序打包**，需要时从发布页单独下载。
 
 ## 启动与定位
 
@@ -25,7 +25,7 @@ description: kabegame-cli 子命令、参数、数据目录与退出码的完整
 | `app` | 强制经主程序执行；连接、协议或数据目录校验失败立即报错。 |
 | `local` | 强制在 CLI 进程初始化 Storage / Provider / 任务运行时。 |
 
-`plugin new`、`plugin pack` 和 `pathql generate` 是纯文件/生成操作，不经 `Backend`；`.kgpg` 的包解析也始终在 CLI 本地完成。
+`plugin new`、`plugin pack`、`pathql generate` 和 `pathql query` 不经 `Backend`；其中 `pathql query` 忽略 `--via`。`.kgpg` 的包解析也始终在 CLI 本地完成。
 
 **数据目录**没有运行时参数，由构建时的 `kabegame_data` 决定：发布页下载的 CLI 与默认构建都使用系统用户数据目录；
 仓库内用 `deno task b -c kabegame-cli --data dev` 构建的 CLI 使用 `.kabegame/debug/`（与 `deno task dev` 起的应用共用）。
@@ -183,6 +183,8 @@ kabegame-cli plugin import <path.kgpg>
 
 :::note
 CLI 层没有版本 / 冲突检查，重复导入同一 ID 可能覆盖已有插件。
+
+CLI 本地加载或安装插件时不调度 metadata 迁移；被跳过的迁移会在 Kabegame 应用下次启动刷新插件时按版本门控补跑。若 `plugin import` 经 app 后端执行，迁移仍由主程序正常调度。
 :::
 
 ## data 子命令组
@@ -218,7 +220,7 @@ kabegame-cli task concurrency <task-id> <正整数|global>
 
 ## pathql 子命令组
 
-`pathql query` 经 app/local `Backend` 查询；`pathql generate` 仍在 CLI 进程内初始化 provider runtime。
+`pathql query` 总在 CLI 进程内只读查询；`pathql generate` 仍在 CLI 进程内初始化 provider runtime。两者都不经 app/local `Backend`。
 
 ### pathql generate
 
@@ -237,7 +239,7 @@ kabegame-cli pathql generate --target typescript --out packages/kabegame-pathql-
 
 ### pathql query
 
-直接查询 PathQL。默认拉取数据行，也可切换为列举子项或查询节点自身 entry。
+直接查询 PathQL。默认拉取数据行，也可切换为列举子项或查询节点自身 entry。该命令忽略全局 `--via`，不会连接主程序；它以 `PRAGMA query_only = ON` 打开现有数据库，不建表、不迁移、不写库，并加载已安装插件以注册 extend provider。数据库不存在或 schema 版本低于当前 CLI 所需版本时会报错退出；数据库版本高于 CLI 时允许查询。
 
 ```bash
 kabegame-cli pathql query <path> [--list [--with-count] | --entry | --fetch]
@@ -250,6 +252,18 @@ kabegame-cli pathql query <path> [--list [--with-count] | --entry | --fetch]
 | `--with-count`   | 否   | 为子项附带 total，仅与 `--list` 同用。 |
 | `--entry`        | 否   | 查询节点自身 entry。              |
 | `--fetch`        | 否   | 拉取数据行；未指定模式时也是此行为。 |
+
+## SQL 调试
+
+设置 `KABEGAME_SQL_DEBUG=1` 后，应用和 CLI 会把每条实际执行的 SQLite 语句及耗时写到 stderr。语句开始行包含 SQLite 已代入绑定参数的完整 SQL，可直接复制到 `sqlite3`；结束行包含毫秒耗时和单行 SQL 前缀。CLI 的 JSON 结果仍只写 stdout，因此可以分别重定向：
+
+```bash
+KABEGAME_SQL_DEBUG=1 kabegame-cli pathql query \
+  'images://gallery/plugin/konachan/extend/rating/Safe/x100x/1' \
+  >result.json 2>sql.log
+```
+
+变量未设置，或值为 `""`、`0`、`false`（不区分大小写）时不注册 trace 回调，没有逐条 SQL 调试开销。
 
 ## 退出码
 
@@ -270,12 +284,14 @@ CLI 使用三种退出码：
 | `plugin run`                     | 是          | 是    | 是       | 不适用  |
 | `task concurrency`               | 是          | 是    | 是       | 不适用  |
 | `data import-image`              | 是          | 是    | 是       | 不适用  |
-| `pathql generate` / `pathql query` | 是        | 是    | 是       | 不适用  |
+| `pathql generate`                  | 是          | 是    | 是       | 不适用  |
+| `pathql query`（本进程只读）       | 是          | 是    | 是       | 不适用  |
 
 ## 常见问题
 
 - **`--album` 无法解析画册** → 某层名称不存在或同级存在重名 → 在 GUI 中确认完整画册路径后重试。
 - **`plugin new` 拒绝名称** → 名称非 kebab-case → 使用 `my-plugin` 这类全小写、短横线分隔、首字符为字母的名称。
+- **`pathql query` 提示 schema 版本过旧** → CLI 不会代替应用迁移数据库 → 先用同版本或更新版本的 Kabegame 启动一次，再重试查询。
 
 ## 延伸阅读
 

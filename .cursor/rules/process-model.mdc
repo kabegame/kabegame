@@ -10,3 +10,4 @@ alwaysApply: true
 - 桌面端可选的应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。
 - 外部集成通过应用 IPC 连接主程序；相关类型、变量、事件、端点和文档使用 app / backend / IPC 语义。
 - `kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序；主程序未运行、协议不兼容或数据目录不同时才在 CLI 进程内初始化所需运行时。`--via auto|app|local` 可显式控制。
+- `pathql query` 是只读例外：忽略 `--via`，总在 CLI 本进程通过不迁移的只读 Storage 执行。

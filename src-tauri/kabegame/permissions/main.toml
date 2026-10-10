@@ -40,6 +40,7 @@ commands.allow = [
   "pathql_list",
   "pathql_fetch",
   "pathql_view",
+  "pathql_count",
   "toggle_image_favorite",
   "get_all_tasks",
   "get_tasks_page",

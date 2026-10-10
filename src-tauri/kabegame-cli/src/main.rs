@@ -115,7 +115,7 @@ enum DataCommands {
 enum PathqlCommands {
     /// 生成 PathQL 客户端
     Generate(GenerateArgs),
-    /// 查询 PathQL 结果
+    /// 查询 PathQL 结果；始终在 CLI 本进程只读执行，忽略全局 --via
     Query(DataQueryArgs),
 }
 
@@ -226,6 +226,7 @@ struct ImportImageArgs {
 }
 
 #[derive(Args, Debug)]
+/// PathQL 只读查询参数；该子命令忽略全局 `--via`。
 struct DataQueryArgs {
     /// PathQL 查询路径，如 images://gallery/all/x10x/1
     path: String,
@@ -466,7 +467,7 @@ async fn main() {
         },
         Commands::Pathql(cmd) => match cmd {
             PathqlCommands::Generate(args) => pathql_generate(args),
-            PathqlCommands::Query(args) => data_query(args, via).await,
+            PathqlCommands::Query(args) => data_query(args).await,
         },
         Commands::Task(cmd) => match cmd {
             TaskCommands::Concurrency(args) => task_concurrency(args, via).await,
@@ -687,7 +688,7 @@ pub(crate) async fn init_local_runtime(needs: LocalNeeds) -> Result<(), String> 
 
     init_local_globals()?;
     if needs.plugin {
-        PluginManager::init_global()?;
+        PluginManager::init_global_without_metadata_migrations()?;
     }
     if needs.tasks {
         init_task_runtime()?;
@@ -752,15 +753,21 @@ async fn data_import_image(args: ImportImageArgs, via: Via) -> Result<(), String
     }
 }
 
-async fn data_query(args: DataQueryArgs, via: Via) -> Result<(), String> {
+/// PathQL 只读查询：总在本进程执行，不经主程序，不迁移、不写库。
+async fn data_query(args: DataQueryArgs) -> Result<(), String> {
     init_paths()?;
-    let backend = choose_backend(via, LocalNeeds::DATA).await?;
+    kabegame_core::storage::Storage::init_global_read_only()?;
+    PluginManager::init_global_without_metadata_migrations()?;
+    PluginManager::global()
+        .ensure_installed_cache_initialized()
+        .await?;
+    use kabegame_core::commands::image::{pathql_entry, pathql_fetch, pathql_list};
     let output = if args.list {
-        backend.pathql_list(&args.path, args.with_count).await?
+        pathql_list(args.path, args.with_count).await?
     } else if args.entry {
-        backend.pathql_entry(&args.path).await?
+        pathql_entry(args.path).await?
     } else {
-        backend.pathql_fetch(&args.path).await?
+        pathql_fetch(args.path).await?
     };
     println!(
         "{}",
@@ -1641,9 +1648,9 @@ mod tests {
     fn test_via_is_global() {
         let cli = Cli::try_parse_from([
             "kabegame-cli",
-            "pathql",
-            "query",
-            "images://gallery/all",
+            "data",
+            "import-image",
+            "./a.png",
             "--via",
             "local",
         ])

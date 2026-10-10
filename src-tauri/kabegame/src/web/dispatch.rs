@@ -202,13 +202,33 @@ pub fn init_registry() {
                 Box::pin(async move {
                     #[derive(serde::Deserialize)]
                     struct Args {
-                        q: kabegame_core::commands::view::ViewQuery,
+                        path: String,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result = kabegame_core::commands::view::pathql_view(args.q)
+                    let mut result = kabegame_core::commands::view::pathql_view(args.path)
                         .await
                         .map_err(RpcError::internal)?;
                     crate::web::image_rewrite::rewrite_image_value(&mut result.rows);
+                    serde_json::to_value(result).map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "pathql_count",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize)]
+                    struct Args {
+                        path: String,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    let result = kabegame_core::commands::view::pathql_count(args.path)
+                        .await
+                        .map_err(RpcError::internal)?;
                     serde_json::to_value(result).map_err(RpcError::internal)
                 })
             }),
@@ -1027,7 +1047,7 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         image_ids: Vec<String>,
-                        view: Option<kabegame_core::commands::view::ViewQuery>,
+                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     let mut result = kabegame_core::commands::image::batch_delete_images(
@@ -1055,7 +1075,7 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         image_ids: Vec<String>,
-                        view: Option<kabegame_core::commands::view::ViewQuery>,
+                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     let mut result = kabegame_core::commands::image::batch_remove_images(
@@ -1256,7 +1276,7 @@ pub fn init_registry() {
                     struct Args {
                         album_id: String,
                         image_ids: Vec<String>,
-                        view: Option<kabegame_core::commands::view::ViewQuery>,
+                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_images_to_album(
@@ -1288,7 +1308,7 @@ pub fn init_registry() {
                     struct Args {
                         task_id: String,
                         album_id: String,
-                        view: Option<kabegame_core::commands::view::ViewQuery>,
+                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_task_images_to_album(
@@ -1320,7 +1340,7 @@ pub fn init_registry() {
                     struct Args {
                         album_id: String,
                         image_ids: Vec<String>,
-                        view: Option<kabegame_core::commands::view::ViewQuery>,
+                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::remove_images_from_album(

@@ -218,7 +218,7 @@ const MIGRATIONS: &[Migration] = &[
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
 pub const LATEST_VERSION: u32 = 36;
 
-fn current_version(conn: &Connection) -> u32 {
+pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .unwrap_or(0) as u32
 }

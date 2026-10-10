@@ -7,7 +7,6 @@ use serde_json::Value;
 use tauri::{AppHandle, Runtime};
 
 use kabegame_core::commands;
-use kabegame_core::commands::view::ViewQuery;
 
 #[tauri::command]
 pub fn get_albums() -> Result<Value, String> {
@@ -62,7 +61,7 @@ pub fn move_album<R: Runtime>(
 pub async fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
-    view: Option<ViewQuery>,
+    view: Option<String>,
 ) -> Result<Value, String> {
     commands::album::add_images_to_album(album_id, image_ids, view).await
 }
@@ -72,7 +71,7 @@ pub async fn add_images_to_album(
 pub async fn add_task_images_to_album(
     task_id: String,
     album_id: String,
-    view: Option<ViewQuery>,
+    view: Option<String>,
 ) -> Result<Value, String> {
     commands::album::add_task_images_to_album(task_id, album_id, view).await
 }
@@ -82,7 +81,7 @@ pub async fn remove_images_from_album<R: Runtime>(
     _app: AppHandle<R>,
     album_id: String,
     image_ids: Vec<String>,
-    view: Option<ViewQuery>,
+    view: Option<String>,
 ) -> Result<Value, String> {
     commands::album::remove_images_from_album(album_id, image_ids, view).await
 }

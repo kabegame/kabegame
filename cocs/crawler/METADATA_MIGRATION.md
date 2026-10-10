@@ -40,7 +40,7 @@
 ## 执行流程
 
 1. 插件解析阶段读取 `kbMetadataMigration` 脚本源码挂到 `Plugin.metadata_migration`，并把 `Plugin.version` pack 成 `Plugin.version_packed`。
-2. 插件安装 / 更新成功后触发后台迁移；应用启动加载已安装插件（`refresh_plugins` → `install_plugin_from_kgpg`）同样走该路径，所以每次启动都会检查（无待迁移行时一条 SELECT 早退）。`MetadataMigrationService` 保证同一插件只有一个 runner；运行中再次 refresh / install 时覆盖保存最新 `Plugin` 到 `pending`，当前轮完成后续跑一轮。
+2. 插件安装 / 更新成功后触发后台迁移；应用启动加载已安装插件（`refresh_plugins` → `install_plugin_from_kgpg`）同样走该路径，所以每次启动都会检查（无待迁移行时一条 SELECT 早退）。CLI 本进程不调度 metadata 迁移；被跳过的迁移由应用下次启动刷新插件时按版本门控补跑。`MetadataMigrationService` 保证同一插件只有一个 runner；运行中再次 refresh / install 时覆盖保存最新 `Plugin` 到 `pending`，当前轮完成后续跑一轮。
 3. 运行器查询当前插件 `plugin_version < version_packed` 的 metadata 行；`data` 字段 trim 后为空串或字面量 `"null"` 视为没有 metadata，直接排除在外，不跑迁移脚本；结果为空直接结束。
 4. 有待处理行时先登记 `{ pluginId, total, processed, startedAtMs }` 并发送 `busy-tasks-change`；装载一次脚本，两个导出都缺失才算装载失败，缺 `migrate` 按恒等处理。
 5. 逐行调用 `migrate(data)`；成功后才调用 `provideLabels(migrated)`。标签先挂到当前 metadata 行引用的全部图片，然后才写回/合并 metadata，避免重定向后丢失原引用集。

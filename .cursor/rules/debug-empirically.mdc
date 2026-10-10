@@ -17,6 +17,7 @@ alwaysApply: true
 
 3. **零成本实验优先。** 能用**现有二进制** + 环境变量 / 命令行开关 / 现有日志测出来的，绝不先改代码、更不要先重编依赖。先问：「有没有办法两分钟内证伪这个假设？」
    - 本仓库现成的口子：`KABEGAME_CEF_GPU_MODE`、Chromium 的 `--disable-features=<Name>`、已有的 `[DEBUG-*]` 日志、`cocs/debug/DEBUG_INGEST.md` 的 runtime debug ingest。
+   - SQLite / PathQL：设 `KABEGAME_SQL_DEBUG=1`，从 stderr 查看绑定参数已展开的实际 SQL 与每条 PROFILE 耗时。
 
 4. **假设必须可证伪，且预先写下判据。** 设计能把假设**劈开**的实验，动手前先写「如果结果是 X，就说明假设错了」。没有判据的实验只会用来确认偏见。
    - 排成阶梯：外科手术式（只动一个变量）→ 大锤式（关掉整个子系统）。最重的一级都不亮 → 假设错了，**停下重新诊断**，不要继续加码。

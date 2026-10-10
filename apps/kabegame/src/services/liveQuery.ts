@@ -1,100 +1,120 @@
 import { computed, onBeforeUnmount, onMounted, reactive, watch } from "vue";
 import { subscribeChanges, type ChangeBatch } from "@/services/dataChangeHub";
-import { pathqlView } from "@/services/pathql";
 import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 const perf = (name: string, payload: unknown) => void sendDebugEvent(name, payload, { sessionId: "eventworker-perf" }); // DEBUG-PERF
 
 export const GRID_REFRESH_WAIT_MS = 500;
 
-export interface ViewQuery {
-  rows: string;
-  count: string;
+export interface RowsSnapshot {
+  rows: Record<string, unknown>[];
+  seq: number;
 }
 
-export interface ViewSnapshot {
-  rows: Record<string, unknown>[];
+export interface TotalSnapshot {
   total: number;
   seq: number;
 }
 
-const inFlight = new Map<string, Promise<ViewSnapshot>>();
+type SequencedSnapshot = { seq: number };
+type QueryKind = "rows" | "total";
 
-function queryKey(query: ViewQuery) {
-  return JSON.stringify([query.rows, query.count]);
-}
+const inFlight = new WeakMap<Function, Map<string, Promise<unknown>>>();
 
-function fetchView(query: ViewQuery): Promise<ViewSnapshot> {
-  const key = queryKey(query);
-  const existing = inFlight.get(key);
+function fetchShared<S extends SequencedSnapshot>(read: (key: string) => Promise<S>, key: string): Promise<S> {
+  let requests = inFlight.get(read);
+  if (!requests) {
+    requests = new Map();
+    inFlight.set(read, requests);
+  }
+  const existing = requests.get(key) as Promise<S> | undefined;
   if (existing) return existing;
-  const request = pathqlView(query).finally(() => {
-    inFlight.delete(key);
+  const request = read(key).finally(() => {
+    requests.delete(key);
   });
-  inFlight.set(key, request);
+  requests.set(key, request);
   return request;
 }
 
-export function useLiveQuery(opts: {
-  key: () => ViewQuery | null;
+function snapshotMetrics(snapshot: SequencedSnapshot) {
+  const value = snapshot as Partial<RowsSnapshot & TotalSnapshot>;
+  if (Array.isArray(value.rows)) return { kind: "rows" as const, n: value.rows.length };
+  return { kind: "total" as const, total: value.total };
+}
+
+export function useLiveQuery<S extends SequencedSnapshot>(opts: {
+  key: () => string | null;
+  read: (key: string) => Promise<S>;
   waitMs: number;
   relevant: (batch: ChangeBatch) => boolean;
-  onResult: (snapshot: ViewSnapshot) => void | Promise<void>;
-  onError?: (error: unknown) => void;
+  onResult: (snapshot: S) => void | Promise<void>;
+  onError?: (error: unknown) => void | Promise<void>;
+  /** key 与上次应用的 key 不同，或标脏后重新激活时，自动重读（总数用；行由调用方显式加载）。 */
+  autoFetch?: boolean;
+  /** 仅用于 DEBUG-PERF 区分单通道实例。 */
+  kind?: QueryKind;
 }) {
   let appliedSeq = 0;
+  let appliedKey: string | null = null;
   let dirty = false;
+  let observedKind: QueryKind | null = opts.kind ?? null;
   const pendingQueries = reactive(new Map<string, number>());
   /** 只统计当前查询的在途读取，旧路径的迟到请求不能改变新页的就绪状态。 */
   const loading = computed(() => {
-    const query = opts.key();
-    return !!query && (pendingQueries.get(queryKey(query)) ?? 0) > 0;
+    const key = opts.key();
+    return !!key && (pendingQueries.get(key) ?? 0) > 0;
   });
 
-  const apply = async (snapshot: ViewSnapshot) => {
+  const applyForKey = async (snapshot: S, key: string) => {
     if (snapshot.seq < appliedSeq) return;
     appliedSeq = snapshot.seq;
+    appliedKey = key;
     await opts.onResult(snapshot);
   };
 
+  const apply = async (snapshot: S) => {
+    const key = opts.key();
+    if (!key) return;
+    await applyForKey(snapshot, key);
+  };
+
   /**
-   * 拉取并应用当前视图；错误向上抛。
-   * shared：是否合并同 key 的在途请求（仅被动批次合并）。
+   * 拉取并应用当前单通道快照；错误向上抛。
+   * shared：是否合并同读函数、同 key 的在途请求（仅被动批次合并）。
    * minSeq：批次已知的最新变更序号。合并到的在途请求若早于它发出（快照 seq 更旧），
    * 绕过合并单独重拉，避免把该变更漏掉。
    */
   const fetchAndApply = async (shared: boolean, minSeq = 0) => {
-    const query = opts.key();
-    if (!query) return;
-    const key = queryKey(query);
+    const key = opts.key();
+    if (!key) return;
     pendingQueries.set(key, (pendingQueries.get(key) ?? 0) + 1);
     try {
       const t0 = performance.now(); // DEBUG-PERF
-      let snapshot = shared ? await fetchView(query) : await pathqlView(query);
+      let snapshot = shared ? await fetchShared(opts.read, key) : await opts.read(key);
       const t1 = performance.now(); // DEBUG-PERF
       let refetched = false; // DEBUG-PERF
       if (snapshot.seq < minSeq) {
-        snapshot = await pathqlView(query);
+        snapshot = await opts.read(key);
         refetched = true;
       } // DEBUG-PERF 仅加了 refetched 标记
       const t2 = performance.now(); // DEBUG-PERF
-      const current = opts.key();
-      if (!current || queryKey(current) !== key) {
-        perf("lq_drop_key_changed", { rows: query.rows });
+      if (opts.key() !== key) {
+        perf("lq_drop_key_changed", { kind: observedKind, key });
         return;
       } // DEBUG-PERF 仅加了埋点
       dirty = false;
       const prevApplied = appliedSeq; // DEBUG-PERF
-      await apply(snapshot);
+      const metrics = snapshotMetrics(snapshot); // DEBUG-PERF
+      observedKind = metrics.kind; // DEBUG-PERF
+      await applyForKey(snapshot, key);
       perf("lq_fetch", {
-        rows: query.rows,
+        key,
         shared,
         minSeq,
         seq: snapshot.seq,
         prevApplied,
         dropped: snapshot.seq < prevApplied,
         refetched,
-        n: snapshot.rows.length,
-        total: snapshot.total,
+        ...metrics,
         ipcMs: +(t1 - t0).toFixed(1),
         refetchMs: +(t2 - t1).toFixed(1),
         applyMs: +(performance.now() - t2).toFixed(1),
@@ -109,6 +129,10 @@ export function useLiveQuery(opts: {
   /** 显式拉取（首次加载、翻页、手动刷新）：不合并在途请求，错误抛给调用方。 */
   const refetch = () => fetchAndApply(false);
 
+  const reportError = async (error: unknown) => {
+    await opts.onError?.(error);
+  };
+
   let unsubscribe: (() => void) | null = null;
   onMounted(() => {
     unsubscribe = subscribeChanges({
@@ -116,6 +140,7 @@ export function useLiveQuery(opts: {
       filter: opts.relevant,
       onBatch: async (batch) => {
         perf("lq_batch", {
+          kind: observedKind,
           maxSeq: batch.maxSeq,
           appliedSeq,
           skip: batch.maxSeq <= appliedSeq,
@@ -131,21 +156,28 @@ export function useLiveQuery(opts: {
         try {
           await fetchAndApply(true, batch.maxSeq);
         } catch (error) {
-          opts.onError?.(error);
+          await reportError(error);
         }
       },
     });
   });
 
-  watch(opts.key, (query, previous) => {
-    if (query && !previous && dirty) void refetch().catch((error) => opts.onError?.(error));
-  });
+  watch(
+    opts.key,
+    (key, previous) => {
+      if (!key) return;
+      if (opts.autoFetch ? key !== appliedKey || dirty : !previous && dirty) {
+        void refetch().catch(reportError);
+      }
+    },
+    { immediate: opts.autoFetch },
+  );
   onBeforeUnmount(() => unsubscribe?.());
 
   return {
     loading,
     refetch,
     apply,
-    view: opts.key,
+    key: opts.key,
   };
 }

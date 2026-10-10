@@ -459,11 +459,6 @@ pub enum IpcRequest {
     },
 
     // ======== Gallery / Provider 相关 ========
-    /// 浏览虚拟 Provider 路径（用于 Gallery/Album/Task 视图的虚拟目录树）
-    GalleryBrowseProvider {
-        path: String,
-    },
-
     /// 查询 PathQL 节点自身。
     PathqlEntry {
         path: String,

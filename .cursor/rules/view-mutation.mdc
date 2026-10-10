@@ -8,14 +8,16 @@ alwaysApply: false
 
 - 凡从 `ImageGrid` 发起、可能改变当前查询结果集的写操作，必须走
   `GridRefreshContext.mutate(view => ...)`，并把 `view` 传给后端命令；命令完成后直接应用返回的
-  `ViewSnapshot`，禁止依赖变更事件回刷用户自己的操作。
+  `RowsSnapshot { rows, seq }`，禁止依赖变更事件回刷用户自己的操作。
 - 只改变当前行展示字段、不会改变结果集的写操作走 `GridRefreshContext.patch`。当前只有收藏符合此规则。
 - 新增可能影响 ImageGrid 结果集的写命令时，core、Tauri 薄包装与 web dispatch 都必须支持可选
-  `view: ViewQuery`；未传 `view` 时必须保持原行为，传入时在写入并发出事件后返回最新视图快照。
+  `view: string`（当前行路径）；未传 `view` 时必须保持原行为，传入时在写入并发出事件后返回最新行快照。
 - 带 `view` 的写命令必须在写库前调用 `GlobalEmitter::hold()`；写入期间的 `images-change` /
   `album-images-change` 照常分配 `seq` 但延迟广播，必须等快照读完、守卫析构后再按序放行。
-- 快照必须先读取全局 `seq`，再读取 rows 与 count。`images-change` 携带递增 `seq`；
+- 行读取与总数读取都必须先读取全局 `seq`，再分别查询 rows 或 count。`images-change` 携带递增 `seq`；
   `album-images-change` 同样携带递增 `seq`。
+- 总数不随写命令返回；ImageGrid 为行路径和计数路径分别维护 live 状态，写后总数由
+  `dataChangeHub` 批次驱动重读。翻页只改变行路径，不得重读未变的计数路径。
 - 被动更新统一经 `dataChangeHub` / `liveQuery`，ImageGrid 不得重新建立独立的
   `images-change` / `album-images-change` 监听。
 

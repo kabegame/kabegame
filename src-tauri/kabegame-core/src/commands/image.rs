@@ -5,7 +5,7 @@
 //! 返回 `ImageInfo`（或嵌套）的函数一律回**原始本地路径**；web 模式的 CDN 改写
 //! 由 `kabegame::web::dispatch` 在本层返回之后施加，本层不感知 web。
 
-use crate::commands::view::{snapshot_view, ViewQuery};
+use crate::commands::view::snapshot_rows;
 use crate::providers::{decode_provider_path_segments, query_entry, query_fetch, query_list};
 use crate::settings::Settings;
 use crate::storage::image_events::{
@@ -180,7 +180,7 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
 
 pub async fn batch_delete_images(
     image_ids: Vec<String>,
-    view: Option<ViewQuery>,
+    view: Option<String>,
 ) -> Result<Value, String> {
     let hold = view
         .as_ref()
@@ -188,7 +188,7 @@ pub async fn batch_delete_images(
     let pending = begin_delete_images_with_events(&image_ids, true)?;
     clear_current_wallpaper_if_removed(&image_ids);
     let snapshot = match view {
-        Some(query) => Some(snapshot_view(query).await),
+        Some(path) => Some(snapshot_rows(path).await),
         None => None,
     };
     drop(hold);
@@ -202,7 +202,7 @@ pub async fn batch_delete_images(
 
 pub async fn batch_remove_images(
     image_ids: Vec<String>,
-    view: Option<ViewQuery>,
+    view: Option<String>,
 ) -> Result<Value, String> {
     let hold = view
         .as_ref()
@@ -210,7 +210,7 @@ pub async fn batch_remove_images(
     let pending = begin_delete_images_with_events(&image_ids, false)?;
     clear_current_wallpaper_if_removed(&image_ids);
     let snapshot = match view {
-        Some(query) => Some(snapshot_view(query).await),
+        Some(path) => Some(snapshot_rows(path).await),
         None => None,
     };
     drop(hold);

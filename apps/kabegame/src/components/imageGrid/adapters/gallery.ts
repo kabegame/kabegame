@@ -31,7 +31,9 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
       const rootPath = buildGalleryCountPath(routeStore.effectiveNoAlbum, routeStore.query);
       return routeStore.hide ? `hide/${rootPath}` : rootPath;
     },
-    onCountError: resetGalleryRouteAfterLoadError,
+    onCountError: (error) => {
+      console.error("加载画廊总数失败:", error);
+    },
     onLoadError: async (error, path) => {
       console.error("加载路径失败:", path, error);
       await resetGalleryRouteAfterLoadError();

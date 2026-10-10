@@ -16,8 +16,10 @@
 - [cli/CLI_IPC.md](cli/CLI_IPC.md)
   - 主题：`kabegame-cli` 的 app 优先/local 回退进程模型，`Backend` 抽象、`--via`
     选择、`ipcProtocol` / `dataDir` 门控、`PluginRun` 共享实现、逐任务下载并发的
-    `TaskSetMaxConcurrentDownloads`、`local-import` 任务以及 `IpcClient` 连接/事件语义。
-  - 适用场景：新增 CLI 数据命令、IPC 协议变体或排查 CLI 与运行中主程序数据/任务不同步。
+    `TaskSetMaxConcurrentDownloads`、`local-import` 任务、`pathql query` 本进程只读 Storage、
+    CLI 禁用 metadata 迁移、`KABEGAME_SQL_DEBUG` 以及 `IpcClient` 连接/事件语义。
+  - 适用场景：新增 CLI 数据命令、IPC 协议变体，或排查 CLI 与运行中主程序的数据/任务差异、
+    PathQL 实际 SQL 与耗时。
 
 ## Provider DSL（`provider-dsl/`）
 
@@ -58,8 +60,8 @@
   - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对；排查宽高比筛选 / 排序变慢或分桶归属不一致；排查收藏 / 隐藏标记或 hide 计数变慢、不一致。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
-  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, total, seq }` 单次快照；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先快照后广播；500ms 批次合并、画册 `ancestorPath` 相关性、wildcard 粗过滤和 `seq` 防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
-  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `liveQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
+  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, seq }` 行快照与 `pathql_count` 的 `{ total, seq }` 总数快照分开维护，翻页只读行；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先行快照后广播；500ms 批次合并、行/总数独立 `seq`、画册 `ancestorPath` 相关性、wildcard 粗过滤和防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
+  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `rowsQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
 
 - [gallery/LABEL_ALBUMS.md](gallery/LABEL_ALBUMS.md)
   - 主题：标签森林由内部节点 `label_dir` 与叶子 `label` 组成；目录只能装子画册、叶子只能挂图。涵盖同级 key（不区分大小写）唯一、v031 的 `label_key` / 派生列 `label_path`、目录/叶子按 PathQL 列举计数、`storage/labels.rs` 标识符规则、`ensure_label_path` 的目录段/叶子寻址与类型冲突逐项跳过、标签来源、`search/label` 的完整路径子串匹配与不相关 `IN` 子查询写法（为何不用相关 EXISTS / JOIN + group_by），以及分页查询树 / 选择器 / 预览面板。

@@ -260,6 +260,8 @@ pub struct PluginManager {
     store_plugin_cache: ArcSwap<HashMap<String, HashMap<String, Plugin>>>,
     /// 商店插件下载进度（内存态，供 `get_store_plugins` 合并）；key = `source_id::plugin_id`
     store_download_states: std::sync::Mutex<HashMap<String, StoreDownloadState>>,
+    /// 是否在插件安装或刷新后调度 metadata 迁移。
+    metadata_migrations: bool,
 }
 
 /// 商店列表合并用：某插件当前下载进度（仅下载中；完成后从 map 移除）
@@ -304,16 +306,32 @@ type InstalledPlugins = HashMap<String, Arc<Plugin>>;
 
 impl PluginManager {
     pub fn new() -> Self {
+        Self::with_metadata_migrations(true)
+    }
+
+    fn with_metadata_migrations(metadata_migrations: bool) -> Self {
         Self {
             plugins: ArcSwap::from_pointee(None),
             store_plugin_cache: ArcSwap::from_pointee(HashMap::new()),
             store_download_states: std::sync::Mutex::new(HashMap::new()),
+            metadata_migrations,
         }
     }
 
     /// 初始化全局 PluginManager（必须在首次使用前调用）
     pub fn init_global() -> Result<(), String> {
         let plugin_manager = PluginManager::new();
+        PLUGIN_MANAGER
+            .set(plugin_manager)
+            .map_err(|_| "PluginManager already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 初始化不调度 metadata 迁移的全局 PluginManager。
+    ///
+    /// 供不持有应用任务运行时的进程使用；被跳过的迁移会在应用下次启动刷新插件时补跑。
+    pub fn init_global_without_metadata_migrations() -> Result<(), String> {
+        let plugin_manager = PluginManager::with_metadata_migrations(false);
         PLUGIN_MANAGER
             .set(plugin_manager)
             .map_err(|_| "PluginManager already initialized".to_string())?;
@@ -788,7 +806,9 @@ impl PluginManager {
         }
 
         #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
-        crate::plugin::metadata_migration::spawn_metadata_migrations_for_plugin(plugin.clone());
+        if self.metadata_migrations {
+            crate::plugin::metadata_migration::spawn_metadata_migrations_for_plugin(plugin.clone());
+        }
 
         Ok(plugin)
     }

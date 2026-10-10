@@ -65,7 +65,7 @@ import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, addTaskImagesToAlbum, createAlbum } from "@/services/albums";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
-import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
+import type { RowsSnapshot } from "@/services/liveQuery";
 
 interface Props {
   open: boolean;
@@ -105,7 +105,7 @@ const newAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
 
-const runMutation = <T extends { view?: ViewSnapshot | null }>(operation: (view: ViewQuery | null) => Promise<T>) =>
+const runMutation = <T extends { view?: RowsSnapshot | null }>(operation: (view: string | null) => Promise<T>) =>
   props.mutate ? props.mutate(operation) : operation(null);
 
 watch(

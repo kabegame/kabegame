@@ -51,7 +51,7 @@ prod 库副本实测 `gallery/hide/` 下三个 `!词`（原生元数据 OR 标�
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | 迁移与分桶一致性 | Rust 单测 / e2e | `test-kabegame` driver：`kabegame-core --lib migrations`、`kabegame-core --test dsl_e2e` | 15 + 43 个用例通过；v036 幂等、自动维护、16:9 边界相等、排序走索引；e2e 逐桶与旧整数公式比对 | 已实测 |
-| [x] | 已有库升级 | CLI 本地模式 | dev 数据目录上 `kabegame-cli pathql query --via local --list --with-count images://gallery/.../aspect` | 打开时执行 v036，各桶计数正常返回 | 已实测 |
+| [ ] | 已有库升级 | 桌面 CEF | 用 v035 数据库启动新版 Kabegame，再查询 `images://gallery/.../aspect` | app 启动时执行 v036，各桶计数正常返回 | 迁移本身此前已实测；`pathql query` 现为不迁移的只读入口，不再承担升级 |
 | [ ] | 按宽高比排序 | 桌面 CEF / Web | 排序选「宽高比」，切升 / 降序并翻到靠后页，打开预览深链接 | 顺序正确、翻页立即出结果，预览定位到正确页 | 宽度为 0 的异常图现在与无宽高的图一起排在最前 |
 | [ ] | 新导入图片 | 桌面 CEF | 导入 / 下载新图后按宽高比筛选与排序 | 新图立即出现在正确的桶与位置（无需应用侧回填） | |
 
@@ -287,16 +287,17 @@ Tauri 命令注册、ACL 白名单与 web JSON-RPC 入口一并删除。创建�
 
 ## kabegame-cli 优先经应用 IPC 执行
 
-CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一套业务组合：同数据目录的主程序
-可用时走 IPC，否则回退 CLI 本地运行时。`PluginRun` 的解析、配置合并与任务提交统一在
+CLI 的插件导入/运行和单文件导入通过 `Backend` 共用一套业务组合：同数据目录的主程序可用时走
+IPC，否则回退 CLI 本地运行时。`PluginRun` 的解析、配置合并与任务提交统一在
 `commands::task::run_plugin`；`data import-image` 改为 `local-import` 任务并移除 `--metadata`。
+`pathql query` 后续改为本进程只读执行，见下一节。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` 与 `-c kabegame-cli --skip vue` | app/core/CLI 无 error | 已实测 |
 | [x] | core 参数解析单测 | 本机 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib commands::task` | key=value、positional、options 名称映射和未知 key 报错均通过 | `3 passed / 0 failed / 0 ignored` |
 | [x] | CLI 单测 | 本机 | `.claude/skills/test-kabegame/driver.sh kabegame-cli` | 全部通过；`--metadata` 已被 clap 拒绝 | `20 passed / 0 failed / 0 ignored` |
-| [x] | app/local PathQL 一致 | dev app + debug CLI | app 运行时用 `--data dev` 构建的 CLI 查询 `images://gallery/all/x10x/1`，再以 `--via local` 查询 | 两者输出一致；app 模式顶部显示主程序版本 | 已实测：`x5x/1` 两种模式输出逐字节一致，stderr 显示「经主程序执行（版本 4.5.1）」；单次约 0.04s |
+| [x] | PathQL 忽略 app/local | dev app + debug CLI | app 运行时分别不带 `--via`、带 `--via app` / `--via local` 查询 `images://gallery/all/x10x/1` | 三次输出一致，stderr 均不显示「经主程序执行」，数据库不迁移 | |
 | [x] | 单文件导入与去重 | dev app + debug CLI | 向 `/父/子` 画册导入图片，再重复导入 | 任务抽屉出现 `local-import`；画廊/画册立即刷新；CLI 分别打印成功/去重计数 | 已实测（未加入画册）：画廊计数 1457→1458 实时刷新，任务抽屉出现本地导入；重复导入打印「去重 1」。`--album` 仅验证了不存在路径经 IPC 报「未找到画册树路径」，未向真实画册写入 |
 | [x] | 临时包与已安装插件 | dev app + debug CLI | 两种模式各运行 `.kgpg --id test-x --var k=v --dry-run` 和已安装 id | 最终配置一致；未知 key 均列出可用 key；实际运行日志/进度正常 | 已实测：konachan 已安装 id 与 `.kgpg --id konachan-ipc-test` 两种模式 dry-run 输出一致（含默认配置合并、`end_page` 转数字）；`--var max_pages=1` 两种模式报同样的可用 key；`--id` 用于 id 模式报错 |
 | [x] | 取消任务 | dev app + debug CLI | `plugin run` 执行中按 Ctrl-C | CLI 经选中后端取消，任务状态变为 canceled | 已实测：app 模式 konachan 运行 12s 后 SIGINT，CLI 打印「任务已取消」，任务抽屉显示已取消（下载 2 张）；stderr 无 `[DEBUG]` |
@@ -308,7 +309,24 @@ CLI 的 PathQL、插件导入/运行和单文件导入通过 `Backend` 共用一
 | [ ] | CLI 日志语言跟随应用设置 | dev app + 以 `--data dev` 构建的 debug CLI | 应用设置切到中文 / 英文后分别执行 `data import-image` 或 `plugin run` | 日志文案与应用界面语言一致，无 `{"_i18n":...}` 原文；`--via local` 同样跟随设置 | local 模式已实测（设置 zh → 中文日志）；app 模式待重启 dev app 后验证 |
 | [ ] | 重复导入不再卡死任务 | dev app（debug 构建）+ 下载间隔 > 0 | 对同一已入库文件反复执行 `data import-image`（或 GUI 拖入同一文件）数十次 | 每次都是「去重 1」并完成；终端无 `attempt to subtract with overflow`；任务抽屉无停在「运行中 0%」的本地导入 | 修复前偶发：`local-import` 的 start_time 比当前时间晚 1ms，`wait_after_download_if_needed` 下溢 panic 掉 task worker |
 | [ ] | IPC 调试与旧版协议 | 本机 | 设 `KABEGAME_IPC_DEBUG=1`；再用旧 app 配新 CLI | 开关打开时恢复 DEBUG；旧 app 下 auto 回退且不挂起 | `KABEGAME_IPC_DEBUG=1` 已实测恢复 DEBUG；旧版 app 未测（无旧版二进制） |
-| [x] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`，dev app 运行时走 app 模式 | 已实测：`--data dev` 退出码 2；不带参数的 `plugin run --dry-run`、`plugin import`、`pathql query` 均显示「经主程序执行」并使用 `.kabegame/debug/data`；`plugin run --help` 不再含 `--data` |
+| [ ] | CLI 移除 `--data` | dev app + 以 `--data dev` 构建的 debug CLI | `plugin run <id> --data dev`；再不带参数执行 `plugin run <id> --dry-run`、`plugin import`、`pathql query` | 前者被 clap 拒绝（退出码 2）；后三者使用 `.kabegame/debug/data`；插件命令走 app，PathQL 本进程只读执行 | `--data` 拒绝和插件命令此前已实测；PathQL 新执行路径待回归 |
+
+## SQL 调试输出 + CLI PathQL 自运行 + CLI 不跑 metadata 迁移
+
+SQLite trace 下沉到 Storage 的连接打开层；`KABEGAME_SQL_DEBUG` 打开时，app 与 CLI 共用的连接会向
+stderr 输出参数已展开的 SQL 和 PROFILE 耗时。`pathql query` 不再选择 app/local Backend，而是在 CLI
+进程中以 `query_only` 打开已有数据库、拒绝旧 schema，并加载已安装插件的 extend provider。CLI 本地
+PluginManager 关闭 metadata 迁移调度，迁移留给应用下次启动的全量刷新补跑。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` 与 `-c kabegame-cli --skip vue` | app/core/CLI 无 error | 已实测；两次均为 `cargo 0 个 error` |
+| [x] | CLI 解析单测 | 本机 | `.claude/skills/test-kabegame/driver.sh kabegame-cli` | 全部通过；全局 `--via` 仍由 `data import-image` 等命令解析 | 已实测：`25 passed / 0 failed / 0 ignored` |
+| [x] | CLI SQL trace 与 stdout 分流 | prod 数据 debug CLI | `KABEGAME_SQL_DEBUG=1 kabegame-cli pathql query '<慢路径>' --entry >result.json 2>sql.log` | stderr 逐条包含展开参数后的 SQL 和毫秒耗时；stdout 仍为 JSON；total 与 app 一致 | |
+| [x] | 插件 extend provider | prod 数据 debug CLI | 查询 `images://gallery/plugin/konachan/extend/rating/Safe/x100x/1` | 路径正常解析；trace 可见 resolve 阶段的 rating 列举与耗时 | 解析 `x100x/1` 时会先执行一次分页列举 SQL（`SELECT page_num … ROW_NUMBER()`，106ms）；rating 值走正则解析不触发列举，预期里的「rating 列举」不成立 |
+| [x] | 只读与不调度迁移 | prod 数据 debug CLI + sqlite | 查询前后对比 `PRAGMA user_version`，检查日志 | `user_version` 不变，不出现 `[metadata-migration]`；`--via app/local` 均不改变执行路径 | |
+| [x] | 旧 schema 拒绝 | 数据库副本 | 只降低副本的 `user_version` 后执行 `pathql query` | 报 schema 版本过旧并以非 0 退出，不迁移副本 | |
+| [ ] | app SQL trace 与迁移保持 | 桌面 CEF | 分别带 / 不带 `KABEGAME_SQL_DEBUG=1` 启动 app，执行画廊查询和插件刷新 | 打开时可见迁移与查询 SQL；关闭时无 trace；app 仍调度 metadata 迁移 | 待用户实测 |
 
 ## konachan / yande.re / danbooru id 范围模式（konachan 1.5.0、yandere 1.2.0、danbooru 1.3.0）
 
@@ -545,7 +563,7 @@ category + key；帖子地址取服务器 `post_url`，为空就留空，不填�
 | [x] | 编译检查 | 本机 macOS | `check-kabegame` driver `--skip vue` | cargo 0 个 error | 已实测 |
 | [ ] | dev 与 release 并存 | 桌面 Windows / macOS / Linux | 先启动已安装的 release 版，再 `deno task dev -c kabegame` | 两者都正常启动，dev 不再被当作第二实例退出或唤起 release 窗口；macOS/Linux 下 `$TMPDIR/Kabegame` 同时有 `kabegame.sock` 与 `kabegame-dev.sock` | |
 | [ ] | 同 profile 第二实例 | 桌面 | dev 运行时再启动一次 dev；release 运行时再启动一次 release | 各自唤起已有窗口并退出 | |
-| [ ] | CLI 路由 | 桌面 | debug CLI（`deno task b -c kabegame-cli --data dev`）与 release CLI 分别执行 `pathql query`，dev app 与 release app 同时运行 | debug CLI 经 dev app 执行，release CLI 经 release app 执行；只有一个 app 运行时，另一 profile 的 CLI 回退本地模式 | |
+| [ ] | CLI 路由 | 桌面 | debug CLI（`deno task b -c kabegame-cli --data dev`）与 release CLI 分别执行 `plugin run <id> --dry-run`，dev app 与 release app 同时运行 | debug CLI 经 dev app 执行，release CLI 经 release app 执行；只有一个 app 运行时，另一 profile 的 CLI 回退本地模式 | `pathql query` 已改为忽略 `--via` 的本进程只读命令，不适合验证 IPC 路由 |
 
 ## `deno task b` 的 `--data` 默认值随 `--release` 切换
 
@@ -612,3 +630,32 @@ yandere 等插件落盘的文件名自带字面量 `%20`（如 `yande.re%2044715
 | [x] | 改写单测 | Rust 单测 | `kabegame --lib image_rewrite` | 6 个用例通过（含字面量 `%`、空格、`#?`、中文文件名） | 已实测；macOS 下测试二进制需 `DYLD_FALLBACK_FRAMEWORK_PATH=target/Frameworks` |
 | [ ] | yandere 任务原图 | Web（demo） | 打开 `/tasks/6df35cbc-43aa-4ef3-b6cb-b66db416408a`，点开任一图预览 / 下载 | 原图正常加载，Network 中 URL 为 `yande.re%2520…`，不再 404 | 需部署 web 后验证 |
 | [ ] | 普通文件名不变 | Web（demo） | 画廊中打开 UUID / 纯 ASCII 文件名的图 | URL 与改动前一致，正常加载 | |
+
+## ImageGrid 行与总数拆分维护
+
+`pathql_view` 只读带页码的行路径，新增 `pathql_count` 独立读计数路径；两者各自携带
+`seq`。ImageGrid 用两个 `useLiveQuery` 实例分别维护行和总数，翻页只读行。带 `view`
+的写命令只返回 `{ rows, seq }`；总数在 hub 批次窗口后独立重读。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译与类型检查 | 本机 | `.claude/skills/check-kabegame/driver.sh` | vue-tsc 与 cargo 均 0 error | 已实测；`vue-tsc 0 个 error`、`cargo 0 个 error` |
+| [x] | 前端回归 | 本机 | `deno task test -c kabegame --skip cargo` | 全部 Vitest 通过；包含独立 `appliedSeq` 与 `autoFetch` 用例 | 已实测；27 个文件、246 个用例全部通过 |
+| [x] | 翻页只读行 | 桌面 CEF + DEBUG_INGEST | 在四维度搜索下翻页 | `lq_fetch` 只出现 `kind: rows`，不跑 COUNT；换图时间降到 100ms 以内 | |
+| [x] | 筛选切换 | 桌面 CEF | 修改筛选条件 | rows 与 total 各读一次，页头总数正确 | 行与总数并发时共用单条 SQLite 连接串行执行：总数先发出时行读取被拖到 615ms（行先发出时 65ms） |
+| [x] | 写后行与总数时序 | 桌面 CEF | 删除或隐藏一张图 | 列表立即更新；约 500ms 后只重读 total 且总数减 1，没有 rows 回声重读 | |
+| [x] | 删空最后一页 | 桌面 CEF | 删除最后一页全部图片 | 新总数到达后回到新的最后一页 | 列表清空到新最后一页出图约 1.3s 空白：等总数 COUNT（约 400ms）后才跳页，深页 OFFSET 行查询又约 400ms |
+| [x] | 外部数据变更 | 多窗口 / 下载 | 让其他窗口或下载新增图片 | rows 和 total 在同一批次窗口后分别刷新 | 同批次行与总数串行：总数排在行查询后，ipcMs 820ms |
+| [x] | Web RPC | Web 构建 / 桌面 Web 服务器 | 调用 `pathql_view` / `pathql_count`，再执行带字符串 `view` 的写方法 | 两个读方法和写后行快照均正常 | |
+
+## 删除 `GalleryBrowseProvider` IPC 命令
+
+`gallery-browse-provider` 自 local folder sync 起只返回 `kind: "dir"` 子目录，唯一外部调用方
+Plasma 壁纸插件按 `kind: "image"` 取图，画廊页一直为空。主仓库删除该 `IpcRequest` 变体、
+`IpcClient::gallery_browse_provider` 与 app 侧 handler；插件迁移到 `pathql-fetch` / `pathql-entry` 另行处理。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Rust 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | app/core 无 error | |
+| [ ] | 未知命令报错 | 桌面 + Plasma 插件 | 在 Plasma 壁纸插件配置里打开画廊页 | 提示「Failed to load gallery: unsupported request: …」（服务端按信封里的 `request_id` 回错，插件不会干等），app 不崩溃；其他 IPC（画册、任务、当前壁纸）不受影响 | |
+| [ ] | PathQL IPC 不受影响 | dev app + debug CLI | `kabegame-cli` 经 app 解析 `--album /父/子` 导入图片 | 画册路径解析正常（走 `pathql-fetch`） | |

@@ -72,12 +72,13 @@
 ### 拉取当前页图片
 
 - **组件**：[`apps/kabegame/src/components/ImageGrid.vue`](/apps/kabegame/src/components/ImageGrid.vue)。
-- 首次加载、翻页与事件刷新统一调用 `pathql_view({ rows, count })`，一次 IPC 返回
-  `{ rows, total, seq }`，不再把 `pathql_fetch(rows)` 与 `pathql_entry(count)` 分成两次请求。
-- `rows` 是带页码的当前列表路径；`count` 由 adapter 的 `computeCountPath` 从同一视图推导。
+- 行与总数拆成两个带 `seq` 的独立读：`pathql_view(path)` 返回 `{ rows, seq }`，
+  `pathql_count(path)` 返回 `{ total, seq }`。
+- 行路径带页码，首次加载、翻页、换筛选和相关数据变更都会重读；计数路径由 adapter 的
+  `computeCountPath` 推导，只在路径变化或相关数据变更时重读。单纯翻页不再跑 COUNT。
 - 每次应用快照前清空 `useProvideImageMetadataCache` 的 per-page 缓存；列表行仍不内联 metadata。
 - [`apps/kabegame/src/composables/usePagedGallery.ts`](/apps/kabegame/src/composables/usePagedGallery.ts)
-  只负责页码、越界回退与预览跨页，数据和总数由同一个视图快照更新。
+  只负责页码、越界回退与预览跨页；行和总数分别由 ImageGrid 的两个 live 状态更新。
 
 ### 预览深链接定位（`pvwimgid` 指向视图外的图）
 
@@ -112,8 +113,8 @@ images://gallery/hide/album/<id>/sort/by-time/desc  /~~/ rank /~~/ id_2719
   结论；下一个快照落地时会再查一遍。视图内切图（邻居本就取自 `images`）与跨页交接（分页器在新页
   快照落地后才交出 id）因此不会把中间的 `null` 传给已打开的弹窗——否则弹窗把 `null` 当关闭，
   被动刷新在途时（web 弱网下可持续数秒）切图会先关闭再打开。在途定位请求只在就绪页命中时结束。
-- **不在**：在途读取可能把它带回来，只在 `loadedKey === rawViewPath()` 且 `!liveQuery.loading` 时
-  才定位或降级，期间保留上一帧。`liveQuery` 按查询 key 计数真实在途读取，必须等快照应用和当前 key
+- **不在**：在途读取可能把它带回来，只在 `loadedKey === rawViewPath()` 且 `!rowsQuery.loading` 时
+  才定位或降级，期间保留上一帧。`rowsQuery` 按行路径 key 计数真实在途读取，必须等快照应用和当前 key
   的全部请求结束；旧页返回不能提前结束新页 loading，同路径刷新也不会拿旧快照先定位。
 
 URL 入口只设置目标 id，不负责取图或定位；列表更新、
@@ -157,7 +158,8 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 - [`apps/kabegame/src/views/TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)
 - [`apps/kabegame/src/views/SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)
 
-过滤树等辅助请求仍可独立读取计数；ImageGrid 的列表与分页总数必须走 `pathql_view`，不能重新拆成两次请求。
+过滤树等辅助请求仍可独立读取计数；ImageGrid 的列表与分页总数必须分别走 `pathql_view`
+与 `pathql_count`，不得在翻页时因行路径变化重读未变的计数路径。
 
 ### UI：每页条数入口
 
@@ -181,8 +183,9 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 ImageGrid 把数据变化分成两条通道：
 
 - **主动通道**：当前网格发起且会改变结果集的写操作走 `ctx.mutate`。命令携带当前
-  `ViewQuery { rows, count }`，写入并发出事件后立即读取并返回 `ViewSnapshot`，前端直接应用，不等待防抖。
-  永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
+  `view: string`（当前行路径），写入并发出事件后立即读取并返回 `{ rows, seq }`，前端直接应用，不等待防抖。
+  写命令不返回总数；总数由 hub 批次驱动的独立 live 状态在约 500ms 后更新。永久删除、隐藏/取消隐藏、
+  加入/移出画册与上划移除均已接入。
 - **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
 - **被动通道**：下载、同步、整理、其他窗口或 MCP 引起的 `image-changed`、`images-change`、`album-images-change` 与
   画册结构字段变更进入全局单例
@@ -192,8 +195,10 @@ ImageGrid 把数据变化分成两条通道：
   `albumPaths` / `albumPathsWildcard` 和结构字段集合。画册成员事件携带画册 `ancestorPath`；新增、删除、
   改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。任一 `images-change` 缺少
   task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
-- [`liveQuery.ts`](/apps/kabegame/src/services/liveQuery.ts) 以 `{ rows, count }` 为 key 共享同一在途请求；
-  inactive 时只标脏，恢复后补拉。gallery/album 全部相关，task 与 surf 只按免费维度或 wildcard 粗过滤。
+- [`liveQuery.ts`](/apps/kabegame/src/services/liveQuery.ts) 是「一个 key + 一个读函数」的单通道 live 状态；
+  在途请求按「读函数 + key」合并。ImageGrid 分别挂 `rowsQuery` 与 `totalQuery`，两者各自维护
+  `appliedSeq`、各自订阅 hub；`totalQuery` 在计数 key 变化或 inactive 期间标脏后重新激活时自动重读。
+  gallery/album 全部相关，task 与 surf 只按免费维度或 wildcard 粗过滤。
 
 画册写命令除 `view` 外始终返回本次已发送事件的 `albumChanges` 副本。无状态 `services/albums.ts` 把返回的
 成员事件用 `publishLocal` 立即投递；hub 记录其 `seq`，随后到达的同序号后端事件直接丢弃。画册树不维护全量
@@ -205,13 +210,16 @@ ImageGrid 把数据变化分成两条通道：
 后端 `GlobalEmitter` 为 `image-changed`、`images-change`、`album-images-change` 与进入 hub 的
 `album-changed` 共用一个单调递增计数器，四者 payload 都携带 `seq`。
 
-读取视图快照时必须**先读取 `seq`，再执行 rows/count 查询**。带 `view` 的写命令在写库前取得全局
-`EventHold`：期间两类视图事件照常分配 `seq` 但暂存，快照读完、守卫析构后才按序广播。因此事件不会触发
-查询来插队同一次主动快照，且出错路径也会由 `Drop` 放行：
+行读取与总数读取都必须**先读取 `seq`，再执行各自查询**。带 `view` 的写命令在写库前取得全局
+`EventHold`：期间两类视图事件照常分配 `seq` 但暂存，行快照读完、守卫析构后才按序广播。因此事件不会触发
+查询来插队同一次主动行快照，且出错路径也会由 `Drop` 放行：
 
-- `liveQuery` 的 `appliedSeq` 已覆盖某事件时，`maxSeq <= appliedSeq` 的回声批次不再重拉；
-- 任意返回快照的 `seq < appliedSeq` 时丢弃，旧的在途请求不会覆盖新列表；
+- 行与总数实例各自用 `appliedSeq` 判断；某实例已覆盖事件时，该实例对
+  `maxSeq <= appliedSeq` 的回声批次不再重拉，不会因另一实例的新读取跳过变更；
+- 任意返回快照的 `seq < 本实例 appliedSeq` 时丢弃，旧的在途请求不会覆盖新状态；
 - 读数据期间新发出的事件具有更大的序号，随后会再触发一次拉取，允许多拉但不会漏变更。
+- 写操作应用行快照后，行实例会跳过回声批次；总数实例的序号仍落后，因而在约 500ms 批次窗口后重读。
+  若写操作删空最后一页，新总数到达后由 `usePagedGallery` 的 total watcher 把页码夹回新的最后一页。
 
 ### `images-change`（`AppEvent::ImagesChange`，`images` 表）
 
@@ -263,7 +271,7 @@ ImageGrid 把数据变化分成两条通道：
 2. **改每页条数后仍显示旧页**：确认对应视图对 `pageSize` 有 `watch`，并 `navigateToPage(1)` 或重新 `loadCurrentPage`。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
 4. **删除后列表延迟或闪回**：确认调用从 `ctx.mutate` 传入了 `view`，返回快照的 `seq` 被
-   `liveQuery.apply` 接收；不要靠 `images-change` 回刷当前操作。
+   `rowsQuery.apply` 接收；不要靠 `images-change` 回刷当前操作。总数则应在 hub 批次窗口后独立重读。
 5. **任务/畅游详情收到无关刷新**：检查 hub 批次的 `wildcard.task/surf`。缺维度必须刷新，带维度时才允许按 id 排除。
 6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
    `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在

@@ -122,7 +122,8 @@ import { createImageActions } from "@/actions/imageActions";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
 import { subscribeChanges } from "@/services/dataChangeHub";
-import { GRID_REFRESH_WAIT_MS, useLiveQuery, type ViewQuery, type ViewSnapshot } from "@/services/liveQuery";
+import { GRID_REFRESH_WAIT_MS, useLiveQuery, type RowsSnapshot, type TotalSnapshot } from "@/services/liveQuery";
+import { pathqlCount, pathqlView } from "@/services/pathql";
 import { useProvideImageMetadataCache } from "@/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, fetchImageAlbums, removeImagesFromAlbum } from "@/services/albums";
@@ -338,19 +339,23 @@ let refreshCtx!: GridRefreshContext;
 
 const rawViewPath = () => adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
 
-const currentViewQuery = (): ViewQuery | null => {
+const currentRowsPath = (): string | null => {
   if (!isRouteActive.value || !adapter.isActive()) return null;
-  const rows = rawViewPath();
-  if (!rows || (adapter.validatePath && !adapter.validatePath(rows))) return null;
-  const count = adapter.computeCountPath(rows);
-  if (!count) return null;
-  return {
-    rows: withGalleryPrefix(rows),
-    count: withGalleryPrefix(count),
-  };
+  const path = rawViewPath();
+  if (!path || (adapter.validatePath && !adapter.validatePath(path))) return null;
+  return withGalleryPrefix(path);
 };
 
-const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
+const currentCountPath = (): string | null => {
+  if (!isRouteActive.value || !adapter.isActive()) return null;
+  const rowsPath = rawViewPath();
+  if (!rowsPath || (adapter.validatePath && !adapter.validatePath(rowsPath))) return null;
+  const count = adapter.computeCountPath(rowsPath);
+  if (!count) return null;
+  return withGalleryPrefix(count);
+};
+
+const applyRows = async (snapshot: RowsSnapshot) => {
   const raw = rawViewPath();
   const sameView = loadedKey.value === raw;
   const previous = sameView ? images.value.slice() : [];
@@ -359,7 +364,6 @@ const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
 
   clearImageMetadataCache();
   images.value = snapshot.rows.map(rowToImageInfo);
-  totalImagesCount.value = snapshot.total;
   loadedKey.value = raw;
   latestSnapshotSeq = snapshot.seq;
   lastRemovedIds = [];
@@ -383,24 +387,44 @@ const applyViewSnapshot = async (snapshot: ViewSnapshot) => {
   await adapter.onAfterRefresh?.(refreshCtx, { removedIds });
 };
 
-const liveQuery = useLiveQuery({
-  key: currentViewQuery,
+const applyTotal = (snapshot: TotalSnapshot) => {
+  totalImagesCount.value = snapshot.total;
+};
+
+const rowsQuery = useLiveQuery<RowsSnapshot>({
+  key: currentRowsPath,
+  read: pathqlView,
+  kind: "rows",
   waitMs: GRID_REFRESH_WAIT_MS,
   relevant: (batch) => adapter.changes?.relevant?.(batch) ?? true,
-  onResult: applyViewSnapshot,
+  onResult: applyRows,
   onError: (error) => {
     void adapter.onLoadError?.(error, rawViewPath());
   },
 });
 
-// 加载路径数据。行与总数由同一个带 seq 的视图快照返回。
+const totalQuery = useLiveQuery<TotalSnapshot>({
+  key: currentCountPath,
+  read: pathqlCount,
+  kind: "total",
+  waitMs: GRID_REFRESH_WAIT_MS,
+  autoFetch: true,
+  relevant: (batch) => adapter.changes?.relevant?.(batch) ?? true,
+  onResult: applyTotal,
+  onError: async (error) => {
+    const fallback = await adapter.onCountError?.(error, refreshCtx);
+    if (typeof fallback === "number") totalImagesCount.value = fallback;
+  },
+});
+
+// 加载当前页的行；总数由独立 live 状态按计数路径维护。
 const loadImages = async (path?: string) => {
   const raw = path || adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
   if (!raw) return;
   if (adapter.validatePath && !adapter.validatePath(raw)) return;
   loadImagesInFlight = true;
   try {
-    await liveQuery.refetch();
+    await rowsQuery.refetch();
   } finally {
     loadImagesInFlight = false;
   }
@@ -418,7 +442,6 @@ const paged = usePagedGallery({
   computeCountPath: adapter.computeCountPath,
   isActive: () => isRouteActive.value && adapter.isActive(),
   computeTargetPath: adapter.computeTargetPath,
-  onCountError: (error) => adapter.onCountError?.(error, refreshCtx),
   onLoadError: adapter.onLoadError,
 });
 
@@ -427,19 +450,19 @@ const {
   pageSize: gridPageSize,
   currentPath: gridCurrentPath,
   handleJumpToPage: jumpToPage,
-  loadTotalImagesCount,
   ensureValidPageAfterMassRemoval,
 } = paged;
+const loadTotalImagesCount = totalQuery.refetch;
 ensurePageAfterRemoval = paged.ensureValidPageAfterMassRemoval;
 
 /**
- * 事件驱动的当前页刷新：保留滚动位置，重算总数；对被移除的图片做
+ * 当前页与总数并行刷新：保留滚动位置；对被移除的图片做
  * 选中清理、当前壁纸清理与页码越界回退。
  */
 const refreshPage = async (): Promise<{ removedIds: string[] }> => {
   lastRemovedIds = [];
   try {
-    await liveQuery.refetch();
+    await Promise.all([rowsQuery.refetch(), totalQuery.refetch()]);
   } catch (error) {
     await adapter.onLoadError?.(error, rawViewPath());
     return { removedIds: [] };
@@ -448,23 +471,22 @@ const refreshPage = async (): Promise<{ removedIds: string[] }> => {
 };
 
 const mutate: GridRefreshContext["mutate"] = async (op) => {
-  const view = liveQuery.view();
+  const view = rowsQuery.key();
   const t0 = performance.now(); // DEBUG-PERF
   const result = await op(view);
   const t1 = performance.now(); // DEBUG-PERF
-  const current = liveQuery.view();
-  const stillCurrent = !!view && !!current && view.rows === current.rows && view.count === current.count;
-  if (result.view && stillCurrent) await liveQuery.apply(result.view);
+  const current = rowsQuery.key();
+  const stillCurrent = !!view && view === current;
+  if (result.view && stillCurrent) await rowsQuery.apply(result.view);
   void sendDebugEvent(
     "grid_mutate",
     {
       adapter: adapter.id,
-      rows: view?.rows,
+      rows: view,
       hasView: !!result.view,
       stillCurrent,
       seq: result.view?.seq,
       n: result.view?.rows.length,
-      total: result.view?.total,
       opMs: +(t1 - t0).toFixed(1),
       applyMs: +(performance.now() - t1).toFixed(1),
     },
@@ -502,7 +524,7 @@ refreshCtx = {
   refreshPage,
   mutate,
   patch,
-  loadTotalImagesCount: liveQuery.refetch,
+  loadTotalImagesCount: totalQuery.refetch,
   ensureValidPageAfterMassRemoval,
   clearSelection,
 };
@@ -559,7 +581,7 @@ const syncActivePathFromUrl = () => {
 
 /** 手动刷新：重拉当前页 + 总数（错误向上抛，由 view 决定提示文案） */
 const refresh = async (opts?: { resetScroll?: boolean }) => {
-  await liveQuery.refetch();
+  await Promise.all([rowsQuery.refetch(), totalQuery.refetch()]);
   if (opts?.resetScroll) {
     const el = getContainerEl();
     if (el) el.scrollTop = 0;
@@ -752,7 +774,7 @@ const clearPreviewAnchor = () => {
 };
 
 /**
- * 在 applyViewSnapshot 更新列表后调用——那里是 images.value 被替换的唯一漏斗。
+ * 在 applyRows 更新列表后调用——那里是 images.value 被替换的唯一漏斗。
  * 无锚点时保留当前 id，后台新增造成的跨页由快照协调负责。
  *
  * 接续方向由设置决定；自动模式跟随用户最近一次切图方向：
@@ -812,7 +834,7 @@ watch(previewedId, (id) => {
  * URL 先记录目标 id，但没有确认行之前不传裸 id，让弹窗绕过跟页自行取图。
  */
 const previewListReady = computed(
-  () => !!loadedKey.value && loadedKey.value === rawViewPath() && !liveQuery.loading.value,
+  () => !!loadedKey.value && loadedKey.value === rawViewPath() && !rowsQuery.loading.value,
 );
 
 /** 外观设置「预览自动跟随视图翻页」，默认开。 */
@@ -915,7 +937,7 @@ async function locatePreviewedImage(id: string) {
     request.targetPage = page;
     if (page === paged.currentPage.value) {
       // rank 已读到更新的数据，而本页快照还没跟上，重取本页后再协调。
-      await liveQuery.refetch();
+      await rowsQuery.refetch();
     } else {
       await jumpToPage(page);
     }
@@ -1245,7 +1267,7 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
     }
     case "remove":
     case "deleteFile":
-      // 锚点跨确认对话框存活，到真正执行删除后才由 applyViewSnapshot 结算
+      // 锚点跨确认对话框存活，到真正执行删除后才由 applyRows 结算
       capturePreviewAnchor();
       openRemoveDialog(command, imagesToProcess);
       break;

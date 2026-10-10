@@ -153,22 +153,6 @@ impl Backend {
         }
     }
 
-    pub async fn pathql_entry(&self, path: &str) -> Result<Value, String> {
-        match self {
-            Self::Local => kabegame_core::commands::image::pathql_entry(path.to_string()).await,
-            Self::App(client) => client.pathql_entry(path.to_string()).await,
-        }
-    }
-
-    pub async fn pathql_list(&self, path: &str, with_count: bool) -> Result<Value, String> {
-        match self {
-            Self::Local => {
-                kabegame_core::commands::image::pathql_list(path.to_string(), with_count).await
-            }
-            Self::App(client) => client.pathql_list(path.to_string(), with_count).await,
-        }
-    }
-
     pub async fn pathql_fetch(&self, path: &str) -> Result<Value, String> {
         match self {
             Self::Local => kabegame_core::commands::image::pathql_fetch(path.to_string()).await,

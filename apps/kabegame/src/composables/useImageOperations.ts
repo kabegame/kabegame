@@ -15,7 +15,7 @@ import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
-import type { ViewSnapshot } from "@/services/liveQuery";
+import type { RowsSnapshot } from "@/services/liveQuery";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 export type FavoriteStatusChangedDetail = {
@@ -256,7 +256,7 @@ export function useImageOperations(
 
       const result = await mutate((view) =>
         invoke<{
-          view?: ViewSnapshot | null;
+          view?: RowsSnapshot | null;
           albumChanges: AlbumImagesChangePayload[];
         }>("batch_delete_images", { imageIds, view }),
       );

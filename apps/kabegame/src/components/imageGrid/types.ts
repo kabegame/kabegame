@@ -3,7 +3,7 @@ import type { ImageInfo } from "@/types/image";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { ChangeBatch } from "@/services/dataChangeHub";
-import type { ViewQuery, ViewSnapshot } from "@/services/liveQuery";
+import type { RowsSnapshot } from "@/services/liveQuery";
 
 export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
@@ -29,8 +29,8 @@ export interface GridRefreshContext {
    * 当前壁纸清理与页码越界回退。返回本次刷新被移除的 id。
    */
   refreshPage: () => Promise<{ removedIds: string[] }>;
-  /** 影响结果集的写操作唯一入口：携带当前视图并立即应用返回快照。 */
-  mutate: <T extends { view?: ViewSnapshot | null }>(op: (view: ViewQuery | null) => Promise<T>) => Promise<T>;
+  /** 影响结果集的写操作唯一入口：携带当前行路径并立即应用返回行快照。 */
+  mutate: <T extends { view?: RowsSnapshot | null }>(op: (view: string | null) => Promise<T>) => Promise<T>;
   /** 仅修改展示字段，不重新查询视图。 */
   patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;
   loadTotalImagesCount: () => Promise<void>;

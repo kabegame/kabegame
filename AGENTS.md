@@ -29,7 +29,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块干净且接近上游
 
 ### 关键架构规则
-**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。桌面端可选的应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
+**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。桌面端可选的应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。`pathql query` 是只读例外：它忽略 `--via`，总在 CLI 本进程以不迁移的只读 Storage 执行。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
 **路径逻辑归属于 `tauri-plugin-pathes`**——所有路径/目录计算都必须放在 `src-tauri-plugins/tauri-plugin-pathes/` 中。其他模块通过 `AppPaths` 调用；切勿在其他位置硬编码或重新计算路径。
 
@@ -42,7 +42,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。
 
-**ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate` 携带可选 `view`，并立即应用后端返回的 `{ rows, total, seq }` 快照；只改展示字段的操作走 `ctx.patch`，不得依赖事件回刷自身操作。带 `view` 的后端写命令必须在写库前取得 `GlobalEmitter::hold()`，快照读完后才放行事件。被动 `images-change` / `album-images-change` 统一经 `dataChangeHub` / `liveQuery`。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
+**ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate` 携带可选 `view`（当前行路径），并立即应用后端返回的 `{ rows, seq }` 行快照；总数由计数路径的独立 live 状态维护，写后经 `dataChangeHub` 刷新。只改展示字段的操作走 `ctx.patch`，不得依赖事件回刷自身操作。带 `view` 的后端写命令必须在写库前取得 `GlobalEmitter::hold()`，行快照读完后才放行事件。被动 `images-change` / `album-images-change` 统一经 `dataChangeHub` / `liveQuery`。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
 
 **画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每一层与 `~~/children` 都叠加 `search/<q>`——自身或子孙命中才保留，树形与展开态不变）；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数：目录页一次三路 fetch——`<过滤段>/x<N>x/<页>` 取这一页的画册行；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录显示它）与 `image_count`（子树成员行数，标签叶子即直接图片数），没有行的画册计 0；口径与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数一致（e2e 逐项比对），`/hide` 对应 `hide/` 前缀；单画册入口仍用这两条 images:// 路径。`~~` 之后的逐行计数一律用 `group_by`，不要 `list_with_count`（每项再包一层 COUNT 会把整个结构重跑 N 次）；子树判断用 `ancestor_path` 前缀区间走索引（见 `cocs/provider-dsl/RULES.md` §2.1）。隐藏等全局过滤只能用路径表达，不得新增计数列、SQL 视图或专用计数命令。
 
@@ -229,7 +229,7 @@ Deno CLI 一律使用官方二进制, `third-patches/deno/` 只补应用通过 C
 ### 验证流程
 **不要运行 `cargo build` / `tauri build` / `deno task b` 来验证改动**——应调用 **`check-kabegame` skill**（`.claude/skills/check-kabegame/driver.sh`，可使用 `--skip vue` / `--skip cargo` 缩小范围）。对于小型改动，编辑器 lint 诊断同样有效。仅在用户明确要求时才进行构建。注意：应用实例运行时，`check` 会以 `os error 32` 失败（`cef-dll-sys` 的构建脚本会将 CEF runtime 复制到 `target/`）——请先终止 `kabegame.exe`。规则见 `.cursor/rules/verify-by-lint.mdc`。
 
-**调试是例外——应实际运行目标。** Lint 无法证明运行时行为。诊断缺陷时：先测量对象的实际状态，再解释症状；跟踪真实调用链，并在每一环验证实际值（尤其是 Rust↔CEF、前端↔Tauri、主进程↔子进程）；优先采用零成本实验（现有二进制文件 + 环境变量 / Chromium `--disable-features=<Name>` / 现有 `[DEBUG-*]` 日志），而不是编辑代码；在运行实验之前先写下证伪标准；逐字引用源码，不要在引文内嵌自己的注释。结论的成本越高（修补 vendored 库、重建 Chromium、大规模重构），所需的经验证据就应越充分。规则见 `.cursor/rules/debug-empirically.mdc`。
+**调试是例外——应实际运行目标。** Lint 无法证明运行时行为。诊断缺陷时：先测量对象的实际状态，再解释症状；跟踪真实调用链，并在每一环验证实际值（尤其是 Rust↔CEF、前端↔Tauri、主进程↔子进程）；优先采用零成本实验（现有二进制文件 + 环境变量 / Chromium `--disable-features=<Name>` / 现有 `[DEBUG-*]` 日志），而不是编辑代码；SQLite / PathQL 查询可设 `KABEGAME_SQL_DEBUG=1`，在 stderr 查看绑定参数已展开的实际 SQL 与每条耗时；在运行实验之前先写下证伪标准；逐字引用源码，不要在引文内嵌自己的注释。结论的成本越高（修补 vendored 库、重建 Chromium、大规模重构），所需的经验证据就应越充分。规则见 `.cursor/rules/debug-empirically.mdc`。
 
 ### 计划与变更说明格式
 编写计划或描述代码变更时，按明确的**点**来组织内容。每个点下面按**新增 / 修改 / 删除**分组，每项可选择附带缩进说明。将现状与变更分开：

@@ -382,13 +382,6 @@ impl IpcClient {
             .await
     }
 
-    // ==================== Gallery / Provider ====================
-
-    pub async fn gallery_browse_provider(&self, path: String) -> Result<serde_json::Value, String> {
-        self.request_data(IpcRequest::GalleryBrowseProvider { path })
-            .await
-    }
-
     // ==================== Plugin ====================
 
     /// 获取已安装插件列表

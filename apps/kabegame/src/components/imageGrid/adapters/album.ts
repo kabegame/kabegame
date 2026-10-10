@@ -10,7 +10,7 @@ import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
-import type { ViewSnapshot } from "@/services/liveQuery";
+import type { RowsSnapshot } from "@/services/liveQuery";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 /**
@@ -54,7 +54,7 @@ export function createAlbumDetailAdapter(params: {
       try {
         const result = await ctx.mutate((view) =>
           invoke<{
-            view?: ViewSnapshot | null;
+            view?: RowsSnapshot | null;
             albumChanges: AlbumImagesChangePayload[];
           }>("batch_delete_images", {
             imageIds: images.map((img) => img.id),
