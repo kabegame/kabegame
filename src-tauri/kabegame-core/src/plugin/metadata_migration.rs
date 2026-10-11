@@ -275,7 +275,7 @@ async fn run_metadata_migrations(
     let mut changed = false;
     let mut touched = Vec::new();
     let mut touched_seen = HashSet::new();
-    let mut image_patch_groups = BTreeMap::<(i64, u32), Vec<String>>::new();
+    let mut image_patch_groups = BTreeMap::<i64, Vec<String>>::new();
     for (row_id, data, _row_version) in rows {
         let migrated = match exports
             .as_ref()
@@ -383,7 +383,7 @@ async fn run_metadata_migrations(
             search_terms,
         )? {
             changed = true;
-            let grouped = image_patch_groups.entry((metadata_id, target)).or_default();
+            let grouped = image_patch_groups.entry(metadata_id).or_default();
             for image_id in image_ids {
                 if !grouped.iter().any(|existing| existing == &image_id) {
                     grouped.push(image_id);
@@ -394,13 +394,10 @@ async fn run_metadata_migrations(
     }
     let image_patches = image_patch_groups
         .into_iter()
-        .filter_map(|((metadata_id, plugin_version), image_ids)| {
+        .filter_map(|(metadata_id, image_ids)| {
             (!image_ids.is_empty()).then(|| ImagePatch {
                 image_ids,
-                diff: serde_json::json!({
-                    "metadataId": metadata_id,
-                    "pluginVersion": plugin_version,
-                }),
+                diff: serde_json::json!({ "metadataId": metadata_id }),
             })
         })
         .collect();
@@ -658,28 +655,33 @@ mod tests {
         })
     }
 
-    fn metadata_row(storage: &Storage, id: i64) -> (String, u32) {
+    fn image_metadata_row(storage: &Storage, image_id: &str) -> (i64, String, u32) {
         let conn = storage.db.lock().unwrap();
         conn.query_row(
-            "SELECT data, plugin_version FROM metadata WHERE id = ?1",
-            [id],
-            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u32)),
+            "SELECT metadata.id, metadata.data, metadata.plugin_version
+             FROM images
+             JOIN metadata ON metadata.id = images.metadata_id
+             WHERE images.id = ?1",
+            [image_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as u32)),
         )
         .unwrap()
     }
 
-    fn metadata_search_terms(storage: &Storage, id: i64) -> Vec<String> {
+    fn image_metadata_search_terms(storage: &Storage, image_id: &str) -> Vec<String> {
         let conn = storage.db.lock().unwrap();
         let mut stmt = conn
             .prepare(
                 "SELECT search_terms.text
-                 FROM metadata_search_terms
+                 FROM images
+                 JOIN metadata_search_terms
+                   ON metadata_search_terms.metadata_id = images.metadata_id
                  JOIN search_terms ON search_terms.id = metadata_search_terms.term_id
-                 WHERE metadata_search_terms.metadata_id = ?1
+                 WHERE images.id = ?1
                  ORDER BY search_terms.id",
             )
             .unwrap();
-        stmt.query_map([id], |row| row.get(0))
+        stmt.query_map([image_id], |row| row.get(0))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
@@ -836,6 +838,88 @@ export async function migrate(input) {
     }
 
     #[test]
+    fn metadata_migration_changed_content_replaces_id_and_emits_metadata_only_patch() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        {
+            let conn = check.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO task_failed_images
+                 (task_id, plugin_id, url, \"order\", created_at, metadata_id)
+                 VALUES ('task', 'demo', 'https://example.com/failed', 0, 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let script = r#"
+export function migrate(input) {
+  const value = JSON.parse(input);
+  value.migrated = true;
+  return JSON.stringify(value);
+}
+export function provideSearchTextList(_input) { return ["fresh"]; }
+"#
+        .to_string();
+
+        let (changed, _, patches) = run_runner(storage, script, 2);
+
+        assert!(changed);
+        let (metadata_id, data, version) = image_metadata_row(&check, "1");
+        assert_ne!(metadata_id, 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&data).unwrap()["migrated"],
+            true
+        );
+        assert_eq!(version, 2);
+        assert_eq!(image_metadata_search_terms(&check, "1"), ["fresh"]);
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].image_ids, ["1"]);
+        assert_eq!(
+            patches[0].diff,
+            serde_json::json!({ "metadataId": metadata_id })
+        );
+
+        let conn = check.db.lock().unwrap();
+        let old_row_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 1)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let failed_metadata_id: i64 = conn
+            .query_row("SELECT metadata_id FROM task_failed_images", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(!old_row_exists);
+        assert_eq!(failed_metadata_id, metadata_id);
+    }
+
+    #[test]
+    fn metadata_migration_unchanged_content_keeps_id_and_emits_no_patch() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let data = image_metadata_row(&check, "1").1;
+        let (changed, _, patches) = run_blocking(move || {
+            tokio::runtime::Handle::current()
+                .block_on(run_metadata_migrations(
+                    &storage,
+                    "demo",
+                    0,
+                    "export function migrate(input) { return input; }",
+                    vec![(1, data, 0)],
+                    || {},
+                ))
+                .unwrap()
+        });
+
+        assert!(!changed);
+        assert!(patches.is_empty());
+        assert_eq!(image_metadata_row(&check, "1").0, 1);
+    }
+
+    #[test]
     fn provide_labels_only_sync_applies_labels_and_stamps_version() {
         let storage = test_storage(1);
         let check = storage.clone();
@@ -850,15 +934,14 @@ export function provideLabels(input) {
         assert!(changed);
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].image_ids, ["1"]);
+        let (metadata_id, _, version) = image_metadata_row(&check, "1");
+        assert_ne!(metadata_id, 1);
         assert_eq!(
             images[0].diff,
-            serde_json::json!({
-                "metadataId": 1,
-                "pluginVersion": 2,
-            })
+            serde_json::json!({ "metadataId": metadata_id })
         );
         assert_eq!(albums.len(), 1);
-        assert_eq!(metadata_row(&check, 1).1, 2);
+        assert_eq!(version, 2);
         assert_eq!(check.get_image_album_ids("1").unwrap(), albums);
     }
 
@@ -881,7 +964,7 @@ export async function provideLabels(input) {
         assert_eq!(albums.len(), 1);
         let album = check.get_album_by_id(&albums[0]).unwrap().unwrap();
         assert_eq!(album.label_key.as_deref(), Some("async_tag"));
-        assert_eq!(metadata_row(&check, 1).1, 3);
+        assert_eq!(image_metadata_row(&check, "1").2, 3);
     }
 
     #[test]
@@ -897,7 +980,7 @@ export function provideSearchTextList(input) {
         let (changed, _, _) = run_runner(storage, script, 6);
         assert!(changed);
         assert_eq!(
-            metadata_search_terms(&check, 1),
+            image_metadata_search_terms(&check, "1"),
             ["custom_1", "display name"]
         );
     }
@@ -911,7 +994,7 @@ export function provideSearchTextList(_input) { throw new Error("broken"); }
 "#
         .to_string();
         run_runner(storage, script, 7);
-        assert_eq!(metadata_search_terms(&check, 1), ["id"]);
+        assert_eq!(image_metadata_search_terms(&check, "1"), ["id"]);
     }
 
     #[test]
@@ -933,9 +1016,16 @@ export function migrate(_input) { return "{}"; }
         .to_string();
         run_runner(storage, script, 8);
         let conn = check.db.lock().unwrap();
-        let row_two_exists: bool = conn
+        let merged_metadata_ids: Vec<i64> = conn
+            .prepare("SELECT metadata_id FROM images ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let old_rows_exist: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM metadata WHERE id = 2)",
+                "SELECT EXISTS(SELECT 1 FROM metadata WHERE id IN (1, 2))",
                 [],
                 |row| row.get(0),
             )
@@ -947,7 +1037,9 @@ export function migrate(_input) { return "{}"; }
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(!row_two_exists);
+        assert_eq!(merged_metadata_ids.len(), 2);
+        assert_eq!(merged_metadata_ids[0], merged_metadata_ids[1]);
+        assert!(!old_rows_exist);
         assert_eq!(row_two_mappings, 0);
     }
 
@@ -955,7 +1047,7 @@ export function migrate(_input) { return "{}"; }
     fn migrate_failure_skips_provide_labels_but_stamps_original_data() {
         let storage = test_storage(1);
         let check = storage.clone();
-        let original = metadata_row(&check, 1).0;
+        let original = image_metadata_row(&check, "1").1;
         let script = r#"
 export function migrate(_input) { throw new Error("broken"); }
 export function provideLabels(_input) { return [{ key: "must_not_run" }]; }
@@ -965,18 +1057,27 @@ export function provideLabels(_input) { return [{ key: "must_not_run" }]; }
         assert!(changed);
         assert!(albums.is_empty());
         assert!(check.get_image_album_ids("1").unwrap().is_empty());
-        assert_eq!(metadata_row(&check, 1), (original, 4));
+        let (metadata_id, data, version) = image_metadata_row(&check, "1");
+        assert_ne!(metadata_id, 1);
+        assert_eq!((data, version), (original, 4));
     }
 
     #[test]
     fn script_load_failure_stamps_all_rows_with_original_data() {
         let storage = test_storage(2);
         let check = storage.clone();
-        let originals = [metadata_row(&check, 1).0, metadata_row(&check, 2).0];
+        let originals = [
+            image_metadata_row(&check, "1").1,
+            image_metadata_row(&check, "2").1,
+        ];
         let (changed, albums, _) = run_runner(storage, "export function migrate( {".to_string(), 5);
         assert!(changed);
         assert!(albums.is_empty());
-        assert_eq!(metadata_row(&check, 1), (originals[0].clone(), 5));
-        assert_eq!(metadata_row(&check, 2), (originals[1].clone(), 5));
+        let first = image_metadata_row(&check, "1");
+        let second = image_metadata_row(&check, "2");
+        assert_ne!(first.0, 1);
+        assert_ne!(second.0, 2);
+        assert_eq!((first.1, first.2), (originals[0].clone(), 5));
+        assert_eq!((second.1, second.2), (originals[1].clone(), 5));
     }
 }

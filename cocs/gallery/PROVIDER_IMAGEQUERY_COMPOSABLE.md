@@ -151,7 +151,7 @@
   + `idx_images_aspect_ratio`。SQLite 随 width/height 自动维护，应用写入处不参与。宽高无效为 NULL。
   只能是 VIRTUAL（`ALTER TABLE ADD COLUMN` 不支持 STORED，后者要重建 images 表）；逐行过滤时 VIRTUAL
   现算与 STORED 只差约 20ms / 100 万行。
-- **段文法**（[`gallery_aspect_router`](/src-tauri/kabegame-core/src/providers/dsl/images/gallery/aspect/gallery_aspect_router.json5)，不可列举）：
+- **段文法**（[`gallery_aspect_router`](/src-tauri/kabegame-core/src/providers/dsl/images/gallery/aspect/gallery_aspect_router.yaml)，列举应用的五个桶并带分组计数，任意区间仍走 resolve）：
   比值写成 `<宽>x<高>`（正整数），四种 resolve：`-9x16` = ≤ 9:16；`9x16-3x4` = 大于 9:16 且 ≤ 3:4；`7x3-` = 大于 7:3；
   `unknown` = 宽或高缺失、非正（列为 NULL）。区间一律左开右闭 `(min, max]`，相邻区间首尾相接、互不重叠。
 - **应用的桶**：`-3x4` 竖屏 / `3x4-4x3` 方正 / `4x3-16x9` 横屏 / `16x9-` 宽屏 / `unknown`（前端 `GALLERY_ASPECT_BUCKETS`）。
@@ -167,7 +167,38 @@
   100 万图组合筛选一页从约 0.2s 变成 14s。只有完整 `ANALYZE`（含 STAT4）能让它按桶选对；默认 `PRAGMA optimize`
   与 `analysis_limit` 只写 stat1，效果等于没有统计，且近似重分析会清掉已有 STAT4，所以不依赖它。
   `unknown` 允许走索引（正常库里极少，直接取 NULL 段）。100 万图实测：各桶组合筛选一页约 20ms、COUNT 0.3～0.8s。
-- **不提供列举**：原先按当前查询动态列举非空桶（100 万图 2～10s）已删除，前端与 VD 都持有固定桶表。
+- **列举只列应用的桶**：原先按当前查询动态列举非空桶（100 万图 2～10s）已删除；现在列举固定列出应用的五个桶
+  （顺序同 `GALLERY_ASPECT_BUCKETS`），并带分组计数，见下一节「维度列举带分组计数」。段名解析顺序是
+  「正则 resolve → 静态 list 字面 → 动态 list 反查」（[RULES §5.2](../provider-dsl/RULES.md)），桶段与任意区间都由
+  resolve 解析，不跑列举 SQL。
+
+## 维度列举带分组计数（`meta.count`）
+
+画廊过滤树、Android picker、MCP 按 `<上下文>/<维度>` 列举一层时，**不带 `with_count`** 就能拿到每个子项的行数：
+各维度的列举 SQL 在 `${composed}`（上游累积查询）上 `GROUP BY` 子项键、`COUNT(*)`，计数随子项放进 `meta.count`。
+一次 IPC、一条 SQL，替代「列举 + 逐子项 COUNT」（`list_with_count` 在引擎里对每个子项各包一层 COUNT、单连接串行）。
+
+| 维度 | 列举 SQL 所在 | 说明 |
+| --- | --- | --- |
+| 年 / 月 / 日 | `shared/dates_provider`、`year_provider`、`month_provider`（VD 共用） | `DISTINCT` 改 `GROUP BY` + `COUNT(*) AS count`；画廊三层 router 把 `${out.meta.count}` 透传进 meta |
+| 媒体格式 | `gallery_media_type_provider` | 原本就按格式分组计数，仅把计数放进 meta |
+| image / video | `gallery_media_type_router.yaml` | 按 kind 分组，与两类固定行 LEFT JOIN 补 0；新增 `image` / `video` resolve，路由不跑 SQL |
+| 大小 | `gallery_size_router.yaml` | 八个应用桶（`unknown` 在前、其余按大小升序）按 CASE 分组，与固定桶表 LEFT JOIN 补 0；字节值同 `size_bucket_router` |
+| 宽高比 | `gallery_aspect_router.yaml` | 四个区间桶一条分组 SQL（补 0），`unknown` 单独一条（动态列举项的 provider 名不能按行切换） |
+| 插件 | `gallery_plugins_router` | 按 `plugin_id` 分组，**只列当前上下文里有图的插件**；meta 只有 `count`，不再附插件清单 JSON；路由靠 resolve 正则，不依赖列举 |
+
+约束：
+
+- **分组口径必须与过滤口径一致**：CASE 的分桶边界、kind 判定要与对应 provider 的 WHERE 同源（大小 `size >= min AND size < max`、
+  unknown `size IS NULL OR size <= 0`；宽高比整数交叉乘法 + `aspect_ratio IS NOT NULL`；kind 同 `gallery_media_type_provider`），
+  改一处同步另一处。e2e `listed_counts` 对每个列举项断言 `meta.count == count(<子路径>)`，覆盖根、`hide/` 与已选其它维度的上下文。
+- 补 0 的维度（kind / 大小 / 宽高比）总是列出全部固定项；日期、格式、插件只列有图的子项。
+- 插件扩展（`plugin/<id>/extend/...`）由插件自己贡献 provider，不在此列，仍需逐项计数。
+- 实测（prod 库 2.5 万图，`hide/` 上下文）：每个面板一条 SQL 24～49ms；旧路径「`list_with_count` + 前端再逐节点 COUNT」
+  为 2N 次 IPC，如日期·月 105ms（10 条）后再补 4 条。
+- `${composed}` 内联完整画廊 SELECT 时，分组外层会令 SQLite 保留未被引用的 join。画廊根已不再为
+  `plugin_version` 做 `LEFT JOIN metadata`：图片行只带 `metadata_id`，详情按 id 读取完整 metadata。按此前
+  2.5 万图拆分测量，大小分组的这部分约 19ms，移除后 43ms 应降至约 25ms；prod 快照复测留在回归表。
 - **排序** `sort/by-aspect` 为 `ORDER BY images.aspect_ratio, images.id`，索引（含 rowid）正好覆盖，翻页按索引顺序读
   （100 万图一页约 3.5s → 1ms）；`/desc` 反向扫描同样走索引。
 - **收藏 / 隐藏标记与 `hide/` 用相关 `EXISTS`**（`gallery_route` / `vd_root_router` 的 `is_favorite` / `is_hidden`，

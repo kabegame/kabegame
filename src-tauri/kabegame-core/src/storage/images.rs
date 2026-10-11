@@ -32,10 +32,6 @@ pub struct ImageInfo {
     #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
-    /// `metadata.plugin_version`（图片下载时的插件版本，packed u32）；用于前端 metadata 缓存失效。
-    #[serde(rename(serialize = "pluginVersion"), alias = "pluginVersion")]
-    #[serde(default)]
-    pub plugin_version: u32,
     #[serde(rename(serialize = "thumbnailPath"), alias = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -441,7 +437,7 @@ impl Storage {
             .map_err(|e| format!("collect image_ids_by_metadata: {e}"))
     }
 
-    /// 写回迁移后的 metadata 行；如命中已有复合键，则重定向引用并删除当前行。
+    /// 写回迁移后的 metadata 行；内容变化时总是换 id，再重定向引用并删除当前行。
     pub fn writeback_migrated_metadata_row(
         &self,
         row_id: i64,
@@ -509,39 +505,29 @@ impl Storage {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("collect migrated metadata image ids: {e}"))?
         };
-        let final_metadata_id = target_id.unwrap_or(row_id);
+        let final_metadata_id = match target_id {
+            Some(target_id) => target_id,
+            None => insert_metadata_id(
+                &tx,
+                new_data,
+                plugin_id,
+                new_plugin_version,
+                search_terms.as_deref(),
+            )?,
+        };
 
-        if let Some(target_id) = target_id {
-            tx.execute(
-                "UPDATE images SET metadata_id = ?1 WHERE metadata_id = ?2",
-                params![target_id, row_id],
-            )
-            .map_err(|e| format!("repoint images.metadata_id: {e}"))?;
-            tx.execute(
-                "UPDATE task_failed_images SET metadata_id = ?1 WHERE metadata_id = ?2",
-                params![target_id, row_id],
-            )
-            .map_err(|e| format!("repoint task_failed_images.metadata_id: {e}"))?;
-            tx.execute("DELETE FROM metadata WHERE id = ?1", params![row_id])
-                .map_err(|e| format!("delete merged metadata row: {e}"))?;
-        } else {
-            tx.execute(
-                "UPDATE metadata
-                 SET data = ?1, plugin_version = ?2
-                 WHERE id = ?3",
-                params![new_data, new_version_i64, row_id],
-            )
-            .map_err(|e| format!("update migrated metadata row: {e}"))?;
-            let default_terms;
-            let terms = match search_terms.as_deref() {
-                Some(terms) => terms,
-                None => {
-                    default_terms = search_terms_from_json_str(new_data);
-                    &default_terms
-                }
-            };
-            replace_metadata_search_terms(&tx, row_id, terms)?;
-        }
+        tx.execute(
+            "UPDATE images SET metadata_id = ?1 WHERE metadata_id = ?2",
+            params![final_metadata_id, row_id],
+        )
+        .map_err(|e| format!("repoint images.metadata_id: {e}"))?;
+        tx.execute(
+            "UPDATE task_failed_images SET metadata_id = ?1 WHERE metadata_id = ?2",
+            params![final_metadata_id, row_id],
+        )
+        .map_err(|e| format!("repoint task_failed_images.metadata_id: {e}"))?;
+        tx.execute("DELETE FROM metadata WHERE id = ?1", params![row_id])
+            .map_err(|e| format!("delete migrated metadata row: {e}"))?;
 
         tx.commit()
             .map_err(|e| format!("commit metadata writeback: {e}"))?;

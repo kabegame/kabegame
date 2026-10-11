@@ -56,8 +56,8 @@
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`——前端状态统一为**唯一查询对象 `GalleryQuery`**（搜索是原子的一个维度；查询条以简单 chip + 追加高级 chip 叠加，高级部分以 `~not/~not` 双重取非保留持久化边界；搜索输入是表达式（`,` 且 `;` 或 `!` 非 `()` 分组、`\` 转义与引号，`utils/searchExpr.ts` 解析、按勾选维度逐词展开成 `~any`/`~not` 并折回）；`no-album` 与 `hide` 并列为随行路由上下文），唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工；宽高比 `images.aspect_ratio` VIRTUAL 生成列与 `aspect/` 区间段文法（`-3x4` / `3x4-4x3` / `16x9-` / `unknown`，左开右闭、不可列举、VD 友好名称落到具体桶、区间谓词为何禁用索引、排序走索引）；收藏 / 隐藏标记与 `hide/` 用相关 EXISTS 而非 LEFT JOIN 或不相关 IN 的理由与实测；以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
-  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对；排查宽高比筛选 / 排序变慢或分桶归属不一致；排查收藏 / 隐藏标记或 hide 计数变慢、不一致。
+  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`——前端状态统一为**唯一查询对象 `GalleryQuery`**（搜索是原子的一个维度；查询条以简单 chip + 追加高级 chip 叠加，高级部分以 `~not/~not` 双重取非保留持久化边界；搜索输入是表达式（`,` 且 `;` 或 `!` 非 `()` 分组、`\` 转义与引号，`utils/searchExpr.ts` 解析、按勾选维度逐词展开成 `~any`/`~not` 并折回）；`no-album` 与 `hide` 并列为随行路由上下文），唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工；宽高比 `images.aspect_ratio` VIRTUAL 生成列与 `aspect/` 区间段文法（`-3x4` / `3x4-4x3` / `16x9-` / `unknown`，左开右闭、列举应用桶（任意区间走 resolve）、VD 友好名称落到具体桶、区间谓词为何禁用索引、排序走索引）；**维度列举带分组计数**（年月日 / 格式 / image·video / 大小 / 宽高比 / 插件的列举 SQL 在 `${composed}` 上 `GROUP BY`，计数放进 `meta.count`，一次 IPC 一条 SQL 替代列举 + 逐项 COUNT，分组口径须与过滤口径同源）；收藏 / 隐藏标记与 `hide/` 用相关 EXISTS 而非 LEFT JOIN 或不相关 IN 的理由与实测；以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
+  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对；排查宽高比筛选 / 排序变慢或分桶归属不一致；排查过滤树或 MCP 列举的计数与筛选结果不一致；排查收藏 / 隐藏标记或 hide 计数变慢、不一致。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, seq }` 行快照与 `pathql_count` 的 `{ total, seq }` 总数快照分开维护并通过 PathQL 只读连接池并行执行，翻页只读行；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先行快照后广播；500ms 批次合并、行/总数独立 `seq`、画册 `ancestorPath` 相关性、wildcard 粗过滤和防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
@@ -106,7 +106,7 @@
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
-  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 表去重合并、搜索词典与映射重建，以及按最终 `metadataId + pluginVersion` 分组的变更事件。
+  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 行按 id 不可变与去重合并、搜索词典与映射重建，以及按最终 `metadataId` 分组的变更事件。
   - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)

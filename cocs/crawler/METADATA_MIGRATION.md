@@ -31,13 +31,13 @@
 该列**由应用维护，插件不可读写**：
 
 - 写入路径（`Kabegame.downloadImage` / `Kabegame.createImageMetadata`、webview `ctx.downloadImage`）不再接受任何版本参数，应用自动盖当前运行插件的 packed 版本；V8 与 WebView 都从运行中 `Task.params.plugin_version()` 派生。
-- 迁移 runner 处理一行后，无论脚本装载、`migrate`、`provideLabels` 或 `provideSearchTextList` 是否成功，都把该行 `plugin_version` 盖为当前插件 packed 版本；失败时写回原 data。
+- 迁移 runner 处理一行后，无论脚本装载、`migrate`、`provideLabels` 或 `provideSearchTextList` 是否成功，都让图片改指向带当前 packed 版本的最终行；失败时沿用原 data。
 - 无插件语境的写入（folder-sync、surf）恒为 0，永不参与迁移。
 - 插件对自己数据结构的版本理解只放在 metadata 内（`schema` 字段自检）。
 
 ## 写入与去重
 
-写入统一进入 `metadata` 表，按 `(plugin_id, plugin_version, data)` 去重合并。`plugin_id` / `plugin_version` 落在 `metadata` 上而不是 `images` 上：metadata 行可被多张图片、失败重试记录或后续合并引用。图片列表只携带 `metadata_id` 与派生的 `plugin_version`（前端 `pluginVersion`），用于前端 metadata 缓存失效。
+写入统一进入 `metadata` 表，按 `(plugin_id, plugin_version, data)` 去重合并。`plugin_id` / `plugin_version` 落在 `metadata` 上而不是 `images` 上：metadata 行可被多张图片、失败重试记录或后续合并引用。metadata 行的 `data + plugin_version` **按 id 不可变**；迁移令任一内容变化时都会改指向新 id 或已有相同行。图片列表只携带 `metadata_id`，它变化就等价于 metadata 内容变化。
 
 ## 执行流程
 
@@ -46,12 +46,12 @@
 3. 运行器查询当前插件 `plugin_version < version_packed` 的 metadata 行；`data` 字段 trim 后为空串或字面量 `"null"` 视为没有 metadata，直接排除在外，不跑迁移脚本；结果为空直接结束。
 4. 有待处理行时先登记 `{ pluginId, total, processed, startedAtMs }` 并发送 `busy-tasks-change`；装载一次脚本，三个导出都缺失才算装载失败，缺 `migrate` 按恒等处理。
 5. 逐行调用 `migrate(data)`；成功后才调用 `provideLabels(migrated)` 与 `provideSearchTextList(migrated)`。标签先挂到当前 metadata 行引用的全部图片，然后才写回/合并 metadata，避免重定向后丢失原引用集；搜索列表与 data 在同一事务中替换。
-6. 无论装载或行级执行是否成功，都把 `plugin_version` 盖为 `version_packed`；失败时写回原 data，不在下次启动无限重试。
-7. 写回时如果目标 `(plugin_id, plugin_version, data)` 已有行，会把 `images.metadata_id` 与 `task_failed_images.metadata_id` 合并到既有行并删除重复行；搜索映射由外键级联删除。每轮结束后清理无引用的字典词条。
+6. 无论装载或行级执行是否成功，都以 `version_packed` 写入最终 metadata；失败时沿用原 data，不在下次启动无限重试。只要 data 或版本变化就不原地更新旧行。
+7. 写回时如果目标 `(plugin_id, plugin_version, data)` 已有行就复用，否则插入新行；随后把 `images.metadata_id` 与 `task_failed_images.metadata_id` 改指向最终 id 并删除旧行。旧搜索映射由外键级联删除，新行搜索词随插入一起建立。每轮结束后清理无引用的字典词条。
 8. 每行回写完成后 `processed += 1`。成功、错误或 guard 异常退出都会从运行态移除，并发送
    `metadata-migration-finished { pluginId, total, processed, error }`；成功静默，失败由前端 toast。
 9. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，在事务内取出受影响图片，
-   按最终 `metadataId + pluginVersion` 分组发 `image-changed`，再发 `images-change`（`reason = "change"`）对账视图成员与排序。
+   按最终 `metadataId` 分组发只含 `{ metadataId }` 的 `image-changed`，再发 `images-change`（`reason = "change"`）对账视图成员与排序。
 
 前端通过聚合 `get_busy_tasks_snapshot.metadataMigrations` 每 500ms 拉取运行态，在忙碌面板中按插件显示
 图标、名称、百分比与 `processed / total`，不提供取消按钮。任务从快照消失即移除卡片；finished 事件
@@ -65,6 +65,7 @@ L1 存储 / 迁移：
 
 - `src-tauri/kabegame-core/src/storage/migrations/init.rs`：`metadata` 表（v024 前名为 `image_metadata`）结构与 `(plugin_id, plugin_version)` 去重索引。
 - `src-tauri/kabegame-core/src/storage/migrations/v021_image_metadata_plugin_version.rs`：列改名 + 归 0 的一次性迁移。
+- `src-tauri/kabegame-core/src/storage/migrations/v039_metadata_id_indexes.rs`：为两类 metadata 引用建立改指向索引。
 - `src-tauri/kabegame-core/src/storage/images.rs`、`storage/search_terms.rs`：metadata 写入、字典与映射维护、迁移行查询、合并写回及 GC。
 
 L2 插件 / V8：
@@ -76,8 +77,8 @@ L2 插件 / V8：
 L3 查询 / 前端：
 
 - `src-tauri/kabegame-core/src/providers/dsl/images/images_metadata_full_provider.json5`：`images://id_{id}/metadata_full` 的完整 metadata 行路径。
-- `apps/kabegame/src/components/common/ImageDetailContent.vue`：详情区读取 `get_image_metadata_full` 并把 `plugin_version` 交给模板渲染。
-- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/dataChangeHub.ts`：metadata 缓存（key 含 `metadataId` / `pluginVersion`）与图片字段 patch 批处理。
+- `apps/kabegame/src/components/common/ImagePluginDescriptionPanel.vue`：详情区读取完整 metadata，并把返回的 `plugin_version` 交给模板渲染。
+- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/dataChangeHub.ts`：metadata 缓存（key 仅为 `m<metadataId>`，值为 `{ data, pluginVersion }`）与图片字段 patch 批处理。
 - `apps/kabegame/src/stores/metadataMigration.ts`、`components/busy/BusyMetadataMigrationCard.vue`：迁移运行态镜像与无取消按钮的忙碌卡片。
 
 ## 排查要点
@@ -87,5 +88,6 @@ L3 查询 / 前端：
 - 搜索列表未生效：查看 `[metadata-migration] ... provideSearchTextList` 日志；失败会回退到默认 JSON 展开，不会阻塞迁移。
 - 部分行内容未升级：查看日志里的 `[metadata-migration]` 装载 / 执行错误。失败行也会盖当前版本，不会自动重试；修复脚本后需提升插件版本才会再次入选。
 - 迁移反复执行：确认插件版本确实已提升；单个版本无论成败只处理一次。`migrate` 仍应幂等，以安全支持后续版本的再次执行。
-- 详情区仍显示旧内容：确认前端是否先收到含最终 `metadataId` / `pluginVersion` 的 `image-changed`，
-  以及随后的 `images-change` 是否为 `reason = "change"` 且 `pluginIds` 包含该插件。
+- 详情区仍显示旧内容：确认前端是否先收到只含最终 `metadataId` 的 `image-changed`，以及随后的
+  `images-change` 是否为 `reason = "change"` 且 `pluginIds` 包含该插件；模板版本应来自同一次
+  `get_image_metadata_full` 返回并与 data 一起缓存，不能再从图片行读取。

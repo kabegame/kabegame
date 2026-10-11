@@ -78,7 +78,11 @@ import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?
 import type { ImageDetailLike } from "./ImageBasicInfoPanel.vue";
 import { invoke } from "../../api";
 import { getEjsBridgeCache, setEjsBridgeCache } from "../../cache/ejsBridgeCache";
-import { imageMetadataResolverKey, type ImageMetadataResolver } from "../../composables/useImageMetadataCache";
+import {
+  imageMetadataResolverKey,
+  type ImageMetadataResolver,
+  type ResolvedImageMetadata,
+} from "../../composables/useImageMetadataCache";
 import { usePluginStore, WEBPAGE_PLUGIN_ID } from "../../stores/plugins";
 import { openExternalLink } from "../../utils/openExternalLink";
 import { Refresh } from "@kabegame/element-plus-icons";
@@ -113,24 +117,10 @@ const injectedResolveMetadata = inject<ImageMetadataResolver | null>(imageMetada
 const resolvedMetadata = ref<unknown | null | undefined>(undefined);
 const resolvedPluginVersion = ref(0);
 
-type ImageMetadataFullPayload = {
-  data?: unknown | null;
-  pluginVersion?: number | null;
-} | null;
-
-function pluginVersionForImage(img: ImageDetailLike | null): number {
-  const version = img?.pluginVersion;
-  return typeof version === "number" && Number.isFinite(version) && version >= 0 ? Math.floor(version) : 0;
-}
-
 async function loadMetadataForImage(img: ImageDetailLike | null) {
   resolvedMetadata.value = undefined;
-  resolvedPluginVersion.value = pluginVersionForImage(img);
+  resolvedPluginVersion.value = 0;
   if (!img?.id) {
-    resolvedMetadata.value = null;
-    return;
-  }
-  if (isRenderableMetadata(img.metadata)) {
     resolvedMetadata.value = null;
     return;
   }
@@ -140,19 +130,28 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
     return;
   }
   try {
+    let resolved: ResolvedImageMetadata | null;
     if (injectedResolveMetadata) {
-      const m = await injectedResolveMetadata(img.id, img.metadataId, resolvedPluginVersion.value);
-      resolvedMetadata.value = m ?? null;
+      resolved = await injectedResolveMetadata(img.id, img.metadataId);
     } else {
-      const full = await invoke<ImageMetadataFullPayload>("get_image_metadata_full", {
-        imageId: img.id,
-      });
-      resolvedPluginVersion.value =
-        typeof full?.pluginVersion === "number" && Number.isFinite(full.pluginVersion) && full.pluginVersion >= 0
-          ? Math.floor(full.pluginVersion)
-          : resolvedPluginVersion.value;
-      resolvedMetadata.value = full?.data ?? null;
+      const full = await invoke<{ data?: unknown | null; pluginVersion?: number | null } | null>(
+        "get_image_metadata_full",
+        {
+          imageId: img.id,
+        },
+      );
+      resolved = full
+        ? {
+            data: full.data ?? null,
+            pluginVersion:
+              typeof full.pluginVersion === "number" && Number.isFinite(full.pluginVersion) && full.pluginVersion >= 0
+                ? Math.floor(full.pluginVersion)
+                : 0,
+          }
+        : null;
     }
+    resolvedMetadata.value = resolved?.data ?? null;
+    resolvedPluginVersion.value = resolved?.pluginVersion ?? 0;
   } catch (e) {
     console.error("image detail metadata load failed", e);
     resolvedMetadata.value = null;
@@ -160,7 +159,7 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
 }
 
 watch(
-  [() => props.image?.id, () => props.image?.metadataId, () => props.image?.pluginVersion],
+  [() => props.image?.id, () => props.image?.metadataId],
   () => {
     console.log("reload metadata");
     void loadMetadataForImage(props.image ?? null);

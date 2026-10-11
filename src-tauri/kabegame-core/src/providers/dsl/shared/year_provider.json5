@@ -10,7 +10,8 @@
     // list: desc 静态 + 动态月份 + 默认分页静态 (与 programmatic 同; 用户在年下既可看月也可直接翻页)
     "list": {
         "${out.mm}": {
-            "sql": "SELECT DISTINCT substr(strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch', 'localtime'), 6, 2) AS mm FROM (${composed}) AS sub WHERE strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch', 'localtime') IS NOT NULL ORDER BY mm DESC",
+            // 按月分组，一次扫描同时给出每月行数 count。
+            "sql": "SELECT substr(strftime('%Y-%m', crawled_at_seconds(sub.crawled_at), 'unixepoch', 'localtime'), 6, 2) AS mm, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY mm HAVING mm IS NOT NULL ORDER BY mm DESC",
             "data_var": "out",
             "meta": "${out}"
         }

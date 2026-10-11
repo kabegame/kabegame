@@ -1,0 +1,68 @@
+namespace: kabegame
+name: gallery_size_router
+note: >-
+  Filter by stored file size. Listing returns the app's eight buckets (unknown, 1B-512KB,
+  512KB-1MB, 1MB-2MB, 2MB-5MB, 5MB-10MB, 10MB-50MB, 50MB-) with each bucket's image count in
+  meta.count; together they cover every image. Any other range can still be written directly as
+  unknown or a <min>-<max> segment such as 3MB-7MB; supported units are B, KB, MB, and GB,
+  case-insensitive. Either bound may be omitted.
+# 画廊文件大小 router。
+# 列举：一条 SQL 在上游结果集上按应用的八个桶分组计数（一次扫描），再与固定桶表 LEFT JOIN 补 0，
+# 桶序同前端过滤树（unknown 在前、其余按大小升序），计数放进 meta.count。
+# 桶的字节值与 shared/size_bucket_router.yaml 相同；CASE 的分界必须与 size_range_provider 的
+# 「size >= min AND size < max」、unknown 的「size IS NULL OR size <= 0」一致，改一处同步另一处。
+# 段名解析走下方 resolve，不跑这条 SQL。
+list:
+  "${out.bucket}":
+    sql: |-
+      SELECT b.bucket AS bucket, b.min_bytes AS min_bytes, b.max_bytes AS max_bytes,
+        COALESCE(c.count, 0) AS count
+      FROM (
+        SELECT 0 AS ord, 'unknown' AS bucket, -1 AS min_bytes, -1 AS max_bytes
+        UNION ALL SELECT 1, '1B-512KB', 1, 524288
+        UNION ALL SELECT 2, '512KB-1MB', 524288, 1048576
+        UNION ALL SELECT 3, '1MB-2MB', 1048576, 2097152
+        UNION ALL SELECT 4, '2MB-5MB', 2097152, 5242880
+        UNION ALL SELECT 5, '5MB-10MB', 5242880, 10485760
+        UNION ALL SELECT 6, '10MB-50MB', 10485760, 52428800
+        UNION ALL SELECT 7, '50MB-', 52428800, 9007199254740991
+      ) AS b
+      LEFT JOIN (
+        SELECT
+          CASE
+            WHEN sub.size IS NULL OR sub.size <= 0 THEN 'unknown'
+            WHEN sub.size < 524288 THEN '1B-512KB'
+            WHEN sub.size < 1048576 THEN '512KB-1MB'
+            WHEN sub.size < 2097152 THEN '1MB-2MB'
+            WHEN sub.size < 5242880 THEN '2MB-5MB'
+            WHEN sub.size < 10485760 THEN '5MB-10MB'
+            WHEN sub.size < 52428800 THEN '10MB-50MB'
+            ELSE '50MB-'
+          END AS bucket,
+          COUNT(*) AS count
+        FROM (${composed}) AS sub
+        GROUP BY bucket
+      ) AS c ON c.bucket = b.bucket
+      ORDER BY b.ord
+    data_var: out
+    provider: gallery_size_range_router
+    properties:
+      min_size: "${out.min_bytes}"
+      max_size: "${out.max_bytes}"
+    meta:
+      count: "${out.count}"
+# 任意区间：
+# "unknown" 直接路由；其余路径段（如 512KB-1MB）委托给 gallery_size_range_provider.resolve
+# 解析为字节数，再传给 gallery_size_range_router。
+resolve:
+  unknown:
+    provider: gallery_size_range_router
+    properties: { min_size: -1, max_size: -1 }
+  ".*":
+    alias: range
+    delegate: { provider: gallery_size_range_provider }
+    child_var: computed
+    provider: gallery_size_range_router
+    properties:
+      min_size: "${computed.meta.min_bytes}"
+      max_size: "${computed.meta.max_bytes}"

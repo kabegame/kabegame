@@ -510,8 +510,8 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
 
 /// JSON 行 → ImageInfo (按 gallery_route fields 的 alias 契约读列)。
 /// alias 名硬契约: id, url, local_path, plugin_id, task_id, surf_record_id, crawled_at,
-/// metadata_id, plugin_version, thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
-/// media_type, last_set_wallpaper_at, size。
+/// metadata_id, thumbnail_path, hash, is_favorite, is_hidden, width, height, display_name,
+/// type, last_set_wallpaper_at, size。
 fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
     let obj = row.as_object().ok_or("executor row not a JSON object")?;
     let s = |k: &str| obj.get(k).and_then(|v| v.as_str()).map(String::from);
@@ -533,10 +533,6 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .map(|t| t as u64)
             .unwrap_or(0),
         metadata_id: i("metadata_id"),
-        plugin_version: i("plugin_version")
-            .filter(|&v| v >= 0)
-            .map(|v| v as u32)
-            .unwrap_or(0),
         thumbnail_path: s("thumbnail_path").unwrap_or_default(),
         hash: s("hash").unwrap_or_default(),
         favorite: b("is_favorite"),
@@ -956,7 +952,6 @@ mod tests {
             "images://gallery/~any/search/metadata/star/~or/plugin/p2/~end",
             &[1, 3, 4, 5, 6, 10, 11],
         );
-        // 两个分支都请求 metadata_im；in_need 必须让它们共享同一个 LEFT JOIN 别名。
         assert_gallery_ids(
             &runtime,
             "images://gallery/~any/search/metadata/star/~or/search/metadata/moon/~end",

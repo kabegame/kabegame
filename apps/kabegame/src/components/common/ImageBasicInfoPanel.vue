@@ -187,7 +187,6 @@ export type ImageDetailLike = {
   type?: string;
   metadata?: Record<string, unknown> | unknown;
   metadataId?: number;
-  pluginVersion?: number;
   size?: number;
   width?: number;
   height?: number;

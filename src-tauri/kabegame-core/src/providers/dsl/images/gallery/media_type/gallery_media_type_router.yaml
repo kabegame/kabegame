@@ -1,0 +1,40 @@
+namespace: kabegame
+name: gallery_media_type_router
+note: >-
+  Filter by broad media type. Listing returns image and video with each one's image count in
+  meta.count. Choose image or video next, then list that node to discover concrete stored formats
+  such as webp or mp4. A broad type can also continue directly to filtering or pagination.
+# 列举：一条 SQL 在上游结果集上按 image / video 分组计数，再与两类固定行 LEFT JOIN 补 0，
+# 计数随列举放进 meta.count（画廊过滤树用 list(with_count=false) 直接读）。
+# 段名解析走下方 resolve，不跑这条 SQL。kind 判定与 gallery_media_type_provider 的 WHERE 同源，
+# 改一处同步另一处。
+list:
+  "${out.kind}":
+    sql: |-
+      SELECT k.kind AS kind, COALESCE(c.count, 0) AS count
+      FROM (SELECT 0 AS ord, 'image' AS kind UNION ALL SELECT 1, 'video') AS k
+      LEFT JOIN (
+        SELECT
+          CASE
+            WHEN LOWER(COALESCE(sub.type, '')) = 'video' OR LOWER(COALESCE(sub.type, '')) LIKE 'video/%'
+              THEN 'video'
+            ELSE 'image'
+          END AS kind,
+          COUNT(*) AS count
+        FROM (${composed}) AS sub
+        GROUP BY kind
+      ) AS c ON c.kind = k.kind
+      ORDER BY k.ord
+    data_var: out
+    provider: gallery_media_type_provider
+    properties:
+      kind: "${out.kind}"
+    meta:
+      count: "${out.count}"
+resolve:
+  image:
+    provider: gallery_media_type_provider
+    properties: { kind: image }
+  video:
+    provider: gallery_media_type_provider
+    properties: { kind: video }

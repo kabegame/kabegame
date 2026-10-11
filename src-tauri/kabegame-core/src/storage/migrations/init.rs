@@ -106,6 +106,7 @@ CREATE UNIQUE INDEX idx_images_local_path      ON images(local_path);
 CREATE INDEX idx_images_thumbnail_path         ON images(thumbnail_path);
 CREATE INDEX idx_images_last_set_wallpaper_at  ON images(last_set_wallpaper_at DESC);
 CREATE INDEX idx_images_aspect_ratio          ON images(aspect_ratio);
+CREATE INDEX idx_images_metadata_id           ON images(metadata_id);
 
 -- ───────────── albums ─────────────
 CREATE TABLE albums (
@@ -161,6 +162,7 @@ CREATE TABLE task_failed_images (
     labels            TEXT
 );
 CREATE INDEX idx_task_failed_images_task ON task_failed_images(task_id);
+CREATE INDEX idx_task_failed_images_metadata_id ON task_failed_images(metadata_id);
 
 -- ───────────── run_configs ─────────────
 CREATE TABLE run_configs (

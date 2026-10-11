@@ -43,11 +43,6 @@
                 "in_need": true
             },
             {
-                "sql": "COALESCE(metadata_im.plugin_version, 0)",
-                "as": "plugin_version",
-                "in_need": true
-            },
-            {
                 "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
                 "as": "thumbnail_path",
                 "in_need": true
@@ -128,14 +123,7 @@
         "order": [
             { "sql": "images.crawled_at", "order": "asc" },
             { "sql": "images.id", "order": "asc" }
-        ],
-        "join": [{
-            "kind": "LEFT",
-            "table": "metadata",
-            "as": "metadata_im",
-            "on": "images.metadata_id = metadata_im.id",
-            "in_need": true
-        }]
+        ]
     },
     "note": "Gallery root. Each segment narrows the previous one; filters AND together. Combine two dimensions with `filter_comb`: gallery/plugin/patreon/filter_comb/media-type/image/x100x/1. `sort` is a sibling of `all`, not a child of it. `/desc` reverses the current order. `hide/` is a PREFIX excluding hidden images. Always end a collection path with /x<N>x/<page>.",
     "list": {

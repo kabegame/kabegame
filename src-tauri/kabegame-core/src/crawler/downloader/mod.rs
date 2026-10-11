@@ -1474,7 +1474,6 @@ pub async fn postprocess_downloaded_image(
                 surf_record_id: surf_record_id.map(|v| v.to_string()),
                 crawled_at: download_start_time,
                 metadata_id,
-                plugin_version: 0,
                 thumbnail_path: thumbnail_path_str,
                 favorite: false,
                 is_hidden: false,

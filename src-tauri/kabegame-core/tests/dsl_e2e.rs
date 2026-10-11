@@ -616,6 +616,28 @@ fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
         .collect()
 }
 
+/// 不带计数列举 `path`，返回 (子项名, meta.count)。列举 SQL 按维度分组计数、随子项放进 meta.count；
+/// 每项都断言它等于按段名解析该子路径的 COUNT——列举里的分组口径与过滤口径一致。
+fn listed_counts(runtime: &ProviderRuntime, path: &str) -> Vec<(String, usize)> {
+    runtime
+        .list(path)
+        .unwrap()
+        .into_iter()
+        .map(|child| {
+            let count = child
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("count"))
+                .and_then(|count| count.as_u64())
+                .unwrap_or_else(|| panic!("{path}/{} 缺 meta.count: {:?}", child.name, child.meta))
+                as usize;
+            let child_path = format!("{path}/{}", pathql_rs::escape_path_segment(&child.name));
+            assert_eq!(count, runtime.count(&child_path).unwrap(), "{child_path}");
+            (child.name, count)
+        })
+        .collect()
+}
+
 #[test]
 fn schema_registration_smoke_and_schemaless_paths_fail() {
     let runtime = build_runtime();
@@ -789,11 +811,72 @@ fn gallery_static_routes_are_enumerable_without_changing_alias_or_meta_semantics
         );
     }
 
-    let plugins = runtime.list("images://gallery/plugin").unwrap();
-    let pixiv = plugins.iter().find(|child| child.name == "pixiv").unwrap();
+    // 插件列举只带分组计数，不再附插件清单 JSON
     assert_eq!(
-        pixiv.meta.as_ref().and_then(|meta| meta.get("id")),
-        Some(&serde_json::json!("pixiv"))
+        listed_counts(&runtime, "images://gallery/plugin"),
+        [(
+            "pixiv".to_string(),
+            runtime.count("images://gallery/plugin/pixiv").unwrap()
+        )]
+    );
+}
+
+/// 画廊过滤树按 `<上下文>/<维度>` 列举一层，直接读 meta.count：各维度在根、hide 前缀与已选其它维度的
+/// 上下文下，列举的分组计数都等于对应子路径的 COUNT；列举结果为空的上下文里，按段名仍可路由（命中 0）。
+#[test]
+fn gallery_dimension_lists_carry_group_counts_in_meta() {
+    let runtime = build_runtime();
+    for context in [
+        "images://gallery",
+        "images://gallery/hide",
+        "images://gallery/media-type/image/filter_comb",
+        "images://gallery/plugin/pixiv/filter_comb",
+    ] {
+        let years = listed_counts(&runtime, &format!("{context}/date"));
+        assert!(!years.is_empty(), "{context}/date");
+        let (year, _) = &years[0];
+        let months = listed_counts(&runtime, &format!("{context}/date/{year}"));
+        let (month, _) = &months[0];
+        listed_counts(&runtime, &format!("{context}/date/{year}/{month}"));
+        listed_counts(&runtime, &format!("{context}/media-type/image"));
+        listed_counts(&runtime, &format!("{context}/size"));
+        listed_counts(&runtime, &format!("{context}/aspect"));
+        if !context.contains("/media-type/") {
+            let kinds = listed_counts(&runtime, &format!("{context}/media-type"));
+            assert_eq!(
+                kinds
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+                ["image", "video"],
+                "{context}/media-type"
+            );
+        }
+        if !context.contains("/plugin/") {
+            listed_counts(&runtime, &format!("{context}/plugin"));
+        }
+    }
+
+    // 没有视频的上下文：video 仍列出且计数 0（补 0），按段名照样可路由
+    let kinds = listed_counts(
+        &runtime,
+        "images://gallery/media-type/image/filter_comb/media-type",
+    );
+    assert_eq!(
+        kinds,
+        [("image".to_string(), 121), ("video".to_string(), 0)]
+    );
+    // 上下文里没有的插件不列出，但段名仍可路由
+    assert!(
+        listed_counts(&runtime, "images://gallery/plugin/pixiv/filter_comb/plugin")
+            .iter()
+            .all(|(name, _)| name == "pixiv")
+    );
+    assert_eq!(
+        runtime
+            .count("images://gallery/media-type/video/filter_comb/plugin/nope")
+            .unwrap(),
+        0
     );
 }
 
@@ -1337,8 +1420,28 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
         total - gallery_ids("4x3-16x9").len()
     );
 
-    // 段值不可枚举；非法段不解析
-    assert!(runtime.list("images://gallery/aspect").unwrap().is_empty());
+    // 列举应用的五个桶（前端 GALLERY_ASPECT_BUCKETS 的顺序），分组计数在 meta.count，等于该桶的画廊结果集；
+    // 带已选维度的上下文下同样等于子路径计数（过滤树按 `<上下文>/filter_comb/aspect` 列举）
+    assert_eq!(
+        listed_counts(&runtime, "images://gallery/aspect"),
+        ["4x3-16x9", "16x9-", "3x4-4x3", "-3x4", "unknown"]
+            .map(|segment| (segment.to_string(), gallery_ids(segment).len()))
+            .to_vec()
+    );
+    let in_context = listed_counts(
+        &runtime,
+        "images://gallery/media-type/image/filter_comb/aspect",
+    );
+    assert_eq!(in_context.len(), APP_ASPECT_BUCKETS.len());
+    // 上下文确实生效（夹具 118 是视频）：各桶之和 = 该上下文的总数 < 全部图片
+    let context_total = runtime.count("images://gallery/media-type/image").unwrap();
+    assert_eq!(
+        in_context.iter().map(|(_, count)| count).sum::<usize>(),
+        context_total
+    );
+    assert!(context_total < total);
+
+    // 列举之外的任意区间仍由 resolve 解析（上面已逐段比对）；非法段不解析
     for bad in [
         "landscape-4x3-16x9",
         "other",
@@ -1437,6 +1540,103 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
             );
         }
     }
+}
+
+/// 应用的大小桶：(段, 下界含, 上界不含)；`unknown` 为 size 缺失或非正。与前端过滤树 SIZE_BUCKETS 同序。
+const APP_SIZE_BUCKETS: [(&str, i64, i64); 8] = [
+    ("unknown", -1, -1),
+    ("1B-512KB", 1, 524_288),
+    ("512KB-1MB", 524_288, 1_048_576),
+    ("1MB-2MB", 1_048_576, 2_097_152),
+    ("2MB-5MB", 2_097_152, 5_242_880),
+    ("5MB-10MB", 5_242_880, 10_485_760),
+    ("10MB-50MB", 10_485_760, 52_428_800),
+    ("50MB-", 52_428_800, i64::MAX),
+];
+
+#[test]
+fn gallery_size_buckets_are_listable_with_counts() {
+    // 夹具的图都是 size=10；补一组落在各桶边界两侧的图（含缺失 / 非正与一张视频），逐桶与参考判定比对
+    let conn = fixture_db();
+    {
+        let c = conn.lock().unwrap();
+        for (id, size, media_type) in [
+            (301_i64, None, "image/jpeg"),
+            (302, Some(0_i64), "image/jpeg"),
+            (303, Some(524_287), "image/jpeg"),
+            (304, Some(524_288), "image/jpeg"),
+            (305, Some(1_048_576), "image/jpeg"),
+            (306, Some(2_097_151), "image/jpeg"),
+            (307, Some(5_242_880), "image/jpeg"),
+            (308, Some(10_485_760), "image/jpeg"),
+            (309, Some(52_428_799), "image/jpeg"),
+            (310, Some(52_428_800), "image/jpeg"),
+            (311, Some(3_000_000_000), "video/mp4"),
+        ] {
+            c.execute(
+                "INSERT INTO images
+                 (id, url, local_path, plugin_id, crawled_at, hash, type, width, height, display_name, size)
+                 VALUES (?1, ?2, ?3, 'pixiv', 1680700000, ?4, ?5, 100, 100, ?6, ?7)",
+                (
+                    id,
+                    format!("https://example.test/{id}.jpg"),
+                    format!("D:/extra/{id}.jpg"),
+                    format!("hash-{id}"),
+                    media_type,
+                    format!("extra-{id}"),
+                    size,
+                ),
+            )
+            .unwrap();
+        }
+    }
+    let runtime = build_runtime_with(conn.clone());
+    let reference_count = |min: i64, max: i64| -> usize {
+        let conn = conn.lock().unwrap();
+        let sql = if min < 0 {
+            "SELECT count(*) FROM images WHERE size IS NULL OR size <= 0".to_string()
+        } else {
+            format!("SELECT count(*) FROM images WHERE size >= {min} AND size < {max}")
+        };
+        conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
+            .unwrap() as usize
+    };
+
+    // 名字与顺序为应用桶表；meta.count = 参考判定 = 按段名解析（走 resolve 换算）的计数，
+    // 由此列举 SQL 的分桶边界与 resolve 的换算结果一致
+    let listed = listed_counts(&runtime, "images://gallery/size");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        APP_SIZE_BUCKETS.map(|(segment, _, _)| segment)
+    );
+    for ((_, count), (segment, min, max)) in listed.iter().zip(APP_SIZE_BUCKETS) {
+        assert_eq!(*count, reference_count(min, max), "size/{segment}");
+    }
+    // 八个桶互不重叠、合起来正好是全部图片
+    let total = runtime.count("images://gallery/all").unwrap();
+    assert_eq!(listed.iter().map(|(_, count)| count).sum::<usize>(), total);
+
+    // 带已选维度的上下文：每项 meta.count 等于子路径计数（listed_counts 内断言），且上下文生效（311 是视频）
+    let in_context = listed_counts(
+        &runtime,
+        "images://gallery/media-type/image/filter_comb/size",
+    );
+    assert_eq!(in_context.len(), APP_SIZE_BUCKETS.len());
+    let context_total = runtime.count("images://gallery/media-type/image").unwrap();
+    assert_eq!(
+        in_context.iter().map(|(_, count)| count).sum::<usize>(),
+        context_total
+    );
+    assert!(context_total < total);
+
+    // 列举之外的任意区间仍可直接写段
+    assert_eq!(
+        runtime.count("images://gallery/size/3MB-7MB").unwrap(),
+        reference_count(3 * 1_048_576, 7 * 1_048_576)
+    );
 }
 
 #[test]

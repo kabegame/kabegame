@@ -24,7 +24,9 @@
             "provider": "gallery_date_month_provider",
             "properties": {
                 "year_month": "${properties.year}-${out.meta.mm}"
-            }
+            },
+            // 分组计数随列举带出（year_provider 的 GROUP BY）
+            "meta": { "count": "${out.meta.count}" }
         }
     },
     "resolve": {

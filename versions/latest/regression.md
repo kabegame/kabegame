@@ -721,3 +721,31 @@ konachan 1.6.0 作为示范。
 | [ ] | 翻页不再跑列举 SQL | 桌面 CEF + `KABEGAME_SQL_DEBUG=1` | 画廊翻到第 2 页、切换每页条数、带搜索翻页 | stderr 只有取行与 COUNT，没有 `SELECT page_num … ROW_NUMBER()` | |
 | [ ] | VD 与 MCP 列举页号 | 桌面 CEF | 资源管理器打开 VD 某个画册的 `x100x` 目录；MCP `list_pathql_entry("gallery/all/x100x")` | 页号目录与之前一致 | |
 | [ ] | 末页之后 | 桌面 CEF | 在最后一页删光图片，或手动打开超出页数的页 | 显示空页或回到有效页，不报错 | |
+
+## 画廊维度列举带分组计数（meta.count）
+
+画廊各维度的列举 SQL 在 `${composed}` 上 `GROUP BY` 子项键、`COUNT(*)`，计数随子项放进 `meta.count`：`list(with_count=false)` 一次 IPC、一条 SQL 就拿到子项与计数，替代「`list_with_count` 逐子项 COUNT + 前端再逐节点 COUNT」。涉及：年 / 月 / 日（共享 `dates_provider` / `year_provider` / `month_provider`，VD 共用，`DISTINCT` 改 `GROUP BY`）、媒体格式、image / video（补 0，新增 resolve）、大小 8 桶与宽高比 5 桶（固定桶补 0，原先不可列举）、插件（改为只列当前上下文里有图的插件，meta 只剩 `count`，不再附插件清单 JSON）。段名解析都走 resolve，不跑列举 SQL。前端过滤树这次未改。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 集成测试 | 本机 | `test-kabegame kabegame-core --test dsl_e2e`（新增 `listed_counts` 断言与 `gallery_dimension_lists_carry_group_counts_in_meta`、`gallery_size_buckets_are_listable_with_counts`，改宽高比与插件 meta 用例） | 49 个全部通过；根、`hide/`、`media-type/image/filter_comb`、`plugin/pixiv/filter_comb` 四种上下文下各维度每项 `meta.count == count(子路径)`；无视频上下文 video 计 0 | |
+| [x] | providers 单测 | 本机 | `test-kabegame kabegame-core --lib providers` | 13 个全部通过 | |
+| [x] | prod 库新旧计数逐项一致 | prod 库（2.5 万图，v38） | 改动前后各编一次 `deno task b -c kabegame-cli --release`，17 条路径（`hide/` 根与 `hide/plugin/konachan/filter_comb` 下的日期三层、kind、格式、大小、宽高比、插件等）对比旧 `--list --with-count` 的 total 与新 `--list` 的 meta.count | 全部一致（旧版计数 0 的插件新版不再列出） | 插件 27 → 16 项 |
+| [x] | prod 库耗时 | 同上，`KABEGAME_SQL_DEBUG=1` | 同上路径各跑 3 次取最好 | 新：每面板 1 条 SQL 24～49ms；旧带计数列举 23～105ms 且前端还要再补 N 次 COUNT | 大小分组 43ms 中约 12ms 来自内层 ORDER BY、约 19ms 来自未被消掉的 metadata LEFT JOIN |
+| [ ] | MCP 列举 | 桌面 CEF | `list_pathql_entry("images://gallery/aspect")`、`("images://gallery/size")`、`("images://gallery/plugin")` | 分别列出 5 / 8 个桶、有图的插件，meta 带 count；各桶之和等于 `gallery/all` 总数 | |
+| [ ] | 任意区间与路由 | 桌面 CEF / MCP | 读 `gallery/aspect/9x16-3x4/x100x/1`、`gallery/size/3MB-7MB/x100x/1`、`gallery/media-type/video/x100x/1`、上下文里没有的 `plugin/<id>` | 正常返回；没有的插件命中 0 而非 path not found | |
+| [ ] | 过滤树计数不变 | 桌面 CEF | 打开画廊各维度 chip 面板，与改动前对比计数；再叠加一个插件或媒体类型条件对比 | 计数一致 | 前端未改，防回归 |
+| [ ] | VD 日期与尺寸目录 | 桌面 CEF | 资源管理器打开 VD「按时间」逐层与「按尺寸」「按大小」目录 | 目录与之前一致 | VD 共用日期列举 SQL |
+
+## metadata 行按 id 不可变与图片行去版本字段
+
+metadata 迁移不再原地更新 `data` / `plugin_version`：内容变化时插入新行或合并到已有相同行，统一改指向后删除旧行。图片查询行只保留 `metadataId`，描述面板以 `m<metadataId>` 缓存 `{ data, pluginVersion }`；画廊根因此移除 `metadata` join。v039 为 `images.metadata_id` 与 `task_failed_images.metadata_id` 增加索引。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 迁移换 id 与事件 | 本机 | `test-kabegame kabegame-core --lib metadata_migration` | data 或版本变化后图片与失败记录改指向新/合并 id，旧行和旧搜索映射删除；补丁只含 `metadataId`；完全未变时 id 不变且无补丁 | 19 passed |
+| [x] | v039 索引单测 | 本机 | `test-kabegame kabegame-core --lib storage_v039` | 两条 metadata_id 索引存在，重复执行安全 | 1 passed |
+| [ ] | v039 升级 prod 副本 | prod 库副本 | 用新版打开 v038 副本 | `user_version=39`，两条索引存在，既有图片/失败记录引用不变 | 人工复测 |
+| [ ] | 描述面板与模板版本 | 桌面 CEF | 打开普通插件与 kabegame-server 来源图片详情；升级一个带迁移脚本的插件后重开详情 | 描述内容正常；EJS 的 `plugin_version` 来自完整 metadata 返回；迁移后详情刷新到新内容 | 人工走查 |
+| [ ] | Web 缓存升级 | Web / DevTools | 预置 v5 `kbg-image-metadata-cache` 后加载新版并查看 IndexedDB，再打开同 metadata 的两张图 | 升到 v6 时旧缓存清空；新 key 为 `m<metadataId>`，值同时含 `data` 与 `pluginVersion`，两张图共用一条 | 人工走查 |
+| [ ] | 画廊分组性能与结果 | prod 库快照 | sqlite3 对比移除 join 前后的大小分组与一页结果 | 一页结果不变；大小分组由约 43ms 降至约 25ms | 人工复测 |

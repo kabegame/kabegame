@@ -99,7 +99,6 @@ pub async fn import_local_file(
         surf_record_id: None,
         crawled_at,
         metadata_id,
-        plugin_version: 0,
         thumbnail_path,
         favorite: false,
         is_hidden: false,

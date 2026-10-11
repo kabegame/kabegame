@@ -234,7 +234,7 @@ ImageGrid 把数据变化分成两条通道：
   `image_metadata_id` 是图片字段，统一经 `image_events::emit_native_metadata_attached` 先发
   `image-changed`（`imageMetadataId`）再发 `images-change("change")`：预览按需解析（`get_image_native_metadata`）
   立即发，整理回填用 `native_metadata_image_patch` 并入本批补丁，下载入库只为同哈希的旧图补发（新图随后有 `add`）。
-  前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（同插件元数据的 `@m<metadataId>`），面板在同一张图只换
+  前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（插件元数据为 `m<metadataId>`），面板在同一张图只换
   `imageMetadataId` 时保留旧内容重新取数，不闪。
 - ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
 
@@ -244,11 +244,11 @@ ImageGrid 把数据变化分成两条通道：
   `ImageInfo` camelCase 字段，值是绝对值快照，不是增量。
 - 同一次写入先发 `image-changed`即时 patch 当前页，再发 `images-change("change", ids)`；后者保留
   500ms 权威快照对账，处理排序、搜索成员与分面变化。`EventHold` 保持两条事件的顺序。
-- 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`pluginVersion`、`imageMetadataId`、`postUrl`、
+- 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`imageMetadataId`、`postUrl`、
   `thumbnailPath`、`compatiblePath`、`localPath`、`surfRecordId`、`taskId`、`lastSetWallpaperAt`、
   `isHidden`、`favorite`、`type`、`size`。`width` / `height` 刻意排除，避免正在预览时打断 PhotoSwipe 缩放。
-- Grid 用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` / `pluginVersion` 变化会自然改变
-  metadata cache key，无需额外失效。
+- Grid 用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` 变化会自然改变 metadata cache key，
+  无需额外失效。
 
 ### `album-images-change`（`AppEvent::AlbumImagesChange`，`album_images` 表）
 

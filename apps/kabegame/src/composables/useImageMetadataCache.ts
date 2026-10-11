@@ -3,12 +3,16 @@ import { invoke } from "../api";
 import { IS_WEB } from "../env";
 import { imageMetadataCacheDb } from "../cache/imageMetadataCache";
 
-/** 按 imageId + metadataId + pluginVersion 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
+export interface ResolvedImageMetadata {
+  data: unknown | null;
+  pluginVersion: number;
+}
+
+/** 按 metadataId 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
 export type ImageMetadataResolver = (
   imageId: string,
   metadataId?: number | null,
-  pluginVersion?: number | null,
-) => Promise<unknown | null>;
+) => Promise<ResolvedImageMetadata | null>;
 
 export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> = Symbol("imageMetadataResolver");
 
@@ -18,18 +22,16 @@ function normalizePluginVersion(version: number | null | undefined): number {
   return typeof version === "number" && Number.isFinite(version) && version >= 0 ? Math.floor(version) : 0;
 }
 
-function cacheKeyFor(imageId: string, metadataId?: number | null, pluginVersion?: number | null): string {
-  return `${imageId}@m${metadataId ?? 0}@v${normalizePluginVersion(pluginVersion)}`;
-}
+const cacheKeyFor = (metadataId: number): string => `m${metadataId}`;
 
 class LruMap {
-  private readonly map = new Map<string, unknown | null>();
+  private readonly map = new Map<string, ResolvedImageMetadata>();
 
   has(key: string): boolean {
     return this.map.has(key);
   }
 
-  get(key: string): unknown | null | undefined {
+  get(key: string): ResolvedImageMetadata | undefined {
     if (!this.map.has(key)) return undefined;
     const v = this.map.get(key)!;
     this.map.delete(key);
@@ -38,7 +40,7 @@ class LruMap {
   }
 
   /** 写入并返回被淘汰的 key（无淘汰返回 null） */
-  set(key: string, value: unknown | null): string | null {
+  set(key: string, value: ResolvedImageMetadata): string | null {
     if (this.map.has(key)) this.map.delete(key);
     this.map.set(key, value);
     if (this.map.size > MAX_CACHE_SIZE) {
@@ -50,7 +52,7 @@ class LruMap {
   }
 
   /** 初始化时从 Dexie 批量载入，不触发淘汰逻辑 */
-  load(key: string, value: unknown | null): void {
+  load(key: string, value: ResolvedImageMetadata): void {
     this.map.set(key, value);
   }
 }
@@ -81,14 +83,26 @@ function ensureInit(): Promise<void> {
  * clearCache() 已为 no-op（全局 LRU + IndexedDB 自动管理容量，无需手动清空）。
  */
 export function useProvideImageMetadataCache() {
-  async function resolveMetadata(
-    imageId: string,
-    metadataId?: number | null,
-    pluginVersion?: number | null,
-  ): Promise<unknown | null> {
-    await ensureInit();
+  async function fetchMetadata(imageId: string): Promise<(ResolvedImageMetadata & { id: number }) | null> {
+    const full = await invoke<{ id: number; data?: unknown | null; pluginVersion?: number | null } | null>(
+      "get_image_metadata_full",
+      { imageId },
+    );
+    if (!full) return null;
+    return {
+      id: full.id,
+      data: full.data ?? null,
+      pluginVersion: normalizePluginVersion(full.pluginVersion),
+    };
+  }
 
-    const key = cacheKeyFor(imageId, metadataId, pluginVersion);
+  async function resolveMetadata(imageId: string, metadataId?: number | null): Promise<ResolvedImageMetadata | null> {
+    if (metadataId == null) {
+      return fetchMetadata(imageId);
+    }
+
+    await ensureInit();
+    const key = cacheKeyFor(metadataId);
 
     // 1. 内存 LRU 命中（初始化后与 Dexie 同步，命中内存即命中持久化层）
     if (mem.has(key)) {
@@ -96,10 +110,16 @@ export function useProvideImageMetadataCache() {
     }
 
     // 2. 后端 IPC 拉取
-    const raw = await invoke<unknown | null>("get_image_metadata", { imageId });
-    const v = raw ?? null;
+    const full = await fetchMetadata(imageId);
+    if (!full) return null;
+    const value: ResolvedImageMetadata = {
+      data: full.data,
+      pluginVersion: full.pluginVersion,
+    };
+    // 查询期间 metadata 可能已经迁移，必须按返回行自己的 id 缓存。
+    const returnedKey = cacheKeyFor(full.id);
 
-    const evictedKey = mem.set(key, v);
+    const evictedKey = mem.set(returnedKey, value);
 
     if (IS_WEB) {
       if (evictedKey) {
@@ -107,21 +127,21 @@ export function useProvideImageMetadataCache() {
         void imageMetadataCacheDb.transaction("rw", imageMetadataCacheDb.entries, async () => {
           await imageMetadataCacheDb.entries.delete(evictedKey);
           await imageMetadataCacheDb.entries.put({
-            cacheKey: key,
-            data: v,
+            cacheKey: returnedKey,
+            data: value,
             cachedAt: Date.now(),
           });
         });
       } else {
         void imageMetadataCacheDb.entries.put({
-          cacheKey: key,
-          data: v,
+          cacheKey: returnedKey,
+          data: value,
           cachedAt: Date.now(),
         });
       }
     }
 
-    return v;
+    return value;
   }
 
   // no-op：全局 LRU + IndexedDB 缓存不依赖页面生命周期
