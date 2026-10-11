@@ -143,7 +143,7 @@ CREATE TABLE album_images (
     "order"  INTEGER,
     PRIMARY KEY (album_id, image_id)
 );
-CREATE INDEX idx_album_images_album ON album_images(album_id);
+CREATE INDEX idx_album_images_album_order ON album_images(album_id, "order");
 CREATE INDEX idx_album_images_image ON album_images(image_id);
 
 -- ───────────── task_failed_images ─────────────

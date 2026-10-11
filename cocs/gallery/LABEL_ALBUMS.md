@@ -57,6 +57,7 @@ v031 迁移（`storage/migrations/v031_label_albums.rs`，`init.rs` 同步）：
 | `set_label_key(id, key)` | 改 key，重算子孙 `label_path`，发 `album-changed { labelKey }` |
 | `ensure_label_path(spec)` | 插件寻址：`category` 各段找或建 `label_dir`，末端找或建 `label`；撞到相反类型时报冲突 |
 | `apply_labels_to_images(specs, image_ids)` | 逐项容错：寻址成功才挂叶子；冲突项进入 `skipped`，同批其它标签继续 |
+| `apply_label_assignments([(spec, image_ids)])` | 批量版（上一行即它的薄包装），整体一个事务：按小写完整路径合并同一叶子；一条 SQL 按 `LOWER(label_path)` 解析全部叶子（必须原样写出部分索引的 `type IN ('label', 'label_dir')` 条件，并用 `CROSS JOIN` 固定先遍历 `json_each`，否则退化成全表扫）；缺失叶子才逐段寻址 / 新建，各占一个 savepoint；最后一条 `INSERT OR IGNORE … SELECT` 把「叶子 × 图片」一次插入，`order` 取当前 `MAX("order")` + 分区内序号（依赖 v040 的 `album_images(album_id, "order")` 索引），`RETURNING` 带回实际新增成员 |
 | `get_image_album_ids(image_id)` | 预览面板用：图片直接所属的全部画册 id，前端按类型过滤 |
 
 插件给的名称**只在创建时使用**，已存在节点永远不改名（用户可能改过）。新建时名称撞同级已有画册，

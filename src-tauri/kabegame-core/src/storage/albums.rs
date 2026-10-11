@@ -542,6 +542,18 @@ impl Storage {
     }
 
     pub fn ensure_label_path(&self, spec: &LabelSpec) -> Result<EnsuredLabel, String> {
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {e}"))?;
+        let ensured = Self::ensure_label_path_in(&tx, spec)?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {e}"))?;
+        Ok(ensured)
+    }
+
+    /// 在调用方的事务内逐段寻址 / 建出标签路径；失败时由调用方回滚。
+    fn ensure_label_path_in(conn: &Connection, spec: &LabelSpec) -> Result<EnsuredLabel, String> {
         if !is_label_key(&spec.key)
             || spec.segments.is_empty()
             || spec.segments.iter().any(|segment| !is_label_key(segment))
@@ -549,16 +561,12 @@ impl Storage {
             return Err(t!("albums.errors.labelKeyInvalid").to_string());
         }
 
-        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("Failed to start transaction: {e}"))?;
         let mut parent_id: Option<String> = None;
         let mut created = Vec::new();
 
         for segment in &spec.segments {
             if let Some(existing) =
-                Self::find_label_child_by_key_ci(&tx, parent_id.as_deref(), segment)?
+                Self::find_label_child_by_key_ci(conn, parent_id.as_deref(), segment)?
             {
                 if existing.kind != "label_dir" {
                     return Err(t!("albums.errors.labelKindConflict").to_string());
@@ -567,15 +575,15 @@ impl Storage {
                 continue;
             }
             let name =
-                Self::resolve_new_label_name_ci(&tx, parent_id.as_deref(), segment, segment)?;
+                Self::resolve_new_label_name_ci(conn, parent_id.as_deref(), segment, segment)?;
             let album =
-                Self::insert_label_album(&tx, segment, &name, parent_id.as_deref(), "label_dir")?;
+                Self::insert_label_album(conn, segment, &name, parent_id.as_deref(), "label_dir")?;
             parent_id = Some(album.id.clone());
             created.push(album);
         }
 
         let leaf = if let Some(existing) =
-            Self::find_label_child_by_key_ci(&tx, parent_id.as_deref(), &spec.key)?
+            Self::find_label_child_by_key_ci(conn, parent_id.as_deref(), &spec.key)?
         {
             if existing.kind != "label" {
                 return Err(t!("albums.errors.labelKindConflict").to_string());
@@ -584,19 +592,17 @@ impl Storage {
         } else {
             let requested_name = spec.name.as_deref().unwrap_or(&spec.key);
             let name = Self::resolve_new_label_name_ci(
-                &tx,
+                conn,
                 parent_id.as_deref(),
                 requested_name,
                 &spec.key,
             )?;
             let album =
-                Self::insert_label_album(&tx, &spec.key, &name, parent_id.as_deref(), "label")?;
+                Self::insert_label_album(conn, &spec.key, &name, parent_id.as_deref(), "label")?;
             created.push(album.clone());
             album
         };
 
-        tx.commit()
-            .map_err(|e| format!("Failed to commit transaction: {e}"))?;
         Ok(EnsuredLabel {
             album_id: leaf.id,
             created,
@@ -608,30 +614,164 @@ impl Storage {
         specs: &[LabelSpec],
         image_ids: &[String],
     ) -> Result<AppliedLabels, String> {
-        let mut album_ids = Vec::new();
+        let assignments = specs
+            .iter()
+            .map(|spec| (spec, image_ids))
+            .collect::<Vec<_>>();
+        self.apply_label_assignments(&assignments)
+    }
+
+    /// 把每个标签挂到各自的一组图片上，整体一个事务。
+    ///
+    /// 同一叶子（按小写完整路径）的多份分配先合并。标签都已存在时只需两条 SQL：一条按
+    /// `LOWER(label_path)` 一次解析全部叶子，一条把「叶子 × 图片」一次插入并用 `RETURNING`
+    /// 带回真正新增的成员。缺失的叶子才逐段寻址 / 新建，每个标签各占一个 savepoint，失败只
+    /// 回滚并跳过它自己。
+    pub fn apply_label_assignments(
+        &self,
+        assignments: &[(&LabelSpec, &[String])],
+    ) -> Result<AppliedLabels, String> {
+        // 按小写完整路径合并：保留首个 spec 用于建节点与报错，图片 id 去重拼接。
+        let mut leaves: Vec<(String, &LabelSpec, Vec<&str>)> = Vec::new();
+        let mut leaf_index = HashMap::<String, usize>::new();
+        for (spec, image_ids) in assignments {
+            let path = format!("{}/{}", spec.segments.join("/"), spec.key).to_ascii_lowercase();
+            let index = *leaf_index.entry(path.clone()).or_insert_with(|| {
+                leaves.push((path, spec, Vec::new()));
+                leaves.len() - 1
+            });
+            let images = &mut leaves[index].2;
+            for id in image_ids.iter() {
+                if !images.contains(&id.as_str()) {
+                    images.push(id);
+                }
+            }
+        }
+
         let mut skipped = Vec::new();
-        let mut seen = HashSet::new();
-        for spec in specs {
-            let ensured = match self.ensure_label_path(spec) {
-                Ok(ensured) => ensured,
-                Err(error) => {
-                    skipped.push((spec.clone(), error));
-                    continue;
-                }
+        let mut created = Vec::new();
+        let mut leaf_ids = Vec::<Option<String>>::with_capacity(leaves.len());
+        let inserted = {
+            let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let mut tx = conn
+                .transaction()
+                .map_err(|e| format!("Failed to start transaction: {e}"))?;
+
+            // SQL 1：一次解析全部叶子。部分索引的 `type IN (...)` 必须原样写出，否则规划器
+            // 用不上 idx_albums_label_path；CROSS JOIN 固定先遍历 json_each。
+            let paths =
+                serde_json::to_string(&leaves.iter().map(|(path, _, _)| path).collect::<Vec<_>>())
+                    .map_err(|e| format!("serialize label paths: {e}"))?;
+            let resolved: HashMap<String, (String, String)> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT p.value, a.id, a.type
+                           FROM json_each(?1) AS p CROSS JOIN albums AS a
+                          WHERE LOWER(a.label_path) = p.value
+                            AND a.type IN ('label', 'label_dir')",
+                    )
+                    .map_err(|e| format!("prepare resolve label paths: {e}"))?;
+                let rows = stmt
+                    .query_map(params![paths], |row| {
+                        Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
+                    })
+                    .map_err(|e| format!("resolve label paths: {e}"))?;
+                rows.collect::<Result<_, _>>()
+                    .map_err(|e| format!("collect label paths: {e}"))?
             };
-            if let Some(emitter) = GlobalEmitter::try_global() {
-                for album in &ensured.created {
-                    emitter.emit_album_added(album);
+
+            for (path, spec, _) in &leaves {
+                let leaf_id = match resolved.get(path) {
+                    Some((id, kind)) if kind == "label" => Some(id.clone()),
+                    Some(_) => {
+                        skipped.push((
+                            (*spec).clone(),
+                            t!("albums.errors.labelKindConflict").to_string(),
+                        ));
+                        None
+                    }
+                    None => {
+                        let savepoint = tx
+                            .savepoint()
+                            .map_err(|e| format!("Failed to start savepoint: {e}"))?;
+                        match Self::ensure_label_path_in(&savepoint, spec) {
+                            Ok(ensured) => {
+                                savepoint
+                                    .commit()
+                                    .map_err(|e| format!("Failed to release savepoint: {e}"))?;
+                                created.extend(ensured.created);
+                                Some(ensured.album_id)
+                            }
+                            Err(error) => {
+                                drop(savepoint);
+                                skipped.push(((*spec).clone(), error));
+                                None
+                            }
+                        }
+                    }
+                };
+                leaf_ids.push(leaf_id);
+            }
+
+            // SQL 2：所有「叶子 × 图片」一次插入。每个叶子的 order 接着它当前的最大值往下排；
+            // 被 IGNORE 的行也占一个序号，与逐张插入时一致。
+            let pairs = leaves
+                .iter()
+                .zip(&leaf_ids)
+                .filter_map(|((_, _, images), leaf_id)| Some((leaf_id.as_ref()?, images)))
+                .flat_map(|(leaf_id, images)| images.iter().map(move |id| (leaf_id, *id)))
+                .collect::<Vec<_>>();
+            let mut inserted = HashMap::<String, Vec<String>>::new();
+            if !pairs.is_empty() {
+                let pairs = serde_json::to_string(&pairs)
+                    .map_err(|e| format!("serialize label memberships: {e}"))?;
+                let mut stmt = tx
+                    .prepare(
+                        "INSERT OR IGNORE INTO album_images (album_id, image_id, \"order\")
+                         SELECT p.value ->> 0, CAST(p.value ->> 1 AS INTEGER),
+                                (SELECT COALESCE(MAX(\"order\"), 0) FROM album_images
+                                  WHERE album_id = p.value ->> 0)
+                                + ROW_NUMBER() OVER (PARTITION BY p.value ->> 0 ORDER BY p.key)
+                           FROM json_each(?1) AS p
+                         RETURNING album_id, CAST(image_id AS TEXT)",
+                    )
+                    .map_err(|e| format!("prepare label memberships: {e}"))?;
+                let rows = stmt
+                    .query_map(params![pairs], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| format!("insert label memberships: {e}"))?;
+                for row in rows {
+                    let (album_id, image_id) =
+                        row.map_err(|e| format!("collect label memberships: {e}"))?;
+                    inserted.entry(album_id).or_default().push(image_id);
                 }
             }
-            let result = self.add_images_to_album(&ensured.album_id, image_ids)?;
-            if result.added > 0 && seen.insert(ensured.album_id.clone()) {
-                #[cfg(feature = "ipc-server")]
-                if GlobalEmitter::try_global().is_some() {
-                    emit_membership_added(&ensured.album_id, &result.inserted_ids)?;
-                }
-                album_ids.push(ensured.album_id);
+            tx.commit()
+                .map_err(|e| format!("Failed to commit transaction: {e}"))?;
+            inserted
+        };
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            for album in &created {
+                emitter.emit_album_added(album);
             }
+        }
+        let mut album_ids = Vec::new();
+        for leaf_id in leaf_ids.into_iter().flatten() {
+            let Some(image_ids) = inserted.get(&leaf_id) else {
+                continue;
+            };
+            if album_ids.contains(&leaf_id) {
+                continue;
+            }
+            #[cfg(feature = "ipc-server")]
+            if GlobalEmitter::try_global().is_some() {
+                emit_membership_added(&leaf_id, image_ids)?;
+            }
+            #[cfg(not(feature = "ipc-server"))]
+            let _ = image_ids;
+            album_ids.push(leaf_id);
         }
         Ok(AppliedLabels { album_ids, skipped })
     }
@@ -2241,6 +2381,92 @@ VALUES
             .add_images_to_album(&directory.id, &["1".to_string()])
             .unwrap_err();
         assert_eq!(error, t!("albums.errors.labelDirNoImages").to_string());
+    }
+
+    #[test]
+    fn apply_label_assignments_batches_existing_leaves_and_appends_order() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            for id in 1..=4 {
+                conn.execute(
+                    "INSERT INTO images (id, local_path, crawled_at) VALUES (?1, ?2, 1)",
+                    (id, format!("/tmp/label-{id}.jpg")),
+                )
+                .unwrap();
+            }
+        }
+        let existing = label_spec(&["plugin", "general"], "Existing", None);
+        let leaf = storage.ensure_label_path(&existing).unwrap().album_id;
+        storage
+            .add_images_to_album(&leaf, &["1".to_string()])
+            .unwrap();
+
+        let first = vec!["1".to_string(), "2".to_string()];
+        let second = vec!["3".to_string(), "2".to_string()];
+        // 大小写不同的同一路径要合并到同一叶子；新叶子在同一事务里建出。
+        let same_leaf = label_spec(&["PLUGIN", "general"], "existing", None);
+        let fresh = label_spec(&["plugin", "general"], "fresh", None);
+        let applied = storage
+            .apply_label_assignments(&[
+                (&existing, &first),
+                (&same_leaf, &second),
+                (&fresh, &first),
+            ])
+            .unwrap();
+
+        assert!(applied.skipped.is_empty());
+        assert_eq!(applied.album_ids.len(), 2);
+        assert_eq!(applied.album_ids[0], leaf);
+        let conn = storage.db.lock().unwrap();
+        let orders: Vec<(i64, i64)> = conn
+            .prepare(
+                "SELECT image_id, \"order\" FROM album_images WHERE album_id = ?1 ORDER BY image_id",
+            )
+            .unwrap()
+            .query_map([&leaf], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // 1 已在画册里（order 1）；本批按「1(忽略)、2、3」续号，被忽略的 1 也占一个序号。
+        assert_eq!(orders, [(1, 1), (2, 3), (3, 4)]);
+        let fresh_members: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
+                [&applied.album_ids[1]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fresh_members, 2);
+    }
+
+    #[test]
+    fn apply_label_assignments_skips_conflict_on_missing_path() {
+        let storage = test_storage();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO images (id, local_path, crawled_at) VALUES (1, '/tmp/label.jpg', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        // 叶子路径不存在，走逐段寻址；中间段 `leaf` 是已有的标签叶子，不能再装子画册。
+        storage
+            .ensure_label_path(&label_spec(&["outer"], "leaf", None))
+            .unwrap();
+        let images = vec!["1".to_string()];
+        let conflict = label_spec(&["outer", "leaf", "deeper"], "x", None);
+        let valid = label_spec(&["other"], "kept", None);
+        let before = storage.list_all_albums().unwrap().len();
+        let applied = storage
+            .apply_label_assignments(&[(&conflict, &images), (&valid, &images)])
+            .unwrap();
+        assert_eq!(applied.skipped.len(), 1);
+        assert_eq!(applied.skipped[0].0.key, "x");
+        assert_eq!(applied.album_ids.len(), 1);
+        // 只多出 `other` 目录与 `kept` 叶子。
+        assert_eq!(storage.list_all_albums().unwrap().len(), before + 2);
     }
 
     #[test]

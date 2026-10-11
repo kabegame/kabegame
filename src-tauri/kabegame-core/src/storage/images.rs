@@ -1,11 +1,12 @@
 use crate::storage::metadata_search_text::{
     native_search_text_from_json_str, search_terms_from_json_str,
 };
-use crate::storage::search_terms::replace_metadata_search_terms;
+use crate::storage::search_terms::insert_metadata_search_terms;
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -230,6 +231,33 @@ pub(crate) fn parse_metadata_json(s: Option<String>) -> Option<Value> {
     })
 }
 
+/// 只插入一行 `metadata` 并返回 id，不写搜索词。
+fn insert_metadata_data_row(
+    conn: &rusqlite::Connection,
+    data_json: &str,
+    plugin_id: &str,
+    plugin_version: u32,
+) -> Result<i64, String> {
+    conn.prepare_cached(
+        "INSERT INTO metadata (data, plugin_id, plugin_version)
+         VALUES (?1, ?2, ?3)",
+    )
+    .and_then(|mut stmt| stmt.execute(params![data_json, plugin_id, i64::from(plugin_version)]))
+    .map_err(|e| format!("insert metadata: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 搜索词：插件提供的列表，缺省（`None`）时按默认规则展开 JSON。
+fn resolve_search_terms<'a>(
+    data_json: &str,
+    search_terms: Option<&'a [String]>,
+) -> Cow<'a, [String]> {
+    match search_terms {
+        Some(terms) => Cow::Borrowed(terms),
+        None => Cow::Owned(search_terms_from_json_str(data_json)),
+    }
+}
+
 /// 将 JSON 文本写入 `metadata` 并返回新插入的行 id。
 pub(crate) fn insert_metadata_id(
     conn: &rusqlite::Connection,
@@ -238,25 +266,64 @@ pub(crate) fn insert_metadata_id(
     plugin_version: u32,
     search_terms: Option<&[String]>,
 ) -> Result<i64, String> {
-    let plugin_version_i64 = i64::from(plugin_version);
-    conn.execute(
-        "INSERT INTO metadata (data, plugin_id, plugin_version)
-         VALUES (?1, ?2, ?3)",
-        params![data_json, plugin_id, plugin_version_i64],
-    )
-    .map_err(|e| format!("insert metadata: {}", e))?;
-
-    let metadata_id = conn.last_insert_rowid();
-    let default_terms;
-    let terms = match search_terms {
-        Some(terms) => terms,
-        None => {
-            default_terms = search_terms_from_json_str(data_json);
-            &default_terms
-        }
-    };
-    replace_metadata_search_terms(conn, metadata_id, terms)?;
+    let metadata_id = insert_metadata_data_row(conn, data_json, plugin_id, plugin_version)?;
+    let terms = resolve_search_terms(data_json, search_terms);
+    insert_metadata_search_terms(conn, &[(metadata_id, &terms)])?;
     Ok(metadata_id)
+}
+
+/// 一行迁移结果：旧 metadata id、迁移后的 data 与搜索词（`None` 按默认规则展开）。
+#[derive(Debug, Clone)]
+pub struct MigratedMetadataRow {
+    pub old_id: i64,
+    pub data: String,
+    pub search_terms: Option<Vec<String>>,
+}
+
+/// 一批写回的结果：本批新建的 metadata id 与被改指的 `(图片 id, 新 metadata id)`。
+#[derive(Debug, Default)]
+pub struct MigratedMetadataBatch {
+    pub new_ids: Vec<i64>,
+    pub repointed: Vec<(String, i64)>,
+}
+
+/// 按 `[(旧 id, 新 id)]` 一次改指 images 与 task_failed_images 并删掉旧行，返回被改指的图片。
+fn repoint_metadata_rows(
+    conn: &rusqlite::Connection,
+    pairs: &[(i64, i64)],
+) -> Result<Vec<(String, i64)>, String> {
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let map = serde_json::to_string(pairs).map_err(|e| format!("serialize metadata map: {e}"))?;
+    let repointed = {
+        let mut stmt = conn
+            .prepare(
+                "UPDATE images SET metadata_id = m.value ->> 1
+                   FROM json_each(?1) AS m
+                  WHERE images.metadata_id = m.value ->> 0
+                 RETURNING CAST(images.id AS TEXT), images.metadata_id",
+            )
+            .map_err(|e| format!("prepare repoint images.metadata_id: {e}"))?;
+        let rows = stmt
+            .query_map(params![map], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| format!("repoint images.metadata_id: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("collect repointed images: {e}"))?
+    };
+    conn.execute(
+        "UPDATE task_failed_images SET metadata_id = m.value ->> 1
+           FROM json_each(?1) AS m
+          WHERE task_failed_images.metadata_id = m.value ->> 0",
+        params![map],
+    )
+    .map_err(|e| format!("repoint task_failed_images.metadata_id: {e}"))?;
+    conn.execute(
+        "DELETE FROM metadata WHERE id IN (SELECT value ->> 0 FROM json_each(?1))",
+        params![map],
+    )
+    .map_err(|e| format!("delete migrated metadata rows: {e}"))?;
+    Ok(repointed)
 }
 
 fn insert_image_metadata_row(
@@ -413,125 +480,143 @@ impl Storage {
             .map_err(|e| format!("collect metadata_rows_below_plugin_version: {e}"))
     }
 
-    /// 返回当前引用指定 metadata 行的全部图片 id。
-    /// 迁移挂标签必须在 metadata 合并重定向前调用。
-    pub fn image_ids_by_metadata(&self, metadata_id: i64) -> Result<Vec<String>, String> {
+    /// 一次查出一批 metadata 行各自引用的图片 id。
+    /// 迁移挂标签必须在写回改指之前调用。
+    pub fn image_ids_by_metadata_ids(
+        &self,
+        metadata_ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<String>>, String> {
+        let mut out = HashMap::<i64, Vec<String>>::new();
+        if metadata_ids.is_empty() {
+            return Ok(out);
+        }
+        let ids = serde_json::to_string(metadata_ids)
+            .map_err(|e| format!("serialize metadata ids: {e}"))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let mut stmt = conn
-            .prepare("SELECT id FROM images WHERE metadata_id = ?1 ORDER BY id")
-            .map_err(|e| format!("prepare image_ids_by_metadata: {e}"))?;
+            .prepare(
+                "SELECT metadata_id, CAST(id AS TEXT) FROM images
+                  WHERE metadata_id IN (SELECT value FROM json_each(?1))
+                  ORDER BY metadata_id, id",
+            )
+            .map_err(|e| format!("prepare image_ids_by_metadata_ids: {e}"))?;
         let rows = stmt
-            .query_map(params![metadata_id], |row| {
-                let id = row.get_ref(0)?;
-                Ok(match id {
-                    rusqlite::types::ValueRef::Integer(value) => value.to_string(),
-                    rusqlite::types::ValueRef::Text(value) => {
-                        String::from_utf8_lossy(value).into_owned()
-                    }
-                    _ => String::new(),
-                })
+            .query_map(params![ids], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|e| format!("query image_ids_by_metadata: {e}"))?;
-        rows.filter(|row| row.as_ref().map_or(true, |id| !id.is_empty()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("collect image_ids_by_metadata: {e}"))
+            .map_err(|e| format!("query image_ids_by_metadata_ids: {e}"))?;
+        for row in rows {
+            let (metadata_id, image_id) =
+                row.map_err(|e| format!("collect image_ids_by_metadata_ids: {e}"))?;
+            out.entry(metadata_id).or_default().push(image_id);
+        }
+        Ok(out)
     }
 
-    /// 写回迁移后的 metadata 行；内容变化时总是换 id，再重定向引用并删除当前行。
-    pub fn writeback_migrated_metadata_row(
+    /// 按批写回迁移结果。metadata 行按 id 不可变：每行插一份带新版本的新行（含搜索词），
+    /// 再用一条 UPDATE 把整批图片与失败记录改指过去、一条 DELETE 删掉旧行（搜索映射级联删除）。
+    /// 这里不找内容相同的合并目标——那是逐行 O(n²) 的比较；整轮结束后由
+    /// [`Self::dedup_migrated_metadata`] 一次合并。迁移途中已被 `gc_metadata` 删掉的旧行跳过。
+    pub fn writeback_migrated_metadata_batch(
         &self,
-        row_id: i64,
         plugin_id: &str,
-        new_plugin_version: u32,
-        new_data: &str,
-        search_terms: Option<Vec<String>>,
-    ) -> Result<Option<(i64, Vec<String>)>, String> {
+        plugin_version: u32,
+        rows: &[MigratedMetadataRow],
+    ) -> Result<MigratedMetadataBatch, String> {
+        if rows.is_empty() {
+            return Ok(MigratedMetadataBatch::default());
+        }
+        let old_ids = serde_json::to_string(&rows.iter().map(|row| row.old_id).collect::<Vec<_>>())
+            .map_err(|e| format!("serialize migrated metadata ids: {e}"))?;
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
             .transaction()
-            .map_err(|e| format!("begin writeback_migrated_metadata_row: {e}"))?;
+            .map_err(|e| format!("begin writeback_migrated_metadata_batch: {e}"))?;
 
-        let current: Option<(String, i64)> = tx
-            .query_row(
-                "SELECT data, plugin_version
-                 FROM metadata
-                 WHERE id = ?1 AND plugin_id = ?2",
-                params![row_id, plugin_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .optional()
-            .map_err(|e| format!("select metadata row for writeback: {e}"))?;
-        let Some((current_data, current_version)) = current else {
-            tx.commit()
-                .map_err(|e| format!("commit metadata writeback no-op: {e}"))?;
-            return Ok(None);
-        };
-
-        let new_version_i64 = i64::from(new_plugin_version);
-        if current_data == new_data && current_version == new_version_i64 {
-            tx.commit()
-                .map_err(|e| format!("commit metadata writeback unchanged: {e}"))?;
-            return Ok(None);
-        }
-
-        let target_id: Option<i64> = tx
-            .query_row(
-                "SELECT id
-                 FROM metadata
-                 WHERE plugin_id = ?1 AND plugin_version = ?2 AND data = ?3 AND id <> ?4
-                 LIMIT 1",
-                params![plugin_id, new_version_i64, new_data, row_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| format!("select metadata merge target: {e}"))?;
-        let image_ids = {
+        let alive: HashSet<i64> = {
             let mut stmt = tx
-                .prepare("SELECT id FROM images WHERE metadata_id = ?1 ORDER BY id")
-                .map_err(|e| format!("prepare migrated metadata image ids: {e}"))?;
-            let rows = stmt
-                .query_map(params![row_id], |row| {
-                    let id = row.get_ref(0)?;
-                    Ok(match id {
-                        rusqlite::types::ValueRef::Integer(value) => value.to_string(),
-                        rusqlite::types::ValueRef::Text(value) => {
-                            String::from_utf8_lossy(value).into_owned()
-                        }
-                        _ => String::new(),
-                    })
-                })
-                .map_err(|e| format!("query migrated metadata image ids: {e}"))?;
-            rows.filter(|row| row.as_ref().map_or(true, |id| !id.is_empty()))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("collect migrated metadata image ids: {e}"))?
-        };
-        let final_metadata_id = match target_id {
-            Some(target_id) => target_id,
-            None => insert_metadata_id(
-                &tx,
-                new_data,
-                plugin_id,
-                new_plugin_version,
-                search_terms.as_deref(),
-            )?,
+                .prepare(
+                    "SELECT id FROM metadata
+                      WHERE plugin_id = ?1 AND id IN (SELECT value FROM json_each(?2))",
+                )
+                .map_err(|e| format!("prepare alive metadata rows: {e}"))?;
+            let ids = stmt
+                .query_map(params![plugin_id, old_ids], |row| row.get(0))
+                .map_err(|e| format!("query alive metadata rows: {e}"))?;
+            ids.collect::<Result<_, _>>()
+                .map_err(|e| format!("collect alive metadata rows: {e}"))?
         };
 
-        tx.execute(
-            "UPDATE images SET metadata_id = ?1 WHERE metadata_id = ?2",
-            params![final_metadata_id, row_id],
-        )
-        .map_err(|e| format!("repoint images.metadata_id: {e}"))?;
-        tx.execute(
-            "UPDATE task_failed_images SET metadata_id = ?1 WHERE metadata_id = ?2",
-            params![final_metadata_id, row_id],
-        )
-        .map_err(|e| format!("repoint task_failed_images.metadata_id: {e}"))?;
-        tx.execute("DELETE FROM metadata WHERE id = ?1", params![row_id])
-            .map_err(|e| format!("delete migrated metadata row: {e}"))?;
+        // 逐行插新行；搜索词整批一次写入。
+        let mut pairs = Vec::with_capacity(alive.len());
+        let mut terms = Vec::with_capacity(alive.len());
+        for row in rows.iter().filter(|row| alive.contains(&row.old_id)) {
+            let new_id = insert_metadata_data_row(&tx, &row.data, plugin_id, plugin_version)?;
+            pairs.push((row.old_id, new_id));
+            terms.push((
+                new_id,
+                resolve_search_terms(&row.data, row.search_terms.as_deref()),
+            ));
+        }
+        let terms = terms
+            .iter()
+            .map(|(new_id, terms)| (*new_id, terms.as_ref()))
+            .collect::<Vec<_>>();
+        insert_metadata_search_terms(&tx, &terms)?;
+        let repointed = repoint_metadata_rows(&tx, &pairs)?;
 
         tx.commit()
-            .map_err(|e| format!("commit metadata writeback: {e}"))?;
-        Ok(Some((final_metadata_id, image_ids)))
+            .map_err(|e| format!("commit writeback_migrated_metadata_batch: {e}"))?;
+        Ok(MigratedMetadataBatch {
+            new_ids: pairs.into_iter().map(|(_, new_id)| new_id).collect(),
+            repointed,
+        })
+    }
+
+    /// 整轮迁移结束后，把同插件、同版本、data 相同的行合并到组内最小 id。
+    /// 只合并本轮新建的行（`candidate_ids`）：运行中的任务可能已用 `createImageMetadata`
+    /// 建好、但图片还没引用的行，删掉会让随后的插图违反外键。返回被改指的图片。
+    pub fn dedup_migrated_metadata(
+        &self,
+        plugin_id: &str,
+        plugin_version: u32,
+        candidate_ids: &[i64],
+    ) -> Result<Vec<(String, i64)>, String> {
+        if candidate_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let candidates = serde_json::to_string(candidate_ids)
+            .map_err(|e| format!("serialize dedup candidates: {e}"))?;
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin dedup_migrated_metadata: {e}"))?;
+        let pairs: Vec<(i64, i64)> = {
+            // 先按 length 分区再比 data：长度不同的行不必逐字节比较。
+            let mut stmt = tx
+                .prepare(
+                    "WITH canon AS (
+                         SELECT id, MIN(id) OVER (PARTITION BY length(data), data) AS keep_id
+                           FROM metadata
+                          WHERE plugin_id = ?1 AND plugin_version = ?2
+                     )
+                     SELECT id, keep_id FROM canon
+                      WHERE id <> keep_id AND id IN (SELECT value FROM json_each(?3))",
+                )
+                .map_err(|e| format!("prepare dedup metadata: {e}"))?;
+            let rows = stmt
+                .query_map(
+                    params![plugin_id, i64::from(plugin_version), candidates],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|e| format!("query dedup metadata: {e}"))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|e| format!("collect dedup metadata: {e}"))?
+        };
+        let repointed = repoint_metadata_rows(&tx, &pairs)?;
+        tx.commit()
+            .map_err(|e| format!("commit dedup_migrated_metadata: {e}"))?;
+        Ok(repointed)
     }
 
     pub fn gc_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {

@@ -45,12 +45,17 @@
 2. 插件安装 / 更新成功后触发后台迁移；应用启动加载已安装插件（`refresh_plugins` → `install_plugin_from_kgpg`）同样走该路径，所以每次启动都会检查（无待迁移行时一条 SELECT 早退）。CLI 本进程不调度 metadata 迁移；被跳过的迁移由应用下次启动刷新插件时按版本门控补跑。`MetadataMigrationService` 保证同一插件只有一个 runner；运行中再次 refresh / install 时覆盖保存最新 `Plugin` 到 `pending`，当前轮完成后续跑一轮。
 3. 运行器查询当前插件 `plugin_version < version_packed` 的 metadata 行；`data` 字段 trim 后为空串或字面量 `"null"` 视为没有 metadata，直接排除在外，不跑迁移脚本；结果为空直接结束。
 4. 有待处理行时先登记 `{ pluginId, total, processed, startedAtMs }` 并发送 `busy-tasks-change`；装载一次脚本，三个导出都缺失才算装载失败，缺 `migrate` 按恒等处理。
-5. 逐行调用 `migrate(data)`；成功后才调用 `provideLabels(migrated)` 与 `provideSearchTextList(migrated)`。标签先挂到当前 metadata 行引用的全部图片，然后才写回/合并 metadata，避免重定向后丢失原引用集；搜索列表与 data 在同一事务中替换。
-6. 无论装载或行级执行是否成功，都以 `version_packed` 写入最终 metadata；失败时沿用原 data，不在下次启动无限重试。只要 data 或版本变化就不原地更新旧行。
-7. 写回时如果目标 `(plugin_id, plugin_version, data)` 已有行就复用，否则插入新行；随后把 `images.metadata_id` 与 `task_failed_images.metadata_id` 改指向最终 id 并删除旧行。旧搜索映射由外键级联删除，新行搜索词随插入一起建立。每轮结束后清理无引用的字典词条。
-8. 每行回写完成后 `processed += 1`。成功、错误或 guard 异常退出都会从运行态移除，并发送
+5. 逐行调用 `migrate(data)`；成功后才调用 `provideLabels(migrated)` 与 `provideSearchTextList(migrated)`。V8 只在内存里算出新 data、标签和搜索词，不逐行写库；每攒满 `MIGRATION_BATCH`（512）行或到达末尾时 flush 一次。
+6. 无论装载或行级执行是否成功，都以 `version_packed` 写入最终 metadata；失败时沿用原 data，不在下次启动无限重试。只要 data 或版本变化就不原地更新旧行。已是目标版本且 data 没变的行（正常不会被选中）只用内存值判断，只挂标签、不写回。
+7. 每次 flush 先挂标签、再写回，两步各一个事务：
+   - **挂标签**：一条 SQL 查出本批旧 metadata id 引用的全部图片（必须在改指之前查），再交给 `apply_label_assignments` 一次挂完（见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)）。
+   - **写回**（`writeback_migrated_metadata_batch`）：一条 SQL 筛掉迁移途中已被 `gc_metadata` 删掉的旧行；逐行插入带新版本的新行；整批搜索词由 `insert_metadata_search_terms` 用两条 `json_each` 集合式 SQL 一次写入（补齐词典 `… WHERE true ON CONFLICT(text) DO NOTHING`、按 `term_id` 排序插映射；新行 id 由 AUTOINCREMENT 分配不会复用，因此不先删旧映射）；一条 `UPDATE … FROM json_each` 把整批 `images.metadata_id` 与 `task_failed_images.metadata_id` 改指过去（`RETURNING` 直接给出图片补丁）；一条 `DELETE` 删掉旧行，旧搜索映射由外键级联删除。
+   - 写回时**不**查找内容相同的合并目标：逐行按 `data = ?` 去比较所有已迁移行是 O(n²)，2 万行时约 23ms/行，是旧实现的主要瓶颈。
+8. 整轮结束后（含中途失败）由 `dedup_migrated_metadata` 做一次去重：用 `MIN(id) OVER (PARTITION BY length(data), data)` 找出同插件、同版本、data 相同的组，把**本轮新建**的重复行改指到组内最小 id 并删除。只删本轮新建的行：运行中的任务可能已用 `createImageMetadata` 建好、但图片还没引用的行，删掉会让随后的插图违反外键；组内保留的可以是任意已有行。随后清理无引用的字典词条。
+   每批 flush 完成后 `processed` 推进该批行数（进度只反映已落库的行）。成功、错误或 guard 异常退出都会从运行态移除，并发送
    `metadata-migration-finished { pluginId, total, processed, error }`；成功静默，失败由前端 toast。
-9. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，在事务内取出受影响图片，
+   flush 按批提交而不是整轮一个事务：持写锁的时间有上限，下载与用户操作不会被一整轮迁移卡住；崩溃时已提交批次的版本已推进，未提交批次下次启动按版本门控重跑。
+9. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，用写回与去重两步 `RETURNING` 的改指结果（去重覆盖写回）
    按最终 `metadataId` 分组发只含 `{ metadataId }` 的 `image-changed`，再发 `images-change`（`reason = "change"`）对账视图成员与排序。
 
 前端通过聚合 `get_busy_tasks_snapshot.metadataMigrations` 每 500ms 拉取运行态，在忙碌面板中按插件显示

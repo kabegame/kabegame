@@ -3,7 +3,8 @@ use deno_core::{resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, Runt
 use super::Plugin;
 use crate::emitter::GlobalEmitter;
 use crate::ipc::events::ImagePatch;
-use crate::storage::labels::{validate_labels, LabelInput};
+use crate::storage::images::MigratedMetadataRow;
+use crate::storage::labels::{validate_labels, LabelInput, LabelSpec};
 use crate::storage::search_terms::validate_search_text_values;
 use crate::storage::Storage;
 use serde::Serialize;
@@ -253,6 +254,19 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
     Ok(changed)
 }
 
+/// 每攒够这么多行写一次库：一个事务的持锁时间有上限，崩溃时未提交的批次下次启动按版本门控重跑。
+const MIGRATION_BATCH: usize = 512;
+
+/// V8 已算完、等待写库的一行。
+struct PendingRow {
+    row: MigratedMetadataRow,
+    labels: Vec<LabelSpec>,
+    /// false = 已是目标版本且内容没变，只挂标签。
+    write: bool,
+}
+
+/// 逐行调用 V8 算出新 data / 标签 / 搜索词，按 [`MIGRATION_BATCH`] 攒批写库，整轮结束后一次
+/// 合并内容相同的行。返回 `(是否有写入, 新增成员的标签画册, 按最终 metadata id 分组的图片补丁)`。
 async fn run_metadata_migrations(
     storage: &Storage,
     plugin_id: &str,
@@ -272,136 +286,216 @@ async fn run_metadata_migrations(
         }
     };
 
-    let mut changed = false;
-    let mut touched = Vec::new();
-    let mut touched_seen = HashSet::new();
-    let mut image_patch_groups = BTreeMap::<i64, Vec<String>>::new();
-    for (row_id, data, _row_version) in rows {
-        let migrated = match exports
-            .as_ref()
-            .and_then(|exports| exports.migrate.as_ref())
-        {
-            Some(function) => match engine.call_migrate(function, data.clone()).await {
-                Ok(migrated) => Some(migrated),
-                Err(error) => {
-                    eprintln!(
-                        "[metadata-migration] plugin `{plugin_id}` row {row_id} migrate failed: {error}"
-                    );
-                    None
-                }
-            },
-            None if exports.is_some() => Some(data.clone()),
-            None => None,
-        };
-
-        if let (Some(migrated), Some(function)) = (
-            migrated.as_ref(),
-            exports
+    let mut run = MigrationRun::default();
+    let mut batch = Vec::with_capacity(MIGRATION_BATCH);
+    let migrated: Result<(), String> = async {
+        for (row_id, data, row_version) in rows {
+            let migrated = match exports
                 .as_ref()
-                .and_then(|exports| exports.provide_labels.as_ref()),
-        ) {
-            match engine.call_provide_labels(function, migrated.clone()).await {
-                Ok(inputs) => {
-                    let (specs, rejected) = validate_labels(&inputs, plugin_id);
-                    for (index, reason) in rejected {
-                        eprintln!(
-                            "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels[{index}] skipped: {reason}"
-                        );
-                    }
-                    if !specs.is_empty() {
-                        let image_ids = storage.image_ids_by_metadata(row_id);
-                        match image_ids.and_then(|image_ids| {
-                            let applied = storage.apply_labels_to_images(&specs, &image_ids)?;
-                            Ok((applied, image_ids))
-                        }) {
-                            Ok((applied, _image_ids)) => {
-                                for (spec, error) in applied.skipped {
-                                    let path = format!(
-                                        "{}/{}",
-                                        spec.segments.join("/"),
-                                        spec.key
-                                    );
-                                    eprintln!(
-                                        "[metadata-migration] plugin `{plugin_id}` row {row_id} label `{path}` skipped: {error}"
-                                    );
-                                }
-                                for album_id in applied.album_ids {
-                                    if touched_seen.insert(album_id.clone()) {
-                                        touched.push(album_id);
-                                    }
-                                }
-                            }
-                            Err(error) => eprintln!(
-                                "[metadata-migration] plugin `{plugin_id}` row {row_id} label apply failed: {error}"
-                            ),
-                        }
-                    }
-                }
-                Err(error) => eprintln!(
-                    "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels failed: {error}"
-                ),
-            }
-        }
-
-        let search_terms = if let (Some(migrated), Some(function)) = (
-            migrated.as_ref(),
-            exports
-                .as_ref()
-                .and_then(|exports| exports.provide_search_text_list.as_ref()),
-        ) {
-            match engine
-                .call_provide_search_text_list(function, migrated.clone())
-                .await
+                .and_then(|exports| exports.migrate.as_ref())
             {
-                Ok(inputs) => {
-                    let value = serde_json::to_value(inputs)
-                        .map_err(|e| format!("serialize provideSearchTextList result: {e}"))?;
-                    let (terms, rejected) = validate_search_text_values(Some(&value))?;
-                    for (index, reason) in rejected {
+                Some(function) => match engine.call_migrate(function, data.clone()).await {
+                    Ok(migrated) => Some(migrated),
+                    Err(error) => {
                         eprintln!(
-                            "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList[{index}] skipped: {reason}"
+                            "[metadata-migration] plugin `{plugin_id}` row {row_id} migrate failed: {error}"
                         );
+                        None
                     }
-                    terms
-                }
-                Err(error) => {
-                    eprintln!(
-                        "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList failed: {error}"
-                    );
-                    None
+                },
+                None if exports.is_some() => Some(data.clone()),
+                None => None,
+            };
+
+            let mut labels = Vec::new();
+            if let (Some(migrated), Some(function)) = (
+                migrated.as_ref(),
+                exports
+                    .as_ref()
+                    .and_then(|exports| exports.provide_labels.as_ref()),
+            ) {
+                match engine.call_provide_labels(function, migrated.clone()).await {
+                    Ok(inputs) => {
+                        let (specs, rejected) = validate_labels(&inputs, plugin_id);
+                        for (index, reason) in rejected {
+                            eprintln!(
+                                "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels[{index}] skipped: {reason}"
+                            );
+                        }
+                        labels = specs;
+                    }
+                    Err(error) => eprintln!(
+                        "[metadata-migration] plugin `{plugin_id}` row {row_id} provideLabels failed: {error}"
+                    ),
                 }
             }
-        } else {
-            None
-        };
 
-        if let Some((metadata_id, image_ids)) = storage.writeback_migrated_metadata_row(
-            row_id,
-            plugin_id,
-            target,
-            migrated.as_deref().unwrap_or(&data),
-            search_terms,
-        )? {
-            changed = true;
-            let grouped = image_patch_groups.entry(metadata_id).or_default();
-            for image_id in image_ids {
-                if !grouped.iter().any(|existing| existing == &image_id) {
-                    grouped.push(image_id);
+            let search_terms = if let (Some(migrated), Some(function)) = (
+                migrated.as_ref(),
+                exports
+                    .as_ref()
+                    .and_then(|exports| exports.provide_search_text_list.as_ref()),
+            ) {
+                match engine
+                    .call_provide_search_text_list(function, migrated.clone())
+                    .await
+                {
+                    Ok(inputs) => {
+                        let value = serde_json::to_value(inputs)
+                            .map_err(|e| format!("serialize provideSearchTextList result: {e}"))?;
+                        let (terms, rejected) = validate_search_text_values(Some(&value))?;
+                        for (index, reason) in rejected {
+                            eprintln!(
+                                "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList[{index}] skipped: {reason}"
+                            );
+                        }
+                        terms
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[metadata-migration] plugin `{plugin_id}` row {row_id} provideSearchTextList failed: {error}"
+                        );
+                        None
+                    }
                 }
+            } else {
+                None
+            };
+
+            // 已是目标版本且内容没变时只挂标签、不写回。runner 只挑低于目标版本的行，正常不会
+            // 出现；这里只用内存里已有的值判断，不再为此回读数据库。
+            let write = row_version != target || migrated.as_ref().is_some_and(|m| *m != data);
+            batch.push(PendingRow {
+                row: MigratedMetadataRow {
+                    old_id: row_id,
+                    data: migrated.unwrap_or(data),
+                    search_terms,
+                },
+                labels,
+                write,
+            });
+            if batch.len() >= MIGRATION_BATCH {
+                run.flush(storage, plugin_id, target, &mut batch, &mut on_row_done)?;
             }
         }
-        on_row_done();
+        run.flush(storage, plugin_id, target, &mut batch, &mut on_row_done)
     }
-    let image_patches = image_patch_groups
-        .into_iter()
-        .filter_map(|(metadata_id, image_ids)| {
-            (!image_ids.is_empty()).then(|| ImagePatch {
-                image_ids,
-                diff: serde_json::json!({ "metadataId": metadata_id }),
+    .await;
+
+    // 已写入的批次即便后续失败也要去重，否则重复行会一直留着。
+    let deduped = storage.dedup_migrated_metadata(plugin_id, target, &run.new_ids);
+    migrated?;
+    for (image_id, metadata_id) in deduped? {
+        run.final_metadata.insert(image_id, metadata_id);
+    }
+    Ok(run.finish())
+}
+
+#[derive(Default)]
+struct MigrationRun {
+    changed: bool,
+    touched: Vec<String>,
+    new_ids: Vec<i64>,
+    /// 图片 → 最终 metadata id；去重改指会覆盖批量写回时的值。
+    final_metadata: HashMap<String, i64>,
+}
+
+impl MigrationRun {
+    /// 先给本批图片挂标签（必须在改指之前按旧 id 查图片），再一次写回整批 metadata。
+    fn flush(
+        &mut self,
+        storage: &Storage,
+        plugin_id: &str,
+        target: u32,
+        batch: &mut Vec<PendingRow>,
+        on_row_done: &mut impl FnMut(),
+    ) -> Result<(), String> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        self.apply_labels(storage, plugin_id, batch);
+
+        let processed = batch.len();
+        let rows = batch
+            .drain(..)
+            .filter(|pending| pending.write)
+            .map(|pending| pending.row)
+            .collect::<Vec<_>>();
+        let written = storage.writeback_migrated_metadata_batch(plugin_id, target, &rows)?;
+        self.changed |= !written.new_ids.is_empty();
+        self.new_ids.extend(written.new_ids);
+        self.final_metadata.extend(written.repointed);
+        for _ in 0..processed {
+            on_row_done();
+        }
+        Ok(())
+    }
+
+    fn apply_labels(&mut self, storage: &Storage, plugin_id: &str, batch: &[PendingRow]) {
+        let labelled = batch
+            .iter()
+            .filter(|pending| !pending.labels.is_empty())
+            .map(|pending| pending.row.old_id)
+            .collect::<Vec<_>>();
+        if labelled.is_empty() {
+            return;
+        }
+        let image_ids = match storage.image_ids_by_metadata_ids(&labelled) {
+            Ok(image_ids) => image_ids,
+            Err(error) => {
+                eprintln!(
+                    "[metadata-migration] plugin `{plugin_id}` label image lookup failed: {error}"
+                );
+                return;
+            }
+        };
+        let assignments = batch
+            .iter()
+            .flat_map(|pending| {
+                let images = image_ids
+                    .get(&pending.row.old_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                pending.labels.iter().map(move |spec| (spec, images))
             })
-        })
-        .collect();
-    Ok((changed, touched, image_patches))
+            .collect::<Vec<_>>();
+        match storage.apply_label_assignments(&assignments) {
+            Ok(applied) => {
+                for (spec, error) in applied.skipped {
+                    let path = format!("{}/{}", spec.segments.join("/"), spec.key);
+                    eprintln!(
+                        "[metadata-migration] plugin `{plugin_id}` label `{path}` skipped: {error}"
+                    );
+                }
+                for album_id in applied.album_ids {
+                    if !self.touched.contains(&album_id) {
+                        self.touched.push(album_id);
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("[metadata-migration] plugin `{plugin_id}` label apply failed: {error}")
+            }
+        }
+    }
+
+    fn finish(self) -> (bool, Vec<String>, Vec<ImagePatch>) {
+        let mut groups = BTreeMap::<i64, Vec<String>>::new();
+        for (image_id, metadata_id) in self.final_metadata {
+            groups.entry(metadata_id).or_default().push(image_id);
+        }
+        let image_patches = groups
+            .into_iter()
+            .map(|(metadata_id, mut image_ids)| {
+                image_ids.sort_by_key(|id| id.parse::<i64>().unwrap_or(i64::MAX));
+                ImagePatch {
+                    image_ids,
+                    diff: serde_json::json!({ "metadataId": metadata_id }),
+                }
+            })
+            .collect();
+        (self.changed, self.touched, image_patches)
+    }
 }
 
 /// CLI 本地测试入口：对 `input` JSON 跑一次 `migrate(input)` 并返回结果。
@@ -1003,12 +1097,9 @@ export function provideSearchTextList(_input) { throw new Error("broken"); }
         let check = storage.clone();
         {
             let conn = check.db.lock().unwrap();
-            crate::storage::search_terms::replace_metadata_search_terms(
-                &conn,
-                2,
-                &["obsolete".to_string()],
-            )
-            .unwrap();
+            let obsolete = ["obsolete".to_string()];
+            crate::storage::search_terms::insert_metadata_search_terms(&conn, &[(2, &obsolete)])
+                .unwrap();
         }
         let script = r#"
 export function migrate(_input) { return "{}"; }
@@ -1041,6 +1132,72 @@ export function migrate(_input) { return "{}"; }
         assert_eq!(merged_metadata_ids[0], merged_metadata_ids[1]);
         assert!(!old_rows_exist);
         assert_eq!(row_two_mappings, 0);
+    }
+
+    #[test]
+    fn dedup_merges_into_existing_row_but_never_deletes_rows_outside_the_run() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        {
+            // 模拟运行中任务预先建好、但还没有图片引用的目标版本行。
+            let conn = check.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO metadata (id, data, plugin_version, plugin_id) VALUES (100, '{}', 9, 'demo')",
+                [],
+            )
+            .unwrap();
+        }
+        let (changed, _, patches) = run_runner(
+            storage,
+            "export function migrate(_input) { return \"{}\"; }".to_string(),
+            9,
+        );
+        assert!(changed);
+        assert_eq!(image_metadata_row(&check, "1").0, 100);
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].diff, serde_json::json!({ "metadataId": 100 }));
+        let conn = check.db.lock().unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM metadata", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn rows_deleted_during_migration_are_skipped() {
+        let storage = test_storage(1);
+        let check = storage.clone();
+        let data = image_metadata_row(&check, "1").1;
+        let (changed, _, patches) = run_blocking(move || {
+            tokio::runtime::Handle::current()
+                .block_on(run_metadata_migrations(
+                    &storage,
+                    "demo",
+                    3,
+                    "export function migrate(input) { return input; }",
+                    vec![(999, "{}".to_string(), 0), (1, data, 0)],
+                    || {},
+                ))
+                .unwrap()
+        });
+        assert!(changed);
+        assert_eq!(patches.len(), 1);
+        assert_eq!(image_metadata_row(&check, "1").2, 3);
+    }
+
+    #[test]
+    fn shared_label_across_rows_is_applied_once_per_batch() {
+        let storage = test_storage(3);
+        let check = storage.clone();
+        let script = r#"
+export function provideLabels(_input) { return [{ key: "shared", category: "demo" }]; }
+"#
+        .to_string();
+        let (_, albums, _) = run_runner(storage, script, 2);
+        assert_eq!(albums.len(), 1);
+        for image_id in ["1", "2", "3"] {
+            assert_eq!(check.get_image_album_ids(image_id).unwrap(), albums);
+        }
     }
 
     #[test]

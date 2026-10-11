@@ -693,7 +693,7 @@ konachan 1.6.0 作为示范。
 | [ ] | app 升级后一致性 | 桌面 CEF + prod 库（先 `sqlite3 .backup` 备份） | 升级前后用 `pathql_count` 查四维度排除路径与若干单词搜索 | 总数完全一致；启动日志有 `[db-migration] v037` | |
 | [ ] | 元数据搜索性能 | 桌面 CEF | 单独执行四维度排除 `pathql_count`，再并发 2 条 | 约 365ms 降到约 200ms；并发时接近单独执行 | |
 | [ ] | konachan 迁移重建索引 | dev app | 用 `repack-crawler-plugins` 打包并安装 konachan 1.6.0 | 出现迁移忙碌卡片；结束后 konachan 映射行数明显下降，孤儿词条被清理 | |
-| [ ] | konachan 搜索命中 | dev app | 在元数据维度搜 `bikini`、`love live! school idol project`、`konachan_tags_bikini`、`konachan_rating_safe`、konachan 站内 URL 片段 | 前四个命中，站内 URL 片段不再命中 | |
+| [ ] | konachan 搜索命中 | dev app | 在元数据维度搜 `bikini`、`love live! school idol project`、konachan 站内 URL 片段 | 前两个命中，站内 URL 片段不再命中 | `konachan_tags_bikini` 前缀写法已在插件 1.7.1 移除，见文末「konachan 搜索词改为单个 `konachan` + 裸字段名标记词」 |
 | [ ] | konachan 新爬数据 | dev CLI | 用 `run-crawler-plugin` 跑一页 | 新 metadata 的词条与 `searchTexts` 一致 | |
 | [ ] | CLI 只读查询 | CLI + 迁移后库 | `pathql query` 元数据搜索路径；再对 v036 的库执行 | 前者正常返回；后者报 schema 版本过旧并以非 0 退出 | |
 
@@ -842,6 +842,23 @@ V8 插件，数据来自 `api.manyacg.top/v1` 的 JSON 接口（无需登录、�
 | [ ] | 高级条件里取非细分 | 桌面 CEF | 同上，把细分条件放进「非」 | 命中数 = 全部 − 59，metadata 缺字段的图不被排除 | 前端界面未实测 |
 | [ ] | 旧版插件兼容提示 | 桌面 CEF | 用未升级的旧插件进细分筛选 | 报错可见（`no such column: plugin_metadata`），升级插件后恢复 | 已在 dev 实例确认旧插件会报该错；界面表现未实测 |
 
+## 插件 Provider 分页尾统一改用 4.5.1 `_kb` 全局解析
+
+anihonet-wallpaper、anime-pictures、danbooru、haowallpaper、heybox、konachan、miyoushe、pixai、pixiv、
+twodwallpapers、yandere、ziworld 的 18 个细分叶子 Provider 删除手写
+`desc|x<N>x|<page> → gallery_desc_pagination_page_comb` 尾巴。倒序与分页统一由 Kabegame 4.5.1
+运行时优先解析 `_kb_desc` / `_kb_x<N>x/<page>`；叶子上的 `list → paginate100_provider` 页码列举也一并删除，
+全局 `_kb_*` 段不作为 Provider child 暴露。
+12 个插件各自递增版本并更新 changelog，`engines.kabegame` 统一为 `>=4.5.1`；PixAI、
+2dwallpapers、ziworld 补齐 `kbChangelog` 接线。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 旧分页尾清零 | 源码检查 | 搜索 `gallery_desc_pagination_page_comb`、`paginate100_provider` 与 `desc\|x[1-9]` | 插件 Provider 中均无命中 | 已实测；18 个叶子的手写分页 `list` 全部删除，其中 17 个同时删除旧 `resolve` |
+| [x] | 插件打包 | debug CLI 4.5.1 | 将 12 个插件打包到临时目录 | 清单、changelog 资源与 Provider JSON5 全部通过校验 | 12/12 成功；导入 dev 目录时版本逐项正确 |
+| [x] | 全局倒序与分页 | dev 库 + `pathql query` | 对 10 个可直接寻址的细分叶子查询 `…/_kb_desc/_kb_x2x/1` | 全部路径可解析；有数据时返回不超过 2 行 | 10/10 成功；Danbooru 正序首行 id `2199,2200`，倒序为 `2438,2437` |
+| [x] | 无数据动态入口 | dev 库 | 列举 12 个插件的 `plugin/<id>/extend` | 不报 Provider 注册或 SQL 错误 | 12/12 成功；anihonet-wallpaper 与 2dwallpapers 当前无历史数据且叶子只支持动态列举，因此无可直接寻址叶子，已由打包校验覆盖 |
+
 ## anihonet 按原站 `rel` 区分 category / tag（插件 1.9.0）
 
 anihonet 详情页的 `span.tagst a` 同时包含目录与标签：目录链接的 `rel="category tag"`，
@@ -855,3 +872,102 @@ anihonet 详情页的 `span.tagst a` 同时包含目录与标签：目录链接�
 | [x] | 旧 metadata 迁移 | 迁移脚本 | 分别传入 schema 4 的扁平 `tags`、仅旧四桶数据 | 输出 schema 5；`/category/` 进 `categories`，其余进 `tags`；去重且保留顺序 | Deno 直接调用迁移，扁平/四桶/schema 5 幂等三组断言通过 |
 | [x] | 细分目录 | PathQL + dev DB | 展开 anihonet 插件细分，并在 schema 5 任务数据上核对分组 SQL | 顶层只有 `category` / `tag`；两层的子项、计数和图片集合与 metadata 一致 | PathQL 顶层仅两项；新任务中 `高画質画像` 50 个 metadata，支援卡 2 个 metadata / 2 张图 |
 | [x] | 插件详情模板 | 离线模板渲染 | 用 `/post/62467` 的真实 metadata 渲染 600px 截图 | 仅显示「目录」「标签」两组，外链可正常打开 | 已目视核对 category / tag 分组、换行和链接文案 |
+
+## anihonet 详情文案加入元数据搜索词（插件 1.9.2）
+
+新下载在创建 metadata 时显式写入详情模板可见的搜索片段；历史 metadata 由迁移脚本的
+`provideSearchTextList` 按同一规则重建索引。固定站点词为 `anihonet`；有值的投稿日、源帖、目录、标签
+分别加入字段文案和值，其中源帖、目录项和标签项保留模板展示的 `#` 前缀，ISO 时间只取模板展示的日期部分。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 新下载搜索词 | dev CLI | 搜索 `宵崎奏` 跑 1 页并检查 `/post/62264` 的 metadata 搜索词 | 依次包含 `anihonet`、`投稿日`、`2026-09-06`、`源帖`、`#62264`、`目录`、`#高画質画像`、`标签`、`#宵崎奏`、`#プロジェクトセカイ (プロセカ)壁紙` | 已实测：插件 1.9.2 下载 32 张、0 失败；该 metadata 仅有上述 10 个词 |
+| [x] | 历史索引规则 | Deno 直接调用迁移脚本 `provideSearchTextList` | 传入 `/post/48190` 的 schema 5 metadata | 输出与新下载规则完全一致且无重复 | 已实测：实时与迁移规则都逐项等于需求给出的 10 个词 |
+| [x] | 缺失字段 | Deno 直接调用实时与迁移两份规则 | 省略日期、源帖、目录和标签 | 始终保留 `anihonet`；缺失字段的文案和值均不写入 | 已实测：两份规则都只返回 `anihonet` |
+
+## anime-pictures 按详情可见语义建立搜索词（插件 0.6.2）
+
+anime-pictures 原先依赖 metadata JSON 默认展开，`/posts/931399` 会产生 129 个搜索词，其中包含
+JSON 键名、标签链接、标签计数、标注者和票数值。0.6.2 改为显式提供搜索词：固定写入
+`anime-picture`、`anime`、`picture`；按页面可见分组写入分组名（`author` 按约定词面写为 `anthor`）；
+有投票区时写入 `votes`；最后写入所有标签名称。实时下载与历史 metadata 迁移使用同一规则。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | `№931399` 搜索词 | prod 库只读样本 + Deno 断言 | 将 metadata 分别传入实时规则与 `provideSearchTextList` | 两边均恰好输出 45 个词：指定的前 8 个词 + 37 个标签字面，顺序一致且无重复 | 已实测 |
+| [x] | 非可见噪声排除 | Deno 断言 | 检查 `№931399` 输出 | 不含 `931399`、`4`、`171K`、`7nik`、URL、`count` 等 JSON 键名 | 已实测；默认展开为 129 个词，新规则为 45 个 |
+| [x] | 缺失字段 | Deno 断言 | 用只有 `schema: 1` 的 metadata 调实时与迁移规则 | 两边都只返回 `anime-picture`、`anime`、`picture` | 已实测 |
+| [ ] | 新下载入库 | dev CLI + 畅游 Cookie | 标签 `apollo (hu maple)` 跑第 0 页，检查新 metadata 的搜索词 | 任务正常下载；任一 metadata 的索引与实时规则一致 | 当前环境无 anime-pictures.net 畅游 Cookie，列表页被 Cloudflare 403 拦截；改前已复现同一限制 |
+
+## bilibili 专栏标签与精确元数据搜索词（插件 0.3.0）
+
+bilibili 专栏的 `tags` 现在写入 `bilibili/tag` 标签画册，key 由 tiny-pinyin 转为小写、连字符分隔的
+无声调拼音；实时下载和 `dist/migrate.js` 迁移入口共用同一个派生模块。专栏 metadata 的搜索词显式收敛为：
+带 `#` 的标签、文章名、UP 名、MID、分区列表、回复者名称、回复内容，以及按中国时区格式化的
+`YYYY年M月D日` 发布时间。纯 opus 没有这些字段，继续用模板里显示的 opus ID 搜索。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 拼音标签派生 | Deno 单测 | 用二次元、同人、玉足、米哈游、美图分享、鸣潮、崩坏星穹铁道、次元女调用共享派生模块 | 分别生成 `er-ci-yuan`、`tong-ren`、`yu-zu`、`mi-ha-you`、`mei-tu-fen-xiang`、`ming-chao`、`beng-huai-xing-qiong-tie-dao`、`ci-yuan-nv`，category 均为 `bilibili/tag` | 已实测：3 个派生单测全部通过 |
+| [x] | 搜索词派生 | Deno 单测 | 构造带标签、作者、目录、回复和 `publish_time` 的专栏 metadata | 顺序输出 `#{标签}`、文章名、UP 名、MID、各目录、各回复者名称与内容、`2018年12月3日`；无额外 JSON 键名或链接 | 已实测：精确数组断言通过 |
+| [x] | 新下载标签和搜索词 | dev CLI | 单篇运行 `cv614181`，检查任务图片、标签关联及 metadata 搜索词 | 66 张下载成功；8 个原站标签分别挂到全部图片；搜索词与共享派生函数逐项一致 | 已实测：66 张、0 失败；8 个标签共 528 条关联；106 个搜索词逐项一致 |
+| [x] | 历史 metadata 迁移 | 自包含迁移 bundle + dev 数据样本 | 对旧版 `cv614181` metadata 调用 `provideLabels` / `provideSearchTextList` | 标签和搜索词与实时规则完全一致，bundle 不含外部 import | 已实测：8 个标签、106 个搜索词一致；`dist/migrate.js` 无外部 import |
+| [x] | 纯 opus 回归 | Deno 单测 + dev CLI | 运行一个无关联 cv 的纯 opus 样例 | 不生成标签；搜索词保留 opus ID；图片和 LivePhoto 下载不受影响 | 已实测：1 JPG + 1 MP4，0 标签，唯一搜索词为 opus ID |
+
+## konachan 搜索词改为单个 `konachan` + 裸字段名标记词（插件 1.7.1）
+
+插件 1.6.x 的 `provideSearchTextList` 把每个值写成 `konachan_<字段>_<值>`（含每图唯一的
+`konachan_id_406266`），2 万张 konachan 图在字典里生成 6.9 万个前缀词、72 万行映射，占
+`metadata_search_terms` 总行数 55%。搜 `konachan` / `tags` 这类词时，`metadata_id IN (…)`
+子查询要展开 72 万 / 36 万行，组合查询主 SQL 约 260ms（快路径 `plugin/konachan` 只要 15ms）。
+1.7.1 改为每张图只写一个 `konachan`，每个有值的字段只写一个裸字段名标记词（`tags`、`rating`…），
+值不带前缀；数字值（id、尺寸、分数）是详情模板里直接可见的信息，照常保留。标记词保留了
+「非 tags = 没有标签分区的图」的语义。`src/index.ts` 与 `metadata_migrations/migrate.js` 两份规则
+同步修改，升版本触发历史 metadata 重建搜索索引。中间版 1.7.0（`konachan_<字段>` 标记词，
+`%konachan%` 仍对应 16 万行）未发布，只在本机 prod 上跑过一次迁移。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 方案模拟 | prod 库副本（假 `HOME` 让 release CLI 读副本） | 用真实 `migrate.js` 重建副本词典，对比 `~not pussy/anus/penis` + `~any konachan` + `~not tags` + `aspect` + `random` 组合查询 | 结果总数与原词典一致；主 SQL 变快 | 原词典 241–319ms；1.7.0 标记词 135–173ms；1.7.1 128–153ms；全去前缀（无标记词）139–145ms 但 `~not tags` 语义丢失（总数 2306→14671）。1.7.1 与原词典的组合总数、`~not tags`（3415）、`black_hair` / `408059` / `3840x2160` 命中数逐项一致 |
+| [x] | 迁移脚本输出 | Deno 直接调用 `provideSearchTextList` | 分别传入有标签、无标签的真实 metadata | 首项为 `konachan`；有标签时含 `tags` 与原名 / 显示名；无标签时不含 `tags`；无重复 | 已实测 |
+| [x] | 类型检查与打包 | 本机 | `tsc --noEmit`；`repack-crawler-plugins konachan` | 0 error；打出 v1.7.1，`dist/main.js` 只在注释里出现 `konachan_` | 已实测 |
+| [x] | 升级迁移重建索引 | 桌面 prod app | 经 `kabegame-cli plugin import`（app 模式）安装 1.7.1，等迁移结束 | 20690 行全部到 1.7.1；字典里没有 `konachan_` 前缀词 | 已实测：147498 词 / 1496775 映射，与副本模拟逐项一致；迁移约 50 行/s、耗时约 7 分钟，瓶颈见下一节 |
+| [x] | 组合查询耗时 | prod + release CLI | 跑上面的组合查询并看 `KABEGAME_SQL_DEBUG` 耗时 | 主 SQL 约 140ms，总数与升级前一致 | 129–159ms，总数 2292 |
+| [ ] | 搜索语义 | 桌面 CEF | 元数据维度分别搜 `black_hair`、`408059`、`3840x2160`、`Safe`；再搜 `!tags` | 前四个命中对应图；`!tags` 只剩没有标签分区的图 | |
+| [ ] | 新爬数据 | dev CLI | 用 `run-crawler-plugin` 跑一页 | 新 metadata 的词条与迁移脚本输出同构 | |
+
+## metadata 迁移按批写回 + 末尾一次去重，标签批量挂载（schema v040）
+
+迁移 runner 原先每行一个写回事务：先拿 `data = ?` 与所有已迁移行逐一比较找合并目标（O(n²)，2 万行约 23ms/行），
+再逐个标签各开一个事务跑 `COUNT` + `MAX("order")`（只有 `(album_id)` 索引，要回表上万次）。konachan 2 万行实测约
+50 行/s、约 7 分钟，采样里 V8 几乎不出现。现在 V8 只在内存里算，每 512 行 flush 一次：一个事务批量挂标签
+（`apply_label_assignments`：标签都已存在时 2 条 SQL），一个事务批量写回（筛存活旧行 → 逐行插新行与搜索词 →
+`UPDATE … FROM json_each` 整批改指 → 一条 DELETE）；整轮结束后用窗口函数一次合并同版本内容相同的行，只删本轮
+新建的行。v040 用 `album_images(album_id, "order")` 取代 `idx_album_images_album`。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | cargo 0 error，改动文件无新 warning | 已实测 |
+| [x] | 单测 | 本机 | `test-kabegame` 分别过滤 `metadata_migration` / `storage::albums` / `storage::images` / `storage_v040` / `search_terms` / `labels` / `downloader`，再跑 `--test dsl_e2e` | 全部通过（既有失败除外） | metadata_migration 22、downloader 22、dsl_e2e 52 全过；`apply_labels_and_delete_label_subtree_remove_memberships` 失败在 `delete_album` 调 `Storage::global()`，HEAD 上同样失败，与本改动无关。新增：同叶子大小写合并与 order 续号（被忽略的行也占号）、缺失路径冲突只跳过自身、去重合并到已有行且不删本轮外的行、迁移途中被删的行跳过、多行共用标签 |
+| [x] | 真实库迁移速度与结果 | prod 库副本 + 临时 `#[ignore]` 基准用例（测完已删） | 用 konachan 1.7.1 的 `migrate.js` 把 20690 行迁到下一版本 | 速度大幅提升；词典、映射、标签成员与 app 内迁移结果一致；库完整 | 15.5s（约 1333 行/s，原约 50 行/s）；147498 词 / 1496775 映射 / album_images 405346 不变；`integrity_check` ok、`foreign_key_check` 无输出。剩余耗时：写回约 64%（其中搜索词 upsert 约 35%、提交约 14%、改指约 13%）、挂标签约 16%，V8 可忽略 |
+| [ ] | app 升级到 v040 | 桌面 CEF + prod 库（先 `sqlite3 .backup` 备份） | 启动新版 app | 启动日志有 v040；`album_images` 只剩 `idx_album_images_album_order` 等索引；画册内拖拽排序、加入画册仍正常 | |
+| [ ] | app 内迁移 | 桌面 CEF | 升一个带迁移脚本的插件版本（如 konachan 1.7.2）后安装 | 忙碌卡片进度按批跳动（每次约 512）且很快结束；结束后图片详情与搜索正常 | |
+| [ ] | 迁移期间下载 | 桌面 CEF | 迁移进行中同时跑一个该插件的下载任务 | 下载不报外键错误，新图 metadata 正常；迁移结束后无重复 metadata 行 | 去重只删本轮新建行 |
+| [ ] | 下载挂标签 | dev CLI | `run-crawler-plugin` 跑一页带标签的插件 | 新图挂上标签，新标签画册被建出，`album-images-change` 正常 | `apply_labels_to_images` 已改为批量实现的薄包装 |
+
+## 搜索词写入改为集合式 SQL
+
+`replace_metadata_search_terms` 对每个词跑 upsert + 插映射两条 SQL（konachan 每行约 140 条），改为
+`insert_metadata_search_terms`：逐行规范化后，一组新 metadata 行只用两条 `json_each` SQL——补齐词典
+（`INSERT … SELECT … WHERE true ON CONFLICT(text) DO NOTHING`）、按 `term_id` 排序插映射。只用于新行：
+`metadata.id` 是 AUTOINCREMENT 不会复用，不再先 DELETE。下载 / 文件夹同步的单行写入每行 1 + 2 条 SQL；
+迁移写回整批写一次。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 编译检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip vue` | cargo 0 error，改动文件无新 warning | 已实测 |
+| [x] | 单测 | 本机 | `test-kabegame` 过滤 `search_terms` / `metadata_migration` / `storage::images` / `providers::query` / `downloader`，再跑 `--test dsl_e2e` | 全部通过 | 10 / 22 / 6 / 14 / 22 / 52 全过；新增「跨行共用词条、已有词复用 id」用例 |
+| [x] | 写法对比 | prod 库副本（102 万「行 × 词」） | 回滚事务里比较逐词写入与集合式写入 | 集合式明显更快 | 逐词 5.8–6.6s；每批 3 条 4.3–4.7s，其中删旧映射 1.0s / 补词典 0.46s / 插映射 1.8s，按 `term_id` 排序后插映射 1.54s |
+| [x] | 真实库迁移 | prod 库副本 + 临时 `#[ignore]` 基准用例（测完已删） | konachan 1.7.1 `migrate.js` 把 20690 行迁到下一版本 | 比上一版更快；结果一致 | 三次 13.4 / 14.1 / 14.2s（上一版 15.5s）；孤儿词条 GC 54ms；147498 词 / 1496775 映射 / album_images 405346 不变；`integrity_check` ok、`foreign_key_check` 无输出 |
+| [ ] | 下载写搜索词 | dev CLI | `run-crawler-plugin` 跑一页带 `searchTexts` 的插件，再在元数据维度搜其中一个词 | 能搜到；与插件提供的词表一致 | |
+| [ ] | 文件夹同步重导入 | 桌面 CEF | 本地文件夹画册触发一次重导入 | 默认展开的搜索词仍能命中 | `insert_metadata_text` 路径 |

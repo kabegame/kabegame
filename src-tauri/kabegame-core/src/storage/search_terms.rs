@@ -53,41 +53,46 @@ pub fn validate_search_text_values(
     Ok((Some(normalize_search_terms(accepted)), rejected))
 }
 
-/// 原子替换一行 metadata 引用的全部搜索词条。
-pub(crate) fn replace_metadata_search_terms(
+/// 为一批新插入的 metadata 行写搜索词：逐行规范化后，整批只用两条 SQL——补齐词典、插映射。
+///
+/// 只用于新行：`metadata.id` 由 AUTOINCREMENT 分配不会复用，旧映射随旧行级联删除，新行不会有
+/// 残留映射，因此不先 DELETE。逐词 upsert 每行要跑上百条 SQL；集合式写入的耗时只剩 B 树本身，
+/// 插映射时按 `term_id` 排序让主键 `(term_id, metadata_id)` 的写入更集中。
+pub(crate) fn insert_metadata_search_terms(
     conn: &Connection,
-    metadata_id: i64,
-    terms: &[String],
+    rows: &[(i64, &[String])],
 ) -> Result<(), String> {
-    conn.execute(
-        "DELETE FROM metadata_search_terms WHERE metadata_id = ?1",
-        params![metadata_id],
-    )
-    .map_err(|e| format!("delete metadata search terms: {e}"))?;
-
-    let terms = normalize_search_terms(terms.iter().cloned());
-    let mut upsert_term = conn
-        .prepare_cached(
-            "INSERT INTO search_terms (text) VALUES (?1)
-             ON CONFLICT(text) DO UPDATE SET text = excluded.text
-             RETURNING id",
-        )
-        .map_err(|e| format!("prepare search term upsert: {e}"))?;
-    let mut insert_mapping = conn
-        .prepare_cached(
-            "INSERT OR IGNORE INTO metadata_search_terms (metadata_id, term_id)
-             VALUES (?1, ?2)",
-        )
-        .map_err(|e| format!("prepare metadata search term mapping: {e}"))?;
-
-    for term in terms {
-        let term_id = upsert_term
-            .query_row(params![term], |row| row.get::<_, i64>(0))
-            .map_err(|e| format!("upsert search term: {e}"))?;
-        insert_mapping
-            .execute(params![metadata_id, term_id])
-            .map_err(|e| format!("insert metadata search term mapping: {e}"))?;
+    let pairs = rows
+        .iter()
+        .flat_map(|(metadata_id, terms)| {
+            normalize_search_terms(terms.iter().cloned())
+                .into_iter()
+                .map(move |term| (*metadata_id, term))
+        })
+        .collect::<Vec<_>>();
+    if pairs.is_empty() {
+        return Ok(());
     }
+    let pairs = serde_json::to_string(&pairs)
+        .map_err(|e| format!("serialize metadata search terms: {e}"))?;
+
+    // `WHERE true` 不能省：`INSERT … SELECT` 后直接跟 `ON CONFLICT` 时 SQLite 解析有歧义。
+    conn.prepare_cached(
+        "INSERT INTO search_terms (text)
+         SELECT value ->> 1 FROM json_each(?1) WHERE true
+         ON CONFLICT(text) DO NOTHING",
+    )
+    .and_then(|mut stmt| stmt.execute(params![pairs]))
+    .map_err(|e| format!("insert search terms: {e}"))?;
+    conn.prepare_cached(
+        "INSERT OR IGNORE INTO metadata_search_terms (metadata_id, term_id)
+         SELECT j.value ->> 0, st.id
+           FROM json_each(?1) AS j
+           JOIN search_terms AS st ON st.text = j.value ->> 1
+          ORDER BY st.id, 1",
+    )
+    .and_then(|mut stmt| stmt.execute(params![pairs]))
+    .map_err(|e| format!("insert metadata search term mappings: {e}"))?;
     Ok(())
 }
 
@@ -192,26 +197,50 @@ mod tests {
     }
 
     #[test]
-    fn search_terms_replace_supports_default_provided_and_empty_lists() {
+    fn search_terms_insert_supports_default_provided_and_empty_lists() {
         let conn = conn();
-        replace_metadata_search_terms(&conn, 1, &["default".to_string()]).unwrap();
-        replace_metadata_search_terms(&conn, 2, &["provided".to_string(), "provided".to_string()])
-            .unwrap();
-        replace_metadata_search_terms(&conn, 3, &[]).unwrap();
+        let default = ["default".to_string()];
+        let provided = ["provided".to_string(), " provided\n".to_string()];
+        insert_metadata_search_terms(&conn, &[(1, &default), (2, &provided), (3, &[])]).unwrap();
         assert_eq!(terms_for(&conn, 1), ["default"]);
         assert_eq!(terms_for(&conn, 2), ["provided"]);
         assert!(terms_for(&conn, 3).is_empty());
+    }
 
-        replace_metadata_search_terms(&conn, 2, &["replacement".to_string()]).unwrap();
-        assert_eq!(terms_for(&conn, 2), ["replacement"]);
+    #[test]
+    fn search_terms_insert_shares_dictionary_rows_across_metadata() {
+        let conn = conn();
+        let first = ["shared".to_string(), "first".to_string()];
+        let second = ["second".to_string(), "shared".to_string()];
+        insert_metadata_search_terms(&conn, &[(1, &first), (2, &second)]).unwrap();
+        assert_eq!(terms_for(&conn, 1), ["shared", "first"]);
+        assert_eq!(terms_for(&conn, 2), ["shared", "second"]);
+        let dictionary: i64 = conn
+            .query_row("SELECT COUNT(*) FROM search_terms", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(dictionary, 3);
+
+        // 已在词典里的词复用原 id，不新建词条。
+        let third = ["first".to_string()];
+        insert_metadata_search_terms(&conn, &[(3, &third)]).unwrap();
+        assert_eq!(terms_for(&conn, 3), ["first"]);
+        let dictionary: i64 = conn
+            .query_row("SELECT COUNT(*) FROM search_terms", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(dictionary, 3);
     }
 
     #[test]
     fn search_terms_gc_removes_only_orphan_dictionary_rows() {
         let conn = conn();
-        replace_metadata_search_terms(&conn, 1, &["kept".to_string(), "orphan".to_string()])
-            .unwrap();
-        replace_metadata_search_terms(&conn, 1, &["kept".to_string()]).unwrap();
+        let terms = ["kept".to_string(), "orphan".to_string()];
+        insert_metadata_search_terms(&conn, &[(1, &terms)]).unwrap();
+        conn.execute(
+            "DELETE FROM metadata_search_terms
+              WHERE term_id = (SELECT id FROM search_terms WHERE text = 'orphan')",
+            [],
+        )
+        .unwrap();
         assert_eq!(gc_orphan_search_terms(&conn).unwrap(), 1);
         let remaining: Vec<String> = conn
             .prepare("SELECT text FROM search_terms ORDER BY text")

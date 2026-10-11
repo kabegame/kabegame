@@ -53,6 +53,7 @@ mod v036_image_aspect_ratio;
 mod v037_metadata_search_terms;
 mod v038_native_metadata_search_values;
 mod v039_metadata_id_indexes;
+mod v040_album_images_order_index;
 
 use rusqlite::Connection;
 
@@ -228,13 +229,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "metadata_id_indexes",
         up: v039_metadata_id_indexes::up,
     },
+    Migration {
+        version: 40,
+        name: "album_images_order_index",
+        up: v040_album_images_order_index::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 39;
+pub const LATEST_VERSION: u32 = 40;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
