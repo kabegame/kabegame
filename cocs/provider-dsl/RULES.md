@@ -298,6 +298,37 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 其它错误（均为确定性错误，带出错路径）：`~end` / `~or` 无匹配开组；`~not` 组内出现
 `~or`（改写成嵌套 `~not/~any/.../~end/~end`）。
 
+### 3.3.2 插件 provider 与 `plugin_im`（让细分条件能进组）
+
+`plugin/<id>/extend/...` 由宿主的 `plugin_entry_provider` 接入，再委托给插件自带的
+`plugins.<id>.entry_provider`。宿主只贡献一条 `LEFT JOIN metadata AS plugin_im`，**不投影任何列**：
+列表行始终是 `images.*`，爬取期 metadata 每行数 KB，带进每个 fetch 会让一页行体积放大约 10 倍。
+
+因此插件 provider 与宿主之间有一份固定约定，三条缺一不可：
+
+- **`where` 读 `plugin_im.data`**，不是裸列名 `plugin_metadata`（宿主不再投影它）。该 join 满足
+  §3.3.1：分支对 composed 的贡献只有 `where` + LEFT JOIN，所以插件细分可以出现在 `~any` / `~not` 里。
+- **`where` 整体包 `COALESCE((…), 0)`**。元数据缺字段或没有 metadata 行时，`json_extract` 得到 NULL，
+  `NOT (NULL)` 仍是 NULL，`~not` 会把这些图整批排除；包成 0 后取非才为真。与宿主的搜索 provider
+  对缺失元数据的处理一致。
+- **`list.sql` 自行 join `metadata`**。`${composed}` 只有 `images.*`，其中的 `metadata_id` 是唯一入口：
+
+```sql
+-- 需要逐行 metadata：在 composed 外包一层补出列，其余表达式不动
+FROM (SELECT c.*, pm.data AS plugin_metadata FROM (${composed}) AS c
+      JOIN metadata AS pm ON pm.id = c.metadata_id) AS composed_result
+-- 按帖子去重计数：metadata 行按 id 不可变，直接按 metadata_id 去重，分组键是整数而非数 KB 的 JSON 文本
+FROM (SELECT pm.data AS plugin_metadata
+      FROM (SELECT DISTINCT metadata_id FROM (${composed}) AS composed_result) AS d
+      JOIN metadata AS pm ON pm.id = d.metadata_id) AS source
+```
+
+这里的 `plugin_metadata` 只是子查询内部的列别名，不是宿主约定。`list.sql` 用 INNER JOIN 即可：
+没有 metadata 的图本来就不属于任何细分。
+
+不要为了这些列举把 facet 改写成 `~~` + `group_by` 的 fetch 节点：facet 子项必须来自 `list`（§4），
+`pathql_list`、VD 目录和高级查询的发现都依赖它。
+
 **缓存**：只有组深度归 0 的路径前缀参与前缀缓存读写——组内中间态只在当前分支基线下
 成立。闭合处（`~end` 所在的完整路径）是合法的缓存边界。
 

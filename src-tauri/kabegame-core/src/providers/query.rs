@@ -774,7 +774,8 @@ mod tests {
                         "namespace": "plugins.p1",
                         "name": "entry_provider",
                         "resolve": {
-                            "fav": { "provider": "fav_provider" }
+                            "fav": { "provider": "fav_provider" },
+                            "nofield": { "provider": "nofield_provider" }
                         }
                     }"#,
                 ),
@@ -788,7 +789,23 @@ mod tests {
                         "namespace": "plugins.p1",
                         "name": "fav_provider",
                         "query": {
-                            "where": "json_extract(plugin_im.data, '$.kind') = 'fav'"
+                            "where": "COALESCE((json_extract(plugin_im.data, '$.kind') = 'fav'), 0)"
+                        }
+                    }"#,
+                ),
+            )
+            .unwrap();
+        // 引用夹具 metadata 里根本不存在的字段：谓词对每一行都是 NULL。
+        // 插件契约要求包 COALESCE，否则 `~not` 取非后仍是 NULL，整批图被排除。
+        runtime
+            .register_provider_dsl(
+                LoaderType::JSON5,
+                Source::Str(
+                    r#"{
+                        "namespace": "plugins.p1",
+                        "name": "nofield_provider",
+                        "query": {
+                            "where": "COALESCE((json_extract(plugin_im.data, '$.missing') = 'x'), 0)"
                         }
                     }"#,
                 ),
@@ -1009,14 +1026,44 @@ mod tests {
     }
 
     #[test]
-    fn gallery_plugin_extend_documents_its_current_group_field_rejection() {
+    fn gallery_plugin_extend_joins_metadata_without_projecting_it() {
         let runtime = build_runtime();
-        let path = "images://gallery/~any/plugin/p1/extend/fav/~or/plugin/p2/~end";
-        let err = query_fetch_with_runtime(&runtime, path).unwrap_err();
-        assert!(
-            err.contains("may only contribute `where` and LEFT JOINs")
-                && err.contains("changed `fields`"),
-            "unexpected plugin extend error: {err}"
+        let rows = query_fetch_with_runtime(
+            &runtime,
+            "images://gallery/plugin/p1/extend/fav/_kb_x100x/1",
+        )
+        .unwrap();
+        assert_eq!(row_ids(&rows), BTreeSet::from([1, 2]));
+        // 列表行只有 images.*：metadata 每行数 KB，不能随细分路径带给前端。
+        for row in &rows {
+            let obj = row.as_object().unwrap();
+            assert!(
+                !obj.contains_key("plugin_metadata") && !obj.contains_key("metadata"),
+                "extend 路径不应投影 metadata: {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn gallery_plugin_extend_works_inside_where_groups() {
+        let runtime = build_runtime();
+        // 插件分支只贡献 where + LEFT JOIN，可以进 ~any：p1 的 fav {1,2} ∪ p2 {4,5,6,10}。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~any/plugin/p1/extend/fav/~or/plugin/p2/~end",
+            &[1, 2, 4, 5, 6, 10],
+        );
+        // ~not：去掉 p1 的 fav，其余 10 张。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~not/plugin/p1/extend/fav/~end",
+            &[3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        );
+        // 谓词对每行都是 NULL 的细分：COALESCE 之后取非不会误排除 p1 的图。
+        assert_gallery_ids(
+            &runtime,
+            "images://gallery/~not/plugin/p1/extend/nofield/~end",
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
         );
     }
 

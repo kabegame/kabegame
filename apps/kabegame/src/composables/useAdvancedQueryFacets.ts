@@ -87,10 +87,6 @@ export function useDimensionFacet(
     let filter: GalleryFilter | null = null;
     if (normalized && normalized !== "all") {
       filter = filterFromTreeSegment(normalized);
-      // 追加高级条件可能包装进组；插件细分在选择时降级为裸插件，预测保持同一口径。
-      if (filter.type === "plugin" && filter.extendPath?.trim()) {
-        filter = { type: "plugin", pluginId: filter.pluginId };
-      }
     }
     const nextTree = updateNode(currentTree, path, (node) => {
       if (!("is" in node)) {

@@ -84,7 +84,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | `kbChangelog` | 否 | 更新日志映射；与 `kbDoc` 同构，`default` 对应默认更新日志，其他键为语言码。值为插件根相对路径。 |
 | `kbAssets` | 否 | 文档与更新日志共用的资源白名单，值为插件根相对路径字符串数组。Markdown 本地资源引用未声明会报错，未引用的预留项只警告；归一化路径以 `banner` 开头的项按数组声明顺序进入轮播。 |
 | `kbRecommendedConfigs` | 否 | 推荐运行配置文件路径数组。 |
-| `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。 |
+| `kbPathQLProviders` | 否 | Provider DSL 文件路径数组。读取图片爬取期 metadata 时，`where` 用 `plugin_im.data` 并整体包 `COALESCE((…), 0)`（让细分条件能用在 `~not` 里），`list.sql` 自行 `JOIN metadata ON id = composed_result.metadata_id`；应用不再投影 `plugin_metadata` 列，旧写法需应用 ≥ 4.5.1 的插件版本迁移，详见 cocs/provider-dsl/RULES.md §3.3.2。 |
 | `kbMetadataMigration` | 否 | 单一 metadata 迁移脚本路径（`.js`，ES module，可导出 `migrate(input)`、`provideLabels(input)` 与 `provideSearchTextList(input)`，至少一个；后者给历史图片提供搜索片段）。搜索片段应覆盖 `description.ejs` 展示原文，可增加 `<插件>_<字段>_<值>` 前缀，不收录键名、不可见链接或过期文字。脚本需幂等一步到位，每行无论成败只处理一次；详见 cocs/crawler/METADATA_MIGRATION.md。旧 `kbMetadataMigrations` 数组已停止支持：打包报可读错误，加载不解析。 |
 | `kbDescriptionTemplate` | 否 | 图片详情 EJS 模板路径。 |
 

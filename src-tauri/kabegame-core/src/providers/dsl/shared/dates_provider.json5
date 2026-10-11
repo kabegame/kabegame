@@ -1,8 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "dates_provider",
-    // 7c S7-b: programmatic GalleryDatesRouter 迁 DSL。年→月→日 三层结构,
-    // 本层是年; apply_query 给上游加 crawled_at ASC 排序基线 (与 programmatic 同)。
+    // 本层是年; apply_query 给上游加 crawled_at ASC 排序基线。
     "query": {
         "order": [{ "sql": "images.crawled_at", "order": "asc" }]
     },

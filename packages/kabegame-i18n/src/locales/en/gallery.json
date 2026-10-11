@@ -292,7 +292,6 @@
   "searchModeHelpLocalPath": "Matches where the image is stored on this device; \\ and / are interchangeable.",
   "searchModeHelpUrl": "Matches the image URL or its source page URL; locally imported images are excluded.",
   "advancedSearchOptions": "Search options…",
-  "advancedPluginExtendRestricted": "Additional advanced conditions do not support plugin subfilters. Only the plugin was kept. Set subfilters using the simple plugin filter in the query bar.",
   "advancedPath": "Path",
   "pathqlHelp": "PathQL is Kabegame's own query path: one path is one filter — copy, share, or paste it back to reproduce the result.",
   "advancedCopy": "Copy",

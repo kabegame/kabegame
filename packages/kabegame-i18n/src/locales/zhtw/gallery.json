@@ -296,7 +296,6 @@
   "searchModeHelpLocalPath": "比對圖片在本機的儲存路徑，\\ 與 / 通用。",
   "searchModeHelpUrl": "比對圖片直連或來源頁連結；本機匯入的圖片不列入。",
   "advancedSearchOptions": "搜尋選項…",
-  "advancedPluginExtendRestricted": "附加進階條件不支援外掛細分篩選，已僅保留外掛。請在查詢列的簡單外掛篩選中設定細分條件。",
   "advancedPath": "路徑",
   "pathqlHelp": "PathQL 是 Kabegame 自研的查詢路徑：一段路徑就是一次過濾，可複製、分享、直接貼回網址列重現結果。",
   "advancedCopy": "複製",

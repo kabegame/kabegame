@@ -83,7 +83,6 @@ import { ElIcon, KbFilterDropdown } from "@kabegame/element-plus";
 import { Close, FilterAspect, FilterDate, FilterMedia, FilterPlugin, FilterSize } from "@kabegame/element-plus-icons";
 import { facetValueLabel, type FacetDimension } from "@/composables/useAdvancedQueryFacets";
 import { usePluginStore } from "@/stores/plugins";
-import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import {
   getNode,
   notParity,
@@ -196,13 +195,7 @@ function clearDimensionFromDropdown(dimension: FacetDimension, value: string | n
 }
 
 function selectDimensionFilter(dimension: FacetDimension, filter: GalleryFilter, close: () => void): void {
-  let nextFilter = filter;
-  if (filter.type === "plugin" && filter.extendPath?.trim()) {
-    // 追加的根原子也可能包装为单分支组；插件细分的 fields 贡献不被组引擎支持。
-    ElMessage.warning(t("gallery.advancedPluginExtendRestricted"));
-    nextFilter = { type: "plugin", pluginId: filter.pluginId };
-  }
-  updateDimensionFilter(dimension, nextFilter);
+  updateDimensionFilter(dimension, filter);
   openedFacet.value = null;
   close();
 }

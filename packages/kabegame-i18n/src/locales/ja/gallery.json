@@ -294,7 +294,6 @@
   "searchModeHelpLocalPath": "端末上の保存パスを検索します。\\ と / は同じ扱いです。",
   "searchModeHelpUrl": "画像の直リンクまたは取得元ページの URL を検索します。ローカル取り込み画像は対象外です。",
   "advancedSearchOptions": "選択肢を検索…",
-  "advancedPluginExtendRestricted": "追加の高度な条件ではプラグインの詳細フィルターを使用できないため、プラグインのみ保持しました。詳細条件は検索バーの基本プラグインフィルターで設定してください。",
   "advancedPath": "パス",
   "pathqlHelp": "PathQL は Kabegame 独自のクエリパス。パス 1 本が 1 つの絞り込みで、コピー・共有・貼り戻しで同じ結果を再現できます。",
   "advancedCopy": "コピー",

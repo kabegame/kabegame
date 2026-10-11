@@ -819,3 +819,39 @@ V8 插件，数据来自 `api.manyacg.top/v1` 的 JSON 接口（无需登录、�
 | [ ] | 四类页面翻页与换页大小 | 桌面 CEF / Android | 各自翻到第 3 页，再从设置或 Android picker 修改页大小 | 列表立即重载；新页码按旧页首图位置换算；`?path=` 不含 `_kb_x` | 待人工走查 |
 | [ ] | 刷新、重启与浏览器后退 | Web / 桌面 CEF | 在非第 1 页刷新、重启或后退到另一视图 | 一律从第 1 页加载；筛选与排序仍由路由恢复 | 待人工走查 |
 | [ ] | 旧路径兼容 | Web / 桌面 CEF | 给 `gallery-path` 写入带 `_kb_x500x/3` 的旧值后重启 | 查询与排序正常恢复；页码为 1；页大小取当前设置 | 待人工走查 |
+
+## 插件细分条件改由 `plugin_im` join 提供（列表行不再带 metadata，细分可进 `~any` / `~not`）
+
+`plugin_entry_provider` 删除 `plugin_metadata` / `metadata` 两条 fields，只保留 `LEFT JOIN metadata AS plugin_im`。
+此前所有 `plugin/<id>/extend/...` 的 fetch 每行都带两份完整 metadata JSON，且 where 组引擎因分支改动 fields 拒绝细分条件
+（`changed fields`），前端只能把高级条件里的插件细分降级成裸插件。现在插件 `where` 读 `plugin_im.data` 并包 `COALESCE((…), 0)`，
+`list.sql` 自行 `JOIN metadata ON id = composed_result.metadata_id`（约定见 `cocs/provider-dsl/RULES.md` §3.3.2）。
+12 个插件同步改写并提版本（konachan 复用工作区未发布的 1.6.0），`engines.kabegame` 统一为 `>=4.5.1`；
+**旧版插件的细分筛选 / 列举会报 `no such column: plugin_metadata`**，需升级插件。前端移除降级分支与
+`gallery.advancedPluginExtendRestricted`。dev 库实测：konachan `extend/score/10+` 一页 100 行 1.5MB → 153KB，
+`extend/rating/Safe` 59 行 734KB → 78KB；`~any` Safe∪Explicit = 299（59 + 240），`~not` Safe = 3683。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 细分进组 / 行不带 metadata 单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib gallery_plugin_extend` | 2 个用例通过；还原 `fields` 后两个均失败（报 `changed fields` 与行里出现 `plugin_metadata`） | 已实测；覆盖 `~any` 并集、`~not` 取非、谓词恒为 NULL 时 `~not` 不误排除 |
+| [x] | 前端类型与单测 | 前端 | `check-kabegame` driver `--skip cargo`；`deno task test -c kabegame --skip cargo` | vue-tsc 0 error；29 个文件 254 个用例通过 | 已实测 |
+| [x] | 细分列举计数不变 | dev 实例 `127.0.0.1:7490` | 部署 12 个插件 → `refresh_plugins` → 对每个有数据的插件逐个 `pathql_list …/plugin/<id>/extend/<维度>` | 17 个细分（anihonet、danbooru、haowallpaper、konachan、pixai、yandere）的子项名与计数与改动前基线逐项一致 | 已实测；含 `GROUP BY metadata_id` 去重的 anihonet tag 类 |
+| [x] | 行体积下降 | dev 实例 | `pathql_fetch …/plugin/konachan/extend/score/10+/_kb_x100x/1` | 响应约 153KB，行内无 `metadata` / `plugin_metadata` 键 | 已实测 |
+| [ ] | 无数据插件的列举 SQL | dev 实例 | 对 heybox / miyoushe / twodwallpapers / ziworld（动态 extend）与 anime-pictures / pixiv（number_range / color）各 `pathql_list …/extend`（及其下一层） | 不报 SQL 错误；有数据时子项与计数与旧版一致 | dev 库无这 6 个插件的图；前 4 个只验证了 `extend` 的 SQL 能执行，后 2 个未执行，均未做数据比对 |
+| [ ] | 高级条件里选插件细分 | 桌面 CEF | 高级查询 → 追加条件 → 插件 → 选 konachan 的 rating → Safe | 不再弹出「已仅保留插件」提示；命中数 = 59；再加一条 Explicit 的「或」组 = 299 | 前端界面未实测 |
+| [ ] | 高级条件里取非细分 | 桌面 CEF | 同上，把细分条件放进「非」 | 命中数 = 全部 − 59，metadata 缺字段的图不被排除 | 前端界面未实测 |
+| [ ] | 旧版插件兼容提示 | 桌面 CEF | 用未升级的旧插件进细分筛选 | 报错可见（`no such column: plugin_metadata`），升级插件后恢复 | 已在 dev 实例确认旧插件会报该错；界面表现未实测 |
+
+## anihonet 按原站 `rel` 区分 category / tag（插件 1.9.0）
+
+anihonet 详情页的 `span.tagst a` 同时包含目录与标签：目录链接的 `rel="category tag"`，
+普通标签的 `rel="tag"`。插件不再按文案猜测 quality / work / character / type，metadata schema 5
+直接保存 `categories` / `tags`，PathQL 细分也改为 `category` / `tag` 两层。旧 schema 因没有
+保存 `rel`，迁移时以 `/category/` URL 作为兼容依据。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 榜单爬取 metadata | dev CLI | 运行 anihonet 日榜第 1 页，查看 `/post/62467` metadata | `高画質画像` 仅在 `categories`；`【学マス】サポートカード…`、角色和作品链接仅在 `tags`；每项保留 `rel` | 1.9.0 任务 completed，91/91 张有 metadata；目标帖实测 1 category + 5 tags |
+| [x] | 旧 metadata 迁移 | 迁移脚本 | 分别传入 schema 4 的扁平 `tags`、仅旧四桶数据 | 输出 schema 5；`/category/` 进 `categories`，其余进 `tags`；去重且保留顺序 | Deno 直接调用迁移，扁平/四桶/schema 5 幂等三组断言通过 |
+| [x] | 细分目录 | PathQL + dev DB | 展开 anihonet 插件细分，并在 schema 5 任务数据上核对分组 SQL | 顶层只有 `category` / `tag`；两层的子项、计数和图片集合与 metadata 一致 | PathQL 顶层仅两项；新任务中 `高画質画像` 50 个 metadata，支援卡 2 个 metadata / 2 张图 |
+| [x] | 插件详情模板 | 离线模板渲染 | 用 `/post/62467` 的真实 metadata 渲染 600px 截图 | 仅显示「目录」「标签」两组，外链可正常打开 | 已目视核对 category / tag 分组、换行和链接文案 |

@@ -8,27 +8,17 @@
         }
     },
     "query": {
-        // Plugin extension providers often need crawl-time metadata. Resolve it
-        // from images.metadata_id.
+        // 契约：插件 provider 的 where 通过 `plugin_im.data` 读取爬取期 metadata。
+        // 这里只 join、不投影：列表行不带 metadata（每行数 KB JSON），插件分支也因此只贡献
+        // where + LEFT JOIN，能进 ~any / ~not 组。list.sql 拿到的 ${composed} 只有 images.*，
+        // 需自行 JOIN metadata ON id = composed_result.metadata_id。见 RULES §3.3.2。
         "join": [{
             "kind": "LEFT",
             "table": "metadata",
             "as": "plugin_im",
             "on": "images.metadata_id = plugin_im.id",
             "in_need": true
-        }],
-        "fields": [
-            {
-                "sql": "plugin_im.data",
-                "as": "plugin_metadata",
-                "in_need": true
-            },
-            {
-                "sql": "plugin_im.data",
-                "as": "metadata",
-                "in_need": true
-            }
-        ]
+        }]
     },
     "list": {
         "${extend.name}": {
