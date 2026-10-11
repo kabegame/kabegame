@@ -184,16 +184,18 @@
 前端消费约定：
 
 - 侧栏过滤树对 `{维度路径}/_kb_co` 调 `list(withCount=false)`，直接把每个 child 的 `meta.count` 挂到树节点；
-  `_kb_co` 必须在维度路径末尾，清掉画廊根排序后再 list。插件扩展由插件 DSL 提供，没有统一的
-  `meta.count`，因此仍用 `withCount=true` 的 `total`。
+  `_kb_co` 必须在维度路径末尾，清掉画廊根排序后再 list。插件扩展（`plugin/<id>/extend/...`）同样
+  `withCount=false`，计数读 `meta.count ?? meta.image_count`（插件 router 惯用 `image_count`）；两者都没有的子项
+  （如 plain 标题行）不显示计数，也不补 COUNT。插件写可选的扩展 router 时，应在 list SQL 里 `GROUP BY` 并把计数放进
+  `meta.image_count`。
 - 面板顶层直接是该维度的子项（年份、区间、插件……），没有维度根，也没有「任意」行；清除维度用 chip 右上角的叉号。
   因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
 - 侧栏只建立一个 `dataChangeHub` 订阅。可见时命中相关批次就重列根与所有已加载分支（`model.reload()`）；不可见时只记脏，
   下次打开补刷。插件增删改由 `pluginStore` 的 `id:version` 签名触发插件分支刷新，并使高级查询的纯净候选缓存失效。
 - 高级查询弹窗是 diff 模式：对每个候选仍逐项计算应用草稿后的预测计数，显示 `+N` / `−N`。它只在面板打开、
   草稿变化或新候选载入时重算，不订阅数据变更；候选列表有纯净路径缓存，数据变化只使缓存失效，不立即重查。
-- Android picker 与头部 `GalleryFilterControl` 也列举 `…/_kb_co` 并读取 `meta.count`；插件扩展同样读取
-  `withCount=true` 的 `total`。
+- Android picker 与头部 `GalleryFilterControl` 也列举 `…/_kb_co` 并读取 `meta.count`；Android picker 的插件扩展
+  选项不显示计数，同样 `withCount=false`。
 
 | 维度 | 列举 SQL 所在 | 说明 |
 | --- | --- | --- |
@@ -210,7 +212,8 @@
   unknown `size IS NULL OR size <= 0`；宽高比整数交叉乘法 + `aspect_ratio IS NOT NULL`；kind 同 `gallery_media_type_provider`），
   改一处同步另一处。e2e `listed_counts` 对每个列举项断言 `meta.count == count(<子路径>)`，覆盖根、`hide/` 与已选其它维度的上下文。
 - 补 0 的维度（kind / 大小 / 宽高比）总是列出全部固定项；日期、格式、插件只列有图的子项。
-- 插件扩展（`plugin/<id>/extend/...`）由插件自己贡献 provider，不在此列，使用 `list_with_count` 的 `total`。
+- 插件扩展（`plugin/<id>/extend/...`）由插件自己贡献 provider，不在此列；计数来自插件 router 的 `meta.image_count`，
+  宿主不再用 `list_with_count` 逐项补 COUNT。
 - `_kb_co` 令维度分组 SQL 不再携带画廊根 `ORDER BY`；日期根仍保留 `dates_provider` 自己为显示顺序贡献的
   `crawled_at` 排序。prod 2.5 万图库 14 个面板合计 271ms → 208ms，大小 / 宽高比 / 媒体类型约快
   40%～50%，日期与插件基本持平。

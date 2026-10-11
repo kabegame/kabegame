@@ -755,8 +755,8 @@ metadata 迁移不再原地更新 `data` / `plugin_version`：内容变化时插
 PathQL runtime 新增 `_kb_` 全局前缀表：`_kb_fc` 续接过滤维度、`_kb_desc` 翻转排序、
 `_kb_x<N>x/<页>` 显式分页，`_kb_co` 以透传方式只清空排序。旧画廊续接段不兼容；原始
 `images://x<N>x/<页>` 与 `albums://` / `tasks://` 等 scheme 自己的分页语法不变。过滤树、Android picker
-和头部过滤控件改为列举 `{维度路径}/_kb_co` 并读取 `meta.count`；插件扩展继续读取
-`withCount=true` 的 `total`。侧栏用一个 `dataChangeHub` 订阅重列根与已加载分支，高级查询 diff
+和头部过滤控件改为列举 `{维度路径}/_kb_co` 并读取 `meta.count`；插件扩展也 `withCount=false`，
+读插件 router 的 `meta.image_count`，缺失不显示计数。侧栏用一个 `dataChangeHub` 订阅重列根与已加载分支，高级查询 diff
 只在打开或草稿变化时逐候选预测。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
@@ -777,13 +777,14 @@ PathQL runtime 新增 `_kb_` 全局前缀表：`_kb_fc` 续接过滤维度、`_k
 | [ ] | 下载中面板计数刷新 | 桌面 CEF / Android | 保持 chip 面板打开并开始下载 | `dataChangeHub` 批次后顶层与已加载分支计数更新 | 未跑真实下载（会往 prod 库加图）。同一过滤路径（`batch.images.size > 0`）已由隐藏操作带来的 `images-change` 批次实测触发刷新；真实下载留待人工确认 |
 | [x] | `hide` / `no-album` 画册成员刷新 | 桌面 CEF / Android | 在对应上下文增删画册成员、隐藏或取消隐藏图片 | 命中 album 相关批次后计数刷新；面板不可见时重开补刷 | 画册详情：面板开着时加入 / 移出收藏，一个批次后「2–5MB」0→1→0、根 13→14→13；面板关着时变更不发请求，重开即为新值。任务详情（`hide/` 上下文）隐藏 / 取消隐藏：5–10MB 333→332→333。`no-album` 走同一 `hasAlbumSensitiveContext` 分支，未单独点。每次隐藏会刷新两轮（见下方「hub 首发批次」一行） |
 | [x] | 高级查询 diff 时机 | 桌面 CEF / Android | 打开高级查询、修改草稿、关闭期间制造数据变化后重开 | `+N` / `−N` 只在打开或改草稿时变化；关闭期间不重查，重新打开能看到新候选 | 任务页：首开 1 条纯净列举 + 8 条候选预测；关闭重开不再列举（缓存）只重算预测；面板开着时隐藏一张图，diff 树零请求、显示保持旧值；关闭后重开重新列举、计数随新数据变化。画廊重上下文下「非 < 512KB」预测 −2316，应用后总数 12266 与预测一致 |
-| [ ] | Android picker 与头部过滤控件 | Android / 桌面 CEF | 打开 Android picker 与头部 `GalleryFilterControl` 的插件、时间、媒体类型分组 | 均读取 `meta.count`，计数与侧栏一致 | 桌面 `isCompact` 恒为 false，两处入口都不可达；代码复核：均列举 `{prefix}{维度}/_kb_co` 读 `meta.count`、插件扩展传 `withCount=true`，路径与上面已实测的侧栏列举相同。需 Android 真机确认 |
+| [ ] | Android picker 与头部过滤控件 | Android / 桌面 CEF | 打开 Android picker 与头部 `GalleryFilterControl` 的插件、时间、媒体类型分组 | 均读取 `meta.count`，计数与侧栏一致 | 桌面 `isCompact` 恒为 false，两处入口都不可达；代码复核：均列举 `{prefix}{维度}/_kb_co` 读 `meta.count`；picker 插件扩展不显示计数，已改为 `withCount=false`，路径与上面已实测的侧栏列举相同。需 Android 真机确认 |
 | [x] | 翻页与倒序 | 桌面 CEF / Android | 切换页大小、翻到多页并切换倒序 | 路径使用 `[_kb_desc]/_kb_x<N>x/<页>`，行顺序、页码与总数正确 | 任务页 UI：下一页发 `…/sort/by-time/_kb_x100x/2`，切倒序发 `…/_kb_desc/_kb_x100x/2`；37 页正序 / 倒序首尾互逆，末页 21 行 |
 | [x] | 壁纸轮播随机模式 | 桌面 | 开启随机轮播并跨多轮取图 | 随机排序路径正常，未受排序链清空与全局段迁移影响 | 未改实际壁纸，在 app 内跑轮播器同款路径：`gallery/hide/all/_kb_x100x` 列出 247 页 = ⌈总数/100⌉（35ms），任取一页 100 行；顺序模式 `bigger_crawler_time/<t>/l100l` 按 crawled_at, id 严格递增且全在标记之后，画册 `bigger_order/0/l100l` 按 album_order 递增 |
 | [x] | VD 各目录 | 桌面虚拟盘 | 依次打开按格式、按名称、畅游与页号目录 | 目录列举与取图正常；本地分页段保持原语法 | 未挂载虚拟盘，app 内遍历 `images://vd/i18n-zh_CN` 全部 10 个目录（每层取前 2 个子目录下钻）：页号层页数均 = ⌈总数/100⌉、第 1 页行数正确；按格式 / 按名称 / 按畅游 / 按时间三层均正常。`按插件/<无扩展插件>/Extend` 列举报 provider 未注册，改前 HEAD CLI 同样报错，为既有问题 |
 | [x] | MCP 新语法读取 | 桌面 MCP | 用 `list_pathql_entry` 发现路径，再追加 `/_kb_desc/_kb_x100x/1` 读取 | `_kb_*` 不出现在 child 列表但可显式续接；分页护栏正常放行 | HTTP 调 7490/mcp：instructions 旧语法 0 处；`list_pathql_entry` 各层无 `_kb_*` 子项，叶子提示追加 `/_kb_x100x/1`；`_kb_desc/_kb_x100x/1`、`_kb_fc` 组合、`sort/by-size/_kb_desc/_kb_x50x/3` 均可读，`images://x100x/1` 不变；旧 `desc/x100x/1` 为 resource_not_found，无分页读取为 pagination_required |
 | [x] | 面板取数性能 A/B | prod 库（2.5 万图）dev app | 同一后端、同一库，交替跑旧模式（`list(withCount=true)` + 每行一条 `pathql_entry`）与新模式（`{维度}/_kb_co` + 2 条根 COUNT，根节点后已去掉）各 7 轮取中位数 | 新模式不慢于旧模式，计数逐项一致 | 日期年 39→14ms、展开月 349→28ms、展开日 508→29ms、媒体类型 30→10ms、image 格式 87→14ms、大小 63→9ms、宽高比 58→8ms、插件 10→2.5ms；IPC 次数 4～19 → 1～3 |
-| [ ] | 插件扩展分支耗时 | prod 库，画廊重上下文 | 展开 konachan → score | 可接受的展开耗时 | 1 次 `withCount=true` 列举 1.8s：7 个子项在后端串行各跑一条约 250ms 的 COUNT。未改动部分，列为后续优化（后端并行 COUNT 或插件 DSL 自带分组计数） |
+| [x] | 插件扩展分支耗时 | prod 库，画廊重上下文 | 展开 konachan → score | 可接受的展开耗时 | 改前 1 次 `withCount=true` 列举 1.8s：7 个子项在后端串行各跑一条约 250ms 的 COUNT，而 router 的分组 SQL 已在 `meta.image_count` 里给出计数。改为 `withCount=false` 读 `meta.image_count` 后，同一 dev app、画廊重上下文（搜索取反 + 横屏）同路径对比（第 3 轮）：展开 konachan 44→1ms、score 150→24ms、rating 65→22ms；score 6 档、rating 2 档的 `image_count` 与旧 `total` 逐项一致 |
+| [x] | 插件扩展缺计数不显示 | 桌面 CEF / Android | 侧栏插件面板展开 konachan，再展开 score / rating；高级查询条件的插件面板做同样操作 | 侧栏 `score` / `rating` 标题行没有 `(…)`，子项显示 `image_count`；每层 1 条 `withCount=false` 列举；高级查询仍显示 `+N` / `−N` | dev app + debug ingest：侧栏每层 1 条 `withCount=false` 列举（3 / 38 / 32ms），标题行无计数，`5+ (22)`、`Safe (14)` 等正常；高级查询插件面板列举同为 `withCount=false`（走纯净缓存），`score` / `rating` / `Safe` 显示 `+209` 预测 |
 | [ ] | hub 首发批次 | dev app | 面板打开时隐藏一张图 | 一个操作刷新一轮 | 实测两轮：`publishLocal` 当场 drain 但不开节流窗口，随后后端 `images-change`（seq 不同不去重）又作为首发批次立刻 drain。每轮约 3 条、各几毫秒；列为 `dataChangeHub` 后续优化 |
 | [x] | 去掉「任意」行与维度根 | 桌面 CEF / Android | 打开各 chip 面板与高级查询条件里的维度面板；展开、选中某项后重开，再点 chip 右上角的叉号 | 面板顶层直接是维度子项，没有「任意」行和维度根；打开面板只发 1 条 `_kb_co` 列举、0 条 COUNT；选中项的祖先链自动展开，其余不展开；叉号清除该维度 | 原先「任意」与维度根同为 `…/all`，同一条 COUNT 发两次，现两者都删掉。dev app + debug ingest：任务详情大小面板顶层即 8 个区间，1 条列举 5.6ms、0 COUNT；时间面板顶层为年份且不自动展开，选中某日后重开，年、月自动展开（3 条列举）；叉号清除后 chip 回到未选中。画廊重上下文插件面板 1 条列举 170ms（原来另有 2 条各约 250–290ms 的根 COUNT），展开 konachan 扩展正常。高级查询条件的尺寸面板顶层即 8 个候选，`+N` / `−N` 正常，没有根节点的预测 COUNT |
 

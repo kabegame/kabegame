@@ -132,6 +132,12 @@ export function useFacetNodeCounts(options: {
     return Math.sign(deltaOf(key) ?? 0);
   }
 
+  /** 侧栏模式下没有计数（插件扩展未给 `meta.count` / `meta.image_count`）就不渲染计数。 */
+  function hasCountOf(key: string): boolean {
+    if (isDeltaMode.value) return true;
+    return (model.nodeByKey(key)?.element.count ?? null) !== null;
+  }
+
   function isEmptyOf(key: string): boolean {
     if (isDeltaMode.value) return deltaOf(key) === 0;
     const count = model.nodeByKey(key)?.element.count ?? null;
@@ -142,5 +148,5 @@ export function useFacetNodeCounts(options: {
     return isDeltaMode.value ? (stateOf(key)?.loading ?? false) : false;
   }
 
-  return { isDeltaMode, displayOf, deltaSignOf, isEmptyOf, loadingOf, refreshAll };
+  return { isDeltaMode, displayOf, hasCountOf, deltaSignOf, isEmptyOf, loadingOf, refreshAll };
 }

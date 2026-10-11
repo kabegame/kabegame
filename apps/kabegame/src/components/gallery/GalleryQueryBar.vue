@@ -1185,9 +1185,9 @@ async function ensurePluginExtendLoaded(pluginId: string, extendPath = "") {
   await ensureLazyLoaded(pluginExtendScope(id, path), async (prefix) => {
     try {
       const providerPath = pluginExtendPathForProvider(path);
+      // picker 选项不显示扩展计数，不要 withCount
       const entries = await listProviderDirs(
         `${prefix}plugin/${encodeURIComponent(id)}/extend${providerPath ? `/${providerPath}` : ""}/_kb_co`,
-        true,
       );
       if (prefix !== filterContextPrefix.value) return;
       pluginExtendChildren.value = {

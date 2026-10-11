@@ -31,7 +31,7 @@
 
 ### Optimized
 - 优化了慢sql，标签查询变快，所有画廊查询变快（30%）
-- 筛选面板计数变快：每展开一层只查一次就带回所有选项的数量，不再逐项计数（2.5 万图库上展开日期的月份 349ms→28ms、展开日 508ms→29ms，大小、宽高比、格式等面板快 3～8 倍）；面板打开时不再额外查询总数
+- 筛选面板计数变快：每展开一层只查一次就带回所有选项的数量，不再逐项计数（2.5 万图库上展开日期的月份 349ms→28ms、展开日 508ms→29ms，大小、宽高比、格式等面板快 3～8 倍）；面板打开时不再额外查询总数；插件扩展（如 konachan 的分数、分级）展开不再逐项计数，「分数」「分级」这类标题行不再显示计数
 
 ### Changed
 - `kabegame-cli` 数据操作现在优先经 IPC 交给正在运行的同数据目录主程序，连不上时自动回退本地执行，也可用 `--via` 强制选择。
@@ -56,7 +56,7 @@
 ### Changed
 - PathQL 排序语法收敛：排序项只剩 `asc` / `desc`，删除条目级 `clear` 与 `revert`；全局指令改为 `{all: revert|clear}`。需要换掉排序链的路由改为先委托 `kb_co_provider` 清空再追加
 - 画廊续接段改名并全局化（`filter_comb` → `_kb_fc`、`desc` → `_kb_desc`、`x<N>x` → `_kb_x<N>x`），不兼容旧写法；前端分页一律写出 `_kb_x<N>x`，不再省略默认页大小
-- 画廊过滤树改为每层一次 `{维度路径}/_kb_co` 列举、读 `meta.count`（插件扩展读 `withCount=true` 的 `total`），刷新收敛为一个 `dataChangeHub` 订阅；高级查询 diff 模式只在打开或草稿变化时逐候选预测，不订阅事件
+- 画廊过滤树改为每层一次 `{维度路径}/_kb_co` 列举、读 `meta.count`（插件扩展读插件 router 的 `meta.count` / `meta.image_count`，缺失不显示计数，不再 `withCount=true` 逐项 COUNT），刷新收敛为一个 `dataChangeHub` 订阅；高级查询 diff 模式只在打开或草稿变化时逐候选预测，不订阅事件
 
 ### Fixed
 - `get_album_preview`（IPC / web）原来请求已不存在的 `album/<id>/order` 路径，恒为 path not found；改用 `sort/by-album-order/_kb_x<N>x/1`

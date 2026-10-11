@@ -52,8 +52,12 @@ describe("facetTreeSource 分组计数枚举", () => {
     ]);
   });
 
-  it("插件扩展使用 withCount total，不把缺失的 meta.count 当分组计数", async () => {
-    pathqlList.mockResolvedValue([{ name: "rating", meta: { isLeaf: true }, total: 9 }]);
+  it("插件扩展只列举一次，计数读 meta.count / meta.image_count，缺失为 null", async () => {
+    pathqlList.mockResolvedValue([
+      { name: "rating", meta: { isLeaf: true, image_count: 9 }, total: 99 },
+      { name: "score", meta: { count: 4 }, total: null },
+      { name: "title", meta: { plain: true }, total: null },
+    ]);
     const source = createSource();
 
     const nodes = await source.dataSource.getChildren({
@@ -62,17 +66,12 @@ describe("facetTreeSource 分组计数枚举", () => {
       version: "1.0.0",
     } as FacetNode);
 
-    expect(pathqlList).toHaveBeenCalledWith("gallery/plugin/demo/extend/_kb_co", true);
+    expect(pathqlList).toHaveBeenCalledWith("gallery/plugin/demo/extend/_kb_co", false);
+    const base = { kind: "plugin-extend", pluginId: "demo" };
     expect(nodes).toEqual([
-      {
-        kind: "plugin-extend",
-        pluginId: "demo",
-        name: "rating",
-        extendPath: "rating",
-        isLeaf: true,
-        isPlain: false,
-        count: 9,
-      },
+      { ...base, name: "rating", extendPath: "rating", isLeaf: true, isPlain: false, count: 9 },
+      { ...base, name: "score", extendPath: "score", isLeaf: false, isPlain: false, count: 4 },
+      { ...base, name: "title", extendPath: "title", isLeaf: false, isPlain: true, count: null },
     ]);
   });
 });

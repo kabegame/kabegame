@@ -89,18 +89,18 @@ export function createGalleryFacetSource(
   // diff 模式走纯净缓存；侧栏每层只列举一次，计数直接读 meta.count。
   const deltaMode = computed(() => !!ctx.countBaseline);
   const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
-  const listDirs = (path: string, withCount = false) => {
-    if (deltaMode.value && !withCount) return listProviderDirsPure(path);
-    return listProviderDirs(joinProviderPath(path, "_kb_co"), withCount);
-  };
+  const listDirs = (path: string) =>
+    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(joinProviderPath(path, "_kb_co"), false);
 
   function groupedCount(entry: ProviderChildDir): number | null {
     const count = entry.meta?.count;
     return typeof count === "number" && Number.isFinite(count) ? count : null;
   }
 
+  /** 插件 router 惯用 `meta.image_count`，宿主维度用 `meta.count`；都没有就不显示，不补 COUNT。 */
   function extensionCount(entry: ProviderChildDir): number | null {
-    return typeof entry.total === "number" && Number.isFinite(entry.total) ? entry.total : null;
+    const count = entry.meta?.count ?? entry.meta?.image_count;
+    return typeof count === "number" && Number.isFinite(count) ? count : null;
   }
 
   const timeLabels: ComputedRef<TimeMenuScopeLabels> = computed(() =>
@@ -328,10 +328,7 @@ export function createGalleryFacetSource(
             }));
           }
           case "plugin": {
-            const entries = await listDirs(
-              listPathForSegment(`plugin/${encodeURIComponent(node.pluginId)}/extend`),
-              true,
-            );
+            const entries = await listDirs(listPathForSegment(`plugin/${encodeURIComponent(node.pluginId)}/extend`));
             return entries.map((entry) => ({
               kind: "plugin-extend",
               pluginId: node.pluginId,
@@ -344,7 +341,7 @@ export function createGalleryFacetSource(
           }
           case "plugin-extend": {
             if (node.isLeaf) return [];
-            const entries = await listDirs(listPathForSegment(pluginExtendSegment(node)), true);
+            const entries = await listDirs(listPathForSegment(pluginExtendSegment(node)));
             return entries.map((entry) => ({
               kind: "plugin-extend",
               pluginId: node.pluginId,

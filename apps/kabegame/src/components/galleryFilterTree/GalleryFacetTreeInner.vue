@@ -19,6 +19,7 @@
           {{ source.descriptor(element).name }}
         </span>
         <span
+          v-if="counts.hasCountOf(keyOf(element))"
           class="flex-none text-[var(--anime-text-secondary)] text-xs"
           :class="{
             '!text-[var(--el-color-error)]': counts.deltaSignOf(keyOf(element)) < 0,

@@ -25,6 +25,8 @@ export interface ProviderChildDir {
     isLeaf?: boolean;
     plain?: boolean;
     count?: number;
+    /** 插件 router 惯用的分组计数字段。 */
+    image_count?: number;
   } | null;
   total: number | null;
 }
