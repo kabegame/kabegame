@@ -1,11 +1,9 @@
 import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
 import type { usePluginStore } from "@/stores/plugins";
-import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { GALLERY_ASPECT_BUCKETS, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
 import { buildTimeMenuScopeLabels, type TimeMenuScopeLabels } from "@/utils/galleryTimeFilterMenu";
 import {
-  countProviderPath,
   dateFilterSegment,
   isProviderLeaf,
   isProviderPlain,
@@ -14,19 +12,18 @@ import {
   listProviderDirs,
   listProviderDirsPure,
   normalizeProviderPath,
-  unknownOrMatchingPlugin,
   type GalleryFilterTreeContext,
+  type ProviderChildDir,
 } from "./context";
 import type { TreeDataSource } from "@/components/tree/types";
 
 /**
- * 画廊过滤树的节点数据：旧 9 个特化组件（Any/Date/DateChild/MediaType/Size/
+ * 画廊过滤树的节点数据：旧特化组件（Date/DateChild/MediaType/Size/
  * Aspect/Plugins/Plugin/PluginExtend）的 union 化。枚举与描述逻辑收敛到
- * createGalleryFacetSource，行为逐一对照旧组件迁移。
+ * createGalleryFacetSource，行为逐一对照旧组件迁移。树里没有维度根，也没有「任意」行：
+ * 顶层直接是该维度的子项，清除维度走 chip 右上角的叉号。
  */
-export type FacetNode =
-  | { kind: "any" }
-  | { kind: "dim"; dimension: GalleryBrowseDimension }
+export type FacetNode = (
   | { kind: "date"; segments: string[] }
   | { kind: "media-kind"; mediaKind: "image" | "video" }
   | { kind: "media-format"; mediaKind: "image" | "video"; format: string }
@@ -40,7 +37,8 @@ export type FacetNode =
       extendPath: string;
       isLeaf: boolean;
       isPlain: boolean;
-    };
+    }
+) & { count?: number | null };
 
 export interface FacetDescriptor {
   name: string;
@@ -51,8 +49,6 @@ export interface FacetDescriptor {
   active: boolean;
   /** 行点击要应用的过滤；维度根等不可选行为 null。 */
   filterOnSelect: GalleryFilter | null;
-  /** images-change 的节点级过滤（plugin 系按 pluginIds 命中；无则全收）。 */
-  imagesFilter?: (payload: ImagesChangePayload) => boolean;
 }
 
 /** 旧 SizeProviderChildrenNode 的本地桶表，原样搬入。 */
@@ -67,14 +63,6 @@ const SIZE_BUCKETS: Array<{ range: string; labelKey: string }> = [
   { range: "50MB-", labelKey: "filterSize_gte50m" },
 ];
 
-const DIMENSION_LABEL_KEYS: Record<GalleryBrowseDimension, string> = {
-  date: "gallery.filterByTime",
-  mediaType: "gallery.filterByMediaType",
-  size: "gallery.filterBySize",
-  aspect: "gallery.filterByAspect",
-  plugin: "gallery.filterByPlugin",
-};
-
 export interface GalleryFacetSourceDeps {
   t: ReturnType<typeof useI18n>["t"];
   locale: Ref<unknown>;
@@ -83,13 +71,9 @@ export interface GalleryFacetSourceDeps {
 
 export interface GalleryFacetSource {
   dataSource: TreeDataSource<FacetNode>;
-  /** 根节点列表：「任意」+ 传入维度的根。 */
-  roots(dimensions: GalleryBrowseDimension[]): FacetNode[];
+  /** 顶层即该维度的子项；没有维度根，也没有「任意」行（清除走 chip 叉号）。 */
+  roots(dimension: GalleryBrowseDimension): Promise<FacetNode[]>;
   descriptor(node: FacetNode): FacetDescriptor;
-  /** 分支子项重枚举对哪些事件敏感（含 plugin-* 只作用于插件列表分支）。 */
-  childrenRefreshFilter(node: FacetNode): (event: string, payload: unknown) => boolean;
-  /** 计数刷新对哪些事件敏感（plugin-* 一律不刷计数，与旧行为一致）。 */
-  countRefreshFilter(node: FacetNode): (event: string, payload: unknown) => boolean;
 }
 
 /**
@@ -102,10 +86,22 @@ export function createGalleryFacetSource(
 ): GalleryFacetSource {
   const { t, pluginStore } = deps;
 
-  // 旧 useProviderTreeList 的显式版：diff 模式走纯净缓存列表，侧栏减格 + 带 count。
+  // diff 模式走纯净缓存；侧栏每层只列举一次，计数直接读 meta.count。
   const deltaMode = computed(() => !!ctx.countBaseline);
   const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
-  const listDirs = (path: string) => (deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(path));
+  const listDirs = (path: string, withCount = false) => {
+    if (deltaMode.value && !withCount) return listProviderDirsPure(path);
+    return listProviderDirs(joinProviderPath(path, "_kb_co"), withCount);
+  };
+
+  function groupedCount(entry: ProviderChildDir): number | null {
+    const count = entry.meta?.count;
+    return typeof count === "number" && Number.isFinite(count) ? count : null;
+  }
+
+  function extensionCount(entry: ProviderChildDir): number | null {
+    return typeof entry.total === "number" && Number.isFinite(entry.total) ? entry.total : null;
+  }
 
   const timeLabels: ComputedRef<TimeMenuScopeLabels> = computed(() =>
     buildTimeMenuScopeLabels(t, String(deps.locale.value)),
@@ -149,9 +145,6 @@ export function createGalleryFacetSource(
 
   function countSegment(node: FacetNode): string {
     switch (node.kind) {
-      case "any":
-      case "dim":
-        return "all";
       case "date":
         return ["date", ...node.segments].join("/");
       case "media-kind":
@@ -172,10 +165,6 @@ export function createGalleryFacetSource(
 
   function filterOnSelect(node: FacetNode): GalleryFilter | null {
     switch (node.kind) {
-      case "any":
-        return { type: "all" };
-      case "dim":
-        return null;
       case "date":
         return { type: "date", segment: dateFilterSegment(node.segments) };
       case "media-kind":
@@ -199,10 +188,6 @@ export function createGalleryFacetSource(
 
   function nodeName(node: FacetNode): string {
     switch (node.kind) {
-      case "any":
-        return t("gallery.filterAny");
-      case "dim":
-        return t(DIMENSION_LABEL_KEYS[node.dimension]);
       case "date":
         return dateLabel(node.segments);
       case "media-kind":
@@ -224,20 +209,6 @@ export function createGalleryFacetSource(
   function defaultExpanded(node: FacetNode): boolean {
     const filter = ctx.filter.value;
     switch (node.kind) {
-      case "dim":
-        switch (node.dimension) {
-          case "date":
-            return filter.type === "date";
-          case "mediaType":
-            return filter.type === "media-type";
-          case "size":
-            return filter.type === "size";
-          case "aspect":
-            return filter.type === "aspect";
-          case "plugin":
-            return filter.type === "plugin";
-        }
-        return false;
       case "date": {
         const activeSegment = filter.type === "date" ? filter.segment : "";
         const current = dateFilterSegment(node.segments);
@@ -258,21 +229,48 @@ export function createGalleryFacetSource(
     }
   }
 
-  function imagesFilterOf(node: FacetNode): FacetDescriptor["imagesFilter"] {
-    if (node.kind === "plugin" || node.kind === "plugin-extend") {
-      const matches = unknownOrMatchingPlugin(node.pluginId);
-      return (payload) => matches(payload.pluginIds);
+  /** 列出某维度的第一层，即面板顶层。 */
+  async function listDimension(dimension: GalleryBrowseDimension): Promise<FacetNode[]> {
+    switch (dimension) {
+      case "date": {
+        const entries = await listDirs(listPathForSegment("date"));
+        return entries
+          .filter((entry) => /^(\d{4})y$/.test(entry.name))
+          .map((entry) => ({ kind: "date", segments: [entry.name], count: groupedCount(entry) }));
+      }
+      case "mediaType": {
+        const entries = await listDirs(listPathForSegment("media-type"));
+        return entries
+          .filter((entry) => entry.name === "image" || entry.name === "video")
+          .map((entry) => ({
+            kind: "media-kind",
+            mediaKind: entry.name as "image" | "video",
+            count: groupedCount(entry),
+          }));
+      }
+      case "size": {
+        const entries = await listDirs(listPathForSegment("size"));
+        return entries.map((entry) => ({ kind: "size", range: entry.name, count: groupedCount(entry) }));
+      }
+      case "aspect": {
+        const entries = await listDirs(listPathForSegment("aspect"));
+        return entries.map((entry) => ({ kind: "aspect", range: entry.name, count: groupedCount(entry) }));
+      }
+      case "plugin": {
+        const entries = await listDirs(listPathForSegment("plugin"));
+        return entries.map((entry) => ({
+          kind: "plugin",
+          pluginId: entry.name,
+          version: pluginVersion(entry.name),
+          count: groupedCount(entry),
+        }));
+      }
     }
-    return undefined;
   }
 
   const dataSource: TreeDataSource<FacetNode> = {
     getKey(node) {
       switch (node.kind) {
-        case "any":
-          return "any";
-        case "dim":
-          return `dim:${node.dimension}`;
         case "date":
           return `date:${node.segments.join("/")}`;
         case "media-kind":
@@ -292,13 +290,10 @@ export function createGalleryFacetSource(
     },
     hasChildren(node) {
       switch (node.kind) {
-        case "any":
         case "media-format":
         case "size":
         case "aspect":
           return false;
-        case "dim":
-          return true;
         case "date":
           return node.segments.length < 3;
         case "media-kind":
@@ -312,71 +307,30 @@ export function createGalleryFacetSource(
     async getChildren(node): Promise<FacetNode[]> {
       try {
         switch (node.kind) {
-          case "dim":
-            switch (node.dimension) {
-              case "date": {
-                const entries = await listDirs(`${listPathForSegment("date")}/`);
-                return entries
-                  .filter((entry) => /^(\d{4})y$/.test(entry.name))
-                  .map((entry) => ({ kind: "date", segments: [entry.name] }));
-              }
-              case "mediaType":
-                return [
-                  { kind: "media-kind", mediaKind: "image" },
-                  { kind: "media-kind", mediaKind: "video" },
-                ];
-              case "size":
-                return SIZE_BUCKETS.map((b) => ({ kind: "size", range: b.range }));
-              case "aspect":
-                return GALLERY_ASPECT_BUCKETS.map((b) => ({
-                  kind: "aspect",
-                  range: b.range,
-                }));
-              case "plugin": {
-                const entries = await listDirs(`${listPathForSegment("plugin")}/`);
-                // diff 模式列的是纯净全集，不按绝对数量过滤（预测为 0 的项灰显但仍可选）；
-                // 侧栏保持「只列有图的插件」。
-                let ids: string[];
-                if (deltaMode.value) {
-                  ids = entries.map((entry) => entry.name).filter(Boolean);
-                } else {
-                  const groups = await Promise.all(
-                    entries.map(async (entry) => ({
-                      pluginId: entry.name,
-                      count:
-                        typeof entry.total === "number"
-                          ? entry.total
-                          : await countProviderPath(ctx.pathForSegment(`plugin/${encodeURIComponent(entry.name)}`)),
-                    })),
-                  );
-                  ids = groups.filter((group) => group.pluginId && group.count > 0).map((group) => group.pluginId);
-                }
-                return ids.map((pluginId) => ({
-                  kind: "plugin",
-                  pluginId,
-                  version: pluginVersion(pluginId),
-                }));
-              }
-            }
-            return [];
           case "date": {
             const pattern = dateChildPattern(node.segments);
-            const entries = await listDirs(`${listPathForSegment(["date", ...node.segments].join("/"))}/`);
+            const entries = await listDirs(listPathForSegment(["date", ...node.segments].join("/")));
             return entries
               .filter((entry) => !pattern || pattern.test(entry.name))
-              .map((entry) => ({ kind: "date", segments: [...node.segments, entry.name] }));
+              .map((entry) => ({
+                kind: "date",
+                segments: [...node.segments, entry.name],
+                count: groupedCount(entry),
+              }));
           }
           case "media-kind": {
-            const entries = await listDirs(`${listPathForSegment(`media-type/${node.mediaKind}`)}/`);
+            const entries = await listDirs(listPathForSegment(`media-type/${node.mediaKind}`));
             return entries.map((entry) => ({
               kind: "media-format",
               mediaKind: node.mediaKind,
               format: entry.name,
+              count: groupedCount(entry),
             }));
           }
           case "plugin": {
             const entries = await listDirs(
-              `${listPathForSegment(`plugin/${encodeURIComponent(node.pluginId)}/extend`)}/`,
+              listPathForSegment(`plugin/${encodeURIComponent(node.pluginId)}/extend`),
+              true,
             );
             return entries.map((entry) => ({
               kind: "plugin-extend",
@@ -385,11 +339,12 @@ export function createGalleryFacetSource(
               extendPath: entry.name,
               isLeaf: isProviderLeaf(entry),
               isPlain: isProviderPlain(entry),
+              count: extensionCount(entry),
             }));
           }
           case "plugin-extend": {
             if (node.isLeaf) return [];
-            const entries = await listDirs(`${listPathForSegment(pluginExtendSegment(node))}/`);
+            const entries = await listDirs(listPathForSegment(pluginExtendSegment(node)), true);
             return entries.map((entry) => ({
               kind: "plugin-extend",
               pluginId: node.pluginId,
@@ -397,6 +352,7 @@ export function createGalleryFacetSource(
               extendPath: joinProviderPath(node.extendPath, entry.name),
               isLeaf: isProviderLeaf(entry),
               isPlain: isProviderPlain(entry),
+              count: extensionCount(entry),
             }));
           }
           default:
@@ -410,7 +366,7 @@ export function createGalleryFacetSource(
   };
 
   function descriptor(node: FacetNode): FacetDescriptor {
-    const selectable = node.kind !== "dim" && !(node.kind === "plugin-extend" && node.isPlain);
+    const selectable = !(node.kind === "plugin-extend" && node.isPlain);
     const filter = filterOnSelect(node);
     return {
       name: nodeName(node),
@@ -419,40 +375,19 @@ export function createGalleryFacetSource(
       defaultExpanded: defaultExpanded(node),
       active: selectable && !!filter && isSameGalleryFilter(filter, ctx.filter.value),
       filterOnSelect: selectable ? filter : null,
-      imagesFilter: imagesFilterOf(node),
-    };
-  }
-
-  function childrenRefreshFilter(node: FacetNode) {
-    const isPluginList = node.kind === "dim" && node.dimension === "plugin";
-    const imagesFilter = imagesFilterOf(node);
-    return (event: string, payload: unknown) => {
-      if (event === "images-change") {
-        return imagesFilter ? imagesFilter(payload as ImagesChangePayload) : true;
-      }
-      if (event === "album-images-change") return true;
-      // plugin-added / plugin-updated / plugin-deleted 只驱动插件列表分支
-      return isPluginList;
-    };
-  }
-
-  function countRefreshFilter(node: FacetNode) {
-    const imagesFilter = imagesFilterOf(node);
-    return (event: string, payload: unknown) => {
-      if (event === "images-change") {
-        return imagesFilter ? imagesFilter(payload as ImagesChangePayload) : true;
-      }
-      return event === "album-images-change";
     };
   }
 
   return {
     dataSource,
-    roots(dimensions) {
-      return [{ kind: "any" }, ...dimensions.map((dimension) => ({ kind: "dim", dimension }) as FacetNode)];
+    async roots(dimension) {
+      try {
+        return await listDimension(dimension);
+      } catch {
+        // 与 getChildren 一致：枚举失败 → 空列表
+        return [];
+      }
     },
     descriptor,
-    childrenRefreshFilter,
-    countRefreshFilter,
   };
 }

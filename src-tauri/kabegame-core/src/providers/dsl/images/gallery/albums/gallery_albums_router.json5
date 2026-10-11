@@ -45,8 +45,8 @@
     },
     "resolve": {
         // album_id 是 UUID v4 (uuid::Uuid::new_v4()) 或 FAVORITE_ALBUM_ID/HIDDEN_ALBUM_ID
-        // (亦 UUID 形态: 0...001 / 0...000)。用 UUID 正则避免与 "desc" / "x100x" 等
-        // 静态/数字段冲突 (DSL resolve regex 在静态 list 之前生效)。不存在的 UUID 走空集
+        // (亦 UUID 形态: 0...001 / 0...000)。严格使用 UUID 正则，避免吞掉其它路径段。
+        // 不存在的 UUID 走空集
         // 而非 PathNotFound — 与原 programmatic album_exists None 语义有微小放宽。
         "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}": {
             "alias": "album",

@@ -1,0 +1,7 @@
+{
+    "namespace": "kabegame",
+    "name": "kb_co_provider",
+    "query": {
+        "order": { "all": "clear" }
+    }
+}

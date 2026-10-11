@@ -84,6 +84,9 @@ fn init_runtime() -> Arc<ProviderRuntime> {
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);
     runtime
+        .register_global_table("_kb_", "kabegame", "kb_global")
+        .unwrap_or_else(|e| panic!("register global PathQL table failed: {}", e));
+    runtime
         .register_schema("images", "images", "kabegame", "images_root_provider")
         .unwrap_or_else(|e| panic!("register `images` schema failed: {}", e));
     runtime

@@ -122,11 +122,11 @@ pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bo
     !kabegame_core::media::image_type::is_video_by_path(Path::new(&img.local_path))
 }
 
-/// 随机模式: 从 `<base>/x100x/` 随机抽一页, 再从该页可用图中随机取一张;
+/// 随机模式: 从 `<base>/_kb_x100x/` 随机抽一页, 再从该页可用图中随机取一张;
 /// 该页没有可用图则换下一页 (不重复抽);
 /// 所有页都 try 完返回 None。base 由 source 决定:
-/// - Gallery → `images://gallery/hide/all/x100x`
-/// - Album(id) → `images://gallery/hide/album/<id>/x100x`
+/// - Gallery → `images://gallery/hide/all/_kb_x100x`
+/// - Album(id) → `images://gallery/hide/album/<id>/_kb_x100x`
 fn load_random_image_for_wallpaper(
     source: &RotationSource,
     wallpaper_mode: &str,
@@ -160,8 +160,8 @@ fn load_random_image_for_wallpaper(
 
 fn random_base_path(source: &RotationSource) -> String {
     match source {
-        RotationSource::Album(id) => format!("images://gallery/hide/album/{}/x100x", id),
-        RotationSource::Gallery => "images://gallery/hide/all/x100x".to_string(),
+        RotationSource::Album(id) => format!("images://gallery/hide/album/{}/_kb_x100x", id),
+        RotationSource::Gallery => "images://gallery/hide/all/_kb_x100x".to_string(),
     }
 }
 

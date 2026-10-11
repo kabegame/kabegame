@@ -31,6 +31,8 @@ type BranchNode = NodeBase | AnyProviderNode;
 class NodeBase {
   protected readonly _segments: readonly string[];
 
+  // __PATHQL_GLOBAL_MEMBERS__
+
   constructor(segments: readonly string[]) {
     this._segments = segments;
   }

@@ -7,13 +7,13 @@ use super::expr::SqlExpr;
 pub enum OrderDirection {
     Asc,
     Desc,
-    Revert,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ClearMode {
-    All,
+pub enum OrderGlobalOp {
+    Revert,
+    Clear,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -23,14 +23,12 @@ pub struct OrderItem {
     #[serde(default)]
     pub prepend: bool,
     pub order: OrderDirection,
-    #[serde(default)]
-    pub clear: Option<ClearMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrderGlobal {
-    pub all: OrderDirection,
+    pub all: OrderGlobalOp,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -45,7 +43,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn array_item_defaults_prepend_and_clear() {
+    fn array_item_defaults_prepend() {
         let v: OrderForm =
             serde_json::from_str(r#"[{"sql":"created_at","order":"desc"}]"#).unwrap();
         match v {
@@ -54,24 +52,21 @@ mod tests {
                 assert_eq!(items[0].sql, SqlExpr("created_at".into()));
                 assert_eq!(items[0].order, OrderDirection::Desc);
                 assert!(!items[0].prepend);
-                assert_eq!(items[0].clear, None);
             }
             _ => panic!("expected Array"),
         }
     }
 
     #[test]
-    fn array_item_accepts_prepend_and_clear_all() {
-        let v: OrderForm = serde_json::from_str(
-            r#"[{"sql":"ai.\"order\"","order":"asc","prepend":true,"clear":"all"}]"#,
-        )
-        .unwrap();
+    fn array_item_accepts_prepend() {
+        let v: OrderForm =
+            serde_json::from_str(r#"[{"sql":"ai.\"order\"","order":"asc","prepend":true}]"#)
+                .unwrap();
         match v {
             OrderForm::Array(items) => {
                 assert_eq!(items[0].sql, SqlExpr("ai.\"order\"".into()));
                 assert_eq!(items[0].order, OrderDirection::Asc);
                 assert!(items[0].prepend);
-                assert_eq!(items[0].clear, Some(ClearMode::All));
             }
             _ => panic!("expected Array"),
         }
@@ -81,7 +76,7 @@ mod tests {
     fn global_form() {
         let v: OrderForm = serde_json::from_str(r#"{"all":"revert"}"#).unwrap();
         match v {
-            OrderForm::Global(g) => assert_eq!(g.all, OrderDirection::Revert),
+            OrderForm::Global(g) => assert_eq!(g.all, OrderGlobalOp::Revert),
             _ => panic!("expected Global"),
         }
     }
@@ -106,9 +101,34 @@ mod tests {
     }
 
     #[test]
+    fn item_revert_and_clear_are_rejected() {
+        let revert: Result<OrderForm, _> =
+            serde_json::from_str(r#"[{"sql":"a","order":"revert"}]"#);
+        let clear: Result<OrderForm, _> =
+            serde_json::from_str(r#"[{"sql":"a","order":"asc","clear":"all"}]"#);
+        assert!(revert.is_err());
+        assert!(clear.is_err());
+    }
+
+    #[test]
+    fn global_clear_is_accepted_but_directions_are_rejected() {
+        let clear: OrderForm = serde_json::from_str(r#"{"all":"clear"}"#).unwrap();
+        assert!(matches!(
+            clear,
+            OrderForm::Global(OrderGlobal {
+                all: OrderGlobalOp::Clear
+            })
+        ));
+        for direction in ["asc", "desc"] {
+            let value = format!(r#"{{"all":"{direction}"}}"#);
+            assert!(serde_json::from_str::<OrderForm>(&value).is_err());
+        }
+    }
+
+    #[test]
     fn round_trip_preserves_struct_items() {
         let v: OrderForm = serde_json::from_str(
-            r#"[{"sql":"a","order":"asc"},{"sql":"b","order":"revert","prepend":true}]"#,
+            r#"[{"sql":"a","order":"asc"},{"sql":"b","order":"desc","prepend":true}]"#,
         )
         .unwrap();
         let j = serde_json::to_string(&v).unwrap();

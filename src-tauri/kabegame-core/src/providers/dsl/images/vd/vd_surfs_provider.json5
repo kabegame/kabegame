@@ -5,7 +5,8 @@
         "${root.name}": {
             "child_var": "root",
             "delegate": { "provider": "gallery_surfs_router" },
-            "provider": "${root.provider}",
+            "provider": "vd_surf_provider",
+            "properties": { "host": "${root.name}" },
             "meta": "${root.meta}"
         }
     }

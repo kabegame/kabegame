@@ -64,12 +64,12 @@ npx @anthropic-ai/mcpb pack .
 导入并启用 Bundle 后，在 Host 中确认以下两步：
 
 1. 工具列表里应出现读资源工具（`list_pathql_entry`、`read_gallery_provider`、`read_image`、`read_album` 等）和四个写工具。
-2. 让助手调用 `list_pathql_entry`，参数 `path` 传 `images://gallery`，应返回该层的维度子节点（`plugin`、`album`、`date`、`sort` 等），每项带 `note` 说明。再用返回的 `child.path` 追加 `/desc/x100x/1` 交给 `read_gallery_provider`。若返回 `UPSTREAM_REQUEST_FAILED`，说明桌面版没在跑或端口不通。
+2. 让助手调用 `list_pathql_entry`，参数 `path` 传 `images://gallery`，应返回该层的维度子节点（`plugin`、`album`、`date`、`sort` 等），每项带 `note` 说明。再用返回的 `child.path` 追加 `/_kb_desc/_kb_x100x/1` 交给 `read_gallery_provider`。这些 `_kb_*` 段来自全局前缀表，不会出现在 child 列表中。若返回 `UPSTREAM_REQUEST_FAILED`，说明桌面版没在跑或端口不通。
 
 每个工具的简要职责：
 
 - **`list_pathql_entry`** — **发现入口**。资源是懒树，`resources/list` 不会枚举图库，需要用它逐层往下走：先 `images://gallery` 看有哪些维度，再 `gallery/plugin` 看有哪些真实插件 id。返回当前节点的 `total` / `note` 与子节点列表，每个子节点带可直接使用的 `path`。`include_counts` 默认关闭，且仅在返回窗口 ≤ 50 个子节点时生效。
-- **`read_gallery_provider`** — 读一页画廊图片路径（例如 `all/desc/x100x/1`、`plugin/patreon/x100x/1`、`album/{id}/album-order/x100x/1`）。上游映射到 `images://gallery/...`，`path` 语义见 [MCP 参考](/reference/mcp/)。
+- **`read_gallery_provider`** — 读一页画廊图片路径（例如 `all/_kb_desc/_kb_x100x/1`、`plugin/patreon/_kb_x100x/1`、`album/{id}/sort/by-album-order/_kb_x100x/1`）。上游映射到 `images://gallery/...`，`path` 语义见 [MCP 参考](/reference/mcp/)。
 - **`read_image`** — 按 `image_id` 读单张图片的基础字段。
 - **`read_image_metadata`** — 按 `image_id` 读单张图片的 metadata（标签、作者、来源 URL 等）。
 - **`read_album` / `read_task` / `read_surf`** — 分别读取复数表资源；省略 id 时列出全部。

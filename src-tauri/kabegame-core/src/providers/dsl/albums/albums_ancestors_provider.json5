@@ -4,6 +4,6 @@
     "properties": { "album_id": { "type": "string", "default": "", "optional": false } },
     "query": {
         "where": "albums.id != ${properties.album_id} AND instr((SELECT ancestor_path FROM albums WHERE id = ${properties.album_id}), '/' || albums.id || '/') > 0",
-        "order": [{ "sql": "length(albums.ancestor_path)", "order": "asc", "clear": "all" }]
+        "order": [{ "sql": "length(albums.ancestor_path)", "order": "asc" }]
     }
 }

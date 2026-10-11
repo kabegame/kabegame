@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { pathForTreeSegment } from "./context";
 
 describe("追加高级条件后的简单 facet 计数", () => {
-  it("移除最后一个简单维度时保留 no-album 叶，不请求 filter_comb/all", () => {
+  it("移除最后一个简单维度时保留 no-album 叶，不请求 _kb_fc/all", () => {
     expect(
       pathForTreeSegment(
-        "gallery/hide/no-album/filter_comb/",
+        "gallery/hide/no-album/_kb_fc/",
         {
           plugin: { pluginId: "pixiv" },
         },
@@ -27,6 +27,6 @@ describe("追加高级条件后的简单 facet 计数", () => {
         "plugin",
         "plugin/konachan",
       ),
-    ).toBe(prefix + "aspect/4x3-16x9/filter_comb/plugin/konachan");
+    ).toBe(prefix + "aspect/4x3-16x9/_kb_fc/plugin/konachan");
   });
 });

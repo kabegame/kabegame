@@ -301,7 +301,6 @@ fn ddl_in_order_sql() {
             sql: SqlExpr("${properties.rank}; DROP TABLE images".into()),
             prepend: false,
             order: OrderDirection::Asc,
-            clear: None,
         }])),
         ..Default::default()
     };

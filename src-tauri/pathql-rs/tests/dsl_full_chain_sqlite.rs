@@ -6,8 +6,8 @@
 //! 路径用例:
 //! - `test://gallery/<router>` 通过 gallery_route 的 resolve 表命中各业务 router
 //! - `test://gallery/all` 列出 gallery_all_router 的静态 + 正则解析 (动态 xNNNx)
-//! - `test://gallery/all/x100x` 触发正则捕获 -> gallery_paginate_router{page_size=100}
-//! - `test://gallery/all/x100x/1` 走动态反查 -> query_page_provider{page_size=100, page_num=1}
+//! - `test://gallery/all/_kb_x100x` 由全局表捕获 -> gallery_paginate_router{page_size=100}
+//! - `test://gallery/all/_kb_x100x/1` 走动态反查 -> query_page_provider{page_size=100, page_num=1}
 //!   再走 query.delegate ./__provider -> query_page_provider 贡献 OFFSET/LIMIT
 //! - `test://vd/i18n-zh_CN/画册` 中文路径段穿透 vd_root_router -> vd/zh_CN/vd_zh_CN_root_router
 
@@ -49,7 +49,10 @@ const PROVIDER_FILES: &[&str] = &[
     "images/gallery/gallery_route.json5",
     "images/gallery/gallery_hide_router.json5",
     "images/gallery/all_router/gallery_all_router.json5",
-    "images/gallery/gallery_desc_pagination_page_comb.json5",
+    "kb_global.json5",
+    "shared/kb_co_provider.json5",
+    "images/gallery/gallery_desc_router.json5",
+    "shared/desc_provider.json5",
     "images/gallery/all_router/x_page_x/gallery_paginate_router.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
@@ -211,7 +214,6 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         "gallery_dates_router",
         "gallery_albums_router",
         "gallery_search_router",
-        "gallery_all_desc_router",
         "vd_en_US_root_router",
         "vd_albums_provider",
         "vd_plugins_provider",
@@ -242,6 +244,9 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         ),
     ]);
     let runtime = ProviderRuntime::with_registry(Arc::new(registry), executor, globals);
+    runtime
+        .register_global_table("_kb_", "kabegame", "kb_global")
+        .unwrap();
     runtime
         .register_schema("test", "images", &root_ns, &root_name)
         .unwrap();
@@ -280,9 +285,9 @@ fn gallery_route_resolves_known_routers() {
 
 #[test]
 #[allow(non_snake_case)]
-fn gallery_all_xNNNx_regex_resolves_with_page_size_capture() {
+fn gallery_all_global_xNNNx_regex_resolves_with_page_size_capture() {
     let runtime = build_runtime();
-    let resolved = runtime.resolve("test://gallery/all/x100x").unwrap();
+    let resolved = runtime.resolve("test://gallery/all/_kb_x100x").unwrap();
     // gallery_paginate_router 设置 query.limit=0; properties.page_size=100
     // composed.limit 应为 Some(NumberOrTemplate{0})
     let _ = resolved;
@@ -291,7 +296,9 @@ fn gallery_all_xNNNx_regex_resolves_with_page_size_capture() {
 #[test]
 fn gallery_hide_all_page_resolves_and_builds_with_globals() {
     let runtime = build_runtime();
-    let resolved = runtime.resolve("test://gallery/hide/all/1").unwrap();
+    let resolved = runtime
+        .resolve("test://gallery/hide/all/_kb_x100x/1")
+        .unwrap();
     let mut ctx = pathql_rs::template::eval::TemplateContext::default();
     ctx.globals = runtime.globals().clone();
 
@@ -299,9 +306,12 @@ fn gallery_hide_all_page_resolves_and_builds_with_globals() {
         .composed
         .build_sql(&ctx, SqlDialect::Sqlite)
         .unwrap();
-    assert!(sql.contains("hid_ai.image_id IS NULL"));
-    assert!(sql.contains("fav_ai.album_id = ?"));
-    assert!(sql.contains("hid_ai.album_id = ?"));
+    assert!(
+        sql.contains("NOT EXISTS (SELECT 1 FROM album_images AS hid_ex"),
+        "{sql}"
+    );
+    assert!(sql.contains("fav_ex.album_id = ?"));
+    assert!(sql.contains("hid_ex.album_id = ?"));
     assert!(params.contains(&TemplateValue::Text("favorite-album".to_string())));
     assert!(params.contains(&TemplateValue::Text("hidden-album".to_string())));
 }

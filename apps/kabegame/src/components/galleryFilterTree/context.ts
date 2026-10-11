@@ -1,6 +1,7 @@
 import { computed, inject, provide, type ComputedRef, type InjectionKey } from "vue";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
-import { listen } from "@/api/rpc";
+import { subscribeChanges } from "@/services/dataChangeHub";
+import { GRID_REFRESH_WAIT_MS } from "@/services/liveQuery";
 import { withGalleryPrefix } from "@/utils/path";
 import {
   buildDimensionCountPath,
@@ -23,6 +24,7 @@ export interface ProviderChildDir {
   meta: {
     isLeaf?: boolean;
     plain?: boolean;
+    count?: number;
   } | null;
   total: number | null;
 }
@@ -37,7 +39,6 @@ export interface GalleryFilterTreeContext {
   dimension: ComputedRef<GalleryBrowseDimension | null>;
   prefix: ComputedRef<string>;
   visible: ComputedRef<boolean>;
-  autoExpandRoot: ComputedRef<boolean>;
   /** 计数路径：侧栏 = 减格绝对计数；高级面板 = 候选写进原子后的整树预测。 */
   pathForSegment: (segment: string) => string;
   /** 枚举路径。缺省回退 pathForSegment（侧栏减格语义）；高级面板给纯净路径。 */
@@ -121,23 +122,24 @@ export async function listProviderDirs(path: string, withCount = true): Promise<
 }
 
 // 纯净枚举缓存：diff 模式下列表路径与草稿树无关，同一 (context, 维度) 的候选
-// 全集在弹窗反复开合间不变，可整段复用；数据变更事件到达时整体失效。
+// 全集在弹窗反复开合间不变，可整段复用。数据变更只让缓存失效、不触发重查：已打开的高级面板
+// 不随数据刷新，下次打开时才重新列举；插件签名变化时由宿主显式清缓存。
 const pureListCache = new Map<string, Promise<ProviderChildDir[]>>();
 let pureListCacheInvalidationReady = false;
+
+export function invalidatePureProviderListCache() {
+  pureListCache.clear();
+}
 
 function ensurePureListCacheInvalidation() {
   if (pureListCacheInvalidationReady) return;
   pureListCacheInvalidationReady = true;
-  const clear = () => pureListCache.clear();
-  for (const eventName of [
-    "images-change",
-    "album-images-change",
-    "plugin-added",
-    "plugin-updated",
-    "plugin-deleted",
-  ]) {
-    void listen(eventName, clear);
-  }
+  subscribeChanges({
+    waitMs: GRID_REFRESH_WAIT_MS,
+    // 只看成员与结构变化；纯字段补丁（image-changed）不改变候选全集
+    filter: (batch) => batch.images.size > 0 || batch.albumIds.size > 0 || batch.albumStructure.size > 0,
+    onBatch: invalidatePureProviderListCache,
+  });
 }
 
 export function listProviderDirsPure(path: string): Promise<ProviderChildDir[]> {
@@ -145,7 +147,7 @@ export function listProviderDirsPure(path: string): Promise<ProviderChildDir[]> 
   const key = normalizeProviderPath(path);
   const cached = pureListCache.get(key);
   if (cached) return cached;
-  const promise = listProviderDirs(path, false);
+  const promise = listProviderDirs(joinProviderPath(path, "_kb_co"), false);
   pureListCache.set(key, promise);
   promise.catch(() => {
     if (pureListCache.get(key) === promise) pureListCache.delete(key);
@@ -153,12 +155,13 @@ export function listProviderDirsPure(path: string): Promise<ProviderChildDir[]> 
   return promise;
 }
 
-/** 树节点的枚举出口：diff 模式走纯净缓存列表，侧栏保持减格 + 带 count。 */
+/** 树节点的枚举出口：diff 模式走纯净缓存列表，侧栏列举 `_kb_co` 上的分组计数。 */
 export function useProviderTreeList() {
   const context = useGalleryFilterTreeContext();
   const deltaMode = computed(() => !!context.countBaseline);
   const listPathForSegment = (segment: string) => (context.listPathForSegment ?? context.pathForSegment)(segment);
-  const listDirs = (path: string) => (deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(path));
+  const listDirs = (path: string) =>
+    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(joinProviderPath(path, "_kb_co"), false);
   return { deltaMode, listPathForSegment, listDirs };
 }
 
@@ -246,7 +249,7 @@ export function pathForTreeSegment(
   segment: string,
 ) {
   const normalized = normalizeProviderPath(segment);
-  // 上下文可能结束于 no-album/filter_comb；空过滤应计数该叶，而非不存在的 all 子项。
+  // 上下文可能结束于 no-album/_kb_fc；空过滤应计数该叶，而非不存在的 all 子项。
   const countPath = (body: string) => (prefix ? queryRuntimePath(body, prefix) : body);
   if (!dimension) {
     return countPath(normalized || "all");

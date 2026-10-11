@@ -119,13 +119,13 @@
         // 单键排序在并列组上不是全序,ORDER BY ... LIMIT 的 top-N sorter 与全量 sort 可以给
         // 同一组并列行不同次序 —— 那会让分页在并列跨页处重复/漏行,也会让
         // `~~/rank/~~/id_<id>` 的定位落到相邻页。各 sort provider 用 clear:"all" 清掉本条后
-        // 要自己补回 images.id;`/desc` 的 {all:"revert"} 会连兜底一起翻转,正好是整个升序列的逆序。
+        // 要自己补回 images.id;`/_kb_desc` 的 {all:"revert"} 会连兜底一起翻转,正好是整个升序列的逆序。
         "order": [
             { "sql": "images.crawled_at", "order": "asc" },
             { "sql": "images.id", "order": "asc" }
         ]
     },
-    "note": "Gallery root. Each segment narrows the previous one; filters AND together. Combine two dimensions with `filter_comb`: gallery/plugin/patreon/filter_comb/media-type/image/x100x/1. `sort` is a sibling of `all`, not a child of it. `/desc` reverses the current order. `hide/` is a PREFIX excluding hidden images. Always end a collection path with /x<N>x/<page>.",
+    "note": "Gallery root. Each segment narrows the previous one; filters AND together. Combine two dimensions with `_kb_fc`: gallery/plugin/patreon/_kb_fc/media-type/image/_kb_x100x/1. `sort` is a sibling of `all`, not a child of it. `/_kb_desc` reverses the current order. `hide/` is a PREFIX excluding hidden images. Always end a collection path with /_kb_x<N>x/<page>. Global `_kb_` entries are resolved before this provider and are not listed as children.",
     "list": {
         "all": {
             "provider": "gallery_all_router"
@@ -198,9 +198,6 @@
         }
     },
     "resolve": {
-        "filter_comb": {
-            "provider": "gallery_filter_comb"
-        },
         "names": {
             "provider": "gallery_name_router"
         },

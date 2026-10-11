@@ -53,7 +53,7 @@
 ### 设置持久化
 
 - **Rust**：`SettingKey::GalleryPageSize`、getter/setter（与 `gallery_grid_columns` 同类模式）。
-- **CLI**：`pathql query` 直接查询 PathQL，不读取 `galleryPageSize`；分页大小和页码由查询路径本身表达（如 `images://gallery/all/x100x/1`）。
+- **CLI**：`pathql query` 直接查询 PathQL，不读取 `galleryPageSize`；分页大小和页码由查询路径本身表达（如 `images://gallery/all/_kb_x100x/1`）。
 
 ## 前端
 
@@ -90,16 +90,16 @@
 序号由一条 PathQL 路径给出，形态是 `<当前视图去掉分页尾>/~~/rank/~~/id_<id>`：
 
 ```
-images://gallery/hide/album/<id>/sort/by-time/desc  /~~/ rank /~~/ id_2719
+images://gallery/hide/album/<id>/sort/by-time/_kb_desc  /~~/ rank /~~/ id_2719
 └───── 内层 pq_nest_1：过滤 + ORDER BY，无 LIMIT ─────┘      │         │
                                      打 row_index 列 ───────┘         │
                              既有 id_<id> 路由挑出目标行 ──────────────┘
 ```
 
 - 必须分三层：窗口函数在 `WHERE` 之后求值，`WHERE id = ?` 与 `ROW_NUMBER()` 同层时序号恒为 1。
-- 内层**不能带分页**：定位要的是全集里的位置。前端用 `stripPageTail`（只剥 `[x<N>x/]<页码>`，
-  **保留 `desc` 与排序段**）从 `routeStore.computedPath` 推出内层；不要复用
-  `stripComposablePathTail`，它连 `desc` 一起剥，会把序号算反。
+- 内层**不能带分页**：定位要的是全集里的位置。前端用 `stripPageTail`（只剥 `_kb_x<N>x/<页码>`，
+  **保留 `_kb_desc` 与排序段**）从 `routeStore.computedPath` 推出内层；不要复用
+  `stripComposablePathTail`，它连 `_kb_desc` 一起剥，会把序号算反。
 - `ROW_NUMBER() OVER ()` 不写 ORDER BY，靠的是 `~~` 把内层冻结为物化 CTE 后、扫描序即内层
   `ORDER BY` 序（见 `cocs/provider-dsl/RULES.md` §2.1）。**前提是排序为全序**：gallery 的每条
   sort provider 都以 `images.id asc` 收尾，`gallery_route` 的默认排序同样带这条兜底。
@@ -277,9 +277,9 @@ ImageGrid 把数据变化分成两条通道：
 6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
    `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在
    该视图（检查 `hide/` 与过滤段）；有 `row_index` 但页码不对，查前端是否误用了
-   `stripComposablePathTail` 而把 `desc` 剥掉了。
+   `stripComposablePathTail` 而把 `_kb_desc` 剥掉了。
 7. **定位落到相邻页 / 分页在某处重复或漏行**：当前排序不是全序。检查该 sort provider 的 `order` 是否
-   以 `images.id asc` 收尾 —— 用了 `clear: "all"` 的 provider 必须自己补回这条兜底。
+   以 `images.id asc` 收尾；排序路由负责先清空上游排序，下游 provider 必须自己补回这条兜底。
 
 ## 涉及文件（速查）
 

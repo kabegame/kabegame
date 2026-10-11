@@ -724,7 +724,7 @@ konachan 1.6.0 作为示范。
 
 ## 画廊维度列举带分组计数（meta.count）
 
-画廊各维度的列举 SQL 在 `${composed}` 上 `GROUP BY` 子项键、`COUNT(*)`，计数随子项放进 `meta.count`：`list(with_count=false)` 一次 IPC、一条 SQL 就拿到子项与计数，替代「`list_with_count` 逐子项 COUNT + 前端再逐节点 COUNT」。涉及：年 / 月 / 日（共享 `dates_provider` / `year_provider` / `month_provider`，VD 共用，`DISTINCT` 改 `GROUP BY`）、媒体格式、image / video（补 0，新增 resolve）、大小 8 桶与宽高比 5 桶（固定桶补 0，原先不可列举）、插件（改为只列当前上下文里有图的插件，meta 只剩 `count`，不再附插件清单 JSON）。段名解析都走 resolve，不跑列举 SQL。前端过滤树这次未改。
+画廊各维度的列举 SQL 在 `${composed}` 上 `GROUP BY` 子项键、`COUNT(*)`，计数随子项放进 `meta.count`：`list(with_count=false)` 一次 IPC、一条 SQL 就拿到子项与计数，替代「`list_with_count` 逐子项 COUNT + 前端再逐节点 COUNT」。涉及：年 / 月 / 日（共享 `dates_provider` / `year_provider` / `month_provider`，VD 共用，`DISTINCT` 改 `GROUP BY`）、媒体格式、image / video（补 0，新增 resolve）、大小 8 桶与宽高比 5 桶（固定桶补 0，原先不可列举）、插件（改为只列当前上下文里有图的插件，meta 只剩 `count`，不再附插件清单 JSON）。段名解析都走 resolve，不跑列举 SQL。前端过滤树的接线与走查已由末尾「PathQL 全局前缀表 `_kb_*` 与过滤树列举计数」一节接续。
 
 | 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -734,7 +734,7 @@ konachan 1.6.0 作为示范。
 | [x] | prod 库耗时 | 同上，`KABEGAME_SQL_DEBUG=1` | 同上路径各跑 3 次取最好 | 新：每面板 1 条 SQL 24～49ms；旧带计数列举 23～105ms 且前端还要再补 N 次 COUNT | 大小分组 43ms 中约 12ms 来自内层 ORDER BY、约 19ms 来自未被消掉的 metadata LEFT JOIN |
 | [ ] | MCP 列举 | 桌面 CEF | `list_pathql_entry("images://gallery/aspect")`、`("images://gallery/size")`、`("images://gallery/plugin")` | 分别列出 5 / 8 个桶、有图的插件，meta 带 count；各桶之和等于 `gallery/all` 总数 | |
 | [ ] | 任意区间与路由 | 桌面 CEF / MCP | 读 `gallery/aspect/9x16-3x4/x100x/1`、`gallery/size/3MB-7MB/x100x/1`、`gallery/media-type/video/x100x/1`、上下文里没有的 `plugin/<id>` | 正常返回；没有的插件命中 0 而非 path not found | |
-| [ ] | 过滤树计数不变 | 桌面 CEF | 打开画廊各维度 chip 面板，与改动前对比计数；再叠加一个插件或媒体类型条件对比 | 计数一致 | 前端未改，防回归 |
+| [ ] | 过滤树计数不变 | 桌面 CEF | 打开画廊各维度 chip 面板，与改动前对比计数；再叠加一个插件或媒体类型条件对比 | 计数一致 | 由末尾新节统一接续 app 走查 |
 | [ ] | VD 日期与尺寸目录 | 桌面 CEF | 资源管理器打开 VD「按时间」逐层与「按尺寸」「按大小」目录 | 目录与之前一致 | VD 共用日期列举 SQL |
 
 ## metadata 行按 id 不可变与图片行去版本字段
@@ -749,3 +749,40 @@ metadata 迁移不再原地更新 `data` / `plugin_version`：内容变化时插
 | [ ] | 描述面板与模板版本 | 桌面 CEF | 打开普通插件与 kabegame-server 来源图片详情；升级一个带迁移脚本的插件后重开详情 | 描述内容正常；EJS 的 `plugin_version` 来自完整 metadata 返回；迁移后详情刷新到新内容 | 人工走查 |
 | [ ] | Web 缓存升级 | Web / DevTools | 预置 v5 `kbg-image-metadata-cache` 后加载新版并查看 IndexedDB，再打开同 metadata 的两张图 | 升到 v6 时旧缓存清空；新 key 为 `m<metadataId>`，值同时含 `data` 与 `pluginVersion`，两张图共用一条 | 人工走查 |
 | [ ] | 画廊分组性能与结果 | prod 库快照 | sqlite3 对比移除 join 前后的大小分组与一页结果 | 一页结果不变；大小分组由约 43ms 降至约 25ms | 人工复测 |
+
+## PathQL 全局前缀表 `_kb_*` 与过滤树列举计数
+
+PathQL runtime 新增 `_kb_` 全局前缀表：`_kb_fc` 续接过滤维度、`_kb_desc` 翻转排序、
+`_kb_x<N>x/<页>` 显式分页，`_kb_co` 以透传方式只清空排序。旧画廊续接段不兼容；原始
+`images://x<N>x/<页>` 与 `albums://` / `tasks://` 等 scheme 自己的分页语法不变。过滤树、Android picker
+和头部过滤控件改为列举 `{维度路径}/_kb_co` 并读取 `meta.count`；插件扩展继续读取
+`withCount=true` 的 `total`。侧栏用一个 `dataChangeHub` 订阅重列根与已加载分支，高级查询 diff
+只在打开或草稿变化时逐候选预测。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | `dsl_e2e` | 本机 | `test-kabegame kabegame-core --test dsl_e2e` | 52 passed | 已实测 |
+| [x] | providers / plugin 单测 | 本机 | `test-kabegame kabegame-core --lib providers`；`--lib plugin` | providers 13 passed；plugin 94 passed | 已实测 |
+| [x] | pathql-rs 全量 | 本机 | `cargo test -p pathql-rs --features json5,validate,client-codegen` | 613 passed | 已实测 |
+| [x] | MCP 单测 | 本机 | 运行 `mcp_server` 相关单测 | 9 passed；覆盖画廊 `_kb_x<N>x/<数字>` 与原始 images 根分页判定 | 已实测 |
+| [x] | 类型与 Rust 检查 | 本机 | `check-kabegame` driver | vue-tsc 0 error；cargo 0 error | 已实测 |
+| [x] | 前端回归 | 本机 | `deno task test -c kabegame --skip cargo` | 29 个文件、251 passed | 已实测 |
+| [x] | 维度列举计数一致 | prod 库（2.5 万图） | 14 条维度列举路径逐项对比改前 `--with-count` 的 `total` 与改后 `{路径}/_kb_co` 的 `meta.count` | 逐项一致 | 已实测 |
+| [x] | `_kb_co` 清排序 | prod 库 + `KABEGAME_SQL_DEBUG=1` | 检查 14 条 `{路径}/_kb_co` 列举 SQL | 不再带画廊根 `ORDER BY`；日期根仍有 `dates_provider` 自带的 `crawled_at` 排序 | 已实测 |
+| [x] | 排序与分页顺序 | prod 库（2.5 万图） | 对比 `sort/by-size/_kb_x100x/1`、`sort/by-name/_kb_desc/_kb_x50x/3` 改前后的图片 id 顺序 | 两条路径均逐行一致 | 已实测 |
+| [x] | 14 个面板列举性能 | prod 库（2.5 万图） | 汇总 14 条维度列举路径耗时 | 271ms → 208ms；大小 / 宽高比 / 媒体类型约快 40%～50%，日期、插件持平 | 已实测 |
+| [x] | 旧画廊续接语法拒绝 | CLI | 分别查询旧 `filter_comb`、`desc`、`x100x` 画廊路径 | 均 `path not found` | 已实测 |
+| [x] | 画册预览路径 | CLI / core | `album_preview_at` 使用 `sort/by-album-order/_kb_x{N}x/1` 取图 | 能取到图；原路径为 `path not found` | 已实测 |
+| [x] | 四类页面 chip 面板计数 | 桌面 CEF / Android | 依次打开画廊、画册详情、任务详情、畅游详情的各个 chip 面板 | 子项与维度根计数正确，切换上下文后无旧值 | prod 库（2.5 万图）dev app + CDP + debug ingest：画廊（hide + 搜索取反 + 插件 / jpg / 横屏 + 1 个高级条件）、任务详情（3621 张）、画册详情（收藏 13 张）、畅游详情（0 张与 8 张两种）逐维度打开并展开年→月→日、媒体→格式、插件→扩展两层。每层恰为 1 条 `{维度}/_kb_co` 列举 + 2 条根 COUNT（当时的实现，根节点后已去掉，见「去掉『任意』行与维度根」）；面板数字与逐项 `pathql_entry` COUNT 独立重算全部一致，各层加总闭合 |
+| [ ] | 下载中面板计数刷新 | 桌面 CEF / Android | 保持 chip 面板打开并开始下载 | `dataChangeHub` 批次后顶层与已加载分支计数更新 | 未跑真实下载（会往 prod 库加图）。同一过滤路径（`batch.images.size > 0`）已由隐藏操作带来的 `images-change` 批次实测触发刷新；真实下载留待人工确认 |
+| [x] | `hide` / `no-album` 画册成员刷新 | 桌面 CEF / Android | 在对应上下文增删画册成员、隐藏或取消隐藏图片 | 命中 album 相关批次后计数刷新；面板不可见时重开补刷 | 画册详情：面板开着时加入 / 移出收藏，一个批次后「2–5MB」0→1→0、根 13→14→13；面板关着时变更不发请求，重开即为新值。任务详情（`hide/` 上下文）隐藏 / 取消隐藏：5–10MB 333→332→333。`no-album` 走同一 `hasAlbumSensitiveContext` 分支，未单独点。每次隐藏会刷新两轮（见下方「hub 首发批次」一行） |
+| [x] | 高级查询 diff 时机 | 桌面 CEF / Android | 打开高级查询、修改草稿、关闭期间制造数据变化后重开 | `+N` / `−N` 只在打开或改草稿时变化；关闭期间不重查，重新打开能看到新候选 | 任务页：首开 1 条纯净列举 + 8 条候选预测；关闭重开不再列举（缓存）只重算预测；面板开着时隐藏一张图，diff 树零请求、显示保持旧值；关闭后重开重新列举、计数随新数据变化。画廊重上下文下「非 < 512KB」预测 −2316，应用后总数 12266 与预测一致 |
+| [ ] | Android picker 与头部过滤控件 | Android / 桌面 CEF | 打开 Android picker 与头部 `GalleryFilterControl` 的插件、时间、媒体类型分组 | 均读取 `meta.count`，计数与侧栏一致 | 桌面 `isCompact` 恒为 false，两处入口都不可达；代码复核：均列举 `{prefix}{维度}/_kb_co` 读 `meta.count`、插件扩展传 `withCount=true`，路径与上面已实测的侧栏列举相同。需 Android 真机确认 |
+| [x] | 翻页与倒序 | 桌面 CEF / Android | 切换页大小、翻到多页并切换倒序 | 路径使用 `[_kb_desc]/_kb_x<N>x/<页>`，行顺序、页码与总数正确 | 任务页 UI：下一页发 `…/sort/by-time/_kb_x100x/2`，切倒序发 `…/_kb_desc/_kb_x100x/2`；37 页正序 / 倒序首尾互逆，末页 21 行 |
+| [x] | 壁纸轮播随机模式 | 桌面 | 开启随机轮播并跨多轮取图 | 随机排序路径正常，未受排序链清空与全局段迁移影响 | 未改实际壁纸，在 app 内跑轮播器同款路径：`gallery/hide/all/_kb_x100x` 列出 247 页 = ⌈总数/100⌉（35ms），任取一页 100 行；顺序模式 `bigger_crawler_time/<t>/l100l` 按 crawled_at, id 严格递增且全在标记之后，画册 `bigger_order/0/l100l` 按 album_order 递增 |
+| [x] | VD 各目录 | 桌面虚拟盘 | 依次打开按格式、按名称、畅游与页号目录 | 目录列举与取图正常；本地分页段保持原语法 | 未挂载虚拟盘，app 内遍历 `images://vd/i18n-zh_CN` 全部 10 个目录（每层取前 2 个子目录下钻）：页号层页数均 = ⌈总数/100⌉、第 1 页行数正确；按格式 / 按名称 / 按畅游 / 按时间三层均正常。`按插件/<无扩展插件>/Extend` 列举报 provider 未注册，改前 HEAD CLI 同样报错，为既有问题 |
+| [x] | MCP 新语法读取 | 桌面 MCP | 用 `list_pathql_entry` 发现路径，再追加 `/_kb_desc/_kb_x100x/1` 读取 | `_kb_*` 不出现在 child 列表但可显式续接；分页护栏正常放行 | HTTP 调 7490/mcp：instructions 旧语法 0 处；`list_pathql_entry` 各层无 `_kb_*` 子项，叶子提示追加 `/_kb_x100x/1`；`_kb_desc/_kb_x100x/1`、`_kb_fc` 组合、`sort/by-size/_kb_desc/_kb_x50x/3` 均可读，`images://x100x/1` 不变；旧 `desc/x100x/1` 为 resource_not_found，无分页读取为 pagination_required |
+| [x] | 面板取数性能 A/B | prod 库（2.5 万图）dev app | 同一后端、同一库，交替跑旧模式（`list(withCount=true)` + 每行一条 `pathql_entry`）与新模式（`{维度}/_kb_co` + 2 条根 COUNT，根节点后已去掉）各 7 轮取中位数 | 新模式不慢于旧模式，计数逐项一致 | 日期年 39→14ms、展开月 349→28ms、展开日 508→29ms、媒体类型 30→10ms、image 格式 87→14ms、大小 63→9ms、宽高比 58→8ms、插件 10→2.5ms；IPC 次数 4～19 → 1～3 |
+| [ ] | 插件扩展分支耗时 | prod 库，画廊重上下文 | 展开 konachan → score | 可接受的展开耗时 | 1 次 `withCount=true` 列举 1.8s：7 个子项在后端串行各跑一条约 250ms 的 COUNT。未改动部分，列为后续优化（后端并行 COUNT 或插件 DSL 自带分组计数） |
+| [ ] | hub 首发批次 | dev app | 面板打开时隐藏一张图 | 一个操作刷新一轮 | 实测两轮：`publishLocal` 当场 drain 但不开节流窗口，随后后端 `images-change`（seq 不同不去重）又作为首发批次立刻 drain。每轮约 3 条、各几毫秒；列为 `dataChangeHub` 后续优化 |
+| [x] | 去掉「任意」行与维度根 | 桌面 CEF / Android | 打开各 chip 面板与高级查询条件里的维度面板；展开、选中某项后重开，再点 chip 右上角的叉号 | 面板顶层直接是维度子项，没有「任意」行和维度根；打开面板只发 1 条 `_kb_co` 列举、0 条 COUNT；选中项的祖先链自动展开，其余不展开；叉号清除该维度 | 原先「任意」与维度根同为 `…/all`，同一条 COUNT 发两次，现两者都删掉。dev app + debug ingest：任务详情大小面板顶层即 8 个区间，1 条列举 5.6ms、0 COUNT；时间面板顶层为年份且不自动展开，选中某日后重开，年、月自动展开（3 条列举）；叉号清除后 chip 回到未选中。画廊重上下文插件面板 1 条列举 170ms（原来另有 2 条各约 250–290ms 的根 COUNT），展开 konachan 扩展正常。高级查询条件的尺寸面板顶层即 8 个候选，`+N` / `−N` 正常，没有根节点的预测 COUNT |

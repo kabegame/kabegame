@@ -17,7 +17,7 @@ vi.mock("@/services/pathql", () => ({
   pathqlEntry: vi.fn(async () => ({ total: 0 })),
   pathqlList: vi.fn(async () => []),
 }));
-vi.mock("@/composables/useImagesChangeRefresh", () => ({ useImagesChangeRefresh: vi.fn() }));
+vi.mock("@/services/dataChangeHub", () => ({ subscribeChanges: vi.fn(() => vi.fn()) }));
 vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key, locale: { value: "zh" } }),
 }));
@@ -78,7 +78,7 @@ describe("查询条追加高级 chip", () => {
     const dialog = wrapper.findComponent({ name: "GalleryAdvancedQueryDialog" });
     expect(dialog.props("visible")).toBe(true);
     expect(dialog.props("query")).toEqual(extra);
-    expect(dialog.props("contextPrefix")).toBe("images://gallery/hide/plugin/pixiv/filter_comb/");
+    expect(dialog.props("contextPrefix")).toBe("images://gallery/hide/plugin/pixiv/_kb_fc/");
     expect(wrapper.emitted("navigate")).toBeUndefined();
     const next: GalleryQuery = [{ is: { size: { range: "1MB-2MB" } } }];
     dialog.vm.$emit("apply", next);

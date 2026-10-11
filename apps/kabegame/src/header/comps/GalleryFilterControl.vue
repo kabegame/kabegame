@@ -162,13 +162,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@kabegame/element-plus-icons";
 import { invoke } from "@/api/rpc";
-import { pathqlEntry, pathqlList } from "@/services/pathql";
+import { pathqlList } from "@/services/pathql";
+import { subscribeChanges } from "@/services/dataChangeHub";
+import { GRID_REFRESH_WAIT_MS } from "@/services/liveQuery";
 import { withGalleryPrefix } from "@/utils/path";
 import {
   GALLERY_ASPECT_BUCKETS,
@@ -209,7 +210,7 @@ interface GalleryMediaTypeCountsPayload {
 
 interface ProviderChildDir {
   name: string;
-  meta: unknown | null;
+  meta: { count?: number } | null;
   total: number | null;
 }
 
@@ -270,31 +271,23 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   ),
 );
 
-async function countProviderPath(path: string): Promise<number> {
-  const p = path.trim().replace(/\/+$/, "");
-  if (!p) return 0;
-  const res = await pathqlEntry(withGalleryPrefix(p));
-  return typeof res?.total === "number" ? res.total : 0;
-}
-
 async function listProviderDirs(path: string): Promise<ProviderChildDir[]> {
-  const entries = await pathqlList(withGalleryPrefix(path), true);
+  const entries = await pathqlList(withGalleryPrefix(path), false);
   return (Array.isArray(entries) ? entries : []).filter(
     (e): e is ProviderChildDir => !!e && typeof e.name === "string" && !!e.name,
   );
 }
 
+function groupedCount(entry: ProviderChildDir): number {
+  const count = entry.meta?.count;
+  return typeof count === "number" && Number.isFinite(count) ? count : 0;
+}
+
 async function loadPluginGroups() {
   try {
     const prefix = filterContextPrefix.value;
-    const entries = await listProviderDirs(`${prefix}plugin/`);
-    const groups = await Promise.all(
-      entries.map(async (e) => ({
-        plugin_id: e.name,
-        count: await countProviderPath(`${prefix}plugin/${encodeURIComponent(e.name)}`),
-      })),
-    );
-    pluginGroups.value = groups.filter((r) => r.count > 0);
+    const entries = await listProviderDirs(`${prefix}plugin/_kb_co`);
+    pluginGroups.value = entries.map((entry) => ({ plugin_id: entry.name, count: groupedCount(entry) }));
   } catch {
     pluginGroups.value = [];
   }
@@ -320,10 +313,13 @@ function isPluginCommandActive(pluginId: string, extendPath = "") {
 async function loadMediaTypeCounts() {
   try {
     const prefix = filterContextPrefix.value;
-    const [imageCount, videoCount] = await Promise.all([
-      countProviderPath(`${prefix}media-type/image`),
-      countProviderPath(`${prefix}media-type/video`),
-    ]);
+    const entries = await listProviderDirs(`${prefix}media-type/_kb_co`);
+    const imageCount = groupedCount(
+      entries.find((entry) => entry.name === "image") ?? { name: "", meta: null, total: null },
+    );
+    const videoCount = groupedCount(
+      entries.find((entry) => entry.name === "video") ?? { name: "", meta: null, total: null },
+    );
     mediaTypeCounts.value = { imageCount, videoCount };
   } catch {
     mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
@@ -354,27 +350,15 @@ async function loadTimeRootData() {
   const key = `${prefix}|time-root`;
   if (loadedTimeKeys.value.has(key)) return;
   try {
-    const yearEntries = await listProviderDirs(`${prefix}date/`);
-    const yearCandidates = yearEntries
+    const yearEntries = await listProviderDirs(`${prefix}date/_kb_co`);
+    const years = yearEntries
       .map((e) => {
         const m = YEAR_SEG_RE.exec(e.name);
-        return m ? { year: m[1]!, seg: e.name } : null;
+        return m ? { year: m[1]!, count: groupedCount(e) } : null;
       })
-      .filter((y): y is { year: string; seg: string } => !!y);
-
-    const years = (
-      await Promise.all(
-        yearCandidates.map(async (y) => ({
-          ...y,
-          total: await countProviderPath(`${prefix}date/${y.seg}`),
-        })),
-      )
-    ).filter((y) => y.total > 0);
+      .filter((year): year is YearGroupRow => !!year && year.count > 0);
     if (prefix !== filterContextPrefix.value) return;
-    yearGroups.value = years.map((y) => ({
-      year: y.year,
-      count: y.total,
-    }));
+    yearGroups.value = years;
     replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
     await ensureTimeTailLoaded(dateTail.value);
   } catch {
@@ -392,21 +376,13 @@ async function ensureTimeYearMonthsLoaded(year: string) {
   await withTimeLoading(year, async () => {
     try {
       const yearSeg = `${year}y`;
-      const monthEntries = await listProviderDirs(`${prefix}date/${yearSeg}/`);
-      const monthCandidates = monthEntries
+      const monthEntries = await listProviderDirs(`${prefix}date/${yearSeg}/_kb_co`);
+      const months = monthEntries
         .map((e) => {
           const m = MONTH_SEG_RE.exec(e.name);
-          return m ? { month: m[1]!, seg: e.name } : null;
+          return m ? { year_month: `${year}-${m[1]!}`, count: groupedCount(e) } : null;
         })
-        .filter((m): m is { month: string; seg: string } => !!m);
-      const months = (
-        await Promise.all(
-          monthCandidates.map(async (mo) => ({
-            year_month: `${year}-${mo.month}`,
-            count: await countProviderPath(`${prefix}date/${yearSeg}/${mo.seg}`),
-          })),
-        )
-      ).filter((mo) => mo.count > 0);
+        .filter((month): month is DateGroupRow => !!month && month.count > 0);
       if (prefix !== filterContextPrefix.value) return;
       monthGroups.value = [...monthGroups.value.filter((m) => !m.year_month.startsWith(`${year}-`)), ...months];
       dayGroups.value = dayGroups.value.filter((d) => !d.ymd.startsWith(`${year}-`));
@@ -431,21 +407,13 @@ async function ensureTimeMonthDaysLoaded(yearMonth: string) {
     try {
       const yearSeg = `${year}y`;
       const monthSeg = `${month}m`;
-      const dayEntries = await listProviderDirs(`${prefix}date/${yearSeg}/${monthSeg}/`);
-      const dayCandidates = dayEntries
+      const dayEntries = await listProviderDirs(`${prefix}date/${yearSeg}/${monthSeg}/_kb_co`);
+      const days = dayEntries
         .map((e) => {
           const dm = DAY_SEG_RE.exec(e.name);
-          return dm ? { day: dm[1]!, seg: e.name } : null;
+          return dm ? { ymd: `${yearMonth}-${dm[1]!}`, count: groupedCount(e) } : null;
         })
-        .filter((d): d is { day: string; seg: string } => !!d);
-      const days = (
-        await Promise.all(
-          dayCandidates.map(async (d) => ({
-            ymd: `${yearMonth}-${d.day}`,
-            count: await countProviderPath(`${prefix}date/${yearSeg}/${monthSeg}/${d.seg}`),
-          })),
-        )
-      ).filter((d) => d.count > 0);
+        .filter((day): day is DayGroupRow => !!day && day.count > 0);
       if (prefix !== filterContextPrefix.value) return;
       dayGroups.value = [...dayGroups.value.filter((d) => !d.ymd.startsWith(`${yearMonth}-`)), ...days];
       replaceTimeSet(loadedTimeKeys, (next) => next.add(key));
@@ -505,11 +473,20 @@ watch(pluginSignature, () => {
   void loadPluginGroups();
 });
 
-useImagesChangeRefresh({
-  enabled: isOnGalleryPage,
-  waitMs: 500,
-  onRefresh: () => void loadFilterCounts(),
+function hasAlbumSensitiveContext() {
+  return /(^|\/)(?:album|album-tree|no-album|hide)(?:\/|$)/.test(filterContextPrefix.value);
+}
+
+const unsubscribeChanges = subscribeChanges({
+  waitMs: GRID_REFRESH_WAIT_MS,
+  filter: (batch) =>
+    isOnGalleryPage.value &&
+    (batch.images.size > 0 ||
+      (hasAlbumSensitiveContext() && (batch.albumIds.size > 0 || batch.albumStructure.size > 0))),
+  onBatch: loadFilterCounts,
 });
+
+onBeforeUnmount(unsubscribeChanges);
 
 const filterLabel = computed(() => {
   void locale.value;

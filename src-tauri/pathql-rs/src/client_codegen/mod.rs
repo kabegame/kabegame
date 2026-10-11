@@ -28,6 +28,7 @@ pub(crate) struct CodegenModel {
     pub(crate) providers: Vec<ProviderNode>,
     pub(crate) placeholders: Vec<PlaceholderNode>,
     pub(crate) schemes: Vec<SchemeNode>,
+    pub(crate) global_edges: Vec<Edge>,
 }
 
 #[derive(Debug)]
@@ -58,7 +59,9 @@ pub(crate) struct Edge {
 #[derive(Debug)]
 pub(crate) enum EdgeKind {
     Static { key: String },
+    PassthroughStatic { key: String },
     Resolve { alias: String },
+    PassthroughResolve { alias: String },
     Dynamic { alias: Option<String> },
 }
 
@@ -110,13 +113,36 @@ impl CodegenModel {
 
         let mut raw_providers = Vec::new();
         let mut placeholders = BTreeMap::new();
+        let global_table = runtime.client_codegen_global_table().map(|(prefix, key)| {
+            (
+                prefix,
+                provider_fqn(&(Namespace(key.namespace), SimpleName(key.name))),
+            )
+        });
+        let mut raw_global_edges = Vec::new();
         for (key, entry) in &registry_entries {
             let fqn = provider_fqn(key);
             match entry {
-                RegistryEntry::Dsl(def) => raw_providers.push(RawProviderNode {
-                    fqn: fqn.clone(),
-                    edges: collect_edges(&registry, key, def, &mut placeholders),
-                }),
+                RegistryEntry::Dsl(def) => {
+                    let global_prefix = global_table
+                        .as_ref()
+                        .filter(|(_, global_fqn)| global_fqn == &fqn)
+                        .map(|(prefix, _)| prefix.as_str());
+                    let edges =
+                        collect_edges(&registry, key, def, &mut placeholders, global_prefix);
+                    if global_prefix.is_some() {
+                        raw_global_edges = edges;
+                        raw_providers.push(RawProviderNode {
+                            fqn: fqn.clone(),
+                            edges: Vec::new(),
+                        });
+                    } else {
+                        raw_providers.push(RawProviderNode {
+                            fqn: fqn.clone(),
+                            edges,
+                        });
+                    }
+                }
                 RegistryEntry::Programmatic(_) => {
                     register_placeholder(
                         &mut placeholders,
@@ -150,7 +176,7 @@ impl CodegenModel {
             placeholder_names.insert(key.clone(), type_name);
         }
 
-        let providers = raw_providers
+        let mut providers: Vec<ProviderNode> = raw_providers
             .into_iter()
             .map(|raw| ProviderNode {
                 type_name: concrete_names[&raw.fqn].clone(),
@@ -182,11 +208,40 @@ impl CodegenModel {
             })
             .collect();
 
+        let global_edges: Vec<Edge> = raw_global_edges
+            .into_iter()
+            .map(|edge| Edge {
+                kind: edge.kind,
+                target: resolve_target(&edge.target, &concrete_names, &placeholder_names),
+            })
+            .collect();
+        let global_members: BTreeSet<String> = global_edges
+            .iter()
+            .filter_map(|edge| edge_member_name(&edge.kind))
+            .collect();
+        for provider in &mut providers {
+            // 全局前缀表优先于 provider 本地 resolve；同名本地成员不可达，也不能在子类重复声明。
+            provider.edges.retain(|edge| {
+                edge_member_name(&edge.kind).is_none_or(|member| !global_members.contains(&member))
+            });
+        }
+
         Self {
             providers,
             placeholders,
             schemes,
+            global_edges,
         }
+    }
+}
+
+fn edge_member_name(kind: &EdgeKind) -> Option<String> {
+    match kind {
+        EdgeKind::Static { key } | EdgeKind::PassthroughStatic { key } => Some(key.clone()),
+        EdgeKind::Resolve { alias } | EdgeKind::PassthroughResolve { alias } => {
+            Some(format!("$resolve{}", pascal_case(alias)))
+        }
+        EdgeKind::Dynamic { .. } => None,
     }
 }
 
@@ -195,71 +250,78 @@ fn collect_edges(
     host_key: &(Namespace, SimpleName),
     def: &ProviderDef,
     placeholders: &mut BTreeMap<PlaceholderKey, String>,
+    global_prefix: Option<&str>,
 ) -> Vec<RawEdge> {
     let host_fqn = provider_fqn(host_key);
     let mut edges = Vec::new();
 
-    if let Some(list) = &def.list {
-        for (index, (key, entry)) in list.entries.iter().enumerate() {
-            match entry {
-                ListEntry::Static(invocation) if !key.contains("${") => {
-                    let target = target_for_invocation(
-                        registry,
-                        &host_key.0,
-                        invocation,
-                        &host_fqn,
-                        "List",
-                        index + 1,
-                        placeholders,
-                    );
-                    edges.push(RawEdge {
-                        kind: EdgeKind::Static { key: key.clone() },
-                        target,
-                    });
-                }
-                ListEntry::Static(_) => {}
-                ListEntry::Dynamic(DynamicListEntry::Sql(entry)) => {
-                    let target = match &entry.provider {
-                        Some(provider) if provider.0.contains("${") => placeholder_target(
+    // 全局表运行期只调用 resolve；list 条目不会成为全局段。
+    if global_prefix.is_none() {
+        if let Some(list) = &def.list {
+            for (index, (key, entry)) in list.entries.iter().enumerate() {
+                match entry {
+                    ListEntry::Static(invocation) if !key.contains("${") => {
+                        let target = target_for_invocation(
+                            registry,
+                            &host_key.0,
+                            invocation,
+                            &host_fqn,
+                            "List",
+                            index + 1,
+                            placeholders,
+                        );
+                        edges.push(RawEdge {
+                            kind: EdgeKind::Static { key: key.clone() },
+                            target,
+                        });
+                    }
+                    ListEntry::Static(_) => {}
+                    ListEntry::Dynamic(DynamicListEntry::Sql(entry)) => {
+                        let target = match &entry.provider {
+                            Some(provider) if provider.0.contains("${") => placeholder_target(
+                                placeholders,
+                                PlaceholderKey::HostBinding {
+                                    host: host_fqn.clone(),
+                                    binding: entry.data_var.0.clone(),
+                                },
+                            ),
+                            Some(provider) => target_for_provider_name(
+                                registry,
+                                &host_key.0,
+                                provider,
+                                placeholders,
+                            ),
+                            None => placeholder_target(
+                                placeholders,
+                                PlaceholderKey::Fallback {
+                                    host: host_fqn.clone(),
+                                    edge_kind: "List",
+                                    ordinal: index + 1,
+                                },
+                            ),
+                        };
+                        edges.push(RawEdge {
+                            kind: EdgeKind::Dynamic {
+                                alias: entry.alias.clone(),
+                            },
+                            target,
+                        });
+                    }
+                    ListEntry::Dynamic(DynamicListEntry::Delegate(entry)) => {
+                        let target = placeholder_target(
                             placeholders,
                             PlaceholderKey::HostBinding {
                                 host: host_fqn.clone(),
-                                binding: entry.data_var.0.clone(),
+                                binding: entry.child_var.0.clone(),
                             },
-                        ),
-                        Some(provider) => {
-                            target_for_provider_name(registry, &host_key.0, provider, placeholders)
-                        }
-                        None => placeholder_target(
-                            placeholders,
-                            PlaceholderKey::Fallback {
-                                host: host_fqn.clone(),
-                                edge_kind: "List",
-                                ordinal: index + 1,
+                        );
+                        edges.push(RawEdge {
+                            kind: EdgeKind::Dynamic {
+                                alias: entry.alias.clone(),
                             },
-                        ),
-                    };
-                    edges.push(RawEdge {
-                        kind: EdgeKind::Dynamic {
-                            alias: entry.alias.clone(),
-                        },
-                        target,
-                    });
-                }
-                ListEntry::Dynamic(DynamicListEntry::Delegate(entry)) => {
-                    let target = placeholder_target(
-                        placeholders,
-                        PlaceholderKey::HostBinding {
-                            host: host_fqn.clone(),
-                            binding: entry.child_var.0.clone(),
-                        },
-                    );
-                    edges.push(RawEdge {
-                        kind: EdgeKind::Dynamic {
-                            alias: entry.alias.clone(),
-                        },
-                        target,
-                    });
+                            target,
+                        });
+                    }
                 }
             }
         }
@@ -269,14 +331,27 @@ fn collect_edges(
         let mut entries: Vec<_> = resolve.0.iter().collect();
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (index, (key, entry)) in entries.into_iter().enumerate() {
+            if global_prefix.is_some_and(|prefix| !key.starts_with(prefix)) {
+                continue;
+            }
             // 纯字面量 key(无正则元字符)语义上就是静态子节点(RULES §5.1:
             // 纯字面量是空元字符的合法子集)—— 无需 alias, 直接按静态边生成 getter。
             // 带元字符的正则仍只认 alias; 无 alias 走 $raw。
             let kind = if entry.alias.is_none() && is_literal_regex(key) {
-                EdgeKind::Static { key: key.clone() }
+                if entry.passthrough {
+                    EdgeKind::PassthroughStatic { key: key.clone() }
+                } else {
+                    EdgeKind::Static { key: key.clone() }
+                }
             } else if let Some(alias) = &entry.alias {
-                EdgeKind::Resolve {
-                    alias: alias.clone(),
+                if entry.passthrough {
+                    EdgeKind::PassthroughResolve {
+                        alias: alias.clone(),
+                    }
+                } else {
+                    EdgeKind::Resolve {
+                        alias: alias.clone(),
+                    }
                 }
             } else {
                 continue;
@@ -300,9 +375,12 @@ fn collect_edges(
 /// key 是否纯字面量正则: 不含任何正则元字符(也排除 `${...}` 模板 —— `$`/`{` 本身就是元字符)。
 fn is_literal_regex(key: &str) -> bool {
     !key.is_empty()
-        && key
-            .chars()
-            .all(|c| !matches!(c, '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'))
+        && key.chars().all(|c| {
+            !matches!(
+                c,
+                '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+            )
+        })
 }
 
 fn target_for_invocation(

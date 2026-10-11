@@ -226,7 +226,7 @@ pub fn query_fetch(raw_path: &str) -> Result<Vec<Value>, String> {
 /// **Engine service**: 路径 → ImageInfo 列表。
 /// 内部：`runtime.fetch(path)` → JSON 行 → 按列名映射到 ImageInfo (gallery_route alias 契约)。
 /// 不带启发式分支；调用方负责传一个能限定范围的 path
-/// (例如 `images://gallery/all/x100x/3`，避免在 `images://gallery/` 等根路径上调本函数)。
+/// (例如 `images://gallery/all/_kb_x100x/3`，避免在 `images://gallery/` 等根路径上调本函数)。
 pub fn images_at(path: &str) -> Result<Vec<ImageInfo>, String> {
     let rt = provider_runtime();
     let rows = rt.fetch(path).map_err(|e| e.to_string())?;
@@ -468,7 +468,7 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
     let limit = limit.max(1);
     let encoded = pathql_rs::escape_path_segment(album_id.trim());
     let base = format!("images://gallery/album/{}", encoded);
-    let mut out = images_at(&format!("{}/order/x{}x/1", base, limit))?;
+    let mut out = images_at(&format!("{}/sort/by-album-order/_kb_x{}x/1", base, limit))?;
     if out.len() >= limit {
         out.truncate(limit);
         return Ok(out);
@@ -496,7 +496,10 @@ pub fn album_preview_at(album_id: &str, limit: usize) -> Result<Vec<ImageInfo>, 
             .and_then(|v| v.as_str())
             .unwrap_or(&child.name);
         let child_encoded = pathql_rs::escape_path_segment(child_id);
-        let child_path = format!("images://gallery/album/{}/order/x3x/1", child_encoded);
+        let child_path = format!(
+            "images://gallery/album/{}/sort/by-album-order/_kb_x3x/1",
+            child_encoded
+        );
         for image in images_at(&child_path)? {
             out.push(image);
             if out.len() >= limit {
@@ -793,6 +796,9 @@ mod tests {
             .unwrap();
         validate_dsl(&runtime);
         runtime
+            .register_global_table("_kb_", "kabegame", "kb_global")
+            .unwrap();
+        runtime
             .register_schema("images", "images", "kabegame", "images_root_provider")
             .unwrap();
         runtime
@@ -892,7 +898,7 @@ mod tests {
     #[test]
     fn query_fetch_returns_schema_agnostic_rows() {
         let runtime = build_runtime();
-        let rows = query_fetch_with_runtime(&runtime, "images://gallery/all/x10x/1").unwrap();
+        let rows = query_fetch_with_runtime(&runtime, "images://gallery/all/_kb_x10x/1").unwrap();
         assert_eq!(rows.len(), 10);
         assert!(rows.iter().all(|row| row.get("id").is_some()));
 
@@ -958,10 +964,10 @@ mod tests {
             &[1, 2, 3, 5, 8, 10, 11],
         );
         // search query provider 委派回 gallery_route，是超级枢纽；后面直接接 date，
-        // 不需要再插入 filter_comb。
+        // 不需要再插入 `_kb_fc`。
         assert_gallery_ids(
             &runtime,
-            "images://gallery/plugin/p1/filter_comb/search/metadata/star/date/2024y/01m",
+            "images://gallery/plugin/p1/_kb_fc/search/metadata/star/date/2024y/01m",
             &[1],
         );
     }
@@ -985,7 +991,7 @@ mod tests {
         // (p1 AND (1MB-4MB OR NOT chinese)) OR p2 = {2,4,5,6,9,10}。
         assert_gallery_ids(
             &runtime,
-            "images://gallery/~any/plugin/p1/filter_comb/~any/size/1MB-4MB/~or/~not/name/chinese/~end/~end/~or/plugin/p2/~end",
+            "images://gallery/~any/plugin/p1/_kb_fc/~any/size/1MB-4MB/~or/~not/name/chinese/~end/~end/~or/plugin/p2/~end",
             &[2, 4, 5, 6, 9, 10],
         );
     }
@@ -993,14 +999,13 @@ mod tests {
     #[test]
     fn gallery_closed_group_returns_to_its_comb_hub_before_sorting() {
         let runtime = build_runtime();
-        let direct_tail = "images://gallery/media-type/image/filter_comb/~any/plugin/p1/~or/date/2024y/01m/~end/sort/by-time/desc/x100x/1";
+        let direct_tail = "images://gallery/media-type/image/_kb_fc/~any/plugin/p1/~or/date/2024y/01m/~end/sort/by-time/_kb_desc/_kb_x100x/1";
         assert_gallery_ids(&runtime, direct_tail, &[1, 2, 4, 7, 9, 10]);
 
         // ~end 会把游标放回开组时的 gallery_filter_comb，故可直接续 sort。
-        // 再写一遍 filter_comb 等于让 comb 解析自己的名字，反而应被确定性拒绝。
-        let redundant_comb = "images://gallery/media-type/image/filter_comb/~any/plugin/p1/~or/date/2024y/01m/~end/filter_comb/sort/by-time/desc/x100x/1";
-        let err = query_fetch_with_runtime(&runtime, redundant_comb).unwrap_err();
-        assert!(err.contains("filter_comb"), "unexpected error: {err}");
+        // `_kb_fc` 由全局表提供，重复写仍会进入同一个组合枢纽。
+        let redundant_comb = "images://gallery/media-type/image/_kb_fc/~any/plugin/p1/~or/date/2024y/01m/~end/_kb_fc/sort/by-time/_kb_desc/_kb_x100x/1";
+        assert_gallery_ids(&runtime, redundant_comb, &[1, 2, 4, 7, 9, 10]);
     }
 
     #[test]
@@ -1026,7 +1031,7 @@ mod tests {
         );
         assert_gallery_ids(
             &runtime,
-            "images://gallery/plugin/p1/filter_comb/date/2024y/01m/filter_comb/sort/by-time/desc/x100x/1",
+            "images://gallery/plugin/p1/_kb_fc/date/2024y/01m/_kb_fc/sort/by-time/_kb_desc/_kb_x100x/1",
             &[1, 2, 9],
         );
         // 裸年节点必须真实过滤(gallery_date_year_provider 自身的年 WHERE;

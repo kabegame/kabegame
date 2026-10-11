@@ -473,7 +473,7 @@ watch(
     }
     try {
       const rows = await pathqlFetch<Record<string, unknown>>(
-        `images://gallery/album-tree/${encodeURIComponent(id)}/x1x/1`,
+        `images://gallery/album-tree/${encodeURIComponent(id)}/_kb_x1x/1`,
       );
       if (selectedAlbumId.value !== id) return; // 过期响应
       albumCover.value = rows[0] ? rowToImageInfo(rows[0]) : null;

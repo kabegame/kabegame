@@ -133,6 +133,8 @@ pub type DelegateTransform =
 pub enum ResolveRef {
     /// Direct result. None means the path segment was not found.
     Terminal(Option<ChildEntry>),
+    /// 只折叠目标 provider 的 query，路径游标仍停在原 provider。
+    Passthrough(Arc<dyn Provider>),
     /// Delegation reference. Runtime owns recursive target resolution and
     /// unwinds transforms after the target chain bottoms out.
     Delegate {
@@ -181,6 +183,7 @@ impl std::fmt::Debug for ResolveRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Terminal(child) => f.debug_tuple("Terminal").field(child).finish(),
+            Self::Passthrough(_) => f.debug_tuple("Passthrough").field(&"<Provider>").finish(),
             Self::Delegate { .. } => f
                 .debug_struct("Delegate")
                 .field("target", &"<Provider>")
@@ -298,6 +301,8 @@ pub enum EngineError {
     /// 没有数据表的 schema 用 `register_programmatic_schema`。
     #[error("schema `{0}`: table `{1}` must be a plain table name (simple, non-keyword identifier); use register_programmatic_schema for a schema without a table")]
     InvalidSchemaTable(String, String),
+    #[error("global table prefix must not be empty: `{0}`")]
+    InvalidGlobalPrefix(String),
     #[error("load provider error: {0}")]
     Load(#[from] LoadError),
     #[error("register provider error: {0}")]

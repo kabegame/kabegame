@@ -10,7 +10,7 @@
   >
     <!-- 常驻不重建（无 treeKey）：草稿变化经 ctx 的 computed 流入，
          计数按 path watch 重取、active 链经 syncAutoExpand 单向展开 -->
-    <GalleryFacetTreeInner :ctx="ctx" :dimensions="dimensions" @select="selectFilter" />
+    <GalleryFacetTreeInner :ctx="ctx" :dimension="dimension" @select="selectFilter" />
   </div>
 </template>
 
@@ -68,7 +68,6 @@ const filters = computed<GalleryFilterSet>(() => ({
 const dimension = computed<GalleryBrowseDimension>(() => props.dimension);
 const filter = computed(() => filterForDimension(filters.value, dimension.value));
 const visible = computed(() => props.visible);
-const dimensions = computed<GalleryBrowseDimension[]>(() => [dimension.value]);
 
 function registerRefreshTarget(target: RefreshTarget): () => void {
   refreshTargets.add(target);
@@ -88,7 +87,6 @@ const ctx: GalleryFilterTreeContext = {
   dimension,
   prefix: facet.treeRootPath,
   visible,
-  autoExpandRoot: computed(() => true),
   pathForSegment: facet.pathForSegment,
   listPathForSegment: facet.listPathForSegment,
   countBaseline: facet.baselineCount,

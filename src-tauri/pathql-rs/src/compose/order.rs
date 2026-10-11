@@ -2,12 +2,12 @@ use crate::ast::OrderDirection;
 
 /// 累积的 ORDER 状态。
 ///
-/// `entries` 保留最终 ORDER BY 优先级（index 0 优先）。`global` 是
-/// `OrderForm::Global { all }` 的累积，多次声明 last-wins。
+/// `entries` 保留最终 ORDER BY 优先级（index 0 优先）。`revert` 控制是否
+/// 在渲染时翻转全部方向。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OrderState {
     pub entries: Vec<(String, OrderDirection)>,
-    pub global: Option<OrderDirection>,
+    pub revert: bool,
 }
 
 impl OrderState {
@@ -19,42 +19,24 @@ impl OrderState {
     ///
     /// - `prepend = false`：新字段追加；已有字段保持当前位置并更新方向。
     /// - `prepend = true`：新字段插入到最前；已有字段移到最前并更新方向。
-    /// - `Revert` 在 fold 期解析；已有字段翻转方向，缺失字段默认为 Asc。
     pub fn insert(&mut self, sql: String, dir: OrderDirection, prepend: bool) {
         let existing_pos = self.entries.iter().position(|(field, _)| field == &sql);
-        let existing_dir = existing_pos.map(|pos| self.entries[pos].1);
-        let effective_dir = resolve_direction(dir, existing_dir);
 
         match (prepend, existing_pos) {
             (false, Some(pos)) => {
-                self.entries[pos].1 = effective_dir;
+                self.entries[pos].1 = dir;
             }
             (false, None) => {
-                self.entries.push((sql, effective_dir));
+                self.entries.push((sql, dir));
             }
             (true, Some(pos)) => {
                 self.entries.remove(pos);
-                self.entries.insert(0, (sql, effective_dir));
+                self.entries.insert(0, (sql, dir));
             }
             (true, None) => {
-                self.entries.insert(0, (sql, effective_dir));
+                self.entries.insert(0, (sql, dir));
             }
         }
-    }
-
-    pub fn clear_all(&mut self) {
-        self.entries.clear();
-    }
-}
-
-fn resolve_direction(incoming: OrderDirection, existing: Option<OrderDirection>) -> OrderDirection {
-    match incoming {
-        OrderDirection::Asc | OrderDirection::Desc => incoming,
-        OrderDirection::Revert => match existing {
-            Some(OrderDirection::Asc) => OrderDirection::Desc,
-            Some(OrderDirection::Desc) => OrderDirection::Asc,
-            Some(OrderDirection::Revert) | None => OrderDirection::Asc,
-        },
     }
 }
 
@@ -121,57 +103,9 @@ mod tests {
     }
 
     #[test]
-    fn default_global_none() {
+    fn default_revert_false() {
         let o = OrderState::new();
-        assert!(o.global.is_none());
+        assert!(!o.revert);
         assert!(o.entries.is_empty());
-    }
-
-    #[test]
-    fn insert_revert_flips_existing_asc_to_desc() {
-        let mut o = OrderState::new();
-        o.insert("a".into(), OrderDirection::Asc, false);
-        o.insert("a".into(), OrderDirection::Revert, false);
-        assert_eq!(o.entries[0], ("a".into(), OrderDirection::Desc));
-    }
-
-    #[test]
-    fn insert_revert_flips_existing_desc_to_asc() {
-        let mut o = OrderState::new();
-        o.insert("a".into(), OrderDirection::Desc, false);
-        o.insert("a".into(), OrderDirection::Revert, false);
-        assert_eq!(o.entries[0], ("a".into(), OrderDirection::Asc));
-    }
-
-    #[test]
-    fn insert_revert_on_missing_defaults_to_asc() {
-        let mut o = OrderState::new();
-        o.insert("a".into(), OrderDirection::Revert, false);
-        assert_eq!(o.entries[0], ("a".into(), OrderDirection::Asc));
-    }
-
-    #[test]
-    fn prepend_revert_existing_flips_and_moves_to_front() {
-        let mut o = OrderState::new();
-        o.insert("a".into(), OrderDirection::Asc, false);
-        o.insert("b".into(), OrderDirection::Desc, false);
-        o.insert("a".into(), OrderDirection::Revert, true);
-        assert_eq!(
-            o.entries,
-            vec![
-                ("a".into(), OrderDirection::Desc),
-                ("b".into(), OrderDirection::Desc),
-            ]
-        );
-    }
-
-    #[test]
-    fn clear_all_drops_entries_but_keeps_global_modifier() {
-        let mut o = OrderState::new();
-        o.insert("a".into(), OrderDirection::Asc, false);
-        o.global = Some(OrderDirection::Revert);
-        o.clear_all();
-        assert!(o.entries.is_empty());
-        assert_eq!(o.global, Some(OrderDirection::Revert));
     }
 }

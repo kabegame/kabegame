@@ -69,7 +69,7 @@ fn fold_gallery_page_chain() {
     // 7b: order 譚･閾ｪ gallery_route (荳顔ｧｻ蜷・
     assert_eq!(state.order.entries.len(), 1);
     assert_eq!(state.order.entries[0].0, "images.crawled_at");
-    assert!(state.order.global.is_none());
+    assert!(!state.order.revert);
 
     assert_eq!(state.fields.len(), 21);
     assert_eq!(state.joins.len(), 3);

@@ -11,7 +11,9 @@ pub(super) fn emit(model: &CodegenModel) -> String {
     ));
     writer.line(format_args!("// Target: TypeScript"));
     writer.line(format_args!(""));
-    writer.raw(RUNTIME.trim_end());
+    let global_members = emit_global_members(&model.global_edges);
+    let runtime = RUNTIME.replace("  // __PATHQL_GLOBAL_MEMBERS__", &global_members);
+    writer.raw(runtime.trim_end());
     writer.line(format_args!(""));
     writer.line(format_args!(""));
 
@@ -105,6 +107,17 @@ fn emit_edge(writer: &mut IndentWriter, edge: &Edge, used_members: &mut HashSet<
             writer.indented(|writer| emit_return(writer, &segment, &edge.target));
             writer.line(format_args!("}}"));
         }
+        EdgeKind::PassthroughStatic { key } => {
+            let name = unique_member(key.clone(), used_members);
+            let property = if is_identifier(&name) && !name.starts_with('$') {
+                name
+            } else {
+                format!("[{}]", ts_string_literal(&name))
+            };
+            writer.line(format_args!("get {}(): this {{", property));
+            writer.indented(|writer| writer.line(format_args!("return this;")));
+            writer.line(format_args!("}}"));
+        }
         EdgeKind::Resolve { alias } => {
             let method = unique_member(format!("$resolve{}", pascal_case(alias)), used_members);
             writer.line(format_args!(
@@ -112,6 +125,12 @@ fn emit_edge(writer: &mut IndentWriter, edge: &Edge, used_members: &mut HashSet<
                 method, edge.target.type_name
             ));
             writer.indented(|writer| emit_return(writer, "seg", &edge.target));
+            writer.line(format_args!("}}"));
+        }
+        EdgeKind::PassthroughResolve { alias } => {
+            let method = unique_member(format!("$resolve{}", pascal_case(alias)), used_members);
+            writer.line(format_args!("{}(_seg: string): this {{", method));
+            writer.indented(|writer| writer.line(format_args!("return this;")));
             writer.line(format_args!("}}"));
         }
         EdgeKind::Dynamic { alias } => {
@@ -128,6 +147,21 @@ fn emit_edge(writer: &mut IndentWriter, edge: &Edge, used_members: &mut HashSet<
             writer.line(format_args!("}}"));
         }
     }
+}
+
+fn emit_global_members(edges: &[Edge]) -> String {
+    if edges.is_empty() {
+        return String::new();
+    }
+    let mut writer = IndentWriter::with_indent(1);
+    let mut used_members = HashSet::new();
+    for (index, edge) in edges.iter().enumerate() {
+        if index > 0 {
+            writer.line(format_args!(""));
+        }
+        emit_edge(&mut writer, edge, &mut used_members);
+    }
+    writer.finish().trim_end().to_string()
 }
 
 fn emit_return(writer: &mut IndentWriter, expression: &str, target: &EdgeTarget) {
@@ -180,6 +214,13 @@ impl IndentWriter {
         Self {
             output: String::new(),
             indent: 0,
+        }
+    }
+
+    fn with_indent(indent: usize) -> Self {
+        Self {
+            output: String::new(),
+            indent,
         }
     }
 

@@ -34,8 +34,8 @@ use url::Url;
 use zip::ZipArchive;
 
 use pathql_rs::{
-    ContribQuery, InvokeByName, List, LoaderType, Namespace, ProviderDef, ProviderInvocation,
-    ProviderName, Query, Resolve, SimpleName, Source, SqlExpr, WhereQuery,
+    ContribQuery, List, LoaderType, Namespace, ProviderDef, Query, SimpleName, Source, SqlExpr,
+    WhereQuery,
 };
 
 /// 脚本后端枚举（core 权威定义）。kbBackend 字符串解析目标。
@@ -2571,28 +2571,11 @@ fn normalize_plugin_provider_def(
             ));
         }
     }
-    ensure_plugin_provider_filter_comb_resolve(&mut def);
     Ok(def)
 }
 
-fn ensure_plugin_provider_filter_comb_resolve(def: &mut ProviderDef) {
-    let resolve = def.resolve.get_or_insert_with(Resolve::default);
-    resolve
-        .0
-        .entry("filter_comb".to_string())
-        .or_insert_with(|| {
-            // ResolveEntry::from — 不带 codegen alias 的普通 resolve 项。
-            ProviderInvocation::ByName(InvokeByName {
-                provider: ProviderName("kabegame.gallery_filter_comb".to_string()),
-                properties: None,
-                meta: None,
-            })
-            .into()
-        });
-}
-
 fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
-    let mut def = ProviderDef {
+    ProviderDef {
         schema: None,
         namespace: Some(Namespace(format!("plugins.{}", plugin_id))),
         name: SimpleName("entry_provider".to_string()),
@@ -2604,9 +2587,7 @@ fn default_plugin_entry_provider(plugin_id: &str) -> ProviderDef {
         list: Some(List::default()),
         resolve: None,
         note: None,
-    };
-    ensure_plugin_provider_filter_comb_resolve(&mut def);
-    def
+    }
 }
 
 fn parse_plugin_provider_entries(

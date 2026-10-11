@@ -571,6 +571,9 @@ fn build_runtime_with(conn: Arc<Mutex<Connection>>) -> Arc<ProviderRuntime> {
     register_embedded_dsl(&runtime);
     validate_dsl(&runtime);
     runtime
+        .register_global_table("_kb_", "kabegame", "kb_global")
+        .unwrap();
+    runtime
         .register_schema("images", "images", "kabegame", "images_root_provider")
         .unwrap();
     runtime
@@ -829,8 +832,8 @@ fn gallery_dimension_lists_carry_group_counts_in_meta() {
     for context in [
         "images://gallery",
         "images://gallery/hide",
-        "images://gallery/media-type/image/filter_comb",
-        "images://gallery/plugin/pixiv/filter_comb",
+        "images://gallery/media-type/image/_kb_fc",
+        "images://gallery/plugin/pixiv/_kb_fc",
     ] {
         let years = listed_counts(&runtime, &format!("{context}/date"));
         assert!(!years.is_empty(), "{context}/date");
@@ -860,7 +863,7 @@ fn gallery_dimension_lists_carry_group_counts_in_meta() {
     // 没有视频的上下文：video 仍列出且计数 0（补 0），按段名照样可路由
     let kinds = listed_counts(
         &runtime,
-        "images://gallery/media-type/image/filter_comb/media-type",
+        "images://gallery/media-type/image/_kb_fc/media-type",
     );
     assert_eq!(
         kinds,
@@ -868,16 +871,53 @@ fn gallery_dimension_lists_carry_group_counts_in_meta() {
     );
     // 上下文里没有的插件不列出，但段名仍可路由
     assert!(
-        listed_counts(&runtime, "images://gallery/plugin/pixiv/filter_comb/plugin")
+        listed_counts(&runtime, "images://gallery/plugin/pixiv/_kb_fc/plugin")
             .iter()
             .all(|(name, _)| name == "pixiv")
     );
     assert_eq!(
         runtime
-            .count("images://gallery/media-type/video/filter_comb/plugin/nope")
+            .count("images://gallery/media-type/video/_kb_fc/plugin/nope")
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn gallery_global_clear_order_preserves_dimension_list_results() {
+    let runtime = build_runtime();
+    for path in [
+        "images://gallery/plugin",
+        "images://gallery/hide/media-type",
+        "images://gallery/plugin/pixiv/_kb_fc/media-type",
+    ] {
+        let plain = runtime.list(path).unwrap();
+        let cleared_path = format!("{path}/_kb_co");
+        let cleared = runtime.list(&cleared_path).unwrap();
+        let project = |children: Vec<pathql_rs::ChildEntry>| {
+            children
+                .into_iter()
+                .map(|child| {
+                    let count = child
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| meta.get("count"))
+                        .cloned();
+                    (child.name, count)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(project(plain), project(cleared), "path={path}");
+
+        let resolved = runtime.resolve(&cleared_path).unwrap();
+        let mut ctx = TemplateContext::default();
+        ctx.globals = runtime.globals().clone();
+        let (sql, _) = resolved
+            .composed
+            .build_sql(&ctx, SqlDialect::Sqlite)
+            .unwrap();
+        assert!(!sql.contains("ORDER BY"), "path={cleared_path} sql={sql}");
+    }
 }
 
 #[test]
@@ -901,26 +941,44 @@ fn gallery_page_number_resolves_without_listing_pages() {
     let runtime = build_runtime();
     let total = runtime.count("images://gallery/all").unwrap();
     assert!(total > 100 && total < 200, "total={total}");
-    // x<N>x 后的页号由 resolve 直接实例化，不经 page_size_provider 列举：越过末页也能解析、取行为空。
+    // `_kb_x<N>x` 后的页号由 resolve 直接实例化，不经 page_size_provider 列举：越过末页也能解析、取行为空。
     // 若退回 list 反查，第 99 页枚举不出来，会是 path not found。
     for path in [
-        "images://gallery/all/x100x/99",
-        "images://gallery/all/desc/x100x/99",
+        "images://gallery/all/_kb_x100x/99",
+        "images://gallery/all/_kb_desc/_kb_x100x/99",
         "images://x100x/99",
     ] {
         assert!(runtime.fetch(path).unwrap().is_empty(), "path={path}");
         assert_eq!(runtime.count(path).unwrap(), 0, "path={path}");
     }
     assert_eq!(
-        runtime.fetch("images://gallery/all/x100x/2").unwrap().len(),
+        runtime
+            .fetch("images://gallery/all/_kb_x100x/2")
+            .unwrap()
+            .len(),
         total - 100
     );
     // 列举仍保留给 VD 目录与 MCP。
-    let pages = runtime.list("images://gallery/all/x100x").unwrap();
+    let pages = runtime.list("images://gallery/all/_kb_x100x").unwrap();
     assert_eq!(
         pages.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
         ["1", "2"]
     );
+}
+
+#[test]
+fn gallery_legacy_continuation_names_are_not_resolved() {
+    let runtime = build_runtime();
+    for path in [
+        "images://gallery/plugin/pixiv/filter_comb",
+        "images://gallery/all/desc",
+        "images://gallery/all/x10x/1",
+    ] {
+        assert!(
+            matches!(runtime.resolve(path), Err(EngineError::PathNotFound(_))),
+            "legacy path unexpectedly resolved: {path}"
+        );
+    }
 }
 
 #[test]
@@ -945,7 +1003,7 @@ fn dsl_loader_rejects_legacy_from_contribution() {
 #[test]
 fn gallery_all_page_fetches_expected_image_set() {
     let runtime = build_runtime();
-    let rows = runtime.fetch("images://gallery/all/x2x/1").unwrap();
+    let rows = runtime.fetch("images://gallery/all/_kb_x2x/1").unwrap();
     assert_eq!(ids(rows), ["1", "2"]);
 }
 
@@ -1023,17 +1081,17 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
     let runtime = build_runtime();
 
     let media_type = runtime
-        .fetch("images://gallery/media-type/image/desc/x2x/1")
+        .fetch("images://gallery/media-type/image/_kb_desc/_kb_x2x/1")
         .unwrap();
     assert_eq!(ids(media_type), ["122", "121"]);
 
     let webp = runtime
-        .fetch("images://gallery/media-type/image/webp/desc/x2x/1")
+        .fetch("images://gallery/media-type/image/webp/_kb_desc/_kb_x2x/1")
         .unwrap();
     assert_eq!(ids(webp), ["119"]);
 
     let mp4 = runtime
-        .fetch("images://gallery/media-type/video/mp4/x2x/1")
+        .fetch("images://gallery/media-type/video/mp4/_kb_x2x/1")
         .unwrap();
     assert_eq!(ids(mp4), ["118"]);
 
@@ -1052,7 +1110,7 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
     );
 
     let hidden_filtered = runtime
-        .fetch("images://gallery/hide/media-type/image/desc/x2x/1")
+        .fetch("images://gallery/hide/media-type/image/_kb_desc/_kb_x2x/1")
         .unwrap();
     assert_eq!(ids(hidden_filtered), ["122", "121"]);
 }
@@ -1061,11 +1119,13 @@ fn desc_router_keeps_pagination_after_filtered_paths() {
 fn gallery_sort_by_id_provider_orders_default_ids() {
     let runtime = build_runtime();
 
-    let by_id = runtime.fetch("images://gallery/sort/by-id/x3x/1").unwrap();
+    let by_id = runtime
+        .fetch("images://gallery/sort/by-id/_kb_x3x/1")
+        .unwrap();
     assert_eq!(ids(by_id), ["1", "2", "3"]);
 
     let by_id_desc = runtime
-        .fetch("images://gallery/sort/by-id/desc/x3x/1")
+        .fetch("images://gallery/sort/by-id/_kb_desc/_kb_x3x/1")
         .unwrap();
     assert_eq!(ids(by_id_desc), ["122", "121", "120"]);
 }
@@ -1092,9 +1152,15 @@ fn gallery_rank_locates_image_position_within_view() {
     assert_eq!(rank(&runtime, "images://gallery/all", "42"), Some(42));
     assert_eq!(rank(&runtime, "images://gallery/all", "122"), Some(122));
 
-    // /desc 必须作用在边界之前的内层：整条升序列倒过来。
-    assert_eq!(rank(&runtime, "images://gallery/all/desc", "122"), Some(1));
-    assert_eq!(rank(&runtime, "images://gallery/all/desc", "1"), Some(122));
+    // `/_kb_desc` 必须作用在边界之前的内层：整条升序列倒过来。
+    assert_eq!(
+        rank(&runtime, "images://gallery/all/_kb_desc", "122"),
+        Some(1)
+    );
+    assert_eq!(
+        rank(&runtime, "images://gallery/all/_kb_desc", "1"),
+        Some(122)
+    );
 
     // hide/ 排除 id=9，它之后的图序号整体前移一位。
     assert_eq!(rank(&runtime, "images://gallery/hide/all", "8"), Some(8));
@@ -1106,7 +1172,7 @@ fn gallery_rank_locates_image_position_within_view() {
     // fixture 里每张图 size 都是 10，by-size 是一个 122 行的并列组：
     // 只有 images.id 全序兜底才能让 rank 与分页 fetch 同序。
     let paged = ids(runtime
-        .fetch("images://gallery/sort/by-size/x200x/1")
+        .fetch("images://gallery/sort/by-size/_kb_x200x/1")
         .unwrap());
     assert_eq!(paged.len(), 122);
     for (i, id) in paged.iter().enumerate() {
@@ -1129,17 +1195,17 @@ fn gallery_seeded_random_sort_is_stable_and_reversible() {
     let runtime = build_runtime();
 
     let first_page = ids(runtime
-        .fetch("images://gallery/sort/random-42/x10x/1")
+        .fetch("images://gallery/sort/random-42/_kb_x10x/1")
         .unwrap());
     let repeated_first_page = ids(runtime
-        .fetch("images://gallery/sort/random-42/x10x/1")
+        .fetch("images://gallery/sort/random-42/_kb_x10x/1")
         .unwrap());
     assert_eq!(first_page, repeated_first_page);
 
     let mut paged = Vec::new();
     for page in 1..=13 {
         paged.extend(ids(runtime
-            .fetch(&format!("images://gallery/sort/random-42/x10x/{page}"))
+            .fetch(&format!("images://gallery/sort/random-42/_kb_x10x/{page}"))
             .unwrap()));
     }
     let unique = paged.iter().cloned().collect::<HashSet<_>>();
@@ -1155,7 +1221,7 @@ fn gallery_seeded_random_sort_is_stable_and_reversible() {
     let mut reversed = seed_42.clone();
     reversed.reverse();
     let descending = ids(runtime
-        .fetch("images://gallery/sort/random-42/desc")
+        .fetch("images://gallery/sort/random-42/_kb_desc")
         .unwrap());
     assert_eq!(descending, reversed);
 
@@ -1165,7 +1231,7 @@ fn gallery_seeded_random_sort_is_stable_and_reversible() {
     );
     assert_eq!(
         runtime
-            .count("images://gallery/sort/random-42/x10x/1")
+            .count("images://gallery/sort/random-42/_kb_x10x/1")
             .unwrap(),
         10
     );
@@ -1177,16 +1243,16 @@ fn gallery_url_search_matches_real_url_columns_and_excludes_dummy_urls() {
 
     assert_eq!(
         ids(runtime
-            .fetch("images://gallery/search/url/post.test/all/x10x/1")
+            .fetch("images://gallery/search/url/post.test/all/_kb_x10x/1")
             .unwrap()),
         ["122"]
     );
     assert!(runtime
-        .fetch("images://gallery/search/url/import/all/x10x/1")
+        .fetch("images://gallery/search/url/import/all/_kb_x10x/1")
         .unwrap()
         .is_empty());
     assert!(runtime
-        .fetch("images://gallery/search/url/dummy/all/x10x/1")
+        .fetch("images://gallery/search/url/dummy/all/_kb_x10x/1")
         .unwrap()
         .is_empty());
 }
@@ -1237,7 +1303,7 @@ fn gallery_local_path_search_normalizes_forward_and_backslashes() {
 
     assert_eq!(
         ids(runtime
-            .fetch(r"images://gallery/search/local-path/D:\/pics/all/x10x/1")
+            .fetch(r"images://gallery/search/local-path/D:\/pics/all/_kb_x10x/1")
             .unwrap()),
         ["121"]
     );
@@ -1249,9 +1315,7 @@ fn gallery_label_search_matches_full_path_substrings_and_frontend_and_shape() {
 
     assert_eq!(
         ids(runtime
-            .fetch(
-                "images://gallery/search/label/HATSUNE/filter_comb/search/label/Vocaloid/sort/by-id"
-            )
+            .fetch("images://gallery/search/label/HATSUNE/_kb_fc/search/label/Vocaloid/sort/by-id")
             .unwrap()),
         ["1"]
     );
@@ -1382,7 +1446,7 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
     let gallery_ids = |segment: &str| {
         ids(runtime
             .fetch(&format!(
-                "images://gallery/aspect/{segment}/filter_comb/sort/by-id"
+                "images://gallery/aspect/{segment}/_kb_fc/sort/by-id"
             ))
             .unwrap())
     };
@@ -1421,17 +1485,14 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
     );
 
     // 列举应用的五个桶（前端 GALLERY_ASPECT_BUCKETS 的顺序），分组计数在 meta.count，等于该桶的画廊结果集；
-    // 带已选维度的上下文下同样等于子路径计数（过滤树按 `<上下文>/filter_comb/aspect` 列举）
+    // 带已选维度的上下文下同样等于子路径计数（过滤树按 `<上下文>/_kb_fc/aspect` 列举）
     assert_eq!(
         listed_counts(&runtime, "images://gallery/aspect"),
         ["4x3-16x9", "16x9-", "3x4-4x3", "-3x4", "unknown"]
             .map(|segment| (segment.to_string(), gallery_ids(segment).len()))
             .to_vec()
     );
-    let in_context = listed_counts(
-        &runtime,
-        "images://gallery/media-type/image/filter_comb/aspect",
-    );
+    let in_context = listed_counts(&runtime, "images://gallery/media-type/image/_kb_fc/aspect");
     assert_eq!(in_context.len(), APP_ASPECT_BUCKETS.len());
     // 上下文确实生效（夹具 118 是视频）：各桶之和 = 该上下文的总数 < 全部图片
     let context_total = runtime.count("images://gallery/media-type/image").unwrap();
@@ -1452,7 +1513,7 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
     ] {
         assert!(
             runtime
-                .fetch(&format!("images://gallery/aspect/{bad}/x10x/1"))
+                .fetch(&format!("images://gallery/aspect/{bad}/_kb_x10x/1"))
                 .is_err(),
             "bad={bad}"
         );
@@ -1620,10 +1681,7 @@ fn gallery_size_buckets_are_listable_with_counts() {
     assert_eq!(listed.iter().map(|(_, count)| count).sum::<usize>(), total);
 
     // 带已选维度的上下文：每项 meta.count 等于子路径计数（listed_counts 内断言），且上下文生效（311 是视频）
-    let in_context = listed_counts(
-        &runtime,
-        "images://gallery/media-type/image/filter_comb/size",
-    );
+    let in_context = listed_counts(&runtime, "images://gallery/media-type/image/_kb_fc/size");
     assert_eq!(in_context.len(), APP_SIZE_BUCKETS.len());
     let context_total = runtime.count("images://gallery/media-type/image").unwrap();
     assert_eq!(
@@ -1644,7 +1702,7 @@ fn gallery_aspect_sort_sql_orders_by_generated_column() {
     // (aspect_ratio, rowid) 索引覆盖「比值 + id 兜底」排序，翻页按索引顺序读
     let runtime = build_runtime();
     let resolved = runtime
-        .resolve("images://gallery/sort/by-aspect/x10x/1")
+        .resolve("images://gallery/sort/by-aspect/_kb_x10x/1")
         .unwrap();
     let mut ctx = TemplateContext::default();
     ctx.globals = runtime.globals().clone();
@@ -1659,17 +1717,28 @@ fn gallery_aspect_sort_sql_orders_by_generated_column() {
 }
 
 #[test]
+fn album_preview_query_shape_returns_rows() {
+    let runtime = build_runtime();
+    let rows = runtime
+        .fetch(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/_kb_x3x/1",
+        )
+        .unwrap();
+    assert_eq!(ids(rows), ["8", "7", "6"]);
+}
+
+#[test]
 fn count_without_top_order_matches_fetched_rows() {
     // count 去掉最外层 ORDER BY：带参数的随机排序、反序、分页、`~~` 之后（内层排序 + LIMIT 切页）
     // 与 rank 定位，计数都必须与 fetch 行数一致
     let runtime = build_runtime();
     for path in [
         "images://gallery/sort/random-42",
-        "images://gallery/sort/random-42/desc",
-        "images://gallery/hide/sort/by-aspect/desc",
+        "images://gallery/sort/random-42/_kb_desc",
+        "images://gallery/hide/sort/by-aspect/_kb_desc",
         "images://gallery/search/display-name/image/sort/by-size",
-        "images://gallery/sort/random-42/x3x/2",
-        "images://gallery/sort/by-time/x3x/1/~~/rank/~~/id_3",
+        "images://gallery/sort/random-42/_kb_x3x/2",
+        "images://gallery/sort/by-time/_kb_x3x/1/~~/rank/~~/id_3",
         "albums://roots/x10x/1/~~/images",
         "albums://roots/x10x/1/~~/images/hide",
     ] {
@@ -1705,7 +1774,7 @@ fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
             .collect()
     };
     for path in [
-        "images://gallery/sort/by-id/x100x/1",
+        "images://gallery/sort/by-id/_kb_x100x/1",
         "images://vd/i18n-zh_CN/按媒体/所有格式/1",
     ] {
         let rows = flags(path);
@@ -1722,12 +1791,12 @@ fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
         total - 1
     );
     assert!(!ids(runtime
-        .fetch("images://gallery/hide/sort/by-id/x100x/1")
+        .fetch("images://gallery/hide/sort/by-id/_kb_x100x/1")
         .unwrap())
     .contains(&"9".to_string()));
 
     let resolved = runtime
-        .resolve("images://gallery/hide/sort/by-id/x10x/1")
+        .resolve("images://gallery/hide/sort/by-id/_kb_x10x/1")
         .unwrap();
     let mut ctx = TemplateContext::default();
     ctx.globals = runtime.globals().clone();
@@ -1801,22 +1870,22 @@ fn gallery_search_sort_paths_allow_empty_results() {
     let runtime = build_runtime();
 
     let rows = runtime
-        .fetch("images://gallery/search/display-name/image-1/sort/by-id/x3x/1")
+        .fetch("images://gallery/search/display-name/image-1/sort/by-id/_kb_x3x/1")
         .unwrap();
     assert_eq!(ids(rows), ["1", "10", "11"]);
 
     let hidden_rows = runtime
-        .fetch("images://gallery/hide/search/display-name/image-1/sort/by-id/x3x/1")
+        .fetch("images://gallery/hide/search/display-name/image-1/sort/by-id/_kb_x3x/1")
         .unwrap();
     assert_eq!(ids(hidden_rows), ["1", "10", "11"]);
 
     let empty_rows = runtime
-        .fetch("images://gallery/search/display-name/not-found/sort/by-id/x3x/1")
+        .fetch("images://gallery/search/display-name/not-found/sort/by-id/_kb_x3x/1")
         .unwrap();
     assert!(empty_rows.is_empty());
 
     let hidden_empty_rows = runtime
-        .fetch("images://gallery/hide/search/display-name/not-found/sort/by-set-time/x3x/1")
+        .fetch("images://gallery/hide/search/display-name/not-found/sort/by-set-time/_kb_x3x/1")
         .unwrap();
     assert!(hidden_empty_rows.is_empty());
 }
@@ -1827,38 +1896,38 @@ fn gallery_aspect_buckets_filter_and_explicit_sort_by_ratio() {
 
     // 111 = 9:16，112 = 3:4（右闭，归竖屏），117 = 1:3（过窄并入竖屏）
     let portrait = runtime
-        .fetch("images://gallery/aspect/-3x4/x10x/1")
+        .fetch("images://gallery/aspect/-3x4/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(portrait), ["111", "112", "117"]);
 
     let landscape = runtime
-        .fetch("images://gallery/aspect/4x3-16x9/x10x/1")
+        .fetch("images://gallery/aspect/4x3-16x9/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(landscape), ["114", "118"]);
 
     let landscape_desc = runtime
-        .fetch("images://gallery/aspect/4x3-16x9/desc/x10x/1")
+        .fetch("images://gallery/aspect/4x3-16x9/_kb_desc/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(landscape_desc), ["118", "114"]);
 
     // 115 ≈ 2.13，116 = 3:1（过宽并入宽屏）
     let widescreen = runtime
-        .fetch("images://gallery/aspect/16x9-/x10x/1")
+        .fetch("images://gallery/aspect/16x9-/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(widescreen), ["115", "116"]);
 
     let unknown = runtime
-        .fetch("images://gallery/aspect/unknown/x10x/1")
+        .fetch("images://gallery/aspect/unknown/_kb_x10x/1")
         .unwrap();
     assert!(unknown.is_empty());
 
     let widescreen_by_aspect = runtime
-        .fetch("images://gallery/aspect/16x9-/filter_comb/sort/by-aspect/x10x/1")
+        .fetch("images://gallery/aspect/16x9-/_kb_fc/sort/by-aspect/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(widescreen_by_aspect), ["115", "116"]);
 
     let widescreen_by_aspect_desc = runtime
-        .fetch("images://gallery/aspect/16x9-/filter_comb/sort/by-aspect/desc/x10x/1")
+        .fetch("images://gallery/aspect/16x9-/_kb_fc/sort/by-aspect/_kb_desc/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(widescreen_by_aspect_desc), ["116", "115"]);
 }
@@ -1868,22 +1937,22 @@ fn gallery_filter_combines_dimensions_and_sort() {
     let runtime = build_runtime();
 
     let image_landscape = runtime
-        .fetch("images://gallery/media-type/image/filter_comb/aspect/4x3-16x9/x10x/1")
+        .fetch("images://gallery/media-type/image/_kb_fc/aspect/4x3-16x9/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(image_landscape), ["114"]);
 
     let image_landscape_by_size_desc = runtime
-        .fetch("images://gallery/media-type/image/filter_comb/aspect/4x3-16x9/filter_comb/sort/by-size/desc/x10x/1")
+        .fetch("images://gallery/media-type/image/_kb_fc/aspect/4x3-16x9/_kb_fc/sort/by-size/_kb_desc/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(image_landscape_by_size_desc), ["114"]);
 
     let plugin_image_webp = runtime
-        .fetch("images://gallery/plugin/pixiv/filter_comb/media-type/image/webp/x10x/1")
+        .fetch("images://gallery/plugin/pixiv/_kb_fc/media-type/image/webp/_kb_x10x/1")
         .unwrap();
     assert_eq!(ids(plugin_image_webp), ["119"]);
 
     let count = runtime
-        .count("images://gallery/media-type/image/filter_comb/aspect/16x9-")
+        .count("images://gallery/media-type/image/_kb_fc/aspect/16x9-")
         .unwrap();
     assert_eq!(count, 2);
 }
@@ -1893,7 +1962,9 @@ fn gallery_no_album_filter_excludes_album_memberships_except_favorite() {
     let runtime = build_runtime();
 
     // 收藏画册归属不算"已分类"(is_favorite or ...): image 10 仅在收藏画册,仍出现在 no-album 中
-    let no_album = runtime.fetch("images://gallery/no-album/x10x/1").unwrap();
+    let no_album = runtime
+        .fetch("images://gallery/no-album/_kb_x10x/1")
+        .unwrap();
     assert_eq!(
         ids(no_album),
         ["9", "10", "11", "12", "13", "14", "15", "16", "17", "18"]
@@ -1901,16 +1972,14 @@ fn gallery_no_album_filter_excludes_album_memberships_except_favorite() {
     assert_eq!(runtime.count("images://gallery/no-album").unwrap(), 114);
 
     let combined = runtime
-        .fetch("images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size/desc/x10x/1")
+        .fetch("images://gallery/media-type/image/_kb_fc/no-album/_kb_fc/sort/by-size/_kb_desc/_kb_x10x/1")
         .unwrap();
     let combined_ids = ids(combined);
     assert_eq!(combined_ids.len(), 10);
     assert!(!combined_ids.contains(&"1".to_string()));
     assert_eq!(
         runtime
-            .count(
-                "images://gallery/media-type/image/filter_comb/no-album/filter_comb/sort/by-size"
-            )
+            .count("images://gallery/media-type/image/_kb_fc/no-album/_kb_fc/sort/by-size")
             .unwrap(),
         113
     );
@@ -1950,31 +2019,34 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
     let runtime = build_runtime();
     let paged = runtime
         .fetch(
-            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1",
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/_kb_x3x/1",
         )
         .unwrap();
     let desc = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/desc/x3x/1")
+        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/_kb_desc/_kb_x3x/1")
         .unwrap();
     let hidden = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/_kb_x3x/1")
         .unwrap();
     let delegated_all = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/all/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/all/_kb_x3x/1")
         .unwrap();
     let image_only = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/x3x/1")
+        .fetch(
+            "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/_kb_x3x/1",
+        )
         .unwrap();
-    let video_only = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/x3x/1");
+    let video_only = runtime.fetch(
+        "images://gallery/hide/album/33333333-3333-3333-3333-333333333333/video-only/_kb_x3x/1",
+    );
     let image_only_wallpaper_order = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/image-only/wallpaper-order/_kb_x3x/1")
         .unwrap();
     let album_wallpaper_order = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/wallpaper-order/_kb_x3x/1")
         .unwrap();
     let image_filter_album_order = runtime
-        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/media-type/image/filter_comb/sort/by-album-order/x3x/1")
+        .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/media-type/image/_kb_fc/sort/by-album-order/_kb_x3x/1")
         .unwrap();
     let bigger_order = runtime
         .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
@@ -2008,7 +2080,7 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
 
     let page_node = runtime
         .resolve(
-            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/x3x/1",
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/_kb_x3x/1",
         )
         .unwrap();
     assert!(page_node.composed.offset_terms.len() == 1);
@@ -2020,8 +2092,9 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
     assert!(limit_node.composed.offset_terms.is_empty());
 
     for legacy in ["order", "album-order"] {
-        let path =
-            format!("images://gallery/album/33333333-3333-3333-3333-333333333333/{legacy}/x3x/1");
+        let path = format!(
+            "images://gallery/album/33333333-3333-3333-3333-333333333333/{legacy}/_kb_x3x/1"
+        );
         assert!(matches!(
             runtime.fetch(&path),
             Err(EngineError::PathNotFound(_))
@@ -2219,12 +2292,10 @@ fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
     let runtime = build_runtime();
     for page in 1..=100 {
         runtime
-            .resolve(&format!("images://gallery/all/x1x/{page}"))
+            .resolve(&format!("images://gallery/all/_kb_x1x/{page}"))
             .unwrap();
     }
-    // The first list fallback at /gallery/all/x1x expands and caches all
-    // countable page nodes from the fixture (122), plus the three route
-    // prefixes used to reach them.
+    // 全局分页路由只缓存实际解析过的页节点，缓存规模保持有界。
     assert!(
         runtime.cache_size() <= 125,
         "cache size={}",
@@ -2236,7 +2307,7 @@ fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
 fn date_path_fold_builds_expected_sql_shape() {
     let runtime = build_runtime();
     let resolved = runtime
-        .resolve("images://gallery/date/2023y/04m/05d/x2x/1")
+        .resolve("images://gallery/date/2023y/04m/05d/_kb_x2x/1")
         .unwrap();
     let mut ctx = TemplateContext::default();
     ctx.globals = runtime.globals().clone();
@@ -2279,12 +2350,12 @@ fn image_collection_paths_decode_into_image_info() {
         "images://",
         "images://x2x/1",
         "images://gallery/all",
-        "images://gallery/all/x2x/1",
-        "images://gallery/all/desc/x2x/1",
+        "images://gallery/all/_kb_x2x/1",
+        "images://gallery/all/_kb_desc/_kb_x2x/1",
         "images://gallery/plugin/pixiv",
-        "images://gallery/sort/by-name/x2x/1",
-        "images://gallery/media-type/image/x2x/1",
-        "images://gallery/hide/all/x2x/1",
+        "images://gallery/sort/by-name/_kb_x2x/1",
+        "images://gallery/media-type/image/_kb_x2x/1",
+        "images://gallery/hide/all/_kb_x2x/1",
         // VD 侧走 vd_root_router 的 fields，与 gallery 是两条独立的字段贡献链，
         // 所以必须各测一条。
         "images://vd/i18n-en_US/By Album/AlbumA/x100x/1",

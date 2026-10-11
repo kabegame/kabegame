@@ -29,8 +29,8 @@
   `register_programmatic_provider` 注册。
 
 - [provider-dsl/RULES.md](provider-dsl/RULES.md)
-  - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖文件格式（json5 / YAML 双 loader，按扩展名选择；长 SQL 用 YAML `|-` 块标量换行书写及其禁忌）、路径折叠、ContribQuery 累积语义（fields/join/where/group_by/order 各自规则；offset 累加、limit 末次胜；schema 只登记数据表名、`plugin://` 走程序化 schema）、**`where` 的 WhereQuery 谓词树**（字符串=原子 / 数组=OR / `{not}`=取非；fold 期坍缩成一条，树上无 AND 节点；`where_clear` 按坍缩串整棵匹配）、嵌套目录清除上一层等值条件、分页写法（列举子项在 `list.sql` 里 bind 分页，行分页用 `x<N>x/<页>`；分页节点只切页，过滤由 `parent/<id>`、`roots`、`album_kind/<kind>`、`search/<q>` 等上游段各自折叠）、**子查询边界 `~~`**（此前的查询整体冻结成 FROM、**内层含 ORDER BY/LIMIT 原样渲染**，外层只拿到一条 `<表名>.*` 并从空状态起步、**不重放根 provider 贡献**；按方言渲染为物化 CTE `pq_nest_<深度>`，不用派生表；配合 `group_by` 按外层行一次出整页计数；物化顺序支撑 `~~/rank/~~/id_<id>` 的序号定位；子树判断用 `ancestor_path` 前缀区间走索引）、**路径 WHERE 组合器 `~any`/`~or`/`~not`/`~end`**（分支旁路语义、游标回到组入口、组内只许 where + LEFT JOIN、`\~` 转义、尾部不自动闭合、缓存只在深度 0 边界）、List 静态/动态项、Resolve 正则解析、`${...}` 模板语义（命名空间取值 + 方法标记）、`as + in_need` 共享机制、缓存契约（只缓存命中）、安全契约、保留标识符（含路径段 `~` 前缀）、主机协调模式抽象。
-  - 适用场景：实现引擎 loader / 解析器；编写 *.provider.json5 / *.yaml 文件、把长 SQL 迁到 YAML；给 where 写 OR / NOT 或用路径组合器拼跨分支条件；分页之后按行计数（`~~` + `group_by`）或排查子查询慢；排查跨字段约束错误、组内贡献被拒、未闭合组报错；设计第三方插件可贡献的 provider。
+  - 主题：声明式 Provider DSL（v0.7）的加载期与运行期语义合约 —— schema 之外的规则。涵盖文件格式（json5 / YAML 双 loader，按扩展名选择；长 SQL 用 YAML `|-` 块标量换行书写及其禁忌）、路径折叠、ContribQuery 累积语义（fields/join/where/group_by/order 各自规则；排序项仅 `{sql, order: asc|desc, prepend?}`，全局排序指令为 `{all: revert|clear}`；offset 累加、limit 末次胜；schema 只登记数据表名、`plugin://` 走程序化 schema）、**`where` 的 WhereQuery 谓词树**（字符串=原子 / 数组=OR / `{not}`=取非；fold 期坍缩成一条，树上无 AND 节点；`where_clear` 按坍缩串整棵匹配）、嵌套目录清除上一层等值条件、分页写法（列举子项在 `list.sql` 里 bind 分页；`albums://` 等本地路由的行分页仍用 `x<N>x/<页>`，画廊续接用全局 `_kb_x<N>x/<页>`；分页节点只切页）、**全局前缀表**（`register_global_table`、本仓 `_kb_` 与 `kb_global.json5`、全局表优先解析及 provider key 缓存失效）与 **Resolve 透传条目 `passthrough: true`**（只折叠目标 query、current 不变，`_kb_co` 必须放在维度路径末尾）、**子查询边界 `~~`**（此前查询冻结成物化 CTE FROM，内层 ORDER BY/LIMIT 保留，外层不重放根贡献；配合 `group_by` 按外层行计数；物化顺序支撑 rank 定位）、**路径 WHERE 组合器 `~any`/`~or`/`~not`/`~end`**（分支旁路、组内只许 where + LEFT JOIN、`\~` 转义、尾部不自动闭合）、List 静态/动态项、`${...}` 模板、`as + in_need`、缓存、安全、保留标识符（`~` 与 `_kb_` 前缀）和主机协调模式。
+  - 适用场景：实现引擎 loader / 解析器；编写 *.provider.json5 / *.yaml 文件；调整 `_kb_*` 全局续接段、透传或排序链；给 where 写 OR / NOT；分页之后按行计数（`~~` + `group_by`）或排查子查询慢；排查解析优先级、缓存失效、跨字段约束、组内贡献或未闭合组错误；设计第三方插件可贡献的 provider。
   - 配套：[../src-tauri/kabegame-core/src/providers/schema.json5](../src-tauri/kabegame-core/src/providers/schema.json5) 为语法 schema。
 
 - [provider-dsl/VD_INTEGRATION.md](provider-dsl/VD_INTEGRATION.md)
@@ -44,8 +44,8 @@
 ## MCP（`mcp/`）
 
 - [mcp/MCP_SERVER.md](mcp/MCP_SERVER.md)
-  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由，MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、500 行分页护栏，以及为什么不能在 `gallery_all_router.json5` 加 limit。
-  - 适用场景：新增或排查桌面 Web 服务器、RPC/SSE、MCP 资源/工具/能力开关；维护 PathQL 发现与分页；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
+  - 主题：桌面端应用 Web 服务器的统一监听器、浏览器拒绝边界、JSON-RPC/SSE/媒体/MCP 路由，MCP URI path/read 与 tool/write 能力体系、`list_pathql_entry` 懒树发现契约、不可列举的 `_kb_*` 全局续接段，以及画廊末两段 `_kb_x<N>x/<数字>`（原始 images 根仍用 `x<N>x/<数字>`）的 500 行分页护栏；并说明为什么不能在 `gallery_all_router.json5` 加 limit。
+  - 适用场景：新增或排查桌面 Web 服务器、RPC/SSE、MCP 资源/工具/能力开关；维护 PathQL 发现、全局段说明与分页护栏；避免用 DSL LIMIT 破坏全局 COUNT、前端总数和页数。
 
 ## Web 版（`web/`）
 
@@ -56,8 +56,8 @@
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统（**当前 Rust 实现**；未来由 DSL 替代，参见 provider-dsl/）。含**前端查询行**：画廊 / 画册详情 / 任务详情 / 畅游详情共用的 `GalleryQueryBar`——前端状态统一为**唯一查询对象 `GalleryQuery`**（搜索是原子的一个维度；查询条以简单 chip + 追加高级 chip 叠加，高级部分以 `~not/~not` 双重取非保留持久化边界；搜索输入是表达式（`,` 且 `;` 或 `!` 非 `()` 分组、`\` 转义与引号，`utils/searchExpr.ts` 解析、按勾选维度逐词展开成 `~any`/`~not` 并折回）；`no-album` 与 `hide` 并列为随行路由上下文），唯一 `navigate` 出口、`providerContextPrefix` 与 `contextBase` 的分工；宽高比 `images.aspect_ratio` VIRTUAL 生成列与 `aspect/` 区间段文法（`-3x4` / `3x4-4x3` / `16x9-` / `unknown`，左开右闭、列举应用桶（任意区间走 resolve）、VD 友好名称落到具体桶、区间谓词为何禁用索引、排序走索引）；**维度列举带分组计数**（年月日 / 格式 / image·video / 大小 / 宽高比 / 插件的列举 SQL 在 `${composed}` 上 `GROUP BY`，计数放进 `meta.count`，一次 IPC 一条 SQL 替代列举 + 逐项 COUNT，分组口径须与过滤口径同源）；收藏 / 隐藏标记与 `hide/` 用相关 EXISTS 而非 LEFT JOIN 或不相关 IN 的理由与实测；以及高级查询在 detail 路由上的落地前提（`~` 组合器由引擎拦截，搜索格需三个 detail provider 的 resolve 列出 `search`）。
-  - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题；给某个详情页增删过滤维度 / 排序项；排查高级查询在画册、任务、畅游详情下路由不到或计数不对；排查宽高比筛选 / 排序变慢或分桶归属不一致；排查过滤树或 MCP 列举的计数与筛选结果不一致；排查收藏 / 隐藏标记或 hide 计数变慢、不一致。
+  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统与前端唯一查询对象 `GalleryQuery`。涵盖四个页面共用的查询行、搜索表达式与高级条件持久化边界、宽高比生成列和区间段、**维度列举带分组计数**（侧栏 / Android picker / 头部控件列举 `{维度路径}/_kb_co` 并读 `meta.count`，插件扩展读 `withCount=true` 的 `total`，面板顶层直接列维度子项、没有根节点与根 COUNT）、侧栏单个 `dataChangeHub` 订阅的可见刷新 / 不可见记脏 / 插件签名刷新、高级查询 diff 逐候选预测与候选缓存失效，以及收藏 / 隐藏标记的相关 EXISTS 取舍。
+  - 适用场景：新增过滤、排序、数据源；排查 provider 查询路径或高级查询路由；排查过滤树、Android picker、头部控件或 MCP 的列举计数与筛选结果不一致；排查侧栏下载中不刷新、隐藏期补刷、插件增删后候选不更新或高级查询 `+N/−N` 刷新时机；排查宽高比分桶、排序、收藏 / 隐藏标记或 `hide` 计数性能。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；`pathql_view` 的 `{ rows, seq }` 行快照与 `pathql_count` 的 `{ total, seq }` 总数快照分开维护并通过 PathQL 只读连接池并行执行，翻页只读行；ImageGrid 主动 `ctx.mutate` / `ctx.patch` 与被动 `dataChangeHub` / `liveQuery` 双通道；`image-changed` 按 imageId 合并字段绝对值并立即 `patchMany`，`images-change` 延迟对账排序/成员；`EventHold` 先行快照后广播；500ms 批次合并、行/总数独立 `seq`、画册 `ancestorPath` 相关性、wildcard 粗过滤和防闪回协议；`album-images-change` 的七种 reason、`publishLocal` 对称去重，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。

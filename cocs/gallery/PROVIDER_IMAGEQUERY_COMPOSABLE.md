@@ -75,7 +75,10 @@
 - [`src-tauri/kabegame-core/src/providers/vd_ops.rs`](/src-tauri/kabegame-core/src/providers/vd_ops.rs)
 - [`src-tauri/kabegame-core/src/storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)
 
-画册详情（`album/<albumId>/…`）在 `MainAlbumsProvider::resolve_child` 下挂 `MainAlbumEntryProvider`：默认分支按抓取时间排序（`album_source` + `sort_by_crawled_at`），与 `desc`、`album-order`（`album_source` + `sort_by_album_order`）、`wallpaper-order` 子目录（画册内仅「曾设为壁纸」+ `sort_by_wallpaper_set_at`）组合；`album-order` 与 `wallpaper-order` 均支持子目录 `desc` 表示倒序。另支持 `image-only` / `video-only` 根段（`MainAlbumMediaEntryProvider` 等），在画册内叠加 `media_type_filter`。语义与根级 `all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/kabegame/src/utils/albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)。
+画册详情路径 `album/<albumId>/…` 先贡献画册成员条件，再复用画廊路由：默认按抓取时间排序，
+`/_kb_desc` 反向；加入顺序使用 `sort/by-album-order`，壁纸历史使用 `wallpaper-order`，两者之后同样可接
+`_kb_desc`。另支持 `image-only` / `video-only` 根段，在画册内叠加媒体类型过滤。语义与根级
+`all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/kabegame/src/utils/albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)。
 
 画廊根级另有 `media-type/image`、`media-type/video`（`MainMediaTypeGroupProvider`）；虚拟盘中文根目录在 `RootProvider` 中为「按种类」→「图片」/「视频」（`MediaTypeGroupProvider`）。
 
@@ -178,6 +181,20 @@
 各维度的列举 SQL 在 `${composed}`（上游累积查询）上 `GROUP BY` 子项键、`COUNT(*)`，计数随子项放进 `meta.count`。
 一次 IPC、一条 SQL，替代「列举 + 逐子项 COUNT」（`list_with_count` 在引擎里对每个子项各包一层 COUNT、单连接串行）。
 
+前端消费约定：
+
+- 侧栏过滤树对 `{维度路径}/_kb_co` 调 `list(withCount=false)`，直接把每个 child 的 `meta.count` 挂到树节点；
+  `_kb_co` 必须在维度路径末尾，清掉画廊根排序后再 list。插件扩展由插件 DSL 提供，没有统一的
+  `meta.count`，因此仍用 `withCount=true` 的 `total`。
+- 面板顶层直接是该维度的子项（年份、区间、插件……），没有维度根，也没有「任意」行；清除维度用 chip 右上角的叉号。
+  因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
+- 侧栏只建立一个 `dataChangeHub` 订阅。可见时命中相关批次就重列根与所有已加载分支（`model.reload()`）；不可见时只记脏，
+  下次打开补刷。插件增删改由 `pluginStore` 的 `id:version` 签名触发插件分支刷新，并使高级查询的纯净候选缓存失效。
+- 高级查询弹窗是 diff 模式：对每个候选仍逐项计算应用草稿后的预测计数，显示 `+N` / `−N`。它只在面板打开、
+  草稿变化或新候选载入时重算，不订阅数据变更；候选列表有纯净路径缓存，数据变化只使缓存失效，不立即重查。
+- Android picker 与头部 `GalleryFilterControl` 也列举 `…/_kb_co` 并读取 `meta.count`；插件扩展同样读取
+  `withCount=true` 的 `total`。
+
 | 维度 | 列举 SQL 所在 | 说明 |
 | --- | --- | --- |
 | 年 / 月 / 日 | `shared/dates_provider`、`year_provider`、`month_provider`（VD 共用） | `DISTINCT` 改 `GROUP BY` + `COUNT(*) AS count`；画廊三层 router 把 `${out.meta.count}` 透传进 meta |
@@ -193,14 +210,12 @@
   unknown `size IS NULL OR size <= 0`；宽高比整数交叉乘法 + `aspect_ratio IS NOT NULL`；kind 同 `gallery_media_type_provider`），
   改一处同步另一处。e2e `listed_counts` 对每个列举项断言 `meta.count == count(<子路径>)`，覆盖根、`hide/` 与已选其它维度的上下文。
 - 补 0 的维度（kind / 大小 / 宽高比）总是列出全部固定项；日期、格式、插件只列有图的子项。
-- 插件扩展（`plugin/<id>/extend/...`）由插件自己贡献 provider，不在此列，仍需逐项计数。
-- 实测（prod 库 2.5 万图，`hide/` 上下文）：每个面板一条 SQL 24～49ms；旧路径「`list_with_count` + 前端再逐节点 COUNT」
-  为 2N 次 IPC，如日期·月 105ms（10 条）后再补 4 条。
-- `${composed}` 内联完整画廊 SELECT 时，分组外层会令 SQLite 保留未被引用的 join。画廊根已不再为
-  `plugin_version` 做 `LEFT JOIN metadata`：图片行只带 `metadata_id`，详情按 id 读取完整 metadata。按此前
-  2.5 万图拆分测量，大小分组的这部分约 19ms，移除后 43ms 应降至约 25ms；prod 快照复测留在回归表。
+- 插件扩展（`plugin/<id>/extend/...`）由插件自己贡献 provider，不在此列，使用 `list_with_count` 的 `total`。
+- `_kb_co` 令维度分组 SQL 不再携带画廊根 `ORDER BY`；日期根仍保留 `dates_provider` 自己为显示顺序贡献的
+  `crawled_at` 排序。prod 2.5 万图库 14 个面板合计 271ms → 208ms，大小 / 宽高比 / 媒体类型约快
+  40%～50%，日期与插件基本持平。
 - **排序** `sort/by-aspect` 为 `ORDER BY images.aspect_ratio, images.id`，索引（含 rowid）正好覆盖，翻页按索引顺序读
-  （100 万图一页约 3.5s → 1ms）；`/desc` 反向扫描同样走索引。
+  （100 万图一页约 3.5s → 1ms）；`/_kb_desc` 反向扫描同样走索引。
 - **收藏 / 隐藏标记与 `hide/` 用相关 `EXISTS`**（`gallery_route` / `vd_root_router` 的 `is_favorite` / `is_hidden`，
   `gallery_hide_router` / `albums_images_hide_provider` 的 `NOT EXISTS`），不 LEFT JOIN `album_images`。
   - **语义等价**：JOIN 的 ON 固定主键 `(album_id, image_id)` 两列，最多匹配一行，不改行数；两种写法都只给 0/1，不出 NULL。
@@ -208,8 +223,7 @@
     LEFT JOIN 不论用不用都逐行执行（聚合里也不会被 SQLite 的 noop-join 优化剪掉）。100 万图 `gallery/all` COUNT 约 1.7s → 0.86s。
   - **为什么不是不相关 `IN` / `NOT IN`**：每条查询都要先物化整个集合。测试只在集合小时占优；隐藏 50%、收藏 30% 时
     第 1 页 2.5ms → 57ms。EXISTS 每行一次主键探测，翻页与 JOIN 同价且不受集合大小影响。
-  - 计数路径的 COUNT 还整体带着字段列表与 ORDER BY；把这些从 COUNT 里去掉是引擎层的另一项优化（未做），
-    需要同时处理 WHERE 引用字段别名、聚合 / 窗口字段与 LIMIT，不能简单剪 join——引擎看不出 LEFT JOIN 是否会扇出。
+
 ## 抓取时间分组（gallery_time / main_date_browse）
 
 - **唯一数据源**：`Storage::get_gallery_day_groups()`（按自然日 `YYYY-MM-DD` 聚合计数，SQL 在 [`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)）。
@@ -222,8 +236,8 @@
 ## 前端（画廊路径控件位置）
 
 - **查询行是四页共用的一个组件**：[`GalleryQueryBar.vue`](/apps/kabegame/src/components/gallery/GalleryQueryBar.vue) 由画廊（经 `GalleryToolbar.vue`）、画册详情、任务详情、畅游详情共用。桌面左端是排序 chip，中间横向滚动区依次为搜索、简单过滤维度、最右侧的高级 chip。没有简单/高级切换开关，也不在查询条展示 PathQL。高级 chip 主体打开弹窗，清除按钮只移除全部追加高级条件；清除全部入口仍会同时清空简单与高级条件。
-- **唯一查询对象 `GalleryQuery`**（[`galleryQuery.ts`](/apps/kabegame/src/utils/galleryQuery.ts)）：查询是一串节点（AND 序列），节点要么是原子 `is`（一个 `GalleryFilterSet`——各维度取值的 AND，**搜索是其中一个维度** `search: { modes, query }`），要么是 `any`（OR 分支）/ `not`（取非）组合器。旧的「简单过滤 FilterSet + 高级树 AdvancedQuery + search/searchMode」三份状态已统一：route store 只存 `query`（外加 `noAlbum`/`sort`/`page`/`pageSize`），简单部分与追加高级部分由 `splitQueryFilters` / `composeQueryFilters` 拆分和合成，最终仍是同一份 AND 查询。`noAlbum` 与 `hide` 并列，是随行路由上下文不是查询（序列化为体首的 `no-album/filter_comb/`）。查询体的序列化/解析（含 `~` 组合器、legacy 形态兼容）全在 `galleryQuery.ts`，整路径（root/no-album/sort/分页）的拼装在 [`galleryPath.ts`](/apps/kabegame/src/utils/galleryPath.ts)，依赖方向恒为 galleryPath → galleryQuery。搜索维度勾选在搜索词为空时不进 path，由各 store 模块级 sticky ref（`galleryStickySearchModes` 等）兜底，经查询行的 `search-modes-change` 事件维护。
-- **搜索维度是勾选集合，输入是表达式，维度作用在每个词上**：`GallerySearchTerm = { modes: GallerySearchPathMode[], query }`，`modes` 恒为按 `GALLERY_SEARCH_MODES` 规范排序、去重（一律经 `makeSearchTerm(modes, query)` 构造）；**空集 = 不做搜索过滤**：`isActiveSearchTerm` 要求有输入且至少一个维度，`hasSearch` / 序列化 / 上下文前缀都以它为准，归一化时移除。`DEFAULT_GALLERY_SEARCH_MODES` 为全选，查询行把 sticky 与 `searchFeatures` 取交集（用户主动全不选时 sticky 为空则保持空）。下拉第一行输入框右侧是「全选」（半选态），勾选变化事件 `update:selectedModes(modes, draft)` 带上输入框内容（草稿有语法错误时改带已生效的 query）——全不选时搜索已不在查询里，重新勾选靠它恢复；全不选时继续输入不触发重查。**`query` 是搜索表达式**，由 `utils/searchExpr.ts` 手写递归下降解析成且 / 或 / 非语法树：`,` 且、`;` 或、前置 `!` 非、`()` 分组；`\X` 恒为字面 X（`\ ` 是不被裁掉的空白），`"…"` 内按字面处理；`(` 与 `!` 只在词首是语法，词中的按字面（`Foo (1).jpg`、`hello!` 免转义），词内配对的括号不会闭合分组；空项丢弃。结果恒为规范形（同类拍平、单项坍缩、**多重 `!` 两两抵消**），`printSearchExpr` 打印回只带必要括号与转义的规范输入。语法错误（7 种，带字符位置）不提交，下拉底部红字指出。**语义**：一个词 = 任一勾选维度包含它，`!词` = 所有勾选维度都不含（多维度时逗号不再要求「同一维度内同时含」）。`serializeSearchTerm` 展开语法树：词 → 单维度 `search/<m>/<词>`、多维度 `~any/<各维度>/~end`（标签词额外按路径规整）；且 → 顺序相接，裸搜索段之后经 `filter_comb`（纯逗号单维度与旧路径逐字一致）；或 → `~any/…/~or/…/~end`，多维度词的维度分支直接平铺；非 → `~not/…/~end`（或组本身是 `~any`，满足引擎「`~not` 内不得直接出现 `~or`」）。例：只勾标签 `(girl; boy), cute, !genshin` → `~any/search/label/girl/~or/search/label/boy/~end/search/label/cute/filter_comb/~not/search/label/genshin/~end`。只剩分隔符退化为字面逗号，外部构造的语法错误串整串按字面词处理，都不会变成全集。**解析**：`parseSequence` 只产出未折叠的树（每个搜索段、维度 chunk 各成原子，搜索段的值经 `printSearchExpr` 转义成字面词），`foldSearchTree` 自底向上在每层贪心找最长的连续纯搜索段：取段内搜索维度并集，按它把节点读回语法树（或组里按规范顺序连续的「同词各维度一支」读成一个词），再要求 `serializeSearchTerm` 去掉 `filter_comb` 后与原路径逐段一致才折叠；然后 `normalizeQuery` 把维度并入相邻原子。高级条件边界外壳 `~not/~not` 与单分支 `~any` 永不参与折叠（搜索展开不会产生这两种形态）。用户在高级里手搭的同维度搜索 OR / NOT 组会被折成搜索词（语义不变）；旧版「多维度 + 逗号」路径无法用新语法表达，保留为普通 OR 组。后端元数据搜索走 `search_terms` → `metadata_search_terms` 的嵌套 `IN`，并先判 `images.metadata_id IS NOT NULL`，避免取非时 NULL 行整批丢失；原生元数据仍对 LEFT JOIN 的 `search_text` 包 `COALESCE(…, '')`。`display_name` / `local_path` 列 NOT NULL，url 的 `is_search_dummy_url` 视 NULL 为占位，标签走不相关 `IN`，均无此问题。文件名 / 本地路径 / url / 原生元数据的 `LIKE` 两侧都不包 `LOWER`：`LIKE` 默认不区分 ASCII 大小写，未编译 ICU 的 `LOWER` 也只折叠 ASCII，结果相同，包了只会逐行复制整列文本（四维度 COUNT 实测慢约 20%）；标签维度用的是区分大小写的 `instr`，`LOWER` 必须保留。原生元数据的 `search_text` 只收 JSON 字符串值、不收键名（v038 重算存量），解析器的结构键（`format` / `groups` / `entries` / `tag` / `value` …）每行都有，收进去会让搜这些词命中全部图片。路径段 `search/<mode>` 只认 `isGallerySearchPathMode`。它仍是原子的 `search` 维度，简单 chip、高级条件行、sticky 勾选均无需特判。
+- **唯一查询对象 `GalleryQuery`**（[`galleryQuery.ts`](/apps/kabegame/src/utils/galleryQuery.ts)）：查询是一串节点（AND 序列），节点要么是原子 `is`（一个 `GalleryFilterSet`——各维度取值的 AND，**搜索是其中一个维度** `search: { modes, query }`），要么是 `any`（OR 分支）/ `not`（取非）组合器。旧的「简单过滤 FilterSet + 高级树 AdvancedQuery + search/searchMode」三份状态已统一：route store 只存 `query`（外加 `noAlbum`/`sort`/`page`/`pageSize`），简单部分与追加高级部分由 `splitQueryFilters` / `composeQueryFilters` 拆分和合成，最终仍是同一份 AND 查询。`noAlbum` 与 `hide` 并列，是随行路由上下文不是查询（序列化为体首的 `no-album/_kb_fc/`）。查询体的序列化/解析（含 `~` 组合器、legacy 形态兼容）全在 `galleryQuery.ts`，整路径（root/no-album/sort/分页）的拼装在 [`galleryPath.ts`](/apps/kabegame/src/utils/galleryPath.ts)，依赖方向恒为 galleryPath → galleryQuery。搜索维度勾选在搜索词为空时不进 path，由各 store 模块级 sticky ref（`galleryStickySearchModes` 等）兜底，经查询行的 `search-modes-change` 事件维护。
+- **搜索维度是勾选集合，输入是表达式，维度作用在每个词上**：`GallerySearchTerm = { modes: GallerySearchPathMode[], query }`，`modes` 恒为按 `GALLERY_SEARCH_MODES` 规范排序、去重（一律经 `makeSearchTerm(modes, query)` 构造）；**空集 = 不做搜索过滤**：`isActiveSearchTerm` 要求有输入且至少一个维度，`hasSearch` / 序列化 / 上下文前缀都以它为准，归一化时移除。`DEFAULT_GALLERY_SEARCH_MODES` 为全选，查询行把 sticky 与 `searchFeatures` 取交集（用户主动全不选时 sticky 为空则保持空）。下拉第一行输入框右侧是「全选」（半选态），勾选变化事件 `update:selectedModes(modes, draft)` 带上输入框内容（草稿有语法错误时改带已生效的 query）——全不选时搜索已不在查询里，重新勾选靠它恢复；全不选时继续输入不触发重查。**`query` 是搜索表达式**，由 `utils/searchExpr.ts` 手写递归下降解析成且 / 或 / 非语法树：`,` 且、`;` 或、前置 `!` 非、`()` 分组；`\X` 恒为字面 X（`\ ` 是不被裁掉的空白），`"…"` 内按字面处理；`(` 与 `!` 只在词首是语法，词中的按字面（`Foo (1).jpg`、`hello!` 免转义），词内配对的括号不会闭合分组；空项丢弃。结果恒为规范形（同类拍平、单项坍缩、**多重 `!` 两两抵消**），`printSearchExpr` 打印回只带必要括号与转义的规范输入。语法错误（7 种，带字符位置）不提交，下拉底部红字指出。**语义**：一个词 = 任一勾选维度包含它，`!词` = 所有勾选维度都不含（多维度时逗号不再要求「同一维度内同时含」）。`serializeSearchTerm` 展开语法树：词 → 单维度 `search/<m>/<词>`、多维度 `~any/<各维度>/~end`（标签词额外按路径规整）；且 → 顺序相接，裸搜索段之后经 `_kb_fc`（纯逗号单维度与规范路径逐字一致）；或 → `~any/…/~or/…/~end`，多维度词的维度分支直接平铺；非 → `~not/…/~end`（或组本身是 `~any`，满足引擎「`~not` 内不得直接出现 `~or`」）。例：只勾标签 `(girl; boy), cute, !genshin` → `~any/search/label/girl/~or/search/label/boy/~end/search/label/cute/_kb_fc/~not/search/label/genshin/~end`。只剩分隔符退化为字面逗号，外部构造的语法错误串整串按字面词处理，都不会变成全集。**解析**：`parseSequence` 只产出未折叠的树（每个搜索段、维度 chunk 各成原子，搜索段的值经 `printSearchExpr` 转义成字面词），`foldSearchTree` 自底向上在每层贪心找最长的连续纯搜索段：取段内搜索维度并集，按它把节点读回语法树（或组里按规范顺序连续的「同词各维度一支」读成一个词），再要求 `serializeSearchTerm` 去掉 `_kb_fc` 后与原路径逐段一致才折叠；然后 `normalizeQuery` 把维度并入相邻原子。高级条件边界外壳 `~not/~not` 与单分支 `~any` 永不参与折叠（搜索展开不会产生这两种形态）。用户在高级里手搭的同维度搜索 OR / NOT 组会被折成搜索词（语义不变）；旧版「多维度 + 逗号」路径无法用新语法表达，保留为普通 OR 组。后端元数据搜索走 `search_terms` → `metadata_search_terms` 的嵌套 `IN`，并先判 `images.metadata_id IS NOT NULL`，避免取非时 NULL 行整批丢失；原生元数据仍对 LEFT JOIN 的 `search_text` 包 `COALESCE(…, '')`。`display_name` / `local_path` 列 NOT NULL，url 的 `is_search_dummy_url` 视 NULL 为占位，标签走不相关 `IN`，均无此问题。文件名 / 本地路径 / url / 原生元数据的 `LIKE` 两侧都不包 `LOWER`：`LIKE` 默认不区分 ASCII 大小写，未编译 ICU 的 `LOWER` 也只折叠 ASCII，结果相同，包了只会逐行复制整列文本（四维度 COUNT 实测慢约 20%）；标签维度用的是区分大小写的 `instr`，`LOWER` 必须保留。原生元数据的 `search_text` 只收 JSON 字符串值、不收键名（v038 重算存量），解析器的结构键（`format` / `groups` / `entries` / `tag` / `value` …）每行都有，收进去会让搜这些词命中全部图片。路径段 `search/<mode>` 只认 `isGallerySearchPathMode`。它仍是原子的 `search` 维度，简单 chip、高级条件行、sticky 勾选均无需特判。
 - **组件不认识 route store**：所有会改查询的动作汇成一个 `navigate(patch, options)` 事件，由各页转交自己的 path-route store（`GalleryQueryPatch = { query?, noAlbum?, sort?, page?, pageSize? }`，定义在 [`galleryPath.ts`](/apps/kabegame/src/utils/galleryPath.ts)）。跨字段改动一次导航完成，不会被拆成多次互相覆盖。差异靠 props 表达：`filterFeatures` / `sortFeatures`（前端过滤维度固定为 `plugin` / `mediaType` / `date` / `size` / `aspect`；名称语言桶与“设置过壁纸”只保留后端 Provider，不再进入 `GalleryBrowseDimension`）、`searchFeatures`（搜索 chip 可勾选的维度：画廊/画册详情吃默认全 5 项 `display-name`/`local-path`/`url`/`metadata`/`native-metadata`，任务/畅游详情传 `GALLERY_SEARCH_MODES_BASIC` 只留前三；高级弹窗链路经 `searchModesContext.ts` 的 provide/inject 下发，当前勾选里有不在集合内的维度时临时补进勾选列表而不静默改写）、`contextBase`（查询基址 = store 的 `contextPathFor({ query: [] })`，**不含查询体**；简单 facet 在基址后加入高级条件，高级弹窗在基址后加入简单条件；两者都保留 no-album 上下文）、`enableClearAll`（画廊的清除全部在副标题里，故只有三个详情页开）。
 - 文案口径（chip 值、安卓折叠菜单标签、排序升降序说法）统一在 [`galleryFilterLabels.ts`](/apps/kabegame/src/utils/galleryFilterLabels.ts)，工具栏与查询行共用一份。
 - **查询条编辑边界**：`splitQueryFilters` 将首个顶层 `is` 原子交给简单 chip，其余节点交给高级弹窗；`composeQueryFilters` 按 AND 合成。高级部分（非空时）整体包进双重取非 `~not/~not/…/~end/~end`（`NOT(NOT(x))` 在 WHERE 里与 `x` 等价，NULL 行同样被排除），既防止归一化时并入简单原子，也防止其中的搜索组合被 `foldSearchTree` 折成搜索项后跑进简单 chip；拆分时解开这一层。旧版只给以原子开头的高级部分加单分支 `~any/…/~end` 包装，`splitQueryFilters` 仍识别它。该边界保存在查询路径中，刷新、前进后退和跨页面恢复都能重建，不另存一套模式状态。旧 URL 的首个原子按简单条件显示，剩余组按高级条件显示。

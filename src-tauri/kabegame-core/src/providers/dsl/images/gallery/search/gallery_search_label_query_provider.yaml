@@ -4,7 +4,7 @@ properties:
   query: { type: string, default: "", optional: false }
 query:
   # 单个条件只负责一次大小写不敏感的完整标签路径子串匹配。多个输入词的 AND 语义由前端
-  # 拆成多个 search/label/<token>，经 filter_comb 让 PathQL 累积多条 WHERE，不在 SQL 中分词。
+  # 拆成多个 search/label/<token>，经全局 `_kb_fc` 让 PathQL 累积多条 WHERE，不在 SQL 中分词。
   # 图片只挂在叶子标签上；label_path 已包含全部祖先 key，例如 pixiv/character/umi。
   # 用不相关的 IN 子查询：先扫一遍 albums 得到命中标签、经 (album_id, image_id) 主键取图并物化，
   # 外层每行只探测一次。不要写回相关 EXISTS（lai.image_id = images.id）：每张图平均挂约 20 个标签，

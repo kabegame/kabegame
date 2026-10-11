@@ -6,19 +6,9 @@
     },
     "query": {
         "order": [
-            { "sql": "kb_rand(${properties.seed}, images.id)", "order": "asc", "clear": "all" },
+            { "sql": "kb_rand(${properties.seed}, images.id)", "order": "asc" },
             { "sql": "images.id", "order": "asc" }
         ]
     },
-    "resolve": {
-        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
-            "delegate": {
-                "provider": "kabegame.gallery_desc_pagination_page_comb"
-            },
-            "child_var": "child",
-            "provider": "${child.provider}",
-            "meta": "${child.meta}"
-        }
-    },
-    "note": "Seeded random shuffle: .../sort/random-12345/x100x/1. Same seed = same permutation (stable pagination); different seed = unrelated permutation. Append /desc before the page for the reversed sequence."
+    "note": "Seeded random shuffle: .../sort/random-12345/_kb_x100x/1. Same seed = same permutation (stable pagination); different seed = unrelated permutation. Append /_kb_desc before the page for the reversed sequence."
 }

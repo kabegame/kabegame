@@ -1,6 +1,9 @@
 {
     "namespace": "kabegame",
     "name": "gallery_album_bigger_order_router",
+    "query": {
+        "delegate": { "provider": "kb_co_provider" }
+    },
     "resolve": {
         // 任意非空段被当作 album_images.order 整数, 转交 filter
         "(.+)": {

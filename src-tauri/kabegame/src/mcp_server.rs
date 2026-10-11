@@ -35,9 +35,9 @@ gallery: use list_pathql_entry to walk PathQL one level at a time, then read a b
 Discovery loop:
 1. list_pathql_entry("images://gallery") to discover dimensions and read their notes.
 2. list_pathql_entry("gallery/plugin") to discover installed plugin children.
-3. Copy a returned child.path verbatim, append /desc/x100x/1 when needed, and pass the
+3. Copy a returned child.path verbatim, append /_kb_desc/_kb_x100x/1 when needed, and pass the
    resulting URI to resources/read, for example:
-   images://gallery/plugin/<id>/desc/x100x/1
+   images://gallery/plugin/<id>/_kb_desc/_kb_x100x/1
 Do not re-encode child.path. Paths without :// passed to list_pathql_entry are promoted to
 images:// paths.
 Use offset and limit to page large child lists; limit is capped at 200. include_counts defaults
@@ -50,11 +50,11 @@ ImageInfo.id values. Do not probe images://id_20000, images://id_23000, or simil
 PathQL gallery grammar:
 - Every segment narrows the result of the previous segment; filters accumulated along a path
   are combined with AND. Path segments are case-sensitive.
-- filter_comb combines two dimensions, for example:
-  images://gallery/plugin/patreon/filter_comb/media-type/image/desc/x100x/1
+- `_kb_fc` combines two dimensions, for example:
+  images://gallery/plugin/patreon/_kb_fc/media-type/image/_kb_desc/_kb_x100x/1
 - sort is a sibling of all, not a child: use gallery/sort/<key>/..., never gallery/all/sort/...
-- /desc reverses the current order.
-- hide/ is a prefix that excludes hidden images, for example gallery/hide/all/desc/x100x/1.
+- `/_kb_desc` reverses the current order.
+- hide/ is a prefix that excludes hidden images, for example gallery/hide/all/_kb_desc/_kb_x100x/1.
 - Common starts:
   gallery/all
   gallery/plugin/<pluginId>
@@ -66,20 +66,22 @@ PathQL gallery grammar:
   returned note instead of inventing syntax.
 
 Pagination is mandatory for collection reads:
-- Always end collection URIs with /x<N>x/<page>, normally /x100x/1.
+- Always end gallery collection URIs with /_kb_x<N>x/<page>, normally /_kb_x100x/1.
 - An unpaginated images read exceeding 500 rows is rejected with pagination_required.
 - The page count is ceil(total / N); list_pathql_entry returns total when count succeeds.
 - Do NOT list a pagination node. Its page provider may materialize the full result set.
   Compute page numbers from total and read each page URI directly.
 - A search term that is itself all digits can look like a page segment; still append explicit
-  /x<N>x/<page> pagination after completing the search path.
+  /_kb_x<N>x/<page> pagination after completing the search path.
+- `_kb_fc`, `_kb_desc`, and `_kb_x<N>x` come from the global prefix table. They are valid
+  continuations but do not appear in list_pathql_entry child listings.
 
 Image read resources:
-  images://gallery/all/desc/x100x/1      first bounded gallery page with gallery joins
+  images://gallery/all/_kb_desc/_kb_x100x/1      first bounded gallery page with gallery joins
   images://gallery/by_id/{id}            one ImageInfo with gallery-computed fields
   images://id_{id}                       one raw ImageInfo
   images://id_{id}/metadata              crawl-time metadata; can be tens of KB
-  images://x100x/1                       first 100 raw rows, without gallery joins
+  images://x100x/1                           first 100 raw rows, without gallery joins
 
 Other read schemes:
   albums://all                           all Albums (Vec<Album>)
@@ -243,9 +245,27 @@ async fn fetch_resource_rows(uri: &str) -> Result<Vec<Value>, McpError> {
 }
 
 fn is_paginated_image_path(segments: &[&str]) -> bool {
-    segments
-        .last()
-        .is_some_and(|segment| !segment.is_empty() && segment.chars().all(|ch| ch.is_ascii_digit()))
+    fn is_page(segment: &str) -> bool {
+        !segment.is_empty() && segment.chars().all(|ch| ch.is_ascii_digit())
+    }
+
+    fn is_page_size(segment: &str, prefix: &str) -> bool {
+        segment
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix('x'))
+            .is_some_and(|value| {
+                !value.is_empty()
+                    && !value.starts_with('0')
+                    && value.chars().all(|ch| ch.is_ascii_digit())
+            })
+    }
+
+    match segments {
+        // 原始 images 根仍保留本地 `x<N>x/<page>` 语法。
+        [page_size, page] => is_page_size(page_size, "x") && is_page(page),
+        [.., page_size, page] => is_page_size(page_size, "_kb_x") && is_page(page),
+        _ => false,
+    }
 }
 
 async fn enforce_image_pagination(uri: &str, segments: &[&str]) -> Result<(), McpError> {
@@ -269,7 +289,7 @@ async fn enforce_image_pagination(uri: &str, segments: &[&str]) -> Result<(), Mc
                 "uri": uri,
                 "total": total,
                 "maxRows": MAX_ROWS,
-                "howTo": "Append /x<N>x/<page> to the completed collection path, for example /x100x/1."
+                "howTo": "Append /_kb_x<N>x/<page> to the completed gallery path, for example /_kb_x100x/1. Raw images:// keeps /x<N>x/<page>."
             })),
         ));
     }
@@ -377,9 +397,9 @@ impl ServerHandler for KabegameMcpServer {
         let disabled = Settings::global().get_mcp_disabled_capabilities();
         let resources = vec![
             (
-                "images://gallery/all/desc/x100x/1",
+                "images://gallery/all/_kb_desc/_kb_x100x/1",
                 Resource::new(
-                    "images://gallery/all/desc/x100x/1",
+                    "images://gallery/all/_kb_desc/_kb_x100x/1",
                     "Gallery images (first page)",
                 )
                 .with_description("First 100 gallery rows in descending order")
@@ -668,7 +688,7 @@ impl ServerHandler for KabegameMcpServer {
                 (
                     "images.read.gallery",
                     ResourceTemplate::new(
-                        "images://gallery/plugin/{pluginId}/desc/x100x/{page}",
+                        "images://gallery/plugin/{pluginId}/_kb_desc/_kb_x100x/{page}",
                         "Gallery images by plugin",
                     )
                     .with_description(
@@ -679,7 +699,7 @@ impl ServerHandler for KabegameMcpServer {
                 (
                     "images.read.gallery",
                     ResourceTemplate::new(
-                        "images://gallery/album/{albumId}/desc/x100x/{page}",
+                        "images://gallery/album/{albumId}/_kb_desc/_kb_x100x/{page}",
                         "Gallery images by album",
                     )
                     .with_description("A descending 100-row gallery page filtered by album.")
@@ -688,7 +708,7 @@ impl ServerHandler for KabegameMcpServer {
                 (
                     "images.read.gallery",
                     ResourceTemplate::new(
-                        "images://gallery/date/{year}y/{month}m/{day}d/desc/x100x/{page}",
+                        "images://gallery/date/{year}y/{month}m/{day}d/_kb_desc/_kb_x100x/{page}",
                         "Gallery images by date",
                     )
                     .with_description("A descending 100-row gallery page filtered by crawl date.")
@@ -697,7 +717,7 @@ impl ServerHandler for KabegameMcpServer {
                 (
                     "images.read.gallery",
                     ResourceTemplate::new(
-                        "images://gallery/search/display-name/{query}/all/desc/x100x/{page}",
+                        "images://gallery/search/display-name/{query}/all/_kb_desc/_kb_x100x/{page}",
                         "Search gallery display names",
                     )
                     .with_description(
@@ -1054,7 +1074,7 @@ impl ServerHandler for KabegameMcpServer {
                     // 后者若也报"这是叶子",会把翻页翻过头的调用方误导成"此路不通"。
                     if child_count == 0 {
                         payload["hint"] = json!(
-                            "This is either a collection leaf (append /x100x/1 and use \
+                            "This is either a collection leaf (append /_kb_x100x/1 and use \
                              resources/read) or its next children are syntax keywords rather \
                              than enumerable data; see server instructions."
                         );
@@ -1206,7 +1226,29 @@ impl ServerHandler for KabegameMcpServer {
 mod tests {
     use kabegame_core::providers::child_runtime_path;
 
-    use super::{normalize_mcp_uri_path, resource_scheme, resource_segments};
+    use super::{
+        is_paginated_image_path, normalize_mcp_uri_path, resource_scheme, resource_segments,
+    };
+
+    #[test]
+    fn pagination_requires_global_gallery_pair_or_raw_root_pair() {
+        assert!(is_paginated_image_path(&[
+            "gallery",
+            "plugin",
+            "pixiv",
+            "_kb_x100x",
+            "2"
+        ]));
+        assert!(is_paginated_image_path(&["x100x", "1"]));
+        assert!(!is_paginated_image_path(&["gallery", "all", "x100x", "1"]));
+        assert!(!is_paginated_image_path(&["gallery", "all", "1"]));
+        assert!(!is_paginated_image_path(&[
+            "gallery",
+            "all",
+            "_kb_x0100x",
+            "1"
+        ]));
+    }
 
     #[test]
     fn resource_scheme_parses_scheme_prefix() {

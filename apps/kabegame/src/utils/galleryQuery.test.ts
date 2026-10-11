@@ -15,7 +15,14 @@ import {
   type GalleryQuery,
   type GallerySearchPathMode,
 } from "./galleryQuery";
-import { buildComposableContextPrefix, buildComposablePath, parseComposablePath } from "./galleryPath";
+import {
+  buildComposableContextPrefix,
+  buildComposablePath,
+  parseComposablePath,
+  queryRuntimePath,
+  stripComposablePathTail,
+  stripPageTail,
+} from "./galleryPath";
 
 const simple: GalleryFilterSet = {
   plugin: { pluginId: "pixiv" },
@@ -37,6 +44,33 @@ function roundTrip(query: GalleryQuery): GalleryQuery {
 }
 
 describe("简单 chip + 追加高级条件", () => {
+  it("新续接段完整往返，且 no-album/_kb_fc 的空查询回落到叶节点", () => {
+    const path = buildComposablePath({
+      noAlbum: true,
+      query: [],
+      sort: { field: "by-size", desc: true },
+      page: 7,
+      pageSize: 250,
+    });
+    expect(path).toBe("no-album/_kb_fc/sort/by-size/_kb_desc/_kb_x250x/7");
+    expect(parseComposablePath(path)).toMatchObject({
+      noAlbum: true,
+      query: [],
+      sort: { field: "by-size", desc: true },
+      page: 7,
+      pageSize: 250,
+    });
+    expect(stripComposablePathTail(path)).toBe("no-album/_kb_fc/sort/by-size");
+    expect(stripPageTail(path)).toBe("no-album/_kb_fc/sort/by-size/_kb_desc");
+    expect(queryRuntimePath("all", "images://gallery/no-album/_kb_fc/")).toBe("images://gallery/no-album");
+  });
+
+  it("默认每页数也显式输出 _kb_x<N>x", () => {
+    expect(buildComposablePath({ query: [], sort: { field: "by-time", desc: false }, page: 1 })).toBe(
+      "sort/by-time/_kb_x100x/1",
+    );
+  });
+
   it("Pixiv + 横图后追加 OR 组，路径保持 AND 顺序", () => {
     const query = composeQueryFilters(simple, advanced);
     expect(
@@ -46,8 +80,8 @@ describe("简单 chip + 追加高级条件", () => {
         page: 1,
       }),
     ).toBe(
-      "plugin/pixiv/filter_comb/aspect/4x3-16x9/filter_comb/" +
-        "~not/~not/~any/search/native-metadata/sakura/~or/media-type/image/~end/~end/~end/sort/by-time/desc/1",
+      "plugin/pixiv/_kb_fc/aspect/4x3-16x9/_kb_fc/" +
+        "~not/~not/~any/search/native-metadata/sakura/~or/media-type/image/~end/~end/~end/sort/by-time/_kb_desc/_kb_x100x/1",
     );
     expect(splitQueryFilters(roundTrip(query))).toEqual({ simple, advanced });
   });
@@ -78,7 +112,7 @@ describe("简单 chip + 追加高级条件", () => {
   });
 
   it("旧版单分支 ~any 边界包装仍能拆回高级条件", () => {
-    const parsed = parseQueryBody("plugin/pixiv/filter_comb/~any/media-type/image/~end".split("/"));
+    const parsed = parseQueryBody("plugin/pixiv/_kb_fc/~any/media-type/image/~end".split("/"));
     expect(splitQueryFilters(parsed!)).toEqual({
       simple: { plugin: { pluginId: "pixiv" } },
       advanced: [{ is: { mediaType: { kind: "image" } } }],
@@ -192,7 +226,7 @@ describe("多维度搜索（勾选维度之间 OR）", () => {
     "~any/search/url/a/~or/search/metadata/a/~or/search/url/b/~end",
     "~any/search/metadata/a/~or/search/url/a/~end",
     "~any/search/url/a/~or/search/metadata/a/media-type/image/~end",
-    "~any/search/url/a/filter_comb/search/url/b/~or/search/metadata/a/~end",
+    "~any/search/url/a/_kb_fc/search/url/b/~or/search/metadata/a/~end",
   ])("不满足折叠条件时保持普通 OR 组：%s", (body) => {
     const parsed = parseQueryBody(body.split("/"));
     expect(parsed).not.toBeNull();
@@ -205,19 +239,19 @@ describe("多维度搜索（勾选维度之间 OR）", () => {
 });
 
 describe("逗号 AND 语法（所有维度通用）", () => {
-  it("单维度：逗号分隔的词序列化成 filter_comb AND 链，解析时折回一个输入值", () => {
+  it("单维度：逗号分隔的词序列化成 _kb_fc AND 链，解析时折回一个输入值", () => {
     const query: GalleryQuery = [
       { is: { search: { modes: ["label"], query: "miku, pixiv/character" }, plugin: { pluginId: "pixiv" } } },
     ];
     expect(serializeQueryBody(query).body).toBe(
-      "search/label/miku/filter_comb/search/label/pixiv%5C%2Fcharacter/plugin/pixiv",
+      "search/label/miku/_kb_fc/search/label/pixiv%5C%2Fcharacter/plugin/pixiv",
     );
     expect(roundTrip(query)).toEqual(query);
   });
 
   it("非标签维度同样按逗号拆成 AND", () => {
     const query: GalleryQuery = [{ is: { search: { modes: ["metadata"], query: "1girl, 1boy" } } }];
-    expect(serializeQueryBody(query).body).toBe("search/metadata/1girl/filter_comb/search/metadata/1boy");
+    expect(serializeQueryBody(query).body).toBe("search/metadata/1girl/_kb_fc/search/metadata/1boy");
     expect(roundTrip(query)).toEqual(query);
   });
 
@@ -241,8 +275,8 @@ describe("逗号 AND 语法（所有维度通用）", () => {
 
   it("旧版多维度逗号链（同一维度内同时命中）不再能写成搜索词，保留为普通条件、语义不变", () => {
     const body =
-      "~any/search/metadata/1girl/filter_comb/search/metadata/1boy" +
-      "/~or/search/label/1girl/filter_comb/search/label/1boy/~end";
+      "~any/search/metadata/1girl/_kb_fc/search/metadata/1boy" +
+      "/~or/search/label/1girl/_kb_fc/search/label/1boy/~end";
     const parsed = parseQueryBody(body.split("/"));
     expect(parsed).not.toBeNull();
     expect(parsed!.every((node) => "any" in node)).toBe(true);
@@ -250,7 +284,7 @@ describe("逗号 AND 语法（所有维度通用）", () => {
   });
 
   it("不同维度的搜索段不会被并成一个词串", () => {
-    const parsed = parseQueryBody("search/url/a/filter_comb/search/metadata/b".split("/"));
+    const parsed = parseQueryBody("search/url/a/_kb_fc/search/metadata/b".split("/"));
     expect(parsed).not.toBeNull();
     expect(JSON.stringify(parsed)).not.toContain("a, b");
     expect(splitQueryFilters(parsed!).simple).toEqual({ search: { modes: ["url"], query: "a" } });
@@ -265,7 +299,7 @@ describe("分号 OR 关键字组", () => {
   it("单维度：每组一条 AND 链，组之间 OR", () => {
     const query: GalleryQuery = [{ is: { search: { modes: ["metadata"], query: "1girl, 1boy; cat" } } }];
     expect(serializeQueryBody(query).body).toBe(
-      "~any/search/metadata/1girl/filter_comb/search/metadata/1boy/~or/search/metadata/cat/~end",
+      "~any/search/metadata/1girl/_kb_fc/search/metadata/1boy/~or/search/metadata/cat/~end",
     );
     expect(roundTrip(query)).toEqual(query);
   });
@@ -283,7 +317,7 @@ describe("分号 OR 关键字组", () => {
 
   it("空组被丢弃；只有一组时与无分号的形态逐字一致", () => {
     const term = makeSearchTerm(["url"], " ; a, b ;");
-    expect(serializeQueryBody([{ is: { search: term } }]).body).toBe("search/url/a/filter_comb/search/url/b");
+    expect(serializeQueryBody([{ is: { search: term } }]).body).toBe("search/url/a/_kb_fc/search/url/b");
   });
 
   it("只剩分隔符时退化为字面逗号，不变成全集", () => {
@@ -306,7 +340,7 @@ describe("搜索表达式（! 非、() 分组、转义）", () => {
   it("单维度：(girl; boy), cute, !genshin", () => {
     const query = term(["label"], "(girl; boy), cute, !genshin");
     expect(serializeQueryBody(query).body).toBe(
-      "~any/search/label/girl/~or/search/label/boy/~end/search/label/cute/filter_comb/~not/search/label/genshin/~end",
+      "~any/search/label/girl/~or/search/label/boy/~end/search/label/cute/_kb_fc/~not/search/label/genshin/~end",
     );
     expect(roundTrip(query)).toEqual(query);
   });
@@ -361,7 +395,7 @@ describe("搜索表达式（! 非、() 分组、转义）", () => {
   it("词里的特殊字符经转义保持字面，路径段里是原字符", () => {
     const query = term(["local-path"], "Foo (1).jpg, a\\,b, \\!x");
     expect(serializeQueryBody(query).body).toBe(
-      "search/local-path/Foo%20(1).jpg/filter_comb/search/local-path/a%2Cb/filter_comb/search/local-path/!x",
+      "search/local-path/Foo%20(1).jpg/_kb_fc/search/local-path/a%2Cb/_kb_fc/search/local-path/!x",
     );
     expect(roundTrip(query)).toEqual(query);
     // 旧路径里带字面 `,` 的词折回时被转义，不会被拆成两个词。

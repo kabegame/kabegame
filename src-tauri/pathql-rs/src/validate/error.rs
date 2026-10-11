@@ -68,6 +68,8 @@ pub enum ValidateErrorKind {
     },
     #[error("`properties` can only be used with an explicit provider name")]
     PropertiesRequireExplicitProvider,
+    #[error("`passthrough: true` is only valid on a named resolve entry")]
+    PassthroughRequiresNamedProvider,
     #[error("provider reference `{0}` not found in registry (current_ns: `{1}`)")]
     UnresolvedProviderRef(String, String),
     #[error("delegate cycle detected: {}", .0.join(" → "))]

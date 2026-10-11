@@ -267,22 +267,16 @@ impl ProviderQuery {
             sql.push_str(match effective {
                 OrderDirection::Asc => " ASC",
                 OrderDirection::Desc => " DESC",
-                OrderDirection::Revert => {
-                    unreachable!("Revert should be resolved during fold (see OrderState::insert)")
-                }
             });
         }
         Ok(())
     }
 
     fn apply_global_modifier(&self, base: OrderDirection) -> OrderDirection {
-        match (self.order.global, base) {
-            (None, b) => b,
-            (Some(OrderDirection::Asc), _) => OrderDirection::Asc,
-            (Some(OrderDirection::Desc), _) => OrderDirection::Desc,
-            (Some(OrderDirection::Revert), OrderDirection::Asc) => OrderDirection::Desc,
-            (Some(OrderDirection::Revert), OrderDirection::Desc) => OrderDirection::Asc,
-            (Some(OrderDirection::Revert), OrderDirection::Revert) => unreachable!(),
+        match (self.order.revert, base) {
+            (false, direction) => direction,
+            (true, OrderDirection::Asc) => OrderDirection::Desc,
+            (true, OrderDirection::Desc) => OrderDirection::Asc,
         }
     }
 
@@ -677,7 +671,7 @@ mod tests {
     #[test]
     fn order_global_revert_no_entries() {
         let mut q = q_with_from("images");
-        q.order.global = Some(OrderDirection::Revert);
+        q.order.revert = true;
         let (sql, _) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
@@ -730,35 +724,11 @@ mod tests {
     fn order_global_revert_flips() {
         let mut q = q_with_from("images");
         q.order.entries.push(("a".into(), OrderDirection::Asc));
-        q.order.global = Some(OrderDirection::Revert);
+        q.order.revert = true;
         let (sql, _) = q
             .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
             .unwrap();
         assert!(sql.ends_with(" ORDER BY a DESC"));
-    }
-
-    #[test]
-    fn order_global_asc_forces_all() {
-        let mut q = q_with_from("images");
-        q.order.entries.push(("a".into(), OrderDirection::Desc));
-        q.order.entries.push(("b".into(), OrderDirection::Asc));
-        q.order.global = Some(OrderDirection::Asc);
-        let (sql, _) = q
-            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
-            .unwrap();
-        assert!(sql.ends_with(" ORDER BY a ASC, b ASC"));
-    }
-
-    #[test]
-    fn order_global_desc_forces_all() {
-        let mut q = q_with_from("images");
-        q.order.entries.push(("a".into(), OrderDirection::Desc));
-        q.order.entries.push(("b".into(), OrderDirection::Asc));
-        q.order.global = Some(OrderDirection::Desc);
-        let (sql, _) = q
-            .build_sql(&empty_ctx(), crate::provider::SqlDialect::Sqlite)
-            .unwrap();
-        assert!(sql.ends_with(" ORDER BY a DESC, b DESC"));
     }
 
     // ----- LIMIT / OFFSET -----

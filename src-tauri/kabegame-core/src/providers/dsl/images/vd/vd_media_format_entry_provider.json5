@@ -1,0 +1,38 @@
+{
+    "namespace": "kabegame",
+    "name": "vd_media_format_entry_provider",
+    "properties": {
+        "format": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "delegate": {
+            "provider": "gallery_media_format_provider",
+            "properties": { "format": "${properties.format}" }
+        }
+    },
+    "list": {
+        "${page.name}": {
+            "delegate": {
+                "provider": "page_size_provider",
+                "properties": { "page_size": 100 }
+            },
+            "child_var": "page",
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${page.meta.page_num}"
+            },
+            "meta": "${page.meta}"
+        }
+    },
+    "resolve": {
+        // 页号直接解析，不经过动态 list 反查（反查要先跑一遍页号列举 SQL）
+        "([1-9][0-9]*)": {
+            "provider": "query_page_provider",
+            "properties": {
+                "page_size": 100,
+                "page_num": "${capture[1]}"
+            }
+        }
+    }
+}

@@ -9,7 +9,7 @@
         // 批量导入的标签 created_at 常常全等，只按它排的话行序随执行计划漂移
         // （叠了 album_kind 过滤段就会换计划）；补 id 作兜底键保证输出稳定。
         "order": [
-            { "sql": "albums.created_at", "order": "asc", "clear": "all" },
+            { "sql": "albums.created_at", "order": "asc" },
             { "sql": "albums.id", "order": "asc" }
         ]
     },

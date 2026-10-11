@@ -8,6 +8,8 @@ pub struct ResolveEntry {
     pub invocation: ProviderInvocation,
     #[serde(default)]
     pub alias: Option<String>,
+    #[serde(default)]
+    pub passthrough: bool,
 }
 
 impl<'de> Deserialize<'de> for ResolveEntry {
@@ -19,9 +21,19 @@ impl<'de> Deserialize<'de> for ResolveEntry {
             .transpose()
             .map_err(de::Error::custom)?
             .flatten();
+        let passthrough = fields
+            .remove("passthrough")
+            .map(bool::deserialize)
+            .transpose()
+            .map_err(de::Error::custom)?
+            .unwrap_or(false);
         let invocation = ProviderInvocation::deserialize(serde_json::Value::Object(fields))
             .map_err(de::Error::custom)?;
-        Ok(Self { invocation, alias })
+        Ok(Self {
+            invocation,
+            alias,
+            passthrough,
+        })
     }
 }
 
@@ -30,6 +42,7 @@ impl From<ProviderInvocation> for ResolveEntry {
         Self {
             invocation,
             alias: None,
+            passthrough: false,
         }
     }
 }
@@ -55,6 +68,7 @@ mod tests {
             _ => panic!("expected ByName"),
         }
         assert_eq!(entry.alias, None);
+        assert!(!entry.passthrough);
     }
 
     #[test]
@@ -78,6 +92,16 @@ mod tests {
             entry.invocation,
             ProviderInvocation::ByDelegate(_)
         ));
+    }
+
+    #[test]
+    fn passthrough_preserves_by_name_discrimination() {
+        let v: Resolve =
+            serde_json::from_str(r#"{"_kb_co":{"provider":"clear_order","passthrough":true}}"#)
+                .unwrap();
+        let entry = v.0.get("_kb_co").unwrap();
+        assert!(entry.passthrough);
+        assert!(matches!(entry.invocation, ProviderInvocation::ByName(_)));
     }
 
     #[test]
@@ -114,5 +138,6 @@ mod tests {
         let entry = v.0.get("k").unwrap();
         assert!(matches!(entry.invocation, ProviderInvocation::Empty(_)));
         assert_eq!(entry.alias, None);
+        assert!(!entry.passthrough);
     }
 }

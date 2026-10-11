@@ -259,7 +259,7 @@ kabegame-cli pathql query <path> [--list [--with-count] | --entry | --fetch]
 
 ```bash
 KABEGAME_SQL_DEBUG=1 kabegame-cli pathql query \
-  'images://gallery/plugin/konachan/extend/rating/Safe/x100x/1' \
+  'images://gallery/plugin/konachan/extend/rating/Safe/_kb_x100x/1' \
   >result.json 2>sql.log
 ```
 

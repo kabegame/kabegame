@@ -540,6 +540,20 @@ impl Provider for DslProvider {
                         .iter()
                         .map(|m| m.map(|x| x.as_str().to_string()).unwrap_or_default())
                         .collect();
+                    if entry.passthrough {
+                        let target = match invocation {
+                            ProviderInvocation::ByName(_) => self
+                                .instantiate_invocation(invocation, &cap_vec, composed, ctx)
+                                .ok()
+                                .flatten(),
+                            ProviderInvocation::ByDelegate(_) | ProviderInvocation::Empty(_) => {
+                                None
+                            }
+                        };
+                        return target
+                            .map(ResolveRef::Passthrough)
+                            .unwrap_or(ResolveRef::Terminal(None));
+                    }
                     // ByDelegate 只返回路由引用；target recursion 和 child materialize
                     // 均由 runtime 通过 transform stack 延迟处理。
                     if let ProviderInvocation::ByDelegate(b) = invocation {

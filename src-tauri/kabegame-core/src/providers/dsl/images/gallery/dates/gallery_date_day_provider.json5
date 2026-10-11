@@ -11,19 +11,5 @@
                 "ymd": "${properties.ymd}"
             }
         }    
-    },
-    "resolve": {
-        "filter_comb": {
-            "provider": "gallery_filter_comb"
-        },
-        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
-            "alias": "paginate",
-            "delegate": {
-                "provider": "kabegame.gallery_desc_pagination_page_comb"
-            },
-            "child_var": "child",
-            "provider": "${child.provider}",
-            "meta": "${child.meta}"
-        },
     }
 }

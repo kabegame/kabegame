@@ -23,7 +23,7 @@ export * from "./galleryQuery.ts";
  *
  * 画廊一条完整路径 = 随行路由上下文 + 查询体 + 排序 + 分页：
  *
- *   [hide/][<root>/][no-album/filter_comb/]<query body>/sort/<field>[/desc][/x{n}x]/<page>
+ *   [hide/][<root>/][no-album/_kb_fc/]<query body>/sort/<field>[/_kb_desc]/_kb_x{n}x/<page>
  *
  * - `hide` 与 `no-album` 都是全局路由参数（值由 globalPathRoute 单例持有、跨页面
  *   共享，工具箱统一开关），不属于查询对象。工厂负责算出扣除赦免后的生效值：
@@ -153,9 +153,9 @@ export function buildComposablePath(params: ComposablePathParams): string {
     endsAtHub: false,
   }).body;
   const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
-  const ps = pageSize === DEFAULT_PAGE_SIZE ? "" : `x${pageSize}x/`;
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
-  return sort.desc ? `${rp}${body}/desc/${ps}${p}` : `${rp}${body}/${ps}${p}`;
+  const tail = `${sort.desc ? "_kb_desc/" : ""}_kb_x${pageSize}x/${p}`;
+  return `${rp}${body}/${tail}`;
 }
 
 /** 无排序/分页的计数路径；空查询回退 `all`。 */
@@ -198,7 +198,7 @@ export function queryRuntimePath(body: string, contextPrefix = "images://gallery
   let prefix = contextPrefix.trim().replace(/\/+$/, "");
   if (!prefix) prefix = "images://gallery";
 
-  // no-album/filter_comb/all 不可路由；no-album 叶自身就是相同集合的合法计数入口。
+  // no-album/_kb_fc/all 不可路由；no-album 叶自身就是相同集合的合法计数入口。
   if (normalizedBody === "all" && prefix.endsWith(`/${FILTER_COMB}`)) {
     return prefix.slice(0, -`/${FILTER_COMB}`.length);
   }
@@ -239,7 +239,7 @@ export function parseComposablePath(
   const { body, tail } = splitBodyAndTail(segs);
   const { sort: order, pageSize, page } = parseTail(tail);
 
-  // no-album 随行上下文：规范形态在体首（后跟 filter_comb 回枢纽）。
+  // no-album 随行上下文：规范形态在体首（后跟 _kb_fc 回枢纽）。
   let rest = [...body];
   let noAlbum = false;
   if (rest[0] === NO_ALBUM) {
@@ -280,12 +280,9 @@ export function stripComposablePathTail(path: string): string {
   if (!trimmed) return "";
   const segs = trimmed.split("/").filter(Boolean);
   let i = segs.length;
-  if (i > 0 && /^[1-9][0-9]*$/.test(segs[i - 1]!)) {
-    i--;
-    if (i > 0 && /^x[1-9][0-9]*x$/.test(segs[i - 1]!)) {
-      i--;
-    }
-    if (i > 0 && segs[i - 1] === "desc") {
+  if (i > 1 && /^[1-9][0-9]*$/.test(segs[i - 1]!) && /^_kb_x[1-9][0-9]*x$/.test(segs[i - 2]!)) {
+    i -= 2;
+    if (i > 0 && segs[i - 1] === "_kb_desc") {
       i--;
     }
   }
@@ -293,21 +290,18 @@ export function stripComposablePathTail(path: string): string {
 }
 
 /**
- * 只剥分页尾 `[x<N>x/]<页码>`，**保留 `desc` 与排序段**。
+ * 只剥分页尾 `_kb_x<N>x/<页码>`，**保留 `_kb_desc` 与排序段**。
  *
- * 与 `stripComposablePathTail` 的区别就在 `desc`：计数路径不关心顺序，所以那边连 `desc`
- * 一起剥；而「这张图在当前排序下排第几」必须保留完整排序，`desc` 被剥掉会把序号算反。
+ * 与 `stripComposablePathTail` 的区别就在 `_kb_desc`：计数路径不关心顺序，所以那边连 `_kb_desc`
+ * 一起剥；而「这张图在当前排序下排第几」必须保留完整排序，`_kb_desc` 被剥掉会把序号算反。
  */
 export function stripPageTail(path: string): string {
   const trimmed = (path || "").trim().replace(/\/+$/g, "");
   if (!trimmed) return "";
   const segs = trimmed.split("/").filter(Boolean);
   let i = segs.length;
-  if (i > 0 && /^[1-9][0-9]*$/.test(segs[i - 1]!)) {
-    i--;
-    if (i > 0 && /^x[1-9][0-9]*x$/.test(segs[i - 1]!)) {
-      i--;
-    }
+  if (i > 1 && /^[1-9][0-9]*$/.test(segs[i - 1]!) && /^_kb_x[1-9][0-9]*x$/.test(segs[i - 2]!)) {
+    i -= 2;
   }
   return segs.slice(0, i).join("/");
 }
@@ -426,12 +420,15 @@ function findSortIndex(body: readonly string[]): number {
 }
 
 function splitBodyAndTail(segs: string[]): { body: string[]; tail: string[] } {
-  if (!segs.length || !/^[1-9][0-9]*$/.test(segs[segs.length - 1]!)) {
+  if (
+    segs.length < 2 ||
+    !/^[1-9][0-9]*$/.test(segs[segs.length - 1]!) ||
+    !/^_kb_x[1-9][0-9]*x$/.test(segs[segs.length - 2]!)
+  ) {
     return { body: segs, tail: [] };
   }
-  let tailStart = segs.length - 1;
-  if (tailStart > 0 && /^x[1-9][0-9]*x$/.test(segs[tailStart - 1]!)) tailStart -= 1;
-  if (tailStart > 0 && segs[tailStart - 1] === "desc") tailStart -= 1;
+  let tailStart = segs.length - 2;
+  if (tailStart > 0 && segs[tailStart - 1] === "_kb_desc") tailStart -= 1;
   return { body: segs.slice(0, tailStart), tail: segs.slice(tailStart) };
 }
 
@@ -440,12 +437,12 @@ function parseTail(tail: string[]): { sort: GalleryTimeSort; pageSize: number; p
   let sort: GalleryTimeSort = "asc";
   let pageSize = DEFAULT_PAGE_SIZE;
 
-  if (rest[0] === "desc") {
+  if (rest[0] === "_kb_desc") {
     sort = "desc";
     rest = rest.slice(1);
   }
 
-  const pageSizeMatch = rest[0]?.match(/^x(\d+)x$/);
+  const pageSizeMatch = rest[0]?.match(/^_kb_x(\d+)x$/);
   if (pageSizeMatch) {
     pageSize = parseInt(pageSizeMatch[1]!, 10) || DEFAULT_PAGE_SIZE;
     rest = rest.slice(1);

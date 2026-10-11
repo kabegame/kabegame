@@ -1,16 +1,14 @@
 import { computed, onBeforeUnmount, shallowReactive, watch } from "vue";
 import { serializeFilterSet } from "@/utils/galleryPath";
 import type { TreeModel } from "@/components/tree/useTreeModel";
-import type { EventRefreshHub } from "@/composables/useEventRefreshHub";
 import { countProviderPath, type GalleryFilterTreeContext } from "./context";
 import type { FacetNode, GalleryFacetSource } from "./facetTreeSource";
 
 /**
- * 每节点计数态（从旧 ProviderChildrenNode 的行内状态搬到适配层 Map）：
- * - 折叠保活：状态挂在 key 上，节点收起（不在投影里）时计数与订阅仍在
- * - visible 门控：面板关着不请求、事件被丢弃；打开时全量刷一遍（旧 watch(visible)）
- * - delta 模式：提供 countBaseline 即显示 `count − baseline`（+N/−N/0）
- * - 每节点在 ctx.registerRefreshTarget 注册（GalleryFilterTree.refresh() 集中刷新机制不变）
+ * 高级查询 diff 模式的逐候选预测计数：
+ * - 仅在 countBaseline 存在时建立节点态，侧栏模式直接读 element.count；
+ * - 面板打开、草稿变化或新候选加载时计算；
+ * - 不订阅任何数据变更事件。
  */
 interface CountState {
   count: number | null;
@@ -20,17 +18,14 @@ interface CountState {
 interface TrackedNode {
   state: CountState;
   token: number;
-  unregisterHub: () => void;
-  unregisterTarget: () => void;
 }
 
 export function useFacetNodeCounts(options: {
   ctx: GalleryFilterTreeContext;
-  hub: EventRefreshHub;
   model: TreeModel<FacetNode>;
   source: GalleryFacetSource;
 }) {
-  const { ctx, hub, model, source } = options;
+  const { ctx, model, source } = options;
   const tracked = new Map<string, TrackedNode>();
   const isDeltaMode = computed(() => !!ctx.countBaseline);
 
@@ -54,18 +49,11 @@ export function useFacetNodeCounts(options: {
     await Promise.all([...tracked.keys()].map((key) => refresh(key)));
   }
 
-  function track(key: string, element: FacetNode) {
+  function track(key: string) {
     if (tracked.has(key)) return;
     const entry: TrackedNode = {
       state: shallowReactive<CountState>({ count: null, loading: false }),
       token: 0,
-      unregisterHub: hub.register({
-        waitMs: 3000,
-        when: () => ctx.visible.value,
-        filter: source.countRefreshFilter(element),
-        onRefresh: () => refresh(key),
-      }),
-      unregisterTarget: ctx.registerRefreshTarget({ refresh: () => refresh(key) }),
     };
     tracked.set(key, entry);
     if (ctx.visible.value) void refresh(key);
@@ -75,8 +63,6 @@ export function useFacetNodeCounts(options: {
     const entry = tracked.get(key);
     if (!entry) return;
     entry.token++;
-    entry.unregisterHub();
-    entry.unregisterTarget();
     tracked.delete(key);
   }
 
@@ -85,8 +71,9 @@ export function useFacetNodeCounts(options: {
   watch(
     model.rows,
     (rows) => {
+      if (!isDeltaMode.value) return;
       for (const row of rows) {
-        if (row.kind === "node") track(row.key, row.node.element);
+        if (row.kind === "node") track(row.key);
       }
       for (const key of [...tracked.keys()]) {
         if (!model.nodeByKey(key)) dispose(key);
@@ -95,7 +82,7 @@ export function useFacetNodeCounts(options: {
     { immediate: true },
   );
 
-  // 面板打开：全量刷一遍（旧实现每个节点 watch(visible)）。
+  // 面板打开：全量刷一遍。
   watch(
     () => ctx.visible.value,
     (visible) => {
@@ -103,8 +90,7 @@ export function useFacetNodeCounts(options: {
     },
   );
 
-  // 计数路径随过滤/草稿变化（高级面板 diff 模式）：全量重取。
-  // GalleryFilterTree 侧由 treeKey 重挂覆盖，此 watch 冗余但无害。
+  // 计数路径随草稿变化：仅面板可见时全量重取。
   watch(
     () => serializeFilterSet(ctx.filters.value),
     () => {
@@ -137,7 +123,7 @@ export function useFacetNodeCounts(options: {
       if (delta < 0) return `−${-delta}`;
       return "0";
     }
-    const count = stateOf(key)?.count ?? null;
+    const count = model.nodeByKey(key)?.element.count ?? null;
     if (count == null) return "...";
     return String(count);
   }
@@ -148,12 +134,12 @@ export function useFacetNodeCounts(options: {
 
   function isEmptyOf(key: string): boolean {
     if (isDeltaMode.value) return deltaOf(key) === 0;
-    const count = stateOf(key)?.count ?? null;
+    const count = model.nodeByKey(key)?.element.count ?? null;
     return count !== null && count === 0;
   }
 
   function loadingOf(key: string): boolean {
-    return stateOf(key)?.loading ?? false;
+    return isDeltaMode.value ? (stateOf(key)?.loading ?? false) : false;
   }
 
   return { isDeltaMode, displayOf, deltaSignOf, isEmptyOf, loadingOf, refreshAll };

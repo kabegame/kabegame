@@ -72,12 +72,12 @@ Kabegame 的图片资源是一棵**懒加载树**：`list_resources` 只列出�
 
 1. 调用 `list_pathql_entry({ "path": "images://gallery" })`，从返回的 22 个维度及其 `note` 中选择入口。
 2. 对选中的 `child.path` 继续调用 `list_pathql_entry`，例如枚举 `images://gallery/plugin` 下已安装的插件。大型子节点列表用 `offset` / `limit` 翻页。
-3. 原样复制返回的、已 percent-encode 的 `child.path`；集合叶子补上 `/desc/x100x/1` 等显式分页后交给 `resources/read`。不要再次编码，也不要对分页节点调用发现工具。
+3. 原样复制返回的、已 percent-encode 的 `child.path`；集合叶子补上 `/_kb_desc/_kb_x100x/1` 等显式分页后交给 `resources/read`。不要再次编码，也不要对分页节点调用发现工具。
 
 例如，插件维度的完整路径可以从 `images://gallery` → `images://gallery/plugin` → 返回的插件 child 逐层得到，最后读取：
 
 ```text
-images://gallery/plugin/<pluginId>/desc/x100x/1
+images://gallery/plugin/<pluginId>/_kb_desc/_kb_x100x/1
 ```
 
 ### 画廊维度速查
@@ -96,10 +96,12 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 ### 组合规则
 
 - 每个路径段都会继续收窄前一个节点，沿路径累积的过滤条件按 AND 组合；路径大小写敏感。
-- `filter_comb` 用于在已有过滤之后再组合一个维度，例如 `images://gallery/plugin/patreon/filter_comb/media-type/image/desc/x100x/1`。
-- `aspect` 不可枚举，直接写宽高比区间段：`-3x4`（≤ 3:4）、`3x4-4x3`、`4x3-16x9`、`16x9-`（大于 16:9）、`unknown`（尺寸缺失）。比值为正整数 `<宽>x<高>`，区间左开右闭，可写任意比值，例如 `images://gallery/aspect/16x9-7x3/x100x/1`。
+- `_kb_fc` 用于在已有过滤之后再组合一个维度，例如 `images://gallery/plugin/patreon/_kb_fc/media-type/image/_kb_desc/_kb_x100x/1`。
+- `aspect` 可列举应用内置的五个桶，也可直接写任意宽高比区间段：`-3x4`（≤ 3:4）、`3x4-4x3`、`4x3-16x9`、`16x9-`（大于 16:9）、`unknown`（尺寸缺失）。比值为正整数 `<宽>x<高>`，区间左开右闭，例如 `images://gallery/aspect/16x9-7x3/_kb_x100x/1`。
 - `sort` 是 `all` 的**兄弟节点**，不是子节点。正确写法是 `gallery/sort/<key>/...`，不要写成 `gallery/all/sort/...`。
-- `/desc` 反转当前排序方向；默认画廊顺序为 `crawledAt` 升序，因此 `/desc` 表示最新在前。
+- `/_kb_desc` 反转当前排序方向；默认画廊顺序为 `crawledAt` 升序，因此 `/_kb_desc` 表示最新在前。
+- `_kb_fc`、`_kb_desc` 与 `_kb_x<N>x` 由 `_kb_` 全局前缀表提供，不是 provider 的可枚举 child，
+  因此 `list_pathql_entry` 看不到这些段；请按节点 `note` 显式追加。
 - `hide` 是排除隐藏图片的**前缀**。`gallery/hide/all/...` 有效，`gallery/all/hide/...` 无效。
 - 对未列出的后续语法，继续发现当前节点并读取 `note`，不要自行发明路径。
 
@@ -132,12 +134,12 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 
 | 路径 | 含义 |
 |---|---|
-| `images://gallery/all/desc/x100x/1` | 所有图片第 1 页，最新在前，每页 100 张 |
-| `images://gallery/album/{albumId}/x100x/1` | 指定画册第 1 页 |
-| `images://gallery/album/{albumId}/desc/x100x/1` | 指定画册第 1 页，最新在前 |
-| `images://gallery/date/2024y/03m/desc/x100x/1` | 2024-03 爬取图片第 1 页，最新在前 |
-| `images://gallery/media-type/image/x100x/1` | 仅图片媒体类型，第 1 页 |
-| `images://gallery/wallpaper-order/x100x/1` | 壁纸历史第 1 页 |
+| `images://gallery/all/_kb_desc/_kb_x100x/1` | 所有图片第 1 页，最新在前，每页 100 张 |
+| `images://gallery/album/{albumId}/_kb_x100x/1` | 指定画册第 1 页 |
+| `images://gallery/album/{albumId}/_kb_desc/_kb_x100x/1` | 指定画册第 1 页，最新在前 |
+| `images://gallery/date/2024y/03m/_kb_desc/_kb_x100x/1` | 2024-03 爬取图片第 1 页，最新在前 |
+| `images://gallery/media-type/image/_kb_x100x/1` | 仅图片媒体类型，第 1 页 |
+| `images://gallery/wallpaper-order/_kb_x100x/1` | 壁纸历史第 1 页 |
 | `images://x100x/1` | 原始 `images` 表第 1 页 |
 
 `images://gallery/...` 直接返回 `Vec<ImageInfo>`；不再返回旧 `provider://` 的 Dir / Image 混合 `entries` 结构，也不支持 `?without=`。
@@ -196,9 +198,11 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 ## 通用分页规则
 
 - **页码从 1 开始。`page 0` 是非法值，一律视为错误。**
-- PathQL 页大小段匹配 `x([1-9][0-9]*)x`，接受任意 `N ≥ 1`，例如 `x25x`、`x100x`、`x1200x`。
+- 画廊页大小段匹配 `_kb_x([1-9][0-9]*)x`，接受任意 `N ≥ 1`，例如 `_kb_x25x`、`_kb_x100x`、`_kb_x1200x`；
+  「只写页号默认 100」的简写已取消。原始 `images://` 表仍使用 `x<N>x/<page>`。
 - 第 N 页从 `(N - 1) * page_size` 处开始。
-- 未以页号收尾、且不是 `id_*` 单图的 `images://` 集合会先执行 COUNT；总数超过 500 时返回 `pagination_required`，要求补上 `/x<N>x/<page>`。
+- 不是 `id_*` 单图、且末两段未匹配画廊 `_kb_x<N>x/<数字>`（或原始根 `x<N>x/<数字>`）的
+  `images://` 集合会先执行 COUNT；总数超过 500 时返回 `pagination_required`。
 
 ## 预置资源（`list_resources`）
 
@@ -206,7 +210,7 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 
 | URI | 名称 | 说明 |
 |---|---|---|
-| `images://gallery/all/desc/x100x/1` | Gallery images (first page) | 画廊最新 100 条 |
+| `images://gallery/all/_kb_desc/_kb_x100x/1` | Gallery images (first page) | 画廊最新 100 条 |
 | `images://x100x/1` | Raw image rows | 原始 `images` 表第 1 页 |
 | `albums://all` | All albums | `Vec<Album>` |
 | `tasks://all` | All tasks | `Vec<TaskInfo>` |
@@ -218,10 +222,10 @@ images://gallery/plugin/<pluginId>/desc/x100x/1
 共十六条模板，供 Host 动态拼接：
 
 - `images://id_{imageId}`、`images://id_{imageId}/metadata`
-- `images://gallery/plugin/{pluginId}/desc/x100x/{page}`
-- `images://gallery/album/{albumId}/desc/x100x/{page}`
-- `images://gallery/date/{year}y/{month}m/{day}d/desc/x100x/{page}`
-- `images://gallery/search/display-name/{query}/all/desc/x100x/{page}`
+- `images://gallery/plugin/{pluginId}/_kb_desc/_kb_x100x/{page}`
+- `images://gallery/album/{albumId}/_kb_desc/_kb_x100x/{page}`
+- `images://gallery/date/{year}y/{month}m/{day}d/_kb_desc/_kb_x100x/{page}`
+- `images://gallery/search/display-name/{query}/all/_kb_desc/_kb_x100x/{page}`
 - `images://gallery/by_id/{imageId}`
 - `albums://id_{albumId}`、`tasks://id_{taskId}`、`surf_records://id_{surfRecordId}`
 - `plugin://{pluginId}`、`plugin://{pluginId}/doc`、`plugin://{pluginId}/changelog`、`plugin://{pluginId}/icon`、`plugin://{pluginId}/description_template`、`plugin://{pluginId}/asset/{assetPath}`
@@ -420,7 +424,8 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 **转发**：`resources/read`，`uri = "images://" + path`；如果 `path` 没有 scheme 且不是 `gallery/`、`vd/`、`id_` 或 `x{N}x/...` 开头，会自动映射到 `images://gallery/{path}`。
 
 :::note
-例如 `path = "all/desc/x100x/1"` 会转发到 `images://gallery/all/desc/x100x/1`；`path = "x100x/1"` 会转发到 `images://x100x/1`。
+例如 `path = "all/_kb_desc/_kb_x100x/1"` 会转发到 `images://gallery/all/_kb_desc/_kb_x100x/1`；
+`path = "x100x/1"` 会转发到 `images://x100x/1`。
 :::
 
 #### `read_image`
@@ -519,8 +524,10 @@ MCPB 暴露 `list_pathql_entry`、和 HTTP MCP 同名的四个写工具，并额
 | `resource_not_found` | PathQL 路径或目标资源不存在 |
 
 - **页码 0 非法**，永远从第 1 页开始。
-- **PathQL 页大小为任意 `N ≥ 1`**，语法是 `/x<N>x/<page>`；这与画廊 UI 的页大小选项无关。
-- **纯数字搜索词漏网**：末段恰为纯数字的搜索词（如 `gallery/search/display-name/2024`）会被当作页号，因此仍应在完整搜索路径后追加显式 `/x<N>x/<page>`。
+- **PathQL 页大小为任意 `N ≥ 1`**：画廊语法是 `/_kb_x<N>x/<page>`，原始 `images://` 根保持
+  `/x<N>x/<page>`；这与画廊 UI 的页大小选项无关。
+- **分页护栏检查末两段**：纯数字搜索词不会被单独当成页号；画廊集合必须在完整搜索路径后追加
+  `/_kb_x<N>x/<page>`。
 - **鉴权收紧**：关闭某个 scheme 的全部 read capability 后，该 scheme 的裸根也会返回 `resource_disabled`；未注册 scheme 直接拒绝。
 - **旧 scheme 不再支持**：`provider://`、`image://`、`album://`、`task://`、`surf://` 没有兼容别名，会被 capability gate 以 `resource_disabled` 拒绝。
 - **不要批量拉 plugin 重字段**：`plugin://` 和 `plugin://{id}` 返回瘦身对象，图标、描述模板、文档与文档资源要按子路径单独读取。

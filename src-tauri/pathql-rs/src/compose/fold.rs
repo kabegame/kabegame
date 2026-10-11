@@ -3,7 +3,7 @@ use thiserror::Error;
 use super::aliases::ResolvedAlias;
 use super::query::{FieldFrag, JoinFrag, ProviderQuery};
 use crate::ast::{
-    ClearMode, ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderForm, SqlExpr,
+    ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderForm, OrderGlobalOp, SqlExpr,
     WhereQuery,
 };
 
@@ -157,18 +157,18 @@ fn fold_order(state: &mut ProviderQuery, order: &Option<OrderForm>) {
     match form {
         OrderForm::Array(items) => {
             for item in items {
-                if item.clear == Some(ClearMode::All) {
-                    state.order.clear_all();
-                }
                 state
                     .order
                     .insert(item.sql.0.clone(), item.order, item.prepend);
             }
         }
-        OrderForm::Global(g) => {
-            // last-wins
-            state.order.global = Some(g.all);
-        }
+        OrderForm::Global(g) => match g.all {
+            OrderGlobalOp::Revert => state.order.revert = true,
+            OrderGlobalOp::Clear => {
+                state.order.entries.clear();
+                state.order.revert = false;
+            }
+        },
     }
 }
 
@@ -188,8 +188,8 @@ fn fold_limit(state: &mut ProviderQuery, l: &Option<NumberOrTemplate>) {
 mod tests {
     use super::*;
     use crate::ast::{
-        AliasName, ClearMode, ContribQuery, Field, Join, JoinKind, NumberOrTemplate,
-        OrderDirection, OrderForm, OrderGlobal, OrderItem, SqlExpr,
+        AliasName, ContribQuery, Field, Join, JoinKind, NumberOrTemplate, OrderDirection,
+        OrderForm, OrderGlobal, OrderGlobalOp, OrderItem, SqlExpr,
     };
 
     fn empty_q() -> ContribQuery {
@@ -476,7 +476,6 @@ mod tests {
             sql: SqlExpr(sql.into()),
             prepend: false,
             order,
-            clear: None,
         }
     }
 
@@ -525,19 +524,14 @@ mod tests {
     }
 
     #[test]
-    fn order_global_last_wins() {
+    fn order_global_revert_sets_flag() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
         q1.order = Some(OrderForm::Global(OrderGlobal {
-            all: OrderDirection::Revert,
-        }));
-        let mut q2 = empty_q();
-        q2.order = Some(OrderForm::Global(OrderGlobal {
-            all: OrderDirection::Asc,
+            all: OrderGlobalOp::Revert,
         }));
         fold_contrib(&mut s, &q1).unwrap();
-        fold_contrib(&mut s, &q2).unwrap();
-        assert_eq!(s.order.global, Some(OrderDirection::Asc));
+        assert!(s.order.revert);
         assert!(s.order.entries.is_empty());
     }
 
@@ -548,7 +542,7 @@ mod tests {
         q1.order = Some(order_arr(vec![("a", OrderDirection::Asc)]));
         let mut q2 = empty_q();
         q2.order = Some(OrderForm::Global(OrderGlobal {
-            all: OrderDirection::Revert,
+            all: OrderGlobalOp::Revert,
         }));
         let mut q3 = empty_q();
         q3.order = Some(order_arr(vec![("b", OrderDirection::Desc)]));
@@ -556,7 +550,7 @@ mod tests {
         fold_contrib(&mut s, &q2).unwrap();
         fold_contrib(&mut s, &q3).unwrap();
         assert_eq!(s.order.entries.len(), 2);
-        assert_eq!(s.order.global, Some(OrderDirection::Revert));
+        assert!(s.order.revert);
     }
 
     #[test]
@@ -583,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn order_item_clear_all_then_inserts_current_item() {
+    fn order_global_clear_drops_entries_and_revert() {
         let mut s = ProviderQuery::new();
         let mut q1 = empty_q();
         q1.order = Some(order_arr(vec![
@@ -591,16 +585,18 @@ mod tests {
             ("images.id", OrderDirection::Desc),
         ]));
         let mut q2 = empty_q();
-        let mut item = order_item("ai.\"order\"", OrderDirection::Asc);
-        item.prepend = true;
-        item.clear = Some(ClearMode::All);
-        q2.order = Some(OrderForm::Array(vec![item]));
+        q2.order = Some(OrderForm::Global(OrderGlobal {
+            all: OrderGlobalOp::Revert,
+        }));
+        let mut q3 = empty_q();
+        q3.order = Some(OrderForm::Global(OrderGlobal {
+            all: OrderGlobalOp::Clear,
+        }));
         fold_contrib(&mut s, &q1).unwrap();
         fold_contrib(&mut s, &q2).unwrap();
-        assert_eq!(
-            s.order.entries,
-            vec![("ai.\"order\"".into(), OrderDirection::Asc)]
-        );
+        fold_contrib(&mut s, &q3).unwrap();
+        assert!(s.order.entries.is_empty());
+        assert!(!s.order.revert);
     }
 
     // ===== offset =====
@@ -653,7 +649,9 @@ mod tests {
 
         // B: references ${ref:t1} in where (str preserved as-is)
         let mut q2 = empty_q();
-        q2.where_ = Some(WhereQuery::Is(SqlExpr("${ref:t1}.image_id = images.id".into())));
+        q2.where_ = Some(WhereQuery::Is(SqlExpr(
+            "${ref:t1}.image_id = images.id".into(),
+        )));
         fold_contrib(&mut s, &q2).unwrap();
 
         assert_eq!(s.aliases.lookup("t1").unwrap().literal, "_a0");

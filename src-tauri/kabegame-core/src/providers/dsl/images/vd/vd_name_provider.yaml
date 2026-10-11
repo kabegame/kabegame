@@ -20,7 +20,7 @@ list:
       WHERE cnt > 0
       ORDER BY name_language_rank(bucket)
     data_var: out
-    provider: name_language_bucket_provider
+    provider: vd_name_bucket_provider
     properties:
       bucket: "${out.bucket}"
     meta:

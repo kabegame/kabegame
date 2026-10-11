@@ -1,7 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_filter_comb",
-    "note": "Choose another filter dimension to AND with the filters already applied. Use one of the listed singular keys; legacy plural aliases still resolve but are intentionally not enumerated.",
+    "note": "Global `_kb_fc` enters this provider to choose another filter dimension and AND it with filters already applied. Use one of the listed singular keys; legacy plural aliases still resolve but are intentionally not enumerated.",
     "list": {
         "wallpaper-order": {
             "provider": "gallery_wallpaper_order_router"

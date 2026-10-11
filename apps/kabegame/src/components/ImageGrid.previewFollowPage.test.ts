@@ -18,12 +18,12 @@ const previewImageId = ref("");
 const queryLoading = ref(false);
 const pendingPreviewBoundary = ref<{ targetPage: number; direction: "next" | "prev" } | null>(null);
 const routeStore = reactive({
-  computedPath: "hide/sort/by-time/desc/x2x/1",
+  computedPath: "hide/sort/by-time/_kb_desc/_kb_x2x/1",
   page: 1,
   pageSize: 2,
   navigate: vi.fn(async ({ page }: { page: number }) => {
     routeStore.page = page;
-    routeStore.computedPath = `hide/sort/by-time/desc/x2x/${page}`;
+    routeStore.computedPath = `hide/sort/by-time/_kb_desc/_kb_x2x/${page}`;
   }),
   syncFromUrl: vi.fn(),
 });
@@ -137,7 +137,7 @@ beforeEach(() => {
   settings.values.previewFollowPage = true;
   settings.values.previewSwitchDirection = "auto";
   routeStore.page = 1;
-  routeStore.computedPath = "hide/sort/by-time/desc/x2x/1";
+  routeStore.computedPath = "hide/sort/by-time/_kb_desc/_kb_x2x/1";
   applySnapshot = null;
   pendingPreviewBoundary.value = null;
   refetch.mockReset();
@@ -149,7 +149,7 @@ beforeEach(() => {
   jumpToPage.mockReset();
   jumpToPage.mockImplementation(async (page) => {
     routeStore.page = page;
-    routeStore.computedPath = `hide/sort/by-time/desc/x2x/${page}`;
+    routeStore.computedPath = `hide/sort/by-time/_kb_desc/_kb_x2x/${page}`;
   });
 });
 afterEach(() => {
@@ -169,7 +169,7 @@ describe("预览跟随后台新增图片", () => {
     expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toBeNull();
     queryLoading.value = false;
     await nextTick();
-    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/desc", "new-target");
+    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/_kb_desc", "new-target");
   });
 
   it("URL 只记录目标 id：先等当前页，再定位，目标页确认前不交给弹窗单图取数", async () => {
@@ -241,12 +241,12 @@ describe("预览跟随后台新增图片", () => {
     const wrapper = await render();
     const originalImage = wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage");
     locateImageRowIndex.mockImplementation(() => new Promise(() => {}));
-    routeStore.computedPath = "hide/plugin/test/sort/by-time/desc/x2x/1";
+    routeStore.computedPath = "hide/plugin/test/sort/by-time/_kb_desc/_kb_x2x/1";
     await nextTick();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
     await applySnapshot!(snapshot(["filtered", "other"], 2));
     await nextTick();
-    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/plugin/test/sort/by-time/desc", "target");
+    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/plugin/test/sort/by-time/_kb_desc", "target");
     expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toBe(originalImage);
   });
 
@@ -318,7 +318,7 @@ describe("预览跟随后台新增图片", () => {
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));
     await nextTick();
 
-    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/desc", "target");
+    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/_kb_desc", "target");
     expect(jumpToPage).toHaveBeenCalledWith(2);
   });
 
@@ -516,7 +516,7 @@ describe("预览跟随后台新增图片", () => {
 
   it("往前切图且本页前面已无图片时，交给分页器翻到上一页末张，期间保留旧图", async () => {
     routeStore.page = 2;
-    routeStore.computedPath = "hide/sort/by-time/desc/x2x/2";
+    routeStore.computedPath = "hide/sort/by-time/_kb_desc/_kb_x2x/2";
     const wrapper = await render();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     core.vm.$emit("preview-switch", { direction: "next" });
@@ -618,7 +618,7 @@ describe("列表读取在途时切图", () => {
     expect(core.props("previewImage")).toBe(switched);
     queryLoading.value = false;
     await nextTick();
-    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/desc", "older");
+    expect(locateImageRowIndex).toHaveBeenCalledWith("hide/sort/by-time/_kb_desc", "older");
     expect(core.props("previewImage")).toBe(switched);
   });
 

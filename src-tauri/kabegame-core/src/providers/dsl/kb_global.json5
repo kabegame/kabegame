@@ -1,0 +1,21 @@
+{
+    "namespace": "kabegame",
+    "name": "kb_global",
+    "resolve": {
+        "_kb_co": {
+            "provider": "kb_co_provider",
+            "passthrough": true
+        },
+        "_kb_fc": {
+            "provider": "gallery_filter_comb"
+        },
+        "_kb_desc": {
+            "provider": "gallery_desc_router"
+        },
+        "_kb_x([1-9][0-9]*)x": {
+            "alias": "page_size",
+            "provider": "gallery_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        }
+    }
+}

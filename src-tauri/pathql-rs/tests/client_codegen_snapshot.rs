@@ -48,6 +48,7 @@ fn runtime() -> Arc<ProviderRuntime> {
                     }
                 },
                 "resolve": {
+                    "_g_all": { "provider": "child_provider" },
                     "filter_comb": { "provider": "all_provider" },
                     "x[1-9][0-9]*x": {
                         "provider": "paginate",
@@ -59,6 +60,20 @@ fn runtime() -> Arc<ProviderRuntime> {
                         "child_var": "extend",
                         "alias": "fallback"
                     }
+                }
+            }"#,
+        ))
+        .unwrap();
+    registry
+        .register(parse_def(
+            r#"{
+                "namespace": "test",
+                "name": "global_table",
+                "resolve": {
+                    "_g_all": { "provider": "all_provider" },
+                    "_g_clear": { "provider": "all_provider", "passthrough": true },
+                    "_g_x[1-9][0-9]*x": { "provider": "paginate", "alias": "global_page_size" },
+                    "plain_global": { "provider": "all_provider" }
                 }
             }"#,
         ))
@@ -135,6 +150,9 @@ fn runtime() -> Arc<ProviderRuntime> {
     }));
     let runtime = ProviderRuntime::with_registry(Arc::new(registry), executor, HashMap::new());
     runtime
+        .register_global_table("_g_", "test", "global_table")
+        .unwrap();
+    runtime
         .register_schema("gallery", "images", "test", "gallery_route")
         .unwrap();
     runtime
@@ -163,6 +181,14 @@ fn typescript_snapshot_contains_expected_runtime_types_and_edges() {
     assert!(output.contains("$nest<T extends NodeBase>(root: T): T {"));
     assert!(output.contains("return root._spawn([...this._segments, \"~~\"]);"));
     assert!(output.contains("readonly $nest: <T extends NodeBase>(root: T) => T;"));
+    // 全局表成员放在共同基类；透传条目保持当前节点类型，且不在表自身重复生成。
+    assert!(output.contains("get _g_all(): TestAllProviderNode"));
+    assert_eq!(output.matches("get _g_all()").count(), 1);
+    assert!(output.contains("get _g_clear(): this"));
+    assert!(output.contains("return this;"));
+    assert!(output.contains("$resolveGlobalPageSize(seg: string): TestPaginateNode"));
+    assert!(!output.contains("get plain_global()"));
+    assert!(output.contains("class TestGlobalTableNode extends NodeBase {\n}"));
 
     assert!(output.contains("class TestGalleryRouteNode extends NodeBase"));
     assert!(output.contains("get all(): TestAllProviderNode"));

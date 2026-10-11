@@ -62,6 +62,15 @@ struct CachedNode {
     provider_keys: Vec<ProviderKey>,
 }
 
+#[derive(Clone)]
+struct GlobalTable {
+    prefix: String,
+    provider: Arc<dyn Provider>,
+    #[cfg(feature = "client-codegen")]
+    provider_key: ProviderKey,
+    provider_keys: Vec<ProviderKey>,
+}
+
 /// schema 的数据来源。FROM 由引擎按它计算，provider 贡献里没有 `from`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaKind {
@@ -82,6 +91,7 @@ pub struct SchemaRoot {
 pub struct ProviderRuntime {
     registry: ArcSwap<ProviderRegistry>,
     schemas: Mutex<HashMap<String, SchemaRoot>>,
+    global_table: Mutex<Option<GlobalTable>>,
     // 用来构建上下文
     weak_self: Weak<Self>,
     /// 注入的 SQL 执行能力 (6d 起强制必填; DSL 动态 list SQL 项 + 反查需要它)。
@@ -110,6 +120,7 @@ impl ProviderRuntime {
         Arc::new_cyclic(|weak| Self {
             registry: ArcSwap::from(registry),
             schemas: Mutex::new(HashMap::new()),
+            global_table: Mutex::new(None),
             weak_self: weak.clone(),
             executor,
             globals,
@@ -198,6 +209,38 @@ impl ProviderRuntime {
         schemes
     }
 
+    /// 以 `prefix` 开头的路径段优先交给指定 DSL provider 解析。
+    /// 未命中时仍按当前 provider 的 resolve → list 顺序继续。
+    pub fn register_global_table(
+        &self,
+        prefix: &str,
+        namespace: &str,
+        name: &str,
+    ) -> Result<(), EngineError> {
+        if prefix.is_empty() {
+            return Err(EngineError::InvalidGlobalPrefix(prefix.to_string()));
+        }
+        let ctx = self.make_ctx();
+        let key_mark = ctx.provider_key_mark();
+        let provider = ctx.registry.instantiate_result(
+            &Namespace(namespace.to_string()),
+            &ProviderName(name.to_string()),
+            &HashMap::new(),
+            &ctx,
+        )?;
+        let table = GlobalTable {
+            prefix: prefix.to_string(),
+            provider,
+            #[cfg(feature = "client-codegen")]
+            provider_key: ProviderKey::new(namespace, name),
+            provider_keys: ctx.provider_keys_since(key_mark),
+        };
+        self.global_table.lock().unwrap().replace(table);
+        // 首次登记也会改变此前缀的解析优先级；旧缓存尚未携带全局表 key，只能整体清理。
+        self.clear_cache();
+        Ok(())
+    }
+
     #[cfg(feature = "client-codegen")]
     pub(crate) fn client_codegen_registry(&self) -> Arc<ProviderRegistry> {
         self.registry.load_full()
@@ -219,6 +262,15 @@ impl ProviderRuntime {
             .collect();
         roots.sort_by(|left, right| left.0.cmp(&right.0));
         roots
+    }
+
+    #[cfg(feature = "client-codegen")]
+    pub(crate) fn client_codegen_global_table(&self) -> Option<(String, ProviderKey)> {
+        self.global_table
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|table| (table.prefix.clone(), table.provider_key.clone()))
     }
 
     /// 动态注册一个dsl
@@ -387,7 +439,7 @@ impl ProviderRuntime {
 
         // Resume / cold-start: 从 start_idx 续 fold 剩余段
         let mut path_so_far = build_path_key(scheme, &segments[..start_idx]);
-        for raw_seg in &segments[start_idx..] {
+        'segments: for raw_seg in &segments[start_idx..] {
             let path_before_seg = path_so_far.clone();
             if !path_so_far.ends_with("://") {
                 path_so_far.push('/');
@@ -467,31 +519,92 @@ impl ProviderRuntime {
             let mut seg_composed = composed.clone();
             let mut transform_stack: Vec<DelegateTransform> = Vec::new();
 
-            let terminal: Option<ChildEntry> = loop {
-                let resolved = resolve_provider.resolve(seg, &seg_composed, &ctx);
-                if dbg_enabled() {
-                    eprintln!(
-                        "[pathql]   step seg={:?} at path={:?} → {}",
-                        seg,
-                        path_so_far,
-                        match &resolved {
-                            ResolveRef::Terminal(Some(child)) if child.provider.is_some() => {
-                                "Terminal(Some(child.provider))"
-                            }
-                            ResolveRef::Terminal(Some(_)) => {
-                                "Terminal(Some(child without provider))"
-                            }
-                            ResolveRef::Terminal(None) => "Terminal(None)",
-                            ResolveRef::Delegate { .. } => "Delegate",
+            let global = self
+                .global_table
+                .lock()
+                .unwrap()
+                .clone()
+                .filter(|table| seg.starts_with(&table.prefix));
+            let mut terminal = None;
+            let mut global_hit = false;
+            if let Some(table) = global {
+                // 即使全局表未命中也要记录 key：表后续新增该段时，旧的 fallback 缓存必须失效。
+                extend_provider_keys(&mut provider_keys, table.provider_keys.clone());
+                resolve_provider = table.provider;
+                loop {
+                    match resolve_provider.resolve(seg, &seg_composed, &ctx) {
+                        ResolveRef::Terminal(Some(child)) => {
+                            terminal = Some(child);
+                            global_hit = true;
+                            break;
                         }
-                    );
+                        ResolveRef::Terminal(None) => break,
+                        ResolveRef::Passthrough(target) => {
+                            composed = target.apply_query(seg_composed, &ctx);
+                            extend_provider_keys(
+                                &mut provider_keys,
+                                ctx.provider_keys_since(key_mark),
+                            );
+                            if group_stack.is_empty() {
+                                self.cache_node(&path_so_far, &current, &composed, &provider_keys);
+                            }
+                            continue 'segments;
+                        }
+                        ResolveRef::Delegate { target, transform } => {
+                            transform_stack.push(transform);
+                            seg_composed = target.apply_query(seg_composed, &ctx);
+                            resolve_provider = target;
+                        }
+                    }
                 }
-                match resolved {
-                    ResolveRef::Terminal(opt) => break opt,
-                    ResolveRef::Delegate { target, transform } => {
-                        transform_stack.push(transform);
-                        seg_composed = target.apply_query(seg_composed, &ctx);
-                        resolve_provider = target;
+                if !global_hit {
+                    resolve_provider = c.clone();
+                    seg_composed = composed.clone();
+                    transform_stack.clear();
+                }
+            }
+
+            let terminal: Option<ChildEntry> = if global_hit {
+                terminal
+            } else {
+                loop {
+                    let resolved = resolve_provider.resolve(seg, &seg_composed, &ctx);
+                    if dbg_enabled() {
+                        eprintln!(
+                            "[pathql]   step seg={:?} at path={:?} → {}",
+                            seg,
+                            path_so_far,
+                            match &resolved {
+                                ResolveRef::Terminal(Some(child)) if child.provider.is_some() => {
+                                    "Terminal(Some(child.provider))"
+                                }
+                                ResolveRef::Terminal(Some(_)) => {
+                                    "Terminal(Some(child without provider))"
+                                }
+                                ResolveRef::Terminal(None) => "Terminal(None)",
+                                ResolveRef::Passthrough(_) => "Passthrough",
+                                ResolveRef::Delegate { .. } => "Delegate",
+                            }
+                        );
+                    }
+                    match resolved {
+                        ResolveRef::Terminal(opt) => break opt,
+                        ResolveRef::Passthrough(target) => {
+                            composed = target.apply_query(seg_composed, &ctx);
+                            extend_provider_keys(
+                                &mut provider_keys,
+                                ctx.provider_keys_since(key_mark),
+                            );
+                            if group_stack.is_empty() {
+                                self.cache_node(&path_so_far, &current, &composed, &provider_keys);
+                            }
+                            continue 'segments;
+                        }
+                        ResolveRef::Delegate { target, transform } => {
+                            transform_stack.push(transform);
+                            seg_composed = target.apply_query(seg_composed, &ctx);
+                            resolve_provider = target;
+                        }
                     }
                 }
             };

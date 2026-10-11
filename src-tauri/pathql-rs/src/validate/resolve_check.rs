@@ -56,6 +56,13 @@ pub fn validate_resolve(registry: &crate::ProviderRegistry, errors: &mut Vec<Val
             compiled.iter().map(|(p, _, g)| (p.as_str(), *g)).collect();
         for (pat, entry) in &resolve.0 {
             let inv = &entry.invocation;
+            if entry.passthrough && !matches!(inv, ProviderInvocation::ByName(_)) {
+                errors.push(ValidateError::new(
+                    &fqn,
+                    format!("resolve[`{}`].passthrough", pat),
+                    ValidateErrorKind::PassthroughRequiresNamedProvider,
+                ));
+            }
             if let ProviderInvocation::ByDelegate(b) = inv {
                 if !matches!(b.provider, Some(DelegateProviderField::Name(_)))
                     && b.properties.is_some()
@@ -252,6 +259,29 @@ mod tests {
         assert!(errs
             .iter()
             .any(|e| matches!(e.kind, ValidateErrorKind::PropertiesRequireExplicitProvider)));
+    }
+
+    #[test]
+    fn passthrough_requires_named_provider() {
+        let mut r = Resolve::default();
+        let mut entry = crate::ast::ResolveEntry::from(by_delegate_child_ref_with_props());
+        entry.passthrough = true;
+        r.0.insert(".*".into(), entry);
+        let errs = run(r, None);
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, ValidateErrorKind::PassthroughRequiresNamedProvider)));
+
+        let mut r = Resolve::default();
+        let mut entry = crate::ast::ResolveEntry::from(ProviderInvocation::Empty(
+            crate::ast::EmptyInvocation::default(),
+        ));
+        entry.passthrough = true;
+        r.0.insert("empty".into(), entry);
+        let errs = run(r, None);
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, ValidateErrorKind::PassthroughRequiresNamedProvider)));
     }
 
     /// 7b: 不再检测 regex 与静态 list key 字面碰撞 — 运行期顺序 (list → regex) 决定。

@@ -11,10 +11,10 @@ function setupPager() {
   const routeStore = reactive({
     page: 1,
     pageSize: 2,
-    computedPath: "sort/by-time/desc/x2x/1",
+    computedPath: "sort/by-time/_kb_desc/_kb_x2x/1",
     navigate: async ({ page }: { page: number }) => {
       routeStore.page = page;
-      routeStore.computedPath = `sort/by-time/desc/x2x/${page}`;
+      routeStore.computedPath = `sort/by-time/_kb_desc/_kb_x2x/${page}`;
     },
   });
   const images = ref<ImageInfo[]>([{ id: "old" } as ImageInfo]);

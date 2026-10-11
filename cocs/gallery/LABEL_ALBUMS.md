@@ -87,7 +87,7 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 ## 搜索
 
 `search/label/<q>` 对每个标签叶子的完整 `label_path` 做一次不区分大小写的子串匹配（`instr` + `LOWER`），
-一条 `search/label/<词>` 只表达一个词；多个词的「且」由前端拆成多段经 `filter_comb` 累积，SQL 内不分词。
+一条 `search/label/<词>` 只表达一个词；多个词的「且」由前端拆成多段经 `_kb_fc` 累积，SQL 内不分词。
 旧的 `search/label-tree` 与 `kb_label_tokens` 已移除。
 
 - `gallery_search_label_router` → `gallery_search_label_query_provider`（YAML）。
@@ -100,7 +100,7 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
 - 三个 detail provider 整体委派 `search`，画册 / 任务 / 畅游详情自动支持。
 
 前端（`galleryQuery.ts` / `GallerySearchDropdown.vue`）里「标签」是搜索勾选框中的一个普通维度：
-逗号 AND 语法对所有维度通用（每个词一条 `search/<mode>/<词>`，以 `filter_comb` 叠加），标签只额外把词内
+逗号 AND 语法对所有维度通用（每个词一条 `search/<mode>/<词>`，以 `_kb_fc` 叠加），标签只额外把词内
 `/` 两侧空白规整掉；与其它维度同时勾选时按维度 OR（`~any/…/~or/…/~end`），解析时能折叠回同一个搜索项。
 
 ## 前端入口

@@ -75,6 +75,16 @@ for seg in segments:
         provider = schema.root_provider                  // 只换 provider 视角
         // 注意：**不** apply 根 provider 的 query —— 根的 fields/join/order 不重放
         continue
+    if seg.starts_with(global_table.prefix):
+        global = global_table.resolve(seg, composed)    // 仅带前缀的段先查全局表
+        if global is passthrough(target):
+            composed = target.query.apply(composed)     // 只折叠 query，provider 不变
+            continue
+        if global is child:
+            composed = child.query.apply(composed)
+            provider = child
+            continue
+        // 全局表未命中：回落到当前 provider 的正常 resolve → list
     child = provider.resolve(seg, composed)             // 字面 / 正则 / dyn fallback
     composed = child.query.apply(composed)              // 折叠
     provider = child
@@ -84,6 +94,8 @@ return ResolvedNode { provider, composed }
 
 - LRU 缓存键：normalize 后的 `path`，值：`(Arc<dyn Provider>, ImageQuery)`
 - 命中前缀直接复用，未命中部分增量 resolve
+- 全局表参与过的路径会把全局表的 provider key 并入缓存依赖；重新注册全局表会清空旧缓存，表内容对应的
+  provider 重新注册也能使相关缓存失效
 - 无 `scheme://` 的路径由运行时拒绝；Kabegame IPC 边界会把历史 gallery 相对路径提升为 `images://...`
 - **路径段大小写敏感**：`By-Album` ≠ `by-album`。i18n 翻译文本 / 插件 ID 等都按字面字节匹配，避免大小写折叠造成的二义性
 
@@ -114,8 +126,8 @@ A/~~/B/~~/C  ⇒  C(from B(from A))
 - **内层照原样渲染，外层从空状态起步** —— 两件事别混：
   - 内层已冻结，它自己的 `where` / `order` / `limit` / `offset` / `group_by` **全部保留并渲染进 CTE**
     （`render_nest_ctes` 调的是 `inner.render_select_stmt`，该函数含 `render_order` 与
-    `render_pagination`）。所以边界**之前**的 `/desc`、排序段和分页段都照常生效，是内层结果集的一部分。
-  - 外层是全新一层：`order.entries` / `order.global` / `where` / `limit` / `group_by` 都从空开始，
+    `render_pagination`）。所以边界**之前**的 `/_kb_desc`、排序段和分页段都照常生效，是内层结果集的一部分。
+  - 外层是全新一层：`order.entries` / `order.revert` / `where` / `limit` / `group_by` 都从空开始，
     不是"继承后丢弃"。`where_clear` 也清不到内层（已冻结）。
   - 由此推论：**外层没写 `ORDER BY` 时，外层的输出顺序不保证**。需要稳定的输出顺序就在边界之后再排一次。
     但 SQLite / Postgres 下 CTE 是 `AS MATERIALIZED`（物化成临时表），顺序敏感的窗口函数
@@ -178,7 +190,7 @@ COUNT，把整个结构重跑 N 次。
 | `where` | **谓词树 + additive AND** — 单个 provider 的 where 是一棵 [WhereQuery](#33-wherewherequery-谓词树) 树（字符串/数组/`{not}`），fold 期坍缩成一条；路径上各 provider 之间仍用 AND 拼接 |
 | `fields[]` | **additive with as-dedup** — 累积到 SELECT 列表，按 `as` 去重 / 共享 |
 | `group_by` | **additive，按表达式文本去重** — 见 §3.6 |
-| `order` | **见 §3.4** — 数组项 `{ sql, order, prepend?, clear? }`；或全局 `{all: ...}` 指令 |
+| `order` | **见 §3.4** — 数组项 `{ sql, order, prepend? }`；或全局 `{all: "revert" | "clear"}` 指令 |
 | `offset` | **additive `+`** — 多次声明按路径顺序串接为 `(o₁) + (o₂) + ...`，实现嵌套分页 |
 | `limit` | **last-wins** — 一般仅终端 provider 设置 |
 
@@ -303,17 +315,17 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 "order": [
     { "sql": "images.crawled_at", "order": "asc" },
     { "sql": "images.size", "order": "desc", "prepend": true },
-    { "sql": "ai.\"order\"", "order": "asc", "prepend": true, "clear": "all" }
+    { "sql": "ai.\"order\"", "order": "asc", "prepend": true }
 ]
 ```
 
-- 数组每项是对象 `{ sql, order, prepend?, clear? }`。
-- `sql` 是 ORDER BY 字段或表达式；`order` 为 `asc` / `desc` / `revert`。
+- 数组每项是对象 `{ sql, order, prepend? }`。
+- `sql` 是 ORDER BY 字段或表达式；`order` 只允许 `asc` / `desc`。
 - `order.sql` 支持 `${...}` 模板，在 build 期渲染为 bind param。它不做 per-instance intern：同名属性按 build 期合并属性表的后写值取值，`OrderState` 的去重键始终是未渲染模板串。
 - `prepend` 默认 `false`。`false` 表示新字段追加到末尾，已有字段保持原位置仅更新方向；`true` 表示新字段插入最前，已有字段移动到最前并更新方向。
-- `revert` 在 fold 期解析：字段已存在则翻转 `ASC` ↔ `DESC`，字段不存在则按 `ASC` 新增。
-- `clear: "all"` 可选，且只允许 `"all"`。它在当前 item 插入前清空已累积的 order entries，用于替代旧的 `order_clear`。
-- `order_clear` 已移除；需要覆盖上游排序时，把 `clear: "all"` 写在第一个替换排序项上。
+- 数组项没有清空或翻转语义。需要换掉上游排序链时，由调用方先组合全局清空 provider，再由下游 provider
+  追加新排序项。例如 `gallery_sort_router` 的 `query` 委托 `kb_co_provider` 清空排序，它下面的
+  `gallery_sort_by_*_provider` 只追加自己的全序排序链。
 
 性能升级备忘：当前 seeded random 排序直接计算宿主函数；若库规模达到几十万行，升级路径是宿主 rank 物化缓存并通过 join 贡献接入，现有 path 契约保持不变。
 
@@ -323,10 +335,10 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 "order": { "all": "revert" }
 ```
 
-- 单对象 `{all: 'revert' | 'asc' | 'desc'}`。
-- `revert` 翻转上游所有 `ASC` ↔ `DESC`；`asc` / `desc` 强制将上游所有字段统一为该方向。
-- 全局指令不新增字段，只影响已有 entries 渲染时的方向解释；多次声明 last-wins。
-- 一般用于 `desc` 这类反向视图节点。
+- 单对象 `{all: 'revert' | 'clear'}`。
+- `revert` 令已有与之后加入的排序项在渲染时统一翻转 `ASC` ↔ `DESC`，不新增字段。
+- `clear` 清空**全部排序状态**：既删除已有排序项，也复位全局翻转；之后加入的排序项按自身方向渲染。
+- 一般由 `_kb_desc` 使用 `revert` 构造反向视图，由 `_kb_co` 使用 `clear` 为分组列举去掉无意义排序。
 
 形态 A 与 B 不可在同一 provider 同一 query 内同时出现（schema oneOf 强制）。
 
@@ -383,7 +395,7 @@ query:
   值域可由格式判定的维度段（年 `([0-9]{4})y`、月/日、媒体格式等），都要加一条正则
   resolve 直接实例化对应 provider；resolve 按声明顺序匹配（§5.2），兜底正则放最后。
   兜底同时是性能要求：resolve 先于动态 list 反查（§5.2），命中就不跑列举数据源。分页页号是典型——
-  `page_size_provider` 的列举要把上游结果整个跑一遍数行，画廊每次翻页都要解析 `x<N>x/<页>`，
+  `page_size_provider` 的列举要把上游结果整个跑一遍数行，画廊每次翻页都要解析 `_kb_x<N>x/<页>`，
   所以 `gallery_paginate_router` 等分页层的 list 只留给 VD 目录 / MCP 枚举，页号一律由
   `([1-9][0-9]*)` resolve 直接实例化 `query_page_provider`（越过末页时取行为空）。
 - `note` 与 `meta` 职责分离：`note` 是面向人和模型的可读节点说明，写在**被说明的 provider
@@ -573,22 +585,61 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 - 正则捕获组用 `${capture[<N>]}` 引用（N≥1；0 = 全匹配）
 - 这条决策放弃了"靠元字符判别字面 vs 正则"的区分尝试（语义不可靠）
 
-### 5.2 运行期解析顺序
+### 5.2 全局前缀表与运行期解析顺序
 
-引擎按以下顺序逐级查找一个路径段名 `seg`：
+宿主可在 schema 注册之外登记一张全局 resolve 表：
 
-1. **正则 resolve**：**按声明顺序**依次尝试 `resolve` 内每条正则；首个命中即构造对应
-   ProviderInvocation。resolve 表底层是保序 map（IndexMap），json5 文档里条目的书写
-   顺序就是匹配优先级——宽泛的兜底正则（如维度值捕获 `([0-9]{4})y`、媒体格式）必须
-   写在 `filter_comb` / 分页等保留段条目**之后**。
-2. **静态 list key 字面量**：在 list 中查 key 是否字面等于 `seg`；命中即构造
-3. **动态 list 反查**（默认开启，无需配置）：
-   - 跑 list 中所有 DynamicListEntry 的 SQL / delegate 数据源
-   - 按 key 模板（`${data_var.<col>}` / `${child_var.name}`）反查匹配的行 / child
-   - 命中即构造，**结果同样进 LRU 缓存**（与 §4.4 一致）
-4. 全部失败 → 该子节点不存在（404，不缓存）
+```rust
+runtime.register_global_table(prefix, namespace, name)?;
+```
 
-### 5.3 加载期检查 (7b 起简化)
+Kabegame 登记 `register_global_table("_kb_", "kabegame", "kb_global")`；定义位于
+`src-tauri/kabegame-core/src/providers/dsl/kb_global.json5`，当前提供：
+
+| 段 | 语义 |
+|---|---|
+| `_kb_co` | 透传到 `kb_co_provider`，只清空排序 |
+| `_kb_fc` | 续接另一个画廊过滤维度 |
+| `_kb_desc` | 翻转当前排序 |
+| `_kb_x<N>x` | 设置画廊页大小；页号仍是其后的本地子段，如 `…/_kb_x100x/1` |
+
+引擎按以下顺序逐级查找路径段 `seg`：
+
+1. **全局前缀表**：只有 `seg` 以登记的 `prefix` 开头时才查询全局表。命中即采用该条目；未命中则回到
+   当前 provider，继续正常解析。不带前缀的段完全不查全局表。
+2. **当前 provider 的正则 resolve**：按声明顺序依次尝试；首个命中即构造对应
+   ProviderInvocation。若条目是 delegate，运行时沿委托链继续 resolve，并折叠各层 query。
+   resolve 表底层是保序 map（IndexMap），json5 文档里的书写顺序就是匹配优先级。
+3. **静态 list key 字面量**：在 list 中查 key 是否字面等于 `seg`；命中即构造。
+4. **动态 list 反查**（默认开启，无需配置）：
+   - 跑 list 中所有 DynamicListEntry 的 SQL / delegate 数据源；
+   - 按 key 模板（`${data_var.<col>}` / `${child_var.name}`）反查匹配的行 / child；
+   - 命中即构造，结果同样进 LRU 缓存（与 §4.4 一致）。
+5. 全部失败 → 该子节点不存在（404，不缓存）。
+
+全局表优先于当前 provider，因此 `.*` 这类 delegate 兜底吞不掉 `_kb_*`；provider 自己声明 `_kb_`
+开头的 resolve/list key 不报错，但同名段会先被全局表截走。全局表的 provider key 会并入路径的
+`provider_keys`，保证表重新注册或定义更新后相关缓存失效。全局段是解析语法，不会作为当前 provider 的
+list child 出现。
+
+### 5.3 透传条目 `passthrough: true`
+
+Resolve 条目可标记 `passthrough: true`：命中后只把目标 provider 的 query 贡献折叠进 composed，
+**current provider 保持不变**，所以下一段仍由透传前的 provider 解析。透传只允许
+`ProviderInvocation::ByName`；ByDelegate 与 Empty 形态会在加载期被拒绝。
+
+```json5
+"_kb_co": {
+    "provider": "kb_co_provider",
+    "passthrough": true
+}
+```
+
+Kabegame 用 `_kb_co` 折叠 `{ order: { all: "clear" } }`。列举维度时必须把它放在**维度路径末尾**，
+即先解析 `{维度路径}/_kb_co`，再对该节点 list。若写成 `{上下文}/_kb_co/{维度}`，后续 `hide`、搜索等
+provider 通过 `.*` 委托 `gallery_route` 时会再次叠加画廊根排序，抵消清空排序的目的。
+
+### 5.4 加载期检查 (7b 起简化)
 
 引擎在加载每个 provider 时执行：
 
@@ -602,7 +653,7 @@ DynamicListEntry_Sql / DynamicListEntry_Delegate）的目标：**最终产出可
 
 多模式重叠由作者按 schema 出现顺序覆写决定；引擎不再插手。
 
-### 5.4 Delegate 对称转发 (7b 起补全)
+### 5.5 Delegate 对称转发 (7b 起补全)
 
 DSL 三处 `delegate` 字段对应同一原则：**把当前上下文的操作转发给 target**。每处 payload 均为 `ProviderCall { provider, properties? }`，永远 path-unaware。
 
@@ -692,7 +743,7 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 - `${composed}` 由引擎构造，可信任直接嵌入子查询
 - `${properties.X}` 等模板值在最终拼接 SQL 时**走 bind param**，不做字符串拼接
 - `list.sql` / query 中的 `LIMIT` / `OFFSET` 同样必须通过 `${properties.*}` 绑定；即使页大小与页码都来自
-  只匹配数字的路由段（如 `x<N>x/<页>`），也不例外。
+  只匹配数字的路由段（如画廊 `_kb_x<N>x/<页>` 或 `albums://` 的 `x<N>x/<页>`），也不例外。
 - `join.table` 字面量表名必须在引擎白名单；`(SELECT ...)` 子查询形式豁免。schema 只登记表名（§3.1），
   由 host 代码负责注册与审计；子查询边界 `~~` 的内层是引擎构造的 composed，与 `${composed}` 同等可信。
 
@@ -742,6 +793,9 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 一转义：`\X` = 字面 X，`\/` 把斜线放进段内，`\\` = 字面反斜线）；未转义的前导 `~` 且非
 记号的段在 walk 期报错。宿主用数据拼段一律过 `escape_path_segment`。
 
+本仓库另保留 `_kb_` 路径段前缀给 §5.2 的全局表。核心与插件 provider 不得把 `_kb_*` 当作自己的
+可见业务节点；即使声明同名 key，运行时也会先由全局表截走。
+
 ---
 
 ## 9. 错误处理
@@ -751,7 +805,6 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 | Schema 校验失败 | 语法错误 | 加载期拒绝；启动 panic + 打印失败文件路径 |
 | 跨字段约束失败（本文档 §3 / §4 / §5 / §6） | 语义错误 | 同上 |
 | ProviderName 重名 | 唯一性错误 | 同上 |
-| Resolve 规则交集 | 多匹配 | 同上 |
 | 运行期 resolve 失败 | 路径不存在 | 返回 `Result<_, String>` 给 IPC，前端显示 toast |
 | 运行期 SQL 失败 | DB 错误 | 同上 |
 | LRU 容量满 | 正常淘汰 | 不可见 |
@@ -768,7 +821,8 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
 - [ ] `namespace` 符合 `[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*` 模式
 - [ ] ContribQuery 内：
   - [ ] `order` 形态 A（数组）与形态 B（`{all}`）二选一
-  - [ ] 形态 A 数组项必须含 `sql` + `order`，`order` ∈ {asc, desc, revert}，`clear` 只能为 `all`
+  - [ ] 形态 A 数组项必须含 `sql` + `order`，`order` ∈ {asc, desc}，不得含条目级 `clear`
+  - [ ] 形态 B 的 `all` ∈ {revert, clear}
   - [ ] `${ref:<X>}` 引用都能在同 ContribQuery 的 `join.as` / `fields.as` 找到定义
         （`where` 谓词树逐原子下钻，错误定位到 `query.where[i].not` 这类树内路径）
   - [ ] `as: "${ref:...}"` 不与 `in_need: true` 同时出现
@@ -782,9 +836,8 @@ list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key�
   - [ ] `child_var` / `data_var` 不是保留标识符
 - [ ] Resolve 内：
   - [ ] 每条 `resolve` key 编译为合法正则
-  - [ ] 每条 `resolve` 正则 vs 任一 list 静态 key 字面 → 无匹配
-  - [ ] 任意两条 `resolve` 正则用 `regex_automata` 求交集 → 空集
   - [ ] 正则项内 `${capture[N]}` 的 N 不超出捕获组数
+  - [ ] `passthrough: true` 只用于 ByName 形态
 - [ ] meta 字段（详见 §4.5）：
   - [ ] 字符串模式：判别为 SQL 时仅单条 SELECT；多语句 / DDL 拒绝
   - [ ] 对象 / 数组模式：递归校验内部模板变量作用域合法
@@ -904,11 +957,11 @@ ChildEntry {
 |---|---|---|---|---|
 | `apply_query` | `query:` | 当前累积 ProviderQuery | 折叠后的 ProviderQuery | 把本 provider 对查询的贡献折叠入累积态（DelegateQuery 6e 起委托另一 provider 的 apply_query, 不再是路径重定向） |
 | `list` | `list:` | 当前累积 ProviderQuery | 子节点 ChildEntry 列表 | 枚举所有可见子节点（静态 + 动态项数据源驱动） |
-| `resolve` | `resolve:` | (段名, 当前累积 ProviderQuery) | 子 provider 引用或不存在 | 给定段名定位单个子 provider；语义按 §5.2 三步顺序（regex `resolve:` → 静态 list 字面 → 动态 list 反查） |
+| `resolve` | `resolve:` | (段名, 当前累积 ProviderQuery) | 子 provider 引用、透传或不存在 | 给定段名定位单个子 provider；provider 内部顺序为 regex `resolve:` → 静态 list 字面 → 动态 list 反查 |
 | `get_note` | `note:` | 当前累积 ProviderQuery（隐式可选） | 字符串或空 | 返回 provider 自描述文本；**支持 `${properties.X}` / `${capture[N]}` 等模板插值**，求值规则同 §6（实现期渲染） |
 
-注意：`resolve` 操作**包含**了 §5.2 的全部三步逻辑（不仅仅是 DSL 的 `resolve:` 字段那一步）；
-trait 命名取最贴近的 DSL 字段名。
+注意：`resolve` 操作包含 provider 内部的三步逻辑（不仅是 DSL 的 `resolve:` 字段那一步）；
+§5.2 的全局前缀表由 runtime 在调用当前 provider 之前处理，不是每个 provider trait 的隐式内容。
 
 ### 12.3 ProviderRegistry 与混合注册
 
@@ -1027,6 +1080,8 @@ runtime.register_schema("images", "images", "kabegame", "images_root_provider")?
 runtime.register_schema("albums", "albums", "kabegame", "albums_root_provider")?;
 // rows come from Rust `fetch_rows`, not SQL: no table, `~~` rejected
 runtime.register_programmatic_schema("plugin", "kabegame", "plugin_resource_root_provider")?;
+// prefixed segments are resolved here before the current provider
+runtime.register_global_table("_kb_", "kabegame", "kb_global")?;
 ```
 
 Contract:
@@ -1035,6 +1090,7 @@ Contract:
 - `table` must be a plain identifier (not an SQL keyword). The engine seeds `ProviderQuery.from` with it before
   the schema root provider contributes query fragments, and uses it as the alias of the previous level after `~~`.
 - `namespace` + `provider_name` locate the schema root provider in the registry.
+- `register_global_table(prefix, namespace, name)` 实例化一张全局 resolve 表；`prefix` 不得为空，后一次登记会替换前一张表并清空旧缓存。
 - Re-registering a scheme is an error. Missing schemes are runtime errors.
 - Plain slash paths are not part of the pathql contract; hosts may keep boundary-level compatibility shims, but core runtime requires a scheme.
 

@@ -43,7 +43,7 @@ http://127.0.0.1:7490/mcp
 
 1. 调用 `list_pathql_entry("images://gallery")` 查看当前可用维度和每个节点的说明。
 2. 选择返回的 `child.path` 继续逐层调用，例如进入 `images://gallery/plugin` 枚举已安装插件。
-3. 原样复制目标 child 的已编码路径，补上 `/desc/x100x/1` 等显式分页，再交给 `resources/read`。
+3. 原样复制目标 child 的已编码路径，补上 `/_kb_desc/_kb_x100x/1` 等显式分页，再交给 `resources/read`。
 
 不要从 `list_resources` 推断完整画廊树，也不要直接读取未分页的 `images://gallery/all`。画册、任务、畅游记录和插件等非画廊资源仍可使用参考页列出的固定 URI。
 
@@ -80,7 +80,9 @@ Kabegame 通过五类 URI scheme 暴露资源，供助手读取：
 
 ### 分页行为
 
-画廊图片路径使用 `images://gallery/.../x{pageSize}x/{page}` 表达分页，例如 `images://gallery/all/desc/x100x/1`。**页码从 1 开始**，传 0 视为非法。
+画廊图片路径使用 `images://gallery/.../_kb_x{pageSize}x/{page}` 表达分页，例如
+`images://gallery/all/_kb_desc/_kb_x100x/1`。`_kb_desc` 与 `_kb_x*` 来自全局前缀表，不会出现在
+`list_pathql_entry` 的 child 列表中。**页码从 1 开始**，传 0 视为非法。
 
 ### 手动排序的可见性
 

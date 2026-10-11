@@ -302,7 +302,7 @@ mod tests {
         assert!(q.joins.is_empty());
         assert!(q.wheres.is_empty());
         assert!(q.order.entries.is_empty());
-        assert!(q.order.global.is_none());
+        assert!(!q.order.revert);
         assert!(q.offset_terms.is_empty());
         assert!(q.limit.is_none());
         assert_eq!(q.aliases.counter, 0);

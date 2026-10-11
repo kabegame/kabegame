@@ -152,12 +152,16 @@ PathQL 是懒树，`resources/list` 只暴露少量静态入口，不能枚举�
 返回的 child path 已可直接交给 `resources/read` 或继续发现，不得再次编码。`limit` 默认 100，
 最大 200；超过上限返回 `limit_exceeded`，而不是静默截断。
 
+`_kb_fc`、`_kb_desc`、`_kb_x<N>x` 和 `_kb_co` 来自运行时注册的 `_kb_` 全局前缀表，优先于当前
+provider 的 resolve/list 解析。它们是合法续接段，但不是当前 provider 的 child，因此
+`list_pathql_entry` 看不到；调用方应按节点 `note` 和服务器 instructions 显式追加。
+
 画廊组合的关键语义：
 
 - 路径上的过滤条件按 AND 累积。
-- `filter_comb` 在已有过滤后再接一个维度。
+- `_kb_fc` 在已有过滤后再接一个维度。
 - `sort` 是 `all` 的兄弟，不是 `all` 的子节点。
-- `desc` 反转当前排序。
+- `_kb_desc` 反转当前排序。
 - `hide` 是排除隐藏图片的前缀。
 
 ## 分页护栏
@@ -165,13 +169,13 @@ PathQL 是懒树，`resources/list` 只暴露少量静态入口，不能枚举�
 `resources/read` 对 images 请求执行 MCP 层护栏：
 
 - 单段 `id_*` 是单图，不检查。
-- 末段全部为 ASCII 数字时视为已经以页号收尾，不检查。
+- 画廊路径仅当末两段严格匹配 `_kb_x<N>x/<数字>` 时视为已分页；原始 images 根继续接受
+  `images://x<N>x/<数字>`。
 - 其它 images 路径先 `runtime.count(uri)`；总数超过 500 时返回
   `pagination_required`，data 为 `{ uri, total, maxRows, howTo }`。
 
-调用方应把集合补成 `/x<N>x/<page>`，页码从 1 开始。当前判定有一个已知漏网：末段恰为纯数字
-的搜索词（例如 `gallery/search/display-name/2024`）会被误当成页号；调用方仍应在完整搜索路径
-之后追加显式分页。
+调用方应把画廊集合补成 `/_kb_x<N>x/<page>`，页码从 1 开始。只以纯数字搜索词收尾不再绕过护栏；
+必须在完整搜索路径之后追加显式分页。原始 `images://` 表分页语法没有变化。
 
 ## 禁区：不能给 `gallery_all_router.json5` 加 `limit`
 

@@ -1,7 +1,7 @@
 {
     "namespace": "kabegame",
     "name": "gallery_plugins_router",
-    "note": "Filter by crawler plugin. List this node to get the ids of plugins that have images under the current path (ids are lowercase slugs), with each one's image count in meta.count. Then: gallery/plugin/<id>/desc/x100x/1",
+    "note": "Filter by crawler plugin. List this node to get the ids of plugins that have images under the current path (ids are lowercase slugs), with each one's image count in meta.count. Then: gallery/plugin/<id>/_kb_desc/_kb_x100x/1",
     // 列举：在上游结果集上按 plugin_id 分组，只列出当前上下文里有图的插件，计数放进 meta.count
     // （画廊过滤树用 list(with_count=false) 直接读，不再逐个插件 COUNT）。
     // 段名解析走下方 resolve，不依赖本列举：上下文里没有某插件的图时 plugin/<id> 仍可路由（命中 0）。

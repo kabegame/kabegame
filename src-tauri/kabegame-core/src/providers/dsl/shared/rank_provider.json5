@@ -5,7 +5,7 @@
     // 给上游查询的每一行附加 1 起的序号列 row_index,用于「这张图在当前视图的第几位」。
     //
     // 只能写在子查询边界 `~~` 之后、并且后面还要再接一个 `~~`,形如
-    //   images://gallery/<过滤>/<排序>[/desc]/~~/rank/~~/id_<id>
+    //   images://gallery/<过滤>/<排序>[/_kb_desc]/~~/rank/~~/id_<id>
     // 三层各自的职责:
     //   内层 pq_nest_1 — 过滤 + ORDER BY,**没有 LIMIT/OFFSET**(定位要的是全集里的序号)
     //   中层 pq_nest_2 — 本 provider,按 CTE 的扫描序打 row_index

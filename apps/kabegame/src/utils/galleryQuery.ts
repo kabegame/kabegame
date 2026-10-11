@@ -11,7 +11,7 @@ import { parseSearchExpr, printSearchExpr, type SearchExpr } from "./searchExpr"
  * 查询条用 `splitQueryFilters` / `composeQueryFilters` 编辑简单与追加高级部分，
  * 以单分支组保留高级原子的边界；持久化仍只有这一份查询。
  *
- * 本模块只关心查询体（维度 chunk、原子、树、`filter_comb`/`~` 组合器的序列化与
+ * 本模块只关心查询体（维度 chunk、原子、树、`_kb_fc`/`~` 组合器的序列化与
  * 解析），不关心排序 / 分页 / hide / no-album / 根前缀——那些是整条路径的事，
  * 在 `galleryPath.ts` 里基于本模块拼装。依赖方向恒为 galleryPath → galleryQuery。
  */
@@ -147,14 +147,14 @@ function termBranches(value: string, modes: readonly GallerySearchPathMode[]): s
 
 interface SearchBodyPart {
   body: string;
-  /** 以裸 `search/<m>/<词>` 结尾：下一个且项沿用旧形态，经 `filter_comb` 接上。 */
+  /** 以裸 `search/<m>/<词>` 结尾：下一个且项经 `_kb_fc` 接回枢纽。 */
   endsWithSearch: boolean;
 }
 
 /**
  * 语法树 → 路径片段：
  * - 词：单维度 `search/<m>/<词>`；多维度 `~any/<各维度>/~end`；
- * - 且：各项顺序相接（同枢纽上 AND），裸搜索段之后经 `filter_comb`，与旧的逗号链逐字一致；
+ * - 且：各项顺序相接（同枢纽上 AND），裸搜索段之后经 `_kb_fc`，与旧的逗号链语义一致；
  * - 或：`~any/…/~or/…/~end`，多维度的词把各维度分支直接平铺进来；
  * - 非：`~not/…/~end`；引擎不许 `~not` 里直接出现 `~or`，或组本身是 `~any` 包着的，天然满足。
  * 语法树已是规范形（无双重取非），展开结果不会长成高级条件边界 `~not/~not/…`。
@@ -198,7 +198,7 @@ export function isActiveSearchTerm(term: GallerySearchTerm | undefined | null): 
 /**
  * 搜索项 → 查询体片段（不构成条件时为空串），结束在 gallery 枢纽（search 委派回枢纽，
  * `~end` 游标回到组入口）。例：
- * - `1girl, 1boy` 只勾元数据 → `search/metadata/1girl/filter_comb/search/metadata/1boy`；
+ * - `1girl, 1boy` 只勾元数据 → `search/metadata/1girl/_kb_fc/search/metadata/1boy`；
  * - `sakura` 勾元数据 + 标签 → `~any/search/metadata/sakura/~or/search/label/sakura/~end`；
  * - `(girl; boy), !genshin` 只勾标签 →
  *   `~any/search/label/girl/~or/search/label/boy/~end/~not/search/label/genshin/~end`。
@@ -777,11 +777,11 @@ export function cloneQuery(query: GalleryQuery): GalleryQuery {
 // 序列化
 // ---------------------------------------------------------------------------
 
-export const FILTER_COMB = "filter_comb";
+export const FILTER_COMB = "_kb_fc";
 
 /**
  * 查询体片段：`endsAtHub` 表示 body 结束在 gallery 枢纽（search 与 `~end` 都会
- * 委派回枢纽），后接片段直接用 `/`；否则要经 `/filter_comb/` 回枢纽。
+ * 委派回枢纽），后接片段直接用 `/`；否则要经 `/_kb_fc/` 回枢纽。
  */
 export interface QueryBodyPart {
   body: string;
@@ -1000,7 +1000,7 @@ function interpretSearchSequence(sequence: GalleryQuery, modes: readonly Gallery
   return items.length === 1 ? items[0]! : { kind: "and", items };
 }
 
-/** `filter_comb` 只是回枢纽的连接段，不影响语义：比较路径时去掉。 */
+/** `_kb_fc` 只是回枢纽的连接段，不影响语义：比较路径时去掉。 */
 function withoutFilterComb(body: string): string {
   return body
     .split("/")

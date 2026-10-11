@@ -228,7 +228,7 @@ struct ImportImageArgs {
 #[derive(Args, Debug)]
 /// PathQL 只读查询参数；该子命令忽略全局 `--via`。
 struct DataQueryArgs {
-    /// PathQL 查询路径，如 images://gallery/all/x10x/1
+    /// PathQL 查询路径，如 images://gallery/all/_kb_x10x/1
     path: String,
     /// 列举子项；可搭配 --with-count
     #[arg(long, group = "query_mode")]

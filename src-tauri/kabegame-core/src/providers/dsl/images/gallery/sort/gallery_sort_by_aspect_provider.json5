@@ -5,18 +5,8 @@
         "order": [
             // images.aspect_ratio 是 v036 生成列,(aspect_ratio, rowid) 索引正好覆盖本排序 + id 兜底,
             // 翻页按索引顺序读,不再全量计算后排序。宽高无效的图为 NULL,升序排在最前。
-            { "sql": "images.aspect_ratio", "order": "asc", "clear": "all" },
+            { "sql": "images.aspect_ratio", "order": "asc" },
             { "sql": "images.id", "order": "asc" }
         ]
-    },
-    "resolve": {
-        "desc|x[1-9][0-9]*x|[1-9][0-9]*": {
-            "delegate": {
-                "provider": "kabegame.gallery_desc_pagination_page_comb"
-            },
-            "child_var": "child",
-            "provider": "${child.provider}",
-            "meta": "${child.meta}"
-        }
     }
 }
