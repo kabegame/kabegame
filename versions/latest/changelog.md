@@ -12,6 +12,8 @@
 - 勾选多个搜索范围时，每个词在任一范围出现即算命中（以前逗号分隔的词要求出现在同一范围里）
 - yande、konachan 新增人气榜， danbooru 新增 rating，可以直接过滤非r18
 - 按宽高比筛选：宽屏不再设上限、竖屏不再设下限（过宽、过窄的图不再归入「其他」）；「其他」改为「未知比例」，只含尺寸读取失败的图；正好 3:4 的图从「方正」归入「竖屏」
+- 筛选面板（时间、插件、媒体类型、大小、宽高比）去掉「任意」行和维度标题行，打开后直接列出各选项；清除筛选改用筛选按钮右上角的叉号
+- MCP 读取画廊路径改用新的续接语法：组合筛选写 `_kb_fc`、倒序写 `_kb_desc`、分页写 `_kb_x100x/1`（如 `images://gallery/plugin/<id>/_kb_desc/_kb_x100x/1`）；旧的 `filter_comb` / `desc` / `x100x` 写法不再识别
 
 ### Fixed
 - 重复导入已在图库中的文件时，「本地导入」任务偶发卡在「运行中 0%」且无法取消
@@ -29,6 +31,7 @@
 
 ### Optimized
 - 优化了慢sql，标签查询变快，所有画廊查询变快（30%）
+- 筛选面板计数变快：每展开一层只查一次就带回所有选项的数量，不再逐项计数（2.5 万图库上展开日期的月份 349ms→28ms、展开日 508ms→29ms，大小、宽高比、格式等面板快 3～8 倍）；面板打开时不再额外查询总数
 
 ### Changed
 - `kabegame-cli` 数据操作现在优先经 IPC 交给正在运行的同数据目录主程序，连不上时自动回退本地执行，也可用 `--via` 强制选择。
@@ -46,8 +49,21 @@
 - kabegame-cli 新增 app 模式和via参数，可以通过ipc连接运行中的app
 - 任务调度 worker 对任务执行体 panic 兜底：按失败收尾并释放运行名额
 
+### Added
+- PathQL 全局前缀表：`register_global_table` 绑定保留前缀 `_kb_`，带前缀的段先查全局表（`kb_global.json5`：`_kb_fc` / `_kb_desc` / `_kb_x<N>x` / `_kb_co`），未命中再照常走 provider 解析；provider 不必再各自抄写组合筛选与分页条目
+- resolve 条目新增 `passthrough: true`：只折叠目标 query、当前 provider 不变；`_kb_co` 借此清掉排序，放在维度路径末尾列举时不再带画廊根的 `ORDER BY`
+
+### Changed
+- PathQL 排序语法收敛：排序项只剩 `asc` / `desc`，删除条目级 `clear` 与 `revert`；全局指令改为 `{all: revert|clear}`。需要换掉排序链的路由改为先委托 `kb_co_provider` 清空再追加
+- 画廊续接段改名并全局化（`filter_comb` → `_kb_fc`、`desc` → `_kb_desc`、`x<N>x` → `_kb_x<N>x`），不兼容旧写法；前端分页一律写出 `_kb_x<N>x`，不再省略默认页大小
+- 画廊过滤树改为每层一次 `{维度路径}/_kb_co` 列举、读 `meta.count`（插件扩展读 `withCount=true` 的 `total`），刷新收敛为一个 `dataChangeHub` 订阅；高级查询 diff 模式只在打开或草稿变化时逐候选预测，不订阅事件
+
+### Fixed
+- `get_album_preview`（IPC / web）原来请求已不存在的 `album/<id>/order` 路径，恒为 path not found；改用 `sort/by-album-order/_kb_x<N>x/1`
+
 ### Optimized
 - pathql count(*) 现在自动去掉 order by，不影响结果
 
 ### Removed
 - 移除 add_task 裸命令
+- 移除宿主给插件 provider 自动注入 `filter_comb` 的逻辑，以及前端 `useEventRefreshHub`、`refreshSources`

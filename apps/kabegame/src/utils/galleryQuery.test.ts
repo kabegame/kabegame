@@ -22,6 +22,7 @@ import {
   queryRuntimePath,
   stripComposablePathTail,
   stripPageTail,
+  withPaged,
 } from "./galleryPath";
 
 const simple: GalleryFilterSet = {
@@ -44,31 +45,27 @@ function roundTrip(query: GalleryQuery): GalleryQuery {
 }
 
 describe("简单 chip + 追加高级条件", () => {
-  it("新续接段完整往返，且 no-album/_kb_fc 的空查询回落到叶节点", () => {
-    const path = buildComposablePath({
+  it("新续接段完整往返，分页尾只在行查询出口追加", () => {
+    const viewBody = buildComposablePath({
       noAlbum: true,
       query: [],
       sort: { field: "by-size", desc: true },
-      page: 7,
-      pageSize: 250,
     });
+    expect(viewBody).toBe("no-album/_kb_fc/sort/by-size/_kb_desc");
+    const path = withPaged(viewBody, 250, 7);
     expect(path).toBe("no-album/_kb_fc/sort/by-size/_kb_desc/_kb_x250x/7");
     expect(parseComposablePath(path)).toMatchObject({
       noAlbum: true,
       query: [],
       sort: { field: "by-size", desc: true },
-      page: 7,
-      pageSize: 250,
     });
     expect(stripComposablePathTail(path)).toBe("no-album/_kb_fc/sort/by-size");
     expect(stripPageTail(path)).toBe("no-album/_kb_fc/sort/by-size/_kb_desc");
     expect(queryRuntimePath("all", "images://gallery/no-album/_kb_fc/")).toBe("images://gallery/no-album");
   });
 
-  it("默认每页数也显式输出 _kb_x<N>x", () => {
-    expect(buildComposablePath({ query: [], sort: { field: "by-time", desc: false }, page: 1 })).toBe(
-      "sort/by-time/_kb_x100x/1",
-    );
+  it("路由路径不输出分页尾", () => {
+    expect(buildComposablePath({ query: [], sort: { field: "by-time", desc: false } })).toBe("sort/by-time");
   });
 
   it("Pixiv + 横图后追加 OR 组，路径保持 AND 顺序", () => {
@@ -77,11 +74,10 @@ describe("简单 chip + 追加高级条件", () => {
       buildComposablePath({
         query,
         sort: { field: "by-time", desc: true },
-        page: 1,
       }),
     ).toBe(
       "plugin/pixiv/_kb_fc/aspect/4x3-16x9/_kb_fc/" +
-        "~not/~not/~any/search/native-metadata/sakura/~or/media-type/image/~end/~end/~end/sort/by-time/_kb_desc/_kb_x100x/1",
+        "~not/~not/~any/search/native-metadata/sakura/~or/media-type/image/~end/~end/~end/sort/by-time/_kb_desc",
     );
     expect(splitQueryFilters(roundTrip(query))).toEqual({ simple, advanced });
   });
@@ -133,22 +129,25 @@ describe("简单 chip + 追加高级条件", () => {
     expect(parts.advanced).toEqual([{ is: { search: { modes: ["url"], query: "a; b" } } }]);
   });
 
-  it.each(["", "album/42", "task/42", "surf/example.com"])(
-    "路由 %s 往返保留边界、排序、分页和 no-album",
-    (rootPrefix) => {
-      const path = buildComposablePath({
-        rootPrefix,
-        noAlbum: true,
-        query: composeQueryFilters(simple, advanced),
-        sort: { field: "by-time", desc: true },
-        page: 3,
-        pageSize: 500,
-      });
-      const parsed = parseComposablePath(path, rootPrefix ? rootPrefix.split("/") : []);
-      expect(splitQueryFilters(parsed.query)).toEqual({ simple, advanced });
-      expect(parsed).toMatchObject({ noAlbum: true, sort: { field: "by-time", desc: true }, page: 3, pageSize: 500 });
-    },
-  );
+  it.each(["", "album/42", "task/42", "surf/example.com"])("路由 %s 往返保留边界、排序和 no-album", (rootPrefix) => {
+    const path = buildComposablePath({
+      rootPrefix,
+      noAlbum: true,
+      query: composeQueryFilters(simple, advanced),
+      sort: { field: "by-time", desc: true },
+    });
+    const parsed = parseComposablePath(path, rootPrefix ? rootPrefix.split("/") : []);
+    expect(splitQueryFilters(parsed.query)).toEqual({ simple, advanced });
+    expect(parsed).toMatchObject({ noAlbum: true, sort: { field: "by-time", desc: true } });
+  });
+
+  it("旧路径的分页尾解析后直接丢弃", () => {
+    expect(parseComposablePath("sort/by-time/_kb_desc/_kb_x500x/3")).toEqual({
+      noAlbum: false,
+      query: [],
+      sort: { field: "by-time", desc: true },
+    });
+  });
 });
 
 describe("removeNode", () => {
@@ -214,7 +213,6 @@ describe("多维度搜索（勾选维度之间 OR）", () => {
       rootPrefix,
       query: [{ is: { search: multiTerm } }],
       sort: { field: "by-time", desc: false },
-      page: 1,
     });
     const parsed = parseComposablePath(path, rootPrefix ? rootPrefix.split("/") : []);
     expect(parsed.query).toEqual([{ is: { search: multiTerm } }]);

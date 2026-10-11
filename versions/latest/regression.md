@@ -786,3 +786,35 @@ PathQL runtime 新增 `_kb_` 全局前缀表：`_kb_fc` 续接过滤维度、`_k
 | [ ] | 插件扩展分支耗时 | prod 库，画廊重上下文 | 展开 konachan → score | 可接受的展开耗时 | 1 次 `withCount=true` 列举 1.8s：7 个子项在后端串行各跑一条约 250ms 的 COUNT。未改动部分，列为后续优化（后端并行 COUNT 或插件 DSL 自带分组计数） |
 | [ ] | hub 首发批次 | dev app | 面板打开时隐藏一张图 | 一个操作刷新一轮 | 实测两轮：`publishLocal` 当场 drain 但不开节流窗口，随后后端 `images-change`（seq 不同不去重）又作为首发批次立刻 drain。每轮约 3 条、各几毫秒；列为 `dataChangeHub` 后续优化 |
 | [x] | 去掉「任意」行与维度根 | 桌面 CEF / Android | 打开各 chip 面板与高级查询条件里的维度面板；展开、选中某项后重开，再点 chip 右上角的叉号 | 面板顶层直接是维度子项，没有「任意」行和维度根；打开面板只发 1 条 `_kb_co` 列举、0 条 COUNT；选中项的祖先链自动展开，其余不展开；叉号清除该维度 | 原先「任意」与维度根同为 `…/all`，同一条 COUNT 发两次，现两者都删掉。dev app + debug ingest：任务详情大小面板顶层即 8 个区间，1 条列举 5.6ms、0 COUNT；时间面板顶层为年份且不自动展开，选中某日后重开，年、月自动展开（3 条列举）；叉号清除后 chip 回到未选中。画廊重上下文插件面板 1 条列举 170ms（原来另有 2 条各约 250–290ms 的根 COUNT），展开 konachan 扩展正常。高级查询条件的尺寸面板顶层即 8 个候选，`+N` / `−N` 正常，没有根节点的预测 COUNT |
+
+## 新增爬虫插件 ManyACG（`src-crawler-plugins/plugins/manyacg`）
+
+V8 插件，数据来自 `api.manyacg.top/v1` 的 JSON 接口（无需登录、图片无防盗链）。四种互斥模式：筛选（标签 / 作者 / 关键词取交集，全空即最新）、语义搜索（`hybrid=true`，站点封顶 1000 条）、相似作品（`similar_target`，无自然终点）、随机（`/artwork/random`，单次 ≤ 200）；内容分级 `r18=0/1/2` 对四种模式都生效。每个作品的多张图共用一行 metadata；标签画册分 `manyacg/artist`（平台 + UID 作 key）与 `manyacg/tag`（纯英文直接作 key、含汉字用 `tiny-pinyin` 拼音、其余 `u-…` 编码）。验证用 release CLI + 隔离 `HOME`（临时数据目录，不碰真实图库）。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 筛选模式 + 标签 | release CLI（隔离 HOME） | `plugin run manyacg.kgpg --var mode=filter --var tag=原神 --var r18=0 --var start_page=1 --var end_page=1` | completed，0 失败 0 WARN；每个作品的 metadata 都带「原神」标签；磁盘文件宽高与 metadata 记录逐张一致 | 50 作品 / 57 张，57/57 含该标签、尺寸 57/57 一致 |
+| [x] | 语义搜索 / 相似作品 / 随机 | 同上 | `mode=semantic keyword=初音`、`mode=similar artwork=<作品页链接>`、`mode=random count=5` | 三种模式均 completed、0 失败 0 WARN | 下载 56 / 95 / 5 张 |
+| [x] | 标签 + 作者叠加 | 同上 | `mode=filter tag=原神 artist=<作者ID> end_page=3` | 结果与 API 同参数一致，第 2 页空页后提前结束且进度补满 100% | 7 作品 / 9 张，与 API 期望一致 |
+| [x] | 缺关键词 / 作者 ID 无效 / 无结果 | 同上 | 语义搜索留空关键词；筛选填 Pixiv uid；筛选填不存在的标签 | 前两者 warn 后结束（不会悄悄抓全站）；无结果标签第 1 页即「已到末尾」；三者任务均 completed | |
+| [x] | 标签 key 派生 | 同上 | 查库 `albums.label_path` | `原神 → manyacg/tag/yuan-shen`、`白发 → bai-fa`、英文 `looking_at_viewer` 原样；假名 / 韩文 / `:o` 走 `u-…`；作者为 `manyacg/artist/pixiv-<uid>` | 同音不同字的汉字标签会合并到同一 key（tiny-pinyin 取舍，与哲风壁纸一致） |
+| [x] | 详情模板 | 离线渲染（`render-desc.ts`）+ 360px iframe | 用多图、简介带链接、73 个标签的 metadata 渲染 | 标题、作者 / 来源按钮并排、简介链接可点且长 URL 换行、标签按容器换行、入库时间与各图尺寸 | 无头 Chrome 有最小窗口宽度，直接设 `--window-size` 小于 500 会产生右侧被截断的假象，需用 iframe 验证窄宽 |
+| [ ] | 开发应用内运行 | 桌面 CEF（dev app） | 在应用里打开收集弹窗选 ManyACG，切换四种模式 | 表单按模式只显示可用条件（标签 / 作者仅筛选；关键词仅筛选与语义；参考作品仅相似；数量仅随机；起止页不含随机） | 尚未在 GUI 中实测 `when` 显隐 |
+| [ ] | 预览详情面板 | 桌面 CEF（dev app） | 跑一次任务后打开某张图的预览 → 插件详情 | 面板还原站点详情版式，外链可在系统浏览器打开 | |
+| [ ] | 去重 | release CLI | 同一配置连跑两次 | 第二次全部为 URL 去重跳过，无失败 | |
+| [ ] | R-18 分级 | release CLI | `r18=1` 与 `r18=2` 各跑一页 | 前者全部 R-18；后者混合；metadata 的 `r18` 与之对应 | API 层已实测 `r18=1` 100% R-18，插件侧未下载 R-18 内容做实跑 |
+
+## 页大小 / 页码移出路由
+
+画廊、画册详情、任务详情与畅游详情的路由只保存查询和排序；页码由各自 `ImageGrid` 的
+`usePagedGallery` 本地持有，页大小只读 `settings.galleryPageSize`。行查询统一经
+`withPaged(viewBody, pageSize, page)` 追加 `_kb_x<N>x/<页>`，旧路由分页尾仅解析剥离。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 路径与分页单测 | Vitest | 运行 `galleryQuery`、`usePagedGallery.previewBoundary`、`ImageGrid.previewFollowPage`、`GalleryQueryBar` 测试 | 路由构建不带分页尾；旧尾被丢弃；换页大小保持旧页首图位置；预览跨页仍按目标快照交接 | 4 个文件、99 passed |
+| [x] | 前端全量回归 | 本机 | `cd apps/kabegame && npx vitest run` | 全部通过 | 29 个文件、254 passed |
+| [x] | 前端类型检查 | 本机 | `.claude/skills/check-kabegame/driver.sh --skip cargo` | vue-tsc 0 error | 通过 |
+| [ ] | 四类页面翻页与换页大小 | 桌面 CEF / Android | 各自翻到第 3 页，再从设置或 Android picker 修改页大小 | 列表立即重载；新页码按旧页首图位置换算；`?path=` 不含 `_kb_x` | 待人工走查 |
+| [ ] | 刷新、重启与浏览器后退 | Web / 桌面 CEF | 在非第 1 页刷新、重启或后退到另一视图 | 一律从第 1 页加载；筛选与排序仍由路由恢复 | 待人工走查 |
+| [ ] | 旧路径兼容 | Web / 桌面 CEF | 给 `gallery-path` 写入带 `_kb_x500x/3` 的旧值后重启 | 查询与排序正常恢复；页码为 1；页大小取当前设置 | 待人工走查 |

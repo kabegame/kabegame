@@ -42,7 +42,6 @@
           :query="taskDetailRouteStore.query"
           :no-album="taskDetailRouteStore.effectiveNoAlbum"
           :sort="taskDetailRouteStore.sort"
-          :page="taskDetailRouteStore.page"
           :page-size="pageSize"
           :search-modes="taskDetailStickySearchModes"
           :provider-context-prefix="taskDetailRouteStore.computedContextPath"
@@ -210,7 +209,7 @@ const taskDetailRouteStore = useTaskDetailRouteStore();
 const adapter = createTaskDetailAdapter({
   taskId: () => taskId.value,
 });
-const { taskId, page } = storeToRefs(taskDetailRouteStore);
+const { taskId } = storeToRefs(taskDetailRouteStore);
 
 const taskFilterFeatures: GalleryBrowseDimension[] = ["plugin", "mediaType", "date", "size", "aspect"];
 const taskSortFeatures: GallerySortField[] = ["by-id", "by-time", "by-size", "by-name", "by-aspect", "by-set-time"];
@@ -371,7 +370,6 @@ watch(
         taskId: newId,
         // 换任务就是换数据源：上一个任务的查询不该跟过来
         query: [],
-        page: 1,
       });
       // 重新启动定时器和监听器
       await startTimersAndListeners();

@@ -19,7 +19,7 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
     id: "task",
     routeStore,
     isActive: () => router.currentRoute.value.name === "TaskDetail" && !!params.taskId(),
-    rootPathFallback: () => (params.taskId() ? `task/${params.taskId()}/1` : ""),
+    rootPathFallback: () => (params.taskId() ? `task/${params.taskId()}` : ""),
     computeCountPath: stripComposablePathTail,
     onCountError: (error) => {
       console.error("加载任务总图片数失败:", error);

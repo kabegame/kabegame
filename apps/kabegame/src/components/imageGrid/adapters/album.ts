@@ -82,7 +82,7 @@ export function createAlbumDetailAdapter(params: {
       const id = params.albumId();
       return !!id && (!routeAlbumId || routeAlbumId === id) && !!params.albumName();
     },
-    rootPathFallback: () => (params.albumId() ? `album/${params.albumId()}/1` : ""),
+    rootPathFallback: () => (params.albumId() ? `album/${params.albumId()}` : ""),
     validatePath: (rawPath) => {
       const inner = rawPath.startsWith("hide/") ? rawPath.slice("hide/".length) : rawPath;
       return inner.startsWith("album/") && !inner.startsWith("album//");
@@ -92,7 +92,6 @@ export function createAlbumDetailAdapter(params: {
       console.error("获取画册总图片数失败:", error);
       return ctx.images.value.length;
     },
-    computeTargetPath: (page) => routeStore.computePath({ page }),
     changes: {
       relevant: (batch) => {
         const id = params.albumId();

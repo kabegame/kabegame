@@ -467,7 +467,7 @@ watch(pluginSignature, () => {
   pluginGroups.value = [];
   const current = legacyFilter.value.type === "plugin" ? legacyFilter.value.pluginId : "";
   if (current && !pluginStore.plugins.some((p) => p.id === current)) {
-    void galleryRouteStore.navigate({ query: [], page: 1 }, { push: true });
+    void galleryRouteStore.navigate({ query: [] }, { push: true });
     return;
   }
   void loadPluginGroups();
@@ -536,7 +536,6 @@ function handleCommand(command: string) {
   void galleryRouteStore.navigate(
     {
       query: [],
-      page: 1,
     },
     { push: true },
   );
@@ -550,7 +549,6 @@ function handlePluginCommand(pluginId: string) {
       query: queryFromFilterSet(
         singleFilterToSet(extendPath ? { type: "plugin", pluginId: id, extendPath } : { type: "plugin", pluginId: id }),
       ),
-      page: 1,
     },
     { push: true },
   );
@@ -560,7 +558,7 @@ function handleTimeCommand(name: string) {
   const seg = (name || "").trim();
   if (!seg) return;
   void galleryRouteStore.navigate(
-    { query: queryFromFilterSet(singleFilterToSet({ type: "date", segment: seg })), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "date", segment: seg })) },
     { push: true },
   );
 }
@@ -568,7 +566,7 @@ function handleTimeCommand(name: string) {
 function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
   void galleryRouteStore.navigate(
-    { query: queryFromFilterSet(singleFilterToSet({ type: "media-type", kind })), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "media-type", kind })) },
     { push: true },
   );
 }
@@ -576,7 +574,7 @@ function handleMediaTypeCommand(kind: string) {
 function handleSizeCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
-    { query: queryFromFilterSet(singleFilterToSet({ type: "size", range })), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "size", range })) },
     { push: true },
   );
 }
@@ -584,7 +582,7 @@ function handleSizeCommand(range: string) {
 function handleAspectCommand(range: string) {
   if (!range) return;
   void galleryRouteStore.navigate(
-    { query: queryFromFilterSet(singleFilterToSet({ type: "aspect", range })), page: 1 },
+    { query: queryFromFilterSet(singleFilterToSet({ type: "aspect", range })) },
     { push: true },
   );
 }

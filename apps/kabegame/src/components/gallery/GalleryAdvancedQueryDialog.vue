@@ -72,14 +72,10 @@ const props = withDefaults(
   defineProps<{
     query?: GalleryQuery;
     sort: GallerySort;
-    page?: number;
-    pageSize?: number;
     contextPrefix?: string;
   }>(),
   {
     query: () => [],
-    page: 1,
-    pageSize: 100,
     contextPrefix: "images://gallery/",
   },
 );
@@ -113,8 +109,6 @@ const previewPath = computed(() =>
       // 路径预览保留追加边界，与查询条实际应用后的持久化路径一致。
       query: composeQueryFilters({}, effectiveQuery.value),
       sort: props.sort,
-      page: props.page,
-      pageSize: props.pageSize,
     }),
     contextPrefix.value,
   ),

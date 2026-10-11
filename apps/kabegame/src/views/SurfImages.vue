@@ -24,7 +24,6 @@
             :query="surfImagesRouteStore.query"
             :no-album="surfImagesRouteStore.effectiveNoAlbum"
             :sort="surfImagesRouteStore.sort"
-            :page="surfImagesRouteStore.page"
             :page-size="pageSize"
             :search-modes="surfImagesStickySearchModes"
             :provider-context-prefix="surfImagesRouteStore.computedContextPath"
@@ -150,7 +149,7 @@ const initRecord = async (host: string) => {
     goBack();
     return;
   }
-  await surfImagesRouteStore.patch({ host, page: 1 });
+  await surfImagesRouteStore.patch({ host });
   // 列表与总数由 ImageGrid 按 currentPath 变化自动加载
 };
 

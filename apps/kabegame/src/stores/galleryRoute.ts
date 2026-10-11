@@ -12,8 +12,6 @@ import {
   parseGalleryPath,
   querySearchTerm,
 } from "@/utils/galleryPath";
-import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
-import { useSettingsStore } from "@/stores/settings";
 import { IS_WEB } from "@/env";
 
 /**
@@ -40,8 +38,6 @@ type GalleryRouteState = {
   /** 唯一查询对象：简单过滤只是单原子查询的退化形态。 */
   query: GalleryQuery;
   sort: GallerySort;
-  page: number;
-  pageSize: number;
 };
 
 export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("galleryRoute", {
@@ -57,8 +53,6 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
     return {
       query: parsed.query,
       sort: parsed.sort,
-      page: parsed.page,
-      pageSize: parsed.pageSize,
     };
   },
   build: (state, { noAlbum }) =>
@@ -66,12 +60,9 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
       noAlbum,
       query: state.query,
       sort: state.sort,
-      page: state.page,
-      pageSize: state.pageSize,
     }),
   buildContext: (state) => buildGalleryContextPrefix(state.query),
   defaultState: () => {
-    const settings = useSettingsStore();
     const stored = IS_WEB ? null : localStorage.getItem(GALLERY_STORAGE_KEY_PATH);
     const parsed = stored ? parseGalleryPath(stored) : null;
     const defaultSort: GallerySort = IS_WEB
@@ -80,26 +71,19 @@ export const useGalleryRouteStore = createPathRouteStore<GalleryRouteState>("gal
     return {
       query: parsed?.query ?? [],
       sort: parsed?.sort ?? defaultSort,
-      page: 1, // 页码不持久化，由当前页面状态/URL 驱动
-      pageSize: normalizeGalleryPageSize(settings.values.galleryPageSize as number | undefined),
     };
   },
   onStateChange: (state) => {
-    // 仅持久化 query/sort（page 不持久化，pageSize 交 settings 统一管理；
-    // noAlbum 由全局 store 自己的 localStorage 承担，不再进这条路径）
+    // 仅持久化 query/sort；分页由 usePagedGallery 本地持有，页大小由 settings 管理。
+    // noAlbum 由全局 store 自己的 localStorage 承担，不再进这条路径。
     if (!IS_WEB) {
       localStorage.setItem(
         GALLERY_STORAGE_KEY_PATH,
         buildComposablePath({
           query: state.query,
           sort: state.sort,
-          page: 1,
         }),
       );
-    }
-    const settings = useSettingsStore();
-    if (state.pageSize !== settings.values.galleryPageSize) {
-      void settings.save("galleryPageSize", state.pageSize);
     }
   },
 });
@@ -110,6 +94,5 @@ export async function resetGalleryRouteToDefault() {
   rememberGallerySearchModes(DEFAULT_GALLERY_SEARCH_MODES);
   await store.navigate({
     query: [],
-    page: 1,
   });
 }

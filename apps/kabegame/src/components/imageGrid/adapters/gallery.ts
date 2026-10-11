@@ -15,7 +15,7 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
   const routeStore = useGalleryRouteStore();
   const t = i18n.global.t;
 
-  const isDefaultGalleryRoute = () => !hasActiveQuery(routeStore.query) && routeStore.page === 1;
+  const isDefaultGalleryRoute = () => !hasActiveQuery(routeStore.query);
 
   const resetGalleryRouteAfterLoadError = async () => {
     if (isDefaultGalleryRoute()) return;

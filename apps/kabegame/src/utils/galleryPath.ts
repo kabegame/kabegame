@@ -21,9 +21,9 @@ export * from "./galleryQuery.ts";
 /**
  * Gallery provider 整路径的拼装与解析。
  *
- * 画廊一条完整路径 = 随行路由上下文 + 查询体 + 排序 + 分页：
+ * 画廊路由路径 = 随行路由上下文 + 查询体 + 排序：
  *
- *   [hide/][<root>/][no-album/_kb_fc/]<query body>/sort/<field>[/_kb_desc]/_kb_x{n}x/<page>
+ *   [hide/][<root>/][no-album/_kb_fc/]<query body>/sort/<field>[/_kb_desc]
  *
  * - `hide` 与 `no-album` 都是全局路由参数（值由 globalPathRoute 单例持有、跨页面
  *   共享，工具箱统一开关），不属于查询对象。工厂负责算出扣除赦免后的生效值：
@@ -90,8 +90,6 @@ export function isGallerySortField(field: string | undefined): field is GalleryS
 // ---------------------------------------------------------------------------
 
 const NO_ALBUM = "no-album";
-const DEFAULT_PAGE = 1;
-const DEFAULT_PAGE_SIZE = 100;
 
 export interface ParsedGalleryPath {
   /**
@@ -102,8 +100,6 @@ export interface ParsedGalleryPath {
   noAlbum: boolean;
   query: GalleryQuery;
   sort: GallerySort;
-  page: number;
-  pageSize: number;
 }
 
 /**
@@ -115,8 +111,6 @@ export interface GalleryQueryPatch {
   query?: GalleryQuery;
   noAlbum?: boolean;
   sort?: GallerySort;
-  page?: number;
-  pageSize?: number;
 }
 
 export interface ComposablePathParams {
@@ -124,8 +118,6 @@ export interface ComposablePathParams {
   noAlbum?: boolean;
   query: GalleryQuery;
   sort: GallerySort | GalleryStoredSort;
-  page: number;
-  pageSize?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,16 +138,20 @@ function foldContextAndQuery(noAlbum: boolean, query: GalleryQuery): QueryBodyPa
 }
 
 export function buildComposablePath(params: ComposablePathParams): string {
-  const { rootPrefix = "", noAlbum = false, query, sort: sortOrOrder, page, pageSize = DEFAULT_PAGE_SIZE } = params;
+  const { rootPrefix = "", noAlbum = false, query, sort: sortOrOrder } = params;
   const sort = normalizeGallerySort(sortOrOrder);
   const body = appendQueryBodyPart(foldContextAndQuery(noAlbum, query), {
     body: sortBodyPath(sort),
     endsAtHub: false,
   }).body;
-  const p = Math.max(1, Math.floor(Number(page)) || DEFAULT_PAGE);
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
-  const tail = `${sort.desc ? "_kb_desc/" : ""}_kb_x${pageSize}x/${p}`;
-  return `${rp}${body}/${tail}`;
+  return `${rp}${body}${sort.desc ? "/_kb_desc" : ""}`;
+}
+
+/** 在视图本体后追加 PathQL 分页尾；所有画廊行查询统一从这里拼装。 */
+export function withPaged(viewBody: string, pageSize: number, page: number): string {
+  const p = Math.max(1, Math.floor(page) || 1);
+  return `${viewBody.replace(/\/+$/, "")}/_kb_x${pageSize}x/${p}`;
 }
 
 /** 无排序/分页的计数路径；空查询回退 `all`。 */
@@ -218,8 +214,6 @@ export function parseComposablePath(
     noAlbum: false,
     query: [],
     sort: { field: defaultSort, desc: false },
-    page: DEFAULT_PAGE,
-    pageSize: DEFAULT_PAGE_SIZE,
   };
   const trimmed = (path || "").trim();
   if (!trimmed) return base;
@@ -237,7 +231,7 @@ export function parseComposablePath(
   if (segs.length === 0) return base;
 
   const { body, tail } = splitBodyAndTail(segs);
-  const { sort: order, pageSize, page } = parseTail(tail);
+  const { sort: order } = parseTail(tail);
 
   // no-album 随行上下文：规范形态在体首（后跟 _kb_fc 回枢纽）。
   let rest = [...body];
@@ -268,7 +262,7 @@ export function parseComposablePath(
     desc: order === "desc",
     ...(sortField === "random" && parsedSort.sortSeed ? { seed: parsedSort.sortSeed } : {}),
   };
-  return { noAlbum, query, sort, page, pageSize };
+  return { noAlbum, query, sort };
 }
 
 export function parseGalleryPath(path: string): ParsedGalleryPath {
@@ -420,37 +414,17 @@ function findSortIndex(body: readonly string[]): number {
 }
 
 function splitBodyAndTail(segs: string[]): { body: string[]; tail: string[] } {
-  if (
-    segs.length < 2 ||
-    !/^[1-9][0-9]*$/.test(segs[segs.length - 1]!) ||
-    !/^_kb_x[1-9][0-9]*x$/.test(segs[segs.length - 2]!)
-  ) {
-    return { body: segs, tail: [] };
+  let tailStart = segs.length;
+  if (tailStart > 1 && /^[1-9][0-9]*$/.test(segs[tailStart - 1]!) && /^_kb_x[1-9][0-9]*x$/.test(segs[tailStart - 2]!)) {
+    // 旧路由中的分页尾只用于兼容解析：剥离后直接丢弃，不迁移页码或页大小。
+    tailStart -= 2;
   }
-  let tailStart = segs.length - 2;
   if (tailStart > 0 && segs[tailStart - 1] === "_kb_desc") tailStart -= 1;
   return { body: segs.slice(0, tailStart), tail: segs.slice(tailStart) };
 }
 
-function parseTail(tail: string[]): { sort: GalleryTimeSort; pageSize: number; page: number } {
-  let rest = [...tail];
-  let sort: GalleryTimeSort = "asc";
-  let pageSize = DEFAULT_PAGE_SIZE;
-
-  if (rest[0] === "_kb_desc") {
-    sort = "desc";
-    rest = rest.slice(1);
-  }
-
-  const pageSizeMatch = rest[0]?.match(/^_kb_x(\d+)x$/);
-  if (pageSizeMatch) {
-    pageSize = parseInt(pageSizeMatch[1]!, 10) || DEFAULT_PAGE_SIZE;
-    rest = rest.slice(1);
-  }
-
-  const p = parseInt(rest[0] ?? "", 10);
-  const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
-  return { sort, pageSize, page };
+function parseTail(tail: string[]): { sort: GalleryTimeSort } {
+  return { sort: tail[0] === "_kb_desc" ? "desc" : "asc" };
 }
 
 function normalizePath(path = "") {
@@ -460,5 +434,4 @@ function normalizePath(path = "") {
 export const DEFAULT_GALLERY_PATH = buildComposablePath({
   query: [],
   sort: "",
-  page: DEFAULT_PAGE,
 });

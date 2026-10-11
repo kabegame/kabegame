@@ -83,6 +83,7 @@ import {
   onBeforeUnmount,
   onDeactivated,
   onMounted,
+  nextTick,
   ref,
   shallowRef,
   useAttrs,
@@ -102,13 +103,8 @@ import type {
 } from "@/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
-import {
-  singleFilterToSet,
-  queryFromFilterSet,
-  stripPageTail,
-  type GalleryFilter,
-  type GalleryQuery,
-} from "@/utils/galleryPath";
+import { singleFilterToSet, queryFromFilterSet, type GalleryFilter, type GalleryQuery } from "@/utils/galleryPath";
+import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { locateImageRowIndex, pageOfRowIndex } from "@/services/imageLocate";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
@@ -255,7 +251,7 @@ async function handleOpenGalleryFilter(target: ImageDetailGalleryFilterTarget) {
   // 这是 gallery 内部跳转，预览的当前图片可能已不在新 filter 结果中，需要关闭；
   // 等导航 await 完成后再关闭，可保证 previewedId→null 引发的 pvwimgid 写入只
   // 基于已落定的目标 URL，不会与 push 在同一 tick 竞争而把 filter 覆盖回去。
-  await galleryRouteStore.navigate({ query, page: 1 }, { push: true });
+  await galleryRouteStore.navigate({ query }, { push: true });
   imageDetailDialog.close();
   coreRef.value?.closePreview?.();
 }
@@ -337,7 +333,33 @@ let lastRemovedIds: string[] = [];
 let ensurePageAfterRemoval: () => Promise<void> = async () => {};
 let refreshCtx!: GridRefreshContext;
 
-const rawViewPath = () => adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
+const pageSize = computed(() => normalizeGalleryPageSize(settingsStore.values.galleryPageSize as number | undefined));
+
+const paged = usePagedGallery({
+  routeStore: adapter.routeStore,
+  pageSize,
+  totalImagesCount,
+  images,
+  loadedKey,
+  viewRef: coreRef,
+  loading: { startLoading, finishLoading },
+  rootPathFallback: adapter.rootPathFallback,
+  // 首次 immediate watcher 会在 live query 初始化前触发，延后一轮再读取行状态。
+  load: async (path) => {
+    loadImagesInFlight = true;
+    try {
+      await nextTick();
+      await loadImages(path);
+    } finally {
+      loadImagesInFlight = false;
+    }
+  },
+  computeCountPath: adapter.computeCountPath,
+  isActive: () => isRouteActive.value && adapter.isActive(),
+  onLoadError: adapter.onLoadError,
+});
+
+const rawViewPath = () => paged.rowsPath.value;
 
 const currentRowsPath = (): string | null => {
   if (!isRouteActive.value || !adapter.isActive()) return null;
@@ -418,8 +440,8 @@ const totalQuery = useLiveQuery<TotalSnapshot>({
 });
 
 // 加载当前页的行；总数由独立 live 状态按计数路径维护。
-const loadImages = async (path?: string) => {
-  const raw = path || adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
+async function loadImages(path?: string) {
+  const raw = path || paged.rowsPath.value;
   if (!raw) return;
   if (adapter.validatePath && !adapter.validatePath(raw)) return;
   loadImagesInFlight = true;
@@ -428,27 +450,12 @@ const loadImages = async (path?: string) => {
   } finally {
     loadImagesInFlight = false;
   }
-};
-
-const paged = usePagedGallery({
-  routeStore: adapter.routeStore,
-  totalImagesCount,
-  images,
-  loadedKey,
-  viewRef: coreRef,
-  loading: { startLoading, finishLoading },
-  // 数据
-  load: (path) => loadImages(path),
-  computeCountPath: adapter.computeCountPath,
-  isActive: () => isRouteActive.value && adapter.isActive(),
-  computeTargetPath: adapter.computeTargetPath,
-  onLoadError: adapter.onLoadError,
-});
+}
 
 const {
   currentPage: gridCurrentPage,
   pageSize: gridPageSize,
-  currentPath: gridCurrentPath,
+  rowsPath: gridCurrentPath,
   handleJumpToPage: jumpToPage,
   ensureValidPageAfterMassRemoval,
 } = paged;
@@ -570,11 +577,11 @@ const syncActivePathFromUrl = () => {
     // URL 无 ?path=：gallery 语义是「回到默认画廊路径」。
     // 把当前默认 state 写回 URL（navigate 走 replace），让地址栏反映默认 path。
     // detail 路由无此语义（恒带 path），不 materialize。
-    if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({ page: 1 });
+    if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
     return;
   }
   if (adapter.validatePath && !adapter.validatePath(qp)) return;
-  if (qp !== gridCurrentPath.value) {
+  if (qp !== paged.viewBody.value) {
     adapter.routeStore.syncFromUrl(qp);
   }
 };
@@ -594,7 +601,7 @@ watch(
   () => isRouteActive.value && adapter.isActive(),
   (active) => {
     if (!active || loadImagesInFlight) return;
-    const path = adapter.routeStore.computedPath || adapter.rootPathFallback?.() || "";
+    const path = paged.rowsPath.value;
     if (!path || loadedKey.value === path) return;
     startLoading();
     void (async () => {
@@ -610,7 +617,7 @@ watch(
   },
 );
 
-// route.query.path → routeStore 同步（预览跨页 pendingPreviewBoundary 特判见下）
+// route.query.path → routeStore 同步
 watch(
   () => route.query.path,
   () => {
@@ -619,18 +626,10 @@ watch(
     if (!qp.trim()) {
       // 见 syncActivePathFromUrl：gallery 空 path = 回默认，把默认 state
       // 写回 URL（replace）；其余 adapter 无 syncEmptyQueryPath，不处理。
-      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({ page: 1 });
+      if (adapter.syncEmptyQueryPath) void adapter.routeStore.navigate({});
       return;
     }
-    const pending = paged.pendingPreviewBoundary.value;
-    if (pending?.targetPath && gridCurrentPath.value === pending.targetPath && qp !== pending.targetPath) {
-      void router.replace({
-        path: route.path,
-        query: { ...route.query, path: pending.targetPath },
-      });
-      return;
-    }
-    if (qp !== gridCurrentPath.value) {
+    if (qp !== paged.viewBody.value) {
       adapter.routeStore.syncFromUrl(qp);
     }
   },
@@ -866,9 +865,9 @@ function reconcilePreview() {
   if (!previewListReady.value) return;
 
   const pending = pendingPreviewLocate;
-  if (pending && pending.id === id && pending.viewBody === stripPageTail(rawViewPath())) {
+  if (pending && pending.id === id && pending.viewBody === paged.viewBody.value) {
     if (pending.targetPage == null) return; // 序号请求仍在途，保留上一帧
-    if (pending.targetPage !== adapter.routeStore.page) return; // 仍在导航，等目标页快照
+    if (pending.targetPage !== paged.currentPage.value) return; // 仍在导航，等目标页快照
     // 下载可能在 rank 与目标页 fetch 之间再次改变位置，用目标快照重算。
     pendingPreviewLocate = null;
   }
@@ -907,10 +906,10 @@ async function locatePreviewedImage(id: string) {
     return;
   }
   const path = rawViewPath();
-  const viewBody = stripPageTail(path);
+  const viewBody = paged.viewBody.value;
   if (!viewBody) return;
   if (pendingPreviewLocate?.id === id && pendingPreviewLocate.path === path) return;
-  const attempt = JSON.stringify([path, id, adapter.routeStore.pageSize, latestSnapshotSeq]);
+  const attempt = JSON.stringify([path, id, paged.pageSize.value, latestSnapshotSeq]);
   if (lastLocateAttempt === attempt) return; // 防循环不是“找不到”，继续保留预览
   lastLocateAttempt = attempt;
   // 已确认在视图外的单图预览重查时也不先收起，直到新的页面确认再交接对象。
@@ -952,14 +951,13 @@ async function locatePreviewedImage(id: string) {
 
 // 用户手动换视图/页码、切走页面或关掉跟页时，取消旧请求，防止迟到结果搬回原视图。
 watch(
-  () => [rawViewPath(), isRouteActive.value, previewFollowPage.value] as const,
-  ([path, active, follow]) => {
+  () => [paged.viewBody.value, paged.currentPage.value, isRouteActive.value, previewFollowPage.value] as const,
+  ([viewBody, currentPage, active, follow]) => {
     const pending = pendingPreviewLocate;
     const atRequestedPage =
-      pending?.targetPage != null &&
-      pending.targetPage === adapter.routeStore.page &&
-      pending.viewBody === stripPageTail(path);
-    if (!pending || !active || !follow || (path !== pending.path && !atRequestedPage)) {
+      pending?.targetPage != null && pending.targetPage === currentPage && pending.viewBody === viewBody;
+    const stillRankingCurrentPage = pending != null && pending.targetPage == null && pending.path === rawViewPath();
+    if (!pending || !active || !follow || (!atRequestedPage && !stillRankingCurrentPage)) {
       pendingPreviewLocate = null;
       lastLocateAttempt = null;
       previewSingleImage.value = false;

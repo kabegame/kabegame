@@ -92,7 +92,6 @@
           :query="albumDetailRouteStore.query"
           :no-album="albumDetailRouteStore.effectiveNoAlbum"
           :sort="albumDetailRouteStore.sort"
-          :page="albumDetailRouteStore.page"
           :page-size="gridPageSize"
           :search-modes="albumDetailStickySearchModes"
           :provider-context-prefix="albumDetailRouteStore.computedContextPath"
@@ -332,6 +331,7 @@ import { useModal } from "@/composables/useModal";
 import { useI18n } from "@kabegame/i18n";
 import {
   querySearchTerm,
+  withPaged,
   type GalleryBrowseDimension,
   type GalleryQueryPatch,
   type GallerySortField,
@@ -473,7 +473,7 @@ watch(
     }
     try {
       const rows = await pathqlFetch<Record<string, unknown>>(
-        `images://gallery/album-tree/${encodeURIComponent(id)}/_kb_x1x/1`,
+        withPaged(`images://gallery/album-tree/${encodeURIComponent(id)}`, 1, 1),
       );
       if (selectedAlbumId.value !== id) return; // 过期响应
       albumCover.value = rows[0] ? rowToImageInfo(rows[0]) : null;
@@ -498,13 +498,12 @@ const selectAlbum = async (id: string, opts?: { history?: "push" | "replace" }) 
   // 「不生效」);且 path 的 hide 前缀(ignoreHide)读 currentAlbumId(),只有
   // album 提交后才能算对,否则跨隐藏边界时 hide/ 反复错写又修正。
   await setAlbumIdPath(chain, { history: opts?.history ?? "push" });
-  // 换画册就是换数据源：重置查询/排序/页码（存储 path 只含查询体，见
+  // 换画册就是换数据源：重置查询/排序（存储 path 只含查询体，见
   // albumDetailRoute）。path 写入保持 replace,与上面 push 出的记录合并成
   // 「一次切换 = 一条完整历史记录」,后退一步即回到上一个画册的完整状态。
   await albumDetailRouteStore.navigate({
     query: [],
     sort: { field: "by-album-order", desc: false },
-    page: 1,
   });
 };
 
@@ -518,7 +517,6 @@ const onTreeSelect = async (id: string, node?: AlbumNode) => {
     await albumDetailRouteStore.navigate({
       query: [],
       sort: { field: "by-album-order", desc: false },
-      page: 1,
     });
   } else {
     await selectAlbum(id);

@@ -29,7 +29,6 @@
     :query="galleryRouteStore.query"
     :no-album="galleryRouteStore.effectiveNoAlbum"
     :sort="props.sort"
-    :page="galleryRouteStore.page"
     :page-size="props.pageSize"
     :search-modes="stickySearchModes"
     :provider-context-prefix="props.providerContextPrefix"
@@ -136,7 +135,7 @@ function onQueryNavigate(patch: GalleryQueryPatch, options?: { push?: boolean })
 const isFilterIndicatorActive = computed(() => hasActiveQuery(galleryRouteStore.query));
 
 function clearAllFilters() {
-  onQueryNavigate({ query: [], page: 1 }, { push: true });
+  onQueryNavigate({ query: [] }, { push: true });
 }
 
 // ---------- 安卓折叠菜单标签 ----------
@@ -249,7 +248,7 @@ onMounted(() => {
   pageBridge.setToggleShowAlbumImages({
     get: () => isNoAlbumBrowse.value,
     set: (v) => {
-      onQueryNavigate({ noAlbum: v, page: 1 });
+      onQueryNavigate({ noAlbum: v });
     },
   });
 });

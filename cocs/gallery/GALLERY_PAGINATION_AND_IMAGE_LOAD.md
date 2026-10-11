@@ -14,7 +14,8 @@
 
 | 概念 | 说明 |
 |------|------|
-| **provider 路径** | 路由 `query.path`（如 `all/1`、`album/<uuid>/1`、`task/<id>/1`），末尾数字段为**逻辑页码**（第几页）。 |
+| **视图本体 `viewBody`** | 路由 `query.path`、route store 与 localStorage 只保存「看什么、怎么排」（如 `album/<uuid>/sort/by-time/_kb_desc`），不含页码和页大小。 |
+| **行路径 `rowsPath`** | `ImageGrid` 查询出口把分页尾追加到视图本体：`withPaged(viewBody, pageSize, page)` → `<viewBody>/_kb_x<N>x/<页>`。 |
 | **SimplePage** | Provider 解析结果为「叶子」：`ProviderDescriptor::SimplePage { query, page }`。后端按 `ImageQuery` 计数 + **offset/limit** 取一页。 |
 | **Greedy / 非 SimplePage** | 目录树、range 分解等；后端 `browse.rs` 内仍用固定 `LEAF_SIZE = 100` 做贪心分段，**不使用**用户配置的每页条数。 |
 | **每页条数 `galleryPageSize`** | 用户设置 `100 / 500 / 1000`，持久化在 Rust `Settings`（JSON 键 `galleryPageSize`），仅影响 **SimplePage** 的 `limit` 与 offset 计算。 |
@@ -59,15 +60,22 @@
 
 ### 设置层
 
-- **Store**：[`packages/core/src/stores/settings.ts`](/packages/core/src/stores/settings.ts)  
-  - `AppSettings.galleryPageSize`  
-  - `buildSettingKeyMap` 中 `get_gallery_page_size` / `set_gallery_page_size`，参数名 `size`（全平台通用键）。
+- **Store**：[`apps/kabegame/src/stores/settings.ts`](/apps/kabegame/src/stores/settings.ts)。
+- `settings.galleryPageSize` 是每页条数的唯一真源；设置页、查询条 Android picker 与其它页大小控件都只写该设置。
+- `ImageGrid` 通过 `normalizeGalleryPageSize(settings.values.galleryPageSize)` 实时读取，route store 不保存、也不反向回写页大小。
 
 ### 路由与页码
 
-- **Composable**：[`apps/kabegame/src/composables/useProviderPathRoute.ts`](/apps/kabegame/src/composables/useProviderPathRoute.ts)  
-  - 仅维护 `currentPath / providerRootPath / currentPage`，不再额外暴露 `currentOffset`。  
-  - 大页分页器直接使用 `currentPage`，`pageSize` 只用于后端查询条数与翻页重载。
+- 四个 path-route store（画廊、画册详情、任务详情、畅游详情）只持有查询、排序和各自身份字段；
+  `computedPath`、`?path=` 与画廊 localStorage 都是 `viewBody`，不含 `_kb_x<N>x/<页>`。
+- 解析旧路径时仍会识别并剥掉 `_kb_x<N>x/<页>`，但页码和页大小直接丢弃，不迁移到本地状态或设置。
+- [`usePagedGallery.ts`](/apps/kabegame/src/composables/usePagedGallery.ts) 在每个 `ImageGrid` 实例内持有 `currentPage`，
+  并用 [`galleryPath.ts`](/apps/kabegame/src/utils/galleryPath.ts) 的唯一入口
+  `withPaged(viewBody, pageSize, page)` 生成 `rowsPath`。
+- `viewBody` 变化时页码同步回到 1，因此刷新、重启、浏览器后退和切换筛选/数据源都从第 1 页开始；
+  keep-alive 下仅切走再切回同一视图时实例仍可保留本地页码。
+- 页大小变化时保留旧页首张图的位置：
+  `newPage = floor((oldPage - 1) * oldPageSize / newPageSize) + 1`。翻页和换页大小都不修改 URL。
 
 ### 拉取当前页图片
 
@@ -97,16 +105,16 @@ images://gallery/hide/album/<id>/sort/by-time/_kb_desc  /~~/ rank /~~/ id_2719
 ```
 
 - 必须分三层：窗口函数在 `WHERE` 之后求值，`WHERE id = ?` 与 `ROW_NUMBER()` 同层时序号恒为 1。
-- 内层**不能带分页**：定位要的是全集里的位置。前端用 `stripPageTail`（只剥 `_kb_x<N>x/<页码>`，
-  **保留 `_kb_desc` 与排序段**）从 `routeStore.computedPath` 推出内层；不要复用
-  `stripComposablePathTail`，它连 `_kb_desc` 一起剥，会把序号算反。
+- 内层**不能带分页**：定位要的是全集里的位置。前端直接使用 `usePagedGallery.viewBody`；它保留
+  `_kb_desc` 与排序段。不要复用 `stripComposablePathTail`，它连 `_kb_desc` 一起剥，会把序号算反。
 - `ROW_NUMBER() OVER ()` 不写 ORDER BY，靠的是 `~~` 把内层冻结为物化 CTE 后、扫描序即内层
   `ORDER BY` 序（见 `cocs/provider-dsl/RULES.md` §2.1）。**前提是排序为全序**：gallery 的每条
   sort provider 都以 `images.id asc` 收尾，`gallery_route` 的默认排序同样带这条兜底。
   少了它，`ORDER BY … LIMIT` 的 top-N sorter 与全量 sort 可能给同一并列组不同次序 —— 定位会落到
   相邻页，分页本身也会在并列跨页处重复/漏行。
 - 空结果 = 这张图**不在该视图里**（被过滤掉、或 `hide/` 开着而它已隐藏），不是错误：保持单图模式。
-- `page = floor((row_index - 1) / pageSize) + 1`。页大小不进路径，换页大小不必重查。
+- `page = floor((row_index - 1) / pageSize) + 1`。页大小不进 `viewBody`；换页大小不必重查 rank，
+  只需按新页大小换算目标页并读取新的 `rowsPath`。
 
 统一入口是 `reconcilePreview`：观察目标 id、列表、路径、激活状态与跟页开关，切图或 `images`
 变化后（渲染前）重查目标 id，判定**不对称**：
@@ -125,7 +133,7 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 
 弹窗的 `ImageInfo` 保存在 `ImageGrid.previewImageInfo`，不直接由 `images` 的当前页成员计算。
 快照先更新网格，随后检查当前 id：找到就更新预览对象；没找到则保留上一份对象直到定位与翻页
-完成。`jumpToPage()` 只等待路由导航，不保证数据已到；必须等目标页快照实际包含同一 id，才能
+完成。`jumpToPage()` 只修改 composable 的本地页码，不保证数据已到；必须等目标页快照实际包含同一 id，才能
 替换成目标页的行。整个阶段 `image` prop 不经过字符串/null，图片内容和 Panzoom 实例不会因
 所有权切换卸载，缩放和平移得以保留。首次打开没有旧对象时保持 `null`，目标页确认之前不打开
 弹窗；定位为空或关闭跟页时进入单图模式：已持有这张图的对象（被动刷新刚把它移出视图，例如打开预览
@@ -134,7 +142,7 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 定位错误不等于不在视图中，保留旧预览
 或等待态，后续快照再次尝试。因等待新 URL 目标而收起旧弹窗的 close 回报，不得取消新目标。
 
-定位防重只覆盖在途请求及同一 `<分页路径, id, 页大小, 快照 seq>` 的重复尝试，不永久缓存
+定位防重只覆盖在途请求及同一 `<rowsPath, id, 页大小, 快照 seq>` 的重复尝试，不永久缓存
 `<视图>|<id>`。目标页到达时如果持续下载又改变了位置，按该快照重新定位；后续跨页同样可以
 重新定位。切图、关预览、停用视图、手动导航或关闭开关会使旧请求失效，迟到结果不能改页。
 手动导航后若目标 id 未取消且仍开启跟页，新页就绪后会重新定位到该 id；防重命中不代表不存在，
@@ -152,7 +160,8 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 
 ### 使用 SimplePage 列表的视图（需统一）
 
-以下视图从设置读取 `galleryPageSize`，经各自 route store 与 `ImageGrid` adapter 构造 PathQL 路径，并在 **`pageSize` 变化时回到第 1 页并刷新**：
+以下视图都由 `ImageGrid` 从设置读取 `galleryPageSize`，再由 `usePagedGallery` 构造 PathQL 行路径；
+`pageSize` 变化时按旧页首张图位置换算页码并刷新：
 
 - [`apps/kabegame/src/views/Gallery.vue`](/apps/kabegame/src/views/Gallery.vue)
 - [`apps/kabegame/src/views/Albums.vue`](/apps/kabegame/src/views/Albums.vue)
@@ -164,10 +173,11 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 
 ### UI：每页条数入口
 
-- **画廊**：[`GalleryToolbar.vue`](/apps/kabegame/src/components/GalleryToolbar.vue)（桌面下拉；Android：header fold + `van-picker`）。
-- **画册页**：[`Albums.vue`](/apps/kabegame/src/views/Albums.vue) 中栏的 `GalleryQueryBar` + `GalleryBigPaginator`。
-- **任务 / 畅游**：分页器上方工具行内嵌 `GalleryPageSizeControl`（`android-ui="inline"`）。
 - **设置**：[`GalleryPageSizeSetting.vue`](/apps/kabegame/src/components/settings/items/GalleryPageSizeSetting.vue)，[`Settings.vue`](/apps/kabegame/src/views/Settings.vue) 应用设置区。
+- **Android 四类图片页**：共用 [`GalleryQueryBar.vue`](/apps/kabegame/src/components/gallery/GalleryQueryBar.vue)
+  的 header fold + `van-picker`；确认后直接保存 `settings.galleryPageSize`。
+- [`GalleryPageSizeControl.vue`](/apps/kabegame/src/components/GalleryPageSizeControl.vue) 若被页面消费，
+  `update:pageSize` 的消费方也只能保存设置，不得导航 route store。
 
 Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一次性读取全部记录，之后通过 `surf-records-change` / `surf-session-changed` 维护缓存；`Surf.vue` 和 `SurfImages.vue` 都以该 store 为读取源头，不再各自全量刷新。
 
@@ -268,8 +278,10 @@ ImageGrid 把数据变化分成两条通道：
 
 ## 排查清单
 
-1. **翻页页码不对**：确认 `query.path` 末尾页码与 `useProviderPathRoute.currentPage` 一致，且切页后有触发 `navigateToPage`。
-2. **改每页条数后仍显示旧页**：确认对应视图对 `pageSize` 有 `watch`，并 `navigateToPage(1)` 或重新 `loadCurrentPage`。
+1. **翻页页码不对**：确认 `query.path` 不含 `_kb_x`，`usePagedGallery.currentPage` 是期望值，且
+   `rowsPath === withPaged(viewBody, pageSize, currentPage)`；翻页不应触发 route store 导航。
+2. **改每页条数后仍显示旧页**：确认入口只写 `settings.galleryPageSize`，`ImageGrid` 的归一化
+   `pageSize` 已更新，且本地页码按旧页首张图位置换算后触发新的 `rowsPath` 读取。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
 4. **删除后列表延迟或闪回**：确认调用从 `ctx.mutate` 传入了 `view`，返回快照的 `seq` 被
    `rowsQuery.apply` 接收；不要靠 `images-change` 回刷当前操作。总数则应在 hub 批次窗口后独立重读。
@@ -289,8 +301,9 @@ ImageGrid 把数据变化分成两条通道：
 | Tauri 命令 | `src-tauri/kabegame/src/commands/image.rs` |
 | CLI PathQL 查询 | `src-tauri/kabegame-cli/src/main.rs` |
 | 设置 | `src-tauri/kabegame-core/src/settings.rs` |
-| 前端设置 | `packages/core/src/stores/settings.ts` |
-| 路由 offset | `apps/kabegame/src/composables/useProviderPathRoute.ts` |
+| 前端设置 | `apps/kabegame/src/stores/settings.ts` |
+| 路由视图本体 | `apps/kabegame/src/stores/{gallery,albumDetail,taskDetail,surfImages}Route.ts` |
+| 本地页码 / 行路径 | `apps/kabegame/src/composables/usePagedGallery.ts`、`apps/kabegame/src/utils/galleryPath.ts` |
 | 视图快照 | `src-tauri/kabegame-core/src/commands/view.rs` |
 | 变更聚合 | `apps/kabegame/src/services/dataChangeHub.ts` |
 | 实时查询 | `apps/kabegame/src/services/liveQuery.ts` |

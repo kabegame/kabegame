@@ -13,9 +13,7 @@ export type GridAdapterId = "gallery" | "task" | "album" | "surf";
  */
 export interface GridRouteStore {
   computedPath: string;
-  page: number;
-  pageSize: number;
-  navigate: (patch: { page: number }, opts?: { push?: boolean }) => Promise<unknown>;
+  navigate: (patch: Record<string, never>, opts?: { push?: boolean }) => Promise<unknown>;
   syncFromUrl: (path: string) => void;
 }
 
@@ -72,8 +70,6 @@ export interface GridAdapter {
   computeCountPath: (path: string) => string;
   onCountError?: (error: unknown, ctx: GridRefreshContext) => Promise<number | void> | number | void;
   onLoadError?: (error: unknown, path: string) => Promise<void> | void;
-  /** usePagedGallery 透传：预览跨页边界的目标 path（album 用） */
-  computeTargetPath?: (page: number) => string;
   /** route.query.path 为空串时是否也执行 syncFromUrl（gallery 需要重置为默认路径） */
   syncEmptyQueryPath?: boolean;
 

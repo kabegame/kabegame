@@ -6,6 +6,7 @@ import ImageGrid from "./ImageGrid.vue";
 import type { GridAdapter } from "@/components/imageGrid/types";
 import type { RowsSnapshot } from "@/services/liveQuery";
 import { pathqlView } from "@/services/pathql";
+import { withPaged } from "@/utils/galleryPath";
 
 const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) => Promise<number | null>>());
 const jumpToPage = vi.hoisted(() => vi.fn<(page: number) => Promise<void>>());
@@ -17,19 +18,20 @@ const handlePreviewPageBoundary = vi.hoisted(() => vi.fn());
 const previewImageId = ref("");
 const queryLoading = ref(false);
 const pendingPreviewBoundary = ref<{ targetPage: number; direction: "next" | "prev" } | null>(null);
+const currentPage = ref(1);
 const routeStore = reactive({
-  computedPath: "hide/sort/by-time/_kb_desc/_kb_x2x/1",
-  page: 1,
-  pageSize: 2,
-  navigate: vi.fn(async ({ page }: { page: number }) => {
-    routeStore.page = page;
-    routeStore.computedPath = `hide/sort/by-time/_kb_desc/_kb_x2x/${page}`;
-  }),
+  computedPath: "hide/sort/by-time/_kb_desc",
+  navigate: vi.fn(async () => {}),
   syncFromUrl: vi.fn(),
 });
 let applySnapshot: ((snapshot: RowsSnapshot) => Promise<void>) | null = null;
 const settings = reactive({
-  values: { previewFollowPage: true, previewSwitchDirection: "auto", currentWallpaperImageId: null },
+  values: {
+    galleryPageSize: 2,
+    previewFollowPage: true,
+    previewSwitchDirection: "auto",
+    currentWallpaperImageId: null,
+  },
 });
 
 vi.mock("@/services/imageLocate", () => ({
@@ -61,16 +63,22 @@ vi.mock("@/services/liveQuery", () => ({
   },
 }));
 vi.mock("@/composables/usePagedGallery", () => ({
-  usePagedGallery: () => ({
-    currentPage: computed(() => routeStore.page),
-    pageSize: computed(() => routeStore.pageSize),
-    currentPath: computed(() => routeStore.computedPath),
-    pendingPreviewBoundary,
-    handleJumpToPage: jumpToPage,
-    handlePreviewPageBoundary,
-    loadTotalImagesCount: vi.fn(),
-    ensureValidPageAfterMassRemoval: vi.fn(async () => {}),
-  }),
+  usePagedGallery: () => {
+    const viewBody = computed(() => routeStore.computedPath);
+    const pageSize = computed(() => settings.values.galleryPageSize);
+    const rowsPath = computed(() => withPaged(viewBody.value, pageSize.value, currentPage.value));
+    return {
+      viewBody,
+      rowsPath,
+      currentPage,
+      pageSize,
+      pendingPreviewBoundary,
+      handleJumpToPage: jumpToPage,
+      handlePreviewPageBoundary,
+      loadTotalImagesCount: vi.fn(),
+      ensureValidPageAfterMassRemoval: vi.fn(async () => {}),
+    };
+  },
 }));
 vi.mock("@/composables/useSettingKeyState", () => ({
   useSettingKeyState: () => ({ settingValue: previewImageId, set: vi.fn(async () => {}) }),
@@ -136,8 +144,9 @@ beforeEach(() => {
   queryLoading.value = false;
   settings.values.previewFollowPage = true;
   settings.values.previewSwitchDirection = "auto";
-  routeStore.page = 1;
-  routeStore.computedPath = "hide/sort/by-time/_kb_desc/_kb_x2x/1";
+  settings.values.galleryPageSize = 2;
+  currentPage.value = 1;
+  routeStore.computedPath = "hide/sort/by-time/_kb_desc";
   applySnapshot = null;
   pendingPreviewBoundary.value = null;
   refetch.mockReset();
@@ -148,8 +157,7 @@ beforeEach(() => {
   locateImageRowIndex.mockReset();
   jumpToPage.mockReset();
   jumpToPage.mockImplementation(async (page) => {
-    routeStore.page = page;
-    routeStore.computedPath = `hide/sort/by-time/_kb_desc/_kb_x2x/${page}`;
+    currentPage.value = page;
   });
 });
 afterEach(() => {
@@ -208,7 +216,7 @@ describe("预览跟随后台新增图片", () => {
 
   it("翻页加载期间 URL 换了 id：不丢掉新目标，也不拿旧页列表定位", async () => {
     const wrapper = await render();
-    await routeStore.navigate({ page: 2 });
+    currentPage.value = 2;
     previewImageId.value = "new-target";
     await nextTick();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
@@ -227,7 +235,7 @@ describe("预览跟随后台新增图片", () => {
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     const originalImage = core.props("previewImage");
     locateImageRowIndex.mockResolvedValue(1);
-    await routeStore.navigate({ page: 2 });
+    currentPage.value = 2;
     await nextTick();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
     expect(core.props("previewImage")).toBe(originalImage);
@@ -241,7 +249,7 @@ describe("预览跟随后台新增图片", () => {
     const wrapper = await render();
     const originalImage = wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage");
     locateImageRowIndex.mockImplementation(() => new Promise(() => {}));
-    routeStore.computedPath = "hide/plugin/test/sort/by-time/_kb_desc/_kb_x2x/1";
+    routeStore.computedPath = "hide/plugin/test/sort/by-time/_kb_desc";
     await nextTick();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
     await applySnapshot!(snapshot(["filtered", "other"], 2));
@@ -300,7 +308,7 @@ describe("预览跟随后台新增图片", () => {
     const wrapper = await render();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     pendingPreviewBoundary.value = { targetPage: 2, direction: "next" };
-    await routeStore.navigate({ page: 2 });
+    currentPage.value = 2;
     await applySnapshot!(snapshot(["next-image", "other"], 2));
     await nextTick();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
@@ -447,11 +455,11 @@ describe("预览跟随后台新增图片", () => {
     let resolveRank!: (rank: number) => void;
     locateImageRowIndex.mockImplementation(() => new Promise((resolve) => (resolveRank = resolve)));
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));
-    await routeStore.navigate({ page: 3 });
+    currentPage.value = 3;
     resolveRank(3);
     await flushPromises();
     expect(jumpToPage).not.toHaveBeenCalled();
-    expect(routeStore.page).toBe(3);
+    expect(currentPage.value).toBe(3);
   });
 
   it("主动删除/隐藏的锚点先结算为同下标图片，不定位旧图", async () => {
@@ -515,8 +523,7 @@ describe("预览跟随后台新增图片", () => {
   });
 
   it("往前切图且本页前面已无图片时，交给分页器翻到上一页末张，期间保留旧图", async () => {
-    routeStore.page = 2;
-    routeStore.computedPath = "hide/sort/by-time/_kb_desc/_kb_x2x/2";
+    currentPage.value = 2;
     const wrapper = await render();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     core.vm.$emit("preview-switch", { direction: "next" });
@@ -626,7 +633,7 @@ describe("列表读取在途时切图", () => {
     const wrapper = await render();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     pendingPreviewBoundary.value = { targetPage: 2, direction: "next" };
-    await routeStore.navigate({ page: 2 });
+    currentPage.value = 2;
     queryLoading.value = true;
     await applySnapshot!(snapshot(["next-image", "other"], 2));
     await nextTick();

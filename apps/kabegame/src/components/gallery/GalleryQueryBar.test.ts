@@ -8,7 +8,7 @@ import { composeQueryFilters, GALLERY_SEARCH_MODES, splitQueryFilters, type Gall
 const ui = vi.hoisted(() => ({ isCompact: false }));
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ui }));
 vi.mock("@/stores/settings", () => ({
-  useSettingsStore: () => ({ values: {}, set: vi.fn() }),
+  useSettingsStore: () => ({ values: {}, set: vi.fn(), save: vi.fn() }),
 }));
 vi.mock("@/stores/plugins", () => ({
   usePluginStore: () => ({ plugins: [], pluginLabel: (id: string) => id }),
@@ -82,9 +82,8 @@ describe("查询条追加高级 chip", () => {
     expect(wrapper.emitted("navigate")).toBeUndefined();
     const next: GalleryQuery = [{ is: { size: { range: "1MB-2MB" } } }];
     dialog.vm.$emit("apply", next);
-    const patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery; page: number };
+    const patch = wrapper.emitted("navigate")!.at(-1)![0] as { query: GalleryQuery };
     expect(splitQueryFilters(patch.query)).toEqual({ simple, advanced: next });
-    expect(patch.page).toBe(1);
   });
 
   it.each([false, true])("清除只删除高级部分且不打开弹窗（compact=%s）", async (compact) => {
@@ -125,7 +124,7 @@ describe("查询条追加高级 chip", () => {
       advanced: extra,
     });
     await wrapper.get(".query-clear-filter").trigger("click");
-    expect(wrapper.emitted("navigate")!.at(-1)![0]).toEqual({ query: [], page: 1 });
+    expect(wrapper.emitted("navigate")!.at(-1)![0]).toEqual({ query: [] });
   });
 
   it("清除简单插件保留高级部分，取消弹窗不导航", async () => {

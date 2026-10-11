@@ -1,12 +1,10 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "@/types/image";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { withPaged } from "@/utils/galleryPath";
 
 type PagedRouteStore = {
   computedPath: string;
-  page: number;
-  pageSize: number;
-  navigate: (patch: { page: number }) => Promise<unknown>;
 };
 
 type PagedGalleryLoading = {
@@ -17,7 +15,6 @@ type PagedGalleryLoading = {
 type PreviewBoundary = {
   direction: "prev" | "next";
   targetPage: number;
-  targetPath?: string;
 };
 
 type PagedGalleryMessages = {
@@ -28,6 +25,7 @@ type PagedGalleryMessages = {
 
 type UsePagedGalleryParams = {
   routeStore: PagedRouteStore;
+  pageSize: Ref<number>;
   totalImagesCount: Ref<number>;
   images: Ref<ImageInfo[]>;
   loadedKey: Ref<string>;
@@ -36,7 +34,7 @@ type UsePagedGalleryParams = {
   load: (path: string) => Promise<void>;
   computeCountPath: (path: string) => string;
   isActive: () => boolean;
-  computeTargetPath?: (page: number) => string;
+  rootPathFallback?: () => string;
   onCountError?: (error: unknown) => Promise<number | void> | number | void;
   onLoadError?: (error: unknown, path: string) => Promise<void> | void;
   messages?: PagedGalleryMessages;
@@ -45,11 +43,10 @@ type UsePagedGalleryParams = {
 // 页面导航、clamp
 export function usePagedGallery(params: UsePagedGalleryParams) {
   const totalImagesCount = params.totalImagesCount;
-  // 各页面不同 :path/
-  const currentPath = computed(() => params.routeStore.computedPath);
-  // {path/x{pageSize}x/{page}
-  const currentPage = computed(() => params.routeStore.page);
-  const pageSize = computed(() => params.routeStore.pageSize);
+  const currentPage = ref(1);
+  const pageSize = params.pageSize;
+  const viewBody = computed(() => params.routeStore.computedPath || params.rootPathFallback?.() || "");
+  const rowsPath = computed(() => (viewBody.value ? withPaged(viewBody.value, pageSize.value, currentPage.value) : ""));
   const bigPageEnabled = computed(() => totalImagesCount.value > pageSize.value);
   const pendingPreviewBoundary = ref<PreviewBoundary | null>(null);
   const messages = {
@@ -61,7 +58,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
 
   const loadTotalImagesCount = async () => {
     try {
-      await params.load(currentPath.value);
+      await params.load(rowsPath.value);
     } catch (error) {
       const fallback = await params.onCountError?.(error);
       if (typeof fallback === "number") {
@@ -71,13 +68,25 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
   };
 
   const handleJumpToPage = async (page: number) => {
-    params.loading.startLoading();
-    try {
-      await params.routeStore.navigate({ page });
-    } finally {
-      params.loading.finishLoading();
-    }
+    currentPage.value = page;
   };
+
+  watch(
+    viewBody,
+    () => {
+      pendingPreviewBoundary.value = null;
+      currentPage.value = 1;
+    },
+    { flush: "sync" },
+  );
+
+  watch(
+    pageSize,
+    (next, previous) => {
+      currentPage.value = Math.floor(((currentPage.value - 1) * previous) / next) + 1;
+    },
+    { flush: "sync" },
+  );
 
   // clamp到最后一页
   watch(
@@ -105,7 +114,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       if (params.images.value.length > 0) return;
 
       if (totalImagesCount.value <= 0) {
-        await params.routeStore.navigate({ page: 1 });
+        currentPage.value = 1;
         return;
       }
 
@@ -133,7 +142,6 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     pendingPreviewBoundary.value = {
       direction: payload.direction,
       targetPage,
-      targetPath: params.computeTargetPath?.(targetPage),
     };
     try {
       await handleJumpToPage(targetPage);
@@ -149,7 +157,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
       const pending = pendingPreviewBoundary.value;
       if (!pending) return;
       if (currentPage.value !== pending.targetPage) return;
-      if (params.loadedKey.value !== currentPath.value) return;
+      if (params.loadedKey.value !== rowsPath.value) return;
       const image = pending.direction === "next" ? list[0] : list[list.length - 1];
       if (!image) return;
 
@@ -159,7 +167,7 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
         pendingPreviewBoundary.value !== pending ||
         currentPage.value !== pending.targetPage ||
         params.loadedKey.value !== loadedPath ||
-        loadedPath !== currentPath.value
+        loadedPath !== rowsPath.value
       )
         return;
       params.viewRef.value?.openPreviewById?.(image.id);
@@ -170,13 +178,10 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
   );
 
   watch(
-    currentPath,
+    rowsPath,
     async (newPath) => {
       const pending = pendingPreviewBoundary.value;
-      if (
-        pending &&
-        (currentPage.value !== pending.targetPage || (pending.targetPath && pending.targetPath !== newPath))
-      ) {
+      if (pending && currentPage.value !== pending.targetPage) {
         pendingPreviewBoundary.value = null;
       }
       if (!params.isActive()) return;
@@ -198,7 +203,8 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
 
   return {
     totalImagesCount,
-    currentPath,
+    viewBody,
+    rowsPath,
     currentPage,
     pageSize,
     bigPageEnabled,

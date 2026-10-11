@@ -11,8 +11,6 @@ import {
   querySearchTerm,
 } from "@/utils/galleryPath";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
-import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
-import { useSettingsStore } from "@/stores/settings";
 import { useAlbumIdPathState, lastAlbumIdOf } from "@/composables/useAlbumIdPathState";
 
 /** 会话内记忆的搜索维度勾选，搜索词清空后兜底用——原理见 galleryRoute.ts 里同名机制的注释。 */
@@ -34,17 +32,12 @@ type AlbumDetailRouteState = {
   /** 唯一查询对象：简单过滤只是单原子查询的退化形态。 */
   query: GalleryQuery;
   sort: GallerySort;
-  page: number;
-  pageSize: number;
 };
 
 function createDefaultState(): AlbumDetailRouteState {
-  const settings = useSettingsStore();
   return {
     query: [],
     sort: { field: "by-album-order", desc: false },
-    page: 1,
-    pageSize: normalizeGalleryPageSize(settings.values.galleryPageSize as number | undefined),
   };
 }
 
@@ -61,8 +54,6 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
     return {
       query: parsed.query,
       sort: parsed.sort,
-      page: parsed.page,
-      pageSize: parsed.pageSize,
     };
   },
   // 持久化形态（settingKey 实际写入值）：无 album/<id> 前缀，只存查询体本身。
@@ -71,10 +62,8 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
       noAlbum,
       query: state.query,
       sort: state.sort,
-      page: state.page,
-      pageSize: state.pageSize,
     }),
-  // 查询出口：computedPath / computeTargetPath 等 pathql 消费方（ImageGrid 等）
+  // 查询出口：computedPath 等 pathql 消费方（ImageGrid 等）
   // 仍需要完整 album/<id> 前缀，从 currentAlbumId() 动态拼回——与持久化形态
   // 读的是同一份 albumIdPath 真源，不会出现「path 里一个 id、树选中态另一个 id」。
   queryBuild: (state, { noAlbum }) =>
@@ -83,18 +72,10 @@ export const useAlbumDetailRouteStore = createPathRouteStore<AlbumDetailRouteSta
       noAlbum,
       query: state.query,
       sort: state.sort,
-      page: state.page,
-      pageSize: state.pageSize,
     }),
   buildContext: (state) => buildComposableContextPrefix(`album/${currentAlbumId()}`, state.query),
   defaultState: createDefaultState,
   ignoreHide: () => currentAlbumId() === HIDDEN_ALBUM_ID,
   // 画册里的图必然属于画册，再叠「不属于任何画册」自相矛盾：整个画册详情都赦免
   ignoreNoAlbum: () => true,
-  onStateChange: (state) => {
-    const settings = useSettingsStore();
-    if (state.pageSize !== settings.values.galleryPageSize) {
-      void settings.save("galleryPageSize", state.pageSize);
-    }
-  },
 });

@@ -20,7 +20,7 @@ export function createSurfImagesAdapter(params: {
     id: "surf",
     routeStore,
     isActive: () => router.currentRoute.value.name === "SurfImages" && !!routeStore.host,
-    rootPathFallback: () => (routeStore.host ? `surf/${routeStore.host}/1` : ""),
+    rootPathFallback: () => (routeStore.host ? `surf/${routeStore.host}` : ""),
     computeCountPath: stripComposablePathTail,
     onCountError: (_error, ctx) => ctx.images.value.length,
     onLoadError: (error) => {

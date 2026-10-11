@@ -9,16 +9,11 @@ vi.mock("@/utils/kameMessage", () => ({ kameMessage: { info: vi.fn() } }));
 
 function setupPager() {
   const routeStore = reactive({
-    page: 1,
-    pageSize: 2,
-    computedPath: "sort/by-time/_kb_desc/_kb_x2x/1",
-    navigate: async ({ page }: { page: number }) => {
-      routeStore.page = page;
-      routeStore.computedPath = `sort/by-time/_kb_desc/_kb_x2x/${page}`;
-    },
+    computedPath: "sort/by-time/_kb_desc",
   });
+  const pageSize = ref(2);
   const images = ref<ImageInfo[]>([{ id: "old" } as ImageInfo]);
-  const loadedKey = ref(routeStore.computedPath);
+  const loadedKey = ref("sort/by-time/_kb_desc/_kb_x2x/1");
   const openPreviewById = vi.fn();
   let pager!: ReturnType<typeof usePagedGallery>;
   const wrapper = mount(
@@ -26,6 +21,7 @@ function setupPager() {
       setup() {
         pager = usePagedGallery({
           routeStore,
+          pageSize,
           totalImagesCount: ref(6),
           images,
           loadedKey,
@@ -39,7 +35,7 @@ function setupPager() {
       },
     }),
   );
-  return { routeStore, images, loadedKey, openPreviewById, pager, wrapper };
+  return { routeStore, pageSize, images, loadedKey, openPreviewById, pager, wrapper };
 }
 
 describe("预览边界翻页目标交接", () => {
@@ -51,7 +47,7 @@ describe("预览边界翻页目标交接", () => {
         expect(state.pager.pendingPreviewBoundary.value).toMatchObject({ targetPage: 2 });
       });
       state.images.value = [{ id: "next" } as ImageInfo];
-      state.loadedKey.value = state.routeStore.computedPath;
+      state.loadedKey.value = state.pager.rowsPath.value;
       await flushPromises();
       expect(state.openPreviewById).toHaveBeenCalledWith("next");
       expect(state.pager.pendingPreviewBoundary.value).toBeNull();
@@ -65,12 +61,38 @@ describe("预览边界翻页目标交接", () => {
     try {
       await state.pager.handlePreviewPageBoundary({ direction: "next", image: state.images.value[0]! });
       state.images.value = [{ id: "next" } as ImageInfo];
-      state.loadedKey.value = state.routeStore.computedPath;
+      state.loadedKey.value = state.pager.rowsPath.value;
       await nextTick();
-      await state.routeStore.navigate({ page: 3 });
+      await state.pager.handleJumpToPage(3);
       await flushPromises();
       expect(state.openPreviewById).not.toHaveBeenCalled();
       expect(state.pager.pendingPreviewBoundary.value).toBeNull();
+    } finally {
+      state.wrapper.unmount();
+    }
+  });
+
+  it("改变页大小时保持旧页首张图的位置", async () => {
+    const state = setupPager();
+    try {
+      await state.pager.handleJumpToPage(3);
+      state.pageSize.value = 4;
+      await nextTick();
+      expect(state.pager.currentPage.value).toBe(2);
+      expect(state.pager.rowsPath.value).toBe("sort/by-time/_kb_desc/_kb_x4x/2");
+    } finally {
+      state.wrapper.unmount();
+    }
+  });
+
+  it("视图本体变化时回到第 1 页", async () => {
+    const state = setupPager();
+    try {
+      await state.pager.handleJumpToPage(3);
+      state.routeStore.computedPath = "plugin/pixiv/sort/by-time";
+      await nextTick();
+      expect(state.pager.currentPage.value).toBe(1);
+      expect(state.pager.rowsPath.value).toBe("plugin/pixiv/sort/by-time/_kb_x2x/1");
     } finally {
       state.wrapper.unmount();
     }

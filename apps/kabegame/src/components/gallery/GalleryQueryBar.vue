@@ -343,8 +343,6 @@
       v-model:visible="advancedDialogVisible"
       :query="advancedDialogInitialQuery"
       :sort="sort"
-      :page="page"
-      :page-size="pageSize"
       :context-prefix="advancedContextPrefix"
       @apply="applyAdvancedQuery"
     />
@@ -452,7 +450,6 @@ interface Props {
    */
   noAlbum?: boolean;
   sort?: GallerySort;
-  page?: number;
   pageSize?: number;
   /** 搜索词为空时搜索下拉勾选维度的兜底（各页的会话 sticky 勾选，默认全选；空 = 不过滤）。 */
   searchModes?: readonly GallerySearchPathMode[];
@@ -482,7 +479,6 @@ const props = withDefaults(defineProps<Props>(), {
   query: () => [],
   noAlbum: false,
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
-  page: 1,
   pageSize: DEFAULT_GALLERY_PAGE_SIZE,
   searchModes: () => ["display-name", "local-path", "url", "metadata", "native-metadata", "label"],
   providerContextPrefix: "",
@@ -554,7 +550,7 @@ function navigateSearch(query: string, modes: readonly GallerySearchPathMode[]) 
   } else {
     delete next.search;
   }
-  navigate({ query: composeQueryFilters(next, advancedQuery.value), page: 1 });
+  navigate({ query: composeQueryFilters(next, advancedQuery.value) });
 }
 
 function onSearchInput(value: string) {
@@ -593,11 +589,11 @@ function openAdvancedQuery() {
 }
 
 function applyAdvancedQuery(tree: GalleryQuery) {
-  navigate({ query: composeQueryFilters(activeFilters.value, tree), page: 1 }, { push: true });
+  navigate({ query: composeQueryFilters(activeFilters.value, tree) }, { push: true });
 }
 
 function clearAdvancedQuery() {
-  navigate({ query: queryFromFilterSet(activeFilters.value), page: 1 }, { push: true });
+  navigate({ query: queryFromFilterSet(activeFilters.value) }, { push: true });
 }
 
 // ---------- 过滤维度 chip ----------
@@ -805,7 +801,7 @@ function applyFilters(filters: GalleryFilterSet) {
   } else {
     delete next.search;
   }
-  navigate({ query: composeQueryFilters(next, advancedQuery.value), page: 1 }, { push: true });
+  navigate({ query: composeQueryFilters(next, advancedQuery.value) }, { push: true });
 }
 
 function clearDimension(dimension: GalleryBrowseDimension) {
@@ -822,7 +818,7 @@ function onDimensionFilter(dimension: GalleryBrowseDimension, filter: GalleryFil
 const isFilterIndicatorActive = computed(() => hasActiveQuery(props.query));
 
 function clearAllFilters() {
-  navigate({ query: [], page: 1 }, { push: true });
+  navigate({ query: [] }, { push: true });
   dimensionPopoverOpen.value = {};
 }
 
@@ -1607,7 +1603,7 @@ function onPageSizePickerConfirm() {
   const v = pageSizePickerSelected.value[0];
   const n = Number(v);
   if (!isGalleryPageSizeOption(n)) return;
-  navigate({ pageSize: n, page: 1 });
+  void settingsStore.save("galleryPageSize", n);
 }
 
 // ---------- 对外接口（安卓折叠菜单从各页 header 触发）----------
