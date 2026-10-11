@@ -971,3 +971,27 @@ bilibili 专栏的 `tags` 现在写入 `bilibili/tag` 标签画册，key 由 tin
 | [x] | 真实库迁移 | prod 库副本 + 临时 `#[ignore]` 基准用例（测完已删） | konachan 1.7.1 `migrate.js` 把 20690 行迁到下一版本 | 比上一版更快；结果一致 | 三次 13.4 / 14.1 / 14.2s（上一版 15.5s）；孤儿词条 GC 54ms；147498 词 / 1496775 映射 / album_images 405346 不变；`integrity_check` ok、`foreign_key_check` 无输出 |
 | [ ] | 下载写搜索词 | dev CLI | `run-crawler-plugin` 跑一页带 `searchTexts` 的插件，再在元数据维度搜其中一个词 | 能搜到；与插件提供的词表一致 | |
 | [ ] | 文件夹同步重导入 | 桌面 CEF | 本地文件夹画册触发一次重导入 | 默认展开的搜索词仍能命中 | `insert_metadata_text` 路径 |
+
+## Danbooru 元数据搜索（provideSearchTextList）
+
+danbooru 1.4.2：新抓取的图写入 `searchTexts`，历史图片由 `metadata_migrations/migrate.js` 的 `provideSearchTextList` 补齐。
+内容为 `danbooru` + 裸字段名标记词（`tags` / `id` / `uploader` / `source` / `rating` / `score` / `favorites` / `original` / `commentary`）及对应值，
+覆盖详情面板文字，不含标签帖数、冒号、Date 与 Size 两行。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 构建与迁移函数 | 本机 | `npx rspack build`；node 直接调用 `provideSearchTextList` 喂样例 metadata | 构建通过；输出以 `danbooru` 开头，含标签规范名 / 展示名、Id、Uploader、Rating、Score、Favorites、Original、评论，不含帖数、Date、Size | 已实测 |
+| [ ] | 新抓取可搜 | 桌面 CEF | 打包 danbooru 到 dev 插件目录，抓 1 张图，画廊「元数据」范围搜 `danbooru`、一个标签展示名、评论里的词 | 都能命中该图；搜标签帖数（如 `27735`）与 `Size` 不命中 | |
+| [ ] | 历史图升级迁移 | 桌面 CEF | 用 1.4.1 抓的旧图，升级到 1.4.2 后等迁移卡片结束，再搜 `danbooru` | 旧图可命中；日志 `[metadata-migration] ... provideSearchTextList` 无失败 | |
+
+## e-shuushuu 元数据搜索（provideSearchTextList）
+
+e-shuushuu 0.3.1：新抓取的图写入 `searchTexts`，历史图片由新增的 `metadata_migrations/migrate.js` 补齐。
+内容为 `e-shuushuu` + 裸字段名标记词（`uploader` / `date` / `tags` / `id` / `favorites` / `source` / `comments`）及对应值；
+日期拆成年、月（英文全名）、日三个词，取 `date_added` 的 UTC 日期，不含冒号、分类标题和 "No comments yet." 占位。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 构建与迁移函数 | 本机 | `npx rspack build`；node 直接调用 `provideSearchTextList` 喂样例 metadata | 构建通过；输出含 `e-shuushuu`、上传者名与头衔、`2026` / `September` / `17`、标签、ID、Favorites、Source | 已实测 |
+| [ ] | 新抓取可搜 | 桌面 CEF | 打包 e-shuushuu 到 dev 插件目录，抓 1 张图，「元数据」范围分别搜 `e-shuushuu`、上传者名、`September`、一个标签名 | 都能命中该图；搜 `No comments yet` 不命中 | |
+| [ ] | 历史图升级迁移 | 桌面 CEF | 用 0.3.0 抓的旧图，升级到 0.3.1 后等迁移卡片结束，再搜 `e-shuushuu` | 旧图可命中；日志 `[metadata-migration] ... provideSearchTextList` 无失败 | |
