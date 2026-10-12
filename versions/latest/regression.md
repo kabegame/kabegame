@@ -1,5 +1,58 @@
 # v4.5.1 regression
 
+## 新增爬虫插件蓝色大肥鱼（`src-crawler-plugins/plugins/bluedafeiyu`）
+
+V8 插件一次读取源站完整 `archive-data.json?v=2`，在本地按固定角色、固定类型与最新 / 热度 / 下载量 / 随机排序筛选，不发分页请求。热度与下载量复用源站公开统计快照，统计不可用时回退到归档顺序。图片写入完整详情 metadata 与 `searchTexts`；标签画册只建立角色与 Tag 两类，角色 key 使用模型英文 ID，中文 Tag 用 `tiny-pinyin` 派生。插件细分提供固定角色与类型 Provider，作品类型不建立标签画册。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 固定筛选与无分页抓取 | dev CLI | 选择 `Stepfun娘` + `其他` + `最新` 运行 | 只读取一次完整归档，无分页日志；命中并下载 1 张原图 | |
+| [ ] | 排序 | dev CLI | 对同一角色分别选择热度、下载量、随机 | 前两种顺序与源站公开统计一致；随机会打乱完整筛选结果 | |
+| [ ] | 标签与搜索文本 | dev DB | 抽查新任务图片的标签和 metadata 搜索词 | 标签仅有 `bluedafeiyu/character`、`bluedafeiyu/tag`；中文 Tag key 为拼音；搜索词含标题、角色、类型、Tag、作者和详情文案 | |
+| [ ] | 固定 Provider | PathQL | 列举 `plugin/bluedafeiyu/extend/character` 与 `…/type`，再进入任一叶子 | 角色固定 13 项、类型固定 6 项；叶子过滤结果与 metadata 中 `character_ids` / `type_ids` 一致 | |
+| [ ] | 角色 / 类型分组计数 | 桌面 CEF（有 bluedafeiyu 图片） | 打开画廊过滤侧栏 → 插件 → 蓝色大肥鱼 → 角色 / 类型 | 子项仍为固定 13 / 6 项且顺序不变，每项右侧显示当前过滤下的图片数（无图为 0）；点击叶子后结果数与该计数一致；路径 `…/extend/character/claude` 仍可直接解析 | 计数由 `list.sql` 的 `image_count` 提供；本地 CLI 因 dev 库 schema v39 < v40 未能实测 |
+| [ ] | 插件详情模板 | 桌面 CEF | 打开蓝色大肥鱼来源图片预览 → 插件详情 | 显示源站风格的角色、标题、类型、大肥鱼说、说明、原图信息、授权、统计和 Tag | |
+
+## ManyACG 元数据搜索文本（`src-crawler-plugins/plugins/manyacg` 0.1.1）
+
+搜索片段统一由 metadata 生成：`manyacg`、全部标签、作品名、作者名、平台名（`source_type`，小写，如 pixiv / twitter）、平台作者名（`artist.username`，去掉前导 `@`）、入库日期（`created_at` 开头的 `YYYY-MM-DD`）；不再写简介和 `manyacg_artist_*` / `manyacg_source_*` 前缀词。新增 `kbMetadataMigration` 脚本，只提供同规则的 `provideSearchTextList`，升级后历史图片自动补齐。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 规则输出 | deno | 用 `/artwork/random` 实时数据调用迁移脚本 `provideSearchTextList` | 依次为 manyacg、标签、标题、作者名、平台名、平台作者名、日期；`@foo` → `foo`，`Pixiv` → `pixiv` | 已实测 |
+| [ ] | 新任务搜索 | 桌面 CEF | 跑一次 ManyACG 随机任务，元数据搜索 `manyacg`、某标签、作者名、`twitter`、平台作者名、入库日期（如 `2025-02-12`） | 均能命中该任务的图片 | |
+| [ ] | 历史图片迁移 | 桌面 CEF（已有 0.1.0 下载的图片） | 安装 0.1.1 后等迁移结束，元数据搜索平台作者名 | 历史图片可被搜到；详情模板显示不变 | |
+
+## Pixiv 元数据搜索文本（`src-crawler-plugins/plugins/pixiv` 1.4.2）
+
+新增搜索片段：`pixiv`、作者名、作者 ID、`#标签`（原始名与 `translation.en` 各一条）、投稿日期 `YYYY年M月D日`（取 `uploadDate`，缺失回落 `createDate`，按 JST 取日）；有评论时另写 `comments`、各评论者名称与评论内容（纯贴图评论无正文则不写）。迁移脚本新增同规则 `provideSearchTextList`，升级后历史图片补齐（`provideLabels` 随版本门控一并重跑，结果不变）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 规则输出 | deno | 用 Pixiv 日榜第一作品的实时详情与评论调用 `provideSearchTextList` | 含作者名 / ID、`#オリジナル` 与 `#original`、`2026年10月10日`（UTC 15:00 → JST 次日）、`comments` 与评论者 / 评论 | 已实测；无 body 的 metadata 只得 `pixiv` |
+| [ ] | 新任务搜索 | 桌面 CEF | 跑一次 Pixiv 任务，元数据搜索 `#` + 标签、作者 ID、`2026年` 日期、某条评论原文 | 均能命中该作品图片 | |
+| [ ] | 历史图片迁移 | 桌面 CEF（已有 1.4.1 下载的图片） | 安装 1.4.2 后等迁移结束，元数据搜索作者 ID 与 `comments` | 历史图片可被搜到；标签画册不变 | |
+
+## yande.re 元数据搜索文本（`src-crawler-plugins/plugins/yandere` 1.3.2）
+
+新增搜索片段：`yandere`、有标签时的 `tags`、作品 ID、各标签（侧栏显示名与站点标识各一条）、rating、上传者名称、喜欢者昵称、评论者名称与评论内容。爬虫经 `downloadImage` 的 `searchTexts` 写入；迁移脚本新增同规则 `provideSearchTextList`，升级后历史图片补齐（`provideLabels` 随版本门控一并重跑，结果不变）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 规则输出 | deno | 用本机库中带评论的 yandere metadata 调用 `provideSearchTextList` | 依次为 yandere、tags、ID、标签（空格 / 下划线两种）、Safe、上传者、喜欢者、评论者与评论 | 已实测；无标签时不写 `tags` |
+| [ ] | 新任务搜索 | 桌面 CEF | 跑一次 yandere 任务，元数据搜索作品 ID、某标签、`Safe`、上传者、某喜欢者、评论原文 | 均能命中该作品图片 | |
+| [ ] | 历史图片迁移 | 桌面 CEF（已有 1.3.1 下载的图片） | 安装 1.3.2 后等迁移结束，元数据搜索上传者名称 | 历史图片可被搜到；标签画册不变 | |
+
+## PixAI 元数据搜索文本（`src-crawler-plugins/plugins/pixai` 0.7.2）
+
+新增搜索片段（`src/search-texts.ts`）：作者显示名与用户名、所有 tack 名称（displayName / defaultName / codeName / 各语言 tackTerms）、作品描述、评论者显示名与用户名及评论内容，最后是提示词——`prompts`、`extra.naturalPrompts`（`HIDDEN_BY_AUTHOR` 跳过）、`extra.referenceImagePrompts` 按中英文逗号与换行切分后去重。单条截断到 1024 字符（应用会整条丢弃超长项），提示词排最后以免 1000 条上限挤掉其他字段。迁移脚本新增同规则 `provideSearchTextList`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 规则输出 | deno | 用本机库全部 121 条 pixai metadata 调用 `provideSearchTextList` | 每张 5–253 条，无超 1000 条、无超 1024 字符、无 `HIDDEN_BY_AUTHOR`；含多语言 tack 名、评论者与提示词片段 | 已实测 |
+| [ ] | 新任务搜索 | 桌面 CEF | 跑一次 PixAI 任务，元数据搜索作者名、某 tack 中文名、某提示词片段（如 `1girl`）、某评论原文 | 均能命中该作品图片 | |
+| [ ] | 历史图片迁移 | 桌面 CEF（已有 0.7.1 下载的图片） | 安装 0.7.2 后等迁移结束，元数据搜索某提示词片段 | 历史图片可被搜到；标签画册不变 | |
+
 本版回归 checklist。任何改动可预见的回归路径，要在上线前 check 完毕。
 按「操作」一步步点，对照「预期」，通过就把第一列勾上。
 
