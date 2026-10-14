@@ -40,7 +40,7 @@
 
 - Task drawer and “copy error” details now only list plugin run options that apply to the current configuration (same `when` rules as the run form), not hidden/irrelevant fields.
 - HTTP downloads (crawler images and plugin store `.kgpg`) now resume in memory when the stream fails: retry requests use `Range` from bytes already received; if the server ignores Range (non-206), the client falls back to a full re-download to avoid corrupt concatenation.
-- Crawler Rhai: `to()` and `fetch_json()` emit task-log `info` lines (request start, success with resolved URL / stack depth / JSON type) for easier script debugging.
+- Crawler Rhai: `to()` and `fetch_json()` emit task-log2 `info` lines (request start, success with resolved URL / stack depth / JSON type) for easier script debugging.
 - **Plugin browser (store):** `.kgpg` download streams into memory then writes once (no partial cache files); `get_store_plugins` merges active download progress; progress callbacks are throttled to 1s; up to two retries after a failed attempt. `preview_store_install` emits `plugin-store-download-progress` for the UI.
 - **Plugin browser (store):** install button shows download progress as a left-to-right fill with percentage; when the installed version equals the store version, the control is a disabled “Installed” state (no reinstall), and plugin detail opens from the local install (no remote query) so docs load offline.
 - **Plugin detail page:** When you install from the store on the source detail / doc page, the install button shows the same live download progress (fill + percentage) as on the plugin store grid. The summary at the top now includes a **Version** row so you can see the package version at a glance.

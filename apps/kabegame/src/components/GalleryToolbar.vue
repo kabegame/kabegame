@@ -50,7 +50,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { Close, Filter } from "@kabegame/element-plus-icons";
-import { pathqlEntry } from "@/services/pathql";
+import { pathqlCount } from "@/services/pathql";
 import { withGalleryPrefix } from "@/utils/path";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -62,6 +62,8 @@ import {
   filterSetToSingleFilter,
   hasActiveQuery,
   querySearchTerm,
+  buildGalleryCountPath,
+  type GalleryQuery,
   type GalleryQueryPatch,
   type GallerySort,
 } from "@/utils/galleryPath";
@@ -81,6 +83,8 @@ interface Props {
   isLoadingAll?: boolean;
   totalCount?: number;
   bigPageEnabled?: boolean;
+  /** 当前画廊过滤条件；工具栏用它把过滤后数量与无过滤总数作为一对刷新。 */
+  filter?: GalleryQuery;
   sort?: GallerySort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
@@ -92,6 +96,7 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
+  filter: () => [] as GalleryQuery,
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   pageSize: DEFAULT_GALLERY_PAGE_SIZE,
   providerContextPrefix: "",
@@ -162,38 +167,63 @@ const failedCountFoldLabel = computed(() => {
 
 // ---------- 总数（分子 / 分母）----------
 /**
- * 无过滤总数（分母）。只带上下文里那部分「不是用户过滤」的东西——目前就是 hide，
- * 所以它跟着 galleryHide 与入库变更自己刷新，不依赖当前这次查询的结果。
+ * 分子与分母必须作为一份显示快照提交。ImageGrid 的 totalCount 继续服务分页，
+ * 这里只把它当首次加载 / 查询失败时的降级值，避免两个独立刷新时序拼出割裂文案。
  */
-const unfilteredTotal = ref<number | null>(null);
+const countPair = ref<{ count: number; total: number } | null>(null);
+const unfilteredCountPath = computed(() => withGalleryPrefix(galleryHide.value ? "hide" : "gallery"));
+const filteredCountPath = computed(() => {
+  if (!galleryRouteStore.effectiveNoAlbum && props.filter.length === 0) return unfilteredCountPath.value;
+  const body = buildGalleryCountPath(galleryRouteStore.effectiveNoAlbum, props.filter);
+  return withGalleryPrefix(galleryHide.value ? `hide/${body}` : body);
+});
+let countRequestVersion = 0;
 
-async function refreshUnfilteredTotal() {
+async function refreshCountPair() {
+  const requestVersion = ++countRequestVersion;
+  const filteredPath = filteredCountPath.value;
+  const unfilteredPath = unfilteredCountPath.value;
   try {
-    const res = await pathqlEntry(withGalleryPrefix(galleryHide.value ? "hide" : "gallery"));
-    unfilteredTotal.value = typeof res?.total === "number" ? res.total : null;
+    if (filteredPath === unfilteredPath) {
+      const snapshot = await pathqlCount(filteredPath);
+      if (requestVersion !== countRequestVersion) return;
+      countPair.value = { count: snapshot.total, total: snapshot.total };
+      return;
+    }
+    const [filtered, unfiltered] = await Promise.all([pathqlCount(filteredPath), pathqlCount(unfilteredPath)]);
+    if (requestVersion !== countRequestVersion) return;
+    countPair.value = { count: filtered.total, total: unfiltered.total };
   } catch {
-    unfilteredTotal.value = null; // 拿不到就退回只显示当前数，不显示分母
+    if (requestVersion === countRequestVersion) countPair.value = null;
   }
 }
 
-watch(galleryHide, () => void refreshUnfilteredTotal(), { immediate: true });
+watch(
+  [filteredCountPath, unfilteredCountPath],
+  () => {
+    countPair.value = null;
+    void refreshCountPair();
+  },
+  { immediate: true },
+);
 
 useImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 500,
-  onRefresh: refreshUnfilteredTotal,
+  onRefresh: refreshCountPair,
 });
 
 const totalCountText = computed(() => {
-  if (props.totalCount === 0) {
+  const count = countPair.value?.count ?? props.totalCount;
+  if (count === 0) {
     return t("gallery.noImages");
   }
-  const total = unfilteredTotal.value;
+  const total = countPair.value?.total;
   // 没过滤(或分母还没回来)时不写 "16892 / 16892" 这种废话。
-  if (total == null || total <= props.totalCount) {
-    return t("gallery.totalImages", { count: props.totalCount });
+  if (total == null || total <= count) {
+    return t("gallery.totalImages", { count });
   }
-  return t("gallery.totalImagesFiltered", { count: props.totalCount, total });
+  return t("gallery.totalImagesFiltered", { count, total });
 });
 
 // ---------- Header ----------

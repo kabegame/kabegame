@@ -72,21 +72,21 @@
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-detail.jpg" alt="Kabegame 详细元信息" width="100%"/><br/>
+      <img src="docs/images/gallery/gallery-detail2.jpg" alt="Kabegame 详细元信息" width="100%"/><br/>
       <small>详细元信息</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-filters.jpg" alt="Kabegame 画廊过滤" width="100%"/><br/>
+      <img src="docs/images/gallery/gallery-filters2.jpg" alt="Kabegame 画廊过滤" width="100%"/><br/>
       <small>随心过滤</small>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/album/album-main.jpg" alt="Kabegame 画册整理" width="100%"/><br/>
+      <img src="docs/images/album/album-main2.jpg" alt="Kabegame 画册整理" width="100%"/><br/>
       <small>画册整理</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/album/album-folder.jpg" alt="Kabegame 文件夹同步" width="100%"/><br/>
+      <img src="docs/images/album/album-folder2.jpg" alt="Kabegame 文件夹同步" width="100%"/><br/>
       <small>文件夹同步</small>
     </td>
   </tr>
@@ -96,7 +96,7 @@
       <small>源插件列表</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/source/source-doc.jpg" alt="Kabegame 源插件文档" width="100%"/><br/>
+      <img src="docs/images/source/source-doc2.jpg" alt="Kabegame 源插件文档" width="100%"/><br/>
       <small>源插件文档</small>
     </td>
   </tr>
@@ -112,11 +112,11 @@
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/crawler/task-images.jpg" alt="Kabegame 任务图片" width="100%"/><br/>
+      <img src="docs/images/crawler/task-images2.jpg" alt="Kabegame 任务图片" width="100%"/><br/>
       <small>任务图片</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/crawler/task-log.jpg" alt="Kabegame 任务日志" width="100%"/><br/>
+      <img src="docs/images/crawler/task-log2.jpg" alt="Kabegame 任务日志" width="100%"/><br/>
       <small>任务日志(快速定位问题)</small>
     </td>
   </tr>
@@ -126,10 +126,10 @@
 
 - 🔌 **爬虫客户端**：通过 `.kgpg` 插件从各站爬取壁纸，内置插件商店可浏览/安装/管理，4.3.0开始内置打包所有发布时的最新插件；插件用 JS/TS 编写，跑在 V8（deno_core）或 WebView 后端。
 - 🎨 **壁纸设置器（图片/视频）**：收集、管理、轮播二次元壁纸，自动从指定画册更换桌面壁纸。
-- 🖼️ **图片管理者**：画廊浏览、画册整理、虚拟磁盘、拖拽导入、文件夹同步画册。
+- 🖼️ **图片管理者**：画廊浏览、自动标签分类、画册整理、虚拟磁盘、拖拽导入、文件夹同步画册。
 - 🧩 **MCP 整理**：打开 MCP 服务器，让外部 AI 代理按精细权限帮你整理壁纸。
 
-支持 Windows、macOS、Linux 与 Android（不支持 iOS）。
+支持 Windows、macOS、Linux 与 Android（<= 4.3.0，新版本正在适配中）。
 
 ## 你可能感兴趣
 也许你对二次元壁纸和爬虫不感兴趣，但本应用中的几个技术创新你也许感兴趣
@@ -137,33 +137,59 @@
 - 自研 Tauri runtime [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)
   高度为Kabegame定制，因此没有发crate，你可以用AI搬到你的项目中
 - 自研路径折叠式查询引擎 [PathQL](./src-tauri/pathql-rs/)
-  简单介绍来说就是，研发了一个被称为Provider DSL的解析器和基于URL路径的查询语法。应用中的大部分图片查询已经变成了 [Provider DSL JSON5格式](./src-tauri/kabegame-core/src/providers/dsl/) ，这些JSON决定PathQL引擎折叠查询的方式。假设查询 2026年6月的所有视频，查询写成:
+  简单介绍来说就是，研发了一个被称为Provider DSL的解析器和基于URL路径的查询语法。应用中的大部分图片查询已经变成了 [Provider DSL JSON5\YAML格式](./src-tauri/kabegame-core/src/providers/dsl/) ，这些DSL文件决定PathQL引擎折叠查询的方式。例如，在画廊中排除元数据含成人内容关键词的图片，只查看 yande.re 来源、4:3 至 16:9 横图并随机排序时，查询写成：
     ```url
-    images://hide/media-type/video/filter_comb/date/2026y/06m/filter_comb/sort/by-id/1
+    images://gallery/hide/~not/~any/search/metadata/pussy/~or/search/native-metadata/pussy/~end/~end/~not/~any/search/metadata/penis/~or/search/native-metadata/penis/~end/~end/~not/~any/search/metadata/sex/~or/search/native-metadata/sex/~end/~end/~not/~any/search/metadata/r18/~or/search/native-metadata/r18/~end/~end/plugin/yandere/_kb_fc/aspect/4x3-16x9/_kb_fc/sort/random-7041412897802809
     ```
+  这条路径的意思是：只查询未隐藏的 yande.re 图片；业务元数据和图片原生元数据都不得包含 `pussy`、`penis`、`sex`、`r18` 中的任意一个关键词；并且图片宽高比必须大于 4:3、不超过 16:9；结果最后使用固定种子随机排序。
   如果你对该查询引擎感兴趣，可以提issue，我来完善文档。
   理论上可以发crate，但应该还存在某些边界情况的bug没有探出来，所以你也可以让AI抄到你的项目里（注意GPL-3.0）
 
 ## 下载与安装
 
-前往 **[GitHub Releases](https://github.com/kabegame/kabegame/releases/latest)** 下载对应平台安装包。
+在 **[GitHub Releases](https://github.com/kabegame/kabegame/releases/latest)** 中按平台下载主程序（`kabegame-cli` 是独立的可选工具，不随主程序安装）：
 
-各平台安装步骤、虚拟盘依赖与数据目录说明见文档：**[安装与首次启动](https://kabegame.com/guide/installation/)**。
+| 平台 | 下载文件 | 安装步骤 |
+| --- | --- | --- |
+| Windows x64 | `Kabegame-standard_<版本>_x64-setup.exe` | 双击安装包，按向导完成安装。若要使用画册虚拟盘，在应用设置中首次开启“画册盘”时，按提示允许应用安装随包附带的 Dokan 2.x 驱动；驱动装好后再开启一次。 |
+| macOS（Apple 芯片） | `Kabegame-standard_<版本>_aarch64.dmg` | 打开 DMG，把 `Kabegame.app` 拖入“应用程序”。安装包未签名；若首次启动提示“已损坏”或无法验证开发者，请在终端执行下方的 `xattr` 命令后重新打开。macOS 11 及以上可用。 |
+| Linux amd64 | `Kabegame-standard_<版本>_amd64.deb` | 在下载目录执行下方的 `apt install` 命令；它会同时安装画册虚拟盘需要的 `fuse3`。 |
+| Android（仅 v4.3.0 及更早版本） | `Kabegame_<版本>_android-preview.apk` | 在系统设置中允许浏览器或文件管理器“安装未知来源应用”，再点击 APK 按提示安装。Android 8.0 及以上可用；新版 Android 客户端仍在适配。 |
+
+macOS 首次启动解除隔离：
+
+```bash
+xattr -d com.apple.quarantine /Applications/Kabegame.app
+```
+
+如需在 macOS 使用画册虚拟盘，再安装 macFUSE；安装完成后按系统提示批准扩展，必要时重启：
+
+```bash
+brew install --cask macfuse
+```
+
+Linux 安装（先在终端进入安装包所在目录）：
+
+```bash
+sudo apt install ./Kabegame-standard_*_amd64.deb
+```
+
+安装完成后直接启动 Kabegame 即可。图片默认保存在用户图片目录的 `Pictures/Kabegame`，卸载应用不会删除这些图片。
 
 ## 文档
 
-完整文档都在 **[kabegame.com](https://kabegame.com/)**：
+完整文档在 **[kabegame.com](https://kabegame.com/)**（从4.4.0之后可能有一些不同步）：
 
 - [用户指南](https://kabegame.com/guide/installation/) —— 安装、画廊、画册、壁纸、虚拟盘、MCP 等。
 - [插件开发](https://kabegame.com/dev/overview/) —— 编写 V8 / WebView 爬虫插件、`.kgpg` 格式、打包发布。
-- [参与开发](https://kabegame.com/dev-contrib/building/) —— 从源码构建、Android 开发、架构与技术栈、致谢与内嵌依赖。
+- [参与开发](https://kabegame.com/dev-contrib/building/) —— 从源码构建、Android 开发、架构与技术栈、致谢与内嵌依赖。（请加我QQ：2905432378）
 - [命令行工具](https://kabegame.com/reference/cli/) 与 [API 参考](https://kabegame.com/reference/kabegame-api/)。
 
-爬虫插件仓库：**[kabegame/crawler-plugins](https://github.com/kabegame/crawler-plugins)**（欢迎贡献插件！）
+爬虫插件仓库：**[kabegame/crawler-plugins](https://github.com/kabegame/crawler-plugins)**（募集更多插件中）
 
 ## License
 
-源代码基于 [GPL v3](./LICENSE) 授权。
+源代码基于 [GPL v3](./LICENSE) 授权。（开放源代码才是终极答案）
 
 ## 名称由来 🐢
 

@@ -247,6 +247,8 @@ ImageGrid 把数据变化分成两条通道：
   前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（插件元数据为 `m<metadataId>`），面板在同一张图只换
   `imageMetadataId` 时保留旧内容重新取数，不闪。
 - ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
+  `GalleryToolbar` 接收当前 `filter`，在同一次刷新中并行读取过滤后 count 与仅保留 `hide` 上下文的总 count，
+  两条都完成后才整体替换副标题计数，避免 `images-change` 后显示出跨两代的“数量 / 总数”。
 
 ### `image-changed`（`AppEvent::ImageChanged`，`ImageInfo` 字段）
 

@@ -172,7 +172,7 @@ const off = Kabegame.onNativeDownload((payload) => {
 
 ## 4. 约束
 
-- 事件契约不变：任务进度、状态和计数仍走 `tasks-change` / `TaskChanged` camelCase diff；日志仍走 `task-log`。
+- 事件契约不变：任务进度、状态和计数仍走 `tasks-change` / `TaskChanged` camelCase diff；日志仍走 `task-log2`。
 - WebView 后端仅桌面使用；Android 走 V8 后端。
 - `Task` 内部锁使用 std 锁，调用方不得跨 `.await` 持有这些锁。
 - `TaskScheduler` 队列只保存 `task_id`，运行参数一律从 `TaskScheduler::get_run(task_id)` 读取。
