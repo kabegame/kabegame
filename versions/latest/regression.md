@@ -515,3 +515,24 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [ ] | 已安装用户升级 | 桌面 dev | 已装旧包的情况下，装新打的 `wallhaven.kgpg` | 识别为同一插件（覆盖更新），已有图片、插件数据目录不变，不会出现 `kabegame-plugin-wallhaven` | 未覆盖 |
 | [ ] | 旧版应用 | 4.5.1 应用 | 商店看新索引 | 插件显示「版本不兼容」，不会装出重复插件 | 未覆盖，需发版后验证 |
 | [ ] | release CLI | `target/release` | 重建 release CLI 后 `deno task --cwd src-crawler-plugins package` | 打包成功；旧 release CLI 会因输出 stem ≠ name 报 P3-7 | 本机 release CLI 为改动前版本，未重建 |
+
+## 画册选择器 / 画册树打开慢：图片计数不挡渲染，标签目录不参与子树 join（`albums_images_provider.yaml`、`services/albums.ts`、`AlbumTreeView.vue`）
+
+prod 库（标签画册 52,915 个，挂在标签上的 `album_images` 1,218,972 行）打开 `AlbumPicker` 要等 2 秒多。用 `KABEGAME_SQL_DEBUG=1 kabegame-cli pathql query` 逐条跑打开时的查询，其它都在 30ms 内，只有标签根页的 `albums://roots/~any/album_kind/label/~or/album_kind/label_dir/~end/x500x/1/~~/images` 要 2262ms：17 个标签根里 16 个是 `label_dir`，子树覆盖整片标签森林，要把约 122 万成员行 join 一遍；而 `label_dir` 的 `image_count` 前端根本不用（显示的是 `child_count`）。又因为 `fetchPageWithCounts` 用 `Promise.all` 等三条查询，`useTreeModel.reload` 再等所有分区，整棵树都陪这一条一起等。
+
+改动：`albums_images_provider` 在 tree join 的 `ON` 里加 `albums.type <> 'label_dir'`（放外层 `WHERE` 会让规划器改成全表扫 `album_images`，实测反而 1.0s），标签目录不再出计数行；前端 `fetchAlbumPage` 只等行与 `~~/children`，`image_count` 经 `AlbumPage.imageCounts` 单独到达，`AlbumTreeView` 按 key 补进句柄（`AlbumNode.count` 为 `null` 时不显示数字，刷新时先沿用旧计数）；系统画册计数同样后补；`searchAlbums` 只用于查重名，改为只取行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 慢 SQL 定位 | prod 库 + release CLI | 逐条跑选择器打开时的 `albums://` 查询 | 仅标签根页 `~~/images` 秒级 | 2262ms，其余 ≤ 26ms |
+| [x] | 新 SQL 耗时 | prod 库 sqlite3 只读 | 原 SQL 与 `ON` 加 `albums.type <> 'label_dir'` 对比 | 结果中 `label` 叶子计数不变，耗时降到几十毫秒 | 1.2–2.3s → 30ms（冷缓存 128ms）；执行计划仍走 `idx_albums_ancestor_path` |
+| [x] | 计数口径 e2e | cargo test | `kabegame-core --test dsl_e2e album`、`count_without_top_order` | 叶子 / 普通画册计数与 images:// 一致；`label_dir` 不出计数行 | 10 个通过 |
+| [x] | 前端类型 | 仓库 | `deno task check -c kabegame --skip cargo` | vue-tsc 无错误 | 已运行 |
+| [x] | 选择器首屏 | 桌面 dev（prod 数据，55,886 张） | 画廊右键图片 →「加入画册」→ 点开选择器，逐帧计时 | 各分区行立即出现，图片计数随后补上；标签目录显示子画册数 | 点击到首行 328ms，同帧计数全部到齐（标签根页 `~~/images` 已不再秒级）；e-shuushuu / konachan 等目录显示子画册数 |
+| [x] | 计数后补 | 桌面 dev（prod 数据） | 画册页侧栏展开 konachan → general（436 个标签叶子） | 叶子行先出现、计数为空，随后补齐且数值正确 | 84ms 出行、926ms 计数补齐；抽查 glasses / gray hair / bikini 与 sqlite 按隐藏口径直算一致（773 / 4302 / 1387） |
+| [x] | 计数后补不串号（数据变化） | 桌面 dev（prod 数据） | 画册页展开 konachan → general，依次跑 kabegame-server（1 页 20 张）与 konachan 任务（6 新增、143 去重），debug ingest 记录每页行与计数到达 | 计数先保持旧值再更新，不闪空、不被旧查询覆盖 | 约 4 分钟内 67 次刷新、292 页：刷新页空计数 0 行（仅首次加载与 1 个新建标签为空）；98 次计数乱序到达，163 行按句柄身份跳过，跳过值无一成为最终显示值；任务停止后 general 437 个叶子 + konachan 6 个目录与 sqlite 直算全部一致。插桩已删除 |
+| [x] | 隐藏口径 | 桌面 dev（prod 数据） | 展开 465 行的画册树，切换 `globalPathRoute.hide`（等同工具箱开关）开 → 关 → 开，逐帧检查 | 普通画册 / 标签叶子计数按 `~~/images/hide` 变化，标签目录不受影响，重载期间不闪空 | gray hair 4302 ⇄ 4313、bikini 1387 ⇄ 1390，与 sqlite 两种口径一致；general 恒为 436；约 420 帧内空计数 0 行、行数不减；已恢复为开启 |
+| [ ] | 画册页右键菜单计数 | 桌面 | 计数还没到时右键画册 | `albumImageCount` 按 0 处理，不报错 | `Albums.vue` 已 `?? 0` |
+| [x] | 选择器无分割线 | 桌面 | 打开「加入画册」的 `AlbumPicker` 下拉；再看画册页侧栏 | 分区之间不再画分割横线，「标签」分区标题仍在；侧栏画册树照旧显示分割线 | 选择器内 `.kb-tree-panel__separator` 0 个、侧栏 3 个，截图确认 |
+| [ ] | 选择器无分割线（Android） | Android | 打开 `AlbumPicker` 全屏选择页 | 同上 | 未覆盖 |
+| [x] | 选择器内标签目录可展开 | 桌面 dev | 「加入画册」选择器里点 konachan 目录行，再点 general，再点叶子 glasses | 目录行点击只展开不选中、弹层不关；叶子可选中并关闭弹层 | 6 处选择器（加入画册、本地导入、网页收集、收集输出、自动任务、轮播目标）由 `is-selectable` 禁用目录改为 `expand-label-dirs`；实测加入画册一处，选中后关闭对话框未提交 |

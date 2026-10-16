@@ -2602,8 +2602,14 @@ fn album_page_image_counts_match_images_paths() {
                 let id = row["id"].as_str().unwrap();
                 let kind = row["type"].as_str().unwrap().to_string();
                 let expected = match kind.as_str() {
-                    // 标签目录不能挂图，前端显示子画册数，这里不比
-                    "label_dir" => None,
+                    // 标签目录不能挂图，前端显示子画册数；provider 在 join 前就排除它，不出计数行
+                    "label_dir" => {
+                        assert!(
+                            !counts.contains_key(id),
+                            "{page}/~~/{images_seg} {id} (label_dir)"
+                        );
+                        None
+                    }
                     "label" => Some(
                         runtime
                             .count(&format!("images://gallery/{prefix}album/{id}"))

@@ -80,6 +80,7 @@ import {
   type Album,
   type AlbumKind,
   type AlbumNode,
+  type AlbumPage,
   type AlbumRootSection,
 } from "@/services/albums";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
@@ -98,6 +99,8 @@ const props = withDefaults(
     searchText: string;
     /** 行尾状态标记（轮播中 / 同步模式 / 文件夹异常）：侧栏才显示，选择器里是噪音 */
     showStatus?: boolean;
+    /** 分区之间的分割横线：侧栏显示，下拉选择器里为简洁关掉（分区标题仍在）。 */
+    separators?: boolean;
   }>(),
   {
     scope: () => ({}),
@@ -105,6 +108,7 @@ const props = withDefaults(
     allowCreate: false,
     expandLabelDirs: false,
     showStatus: false,
+    separators: true,
   },
 );
 const emit = defineEmits<{
@@ -138,6 +142,29 @@ function sectionKinds(section: AlbumRootSection): AlbumKind[] | undefined {
  * 必须在 dataSource 之前声明：useTreeModel 创建时就会同步调用 dataSource。
  */
 const searchQuery = ref(props.searchText.trim());
+/**
+ * 行先交给树渲染，图片计数到了再补：句柄是 shallowReactive，换掉 `element` 即重绘这一行。
+ * 刷新（重载 / 事件重枚举）时新行先沿用句柄上的旧计数，避免数字闪空。
+ */
+function withLateCounts(page: AlbumPage): AlbumNode[] {
+  for (const node of page.nodes) {
+    if (node.count === null) node.count = model.nodeByKey(node.id)?.element.count ?? null;
+  }
+  void page.imageCounts.then(
+    (counts) => {
+      for (const [id, count] of counts) {
+        const node = page.nodes.find((candidate) => candidate.id === id);
+        if (!node) continue;
+        const handle = model.nodeByKey(id);
+        // 句柄已换成更新一轮查询的行就不覆盖；句柄还没建时改行本身，建句柄时直接带上
+        if (handle && handle.element === node) handle.element = { ...node, count };
+        else node.count = count;
+      }
+    },
+    () => {},
+  );
+  return page.nodes;
+}
 async function systemRows(page: number): Promise<AlbumNode[]> {
   if (page !== 1) return [];
   const ids = [FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].filter((id) => !props.scope.excludeIds?.includes(id));
@@ -146,13 +173,13 @@ async function systemRows(page: number): Promise<AlbumNode[]> {
   const albums = (await Promise.all(ids.map(fetchAlbum))).filter(
     (album): album is Album => !!album && (!query || displayName(album).toLowerCase().includes(query)),
   );
-  return Promise.all(
-    albums.map(async (album) => ({
-      ...album,
-      childCount: 0,
-      count: await fetchAlbumCount(album, album.id === HIDDEN_ALBUM_ID ? "" : prefix.value),
-    })),
-  );
+  const imageCounts = Promise.all(
+    albums.map(
+      async (album) =>
+        [album.id, await fetchAlbumCount(album, album.id === HIDDEN_ALBUM_ID ? "" : prefix.value)] as const,
+    ),
+  ).then((entries) => new Map(entries));
+  return withLateCounts({ nodes: albums.map((album) => ({ ...album, childCount: 0, count: null })), imageCounts });
 }
 function sectionOf(node: Album): AlbumRootSection {
   if (node.type === "local_folder") return "local_folder";
@@ -167,7 +194,7 @@ function childrenPage(node: AlbumNode, page: number): Promise<AlbumNode[]> {
     sectionKinds(sectionOf(node)),
     ALBUM_PAGE_SIZE,
     searchQuery.value,
-  ).then((rows) => rows.filter(allowed));
+  ).then((page) => withLateCounts(page).filter(allowed));
 }
 const dataSource: TreeDataSource<AlbumNode> = {
   getKey: (node) => node.id,
@@ -182,8 +209,8 @@ const dataSource: TreeDataSource<AlbumNode> = {
     const section = sectionId as AlbumRootSection;
     const kinds = sectionKinds(section);
     if (kinds?.length === 0) return Promise.resolve([]);
-    return fetchAlbumPage({ section }, page, prefix.value, kinds, ALBUM_PAGE_SIZE, searchQuery.value).then((rows) =>
-      rows.filter(allowed),
+    return fetchAlbumPage({ section }, page, prefix.value, kinds, ALBUM_PAGE_SIZE, searchQuery.value).then((result) =>
+      withLateCounts(result).filter(allowed),
     );
   },
   pageSize: ALBUM_PAGE_SIZE,
@@ -192,7 +219,7 @@ const sections = computed<TreeSection<AlbumNode>[]>(() =>
   visibleSections.value.map((id, index) => ({
     id,
     header: id === "label" || id === "local_folder",
-    separatorBefore: index > 0,
+    separatorBefore: props.separators && index > 0,
     roots: () => [],
   })),
 );

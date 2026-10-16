@@ -274,7 +274,8 @@ ImageGrid 把数据变化分成两条通道：
   （默认按创建时间排序）；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册
   `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录直接显示它）与 `image_count`
   （子树成员行数，标签叶子即直接成员数），没有行的画册计 0；与 `images://gallery/[hide/]album/<id>`、
-  `album-tree/<id>` 的 entry 总数同口径。`/hide` 对应 `hide/` 前缀（不数隐藏画册里的图片）。每页固定 3 条 SQL，
+  `album-tree/<id>` 的 entry 总数同口径。`/hide` 对应 `hide/` 前缀（不数隐藏画册里的图片）。`label_dir` 不挂图，
+  `~~/images` 不给它出行。行与 `child_count` 先到即渲染，`image_count` 是慢查询，单独到达后再补进树行。每页固定 3 条 SQL，
   内层分页物化为 CTE、子树走 `idx_albums_ancestor_path` 区间，见 [../provider-dsl/RULES.md](../provider-dsl/RULES.md) §2.1。
 - Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 

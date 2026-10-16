@@ -1106,7 +1106,7 @@ fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, 
     }
 
     client_builder = client_builder
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(300))
         .connect_timeout(Duration::from_secs(10))
         .redirect(redirect)
         .user_agent("Kabegame/1.0");

@@ -4,19 +4,24 @@ note: >-
   Image counts of the albums selected so far, including their descendants (a label leaf counts
   its own images). Use after ~~ so a page is cut first: .../x<N>x/<page>/~~/images. Fetch returns
   one row per album that has at least one image, with image_count = its member-row count (the
-  same as images://gallery/album-tree/<id>); albums without images have no row. Append /hide to
-  leave out images in the hidden album.
+  same as images://gallery/album-tree/<id>); albums without images have no row. Label
+  directories (label_dir) hold no images and never get a row: count their children with
+  ~~/children instead. Append /hide to leave out images in the hidden album.
 query:
   fields:
     - { sql: COUNT(images.id), as: image_count, in_need: true }
   join:
     # 子树成员（含自身，所以标签叶子即直接成员）：ancestor_path 为 `/根/.../自身/`，
     # 后代的路径以它为前缀，写成索引上的一段区间（`/` 的下一个字符是 `0`），走 idx_albums_ancestor_path。
+    # 标签目录不挂图、前端显示子画册数，在 ON 里先排除：标签根页几乎全是目录，子树覆盖整片标签森林，
+    # 不排除就要 join 上百万成员行（实测 2.2s → 30ms）。条件放 ON 而不是外层 WHERE：WHERE 会让
+    # 规划器改成先全表扫 album_images 再回连外层。
     - kind: INNER
       table: albums
       as: tree
       "on": >-
-        tree.ancestor_path >= albums.ancestor_path
+        albums.type <> 'label_dir'
+        AND tree.ancestor_path >= albums.ancestor_path
         AND tree.ancestor_path < substr(albums.ancestor_path, 1, length(albums.ancestor_path) - 1) || '0'
       in_need: true
     - { kind: INNER, table: album_images, as: tree_ai, "on": tree_ai.album_id = tree.id, in_need: true }
