@@ -547,3 +547,32 @@ prod 库（标签画册 52,915 个，挂在标签上的 `album_images` 1,218,972
 | [x] | 选择器无分割线 | 桌面 | 打开「加入画册」的 `AlbumPicker` 下拉；再看画册页侧栏 | 分区之间不再画分割横线，「标签」分区标题仍在；侧栏画册树照旧显示分割线 | 选择器内 `.kb-tree-panel__separator` 0 个、侧栏 3 个，截图确认 |
 | [ ] | 选择器无分割线（Android） | Android | 打开 `AlbumPicker` 全屏选择页 | 同上 | 未覆盖 |
 | [x] | 选择器内标签目录可展开 | 桌面 dev | 「加入画册」选择器里点 konachan 目录行，再点 general，再点叶子 glasses | 目录行点击只展开不选中、弹层不关；叶子可选中并关闭弹层 | 6 处选择器（加入画册、本地导入、网页收集、收集输出、自动任务、轮播目标）由 `is-selectable` 禁用目录改为 `expand-label-dirs`；实测加入画册一处，选中后关闭对话框未提交 |
+
+## 任务抽屉：运行中任务禁止删除，任务数改为搜索（`TaskDrawerContent.vue`、`TaskDrawer.vue`、`TaskContextMenu.vue`）
+
+任务卡片右上角的删除按钮与右键「删除任务」在 `running` / `waiting_downloads` 时禁用，提示先停止；`handleDeleteTaskById` 同样拦截，抽屉不再走「停止并删除」（任务详情页的删除不变）。任务列表顶部「共 N 个任务」换成搜索框，按插件 id 与当前语言插件名做不区分大小写的子串过滤（任务启动时已经全量加载，纯前端过滤），无结果时显示空状态，搜索词变化时列表滚回顶部；面板标题右侧仍显示总任务数。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型 | 仓库 | `deno task check -c kabegame --skip cargo` | vue-tsc 无错误 | 已运行 |
+| [x] | 运行中禁删 | 桌面 dev（CDP） | 启动 konachan 任务，点其卡片右上角删除按钮、右键「删除任务」；再停止任务 | 按钮半透明禁用、悬停提示需先停止，点击不弹确认；右键「删除任务」置灰，点击无反应；停止（canceled）后两者恢复可用 | 已实测；补了 `.close-btn.is-disabled` 样式，原自定义样式会盖住禁用态 |
+| [ ] | 等待下载收尾 | 桌面 | 任务进入 `waiting_downloads` | 同上，仍不可删除 | 未覆盖 |
+| [x] | 搜索 | 桌面 dev（145 个任务） | 依次输入 `kona`、`动漫壁纸`、`KABEGAME`、`Server`、`zzz-none`，再清空 | 列表只剩匹配任务（`Server` 经 id `kabegame-server` 命中）；无匹配显示「没有匹配的任务」；清空恢复全部 | 已实测；Android 未覆盖 |
+| [x] | 深滚动后搜索 | 桌面 dev | 列表滚到 scrollTop 5000 后输入 `KABEGAME` | 回到顶部并显示 3 条结果，不出现空白列表 | 修复前整列空白（沿用旧 scrollTop），已加 `scrollTo(0)` 并复测 |
+| [ ] | 搜索中清除所有 | 桌面 | 搜索状态下点「清除所有任务」 | 仍按全部已结束任务清除（与搜索无关），计数文字不变 | 未覆盖 |
+
+## 任务抽屉：停止叉号改为下方小确认框（`TaskDrawerContent.vue`、`TaskDrawer.vue`）
+
+进度条旁的停止叉号包进 `el-popconfirm`（`placement="bottom-end"`，文案 `tasks.drawerStopConfirm`「停止任务？」，确认按钮 danger），确认后才 emit `cancel-task`；`TaskDrawer` 把抽屉的 `cancel-task` 接到不弹窗的 `handleStopTaskById`，右键菜单「停止任务」仍走带 `ElMessageBox` 的 `handleCancelTaskById`。各行确认框由 `stopConfirmTaskId` 受控，同一时刻最多开一个，并经 `useModalBack` 接入 Android 返回栈。placement 不能用居中的 `bottom`：叉号贴着抽屉右缘，居中会右溢出，popper flip 的横轴检查随之否掉 bottom / top，小框被翻到左侧盖住卡片。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型 | 仓库 | `deno task check -c kabegame --skip cargo` | vue-tsc 无错误 | 已运行 |
+| [x] | 叉号小确认框 | 桌面 dev（CDP） | 启动两个 konachan 任务，点第一个任务进度条旁叉号 | 叉号正下方弹出「停止任务？」小框，含「取消 / 确认」，无居中对话框 | 已实测：`bottom-end`，小框顶 609.5 = 叉号底 597 + 12，右缘与叉号对齐；首版用 `bottom` 时被翻到左侧，已修复并复测 |
+| [x] | 靠近视口底部 | 桌面 dev | 点第二个任务的叉号（底部 763px） | 下方放不下时翻到叉号上方 | 已实测 |
+| [x] | 单开 | 桌面 dev | 第一个框开着时点第二个叉号 | 只保留后点的那个小框 | 已实测，可见小框恒为 1 |
+| [x] | 取消 / 点框外 | 桌面 dev | 小框内点「取消」；重开后点抽屉内其它区域 | 只关闭小框，任务仍 running，抽屉保持打开 | 已实测 |
+| [x] | 确认 | 桌面 dev | 小框内点「确认」 | 任务转 canceled，不弹居中对话框 | 已实测 |
+| [x] | 任务结束时框还开着 | 桌面 dev | 打开小框后等任务自然完成 | 叉号随进度条状态消失，小框一并关闭，不残留 | 已实测：两个 konachan 任务跑完后可见小框为 0 |
+| [x] | 右键「停止任务」 | 桌面 dev | 右键运行中任务 →「停止任务」 | 仍弹出居中确认对话框，确认后停止 | 已实测 |
+| [ ] | Android 返回键 | Android | 打开小框后按返回键 | 只关闭小框，抽屉保持打开 | 未覆盖 |

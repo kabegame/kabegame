@@ -29,7 +29,7 @@
       @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById"
       @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById"
+      @cancel-task="handleStopTaskById"
       @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu"
     />
@@ -56,7 +56,7 @@
       @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById"
       @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById"
+      @cancel-task="handleStopTaskById"
       @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu"
     />
@@ -318,41 +318,41 @@ onUnmounted(() => {
   window.removeEventListener("click", handleGlobalClick);
 });
 
-const handleCancelTaskById = async (taskId: string) => {
+/** 抽屉叉号已在 popconfirm 里确认过，这里直接停止 */
+const handleStopTaskById = async (taskId: string) => {
   const task = props.tasks.find((t) => t.id === taskId);
   if (!task) return;
   try {
-    await ElMessageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
     await crawlerStore.stopTask(task.id);
     ElMessage.info(t("tasks.taskStopRequested"));
   } catch (error) {
-    if (error !== "cancel") {
-      // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
-      console.error("停止任务失败:", error);
-    }
+    // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
+    console.error("停止任务失败:", error);
   }
+};
+
+/** 右键菜单「停止」没有可挂靠的叉号，仍用确认弹窗 */
+const handleCancelTaskById = async (taskId: string) => {
+  try {
+    await ElMessageBox.confirm(t("tasks.stopTaskConfirm"), t("tasks.stopTaskTitle"), { type: "warning" });
+  } catch {
+    return;
+  }
+  await handleStopTaskById(taskId);
 };
 
 const handleDeleteTaskById = async (taskId: string) => {
   const task = props.tasks.find((t) => t.id === taskId);
   if (!task) return;
+  // 运行中的任务须先停止，抽屉不再提供「停止并删除」
+  if (task.status === "running" || task.status === "waiting_downloads") {
+    ElMessage.warning(t("tasks.drawerDeleteTaskRunning"));
+    return;
+  }
   trackTaskDrawerAction("delete_task", task);
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
-    const needStop = task.status === "running" || task.status === "waiting_downloads";
-    const msg = needStop ? t("tasks.deleteTaskConfirmRunning") : t("tasks.deleteTaskConfirm");
-    await ElMessageBox.confirm(msg, t("tasks.confirmDelete"), { type: "warning" });
-
-    if (needStop) {
-      try {
-        await crawlerStore.stopTask(task.id);
-      } catch (err) {
-        console.error("终止任务失败，已取消删除", err);
-        ElMessage.error(t("tasks.stopFailedCancel"));
-        return;
-      }
-    }
-
+    await ElMessageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
     await crawlerStore.deleteTask(task.id);
     ElMessage.success(t("tasks.taskDeleted"));
   } catch (error) {

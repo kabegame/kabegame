@@ -36,9 +36,10 @@ const { t } = useI18n();
 
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
+  const isRunning = props.task?.status === "running" || props.task?.status === "waiting_downloads";
 
   // 停止任务（只在运行中时显示）
-  if (props.task?.status === "running" || props.task?.status === "waiting_downloads") {
+  if (isRunning) {
     items.push({
       key: "stop",
       type: "item",
@@ -99,7 +100,7 @@ const menuItems = computed<MenuItem[]>(() => {
   // 分隔符
   items.push({ key: "divider", type: "divider" });
 
-  // 删除任务
+  // 删除任务（运行中须先停止）
   items.push({
     key: "delete",
     type: "item",
@@ -107,6 +108,7 @@ const menuItems = computed<MenuItem[]>(() => {
     icon: Delete,
     command: "delete",
     className: "danger",
+    disabled: isRunning,
   });
 
   return items;
