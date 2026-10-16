@@ -14,7 +14,7 @@
     :model-value="modelValue"
     :options="options"
     :placeholder="placeholder"
-    :allow-unset="allowUnset"
+    allow-unset
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
@@ -29,7 +29,7 @@
     :model-value="modelValue"
     :options="options"
     :placeholder="placeholder"
-    :allow-unset="allowUnset"
+    allow-unset
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
@@ -37,7 +37,7 @@
     v-else-if="type === 'checkbox'"
     :model-value="modelValue"
     :options="options"
-    :allow-unset="allowUnset"
+    allow-unset
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
@@ -47,7 +47,7 @@
     :model-value="modelValue"
     :file-extensions="fileExtensions"
     :placeholder="placeholder"
-    :allow-unset="allowUnset"
+    allow-unset
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
@@ -55,7 +55,7 @@
     v-else-if="type === 'string'"
     :model-value="modelValue"
     :placeholder="placeholder"
-    :allow-unset="allowUnset"
+    allow-unset
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
@@ -63,7 +63,7 @@
     v-else-if="type === 'date'"
     :model-value="modelValue"
     :placeholder="placeholder"
-    :allow-unset="allowUnset"
+    allow-unset
     :date-storage-format="dateFormat"
     :date-min="dateMin"
     :date-max="dateMax"
@@ -74,7 +74,7 @@
     v-else
     :model-value="modelValue"
     :placeholder="placeholder"
-    :allow-unset="allowUnset"
+    allow-unset
     @update:model-value="$emit('update:modelValue', $event)"
   />
 </template>
@@ -99,7 +99,6 @@ defineProps<{
   max?: number;
   placeholder?: string;
   fileExtensions?: string[];
-  allowUnset?: boolean;
   /** date 类型：dayjs 格式，写入 vars 的字符串形态 */
   dateFormat?: string;
   /** date 类型：可选最早/最晚日（YYYY-MM-DD） */

@@ -11,7 +11,7 @@
   <!-- 选项少时用分段器：一眼看全部选项，省一次点击展开 -->
   <KbSegmentedControl
     v-else-if="normalizedOptions.length > 0 && normalizedOptions.length <= 4"
-    :model-value="valueForSelect ?? ''"
+    :model-value="valueForSelect ?? SEGMENT_NONE"
     :options="normalizedOptions"
     @update:model-value="$emit('update:modelValue', $event)"
   />
@@ -20,11 +20,13 @@
     :model-value="valueForSelect"
     :placeholder="placeholder"
     :clearable="allowUnset"
+    :empty-values="[undefined, null]"
     :filterable="normalizedOptions.length >= 9"
     style="width: 100%"
     :title="selectedLabel || placeholder"
     @update:model-value="$emit('update:modelValue', $event)"
   >
+    <!-- 插件 options 声明的 variable "" 是合法取值（如「全部」）；empty-values 去掉 ""，否则会被当成未选显示占位 -->
     <!-- 下拉宽度已统一为输入框宽度，长文案会被 ellipsis 截断；补原生 title 让鼠标能看全 -->
     <el-option
       v-for="opt in normalizedOptions"
@@ -43,6 +45,9 @@ import AndroidPickerSelect from "../../AndroidPickerSelect.vue";
 import KbSegmentedControl from "./KbSegmentedControl.vue";
 
 const isCompact = computed(() => useUiStore().isCompact);
+
+/** 分段器「未选」占位：不能用 ""，那是插件可声明的合法选项值 */
+const SEGMENT_NONE = "\u0000kb-segment-none";
 
 type VarOption = string | { name: string | Record<string, string>; variable: string };
 
@@ -74,7 +79,8 @@ const normalizedOptions = computed(() => {
       if (typeof o === "string") return { label: o, value: o };
       return { label: optionLabel(o), value: o.variable };
     })
-    .filter((o) => typeof o.value === "string" && o.value.trim() !== "");
+    // 保留 variable 为 "" 的选项：它是插件声明的合法值，空值语义由 null / undefined 表达
+    .filter((o) => typeof o.value === "string");
 });
 
 const valueForSelect = computed<string | undefined>(() => {

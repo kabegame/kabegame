@@ -1,7 +1,8 @@
 import { unref } from "vue";
 import { resolveConfigText, i18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
-import { validateVarValue, type PluginVarDef } from "@/utils/pluginVarForm";
+import { isRequired, validateVarValue, type PluginVarDef } from "@/utils/pluginVarForm";
+import { visibleVarDefs } from "@/utils/pluginVarWhen";
 
 export interface ConfigCompatibility {
   versionCompatible: boolean; // 第一步：插件是否存在
@@ -9,10 +10,6 @@ export interface ConfigCompatibility {
   versionReason?: string;
   contentErrors: string[]; // 内容不兼容的具体错误
   warnings: string[]; // 警告信息（如字段已删除但不算严重错误）
-}
-
-function isRequiredVar(varDef: { default?: any }) {
-  return varDef.default === undefined || varDef.default === null;
 }
 
 /** 校验插件推荐配置的 userConfig 是否与当前插件变量定义兼容（导入前调用） */
@@ -46,18 +43,17 @@ export async function checkRecommendedPresetCompatibility(
         result.warnings.push(`字段 "${key}" 已在新版本中删除`);
         continue;
       }
+      if (value === null && !isRequired(varDef)) continue;
       const validation = validateVarValue(value, varDef);
       if (!validation.valid) {
         result.contentCompatible = false;
         result.contentErrors.push(`${resolveConfigText(varDef.name, locale)} (${key}): ${validation.error}`);
       }
     }
-    for (const varDef of vars) {
-      if (!(varDef.key in uc)) {
-        if (isRequiredVar(varDef)) {
-          result.contentCompatible = false;
-          result.contentErrors.push(`缺少必填字段: ${resolveConfigText(varDef.name, locale)} (${varDef.key})`);
-        }
+    for (const varDef of visibleVarDefs(vars, uc)) {
+      if (isRequired(varDef) && (!(varDef.key in uc) || uc[varDef.key] === null)) {
+        result.contentCompatible = false;
+        result.contentErrors.push(`缺少必填字段: ${resolveConfigText(varDef.name, locale)} (${varDef.key})`);
       }
     }
   } catch {

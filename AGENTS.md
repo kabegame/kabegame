@@ -19,25 +19,31 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 ### 单体仓库布局
 - `apps/kabegame/` — Vue 3 前端（Vite、Pinia、UnoCSS、自有组件库）
-- `packages/kabegame-element-plus/`、`packages/kabegame-element-plus-icons/` — vendored 的 element-plus 与图标，作为**自有组件库**的 fork 维护（见下文）
-- `packages/` — 共享前端包（`core`、`i18n`、`image-type`）
+- `packages/` — 共享前端包、自有组件库、插件开发子仓库与生成型包；详见 [packages/AGENTS.md](packages/AGENTS.md)
 - `src-tauri/kabegame-core/` — `kabegame-core`：共享 Rust 库（爬虫引擎、插件系统、存储）
 - `src-tauri/kabegame/` — Tauri GUI 应用（桌面端 + Android）
 - `src-tauri/kabegame-cli/` — 无界面 CLI
 - `src-tauri-plugins/` — 自定义 Tauri 插件（picker、pathes、share、compress、wallpaper、task-notification）
-- `src-crawler-plugins/` — 打包为 `.kgpg` 归档的 JS/TS 爬虫插件（V8 后端）
-- `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块干净且接近上游
+- `src-crawler-plugins/` — JS/TS 爬虫插件子仓库，一个单独的 pnpm workspace 根
+- `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块gitlink指向上游，但运行时附带仓库的补丁
 
 ### 关键架构规则
-**进程模型**——核心业务、Storage、Provider、任务调度和事件广播都由 `kabegame` 主应用进程持有；HTTP、Tauri、Web JSON-RPC 与应用 IPC 只是协议入口，并复用共享命令层。桌面端可选的应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。外部集成通过应用 IPC 连接主程序；`kabegame-cli` 碰数据库或主程序运行时状态的操作优先经应用 IPC 交给主程序，主程序未运行、协议不兼容或数据目录不同时才在自身进程内初始化，可用 `--via auto|app|local` 控制。`pathql query` 是只读例外：它忽略 `--via`，总在 CLI 本进程以不迁移的只读 Storage 执行。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
+**进程模型**——Kabegame 运行时涉及以下进程：
 
-**数据库连接模型**——PathQL 查询统一走只读连接池；写操作和 Storage 自身方法继续走单条写连接。写方法必须在事务提交或自动提交完成后才发送数据变更事件，保证事件触发的 PathQL 重读能看到对应写入。Storage 在进程内第一条 SQLite 连接打开前关闭全局内存统计（`SQLITE_CONFIG_MEMSTATUS`），否则多连接并发查询会在全局分配锁上互相拖慢——不要在 Storage 初始化之前打开别的 SQLite 连接。
+| 进程 | 平台 | 职责 |
+|---|---|---|
+| `kabegame`（主应用） | 全平台 | **唯一的业务状态属主**：Storage、PathQL 查询引擎、任务调度（V8 插件在本进程内每任务独占线程运行）、事件广播、虚拟盘挂载（Dokan / FUSE 在进程内）。桌面端同时是 CEF browser 进程，并开 app IPC 服务端（Windows named pipe / Unix socket）与可选的应用 Web 服务器。启动时若检测到同数据目录已有实例，经 IPC 转发「显示窗口」/「导入 `.kgpg`」后立即退出 |
+| `kabegame-cef-helper` | 桌面 standard | CEF 子进程，全部是主进程的直接子进程，由 `browser_subprocess_path` 派生、`--type=` 区分角色：`gpu-process`、`utility`（NetworkService / StorageService，按需再起 AudioService / VideoCaptureService 等）、`renderer`（每个 browser / 站点一个），**不持有任何业务状态**。CEF profile 目录 dev 为 `~/.cache/kabegame-cef-dev`、prod 为 `~/.cache/kabegame-cef`，所以 dev 与已安装版可同时运行、各带一套 helper。主界面、畅游窗口、WebView 爬虫任务窗口（`crawler-<task_id>`）都是主进程里的 CEF browser，页面跑在 helper renderer 中，经 Tauri IPC 回到主进程。位于 exe 旁（Linux release 为 `/usr/lib/kabegame/`）；Linux 禁用 zygote，每个 renderer 独立启动 helper |
+| `kabegame-cli` | 桌面 | 独立进程。碰数据库或主程序运行时状态的操作优先经 app IPC 交给主程序；主程序未运行、协议不兼容或数据目录不同时才在本进程初始化，可用 `--via auto\|app\|local` 控制。`pathql query` 是只读例外：忽略 `--via`，总在本进程以不迁移的只读 Storage 执行 |
+| 外部集成 | 桌面 | 通过 app IPC 或应用 Web 服务器（JSON-RPC / SSE / 媒体 / MCP）连接主程序，不直接碰数据库 |
 
-**路径逻辑归属于 `tauri-plugin-pathes`**——所有路径/目录计算都必须放在 `src-tauri-plugins/tauri-plugin-pathes/` 中。其他模块通过 `AppPaths` 调用；切勿在其他位置硬编码或重新计算路径。
+形态差异：**Web 版**的 `kabegame` 以 `web` feature 构建为无 Tauri、无 CEF 的控制台服务器进程，浏览器即前端；**Android** 只有一个 app 进程（系统 WebView 的渲染进程由系统管理），不开 app IPC 服务端，也没有 CLI。
 
-**第三方补丁序列**——Kabegame 对 vendored `third/` 仓库的改动应放在对应的 `third-patches/<dir>/NNNN-*.patch` 文件中。对于由补丁管理器管理的仓库，`deno task patch <dir>` 会将子模块重置到干净的锁定基线，然后按文件名排序应用完整补丁序列；`deno task patch <dir> -r` 会执行重置，但不应用补丁。因为每次操作都从基线开始，所以可以修改、删除或重新编号补丁文件。`--check` 会在一次性 worktree 中预检按顺序排列的补丁序列。重置会丢弃子模块中未提交的工作，因此请先将本地 `third/` 开发内容提交到分支。`rusty_v8` 是唯一的手动例外（它是原地复用的大型构建树，补丁由 `scripts/build-v8.ts` 应用），详见 `.cursor/rules/third-patches-workflow.mdc`。`cef` 遵循标准流程——`automate-git.py` 只认可提交，但 `scripts/build-chromium.ts` 会自动将应用补丁后的 worktree 暂存到 `kabegame-build` 分支，因此 `third/cef` 的 gitlink 始终指向官方上游锁定点。
+主进程内部，HTTP、Tauri、Web JSON-RPC 与 app IPC 只是协议入口，统一复用共享命令层，不建立平行业务后端；桌面端应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
-**脚本仓库路径**——`scripts/paths.ts` 是 `ROOT`、`THIRD_DIR`、宿主架构及 `bin/{platform}/{arch}/{repo}-build` 这些内容的轻依赖唯一事实来源；`scripts/utils.ts` 重新导出这些符号以保持现有导入界面，构建插件不得自行重新计算。
+**第三方补丁序列**——工作流与目录级约束见 [third-patches/AGENTS.md](third-patches/AGENTS.md)。
+
+**组件库与 packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。
 
 **文件类型的唯一事实来源：**
 - `kabegame_core::media::image_type::MEDIA_FORMATS` 是唯一的格式表，包含格式键、标准 MIME 值、扩展名、别名和支持标志。`images.type` 存储 `image/jpg` 和 `video/mov` 等格式键；仅在需要标准 MIME 的边界（HTTP Content-Type / Android MediaStore）使用 `mime_from_format`。
@@ -57,18 +63,6 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 **Android 模态层**——所有覆盖层（对话框、抽屉、ActionSheet、预览）都必须调用 `@/composables/useModalBack` 中的 `useModalBack(visibleRef)`，以便 Android 返回键按堆栈顺序关闭各层。该 composable 在桌面端为空操作；无论平台如何，都应在所有相关位置使用它。
 
-### 组件库——fork 自 element-plus
-本仓**不再依赖 npm 的 `element-plus` / `@element-plus/icons-vue`**，两者已 vendor 成自有组件库并 fork 维护（不跟上游）。**不要从 `"element-plus"` 导入任何东西**：
-
-```ts
-import { ElButton, ElMessageBox } from "@kabegame/element-plus";
-import { ArrowLeft } from "@kabegame/element-plus-icons";
-```
-
-类名前缀目前仍是 `el-`（namespace 开关未翻），但**不要按「第三方库覆盖」的思路加 hack CSS**——给组件加主题一律下沉到 `packages/kabegame-element-plus/src/theme-chalk/src/common/var.scss` 的 token map（方向恒为 `--kb-el-* ← --anime-*`），而不是在业务侧写 `.el-xxx { ... }`。新写的通用组件可以直接进 vendored 包（`KbTab` 已取代删掉的 `ElTabs`）。
-
-接线有三处必须同步：vite alias、根与 `apps/kabegame` 的 tsconfig `paths`（app 的是**整体覆盖**不合并）、web 的 `manualChunks`。改任何前端组件或样式前先读 `cocs/ui/COMPONENT_LIBRARY.md`。
-
 ### 样式
 新样式应使用 **UnoCSS 工具类**（在 `uno.config.pub.ts` 和 `apps/kabegame/uno.config.ts` 中配置，使用 `presetWind3`——兼容 Tailwind 语法）。仅为复杂动画或第三方覆盖编写 `<style>` 块。将重复的类组合提取为 `uno.config.*.ts` 中的快捷方式。
 
@@ -76,7 +70,6 @@ import { ArrowLeft } from "@kabegame/element-plus-icons";
 - **Windows/macOS/Linux**：使用虚拟磁盘（Dokan / macFUSE / FUSE）挂载图库
 - **Windows/macOS/Linux 标准版**：使用 CEF runtime 后端。三个平台都会在构建时链接 CEF，并通过 exe 旁边的扁平 `kabegame-cef-helper` 启动子进程（macOS 开发模式运行裸可执行文件；release 包通过 `macOS.frameworks` 嵌入 framework，通过 `macOS.files` 嵌入 helper）。
 - **Android 身份分离**：identifier（applicationId）按模式区分——dev 为 `app.kabegame.dev`，prod 为 `app.kabegame`（可并排安装）——而 Java package/源码树保持固定为 `app.kabegame`（`namespace`）。该能力由 fork 版 `cargo-tauri` 实现（上游 Tauri monorepo 位于 `third/tauri`，由 `third-patches/tauri` 修补——请先运行 `deno task patch tauri`；遵循 `TAURI_ANDROID_PACKAGE`；从 `crates/tauri-cli` 构建，并由 `TauriCliPlugin` 注入 PATH）。绝不要从 identifier 重新推导 Kotlin package 名。参见 `cocs/tauri/TAURI_CLI_FORK.md`。
-- **iOS**：不支持——不要添加 iOS 适配
 
 ### 爬虫插件开发
 插件是 JS/TS 脚本（V8 后端，自包含 ES 模块 `export async function crawl`），打包为 `.kgpg` ZIP 归档。参见 `docs/PLUGIN_FORMAT.md` 和 `cocs/crawler/V8_RUNTIME.md`。新写或修改插件**用 `kabegame-plugin` skill**（`.claude/skills/kabegame-plugin/`）：先用探针逐环实测「页面 → 结构 → 媒体」链路，再写代码，V8 插件打包到 dev 插件目录后由 release CLI `plugin run <kgpg> --id <测试id>` 直接验证，WebView 插件在 dev app 内经 CDP 验证。使用以下命令构建：
@@ -183,24 +176,11 @@ ModePlugin 注入的环境变量算出，测试环境必须与应用一致，不
 ### 其他
 ```bash
 deno task format                 # Prettier 格式化前端源码（apps/ 与 packages/ 的代码文件）
-                                 # 配置：根目录 .prettierrc.json（printWidth 120、双引号、分号、
-                                 # 2 空格、尾逗号 all、LF、htmlWhitespaceSensitivity=ignore）。
-                                 # 排除（见 .prettierignore）：3 个 submodule（plugin-sdk /
-                                 # kabegame-types / photoswipe-vue，格式化会污染独立仓库）、
-                                 # 2 个 vendored fork（element-plus / element-plus-icons）、
-                                 # 生成物 pathql-client/index.ts；*.md 不在范围内。
-                                 # 模板里需要紧贴的拼接用精确的 <!-- prettier-ignore --> 钉住。
-                                 # 不挂 pre-commit 钩子，属显式动作。规则见
-                                 # .cursor/rules/code-formatting.mdc
+                                 # 规则见 .cursor/rules/code-formatting.mdc；packages 范围与排除项
+                                 # 见 packages/AGENTS.md
 deno task format:check           # 同上但只检查不写入（prettier --check），退出码非 0 即有文件不合规
-deno task set-version            # 在整个 workspace 中更新版本号
 deno task pathql:generate        # 生成 PathQL 客户端 packages/kabegame-pathql-client/index.ts
-                                 # (deno TS 脚本 scripts/generate-pathql-client.ts:默认先增量
-                                 # 构建 debug kabegame-cli 再 pathql generate,--skip-build 用现有
-                                 # 二进制)。包是 workspace 成员:外壳 package.json 入库、可被
-                                 # 安装(@kabegame/pathql-client),index.ts 为生成物不入库;
-                                 # 新 checkout / 修改 DSL 后需先生成,否则前端 vue-tsc / vite
-                                 # 构建会因缺文件明确报错
+                                 # 生成方式与入库边界见 packages/AGENTS.md
 deno task patch deno             # 将 third/deno 重置到干净基线，然后应用完整补丁序列
 deno task patch deno -r          # 将 third/deno 重置到干净基线
 deno task patch --all --check    # 试运行所有由补丁管理器管理的 third-patches/* 序列
@@ -225,8 +205,6 @@ deno task build:ffmpeg --target android  # 通过环境中的 NDK（NDK_HOME 等
                                  # 输出到已被 git 忽略的 bin/android/arm64/FFmpeg-build/（可通过
                                  # 命令重现，不提交）。执行 Android Cargo 构建/检查前必须先运行此命令。
 ```
-
-Deno CLI 一律使用官方二进制, `third-patches/deno/` 只补应用通过 Cargo 消费的 `libs/core`，与 CLI 行为无关。
 
 ### 验证流程
 **不要运行 `cargo build` / `tauri build` / `deno task b` 来验证改动**——应调用 **`check-kabegame` skill**（`.claude/skills/check-kabegame/driver.sh`，可使用 `--skip vue` / `--skip cargo` 缩小范围）。对于小型改动，编辑器 lint 诊断同样有效。仅在用户明确要求时才进行构建。注意：应用实例运行时，`check` 会以 `os error 32` 失败（`cef-dll-sys` 的构建脚本会将 CEF runtime 复制到 `target/`）——请先终止 `kabegame.exe`。规则见 `.cursor/rules/verify-by-lint.mdc`。
@@ -265,8 +243,11 @@ struct Foo {
 }
 ```
 ````
-在进行更改后要把回归补充到 @versions/vX.X.X/regression.md，格式参考 [最新版本回归](./versions/latest/regression.md). 
-用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序，在需要的时候。
+对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行 [changlog](versions/latest/changelog.md)
+
+对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本。
+
+在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序。
 
 ## 语言规范
 所有与用户的交流均使用简体中文。

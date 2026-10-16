@@ -195,7 +195,7 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { usePluginConfig } from "@/composables/usePluginConfig";
-import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "@/utils/pluginVarWhen";
+import { coerceOptionsVarsToVisibleChoices, visibleVarDefs } from "@/utils/pluginVarWhen";
 import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/utils/pluginVarForm";
 import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
@@ -295,9 +295,7 @@ const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   return 60;
 };
 
-const visiblePluginVars = computed(() =>
-  pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
-);
+const visiblePluginVars = computed(() => visibleVarDefs(pluginVars.value as PluginVarDef[], form.value.vars));
 
 watch(
   () => form.value.vars,
@@ -637,7 +635,11 @@ const handleSave = async () => {
     }
   }
 
-  const userConfig = expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[]);
+  const visible = visiblePluginVars.value;
+  const userConfig = expandVarsForBackend(
+    Object.fromEntries(visible.map((def) => [def.key, form.value.vars[def.key]])),
+    visible,
+  );
   const schedule = buildScheduleFields();
   const payload = {
     name: name.value.trim(),

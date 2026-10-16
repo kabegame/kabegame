@@ -15,6 +15,23 @@ export function matchesPluginVarWhen(
 }
 
 /**
+ * 从全部字段可见开始迭代删除不满足 `when` 的字段，直到稳定。
+ * 已隐藏字段不再参与依赖值视图，因此多级 when 会沿依赖链继续隐藏。
+ */
+export function visibleVarDefs(defs: PluginVarDef[], vars: Record<string, any>): PluginVarDef[] {
+  const visible = new Set(defs.map((def) => def.key));
+  while (true) {
+    const visibleValues = Object.fromEntries(
+      Object.entries(vars ?? {}).filter(([key]) => visible.has(key)),
+    );
+    const hidden = defs.filter((def) => visible.has(def.key) && !matchesPluginVarWhen(def.when, visibleValues));
+    if (hidden.length === 0) break;
+    for (const def of hidden) visible.delete(def.key);
+  }
+  return defs.filter((def) => visible.has(def.key));
+}
+
+/**
  * 按选项自身的 `when`（与字段级 when 语义相同）过滤 options/checkbox 等待选项列表。
  * 无 `when` 的选项始终显示；字符串选项无 when，始终保留。
  */
@@ -35,7 +52,7 @@ export function coerceOptionsVarsToVisibleChoices(defs: Array<PluginVarDef>, var
     if (def.type !== "options" || !def.options || !Array.isArray(def.options)) continue;
     if (!matchesPluginVarWhen(def.when, vars)) continue;
     const filtered = filterVarOptionsByWhen(def.options, vars);
-    const allowed = filtered.map((o) => (typeof o === "string" ? o : (o.variable ?? ""))).filter((s) => s !== "");
+    const allowed = filtered.map((o) => (typeof o === "string" ? o : (o.variable ?? "")));
     if (allowed.length === 0) continue;
     const cur = vars[def.key];
     if (typeof cur !== "string") continue;

@@ -37,6 +37,7 @@ pub(super) fn var_defs() -> Vec<VarDefinition> {
         {
             "key": "url",
             "type": "string",
+            "required": true,
             "name": "Full URL",
             "name.zh": "完整 URL",
             "name.zhtw": "完整 URL",

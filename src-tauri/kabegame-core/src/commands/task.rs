@@ -99,11 +99,9 @@ pub async fn run_plugin(
     }
 
     let saved = pm
-        .read_plugin_default_config_file(&plugin.id)
-        .ok()
-        .flatten()
+        .read_plugin_default_config_file(&plugin.id)?
         .unwrap_or(Value::Null);
-    let mut user_config: HashMap<String, Value> = saved
+    let user_default: HashMap<String, Value> = saved
         .get("userConfig")
         .and_then(Value::as_object)
         .map(|values| values.clone().into_iter().collect())
@@ -130,11 +128,12 @@ pub async fn run_plugin(
             .map(str::to_string)
     });
 
-    user_config.extend(parse_plugin_args_to_user_config(&var_defs, &p.args)?);
+    let user_config = parse_plugin_args_to_user_config(&var_defs, &p.args)?;
     let effective = crate::crawler::task_scheduler::build_effective_user_config_from_var_defs(
         &var_defs,
-        user_config,
-    );
+        user_config.clone(),
+        Some(&user_default),
+    )?;
     let config = effective.clone().into_iter().collect::<BTreeMap<_, _>>();
     let plugin_file_path = plugin_file_path.map(|path| path.to_string_lossy().into_owned());
 
@@ -151,7 +150,7 @@ pub async fn run_plugin(
 
     let mut params = serde_json::json!({
         "pluginId": plugin.id,
-        "userConfig": effective,
+        "userConfig": user_config,
         "triggerSource": "cli",
     });
     if let Some(path) = plugin_file_path.as_ref() {
@@ -187,33 +186,87 @@ fn parse_plugin_args_to_user_config(
 ) -> Result<HashMap<String, Value>, String> {
     fn parse_one(def: &VarDefinition, raw: &str) -> Result<Value, String> {
         match def.var_type.trim().to_ascii_lowercase().as_str() {
-            "int" => raw
-                .trim()
-                .parse::<i64>()
-                .map(Value::from)
-                .map_err(|e| format!("参数 {} 解析为 int 失败: {raw} ({e})", def.key)),
-            "float" => raw
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .and_then(serde_json::Number::from_f64)
-                .map(Value::Number)
-                .ok_or_else(|| format!("参数 {} 解析为 float 失败: {raw}", def.key)),
+            "int" => {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    return Ok(Value::Null);
+                }
+                raw.parse::<i64>()
+                    .map(Value::from)
+                    .map_err(|e| format!("参数 {} 解析为 int 失败: {raw} ({e})", def.key))
+            }
+            "float" => {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    return Ok(Value::Null);
+                }
+                raw.parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                    .map(Value::Number)
+                    .ok_or_else(|| format!("参数 {} 解析为 float 失败: {raw}", def.key))
+            }
             "boolean" => {
-                let value = match raw.trim().to_ascii_lowercase().as_str() {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    return Ok(Value::Null);
+                }
+                let value = match raw.to_ascii_lowercase().as_str() {
                     "1" | "true" | "yes" | "y" | "on" => true,
                     "0" | "false" | "no" | "n" | "off" => false,
                     _ => return Err(format!("参数 {} 解析为 boolean 失败: {raw}", def.key)),
                 };
                 Ok(Value::Bool(value))
             }
-            "list" => Ok(Value::Array(
-                raw.split(',')
+            "list" => {
+                let values = raw
+                    .split(',')
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(|value| Value::String(value.to_string()))
-                    .collect(),
-            )),
+                    .collect::<Vec<_>>();
+                Ok(if values.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Array(values)
+                })
+            }
+            "checkbox" => {
+                let selected = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>();
+                if selected.is_empty() {
+                    return Ok(Value::Null);
+                }
+                let variables = def
+                    .options
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|option| match option {
+                        VarOption::String(value) => value.as_str(),
+                        VarOption::Item { variable, .. } => variable.as_str(),
+                    })
+                    .collect::<Vec<_>>();
+                for value in &selected {
+                    if !variables.contains(value) {
+                        return Err(format!("参数 {} 包含未知 checkbox 选项: {value}", def.key));
+                    }
+                }
+                Ok(Value::Object(
+                    variables
+                        .into_iter()
+                        .map(|variable| {
+                            (
+                                variable.to_string(),
+                                Value::Bool(selected.contains(&variable)),
+                            )
+                        })
+                        .collect(),
+                ))
+            }
             "options" => {
                 let raw = raw.trim();
                 if let Some(options) = def.options.as_ref() {
@@ -231,9 +284,20 @@ fn parse_plugin_args_to_user_config(
                         }
                     }
                 }
-                Ok(Value::String(raw.to_string()))
+                if raw.is_empty() {
+                    Ok(Value::Null)
+                } else {
+                    Err(format!("参数 {} 不是有效 option: {raw}", def.key))
+                }
             }
-            _ => Ok(Value::String(raw.trim().to_string())),
+            _ => {
+                let raw = raw.trim();
+                Ok(if raw.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(raw.to_string())
+                })
+            }
         }
     }
 
@@ -338,10 +402,27 @@ pub async fn start_task(task: Value) -> Result<String, String> {
 
     let p: StartTaskParams = serde_json::from_value(task).map_err(|e| e.to_string())?;
     let max_concurrent_downloads = validate_task_max_downloads(p.max_concurrent_downloads)?;
+    let plugin_manager = PluginManager::global();
+    let (plugin, _) = plugin_manager
+        .resolve_plugin_for_task_request(&p.plugin_id, p.plugin_file_path.as_deref())
+        .await?;
+    let saved = plugin_manager
+        .read_plugin_default_config_file(&plugin.id)?
+        .unwrap_or(Value::Null);
+    let user_default = saved
+        .get("userConfig")
+        .and_then(Value::as_object)
+        .map(|values| values.clone().into_iter().collect::<HashMap<_, _>>())
+        .unwrap_or_default();
+    let effective = crate::crawler::task_scheduler::build_effective_user_config_from_var_defs(
+        &plugin.var_defs,
+        p.user_config.clone().unwrap_or_default(),
+        Some(&user_default),
+    )?;
     // 网页收集：前端校验之外必须再校验一次，非法直接拒绝，不创建任务记录
     if p.plugin_id == crate::plugin::webpage::WEBPAGE_PLUGIN_ID {
         crate::crawler::webpage::validate_submission(
-            p.user_config.as_ref(),
+            Some(&effective),
             p.http_headers.as_ref(),
         )?;
     }
@@ -359,7 +440,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         id: task_id.clone(),
         plugin_id: p.plugin_id,
         output_dir,
-        user_config: p.user_config,
+        user_config: Some(effective),
         http_headers: p.http_headers,
         output_album_id: p.output_album_id,
         run_config_id: p.run_config_id,
@@ -588,6 +669,55 @@ mod tests {
         let values = parse_plugin_args_to_user_config(&defs, &["quality=高清".to_string()])
             .expect("parse option");
         assert_eq!(values.get("quality"), Some(&serde_json::json!("high")));
+    }
+
+    #[test]
+    fn plugin_args_empty_values_become_null_except_declared_empty_option() {
+        let defs = vec![
+            var(serde_json::json!({"key": "tag", "type": "string", "name": "Tag"})),
+            var(serde_json::json!({"key": "items", "type": "list", "name": "Items"})),
+            var(serde_json::json!({
+                "key": "option", "type": "options", "name": "Option",
+                "options": [{"name": "Any", "variable": ""}]
+            })),
+        ];
+        let values = parse_plugin_args_to_user_config(
+            &defs,
+            &["tag=".to_string(), "items=,,".to_string(), "option=".to_string()],
+        )
+        .unwrap();
+        assert_eq!(values["tag"], Value::Null);
+        assert_eq!(values["items"], Value::Null);
+        assert_eq!(values["option"], serde_json::json!(""));
+    }
+
+    #[test]
+    fn plugin_args_checkbox_produces_complete_object_and_rejects_unknown_option() {
+        let defs = vec![var(serde_json::json!({
+            "key": "kinds", "type": "checkbox", "name": "Kinds", "options": ["a", "b", "c"]
+        }))];
+        let values = parse_plugin_args_to_user_config(&defs, &["kinds=a,c".to_string()]).unwrap();
+        assert_eq!(
+            values["kinds"],
+            serde_json::json!({"a": true, "b": false, "c": true})
+        );
+        assert_eq!(
+            parse_plugin_args_to_user_config(&defs, &["kinds=".to_string()]).unwrap()["kinds"],
+            Value::Null
+        );
+        assert!(parse_plugin_args_to_user_config(&defs, &["kinds=x".to_string()])
+            .unwrap_err()
+            .contains("未知 checkbox 选项"));
+    }
+
+    #[test]
+    fn plugin_args_reject_unknown_option_value() {
+        let defs = vec![var(serde_json::json!({
+            "key": "quality", "type": "options", "name": "Quality", "options": ["high"]
+        }))];
+        assert!(parse_plugin_args_to_user_config(&defs, &["quality=low".to_string()])
+            .unwrap_err()
+            .contains("不是有效 option"));
     }
 
     #[test]

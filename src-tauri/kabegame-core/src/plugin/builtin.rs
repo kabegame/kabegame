@@ -1,6 +1,7 @@
 use super::webpage::{self, WEBPAGE_PLUGIN_ID};
 use super::{
-    pack_plugin_version, var_definition_to_frontend_value, Plugin, PluginBackend, PluginScript,
+    pack_plugin_version, validate_var_defs, var_definition_to_frontend_value, Plugin, PluginBackend,
+    PluginScript,
 };
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -18,6 +19,34 @@ const BUILTIN_PLUGIN_VERSION: &str = "1.0.0";
 pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
     static BUILTIN_PLUGINS: OnceLock<HashMap<String, Arc<Plugin>>> = OnceLock::new();
     BUILTIN_PLUGINS.get_or_init(|| {
+        let local_import_var_defs: Vec<super::VarDefinition> = serde_json::from_value(json!([
+            {
+                "key": "paths",
+                "type": "list",
+                "required": true,
+                "name": "Path list",
+                "name.zh": "路径列表",
+                "name.zhtw": "路徑列表",
+                "name.ja": "パス一覧",
+                "name.ko": "경로 목록"
+            },
+            {
+                "key": "recursive",
+                "type": "boolean",
+                "default": true,
+                "name": "Recurse subfolders",
+                "name.zh": "递归子文件夹",
+                "name.zhtw": "遞迴子資料夾",
+                "name.ja": "サブフォルダを再帰",
+                "name.ko": "하위 폴더 재귀"
+            }
+        ]))
+        .expect("local-import 内建插件变量定义必须合法");
+        validate_var_defs(&local_import_var_defs).expect("local-import 内建插件变量定义校验失败");
+        let local_import_vars = local_import_var_defs
+            .iter()
+            .map(var_definition_to_frontend_value)
+            .collect();
         let local_import = builtin_plugin(
             LOCAL_FOLDER_PLUGIN_ID,
             json!({
@@ -34,36 +63,13 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
                 "ja": "ローカルフォルダから画像と動画をインポート",
                 "ko": "로컬 폴더에서 이미지와 동영상을 가져오기",
             }),
-            HashMap::from([(
-                "vars".to_string(),
-                json!([
-                    {
-                        "key": "paths",
-                        "name": {
-                            "default": "Path list",
-                            "zh": "路径列表",
-                            "zhtw": "路徑列表",
-                            "ja": "パス一覧",
-                            "ko": "경로 목록",
-                        },
-                    },
-                    {
-                        "key": "recursive",
-                        "name": {
-                            "default": "Recurse subfolders",
-                            "zh": "递归子文件夹",
-                            "zhtw": "遞迴子資料夾",
-                            "ja": "サブフォルダを再帰",
-                            "ko": "하위 폴더 재귀",
-                        },
-                    },
-                ]),
-            )]),
-            Vec::new(),
+            HashMap::from([("vars".to_string(), Value::Array(local_import_vars))]),
+            local_import_var_defs,
             String::new(),
         );
 
         let webpage_var_defs = webpage::var_defs();
+        validate_var_defs(&webpage_var_defs).expect("webpage 内建插件变量定义校验失败");
         let webpage_vars: Vec<Value> = webpage_var_defs
             .iter()
             .map(var_definition_to_frontend_value)
@@ -177,5 +183,14 @@ mod tests {
         assert_eq!(vars[2]["default"], true);
         assert_eq!(vars[3]["default"], true);
         assert_eq!(vars[2]["when"]["backend"][0], "v8");
+    }
+
+    #[test]
+    fn builtin_var_defs_are_valid() {
+        for plugin in builtin_plugins().values() {
+            validate_var_defs(&plugin.var_defs).unwrap();
+        }
+        let local = builtin_plugins().get(LOCAL_FOLDER_PLUGIN_ID).unwrap();
+        assert!(local.var_defs[0].required);
     }
 }

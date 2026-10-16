@@ -77,7 +77,6 @@ Android 的省电策略会冻结后台应用，导致下载停滞或轮播失效
 | 开机自启 / 全局快捷键 | 平台不允许，相关设置项隐藏。 |
 | CLI（`kabegame-cli`） | 不随 APK 打包。 |
 | MCP 服务器 / HTTP 文件服务 / IPC 服务 | 全部在 Android 构建中被禁用。 |
-| Wallpaper Engine 导出 | Wallpaper Engine 无 Android 版，菜单项仅 Windows 可见。 |
 | 拖拽导入（文件/文件夹/zip） | 只能通过「开始收集 → 本地」的系统选择器导入。 |
 | 打开所在文件夹 | Android 没有文件管理器定位的通用机制，菜单项隐藏。 |
 | WebView 相关设置 | WebView 入口、自动打开、开发者 WebView 等选项全部隐藏。 |
@@ -94,7 +93,6 @@ Android 的省电策略会冻结后台应用，导致下载停滞或轮播失效
 | 分享 sheet | ✗ | ✗ | ✗ | ✓ |
 | 复制图片到系统剪贴板 | ✓ | ✓ | ✓ | ✓（通过 URI） |
 | 设为壁纸 | ✓ | ✓ | ✓ | ✓（仅 `fill`） |
-| Wallpaper Engine 导出 | ✓ | ✗ | ✗ | ✗ |
 | 壁纸轮播 | ✓ | ✓ | ✓ | ✓（最小 15 分钟） |
 | 虚拟盘 / 画册盘 | ✓（Dokan） | ✓（macFUSE） | ✓（FUSE） | ✗ |
 | 系统托盘 | ✓ | ✓ | ✓ | ✗ |
@@ -123,5 +121,5 @@ Android 的省电策略会冻结后台应用，导致下载停滞或轮播失效
 ## 延伸阅读
 
 - [画廊](/guide/gallery/) — 导入与浏览流程的完整说明。
-- [壁纸](/guide/wallpaper/) — 桌面端壁纸与 Wallpaper Engine 集成。
+- [壁纸](/guide/wallpaper/) — 桌面端壁纸、轮播与显示模式。
 - [虚拟盘](/guide/virtual-drive/) — 桌面端专属的画册挂盘能力。

@@ -161,16 +161,25 @@ const useOptionSlot = computed(() => !!slots.option);
 
 const { isOpen, zIndex, open, close } = useModal();
 
+/** 「清除」行的私有值：不能用 ""，那是插件 options 可声明的合法取值 */
+const CLEAR_VALUE = "\u0000kb-picker-clear";
+
+/** 当前值是否对应一个可选中的项（"" 只有被某个选项声明时才算选中） */
+function hasValue(v: string | null | undefined): v is string {
+  if (v === null || v === undefined) return false;
+  return v !== "" || props.options.some((o) => o.value === "");
+}
+
 const displayLabel = computed(() => {
   const v = props.modelValue;
-  if (v === null || v === undefined || v === "") return "";
+  if (!hasValue(v)) return "";
   const opt = props.options.find((o) => o.value === v);
   return opt ? opt.label : v;
 });
 
 const optionsWithClear = computed(() => {
   if (props.clearable) {
-    return [{ label: t("common.selectNone"), value: "" }, ...props.options];
+    return [{ label: t("common.selectNone"), value: CLEAR_VALUE }, ...props.options];
   }
   return props.options;
 });
@@ -186,12 +195,11 @@ const pickerSelectedValues = ref<string[]>([]);
 watch(isOpen, (v) => {
   if (v) {
     const val = props.modelValue;
-    const selected =
-      val !== null && val !== undefined && val !== ""
-        ? val
-        : props.clearable
-          ? ""
-          : (optionsWithClear.value[0]?.value ?? "");
+    const selected = hasValue(val)
+      ? val
+      : props.clearable
+        ? CLEAR_VALUE
+        : (optionsWithClear.value[0]?.value ?? "");
     pickerSelectedValues.value = [selected];
   }
 });
@@ -201,8 +209,7 @@ watch(
   () => {
     if (isOpen.value) {
       const v = props.modelValue;
-      const val =
-        v !== null && v !== undefined && v !== "" ? v : props.clearable ? "" : (optionsWithClear.value[0]?.value ?? "");
+      const val = hasValue(v) ? v : props.clearable ? CLEAR_VALUE : (optionsWithClear.value[0]?.value ?? "");
       pickerSelectedValues.value = [val];
     }
   },
@@ -216,7 +223,7 @@ function onTriggerClick() {
 function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)[] }) {
   close();
   const raw = selectedValues[0];
-  const value = raw === "" || raw === null || raw === undefined ? null : String(raw);
+  const value = raw === CLEAR_VALUE || raw === null || raw === undefined ? null : String(raw);
   emit("update:modelValue", value);
 }
 
@@ -224,7 +231,7 @@ function onSelectOption(opt: AndroidPickerSelectOption) {
   // 受限项（Webview 插件）在移动端不可选，点击无反馈
   if (opt.warning) return;
   close();
-  const value = opt.value === "" || opt.value === null || opt.value === undefined ? null : opt.value;
+  const value = opt.value === CLEAR_VALUE || opt.value === null || opt.value === undefined ? null : opt.value;
   emit("update:modelValue", value);
 }
 </script>

@@ -169,7 +169,8 @@ import ScheduleProgressBar from "./ScheduleProgressBar.vue";
 import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
 import type { RunConfig } from "../../stores/crawler";
-import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
+import type { PluginVarDef } from "../../utils/pluginVarForm";
+import { visibleVarDefs } from "../../utils/pluginVarWhen";
 
 const props = withDefaults(
   defineProps<{
@@ -215,11 +216,11 @@ function getVisibleUserConfigEntries(cfg: RunConfig): [string, any][] {
   const uc = cfg.userConfig;
   if (!uc || typeof uc !== "object") return [];
   const metaForPlugin = varMetaByPluginId.value[cfg.pluginId];
-  const entries = Object.entries(uc).filter(([key]) => {
-    const meta = metaForPlugin?.[key];
-    if (!meta) return true;
-    return matchesPluginVarWhen(meta.when, uc);
-  });
+  const defs = Object.entries(metaForPlugin ?? {}).map(
+    ([key, meta]) => ({ key, type: meta.type ?? "", name: meta.name, when: meta.when }) as PluginVarDef,
+  );
+  const visibleKeys = new Set(visibleVarDefs(defs, uc).map((def) => def.key));
+  const entries = Object.entries(uc).filter(([key]) => !metaForPlugin?.[key] || visibleKeys.has(key));
   if (!metaForPlugin) return entries;
 
   // 按插件 config.vars 定义顺序展示，未知字段追加到末尾

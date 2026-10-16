@@ -13,7 +13,7 @@
       <el-form ref="formRef" :model="form" label-position="top" class="plugin-defaults-form">
         <template v-if="pluginVars.length > 0">
           <el-divider content-position="left">{{ $t("plugins.pluginConfig") }}</el-divider>
-          <PluginVarsForm v-model="form.vars" :plugin-vars="pluginVars" allow-unset-all ignore-when />
+          <PluginVarsForm v-model="form.vars" :plugin-vars="pluginVars" ignore-required ignore-when />
         </template>
 
         <div class="plugin-defaults-actions">

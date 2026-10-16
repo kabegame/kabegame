@@ -105,7 +105,7 @@ import { useUiStore } from "@/stores/ui";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { matchesPluginVarWhen } from "@/utils/pluginVarWhen";
+import { visibleVarDefs as resolveVisibleVarDefs } from "@/utils/pluginVarWhen";
 import { expandVarsForBackend, normalizeVarsForUI, optionValue, type PluginVarDef } from "@/utils/pluginVarForm";
 import { usePluginStore } from "@/stores/plugins";
 import { WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
@@ -158,7 +158,7 @@ const varDefs = computed<PluginVarDef[]>(() => {
 });
 const urlVarDef = computed(() => varDefs.value.find((def) => def.key === "url"));
 const visibleVarDefs = computed(() =>
-  varDefs.value.filter((def) => def.key !== "url" && matchesPluginVarWhen(def.when, form.value.vars)),
+  resolveVisibleVarDefs(varDefs.value, form.value.vars).filter((def) => def.key !== "url"),
 );
 
 const form = ref({ url: "", outputDir: "", vars: {} as Record<string, any> });

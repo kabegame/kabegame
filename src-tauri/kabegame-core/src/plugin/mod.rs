@@ -746,6 +746,8 @@ impl PluginManager {
             None,
             read_kgpg_package_name(zip_path).await?.as_deref(),
         )?;
+        // 复制前完整解析一次：变量定义（尤其是 when 环）不合法时不能把坏包留在插件目录。
+        self.parse_kgpg(zip_path, Some(&plugin_id)).await?;
         let target_path = plugins_dir.join(format!("{plugin_id}.kgpg"));
 
         let source_canon =
@@ -844,11 +846,11 @@ impl PluginManager {
         let user_obj = match vars {
             Some(v) if !v.is_empty() => {
                 let mut m = serde_json::Map::new();
+                // 只写有 default 的键：显式 null 表示「用户清空」，不会再回落；
+                // 无 default 的键缺省即可，合并时自然得到 null（boolean 为 false）。
                 for def in v {
                     if let Some(d) = def.default {
                         m.insert(def.key, d);
-                    } else {
-                        m.insert(def.key, serde_json::Value::Null);
                     }
                 }
                 serde_json::Value::Object(m)
@@ -2199,6 +2201,12 @@ impl PluginManager {
         let providers =
             parse_plugin_provider_entries(&plugin_id, declared_id.as_deref(), provider_entries)?;
 
+        let var_defs = config
+            .as_ref()
+            .and_then(|c| c.var.clone())
+            .unwrap_or_default();
+        validate_var_defs(&var_defs).map_err(|error| format!("插件变量定义不合法: {error}"))?;
+
         // 版本无法 packed 编码的插件直接拒绝加载（写入盖章与迁移门控都依赖它）
         let version_packed = pack_plugin_version(&manifest.version)?;
 
@@ -2223,10 +2231,7 @@ impl PluginManager {
             icon_png_base64,
             description_template,
             recommended_configs,
-            var_defs: config
-                .as_ref()
-                .and_then(|c| c.var.clone())
-                .unwrap_or_default(),
+            var_defs,
             script,
             assets,
             providers,
@@ -3099,6 +3104,8 @@ pub struct VarDefinition {
     #[serde(default)]
     pub default: Option<serde_json::Value>,
     #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
     pub options: Option<Vec<VarOption>>,
     #[serde(default)]
     pub min: Option<serde_json::Value>,
@@ -3150,6 +3157,10 @@ impl<'de> Deserialize<'de> for VarDefinition {
             }
         };
         let default = map.get("default").cloned();
+        let required = map
+            .get("required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let options: Option<Vec<VarOption>> = map.get("options").and_then(|v| {
             let arr = v.as_array()?;
             let mut out = Vec::with_capacity(arr.len());
@@ -3191,12 +3202,20 @@ impl<'de> Deserialize<'de> for VarDefinition {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let width = map.get("width").and_then(|v| v.as_u64()).map(|n| n as u8);
+        // checkbox 的 default 允许写成勾选项数组或部分对象（文档约定），在定义期规范成
+        // 完整的 {variable: bool}；一项未勾视为无 default。运行期合并不再做值转换。
+        let default = if var_type == "checkbox" {
+            default.and_then(|value| canonical_checkbox_default(&options, value))
+        } else {
+            default
+        };
         Ok(VarDefinition {
             key,
             var_type,
             name,
             descripts,
             default,
+            required,
             options,
             min,
             max,
@@ -3207,6 +3226,120 @@ impl<'de> Deserialize<'de> for VarDefinition {
             width,
         })
     }
+}
+
+fn canonical_checkbox_default(
+    options: &Option<Vec<VarOption>>,
+    value: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let variables = options
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|option| match option {
+            VarOption::String(variable) => variable.clone(),
+            VarOption::Item { variable, .. } => variable.clone(),
+        })
+        .collect::<Vec<_>>();
+    let checked = |variable: &String| match &value {
+        serde_json::Value::Array(items) => items.iter().any(|item| item.as_str() == Some(variable)),
+        serde_json::Value::Object(object) => object.get(variable).and_then(|v| v.as_bool()) == Some(true),
+        serde_json::Value::String(item) => item == variable,
+        _ => false,
+    };
+    let object = variables
+        .iter()
+        .map(|variable| (variable.clone(), serde_json::Value::Bool(checked(variable))))
+        .collect::<serde_json::Map<_, _>>();
+    object
+        .values()
+        .any(|v| v.as_bool() == Some(true))
+        .then_some(serde_json::Value::Object(object))
+}
+
+/// 校验插件变量定义中必须跨字段观察的约束。
+pub fn validate_var_defs(defs: &[VarDefinition]) -> Result<(), String> {
+    let mut key_indexes = HashMap::new();
+    for (index, def) in defs.iter().enumerate() {
+        if key_indexes.insert(def.key.as_str(), index).is_some() {
+            return Err(format!("变量 key `{}` 重复", def.key));
+        }
+
+        if matches!(def.var_type.as_str(), "options" | "checkbox") {
+            let mut variables = std::collections::HashSet::new();
+            for option in def.options.as_deref().unwrap_or_default() {
+                let variable = match option {
+                    VarOption::String(value) => value,
+                    VarOption::Item { variable, .. } => variable,
+                };
+                if !variables.insert(variable.as_str()) {
+                    return Err(format!(
+                        "变量 `{}` 的选项 variable `{variable}` 重复",
+                        def.key
+                    ));
+                }
+            }
+        }
+    }
+
+    let mut edges = vec![Vec::<usize>::new(); defs.len()];
+    for (index, def) in defs.iter().enumerate() {
+        let mut add_dependencies = |when: Option<&HashMap<String, Vec<serde_json::Value>>>| {
+            if let Some(when) = when {
+                for dep_key in when.keys() {
+                    if let Some(dep_index) = key_indexes.get(dep_key.as_str()) {
+                        edges[index].push(*dep_index);
+                    }
+                }
+            }
+        };
+        add_dependencies(def.when.as_ref());
+        for option in def.options.as_deref().unwrap_or_default() {
+            if let VarOption::Item { when, .. } = option {
+                add_dependencies(when.as_ref());
+            }
+        }
+        edges[index].sort_unstable();
+        edges[index].dedup();
+    }
+
+    fn visit(
+        node: usize,
+        defs: &[VarDefinition],
+        edges: &[Vec<usize>],
+        states: &mut [u8],
+        stack: &mut Vec<usize>,
+    ) -> Result<(), String> {
+        states[node] = 1;
+        stack.push(node);
+        for &next in &edges[node] {
+            match states[next] {
+                0 => visit(next, defs, edges, states, stack)?,
+                1 => {
+                    let start = stack.iter().position(|&item| item == next).unwrap_or(0);
+                    let mut path = stack[start..]
+                        .iter()
+                        .map(|&item| defs[item].key.as_str())
+                        .collect::<Vec<_>>();
+                    path.push(defs[next].key.as_str());
+                    return Err(format!("when 依赖成环: {}", path.join(" -> ")));
+                }
+                _ => {}
+            }
+        }
+        stack.pop();
+        states[node] = 2;
+        Ok(())
+    }
+
+    let mut states = vec![0u8; defs.len()];
+    let mut stack = Vec::new();
+    for node in 0..defs.len() {
+        if states[node] == 0 {
+            visit(node, defs, &edges, &mut states, &mut stack)?;
+        }
+    }
+    Ok(())
 }
 
 /// 将变量定义转为前端 i18n 结构：name/descripts/options[].name 为 Record (default, zh, en...)，便于前端按 locale 解析。
@@ -3229,6 +3362,9 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
     }
     if let Some(ref default) = v.default {
         obj.insert("default".to_string(), default.clone());
+    }
+    if v.required {
+        obj.insert("required".to_string(), serde_json::Value::Bool(true));
     }
     if let Some(ref opts) = v.options {
         let arr: Vec<serde_json::Value> = opts
@@ -3715,6 +3851,54 @@ mod tests {
         let vars = c.var.unwrap();
         assert_eq!(vars.len(), 1);
         assert_eq!(vars[0].key, "tag");
+    }
+
+    #[test]
+    fn validate_var_defs_rejects_duplicate_keys_options_and_cycles() {
+        let duplicate_keys: Vec<VarDefinition> = serde_json::from_value(serde_json::json!([
+            {"key": "same", "type": "string", "name": "A"},
+            {"key": "same", "type": "string", "name": "B"}
+        ]))
+        .unwrap();
+        assert!(validate_var_defs(&duplicate_keys)
+            .unwrap_err()
+            .contains("key `same` 重复"));
+
+        let duplicate_options: Vec<VarDefinition> = serde_json::from_value(serde_json::json!([{
+            "key": "mode",
+            "type": "options",
+            "name": "Mode",
+            "options": [
+                {"name": "A", "variable": "same"},
+                {"name": "B", "variable": "same"}
+            ]
+        }]))
+        .unwrap();
+        assert!(validate_var_defs(&duplicate_options)
+            .unwrap_err()
+            .contains("variable `same` 重复"));
+
+        let cycle: Vec<VarDefinition> = serde_json::from_value(serde_json::json!([
+            {"key": "a", "type": "string", "name": "A", "when": {"b": ["x"]}},
+            {"key": "b", "type": "options", "name": "B", "options": [
+                {"name": "X", "variable": "x", "when": {"a": ["yes"]}}
+            ]}
+        ]))
+        .unwrap();
+        let error = validate_var_defs(&cycle).unwrap_err();
+        assert!(error.contains("a -> b -> a"), "{error}");
+    }
+
+    #[test]
+    fn validate_var_defs_allows_missing_dependency_keys() {
+        let defs: Vec<VarDefinition> = serde_json::from_value(serde_json::json!([{
+            "key": "child",
+            "type": "string",
+            "name": "Child",
+            "when": {"external": ["visible"]}
+        }]))
+        .unwrap();
+        validate_var_defs(&defs).unwrap();
     }
 
     #[test]

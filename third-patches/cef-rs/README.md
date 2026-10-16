@@ -19,7 +19,7 @@
 - `0007-drag-source-bindings-windows.patch` — the same drag-source bindings and verified C layout for `x86_64_pc_windows_msvc`.
 - `0008-drag-source-bindings-macos.patch` — the same drag-source bindings and verified C layout for both `aarch64_apple_darwin` and `x86_64_apple_darwin`.
 
-  **aarch64 / i686 / arm bindings are still not regenerated.** kabegame does not build those targets (desktop CEF is x86_64-only; Android has no CEF backend), so `tauri-runtime-cef` compiles on the three x86_64 desktop platforms. To add another target, prefer `cargo run -p update-bindings -- --bindgen --target <triple>` (needs that platform's sysroot plus a CEF built with the `third-patches/cef` series, so it must run natively) and append the result as a new numbered patch. The reset model (`.cursor/rules/third-patches-workflow.mdc`) lets you renumber/rewrite freely; the former append-only rule is retired.
+  **aarch64 / i686 / arm bindings are still not regenerated.** kabegame does not build those targets (desktop CEF is x86_64-only; Android has no CEF backend), so `tauri-runtime-cef` compiles on the three x86_64 desktop platforms. To add another target, prefer `cargo run -p update-bindings -- --bindgen --target <triple>` (needs that platform's sysroot plus a CEF built with the `third-patches/cef` series, so it must run natively) and append the result as a new numbered patch. The reset model ([`third-patches/AGENTS.md`](../AGENTS.md)) lets you renumber/rewrite freely; the former append-only rule is retired.
 
 Apply this series manually before building against `third/cef-rs`:
 

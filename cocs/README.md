@@ -220,4 +220,4 @@
 
 - 新增流程文档后，必须在本索引补充条目（链到具体文件路径 + 主题 + 适用场景）。
 - 发生流程级改动时，先更新对应文档，再更新本索引描述（若语义有变化）。
-- **third-patches reset 模型**：patch-manager 接管的系列可自由增删改和重编号；`deno task patch <dir>` 先把子模块 reset 到纯净基线，再按文件名顺序全量 apply，`-r` 仅 reset。操作会丢弃子模块未提交改动，本地开发应先提交到分支。`rusty_v8` 是唯一的手动例外（就地复用的胖构建树，patch 由 `scripts/build-v8.ts` 应用）；`cef` 走标准流程，automate-git 只认提交这一点由 `scripts/build-chromium.ts` 自动固化成 `kabegame-build` 分支来满足。详见 [.cursor/rules/third-patches-workflow.mdc](../.cursor/rules/third-patches-workflow.mdc)。
+- **third-patches reset 模型**：patch-manager 接管的系列可自由增删改和重编号；`deno task patch <dir>` 先把子模块 reset 到纯净基线，再按文件名顺序全量 apply，`-r` 仅 reset。操作会丢弃子模块未提交改动，本地开发应先提交到分支。`rusty_v8` 是唯一的手动例外（就地复用的胖构建树，patch 由 `scripts/build-v8.ts` 应用）；`cef` 的正式补丁位于 `third-patches/cef/` 并由 patch-manager 应用，`scripts/build-chromium.ts` 仅将已应用补丁的工作树临时固化成 `kabegame-build` 提交，供只认提交的 automate-git 使用。详见 [third-patches/AGENTS.md](../third-patches/AGENTS.md)。

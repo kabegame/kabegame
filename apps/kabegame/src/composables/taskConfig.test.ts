@@ -48,7 +48,7 @@ describe("resolveTaskConfig", () => {
 
   it("显式 null 不补默认值", () => {
     const result = resolveTaskConfig({ pluginId: "p", userConfig: { c: null } }, null, defs);
-    expect("c" in result.userConfig).toBe(false);
+    expect(result.userConfig.c).toBeNull();
     expect(result.userConfig.a).toBe("defA");
   });
 
@@ -121,5 +121,19 @@ describe("buildSubmitUserConfig", () => {
     const snapshot = JSON.parse(JSON.stringify(input));
     buildSubmitUserConfig(input, defs);
     expect(input).toEqual(snapshot);
+  });
+
+  it("清空带 default 的字段提交 null，链式 when 隐藏字段不提交", () => {
+    const chained: PluginVarDef[] = [
+      { key: "gate", type: "options", name: "Gate", options: ["on", "off"], default: "off" },
+      { key: "middle", type: "string", name: "Middle", default: "show", when: { gate: ["on"] } },
+      { key: "leaf", type: "string", name: "Leaf", default: "value", when: { middle: ["show"] } },
+      { key: "clearable", type: "string", name: "Clearable", default: "default" },
+    ];
+    const out = buildSubmitUserConfig(
+      { gate: "off", middle: "show", leaf: "value", clearable: null },
+      chained,
+    );
+    expect(out).toEqual({ gate: "off", clearable: null });
   });
 });

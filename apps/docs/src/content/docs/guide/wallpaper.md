@@ -1,9 +1,9 @@
 ---
 title: 壁纸
-description: 设置桌面壁纸、轮播和显示模式，支持视频壁纸、过渡效果与 Wallpaper Engine 导出。
+description: 设置桌面壁纸、轮播和显示模式，支持视频壁纸与过渡效果。
 ---
 
-Kabegame 的壁纸系统围绕三个维度组合：**来源**（单张 / 轮播）、**显示后端**（原生 / 窗口 / Plasma 插件 / Android 系统）、**外部集成**（Wallpaper Engine 导出，仅 Windows）。本页覆盖每种组合在不同平台上的可用能力与注意事项。
+Kabegame 的壁纸系统围绕两个维度组合：**来源**（单张 / 轮播）与**显示后端**（原生 / 窗口 / Plasma 插件 / Android 系统）。本页覆盖每种组合在不同平台上的可用能力与注意事项。
 
 ## 单张壁纸
 
@@ -128,28 +128,6 @@ Android 没有壁纸模式选择，统一走系统 `WallpaperManager`：
 前端只按扩展名判断是否为视频。mp4 / mov 内的编码若系统播放器不支持，可能出现黑屏——此时换一个文件或重新压制。
 :::
 
-## 导出到 Wallpaper Engine（仅 Windows）
-
-Kabegame 可以把图片或视频导出为 **Wallpaper Engine Web 工程**（包含 `project.json`、`index.html`、资源文件），写入 WE 的 `projects/myprojects` 目录后由 WE 识别。
-
-:::note
-这不是订阅或发布到 WE Workshop，也不会自动在 WE 内「应用」工程。导出完成后你仍需打开 WE，在「我的项目」里手动选择该工程。
-:::
-
-**使用步骤：**
-
-1. 首次使用前，前往「设置」→「壁纸轮播」→「Wallpaper Engine 目录」，选择 WE 安装目录或直接选到 `projects/myprojects` 任一层级。未配置时会 toast「未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择」。
-2. 右键目标图片或视频 → 「更多」→「导出到 Wallpaper Engine」。
-3. 在弹出的输入框里填工程名（留空使用默认名称）。
-4. 导出完成后会 toast 成功信息并自动打开工程目录。切换到 WE，从「我的项目」里选中即可。
-
-**限制：**
-
-- 从 WE Workshop 拉取 / 订阅工程：不支持。
-- 在 WE 里直接「应用」工程：需用户手动选。
-- 视频工程：仅接受 mp4 / mov；其他扩展名会被拒绝。
-- macOS / Linux / Android：右键菜单不会出现该选项。
-
 ## 应用关闭后的壁纸
 
 | 场景 | 退出后行为 |
@@ -178,7 +156,6 @@ Kabegame 可以把图片或视频导出为 **Wallpaper Engine Web 工程**（包
 | 视频音量 / 播放速率 UI | 是 | 是 | 否 | 是 | 是 | 否 |
 | 轮播 | 是 | 是 | 是 | 是 | 是 | 是（最小 15 分钟） |
 | 轮播包含子画册 | 是 | 是 | 是 | 是 | 是 | 是 |
-| Wallpaper Engine 导出 | 是 | 否 | 否 | 否 | 否 | 否 |
 | 主屏 / 锁屏分离 | 否 | 否 | 否 | 否 | 否 | 否（由系统决定） |
 
 ## 延伸阅读

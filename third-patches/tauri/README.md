@@ -81,7 +81,7 @@ deno task patch tauri
 ```
 
 The patch manager uses a **reset model**, so the series is *not* append-only: patches may be
-edited, deleted or renumbered freely (`.cursor/rules/third-patches-workflow.mdc`). Applying
+edited, deleted or renumbered freely ([`third-patches/AGENTS.md`](../AGENTS.md)). Applying
 resets the submodule to its clean pinned baseline and replays the whole series in filename
 order; `-r` just resets. Re-running is therefore idempotent — after a pull that changes any
 patch, plain `deno task patch tauri` resyncs (the `.husky/post-merge` hook does this

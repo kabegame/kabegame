@@ -3,6 +3,7 @@ import { computed, ref, unref } from "vue";
 import { invoke, listen } from "../api";
 import { i18n, resolveConfigText } from "@kabegame/i18n";
 import { IS_ANDROID } from "../env";
+import { canonicalizeUserConfig, type PluginVarDef } from "../utils/pluginVarForm";
 
 /** 创建爬虫任务前的异步守卫；返回 `false` 时不创建任务（如最低应用版本不满足） */
 export type CrawlerBeforeAddTaskGuard = (pluginId: string) => Promise<boolean>;
@@ -621,12 +622,17 @@ export const useCrawlerStore = defineStore("crawler", () => {
       descRaw != null && descRaw !== "" ? resolveConfigText(descRaw as any, locale).trim() || undefined : undefined;
     const spec = preset.scheduleSpec;
     const scheduleEnabled = Boolean(importScheduleDefault && spec);
+    // 推荐配置由插件作者手写，可能含 "" / [] 等旧式空值；入库前按插件定义规范化，
+    // 否则定时运行会被后端严格校验拒绝。动态导入 plugins store 以避开循环依赖。
+    const { usePluginStore } = await import("./plugins");
+    const defs = (usePluginStore().plugins.find((p) => p.id === preset.pluginId)?.config?.vars ??
+      []) as PluginVarDef[];
     return await addRunConfig({
       name: nameStr,
       description,
       pluginId: preset.pluginId,
       url: preset.baseUrl || "",
-      userConfig: preset.userConfig ?? {},
+      userConfig: canonicalizeUserConfig(preset.userConfig ?? {}, defs),
       httpHeaders: preset.httpHeaders ?? {},
       scheduleEnabled,
       scheduleSpec: spec,

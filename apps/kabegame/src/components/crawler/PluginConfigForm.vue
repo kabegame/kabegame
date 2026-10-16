@@ -15,8 +15,14 @@
 import { computed, ref, watch } from "vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import { usePluginStore } from "@/stores/plugins";
-import { isRequired, normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/utils/pluginVarForm";
-import { matchesPluginVarWhen, withCoercedOptions } from "@/utils/pluginVarWhen";
+import {
+  expandVarsForBackend,
+  isEmptyVarValue,
+  isRequired,
+  normalizeVarsForUI,
+  type PluginVarDef,
+} from "@/utils/pluginVarForm";
+import { visibleVarDefs, withCoercedOptions } from "@/utils/pluginVarWhen";
 import { trackEvent } from "@/track/umami";
 import { IS_WEB } from "@/env";
 
@@ -50,7 +56,7 @@ const formVars = computed<Record<string, any>>({
 });
 
 /** `when` 只控制显隐，不改 store */
-const visibleDefs = computed(() => defs.value.filter((d) => matchesPluginVarWhen(d.when, effectiveVars.value)));
+const visibleDefs = computed(() => visibleVarDefs(defs.value, effectiveVars.value));
 
 watch(
   uiVars,
@@ -110,12 +116,7 @@ function firstInvalidVar(): PluginVarDef | null {
   for (const varDef of visibleDefs.value) {
     if (!isRequired(varDef)) continue;
     const value = values[varDef.key];
-    if (
-      value === undefined ||
-      value === null ||
-      value === "" ||
-      ((varDef.type === "list" || varDef.type === "checkbox") && Array.isArray(value) && value.length === 0)
-    ) {
+    if (isEmptyVarValue(varDef, value)) {
       return varDef;
     }
   }

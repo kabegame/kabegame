@@ -64,7 +64,7 @@ import PluginVarsForm from "../crawler/PluginVarsForm.vue";
 import type { Plugin } from "../../stores/plugins";
 import { parsePluginRecommendedPreset, type PluginRecommendedPreset } from "../../stores/crawler";
 import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "../../utils/pluginVarForm";
-import { matchesPluginVarWhen, coerceOptionsVarsToVisibleChoices } from "../../utils/pluginVarWhen";
+import { coerceOptionsVarsToVisibleChoices, visibleVarDefs } from "../../utils/pluginVarWhen";
 
 const props = withDefaults(
   defineProps<{
@@ -150,7 +150,7 @@ watch(
   { immediate: true },
 );
 
-const visibleVars = computed(() => vars.value.filter((v) => matchesPluginVarWhen(v.when, formVars.value)));
+const visibleVars = computed(() => visibleVarDefs(vars.value, formVars.value));
 
 watch(
   formVars,
@@ -182,7 +182,10 @@ async function handleStartTask() {
   }
   emit("start-task", {
     pluginId: props.plugin.id,
-    vars: expandVarsForBackend(formVars.value, vars.value),
+    vars: expandVarsForBackend(
+      Object.fromEntries(visibleVars.value.map((def) => [def.key, formVars.value[def.key]])),
+      visibleVars.value,
+    ),
     httpHeaders: presetHeaders.value,
   });
 }

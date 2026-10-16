@@ -144,7 +144,8 @@ import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { buildVarMetaMapFromPluginConfig, usePluginStore } from "../../stores/plugins";
 import type { PluginVarMeta } from "../../stores/plugins";
-import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
+import type { PluginVarDef } from "../../utils/pluginVarForm";
+import { visibleVarDefs } from "../../utils/pluginVarWhen";
 import { IS_WEB } from "@/env";
 
 export type TaskRunParamsTask = {
@@ -238,11 +239,11 @@ function getVisibleUserConfigEntries(task: TaskRunParamsTask): [string, any][] {
   const cfg = task.userConfig;
   if (!cfg || typeof cfg !== "object") return [];
   const metaForPlugin = varMetaByPluginId.value[task.pluginId];
-  return Object.entries(cfg).filter(([key]) => {
-    const meta = metaForPlugin?.[key];
-    if (!meta) return true;
-    return matchesPluginVarWhen(meta.when, cfg);
-  });
+  const defs = Object.entries(metaForPlugin ?? {}).map(
+    ([key, meta]) => ({ key, type: meta.type ?? "", name: meta.name, when: meta.when }) as PluginVarDef,
+  );
+  const visibleKeys = new Set(visibleVarDefs(defs, cfg).map((def) => def.key));
+  return Object.entries(cfg).filter(([key]) => !metaForPlugin?.[key] || visibleKeys.has(key));
 }
 
 const formatConfigValue = (pluginId: string, key: string, value: any, raw = false): string => {

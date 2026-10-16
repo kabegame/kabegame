@@ -225,7 +225,8 @@ impl TaskScheduler {
             check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
         }
         let user_cfg = task.user_config.clone().unwrap_or_default();
-        let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg);
+        let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg, None)
+            .map_err(|error| format!("配置不合法：{error}"))?;
         let params = TaskParams {
             plugin: Arc::new(plugin),
             images_dir,
@@ -959,31 +960,82 @@ pub struct ImageData {
 //     ))
 // }
 
-/// 将变量定义（var_defs）的默认值与用户配置合并，并对部分类型做规范化。
-///
-/// 说明：
-/// - 该函数不依赖 AppHandle，便于在 CLI/插件编辑器等场景复用（由调用方自行读取 var_defs）。
+/// 合并插件变量配置、按链式 `when` 裁剪不可见字段，并严格校验规范值。
 pub fn build_effective_user_config_from_var_defs(
     var_defs: &[VarDefinition],
     user_cfg: HashMap<String, serde_json::Value>,
-) -> HashMap<String, serde_json::Value> {
-    // 先按 var_defs 填满所有变量（默认值 -> 用户值覆盖）
+    user_default: Option<&HashMap<String, serde_json::Value>>,
+) -> Result<HashMap<String, serde_json::Value>, String> {
     let mut merged: HashMap<String, serde_json::Value> = HashMap::new();
     for def in var_defs {
-        let user_value = user_cfg.get(&def.key).cloned();
-        let default_value = def.default.clone();
-        let normalized = normalize_var_value(def, user_value.or(default_value));
-        merged.insert(def.key.clone(), normalized);
+        let value = user_cfg
+            .get(&def.key)
+            .cloned()
+            .or_else(|| user_default.and_then(|values| values.get(&def.key).cloned()))
+            .or_else(|| def.default.clone())
+            .unwrap_or_else(|| {
+                if def.var_type == "boolean" {
+                    serde_json::Value::Bool(false)
+                } else {
+                    serde_json::Value::Null
+                }
+            });
+        merged.insert(def.key.clone(), value);
     }
 
-    // 再把 user_cfg 中那些不在 var_defs 里的键也注入（保持兼容扩展变量）
-    for (k, v) in user_cfg {
-        if !merged.contains_key(&k) {
-            merged.insert(k, v);
+    // 从「全部可见」开始只做删除，直到依赖链稳定；被隐藏字段不能继续满足下游 when。
+    let mut visible_keys = var_defs
+        .iter()
+        .map(|def| def.key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    loop {
+        let visible_values = merged
+            .iter()
+            .filter(|(key, _)| visible_keys.contains(key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<HashMap<_, _>>();
+        let hidden = var_defs
+            .iter()
+            .filter(|def| visible_keys.contains(def.key.as_str()))
+            .filter(|def| !matches_when(def.when.as_ref(), &visible_values))
+            .map(|def| def.key.as_str())
+            .collect::<Vec<_>>();
+        if hidden.is_empty() {
+            break;
+        }
+        for key in hidden {
+            visible_keys.remove(key);
         }
     }
 
-    merged
+    merged.retain(|key, _| visible_keys.contains(key.as_str()));
+
+    let mut errors = Vec::new();
+    for def in var_defs
+        .iter()
+        .filter(|def| visible_keys.contains(def.key.as_str()))
+    {
+        if let Some(value) = merged.get(&def.key) {
+            if let Err(error) = validate_var_value(def, value, &merged) {
+                errors.push(format!("{}: {error}", def.key));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("；"));
+    }
+
+    // 未声明扩展键保持兼容并原样透传；它们不参与 when 依赖计算。
+    let declared = var_defs
+        .iter()
+        .map(|def| def.key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for (key, value) in user_cfg {
+        if !declared.contains(key.as_str()) {
+            merged.insert(key, value);
+        }
+    }
+    Ok(merged)
 }
 
 fn extract_option_variables(options: &Option<Vec<VarOption>>) -> Vec<String> {
@@ -999,100 +1051,248 @@ fn extract_option_variables(options: &Option<Vec<VarOption>>) -> Vec<String> {
     }
 }
 
-/// 将变量值规范化，确保脚本侧不会出现"变量不存在"或类型完全不匹配。
-/// - checkbox：无论输入是 ["a","b"] 还是 {a:true,b:false}，都输出对象 { option: bool }
-fn normalize_var_value(def: &VarDefinition, value: Option<serde_json::Value>) -> serde_json::Value {
-    let t = def.var_type.as_str();
-    match t {
-        "checkbox" => {
-            let vars = extract_option_variables(&def.options);
-            let mut obj = serde_json::Map::new();
-            for k in &vars {
-                obj.insert(k.clone(), serde_json::Value::Bool(false));
-            }
-
-            match value {
-                Some(serde_json::Value::Object(m)) => {
-                    for (k, v) in m {
-                        let b = match v {
-                            serde_json::Value::Bool(b) => b,
-                            serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
-                            serde_json::Value::String(s) => s == "true" || s == "1",
-                            _ => false,
-                        };
-                        obj.insert(k, serde_json::Value::Bool(b));
-                    }
-                }
-                Some(serde_json::Value::Array(arr)) => {
-                    for it in arr {
-                        if let serde_json::Value::String(s) = it {
-                            obj.insert(s, serde_json::Value::Bool(true));
-                        }
-                    }
-                }
-                Some(serde_json::Value::String(s)) => {
-                    obj.insert(s, serde_json::Value::Bool(true));
-                }
-                _ => {
-                    // 无值：保持全 false（或由 config.json default 已经传入）
-                }
-            }
-            serde_json::Value::Object(obj)
-        }
-        "int" => match value {
-            Some(serde_json::Value::Number(n)) => {
-                serde_json::Value::Number(serde_json::Number::from(n.as_i64().unwrap_or(0)))
-            }
-            Some(serde_json::Value::String(s)) => {
-                serde_json::Value::Number(serde_json::Number::from(s.parse::<i64>().unwrap_or(0)))
-            }
-            Some(serde_json::Value::Bool(b)) => {
-                serde_json::Value::Number(serde_json::Number::from(if b { 1 } else { 0 }))
-            }
-            _ => serde_json::Value::Number(serde_json::Number::from(0)),
-        },
-        "float" => match value {
-            Some(serde_json::Value::Number(n)) => serde_json::Value::Number(
-                serde_json::Number::from_f64(n.as_f64().unwrap_or(0.0)).unwrap(),
-            ),
-            Some(serde_json::Value::String(s)) => serde_json::Value::Number(
-                serde_json::Number::from_f64(s.parse::<f64>().unwrap_or(0.0)).unwrap(),
-            ),
-            Some(serde_json::Value::Bool(b)) => serde_json::Value::Number(
-                serde_json::Number::from_f64(if b { 1.0 } else { 0.0 }).unwrap(),
-            ),
-            _ => serde_json::Value::Number(serde_json::Number::from_f64(0.0).unwrap()),
-        },
-        "boolean" => match value {
-            Some(serde_json::Value::Bool(b)) => serde_json::Value::Bool(b),
-            Some(serde_json::Value::Number(n)) => {
-                serde_json::Value::Bool(n.as_i64().unwrap_or(0) != 0)
-            }
-            Some(serde_json::Value::String(s)) => serde_json::Value::Bool(s == "true" || s == "1"),
-            _ => serde_json::Value::Bool(false),
-        },
-        // options/list/string/其它：保持原样；若无值则给一个可用的空值，避免变量缺失
-        "options" => match value {
-            Some(v) => v,
-            None => serde_json::Value::String(String::new()),
-        },
-        "string" | "date" => match value {
-            Some(serde_json::Value::String(s)) => serde_json::Value::String(s),
-            Some(v) => serde_json::Value::String(v.to_string()),
-            None => serde_json::Value::String(String::new()),
-        },
-        "list" => match value {
-            Some(serde_json::Value::Array(arr)) => serde_json::Value::Array(arr),
-            Some(v) => v,
-            None => serde_json::Value::Array(vec![]),
-        },
-        _ => value.unwrap_or(serde_json::Value::Null),
+fn when_value_string(value: Option<&serde_json::Value>) -> String {
+    match value {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::Bool(value)) => value.to_string(),
+        Some(serde_json::Value::Number(value)) => value.to_string(),
+        Some(serde_json::Value::String(value)) => value.clone(),
+        Some(value) => value.to_string(),
     }
+}
+
+fn matches_when(
+    when: Option<&HashMap<String, Vec<serde_json::Value>>>,
+    visible_values: &HashMap<String, serde_json::Value>,
+) -> bool {
+    when.map_or(true, |conditions| {
+        conditions.iter().all(|(dep_key, accepted)| {
+            let actual = when_value_string(visible_values.get(dep_key));
+            accepted
+                .iter()
+                .any(|expected| when_value_string(Some(expected)) == actual)
+        })
+    })
+}
+
+fn validate_var_value(
+    def: &VarDefinition,
+    value: &serde_json::Value,
+    visible_values: &HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    if value.is_null() {
+        if def.required {
+            return Err("必填字段不能为空".to_string());
+        }
+        if def.var_type == "boolean" {
+            return Err("boolean 不能为 null".to_string());
+        }
+        return Ok(());
+    }
+
+    let min = def.min.as_ref().and_then(serde_json::Value::as_f64);
+    let max = def.max.as_ref().and_then(serde_json::Value::as_f64);
+    match def.var_type.as_str() {
+        "int" => {
+            let number = value.as_i64().ok_or("必须是整数")?;
+            if min.is_some_and(|bound| (number as f64) < bound) {
+                return Err(format!("不能小于 {}", def.min.as_ref().unwrap()));
+            }
+            if max.is_some_and(|bound| number as f64 > bound) {
+                return Err(format!("不能大于 {}", def.max.as_ref().unwrap()));
+            }
+        }
+        "float" => {
+            let number = value.as_f64().ok_or("必须是数字")?;
+            if min.is_some_and(|bound| number < bound) {
+                return Err(format!("不能小于 {}", def.min.as_ref().unwrap()));
+            }
+            if max.is_some_and(|bound| number > bound) {
+                return Err(format!("不能大于 {}", def.max.as_ref().unwrap()));
+            }
+        }
+        "boolean" => {
+            if !value.is_boolean() {
+                return Err("必须是 boolean".to_string());
+            }
+        }
+        "string" | "date" | "path" | "file" | "folder" | "file_or_folder" => {
+            if !value.as_str().is_some_and(|text| !text.trim().is_empty()) {
+                return Err("必须是非空字符串".to_string());
+            }
+        }
+        "options" => {
+            let selected = value.as_str().ok_or("必须是字符串")?;
+            let allowed = def
+                .options
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|option| match option {
+                    VarOption::String(_) => true,
+                    VarOption::Item { when, .. } => matches_when(when.as_ref(), visible_values),
+                })
+                .any(|option| match option {
+                    VarOption::String(variable) => variable == selected,
+                    VarOption::Item { variable, .. } => variable == selected,
+                });
+            if !allowed {
+                return Err(format!("不是当前可见选项: {selected:?}"));
+            }
+        }
+        "list" => {
+            if !value.as_array().is_some_and(|items| !items.is_empty()) {
+                return Err("必须是非空数组".to_string());
+            }
+        }
+        "checkbox" => {
+            let object = value.as_object().ok_or("必须是对象")?;
+            let variables = extract_option_variables(&def.options);
+            let expected = variables.iter().map(String::as_str).collect::<std::collections::HashSet<_>>();
+            let actual = object.keys().map(String::as_str).collect::<std::collections::HashSet<_>>();
+            if actual != expected {
+                return Err("键集合必须与声明的 option variable 完全一致".to_string());
+            }
+            if object.values().any(|item| !item.is_boolean()) {
+                return Err("每个选项值都必须是 boolean".to_string());
+            }
+            if !object.values().any(|item| item.as_bool() == Some(true)) {
+                return Err("至少选择一项".to_string());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn var(value: serde_json::Value) -> VarDefinition {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn checkbox_array_default_is_canonicalized_at_definition_time() {
+        let defs = vec![
+            var(serde_json::json!({
+                "key": "kinds", "type": "checkbox", "name": "Kinds",
+                "options": ["a", "b", "c"], "default": ["a", "c"]
+            })),
+            var(serde_json::json!({
+                "key": "none", "type": "checkbox", "name": "None",
+                "options": ["x"], "default": []
+            })),
+        ];
+        assert_eq!(defs[1].default, None);
+        let effective =
+            build_effective_user_config_from_var_defs(&defs, HashMap::new(), None).unwrap();
+        assert_eq!(
+            effective["kinds"],
+            serde_json::json!({"a": true, "b": false, "c": true})
+        );
+        assert_eq!(effective["none"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn effective_config_merges_layers_and_preserves_explicit_null() {
+        let defs = vec![
+            var(serde_json::json!({
+                "key": "value", "type": "string", "name": "Value", "default": "plugin"
+            })),
+            var(serde_json::json!({
+                "key": "cleared", "type": "string", "name": "Cleared", "default": "plugin"
+            })),
+        ];
+        let user_default = HashMap::from([
+            ("value".to_string(), serde_json::json!("user-default")),
+            ("cleared".to_string(), serde_json::json!("user-default")),
+        ]);
+        let user_cfg = HashMap::from([
+            ("value".to_string(), serde_json::json!("submitted")),
+            ("cleared".to_string(), serde_json::Value::Null),
+            ("extension".to_string(), serde_json::json!({"keep": true})),
+        ]);
+        let effective =
+            build_effective_user_config_from_var_defs(&defs, user_cfg, Some(&user_default))
+                .unwrap();
+        assert_eq!(effective["value"], serde_json::json!("submitted"));
+        assert_eq!(effective["cleared"], serde_json::Value::Null);
+        assert_eq!(effective["extension"], serde_json::json!({"keep": true}));
+    }
+
+    #[test]
+    fn effective_config_applies_chained_when_until_stable() {
+        let defs = vec![
+            var(serde_json::json!({
+                "key": "gate", "type": "options", "name": "Gate", "default": "off",
+                "options": ["on", "off"]
+            })),
+            var(serde_json::json!({
+                "key": "middle", "type": "string", "name": "Middle", "default": "show",
+                "when": {"gate": ["on"]}
+            })),
+            var(serde_json::json!({
+                "key": "leaf", "type": "string", "name": "Leaf", "default": "kept",
+                "when": {"middle": ["show"]}
+            })),
+        ];
+        let effective =
+            build_effective_user_config_from_var_defs(&defs, HashMap::new(), None).unwrap();
+        assert_eq!(effective.get("gate"), Some(&serde_json::json!("off")));
+        assert!(!effective.contains_key("middle"));
+        assert!(!effective.contains_key("leaf"));
+    }
+
+    #[test]
+    fn effective_config_accepts_declared_empty_option_and_implicit_boolean_false() {
+        let defs = vec![
+            var(serde_json::json!({
+                "key": "option", "type": "options", "name": "Option", "options": [
+                    {"name": "Any", "variable": ""},
+                    {"name": "One", "variable": "one"}
+                ]
+            })),
+            var(serde_json::json!({"key": "flag", "type": "boolean", "name": "Flag"})),
+        ];
+        let effective = build_effective_user_config_from_var_defs(
+            &defs,
+            HashMap::from([("option".to_string(), serde_json::json!(""))]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(effective["option"], serde_json::json!(""));
+        assert_eq!(effective["flag"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn effective_config_reports_all_invalid_empty_values_and_required_null() {
+        let defs = vec![
+            var(serde_json::json!({
+                "key": "required", "type": "string", "name": "Required", "required": true
+            })),
+            var(serde_json::json!({"key": "text", "type": "string", "name": "Text"})),
+            var(serde_json::json!({"key": "items", "type": "list", "name": "Items"})),
+            var(serde_json::json!({
+                "key": "checks", "type": "checkbox", "name": "Checks", "options": ["a", "b"]
+            })),
+        ];
+        let error = build_effective_user_config_from_var_defs(
+            &defs,
+            HashMap::from([
+                ("text".to_string(), serde_json::json!("")),
+                ("items".to_string(), serde_json::json!([])),
+                ("checks".to_string(), serde_json::json!({"a": false, "b": false})),
+            ]),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("required: 必填字段不能为空"), "{error}");
+        assert!(error.contains("text: 必须是非空字符串"), "{error}");
+        assert!(error.contains("items: 必须是非空数组"), "{error}");
+        assert!(error.contains("checks: 至少选择一项"), "{error}");
+    }
 
     struct TestTask {
         fs_handle: u64,

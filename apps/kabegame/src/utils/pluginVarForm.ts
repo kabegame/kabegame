@@ -16,6 +16,7 @@ export type PluginVarDef = {
   name: PluginConfigText | string;
   descripts?: PluginConfigText | string;
   default?: any;
+  required?: boolean;
   options?: VarOption[];
   min?: number | null;
   max?: number | null;
@@ -38,9 +39,26 @@ function finiteBound(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-// 判断配置项是否必填（没有 default 值则为必填）
-export function isRequired(varDef: { default?: any }) {
-  return varDef.default === undefined || varDef.default === null;
+// 必填只由插件清单显式声明；没有 default 不再隐式等于必填。
+export function isRequired(varDef: { required?: boolean }) {
+  return varDef.required === true;
+}
+
+/** 控件层各种“未输入”表示的统一判断；options 声明过的空字符串是合法值。 */
+export function isEmptyVarValue(varDef: PluginVarDef, value: any): boolean {
+  if (varDef.type === "boolean") return false;
+  if (value === undefined || value === null) return true;
+  if (varDef.type === "options" && value === "") {
+    return !(varDef.options ?? []).some((option) => optionValue(option) === "");
+  }
+  if (typeof value === "string") return value.trim() === "";
+  if (varDef.type === "list") return !Array.isArray(value) || value.length === 0;
+  if (varDef.type === "checkbox") {
+    if (Array.isArray(value)) return value.length === 0;
+    if (value && typeof value === "object") return !Object.values(value).some((item) => item === true);
+    return true;
+  }
+  return false;
 }
 
 /** 校验单个插件变量值是否与定义兼容（与 useConfigCompatibility 逻辑一致） */
@@ -77,9 +95,7 @@ export function validateVarValue(value: any, varDef: PluginVarDef): { valid: boo
       break;
     case "options":
       if (varDef.options && Array.isArray(varDef.options)) {
-        const validValues = varDef.options.map((opt) =>
-          typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value,
-        );
+        const validValues = varDef.options.map(optionValue);
         if (!validValues.includes(value)) {
           return { valid: false, error: `值不在有效选项中` };
         }
@@ -88,9 +104,7 @@ export function validateVarValue(value: any, varDef: PluginVarDef): { valid: boo
     case "checkbox":
       if (Array.isArray(value)) {
         if (varDef.options && Array.isArray(varDef.options)) {
-          const validValues = varDef.options.map((opt) =>
-            typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value,
-          );
+          const validValues = varDef.options.map(optionValue);
           const invalidValues = value.filter((v) => !validValues.includes(v));
           if (invalidValues.length > 0) {
             return { valid: false, error: `包含无效选项` };
@@ -126,13 +140,12 @@ export function matchUserConfigFromDefaults(
 ): Record<string, any> {
   const matched: Record<string, any> = {};
   const varDefMap = new Map(defs.map((d) => [d.key, d]));
-  const explicitNullKeys = new Set<string>();
 
   for (const [key, value] of Object.entries(userConfig)) {
     const varDef = varDefMap.get(key);
     if (!varDef) continue;
     if (value === null) {
-      explicitNullKeys.add(key);
+      matched[key] = null;
       continue;
     }
     if (value === undefined) continue;
@@ -146,7 +159,6 @@ export function matchUserConfigFromDefaults(
 
   for (const varDef of defs) {
     if (varDef.key in matched) continue;
-    if (explicitNullKeys.has(varDef.key)) continue;
     if (varDef.default !== undefined) {
       matched[varDef.key] = varDef.default;
     }
@@ -159,21 +171,41 @@ export function matchUserConfigFromDefaults(
 export function expandVarsForBackend(uiVars: Record<string, any>, defs: PluginVarDef[]) {
   const expanded: Record<string, any> = { ...uiVars };
   for (const def of defs) {
+    const raw = uiVars[def.key];
+    if (def.type === "boolean") {
+      expanded[def.key] = raw === true;
+      continue;
+    }
+    if (isEmptyVarValue(def, raw)) {
+      expanded[def.key] = null;
+      continue;
+    }
     if (def.type === "checkbox") {
       const options = def.options || [];
       const optionVars = options.map(optionValue);
-      const selected = Array.isArray(uiVars[def.key]) ? (uiVars[def.key] as string[]) : [];
+      const selected = Array.isArray(raw) ? (raw as string[]) : [];
       const obj: Record<string, boolean> = {};
       for (const v of optionVars) obj[v] = selected.includes(v);
       expanded[def.key] = obj;
     } else if (def.type === "date") {
-      const raw = expanded[def.key];
       if (typeof raw !== "string") continue;
       const fmt = def.format && def.format.trim() !== "" ? def.format.trim() : "YYYY-MM-DD";
       expanded[def.key] = formatPluginDateForBackend(raw, fmt);
     }
   }
   return expanded;
+}
+
+/**
+ * 把外部来源（插件推荐配置等）里的 userConfig 规范成后端接受的形态：只处理实际出现的键，
+ * 不补默认值（缺省键运行时由后端按 default 合并）；`""` / `[]` / 未勾选等空表示转为 `null`，
+ * checkbox 数组展开为完整对象，options 声明过的 `""` 保持原样。未声明的键原样保留。
+ */
+export function canonicalizeUserConfig(userConfig: Record<string, any>, defs: PluginVarDef[]): Record<string, any> {
+  const out: Record<string, any> = { ...(userConfig ?? {}) };
+  const present = defs.filter((d) => Object.prototype.hasOwnProperty.call(out, d.key));
+  if (present.length === 0) return out;
+  return { ...out, ...expandVarsForBackend(normalizeVarsForUI(out, present), present) };
 }
 
 // 将后端保存/运行配置中的 checkbox 值聚合回 UI 用的 foo: string[]
@@ -199,7 +231,7 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
     if (
       def.type === "date" &&
       def.key === "end_date" &&
-      (rawVars[def.key] === undefined || rawVars[def.key] === "" || rawVars[def.key] === null)
+      (rawVars[def.key] === undefined || rawVars[def.key] === "")
     ) {
       const legacyRange = rawVars["date_range"];
       const start = rawVars["start_date"];
@@ -213,6 +245,11 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
       }
     }
 
+    if (rawVars[def.key] === null) {
+      normalized[def.key] = def.type === "checkbox" || def.type === "list" ? [] : null;
+      continue;
+    }
+
     if (def.type === "checkbox") {
       const options = def.options || [];
       const optionVars = options.map(optionValue);
@@ -220,6 +257,11 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
       const raw = rawVars[def.key];
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
         normalized[def.key] = optionVars.filter((v) => raw?.[v] === true);
+        continue;
+      }
+      // 数组写法（["a","b"]，常见于手写推荐配置 / 旧数据）：只保留声明过的 variable
+      if (Array.isArray(raw)) {
+        normalized[def.key] = optionVars.filter((v) => raw.includes(v));
         continue;
       }
       // default: 支持数组（["a","b"]）或对象（{a:true,b:false}）
@@ -255,10 +297,17 @@ export function normalizeVarsForUI(rawVars: Record<string, any>, defs: PluginVar
   return normalized;
 }
 
-/** 获取验证规则。displayName 为已按 locale 解析好的展示名（由调用方通过 i18n composable 解析后传入） */
-export function getValidationRules(varDef: PluginVarDef, displayName: string) {
+/**
+ * 获取验证规则。displayName 为已按 locale 解析好的展示名（由调用方通过 i18n composable 解析后传入）。
+ * `ignoreRequired`：编辑默认配置等不提交任务的场景，必填字段也允许为空。
+ */
+export function getValidationRules(
+  varDef: PluginVarDef,
+  displayName: string,
+  options: { ignoreRequired?: boolean } = {},
+) {
   const label = displayName;
-  const required = isRequired(varDef);
+  const required = !options.ignoreRequired && isRequired(varDef);
   const min = finiteBound(varDef.min);
   const max = finiteBound(varDef.max);
 
@@ -268,7 +317,7 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
         required,
         trigger: "change",
         validator: (_rule: any, value: any, callback: any) => {
-          if (value === undefined || value === null || value === "") {
+          if (isEmptyVarValue(varDef, value)) {
             if (required) callback(new Error(`请输入${label}`));
             else callback();
             return;
@@ -291,7 +340,7 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
     ];
   }
 
-  if (!isRequired(varDef)) {
+  if (!required) {
     return [];
   }
 
@@ -302,7 +351,7 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
         message: `请选择${label}`,
         trigger: "change",
         validator: (_rule: any, value: any, callback: any) => {
-          if (!value || (Array.isArray(value) && value.length === 0)) {
+          if (isEmptyVarValue(varDef, value)) {
             callback(new Error(`请选择${label}`));
           } else {
             callback();
@@ -318,7 +367,7 @@ export function getValidationRules(varDef: PluginVarDef, displayName: string) {
         required: true,
         trigger: varDef.type === "options" || varDef.type === "date" ? "change" : "blur",
         validator: (_rule: any, value: any, callback: any) => {
-          if (value === undefined || value === null || value === "") {
+          if (isEmptyVarValue(varDef, value)) {
             callback(new Error(`请输入${label}`));
             return;
           }

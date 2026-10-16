@@ -7,7 +7,7 @@ import {
   validateVarValue,
   type PluginVarDef,
 } from "@/utils/pluginVarForm";
-import { matchesPluginVarWhen, withCoercedOptions } from "@/utils/pluginVarWhen";
+import { visibleVarDefs, withCoercedOptions } from "@/utils/pluginVarWhen";
 import { fetchPluginUserDefault, type PluginUserDefault } from "@/composables/usePluginConfig";
 
 /**
@@ -90,7 +90,7 @@ export function taskConfigFromRunConfig(cfg: RunConfig): TaskConfigInput {
  */
 export function buildSubmitUserConfig(userConfig: Record<string, any>, defs: PluginVarDef[]): Record<string, any> {
   const effective = withCoercedOptions(normalizeVarsForUI(userConfig ?? {}, defs), defs);
-  const visible = defs.filter((d) => matchesPluginVarWhen(d.when, effective));
+  const visible = visibleVarDefs(defs, effective);
   const picked = Object.fromEntries(visible.map((d) => [d.key, effective[d.key]]));
   return expandVarsForBackend(picked, visible);
 }
