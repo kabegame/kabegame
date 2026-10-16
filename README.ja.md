@@ -1,35 +1,18 @@
-# Kabegame 二次元クローラークライアント
+# Kabegame — プラグイン駆動のアニメ画像・動画コレクション／アーカイブツール
 
 > *Translated by AI. [中文](README.md) | [English](README.en-US.md) | 日本語 | [한국어](README.ko.md)*
 
-Tauri ベースの二次元クローラークライアント！壁紙をクロール・管理・設定/ローテーションして、推しの嫁（や旦那）たちに毎日そばにいてもらおう～ プラグインで拡張でき、様々な二次元サイトのリソースを簡単にクロールできます。
+イラストサイト、コミュニティ、クリエイタープラットフォーム、ローカルフォルダに散らばった画像と動画を、一つのローカルライブラリに集約し、出典・タグ・作品メタデータをそのまま保持します。
 
-📖 **完全なドキュメント**：[https://kabegame.com](https://kabegame.com/)
+Kabegame はダウンロードだけを担うツールではありません。プラグインがキャラクター・作品・絵師などのタグを自動で分類し、ローカルディレクトリは継続同期する画集にマッピングでき、ログインが必要な場合は内蔵ブラウザで一度ログインすればプラグインが保存済み Cookie を再利用できます。通常のサイトは軽量な V8 プラグインで処理し、JS レンダリングが重いサイトやアンチクロール対策のあるサイトは実ブラウザの WebView で収集できます。
 
-🌐 **オンラインで体験（Demo）**：[https://demo.kabegame.com](https://demo.kabegame.com/)
-
-論文が書けるレベルの[技術的な工夫](#興味があるかもしれません)。
-
-> 理解しました、二次元には語りが必要だと。そこでプラグインメタデータを追加し、クロールした画像の投稿コメントを見られるようにしました。
-
-> 気づきました、二次元には新鮮さが必要だと。そこでランダムソートを追加し、クロールを自動で設定・実行して、毎日入れ替わりのある美しい画像を楽しめるようにしました。
-> - なぜ壁紙なのか？実はほとんどの人が、ほとんどの時間、壁紙を見ています。心理学的に、壁紙は人の気分に直接影響します。部屋の散らかり具合が気分に影響するのと同じです。素敵な壁紙は気分を晴れやかにし、寿命まで延ばしてくれます。
-> - なぜローテーションなのか？それは審美疲労です。良いものでも長く見れば環境の一部になり、人は環境のノイズを自動的に濾過してしまい、主観的には美しいと感じなくなります。ローテーションなら新しい壁紙への期待とデスクトップの新鮮さを保ち続けられ、いつでも良い気分でいられます。
-
-> 悟りました、二次元は際どさから、エロから切り離せないと。そこで
->  - R18 プラグインを積極的に導入し、さらに MCP（AI がキャラクターのエロ画像を一つの画集にまとめるのを手伝えます）も取り入れました。
->  - 画像メタデータの読み込みと高度な複合検索機能も作りました。好きなキャラクターを素早く見つけたり、AI prompt 付きの画像を素早く絞り込んだりするためだけに。
->  - フォルダ画集も作りました。生成した画像を自動で kabegame に取り込むためです。
-
-> AI 生成画像は三次元から二次元への扉を開く鍵です。これがあれば、絵が描けなくても、他人の創作物に縛られずに自分だけの二次元を創造できます。考えたこともないかもしれませんが、あなたが好きなキャラクターは実際には誰かが作ったものです。大企業の会社員かもしれないし、ヒゲのプログラマーかもしれません。AI 生成画像は初めて、誰もが自分で二次元世界を創造する能力を授け、私たち自身の二次元を可能にし、傍観者ではなく全員が参加できるようにしました。
-
-<div align="center" style="line-height: 3em">
-  <b>努力は、二次元専用のソフトを作るためだけに。</b>
-</div>
-
-<div align="center">
-  <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
-</div>
+<p align="center">
+  <a href="https://github.com/kabegame/kabegame/releases/latest"><b>最新版をダウンロード</b></a>
+  · <a href="https://demo.kabegame.com">オンライン体験</a>
+  · <a href="https://kabegame.com/guide/quickstart/">クイックスタート</a>
+  · <a href="https://github.com/kabegame/crawler-plugins">プラグインを見る</a>
+  · <a href="https://kabegame.com/dev/overview/">プラグインを開発</a>
+</p>
 
 <p align="center">
   <a href="https://github.com/kabegame/kabegame/releases/latest">
@@ -42,155 +25,157 @@ Tauri ベースの二次元クローラークライアント！壁紙をクロ�
     <img alt="GitHub Stars" src="https://img.shields.io/github/stars/kabegame/kabegame?style=flat-square&logo=github" height="20"/>
   </a>
   <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
-    <img alt="ライセンス" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square" height="20"/>
+    <img alt="GPL-3.0 ライセンス" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square" height="20"/>
   </a>
   <a href="https://kabegame.com">
     <img alt="プロジェクトドキュメント" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square" height="20"/>
   </a>
-  <br/>
-  <a href="https://kabegame.com/guide/installation/">
-    <img alt="対応プラットフォーム" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square" height="20"/>
-  </a>
-  <a href="https://v2.tauri.app/">
-    <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" height="20"/>
-  </a>
-  <a href="https://vuejs.org/">
-    <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white" height="20"/>
-  </a>
 </p>
+
+## 主なハイライト
+
+- **タグの自動分類**：対応プラグインはダウンロード時にキャラクター、作品、絵師、モデル、出典などの構造化タグを同時に書き込み、閲覧と組み合わせフィルタができるタグディレクトリを自動で形成します。収集後に一枚ずつ整理する必要はありません。
+- **ローカルフォルダの継続同期**：ディスク上のディレクトリを同期画集にマッピングし、ディレクトリ内の追加・削除がライブラリに反映され、サブディレクトリは元の階層のまま子画集を生成できます。お絵かきソフト、AI 画像生成ツール、その他のダウンローダーの出力を受け取り続けるのに向いています。
+- **一度ログインすれば以後は自動再利用**：「ブラウジング（暢遊）」の内蔵ブラウザで普通にサイトへログインすると、Kabegame がすべてのサイト Cookie を保存します。プラグインはホストから安全にログイン状態を注入でき、Cookie を何度もコピーする必要がなく、Cookie の平文を読むこともありません。
+- **実 WebView 駆動のクロール**：軽量な V8 HTTP / HTML プラグインに加え、プラグインを実際のブラウザページ内で実行し、SPA、JS レンダリング、ブラウザフィンガープリント、Cloudflare チェック、操作が必要なログインフローに対応できます。
+- **スクリプトで新しいコンテンツソースを拡張**：クローラープラグインは JavaScript / TypeScript で書けるため、Kabegame 本体を変更・再コンパイルする必要はありません。一つのプラグインが収集ロジック、設定フォーム、タグ分類、出典メタデータ、詳細ビューを同時に定義でき、`.kgpg` ファイルにパッケージして他のユーザーと共有できます。
+- **出典情報を画像と一緒に残す**：プラグインは作者、元投稿リンク、本文、コメント、コミュニティタグ、AI 生成パラメータを保存し、独自の詳細ビューと検索断片を提供できます。画像が元サイトを離れても「どこから来て、なぜ保存したのか」が分かります。
 
 <table width="100%">
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame ギャラリー" width="100%"/><br/>
-      <small>ギャラリー</small>
+      <img src="docs/images/features/auto-labels.jpg" alt="Kabegame タグの自動分類" width="100%"/><br/>
+      <small>プラグインが構造化タグを書き込み、絞り込めるタグディレクトリを自動で形成</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame 画像プレビュー" width="100%"/><br/>
-      <small>プレビュー</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-detail2.jpg" alt="Kabegame 詳細メタデータ" width="100%"/><br/>
-      <small>詳細メタデータ</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-filters2.jpg" alt="Kabegame ギャラリーフィルター" width="100%"/><br/>
-      <small>自由なフィルタリング</small>
+      <img src="docs/images/features/folder-sync.jpg" alt="Kabegame ローカルフォルダ同期" width="100%"/><br/>
+      <small>ローカルディレクトリを、階層を保ったまま継続同期する画集にマッピング</small>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/album/album-main2.jpg" alt="Kabegame 画集の整理" width="100%"/><br/>
-      <small>画集の整理</small>
+      <img src="docs/images/features/cookie-reuse.jpg" alt="Kabegame が Cookie を自動保存して再利用" width="100%"/><br/>
+      <small>ブラウジングで一度ログインすれば、以後の収集はログイン状態を自動再利用</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/album/album-folder2.jpg" alt="Kabegame フォルダ同期" width="100%"/><br/>
-      <small>フォルダ同期</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/source/source-main.jpg" alt="Kabegame ソースプラグイン一覧" width="100%"/><br/>
-      <small>ソースプラグイン一覧</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/source/source-doc2.jpg" alt="Kabegame ソースプラグインドキュメント" width="100%"/><br/>
-      <small>ソースプラグインドキュメント</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame タスクパラメータ設定" width="100%"/><br/>
-      <small>タスクパラメータ設定</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame タスク実行" width="100%"/><br/>
-      <small>タスクを実行</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/task-images2.jpg" alt="Kabegame タスク画像" width="100%"/><br/>
-      <small>タスク画像</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/task-log2.jpg" alt="Kabegame タスクログ" width="100%"/><br/>
-      <small>タスクログ（問題を素早く特定）</small>
+      <img src="docs/images/features/source-metadata.jpg" alt="Kabegame 出典メタデータ" width="100%"/><br/>
+      <small>作者、元投稿、タグ、インタラクション情報を画像と一緒に保持</small>
     </td>
   </tr>
 </table>
 
+<table width="100%">
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/features/webview-crawler-images.jpg" alt="Kabegame WebView クローラーの収集結果" width="100%"/><br/>
+      <small>プラグインは実際のブラウザページで動作し、メディアを収集タスクへ渡します</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/features/webview-crawler-log.jpg" alt="Kabegame WebView クローラーのタスクログ" width="100%"/><br/>
+      <small>ページ操作、スクロール、抽出の過程をタスクログで追跡できます</small>
+    </td>
+  </tr>
+</table>
+
+## 収集からアーカイブまで
+
+- **統合収集**：プラグインを通じて Pixiv、Bilibili、Danbooru、壁紙サイト、コミュニティなどからまとめて取得でき、内蔵ブラウザで見ながら収集もできます。
+- **統合検索**：異なるソースが同じギャラリーに入り、時間、プラグイン、タグ、メディア種別、サイズ、ファイルサイズ、メタデータ検索の組み合わせで絞り込めます。
+- **統合管理**：通常の画集でテーマを手動整理し、タグディレクトリで自動分類し、同期画集でディスクフォルダを追従し、重複排除と非表示で長期間蓄積したライブラリを扱えます。
+- **ローカル所有**：元ファイルとライブラリデータはあなたの手元にあります。ダウンロード先をカスタマイズでき、仮想ディスク経由で他のアプリから画集にアクセスできます。
+- **拡張し続ける**：クローラープラグインは JavaScript / TypeScript で書けます。MCP を使えば AI エージェントが明確な権限のもとでライブラリを検索・整理できます。
+
+Kabegame が解こうとしているのは「画像をどうダウンロードするか」ではなく、画像が異なるソースをまたいで積み上がっていく中で、どう文脈を保ち長期的に整理するかです。画像整理からあなたの手を解放し、AI 学習者、二次元ファン、そして仕事中の息抜きに最適です。png などの画像はメタデータを解析できるので、AI 生成画像のプロンプトが見つかるかもしれません！（私自身、いくつものワークフローを Kabegame から拾いました）
+
+## クイックスタート
+
+1. [GitHub Releases](https://github.com/kabegame/kabegame/releases/latest) から Kabegame をダウンロードしてインストールします。
+2. 「ソース」を開き、公式プラグインディレクトリから興味のあるプラグインをインストールします。ローカル画像の管理だけならこの手順は飛ばせます。
+3. 「ギャラリー」に戻り、「収集を開始」をクリックして、ローカルインポートまたはネットワークプラグインを選びます。
+4. ギャラリーで出典とタグにより絞り込み、元投稿のメタデータを確認し、長期保存したいものを画集に整理します。
+
+5 分でわかる一連の流れは[クイックスタート](https://kabegame.com/guide/quickstart/)を参照してください。デスクトップアプリをインストールしなくても、[オンライン Demo](https://demo.kabegame.com) でライブラリ画面を試せます。
+
 ## 主な機能
 
-- 🔌 **クローラークライアント**：`.kgpg` プラグインで各サイトから壁紙をクロール。内蔵のプラグインストアで閲覧/インストール/管理が可能。4.3.0 以降、リリース時点の最新プラグインをすべて同梱しています。プラグインは JS/TS で書かれ、V8（deno_core）または WebView バックエンドで動作します。
-- 🎨 **壁紙セッター（画像/動画）**：二次元壁紙を収集・管理・ローテーションし、指定した画集からデスクトップ壁紙を自動で切り替えます。
-- 🖼️ **画像マネージャー**：ギャラリー閲覧、自動タグ分類、画集の整理、仮想ディスク、ドラッグ＆ドロップでのインポート、フォルダと画集の同期。
-- 🧩 **MCP 整理**：MCP サーバーを開き、外部の AI エージェントにきめ細かな権限のもとで壁紙の整理を任せられます。
+| 機能 | 説明 |
+| --- | --- |
+| プラグイン駆動の収集 | 内蔵プラグインストアで `.kgpg` プラグインをインストール・更新・管理できます。V8 と WebView のバックエンドが、それぞれ軽量リクエストと実ブラウザのシナリオをカバーします。 |
+| ログイン状態の再利用 | ブラウジングがサイト Cookie を保存し、V8 プラグインは安全に注入を要求できます。WebView プラグインはブラウザセッションを直接利用します。 |
+| タグとメタデータ | プラグインはタグを自動分類し、元投稿、作者、コメント、生成パラメータを保存し、詳細ビューと検索フィールドを提供できます。 |
+| ギャラリーと検索 | 画像と動画を閲覧し、時間、出典、タグ、メディア、サイズ、ファイルサイズ、メタデータの組み合わせで絞り込めます。 |
+| 画集とフォルダ | 手動画集は多階層の整理に対応し、同期画集はローカルディレクトリとそのサブディレクトリの変化を継続的に追従します。 |
+| ローカルライブラリ連携 | ダウンロード先のカスタマイズ、ドラッグ＆ドロップでのインポート、一括操作、重複排除、仮想ディスク、ネイティブメタデータの読み取り。 |
+| 自動化とオープンインターフェース | 定時収集、CLI、MCP に対応。壁紙設定と画集ローテーションはデスクトップ版の追加機能として提供します。 |
 
-Windows、macOS、Linux、Android に対応（v4.3.0 以前のみ。新しいバージョンは現在対応を進めています）。
+## プラグインエコシステム
 
-## 興味があるかもしれません
-二次元壁紙やクローラーには興味がないかもしれませんが、本アプリのいくつかの技術的な工夫にはもしかしたら興味を持ってもらえるかもしれません
-- Tauri ベースの Webview クローラー [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)
-- 自作の Tauri runtime [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)
-  Kabegame 向けに深くカスタマイズしているため crate としては公開していませんが、AI に頼んで自分のプロジェクトへ移植できます。
-- 自作のパス折りたたみ式クエリエンジン [PathQL](./src-tauri/pathql-rs/)
-  簡単に紹介すると、Provider DSL と呼ばれるパーサーと、URL パスベースのクエリ構文を開発しました。アプリ内のほとんどの画像クエリはすでに [Provider DSL JSON5\YAML 形式](./src-tauri/kabegame-core/src/providers/dsl/) に置き換えられており、これらの DSL ファイルが PathQL エンジンのクエリ折りたたみ方法を決定します。たとえば、ギャラリーでメタデータに成人向けキーワードを含む画像を除外し、yande.re 由来の 4:3 から 16:9 の横長画像だけをランダム順で表示する場合、クエリはこう書きます：
-    ```url
-    images://gallery/hide/~not/~any/search/metadata/pussy/~or/search/native-metadata/pussy/~end/~end/~not/~any/search/metadata/penis/~or/search/native-metadata/penis/~end/~end/~not/~any/search/metadata/sex/~or/search/native-metadata/sex/~end/~end/~not/~any/search/metadata/r18/~or/search/native-metadata/r18/~end/~end/plugin/yandere/_kb_fc/aspect/4x3-16x9/_kb_fc/sort/random-7041412897802809
-    ```
-  このパスの意味は：非表示でない yande.re の画像だけを対象にし、業務メタデータと画像ネイティブメタデータのどちらにも `pussy`、`penis`、`sex`、`r18` のいずれのキーワードも含まれず、さらに画像のアスペクト比が 4:3 より大きく 16:9 以下で、最後に固定シードでランダムソートする、という意味です。
-  このクエリエンジンに興味があれば issue を立ててください。ドキュメントを充実させます。
-  理論上は crate として公開できますが、まだ探り切れていないエッジケースのバグがおそらく残っているので、AI に頼んで自分のプロジェクトへコピーしてもらうのもありです（GPL-3.0 にはご注意を）。
+公式プラグインリポジトリは、すでに二十以上のイラストサイト、コミュニティ、クリエイタープラットフォーム、壁紙サイトをカバーしています。プラグインごとに独自の設定フォーム、ログイン方法、タグ軸、詳細表示、おすすめタスクを提供できます。
 
-## ダウンロードとインストール
+- **プラグインを使う**：[公式プラグインディレクトリを見る](https://github.com/kabegame/crawler-plugins) · [プラグインのインストールと管理](https://kabegame.com/guide/plugins-usage/)
+- **プラグインを開発する**：[開発概要](https://kabegame.com/dev/overview/) · [V8 / WebView バックエンドの選択](https://kabegame.com/dev/crawler-backends/) · [API リファレンス](https://kabegame.com/reference/kabegame-api/)
+- **プラグインを貢献する**：新しいソースの追加、壊れたサイトの修正、既存プラグインのドキュメントやメタデータの改善ができます。
 
-**[GitHub Releases](https://github.com/kabegame/kabegame/releases/latest)** からお使いのプラットフォーム向けの本体をダウンロードしてください（`kabegame-cli` は独立した任意のツールで、本体と一緒にはインストールされません）：
+V8 プラグインは自己完結した ES Module で、HTTP リクエスト、API、HTML 解析による収集に適しており、Android でも動作します。実ブラウザのレンダリング、ブラウザセッション、ページ操作に依存する必要がある場合は、デスクトップ版の WebView バックエンドを使えます。ページを実際に動かしたうえで、DOM、ネットワーク応答、ページのダウンロードから内容を抽出します。
 
-| プラットフォーム | ダウンロードファイル | インストール手順 |
+> プラグインは、あなたがアクセスする権利を持つ内容の整理にのみ使用してください。ソースサイトの利用規約を守り、作者の著作権とプライバシーを尊重し、アクセス頻度を適切に抑えてください。
+
+## ダウンロードとプラットフォーム
+
+現在の主要リリースはデスクトップ版です。`kabegame-cli` は独立した任意のツールで、本体と一緒にはインストールされません。
+
+| プラットフォーム | ダウンロードファイル | 説明 |
 | --- | --- | --- |
-| Windows x64 | `Kabegame-standard_<バージョン>_x64-setup.exe` | インストーラーをダブルクリックし、ウィザードに従ってインストールします。画集仮想ディスクを使う場合は、アプリ設定で初めて「画集ドライブ」を有効にするときに、同梱の Dokan 2.x ドライバーのインストールを促す指示に従って許可してください。ドライバーのインストール後にもう一度有効にします。 |
-| macOS（Apple シリコン） | `Kabegame-standard_<バージョン>_aarch64.dmg` | DMG を開き、`Kabegame.app` を「アプリケーション」にドラッグします。インストーラーは署名されていません。初回起動時に「壊れている」または開発元を検証できないと表示された場合は、下記の `xattr` コマンドをターミナルで実行してから再度開いてください。macOS 11 以降で利用できます。 |
-| Linux amd64 | `Kabegame-standard_<バージョン>_amd64.deb` | ダウンロードディレクトリで下記の `apt install` コマンドを実行します。画集仮想ディスクに必要な `fuse3` も同時にインストールされます。 |
-| Android（v4.3.0 以前のみ） | `Kabegame_<バージョン>_android-preview.apk` | システム設定でブラウザーまたはファイルマネージャーに「提供元不明のアプリのインストール」を許可し、APK をタップして指示に従ってインストールします。Android 8.0 以降で利用できます。新しい Android クライアントは現在対応を進めています。 |
+| Windows x64 | `Kabegame-standard_<バージョン>_x64-setup.exe` | ダブルクリックでインストールします。画集仮想ディスクには Dokan 2.x が必要で、初回有効時にアプリがインストールを促します。 |
+| macOS Apple シリコン | `Kabegame-standard_<バージョン>_aarch64.dmg` | macOS 11 以降に対応。インストーラーはまだ署名されていません。 |
+| Linux amd64 | `Kabegame-standard_<バージョン>_amd64.deb` | `apt` でインストールします。画集仮想ディスクは `fuse3` に依存します。 |
+| Android | `Kabegame_<バージョン>_android-preview.apk` | Android 8.0 以降。現時点では v4.3.0 を使用してください。以降のバージョンは現在対応中です。 |
 
-macOS での初回起動時に隔離を解除：
+macOS の初回起動で開発元を検証できない、またはアプリが壊れていると表示された場合：
 
 ```bash
 xattr -d com.apple.quarantine /Applications/Kabegame.app
 ```
 
-macOS で画集仮想ディスクを使う場合は、macFUSE もインストールしてください。インストール後にシステムの指示に従って拡張機能を承認し、必要に応じて再起動します：
+macOS で画集仮想ディスクを使う場合は、macFUSE もインストールします：
 
 ```bash
 brew install --cask macfuse
 ```
 
-Linux へのインストール（まずターミナルでインストールパッケージのあるディレクトリに移動）：
+Linux へのインストール：
 
 ```bash
 sudo apt install ./Kabegame-standard_*_amd64.deb
 ```
 
-インストール後は Kabegame を起動するだけです。画像はデフォルトでユーザーのピクチャディレクトリの `Pictures/Kabegame` に保存され、アプリをアンインストールしてもこれらの画像は削除されません。
+画像はデフォルトでユーザーのピクチャディレクトリの `Pictures/Kabegame` に保存され、アプリをアンインストールしてもここにある画像は削除されません。より詳しいプラットフォーム要件、データディレクトリ、トラブルシューティングは[インストールドキュメント](https://kabegame.com/guide/installation/)を参照してください。
 
-## ドキュメント
+## プロジェクトに参加する
 
-完全なドキュメントはすべて **[kabegame.com](https://kabegame.com/)** にあります（4.4.0 以降は一部同期していない可能性があります）：
+Tauri / Rust のモノレポ全体を先に理解していなくても、Kabegame に参加できます：
 
-- [ユーザーガイド](https://kabegame.com/guide/installation/) —— インストール、ギャラリー、画集、壁紙、仮想ディスク、MCP など。
-- [プラグイン開発](https://kabegame.com/dev/overview/) —— V8 / WebView クローラープラグインの作成、`.kgpg` 形式、パッケージングと公開。
-- [開発に参加](https://kabegame.com/dev-contrib/building/) —— ソースからのビルド、Android 開発、アーキテクチャと技術スタック、謝辞と組み込み依存関係。（QQ を追加してください：2905432378）
-- [コマンドラインツール](https://kabegame.com/reference/cli/) と [API リファレンス](https://kabegame.com/reference/kabegame-api/)。
+- 問題が発生したら [Bug report](https://github.com/kabegame/kabegame/issues/new?template=bug_report.md) を提出してください。
+- 新しいソースに対応してほしい場合は、[プラグインリポジトリ](https://github.com/kabegame/crawler-plugins)でプラグインを提出するか要望を出してください。
+- アプリ本体を改善したい場合は、まず[ソースからのビルド](https://kabegame.com/dev-contrib/building/)と[アーキテクチャ](https://kabegame.com/dev-contrib/architecture/)をお読みください。
+- ドキュメント、翻訳、スクリーンショット、プラグイン説明も同じく価値のある貢献です。
 
-クローラープラグインリポジトリ：**[kabegame/crawler-plugins](https://github.com/kabegame/crawler-plugins)**（プラグイン募集中！）
+Kabegame が役に立ったら、Star を付けていただけると嬉しいです。より多くのユーザーと潜在的なプラグイン作者にプロジェクトを知ってもらう助けになり、私にとっても励みになります。
+
+## 技術的なハイライト
+
+Kabegame は Vue 3、Tauri 2、Rust で構築され、ライブラリクエリ、プラグインランタイム、デスクトップブラウザ機能についていくつかの拡張を行っています：
+
+- [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)：ログイン状態やページ操作を必要とするプラグインを実ページ環境で実行します。
+- [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)：デスクトップ向けにカスタマイズした CEF Tauri runtime。
+- [PathQL](./src-tauri/pathql-rs/)：パスによる組み合わせフィルタ、並べ替え、ページングと Provider DSL を備えたデータベースクエリエンジン。
+
+プロジェクト構成、プロセスモデル、主要モジュールは[アーキテクチャとプロジェクト構成](https://kabegame.com/dev-contrib/architecture/)を参照してください。
 
 ## ライセンス
 
-ソースコードは [GPL v3](./LICENSE) ライセンスの下で提供されています。（オープンソースこそが究極の答え）
+Kabegame は [GPL-3.0](./LICENSE) でオープンソース化されています。
 
 ## 名前の由来 🐢
 
-**Kabegame** は日本語の「壁亀」（かべがめ）のローマ字表記で、「壁紙」（かべがみ）と発音が近いんです～ まるで静かな亀さんがあなたのデスクトップに乗って、二次元壁紙コレクションをそっと見守っているかのよう。オープンソースを大切に、二次元好きのための、二次元好き自身のソフトウェアを作ろう。
+**Kabegame** は日本語の「壁亀」（かべがめ）のローマ字表記で、「壁紙」（かべがみ）と発音が近いんです。まるで静かな亀さんがデスクトップに乗って、あなたの画像コレクションを見守っているかのよう。
