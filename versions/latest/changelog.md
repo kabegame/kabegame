@@ -31,6 +31,8 @@
 - CLI `plugin run --var`：`key=` 显式清空为 `null`；checkbox 写作 `key=a,b`；options 只接受声明过的 `variable` 或显示名，其余值直接报错。
 - `@kabegame/plugin-sdk` 类型：`kbCfgField<K, T, M>` 新增修饰参数，`{ required: true }` 去掉 `null`、`{ when: true }` 让 key 变成可选；`kbCfgCheckbox<V>` 改为 `Record<V, boolean>`，与运行时一致。
 - 仓库内插件已全部迁移：删掉多余的空 `default`，给必需输入加上 `required`，并修复把 `null` 拼成字符串 `"null"` 的读取点。第三方插件请检查 `String(x)`、模板字符串插值、`x.trim()` / `x.split()` / `x.length` 和 `Object.entries(checkbox)` 等写法。
+- `@kabegame/plugin-sdk` 与 `@kabegame/types` 发布到 npm 并改为 MIT 许可；`kabegame-cli plugin new` 的 V8 模板改为从 npm 安装二者（版本跟随 CLI），仓库外的插件作者生成后可直接 `npm install`。
+- 插件 `package.json` 的 `name` 可写成 `kabegame-plugin-<id>`，应用加载时剥离前缀作为插件 id；`kabegame-cli plugin new <id>` 生成 `kabegame-plugin-<id>/`，`plugin pack` 要求输出 `<id>.kgpg`；官方插件目录同步改名，id 不变，`engines.kabegame` 提到 `>=4.5.2`。
 
 ## 开发侧
 

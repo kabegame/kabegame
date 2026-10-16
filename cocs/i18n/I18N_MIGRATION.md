@@ -425,7 +425,7 @@
 
 ### 8.2 各插件 manifest 与 config 内界面文本
 
-#### 8.2.1 Pixiv（`plugins/pixiv/`）
+#### 8.2.1 Pixiv（`plugins/kabegame-plugin-pixiv/`）
 
 | 文件 | 字段/位置 | 界面文本示例 |
 |------|------------|--------------|
@@ -435,7 +435,7 @@
 | `config.json` | `var[].descripts` | 各变量说明（如「Pixiv 用户 ID，不清楚请点击插件查看文档」「格式 YYYYMMDD，如 20240501」等） |
 | `config.json` | `options[].name` | 排行榜、个人收藏、画师作品、关键词搜索；日榜、周榜、月榜、男性向、女性向、AI 日榜、日榜 R18…；全部、插画、漫画、动图；安全、R18、全部；按日期、按人气 |
 
-#### 8.2.2 konachan（`plugins/konachan/`）
+#### 8.2.2 konachan（`plugins/kabegame-plugin-konachan/`）
 
 | 文件 | 字段/位置 | 界面文本示例 |
 |------|------------|--------------|
@@ -445,7 +445,7 @@
 | `config.json` | `var[].descripts` | 要拉取的起始页面；要拉取的结束页面。请保持最多爬取100页…；图片质量，这个网站质量都挺高的 |
 | `config.json` | `options[].name` | 高、中 |
 
-#### 8.2.3 twodwallpapers（`plugins/twodwallpapers/`）
+#### 8.2.3 twodwallpapers（`plugins/kabegame-plugin-twodwallpapers/`）
 
 | 文件 | 字段/位置 | 界面文本示例 |
 |------|------------|--------------|
@@ -455,7 +455,7 @@
 | `config.json` | `var[].descripts` | 爬取某一种壁纸；按名称过滤包含的子目录；最大爬取的总图片张数 |
 | `config.json` | `options[].name` | 动漫壁纸、游戏壁纸、未分类；最新、最多查看、最多喜欢、最多收藏、最近更新、随机 |
 
-#### 8.2.4 anime-pictures（`plugins/anime-pictures/`）
+#### 8.2.4 anime-pictures（`plugins/kabegame-plugin-anime-pictures/`）
 
 | 文件 | 字段/位置 | 界面文本示例 |
 |------|------------|--------------|
@@ -464,7 +464,7 @@
 | `config.json` | `var[].name` | 起始页面、结束页数、标签 |
 | `config.json` | `var[].descripts` | 要拉取的起始页面；要拉取的结束页面；要拉取的标签（默认无标签爬全站） |
 
-#### 8.2.5 anihonet-wallpaper（`plugins/anihonet-wallpaper/`）
+#### 8.2.5 anihonet-wallpaper（`plugins/kabegame-plugin-anihonet-wallpaper/`）
 
 | 文件 | 字段/位置 | 界面文本示例 |
 |------|------------|--------------|
@@ -474,7 +474,7 @@
 | `config.json` | `var[].descripts` | 要拉取的起始页面；要拉取的结束页面；选择要爬取的壁纸类型：桌面壁纸（imgpc）或手机壁纸（sp）；选择要爬取的排行榜周期：日榜、周榜、月榜或年榜 |
 | `config.json` | `options[].name` | 桌面壁纸、手机壁纸；日榜、周榜、月榜、年榜 |
 
-#### 8.2.6 ziworld（`plugins/ziworld/`）
+#### 8.2.6 ziworld（`plugins/kabegame-plugin-ziworld/`）
 
 | 文件 | 字段/位置 | 界面文本示例 |
 |------|------------|--------------|
@@ -490,12 +490,12 @@
 
 | 插件 | 路径 | 说明 |
 |------|------|------|
-| Pixiv | `plugins/pixiv/doc_root/doc.md` | Pixiv 爬虫说明、Cookie 获取、配置项、注意事项等 |
-| konachan | `plugins/konachan/doc_root/doc.md` | Konachan 动漫壁纸说明、配置项、使用说明、注意事项 |
-| twodwallpapers | `plugins/twodwallpapers/doc_root/doc.md` | 2dwallpaper 插件说明、大目录/小目录/排序、使用示例 |
-| anime-pictures | `plugins/anime-pictures/doc_root/doc.md` | anime-pictures 按标签下载说明、参数表、获取标签名、示例、注意事项 |
-| anihonet-wallpaper | `plugins/anihonet-wallpaper/doc_root/doc.md` | anihonet 关键规则、配置项、使用建议 |
-| ziworld | `plugins/ziworld/doc_root/doc.md` | ziworld 抓取说明 |
+| Pixiv | `plugins/kabegame-plugin-pixiv/doc_root/doc.md` | Pixiv 爬虫说明、Cookie 获取、配置项、注意事项等 |
+| konachan | `plugins/kabegame-plugin-konachan/doc_root/doc.md` | Konachan 动漫壁纸说明、配置项、使用说明、注意事项 |
+| twodwallpapers | `plugins/kabegame-plugin-twodwallpapers/doc_root/doc.md` | 2dwallpaper 插件说明、大目录/小目录/排序、使用示例 |
+| anime-pictures | `plugins/kabegame-plugin-anime-pictures/doc_root/doc.md` | anime-pictures 按标签下载说明、参数表、获取标签名、示例、注意事项 |
+| anihonet-wallpaper | `plugins/kabegame-plugin-anihonet-wallpaper/doc_root/doc.md` | anihonet 关键规则、配置项、使用建议 |
+| ziworld | `plugins/kabegame-plugin-ziworld/doc_root/doc.md` | ziworld 抓取说明 |
 
 ### 8.4 脚本内用户可见字符串（throw / print / ctx.log）
 
@@ -505,25 +505,25 @@
 
 | 插件 | 文件 | 类型 | 文案 |
 |------|------|------|------|
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 排行榜模式请选择起始日期（起止均空时由脚本按东京时间自动填充；异常仍为空时触发） |
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 收藏模式请填写用户 UID |
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 画师模式请填写画师 UID |
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 无法获取画师作品列表 |
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 关键词模式请填写搜索关键词 |
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 未知的爬取类型: …（含变量） |
-| konachan | `plugins/konachan/crawl.rhai` | throw | 在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪 |
-| konachan | `plugins/konachan/crawl.rhai` | throw | 结束页面需要比开始页面大 |
-| anime-pictures | `plugins/anime-pictures/crawl.rhai` | throw | 此插件不支持安卓版本！如果您是桌面版本，请下载最新版kabegame来运行本插件！ |
-| anihonet-wallpaper | `plugins/anihonet-wallpaper/crawl.rhai` | print | 错误：wallpaper_type 必须是 'imgpc' 或 'sp' |
+| pixiv | `plugins/kabegame-plugin-pixiv/crawl.rhai` | throw | 排行榜模式请选择起始日期（起止均空时由脚本按东京时间自动填充；异常仍为空时触发） |
+| pixiv | `plugins/kabegame-plugin-pixiv/crawl.rhai` | throw | 收藏模式请填写用户 UID |
+| pixiv | `plugins/kabegame-plugin-pixiv/crawl.rhai` | throw | 画师模式请填写画师 UID |
+| pixiv | `plugins/kabegame-plugin-pixiv/crawl.rhai` | throw | 无法获取画师作品列表 |
+| pixiv | `plugins/kabegame-plugin-pixiv/crawl.rhai` | throw | 关键词模式请填写搜索关键词 |
+| pixiv | `plugins/kabegame-plugin-pixiv/crawl.rhai` | throw | 未知的爬取类型: …（含变量） |
+| konachan | `plugins/kabegame-plugin-konachan/crawl.rhai` | throw | 在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪 |
+| konachan | `plugins/kabegame-plugin-konachan/crawl.rhai` | throw | 结束页面需要比开始页面大 |
+| anime-pictures | `plugins/kabegame-plugin-anime-pictures/crawl.rhai` | throw | 此插件不支持安卓版本！如果您是桌面版本，请下载最新版kabegame来运行本插件！ |
+| anihonet-wallpaper | `plugins/kabegame-plugin-anihonet-wallpaper/crawl.rhai` | print | 错误：wallpaper_type 必须是 'imgpc' 或 'sp' |
 
 #### 8.4.2 crawl.js
 
 | 插件 | 文件 | 类型 | 文案 |
 |------|------|------|------|
-| anime-pictures | `plugins/anime-pictures/crawl.js` | throw | 在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪 |
-| anime-pictures | `plugins/anime-pictures/crawl.js` | throw | 结束页面需要比开始页面大 |
-| anime-pictures | `plugins/anime-pictures/crawl.js` | ctx.log | [anime-pictures] 检测到挑战页（如 Cloudflare 验证），请求打开 WebView 窗口并等待 20 秒 |
-| anime-pictures | `plugins/anime-pictures/crawl.js` | ctx.log | [anime-pictures] 等待结束，重新查询页面元素 |
+| anime-pictures | `plugins/kabegame-plugin-anime-pictures/crawl.js` | throw | 在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪 |
+| anime-pictures | `plugins/kabegame-plugin-anime-pictures/crawl.js` | throw | 结束页面需要比开始页面大 |
+| anime-pictures | `plugins/kabegame-plugin-anime-pictures/crawl.js` | ctx.log | [anime-pictures] 检测到挑战页（如 Cloudflare 验证），请求打开 WebView 窗口并等待 20 秒 |
+| anime-pictures | `plugins/kabegame-plugin-anime-pictures/crawl.js` | ctx.log | [anime-pictures] 等待结束，重新查询页面元素 |
 
 ### 8.5 其他与插件相关的界面文本
 

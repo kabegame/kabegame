@@ -209,7 +209,7 @@ JavaScript / TypeScript 脚本扩展与来源元数据保留；脚本扩展说�
 
 ## 新增 Safebooru 收集源插件
 
-新增插件 `safebooru`（1.0.0，`src-crawler-plugins/plugins/safebooru/`）。帖子列表走站点匿名可用的 dapi JSON：
+新增插件 `safebooru`（1.0.0，`src-crawler-plugins/plugins/kabegame-plugin-safebooru/`）。帖子列表走站点匿名可用的 dapi JSON：
 请求带 `fields=tag_info`，一页一个请求就拿到带分类的全量标签。同参数再取一次 XML，按 id 合并发布时间
 （JSON 没有这个字段；XML 的 rating 是旧单字母，不采用）。有评论的帖子按 10 条一页翻详情页取评论
 （dapi 评论接口的时间是假的）。id 范围模式用 `id:>=A id:<=B sort:id:asc`，每页 100 条，按 id 升序抓完闭区间，两端最多相差 5000
@@ -238,7 +238,7 @@ JavaScript / TypeScript 脚本扩展与来源元数据保留；脚本扩展说�
 
 ## 新增 nekos.moe 收集源插件
 
-新增插件 `nekos-moe`（0.1.0，`src-crawler-plugins/plugins/nekos-moe/`，V8）。数据走开源后端的
+新增插件 `nekos-moe`（0.1.0，`src-crawler-plugins/plugins/kabegame-plugin-nekos-moe/`，V8）。数据走开源后端的
 `POST /api/v1/images/search`：排序支持 newest / likes / oldest（`relevance` 不带 tags 时等同自然顺序，不提供），
 NSFW 支持仅全年龄 / 仅 NSFW / 全部（全部时不传 `nsfw`），每页 1–50（超过 50 服务端会回落成 20）。
 服务端 `skip` 上限 2500，越界的页码在发请求前截断或报 warn；站点现存 792 张（SFW 471 / NSFW 321），不会碰到上限。
@@ -258,7 +258,7 @@ NSFW 支持仅全年龄 / 仅 NSFW / 全部（全部时不传 `nsfw`），每页
 
 ## 新增 AIBooru 收集源插件
 
-新增插件 `aibooru`（1.0.0，`src-crawler-plugins/plugins/aibooru/`）。AIBooru 是 Danbooru 的分支，专收 AI 生成图。
+新增插件 `aibooru`（1.0.0，`src-crawler-plugins/plugins/kabegame-plugin-aibooru/`）。AIBooru 是 Danbooru 的分支，专收 AI 生成图。
 和 danbooru 插件解析 HTML 不同，这里全程走 JSON API：列表接口用 `only=` 把上传者、审核者、AI 生成参数、作者评论和评论
 一次带回，每页一个请求拿齐详情页信息；标签帖数另查 `/tags.json`（`name_array` 按 URL 长度切块，任务内缓存）。
 网页先分页再隐藏已删除作品，插件同样在分页后过滤，保证与网页同页一致。标签多一个 `model` 分类（分类号 6），
@@ -331,7 +331,7 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 
 ## 新增微博收集源插件
 
-新增插件 `weibo`（0.1.0，`src-crawler-plugins/plugins/weibo/`，V8）。全部模式依赖畅游里 `weibo.com` 的登录态
+新增插件 `weibo`（0.1.0，`src-crawler-plugins/plugins/kabegame-plugin-weibo/`，V8）。全部模式依赖畅游里 `weibo.com` 的登录态
 （`requireCookie("weibo.com")`；未登录时时间线 403、m 站 432、搜索跳登录页，所以不走访客 Cookie，也不用 m 站）。
 五种模式各自产出微博，统一交给 `processPost`：用户相册走 `ajax/profile/getImageWall`（`since_id` 游标，按 mid 分组后逐条
 `statuses/show`），用户微博走 `ajax/statuses/mymblog`（`feature` 0/1/2 = 全部/原创/图片，转发可选收原帖），超话走
@@ -362,7 +362,7 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 
 ## 新增 X（Twitter）媒体收集源插件（画师媒体 / 搜索 / 单条推文 / 书签 / 点赞）
 
-新增插件 `x-webview`（0.1.0，`src-crawler-plugins/plugins/x-webview/`，WebView）。不自己调 GraphQL（请求要带页面 JS 算的
+新增插件 `x-webview`（0.1.0，`src-crawler-plugins/plugins/kabegame-plugin-x-webview/`，WebView）。不自己调 GraphQL（请求要带页面 JS 算的
 `x-client-transaction-id`，queryId 也会轮换）：`crawl.js` 顶层在 document-start 同步 hook `XMLHttpRequest.prototype.open`，
 截获页面滚动时自己发出的时间线响应，思路参考 prinsss/twitter-web-exporter。2026-10 实测旧 `UserMedia` 已退役，主页「媒体」标签
 带「图片 / 视频」下拉：`/<user>/media?filter=photo` → `UserPhotoTimeline`（首屏 `profile-photo-grid-0` 模块，后续页
@@ -488,3 +488,30 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [x] | 语言切换 | 桌面 CEF | 设置语言 zh → en → zh | 收到 `{reason: official-source-name-i18n-sync}`，官方源 tab 名称随之切换 | 已实测，语言已恢复 zh |
 | [ ] | Web 版 | Web | `?tab=` 恢复与只读源行为 | 与桌面一致，源增删改仍被只读拦截 | 未覆盖 |
 | [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行 |
+
+## 插件 SDK 与类型发布 npm，CLI 模板改用 npm 版本（`src-tauri/kabegame-cli/template/package.json`）
+
+`@kabegame/types` 与 `@kabegame/plugin-sdk` 发布到 npm（scope `@kabegame`），两包改为 MIT 许可并补 LICENSE / README / 仓库元数据；SDK 对 types 的依赖由 `file:` 改为 `devDependencies`（发布的 `.d.ts` 不引用 types 全局）。`kabegame-cli plugin new` 新增模板变量 `kabegame-version`（取 CLI 的 `CARGO_PKG_VERSION`），V8 模板的两个依赖渲染为 `^<CLI 版本>`。仓库内插件仍用 `file:../../../packages/…`，`kabegame-plugin` skill 改为要求用 `plugin new` 生成后改回 `file:`。文档站「打包与发布」「plugin-sdk 工具库」「概览」去掉「未发布到 npm」的说明。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 模板渲染 | cargo test | `test_template_package_json_uses_cli_version` | v8 模板渲染为合法 JSON，两依赖均为 `^<CLI 版本>` | |
+| [ ] | 仓库外生成并构建 | 任意目录 | `kabegame-cli plugin new demo && cd demo && npm install && npm run build` | 从 npm 装到 SDK 与 types，产出 `dist/main.js`，`plugin pack` 成功 | 需对应版本已发布 |
+| [x] | 发布内容 | 本地 | 两包 `npm pack --dry-run` | types 只含 `.d.ts`、README、LICENSE；SDK 只含 `dist`、README、LICENSE | 已运行 |
+| [ ] | npm 页面许可证 | npmjs.com | 发布新版本后查看两包 | 显示 MIT 与 README | 已发布的 4.5.1 仍为 GPL，需新版本 |
+
+## 插件包名 `kabegame-plugin-<id>`，应用剥离前缀作插件 id（`kabegame-core/src/plugin/mod.rs`、`kabegame-cli`、`src-crawler-plugins/`）
+
+`package.json.name` 与插件 id 分开：`kabegame_core::plugin::plugin_id_from_package_name` 剥离可选前缀 `kabegame-plugin-`（剥完为空则不剥），`resolve_kgpg_plugin_id` 的 `name` 来源与 manifest 显示名回退都经它；显式 `--id` 与文件名 stem 不剥离。`kabegame-cli plugin new <id>` 生成 `kabegame-plugin-<id>/`、模板 `name` 加前缀、`engines.kabegame` 改 `>=4.5.2`；`plugin pack` 改为「目录名 = name、输出 stem = 剥离后 id」，目录名先 canonicalize（修 `--plugin-dir .`）。插件仓库 32 个目录 `git mv` 为 `plugins/kabegame-plugin-<id>/`，`name` 同步、`engines.kabegame` 统一 `>=4.5.2`（旧版应用不剥离前缀）；`package-plugin.ts`、`generate-index.ts`、repack / run driver 按 id 输出 `<id>.kgpg` 与索引条目，参数接受 id 或目录名。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | core 单测 | cargo test | `kabegame-core --lib prefix` | 前缀剥离、`resolve_kgpg_plugin_id`（含撞内建 id 拒绝）、显示名回退 3 个新测试通过 | `plugin::` 全部 92 个通过 |
+| [x] | CLI 单测 | cargo test | `kabegame-cli` 全部 | 模板 `name` 为 `kabegame-plugin-my-plugin`；带前缀目录打出 `<id>.kgpg`，输出 stem 用包名被拒，`<dir>/.` 也能识别目录名 | 27 个通过 |
+| [x] | plugin new / pack | 本地 debug CLI | `plugin new demo`、`plugin new kabegame-plugin-demo2`，进目录 `plugin pack --plugin-dir . --output ../demo.kgpg` 与 `--output ../kabegame-plugin-demo.kgpg` | 目录分别为 `kabegame-plugin-demo` / `kabegame-plugin-demo2`（不重复加前缀）；前者成功，后者报 P3-7 | 已实测 |
+| [x] | 全量打包 | 本地 debug CLI | `KABEGAME_CLI=target/debug/kabegame-cli deno run -A package-plugin.ts --out-dir <临时目录>` | 32 个全部成功，产物文件名均为无前缀 `<id>.kgpg` | 已实测；未覆盖仓库内已跟踪的 `packed/` |
+| [x] | 索引生成 | 临时目录 | 软链 plugins 后跑 `generate-index.ts --tag v4.5.2` | 32 条，`id` / `name` / `downloadUrl` 均无前缀，`minAppVersion` 为 `4.5.2` | 已实测 |
+| [x] | 临时运行识别 id | 本地 debug CLI | `plugin run <临时目录>/konachan.kgpg --dry-run --via local` | 显示「插件 konachan」，读取原 id 的默认配置 | 已实测 |
+| [ ] | 已安装用户升级 | 桌面 dev | 已装旧包的情况下，装新打的 `wallhaven.kgpg` | 识别为同一插件（覆盖更新），已有图片、插件数据目录不变，不会出现 `kabegame-plugin-wallhaven` | 未覆盖 |
+| [ ] | 旧版应用 | 4.5.1 应用 | 商店看新索引 | 插件显示「版本不兼容」，不会装出重复插件 | 未覆盖，需发版后验证 |
+| [ ] | release CLI | `target/release` | 重建 release CLI 后 `deno task --cwd src-crawler-plugins package` | 打包成功；旧 release CLI 会因输出 stem ≠ name 报 P3-7 | 本机 release CLI 为改动前版本，未重建 |

@@ -1,7 +1,7 @@
 # WebView 插件参考
 
 权威来源：bootstrap `src-tauri/kabegame/src/webview_js/bootstrap.js`（`Kabegame` 对象定义及注释）、
-`docs/PLUGIN_FORMAT.md`、`cocs/crawler/CRAWLER_JS_FLOW.md`。完整范例：`plugins/xhs-webview/crawl.js`。
+`docs/PLUGIN_FORMAT.md`、`cocs/crawler/CRAWLER_JS_FLOW.md`。完整范例：`plugins/kabegame-plugin-xhs-webview/crawl.js`。
 
 ## 和 V8 的根本区别：每次导航都重跑整份脚本
 
@@ -89,7 +89,7 @@ await main();
 
 - **截获页面自己的 API 响应**：签名在页面 JS 里算的站点（如 x.com 的 `x-client-transaction-id`），
   不要自己调接口——在 `crawl.js` 顶层、任何 `await` 之前同步 hook `XMLHttpRequest.prototype.open`
-  （或 `window.fetch`），脚本在 document-start 执行，早于页面请求；再滚动页面触发翻页。范例：`plugins/x-webview`。
+  （或 `window.fetch`），脚本在 document-start 执行，早于页面请求；再滚动页面触发翻页。范例：`plugins/kabegame-plugin-x-webview`。
 - **传给宿主的字符串不能含孤立代理项**：`str.slice(0, n)` 按 UTF-16 截断会把 emoji 劈开，带孤立代理项的
   `name` 等参数经 IPC 传过去后 `invoke` 既不返回也不报错，任务永远挂在 `exit()` 等下载。截断一律按字形
   （`Intl.Segmenter`）或至少 `Array.from(str)`。

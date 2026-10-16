@@ -179,3 +179,10 @@ Kabegame 基于 [GPL-3.0](./LICENSE) 开源。
 ## 名称由来 🐢
 
 **Kabegame** 是日语「壁亀」（かべがめ）的罗马音，与「壁纸」（かべがみ）发音相近。就像一只安静的龟龟趴在桌面上，守护你的图片收藏。
+
+
+<!-- others: 
+
+为了优化docs文档，你要作为不懂项目的插件作者，想按照docs里的步骤写一个自定义插件，注意不用 kabegame-plugins skill。你安装了最新的 kabegame-cli 到path中，你决定在 ~/Code/ 下
+
+-->

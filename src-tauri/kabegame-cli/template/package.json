@@ -1,10 +1,10 @@
 {
-  "name": "{{ project-name }}",
+  "name": "kabegame-plugin-{{ project-name }}",
   "version": "0.1.0",
   "description": "{{ project-name }} crawler plugin",
   "author": "You",
   "private": true,
-  "engines": { "kabegame": ">=4.3.0" },
+  "engines": { "kabegame": ">=4.5.2" },
   "kbPackageVersion": 3,
   "kbBackend": "{{ backend }}",
   "kbBaseUrl": "",
@@ -15,8 +15,8 @@
   "main": "dist/main.js",
   "scripts": { "build": "rspack build" },
   "devDependencies": {
-    "@kabegame/plugin-sdk": "file:../../../packages/kabegame-plugin-sdk",
-    "@kabegame/types": "file:../../../packages/kabegame-types",
+    "@kabegame/plugin-sdk": "^{{ kabegame-version }}",
+    "@kabegame/types": "^{{ kabegame-version }}",
     "@rspack/cli": "^1",
     "@rspack/core": "^1",
     "typescript": "^5.5.0"

@@ -47,14 +47,14 @@ kabegame-cli plugin new <name> [--backend v8|webview]
 
 | 参数        | 必填 | 说明                                                                                                                 |
 | ----------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
-| `name`      | 是   | 插件名，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。 |
+| `name`      | 是   | 插件 ID，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。目录名与 `package.json.name` 自动加 `kabegame-plugin-` 前缀；已带前缀时不重复添加。 |
 | `--backend` | 否   | `v8`（默认）或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。（Rhai 后端已移除，不可选。）                |
 
-目标目录若已存在则直接报错退出。生成结果：
+目标目录若已存在则直接报错退出。`kabegame-cli plugin new my-site` 的生成结果：
 
 ```text
-my-site/
-├─ package.json       # v3 清单，name / kbBackend 已按参数填好
+kabegame-plugin-my-site/
+├─ package.json       # v3 清单，name = kabegame-plugin-my-site（插件 ID my-site），engines.kabegame = >=4.5.2
 ├─ icon.png
 ├─ docs/doc.md
 ├─ tsconfig.json
@@ -64,7 +64,7 @@ my-site/
 └─ crawl.js           # 仅 webview
 ```
 
-v8 模板要先 `npm i && npm run build` 产出 `dist/main.js`，否则 `plugin pack` 会报 `main 脚本不存在`。模板的 `devDependencies` 用 Kabegame 源码仓库内的相对路径引用 `@kabegame/plugin-sdk` / `@kabegame/types`，仓库外使用时需改成 `"@kabegame/types": "github:kabegame/kabegame-types"` 并删掉 plugin-sdk，见 [打包与发布 · 准备插件目录](/dev/packaging/#准备插件目录)。
+v8 模板要先 `npm i && npm run build` 产出 `dist/main.js`，否则 `plugin pack` 会报 `main 脚本不存在`。模板的 `devDependencies` 从 npm 安装与 CLI 同版本的 `@kabegame/plugin-sdk` / `@kabegame/types`，见 [打包与发布 · 准备插件目录](/dev/packaging/#准备插件目录)。
 
 ```bash
 kabegame-cli plugin new my-site
@@ -112,7 +112,7 @@ kabegame-cli plugin run <plugin> [选项]
 
 ```bash
 # 不安装，直接跑一个打好的包（配置仍按已存的 default-configs/<id>.json 叠加）
-kabegame-cli plugin pack --plugin-dir ./plugins/kemono --output /tmp/kemono.kgpg
+kabegame-cli plugin pack --plugin-dir ./plugins/kabegame-plugin-kemono --output /tmp/kemono.kgpg
 kabegame-cli plugin run /tmp/kemono.kgpg --var page=1
 
 # 换个 id 跑同一个包：数据目录 / 默认配置 / 入库 plugin_id 都隔离开，方便对照测试
@@ -150,8 +150,8 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 | 参数           | 必填 | 说明                                                              |
 | -------------- | ---- | ----------------------------------------------------------------- |
-| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录。 |
-| `--output`     | 是   | 输出的 `.kgpg` 文件路径。                                         |
+| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录；目录名必须等于 `package.json.name`。 |
+| `--output`     | 是   | 输出的 `.kgpg` 文件路径；文件名（去掉 `.kgpg`）必须等于插件 ID，即去掉 `kabegame-plugin-` 前缀后的 `name`。 |
 
 打包时读取 `package.json.main` 与 `package.json.kbBackend`；缺少 v3 清单或必需脚本会直接报错。
 

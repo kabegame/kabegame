@@ -44,12 +44,15 @@ import { Badge } from '@astrojs/starlight/components';
 | 迁移脚本导出 `provideSearchTextList` | 通用 | <Badge text="4.5.1" variant="note" /> |
 | 插件 provider 依赖全局续接段 `_kb_fc` / `_kb_desc` / `_kb_x<N>x` / `_kb_co` | 通用 | <Badge text="4.5.1" variant="note" /> |
 | `kbConfig.required` 与新的 null / `when` 缺键语义 | 通用 | <Badge text="4.5.2" variant="note" /> |
+| `package.json` 的 `name` 去掉 `kabegame-plugin-` 前缀作为插件 ID | 通用 | <Badge text="4.5.2" variant="note" /> |
 
 ## 4.5.2
 
 ### 新增
 
 - `kbConfig` 字段可声明 `required: true`。字段可见但为空时，主应用、CLI、自动任务都会在创建或调度任务前拒绝运行。
+- `package.json` 的 `name` 可以写成 `kabegame-plugin-<ID>`：应用取插件 ID 时会去掉 `kabegame-plugin-` 前缀，`kabegame-plugin-my-plugin` 与 `my-plugin` 得到同一个 ID `my-plugin`，数据目录、图片记录、`.kgpg` 文件名都按去掉前缀后的 ID。前缀可选，旧版应用不会去掉它，所以 `name` 带前缀时 `engines.kabegame` 至少要写 `>=4.5.2`。见 [打包与发布 · 插件 ID](/dev/packaging/#插件-id)。
+- `@kabegame/plugin-sdk` 与 `@kabegame/types` 发布到 npm，改为 MIT 许可；`kabegame-cli plugin new` 生成的 V8 模板直接从 npm 安装二者，版本与 CLI 一致，仓库外可直接 `npm install`。
 
 ### 变更
 
@@ -57,6 +60,9 @@ import { Badge } from '@astrojs/starlight/components';
 - **Breaking：**被 `when` 隐藏的字段不再传给脚本，对应 key 为 `undefined`。可见性按依赖链计算，字段级或选项级 `when` 成环的插件会被拒绝安装。
 - 有 `default` 的字段也可以被用户清空；显式 `null` 不再回落到默认值。options 中声明过的 `variable: ""` 仍是合法值。
 - CLI 的 `--var key=` 表示清空为 `null`，checkbox 接受逗号分隔的 variable，options 不再接受未声明值。
+- `kabegame-cli plugin new <ID>` 生成的目录和 `package.json` 的 `name` 改为 `kabegame-plugin-<ID>`，模板 `engines.kabegame` 改为 `>=4.5.2`；参数本身已带前缀时不会重复添加。
+- `kabegame-cli plugin pack` 的命名检查改为：目录名等于 `package.json` 的 `name`，输出文件名（去掉 `.kgpg`）等于插件 ID。以前要求输出文件名也等于 `name`，带前缀的插件要改成 `--output <ID>.kgpg`；`--plugin-dir .` 现在也能正确识别目录名。
+- 官方插件仓库的插件目录改为 `plugins/kabegame-plugin-<ID>/`，插件 ID 不变，全部插件的 `engines.kabegame` 提到 `>=4.5.2`。
 
 ## 4.5.1
 

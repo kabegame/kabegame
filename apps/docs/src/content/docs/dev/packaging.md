@@ -38,10 +38,10 @@ kabegame-cli plugin new my-plugin                    # V8 后端
 kabegame-cli plugin new my-plugin --backend webview  # WebView 后端
 ```
 
-目录名只允许全小写的 kebab-case。V8 模板是 TypeScript 项目，内容如下：
+参数是插件 ID，只允许全小写的 kebab-case。CLI 生成的目录名和 `package.json` 的 `name` 都会加上 `kabegame-plugin-` 前缀（传入的名字已经带前缀时不会重复添加），插件 ID 仍是 `my-plugin`，见下文 [插件 ID](#插件-id)。V8 模板是 TypeScript 项目，内容如下：
 
 ```
-my-plugin/
+kabegame-plugin-my-plugin/
 ├── package.json        # 清单；main 指向 dist/main.js
 ├── src/index.ts        # crawl 入口
 ├── rspack.config.mjs   # 把 src/ 打成单个 ES module
@@ -50,25 +50,22 @@ my-plugin/
 └── docs/doc.md         # 插件文档（kbDoc）
 ```
 
-:::caution[先改模板的 devDependencies]
-当前模板 `package.json` 的 `devDependencies` 用相对路径引用 `@kabegame/plugin-sdk` 和 `@kabegame/types`，只在 Kabegame 源码仓库里能装上。在仓库外开发时，把它改成下面这样，类型声明直接从 GitHub 安装：
+模板 `package.json` 的 `devDependencies` 从 npm 安装 `@kabegame/plugin-sdk` 和 `@kabegame/types`，版本与生成模板的 CLI 一致（如 `^4.5.1`）：
 
 ```json
 "devDependencies": {
-  "@kabegame/types": "github:kabegame/kabegame-types",
+  "@kabegame/plugin-sdk": "^4.5.1",
+  "@kabegame/types": "^4.5.1",
   "@rspack/cli": "^1",
   "@rspack/core": "^1",
   "typescript": "^5.5.0"
 }
 ```
 
-模板源码没有用到 `@kabegame/plugin-sdk`，删掉它不影响构建。`@kabegame/plugin-sdk` 目前还没发布到 npm，见 [plugin-sdk 工具库](/dev/plugin-sdk/)。
-:::
-
 然后安装依赖并构建，产出 `dist/main.js`：
 
 ```bash
-cd my-plugin
+cd kabegame-plugin-my-plugin
 npm install
 npm run build
 ```
@@ -80,18 +77,20 @@ npm run build
 插件 ID 决定插件的数据目录、PathQL provider 的命名空间、图片记录上的 `plugin_id`，以及安装后的文件名。应用按下面的顺序取第一个非空值：
 
 1. `plugin run` 的 `--id` 参数（只用于临时运行）；
-2. `package.json` 的 `name`；
+2. `package.json` 的 `name`，去掉开头的 `kabegame-plugin-` 前缀；
 3. `.kgpg` 的文件名（去掉扩展名）。
 
-所以 **`package.json` 的 `name` 就是插件 ID**，`.kgpg` 文件叫什么都不影响安装结果，安装后统一存成 `<ID>.kgpg`。ID 只能用 ASCII 字母、数字、`_` 和 `-`，不超过 64 字节，也不能和内建插件（如 `local-import`、`webpage`）重名。用户看到的插件名由 `name.zh`、`name.en` 等多语言键决定，`name` 只在没有对应语言时作为回退显示。
+所以 **插件 ID 就是去掉前缀后的 `package.json` 的 `name`**：`kabegame-plugin-my-plugin` 和 `my-plugin` 得到同一个 ID `my-plugin`。前缀是可选的，只有 4.5.2 及以上的应用会去掉它，`name` 带前缀时要把 `engines.kabegame` 写成 `>=4.5.2`，否则旧版应用会把整个 `kabegame-plugin-my-plugin` 当成 ID。`.kgpg` 文件叫什么都不影响安装结果，安装后统一存成 `<ID>.kgpg`。ID 只能用 ASCII 字母、数字、`_` 和 `-`，不超过 64 字节，也不能和内建插件（如 `local-import`、`webpage`）重名。用户看到的插件名由 `name.zh`、`name.en` 等多语言键决定，没有对应语言时回退显示插件 ID。
 
-ID 发布后就不要再改：改了 `name`，应用会把它当成另一个插件，已经下载的图片和插件数据都不会跟过去。
+ID 发布后就不要再改：改了去掉前缀后的 `name`，应用会把它当成另一个插件，已经下载的图片和插件数据都不会跟过去。给已发布的插件补上前缀不算改 ID（`my-plugin` → `kabegame-plugin-my-plugin`），但同样要把 `engines.kabegame` 提到 `>=4.5.2`。
 
 ## 打包：`plugin pack`
 
 ```bash
-kabegame-cli plugin pack --plugin-dir ./my-plugin --output ./my-plugin.kgpg
+kabegame-cli plugin pack --plugin-dir ./kabegame-plugin-my-plugin --output ./my-plugin.kgpg
 ```
+
+`plugin pack` 要求目录名等于 `package.json` 的 `name`，输出文件名（去掉 `.kgpg`）等于插件 ID。
 
 产物是 KGPG v3 格式：固定头部（内嵌图标）加 ZIP，详见 [插件格式（.kgpg）](/dev/format/)。
 
@@ -187,8 +186,8 @@ https://github.com/kabegame/crawler-plugins/releases/latest/download/index.json
 
 | 字段 | 必需 | 说明 |
 |---|:--:|---|
-| `id` | ✅ | 插件 ID，必须等于 `package.json` 的 `name` |
-| `name` / `name.<语言>` | ✅ | 商店里显示的名字，扁平的多语言键，照抄 `package.json` |
+| `id` | ✅ | 插件 ID，必须等于去掉 `kabegame-plugin-` 前缀后的 `package.json` 的 `name` |
+| `name` / `name.<语言>` | ✅ | 商店里显示的名字，扁平的多语言键，照抄 `package.json`；无语言后缀的 `name` 写插件 ID |
 | `version` | ✅ | 照抄 `package.json` 的 `version`，用来判断用户是否需要更新 |
 | `downloadUrl` | ✅ | `.kgpg` 的公开下载地址 |
 | `description` / `description.<语言>` | | 描述，扁平的多语言键 |
@@ -234,11 +233,11 @@ Get-FileHash my-plugin.kgpg -Algorithm SHA256   # Windows PowerShell
 **操作** 先 `npm run build`，确认 `dist/main.js`（或 `main` 指向的文件）存在。
 
 **现象** `npm install` 报找不到 `@kabegame/plugin-sdk` / `@kabegame/types` 所在的路径。
-**原因** 模板的 `devDependencies` 用的是 Kabegame 源码仓库里的相对路径。
-**操作** 按上文 [准备插件目录](#准备插件目录) 改成从 GitHub 安装。
+**原因** 插件是从旧版 CLI 生成的，或复制自官方插件仓库，`devDependencies` 用的是 Kabegame 源码仓库里的相对路径。
+**操作** 按上文 [准备插件目录](#准备插件目录) 改成 npm 版本。
 
 **现象** 安装或打包时报插件 ID 不合规。
-**原因** `package.json` 的 `name` 含有 `.`、空格、非 ASCII 字符，超过 64 字节，或与内建插件重名。
+**原因** 去掉 `kabegame-plugin-` 前缀后的 `package.json` 的 `name` 含有 `.`、空格、非 ASCII 字符，超过 64 字节，或与内建插件重名。
 **操作** 改 `name`；报错信息里会写明这个 ID 来自哪里（`--id`、`name` 还是文件名）。
 
 **现象** `plugin run` 跑 WebView 插件时报错。

@@ -25,10 +25,10 @@ Kabegame 的抓取能力全部由插件提供。一个插件是一个自包含�
 
 ## 插件目录骨架
 
-每个插件是一个独立目录，放在哪里都可以。**`package.json` 的 `name` 就是插件 ID**：它决定插件的数据目录、图片记录上的 `plugin_id`、日志里的插件名，以及安装后的文件名 `<ID>.kgpg`。`.kgpg` 文件和目录叫什么都不影响 ID，但习惯上让三者一致。用户看到的插件名来自 `name.zh`、`name.en` 等多语言键，`name` 只在缺少对应语言时作为回退显示。ID 的规则见 [打包与发布 · 插件 ID](/dev/packaging/#插件-id)。
+每个插件是一个独立目录，放在哪里都可以。**插件 ID 来自 `package.json` 的 `name`**，应用会去掉其中的 `kabegame-plugin-` 前缀：`name` 写 `kabegame-plugin-my-plugin` 时，插件 ID 就是 `my-plugin`（4.5.2 起）。插件 ID 决定插件的数据目录、图片记录上的 `plugin_id`、日志里的插件名，以及安装后的文件名 `<ID>.kgpg`。习惯上目录名和 `name` 一致（`kabegame-plugin-my-plugin/`），`.kgpg` 用插件 ID 命名（`my-plugin.kgpg`）。用户看到的插件名来自 `name.zh`、`name.en` 等多语言键，缺少对应语言时回退显示插件 ID。ID 的规则见 [打包与发布 · 插件 ID](/dev/packaging/#插件-id)。
 
 ```
-my-plugin/
+kabegame-plugin-my-plugin/
 ├── package.json           # 必需：v3 自描述清单（元数据 + 配置 + 后端声明）
 ├── src/index.ts           # 源码（用 TS + plugin-sdk 编写）
 ├── dist/main.js           # 必需：package.json.main 指向的打包产物
@@ -56,12 +56,12 @@ V8 插件通常用 TypeScript 写在 `src/` 里，再用打包器（如 rspack�
 
 ```jsonc
 {
-  "name": "my-plugin",              // 插件 ID，[a-zA-Z0-9_-]，≤64 字节；也是显示名回退
+  "name": "kabegame-plugin-my-plugin", // 去掉 kabegame-plugin- 前缀即插件 ID（my-plugin），[a-zA-Z0-9_-]，≤64 字节
   "version": "1.0.0",              // 每段 ≤255
   "description": "插件描述",
   "author": "you",
   "kbPackageVersion": 3,           // 必须 ≥3
-  "engines": { "kabegame": ">=4.3.0" },  // 最低 Kabegame 版本
+  "engines": { "kabegame": ">=4.5.2" },  // 最低 Kabegame 版本；name 带前缀时至少 4.5.2
   "main": "dist/main.js",          // 入口脚本相对路径
   "kbBackend": "v8",              // "v8" 或 "webview"
   "kbBaseUrl": "https://example.com",
@@ -134,12 +134,12 @@ kabegame-cli plugin new my-plugin                    # V8 后端（默认）
 kabegame-cli plugin new my-plugin --backend webview  # WebView 后端
 ```
 
-V8 模板是 TypeScript 项目。在 Kabegame 源码仓库外开发时，要先把模板 `package.json` 里的 `devDependencies` 改成从 GitHub 安装类型声明，写法见 [打包与发布 · 准备插件目录](/dev/packaging/#准备插件目录)。
+模板生成在 `kabegame-plugin-my-plugin/` 目录，`package.json` 的 `name` 也是 `kabegame-plugin-my-plugin`，插件 ID 是 `my-plugin`。V8 模板是 TypeScript 项目，详见 [打包与发布 · 准备插件目录](/dev/packaging/#准备插件目录)。
 
 ### 2. 构建并打包
 
 ```bash
-cd my-plugin
+cd kabegame-plugin-my-plugin
 npm install          # 首次
 npm run build        # 产出 dist/main.js
 kabegame-cli plugin pack --plugin-dir . --output ../my-plugin.kgpg
@@ -180,11 +180,11 @@ kabegame-cli plugin import ../my-plugin.kgpg
 
 [官方插件仓库](https://github.com/kabegame/crawler-plugins/tree/main/plugins) 里的插件都可以当参考实现。推荐阅读顺序：
 
-1. **[`konachan`](https://github.com/kabegame/crawler-plugins/tree/main/plugins/konachan)**：V8 后端、无需登录，覆盖 `kbConfig` 的 `options` / `list` / `when`、多语言文档、`configs/`、`providers/`、`templates/description.ejs`，与本页骨架几乎一一对应。
-2. **[`pixiv`](https://github.com/kabegame/crawler-plugins/tree/main/plugins/pixiv)**：功能多也更复杂，需要登录 cookie（`Kabegame.requireCookie()`）、R18 判定和 `kbLabels`，熟悉基本流程后再看。
-3. **[`xhs-webview`](https://github.com/kabegame/crawler-plugins/tree/main/plugins/xhs-webview)**：WebView 后端的参考实现，演示真实浏览器页面抓取、`Kabegame.vars` 读配置、跨页 `updateState`。
+1. **[`konachan`](https://github.com/kabegame/crawler-plugins/tree/main/plugins/kabegame-plugin-konachan)**：V8 后端、无需登录，覆盖 `kbConfig` 的 `options` / `list` / `when`、多语言文档、`configs/`、`providers/`、`templates/description.ejs`，与本页骨架几乎一一对应。
+2. **[`pixiv`](https://github.com/kabegame/crawler-plugins/tree/main/plugins/kabegame-plugin-pixiv)**：功能多也更复杂，需要登录 cookie（`Kabegame.requireCookie()`）、R18 判定和 `kbLabels`，熟悉基本流程后再看。
+3. **[`xhs-webview`](https://github.com/kabegame/crawler-plugins/tree/main/plugins/kabegame-plugin-xhs-webview)**：WebView 后端的参考实现，演示真实浏览器页面抓取、`Kabegame.vars` 读配置、跨页 `updateState`。
 
-注意 `konachan`、`pixiv` 这类 TypeScript 插件的 `devDependencies` 指向 Kabegame 源码仓库里的相对路径，还用到了尚未发布到 npm 的 `@kabegame/plugin-sdk`，适合对照阅读；直接复制出来构建会失败。
+注意 `konachan`、`pixiv` 这类 TypeScript 插件的 `devDependencies` 指向 Kabegame 源码仓库里的相对路径，适合对照阅读；复制到仓库外时，把 `@kabegame/plugin-sdk` 与 `@kabegame/types` 改成 npm 版本再构建。
 
 ## 在应用中导入插件
 

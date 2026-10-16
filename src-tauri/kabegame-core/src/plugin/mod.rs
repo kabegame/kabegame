@@ -2672,7 +2672,23 @@ async fn read_kgpg_package_name(zip_path: &Path) -> Result<Option<String>, Strin
     .map_err(|e| format!("Failed to join package.json reader task: {}", e))?
 }
 
-/// `.kgpg` → 插件 id 的回落链：显式指定 → 包内 package.json 的 `name` → 文件名 stem。
+/// 插件包名的可选前缀：`package.json` 的 `name` 写成 `kabegame-plugin-<id>` 时，插件 id 是 `<id>`。
+pub const PLUGIN_PACKAGE_PREFIX: &str = "kabegame-plugin-";
+
+/// `package.json` 的 `name` → 插件 id：剥离可选的 [`PLUGIN_PACKAGE_PREFIX`]。
+///
+/// 包名（= 源码目录名）可以带前缀，插件 id（数据目录、provider namespace、`<id>.kgpg`、
+/// 图片 `plugin_id`）一律是剥离后的值。没有前缀时原样返回；剥完为空（name 恰好是前缀本身）
+/// 也原样返回，交给 `validate_plugin_id` 照常校验。CLI 打包与 TS 打包脚本共用这条规则。
+pub fn plugin_id_from_package_name(name: &str) -> &str {
+    match name.strip_prefix(PLUGIN_PACKAGE_PREFIX) {
+        Some(rest) if !rest.is_empty() => rest,
+        _ => name,
+    }
+}
+
+/// `.kgpg` → 插件 id 的回落链：显式指定 → 包内 package.json 的 `name`（剥离
+/// [`PLUGIN_PACKAGE_PREFIX`]）→ 文件名 stem。
 ///
 /// 包自己声明的 `name` 比文件名权威：provider 的 namespace（`plugins.<id>`）按 id 生成，
 /// 只改文件名就会撞上「namespace 不能逃逸」。`id_override` 给临时运行/测试用，让调用方
@@ -2686,9 +2702,10 @@ fn resolve_kgpg_plugin_id(
     pkg_name: Option<&str>,
 ) -> Result<String, String> {
     let stem = path.file_stem().and_then(|s| s.to_str());
+    let pkg_id = pkg_name.map(|name| plugin_id_from_package_name(name.trim()));
     let (plugin_id, source) = [
         (id_override, "显式指定"),
-        (pkg_name, "package.json 的 name"),
+        (pkg_id, "package.json 的 name"),
         (stem, "文件名"),
     ]
     .into_iter()
@@ -3632,6 +3649,10 @@ pub fn plugin_manifest_from_package_json(v: &serde_json::Value) -> Result<Plugin
         .transpose()?;
 
     let mut name = extract_manifest_text_from_flat(obj, "name");
+    // 无语言后缀的 `name` 就是包名，作显示名回退时用剥离前缀后的插件 id
+    if let Some(base) = name.get_mut("name") {
+        *base = plugin_id_from_package_name(base).to_string();
+    }
     if name.is_empty() && !npm_name.is_empty() {
         name.insert("name".to_string(), npm_name);
     }
@@ -3814,6 +3835,58 @@ mod tests {
         assert_eq!(m.description.get("description").unwrap(), "desc default");
         assert_eq!(m.description.get("description.zh").unwrap(), "中文描述");
         assert!(m.min_app_version.is_none());
+    }
+
+    #[test]
+    fn test_plugin_id_from_package_name_strips_prefix() {
+        assert_eq!(
+            plugin_id_from_package_name("kabegame-plugin-wallhaven"),
+            "wallhaven"
+        );
+        assert_eq!(plugin_id_from_package_name("wallhaven"), "wallhaven");
+        // 剥完为空不剥，交给 validate_plugin_id
+        assert_eq!(
+            plugin_id_from_package_name("kabegame-plugin-"),
+            "kabegame-plugin-"
+        );
+        // 只剥开头
+        assert_eq!(
+            plugin_id_from_package_name("my-kabegame-plugin-x"),
+            "my-kabegame-plugin-x"
+        );
+    }
+
+    #[test]
+    fn test_resolve_kgpg_plugin_id_strips_package_prefix() {
+        let path = Path::new("/tmp/whatever.kgpg");
+        assert_eq!(
+            resolve_kgpg_plugin_id(path, None, Some("kabegame-plugin-wallhaven")).unwrap(),
+            "wallhaven"
+        );
+        // 显式 id 与文件名 stem 不剥离
+        assert_eq!(
+            resolve_kgpg_plugin_id(path, Some("kabegame-plugin-x"), Some("kabegame-plugin-y"))
+                .unwrap(),
+            "kabegame-plugin-x"
+        );
+        assert_eq!(
+            resolve_kgpg_plugin_id(Path::new("/tmp/kabegame-plugin-z.kgpg"), None, None).unwrap(),
+            "kabegame-plugin-z"
+        );
+        // 剥离后撞内建 id 照样拒绝
+        assert!(resolve_kgpg_plugin_id(path, None, Some("kabegame-plugin-local-import")).is_err());
+    }
+
+    #[test]
+    fn test_plugin_manifest_display_name_fallback_strips_prefix() {
+        let pkg = serde_json::json!({
+            "name": "kabegame-plugin-my-plugin",
+            "name.zh": "我的插件",
+            "version": "1.0.0",
+        });
+        let m = plugin_manifest_from_package_json(&pkg).unwrap();
+        assert_eq!(m.name.get("name").unwrap(), "my-plugin");
+        assert_eq!(m.name.get("name.zh").unwrap(), "我的插件");
     }
 
     #[test]
