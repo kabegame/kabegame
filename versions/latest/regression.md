@@ -1,5 +1,19 @@
 # v4.5.2 regression
 
+## 文件夹画册切换同步模式后子画册状态实时刷新
+
+把文件夹画册切到递归同步（或从递归切走）时，后端会在同一事务里把子树规整为「同步委托」/「不同步」，并逐个发 `album-changed { syncMode }`；但前端 `dataChangeHub` 只放行 `name` / `parentId` / `labelKey` / `albumType` 四个结构字段，`syncMode` 事件被整条丢弃，画册树里已展开的子画册图标停在旧状态（被操作的画册本身只是碰巧经同步的成员变更事件刷新）。现在 `syncMode` 作为行展示字段放行，只写入 `albumIds` 与 `albumPaths`，不进 `albumStructure`，避免画廊网格与过滤树跟着重查；后端 `normalize_local_folder_sync_modes` 同时返回各画册的 `ancestor_path`，`syncMode` 事件统一经 `emit_sync_mode_changes` 携带 `ancestorPath`，树只重拉变更画册所在目录，不再走通配整树刷新。`folderStatus` 事件同样未被放行，但它每次同步都会发且无路径，本次不纳入。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 递归 → 浅同步 | macOS 桌面 CEF / CDP | 展开 `comfy_output`（递归，5 个子画册委托），切为浅同步 | 根画册立即显示浅同步图标，5 个已展开子行同步图标消失（不同步） | 已实测；页面监听到 6 条 `album-changed`，均带 `ancestorPath` |
+| [x] | 浅同步 → 递归 | macOS 桌面 CEF / CDP | 同上切回递归同步 | 根画册显示递归图标，5 个已展开子行无需刷新即显示委托（链接）图标 | 已实测并截图核对；dev 数据已恢复为原递归状态 |
+| [ ] | 选中子画册时详情面板 | 桌面 CEF | 选中某个子画册，再在父画册上切换递归 / 浅同步 | 右栏同步状态随之在「同步委托」与「不同步」间切换，右键菜单禁用态同步更新 | `useAlbumQuery` 经 `albumIds` 命中 |
+| [ ] | 不误刷画廊 | 桌面 CEF | 停留在画廊页，从另一入口切换文件夹画册同步模式 | 画廊网格与过滤侧栏不因 `syncMode` 事件重查 | `syncMode` 不进入 `albumStructure` |
+| [ ] | 转为普通画册 / 重新串联 | 桌面 CEF | 对递归画册的祖先关系做调整（新建父级文件夹画册触发 rechain），或转换含委托子树的画册 | 规整产生的 `syncMode` 变更同样带路径并刷新所在目录 | 三处调用方共用 `emit_sync_mode_changes` |
+| [x] | 后端单测 | cargo test | `kabegame-core --lib sync_mode` | 3 项通过；规整结果断言包含 `ancestor_path` | 已运行 |
+| [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行 |
+
 ## 任务指南补齐收尾状态与逐任务并发
 
 通过 `kabegame-chromium` 在桌面 dev 中实际启动 `Kabegame 服务器` 任务，核对创建弹窗、运行中任务卡片、下载队列、任务详情页和停止确认流程后更新任务指南。文档将并发关系从旧的两个全局设置改为「同时运行任务数 + 全局下载上限 + 本任务下载上限」，补充创建时关闭跟随全局、运行中即时调节及不突破全局上限的规则；任务状态新增「等待剩余下载」，明确它表示插件脚本已经结束、任务仍在等待排队或处理中的下载落盘。五张 2400×1536 dev 实机截图使用 `annotate-ui-screenshots` 标出创建步骤、任务级并发、任务状态、单张下载阶段、详情统计与停止确认，正文同步删去重复说明。

@@ -263,10 +263,12 @@ const sources: ChangeSource[] = [
     event: "album-changed",
     toBatch(raw): ChangeBatch | null {
       const payload = raw as AlbumChangedPayload;
-      const structureFields = ["name", "parentId", "labelKey", "albumType"].filter((field) =>
-        Object.prototype.hasOwnProperty.call(payload.changes ?? {}, field),
-      );
-      if (structureFields.length === 0) return null;
+      const has = (field: string) => Object.prototype.hasOwnProperty.call(payload.changes ?? {}, field);
+      const structureFields = ["name", "parentId", "labelKey", "albumType"].filter(has);
+      // 只改画册行展示的字段：不进 albumStructure（不触发画廊 / 过滤树重查），
+      // 只经 albumIds + albumPaths 让画册树重拉所在目录、详情面板重读该画册
+      const rowFields = ["syncMode"].filter(has);
+      if (structureFields.length === 0 && rowFields.length === 0) return null;
       const batch = emptyBatch(Number.isFinite(payload.seq) ? Number(payload.seq) : 0);
       batch.albumStructure = new Set(structureFields);
       if (payload.albumId) batch.albumIds.add(payload.albumId);

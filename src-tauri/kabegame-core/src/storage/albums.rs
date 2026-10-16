@@ -120,15 +120,37 @@ struct AlbumRechainChange {
     name: Option<String>,
 }
 
-/// 修复本地文件夹画册同步状态不变量，并返回实际发生的 `(画册 id, 新状态)`。
+/// 同步状态规整中被实际改写的一个画册。
+#[derive(Debug, PartialEq)]
+pub(crate) struct SyncModeChange {
+    pub id: String,
+    pub sync_mode: SyncMode,
+    /// 前端据此只刷新该画册所在目录，而不是整棵树。
+    pub ancestor_path: String,
+}
+
+/// 发送 `syncMode` 变更事件；载荷带 `ancestorPath`，供前端按目录定位要刷新的树节点。
+fn emit_sync_mode_changes(emitter: &GlobalEmitter, changes: &[SyncModeChange]) {
+    for change in changes {
+        emitter.emit_album_changed(
+            &change.id,
+            json!({
+                "syncMode": change.sync_mode.as_str(),
+                "ancestorPath": change.ancestor_path,
+            }),
+        );
+    }
+}
+
+/// 修复本地文件夹画册同步状态不变量，并返回实际发生的变更。
 pub(crate) fn normalize_local_folder_sync_modes(
     conn: &Connection,
-) -> Result<Vec<(String, String)>, String> {
-    let delegated_ids = {
+) -> Result<Vec<SyncModeChange>, String> {
+    let delegated = {
         let mut stmt = conn
             .prepare(
                 r#"
-SELECT albums.id
+SELECT albums.id, albums.ancestor_path
   FROM albums
  WHERE albums.type = 'local_folder'
    AND albums.sync_mode <> 'delegated'
@@ -145,16 +167,18 @@ SELECT albums.id
             )
             .map_err(|e| format!("prepare delegated sync mode normalization: {e}"))?;
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| format!("query delegated sync mode normalization: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("read delegated sync mode normalization: {e}"))?
     };
-    let none_ids = {
+    let none = {
         let mut stmt = conn
             .prepare(
                 r#"
-SELECT albums.id
+SELECT albums.id, albums.ancestor_path
   FROM albums
  WHERE albums.type = 'local_folder'
    AND albums.sync_mode = 'delegated'
@@ -171,7 +195,9 @@ SELECT albums.id
             )
             .map_err(|e| format!("prepare none sync mode normalization: {e}"))?;
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| format!("query none sync mode normalization: {e}"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("read none sync mode normalization: {e}"))?
@@ -214,14 +240,16 @@ UPDATE albums
     )
     .map_err(|e| format!("normalize none local folder sync modes: {e}"))?;
 
-    Ok(delegated_ids
-        .into_iter()
-        .map(|id| (id, SyncMode::Delegated.as_str().to_string()))
-        .chain(
-            none_ids
-                .into_iter()
-                .map(|id| (id, SyncMode::None.as_str().to_string())),
-        )
+    let changes = |rows: Vec<(String, String)>, sync_mode: SyncMode| {
+        rows.into_iter()
+            .map(move |(id, ancestor_path)| SyncModeChange {
+                id,
+                sync_mode,
+                ancestor_path,
+            })
+    };
+    Ok(changes(delegated, SyncMode::Delegated)
+        .chain(changes(none, SyncMode::None))
         .collect())
 }
 
@@ -1504,15 +1532,15 @@ UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
             .transaction()
             .map_err(|e| format!("start set_album_sync_mode transaction: {e}"))?;
 
-        let album: Option<(String, String)> = tx
+        let album: Option<(String, String, String)> = tx
             .query_row(
-                "SELECT type, sync_mode FROM albums WHERE id = ?1",
+                "SELECT type, sync_mode, ancestor_path FROM albums WHERE id = ?1",
                 params![album_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|e| format!("query album sync mode: {e}"))?;
-        let Some((kind, current_mode)) = album else {
+        let Some((kind, current_mode, ancestor_path)) = album else {
             return Err("画册不存在".to_string());
         };
         if kind != "local_folder" {
@@ -1537,10 +1565,15 @@ UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
             .map_err(|e| format!("commit set_album_sync_mode: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_changed(album_id, json!({ "syncMode": mode.as_str() }));
-            for (id, sync_mode) in normalized {
-                emitter.emit_album_changed(&id, json!({ "syncMode": sync_mode }));
-            }
+            emit_sync_mode_changes(
+                emitter,
+                &[SyncModeChange {
+                    id: album_id.to_string(),
+                    sync_mode: mode,
+                    ancestor_path,
+                }],
+            );
+            emit_sync_mode_changes(emitter, &normalized);
         }
         Ok(())
     }
@@ -1667,9 +1700,7 @@ UPDATE albums
                 };
                 emitter.emit_album_changed(&id, payload);
             }
-            for (id, sync_mode) in normalized {
-                emitter.emit_album_changed(&id, json!({ "syncMode": sync_mode }));
-            }
+            emit_sync_mode_changes(emitter, &normalized);
         }
 
         Ok(converted_ids)
@@ -1786,9 +1817,7 @@ UPDATE albums
                 };
                 emitter.emit_album_changed(&change.id, payload);
             }
-            for (id, sync_mode) in &sync_mode_changes {
-                emitter.emit_album_changed(id, json!({ "syncMode": sync_mode }));
-            }
+            emit_sync_mode_changes(emitter, &sync_mode_changes);
         }
         Ok(changes.into_iter().map(|change| change.id).collect())
     }
@@ -2641,8 +2670,16 @@ VALUES
         assert_eq!(
             normalize_local_folder_sync_modes(&conn).unwrap(),
             vec![
-                ("actual".to_string(), "delegated".to_string()),
-                ("stale".to_string(), "none".to_string()),
+                SyncModeChange {
+                    id: "actual".to_string(),
+                    sync_mode: SyncMode::Delegated,
+                    ancestor_path: "/root_%/actual/".to_string(),
+                },
+                SyncModeChange {
+                    id: "stale".to_string(),
+                    sync_mode: SyncMode::None,
+                    ancestor_path: "/stale/".to_string(),
+                },
             ]
         );
         let imposter_mode: String = conn
