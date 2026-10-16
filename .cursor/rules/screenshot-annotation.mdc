@@ -1,0 +1,15 @@
+---
+description: 真实界面截图用项目 skill 做确定性标注，不生成式重绘
+globs: "README*.md, apps/docs/src/content/docs/**/*.md, apps/docs/src/assets/screenshots/**/*"
+alwaysApply: false
+---
+
+# 真实界面截图标注
+
+为 README、教程或操作指南编辑真实产品截图时，使用
+`.claude/skills/annotate-ui-screenshots`：
+
+- 保留真实 UI，只叠加少量短标签和箭头，不使用生成式重绘。
+- 默认保留原图，并以 `-annotated` 后缀命名标注版本。
+- 生成后必须目视检查箭头指向、遮挡、敏感信息和文字可读性。
+- 更新文档引用，并删减与图内标注重复的正文；行为边界、安全提示和平台差异仍须保留。

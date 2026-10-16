@@ -1,0 +1,4 @@
+interface:
+  display_name: "界面截图标注"
+  short_description: "为真实产品截图添加统一短标签、箭头并精简配套文档说明"
+  default_prompt: "使用 $annotate-ui-screenshots 给这些真实界面截图添加简洁标注，并保持原始 UI 不被重绘。"

@@ -136,6 +136,8 @@ struct Foo {
 
 在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序。
 
+为 README、教程或操作指南编辑真实界面截图时，用 `.claude/skills/annotate-ui-screenshots` 技能添加短标签和箭头、生成带 `-annotated` 后缀的资源，并同步精简与图片重复的正文。保持真实 UI，不使用生成式重绘。
+
 ## 语言规范
 所有与用户的交流均使用简体中文。
 任务计划、进度说明、问题分析、调试结论和最终回答均使用中文。
