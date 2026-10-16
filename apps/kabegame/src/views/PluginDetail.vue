@@ -71,7 +71,12 @@ const { plugin, loading, showSkeleton, reload } = usePluginDetailLoader({
 
 const goBack = () => {
   if (window.history.length > 1) router.back();
-  else void router.push({ name: "PluginBrowser" });
+  else
+    void router.push({
+      name: "PluginBrowser",
+      // 无历史可回（如直接打开详情链接）：远程条目回到它所属的商店 tab
+      query: isRemote.value && sourceIdRef.value ? { tab: `store:${sourceIdRef.value}` } : {},
+    });
 };
 
 // 与页面头部同一套判据：决定确认弹窗与成功提示用「安装/更新/重新安装」哪一套文案

@@ -49,7 +49,8 @@
 | 安装预览命令 | `src-tauri/kabegame/src/commands/plugin.rs` | `preview_store_install`：有 `source_id`+`version` 时走 `ensure_plugin_cached` |
 | IPC | `src-tauri/kabegame/src/ipc/handlers/plugin.rs` | 主应用 IPC 入口；自包含 CLI 不读取插件商店 |
 | 路径 | `src-tauri/kabegame-core/src/app_paths.rs` | `store_cache_dir`、`store_plugin_cache_dir`、`store_plugin_cache_file` |
-| 前端 | `apps/kabegame/src/views/PluginBrowser.vue` | `loadStorePlugins`；手动刷新 `forceRefresh: true`；`revalidateStorePluginsInBackground` 传 `revalidateIfStaleAfterSecs` |
+| 前端数据 | `apps/kabegame/src/stores/pluginMarket.ts` | `usePluginMarketStore`：源列表、各源原始列表、远程图标的唯一属主；`loadStorePlugins` / `ensureStorePlugins`；`revalidateInBackground` 传 `revalidateIfStaleAfterSecs`；监听 `plugin-sources-changed` |
+| 前端页面 | `apps/kabegame/src/views/PluginBrowser.vue` | tab 绑定 `?tab=`、骨架屏、对话框；手动刷新 `forceRefresh: true` |
 
 ---
 
@@ -79,7 +80,18 @@
 
 ---
 
-## 7. 小结
+## 7. 前端生命周期（`usePluginMarketStore` + `?tab=`）
+
+- **加载**：`ensureSources()` / `ensureStorePlugins(sourceId)` 只在未加载过时请求；进入商店 tab 时仍调用一次 `revalidateInBackground`（后端按 `updated_at` 判断是否走网络，便宜）。并发请求按源合并。
+- **保存**：数据存在 Pinia store，跨路由存活。App 没有 keep-alive，`PluginBrowser` 从详情返回会重挂载，但直接复用 store，不重拉列表与图标、不闪骨架屏。
+- **installedVersion 现算**：store 只存后端原始列表，`pluginsBySource` 在读取时按 `usePluginStore().visiblePlugins` 叠加 `installedVersion`。安装 / 更新 / 删除插件由 `plugin-added/updated/deleted` 驱动 `pluginStore`，商店卡片自动跟随，无需重拉商店。
+- **事件刷新**：store 首次使用时注册一次 `plugin-sources-changed` → `loadSources()`。后端在 storage 层 `add_source` / `update_source` / `delete_source` 写库后（释放锁后）以 `reason: added|updated|deleted` + `sourceId` 广播；官方源名 i18n 同步也发同名事件。自身写操作完成后页面直接 `loadSources()`，不依赖事件回刷；重复刷新幂等。
+- **`loadSources()` 的副作用**：清掉已不存在源的列表、加载标记与 `store:<id>:*` 图标；已加载源的 `indexUrl` 变了则 `forceRefresh` 重拉（旧 index 缓存不再可信）。
+- **tab 导航参数**：当前 tab 是 settings 的 query 后端键 `pluginBrowserTab`（URL 参数 `tab`，与 `autoConfigTab` 共用参数名、各自在本页读取）：`installed` 编码为空，商店 tab 为 `store:<sourceId>`。切 tab 用 `replace`，所以进详情时 history 里那条已带 `?tab=`，`router.back()` 回来即恢复。页面只在 `route.name === "PluginBrowser"` 时读写（settings 层只做哑同步）；URL 指向不存在的源时回落到 `installed`，当前源被删 / 事件刷新后消失时同样回落。详情页无历史可回时，远程条目回到 `?tab=store:<source>`。
+
+---
+
+## 8. 小结
 
 | 操作 | index（DB） | 各插件 .kgpg（磁盘） |
 |------|-------------|----------------------|

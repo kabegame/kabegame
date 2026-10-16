@@ -8,6 +8,16 @@ pub const OFFICIAL_PLUGIN_SOURCE_ID: &str = "official_github_release";
 /// 官方源在数据库中的规范默认名称（用于 i18n 名称同步）
 pub const OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME: &str = "官方 GitHub Releases 源";
 
+/// 源列表变更后广播 `plugin-sources-changed`，让前端（含 CLI / IPC 触发的改动）被动刷新源列表。
+fn emit_sources_changed(reason: &str, source_id: &str) {
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        emitter.emit(
+            "plugin-sources-changed",
+            serde_json::json!({ "reason": reason, "sourceId": source_id }),
+        );
+    }
+}
+
 /// 默认官方 index.json（与首次迁移一致，可由编译期 env 覆盖仓库 owner/name）
 pub fn default_official_index_url() -> String {
     let owner = option_env!("CRAWLER_PLUGINS_REPO_OWNER").unwrap_or("kabegame");
@@ -141,6 +151,8 @@ impl PluginSourcesStorage {
             "INSERT INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
             params![source_id, name, index_url],
         )?;
+        drop(conn);
+        emit_sources_changed("added", &source_id);
 
         Ok(PluginSource {
             id: source_id,
@@ -171,6 +183,8 @@ impl PluginSourcesStorage {
             if rows_affected == 0 {
                 return Err(rusqlite::Error::QueryReturnedNoRows);
             }
+            drop(conn);
+            emit_sources_changed("updated", &id);
             return Ok(());
         }
 
@@ -182,6 +196,8 @@ impl PluginSourcesStorage {
         if rows_affected == 0 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        drop(conn);
+        emit_sources_changed("updated", &id);
 
         Ok(())
     }
@@ -198,6 +214,8 @@ impl PluginSourcesStorage {
         if rows_affected == 0 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        drop(conn);
+        emit_sources_changed("deleted", &id);
 
         Ok(())
     }

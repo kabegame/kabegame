@@ -132,8 +132,8 @@
   - 适用场景：给插件补配图；排查文档或更新日志图片「加载失败」、打包报「引用了未在 kbAssets 声明的本地资源」、单文件超 2MB 打包失败、残留 `kbDocAssets` 打包报错；改归一化规则；排查快捷预览面板不弹出或走马灯无图。
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)
-  - 主题：插件商店缓存机制与更新策略。
-  - 适用场景：插件列表更新延迟、缓存失效与命中行为分析。
+  - 主题：插件商店缓存机制与更新策略；前端 `usePluginMarketStore`「按需加载 → store 保存 → `plugin-sources-changed` 事件刷新」生命周期、`installedVersion` 读取时现算，以及插件页 `?tab=store:<sourceId>` 导航参数（详情返回恢复商店 tab）。
+  - 适用场景：插件列表更新延迟、缓存失效与命中行为分析；排查从插件详情返回后 tab 丢失或商店列表重拉、源增删后 tab 未刷新、商店卡片已安装状态不同步。
 
 - [plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md](plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md)
   - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → `get_plugin_template` 加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`）。

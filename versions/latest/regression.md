@@ -475,3 +475,26 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [x] | 按名称搜索 | 桌面 CEF | 输入「蓝色」 | 只剩「蓝色大肥鱼 AI 娘档案」，与改动前一致 | 已实测 |
 | [x] | 重新展开重置 | 桌面 CEF | 按 ID 搜索后选中蓝色大肥鱼，再次展开下拉 | 32 个选项全部恢复，输入框与选中行显示「蓝色大肥鱼 AI 娘档案」 | 已实测 |
 | [x] | 前置项 | 桌面 CEF | 自动任务页插件过滤下拉输入「全部」 | 「全部插件(0)」行保留，计数正常 | 已实测；当前没有自动任务配置，只有这一行 |
+
+## 插件页商店 tab 导航参数与商店列表 store 化（`apps/kabegame/src/stores/pluginMarket.ts`）
+
+插件页当前 tab 改为 settings query 键 `pluginBrowserTab`（`?tab=store:<sourceId>`，已安装 tab 不写参数），切 tab 用 `replace`，从插件详情 `router.back()` 回来即恢复。商店源列表、各源插件列表、远程图标下沉到 `usePluginMarketStore`：按需加载、跨路由保存、`plugin-sources-changed` 事件被动刷新；`installedVersion` 读取时按已安装列表现算，删掉导入后的重拉。后端 storage 层源增 / 改 / 删后广播 `plugin-sources-changed`。顺带修复源管理弹窗「删除」只移除本地数组、不调后端的问题。回归中发现并修复：store 加载结束时删除 loading key 而非置 false，骨架屏 300ms 定时器未被清掉，导致列表加载完后骨架屏常驻。
+
+回归方式：dev 桌面 CEF + `kabegame-chromium` 驱动 UI，前端临时 `sendDebugEvent` 插桩（session `plugin-tab-regress`）记录每次 `get_plugin_sources` / `get_store_plugins`（区分强制刷新与后台检查）/ `get_remote_plugin_icon` 请求、`plugin-sources-changed` 事件、挂载与 tab 变化，验证后已删除插桩。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 切到商店 tab | 桌面 CEF | 重载 `/plugins` 后点官方源 tab | URL 为 `/plugins?tab=store:official_github_release`，30 张卡片，骨架屏不残留 | 已实测；首测发现骨架屏常驻，修复后复测通过 |
+| [x] | 详情返回保留 tab | 桌面 CEF | 点 aibooru 卡片进详情，`history.back()` | 重挂载直接读回官方源 tab；无 `get_plugin_sources` / `get_store_plugins` / 图标请求、无骨架屏，只有一次后台 revalidate | 已实测（debug ingest 日志） |
+| [x] | 已安装 tab URL | 桌面 CEF | 切回「已安装」 | URL 为 `/plugins`，不带 `tab` | 已实测 |
+| [x] | 无效 tab 回落 | 桌面 CEF | 整页打开 `/plugins?tab=store:does_not_exist` | 源列表加载后回落「已安装」，`tab` 参数被清掉 | 已实测 |
+| [x] | 详情无历史兜底 | 桌面 CEF | 整页打开远程详情 `/plugins/aibooru?mode=remote&source=official_github_release&version=1.0.1`，覆盖 `history.length = 1` 后点返回 | 回到 `/plugins?tab=store:official_github_release` | 已实测（`history.length` 为模拟） |
+| [x] | 外部新增源 | 桌面 CEF | 页面外直接 invoke `add_plugin_source`（不经插件页代码） | 收到 `plugin-sources-changed {reason: added}`，store 重拉源列表，新 tab 出现；打开后首次网络加载显示骨架屏并正常消失 | 已实测；CLI 没有源命令，用直接 invoke 代替外部入口 |
+| [x] | 修改源地址 | 桌面 CEF | 直接 invoke `update_plugin_source` 改 index 地址 | 收到 `{reason: updated}`，地址变化的已加载源以 `forceRefresh: true` 重拉 | 已实测 |
+| [x] | 源管理弹窗删除 | 桌面 CEF | 「管理源」弹窗删除测试源并确认 | 后端 `get_plugin_sources` 已无该源；收到 `{reason: deleted}`；当前 tab 自动回「已安装」 | 已实测（当时宽屏无入口，经组件实例打开弹窗） |
+| [x] | 桌面「管理源」入口 | 桌面 CEF 宽屏 | 看插件页标题栏右上角，点「管理源」按钮 | 标题栏依次为刷新（super）/ 导入源 / 管理源；点击打开「商店源」弹窗，可编辑源 | 已实测并截图；此前宽屏只有紧凑布局折叠菜单里有该入口，编辑源无路可达；light 模式不渲染弹窗，两处入口均按 `!IS_LIGHT_MODE` 隐藏 |
+| [x] | 已安装状态同步 | 桌面 CEF | 内存中临时从 `pluginStore.plugins` 移除 aibooru 再恢复 | 商店条目 `installedVersion` 随之 `1.0.0 → null → 1.0.0`，无 `get_store_plugins` 请求 | 已实测（内存模拟，未真实卸载）；`plugin-*` 事件驱动 `pluginStore` 为既有逻辑 |
+| [ ] | 真实安装 / 卸载 / 拖入导入 | 桌面 CEF | 从商店安装或卸载插件、拖入 `.kgpg` | 卡片更新角标与已安装状态即时正确，不重拉商店 | 官方源 30 个插件已全部安装，未做破坏性操作 |
+| [x] | 语言切换 | 桌面 CEF | 设置语言 zh → en → zh | 收到 `{reason: official-source-name-i18n-sync}`，官方源 tab 名称随之切换 | 已实测，语言已恢复 zh |
+| [ ] | Web 版 | Web | `?tab=` 恢复与只读源行为 | 与桌面一致，源增删改仍被只读拦截 | 未覆盖 |
+| [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行 |

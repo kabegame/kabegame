@@ -132,6 +132,8 @@ export interface AppSettings {
   // --- URL query 镜像键（settings 层只做哑同步，页面自己做激活态 guard）---
   /** `/auto-configs?tab=`；缺省为 `"mine"`，`"mine"` 会编码为空并删除参数。 */
   autoConfigTab: "mine" | "recommended";
+  /** `/plugins?tab=`：`"installed"` 或 `"store:<sourceId>"`；`"installed"` 会编码为空并删除参数。 */
+  pluginBrowserTab: string;
   /** 图片预览 query `?pvwimgid=`；空串表示未预览。 */
   previewImageId: string;
   /** web super query `?super=1`；非 `"1"` 都解码为 false。 */

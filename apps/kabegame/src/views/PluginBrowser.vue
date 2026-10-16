@@ -7,7 +7,7 @@
         @manage-sources="openManageSources"
       />
 
-      <div v-if="sourcesLoadedOnce && sources.length === 0" class="plugin-sources-empty-hint">
+      <div v-if="sourcesLoaded && sources.length === 0" class="plugin-sources-empty-hint">
         <el-alert type="info" :closable="false" show-icon>
           <template #title>
             {{ $t("plugins.noStoreSourcesHint") }}
@@ -168,7 +168,10 @@
             </div>
           </div>
 
-          <div v-else-if="!loadingBySource[s.id] && getStorePlugins(s.id).length === 0" class="empty">
+          <!-- 尚未拉取过该源：保持空白，等加载态/骨架屏接管，避免先闪「源为空」 -->
+          <div v-else-if="!settledBySource[s.id]" />
+
+          <div v-else-if="getStorePlugins(s.id).length === 0" class="empty">
             <el-empty :description="$t('plugins.noPluginsInSource', { name: pluginSourceDisplayName(s) })" />
           </div>
 
@@ -314,16 +317,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, reactive, watch, nextTick } from "vue";
-import { useRouter } from "vue-router";
+import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { storeToRefs } from "pinia";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { Refresh, Upload, Plus, Search, Setting, QuestionFilled } from "@kabegame/element-plus-icons";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
-import type { PluginManifestText } from "@/stores/plugins";
-import type { PluginLabel } from "@/stores/pluginLabels";
+import {
+  usePluginMarketStore,
+  storeIconKey,
+  OFFICIAL_PLUGIN_SOURCE_ID,
+  OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME,
+  type PluginSource,
+  type StorePluginResolved,
+} from "@/stores/pluginMarket";
+import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
-import { invoke, listen } from "@/api/rpc";
+import { invoke } from "@/api/rpc";
 import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
@@ -336,45 +347,18 @@ import { bannerPreviewImages } from "@/utils/assetPath";
 import { isUpdateAvailable } from "@/utils/version";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
 import { useModal } from "@/composables/useModal";
-import { storePluginCacheDb } from "@/cache/storePluginCache";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { trackEvent } from "@/track/umami";
 import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
 
-interface PluginSource {
-  id: string;
-  name: string;
-  indexUrl: string;
-}
-
-interface StorePluginResolved {
-  id: string;
-  /** 与已安装插件一致：i18n 对象 { default, zh?, ja?, ... }，由后端从 index.json 归一化 */
-  name: PluginManifestText;
-  version: string;
-  /** 与已安装插件一致：i18n 对象 { default, zh?, ja?, ... }，由后端从 index.json 归一化 */
-  description: PluginManifestText;
-  downloadUrl: string;
-  iconUrl?: string | null;
-  packageVersion?: number | null;
-  sha256?: string | null;
-  sizeBytes: number;
-  sourceId: string;
-  sourceName: string;
-  installedVersion?: string | null;
-  /** 后端 get_store_plugins 合并的当前下载进度 0–100 */
-  storeDownloadProgress?: number | null;
-  storeDownloadError?: string | null;
-  labels?: PluginLabel[];
-  minAppIncompatible?: boolean;
-}
-
-/** 与 Rust `StorePluginDownloadProgressEvent`（camelCase）一致 */
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
 type PluginListItem = Plugin | StorePluginResolved;
 
 const pluginStore = usePluginStore();
+const market = usePluginMarketStore();
+const { sources, sourcesLoaded, loadingBySource, loadedBySource, settledBySource, pluginsBySource } =
+  storeToRefs(market);
 const { t } = useI18n();
 const { pluginName } = usePluginManifestI18n();
 
@@ -396,15 +380,6 @@ function trackPluginBrowserEvent(name: string, data: Record<string, unknown> = {
     ...data,
   });
 }
-
-/** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
-const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
-/** 与 `kabegame_core::storage::plugin_sources` 插入官方源时的默认 `name` 一致（用于识别「未自定义」以走 i18n） */
-const OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME = "官方 GitHub Releases 源";
-
-/** 打开商店 tab 时后台重拉 index 的缓存最大年龄（与后端 `plugin_source_cache.updated_at` 比较，秒） */
-const STORE_INDEX_REVALIDATE_MAX_AGE_SECS = 24 * 60 * 60;
-const storeRevalidateInflight = new Set<string>();
 
 const pluginSourceDisplayName = (s: PluginSource) => {
   if (s.id === OFFICIAL_PLUGIN_SOURCE_ID && s.name === OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME) {
@@ -429,24 +404,60 @@ const openManageSources = () => {
   sourcesDialog.open();
 };
 
-const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的loading状态
-const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
-const skeletonTimersBySource = ref<Record<string, ReturnType<typeof setTimeout>>>({}); // 按源区分的骨架屏定时器
-const activeTab = ref<string>("installed");
+const route = useRoute();
 const router = useRouter();
 const importDialog = useModal();
 const selectedFilePath = ref<string | null>(null);
 const isRefreshing = ref(false);
+/** 「已安装」tab 手动刷新中（商店源的加载态由 market store 持有） */
+const installedRefreshing = ref(false);
 
-let unlistenPluginSourcesChanged: (() => void) | undefined;
+/** 当前 tab 走 URL query（`?tab=store:<sourceId>`），从详情页返回时随 history 恢复 */
+const { settingValue: tabSetting, set: setTabSetting } = useSettingKeyState("pluginBrowserTab");
+/** settings 层只做哑同步：离开本页后 query 会被别的页面解码，这里只在本页激活时读写 */
+const isOnPage = () => route.name === "PluginBrowser";
+const activeTab = computed<string>({
+  get: () => tabSetting.value || "installed",
+  set: (tab) => {
+    if (!isOnPage()) return;
+    void setTabSetting(tab);
+  },
+});
 
-// 商店插件：按商店源分组缓存（每个 tab 独立显示/刷新）
-const storePluginsBySource = ref<Record<string, StorePluginResolved[]>>({});
-const storeLoadedBySource = ref<Record<string, boolean>>({});
+// 骨架屏：加载超过 300ms 才显示，避免快速加载时闪屏
+const showSkeletonBySource = ref<Record<string, boolean>>({});
+const skeletonTimersBySource: Record<string, ReturnType<typeof setTimeout>> = {};
+watch(
+  (): Record<string, boolean> => ({ ...loadingBySource.value, installed: installedRefreshing.value }),
+  (loadingMap) => {
+    // 加载结束时 store 会删掉 key 而不是置 false：待触发的定时器也要纳入，否则会漏清并在之后把骨架屏永久打开
+    const keys = new Set([
+      ...Object.keys(loadingMap),
+      ...Object.keys(showSkeletonBySource.value),
+      ...Object.keys(skeletonTimersBySource),
+    ]);
+    for (const key of keys) {
+      if (loadingMap[key]) {
+        if (skeletonTimersBySource[key] || showSkeletonBySource.value[key]) continue;
+        skeletonTimersBySource[key] = setTimeout(() => {
+          delete skeletonTimersBySource[key];
+          showSkeletonBySource.value = { ...showSkeletonBySource.value, [key]: true };
+        }, 300);
+      } else {
+        clearTimeout(skeletonTimersBySource[key]);
+        delete skeletonTimersBySource[key];
+        if (showSkeletonBySource.value[key]) {
+          const next = { ...showSkeletonBySource.value };
+          delete next[key];
+          showSkeletonBySource.value = next;
+        }
+      }
+    }
+  },
+  { immediate: true },
+);
 
-const sources = ref<PluginSource[]>([]);
 const storeSourcesToRender = computed(() => sources.value);
-const sourcesLoadedOnce = ref(false); // 是否已加载过商店源（仅用于避免重复拉取）
 const sourcesDialog = useModal();
 const editSourceDialog = useModal();
 const isValidatingSource = ref(false);
@@ -475,7 +486,7 @@ const tabItems = computed<KbTabItem[]>(() => [
     name: storeTabName(s.id),
     label: pluginSourceDisplayName(s),
     // 未加载过的源不显示计数（0 会被误读成「这个源是空的」）
-    count: storeLoadedBySource.value[s.id] ? getStorePlugins(s.id).length : null,
+    count: loadedBySource.value[s.id] ? getStorePlugins(s.id).length : null,
     closable: s.id !== OFFICIAL_PLUGIN_SOURCE_ID,
   })),
   {
@@ -491,7 +502,7 @@ const activeStoreSourceId = computed(() => {
   return activeTab.value.slice("store:".length);
 });
 
-const getStorePlugins = (sourceId: string) => storePluginsBySource.value[sourceId] || [];
+const getStorePlugins = (sourceId: string) => market.storePlugins(sourceId);
 
 // ---- 搜索：只过滤网格展示，不影响 tab 计数与 installedVersion 合并等既有逻辑 ----
 const searchKeyword = ref("");
@@ -531,54 +542,17 @@ const pluginAnalyticsItem = (plugin: PluginListItem) => {
   };
 };
 
-// 已安装版本索引：用于给商店列表补齐 installedVersion（按 id + version 判断状态）
-const installedVersionById = computed(() => {
-  const m = new Map<string, string>();
-  for (const p of installedPlugins.value) {
-    if (p?.id) m.set(p.id, p.version);
-  }
-  return m;
-});
-
-const applyInstalledVersions = (arr: StorePluginResolved[] | null | undefined): StorePluginResolved[] => {
-  const list = arr || [];
-  const m = installedVersionById.value;
-  return list.map((p) => {
-    const installed = m.get(p.id) ?? null;
-    // 仅覆盖 installedVersion：避免后端未来补充该字段时被误抹除
-    return { ...p, installedVersion: installed };
-  });
-};
-
-// 插件图标缓存：
-// - 本地已安装：key = local:<pluginId>
-// - 商店源：key = store:<sourceId>:<pluginId>
+// 插件图标：
+// - 本地已安装：key = local:<pluginId>，直接读 Plugin.iconPngBase64
+// - 商店源：key = store:<sourceId>:<pluginId>，由 market store 远程拉取并缓存
 //
 // 关键：商店 tab 绝不能”命中”本地 icon，即使 id 一样；因此必须用不同 key 做隔离。
-const pluginIcons = ref<Record<string, string>>({});
-const pluginIconLoading = ref<Record<string, boolean>>({});
-
-const storeIconKey = (sourceId: string, pluginId: string) => `store:${sourceId}:${pluginId}`;
 const getIconKey = (p: PluginListItem) => {
   // StorePluginResolved 一定有 sourceId；本地 Plugin 没有该字段
   const sid = "sourceId" in p && typeof p.sourceId === "string" ? p.sourceId : null;
   return sid ? storeIconKey(sid, p.id) : `local:${p.id}`;
 };
-const isIconLoading = (p: PluginListItem) => {
-  const k = getIconKey(p);
-  return !!pluginIconLoading.value[k];
-};
-
-const setPluginIconLoading = (key: string, loading: boolean) => {
-  if (!key) return;
-  if (loading) {
-    pluginIconLoading.value = { ...pluginIconLoading.value, [key]: true };
-    return;
-  }
-  const next = { ...pluginIconLoading.value };
-  delete next[key];
-  pluginIconLoading.value = next;
-};
+const isIconLoading = (p: PluginListItem) => !!market.pluginIconLoading[getIconKey(p)];
 
 const getPluginIconSrc = (p: PluginListItem) => {
   const isStore = "sourceId" in p && typeof p.sourceId === "string";
@@ -589,8 +563,7 @@ const getPluginIconSrc = (p: PluginListItem) => {
     if (installedPlugins.value.some((x) => x.id === p.id)) {
       return pluginStore.pluginIconSrc(p.id) || null;
     }
-    const key = getIconKey(p);
-    return pluginIcons.value[key] || null;
+    return market.pluginIcons[getIconKey(p)] || null;
   }
 
   // 已安装：图标已在 Plugin.iconPngBase64 中，直接从 store 读取
@@ -604,7 +577,7 @@ const getPluginIconSrc = (p: PluginListItem) => {
 
 /** 已安装 tab 里"已知有更新"仅在对应商店列表恰好已加载时才能判断，不主动为此发请求 */
 const hasKnownUpdateFor = (pluginId: string, installedVersion: string): boolean => {
-  for (const arr of Object.values(storePluginsBySource.value)) {
+  for (const arr of Object.values(pluginsBySource.value)) {
     const match = (arr || []).find((p) => p.id === pluginId);
     if (match && isUpdateAvailable(installedVersion, match.version)) return true;
   }
@@ -626,7 +599,7 @@ const quickPreviewUpdateVersion = (item: PluginListItem): string | null => {
     const store = item as StorePluginResolved;
     return isUpdateAvailable(store.installedVersion, store.version) ? store.version : null;
   }
-  for (const arr of Object.values(storePluginsBySource.value)) {
+  for (const arr of Object.values(pluginsBySource.value)) {
     const match = (arr || []).find((p) => p.id === item.id);
     if (match && isUpdateAvailable(item.version, match.version)) return match.version;
   }
@@ -646,143 +619,16 @@ const quickPreviewProps = (item: PluginListItem) => {
   };
 };
 
-// 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）
-const loadRemotePluginIcon = async (plugin: {
-  id: string;
-  sourceId: string;
-  downloadUrl?: string | null;
-  version?: string;
-}) => {
-  if (!plugin?.id || !plugin.sourceId || !plugin.downloadUrl) return;
-  // 有同 id 的已安装插件 → 图标由 getPluginIconSrc 从已安装数据取，无需远程拉取
-  if (installedPlugins.value.some((p) => p.id === plugin.id)) return;
-  const key = storeIconKey(plugin.sourceId, plugin.id);
-  if (pluginIcons.value[key]) return;
-  if (pluginIconLoading.value[key]) return;
-  // web 模式：先查 Dexie icon 缓存（版本匹配）
-  if (IS_WEB && plugin.version) {
-    const cached = await storePluginCacheDb.icons.get(key);
-    if (cached && cached.version === plugin.version) {
-      pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${cached.iconBase64}` };
-      return;
-    }
-  }
-  setPluginIconLoading(key, true);
-  try {
-    const iconData = await invoke<number[] | null>("get_remote_plugin_icon", {
-      downloadUrl: plugin.downloadUrl,
-      sourceId: plugin.sourceId,
-      pluginId: plugin.id,
-    });
-    if (!iconData || iconData.length === 0) return;
-    const bytes = new Uint8Array(iconData);
-    const binaryString = Array.from(bytes)
-      .map((byte) => String.fromCharCode(byte))
-      .join("");
-    const base64 = btoa(binaryString);
-    pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${base64}` };
-    if (IS_WEB && plugin.version) {
-      void storePluginCacheDb.icons.put({ key, version: plugin.version, iconBase64: base64, cachedAt: Date.now() });
-    }
-  } catch {
-    // 远程 icon 拉取失败：保持占位符即可
-  } finally {
-    setPluginIconLoading(key, false);
-  }
-};
-
-const prefetchRemoteIconsForSource = async (sourceId: string) => {
-  const arr = getStorePlugins(sourceId) || [];
-  const installedIds = new Set(installedPlugins.value.map((p) => p.id));
-  // 控制规模：只预取前 24 个缺失 iconUrl 的条目，避免刷新时并发过多；已安装同 id 者跳过
-  const targets = arr
-    .filter((p) => {
-      if (installedIds.has(p.id)) return false;
-      const pv = typeof p.packageVersion === "number" ? p.packageVersion : 1;
-      return pv >= 2 && !p.iconUrl && !!p.downloadUrl;
-    })
-    .slice(0, 24);
-  // 有限并发：最多同时拉 10 个，避免请求风暴但也不会”一个接一个”太慢
-  const concurrency = 10;
-  let idx = 0;
-  const workers = new Array(Math.min(concurrency, targets.length)).fill(0).map(async () => {
-    while (idx < targets.length) {
-      const cur = targets[idx];
-      idx += 1;
-      // eslint-disable-next-line no-await-in-loop
-      await loadRemotePluginIcon({
-        id: cur.id,
-        sourceId,
-        downloadUrl: cur.downloadUrl,
-        version: cur.version,
-      });
-    }
-  });
-  await Promise.all(workers);
-};
-
-const restoreIconsFromCache = async (sourceId: string) => {
-  if (!IS_WEB) return;
-  const arr = getStorePlugins(sourceId);
-  if (!arr.length) return;
-  const installedIds = new Set(installedPlugins.value.map((p) => p.id));
-  const updates: Record<string, string> = {};
-  await Promise.all(
-    arr
-      .filter((p) => !p.iconUrl && !installedIds.has(p.id))
-      .map(async (p) => {
-        const key = storeIconKey(sourceId, p.id);
-        if (pluginIcons.value[key]) return;
-        const cached = await storePluginCacheDb.icons.get(key);
-        if (cached && cached.version === p.version) {
-          updates[key] = `data:image/png;base64,${cached.iconBase64}`;
-        }
-      }),
-  );
-  if (Object.keys(updates).length) {
-    pluginIcons.value = { ...pluginIcons.value, ...updates };
-  }
-};
-
-const refreshPluginIcons = async () => {
-  // 已安装插件的图标已内嵌在 Plugin.iconPngBase64 中，无需单独加载
-};
-
-watch(
-  [
-    () => installedPlugins.value.map((p) => p.id).join("|"),
-    () => {
-      // 让 watch 感知商店列表变化（按源聚合成一个稳定字符串）
-      const parts: string[] = [];
-      const keys = Object.keys(storePluginsBySource.value).sort();
-      for (const k of keys) {
-        const arr = storePluginsBySource.value[k] || [];
-        parts.push(`${k}=` + arr.map((p) => `${p.id}:${p.installedVersion ?? ""}:${p.version}`).join(","));
-      }
-      return parts.join("|");
-    },
-  ],
-  () => {
-    refreshPluginIcons();
-  },
-  { immediate: true },
-);
-
-// 当“已安装源”变化时，同步刷新所有已加载商店列表的 installedVersion（否则会出现只有本地源显示已安装的现象）
-watch(
-  () => installedPlugins.value.map((p) => `${p.id}:${p.version}`).join("|"),
-  () => {
-    const next: Record<string, StorePluginResolved[]> = {};
-    for (const [sourceId, arr] of Object.entries(storePluginsBySource.value)) {
-      next[sourceId] = applyInstalledVersions(arr || []);
-    }
-    storePluginsBySource.value = next;
-  },
-  { immediate: true },
-);
-
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+
+/** Tauri invoke 可能返回字符串或 Error 对象 */
+const errorMessageOf = (e: unknown, fallback: string): string => {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message || e.toString();
+  if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
+  return fallback;
+};
 
 const formatBytes = (bytes: number) => {
   if (!bytes || bytes <= 0) return "0 B";
@@ -792,7 +638,7 @@ const formatBytes = (bytes: number) => {
 };
 
 const goToOfficialGitHubStoreTab = async () => {
-  const r = await loadSources();
+  const r = await market.loadSources();
   if (!r.success) {
     ElMessage.error(r.error ?? t("plugins.loadSourcesFailed"));
     return;
@@ -804,28 +650,6 @@ const goToOfficialGitHubStoreTab = async () => {
   }
   activeTab.value = storeTabName(OFFICIAL_PLUGIN_SOURCE_ID);
   // 列表加载与后台重拉由 watch(activeTab) 统一处理
-};
-
-const loadSources = async (): Promise<{ success: boolean; error?: string }> => {
-  try {
-    const res = await invoke<PluginSource[]>("get_plugin_sources");
-    sources.value = res || [];
-    sourcesLoadedOnce.value = true;
-    return { success: true };
-  } catch (e) {
-    console.error("加载商店源失败:", e);
-    sources.value = [];
-    // 提取错误消息
-    let errorMessage = "加载商店源失败";
-    if (typeof e === "string") {
-      errorMessage = e;
-    } else if (e instanceof Error) {
-      errorMessage = e.message || e.toString();
-    } else if (e && typeof e === "object" && "message" in e) {
-      errorMessage = String((e as any).message);
-    }
-    return { success: false, error: errorMessage };
-  }
 };
 
 const addSource = () => {
@@ -875,14 +699,7 @@ const confirmEditSource = async () => {
       await invoke("validate_plugin_source", { indexUrl });
     }
   } catch (e) {
-    const msg =
-      typeof e === "string"
-        ? e
-        : e instanceof Error
-          ? e.message || e.toString()
-          : e && typeof e === "object" && "message" in e
-            ? String((e as any).message)
-            : "源验证失败";
+    const msg = errorMessageOf(e, "源验证失败");
 
     try {
       await ElMessageBox.confirm(
@@ -920,52 +737,27 @@ const confirmEditSource = async () => {
 
     if (editingSourceIndex.value === null) {
       // 添加新源
-      const result = await invoke<PluginSource>("add_plugin_source", { id, name, indexUrl });
-      sources.value.push(result);
+      await invoke<PluginSource>("add_plugin_source", { id, name, indexUrl });
     } else {
       // 编辑现有源
       const originalId = sources.value[editingSourceIndex.value].id;
       await invoke("update_plugin_source", { id: originalId, name, indexUrl });
-      sources.value[editingSourceIndex.value] = {
-        id: originalId,
-        name,
-        indexUrl,
-      };
     }
 
-    await loadSources();
+    // 自身写操作直接刷新源列表（不依赖 plugin-sources-changed 回刷）
+    await market.loadSources();
     ElMessage.success(editingSourceIndex.value === null ? t("plugins.sourceAdded") : t("plugins.sourceUpdated"));
     editSourceDialog.close();
   } catch (e) {
     console.error("保存商店源失败:", e);
-    let errorMessage = t("plugins.saveSourceFailed");
-    if (typeof e === "string") {
-      errorMessage = e;
-    } else if (e instanceof Error) {
-      errorMessage = e.message || e.toString();
-    } else if (e && typeof e === "object" && "message" in e) {
-      errorMessage = String((e as any).message);
-    }
-    ElMessage.error(errorMessage);
+    ElMessage.error(errorMessageOf(e, t("plugins.saveSourceFailed")));
   }
 };
 
-const removeSource = async (idx: number) => {
+/** 源管理弹窗里的删除：与 tab 关闭按钮走同一条真正删除后端记录的路径 */
+const removeSource = (idx: number) => {
   const source = sources.value[idx];
-  if (!source) return;
-  if (source.id === OFFICIAL_PLUGIN_SOURCE_ID) {
-    ElMessage.warning(t("plugins.cannotDeleteOfficialSource"));
-    return;
-  }
-
-  try {
-    await ElMessageBox.confirm(t("plugins.confirmDeleteStoreSource"), t("plugins.deleteStoreSourceTitle"), {
-      type: "warning",
-    });
-    sources.value.splice(idx, 1);
-  } catch {
-    // cancel
-  }
+  if (source) void handleDeleteSource(source);
 };
 
 const handleDeleteSource = async (source: PluginSource) => {
@@ -980,23 +772,9 @@ const handleDeleteSource = async (source: PluginSource) => {
       { type: "warning" },
     );
 
-    // 调用后端删除
+    // 调用后端删除；源列表刷新时 store 会清掉该源的缓存，当前 tab 由 watch(sources) 切回「已安装」
     await invoke("delete_plugin_source", { id: source.id });
-
-    // 从前端列表移除
-    const idx = sources.value.findIndex((s) => s.id === source.id);
-    if (idx !== -1) {
-      sources.value.splice(idx, 1);
-    }
-
-    // 清理前端缓存
-    delete storePluginsBySource.value[source.id];
-    delete storeLoadedBySource.value[source.id];
-
-    // 如果当前 tab 是被删的源，切换到已安装源
-    if (activeStoreSourceId.value === source.id) {
-      activeTab.value = "installed";
-    }
+    await market.loadSources();
 
     ElMessage.success(t("plugins.sourceDeleted"));
   } catch (e) {
@@ -1007,112 +785,19 @@ const handleDeleteSource = async (source: PluginSource) => {
   }
 };
 
-/**
- * 加载商店插件列表
- * @param sourceId 商店源 ID
- * @param options.showMessage 是否显示提示消息
- * @param options.forceRefresh 是否强制从远程刷新（忽略本地缓存）
- *   - true: 用户手动刷新时使用，强制从远程获取最新数据
- *   - false: 首次加载或自动加载时使用，优先使用本地缓存
- */
-const loadStorePlugins = async (sourceId: string, options: { showMessage?: boolean; forceRefresh?: boolean } = {}) => {
-  const { showMessage = true, forceRefresh = false } = options;
-
-  loadingBySource.value = { ...loadingBySource.value, [sourceId]: true };
-  // 延迟 300ms 显示骨架屏，避免快速加载时闪屏
-  if (skeletonTimersBySource.value[sourceId]) {
-    clearTimeout(skeletonTimersBySource.value[sourceId]);
-  }
-  skeletonTimersBySource.value[sourceId] = setTimeout(() => {
-    if (loadingBySource.value[sourceId]) {
-      showSkeletonBySource.value = { ...showSkeletonBySource.value, [sourceId]: true };
-    }
-  }, 300);
+/** 拉取某个源的商店列表并提示结果；数据与加载态都由 market store 持有 */
+const loadStoreList = async (sourceId: string, options: { showMessage?: boolean; forceRefresh?: boolean } = {}) => {
+  const { showMessage = false, forceRefresh = false } = options;
   try {
-    const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", {
-      sourceId,
-      forceRefresh,
-    });
-    storePluginsBySource.value = {
-      ...storePluginsBySource.value,
-      [sourceId]: applyInstalledVersions(plugins || []),
-    };
-    storeLoadedBySource.value = {
-      ...storeLoadedBySource.value,
-      [sourceId]: true,
-    };
-    loadingBySource.value = { ...loadingBySource.value, [sourceId]: false };
-
+    if (forceRefresh) await market.loadStorePlugins(sourceId, { forceRefresh: true });
+    else await market.ensureStorePlugins(sourceId);
     if (showMessage) {
       ElMessage.success(forceRefresh ? t("plugins.storeListRefreshed") : t("plugins.storeListLoaded"));
     }
-
-    // 新格式：先从 Dexie 还原图标缓存，再按需发起远程拉取（均不阻塞 UI）
-    void restoreIconsFromCache(sourceId);
-    void prefetchRemoteIconsForSource(sourceId);
   } catch (error) {
     console.error("加载商店失败:", error);
-    // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
-    let errorMessage = t("plugins.loadStoreFailed");
-    if (typeof error === "string") {
-      errorMessage = error;
-    } else if (error instanceof Error) {
-      errorMessage = error.message || error.toString();
-    } else if (error && typeof error === "object" && "message" in error) {
-      errorMessage = String((error as any).message);
-    }
-    ElMessage.error(errorMessage);
-    loadingBySource.value = { ...loadingBySource.value, [sourceId]: false };
-  } finally {
-    // 确保骨架屏状态被清理（列表内容可能已提前展示，但骨架屏不能残留）
-    loadingBySource.value = { ...loadingBySource.value, [sourceId]: false };
-    showSkeletonBySource.value = { ...showSkeletonBySource.value, [sourceId]: false };
-    if (skeletonTimersBySource.value[sourceId]) {
-      clearTimeout(skeletonTimersBySource.value[sourceId]);
-      delete skeletonTimersBySource.value[sourceId];
-    }
+    ElMessage.error(errorMessageOf(error, t("plugins.loadStoreFailed")));
   }
-};
-
-/** 用于比对商店列表是否变化（仅 id + version，排序后拼接） */
-const storePluginListSignature = (plugins: StorePluginResolved[]) =>
-  [...plugins]
-    .map((p) => `${p.id}\x1f${p.version}`)
-    .sort()
-    .join("\n");
-
-/**
- * 静默后台：若 index 缓存超过 `STORE_INDEX_REVALIDATE_MAX_AGE_SECS` 则拉取；不碰 loading 状态。
- * 若返回列表与当前展示不一致则更新 UI 并提示；失败完全静默。
- */
-const revalidateStorePluginsInBackground = (sourceId: string) => {
-  if (storeRevalidateInflight.has(sourceId)) return;
-  storeRevalidateInflight.add(sourceId);
-  void (async () => {
-    try {
-      const prev = storePluginsBySource.value[sourceId];
-      const prevSig = storePluginListSignature(prev ?? []);
-      const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", {
-        sourceId,
-        forceRefresh: false,
-        revalidateIfStaleAfterSecs: STORE_INDEX_REVALIDATE_MAX_AGE_SECS,
-      });
-      if (!plugins?.length) return;
-      const next = applyInstalledVersions(plugins);
-      const nextSig = storePluginListSignature(next);
-      if (prevSig === nextSig) return;
-      storePluginsBySource.value = { ...storePluginsBySource.value, [sourceId]: next };
-      if (prev && prev.length > 0) {
-        ElMessage.success(t("plugins.storeListAutoUpdated"));
-      }
-      void restoreIconsFromCache(sourceId);
-      void prefetchRemoteIconsForSource(sourceId);
-    } catch {
-      /* 静默 */
-    } finally {
-      storeRevalidateInflight.delete(sourceId);
-    }
-  })();
 };
 
 const selectPluginFile = async () => {
@@ -1192,12 +877,7 @@ const handleImport = async () => {
     ElMessage.success(t("plugins.importSuccess"));
     importDialog.close();
     selectedFilePath.value = null;
-    // plugin-added / plugin-updated event auto-updates the store
-    // 若当前在某个商店源 tab，导入后顺手刷新当前源列表（否则只刷新已安装即可）
-    // 只需更新 installedVersion，使用缓存即可
-    if (activeStoreSourceId.value) {
-      await loadStorePlugins(activeStoreSourceId.value, { showMessage: false, forceRefresh: false });
-    }
+    // plugin-added / plugin-updated 事件更新已安装列表；商店卡片的 installedVersion 由 market store 现算
   } catch (error) {
     console.error("导入源失败:", error);
     ElMessage.error(error instanceof Error ? error.message : t("plugins.importFailed"));
@@ -1229,11 +909,8 @@ const dropZone = computed<DragFileOptions>(() => ({
     }
     if (successCount > 0) {
       ElMessage.success(t("import.importedPluginsCount", { count: successCount }));
-      // plugin-added / plugin-updated 事件会自动更新已安装列表；商店 tab 的 installedVersion 需主动刷新
+      // plugin-added / plugin-updated 事件会自动更新已安装列表；商店卡片的 installedVersion 由 market store 现算
       await pluginStore.refreshPlugins();
-      if (activeStoreSourceId.value) {
-        await loadStorePlugins(activeStoreSourceId.value, { showMessage: false, forceRefresh: false });
-      }
     }
   },
 }));
@@ -1263,43 +940,16 @@ const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     if (activeTab.value === "installed") {
-      // 已安装源 tab：刷新已安装源
-      // 已安装源使用 "installed" 作为key
-      const sourceKey = "installed";
-      loadingBySource.value = { ...loadingBySource.value, [sourceKey]: true };
-      if (skeletonTimersBySource.value[sourceKey]) {
-        clearTimeout(skeletonTimersBySource.value[sourceKey]);
-      }
-      skeletonTimersBySource.value[sourceKey] = setTimeout(() => {
-        if (loadingBySource.value[sourceKey]) {
-          showSkeletonBySource.value = { ...showSkeletonBySource.value, [sourceKey]: true };
-        }
-      }, 300);
+      installedRefreshing.value = true;
       try {
         // 触发后端全量刷新缓存（避免 get_plugins 只返回内存缓存导致”刷新无效”）
         await pluginStore.refreshPlugins();
-        await refreshPluginIcons();
         ElMessage.success(t("plugins.installedRefreshSuccess"));
       } catch (error) {
         console.error("刷新已安装源失败:", error);
-        // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
-        let errorMessage = t("plugins.installedRefreshFailed");
-        if (typeof error === "string") {
-          errorMessage = error;
-        } else if (error instanceof Error) {
-          errorMessage = error.message || error.toString();
-        } else if (error && typeof error === "object" && "message" in error) {
-          errorMessage = String((error as any).message);
-        }
-        ElMessage.error(errorMessage);
-        throw error; // 重新抛出，让外层 catch 处理
+        ElMessage.error(errorMessageOf(error, t("plugins.installedRefreshFailed")));
       } finally {
-        loadingBySource.value = { ...loadingBySource.value, [sourceKey]: false };
-        showSkeletonBySource.value = { ...showSkeletonBySource.value, [sourceKey]: false };
-        if (skeletonTimersBySource.value[sourceKey]) {
-          clearTimeout(skeletonTimersBySource.value[sourceKey]);
-          delete skeletonTimersBySource.value[sourceKey];
-        }
+        installedRefreshing.value = false;
       }
     } else if (isStoreTab(activeTab.value)) {
       // 商店 tab：只刷新当前源
@@ -1307,112 +957,74 @@ const handleRefresh = async () => {
       if (!sourceId) return;
 
       // 刷新源列表（本地），若当前源不见了则切回已安装源
-      const sourcesResult = await loadSources();
+      const sourcesResult = await market.loadSources();
       if (!sourcesResult.success && sourcesResult.error) {
         ElMessage.error(sourcesResult.error);
       }
-      const sourceIds = new Set(sources.value.map((s) => s.id));
-      if (!sourceIds.has(sourceId)) {
+      if (!sources.value.some((s) => s.id === sourceId)) {
         ElMessage.warning(t("plugins.storeSourceGoneSwitchToInstalled"));
         activeTab.value = "installed";
         return;
       }
 
       // 用户点击刷新按钮：强制从远程刷新（忽略本地缓存）
-      await loadStorePlugins(sourceId, { showMessage: true, forceRefresh: true });
-      await refreshPluginIcons();
-    }
-  } catch (error) {
-    console.error("刷新失败:", error);
-    // 如果内层已经处理过错误（已安装源），这里不再重复显示
-    // 否则显示通用错误消息
-    if (isStoreTab(activeTab.value)) {
-      // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
-      let errorMessage = t("plugins.refreshFailed");
-      if (typeof error === "string") {
-        errorMessage = error;
-      } else if (error instanceof Error) {
-        errorMessage = error.message || error.toString();
-      } else if (error && typeof error === "object" && "message" in error) {
-        errorMessage = String((error as any).message);
-      }
-      ElMessage.error(errorMessage);
+      await loadStoreList(sourceId, { showMessage: true, forceRefresh: true });
     }
   } finally {
     isRefreshing.value = false;
   }
 };
 
-onMounted(async () => {
-  try {
-    // 首次进入：已安装列表由用户在「已安装」Tab 手动刷新拉取；此处只加载商店源配置
-    // 加载商店源列表（本地配置），用于渲染动态 tab
-    await loadSources();
-    await refreshPluginIcons();
-
-    try {
-      const { isTauri } = await import("@tauri-apps/api/core");
-      if (isTauri()) {
-        unlistenPluginSourcesChanged = await listen<{ sourceId?: string; name?: string }>(
-          "plugin-sources-changed",
-          () => {
-            void loadSources();
-          },
-        );
-      }
-    } catch {
-      /* 无事件环境 */
-    }
-  } finally {
-    // 无论成功失败，都清理骨架屏定时器与显示状态
-    loadingBySource.value = {};
-    showSkeletonBySource.value = {};
-    for (const timer of Object.values(skeletonTimersBySource.value)) {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
-    skeletonTimersBySource.value = {};
-  }
+onMounted(() => {
+  // 已安装列表由 pluginStore 维护；这里只确保商店源配置已加载（已加载过则直接复用 store）
+  void market.ensureSources();
 });
 
-// 首次切到“某个商店源 tab”时，才拉取该源的商店列表（懒加载）
-watch(activeTab, async (tab, prevTab) => {
-  if (!isStoreTab(tab)) return;
-  const sourceId = tab.slice("store:".length);
-  if (!sourceId) return;
+// 商店 tab 懒加载：首次进入某个源才拉列表（store 里已有则直接复用），之后每次进入都做一次后台按时间静默重拉。
+// immediate：从详情页返回 / 直接打开带 ?tab= 的链接时，挂载即按 URL 恢复。
+watch(
+  activeTab,
+  async (tab, prevTab) => {
+    if (!isOnPage() || !isStoreTab(tab)) return;
+    const sourceId = tab.slice("store:".length);
+    if (!sourceId) return;
 
-  // 兜底：若源列表尚未加载，先加载一次（本地）
-  if (!sourcesLoadedOnce.value) {
-    await loadSources();
-  }
+    await market.ensureSources();
+    if (activeTab.value !== tab) return;
 
-  // 如果该源不存在，直接回到已安装源
-  const sourceIds = new Set(sources.value.map((s) => s.id));
-  if (!sourceIds.has(sourceId)) {
+    // 如果该源不存在，直接回到已安装源
+    if (!sources.value.some((s) => s.id === sourceId)) {
+      activeTab.value = "installed";
+      return;
+    }
+
+    if (prevTab && prevTab !== tab) {
+      trackPluginBrowserEvent("plugin_browser_source_switch", sourceAnalyticsItem(sourceId));
+    }
+
+    await loadStoreList(sourceId);
+    trackPluginBrowserEvent("plugin_browser_store_plugins_view", {
+      ...sourceAnalyticsItem(sourceId),
+      count: getStorePlugins(sourceId).length,
+      loaded: !!loadedBySource.value[sourceId],
+    });
+    void market.revalidateInBackground(sourceId).then((changed) => {
+      if (changed) ElMessage.success(t("plugins.storeListAutoUpdated"));
+    });
+  },
+  { immediate: true },
+);
+
+// 当前商店 tab 的源消失（本页删除，或 plugin-sources-changed 事件刷新）时回到「已安装」
+watch(sources, (list) => {
+  const sourceId = activeStoreSourceId.value;
+  if (sourceId && sourcesLoaded.value && !list.some((s) => s.id === sourceId)) {
     activeTab.value = "installed";
-    return;
   }
-
-  if (prevTab && prevTab !== tab) {
-    trackPluginBrowserEvent("plugin_browser_source_switch", sourceAnalyticsItem(sourceId));
-  }
-
-  // 首次进入该源：优先本地缓存；之后每次切回该 tab 也会触发后台按时间静默重拉（见 revalidateStorePluginsInBackground）
-  if (!storeLoadedBySource.value[sourceId]) {
-    await loadStorePlugins(sourceId, { showMessage: false, forceRefresh: false });
-    await refreshPluginIcons();
-  }
-  trackPluginBrowserEvent("plugin_browser_store_plugins_view", {
-    ...sourceAnalyticsItem(sourceId),
-    count: getStorePlugins(sourceId).length,
-    loaded: !!storeLoadedBySource.value[sourceId],
-  });
-  revalidateStorePluginsInBackground(sourceId);
 });
 
 onUnmounted(() => {
-  unlistenPluginSourcesChanged?.();
+  for (const timer of Object.values(skeletonTimersBySource)) clearTimeout(timer);
 });
 </script>
 

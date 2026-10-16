@@ -136,6 +136,8 @@ struct Foo {
 
 在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序。
 
+**观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `spawn_debug_event`，固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。
+
 为 README、教程或操作指南编辑真实界面截图时，用 `.claude/skills/annotate-ui-screenshots` 技能添加短标签和箭头、生成带 `-annotated` 后缀的资源，并同步精简与图片重复的正文。保持真实 UI，不使用生成式重绘。
 
 ## 语言规范

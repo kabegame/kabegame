@@ -127,6 +127,11 @@ const autoConfigTabCodec: QuerySettingCodec<AppSettings["autoConfigTab"]> = {
   decode: (raw) => (raw === "recommended" ? "recommended" : "mine"),
 };
 
+const pluginBrowserTabCodec: QuerySettingCodec<AppSettings["pluginBrowserTab"]> = {
+  encode: (value) => (value && value !== "installed" ? value : ""),
+  decode: (raw) => (raw ? String(raw) : "installed"),
+};
+
 function assignEntry<K extends AppSettingKey>(
   map: SettingsDescriptorMap,
   [key, descriptor]: [K, SettingDescriptor<K>],
@@ -304,6 +309,8 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
 
   const queryEntries = [
     query("autoConfigTab", "tab", autoConfigTabCodec),
+    // 与 autoConfigTab 共用 `tab` 参数名：各自只在自己的页面读取
+    query("pluginBrowserTab", "tab", pluginBrowserTabCodec),
     query("previewImageId", "pvwimgid"),
     query("superMode", "super", booleanQueryCodec),
     query("task-detail-path", "path"),
