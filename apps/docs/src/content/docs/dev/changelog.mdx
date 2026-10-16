@@ -1,0 +1,137 @@
+---
+title: 插件开发更新日志
+description: 从文档基线 4.3.0 起，每个 Kabegame 版本给插件作者带来的接口、清单字段与行为变化，以及怎样据此确定 engines.kabegame。
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+本页只记录**插件作者能感知到的变化**：宿主 `Kabegame.*` 接口、`package.json` 清单字段、打包规则和影响插件的运行时行为。按版本倒序排列，从本站文档的编写基线 <Badge text="4.3.0" variant="note" /> 开始。面向用户的完整更新内容见主仓库的 [CHANGELOG](https://github.com/kabegame/kabegame/blob/main/CHANGELOG.md)。
+
+## 怎样确定 `engines.kabegame`
+
+`engines.kabegame` 只支持 `>=X.Y.Z` 一种写法，声明插件能运行的**最低**应用版本。应用版本低于它时，插件会被拒绝安装并标上「版本不兼容」。确定这个值的方法：
+
+1. 列出插件用到的接口、`downloadImage` 选项、迁移脚本导出和清单字段；
+2. 在下面的速查表里查出每一项的「首次可用」版本；
+3. 取其中**最高**的那个版本。所有用到的东西都在基线里时，写 `>=4.3.0`。
+
+例如插件调用了 `requireCookie()`（4.4.0），下载时传了 `labels`（4.5.0），就写 `>=4.5.0`。再加上 `searchTexts`（4.5.1），就要写 `>=4.5.1`。
+
+:::caution[只有下限，没有上限]
+`engines.kabegame` 只能挡住太旧的应用，挡不住新版本里移除或改名的东西。每个版本下的「变更」「移除」两类条目需要你自己核对：已经发布的插件依赖了它们时，要改代码并发一个新版本，不能靠调高 `engines` 解决。
+:::
+
+### 速查表
+
+| 能力 | 后端 | 首次可用 |
+|---|---|---|
+| V8 后端、`crawl(common, custom)`、导航 / 下载 / 请求头 / 进度 / `pluginData` 等基础 `Kabegame.*` | V8 | <Badge text="4.3.0" variant="note" /> |
+| WebView 后端（每个任务一个独立窗口） | WebView | <Badge text="4.3.0" variant="note" /> |
+| KGPG v3 清单（`kbPackageVersion: 3`）及 `kbConfig`、`kbIcon`、`kbDoc`、`kbRecommendedConfigs`、`kbPathQLProviders`、`kbDescriptionTemplate`、`kbMetadataMigration` | 通用 | <Badge text="4.3.0" variant="note" /> |
+| 元数据迁移脚本导出 `migrate` | 通用 | <Badge text="4.3.0" variant="note" /> |
+| `kbLabels` 插件标签 | 通用 | <Badge text="4.4.0" variant="note" /> |
+| `kbChangelog` 更新日志、`kbAssets` 资源白名单 | 通用 | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.requireCookie(host?)` | V8 | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.fs` 私有虚拟文件系统 | V8（完整）/ WebView（异步子集） | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.fetchToFile`、`Kabegame.archive.zip` / `tar` / `sevenZip` | V8 / WebView | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.ffmpeg.muxStreams` / `probe`（Android 不可用） | V8 / WebView | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.onNativeDownload(callback)` | WebView | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.createImageMetadata` | WebView | <Badge text="4.4.0" variant="note" /> |
+| `Kabegame.cefUserAgent()` | V8 | <Badge text="4.5.0" variant="note" /> |
+| `downloadImage` 的 `labels` 选项 | V8 / WebView | <Badge text="4.5.0" variant="note" /> |
+| 迁移脚本导出 `provideLabels`；`migrate` 改为可选 | 通用 | <Badge text="4.5.0" variant="note" /> |
+| `downloadImage` / `createImageMetadata` 的 `searchTexts` 选项 | V8 / WebView | <Badge text="4.5.1" variant="note" /> |
+| 迁移脚本导出 `provideSearchTextList` | 通用 | <Badge text="4.5.1" variant="note" /> |
+| 插件 provider 依赖全局续接段 `_kb_fc` / `_kb_desc` / `_kb_x<N>x` / `_kb_co` | 通用 | <Badge text="4.5.1" variant="note" /> |
+| `kbConfig.required` 与新的 null / `when` 缺键语义 | 通用 | <Badge text="4.5.2" variant="note" /> |
+
+## 4.5.2
+
+### 新增
+
+- `kbConfig` 字段可声明 `required: true`。字段可见但为空时，主应用、CLI、自动任务都会在创建或调度任务前拒绝运行。
+
+### 变更
+
+- **Breaking：**非 boolean 字段可见但未输入时统一为 `null`，不再补 `""`、`0`、`[]` 或全 false 对象；boolean 没有默认值时仍为 `false`。
+- **Breaking：**被 `when` 隐藏的字段不再传给脚本，对应 key 为 `undefined`。可见性按依赖链计算，字段级或选项级 `when` 成环的插件会被拒绝安装。
+- 有 `default` 的字段也可以被用户清空；显式 `null` 不再回落到默认值。options 中声明过的 `variable: ""` 仍是合法值。
+- CLI 的 `--var key=` 表示清空为 `null`，checkbox 接受逗号分隔的 variable，options 不再接受未声明值。
+
+## 4.5.1
+
+### 新增
+
+- `downloadImage(url, { searchTexts })` 与 `createImageMetadata(map, { searchTexts })` 可以为新 metadata 提供精选的元数据搜索片段。不传时应用按键名和字符串叶子展开 JSON；传空数组表示这条 metadata 不参与元数据搜索。同时传了 `metadata_id` 时不会新建 metadata，`searchTexts` 会被忽略并写一条警告。见 [V8 脚本 · 元数据搜索片段](/dev/v8-api/#元数据搜索片段)。
+- 迁移脚本可以导出 `provideSearchTextList(json)`，给历史图片补搜索片段。见 [给历史图片提供搜索片段](/dev/v8-api/#给历史图片提供搜索片段)。
+- 用户可以给每个任务单独设置最大下载并发。这个值由用户在收集弹窗里设置，插件不需要处理。
+
+### 变更
+
+- PathQL 的画廊续接段改为全局前缀表提供，并改了名字：`filter_comb` 改为 `_kb_fc`，`desc` 改为 `_kb_desc`，`x<N>x` 改为 `_kb_x<N>x`，旧写法不再识别。`_kb_` 是保留前缀，插件 provider 里的条目名不要以它开头。
+- 画廊过滤面板列举插件维度时，读取插件 router 的 `meta.count` 或 `meta.image_count` 作为计数，不再逐项 COUNT。插件 router 没给这两个字段时，面板上就不显示计数。
+
+### 移除
+
+- 应用不再给插件 provider 自动注入 `filter_comb` 解析条目，组合筛选统一由全局段 `_kb_fc` 处理，插件 provider 不需要自己声明。插件的 PathQL 路径、推荐配置或模板里写死了 `filter_comb` / `desc` / `x<N>x` 段的，要改成对应的 `_kb_` 写法。
+- `kabegame-cli plugin run` / `plugin import` 移除 `--data` 参数，数据目录只由 CLI 构建时决定。
+
+## 4.5.0
+
+### 新增
+
+- `Kabegame.cefUserAgent()`（V8）：返回桌面畅游（CEF）的默认 User-Agent，Android 上返回 `null`。Cloudflare 的 `cf_clearance` 等 cookie 绑定签发时的 UA，所以配合 `requireCookie()` 使用时，要把它一起设成 `User-Agent` 请求头。
+- `downloadImage(url, { labels })`：给图片挂标签，图片入库后会出现在应用的「标签」分区。标签写法与规则见 [V8 脚本 · 图片标签](/dev/v8-api/#图片标签)。
+- 迁移脚本可以导出 `provideLabels(json)`，给历史图片补标签；`migrate` 从必需改为可选，三个导出至少有一个即可。见 [给历史图片补标签](/dev/v8-api/#给历史图片补标签)。
+
+### 变更
+
+- 插件 ID 收紧为 `[a-zA-Z0-9_-]`、不超过 64 字节，不再允许 `.`。不合规的 `.kgpg` 在安装和打包时都会被拒绝。
+- 元数据迁移改为「失败也盖版本」：每行 metadata 无论迁移成败都只处理一次，失败的行保留原数据，之后启动不再重试。迁移脚本需要一步到位，不能指望下次启动再修。
+- 用户开启「去重时更新元数据」后，重复下载命中已有图片时，会用本次下载的 metadata、来源插件和帖子地址覆盖那张图片的旧值。新版插件写出的 metadata 可能出现在老图片上，`description.ejs` 和迁移脚本都要能识别新旧 `schema`。
+
+## 4.4.0
+
+### 新增
+
+- `kbLabels`：在 `package.json` 里声明插件标签（需要 Cookie、需要代理、NSFW 等），显示在插件列表和详情里。合法 id 见 [插件清单字段 · kbLabels](/reference/plugin-schema/#kblabels)。
+- `Kabegame.requireCookie(host?)`（V8）：让应用把用户在畅游里登录该站留下的 cookie 注入本任务的请求头。插件读不到 cookie 明文，返回值只表示注入是否成功。
+- `Kabegame.fs`：每个任务独立的私有虚拟文件系统。V8 提供完整的 `deno_fs` 接口（含所有 `*Sync` 方法），WebView 只提供异步子集。插件卸载时应用会尽量清理它的 data、cache、tmp 目录，升级插件时保留。
+- `Kabegame.fetchToFile(url, destPath, init?)` 把响应直接写进虚拟文件系统；`Kabegame.archive.zip` / `tar` / `sevenZip` 在虚拟文件系统里解压 ZIP、tar（含 gzip / bzip2 压缩）和 7z。V8 与 WebView 都可用。
+- `Kabegame.ffmpeg.muxStreams` / `probe`：对虚拟路径里的媒体做 stream-copy 合流和探测，可以用来合并 B 站这类分离的 m4s 音视频流。V8 与 WebView 都可用；Android 上调用会抛出不支持的错误。
+- `Kabegame.onNativeDownload(callback)`（WebView）：页面自己触发的浏览器原生下载会落到窗口虚拟文件系统的 `tmp/Downloads`，插件通过这个回调拿到下载终态后再导入。每次导航后都要在页面脚本顶层重新注册。见 [插件格式 · WebView 页面原生下载](/dev/format/#webview-页面原生下载kabegameonnativedownload)。
+- `kbChangelog`：多语言更新日志映射，和 `kbDoc` 同构，应用会渲染给用户看。
+- `kbAssets`：文档和更新日志共用的资源白名单。Markdown 里引用了没在这里声明的本地资源时，打包会报错。路径以 `banner` 开头的项会作为插件列表快捷预览走马灯的图片。
+- `kabegame-cli plugin run`：直接运行已安装插件或一个 `.kgpg` 文件，是 V8 插件的开发与测试工作流。见 [命令行工具](/reference/cli/)。
+
+### 变更
+
+- 文档资源不再自动递归收集，必须在 `kbAssets` 里逐项声明。
+
+### 移除
+
+- 移除 KGPG v2 兼容，只认 v3 包（文件头含固定的图标数据）。
+- WebView 内部的 begin / chunk / end 流式上传通道和 base64 传输被移除，`downloadImage(blob:/data:)` 对插件的行为不变。
+
+## 4.3.0（基线）
+
+本站插件开发文档从这个版本开始编写，下面是基线能力。只用到这些能力的插件写 `>=4.3.0`。
+
+### 新增
+
+- **V8 后端就绪**：插件是自包含的 ES module，导出 `async function crawl(common, custom)`。宿主提供 `Kabegame.to` / `back` / `currentUrl` / `currentHtml` / `currentDocument` / `currentHeaders`、`downloadImage` / `createImageMetadata`、`setHeader` / `delHeader`、`addProgress` / `warn`、`pluginData` / `setPluginData`，以及 `fetch`、`URL`、`TextEncoder`、`atob`、定时器等 Web 平台全局。见 [V8 脚本](/dev/v8-api/)。
+- **WebView 后端支持多窗口**：每个任务开一个独立的爬虫窗口，多个 WebView 任务可以同时运行。窗口用应用自带的 CEF 运行时，三个桌面平台行为一致。见 [WebView 脚本](/dev/webview-api/)。
+- **KGPG v3 清单**：所有元数据、后端声明和表单都写在插件的 `package.json` 里（`kbPackageVersion: 3`），字段见 [插件清单字段](/reference/plugin-schema/)。
+- 元数据迁移脚本 `kbMetadataMigration`，导出 `migrate(json)`，在裸 V8 里运行。
+- 每个应用版本发布时预打包全部官方插件。
+
+### 移除
+
+- **Rhai 后端被移除**：`kbBackend: "rhai"` 加载时报「Rhai 后端已停止支持，请更新该插件」，合法值只剩 `v8` 和 `webview`。
+- `kabegame-cli` 移除 `plugin run`，4.4.0 又以新的形式加回。
+
+## 延伸阅读
+
+- [插件开发总览](/dev/overview/)：`package.json` 最小示例与开发循环。
+- [打包与发布 · 版本与兼容性](/dev/packaging/#版本与兼容性)：`version` 与 `engines.kabegame` 怎样影响发布。
+- [Kabegame API 字典](/reference/kabegame-api/)：每个方法的签名与最低版本徽章。

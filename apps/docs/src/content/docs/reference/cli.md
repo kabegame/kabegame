@@ -14,7 +14,7 @@ description: kabegame-cli 子命令、参数、数据目录与退出码的完整
 
 获取方式：
 
-- **Windows / macOS / Linux**：从 [GitHub Releases](https://github.com/kabegame/kabegame/releases/latest) 单独下载对应平台的 `Kabegame-cli-standard_<版本>_<架构>` 资产（Windows 为 setup.exe，macOS / Linux 为可执行文件）。下载后放到 PATH 或直接用绝对路径调用。
+- **Windows / macOS / Linux**：从 [GitHub Releases](https://github.com/kabegame/kabegame/releases/latest) 单独下载对应平台的资产：`kabegame-cli-standard_<版本>_windows_x64.exe`、`kabegame-cli-standard_<版本>_macos_aarch64`（Apple 芯片）或 `kabegame-cli-standard_<版本>_linux_amd64`。三者都是可直接运行的单文件，不是安装包。改名为 `kabegame-cli`（Windows 为 `kabegame-cli.exe`）后放到 PATH 或直接用绝对路径调用；macOS / Linux 需 `chmod +x`，macOS 还需 `xattr -d com.apple.quarantine kabegame-cli` 去掉未签名文件的隔离标记。
 - **Android**：不提供 CLI。
 
 除 clap 自带的 `--help` / `-h` 与 `--version` / `-V` 外，还有全局参数 `--via`：
@@ -64,7 +64,7 @@ my-site/
 └─ crawl.js           # 仅 webview
 ```
 
-v8 模板要先 `npm i && npm run build` 产出 `dist/main.js`，否则 `plugin pack` 会报 `main 脚本不存在`。
+v8 模板要先 `npm i && npm run build` 产出 `dist/main.js`，否则 `plugin pack` 会报 `main 脚本不存在`。模板的 `devDependencies` 用 Kabegame 源码仓库内的相对路径引用 `@kabegame/plugin-sdk` / `@kabegame/types`，仓库外使用时需改成 `"@kabegame/types": "github:kabegame/kabegame-types"` 并删掉 plugin-sdk，见 [打包与发布 · 准备插件目录](/dev/packaging/#准备插件目录)。
 
 ```bash
 kabegame-cli plugin new my-site
@@ -97,6 +97,10 @@ kabegame-cli plugin run <plugin> [选项]
 1. `kbConfig` 各项的 `default`
 2. 用户在应用里保存的插件默认配置（`plugins-directory/default-configs/<id>.json` 的 `userConfig`；同一文件里的 `httpHeaders` / `outputDir` 也会被采用）
 3. 本次命令行的 `--var`
+
+`--var key=` 会显式清空字段并提交 `null`，不会回落到用户默认或插件 `default`。checkbox 用逗号分隔已勾选项，例如 `--var wallpaper_type=desktop,mobile`；CLI 会补齐为包含全部 variable 的 boolean 对象，空值仍是 `null`。options 必须严格匹配声明的 `variable` 或显示名，未知值直接报错；只有清单中确实声明了 `variable: ""` 时，空字符串才是合法选项。
+
+隐藏字段不会出现在最终 JSON 中。可见的 `required: true` 字段若为 `null`，`--dry-run` 与正式运行都会在创建任务前报错。
 
 **插件 id 怎么定**：`--id` → 包内 `package.json` 的 `name` → `.kgpg` 文件名 stem，取第一个非空的。三者都要过 id 合法性校验（ASCII 字母/数字/`_`/`-`，≤ 64 字节），且不能撞内建插件 id；报错里会写明这个 id 是从哪儿来的。
 
@@ -152,7 +156,7 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 打包时读取 `package.json.main` 与 `package.json.kbBackend`；缺少 v3 清单或必需脚本会直接报错。
 
 :::caution
-`plugin pack` 只打包已经构建好的目录，不执行 `scripts.build`。仓库打包流程由 `src-crawler-plugins/package-plugin.ts` 在调用 CLI 前负责构建。
+`plugin pack` 只打包已经构建好的目录，不执行 `scripts.build`；打包前请先自行构建（如 `npm run build`）。
 :::
 
 内部 ZIP 会收集 `package.json` 明确引用的脚本、文档、推荐配置、providers、metadata 迁移脚本与模板。`icon.png` 被单独编码进 KGPG 头部字段，失败时仅日志警告，不中断打包。

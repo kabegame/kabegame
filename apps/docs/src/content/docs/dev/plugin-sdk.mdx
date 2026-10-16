@@ -23,7 +23,11 @@ SDK 主要服务 V8 后端（用 TypeScript 写在 `src/`，打包成单个 `dis
 
 ## 安装与使用
 
-仓库内的插件已把 `@kabegame/plugin-sdk` 作为 workspace 依赖。在插件源码里直接 import，打包器会把用到的部分内联进产物：
+:::caution[暂未发布到 npm]
+`@kabegame/plugin-sdk` 目前只在 Kabegame 源码仓库里以本地路径依赖的方式提供，还没有发布到 npm，在仓库外暂时装不上。仓库外开发时可以先不用它：`resolveUrl` 用 `new URL(href, base)`，`sleep` 用 `setTimeout` 包一层 Promise。类型声明 `@kabegame/types` 可以直接从 GitHub 安装（`npm i -D github:kabegame/kabegame-types`）。
+:::
+
+在插件源码里直接 import，打包器会把用到的部分内联进产物：
 
 ```ts
 import { type kbCrawlFn, resolveUrl, sleep } from "@kabegame/plugin-sdk";
@@ -106,7 +110,7 @@ SDK 还导出用于给 `crawl` 加类型的辅助（纯类型，无运行时开�
 | `kbCrawlFn<CustomCfg>` | `crawl` 入口的签名：`(common: KbCommonCfg, custom: CustomCfg) => void \| Promise<void>`。 |
 | `KbCommonCfg` | `common` 的形状：`{ base_url: string \| null }`。 |
 | `kbCustomCfg<Fields>` | 由字段列表构建 `custom` 的类型。 |
-| `kbCfgField<K, T>` | 描述一个 `custom` 字段（键 + 值类型）。 |
+| `kbCfgField<K, T, M>` | 描述一个 `custom` 字段。第三个泛型可用 `{ required: true }` 去掉 `null`，或用 `{ when: true }` 把 key 标为可选。 |
 | `kbCfgInt` / `kbCfgStr` / `kbCfgBool` / `kbCfgDate` / `kbCfgList<T>` / `kbCfgOption<T>` / `kbCfgCheckbox` | 各 `kbConfig` 变量类型对应的值类型。 |
 | `JsonValue` / `JsonObject` / `JsonPrimitive` | 可跨宿主边界的 JSON 值。 |
 
@@ -116,15 +120,19 @@ SDK 还导出用于给 `crawl` 加类型的辅助（纯类型，无运行时开�
 import type { kbCfgField, kbCfgInt, kbCfgStr, kbCustomCfg, KbCommonCfg } from "@kabegame/plugin-sdk";
 
 type Cfg = kbCustomCfg<[
-  kbCfgField<"startPage", kbCfgInt>,
+  kbCfgField<"startPage", kbCfgInt, { required: true }>,
   kbCfgField<"tag", kbCfgStr>,
+  kbCfgField<"artistId", kbCfgStr, { required: true; when: true }>,
 ]>;
 
 export async function crawl(common: KbCommonCfg, custom: Cfg) {
-  const startPage = custom.startPage ?? 1;   // 默认每个字段还接受 null
-  const tag = custom.tag ?? "";
+  const startPage = custom.startPage;       // required：number，不含 null
+  const tag = custom.tag ?? "";             // 普通字段：string | null
+  const artistId = custom.artistId;         // when：字段可能不存在
 }
 ```
+
+boolean 字段即使没有 `required` 也不会包含 `null`；`kbCfgCheckbox<"desktop" | "mobile">` 表示完整的 `{ desktop: boolean; mobile: boolean }` 对象。`when` 字段在隐藏时整个 key 缺失，因此代码应使用可选访问或先判断 key 是否存在。
 
 :::note
 `Kabegame` 全局的类型声明在单独的 `@kabegame/types`（`packages/kabegame-types/lib.kabegame.d.ts`），把它加入插件的 `tsconfig` 即可获得 `Kabegame.*` 的类型提示。它只覆盖 V8 后端的完整 API。

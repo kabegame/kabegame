@@ -2,7 +2,7 @@
 
 V8 与 WebView 通用。权威来源：插件标签 `apps/kabegame/src/stores/pluginLabels.ts`（REG）+
 `docs/PLUGIN_FORMAT.md`；配置项 `src-crawler-plugins/config.schema.json`，后端取值转换在
-`kabegame-core/src/crawler/task_scheduler/mod.rs` 的 `normalize_var_value`，表单显隐语义见
+`kabegame-core/src/crawler/task_scheduler/mod.rs` 的 `build_effective_user_config_from_var_defs`，表单显隐语义见
 `cocs/crawler/TASK_CONFIG.md`。两处若与本文不一致，以源码为准并更新本文。
 
 ## kbLabels：插件标签（商店/插件列表上的徽标）
@@ -38,7 +38,7 @@ CLI 的 `--var key=value` 也按下表类型转换。
 | `float` | `default`、`min`、`max` | 数字 |
 | `string` | `default` | 字符串 |
 | `boolean` | `default` | `true` / `false` |
-| `date` | `default`（与 format 一致，常用 `""`）、`format`（dayjs，缺省 `YYYY-MM-DD`）、`dateMin` / `dateMax`（`YYYY-MM-DD` 或 `today` / `yesterday`） | 按 `format` 格式化的日期字符串 |
+| `date` | `default`（与 format 一致）、`format`（dayjs，缺省 `YYYY-MM-DD`）、`dateMin` / `dateMax`（`YYYY-MM-DD` 或 `today` / `yesterday`） | 按 `format` 格式化的日期字符串 |
 | `options` | `options: [{ name, variable }]`（兼容纯字符串）、`default`（某个 variable） | 选中项的 `variable` 字符串（单选） |
 | `list` | `options: string[]`（建议项，不要用 name/variable）、`default: string[]` | 字符串数组（可自由输入的多值） |
 | `checkbox` | `options: [{ name, variable }]`、`default`（`string[]` 勾选项，或 `{ variable: bool }`） | 对象：`custom.foo.a`、`custom.foo.b` 各是 bool（多选） |
@@ -46,12 +46,15 @@ CLI 的 `--var key=value` 也按下表类型转换。
 所有类型通用的可选字段：
 
 - `descripts`：说明文字。
+- `required: true`：字段可见但为空时拒绝启动。必填必须显式声明，不要靠省略 `default` 表达。
 - 多语言：`name.zh` / `name.en` / `name.ja` / `name.ko` / `name.zhtw`，`descripts.*` 同理；
   `options` 里的 `name` 也可以带这些后缀。
 - `when: { "<options 类型变量的 key>": ["variable1", "variable2"] }`：条件显示，多个 key 之间是 AND。
-  选项级 `when`（写在 `options` 的某一项上）控制该选项是否可选。被隐藏的字段**提交时会被裁掉**，
-  脚本拿不到，所以脚本里要为它们准备默认值。
+  选项级 `when`（写在 `options` 的某一项上）控制该选项是否可选。可见性按依赖链传播，依赖成环会被拒绝；
+  被隐藏的字段**提交时会被裁掉**，脚本读取为 `undefined`。
 - `width`：1–4，四列栅格中的宽度，缺省 4（独占一行），纯布局。
+
+可见但未输入的非 boolean 字段是 `null`；boolean 始终是 bool，未写 default 时为 `false`。string/date/list/checkbox 不要用 `default: ""` 或 `default: []` 表示可选，直接省略 default。options 中显式声明的 `variable: ""` 是合法值，不代表未选择。
 
 示例（模式切换 + 条件字段）：
 
@@ -60,7 +63,7 @@ CLI 的 `--var key=value` 也按下表类型转换。
   { "key": "mode", "type": "options", "name": "Mode", "name.zh": "模式", "default": "latest",
     "options": [{ "name": "Latest", "name.zh": "最新", "variable": "latest" },
                 { "name": "Tag", "name.zh": "标签", "variable": "tag" }] },
-  { "key": "tag", "type": "string", "name": "Tag", "name.zh": "标签", "default": "", "when": { "mode": ["tag"] } },
+  { "key": "tag", "type": "string", "name": "Tag", "name.zh": "标签", "required": true, "when": { "mode": ["tag"] } },
   { "key": "start_page", "type": "int", "name": "Start page", "name.zh": "起始页", "default": 1, "min": 1, "width": 2 },
   { "key": "end_page", "type": "int", "name": "End page", "name.zh": "结束页", "default": 1, "min": 1, "width": 2 }
 ]

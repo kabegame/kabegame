@@ -51,7 +51,7 @@ const maxItems = Kabegame.vars.max_items;    // int
 const wantVideo = Kabegame.vars.download_video === true;
 ```
 
-`Kabegame.vars` 是 frozen 对象，键就是 `kbConfig` 里的 `key`。变量类型见 [插件清单字段 · kbConfig](/reference/plugin-schema/#kbconfig-变量)。
+`Kabegame.vars` 是 frozen 对象。可见但未填写的非 boolean 字段值为 `null`；被 `when` 隐藏的字段不会出现在对象中，读取结果为 `undefined`；boolean 始终是 `true` 或 `false`。因此可选输入宜写成 `String(Kabegame.vars.keyword ?? "")`，不要直接对它调用 `.trim()`。完整规则见 [插件清单字段 · 取值语义](/reference/plugin-schema/#取值语义)。
 
 ---
 
@@ -132,7 +132,9 @@ await Kabegame.log("普通日志");
 await Kabegame.warn("找不到下载链接");   // = log(msg, "warn")
 ```
 
-`downloadImage` 对 `http(s)` 走下载队列；对 `data:` / `blob:` / MSE 媒体仍由框架注入的捕获脚本处理，对插件的调用形状和结果不变。内部会把捕获内容经 `Kabegame.fs` 分块落到任务 VFS，多流再用 `Kabegame.ffmpeg` 显式合流，最终从虚拟路径提交入库。WebView 后端**没有** `createImageMetadata`——metadata 直接随 `downloadImage(url, { metadata })` 传。
+`downloadImage` 对 `http(s)` 走下载队列；对 `data:` / `blob:` / MSE 媒体仍由框架注入的捕获脚本处理，对插件的调用形状和结果不变。内部会把捕获内容经 `Kabegame.fs` 分块落到任务 VFS，多流再用 `Kabegame.ffmpeg` 显式合流，最终从虚拟路径提交入库。
+
+一个作品有多张图时，用 `await Kabegame.createImageMetadata(obj, { searchTexts })` <Badge text="4.4.0" variant="note" /> 建一次 metadata，各图传返回的 `metadata_id`，不要每张重复存；`searchTexts` 选项 <Badge text="4.5.1" variant="note" /> 与 V8 同义。单张图直接随 `downloadImage(url, { metadata })` 传即可。
 
 **内部流式上传通道已移除** <Badge text="4.4.0" variant="danger" />：自 4.4.0 起不再使用专用的 begin/chunk/end 上传命令或 base64 传输；`downloadImage(blob:/data:)` 的插件行为保持不变。
 
@@ -182,7 +184,7 @@ WebView 也有每任务隔离的私有 VFS，但只暴露**异步无同步方法
 
 ## 参考实现
 
-仓库内 `src-crawler-plugins/plugins/xhs-webview/` 是唯一的 WebView 参考插件（`main` 指向 `crawl.js`，`kbBackend: "webview"`）。它演示了 `pageLabel` 阶段分派、`updateState` 跨页、原生 `fetch` 抓详情、视频 / 实况照片下载。
+[官方插件仓库](https://github.com/kabegame/crawler-plugins/tree/main/plugins/xhs-webview) 里的 `xhs-webview` 是 WebView 参考插件（`main` 指向 `crawl.js`，`kbBackend: "webview"`）。它演示了 `pageLabel` 阶段分派、`updateState` 跨页、原生 `fetch` 抓详情、视频 / 实况照片下载。
 
 ## 延伸阅读
 

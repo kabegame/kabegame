@@ -154,11 +154,23 @@ WebView 选 `plugins/xhs-webview`。不要用 `kabegame-cli plugin new`，它的
 - `package.json` 的 `kbLabels` 只能用 6 个内置 id（如 R-18 站点用 `content.nsfw`），`kbConfig` 只有
   8 种类型（`int` / `float` / `string` / `boolean` / `date` / `options` / `list` / `checkbox`），
   两者的完整清单、字段和脚本拿到的值形态见 [references/manifest.md](references/manifest.md)。
+- `kbConfig` 的必填项必须显式写 `required: true`；不要用 `default: ""` / `default: []` 表达可选。
+  可见的空字段是 `null`，被 `when` 隐藏的字段没有 key，boolean 始终是 bool；读取可选值时用
+  `value ?? ""`、`Array.isArray(value)` 等方式兜底，禁止让 `String(null)` 或模板字符串产生字面量 `"null"`。
+  options 中声明的 `variable: ""` 是合法值，不能和未选择混为一谈；`when` 依赖不得成环。
 - 选择器、URL 规律、请求头**逐字照搬链路笔记**；改动任何一处都回第 2/3 步重测。
 - 每个阶段打带前缀的日志（`[<id>] 进入详情页 3/20: …`），排障时它们是唯一能定位卡在哪一步的线索。
 - 进度：按页、按条分摊 `Kabegame.addProgress(pct)`，总和约等于 100。
 - 单个作品失败要 `Kabegame.warn` 后继续，不要让一张图的异常结束整个任务。
 - 改已有插件时，在 `package.json` 里 bump `version`，并更新 `CHANGELOG.md`（如果有）。
+- **`engines.kabegame` 按文档的「插件开发更新日志」定**（`apps/docs/src/content/docs/dev/changelog.mdx`，
+  线上 <https://kabegame.com/dev/changelog/>）：写完代码后列出用到的 `Kabegame.*` 方法、`downloadImage` /
+  `createImageMetadata` 选项、迁移脚本导出和 `package.json` 字段，在速查表里查各自的「首次可用」版本，
+  取**最高**的那个写成 `>=X.Y.Z`；全在基线里就写 `>=4.3.0`。不要直接抄当前应用版本，也不要沿用复制来的
+  模板插件的值——写高了会无故挡住老版本用户，写低了老版本装上就报错。改已有插件时，新用了更高版本的能力
+  才抬高，并顺便对照该页各版本的「变更 / 移除」条目，确认插件没依赖已移除的写法（`engines` 只有下限）。
+  速查表里找不到某个能力时，用 `git grep -c '<名字>' v4.X.Y -- <路径>` 在各版本 tag 上确认首次出现的版本，
+  再把它补进这一页。
 
 **每张图都要带三样东西**，写法与规则见 [references/metadata-labels.md](references/metadata-labels.md)：
 1. `metadata`：一个带 `schema` 版本号的 JSON 对象，存到**足以还原源站详情页**的程度——

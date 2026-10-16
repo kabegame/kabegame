@@ -10,7 +10,7 @@ import { Badge } from '@astrojs/starlight/components';
 「最低版本」标注插件用到该字段/能力时应在 `engines.kabegame` 声明的最低应用版本。基线：V8 / WebView 插件本身自 <Badge text="4.3.0" variant="note" /> 起就绪；标注更高版本的字段是后续增量。
 
 :::note[版本标注是本文档的持续约定]
-新增接口或字段时，本站按版本标注：字段/方法旁用 <Badge text="4.4.0" variant="note" /> 徽章标出**首次可用的应用版本**，`package.json` 结构变化也在此页同步。写插件时把 `engines.kabegame` 抬到你用到的最高版本。
+新增接口或字段时，本站按版本标注：字段/方法旁用 <Badge text="4.4.0" variant="note" /> 徽章标出**首次可用的应用版本**，`package.json` 结构变化也在此页同步。写插件时把 `engines.kabegame` 抬到你用到的最高版本；按版本汇总的变化见 [插件开发更新日志](/dev/changelog/)。
 :::
 
 ## .kgpg 目录结构
@@ -81,6 +81,7 @@ v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉
 | `name` | string（+ 多语言点键） | 是 | 展示名。 |
 | `descripts` | string（+ 多语言点键） | 否 | 说明文案（注意拼写是 `descripts`）。 |
 | `default` | 随 type | 否 | 默认值。 |
+| `required` | boolean | 否 | 为 `true` 时，可见字段必须有非空值，否则任务不会启动。缺省为 `false`。 |
 | `min` / `max` | number | 否 | `int` / `float` 的取值范围。 |
 | `options` | array | `options`/`checkbox` 必填 | 选项列表，元素为 `{ name, variable, when? }`（`name` 支持多语言点键）。 |
 | `when` | object | 否 | 条件显示：`{ otherKey: [值...] }`，某 key 当前值 ∈ 数组才显示；多 key 之间为 AND。可挂变量或单个 option 上。 |
@@ -101,6 +102,20 @@ v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉
 | `list` | string[] | 可变长字符串列表；`options` 为字符串建议项 |
 | `checkbox` | 对象 `{ [variable]: bool }` | 多选；脚本中通过 `key.a`、`key.b` 访问；`default` 可为勾选项数组或 `{variable:bool}` |
 | `path` / `file` / `folder` / `file_or_folder` | string | 路径选择器（分别为文件或文件夹 / 仅文件 / 仅文件夹 / 二者）。前端已实现，未写入 schema，主要面向本地导入类插件。 |
+
+### 取值语义
+
+| 情况 | 脚本收到 |
+|---|---|
+| 字段被 `when` 隐藏 | 没有这个 key（JavaScript 中为 `undefined`） |
+| 字段可见，但用户没有输入，或清空了带 `default` 的字段 | `null` |
+| 其他情况 | 用户输入的有效值，或 key 缺失时回落到 `default` |
+| `required: true` 且可见但为空 | 拒绝启动任务 |
+| `boolean` | 永不为 `null`；没有 `default` 时为 `false` |
+
+string/date/path 的空串、未选择的 options、清空的数字、空 list，以及一项都没勾选的 checkbox 都会提交为 `null`。options 是例外：如果选项中显式声明了 `variable: ""`，空字符串就是合法选项值，不代表空值。
+
+`when` 按依赖链计算：上游字段隐藏后，它不再参与下游条件匹配。字段级和选项级 `when` 形成依赖环时，插件会被拒绝安装。
 
 **options 示例**
 
@@ -139,6 +154,7 @@ v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉
   "key": "artist_id",
   "type": "string",
   "name": "画师 UID",
+  "required": true,
   "when": { "source": ["user", "bookmark"] }
 }
 ```
@@ -183,7 +199,7 @@ v3 插件只写 `engines.kabegame`（`>=X.Y.Z`）。`minAppVersion` 是它去掉
 
 ```jsonc
 {
-  "name": "myplugin",                     // 显示名回退；真实 ID = 目录名
+  "name": "myplugin",                     // 插件 ID（优先于文件名）；也是显示名回退
   "version": "0.1.0",
   "description": "…",
   "description.en": "…",

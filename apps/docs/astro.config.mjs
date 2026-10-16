@@ -55,6 +55,7 @@ export default defineConfig({
             { label: "plugin-sdk 工具库", slug: "dev/plugin-sdk" },
             { label: "插件格式", slug: "dev/format" },
             { label: "打包与发布", slug: "dev/packaging" },
+            { label: "更新日志", slug: "dev/changelog" },
           ],
         },
         {

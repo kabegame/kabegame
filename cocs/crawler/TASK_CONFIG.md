@@ -8,8 +8,8 @@ plugin config（插件变量 JSON，后端格式）
       ⊂ 自动任务 config（= task config + 自动/定时配置，即 RunConfig）
 ```
 
-- **plugin config**：插件脚本读到的 `userConfig`，键值由插件 `config.json` 的 `vars` 决定。
-  checkbox 在后端是对象 `{ a: true }`，表单内部用的是数组 `["a"]`（`normalizeVarsForUI` / `expandVarsForBackend`）。
+- **plugin config**：插件脚本读到的 `userConfig`，键值由 `package.json.kbConfig` 决定。
+  checkbox 在后端是完整对象 `{ a: true, b: false }`，表单内部用数组 `["a"]`（`normalizeVarsForUI` / `expandVarsForBackend`）。
 - **task config**：`TaskConfig`（`apps/kabegame/src/stores/crawler.ts`）——
   `pluginId` / `userConfig` / `outputDir` / `httpHeaders` / `outputAlbumId` /
   `maxConcurrentDownloads`。最后一个字段为 `null` 时跟随应用全局下载并发。
@@ -17,7 +17,17 @@ plugin config（插件变量 JSON，后端格式）
   `scheduleEnabled` / `scheduleSpec` / `schedulePlannedAt` / `scheduleLastRunAt`。
   用户保存的配置一律是这一层，「保存为配置」恒为 `scheduleEnabled: false`。
 
-## 2. 全局唯一的 taskConfig 与「先写再打开」
+## 2. 插件变量的转换、合并与校验
+
+职责边界是「入口转换，后端定语义」：主应用把控件的空表示转换为 `null`，CLI 把 `key=value` 字符串转换成声明类型；两者都不自行决定最终默认值。`build_effective_user_config_from_var_defs` 是唯一的合并、链式 `when` 过滤和校验入口。
+
+合并顺序从高到低为：本次提交 config → `default-configs/<id>.json` 的 `userConfig` → 插件字段 `default` → 隐式空值。显式 `null` 算已提交，不继续回落。隐式空值中 boolean 为 `false`，其他类型为 `null`。未在 `kbConfig` 声明的扩展键继续原样透传，以兼容内建本地导入等调用方。
+
+合并后按不动点计算 `when`：每轮只让当前仍可见的字段参与条件匹配，隐藏一个字段会使依赖它的下游字段继续隐藏。隐藏字段从最终对象中删除；依赖图成环在插件解析与安装阶段直接拒绝。剩余值只允许是声明类型的规范值或 `null`，`required: true` 和 boolean 不接受 `null`。options 的 `variable: ""` 是合法选项，不按空值处理。
+
+`start_task` 在建任务前完成上述处理，并把最终快照写入 `TaskInfo.user_config`；因此用户之后修改默认配置不会让既有任务漂移。调度器运行前再次用当前插件定义校验该快照，插件升级使旧任务失配时任务直接失败。
+
+## 3. 全局唯一的 taskConfig 与「先写再打开」
 
 core crawler store 只存一份：
 
@@ -42,7 +52,7 @@ function setTaskConfig(cfg: TaskConfig | null) { taskConfig.value = cfg; taskCon
 通路 4 **不写配置 id、任务不关联该配置、也不回存原配置**：它只是把该配置的 task 部分当作参数初值；
 要改原配置走卡片「更多 → 编辑」。
 
-## 3. 唯一写入口与优先级
+## 4. 唯一写入口与优先级
 
 app 侧 `apps/kabegame/src/composables/taskConfig.ts` 是唯一的写入口：
 
@@ -62,21 +72,21 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 弹窗内改选来源插件本身也是一次写入：`writeTaskConfig({ pluginId })`，
 于是 vars / outputDir / headers 取「用户默认 > 插件默认」。
 
-## 4. revision 重建与 `when` 只控显隐
+## 5. revision 重建与链式 `when`
 
 `PluginConfigForm` 的 v-model 是**后端格式**的 plugin config，内部持有 UI 格式；
 父级以 `:key="taskConfigRevision"` 重建它——**只有外部写入才重建**，用户编辑不触发循环。
 
-`when`（字段级与选项级）只控制显隐/可选，不改 store：
+`when`（字段级与选项级）按链式可见性控制显隐/可选，不改 store：
 
-- 字段级 `when` 隐藏的字段，其值原样留在 `tc.userConfig`，依赖项切回来时原值重新出现；
+- 字段级 `when` 通过不动点迭代计算；上游隐藏后，下游即使值仍留在 store 也会继续隐藏。隐藏字段的原值留在 `tc.userConfig`，依赖项切回来时原值重新出现；
   只有切换插件（整体替换）才清掉。
-- 选项级 `when` 用派生只读的 `effectiveVars = withCoercedOptions(uiVars, defs)` 供展示：
+- 选项级 `when` 只读取当前可见字段组成的值视图，并用派生只读的 `effectiveVars = withCoercedOptions(uiVars, defs)` 供展示：
   当前值不可选时界面显示回退值，但 store 里的原值不动；用户一旦手动选择才写回。
 - **提交时裁剪**：`buildSubmitUserConfig` 按真实表单结构产出提交用 plugin config——
   选项回退 → 只保留当前可见字段 → 转后端格式，被隐藏的字段不传给插件脚本。
 
-## 5. Dialog 交互
+## 6. Dialog 交互
 
 表单分三段，顺序固定：
 
@@ -97,7 +107,7 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 - **无运行配置下拉、无定时表单**：定时只在自动配置页编辑。
 - 「开始收集」发起的任务一律是手动任务，**不带 `runConfigId`**；成功后关闭且不重置 `taskConfig`。
 
-## 6. 相关代码
+## 7. 相关代码
 
 | 位置 | 职责 |
 | --- | --- |

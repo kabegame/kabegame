@@ -1,35 +1,18 @@
-# Kabegame 二次元爬虫客户端
+# Kabegame — 插件驱动的动漫图片与视频收集、归档工具
 
-> 中文  | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en-US.md)
+> 中文 | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en-US.md)
 
-一个基于 Tauri 的二次元爬虫客户端！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元站点资源~
+把散落在插画站、社区、创作者平台和本地文件夹里的图片与视频，收进一个本地图库，同时保留来源、标签和作品元数据。
 
-📖 **完整文档**：[https://kabegame.com](https://kabegame.com/)
+Kabegame 不只负责下载：插件可以把角色、作品、画师等标签自动归类；本地目录可以映射成持续同步的画册；需要登录时，在内置浏览器登录一次，插件即可复用保存的 Cookie。普通站点由轻量 V8 插件处理，强 JS 渲染或反爬站点则可由真实 WebView 驱动收集。
 
-🌐 **在线体验（Demo）**：[https://demo.kabegame.com](https://demo.kabegame.com/)
-
-几个能发论文的 [技术创新](#你可能感兴趣)。
-
-> 我理解了，二次元需要讲故事，于是我添加了插件元数据，可以看爬取图片时的帖子评论。
-
-> 我明白了，二次元需要新鲜感，于是我添加了随机排序，自动配置运行爬取，自动为了能每天有常换常新的美图。
-> - 为什么是壁纸？你其实没有注意到，大部分人大部分时间都在看壁纸。在心理学上，壁纸直接影响一个人的心情，这和房间的乱整能影响人的心情一样。好看的壁纸能让你心情舒畅，延年益寿。
-> - 为什么要轮播？因为审美疲劳，好的东西看久了就会变成环境，人会自动过滤环境里的噪音，从而主观上不觉得它是美的了。轮播能让你始终保持对新壁纸的期待和桌面的新鲜感，让你始终保持好心情。
-
-> 我领悟了，二次元离不开擦边，离不开涩涩，于是我
->  - 积极引入了R18插件，以及MCP（能让AI帮你整理一组角色的涩图到同一个画册）。
->  - 我还做了图片元数据载入，和高级组合搜索功能，只为让你快速找到喜欢的角色，或者快速筛选出带有AI prompt的图片。
->  - 我还做了文件夹画册，以便自动将你生成的图片导入到kabegame中。
-
-> AI生图是三次元通往二次元的大门之匙，有了它，即使不会画画，你也可以创造独属于自己的二次元，而不拘泥于别人的创造。你可能从没有想过，你喜欢的角色实际上都是别人给你创造的，可能是大厂白领，可能是秃头程序员。AI生图首次授予了每个人自己来创造二次元世界的能力，使得我们自己的二次元成为了可能，使得我们每个人都能够参与进来，而不只是做一个旁观者。
-
-<div align="center" style="line-height: 3em">
-  <b>努力，只为做专属于二次元的软件。</b>
-</div>
-
-<div align="center">
-  <img src="docs/images/icon.png" alt="Kabegame" width="256"/>
-</div>
+<p align="center">
+  <a href="https://github.com/kabegame/kabegame/releases/latest"><b>下载最新版</b></a>
+  · <a href="https://demo.kabegame.com">在线体验</a>
+  · <a href="https://kabegame.com/guide/quickstart/">快速上手</a>
+  · <a href="https://github.com/kabegame/crawler-plugins">浏览插件</a>
+  · <a href="https://kabegame.com/dev/overview/">开发插件</a>
+</p>
 
 <p align="center">
   <a href="https://github.com/kabegame/kabegame/releases/latest">
@@ -42,155 +25,157 @@
     <img alt="GitHub Stars" src="https://img.shields.io/github/stars/kabegame/kabegame?style=flat-square&logo=github" height="20"/>
   </a>
   <a href="https://github.com/kabegame/kabegame/blob/main/LICENSE">
-    <img alt="许可证" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square" height="20"/>
+    <img alt="GPL-3.0 许可证" src="https://img.shields.io/github/license/kabegame/kabegame?style=flat-square" height="20"/>
   </a>
   <a href="https://kabegame.com">
     <img alt="项目文档" src="https://img.shields.io/badge/docs-kabegame.com-2f80ed?style=flat-square" height="20"/>
   </a>
-  <br/>
-  <a href="https://kabegame.com/guide/installation/">
-    <img alt="支持平台" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-5c6bc0?style=flat-square" height="20"/>
-  </a>
-  <a href="https://v2.tauri.app/">
-    <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" height="20"/>
-  </a>
-  <a href="https://vuejs.org/">
-    <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-42B883?style=flat-square&logo=vuedotjs&logoColor=white" height="20"/>
-  </a>
 </p>
+
+## 核心亮点
+
+- **标签自动归类**：支持的插件在下载时同时写入角色、作品、画师、模型、来源等结构化标签，自动形成可浏览、可组合过滤的标签目录，不必收完以后再逐张整理。
+- **本地文件夹持续同步**：把磁盘目录映射为同步画册，目录中的新增与删除会反映到图库，子目录还能按原有层级生成子画册；适合持续接收绘图软件、AI 生图工具或其他下载器的输出。
+- **登录一次，后续自动复用**：在「畅游」的内置浏览器中正常登录网站，Kabegame 会保存所有站点 Cookie；插件可由宿主安全注入登录态，不必反复复制 Cookie，也不会读取到 Cookie 明文。
+- **真实 WebView 驱动爬取**：除了轻量的 V8 HTTP / HTML 插件，还能让插件运行在真实浏览器页面中，处理 SPA、JS 渲染、浏览器指纹、Cloudflare 检查以及需要交互的登录流程。
+- **用脚本扩展新的内容来源**：爬虫插件使用 JavaScript / TypeScript 编写，无需修改或重新编译 Kabegame；一个插件可以同时定义收集逻辑、配置表单、标签分类、来源元数据和详情视图，并打包成 `.kgpg` 文件分享给其他用户。
+- **来源信息随图片一起留下**：插件可以保存作者、原帖链接、正文、评论、社区标签和 AI 生成参数，并提供自己的详情视图与搜索片段，让图片离开原站后仍然知道“来自哪里、为什么收藏”。
 
 <table width="100%">
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-main.png" alt="Kabegame 画廊" width="100%"/><br/>
-      <small>画廊</small>
+      <img src="docs/images/features/auto-labels.jpg" alt="Kabegame 标签自动归类" width="100%"/><br/>
+      <small>插件写入结构化标签，自动形成可筛选的标签目录</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-preview.png" alt="Kabegame 图片预览" width="100%"/><br/>
-      <small>预览</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-detail2.jpg" alt="Kabegame 详细元信息" width="100%"/><br/>
-      <small>详细元信息</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/gallery/gallery-filters2.jpg" alt="Kabegame 画廊过滤" width="100%"/><br/>
-      <small>随心过滤</small>
+      <img src="docs/images/features/folder-sync.jpg" alt="Kabegame 本地文件夹同步" width="100%"/><br/>
+      <small>把本地目录映射为持续同步、保留层级的画册</small>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/album/album-main2.jpg" alt="Kabegame 画册整理" width="100%"/><br/>
-      <small>画册整理</small>
+      <img src="docs/images/features/cookie-reuse.jpg" alt="Kabegame 自动保存并复用 Cookie" width="100%"/><br/>
+      <small>在畅游中登录一次，后续收集自动复用登录态</small>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/album/album-folder2.jpg" alt="Kabegame 文件夹同步" width="100%"/><br/>
-      <small>文件夹同步</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/source/source-main.jpg" alt="Kabegame 源插件列表" width="100%"/><br/>
-      <small>源插件列表</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/source/source-doc2.jpg" alt="Kabegame 源插件文档" width="100%"/><br/>
-      <small>源插件文档</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/crawler-config.jpg" alt="Kabegame 任务参数配置" width="100%"/><br/>
-      <small>配置任务参数</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/crawler-start.jpg" alt="Kabegame 任务执行" width="100%"/><br/>
-      <small>开始执行任务</small>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/task-images2.jpg" alt="Kabegame 任务图片" width="100%"/><br/>
-      <small>任务图片</small>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/crawler/task-log2.jpg" alt="Kabegame 任务日志" width="100%"/><br/>
-      <small>任务日志(快速定位问题)</small>
+      <img src="docs/images/features/source-metadata.jpg" alt="Kabegame 来源元数据" width="100%"/><br/>
+      <small>作者、原帖、标签与互动信息跟随图片一起保留</small>
     </td>
   </tr>
 </table>
 
-## 主要功能
+<table width="100%">
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/features/webview-crawler-images.jpg" alt="Kabegame WebView 爬虫收集结果" width="100%"/><br/>
+      <small>插件在真实浏览器页面中运行，并把媒体送入收集任务</small>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/features/webview-crawler-log.jpg" alt="Kabegame WebView 爬虫任务日志" width="100%"/><br/>
+      <small>页面交互、滚动与提取过程可在任务日志中追踪</small>
+    </td>
+  </tr>
+</table>
 
-- 🔌 **爬虫客户端**：通过 `.kgpg` 插件从各站爬取壁纸，内置插件商店可浏览/安装/管理，4.3.0开始内置打包所有发布时的最新插件；插件用 JS/TS 编写，跑在 V8（deno_core）或 WebView 后端。
-- 🎨 **壁纸设置器（图片/视频）**：收集、管理、轮播二次元壁纸，自动从指定画册更换桌面壁纸。
-- 🖼️ **图片管理者**：画廊浏览、自动标签分类、画册整理、虚拟磁盘、拖拽导入、文件夹同步画册。
-- 🧩 **MCP 整理**：打开 MCP 服务器，让外部 AI 代理按精细权限帮你整理壁纸。
+## 从收集到归档
 
-支持 Windows、macOS、Linux 与 Android（<= 4.3.0，新版本正在适配中）。
+- **统一收集**：通过插件从 Pixiv、Bilibili、Danbooru、壁纸站和社区等来源批量获取内容，也能在内置浏览器里边逛边收。
+- **统一检索**：不同来源进入同一个画廊，可按时间、插件、标签、媒体类型、尺寸、文件大小和元数据搜索组合过滤。
+- **统一管理**：用普通画册手工整理主题，用标签目录自动分类，用同步画册跟随磁盘文件夹，再通过去重和隐藏处理长期积累的图库。
+- **本地持有**：原始文件和图库数据由你掌握；可自定义下载目录，也能通过虚拟盘在其他应用中访问画册。
+- **继续扩展**：爬虫插件使用 JavaScript / TypeScript 编写；MCP 可让 AI 代理在明确权限下检索和整理图库。
 
-## 你可能感兴趣
-也许你对二次元壁纸和爬虫不感兴趣，但本应用中的几个技术创新你也许感兴趣
-- 基于 Tauri 的 Webview 爬虫 [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)
-- 自研 Tauri runtime [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)
-  高度为Kabegame定制，因此没有发crate，你可以用AI搬到你的项目中
-- 自研路径折叠式查询引擎 [PathQL](./src-tauri/pathql-rs/)
-  简单介绍来说就是，研发了一个被称为Provider DSL的解析器和基于URL路径的查询语法。应用中的大部分图片查询已经变成了 [Provider DSL JSON5\YAML格式](./src-tauri/kabegame-core/src/providers/dsl/) ，这些DSL文件决定PathQL引擎折叠查询的方式。例如，在画廊中排除元数据含成人内容关键词的图片，只查看 yande.re 来源、4:3 至 16:9 横图并随机排序时，查询写成：
-    ```url
-    images://gallery/hide/~not/~any/search/metadata/pussy/~or/search/native-metadata/pussy/~end/~end/~not/~any/search/metadata/penis/~or/search/native-metadata/penis/~end/~end/~not/~any/search/metadata/sex/~or/search/native-metadata/sex/~end/~end/~not/~any/search/metadata/r18/~or/search/native-metadata/r18/~end/~end/plugin/yandere/_kb_fc/aspect/4x3-16x9/_kb_fc/sort/random-7041412897802809
-    ```
-  这条路径的意思是：只查询未隐藏的 yande.re 图片；业务元数据和图片原生元数据都不得包含 `pussy`、`penis`、`sex`、`r18` 中的任意一个关键词；并且图片宽高比必须大于 4:3、不超过 16:9；结果最后使用固定种子随机排序。
-  如果你对该查询引擎感兴趣，可以提issue，我来完善文档。
-  理论上可以发crate，但应该还存在某些边界情况的bug没有探出来，所以你也可以让AI抄到你的项目里（注意GPL-3.0）
+Kabegame 试图解决的不是“怎样下载一张图”，而是图片跨越不同来源、不断积累之后，怎样保留上下文并长期整理。解放你图片整理的双手，适合 AI 训练者、二次元爱好者、以及上班摸鱼。png等图片还能被解析元数据，可以发现 AI 生成图片的提示词也说不定！（我就有好几个工作流是用 Kabegame 捡来的）
 
-## 下载与安装
+## 快速开始
 
-在 **[GitHub Releases](https://github.com/kabegame/kabegame/releases/latest)** 中按平台下载主程序（`kabegame-cli` 是独立的可选工具，不随主程序安装）：
+1. 从 [GitHub Releases](https://github.com/kabegame/kabegame/releases/latest) 下载并安装 Kabegame。
+2. 打开「源」，从官方插件目录安装一个感兴趣的插件；只管理本地图片时可跳过这一步。
+3. 回到「画廊」，点击「开始收集」，选择本地导入或网络插件。
+4. 在画廊中按来源和标签筛选，查看原帖元数据，再把需要长期保留的内容整理进画册。
 
-| 平台 | 下载文件 | 安装步骤 |
+完整的五分钟流程见[快速上手](https://kabegame.com/guide/quickstart/)。不安装桌面程序也可以先打开[在线 Demo](https://demo.kabegame.com)体验图库界面。
+
+## 核心能力
+
+| 能力 | 说明 |
+| --- | --- |
+| 插件驱动收集 | 内置插件商店，可安装、升级和管理 `.kgpg` 插件；V8 与 WebView 后端分别覆盖轻量请求和真实浏览器场景。 |
+| 登录态复用 | 畅游保存站点 Cookie，V8 插件可安全请求注入；WebView 插件直接使用浏览器会话。 |
+| 标签与元数据 | 插件可自动归类标签，保存原帖、作者、评论和生成参数，并贡献详情视图与搜索字段。 |
+| 画廊与检索 | 浏览图片和视频，按时间、来源、标签、媒体、尺寸、文件大小和元数据组合过滤。 |
+| 画册与文件夹 | 手动画册支持多级组织；同步画册持续跟随本地目录及其子目录变化。 |
+| 本地图库集成 | 自定义下载目录、拖拽导入、批量操作、去重、虚拟盘和原生元数据读取。 |
+| 自动化与开放接口 | 支持定时收集、CLI 和 MCP；壁纸设置与画册轮播作为桌面端附加能力提供。 |
+
+## 插件生态
+
+官方插件仓库已经覆盖二十余个插画站、社区、创作者平台和壁纸站。不同插件可以提供自己的配置表单、登录方式、标签维度、详情展示和推荐任务。
+
+- **使用插件**：[浏览官方插件目录](https://github.com/kabegame/crawler-plugins) · [安装与管理插件](https://kabegame.com/guide/plugins-usage/)
+- **开发插件**：[开发总览](https://kabegame.com/dev/overview/) · [V8 / WebView 后端选择](https://kabegame.com/dev/crawler-backends/) · [API 参考](https://kabegame.com/reference/kabegame-api/)
+- **贡献插件**：可以提交新的来源、修复失效站点，或者改善现有插件的文档与元数据。
+
+V8 插件是自包含的 ES Module，适合使用 HTTP 请求、API 和 HTML 解析完成收集，也能在 Android 上运行。必须依赖真实浏览器渲染、浏览器会话或页面交互时，可使用桌面端 WebView 后端；它会让页面真正运行起来，再从 DOM、网络响应或页面下载中提取内容。
+
+> 插件只应用于整理你有权访问的内容。请遵守来源网站的服务条款，尊重作者版权与隐私，并合理控制访问频率。
+
+## 下载与平台
+
+桌面版是当前主要发布版本；`kabegame-cli` 是独立的可选工具，不随主程序安装。
+
+| 平台 | 下载文件 | 说明 |
 | --- | --- | --- |
-| Windows x64 | `Kabegame-standard_<版本>_x64-setup.exe` | 双击安装包，按向导完成安装。若要使用画册虚拟盘，在应用设置中首次开启“画册盘”时，按提示允许应用安装随包附带的 Dokan 2.x 驱动；驱动装好后再开启一次。 |
-| macOS（Apple 芯片） | `Kabegame-standard_<版本>_aarch64.dmg` | 打开 DMG，把 `Kabegame.app` 拖入“应用程序”。安装包未签名；若首次启动提示“已损坏”或无法验证开发者，请在终端执行下方的 `xattr` 命令后重新打开。macOS 11 及以上可用。 |
-| Linux amd64 | `Kabegame-standard_<版本>_amd64.deb` | 在下载目录执行下方的 `apt install` 命令；它会同时安装画册虚拟盘需要的 `fuse3`。 |
-| Android（仅 v4.3.0 及更早版本） | `Kabegame_<版本>_android-preview.apk` | 在系统设置中允许浏览器或文件管理器“安装未知来源应用”，再点击 APK 按提示安装。Android 8.0 及以上可用；新版 Android 客户端仍在适配。 |
+| Windows x64 | `Kabegame-standard_<版本>_x64-setup.exe` | 双击安装。画册虚拟盘需要 Dokan 2.x，首次启用时应用会提示安装。 |
+| macOS Apple 芯片 | `Kabegame-standard_<版本>_aarch64.dmg` | 支持 macOS 11 及以上；安装包暂未签名。 |
+| Linux amd64 | `Kabegame-standard_<版本>_amd64.deb` | 使用 `apt` 安装；画册虚拟盘依赖 `fuse3`。 |
+| Android | `Kabegame_<版本>_android-preview.apk` | Android 8.0 及以上；目前请使用 v4.3.0，后续版本仍在适配。 |
 
-macOS 首次启动解除隔离：
+macOS 首次启动若提示无法验证开发者或应用已损坏：
 
 ```bash
 xattr -d com.apple.quarantine /Applications/Kabegame.app
 ```
 
-如需在 macOS 使用画册虚拟盘，再安装 macFUSE；安装完成后按系统提示批准扩展，必要时重启：
+macOS 如需使用画册虚拟盘，再安装 macFUSE：
 
 ```bash
 brew install --cask macfuse
 ```
 
-Linux 安装（先在终端进入安装包所在目录）：
+Linux 安装：
 
 ```bash
 sudo apt install ./Kabegame-standard_*_amd64.deb
 ```
 
-安装完成后直接启动 Kabegame 即可。图片默认保存在用户图片目录的 `Pictures/Kabegame`，卸载应用不会删除这些图片。
+图片默认保存在用户图片目录的 `Pictures/Kabegame`，卸载应用不会删除这里的图片。更完整的平台要求、数据目录和排障方法见[安装文档](https://kabegame.com/guide/installation/)。
 
-## 文档
+## 参与项目
 
-完整文档在 **[kabegame.com](https://kabegame.com/)**（从4.4.0之后可能有一些不同步）：
+不必先熟悉整个 Tauri / Rust 单体仓库，也可以参与 Kabegame：
 
-- [用户指南](https://kabegame.com/guide/installation/) —— 安装、画廊、画册、壁纸、虚拟盘、MCP 等。
-- [插件开发](https://kabegame.com/dev/overview/) —— 编写 V8 / WebView 爬虫插件、`.kgpg` 格式、打包发布。
-- [参与开发](https://kabegame.com/dev-contrib/building/) —— 从源码构建、Android 开发、架构与技术栈、致谢与内嵌依赖。（请加我QQ：2905432378）
-- [命令行工具](https://kabegame.com/reference/cli/) 与 [API 参考](https://kabegame.com/reference/kabegame-api/)。
+- 遇到问题，请提交 [Bug report](https://github.com/kabegame/kabegame/issues/new?template=bug_report.md)。
+- 希望支持新的来源，可以在[插件仓库](https://github.com/kabegame/crawler-plugins)提交插件或提出需求。
+- 想改进应用本体，请先阅读[从源码构建](https://kabegame.com/dev-contrib/building/)与[架构说明](https://kabegame.com/dev-contrib/architecture/)。
+- 文档、翻译、截图和插件说明同样是很有价值的贡献。
 
-爬虫插件仓库：**[kabegame/crawler-plugins](https://github.com/kabegame/crawler-plugins)**（募集更多插件中）
+如果 Kabegame 对你有帮助，欢迎点一个 Star。它会让更多用户和潜在插件作者发现这个项目，对我来说也是一份鼓励。
+
+## 技术亮点
+
+Kabegame 使用 Vue 3、Tauri 2 与 Rust 构建，并针对图库查询、插件运行时和桌面浏览器能力做了多项扩展：
+
+- [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)：基于真实页面环境运行需要登录态或页面交互的插件。
+- [tauri-runtime-cef](./src-tauri/tauri-runtime-cef/)：为桌面端定制的 CEF Tauri runtime。
+- [PathQL](./src-tauri/pathql-rs/)：用路径组合过滤、排序、分页和 Provider DSL 的数据库查询引擎。
+
+项目结构、进程模型与关键模块见[架构与项目结构](https://kabegame.com/dev-contrib/architecture/)。
 
 ## License
 
-源代码基于 [GPL v3](./LICENSE) 授权。（开放源代码才是终极答案）
+Kabegame 基于 [GPL-3.0](./LICENSE) 开源。
 
 ## 名称由来 🐢
 
-**Kabegame** 是日语「壁亀」（かべがめ）的罗马音，与「壁纸」（かべがみ）发音相近~ 就像一只安静的龟龟趴在你的桌面上，默默守护着你的二次元壁纸收藏。拥抱开源，做二次元人自己的软件。
+**Kabegame** 是日语「壁亀」（かべがめ）的罗马音，与「壁纸」（かべがみ）发音相近。就像一只安静的龟龟趴在桌面上，守护你的图片收藏。

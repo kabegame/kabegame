@@ -85,6 +85,22 @@ async function main() {
 await main();
 ```
 
+## 踩过的坑
+
+- **截获页面自己的 API 响应**：签名在页面 JS 里算的站点（如 x.com 的 `x-client-transaction-id`），
+  不要自己调接口——在 `crawl.js` 顶层、任何 `await` 之前同步 hook `XMLHttpRequest.prototype.open`
+  （或 `window.fetch`），脚本在 document-start 执行，早于页面请求；再滚动页面触发翻页。范例：`plugins/x-webview`。
+- **传给宿主的字符串不能含孤立代理项**：`str.slice(0, n)` 按 UTF-16 截断会把 emoji 劈开，带孤立代理项的
+  `name` 等参数经 IPC 传过去后 `invoke` 既不返回也不报错，任务永远挂在 `exit()` 等下载。截断一律按字形
+  （`Intl.Segmenter`）或至少 `Array.from(str)`。
+- **有下载在途时不要整页导航**：WebView 插件的下载由爬虫窗口的 CEF 发起，`Kabegame.to()` 那一刻还没被认领的
+  原生下载会丢失，挂满宿主 120 秒无进展期限后以 `webview destroyed` 失败。同一站点内能用 SPA 内的点击
+  切换（标签页、下拉）就别 `to()`；必须导航时把它放在一批下载之前。
+- **SPA 内跳详情页**：`history.pushState({}, "", path)` 后 `dispatchEvent(new PopStateEvent("popstate", { state: history.state }))`，
+  React Router 一类会照常路由、文档不重载。但站点可能直接用缓存渲染、不再发详情请求——x.com 推规范路径
+  `/<user>/status/<id>` 连续几条后就不再发 `TweetDetail`，换成 `/i/web/status/<id>` 每次都会请求。
+  等响应要设超时并按请求参数（如 `variables.focalTweetId`）匹配是哪一条的。
+
 ## 调试真实页面
 
 任务运行中可以用 `kabegame-chromium` 连到 `crawler-<taskId>` 窗口：`targets` 列出窗口，

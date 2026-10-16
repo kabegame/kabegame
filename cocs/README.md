@@ -114,8 +114,8 @@
   - 适用场景：编写/迁移 V8 插件；排查 startup snapshot 生成/失效/fallback、`Kabegame.fs` / `Kabegame.ffmpeg`、`fetch`、`URL`、`crypto`、`DOMParser`；更新 JS 插件模板和类型声明；排查 V8 任务偶发卡死不动（`RefCell already borrowed`）或跑插件时进程闪退；排查 V8 后端 Android 交叉编译（依赖门控 / 自建预编译产物 / NDK 链接）或网络/`Response`/`Headers` 行为。
 
 - [crawler/TASK_CONFIG.md](crawler/TASK_CONFIG.md)
-  - 主题：收集弹窗的三层配置（plugin config ⊂ task config ⊂ 自动任务 `RunConfig`）与全局唯一 `taskConfig`——四条入口「先写再打开」、唯一写入口 `writeTaskConfig` 与 `resolveTaskConfig` 优先级、逐任务最大下载并发（不继承插件用户默认）、`taskConfigRevision` 重建插件表单、字段级/选项级 `when` 只控显隐与提交时裁剪、Dialog 的「运行配置」链接与「保存为配置」（无定时表单、手动任务不带 `runConfigId`）。
-  - 适用场景：改动收集弹窗、任务「再次执行」、「以此配置运行」、插件变量表单或运行配置回填；排查首次打开表单非空/为空、切换插件后参数未取默认值、隐藏字段仍被提交。
+  - 主题：收集弹窗的三层配置（plugin config ⊂ task config ⊂ 自动任务 `RunConfig`）、插件变量的前端转换与后端合并 / 校验 / 链式 `when` 过滤，以及全局唯一 `taskConfig` 的回填与交互规则。
+  - 适用场景：改动收集弹窗、任务「再次执行」、「以此配置运行」、插件变量表单或运行配置回填；排查默认值优先级、显式 `null`、`required` 拦截、隐藏字段仍被提交或 `when` 链未传播。
 
 - [../third-patches/deno/README.md](../third-patches/deno/README.md)
   - 主题：`deno_core` 的上游 vendor base 与 kabegame patch series。`third/deno` = `denoland/deno` monorepo submodule（pin `v2.9.0`，`libs/core` 与 crates.io deno_core 0.405.0 逐字节一致），经 `[patch.crates-io] deno_core = third/deno/libs/core` 单一来源消费；4 个 patch（扩展 JS 内嵌 / 共享 V8 platform 初始化 / Android Bionic errno / 内嵌行为 feature 门控）只作用于 `libs/core`，`deno task patch deno` 按 reset 模型全量应用。Deno CLI 一律使用官方二进制，与这组 patch 无关；`serde_v8`/`deno_ops` 作为 monorepo path 依赖单份解析（无 path-vs-registry 重复）。
