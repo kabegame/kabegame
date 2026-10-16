@@ -50,12 +50,13 @@
         :clearable="clearable"
         :disabled="disabled"
         :filterable="filterable"
+        :filter-method="filterable ? onFilter : undefined"
         :size="size"
         :popper-class="popperClass"
         style="width: 100%"
         @update:model-value="emitValue"
       >
-        <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value">
+        <el-option v-for="option in filteredOptions" :key="option.value" :label="option.label" :value="option.value">
           <!-- 悬浮时在整行右侧弹出插件快捷预览（与「源」页面同一张面板）；
                「全部」这类没有插件实体的行不弹 -->
           <HoverRevealPanel :disabled="!option.plugin">
@@ -101,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { Grid, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
@@ -261,6 +262,22 @@ const options = computed((): PluginPickerOption[] => [
   })),
   ...pluginRows.value,
 ]);
+
+// 桌面下拉的搜索：同时匹配显示名与插件 id（不区分大小写）。
+// 传了 filter-method 后 el-select 不再按 label 自行隐藏选项，展开时会以空串回调重置。
+const filterQuery = ref("");
+
+function onFilter(query: string) {
+  filterQuery.value = query;
+}
+
+const filteredOptions = computed((): PluginPickerOption[] => {
+  const q = filterQuery.value.trim().toLowerCase();
+  if (!q) return options.value;
+  return options.value.filter(
+    (option) => option.label.toLowerCase().includes(q) || !!option.pluginId?.toLowerCase().includes(q),
+  );
+});
 
 const androidOptions = computed(() =>
   options.value.map((option) => ({

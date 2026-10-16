@@ -464,3 +464,14 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [x] | 过滤模式粘贴旧写法 | debug CLI → demo | `pathql=…/pixiv/filter_comb/sort/by-time/desc/x100x/3` | 剥掉分页尾，改写成 `_kb_fc` / `_kb_desc` 后解析成功，总数 788 | 已实测 |
 | [ ] | 连旧版服务器 | debug CLI → 4.5.0 及以前的桌面 Web 服务器 | 全站 + 过滤（粘贴新写法路径）各跑一次 | 识别为旧版语法，分页用 `x<N>x/<页>`，过滤路径的 `_kb_*` 段改回裸段名 | 手边没有旧版服务器，未覆盖 |
 | [ ] | 插件商店上架 | 插件仓库 | `generate-index` 后在商店里查看 | kabegame-server 显示 0.2.1 | |
+
+## 插件选择下拉框按 ID 搜索（`apps/kabegame/src/components/PluginPickerField.vue`）
+
+桌面端 `el-select` 改用 `filter-method`：输入词不区分大小写，命中显示名或插件 ID 的选项保留；「全部」等前置项只按显示名匹配。Android 选择弹窗不受影响。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 按 ID 搜索 | 桌面 CEF | 收集弹窗的插件下拉中输入 `bluedafeiyu`、`BLUEDAFEIYU`、`pixiv` | 分别只剩「蓝色大肥鱼 AI 娘档案」「Pixiv」，显示名不含 ID 的插件也能搜到；输入无关词 `xyzzy` 结果为空 | 已实测（CDP 写入输入框并派发 input 事件） |
+| [x] | 按名称搜索 | 桌面 CEF | 输入「蓝色」 | 只剩「蓝色大肥鱼 AI 娘档案」，与改动前一致 | 已实测 |
+| [x] | 重新展开重置 | 桌面 CEF | 按 ID 搜索后选中蓝色大肥鱼，再次展开下拉 | 32 个选项全部恢复，输入框与选中行显示「蓝色大肥鱼 AI 娘档案」 | 已实测 |
+| [x] | 前置项 | 桌面 CEF | 自动任务页插件过滤下拉输入「全部」 | 「全部插件(0)」行保留，计数正常 | 已实测；当前没有自动任务配置，只有这一行 |
