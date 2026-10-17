@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import ElementPlus from "@kabegame/element-plus";
+import ElementPlus, { vCornerBadge } from "@kabegame/element-plus";
 /** vendored element-plus 无构建产物，直接吃 scss 源码（等价于原 element-plus/dist/index.css） */
 import "@kabegame/element-plus/theme-chalk/src/index.scss";
 import * as ElementPlusIconsVue from "@kabegame/element-plus-icons";
@@ -8,7 +8,6 @@ import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";
 import "@/styles/anime-theme.css";
-import "./styles/corner-badge.css";
 import "./styles/dialogs.css";
 import "./styles/hscroll-fade.css";
 /** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */
@@ -17,7 +16,6 @@ import "vant/lib/toast/style";
 import "@/styles/vant-theme.css";
 import { vPullToRefresh } from "@/directives/pullToRefresh";
 import { vDragFile } from "@/directives/dragFile";
-import { vCornerBadge } from "@/directives/cornerBadge";
 import { vHscrollFade } from "@/directives/hscrollFade";
 import { IS_ANDROID, IS_MACOS } from "@/env";
 import { Toast, Picker, Popup, Button } from "vant";

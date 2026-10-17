@@ -88,7 +88,7 @@
 - **周期与 tab 兜底**：启动强制刷新完成后，store 每 4h 对当时存在的所有源静默强制刷新一次；进入商店 tab 仍调用 `revalidateInBackground`，由后端按 `updated_at` 与 4h 阈值决定是否走网络。周期刷新必须强制，避免首次网络写入时间晚于定时器起点而使 4h 首轮被 stale 判断跳过。
 - **保存**：数据存在 Pinia store，跨路由存活。App 没有 keep-alive，`PluginBrowser` 从详情返回会重挂载，但直接复用 store，不重拉列表与图标、不闪骨架屏。
 - **installedVersion 现算**：store 只存后端原始列表，`pluginsBySource` 在读取时按 `usePluginStore().visiblePlugins` 叠加 `installedVersion`。安装 / 更新 / 删除插件由 `plugin-added/updated/deleted` 驱动 `pluginStore`，商店卡片自动跟随，无需重拉商店。
-- **可更新唯一判据**：`isStoreUpdateAvailable` 同时要求商店版本高于已安装版本且 `minAppIncompatible` 不为真；`updatableInstalledIds` 按插件 id 去重。桌面侧栏、紧凑端底部 tab 的数字角标，商店/已安装卡片红点和快捷预览统一读这套结果，不兼容的新版本不会提示更新。
+- **可更新唯一判据**：`isStoreUpdateAvailable` 同时要求商店版本高于已安装版本且 `minAppIncompatible` 不为真；`updatableInstalledIds` 按插件 id 去重。桌面侧栏、紧凑端底部 tab 的数字角标，插件页各商店源 tab 的数字角标（只计该源条目），商店卡片红点和商店条目快捷预览统一读这套结果，不兼容的新版本不会提示更新。已安装 tab 的卡片与快捷预览不提示更新：从那里点进去的是本地插件详情，不能执行更新，入口只在商店源。角标统一用组件库的 `v-corner-badge`（与 `el-badge` 同外观）。
 - **安装守卫**：前端详情按钮继续按 `minAppIncompatible` 禁用；后端共同入口 `install_plugin_from_kgpg` 在复制前复用 `check_min_app_version` 校验完整解析所得 `min_app_version`，因此商店安装、文件导入和拖入导入都不能绕过最低应用版本要求。
 - **事件刷新**：store 首次使用时注册一次 `plugin-sources-changed` → `loadSources()`。后端在 storage 层 `add_source` / `update_source` / `delete_source` 写库后（释放锁后）以 `reason: added|updated|deleted` + `sourceId` 广播；官方源名 i18n 同步也发同名事件。自身写操作完成后页面直接 `loadSources()`，不依赖事件回刷；重复刷新幂等。
 - **`loadSources()` 的副作用**：清掉已不存在源的列表、加载标记与 `store:<id>:*` 图标；已加载源的 `indexUrl` 变了则 `forceRefresh` 重拉（旧 index 缓存不再可信）。

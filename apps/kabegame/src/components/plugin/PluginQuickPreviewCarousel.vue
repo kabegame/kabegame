@@ -6,18 +6,6 @@
       <span class="qp-carousel-state-text">{{ t("plugins.quickPreview.loadingSamples") }}</span>
     </div>
 
-    <!-- 空态：区分“确实没有示例图”与“未安装故未读取” -->
-    <div v-else-if="emptyReason" class="qp-carousel-box qp-carousel-empty">
-      <el-icon class="qp-carousel-empty-icon"><Picture /></el-icon>
-      <span class="qp-carousel-empty-text">
-        {{
-          emptyReason === "not-installed"
-            ? t("plugins.quickPreview.installToPreview")
-            : t("plugins.quickPreview.noSampleImages")
-        }}
-      </span>
-    </div>
-
     <template v-else-if="images.length">
       <div class="qp-carousel-box" @mouseenter="paused = true" @mouseleave="paused = false">
         <img :src="images[activeIndex].src" alt="" class="qp-carousel-img" />
@@ -70,7 +58,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
 import { ElIcon } from "@kabegame/element-plus";
-import { ArrowLeft, ArrowRight, Loading, Picture } from "@kabegame/element-plus-icons";
+import { ArrowLeft, ArrowRight, Loading } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 
 export interface PluginQuickPreviewImage {
@@ -84,13 +72,11 @@ const props = withDefaults(
   defineProps<{
     images: PluginQuickPreviewImage[];
     loading?: boolean;
-    /** 非空时不展示走马灯：'no-assets' = 插件确实没有示例图；'not-installed' = 未安装故未读取 */
-    emptyReason?: "no-assets" | "not-installed" | null;
     /** 当前预览目标变化时用它重置索引（通常传插件 id），避免复用同一实例时索引串台 */
     resetToken?: string;
     autoplayMs?: number;
   }>(),
-  { loading: false, emptyReason: null, resetToken: "", autoplayMs: 2600 },
+  { loading: false, resetToken: "", autoplayMs: 2600 },
 );
 
 const { t } = useI18n();
@@ -153,18 +139,12 @@ onBeforeUnmount(clearTimer);
   background: var(--kb-qp-carousel-bg, #f4eff7);
 }
 
-.qp-carousel-state,
-.qp-carousel-empty {
+.qp-carousel-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 9px;
-}
-
-.qp-carousel-empty {
-  background: transparent;
-  border: 1.5px dashed var(--el-border-color);
 }
 
 .qp-spin {
@@ -179,19 +159,13 @@ onBeforeUnmount(clearTimer);
   }
 }
 
-.qp-carousel-state-text,
-.qp-carousel-empty-text {
+.qp-carousel-state-text {
   font-size: 12px;
   color: var(--el-text-color-placeholder);
   text-align: center;
   white-space: pre-line;
   line-height: 1.5;
   padding: 0 12px;
-}
-
-.qp-carousel-empty-icon {
-  font-size: 22px;
-  color: var(--el-text-color-placeholder);
 }
 
 .qp-carousel-img {

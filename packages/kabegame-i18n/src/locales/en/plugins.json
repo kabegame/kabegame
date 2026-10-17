@@ -172,8 +172,6 @@
   "officialGithubReleaseSourceName": "Official GitHub Releases source",
   "quickPreview": {
     "loadingSamples": "Loading sample images",
-    "noSampleImages": "This source ships no sample images",
-    "installToPreview": "Install to see sample images",
     "prevImage": "Previous image",
     "nextImage": "Next image",
     "canUpdateTo": "Update available: {version}",

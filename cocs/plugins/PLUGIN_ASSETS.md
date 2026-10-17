@@ -3,7 +3,7 @@
 本文档描述插件配图的**声明、打包、加载、展示**全链路：`package.json` 的 `kbAssets`
 如何用一份「插件根相对路径」清单同时服务 `kbDoc`（README）与 `kbChangelog`
 （更新日志），路径归一化的唯一裁决者是谁，以及其中**归一化路径以 `banner` 开头**的那些
-除了渲染在文档正文里之外，还被「源」页面的 hover 快捷预览当作走马灯示例图使用。
+除了渲染在文档正文里之外，还被「源」页面的右键快捷预览当作走马灯示例图使用。
 
 ---
 
@@ -160,8 +160,10 @@ package.json (kbAssets + kbDoc + kbChangelog)
 ## 5. 快捷预览走马灯
 
 「源」页面（`PluginBrowser.vue`）的插件卡片与**插件选择器**（`PluginPickerField.vue`
-的桌面下拉行）支持快捷预览：桌面 hover 400ms 后在触发元素旁弹出 320px 悬浮面板，
-紧凑端长按 500ms 弹出同一面板的底部抽屉形态。面板里的**示例图走马灯直接复用
+的桌面下拉行）支持快捷预览，在触发元素旁弹出 320px 悬浮面板：「源」页面卡片是桌面**右键**
+弹出（`HoverRevealPanel trigger="contextmenu"`，点面板外或 Esc 关闭，不随鼠标移出消失；
+悬停自动弹出在卡片网格里太容易误触），插件选择器的下拉行保持 hover 400ms；紧凑端都是长按
+500ms 弹出同一面板的底部抽屉形态。面板里的**示例图走马灯直接复用
 `Plugin.assets`** —— 不额外增加任何后端接口或资源。
 
 | 关注点 | 处理 |
@@ -170,7 +172,8 @@ package.json (kbAssets + kbDoc + kbChangelog)
 | 顺序 | `Plugin.assets` 按 `kbAssets` 数组声明顺序下发；过滤后不再排序，走马灯直接沿用作者声明顺序 |
 | 图注 | **不显示**。走马灯是橱窗，图上压一行从文件名推导的字符串（`Banner 1`）既非作者本意也无信息量 |
 | MIME | `guessAssetMime(key)`，与 Rust `mime_for_asset` 及打包白名单口径一致 |
-| **只对已安装插件出图** | 商店里未安装的条目**不出图**，显示「安装后可查看示例图」。原因见下 |
+| **只对已安装插件出图** | 商店里未安装的条目**不出图**。原因见下 |
+| **没图就没有 banner 区** | 没有 banner 图时面板不渲染走马灯区域（也不放空态占位），只剩头部、描述、标签与页脚 |
 
 ### 为什么按路径前缀筛
 
@@ -184,19 +187,19 @@ package.json (kbAssets + kbDoc + kbChangelog)
 `banner.png` / `banner-1.jpg` / `banner/home.webp` 都算；`images/banner-home.webp` 不算，
 因为它的完整路径不是以 `banner` 开头。判定实现在
 `apps/kabegame/src/utils/assetPath.ts::isBannerAsset`，两个装配点共用。
-**存量插件没有迁移**，因此它们当前都命中「没有示例图」空态 —— 这是预期的，
+**存量插件没有迁移**，因此它们的预览当前都没有 banner 区 —— 这是预期的，
 补图时按新约定命名即可。
 
 ### 为什么未安装条目不出图
 
 唯一能拿到远程插件 `assets` 的接口 `get_plugin_detail(source_id)` 内部会调用
-`ensure_plugin_cached`，把**整个 .kgpg 下载到本地磁盘缓存**（可能几 MB）。hover 是高频
+`ensure_plugin_cached`，把**整个 .kgpg 下载到本地磁盘缓存**（可能几 MB）。快捷预览是高频
 轻量交互，鼠标划过卡片列表就会触发一串后台整包下载，产生非预期流量。因此快捷预览只做
 best-effort：
 
 - 本身就是已安装插件 → 直接用内存里的 `assets`（零成本）
 - 商店条目且 `installedVersion === version` → 同一份内容，复用本地已装包
-- 其余 → 空态「安装后可查看示例图」
+- 其余 → 不出图，面板不含 banner 区
 
 真要看图，点进详情弹窗（那里本就要拉完整包，是用户的显式动作）。
 
@@ -206,7 +209,7 @@ best-effort：
 |---|---|
 | 走马灯 | `apps/kabegame/src/components/plugin/PluginQuickPreviewCarousel.vue` |
 | 悬浮面板 | `apps/kabegame/src/components/plugin/PluginQuickPreviewPanel.vue` |
-| 交互（hover 延迟/长按/定位翻转/抽屉形态） | `apps/kabegame/src/components/common/HoverRevealPanel.vue` |
+| 交互（hover 延迟或右键触发/长按/定位翻转/抽屉形态） | `apps/kabegame/src/components/common/HoverRevealPanel.vue` |
 | 示例图装配 | `apps/kabegame/src/utils/assetPath.ts::bannerPreviewImages` |
 | 接入 | `apps/kabegame/src/views/PluginBrowser.vue`、`apps/kabegame/src/components/PluginPickerField.vue` |
 

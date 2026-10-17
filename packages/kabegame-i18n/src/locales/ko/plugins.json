@@ -172,8 +172,6 @@
   "officialGithubReleaseSourceName": "공식 GitHub Releases 소스",
   "quickPreview": {
     "loadingSamples": "예시 이미지를 불러오는 중",
-    "noSampleImages": "이 소스에는 예시 이미지가 없습니다",
-    "installToPreview": "설치하면 예시 이미지를 볼 수 있습니다",
     "prevImage": "이전 이미지",
     "nextImage": "다음 이미지",
     "canUpdateTo": "{version}(으)로 업데이트 가능",

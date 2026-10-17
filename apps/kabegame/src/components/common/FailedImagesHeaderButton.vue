@@ -1,13 +1,6 @@
 <template>
-  <el-badge v-if="failedCount > 0" :value="failedCount" :max="99" class="failed-images-badge">
-    <el-tooltip :content="t('header.failedImages')" placement="bottom">
-      <el-button class="failed-images-trigger" circle @click="openDialog">
-        <el-icon><WarningFilled /></el-icon>
-      </el-button>
-    </el-tooltip>
-  </el-badge>
-  <el-tooltip v-else :content="t('header.failedImages')" placement="bottom">
-    <el-button class="failed-images-trigger" circle @click="openDialog">
+  <el-tooltip :content="t('header.failedImages')" placement="bottom">
+    <el-button v-corner-badge="failedCount" class="failed-images-trigger" circle @click="openDialog">
       <el-icon><WarningFilled /></el-icon>
     </el-button>
   </el-tooltip>
@@ -60,9 +53,5 @@ defineEmits<{
     transform: translateY(-2px);
     box-shadow: var(--anime-shadow-hover);
   }
-}
-
-.failed-images-badge {
-  display: block;
 }
 </style>

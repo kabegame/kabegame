@@ -1,9 +1,11 @@
 <template>
   <!-- 触发器包一层锚点元素：定位只需要它的 rect，不改子节点自身的盒模型职责 -->
   <div
+    ref="triggerRootRef"
     class="hover-reveal"
     @mouseenter="onTriggerMouseenter"
     @mouseleave="onTriggerMouseleave"
+    @contextmenu="onTriggerContextmenu"
     @touchstart="onTouchStart"
     @touchmove="onTouchMove"
     @touchend="onTouchEnd"
@@ -55,7 +57,7 @@ const PANEL_GAP = 12;
 const VIEWPORT_MARGIN = 12;
 
 /**
- * 悬浮揭示面板：hover（桌面）/ 长按（紧凑端）在触发元素旁弹出一张面板。
+ * 悬浮揭示面板：hover 或右键（桌面）/ 长按（紧凑端）在触发元素旁弹出一张面板。
  *
  * 只管「何时显示、贴哪」，面板内容由 `panel` 插槽给出——避免这个通用组件反向依赖
  * 某个具体页面的数据形状。桌面面板贴触发元素右侧，右边放不下则翻到左侧，并夹在视口内。
@@ -64,6 +66,11 @@ const props = withDefaults(
   defineProps<{
     /** 为真时完全不弹（如「全部」这类没有可预览内容的行） */
     disabled?: boolean;
+    /**
+     * 桌面端触发方式：`hover` 悬停延时弹出、移出关闭；`contextmenu` 右键弹出，
+     * 点面板外 / Esc 关闭，不随鼠标移出消失。紧凑端始终是长按。
+     */
+    trigger?: "hover" | "contextmenu";
     openDelay?: number;
     closeDelay?: number;
     /** 面板宽度（px），仅用于定位计算；实际宽度由面板内容自己决定，两者应一致 */
@@ -75,6 +82,7 @@ const props = withDefaults(
   }>(),
   {
     disabled: false,
+    trigger: "hover",
     openDelay: 400,
     closeDelay: 200,
     panelWidth: 320,
@@ -176,9 +184,11 @@ const cancelScheduledClose = () => {
   clearCloseTimer();
 };
 
+const isHoverTrigger = () => props.trigger === "hover";
+
 // ---- 桌面 hover ----
 const onTriggerMouseenter = (event: MouseEvent) => {
-  if (compact.value || props.disabled) return;
+  if (compact.value || props.disabled || !isHoverTrigger()) return;
   cancelScheduledClose();
   clearOpenTimer();
   const el = event.currentTarget as HTMLElement;
@@ -189,13 +199,35 @@ const onTriggerMouseenter = (event: MouseEvent) => {
 };
 
 const onTriggerMouseleave = () => {
-  if (compact.value) return;
+  if (compact.value || !isHoverTrigger()) return;
   clearOpenTimer();
   if (visible.value) scheduleClose();
 };
 
 const onPanelMouseleave = () => {
-  if (!compact.value) scheduleClose();
+  if (!compact.value && isHoverTrigger()) scheduleClose();
+};
+
+// ---- 桌面右键 ----
+const triggerRootRef = ref<HTMLElement | null>(null);
+
+const onTriggerContextmenu = (event: MouseEvent) => {
+  if (compact.value || props.disabled || isHoverTrigger()) return;
+  event.preventDefault();
+  void show(event.currentTarget as HTMLElement);
+};
+
+// 面板外的按下一律关闭（左键点触发器本身会打开详情，面板也该让开）；只有在触发器上
+// 再次右键时保留，交给随后的 contextmenu 重新定位。右键另一张卡片则先关这张、再开那张。
+const onDocumentPointerdown = (event: PointerEvent) => {
+  const target = event.target as Node | null;
+  if (!target || panelRef.value?.contains(target)) return;
+  if (event.button === 2 && triggerRootRef.value?.contains(target)) return;
+  close();
+};
+
+const onDocumentKeydown = (event: KeyboardEvent) => {
+  if (event.key === "Escape") close();
 };
 
 const handlePanelClick = () => {
@@ -257,10 +289,16 @@ const onViewportChange = () => {
 const bindViewportListeners = () => {
   window.addEventListener("scroll", onViewportChange, true);
   window.addEventListener("resize", onViewportChange);
+  if (!isHoverTrigger()) {
+    document.addEventListener("pointerdown", onDocumentPointerdown, true);
+    document.addEventListener("keydown", onDocumentKeydown);
+  }
 };
 const unbindViewportListeners = () => {
   window.removeEventListener("scroll", onViewportChange, true);
   window.removeEventListener("resize", onViewportChange);
+  document.removeEventListener("pointerdown", onDocumentPointerdown, true);
+  document.removeEventListener("keydown", onDocumentKeydown);
 };
 
 watch(visible, (v) => {

@@ -172,8 +172,6 @@
   "officialGithubReleaseSourceName": "官方 GitHub Releases 源",
   "quickPreview": {
     "loadingSamples": "正在讀取範例圖",
-    "noSampleImages": "這個來源沒帶範例圖",
-    "installToPreview": "安裝後可查看範例圖",
     "prevImage": "上一張",
     "nextImage": "下一張",
     "canUpdateTo": "可更新至 {version}",

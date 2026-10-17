@@ -231,12 +231,10 @@ function labelsFor(p?: Plugin): PluginLabel[] {
  * 不存在「未安装故读不到」的分支；标签口径与行尾标签保持一致（含版本不兼容这类派生标签）。
  */
 function quickPreviewProps(plugin: Plugin) {
-  const images = bannerPreviewImages(plugin.assets);
   return {
     plugin: { ...plugin, labels: labelsFor(plugin) } as QuickPreviewPluginLike,
     iconSrc: pluginStore.pluginIconSrc(plugin.id),
-    images,
-    emptyReason: images.length > 0 ? null : ("no-assets" as const),
+    images: bannerPreviewImages(plugin.assets),
   };
 }
 

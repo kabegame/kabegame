@@ -14,8 +14,16 @@
       <el-icon v-if="item.icon" class="kb-tab-icon">
         <component :is="item.icon" />
       </el-icon>
-      <span v-if="!item.iconOnly" class="kb-tab-label">{{ item.label }}</span>
-      <span v-if="item.count != null" class="kb-tab-count">{{ item.count }}</span>
+      <!-- 角标挂在文字组而不是按钮上：.kb-tab 横向滚动会裁掉按钮外沿，文字组的右上角还在按钮内 -->
+      <span
+        v-if="!item.iconOnly || item.count != null"
+        v-corner-badge="item.badge"
+        class="kb-tab-text"
+        :class="{ 'kb-tab-text--badged': (item.badge ?? 0) > 0 }"
+      >
+        <span v-if="!item.iconOnly" class="kb-tab-label">{{ item.label }}</span>
+        <span v-if="item.count != null" class="kb-tab-count">{{ item.count }}</span>
+      </span>
       <el-icon
         v-if="item.closable"
         class="kb-tab-close"
@@ -31,6 +39,7 @@
 <script setup lang="ts" generic="T extends string">
 import { ElIcon } from "@kabegame/element-plus/components/icon";
 import { Close } from "@kabegame/element-plus-icons";
+import { vCornerBadge } from "@kabegame/element-plus/directives";
 import type { KbTabItem } from "./kb-tab";
 
 // withInstall 靠 comp.name 做全局注册，<script setup> 不写就会注册成 undefined
@@ -118,6 +127,19 @@ function select(item: KbTabItem<T>) {
 .kb-tab-icon {
   flex: none;
   font-size: 15px;
+}
+
+.kb-tab-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* el-badge 式定位会压住宿主右缘约 10px：补右内边距让角标从计数之后开始，
+   它再向外浮出的约 8px 用外边距给后面的叉号让位 */
+.kb-tab-text--badged {
+  padding-right: 10px;
+  margin-right: 6px;
 }
 
 /* 计数与叉号都跟随 tab 自身文字色（选中态是白字渐变底），只压低透明度做主次区分 */

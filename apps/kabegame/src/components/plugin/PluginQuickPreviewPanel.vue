@@ -18,11 +18,12 @@
 
     <PluginLabelTags v-if="plugin.labels?.length" class="qp-tags" :labels="plugin.labels" size="small" />
 
+    <!-- 没有 banner 图就整块不渲染，不留占位 -->
     <PluginQuickPreviewCarousel
+      v-if="images.length > 0 || carouselLoading"
       class="qp-carousel-slot"
       :images="images"
       :loading="carouselLoading"
-      :empty-reason="emptyReason"
       :reset-token="plugin.id"
     />
 
@@ -64,7 +65,6 @@ const props = withDefaults(
     iconSrc?: string | null;
     images: PluginQuickPreviewImage[];
     carouselLoading?: boolean;
-    emptyReason?: "no-assets" | "not-installed" | null;
     /** 已知的可更新版本号；未知或已是最新则为 null，面板只显示"点击查看详情" */
     updateAvailableVersion?: string | null;
     /** 面板点击后不会跳转详情时（如插件选择器里的预览）关掉这行提示 */

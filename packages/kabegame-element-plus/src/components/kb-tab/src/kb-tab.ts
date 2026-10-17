@@ -11,6 +11,8 @@ export interface KbTabItem<T extends string = string> {
   label: string
   /** 右上角计数；null/undefined 表示不显示（区别于「数量为 0」） */
   count?: number | null
+  /** 文字右上角的 el-badge 式角标（v-corner-badge）；0 / null 不显示 */
+  badge?: number | null
   icon?: Component
   /** 只渲染图标（如末尾的「添加」按钮） */
   iconOnly?: boolean

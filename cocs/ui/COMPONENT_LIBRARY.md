@@ -102,6 +102,12 @@ EP token 挂在它下面，换肤能自动波及 EP 组件。桥接方向恒为 
 `@kabegame/element-plus/components/kb-tab` 的 `KbTab`（只管 tab 头本身，内容由调用方按
 `v-model` 自行切换）。
 
+指令同理：右上角数字 / 圆点角标 `vCornerBadge`（`directives/corner-badge`，样式
+`theme-chalk/src/kb-corner-badge.scss`，尺寸与定位照搬 `el-badge` 的 `is-fixed`）放在包里，
+`KbTab` 的 `badge` 字段和业务侧（`main.ts` 全局注册为 `v-corner-badge`：导航「插件」图标、
+失败图片按钮）共用一份实现。它用宿主 `::after` 绘制、不插入子节点，宿主不能再占用 `::after`；
+宿主带 `:class` 绑定时 Vue patch 会重写 `className`，所以指令每次 `updated` 都补回宿主类。
+
 另一个先例是 `kb-filter-dropdown` 的 `KbFilterDropdown`。名字来自第一个用例（画廊过滤
 维度），但它本质是**「chip 触发器 + 浮层」的通用单选器**，两种形态：
 

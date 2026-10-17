@@ -1,0 +1,42 @@
+@use 'sass:map';
+@use 'mixins/function' as *;
+@use 'common/var' as *;
+
+// v-corner-badge（directives/corner-badge）：宿主 ::after 画角标。
+// 尺寸、配色、定位逐项照搬 badge.scss 的 `is-fixed`，与 el-badge 视觉一致。
+$size: map.get($badge, 'size');
+
+// 零特异性：宿主已有 absolute / fixed 等定位时不被覆盖
+:where(.kb-corner-badge) {
+  position: relative;
+}
+
+.kb-corner-badge--show::after {
+  content: attr(data-kb-badge);
+  position: absolute;
+  top: 0;
+  right: calc(1px + #{$size} / 2);
+  transform: translateY(-50%) translateX(100%);
+  z-index: getCssVar('index', 'normal');
+  box-sizing: border-box;
+  height: $size;
+  padding: 0 map.get($badge, 'padding');
+  border: 1px solid getCssVar('bg-color');
+  border-radius: map.get($badge, 'radius');
+  background-color: map.get($badge, 'bg-color');
+  color: getCssVar('color', 'white');
+  font-size: map.get($badge, 'font-size');
+  font-weight: normal;
+  line-height: calc(#{$size} - 2px);
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.kb-corner-badge--dot::after {
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 50%;
+}

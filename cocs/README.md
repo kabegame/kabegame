@@ -128,11 +128,11 @@
 ## 插件（`plugins/`）
 
 - [plugins/PLUGIN_ASSETS.md](plugins/PLUGIN_ASSETS.md)
-  - 主题：插件配图的**声明→打包→加载→展示**全链路，核心是**单一坐标系**。涵盖 `kbAssets` 路径数组（为何从 `kbDocAssets` 的「引用串→包内路径」对象收敛为一份插件根相对路径清单、与 `kbDoc` / `kbChangelog` 的职责划分、字段缺失即零资源、`kbDocAssets` 的打包硬错误 vs 加载 WARN 不对称）、**路径归一化契约**（8 条规则、`..` 越界判非法、引用一律按插件根解析而非 md 所在目录、不做大小写归一、Rust/TS 两份同构实现）、**为何交叉校验必须提到分支外**（删掉 md 正则回退后没有兜底，且由此实现「三个键互不依存」）、2MB/10MB 限额、保留声明顺序的 `Plugin.assets` 数组接口，以及「源」页面与插件选择器共用的 hover 快捷预览走马灯（路径 `banner` 前缀、声明顺序、通用 `HoverRevealPanel` 容器、为何未安装条目不出图）与插件详情由路由改为弹窗。
+  - 主题：插件配图的**声明→打包→加载→展示**全链路，核心是**单一坐标系**。涵盖 `kbAssets` 路径数组（为何从 `kbDocAssets` 的「引用串→包内路径」对象收敛为一份插件根相对路径清单、与 `kbDoc` / `kbChangelog` 的职责划分、字段缺失即零资源、`kbDocAssets` 的打包硬错误 vs 加载 WARN 不对称）、**路径归一化契约**（8 条规则、`..` 越界判非法、引用一律按插件根解析而非 md 所在目录、不做大小写归一、Rust/TS 两份同构实现）、**为何交叉校验必须提到分支外**（删掉 md 正则回退后没有兜底，且由此实现「三个键互不依存」）、2MB/10MB 限额、保留声明顺序的 `Plugin.assets` 数组接口，以及「源」页面（右键）与插件选择器（hover）共用的快捷预览走马灯（路径 `banner` 前缀、声明顺序、通用 `HoverRevealPanel` 容器及其 `trigger`、为何未安装条目不出图、无图时不留 banner 区）与插件详情由路由改为弹窗。
   - 适用场景：给插件补配图；排查文档或更新日志图片「加载失败」、打包报「引用了未在 kbAssets 声明的本地资源」、单文件超 2MB 打包失败、残留 `kbDocAssets` 打包报错；改归一化规则；排查快捷预览面板不弹出或走马灯无图。
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)
-  - 主题：插件商店缓存机制与更新策略；前端 `usePluginMarketStore` 通过 `startRefreshPlugins` 在启动时先读缓存、再静默强制刷新并每 4h 自动刷新，进入 tab 以 4h 阈值兜底；`installedVersion` 读取时现算，兼容性过滤后的可更新集合驱动桌面/紧凑导航角标、卡片红点与快捷预览；后端安装入口校验最低应用版本；以及插件页 `?tab=store:<sourceId>` 导航参数（详情返回恢复商店 tab）。
+  - 主题：插件商店缓存机制与更新策略；前端 `usePluginMarketStore` 通过 `startRefreshPlugins` 在启动时先读缓存、再静默强制刷新并每 4h 自动刷新，进入 tab 以 4h 阈值兜底；`installedVersion` 读取时现算，兼容性过滤后的可更新集合驱动桌面/紧凑导航角标、商店源 tab 角标、商店卡片红点与快捷预览（已安装 tab 不提示，更新只能在商店源执行）；后端安装入口校验最低应用版本；以及插件页 `?tab=store:<sourceId>` 导航参数（详情返回恢复商店 tab）。
   - 适用场景：插件列表或导航更新角标延迟、缓存失效与命中行为分析；排查不兼容版本仍提示或被导入、从插件详情返回后 tab 丢失或商店列表重拉、源增删后 tab 未刷新、商店卡片已安装状态不同步。
 
 - [plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md](plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md)

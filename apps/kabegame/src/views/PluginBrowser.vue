@@ -68,6 +68,7 @@
               <HoverRevealPanel
                 v-for="plugin in filteredInstalledPlugins"
                 :key="plugin.id"
+                trigger="contextmenu"
                 @panel-click="openDetailDialog(plugin)"
               >
                 <PluginGridCard
@@ -76,7 +77,6 @@
                   :version="plugin.version"
                   :icon-src="getPluginIconSrc(plugin)"
                   :icon-loading="isIconLoading(plugin)"
-                  :update-available="hasKnownUpdateFor(plugin.id)"
                   @click="openDetailDialog(plugin)"
                 />
                 <template #panel>
@@ -189,6 +189,7 @@
             <HoverRevealPanel
               v-for="plugin in filteredStorePlugins(s.id)"
               :key="plugin.id"
+              trigger="contextmenu"
               @panel-click="openDetailDialog(plugin)"
             >
               <PluginGridCard
@@ -357,8 +358,7 @@ type PluginListItem = Plugin | StorePluginResolved;
 
 const pluginStore = usePluginStore();
 const market = usePluginMarketStore();
-const { sources, sourcesLoaded, loadingBySource, loadedBySource, settledBySource, pluginsBySource } =
-  storeToRefs(market);
+const { sources, sourcesLoaded, loadingBySource, loadedBySource, settledBySource } = storeToRefs(market);
 const { t } = useI18n();
 const { pluginName } = usePluginManifestI18n();
 
@@ -487,6 +487,8 @@ const tabItems = computed<KbTabItem[]>(() => [
     label: pluginSourceDisplayName(s),
     // 未加载过的源不显示计数（0 会被误读成「这个源是空的」）
     count: loadedBySource.value[s.id] ? getStorePlugins(s.id).length : null,
+    // 可更新数挂在商店源 tab 上：只有商店详情能执行更新，已安装 tab 不提示
+    badge: getStorePlugins(s.id).filter(isStoreUpdateAvailable).length,
     closable: s.id !== OFFICIAL_PLUGIN_SOURCE_ID,
   })),
   {
@@ -570,13 +572,10 @@ const getPluginIconSrc = (p: PluginListItem) => {
   return pluginStore.pluginIconSrc(p.id) || null;
 };
 
-// ---- hover 快捷预览（走马灯示例图仅取已安装插件的 assets，内存直读零成本；
+// ---- 右键快捷预览（走马灯示例图仅取已安装插件的 assets，内存直读零成本；
 //      商店未安装条目若拉取示例图需要 get_plugin_detail 现下整包 .kgpg，
-//      hover 这种高频轻量交互不适合触发这种下载，故只做 best-effort：
-//      版本与已安装一致时复用本地已装包，否则提示"安装后可查看"）----
-
-/** 已安装 tab 与导航角标共用 market store 的可更新集合。 */
-const hasKnownUpdateFor = (pluginId: string): boolean => market.updatableInstalledIds.has(pluginId);
+//      预览这种轻量交互不适合触发这种下载，故只做 best-effort：
+//      版本与已安装一致时复用本地已装包，否则不展示 banner 区）----
 
 /** 预览目标对应的"已安装 Plugin"：本身就是已安装插件，或商店条目版本与本地一致（同一份内容，复用零成本） */
 const quickPreviewInstalledMatch = (item: PluginListItem): Plugin | null => {
@@ -588,27 +587,20 @@ const quickPreviewInstalledMatch = (item: PluginListItem): Plugin | null => {
   return null;
 };
 
+/** 只有商店条目提示新版本：已安装条目点开的是本地详情，那里不能更新 */
 const quickPreviewUpdateVersion = (item: PluginListItem): string | null => {
-  if ("sourceId" in item) {
-    const store = item as StorePluginResolved;
-    return isStoreUpdateAvailable(store) ? store.version : null;
-  }
-  for (const arr of Object.values(pluginsBySource.value)) {
-    const match = (arr || []).find((p) => p.id === item.id);
-    if (match && isStoreUpdateAvailable(match)) return match.version;
-  }
-  return null;
+  if (!("sourceId" in item)) return null;
+  const store = item as StorePluginResolved;
+  return isStoreUpdateAvailable(store) ? store.version : null;
 };
 
 /** 面板 props 现算不缓存：面板只在真正弹出的那一张卡片上渲染，算一次的成本可以忽略 */
 const quickPreviewProps = (item: PluginListItem) => {
   const installed = quickPreviewInstalledMatch(item);
-  const images = bannerPreviewImages(installed?.assets);
   return {
     plugin: item as QuickPreviewPluginLike,
     iconSrc: getPluginIconSrc(item),
-    images,
-    emptyReason: images.length > 0 ? null : installed ? ("no-assets" as const) : ("not-installed" as const),
+    images: bannerPreviewImages(installed?.assets),
     updateAvailableVersion: quickPreviewUpdateVersion(item),
   };
 };
