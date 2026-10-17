@@ -135,7 +135,8 @@ mod imp {
                 .closable(config.closable)
                 .maximizable(config.maximizable)
                 .minimizable(config.minimizable)
-                .shadow(config.shadow);
+                .shadow(config.shadow)
+                .no_redirection_bitmap(config.no_redirection_bitmap);
 
             let mut constraints = WindowSizeConstraints::default();
             if let Some(min_width) = config.min_width {
@@ -265,11 +266,6 @@ mod imp {
             self
         }
 
-        // Mirror the trait gate: `WindowBuilder::transparent` only exists on
-        // macOS when the `macos-private-api` feature is enabled, which this
-        // crate never enables. Providing it unconditionally under
-        // `target_os = "macos"` breaks the trait impl (E0407).
-        #[cfg(not(target_os = "macos"))]
         fn transparent(mut self, transparent: bool) -> Self {
             self.inner = self.inner.with_transparent(transparent);
             self
@@ -424,6 +420,12 @@ mod imp {
         }
 
         fn window_classname<S: Into<String>>(self, _window_classname: S) -> Self {
+            self
+        }
+
+        fn no_redirection_bitmap(self, _enable: bool) -> Self {
+            // CEF Views 自行创建顶层原生窗口，无法在创建 HWND 时传入
+            // WS_EX_NOREDIRECTIONBITMAP；创建后再改样式也不等价，因此保守忽略。
             self
         }
     }
@@ -700,6 +702,12 @@ mod imp {
         }
         fn set_fullscreen(&self, fullscreen: bool) -> Result<()> {
             self.send_set(runtime::WindowSet::Fullscreen(fullscreen))
+        }
+        fn set_fullscreen_on_monitor(&self, position: PhysicalPosition<f64>) -> Result<()> {
+            self.context.send(runtime::Message::Window(
+                self.window_id,
+                runtime::WindowMessage::SetFullscreenOnMonitor(position),
+            ))
         }
         #[cfg(target_os = "macos")]
         fn set_simple_fullscreen(&self, enable: bool) -> Result<()> {

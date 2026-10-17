@@ -17,7 +17,9 @@ mod imp {
     use cef::{self, *};
     use tauri_runtime::{
         dpi::{PhysicalPosition, PhysicalSize, Rect as RuntimeRect, Size},
-        webview::{DetachedWebview, PageLoadEvent, PendingWebview},
+        webview::{
+            DetachedWebview, PageLoadEvent, PendingWebview, PermissionKind, PermissionResponse,
+        },
         window::{DragDropEvent, WebviewEvent, WindowEvent, WindowId},
         Cookie, Error, Result, UserEvent, WebviewDispatch, WebviewEventId,
     };
@@ -520,6 +522,8 @@ mod imp {
     // 与 PageLoadHandler 同模式。
     type TauriNavigationFn = Rc<Box<dyn Fn(&Url) -> bool + Send>>;
 
+    type TauriPermissionFn = Rc<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>;
+
     fn download_identity_url(item: &DownloadItem) -> String {
         let original = CefString::from(&item.original_url()).to_string();
         if original.is_empty() {
@@ -725,6 +729,174 @@ mod imp {
                 Some(DownloadReferrerHandler::new(referrer))
             }
         }
+    }
+
+    wrap_permission_handler! {
+        pub(crate) struct TauriCefPermissionHandler {
+            handler: TauriPermissionFn,
+        }
+        impl PermissionHandler {
+            fn on_request_media_access_permission(
+                &self,
+                _browser: Option<&mut Browser>,
+                _frame: Option<&mut Frame>,
+                _requesting_origin: Option<&CefString>,
+                requested_permissions: u32,
+                callback: Option<&mut MediaAccessCallback>,
+            ) -> ::std::os::raw::c_int {
+                let response = evaluate_media_permission_request(
+                    self.handler.as_ref(),
+                    requested_permissions,
+                );
+                match (response, callback) {
+                    (PermissionResponse::Allow, Some(callback)) => {
+                        callback.cont(requested_permissions);
+                        1
+                    }
+                    (PermissionResponse::Deny, Some(callback)) => {
+                        callback.cancel();
+                        1
+                    }
+                    _ => 0,
+                }
+            }
+
+            fn on_show_permission_prompt(
+                &self,
+                _browser: Option<&mut Browser>,
+                _prompt_id: u64,
+                _requesting_origin: Option<&CefString>,
+                requested_permissions: u32,
+                callback: Option<&mut PermissionPromptCallback>,
+            ) -> ::std::os::raw::c_int {
+                let response = evaluate_permission_request(
+                    self.handler.as_ref(),
+                    requested_permissions,
+                );
+                match (response, callback) {
+                    (PermissionResponse::Allow, Some(callback)) => {
+                        callback.cont(PermissionRequestResult::ACCEPT);
+                        1
+                    }
+                    (PermissionResponse::Deny, Some(callback)) => {
+                        callback.cont(PermissionRequestResult::DENY);
+                        1
+                    }
+                    _ => 0,
+                }
+            }
+        }
+    }
+
+    fn evaluate_media_permission_request(
+        handler: &Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>,
+        requested: u32,
+    ) -> PermissionResponse {
+        let audio = MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw();
+        let video = MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw();
+        let desktop_audio = MediaAccessPermissionTypes::DESKTOP_AUDIO_CAPTURE.get_raw();
+        let desktop_video = MediaAccessPermissionTypes::DESKTOP_VIDEO_CAPTURE.get_raw();
+        let known = audio | video | desktop_audio | desktop_video;
+        let mut kinds = Vec::new();
+        if requested & audio != 0 {
+            kinds.push(PermissionKind::Microphone);
+        }
+        if requested & video != 0 {
+            kinds.push(PermissionKind::Camera);
+        }
+        if requested & (desktop_audio | desktop_video) != 0 {
+            kinds.push(PermissionKind::DisplayCapture);
+        }
+        if requested & !known != 0 || kinds.is_empty() {
+            kinds.push(PermissionKind::Other);
+        }
+        evaluate_permission_kinds(handler, kinds)
+    }
+
+    fn evaluate_permission_request(
+        handler: &Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>,
+        requested: u32,
+    ) -> PermissionResponse {
+        let mappings = [
+            (
+                PermissionRequestTypes::CAMERA_STREAM,
+                PermissionKind::Camera,
+            ),
+            (
+                PermissionRequestTypes::CAPTURED_SURFACE_CONTROL,
+                PermissionKind::DisplayCapture,
+            ),
+            (
+                PermissionRequestTypes::CLIPBOARD,
+                PermissionKind::ClipboardRead,
+            ),
+            (
+                PermissionRequestTypes::LOCAL_FONTS,
+                PermissionKind::LocalFonts,
+            ),
+            (
+                PermissionRequestTypes::GEOLOCATION,
+                PermissionKind::Geolocation,
+            ),
+            (
+                PermissionRequestTypes::MIC_STREAM,
+                PermissionKind::Microphone,
+            ),
+            (PermissionRequestTypes::MIDI_SYSEX, PermissionKind::Midi),
+            (
+                PermissionRequestTypes::MULTIPLE_DOWNLOADS,
+                PermissionKind::AutomaticDownloads,
+            ),
+            (
+                PermissionRequestTypes::NOTIFICATIONS,
+                PermissionKind::Notifications,
+            ),
+            (
+                PermissionRequestTypes::POINTER_LOCK,
+                PermissionKind::PointerLock,
+            ),
+            (
+                PermissionRequestTypes::PROTECTED_MEDIA_IDENTIFIER,
+                PermissionKind::MediaKeySystemAccess,
+            ),
+            (
+                PermissionRequestTypes::WINDOW_MANAGEMENT,
+                PermissionKind::WindowManagement,
+            ),
+            (
+                PermissionRequestTypes::FILE_SYSTEM_ACCESS,
+                PermissionKind::FileSystemAccess,
+            ),
+            (PermissionRequestTypes::SENSORS, PermissionKind::Sensors),
+        ];
+        let mut known = 0;
+        let mut kinds = Vec::new();
+        for (permission, kind) in mappings {
+            let permission = permission.get_raw();
+            known |= permission;
+            if requested & permission != 0 {
+                kinds.push(kind);
+            }
+        }
+        if requested & !known != 0 || kinds.is_empty() {
+            kinds.push(PermissionKind::Other);
+        }
+        evaluate_permission_kinds(handler, kinds)
+    }
+
+    fn evaluate_permission_kinds(
+        handler: &Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>,
+        kinds: Vec<PermissionKind>,
+    ) -> PermissionResponse {
+        let mut aggregate = PermissionResponse::Allow;
+        for kind in kinds {
+            match handler(kind) {
+                PermissionResponse::Deny => return PermissionResponse::Deny,
+                PermissionResponse::Default => aggregate = PermissionResponse::Default,
+                PermissionResponse::Allow => {}
+            }
+        }
+        aggregate
     }
 
     wrap_resource_request_handler! {
@@ -938,6 +1110,7 @@ mod imp {
             keyboard_handler: KeyboardHandler,
             context_menu_handler: ContextMenuHandler,
             download_handler: Option<DownloadHandler>,
+            permission_handler: Option<PermissionHandler>,
             request_handler: Option<RequestHandler>,
             life_span_handler: Option<LifeSpanHandler>,
             drag_handler: Option<DragHandler>,
@@ -947,6 +1120,7 @@ mod imp {
             fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(self.keyboard_handler.clone()) }
             fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.context_menu_handler.clone()) }
             fn download_handler(&self) -> Option<DownloadHandler> { self.download_handler.clone() }
+            fn permission_handler(&self) -> Option<PermissionHandler> { self.permission_handler.clone() }
             fn request_handler(&self) -> Option<RequestHandler> { self.request_handler.clone() }
             fn life_span_handler(&self) -> Option<LifeSpanHandler> { self.life_span_handler.clone() }
             fn drag_handler(&self) -> Option<DragHandler> { self.drag_handler.clone() }
@@ -1220,6 +1394,11 @@ mod imp {
             .download_handler
             .take()
             .map(TauriCefDownloadHandler::new);
+        let permission_handler = pending
+            .permission_request_handler
+            .take()
+            .map(Rc::new)
+            .map(TauriCefPermissionHandler::new);
         // RequestHandler 无条件挂载:除导航闸门外,还承担渲染进程无响应/终止的
         // 看门狗回调(可见窗口 terminate + reload,爬虫窗口交给调度器心跳超时)。
         let request_handler = Some(TauriCefRequestHandler::new(
@@ -1251,6 +1430,7 @@ mod imp {
             DevToolsKeyboardHandler::new(),
             DisabledContextMenuHandler::new(),
             download_handler,
+            permission_handler,
             request_handler,
             life_span_handler,
             drag_handler,

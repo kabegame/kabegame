@@ -752,7 +752,6 @@ body,
 
   > :not(.app-background-layer):not(.file-drop-overlay) {
     position: relative;
-    z-index: 1;
   }
 }
 

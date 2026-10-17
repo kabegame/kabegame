@@ -2,7 +2,7 @@
 
 Windows、macOS 与 Linux 桌面端的 Tauri runtime 适配器：统一使用 CEF/Chromium 作为 WebView 后端。
 
-它实现 `tauri-runtime` trait，并在桌面 Kabegame GUI 的 `standard` 构建中被选用。Android 仍使用系统 WebView。
+它实现 `tauri-runtime` 2.12.x trait，并在桌面 Kabegame GUI 的 `standard` 构建中被选用。Android 仍使用系统 WebView。
 
 ## Runtime 模型
 
@@ -34,8 +34,9 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | `invoke()` | 普通 invoke 强制走 `cef-ipc://` postMessage(JSON)桥（`ipc.rs::force_postmessage_ipc_transport`：上游 `fetch(ipc://)` 路径的 `Tauri-*` 自定义头触发 CORS 预检，而 CEF scheme handler 收不到 network process 发起的 preflight → `ERR_UNKNOWN_URL_SCHEME`）；**二进制 body**（`InvokeBody::Raw`，如 `crawl_fs_fwrite` 流式写）走 `cef-ipc://localhost/raw` 帧化通道——元数据在 body 前缀、请求零自定义头不触发预检，Rust 侧解帧后转发给 Tauri `ipc` 协议 handler（完整 invoke 解析 + ACL），页面侧入口为 shim 注入的 `window.__kb_raw_invoke__`；内部 IPC scheme 允许绕过页面 CSP，以支持 surf 等第三方页面中的 Tauri IPC |
 | 初始化脚本 | browser 创建时通过版本化 `extra_info` 传给 renderer，在每个新 V8 context 的 `RenderProcessHandler::on_context_created` 中同步执行，保证首次加载、刷新与跨页面导航均为 document-start |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
+| 权限请求 | Tauri 2.12 的 `permission_request_handler` 转发到 CEF `PermissionHandler`；媒体权限映射为麦克风、摄像头、屏幕捕获，普通权限按 CEF bitmask 逐项映射。组合请求中任一项拒绝即整体拒绝，全部允许才整体允许，其余交回 CEF 默认处理 |
 | Cookie API | CEF 全局 `CookieManager` 映射到 Tauri `cookies_for_url` / `cookies` / `set_cookie` / `delete_cookie` |
-| 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events |
+| 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events；指定显示器全屏先退出旧全屏、移动到命中显示器，再进入 CEF Views 全屏 |
 | Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
 | 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在 Linux 与 macOS 上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件，**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
@@ -98,7 +99,8 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   `<scheme>://localhost/<path>` 再交给 handler，与 wry 行为对齐。
 - `WindowBuilder::owner` / `parent` 通过创建后的 `SetWindowLongPtrW(GWLP_HWNDPARENT)` /
   `SetParent` 尽力实现（CEF Views 不暴露创建参数）；kabegame 当前无调用方。
-  `shadow` 无运行时等价物，no-op。不设置 AppUserModelID（与 tauri-runtime-wry 对齐，
+  `shadow` 无运行时等价物，no-op。`no_redirection_bitmap` 必须在 CEF 创建 HWND 时设置，
+  CEF Views 没有对应创建参数，故同样 no-op。不设置 AppUserModelID（与 tauri-runtime-wry 对齐，
   由安装器快捷方式承载）。
 
 ## 开发与校验

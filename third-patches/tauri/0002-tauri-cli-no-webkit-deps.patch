@@ -1,8 +1,8 @@
 diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/interface/rust.rs
-index e18e8308f..41b274e32 100644
+index b7def14b9..5d560dbef 100644
 --- a/crates/tauri-cli/src/interface/rust.rs
 +++ b/crates/tauri-cli/src/interface/rust.rs
-@@ -1423,10 +1423,17 @@ fn tauri_config_to_bundle_settings(
+@@ -1419,10 +1419,17 @@ fn tauri_config_to_bundle_settings(
        }
      }
  
@@ -23,7 +23,7 @@ index e18e8308f..41b274e32 100644
      libs.push("libgtk-3.so.0".into());
  
      for lib in libs {
-@@ -1438,6 +1445,15 @@ fn tauri_config_to_bundle_settings(
+@@ -1434,6 +1441,15 @@ fn tauri_config_to_bundle_settings(
      }
    }
  

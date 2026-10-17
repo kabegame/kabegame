@@ -7140,7 +7140,6 @@
       "packages/kabegame-plugin-sdk": {
         "packageJson": {
           "dependencies": [
-            "npm:@kabegame/types@^4.5.1",
             "npm:typescript@^5.4.5"
           ]
         }

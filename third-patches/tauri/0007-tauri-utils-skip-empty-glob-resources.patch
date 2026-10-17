@@ -1,8 +1,8 @@
 diff --git a/crates/tauri-utils/src/resources.rs b/crates/tauri-utils/src/resources.rs
-index 6c30b89de..c37807538 100644
+index 692c5cd98..7cacf4b80 100644
 --- a/crates/tauri-utils/src/resources.rs
 +++ b/crates/tauri-utils/src/resources.rs
-@@ -255,7 +255,10 @@ impl ResourcePathsIter<'_> {
+@@ -286,7 +286,10 @@ impl ResourcePathsIter<'_> {
          Some(r) => Some(r),
          None => {
            self.current_iter = None;
@@ -14,7 +14,7 @@ index 6c30b89de..c37807538 100644
          }
        }
      } else {
-@@ -606,9 +609,8 @@ mod tests {
+@@ -669,9 +672,8 @@ mod tests {
          ("../non-existent-dir", "dir"),
          // exists but not allowed to walk
          ("../src", "dir2"),
@@ -25,7 +25,7 @@ index 6c30b89de..c37807538 100644
          ("../src/dir/*", "dir3"),
        ]),
        false,
-@@ -616,7 +618,8 @@ mod tests {
+@@ -679,7 +681,8 @@ mod tests {
      .iter()
      .collect::<Vec<_>>();
  
@@ -35,13 +35,15 @@ index 6c30b89de..c37807538 100644
  
      assert!(resources.iter().all(|r| r.is_err()));
  
-@@ -641,15 +644,5 @@ mod tests {
+@@ -708,17 +711,5 @@ mod tests {
          .count(),
        1
      );
--    assert!(resources
--      .iter()
--      .any(|r| matches!(r, Err(crate::Error::GlobPathNotFound(_)))));
+-    assert!(
+-      resources
+-        .iter()
+-        .any(|r| matches!(r, Err(crate::Error::GlobPathNotFound(_))))
+-    );
 -    assert_eq!(
 -      resources
 -        .iter()

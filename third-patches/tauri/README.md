@@ -2,17 +2,18 @@
 
 All kabegame changes to the **tauri monorepo** live here as one numbered series.
 `third/tauri` is the pristine upstream `tauri-apps/tauri` submodule; the series patches
-its three consumed sub-crates: `crates/tauri-runtime` and `crates/tauri-utils` (libraries,
-pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
+its consumed sub-crates: `crates/tauri-runtime`, `crates/tauri-runtime-wry` and
+`crates/tauri-utils` (libraries, pulled into the app via `[patch.crates-io]`) plus
+`crates/tauri-cli` (the forked
 `cargo-tauri` binary, built by `TauriCliPlugin`). One submodule, one series — no separate
 `kabegame/tauri-cli` fork and no vendored `third/tauri-runtime` copy to keep in sync.
 
 ## Upstream
 
 - Repository: <https://github.com/tauri-apps/tauri.git>
-- Vendor base: `499df79b` — tag `tauri-v2.11.2` (`tauri` 2.11.2 / `tauri-runtime` 2.11.2 /
-  `tauri-cli` 2.11.2 / `tauri-utils` 2.9.2). Chosen so `tauri-runtime` matches the `tauri`
-  the app resolves — no library version churn.
+- Vendor base: `59b63ab5` — tag `tauri-v2.12.4` (`tauri` 2.12.4 /
+  `tauri-runtime` 2.12.2 / `tauri-runtime-wry` 2.12.2 / `tauri-utils` 2.10.2 /
+  `tauri-macros`, `tauri-codegen`, `tauri-build` 2.7.3 / `tauri-cli` 2.12.3).
 
 ## Patches
 
@@ -37,7 +38,10 @@ pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
   into install dirs (`/usr/bin`, .app, NSIS). Auxiliary `[[bin]]`/`src/bin/` targets
   (`kabegame-cef-helper`, `cef-example`) must be shipped explicitly via bundle `files`
   (deb files / `macOS.files`). Without `default-run` (or with a single bin) upstream
-  behavior is unchanged.
+  behavior is unchanged. The filter is applied after Tauri 2.12's complete upstream list,
+  which preserves `src/bin` when a pathless `[[bin]]` exists and does not re-add bins disabled
+  by `required-features`. The two new upstream fixtures omit `default-run`; the fork adds
+  `get_binaries_only_keeps_default_run_for_multiple_bins` as its dedicated regression test.
 - `0009-tauri-config-bins-compile-list.patch` — adds a top-level `bins: string[]` config
   (field on tauri-utils `Config`, embedded as `None` at runtime; the struct is
   `deny_unknown_fields`, so configs using `bins` require this patch to parse). Also updates
@@ -46,12 +50,14 @@ pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
   JSON schema before deserializing, so without the schema hunk it rejects `bins` with
   "Additional properties are not allowed". Desktop
   `tauri build` no longer passes `--bins` to cargo: it passes one `--bin <name>` per
-  configured entry (deduped against existing runner args); with no `bins` config it falls
+  configured entry; with no `bins` config it falls
   back to the `get_binaries()` bundle list (i.e. only the default-run binary after 0008),
   and to upstream `--bins` if that list is empty. On Windows the configured auxiliary bins
   are additionally added to the bundle as non-main binaries, so NSIS installs them next to
   the main exe and deletes them on uninstall (no resources staging / installer-hook moves).
-  Mobile is untouched (`--lib`); `tauri dev` (cargo run) does not use this path.
+  Mobile is untouched (`--lib`); `tauri dev` (cargo run) does not use this path. Known
+  limitation: existing `--bin` values in `build.runner.args` are not deduplicated; kabegame
+  does not configure a runner, so this does not affect its builds.
 
 `tauri-utils` (library, consumed via `[patch.crates-io]`):
 
@@ -64,15 +70,14 @@ pulled into the app via `[patch.crates-io]`) and `crates/tauri-cli` (the forked
 
 - `0006-tauri-runtime-optional-webkit.patch` — makes `webkit2gtk` optional behind a new
   `webkit` feature and gates the Linux/BSD `webkit2gtk::WebView` fields in `webview.rs` behind
-  it, so the Linux CEF build does not link `webkit2gtk`.
+  it, so the Linux CEF build does not link `webkit2gtk`. `tauri-runtime-wry` explicitly enables
+  `tauri-runtime/webkit` on Linux/BSD, keeping the upstream wry runtime buildable in the
+  monorepo while custom runtimes can leave WebKit disabled.
 
-`tauri-build` (library, consumed via `[patch.crates-io]`):
-
-- `0010-tauri-build-always-static-vcruntime.patch` — on Windows (msvc) the static vcruntime
-  link is always applied: the `STATIC_VCRUNTIME` env gate is removed (non-configurable).
-  Bare `cargo build` invocations of auxiliary bins (e.g. the dev-time `kabegame-cef-helper`
-  pre-build) previously missed the env that `tauri build` sets, yielding binaries that fail
-  with a missing `VCRUNTIME140.dll` on machines without the VC++ runtime.
+`0010-tauri-build-always-static-vcruntime.patch` has been deleted: since Tauri 2.12,
+`tauri-build` reads `build.windows.staticVCRuntime` when `STATIC_VCRUNTIME` is absent, and the
+configuration defaults to `true`. Bare `cargo build` therefore gets the same static vcruntime
+behavior without a fork patch.
 
 Apply the whole series manually before building against `third/tauri`:
 
@@ -96,9 +101,9 @@ The whole tauri stack is `[patch.crates-io]`-pointed at `third/tauri/crates/*`
 (`tauri`, `tauri-runtime`, `tauri-runtime-wry`, `tauri-utils`, `tauri-macros`,
 `tauri-codegen`, `tauri-build`) so the submodule is the single source of truth — a bump
 is just a submodule bump + this series, with no registry version to keep in sync.
-`tauri-plugin` is intentionally **not** patched (the tag's 2.6.2 leads crates.io's 2.5.3, so
+`tauri-plugin` is intentionally **not** patched (the tag's 2.7.2 leads crates.io's 2.5.3, so
 cargo would flag the patch unused; it only depends on tauri/tauri-utils, so no type boundary),
-and `Cargo.lock` pins `tauri-utils` to `2.9.2` (the monorepo version, satisfies every `^2.x`
+and `Cargo.lock` pins `tauri-utils` to `2.10.2` (the monorepo version, satisfies every `^2.x`
 requirement) so the path patch unifies the whole graph on one `tauri-utils`.
 
 `tauri-cli` is built by `TauriCliPlugin` via `--manifest-path third/tauri/crates/tauri-cli`

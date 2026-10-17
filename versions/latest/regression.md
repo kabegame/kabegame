@@ -1,5 +1,41 @@
 # v4.5.2 regression
 
+## Tauri 2.12.4 升级
+
+Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上游；现有 CEF runtime 的 trait 适配回归见下一节。本节集中验证升级影响到的桌面打包、NSIS、Android 开发/安装链路、窗口与 Channel 生命周期、ACL，以及删除 0010 后的 Windows vcruntime 行为。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard | `deno task check -c kabegame` | `vue-tsc` 与 Rust `cargo check` 无 error | 已运行；仅有既存 warning |
+| [ ] | dev helper 静态 vcruntime | 未安装 VC++ 运行库的 Windows | `deno task dev -c kabegame`，等待 dev 期预构建并启动 `kabegame-cef-helper` | helper 正常启动，不报缺少 `VCRUNTIME140.dll` | 0010 已删除，验证上游 `staticVCRuntime=true` 默认值 |
+| [ ] | Linux `tauri build` | Linux | 构建 deb，检查 Cargo 产物与包内 `files` | `kabegame-cef-helper` 被编译并安装到 `/usr/lib/kabegame/`，可随主程序启动 | |
+| [ ] | Windows `tauri build` | Windows | 构建 NSIS 并安装，检查安装根目录后卸载 | helper 被编译并由 NSIS 安装到主 exe 同级；卸载后 helper 无残留 | 顶层 `bins` / patch 0009 |
+| [ ] | macOS `tauri build` | macOS | 构建 `.app`，检查 `macOS.files` 与启动链路 | helper 被编译并打入配置位置，主程序可正常派生 | |
+| [ ] | NSIS 安装生命周期 | Windows | 分别做同版覆盖安装、低版→高版升级、卸载 | 配置/数据符合现有策略，旧 exe 与 helper 均被替换或清理，不出现文件占用失败 | |
+| [ ] | NSIS 降级拦截 | Windows | 对更高版本分别运行普通、静默与被动模式的低版安装包 | 三种模式均拦截降级；静默/被动模式不绕过版本判定 | |
+| [ ] | Android USB dev + HMR | Android USB 真机 | `deno task dev -c kabegame --mode android`，检查 devUrl、`adb reverse`，修改前端源码 | 保留 localhost，自动建立 `adb reverse tcp:1420 tcp:1420`，页面和 HMR WebSocket 均走 USB 回环且连续热更新 | patch 0005 |
+| [ ] | Android `tauri android check` | Android NDK | `deno task check -c kabegame --mode android --skip vue` | fork CLI 执行 `tauri android check`，共用 cargo-mobile2 工具链并无 Rust error | patch 0004 |
+| [ ] | Android Picker 导入 | Android USB 真机 | 多选图片和视频，再通过 SAF 选择文件夹导入 | 多选结果全部入库；`content://` 视频和 SAF 目录均可读，无序列化或权限异常 | |
+| [ ] | Android 压缩包导出 | Android USB 真机 | 选择多张图片导出压缩包到 Pictures | Pictures 中生成可打开的压缩包，文件齐全且无 `content://` 错误 | |
+| [ ] | Android 返回键退出 | Android USB 真机 | 从主界面按返回键退出，再从桌面图标重新启动 | `exit_app → app.exit(0)` 完整退出，无白屏/残留 Activity，重启正常 | 上游 2.12 会 `finishAffinity()` |
+| [ ] | Android 运行中覆盖安装 | Android USB 真机 | 应用运行时覆盖安装新 APK，重启后使用 Picker 并请求通知权限 | 无 PluginManager / ActivityResult 注册崩溃；Picker 可回传，通知权限流程正常 | `TaskNotificationPlugin` 的 lazy 注册原有风险仍需观察 |
+| [ ] | 爬虫窗口生命周期 | 桌面 CEF | 反复创建并关闭 `crawler-<task_id>` 窗口，记录监听器数与内存 | 关闭后监听器不累积，renderer/browser 资源和内存回落 | |
+| [ ] | 畅游窗口生命周期 | 桌面 CEF | 反复打开/关闭畅游窗口，记录监听器数与内存 | 监听器不累积，关闭后内存回落，不影响主窗口 | |
+| [ ] | 畅游一键下载 Channel | 桌面 CEF | 对多张媒体执行一键下载，观察 Channel 进度直到完成 | 进度单调、连续到达完成值，无中途停更、跳回或关窗后残留回调 | |
+| [ ] | `dynamic-acl` / capability 拒绝 | 桌面 CEF / Android | 从未授权窗口调用受限命令，再从已授权窗口调用 | 未授权调用按 capability 拒绝，已授权调用正常；不出现全放行或全拒绝 | |
+| [ ] | deb 无 WebKit Depends | Linux | 构建 deb 后读取 control `Depends` | 仍不含 `libwebkit2gtk-*`，依赖无重复 | patch 0002 + 0006 |
+
+## CEF runtime 适配 Tauri 2.12
+
+`tauri-runtime-cef` 已同步 `tauri-runtime` 2.12.2（Tauri 2.12.4）的 trait：app handle 的显示器查询返回 `Result`；指定显示器全屏会在 CEF UI 线程退出旧全屏、移动到目标显示器并重新全屏；CEF 无法在创建 HWND 时注入 `WS_EX_NOREDIRECTIONBITMAP`，因此该 builder 选项明确保留为 no-op。新增的权限请求 handler 转发到 CEF 权限回调，macOS 启动激活策略与不再受 feature 门控的透明窗口签名也已同步。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard | `deno task check -c kabegame` | `vue-tsc` 与 Rust `cargo check` 无 error | 已运行；仅有既存 warning |
+| [ ] | 指定显示器全屏 | Windows / macOS / Linux 双屏 | 将窗口放在一块显示器，从另一块显示器的物理坐标调用 `set_fullscreen_on_monitor` | 窗口移动到坐标所在显示器并全屏；坐标不命中任何显示器时不改变窗口 | 需双屏实机回归 |
+| [ ] | 权限请求转发 | 桌面 CEF | 注册 `on_permission_request`，分别触发允许、拒绝与默认处理的摄像头 / 麦克风 / 通知请求 | handler 收到对应 `PermissionKind`，CEF 按返回值允许、拒绝或执行默认策略 | 需带权限设备实机回归 |
+| [ ] | macOS 启动激活策略 | macOS | 分别以 `activate_ignoring_other_apps` 开 / 关启动应用 | 启动激活行为与配置一致，窗口透明配置仍能正常构建 | Linux check 不覆盖该 cfg 分支 |
+
 ## 插件商店启动刷新、可更新导航角标与最低版本安装守卫
 
 应用加载已安装插件后，商店 store 会先从后端 index 缓存恢复所有源，再在全平台静默强制刷新一次，之后每 4 小时继续强制刷新；进入商店 tab 的兜底重拉阈值也同步为 4 小时。可更新插件按 id 去重，并统一排除 `minAppIncompatible` 条目；桌面侧栏与紧凑端底部 tab 的「插件」图标通过通用 `v-corner-badge` 显示数量。后端在 `.kgpg` 复制进插件目录前校验 `min_app_version`，商店安装、文件导入和拖入导入共用守卫。

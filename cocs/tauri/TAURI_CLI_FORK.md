@@ -2,12 +2,13 @@
 
 kabegame 使用自有 fork 的 `cargo-tauri`，替代全局安装版。源码是**上游 tauri monorepo**
 （[tauri-apps/tauri](https://github.com/tauri-apps/tauri)，submodule 挂载于 `third/tauri`，
-pin tag `tauri-v2.11.2`）的 `crates/tauri-cli` 子 crate，fork 差异以 patch 形式存放于
-`third-patches/tauri/`（`0001`–`0005`、`0008` 为 tauri-cli，`0006` 为 tauri-runtime，
-`0007` 为 tauri-utils），构建前先 `deno task patch tauri` 应用。基线 **tauri-cli 2.11.2**。
+pin tag `tauri-v2.12.4`）的 `crates/tauri-cli` 子 crate，fork 差异以 patch 形式存放于
+`third-patches/tauri/`（`0001`–`0005`、`0008`、`0009` 为 tauri-cli，`0006` 为
+tauri-runtime / tauri-runtime-wry，`0007` 为 tauri-utils），构建前先
+`deno task patch tauri` 应用。基线 **Tauri 2.12.4 / tauri-cli 2.12.3**。
 
 > 不再有独立的 `kabegame/tauri-cli` fork 仓或 vendored `third/tauri-runtime` 拷贝：
-> 两个子 crate 的改动都在同一条 series 里，submodule 保持上游纯净。见
+> 这些子 crate 的改动都在同一条 series 里，submodule 保持上游纯净。见
 > [third-patches/tauri/README.md](../../third-patches/tauri/README.md)。整个 tauri 栈经
 > root `Cargo.toml` 的 `[patch.crates-io]` 指向 `third/tauri/crates/*`，是单一来源。
 
@@ -97,6 +98,10 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      Linux release 的 `helper_path()` 硬编码此路径）,源路径经 handlebars `{{targetDir}}`
      尊重 `CARGO_TARGET_DIR`（component-plugin 注入,见 LINUX_BUILD_WORKFLOW 踩坑）。
    - 无 `default-run` 或单 bin 时与上游行为一致。
+   - Tauri 2.12 上游已修复「无 path 的 `[[bin]]` 让 `src/bin` 被漏掉」与「被
+     `required-features` 关掉的 bin 被重新加回」；本 patch 在上游完整清单上再做
+     default-run 收敛。上游新增的两条 fixture 去掉 `default-run`，fork 另有
+     `get_binaries_only_keeps_default_run_for_multiple_bins` 回归测试。
 
 7. **顶层 `bins` 配置驱动桌面编译清单（不再 `--bins` 全量编译）**（`crates/tauri-utils/src/config.rs` + `src/interface/{rust,mod}.rs` + CLI 内嵌 `config.schema.json`（含 schema-generator 同名产物）,patch **0009**）
    - 注意:CLI 在 serde 反序列化**之前**先按内嵌 JSON schema 校验 tauri.conf.json,漏改
@@ -106,9 +111,11 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
      `cef-example` 这类不出货的示例；现已迁到 Cargo examples)都被编进 release。fork 给 tauri.conf.json 新增**顶层 `bins: string[]`**
      (tauri-utils `Config` 加字段——`deny_unknown_fields` 下不打 patch 则配置解析直接报错;
      运行时嵌入恒为 `None`,仅 CLI 构建期读取):声明了就逐个翻译成 `--bin <name>` 传给
-     cargo(带去重,args 里已有的不重复追加);**未声明回退 `get_binaries()` 的打包清单**
+     cargo（配置内去重）;**未声明回退 `get_binaries()` 的打包清单**
      (经 0008 过滤,即仅 default-run 主 bin);清单为空回退上游 `--bins`。仅桌面生效
      (mobile 仍走 `--lib`;`tauri dev` 是 `cargo run`,不经此路径)。
+   - 已知边界：不对 `build.runner.args` 里原有的 `--bin` 去重；kabegame 不配置
+     runner，因此不影响当前构建。
    - **Windows 打包**:`bins` 里的辅助 bin 以非 main binary 挂进 bundle,NSIS 模板原生装到
      `$INSTDIR` 根(主 exe 旁)、卸载时自动删除——kabegame 的 `kabegame-cef-helper.exe`
      因此不再经 resources/bin stage + installer hook 搬运,Windows build 也不再需要
@@ -126,12 +133,13 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
     （三处）。
   - 动机:kabegame Linux 是 CEF runtime（`tauri-runtime-cef`）,不应链接 webkit2gtk;
     不开 feature 即零 webkit 依赖,与 patch 0002 的 `TAURI_NO_WEBKIT_DEPS`（打包依赖侧）配套。
-- **0010 `tauri-build` 恒定静态 vcruntime**（`crates/tauri-build/src/lib.rs`）
-  - Windows(msvc)下 `static_vcruntime::build()` 恒定执行,删除 `STATIC_VCRUNTIME` env
-    门控(不可配置)。此前 `tauri build` 会自动设该 env,但裸 `cargo build` 的辅助 bin
-    (如 dev 期预构建的 `kabegame-cef-helper`)没有 → 动态链接 vcruntime,在无 VC++
-    运行库的干净 Windows 上报找不到 `VCRUNTIME140.dll`;改后无需任何 env 注入
-    (component-plugin 原来的 `STATIC_VCRUNTIME=true` 注入已移除)。
+  - `crates/tauri-runtime-wry/Cargo.toml` 在 Linux/BSD 上显式开启
+    `tauri-runtime/webkit`，使上游 wry runtime 仍可在 monorepo 内构建，同时 CEF 自定义
+    runtime 可不开 WebKit。
+- **0010 已删除（上游已覆盖）**
+  - Tauri 2.12 起，没有 `STATIC_VCRUNTIME` env 时，`tauri-build` 会读
+    `build.windows.staticVCRuntime`，其默认值为 `true`。因此裸 `cargo build` 的
+    `kabegame-cef-helper` 也会静态链接 vcruntime，不再需要 fork patch。
 - **0007 `tauri-utils` 空 glob resources 跳过**（`crates/tauri-utils/src/resources.rs`）
   - resource glob pattern（如 `resources/**/*`）匹配不到任何文件时,stock 直接
     `GlobPathNotFound` 硬错终止构建;patch 改为静默跳过、继续下一个 pattern
@@ -189,9 +197,21 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
    - `mobile/android/dev.rs` `run_dev` 开头的网络改写条件（删物理设备触发；确认
      `android_studio_script.rs` 的 localhost `adb_forward_port` 分支仍在）
    - `interface/rust.rs` 的 `get_binaries`（多 bin 收敛 default-run;0008）
+     ：先核对当版上游的 bin 发现规则和新增测试，再将 default-run 过滤作用于
+     完整列表；上游 fixture 若需测原行为，不得被 fork 的 `default-run` 误过滤
+   - `interface/{rust,mod}.rs` 与 schema 的顶层 `bins`（0009）：确认上游新增的
+     `BuildOptions` 字段和 runner args 合并顺序；当前已知不对 runner 里的 `--bin` 去重
    - `tauri-runtime` 的 `Cargo.toml`（`webkit` feature + `webkit2gtk` optional）与
-     `webview.rs`（三处 `#[cfg(all(feature = "webkit", any(linux...)))]` 门控;0006）
+     `webview.rs`（三处 `#[cfg(all(feature = "webkit", any(linux...)))]` 门控），以及
+     `tauri-runtime-wry/Cargo.toml` 在 Linux/BSD 开启 `tauri-runtime/webkit`（0006）
    - `tauri-utils` 的 `resources.rs` `ResourcePathsIter::next_pattern`（空 glob 静默跳过;0007）
+     ；若上游新增 `GlobPathNotFound` 断言，应随 patch 语义删除
+   - 上游若迁移 edition 2024，patch 中的 `set_var` 需同步改为 `unsafe` 调用；
+     `image::resize_exact` 等 API 如改为返回 `Result`，必须同步传递错误
+   - Android 构建流程若新增 `check_java_gradle_versions` 模块，或
+     `BuildOptions::no_binary_patching` 等字段，要对照当版 `build.rs` 重裁 `check.rs`
+   - 核对 `tauri-build` 的 `build.windows.staticVCRuntime` 默认值；上游默认为
+     `true` 时不要恢复已删除的 0010
 4. 重新生成编号 patch 文件并更新 `third-patches/tauri/README.md`；如新 tag 的 `tauri-utils`
    版本与 crates.io 最新不一致，`cargo update -p tauri-utils --precise <monorepo 版本>` 重钉。
 5. 主仓库更新 submodule 指针；跑一次
@@ -202,6 +222,6 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
 
 - `tauri android init`（重建 gen/android）未适配 `TAURI_ANDROID_PACKAGE`——仓库的
   gen/android 是手工维护 + git 跟踪的，不应 re-init。
-- stock CLI（未设 env 时）行为与上游 2.9.4 一致：`TAURI_ANDROID_PACKAGE`/webkit patch 仅在
+- stock CLI（未设自定义 env 时）的相关路径与上游 2.12.4 一致：`TAURI_ANDROID_PACKAGE`/webkit patch 仅在
   设置 env 的 kabegame 构建流程生效；`android check` 是纯新增子命令，不改动既有命令；`tauri icon`
   的 icns inset 仅影响 `.icns` 输出。桌面三平台构建不受影响。

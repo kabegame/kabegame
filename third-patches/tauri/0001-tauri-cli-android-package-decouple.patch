@@ -1,8 +1,8 @@
 diff --git a/crates/tauri-cli/src/mobile/android/dev.rs b/crates/tauri-cli/src/mobile/android/dev.rs
-index dec1eea93..f7258c182 100644
+index 3754fa22a..24d6bd3d5 100644
 --- a/crates/tauri-cli/src/mobile/android/dev.rs
 +++ b/crates/tauri-cli/src/mobile/android/dev.rs
-@@ -403,7 +403,9 @@ fn run(
+@@ -405,7 +405,9 @@ fn run(
        }),
        build_app_bundle,
        false,
@@ -14,10 +14,10 @@ index dec1eea93..f7258c182 100644
      )
      .map(DevChild::new)
 diff --git a/crates/tauri-cli/src/mobile/android/mod.rs b/crates/tauri-cli/src/mobile/android/mod.rs
-index 5e41d7eae..698dafa47 100644
+index f86cec951..1f67b3ad1 100644
 --- a/crates/tauri-cli/src/mobile/android/mod.rs
 +++ b/crates/tauri-cli/src/mobile/android/mod.rs
-@@ -123,6 +123,32 @@ pub fn command(cli: Cli, verbosity: u8) -> Result<()> {
+@@ -125,6 +125,32 @@ pub fn command(cli: Cli, verbosity: u8) -> Result<()> {
    Ok(())
  }
  
@@ -50,7 +50,7 @@ index 5e41d7eae..698dafa47 100644
  pub fn get_config(
    app: &App,
    config: &TauriConfig,
-@@ -158,18 +184,22 @@ pub fn get_config(
+@@ -160,20 +186,24 @@ pub fn get_config(
      ..Default::default()
    };
  
@@ -58,15 +58,17 @@ index 5e41d7eae..698dafa47 100644
 +  // identifier 只保留给 applicationId 与 am start 第一段(cargo-mobile2 侧)。
 +  let android_package = android_package(app);
 +
-   set_var(
-     "WRY_ANDROID_PACKAGE",
--    app.android_identifier_escape_kotlin_keyword(),
-+    escape_kotlin_keywords(&android_package),
-   );
--  set_var("TAURI_ANDROID_PACKAGE_UNESCAPED", app.identifier());
-+  set_var("TAURI_ANDROID_PACKAGE_UNESCAPED", &android_package);
-   set_var("WRY_ANDROID_LIBRARY", app.lib_name());
-   set_var("TAURI_ANDROID_PROJECT_PATH", config.project_dir());
+   unsafe {
+     set_var(
+       "WRY_ANDROID_PACKAGE",
+-      app.android_identifier_escape_kotlin_keyword(),
++      escape_kotlin_keywords(&android_package),
+     )
+   };
+-  unsafe { set_var("TAURI_ANDROID_PACKAGE_UNESCAPED", app.identifier()) };
++  unsafe { set_var("TAURI_ANDROID_PACKAGE_UNESCAPED", &android_package) };
+   unsafe { set_var("WRY_ANDROID_LIBRARY", app.lib_name()) };
+   unsafe { set_var("TAURI_ANDROID_PROJECT_PATH", config.project_dir()) };
  
    let src_main_dir = config
      .project_dir()
@@ -77,10 +79,10 @@ index 5e41d7eae..698dafa47 100644
      if src_main_dir.exists() {
        let _ = create_dir(src_main_dir.join("generated"));
 diff --git a/crates/tauri-cli/src/mobile/android/run.rs b/crates/tauri-cli/src/mobile/android/run.rs
-index f459a88e1..09d0f0dff 100644
+index 785af5963..3af023ecc 100644
 --- a/crates/tauri-cli/src/mobile/android/run.rs
 +++ b/crates/tauri-cli/src/mobile/android/run.rs
-@@ -156,7 +156,8 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
+@@ -158,7 +158,8 @@ pub fn command(options: Options, noise_level: NoiseLevel) -> Result<()> {
            }),
            false,
            false,
@@ -91,25 +93,25 @@ index f459a88e1..09d0f0dff 100644
          )
          .map(|c| Box::new(DevChild::new(c)) as Box<dyn DevProcess + Send>)
 diff --git a/crates/tauri-cli/src/mobile/mod.rs b/crates/tauri-cli/src/mobile/mod.rs
-index 2e85355f3..636e685ae 100644
+index 4944b87b8..c1cd49175 100644
 --- a/crates/tauri-cli/src/mobile/mod.rs
 +++ b/crates/tauri-cli/src/mobile/mod.rs
-@@ -488,9 +488,17 @@ fn ensure_init(
+@@ -673,9 +673,15 @@ fn ensure_init(
  
    match target {
      Target::Android => {
+-      let java_folder = project_dir
+-        .join("app/src/main/java")
+-        .join(tauri_config.identifier.replace('.', "/").replace('-', "_"));
 +      // kabegame fork:Java 源码目录按 android package(TAURI_ANDROID_PACKAGE 覆盖,回退
 +      // identifier)解耦于 identifier —— identifier 按 mode 变(app.kabegame.dev / app.kabegame)
 +      // 而源码树固定 app.kabegame。否则此处会误判「identifier 被改」并要求删库重 init。
 +      // 与 android/mod.rs get_config 的包/目录派生同源。
-       let java_folder = project_dir
-         .join("app/src/main/java")
--        .join(tauri_config.identifier.replace('.', "/").replace('-', "_"));
-+        .join(
-+          android::android_package(app)
-+            .replace('.', "/")
-+            .replace('-', "_"),
-+        );
++      let java_folder = project_dir.join("app/src/main/java").join(
++        android::android_package(app)
++          .replace('.', "/")
++          .replace('-', "_"),
++      );
        if java_folder.exists() {
-         #[cfg(unix)]
          ensure_gradlew(&project_dir)?;
+       } else {

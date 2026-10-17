@@ -1,7 +1,8 @@
 diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/interface/rust.rs
+index 5d560dbef..a8e645e8a 100644
 --- a/crates/tauri-cli/src/interface/rust.rs
 +++ b/crates/tauri-cli/src/interface/rust.rs
-@@ -1009,6 +1009,16 @@
+@@ -1001,6 +1001,16 @@ impl AppSettings for RustAppSettings {
        }
      }
  
@@ -18,3 +19,59 @@ diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/inter
      match binaries.len() {
        0 => binaries.push(BundleBinary::new(
          self.cargo_package_settings.name.clone(),
+@@ -1829,11 +1839,11 @@ mod tests {
+ 
+   #[test]
+   fn get_binaries_ignores_src_bin_with_disabled_required_features() {
++    // kabegame fork(0008): 此上游测试只验证完整收集，不声明 default-run，避免启用打包过滤。
+     let cargo_toml = r#"
+       [package]
+       name = "app"
+       version = "0.1.0"
+-      default-run = "app"
+ 
+       [[bin]]
+       name = "generate-bindings"
+@@ -1864,11 +1874,11 @@ mod tests {
+ 
+   #[test]
+   fn get_binaries_keeps_src_bin_when_bin_has_no_path() {
++    // kabegame fork(0008): 此上游测试只验证完整收集，不声明 default-run，避免启用打包过滤。
+     let cargo_toml = r#"
+       [package]
+       name = "app"
+       version = "0.1.0"
+-      default-run = "app"
+ 
+       [[bin]]
+       name = "other"
+@@ -1887,6 +1897,29 @@ mod tests {
+     assert_eq!(names.len(), 3, "{names:?}");
+   }
+ 
++  #[test]
++  fn get_binaries_only_keeps_default_run_for_multiple_bins() {
++    // kabegame fork(0008): 多 bin 且声明 default-run 时，打包清单只保留主 binary。
++    let cargo_toml = r#"
++      [package]
++      name = "app"
++      version = "0.1.0"
++      default-run = "app"
++
++      [[bin]]
++      name = "other"
++    "#;
++
++    let (temp_dir, app_settings) = app_settings_with_manifest(cargo_toml);
++    let binaries = app_settings
++      .get_binaries(&Options::default(), temp_dir.path())
++      .unwrap();
++
++    assert_eq!(binaries.len(), 1);
++    assert_eq!(binaries[0].name(), "app");
++    assert!(binaries[0].main());
++  }
++
+   #[test]
+   fn parse_profile_from_opts() {
+     let options = Options {

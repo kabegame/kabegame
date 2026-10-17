@@ -23,6 +23,8 @@ mod imp {
     use cef::{args::Args, *};
     #[cfg(target_os = "linux")]
     use gtk::glib::MainContext;
+    #[cfg(target_os = "macos")]
+    use tao::platform::macos::EventLoopExtMacOS;
     #[cfg(target_os = "linux")]
     use tao::platform::unix::EventLoopBuilderExtUnix;
     #[cfg(target_os = "windows")]
@@ -768,6 +770,7 @@ mod imp {
         AddEventListener(WindowEventId, Box<dyn Fn(&WindowEvent) + Send>),
         Get(WindowGetterKind, Sender<Result<Box<dyn Any + Send>>>),
         MonitorFromPoint(Sender<Option<tao::monitor::MonitorHandle>>, f64, f64),
+        SetFullscreenOnMonitor(PhysicalPosition<f64>),
         Set(WindowSet),
         Center,
         RequestUserAttention(Option<tao::window::UserAttentionType>),
@@ -2062,13 +2065,22 @@ mod imp {
             Err(raw_window_handle::HandleError::Unavailable)
         }
 
-        fn primary_monitor(&self) -> Option<Monitor> {
-            self.context.monitors.lock().ok()?.primary.clone()
+        fn primary_monitor(&self) -> Result<Option<Monitor>> {
+            let snapshot = self
+                .context
+                .monitors
+                .lock()
+                .map_err(|_| Error::FailedToGetMonitor)?;
+            Ok(snapshot.primary.clone())
         }
 
-        fn monitor_from_point(&self, x: f64, y: f64) -> Option<Monitor> {
-            let snapshot = self.context.monitors.lock().ok()?;
-            snapshot
+        fn monitor_from_point(&self, x: f64, y: f64) -> Result<Option<Monitor>> {
+            let snapshot = self
+                .context
+                .monitors
+                .lock()
+                .map_err(|_| Error::FailedToGetMonitor)?;
+            Ok(snapshot
                 .all
                 .iter()
                 .find(|m| {
@@ -2078,15 +2090,16 @@ mod imp {
                     x >= mx && y >= my && x < mx + size.width as f64 && y < my + size.height as f64
                 })
                 .or(snapshot.primary.as_ref())
-                .cloned()
+                .cloned())
         }
 
-        fn available_monitors(&self) -> Vec<Monitor> {
-            self.context
+        fn available_monitors(&self) -> Result<Vec<Monitor>> {
+            let snapshot = self
+                .context
                 .monitors
                 .lock()
-                .map(|snapshot| snapshot.all.clone())
-                .unwrap_or_default()
+                .map_err(|_| Error::FailedToGetMonitor)?;
+            Ok(snapshot.all.clone())
         }
 
         fn cursor_position(&self) -> Result<PhysicalPosition<f64>> {
@@ -2325,6 +2338,13 @@ mod imp {
         #[cfg(target_os = "macos")]
         fn set_activation_policy(&mut self, activation_policy: tauri_runtime::ActivationPolicy) {
             crate::app_mac::set_activation_policy(activation_policy);
+        }
+
+        #[cfg(target_os = "macos")]
+        fn set_activate_ignoring_other_apps(&mut self, ignore: bool) {
+            self.inner
+                .event_loop
+                .set_activate_ignoring_other_apps(ignore);
         }
 
         #[cfg(target_os = "macos")]
@@ -3045,6 +3065,18 @@ mod imp {
                 WindowMessage::MonitorFromPoint(tx, x, y) => {
                     let _ = tx.send(target.monitor_from_point(x, y));
                 }
+                WindowMessage::SetFullscreenOnMonitor(position) => {
+                    if let Some(monitor) = find_monitor_for_physical_position(target, position) {
+                        // CEF 没有“指定显示器全屏”接口：先退出旧全屏并移动到目标屏，
+                        // 再调用同一条 CEF Views 全屏路径，得到等价行为。
+                        apply_window_set(&mut state.kind, WindowSet::Fullscreen(false));
+                        apply_window_set(
+                            &mut state.kind,
+                            WindowSet::Position(Position::Physical(monitor.position())),
+                        );
+                        apply_window_set(&mut state.kind, WindowSet::Fullscreen(true));
+                    }
+                }
                 WindowMessage::Set(set) => apply_window_set(&mut state.kind, set),
                 WindowMessage::Center => {
                     let CefWindowKind::Windowed(window) = &state.kind;
@@ -3456,6 +3488,22 @@ mod imp {
         target.monitor_from_point(x, y)
     }
 
+    fn find_monitor_for_physical_position<T: UserEvent>(
+        target: &tao::event_loop::EventLoopWindowTarget<Message<T>>,
+        position: PhysicalPosition<f64>,
+    ) -> Option<tao::monitor::MonitorHandle> {
+        target.available_monitors().find(|monitor| {
+            let monitor_position = monitor.position();
+            let monitor_size = monitor.size();
+            let left = f64::from(monitor_position.x);
+            let top = f64::from(monitor_position.y);
+            position.x >= left
+                && position.x < left + f64::from(monitor_size.width)
+                && position.y >= top
+                && position.y < top + f64::from(monitor_size.height)
+        })
+    }
+
     fn raw_window_handle_for_cef_window(
         window: &WindowedWindowState,
     ) -> std::result::Result<SendRawWindowHandle, raw_window_handle::HandleError> {
@@ -3516,9 +3564,9 @@ mod imp {
             return Err(raw_window_handle::HandleError::Unavailable);
         };
         Ok(SendRawWindowHandle(
-            raw_window_handle::RawWindowHandle::AppKit(
-                raw_window_handle::AppKitWindowHandle::new(ns_view),
-            ),
+            raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(
+                ns_view,
+            )),
         ))
     }
 

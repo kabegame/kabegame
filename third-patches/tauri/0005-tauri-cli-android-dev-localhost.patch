@@ -1,8 +1,8 @@
 diff --git a/crates/tauri-cli/src/mobile/android/dev.rs b/crates/tauri-cli/src/mobile/android/dev.rs
-index f7258c182..131234364 100644
+index 24d6bd3d5..453e6a7e1 100644
 --- a/crates/tauri-cli/src/mobile/android/dev.rs
 +++ b/crates/tauri-cli/src/mobile/android/dev.rs
-@@ -238,12 +238,13 @@ fn run_dev(
+@@ -240,12 +240,13 @@ fn run_dev(
    noise_level: NoiseLevel,
    dirs: &Dirs,
  ) -> Result<()> {

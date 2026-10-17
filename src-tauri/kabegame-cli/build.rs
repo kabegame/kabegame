@@ -12,9 +12,10 @@ fn main() {
     // Windows: 静态链接 vcruntime，让 kabegame-cli.exe 不依赖 VCRUNTIME140.dll
     // (VC++ 可再发行运行库)，在未装 redist 的干净机器上也能直接运行。
     //
-    // GUI 主程序走 `cargo tauri build`，由 tauri-build 在 STATIC_VCRUNTIME=true 时
-    // 做同样处理；但 kabegame-cli 是纯 cargo 组件、不依赖 tauri-build，那条 env 对它
-    // 无效，所以这里自带一份等价逻辑。采用 static_vcruntime 方案(仅静态 vcruntime，
+    // GUI 主程序走 `cargo tauri build`，Tauri 2.12 的 tauri-build 会读取
+    // `build.windows.staticVCRuntime`（默认 true）做同样处理；但 kabegame-cli 是纯
+    // cargo 组件、不依赖 tauri-build，所以这里自带一份等价逻辑。采用
+    // static_vcruntime 方案(仅静态 vcruntime，
     // 保留动态 UCRT ucrtbase.dll —— Win10+ 系统自带)，而非 `+crt-static` 全静态：
     // 后者会与项目里按动态 CRT 预编的 FFmpeg/x264 静态库冲突。主程序用同一方案 +
     // 同一批 FFmpeg 库已验证可行。移植自 third/tauri tauri-build 的 static_vcruntime.rs。

@@ -333,8 +333,8 @@ export class ComponentPlugin extends BasePlugin {
         "--features",
         "standard",
       ];
-      // Windows 的静态 vcruntime 由 fork 的 tauri-build 恒定开启(patch 0010,
-      // 不再读 STATIC_VCRUNTIME env),裸 cargo build 无需注入任何环境变量。
+      // Tauri 2.12 起 tauri-build 在未设 STATIC_VCRUNTIME 时读取配置，
+      // build.windows.staticVCRuntime 默认为 true，裸 cargo build 无需注入环境变量。
       run("cargo", args, { cwd: SRC_TAURI_DIR });
     });
 

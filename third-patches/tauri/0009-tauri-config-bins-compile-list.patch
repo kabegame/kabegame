@@ -1,4 +1,5 @@
 diff --git a/crates/tauri-cli/config.schema.json b/crates/tauri-cli/config.schema.json
+index 496ca355e..39a668d44 100644
 --- a/crates/tauri-cli/config.schema.json
 +++ b/crates/tauri-cli/config.schema.json
 @@ -30,6 +30,16 @@
@@ -19,9 +20,10 @@ diff --git a/crates/tauri-cli/config.schema.json b/crates/tauri-cli/config.schem
        "description": "App version. It is a semver version number or a path to a `package.json` file containing the `version` field.\n\n If removed the version number from `Cargo.toml` is used.\n It's recommended to manage the app versioning in the Tauri config.\n\n ## Platform-specific\n\n - **macOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > macOS > bundleVersion`](MacConfig::bundle_version).\n - **iOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > iOS > bundleVersion`](IosConfig::bundle_version).\n    The `tauri ios build` CLI command has a `--build-number <number>` option that lets you append a build number to the app version.\n - **Android**: By default version 1.0 is used. You can set a version code using [`bundle > android > versionCode`](AndroidConfig::version_code).\n\n By default version 1.0 is used on Android.",
        "type": [
 diff --git a/crates/tauri-cli/src/interface/mod.rs b/crates/tauri-cli/src/interface/mod.rs
+index 1943cbbbe..779d16af4 100644
 --- a/crates/tauri-cli/src/interface/mod.rs
 +++ b/crates/tauri-cli/src/interface/mod.rs
-@@ -66,6 +66,22 @@ pub trait AppSettings {
+@@ -68,6 +68,22 @@ pub trait AppSettings {
        main.set_name(main_binary_name.to_owned());
      }
  
@@ -45,6 +47,7 @@ diff --git a/crates/tauri-cli/src/interface/mod.rs b/crates/tauri-cli/src/interf
        .package_settings(self.get_package_settings())
        .bundle_settings(self.get_bundle_settings(&options, config, &enabled_features, tauri_dir)?)
 diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/interface/rust.rs
+index a8e645e8a..d65c389cd 100644
 --- a/crates/tauri-cli/src/interface/rust.rs
 +++ b/crates/tauri-cli/src/interface/rust.rs
 @@ -130,6 +130,10 @@ pub struct RustupTarget {
@@ -58,7 +61,7 @@ diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/inter
    available_targets: Option<Vec<RustupTarget>>,
    main_binary_name: Option<String>,
  }
-@@ -171,6 +175,8 @@ impl Rust {
+@@ -173,6 +177,8 @@ impl Rust {
      Ok(Self {
        app_settings: Arc::new(app_settings),
        config_features: config.build.features.clone().unwrap_or_default(),
@@ -67,7 +70,7 @@ diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/inter
        main_binary_name: config.main_binary_name.clone(),
        available_targets: None,
      })
-@@ -488,7 +494,43 @@ impl Rust {
+@@ -484,7 +490,43 @@ impl Rust {
          args.push("--lib".into());
        }
      } else {
@@ -113,6 +116,7 @@ diff --git a/crates/tauri-cli/src/interface/rust.rs b/crates/tauri-cli/src/inter
    }
  
 diff --git a/crates/tauri-schema-generator/schemas/config.schema.json b/crates/tauri-schema-generator/schemas/config.schema.json
+index 496ca355e..39a668d44 100644
 --- a/crates/tauri-schema-generator/schemas/config.schema.json
 +++ b/crates/tauri-schema-generator/schemas/config.schema.json
 @@ -30,6 +30,16 @@
@@ -133,9 +137,10 @@ diff --git a/crates/tauri-schema-generator/schemas/config.schema.json b/crates/t
        "description": "App version. It is a semver version number or a path to a `package.json` file containing the `version` field.\n\n If removed the version number from `Cargo.toml` is used.\n It's recommended to manage the app versioning in the Tauri config.\n\n ## Platform-specific\n\n - **macOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > macOS > bundleVersion`](MacConfig::bundle_version).\n - **iOS**: Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion.\n    You can set an specific bundle version using [`bundle > iOS > bundleVersion`](IosConfig::bundle_version).\n    The `tauri ios build` CLI command has a `--build-number <number>` option that lets you append a build number to the app version.\n - **Android**: By default version 1.0 is used. You can set a version code using [`bundle > android > versionCode`](AndroidConfig::version_code).\n\n By default version 1.0 is used on Android.",
        "type": [
 diff --git a/crates/tauri-utils/src/config.rs b/crates/tauri-utils/src/config.rs
+index 5733abf71..d7972447f 100644
 --- a/crates/tauri-utils/src/config.rs
 +++ b/crates/tauri-utils/src/config.rs
-@@ -3607,6 +3607,13 @@ pub struct Config {
+@@ -4103,6 +4103,13 @@ pub struct Config {
    /// [`different-binary-name`]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#different-binary-name
    #[serde(alias = "main-binary-name")]
    pub main_binary_name: Option<String>,
@@ -149,7 +154,7 @@ diff --git a/crates/tauri-utils/src/config.rs b/crates/tauri-utils/src/config.rs
    /// App version. It is a semver version number or a path to a `package.json` file containing the `version` field.
    ///
    /// If removed the version number from `Cargo.toml` is used.
-@@ -4410,6 +4417,8 @@ mod build {
+@@ -4979,6 +4986,8 @@ mod build {
        let schema = quote!(None);
        let product_name = opt_str_lit(self.product_name.as_ref());
        let main_binary_name = opt_str_lit(self.main_binary_name.as_ref());
@@ -158,7 +163,7 @@ diff --git a/crates/tauri-utils/src/config.rs b/crates/tauri-utils/src/config.rs
        let version = opt_str_lit(self.version.as_ref());
        let identifier = str_lit(&self.identifier);
        let app = &self.app;
-@@ -4423,6 +4432,7 @@ mod build {
+@@ -4992,6 +5001,7 @@ mod build {
          schema,
          product_name,
          main_binary_name,

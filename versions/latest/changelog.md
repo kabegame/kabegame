@@ -75,3 +75,6 @@
     - 将第三方补丁工作流统一收口到 `third-patches/AGENTS.md`，并明确 CEF 正式补丁序列与构建期临时提交的边界。
 - debug ingest 支持 Android：WebView 代理会丢 POST body，Android 端改把事件放进 `event` 查询参数。
 - 画册目录页的 `~~/images` 计数不再给标签目录（`label_dir`）出行；前端画册树只等行与子画册数就渲染，图片计数单独到达后再补。
+- CEF runtime 适配 Tauri 2.12：同步显示器查询、指定显示器全屏、权限请求与 macOS 启动激活策略等 runtime trait。
+- Tauri 栈升级到 2.12.4，同步改善窗口 / Channel 监听的释放、Android 退出白屏与运行中覆盖安装崩溃，并在 NSIS 静默/被动模式下拦截降级。
+- 删除 `0010-tauri-build-always-static-vcruntime` 补丁；上游现已默认启用 `build.windows.staticVCRuntime`。

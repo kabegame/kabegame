@@ -9,7 +9,8 @@ import { Component } from "./component-plugin.ts";
  * TauriCliPlugin — 让所有 `cargo tauri` 调用命中 fork 的 CLI(tauri 上游 monorepo 的
  * crates/tauri-cli,挂载于 third/tauri submodule + third-patches/tauri),而非全局安装版。
  *
- * fork 相对上游 2.11.2 的差异(third-patches/tauri 的 tauri-cli 系列):Android 侧 Java 包
+ * fork 相对上游 Tauri 2.12.4（tauri-cli 2.12.3）的差异
+ * (third-patches/tauri 的 tauri-cli 系列):Android 侧 Java 包
  *(源码目录 / 生成 Kotlin 包 / JNI)按 `TAURI_ANDROID_PACKAGE` env 解耦于 identifier
  *(applicationId),使 dev/prod 双 identifier 并存安装时源码树保持固定 `app.kabegame`;另含
  * `TAURI_NO_WEBKIT_DEPS`、`.icns` 留白、`android check` 子命令、真机 localhost devUrl。

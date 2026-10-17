@@ -1,8 +1,21 @@
+diff --git a/crates/tauri-runtime-wry/Cargo.toml b/crates/tauri-runtime-wry/Cargo.toml
+index 08a9dc274..fa3182536 100644
+--- a/crates/tauri-runtime-wry/Cargo.toml
++++ b/crates/tauri-runtime-wry/Cargo.toml
+@@ -42,6 +42,8 @@ features = [
+ gtk = { version = "0.18", features = ["v3_24"] }
+ webkit2gtk = { version = "=2.0", features = ["v2_40"] }
+ percent-encoding = "2"
++# kabegame fork(0006): wry runtime 依赖 tauri-runtime 的 webkit2gtk 字段,在此显式开启 `webkit`。
++tauri-runtime = { workspace = true, features = ["webkit"] }
+ 
+ [target.'cfg(target_vendor = "apple")'.dependencies]
+ objc2 = "0.6"
 diff --git a/crates/tauri-runtime/Cargo.toml b/crates/tauri-runtime/Cargo.toml
-index 7b73df458..b32303441 100644
+index 8b0572e0e..ec86b70c7 100644
 --- a/crates/tauri-runtime/Cargo.toml
 +++ b/crates/tauri-runtime/Cargo.toml
-@@ -44,7 +44,9 @@ webview2-com = "0.38"
+@@ -43,7 +43,9 @@ webview2-com = "0.39"
  
  [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
  gtk = { version = "0.18", features = ["v3_24"] }
@@ -13,17 +26,20 @@ index 7b73df458..b32303441 100644
  
  [target."cfg(target_os = \"android\")".dependencies]
  jni = "0.21"
-@@ -70,3 +72,5 @@ objc2-web-kit = { version = "0.3", default-features = false, features = [
- [features]
+@@ -70,6 +72,8 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
  devtools = []
+ # TODO: Remove in v3 - wry does not have this feature anymore
  macos-private-api = []
 +# kabegame fork: 显式开启 Linux/BSD 的 webkit2gtk 依赖与相关 webview 代码。
 +webkit = ["dep:webkit2gtk"]
+ 
+ [lints]
+ workspace = true
 diff --git a/crates/tauri-runtime/src/webview.rs b/crates/tauri-runtime/src/webview.rs
-index d7fb9c80f..7e40b69a5 100644
+index 92c89625b..a6adcfa53 100644
 --- a/crates/tauri-runtime/src/webview.rs
 +++ b/crates/tauri-runtime/src/webview.rs
-@@ -94,12 +94,15 @@ pub struct NewWindowOpener {
+@@ -97,12 +97,15 @@ pub struct NewWindowOpener {
    /// The instance of the webview that initiated the new window request.
    ///
    /// This must be set as the related view of the new webview. See [`WebviewAttributes::related_view`].
@@ -45,7 +61,7 @@ index d7fb9c80f..7e40b69a5 100644
    ))]
    pub webview: webkit2gtk::WebView,
    /// The instance of the webview that initiated the new window request.
-@@ -410,12 +413,15 @@ pub struct WebviewAttributes {
+@@ -418,12 +421,15 @@ pub struct WebviewAttributes {
  
    /// Creates a new webview sharing the same web process with the provided webview.
    /// Useful if you need to link a webview to another, for instance when using the [`PendingWebview::new_window_handler`].
@@ -67,8 +83,8 @@ index d7fb9c80f..7e40b69a5 100644
    ))]
    pub related_view: Option<webkit2gtk::WebView>,
  
-@@ -540,12 +546,15 @@ impl WebviewAttributes {
-       input_accessory_view_builder: None,
+@@ -548,12 +554,15 @@ impl WebviewAttributes {
+       limit_navigations_to_app_bound_domains: false,
        #[cfg(windows)]
        environment: None,
 -      #[cfg(any(

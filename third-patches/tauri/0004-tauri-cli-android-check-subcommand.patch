@@ -1,9 +1,9 @@
 diff --git a/crates/tauri-cli/src/mobile/android/check.rs b/crates/tauri-cli/src/mobile/android/check.rs
 new file mode 100644
-index 000000000..d7c894fd9
+index 000000000..21714fa78
 --- /dev/null
 +++ b/crates/tauri-cli/src/mobile/android/check.rs
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,153 @@
 +// Copyright 2019-2024 Tauri Programme within The Commons Conservancy
 +// SPDX-License-Identifier: Apache-2.0
 +// SPDX-License-Identifier: MIT
@@ -14,15 +14,11 @@ index 000000000..d7c894fd9
 +// 见 cocs/tauri/TAURI_CLI_FORK.md。
 +
 +use super::{
-+  configure_cargo, delete_codegen_vars, ensure_init, env, get_app, get_config, MobileTarget,
++  MobileTarget, configure_cargo, delete_codegen_vars, ensure_init, env, get_app, get_config,
 +};
 +use crate::{
-+  build::Options as BuildOptions,
-+  error::Context,
-+  helpers::config::get_config as get_tauri_config,
-+  interface::AppInterface,
-+  mobile::CliOptions,
-+  ConfigValue, Error, Result,
++  ConfigValue, Error, Result, build::Options as BuildOptions, error::Context,
++  helpers::config::get_config as get_tauri_config, interface::AppInterface, mobile::CliOptions,
 +};
 +use clap::{ArgAction, Parser};
 +
@@ -75,6 +71,7 @@ index 000000000..d7c894fd9
 +      skip_stapling: false,
 +      ignore_version_mismatches: false,
 +      no_sign: false,
++      no_binary_patching: false,
 +    }
 +  }
 +}
@@ -161,19 +158,19 @@ index 000000000..d7c894fd9
 +  Ok(())
 +}
 diff --git a/crates/tauri-cli/src/mobile/android/mod.rs b/crates/tauri-cli/src/mobile/android/mod.rs
-index 698dafa47..029def683 100644
+index 1f67b3ad1..1cdbd3f16 100644
 --- a/crates/tauri-cli/src/mobile/android/mod.rs
 +++ b/crates/tauri-cli/src/mobile/android/mod.rs
-@@ -44,6 +44,8 @@ use crate::{
+@@ -45,6 +45,8 @@ use crate::{
  
  mod android_studio_script;
  mod build;
 +// kabegame fork: `tauri android check`(见 cocs/tauri/TAURI_CLI_FORK.md）。
 +mod check;
+ mod check_java_gradle_versions;
  mod dev;
  pub(crate) mod project;
- mod run;
-@@ -99,6 +101,8 @@ enum Commands {
+@@ -101,6 +103,8 @@ enum Commands {
    Init(InitOptions),
    Dev(dev::Options),
    Build(build::Options),
@@ -182,7 +179,7 @@ index 698dafa47..029def683 100644
    Run(run::Options),
    #[clap(hide(true))]
    AndroidStudioScript(android_studio_script::Options),
-@@ -116,6 +120,7 @@ pub fn command(cli: Cli, verbosity: u8) -> Result<()> {
+@@ -118,6 +122,7 @@ pub fn command(cli: Cli, verbosity: u8) -> Result<()> {
      )?,
      Commands::Dev(options) => dev::command(options, noise_level)?,
      Commands::Build(options) => build::command(options, noise_level).map(|_| ())?,

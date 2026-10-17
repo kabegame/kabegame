@@ -16,7 +16,7 @@ publish = false
 
 [dependencies]
 # The trait contract we implement. `"2"` lets cargo unify this with whatever
-# tauri version the kabegame app resolves (currently tauri 2.11.x).
+# tauri version the kabegame app resolves (currently tauri 2.12.x).
 tauri-runtime = { version = "2", features = ["devtools"] }
 tauri-utils = "2"
 

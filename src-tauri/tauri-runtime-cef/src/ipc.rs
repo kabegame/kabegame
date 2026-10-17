@@ -146,7 +146,10 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
         },
     );
 
-    force_postmessage_ipc_transport(&mut pending.webview_attributes.initialization_scripts);
+    // DEBUG-IPC 实测开关:设 KB_DEBUG_IPC_FETCH=1 时不预置失败,让上游 fetch 通道自然跑
+    if !crate::protocol::debug_ipc_fetch_enabled() {
+        force_postmessage_ipc_transport(&mut pending.webview_attributes.initialization_scripts);
+    }
 
     let ipc_handler = Mutex::new(ipc_handler);
     pending.register_uri_scheme_protocol(CEF_IPC_SCHEME, move |label, request, responder| {
