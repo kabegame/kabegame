@@ -165,7 +165,10 @@ export function kabegameDebugServer(options: KabegameDebugServerOptions): Plugin
                 process.env.KABEGAME_DEBUG_SESSION_ID ??
                 "default",
             );
-            const events = parseEvents(body).map((event) => normalizeEvent(event, requestSessionId));
+            // Android WebView 经 shouldInterceptRequest 代理时 POST body 会丢，客户端改把事件放进 `event` 查询参数
+            const events = parseEvents(body.trim() ? body : (url.searchParams.get("event") ?? "")).map((event) =>
+              normalizeEvent(event, requestSessionId),
+            );
             await appendEvents(debugDir, events, logToConsole);
             res.statusCode = 204;
             res.end();

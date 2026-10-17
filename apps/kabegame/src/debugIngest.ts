@@ -1,4 +1,4 @@
-import { IS_DEV } from "./env";
+import { IS_ANDROID, IS_DEV } from "./env";
 
 export interface DebugIngestOptions {
   sessionId?: string;
@@ -40,12 +40,15 @@ export async function sendDebugEvent(
   if (!IS_DEV) return;
 
   try {
-    await fetch(DEBUG_INGEST_ENDPOINT, {
+    const body = JSON.stringify(buildDebugEvent(name, payload, options));
+    // Android WebView 的请求经 shouldInterceptRequest 代理，POST body 到不了 dev server，改走查询参数
+    const endpoint = IS_ANDROID ? `${DEBUG_INGEST_ENDPOINT}?event=${encodeURIComponent(body)}` : DEBUG_INGEST_ENDPOINT;
+    await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(buildDebugEvent(name, payload, options)),
+      body: IS_ANDROID ? undefined : body,
       keepalive: true,
     });
   } catch {

@@ -41,3 +41,4 @@
     - 将顶层命令的参数、构建注意事项和验证指南迁入 `scripts/AGENTS.md`，根规则仅保留命令索引和用途摘要。
     - 将组件库、`packages/` 子仓库和生成型包的维护规则收口到 `packages/AGENTS.md`。
     - 将第三方补丁工作流统一收口到 `third-patches/AGENTS.md`，并明确 CEF 正式补丁序列与构建期临时提交的边界。
+- debug ingest 支持 Android：WebView 代理会丢 POST body，Android 端改把事件放进 `event` 查询参数。

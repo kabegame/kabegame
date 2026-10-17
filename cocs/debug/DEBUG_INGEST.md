@@ -118,6 +118,7 @@ await sendDebugEvent(
 
 - `sendDebugEvent()` 只在 `IS_DEV` 下发送。
 - 请求失败会被吞掉，不影响应用行为。
+- Android 上 WebView 请求经 `shouldInterceptRequest` 代理，POST body 到不了 dev server（落成 `debug-default.ndjson` 里的空事件）。所以 `IS_ANDROID` 时事件 JSON 改放在 `event` 查询参数里；middleware 在 body 为空时读这个参数。
 - 如果不显式传 `sessionId`，会优先读取 URL query `debug_session`，其次使用 `sessionStorage` 自动生成的 session。
 
 可以这样让一次前端复现使用固定 session：
