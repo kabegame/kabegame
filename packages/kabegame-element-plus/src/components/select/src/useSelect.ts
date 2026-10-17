@@ -154,7 +154,9 @@ export const useSelect = (props: SelectProps, emit: SelectEmits) => {
       props.clearable &&
       !selectDisabled.value &&
       hasModelValue.value &&
-      (isFocused.value || states.inputHovering)
+      (isFocused.value ||
+        states.inputHovering ||
+        (!props.focusOnOpen && expanded.value))
     )
   })
   const iconComponent = computed(() =>
@@ -565,7 +567,7 @@ export const useSelect = (props: SelectProps, emit: SelectEmits) => {
       emit('remove-tag', tag.value)
     }
     event.stopPropagation()
-    focus()
+    refocusAfterInteraction()
   }
 
   const deleteSelected = (event: Event) => {
@@ -581,7 +583,7 @@ export const useSelect = (props: SelectProps, emit: SelectEmits) => {
     states.hoveringIndex = -1
     expanded.value = false
     emit('clear')
-    focus()
+    refocusAfterInteraction()
   }
 
   const handleOptionSelect = (option: OptionPublicInstance) => {
@@ -610,7 +612,7 @@ export const useSelect = (props: SelectProps, emit: SelectEmits) => {
       emitChange(option.value)
       expanded.value = false
     }
-    focus()
+    refocusAfterInteraction()
     if (expanded.value) return
     nextTick(() => {
       scrollToOption(option)
@@ -678,6 +680,18 @@ export const useSelect = (props: SelectProps, emit: SelectEmits) => {
 
   const focus = () => {
     inputRef.value?.focus()
+  }
+
+  const refocusAfterInteraction = () => {
+    if (props.focusOnOpen) {
+      focus()
+    } else if (!expanded.value) {
+      inputRef.value?.blur()
+    }
+  }
+
+  const handleInputMouseDown = (event: MouseEvent) => {
+    if (!props.focusOnOpen && !expanded.value) event.preventDefault()
   }
 
   const blur = () => {
@@ -988,6 +1002,7 @@ export const useSelect = (props: SelectProps, emit: SelectEmits) => {
     focus,
     blur,
     handleClearClick,
+    handleInputMouseDown,
     handleClickOutside,
     handleEsc,
     toggleMenu,

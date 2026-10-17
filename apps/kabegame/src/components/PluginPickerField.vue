@@ -15,6 +15,31 @@
         :disabled="disabled"
         @update:model-value="emitValue"
       >
+        <template v-if="selectTrigger" #trigger="{ open }">
+          <div
+            class="w-full"
+            role="button"
+            :tabindex="disabled ? -1 : 0"
+            :aria-disabled="disabled"
+            :aria-label="selectedTriggerLabel || placeholder || $t('common.selectPlaceholder')"
+            @click="open()"
+            @keydown.enter.prevent="open()"
+            @keydown.space.prevent="open()"
+          >
+            <!-- 复用桌面 el-select 展示当前值；实际选择交给 Android 弹窗，避免同时打开两个面板。 -->
+            <el-select
+              class="pointer-events-none w-full"
+              :model-value="modelValue ?? undefined"
+              :placeholder="placeholder || $t('common.selectPlaceholder')"
+              :disabled="disabled"
+              :size="size"
+              :tabindex="-1"
+              aria-hidden="true"
+            >
+              <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value" />
+            </el-select>
+          </div>
+        </template>
         <template #option="{ option }">
           <div class="plugin-picker-option">
             <!-- 图标瓦片：优先真实图标，回退首字符 + 色相渐变 -->
@@ -139,6 +164,7 @@ const props = withDefaults(
     pickerTitle?: string;
     clearable?: boolean;
     disabled?: boolean;
+    selectTrigger?: boolean;
     filterable?: boolean;
     showIcons?: boolean;
     showJsWarning?: boolean;
@@ -153,6 +179,7 @@ const props = withDefaults(
     optionCounts: () => ({}),
     clearable: false,
     disabled: false,
+    selectTrigger: false,
     filterable: true,
     showIcons: true,
     showJsWarning: false,
@@ -262,6 +289,10 @@ const options = computed((): PluginPickerOption[] => [
   })),
   ...pluginRows.value,
 ]);
+
+const selectedTriggerLabel = computed(
+  () => options.value.find((option) => option.value === props.modelValue)?.label ?? "",
+);
 
 // 桌面下拉的搜索：同时匹配显示名与插件 id（不区分大小写）。
 // 传了 filter-method 后 el-select 不再按 label 自行隐藏选项，展开时会以空串回调重置。

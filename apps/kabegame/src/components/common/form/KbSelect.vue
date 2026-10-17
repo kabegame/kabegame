@@ -1,16 +1,7 @@
 <template>
-  <AndroidPickerSelect
-    v-if="isCompact"
-    :model-value="valueForSelect ?? null"
-    :options="normalizedOptions"
-    :title="placeholder || '请选择'"
-    :placeholder="placeholder"
-    :clearable="allowUnset"
-    @update:model-value="$emit('update:modelValue', $event ?? undefined)"
-  />
   <!-- 选项少时用分段器：一眼看全部选项，省一次点击展开 -->
   <KbSegmentedControl
-    v-else-if="normalizedOptions.length > 0 && normalizedOptions.length <= 4"
+    v-if="!isCompact && normalizedOptions.length > 0 && normalizedOptions.length <= 4"
     :model-value="valueForSelect ?? SEGMENT_NONE"
     :options="normalizedOptions"
     @update:model-value="$emit('update:modelValue', $event)"
@@ -22,6 +13,7 @@
     :clearable="allowUnset"
     :empty-values="[undefined, null]"
     :filterable="normalizedOptions.length >= 9"
+    :focus-on-open="!IS_ANDROID"
     style="width: 100%"
     :title="selectedLabel || placeholder"
     @update:model-value="$emit('update:modelValue', $event)"
@@ -41,7 +33,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useUiStore } from "../../../stores/ui";
-import AndroidPickerSelect from "../../AndroidPickerSelect.vue";
+import { IS_ANDROID } from "../../../env";
 import KbSegmentedControl from "./KbSegmentedControl.vue";
 
 const isCompact = computed(() => useUiStore().isCompact);
@@ -74,13 +66,15 @@ defineEmits<{
 
 const normalizedOptions = computed(() => {
   const opts = props.options || [];
-  return opts
-    .map((o) => {
-      if (typeof o === "string") return { label: o, value: o };
-      return { label: optionLabel(o), value: o.variable };
-    })
-    // 保留 variable 为 "" 的选项：它是插件声明的合法值，空值语义由 null / undefined 表达
-    .filter((o) => typeof o.value === "string");
+  return (
+    opts
+      .map((o) => {
+        if (typeof o === "string") return { label: o, value: o };
+        return { label: optionLabel(o), value: o.variable };
+      })
+      // 保留 variable 为 "" 的选项：它是插件声明的合法值，空值语义由 null / undefined 表达
+      .filter((o) => typeof o.value === "string")
+  );
 });
 
 const valueForSelect = computed<string | undefined>(() => {

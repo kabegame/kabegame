@@ -23,6 +23,7 @@
         allow-create
         :placeholder="$t('plugins.defaultGalleryOnly')"
         :picker-title="$t('albums.outputAlbum')"
+        :compact-presentation="IS_ANDROID ? 'dialog' : 'overlay'"
         clearable
       />
     </el-form-item>
@@ -58,6 +59,7 @@
             :model-value="tc?.pluginId || null"
             :plugins="plugins"
             :placeholder="$t('plugins.selectSourcePlaceholder')"
+            :select-trigger="IS_ANDROID"
             :popper-class="uiStore.isCompact ? undefined : 'crawl-plugin-select-dropdown'"
             :show-js-warning="uiStore.isCompact"
             :show-selected-js-warning="uiStore.isCompact"
@@ -156,7 +158,7 @@ import PluginConfigForm from "@/components/crawler/PluginConfigForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import MaxDownloadsField from "@/components/crawler/MaxDownloadsField.vue";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { IS_WEB } from "@/env";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";

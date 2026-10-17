@@ -1,12 +1,14 @@
 <template>
-  <div class="android-picker-select" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
-    <span class="android-picker-select__value" :class="{ 'is-placeholder': !displayLabel }">
-      {{ displayLabel || resolvedPlaceholder }}
-    </span>
-    <el-icon class="android-picker-select__arrow">
-      <ArrowDown />
-    </el-icon>
-  </div>
+  <slot name="trigger" :open="onTriggerClick">
+    <div class="android-picker-select" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
+      <span class="android-picker-select__value" :class="{ 'is-placeholder': !displayLabel }">
+        {{ displayLabel || resolvedPlaceholder }}
+      </span>
+      <el-icon class="android-picker-select__arrow">
+        <ArrowDown />
+      </el-icon>
+    </div>
+  </slot>
 
   <Teleport to="body">
     <!-- 有 option 插槽：屏幕居中磨玻璃弹窗（方案 1c）。可渲染图标 / 描述 / 标签 / 警告 -->
@@ -195,11 +197,7 @@ const pickerSelectedValues = ref<string[]>([]);
 watch(isOpen, (v) => {
   if (v) {
     const val = props.modelValue;
-    const selected = hasValue(val)
-      ? val
-      : props.clearable
-        ? CLEAR_VALUE
-        : (optionsWithClear.value[0]?.value ?? "");
+    const selected = hasValue(val) ? val : props.clearable ? CLEAR_VALUE : (optionsWithClear.value[0]?.value ?? "");
     pickerSelectedValues.value = [selected];
   }
 });

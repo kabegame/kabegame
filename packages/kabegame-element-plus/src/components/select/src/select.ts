@@ -102,6 +102,13 @@ export const selectProps = buildProps({
    */
   filterable: Boolean,
   /**
+   * @description whether opening and interacting with Select should focus the search input
+   */
+  focusOnOpen: {
+    type: Boolean,
+    default: true,
+  },
+  /**
    * @description whether creating new items is allowed. To use this, `filterable` must be true
    */
   allowCreate: Boolean,

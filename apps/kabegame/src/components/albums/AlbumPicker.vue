@@ -91,7 +91,32 @@
         </div>
       </div>
     </div>
-    <Teleport to="body">
+    <ElDialog
+      v-if="compactPresentation === 'dialog'"
+      append-to-body
+      align-center
+      :model-value="visible"
+      :z-index="modal.zIndex.value"
+      :title="resolvedTitle"
+      width="min(440px, calc(100% - 32px))"
+      @update:model-value="setVisible"
+    >
+      <div class="album-picker-panel flex max-h-[min(520px,70vh)] min-h-0 flex-col gap-1.5">
+        <el-input v-model="searchText" clearable :placeholder="t('albums.treeFilterPlaceholder')" />
+        <StaticOptions :options="staticOptions" @select="choose" />
+        <AlbumTreeView
+          v-if="visible"
+          v-model:search-text="searchText"
+          :selected-id="modelValue"
+          :scope="scope"
+          :is-selectable="isSelectable"
+          :expand-label-dirs="expandLabelDirs"
+          :separators="false"
+          @select="choose"
+        />
+      </div>
+    </ElDialog>
+    <Teleport v-else to="body">
       <div
         v-if="visible"
         class="fixed inset-0 flex flex-col bg-[var(--anime-surface,#fff)]"
@@ -125,6 +150,7 @@
 import { computed, defineComponent, h, ref, watch } from "vue";
 import { useElementSize } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
+import { ElDialog } from "@kabegame/element-plus";
 import { ArrowDown, ArrowLeft, CircleClose } from "@kabegame/element-plus-icons";
 import { useUiStore } from "@/stores/ui";
 import { useModal } from "@/composables/useModal";
@@ -146,8 +172,17 @@ const props = withDefaults(
     pickerTitle?: string;
     clearable?: boolean;
     disabled?: boolean;
+    /** 紧凑端选择面板的呈现方式；默认保持全屏覆盖层。 */
+    compactPresentation?: "overlay" | "dialog";
   }>(),
-  { scope: () => ({}), prependOptions: () => [], allowCreate: false, clearable: true, disabled: false },
+  {
+    scope: () => ({}),
+    prependOptions: () => [],
+    allowCreate: false,
+    clearable: true,
+    disabled: false,
+    compactPresentation: "overlay",
+  },
 );
 const emit = defineEmits<{ "update:modelValue": [value: string | null] }>();
 const { t } = useI18n();

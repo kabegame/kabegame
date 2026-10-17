@@ -14,6 +14,7 @@
       v-model="addSelectValue"
       class="var-multi__add"
       filterable
+      :focus-on-open="!IS_ANDROID"
       allow-create
       default-first-option
       :placeholder="currentList.length ? '' : placeholder"
@@ -33,6 +34,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { IS_ANDROID } from "../../../env";
 
 type VarOption = string | { name: string | Record<string, string>; variable: string };
 
