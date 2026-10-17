@@ -1,5 +1,23 @@
 # v4.5.2 regression
 
+## 本地媒体 URL 统一为 wildcard path
+
+桌面、Android 与 debug Web 的原图、缩略图、浏览器兼容副本统一把绝对路径编码在 URL path 中：`/file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}`。旧 `?path=` 形式和独立 `/download/{*path}` 均删除；三类端点继续使用各自的图库字段白名单。Windows 拖出不固定选择原图，而是使用触发拖拽的媒体元素当前 `currentSrc`，让已经回退成功的缩略图或兼容副本也能拖出。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 三类媒体加载 | Windows / macOS / Linux | 浏览网格并打开原图、缩略图和兼容副本各不相同的图片或视频 | 请求分别走三个 wildcard 端点，中文、空格、`#`、`?` 路径均正常加载 | 不出现 `?path=` |
+| [ ] | Windows 原图拖出 | Windows | 从网格或预览拖一张原图存在的媒体到资源管理器 | 通过当前 `/file/{*path}` 地址落地，文件名和内容正确 | 无 `/download` 请求 |
+| [ ] | Windows 回退源拖出 | Windows | 临时移走原图，让界面回退到缩略图或兼容副本后拖到资源管理器 | 拖出当前可见/可播放的回退源，文件名后缀与该源一致 | 分别覆盖 thumbnail、compatible |
+| [ ] | Android content URI | Android | 导入 `content://` 图片和视频，打开网格、预览并拖动视频进度 | wildcard URL 能还原完整 content URI，图片显示、视频 Range/seek 正常 | |
+| [ ] | 旧端点移除 | curl | 请求 `/file?path=...` 与 `/download/...`，再请求三个新端点 | 旧形式 404；新端点仅对图库登记路径返回媒体，任意本地路径仍为 404 | |
+| [ ] | Kabegame Server 插件 | 两台桌面端 | 从开启 Web 服务器的实例复制一页图片 | 媒体经 `/file/{*path}` 下载成功，元数据与标签不变 | |
+| [x] | 前端 URL 单测 | Vitest | 运行 `fileUrl.test.ts` | Unix、Windows 盘符、UNC、中文、保留字符与 content URI 均生成正确 URL，三端点可还原原路径，拖出文件名为当前 source 的 basename | 35 passed |
+| [x] | Rust 路径与路由单测 | `test-kabegame` | 运行 `kabegame media_route` | Unix 补回 `/`，Windows 盘符与 UNC 保持原样；query 与 `/download` 已不匹配路由 | 3 passed |
+| [x] | 桌面静态检查 | `check-kabegame` | 运行完整检查 | vue-tsc、cargo check 均无 error | 已通过，仅既存 warning |
+| [x] | Android 静态检查 | Android NDK / Gradle | 运行 Android check 与 `:app:compileUniversalDebugKotlin` | aarch64 Rust 与 Kotlin 均无 error | Kotlin BUILD SUCCESSFUL |
+| [x] | 插件打包 | `kabegame-plugin` skill | 部署 `kabegame-server` | 生成 `kabegame-server.kgpg` | 已通过；未改插件版本号 |
+
 ## Tauri 2.12.4 升级
 
 Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上游；现有 CEF runtime 的 trait 适配回归见下一节。本节集中验证升级影响到的桌面打包、NSIS、Android 开发/安装链路、窗口与 Channel 生命周期、ACL，以及删除 0010 后的 Windows vcruntime 行为。

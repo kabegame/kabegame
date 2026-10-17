@@ -27,7 +27,7 @@ Provider DSL 的通用查询语义。
 
 - `POST /rpc`：web 版同一份 JSON-RPC 注册表；默认只读，写方法必须显式带 `?super=1`。
 - `GET /events`：SSE 事件订阅，连接时先发 `connected`；桌面仍同时向 Tauri 前端 emit。
-- `GET /file`、`/download/{*path}`、`/thumbnail`、`/compatible`：只读取图库数据库已登记的本地路径，统一经过并发闸。
+- `GET /file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}`：从 URL path 取得绝对路径，只读取图库数据库已登记的本地文件，统一经过并发闸；不提供 query 形式或独立 `/download` 端点。
 - `/mcp`：rmcp 3.0 StreamableHTTP。
 - `GET /__ping`：非网页客户端存活探测。
 

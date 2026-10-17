@@ -43,10 +43,9 @@ MCP、JSON-RPC 与事件订阅共用同一端口。
 |---|---|
 | `POST /rpc` | JSON-RPC 2.0；默认只读，写方法需在 URL 添加 `?super=1` |
 | `GET /events` | SSE 事件流；连接后先收到 `connected` |
-| `GET /file?path=...` | 读取图库中已登记的本地文件 |
-| `GET /thumbnail?path=...` | 读取图库缩略图 |
-| `GET /compatible?path=...` | 读取兼容格式 |
-| `GET /download/<path>` | 以下载响应读取图库文件 |
+| `GET /file/{*path}` | 读取图库中已登记的本地文件；`path` 为绝对路径 |
+| `GET /thumbnail/{*path}` | 读取图库缩略图；`path` 为绝对路径 |
+| `GET /compatible/{*path}` | 读取兼容格式；`path` 为绝对路径 |
 | `GET /__ping` | 返回 `ok` 的存活探测 |
 
 桌面服务不提供 `/proxy`。下面是只读 RPC 调用示例：

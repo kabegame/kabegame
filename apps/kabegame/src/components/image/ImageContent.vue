@@ -103,7 +103,7 @@ import { sendDebugEvent } from "../../debugIngest";
 // #endregion debug-drag
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
-import { fileToUrl, thumbnailToUrl, compatibleToUrl, downloadToUrl } from "../../utils/fileUrl";
+import { fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../utils/fileUrl";
 import { IS_ANDROID, IS_LINUX, IS_MACOS } from "../../env";
 
 /**
@@ -189,17 +189,16 @@ const props = withDefaults(defineProps<Props>(), {
   nativeDrag: true,
 });
 
-/** 拖拽落盘的建议文件名：优先 localPath 的 basename（带真实扩展名），退回 displayName / id */
-const dragFileName = (): string => {
-  const path = localPath.value.split(/[?#]/)[0];
-  const base = path.split(/[/\\]/).pop() || "";
+/** 拖拽落盘的建议文件名：跟随当前实际加载的 source，退回 displayName / id。 */
+const dragFileName = (sourceUrl: string): string => {
+  const base = fileNameFromUrlOrPath(sourceUrl);
   if (base.includes(".")) return base;
   return props.image.displayName || base || props.image.id;
 };
 
 /**
- * 原生拖拽起手：把拖拽数据统一改写成「原图」。
- * 网格 prefer=thumbnail 时 <img> 的 src 是缩略图，浏览器默认写入的拖拽数据也会是缩略图。
+ * 原生拖拽起手：Windows 复用触发 dragstart 的元素当前实际加载成功的 source。
+ * 原图缺失并已回退到兼容副本或缩略图时，拖出内容与用户此刻看到的内容一致。
  *
  * 两条平台路径互斥，不共用载荷：
  *
@@ -209,12 +208,11 @@ const dragFileName = (): string => {
  *   也留不下；留着只会让人误以为 Linux 拖出仍依赖 http server。
  *   自定义 mime 走 `DropData::custom_data`，不被 Chromium 的拖拽数据过滤器改写；
  *   只提议 id 而不传路径，即使前端被注入也只能导出图库中已有的图片。
- * - **Windows / macOS** 仍走 http 下载 URL：`DownloadURL`（Chromium 专有
+ * - **Windows** 仍走 http 下载 URL：`DownloadURL`（Chromium 专有
  *   `mime:filename:url` 三段格式，Windows 上由 `PrepareDragForDownload` 转成
  *   CF_HDROP 虚拟文件；实际内容与 Content-Type 由响应决定，mime 段仅是提示，
- *   故直接用格式键）+ `text/uri-list`/`text/plain`（拖进浏览器/编辑器时得到原图
- *   URL 而非缩略图）。URL 用 /download 而非 /file：前者把路径接在端点后面，
- *   文件名落在 URL 末段，下载方才能给出正确的落地文件名。
+ *   故直接用格式键）+ `text/uri-list`/`text/plain`。URL 可能来自 `/file/{*path}`、
+ *   `/thumbnail/{*path}` 或 `/compatible/{*path}`，由当前媒体元素决定。
  *
  * nativeDrag 关闭时把 dragstart 掐掉：`draggable=false` 之外的第二道闸。
  */
@@ -240,10 +238,11 @@ const onDragStart = (event: DragEvent) => {
     if (props.image.id) dt.setData(DRAG_IMAGE_ID_MIME, props.image.id);
     return;
   }
-  const url = downloadToUrl(localPath.value);
+  const media = event.currentTarget as HTMLImageElement | HTMLVideoElement | null;
+  const url = media?.currentSrc || media?.src || "";
   if (!url) return;
   // filename 段不能含冒号（DownloadURL 以冒号分段）
-  const name = dragFileName().replace(/:/g, "_");
+  const name = dragFileName(url).replace(/:/g, "_");
   dt.setData("DownloadURL", `${displayImageMimeType(props.image.type)}:${name}:${url}`);
   dt.setData("text/uri-list", url);
   dt.setData("text/plain", url);

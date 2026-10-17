@@ -27,7 +27,7 @@ import kotlin.math.min
  *
  * 背景 / 现状（已查清，本服务部分已完成）：
  *  - 本地导入的视频（content://media/picker/...，存为 image.localPath）通过这个
- *    LocalHttpServer 经 http://127.0.0.1:<port>/file?path=<content uri> 提供给前端
+ *    LocalHttpServer 经 http://127.0.0.1:<port>/file/<content uri> 提供给前端
  *    <video> 播放。range/seek 已验证完全正确（实 socket 走 Chromium 原生网络栈，
  *    honor Content-Range；非 faststart MP4 也能 seek 到末尾读 moov）。
  *  - 但用户实测的视频是 HEVC(H.265)：服务正确返回 206 + moov 后，<video> 解析出
@@ -141,13 +141,21 @@ internal class LocalHttpServer(context: Context) {
             }
 
             val parsed = parseRequestTarget(requestTarget)
-            val endpoint = parsed.path ?: ""
-            if (endpoint != "/file" && endpoint != "/thumbnail" && endpoint != "/compatible") {
+            val routePath = parsed.path ?: ""
+            val endpoint = MEDIA_ENDPOINTS.firstOrNull { routePath.startsWith("/$it/") }
+            if (endpoint == null) {
                 sendText(output, 404, "Not Found", "not found", method == "HEAD")
                 return
             }
 
-            val path = parsed.getQueryParameter("path")?.trim().orEmpty()
+            val encodedPath = parsed.encodedPath.orEmpty().removePrefix("/$endpoint/")
+            val decodedPath = Uri.decode(encodedPath).trim()
+            val path = when {
+                decodedPath.startsWith("content://") || decodedPath.startsWith("file://") -> decodedPath
+                decodedPath.matches(WINDOWS_ABSOLUTE_PATH) -> decodedPath
+                decodedPath.isNotEmpty() -> "/$decodedPath"
+                else -> ""
+            }
             if (path.isBlank()) {
                 sendText(output, 400, "Bad Request", "missing path", method == "HEAD")
                 return
@@ -491,5 +499,7 @@ internal class LocalHttpServer(context: Context) {
         private const val MAX_HEADER_LINE_BYTES = 16 * 1024
         private const val IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
         private const val DEFAULT_BUFFER_SIZE = 64 * 1024
+        private val MEDIA_ENDPOINTS = arrayOf("file", "thumbnail", "compatible")
+        private val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/].*")
     }
 }
