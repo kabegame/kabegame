@@ -25,6 +25,7 @@ WebView 插件是一份**不经打包**的 `crawl.js`（`"main": "crawl.js"`, `"
 | API | 用途 |
 |---|---|
 | `Kabegame.vars` | kbConfig 合并值 |
+| `Kabegame.getLang()` | 建窗时烘焙的应用界面语言码：`zh` / `en` / `ja` / `ko` / `zhtw` |
 | `await Kabegame.pageLabel()` / `state()` / `updateState(patch)` | 阶段分派与跨页状态 |
 | `await Kabegame.to(url, { pageLabel })` / `back(n)` | 导航（当前 JS 上下文随之销毁） |
 | `await Kabegame.waitForDom()` / `waitForSelector(css, { timeout })` | 等渲染；SPA 一律 `waitForSelector` |

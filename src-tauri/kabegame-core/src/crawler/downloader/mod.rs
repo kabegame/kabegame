@@ -144,7 +144,10 @@ fn apply_download_labels(
                     emit_task_log(
                         task_id,
                         "warn",
-                        format!("[labels] 跳过标签 `{path}`：{error}"),
+                        task_log_i18n(
+                            "taskLogLabelAttachSkipped",
+                            json!({ "path": path, "reason": error }),
+                        ),
                     );
                 }
             }
@@ -152,7 +155,11 @@ fn apply_download_labels(
         Err(error) => {
             eprintln!("[labels] 图片 {image_id} 挂载标签失败: {error}");
             if let Some(task_id) = task_id {
-                emit_task_log(task_id, "warn", format!("[labels] 挂载标签失败：{error}"));
+                emit_task_log(
+                    task_id,
+                    "warn",
+                    task_log_i18n("taskLogLabelAttachFailed", json!({ "detail": error })),
+                );
             }
         }
     }

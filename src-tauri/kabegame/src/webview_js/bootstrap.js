@@ -4,10 +4,10 @@
 // Kabegame WebView 爬虫运行环境模板。
 //
 // 本文件不是直接注入的脚本，而是由 Rust（create_crawler_window）在建窗时做
-// 模板替换后，作为该任务窗口的 initialization_script 注入。两个占位符各只出现一次
-// （见下方 Object.freeze(...) 的 vars 位与 async 执行块内的 crawl 位），分别替换为：
-// 该任务 merged_config 的 JSON 字面量、插件 crawl.js 全文。切勿在别处（含本注释）
-// 再写出这两个占位符字面量——Rust 用 str::replace 全量替换，重复会插错位置。
+// 模板替换后，作为该任务窗口的 initialization_script 注入。三个占位符各只出现一次
+// （见下方 Object.freeze(...) 的 vars / language 位与 async 执行块内的 crawl 位），分别替换为：
+// 该任务 merged_config 的 JSON 字面量、应用语言的 JSON 字符串字面量、插件 crawl.js 全文。
+// 切勿在别处（含本注释）再写出占位符字面量——Rust 用 str::replace 全量替换，重复会插错位置。
 // 替换后是一段一次性闭包（IIFE），每次页面加载在 document-start 自执行：
 //   1. 顶层帧才运行（iframe 直接返回，避免在子帧里重复跑爬虫脚本）；
 //   2. 捕获 __TAURI_INTERNALS__ 到闭包内并从 window 删除，避免站点探测；
@@ -170,6 +170,9 @@
   const Kabegame = Object.freeze({
     // 该任务的 merged_config（静态，建窗时烘焙）。
     vars: Object.freeze(__KB_VARS_JSON__),
+    getLang() {
+      return __KB_LANG__;
+    },
     // WebView 后端只暴露异步文件系统子集；所有路径均由任务 PluginVfs 校验。
     fs: Object.freeze({
       async open(path, options) {

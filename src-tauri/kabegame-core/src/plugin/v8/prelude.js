@@ -326,6 +326,7 @@ globalThis.Kabegame = Object.freeze({
   setHeader: (key, value) => ops.op_kabegame_set_header(key, value),
   requireCookie: (host) => ops.op_kabegame_require_cookie(host ?? ""),
   cefUserAgent: () => ops.op_kabegame_cef_user_agent(),
+  getLang: () => ops.op_kabegame_get_lang(),
   delHeader: (key) => ops.op_kabegame_del_header(key),
   warn: (message) => ops.op_kabegame_warn(message),
   addProgress: (percentage) => ops.op_kabegame_add_progress(percentage),

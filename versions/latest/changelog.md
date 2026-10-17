@@ -84,3 +84,5 @@
 - Tauri 栈升级到 2.12.4，同步改善窗口 / Channel 监听的释放、Android 退出白屏与运行中覆盖安装崩溃，并在 NSIS 静默/被动模式下拦截降级。
 - 删除 `0010-tauri-build-always-static-vcruntime` 补丁；上游现已默认启用 `build.windows.staticVCRuntime`。
 - CEF 桌面端的普通 invoke 不再被强制改走 postMessage，恢复上游 `fetch(ipc://)` 主通道，DevTools Network 面板可以看到每次 IPC 的请求与响应内容；二进制写入（畅游 / WebView 爬虫的分块落盘、`Kabegame.fs` 写文件）也改走标准 invoke，删除 runtime 注入的 `__kb_raw_invoke__` 与 `cef-ipc://localhost/raw` 帧化通道。
+
+- 插件新增 `Kabegame.getLang()` 与 SDK `defineI18n`；konachan 插件日志、宿主任务链路日志支持简中、英文、日文、韩文、繁中显示。

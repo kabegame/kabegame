@@ -1,3 +1,4 @@
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::task_scheduler::{PageStackEntry, Task};
 use crate::crawler::TaskScheduler;
 use crate::emitter::GlobalEmitter;
@@ -12,7 +13,7 @@ use deno_error::JsErrorBox;
 use deno_fs::OpenOptions;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -41,7 +42,10 @@ pub async fn op_kabegame_to(
     let headers = run.headers_snapshot();
 
     let resolved_url = resolve_url_for_task_async(&task_id, &url).await?;
-    emit_http_info(&task_id, format!("[to] 打开页面：{resolved_url}"));
+    emit_http_info(
+        &task_id,
+        task_log_i18n("taskLogToOpen", json!({ "url": resolved_url })),
+    );
     let (final_url, html, resp_headers) =
         http_get_text_with_retry(&task_id, &resolved_url, "to", &headers, &cancel).await?;
 
@@ -58,10 +62,9 @@ pub async fn op_kabegame_to(
     });
     emit_http_info(
         &task_id,
-        format!(
-            "[to] 页面已入栈：{}（stack_depth={}）",
-            final_url,
-            stack_guard.len()
+        task_log_i18n(
+            "taskLogToPushed",
+            json!({ "url": final_url, "depth": stack_guard.len() }),
         ),
     );
     Ok(final_url)
@@ -428,20 +431,44 @@ pub fn op_kabegame_set_header(state: &mut OpState, #[string] key: String, #[stri
     }
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
     if let Err(e) = HeaderName::from_bytes(k.as_bytes()) {
-        emit_http_warn(&task_id, format!("[headers] 跳过无效 header 名：{k} ({e})"));
+        emit_http_warn(
+            &task_id,
+            task_log_i18n(
+                "taskLogHttpHeaderInvalidName",
+                json!({ "key": k, "detail": e.to_string() }),
+            ),
+        );
         return;
     }
     if let Err(e) = HeaderValue::from_str(&value) {
-        emit_http_warn(&task_id, format!("[headers] 跳过无效 header 值：{k} ({e})"));
+        emit_http_warn(
+            &task_id,
+            task_log_i18n(
+                "taskLogHttpHeaderInvalidValue",
+                json!({ "key": k, "detail": e.to_string() }),
+            ),
+        );
         return;
     }
     match run_of(&task_id) {
         Ok(run) => {
             if let Err(e) = run.set_header(k.to_string(), value) {
-                emit_http_warn(&task_id, format!("[headers] 写入 header 失败：{e}"));
+                emit_http_warn(
+                    &task_id,
+                    task_log_i18n(
+                        "taskLogHttpHeaderWriteFailed",
+                        json!({ "detail": e.to_string() }),
+                    ),
+                );
             }
         }
-        Err(e) => emit_http_warn(&task_id, format!("[headers] 写入 header 失败：{e}")),
+        Err(e) => emit_http_warn(
+            &task_id,
+            task_log_i18n(
+                "taskLogHttpHeaderWriteFailed",
+                json!({ "detail": e.to_string() }),
+            ),
+        ),
     }
 }
 
@@ -474,13 +501,26 @@ pub fn op_kabegame_cef_user_agent() -> Option<String> {
     cef_user_agent()
 }
 
+/// 应用界面语言码（zh/en/ja/ko/zhtw），与 `sync_locale` 同口径；插件据此选日志文案。
+#[op2]
+#[string]
+pub fn op_kabegame_get_lang() -> String {
+    Settings::global().get_resolved_language().to_string()
+}
+
 #[op2(fast)]
 pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -> bool {
     let task_id = state.borrow::<KabegameOpState>().task_id.clone();
     let run = match run_of(&task_id) {
         Ok(r) => r,
         Err(e) => {
-            emit_http_warn(&task_id, format!("[cookie] 无法定位任务：{e}"));
+            emit_http_warn(
+                &task_id,
+                task_log_i18n(
+                    "taskLogCookieTaskMissing",
+                    json!({ "detail": e.to_string() }),
+                ),
+            );
             return false;
         }
     };
@@ -495,18 +535,30 @@ pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -
         }
     };
     let Some(host) = target_host else {
-        emit_http_warn(&task_id, "[cookie] 无法解析目标 host".to_string());
+        emit_http_warn(
+            &task_id,
+            task_log_i18n("taskLogCookieHostInvalid", json!({})),
+        );
         return false;
     };
     match Storage::global().get_surf_record_by_host(&host) {
         Ok(Some(rec)) if !rec.cookie.trim().is_empty() => {
             match run.set_header("Cookie".to_string(), rec.cookie) {
                 Ok(()) => {
-                    emit_http_info(&task_id, format!("[cookie] 已从畅游注入 {host} 的 Cookie"));
+                    emit_http_info(
+                        &task_id,
+                        task_log_i18n("taskLogCookieInjected", json!({ "host": host })),
+                    );
                     true
                 }
                 Err(e) => {
-                    emit_http_warn(&task_id, format!("[cookie] 写入 Cookie 失败：{e}"));
+                    emit_http_warn(
+                        &task_id,
+                        task_log_i18n(
+                            "taskLogCookieWriteFailed",
+                            json!({ "detail": e.to_string() }),
+                        ),
+                    );
                     false
                 }
             }
@@ -514,12 +566,18 @@ pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -
         Ok(_) => {
             emit_http_warn(
                 &task_id,
-                format!("[cookie] 畅游无 {host} 的 Cookie(请先在畅游登录该站)"),
+                task_log_i18n("taskLogCookieMissing", json!({ "host": host })),
             );
             false
         }
         Err(e) => {
-            emit_http_warn(&task_id, format!("[cookie] 读取畅游记录失败：{e}"));
+            emit_http_warn(
+                &task_id,
+                task_log_i18n(
+                    "taskLogCookieReadFailed",
+                    json!({ "detail": e.to_string() }),
+                ),
+            );
             false
         }
     }
@@ -533,10 +591,22 @@ pub fn op_kabegame_del_header(state: &mut OpState, #[string] key: String) {
         match run_of(&task_id) {
             Ok(run) => {
                 if let Err(e) = run.del_header(k) {
-                    emit_http_warn(&task_id, format!("[headers] 删除 header 失败：{e}"));
+                    emit_http_warn(
+                        &task_id,
+                        task_log_i18n(
+                            "taskLogHttpHeaderDeleteFailed",
+                            json!({ "detail": e.to_string() }),
+                        ),
+                    );
                 }
             }
-            Err(e) => emit_http_warn(&task_id, format!("[headers] 删除 header 失败：{e}")),
+            Err(e) => emit_http_warn(
+                &task_id,
+                task_log_i18n(
+                    "taskLogHttpHeaderDeleteFailed",
+                    json!({ "detail": e.to_string() }),
+                ),
+            ),
         }
     }
 }
@@ -716,7 +786,7 @@ fn parse_download_opts(opts: Option<JsonValue>, run: &Task) -> Result<DownloadOp
         if search_terms.is_some() {
             emit_label_warning(
                 &run.task_id,
-                "[searchTexts] 同时传入 metadata_id，已忽略 searchTexts".to_string(),
+                task_log_i18n("taskLogSearchTextsIgnoredWithMetadataId", json!({})),
             );
         }
         Some(id)
@@ -746,7 +816,13 @@ fn parse_download_labels(
     let (specs, rejected) = validate_label_values(value, plugin_id)
         .map_err(|error| JsErrorBox::generic(format!("{label}: {error}")))?;
     for (index, reason) in rejected {
-        emit_label_warning(task_id, format!("[labels] 跳过 {label}[{index}]：{reason}"));
+        emit_label_warning(
+            task_id,
+            task_log_i18n(
+                "taskLogLabelSkipped",
+                json!({ "label": label, "index": index, "reason": reason }),
+            ),
+        );
     }
     Ok(specs)
 }
@@ -761,7 +837,10 @@ fn parse_search_texts(
     for (index, reason) in rejected {
         emit_label_warning(
             task_id,
-            format!("[searchTexts] 跳过 {label}[{index}]：{reason}"),
+            task_log_i18n(
+                "taskLogSearchTextSkipped",
+                json!({ "label": label, "index": index, "reason": reason }),
+            ),
         );
     }
     Ok(terms)
@@ -956,31 +1035,53 @@ async fn http_get_text_with_retry(
                 if redirect_count >= 10 {
                     let msg = format!("[{label}] 重定向次数过多（>10）");
                     eprintln!("{msg} URL: {current_url}");
-                    emit_http_error(task_id, format!("{msg}，URL: {current_url}"));
+                    emit_http_error(
+                        task_id,
+                        task_log_i18n(
+                            "taskLogHttpTooManyRedirects",
+                            json!({ "label": label, "url": current_url }),
+                        ),
+                    );
                     break Err("Too many redirects".to_string());
                 }
                 if let Some(loc) = resp.headers().get(reqwest::header::LOCATION) {
                     if let Ok(loc_str) = loc.to_str() {
-                        let next_url = if loc_str.starts_with("http://")
-                            || loc_str.starts_with("https://")
-                        {
-                            loc_str.to_string()
-                        } else {
-                            match Url::parse(&current_url).and_then(|u| u.join(loc_str)) {
-                                Ok(u) => u.to_string(),
-                                Err(e) => {
-                                    let msg = format!("[{label}] 重定向 URL 解析失败：{e}");
-                                    eprintln!("{msg} URL: {current_url}");
-                                    emit_http_error(task_id, format!("{msg}，URL: {current_url}"));
-                                    break Err(format!("Redirect parse error: {e}"));
+                        let next_url =
+                            if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                                loc_str.to_string()
+                            } else {
+                                match Url::parse(&current_url).and_then(|u| u.join(loc_str)) {
+                                    Ok(u) => u.to_string(),
+                                    Err(e) => {
+                                        let msg = format!("[{label}] 重定向 URL 解析失败：{e}");
+                                        eprintln!("{msg} URL: {current_url}");
+                                        emit_http_error(
+                                            task_id,
+                                            task_log_i18n(
+                                                "taskLogHttpRedirectParseFailed",
+                                                json!({
+                                                    "label": label,
+                                                    "detail": e.to_string(),
+                                                    "url": current_url,
+                                                }),
+                                            ),
+                                        );
+                                        break Err(format!("Redirect parse error: {e}"));
+                                    }
                                 }
-                            }
-                        };
+                            };
 
                         redirect_count += 1;
                         emit_http_warn(
                             task_id,
-                            format!("[{label}] HTTP {} 跳转到：{next_url}", status.as_u16()),
+                            task_log_i18n(
+                                "taskLogHttpRedirect",
+                                json!({
+                                    "label": label,
+                                    "status": status.as_u16(),
+                                    "url": next_url,
+                                }),
+                            ),
                         );
                         current_url = next_url;
                         continue;
@@ -1000,7 +1101,13 @@ async fn http_get_text_with_retry(
                 }
                 let msg = format!("[{label}] 请求失败：{e}");
                 eprintln!("{msg} URL: {url}");
-                emit_http_error(task_id, format!("{msg}，URL: {url}"));
+                emit_http_error(
+                    task_id,
+                    task_log_i18n(
+                        "taskLogHttpRequestFailed",
+                        json!({ "label": label, "detail": e, "url": url }),
+                    ),
+                );
                 return Err(JsErrorBox::generic(e));
             }
         };
@@ -1012,8 +1119,16 @@ async fn http_get_text_with_retry(
                 let backoff_ms = backoff_ms_for_attempt(attempt);
                 emit_http_warn(
                     task_id,
-                    format!(
-                        "[{label}] HTTP {status}，将于 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})，URL: {current_url}"
+                    task_log_i18n(
+                        "taskLogHttpStatusRetry",
+                        json!({
+                            "label": label,
+                            "status": status.to_string(),
+                            "backoffMs": backoff_ms,
+                            "attempt": attempt,
+                            "max": max_attempts,
+                            "url": current_url,
+                        }),
                     ),
                 );
                 cancellable_sleep(Duration::from_millis(backoff_ms), cancel).await?;
@@ -1021,7 +1136,17 @@ async fn http_get_text_with_retry(
             }
             let msg = format!("[{label}] HTTP 错误：{status}");
             eprintln!("{msg} URL: {current_url}");
-            emit_http_error(task_id, format!("{msg}，URL: {current_url}"));
+            emit_http_error(
+                task_id,
+                task_log_i18n(
+                    "taskLogHttpStatusError",
+                    json!({
+                        "label": label,
+                        "status": status.to_string(),
+                        "url": current_url,
+                    }),
+                ),
+            );
             return Err(JsErrorBox::generic(format!("HTTP error: {status}")));
         }
 
@@ -1043,7 +1168,17 @@ async fn http_get_text_with_retry(
                 }
                 let msg = format!("[{label}] 读取响应失败：{e}");
                 eprintln!("{msg} URL: {final_url}");
-                emit_http_error(task_id, format!("{msg}，URL: {final_url}"));
+                emit_http_error(
+                    task_id,
+                    task_log_i18n(
+                        "taskLogHttpReadResponseFailed",
+                        json!({
+                            "label": label,
+                            "detail": e.to_string(),
+                            "url": final_url,
+                        }),
+                    ),
+                );
                 return Err(JsErrorBox::generic(format!("Failed to fetch: {e}")));
             }
         }
@@ -1063,8 +1198,15 @@ async fn sleep_before_retry(
     let backoff_ms = backoff_ms_for_attempt(attempt);
     emit_http_warn(
         task_id,
-        format!(
-            "[{label}] 请求失败，将在 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})：{error}"
+        task_log_i18n(
+            "taskLogHttpRequestRetry",
+            json!({
+                "label": label,
+                "backoffMs": backoff_ms,
+                "attempt": attempt,
+                "max": max_attempts,
+                "detail": error,
+            }),
         ),
     );
     cancellable_sleep(Duration::from_millis(backoff_ms), cancel).await
@@ -1138,7 +1280,10 @@ fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>) ->
             Err(e) => {
                 emit_http_warn(
                     task_id,
-                    format!("[headers] 跳过无效 header 名：{key} ({e})"),
+                    task_log_i18n(
+                        "taskLogHttpHeaderInvalidName",
+                        json!({ "key": key, "detail": e.to_string() }),
+                    ),
                 );
                 continue;
             }
@@ -1148,7 +1293,10 @@ fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>) ->
             Err(e) => {
                 emit_http_warn(
                     task_id,
-                    format!("[headers] 跳过无效 header 值：{key} ({e})"),
+                    task_log_i18n(
+                        "taskLogHttpHeaderInvalidValue",
+                        json!({ "key": key, "detail": e.to_string() }),
+                    ),
                 );
                 continue;
             }

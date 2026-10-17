@@ -13,7 +13,7 @@
     -> worker 取 Arc<Task>，把任务置为 Running
     -> WebView 分支初始化 Task.page_stack 顶部 initial 页面，并 begin_webview_session()
     -> AppCrawlerWebViewHandler 创建 label=`crawler-<task_id>` 的独立 WebView 窗口并加载 base_url/about:blank
-    -> startup.rs 从 Task.params.plugin 读取 crawl.js，从 Task.params.config 读取冻结配置，烘焙进 bootstrap
+    -> startup.rs 从 Task.params.plugin 读取 crawl.js，从 Task.params.config 读取冻结配置，并读取已解析的应用语言，烘焙进 bootstrap 的三个占位符
     -> 页面每次加载执行 media_capture.js -> media_download.js -> bootstrap
     -> crawl.js 通过 Kabegame.pageLabel()/pageState()/state() 读取 Task 内状态
     -> Kabegame.to()/back() 直接维护 Task.page_stack 并 navigate
@@ -85,6 +85,8 @@ Tauri initialization script 在每次页面加载时执行：
 3. `media_download.js` 注册共享媒体落盘/提交入口。
 4. 烘焙后的 `bootstrap.js` 捕获并隐藏 `__TAURI_INTERNALS__`。
 5. 闭包内构造 `Kabegame`，直接执行插件 `crawl.js`。
+
+bootstrap 的三个占位符分别承载冻结配置 JSON、已解析语言的 JSON 字符串字面量和插件 `crawl.js`；每个占位符字面量在模板中只能出现一次。`Kabegame.getLang()` 同步返回建窗时烘焙的语言常量。
 
 跨页状态不能依赖上一页 JS 变量；应使用 `Kabegame.state()` / `updateState()` 与 `Kabegame.pageState()` / `updatePageState()`。
 

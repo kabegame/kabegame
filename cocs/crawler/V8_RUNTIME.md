@@ -7,7 +7,7 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 ## 全局能力
 
 - Web 平台：`URL` / `URLSearchParams`、`TextEncoder` / `TextDecoder`、`atob` / `btoa`、timer、`crypto`、`fetch` / `Request` / `Response` / `Headers`、`DOMParser`。
-- 宿主桥：`Kabegame.to`、`back`、`currentUrl`、`currentHtml`、`currentDocument`、`currentHeaders`、`pluginData`、`setPluginData`、`setHeader`、`requireCookie`、`cefUserAgent`、`delHeader`、`warn`、`addProgress`、`downloadImage`、`createImageMetadata`，以及基于每任务 `PluginVfs` 的 `Kabegame.fs`（`getRoot()` 返回本次任务的虚拟根）与 `Kabegame.ffmpeg`。
+- 宿主桥：`Kabegame.to`、`back`、`currentUrl`、`currentHtml`、`currentDocument`、`currentHeaders`、`pluginData`、`setPluginData`、`setHeader`、`requireCookie`、`cefUserAgent`、`getLang`、`delHeader`、`warn`、`addProgress`、`downloadImage`、`createImageMetadata`，以及基于每任务 `PluginVfs` 的 `Kabegame.fs`（`getRoot()` 返回本次任务的虚拟根）与 `Kabegame.ffmpeg`。
 
 ### 畅游 Cookie 注入
 
@@ -16,6 +16,12 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - Cookie 仅来自数据库持久化的 `get_surf_record_by_host` 记录。用户必须先在畅游访问并登录目标站点；无记录或记录中没有 Cookie 时返回 `false`。
 - `Kabegame.cefUserAgent(): string | null` 返回畅游（桌面 CEF）的默认 UA，由 `ops.rs` 的 `cef_user_agent()` 按 Chromium `BuildUserAgentFromOSAndProduct` 公式拼出：平台段取 Chromium 写死的 unified platform（Windows `Windows NT 10.0; Win64; x64` / macOS `Macintosh; Intel Mac OS X 10_15_7` / Linux `X11; Linux x86_64`），版本段 `Chrome/<CEF_CHROME_MAJOR>.0.0.0`；Android 返回 `null`。`CEF_CHROME_MAJOR` 写死，升级 CEF 时手动同步（落后可接受）。用途：Cloudflare `cf_clearance` 绑定签发时的 UA，只注入 Cookie 而 UA 不一致仍会 403。
 - `auth.needCookie` 标签负责提示插件需要 Cookie，并引导用户去畅游登录；插件随后调用 `requireCookie()` 取用，形成“标签提示 → 畅游登录 → 插件注入”的闭环。
+
+### 应用界面语言
+
+- `Kabegame.getLang(): "zh" | "en" | "ja" | "ko" | "zhtw"` 返回 `Settings::global().get_resolved_language()` 的结果，与应用 `sync_locale` 使用同一口径；未显式设置时按系统语言解析。
+- V8 通过同步 op 在每次调用时读取当前值；WebView 在创建任务窗口时把语言烘焙进 bootstrap，当前页面内同步返回该常量。
+- 需要兼容没有此 API 的旧版应用时写成 `Kabegame.getLang?.() ?? "zh"`。插件自有文案推荐交给 `@kabegame/plugin-sdk` 的 `defineI18n`，宿主任务日志则使用独立的 `_i18n` 载荷，二者不要混用。
 
 ### 插件私有虚拟文件系统
 

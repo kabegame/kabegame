@@ -3,6 +3,7 @@
 // Copyright 2018-2023 the Deno authors.
 use deno_fs::{FileSystem, OpenOptions};
 use deno_permissions::CheckedPathBuf;
+use kabegame_core::crawler::task_log_i18n::task_log_i18n;
 use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
 use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
 use kabegame_core::crawler::TaskScheduler;
@@ -18,7 +19,7 @@ use kabegame_core::storage::search_terms::validate_search_text_values;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -1241,7 +1242,7 @@ pub async fn crawl_download_image<R: Runtime>(
             GlobalEmitter::global().emit_task_log(
                 &task_id,
                 "warn",
-                "[searchTexts] 同时传入 metadata_id，已忽略 searchTexts",
+                &task_log_i18n("taskLogSearchTextsIgnoredWithMetadataId", json!({})),
             );
         }
         Some(id)
@@ -1286,7 +1287,10 @@ fn validate_crawler_download_labels(
         GlobalEmitter::global().emit_task_log(
             task_id,
             "warn",
-            &format!("[labels] 跳过 labels[{index}]：{reason}"),
+            &task_log_i18n(
+                "taskLogLabelSkipped",
+                json!({ "label": "labels", "index": index, "reason": reason }),
+            ),
         );
     }
     Ok(specs)
@@ -1303,7 +1307,10 @@ fn validate_crawler_search_texts(
         GlobalEmitter::global().emit_task_log(
             task_id,
             "warn",
-            &format!("[searchTexts] 跳过 {label}[{index}]：{reason}"),
+            &task_log_i18n(
+                "taskLogSearchTextSkipped",
+                json!({ "label": label, "index": index, "reason": reason }),
+            ),
         );
     }
     Ok(terms)
