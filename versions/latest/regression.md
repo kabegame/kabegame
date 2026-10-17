@@ -489,6 +489,16 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [ ] | Web 版 | Web | `?tab=` 恢复与只读源行为 | 与桌面一致，源增删改仍被只读拦截 | 未覆盖 |
 | [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行 |
 
+## Android 源管理页商店网格横向溢出（`apps/kabegame/src/views/PluginBrowser.vue`）
+
+紧凑端插件网格与骨架屏网格由 `repeat(2, 1fr)` 改为 `repeat(2, minmax(0, 1fr))`：`1fr` 的下限是 min-content，`nowrap` 的长插件名会把列撑宽（实测 203px + 281px，容器仅 320px）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 商店 tab 两列等宽 | Android dev（360 CSS px，ja） | 打开源管理页，切到官方 GitHub 源 tab | 两列各 155px，`.plugin-browser-content` 的 `scrollWidth` 等于容器宽 320；长名称显示省略号 | 已实测并截图 |
+| [ ] | 骨架屏 | Android | 首次加载商店 tab | 骨架卡片同样两列等宽，不横向溢出 | 同一规则，未单独截图 |
+| [ ] | 桌面不受影响 | 桌面 CEF 窄窗 | 缩窄窗口进入紧凑布局 | 两列等宽 | 未覆盖 |
+
 ## Android 画册页左侧贴边（`Albums.vue`）
 
 `.albums-page` 的左内边距为 0，是给桌面三栏布局让树列贴窗口左缘；紧凑模式没有树列，`ImageGrid` 中栏又是 `display: contents` 加不上内边距，结果面包屑、查询 chip 行和图片都贴着屏幕左边，只有页头靠 `ml-5` 缩进。现在紧凑模式在页面根上补回 20px 左内边距，页头的 `ml-5` 只在非紧凑模式保留。

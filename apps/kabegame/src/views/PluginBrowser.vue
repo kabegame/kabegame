@@ -1078,7 +1078,7 @@ onUnmounted(() => {
 
   /* 紧凑端：2 列 */
   .plugin-grid-android {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
 }
@@ -1159,7 +1159,7 @@ onUnmounted(() => {
 }
 
 .skeleton-grid-android {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 
   .skeleton-card {
