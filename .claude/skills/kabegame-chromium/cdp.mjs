@@ -95,8 +95,10 @@ function isMainWindow(rawUrl) {
   } catch {
     return false;
   }
-  // 只认应用自身的页面：dev 是 :1420，打包后是 tauri:// 自定义协议。
-  const isAppOrigin = u.port === "1420" || u.protocol === "tauri:";
+  // 只认应用自身的页面：桌面 dev 是 :1420，桌面打包后是 tauri:// 自定义协议；
+  // Android WebView 上 Tauri 用 http://tauri.localhost（dev 也一样，不是 :1420）。
+  const isAppOrigin =
+    u.port === "1420" || u.protocol === "tauri:" || u.hostname === "tauri.localhost";
   if (!isAppOrigin) return false;
   // 排除 wallpaper.html 这类独立入口页；主窗口是 SPA，路径不带 .html。
   return !u.pathname.endsWith(".html");
@@ -179,7 +181,7 @@ async function main() {
   text '<selector>'       打印元素文本
 
   --port N        CDP 端口；不传则向 vite dev server（127.0.0.1:${VITE_PORT}）
-                  要 app 上报的随机端口
+                  要 app 上报的随机端口（Android 由 driver.sh --android 经 adb forward 给出）
   --url <substr>  选择 URL 含该子串的 page
                   （不传则自动挑主窗口，排除 wallpaper.html 等辅助窗口）`);
     return 0;

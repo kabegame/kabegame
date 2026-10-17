@@ -18,9 +18,17 @@
 #   .claude/skills/kabegame-chromium/driver.sh eval 'document.title'
 #   .claude/skills/kabegame-chromium/driver.sh click '.foo'
 #
+# Android（系统 WebView 自带 CDP，经 adb forward 转到本机）：任意子命令加 --android，
+# 或设 KABEGAME_ANDROID=1。
+#   .claude/skills/kabegame-chromium/driver.sh status --android
+#   .claude/skills/kabegame-chromium/driver.sh shot /tmp/a.png --android
+#   .claude/skills/kabegame-chromium/driver.sh screen /tmp/full.png --android  # adb 整屏（含原生层）
+#
 # 覆盖项：
 #   KABEGAME_DEV_SERVER_PORT  vite 端口（默认 1420）
 #   KABEGAME_CEF_DEBUG_PORT   跳过发现，直连这个 CDP 端口
+#   KABEGAME_ANDROID_PACKAGE  Android 包名（默认 app.kabegame.dev；prod 包不开 WebView 调试）
+#   ANDROID_SERIAL            多台设备时指定 adb 目标（adb 原生识别）
 
 set -uo pipefail
 
@@ -31,6 +39,8 @@ cd "$ROOT" || exit 1
 VITE_PORT="${KABEGAME_DEV_SERVER_PORT:-1420}"
 VITE_BASE="http://127.0.0.1:${VITE_PORT}"
 DEV_CMD="deno task dev -c kabegame"
+ANDROID_PKG="${KABEGAME_ANDROID_PACKAGE:-app.kabegame.dev}"
+ANDROID_DEV_CMD="deno task dev -c kabegame --mode android"
 
 vite_up() {
   # 拿到任何 HTTP 状态码都说明 dev server 活着：200=已登记 CDP，404=还没登记。
@@ -136,6 +146,126 @@ EOF
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Android：系统 WebView 是 Chromium，`setWebContentsDebuggingEnabled(true)` 后在设备上
+# 监听 abstract unix socket `@webview_devtools_remote_<pid>`（chrome://inspect 走的就是
+# 它）。Tauri 在 devtools=true（dev 配置）时由 wry 打开这个开关，所以只要
+# `adb forward` 到本机端口，就是一个标准 CDP 端点，cdp.mjs 原样可用。
+# ---------------------------------------------------------------------------
+
+android_pid() {
+  adb shell pidof "$ANDROID_PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}'
+}
+
+# 设备上该 pid 的 WebView devtools socket 名（不带 @）。没开调试则为空。
+android_socket() {
+  adb shell cat /proc/net/unix 2>/dev/null | tr -d '\r' |
+    grep -ao "@webview_devtools_remote_${1}\$" | head -n 1 | sed 's/^@//'
+}
+
+# 复用已有的转发（同一 socket）；没有就 tcp:0 让 adb 分配本机空闲端口。
+# pid 每次启动都会变，旧 pid 的转发留着无害，这里顺手清掉指向别的
+# webview_devtools_remote_* 的陈旧条目，免得 forward --list 越积越长。
+android_forward() {
+  local sock="$1" line local_spec remote port
+  while read -r _serial local_spec remote; do
+    [ -n "${remote:-}" ] || continue
+    case "$remote" in
+      "localabstract:${sock}")
+        port="${local_spec#tcp:}"
+        ;;
+      localabstract:webview_devtools_remote_*)
+        adb forward --remove "$local_spec" >/dev/null 2>&1
+        ;;
+    esac
+  done < <(adb forward --list 2>/dev/null | tr -d '\r')
+
+  if [ -n "${port:-}" ] && cdp_up "$port"; then
+    echo "$port"
+    return 0
+  fi
+  [ -n "${port:-}" ] && adb forward --remove "tcp:${port}" >/dev/null 2>&1
+  line="$(adb forward tcp:0 "localabstract:${sock}" 2>/dev/null | tr -d '\r')"
+  [ -n "$line" ] && echo "$line"
+}
+
+resolve_android_port() {
+  if ! command -v adb >/dev/null 2>&1; then
+    echo "[chromium] 找不到 adb（Android SDK platform-tools 没装或不在 PATH）。" >&2
+    return 1
+  fi
+  if ! adb get-state >/dev/null 2>&1; then
+    cat >&2 <<EOF
+[chromium] adb 没有可用设备（未连接 / 未授权 / 多台设备未设 ANDROID_SERIAL）。
+[chromium] 用 \`adb devices\` 确认。
+EOF
+    return 1
+  fi
+
+  local pid sock port
+  pid="$(android_pid)"
+  if [ -z "$pid" ]; then
+    cat >&2 <<EOF
+[chromium] 设备上没有在跑的 ${ANDROID_PKG}。请在你自己的终端里启动：
+[chromium]
+[chromium]     ${ANDROID_DEV_CMD}
+[chromium]
+[chromium] 或直接在手机上打开已安装的 dev 包；包名不同就设 KABEGAME_ANDROID_PACKAGE。
+EOF
+    return 1
+  fi
+
+  sock="$(android_socket "$pid")"
+  if [ -z "$sock" ]; then
+    cat >&2 <<EOF
+[chromium] ${ANDROID_PKG}（pid ${pid}）没有 WebView 调试 socket。
+[chromium] 只有 devtools=true 的构建（dev）才会 setWebContentsDebuggingEnabled；prod 包不行。
+[chromium] 也可能是 WebView 还没创建完，等界面出来再试。
+EOF
+    return 1
+  fi
+
+  port="$(android_forward "$sock")"
+  if [ -z "$port" ] || ! cdp_up "$port"; then
+    echo "[chromium] adb forward 到 ${sock} 失败或不应答（端口: ${port:-无}）。" >&2
+    return 1
+  fi
+  echo "$port"
+}
+
+cmd_status_android() {
+  echo "Android 包      : ${ANDROID_PKG}"
+  if ! command -v adb >/dev/null 2>&1; then
+    echo "  adb           : 未找到 ❌"
+    return 0
+  fi
+  echo "  设备          : $(adb get-serialno 2>/dev/null | tr -d '\r' || echo '无')"
+  local pid
+  pid="$(android_pid)"
+  echo "  pid           : ${pid:-未运行 ❌（需手动启动: ${ANDROID_DEV_CMD}）}"
+  [ -n "$pid" ] || return 0
+  echo "  调试 socket   : $(android_socket "$pid" || true)"
+  local port
+  if port="$(resolve_android_port 2>/dev/null)"; then
+    echo "CDP 端口        : ${port}（adb forward）"
+    echo "  状态          : 就绪 ✅"
+    curl -sf -m 2 "http://127.0.0.1:${port}/json/version" | sed 's/^/                  /'
+  else
+    echo "CDP             : 不可用 ❌（跑 \`$0 port --android\` 看具体原因）"
+  fi
+}
+
+# 整屏截图：CDP 截图只包含 WebView 内容，系统栏 / 原生对话框 / 通知要靠 screencap。
+cmd_screen_android() {
+  local out="${1:-}"
+  if [ -z "$out" ]; then
+    echo "[chromium] screen 需要输出路径，例如: screen /tmp/full.png --android" >&2
+    return 2
+  fi
+  adb exec-out screencap -p >"$out" || return 1
+  realpath "$out"
+}
+
 cmd_status() {
   echo "vite dev server : ${VITE_BASE}"
   if vite_up; then
@@ -173,11 +303,48 @@ cmd_status() {
 SUB="${1:-help}"
 shift 2>/dev/null || true
 
+# --android 可出现在任意位置；从参数里摘掉，别透传给 cdp.mjs。
+ANDROID="${KABEGAME_ANDROID:-}"
+ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--android" ]; then
+    ANDROID=1
+  else
+    ARGS+=("$a")
+  fi
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+if [ -n "$ANDROID" ] && [ "$ANDROID" != "0" ]; then
+  case "$SUB" in
+    status) cmd_status_android ;;
+    port)
+      PORT="$(resolve_android_port)" || exit 4
+      echo "$PORT"
+      ;;
+    screen) cmd_screen_android "$@" ;;
+    targets | shot | eval | click | text)
+      PORT="$(resolve_android_port)" || exit 4
+      KABEGAME_CEF_DEBUG_PORT="$PORT" node "$SKILL_DIR/cdp.mjs" "$SUB" "$@"
+      ;;
+    help) node "$SKILL_DIR/cdp.mjs" help ;;
+    *)
+      echo "未知子命令: $SUB" >&2
+      exit 2
+      ;;
+  esac
+  exit $?
+fi
+
 case "$SUB" in
   status) cmd_status ;;
   port)
     PORT="$(resolve_port)" || exit 4
     echo "$PORT"
+    ;;
+  screen)
+    echo "[chromium] screen 只在 --android 下可用（adb screencap）；桌面用 shot。" >&2
+    exit 2
     ;;
   start | stop)
     cat >&2 <<EOF

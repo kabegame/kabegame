@@ -1,11 +1,12 @@
 ---
 name: kabegame-chromium
-description: 连上跑起来的 kabegame 桌面 app 做截图与 UI 自动化(CDP)。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态时使用。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
+description: 连上跑起来的 kabegame app（桌面 CEF，或经 adb 连 Android dev 包的系统 WebView）做截图与 UI 自动化(CDP)。当需要 screenshot / 看看界面长什么样 / 验证 UI 改动在真实 app 里的效果 / 点击元素 / 在页面里执行 JS / 检查前端运行时状态时使用，安卓上看界面 / 跑 JS 加 --android。区别于 dev:frontend 纯前端预览——这里连的是带完整 Tauri IPC 与真实数据的 app。本 skill 不启动 dev，需用户自己先跑起来。
 ---
 
 # kabegame-chromium
 
-让 agent 真正"看到"并操作跑起来的 kabegame 桌面 app。
+让 agent 真正"看到"并操作跑起来的 kabegame app——桌面端（CEF）与 Android dev 包
+（系统 WebView，见下文「Android」）共用同一套 `cdp.mjs`。
 
 kabegame 桌面端跑在自建 CEF runtime（`src-tauri/tauri-runtime-cef/`）上，本质是
 Chromium，所以支持 **CDP（Chrome DevTools Protocol）**。dev 下调试端口默认开启且
@@ -35,13 +36,15 @@ Rust 冷编译好几分钟、agent 侧看不到任何进度、还会跟用户已
 
 **为什么不用 `deno task dev:frontend` + 无头浏览器**：那条路只有 Vite，没有 Tauri
 后端，所有 `invoke`/`listen` 都是 `undefined`，看到的是空数据的空壳；而且
-`__ANDROID__`/`__WEB__` 是编译期 define，浏览器里再怎么缩窗也切不出安卓布局。
+`__ANDROID__`/`__WEB__` 是编译期 define，浏览器里再怎么缩窗也切不出安卓布局——要看安卓
+布局就用 `--android` 连真机。
 
-下面路径都相对仓库根 `/Volumes/KIOXIA/kabegame`（脚本自行 cd，任意子目录可调）。
+下面路径都相对仓库根（脚本自行 cd，任意子目录可调）。
 
 ## 前置
 
 - 用户自己跑着 `deno task dev -c kabegame`（本 skill 不代跑）。
+  Android 则是 `deno task dev -c kabegame --mode android`，另需 `adb` 与已授权的设备。
 - `node`（≥18，要 `fetch`/`AbortSignal.timeout`）。
 - `playwright-core` 已在仓库根 `node_modules`（随 `bun install` 装好）。
   **不需要** `npx playwright install` —— `connectOverCDP` 连的是已有 browser，
@@ -85,7 +88,7 @@ http://localhost:1420/wallpaper.html    ← 壁纸窗口（排在前面！）
 http://localhost:1420/gallery           ← 主窗口（SPA，路径随路由变）
 ```
 
-不传 `--url` 时走 `isMainWindow()` 启发式：**应用自身页面（:1420 或 `tauri:`）且
+不传 `--url` 时走 `isMainWindow()` 启发式：**应用自身页面（:1420、`tauri:` 或 Android 的 `tauri.localhost`）且
 路径不以 `.html` 结尾**。别退回成子串匹配——`localhost:1420` 会同时命中壁纸窗口，
 而壁纸排在前面，结果就是截到一张全屏壁纸而不是 UI。
 
@@ -96,6 +99,52 @@ $S targets
 $S shot /tmp/wp.png --url wallpaper
 $S shot /tmp/surf.png --url surf
 ```
+
+## Android（`--android`）
+
+Android 不用 CEF，但系统 WebView 本身就是 Chromium：Tauri 在 `devtools: true`
+（`tauri.conf.json.handlebars` 里是 `{{isDev}}`）时由 wry 调
+`WebView.setWebContentsDebuggingEnabled(true)`，WebView 便在设备上监听 abstract unix
+socket `@webview_devtools_remote_<pid>`（`chrome://inspect` 走的也是它）。
+`adb forward` 到本机端口后就是**真正的 CDP 端点**，不是模拟——`cdp.mjs` 原样可用。
+
+```
+deno task dev -c kabegame --mode android     用户自己跑（或手机上直接打开已装的 dev 包）
+skill ── adb shell pidof app.kabegame.dev → <pid>
+     ├── /proc/net/unix 里确认 @webview_devtools_remote_<pid> 存在
+     ├── adb forward --list 有同 socket 的转发且应答 → 复用；否则 adb forward tcp:0 → <port>
+     └── connectOverCDP 127.0.0.1:<port>
+```
+
+```bash
+$S status --android                 # 设备 / pid / socket / 转发端口
+$S port --android                   # 打印转发后的本机 CDP 端口
+$S shot /tmp/a.png --android        # WebView 截图（物理像素，如 1080x2400）
+$S eval 'innerWidth' --android      # 360（CSS 像素，DPR 3）
+$S click '.foo' --android
+$S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原生对话框）
+```
+
+`--android` 可放在任意位置，也可设 `KABEGAME_ANDROID=1`。
+
+要点：
+
+- **只对 dev 包有效**：默认包名 `app.kabegame.dev`；prod 包 `app.kabegame` 的
+  devtools 为 false，没有调试 socket。`KABEGAME_ANDROID_PACKAGE` 可覆盖包名。
+- **pid 每次启动都会变**，所以端口不能缓存——驱动每次调用都重新 `pidof` 并核对转发，
+  顺手 `adb forward --remove` 指向其它 `webview_devtools_remote_*` 的陈旧条目。
+- **主窗口 URL 是 `http://tauri.localhost/...`**（dev 也一样，不是 `:1420`），
+  `isMainWindow()` 已认这个 host，不必传 `--url`。
+- **CDP 截图只有 WebView 内容**：系统状态栏、原生权限弹窗、通知、Kotlin 侧 UI
+  （如 picker）都截不到，要看就用 `screen`。
+- **多台设备**时设 `ANDROID_SERIAL`（adb 原生识别）。
+- 没有 vite 端口登记这条链路：Android app 不向 vite 上报，一切以 adb 为准。
+
+| 报错 | 处理 |
+|---|---|
+| `adb 没有可用设备` | `adb devices` 看是否未授权 / 多台设备未设 `ANDROID_SERIAL` |
+| `设备上没有在跑的 app.kabegame.dev` | 请用户跑 `deno task dev -c kabegame --mode android` 或手机上打开 dev 包 |
+| `没有 WebView 调试 socket` | 装的是 prod 包，或 WebView 还没创建完 |
 
 ## 端口是怎么串起来的
 
