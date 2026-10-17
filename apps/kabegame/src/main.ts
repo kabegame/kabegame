@@ -8,6 +8,7 @@ import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";
 import "@/styles/anime-theme.css";
+import "./styles/corner-badge.css";
 import "./styles/dialogs.css";
 import "./styles/hscroll-fade.css";
 /** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */
@@ -16,6 +17,7 @@ import "vant/lib/toast/style";
 import "@/styles/vant-theme.css";
 import { vPullToRefresh } from "@/directives/pullToRefresh";
 import { vDragFile } from "@/directives/dragFile";
+import { vCornerBadge } from "@/directives/cornerBadge";
 import { vHscrollFade } from "@/directives/hscrollFade";
 import { IS_ANDROID, IS_MACOS } from "@/env";
 import { Toast, Picker, Popup, Button } from "vant";
@@ -51,6 +53,7 @@ const app = createApp(App);
 
 app.directive("pull-to-refresh", vPullToRefresh);
 app.directive("drag-file", vDragFile);
+app.directive("corner-badge", vCornerBadge);
 app.directive("hscroll-fade", vHscrollFade);
 
 // 注册所有图标

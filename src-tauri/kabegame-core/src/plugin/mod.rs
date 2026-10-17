@@ -747,7 +747,15 @@ impl PluginManager {
             read_kgpg_package_name(zip_path).await?.as_deref(),
         )?;
         // 复制前完整解析一次：变量定义（尤其是 when 环）不合法时不能把坏包留在插件目录。
-        self.parse_kgpg(zip_path, Some(&plugin_id)).await?;
+        let parsed = self.parse_kgpg(zip_path, Some(&plugin_id)).await?;
+        // 应用版本不满足插件要求时拒绝安装/更新（商店、导入、拖入共用此入口）。
+        if let Some(min) = parsed
+            .min_app_version
+            .as_deref()
+            .filter(|version| !version.trim().is_empty())
+        {
+            check_min_app_version(env!("CARGO_PKG_VERSION"), min)?;
+        }
         let target_path = plugins_dir.join(format!("{plugin_id}.kgpg"));
 
         let source_canon =
@@ -4147,6 +4155,45 @@ mod tests {
         assert_eq!(script_type, "v8");
         assert_eq!(script.v8_source(), Some(js_source));
         assert!(script.js_source().is_none());
+    }
+
+    #[tokio::test]
+    async fn install_plugin_rejects_incompatible_min_app_version_before_copy() {
+        let paths = crate::app_paths::AppPaths::init_for_tests();
+        let plugin_id = "install-min-version-guard";
+        let source_dir = paths.temp_dir.join("plugin-install-tests");
+        let source_path = source_dir.join(format!("{plugin_id}.kgpg"));
+        let target_path = paths.plugins_dir().join(format!("{plugin_id}.kgpg"));
+        let _ = fs::remove_file(&source_path);
+        let _ = fs::remove_file(&target_path);
+        fs::create_dir_all(&source_dir).unwrap();
+
+        let pkg = serde_json::json!({
+            "name": plugin_id,
+            "version": "1.0.0",
+            "kbPackageVersion": 3,
+            "kbBackend": "v8",
+            "main": "main.js",
+            "engines": {"kabegame": ">= 99.0.0"},
+        });
+        let zip_data = make_zip(&[
+            (
+                "package.json",
+                serde_json::to_string_pretty(&pkg).unwrap().as_bytes(),
+            ),
+            ("main.js", b"export async function crawl() {}"),
+        ]);
+        let header = crate::kgpg::build_kgpg3_header(None).unwrap();
+        crate::kgpg::write_kgpg3_from_zip_bytes(&source_path, &header, &zip_data).unwrap();
+
+        let error = PluginManager::new()
+            .install_plugin_from_kgpg(&source_path)
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("此插件要求 Kabegame >= 99.0.0"), "{error}");
+        assert!(!target_path.exists(), "不兼容插件不能留在插件目录");
+        let _ = fs::remove_file(source_path);
     }
 
     #[test]

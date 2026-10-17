@@ -5,6 +5,7 @@ import { IS_WEB } from "../env";
 import { storePluginCacheDb } from "../cache/storePluginCache";
 import { usePluginStore, type PluginManifestText } from "./plugins";
 import type { PluginLabel } from "./pluginLabels";
+import { isUpdateAvailable } from "../utils/version";
 
 /** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
 export const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
@@ -12,7 +13,9 @@ export const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
 export const OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME = "官方 GitHub Releases 源";
 
 /** 打开商店 tab 时后台重拉 index 的缓存最大年龄（与后端 `plugin_source_cache.updated_at` 比较，秒） */
-const STORE_INDEX_REVALIDATE_MAX_AGE_SECS = 24 * 60 * 60;
+const STORE_INDEX_REVALIDATE_MAX_AGE_SECS = 4 * 60 * 60;
+/** 启动刷新完成后，静默强制刷新所有商店源的周期 */
+const STORE_AUTO_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 export interface PluginSource {
   id: string;
@@ -43,6 +46,10 @@ export interface StorePluginResolved {
   minAppIncompatible?: boolean;
 }
 
+/** 商店条目能否作为「可更新」：要求当前应用版本满足 minAppVersion，且比已安装版本新。 */
+export const isStoreUpdateAvailable = (plugin: StorePluginResolved): boolean =>
+  !plugin.minAppIncompatible && isUpdateAvailable(plugin.installedVersion, plugin.version);
+
 /** 远程图标缓存 key：与本地已安装图标隔离，商店条目即使 id 相同也不命中本地 icon */
 export const storeIconKey = (sourceId: string, pluginId: string) => `store:${sourceId}:${pluginId}`;
 
@@ -63,7 +70,8 @@ const errorMessageOf = (e: unknown, fallback: string): string => {
 /**
  * 插件商店数据（商店源列表、各源插件列表、远程图标）的唯一属主。
  *
- * 生命周期：按需加载（`ensure*` 只在未加载时拉取）→ 保存在 store 里跨路由复用 →
+ * 生命周期：应用启动调用 `startRefreshPlugins`，先读缓存、再静默强制刷新，之后每 4h 自动刷新；
+ * 进入商店 tab 时仍以 4h 阈值兜底重拉。数据保存在 store 里跨路由复用，
  * `plugin-sources-changed` 事件被动刷新源列表。自身写操作完成后由调用方直接 `loadSources()`，
  * 不依赖事件回刷；重复刷新幂等。
  */
@@ -85,6 +93,7 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
   const loadInflight = new Map<string, Promise<void>>();
   const revalidateInflight = new Set<string>();
   let sourcesInflight: Promise<{ success: boolean; error?: string }> | null = null;
+  let startRefreshInflight: Promise<void> | null = null;
   let listenersInitialized = false;
 
   const installedVersionById = computed(() => {
@@ -104,6 +113,17 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
     }
     return out;
   });
+
+  const updatableInstalledIds = computed(() => {
+    const ids = new Set<string>();
+    for (const plugins of Object.values(pluginsBySource.value)) {
+      for (const plugin of plugins) {
+        if (isStoreUpdateAvailable(plugin)) ids.add(plugin.id);
+      }
+    }
+    return ids;
+  });
+  const updatableCount = computed(() => updatableInstalledIds.value.size);
 
   const storePlugins = (sourceId: string): StorePluginResolved[] => pluginsBySource.value[sourceId] || [];
 
@@ -313,17 +333,19 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
   };
 
   /**
-   * 静默后台：若后端 index 缓存超过 `STORE_INDEX_REVALIDATE_MAX_AGE_SECS` 则重拉；不碰 loading 状态，失败完全静默。
+   * 静默后台：默认在后端 index 缓存超过阈值时重拉；`force` 则忽略缓存强制拉远程。
+   * 不碰 loading 状态，失败完全静默。
    * @returns 列表是否发生了变化且此前已有内容（调用方据此决定是否提示「已自动更新」）
    */
-  const revalidateInBackground = async (sourceId: string): Promise<boolean> => {
+  const revalidateInBackground = async (sourceId: string, options: { force?: boolean } = {}): Promise<boolean> => {
+    const { force = false } = options;
     if (revalidateInflight.has(sourceId)) return false;
     revalidateInflight.add(sourceId);
     try {
       const prev = rawPluginsBySource.value[sourceId];
       const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", {
         sourceId,
-        forceRefresh: false,
+        forceRefresh: force,
         revalidateIfStaleAfterSecs: STORE_INDEX_REVALIDATE_MAX_AGE_SECS,
       });
       if (!plugins?.length) return false;
@@ -340,6 +362,28 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
     }
   };
 
+  /** 所有源静默强制刷新；不碰 loading，单个源失败不会中断其余源。 */
+  const refreshAllInBackground = () =>
+    Promise.allSettled(sources.value.map((source) => revalidateInBackground(source.id, { force: true })));
+
+  /** 启动商店刷新生命周期；重复调用复用同一个 Promise。 */
+  const startRefreshPlugins = (): Promise<void> => {
+    if (!startRefreshInflight) {
+      startRefreshInflight = (async () => {
+        const result = await ensureSources();
+        if (!result.success) return;
+
+        // 先用后端缓存把列表与角标填出来，再全平台静默强制拉一次远程。
+        await Promise.allSettled(sources.value.map((source) => ensureStorePlugins(source.id)));
+        await refreshAllInBackground();
+
+        // store 与应用同寿命；每轮读取当时的源列表，增删源后自然生效。
+        setInterval(() => void refreshAllInBackground(), STORE_AUTO_REFRESH_INTERVAL_MS);
+      })();
+    }
+    return startRefreshInflight;
+  };
+
   return {
     sources,
     sourcesLoaded,
@@ -347,6 +391,8 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
     settledBySource,
     loadingBySource,
     pluginsBySource,
+    updatableInstalledIds,
+    updatableCount,
     pluginIcons,
     pluginIconLoading,
     storePlugins,
@@ -355,6 +401,7 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
     loadStorePlugins,
     ensureStorePlugins,
     revalidateInBackground,
+    startRefreshPlugins,
     forgetSource,
   };
 });

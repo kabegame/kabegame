@@ -130,7 +130,7 @@ struct Foo {
 }
 ```
 ````
-对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行 [changlog](versions/latest/changelog.md)
+对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行或几行 [changlog](versions/latest/changelog.md)
 
 对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，总插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本，所以changelog.md要比较才知道顶部版本是最新还是需要新加一节，注意不要改 version，改了之后commit 会打新tag。
 

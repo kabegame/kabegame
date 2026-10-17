@@ -132,8 +132,8 @@
   - 适用场景：给插件补配图；排查文档或更新日志图片「加载失败」、打包报「引用了未在 kbAssets 声明的本地资源」、单文件超 2MB 打包失败、残留 `kbDocAssets` 打包报错；改归一化规则；排查快捷预览面板不弹出或走马灯无图。
 
 - [plugins/PLUGIN_STORE_CACHE.md](plugins/PLUGIN_STORE_CACHE.md)
-  - 主题：插件商店缓存机制与更新策略；前端 `usePluginMarketStore`「按需加载 → store 保存 → `plugin-sources-changed` 事件刷新」生命周期、`installedVersion` 读取时现算，以及插件页 `?tab=store:<sourceId>` 导航参数（详情返回恢复商店 tab）。
-  - 适用场景：插件列表更新延迟、缓存失效与命中行为分析；排查从插件详情返回后 tab 丢失或商店列表重拉、源增删后 tab 未刷新、商店卡片已安装状态不同步。
+  - 主题：插件商店缓存机制与更新策略；前端 `usePluginMarketStore` 通过 `startRefreshPlugins` 在启动时先读缓存、再静默强制刷新并每 4h 自动刷新，进入 tab 以 4h 阈值兜底；`installedVersion` 读取时现算，兼容性过滤后的可更新集合驱动桌面/紧凑导航角标、卡片红点与快捷预览；后端安装入口校验最低应用版本；以及插件页 `?tab=store:<sourceId>` 导航参数（详情返回恢复商店 tab）。
+  - 适用场景：插件列表或导航更新角标延迟、缓存失效与命中行为分析；排查不兼容版本仍提示或被导入、从插件详情返回后 tab 丢失或商店列表重拉、源增删后 tab 未刷新、商店卡片已安装状态不同步。
 
 - [plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md](plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md)
   - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → `get_plugin_template` 加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`）。
