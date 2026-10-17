@@ -755,6 +755,11 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
+const isButtonLike = (target: EventTarget | null) => {
+  const el = target as HTMLElement | null;
+  return !!el?.closest?.('button, [role="button"]');
+};
+
 /**
  * 紧凑模式 PhotoSwipe：三项滑动窗口 `[prev, current, next]`，内容由上层按 id 实时算出。
  * 页边界或视图外时不足三项，所以**当前位不恒为 1**，必须显式算（见 pswpCurrentIndex）。
@@ -1100,6 +1105,31 @@ const handlePreviewReady = () => {
   });
 };
 
+const consumePreviewShortcut = (event: KeyboardEvent) => {
+  event.preventDefault();
+  event.stopPropagation();
+};
+
+const togglePreviewVideoPlayback = () => {
+  const video = previewVideoEl.value;
+  if (!video) return;
+  if (video.paused || video.ended) {
+    void video.play().catch(() => {
+      // 播放可能因媒体尚未就绪或平台策略被拒绝，保持当前暂停态即可。
+    });
+  } else {
+    video.pause();
+  }
+};
+
+const seekPreviewVideoBy = (seconds: number) => {
+  const video = previewVideoEl.value;
+  if (!video) return;
+  const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  const maxTime = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+  video.currentTime = Math.min(maxTime, Math.max(0, currentTime + seconds));
+};
+
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (!previewVisible.value) return;
   const target = event.target as HTMLInputElement | null;
@@ -1114,6 +1144,28 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
       (event as any).stopImmediatePropagation();
     }
     emit("contextCommand", { command: "copy", image: previewImage.value });
+    return;
+  }
+  const isBareSpace =
+    (event.code === "Space" || event.key === " ") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey;
+  if (isPreviewVideo.value && isBareSpace && !isButtonLike(event.target)) {
+    consumePreviewShortcut(event);
+    if (!event.repeat) togglePreviewVideoPlayback();
+    return;
+  }
+  const isVideoSeekShortcut =
+    isPreviewVideo.value &&
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    (event.key === "ArrowLeft" || event.key === "ArrowRight");
+  if (isVideoSeekShortcut) {
+    consumePreviewShortcut(event);
+    seekPreviewVideoBy(event.key === "ArrowLeft" ? -5 : 5);
     return;
   }
   if (event.key === "ArrowLeft") {

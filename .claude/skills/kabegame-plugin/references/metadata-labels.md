@@ -1,6 +1,6 @@
 # metadata、labels 与 description.ejs
 
-完整范例：`src-crawler-plugins/plugins/e-shuushuu/`（`src/index.ts` 的 `buildMetadata` /
+完整范例：`src-crawler-plugins/plugins/kabegame-plugin-e-shuushuu/`（`src/index.ts` 的 `buildMetadata` /
 `labelsFromTags`，以及 `templates/description.ejs`）。更复杂的参考：danbooru、pixiv。
 权威来源：`packages/kabegame-types/lib.kabegame.d.ts`（`KabegameDownloadImageOptions` /
 `KabegameLabelInput`）、`cocs/gallery/LABEL_ALBUMS.md`、`cocs/plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md`。

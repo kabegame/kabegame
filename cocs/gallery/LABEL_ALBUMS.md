@@ -76,13 +76,13 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
    metadata 行的所有图片，详见 [../crawler/METADATA_MIGRATION.md](../crawler/METADATA_MIGRATION.md)。
 4. **用户手动**：画册页新建标签/标签目录、拖入文件到标签叶子、预览面板添加 / 新建标签。
 
-样例：`src-crawler-plugins/plugins/anime-pictures` 把作品 / 角色 / 画师 / 参考 / 物体 tag 映射为
+样例：`src-crawler-plugins/plugins/kabegame-plugin-anime-pictures` 把作品 / 角色 / 画师 / 参考 / 物体 tag 映射为
 `anime-pictures/{copyright,character,artist,reference,object}` 下的标签（下载与 `provideLabels` 各一份同规则实现）。
-`src-crawler-plugins/plugins/pixiv` 把作品 tag 映射到 `pixiv/tag`：作品详情固定请求 `lang=en`，英文翻译
+`src-crawler-plugins/plugins/kabegame-plugin-pixiv` 把作品 tag 映射到 `pixiv/tag`：作品详情固定请求 `lang=en`，英文翻译
 优先派生 ASCII key；无翻译时把假名转成罗马字、长音符转成 `-`，仅将其余非 ASCII 字符确定性编码为
 `u-...`。Pixiv 默认原始名（通常为日语）优先作为显示名，缺失时才回落英文与 key。作者映射到
 `pixiv/artist`，以 UID 作稳定 key、用户名作显示名。
-`src-crawler-plugins/plugins/pixai` 把作品 tack 映射到 `pixai/tag`（优先用 codeName 归一化派生 key，
+`src-crawler-plugins/plugins/kabegame-plugin-pixai` 把作品 tack 映射到 `pixai/tag`（优先用 codeName 归一化派生 key，
 无法派生时回退到 tack id），作者映射到 `pixai/artist`，以作者 id 作稳定 key、显示名或用户名作名称。
 
 ## 搜索
@@ -114,7 +114,9 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
   （子目录把 `roots` 换成 `parent/<id>`；只选目录时单写 `album_kind/label_dir`，默认按创建时间排序）；
   目录计数取 `…/~~/children/<同一类型段>` 的 `child_count`（同类型过滤下的直接子画册数），标签叶子计数取
   `…/~~/images` 的 `image_count`（与 `images://gallery/[hide/]album/<id>` 同口径），两者都在 `~~` 边界之后
-  按画册 `GROUP BY`，没有行即 0。隐藏口径用 `…/~~/images/hide`。搜索时树形不变：每层查询与
+  按画册 `GROUP BY`，没有行即 0；标签目录在 `~~/images` 里不出行（provider 在 join 前用 `ON` 排除，
+  否则标签根页的子树覆盖整片森林、要 join 上百万成员行）。隐藏口径用 `…/~~/images/hide`。
+  行与 `child_count` 一起返回即渲染，`image_count` 单独到达后按 key 补进行里（刷新时先沿用旧计数）。搜索时树形不变：每层查询与
   `~~/children` 都叠加 `search/<q>`（自身或子孙的名称 / 标签路径命中才保留，命中项的祖先一路保留），
   不自动展开；重载按 key diff，用户的展开态按 key 记忆，清空搜索后恢复。
 - `AlbumTreePanel.vue` 包装同一棵查询树并提供 DnD；只允许同森林移动且拒绝把节点放到标签叶子下。

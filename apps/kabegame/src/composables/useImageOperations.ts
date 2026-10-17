@@ -380,7 +380,7 @@ export function useImageOperations(
         // 1. 找到下一个可用的"桌面画册x"名称
         let counter = 1;
         let albumName = i18n.global.t("gallery.desktopAlbumName", { n: counter });
-        while ((await searchAlbums(albumName, 1, "", ["normal"])).some((album) => album.name === albumName)) {
+        while ((await searchAlbums(albumName, 1, ["normal"])).some((album) => album.name === albumName)) {
           counter++;
           albumName = i18n.global.t("gallery.desktopAlbumName", { n: counter });
         }

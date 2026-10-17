@@ -1,5 +1,30 @@
 # v4.5.2 regression
 
+## 插件商店启动刷新、可更新导航角标与最低版本安装守卫
+
+应用加载已安装插件后，商店 store 会先从后端 index 缓存恢复所有源，再在全平台静默强制刷新一次，之后每 4 小时继续强制刷新；进入商店 tab 的兜底重拉阈值也同步为 4 小时。可更新插件按 id 去重，并统一排除 `minAppIncompatible` 条目；桌面侧栏与紧凑端底部 tab 的「插件」图标通过通用 `v-corner-badge` 显示数量。后端在 `.kgpg` 复制进插件目录前校验 `min_app_version`，商店安装、文件导入和拖入导入共用守卫。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 启动缓存与静默刷新 | 桌面 CEF / Web | 启动后不进入插件页，观察商店请求与插件导航图标 | 先显示缓存计算出的角标；每个源随后静默强制刷新一次，期间不出现商店骨架屏 | 桌面 dev：停在画廊页，官方源与虚拟源均已加载，虚拟源 index 被请求（缓存缺失 + 强制刷新）；停在虚拟源 tab 重载、index 延迟 4s，7s 内 67 次采样骨架屏 0 次、`loadingBySource` 始终为假，卡片首帧即由缓存显示；Web 未测 |
+| [x] | 4h 周期与 tab 兜底 | 桌面 CEF / Web | 保持应用运行超过 4h，再进入一个商店 tab | 周期刷新按时强制拉取；进入 tab 只在 index 至少 4h 未更新时兜底联网 | 周期临时改为 1 分钟验证：启动刷新后约 64s 定时器再次请求，期间无操作，index 换成含兼容更新的版本后角标自动 0→1；随后进入商店 tab 无额外请求（缓存未满 4h）；Web 未测 |
+| [x] | 桌面与紧凑导航角标 | 桌面侧栏 / 窄窗口或 Android | 准备多个已安装低版本插件，其中一个商店版本不兼容 | 仅「插件」图标显示去重后的兼容更新数；不兼容条目不计入，亮/暗主题和折叠侧栏下不裁切 | 桌面侧栏：虚拟源 nekos-moe 0.1.2 计入、konachan 99.0.0（要求 >=99.0.0）不计入，显示 1，选中态不裁切；应用无暗色模式；紧凑端（仅 Android / 窄 web）未测 |
+| [x] | 更新状态统一 | 插件页 | 对同一插件检查商店卡片、已安装卡片、快捷预览并完成更新 | 三处只对兼容新版本提示；更新完成后红点与导航数量立即减少或消失 | 商店卡片与已安装卡片：仅 nekos-moe 有红点；两处快捷预览 nekos-moe 显示「可更新至 0.1.2」、konachan 无更新提示；更新 nekos-moe 后导航角标立即消失 |
+| [x] | 不兼容包安装守卫 | 商店 / 文件导入 / 拖入 | 尝试安装 `engines.kabegame: ">= 99.0.0"` 的 `.kgpg` | 返回「此插件要求 Kabegame >= 99.0.0」，插件目录不留下该文件 | 详情页「更新」按钮禁用并提示版本；`install_from_store` 与 `import_plugin_from_zip`（拖入同入口）均被拒，盘上 konachan 仍为 1.7.3 |
+| [x] | 后端单测 | `test-kabegame` | 运行 `kabegame-core --lib install_plugin_rejects_incompatible_min_app_version_before_copy` | 新增测试通过，且断言插件目录无目标文件 | 1 passed / 0 failed |
+| [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 零错误 | 退出码 0；vue-tsc / cargo 均 0 error |
+
+## 桌面端视频预览键盘快捷键
+
+视频预览复用已有的 `<video>` 元素执行播放、暂停与 seek：空格键切换播放状态，`Command/Ctrl + ←/→` 将进度限制在媒体起止范围内并移动 5 秒。快捷键只在视频预览中拦截，普通图片的左右切图行为不变；输入框与可编辑区域仍不接管全局快捷键。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 播放 / 暂停 | 桌面 CEF | 打开一个视频预览，连续按两次空格 | 第一次暂停，第二次从原进度继续播放；长按不会因按键重复事件连续反转 | macOS CEF dev 实测：暂停后 1s 进度保持 0.141s，续播 1s 后到 1.411s；`repeat` 事件未反转状态 |
+| [x] | 快退 / 快进 | macOS / Windows / Linux | 在播放中分别按 `Command/Ctrl + ←` 和 `Command/Ctrl + →` | 当前进度分别减少 / 增加 5 秒，控制条时间同步更新，不切换前后媒体 | macOS CEF dev 实测 `Command + ←` 6s → 1s、`Ctrl + →` 1s → 6s，标题未变 |
+| [x] | 起止边界 | 桌面 CEF | 在开头 5 秒内快退，在末尾 5 秒内快进 | 进度分别停在 0 和视频时长，不报错 | macOS CEF dev 实测 2s 快退到 0，9s 快进到 10.041667s 总时长 |
+| [x] | 原有快捷键 | 桌面 CEF | 预览普通图片时按 `←/→`；在详情输入控件中输入空格 | 图片仍正常切换；输入时不触发视频播放或 seek | macOS CEF dev 实测普通图片 `→` 切到下一张；输入元素上的空格事件未被拦截、视频继续播放 |
+
 ## 文件夹画册切换同步模式后子画册状态实时刷新
 
 把文件夹画册切到递归同步（或从递归切走）时，后端会在同一事务里把子树规整为「同步委托」/「不同步」，并逐个发 `album-changed { syncMode }`；但前端 `dataChangeHub` 只放行 `name` / `parentId` / `labelKey` / `albumType` 四个结构字段，`syncMode` 事件被整条丢弃，画册树里已展开的子画册图标停在旧状态（被操作的画册本身只是碰巧经同步的成员变更事件刷新）。现在 `syncMode` 作为行展示字段放行，只写入 `albumIds` 与 `albumPaths`，不进 `albumStructure`，避免画廊网格与过滤树跟着重查；后端 `normalize_local_folder_sync_modes` 同时返回各画册的 `ancestor_path`，`syncMode` 事件统一经 `emit_sync_mode_changes` 携带 `ancestorPath`，树只重拉变更画册所在目录，不再走通配整树刷新。`folderStatus` 事件同样未被放行，但它每次同步都会发且无路径，本次不纳入。
@@ -209,7 +234,7 @@ JavaScript / TypeScript 脚本扩展与来源元数据保留；脚本扩展说�
 
 ## 新增 Safebooru 收集源插件
 
-新增插件 `safebooru`（1.0.0，`src-crawler-plugins/plugins/safebooru/`）。帖子列表走站点匿名可用的 dapi JSON：
+新增插件 `safebooru`（1.0.0，`src-crawler-plugins/plugins/kabegame-plugin-safebooru/`）。帖子列表走站点匿名可用的 dapi JSON：
 请求带 `fields=tag_info`，一页一个请求就拿到带分类的全量标签。同参数再取一次 XML，按 id 合并发布时间
 （JSON 没有这个字段；XML 的 rating 是旧单字母，不采用）。有评论的帖子按 10 条一页翻详情页取评论
 （dapi 评论接口的时间是假的）。id 范围模式用 `id:>=A id:<=B sort:id:asc`，每页 100 条，按 id 升序抓完闭区间，两端最多相差 5000
@@ -238,7 +263,7 @@ JavaScript / TypeScript 脚本扩展与来源元数据保留；脚本扩展说�
 
 ## 新增 nekos.moe 收集源插件
 
-新增插件 `nekos-moe`（0.1.0，`src-crawler-plugins/plugins/nekos-moe/`，V8）。数据走开源后端的
+新增插件 `nekos-moe`（0.1.0，`src-crawler-plugins/plugins/kabegame-plugin-nekos-moe/`，V8）。数据走开源后端的
 `POST /api/v1/images/search`：排序支持 newest / likes / oldest（`relevance` 不带 tags 时等同自然顺序，不提供），
 NSFW 支持仅全年龄 / 仅 NSFW / 全部（全部时不传 `nsfw`），每页 1–50（超过 50 服务端会回落成 20）。
 服务端 `skip` 上限 2500，越界的页码在发请求前截断或报 warn；站点现存 792 张（SFW 471 / NSFW 321），不会碰到上限。
@@ -258,7 +283,7 @@ NSFW 支持仅全年龄 / 仅 NSFW / 全部（全部时不传 `nsfw`），每页
 
 ## 新增 AIBooru 收集源插件
 
-新增插件 `aibooru`（1.0.0，`src-crawler-plugins/plugins/aibooru/`）。AIBooru 是 Danbooru 的分支，专收 AI 生成图。
+新增插件 `aibooru`（1.0.0，`src-crawler-plugins/plugins/kabegame-plugin-aibooru/`）。AIBooru 是 Danbooru 的分支，专收 AI 生成图。
 和 danbooru 插件解析 HTML 不同，这里全程走 JSON API：列表接口用 `only=` 把上传者、审核者、AI 生成参数、作者评论和评论
 一次带回，每页一个请求拿齐详情页信息；标签帖数另查 `/tags.json`（`name_array` 按 URL 长度切块，任务内缓存）。
 网页先分页再隐藏已删除作品，插件同样在分页后过滤，保证与网页同页一致。标签多一个 `model` 分类（分类号 6），
@@ -331,7 +356,7 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 
 ## 新增微博收集源插件
 
-新增插件 `weibo`（0.1.0，`src-crawler-plugins/plugins/weibo/`，V8）。全部模式依赖畅游里 `weibo.com` 的登录态
+新增插件 `weibo`（0.1.0，`src-crawler-plugins/plugins/kabegame-plugin-weibo/`，V8）。全部模式依赖畅游里 `weibo.com` 的登录态
 （`requireCookie("weibo.com")`；未登录时时间线 403、m 站 432、搜索跳登录页，所以不走访客 Cookie，也不用 m 站）。
 五种模式各自产出微博，统一交给 `processPost`：用户相册走 `ajax/profile/getImageWall`（`since_id` 游标，按 mid 分组后逐条
 `statuses/show`），用户微博走 `ajax/statuses/mymblog`（`feature` 0/1/2 = 全部/原创/图片，转发可选收原帖），超话走
@@ -362,7 +387,7 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 
 ## 新增 X（Twitter）媒体收集源插件（画师媒体 / 搜索 / 单条推文 / 书签 / 点赞）
 
-新增插件 `x-webview`（0.1.0，`src-crawler-plugins/plugins/x-webview/`，WebView）。不自己调 GraphQL（请求要带页面 JS 算的
+新增插件 `x-webview`（0.1.0，`src-crawler-plugins/plugins/kabegame-plugin-x-webview/`，WebView）。不自己调 GraphQL（请求要带页面 JS 算的
 `x-client-transaction-id`，queryId 也会轮换）：`crawl.js` 顶层在 document-start 同步 hook `XMLHttpRequest.prototype.open`，
 截获页面滚动时自己发出的时间线响应，思路参考 prinsss/twitter-web-exporter。2026-10 实测旧 `UserMedia` 已退役，主页「媒体」标签
 带「图片 / 视频」下拉：`/<user>/media?filter=photo` → `UserPhotoTimeline`（首屏 `profile-photo-grid-0` 模块，后续页
@@ -576,3 +601,80 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [x] | 左右对称 | Android dev | 打开任一子画册 | 页头、面包屑、chip 行左右边缘均为 20 / 340（360 宽视口），与画廊一致 | 已实测并截图 |
 | [ ] | 未选画册 | Android | 进入画册页未选中任何画册 | 页头与内容左缘对齐，无面包屑 | 未覆盖 |
 | [ ] | 桌面三栏不受影响 | 桌面 CEF | 宽屏打开画册页、开关信息面板 | 树列仍贴左缘，页头仍缩进 20px | `isCompact` 为 false 时样式未变，未单独复测 |
+
+## 插件 SDK 与类型发布 npm，CLI 模板改用 npm 版本（`src-tauri/kabegame-cli/template/package.json`）
+
+`@kabegame/types` 与 `@kabegame/plugin-sdk` 发布到 npm（scope `@kabegame`），两包改为 MIT 许可并补 LICENSE / README / 仓库元数据；SDK 对 types 的依赖由 `file:` 改为 `devDependencies`（发布的 `.d.ts` 不引用 types 全局）。`kabegame-cli plugin new` 新增模板变量 `kabegame-version`（取 CLI 的 `CARGO_PKG_VERSION`），V8 模板的两个依赖渲染为 `^<CLI 版本>`。仓库内插件仍用 `file:../../../packages/…`，`kabegame-plugin` skill 改为要求用 `plugin new` 生成后改回 `file:`。文档站「打包与发布」「plugin-sdk 工具库」「概览」去掉「未发布到 npm」的说明。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 模板渲染 | cargo test | `test_template_package_json_uses_cli_version` | v8 模板渲染为合法 JSON，两依赖均为 `^<CLI 版本>` | |
+| [ ] | 仓库外生成并构建 | 任意目录 | `kabegame-cli plugin new demo && cd demo && npm install && npm run build` | 从 npm 装到 SDK 与 types，产出 `dist/main.js`，`plugin pack` 成功 | 需对应版本已发布 |
+| [x] | 发布内容 | 本地 | 两包 `npm pack --dry-run` | types 只含 `.d.ts`、README、LICENSE；SDK 只含 `dist`、README、LICENSE | 已运行 |
+| [ ] | npm 页面许可证 | npmjs.com | 发布新版本后查看两包 | 显示 MIT 与 README | 已发布的 4.5.1 仍为 GPL，需新版本 |
+
+## 插件包名 `kabegame-plugin-<id>`，应用剥离前缀作插件 id（`kabegame-core/src/plugin/mod.rs`、`kabegame-cli`、`src-crawler-plugins/`）
+
+`package.json.name` 与插件 id 分开：`kabegame_core::plugin::plugin_id_from_package_name` 剥离可选前缀 `kabegame-plugin-`（剥完为空则不剥），`resolve_kgpg_plugin_id` 的 `name` 来源与 manifest 显示名回退都经它；显式 `--id` 与文件名 stem 不剥离。`kabegame-cli plugin new <id>` 生成 `kabegame-plugin-<id>/`、模板 `name` 加前缀、`engines.kabegame` 改 `>=4.5.2`；`plugin pack` 改为「目录名 = name、输出 stem = 剥离后 id」，目录名先 canonicalize（修 `--plugin-dir .`）。插件仓库 32 个目录 `git mv` 为 `plugins/kabegame-plugin-<id>/`，`name` 同步、`engines.kabegame` 统一 `>=4.5.2`（旧版应用不剥离前缀）；`package-plugin.ts`、`generate-index.ts`、repack / run driver 按 id 输出 `<id>.kgpg` 与索引条目，参数接受 id 或目录名。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | core 单测 | cargo test | `kabegame-core --lib prefix` | 前缀剥离、`resolve_kgpg_plugin_id`（含撞内建 id 拒绝）、显示名回退 3 个新测试通过 | `plugin::` 全部 92 个通过 |
+| [x] | CLI 单测 | cargo test | `kabegame-cli` 全部 | 模板 `name` 为 `kabegame-plugin-my-plugin`；带前缀目录打出 `<id>.kgpg`，输出 stem 用包名被拒，`<dir>/.` 也能识别目录名 | 27 个通过 |
+| [x] | plugin new / pack | 本地 debug CLI | `plugin new demo`、`plugin new kabegame-plugin-demo2`，进目录 `plugin pack --plugin-dir . --output ../demo.kgpg` 与 `--output ../kabegame-plugin-demo.kgpg` | 目录分别为 `kabegame-plugin-demo` / `kabegame-plugin-demo2`（不重复加前缀）；前者成功，后者报 P3-7 | 已实测 |
+| [x] | 全量打包 | 本地 debug CLI | `KABEGAME_CLI=target/debug/kabegame-cli deno run -A package-plugin.ts --out-dir <临时目录>` | 32 个全部成功，产物文件名均为无前缀 `<id>.kgpg` | 已实测；未覆盖仓库内已跟踪的 `packed/` |
+| [x] | 索引生成 | 临时目录 | 软链 plugins 后跑 `generate-index.ts --tag v4.5.2` | 32 条，`id` / `name` / `downloadUrl` 均无前缀，`minAppVersion` 为 `4.5.2` | 已实测 |
+| [x] | 临时运行识别 id | 本地 debug CLI | `plugin run <临时目录>/konachan.kgpg --dry-run --via local` | 显示「插件 konachan」，读取原 id 的默认配置 | 已实测 |
+| [ ] | 已安装用户升级 | 桌面 dev | 已装旧包的情况下，装新打的 `wallhaven.kgpg` | 识别为同一插件（覆盖更新），已有图片、插件数据目录不变，不会出现 `kabegame-plugin-wallhaven` | 未覆盖 |
+| [ ] | 旧版应用 | 4.5.1 应用 | 商店看新索引 | 插件显示「版本不兼容」，不会装出重复插件 | 未覆盖，需发版后验证 |
+| [ ] | release CLI | `target/release` | 重建 release CLI 后 `deno task --cwd src-crawler-plugins package` | 打包成功；旧 release CLI 会因输出 stem ≠ name 报 P3-7 | 本机 release CLI 为改动前版本，未重建 |
+
+## 画册选择器 / 画册树打开慢：图片计数不挡渲染，标签目录不参与子树 join（`albums_images_provider.yaml`、`services/albums.ts`、`AlbumTreeView.vue`）
+
+prod 库（标签画册 52,915 个，挂在标签上的 `album_images` 1,218,972 行）打开 `AlbumPicker` 要等 2 秒多。用 `KABEGAME_SQL_DEBUG=1 kabegame-cli pathql query` 逐条跑打开时的查询，其它都在 30ms 内，只有标签根页的 `albums://roots/~any/album_kind/label/~or/album_kind/label_dir/~end/x500x/1/~~/images` 要 2262ms：17 个标签根里 16 个是 `label_dir`，子树覆盖整片标签森林，要把约 122 万成员行 join 一遍；而 `label_dir` 的 `image_count` 前端根本不用（显示的是 `child_count`）。又因为 `fetchPageWithCounts` 用 `Promise.all` 等三条查询，`useTreeModel.reload` 再等所有分区，整棵树都陪这一条一起等。
+
+改动：`albums_images_provider` 在 tree join 的 `ON` 里加 `albums.type <> 'label_dir'`（放外层 `WHERE` 会让规划器改成全表扫 `album_images`，实测反而 1.0s），标签目录不再出计数行；前端 `fetchAlbumPage` 只等行与 `~~/children`，`image_count` 经 `AlbumPage.imageCounts` 单独到达，`AlbumTreeView` 按 key 补进句柄（`AlbumNode.count` 为 `null` 时不显示数字，刷新时先沿用旧计数）；系统画册计数同样后补；`searchAlbums` 只用于查重名，改为只取行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 慢 SQL 定位 | prod 库 + release CLI | 逐条跑选择器打开时的 `albums://` 查询 | 仅标签根页 `~~/images` 秒级 | 2262ms，其余 ≤ 26ms |
+| [x] | 新 SQL 耗时 | prod 库 sqlite3 只读 | 原 SQL 与 `ON` 加 `albums.type <> 'label_dir'` 对比 | 结果中 `label` 叶子计数不变，耗时降到几十毫秒 | 1.2–2.3s → 30ms（冷缓存 128ms）；执行计划仍走 `idx_albums_ancestor_path` |
+| [x] | 计数口径 e2e | cargo test | `kabegame-core --test dsl_e2e album`、`count_without_top_order` | 叶子 / 普通画册计数与 images:// 一致；`label_dir` 不出计数行 | 10 个通过 |
+| [x] | 前端类型 | 仓库 | `deno task check -c kabegame --skip cargo` | vue-tsc 无错误 | 已运行 |
+| [x] | 选择器首屏 | 桌面 dev（prod 数据，55,886 张） | 画廊右键图片 →「加入画册」→ 点开选择器，逐帧计时 | 各分区行立即出现，图片计数随后补上；标签目录显示子画册数 | 点击到首行 328ms，同帧计数全部到齐（标签根页 `~~/images` 已不再秒级）；e-shuushuu / konachan 等目录显示子画册数 |
+| [x] | 计数后补 | 桌面 dev（prod 数据） | 画册页侧栏展开 konachan → general（436 个标签叶子） | 叶子行先出现、计数为空，随后补齐且数值正确 | 84ms 出行、926ms 计数补齐；抽查 glasses / gray hair / bikini 与 sqlite 按隐藏口径直算一致（773 / 4302 / 1387） |
+| [x] | 计数后补不串号（数据变化） | 桌面 dev（prod 数据） | 画册页展开 konachan → general，依次跑 kabegame-server（1 页 20 张）与 konachan 任务（6 新增、143 去重），debug ingest 记录每页行与计数到达 | 计数先保持旧值再更新，不闪空、不被旧查询覆盖 | 约 4 分钟内 67 次刷新、292 页：刷新页空计数 0 行（仅首次加载与 1 个新建标签为空）；98 次计数乱序到达，163 行按句柄身份跳过，跳过值无一成为最终显示值；任务停止后 general 437 个叶子 + konachan 6 个目录与 sqlite 直算全部一致。插桩已删除 |
+| [x] | 隐藏口径 | 桌面 dev（prod 数据） | 展开 465 行的画册树，切换 `globalPathRoute.hide`（等同工具箱开关）开 → 关 → 开，逐帧检查 | 普通画册 / 标签叶子计数按 `~~/images/hide` 变化，标签目录不受影响，重载期间不闪空 | gray hair 4302 ⇄ 4313、bikini 1387 ⇄ 1390，与 sqlite 两种口径一致；general 恒为 436；约 420 帧内空计数 0 行、行数不减；已恢复为开启 |
+| [ ] | 画册页右键菜单计数 | 桌面 | 计数还没到时右键画册 | `albumImageCount` 按 0 处理，不报错 | `Albums.vue` 已 `?? 0` |
+| [x] | 选择器无分割线 | 桌面 | 打开「加入画册」的 `AlbumPicker` 下拉；再看画册页侧栏 | 分区之间不再画分割横线，「标签」分区标题仍在；侧栏画册树照旧显示分割线 | 选择器内 `.kb-tree-panel__separator` 0 个、侧栏 3 个，截图确认 |
+| [ ] | 选择器无分割线（Android） | Android | 打开 `AlbumPicker` 全屏选择页 | 同上 | 未覆盖 |
+| [x] | 选择器内标签目录可展开 | 桌面 dev | 「加入画册」选择器里点 konachan 目录行，再点 general，再点叶子 glasses | 目录行点击只展开不选中、弹层不关；叶子可选中并关闭弹层 | 6 处选择器（加入画册、本地导入、网页收集、收集输出、自动任务、轮播目标）由 `is-selectable` 禁用目录改为 `expand-label-dirs`；实测加入画册一处，选中后关闭对话框未提交 |
+
+## 任务抽屉：运行中任务禁止删除，任务数改为搜索（`TaskDrawerContent.vue`、`TaskDrawer.vue`、`TaskContextMenu.vue`）
+
+任务卡片右上角的删除按钮与右键「删除任务」在 `running` / `waiting_downloads` 时禁用，提示先停止；`handleDeleteTaskById` 同样拦截，抽屉不再走「停止并删除」（任务详情页的删除不变）。任务列表顶部「共 N 个任务」换成搜索框，按插件 id 与当前语言插件名做不区分大小写的子串过滤（任务启动时已经全量加载，纯前端过滤），无结果时显示空状态，搜索词变化时列表滚回顶部；面板标题右侧仍显示总任务数。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型 | 仓库 | `deno task check -c kabegame --skip cargo` | vue-tsc 无错误 | 已运行 |
+| [x] | 运行中禁删 | 桌面 dev（CDP） | 启动 konachan 任务，点其卡片右上角删除按钮、右键「删除任务」；再停止任务 | 按钮半透明禁用、悬停提示需先停止，点击不弹确认；右键「删除任务」置灰，点击无反应；停止（canceled）后两者恢复可用 | 已实测；补了 `.close-btn.is-disabled` 样式，原自定义样式会盖住禁用态 |
+| [ ] | 等待下载收尾 | 桌面 | 任务进入 `waiting_downloads` | 同上，仍不可删除 | 未覆盖 |
+| [x] | 搜索 | 桌面 dev（145 个任务） | 依次输入 `kona`、`动漫壁纸`、`KABEGAME`、`Server`、`zzz-none`，再清空 | 列表只剩匹配任务（`Server` 经 id `kabegame-server` 命中）；无匹配显示「没有匹配的任务」；清空恢复全部 | 已实测；Android 未覆盖 |
+| [x] | 深滚动后搜索 | 桌面 dev | 列表滚到 scrollTop 5000 后输入 `KABEGAME` | 回到顶部并显示 3 条结果，不出现空白列表 | 修复前整列空白（沿用旧 scrollTop），已加 `scrollTo(0)` 并复测 |
+| [ ] | 搜索中清除所有 | 桌面 | 搜索状态下点「清除所有任务」 | 仍按全部已结束任务清除（与搜索无关），计数文字不变 | 未覆盖 |
+
+## 任务抽屉：停止叉号改为下方小确认框（`TaskDrawerContent.vue`、`TaskDrawer.vue`）
+
+进度条旁的停止叉号包进 `el-popconfirm`（`placement="bottom-end"`，文案 `tasks.drawerStopConfirm`「停止任务？」，确认按钮 danger），确认后才 emit `cancel-task`；`TaskDrawer` 把抽屉的 `cancel-task` 接到不弹窗的 `handleStopTaskById`，右键菜单「停止任务」仍走带 `ElMessageBox` 的 `handleCancelTaskById`。各行确认框由 `stopConfirmTaskId` 受控，同一时刻最多开一个，并经 `useModalBack` 接入 Android 返回栈。placement 不能用居中的 `bottom`：叉号贴着抽屉右缘，居中会右溢出，popper flip 的横轴检查随之否掉 bottom / top，小框被翻到左侧盖住卡片。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型 | 仓库 | `deno task check -c kabegame --skip cargo` | vue-tsc 无错误 | 已运行 |
+| [x] | 叉号小确认框 | 桌面 dev（CDP） | 启动两个 konachan 任务，点第一个任务进度条旁叉号 | 叉号正下方弹出「停止任务？」小框，含「取消 / 确认」，无居中对话框 | 已实测：`bottom-end`，小框顶 609.5 = 叉号底 597 + 12，右缘与叉号对齐；首版用 `bottom` 时被翻到左侧，已修复并复测 |
+| [x] | 靠近视口底部 | 桌面 dev | 点第二个任务的叉号（底部 763px） | 下方放不下时翻到叉号上方 | 已实测 |
+| [x] | 单开 | 桌面 dev | 第一个框开着时点第二个叉号 | 只保留后点的那个小框 | 已实测，可见小框恒为 1 |
+| [x] | 取消 / 点框外 | 桌面 dev | 小框内点「取消」；重开后点抽屉内其它区域 | 只关闭小框，任务仍 running，抽屉保持打开 | 已实测 |
+| [x] | 确认 | 桌面 dev | 小框内点「确认」 | 任务转 canceled，不弹居中对话框 | 已实测 |
+| [x] | 任务结束时框还开着 | 桌面 dev | 打开小框后等任务自然完成 | 叉号随进度条状态消失，小框一并关闭，不残留 | 已实测：两个 konachan 任务跑完后可见小框为 0 |
+| [x] | 右键「停止任务」 | 桌面 dev | 右键运行中任务 →「停止任务」 | 仍弹出居中确认对话框，确认后停止 | 已实测 |
+| [ ] | Android 返回键 | Android | 打开小框后按返回键 | 只关闭小框，抽屉保持打开 | 未覆盖 |

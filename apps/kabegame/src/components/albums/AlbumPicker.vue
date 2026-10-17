@@ -53,6 +53,7 @@
         :scope="scope"
         :is-selectable="isSelectable"
         :expand-label-dirs="expandLabelDirs"
+        :separators="false"
         @select="choose"
       />
     </div>
@@ -111,6 +112,7 @@
             :scope="scope"
             :is-selectable="isSelectable"
             :expand-label-dirs="expandLabelDirs"
+            :separators="false"
             @select="choose"
           />
         </div>

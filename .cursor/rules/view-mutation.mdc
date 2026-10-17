@@ -34,7 +34,7 @@ alwaysApply: false
 - 计数由 PathQL 路径表达，不新增 SQL 视图、计数列或专用计数命令：目录页一次三路 fetch——
   `albums://<过滤段>/x<N>x/<页>` 取这一页的画册行（默认按创建时间排序）；`…/~~/children[/<类型段>]` 与
   `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的
-  直接子画册数）与 `image_count`（子树成员行数，标签叶子即直接图片数），没有行的画册计 0；口径与
+  直接子画册数）与 `image_count`（子树成员行数，标签叶子即直接图片数；标签目录不出行），没有行的画册计 0；口径与
   `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 一致。单画册入口仍读这两条 images:// 路径的
   entry 总数。`~~` 之后的逐行计数用 `group_by`，不要 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
 - 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行

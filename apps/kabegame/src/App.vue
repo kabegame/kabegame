@@ -93,7 +93,7 @@
                 <span>{{ $t("route.albums") }}</span>
               </el-menu-item>
               <el-menu-item index="/plugins" :title="$t('route.pluginBrowser')" :aria-label="$t('route.pluginBrowser')">
-                <el-icon>
+                <el-icon v-corner-badge="market.updatableCount">
                   <FilterPlugin />
                 </el-icon>
                 <span>{{ $t("route.pluginBrowser") }}</span>
@@ -160,7 +160,7 @@
           class="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 min-w-0 no-underline text-[var(--anime-text-secondary)] transition-[color,background] duration-200 active:bg-[rgba(255,107,157,0.08)] [&.is-active]:text-[var(--anime-primary)] [&.is-active]:bg-linear-to-b [&.is-active]:from-[rgba(255,107,157,0.12)] [&.is-active]:to-[rgba(167,139,250,0.08)]"
           :class="{ 'is-active': activeRoute === tab.index }"
         >
-          <el-icon class="text-[22px] shrink-0">
+          <el-icon v-corner-badge="tab.badge" class="text-[22px] shrink-0">
             <component :is="tab.icon" />
           </el-icon>
           <span class="text-[11px] leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap max-w-full">
@@ -216,6 +216,7 @@ import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
 import { isVideoMediaType } from "@/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
+import { usePluginMarketStore } from "./stores/pluginMarket";
 import { useFailedImagesStore } from "./stores/failedImages";
 import { useDownloadStateStore } from "./stores/downloadState";
 import { useRoute, useRouter } from "vue-router";
@@ -277,12 +278,18 @@ function initializeLanguageSetting() {
 // Android 底部 Tab 配置：画廊/画册/插件三个路由 tab + 第四格「工具箱」浮层（非路由，见模板）。
 // 运行配置/设置/帮助已收进侧栏底部常驻区 / 工具箱，紧凑端不再单独占一个 tab。
 // 依赖 locale 以便语言切换时标签立即更新
+const market = usePluginMarketStore();
 const bottomTabs = computed(() => {
   void locale.value;
   return [
-    { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
-    { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
-    { index: "/plugins", icon: FilterPlugin, label: i18n.global.t("route.pluginBrowser") },
+    { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery"), badge: undefined },
+    { index: "/albums", icon: Collection, label: i18n.global.t("route.albums"), badge: undefined },
+    {
+      index: "/plugins",
+      icon: FilterPlugin,
+      label: i18n.global.t("route.pluginBrowser"),
+      badge: market.updatableCount,
+    },
   ];
 });
 
@@ -568,6 +575,7 @@ onMounted(async () => {
   } catch (e) {
     console.error("加载已安装插件列表失败:", e);
   }
+  void market.startRefreshPlugins();
   await failedImagesStore.initListeners();
   await downloadStateStore.init();
   await initMissedRunsWatch();

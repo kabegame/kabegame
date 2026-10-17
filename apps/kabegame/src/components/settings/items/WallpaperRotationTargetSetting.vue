@@ -2,7 +2,7 @@
   <div class="rotation-target-setting">
     <AlbumPicker
       :model-value="pickerAlbumId"
-      :is-selectable="(node) => node.type !== 'label_dir'"
+      expand-label-dirs
       :prepend-options="rotationPrependOptions"
       :disabled="disabled || keyDisabled || wallpaperModeSwitching"
       :placeholder="t('settings.rotationTargetPlaceholder')"

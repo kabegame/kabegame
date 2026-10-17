@@ -16,7 +16,7 @@
         <AlbumPicker
           v-model="selectedAlbumId"
           :scope="albumScope"
-          :is-selectable="(node) => node.type !== 'label_dir'"
+          expand-label-dirs
           allow-create
           :placeholder="$t('albums.chooseAlbumPlaceholder')"
           :picker-title="$t('albums.selectAlbum')"

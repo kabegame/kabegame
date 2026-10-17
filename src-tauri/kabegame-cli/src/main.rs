@@ -172,7 +172,8 @@ impl From<PluginBackend> for core_plugin::PluginBackend {
 
 #[derive(Args, Debug)]
 struct NewPluginArgs {
-    /// 插件名（目录名）：仅允许 kebab-case（全小写）
+    /// 插件 id：仅允许 kebab-case（全小写）。目录与 package.json 的 name 自动加
+    /// `kabegame-plugin-` 前缀；传入的名字已带该前缀时不重复添加。
     name: String,
     /// 插件后端（默认 v8）
     #[arg(long, value_enum, default_value_t = PluginBackend::V8)]
@@ -481,15 +482,18 @@ async fn main() {
 }
 
 fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
-    if !is_valid_plugin_name(&args.name) {
+    let plugin_id = core_plugin::plugin_id_from_package_name(&args.name);
+    if !is_valid_plugin_name(plugin_id) {
         return Err(format!(
             "非法插件名 `{}`：只允许 kebab-case（如 `my-plugin`）",
             args.name
         ));
     }
 
+    // 目录名 = package.json 的 name = `kabegame-plugin-<id>`；应用加载时剥离前缀得到 id
+    let package_name = format!("{}{plugin_id}", core_plugin::PLUGIN_PACKAGE_PREFIX);
     let cwd = std::env::current_dir().map_err(|e| format!("读取当前目录失败: {e}"))?;
-    let plugin_dir = cwd.join(&args.name);
+    let plugin_dir = cwd.join(&package_name);
     if plugin_dir.exists() {
         return Err(format!(
             "目标目录已存在，请先移除或更换名称: {}",
@@ -501,7 +505,7 @@ fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
 
     let backend_str = args.backend.kb_backend_str().to_string();
     let backend_clone = backend_str.clone();
-    let project_name = args.name.clone();
+    let project_name = plugin_id.to_string();
 
     let cargo_gen_toml = TEMPLATE_DIR
         .get_file("cargo-generate.toml")
@@ -512,6 +516,11 @@ fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
     let mut vars = HashMap::new();
     vars.insert("project-name".to_string(), project_name.clone());
     vars.insert("backend".to_string(), backend_clone);
+    // 模板里 @kabegame/plugin-sdk 与 @kabegame/types 的 npm 版本跟随 CLI 自身版本
+    vars.insert(
+        "kabegame-version".to_string(),
+        env!("CARGO_PKG_VERSION").to_string(),
+    );
 
     write_template_files(&TEMPLATE_DIR, &plugin_dir, &vars, &ignored)?;
 
@@ -1205,17 +1214,20 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "package.json 缺少 \"name\" 字段".to_string())?;
-    kabegame_core::app_paths::validate_plugin_id(pkg_name)
-        .map_err(|reason| format!("插件 ID \"{pkg_name}\" 不合规: {reason}"))?;
-    let dir_name = plugin_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    // 包名可带 `kabegame-plugin-` 前缀，插件 id 是剥离后的值（与应用加载时一致）
+    let plugin_id = core_plugin::plugin_id_from_package_name(pkg_name);
+    kabegame_core::app_paths::validate_plugin_id(plugin_id)
+        .map_err(|reason| format!("插件 ID \"{plugin_id}\" 不合规: {reason}"))?;
+    // canonicalize 后再取目录名：`--plugin-dir .` 的 file_name() 是 None
+    let dir_name = std::fs::canonicalize(plugin_dir)
+        .ok()
+        .and_then(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
+        .unwrap_or_default();
     let output_stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if pkg_name != dir_name || pkg_name != output_stem {
+    if pkg_name != dir_name || plugin_id != output_stem {
         return Err(format!(
-            "package.json name \"{}\" 必须等于目录名 \"{}\" 和输出文件名 stem \"{}\"（P3-7）",
-            pkg_name, dir_name, output_stem
+            "package.json name \"{pkg_name}\" 必须等于目录名 \"{dir_name}\"，\
+             输出文件名 stem \"{output_stem}\" 必须等于插件 ID \"{plugin_id}\"（P3-7）"
         ));
     }
 
@@ -1796,6 +1808,29 @@ mod tests {
         assert!(error.contains("未找到画册树路径"));
     }
 
+    /// 模板 package.json 的 SDK / types 依赖必须是与 CLI 同版本的 npm 版本，不能是仓库内 file: 路径。
+    #[test]
+    fn test_template_package_json_uses_cli_version() {
+        let mut vars = HashMap::new();
+        vars.insert("project-name".to_string(), "my-plugin".to_string());
+        vars.insert("backend".to_string(), "v8".to_string());
+        vars.insert(
+            "kabegame-version".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        );
+
+        let tmpl = TEMPLATE_DIR
+            .get_file("package.json")
+            .and_then(|f| f.contents_utf8())
+            .unwrap();
+        let rendered = render_liquid_template(tmpl, &vars).unwrap();
+        let pkg: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let expected = format!("^{}", env!("CARGO_PKG_VERSION"));
+        for dep in ["@kabegame/plugin-sdk", "@kabegame/types"] {
+            assert_eq!(pkg["devDependencies"][dep], expected.as_str(), "{dep}");
+        }
+    }
+
     #[test]
     fn test_render_liquid_basic() {
         let mut vars = HashMap::new();
@@ -1931,7 +1966,7 @@ mod tests {
             let json: serde_json::Value = serde_json::from_str(&raw)
                 .unwrap_or_else(|e| panic!("生成的 {name} 不是合法 JSON: {e}\n{raw}"));
             if name == "package.json" {
-                assert_eq!(json["name"], "my-plugin");
+                assert_eq!(json["name"], "kabegame-plugin-my-plugin");
                 assert_eq!(json["kbBackend"], "v8");
                 assert_eq!(json["main"], "dist/main.js");
             }
@@ -2040,6 +2075,28 @@ mod tests {
             std::fs::read(&out_b).unwrap(),
             "同一份源码打两次应当字节一致"
         );
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// 包名带 `kabegame-plugin-` 前缀：目录名 = 包名，输出 stem 必须是剥离后的插件 id。
+    #[test]
+    fn test_pack_v3_prefixed_package_name_outputs_plugin_id() {
+        let base =
+            std::env::temp_dir().join(format!("kabegame-cli-pack-prefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let plugin_dir = base.join("kabegame-plugin-demo");
+        write_minimal_plugin(&plugin_dir, "kabegame-plugin-demo");
+        let pkg = read_optional_package_json(&plugin_dir).unwrap().unwrap();
+
+        pack_plugin_v3(&plugin_dir, &base.join("demo.kgpg"), &pkg).unwrap();
+        let err =
+            pack_plugin_v3(&plugin_dir, &base.join("kabegame-plugin-demo.kgpg"), &pkg).unwrap_err();
+        assert!(err.contains("P3-7"), "{err}");
+
+        // `--plugin-dir .` 形式的相对路径也能取到目录名
+        let rel = plugin_dir.join(".");
+        pack_plugin_v3(&rel, &base.join("demo.kgpg"), &pkg).unwrap();
 
         std::fs::remove_dir_all(&base).unwrap();
     }

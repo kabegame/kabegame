@@ -28,9 +28,9 @@ plugin-name.kgpg
 
 ## 清单 v3：package.json 自描述
 
-v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion >= 3`；当前打包器要求 `kbPackageVersion` 精确为 `3`。插件目录名、`.kgpg` 输出文件名 stem 和 `package.json.name` 必须一致。
+v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion >= 3`；当前打包器要求 `kbPackageVersion` 精确为 `3`。插件目录名必须等于 `package.json.name`，`.kgpg` 输出文件名 stem 必须等于插件 ID（`name` 剥离可选的 `kabegame-plugin-` 前缀，见 `kabegame_core::plugin::plugin_id_from_package_name`）。仓库内插件统一为 `plugins/kabegame-plugin-<id>/` → `<id>.kgpg`。
 
-加载 `.kgpg` 时插件 ID 的取值顺序是：**调用方显式指定**（仅 `kabegame-cli plugin run --id`，用于临时运行/测试）→ `package.json.name` → `.kgpg` 文件名 stem。换言之包自己声明的 `name` 比文件名权威，改文件名不会改掉插件身份；安装落盘时文件名也会被归一成 `<ID>.kgpg`。
+加载 `.kgpg` 时插件 ID 的取值顺序是：**调用方显式指定**（仅 `kabegame-cli plugin run --id`，用于临时运行/测试）→ `package.json.name`（剥离 `kabegame-plugin-` 前缀；剥完为空则不剥）→ `.kgpg` 文件名 stem（不剥离）。前缀剥离自 4.5.2 起，带前缀的插件 `engines.kabegame` 须 `>=4.5.2`，否则旧版应用会把完整包名当 ID。换言之包自己声明的 `name` 比文件名权威，改文件名不会改掉插件身份；安装落盘时文件名也会被归一成 `<ID>.kgpg`。
 
 ```json
 {
@@ -67,7 +67,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `name` | 是 | 插件包名，必须等于插件目录名和输出 `.kgpg` stem；它同时是加载时的插件 ID 首选来源（见上文取值顺序）。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
+| `name` | 是 | 插件包名，必须等于插件目录名；剥离 `kabegame-plugin-` 前缀后必须等于输出 `.kgpg` stem，同时是加载时的插件 ID 首选来源（见上文取值顺序），无语言后缀时剥离后的值也是显示名回退。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
 | `version` | 是 | 插件 semver，必须是 `a.b.c` 且每段 ≤255（应用将其 packed 编码为 u32 记录到 `image_metadata.plugin_version` 并做迁移门控）。 |
 | `private` | 否 | 内置插件建议为 `true`，避免作为 npm 包发布。 |
 | `name.*` / `description.*` | 否 | 扁平 i18n 键。`name` 自身已被包名占用；本地化展示名使用 `name.zh`、`name.en` 等。`description` 可作为默认描述。 |

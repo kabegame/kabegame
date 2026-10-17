@@ -56,7 +56,7 @@
         <AlbumPicker
           v-model="outputAlbumId"
           :scope="{ excludeIds: [HIDDEN_ALBUM_ID] }"
-          :is-selectable="(node) => node.type !== 'label_dir'"
+          expand-label-dirs
           :placeholder="t('plugins.defaultGalleryOnly')"
           :picker-title="t('albums.outputAlbum')"
           clearable

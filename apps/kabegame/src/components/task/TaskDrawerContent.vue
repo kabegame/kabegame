@@ -53,7 +53,14 @@
         </template>
         <div class="drawer-panel-body drawer-panel-body--tasks">
           <div class="tasks-summary">
-            <span>{{ t("tasks.drawerTaskCount", { n: displayTaskCount }) }}</span>
+            <el-input
+              v-model="taskSearch"
+              size="small"
+              clearable
+              class="tasks-search"
+              :prefix-icon="Search"
+              :placeholder="t('tasks.drawerSearchPlaceholder')"
+            />
             <el-button
               text
               size="small"
@@ -65,6 +72,11 @@
             </el-button>
           </div>
           <div class="tasks-list-col">
+            <el-empty
+              v-if="taskSearchQuery && filteredTasks.length === 0"
+              :description="t('tasks.drawerSearchEmpty')"
+              :image-size="60"
+            />
             <div class="tasks-list tasks-list--virtual" v-bind="containerProps" @scroll="handleTasksListScroll">
               <div v-bind="wrapperProps">
                 <div v-for="item in virtualList" :key="item.data.id" class="task-drawer-virtual-item">
@@ -79,7 +91,8 @@
                         circle
                         size="small"
                         class="close-btn"
-                        :title="t('tasks.drawerDeleteTask')"
+                        :disabled="isTaskRunning(item.data)"
+                        :title="isTaskRunning(item.data) ? t('tasks.drawerDeleteTaskRunning') : t('tasks.drawerDeleteTask')"
                         @click="$emit('delete-task', item.data.id)"
                       >
                         <el-icon>
@@ -130,17 +143,30 @@
                                 :color="taskProgressBarColor(item.data.status)"
                                 :show-text="false"
                               />
-                              <el-button
+                              <el-popconfirm
                                 v-if="item.data.status === 'running' || item.data.status === 'waiting_downloads'"
-                                text
-                                circle
-                                size="small"
-                                class="progress-cancel-btn"
-                                :title="t('tasks.drawerStop')"
-                                @click.stop="$emit('cancel-task', item.data.id)"
+                                placement="bottom-end"
+                                :title="t('tasks.drawerStopConfirm')"
+                                :confirm-button-text="t('common.confirm')"
+                                :cancel-button-text="t('common.cancel')"
+                                confirm-button-type="danger"
+                                :visible="stopConfirmTaskId === item.data.id"
+                                @update:visible="(v: boolean) => setStopConfirmVisible(item.data.id, v)"
+                                @confirm="$emit('cancel-task', item.data.id)"
                               >
-                                <el-icon><Close /></el-icon>
-                              </el-button>
+                                <template #reference>
+                                  <el-button
+                                    text
+                                    circle
+                                    size="small"
+                                    class="progress-cancel-btn"
+                                    :title="t('tasks.drawerStop')"
+                                    @click.stop
+                                  >
+                                    <el-icon><Close /></el-icon>
+                                  </el-button>
+                                </template>
+                              </el-popconfirm>
                             </div>
                           </div>
                         </div>
@@ -239,9 +265,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useModal } from "../../composables/useModal";
+import { useModalBack } from "../../composables/useModalBack";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
-import { Close, Grid, Loading } from "@kabegame/element-plus-icons";
+import { Close, Grid, Loading, Search } from "@kabegame/element-plus-icons";
 import { invoke } from "../../api";
 import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";
@@ -302,6 +329,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: "delete-task", taskId: string): void;
+  /** 已在叉号下方的小确认框里确认过，父组件直接停止，不要再弹确认 */
   (e: "cancel-task", taskId: string): void;
   (e: "open-task-images", taskId: string): void;
   (e: "open-task-schedule-config", task: TaskSummaryRowTask): void;
@@ -363,15 +391,50 @@ function drawerPluginIconSrc(pluginId: string): string | undefined {
 /** 与虚拟列表行高一致（须与 .task-drawer-virtual-item height 相同） */
 const TASK_DRAWER_ITEM_HEIGHT = 166;
 
-const tasksSource = computed(() => props.tasks);
+/**
+ * 停止确认小框：同一时刻最多一个任务的确认框打开，接入 Android 返回栈。
+ * 模板里 placement 用 bottom-end：叉号贴着抽屉右缘，居中的 bottom 会右溢出，
+ * flip 的横轴检查随之否掉 bottom/top，最终翻到左侧盖住卡片。
+ */
+const stopConfirmTaskId = ref<string | null>(null);
+function setStopConfirmVisible(taskId: string, visible: boolean) {
+  if (visible) stopConfirmTaskId.value = taskId;
+  else if (stopConfirmTaskId.value === taskId) stopConfirmTaskId.value = null;
+}
+useModalBack(
+  computed({
+    get: () => stopConfirmTaskId.value !== null,
+    set: (open) => {
+      if (!open) stopConfirmTaskId.value = null;
+    },
+  }),
+);
+
+/** 运行中（含等待下载收尾）的任务不能直接删除，须先停止 */
+const isTaskRunning = (task: ScriptTask) => task.status === "running" || task.status === "waiting_downloads";
+
+/** 任务搜索：按插件 id 与当前语言下的插件名做不区分大小写的子串匹配 */
+const taskSearch = ref("");
+const taskSearchQuery = computed(() => taskSearch.value.trim().toLowerCase());
+const filteredTasks = computed(() => {
+  const q = taskSearchQuery.value;
+  if (!q) return props.tasks;
+  return props.tasks.filter(
+    (task) => task.pluginId.toLowerCase().includes(q) || getPluginName(task.pluginId).toLowerCase().includes(q),
+  );
+});
+
 const {
   list: virtualList,
   containerProps,
   wrapperProps,
-} = useVirtualList(tasksSource, {
+  scrollTo: scrollTasksTo,
+} = useVirtualList(filteredTasks, {
   itemHeight: TASK_DRAWER_ITEM_HEIGHT,
   overscan: 6,
 });
+// 搜索词变化后回到顶部：否则沿用旧 scrollTop，结果比原列表短时可视区落在结果之外，整列空白
+watch(taskSearchQuery, () => scrollTasksTo(0));
 
 const runParamsDialog = useModal();
 const runParamsTask = ref<TaskRunParamsTask | null>(null);
@@ -734,6 +797,16 @@ watch(
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
+
+    .tasks-search {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .clear-completed-btn {
+      flex-shrink: 0;
+    }
   }
 
   .tasks-list-col {
@@ -1045,6 +1118,17 @@ watch(
       &:hover {
         color: var(--anime-primary);
         background: #fff;
+      }
+
+      &.is-disabled {
+        opacity: 0.4;
+        box-shadow: none;
+        cursor: not-allowed;
+
+        &:hover {
+          color: var(--anime-text-secondary);
+          background: var(--el-bg-color-overlay, #fff);
+        }
       }
     }
   }

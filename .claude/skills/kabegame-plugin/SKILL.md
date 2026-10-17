@@ -1,11 +1,11 @@
 ---
 name: kabegame-plugin
-description: 编写新的 Kabegame 爬虫插件、或修改已有插件（src-crawler-plugins/plugins/<id>/）的完整工作流 —— 先用 curl/探针把「列表页 → 详情页/JSON → 媒体 URL → 媒体字节」这条链路逐环实测打通，再写成 V8 或 WebView 插件代码（每张图都带能还原详情页的 JSON metadata、labels 标签数组，以及还原源站详情样式的 description.ejs），最后真跑验证（V8 用 kabegame-cli（默认 dev 版）以测试 id 直接运行 .kgpg，WebView 在 dev app 里经 CDP 跑）。凡是要给某个网站加爬虫/收集源、适配站点改版、修插件抓不到图/下载失败/选择器失效、给插件加新模式或配置项、把 V8 插件改成 WebView（或反之）时都用本 skill，即使用户只说「帮我爬一下 xx 站」「这个插件坏了」。
+description: 编写新的 Kabegame 爬虫插件、或修改已有插件（src-crawler-plugins/plugins/kabegame-plugin-<id>/）的完整工作流 —— 先用 curl/探针把「列表页 → 详情页/JSON → 媒体 URL → 媒体字节」这条链路逐环实测打通，再写成 V8 或 WebView 插件代码（每张图都带能还原详情页的 JSON metadata、labels 标签数组，以及还原源站详情样式的 description.ejs），最后真跑验证（V8 用 kabegame-cli（默认 dev 版）以测试 id 直接运行 .kgpg，WebView 在 dev app 里经 CDP 跑）。凡是要给某个网站加爬虫/收集源、适配站点改版、修插件抓不到图/下载失败/选择器失效、给插件加新模式或配置项、把 V8 插件改成 WebView（或反之）时都用本 skill，即使用户只说「帮我爬一下 xx 站」「这个插件坏了」。
 ---
 
 # Kabegame 插件编写
 
-插件是 `src-crawler-plugins/plugins/<id>/` 下的 JS/TS 包，打成 `.kgpg` 后由应用加载。
+插件是 `src-crawler-plugins/plugins/kabegame-plugin-<id>/` 下的 JS/TS 包，打成 `.kgpg` 后由应用加载。
 本 skill 的核心约束是**每一步都绑着一个验证**：上一环没有拿到实测证据，就不进下一环。
 爬虫失败几乎都发生在「以为页面里有、其实没有」「以为能直拉、其实要 Referer」这类假设上，
 写完代码再跑才发现，返工成本是逐环验证的好几倍。
@@ -34,7 +34,7 @@ K=.claude/skills/kabegame-plugin/scripts
 
 先确认：目标站点和入口（排行/搜索/作者/标签/单个作品…）、要哪些配置项、是新插件还是改旧插件。
 
-**改已有插件**：先读 `plugins/<id>/package.json`（`kbBackend`、`main`、`kbConfig`）和源码入口，
+**改已有插件**：先读 `plugins/kabegame-plugin-<id>/package.json`（`kbBackend`、`main`、`kbConfig`）和源码入口，
 然后**先跑一次复现**（V8 用 `run-cli.sh`，WebView 用 `app-run.sh`），拿到失败的那一环再动手。
 别凭报错描述猜——站点改版、配置写错、登录失效、去重跳过，日志长得完全不一样。
 
@@ -146,9 +146,28 @@ HTML 或 JSON 说明拿到的是防盗链页或错误响应，不算通过。需
 - V8：[references/v8.md](references/v8.md)
 - WebView：[references/webview.md](references/webview.md)
 
-新插件**复制一个结构相近的现有插件起步**，然后改 `name`、`kbBaseUrl`、`kbConfig`、源码：
-V8 + TS 打包选 `plugins/wallspic`（小）或 `plugins/anihonet-wallpaper`（多模式、metadata 齐全）；
-WebView 选 `plugins/xhs-webview`。不要用 `kabegame-cli plugin new`，它的产物目录结构不对。
+新插件**用 `kabegame-cli plugin new` 生成骨架**，在 `src-crawler-plugins/plugins/` 下执行：
+
+```bash
+cd src-crawler-plugins/plugins
+../../target/debug/kabegame-cli plugin new <id>                    # V8（默认）
+../../target/debug/kabegame-cli plugin new <id> --backend webview  # WebView
+```
+
+产物目录与 `package.json` 的 `name` 都是 `kabegame-plugin-<id>`，应用加载时剥离前缀，插件 id 仍是 `<id>`；
+打包产物是 `<id>.kgpg`，`repack` / `run` driver 也只认 `<id>`。
+
+生成后**必须把 V8 模板的两个 SDK 依赖改回仓库内 `file:` 路径**。模板面向仓库外作者，写的是 npm
+版本（`^<CLI 版本>`）；本仓库的插件一律跟随 `packages/` 里的源码，不引用 npm：
+
+```json
+"@kabegame/plugin-sdk": "file:../../../packages/kabegame-plugin-sdk",
+"@kabegame/types": "file:../../../packages/kabegame-types",
+```
+
+然后改 `name.*` 多语言显示名、`kbBaseUrl`、`kbConfig`、源码（`name` 保持 `kabegame-plugin-<id>`，`engines.kabegame` 不低于 `>=4.5.2`）。模板只有最小骨架，`templates/description.ejs`、
+`CHANGELOG.md`、多语言 README 等照结构相近的现有插件补齐：V8 参考 `plugins/kabegame-plugin-wallspic`（小）或
+`plugins/kabegame-plugin-anihonet-wallpaper`（多模式、metadata 齐全）；WebView 参考 `plugins/kabegame-plugin-xhs-webview`。
 
 写代码时守住这几条：
 - `package.json` 的 `kbLabels` 只能用 6 个内置 id（如 R-18 站点用 `content.nsfw`），`kbConfig` 只有

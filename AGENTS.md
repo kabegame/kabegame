@@ -41,7 +41,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 主进程内部，HTTP、Tauri、Web JSON-RPC 与 app IPC 只是协议入口，统一复用共享命令层，不建立平行业务后端；桌面端应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 
-**第三方补丁序列**——工作流与目录级约束见 [third-patches/AGENTS.md](third-patches/AGENTS.md)。
+**第三方补丁序列**——工作流与目录级约束见 [third-patches/AGENTS.md](third-patches/AGENTS.md)。一般预期third是脏的，third-patches才是我们工作的地方。
 
 **组件库与 packages 子仓库**——维护边界和目录级约束见 [packages/AGENTS.md](packages/AGENTS.md)。
 
@@ -52,7 +52,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 **ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate` 携带可选 `view`（当前行路径），并立即应用后端返回的 `{ rows, seq }` 行快照；总数由计数路径的独立 live 状态维护，写后经 `dataChangeHub` 刷新。只改展示字段的操作走 `ctx.patch`，不得依赖事件回刷自身操作。带 `view` 的后端写命令必须在写库前取得 `GlobalEmitter::hold()`，行快照读完后才放行事件。被动 `images-change` / `album-images-change` 统一经 `dataChangeHub` / `liveQuery`。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
 
-**画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每一层与 `~~/children` 都叠加 `search/<q>`——自身或子孙命中才保留，树形与展开态不变）；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数：目录页一次三路 fetch——`<过滤段>/x<N>x/<页>` 取这一页的画册行；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录显示它）与 `image_count`（子树成员行数，标签叶子即直接图片数），没有行的画册计 0；口径与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数一致（e2e 逐项比对），`/hide` 对应 `hide/` 前缀；单画册入口仍用这两条 images:// 路径。`~~` 之后的逐行计数一律用 `group_by`，不要 `list_with_count`（每项再包一层 COUNT 会把整个结构重跑 N 次）；子树判断用 `ancestor_path` 前缀区间走索引（见 `cocs/provider-dsl/RULES.md` §2.1）。隐藏等全局过滤只能用路径表达，不得新增计数列、SQL 视图或专用计数命令。
+**画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每一层与 `~~/children` 都叠加 `search/<q>`——自身或子孙命中才保留，树形与展开态不变）；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数：目录页一次三路 fetch——`<过滤段>/x<N>x/<页>` 取这一页的画册行；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录显示它）与 `image_count`（子树成员行数，标签叶子即直接图片数；标签目录不出行），没有行的画册计 0；行与 `child_count` 先渲染，`image_count` 单独到达后再补；口径与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数一致（e2e 逐项比对），`/hide` 对应 `hide/` 前缀；单画册入口仍用这两条 images:// 路径。`~~` 之后的逐行计数一律用 `group_by`，不要 `list_with_count`（每项再包一层 COUNT 会把整个结构重跑 N 次）；子树判断用 `ancestor_path` 前缀区间走索引（见 `cocs/provider-dsl/RULES.md` §2.1）。隐藏等全局过滤只能用路径表达，不得新增计数列、SQL 视图或专用计数命令。
 
 **桌面端和 Android 端的视频导入都使用 rsmpeg/FFmpeg（仅排除 iOS）：**
 - 桌面端构建（Windows/macOS/Linux 上的标准版/CLI）会链接 rsmpeg/FFmpeg，用于预览图压缩和视频尺寸读取（使用 `deno task build:ffmpeg` 产生的本机静态库）。
@@ -130,9 +130,9 @@ struct Foo {
 }
 ```
 ````
-对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行 [changlog](versions/latest/changelog.md)
+对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行或几行 [changlog](versions/latest/changelog.md)
 
-对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本。
+对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，总插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本，所以changelog.md要比较才知道顶部版本是最新还是需要新加一节，注意不要改 version，改了之后commit 会打新tag。
 
 在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序。
 

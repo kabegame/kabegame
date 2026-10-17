@@ -23,9 +23,11 @@ SDK 主要服务 V8 后端（用 TypeScript 写在 `src/`，打包成单个 `dis
 
 ## 安装与使用
 
-:::caution[暂未发布到 npm]
-`@kabegame/plugin-sdk` 目前只在 Kabegame 源码仓库里以本地路径依赖的方式提供，还没有发布到 npm，在仓库外暂时装不上。仓库外开发时可以先不用它：`resolveUrl` 用 `new URL(href, base)`，`sleep` 用 `setTimeout` 包一层 Promise。类型声明 `@kabegame/types` 可以直接从 GitHub 安装（`npm i -D github:kabegame/kabegame-types`）。
-:::
+```bash
+npm i -D @kabegame/plugin-sdk @kabegame/types
+```
+
+`kabegame-cli plugin new` 生成的 V8 模板已经带上这两个依赖。SDK 以 MIT 许可发布。
 
 在插件源码里直接 import，打包器会把用到的部分内联进产物：
 

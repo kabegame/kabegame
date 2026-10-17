@@ -76,7 +76,7 @@
                   :version="plugin.version"
                   :icon-src="getPluginIconSrc(plugin)"
                   :icon-loading="isIconLoading(plugin)"
-                  :update-available="hasKnownUpdateFor(plugin.id, plugin.version)"
+                  :update-available="hasKnownUpdateFor(plugin.id)"
                   @click="openDetailDialog(plugin)"
                 />
                 <template #panel>
@@ -197,7 +197,7 @@
                 :version="plugin.version"
                 :icon-src="getPluginIconSrc(plugin)"
                 :icon-loading="isIconLoading(plugin)"
-                :update-available="isUpdateAvailable(plugin.installedVersion, plugin.version)"
+                :update-available="isStoreUpdateAvailable(plugin)"
                 @click="openDetailDialog(plugin)"
               />
               <template #panel>
@@ -326,6 +326,7 @@ import { Refresh, Upload, Plus, Search, Setting, QuestionFilled } from "@kabegam
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import {
   usePluginMarketStore,
+  isStoreUpdateAvailable,
   storeIconKey,
   OFFICIAL_PLUGIN_SOURCE_ID,
   OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME,
@@ -344,7 +345,6 @@ import PluginGridCard from "@/components/plugin/PluginGridCard.vue";
 import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
 import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
 import { bannerPreviewImages } from "@/utils/assetPath";
-import { isUpdateAvailable } from "@/utils/version";
 import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
@@ -575,14 +575,8 @@ const getPluginIconSrc = (p: PluginListItem) => {
 //      hover 这种高频轻量交互不适合触发这种下载，故只做 best-effort：
 //      版本与已安装一致时复用本地已装包，否则提示"安装后可查看"）----
 
-/** 已安装 tab 里"已知有更新"仅在对应商店列表恰好已加载时才能判断，不主动为此发请求 */
-const hasKnownUpdateFor = (pluginId: string, installedVersion: string): boolean => {
-  for (const arr of Object.values(pluginsBySource.value)) {
-    const match = (arr || []).find((p) => p.id === pluginId);
-    if (match && isUpdateAvailable(installedVersion, match.version)) return true;
-  }
-  return false;
-};
+/** 已安装 tab 与导航角标共用 market store 的可更新集合。 */
+const hasKnownUpdateFor = (pluginId: string): boolean => market.updatableInstalledIds.has(pluginId);
 
 /** 预览目标对应的"已安装 Plugin"：本身就是已安装插件，或商店条目版本与本地一致（同一份内容，复用零成本） */
 const quickPreviewInstalledMatch = (item: PluginListItem): Plugin | null => {
@@ -597,11 +591,11 @@ const quickPreviewInstalledMatch = (item: PluginListItem): Plugin | null => {
 const quickPreviewUpdateVersion = (item: PluginListItem): string | null => {
   if ("sourceId" in item) {
     const store = item as StorePluginResolved;
-    return isUpdateAvailable(store.installedVersion, store.version) ? store.version : null;
+    return isStoreUpdateAvailable(store) ? store.version : null;
   }
   for (const arr of Object.values(pluginsBySource.value)) {
     const match = (arr || []).find((p) => p.id === item.id);
-    if (match && isUpdateAvailable(item.version, match.version)) return match.version;
+    if (match && isStoreUpdateAvailable(match)) return match.version;
   }
   return null;
 };
