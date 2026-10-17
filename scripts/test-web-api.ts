@@ -19,7 +19,9 @@ function err(label: string, reason: unknown) {
 }
 
 async function rpc(method: string, params: unknown = {}, superMode = false) {
-  const url = superMode ? `${BASE}/rpc?super=1` : `${BASE}/rpc`;
+  const url = `${BASE}/rpc/${encodeURIComponent(method)}${
+    superMode ? "?super=1" : ""
+  }`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },

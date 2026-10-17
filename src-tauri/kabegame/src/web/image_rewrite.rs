@@ -1,12 +1,11 @@
-//! Web 边界：把 core 命令返回的图片 JSON 里的 `local_path` / `thumbnail_path`
-//! 改写为 CDN 绝对 URL。
+//! Web 边界：把 core 命令返回的图片 JSON 里的本地媒体路径改写为 CDN 绝对 URL。
 //!
 //! `kabegame-core::commands` 层是 feature-agnostic 的，一律回**原始本地路径**；
 //! 改写在**本层（web dispatch 出口）**对 core 已序列化的 `serde_json::Value`
 //! 就地施加。桌面 Tauri 不经过这里，保持文件系统路径。
 //!
-//! 规则：取 local_path 的 **末级目录名** + **basename**，拼到 [`CDN_BASE`]。
-//! images/ 与 thumbnails/ 共用同一函数，未来多层目录 / 多租户分桶也不必改逻辑。
+//! 规则：取路径的 **末级目录名** + **basename**，拼到 [`CDN_BASE`]。
+//! images/、thumbnails/ 与 compatibles/ 共用同一函数，未来多层目录 / 多租户分桶也不必改逻辑。
 
 use std::path::Path;
 
@@ -50,7 +49,7 @@ pub fn rewrite_fs_path(p: &str) -> String {
     )
 }
 
-/// 对 core 返回的图片 `Value` 就地改写 `local_path` / `thumbnail_path`。
+/// 对 core 返回的图片 `Value` 就地改写原图、缩略图和两类兼容副本路径。
 /// 接受单个 image 对象，或 image 对象数组（`get_album_preview` / `pathql_fetch`）。
 ///
 /// **Debug 构建下是 no-op**——`deno task dev` 里 web server 与桌面共用调试二进制，
@@ -72,7 +71,12 @@ fn rewrite_obj_paths(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else {
         return;
     };
-    for key in ["local_path", "thumbnail_path"] {
+    for key in [
+        "local_path",
+        "thumbnail_path",
+        "compatible_path",
+        "wallpaper_compatible_path",
+    ] {
         if let Some(Value::String(s)) = obj.get_mut(key) {
             *s = rewrite_fs_path(s);
         }
@@ -126,5 +130,34 @@ mod tests {
     fn passes_through_http_insecure() {
         let url = "http://example.com/a.png";
         assert_eq!(rewrite_fs_path(url), url);
+    }
+
+    #[test]
+    fn rewrites_every_local_media_path_field() {
+        let mut value = serde_json::json!({
+            "local_path": "/data/images/original.jpg",
+            "thumbnail_path": "/data/thumbnails/thumb.jpg",
+            "compatible_path": "/data/compatibles/browser.png",
+            "wallpaper_compatible_path": "/data/compatibles/wallpaper.png",
+        });
+
+        rewrite_obj_paths(&mut value);
+
+        assert_eq!(
+            value["local_path"],
+            format!("{CDN_BASE}/images/original.jpg")
+        );
+        assert_eq!(
+            value["thumbnail_path"],
+            format!("{CDN_BASE}/thumbnails/thumb.jpg")
+        );
+        assert_eq!(
+            value["compatible_path"],
+            format!("{CDN_BASE}/compatibles/browser.png")
+        );
+        assert_eq!(
+            value["wallpaper_compatible_path"],
+            format!("{CDN_BASE}/compatibles/wallpaper.png")
+        );
     }
 }

@@ -16,8 +16,8 @@ function qsSuper(): string {
   return getIsSuper() ? "?super=1" : "";
 }
 
-function rpcUrl(): string {
-  return `${API_ROOT}rpc${qsSuper()}`;
+function rpcUrl(method: string): string {
+  return `${API_ROOT}rpc/${encodeURIComponent(method)}${qsSuper()}`;
 }
 
 function sseUrl(): string {
@@ -28,7 +28,7 @@ let rpcIdCounter = 0;
 
 export async function invoke<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const id = ++rpcIdCounter;
-  const res = await fetch(rpcUrl(), {
+  const res = await fetch(rpcUrl(method), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? null }),

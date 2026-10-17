@@ -18,6 +18,32 @@
 | [x] | Android 静态检查 | Android NDK / Gradle | 运行 Android check 与 `:app:compileUniversalDebugKotlin` | aarch64 Rust 与 Kotlin 均无 error | Kotlin BUILD SUCCESSFUL |
 | [x] | 插件打包 | `kabegame-plugin` skill | 部署 `kabegame-server` | 生成 `kabegame-server.kgpg` | 已通过；未改插件版本号 |
 
+## Web 兼容副本 CDN 转写与 OSS 挂载
+
+Web release 的媒体响应不提供 `/file`、`/thumbnail` 或 `/compatible`，所有媒体路径必须在 RPC 出口转成 CDN URL。此前只处理 `local_path` 与 `thumbnail_path`，导致 `compatible_path` 泄露服务器本地路径；线上 `images`、`thumbnails` 已指向 `/mnt/oss`，但约 19.86 GB 的 `compatibles` 仍在本地。现在四个路径字段统一转写，线上兼容目录同步到 OSS 后改为软链接。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 线上现状确认 | `cmtheit.com` | 检查文件、挂载、RPC 与 CDN | 兼容文件本地存在；`compatible_path` 未转写；OSS 无 `compatibles`；对应 CDN URL 为 404 | 已确认：2010 个文件，约 19.86 GB |
+| [x] | OSS 初次同步 | `cmtheit.com` | 将本地 `compatibles/` 两阶段同步到 `/mnt/oss/compatibles/` | 文件数与总字节一致，抽样文件 CDN 返回 200 | 2010 个文件、19,863,366,234 字节完全一致；首/中/末样本 SHA-256 一致；示例 CDN 200 |
+| [x] | 目录切换与释放空间 | `cmtheit.com` | 停服补增量，建立 OSS 软链接，启动验证后删除原目录 | 服务恢复 active；新生成兼容副本直接进入 OSS；本地不再保留约 19.86 GB 副本 | 链接解析到 `/mnt/oss/compatibles`，`/__ping` 为 `ok`；原目录已删除，根盘约 23 GB 可用 |
+| [x] | 新对象 MIME | `cmtheit.com` | 安装 `mailcap`、重启 ossfs2，经软链接写入临时 PNG 后请求 CDN | CDN `Content-Type` 为 `image/png`，探针随后删除 | 已实测；迁移批次旧对象仍保留 `application/octet-stream` 元数据，但无 `nosniff` 且均为 PNG/JPG |
+| [ ] | RPC 路径转写 | Web release | 查询含四类路径的图片行 | 所有非空本地路径均为 `https://cdn.kabegame.com/<目录>/<文件>`，无服务器绝对路径 | |
+| [x] | 静态检查与单测 | 仓库 | 跑 `image_rewrite` 测试及 `deno task check -c kabegame` | 测试、vue-tsc、cargo check 均无错误 | 7 tests passed；vue-tsc 与 cargo check 0 error，仅有既存 warning |
+
+## Web RPC 按方法拆分请求路径
+
+Web 前端把 JSON-RPC 请求从统一的 `/rpc` 改为 `/rpc/{method}`，URL 中的方法名经编码并与 body 的 `method` 保持一致，方便在浏览器 Network 面板按接口筛选。服务端继续保留 `/rpc` 兼容既有插件与外部客户端；命名路径与 body 不一致时返回 JSON-RPC `-32600`，不执行调用。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | Network 按方法过滤 | Web | 打开开发者工具 Network，触发画廊翻页、打开设置 | 请求分别显示为 `/rpc/pathql_fetch` 等具体方法，可按 URL 过滤 | |
+| [ ] | super 请求 | Web `?super=1` | 执行一个写操作 | 请求为 `/rpc/<方法>?super=1`，写操作正常完成 | |
+| [ ] | 旧入口兼容 | curl / `kabegame-server` 插件 | 继续向 `/rpc` 发送合法 JSON-RPC body | 行为与改动前一致 | |
+| [ ] | 方法不一致 | curl | 向 `/rpc/get_albums` 发送 body `method: get_tasks_page` | 返回 `-32600`，两个方法均不执行 | |
+| [x] | 前端请求单测 | Vitest | `deno task --cwd apps/kabegame test --run src/api/web.test.ts` | URL pathname 为 `/rpc/pathql_fetch`，body 仍携带同名 `method` 与参数 | 已运行，1 passed |
+| [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行；仅有既存 warning |
+
 ## Tauri 2.12.4 升级
 
 Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上游；现有 CEF runtime 的 trait 适配回归见下一节。本节集中验证升级影响到的桌面打包、NSIS、Android 开发/安装链路、窗口与 Channel 生命周期、ACL，以及删除 0010 后的 Windows vcruntime 行为。

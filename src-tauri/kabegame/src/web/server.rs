@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::{
-    extract::Query,
+    extract::{Path, Query},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
@@ -35,6 +35,7 @@ pub fn web_routes() -> Router {
     Router::new()
         .route("/events", get(sse_handler))
         .route("/rpc", post(rpc_handler))
+        .route("/rpc/{method}", post(rpc_method_handler))
 }
 
 async fn sse_handler(
@@ -66,6 +67,28 @@ async fn sse_handler(
 async fn rpc_handler(
     Query(params): Query<HashMap<String, String>>,
     Json(req): Json<JsonRpcRequest>,
+) -> Json<serde_json::Value> {
+    dispatch_rpc(params, req).await
+}
+
+async fn rpc_method_handler(
+    Path(method): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Json<serde_json::Value> {
+    if method != req.method {
+        return Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": req.id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32600, "message": "URL method does not match request method" },
+        }));
+    }
+    dispatch_rpc(params, req).await
+}
+
+async fn dispatch_rpc(
+    params: HashMap<String, String>,
+    req: JsonRpcRequest,
 ) -> Json<serde_json::Value> {
     let is_super = params.get("super").map(|v| v == "1").unwrap_or(false);
     #[cfg(feature = "web")]
