@@ -517,6 +517,56 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [ ] | 桌面不受影响 | 桌面 CEF | 点各 chip | 仍为下拉弹层 | 未覆盖 |
 | [x] | 类型与单测 | 仓库 | `vue-tsc`；`vitest` GalleryQueryBar / GalleryToolbar | 无错误，12 个用例通过 | 已运行 |
 
+## Android 预览关闭中途重开后不可见（`packages/photoswipe-vue/src/vue/composables/useOpener.ts`）
+
+`CSSAnimation.destroy()` 会同步回调 `onComplete`。关闭动画进行中重新 `open()` 时，`_applyStartProps` 里的 `stopAll()` 让被打断的关闭动画按「打开完成」收尾（`isOpening` 被清成 false），随后设置打开起始样式的分支被跳过，根节点停在关闭留下的 `opacity: 0; transition: none`：opener 认为已打开、返回栈占位、吉祥物被隐藏，画面却看不见预览。修复：opener 增加动画轮次 `_generation`，每次 open / close 自增；动画 `onComplete`、图片解码回调与关闭的延迟 `_start` 只在本轮有效。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 根因复现 | Android dev | 未修复代码：打开预览后经 CDP 调 `opener.close()`，150ms 后 `opener.open()` | 根节点 `opacity: 0`、`transition: none`、背景 0.8、opener `isOpen=true`，与现场一致 | 已实测 |
+| [x] | 修复后 | Android dev | 同上，关闭后 50 / 150 / 300ms 重新打开 | 关闭中途 opacity 为 0，重新打开后均恢复为 1，状态为已打开；返回键可关闭 | 重启 dev 后已实测 |
+| [x] | 后台下载时预览 | Android dev | 下载任务运行中（总数 319 → 377）打开预览停留 20s，每 0.5s 采样；再左右滑动翻 6 次 | 全程 opacity 1、opener 无开合切换；翻页时 `pvwimgid` 跟随，预览可见；返回键可关闭 | 已实测并截图；本轮未自然触发「关闭中途重开」时序，该时序由上一行的直接复现覆盖 |
+| [x] | 正常开合 / 打开中途关闭 | Android dev | 点图打开后立即返回；正常打开再返回 | 正常打开时 opacity 1、背景 0.8；两种情况都能关闭，吉祥物恢复，不误弹退出确认 | 已实测并截图 |
+
+## Android 下载中返回键关闭预览被重新打开（`apps/kabegame/src/components/common/ImagePreviewDialog.vue`）
+
+上一节「关闭中途重开后不可见」的触发源。返回键只关掉 `previewModal`，PhotoSwipe 的 `close` 要等关闭动画结束（约 0.4s）才发，期间 `ImageGrid` 的 `previewedId` 仍在；下载刷新经 `reconcilePreview` 给同一 id 换入新 `ImageInfo`，弹窗的 `props.image` watch 看到「非空且未打开」就重新 `previewModal.open()`。修 opener 之前重开落在关闭动画中途 → 不可见；之后 → 看起来按返回没反应。桌面 `el-dialog` 的 `@close` 在关闭开始时就发，没有这个窗口。修复：紧凑模式下 `previewVisible` 一变 false 就通知上层 `preview-close`（`notifyCompactPreviewClose`，每次打开只发一次，动画结束时那次去重）；同时冻结 `pswpWindow`（`imageById` 改为从同一窗口取），关闭动画期间幻灯片不被抽空。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 竞态复现（修复前） | Android dev | HEAD 版本：打开预览，经 `modalStack.closeTop()` 模拟返回，80ms 后给同 id 换新 `ImageInfo` 对象 | 预览被重新打开，`pvwimgid` 保留 | 已实测；下载中真实按返回也偶发复现（5 次左右出现 1 次） |
+| [x] | 修复后竞态 | Android dev | 同上，跑 5 次 | 返回时 `previewedId` 立即清空，预览关闭、URL 清除，不再重开 | 已实测 |
+| [x] | 关闭动画完整 | Android dev | 打开预览后返回，逐帧采样 | 关闭期间 PhotoSwipe 数据源保持 3 项、媒体元素在，约 0.4s 后移除 | 已实测 |
+| [x] | 正常路径 | Android dev | 滑动翻图后返回；打开后立即返回；关闭后重开同一张 | 均正常关闭 / 打开，`pvwimgid` 跟随与清除正确 | 已实测 |
+| [ ] | 下载中真实操作 | Android | 下载任务运行中反复打开预览、滑动、按返回 | 每次返回都关闭 | 测试时下载已结束，由上面的模拟覆盖 |
+| [ ] | 桌面不受影响 | 桌面 CEF | 预览开合、切图、关闭 | 行为不变（改动只在紧凑模式分支） | 未覆盖 |
+| [x] | 前端单测 | 仓库 | `vitest` `ImageGrid.previewFollowPage.test.ts` | 通过 | 测试补上 `@/stores/ui` 的 mock 后 32 例通过（`ImageGrid.vue` 新增了 `useUiStore()`） |
+
+## Android 预览切图模型：手势回流 + 受控窗口（`ImagePreviewDialog.vue` / `photoswipe-vue` / `ImageGrid.vue`）
+
+旧模型下「当前图」有三份状态（`previewedId`、URL `pvwimgid`、PhotoSwipe 内部下标），彼此用窗口下标与相对方向异步互写：给 PhotoSwipe 的 `index` 是一次性命令、关闭后残留，打开时 `runInit` 读到上一轮的下标；初始化、重定位发出的 `change` 又被当成用户滑动转成 `switch`，把上层的 `previewedId` 改走（现象：预览过 B 后再点 A 或 C，打开的都是 B）；URL 回写没有序号，旧写入落地会把 `previewedId` 拉回。
+
+现模型：`previewedId` 唯一真源，URL 与 PhotoSwipe 只做投影。
+- `ImageGrid` 只在挂载 / keep-alive 激活时读一次 `pvwimgid`，之后只写不读。
+- 弹窗把三项窗口与当前下标（`pswpCurrentIndex`，派生值）随 `open` 同一轮下发；PhotoSwipe 的 `change` 不再回流。
+- photoswipe-vue 区分手势与程序导航：手势翻页落定后发新的 `swipe` 事件，弹窗与边界滑动（`reach-boundary`）一样，和桌面箭头一样 `requestSwitch(方向)`；上层重算窗口与下标回设，PhotoSwipe 在同一个 watcher 里先按 id `relocate`、再 `goTo` 下标，通常是 no-op；手势翻页尚未结算时不收敛。
+- slideView 改读父组件的实时数据源（`getItems`）：父组件 watcher 里重定位时子组件 `items` prop 还是上一帧，按旧长度夹取下标会落到错误的幻灯片（从下一页滑回上一页落到倒数第二张）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 根因复现 | Android dev | 旧代码：依次点第 2、1、3 张（B → 返回 → A → 返回 → C） | 打开 C 显示的是 B | 已实测，debug ingest 记录到初始化 `change` 触发的 `prev` 切图与 URL 回写拉回 |
+| [x] | 打开正确 | Android dev | 同上 | B、A、C 各自打开正确，`runInit` 读到的 `propsIndex` 即当前图，打开后无切图请求 | 已实测并截图 |
+| [x] | 滑动翻页 | Android dev | 从 B 往后滑两张、往回滑一张 | `pvwimgid` 依次 574 → 573 → 574；每次 `swipe` 后新窗口 `relocate` 到原位，`goTo` 的 diff 为 0 | 已实测 |
+| [x] | 首张往前滑 | Android dev | 第 1 页首张往前滑 | 停在首张，不发切图 | 已实测 |
+| [x] | 快速连滑 | Android dev | 连续快速滑两下（next×2、prev×2） | 第二下撞窗口边缘走 `reach-boundary`，第一下落定再发 `swipe`，上层走两步，PhotoSwipe `goTo` 跟上；最终显示与 `pvwimgid` 一致 | 已实测并截图 |
+| [x] | 跨页往后 | Android dev（每页 100） | 第 1 页末张往后滑 | 翻到第 2 页，显示 476 | 已实测 |
+| [ ] | 跨页往回 | Android dev | 第 2 页首张往前滑 | 回到第 1 页末张 477 | 修复前落到倒数第二张 478；`getItems` 修复待重启 dev 后复测（Vite 未重载 `PhotoSwipe.vue`） |
+| [x] | URL 只写不读 | 仓库 | `vitest`：挂载后改 `pvwimgid` | 预览目标不变 | 新增用例通过 |
+| [ ] | 深链接 | Android / 桌面 | 带 `?pvwimgid=` 进入画廊或从其它页切回 | 打开该图 | 挂载 / 激活读取路径未改，未单独复测 |
+| [ ] | 下载中滑动 | Android | 下载任务运行中滑动翻页、按返回 | 不跳图、不回弹 | 未覆盖 |
+| [ ] | 桌面不受影响 | 桌面 CEF | 预览切图、关闭 | 行为不变（桌面不走 PhotoSwipe） | 未覆盖 |
+| [x] | 类型与单测 | 仓库 | `vue-tsc`；`vitest src/components` | 无错误；16 个文件 80 例通过 | 已运行 |
+
 ## Android 画册页左侧贴边（`Albums.vue`）
 
 `.albums-page` 的左内边距为 0，是给桌面三栏布局让树列贴窗口左缘；紧凑模式没有树列，`ImageGrid` 中栏又是 `display: contents` 加不上内边距，结果面包屑、查询 chip 行和图片都贴着屏幕左边，只有页头靠 `ml-5` 缩进。现在紧凑模式在页面根上补回 20px 左内边距，页头的 `ml-5` 只在非紧凑模式保留。

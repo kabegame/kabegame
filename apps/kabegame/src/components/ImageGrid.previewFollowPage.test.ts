@@ -93,6 +93,7 @@ vi.mock("@/stores/settings", () => ({
   useSettingsStore: () => settings,
 }));
 vi.mock("@/stores/plugins", () => ({ usePluginStore: () => ({ plugins: [] }) }));
+vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
 vi.mock("vue-router", () => ({
   useRoute: () => reactive({ path: "/gallery", query: {} }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -165,10 +166,17 @@ afterEach(() => {
 });
 
 describe("预览跟随后台新增图片", () => {
+  it("挂载后只写不读 URL：外部改 pvwimgid 不改变预览目标", async () => {
+    const wrapper = await render();
+    previewImageId.value = "other";
+    await nextTick();
+    expect(wrapper.getComponent({ name: "ImageGridCore" }).props("previewImage")).toMatchObject({ id: "target" });
+  });
+
   it("同一路径刷新仍在途时，即使旧快照已加载也要等真实读取完成", async () => {
     const wrapper = await render();
     queryLoading.value = true;
-    previewImageId.value = "new-target";
+    wrapper.getComponent({ name: "ImageGridCore" }).vm.$emit("preview-request", { id: "new-target" });
     locateImageRowIndex.mockImplementation(() => new Promise(() => {}));
     await nextTick();
     await applySnapshot!(snapshot(["first", "second"], 2));
@@ -214,12 +222,12 @@ describe("预览跟随后台新增图片", () => {
     expect(locateImageRowIndex).not.toHaveBeenCalled();
   });
 
-  it("翻页加载期间 URL 换了 id：不丢掉新目标，也不拿旧页列表定位", async () => {
+  it("翻页加载期间换了目标 id：不丢掉新目标，也不拿旧页列表定位", async () => {
     const wrapper = await render();
-    currentPage.value = 2;
-    previewImageId.value = "new-target";
-    await nextTick();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
+    currentPage.value = 2;
+    core.vm.$emit("preview-request", { id: "new-target" });
+    await nextTick();
     expect(core.props("previewImage")).toBeNull();
     expect(locateImageRowIndex).not.toHaveBeenCalled();
     // 真实弹窗因 null prop 收起旧预览时会回报 close，不得清掉等待中的 URL 目标。

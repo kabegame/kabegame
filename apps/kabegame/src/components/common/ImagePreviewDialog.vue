@@ -4,7 +4,7 @@
     v-if="uiStore.isCompact"
     ref="pswpRef"
     :open="previewModal.isOpen.value"
-    :index="pswpCommandIndex"
+    :index="pswpCurrentIndex"
     :data-source="pswpDataSource"
     :loop="false"
     :z-index="previewFullscreenZIndex"
@@ -14,6 +14,7 @@
     :on-before-close="handlePswpBeforeClose"
     @change="handlePswpChange"
     @close="handlePswpClose"
+    @swipe="handlePswpSwipe"
     @reach-boundary="handlePswpReachBoundary"
     @video-double-tap="handleVideoDoubleTap"
   >
@@ -515,8 +516,9 @@ const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 /** 桌面预览视频：从 ImageContent 暴露的 videoEl 取，供 VideoControls 绑定 */
 const previewVideoEl = computed<HTMLVideoElement | null>(() => previewContentRef.value?.videoEl ?? null);
 /** 紧凑模式 PhotoSwipe slot：用 item.id 反查三项窗口 */
+/** 与 PhotoSwipe 数据源同一份窗口（含关闭动画期间的冻结），否则冻结的幻灯片找不到图会被 v-if 收掉。 */
 const imageById = (id: string | number | undefined): ImageInfo | null =>
-  [props.prevImage, previewImage.value, props.nextImage].find((img) => img && img.id === id) ?? null;
+  pswpWindow.value.find((img) => img.id === id) ?? null;
 const imageControlBarRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const pswpRef = ref<InstanceType<typeof PhotoSwipe> | null>(null);
 // Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
@@ -756,10 +758,25 @@ const isTextInputLike = (target: EventTarget | null) => {
 /**
  * 紧凑模式 PhotoSwipe：三项滑动窗口 `[prev, current, next]`，内容由上层按 id 实时算出。
  * 页边界或视图外时不足三项，所以**当前位不恒为 1**，必须显式算（见 pswpCurrentIndex）。
+ *
+ * 窗口和下标都是上层状态的投影，单向下发；回流只有用户手势：
+ * - 用户滑动落定（swipe）或在窗口边缘继续滑（reach-boundary）→ 和桌面箭头一样 requestSwitch(方向)；
+ * - 上层挪动 previewedId → 重算窗口与下标 → PhotoSwipe 先按 id 重定位、再收敛到下标。
+ *   滑动后上层算出的新窗口里当前图正是 PhotoSwipe 已经停住的那张，所以通常是 no-op。
+ * PhotoSwipe 的 change 不回流：它也会由初始化、重定位、程序导航触发，不能当作用户翻页。
  */
-const pswpWindow = computed<ImageInfo[]>(() =>
-  [props.prevImage, previewImage.value, props.nextImage].filter((img): img is ImageInfo => !!img),
-);
+/**
+ * 关闭动画期间冻结：弹窗一关上层就清掉 previewedId（见 notifyCompactPreviewClose），窗口
+ * 会立即变空；不冻结的话 PhotoSwipe 的幻灯片在关闭动画一开始就被抽走，只剩背景淡出。
+ * 重新打开时 previewVisible 先变 true，窗口照常跟上层走。
+ */
+let lastPswpWindow: ImageInfo[] = [];
+const pswpWindow = computed<ImageInfo[]>(() => {
+  const items = [props.prevImage, previewImage.value, props.nextImage].filter((img): img is ImageInfo => !!img);
+  if (!previewVisible.value && items.length === 0) return lastPswpWindow;
+  lastPswpWindow = items;
+  return items;
+});
 
 /** 当前图在窗口里的下标：首张时为 0，末张时为 1，视图外只有一项时为 0。 */
 const pswpCurrentIndex = computed(() => {
@@ -788,16 +805,6 @@ const pswpDataSource = computed(() => {
     };
   });
 });
-
-/**
- * 传给 PhotoSwipe 的 index 是「命令」，不是派生值——只在需要主动导航时写。
- *
- * 绝不能把它做成 `currentId → index` 的 computed：窗口平移时该值会变，触发
- * PhotoSwipe 的 props.index watcher → goTo() → 带动画倒退一张，并清掉用户当前缩放。
- * 窗口平移应当走 PhotoSwipe 自己的 relocate（它按 delta 平移各 holder 逻辑索引，
- * 保留内容相同那几张的缩放平移）。@change 只单向更新本地状态，不回写这里。
- */
-const pswpCommandIndex = ref(0);
 
 /** 把当前这张图的 URL / 路径同步到桌面侧渲染状态。 */
 const syncPreviewSource = (img: ImageInfo | null) => {
@@ -1146,13 +1153,35 @@ function doAndroidPreviewCleanup() {
   closePreviewContextMenu();
 }
 
+/**
+ * 紧凑模式下每次打开只通知上层一次关闭。返回键等外部路径只关掉 previewModal，PhotoSwipe
+ * 的 close 要等关闭动画结束才发；这段动画期间上层 previewedId 还在，下载刷新换入同 id 的
+ * 新 ImageInfo 会让 props.image 的 watch 把预览重新打开（看起来就是「按返回没反应」）。
+ * 所以弹窗一关就立刻通知，动画结束时的那次由这里去重。
+ */
+let compactCloseNotified = false;
+function notifyCompactPreviewClose(image: ImageInfo | null) {
+  if (compactCloseNotified) return;
+  compactCloseNotified = true;
+  emit("preview-close", { image });
+}
+
+watch(previewVisible, (visible) => {
+  if (!uiStore.isCompact) return;
+  if (visible) {
+    compactCloseNotified = false;
+    return;
+  }
+  notifyCompactPreviewClose(previewImage.value);
+});
+
 const closePreview = () => {
   const closedImage = previewImage.value;
   isAppFullscreen.value = false;
   if (uiStore.isCompact) {
     previewModal.close();
     doAndroidPreviewCleanup();
-    emit("preview-close", { image: closedImage });
+    notifyCompactPreviewClose(closedImage);
     return;
   }
   previewModal.close();
@@ -1288,10 +1317,15 @@ const handlePswpBeforeClose = (source?: string): boolean => {
   return true;
 };
 
+/** PhotoSwipe 当前停住的那张；只用来判断显示的图是否真的换了，不回流给上层 */
+let pswpShownId: string | null = null;
+
+/** 只重置本地手势 / 播放状态。同一张图被重定位（下载刷新、窗口平移）时不算换图。 */
 const handlePswpChange = ({ index }: { index: number }) => {
   if (!uiStore.isCompact || index < 0) return;
   const target = pswpWindow.value[index];
-  if (!target) return;
+  if (!target || target.id === pswpShownId) return;
+  pswpShownId = target.id;
 
   initialPanY = null;
   if (verticalDragResetTimer) {
@@ -1302,12 +1336,12 @@ const handlePswpChange = ({ index }: { index: number }) => {
   swipeDeleteReady.value = false;
   isFromVerticalDrag = false;
   videoPaused.value = false;
+};
 
-  // 窗口里换了一张 = 用户划到了邻居：请求上层把 props.image 挪过去。
-  // 这里不回写 pswpCommandIndex——窗口随后会平移，PhotoSwipe 自己用 relocate 跟上。
-  if (target.id === currentId.value) return;
-  if (target.id === props.nextImage?.id) requestSwitch("next");
-  else if (target.id === props.prevImage?.id) requestSwitch("prev");
+/** 用户滑动已落定：和桌面箭头一样请求上层切图，上层回设的新窗口通常与当前显示一致。 */
+const handlePswpSwipe = ({ direction }: { direction: "prev" | "next"; index: number }) => {
+  if (!uiStore.isCompact) return;
+  requestSwitch(direction);
 };
 
 const handlePswpReachBoundary = ({ direction }: { direction: "prev" | "next"; index: number }) => {
@@ -1338,7 +1372,7 @@ const handlePswpClose = () => {
     clearTimeout(verticalDragResetTimer);
     verticalDragResetTimer = null;
   }
-  emit("preview-close", { image: closedImage });
+  notifyCompactPreviewClose(closedImage);
 };
 
 onMounted(() => {
@@ -1384,18 +1418,17 @@ if (!uiStore.isCompact) {
 
 /**
  * props.image 非空即打开。弹窗不再有命令式 open()——开关是上层 previewedId 的投影。
- * 打开瞬间把 PhotoSwipe 的命令索引对准当前图；之后窗口平移一律走 relocate，不再写这里。
+ * 紧凑模式下打开与窗口 / 下标在同一轮渲染下发，PhotoSwipe 初始化时读到的就是当前图。
  */
 watch(
   () => props.image,
-  async (value) => {
+  (value) => {
     if (value) {
       if (!previewVisible.value) {
         previewModal.open();
         videoPaused.value = false;
+        pswpShownId = null;
       }
-      await nextTick();
-      pswpCommandIndex.value = pswpCurrentIndex.value;
     } else if (previewVisible.value) {
       closePreview();
     }

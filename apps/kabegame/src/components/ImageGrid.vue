@@ -14,6 +14,7 @@
     @preview-close="handlePreviewClose"
     @open-gallery-filter="handleOpenGalleryFilter"
     @open-surf-record="handleOpenSurfRecord"
+    :enable-virtual-scroll="!uiStore.isCompact"
   >
     <!-- header / aside 必须按需透传：无条件声明会让 core 误判 $slots.aside 存在而切换多栏布局 -->
     <template v-if="$slots.header" #header>
@@ -133,6 +134,7 @@ import type {
   ContextCommandPayload as CoreContextCommandPayload,
 } from "@/components/image/ImageGridCore.vue";
 import type { ActionItem } from "@/actions/types";
+import { useUiStore } from "@/stores/ui";
 
 // 扩展 ContextCommand 类型，添加 kabegame 特有的命令
 export type ContextCommand =
@@ -205,6 +207,7 @@ const route = useRoute();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
 const settingsStore = useSettingsStore();
+const uiStore = useUiStore();
 
 const adapter = props.adapter;
 
@@ -808,7 +811,10 @@ const resolvePreviewAnchor = () => {
   previewedId.value = next?.id ?? null;
 };
 
-/* ---------------- 预览图片 URL 参数 pvwimgid 双向同步 ----------------
+/* ---------------- 预览图片 URL 参数 pvwimgid ----------------
+ * previewedId 是唯一真源，URL 只是它的投影：挂载 / keep-alive 激活时读一次做深链接初始化，
+ * 之后只写不读。写入是异步 replace，若再监听 URL，先发出的旧写入落地时会把已经前进的
+ * previewedId 拉回去（连续切图时表现为来回跳）。
  * router 由本（外层）组件持有，core 层保持 router-agnostic：core 仅
  * emit preview-open/navigate/close 并暴露 openPreviewById/closePreview。
  */
@@ -966,7 +972,7 @@ watch(
   { flush: "sync" },
 );
 
-// URL -> state
+// URL -> state：只在挂载 / 激活时调用
 const applyPreviewFromUrl = () => {
   if (!isRouteActive.value) return;
   const id = readPreviewId();
@@ -1005,7 +1011,6 @@ onDeactivated(() => {
   isRouteActive.value = false;
   clearSelection();
 });
-watch(() => previewImageId.value, applyPreviewFromUrl); // 前进/后退、外部改动
 
 function handlePreviewOpen(payload: { image: ImageInfo }) {
   previewedId.value = payload.image.id;
