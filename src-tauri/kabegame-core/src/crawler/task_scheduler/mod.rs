@@ -619,12 +619,14 @@ async fn worker_loop(
         {
             Ok(res) => res,
             Err(payload) => {
-                let message = format!(
-                    "任务执行时发生内部错误（panic）：{}",
-                    panic_message(&*payload)
-                );
+                let detail = panic_message(&*payload);
+                let message = format!("任务执行时发生内部错误（panic）：{detail}");
                 eprintln!("[TaskScheduler] task {task_id} {message}");
-                GlobalEmitter::global().emit_task_log(&task_id, "error", &message);
+                GlobalEmitter::global().emit_task_log(
+                    &task_id,
+                    "error",
+                    &task_log_i18n("taskLogTaskPanic", json!({ "detail": detail })),
+                );
                 download_queue.cancel_task_downloads(&task_id).await;
                 Err(TaskError::Other(message))
             }
@@ -739,7 +741,7 @@ async fn wait_task_downloads_drained(download_queue: &DownloadQueue, run: &Arc<T
         GlobalEmitter::global().emit_task_log(
             task_id,
             "print",
-            &format!("等待剩余 {n} 个下载完成…"),
+            &task_log_i18n("taskLogWaitDownloads", json!({ "count": n })),
         );
         tokio::select! {
             biased;
@@ -747,7 +749,7 @@ async fn wait_task_downloads_drained(download_queue: &DownloadQueue, run: &Arc<T
                 GlobalEmitter::global().emit_task_log(
                     task_id,
                     "print",
-                    "任务已取消，停止等待剩余下载",
+                    &task_log_i18n("taskLogWaitDownloadsCanceled", json!({})),
                 );
                 break;
             }
@@ -756,7 +758,7 @@ async fn wait_task_downloads_drained(download_queue: &DownloadQueue, run: &Arc<T
                 GlobalEmitter::global().emit_task_log(
                     task_id,
                     "warn",
-                    &format!("等待下载无进展超时，仍有 {n} 个未完成，继续结束任务"),
+                    &task_log_i18n("taskLogWaitDownloadsTimeout", json!({ "count": n })),
                 );
                 break;
             }
@@ -870,9 +872,9 @@ pub(crate) async fn run_webview_session(
                 GlobalEmitter::global().emit_task_log(
                     &run.task_id,
                     "error",
-                    &format!(
-                        "超过 {} 秒未收到 WebView 心跳，判定窗口无响应，结束任务",
-                        WEBVIEW_HEARTBEAT_TIMEOUT.as_secs()
+                    &task_log_i18n(
+                        "taskLogWebviewHeartbeatTimeout",
+                        json!({ "seconds": WEBVIEW_HEARTBEAT_TIMEOUT.as_secs() }),
                     ),
                 );
                 break Err(TaskError::Other("WebView 窗口无响应".to_string()));

@@ -685,8 +685,11 @@ pub fn create_crawler_window<R: Runtime>(
         env!("CARGO_MANIFEST_DIR"),
         "/src/webview_js/bootstrap.js"
     ));
+    let lang_json = serde_json::to_string(Settings::global().get_resolved_language())
+        .map_err(|error| format!("Failed to serialize crawler language: {error}"))?;
     let script = bootstrap_tpl
         .replace("__KB_VARS_JSON__", vars_json)
+        .replace("__KB_LANG__", &lang_json)
         .replace("/*__KB_CRAWL_JS__*/", crawl_js);
     let target = if base_url.trim().is_empty() {
         "about:blank"

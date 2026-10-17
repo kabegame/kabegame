@@ -1957,6 +1957,12 @@ mod tests {
                 "icon.png",
                 "package.json",
                 "rspack.config.mjs",
+                "src/i18n/en.json",
+                "src/i18n/index.ts",
+                "src/i18n/ja.json",
+                "src/i18n/ko.json",
+                "src/i18n/zh.json",
+                "src/i18n/zhtw.json",
                 "src/index.ts",
                 "tsconfig.json",
             ]
