@@ -24,6 +24,8 @@
   "surfHelpTitle": "Surf help",
   "surfHelpIntro": "Surf is Kabegame's built-in browse & collect feature. Enter a site URL (e.g. https://pixiv.net) and click \"Start surfing\" to open it in-app; you can right-click to download images or videos, and they will be added to your gallery.",
   "surfHelpRecord": "Each surf creates a record; you can re-enter the site from here or open \"View recent images\" for that site's gallery view.",
+  "surfHelpIntroAndroid": "Surf opens the target site in a separate page. You can sign in there; when you close it, Kabegame saves the site's Cookie and browser identity for plugins that require authentication.",
+  "surfHelpRecordAndroid": "One-click and in-page downloads are not available in this first phase. Surf records are still saved so you can reopen the site, inspect its Cookie, or manage the record.",
   "gotIt": "Got it",
   "pleaseEnterUrl": "Please enter URL",
   "useHttps": "Please use https",

@@ -67,7 +67,10 @@ if (fromDb) {
 }
 const metadata = JSON.parse(metadataText);
 
-const tplPath = `${root}/src-crawler-plugins/plugins/${pluginId}/templates/description.ejs`;
+// 插件目录为 plugins/kabegame-plugin-<id>/（旧命名 plugins/<id>/ 仍兼容）
+const prefixedTpl = `${root}/src-crawler-plugins/plugins/kabegame-plugin-${pluginId}/templates/description.ejs`;
+const tplPath = await Deno.stat(prefixedTpl).then(() => prefixedTpl, () =>
+  `${root}/src-crawler-plugins/plugins/${pluginId}/templates/description.ejs`);
 const body = ejs.render(await Deno.readTextFile(tplPath), { metadata }, { rmWhitespace: false });
 // 与 app 注入的 iframe 外壳同形（ImagePluginDescriptionPanel.vue buildDescriptionIframeThemeStyles）
 const shell = `<!doctype html><meta charset="utf-8"><style>:root{--anime-text-primary:#4a154b;--anime-text-secondary:#7c3aed;` +

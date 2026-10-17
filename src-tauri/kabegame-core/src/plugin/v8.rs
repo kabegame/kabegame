@@ -21,6 +21,8 @@ use crate::plugin::Plugin;
 
 mod ops;
 pub use ops::KabegameOpState;
+#[cfg(target_os = "android")]
+pub use ops::set_android_webview_user_agent;
 
 extension!(
     kabegame_v8,

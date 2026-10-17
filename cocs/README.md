@@ -53,6 +53,16 @@
   - 主题：Web 发布版在服务端对每次 `POST /rpc` 发以方法名命名、url 为 `/rpc/<方法名>` 的 umami 事件（data: method / ok / code / ms），不读取、不转发客户端请求头；`web` feature 门控，由 `KABEGAME_UMAMI_*` 环境变量开启（systemd drop-in）；有界队列丢弃策略、`no_proxy` 直连，以及 umami isbot 会静默丢弃 `名字/版本` 形式 UA 的坑。
   - 适用场景：在 demo 服务器开启或排查接口埋点；umami 里看不到接口事件（未配置环境变量、返回 `beep`、走了代理）；新增需要统计的服务端入口。
 
+## 畅游（`surf/`）
+
+- [surf/ANDROID_SURF.md](surf/ANDROID_SURF.md)
+  - 主题：Android Phase 1 畅游架构。涵盖独立 `SurfActivity` 的 Tauri navbar + 普通内容 WebView
+    双层布局、wry `setContentView` 时序、`SurfRegistry` 双向会合、Rust 单会话权威状态、移动插件命令与
+    Channel 事件、Cookie 合并保存、系统 WebView 默认 UA 登记为 `Kabegame.cefUserAgent()`（UA 不入库）、
+    安全边界、已知 Channel 生命周期与 OAuth 限制。
+  - 适用场景：新增或排查 Android 畅游启动/关闭、导航栏地址同步、返回键、登录态保存、插件请求的
+    Cookie/UA 配对（403、`cefUserAgent()` 为 `null`）、Activity 重建或外部页面意外获得 IPC。
+
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)

@@ -63,6 +63,7 @@ import { Badge } from '@astrojs/starlight/components';
 - `kabegame-cli plugin new <ID>` 生成的目录和 `package.json` 的 `name` 改为 `kabegame-plugin-<ID>`，模板 `engines.kabegame` 改为 `>=4.5.2`；参数本身已带前缀时不会重复添加。
 - `kabegame-cli plugin pack` 的命名检查改为：目录名等于 `package.json` 的 `name`，输出文件名（去掉 `.kgpg`）等于插件 ID。以前要求输出文件名也等于 `name`，带前缀的插件要改成 `--output <ID>.kgpg`；`--plugin-dir .` 现在也能正确识别目录名。
 - 官方插件仓库的插件目录改为 `plugins/kabegame-plugin-<ID>/`，插件 ID 不变，全部插件的 `engines.kabegame` 提到 `>=4.5.2`。
+- Android 支持畅游后，`Kabegame.cefUserAgent()` 在 Android 上不再返回 `null`，改为返回系统 WebView 的默认 User-Agent，也就是 Android 畅游 Cookie 的签发 UA。已按「先 `setHeader("User-Agent", cefUserAgent())` 再 `requireCookie()`」写法配对的插件无需修改；若插件把 `null` 当作「运行在 Android」的判断依据，要改用别的方式。
 
 ## 4.5.1
 

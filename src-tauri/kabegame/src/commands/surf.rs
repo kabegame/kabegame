@@ -1,6 +1,11 @@
+use super::surf_common::SurfSessionStatus;
+pub(crate) use super::surf_common::{
+    encode_query_value, normalize_surf_host, parse_external_url, resolve_root_url, surf_label,
+    surf_navbar_label,
+};
 use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::crawler::TaskScheduler;
-use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
+use kabegame_core::storage::Storage;
 use kabegame_i18n::t;
 use std::collections::HashMap;
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
@@ -9,31 +14,6 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, Webview, WebviewUrl,
     WebviewWindowBuilder,
 };
-use tauri_plugin_opener::OpenerExt;
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SurfSessionStatus {
-    pub active: bool,
-    /// 当前畅游站点 host（对外索引键，与路由 `/surf/:host/images` 一致）
-    pub surf_host: Option<String>,
-}
-
-fn parse_external_url(raw: &str) -> Result<url::Url, String> {
-    let parsed = url::Url::parse(raw).map_err(|e| format!("无效 URL: {}", e))?;
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" {
-        return Err("仅支持 http 或 https URL".to_string());
-    }
-    Ok(parsed)
-}
-
-/// 新建畅游记录时写入的「根 URL」：与用户输入一致（保留 path、query），仅去掉 fragment。
-fn resolve_root_url(parsed: &url::Url) -> String {
-    let mut root = parsed.clone();
-    root.set_fragment(None);
-    root.to_string()
-}
 
 /// RFC6265 风格的域匹配：`.example.com` 与 `www.example.com` 等子域。
 fn cookie_domain_matches_site_host(cookie_domain: &str, site_host: &str) -> bool {
@@ -97,15 +77,6 @@ pub(crate) fn eval_surf_toast_for_host<R: Runtime>(
     }
 }
 
-pub(crate) fn surf_label(host: &str) -> String {
-    // Tauri window labels only allow [a-zA-Z0-9-/:_]; replace '.' with '_'
-    format!("surf-{}", host.trim().to_lowercase().replace('.', "_"))
-}
-
-fn surf_navbar_label(host: &str) -> String {
-    format!("{}-navbar", surf_label(host))
-}
-
 pub(crate) fn is_surf_content_label(label: &str) -> bool {
     label.starts_with("surf-") && !label.ends_with("-navbar")
 }
@@ -116,10 +87,6 @@ pub(crate) fn host_from_surf_label(label: &str) -> Option<String> {
         .filter(|s| !s.ends_with("-navbar"))
         .filter(|s| !s.is_empty())
         .map(|s| s.replace('_', "."))
-}
-
-fn encode_query_value(value: &str) -> String {
-    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 fn surf_content_webview<R: Runtime>(
@@ -149,18 +116,6 @@ pub async fn surf_open_devtools<R: Runtime>(
     let webview = surf_content_webview(&app, host.as_deref())?;
     webview.open_devtools();
     Ok(())
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_open_in_browser<R: Runtime>(
-    app: AppHandle<R>,
-    url: String,
-) -> Result<(), String> {
-    let parsed = parse_external_url(url.trim())?;
-    app.opener()
-        .open_url(parsed.as_str(), None::<&str>)
-        .map_err(|e| format!("打开浏览器失败: {}", e))
 }
 
 #[cfg(not(target_os = "android"))]
@@ -559,65 +514,6 @@ pub async fn surf_get_session_status<R: Runtime>(
         active: surf_host.is_some(),
         surf_host,
     })
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_list_records(offset: usize, limit: usize) -> Result<RangedSurfRecords, String> {
-    kabegame_core::commands::surf::surf_list_records(offset, limit)
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_get_all_records() -> Result<Vec<SurfRecord>, String> {
-    kabegame_core::commands::surf::surf_get_all_records()
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_get_records_by_ids(ids: Vec<String>) -> Result<Vec<SurfRecord>, String> {
-    kabegame_core::commands::surf::surf_get_records_by_ids(ids)
-}
-
-pub(crate) fn normalize_surf_host(host: &str) -> String {
-    host.trim().to_lowercase()
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_get_record(host: String) -> Result<Option<SurfRecord>, String> {
-    kabegame_core::commands::surf::surf_get_record(host)
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_get_record_images(
-    host: String,
-    offset: usize,
-    limit: usize,
-) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_get_record_images(host, offset, limit)
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_update_root_url(
-    host: String,
-    root_url: String,
-) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_update_root_url(host, root_url)
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_update_name(host: String, name: String) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_update_name(host, name)
-}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_delete_record(host)
 }
 
 /// 返回当前畅游会话对应站点的 Cookie（与浏览器请求头中发送的一致，含 HttpOnly）。

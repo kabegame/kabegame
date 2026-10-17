@@ -213,10 +213,10 @@
       @update:model-value="helpDialog.close"
     >
       <p class="surf-help-p">
-        {{ $t("surf.surfHelpIntro") }}
+        {{ $t(IS_ANDROID ? "surf.surfHelpIntroAndroid" : "surf.surfHelpIntro") }}
       </p>
       <p class="surf-help-p">
-        {{ $t("surf.surfHelpRecord") }}
+        {{ $t(IS_ANDROID ? "surf.surfHelpRecordAndroid" : "surf.surfHelpRecord") }}
       </p>
       <template #footer>
         <el-button type="primary" @click="helpDialog.close()">{{ $t("surf.gotIt") }}</el-button>
@@ -247,6 +247,7 @@ import { useSettingsStore } from "@/stores/settings";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { formatAbsoluteTime, formatRelativeTime } from "@/utils/relativeTime";
+import { IS_ANDROID } from "@/env";
 
 const { t } = useI18n();
 const router = useRouter();

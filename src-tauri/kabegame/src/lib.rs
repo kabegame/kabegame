@@ -405,6 +405,7 @@ pub(crate) fn configure_app(
         builder = builder.plugin(tauri_plugin_wallpaper::init());
         builder = builder.plugin(tauri_plugin_task_notification::init());
         builder = builder.plugin(tauri_plugin_android_battery_optimization::init());
+        builder = builder.plugin(commands::surf_android::plugin());
     }
 
     #[cfg(not(target_os = "android"))]
@@ -528,41 +529,25 @@ pub(crate) fn configure_app(
             delete_failed_images,
             delete_task_failed_image,
             get_active_downloads,
-            #[cfg(not(target_os = "android"))]
             surf_start_session,
-            #[cfg(not(target_os = "android"))]
             surf_close_session,
-            #[cfg(not(target_os = "android"))]
             surf_get_session_status,
-            #[cfg(not(target_os = "android"))]
             surf_list_records,
-            #[cfg(not(target_os = "android"))]
             surf_get_all_records,
-            #[cfg(not(target_os = "android"))]
             surf_get_records_by_ids,
-            #[cfg(not(target_os = "android"))]
             surf_get_record,
-            #[cfg(not(target_os = "android"))]
             surf_get_record_images,
-            #[cfg(not(target_os = "android"))]
             surf_update_root_url,
-            #[cfg(not(target_os = "android"))]
             surf_update_name,
-            #[cfg(not(target_os = "android"))]
             surf_delete_record,
             #[cfg(not(target_os = "android"))]
             surf_get_cookies,
             #[cfg(not(target_os = "android"))]
             surf_open_devtools,
-            #[cfg(not(target_os = "android"))]
             surf_open_in_browser,
-            #[cfg(not(target_os = "android"))]
             surf_go_back,
-            #[cfg(not(target_os = "android"))]
             surf_go_forward,
-            #[cfg(not(target_os = "android"))]
             surf_reload,
-            #[cfg(not(target_os = "android"))]
             surf_navigate,
             #[cfg(not(target_os = "android"))]
             surf_report_url,

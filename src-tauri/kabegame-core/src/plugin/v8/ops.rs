@@ -478,8 +478,14 @@ const CEF_CHROME_MAJOR: u32 = 149;
 /// 畅游（桌面 CEF）默认 User-Agent，按 Chromium `BuildUserAgentFromOSAndProduct` 的公式拼出：
 /// 平台段为 Chromium 写死的 unified platform，版本段为 `<major>.0.0.0`。
 /// Cloudflare 的 `cf_clearance` 绑定签发时的 UA，插件拿畅游 Cookie 时须配套使用。
-/// Android 不走 CEF（系统 WebView），返回 `None`。
+/// Android 不走 CEF：畅游内容页是系统 WebView 且保持默认 UA，故返回宿主启动时登记的
+/// `WebSettings.getDefaultUserAgent`；尚未登记时返回 `None`。
 fn cef_user_agent() -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        return ANDROID_WEBVIEW_USER_AGENT.get().cloned();
+    }
+    #[allow(unreachable_code)]
     let platform = if cfg!(target_os = "windows") {
         "Windows NT 10.0; Win64; x64"
     } else if cfg!(target_os = "macos") {
@@ -493,6 +499,19 @@ fn cef_user_agent() -> Option<String> {
         "Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) \
          Chrome/{CEF_CHROME_MAJOR}.0.0.0 Safari/537.36"
     ))
+}
+
+/// 系统 WebView 默认 UA：同进程内所有 WebView 一致，WebView 升级会重启进程，故只登记一次。
+#[cfg(target_os = "android")]
+static ANDROID_WEBVIEW_USER_AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 由安卓宿主登记系统 WebView 的默认 UA，供 `Kabegame.cefUserAgent()` 返回。
+#[cfg(target_os = "android")]
+pub fn set_android_webview_user_agent(user_agent: &str) {
+    let user_agent = user_agent.trim();
+    if !user_agent.is_empty() {
+        let _ = ANDROID_WEBVIEW_USER_AGENT.set(user_agent.to_string());
+    }
 }
 
 #[op2]
@@ -1248,6 +1267,10 @@ fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, 
     }
 
     client_builder = client_builder
+        // HTTP/1.1 下 hyper 默认把头名全部转成小写发出，Cloudflare 视作机器人特征直接挑战
+        // （同一请求 curl 以 User-Agent 大小写发出是 200、全小写是 403）。改为首字母大写兜底；
+        // 能协商 h2 的连接不受影响（h2 规定头名小写，见 Cargo.toml 的 native-tls-alpn）。
+        .http1_title_case_headers()
         .timeout(Duration::from_secs(300))
         .connect_timeout(Duration::from_secs(10))
         .redirect(redirect)

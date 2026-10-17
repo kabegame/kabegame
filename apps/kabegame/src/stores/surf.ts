@@ -2,7 +2,6 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { invoke, listen, type UnlistenFn } from "../api";
 import type { ImageInfo } from "../types/image";
-import { IS_ANDROID } from "../env";
 
 export interface SurfRecord {
   id: string;
@@ -115,7 +114,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function fetchRecordByHost(host: string): Promise<SurfRecord | null> {
-    if (IS_ANDROID) return null;
     const normalizedHost = normalizeHost(host);
     if (!normalizedHost) return null;
     const record = await invoke<SurfRecord | null>("surf_get_record", { host: normalizedHost });
@@ -123,7 +121,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function ensureRecordsByIds(ids: string[]): Promise<SurfRecord[]> {
-    if (IS_ANDROID) return [];
     const missingIds = Array.from(
       new Set(ids.map((id) => String(id ?? "").trim()).filter((id) => id && !recordsById.value[id])),
     );
@@ -166,7 +163,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function initListeners() {
-    if (IS_ANDROID) return;
     if (unlistenRecords || unlistenSession) return;
     unlistenRecords = await listen<Record<string, unknown>>("surf-records-change", async (event) => {
       const p = (event.payload ?? {}) as Record<string, unknown>;
@@ -192,11 +188,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function checkSession() {
-    if (IS_ANDROID) {
-      sessionActive.value = false;
-      activeHost.value = null;
-      return;
-    }
     const status = await invoke<SurfSessionStatus>("surf_get_session_status");
     sessionActive.value = !!status.active;
     activeHost.value = status.surfHost ? normalizeHost(status.surfHost) : null;
@@ -207,10 +198,6 @@ export const useSurfStore = defineStore("surf", () => {
     if (initPromise) return initPromise;
     loading.value = true;
     initPromise = (async () => {
-      if (IS_ANDROID) {
-        inited = true;
-        return;
-      }
       await initListeners();
       const [allRecords] = await Promise.all([invoke<SurfRecord[]>("surf_get_all_records"), checkSession()]);
       recordsById.value = {};
@@ -226,7 +213,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function startSession(url: string) {
-    if (IS_ANDROID) throw new Error("Surf is not supported on Android");
     await init();
     const record = await invoke<SurfRecord>("surf_start_session", { url });
     sessionActive.value = true;
@@ -236,7 +222,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function closeSession(host?: string) {
-    if (IS_ANDROID) return;
     await invoke("surf_close_session", { host: host ? normalizeHost(host) : null });
   }
 
@@ -246,20 +231,15 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function getRecordImages(host: string, localOffset: number, limit: number) {
-    if (IS_ANDROID) {
-      return { images: [], total: 0, offset: localOffset, limit };
-    }
     return invoke<RangedImages>("surf_get_record_images", { host, offset: localOffset, limit });
   }
 
   async function deleteRecord(host: string) {
-    if (IS_ANDROID) return;
     await init();
     await invoke("surf_delete_record", { host: normalizeHost(host) });
   }
 
   async function updateName(host: string, name: string) {
-    if (IS_ANDROID) return;
     await init();
     await invoke("surf_update_name", { host: normalizeHost(host), name });
     const cached = recordByHost(host);
@@ -267,7 +247,6 @@ export const useSurfStore = defineStore("surf", () => {
   }
 
   async function updateRootUrl(host: string, rootUrl: string) {
-    if (IS_ANDROID) return;
     await init();
     await invoke("surf_update_root_url", { host: normalizeHost(host), rootUrl });
     const cached = recordByHost(host);

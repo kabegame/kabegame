@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@/api/rpc";
+import { IS_ANDROID } from "@/env";
 
 const params = new URLSearchParams(location.search);
 const host = params.get("host") ?? "";
@@ -122,6 +123,21 @@ function mount() {
             flex: 0 0 18px;
         }
 
+        .surf-navbar--android {
+            gap: 4px;
+            padding: 0 6px;
+        }
+
+        .surf-navbar--android .surf-navbar__button {
+            width: 40px;
+            height: 40px;
+            flex-basis: 40px;
+        }
+
+        .surf-navbar--android .surf-navbar__address {
+            height: 36px;
+        }
+
         .surf-navbar__address {
             min-width: 0;
             height: 28px;
@@ -158,7 +174,7 @@ function mount() {
   document.head.appendChild(style);
 
   const bar = document.createElement("nav");
-  bar.className = "surf-navbar";
+  bar.className = IS_ANDROID ? "surf-navbar surf-navbar--android" : "surf-navbar";
   bar.setAttribute("role", "navigation");
 
   const address = document.createElement("input");
@@ -168,6 +184,7 @@ function mount() {
   address.autocomplete = "off";
   address.spellcheck = false;
   address.inputMode = "url";
+  address.enterKeyHint = "go";
   address.value = currentUrl;
 
   // invoke 失败时把原因直接显示在地址栏里（导航栏 webview 的 devtools 需经
@@ -215,6 +232,11 @@ function mount() {
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>',
     () => runCommand("surf_open_in_browser", { url: currentUrl }),
   );
+  const close = iconButton(
+    "Close",
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>',
+    () => runCommand("surf_close_session", { host }),
+  );
 
   // 一键下载：运行态完全由 Rust 的 surf-collect-state 驱动，点击只发 toggle（空闲=开始，运行中=取消）
   const collect = iconButton("Download all media", COLLECT_ICON, () => runCommand("surf_collect_toggle", { host }));
@@ -242,7 +264,11 @@ function mount() {
     address.value = currentUrl;
   });
 
-  bar.append(back, forward, reload, address, devtools, openInBrowser, collect);
+  bar.append(
+    ...(IS_ANDROID
+      ? [back, forward, reload, address, openInBrowser, close]
+      : [back, forward, reload, address, devtools, openInBrowser, collect]),
+  );
   root.appendChild(bar);
 
   // target 必须显式给本 navbar 的 webview label:后端用 emit_to(<label>-navbar) 定向,
@@ -261,11 +287,13 @@ function mount() {
     unlistenUrlChanged = unlisten;
   }, showError);
 
-  listen<{ running?: boolean }>("surf-collect-state", (event) => setCollectRunning(event.payload?.running === true), {
-    target: getCurrentWebview().label,
-  }).then((unlisten) => {
-    unlistenCollectState = unlisten;
-  }, showError);
+  if (!IS_ANDROID) {
+    listen<{ running?: boolean }>("surf-collect-state", (event) => setCollectRunning(event.payload?.running === true), {
+      target: getCurrentWebview().label,
+    }).then((unlisten) => {
+      unlistenCollectState = unlisten;
+    }, showError);
+  }
 }
 
 window.addEventListener("beforeunload", () => {

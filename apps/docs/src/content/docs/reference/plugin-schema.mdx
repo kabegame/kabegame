@@ -57,7 +57,7 @@ plugin-name.kgpg
 | `kbDoc` | object | 否 | 4.3.0 | 多语言文档映射：键 `default`/`zh`/`en`/`ja`/`ko`/`zhtw`，值为 `.md` 相对路径。 |
 | `kbChangelog` | object | 否 | <Badge text="4.4.0" variant="note" /> | 多语言更新日志映射；与 `kbDoc` 同构，值为 `.md` 插件根相对路径。 |
 | `kbAssets` | string[] | 否 | <Badge text="4.4.0" variant="note" /> | 文档与更新日志共用的资源白名单；每项是插件根相对路径。未声明的 Markdown 本地资源引用会使打包报错。归一化路径以 `banner` 开头的项另作快捷预览走马灯的橱窗图。 |
-| `kbRecommendedConfigs` | string[] | 否 | 4.3.0 | 推荐运行配置文件路径数组（`configs/*.json`）。 |
+| `kbRecommendedConfigs` | string[] | 否 | 4.3.0 | 推荐运行配置文件路径数组（`configs/*.json`），文件格式见 [插件格式 · configs/*.json](/dev/format/#configsjson)。 |
 | `kbPathQLProviders` | string[] | 否 | 4.3.0 | PathQL provider DSL 文件路径数组（`providers/*.json5`），后端用。 |
 | `kbDescriptionTemplate` | string | 否 | 4.3.0 | 图片描述模板 `.ejs` 路径。 |
 | `kbMetadataMigration` | string | 否 | 4.3.0 | 单一 metadata 迁移脚本路径（须 `.js`，ES module，`export migrate`）。 |

@@ -35,6 +35,8 @@
   "listCount": "{total} config(s)",
   "listFiltered": "Showing {shown} of {total}",
   "moreActions": "More",
+  "copyAsPresetJson": "Copy as preset JSON",
+  "presetJsonCopied": "Copied. Save it as a .json file under the plugin's configs/",
   "relatedTasks": "Related tasks",
   "noRelatedTasks": "None yet",
   "taskTriggerScheduled": "Scheduled",

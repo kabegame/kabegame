@@ -68,6 +68,10 @@ pub fn create_client() -> Result<reqwest::Client, String> {
     }
 
     client_builder = client_builder
+        // HTTP/1.1 下 hyper 默认把头名全部转成小写发出，Cloudflare 视作机器人特征直接挑战
+        // （同一请求 curl 以 User-Agent 大小写发出是 200、全小写是 403）。改为首字母大写兜底；
+        // 能协商 h2 的连接不受影响（h2 规定头名小写，见 Cargo.toml 的 native-tls-alpn）。
+        .http1_title_case_headers()
         .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())

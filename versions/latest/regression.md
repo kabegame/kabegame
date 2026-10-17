@@ -795,3 +795,44 @@ Android 收集表单使用与桌面一致的 `el-select` 展示插件选择入�
 | [ ] | WebView `getLang()` | 桌面 CEF | 在 WebView 插件中记录 `Kabegame.getLang()`，切换语言后新建任务窗口 | 返回建窗时的已解析语言码；脚本可同步调用，无新增 Tauri IPC | 待验证 |
 | [ ] | 历史宿主日志重译 | 桌面 CEF | 运行会产生 `[to]`、`[cookie]`、HTTP 重试与下载等待日志的任务，保持日志对话框打开并切换应用语言 | 宿主日志立即按新语言重新渲染；插件已写入的纯文本日志保持任务运行时语言 | 待验证 |
 | [ ] | CLI 日志渲染 | dev CLI | 切换设置语言后执行 `kabegame-cli plugin run`，触发宿主 `[to]` / `[cookie]` 日志 | CLI 输出对应语言的可读文本，不出现原始 `{"_i18n":...}` 载荷 | 待验证 |
+
+## 运行配置复制为推荐配置 JSON
+
+运行配置卡片的「更多」由 `el-dropdown` 改为 `el-select`（`model-value` 恒为 `null`，选中只发命令），新增「复制为推荐配置 JSON」。导出由 `runConfigToPresetJson` 生成，字段与 `parsePluginRecommendedPreset` 读取的一致：`name`、可选 `description`、`userConfig`、有模式时的 `scheduleSpec`、非空时的 `httpHeaders`；不导出 id、时间戳、输出目录、画册与并发。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard | `deno task check -c kabegame --skip cargo` | `vue-tsc` 无 error | 已运行 |
+| [ ] | 更多菜单交互 | 桌面 CEF / Android | 点卡片「更多」依次选编辑、复制、删除 | 各动作与改前一致；选完触发器仍显示「更多」，不残留所选项；点下拉不触发卡片详情 | |
+| [ ] | 复制 JSON 内容 | 桌面 CEF / Web | 对带定时与不带定时的配置各选「复制为推荐配置 JSON」并粘贴 | 成功提示；JSON 只含上述字段，无定时时无 `scheduleSpec` | Web 走 `navigator.clipboard` |
+| [ ] | 回放为推荐配置 | 桌面 CEF + 插件源码 | 把复制内容存为插件 `configs/x.json` 并加入 `kbRecommendedConfigs`，打包安装后在「推荐」tab 预览并导入 | 预览参数、定时与原配置一致，导入成功且可正常运行 | |
+
+## Android 畅游 Phase 1
+
+Android 畅游使用独立 `SurfActivity`：顶部复用桌面 `surf-navbar.html` Tauri webview，底部普通 Android WebView 加载外部站点。导航由 Rust 命令转给 Kotlin，URL / Cookie 由 Channel 回到 Rust；内容页没有 Tauri IPC。UA 不入库：内容页保持系统 WebView 默认 UA，启动时登记为 `Kabegame.cefUserAgent()` 的返回值，插件照桌面写法与 `requireCookie()` 配对。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver | `vue-tsc` 与 Rust `cargo check` 无 error；桌面畅游引用未被共用模块搬迁破坏 | 已运行（撤 UA 列后重跑）：vue-tsc 0 error，cargo 0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | Rust Android target 与 Kotlin/Gradle 配置无 error | 已运行（撤 UA 列后重跑）：Android Rust 0 error；`:app:compileUniversalDebugKotlin` 成功 |
+| [x] | Cookie 写入去重 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib surf_record` | Cookie 相同不写库、不发事件；变化时更新 | 已运行：1 项定向单测通过；`dsl_e2e` 52 项通过 |
+| [ ] | 启动与布局 | Android 真机 | 工具箱 → 畅游 → 输入 `https://www.pixiv.net` | 打开独立 Activity；顶部 48dp 导航栏、底部站点；主 Vue 页面保留在下方 | dev 包与 prod 包都要测：dev 的 applicationId 与 Java 包不同，曾因写死 `MainActivity` 报 `failed to create window` |
+| [ ] | 导航与地址同步 | Android 真机 | 点站内链接、触发 SPA 路由，再测试地址栏回车、后退、前进、刷新 | 内容页导航正确；navbar 地址随整页与 SPA 跳转更新 | |
+| [ ] | 返回键与关闭 | Android 真机 | 页面有历史时连续按系统返回键，再点 navbar 关闭 | 先逐级后退，退到头关闭 Activity；回到原 `/surf` 且 Vue 状态不丢；会话状态立即清除 | |
+| [ ] | Cookie 保存 | Android 真机 | 登录站点后关闭 Activity，查看记录并查询数据库 | Cookie 非空且包含 HttpOnly 登录 Cookie；`surf_records` 没有 `user_agent` 列；列表由事件即时更新 | |
+| [ ] | `cefUserAgent()` 返回 WebView UA | Android 真机 / V8 插件 | 冷启动后直接运行调用 `Kabegame.cefUserAgent()` 的插件（不先开畅游） | 返回值与内容页 `navigator.userAgent` 一致，不为 `null` | |
+| [ ] | 插件登录态复用 | Android 真机 / V8 插件 | 运行需要该站登录态且调用 `requireCookie` 的插件 | 日志出现 `taskLogCookieInjected`；插件用 `cefUserAgent()` 设置的 UA 与 Cookie 签发 UA 一致，登录态有效；Cloudflare 站点（如 danbooru）不再 403 | |
+| [ ] | 旋转、键盘与重开 | Android 真机 | 旋转屏幕、聚焦登录表单，再关闭并重复打开畅游 | Activity 不因旋转重建；表单不被键盘遮挡；第二次打开无 label 残留或空白页 | |
+| [ ] | 安全边界 | Android debug / `chrome://inspect` | 分别检查 navbar 与内容页全局对象 | navbar 有 `__TAURI_INTERNALS__`；内容页 `window.ipc` 与 `__TAURI_INTERNALS__` 均为 `undefined` | |
+
+## 插件请求头大小写与 HTTP/2
+
+hyper 走 HTTP/1.1 时默认把请求头名全部转成小写，Cloudflare 视作机器人特征直接挑战（实测同一请求 curl 用 `User-Agent` 是 200，全小写是 403）。V8 插件客户端（`plugin/v8/ops.rs::build_client`）与下载器客户端（`crawler/downloader/http.rs::create_client`）开启 `http1_title_case_headers()`；桌面 reqwest 增加 `native-tls-alpn`，握手声明 `h2`，能协商 HTTP/2 的连接按规范使用小写头名。安卓 rustls 原本就会声明 h2。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard + Android | `check-kabegame` driver（桌面、`--mode android`） | cargo 无 error；`Cargo.lock` 无变化 | 已运行 |
+| [x] | Cloudflare 站点不再 403 | 桌面 dev CLI | `run-cli.sh anime-pictures --var startPage=0 --var endPage=0 --via local`，不进畅游、无 Cookie | 列表 / 详情 API 返回 200，原图下载成功 | 已运行：修复前 API 稳定返回 `cf-mitigated: challenge`；修复后全站与 `tag=blue archive` 两轮共新下载 24 张原图、0 失败，metadata 齐全、标签 948 条与源数据一致 |
+| [ ] | 其它插件回归 | 桌面 dev CLI | 各跑一页 pixiv、danbooru、konachan、weibo | 请求与下载结果和修复前一致；需要登录态的插件 Cookie 仍生效 | 关注依赖自定义小写头名的插件 |
+| [ ] | HTTP/2 协商与代理 | 桌面，开 / 关系统代理 | 跑任一 HTTPS 插件，观察网络或服务端日志 | 支持 h2 的站点走 HTTP/2；只支持 HTTP/1.1 的站点与 HTTP 代理照常可用 | |
+| [ ] | Android 下载 | Android 真机 | 跑 anime-pictures 一页 | 不需要畅游 Cookie 也能下载 | 安卓走 rustls |

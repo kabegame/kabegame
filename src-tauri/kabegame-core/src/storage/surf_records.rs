@@ -1,7 +1,7 @@
 use crate::emitter::GlobalEmitter;
 use crate::storage::images::RangedImages;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
@@ -35,6 +35,19 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn update_surf_record_cookie_row_if_changed(
+    conn: &Connection,
+    id: &str,
+    cookie: &str,
+) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE surf_records SET cookie = ?1 WHERE id = ?2 AND cookie != ?1",
+        params![cookie, id],
+    )
+    .map(|changed| changed > 0)
+    .map_err(|e| format!("Failed to update surf_record cookie: {e}"))
 }
 
 impl Storage {
@@ -402,6 +415,18 @@ impl Storage {
         Ok(())
     }
 
+    /// 仅在 Cookie 实际变化时写库并发 `SurfRecordChanged`；安卓内容页每次加载完成都会上报。
+    pub fn update_surf_record_cookie_if_changed(&self, id: &str, cookie: &str) -> Result<(), String> {
+        let cookie = cookie.trim();
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let changed = update_surf_record_cookie_row_if_changed(&conn, id, cookie)?;
+        drop(conn);
+        if changed {
+            GlobalEmitter::global().emit_surf_record_changed(id, json!({ "cookie": cookie }));
+        }
+        Ok(())
+    }
+
     /// 删除遨游记录：将关联图片的 surf_record_id 置空后删除记录。
     pub fn delete_surf_record(&self, id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -594,5 +619,30 @@ impl Storage {
             .optional()
             .map_err(|e| format!("Failed to query latest surf image: {}", e))?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    #[test]
+    fn update_cookie_only_writes_when_value_changes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE surf_records (id TEXT PRIMARY KEY, cookie TEXT NOT NULL DEFAULT '');
+            INSERT INTO surf_records (id, cookie) VALUES ('surf-1', 'sid=old');",
+        )
+        .unwrap();
+
+        assert!(!super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=old").unwrap());
+        assert!(super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=new").unwrap());
+        assert_eq!(
+            conn.query_row("SELECT cookie FROM surf_records WHERE id = 'surf-1'", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+            "sid=new"
+        );
     }
 }

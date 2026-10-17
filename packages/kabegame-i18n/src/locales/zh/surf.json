@@ -24,6 +24,8 @@
   "surfHelpTitle": "畅游说明",
   "surfHelpIntro": "畅游是 Kabegame 的内置浏览与收集功能。输入目标网站 URL（如 https://pixiv.net）并点击「开始畅游」后，会在应用内打开该页面；你可以在该窗口中右键下载图片或者视频，成功下载的图片和视频会加入你的画廊！",
   "surfHelpRecord": "每次畅游会生成一条记录，可在此页快速再次进入该站点，或通过「查看最近图片」进入该站点的画廊视图。",
+  "surfHelpIntroAndroid": "畅游会在独立页面中打开目标网站。你可以在其中登录，关闭页面时 Kabegame 会自动保存该站点的 Cookie 与浏览器标识，供需要登录的插件使用。",
+  "surfHelpRecordAndroid": "第一阶段暂不支持一键下载或网页内下载。每次畅游仍会生成记录，可在此页再次进入站点、查看 Cookie 或管理记录。",
   "gotIt": "知道了",
   "pleaseEnterUrl": "请输入 URL",
   "useHttps": "请使用 https 协议",

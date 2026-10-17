@@ -12,8 +12,11 @@ pub mod proxy;
 pub mod settings;
 #[cfg(not(target_os = "android"))]
 pub mod surf;
+#[cfg(target_os = "android")]
+pub mod surf_android;
 #[cfg(not(target_os = "android"))]
 pub mod surf_collect;
+pub mod surf_common;
 #[cfg(not(target_os = "android"))]
 pub mod surf_session;
 pub mod task;
@@ -37,8 +40,11 @@ pub use proxy::*;
 pub use settings::*;
 #[cfg(not(target_os = "android"))]
 pub use surf::*;
+#[cfg(target_os = "android")]
+pub use surf_android::*;
 #[cfg(not(target_os = "android"))]
 pub use surf_collect::*;
+pub use surf_common::*;
 #[cfg(not(target_os = "android"))]
 pub use surf_session::*;
 pub use task::*;

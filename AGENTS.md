@@ -37,7 +37,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 | `kabegame-cli` | 桌面 | 独立进程。碰数据库或主程序运行时状态的操作优先经 app IPC 交给主程序；主程序未运行、协议不兼容或数据目录不同时才在本进程初始化，可用 `--via auto\|app\|local` 控制。`pathql query` 是只读例外：忽略 `--via`，总在本进程以不迁移的只读 Storage 执行 |
 | 外部集成 | 桌面 | 通过 app IPC 或应用 Web 服务器（JSON-RPC / SSE / 媒体 / MCP）连接主程序，不直接碰数据库 |
 
-形态差异：**Web 版**的 `kabegame` 以 `web` feature 构建为无 Tauri、无 CEF 的控制台服务器进程，浏览器即前端；**Android** 只有一个 app 进程（系统 WebView 的渲染进程由系统管理），不开 app IPC 服务端，也没有 CLI。
+形态差异：**Web 版**的 `kabegame` 以 `web` feature 构建为无 Tauri、无 CEF 的控制台服务器进程，浏览器即前端；**Android** 只有一个 app 进程（系统 WebView 的渲染进程由系统管理），不开 app IPC 服务端，也没有 CLI；畅游使用独立 `SurfActivity`，顶部导航栏是有 IPC 的 Tauri webview，外部内容页是无 IPC 的普通 Android WebView。
 
 主进程内部，HTTP、Tauri、Web JSON-RPC 与 app IPC 只是协议入口，统一复用共享命令层，不建立平行业务后端；桌面端应用 Web 服务器复用 web JSON-RPC 注册表，并在同一端口提供 SSE、媒体文件与 MCP。相关类型、变量、事件、端点与文档统一使用 app / backend / IPC 语义。
 

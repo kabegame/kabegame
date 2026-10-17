@@ -284,6 +284,7 @@ const bottomTabs = computed(() => {
   return [
     { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery"), badge: undefined },
     { index: "/albums", icon: Collection, label: i18n.global.t("route.albums"), badge: undefined },
+    { index: "/surf", icon: Compass, label: i18n.global.t("route.surf"), badge: undefined },
     {
       index: "/plugins",
       icon: FilterPlugin,

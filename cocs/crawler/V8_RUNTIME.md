@@ -51,6 +51,7 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 ## 运行时架构与网络（宿主化）
 
 - **网络全部走宿主 `reqwest`**，V8 侧不做任何 socket/TLS。`fetch` 是 `op_kabegame_fetch`（代理感知、跟随重定向 ≤10），`Kabegame.to`/页面抓取是 `op_kabegame_to`（手动重定向 + 重试），两者都在 `ops.rs` 用 `reqwest` 实现。因此 **不引入 `deno_fetch` / `deno_net` / `deno_tls`**，也就没有 hyper/其自带 TLS 的编译与体积负担。
+- **请求头名大小写与 HTTP/2**：hyper 走 HTTP/1.1 时默认把头名全部转成小写发出，Cloudflare 把这当作机器人特征直接挑战（实测同一请求 curl 用 `User-Agent` 是 200、全小写是 403，anime-pictures 的 API 即是如此）。所以 `ops.rs::build_client` 与下载器 `downloader/http.rs::create_client` 都开 `http1_title_case_headers()`，HTTP/1.1 头名一律首字母大写（插件写的 `x-csrf-token` 也会变成 `X-Csrf-Token`；reqwest 0.11 不支持原样保留，hyper 的 `HeaderCaseMap` 是 `pub(crate)`）。桌面 `reqwest` 另开 `native-tls-alpn`，握手声明 `h2`，能协商 HTTP/2 的连接按规范用小写头名；Android rustls 本来就声明 h2。
 - 因为不再从 `deno_fetch` 取 `Headers` / `Response`，这两个类在 `prelude.js` 里**自实现**（`Headers` 为大小写不敏感多值 map；`Response` 由宿主返回的 `Uint8Array` 承载 body，支持 `text()`/`json()`/`arrayBuffer()`/`bytes()`，无流式 body / `clone`）。`Request` 仍是归一化 fetch 入参用的最小实现。改这三个类只需改 `prelude.js`。
 - 保留的 deno 扩展为 `deno_webidl` / `deno_web`（URL/编码/timer/base64/DOMException）/ `deno_crypto`（`crypto.subtle`）/ `deno_io` / `deno_fs`；`deno_io` 不注册 stdio，`deno_fs` 注入每任务的 `PluginVfs`。`deno_crypto` 的 `00_crypto.js` 是 lazy JS 且创建 cppgc 对象，在 `JsPluginRuntime::new` 里 isolate 建好后用 `loadExtScript` 显式加载并挂全局。
 - **不使用 V8 startup snapshot**：桌面、Android 与 CLI 的每个插件任务都通过 `JsRuntime::new` 即时初始化独立 isolate 和全部 extension。应用不生成、读取或校验 `runtime@*.bin`，也没有 snapshot 指纹、后台生成任务、恢复分支和环境变量开关。旧版本留下的缓存文件不会再被访问，可随普通缓存清理。
