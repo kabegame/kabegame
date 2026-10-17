@@ -80,10 +80,11 @@ worker 启动后不再重新解析 DB/PluginManager。提交失败由 `enqueue` 
 
 Tauri initialization script 在每次页面加载时执行：
 
-1. `media_capture.js` 捕获 Blob/MSE。
-2. `media_download.js` 注册共享媒体落盘/提交入口。
-3. 烘焙后的 `bootstrap.js` 捕获并隐藏 `__TAURI_INTERNALS__`。
-4. 闭包内构造 `Kabegame`，直接执行插件 `crawl.js`。
+1. `webview_i18n.js` 调 `get_webview_i18n` 拉取当前应用语言的 `webview.*` 文案表，挂 `window.__kb_i18n__`（`t(key, params)` / `ready`）；须排在最前，因为 bootstrap 会隐藏 `__TAURI_INTERNALS__`。
+2. `media_capture.js` 捕获 Blob/MSE。
+3. `media_download.js` 注册共享媒体落盘/提交入口。
+4. 烘焙后的 `bootstrap.js` 捕获并隐藏 `__TAURI_INTERNALS__`。
+5. 闭包内构造 `Kabegame`，直接执行插件 `crawl.js`。
 
 跨页状态不能依赖上一页 JS 变量；应使用 `Kabegame.state()` / `updateState()` 与 `Kabegame.pageState()` / `updatePageState()`。
 
@@ -134,9 +135,9 @@ Tauri initialization script 在每次页面加载时执行：
 
 `data:` / 普通 `blob:` / MSE `blob:` 保持对插件相同的 `downloadImage(url, opts)` 调用形状，但内部不再走专用媒体上传命令：
 
-1. `media_capture.js` 继续维护 Blob/MSE 捕获表；MSE 下载前仍由 `ensureFullyBuffered` 高倍速全缓冲并侦测换集，之后检查 DRM、截断和空数据。
-2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。CEF 桌面端 raw 分块不走标准 invoke（postMessage JSON 通道会把 `Uint8Array` 退化成数字数组），改经 runtime 注入的 `window.__kb_raw_invoke__`（`cef-ipc://localhost/raw` 帧化通道，见 `tauri-runtime-cef/src/ipc.rs`），无桥平台回退标准 invoke。
-3. 多 SourceBuffer 显式调用 `crawl_ffmpeg_mux`，容器规则为任一流 MIME 含 `webm` 则 WebM，否则 MP4。
+1. `media_capture.js` 维护 Blob/MSE 捕获表并按清晰度分组、累计覆盖区间；MSE 下载前由 `ensureCaptured` 以正常倍速跳到缺口补拉、侦测换集并选定每路清晰度（无可驱动的 `<video>` 时直接按现有覆盖选），之后检查 DRM、截断和空数据（细节见 `cocs/downloader-tasks/DOWNLOADER_FLOW.md`）。
+2. `media_download.js` 通过 `crawl_fs_get_root` 在当前任务 VFS 的 `tmp/media-*` 建子目录，以 8 MiB Raw IPC 分块写每条流；`crawl_fs_fwrite` 的短写会循环补齐。raw 分块直接用标准 invoke 传 `Uint8Array`（Tauri `InvokeBody::Raw`），CEF 桌面端经 `fetch(ipc://)` 主通道携带，`ipc` scheme 绕过页面 CSP（见 `tauri-runtime-cef/src/ipc.rs`）。
+3. 多 SourceBuffer 显式调用 `crawl_ffmpeg_mux`，容器规则为全部流 MIME 都含 `webm` 才封 WebM，否则 MP4（WebM 只收 VP8/VP9/AV1 + Opus/Vorbis；YouTube 常见 H.264 视频 + Opus 音频，封 WebM 会在写头时 `EINVAL`，MP4 可 stream copy）。
 4. `bootstrap.js` 注入的 `window.__kb_media_submit__` 把最终虚拟绝对路径作为 `crawl_download_image.url` 提交。宿主将其解析为内部 `task-vfs://`，scheme downloader 从 VFS 流式读取并进入 `DownloadSink` / 统一后处理。
 5. `finally` 递归删除本次 `tmp/media-*` 子目录。`crawl_download_image` 会等待下载完成，因此清理不会早于 task-vfs 读取。
 

@@ -38,7 +38,7 @@ Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上�
 
 ## CEF IPC 恢复 fetch 主通道
 
-删除 `tauri-runtime-cef` 的 `force_postmessage_ipc_transport`：不再把上游 `ipc-protocol.js` 的 `customProtocolIpcFailed` 预置为 `true`，invoke 回到上游 `fetch(ipc://localhost/<cmd>)` 主通道，响应直接作为 fetch body 返回，DevTools Network 面板可见。原注释所称「`Tauri-*` 头触发 CORS 预检、CEF 收不到」经实测不成立：CEF scheme handler 处理的请求不发预检，只在响应上校验 ACAO，Tauri `ipc` handler 已返回 `*`。fetch 失败时上游脚本仍自动回退 `window.ipc.postMessage`（`cef-ipc://` JSON 桥），第三方页面的 `__kb_raw_invoke__` / `cef-ipc://localhost/raw` 二进制通道保持不变。
+删除 `tauri-runtime-cef` 的 `force_postmessage_ipc_transport`：不再把上游 `ipc-protocol.js` 的 `customProtocolIpcFailed` 预置为 `true`，invoke 回到上游 `fetch(ipc://localhost/<cmd>)` 主通道，响应直接作为 fetch body 返回，DevTools Network 面板可见。原注释所称「`Tauri-*` 头触发 CORS 预检、CEF 收不到」经实测不成立：CEF scheme handler 处理的请求不发预检，只在响应上校验 ACAO，Tauri `ipc` handler 已返回 `*`。fetch 失败时上游脚本仍自动回退 `window.ipc.postMessage`（`cef-ipc://` JSON 桥）。第三方页面实测（`connect-src 'self'` 严格 CSP 下）标准 invoke 照样走 `ipc://` 并携带 raw body，因此删除 runtime 注入的 `__kb_raw_invoke__` 与 `cef-ipc://localhost/raw` 帧化通道；`media_download.js` 的分块写与 `bootstrap.js` 的 `Kabegame.fs` 写入改用标准 `invoke(cmd, Uint8Array, { headers })`。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -47,8 +47,34 @@ Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上�
 | [ ] | Network 面板可见 | 桌面 CEF（三平台） | 打开主窗口 DevTools → Network，触发画廊翻页、设置保存等 invoke | 每次 invoke 显示为一条 ipc 请求，状态 200，Response 可读到 JSON | |
 | [ ] | macOS 主通道 | macOS | 同上，并观察控制台 | 不出现 `IPC custom protocol failed` 回退告警，功能正常 | 用户待测 |
 | [ ] | Windows 主通道 | Windows | 同上；Windows 上 ipc 走 `http://ipc.localhost` | 请求 200、无回退告警 | Linux 已用 `http://ipc.localhost` 对照实验验证 JSON 与 raw body 均可达 |
-| [ ] | 第三方页面 IPC | 桌面 CEF 畅游窗口（CSP 严格站点，如 github.com）/ WebView 爬虫任务 | 畅游一键下载 blob/MSE 媒体，跑一个 WebView 插件任务 | 下载与导入正常；若 fetch 被 CSP 挡住则自动回退 postMessage，不出现命令丢失或卡死 | `ipc` scheme 注册带 `CSP_BYPASSING` |
+| [ ] | Windows 严格 CSP 第三方页面 | Windows 畅游窗口（CSP 严格站点，如 github.com） | 畅游一键下载视频 | 下载正常 | 风险：`http://ipc.localhost` 不享受 `CSP_BYPASSING`，若被 `connect-src` 拦下会回退 postMessage，二进制退化成数字数组导致写入失败 |
+| [x] | 第三方页面 IPC 与 CSP | Linux dev 畅游窗口（anime-pictures.net，动态插入 `connect-src 'self'` 的 meta CSP） | 对照：`no-cors` 请求 example.com；再用标准 invoke 调 `crawl_fs_fwrite`（raw body）与 JSON 命令 | 对照请求被 CSP 拦下并触发 `securitypolicyviolation`；invoke 仍走 `ipc://` 返回 200，raw body 被解析（业务错误 `resource id invalid`），无回退告警 | 经 CDP 改写文档响应头注入 CSP 的尝试未生效，结论只取 meta 方式 |
+| [ ] | raw 大块读写一致 | 桌面 CEF 畅游窗口（严格 CSP） | 标准 invoke 以 8 MiB 分块写 16 MiB+ 随机数据后 `crawl_fs_read_file` 读回比对 | 写入字节数正确，读回逐字节一致 | 验证删除帧化桥后 `fetch` 直接携带大 `Uint8Array` body 不丢数据 |
+| [ ] | 畅游一键下载 / WebView 插件 | 桌面 CEF（三平台） | 畅游一键下载 blob/MSE 视频；跑一个用 `Kabegame.fs.writeFile` 的 WebView 插件任务 | 下载、合流、导入正常；Network 中写入为普通 `ipc://…/crawl_fs_fwrite` 请求 | |
 | [ ] | 生产包主通道 | 安装版（页面为 `tauri://localhost`） | 安装新构建后操作画廊、设置、任务 | invoke 正常，Network 可见 | dev 下页面 origin 为 `http://localhost:1420` |
+
+## 畅游 / WebView MSE 视频下载：按捕获覆盖补拉、按清晰度拼接与进度面板
+
+长视频右键下载原先「16 倍速从头播 + loop」，完整性看 `video.buffered`：X 只往前缓冲十几秒并回收已播部分，条件永远不满足，表现为结尾回卷重放直到停滞超时；16 倍速还让自适应码率降档，多档清晰度的分片被套在第一个 init 后拼接，导致流错位或 FFmpeg 找不到流；MediaSource 刚重建时 `duration` 为 `NaN` 被误判为直播。现在 `media_capture.js` 在 append 时按清晰度分组并累计覆盖区间，`media_download.js` 等元数据后以正常倍速跳缺口补拉、只拼同一清晰度，并在页面右下角显示每档覆盖条与阶段。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 分组与拼接（离线） | node + ffmpeg | 720p / 360p 两档分片交替追加，含重复 init、重复分片、跨两次 append 的半截分片，选 720p 拼接后 ffprobe / 解码 | 720p 20 片覆盖 0–20s，360p 4 片覆盖 3–7s；拼出文件 1280×720、20.0s，解码无错误 | |
+| [x] | 长视频右键下载 | Linux dev 畅游 x.com（197s 视频） | 播放几秒后右键「下载视频」 | 不再 16 倍速回卷；全程 1280×720 单一清晰度，约 48s 补齐 0–197s 后写入、合并、导入成功；面板显示两路覆盖条、目标标记与补拉位置 | 同场另外 2 次下载亦成功 |
+| [ ] | 元数据未就绪 | 桌面 CEF 畅游 x.com | 点播放后立刻右键下载 | 先显示「等待视频元数据」，随后正常补拉；不再报「无法全缓冲直播流」 | |
+| [ ] | 清晰度回退 | 桌面 CEF（限速网络，播放器会降档） | 长视频右键下载 | 目标档在缺口 8s 无增长时面板提示改用覆盖最完整的一档，产物为单一清晰度可正常播放 | |
+| [ ] | 换集 / 移除 | 桌面 CEF 畅游 B 站或 X 时间线 | 下载中切到下一集或滚动使视频卸载 | 面板与提示「视频已切换或被移除，下载中断」，原视频状态不被写到新视频上 | |
+| [x] | 混合容器合流 | 本机 FFmpeg 8.1.1 | H.264（MP4）+ Opus（WebM）分别 stream copy 封 WebM / MP4 | WebM 写头失败（复现 YouTube 的 `write mux header … Error(-22)`）；MP4 成功且完整解码无错误；H.264 + Vorbis 封 MP4 亦成功 | 规则改为全部流是 WebM 才封 WebM |
+| [ ] | YouTube 右键下载 | 桌面 CEF 畅游 YouTube（H.264 视频 + Opus 音频） | 右键下载一个长视频 | 合并为 MP4 并导入成功，可正常播放 | |
+| [x] | 捕获层中止与重同步（离线） | node + ffmpeg | 分片切 64 KiB 流式追加；半截分片后 `abort()`；半截后不 abort 直接换段；中途混入 5000 字节垃圾 | 四种情况均 20 片覆盖 0–20s、仍为 fMP4、拼出文件解码无错误；计数分别为 aborts 1 / resyncs 1 / resyncs 1，丢弃字节等于半截或垃圾长度 | |
+| [ ] | YouTube 补拉不再停滞 | 桌面 CEF 畅游 YouTube | 多次右键下载 2–5 分钟视频 | 面板在播放器正下载缺口时显示「等待 X 处的分片下载完成」且不回跳；不再出现「视频补拉停滞超时」；分组标题若出现中止 / 重同步计数仍能完成 | 复现时面板曾停在 0:30，播放位置约 0:36 |
+| [ ] | 丢片移除重拉 | 桌面 CEF | 制造捕获丢片（如重同步丢弃）后下载 | 面板提示「重新拉取 X 处丢失的分片（第 n 次）」并补齐；3 次仍失败时报「捕获丢失 X 处的分片…」 | 依赖站点播放器在缓冲被移除后重新下载 |
+| [ ] | 非 fMP4 容器 | 桌面 CEF（WebM MSE 站点） | 右键下载 | 覆盖条取 `SourceBuffer.buffered` 历史并集，能补齐并完成或给出明确错误 | WebM 仍按 append 顺序拼接（`unordered`），乱序时可能不可播，为既有限制 |
+| [ ] | WebView 插件 blob 下载 | 桌面 CEF WebView 插件任务 | 插件 `downloadImage(blob:)` 下载 MSE 视频 | 有对应 `<video>` 时同样补拉；没有时按现有覆盖选清晰度并成功或明确报错 | |
+| [x] | Linux 畅游帮助不再提示无法下载 | Linux 桌面 CEF / 仓库 | 打开「畅游」页的帮助弹窗；`deno task check -c kabegame --skip cargo` | 弹窗只有功能介绍与记录说明，不再出现「因 WebKit 限制无法下载」；`surf.linuxHintHelp` 已从五种语言移除，vue-tsc 无 error | 已运行静态检查；弹窗待实机看一眼 |
+| [x] | 注入页文案五语齐全 | 仓库 | `cargo test -p kabegame-i18n` | `webview_keys_translated_in_every_locale` 通过：`WEBVIEW_KEYS` 每个键在 zh/zhtw/en/ja/ko 都有译文 | 已运行 |
+| [ ] | 畅游文案跟随应用语言 | 桌面 CEF 畅游 | 把应用语言切到 English，新开畅游窗口：右键图片 / 视频、下载一张图、右键下载一个 MSE 视频 | 右键菜单、「已加入下载列表」/ 成功 / 失败 toast、视频捕获面板标题、分组、阶段与错误都显示英文，没有 `menu.xxx` 之类的原始键 | 已打开的页面要刷新后才换语言 |
+| [ ] | WebView 爬虫窗口文案 | 桌面 CEF WebView 插件任务 | 非中文语言下跑一个会下载 `blob:` / MSE 视频的 WebView 插件，显示爬虫窗口 | 捕获面板显示当前语言；`get_webview_i18n` 未被 capability 拒绝 | `crawler.toml` 已加授权 |
 
 ## 插件商店启动刷新、可更新导航角标与最低版本安装守卫
 

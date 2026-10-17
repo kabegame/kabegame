@@ -218,9 +218,6 @@
       <p class="surf-help-p">
         {{ $t("surf.surfHelpRecord") }}
       </p>
-      <p v-if="IS_LINUX" class="surf-help-p surf-help-linux">
-        {{ $t("surf.linuxHintHelp") }}
-      </p>
       <template #footer>
         <el-button type="primary" @click="helpDialog.close()">{{ $t("surf.gotIt") }}</el-button>
       </template>
@@ -238,7 +235,6 @@ import { QuestionFilled, Right, Clock } from "@kabegame/element-plus-icons";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useModal } from "@/composables/useModal";
 import { HeaderFeatureId } from "@/stores/header";
-import { IS_LINUX } from "@/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { useSurfImageCountsStore } from "@/stores/surfImageCounts";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
@@ -925,16 +921,6 @@ onMounted(async () => {
   }
 }
 
-.surf-linux-tip {
-  width: 100%;
-  margin-top: 12px;
-  margin-bottom: 4px;
-
-  .surf-content.has-records & {
-    margin-bottom: 12px;
-  }
-}
-
 /* 列表区：有记录时占据剩余空间、独立滚动 */
 .surf-list-wrap {
   width: 100%;
@@ -1061,10 +1047,6 @@ onMounted(async () => {
 }
 .surf-help-dialog .surf-help-p:last-of-type {
   margin-bottom: 0;
-}
-.surf-help-dialog .surf-help-linux {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
 }
 
 .surf-cookie-dialog .surf-cookie-host {

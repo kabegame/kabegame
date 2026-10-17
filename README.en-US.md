@@ -37,6 +37,7 @@ Kabegame doesn't just download: plugins can automatically classify tags such as 
 - **Automatic tag classification**: Supported plugins write structured tags such as character, work, artist, model, and source at download time, automatically forming a browsable tag directory that supports combined filtering—no need to sort images one by one after collecting them.
 - **Continuous local folder sync**: Map a disk directory to a synced album; additions and deletions in the directory are reflected in the library, and subdirectories can generate sub-albums that keep their original hierarchy. Ideal for continuously receiving output from drawing software, AI image generators, or other downloaders.
 - **Sign in once, reuse automatically afterward**: Sign in to a site normally in the built-in "Surf" browser and Kabegame saves every site cookie; the host can securely inject the login state into plugins, so you don't have to copy cookies over and over, and plugins never see cookie plaintext.
+- **Save videos straight from Surf**: Right-click a video in the built-in browser and choose "Download video"; even `blob:` / MSE streaming players are captured per quality level, audio and video are muxed and imported, and a corner panel shows live capture progress for each stream.
 - **Real WebView-driven crawling**: Beyond lightweight V8 HTTP / HTML plugins, plugins can run inside a real browser page to handle SPAs, JS rendering, browser fingerprinting, Cloudflare checks, and login flows that need interaction.
 - **Extend to new content sources with scripts**: Crawler plugins are written in JavaScript / TypeScript with no need to modify or recompile Kabegame; a single plugin can define collection logic, configuration forms, tag classification, source metadata, and detail views at once, and be packaged as a `.kgpg` file to share with other users.
 - **Source information stays with the image**: Plugins can save the author, original post link, body text, comments, community tags, and AI generation parameters, and provide their own detail views and search fragments—so an image still knows "where it came from and why it was saved" after leaving the original site.
@@ -73,6 +74,12 @@ Kabegame doesn't just download: plugins can automatically classify tags such as 
     <td align="center" width="50%">
       <img src="docs/images/features/webview-crawler-log.jpg" alt="Kabegame WebView crawler task log" width="100%"/><br/>
       <small>Page interaction, scrolling, and extraction can be traced in the task log</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="docs/images/features/surf-video-download.jpg" alt="Kabegame Surf video download and capture progress" width="100%"/><br/>
+      <small>Right-click a streaming video in Surf to download it, with live per-stream capture progress in the corner</small>
     </td>
   </tr>
 </table>

@@ -21,7 +21,7 @@
 
 JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通用 VFS 原语：页面 JS 读取/捕获字节，在当前任务或畅游会话的 `PluginVfs` 中分块落盘；MSE 多 SourceBuffer 再显式调用 `crawl_ffmpeg_mux` 做 stream-copy 合流。crawler 把最终虚拟路径交给 `crawl_download_image`，由 `task-vfs://` scheme 流式读入下载管线；surf 则调用 `surf_import_media`，以 `PostprocessSource::Path` 直通后处理。浏览器侧写盘进度仍通过 toast 展示，不再存在专用媒体上传会话或 base64 IPC。
 
-分块落盘的 raw 二进制 IPC 在 CEF 桌面端优先走 runtime 注入的帧化桥：标准 invoke 的 fetch 通道在第三方页面可能被回退到 postMessage(JSON)（`Uint8Array` 会退化成数字数组），`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令改经 CEF runtime 注入的 `window.__kb_raw_invoke__`（`cef-ipc://localhost/raw` 帧化通道：元数据在 body 前缀、不依赖 fetch 主通道是否可用；Rust 侧解帧后转发 Tauri `ipc` 协议 handler，完整走 invoke 解析 + ACL + `InvokeBody::Raw`）。`media_download.js` 与 `bootstrap.js` 均优先该桥、无桥时（Android WebView）回退标准 invoke。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
+分块落盘的 raw 二进制 IPC 统一走标准 invoke：`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令以 `invoke(cmd, Uint8Array, { headers })` 发出，CEF 桌面端由 `fetch(ipc://localhost/<cmd>)` 主通道携带二进制 body（`InvokeBody::Raw`），`ipc` scheme 带 `CSP_BYPASSING`，第三方页面的严格 CSP 也拦不住；请求与响应在 DevTools Network 面板可见。fetch 失败时上游回退的 postMessage 只能传 JSON，会让二进制退化成数字数组。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
 
 ---
 
@@ -222,15 +222,15 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 - `http:` / `https:` 等普通 URL：先统一入队；webview 爬虫或 surf job 由 worker 分派回对应 CEF WebView。
 - `data:`：页面内 `fetch(url).blob()` 后按 8 MiB 切片写入 VFS，不把大 Blob 一次性读入内存。
 - 普通 `blob:`：优先从 `media_capture.js` 维护的 `URL.createObjectURL` 注册表取 Blob；未命中时兜底 `fetch(blobUrl)`。
-- MSE `blob:`：`media_capture.js` 早期 hook `MediaSource.addSourceBuffer` 与 `SourceBuffer.appendBuffer`，只保存页面实际 append 过的媒体片段；下载前 `media_download.js` 会静音高倍速驱动 `<video>` 尽量全缓冲，直播或长时间无推进会明确报错。
-- 捕获结果在 `resolve()` 时按容器归一化：fMP4/CMAF 读取 `tfdt.baseMediaDecodeTime`，MPEG-TS 读取首个 PES PTS，按时间升序排序并去重；无法识别的容器保留 append 顺序并标记 `unordered`。
+- MSE `blob:`：`media_capture.js` 早期 hook `MediaSource.addSourceBuffer` 与 `SourceBuffer.appendBuffer`，只保存页面实际 append 过的媒体片段，并在每次 append 时就地解析：fMP4/CMAF 遇到 init（`moov`）按 `tkhd` 宽高 + `stsd` 指纹开启或归回一个**清晰度组**，分片按 `tfdt` 在组内去重，用 `tfdt` + `trun` 时长（`mdhd` timescale，加 `timestampOffset`）累计该组的覆盖区间；跨 append 的半截盒子（YouTube 把一个分片切成多块边下边追加）留到下一次拼接；页面调用 `SourceBuffer.abort()` 时同步丢弃残留，新数据以新段开头（`ftyp/styp/moov/moof/sidx/emsg/prft`）而残留不是「完整 moof 正等 mdat」时也丢弃重同步，解析失败则跳到下一个段开头继续——已解析成功过的流绝不整体降级为 raw；`aborts / resyncs / droppedBytes / pendingBytes` 诊断计数随 `coverage()` 返回并显示在面板分组标题上。768 MB 上限只计去重后的字节。MPEG-TS 保留原始序列、`resolve()` 时按首个 PES PTS 排序；其它容器（如 WebM）保留 append 顺序并标记 `unordered`，二者的覆盖区间取 `SourceBuffer.buffered` 的历史并集。`__kb_media__.coverage(url)` 只返回各清晰度的宽高 / 码率 / 覆盖区间，不复制字节；`resolve(url, selection)` 按每路选中的清晰度取 init + 有序分片，同一路绝不混用不同清晰度。
+- 完整性只看捕获覆盖，不看 `video.buffered`：X 等播放器只往前缓冲十几秒并回收已播部分，`video.buffered` 永远凑不出 `[0, 时长]`。下载前 `media_download.js` 先等 `loadedmetadata`（时长为 `NaN` 时最多 10s，`Infinity` 才判直播），再静音、**正常倍速**把 `currentTime` 跳到目标清晰度的第一个缺口让播放器补拉（16 倍速会让自适应码率因缓冲耗尽而降档，并在结尾回卷重放），`loop=true` 只用来阻止 `ended` 触发站点自动连播。只有播放器缓冲区**没有**缺口处数据、且播放位置不在缺口附近时才跳转；缺口已在 `video.buffered` 里（播放器正边下边追加这一片）就不打扰它——反复跳转会让播放器中止当前分片重下，这一片永远下不完（YouTube 上「视频还在播、补拉却停滞超时」即此）。缺口在播放器缓冲区里却 6s 未进捕获时视为捕获丢片，经 `__kb_media__.evict()` 从页面 SourceBuffer 移除该段再跳过去迫使重下，最多 3 次。每路目标取已出现的最高清晰度；目标在缺口处 8s 无增长（播放器坚持给别的档）就改用覆盖最完整的一档，总覆盖 20s 无增长报停滞。全程在页面右下角的 shadow DOM 面板上逐档画覆盖条、标出目标与播放位置，并显示补拉 / 写入 / 合并 / 导入阶段；终态停留 3s（失败 8s）后移除，MSE 路径不再另弹进度 toast。面板、右键菜单与页内 toast 的文案都不写死在脚本里：`webview_i18n.js` 作为畅游 / 爬虫窗口的第一个 initialization script，页面加载时调 `get_webview_i18n`（`kabegame-i18n` 的 `webview.*`，键表在 `WEBVIEW_KEYS`，单测保证五种语言齐全）取当前应用语言的整张表，脚本经 `__kb_i18n__.t(key, { name })` 取文案并替换 `{name}`；切换语言后新加载的页面才用新语言。Rust 侧的畅游终态 toast（`startup.rs` 的 `DownloadState`）直接用 `t!("webview.toast.*")`。
 - DRM/EME 只做检测和拒绝：检测到 `setMediaKeys` 或 `encrypted` 事件后抛出清晰错误，不尝试解密，也不生成坏文件。
 
 落盘与提交顺序：
 
 1. `crawl_fs_get_root` 取得 `/{handle}`，在 `${root}/tmp/media-<timestamp>-<random>` 建本次下载子目录。
 2. 每个流写入 `stream-<index>.<ext>`：`crawl_fs_create` 创建句柄，`crawl_fs_fwrite` 通过 Raw IPC 发送原始字节。Rust 返回本次实际写入数，JS 对短写循环推进，直至当前 8 MiB 块完整写入，最后 `crawl_fs_close`。
-3. 单流直接使用该流路径；多流显式调用 `crawl_ffmpeg_mux({ inputs, output })`。任一流 MIME 含 `webm` 时输出 WebM，否则输出 MP4；`inputs` / `output` 始终是当前 VFS 的虚拟绝对路径。Android 的 FFmpeg 桥返回可读的不支持错误。
+3. 单流直接使用该流路径；多流显式调用 `crawl_ffmpeg_mux({ inputs, output })`。全部流 MIME 都含 `webm` 时才输出 WebM，否则输出 MP4（混合如 H.264 + Opus 封 WebM 会写头失败）；`inputs` / `output` 始终是当前 VFS 的虚拟绝对路径。Android 的 FFmpeg 桥返回可读的不支持错误。
 4. crawler 的 `window.__kb_media_submit__` 调用 `crawl_download_image({ url: vfsPath, ... })`。宿主包装成内部 `task-vfs://`，`task_vfs.rs` 以固定缓冲区流式读 VFS 文件，`DownloadSink` 超过 5 MiB 后继续溢写磁盘，再进入统一后处理。
 5. surf 的提交回调调用 `surf_import_media({ path: vfsPath, ... })`。宿主解析出受会话 VFS 约束的真实路径，以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 直通后处理；成功后源文件所有权交给 Rust。
 6. 无论捕获、写盘、合流或提交成功与否，JS 都在 `finally` 递归删除本次下载子目录。surf 窗口销毁还会删除整棵会话目录，启动期清理提供兜底。

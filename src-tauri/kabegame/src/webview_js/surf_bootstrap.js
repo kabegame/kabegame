@@ -1,6 +1,8 @@
 // 由 surf.rs 以 concat! 包进 IIFE（与 surf_download_name.js 共享闭包），本文件不是独立脚本。
 
   const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args || {});
+  // 文案见 kabegame-i18n `webview.*`，由 webview_i18n.js 预先拉取
+  const t = (key, params) => (window.__kb_i18n__ ? window.__kb_i18n__.t(key, params) : key);
   window.__kb_media_submit__ = (vfsPath, sourceUrl, opts) => {
     const o = typeof opts === "object" && opts !== null ? opts : {};
     return invoke("surf_import_media", {
@@ -58,7 +60,7 @@
   // 页面自发原生下载成功后统一导入；压缩包先尝试解压并逐项导入。
   window.__kb_native_download_finished__ = async (payload) => {
     if (!payload.success) {
-      window.__kabegame_toast?.(payload.error || "下载失败", "failed");
+      window.__kabegame_toast?.(payload.error || t("toast.failed"), "failed");
       return;
     }
 
@@ -89,7 +91,7 @@
       );
       const imported = results.filter((result) => result.status === "fulfilled").length;
       window.__kabegame_toast?.(
-        `已导入 ${imported}/${files.length} 项`,
+        t("toast.archiveImported", { imported, total: files.length }),
         imported ? "success" : "failed",
       );
       await invoke("crawl_fs_remove", {
@@ -117,7 +119,7 @@
       name: options.name ?? undefined,
       sourceUrl: options.url ?? undefined,
     })
-      .then(() => window.__kabegame_toast?.("已加入下载列表", "start"))
+      .then(() => window.__kabegame_toast?.(t("toast.queued"), "start"))
       .catch(reportErr);
   }
 

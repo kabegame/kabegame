@@ -494,7 +494,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                                     crate::commands::surf::eval_surf_toast_for_host(
                                         &app,
                                         &info.plugin_id,
-                                        "下载成功",
+                                        &t!("webview.toast.succeeded"),
                                         "success",
                                     );
                                 }
@@ -502,7 +502,10 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                                     crate::commands::surf::eval_surf_toast_for_host(
                                         &app,
                                         &info.plugin_id,
-                                        error.as_deref().unwrap_or("下载失败"),
+                                        error
+                                            .clone()
+                                            .unwrap_or_else(|| t!("webview.toast.failed"))
+                                            .as_str(),
                                         "failed",
                                     );
                                 }
@@ -699,6 +702,10 @@ pub fn create_crawler_window<R: Runtime>(
         .skip_taskbar(true)
         .resizable(false)
         .inner_size(1920.0, 1080.0)
+        .initialization_script(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/webview_js/webview_i18n.js"
+        )))
         .initialization_script(media_capture)
         .initialization_script(media_download)
         .initialization_script(script)

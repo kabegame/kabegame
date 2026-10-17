@@ -827,6 +827,7 @@ pub(crate) fn configure_app(
             show_crawler_window,
             get_file_drop_supported_types,
             get_file_drop_kinds,
+            get_webview_i18n,
             proxy_fetch,
             get_supported_image_types,
             get_busy_tasks_snapshot,

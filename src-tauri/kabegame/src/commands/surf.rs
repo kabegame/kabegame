@@ -278,6 +278,7 @@ pub async fn surf_start_session<R: Runtime>(
             .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
             .devtools(true)
+            .initialization_script(include_str!("../webview_js/webview_i18n.js"))
             .initialization_script(media_capture)
             .initialization_script(media_download)
             .initialization_script(concat!(

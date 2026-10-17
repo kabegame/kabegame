@@ -24,7 +24,6 @@
   "surfHelpTitle": "サーフヘルプ",
   "surfHelpIntro": "サーフはKabegameの組み込み閲覧＆収集機能です。サイトURL（例: https://pixiv.net）を入力して「サーフを開始」をクリックするとアプリ内で開きます。右クリックで画像や動画をダウンロードでき、ギャラリーに追加されます。",
   "surfHelpRecord": "各サーフは記録されます。ここからサイトに再入場したり、「最近の画像を表示」でそのサイトのギャラリービューを開けます。",
-  "linuxHintHelp": "Linuxではサーフはコンテンツのダウンロードができません。閲覧のみ。",
   "gotIt": "了解",
   "pleaseEnterUrl": "URLを入力してください",
   "useHttps": "httpsを使用してください",

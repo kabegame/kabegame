@@ -4,6 +4,8 @@
   const _tauri = window.__TAURI_INTERNALS__;
   const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
   const WRITE_CHUNK = 8 * 1024 * 1024;
+  // 文案见 kabegame-i18n `webview.*`，由 webview_i18n.js 预先拉取
+  const t = (key, params) => (window.__kb_i18n__ ? window.__kb_i18n__.t(key, params) : key);
 
   function toast(message, type) {
     try {
@@ -12,9 +14,9 @@
   }
 
   function progressMessage(written, total) {
-    if (!Number.isFinite(total) || total <= 0) return "下载中";
+    if (!Number.isFinite(total) || total <= 0) return t("progress.downloading");
     const percent = Math.max(0, Math.min(100, Math.floor((written / total) * 100)));
-    return "下载中 " + percent + "%";
+    return t("progress.downloadingPercent", { percent });
   }
 
   function streamExtension(mime) {
@@ -33,16 +35,10 @@
     let offset = 0;
     while (offset < bytes.byteLength) {
       const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + WRITE_CHUNK));
-      // CEF 上普通 invoke 走 postMessage(JSON)通道,二进制会退化成数字数组;
-      // raw body 必须走 __kb_raw_invoke__(cef-ipc:///raw 帧化通道)。
-      // 非 CEF 平台(Android WebView)没有该桥,回退标准 invoke。
-      const count = window.__kb_raw_invoke__
-        ? await window.__kb_raw_invoke__("crawl_fs_fwrite", chunk, {
-            headers: { rid: String(rid) },
-          })
-        : await _tauri.invoke("crawl_fs_fwrite", chunk, {
-            headers: { rid: String(rid) },
-          });
+      // Uint8Array 作为 invoke 参数即 raw body(Tauri InvokeBody::Raw)。
+      const count = await _tauri.invoke("crawl_fs_fwrite", chunk, {
+        headers: { rid: String(rid) },
+      });
       if (!Number.isInteger(count) || count <= 0 || count > chunk.byteLength) {
         throw new Error(`crawl_fs_fwrite 返回无效写入字节数：${count}`);
       }
@@ -92,7 +88,9 @@
     return `media-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  async function saveAndSubmit(streams, sourceUrl, opts) {
+  // panel 存在时（MSE 下载）进度与终态都显示在捕获面板上，不再另弹 toast
+  async function saveAndSubmit(streams, sourceUrl, opts, panel) {
+    const report = (message) => (panel ? panel.phase(message) : toast(message, "start"));
     let sessionDir = null;
     try {
       const root = await invoke("crawl_fs_get_root");
@@ -102,12 +100,12 @@
         options: { recursive: true },
       });
 
-      toast("开始下载", "start");
+      report(t("progress.writing"));
       const totalBytes = streams.reduce((sum, stream) => sum + stream.totalBytes, 0);
       let written = 0;
       const onWrite = (count) => {
         written += count;
-        toast(progressMessage(written, totalBytes), "start");
+        report(progressMessage(written, totalBytes));
       };
       const paths = [];
       for (let index = 0; index < streams.length; index++) {
@@ -123,20 +121,23 @@
 
       let outputPath = paths[0];
       if (paths.length > 1) {
-        const outputExt = streams.some((stream) =>
+        // 只有全部是 WebM 流才封 WebM（WebM 只收 VP8/VP9/AV1 + Opus/Vorbis）；混合时
+        // 例如 YouTube 的 H.264 视频 + Opus 音频，封 WebM 会在写头时 EINVAL，MP4 则都装得下。
+        const outputExt = streams.every((stream) =>
           String(stream.mime || "").toLowerCase().includes("webm")
         )
           ? "webm"
           : "mp4";
         outputPath = `${sessionDir}/output.${outputExt}`;
-        toast("正在合并音视频", "start");
+        report(t("progress.muxing"));
         await invoke("crawl_ffmpeg_mux", { inputs: paths, output: outputPath });
       }
 
+      report(t("progress.importing"));
       await window.__kb_media_submit__(outputPath, sourceUrl, opts);
-      toast("下载完成", "success");
+      if (!panel) toast(t("toast.completed"), "success");
     } catch (e) {
-      toast("下载失败", "failed");
+      if (!panel) toast(t("toast.failed"), "failed");
       throw e;
     } finally {
       if (sessionDir) {
@@ -158,7 +159,7 @@
     );
   }
 
-  function saveStreams(buffers, sourceUrl, opts) {
+  function saveStreams(buffers, sourceUrl, opts, panel) {
     return saveAndSubmit(
       buffers.map((buffer) => ({
         mime: buffer.mime || "",
@@ -167,6 +168,7 @@
       })),
       sourceUrl,
       opts,
+      panel,
     );
   }
 
@@ -178,15 +180,232 @@
     );
   }
 
-  function bufferedCovers(video, end) {
+  // ---------- 捕获进度面板 ----------
+  // 页面右下角的浮层（shadow DOM 隔离页面样式）：每个 SourceBuffer 一组，每档清晰度一条覆盖条，
+  // 目标清晰度高亮，竖线是当前播放位置；底部是当前阶段。
+
+  const PANEL_STYLE = `
+    :host { all: initial; }
+    .card { --bg:#fff; --fg:#1f2328; --muted:#6b7280; --track:#e5e7eb; --target:#2563eb; --other:#9ca3af;
+      --ok:#16a34a; --err:#dc2626; --head:#111827; box-sizing:border-box; width:360px; max-width:calc(100vw - 32px);
+      padding:10px 12px; border-radius:10px; background:var(--bg); color:var(--fg);
+      box-shadow:0 10px 30px rgba(0,0,0,.22); font:12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      .card { --bg:#1f2329; --fg:#e5e7eb; --muted:#9ca3af; --track:#374151; --target:#60a5fa; --other:#6b7280;
+        --head:#f9fafb; }
+    }
+    .head { display:flex; justify-content:space-between; gap:8px; font-weight:600; color:var(--head); margin-bottom:6px; }
+    .group { margin-top:6px; }
+    .glabel { color:var(--muted); margin-bottom:2px; }
+    .row { display:grid; grid-template-columns:110px 1fr 38px; align-items:center; gap:6px; margin:2px 0; }
+    .row .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--muted); }
+    .row.target .name { color:var(--fg); font-weight:600; }
+    .row .pct { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
+    .row.target .pct { color:var(--fg); }
+    .bar { position:relative; height:8px; border-radius:4px; background:var(--track); overflow:hidden; }
+    .seg { position:absolute; top:0; bottom:0; background:var(--other); }
+    .row.target .seg { background:var(--target); }
+    .head-mark { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--fg); opacity:.75; }
+    .phase { margin-top:8px; color:var(--muted); }
+    .phase.ok { color:var(--ok); } .phase.err { color:var(--err); }
+  `;
+
+  function formatTime(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    const m = Math.floor(s / 60);
+    return `${m}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+  function renditionLabel(rendition) {
+    if (rendition.id === "raw") return t("panel.rawStream");
+    if (!rendition.decodable) return t("panel.missingInit");
+    const kbps = rendition.kbps >= 1000 ? `${(rendition.kbps / 1000).toFixed(1)}M` : `${rendition.kbps}k`;
+    const size = rendition.width && rendition.height ? `${rendition.width}×${rendition.height}` : rendition.codec || "?";
+    return rendition.kbps ? `${size} · ${kbps}` : size;
+  }
+
+  function bufferLabel(buffer) {
+    const major = String(buffer.mime || "").split("/")[0];
+    return major === "video" ? t("panel.video") : major === "audio" ? t("panel.audio") : buffer.mime || t("panel.stream");
+  }
+
+  // 只用 DOM API 构建：YouTube 等站点启用 Trusted Types，innerHTML 字符串赋值会抛错
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function percentOf(value, duration) {
+    return Math.max(0, Math.min(100, (value / duration) * 100));
+  }
+
+  function createProgressPanel() {
+    let host = null;
+    let parts = null;
+    let removeTimer = null;
+    function ensure() {
+      if (host && host.isConnected) return;
+      host = document.createElement("div");
+      host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;pointer-events:none";
+      const root = host.attachShadow({ mode: "closed" });
+      const style = document.createElement("style");
+      style.textContent = PANEL_STYLE;
+      const card = el("div", "card");
+      const head = el("div", "head");
+      parts = {
+        title: el("span", "title"),
+        total: el("span", "total"),
+        groups: el("div", "groups"),
+        phase: el("div", "phase"),
+      };
+      head.append(parts.title, parts.total);
+      card.append(head, parts.groups, parts.phase);
+      root.append(style, card);
+      (document.body || document.documentElement).appendChild(host);
+    }
+    function renditionRow(rendition, isTarget, duration, currentTime) {
+      const row = el("div", "row" + (isTarget ? " target" : ""));
+      const bar = el("div", "bar");
+      for (const [start, end] of rendition.ranges) {
+        const seg = el("div", "seg");
+        const left = percentOf(start, duration);
+        seg.style.left = `${left}%`;
+        seg.style.width = `${Math.max(0.4, Math.min(100 - left, ((end - start) / duration) * 100))}%`;
+        bar.append(seg);
+      }
+      const mark = el("div", "head-mark");
+      mark.style.left = `${percentOf(currentTime, duration)}%`;
+      bar.append(mark);
+      const seconds = coveredSeconds(rendition.ranges, duration);
+      row.append(
+        el("span", "name", `${isTarget ? "◆ " : ""}${renditionLabel(rendition)}`),
+        bar,
+        el("span", "pct", `${Math.floor((seconds / duration) * 100)}%`),
+      );
+      return { row, seconds };
+    }
+    const panel = {
+      phase(text, state) {
+        ensure();
+        parts.phase.textContent = text;
+        parts.phase.className = "phase" + (state ? " " + state : "");
+      },
+      coverage(cov, targets, duration, currentTime) {
+        ensure();
+        parts.title.textContent = t("panel.title", { duration: formatTime(duration) });
+        let targetSeconds = 0;
+        const groups = cov.buffers.map((buffer, index) => {
+          const group = el("div", "group");
+          const stats = buffer.stats || {};
+          const notes = [
+            stats.aborts ? t("panel.aborts", { count: stats.aborts }) : "",
+            stats.resyncs ? t("panel.resyncs", { count: stats.resyncs }) : "",
+            stats.droppedBytes ? t("panel.dropped", { size: (stats.droppedBytes / 1048576).toFixed(1) }) : "",
+          ].filter(Boolean);
+          group.append(el("div", "glabel", [bufferLabel(buffer), ...notes].join(" · ")));
+          if (!buffer.renditions.length) group.append(el("div", "glabel", t("panel.noData")));
+          for (const rendition of buffer.renditions) {
+            const isTarget = targets.get(index) === rendition.id;
+            const { row, seconds } = renditionRow(rendition, isTarget, duration, currentTime);
+            if (isTarget) targetSeconds += seconds;
+            group.append(row);
+          }
+          return group;
+        });
+        parts.groups.replaceChildren(...groups);
+        const total = cov.buffers.length ? targetSeconds / (cov.buffers.length * duration) : 0;
+        parts.total.textContent = `${Math.floor(Math.min(1, total) * 100)}%`;
+      },
+      // 终态停留几秒后移除
+      finish(text, state) {
+        panel.phase(text, state);
+        clearTimeout(removeTimer);
+        removeTimer = setTimeout(() => host && host.remove(), state === "err" ? 8000 : 3000);
+      },
+    };
+    return panel;
+  }
+
+  // ---------- 捕获补拉 ----------
+
+  // 区间端点与 0 / 时长之间允许的空隙（秒）：首帧时间戳偏移、音视频时长差
+  const COVER_TOLERANCE = 0.75;
+
+  function coveredSeconds(ranges, duration) {
+    let total = 0;
+    for (const [start, end] of ranges) {
+      total += Math.max(0, Math.min(end, duration) - Math.max(start, 0));
+    }
+    return total;
+  }
+
+  // 第一个未覆盖的时间点；全覆盖返回 null
+  function firstGap(ranges, duration) {
+    let cursor = 0;
+    for (const [start, end] of ranges) {
+      if (end <= cursor) continue;
+      if (start > cursor + COVER_TOLERANCE) return cursor;
+      cursor = Math.max(cursor, end);
+      if (cursor >= duration - COVER_TOLERANCE) return null;
+    }
+    return cursor >= duration - COVER_TOLERANCE ? null : cursor;
+  }
+
+  // 缺口之后下一个已覆盖区间的起点（没有则到结尾），用作兜底移除的区间终点
+  function gapEnd(ranges, gap, duration) {
+    for (const [start] of ranges) if (start > gap + COVER_TOLERANCE) return Math.min(start, duration);
+    return duration;
+  }
+
+  // 播放器缓冲区是否已有 t 处的数据（正在下载或已下载）
+  function playerHas(video, t) {
     try {
       for (let i = 0; i < video.buffered.length; i++) {
-        if (video.buffered.start(i) <= 0.5 && video.buffered.end(i) >= end) {
-          return true;
-        }
+        if (video.buffered.start(i) <= t + 0.05 && video.buffered.end(i) >= t + 0.25) return true;
       }
     } catch (_) {}
     return false;
+  }
+
+  function area(rendition) {
+    return (rendition.width || 0) * (rendition.height || 0);
+  }
+
+  // 首选：可解码的最高清晰度（同分辨率取码率高的）
+  function bestRendition(renditions) {
+    return renditions
+      .filter((r) => r.decodable)
+      .sort((a, b) => area(b) - area(a) || b.kbps - a.kbps)[0] || null;
+  }
+
+  // 退路：覆盖最完整的可解码清晰度（同覆盖取清晰度高的）
+  function mostCoveredRendition(renditions, duration) {
+    return renditions
+      .filter((r) => r.decodable)
+      .sort((a, b) => coveredSeconds(b.ranges, duration) - coveredSeconds(a.ranges, duration) || area(b) - area(a))[0] ||
+      null;
+  }
+
+  function waitForDuration(video, timeoutMs) {
+    const ready = () => Number.isFinite(video.duration) && video.duration > 0;
+    if (ready()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const done = () => {
+        clearTimeout(timer);
+        video.removeEventListener("loadedmetadata", check);
+        video.removeEventListener("durationchange", check);
+        if (ready()) resolve();
+        else reject(new Error(video.duration === Infinity ? t("error.liveStream") : t("error.durationTimeout")));
+      };
+      const check = () => {
+        if (ready()) done();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      video.addEventListener("loadedmetadata", check);
+      video.addEventListener("durationchange", check);
+    });
   }
 
   // 当前 <video> 绑定的媒体来源标识（blob/src）。换集后会变，用于侦测视频被替换。
@@ -194,17 +413,18 @@
     return video ? video.currentSrc || video.src || "" : "";
   }
 
-  async function ensureFullyBuffered(video, opts) {
-    if (!video) return;
-    const duration = Number(video.duration);
-    if (!Number.isFinite(duration) || duration <= 0) {
-      throw new Error("无法全缓冲直播流");
-    }
-    const end = Math.max(0, duration - 0.3);
-    if (bufferedCovers(video, end)) return;
-
-    toast("正在加速获取全量视频内容", "start");
+  // 驱动播放器把每路流的目标清晰度补齐：静音、正常倍速，把 currentTime 跳到目标清晰度的第一个
+  // 缺口，让播放器从那里继续拉分片。正常倍速是为了不让自适应码率因缓冲耗尽而降档；完整性只看
+  // 捕获层的覆盖区间，播放器回收已播部分不影响。返回每路流选中的清晰度 id。
+  async function ensureCaptured(video, url, panel, opts) {
+    panel.phase(t("panel.waitingMetadata"));
+    await waitForDuration(video, opts.metadataTimeoutMs ?? 10000);
+    const duration = video.duration;
     const pinnedId = videoIdentity(video);
+    const stallMs = opts.stallTimeoutMs ?? 20000;
+    const switchMs = opts.renditionSwitchMs ?? 8000;
+    const targets = new Map();
+    const targetProgress = new Map();
     const original = {
       muted: video.muted,
       playbackRate: video.playbackRate,
@@ -212,33 +432,107 @@
       paused: video.paused,
       loop: video.loop,
     };
-    const stallTimeoutMs = opts?.stallTimeoutMs ?? 20000;
-    let lastBufferedEnd = 0;
+    let lastTotal = -1;
     let lastProgressAt = Date.now();
+    // 「播放器缓冲区里有、捕获里没有」的缺口：开始时刻与已做的移除重拉次数
+    let held = null;
+    const maxEvictions = opts.maxEvictions ?? 3;
+    const heldMs = opts.heldTimeoutMs ?? 6000;
     try {
       video.muted = true;
-      // 关键：loop=true 时到达结尾会回卷到起点、**不触发 ended 事件**（HTML 规范），
-      // 从而阻止 B 站等站点在播放结束时自动跳下一集；播放仍会在回卷前缓冲到尾部。
+      video.playbackRate = 1;
+      // loop=true 时到达结尾会回卷、不触发 ended（HTML 规范），阻止 B 站等站点结束时自动跳下一集
       video.loop = true;
-      video.playbackRate = opts?.rate ?? 16;
-      video.currentTime = 0;
-      await video.play().catch(() => {});
-      while (!bufferedCovers(video, end)) {
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        // 视频被换集/替换/移出 DOM → 立即中断，不再空等到超时。
+      for (;;) {
         if (videoIdentity(video) !== pinnedId || !video.isConnected) {
-          throw new Error("视频已切换或被移除，下载中断");
+          throw new Error(t("error.videoChanged"));
         }
-        let bufferedEnd = 0;
-        for (let i = 0; i < video.buffered.length; i++) {
-          bufferedEnd = Math.max(bufferedEnd, video.buffered.end(i));
+        const cov = window.__kb_media__?.coverage(url);
+        if (!cov) throw new Error(t("error.captureMissing"));
+        if (cov.drm) throw new Error(t("error.drm"));
+        if (cov.truncated) throw new Error(t("error.captureLimit"));
+        const now = Date.now();
+        let gap = null;
+        let gapIndex = -1;
+        let gapUntil = duration;
+        let total = 0;
+        let switched = null;
+        cov.buffers.forEach((buffer, index) => {
+          let target = buffer.renditions.find((r) => r.id === targets.get(index));
+          if (!target) {
+            target = bestRendition(buffer.renditions);
+            if (!target) {
+              gap = 0;
+              return;
+            }
+            targets.set(index, target.id);
+            targetProgress.set(index, { at: now, seconds: coveredSeconds(target.ranges, duration) });
+          }
+          const seconds = coveredSeconds(target.ranges, duration);
+          const bufferGap = firstGap(target.ranges, duration);
+          const progress = targetProgress.get(index);
+          if (seconds > progress.seconds + 0.05) {
+            progress.seconds = seconds;
+            progress.at = now;
+          } else if (bufferGap != null && now - progress.at > switchMs) {
+            // 播放器在缺口处一直给别的清晰度：改用覆盖最完整的那一档
+            const fallback = mostCoveredRendition(buffer.renditions, duration);
+            if (fallback && fallback.id !== target.id) {
+              target = fallback;
+              targets.set(index, target.id);
+              targetProgress.set(index, { at: now, seconds: coveredSeconds(target.ranges, duration) });
+              switched = t("panel.switched", { stream: bufferLabel(buffer), rendition: renditionLabel(target) });
+            }
+          }
+          total += coveredSeconds(target.ranges, duration);
+          const targetGap = firstGap(target.ranges, duration);
+          if (targetGap != null && (gap == null || targetGap < gap)) {
+            gap = targetGap;
+            gapIndex = index;
+            gapUntil = gapEnd(target.ranges, targetGap, duration);
+          }
+        });
+        panel.coverage(cov, targets, duration, video.currentTime);
+        if (gap == null && cov.buffers.length) return targets;
+        if (total > lastTotal + 0.05) {
+          lastTotal = total;
+          lastProgressAt = now;
+        } else if (now - lastProgressAt > stallMs) {
+          throw new Error(
+            held && held.evictions >= maxEvictions
+              ? t("error.gapLost", { time: formatTime(gap ?? 0), count: held.evictions })
+              : t("error.stalled", { time: formatTime(gap ?? 0) }),
+          );
         }
-        if (bufferedEnd > lastBufferedEnd + 0.1) {
-          lastBufferedEnd = bufferedEnd;
-          lastProgressAt = Date.now();
-        } else if (Date.now() - lastProgressAt > stallTimeoutMs) {
-          throw new Error("MSE 全缓冲停滞超时");
+        let phase = switched || t("panel.fetchingGap", { time: formatTime(gap ?? 0) });
+        const current = video.currentTime;
+        if (gap != null && playerHas(video, gap)) {
+          // 播放器已有缺口处的数据（多半正在边下边追加这一片）：不要跳转打断它。跳转会让播放器
+          // 中止当前分片重新下载，反复跳转时这一片永远下不完。等它追加完整即可。
+          if (!held || Math.abs(held.gap - gap) > COVER_TOLERANCE) held = { gap, since: now, evictions: 0 };
+          if (!switched) phase = t("panel.waitingGap", { time: formatTime(gap) });
+          if (now - held.since > heldMs && held.evictions < maxEvictions) {
+            // 等了很久仍没进捕获：这段数据在捕获里丢了（例如解析重同步时丢弃）。从播放器缓冲区
+            // 移除这一段，再跳过去让它重新下载。
+            if (window.__kb_media__?.evict(url, gapIndex, gap, gapUntil)) {
+              held.evictions += 1;
+              held.since = now;
+              phase = t("panel.refetchingGap", { time: formatTime(gap), count: held.evictions });
+              try {
+                video.currentTime = gap;
+              } catch (_) {}
+            }
+          }
+        } else if (gap != null && !(current >= gap - 0.5 && current <= gap + 4)) {
+          // 播放器没有缺口处的数据，且播放位置不在缺口附近：跳过去让它从这里开始下载
+          held = null;
+          try {
+            video.currentTime = gap;
+          } catch (_) {}
         }
+        panel.phase(phase);
+        if (video.paused) await video.play().catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 250));
       }
     } finally {
       // 仅当仍是同一视频时才恢复状态，避免把设置写到已换集的新视频上。
@@ -254,7 +548,23 @@
     }
   }
 
+  // 没有可驱动的 <video>（插件直接传 blob URL）时，按现有捕获选清晰度：完整的最高档，否则覆盖最多的一档
+  function pickRenditions(url, duration) {
+    const cov = window.__kb_media__?.coverage(url);
+    const targets = new Map();
+    if (!cov) return targets;
+    cov.buffers.forEach((buffer, index) => {
+      const complete = Number.isFinite(duration)
+        ? buffer.renditions.filter((r) => r.decodable && firstGap(r.ranges, duration) == null)
+        : [];
+      const pick = bestRendition(complete) || mostCoveredRendition(buffer.renditions, duration || Infinity);
+      if (pick) targets.set(index, pick.id);
+    });
+    return targets;
+  }
+
   async function mediaDownload(url, opts) {
+    await window.__kb_i18n__?.ready;
     const rawUrl = String(url || "");
     if (/^data:/i.test(rawUrl)) {
       const blob = await (await fetch(rawUrl)).blob();
@@ -270,9 +580,7 @@
         try {
           blob = await (await fetch(rawUrl)).blob();
         } catch (_) {
-          const message = "未捕获到该视频的媒体流（页面可能在注入前就开始播放，可刷新页面后重试）";
-          toast(message, "failed");
-          throw new Error(message);
+          throw new Error(t("error.notCaptured"));
         }
         return saveBlob(blob, rawUrl, opts);
       }
@@ -280,38 +588,32 @@
         return saveBlob(entry.blob, rawUrl, opts);
       }
       if (entry.drm || window.__kb_media__?.hasDrm?.()) {
-        throw new Error("DRM/EME 保护内容无法下载");
+        throw new Error(t("error.drm"));
       }
-      if (entry.truncated) {
-        throw new Error("MSE capture truncated (over cap)");
-      }
-      // 固定住发起下载时的目标视频；换集侦测与全缓冲都针对这一个元素/blob。
+      // 固定住发起下载时的目标视频；换集侦测与补拉都针对这一个元素/blob。
       const targetVideo = findVideoForUrl(rawUrl, opts);
+      const panel = createProgressPanel();
       try {
-        await ensureFullyBuffered(targetVideo, opts || {});
+        const targets = targetVideo
+          ? await ensureCaptured(targetVideo, rawUrl, panel, opts || {})
+          : pickRenditions(rawUrl, NaN);
+        // 用原始 blob URL 取字节：即便页面已换集，捕获表仍保留原视频的分片。
+        entry = window.__kb_media__?.resolve(rawUrl, Object.fromEntries(targets));
+        if (!entry || entry.kind !== "mse") throw new Error(t("error.captureMissing"));
+        if (entry.drm || window.__kb_media__?.hasDrm?.()) throw new Error(t("error.drm"));
+        if (entry.truncated) throw new Error(t("error.captureLimit"));
+        if (entry.buffers.some((buffer) => buffer.unordered)) {
+          console.warn("[kabegame] MSE container order could not be verified");
+        }
+        const buffers = entry.buffers.filter((buffer) => bufferTotal(buffer) > 0);
+        if (!buffers.length) throw new Error(t("error.captureEmpty"));
+        await saveStreams(buffers, rawUrl, opts, panel);
+        panel.finish(t("toast.completed"), "ok");
       } catch (e) {
-        toast(String((e && e.message) || e) || "下载失败", "failed");
+        panel.finish(t("panel.failed", { error: String((e && e.message) || e) }), "err");
         throw e;
       }
-      // 用原始 blob URL 重新取快照：即便页面已换集，捕获表仍保留原视频的分片。
-      entry = window.__kb_media__?.resolve(rawUrl);
-      if (!entry || entry.kind !== "mse") {
-        throw new Error("MSE capture not found");
-      }
-      if (entry.drm || window.__kb_media__?.hasDrm?.()) {
-        throw new Error("DRM/EME 保护内容无法下载");
-      }
-      if (entry.truncated) {
-        throw new Error("MSE capture truncated (over cap)");
-      }
-      if (entry.buffers.some((buffer) => buffer.unordered)) {
-        console.warn("[kabegame] MSE container order could not be verified");
-      }
-      const buffers = entry.buffers.filter((buffer) => bufferTotal(buffer) > 0);
-      if (!buffers.length) {
-        throw new Error("MSE capture has no media data");
-      }
-      return saveStreams(buffers, rawUrl, opts);
+      return;
     }
     const blob = await (await fetch(rawUrl)).blob();
     return saveBlob(blob, rawUrl, opts);

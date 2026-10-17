@@ -3,6 +3,7 @@
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::Storage;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use tauri::{AppHandle, Runtime};
@@ -15,6 +16,13 @@ pub fn exit_app<R: Runtime>(app: AppHandle<R>) {
         emitter.emit_app_shutdown("exit");
     }
     app.exit(0);
+}
+
+/// 注入网页（畅游 / WebView 爬虫窗口）的脚本文案：当前应用语言下 `webview.*` 的整张表。
+/// 页面加载时由 `webview_i18n.js` 拉取一次，切换语言后新加载的页面即用新语言。
+#[tauri::command]
+pub fn get_webview_i18n() -> HashMap<&'static str, String> {
+    kabegame_i18n::webview_messages().into_iter().collect()
 }
 
 #[derive(Debug, Clone, Serialize)]

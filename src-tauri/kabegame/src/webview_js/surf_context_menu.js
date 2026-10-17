@@ -81,10 +81,12 @@
     menu.style.background = isDark ? "#2a2a2a" : "#fff";
     menu.style.border = isDark ? "1px solid #444" : "1px solid #d0d0d0";
     menu.style.color = isDark ? "#eee" : "#222";
-    menu.innerHTML = "";
+    // 不用 innerHTML：YouTube 等站点启用 Trusted Types，字符串赋值会抛错
+    menu.replaceChildren();
 
     const item = document.createElement("div");
-    item.textContent = mediaKind === "video" ? "下载视频" : "下载图片";
+    const t = (key) => (window.__kb_i18n__ ? window.__kb_i18n__.t(key) : key);
+    item.textContent = t(mediaKind === "video" ? "menu.downloadVideo" : "menu.downloadImage");
     item.style.cssText =
       "padding:8px 16px;cursor:pointer;border-radius:3px;margin:2px 4px;white-space:nowrap";
     const hoverBg = isDark ? "#3a3a3a" : "#f0f0f0";
@@ -132,10 +134,15 @@
       const { media, element } = hit;
       const url = typeof media === "string" ? media : media.url;
       const kind = typeof media === "string" ? "image" : media.kind || "image";
+      // 先画菜单再拦截：菜单画不出来时保留站点 / 浏览器自己的右键菜单，而不是什么都不出
+      try {
+        show(e.clientX, e.clientY, toAbsolute(url), kind, element);
+      } catch (error) {
+        console.warn("[kabegame] surf context menu failed:", error);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
-      const absoluteUrl = toAbsolute(url);
-      show(e.clientX, e.clientY, absoluteUrl, kind, element);
     },
     true,
   );

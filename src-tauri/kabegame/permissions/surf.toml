@@ -13,6 +13,7 @@ commands.allow = [
     "surf_collect_finished",
     "surf_save_page_snapshot",
     "surf_import_media",
+    "get_webview_i18n",
     "crawl_fs_get_root",
     "crawl_fs_mkdir",
     "crawl_fs_create",

@@ -80,6 +80,58 @@ pub fn translate_for_locale(key: &str, locale: &str) -> String {
     rust_i18n::t!(key, locale = lang).to_string()
 }
 
+/// 注入网页（畅游 / WebView 爬虫窗口）脚本使用的文案键，均位于 `webview.` 命名空间下。
+/// 新增 key 时同时补全 `locales/*.yml` 的 `webview:` 段。
+const WEBVIEW_KEYS: &[&str] = &[
+    "menu.downloadVideo",
+    "menu.downloadImage",
+    "toast.queued",
+    "toast.succeeded",
+    "toast.completed",
+    "toast.failed",
+    "toast.archiveImported",
+    "progress.downloading",
+    "progress.downloadingPercent",
+    "progress.writing",
+    "progress.muxing",
+    "progress.importing",
+    "panel.title",
+    "panel.video",
+    "panel.audio",
+    "panel.stream",
+    "panel.rawStream",
+    "panel.missingInit",
+    "panel.aborts",
+    "panel.resyncs",
+    "panel.dropped",
+    "panel.noData",
+    "panel.waitingMetadata",
+    "panel.switched",
+    "panel.fetchingGap",
+    "panel.waitingGap",
+    "panel.refetchingGap",
+    "panel.failed",
+    "error.liveStream",
+    "error.durationTimeout",
+    "error.videoChanged",
+    "error.drm",
+    "error.captureLimit",
+    "error.gapLost",
+    "error.stalled",
+    "error.notCaptured",
+    "error.captureMissing",
+    "error.captureEmpty",
+];
+
+/// 当前全局 locale 下注入网页脚本的整张文案表：键不带 `webview.` 前缀，占位符保持 `{name}` 原样，
+/// 由页面脚本替换。
+pub fn webview_messages() -> Vec<(&'static str, String)> {
+    WEBVIEW_KEYS
+        .iter()
+        .map(|key| (*key, translate(&format!("webview.{key}"))))
+        .collect()
+}
+
 /// 与 `UnifiedRootProvider` / `VfsSemantics` 的 `vd/{locale}` 段一致（zh/en/ja/ko/zhtw）。
 #[inline]
 pub fn vd_locale_segment_for_ui_language(lang: Option<&str>) -> &'static str {
@@ -148,4 +200,25 @@ macro_rules! t {
             _text
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `WEBVIEW_KEYS` 的每个键在所有语言里都必须有译文：缺失时 rust-i18n 退回 key 原文，
+    /// 注入页面会直接显示 `webview.xxx`。
+    #[test]
+    fn webview_keys_translated_in_every_locale() {
+        for locale in SUPPORTED_LOCALES {
+            for key in WEBVIEW_KEYS {
+                let full = format!("webview.{key}");
+                let text = translate_for_locale(&full, locale);
+                assert!(
+                    !text.is_empty() && text != full,
+                    "{locale} 缺少 {full}"
+                );
+            }
+        }
+    }
 }

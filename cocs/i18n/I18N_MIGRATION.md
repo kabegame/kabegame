@@ -90,6 +90,7 @@
 
 - **新增/修改前端文案**：只改对应命名空间下的 JSON（如 `locales/zh/settings.json`），key 保持与英文等基准语言一致；若新增命名空间，需在各语言的 `index.ts` 中聚合。
 - **新增/修改后端文案**：只改 `kabegame-i18n/locales/*.yml` 中对应模块；新增 key 时在所有语言 YAML 中补全（可先复制英文），避免运行时 fallback 到默认语种造成混语。
+- **注入网页脚本文案**（畅游 / WebView 爬虫窗口里的右键菜单、页内 toast、视频捕获面板）：放在 YAML 的 `webview:` 段，并把键登记到 `kabegame-i18n` 的 `WEBVIEW_KEYS`（单测校验五种语言齐全）；页面经 `get_webview_i18n` 命令拉表，脚本里用 `__kb_i18n__.t(key, params)`，占位符写 `{name}`。
 - **新增语言**：  
   - 前端：复制 `locales/en/`（或 zh）为 `locales/<new-lang>/`，翻译后在各语言列表与 `supportedLanguages` 中注册。  
   - 后端：复制 `en.yml` 为 `<new-lang>.yml` 并翻译，在 crate 的「支持语言」逻辑中加入新语种。

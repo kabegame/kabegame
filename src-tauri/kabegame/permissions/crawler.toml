@@ -49,4 +49,5 @@ commands.allow = [
     "crawl_error",
     "show_crawler_window",
     "crawl_clear_site_data",
+    "get_webview_i18n",
 ]

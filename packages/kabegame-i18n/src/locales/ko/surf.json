@@ -24,7 +24,6 @@
   "surfHelpTitle": "서핑 도움말",
   "surfHelpIntro": "서핑은 Kabegame의 내장 탐색 및 수집 기능입니다. 사이트 URL(예: https://pixiv.net)을 입력하고 \"서핑 시작\"을 클릭하면 앱 내에서 열립니다. 오른쪽 클릭으로 이미지나 동영상을 다운로드할 수 있으며 갤러리에 추가됩니다.",
   "surfHelpRecord": "각 서핑은 기록을 생성합니다. 여기서 사이트에 다시 들어가거나 \"최근 이미지 보기\"를 열어 해당 사이트의 갤러리 뷰를 볼 수 있습니다.",
-  "linuxHintHelp": "Linux에서는 서핑이 콘텐츠를 다운로드할 수 없습니다. 탐색만 가능합니다.",
   "gotIt": "알겠습니다",
   "pleaseEnterUrl": "URL을 입력해 주세요",
   "useHttps": "https를 사용해 주세요",
