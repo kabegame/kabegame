@@ -1,3 +1,5 @@
+import type { InjectionKey, Ref } from 'vue'
+
 export interface KbFilterDropdownOption {
   label: string
   value: string
@@ -68,3 +70,25 @@ export interface KbFilterDropdownTriggerSlotProps {
 export interface KbFilterDropdownPanelSlotProps {
   close: () => void
 }
+
+/**
+ * 面板的承载方式。
+ *
+ * - `popover`(默认):chip 下方弹层。
+ * - `dialog`:点 chip 弹出对话框，面板内容原样放进对话框主体。窄屏(安卓)上弹层
+ *   贴着 chip 挤在屏幕一角，不好点也装不下树形面板，改成居中对话框。
+ */
+export type KbFilterDropdownPanelMode = 'popover' | 'dialog'
+
+/**
+ * 由应用在祖先组件 provide，整棵子树里的 KbFilterDropdown 统一切换承载方式。
+ * 组件库不认识应用的返回栈，`bindVisible` 让应用把每个实例的开合状态接进去
+ * (在实例 setup 内调用，可以使用 watch / onBeforeUnmount)。
+ */
+export interface KbFilterDropdownContext {
+  panelMode?: Ref<KbFilterDropdownPanelMode> | KbFilterDropdownPanelMode
+  bindVisible?: (visible: Ref<boolean>) => void
+}
+
+export const kbFilterDropdownContextKey: InjectionKey<KbFilterDropdownContext> =
+  Symbol('kbFilterDropdownContext')

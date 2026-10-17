@@ -1,4 +1,5 @@
 import '@kabegame/element-plus/components/base/style'
+import '@kabegame/element-plus/components/dialog/style'
 import '@kabegame/element-plus/components/icon/style'
 import '@kabegame/element-plus/components/input/style'
 import '@kabegame/element-plus/components/tooltip/style'

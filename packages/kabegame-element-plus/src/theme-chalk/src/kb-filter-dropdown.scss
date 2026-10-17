@@ -202,6 +202,28 @@
     }
   }
 
+  // dialog 档：面板原样放进对话框主体。变量要在这里再挂一次——面板不在 popper 里了。
+  // 主体去掉内边距，由面板自己的留白排版；面板撑满对话框宽度。
+  @include e(dialog) {
+    @include set-component-css-var('kb-filter-dropdown', $kb-filter-dropdown);
+  }
+
+  @include e(dialog-body) {
+    max-height: 70vh;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+
+    .#{$namespace}-kb-filter-dropdown__panel {
+      width: 100%;
+      max-width: none;
+    }
+
+    .#{$namespace}-kb-filter-dropdown__body {
+      max-height: none;
+    }
+  }
+
   @include e(panel) {
     // width: auto;
     color: getCssVar('kb-filter-dropdown', 'option-text-color');

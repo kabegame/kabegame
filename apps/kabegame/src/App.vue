@@ -180,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, provide, watch } from "vue";
 import { zhCn, en, zhTw, ja, ko } from "@kabegame/element-plus/locale";
 import { Picture, FilterPlugin, Setting, Collection, Compass, AlarmClock } from "@kabegame/element-plus-icons";
 import appLogoUrl from "@/assets/icon-small.png";
@@ -222,7 +222,8 @@ import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@/stores/modalStack";
 import { useModal } from "@/composables/useModal";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
-import { ElMessageBox } from "@kabegame/element-plus";
+import { ElMessageBox, kbFilterDropdownContextKey } from "@kabegame/element-plus";
+import { useModalBack } from "@/composables/useModalBack";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
 import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
@@ -370,6 +371,11 @@ const { init: initFileDrop } = useFileDrop(fileDropOverlayRef);
 
 // 紧凑布局信号（Android 恒紧凑；web mode 跟随视口；Tauri 桌面永不紧凑）
 const uiStore = useUiStore();
+// 紧凑模式（安卓 / 窄屏 web）下查询 chip 的面板改用对话框承载，并接入返回栈。
+provide(kbFilterDropdownContextKey, {
+  panelMode: computed(() => (uiStore.isCompact ? "dialog" : "popover")),
+  bindVisible: useModalBack,
+});
 const settingsStore = useSettingsStore();
 type BgMediaType = "image" | "video";
 

@@ -499,6 +499,24 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [ ] | 骨架屏 | Android | 首次加载商店 tab | 骨架卡片同样两列等宽，不横向溢出 | 同一规则，未单独截图 |
 | [ ] | 桌面不受影响 | 桌面 CEF 窄窗 | 缩窄窗口进入紧凑布局 | 两列等宽 | 未覆盖 |
 
+## Android 查询 chip 改为对话框面板（`KbFilterDropdown` / `GalleryQueryBar.vue` / `GalleryToolbar.vue`）
+
+`KbFilterDropdown` 新增经 `kbFilterDropdownContextKey` 注入的面板承载方式：`App.vue` 在紧凑模式下提供 `panelMode: "dialog"` 与 `bindVisible: useModalBack`，面板内容（自定义 `#panel` 或内置选项列表）原样放进 `ElDialog`。`GalleryQueryBar` 的查询行不再只在桌面渲染，紧凑模式不换行、中段从 0 伸缩横向滚动；删除旧的 van-picker 过滤 / 时间 / 插件 / 媒体类型 / 宽高比 / 排序 picker 与其懒加载，仅保留每页条数 picker；画廊折叠菜单去掉「过滤」「排序」两项。dialog 档下 tooltip 恒给 `visible=false`：disabled 的 tooltip 收到 `true` 会立刻经 `useModelToggle` 回发 `false`，把对话框关掉。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | chip 单行 | Android dev（360 CSS px，ja） | 打开画廊 | 排序两颗 + 搜索 / 过滤 chip 横向滚动 + 行末 ⋯，同一行不换行 | 已实测并截图 |
+| [x] | 过滤 chip 弹窗 | Android dev | 点时间 chip | 居中对话框，标题「時間」，内容为过滤树 `2026 通年 (100)` | 已实测并截图 |
+| [x] | 内置选项列表 | Android dev | 点排序维度 chip | 对话框列出全部排序维度，当前项高亮 | 已实测并截图 |
+| [x] | 返回键 | Android dev | 对话框打开时按返回键 | 只关闭对话框，不弹退出确认 | 已实测 |
+| [ ] | 选值后关闭 | Android | 在过滤树 / 排序列表中选择一项 | 查询生效，对话框关闭，chip 显示取值 | 未在真机点选（避免改动用户当前查询） |
+| [ ] | 搜索 chip | Android | 点搜索 chip 输入关键字 | 对话框内输入框聚焦、防抖生效 | 未覆盖 |
+| [ ] | 高级查询弹窗内的 chip | Android | 在高级查询条件行点 chip | 嵌套对话框在上层，返回键逐层关闭 | 未覆盖 |
+| [ ] | 画册 / 任务 / 畅游详情 | Android | 打开各详情页 | 出现同样的 chip 行并可弹窗 | 未覆盖 |
+| [ ] | 每页条数 | Android | 右上角 ⋯ → 每页条数 | van-picker 仍可用 | 未覆盖 |
+| [ ] | 桌面不受影响 | 桌面 CEF | 点各 chip | 仍为下拉弹层 | 未覆盖 |
+| [x] | 类型与单测 | 仓库 | `vue-tsc`；`vitest` GalleryQueryBar / GalleryToolbar | 无错误，12 个用例通过 | 已运行 |
+
 ## Android 画册页左侧贴边（`Albums.vue`）
 
 `.albums-page` 的左内边距为 0，是给桌面三栏布局让树列贴窗口左缘；紧凑模式没有树列，`ImageGrid` 中栏又是 `display: contents` 加不上内边距，结果面包屑、查询 chip 行和图片都贴着屏幕左边，只有页头靠 `ml-5` 缩进。现在紧凑模式在页面根上补回 20px 左内边距，页头的 `ml-5` 只在非紧凑模式保留。

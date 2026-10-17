@@ -58,8 +58,6 @@ import PageHeader from "@/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@/stores/header";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
-  splitQueryFilters,
-  filterSetToSingleFilter,
   hasActiveQuery,
   querySearchTerm,
   buildGalleryCountPath,
@@ -67,8 +65,6 @@ import {
   type GalleryQueryPatch,
   type GallerySort,
 } from "@/utils/galleryPath";
-import { galleryLabelForFilter, gallerySortOrderLabels } from "@/utils/galleryFilterLabels";
-import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import {
   useGalleryRouteStore,
@@ -110,23 +106,18 @@ const emit = defineEmits<{
   openCollectMenu: [];
 }>();
 
-const { t, locale } = useI18n();
+const { t } = useI18n();
 const uiStore = useUiStore();
-const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const galleryRouteStore = useGalleryRouteStore();
 const { hide: galleryHide } = storeToRefs(galleryRouteStore);
 
 const queryBarRef = ref<{
-  openFilterPicker: () => void;
-  openSortPicker: () => void;
   openPageSizePicker: () => void;
   refreshProviderFilterTree: () => Promise<void>;
 } | null>(null);
 const failedImagesDialogRef = ref<InstanceType<typeof FailedImagesDialog> | null>(null);
 
-/** 安卓折叠菜单只展示简单部分，高级条件由独立 chip 管理。 */
-const simpleFilters = computed(() => splitQueryFilters(galleryRouteStore.query).simple);
 const isNoAlbumBrowse = computed(() => galleryRouteStore.effectiveNoAlbum);
 
 /** 查询行的唯一出口：一次 patch 一次导航，搜索模式顺带记进会话记忆。 */
@@ -144,21 +135,6 @@ function clearAllFilters() {
 }
 
 // ---------- 安卓折叠菜单标签 ----------
-const labelContext = computed(() => ({
-  t,
-  locale: String(locale.value),
-  pluginLabel: (id: string) => pluginStore.pluginLabel(id),
-}));
-
-const filterFoldLabel = computed(() =>
-  galleryLabelForFilter(filterSetToSingleFilter(simpleFilters.value ?? {}), labelContext.value),
-);
-
-const sortFoldLabel = computed(() => {
-  const labels = gallerySortOrderLabels(props.sort.field, t);
-  return props.sort.desc ? labels.desc : labels.asc;
-});
-
 const failedCountFoldLabel = computed(() => {
   const n = failedImagesStore.allFailed.length;
   const suffix = n >= 99 ? "99+" : String(n);
@@ -238,20 +214,16 @@ const foldIds = computed(() => {
   if (!uiStore.isCompact) {
     return [];
   }
-  const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages, HeaderFeatureId.GalleryFilter];
-  ids.push(HeaderFeatureId.GallerySort);
-  ids.push(HeaderFeatureId.GalleryPageSize);
-  return ids;
+  // 过滤与排序和桌面一样走查询行的 chip；每页条数工具条上没有 chip，留在折叠菜单。
+  return [HeaderFeatureId.FailedImages, HeaderFeatureId.GalleryPageSize];
 });
 
 const headerStore = useHeaderStore();
 watch(
-  [sortFoldLabel, filterFoldLabel, () => props.pageSize, () => failedImagesStore.allFailed.length],
+  [() => props.pageSize, () => failedImagesStore.allFailed.length],
   () => {
     if (!uiStore.isCompact) return;
     headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
-    headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, filterFoldLabel.value);
-    headerStore.setFoldLabel(HeaderFeatureId.GallerySort, sortFoldLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, String(props.pageSize));
   },
   { immediate: true },
@@ -259,8 +231,6 @@ watch(
 onUnmounted(() => {
   if (!uiStore.isCompact) return;
   headerStore.setFoldLabel(HeaderFeatureId.FailedImages, undefined);
-  headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
-  headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);
 });
 
@@ -310,12 +280,6 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
           emit("showWebpageCollect");
         }
       }
-      break;
-    case HeaderFeatureId.GalleryFilter:
-      queryBarRef.value?.openFilterPicker();
-      break;
-    case HeaderFeatureId.GallerySort:
-      queryBarRef.value?.openSortPicker();
       break;
     case HeaderFeatureId.GalleryPageSize:
       queryBarRef.value?.openPageSizePicker();
