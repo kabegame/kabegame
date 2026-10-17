@@ -488,3 +488,13 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 | [x] | 语言切换 | 桌面 CEF | 设置语言 zh → en → zh | 收到 `{reason: official-source-name-i18n-sync}`，官方源 tab 名称随之切换 | 已实测，语言已恢复 zh |
 | [ ] | Web 版 | Web | `?tab=` 恢复与只读源行为 | 与桌面一致，源增删改仍被只读拦截 | 未覆盖 |
 | [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行 |
+
+## Android 画册页左侧贴边（`Albums.vue`）
+
+`.albums-page` 的左内边距为 0，是给桌面三栏布局让树列贴窗口左缘；紧凑模式没有树列，`ImageGrid` 中栏又是 `display: contents` 加不上内边距，结果面包屑、查询 chip 行和图片都贴着屏幕左边，只有页头靠 `ml-5` 缩进。现在紧凑模式在页面根上补回 20px 左内边距，页头的 `ml-5` 只在非紧凑模式保留。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 左右对称 | Android dev | 打开任一子画册 | 页头、面包屑、chip 行左右边缘均为 20 / 340（360 宽视口），与画廊一致 | 已实测并截图 |
+| [ ] | 未选画册 | Android | 进入画册页未选中任何画册 | 页头与内容左缘对齐，无面包屑 | 未覆盖 |
+| [ ] | 桌面三栏不受影响 | 桌面 CEF | 宽屏打开画册页、开关信息面板 | 树列仍贴左缘，页头仍缩进 20px | `isCompact` 为 false 时样式未变，未单独复测 |

@@ -1,5 +1,5 @@
 <template>
-  <div class="albums-page" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
+  <div class="albums-page" :class="{ 'is-compact': isCompact }" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
     <!-- 单个 ImageGrid、单个滚动容器（sticky 体系与 Gallery 同源）：#header 页头全宽 sticky 钉顶，
          #aside 树列排在页头之下、自身 sticky 钉在页头下缘，中栏 = before-grid（查询行 / sticky 分页）
          + 图片流，图片能滚到页头下方 -->
@@ -19,7 +19,8 @@
       <!-- 直接放 AlbumsPageHeader，不能包短容器：sticky 元素被限制在父盒内，父盒等高即失效 -->
       <template #header>
         <AlbumsPageHeader
-          class="albums-page-header ml-5"
+          class="albums-page-header"
+          :class="{ 'ml-5': !isCompact }"
           :album-drive-enabled="albumDriveEnabled"
           @view-vd="openVirtualDrive"
           @refresh="handleRefresh"
@@ -1102,6 +1103,11 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   overflow: hidden;
   /* 与 .gallery-page 同口径的整页内缩：页头/树列/内容距窗口四周 20px */
   padding: var(--albums-page-pad) var(--albums-page-pad) var(--albums-page-pad) 0;
+
+  /* 左侧 0 是让三栏的树列贴窗口左缘；紧凑模式没有树列，补回左内边距与 Gallery 同缘 */
+  &.is-compact {
+    padding-left: var(--albums-page-pad);
+  }
 }
 
 .albums-grid-body {
