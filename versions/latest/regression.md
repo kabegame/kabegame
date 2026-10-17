@@ -36,6 +36,20 @@ Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上�
 | [ ] | 权限请求转发 | 桌面 CEF | 注册 `on_permission_request`，分别触发允许、拒绝与默认处理的摄像头 / 麦克风 / 通知请求 | handler 收到对应 `PermissionKind`，CEF 按返回值允许、拒绝或执行默认策略 | 需带权限设备实机回归 |
 | [ ] | macOS 启动激活策略 | macOS | 分别以 `activate_ignoring_other_apps` 开 / 关启动应用 | 启动激活行为与配置一致，窗口透明配置仍能正常构建 | Linux check 不覆盖该 cfg 分支 |
 
+## CEF IPC 恢复 fetch 主通道
+
+删除 `tauri-runtime-cef` 的 `force_postmessage_ipc_transport`：不再把上游 `ipc-protocol.js` 的 `customProtocolIpcFailed` 预置为 `true`，invoke 回到上游 `fetch(ipc://localhost/<cmd>)` 主通道，响应直接作为 fetch body 返回，DevTools Network 面板可见。原注释所称「`Tauri-*` 头触发 CORS 预检、CEF 收不到」经实测不成立：CEF scheme handler 处理的请求不发预检，只在响应上校验 ACAO，Tauri `ipc` handler 已返回 `*`。fetch 失败时上游脚本仍自动回退 `window.ipc.postMessage`（`cef-ipc://` JSON 桥），第三方页面的 `__kb_raw_invoke__` / `cef-ipc://localhost/raw` 二进制通道保持不变。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard | `deno task check -c kabegame --skip vue` | Rust `cargo check` 无 error | 已运行；仅有既存 warning |
+| [x] | 主窗口首帧起 invoke | Linux dev（删除前用 `KB_DEBUG_IPC_FETCH=1` 插桩等效验证） | 经 CDP 开 Network 域后重载主窗口，统计全部 IPC 请求与控制台回退告警 | 全部为 `POST ipc://localhost/<cmd>` 且 200，无 `IPC custom protocol failed` 告警；raw body invoke 同样 200 | 实测 54 个请求全部成功；手工 fetch 用错误 invoke key 时 Tauri 不回调 responder，表现为请求失败，与 CORS 无关 |
+| [ ] | Network 面板可见 | 桌面 CEF（三平台） | 打开主窗口 DevTools → Network，触发画廊翻页、设置保存等 invoke | 每次 invoke 显示为一条 ipc 请求，状态 200，Response 可读到 JSON | |
+| [ ] | macOS 主通道 | macOS | 同上，并观察控制台 | 不出现 `IPC custom protocol failed` 回退告警，功能正常 | 用户待测 |
+| [ ] | Windows 主通道 | Windows | 同上；Windows 上 ipc 走 `http://ipc.localhost` | 请求 200、无回退告警 | Linux 已用 `http://ipc.localhost` 对照实验验证 JSON 与 raw body 均可达 |
+| [ ] | 第三方页面 IPC | 桌面 CEF 畅游窗口（CSP 严格站点，如 github.com）/ WebView 爬虫任务 | 畅游一键下载 blob/MSE 媒体，跑一个 WebView 插件任务 | 下载与导入正常；若 fetch 被 CSP 挡住则自动回退 postMessage，不出现命令丢失或卡死 | `ipc` scheme 注册带 `CSP_BYPASSING` |
+| [ ] | 生产包主通道 | 安装版（页面为 `tauri://localhost`） | 安装新构建后操作画廊、设置、任务 | invoke 正常，Network 可见 | dev 下页面 origin 为 `http://localhost:1420` |
+
 ## 插件商店启动刷新、可更新导航角标与最低版本安装守卫
 
 应用加载已安装插件后，商店 store 会先从后端 index 缓存恢复所有源，再在全平台静默强制刷新一次，之后每 4 小时继续强制刷新；进入商店 tab 的兜底重拉阈值也同步为 4 小时。可更新插件按 id 去重，并统一排除 `minAppIncompatible` 条目；桌面侧栏与紧凑端底部 tab 的「插件」图标通过通用 `v-corner-badge` 显示数量。后端在 `.kgpg` 复制进插件目录前校验 `min_app_version`，商店安装、文件导入和拖入导入共用守卫。

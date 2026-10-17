@@ -79,3 +79,4 @@
 - CEF runtime 适配 Tauri 2.12：同步显示器查询、指定显示器全屏、权限请求与 macOS 启动激活策略等 runtime trait。
 - Tauri 栈升级到 2.12.4，同步改善窗口 / Channel 监听的释放、Android 退出白屏与运行中覆盖安装崩溃，并在 NSIS 静默/被动模式下拦截降级。
 - 删除 `0010-tauri-build-always-static-vcruntime` 补丁；上游现已默认启用 `build.windows.staticVCRuntime`。
+- CEF 桌面端的普通 invoke 不再被强制改走 postMessage，恢复上游 `fetch(ipc://)` 主通道，DevTools Network 面板可以看到每次 IPC 的请求与响应内容；第三方页面仍保留 `cef-ipc://` 回退与 `/raw` 二进制通道。

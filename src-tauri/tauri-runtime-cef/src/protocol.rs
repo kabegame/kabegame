@@ -60,47 +60,6 @@ pub(crate) fn remove_browser_protocols(id: i32) {
     registry().lock().unwrap().remove(&id);
 }
 
-// DEBUG-IPC 临时插桩:验证 fetch(ipc://) 失败的真实原因,验证完删除。
-// runtime crate 不依赖 app 的 debug_ingest,直接追加写同格式的 NDJSON 会话文件。
-pub(crate) fn debug_ipc_fetch_enabled() -> bool {
-    std::env::var_os("KB_DEBUG_IPC_FETCH").is_some_and(|value| value == "1")
-}
-
-// DEBUG-IPC
-pub(crate) fn debug_ipc_event(name: &str, payload: serde_json::Value) {
-    if !debug_ipc_fetch_enabled() {
-        return;
-    }
-    use std::io::Write;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let line = serde_json::json!({
-        "session_id": "ipc-fetch-probe",
-        "source": "cef-runtime",
-        "name": name,
-        "ts": ts,
-        "payload": payload,
-    });
-    let path = std::env::var_os("KB_DEBUG_IPC_FILE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../.kabegame/debug/debug-ipc-fetch-probe.ndjson"
-            ))
-        });
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{line}");
-    }
-}
-
-// DEBUG-IPC:只记 IPC 相关请求,资源请求太多会淹没日志
-fn debug_ipc_is_interesting(url: &str) -> bool {
-    url.starts_with("ipc:") || url.starts_with("cef-ipc:") || url.contains("ipc.localhost")
-}
-
 #[derive(Default)]
 struct ResponseState {
     response: Option<HttpResponse<ResponseBody>>,
@@ -122,36 +81,9 @@ wrap_scheme_handler_factory! {
             browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _scheme_name: Option<&CefString>,
-            request: Option<&mut cef::Request>,
+            _request: Option<&mut cef::Request>,
         ) -> Option<ResourceHandler> {
-            // DEBUG-IPC:factory 返回 None 时请求会落到 network service,
-            // 这正是 ERR_UNKNOWN_URL_SCHEME 的另一种可能来源
-            let debug_url = request
-                .as_ref()
-                .map(|request| CefString::from(&request.url()).to_string())
-                .unwrap_or_default();
-            let debug_method = request
-                .as_ref()
-                .map(|request| CefString::from(&request.method()).to_string())
-                .unwrap_or_default();
-            let debug = debug_ipc_is_interesting(&debug_url);
-            let id = browser.as_ref().map(|browser| browser.identifier());
-            let lookup = id.and_then(|id| {
-                let guard = registry().lock().ok()?;
-                let entry = guard.get(&id)?;
-                Some((entry.label.clone(), entry.schemes.get(&self.logical_scheme).cloned()))
-            });
-            if debug {
-                debug_ipc_event("factory_create", serde_json::json!({
-                    "scheme": self.logical_scheme,
-                    "method": debug_method,
-                    "url": debug_url,
-                    "browser_id": id,
-                    "registry_entry": lookup.as_ref().map(|(label, _)| label.clone()),
-                    "has_handler": lookup.as_ref().is_some_and(|(_, handler)| handler.is_some()),
-                }));
-            }
-            let id = id?;
+            let id = browser?.identifier();
             let guard = registry().lock().ok()?;
             let entry = guard.get(&id)?;
             let protocol = entry.schemes.get(&self.logical_scheme)?.clone();
@@ -194,31 +126,6 @@ wrap_resource_handler! {
                 }
             };
 
-            // DEBUG-IPC
-            let debug_uri = request.uri().to_string();
-            let debug = debug_ipc_is_interesting(&debug_uri);
-            if debug {
-                let header = |name: &str| {
-                    request
-                        .headers()
-                        .get(name)
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_string)
-                };
-                debug_ipc_event("handler_open", serde_json::json!({
-                    "label": self.webview_label,
-                    "method": request.method().as_str(),
-                    "uri": debug_uri,
-                    "origin": header("origin"),
-                    "content_type": header("content-type"),
-                    "has_tauri_callback": header("tauri-callback").is_some(),
-                    "has_invoke_key": header("tauri-invoke-key").is_some(),
-                    "acr_method": header("access-control-request-method"),
-                    "acr_headers": header("access-control-request-headers"),
-                    "body_len": request.body().len(),
-                }));
-            }
-
             self.state.lock().unwrap().open_in_progress = true;
             let state = self.state.clone();
             let callback = callback.clone();
@@ -226,21 +133,6 @@ wrap_resource_handler! {
                 &self.webview_label,
                 request,
                 Box::new(move |response| {
-                    // DEBUG-IPC
-                    if debug {
-                        debug_ipc_event("handler_respond", serde_json::json!({
-                            "uri": debug_uri,
-                            "status": response.status().as_u16(),
-                            "tauri_response": response
-                                .headers()
-                                .get("tauri-response")
-                                .and_then(|value| value.to_str().ok()),
-                            "acao": response
-                                .headers()
-                                .get("access-control-allow-origin")
-                                .and_then(|value| value.to_str().ok()),
-                        }));
-                    }
                     let should_continue = {
                         let mut state = state.lock().unwrap();
                         if state.cancelled {
@@ -438,17 +330,6 @@ fn ensure_global_scheme_factory(logical_scheme: &str) -> Result<()> {
         domain.as_ref(),
         Some(&mut factory),
     );
-    // DEBUG-IPC:非 Windows 额外把 ipc 挂到 http + ipc.localhost,与 ipc:// 自定义 scheme 对照
-    #[cfg(not(target_os = "windows"))]
-    if ok == 1 && logical_scheme == "ipc" && debug_ipc_fetch_enabled() {
-        let mut http_factory = GlobalSchemeHandlerFactory::new(logical_scheme.to_string());
-        let http_ok = cef::register_scheme_handler_factory(
-            Some(&CefString::from("http")),
-            Some(&CefString::from("ipc.localhost")),
-            Some(&mut http_factory),
-        );
-        debug_ipc_event("register_http_ipc_localhost", serde_json::json!({ "ok": http_ok }));
-    }
     if ok == 1 {
         set.insert(logical_scheme.to_string());
         Ok(())
@@ -463,7 +344,7 @@ fn ensure_global_scheme_factory(logical_scheme: &str) -> Result<()> {
 /// `<scheme>://localhost/<path>?<query>`,使 Tauri 的自定义-scheme handler 能正确
 /// 解析(见 [`request_to_http`] 处的说明)。非 `*.localhost` 或非 http(s) 的请求
 /// (如 `cef-ipc://localhost/`)原样返回。
-// DEBUG-IPC:临时放开 cfg,供非 Windows 的 http://ipc.localhost 对照实验复用
+#[cfg(target_os = "windows")]
 fn rewrite_windows_localhost_uri(uri: http::Uri) -> http::Uri {
     if !matches!(uri.scheme_str(), Some("http") | Some("https")) {
         return uri;
@@ -501,13 +382,6 @@ fn request_to_http(request: &cef::Request) -> std::result::Result<HttpRequest<Ve
     // handler。asset handler 只读 `uri().path()`,不受影响。
     #[cfg(target_os = "windows")]
     let uri = rewrite_windows_localhost_uri(uri);
-    // DEBUG-IPC
-    #[cfg(not(target_os = "windows"))]
-    let uri = if debug_ipc_fetch_enabled() {
-        rewrite_windows_localhost_uri(uri)
-    } else {
-        uri
-    };
     let mut http_request = HttpRequest::new(post_data_bytes(request));
     *http_request.method_mut() = method;
     *http_request.uri_mut() = uri;

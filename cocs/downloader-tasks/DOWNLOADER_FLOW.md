@@ -21,7 +21,7 @@
 
 JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通用 VFS 原语：页面 JS 读取/捕获字节，在当前任务或畅游会话的 `PluginVfs` 中分块落盘；MSE 多 SourceBuffer 再显式调用 `crawl_ffmpeg_mux` 做 stream-copy 合流。crawler 把最终虚拟路径交给 `crawl_download_image`，由 `task-vfs://` scheme 流式读入下载管线；surf 则调用 `surf_import_media`，以 `PostprocessSource::Path` 直通后处理。浏览器侧写盘进度仍通过 toast 展示，不再存在专用媒体上传会话或 base64 IPC。
 
-分块落盘的 raw 二进制 IPC 在 CEF 桌面端**不走标准 invoke**：普通 invoke 被强制为 postMessage(JSON)通道（`Uint8Array` 会退化成数字数组），`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令改经 CEF runtime 注入的 `window.__kb_raw_invoke__`（`cef-ipc://localhost/raw` 帧化通道：元数据在 body 前缀、请求零自定义头以规避 CORS 预检；Rust 侧解帧后转发 Tauri `ipc` 协议 handler，完整走 invoke 解析 + ACL + `InvokeBody::Raw`）。`media_download.js` 与 `bootstrap.js` 均优先该桥、无桥时（Android WebView）回退标准 invoke。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
+分块落盘的 raw 二进制 IPC 在 CEF 桌面端优先走 runtime 注入的帧化桥：标准 invoke 的 fetch 通道在第三方页面可能被回退到 postMessage(JSON)（`Uint8Array` 会退化成数字数组），`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令改经 CEF runtime 注入的 `window.__kb_raw_invoke__`（`cef-ipc://localhost/raw` 帧化通道：元数据在 body 前缀、不依赖 fetch 主通道是否可用；Rust 侧解帧后转发 Tauri `ipc` 协议 handler，完整走 invoke 解析 + ACL + `InvokeBody::Raw`）。`media_download.js` 与 `bootstrap.js` 均优先该桥、无桥时（Android WebView）回退标准 invoke。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
 
 ---
 

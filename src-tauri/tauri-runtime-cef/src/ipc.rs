@@ -1,19 +1,21 @@
 //! IPC bridge helpers for the CEF runtime.
 //!
 //! Tauri 2 的命令 IPC 有两条上游通道:`fetch(ipc://localhost/<cmd>)` 自定义协议
-//! (唯一能携带 **raw 二进制 body** 的通道)与 `window.ipc.postMessage(...)`
-//! JSON 回退。在 CEF 上,上游 fetch 路径因 `Tauri-*` 自定义头触发 CORS 预检而
-//! 不可用(见 [`force_postmessage_ipc_transport`]),所以本模块:
+//! (主通道,唯一能携带 **raw 二进制 body**,请求与响应在 DevTools Network 面板可见)
+//! 与 `window.ipc.postMessage(...)` JSON 回退(fetch 失败后由上游脚本自动切换)。
+//! 主通道直接由 Tauri 注册的 `ipc` scheme handler 承接:CEF scheme handler 处理的
+//! 请求不发 CORS 预检,只在响应上校验 ACAO,Tauri 的 `ipc` handler 已返回 `*`。
+//! 本模块只补 CEF 缺的那部分:
 //!
 //! 1. 提供 `window.ipc.postMessage` 实现 —— 经 CEF 自有的 `cef-ipc://` 自定义
 //!    协议 POST,转发给 Tauri `PendingWebview` 的 `ipc_handler`(JSON 通道,
 //!    `Uint8Array` payload 会退化成数字数组,不能承载二进制);
 //! 2. 提供 `cef-ipc://localhost/raw` **二进制直通端点** —— 元数据(cmd/invoke
-//!    key/业务头)帧化进 body 前缀,请求本身零自定义头、不触发预检;Rust 侧解帧
-//!    后重建带 `Tauri-*` 头的请求,转发给 Tauri 注册的 `ipc` 协议 handler,
-//!    走完整的 invoke 解析 + ACL + `InvokeBody::Raw` 链路。页面侧入口是
-//!    [`POST_MESSAGE_SHIM`] 注入的 `window.__kb_raw_invoke__(cmd, bytes, opts)`,
-//!    供 `media_download.js` / `bootstrap.js` 等第一方脚本流式写入使用。
+//!    key/业务头)帧化进 body 前缀;Rust 侧解帧后重建带 `Tauri-*` 头的请求,转发给
+//!    Tauri 注册的 `ipc` 协议 handler,走完整的 invoke 解析 + ACL + `InvokeBody::Raw`
+//!    链路。页面侧入口是 [`POST_MESSAGE_SHIM`] 注入的
+//!    `window.__kb_raw_invoke__(cmd, bytes, opts)`,供 `media_download.js` /
+//!    `bootstrap.js` 等第一方脚本在第三方页面里流式写入使用。
 
 use std::{
     borrow::Cow,
@@ -61,8 +63,7 @@ const POST_MESSAGE_SHIM: &str = r#"
   })
 
   // 二进制 invoke 通道:帧格式 [u32 LE 头长][JSON 头][payload]。
-  // 请求不带任何自定义 HTTP 头(元数据全在帧头里),避开 CORS 预检
-  // —— CEF 的 scheme handler 收不到 network process 发起的预检请求。
+  // 元数据全在帧头里,请求不带自定义 HTTP 头。
   Object.defineProperty(window, '__kb_raw_invoke__', {
     configurable: false,
     enumerable: false,
@@ -146,11 +147,6 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
         },
     );
 
-    // DEBUG-IPC 实测开关:设 KB_DEBUG_IPC_FETCH=1 时不预置失败,让上游 fetch 通道自然跑
-    if !crate::protocol::debug_ipc_fetch_enabled() {
-        force_postmessage_ipc_transport(&mut pending.webview_attributes.initialization_scripts);
-    }
-
     let ipc_handler = Mutex::new(ipc_handler);
     pending.register_uri_scheme_protocol(CEF_IPC_SCHEME, move |label, request, responder| {
         if request.uri().path() == RAW_INVOKE_PATH {
@@ -180,31 +176,6 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
         };
         responder(response);
     });
-}
-
-/// 把 Tauri `ipc-protocol.js` 里的 `customProtocolIpcFailed = false` 预置为 `true`,
-/// 让前端 IPC 从一开始就走 postMessage 主路径,而不是先尝试 `fetch(ipc://...)`。
-///
-/// 原因(2026-07 实测修订;早期"首帧 URLLoaderFactory bundle 不含动态 scheme"
-/// 的解释不准确):上游 fetch 路径带 `Tauri-Callback`/`Tauri-Error`/
-/// `Tauri-Invoke-Key` 自定义头,该头组合会触发 CORS 预检,而 CEF 的 scheme
-/// handler 收不到预检请求 —— preflight 由 network process 直接发起(见 CEF
-/// `proxy_url_loader_factory.cc` 的 `CorsPreflightRequest` 注释),对动态注册的
-/// 自定义 scheme 报 `net::ERR_UNKNOWN_URL_SCHEME`。于是每个页面的头几个 invoke
-/// 必然失败、留下成串报错后才回退 postMessage。直接预置"已失败"跳过这些注定
-/// 失败的往返。无自定义头的请求不受预检影响 —— 二进制 payload 走本模块的
-/// `cef-ipc://localhost/raw` 帧化通道(`window.__kb_raw_invoke__`)。
-///
-/// 该替换与 Tauri 上游脚本文本强耦合;若上游改写此标记,替换会静默失效(仅退回
-/// "先失败再回退",功能不受影响)。
-fn force_postmessage_ipc_transport(scripts: &mut [InitializationScript]) {
-    const NEEDLE: &str = "customProtocolIpcFailed = false";
-    const PATCHED: &str = "customProtocolIpcFailed = true";
-    for script in scripts.iter_mut() {
-        if script.script.contains(NEEDLE) {
-            script.script = script.script.replace(NEEDLE, PATCHED);
-        }
-    }
 }
 
 /// 从已完成模板替换的上游初始化脚本里提取 invoke key。
