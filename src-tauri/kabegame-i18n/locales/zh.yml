@@ -110,6 +110,18 @@ vd:
 
 surf:
   windowTitle: "畅游 - {host}"
+  toolbar:
+    back: "后退"
+    forward: "前进"
+    reload: "刷新"
+    address: "地址"
+    collect: "下载本页全部媒体"
+    cancel: "取消下载"
+    openInBrowser: "在浏览器打开"
+    close: "关闭"
+  download:
+    unsupportedType: "不支持的下载类型：畅游只接收图片和视频"
+    unsupportedScheme: "不支持的下载地址"
   collect:
     detecting: "正在检测媒体资源…"
     none: "当前页面未检测到可下载的媒体资源"
@@ -118,6 +130,7 @@ surf:
     done: "已加入下载 {queued}/{total} 项"
     notReady: "页面尚未就绪，请稍后再试"
     snapshotFailed: "页面快照保存失败：{error}"
+    ipcUnavailable: "当前系统 WebView 不支持安全的应用通信，无法一键下载"
 
 webview:
   menu:

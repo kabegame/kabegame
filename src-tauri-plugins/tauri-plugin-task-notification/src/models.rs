@@ -1,4 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationPermissionResponse {
+    pub granted: bool,
+}
 
 /// 单个活跃下载的通知条目（镜像 TaskDrawer「正在下载」面板的一行）。
 #[derive(Debug, Clone, Serialize)]

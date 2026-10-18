@@ -41,6 +41,7 @@ JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通�
 | `src-tauri/kabegame-core/src/plugin/vfs.rs`、`src-tauri/kabegame-core/src/plugin/ffmpeg.rs` | 任务/会话虚拟路径安全边界；虚拟路径上的显式媒体合流与探测 |
 | `src-tauri/kabegame/src/webview_js/media_capture.js`、`src-tauri/kabegame/src/webview_js/media_download.js` | 捕获 Blob/MSE；以 Raw IPC 分块写入会话 VFS、显式合流并提交 |
 | `src-tauri/kabegame/src/startup.rs`、`src-tauri/kabegame/src/commands/surf.rs`、`src-tauri/kabegame/src/commands/crawler.rs`、`src-tauri/kabegame/src/commands/surf_session.rs` | 桌面 WebView/CEF 下载投递与回传；fs/ffmpeg 命令按窗口 label 选择 VFS；surf 会话 VFS 与 Path 直通导入 |
+| `src-tauri/kabegame/src/commands/page_fs.rs`、`src-tauri/kabegame/src/commands/surf_receive.rs` | 全平台的 `crawl_fs_*` / `crawl_ffmpeg_*` 与畅游下载入队（含安卓 Cookie / UA / Referer 补头、raw body JSON 兼容） |
 | `src-tauri/kabegame/src/commands/surf_collect.rs`、`src-tauri/kabegame/src/webview_js/{page_snapshot,surf_collect,surf_download_name}.js`、`src-tauri/kabegame-core/src/plugin/webpage/page_discover.js`、`apps/kabegame/src/surf-navbar.ts` | 畅游一键下载：Rust 权威的 run 状态机、Channel 通信、页面媒体发现（builtin `webpage` 载荷）与 HTML+CSS 快照 |
 | `src-tauri/kabegame-core/src/storage/page_snapshot.rs` | 冻结网页快照 metadata 的统一规则：`kind`、32MB 上限、搜索索引只含标题与来源 URL 两个片段 |
 | `src-tauri/kabegame-core/src/crawler/task_scheduler/mod.rs`、`src-tauri/kabegame-core/src/crawler/task_scheduler/task.rs` | crawl task 调度；运行中 `Task` 注册表；任务级 header/display_name/metadata 快照回放；失败图片重试入口 |
@@ -215,12 +216,36 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 
 桌面 WebView/CEF 下载完成后也复用同一后处理入口。`DownloadRequest`/`ActiveDownloadInfo` 携带 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`；敏感后端字段使用 `#[serde(skip)]`。CEF 只负责把字节落到 `downloads_temp_dir()/native-<id>.part` 并回传终态，worker 再以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 进入后处理。CEF 与 reqwest 下载发送相同 lifecycle，前端不再区分 `native` 字段。
 
+### 安卓畅游下载（没有 CEF 通道）
+
+安卓没有 CEF 原生下载 handler：`is_native_job` 只在桌面把 `surf_record_id` 当作 native
+（`surf_uses_native`），安卓上一律由 reqwest 下载并直接入图库。浏览器会话靠入队前补齐的三个头
+复现，平台补的头覆盖页面给的：
+
+| 头 | 来源 |
+| --- | --- |
+| `Cookie` | SurfPlugin `getCookie` 读 `CookieManager.getCookie(媒体 URL)`，含 HttpOnly，空则不加头；不用 wry `cookies_for_url`（其生成的 Kotlin 对无 Cookie 的 URL 抛 NPE 崩溃） |
+| `User-Agent` | 系统 WebView 默认 UA（`kabegame_core::plugin::v8::android_webview_user_agent()`，即 Cookie 的签发 UA） |
+| `Referer` | `webview.url()`（内容页当前地址） |
+
+脚本下载（`surf_download_image`）与页面自发下载（`SurfActivity.setDownloadListener` → `pageDownload`
+事件）都组装 `surf_receive::SurfDownloadRequest` 后走同一个 `enqueue_surf_download`，因此
+`collect_run_id` 取消、metadata 归属、终态 toast 的口径完全一致。页面自发下载先按文件名
+（`is_media_by_path`）和 MIME（`is_supported_media_mime`）过滤，非媒体（含 zip / 7z / tar 等压缩包）
+只 toast 拒绝、不发起下载；解压属于各爬虫插件自己（`Kabegame.archive`），畅游只收媒体。
+`data:` / `blob:` 在页面外取不到字节，转回页内 `__kb_media_download__`，与桌面同一份
+`media_download.js`。
+
+安卓的 Tauri 没有自定义协议 IPC，`Uint8Array` invoke 参数会被序列化成 JSON 数字数组
+（`InvokeBody::Json`）。`page_fs::raw_body_bytes` 同时接受 `Raw` 与 0–255 的数组，
+`crawl_fs_fwrite` 的分块写因此原样复用，代价是体积约膨胀 3–4 倍。
+
 ### 浏览器媒体捕获、会话 VFS 与提交
 
 `Kabegame.downloadImage(url)` 在 bootstrap 中按 scheme 分流；畅游 `surf-{host}` 窗口的右键下载对 `data:` / `blob:` 也复用同一份 `media_download.js`：
 
-- `http:` / `https:` 等普通 URL：先统一入队；webview 爬虫或 surf job 由 worker 分派回对应 CEF WebView。
-- `data:`：页面内 `fetch(url).blob()` 后按 8 MiB 切片写入 VFS，不把大 Blob 一次性读入内存。
+- `http:` / `https:` 等普通 URL：先统一入队；桌面 webview 爬虫或 surf job 由 worker 分派回对应 CEF WebView，安卓 surf job 由 reqwest 下载（见上一节）。
+- `data:`：页面内 `fetch(url).blob()` 后按块写入 VFS（桌面 8 MiB；安卓经 postMessage IPC，JSON 数组约膨胀 3–4 倍，故 1 MiB），不把大 Blob 一次性读入内存。
 - 普通 `blob:`：优先从 `media_capture.js` 维护的 `URL.createObjectURL` 注册表取 Blob；未命中时兜底 `fetch(blobUrl)`。
 - MSE `blob:`：`media_capture.js` 早期 hook `MediaSource.addSourceBuffer` 与 `SourceBuffer.appendBuffer`，只保存页面实际 append 过的媒体片段，并在每次 append 时就地解析：fMP4/CMAF 遇到 init（`moov`）按 `tkhd` 宽高 + `stsd` 指纹开启或归回一个**清晰度组**，分片按 `tfdt` 在组内去重，用 `tfdt` + `trun` 时长（`mdhd` timescale，加 `timestampOffset`）累计该组的覆盖区间；跨 append 的半截盒子（YouTube 把一个分片切成多块边下边追加）留到下一次拼接；页面调用 `SourceBuffer.abort()` 时同步丢弃残留，新数据以新段开头（`ftyp/styp/moov/moof/sidx/emsg/prft`）而残留不是「完整 moof 正等 mdat」时也丢弃重同步，解析失败则跳到下一个段开头继续——已解析成功过的流绝不整体降级为 raw；`aborts / resyncs / droppedBytes / pendingBytes` 诊断计数随 `coverage()` 返回并显示在面板分组标题上。768 MB 上限只计去重后的字节。MPEG-TS 保留原始序列、`resolve()` 时按首个 PES PTS 排序；其它容器（如 WebM）保留 append 顺序并标记 `unordered`，二者的覆盖区间取 `SourceBuffer.buffered` 的历史并集。`__kb_media__.coverage(url)` 只返回各清晰度的宽高 / 码率 / 覆盖区间，不复制字节；`resolve(url, selection)` 按每路选中的清晰度取 init + 有序分片，同一路绝不混用不同清晰度。
 - 完整性只看捕获覆盖，不看 `video.buffered`：X 等播放器只往前缓冲十几秒并回收已播部分，`video.buffered` 永远凑不出 `[0, 时长]`。下载前 `media_download.js` 先等 `loadedmetadata`（时长为 `NaN` 时最多 10s，`Infinity` 才判直播），再静音、**正常倍速**把 `currentTime` 跳到目标清晰度的第一个缺口让播放器补拉（16 倍速会让自适应码率因缓冲耗尽而降档，并在结尾回卷重放），`loop=true` 只用来阻止 `ended` 触发站点自动连播。只有播放器缓冲区**没有**缺口处数据、且播放位置不在缺口附近时才跳转；缺口已在 `video.buffered` 里（播放器正边下边追加这一片）就不打扰它——反复跳转会让播放器中止当前分片重下，这一片永远下不完（YouTube 上「视频还在播、补拉却停滞超时」即此）。缺口在播放器缓冲区里却 6s 未进捕获时视为捕获丢片，经 `__kb_media__.evict()` 从页面 SourceBuffer 移除该段再跳过去迫使重下，最多 3 次。每路目标取已出现的最高清晰度；目标在缺口处 8s 无增长（播放器坚持给别的档）就改用覆盖最完整的一档，总覆盖 20s 无增长报停滞。全程在页面右下角的 shadow DOM 面板上逐档画覆盖条、标出目标与播放位置，并显示补拉 / 写入 / 合并 / 导入阶段；终态停留 3s（失败 8s）后移除，MSE 路径不再另弹进度 toast。面板、右键菜单与页内 toast 的文案都不写死在脚本里：`webview_i18n.js` 作为畅游 / 爬虫窗口的第一个 initialization script，页面加载时调 `get_webview_i18n`（`kabegame-i18n` 的 `webview.*`，键表在 `WEBVIEW_KEYS`，单测保证五种语言齐全）取当前应用语言的整张表，脚本经 `__kb_i18n__.t(key, { name })` 取文案并替换 `{name}`；切换语言后新加载的页面才用新语言。Rust 侧的畅游终态 toast（`startup.rs` 的 `DownloadState`）直接用 `t!("webview.toast.*")`。
@@ -229,7 +254,7 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 落盘与提交顺序：
 
 1. `crawl_fs_get_root` 取得 `/{handle}`，在 `${root}/tmp/media-<timestamp>-<random>` 建本次下载子目录。
-2. 每个流写入 `stream-<index>.<ext>`：`crawl_fs_create` 创建句柄，`crawl_fs_fwrite` 通过 Raw IPC 发送原始字节。Rust 返回本次实际写入数，JS 对短写循环推进，直至当前 8 MiB 块完整写入，最后 `crawl_fs_close`。
+2. 每个流写入 `stream-<index>.<ext>`：`crawl_fs_create` 创建句柄，`crawl_fs_fwrite` 通过 Raw IPC（安卓为 postMessage 的 JSON 数组）发送原始字节。Rust 返回本次实际写入数，JS 对短写循环推进，直至当前块完整写入，最后 `crawl_fs_close`。
 3. 单流直接使用该流路径；多流显式调用 `crawl_ffmpeg_mux({ inputs, output })`。全部流 MIME 都含 `webm` 时才输出 WebM，否则输出 MP4（混合如 H.264 + Opus 封 WebM 会写头失败）；`inputs` / `output` 始终是当前 VFS 的虚拟绝对路径。Android 的 FFmpeg 桥返回可读的不支持错误。
 4. crawler 的 `window.__kb_media_submit__` 调用 `crawl_download_image({ url: vfsPath, ... })`。宿主包装成内部 `task-vfs://`，`task_vfs.rs` 以固定缓冲区流式读 VFS 文件，`DownloadSink` 超过 5 MiB 后继续溢写磁盘，再进入统一后处理。
 5. surf 的提交回调调用 `surf_import_media({ path: vfsPath, ... })`。宿主解析出受会话 VFS 约束的真实路径，以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 直通后处理；成功后源文件所有权交给 Rust。
@@ -257,25 +282,27 @@ window.__kb_native_download_finished__?.({
 
 成功与失败都会派发；CEF 下载失败或取消时使用可读错误，`Requested` 分配失败也走同一出口。crawler 的 `bootstrap.js` 将事件分发给当前页通过 `Kabegame.onNativeDownload(callback)` 注册的监听器，由插件决定是否把 `payload.path` 传给 `Kabegame.downloadImage` 进入统一下载/后处理；页面导航会重建 JS 上下文，因此插件必须在每页顶层重新注册。surf 的 `surf_bootstrap.js` 自动接管成功事件：普通文件直接调用 `surf_import_media`，ZIP、TAR 系列和 7z 先尝试解压、递归枚举文件并逐项导入，解压不可用或失败时退回普通文件导入。
 
-surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`startup.rs` 事件循环统一监听其 `DownloadState::Completed` / `DownloadState::Failed` 并向对应 surf WebView eval toast，因此右键 HTTP 下载、blob/data 导入和页面自发下载共用同一个成功/失败反馈出口。
+surf 导入开始后会注册带 `surf_record_id` 的 `ActiveDownloadInfo`。`startup.rs` 事件循环统一监听其 `DownloadState::Completed` / `DownloadState::Failed`，经 `surf_common::surf_toast_for_host`（桌面按 `surf-<host>`、安卓按当前会话 label）向内容 webview eval toast，因此右键 HTTP 下载、blob/data 导入和页面自发下载共用同一个成功/失败反馈出口——安卓也没有例外。
 
 桌面的 `file://` 或其他本地导入路径也通过 `PostprocessSource::Path` 走统一后处理。
 
 ### 畅游一键下载与页面快照
 
-导航栏右侧的“一键下载”按钮扫描当前页媒体并逐个入队；转圈期间再点一次即取消。
+导航栏右侧的“一键下载”按钮扫描当前页媒体并逐个入队；转圈期间再点一次即取消。安卓的原生工具栏
+按钮不发命令，而是经 `events` Channel 发 `collectToggle`，Rust 用当前会话 label 调同一个
+`surf_collect::toggle`；运行态经 `SurfPlugin.setCollectRunning` 回推给原生控件。
 
-**Rust 是运行状态的唯一权威，内容页不暴露新的 window 全局。** `page_discover.js`（core `plugin::webpage::PAGE_DISCOVER_JS`，builtin `webpage` 的载荷）、`page_snapshot.js`、`surf_collect.js` 与共享的 `surf_download_name.js` 由 `surf.rs` 运行时拼接进同一个封闭 IIFE，彼此只做局部函数调用（`surf_bootstrap.js` 同样与 `surf_download_name.js` 拼接）。页面加载时脚本用 `__TAURI_INTERNALS__.transformCallback` 拼出 `"__CHANNEL__:<id>"`，经 `surf_collect_attach` 交给 Rust 一条 Tauri `Channel`；Rust 只经它发 `start` / `cancel`，JS 端按 `index` 保序。**不给内容 capability 开 `core:event:*`**：内容页是任意 remote 站点，开放事件监听等于让站点收听应用全局广播。
+**Rust 是运行状态的唯一权威，内容页不暴露新的 window 全局。** `page_discover.js`（core `plugin::webpage::PAGE_DISCOVER_JS`，builtin `webpage` 的载荷）、`page_snapshot.js`、`surf_collect.js` 与共享的 `surf_download_name.js` 由 `surf_common::surf_initialization_scripts()` 运行时拼接进同一个封闭 IIFE（桌面与安卓共用），彼此只做局部函数调用（`surf_bootstrap.js` 同样与 `surf_download_name.js` 拼接）。页面加载时脚本用 `__TAURI_INTERNALS__.transformCallback` 拼出 `"__CHANNEL__:<id>"`，经 `surf_collect_attach` 交给 Rust 一条 Tauri `Channel`；Rust 只经它发 `start` / `cancel`，JS 端按 `index` 保序。**不给内容 capability 开 `core:event:*`**：内容页是任意 remote 站点，开放事件监听等于让站点收听应用全局广播。
 
 `surf_collect.rs` 按内容 label 维护 `{ channel, active_run }`：
 
 | 触发 | Rust 行为 |
 | --- | --- |
-| navbar `surf_collect_toggle`（空闲） | 无 channel 报“页面尚未就绪”；否则新建 run_id，发 `start{runId, freeze, imageExtensions, videoExtensions, texts}`，向 `<label>-navbar` emit `surf-collect-state {running:true}` |
-| navbar `surf_collect_toggle`（运行中） | 先 take run 并 emit `running:false`（点击后立即停止转圈），再发 `cancel{runId}` |
-| 内容页 `surf_collect_finished` | run 匹配才清除并 emit `running:false`；`queued == 0` 时回收本站点快照行（`gc_metadata`） |
-| `on_page_load(Started)` | 整页导航销毁脚本：清 run 并 emit `running:false`（不清 channel，新页 attach 可能先到） |
-| 窗口 `Destroyed` | 移除 slot |
+| `surf_collect_toggle`（桌面导航栏）/ `collectToggle`（安卓原生工具栏）（空闲） | 无 channel 报“页面尚未就绪”；否则新建 run_id，发 `start{runId, freeze, imageExtensions, videoExtensions, texts}`，桌面向 `<label>-navbar` emit `surf-collect-state {running:true}`，安卓调 `SurfPlugin.setCollectRunning` |
+| 同上（运行中） | 先 take run 并回报 `running:false`（点击后立即停止转圈），再发 `cancel{runId}` |
+| 内容页 `surf_collect_finished` | run 匹配才清除并回报 `running:false`；`queued == 0` 时回收本站点快照行（`gc_metadata`） |
+| `on_page_load(Started)` | 整页导航销毁脚本：清 run 并回报 `running:false`（不清 channel，新页 attach 可能先到） |
+| 窗口 `Destroyed`（桌面）/ Activity `closed`（安卓） | 移除 slot |
 
 内容页收到 `start` 后：toast“正在检测媒体资源” → `discoverMedia` → toast 检测结果（总数 / 图片 / 视频），或“未检测到” → **检查取消** → `freeze` 时 `snapshotPage` + `surf_save_page_snapshot` → 逐个 `surf_download_image`，**每项之前检查取消**，取消时 toast“已取消” → 结束 toast“已加入 x/N” → `finally` 调 `surf_collect_finished`。文案由 Rust 按当前语言（`surf.collect.*`）随 `start` 下发。
 

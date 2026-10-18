@@ -1,6 +1,7 @@
 use super::surf_common::SurfSessionStatus;
 pub(crate) use super::surf_common::{
-    encode_query_value, normalize_surf_host, parse_external_url, resolve_root_url, surf_label,
+    encode_query_value, host_from_surf_label, is_surf_content_label, normalize_surf_host,
+    parse_external_url, resolve_root_url, surf_initialization_scripts, surf_label,
     surf_navbar_label,
 };
 use kabegame_core::crawler::favicon::fetch_favicon;
@@ -60,33 +61,6 @@ fn collect_surf_cookie_string<R: Runtime>(
         .collect();
     pairs.sort();
     Ok(pairs.join("; "))
-}
-
-pub(crate) fn eval_surf_toast_for_host<R: Runtime>(
-    app: &AppHandle<R>,
-    host: &str,
-    message: &str,
-    kind: &str,
-) {
-    if let Some(webview) = app.get_webview(&surf_label(host)) {
-        let msg_json =
-            serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
-        let kind_json = serde_json::to_string(kind).unwrap_or_else(|_| "\"failed\"".to_string());
-        let script = format!("window.__kabegame_toast?.({}, {});", msg_json, kind_json);
-        let _ = webview.eval(script.as_str());
-    }
-}
-
-pub(crate) fn is_surf_content_label(label: &str) -> bool {
-    label.starts_with("surf-") && !label.ends_with("-navbar")
-}
-
-pub(crate) fn host_from_surf_label(label: &str) -> Option<String> {
-    label
-        .strip_prefix("surf-")
-        .filter(|s| !s.ends_with("-navbar"))
-        .filter(|s| !s.is_empty())
-        .map(|s| s.replace('_', "."))
 }
 
 fn surf_content_webview<R: Runtime>(
@@ -227,37 +201,15 @@ pub async fn surf_start_session<R: Runtime>(
         let host_for_plugin_id = host.clone();
         let record_id_for_download = record.id.clone();
         let navbar_label = surf_navbar_label(&host);
-        let media_capture = include_str!("../webview_js/media_capture.js");
-        let media_download = include_str!("../webview_js/media_download.js");
-        let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        // 注入脚本的单一来源（安卓同一份，只是多一层顶层守卫、少一段 URL 上报）。
+        let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
             .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
-            .devtools(true)
-            .initialization_script(include_str!("../webview_js/webview_i18n.js"))
-            .initialization_script(media_capture)
-            .initialization_script(media_download)
-            .initialization_script(concat!(
-                "(function () {\n\"use strict\";\n",
-                include_str!("../webview_js/surf_download_name.js"),
-                include_str!("../webview_js/surf_bootstrap.js"),
-                "\n})();\n"
-            ))
-            // 一键下载：发现 / 快照 / 编排拼进同一个封闭 IIFE，不挂 window 全局；
-            // 发现脚本是 builtin `webpage` 插件的载荷（core 唯一一份），故运行时拼接。
-            .initialization_script(
-                [
-                    "(function () {\n\"use strict\";\n",
-                    include_str!("../webview_js/surf_download_name.js"),
-                    kabegame_core::plugin::webpage::PAGE_DISCOVER_JS,
-                    include_str!("../webview_js/page_snapshot.js"),
-                    include_str!("../webview_js/surf_collect.js"),
-                    "\n})();\n",
-                ]
-                .concat(),
-            )
-            .initialization_script(include_str!("../webview_js/surf_toast.js"))
-            .initialization_script(include_str!("../webview_js/surf_context_menu.js"))
-            .initialization_script(include_str!("../webview_js/surf_url_report.js"))
+            .devtools(true);
+        for script in surf_initialization_scripts() {
+            builder = builder.initialization_script(script);
+        }
+        let builder = builder
             .on_page_load({
                 let app = app.clone();
                 let host = host.clone();

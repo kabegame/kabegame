@@ -25,12 +25,13 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.WebViewCompat
 import app.kabegame.plugin.PickerLauncherHost
+import app.kabegame.plugin.TaskNotificationPermissionHost
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.URLDecoder
 
-class MainActivity : TauriActivity(), PickerLauncherHost {
+class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermissionHost {
   private var folderPickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var filePickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var webView: WebView? = null
@@ -101,6 +102,14 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
   ) { result ->
     deleteRequestCallback?.invoke(result)
     deleteRequestCallback = null
+  }
+
+  private var notificationPermissionCallback: ((Boolean) -> Unit)? = null
+  private val notificationPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestPermission()
+  ) { granted ->
+    notificationPermissionCallback?.invoke(granted)
+    notificationPermissionCallback = null
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -224,6 +233,11 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
   override fun launchDeleteRequest(sender: IntentSender, onResult: (ActivityResult) -> Unit) {
     deleteRequestCallback = onResult
     deleteRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
+  }
+
+  override fun launchNotificationPermission(onResult: (Boolean) -> Unit) {
+    notificationPermissionCallback = onResult
+    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
   }
 
   /** 将 content:// URI 转为可读文件路径（供需要时使用） */

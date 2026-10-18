@@ -60,12 +60,16 @@
 ## 畅游（`surf/`）
 
 - [surf/ANDROID_SURF.md](surf/ANDROID_SURF.md)
-  - 主题：Android Phase 1 畅游架构。涵盖独立 `SurfActivity` 的 Tauri navbar + 普通内容 WebView
-    双层布局、wry `setContentView` 时序、`SurfRegistry` 双向会合、Rust 单会话权威状态、移动插件命令与
-    Channel 事件、Cookie 合并保存、系统 WebView 默认 UA 登记为 `Kabegame.cefUserAgent()`（UA 不入库）、
+  - 主题：Android 畅游架构（Phase 1 + Phase 2）。涵盖内容页作为 `SurfActivity` 的 Tauri 主 webview
+    （label `surf-<host>:<n>`，与桌面共用注入脚本与按 label 认会话的命令）、原生 Kotlin 工具栏、
+    `SurfRegistry` 双向会合与 `ipcAvailable` 回传、Rust 单会话权威状态、移动插件命令与 Channel 事件、
+    wry `addJavascriptInterface` 换成只收主框架消息的 `addWebMessageListener`、注入脚本顶层守卫、
+    脚本下载与页面自发下载共用 `enqueue_surf_download` 并补 Cookie/UA/Referer、非媒体不下载不解压、
+    raw body 的 JSON 数字数组兼容、Cookie 合并保存与系统 WebView 默认 UA 登记（UA 不入库）、
     安全边界、已知 Channel 生命周期与 OAuth 限制。
-  - 适用场景：新增或排查 Android 畅游启动/关闭、导航栏地址同步、返回键、登录态保存、插件请求的
-    Cookie/UA 配对（403、`cefUserAgent()` 为 `null`）、Activity 重建或外部页面意外获得 IPC。
+  - 适用场景：新增或排查 Android 畅游启动/关闭、原生工具栏地址与一键下载状态、返回键、登录态保存、
+    插件请求的 Cookie/UA 配对（403、`cefUserAgent()` 为 `null`）、页面下载被拒或类型误判、
+    `blob:` / MSE 分块写失败、Activity 重建或外部页面意外获得 IPC。
 
 ## 画廊与查询（`gallery/`）
 

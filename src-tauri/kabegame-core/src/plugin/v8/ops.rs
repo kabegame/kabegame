@@ -505,6 +505,12 @@ fn cef_user_agent() -> Option<String> {
 #[cfg(target_os = "android")]
 static ANDROID_WEBVIEW_USER_AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// 安卓宿主登记的系统 WebView 默认 UA；畅游下载补请求头也用它。
+#[cfg(target_os = "android")]
+pub fn android_webview_user_agent() -> Option<String> {
+    ANDROID_WEBVIEW_USER_AGENT.get().cloned()
+}
+
 /// 由安卓宿主登记系统 WebView 的默认 UA，供 `Kabegame.cefUserAgent()` 返回。
 #[cfg(target_os = "android")]
 pub fn set_android_webview_user_agent(user_agent: &str) {

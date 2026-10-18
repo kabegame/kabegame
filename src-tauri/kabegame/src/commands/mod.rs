@@ -7,6 +7,7 @@ pub mod image;
 #[cfg(not(target_os = "android"))]
 pub mod mcp;
 pub mod misc;
+pub mod page_fs;
 pub mod plugin;
 pub mod proxy;
 pub mod settings;
@@ -14,10 +15,9 @@ pub mod settings;
 pub mod surf;
 #[cfg(target_os = "android")]
 pub mod surf_android;
-#[cfg(not(target_os = "android"))]
 pub mod surf_collect;
 pub mod surf_common;
-#[cfg(not(target_os = "android"))]
+pub mod surf_receive;
 pub mod surf_session;
 pub mod task;
 #[cfg(not(target_os = "android"))]
@@ -35,6 +35,7 @@ pub use image::*;
 #[cfg(not(target_os = "android"))]
 pub use mcp::*;
 pub use misc::*;
+pub use page_fs::*;
 pub use plugin::*;
 pub use proxy::*;
 pub use settings::*;
@@ -42,10 +43,9 @@ pub use settings::*;
 pub use surf::*;
 #[cfg(target_os = "android")]
 pub use surf_android::*;
-#[cfg(not(target_os = "android"))]
 pub use surf_collect::*;
 pub use surf_common::*;
-#[cfg(not(target_os = "android"))]
+pub use surf_receive::*;
 pub use surf_session::*;
 pub use task::*;
 #[cfg(not(target_os = "android"))]

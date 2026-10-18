@@ -1,5 +1,5 @@
 use kabegame_core::storage::{RangedSurfRecords, SurfRecord};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -31,10 +31,108 @@ pub(crate) fn surf_label(host: &str) -> String {
     format!("surf-{}", host.trim().to_lowercase().replace('.', "_"))
 }
 
+/// 桌面导航栏 webview 的 label；安卓没有导航栏，不参与目标编译。
+#[cfg(not(target_os = "android"))]
 pub(crate) fn surf_navbar_label(host: &str) -> String {
     format!("{}-navbar", surf_label(host))
 }
 
+/// 内容 webview label → host。桌面为 `surf-<host>`，安卓为 `surf-<host>:<会话序号>`。
+///
+/// Tauri 的 label 只允许 `[a-zA-Z0-9-/:_]`，host 里的 `.` 已换成 `_`，这里换回来。
+pub(crate) fn host_from_surf_label(label: &str) -> Option<String> {
+    let rest = label.strip_prefix("surf-")?;
+    if rest.is_empty() || rest.ends_with("-navbar") {
+        return None;
+    }
+    let host_part = rest.split_once(':').map_or(rest, |(host, _)| host);
+    (!host_part.is_empty()).then(|| host_part.replace('_', "."))
+}
+
+pub(crate) fn is_surf_content_label(label: &str) -> bool {
+    host_from_surf_label(label).is_some()
+}
+
+/// 畅游内容页要注入的全部脚本，桌面与安卓共用同一份。
+///
+/// - 桌面：直接按顺序 `.initialization_script(...)`，与拆分前完全一致。
+/// - 安卓：wry 用 `addDocumentStartJavaScript(…, setOf("*"))`，脚本会进所有 iframe；每段再包一层
+///   顶层守卫，让行为与桌面「只进主框架」一致。安卓没有导航栏 webview，`surf_url_report.js`
+///   不注入（地址由原生工具栏直接读）。
+/// - 一键下载的发现 / 快照 / 编排拼进同一个封闭 IIFE，不挂 window 全局；发现脚本是 builtin
+///   `webpage` 插件的载荷（core 唯一一份），故运行时拼接。
+pub(crate) fn surf_initialization_scripts() -> Vec<String> {
+    let mut scripts = vec![
+        include_str!("../webview_js/webview_i18n.js").to_string(),
+        include_str!("../webview_js/media_capture.js").to_string(),
+        include_str!("../webview_js/media_download.js").to_string(),
+        concat!(
+            "(function () {\n\"use strict\";\n",
+            include_str!("../webview_js/surf_download_name.js"),
+            include_str!("../webview_js/surf_bootstrap.js"),
+            "\n})();\n"
+        )
+        .to_string(),
+        [
+            "(function () {\n\"use strict\";\n",
+            include_str!("../webview_js/surf_download_name.js"),
+            kabegame_core::plugin::webpage::PAGE_DISCOVER_JS,
+            include_str!("../webview_js/page_snapshot.js"),
+            include_str!("../webview_js/surf_collect.js"),
+            "\n})();\n",
+        ]
+        .concat(),
+        include_str!("../webview_js/surf_toast.js").to_string(),
+        include_str!("../webview_js/surf_context_menu.js").to_string(),
+    ];
+    #[cfg(not(target_os = "android"))]
+    scripts.push(include_str!("../webview_js/surf_url_report.js").to_string());
+    #[cfg(target_os = "android")]
+    {
+        scripts = scripts.into_iter().map(top_frame_only).collect();
+    }
+    scripts
+}
+
+/// wry 安卓会把初始化脚本注入到每个 frame；桌面 Tauri 只注入主框架。
+#[cfg(target_os = "android")]
+fn top_frame_only(script: String) -> String {
+    format!("(function () {{\nif (window.top !== window) return;\n{script}\n}})();\n")
+}
+
+/// 内容 webview 的 label：桌面按 host 推导，安卓取当前会话（label 带会话序号）。
+fn content_label_for_host(host: &str) -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::commands::surf_android::session_label_for_host(host)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Some(surf_label(host))
+    }
+}
+
+/// 在畅游内容页里弹一条页内 toast（桌面与安卓同一套注入脚本）。
+pub(crate) fn surf_toast_for_host<R: Runtime>(
+    app: &AppHandle<R>,
+    host: &str,
+    message: &str,
+    kind: &str,
+) {
+    let Some(label) = content_label_for_host(host) else {
+        return;
+    };
+    let Some(webview) = app.get_webview(&label) else {
+        return;
+    };
+    let message_json = serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
+    let kind_json = serde_json::to_string(kind).unwrap_or_else(|_| "\"failed\"".to_string());
+    let script = format!("window.__kabegame_toast?.({}, {});", message_json, kind_json);
+    let _ = webview.eval(script.as_str());
+}
+
+/// 桌面导航栏 URL 的 query 编码；安卓没有 navbar，不参与目标编译。
+#[cfg(not(target_os = "android"))]
 pub(crate) fn encode_query_value(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
@@ -99,4 +197,41 @@ pub async fn surf_update_name(host: String, name: String) -> Result<serde_json::
 #[tauri::command]
 pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, String> {
     kabegame_core::commands::surf::surf_delete_record(host)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_from_surf_label;
+
+    #[test]
+    fn desktop_label_maps_back_to_host() {
+        assert_eq!(
+            host_from_surf_label("surf-example_com").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            host_from_surf_label("surf-localhost").as_deref(),
+            Some("localhost")
+        );
+    }
+
+    #[test]
+    fn android_label_strips_session_sequence() {
+        // 安卓 label 带进程内会话序号，host 解析必须剥掉 `:<n>`。
+        assert_eq!(
+            host_from_surf_label("surf-example_com:7").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(host_from_surf_label("surf-example_com:").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn navbar_and_empty_labels_are_not_content_webviews() {
+        assert!(host_from_surf_label("surf-example_com-navbar").is_none());
+        assert!(host_from_surf_label("surf-").is_none());
+        assert!(host_from_surf_label("surf-:3").is_none());
+        assert!(host_from_surf_label("-navbar").is_none());
+        assert!(host_from_surf_label("main").is_none());
+        assert!(host_from_surf_label("crawler-task-1").is_none());
+    }
 }

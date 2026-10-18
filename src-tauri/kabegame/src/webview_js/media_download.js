@@ -3,7 +3,11 @@
 
   const _tauri = window.__TAURI_INTERNALS__;
   const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
-  const WRITE_CHUNK = 8 * 1024 * 1024;
+  // 桌面走 Raw IPC，8 MiB 一块最省往返。安卓只有 postMessage IPC：Uint8Array 会被
+  // JSON.stringify 成数字数组（体积约 3–4 倍），8 MiB 会变成 ~30 MB 的字符串，故降到 1 MiB。
+  const WRITE_CHUNK = /Android/i.test(navigator.userAgent || "")
+    ? 1024 * 1024
+    : 8 * 1024 * 1024;
   // 文案见 kabegame-i18n `webview.*`，由 webview_i18n.js 预先拉取
   const t = (key, params) => (window.__kb_i18n__ ? window.__kb_i18n__.t(key, params) : key);
 

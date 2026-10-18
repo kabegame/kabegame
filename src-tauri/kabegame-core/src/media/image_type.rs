@@ -325,6 +325,14 @@ pub fn is_video_mime(mime: &Option<String>) -> bool {
     media_format(m).is_some_and(|format| format.ingestible() && format.is_video())
 }
 
+/// 根据格式键或 MIME 判断是否为可摄入的媒体（图片或视频）。
+///
+/// 用于页面自发下载的 MIME 判定：`application/octet-stream`、压缩包等一律返回 false。
+pub fn is_supported_media_mime(mime: &str) -> bool {
+    media_format(mime)
+        .is_some_and(|format| format.ingestible() && (format.is_image() || format.is_video()))
+}
+
 /// 默认图片格式键（无类型或历史存 `image` 时）。
 pub fn default_image_format() -> &'static str {
     "image/jpg"

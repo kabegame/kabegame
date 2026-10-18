@@ -110,6 +110,18 @@ vd:
 
 surf:
   windowTitle: "暢遊 - {host}"
+  toolbar:
+    back: "後退"
+    forward: "前進"
+    reload: "重新載入"
+    address: "網址"
+    collect: "下載本頁全部媒體"
+    cancel: "取消下載"
+    openInBrowser: "在瀏覽器開啟"
+    close: "關閉"
+  download:
+    unsupportedType: "不支援的下載類型：暢遊只接收圖片和影片"
+    unsupportedScheme: "不支援的下載網址"
   collect:
     detecting: "正在偵測媒體資源…"
     none: "目前頁面未偵測到可下載的媒體資源"
@@ -118,6 +130,7 @@ surf:
     done: "已加入下載 {queued}/{total} 項"
     notReady: "頁面尚未就緒，請稍後再試"
     snapshotFailed: "頁面快照儲存失敗：{error}"
+    ipcUnavailable: "目前系統 WebView 不支援安全的應用通訊，無法一鍵下載"
 
 webview:
   menu:

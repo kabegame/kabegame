@@ -25,7 +25,7 @@
   "surfHelpIntro": "畅游是 Kabegame 的内置浏览与收集功能。输入目标网站 URL（如 https://pixiv.net）并点击「开始畅游」后，会在应用内打开该页面；你可以在该窗口中右键下载图片或者视频，成功下载的图片和视频会加入你的画廊！",
   "surfHelpRecord": "每次畅游会生成一条记录，可在此页快速再次进入该站点，或通过「查看最近图片」进入该站点的画廊视图。",
   "surfHelpIntroAndroid": "畅游会在独立页面中打开目标网站。你可以在其中登录，关闭页面时 Kabegame 会自动保存该站点的 Cookie 与浏览器标识，供需要登录的插件使用。",
-  "surfHelpRecordAndroid": "第一阶段暂不支持一键下载或网页内下载。每次畅游仍会生成记录，可在此页再次进入站点、查看 Cookie 或管理记录。",
+  "surfHelpRecordAndroid": "现在支持一键下载与网页内下载：下载的图片和视频会进入该站点的畅游记录。",
   "gotIt": "知道了",
   "pleaseEnterUrl": "请输入 URL",
   "useHttps": "请使用 https 协议",
@@ -71,6 +71,23 @@
   "fullUrlPreview": "完整 URL：",
   "cookieLabel": "Cookie",
   "cookieEmpty": "暂无保存的 Cookie",
-  "deleteRecordDanger": "删除此畅游记录",
-  "savedSuccess": "已保存"
+  "deleteRecordDanger": "删除",
+  "savedSuccess": "已保存",
+  "toolbar": {
+    "back": "后退",
+    "forward": "前进",
+    "reload": "刷新",
+    "address": "地址",
+    "collect": "下载本页全部媒体",
+    "cancel": "取消下载",
+    "openInBrowser": "在浏览器打开",
+    "close": "关闭"
+  },
+  "download": {
+    "unsupportedType": "不支持的下载类型：畅游只接收图片和视频",
+    "unsupportedScheme": "不支持的下载地址"
+  },
+  "collect": {
+    "ipcUnavailable": "当前系统 WebView 不支持安全的应用通信，无法一键下载"
+  }
 }

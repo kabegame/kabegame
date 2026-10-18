@@ -1,5 +1,54 @@
 # v4.5.2 regression
 
+## Android 畅游 Phase 2（内容页改为 Tauri webview + 原生导航栏）
+
+Android 畅游的主次对调：外部内容页成为 `SurfActivity` 的 Tauri 主 webview（label `surf-<host>:<n>`），顶部导航栏改成原生 Kotlin 控件。内容页因此拿到与桌面同一份注入脚本与按 label 认会话的命令；wry 的 `addJavascriptInterface("ipc")` 换成只收主框架消息的 `addWebMessageListener`，脚本下载与页面自发下载共用 `surf_receive::enqueue_surf_download` 并补 Cookie / UA / Referer。安卓没有 CEF 下载通道，`is_native_job` 不再把 `surf_record_id` 当作 native；`crawl_fs_*` / `crawl_ffmpeg_*` / `surf_collect_*` / `surf_download_image` / `surf_import_media` 改为全平台注册，`raw_body_bytes` 兼容 postMessage 送来的 JSON 数字数组。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver `--skip vue` | `cargo check` 无 error，模块拆分与脚本列表抽取未破坏桌面 | 已运行：0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error（需先修复 `~/.cargo/registry` 下 tauri-plugin 的只读 `tauri-api/build` 残留） |
+| [x] | Kotlin 编译 | Android SDK 36 | `./gradlew :app:compileArm64DebugKotlin` | `SurfActivity` / `SurfToolbar` / `SurfPlugin` 与 `ic_surf_*` 矢量资源编译通过 | 已运行 |
+| [x] | 平台分支单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib surf_uses_native` | 桌面返回 true、安卓返回 false；非畅游 job 恒为 false | 已运行：1 passed |
+| [x] | label 解析单测 | Rust 单测 | `test-kabegame` driver：`kabegame surf_common` | 桌面 `surf-example_com`、安卓 `surf-example_com:7` 都解析为 `example.com`；navbar / 空 label / 非 surf label 返回 None | 已运行：3 passed |
+| [x] | raw body 兼容单测 | Rust 单测 | `test-kabegame` driver：`kabegame raw_body` | `InvokeBody::Raw` 与 0–255 的 JSON 数字数组都还原为字节；越界值 / 负数 / 非数组报错 | 已运行：3 passed |
+| [ ] | 原生工具栏导航 | Android dev | 打开畅游站点，点后退 / 前进 / 刷新，地址栏输入新 URL 回车；触发 SPA 路由切换 | 四个操作都直接作用内容页；整页与 SPA 跳转后地址栏更新；系统返回键先页内后退，退到头关闭 Activity | dev 与 prod 包都测 |
+| [ ] | 一键下载（pixiv） | Android dev / 已登录 pixiv 记录 | 在作品页点工具栏下载按钮 | 页内 toast、工具栏转圈并在完成后复位；图片进入该畅游记录；`i.pximg.net` 不 403（Referer 生效） | 补头来自 SurfPlugin `getCookie` / 系统 UA / `webview.url()` |
+| [ ] | 无 Cookie 域名的下载 | Android dev | 在内容页点下载，媒体位于从未写过 Cookie 的 CDN 域名（如未登录时的 `i.pximg.net`） | 应用不崩溃；请求不带 `Cookie` 头，照常入队下载 | 曾因 wry `RustWebView.getCookies` 对 null 抛 NPE 而闪退，现改走 SurfPlugin `getCookie` |
+| [ ] | 一键下载取消 | Android dev | 一键下载运行中点正在旋转的同一按钮 | 先停止旋转并取消尚未入队的候选；已入队项照常下载；再点一次可重新开始 | 运行中按钮仍是同一个 `ImageView`，只换图标 |
+| [ ] | 工具栏图标与动画 | Android dev，浅色 / 深色各一次 | 打开畅游站点，逐个按压工具栏按钮；地址栏聚焦后输入 `ftp://x` 回车；启动一键下载 | 图标与桌面导航栏同一套线条图标并跟随深浅色；按压出现 32dp 圆角底色；聚焦时边框变蓝，无效输入红框约 0.9s 后恢复；运行中下载按钮换成弧线并以 0.8s 一圈匀速旋转，结束后复位到下载图标且不残留角度 | 图标在 `res/drawable/ic_surf_*.xml`，关闭按钮为新增的同风格 × |
+| [ ] | 页面自发下载（媒体） | Android dev / 站点直链附件 | 点击一个图片或视频附件链接 | 直接进入该畅游记录；Cookie / Referer 生效 | `setDownloadListener` → `pageDownload` |
+| [ ] | 页面自发下载（压缩包） | Android dev | 点击 zip / 7z / tar 附件链接 | 提示 `surf.download.unsupportedType`，不发起下载、不入库 | 畅游只收媒体，解压交给插件 |
+| [ ] | `data:` 页面下载 | Android dev | 点击 `data:` 图片链接 | 经页内 `__kb_media_download__` 导入该畅游记录 | 与桌面同口径 |
+| [ ] | `blob:` / MSE 视频 | Android dev / bilibili 播放页 | 长按或右键视频触发下载 | 分块写入成功（JSON 数组兼容路径），合流后入库，进度面板正常 | 关注长视频耗时与内存 |
+| [ ] | IPC 主框架化 | Android debug / `chrome://inspect` | 在 iframe 内执行 `window.ipc.postMessage(...)`；在顶层执行 `__TAURI_INTERNALS__.invoke("surf_navigate", …)` | iframe 消息被丢弃；顶层调用因命令未注册 / 无权限被拒 | 设备不支持 `WEB_MESSAGE_LISTENER` 时工具栏下载提示 `surf.collect.ipcUnavailable` |
+| [ ] | 关闭会话 | Android dev | 关闭 SurfActivity，再查看主界面与临时目录 | 会话 VFS 目录被清理；Cookie 已保存；`surf-session-changed` 正确 | `closed` 事件走 `drop_session` / `drop_slot` |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 一键下载、冻结快照、取消、页面自发下载（含 zip 解压）、MSE 视频捕获 | 结果与改动前一致；页面自发下载仍走 CEF 并在桌面解压 | 桌面 `surf_uses_native` 保持 true |
+
+## Android 分享 MediaStore 图片
+
+Android 图片的 `local_path` 是 MediaStore `content://` URI，原 `SharePlugin.shareFile` 把它当文件路径做 `File.exists()`，必然报「文件不存在」。现对 `content://` 直接作为 `EXTRA_STREAM` 分享并附 `ClipData` + 读授权；content URI 没有扩展名，前端推出的 `application/octet-stream` 回退为 `ContentResolver.getType`。普通文件路径仍走 FileProvider。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | MediaStore 图片分享 | Android dev | 在画廊或预览中对已下载图片点击分享 | 弹出系统分享面板，不再提示分享失败 | 原报错 `文件不存在: content://media/...` |
+| [ ] | 目标应用可读 | Android dev | 分享到聊天应用或相册类应用 | 目标应用能正常显示图片，无权限错误 | 依赖 `FLAG_GRANT_READ_URI_PERMISSION` + `ClipData` |
+| [ ] | MIME 正确 | Android dev | 分享 JPEG、PNG 与视频各一项 | 分享面板只列出能处理对应类型的应用，视频不被当作图片 | 类型来自 `ContentResolver.getType` |
+| [ ] | 外部导入图片 | Android dev | 分享从系统相册导入（沿用原 content URI）的图片 | 同样能分享并被目标应用读取 | |
+
+## Android 启动任务时请求通知权限
+
+Android 13 及以上把通知权限请求移到用户主动启动任务的入口：系统弹窗在任务入队前出现，授权或拒绝后都继续启动任务。通知状态刷新不再自行触发权限弹窗，避免任务已经运行后才询问；权限 launcher 由 `MainActivity` 在生命周期启动前注册，插件只经 host 接口调用。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 首次启动请求 | Android 13+ / 清除应用通知权限状态 | 在插件详情或任务配置中点击启动任务 | 点击后立即出现系统通知权限弹窗，任务尚未入队 | 用户动作与权限请求同一条调用链 |
+| [ ] | 授权后启动 | Android 13+ | 在权限弹窗选择允许 | 弹窗关闭后任务正常启动，任务与下载进度通知正常显示 | |
+| [ ] | 拒绝后启动 | Android 13+ | 在权限弹窗选择不允许 | 弹窗关闭后任务仍正常启动；调用不悬挂，界面不一直等待 | 前台服务仍可按 Android 规则运行 |
+| [ ] | 状态刷新不补弹窗 | Android 13+ / 通知权限未授予 | 让定时任务或已有任务产生状态、下载进度变化 | 状态刷新本身不弹通知权限框 | 只在用户主动 `start_task` 时请求 |
+| [ ] | 旧系统兼容 | Android 12 及以下 | 启动任务 | 不出现运行时通知权限弹窗，任务和通知行为保持不变 | `POST_NOTIFICATIONS` 无运行时授权要求 |
+| [ ] | 已授权重复启动 | Android 13+ / 已允许通知 | 连续启动两个任务 | 不重复弹权限框，两个任务均正常入队 | |
+
 ## Android 插件标签提示
 
 Android 上的插件标签改用点击触发 Tooltip，避开 WebView 把触摸合成为短暂 hover 后在抬手时发送 `mouseleave` 的行为。桌面端继续使用延迟悬停提示。

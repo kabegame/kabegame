@@ -110,6 +110,18 @@ vd:
 
 surf:
   windowTitle: "서핑 - {host}"
+  toolbar:
+    back: "뒤로"
+    forward: "앞으로"
+    reload: "새로 고침"
+    address: "주소"
+    collect: "이 페이지의 모든 미디어 다운로드"
+    cancel: "다운로드 취소"
+    openInBrowser: "브라우저에서 열기"
+    close: "닫기"
+  download:
+    unsupportedType: "지원하지 않는 다운로드 형식입니다. 서핑은 이미지와 동영상만 받습니다"
+    unsupportedScheme: "지원하지 않는 다운로드 주소입니다"
   collect:
     detecting: "미디어를 감지하는 중…"
     none: "이 페이지에서 다운로드할 수 있는 미디어를 찾지 못했습니다"
@@ -118,6 +130,7 @@ surf:
     done: "{queued}/{total}개를 다운로드에 추가했습니다"
     notReady: "페이지가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요"
     snapshotFailed: "페이지 스냅샷 저장 실패: {error}"
+    ipcUnavailable: "이 시스템 WebView는 안전한 앱 통신을 지원하지 않아 일괄 다운로드를 사용할 수 없습니다"
 
 webview:
   menu:

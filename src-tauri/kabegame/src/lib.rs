@@ -104,7 +104,7 @@ fn init(
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
-    #[cfg(not(any(feature = "web", target_os = "android")))]
+    #[cfg(not(feature = "web"))]
     commands::surf_session::clear_stale_sessions();
     #[cfg(debug_assertions)]
     crate::debug_ingest::spawn_debug_event(
@@ -545,19 +545,20 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             surf_open_devtools,
             surf_open_in_browser,
+            #[cfg(not(target_os = "android"))]
             surf_go_back,
+            #[cfg(not(target_os = "android"))]
             surf_go_forward,
+            #[cfg(not(target_os = "android"))]
             surf_reload,
+            #[cfg(not(target_os = "android"))]
             surf_navigate,
             #[cfg(not(target_os = "android"))]
             surf_report_url,
-            #[cfg(not(target_os = "android"))]
             surf_collect_attach,
             #[cfg(not(target_os = "android"))]
             surf_collect_toggle,
-            #[cfg(not(target_os = "android"))]
             surf_collect_finished,
-            #[cfg(not(target_os = "android"))]
             surf_save_page_snapshot,
             // --- Run Configs ---
             get_run_configs,
@@ -714,55 +715,30 @@ pub(crate) fn configure_app(
             cancel_download,
             #[cfg(not(target_os = "android"))]
             apply_update_and_restart,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_open,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_create,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fread,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fwrite,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fseek,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fstat,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_ftruncate,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_close,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_read_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_read_text_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_write_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_write_text_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_mkdir,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_read_dir,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_remove,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_stat,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_lstat,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_rename,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_copy_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_exists,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_truncate,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_size,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_get_root,
-            #[cfg(not(target_os = "android"))]
             crawl_ffmpeg_mux,
-            #[cfg(not(target_os = "android"))]
             crawl_ffmpeg_probe,
             #[cfg(not(target_os = "android"))]
             crawl_archive_zip,
@@ -794,9 +770,7 @@ pub(crate) fn configure_app(
             crawl_set_plugin_data,
             #[cfg(not(target_os = "android"))]
             crawl_download_image,
-            #[cfg(not(target_os = "android"))]
             surf_download_image,
-            #[cfg(not(target_os = "android"))]
             surf_import_media,
             #[cfg(not(target_os = "android"))]
             crawl_to,

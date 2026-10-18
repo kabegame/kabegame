@@ -110,6 +110,18 @@ vd:
 
 surf:
   windowTitle: "サーフ - {host}"
+  toolbar:
+    back: "戻る"
+    forward: "進む"
+    reload: "再読み込み"
+    address: "アドレス"
+    collect: "このページのメディアをすべてダウンロード"
+    cancel: "ダウンロードをキャンセル"
+    openInBrowser: "ブラウザーで開く"
+    close: "閉じる"
+  download:
+    unsupportedType: "未対応のダウンロード形式です。サーフは画像と動画のみ受け取ります"
+    unsupportedScheme: "未対応のダウンロード URL です"
   collect:
     detecting: "メディアを検出しています…"
     none: "このページにダウンロード可能なメディアは見つかりませんでした"
@@ -118,6 +130,7 @@ surf:
     done: "{queued}/{total} 件をダウンロードに追加しました"
     notReady: "ページの準備ができていません。しばらくしてから再試行してください"
     snapshotFailed: "ページのスナップショット保存に失敗しました：{error}"
+    ipcUnavailable: "このシステム WebView は安全なアプリ通信に対応していないため、一括ダウンロードは利用できません"
 
 webview:
   menu:

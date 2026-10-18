@@ -1,7 +1,7 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+#[cfg(not(feature = "web"))]
 use kabegame_core::crawler::downloader::DownloadState;
 use kabegame_core::crawler::{task_scheduler, TaskScheduler};
 use kabegame_i18n::t;
@@ -482,7 +482,8 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                     }
                 }
                 // surf 的所有导入路径最终都会广播 DownloadState，在这里统一反馈终态。
-                #[cfg(all(not(target_os = "android"), not(feature = "web")))]
+                // 安卓上畅游下载也走 reqwest + 图库导入，同样在这里弹页内 toast。
+                #[cfg(not(feature = "web"))]
                 AppEvent::DownloadState {
                     id, state, error, ..
                 } if matches!(state, DownloadState::Completed | DownloadState::Failed) => {
@@ -491,7 +492,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                         if info.surf_record_id.is_some() {
                             match state {
                                 DownloadState::Completed => {
-                                    crate::commands::surf::eval_surf_toast_for_host(
+                                    crate::commands::surf_common::surf_toast_for_host(
                                         &app,
                                         &info.plugin_id,
                                         &t!("webview.toast.succeeded"),
@@ -499,7 +500,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                                     );
                                 }
                                 _ => {
-                                    crate::commands::surf::eval_surf_toast_for_host(
+                                    crate::commands::surf_common::surf_toast_for_host(
                                         &app,
                                         &info.plugin_id,
                                         error

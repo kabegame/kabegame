@@ -1,6 +1,7 @@
 package app.kabegame
 
 import android.app.Activity
+import android.webkit.CookieManager
 import android.webkit.WebSettings
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -10,12 +11,26 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
+/** 原生工具栏文案，由 Rust 用 `t!()` 按应用语言下发。 */
+@InvokeArg
+class SurfToolbarTexts {
+  lateinit var back: String
+  lateinit var forward: String
+  lateinit var reload: String
+  lateinit var address: String
+  lateinit var collect: String
+  lateinit var cancel: String
+  lateinit var openInBrowser: String
+  lateinit var close: String
+}
+
 @InvokeArg
 class SurfAttachArgs {
   lateinit var label: String
   lateinit var host: String
   lateinit var url: String
   lateinit var events: Channel
+  lateinit var texts: SurfToolbarTexts
 }
 
 @InvokeArg
@@ -24,8 +39,13 @@ class SurfLabelArgs {
 }
 
 @InvokeArg
-class SurfNavigateArgs {
+class SurfCollectRunningArgs {
   lateinit var label: String
+  var running: Boolean = false
+}
+
+@InvokeArg
+class SurfCookieArgs {
   lateinit var url: String
 }
 
@@ -34,34 +54,52 @@ data class SurfBinding(
   val host: String,
   val url: String,
   val events: Channel,
+  val texts: SurfToolbarTexts,
 )
 
+private class PendingAttach(val binding: SurfBinding, val invoke: Invoke)
+
+/**
+ * Activity 与 `attach` 的会合点：两边到达顺序不定。
+ *
+ * - Activity 先到：登记后等 binding。
+ * - `attach` 先到：先存 binding 与 invoke，等 `setContentView` 完成 IPC 替换后再一起 resolve，
+ *   这样 Rust 能拿到 `ipcAvailable`。找不到 Activity 时（Activity 已销毁）reject，避免 Rust 干等。
+ */
 object SurfRegistry {
   private val activities = HashMap<String, SurfActivity>()
-  private val pending = HashMap<String, SurfBinding>()
+  private val pending = HashMap<String, PendingAttach>()
 
-  fun attach(binding: SurfBinding) {
+  fun attach(binding: SurfBinding, invoke: Invoke) {
     val activity = activities[binding.label]
     if (activity == null) {
-      pending[binding.label] = binding
+      pending[binding.label] = PendingAttach(binding, invoke)
     } else {
       activity.bind(binding)
+      resolve(invoke, activity)
     }
   }
 
   fun onActivityReady(label: String, activity: SurfActivity) {
     activities[label] = activity
-    pending.remove(label)?.let(activity::bind)
+    pending.remove(label)?.let { attach ->
+      activity.bind(attach.binding)
+      resolve(attach.invoke, activity)
+    }
   }
 
   fun onActivityGone(label: String, activity: SurfActivity) {
     if (activities[label] === activity) {
       activities.remove(label)
-      pending.remove(label)
+      pending.remove(label)?.let { attach -> attach.invoke.reject("畅游页面已关闭") }
     }
   }
 
   fun get(label: String): SurfActivity? = activities[label]
+
+  private fun resolve(invoke: Invoke, activity: SurfActivity) {
+    invoke.resolve(JSObject().put("ipcAvailable", activity.ipcAvailable))
+  }
 }
 
 @TauriPlugin
@@ -70,8 +108,10 @@ class SurfPlugin(private val activity: Activity) : Plugin(activity) {
   fun attach(invoke: Invoke) {
     val args = invoke.parseArgs(SurfAttachArgs::class.java)
     activity.runOnUiThread {
-      SurfRegistry.attach(SurfBinding(args.label, args.host, args.url, args.events))
-      invoke.resolve()
+      SurfRegistry.attach(
+        SurfBinding(args.label, args.host, args.url, args.events, args.texts),
+        invoke,
+      )
     }
   }
 
@@ -87,23 +127,33 @@ class SurfPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
+  /**
+   * 下载补头用的 Cookie（含 HttpOnly），已是 `a=b; c=d` 形式。
+   *
+   * 不用 wry 的 `cookies_for_url`：生成的 `RustWebView.getCookies` 把 `getCookie` 声明成非空，
+   * 媒体 CDN 等没有 Cookie 的 URL 返回 null 时会在主线程抛 NPE 让应用崩溃。
+   */
   @Command
-  fun goBack(invoke: Invoke) = onSurf(invoke) {
-    if (it.content.canGoBack()) it.content.goBack()
+  fun getCookie(invoke: Invoke) {
+    val args = invoke.parseArgs(SurfCookieArgs::class.java)
+    activity.runOnUiThread {
+      try {
+        val cookie = CookieManager.getInstance().getCookie(args.url) ?: ""
+        invoke.resolve(JSObject().apply { put("cookie", cookie) })
+      } catch (error: Exception) {
+        invoke.reject("读取 Cookie 失败: ${error.message}", error)
+      }
+    }
   }
 
+  /** Rust 回推一键下载运行态：运行中工具栏换成转圈。 */
   @Command
-  fun goForward(invoke: Invoke) = onSurf(invoke) {
-    if (it.content.canGoForward()) it.content.goForward()
-  }
-
-  @Command
-  fun reload(invoke: Invoke) = onSurf(invoke) { it.content.reload() }
-
-  @Command
-  fun navigate(invoke: Invoke) {
-    val args = invoke.parseArgs(SurfNavigateArgs::class.java)
-    onSurf(invoke, args.label) { it.content.loadUrl(args.url) }
+  fun setCollectRunning(invoke: Invoke) {
+    val args = invoke.parseArgs(SurfCollectRunningArgs::class.java)
+    activity.runOnUiThread {
+      SurfRegistry.get(args.label)?.setCollectRunning(args.running)
+      invoke.resolve()
+    }
   }
 
   @Command
@@ -111,10 +161,6 @@ class SurfPlugin(private val activity: Activity) : Plugin(activity) {
 
   private fun onSurf(invoke: Invoke, block: (SurfActivity) -> Unit) {
     val label = invoke.parseArgs(SurfLabelArgs::class.java).label
-    onSurf(invoke, label, block)
-  }
-
-  private fun onSurf(invoke: Invoke, label: String, block: (SurfActivity) -> Unit) {
     activity.runOnUiThread {
       val surf = SurfRegistry.get(label)
       if (surf == null) {

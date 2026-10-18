@@ -148,6 +148,19 @@ pub async fn delete_task(task_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn start_task(task: Value) -> Result<String, String> {
+pub async fn start_task<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    task: Value,
+) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_task_notification::TaskNotificationExt;
+
+        // 权限结果不影响任务启动；插件调用异常同样降级为无通知运行。
+        let _ = app.task_notification().request_permission().await;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+
     commands::task::start_task(task).await
 }
