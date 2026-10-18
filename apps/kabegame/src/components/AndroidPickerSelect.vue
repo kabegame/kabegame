@@ -319,6 +319,11 @@ function onSelectOption(opt: AndroidPickerSelectOption) {
 
 .apk-modal-list {
   flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  align-content: start;
+  column-gap: 8px;
+  row-gap: 2px;
   overflow-y: auto;
   padding: 0 10px 12px;
   scrollbar-width: none;
@@ -329,6 +334,7 @@ function onSelectOption(opt: AndroidPickerSelectOption) {
 }
 
 .apk-section-title {
+  grid-column: 1 / -1;
   padding: 4px 8px 8px;
   font-size: 11px;
   font-weight: 700;
@@ -354,7 +360,6 @@ function onSelectOption(opt: AndroidPickerSelectOption) {
   display: flex;
   align-items: center;
   gap: 13px;
-  margin-bottom: 2px;
   padding: 12px;
   border-radius: 18px;
   cursor: pointer;

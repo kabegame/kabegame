@@ -2,7 +2,7 @@
   <div class="plugin-picker-field flex w-full min-w-0 flex-col gap-1.5">
     <div class="flex w-full min-w-0 items-center gap-2">
       <AndroidPickerSelect
-        v-if="isCompact"
+        v-if="useAndroidPicker"
         :model-value="modelValue ?? null"
         :options="androidOptions"
         :title="pickerTitleResolved"
@@ -177,6 +177,7 @@ const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 
 const isCompact = computed(() => uiStore.isCompact);
+const useAndroidPicker = computed(() => isCompact.value || props.selectTrigger);
 const pickerTitleResolved = computed(() => props.pickerTitle ?? props.placeholder ?? t("common.selectPlaceholder"));
 
 function emitValue(value: string | null | undefined) {

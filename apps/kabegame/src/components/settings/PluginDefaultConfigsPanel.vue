@@ -6,6 +6,7 @@
       class="plugin-defaults-select"
       clearable
       :placeholder="$t('settings.pluginDefaultsSelectPlugin')"
+      :select-trigger="IS_ANDROID"
       @update:model-value="(value) => (selectedPluginId = value ?? '')"
     />
 
@@ -39,6 +40,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
+import { IS_ANDROID } from "@/env";
 import { useI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { usePluginConfig } from "@/composables/usePluginConfig";

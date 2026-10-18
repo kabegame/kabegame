@@ -2,7 +2,6 @@
   <div
     class="settings-container"
     :class="{ 'settings-container--embedded': embedded }"
-    v-pull-to-refresh="pullToRefreshOpts"
   >
     <div class="settings-content">
       <!-- embedded（桌面弹窗）时标题与关闭按钮由 el-dialog 自带 header 提供，这里不再自绘 -->
@@ -579,7 +578,6 @@ watch(activeTab, (tab, previousTab) => {
   });
 });
 
-const isRefreshing = ref(false);
 const wallpaperRotationTargetsAlbum = computed(() => {
   const raw = settingsStore.values.wallpaperRotationAlbumId as string | null | undefined;
   if (raw == null) return false;
@@ -621,32 +619,11 @@ watch(wallpaperDisabled, (disabled, prev) => {
 const isLightMode = IS_LIGHT_MODE;
 
 const settingsShowIds = computed(() => []);
-const pullToRefreshOpts = computed(() =>
-  IS_ANDROID ? { onRefresh: handleRefresh, refreshing: isRefreshing.value } : undefined,
-);
 
 function handleSettingsAction(_payload: { id: string; data: { type: string } }) {
   // HeaderFeatureId.Help 已下线；HeaderFeatureId.CheckUpdate 迁移到全局工具箱「维护」分组。
   // settingsShowIds 现为空数组，这里暂无需要处理的 action。
 }
-
-const refreshSettings = async () => {
-  await settingsStore.refreshAll();
-};
-
-// 统一的刷新处理
-const handleRefresh = async () => {
-  isRefreshing.value = true;
-  try {
-    await refreshSettings();
-    ElMessage.success(t("settings.messageRefreshSuccess"));
-  } catch (error) {
-    console.error("刷新失败:", error);
-    ElMessage.error(t("settings.messageRefreshFailed"));
-  } finally {
-    isRefreshing.value = false;
-  }
-};
 
 const batteryOptimizationStore = useBatteryOptimizationStore();
 

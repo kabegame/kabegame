@@ -1,5 +1,22 @@
 # v4.5.2 regression
 
+## Android 设置统一走路由页
+
+设置原先按 `isCompact` 分流：紧凑走 `/settings` 路由页，否则开 `SettingsDialog`。Android 平板宽屏与横屏手机
+（800×360）不紧凑，弹窗在矮屏上超出视口、标题与关闭按钮压在状态栏下，左侧导航又占去近三分之一宽度。
+现 `App.vue` 的 `settingsUsesRoute = IS_ANDROID || uiStore.isCompact`：Android 一律走路由页（非紧凑时页内仍有
+左侧分类导航），`SettingsDialog` 只在桌面 / web 非紧凑挂载；侧栏设置按钮的高亮在路由模式下跟随 `route.path`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 横屏手机 | vivo V2429A / Android 16 横屏（800×360），dev 包 | 点侧栏设置按钮 | 进入 `/settings` 全屏页，有左侧分类导航，无弹窗；设置按钮高亮 | 已用 CDP 实测 |
+| [ ] | 返回 | 同上 | 设置页按返回键 | 回到进入前的页面 | |
+| [ ] | 旋转 | Android | 设置页内在竖屏 / 横屏间旋转 | 竖屏为分类卡片列表、横屏为左侧导航，不跳出设置页 | |
+| [ ] | kamechan / 工具箱入口 | Android 平板 | 从 kamechan 工具箱、紧凑 tab 工具箱打开设置 | 都进入路由页 | |
+| [ ] | 桌面不回归 | Linux standard | 侧栏设置、`⌘,` | 仍弹出设置弹窗 | |
+| [ ] | 设置页无下拉刷新 | Android | 设置页顶部下拉 | 不出现刷新指示器，也不弹「刷新成功」 | `Settings.vue` 删除 `v-pull-to-refresh` 与 `handleRefresh`，及 `messageRefreshSuccess` / `messageRefreshFailed` 文案 |
+| [ ] | 插件默认配置选择器 | Android 竖屏及 800×360 横屏 | 设置 → 插件默认配置，点击插件选择框并选择、清除插件 | 入口样式与新建爬虫任务一致；居中弹出移动端插件选择面板而非桌面下拉菜单；窄屏单列、横屏按可用宽度智能分列；选择后显示插件名，清除后恢复占位文案 | 已用 Android CDP 实测 800×360 打开面板并自动排为 369px 两列；选择与清除待回归 |
+
 ## Android 图片详情弹窗按空间排版
 
 `ImageDetailDialog`（只在 Android 渲染）原先只看 `isCompact`：非紧凑一律四列 `flex: 1 1 0` 并排。横屏手机

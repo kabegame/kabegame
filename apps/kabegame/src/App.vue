@@ -85,7 +85,7 @@
               <SidebarActivityBar v-if="busyEntryVisible" :collapsed="true" />
               <div
                 class="dock-row"
-                :class="{ 'is-active': settingsModal.isOpen.value }"
+                :class="{ 'is-active': settingsUsesRoute ? route.path === '/settings' : settingsModal.isOpen.value }"
                 :title="$t('route.settings')"
                 :aria-label="$t('route.settings')"
                 @click="openSettingsEntry()"
@@ -130,7 +130,7 @@
         </router-link>
         <!-- 同上：kamechan 开着时工具箱入口在它身上，底部 tab 不再重复一个 -->
         <div v-if="!kamechanEnabled" class="flex-1 flex flex-col items-center justify-center min-w-0">
-          <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面挂载），走路由而非弹窗 -->
+          <!-- 紧凑布局用全屏设置页（SettingsDialog 仅桌面 / web 非紧凑挂载），走路由而非弹窗 -->
           <GlobalToolsPopover variant="compact" @open-settings="openSettingsEntry()" />
         </div>
       </nav>
@@ -143,9 +143,9 @@
       :kgpg-path="importKgpgPath"
       @update:visible="importDialog.close"
     />
-    <!-- 桌面端完整设置弹窗；紧凑布局继续使用全屏设置页 -->
+    <!-- 桌面 / web 非紧凑用设置弹窗；Android（含平板宽屏、横屏手机）与紧凑布局用全屏设置页 -->
     <SettingsDialog
-      v-if="!uiStore.isCompact"
+      v-if="!settingsUsesRoute"
       :open="settingsModal.isOpen.value"
       :z-index="settingsModal.zIndex.value"
       @close="settingsModal.close()"
@@ -303,11 +303,13 @@ const { settingValue: kamechanEnabled } = useSettingKeyState("kamechanEnabled");
 const { count: busyCount, hasUnseenFailure: hasUnseenBusyFailure } = useBusyTasks();
 const busyEntryVisible = computed(() => busyCount.value > 0 || hasUnseenBusyFailure.value);
 
-// 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
+// Android 一律走路由页：横屏手机等矮屏放不下弹窗，平板宽屏的路由页也有左侧分类导航。
+const settingsUsesRoute = computed(() => IS_ANDROID || uiStore.isCompact);
 const openSettingsEntry = () => {
-  if (uiStore.isCompact) void router.push("/settings");
+  if (settingsUsesRoute.value) void router.push("/settings");
   else settingsModal.open();
 };
+// 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
 useGlobalShortcuts({ openSettings: openSettingsEntry });
 
 // 全局导入弹窗 store

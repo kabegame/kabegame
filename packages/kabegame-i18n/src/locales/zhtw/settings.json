@@ -44,7 +44,7 @@
   "previewSlideshowSpeedSlow": "慢（20 秒）",
   "previewSwitchDirection": "切圖方向",
   "previewSwitchDirectionDesc": "隱藏、刪除等操作使目前圖片離開檢視後，預覽切換到哪個方向",
-  "previewSwitchDirectionAuto": "自動（跟隨最近 5 次手動切圖的多數方向）",
+  "previewSwitchDirectionAuto": "自動",
   "previewSwitchDirectionPrev": "上一張",
   "previewSwitchDirectionNext": "下一張",
   "imageClickPreview": "應用內預覽",
@@ -78,8 +78,6 @@
   "linkOpenBrowser": "系統瀏覽器",
   "linkOpenAsk": "每次詢問",
   "messageOpenFailed": "開啟失敗",
-  "messageRefreshSuccess": "重新整理成功",
-  "messageRefreshFailed": "重新整理失敗",
 
   "tabWallpaper": "壁紙設定",
   "tabDownload": "下載設定",
