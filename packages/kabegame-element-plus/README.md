@@ -54,6 +54,10 @@ workspace**，故已平铺成单包：
 - `src/global.d.ts` —— 上游包根的 `global.d.ts`（`GlobalComponents` / `GlobalDirectives`）vendor 时漏掉，
   补回并由 `env.d.ts` 的 `/// <reference path="./global.d.ts" />` 带进程序。缺它时模板里全局注册的
   `<el-xxx>` 类型为 any，事件回调参数报 TS7006、props 不校验。组件清单与 `src/component.ts` 保持同步。
+- **message 安全区**：`message.vue` 的 `top` / `bottom` 定位改为 `calc(<offset>px + 安全区 inset)`
+  （`--sat` / `--sab`，回落 `env(safe-area-inset-*)`），Android 顶部消息不再被状态栏挡住；
+  堆叠计算仍只用数字 offset。另外 `zIndex` 选项改为生效（上游 `message.vue` 只用自增层级、忽略
+  该选项），调用方可让消息压过 `modalStack` 自管层级的弹层。
 - **date-picker 主题下沉**：`$datepicker` token map 直接取 `--anime-*`，并追加
   `active-bg` / `hover-bg-color` / `today-ring-color` / `disabled-text-color` /
   `cell-radius(-large)`；日/月/年表与 popper 的选择器改在组件自身。业务侧

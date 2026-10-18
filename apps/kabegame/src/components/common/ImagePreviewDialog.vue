@@ -391,6 +391,7 @@ import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
 import { useUiStore } from "../../stores/ui";
 import { useSettingsStore } from "../../stores/settings";
+import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -414,7 +415,9 @@ const previewContextMenu = useModal();
 const previewFullscreenZIndex = computed(() => previewModal.zIndex.value);
 const previewOverlayZIndex = computed(() => previewModal.zIndex.value + 10);
 const previewControlZIndex = computed(() => previewModal.zIndex.value + 20);
-const previewHidesKamechanClass = "image-preview-hides-kamechan";
+const kameMessageStore = useKameMessageStore();
+/** 每个预览实例各占一个隐藏来源，多实例互不覆盖 */
+const kamechanHideOwner = `image-preview-${Math.random().toString(36).slice(2)}`;
 
 const props = withDefaults(
   defineProps<{
@@ -734,8 +737,7 @@ const toggleAppFullscreen = (event?: MouseEvent) => {
 };
 
 const syncKamechanVisibilityForPreview = (hidden: boolean) => {
-  if (typeof document === "undefined") return;
-  document.body.classList.toggle(previewHidesKamechanClass, hidden);
+  kameMessageStore.setKamechanHidden(kamechanHideOwner, hidden);
 };
 
 const previewDialogTitle = computed(() => {
@@ -1496,10 +1498,6 @@ defineExpose({
 </script>
 
 <style lang="scss">
-body.image-preview-hides-kamechan .kamechan-host {
-  display: none !important;
-}
-
 .image-preview-dialog.el-dialog {
   width: 90vw !important;
   height: 90vh !important;

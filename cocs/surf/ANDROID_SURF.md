@@ -272,8 +272,23 @@ WebView。
   `SurfActivity` 收到后关闭畅游；`MainActivity` 摘下死掉的主 webview、post `recreate()`，由 wry 重建
   主界面（前端从头加载，路由状态丢失）。外部页面的长任务与内存也会和主界面抢同一个渲染进程。
 - tao 的 `MonitorHandle::size()` 在事件循环线程（永不返回 Java）上调 `getCurrentWindowMetrics`，
-  JNI 局部引用不会释放，`WindowMetrics` 经 `ContextImpl` 钉住已销毁的 SurfActivity。WebView 已
-  `destroy()`，残留的只是 Java 对象：实测 5 次开关残留 2 个 Activity，约 1 MB。修复需要给 tao 打补丁。
+  JNI 局部引用不会释放，`WindowMetrics` 经 `ContextImpl` 钉住已销毁的 Activity。WebView 已
+  `destroy()`，残留的只是 Java 对象（Activity + WebView 空壳）。畅游与 WebView 爬虫宿主都受影响，
+  **每建一个子 Activity 约 50% 概率残留一个**（畅游 5 次开关残留 2 个；爬虫 8 个任务残留 4 个），触发链：
+  1. 安卓开了 `unstable`，`tauri-runtime-wry` 建 webview 时调 `window.inner_size()`，落到 tao 的
+     `MonitorHandle::size()`；
+  2. 它用的是 `ndk_glue::main_window_manager()` = `WINDOW_MANAGER`（`BTreeMap<ActivityId, …>`）里
+     **id 最小**的那个，而不是本窗口的；
+  3. `ActivityId` 来自 wry 生成的 `WryActivity`：主界面是 `hashCode()`（正数），`startActivity(cls)`
+     拉起的子 Activity 是 `Random.nextInt()`，比主界面小的概率约一半，此时新建的子 Activity 被当成「主窗口」，
+     它的 `WindowMetrics` 局部引用就留在事件循环线程上。
+  **已绕开**：`MainActivity.pinMainActivityId()` 在 `super.onCreate` 前往 intent 写
+  `__wryActivityId = Int.MIN_VALUE`（wry `WryActivity.kt` 私有常量 `ACTIVITY_ID_KEY` 的值，升级 wry 要核对），
+  主界面 id 恒为最小，子 Activity 不再被选中；重建时 wry 自己的 `onSaveInstanceState` 带回同一个 id。实测修后
+  爬虫 8 个任务、畅游开关 6 次，强制 GC 后都只剩主界面 1 个 Activity。
+  **仍残留**：主界面因未声明的配置变化（如字体缩放）或渲染进程崩溃而重建时，旧 MainActivity 可能被钉住
+  （实测两次重建多 1 个）。根治只能给 tao 打补丁（`size()` 内用 local frame 释放引用并改用本窗口的
+  window manager）。
 - 初始化脚本在外部网页上会被注入两次（见「注入脚本守卫」）。我们的脚本由 `android_init_script` 保证
   每文档只执行一次；Tauri 自己的脚本第二次执行时在控制台报 `Cannot redefine property`，无害。
 - 安卓 `tauri.conf.json` 的 capability 清单必须含 `crawler-capability`（模板

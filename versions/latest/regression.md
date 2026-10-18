@@ -94,7 +94,8 @@ Android 畅游的主次对调：外部内容页成为 `SurfActivity` 的 Tauri �
 | [x] | 被服务端跳到手机版后切桌面版 | Android dev / weibo.com（移动 UA 302 到 `m.weibo.cn`） | 在 `m.weibo.cn` 上「更多」→ 勾选「桌面版网站」，再取消 | 勾选后回到 `weibo.com` 桌面版（帖子显示「来自 微博网页版」）；取消后回到 `m.weibo.cn` | 已实测。曾经只 `reload()` 跳转后的 `m.weibo.cn`，UA 已是桌面但页面始终是手机版；现在重载 `WebHistoryItem.originalUrl` |
 | [x] | 爬虫页面返回键收起 | Android dev / xhs-webview 运行中，主界面有可后退的历史（如打开了任务抽屉） | 在任务抽屉点「打开窗口」，再按系统返回键 | 爬虫页面收起回主界面下面，任务抽屉与主界面路由保持不变；再按返回才作用于主界面 | 已实测。曾因爬虫返回回调早于 wry 的回调注册，返回键被主界面 webview 消费，只收起了任务抽屉 |
 | [x] | 爬虫页面显示 / 收起动画 | 同上 | 打开窗口、按返回或点「收起」；在收起途中立刻再打开 | 显示从底部滑上（约 260ms），收起滑出底部（约 200ms）后露出主界面；中途再打开从当前位置滑回，不闪白、不跳 | 已录屏抽帧核对显示与收起；中途再打开未测 |
-| [x] | 爬虫并行与销毁 | Android dev / 任务并发上限 2 | 同时启动两个 xhs-webview 任务（各 3 条），等全部完成 | 运行中有 2 个 `CrawlerActivity`、2 个爬虫页面，各自完成 3/3、日志不串；结束后只剩 `MainActivity`，最近任务里没有爬虫卡片，强制 GC 后堆内 Activities / WebViews 都只剩主界面的 1 个 | 已实测（`dumpsys activity activities` / `dumpsys meminfo`，ART `SIGUSR1` 触发 GC） |
+| [x] | 爬虫并行与销毁 | Android dev / 任务并发上限 2 | 同时启动两个 xhs-webview 任务（各 3 条），等全部完成 | 运行中有 2 个 `CrawlerActivity`、2 个爬虫页面，各自完成 3/3、日志不串；结束后只剩 `MainActivity`，最近任务里没有爬虫卡片，页面与渲染资源都已释放 | 已实测（`dumpsys activity activities`）。**Java 对象有约 50% 概率残留**：连续 8 个任务后强制 GC（ART `SIGUSR1`），`dumpsys meminfo` 仍有 5 个 Activities / 5 个 WebViews（主界面 + 4 个残留），即 tao 泄漏，见 ANDROID_SURF.md 已知限制；2 个任务时碰巧 0 残留 |
+| [x] | 子 Activity 不再残留 | Android dev，冷启动 | 连续跑 8 个 xhs-webview 任务（各 1 条）；另开关畅游 6 次；各自完成后强制 GC（`run-as … kill -10 <pid>`），看 `dumpsys meminfo` 的 Activities / WebViews | 都只剩主界面 1 个 | 已实测。修前 8 个任务残留 4 个（tao 选中 id 最小的 Activity 取 `WindowMetrics`，子 Activity 的随机 id 约一半比主界面小）。主界面重建后旧 MainActivity 仍可能残留（两次重建多 1 个），为已知限制 |
 | [x] | 安卓 WebView 爬虫能跑 | Android dev / xhs-webview 0.1.3 | 推荐模式、最多 3 条 | 任务日志从「ページ読み込み · initial」一路到「完了 · 成功 3/3」，3 张图入库 | 已实测。曾因安卓 capability 清单漏了 `crawler-capability`，`crawl_heartbeat` 被 ACL 拒绝，插件一行日志都没有，120 秒后报「WebView 窗口无响应」 |
 | [x] | 安卓注入脚本不重复执行 | Android dev / xhs-webview | 同上 | 每条插件日志只出现一次，作品不重复处理 | 已实测。wry 的 `onPageStarted` 会对外部网页再 `evaluateJavascript` 一遍初始化脚本，插件曾并行跑两份；现由 `android_init_script` 每文档一次守卫挡住 |
 | [ ] | WebView 爬虫跟随桌面版 | Android dev / 小红书畅游记录已勾选「桌面版网站」 | 运行 xhs-webview 任务，展开爬虫页面；页面里查 `navigator.userAgent` / `navigator.userAgentData.mobile`；再取消该记录的桌面版重跑 | 勾选时爬虫页面为桌面版，UA 为桌面 UA、`mobile === false`；页面自发下载补的 `User-Agent` 也是桌面 UA；取消后爬虫回到移动 UA | 已实测勾选时爬虫页为桌面 UA、`mobile === false`；取消后回移动 UA 与下载补头未测。曾经 `create_crawler_activity` 不读畅游记录，爬虫恒为移动 UA，用桌面 UA 签发的 Cookie 失配。`www.` 前缀有无视为同一站点（单测 `surf_host_candidates_toggle_www_prefix`） |
@@ -1089,3 +1090,25 @@ hyper 走 HTTP/1.1 时默认把请求头名全部转成小写，Cloudflare 视�
 | [ ] | 桌面空白格 | 桌面 CEF | 每页 1000、5 列以上快速滚动，含左侧画册树的画册页 | 不再偶发空白格 | |
 | [ ] | 层叠关系 | 桌面 CEF / Android | 画廊、画册、任务详情页：页头「…」菜单、sticky 分页器、滚动按钮、右键菜单、空状态与 loading 遮罩 | 页头与分页器仍盖在图片之上；弹出菜单不被网格遮挡 | 滚动容器成为层叠上下文后，容器内 z-index 不再与外部比较 |
 | [ ] | hover / 选中动画 | 桌面 CEF | 悬停、框选、Ctrl 多选网格项 | 描边、阴影与 transform 过渡仍顺滑 | |
+
+## ElMessage 安全区
+
+vendored `message.vue` 的定位原本只用数字 offset（默认 16px），Android 顶部消息会落到状态栏 / 刘海下面被挡住。修复：`top` / `bottom` 改为 `calc(<offset>px + var(--sat|--sab, env(safe-area-inset-*)))`，安全区由 `MainActivity` 注入；堆叠计算（`bottom = height + offset`）仍只用数字，整组消息统一平移。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 顶部消息不被遮挡 | Android 真机（有刘海 / 挖孔屏更佳） | 触发任意 `ElMessage`（如复制、保存设置） | 消息完整显示在状态栏下方 16px 处 | |
+| [ ] | 多条堆叠 | Android 真机 | 连续触发 3 条以上消息，等前面的关闭 | 间距 16px 一致，关闭后其余消息上移且始终不进入状态栏 | |
+| [ ] | 桌面不变 | 桌面 CEF | 触发消息 | 位置与修复前一致（`env()` 为 0） | |
+
+## kamechan 被遮住时消息降级到 ElMessage
+
+图片预览在紧凑布局打开、或桌面应用全屏时会隐藏 kamechan，原先靠 `body.image-preview-hides-kamechan` 的 CSS，`kameMessage` 不知情仍把消息推进气泡队列，消息被吞。修复：隐藏状态改为 `kameMessage` store 的 `setKamechanHidden(owner, hidden)`（每个预览实例一个 owner），Mascot 用 `v-show` 读 `kamechanHidden`；`kameMessage` 在隐藏时写历史并走 `ElMessage`，`zIndex` 取 `modalStack.topZIndex()` 压在预览之上（vendored `message.vue` 改为尊重 `zIndex` 选项）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 安卓预览中提示 | Android 真机 | 打开图片预览，执行收藏 / 设为壁纸 / 复制等会出提示的操作 | 顶部弹出 ElMessage，显示在预览之上；kamechan 历史中也有该条 | |
+| [ ] | 桌面全屏预览提示 | 桌面 CEF | 预览进入应用全屏后触发提示 | 同上；退出全屏后新消息回到 kamechan 气泡 | 非全屏预览 kamechan 可见，仍走气泡 |
+| [ ] | 关闭预览恢复 | Android / 桌面 | 关闭预览后触发提示 | kamechan 重新显示，消息走气泡 | |
+| [ ] | kamechan 关闭时 | 任一 | 设置中关闭 kamechan，在有弹窗时触发提示 | ElMessage 显示在弹窗之上 | 原先可能被弹窗压住 |
+

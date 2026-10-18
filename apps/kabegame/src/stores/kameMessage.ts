@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 export type KameMessageType = "success" | "info" | "warning" | "error";
 
@@ -29,6 +29,15 @@ export const useKameMessageStore = defineStore("kameMessage", () => {
   const queue = ref<KameMessage[]>([]);
   const history = ref<KameMessage[]>([]);
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 当前把 kamechan 遮住 / 隐藏的来源（如全屏图片预览）；非空时气泡不可见，消息改走 ElMessage */
+  const hiddenOwners = ref<string[]>([]);
+  const kamechanHidden = computed(() => hiddenOwners.value.length > 0);
+
+  const setKamechanHidden = (owner: string, hidden: boolean) => {
+    const has = hiddenOwners.value.includes(owner);
+    if (hidden && !has) hiddenOwners.value = [...hiddenOwners.value, owner];
+    else if (!hidden && has) hiddenOwners.value = hiddenOwners.value.filter((o) => o !== owner);
+  };
 
   const dismiss = (id: string) => {
     queue.value = queue.value.filter((message) => message.id !== id);
@@ -96,5 +105,7 @@ export const useKameMessageStore = defineStore("kameMessage", () => {
     clearHistory,
     closeKamechanQueue,
     closeAll,
+    kamechanHidden,
+    setKamechanHidden,
   };
 });

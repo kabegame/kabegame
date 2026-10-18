@@ -144,8 +144,9 @@ Cookie 的媒体 URL 上 NPE）：
   宿主窗口上；需逐项实测，必要时在 `RustWebChromeClient` 外包一层改挂到 `MainActivity`。
 - 移动版页面：视口是手机尺寸、UA 是系统 WebView 的移动 UA，现有按桌面 DOM 写的 webview 插件
   选择器大概率失效；本期只保证运行时。
-- tao JNI 局部引用泄漏（畅游 Phase 2 已知）：每个任务一个 Activity，长时间批量跑任务会累积残留
-  Java 对象。
+- tao JNI 局部引用泄漏：已由 `MainActivity.pinMainActivityId()` 绕开（主界面 wry ActivityId 固定为
+  `Int.MIN_VALUE`），爬虫宿主不再残留；仍会残留的只有主界面重建时的旧 MainActivity。机制见
+  [../surf/ANDROID_SURF.md](../surf/ANDROID_SURF.md) 已知限制。
 - rAF 常驻 60fps 的耗电与温度需要在真机跑 30 分钟确认。
 - `MainActivity` 重建时容器摘下再挂回，页面会短暂 detach；需确认不会触发 `visibilitychange`
   引起插件逻辑分支。

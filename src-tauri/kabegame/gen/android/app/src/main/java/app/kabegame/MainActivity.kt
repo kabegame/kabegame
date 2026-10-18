@@ -33,6 +33,9 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.URLDecoder
 
+/** wry 生成的 `WryActivity.kt` 中 `ACTIVITY_ID_KEY` 的值（那里是 private，只能照抄）。 */
+private const val WRY_ACTIVITY_ID_KEY = "__wryActivityId"
+
 class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermissionHost {
   private var folderPickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var filePickerCallback: ActivityResultCallback<ActivityResult>? = null
@@ -120,6 +123,7 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
     android.util.Log.i("Kabegame", "MainActivity.onCreate start")
     try {
       enableEdgeToEdge()
+      pinMainActivityId()
       super.onCreate(savedInstanceState)
       handleIntent(intent)
       android.util.Log.i("Kabegame", "MainActivity.onCreate done")
@@ -127,6 +131,23 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
       android.util.Log.e("Kabegame", "MainActivity.onCreate crash", e)
       throw e
     }
+  }
+
+  /**
+   * 让主界面的 wry ActivityId 恒为最小值，绕开 tao 的 JNI 引用泄漏。
+   *
+   * tao 的 `MonitorHandle::size()`（Tauri 每建一个 webview 都会经 `inner_size()` 调一次）用的是
+   * `WINDOW_MANAGER` 里 **id 最小**的 Activity 的 window manager，并在永不返回 Java 的事件循环线程上
+   * 取 `WindowMetrics`，局部引用不释放。子 Activity（畅游 / 爬虫宿主）的 id 是 `Random.nextInt()`，
+   * 约一半概率比主界面的 `hashCode()` 小，于是被选中并在关闭后被钉在堆里。主界面 id 取
+   * `Int.MIN_VALUE` 后恒被选中，而它本来就常驻。
+   *
+   * 必须在 `super.onCreate` 之前写：`WryActivity.onCreate` 按 savedInstanceState → intent extra →
+   * `hashCode()` 的顺序取 id，重建时由它自己的 `onSaveInstanceState` 带回同一个值。
+   * key 是 wry 生成的 `WryActivity.kt` 里的私有常量 `ACTIVITY_ID_KEY`，升级 wry 时要核对。
+   */
+  private fun pinMainActivityId() {
+    intent.putExtra(WRY_ACTIVITY_ID_KEY, Int.MIN_VALUE)
   }
 
   override fun onNewIntent(intent: Intent) {
