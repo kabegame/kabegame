@@ -706,19 +706,19 @@ Release 资产名改为实际的 `kabegame-cli-standard_<版本>_<os>_<arch>`。
 
 ## 插件包名 `kabegame-plugin-<id>`，应用剥离前缀作插件 id（`kabegame-core/src/plugin/mod.rs`、`kabegame-cli`、`src-crawler-plugins/`）
 
-`package.json.name` 与插件 id 分开：`kabegame_core::plugin::plugin_id_from_package_name` 剥离可选前缀 `kabegame-plugin-`（剥完为空则不剥），`resolve_kgpg_plugin_id` 的 `name` 来源与 manifest 显示名回退都经它；显式 `--id` 与文件名 stem 不剥离。`kabegame-cli plugin new <id>` 生成 `kabegame-plugin-<id>/`、模板 `name` 加前缀、`engines.kabegame` 改 `>=4.5.2`；`plugin pack` 改为「目录名 = name、输出 stem = 剥离后 id」，目录名先 canonicalize（修 `--plugin-dir .`）。插件仓库 32 个目录 `git mv` 为 `plugins/kabegame-plugin-<id>/`，`name` 同步、`engines.kabegame` 统一 `>=4.5.2`（旧版应用不剥离前缀）；`package-plugin.ts`、`generate-index.ts`、repack / run driver 按 id 输出 `<id>.kgpg` 与索引条目，参数接受 id 或目录名。
+`package.json.name` 与插件 id 分开：`kabegame_core::plugin::plugin_id_from_package_name` 剥离可选前缀 `kabegame-plugin-`（剥完为空则不剥），`resolve_kgpg_plugin_id` 的 `name` 来源与 manifest 显示名回退都经它；显式 `--id` 与文件名 stem 不剥离。`kabegame-cli plugin new <id>` 生成 `kabegame-plugin-<id>/`、模板 `name` 加前缀、`engines.kabegame` 改 `>=4.5.2`；`plugin pack` 仅用 `package.json.name` 校验插件 ID，不再要求源码目录名或输出 stem 与它一致。插件仓库 32 个目录 `git mv` 为 `plugins/kabegame-plugin-<id>/`，`name` 同步、`engines.kabegame` 统一 `>=4.5.2`（旧版应用不剥离前缀）；`package-plugin.ts`、`generate-index.ts`、repack / run driver 按 id 输出 `<id>.kgpg` 与索引条目，参数接受 id 或目录名。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | core 单测 | cargo test | `kabegame-core --lib prefix` | 前缀剥离、`resolve_kgpg_plugin_id`（含撞内建 id 拒绝）、显示名回退 3 个新测试通过 | `plugin::` 全部 92 个通过 |
-| [x] | CLI 单测 | cargo test | `kabegame-cli` 全部 | 模板 `name` 为 `kabegame-plugin-my-plugin`；带前缀目录打出 `<id>.kgpg`，输出 stem 用包名被拒，`<dir>/.` 也能识别目录名 | 27 个通过 |
-| [x] | plugin new / pack | 本地 debug CLI | `plugin new demo`、`plugin new kabegame-plugin-demo2`，进目录 `plugin pack --plugin-dir . --output ../demo.kgpg` 与 `--output ../kabegame-plugin-demo.kgpg` | 目录分别为 `kabegame-plugin-demo` / `kabegame-plugin-demo2`（不重复加前缀）；前者成功，后者报 P3-7 | 已实测 |
+| [x] | CLI 单测与静态检查 | cargo test / cargo check | `kabegame-cli` 全部 | 模板 `name` 为 `kabegame-plugin-my-plugin`；源码目录名与输出 stem 都可不同于插件 ID，仍能成功打包 | 27 个测试通过；cargo check 0 error |
+| [ ] | plugin new / pack | 本地 debug CLI | `plugin new demo` 后把目录改成任意名称，再执行 `plugin pack --plugin-dir <任意目录> --output ../renamed-artifact.kgpg` | 打包成功；包内插件 ID 仍由 `package.json.name` 解析为 `demo` | 待实测 |
 | [x] | 全量打包 | 本地 debug CLI | `KABEGAME_CLI=target/debug/kabegame-cli deno run -A package-plugin.ts --out-dir <临时目录>` | 32 个全部成功，产物文件名均为无前缀 `<id>.kgpg` | 已实测；未覆盖仓库内已跟踪的 `packed/` |
 | [x] | 索引生成 | 临时目录 | 软链 plugins 后跑 `generate-index.ts --tag v4.5.2` | 32 条，`id` / `name` / `downloadUrl` 均无前缀，`minAppVersion` 为 `4.5.2` | 已实测 |
 | [x] | 临时运行识别 id | 本地 debug CLI | `plugin run <临时目录>/konachan.kgpg --dry-run --via local` | 显示「插件 konachan」，读取原 id 的默认配置 | 已实测 |
 | [ ] | 已安装用户升级 | 桌面 dev | 已装旧包的情况下，装新打的 `wallhaven.kgpg` | 识别为同一插件（覆盖更新），已有图片、插件数据目录不变，不会出现 `kabegame-plugin-wallhaven` | 未覆盖 |
 | [ ] | 旧版应用 | 4.5.1 应用 | 商店看新索引 | 插件显示「版本不兼容」，不会装出重复插件 | 未覆盖，需发版后验证 |
-| [ ] | release CLI | `target/release` | 重建 release CLI 后 `deno task --cwd src-crawler-plugins package` | 打包成功；旧 release CLI 会因输出 stem ≠ name 报 P3-7 | 本机 release CLI 为改动前版本，未重建 |
+| [ ] | release CLI | `target/release` | 重建 release CLI 后 `deno task --cwd src-crawler-plugins package` | 按插件仓库的规范目录与产物名完成全量打包，不出现命名校验错误 | 本机 release CLI 未重建 |
 
 ## 画册选择器 / 画册树打开慢：图片计数不挡渲染，标签目录不参与子树 join（`albums_images_provider.yaml`、`services/albums.ts`、`AlbumTreeView.vue`）
 
@@ -784,14 +784,42 @@ Android 收集表单使用与桌面一致的 `el-select` 展示插件选择入�
 | [ ] | 选择后焦点 | Android | 搜索并选择一项，或清空当前单选值 | 下拉按原规则关闭或保持，不自动抢回输入焦点、不重新弹出软键盘 | 待 Android 实机验证 |
 | [ ] | 非 Android 回归 | 桌面 / 窄屏 Web | 打开收集表单 | 继续显示原有选择触发器 | 待验证 |
 
-## 插件与宿主任务日志多语言（`Kabegame.getLang()`、`defineI18n`、konachan 1.7.4）
+## 插件与宿主任务日志多语言（`Kabegame.getLang()`、`defineI18n`、全部插件）
 
-插件可通过同步 `Kabegame.getLang()` 取得应用已解析的语言码；V8 每次调用读取设置，WebView 在建窗时把语言烘焙进 bootstrap。SDK `defineI18n` 按当前语言、基准语言、key 本身的顺序回退。konachan 的用户可见日志和校验错误改用插件内五语言 JSON；宿主的导航、请求、Cookie、标签和任务收尾日志改存 `_i18n` 载荷，由前端或 CLI 按当前语言渲染。
+插件可通过同步 `Kabegame.getLang()` 取得应用已解析的语言码；V8 每次调用读取设置，WebView 在建窗时把语言烘焙进 bootstrap。SDK `defineI18n` 按当前语言、基准语言、key 本身的顺序回退。除已下线的 twodwallpapers 外，全部插件的用户可见日志和校验错误改用插件内五语言 JSON（V8 走 `src/i18n/`，WebView 在 `crawl.js` 内联）；宿主的导航、请求、Cookie、标签和任务收尾日志改存 `_i18n` 载荷，由前端或 CLI 按当前语言渲染。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [ ] | konachan 日志语言 | 桌面 CEF | 依次把应用语言切到简中、英文、日文、韩文、繁中，每次运行一页 konachan 任务 | Cookie、打开页面、排行榜 / 分级、校验错误等插件日志使用当前语言；旧版宿主没有 `getLang` 时回退简中 | 待验证 |
+| [ ] | 全部插件日志语言 | 桌面 CEF | 切换五种应用语言，分别运行一个 V8 插件（如 danbooru）与一个 WebView 插件（如 xhs）任务，并触发一次参数校验错误 | 启动日志、分页 / 下载日志、校验错误均使用当前语言；技术透传（HTTP 状态、URL、站点返回文案）保持原样 | 待验证 |
 | [ ] | V8 `getLang()` | dev CLI / 桌面 CEF | 在 V8 插件中记录 `Kabegame.getLang()`，切换五种应用语言后分别运行 | 返回 `zh` / `en` / `ja` / `ko` / `zhtw`，与界面语言一致 | 待验证 |
 | [ ] | WebView `getLang()` | 桌面 CEF | 在 WebView 插件中记录 `Kabegame.getLang()`，切换语言后新建任务窗口 | 返回建窗时的已解析语言码；脚本可同步调用，无新增 Tauri IPC | 待验证 |
 | [ ] | 历史宿主日志重译 | 桌面 CEF | 运行会产生 `[to]`、`[cookie]`、HTTP 重试与下载等待日志的任务，保持日志对话框打开并切换应用语言 | 宿主日志立即按新语言重新渲染；插件已写入的纯文本日志保持任务运行时语言 | 待验证 |
 | [ ] | CLI 日志渲染 | dev CLI | 切换设置语言后执行 `kabegame-cli plugin run`，触发宿主 `[to]` / `[cookie]` 日志 | CLI 输出对应语言的可读文本，不出现原始 `{"_i18n":...}` 载荷 | 待验证 |
+
+## V8 `common.baseUrl` 与 WebView `Kabegame.vars.baseUrl`
+
+`common` 对象键从 `base_url` 改为 `baseUrl`，宿主注入、SDK `KbCommonCfg`、类型包示例、官方插件与文档同步；WebView 也新增同名同义的 `Kabegame.vars.baseUrl`。官方插件此前有 8 个只读 `common.baseUrl`（含已下线的 twodwallpapers，随宿主修正后开始生效），另有 8 个读 `common.base_url`（已改为 `baseUrl`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 | `node ./node_modules/typescript/bin/tsc -p tsconfig.check.json`（`src-crawler-plugins/`） | 0 error（twodwallpapers 用 `// @ts-nocheck`） | 已运行 |
+| [x] | v8 单测 | 仓库 | `.claude/skills/test-kabegame/driver.sh kabegame-core --lib common` | `run_crawl_uses_prelude_common_custom_and_timer` 与 `execute_entry_builds_common_and_custom_configs` 通过 | 已运行，2 passed |
+| [x] | Rust 编译 | 仓库 | `.claude/skills/check-kabegame/driver.sh --skip vue` | `kabegame` crate cargo check 0 error | 已运行 |
+| [x] | 插件构建 | 仓库 | 受影响插件 `pnpm --dir plugins/<id> run build` | rspack 编译通过 | 已运行 |
+| [ ] | 自定义 `kbBaseUrl`（V8） | 桌面 dev | 给一个读 `common.baseUrl` 的 V8 插件配置非默认 `kbBaseUrl`，运行任务 | 请求命中自定义 base URL，而不是回落到插件内默认常量 | 需实机验证 |
+| [ ] | WebView `baseUrl` | 桌面 dev | 运行任意 WebView 插件，在脚本或日志中读取 `Kabegame.vars.baseUrl` | 等于插件 `kbBaseUrl`；空串时为 `null` | 需实机验证 |
+| [ ] | 旧插件兼容 | 桌面 dev | 运行只读 `common.base_url` 的第三方旧插件 | 预期读不到值；确认插件已迁移到 `common.baseUrl` | Breaking，需文档告知作者 |
+| [ ] | CLI 入口 | dev CLI | `kabegame-cli plugin run <id>` 运行读 `common.baseUrl` 的插件 | 与桌面一致拿到 `baseUrl` | 待验证 |
+
+## 插件仓库远程合并（anime-pictures 0.7.0 / kabegame-server 0.2.3）
+
+合并 `crawler-plugins` 远程 `main` 的两个提交：anime-pictures 改走 `api.anime-pictures.net` JSON API 与 oimages 原图，kabegame-server 桌面媒体地址改用 `/file/{*path}`。合并时保留了本地类型改造，并给 anime-pictures 的新 API 代码补齐类型（新文件不再使用 `@ts-nocheck`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 合并与冲突 | 插件仓库 | `git fetch` 后快进到 `origin/main`，恢复本地改动 | 仅 `CHANGELOG.md` 与 anime-pictures `src/index.ts` 冲突，均已解决 | 已合并到 `8534be9` |
+| [x] | 静态检查 | 仓库 | `deno task --cwd src-crawler-plugins check` | 0 error | 已运行 |
+| [x] | 插件构建 | 仓库 | anime-pictures、kabegame-server `pnpm --dir ... run build` | rspack 编译通过 | 已运行 |
+| [ ] | anime-pictures API 实跑 | dev CLI / 桌面 CEF | 列表、详情、原图下载各跑一次 | 列表分页与详情 metadata 正常，oimages 原图可下载 | 需实机验证 |
+| [ ] | kabegame-server 媒体路径 | dev CLI → 4.5.2 服务端 | 抓取带本地文件的图片 | 媒体请求命中 `/file/{*path}`，图片正常入库 | 需实机验证 |

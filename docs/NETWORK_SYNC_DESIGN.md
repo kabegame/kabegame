@@ -9,7 +9,7 @@ Kabegame 是一个基于 Tauri 的二次元壁纸管理器，核心架构包含�
 - **Provider 系统**：通过 `Provider` trait 统一抽象所有数据源（画册、按插件、按时间等）
 - **虚拟盘系统**：在 Windows 上将 Provider 数据挂载为虚拟磁盘
 - **Gallery 浏览系统**：基于 Provider 路径浏览图片
-- **爬虫插件系统**：使用 Rhai 脚本从网站爬取壁纸，支持 `fetch_json()` 和 `download_image()` 等 API
+- **爬虫插件系统**：使用 JS 插件脚本从网站爬取壁纸，支持 `fetch()` 和 `Kabegame.downloadImage()` 等 API
 
 ### 1.2 设计目标
 
@@ -695,26 +695,21 @@ impl DeviceManager {
 
 ### 8.2 脚本示例
 
-```rhai
-// crawl.rhai - 从远程设备同步画册
-let base_url = peer_url;
+```ts
+// 从远程设备同步画册
+export async function crawl(_common, custom) {
+  const baseUrl = custom.peer_url;
+  const albums = await (await fetch(`${baseUrl}/api/provider/albums`)).json();
 
-// 获取画册列表
-let albums = fetch_json(base_url + "/api/provider/albums");
+  for (const album of albums.entries) {
+    if (album.type !== "directory") continue;
+    const albumPath = `${baseUrl}/api/provider/albums/${album.name}`;
+    const detail = await (await fetch(albumPath)).json();
 
-// 遍历画册
-for album in albums["entries"] {
-    if album["type"] == "directory" {
-        let album_path = base_url + "/api/provider/albums/" + album["name"];
-        let album_detail = fetch_json(album_path);
-
-        // 下载图片
-        for entry in album_detail["entries"] {
-            if entry["type"] == "file" {
-                download_image(base_url + entry["url"]);
-            }
-        }
+    for (const entry of detail.entries) {
+      if (entry.type === "file") await Kabegame.downloadImage(`${baseUrl}${entry.url}`);
     }
+  }
 }
 ```
 

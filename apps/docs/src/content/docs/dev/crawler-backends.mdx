@@ -7,10 +7,6 @@ import { Badge } from '@astrojs/starlight/components';
 
 Kabegame 的 v3 爬虫插件通过 `package.json` 的 `kbBackend` 显式声明运行后端。当前只有两个后端：**V8** 与 **WebView**。作为插件作者，你需要知道它们各自的能力边界，才能判断目标站点该写哪个脚本、以及能否在安卓上跑。
 
-:::caution[Rhai 已移除]
-早期还有第三个后端 Rhai（`crawl.rhai`）。**它自 <Badge text="4.3.0" variant="note" /> 起已停止支持**：`kbBackend: "rhai"` 会在加载时报「Rhai 后端已停止支持，请更新该插件」。合法值只有 `v8` / `webview`。
-:::
-
 ## 后端概览
 
 | 后端 | 入口 | 运行环境 | 桌面 | 安卓 |
@@ -53,6 +49,7 @@ WebView 后端会启动一个隐藏的爬虫窗口执行你的脚本。**这是�
 |---|---|---|
 | 入口 | `export async function crawl(common, custom)` | 顶层脚本，每页重跑 |
 | 读表单配置 | `crawl` 的 `custom` 参数 | `Kabegame.vars`（frozen 对象） |
+| 基础 URL | `common.baseUrl` | `Kabegame.vars.baseUrl` |
 | 导航 | `to(url)` 宿主抓取式 | `to(payload, { pageLabel, pageState })` 真实浏览器导航 + page_stack |
 | `back()` | `back()` | `back(count?)` |
 | 读当前页 | `currentUrl` / `currentHtml` / `currentDocument` / `currentHeaders` | 用浏览器原生 `location` / `document` / `fetch` |

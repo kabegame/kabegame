@@ -54,8 +54,10 @@
 ### Added
 - 新增变量字段 `required: true` 显式声明必填。没有 `default` 不再隐式等于必填；可选字段不需要再写 `default: ""` / `default: []`。必填只在字段可见时校验，由宿主在创建任务前统一拦截（主应用、CLI、自动任务都会经过）。
 - `@kabegame/plugin-sdk` 与 `@kabegame/types` 发布到 npm 并改为 MIT 许可；`kabegame-cli plugin new` 的 V8 模板改为从 npm 安装二者（版本跟随 CLI），仓库外的插件作者生成后可直接 `npm install`。
+- 插件仓库新增 `check` 类型检查命令（`pnpm run check` / `deno task --cwd src-crawler-plugins check`），官方插件已全部通过；已下线的 twodwallpapers 保留文件级 `// @ts-nocheck`。
 
 ### Changed
+- 合并插件仓库上游更新：anime-pictures 0.7.0 的列表与详情改走站点 JSON API、原图改从 oimages 直接下载；kabegame-server 0.2.3 的桌面服务器媒体地址改用 `/file/{*path}`，适配 4.5.2 服务端。
 - **Breaking**：`kbConfig` 变量的取值语义重新定义，插件脚本需要能处理 `null` 与 `undefined`：
   - 被 `when` 隐藏的字段**不出现在 config 中**（读到 `undefined`）；
   - 可见但用户未填的字段为 `null`，宿主不再补 `""`、`0`、`[]` 或全 `false` 的 checkbox 对象；
@@ -68,7 +70,8 @@
 - CLI `plugin run --var`：`key=` 显式清空为 `null`；checkbox 写作 `key=a,b`；options 只接受声明过的 `variable` 或显示名，其余值直接报错。
 - `@kabegame/plugin-sdk` 类型：`kbCfgField<K, T, M>` 新增修饰参数，`{ required: true }` 去掉 `null`、`{ when: true }` 让 key 变成可选；`kbCfgCheckbox<V>` 改为 `Record<V, boolean>`，与运行时一致。
 - 仓库内插件已全部迁移：删掉多余的空 `default`，给必需输入加上 `required`，并修复把 `null` 拼成字符串 `"null"` 的读取点。第三方插件请检查 `String(x)`、模板字符串插值、`x.trim()` / `x.split()` / `x.length` 和 `Object.entries(checkbox)` 等写法。
-- 插件 `package.json` 的 `name` 可写成 `kabegame-plugin-<id>`，应用加载时剥离前缀作为插件 id；`kabegame-cli plugin new <id>` 生成 `kabegame-plugin-<id>/`，`plugin pack` 要求输出 `<id>.kgpg`；官方插件目录同步改名，id 不变，`engines.kabegame` 提到 `>=4.5.2`。
+- 插件 `package.json` 的 `name` 可写成 `kabegame-plugin-<id>`，应用加载时剥离前缀作为插件 id；`kabegame-cli plugin new <id>` 仍生成 `kabegame-plugin-<id>/`，但 `plugin pack` 不再限制源码目录名与输出文件名；官方插件目录同步改名，id 不变，`engines.kabegame` 提到 `>=4.5.2`。
+- **Breaking**：V8 插件 `common` 的 `base_url` 键更名为 `baseUrl`。宿主注入、`@kabegame/plugin-sdk` 的 `KbCommonCfg`、`@kabegame/types` 示例、官方插件与文档均已同步；第三方插件需改为读取 `common.baseUrl`。此前部分官方插件读 `common.baseUrl` 时拿不到宿主值，自定义 `kbBaseUrl` 实际未生效，本次一并修正。WebView 同步新增 `Kabegame.vars.baseUrl`，与 V8 同名同义。
 
 ## 开发侧
 
@@ -86,5 +89,6 @@
 - Tauri 栈升级到 2.12.4，同步改善窗口 / Channel 监听的释放、Android 退出白屏与运行中覆盖安装崩溃，并在 NSIS 静默/被动模式下拦截降级。
 - 删除 `0010-tauri-build-always-static-vcruntime` 补丁；上游现已默认启用 `build.windows.staticVCRuntime`。
 - CEF 桌面端的普通 invoke 不再被强制改走 postMessage，恢复上游 `fetch(ipc://)` 主通道，DevTools Network 面板可以看到每次 IPC 的请求与响应内容；二进制写入（畅游 / WebView 爬虫的分块落盘、`Kabegame.fs` 写文件）也改走标准 invoke，删除 runtime 注入的 `__kb_raw_invoke__` 与 `cef-ipc://localhost/raw` 帧化通道。
+- 删除已下线 Rhai 后端的历史文档（`docs/README_PLUGIN_DEV.md`、`docs/CRAWLER_BACKENDS.md`、`cocs/crawler/PIXIV_RANKING_RHAI.md`），当前文档与插件 README 不再引用 Rhai；`plugin_data` 文档改为 V8 `Kabegame.pluginData` 示例。
 
-- 插件新增 `Kabegame.getLang()` 与 SDK `defineI18n`；konachan 插件日志、宿主任务链路日志支持简中、英文、日文、韩文、繁中显示。
+- 插件新增 `Kabegame.getLang()` 与 SDK `defineI18n`；除已下线的 twodwallpapers 外，全部插件与宿主任务链路日志支持简中、英文、日文、韩文、繁中显示。

@@ -19,7 +19,7 @@ V8 插件必须导出一个 `crawl` 函数。它可以是同步的，也可以�
 
 ```ts
 export async function crawl(common, custom) {
-  const baseUrl = common.base_url ?? "https://example.com";
+  const baseUrl = common.baseUrl ?? "https://example.com";
   // custom 是用户在采集对话框填的 kbConfig 值
   const page = custom.start ?? 1;
   await Kabegame.to(`${baseUrl}/posts?page=${page}`);
@@ -33,10 +33,22 @@ export async function crawl(common, custom) {
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `common.base_url` | `string \| null` | 来自 `package.json` 的 `kbBaseUrl`（trim 后；未定义为 `null`）。 |
+| `common.baseUrl` | `string \| null` | 来自 `package.json` 的 `kbBaseUrl`（trim 后；未定义为 `null`）。 |
+
+宿主注入的对象形如：
+
+```json
+{ "baseUrl": "https://example.com" }
+```
+
+`kbBaseUrl` 为空串或未定义时：
+
+```json
+{ "baseUrl": null }
+```
 
 :::caution
-键名是 **`base_url`（snake_case）**，不是 `baseUrl`。始终保留一个 fallback，因为它可能是 `null`：`const baseUrl = common.base_url ?? "https://…";`
+键名是 **`baseUrl`（camelCase）**，不是 `base_url`。始终保留一个 fallback，因为它可能是 `null`：`const baseUrl = common.baseUrl ?? "https://…";`
 :::
 
 ### `custom` —— 用户填的表单值
@@ -45,7 +57,7 @@ export async function crawl(common, custom) {
 
 ```ts
 export async function crawl(_common, custom) {
-  // 不需要 base_url 时用 _common 忽略第一参
+  // 不需要 baseUrl 时用 _common 忽略第一参
   const mode = custom.crawl_mode;          // options → "all" | "tags" | ...
   const tags = custom.mode_tag_value ?? []; // list → string[]
   const includeR18 = custom.r18 === true;   // boolean
@@ -161,7 +173,7 @@ Kabegame.setHeader("Cookie", "sitelang=zh-cn");   // 影响后续 to() 与 fetch
 Kabegame.delHeader("Cookie");
 
 // 让宿主把用户在「畅游」里登录该站的 cookie 注入本任务请求头：
-if (!Kabegame.requireCookie()) {                  // 省略 host 时从 base_url 推断
+if (!Kabegame.requireCookie()) {                  // 省略 host 时从 baseUrl 推断
   Kabegame.warn("请先在畅游里登录该站点");
 }
 ```

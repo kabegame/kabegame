@@ -48,7 +48,7 @@ kabegame-cli plugin new <name> [--backend v8|webview]
 | 参数        | 必填 | 说明                                                                                                                 |
 | ----------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
 | `name`      | 是   | 插件 ID，必须是 kebab-case（正则 `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`）。`MyPlugin`、`my_plugin`、`1stplugin` 都会被拒绝。目录名与 `package.json.name` 自动加 `kabegame-plugin-` 前缀；已带前缀时不重复添加。 |
-| `--backend` | 否   | `v8`（默认）或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。（Rhai 后端已移除，不可选。）                |
+| `--backend` | 否   | `v8`（默认）或 `webview`，决定生成的脚本文件与 `package.json.kbBackend`。                |
 
 目标目录若已存在则直接报错退出。`kabegame-cli plugin new my-site` 的生成结果：
 
@@ -150,10 +150,11 @@ kabegame-cli plugin pack --plugin-dir <目录> --output <输出.kgpg>
 
 | 参数           | 必填 | 说明                                                              |
 | -------------- | ---- | ----------------------------------------------------------------- |
-| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录；目录名必须等于 `package.json.name`。 |
-| `--output`     | 是   | 输出的 `.kgpg` 文件路径；文件名（去掉 `.kgpg`）必须等于插件 ID，即去掉 `kabegame-plugin-` 前缀后的 `name`。 |
+| `--plugin-dir` | 是   | 包含 v3 `package.json` 与 `main` 指向脚本的插件目录；目录名不参与插件身份判定。 |
+| `--output`     | 是   | 输出的 `.kgpg` 文件路径；文件名可以自定，不参与插件身份判定。 |
 
 打包时读取 `package.json.main` 与 `package.json.kbBackend`；缺少 v3 清单或必需脚本会直接报错。
+插件 ID 取自 `package.json.name`（会去掉可选的 `kabegame-plugin-` 前缀），与源码目录名和输出文件名无关。
 
 :::caution
 `plugin pack` 只打包已经构建好的目录，不执行 `scripts.build`；打包前请先自行构建（如 `npm run build`）。

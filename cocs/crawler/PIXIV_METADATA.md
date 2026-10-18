@@ -2,7 +2,7 @@
 
 ## 要点
 
-- **来源**：`src-crawler-plugins/plugins/kabegame-plugin-pixiv/crawl.rhai` 中 `pixiv_trim_illust_body`，在 `download_image` 前从 `/ajax/illust/{id}` 的 `body` 裁剪为 **EJS 白名单字段**（与 `templates/description.ejs` 展示一致）。
+- **来源**：`src-crawler-plugins/plugins/kabegame-plugin-pixiv/src/illust.ts` 的 metadata 构建，在 `downloadImage` 前从 `/ajax/illust/{id}` 的 `body` 裁剪为 **EJS 白名单字段**（与 `templates/description.ejs` 展示一致）。
 - **目的**：避免整份 API `body`（含 `userIllusts`、`zoneConfig`、`extraData` 等）进入详情 metadata，减轻详情渲染与缓存体积。
 - **入库路径**：`download_image` 入口会把插件传入的 raw JSON 写入 `metadata` 表（v024 前名为 `image_metadata`）并转为 `metadata_id`；`images` 与 `task_failed_images` 只保存该 id。
 - **存量数据**：v011 迁移会把旧 `images.metadata` 折叠进 `metadata` 表（当时名为 `image_metadata`），按 `content_hash` 复用相同 JSON，然后删除旧列。
@@ -12,6 +12,6 @@
 
 | 层级 | 文件 |
 |------|------|
-| 爬取入库 | `src-crawler-plugins/plugins/kabegame-plugin-pixiv/crawl.rhai` |
+| 爬取入库 | `src-crawler-plugins/plugins/kabegame-plugin-pixiv/src/illust.ts` |
 | 详情模板 | `src-crawler-plugins/plugins/kabegame-plugin-pixiv/templates/description.ejs` |
 | 迁移 | `src-tauri/kabegame-core/src/storage/migrations/v011_consolidate_image_metadata_and_failed_display_name.rs` |

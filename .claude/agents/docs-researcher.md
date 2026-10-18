@@ -70,7 +70,7 @@ audience: <end user | plugin author | all users>
 <Wallpaper Engine docs, Dokan installer, macFUSE page, etc. Only include URLs that already appear in the repo (README, code comments, i18n strings) — do NOT invent URLs.>
 
 ## Inheritable prose
-<If `/docs/` root or an existing docs page already has user-level text that can be reused verbatim or lightly edited, point to it here. E.g. "CRAWLER_BACKENDS.md §2 can migrate as-is except for the `tauri-plugin-webview2` paragraph.">
+<If `/docs/` root or an existing docs page already has user-level text that can be reused verbatim or lightly edited, point to it here. E.g. "PLUGIN_FORMAT.md §kbBackend can migrate as-is except for the `webview` paragraph.">
 
 ## Cross-links suggested
 <Other docs slugs this page should link to. Format: `[画廊](/guide/gallery/)`.>

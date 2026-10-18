@@ -18,7 +18,7 @@ plugin-name.kgpg
     - templates/               # 插件提供模板
 ```
 
-只支持 v3 `package.json` 格式；缺少有效 v3 清单的包与 Rhai 后端均不支持，加载/打包时报可读错误。
+只支持 v3 `package.json` 格式；缺少有效 v3 清单的包不支持，加载/打包时报可读错误。
 
 ### templates/description.ejs（图片详情 HTML）
 
@@ -28,7 +28,7 @@ plugin-name.kgpg
 
 ## 清单 v3：package.json 自描述
 
-v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion >= 3`；当前打包器要求 `kbPackageVersion` 精确为 `3`。插件目录名必须等于 `package.json.name`，`.kgpg` 输出文件名 stem 必须等于插件 ID（`name` 剥离可选的 `kabegame-plugin-` 前缀，见 `kabegame_core::plugin::plugin_id_from_package_name`）。仓库内插件统一为 `plugins/kabegame-plugin-<id>/` → `<id>.kgpg`。
+v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion >= 3`；当前打包器要求 `kbPackageVersion` 精确为 `3`。插件 ID 取自 `package.json.name`（剥离可选的 `kabegame-plugin-` 前缀，见 `kabegame_core::plugin::plugin_id_from_package_name`）；源码目录名与 `.kgpg` 输出文件名不参与身份判定，也不受打包器限制。仓库内插件仍统一使用 `plugins/kabegame-plugin-<id>/` → `<id>.kgpg` 作为维护约定。
 
 加载 `.kgpg` 时插件 ID 的取值顺序是：**调用方显式指定**（仅 `kabegame-cli plugin run --id`，用于临时运行/测试）→ `package.json.name`（剥离 `kabegame-plugin-` 前缀；剥完为空则不剥）→ `.kgpg` 文件名 stem（不剥离）。前缀剥离自 4.5.2 起，带前缀的插件 `engines.kabegame` 须 `>=4.5.2`，否则旧版应用会把完整包名当 ID。换言之包自己声明的 `name` 比文件名权威，改文件名不会改掉插件身份；安装落盘时文件名也会被归一成 `<ID>.kgpg`。
 
@@ -67,7 +67,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `name` | 是 | 插件包名，必须等于插件目录名；剥离 `kabegame-plugin-` 前缀后必须等于输出 `.kgpg` stem，同时是加载时的插件 ID 首选来源（见上文取值顺序），无语言后缀时剥离后的值也是显示名回退。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
+| `name` | 是 | 插件包名；剥离 `kabegame-plugin-` 前缀后是加载时的插件 ID 首选来源（见上文取值顺序），不要求与插件目录名或输出 `.kgpg` stem 一致。无语言后缀时剥离后的值也是显示名回退。内置插件作为 `src-crawler-plugins` workspace 子包管理，因此这里也是 monorepo 包名。 |
 | `version` | 是 | 插件 semver，必须是 `a.b.c` 且每段 ≤255（应用将其 packed 编码为 u32 记录到 `image_metadata.plugin_version` 并做迁移门控）。 |
 | `private` | 否 | 内置插件建议为 `true`，避免作为 npm 包发布。 |
 | `name.*` / `description.*` | 否 | 扁平 i18n 键。`name` 自身已被包名占用；本地化展示名使用 `name.zh`、`name.en` 等。`description` 可作为默认描述。 |
@@ -75,7 +75,7 @@ v3 插件以 `package.json` 为唯一清单。判定规则是 `kbPackageVersion 
 | `kbPackageVersion` | 是 | 必须为 `3`。缺失或小于 3 会在加载/打包时报可读错误。 |
 | `engines.kabegame` | 是 | 最低 Kabegame 版本，只支持 `>= X.Y.Z`，商店索引会派生为 `minAppVersion`。 |
 | `main` | 是 | 插件根相对脚本路径。v8 插件用打包产物（如 `dist/main.js`），webview 插件用 `crawl.js`。 |
-| `kbBackend` | 是 | 脚本后端：`v8`、`webview`。JS 插件默认应显式写 `v8`；只有确实需要浏览器窗口/DOM/Cookie 容器时才使用 `webview`。（`rhai` 已停止支持。） |
+| `kbBackend` | 是 | 脚本后端：`v8`、`webview`。JS 插件默认应显式写 `v8`；只有确实需要浏览器窗口/DOM/Cookie 容器时才使用 `webview`。 |
 | `kbBaseUrl` | 否 | 旧 `config.json.baseUrl`。 |
 | `kbLabels` | 否 | 插件声明的标签数组；应用按内置支持列表渲染标签文案和颜色。 |
 | `kbConfig` | 否 | 旧 `config.json.var` 数组。 |
@@ -167,7 +167,7 @@ KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、�
     const startPage = custom?.startPage ?? 0;
     const endPage = custom?.endPage ?? 0;
     const tag = custom?.tag ?? "";
-    console.log(common.base_url, startPage, endPage, tag);
+    console.log(common.baseUrl, startPage, endPage, tag);
   }
   ```
 

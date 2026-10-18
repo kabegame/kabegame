@@ -1218,18 +1218,6 @@ fn pack_plugin_v3(plugin_dir: &Path, output: &Path, pkg: &serde_json::Value) -> 
     let plugin_id = core_plugin::plugin_id_from_package_name(pkg_name);
     kabegame_core::app_paths::validate_plugin_id(plugin_id)
         .map_err(|reason| format!("插件 ID \"{plugin_id}\" 不合规: {reason}"))?;
-    // canonicalize 后再取目录名：`--plugin-dir .` 的 file_name() 是 None
-    let dir_name = std::fs::canonicalize(plugin_dir)
-        .ok()
-        .and_then(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
-        .unwrap_or_default();
-    let output_stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if pkg_name != dir_name || plugin_id != output_stem {
-        return Err(format!(
-            "package.json name \"{pkg_name}\" 必须等于目录名 \"{dir_name}\"，\
-             输出文件名 stem \"{output_stem}\" 必须等于插件 ID \"{plugin_id}\"（P3-7）"
-        ));
-    }
 
     let version = pkg_obj
         .get("version")
@@ -2005,7 +1993,7 @@ mod tests {
         std::fs::remove_dir_all(&out_dir).unwrap();
     }
 
-    /// 造一个最小可打包的 v3 插件目录：name 必须等于目录名与输出 stem（pack 的 P3-7 校验）。
+    /// 造一个最小可打包的 v3 插件目录。
     fn write_minimal_plugin(dir: &Path, name: &str) {
         std::fs::create_dir_all(dir.join("docs")).unwrap();
         std::fs::create_dir_all(dir.join("dist")).unwrap();
@@ -2085,24 +2073,19 @@ mod tests {
         std::fs::remove_dir_all(&base).unwrap();
     }
 
-    /// 包名带 `kabegame-plugin-` 前缀：目录名 = 包名，输出 stem 必须是剥离后的插件 id。
+    /// `package.json.name` 独立声明插件身份，不限制源码目录名或输出文件名。
     #[test]
-    fn test_pack_v3_prefixed_package_name_outputs_plugin_id() {
+    fn test_pack_v3_accepts_arbitrary_directory_and_output_names() {
         let base =
             std::env::temp_dir().join(format!("kabegame-cli-pack-prefix-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        let plugin_dir = base.join("kabegame-plugin-demo");
+        let plugin_dir = base.join("arbitrary-source-directory");
         write_minimal_plugin(&plugin_dir, "kabegame-plugin-demo");
         let pkg = read_optional_package_json(&plugin_dir).unwrap().unwrap();
 
-        pack_plugin_v3(&plugin_dir, &base.join("demo.kgpg"), &pkg).unwrap();
-        let err =
-            pack_plugin_v3(&plugin_dir, &base.join("kabegame-plugin-demo.kgpg"), &pkg).unwrap_err();
-        assert!(err.contains("P3-7"), "{err}");
-
-        // `--plugin-dir .` 形式的相对路径也能取到目录名
-        let rel = plugin_dir.join(".");
-        pack_plugin_v3(&rel, &base.join("demo.kgpg"), &pkg).unwrap();
+        let output = base.join("renamed-artifact.kgpg");
+        pack_plugin_v3(&plugin_dir, &output, &pkg).unwrap();
+        assert!(output.is_file());
 
         std::fs::remove_dir_all(&base).unwrap();
     }

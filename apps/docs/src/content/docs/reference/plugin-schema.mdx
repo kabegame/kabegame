@@ -49,8 +49,8 @@ plugin-name.kgpg
 | 字段 | 类型 | 必填 | 最低版本 | 说明 |
 |---|---|---|---|---|
 | `kbPackageVersion` | number | 是 | 4.3.0 | 清单格式版本，**必须 ≥3**。当前生态一律 `3`。 |
-| `kbBackend` | string | 是 | 4.3.0 | 脚本后端：`"v8"` 或 `"webview"`。`"rhai"` 报「Rhai 后端已停止支持」；其它值报错。 |
-| `kbBaseUrl` | string | 否 | 4.3.0 | 基础 URL。运行时作为 `common.base_url` 注入；WebView 后端还用作任务窗口初始 URL。空串合法。 |
+| `kbBackend` | string | 是 | 4.3.0 | 脚本后端：`"v8"` 或 `"webview"`；其它值报错。 |
+| `kbBaseUrl` | string | 否 | 4.3.0 | 基础 URL。运行时作为 `common.baseUrl` 注入；WebView 后端还用作任务窗口初始 URL。空串合法。 |
 | `kbConfig` | array | 否 | 4.3.0 | 采集对话框表单变量定义数组，顺序即展示顺序。见 [kbConfig 变量](#kbconfig-变量)。 |
 | `kbLabels` | array | 否 | <Badge text="4.4.0" variant="note" /> | 插件声明的标签数组。见 [kbLabels](#kblabels)。 |
 | `kbIcon` | string | 否 | 4.3.0 | 包内图标 PNG 相对路径。 |
@@ -209,7 +209,7 @@ string/date/path 的空串、未选择的 options、清空的数字、空 list�
   "kbPackageVersion": 3,                  // 必须 ≥3
   "kbBackend": "v8",                     // v8 | webview
   "main": "dist/main.js",                 // v8: dist/main.js；webview: crawl.js
-  "kbBaseUrl": "https://example.com",     // → common.base_url
+  "kbBaseUrl": "https://example.com",     // → common.baseUrl
   "kbLabels": [{ "id": "auth.needCookie" }],  // 4.4.0+
   "kbConfig": [ /* 变量定义 */ ],
   "kbIcon": "icon.png",

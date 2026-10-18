@@ -76,6 +76,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 ```bash
 deno task --cwd src-crawler-plugins package --out-dir ../.kabegame/debug/data/plugins-directory        # 打包所有插件到开发目录
 deno task --cwd src-crawler-plugins generate-index  # 重新生成插件商店索引
+deno task --cwd src-crawler-plugins check           # 类型检查全部插件源码（twodwallpapers 用 @ts-nocheck）
 ```
 
 ## 命令

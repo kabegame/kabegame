@@ -90,7 +90,8 @@ ID 发布后就不要再改：改了去掉前缀后的 `name`，应用会把它�
 kabegame-cli plugin pack --plugin-dir ./kabegame-plugin-my-plugin --output ./my-plugin.kgpg
 ```
 
-`plugin pack` 要求目录名等于 `package.json` 的 `name`，输出文件名（去掉 `.kgpg`）等于插件 ID。
+`plugin pack` 不限制源码目录名或输出文件名。插件身份只取自 `package.json` 的 `name`；示例沿用
+`kabegame-plugin-<ID>/` 与 `<ID>.kgpg`，只是为了让源码和产物更容易辨认。
 
 产物是 KGPG v3 格式：固定头部（内嵌图标）加 ZIP，详见 [插件格式（.kgpg）](/dev/format/)。
 

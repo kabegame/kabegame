@@ -53,6 +53,12 @@ const wantVideo = Kabegame.vars.download_video === true;
 
 `Kabegame.vars` 是 frozen 对象。可见但未填写的非 boolean 字段值为 `null`；被 `when` 隐藏的字段不会出现在对象中，读取结果为 `undefined`；boolean 始终是 `true` 或 `false`。因此可选输入宜写成 `String(Kabegame.vars.keyword ?? "")`，不要直接对它调用 `.trim()`。完整规则见 [插件清单字段 · 取值语义](/reference/plugin-schema/#取值语义)。
 
+除 `kbConfig` 值外，宿主还会写入 `baseUrl`（来自 `package.json` 的 `kbBaseUrl`，空串为 `null`），与 V8 的 `common.baseUrl` 同名同义；`kbConfig` 里的同名键会被宿主覆盖。
+
+```js
+const baseUrl = Kabegame.vars.baseUrl ?? "https://example.com";
+```
+
 ---
 
 ## 导航：真实浏览器跳转 + page_stack

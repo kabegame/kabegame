@@ -94,15 +94,11 @@
   - 适用场景：调度、注入、抓取流程排查与扩展；新增内建插件或排查网页收集（发现不全、Cookie/UA 未注入、WebView 任务下载丢登录态、快照缺失）；排查 JS 任务并发、窗口创建/销毁、IPC 路由、Task 注册表状态、`Kabegame.downloadImage` 对 blob/data/MSE 的分流、`Kabegame.onNativeDownload` 每页注册与 VFS 路径导入、会话 VFS 分块写、task-vfs 提交、DRM 拒绝与显式合流。
 
 - [crawler/PIXIV_METADATA.md](crawler/PIXIV_METADATA.md)
-  - 主题：Pixiv Rhai 插件 `metadata.body` 白名单入库与 DB 一次性迁移。
+  - 主题：Pixiv 插件 `metadata.body` 白名单入库与 DB 一次性迁移。
   - 适用场景：排查画册列表因 metadata 过大变慢、扩展 EJS 所需字段。
 
-- [crawler/PIXIV_RANKING_RHAI.md](crawler/PIXIV_RANKING_RHAI.md)（历史，Rhai 已移除）
-  - 主题：Pixiv 排行榜模式的 `config.json` 三维度、`ranking_date`、按接口 `next` 分页与 `warn`。
-  - 适用场景：扩展/排查排行榜爬取、R18 与 `x-user-id`、理解列表分页语义。
-
 - [crawler/PLUGIN_DATA.md](crawler/PLUGIN_DATA.md)
-  - 主题：爬虫插件私有 JSON 缓存 `plugin_data`，含 Rhai 读写 API、`description.ejs` 只读 bridge、隔离和卸载清理语义。
+  - 主题：爬虫插件私有 JSON 缓存 `plugin_data`，含 V8 读写 API、`description.ejs` 只读 bridge、隔离和卸载清理语义。
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)

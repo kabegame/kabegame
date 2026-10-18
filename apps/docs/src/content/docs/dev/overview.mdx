@@ -3,15 +3,10 @@ title: 插件开发指南
 description: 从零开始开发 Kabegame 爬虫插件，了解目录骨架、开发循环与发布方式。
 ---
 
-import { Badge } from '@astrojs/starlight/components';
 
 Kabegame 的抓取能力全部由插件提供。一个插件是一个自包含的文件夹，描述「去哪里取图」以及「怎么把图取回来」。本页帮你在 10 分钟内跑通一个插件的开发循环：从用 `kabegame-cli` 生成模板，到在运行中的 Kabegame 看到自己的改动。全程不需要克隆 Kabegame 的源码仓库。
 
 插件用 **JavaScript / TypeScript** 编写，打包成 `.kgpg` 文件分发。脚本后端有两个：**V8**（默认，嵌入式 JS 引擎）与 **WebView**（真实浏览器窗口）。
-
-:::caution[Rhai 已移除]
-早期版本用 Rhai 脚本（`crawl.rhai`）。**Rhai 后端自 <Badge text="4.3.0" variant="note" /> 起已停止支持**：`kbBackend: "rhai"` 会在加载时报「Rhai 后端已停止支持，请更新该插件」。现存所有插件都必须是 V8 或 WebView。本文档不再涉及 Rhai。
-:::
 
 ## 什么是插件
 
@@ -108,7 +103,7 @@ V8 插件导出 `async function crawl(common, custom)`，宿主能力通过全�
 
 ```ts
 export async function crawl(common, custom) {
-  const baseUrl = common.base_url ?? "https://example.com";
+  const baseUrl = common.baseUrl ?? "https://example.com";
   await Kabegame.to(`${baseUrl}/gallery`);
 
   const doc = await Kabegame.currentDocument();

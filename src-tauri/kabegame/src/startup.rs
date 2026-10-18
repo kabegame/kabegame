@@ -67,6 +67,17 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
                     serde_json::to_value(&run.params.config).unwrap_or_default(),
                 )
             };
+        let mut vars = vars;
+        if let Some(object) = vars.as_object_mut() {
+            object.insert(
+                "baseUrl".to_string(),
+                if base_url.trim().is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(base_url.to_string())
+                },
+            );
+        }
         let vars_json = serde_json::to_string(&vars)
             .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
         let task_id = task_id.to_string();

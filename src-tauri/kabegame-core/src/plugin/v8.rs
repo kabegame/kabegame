@@ -135,7 +135,7 @@ impl JsPluginRuntime {
     /// - The file must be self-contained. `module_loader = None`, so any
     ///   runtime `import` fails instead of resolving SDK or node_modules files.
     /// - `crawl` may be sync or async. Top-level await is supported.
-    /// - `common` contains host-owned stable config such as `base_url`; `custom`
+    /// - `common` contains host-owned stable config such as `baseUrl`; `custom`
     ///   is the plugin's merged user config and preserves JSON `null`.
     /// - The return value is ignored. Effects are produced through host ops.
     pub async fn run_crawl(
@@ -287,7 +287,7 @@ fn build_crawl_configs(
     let mut common = JsonMap::new();
     let base_url = plugin.base_url.trim();
     common.insert(
-        "base_url".to_string(),
+        "baseUrl".to_string(),
         if base_url.is_empty() {
             JsonValue::Null
         } else {
@@ -422,8 +422,8 @@ mod tests {
     async fn run_crawl_uses_prelude_common_custom_and_timer() {
         let entry = r#"
             export async function crawl(common, custom) {
-                if (common.base_url !== "https://example.test") {
-                    throw new Error("bad common base_url: " + common.base_url);
+                if (common.baseUrl !== "https://example.test") {
+                    throw new Error("bad common baseUrl: " + common.baseUrl);
                 }
                 if (custom.page !== 2 || custom.keep !== null) {
                     throw new Error("bad custom config");
@@ -446,7 +446,7 @@ mod tests {
         rt.run_crawl(
             "plugin-test",
             entry,
-            json!({ "base_url": "https://example.test" }),
+            json!({ "baseUrl": "https://example.test" }),
             json!({ "page": 2, "keep": null }),
         )
         .await
@@ -826,7 +826,7 @@ mod tests {
                 PluginBackend::V8,
                 r#"
                     export async function crawl(common, custom) {
-                        if (common.base_url !== "https://example.test") throw new Error("bad base");
+                        if (common.baseUrl !== "https://example.test") throw new Error("bad base");
                         if (custom.page !== 3 || custom.keep !== null) throw new Error("bad custom");
                         await new Promise((resolve) => setTimeout(resolve, 1));
                     }
