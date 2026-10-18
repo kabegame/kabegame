@@ -64,6 +64,7 @@
   "loadImagesFailed": "이미지 로드 실패",
   "viewDownloadedImages": "다운로드한 이미지 보기",
   "recordDetails": "상세",
+  "addToHome": "홈 화면에 추가",
   "recordName": "이름",
   "recordNamePlaceholder": "사용자 지정 이름 입력 (선택)",
   "entryPath": "진입 경로",

@@ -1,5 +1,45 @@
 # v4.5.2 regression
 
+## Android 畅游桌面快捷方式
+
+站点卡片菜单与畅游工具栏「更多」菜单新增「添加到桌面」，经 `ShortcutManagerCompat.requestPinShortcut`
+固定。快捷方式 intent 为 `MainActivity` + `app.kabegame.action.OPEN_SURF` + `host`；`SurfShortcuts` 暂存冷启动
+到达的 host，Rust 插件 setup 注册 `listenShortcuts` Channel 后投递，`open_from_shortcut` 只认已有记录并等主窗口
+建好再调 `surf_start_session`。图标用记录的 favicon（解不出画首字母），抓到 favicon / 改名后刷新已固定的快捷方式，
+删除记录后禁用；已固定时只刷新并提示「已存在于桌面上」。冷启动投递早于 `init_globals`，`open_from_shortcut`
+先等主窗口再访问 Storage（首版先查记录导致 panic、停在画廊）。`onCreate` 只在 `savedInstanceState == null` 时处理 intent，最近任务重放的快捷方式 intent 忽略。
+`surf_start_session` 的建窗收进块作用域（泛型 runtime 下 builder 非 `Send`，否则不能在 spawn 里调用）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 静态检查 | Android NDK | `deno task check -c kabegame --mode android` | vue-tsc 与 aarch64 `cargo check` 无 error | 已运行：成功 |
+| [x] | 桌面静态检查 | Linux standard | `deno task check -c kabegame` | `surf_update_name` / `surf_delete_record` 改为泛型签名后桌面照常编译 | 已运行：成功 |
+| [x] | Kotlin 编译 | Android SDK | `gradlew :app:compileUniversalDebugKotlin` | `SurfShortcuts` / `SurfPlugin` / `SurfToolbar` / `MainActivity` 编译通过 | 已运行：成功 |
+| [x] | 热启动打开（真机图标） | vivo V2429A / Android 16，dev 包 | 应用在后台时点桌面 x.com 图标 | 进入 `https://x.com/`；抓到 favicon 后调 `updateShortcut` | 已用 adb 实测 |
+| [x] | 工具栏菜单项 | 同上 | 畅游「更多」菜单 | 出现「ホーム画面に追加」，点击调 `pinShortcut`、弹 Toast，快捷方式不重复 | 已实测；发现 Toast 两行截断，已缩短文案 |
+| [ ] | 重复添加提示 | 同上 | 已固定的站点再点「添加到桌面」 | 不弹系统确认框，Toast「已存在于桌面上」 | |
+| [ ] | 卡片菜单固定 | Android（原生 Pixel 类桌面） | 畅游页长按站点卡片 →「添加到桌面」 | 弹系统确认框，同意后桌面出现带 favicon 的图标，名称为站点名或 host；同时有长 Toast 提示 | |
+| [ ] | 工具栏固定 | Android | 畅游内容页右上角「更多」→「添加到桌面」 | 同上；失败时页内红色 toast | |
+| [ ] | 热启动打开 | Android（应用在后台，另一站点畅游中） | 点桌面快捷方式 | 旧畅游关闭，进入该站点的 `root_url`，Cookie / 桌面版设置沿用记录；返回键回到主界面 | |
+| [ ] | 冷启动打开 | Android（划掉应用后） | 点桌面快捷方式 | 主界面短暂出现后进入该站点畅游；前端畅游页显示该站点为畅游中 | |
+| [ ] | 重放保护 | Android | 从快捷方式进入后旋转屏幕；退出到主界面后从最近任务切回 | 不会再次打开畅游 | |
+| [ ] | 图标兜底与刷新 | Android | 对从未打开过（无 favicon）的站点固定，再进入一次该站点 | 先显示首字母图标，favicon 抓到后桌面图标更新 | |
+| [ ] | 改名同步 | Android | 在站点详情修改名称 | 已固定快捷方式的标签随之更新 | |
+| [ ] | 删除记录 | Android | 删除已固定的站点记录后点桌面图标 | 图标变灰，点击提示「该畅游站点已被删除」；重新添加同站点后可再次固定 | |
+| [ ] | 国产 ROM 权限 | 小米 / OPPO / vivo（默认关闭快捷方式权限） | 「添加到桌面」 | 无确认框时也会弹 Toast 提示去设置开启；开启后再次添加成功 | |
+| [ ] | 伪造 intent | Android（adb） | `adb shell am start -n <pkg>/app.kabegame.MainActivity -a app.kabegame.action.OPEN_SURF --es host not-exist.example` | 不打开任何畅游页 | |
+| [ ] | 桌面端不显示 | Windows / macOS / Linux | 右键站点卡片 | 菜单中没有「添加到桌面」 | |
+
+## Android 图片详情布局
+
+图片详情窄屏按“基本数据、图片标签、插件详情、原生元数据”纵向排列，展开的插件详情固定为与弹窗一致的 `90vh` 高度（收起后只保留标题行）；宽屏按同一顺序横向排列。标签面板复用预览侧栏的按需查询与编辑能力，点击标签导航后关闭详情弹窗。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 窄屏顺序与高度 | Android dev / CDP | 打开带插件详情模板的图片详情并滚动到插件区 | 顺序为基本数据、标签、插件详情、原生元数据；弹窗与插件列高度均为 `720px`（当前 `800px` 视口的 `90vh`），插件 iframe 随面板撑高 | 已用 `kabegame-chromium` 实测：iframe 约 `656px`，改动前最小高度仅 `160px` |
+| [ ] | 标签操作 | Android dev | 在详情中添加、移除、复制并点击一个图片标签 | 状态即时更新；点击标签进入对应画册并关闭详情弹窗 | |
+| [ ] | 宽屏横排 | Android 平板横屏（宽度 ≥ 768 CSS px） | 打开同一图片详情 | 四个面板按同一顺序横向排列，插件详情不套用窄屏 `90vh` 高度 | |
+
 ## Android 预置插件复制（`tauri-plugin-pathes` `seedBundledPlugins`）
 
 Android 的 `resources/plugins/*.kgpg` 由 tauri-cli 注入 APK `assets/resources/plugins/`，此前只打包不复制。
@@ -7,12 +47,14 @@ Android 的 `resources/plugins/*.kgpg` 由 tauri-cli 注入 APK `assets/resource
 Kotlin `PathesPlugin.seedBundledPlugins` 在后台线程比较插件目录里的 `.bundled-plugins-version`
 （`versionName+versionCode+lastUpdateTime`）与当前安装包，不一致才逐个经 `.tmp` + rename 覆盖复制，
 全部成功后写入新标记；有失败则不写标记，下次启动重试。桌面 / web 仍走原 `PluginManager::seed_bundled_plugins` 移动逻辑。
+`ModePlugin.packagePlugins` 在 Android 模式（dev 与 build）下改为打包到 `src-tauri/kabegame/resources/plugins`，不再写宿主机的 dev data 目录。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
 | [x] | 桌面静态检查 | Linux standard | `check-kabegame` driver `--skip vue` | `init_kgpg_plugin` 的平台签名差异不影响桌面 | 已运行：0 error |
 | [x] | Kotlin 编译 | Android SDK | `gradle :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `PathesPlugin.seedBundledPlugins` 编译通过 | 已运行：成功 |
+| [ ] | Android dev 打包目录 | 宿主 + Android dev | `deno task dev --mode android` | 日志为「打包插件到安卓资源目录」，`.kgpg` 出现在 `src-tauri/kabegame/resources/plugins`；桌面 dev 仍写 `.kabegame/debug/data/plugins-directory` | |
 | [ ] | 首次安装 | Android（清除数据后安装） | 启动应用进入插件页 | 预置插件全部出现在已安装列表；`plugins-directory` 下有 `.bundled-plugins-version`，无 `.tmp` 残留 | logcat 有 `seed_bundled_plugins: 版本 …，复制 N 个，失败 0 个` |
 | [ ] | 同版本重启 | Android | 卸载一个预置插件后冷启动 | 该插件不再被复制回来；日志无复制记录 | 标记一致直接跳过 |
 | [ ] | 应用更新 | Android | 覆盖安装新包（同版本号的 dev 包也算）后冷启动 | 重新复制，同名插件被预置版本覆盖，此前卸载的预置插件重新出现 | `lastUpdateTime` 变化触发 |

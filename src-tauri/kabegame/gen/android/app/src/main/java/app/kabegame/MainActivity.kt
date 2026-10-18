@@ -125,7 +125,8 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
       enableEdgeToEdge()
       pinMainActivityId()
       super.onCreate(savedInstanceState)
-      handleIntent(intent)
+      // 重建（配置变化 / 进程回收后恢复）会带回同一个 intent，不能再次打开畅游或导入。
+      if (savedInstanceState == null) handleIntent(intent)
       android.util.Log.i("Kabegame", "MainActivity.onCreate done")
     } catch (e: Throwable) {
       android.util.Log.e("Kabegame", "MainActivity.onCreate crash", e)
@@ -331,6 +332,14 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
       
       val action = intent.action
       val data = intent.data
+
+      // 桌面快捷方式打开畅游站点。从最近任务恢复时系统重放最初的 intent，要忽略。
+      if (SurfShortcuts.ACTION_OPEN_SURF == action) {
+          val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+          val host = intent.getStringExtra(SurfShortcuts.EXTRA_HOST)
+          if (!fromHistory && !host.isNullOrBlank()) SurfShortcuts.deliver(host)
+          return
+      }
       
       // 处理 ACTION_VIEW（从文件管理器或其他应用打开）
       if (Intent.ACTION_VIEW == action && data != null) {

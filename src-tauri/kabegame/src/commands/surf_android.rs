@@ -52,6 +52,7 @@ struct SurfToolbarTexts {
     close_popup: String,
     more: String,
     desktop_site: String,
+    add_to_home: String,
 }
 
 #[derive(Serialize)]
@@ -96,6 +97,40 @@ struct CookieResponse {
     cookie: String,
 }
 
+#[derive(Serialize)]
+struct ShortcutListenArgs {
+    events: Channel<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ShortcutOpenEvent {
+    host: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutArgs {
+    host: String,
+    label: String,
+    /// favicon 的 base64；没有时 Kotlin 画首字母图标。
+    icon: Option<String>,
+    hint: String,
+    already_pinned_hint: String,
+}
+
+#[derive(Serialize)]
+struct ShortcutDisableArgs {
+    host: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PinShortcutResponse {
+    supported: bool,
+    requested: bool,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 enum SurfContentEvent {
@@ -118,6 +153,8 @@ enum SurfContentEvent {
     DesktopModeChanged {
         desktop: bool,
     },
+    /// 「更多」菜单里的「添加到桌面」。
+    PinShortcut,
 }
 
 #[derive(serde::Deserialize)]
@@ -143,6 +180,28 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
                         kabegame_core::plugin::v8::set_android_webview_user_agent(&res.user_agent)
                     }
                     Err(e) => eprintln!("[surf] 读取 WebView 默认 UA 失败: {e}"),
+                }
+            });
+            // 桌面快捷方式点开的站点：冷启动时 intent 早于这里到达，Kotlin 暂存后在注册时投递。
+            let shortcut_handle = handle.clone();
+            let shortcut_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let events = Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(json) = body {
+                        if let Ok(event) = serde_json::from_str::<ShortcutOpenEvent>(&json) {
+                            let app = shortcut_app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                open_from_shortcut(app, event.host).await;
+                            });
+                        }
+                    }
+                    Ok(())
+                });
+                if let Err(e) = shortcut_handle
+                    .run_mobile_plugin_async::<()>("listenShortcuts", ShortcutListenArgs { events })
+                    .await
+                {
+                    eprintln!("[surf] 注册桌面快捷方式监听失败: {e}");
                 }
             });
             app.manage(SurfAndroid(handle));
@@ -213,6 +272,7 @@ fn toolbar_texts() -> SurfToolbarTexts {
         close_popup: t!("surf.toolbar.closePopup"),
         more: t!("surf.toolbar.more"),
         desktop_site: t!("surf.toolbar.desktopSite"),
+        add_to_home: t!("surf.toolbar.addToHome"),
     }
 }
 
@@ -296,6 +356,15 @@ fn on_content_event<R: Runtime>(
                 }
             }
             let _ = Storage::global().set_surf_record_desktop_mode(&session.record_id, desktop);
+        }
+        SurfContentEvent::PinShortcut => {
+            let (app, host) = (app.clone(), session.host.clone());
+            tauri::async_runtime::spawn(async move {
+                // 成功时 Kotlin 已弹系统 Toast；失败提示放进内容页。
+                if let Err(error) = pin_shortcut(&app, &host).await {
+                    surf_toast_for_host(&app, &host, &error, "failed");
+                }
+            });
         }
         SurfContentEvent::PageDownload {
             url,
@@ -462,38 +531,41 @@ pub async fn surf_start_session<R: Runtime>(
         .map_err(|e| format!("读取主窗口 Activity 名失败: {e}"))?;
 
     // 内容页直接作为 Tauri 主 webview：注入脚本、on_page_load、按 label 认会话的命令与桌面一致。
-    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed.clone()))
-        .activity_name("SurfActivity")
-        .created_by_activity_name(creator_activity)
-        // 超过阈值（JSON 8 KiB / raw 1 KiB）的 invoke 响应与 Channel 消息要靠 fetch
-        // `<scheme>://ipc.localhost` 取。安卓默认 http，在 https 页面里属于混合内容，改用 https。
-        .use_https_scheme(true);
-    for script in surf_initialization_scripts() {
-        builder = builder.initialization_script(script);
-    }
-    // 桌面模式：首个请求就带桌面 UA。强制跳应用商店 / 下发 apk 往往发生在首个请求，
-    // 等 Kotlin 收到 attach 再换 UA 已经晚了一步。
     let desktop_user_agent = kabegame_core::plugin::v8::android_desktop_user_agent();
-    if record.desktop_mode {
-        if let Some(user_agent) = desktop_user_agent.as_deref() {
-            builder = builder.user_agent(user_agent);
+    // builder 放进块作用域：泛型 runtime 下它不是 Send，不能活过后面的 await（快捷方式入口在 spawn 里调用本函数）。
+    let window = {
+        let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed.clone()))
+            .activity_name("SurfActivity")
+            .created_by_activity_name(creator_activity)
+            // 超过阈值（JSON 8 KiB / raw 1 KiB）的 invoke 响应与 Channel 消息要靠 fetch
+            // `<scheme>://ipc.localhost` 取。安卓默认 http，在 https 页面里属于混合内容，改用 https。
+            .use_https_scheme(true);
+        for script in surf_initialization_scripts() {
+            builder = builder.initialization_script(script);
         }
-    }
-    let builder = builder
-        .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
-        .on_page_load({
-            let app = app.clone();
-            let label = label.clone();
-            move |_webview, payload| {
-                if payload.event() == PageLoadEvent::Started {
-                    // 整页导航会销毁内容脚本：结束其一键下载 run，工具栏停止转圈。
-                    super::surf_collect::on_content_page_started(&app, &label);
-                }
+        // 桌面模式：首个请求就带桌面 UA。强制跳应用商店 / 下发 apk 往往发生在首个请求，
+        // 等 Kotlin 收到 attach 再换 UA 已经晚了一步。
+        if record.desktop_mode {
+            if let Some(user_agent) = desktop_user_agent.as_deref() {
+                builder = builder.user_agent(user_agent);
             }
-        });
-    let window = builder
-        .build()
-        .map_err(|e| format!("创建畅游 Activity 失败: {e}"))?;
+        }
+        let builder = builder
+            .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
+            .on_page_load({
+                let app = app.clone();
+                let label = label.clone();
+                move |_webview, payload| {
+                    if payload.event() == PageLoadEvent::Started {
+                        // 整页导航会销毁内容脚本：结束其一键下载 run，工具栏停止转圈。
+                        super::surf_collect::on_content_page_started(&app, &label);
+                    }
+                }
+            });
+        builder
+            .build()
+            .map_err(|e| format!("创建畅游 Activity 失败: {e}"))?
+    };
 
     let session = AndroidSurfSession {
         host: host.clone(),
@@ -575,13 +647,122 @@ pub async fn surf_start_session<R: Runtime>(
 
     let record_id_for_icon = record.id.clone();
     let host_for_icon = host.clone();
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(icon) = fetch_favicon(&host_for_icon).await {
             let _ = Storage::global().update_surf_record_icon(&record_id_for_icon, &icon);
+            // 固定时 favicon 可能还没抓到（用的是首字母图标）：抓到后刷新已固定的快捷方式。
+            refresh_shortcut(&app, &host_for_icon).await;
         }
     });
 
     serde_json::to_value(record).map_err(|e| e.to_string())
+}
+
+/// 快捷方式标签：有自定义名称用名称，否则用 host。
+fn shortcut_args(record: &kabegame_core::storage::SurfRecord) -> ShortcutArgs {
+    use base64::Engine;
+    let name = record.name.trim();
+    ShortcutArgs {
+        host: record.host.clone(),
+        label: if name.is_empty() { record.host.clone() } else { name.to_string() },
+        icon: record
+            .icon
+            .as_deref()
+            .filter(|icon| !icon.is_empty())
+            .map(|icon| base64::engine::general_purpose::STANDARD.encode(icon)),
+        hint: kabegame_i18n::t!("surf.shortcut.requested"),
+        already_pinned_hint: kabegame_i18n::t!("surf.shortcut.alreadyPinned"),
+    }
+}
+
+/// 把站点固定到桌面。只认已有记录：快捷方式只带 host，打开时按记录的 `root_url` 进入。
+async fn pin_shortcut<R: Runtime>(app: &AppHandle<R>, host: &str) -> Result<(), String> {
+    let host = normalize_surf_host(host);
+    let record = Storage::global()
+        .get_surf_record_by_host(&host)?
+        .ok_or_else(|| "畅游记录不存在".to_string())?;
+    let plugin = app.state::<SurfAndroid<R>>().0.clone();
+    let response = plugin
+        .run_mobile_plugin_async::<PinShortcutResponse>("pinShortcut", shortcut_args(&record))
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.supported {
+        return Err(kabegame_i18n::t!("surf.shortcut.unsupported"));
+    }
+    if !response.requested {
+        return Err(kabegame_i18n::t!("surf.shortcut.failed"));
+    }
+    Ok(())
+}
+
+/// 站点名称或图标变化后，刷新已固定的快捷方式（未固定时 Kotlin 什么也不做）。
+pub(crate) async fn refresh_shortcut<R: Runtime>(app: &AppHandle<R>, host: &str) {
+    let Ok(Some(record)) = Storage::global().get_surf_record_by_host(&normalize_surf_host(host))
+    else {
+        return;
+    };
+    let plugin = app.state::<SurfAndroid<R>>().0.clone();
+    if let Err(e) = plugin
+        .run_mobile_plugin_async::<()>("updateShortcut", shortcut_args(&record))
+        .await
+    {
+        eprintln!("[surf] 刷新桌面快捷方式失败: {e}");
+    }
+}
+
+/// 站点记录删除后禁用桌面快捷方式（应用删不掉桌面图标，点击时系统显示提示）。
+pub(crate) async fn disable_shortcut<R: Runtime>(app: &AppHandle<R>, host: &str) {
+    let plugin = app.state::<SurfAndroid<R>>().0.clone();
+    if let Err(e) = plugin
+        .run_mobile_plugin_async::<()>(
+            "disableShortcut",
+            ShortcutDisableArgs {
+                host: normalize_surf_host(host),
+                message: kabegame_i18n::t!("surf.shortcut.recordDeleted"),
+            },
+        )
+        .await
+    {
+        eprintln!("[surf] 禁用桌面快捷方式失败: {e}");
+    }
+}
+
+/// 桌面快捷方式点开站点：等主窗口建好（冷启动）后按记录的 `root_url` 开始畅游。
+async fn open_from_shortcut<R: Runtime>(app: AppHandle<R>, host: String) {
+    // 冷启动时投递早于 `init_globals`：先等主窗口（它在全局初始化之后才创建），之后 Storage 才可用；
+    // `surf_start_session` 也依赖主窗口的 Activity 名建窗。
+    let mut ready = false;
+    for _ in 0..100 {
+        if app.get_webview_window("main").is_some() {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    if !ready {
+        eprintln!("[surf] 等待主窗口超时，放弃从桌面快捷方式打开 {host}");
+        return;
+    }
+    let host = normalize_surf_host(&host);
+    let record = match Storage::global().get_surf_record_by_host(&host) {
+        Ok(Some(record)) => record,
+        // 记录已删除时快捷方式本该被禁用；外部应用伪造的 intent 同样在这里止步。
+        Ok(None) => return,
+        Err(e) => {
+            eprintln!("[surf] 快捷方式读取畅游记录失败: {e}");
+            return;
+        }
+    };
+    if let Err(e) = surf_start_session(app, record.root_url).await {
+        eprintln!("[surf] 从桌面快捷方式开始畅游失败: {e}");
+    }
+}
+
+/// 前端站点菜单的「添加到桌面」。
+#[tauri::command]
+pub async fn surf_pin_shortcut<R: Runtime>(app: AppHandle<R>, host: String) -> Result<(), String> {
+    pin_shortcut(&app, &host).await
 }
 
 #[tauri::command]

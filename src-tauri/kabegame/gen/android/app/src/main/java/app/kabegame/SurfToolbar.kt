@@ -24,7 +24,7 @@ import android.widget.ProgressBar
  * 全部操作直接落在 `RustWebView` 上，不经 Rust 往返；只有一键下载按钮发给 Rust
  * （`collectToggle`），运行态由 Rust 经 `SurfPlugin.setCollectRunning` 回推。
  *
- * 「在浏览器打开」与「桌面版网站」收进「更多」菜单：工具栏已有 6 个图标按钮，
+ * 「在浏览器打开」「桌面版网站」与「添加到桌面」收进「更多」菜单：工具栏已有 6 个图标按钮，
  * 地址栏需要尽量宽；桌面版网站的勾选状态由本类维护（Kotlin 是显示状态权威，
  * 记录是持久化权威）。
  */
@@ -36,6 +36,7 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
   var onCollect: (() -> Unit)? = null
   var onOpenInBrowser: ((String) -> Unit)? = null
   var onToggleDesktop: ((Boolean) -> Unit)? = null
+  var onPinShortcut: (() -> Unit)? = null
   var onClose: (() -> Unit)? = null
 
   private val theme = SurfTheme(context)
@@ -72,12 +73,14 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
   private var currentUrl = ""
   private var openLabel = ""
   private var desktopLabel = ""
+  private var pinShortcutLabel = ""
   private var desktopMode = false
   private var desktopAvailable = false
 
   private companion object {
     const val MENU_OPEN_IN_BROWSER = 1
     const val MENU_DESKTOP = 2
+    const val MENU_PIN_SHORTCUT = 3
   }
 
   init {
@@ -147,6 +150,7 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     more.contentDescription = texts.more
     openLabel = texts.openInBrowser
     desktopLabel = texts.desktopSite
+    pinShortcutLabel = texts.addToHome
     close.contentDescription = texts.close
     collectCancellation = texts.cancel
   }
@@ -211,10 +215,12 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
           isChecked = desktopMode
         }
       }
+      menu.add(0, MENU_PIN_SHORTCUT, 2, pinShortcutLabel)
       setOnMenuItemClickListener { item ->
         when (item.itemId) {
           MENU_OPEN_IN_BROWSER -> onOpenInBrowser?.invoke(currentUrl)
           MENU_DESKTOP -> onToggleDesktop?.invoke(!desktopMode)
+          MENU_PIN_SHORTCUT -> onPinShortcut?.invoke()
         }
         true
       }

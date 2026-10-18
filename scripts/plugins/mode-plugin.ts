@@ -424,12 +424,13 @@ export class ModePlugin extends BasePlugin {
   // 打包爬虫插件：
   // - dev：写入 data/plugins-directory（不打进安装包 resources，即时对开发中的
   //   应用可见）
-  // - build（非 Android）：写入 resources/plugins/，随 tauri.conf.json 的
+  // - Android（dev 与 build）：写入 resources/plugins/，tauri-cli 把 resources/
+  //   注入 APK assets，启动时按安装包版本标记复制进设备上的用户插件目录（见
+  //   tauri_plugin_pathes::seed_bundled_plugins）。宿主机的 data 目录对设备不可见。
+  // - build（桌面）：写入 resources/plugins/，随 tauri.conf.json 的
   //   bundle.resources 打进安装包；init_kgpg_plugin() 在应用启动时把这里的 .kgpg
   //   "移动"进用户插件目录（见 kabegame-core/src/plugin/mod.rs 的
-  //   PluginManager::seed_bundled_plugins）。Android 不在这里打包，但 tauri-cli
-  //   会把 resources/ 现有内容注入 APK assets，启动时按安装包版本标记复制进用户
-  //   插件目录（见 tauri_plugin_pathes::seed_bundled_plugins）。
+  //   PluginManager::seed_bundled_plugins）。
   // - start：不打包插件；正式环境插件从 GitHub Releases 下载
   packagePlugins(bs: BuildSystem): void {
     // 显式跳过插件打包(rspack + kabegame-cli 均为 JS/宿主工具链步骤)。
@@ -444,7 +445,17 @@ export class ModePlugin extends BasePlugin {
     }
     const cmd = bs.context.cmd;
     const comp = bs.context.component!;
-    if (comp.isMain && cmd.isDev) {
+    if (comp.isMain && (cmd.isDev || cmd.isBuild) && this.mode!.isAndroid) {
+      this.log(
+        chalk.blue(
+          "打包插件到安卓资源目录: deno task package --out-dir ../src-tauri/kabegame/resources/plugins",
+        ),
+      );
+      run("package", ["--out-dir", "../src-tauri/kabegame/resources/plugins"], {
+        bin: "deno-task",
+        cwd: CRAWLER_PLUGINS_DIR,
+      });
+    } else if (comp.isMain && cmd.isDev) {
       this.log(
         chalk.blue(
           "打包插件到开发 data 目录: deno task package --out-dir ../.kabegame/debug/data/plugins-directory",
@@ -471,7 +482,7 @@ export class ModePlugin extends BasePlugin {
         bin: "deno-task",
         cwd: CRAWLER_PLUGINS_DIR,
       });
-    } else if (comp.isMain && cmd.isBuild && !this.mode!.isAndroid) {
+    } else if (comp.isMain && cmd.isBuild) {
       // 注意：本步骤在 tauri/cargo 编译 kabegame 主程序之前执行（build-system.ts
       // 的 beforeBuild hook 早于实际编译调用），因此依赖 kabegame-cli release
       // sidecar（target/release/kabegame-cli[.exe]）已提前构建好（package-plugin.ts

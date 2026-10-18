@@ -64,6 +64,7 @@
   "loadImagesFailed": "加载图片失败",
   "viewDownloadedImages": "查看下载图片",
   "recordDetails": "详情",
+  "addToHome": "添加到桌面",
   "recordName": "名称",
   "recordNamePlaceholder": "输入自定义名称（可选）",
   "entryPath": "入口路径",

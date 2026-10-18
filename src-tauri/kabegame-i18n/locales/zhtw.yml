@@ -122,6 +122,13 @@ surf:
     closePopup: "關閉彈出視窗"
     more: "更多"
     desktopSite: "電腦版網站"
+    addToHome: "加入主畫面"
+  shortcut:
+    requested: "未出現圖示時，請在系統設定中允許建立桌面捷徑"
+    alreadyPinned: "已存在於主畫面上"
+    unsupported: "目前的桌面不支援加入捷徑"
+    failed: "加入桌面捷徑失敗"
+    recordDeleted: "此暢遊站點已被刪除"
   download:
     unsupportedType: "不支援的下載類型：暢遊只接收圖片和影片"
     unsupportedScheme: "不支援的下載網址"

@@ -64,6 +64,7 @@
   "loadImagesFailed": "Failed to load images",
   "viewDownloadedImages": "View downloaded images",
   "recordDetails": "Details",
+  "addToHome": "Add to Home screen",
   "recordName": "Name",
   "recordNamePlaceholder": "Enter a custom name (optional)",
   "entryPath": "Entry path",

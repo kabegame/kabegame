@@ -293,13 +293,29 @@ pub async fn surf_update_root_url(
 }
 
 #[tauri::command]
-pub async fn surf_update_name(host: String, name: String) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_update_name(host, name)
+#[cfg_attr(not(target_os = "android"), allow(unused_variables))]
+pub async fn surf_update_name<R: Runtime>(
+    app: AppHandle<R>,
+    host: String,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    let result = kabegame_core::commands::surf::surf_update_name(host.clone(), name)?;
+    // 已固定到桌面的快捷方式跟着改名。
+    #[cfg(target_os = "android")]
+    super::surf_android::refresh_shortcut(&app, &host).await;
+    Ok(result)
 }
 
 #[tauri::command]
-pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_delete_record(host)
+#[cfg_attr(not(target_os = "android"), allow(unused_variables))]
+pub async fn surf_delete_record<R: Runtime>(
+    app: AppHandle<R>,
+    host: String,
+) -> Result<serde_json::Value, String> {
+    let result = kabegame_core::commands::surf::surf_delete_record(host.clone())?;
+    #[cfg(target_os = "android")]
+    super::surf_android::disable_shortcut(&app, &host).await;
+    Ok(result)
 }
 
 #[cfg(test)]

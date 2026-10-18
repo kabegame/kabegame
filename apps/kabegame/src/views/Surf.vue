@@ -150,7 +150,7 @@
       :context="recordMenuContext"
       :z-index="recordMenu.zIndex.value"
       @close="recordMenu.hide"
-      @command="(cmd) => handleRecordMenuCommand(cmd as 'viewImages' | 'details' | 'delete')"
+      @command="(cmd) => handleRecordMenuCommand(cmd as SurfRecordMenuCommand)"
     />
 
     <ElDialog
@@ -610,7 +610,9 @@ const openRecordContextMenu = (e: MouseEvent, record: SurfRecord) => {
   recordMenu.show(record, e);
 };
 
-const handleRecordMenuCommand = async (command: "viewImages" | "details" | "delete") => {
+type SurfRecordMenuCommand = "viewImages" | "details" | "addToHome" | "delete";
+
+const handleRecordMenuCommand = async (command: SurfRecordMenuCommand) => {
   const record = recordMenu.context.value.target;
   recordMenu.hide();
   if (!record) return;
@@ -620,6 +622,15 @@ const handleRecordMenuCommand = async (command: "viewImages" | "details" | "dele
   }
   if (command === "details") {
     await openDetailDialog(record);
+    return;
+  }
+  if (command === "addToHome") {
+    // 成功时系统 Toast 已提示（含国产 ROM 权限说明），这里只处理失败。
+    try {
+      await surfStore.pinShortcut(record.host);
+    } catch (e: any) {
+      ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+    }
     return;
   }
   if (command === "delete") {

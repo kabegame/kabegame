@@ -122,6 +122,13 @@ surf:
     closePopup: "팝업 닫기"
     more: "더보기"
     desktopSite: "데스크톱 사이트"
+    addToHome: "홈 화면에 추가"
+  shortcut:
+    requested: "아이콘이 안 보이면 설정에서 바로가기 생성을 허용하세요"
+    alreadyPinned: "이미 홈 화면에 있습니다"
+    unsupported: "현재 런처는 바로가기 추가를 지원하지 않습니다"
+    failed: "홈 화면 바로가기를 추가하지 못했습니다"
+    recordDeleted: "이 서핑 사이트는 삭제되었습니다"
   download:
     unsupportedType: "지원하지 않는 다운로드 형식입니다. 서핑은 이미지와 동영상만 받습니다"
     unsupportedScheme: "지원하지 않는 다운로드 주소입니다"

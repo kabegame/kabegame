@@ -25,6 +25,7 @@ class SurfToolbarTexts {
   lateinit var closePopup: String
   lateinit var more: String
   lateinit var desktopSite: String
+  lateinit var addToHome: String
 }
 
 @InvokeArg
@@ -54,6 +55,29 @@ class SurfCollectRunningArgs {
 @InvokeArg
 class SurfCookieArgs {
   lateinit var url: String
+}
+
+@InvokeArg
+class SurfShortcutListenArgs {
+  lateinit var events: Channel
+}
+
+@InvokeArg
+class SurfShortcutArgs {
+  lateinit var host: String
+  lateinit var label: String
+  /** 站点 favicon 的 base64；没有时用首字母图标。 */
+  var icon: String? = null
+  /** 发出固定请求后的提示（国产 ROM 常默认关闭「创建桌面快捷方式」权限且无回调）。 */
+  var hint: String = ""
+  /** 已固定过时的提示：不再发请求（部分桌面会再弹一次确认框或静默无反应）。 */
+  var alreadyPinnedHint: String = ""
+}
+
+@InvokeArg
+class SurfShortcutDisableArgs {
+  lateinit var host: String
+  lateinit var message: String
 }
 
 data class SurfBinding(
@@ -188,6 +212,61 @@ class SurfPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun close(invoke: Invoke) = onSurf(invoke) { it.finish() }
+
+  /** Rust 启动时注册：桌面快捷方式点开的站点 host 经此 Channel 投递（含冷启动时暂存的那一个）。 */
+  @Command
+  fun listenShortcuts(invoke: Invoke) {
+    val args = invoke.parseArgs(SurfShortcutListenArgs::class.java)
+    activity.runOnUiThread {
+      SurfShortcuts.listen(args.events)
+      invoke.resolve()
+    }
+  }
+
+  @Command
+  fun pinShortcut(invoke: Invoke) {
+    val args = invoke.parseArgs(SurfShortcutArgs::class.java)
+    activity.runOnUiThread {
+      try {
+        val supported = SurfShortcuts.isSupported(activity)
+        val requested = supported &&
+          SurfShortcuts.requestPin(
+            activity,
+            args.host,
+            args.label,
+            SurfShortcuts.decodeIcon(args.icon),
+            args.hint,
+            args.alreadyPinnedHint,
+          )
+        invoke.resolve(JSObject().apply {
+          put("supported", supported)
+          put("requested", requested)
+        })
+      } catch (error: Exception) {
+        invoke.reject("添加桌面快捷方式失败: ${error.message}", error)
+      }
+    }
+  }
+
+  @Command
+  fun updateShortcut(invoke: Invoke) {
+    val args = invoke.parseArgs(SurfShortcutArgs::class.java)
+    activity.runOnUiThread {
+      runCatching {
+        SurfShortcuts.update(activity, args.host, args.label, SurfShortcuts.decodeIcon(args.icon))
+      }
+      invoke.resolve()
+    }
+  }
+
+  @Command
+  fun disableShortcut(invoke: Invoke) {
+    val args = invoke.parseArgs(SurfShortcutDisableArgs::class.java)
+    activity.runOnUiThread {
+      runCatching { SurfShortcuts.disable(activity, args.host, args.message) }
+      invoke.resolve()
+    }
+  }
 
   private fun onSurf(invoke: Invoke, block: (SurfActivity) -> Unit) {
     val label = invoke.parseArgs(SurfLabelArgs::class.java).label

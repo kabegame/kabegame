@@ -122,6 +122,13 @@ surf:
     closePopup: "关闭弹窗"
     more: "更多"
     desktopSite: "桌面版网站"
+    addToHome: "添加到桌面"
+  shortcut:
+    requested: "未出现图标时，请在系统设置中允许创建桌面快捷方式"
+    alreadyPinned: "已存在于桌面上"
+    unsupported: "当前桌面不支持添加快捷方式"
+    failed: "添加桌面快捷方式失败"
+    recordDeleted: "该畅游站点已被删除"
   download:
     unsupportedType: "不支持的下载类型：畅游只接收图片和视频"
     unsupportedScheme: "不支持的下载地址"

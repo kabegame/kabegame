@@ -26,12 +26,15 @@
           @open-surf-record="emit('open-surf-record', $event)"
         />
       </div>
-      <div v-if="isNativeMetadataEligible(image?.type)" class="detail-col-meta">
-        <ImageNativeMetadataPanel :image="image" :collapsible="isCompact" :fill-when-expanded="!isCompact" />
+      <div v-if="image" class="detail-col-labels">
+        <ImageLabelsPanel :image="image" @navigate="emit('close')" />
       </div>
       <!-- 面板壳恒定存在（无插件数据时显示空态），列不随内容有无出现/消失 -->
       <div class="detail-col-plugin">
-        <ImagePluginDescriptionPanel :image="image" :collapsible="isCompact" :fill-when-expanded="!isCompact" />
+        <ImagePluginDescriptionPanel :image="image" :collapsible="isCompact" fill-when-expanded />
+      </div>
+      <div v-if="isNativeMetadataEligible(image?.type)" class="detail-col-meta">
+        <ImageNativeMetadataPanel :image="image" :collapsible="isCompact" :fill-when-expanded="!isCompact" />
       </div>
     </div>
   </el-dialog>
@@ -42,11 +45,12 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import ImageBasicInfoPanel, {
   type ImageDetailGalleryFilterTarget,
-  type ImageDetailLike,
   type ImageDetailSurfRecordTarget,
 } from "./ImageBasicInfoPanel.vue";
 import ImageNativeMetadataPanel from "./ImageNativeMetadataPanel.vue";
 import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
+import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
+import type { ImageInfo } from "@/types/image";
 import type { Plugin } from "@/stores/plugins";
 import { useUiStore } from "../../stores/ui";
 import { isNativeMetadataEligible } from "../../utils/mediaMime";
@@ -58,7 +62,7 @@ const isCompact = computed(() => uiStore.isCompact);
 interface Props {
   open: boolean;
   zIndex: number;
-  image: ImageDetailLike | null;
+  image: ImageInfo | null;
   plugins?: Array<Plugin>;
 }
 
@@ -112,6 +116,7 @@ const emit = defineEmits<Emits>();
 }
 
 .image-detail-columns > .detail-col-basic,
+.image-detail-columns > .detail-col-labels,
 .image-detail-columns > .detail-col-meta,
 .image-detail-columns > .detail-col-plugin {
   display: flex;
@@ -129,9 +134,16 @@ const emit = defineEmits<Emits>();
 }
 
 .image-detail-columns.is-compact > .detail-col-basic,
+.image-detail-columns.is-compact > .detail-col-labels,
 .image-detail-columns.is-compact > .detail-col-meta,
 .image-detail-columns.is-compact > .detail-col-plugin {
   min-width: 0;
   flex: 0 0 auto;
+}
+
+/* 窄屏滚到插件详情后，展开态拥有与整个弹窗相同的阅读高度；收起时不留下空白。 */
+.image-detail-columns.is-compact .image-plugin-description-panel:not(.kb-collapsible-panel--collapsed) {
+  height: 90vh;
+  flex: 0 0 90vh;
 }
 </style>

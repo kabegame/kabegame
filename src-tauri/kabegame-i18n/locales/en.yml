@@ -122,6 +122,13 @@ surf:
     closePopup: "Close popup"
     more: "More"
     desktopSite: "Desktop site"
+    addToHome: "Add to Home screen"
+  shortcut:
+    requested: "No icon? Allow Kabegame to create home screen shortcuts in Settings"
+    alreadyPinned: "Already on the Home screen"
+    unsupported: "This launcher does not support adding shortcuts"
+    failed: "Failed to add the home screen shortcut"
+    recordDeleted: "This surf site has been deleted"
   download:
     unsupportedType: "Unsupported download type: Surf only receives images and videos"
     unsupportedScheme: "Unsupported download address"

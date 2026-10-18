@@ -88,7 +88,7 @@ label 与 `ipc_available`。新会话会先通过 Kotlin 插件关闭旧 Activit
 Vue 继续使用桌面命令名：`surf_start_session`、`surf_close_session`、`surf_get_session_status`。
 导航（后退 / 前进 / 刷新 / 地址跳转）不再有 Rust 命令，由原生工具栏直接操作 WebView。
 
-Kotlin 通过 Rust 创建的 `tauri::ipc::Channel` 上报五类消息：
+Kotlin 通过 Rust 创建的 `tauri::ipc::Channel` 上报六类消息：
 
 - `pageFinished { url, cookie }`：刷新记录的 Cookie；只有值实际变化时才写库
   （`update_surf_record_cookie_if_changed`）并广播 `surf-records-change`。弹窗可见时关闭弹窗也会
@@ -101,11 +101,45 @@ Kotlin 通过 Rust 创建的 `tauri::ipc::Channel` 上报五类消息：
 - `desktopModeChanged { desktop }`：「更多」菜单的「桌面版网站」开关。Kotlin 是显示状态权威，
   已经立即应用并刷新；Rust 核对当前会话后更新 `SESSION.desktop_mode` 与 `surf_records.desktop_mode`
   （只在值变化时写库并发 `SurfRecordChanged`）。
+- `pinShortcut`：「更多」菜单的「添加到桌面」，Rust 走与前端同一个 `pin_shortcut`（见下节）。
 
 导航状态、加载进度与弹窗生命周期都只在 Kotlin 内处理，不经 Rust 往返。
 
 Rust → Kotlin 侧：`attach`（含工具栏文案、`desktopUserAgent`、`desktopMode`）、`close`、
-`setCollectRunning`、`getDefaultUserAgent`。
+`setCollectRunning`、`getDefaultUserAgent`，以及桌面快捷方式的 `listenShortcuts`、`pinShortcut`、
+`updateShortcut`、`disableShortcut`。
+
+## 桌面快捷方式
+
+站点可以固定到桌面（`ShortcutManagerCompat.requestPinShortcut`），点开直接进入该站点的畅游。
+入口两处：前端站点卡片菜单的「添加到桌面」（`surf_pin_shortcut`，仅 Android 注册）与原生工具栏
+「更多」菜单（`pinShortcut` 事件），都落到 `surf_android::pin_shortcut`。
+
+- **intent 指向 `MainActivity`，不是 `SurfActivity`**：`SurfActivity` 由 Rust `WebviewWindowBuilder`
+  建窗（依赖主窗口的 Activity 名、注入脚本、`SESSION`），不能被单独拉起。快捷方式 intent 为
+  `app.kabegame.action.OPEN_SURF` + extra `host`，快捷方式 id 为 `surf:<host>`。
+- **只认已有记录**：`MainActivity` 是 exported 的，任何应用都能发这个 intent；Rust 按 host 查
+  `surf_records`，查不到直接丢弃，查到用记录的 `root_url` 调 `surf_start_session`。intent 里不放 URL。
+- **冷启动会合**：intent 早于 Rust 就绪到达。`SurfShortcuts` 暂存最新一个 host；Rust 在插件 setup 里
+  调 `listenShortcuts` 注册 Channel，注册时投递暂存值，之后实时投递。插件 setup 早于 `init_globals`，
+  投递到达时 `Storage::global()` 还没初始化（直接访问会 panic，实测冷启动停在画廊）：`open_from_shortcut`
+  必须**先**等主窗口（在全局初始化之后创建，最多 10s），再查记录、开会话。不用 `.kgpg` 导入那种 `evaluateJavascript` 调前端全局函数的做法：
+  前端未加载完时调用会落空。
+- **重放保护**：`onCreate` 只在 `savedInstanceState == null` 时处理 intent（配置变化 / 进程恢复会带回
+  原 intent）；带 `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY`（从最近任务恢复）的快捷方式 intent 忽略。
+- **返回与任务栈**：`MainActivity` 是 `singleTask`，点快捷方式会清掉其上已有的 `SurfActivity`，再由
+  Rust 开新会话；从畅游按返回回到主界面（第一版有意保留）。冷启动时主界面会先短暂出现。
+- **图标**：`surf_records.icon`（favicon，ico / png）以 base64 下发，Kotlin 放大到自适应图标画布的 44%
+  居中垫白底（在 66dp 安全区内）；解不出时按 host 取色画首字母。固定时 favicon 可能还没抓到：
+  `surf_start_session` 抓到 favicon 后、`surf_update_name` 改名后调 `refresh_shortcut`，只更新已固定且
+  启用的快捷方式。
+- **重复添加**：已固定且启用时不再 `requestPinShortcut`，只 `updateShortcuts` 刷新名称与图标并提示
+  「已存在于桌面上」。用户从桌面移除图标后系统取消固定，可以再次添加。
+- **删除记录**：应用删不掉桌面图标，`surf_delete_record` 后 `disableShortcuts`（点击显示「站点已删除」）。
+  再次固定同一 host 前先 `enableShortcuts`，否则系统拒绝更新被禁用的快捷方式。
+- **ROM 权限**：小米 / OPPO / vivo / 华为等默认关闭「创建桌面快捷方式」，`requestPinShortcut` 仍返回 true
+  且没有回调。因此请求发出后统一弹系统 Toast 提示去设置里开启（Android 12+ Toast 最多两行，文案要短）；`supported=false` / `requested=false`
+  才作为错误返回（前端 `ElMessage`、工具栏入口走页内 toast）。
 
 ## 下载：脚本下载与页面下载
 

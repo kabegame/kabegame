@@ -1,4 +1,5 @@
-import { Picture, Delete, InfoFilled } from "@kabegame/element-plus-icons";
+import { Picture, Delete, InfoFilled, House } from "@kabegame/element-plus-icons";
+import { IS_ANDROID } from "@/env";
 import type { ActionItem, ActionContext } from "@/actions/types";
 import type { SurfRecord } from "@/stores/surf";
 import { i18n } from "@kabegame/i18n";
@@ -27,6 +28,14 @@ export function createSurfRecordActions(): ActionItem<SurfRecord>[] {
       icon: InfoFilled,
       command: "details",
       visible: () => true,
+    },
+    {
+      key: "addToHome",
+      label: t("surf.addToHome"),
+      icon: House,
+      command: "addToHome",
+      // 桌面快捷方式只在 Android 上实现（ShortcutManager 固定到桌面）。
+      visible: () => IS_ANDROID,
     },
     {
       key: "delete",

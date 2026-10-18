@@ -98,6 +98,8 @@ class SurfActivity : TauriActivity() {
       onCollect = { emit("collectToggle") }
       onOpenInBrowser = { url -> openInBrowser(url) }
       onToggleDesktop = { enabled -> applyDesktopSite(enabled) }
+      // 站点名称与图标在 Rust 侧的记录里，交给 Rust 组装后再回到 SurfPlugin.pinShortcut。
+      onPinShortcut = { emit("pinShortcut") }
       onClose = { finish() }
     }
 

@@ -72,13 +72,14 @@
     提前拒绝不解压、raw body 的安卓形态（分块写走 `{ base64 }`、MSE 分片合并、数字数组兼容）、
     关闭与配置变化重建时手动释放内容 WebView（主界面同理）、重建后 binding 交接、应用内 WebView
     共用渲染进程须各自处理 `onRenderProcessGone`、Cookie 合并保存与系统 WebView 默认 UA 登记、
-    安全边界、已知 Channel 生命周期（tauri 补丁 0011）与 tao JNI 局部引用残留。
+    安全边界、桌面快捷方式（intent 经 `MainActivity` + 只带 host、冷启动 Channel 收件箱、重放保护、
+    favicon 自适应图标与删除后禁用、国产 ROM 静默拦截）、已知 Channel 生命周期（tauri 补丁 0011）与 tao JNI 局部引用残留。
   - 适用场景：新增或排查 Android 畅游启动/关闭、原生工具栏地址 / 一键下载状态 / 后退前进置灰 /
     加载进度、返回键、登录态保存、第三方登录弹窗无反应或弹窗不关闭、`target=_blank` 被误弹覆盖层、
     插件请求的 Cookie/UA 配对（403、`cefUserAgent()` 为 `null`、桌面模式下仍 403）、站点强制跳应用
     商店或下 apk、页面下载被拒或类型误判、`blob:` / MSE 分块写失败或很慢、关闭畅游后页面仍在后台运行
     或内存不回落、用 CDP 测试时页面下载回调不触发、Activity 重建后出现两个主界面页面、旧页面 `invoke`
-    挂起或工具栏失效、外部页面崩溃连带应用闪退，或外部页面意外获得 IPC。
+    挂起或工具栏失效、外部页面崩溃连带应用闪退、外部页面意外获得 IPC，或桌面快捷方式不出现 / 点开没进畅游 / 旋转后重复打开。
 
 ## 画廊与查询（`gallery/`）
 

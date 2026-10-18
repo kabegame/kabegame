@@ -536,6 +536,8 @@ pub(crate) fn configure_app(
             surf_start_session,
             surf_close_session,
             surf_get_session_status,
+            #[cfg(target_os = "android")]
+            surf_pin_shortcut,
             surf_list_records,
             surf_get_all_records,
             surf_get_records_by_ids,

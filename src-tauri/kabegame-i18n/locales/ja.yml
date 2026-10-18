@@ -122,6 +122,13 @@ surf:
     closePopup: "ポップアップを閉じる"
     more: "その他"
     desktopSite: "PC 版サイト"
+    addToHome: "ホーム画面に追加"
+  shortcut:
+    requested: "アイコンが出ない場合は設定でショートカット作成を許可してください"
+    alreadyPinned: "すでにホーム画面にあります"
+    unsupported: "このホームアプリはショートカットの追加に対応していません"
+    failed: "ホーム画面ショートカットの追加に失敗しました"
+    recordDeleted: "このサーフサイトは削除されました"
   download:
     unsupportedType: "未対応のダウンロード形式です。サーフは画像と動画のみ受け取ります"
     unsupportedScheme: "未対応のダウンロード URL です"
