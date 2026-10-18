@@ -1,5 +1,5 @@
 <template>
-  <div class="page-header" :class="{ sticky: props.sticky }">
+  <div class="page-header" :class="{ sticky: props.sticky, 'is-compact': uiStore.isCompact }">
     <div class="left">
       <el-button v-if="showBack" circle @click="$emit('back')">
         <el-icon>
@@ -70,6 +70,7 @@
 <script setup lang="ts">
 import { ArrowLeft, MoreFilled } from "@kabegame/element-plus-icons";
 import { useHeaderStore } from "../../stores/header";
+import { useUiStore } from "../../stores/ui";
 import HeaderActionButton from "./HeaderActionButton.vue";
 
 const props = withDefaults(
@@ -94,6 +95,7 @@ defineEmits<{
 }>();
 
 const headerStore = useHeaderStore();
+const uiStore = useUiStore();
 
 const getShowComponent = (featureId: string) => {
   const feature = headerStore.get(featureId);
@@ -144,6 +146,12 @@ const getFoldLabel = (featureId: string) => headerStore.getFoldLabel(featureId);
     position: sticky;
     top: 0;
     z-index: 100;
+  }
+
+  &.is-compact {
+    width: 100vw;
+    margin-right: calc(50% - 50vw);
+    margin-left: calc(50% - 50vw);
   }
 
   .left {

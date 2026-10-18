@@ -1,6 +1,6 @@
 <template>
   <div class="surf-page">
-    <div class="surf-scroll-container" :class="{ 'has-records': hasRecords }">
+    <div class="surf-scroll-container" :class="{ 'has-records': hasRecords, 'is-android': IS_ANDROID }">
       <PageHeader :title="$t('surf.title')" :show="surfHeaderShowIds" sticky @action="handleSurfHeaderAction">
         <template #extra>
           <el-button circle :title="$t('surf.surfHelpTitle')" @click="helpDialog.open()">
@@ -41,10 +41,24 @@
                 :plugins="pluginsWithHttpRoot"
                 value-key="baseUrl"
                 :placeholder="$t('surf.placeholderPlugin')"
+                :select-trigger="IS_ANDROID"
                 size="large"
                 class="surf-plugin-select"
+                :style="{ width: IS_ANDROID ? '40px' : '150px' }"
                 @update:model-value="onPluginQuickSelect"
-              />
+              >
+                <template #compact-trigger="{ open }">
+                  <button
+                    type="button"
+                    class="flex h-10 w-10 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 text-lg text-[var(--anime-secondary)] transition-colors active:bg-[color-mix(in_srgb,var(--anime-primary)_12%,transparent)] active:text-[var(--anime-primary)]"
+                    :title="$t('surf.placeholderPlugin')"
+                    :aria-label="$t('surf.placeholderPlugin')"
+                    @click="open()"
+                  >
+                    <el-icon><Grid /></el-icon>
+                  </button>
+                </template>
+              </PluginPickerField>
             </template>
 
             <template #append>
@@ -231,7 +245,7 @@ import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { ElDialog } from "@kabegame/element-plus";
-import { QuestionFilled, Right, Clock } from "@kabegame/element-plus-icons";
+import { QuestionFilled, Right, Clock, Grid } from "@kabegame/element-plus-icons";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useModal } from "@/composables/useModal";
 import { HeaderFeatureId } from "@/stores/header";
@@ -677,6 +691,18 @@ onMounted(async () => {
   &.has-records {
     overflow: hidden;
   }
+
+  &.is-android {
+    padding: 0;
+
+    .surf-content {
+      width: 100%;
+    }
+
+    .surf-search-row {
+      width: 92%;
+    }
+  }
 }
 
 /* 内容区：空态居中，有记录时 flex 填满 */
@@ -818,10 +844,6 @@ onMounted(async () => {
       height: 24px;
       background: rgba(74, 21, 75, 0.1);
     }
-  }
-
-  .surf-plugin-select {
-    width: 150px;
   }
 
   /* 右端：圆形主按钮，渐变只出现在这一处。

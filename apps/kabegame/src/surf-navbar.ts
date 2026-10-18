@@ -129,9 +129,10 @@ function mount() {
         }
 
         .surf-navbar--android .surf-navbar__button {
-            width: 40px;
+            width: auto;
             height: 40px;
-            flex-basis: 40px;
+            flex: 0 0 auto;
+            padding: 0 6px;
         }
 
         .surf-navbar--android .surf-navbar__address {

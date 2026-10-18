@@ -3,7 +3,7 @@ import { i18n } from "@kabegame/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { markRaw } from "vue";
 import { resolveSettingWithPrompt } from "../composables/useSettingChoice";
-import { IS_ANDROID, IS_WEB } from "../env";
+import { IS_WEB } from "../env";
 import { useSurfStore } from "../stores/surf";
 
 export async function openExternalLink(url: string): Promise<void> {
@@ -11,11 +11,6 @@ export async function openExternalLink(url: string): Promise<void> {
     window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
-  if (IS_ANDROID) {
-    await openUrl(url);
-    return;
-  }
-
   const t = i18n.global.t;
   const mode = await resolveSettingWithPrompt("linkOpenMode", {
     title: t("common.chooseLinkOpenMode"),

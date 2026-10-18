@@ -3,7 +3,10 @@
     <!-- 主窗口 -->
     <el-container
       class="app-container"
-      :class="{ 'app-container-compact': uiStore.isCompact, 'has-app-background': bgVisible }"
+      :class="{
+        'app-container-compact': uiStore.isCompact,
+        'has-app-background': bgVisible,
+      }"
     >
       <div
         v-if="bgVisible && bgImage"
@@ -28,48 +31,6 @@
       </div>
       <!-- 全局文件拖拽提示层（仅非安卓平台，按热区定位，不遮挡交互） -->
       <FileDropOverlay ref="fileDropOverlayRef" />
-      <!-- 外部插件导入弹窗 -->
-      <PluginImportDialog
-        :visible="importDialog.isOpen.value"
-        :kgpg-path="importKgpgPath"
-        @update:visible="importDialog.close"
-      />
-      <!-- 全局唯一的未配置设置选择宿主 -->
-      <SettingChoiceHost />
-      <!-- 桌面端完整设置弹窗；紧凑布局继续使用全屏设置页 -->
-      <SettingsDialog
-        v-if="!uiStore.isCompact"
-        :open="settingsModal.isOpen.value"
-        :z-index="settingsModal.zIndex.value"
-        @close="settingsModal.close()"
-      />
-      <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
-      <template v-if="!uiStore.isCompact && !IS_WEB">
-        <UpdateDialog />
-        <DownloadProgressDialog />
-      </template>
-      <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
-      <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
-      <AutoConfigDialog />
-      <!-- 全局唯一的整理对话框：页面路由切换时仍可由页头/工具箱打开 -->
-      <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
-      <!-- 全局唯一的收集弹窗：参数经全局 taskConfig 传递，见 writeTaskConfig -->
-      <CrawlerDialog v-model="crawlerDrawerVisible" />
-      <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
-      <LocalImportDialog
-        v-if="!IS_WEB && !uiStore.isCompact"
-        v-model="localImportVisible"
-        :initial-config="localImportInitial"
-      />
-      <MissedRunsDialog
-        :open="missedRunsModal.isOpen.value"
-        :z-index="missedRunsModal.zIndex.value"
-        :items="missedRunItems"
-        :system-sleep="wasSystemSleep"
-        @close="missedRunsModal.close()"
-        @run-now="handleRunMissedNow"
-        @dismiss="handleDismissMissed"
-      />
       <!-- 非紧凑布局：侧边栏 + 主内容 -->
       <template v-if="!uiStore.isCompact">
         <el-aside class="app-sidebar sidebar-collapsed" width="64px">
@@ -175,6 +136,45 @@
       </nav>
       <KamechanMascot @open-settings="openSettingsEntry()" />
     </el-container>
+
+    <!-- 全局模态单例与页面布局同级，避免继承 app-container 的 flex、定位和裁剪规则 -->
+    <PluginImportDialog
+      :visible="importDialog.isOpen.value"
+      :kgpg-path="importKgpgPath"
+      @update:visible="importDialog.close"
+    />
+    <!-- 桌面端完整设置弹窗；紧凑布局继续使用全屏设置页 -->
+    <SettingsDialog
+      v-if="!uiStore.isCompact"
+      :open="settingsModal.isOpen.value"
+      :z-index="settingsModal.zIndex.value"
+      @close="settingsModal.close()"
+    />
+    <!-- 桌面端自动更新：更新日志弹窗 + 下载进度弹窗（全局唯一，常驻以便下载中刷新存活） -->
+    <template v-if="!uiStore.isCompact && !IS_WEB">
+      <UpdateDialog />
+      <DownloadProgressDialog />
+    </template>
+    <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+    <AutoConfigDialog />
+    <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
+    <CrawlerDialog v-model="crawlerDrawerVisible" />
+    <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
+    <LocalImportDialog
+      v-if="!IS_WEB && !uiStore.isCompact"
+      v-model="localImportVisible"
+      :initial-config="localImportInitial"
+    />
+    <MissedRunsDialog
+      :open="missedRunsModal.isOpen.value"
+      :z-index="missedRunsModal.zIndex.value"
+      :items="missedRunItems"
+      :system-sleep="wasSystemSleep"
+      @close="missedRunsModal.close()"
+      @run-now="handleRunMissedNow"
+      @dismiss="handleDismissMissed"
+    />
+    <SettingChoiceHost />
     <FrameMonitor />
   </el-config-provider>
 </template>
@@ -768,6 +768,56 @@ body,
 // 紧凑布局：主内容区顶部留出状态栏高度，避免与 Android 系统状态栏重叠（桌面浏览器 env() 为 0）
 .app-container.app-container-compact .app-main {
   padding-top: var(--sat, env(safe-area-inset-top, 24px));
+}
+
+/* 紧凑布局公共页头贴齐视口边缘：把页面的水平 gutter 下移到正文，避免全宽页头被
+   各页面的滚动/裁剪容器截断；正文仍保持原来的 20px（详情页 16px）留白。 */
+.app-container.app-container-compact {
+  --kb-page-gutter: 20px;
+  --kb-detail-page-gutter: 16px;
+
+  .gallery-page,
+  .albums-page.is-compact,
+  .plugin-browser-container,
+  .settings-container:not(.settings-container--embedded),
+  .surf-images-scroll-container,
+  .auto-configs-container,
+  .tab-layout,
+  .plugin-detail,
+  .task-detail {
+    padding-top: 0;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .gallery-page .image-grid-container,
+  .albums-page.is-compact .image-grid-container,
+  .surf-images-page .image-grid-container {
+    padding-right: var(--kb-page-gutter);
+    padding-left: var(--kb-page-gutter);
+  }
+
+  .task-detail .image-grid-container {
+    padding-right: var(--kb-detail-page-gutter);
+    padding-left: var(--kb-detail-page-gutter);
+  }
+
+  .plugin-browser-content > :not(.page-header),
+  .settings-container:not(.settings-container--embedded) .settings-layout {
+    margin-right: var(--kb-page-gutter);
+    margin-left: var(--kb-page-gutter);
+  }
+
+  .plugin-detail > .detail-body {
+    margin-right: var(--kb-detail-page-gutter);
+    margin-left: var(--kb-detail-page-gutter);
+  }
+
+  .auto-configs-container .auto-configs-list-tabs,
+  .tab-layout .tab-layout-body {
+    padding-right: var(--kb-page-gutter);
+    padding-left: var(--kb-page-gutter);
+  }
 }
 
 // 紧凑布局：全局去除触摸时的浅蓝色高亮（与画廊图片等一致）

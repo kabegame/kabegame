@@ -16,29 +16,31 @@
         @update:model-value="emitValue"
       >
         <template v-if="selectTrigger" #trigger="{ open }">
-          <div
-            class="w-full"
-            role="button"
-            :tabindex="disabled ? -1 : 0"
-            :aria-disabled="disabled"
-            :aria-label="selectedTriggerLabel || placeholder || $t('common.selectPlaceholder')"
-            @click="open()"
-            @keydown.enter.prevent="open()"
-            @keydown.space.prevent="open()"
-          >
-            <!-- 复用桌面 el-select 展示当前值；实际选择交给 Android 弹窗，避免同时打开两个面板。 -->
-            <el-select
-              class="pointer-events-none w-full"
-              :model-value="modelValue ?? undefined"
-              :placeholder="placeholder || $t('common.selectPlaceholder')"
-              :disabled="disabled"
-              :size="size"
-              :tabindex="-1"
-              aria-hidden="true"
+          <slot name="compact-trigger" :open="open" :selected-label="selectedTriggerLabel" :disabled="disabled">
+            <div
+              class="w-full"
+              role="button"
+              :tabindex="disabled ? -1 : 0"
+              :aria-disabled="disabled"
+              :aria-label="selectedTriggerLabel || placeholder || $t('common.selectPlaceholder')"
+              @click="open()"
+              @keydown.enter.prevent="open()"
+              @keydown.space.prevent="open()"
             >
-              <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value" />
-            </el-select>
-          </div>
+              <!-- 复用桌面 el-select 展示当前值；实际选择交给 Android 弹窗，避免同时打开两个面板。 -->
+              <el-select
+                class="pointer-events-none w-full"
+                :model-value="modelValue ?? undefined"
+                :placeholder="placeholder || $t('common.selectPlaceholder')"
+                :disabled="disabled"
+                :size="size"
+                :tabindex="-1"
+                aria-hidden="true"
+              >
+                <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </div>
+          </slot>
         </template>
         <template #option="{ option }">
           <div class="plugin-picker-option">

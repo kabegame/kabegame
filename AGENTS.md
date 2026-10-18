@@ -134,7 +134,7 @@ struct Foo {
 
 对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，总插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本，所以changelog.md要比较才知道顶部版本是最新还是需要新加一节，注意不要改 version，改了之后commit 会打新tag。
 
-在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序。
+在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序，只有在需要打开外部网站或调试kabegame-web才允许用 ageng-browser
 
 **观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `spawn_debug_event`，固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。
 

@@ -2,7 +2,13 @@
   <!-- 空槽：只占位不画任何东西，让同一枚标签在列表各行落在同一列 -->
   <span v-if="!label" class="kb-label-empty flex-none" :class="sizeClass" aria-hidden="true" />
 
-  <el-tooltip v-else placement="top" :show-after="200" :disabled="!resolved.desc">
+  <el-tooltip
+    v-else
+    placement="top"
+    :trigger="tooltipTrigger"
+    :show-after="tooltipShowAfter"
+    :disabled="!resolved.desc"
+  >
     <template #content>{{ tooltipText }}</template>
     <span
       class="kb-label inline-flex items-center justify-center flex-none box-border"
@@ -22,6 +28,7 @@
 import { computed } from "vue";
 import { ElTooltip } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
+import { IS_ANDROID } from "@/env";
 import { resolvePluginLabel, type PluginLabel, type ResolvedPluginLabel } from "../../stores/pluginLabels";
 
 const props = withDefaults(
@@ -34,6 +41,11 @@ const props = withDefaults(
 );
 
 const { t } = useI18n();
+
+// Android WebView 会把一次触摸合成为 mouseenter → click → mouseleave；hover 提示会在抬手时立刻关闭。
+// 改用 click 后，点标签负责开关，点外部由 ElTooltip 自己关闭；桌面仍保持悬停行为。
+const tooltipTrigger = IS_ANDROID ? "click" : "hover";
+const tooltipShowAfter = IS_ANDROID ? 0 : 200;
 
 const EMPTY: ResolvedPluginLabel = { text: "", desc: "" };
 

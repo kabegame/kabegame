@@ -1,5 +1,72 @@
 # v4.5.2 regression
 
+## Android 插件标签提示
+
+Android 上的插件标签改用点击触发 Tooltip，避开 WebView 把触摸合成为短暂 hover 后在抬手时发送 `mouseleave` 的行为。桌面端继续使用延迟悬停提示。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 触发策略单测 | Vitest | 运行 `KbLabel.test.ts` | Android 标签 Tooltip 使用 `click` 且无显示延迟 | 覆盖平台分流 |
+| [x] | 点击保持 | Android dev | 打开任一带标签的插件详情并点击标签 | 抬手后提示保持显示，不会立即消失 | 真机实测抬手 1 秒后仍为 `display: block`、`aria-hidden=false`；再次点击标签或点外部均可关闭 |
+| [ ] | 多入口回归 | Android dev | 在插件列表、选择器与快捷预览中分别点击标签 | 各入口的标签提示均可保持并正常关闭 | 共用 `KbLabel` |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 鼠标悬停及移出插件标签 | 悬停 200ms 后显示，移出后关闭，无需点击 | Android 分支不影响桌面 |
+
+## Android 外部链接打开方式确认
+
+Android 不再绕过应用内统一的外部链接打开设置。首次点击插件详情中的 `baseUrl` 等外部链接时，与桌面端一样确认是在畅游中打开还是跳转系统浏览器；用户选择记住后，后续链接直接沿用该设置。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 分流单测 | Vitest | 运行 `openExternalLink.test.ts` | 选择畅游只启动畅游会话；选择系统浏览器只调用外部跳转 | 覆盖 Android 平台常量 |
+| [x] | 首次确认 | Android dev / `linkOpenMode` 为“每次询问” | 打开任一插件详情，点击正文上方的 `baseUrl` | 弹出“如何打开这个链接？”，可选择畅游或系统浏览器，不直接跳转 | 真机 CDP 点击确认 |
+| [x] | 弹窗不挤走文档 | Android dev | 打开选择框，再关闭选择框 | 全局宿主位于 `app-container` 外，遮罩固定覆盖视口；插件 Doc 留在原位，不会被约一屏高的遮罩挤到下方形成空白 | 真机修复前测得遮罩误为 `position: relative`、高约 680px；修复后为 `position: fixed`、Doc 标题纵坐标保持 377.67px |
+| [x] | 全局模态宿主层级 | Android dev | 检查 `App.vue` 挂载后的 DOM，再打开链接选择框 | 设置、导入、更新、任务、整理、收集等全局模态单例与选择框都位于 `app-container` 外；选择框遮罩不在容器内 | 真机 CDP 检查容器只保留主内容与底部导航，选择框 `insideContainer=false` |
+| [x] | 畅游打开 | Android dev | 在确认框选择“在畅游窗口打开” | 打开 Android 独立畅游页面并导航到插件 `baseUrl` | 真机打开 `https://anime-pictures.net/` 并成功显示站点 |
+| [ ] | 系统浏览器打开 | Android dev | 在确认框选择“在系统浏览器打开” | 跳转系统默认浏览器，不启动畅游会话 | |
+| [ ] | 记住选择 | Android dev | 勾选“下次保持此选择”后任选一种方式，再点击另一个外部链接 | 不再弹框，直接沿用已保存的打开方式；设置页可改回“每次询问” | |
+| [ ] | 桌面与 Web 回归 | Windows / macOS / Linux / Web | 分别点击插件 `baseUrl` | 桌面维持原确认与设置逻辑；Web 仍直接新标签页打开 | |
+
+## Android 页面标题栏全宽贴边
+
+Android 紧凑布局下所有使用公共 `PageHeader` 的页面统一紧贴状态栏安全区下缘并按视口全宽展示，标题栏不再跟随图库、画册、源等页面内容区的外围留白缩进；布局由既有 `isCompact` 响应式状态统一控制，平板横屏等非紧凑布局维持桌面 gutter。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 主导航页面 | Android dev | 依次进入图库、画册、畅游和源 | 各页标题栏紧贴状态栏安全区下缘并左右贴齐屏幕边缘，正文原有宽度和留白不变 | 四页真机 CDP 实测均为 x=0、y=42px、宽 360px，无横向溢出；图库截图确认按钮未裁切 |
+| [x] | 设置与详情页面 | Android dev | 打开设置、任务详情、插件详情和自动配置页 | 公共标题栏顶部和左右均不留页面 padding，正文仍保留原 gutter，返回与操作按钮可正常点击 | 真机实测标题栏均为 x=0、y=42px、宽 360px；设置正文保留 20px、插件与任务详情保留 16px gutter |
+| [ ] | 畅游图片页 | Android dev / 有畅游媒体记录 | 从畅游记录打开图片页 | 公共标题栏顶部和左右均不留页面 padding，查询区仍保留 20px gutter | 当前空态不挂载 `PageHeader`，需有数据场景复核 |
+| [ ] | 平板横屏回退 | Android 平板横屏 | 进入任一含公共标题栏的页面 | 非紧凑布局恢复桌面 gutter，不继续强制按视口全宽贴边 | 复用 `uiStore.isCompact`，不按平台常量判断 |
+| [ ] | 桌面回归 | Windows / macOS / Linux 非紧凑布局 | 打开任一含标题栏的页面 | 标题栏继续服从页面内容宽度，不扩展到视口边缘 | 由 `uiStore.isCompact` 响应式隔离 |
+
+## Android 畅游插件快选按钮
+
+Android 畅游首页不再把完整插件选择器塞进搜索胶囊，改为左侧固定宽度的图标按钮；点击仍复用统一 Android 插件选择弹窗，选中后把插件根 URL 填入输入框。桌面宽屏保留原有下拉选择器。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 全宽布局 | Android dev | 进入畅游首页 | 页面内容区不再保留 20px 外围 padding，正文与标题栏等宽铺满可用宽度；搜索框与下方记录卡片左右对齐 | 真机 CDP 实测容器 padding 为 0，正文与标题栏宽度均为 360px；搜索框与卡片均从 x=14.4px 起、宽 331.2px，截图确认无横向溢出 |
+| [x] | Android 首页布局 | Android dev | 进入畅游首页 | 胶囊左侧只显示插件图标按钮，URL 输入区不再被插件占位文案挤压 | 真机 HMR 截图确认 |
+| [x] | 插件选择 | Android dev | 点击插件图标，选择任一有 HTTP 根地址的插件 | 弹窗正常打开并可由返回键关闭；选中后关闭弹窗并把根 URL 填入输入框 | 真机已验证打开、返回关闭与 URL 填充 |
+| [ ] | 无障碍标签 | Android TalkBack | 聚焦插件图标按钮 | 读出“选择插件”等当前语言文案 | |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 进入畅游首页并选择插件 | 仍显示 `150px` 下拉选择器，填充 URL 与启动畅游行为不变 | |
+
+## Android 插件详情标题栏动作图标化
+
+Android / 紧凑布局的插件详情标题栏不再显示“已安装”状态 chip 或安装、更新、重装文字按钮；状态仍在正文展示，标题栏动作统一使用带无障碍标签的图标按钮。桌面宽屏继续显示原有文字与状态。
+商店插件的安装确认框与已安装插件的卸载确认框都改由统一 `useModal` 栈管理，Android 返回键可按层级关闭；安装确认框同时补齐格式化后的安装包大小，不再出现空括号。安装成功后保留当前商店详情与滚动位置，不再切换到本地详情路由；卸载成功后因详情对象已不存在，直接用 replace 切到插件列表，不再叠加历史回退。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 待安装插件标题栏 | Android dev | 从任一商店源打开未安装插件详情 | 标题栏显示下载图标按钮，不显示“安装”文字；插件名、ID 与版本获得更多空间 | 真机 CDP 截图确认 |
+| [x] | 安装确认框包大小 | Android dev / 日语 | 点击待安装插件标题栏的下载图标 | 确认文案的括号内显示格式化后的安装包大小，不出现 `()` | 修复后真机 CDP 截图显示 `1 MB` |
+| [ ] | 安装确认返回栈 | Android dev | 打开安装确认框后按系统返回键 | 只关闭确认框，仍停留在插件详情；再次按返回才离开详情 | `useModal` 统一管理 |
+| [ ] | 安装后保留详情 | Android dev | 在商店插件详情确认安装并等待成功 | 弹窗关闭并提示成功；URL、当前商店详情和滚动位置不变，操作按钮更新为重装 | |
+| [ ] | 卸载确认返回栈 | Android dev | 从“已安装”详情打开卸载确认框后按系统返回键 | 只关闭确认框，仍停留在插件详情；再次按返回才离开详情 | `useModal` 统一管理 |
+| [ ] | 卸载后返回列表 | Android dev | 在已安装插件详情确认卸载并等待成功 | 弹窗关闭并提示成功，只切换一次到插件列表；不会越过列表，也不会通过返回重新进入已删除详情 | 使用确定性 replace，不调用 `router.back()` |
+| [ ] | 更新与重装图标 | Android | 分别打开有新版和同版本的商店插件详情 | 两种状态均显示刷新图标，点击后仍进入对应更新或重装确认流程 | |
+| [ ] | 已安装插件标题栏 | Android | 从“已安装”打开插件详情 | 标题栏不显示“已安装”chip，只保留复制 ID 与卸载图标；正文状态 chip 仍存在 | |
+| [ ] | 桌面宽屏回归 | Windows / macOS / Linux | 打开待安装、可更新、可重装与已安装插件详情 | 安装类按钮仍显示文字，已安装状态 chip 仍显示，动作行为不变 | |
+
 ## 本地媒体 URL 统一为 wildcard path
 
 桌面、Android 与 debug Web 的原图、缩略图、浏览器兼容副本统一把绝对路径编码在 URL path 中：`/file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}`。旧 `?path=` 形式和独立 `/download/{*path}` 均删除；三类端点继续使用各自的图库字段白名单。Windows 拖出不固定选择原图，而是使用触发拖拽的媒体元素当前 `currentSrc`，让已经回退成功的缩略图或兼容副本也能拖出。
@@ -861,6 +928,7 @@ Android 畅游使用独立 `SurfActivity`：顶部复用桌面 `surf-navbar.html
 | [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | Rust Android target 与 Kotlin/Gradle 配置无 error | 已运行（撤 UA 列后重跑）：Android Rust 0 error；`:app:compileUniversalDebugKotlin` 成功 |
 | [x] | Cookie 写入去重 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib surf_record` | Cookie 相同不写库、不发事件；变化时更新 | 已运行：1 项定向单测通过；`dsl_e2e` 52 项通过 |
 | [ ] | 启动与布局 | Android 真机 | 工具箱 → 畅游 → 输入 `https://www.pixiv.net` | 打开独立 Activity；顶部 48dp 导航栏、底部站点；主 Vue 页面保留在下方 | dev 包与 prod 包都要测：dev 的 applicationId 与 Java 包不同，曾因写死 `MainActivity` 报 `failed to create window` |
+| [x] | 导航栏紧凑间距 | Android 真机 | 打开畅游站点，对比顶部五个图标按钮与地址栏 | 图标按钮按 SVG 自然宽度加 6px 左右 padding 排列，不再占用固定 40px 宽度；地址栏占用剩余宽度 | 真机 HMR 截图确认 |
 | [ ] | 导航与地址同步 | Android 真机 | 点站内链接、触发 SPA 路由，再测试地址栏回车、后退、前进、刷新 | 内容页导航正确；navbar 地址随整页与 SPA 跳转更新 | |
 | [ ] | 返回键与关闭 | Android 真机 | 页面有历史时连续按系统返回键，再点 navbar 关闭 | 先逐级后退，退到头关闭 Activity；回到原 `/surf` 且 Vue 状态不丢；会话状态立即清除 | |
 | [ ] | Cookie 保存 | Android 真机 | 登录站点后关闭 Activity，查看记录并查询数据库 | Cookie 非空且包含 HttpOnly 登录 Cookie；`surf_records` 没有 `user_agent` 列；列表由事件即时更新 | |
