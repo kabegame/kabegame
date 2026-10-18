@@ -18,3 +18,22 @@ pub struct CachePathsResponse {
 pub struct ExternalDataDirResponse {
     pub dir: String,
 }
+
+/// 预置插件复制参数（Android：APK assets → 用户插件目录）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeedBundledPluginsArgs {
+    pub target_dir: String,
+}
+
+/// 预置插件复制结果
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SeedBundledPluginsResponse {
+    /// 当前安装包版本标记
+    pub version: String,
+    /// 标记与插件目录中记录的一致，未复制
+    pub skipped: bool,
+    pub copied: u32,
+    #[serde(default)]
+    pub failed: u32,
+}

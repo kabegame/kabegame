@@ -110,6 +110,29 @@ vd:
 
 surf:
   windowTitle: "サーフ - {host}"
+  toolbar:
+    back: "戻る"
+    forward: "進む"
+    reload: "再読み込み"
+    address: "アドレス"
+    collect: "このページのメディアをすべてダウンロード"
+    cancel: "ダウンロードをキャンセル"
+    openInBrowser: "ブラウザーで開く"
+    close: "閉じる"
+    closePopup: "ポップアップを閉じる"
+    more: "その他"
+    desktopSite: "PC 版サイト"
+    addToHome: "ホーム画面に追加"
+  shortcut:
+    requested: "アイコンが出ない場合は設定でショートカット作成を許可してください"
+    alreadyPinned: "すでにホーム画面にあります"
+    unsupported: "このホームアプリはショートカットの追加に対応していません"
+    failed: "ホーム画面ショートカットの追加に失敗しました"
+    recordDeleted: "このサーフサイトは削除されました"
+  download:
+    unsupportedType: "未対応のダウンロード形式です。サーフは画像と動画のみ受け取ります"
+    unsupportedScheme: "未対応のダウンロード URL です"
+    appPackage: "アプリのインストールパッケージのダウンロードをブロックしました。Web ログインが表示されない場合は、メニューから PC 版サイトに切り替えてください"
   collect:
     detecting: "メディアを検出しています…"
     none: "このページにダウンロード可能なメディアは見つかりませんでした"
@@ -118,6 +141,7 @@ surf:
     done: "{queued}/{total} 件をダウンロードに追加しました"
     notReady: "ページの準備ができていません。しばらくしてから再試行してください"
     snapshotFailed: "ページのスナップショット保存に失敗しました：{error}"
+    ipcUnavailable: "このシステム WebView は安全なアプリ通信に対応していないため、一括ダウンロードは利用できません"
 
 webview:
   menu:
@@ -163,3 +187,8 @@ webview:
     notCaptured: "この動画のメディアストリームをキャプチャできませんでした（注入前に再生が始まった可能性があります。ページを再読み込みして再試行してください）"
     captureMissing: "この動画のキャプチャデータが見つかりません"
     captureEmpty: "キャプチャにメディアデータがありません"
+
+crawler:
+  toolbar:
+    collapse: "閉じる"
+    cancel: "タスクをキャンセル"

@@ -199,7 +199,7 @@ pub use compress::{
     image_thumbnail_dimensions_acceptable, IMAGE_THUMBNAIL_MAX_DIM,
     IMAGE_THUMBNAIL_SOURCE_THRESHOLD_BYTES,
 };
-pub use http::{build_reqwest_header_map, create_client};
+pub use http::{build_reqwest_header_map, create_client, create_following_redirects_client};
 pub use queue::{
     next_download_id, ActiveDownloadInfo, DownloadQueue, DownloadRequest, DownloadState,
 };

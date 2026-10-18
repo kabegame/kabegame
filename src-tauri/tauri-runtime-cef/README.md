@@ -327,8 +327,8 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium
   Linux 前端因此**只**写自定义 mime 里的 image id，不再写 `DownloadURL` / `text/uri-list` /
   `text/plain`（写了也会被 Chromium 一并清掉）。代价是没有 HTTP 兜底：resolver 未安装、id 未获
   授权或仍在用未包含 0003 的旧 CEF 时，目标端拿到的是 Blink 为 `<img>` 自动填充的缩略图载荷。
-  Windows / macOS 仍写那三项并沿用 `DownloadURL` 虚拟文件路径，`/download` 端点为此保留，
-  不受此链路影响。
+  Windows 仍写那三项并沿用 `DownloadURL` 虚拟文件路径，URL 直接使用当前媒体元素实际加载的
+  `/file/{*path}`、`/thumbnail/{*path}` 或 `/compatible/{*path}`；macOS 与 Linux 一样走真实路径注入。
 - Wayland 会话下**不能**用 `KABEGAME_OZONE_PLATFORM=x11` 退回 X11：XWayland 客户端往原生
   Wayland 目标拖出会被合成器直接拒绝（光标显示禁止符号），拖出在源头就失败，与上面这条
   链路是否生效无关。本机 Chrome 强制 `--ozone-platform=x11` 可独立复现。

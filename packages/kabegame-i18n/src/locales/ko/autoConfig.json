@@ -35,6 +35,8 @@
   "listCount": "총 {total}개",
   "listFiltered": "{shown} / {total}개 표시",
   "moreActions": "더보기",
+  "copyAsPresetJson": "추천 설정 JSON으로 복사",
+  "presetJsonCopied": "복사했습니다. 플러그인 configs/ 아래 .json 파일로 저장할 수 있습니다",
   "relatedTasks": "관련 작업",
   "noRelatedTasks": "없음",
   "taskTriggerScheduled": "예약 실행",

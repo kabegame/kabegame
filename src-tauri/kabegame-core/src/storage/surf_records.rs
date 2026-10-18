@@ -1,7 +1,7 @@
 use crate::emitter::GlobalEmitter;
 use crate::storage::images::RangedImages;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
@@ -17,6 +17,9 @@ pub struct SurfRecord {
     pub icon: Option<Vec<u8>>,
     pub last_visit_at: u64,
     pub created_at: u64,
+    /// 安卓畅游是否以桌面版网站打开该站。只存模式不存 UA 串，UA 每次由系统默认 UA 派生。
+    #[serde(default)]
+    pub desktop_mode: bool,
     #[serde(default)]
     pub last_image: Option<ImageInfo>,
 }
@@ -35,6 +38,32 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn update_surf_record_cookie_row_if_changed(
+    conn: &Connection,
+    id: &str,
+    cookie: &str,
+) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE surf_records SET cookie = ?1 WHERE id = ?2 AND cookie != ?1",
+        params![cookie, id],
+    )
+    .map(|changed| changed > 0)
+    .map_err(|e| format!("Failed to update surf_record cookie: {e}"))
+}
+
+fn update_surf_record_desktop_mode_row_if_changed(
+    conn: &Connection,
+    id: &str,
+    enabled: bool,
+) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE surf_records SET desktop_mode = ?1 WHERE id = ?2 AND desktop_mode != ?1",
+        params![enabled, id],
+    )
+    .map(|changed| changed > 0)
+    .map_err(|e| format!("Failed to update surf_record desktop_mode: {e}"))
 }
 
 impl Storage {
@@ -81,7 +110,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
+                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at, sr.desktop_mode
                  FROM surf_records sr
                  WHERE sr.host = ?1
                  LIMIT 1",
@@ -96,6 +125,7 @@ impl Storage {
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, i64>(6)?,
                         r.get::<_, i64>(7)?,
+                        r.get::<_, i64>(8)?,
                     ))
                 },
             )
@@ -104,7 +134,17 @@ impl Storage {
         drop(conn);
 
         match row {
-            Some((id, host, name, root_url, cookie, icon, last_visit_at, created_at)) => {
+            Some((
+                id,
+                host,
+                name,
+                root_url,
+                cookie,
+                icon,
+                last_visit_at,
+                created_at,
+                desktop_mode,
+            )) => {
                 let last_image = self.find_latest_image_by_surf_record(&id)?;
                 Ok(Some(SurfRecord {
                     id,
@@ -115,6 +155,7 @@ impl Storage {
                     icon,
                     last_visit_at: last_visit_at as u64,
                     created_at: created_at as u64,
+                    desktop_mode: desktop_mode != 0,
                     last_image,
                 }))
             }
@@ -126,7 +167,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let row = conn
             .query_row(
-                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
+                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at, sr.desktop_mode
                  FROM surf_records sr
                  WHERE sr.id = ?1
                  LIMIT 1",
@@ -141,6 +182,7 @@ impl Storage {
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, i64>(6)?,
                         r.get::<_, i64>(7)?,
+                        r.get::<_, i64>(8)?,
                     ))
                 },
             )
@@ -149,7 +191,17 @@ impl Storage {
         drop(conn);
 
         match row {
-            Some((id, host, name, root_url, cookie, icon, last_visit_at, created_at)) => {
+            Some((
+                id,
+                host,
+                name,
+                root_url,
+                cookie,
+                icon,
+                last_visit_at,
+                created_at,
+                desktop_mode,
+            )) => {
                 let last_image = self.find_latest_image_by_surf_record(&id)?;
                 Ok(Some(SurfRecord {
                     id,
@@ -160,6 +212,7 @@ impl Storage {
                     icon,
                     last_visit_at: last_visit_at as u64,
                     created_at: created_at as u64,
+                    desktop_mode: desktop_mode != 0,
                     last_image,
                 }))
             }
@@ -183,7 +236,7 @@ impl Storage {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
+            "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at, sr.desktop_mode
              FROM surf_records sr WHERE sr.id IN ({})",
             placeholders
         );
@@ -201,6 +254,7 @@ impl Storage {
                     icon: r.get::<_, Option<Vec<u8>>>(5)?,
                     last_visit_at: r.get::<_, i64>(6)? as u64,
                     created_at: r.get::<_, i64>(7)? as u64,
+                    desktop_mode: r.get::<_, i64>(8)? != 0,
                     last_image: None,
                 })
             })
@@ -225,7 +279,7 @@ impl Storage {
             .map_err(|e| format!("Failed to query surf_records total: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at
+                "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, sr.icon, sr.last_visit_at, sr.created_at, sr.desktop_mode
                  FROM surf_records sr
                  ORDER BY sr.last_visit_at DESC
                  LIMIT ?1 OFFSET ?2",
@@ -242,6 +296,7 @@ impl Storage {
                     r.get::<_, Option<Vec<u8>>>(5)?,
                     r.get::<_, i64>(6)?,
                     r.get::<_, i64>(7)?,
+                    r.get::<_, i64>(8)?,
                 ))
             })
             .map_err(|e| format!("Failed to query surf_records: {}", e))?;
@@ -254,7 +309,7 @@ impl Storage {
         drop(conn);
 
         let mut records = Vec::with_capacity(raw.len());
-        for (id, host, name, root_url, cookie, icon, last_visit_at, created_at) in raw {
+        for (id, host, name, root_url, cookie, icon, last_visit_at, created_at, desktop_mode) in raw {
             records.push(SurfRecord {
                 last_image: self.find_latest_image_by_surf_record(&id)?,
                 id,
@@ -265,6 +320,7 @@ impl Storage {
                 icon,
                 last_visit_at: last_visit_at as u64,
                 created_at: created_at as u64,
+                desktop_mode: desktop_mode != 0,
             });
         }
 
@@ -399,6 +455,30 @@ impl Storage {
         .map_err(|e| format!("Failed to update surf_record cookie: {}", e))?;
         drop(conn);
         GlobalEmitter::global().emit_surf_record_changed(id, json!({ "cookie": cookie }));
+        Ok(())
+    }
+
+    /// 仅在 Cookie 实际变化时写库并发 `SurfRecordChanged`；安卓内容页每次加载完成都会上报。
+    pub fn update_surf_record_cookie_if_changed(&self, id: &str, cookie: &str) -> Result<(), String> {
+        let cookie = cookie.trim();
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let changed = update_surf_record_cookie_row_if_changed(&conn, id, cookie)?;
+        drop(conn);
+        if changed {
+            GlobalEmitter::global().emit_surf_record_changed(id, json!({ "cookie": cookie }));
+        }
+        Ok(())
+    }
+
+    /// 安卓畅游「桌面版网站」开关：值变化才写库并发 `SurfRecordChanged { desktopMode }`。
+    pub fn set_surf_record_desktop_mode(&self, id: &str, enabled: bool) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let changed = update_surf_record_desktop_mode_row_if_changed(&conn, id, enabled)?;
+        drop(conn);
+        if changed {
+            GlobalEmitter::global()
+                .emit_surf_record_changed(id, json!({ "desktopMode": enabled }));
+        }
         Ok(())
     }
 
@@ -594,5 +674,62 @@ impl Storage {
             .optional()
             .map_err(|e| format!("Failed to query latest surf image: {}", e))?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    #[test]
+    fn update_cookie_only_writes_when_value_changes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE surf_records (id TEXT PRIMARY KEY, cookie TEXT NOT NULL DEFAULT '');
+            INSERT INTO surf_records (id, cookie) VALUES ('surf-1', 'sid=old');",
+        )
+        .unwrap();
+
+        assert!(!super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=old").unwrap());
+        assert!(super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=new").unwrap());
+        assert_eq!(
+            conn.query_row("SELECT cookie FROM surf_records WHERE id = 'surf-1'", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+            "sid=new"
+        );
+    }
+
+    #[test]
+    fn desktop_mode_only_writes_when_value_changes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE surf_records (
+                 id TEXT PRIMARY KEY,
+                 desktop_mode INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO surf_records (id) VALUES ('surf-1');",
+        )
+        .unwrap();
+
+        assert!(
+            !super::update_surf_record_desktop_mode_row_if_changed(&conn, "surf-1", false).unwrap()
+        );
+        assert!(
+            super::update_surf_record_desktop_mode_row_if_changed(&conn, "surf-1", true).unwrap()
+        );
+        assert!(
+            !super::update_surf_record_desktop_mode_row_if_changed(&conn, "surf-1", true).unwrap()
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT desktop_mode FROM surf_records WHERE id = 'surf-1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
     }
 }

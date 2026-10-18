@@ -61,12 +61,10 @@
             :placeholder="$t('plugins.selectSourcePlaceholder')"
             :select-trigger="IS_ANDROID"
             :popper-class="uiStore.isCompact ? undefined : 'crawl-plugin-select-dropdown'"
-            :show-js-warning="uiStore.isCompact"
-            :show-selected-js-warning="uiStore.isCompact"
             show-labels
             @update:model-value="onPluginChange"
           />
-          <el-tooltip v-if="!uiStore.isCompact" :content="$t('plugins.detail.goSurfLogin')" placement="top">
+          <el-tooltip :content="$t('plugins.detail.goSurfLogin')" placement="top">
             <span class="inline-flex flex-none">
               <el-button
                 class="!m-0 h-32px w-40px !p-0"
@@ -389,7 +387,7 @@ async function confirmSaveConfig() {
 
 async function submit() {
   const cfg = tc.value;
-  if (!(await guardPluginPlatform(cfg?.pluginId ?? ""))) return;
+  if (!(await guardPluginPlatform())) return;
   if (!cfg?.pluginId) {
     ElMessage.warning(t("plugins.selectSourcePlaceholder"));
     return;

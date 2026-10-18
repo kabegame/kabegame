@@ -168,6 +168,7 @@ function mount() {
   address.autocomplete = "off";
   address.spellcheck = false;
   address.inputMode = "url";
+  address.enterKeyHint = "go";
   address.value = currentUrl;
 
   // invoke 失败时把原因直接显示在地址栏里（导航栏 webview 的 devtools 需经
@@ -215,7 +216,6 @@ function mount() {
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>',
     () => runCommand("surf_open_in_browser", { url: currentUrl }),
   );
-
   // 一键下载：运行态完全由 Rust 的 surf-collect-state 驱动，点击只发 toggle（空闲=开始，运行中=取消）
   const collect = iconButton("Download all media", COLLECT_ICON, () => runCommand("surf_collect_toggle", { host }));
   const setCollectRunning = (running: boolean) => {

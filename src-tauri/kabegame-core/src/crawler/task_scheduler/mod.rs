@@ -28,15 +28,12 @@ pub use task::{Task, TaskError, TaskParams, TaskResult};
 pub const MAX_TASK_WORKER_LOOPS: usize = 10;
 
 /// 首次进入 WebView 爬虫时的 page_label（Kabegame.pageLabel() 的初始值）。
-#[cfg(not(target_os = "android"))]
 const INITIAL_PAGE_LABEL: &str = "initial";
 
 /// WebView 会话心跳超时：bootstrap.js 每 60s 上报一次（crawl_heartbeat），
 /// 超过该时长未收到即判定窗口无响应，结束任务。
-#[cfg(not(target_os = "android"))]
 const WEBVIEW_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(120);
 
-#[cfg(not(target_os = "android"))]
 use crate::crawler::webview::get_webview_handler;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -793,8 +790,7 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
         };
     }
 
-    // WebView 后端：仅桌面 CEF。
-    #[cfg(not(target_os = "android"))]
+    // WebView 后端：桌面是隐藏的 CEF 窗口，安卓是停靠在主界面下的宿主 WebView。
     if plugin.script.js_source().is_some() {
         let start_url = if run.params.base_url().trim().is_empty() {
             "about:blank".to_string()
@@ -827,7 +823,6 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
 
 /// 在隐藏的爬虫 WebView 窗口里跑一次任务会话：建窗 → 心跳看门狗等完成 → 排空下载 → 销毁窗口。
 /// 窗口注入的脚本由 app crate 的 `CrawlerWebViewHandler` 按任务决定（JS 插件 / 网页收集）。
-#[cfg(not(target_os = "android"))]
 pub(crate) async fn run_webview_session(
     download_queue: &DownloadQueue,
     run: &Arc<Task>,
@@ -859,7 +854,13 @@ pub(crate) async fn run_webview_session(
     // 心跳看门狗:每轮 select 重建 sleep,收到心跳即重置超时;
     // 超时(渲染进程卡死/崩溃后心跳停止)则以「窗口无响应」结束任务,
     // 不刷新窗口(刷新会导致任务状态不稳定),走既有失败收尾路径。
+    //
+    // 安卓宿主停靠在主界面下:app 退后台后页面被 Chromium 冻结,心跳必然停,
+    // 那段时间不计时;回到前台再从新的期限重新计时,避免把「后台挂起」误判成无响应。
+    let mut host_visibility = crate::crawler::webview::host_visibility();
     let completion = loop {
+        // 每轮重读:前后台切换分支会让循环重新进入,此时按最新可见性决定是否计时。
+        let host_visible = *host_visibility.borrow();
         tokio::select! {
             r = &mut completion_rx => {
                 break r.map_err(|_| {
@@ -868,7 +869,10 @@ pub(crate) async fn run_webview_session(
             }
             // 通道关闭时模式不匹配 → 本轮内禁用该分支,继续等 completion/超时。
             Some(()) = heartbeat_rx.recv() => {}
-            _ = tokio::time::sleep(WEBVIEW_HEARTBEAT_TIMEOUT) => {
+            // 前后台切换都重新进入循环:切到不可见时禁用超时分支,切回可见时重置期限。
+            // 发送端是进程级 static,不会关闭,故无需处理返回的 Err。
+            _ = host_visibility.changed() => {}
+            _ = tokio::time::sleep(WEBVIEW_HEARTBEAT_TIMEOUT), if host_visible => {
                 GlobalEmitter::global().emit_task_log(
                     &run.task_id,
                     "error",
@@ -1150,8 +1154,14 @@ fn validate_var_value(
         "checkbox" => {
             let object = value.as_object().ok_or("必须是对象")?;
             let variables = extract_option_variables(&def.options);
-            let expected = variables.iter().map(String::as_str).collect::<std::collections::HashSet<_>>();
-            let actual = object.keys().map(String::as_str).collect::<std::collections::HashSet<_>>();
+            let expected = variables
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>();
+            let actual = object
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>();
             if actual != expected {
                 return Err("键集合必须与声明的 option variable 完全一致".to_string());
             }
@@ -1285,7 +1295,10 @@ mod tests {
             HashMap::from([
                 ("text".to_string(), serde_json::json!("")),
                 ("items".to_string(), serde_json::json!([])),
-                ("checks".to_string(), serde_json::json!({"a": false, "b": false})),
+                (
+                    "checks".to_string(),
+                    serde_json::json!({"a": false, "b": false}),
+                ),
             ]),
             None,
         )
@@ -1344,5 +1357,100 @@ mod tests {
         assert!(error.contains("Task VFS handle already registered: 4242"));
         assert!(Arc::ptr_eq(&registry.get_by_handle(4242).unwrap(), &first));
         assert!(registry.get("second-handle-task").is_none());
+    }
+
+    struct WatchdogTestHandler;
+
+    #[async_trait::async_trait]
+    impl crate::crawler::webview::CrawlerWebViewHandler for WatchdogTestHandler {
+        async fn create_task_window(&self, _task_id: &str, _base_url: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn destroy_task_window(&self, _task_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn start_native_download(
+            &self,
+            _task_id: &str,
+            _surf_record_id: Option<&str>,
+            _url: &str,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn watchdog_test_plugin() -> crate::plugin::Plugin {
+        crate::plugin::Plugin {
+            id: "watchdog-visibility-test".to_string(),
+            name: serde_json::json!("Watchdog visibility test"),
+            description: serde_json::json!("Watchdog visibility test"),
+            version: "0.0.0".to_string(),
+            base_url: "https://example.com".to_string(),
+            size_bytes: 0,
+            config: HashMap::new(),
+            script_type: "js".to_string(),
+            min_app_version: None,
+            labels: Vec::new(),
+            min_app_incompatible: false,
+            file_path: None,
+            doc: None,
+            changelog: None,
+            icon_png_base64: None,
+            description_template: None,
+            recommended_configs: Vec::new(),
+            var_defs: Vec::new(),
+            script: crate::plugin::PluginScript::default(),
+            assets: None,
+            providers: Vec::new(),
+            metadata_migration: None,
+            version_packed: 0,
+        }
+    }
+
+    /// app 退后台期间看门狗不计时：虚拟时间推进 10 分钟也不能把任务判成「窗口无响应」。
+    #[tokio::test(start_paused = true)]
+    async fn webview_watchdog_suspends_while_host_hidden() {
+        crate::app_paths::AppPaths::init_for_tests();
+        let _ = Settings::init_global();
+        let _ = Storage::init_global();
+
+        let queue = Arc::new(DownloadQueue::new());
+        let run = Arc::new(Task::new(
+            "watchdog-visibility-test".to_string(),
+            TaskParams {
+                plugin: Arc::new(watchdog_test_plugin()),
+                images_dir: std::path::PathBuf::new(),
+                output_album_id: None,
+                config: HashMap::new(),
+            },
+            None,
+        ));
+        let handler: Arc<dyn crate::crawler::webview::CrawlerWebViewHandler> =
+            Arc::new(WatchdogTestHandler);
+        // 同一测试进程里只会设置一次；已被设置过时复用既有 handler（行为一致）。
+        let _ = crate::crawler::webview::set_webview_handler(handler);
+
+        crate::crawler::webview::set_host_visible(false);
+        let run_for_session = Arc::clone(&run);
+        let queue_for_session = Arc::clone(&queue);
+        let session = tokio::spawn(async move {
+            run_webview_session(
+                &queue_for_session,
+                &run_for_session,
+                "https://example.com".to_string(),
+            )
+            .await
+        });
+
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        assert!(!session.is_finished(), "宿主不可见期间看门狗不应超时");
+
+        crate::crawler::webview::set_host_visible(true);
+        run.complete_webview(Ok(()));
+        let result = session.await.unwrap();
+        crate::crawler::webview::set_host_visible(true);
+        assert!(result.is_ok(), "会话应正常结束: {result:?}");
     }
 }

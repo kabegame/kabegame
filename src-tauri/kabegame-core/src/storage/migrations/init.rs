@@ -192,7 +192,8 @@ CREATE TABLE surf_records (
     last_visit_at  INTEGER NOT NULL,
     created_at     INTEGER NOT NULL,
     name           TEXT    NOT NULL DEFAULT '',
-    cookie         TEXT    NOT NULL DEFAULT ''
+    cookie         TEXT    NOT NULL DEFAULT '',
+    desktop_mode   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_surf_records_host       ON surf_records(host);
 CREATE INDEX idx_surf_records_last_visit ON surf_records(last_visit_at DESC);

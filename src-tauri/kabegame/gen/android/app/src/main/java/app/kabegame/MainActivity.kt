@@ -10,12 +10,14 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -25,16 +27,22 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.WebViewCompat
 import app.kabegame.plugin.PickerLauncherHost
+import app.kabegame.plugin.TaskNotificationPermissionHost
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.URLDecoder
 
-class MainActivity : TauriActivity(), PickerLauncherHost {
+/** wry 生成的 `WryActivity.kt` 中 `ACTIVITY_ID_KEY` 的值（那里是 private，只能照抄）。 */
+private const val WRY_ACTIVITY_ID_KEY = "__wryActivityId"
+
+class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermissionHost {
   private var folderPickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var filePickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var webView: WebView? = null
   private var pendingImportPath: String? = null
+  /** 爬虫页面显示时接管返回键：优先把停靠的页面放回主界面下。 */
+  private var crawlerBack: OnBackPressedCallback? = null
 
   /** 用于在 onPageFinished 时再次注入安全区（主文档加载完成后 document 才稳定） */
   private var lastSystemInsets: Insets? = null
@@ -103,12 +111,22 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
     deleteRequestCallback = null
   }
 
+  private var notificationPermissionCallback: ((Boolean) -> Unit)? = null
+  private val notificationPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestPermission()
+  ) { granted ->
+    notificationPermissionCallback?.invoke(granted)
+    notificationPermissionCallback = null
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     android.util.Log.i("Kabegame", "MainActivity.onCreate start")
     try {
       enableEdgeToEdge()
+      pinMainActivityId()
       super.onCreate(savedInstanceState)
-      handleIntent(intent)
+      // 重建（配置变化 / 进程回收后恢复）会带回同一个 intent，不能再次打开畅游或导入。
+      if (savedInstanceState == null) handleIntent(intent)
       android.util.Log.i("Kabegame", "MainActivity.onCreate done")
     } catch (e: Throwable) {
       android.util.Log.e("Kabegame", "MainActivity.onCreate crash", e)
@@ -116,9 +134,74 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
     }
   }
 
+  /**
+   * 让主界面的 wry ActivityId 恒为最小值，绕开 tao 的 JNI 引用泄漏。
+   *
+   * tao 的 `MonitorHandle::size()`（Tauri 每建一个 webview 都会经 `inner_size()` 调一次）用的是
+   * `WINDOW_MANAGER` 里 **id 最小**的 Activity 的 window manager，并在永不返回 Java 的事件循环线程上
+   * 取 `WindowMetrics`，局部引用不释放。子 Activity（畅游 / 爬虫宿主）的 id 是 `Random.nextInt()`，
+   * 约一半概率比主界面的 `hashCode()` 小，于是被选中并在关闭后被钉在堆里。主界面 id 取
+   * `Int.MIN_VALUE` 后恒被选中，而它本来就常驻。
+   *
+   * 必须在 `super.onCreate` 之前写：`WryActivity.onCreate` 按 savedInstanceState → intent extra →
+   * `hashCode()` 的顺序取 id，重建时由它自己的 `onSaveInstanceState` 带回同一个值。
+   * key 是 wry 生成的 `WryActivity.kt` 里的私有常量 `ACTIVITY_ID_KEY`，升级 wry 时要核对。
+   */
+  private fun pinMainActivityId() {
+    intent.putExtra(WRY_ACTIVITY_ID_KEY, Int.MIN_VALUE)
+  }
+
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     handleIntent(intent)
+  }
+
+  /**
+   * 主界面 WebView 的渲染进程退出（被外部页面拖崩或被系统回收）：这个 WebView 已不可用，
+   * 先摘下，再重建 Activity，由 wry 按原属性重建主 webview（destroy 交给 onDestroy）。
+   * 重建 post 出去，让共用渲染进程的其它 WebView 先各自收到回调。
+   */
+  private fun onMainRenderProcessGone(view: WebView) {
+    android.util.Log.w("Kabegame", "Main WebView render process gone, recreating MainActivity")
+    (view.parent as? android.view.ViewGroup)?.removeView(view)
+    window.decorView.post { if (!isFinishing && !isDestroyed) recreate() }
+  }
+
+  /**
+   * wry 从不调 WebView.destroy()。配置变化重建时它保留按 webview id 登记的回调，在新 Activity 里
+   * 新建 webview；旧实例若不销毁，页面会继续运行，并以同一 id 向 Rust 发 IPC（响应却回到新页面）。
+   * 放在 super 之后，保证 wry 先拿到 webview id。
+   */
+  override fun onDestroy() {
+    // 先摘掉爬虫容器的引用：重建后的 MainActivity 会把它们重新挂到新的内容根节点。
+    CrawlerHost.detachMain(this)
+    val old = webView
+    super.onDestroy()
+    old?.let {
+      (it.parent as? android.view.ViewGroup)?.removeView(it)
+      it.destroy()
+    }
+    webView = null
+    crawlerBack = null
+  }
+
+  /**
+   * 爬虫页面（停靠在主 webview 下面）显示时接管返回键：按返回只「收起」，不退出主界面。
+   * 没有显示任何爬虫页面时禁用本回调，交回主界面的默认返回行为。
+   */
+  private fun installCrawlerBackCallback() {
+    crawlerBack?.remove()
+    val callback = object : OnBackPressedCallback(false) {
+      override fun handleOnBackPressed() {
+        CrawlerHost.hideShown()
+      }
+    }
+    onBackPressedDispatcher.addCallback(this, callback)
+    crawlerBack = callback
+  }
+
+  fun setCrawlerBackEnabled(enabled: Boolean) {
+    crawlerBack?.isEnabled = enabled
   }
 
   // 重写 onWebViewCreate 以捕获 WebView 实例
@@ -158,6 +241,12 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       webView.postDelayed({
           injectSafeAreaInsets(webView, webView)
       }, 500)
+
+      // 必须在 super.onWebViewCreate（wry 的 setWebView）之后注册：分发器先调用最后注册的回调，
+      // 而 wry 在 setWebView 里注册的回调会把返回键消费成主界面 webview 的后退。
+      installCrawlerBackCallback()
+      // 主界面重建后，把仍在运行的爬虫页面容器挂到新的内容根节点（爬到下面继续跑）。
+      CrawlerHost.attachMain(this)
   }
 
   /**
@@ -172,7 +261,11 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
                       android.util.Log.w("Kabegame", "Failed to get original WebViewClient, skipping content:// streaming wrapper")
                       return
                   }
-              val wrappedClient = ContentUriStreamClient(applicationContext, originalClient) { v, _ ->
+              val wrappedClient = ContentUriStreamClient(
+                  applicationContext,
+                  originalClient,
+                  onRenderProcessGoneCallback = { view -> this@MainActivity.onMainRenderProcessGone(view) },
+              ) { v, _ ->
                   v?.let {
                       this@MainActivity.injectSafeAreaInsetsForPageFinished(it)
                   }
@@ -226,6 +319,11 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
     deleteRequestLauncher.launch(IntentSenderRequest.Builder(sender).build())
   }
 
+  override fun launchNotificationPermission(onResult: (Boolean) -> Unit) {
+    notificationPermissionCallback = onResult
+    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+  }
+
   /** 将 content:// URI 转为可读文件路径（供需要时使用） */
   fun copyContentUriToFile(uri: Uri): String? = copyContentUriToPrivateStorage(uri)
 
@@ -234,6 +332,14 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       
       val action = intent.action
       val data = intent.data
+
+      // 桌面快捷方式打开畅游站点。从最近任务恢复时系统重放最初的 intent，要忽略。
+      if (SurfShortcuts.ACTION_OPEN_SURF == action) {
+          val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+          val host = intent.getStringExtra(SurfShortcuts.EXTRA_HOST)
+          if (!fromHistory && !host.isNullOrBlank()) SurfShortcuts.deliver(host)
+          return
+      }
       
       // 处理 ACTION_VIEW（从文件管理器或其他应用打开）
       if (Intent.ACTION_VIEW == action && data != null) {
@@ -342,6 +448,7 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
 private class ContentUriStreamClient(
     private val context: android.content.Context,
     private val delegate: WebViewClient,
+    private val onRenderProcessGoneCallback: ((WebView) -> Unit)? = null,
     private val onPageFinishedCallback: ((WebView?, String?) -> Unit)? = null
 ) : WebViewClient() {
 
@@ -469,5 +576,12 @@ private class ContentUriStreamClient(
         error: WebResourceError?
     ) {
         delegate.onReceivedError(view, request, error)
+    }
+
+    // 应用内所有 WebView（主界面、畅游、爬虫页）共用一个渲染进程；任何一个没处理渲染进程退出，
+    // Chromium 就会杀掉整个应用进程。主界面接住后自行重建。
+    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        onRenderProcessGoneCallback?.invoke(view) ?: return false
+        return true
     }
 }

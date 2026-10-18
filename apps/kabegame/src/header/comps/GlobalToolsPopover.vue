@@ -50,6 +50,10 @@
           <el-icon class="row-icon"><Setting /></el-icon>
           <span class="row-label">{{ t("route.settings") }}</span>
         </div>
+        <div v-if="!IS_WEB" class="tool-row" @click="handleOpenSurf">
+          <el-icon class="row-icon"><Compass /></el-icon>
+          <span class="row-label">{{ t("route.surf") }}</span>
+        </div>
         <div v-if="groups.length > 0" class="tool-divider" />
       </template>
 
@@ -80,12 +84,14 @@
 
 <script setup lang="ts">
 import { watch } from "vue";
-import { Tools, Setting } from "@kabegame/element-plus-icons";
+import { useRouter } from "vue-router";
+import { Tools, Setting, Compass } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 import { useModal } from "@/composables/useModal";
 import { useGlobalTools, type GlobalToolItem } from "@/header/globalToolsRegistry";
 import { useBusyTasks } from "@/composables/useBusyTasks";
 import BusyTasksSection from "@/components/busy/BusyTasksSection.vue";
+import { IS_WEB } from "@/env";
 
 withDefaults(defineProps<{ variant: "sidebar" | "compact"; collapsed?: boolean }>(), {
   collapsed: false,
@@ -93,6 +99,7 @@ withDefaults(defineProps<{ variant: "sidebar" | "compact"; collapsed?: boolean }
 const emit = defineEmits<{ "open-settings": [] }>();
 
 const { t } = useI18n();
+const router = useRouter();
 const modal = useModal();
 const { groups } = useGlobalTools();
 const { count: busyCount, hasUnseenFailure, markFailuresSeen } = useBusyTasks();
@@ -106,6 +113,10 @@ watch(
 
 const handleOpenSettings = () => {
   emit("open-settings");
+  modal.close();
+};
+const handleOpenSurf = () => {
+  void router.push("/surf");
   modal.close();
 };
 const handleItemClick = (item: GlobalToolItem) => {

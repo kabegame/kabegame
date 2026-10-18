@@ -24,6 +24,8 @@
   "surfHelpTitle": "暢遊說明",
   "surfHelpIntro": "暢遊是 Kabegame 的內建瀏覽與收集功能。輸入目標網站 URL（如 https://pixiv.net）並點擊「開始暢遊」後，會在應用內開啟該頁面；您可以在該視窗中右鍵下載圖片或影片，成功下載的圖片和影片會加入您的畫廊！",
   "surfHelpRecord": "每次暢遊會產生一筆記錄，可在此頁快速再次進入該網站，或透過「檢視最近圖片」進入該網站的畫廊檢視。",
+  "surfHelpIntroAndroid": "暢遊會在獨立頁面中開啟目標網站。您可以在其中登入，關閉頁面時 Kabegame 會自動儲存該網站的 Cookie 與瀏覽器識別，供需要登入的外掛使用。",
+  "surfHelpRecordAndroid": "現在支援一鍵下載與網頁內下載：下載的圖片和影片會進入該網站的暢遊記錄。",
   "gotIt": "知道了",
   "pleaseEnterUrl": "請輸入 URL",
   "useHttps": "請使用 https 協定",
@@ -62,6 +64,7 @@
   "loadImagesFailed": "載入圖片失敗",
   "viewDownloadedImages": "檢視下載圖片",
   "recordDetails": "詳情",
+  "addToHome": "加入主畫面",
   "recordName": "名稱",
   "recordNamePlaceholder": "輸入自訂名稱（可選）",
   "entryPath": "入口路徑",
@@ -69,6 +72,23 @@
   "fullUrlPreview": "完整 URL：",
   "cookieLabel": "Cookie",
   "cookieEmpty": "暫無已儲存的 Cookie",
-  "deleteRecordDanger": "刪除此暢遊記錄",
-  "savedSuccess": "已儲存"
+  "deleteRecordDanger": "刪除",
+  "savedSuccess": "已儲存",
+  "toolbar": {
+    "back": "後退",
+    "forward": "前進",
+    "reload": "重新載入",
+    "address": "網址",
+    "collect": "下載本頁全部媒體",
+    "cancel": "取消下載",
+    "openInBrowser": "在瀏覽器開啟",
+    "close": "關閉"
+  },
+  "download": {
+    "unsupportedType": "不支援的下載類型：暢遊只接收圖片和影片",
+    "unsupportedScheme": "不支援的下載網址"
+  },
+  "collect": {
+    "ipcUnavailable": "目前系統 WebView 不支援安全的應用通訊，無法一鍵下載"
+  }
 }

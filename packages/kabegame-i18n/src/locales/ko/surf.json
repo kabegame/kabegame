@@ -24,6 +24,8 @@
   "surfHelpTitle": "서핑 도움말",
   "surfHelpIntro": "서핑은 Kabegame의 내장 탐색 및 수집 기능입니다. 사이트 URL(예: https://pixiv.net)을 입력하고 \"서핑 시작\"을 클릭하면 앱 내에서 열립니다. 오른쪽 클릭으로 이미지나 동영상을 다운로드할 수 있으며 갤러리에 추가됩니다.",
   "surfHelpRecord": "각 서핑은 기록을 생성합니다. 여기서 사이트에 다시 들어가거나 \"최근 이미지 보기\"를 열어 해당 사이트의 갤러리 뷰를 볼 수 있습니다.",
+  "surfHelpIntroAndroid": "서핑은 대상 사이트를 별도 화면에서 엽니다. 여기서 로그인하면 화면을 닫을 때 Kabegame이 사이트의 Cookie와 브라우저 식별 정보를 저장하여 로그인이 필요한 플러그인에서 사용합니다.",
+  "surfHelpRecordAndroid": "이제 일괄 다운로드와 페이지 내 다운로드를 지원합니다. 다운로드한 이미지와 동영상은 이 사이트의 서핑 기록에 추가됩니다.",
   "gotIt": "알겠습니다",
   "pleaseEnterUrl": "URL을 입력해 주세요",
   "useHttps": "https를 사용해 주세요",
@@ -62,6 +64,7 @@
   "loadImagesFailed": "이미지 로드 실패",
   "viewDownloadedImages": "다운로드한 이미지 보기",
   "recordDetails": "상세",
+  "addToHome": "홈 화면에 추가",
   "recordName": "이름",
   "recordNamePlaceholder": "사용자 지정 이름 입력 (선택)",
   "entryPath": "진입 경로",
@@ -69,6 +72,23 @@
   "fullUrlPreview": "전체 URL: ",
   "cookieLabel": "Cookie",
   "cookieEmpty": "저장된 Cookie가 없습니다",
-  "deleteRecordDanger": "이 서핑 기록 삭제",
-  "savedSuccess": "저장됨"
+  "deleteRecordDanger": "삭제",
+  "savedSuccess": "저장됨",
+  "toolbar": {
+    "back": "뒤로",
+    "forward": "앞으로",
+    "reload": "새로 고침",
+    "address": "주소",
+    "collect": "이 페이지의 모든 미디어 다운로드",
+    "cancel": "다운로드 취소",
+    "openInBrowser": "브라우저에서 열기",
+    "close": "닫기"
+  },
+  "download": {
+    "unsupportedType": "지원하지 않는 다운로드 형식입니다. 서핑은 이미지와 동영상만 받습니다",
+    "unsupportedScheme": "지원하지 않는 다운로드 주소입니다"
+  },
+  "collect": {
+    "ipcUnavailable": "이 시스템 WebView는 안전한 앱 통신을 지원하지 않아 일괄 다운로드를 사용할 수 없습니다"
+  }
 }

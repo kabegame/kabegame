@@ -43,7 +43,6 @@
   "webpageCollectTitle": "網頁收集",
   "webpageSectionPage": "網頁",
   "webpageSectionSaveTo": "儲存到",
-  "webpageWebviewDesktopOnly": "WebView 後端需要桌面瀏覽器核心，Android 僅支援 V8。",
   "webpageHeadersHint": "這些 HTTP 標頭會用於讀取頁面及下載頁面上發現的媒體（可能位於第三方網域），請勿向不可信頁面填寫長期有效的憑證。",
   "webpageTaskAdded": "已新增網頁收集任務",
   "webpageTaskFailed": "網頁收集任務建立失敗",

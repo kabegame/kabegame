@@ -64,6 +64,7 @@ commands.allow = [
   "surf_start_session",
   "surf_close_session",
   "surf_get_session_status",
+  "surf_pin_shortcut",
   "surf_list_records",
   "surf_get_record",
   "surf_get_record_images",

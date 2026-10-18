@@ -2,6 +2,7 @@
   <Teleport to="body">
     <div
       v-if="kamechanEnabled"
+      v-show="!kamechanHidden"
       ref="hostEl"
       class="kamechan-host"
       :class="{ 'is-minimized': minimized, 'is-dragging': isDragging }"
@@ -102,7 +103,7 @@ const emit = defineEmits<{ "open-settings": [] }>();
 const { t } = useI18n();
 const store = useKameMessageStore();
 const settingsStore = useSettingsStore();
-const { queue } = storeToRefs(store);
+const { queue, kamechanHidden } = storeToRefs(store);
 const { state, imageSrc, wave } = useKamechanMachine();
 
 const minimized = ref(false);

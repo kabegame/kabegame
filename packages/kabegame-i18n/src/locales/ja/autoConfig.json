@@ -35,6 +35,8 @@
   "listCount": "全 {total} 件",
   "listFiltered": "表示 {shown} / {total} 件",
   "moreActions": "その他",
+  "copyAsPresetJson": "おすすめ設定 JSON としてコピー",
+  "presetJsonCopied": "コピーしました。プラグインの configs/ に .json ファイルとして保存できます",
   "relatedTasks": "関連タスク",
   "noRelatedTasks": "なし",
   "taskTriggerScheduled": "スケジュール実行",

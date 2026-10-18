@@ -41,7 +41,6 @@
   "webpageCollectTitle": "웹페이지 수집",
   "webpageSectionPage": "페이지",
   "webpageSectionSaveTo": "저장 위치",
-  "webpageWebviewDesktopOnly": "WebView 백엔드는 데스크톱 브라우저 엔진이 필요하며, Android는 V8만 지원합니다.",
   "webpageHeadersHint": "이 HTTP 헤더는 페이지를 읽을 때와 페이지에서 찾은 미디어(서드파티 도메인일 수 있음)를 다운로드할 때 전송됩니다. 신뢰할 수 없는 페이지에는 장기간 유효한 자격 증명을 입력하지 마세요.",
   "webpageTaskAdded": "웹페이지 수집 작업을 추가했습니다",
   "webpageTaskFailed": "웹페이지 수집 작업을 만들지 못했습니다",

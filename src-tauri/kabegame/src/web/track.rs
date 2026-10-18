@@ -1,4 +1,5 @@
-// Web 版 `/rpc` 接口埋点：每次调用发一条 umami 事件，事件名为方法名、url 为 `/rpc/<方法名>`，
+// Web 版 RPC 接口埋点：`/rpc/{method}` 与兼容入口 `/rpc` 的每次调用都发一条 umami 事件，
+// 事件名为方法名、url 为 `/rpc/<方法名>`，
 // 使 umami 的 Events 与 Pages 直接按命令拆分（data: method / ok / code / ms）。
 // 只在服务端按接口统计，不读取、不转发任何客户端请求头（IP、UA 等），事件全部归到服务器自己这一个访客。
 // 配置走运行时环境变量（systemd drop-in），未配置即整体关闭：

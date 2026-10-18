@@ -206,6 +206,31 @@ macro_rules! t {
 mod tests {
     use super::*;
 
+    /// Android 畅游原生工具栏与页面下载提示的键：同样必须五语言齐全。
+    /// rust-i18n 对缺失键返回 key 原文，工具栏会没有无障碍文案、页内 toast 会直接显示 key。
+    #[test]
+    fn surf_toolbar_and_download_keys_translated_in_every_locale() {
+        const KEYS: &[&str] = &[
+            "surf.toolbar.back",
+            "surf.toolbar.forward",
+            "surf.toolbar.reload",
+            "surf.toolbar.address",
+            "surf.toolbar.collect",
+            "surf.toolbar.cancel",
+            "surf.toolbar.openInBrowser",
+            "surf.toolbar.close",
+            "surf.download.unsupportedType",
+            "surf.download.unsupportedScheme",
+            "surf.collect.ipcUnavailable",
+        ];
+        for locale in SUPPORTED_LOCALES {
+            for key in KEYS {
+                let text = translate_for_locale(key, locale);
+                assert!(!text.is_empty() && text != *key, "{locale} 缺少 {key}");
+            }
+        }
+    }
+
     /// `WEBVIEW_KEYS` 的每个键在所有语言里都必须有译文：缺失时 rust-i18n 退回 key 原文，
     /// 注入页面会直接显示 `webview.xxx`。
     #[test]

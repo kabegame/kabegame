@@ -7,7 +7,7 @@ import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/
 import { albumChangeBatch, publishLocal } from "@/services/dataChangeHub";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
-import { fileToUrl } from "@/utils/fileUrl";
+import { fileNameFromUrlOrPath, fileToUrl } from "@/utils/fileUrl";
 import { isVideoMediaType } from "@/utils/mediaMime";
 import { IS_WEB } from "@/env";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -61,39 +61,11 @@ export function useImageOperations(
   const getImageDownloadUrl = (image: ImageInfo) =>
     fileToUrl(image.localPath) || fileToUrl(image.thumbnailPath || "") || image.url || "";
 
-  const decodeFileName = (fileName: string) => {
-    try {
-      return decodeURIComponent(fileName);
-    } catch {
-      return fileName;
-    }
-  };
-
-  const getLastPathSegment = (path: string) => {
-    const segment = path.split(/[\\/]/).filter(Boolean).pop()?.trim() || "";
-    return segment ? decodeFileName(segment) : "";
-  };
-
-  const getFileNameFromUrlOrPath = (source: string) => {
-    const value = (source || "").trim();
-    if (!value) return "";
-
-    try {
-      const parsed = new URL(value, window.location.href);
-      const proxiedPath = parsed.searchParams.get("path") || "";
-      return getLastPathSegment(proxiedPath || parsed.pathname);
-    } catch {
-      const withoutHash = value.split("#", 1)[0] || "";
-      const withoutQuery = withoutHash.split("?", 1)[0] || "";
-      return getLastPathSegment(withoutQuery);
-    }
-  };
-
   const getImageFileName = (image: ImageInfo) =>
-    getFileNameFromUrlOrPath(fileToUrl(image.localPath)) ||
-    getFileNameFromUrlOrPath(image.localPath) ||
-    getFileNameFromUrlOrPath(fileToUrl(image.thumbnailPath || "")) ||
-    getFileNameFromUrlOrPath(image.url || "") ||
+    fileNameFromUrlOrPath(fileToUrl(image.localPath)) ||
+    fileNameFromUrlOrPath(image.localPath) ||
+    fileNameFromUrlOrPath(fileToUrl(image.thumbnailPath || "")) ||
+    fileNameFromUrlOrPath(image.url || "") ||
     image.id;
 
   // web 模式：先转成同源 blob URL 再 download，避免跨域直链忽略 download 后跳转到图片页。

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::sync::{Arc, OnceLock};
+use tokio::sync::watch;
 
 #[async_trait]
 pub trait CrawlerWebViewHandler: Send + Sync + 'static {
@@ -33,4 +34,30 @@ pub fn set_webview_handler(handler: Arc<dyn CrawlerWebViewHandler>) -> Result<()
 
 pub fn get_webview_handler() -> Option<Arc<dyn CrawlerWebViewHandler>> {
     CRAWLER_WEBVIEW_HANDLER.get().cloned()
+}
+
+/// app 是否在前台（安卓宿主生命周期的进程级可见性）。默认可见：
+/// 桌面与 web 没有「宿主不可见」这回事，看门狗照旧工作。
+static HOST_VISIBLE: OnceLock<watch::Sender<bool>> = OnceLock::new();
+
+fn host_visible_tx() -> &'static watch::Sender<bool> {
+    HOST_VISIBLE.get_or_init(|| watch::channel(true).0)
+}
+
+/// 订阅前后台切换。看门狗用它在宿主不可见期间挂起计时。
+pub fn host_visibility() -> watch::Receiver<bool> {
+    host_visible_tx().subscribe()
+}
+
+/// 由 app 层（安卓 `CrawlerPlugin.subscribeHost`）上报前后台切换。
+/// 只在值真正变化时通知；重复上报同值不会重置看门狗。
+pub fn set_host_visible(visible: bool) {
+    let _ = host_visible_tx().send_if_modified(|current| {
+        if *current == visible {
+            false
+        } else {
+            *current = visible;
+            true
+        }
+    });
 }

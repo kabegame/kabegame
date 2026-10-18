@@ -35,6 +35,8 @@
   "listCount": "共 {total} 条配置",
   "listFiltered": "显示 {shown} / {total} 条",
   "moreActions": "更多",
+  "copyAsPresetJson": "复制为推荐配置 JSON",
+  "presetJsonCopied": "已复制，可保存为插件 configs/ 下的 .json 文件",
   "relatedTasks": "关联任务",
   "noRelatedTasks": "暂无",
   "taskTriggerScheduled": "由定时触发",

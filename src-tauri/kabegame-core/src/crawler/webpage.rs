@@ -58,13 +58,7 @@ pub fn validate_url(raw: &str) -> Result<Url, String> {
 fn parse_backend(value: Option<&Value>) -> Result<WebpageBackend, String> {
     match value.and_then(Value::as_str).unwrap_or("v8") {
         "v8" => Ok(WebpageBackend::V8),
-        "webview" => {
-            if cfg!(target_os = "android") {
-                Err("Android 不支持网页收集的 WebView 后端".to_string())
-            } else {
-                Ok(WebpageBackend::Webview)
-            }
-        }
+        "webview" => Ok(WebpageBackend::Webview),
         other => Err(format!("未知的网页收集后端：{other}")),
     }
 }

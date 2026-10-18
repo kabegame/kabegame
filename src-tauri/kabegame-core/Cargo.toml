@@ -43,7 +43,9 @@ uuid = { workspace = true }
 walkdir = "2"
 zip = { workspace = true }
 
-# 桌面端使用 native-tls，移动端使用 rustls
+# 桌面端使用 native-tls，移动端使用 rustls。
+# native-tls-alpn：握手时声明 h2，让桌面请求能与 rustls 一样协商 HTTP/2（native-tls 默认不带 ALPN，
+# 只能走 HTTP/1.1，而 HTTP/1.1 的全小写头名会被 Cloudflare 判为机器人）。
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 reqwest = { version = "0.11", features = [
   "blocking",
@@ -51,6 +53,7 @@ reqwest = { version = "0.11", features = [
   "json",
   "stream",
   "native-tls",
+  "native-tls-alpn",
 ] }
 # 桌面端删除原始文件时移入系统回收站（可恢复）；Android/iOS 不支持，单独处理。
 trash = "5"
@@ -150,3 +153,5 @@ plugin-runtime = [
 
 [dev-dependencies]
 tempfile = "3"
+# `#[tokio::test(start_paused = true)]` 需要 test-util（workspace 的 "full" 不含它）。
+tokio = { workspace = true, features = ["test-util"] }

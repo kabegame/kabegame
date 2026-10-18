@@ -1,4 +1,4 @@
-const COMMANDS: &[&str] = &["updateNotifications"];
+const COMMANDS: &[&str] = &["requestPermission", "updateNotifications"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)

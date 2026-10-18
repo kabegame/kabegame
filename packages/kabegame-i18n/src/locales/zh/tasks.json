@@ -176,6 +176,7 @@
   "taskLogCookieTaskMissing": "[cookie] 无法定位任务：{detail}",
   "taskLogCookieHostInvalid": "[cookie] 无法解析目标 host",
   "taskLogCookieInjected": "[cookie] 已从畅游注入 {host} 的 Cookie",
+  "taskLogDesktopUaInjected": "[cookie] 已为 {host} 使用畅游桌面版 UA",
   "taskLogCookieWriteFailed": "[cookie] 写入 Cookie 失败：{detail}",
   "taskLogCookieMissing": "[cookie] 畅游无 {host} 的 Cookie（请先在畅游登录该站）",
   "taskLogCookieReadFailed": "[cookie] 读取畅游记录失败：{detail}",
@@ -215,5 +216,8 @@
   "taskLogDedupByUrl": "按 URL 去重：跳过下载。当前 {currentUrl} 与库中 id={existingId} 匹配；库中 URL：{existingUrl}；本地路径：{existingPath}",
   "taskLogDedupByHash": "按内容哈希去重：当前 {currentUrl} 与已有图片 id={existingId} 内容相同；已有记录 URL：{existingUrl}；本地路径：{existingPath}",
   "taskLogDedupByPath": "按路径去重：已跳过，本地路径已被图片 id={existingId}（{existingPath}）占用。来源：{currentUrl}",
-  "taskLogDedupSurfDuplicate": "冲浪模式：内容哈希与已有图片 id={existingId} 重复已过滤。当前 {currentUrl}；已有 URL：{existingUrl}；本地路径：{existingPath}"
+  "taskLogDedupSurfDuplicate": "冲浪模式：内容哈希与已有图片 id={existingId} 重复已过滤。当前 {currentUrl}；已有 URL：{existingUrl}；本地路径：{existingPath}",
+  "taskLogWebviewPendingShow": "应用在后台，已记为待显示：回到前台后自动把爬虫页面提到最上层",
+  "taskLogWebviewRenderGone": "WebView 渲染进程已退出（crash={crashed}），结束任务",
+  "taskLogWebviewHostClosed": "爬虫窗口已关闭，取消任务"
 }

@@ -207,6 +207,10 @@ $S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原�
   连接后先对 browser 级 + `Target.getBrowserContexts` 的每个 context 发
   `Browser.setDownloadBehavior {behavior:"default"}` 再触发（参考实测：驱动每次调用都是
   新 playwright 连接，会重新注入劫持，所以"改回 default"和"触发下载"必须在同一连接内完成）。
+  **Android WebView 同样会被劫持，且改回 `default` 也无效**：连过 CDP 之后，页面附件下载
+  （含 http 的 `Content-Disposition: attachment`）都不再触发 `setDownloadListener` 的
+  `onDownloadStart`，WebView 照样发了请求，服务端看得到 GET。测页面自发下载必须先强制停止应用、
+  全程不连 CDP，由人在手机上点，靠 logcat / debug ingest 被动观察。
 
 ## Troubleshooting
 

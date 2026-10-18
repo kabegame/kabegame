@@ -6,36 +6,29 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+
+/** Activity 在 onCreate 前注册的通知权限 launcher，供插件在用户启动任务时调用。 */
+interface TaskNotificationPermissionHost {
+    fun launchNotificationPermission(onResult: (Boolean) -> Unit)
+}
 
 @TauriPlugin
 class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) {
 
-    private var pendingPermissionBlock: (() -> Unit)? = null
+    private val permissionLauncherHost: TaskNotificationPermissionHost? =
+        activity as? TaskNotificationPermissionHost
+    private val pendingPermissionInvokes = mutableListOf<Invoke>()
 
     /** downloadId → 子通知 ID（稳定映射，便于 upsert / 取消）。 */
     private val downloadNotifIds = HashMap<Long, Int>()
     private var childIdSeq = CHILD_NOTIFICATION_ID_BASE
-
-    private val permissionLauncher: ActivityResultLauncher<String>? by lazy {
-        if (activity is androidx.activity.ComponentActivity) {
-            (activity as androidx.activity.ComponentActivity).registerForActivityResult(
-                ActivityResultContracts.RequestPermission()
-            ) { granted ->
-                if (granted) {
-                    pendingPermissionBlock?.invoke()
-                }
-                pendingPermissionBlock = null
-            }
-        } else null
-    }
 
     @InvokeArg
     class DownloadItem {
@@ -51,6 +44,30 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
         var items: List<DownloadItem> = emptyList()
     }
 
+    /** 在用户明确启动任务时请求 Android 13+ 通知权限；拒绝权限不阻止任务启动。 */
+    @Command
+    fun requestPermission(invoke: Invoke) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasNotificationPermission()) {
+            resolvePermission(invoke, true)
+            return
+        }
+
+        val host = permissionLauncherHost
+        if (host == null) {
+            resolvePermission(invoke, false)
+            return
+        }
+
+        pendingPermissionInvokes.add(invoke)
+        if (pendingPermissionInvokes.size > 1) return
+
+        host.launchNotificationPermission { granted ->
+            val pending = pendingPermissionInvokes.toList()
+            pendingPermissionInvokes.clear()
+            pending.forEach { resolvePermission(it, granted) }
+        }
+    }
+
     /**
      * 全量协调下载/任务通知:
      * - `runningCount == 0 && items` 空 → 停前台服务 + 取消全部子通知 + 显示可划掉「全部完成」。
@@ -58,34 +75,32 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
      */
     @Command
     fun updateNotifications(invoke: Invoke) {
-        ensureNotificationPermission {
-            val args = invoke.parseArgs(UpdateNotificationsArgs::class.java)
-            val running = args.runningCount.coerceAtLeast(0)
-            val items = args.items
+        val args = invoke.parseArgs(UpdateNotificationsArgs::class.java)
+        val running = args.runningCount.coerceAtLeast(0)
+        val items = args.items
 
-            if (running == 0 && items.isEmpty()) {
-                stopServiceAndClearChildren()
-                showCompletionNotification()
-                invoke.resolve()
-                return@ensureNotificationPermission
-            }
+        if (running == 0 && items.isEmpty()) {
+            stopServiceAndClearChildren()
+            showCompletionNotification()
+            invoke.resolve()
+            return
+        }
 
-            val intent = Intent(activity, TaskNotificationService::class.java).apply {
-                putExtra(TaskNotificationService.EXTRA_RUNNING_COUNT, running)
-                putExtra(TaskNotificationService.EXTRA_DOWNLOAD_COUNT, items.size)
+        val intent = Intent(activity, TaskNotificationService::class.java).apply {
+            putExtra(TaskNotificationService.EXTRA_RUNNING_COUNT, running)
+            putExtra(TaskNotificationService.EXTRA_DOWNLOAD_COUNT, items.size)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                activity.startForegroundService(intent)
+            } else {
+                activity.startService(intent)
             }
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    activity.startForegroundService(intent)
-                } else {
-                    activity.startService(intent)
-                }
-                syncChildNotifications(items)
-                invoke.resolve()
-            } catch (e: Exception) {
-                Log.e("TaskNotification", "Failed to update notifications", e)
-                invoke.reject("Failed to update notifications: ${e.message}")
-            }
+            syncChildNotifications(items)
+            invoke.resolve()
+        } catch (e: Exception) {
+            Log.e("TaskNotification", "Failed to update notifications", e)
+            invoke.reject("Failed to update notifications: ${e.message}")
         }
     }
 
@@ -176,24 +191,14 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
         manager.notify(TaskNotificationService.NOTIFICATION_ID + 1, notification)
     }
 
-    private fun ensureNotificationPermission(block: () -> Unit) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            block()
-            return
-        }
-        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+    private fun hasNotificationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-        ) {
-            block()
-            return
-        }
-        val launcher = permissionLauncher
-        if (launcher != null) {
-            pendingPermissionBlock = block
-            launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            block()
-        }
+
+    private fun resolvePermission(invoke: Invoke, granted: Boolean) {
+        val result = JSObject()
+        result.put("granted", granted)
+        invoke.resolve(result)
     }
 
     companion object {

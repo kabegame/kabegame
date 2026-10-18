@@ -99,7 +99,7 @@ pub async fn surf_import_media<R: Runtime>(
     metadata: Option<Value>,
     page_url: Option<String>,
 ) -> Result<(), String> {
-    let ctx = super::crawler::surf_ctx_from_label(webview.label())?;
+    let ctx = super::surf_receive::surf_ctx_from_label(webview.label())?;
     let session = get_or_create_session(&ctx.host)?;
     let real_path = session
         .vfs
@@ -109,10 +109,11 @@ pub async fn surf_import_media<R: Runtime>(
         .map_err(|error| format!("无法读取待导入媒体“{path}”：{error}"))?
         .len();
     let parsed = Url::parse(&source_url).map_err(|error| format!("Invalid media URL: {error}"))?;
-    let custom_name = name.or_else(|| super::crawler::surf_download_name_from_url(&parsed));
-    let metadata_id = super::crawler::insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?;
+    let custom_name = name.or_else(|| super::surf_receive::surf_download_name_from_url(&parsed));
+    let metadata_id =
+        super::surf_receive::insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?;
     let download_id = next_download_id();
-    let download_start_time = super::crawler::now_ms();
+    let download_start_time = super::surf_receive::now_ms();
     let http_headers = HashMap::new();
 
     let dq = TaskScheduler::global().download_queue();

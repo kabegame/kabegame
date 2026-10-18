@@ -11,13 +11,14 @@ cef-rs bindings，不会让已经编好的旧 CEF 获得新的 Chromium/CEF 回�
 
 这两个平台上前端**只**写自定义 mime 里的 image id，不再写 `DownloadURL` / `text/uri-list` /
 `text/plain`。链路一旦生效，Chromium 会把 URL、text 与 file_contents 一并清掉，这三项写了
-也留不下；留着只会让人误以为拖出仍依赖 `/download` HTTP 端点。代价是链路不生效时
+也留不下；留着只会让人误以为拖出仍依赖本地媒体 HTTP 端点。代价是链路不生效时
 （旧 CEF、resolver 未安装、授权失败）没有 HTTP URL 兜底：目标端收到的是 Blink 为 `<img>`
 自动填充的默认载荷，也就是网格里那张**缩略图**的 URL 与字节。
 
 Windows 不走本链路，仍写 `DownloadURL` + `text/uri-list` + `text/plain` 三项 localhost
-HTTP URL，`/download` 端点因此必须保留——Windows 的 `PrepareDragForDownload` 是它唯一的
-真实消费者（该函数在 Chromium 里就是 `#if BUILDFLAG(IS_WIN)`）。
+HTTP URL；URL 直接复用触发拖拽的媒体元素当前 `currentSrc`，可能是 `/file/{*path}`、
+`/thumbnail/{*path}` 或 `/compatible/{*path}`。Windows 的 `PrepareDragForDownload` 是
+`DownloadURL` 的真实消费者（该函数在 Chromium 里就是 `#if BUILDFLAG(IS_WIN)`）。
 
 ## 为什么前端不能直接给路径
 

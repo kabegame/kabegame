@@ -1,0 +1,49 @@
+diff --git a/crates/tauri/src/ipc/channel.rs b/crates/tauri/src/ipc/channel.rs
+index d008fa2e6..7782275d9 100644
+--- a/crates/tauri/src/ipc/channel.rs
++++ b/crates/tauri/src/ipc/channel.rs
+@@ -387,14 +387,7 @@ impl<TSend> Channel<TSend> {
+ 
+   fn new_with_id(id: u32, on_message: OnMessageFn, on_drop: OnDropFn) -> Self {
+     #[allow(clippy::let_and_return)]
+-    let channel = Self {
+-      inner: Arc::new(ChannelInner {
+-        id,
+-        on_message,
+-        on_drop,
+-      }),
+-      phantom: Default::default(),
+-    };
++    let channel = Self::new_unregistered(id, on_message, on_drop);
+ 
+     #[cfg(mobile)]
+     crate::plugin::mobile::register_channel(Channel {
+@@ -405,10 +398,27 @@ impl<TSend> Channel<TSend> {
+     channel
+   }
+ 
++  /// A channel that native mobile plugins never look up by id.
++  ///
++  /// The mobile `CHANNELS` table is never pruned, so registering one-shot channels (such as the
++  /// response channel of every IPC call) would leak one entry, and the webview handle it captures,
++  /// per invoke.
++  fn new_unregistered(id: u32, on_message: OnMessageFn, on_drop: OnDropFn) -> Self {
++    Self {
++      inner: Arc::new(ChannelInner {
++        id,
++        on_message,
++        on_drop,
++      }),
++      phantom: Default::default(),
++    }
++  }
++
+   // This is used from the IPC handler
+   pub(crate) fn from_callback_fn<R: Runtime>(webview: Webview<R>, callback: CallbackFn) -> Self {
+     let callback_id = callback.0;
+-    Channel::new_with_id(
++    // One-shot response channel: only `send` is called on it, right after creation.
++    Channel::new_unregistered(
+       callback_id,
+       Box::new(move |body| {
+         match body {

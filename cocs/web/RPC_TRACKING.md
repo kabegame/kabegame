@@ -1,7 +1,8 @@
-# Web 版 `/rpc` 接口埋点
+# Web 版 RPC 接口埋点
 
-Web 发布版（demo.kabegame.com）在服务端按接口统计 JSON-RPC 调用：每次 `POST /rpc` 都向 umami
-发一条以方法名命名的事件，umami 的 Events / Pages 直接按命令拆分。插件和网页前端都不需要改动，也不需要额外的请求头。服务器不读取、不转发
+Web 发布版（demo.kabegame.com）在服务端按接口统计 JSON-RPC 调用：网页前端请求 `POST /rpc/{method}`，
+旧客户端仍可请求兼容入口 `POST /rpc`；两者都会向 umami 发一条以方法名命名的事件，umami 的 Events / Pages
+直接按命令拆分。插件和网页前端都不需要额外的请求头。服务器不读取、不转发
 客户端的请求头（IP、UA 等），所以 umami 里所有事件都归到服务器自己这一个访客，看不到是谁在调用。
 
 ## 事件
@@ -16,7 +17,7 @@ Web 发布版（demo.kabegame.com）在服务端按接口统计 JSON-RPC 调用�
 | `data.code` | 仅失败时出现，JSON-RPC 错误码（`-32001` forbidden、`-32000` internal 等） |
 | `data.ms` | 服务端处理耗时（毫秒），不含网络传输 |
 
-网页前端与 `kabegame-server` 插件都走 `/rpc`，两者混在一起统计，单靠方法名区分不出来源。
+网页前端走 `/rpc/{method}`，`kabegame-server` 插件仍可走兼容入口 `/rpc`；两者混在一起统计，单靠方法名区分不出来源。
 `/events`（SSE）、`/file` 与 MCP 不在统计范围内。
 
 ## 配置
@@ -48,7 +49,7 @@ Environment="KABEGAME_UMAMI_HOSTNAME=demo.kabegame.com"
 - **接入点**：`web/server.rs` 的 `rpc_handler` 在 `dispatch` 前后计时，再交给 `web/track.rs`。
   `track::start` 在埋点关闭时返回 `None`，此时没有任何额外开销。
 - **不阻塞接口**：事件进入容量 1024 的有界队列，后台 worker 以 8 路并发 POST。队列满（umami 慢或
-  不可达）时直接丢弃，不反压 `/rpc`。
+  不可达）时直接丢弃，不反压 RPC 请求。
 - **不走代理**：demo 的 systemd 单元带全局 `HTTPS_PROXY`，埋点客户端用 `no_proxy()` 直连 umami。
 - **UA 必须像浏览器**：umami 3.x 用 isbot 过滤，`Kabegame/1.0`、`reqwest/0.11` 这类 `名字/版本` UA
   会被判成 bot，返回 `200 {"beep":"boop"}` 并静默丢弃。这里用

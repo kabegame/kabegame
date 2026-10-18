@@ -10,7 +10,7 @@ Provider DSL 的通用查询语义。
 
 - `src-tauri/kabegame/src/mcp_server.rs`：rmcp 3.0 ServerHandler、资源/模板/工具声明、资源读取、PathQL 发现与分页护栏。
 - `src-tauri/kabegame/src/web_server_service.rs`：统一监听器、路由集合、浏览器拒绝中间件与 graceful shutdown。
-- `src-tauri/kabegame/src/web/{dispatch,server}.rs`：共享 JSON-RPC 注册表、`/rpc`、`/events` 与 SSE 总线。
+- `src-tauri/kabegame/src/web/{dispatch,server}.rs`：共享 JSON-RPC 注册表、`/rpc/{method}`（兼容 `/rpc`）、`/events` 与 SSE 总线。
 - `src-tauri/kabegame/src/http_server.rs`：带图库路径白名单和并发闸的媒体文件路由。
 - `src-tauri/kabegame/src/mcp_capabilities.rs`：能力元数据、URI → read capability、工具名 → write capability 的映射。
 - `src-tauri/kabegame/src/commands/web_server.rs`：设置页的服务启停、端口和监听地址切换；`get_web_server_lan_ip` 以 UDP `connect` 让系统按路由选出口网卡（不发包），给设置页拼局域网「服务器地址」。
@@ -25,20 +25,20 @@ Provider DSL 的通用查询语义。
 桌面端在「设置 → 高级 → Web 服务器」开启服务。`WebServerService` 只持有一个 axum listener，
 同一端口提供：
 
-- `POST /rpc`：web 版同一份 JSON-RPC 注册表；默认只读，写方法必须显式带 `?super=1`。
+- `POST /rpc/{method}`：web 版同一份 JSON-RPC 注册表，URL 方法名必须与 JSON-RPC body 一致；默认只读，写方法必须显式带 `?super=1`。旧 `/rpc` 入口保留给既有客户端。
 - `GET /events`：SSE 事件订阅，连接时先发 `connected`；桌面仍同时向 Tauri 前端 emit。
-- `GET /file`、`/download/{*path}`、`/thumbnail`、`/compatible`：只读取图库数据库已登记的本地路径，统一经过并发闸。
+- `GET /file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}`：从 URL path 取得绝对路径，只读取图库数据库已登记的本地文件，统一经过并发闸；不提供 query 形式或独立 `/download` 端点。
 - `/mcp`：rmcp 3.0 StreamableHTTP。
 - `GET /__ping`：非网页客户端存活探测。
 
 桌面服务**不挂 `/proxy`**，也不发送 CORS 响应头。默认绑定 `127.0.0.1`；开启
 `webServerLanAccess` 后绑定 `0.0.0.0`。局域网模式没有鉴权，同网段设备只要知道端口就能读取数据，
-并可通过 `/rpc?super=1` 或 MCP 写工具修改图库，因此只能在可信网络开启。rmcp 默认只接受
+并可通过 `/rpc/{method}?super=1`（或兼容入口 `/rpc?super=1`）或 MCP 写工具修改图库，因此只能在可信网络开启。rmcp 默认只接受
 localhost Host；局域网模式会对 `/mcp` 调用 `disable_allowed_hosts()`，否则通过局域网 IP 访问会被 Host
 白名单拒绝。
 
 服务最外层的 `reject_browser_mw` 拒绝任何带 `Origin` 或 `Sec-Fetch-Mode` / `Sec-Fetch-Site` /
-`Sec-Fetch-Dest` 的请求，覆盖 `/rpc`、`/events`、文件、MCP 和 ping。现代浏览器会自动添加这些
+`Sec-Fetch-Dest` 的请求，覆盖 `/rpc/{method}`、兼容入口 `/rpc`、`/events`、文件、MCP 和 ping。现代浏览器会自动添加这些
 forbidden header，网页脚本无法删除或伪造；curl、脚本和 MCP 客户端默认不发送。这里的目标不是做
 跨域许可，而是彻底禁止网页借浏览器访问无鉴权服务，降低跨站请求和 DNS rebinding 风险。
 
@@ -78,7 +78,7 @@ restart，失败返回错误且不写入新值。应用启动恢复失败时会�
 
 ## JSON-RPC 的 super 边界
 
-`/rpc` 沿用 web 版语义：不带 `?super=1` 时只允许注册表中 `requires_super = false` 的读取方法；写方法
+`/rpc/{method}`（及兼容入口 `/rpc`）沿用 web 版语义：不带 `?super=1` 时只允许注册表中 `requires_super = false` 的读取方法；写方法
 返回 JSON-RPC `-32001 forbidden`。非 super 请求还会清洗插件信息中的 `httpHeaders`，避免通过只读接口
 泄露请求凭据。`super=1` 只是调用方声明，不是鉴权；它不能替代回环绑定或可信局域网边界。
 

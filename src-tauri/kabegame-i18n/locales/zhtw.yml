@@ -110,6 +110,29 @@ vd:
 
 surf:
   windowTitle: "暢遊 - {host}"
+  toolbar:
+    back: "後退"
+    forward: "前進"
+    reload: "重新載入"
+    address: "網址"
+    collect: "下載本頁全部媒體"
+    cancel: "取消下載"
+    openInBrowser: "在瀏覽器開啟"
+    close: "關閉"
+    closePopup: "關閉彈出視窗"
+    more: "更多"
+    desktopSite: "電腦版網站"
+    addToHome: "加入主畫面"
+  shortcut:
+    requested: "未出現圖示時，請在系統設定中允許建立桌面捷徑"
+    alreadyPinned: "已存在於主畫面上"
+    unsupported: "目前的桌面不支援加入捷徑"
+    failed: "加入桌面捷徑失敗"
+    recordDeleted: "此暢遊站點已被刪除"
+  download:
+    unsupportedType: "不支援的下載類型：暢遊只接收圖片和影片"
+    unsupportedScheme: "不支援的下載網址"
+    appPackage: "已攔截應用程式安裝包下載。網站不提供網頁登入時，可在右上角選單切換為電腦版網站"
   collect:
     detecting: "正在偵測媒體資源…"
     none: "目前頁面未偵測到可下載的媒體資源"
@@ -118,6 +141,7 @@ surf:
     done: "已加入下載 {queued}/{total} 項"
     notReady: "頁面尚未就緒，請稍後再試"
     snapshotFailed: "頁面快照儲存失敗：{error}"
+    ipcUnavailable: "目前系統 WebView 不支援安全的應用通訊，無法一鍵下載"
 
 webview:
   menu:
@@ -163,3 +187,8 @@ webview:
     notCaptured: "未擷取到該影片的媒體串流（頁面可能在注入前就開始播放，可重新整理頁面後再試）"
     captureMissing: "找不到該影片的擷取資料"
     captureEmpty: "擷取資料中沒有媒體內容"
+
+crawler:
+  toolbar:
+    collapse: "收合"
+    cancel: "取消任務"

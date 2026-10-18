@@ -65,6 +65,7 @@ import { Badge } from '@astrojs/starlight/components';
 - `kabegame-cli plugin pack` 不再限制源码目录名与输出文件名；插件 ID 只取自 `package.json` 的 `name`（去掉可选的 `kabegame-plugin-` 前缀）。
 - 官方插件仓库的插件目录改为 `plugins/kabegame-plugin-<ID>/`，插件 ID 不变，全部插件的 `engines.kabegame` 提到 `>=4.5.2`。
 - **Breaking：**V8 插件的 `common` 对象键 `base_url` 改为 `baseUrl`。宿主注入、`@kabegame/plugin-sdk` 的 `KbCommonCfg`、`@kabegame/types` 示例、官方插件与文档同步；第三方插件需改为读取 `common.baseUrl`。
+- Android 支持畅游后，`Kabegame.cefUserAgent()` 在 Android 上不再返回 `null`，改为返回系统 WebView 的默认 User-Agent，也就是 Android 畅游 Cookie 的签发 UA。已按「先 `setHeader("User-Agent", cefUserAgent())` 再 `requireCookie()`」写法配对的插件无需修改；若插件把 `null` 当作「运行在 Android」的判断依据，要改用别的方式。
 
 ## 4.5.1
 

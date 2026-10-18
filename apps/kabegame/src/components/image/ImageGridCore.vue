@@ -855,13 +855,13 @@ const handleItemClick = async (image: ImageInfo, index: number, event?: MouseEve
   focusGrid();
 
   // 紧凑模式选择模式下的点击行为
-  if (isCompact.value && androidSelectionMode.value) {
+  if ((isCompact.value || IS_ANDROID) && androidSelectionMode.value) {
     toggleSelection(image.id, index);
     return;
   }
 
   // 紧凑模式非选择模式下，单击直接预览
-  if (isCompact.value && !androidSelectionMode.value) {
+  if ((isCompact.value || IS_ANDROID) && !androidSelectionMode.value) {
     const action = await resolveImageClickAction();
     if (action === "preview") {
       openPreview(index);
@@ -899,10 +899,10 @@ function openPreview(index: number) {
 
 const handleItemDblClick = async (image: ImageInfo, index: number) => {
   // 紧凑模式选择中：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
-  if (isCompact.value && androidSelectionMode.value) {
+  if ((isCompact.value || IS_ANDROID) && androidSelectionMode.value) {
     return;
   }
-  if (isCompact.value || IS_WEB) {
+  if (isCompact.value || IS_ANDROID || IS_WEB) {
     emit("image-dblclick", { action: "preview", image });
     openPreview(index);
     return;
@@ -921,7 +921,7 @@ const handleItemDblClick = async (image: ImageInfo, index: number) => {
 
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
-  if (isCompact.value && androidSelectionMode.value) {
+  if ((isCompact.value || IS_ANDROID) && androidSelectionMode.value) {
     openPreview(index);
     return;
   }
@@ -1483,6 +1483,10 @@ defineExpose({
   min-width: 0;
   overflow: hidden;
   outline: none;
+  /* 滚动容器自成层叠上下文：ImageContent 的图层 img 带 z-index，否则会逃到外层层叠上下文、
+     排在底部导航等已合成层之后，无法并回滚动内容层，被逐行拆成几十个 squashing layer；
+     某层漏光栅化就整行空白、点一下才出现（安卓 WebView 常见，桌面 CEF 偶发）。 */
+  isolation: isolate;
 
   &.scrolls-whole-container {
     display: block;

@@ -24,6 +24,8 @@
   "surfHelpTitle": "Surf help",
   "surfHelpIntro": "Surf is Kabegame's built-in browse & collect feature. Enter a site URL (e.g. https://pixiv.net) and click \"Start surfing\" to open it in-app; you can right-click to download images or videos, and they will be added to your gallery.",
   "surfHelpRecord": "Each surf creates a record; you can re-enter the site from here or open \"View recent images\" for that site's gallery view.",
+  "surfHelpIntroAndroid": "Surf opens the target site in a separate page. You can sign in there; when you close it, Kabegame saves the site's Cookie and browser identity for plugins that require authentication.",
+  "surfHelpRecordAndroid": "One-click and in-page downloads are now supported: downloaded images and videos are added to this site's Surf record.",
   "gotIt": "Got it",
   "pleaseEnterUrl": "Please enter URL",
   "useHttps": "Please use https",
@@ -62,6 +64,7 @@
   "loadImagesFailed": "Failed to load images",
   "viewDownloadedImages": "View downloaded images",
   "recordDetails": "Details",
+  "addToHome": "Add to Home screen",
   "recordName": "Name",
   "recordNamePlaceholder": "Enter a custom name (optional)",
   "entryPath": "Entry path",
@@ -69,6 +72,23 @@
   "fullUrlPreview": "Full URL: ",
   "cookieLabel": "Cookie",
   "cookieEmpty": "No saved Cookie yet",
-  "deleteRecordDanger": "Delete this surf record",
-  "savedSuccess": "Saved"
+  "deleteRecordDanger": "Delete",
+  "savedSuccess": "Saved",
+  "toolbar": {
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "address": "Address",
+    "collect": "Download all media",
+    "cancel": "Cancel download",
+    "openInBrowser": "Open in browser",
+    "close": "Close"
+  },
+  "download": {
+    "unsupportedType": "Unsupported download type: Surf only receives images and videos",
+    "unsupportedScheme": "Unsupported download address"
+  },
+  "collect": {
+    "ipcUnavailable": "This system WebView does not support secure app messaging, so one-click download is unavailable"
+  }
 }

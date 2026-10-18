@@ -128,9 +128,18 @@ const verticalProperty = computed(() =>
   placement.value.startsWith('top') ? 'top' : 'bottom'
 )
 
+// kabegame：叠加安全区 inset（Android 由 MainActivity 注入 --sat/--sab，其它平台回落 env()），
+// 避免顶部消息被状态栏 / 刘海挡住。堆叠用的 offset/bottom 仍是不含安全区的数字，整组统一平移。
+const safeAreaInset = computed(() =>
+  verticalProperty.value === 'top'
+    ? 'var(--sat, env(safe-area-inset-top, 0px))'
+    : 'var(--sab, env(safe-area-inset-bottom, 0px))'
+)
+
 const customStyle = computed<CSSProperties>(() => ({
-  [verticalProperty.value]: `${offset.value}px`,
-  zIndex: currentZIndex.value,
+  [verticalProperty.value]: `calc(${offset.value}px + ${safeAreaInset.value})`,
+  // kabegame：显式传入的 zIndex 优先（上游忽略了该选项），供调用方压过自管层级的弹层
+  zIndex: props.zIndex || currentZIndex.value,
 }))
 
 function startTimer() {

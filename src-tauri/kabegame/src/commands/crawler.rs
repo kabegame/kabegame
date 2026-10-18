@@ -1,30 +1,28 @@
-// 部分文件系统命令实现取自并改编自 tauri-plugin-fs 2.4.4（Apache-2.0 OR MIT）。
-// 原始版权：Copyright 2019-2023 Tauri Programme within The Commons Conservancy；
-// Copyright 2018-2023 the Deno authors.
-use deno_fs::{FileSystem, OpenOptions};
-use deno_permissions::CheckedPathBuf;
+// WebView 爬虫命令（桌面 + 安卓）与 CEF 页面下载出口（仅桌面）。
+//
+// 文件系统命令（`crawl_fs_*` / `crawl_ffmpeg_*`）与畅游接收命令已拆到全平台模块
+// `page_fs` / `surf_receive`；这里重新导出，保持 `super::crawler::now_ms` 这类既有引用不变。
+// 安卓的宿主 Activity / 停靠 / 页面自发下载在 `crawler_android.rs`。
+pub(crate) use super::page_fs::*;
+pub(crate) use super::surf_receive::*;
+
 use kabegame_core::crawler::task_log_i18n::task_log_i18n;
 use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
 use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::plugin::{
-    archive::{ExtractOptions, ExtractResult},
-    ffmpeg::FfmpegProbeResult,
-    vfs::PluginVfs,
-};
+#[cfg(not(target_os = "android"))]
+use kabegame_core::plugin::archive::{ExtractOptions, ExtractResult};
+use kabegame_core::plugin::vfs::PluginVfs;
 use kabegame_core::storage::labels::{validate_label_values, LabelSpec};
-use kabegame_core::storage::page_snapshot::SURF_METADATA_VERSION;
 use kabegame_core::storage::search_terms::validate_search_text_values;
 use kabegame_core::storage::Storage;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
-use tauri::{AppHandle, Manager, Resource, ResourceId, Runtime, Webview, WebviewWindow};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, Runtime, Webview, WebviewWindow};
 use url::Url;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -35,121 +33,7 @@ pub struct CrawlToPayload {
     pub page_state: Option<Value>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlFsWriteOptions {
-    pub append: Option<bool>,
-    pub create: Option<bool>,
-    pub create_new: Option<bool>,
-    pub mode: Option<u32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlFsOpenOptions {
-    pub read: Option<bool>,
-    pub write: Option<bool>,
-    pub append: Option<bool>,
-    pub truncate: Option<bool>,
-    pub create: Option<bool>,
-    pub create_new: Option<bool>,
-    pub mode: Option<u32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlFsMkdirOptions {
-    pub recursive: Option<bool>,
-    pub mode: Option<u32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlFsRemoveOptions {
-    pub recursive: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlFsDirEntry {
-    pub name: String,
-    pub is_file: bool,
-    pub is_directory: bool,
-    pub is_symlink: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CrawlFsStat {
-    pub is_file: bool,
-    pub is_directory: bool,
-    pub is_symlink: bool,
-    pub size: u64,
-    pub mtime: Option<u64>,
-    pub atime: Option<u64>,
-    pub birthtime: Option<u64>,
-    pub ctime: Option<u64>,
-    pub dev: u64,
-    pub ino: Option<u64>,
-    pub mode: u32,
-    pub nlink: Option<u64>,
-    pub uid: u32,
-    pub gid: u32,
-    pub rdev: u64,
-    pub blksize: u64,
-    pub blocks: Option<u64>,
-    pub is_block_device: bool,
-    pub is_char_device: bool,
-    pub is_fifo: bool,
-    pub is_socket: bool,
-}
-
-struct CrawlFsFileResource(StdMutex<std::fs::File>);
-
-impl CrawlFsFileResource {
-    fn new(file: std::fs::File) -> Self {
-        Self(StdMutex::new(file))
-    }
-}
-
-impl Resource for CrawlFsFileResource {}
-
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-/// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可传入）。
-pub(crate) fn insert_metadata(
-    plugin_id: &str,
-    metadata: Option<Value>,
-    plugin_version: u32,
-) -> Result<Option<i64>, String> {
-    if let Some(value) = metadata {
-        Ok(Some(Storage::global().insert_metadata_row(
-            &value,
-            plugin_id,
-            plugin_version,
-            None,
-        )?))
-    } else {
-        Ok(None)
-    }
-}
-
-pub(crate) fn surf_download_name_from_url(url: &Url) -> Option<String> {
-    if matches!(url.scheme(), "blob" | "data") {
-        return None;
-    }
-    url.path_segments()
-        .and_then(|segments| segments.filter(|segment| !segment.trim().is_empty()).last())
-        .map(str::trim)
-        .filter(|segment| !segment.is_empty())
-        .map(ToOwned::to_owned)
-}
-
+#[cfg(not(target_os = "android"))]
 pub(crate) fn native_download_id_from_path(path: &Path) -> Option<u64> {
     path.file_name()?
         .to_str()?
@@ -243,6 +127,7 @@ pub(crate) fn finish_page_download<R: Runtime>(
 }
 
 /// CEF Requested 回调认领 worker 发起的下载并设置统一临时路径。
+#[cfg(not(target_os = "android"))]
 pub(crate) fn claim_native_download_destination(
     task_id: Option<&str>,
     surf_record_id: Option<&str>,
@@ -262,6 +147,7 @@ pub(crate) fn claim_native_download_destination(
 }
 
 /// CEF Finished 回调把终态送回对应 worker。无法找到等待者时立即清理孤儿文件。
+#[cfg(not(target_os = "android"))]
 pub(crate) fn finish_native_download(
     task_id: Option<&str>,
     surf_record_id: Option<&str>,
@@ -291,33 +177,6 @@ pub(crate) fn finish_native_download(
             let _ = std::fs::remove_file(path);
         }
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct SurfReceiveCtx {
-    pub(crate) images_dir: PathBuf,
-    pub(crate) host: String,
-    pub(crate) surf_record_id: String,
-}
-
-pub(crate) fn surf_ctx_from_label(label: &str) -> Result<SurfReceiveCtx, String> {
-    let host =
-        surf_host_from_label(label).ok_or_else(|| format!("Invalid surf window label: {label}"))?;
-    let record = Storage::global()
-        .get_surf_record_by_host(&host)?
-        .ok_or_else(|| format!("Surf record not found for host: {host}"))?;
-    Ok(SurfReceiveCtx {
-        images_dir: kabegame_core::crawler::downloader::get_default_images_dir(),
-        host,
-        surf_record_id: record.id,
-    })
-}
-
-fn surf_host_from_label(label: &str) -> Option<String> {
-    label
-        .strip_prefix("surf-")
-        .filter(|host| !host.is_empty())
-        .map(|host| host.replace('_', "."))
 }
 
 /// 仅接受 plain object：是 Object 则克隆返回，否则返回空对象。
@@ -414,626 +273,8 @@ fn run_of<R: Runtime>(webview: &WebviewWindow<R>) -> Result<(String, Arc<Task>),
     run_of_label(webview.label())
 }
 
-fn run_of_label(label: &str) -> Result<(String, Arc<Task>), String> {
-    let task_id = task_id_from_crawler_label(label)
-        .ok_or_else(|| format!("Invalid crawler window label: {}", label))?
-        .to_string();
-    let run = TaskScheduler::global()
-        .get_run(&task_id)
-        .ok_or_else(|| format!("Crawler task not found for task {}", task_id))?;
-    Ok((task_id, run))
-}
-
-fn vfs_of_label(label: &str) -> Result<Arc<PluginVfs>, String> {
-    if label.starts_with("crawler-") {
-        return run_of_label(label).map(|(_, run)| Arc::clone(&run.vfs));
-    }
-    if let Some(host) = surf_host_from_label(label) {
-        return crate::commands::surf_session::get_or_create_session(&host)
-            .map(|session| Arc::clone(&session.vfs));
-    }
-    Err(format!("Invalid fs window label: {label}"))
-}
-
-async fn crawl_fs_blocking<T, F>(
-    vfs: Arc<PluginVfs>,
-    path: String,
-    operation: &'static str,
-    action: F,
-) -> Result<T, String>
-where
-    T: Send + 'static,
-    F: FnOnce(&PluginVfs, CheckedPathBuf) -> Result<T, deno_fs::FsError> + Send + 'static,
-{
-    tokio::task::spawn_blocking(move || {
-        let checked_path = CheckedPathBuf::unsafe_new(PathBuf::from(&path));
-        action(&vfs, checked_path).map_err(|error| format!("{operation} '{path}': {error}"))
-    })
-    .await
-    .map_err(|error| format!("Failed to join {operation}: {error}"))?
-}
-
-async fn crawl_fs_file_blocking<R, T, F>(
-    webview: &Webview<R>,
-    rid: ResourceId,
-    operation: &'static str,
-    action: F,
-) -> Result<T, String>
-where
-    R: Runtime,
-    T: Send + 'static,
-    F: FnOnce(&mut std::fs::File) -> std::io::Result<T> + Send + 'static,
-{
-    let resource = webview
-        .resources_table()
-        .get::<CrawlFsFileResource>(rid)
-        .map_err(|error| format!("{operation} rid {rid}: {error}"))?;
-    tokio::task::spawn_blocking(move || {
-        let mut file = resource
-            .0
-            .lock()
-            .map_err(|_| format!("{operation} rid {rid}: file lock poisoned"))?;
-        action(&mut file).map_err(|error| format!("{operation} rid {rid}: {error}"))
-    })
-    .await
-    .map_err(|error| format!("Failed to join {operation}: {error}"))?
-}
-
-fn crawl_fs_open_options(options: Option<CrawlFsOpenOptions>) -> OpenOptions {
-    match options {
-        Some(options) => OpenOptions {
-            read: options.read.unwrap_or(true),
-            write: options.write.unwrap_or(false),
-            create: options.create.unwrap_or(false),
-            truncate: options.truncate.unwrap_or(false),
-            append: options.append.unwrap_or(false),
-            create_new: options.create_new.unwrap_or(false),
-            custom_flags: None,
-            mode: options.mode,
-        },
-        None => OpenOptions::read(),
-    }
-}
-
-fn crawl_fs_raw_handle_write_request(
-    request: &tauri::ipc::Request<'_>,
-) -> Result<(ResourceId, Vec<u8>), String> {
-    let rid = request
-        .headers()
-        .get("rid")
-        .ok_or_else(|| "Missing file resource id header".to_string())?
-        .to_str()
-        .map_err(|error| format!("Invalid file resource id header: {error}"))?
-        .parse::<ResourceId>()
-        .map_err(|error| format!("Invalid file resource id: {error}"))?;
-    let data = match request.body() {
-        tauri::ipc::InvokeBody::Raw(data) => data.clone(),
-        _ => return Err("Expected raw IPC body for file handle write".to_string()),
-    };
-    Ok((rid, data))
-}
-
-fn crawl_fs_raw_write_request(
-    request: &tauri::ipc::Request<'_>,
-) -> Result<(String, Vec<u8>, CrawlFsWriteOptions), String> {
-    let encoded_path = request
-        .headers()
-        .get("path")
-        .ok_or_else(|| "Missing file path header".to_string())?
-        .to_str()
-        .map_err(|error| format!("Invalid file path header: {error}"))?;
-    let path = percent_encoding::percent_decode_str(encoded_path)
-        .decode_utf8()
-        .map_err(|_| "File path is not valid UTF-8".to_string())?
-        .into_owned();
-    let options = request
-        .headers()
-        .get("options")
-        .map(|value| {
-            value
-                .to_str()
-                .map_err(|error| format!("Invalid file options header: {error}"))
-                .and_then(|value| {
-                    serde_json::from_str(value)
-                        .map_err(|error| format!("Invalid file options JSON: {error}"))
-                })
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let data = match request.body() {
-        tauri::ipc::InvokeBody::Raw(data) => data.clone(),
-        _ => return Err("Expected raw IPC body for file write".to_string()),
-    };
-    Ok((path, data, options))
-}
-
-async fn crawl_fs_metadata(
-    vfs: Arc<PluginVfs>,
-    path: String,
-    operation: &'static str,
-    follow_symlinks: bool,
-) -> Result<CrawlFsStat, String> {
-    crawl_fs_blocking(vfs, path, operation, move |vfs, path| {
-        let stat = if follow_symlinks {
-            vfs.stat_sync(&path.as_checked_path())
-        } else {
-            vfs.lstat_sync(&path.as_checked_path())
-        }?;
-        Ok(CrawlFsStat {
-            is_file: stat.is_file,
-            is_directory: stat.is_directory,
-            is_symlink: stat.is_symlink,
-            size: stat.size,
-            mtime: stat.mtime,
-            atime: stat.atime,
-            birthtime: stat.birthtime,
-            ctime: stat.ctime,
-            dev: stat.dev,
-            ino: stat.ino,
-            mode: stat.mode,
-            nlink: stat.nlink,
-            uid: stat.uid,
-            gid: stat.gid,
-            rdev: stat.rdev,
-            blksize: stat.blksize,
-            blocks: stat.blocks,
-            is_block_device: stat.is_block_device,
-            is_char_device: stat.is_char_device,
-            is_fifo: stat.is_fifo,
-            is_socket: stat.is_socket,
-        })
-    })
-    .await
-}
-
-fn crawl_fs_stat_from_std(metadata: std::fs::Metadata) -> CrawlFsStat {
-    macro_rules! unix_some_or_none {
-        ($member:ident) => {{
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                Some(metadata.$member())
-            }
-            #[cfg(not(unix))]
-            {
-                None
-            }
-        }};
-    }
-
-    macro_rules! unix_or_zero {
-        ($member:ident) => {{
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                metadata.$member()
-            }
-            #[cfg(not(unix))]
-            {
-                0
-            }
-        }};
-    }
-
-    macro_rules! unix_or_false {
-        ($member:ident) => {{
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::FileTypeExt;
-                metadata.file_type().$member()
-            }
-            #[cfg(not(unix))]
-            {
-                false
-            }
-        }};
-    }
-
-    fn to_msec(time: std::io::Result<std::time::SystemTime>) -> Option<u64> {
-        time.ok().map(|time| {
-            time.duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis() as u64)
-                .unwrap_or_else(|error| error.duration().as_millis() as u64)
-        })
-    }
-
-    let ctime = unix_or_zero!(ctime);
-    CrawlFsStat {
-        is_file: metadata.is_file(),
-        is_directory: metadata.is_dir(),
-        is_symlink: metadata.file_type().is_symlink(),
-        size: metadata.len(),
-        mtime: to_msec(metadata.modified()),
-        atime: to_msec(metadata.accessed()),
-        birthtime: to_msec(metadata.created()),
-        ctime: (ctime > 0).then_some(ctime as u64 * 1000),
-        dev: unix_or_zero!(dev),
-        ino: unix_some_or_none!(ino),
-        mode: unix_or_zero!(mode),
-        nlink: unix_some_or_none!(nlink),
-        uid: unix_or_zero!(uid),
-        gid: unix_or_zero!(gid),
-        rdev: unix_or_zero!(rdev),
-        blksize: unix_or_zero!(blksize),
-        blocks: unix_some_or_none!(blocks),
-        is_block_device: unix_or_false!(is_block_device),
-        is_char_device: unix_or_false!(is_char_device),
-        is_fifo: unix_or_false!(is_fifo),
-        is_socket: unix_or_false!(is_socket),
-    }
-}
-
-fn crawl_fs_size_sync(vfs: &PluginVfs, path: CheckedPathBuf) -> Result<u64, deno_fs::FsError> {
-    let stat = vfs.stat_sync(&path.as_checked_path())?;
-    if stat.is_file {
-        return Ok(stat.size);
-    }
-
-    let mut size = 0u64;
-    for entry in vfs.read_dir_sync(&path.as_checked_path())? {
-        let child = CheckedPathBuf::unsafe_new(path.join(entry.name));
-        size = size
-            .checked_add(crawl_fs_size_sync(vfs, child)?)
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "File size overflow")
-            })?;
-    }
-    Ok(size)
-}
-
-#[tauri::command]
-pub async fn crawl_fs_open<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-    options: Option<CrawlFsOpenOptions>,
-) -> Result<ResourceId, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let options = crawl_fs_open_options(options);
-    let file = crawl_fs_blocking(vfs, path, "open", move |vfs, path| {
-        vfs.open_std(&path, options)
-    })
-    .await?;
-    Ok(webview
-        .resources_table()
-        .add(CrawlFsFileResource::new(file)))
-}
-
-#[tauri::command]
-pub async fn crawl_fs_create<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<ResourceId, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let options = OpenOptions {
-        read: false,
-        write: true,
-        create: true,
-        truncate: true,
-        append: false,
-        create_new: false,
-        custom_flags: None,
-        mode: None,
-    };
-    let file = crawl_fs_blocking(vfs, path, "create", move |vfs, path| {
-        vfs.open_std(&path, options)
-    })
-    .await?;
-    Ok(webview
-        .resources_table()
-        .add(CrawlFsFileResource::new(file)))
-}
-
-#[tauri::command]
-pub async fn crawl_fs_fread<R: Runtime>(
-    webview: Webview<R>,
-    rid: ResourceId,
-    len: usize,
-) -> Result<tauri::ipc::Response, String> {
-    let mut data = vec![0; len];
-    let (mut data, nread) = crawl_fs_file_blocking(&webview, rid, "fread", move |file| {
-        let nread = file.read(&mut data)?;
-        Ok((data, nread))
-    })
-    .await?;
-
-    // 与 tauri-plugin-fs 一致，把读取数作为 8 字节大端整数附在 Raw IPC 响应末尾。
-    data.extend_from_slice(&(nread as u64).to_be_bytes());
-    Ok(tauri::ipc::Response::new(data))
-}
-
-#[tauri::command]
-pub async fn crawl_fs_fwrite<R: Runtime>(
-    webview: Webview<R>,
-    request: tauri::ipc::Request<'_>,
-) -> Result<usize, String> {
-    let (rid, data) = crawl_fs_raw_handle_write_request(&request)?;
-    crawl_fs_file_blocking(&webview, rid, "fwrite", move |file| file.write(&data)).await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_fseek<R: Runtime>(
-    webview: Webview<R>,
-    rid: ResourceId,
-    offset: i64,
-    whence: u16,
-) -> Result<u64, String> {
-    let position = match whence {
-        0 => SeekFrom::Start(
-            u64::try_from(offset)
-                .map_err(|_| "fseek from start requires a non-negative offset".to_string())?,
-        ),
-        1 => SeekFrom::Current(offset),
-        2 => SeekFrom::End(offset),
-        _ => return Err(format!("Invalid fseek whence: {whence}")),
-    };
-    crawl_fs_file_blocking(&webview, rid, "fseek", move |file| file.seek(position)).await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_fstat<R: Runtime>(
-    webview: Webview<R>,
-    rid: ResourceId,
-) -> Result<CrawlFsStat, String> {
-    crawl_fs_file_blocking(&webview, rid, "fstat", |file| {
-        file.metadata().map(crawl_fs_stat_from_std)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_ftruncate<R: Runtime>(
-    webview: Webview<R>,
-    rid: ResourceId,
-    len: Option<u64>,
-) -> Result<(), String> {
-    crawl_fs_file_blocking(&webview, rid, "ftruncate", move |file| {
-        file.set_len(len.unwrap_or(0))
-    })
-    .await
-}
-
-#[tauri::command]
-pub fn crawl_fs_close<R: Runtime>(webview: Webview<R>, rid: ResourceId) -> Result<(), String> {
-    let resource = webview
-        .resources_table()
-        .take::<CrawlFsFileResource>(rid)
-        .map_err(|error| format!("close rid {rid}: {error}"))?;
-    drop(resource);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn crawl_fs_read_file<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<tauri::ipc::Response, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let bytes = crawl_fs_blocking(vfs, path, "readfile", |vfs, path| {
-        vfs.read_file_sync(&path.as_checked_path(), OpenOptions::read())
-            .map(|bytes| bytes.into_owned())
-    })
-    .await?;
-    Ok(tauri::ipc::Response::new(bytes))
-}
-
-#[tauri::command]
-pub async fn crawl_fs_read_text_file<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<tauri::ipc::Response, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let text = crawl_fs_blocking(vfs, path, "readtextfile", |vfs, path| {
-        vfs.read_text_file_lossy_sync(&path.as_checked_path())
-            .map(|text| text.into_owned())
-    })
-    .await?;
-    Ok(tauri::ipc::Response::new(text.into_bytes()))
-}
-
-#[tauri::command]
-pub async fn crawl_fs_write_file<R: Runtime>(
-    webview: Webview<R>,
-    request: tauri::ipc::Request<'_>,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let (path, data, options) = crawl_fs_raw_write_request(&request)?;
-    let open_options = OpenOptions::write(
-        options.create.unwrap_or(true),
-        options.append.unwrap_or(false),
-        options.create_new.unwrap_or(false),
-        options.mode,
-    );
-    crawl_fs_blocking(vfs, path, "writefile", move |vfs, path| {
-        vfs.write_file_sync(&path.as_checked_path(), open_options, &data)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_write_text_file<R: Runtime>(
-    webview: Webview<R>,
-    request: tauri::ipc::Request<'_>,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let (path, data, options) = crawl_fs_raw_write_request(&request)?;
-    let open_options = OpenOptions::write(
-        options.create.unwrap_or(true),
-        options.append.unwrap_or(false),
-        options.create_new.unwrap_or(false),
-        options.mode,
-    );
-    crawl_fs_blocking(vfs, path, "writetextfile", move |vfs, path| {
-        vfs.write_file_sync(&path.as_checked_path(), open_options, &data)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_mkdir<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-    options: Option<CrawlFsMkdirOptions>,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let options = options.unwrap_or_default();
-    let recursive = options.recursive.unwrap_or(false);
-    let mode = Some(options.mode.unwrap_or(0o777) & 0o777);
-    crawl_fs_blocking(vfs, path, "mkdir", move |vfs, path| {
-        vfs.mkdir_sync(&path.as_checked_path(), recursive, mode)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_read_dir<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<Vec<CrawlFsDirEntry>, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_blocking(vfs, path, "readdir", |vfs, path| {
-        vfs.read_dir_sync(&path.as_checked_path()).map(|entries| {
-            entries
-                .into_iter()
-                .map(|entry| CrawlFsDirEntry {
-                    name: entry.name,
-                    is_file: entry.is_file,
-                    is_directory: entry.is_directory,
-                    is_symlink: entry.is_symlink,
-                })
-                .collect()
-        })
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_remove<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-    options: Option<CrawlFsRemoveOptions>,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    let recursive = options.unwrap_or_default().recursive.unwrap_or(false);
-    crawl_fs_blocking(vfs, path, "remove", move |vfs, path| {
-        vfs.remove_sync(&path.as_checked_path(), recursive)
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_stat<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<CrawlFsStat, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_metadata(vfs, path, "stat", true).await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_lstat<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<CrawlFsStat, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_metadata(vfs, path, "lstat", false).await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_rename<R: Runtime>(
-    webview: Webview<R>,
-    old_path: String,
-    new_path: String,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_blocking(vfs, old_path, "rename", move |vfs, old_path| {
-        let new_path = CheckedPathBuf::unsafe_new(PathBuf::from(new_path));
-        vfs.rename_sync(&old_path.as_checked_path(), &new_path.as_checked_path())
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_copy_file<R: Runtime>(
-    webview: Webview<R>,
-    from_path: String,
-    to_path: String,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_blocking(vfs, from_path, "copyfile", move |vfs, from_path| {
-        let to_path = CheckedPathBuf::unsafe_new(PathBuf::from(to_path));
-        vfs.copy_file_sync(&from_path.as_checked_path(), &to_path.as_checked_path())
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_exists<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<bool, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_blocking(vfs, path, "exists", |vfs, path| {
-        Ok(vfs.exists_sync(&path.as_checked_path()))
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_truncate<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-    len: Option<u64>,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_blocking(vfs, path, "truncate", move |vfs, path| {
-        vfs.truncate_sync(&path.as_checked_path(), len.unwrap_or(0))
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_size<R: Runtime>(webview: Webview<R>, path: String) -> Result<u64, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    crawl_fs_blocking(vfs, path, "size", crawl_fs_size_sync).await
-}
-
-#[tauri::command]
-pub async fn crawl_fs_get_root<R: Runtime>(webview: Webview<R>) -> Result<String, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    tokio::task::spawn_blocking(move || {
-        vfs.cwd()
-            .map(|path| path.to_string_lossy().into_owned())
-            .map_err(|error| format!("getroot: {error}"))
-    })
-    .await
-    .map_err(|error| format!("Failed to join getroot: {error}"))?
-}
-
-#[tauri::command]
-pub async fn crawl_ffmpeg_mux<R: Runtime>(
-    webview: Webview<R>,
-    inputs: Vec<String>,
-    output: String,
-) -> Result<(), String> {
-    let vfs = vfs_of_label(webview.label())?;
-    tokio::task::spawn_blocking(move || {
-        kabegame_core::plugin::ffmpeg::mux_streams_sync(&vfs, &inputs, &output)
-    })
-    .await
-    .map_err(|error| format!("音视频合流任务执行失败：{error}"))?
-}
-
-#[tauri::command]
-pub async fn crawl_ffmpeg_probe<R: Runtime>(
-    webview: Webview<R>,
-    path: String,
-) -> Result<Option<FfmpegProbeResult>, String> {
-    let vfs = vfs_of_label(webview.label())?;
-    tokio::task::spawn_blocking(move || kabegame_core::plugin::ffmpeg::probe_sync(&vfs, &path))
-        .await
-        .map_err(|error| format!("媒体探测任务执行失败：{error}"))?
-}
-
+// 压缩包解压是桌面专属命令（安卓不注册 `Kabegame.archive`），本模块在安卓上仍需编译其余命令。
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn crawl_archive_zip<R: Runtime>(
     webview: Webview<R>,
@@ -1050,6 +291,7 @@ pub async fn crawl_archive_zip<R: Runtime>(
     .map_err(|error| format!("ZIP 解压任务执行失败：{error}"))?
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn crawl_archive_tar<R: Runtime>(
     webview: Webview<R>,
@@ -1066,6 +308,7 @@ pub async fn crawl_archive_tar<R: Runtime>(
     .map_err(|error| format!("TAR 解压任务执行失败：{error}"))?
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn crawl_archive_7z<R: Runtime>(
     webview: Webview<R>,
@@ -1107,6 +350,7 @@ pub async fn crawl_get_state<R: Runtime>(webview: WebviewWindow<R>) -> Result<Va
 }
 
 /// 内部：按任务 id 取消当前 WebView 任务并释放。
+#[cfg(not(target_os = "android"))]
 pub async fn crawl_cancel_for_task(task_id: &str) {
     TaskScheduler::global()
         .complete_webview_task(task_id, Err(TaskError::Canceled))
@@ -1253,6 +497,17 @@ pub async fn crawl_download_image<R: Runtime>(
     };
     let labels = validate_crawler_download_labels(labels, &run.params.plugin.id, &task_id)?;
 
+    // 桌面靠 CEF 会话自己带 Cookie；安卓没有 CEF 下载通道，入队前补齐 Cookie / UA / Referer。
+    #[cfg(target_os = "android")]
+    let http_headers = if matches!(parsed.scheme(), "http" | "https") {
+        super::surf_receive::android_identity_headers(webview.as_ref(), &parsed).await
+    } else {
+        // task-vfs / data 等本地路径不需要浏览器身份。
+        HashMap::new()
+    };
+    #[cfg(not(target_os = "android"))]
+    let http_headers = HashMap::new();
+
     let dq = TaskScheduler::global().download_queue();
     // 与 V8 op 同形：统一经容量门控入队；worker 再按插件 backend 选择 CEF 或 scheme downloader。
     let cancel = run.cancel.clone();
@@ -1263,7 +518,7 @@ pub async fn crawl_download_image<R: Runtime>(
         task_id,
         download_start_time,
         run.params.output_album_id.clone(),
-        HashMap::new(),
+        http_headers,
         name,
         metadata_id,
         source_url,
@@ -1316,67 +571,6 @@ fn validate_crawler_search_texts(
     Ok(terms)
 }
 
-/// 畅游右键下载 / 一键下载统一入队；worker 仍会在所属 surf WebView 中调用 CEF 下载以保留会话。
-///
-/// 一键下载额外传 `collect_run_id`：run 已取消则直接拒绝，并以 blocking 方式入队（等下载池
-/// 有空位），使取消能拦下尚未入队的候选；`metadata_id` 为同批共享的页面快照行，必须属于本站点。
-#[tauri::command]
-pub async fn surf_download_image<R: Runtime>(
-    webview: Webview<R>,
-    url: String,
-    name: Option<String>,
-    headers: Option<HashMap<String, String>>,
-    metadata: Option<Value>,
-    metadata_id: Option<i64>,
-    collect_run_id: Option<u64>,
-    source_url: Option<String>,
-) -> Result<(), String> {
-    let ctx = surf_ctx_from_label(webview.label())?;
-    let parsed = Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("Surf download only supports http or https URLs".to_string());
-    }
-    if let Some(run_id) = collect_run_id {
-        if !super::surf_collect::is_run_active(webview.label(), run_id) {
-            return Err(kabegame_i18n::t!("surf.collect.canceled"));
-        }
-    }
-
-    let custom_name = name.or_else(|| surf_download_name_from_url(&parsed));
-    let metadata_id = match metadata_id {
-        Some(id) => {
-            let owner = Storage::global().metadata_plugin_id(id)?;
-            if owner.as_deref() != Some(ctx.host.as_str()) {
-                return Err(format!("Metadata {id} does not belong to this surf site"));
-            }
-            Some(id)
-        }
-        None => insert_metadata(&ctx.host, metadata, SURF_METADATA_VERSION)?,
-    };
-    let mut http_headers = HashMap::new();
-    if let Some(headers) = headers {
-        http_headers.extend(headers);
-    }
-    let dq = TaskScheduler::global().download_queue();
-    dq.download(
-        parsed,
-        ctx.images_dir,
-        ctx.host,
-        String::new(),
-        now_ms(),
-        None,
-        Some(ctx.surf_record_id),
-        http_headers,
-        None,
-        custom_name,
-        metadata_id,
-        collect_run_id.is_some(),
-        source_url,
-        Vec::new(),
-    )
-    .await
-}
-
 /// 更新当前页 page_state（浅合并），返回合并后的 page_state 供脚本直接复用
 /// （无本地缓存，避免脚本再发一次 crawl_get_page_state）。
 #[tauri::command]
@@ -1424,13 +618,26 @@ pub async fn crawl_clear_site_data<R: Runtime>(
     let _ = run_of(&webview)?;
     let parsed =
         Url::parse(url.trim()).map_err(|e| format!("Invalid URL for clear_site_data: {}", e))?;
-    let cookies = webview
-        .cookies_for_url(parsed)
-        .map_err(|e| format!("Failed to get cookies: {}", e))?;
-    for cookie in cookies {
-        let _ = webview.delete_cookie(cookie);
+    // 桌面走 CEF 的 cookies_for_url / delete_cookie；安卓 wry 的 delete_cookie 是空实现，
+    // 改由 CrawlerPlugin 逐个把该 URL 的 Cookie 写成过期。
+    #[cfg(target_os = "android")]
+    {
+        return super::crawler_android::crawler_android_clear_cookies(
+            webview.app_handle().clone(),
+            parsed.to_string(),
+        )
+        .await;
     }
-    Ok(())
+    #[cfg(not(target_os = "android"))]
+    {
+        let cookies = webview
+            .cookies_for_url(parsed)
+            .map_err(|e| format!("Failed to get cookies: {}", e))?;
+        for cookie in cookies {
+            let _ = webview.delete_cookie(cookie);
+        }
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -1514,17 +721,81 @@ pub async fn crawl_back<R: Runtime>(
     Ok(())
 }
 
+/// `show_crawler_window` 的任务 id 解析：显式 `taskId` 优先，缺省时从调用方 webview 的
+/// label（`crawler-<task_id>`）反推；插件里的 `Kabegame.requestShowWebview()` 不带参数。
+fn resolve_show_task_id(task_id: Option<String>, caller_label: &str) -> Result<String, String> {
+    match task_id {
+        Some(id) if !id.trim().is_empty() => Ok(id.trim().to_string()),
+        _ => task_id_from_crawler_label(caller_label)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "不是爬虫窗口，无法推断任务 id".to_string()),
+    }
+}
+
+/// 显示爬虫 WebView 窗口。
+///
+/// `task_id` 可缺省：插件里 `Kabegame.requestShowWebview()` 不带参数，此时从调用方 webview 的
+/// label 反推（只有爬虫窗口自己能这么用）。桌面上浮并聚焦窗口；安卓把停靠的主界面容器提到
+/// 主 webview 之上，app 在后台时只记为待显示（安卓限制后台拉起界面）。
 #[tauri::command]
-pub fn show_crawler_window<R: Runtime>(app: AppHandle<R>, task_id: String) -> Result<(), String> {
-    let label = crawler_window_label(task_id.trim());
-    let crawler_window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| "该任务未在运行或没有 WebView 窗口".to_string())?;
-    crawler_window
-        .show()
-        .map_err(|e| format!("Failed to show crawler window: {}", e))?;
-    crawler_window
-        .set_focus()
-        .map_err(|e| format!("Failed to focus crawler window: {}", e))?;
-    Ok(())
+pub async fn show_crawler_window<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
+    task_id: Option<String>,
+) -> Result<(), String> {
+    let task_id = resolve_show_task_id(task_id, webview.label())?;
+    let label = crawler_window_label(&task_id);
+    #[cfg(target_os = "android")]
+    {
+        let pending = super::crawler_android::show_crawler_window_via_plugin(&app, &label).await?;
+        if pending {
+            super::crawler_android::log_pending_show(&task_id);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let crawler_window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| "该任务未在运行或没有 WebView 窗口".to_string())?;
+        crawler_window
+            .show()
+            .map_err(|e| format!("Failed to show crawler window: {}", e))?;
+        crawler_window
+            .set_focus()
+            .map_err(|e| format!("Failed to focus crawler window: {}", e))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_show_task_id;
+
+    #[test]
+    fn show_task_id_prefers_explicit_value() {
+        assert_eq!(
+            resolve_show_task_id(Some("  task-1  ".to_string()), "main").unwrap(),
+            "task-1"
+        );
+    }
+
+    #[test]
+    fn show_task_id_falls_back_to_caller_label() {
+        assert_eq!(
+            resolve_show_task_id(None, "crawler-task-2").unwrap(),
+            "task-2"
+        );
+        // 空串等同缺省（前端有时会传空 taskId）。
+        assert_eq!(
+            resolve_show_task_id(Some("   ".to_string()), "crawler-task-2").unwrap(),
+            "task-2"
+        );
+    }
+
+    #[test]
+    fn show_task_id_rejects_non_crawler_caller() {
+        assert!(resolve_show_task_id(None, "main").is_err());
+        assert!(resolve_show_task_id(Some("task-3".to_string()), "main").is_ok());
+    }
 }

@@ -259,7 +259,7 @@ import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { HeaderFeatureId } from "@/stores/header";
-import { useCrawlerStore } from "@/stores/crawler";
+import { runConfigToPresetJson, useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
@@ -271,6 +271,7 @@ import type { PluginRecommendedPreset, RunConfig } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { trackEvent } from "@/track/umami";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -601,6 +602,22 @@ const handleCopy = async (id: string) => {
   ElMessage.success(t("autoConfig.copied"));
 };
 
+/** 复制为插件 `configs/*.json` 推荐配置，供插件作者直接存成文件 */
+const handleCopyPresetJson = async (cfg: RunConfig) => {
+  const text = runConfigToPresetJson(cfg);
+  try {
+    if (IS_WEB) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      await writeText(text);
+    }
+    ElMessage.success(t("autoConfig.presetJsonCopied"));
+  } catch (e) {
+    console.error(e);
+    ElMessage.error(t("common.copyFailed"));
+  }
+};
+
 /** 通路 4：只把该配置的 task config 写入全局 taskConfig 再打开弹窗，不写配置 id、不关联该配置 */
 const handleRunWithConfig = async (id: string) => {
   if (await guardDesktopOnly("runConfig", { needSuper: true })) return;
@@ -617,6 +634,9 @@ const handleMoreCommand = (cmd: string, cfg: RunConfig) => {
       break;
     case "copy":
       void handleCopy(cfg.id);
+      break;
+    case "copyPresetJson":
+      void handleCopyPresetJson(cfg);
       break;
     case "delete":
       void handleDelete(cfg.id);

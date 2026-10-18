@@ -2,7 +2,7 @@
 
 All kabegame changes to the **tauri monorepo** live here as one numbered series.
 `third/tauri` is the pristine upstream `tauri-apps/tauri` submodule; the series patches
-its consumed sub-crates: `crates/tauri-runtime`, `crates/tauri-runtime-wry` and
+its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-runtime-wry` and
 `crates/tauri-utils` (libraries, pulled into the app via `[patch.crates-io]`) plus
 `crates/tauri-cli` (the forked
 `cargo-tauri` binary, built by `TauriCliPlugin`). One submodule, one series — no separate
@@ -74,10 +74,16 @@ its consumed sub-crates: `crates/tauri-runtime`, `crates/tauri-runtime-wry` and
   `tauri-runtime/webkit` on Linux/BSD, keeping the upstream wry runtime buildable in the
   monorepo while custom runtimes can leave WebKit disabled.
 
-`0010-tauri-build-always-static-vcruntime.patch` has been deleted: since Tauri 2.12,
-`tauri-build` reads `build.windows.staticVCRuntime` when `STATIC_VCRUNTIME` is absent, and the
-configuration defaults to `true`. Bare `cargo build` therefore gets the same static vcruntime
-behavior without a fork patch.
+`tauri` (library, consumed via `[patch.crates-io]`):
+
+- `0010-tauri-mobile-unregistered-response-channel.patch` — on mobile every `Channel` is put into
+  the global `CHANNELS` table (`plugin/mobile.rs`) so native plugins can push to it by id, and
+  that table is never pruned. `Channel::from_callback_fn` builds a one-shot channel for the
+  response of **every** IPC call, so each invoke leaked one entry plus the `Webview` it
+  captures (measured on Android: +101 entries for 100 invokes). The patch adds a private
+  `Channel::new_unregistered` and uses it for these response channels only; channels created by
+  `channel_on` / `Channel::new` (the ones native plugins look up) are still registered.
+  Re-check on bump: `ipc/channel.rs` `new_with_id` / `from_callback_fn`.
 
 Apply the whole series manually before building against `third/tauri`:
 

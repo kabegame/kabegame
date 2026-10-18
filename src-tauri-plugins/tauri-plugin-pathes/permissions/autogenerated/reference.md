@@ -84,4 +84,30 @@ Denies the getExternalDataDir command without any pre-configured scope.
 
 </td>
 </tr>
+
+<tr>
+<td>
+
+`pathes:allow-seedBundledPlugins`
+
+</td>
+<td>
+
+Enables the seedBundledPlugins command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`pathes:deny-seedBundledPlugins`
+
+</td>
+<td>
+
+Denies the seedBundledPlugins command without any pre-configured scope.
+
+</td>
+</tr>
 </table>

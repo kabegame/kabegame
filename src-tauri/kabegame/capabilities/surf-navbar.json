@@ -1,6 +1,6 @@
 {
   "identifier": "surf-navbar-capability",
-  "description": "Surf navbar webview (local tauri:// page only; content webview stays on surf-capability)",
+  "description": "Surf navbar webview (local tauri:// page only; external content never receives this capability)",
   "webviews": ["surf-*-navbar"],
   "permissions": [
     "surf",

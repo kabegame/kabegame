@@ -3,7 +3,21 @@
 
   const _tauri = window.__TAURI_INTERNALS__;
   const invoke = (cmd, args) => _tauri.invoke(cmd, args || {});
-  const WRITE_CHUNK = 8 * 1024 * 1024;
+  // 桌面走 Raw IPC，8 MiB 一块最省往返。安卓只有 postMessage IPC，整块要编码进一条字符串消息，
+  // 故降到 1 MiB，并改发 base64（见 ipcBytes）。
+  const IS_ANDROID = /Android/i.test(navigator.userAgent || "");
+  const WRITE_CHUNK = IS_ANDROID ? 1024 * 1024 : 8 * 1024 * 1024;
+
+  // 安卓上直接传 Uint8Array 会被 JSON.stringify 成数字数组（约 3.6 倍体积），1 MiB 一块往返
+  // 实测 1 s 以上；base64 只有 1.33 倍。Rust 侧 raw_body_bytes 认 `{ base64 }`。
+  function ipcBytes(chunk) {
+    if (!IS_ANDROID) return chunk;
+    let binary = "";
+    for (let i = 0; i < chunk.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, chunk.subarray(i, i + 0x8000));
+    }
+    return { base64: btoa(binary) };
+  }
   // 文案见 kabegame-i18n `webview.*`，由 webview_i18n.js 预先拉取
   const t = (key, params) => (window.__kb_i18n__ ? window.__kb_i18n__.t(key, params) : key);
 
@@ -35,8 +49,8 @@
     let offset = 0;
     while (offset < bytes.byteLength) {
       const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + WRITE_CHUNK));
-      // Uint8Array 作为 invoke 参数即 raw body(Tauri InvokeBody::Raw)。
-      const count = await _tauri.invoke("crawl_fs_fwrite", chunk, {
+      // 桌面上 Uint8Array 作为 invoke 参数即 raw body(Tauri InvokeBody::Raw)。
+      const count = await _tauri.invoke("crawl_fs_fwrite", ipcBytes(chunk), {
         headers: { rid: String(rid) },
       });
       if (!Number.isInteger(count) || count <= 0 || count > chunk.byteLength) {
@@ -76,11 +90,35 @@
     return bufferParts(buffer).reduce((sum, part) => sum + part.byteLength, 0);
   }
 
+  // MSE 分片常只有几 KB（实测 YouTube Shorts 平均不到 2 KB），逐片 invoke 时耗时全在往返上；
+  // 先攒到 WRITE_CHUNK 再写。
   async function writeBuffer(path, buffer, onWrite) {
     await createAndWrite(path, async (rid) => {
+      const pending = [];
+      let pendingBytes = 0;
+      const flush = async () => {
+        if (!pendingBytes) return;
+        const merged = new Uint8Array(pendingBytes);
+        let offset = 0;
+        for (const part of pending) {
+          merged.set(part, offset);
+          offset += part.byteLength;
+        }
+        pending.length = 0;
+        pendingBytes = 0;
+        await writeRaw(rid, merged, onWrite);
+      };
       for (const part of bufferParts(buffer)) {
-        await writeRaw(rid, new Uint8Array(part), onWrite);
+        const bytes = new Uint8Array(part);
+        if (pendingBytes + bytes.byteLength > WRITE_CHUNK) await flush();
+        if (bytes.byteLength >= WRITE_CHUNK) {
+          await writeRaw(rid, bytes, onWrite);
+          continue;
+        }
+        pending.push(bytes);
+        pendingBytes += bytes.byteLength;
       }
+      await flush();
     });
   }
 

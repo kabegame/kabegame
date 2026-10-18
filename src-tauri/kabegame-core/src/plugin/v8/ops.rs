@@ -478,8 +478,14 @@ const CEF_CHROME_MAJOR: u32 = 149;
 /// 畅游（桌面 CEF）默认 User-Agent，按 Chromium `BuildUserAgentFromOSAndProduct` 的公式拼出：
 /// 平台段为 Chromium 写死的 unified platform，版本段为 `<major>.0.0.0`。
 /// Cloudflare 的 `cf_clearance` 绑定签发时的 UA，插件拿畅游 Cookie 时须配套使用。
-/// Android 不走 CEF（系统 WebView），返回 `None`。
+/// Android 不走 CEF：畅游内容页是系统 WebView 且保持默认 UA，故返回宿主启动时登记的
+/// `WebSettings.getDefaultUserAgent`；尚未登记时返回 `None`。
 fn cef_user_agent() -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        return ANDROID_WEBVIEW_USER_AGENT.get().cloned();
+    }
+    #[allow(unreachable_code)]
     let platform = if cfg!(target_os = "windows") {
         "Windows NT 10.0; Win64; x64"
     } else if cfg!(target_os = "macos") {
@@ -493,6 +499,92 @@ fn cef_user_agent() -> Option<String> {
         "Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) \
          Chrome/{CEF_CHROME_MAJOR}.0.0.0 Safari/537.36"
     ))
+}
+
+/// 系统 WebView 默认 UA：同进程内所有 WebView 一致，WebView 升级会重启进程，故只登记一次。
+#[cfg(target_os = "android")]
+static ANDROID_WEBVIEW_USER_AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 安卓宿主登记的系统 WebView 默认 UA；畅游下载补请求头也用它。
+#[cfg(target_os = "android")]
+pub fn android_webview_user_agent() -> Option<String> {
+    ANDROID_WEBVIEW_USER_AGENT.get().cloned()
+}
+
+/// 由安卓宿主登记系统 WebView 的默认 UA，供 `Kabegame.cefUserAgent()` 返回。
+#[cfg(target_os = "android")]
+pub fn set_android_webview_user_agent(user_agent: &str) {
+    let user_agent = user_agent.trim();
+    if !user_agent.is_empty() {
+        let _ = ANDROID_WEBVIEW_USER_AGENT.set(user_agent.to_string());
+    }
+}
+
+/// 安卓畅游「桌面版网站」用的 UA：与当前系统 WebView 同 Chrome 大版本的 Linux 桌面 UA，
+/// 与 Chrome Android「桌面版网站」同一套写法。
+///
+/// 内容页建窗、弹窗、插件 `requireCookie`、畅游下载补头都只认这一个实现；存的是记录上的
+/// 模式布尔值，UA 每次由当前系统默认 UA 派生，WebView 升级后不会留下旧 Chrome 版本。
+/// 默认 UA 未登记或解析不出版本时返回 `None`（调用方据此不切换）。
+#[cfg(target_os = "android")]
+pub fn android_desktop_user_agent() -> Option<String> {
+    let default = ANDROID_WEBVIEW_USER_AGENT.get()?;
+    let major = desktop_chrome_major(default)?;
+    Some(format!(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+         Chrome/{major}.0.0.0 Safari/537.36"
+    ))
+}
+
+/// `…Version/4.0 Chrome/155.0.8059.43 Mobile Safari/537.36` → `155`。
+/// 纯函数，桌面也编译以便单测。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn desktop_chrome_major(user_agent: &str) -> Option<u32> {
+    let rest = user_agent.split("Chrome/").nth(1)?;
+    rest.split('.').next()?.parse().ok()
+}
+
+/// 桌面模式记录：把任务当前的 `User-Agent` 换成桌面 UA。
+///
+/// 只替换「缺失或等于系统 WebView 默认 UA」的值。现有插件都是先
+/// `setHeader("User-Agent", cefUserAgent())` 再 `requireCookie`，因此无需改插件就能配对；
+/// 插件写死的 UA（xhs、kemono、bilibili）和用户在任务 Header 里显式填的 UA 不被覆盖。
+/// 头名按 HTTP 规范不区分大小写，先删掉大小写变体再写，避免同一头出现两份。
+#[cfg(target_os = "android")]
+fn inject_desktop_user_agent(task_id: &str, run: &Task, host: &str) {
+    let Some(desktop) = android_desktop_user_agent() else {
+        return;
+    };
+    let default_ua = android_webview_user_agent();
+    let existing: Vec<(String, String)> = run
+        .headers_snapshot()
+        .into_iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+        .collect();
+    let replaceable = existing.is_empty()
+        || existing
+            .iter()
+            .all(|(_, value)| Some(value.as_str()) == default_ua.as_deref());
+    if !replaceable {
+        return;
+    }
+    for (name, _) in &existing {
+        let _ = run.del_header(name);
+    }
+    if let Err(e) = run.set_header("User-Agent".to_string(), desktop) {
+        emit_http_warn(
+            task_id,
+            task_log_i18n(
+                "taskLogHttpHeaderWriteFailed",
+                json!({ "detail": e.to_string() }),
+            ),
+        );
+        return;
+    }
+    emit_http_info(
+        task_id,
+        task_log_i18n("taskLogDesktopUaInjected", json!({ "host": host })),
+    );
 }
 
 #[op2]
@@ -543,12 +635,19 @@ pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -
     };
     match Storage::global().get_surf_record_by_host(&host) {
         Ok(Some(rec)) if !rec.cookie.trim().is_empty() => {
+            #[cfg(target_os = "android")]
+            let desktop_mode = rec.desktop_mode;
             match run.set_header("Cookie".to_string(), rec.cookie) {
                 Ok(()) => {
                     emit_http_info(
                         &task_id,
                         task_log_i18n("taskLogCookieInjected", json!({ "host": host })),
                     );
+                    // Cookie 与签发 UA 必须配对：桌面模式记录顺带把宿主给的默认 UA 换成桌面 UA。
+                    #[cfg(target_os = "android")]
+                    if desktop_mode {
+                        inject_desktop_user_agent(&task_id, &run, &host);
+                    }
                     true
                 }
                 Err(e) => {
@@ -1248,6 +1347,10 @@ fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, 
     }
 
     client_builder = client_builder
+        // HTTP/1.1 下 hyper 默认把头名全部转成小写发出，Cloudflare 视作机器人特征直接挑战
+        // （同一请求 curl 以 User-Agent 大小写发出是 200、全小写是 403）。改为首字母大写兜底；
+        // 能协商 h2 的连接不受影响（h2 规定头名小写，见 Cargo.toml 的 native-tls-alpn）。
+        .http1_title_case_headers()
         .timeout(Duration::from_secs(300))
         .connect_timeout(Duration::from_secs(10))
         .redirect(redirect)
@@ -1351,5 +1454,19 @@ mod tests {
     #[test]
     fn ops_search_texts_non_array_is_an_argument_error() {
         assert!(parse_search_texts(Some(&json!({"text": "x"})), "task", "searchTexts").is_err());
+    }
+
+    #[test]
+    fn desktop_chrome_major_parses_webview_user_agent() {
+        let ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A; wv) \
+                  AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 \
+                  Chrome/155.0.8059.43 Mobile Safari/537.36";
+        assert_eq!(super::desktop_chrome_major(ua), Some(155));
+        // 缺 `Chrome/` 或版本段不是数字：派生不出桌面 UA，调用方不切换。
+        assert_eq!(
+            super::desktop_chrome_major("Mozilla/5.0 (Linux; Android 14)"),
+            None
+        );
+        assert_eq!(super::desktop_chrome_major("Chrome/abc Safari/537.36"), None);
     }
 }

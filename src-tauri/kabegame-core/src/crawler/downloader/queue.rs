@@ -941,8 +941,12 @@ impl DownloadQueue {
 }
 
 /// job 是否应由所属 CEF webview 执行，以保留爬虫或畅游窗口的会话状态。
+///
+/// 安卓没有 CEF 下载通道：脚本下载在 `crawl_download_image` / `surf_download_image` 入队前
+/// 已补齐 Cookie / UA / Referer，交给 reqwest 下载；畅游与爬虫在这一平台都必须走 scheme downloader。
 fn is_native_job(job: &DownloadRequest) -> bool {
-    matches!(job.url.scheme(), "http" | "https")
+    cfg!(not(target_os = "android"))
+        && matches!(job.url.scheme(), "http" | "https")
         && (job.surf_record_id.is_some()
             || TaskScheduler::global()
                 .get_run(&job.task_id)
@@ -1421,5 +1425,44 @@ mod tests {
         Settings::global()
             .set_max_concurrent_downloads(previous_global)
             .unwrap();
+    }
+
+    fn surf_request(url: &str, surf_record_id: Option<&str>) -> DownloadRequest {
+        DownloadRequest {
+            id: 1,
+            url: Url::parse(url).unwrap(),
+            images_dir: PathBuf::new(),
+            plugin_id: "example.com".to_string(),
+            task_id: String::new(),
+            download_start_time: 0,
+            output_album_id: None,
+            surf_record_id: surf_record_id.map(str::to_string),
+            http_headers: HashMap::new(),
+            failed_image_id: None,
+            custom_display_name: None,
+            metadata_id: None,
+            post_url: None,
+            labels: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn native_job_only_on_desktop() {
+        AppPaths::init_for_tests();
+        let _ = Settings::init_global();
+        let _ = Storage::init_global();
+        let _ = TaskScheduler::init_global(Arc::new(DownloadQueue::new()));
+
+        // 桌面有 CEF 下载 handler，畅游下载交给浏览器；安卓没有，必须走 reqwest。
+        let surf = surf_request("https://example.com/a.jpg", Some("record-1"));
+        assert_eq!(is_native_job(&surf), cfg!(not(target_os = "android")));
+
+        // 普通 reqwest 下载（无畅游记录、任务也不是 webview transport）。
+        let plain = surf_request("https://example.com/a.jpg", None);
+        assert!(!is_native_job(&plain));
+
+        // 非 http(s) 永远不走 CEF 原生下载。
+        let data = surf_request("data:image/png;base64,AAAA", Some("record-1"));
+        assert!(!is_native_job(&data));
     }
 }

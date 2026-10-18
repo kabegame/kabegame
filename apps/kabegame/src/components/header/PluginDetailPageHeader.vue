@@ -20,7 +20,9 @@
     <template #extra>
       <div v-if="plugin" class="flex items-center gap-2">
         <template v-if="actionState === 'installed'">
-          <span class="kb-chip text-white kb-grad-success whitespace-nowrap">{{ t("plugins.installed") }}</span>
+          <span v-if="!uiStore.isCompact" class="kb-chip text-white kb-grad-success whitespace-nowrap">
+            {{ t("plugins.installed") }}
+          </span>
           <el-button circle :title="t('plugins.detailCopyId')" @click="emit('copy-id', plugin.id)">
             <el-icon><DocumentCopy /></el-icon>
           </el-button>
@@ -31,16 +33,22 @@
         <el-button
           v-else
           type="primary"
-          round
+          :circle="uiStore.isCompact"
+          :round="!uiStore.isCompact"
           :disabled="!!plugin.minAppIncompatible"
+          :aria-label="installButtonText"
           :title="
             plugin.minAppIncompatible
               ? t('plugins.detail.appVersionBad', { app: appVersion ?? '?', min: plugin.minAppVersion })
-              : undefined
+              : installButtonText
           "
           @click="emit('install')"
         >
-          {{ installButtonText }}
+          <el-icon v-if="uiStore.isCompact">
+            <Refresh v-if="actionState === 'update' || actionState === 'reinstall'" />
+            <Download v-else />
+          </el-icon>
+          <template v-else>{{ installButtonText }}</template>
         </el-button>
       </div>
     </template>
@@ -49,13 +57,14 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Delete, DocumentCopy, Grid } from "@kabegame/element-plus-icons";
+import { Delete, DocumentCopy, Download, Grid, Refresh } from "@kabegame/element-plus-icons";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@/stores/header";
 import type { Plugin } from "@/stores/plugins";
 import { pluginIconToDataUrl } from "@/stores/plugins";
 import { usePluginActionState } from "@/composables/usePluginActionState";
+import { useUiStore } from "@/stores/ui";
 import { APP_VERSION } from "@/env";
 
 const props = defineProps<{
@@ -73,6 +82,7 @@ const emit = defineEmits<{
 }>();
 
 const { t, locale } = useI18n();
+const uiStore = useUiStore();
 
 const iconUrl = computed(() => pluginIconToDataUrl(props.plugin?.iconPngBase64));
 const appVersion = computed(() => APP_VERSION ?? undefined);

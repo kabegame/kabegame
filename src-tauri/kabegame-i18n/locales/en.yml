@@ -110,6 +110,29 @@ vd:
 
 surf:
   windowTitle: "Surf - {host}"
+  toolbar:
+    back: "Back"
+    forward: "Forward"
+    reload: "Reload"
+    address: "Address"
+    collect: "Download all media"
+    cancel: "Cancel download"
+    openInBrowser: "Open in browser"
+    close: "Close"
+    closePopup: "Close popup"
+    more: "More"
+    desktopSite: "Desktop site"
+    addToHome: "Add to Home screen"
+  shortcut:
+    requested: "No icon? Allow Kabegame to create home screen shortcuts in Settings"
+    alreadyPinned: "Already on the Home screen"
+    unsupported: "This launcher does not support adding shortcuts"
+    failed: "Failed to add the home screen shortcut"
+    recordDeleted: "This surf site has been deleted"
+  download:
+    unsupportedType: "Unsupported download type: Surf only receives images and videos"
+    unsupportedScheme: "Unsupported download address"
+    appPackage: "Blocked an app installer download. If the site hides web sign-in, switch to Desktop site from the menu"
   collect:
     detecting: "Detecting media on this page…"
     none: "No downloadable media found on this page"
@@ -118,6 +141,7 @@ surf:
     done: "Queued {queued}/{total} for download"
     notReady: "Page is not ready yet, please try again"
     snapshotFailed: "Failed to save page snapshot: {error}"
+    ipcUnavailable: "This system WebView does not support secure app messaging, so one-click download is unavailable"
 
 webview:
   menu:
@@ -163,3 +187,8 @@ webview:
     notCaptured: "No media stream was captured for this video (the page may have started playing before injection; reload and try again)"
     captureMissing: "No capture data found for this video"
     captureEmpty: "The capture contains no media data"
+
+crawler:
+  toolbar:
+    collapse: "Collapse"
+    cancel: "Cancel task"

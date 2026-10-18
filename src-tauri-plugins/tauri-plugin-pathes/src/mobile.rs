@@ -36,4 +36,11 @@ impl<R: Runtime> Pathes<R> {
             .run_mobile_plugin("getExternalDataDir", ())
             .map_err(Into::into)
     }
+
+    /// 版本变化时把 APK 内预置的 `.kgpg` 复制进 `target_dir`（阻塞直到复制完成）。
+    pub fn seed_bundled_plugins(&self, target_dir: String) -> crate::Result<SeedBundledPluginsResponse> {
+        self.0
+            .run_mobile_plugin("seedBundledPlugins", SeedBundledPluginsArgs { target_dir })
+            .map_err(Into::into)
+    }
 }

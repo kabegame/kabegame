@@ -74,30 +74,27 @@
         <el-button type="primary" size="small" @click="emit('run-with-config', config.id)">
           {{ t("autoConfig.runWithConfig") }}
         </el-button>
-        <el-dropdown trigger="click" @command="(cmd: string) => emit('more-command', cmd, config)">
-          <el-button size="small">
-            {{ t("autoConfig.moreActions") }}
-            <el-icon class="cg-actions-caret">
-              <ArrowDown />
-            </el-icon>
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="edit">{{ t("autoConfig.edit") }}</el-dropdown-item>
-              <el-dropdown-item command="copy">{{ t("autoConfig.copy") }}</el-dropdown-item>
-              <el-dropdown-item command="delete" divided>
-                {{ t("autoConfig.delete") }}
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <!-- 动作菜单：model-value 恒为 null，选中只发命令，触发器始终显示「更多」占位 -->
+        <el-select
+          class="cg-actions-more"
+          size="small"
+          :model-value="null"
+          :placeholder="t('autoConfig.moreActions')"
+          :fit-input-width="false"
+          @update:model-value="(cmd: string) => emit('more-command', cmd, config)"
+        >
+          <el-option value="edit" :label="t('autoConfig.edit')" />
+          <el-option value="copy" :label="t('autoConfig.copy')" />
+          <el-option value="copyPresetJson" :label="t('autoConfig.copyAsPresetJson')" />
+          <el-option value="delete" :label="t('autoConfig.delete')" />
+        </el-select>
       </div>
     </div>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { AlarmClock, ArrowDown } from "@kabegame/element-plus-icons";
+import { AlarmClock } from "@kabegame/element-plus-icons";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import ScheduleProgressBar from "@/components/scheduler/ScheduleProgressBar.vue";
 import AutoConfigCardScheduleEditor from "@/components/scheduler/AutoConfigCardScheduleEditor.vue";
@@ -202,7 +199,7 @@ const scheduleSummary = (cfg: RunConfig) => {
 function onCardClick(e: MouseEvent) {
   const el = e.target as HTMLElement | null;
   if (!el) return;
-  if (el.closest(".cg-icon, .cg-tasks, .cg-actions, .cg-schedule, .el-switch, .el-button, .el-dropdown")) {
+  if (el.closest(".cg-icon, .cg-tasks, .cg-actions, .cg-schedule, .el-switch, .el-button, .el-select")) {
     return;
   }
   emit("card-click", props.config, e);
@@ -366,9 +363,13 @@ function onCardClick(e: MouseEvent) {
   margin-top: 0;
 }
 
-.cg-actions-caret {
-  margin-left: 4px;
-  vertical-align: middle;
+.cg-actions-more {
+  width: 96px;
+
+  /* 占位即按钮文案，不用占位灰 */
+  :deep(.el-select__placeholder) {
+    color: var(--el-text-color-regular);
+  }
 }
 
 .config-title-line {

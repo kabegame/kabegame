@@ -1,6 +1,7 @@
 import type { KameMessageType } from "../stores/kameMessage";
 import { useKameMessageStore } from "../stores/kameMessage";
 import { useSettingsStore } from "../stores/settings";
+import { useModalStackStore } from "../stores/modalStack";
 import { ElMessage } from "@kabegame/element-plus";
 
 type KameMessageOptions = {
@@ -35,7 +36,8 @@ const push = (type: KameMessageType, message: unknown, duration?: number) => {
   const settingsStore = useSettingsStore();
   const store = useKameMessageStore();
 
-  if (settingsStore.values.kamechanEnabled !== false) {
+  // kamechan 被遮住（如全屏图片预览隐藏了它）时气泡看不见，降级到 ElMessage
+  if (settingsStore.values.kamechanEnabled !== false && !store.kamechanHidden) {
     store.push(type, text, duration);
     return;
   }
@@ -45,6 +47,8 @@ const push = (type: KameMessageType, message: unknown, duration?: number) => {
     type,
     message: text,
     duration,
+    // 压在所有已占栈位（预览、弹窗）之上；没有弹层时用组件库自增层级
+    zIndex: useModalStackStore().topZIndex() ?? undefined,
   });
 };
 

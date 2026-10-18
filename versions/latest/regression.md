@@ -1,5 +1,373 @@
 # v4.5.2 regression
 
+## Android 设置统一走路由页
+
+设置原先按 `isCompact` 分流：紧凑走 `/settings` 路由页，否则开 `SettingsDialog`。Android 平板宽屏与横屏手机
+（800×360）不紧凑，弹窗在矮屏上超出视口、标题与关闭按钮压在状态栏下，左侧导航又占去近三分之一宽度。
+现 `App.vue` 的 `settingsUsesRoute = IS_ANDROID || uiStore.isCompact`：Android 一律走路由页（非紧凑时页内仍有
+左侧分类导航），`SettingsDialog` 只在桌面 / web 非紧凑挂载；侧栏设置按钮的高亮在路由模式下跟随 `route.path`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 横屏手机 | vivo V2429A / Android 16 横屏（800×360），dev 包 | 点侧栏设置按钮 | 进入 `/settings` 全屏页，有左侧分类导航，无弹窗；设置按钮高亮 | 已用 CDP 实测 |
+| [ ] | 返回 | 同上 | 设置页按返回键 | 回到进入前的页面 | |
+| [ ] | 旋转 | Android | 设置页内在竖屏 / 横屏间旋转 | 竖屏为分类卡片列表、横屏为左侧导航，不跳出设置页 | |
+| [ ] | kamechan / 工具箱入口 | Android 平板 | 从 kamechan 工具箱、紧凑 tab 工具箱打开设置 | 都进入路由页 | |
+| [ ] | 桌面不回归 | Linux standard | 侧栏设置、`⌘,` | 仍弹出设置弹窗 | |
+| [ ] | 设置页无下拉刷新 | Android | 设置页顶部下拉 | 不出现刷新指示器，也不弹「刷新成功」 | `Settings.vue` 删除 `v-pull-to-refresh` 与 `handleRefresh`，及 `messageRefreshSuccess` / `messageRefreshFailed` 文案 |
+| [ ] | 插件默认配置选择器 | Android 竖屏及 800×360 横屏 | 设置 → 插件默认配置，点击插件选择框并选择、清除插件 | 入口样式与新建爬虫任务一致；居中弹出移动端插件选择面板而非桌面下拉菜单；窄屏单列、横屏按可用宽度智能分列；选择后显示插件名，清除后恢复占位文案 | 已用 Android CDP 实测 800×360 打开面板并自动排为 369px 两列；选择与清除待回归 |
+
+## Android 图片详情弹窗按空间排版
+
+`ImageDetailDialog`（只在 Android 渲染）原先只看 `isCompact`：非紧凑一律四列 `flex: 1 1 0` 并排。横屏手机
+（800×360）与竖屏平板（宽约 800）都不紧凑，每列只剩约 180px；弹窗 `margin: 5vh` 在 360 高的屏上只有 18px，
+被 42px 的状态栏压住。现按视口分三档：`stack`（紧凑或高 <560，可折叠竖排）/ `grid`（2×2，无原生元数据列时
+插件详情占满一行）/ `row`（宽 ≥1200，四列）；上下边距与最大高度扣除 `--sat` / `--sab`；并排两档给插件详情
+`min-height: 60vh`，堆叠档的插件详情展开高度改为与弹窗最大高度一致。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型检查 | Linux | `vue-tsc --noEmit` | 无 error | 已运行：成功 |
+| [x] | 横屏手机 | vivo V2429A / Android 16 横屏（800×360），dev 包 | 预览 →「详情」 | `is-stack`，面板整宽可折叠；弹窗 y=51、高 300，不再压在状态栏下 | 已用 adb 截屏实测 |
+| [x] | 竖屏平板 | 同上，CDP 模拟 800×1280 | 同上 | `is-grid`，基本信息 \| 标签、插件详情 \| 原生元数据，每列 318px | 已实测 |
+| [x] | 大平板横屏 | 同上，CDP 模拟 1280×800 | 同上 | `is-row`，四列并排，行高 480（插件详情不被压扁） | 已实测 |
+| [ ] | 竖屏手机不回归 | Android 竖屏 | 同上 | 与之前一致：竖向堆叠、插件详情展开占满弹窗高度 | |
+| [ ] | 视频无元数据列 | Android 平板竖屏 | 视频图片「详情」 | 插件详情占满第二行 | |
+| [ ] | 旋转 | Android | 详情打开时旋转屏幕 | 布局随视口切换，不残留旧档样式 | |
+
+## Android 宽屏图片详情 / 分享入口
+
+`createImageActions` 里 `detail` 与 `share` 只在 `isCompact` 的「更多」子菜单里，顶层 `share` 恒 `visible: false`、
+顶层没有 `detail`；Android 平板宽屏 `isCompact=false`，「更多」不显示，网格菜单与 PhotoSwipe 预览操作栏都没有入口。
+现按能力门控（`IS_ANDROID`：`ImageDetailDialog` 只在 Android 渲染、`share_file` 只在 Android 编译），放哪一层按
+`isCompact` 决定；顺带修掉桌面窄窗口（web / 缩窗）「更多」里 `share` 调不存在命令的问题。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型检查 | Linux | `vue-tsc --noEmit` | 无 error | 已运行：成功 |
+| [x] | 菜单项计算 | vivo V2429A / Android 16，dev 包，视口 800（非紧凑） | CDP 调 `createImageActions` 求单选可见项 | 顶层含 `detail`、`share`，无 `more` | 已实测 |
+| [x] | 紧凑不变 | 同上，CDP 模拟 360 宽 | 同上 | 顶层 `favorite/open/wallpaper/more`，`more` 内首项 `detail`、`share` | 已实测 |
+| [ ] | 宽屏网格菜单 | Android 平板 / 折叠屏展开 | 长按图片 | 菜单有「详情」「分享」，点「详情」弹出详情弹窗，点「分享」拉起系统分享 | |
+| [ ] | 宽屏预览操作栏 | 同上 | 打开预览 | 底部操作栏有「详情」「分享」，详情弹窗盖在预览之上，返回键先关详情 | |
+| [ ] | 多选不显示 | 同上 | 选中多张后打开菜单 | 不出现「详情」「分享」 | |
+| [ ] | 桌面不回归 | Linux standard | 右键图片 | 不出现「详情」「分享」 | |
+| [ ] | web 窄屏 | web，视口 <768 | 「更多」子菜单 | 不再出现「分享」 | |
+
+## Android 畅游站点图片计数
+
+`useSurfImageCountsStore` 的 `refreshAll` / `refreshSome` 建立时（`30c1733e`，Android 尚无畅游）带了
+`if (IS_ANDROID) return;`，Android 支持畅游后门控没撤，计数表恒空、`countOf` 回落 0。去掉门控后两端同走
+`pathql_entry("gallery/[hide/]surf/<host>")`；真机直接调该命令返回 x.com 15、xiaohongshu 2，后端无需改动。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 后端计数 | vivo V2429A / Android 16，dev 包 | CDP 调 `pathql_entry` 查 `gallery/surf/<host>` | 返回各站点真实 `total` | 已实测 |
+| [ ] | 首页计数 | 同上 | 打开畅游页 | 各站点卡片「图片 N」与点进去的图片页总数一致 | |
+| [ ] | 下载后刷新 | 同上 | 畅游一键下载若干张后返回畅游页 | 该站点计数随 `images-change` 增加 | |
+| [ ] | 隐藏切换 | 同上 | 切换全局「显示隐藏」 | 计数按 `hide/` 前缀重算 | |
+| [ ] | 桌面不回归 | Linux standard | 打开畅游页 | 计数照旧 | |
+
+## Android 畅游桌面快捷方式
+
+站点卡片菜单与畅游工具栏「更多」菜单新增「添加到桌面」，经 `ShortcutManagerCompat.requestPinShortcut`
+固定。快捷方式 intent 为 `MainActivity` + `app.kabegame.action.OPEN_SURF` + `host`；`SurfShortcuts` 暂存冷启动
+到达的 host，Rust 插件 setup 注册 `listenShortcuts` Channel 后投递，`open_from_shortcut` 只认已有记录并等主窗口
+建好再调 `surf_start_session`。图标用记录的 favicon（解不出画首字母），抓到 favicon / 改名后刷新已固定的快捷方式，
+删除记录后禁用；已固定时只刷新并提示「已存在于桌面上」。冷启动投递早于 `init_globals`，`open_from_shortcut`
+先等主窗口再访问 Storage（首版先查记录导致 panic、停在画廊）。`onCreate` 只在 `savedInstanceState == null` 时处理 intent，最近任务重放的快捷方式 intent 忽略。
+`surf_start_session` 的建窗收进块作用域（泛型 runtime 下 builder 非 `Send`，否则不能在 spawn 里调用）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 静态检查 | Android NDK | `deno task check -c kabegame --mode android` | vue-tsc 与 aarch64 `cargo check` 无 error | 已运行：成功 |
+| [x] | 桌面静态检查 | Linux standard | `deno task check -c kabegame` | `surf_update_name` / `surf_delete_record` 改为泛型签名后桌面照常编译 | 已运行：成功 |
+| [x] | Kotlin 编译 | Android SDK | `gradlew :app:compileUniversalDebugKotlin` | `SurfShortcuts` / `SurfPlugin` / `SurfToolbar` / `MainActivity` 编译通过 | 已运行：成功 |
+| [x] | 热启动打开（真机图标） | vivo V2429A / Android 16，dev 包 | 应用在后台时点桌面 x.com 图标 | 进入 `https://x.com/`；抓到 favicon 后调 `updateShortcut` | 已用 adb 实测 |
+| [x] | 工具栏菜单项 | 同上 | 畅游「更多」菜单 | 出现「ホーム画面に追加」，点击调 `pinShortcut`、弹 Toast，快捷方式不重复 | 已实测；发现 Toast 两行截断，已缩短文案 |
+| [ ] | 重复添加提示 | 同上 | 已固定的站点再点「添加到桌面」 | 不弹系统确认框，Toast「已存在于桌面上」 | |
+| [ ] | 卡片菜单固定 | Android（原生 Pixel 类桌面） | 畅游页长按站点卡片 →「添加到桌面」 | 弹系统确认框，同意后桌面出现带 favicon 的图标，名称为站点名或 host；同时有长 Toast 提示 | |
+| [ ] | 工具栏固定 | Android | 畅游内容页右上角「更多」→「添加到桌面」 | 同上；失败时页内红色 toast | |
+| [ ] | 热启动打开 | Android（应用在后台，另一站点畅游中） | 点桌面快捷方式 | 旧畅游关闭，进入该站点的 `root_url`，Cookie / 桌面版设置沿用记录；返回键回到主界面 | |
+| [ ] | 冷启动打开 | Android（划掉应用后） | 点桌面快捷方式 | 主界面短暂出现后进入该站点畅游；前端畅游页显示该站点为畅游中 | |
+| [ ] | 重放保护 | Android | 从快捷方式进入后旋转屏幕；退出到主界面后从最近任务切回 | 不会再次打开畅游 | |
+| [ ] | 图标兜底与刷新 | Android | 对从未打开过（无 favicon）的站点固定，再进入一次该站点 | 先显示首字母图标，favicon 抓到后桌面图标更新 | |
+| [ ] | 改名同步 | Android | 在站点详情修改名称 | 已固定快捷方式的标签随之更新 | |
+| [ ] | 删除记录 | Android | 删除已固定的站点记录后点桌面图标 | 图标变灰，点击提示「该畅游站点已被删除」；重新添加同站点后可再次固定 | |
+| [ ] | 国产 ROM 权限 | 小米 / OPPO / vivo（默认关闭快捷方式权限） | 「添加到桌面」 | 无确认框时也会弹 Toast 提示去设置开启；开启后再次添加成功 | |
+| [ ] | 伪造 intent | Android（adb） | `adb shell am start -n <pkg>/app.kabegame.MainActivity -a app.kabegame.action.OPEN_SURF --es host not-exist.example` | 不打开任何畅游页 | |
+| [ ] | 桌面端不显示 | Windows / macOS / Linux | 右键站点卡片 | 菜单中没有「添加到桌面」 | |
+
+## Android 图片详情布局
+
+图片详情窄屏按“基本数据、图片标签、插件详情、原生元数据”纵向排列，展开的插件详情固定为与弹窗一致的 `90vh` 高度（收起后只保留标题行）；宽屏按同一顺序横向排列。标签面板复用预览侧栏的按需查询与编辑能力，点击标签导航后关闭详情弹窗。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 窄屏顺序与高度 | Android dev / CDP | 打开带插件详情模板的图片详情并滚动到插件区 | 顺序为基本数据、标签、插件详情、原生元数据；弹窗与插件列高度均为 `720px`（当前 `800px` 视口的 `90vh`），插件 iframe 随面板撑高 | 已用 `kabegame-chromium` 实测：iframe 约 `656px`，改动前最小高度仅 `160px` |
+| [ ] | 标签操作 | Android dev | 在详情中添加、移除、复制并点击一个图片标签 | 状态即时更新；点击标签进入对应画册并关闭详情弹窗 | |
+| [ ] | 宽屏横排 | Android 平板横屏（宽度 ≥ 768 CSS px） | 打开同一图片详情 | 四个面板按同一顺序横向排列，插件详情不套用窄屏 `90vh` 高度 | |
+
+## Android 预置插件复制（`tauri-plugin-pathes` `seedBundledPlugins`）
+
+Android 的 `resources/plugins/*.kgpg` 由 tauri-cli 注入 APK `assets/resources/plugins/`，此前只打包不复制。
+`init_kgpg_plugin` 在插件缓存初始化前经 `spawn_blocking` 调 `tauri_plugin_pathes::seed_bundled_plugins`；
+Kotlin `PathesPlugin.seedBundledPlugins` 在后台线程比较插件目录里的 `.bundled-plugins-version`
+（`versionName+versionCode+lastUpdateTime`）与当前安装包，不一致才逐个经 `.tmp` + rename 覆盖复制，
+全部成功后写入新标记；有失败则不写标记，下次启动重试。桌面 / web 仍走原 `PluginManager::seed_bundled_plugins` 移动逻辑。
+`ModePlugin.packagePlugins` 在 Android 模式（dev 与 build）下改为打包到 `src-tauri/kabegame/resources/plugins`，不再写宿主机的 dev data 目录。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
+| [x] | 桌面静态检查 | Linux standard | `check-kabegame` driver `--skip vue` | `init_kgpg_plugin` 的平台签名差异不影响桌面 | 已运行：0 error |
+| [x] | Kotlin 编译 | Android SDK | `gradle :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `PathesPlugin.seedBundledPlugins` 编译通过 | 已运行：成功 |
+| [ ] | Android dev 打包目录 | 宿主 + Android dev | `deno task dev --mode android` | 日志为「打包插件到安卓资源目录」，`.kgpg` 出现在 `src-tauri/kabegame/resources/plugins`；桌面 dev 仍写 `.kabegame/debug/data/plugins-directory` | |
+| [ ] | 首次安装 | Android（清除数据后安装） | 启动应用进入插件页 | 预置插件全部出现在已安装列表；`plugins-directory` 下有 `.bundled-plugins-version`，无 `.tmp` 残留 | logcat 有 `seed_bundled_plugins: 版本 …，复制 N 个，失败 0 个` |
+| [ ] | 同版本重启 | Android | 卸载一个预置插件后冷启动 | 该插件不再被复制回来；日志无复制记录 | 标记一致直接跳过 |
+| [ ] | 应用更新 | Android | 覆盖安装新包（同版本号的 dev 包也算）后冷启动 | 重新复制，同名插件被预置版本覆盖，此前卸载的预置插件重新出现 | `lastUpdateTime` 变化触发 |
+| [ ] | 桌面回归 | Windows / macOS / Linux 安装包 | 安装后首次启动 | 预置插件照旧从 `resources/plugins/` 移入用户目录 | |
+
+## Android WebView 爬虫 Phase 1（宿主 Activity + 停靠到主界面下）
+
+安卓 WebView 后端落地：`run_webview_session` / `crawl_*` 命令 / `crawler-capability` 全平台编译，
+每个任务一个 `CrawlerActivity`（`documentLaunchMode="always"`、第一帧前 `moveTaskToBack`）只当 wry
+宿主，`CrawlerHost` 把页面装进容器垫到 `MainActivity` 主 webview 之下（`z=-1`），`show` / `hide` 只改
+Z 序。主框架 IPC 从 `SurfActivity` 抽到 `ContentWebView` 共用；`CrawlerPlugin` 用每任务 events Channel
+回传 `pageDownload` / `renderGone` / `cancel` / `closed`；`ProcessLifecycleOwner` 的前后台切换经全局
+Channel 推给 `crawler::webview::set_host_visible`，看门狗在后台挂起计时。安卓 `is_native_job` 恒为
+false，脚本下载与页面自发下载都补 Cookie / UA / Referer 后走 reqwest。前端不再拒绝 JS 插件，网页收集
+恢复 WebView 后端，插件选择器上的「需桌面浏览器 / 安卓不支持」警告一并移除。文档见 `cocs/crawler/ANDROID_WEBVIEW_CRAWLER.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver `--skip vue` | `cargo check` 无 error；共享初始化脚本抽取未破坏桌面建窗 | 已运行：0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
+| [x] | Kotlin 编译 | Android SDK 36 | `gradle :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `ContentWebView` / `CrawlerActivity` / `CrawlerHost` / `CrawlerPlugin` 与 manifest 编译通过 | 已运行：BUILD SUCCESSFUL |
+| [x] | 下载 transport 单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib native_job_only_on_desktop` | 桌面畅游 job 返回 true、安卓 false；普通 http job 与 `data:` 恒为 false | 已运行：1 passed |
+| [x] | 显示窗口 id 解析单测 | Rust 单测 | `test-kabegame` driver：`kabegame show_task_id` | 显式 `taskId` 去空白；缺省 / 空串时从 `crawler-<id>` 反推；主界面调用缺 `taskId` 报错 | 已运行：3 passed |
+| [x] | 看门狗后台挂起单测 | Rust 单测（tokio 暂停时钟） | `test-kabegame` driver：`kabegame-core --lib webview_watchdog_suspends_while_host_hidden` | 宿主不可见时虚拟时间推进 10 分钟任务仍不结束；回到可见并正常完成返回 Ok | 已运行：1 passed（`dev-dependencies` 为 `tokio` 增加 `test-util`） |
+| [ ] | WebView 网页收集 | Android dev | 网页收集选 webview 后端，收一个普通图集页 | 任务完成、图片入库、快照有 CSS；任务日志无心跳超时 | 先在畅游登录目标站可顺带验证登录态 |
+| [ ] | 最小测试插件常驻 | Android dev | 最小 JS 插件：`setInterval` 计数 5 分钟 + `requestShowWebview()` + 输入框 | 计数不掉拍；显示后可点、可输入；「收起」与返回键放回下面；主界面全程正常 | 页面在任务运行期间 rAF 约 60fps |
+| [ ] | 三分钟后台 | Android dev | 任务运行中按 Home 3 分钟再回来 | 任务不因心跳超时失败；日志可见后台暂停 / 恢复；回来后页面继续 | 无前台服务时可能被 cached freezer 冻结，属预期 |
+| [ ] | 主界面重建 | Android dev | 任务运行中改系统字体大小 | 主界面重建后容器重新挂上，任务继续，不出现两份页面 | 关注端口 detach 是否触发 `visibilitychange` |
+| [ ] | 渲染进程崩溃 | Android dev | 打崩共用渲染进程（可用 `chrome://crash` 页面） | 任务以 `renderGone` 失败；主界面重建；app 不退出 | 三处 WebView 都要接 `onRenderProcessGone` |
+| [ ] | 登录态补头 | Android dev | 先在畅游登录某站，再跑需要登录的 webview 插件并用 `Kabegame.downloadImage` 下载 | 请求带 Cookie / UA / Referer，图片入库；无 Cookie 的 CDN 不崩溃 | Cookie 走 `SurfPlugin.getCookie` |
+| [ ] | 页面自发下载 | Android dev（不连 CDP） | 在爬虫页点一个附件链接 | 落到任务 VFS `tmp/Downloads`，`onNativeDownload` 收到成功载荷并可导入 | CDP 会劫持 WebView 下载回调，测试时不要连 |
+| [ ] | `clearData` | Android dev | 插件调用 `Kabegame.clearData()` | 该 URL 的 Cookie 被写成过期；localStorage / sessionStorage 清空 | 安卓走 `CrawlerPlugin.clearCookies` |
+| [ ] | 后台 requestShowWebview | Android dev | 任务运行中按 Home，脚本调用 `requestShowWebview()`，再回到前台 | 日志出现 `taskLogWebviewPendingShow`；回到前台页面自动提到最上层 | 安卓限制后台拉起界面 |
+| [ ] | 最近任务划掉 | Android dev | 任务运行中从最近任务划掉爬虫卡片 | 任务以取消结束，日志有 `taskLogWebviewHostClosed`，主界面不受影响 | 不能 `excludeFromRecents`，否则 182 ms 被回收 |
+| [ ] | 桌面回归 | Windows / macOS / Linux | JS 插件任务、`requestShowWebview()`、`is_native_job` 下载、网页收集 webview 后端 | 结果与改动前一致；插件内 `requestShowWebview()` 不再报缺 `taskId` | |
+
+
+## Android 畅游 Phase 2（内容页改为 Tauri webview + 原生导航栏）
+
+Android 畅游的主次对调：外部内容页成为 `SurfActivity` 的 Tauri 主 webview（label `surf-<host>:<n>`），顶部导航栏改成原生 Kotlin 控件。内容页因此拿到与桌面同一份注入脚本与按 label 认会话的命令；wry 的 `addJavascriptInterface("ipc")` 换成只收主框架消息的 `addWebMessageListener`，脚本下载与页面自发下载共用 `surf_receive::enqueue_surf_download` 并补 Cookie / UA / Referer。安卓没有 CEF 下载通道，`is_native_job` 不再把 `surf_record_id` 当作 native；`crawl_fs_*` / `crawl_ffmpeg_*` / `surf_collect_*` / `surf_download_image` / `surf_import_media` 改为全平台注册，`raw_body_bytes` 兼容 postMessage 送来的 JSON 数字数组。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver `--skip vue` | `cargo check` 无 error，模块拆分与脚本列表抽取未破坏桌面 | 已运行：0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error（需先修复 `~/.cargo/registry` 下 tauri-plugin 的只读 `tauri-api/build` 残留） |
+| [x] | Kotlin 编译 | Android SDK 36 | `./gradlew :app:compileArm64DebugKotlin` | `SurfActivity` / `SurfToolbar` / `SurfPlugin` 与 `ic_surf_*` 矢量资源编译通过 | 已运行 |
+| [x] | 平台分支单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib surf_uses_native` | 桌面返回 true、安卓返回 false；非畅游 job 恒为 false | 已运行：1 passed |
+| [x] | label 解析单测 | Rust 单测 | `test-kabegame` driver：`kabegame surf_common` | 桌面 `surf-example_com`、安卓 `surf-example_com:7` 都解析为 `example.com`；navbar / 空 label / 非 surf label 返回 None | 已运行：3 passed |
+| [x] | raw body 兼容单测 | Rust 单测 | `test-kabegame` driver：`kabegame raw_body` | `InvokeBody::Raw` 与 0–255 的 JSON 数字数组都还原为字节；越界值 / 负数 / 非数组报错 | 已运行：3 passed |
+| [ ] | 原生工具栏导航 | Android dev | 打开畅游站点，点后退 / 前进 / 刷新，地址栏输入新 URL 回车；触发 SPA 路由切换 | 四个操作都直接作用内容页；整页与 SPA 跳转后地址栏更新；系统返回键先页内后退，退到头关闭 Activity | dev 与 prod 包都测 |
+| [ ] | 一键下载（pixiv） | Android dev / 已登录 pixiv 记录 | 在作品页点工具栏下载按钮 | 页内 toast、工具栏转圈并在完成后复位；图片进入该畅游记录；`i.pximg.net` 不 403（Referer 生效） | 补头来自 SurfPlugin `getCookie` / 系统 UA / `webview.url()` |
+| [ ] | 无 Cookie 域名的下载 | Android dev | 在内容页点下载，媒体位于从未写过 Cookie 的 CDN 域名（如未登录时的 `i.pximg.net`） | 应用不崩溃；请求不带 `Cookie` 头，照常入队下载 | 曾因 wry `RustWebView.getCookies` 对 null 抛 NPE 而闪退，现改走 SurfPlugin `getCookie` |
+| [ ] | 一键下载取消 | Android dev | 一键下载运行中点正在旋转的同一按钮 | 先停止旋转并取消尚未入队的候选；已入队项照常下载；再点一次可重新开始 | 运行中按钮仍是同一个 `ImageView`，只换图标 |
+| [ ] | 工具栏图标与动画 | Android dev，浅色 / 深色各一次 | 打开畅游站点，逐个按压工具栏按钮；地址栏聚焦后输入 `ftp://x` 回车；启动一键下载 | 图标与桌面导航栏同一套线条图标并跟随深浅色；按压出现 32dp 圆角底色；聚焦时边框变蓝，无效输入红框约 0.9s 后恢复；运行中下载按钮换成弧线并以 0.8s 一圈匀速旋转，结束后复位到下载图标且不残留角度 | 图标在 `res/drawable/ic_surf_*.xml`，关闭按钮为新增的同风格 × |
+| [ ] | YouTube Shorts 长按下载视频 | Android dev / `m.youtube.com/shorts/*`（桌面 CEF 畅游 YouTube Shorts 亦测） | 播放中长按视频画面 | 菜单显示「下载视频」而非「下载图片」，下载走 `blob:` / MSE 捕获 | 顶层手势覆盖层的祖先轮播项带首帧占位背景图 `frame0.jpg`，曾先于下层 `<video>` 命中；现在元素栈逐层只看自身媒体，祖先背景图仅作兜底。已在真机用新逻辑求值命中 `VIDEO` |
+| [x] | 页面自发下载（媒体） | Android dev / 站点直链附件 | 点击一个图片或视频附件链接 | 直接进入该畅游记录；Cookie / Referer 生效 | `setDownloadListener` → `pageDownload`。已用本机测试服务（`Content-Disposition: attachment` 的 PNG）实测：WebView 与 reqwest 各请求一次，后者带 `Referer`，图片入库 |
+| [x] | 页面自发下载（无类型） | Android dev | 点击 `application/octet-stream`、URL 无扩展名的图片附件（`guessFileName` 给出 `xxx.bin`） | 照样入队，后处理按字节识别为图片并入库；真非媒体在后处理报「格式不受支持」 | 原先文件名与 MIME 都认不出就直接拒绝，真图片也被挡；现在只提前拒绝明确的压缩包（`surf_common::is_archive_download`）。已实测入库 |
+| [x] | 页面自发下载（压缩包） | Android dev | 点击 zip / 7z / tar 附件链接 | 提示 `surf.download.unsupportedType`，不发起下载、不入库 | 畅游只收媒体，解压交给插件。已实测：只有 WebView 的一次请求，没有 reqwest 重下 |
+| [ ] | 页面自发 `blob:` / `data:` 下载 | Android dev | 点击页面生成的 `<a download href="blob:…">` 与 `data:` 图片链接 | `onDownloadStart` 触发，经页内 `__kb_media_download__` 导入该畅游记录 | 尚未在干净进程验证：此前的测试连着 CDP，playwright 的 `Browser.setDownloadBehavior` 劫持会吞掉 WebView 下载回调（http 附件同样不触发），结论作废。即使不触发，页面 revoke 也不影响脚本发起的下载：`media_capture.js` 的捕获表保留 Blob 对象（已实测） |
+| [x] | `blob:` / MSE 视频 | Android dev / YouTube Shorts | 长按或右键视频触发下载 | 分块写入成功，合流后入库，进度面板正常 | 安卓分块写改发 `{ base64 }`（Rust `raw_body_bytes` 解码），1 MiB 一块往返从 0.8–1.1 s 降到 40–60 ms；MSE 小分片先合并到 1 MiB 再写，一条 Shorts 从 1308 次 invoke 降到 2 次，整次约 1.5 s |
+| [x] | 直链视频下载 | Android dev / bilibili 移动版播放页 | 对 mp4 直链视频触发下载 | 补头入队，入库后可播放 | 已实测 |
+| [x] | IPC 主框架化 | Android debug / CDP | 首个文档检查 `window.ipc`；在跨源 iframe（example.com）里重放主框架截获的合法 IPC 消息 | 首个文档的 `window.ipc` 即 WebMessageListener 版本（有 `addEventListener`）；iframe 重放无任何效果，同一条消息由主框架发出时回调正常触发 | 跨源 iframe 里同样有 `window.ipc` 与 `__TAURI_INTERNALS__`（含 invoke key），隔离完全依赖 Kotlin 的 `isMainFrame` 判断。设备不支持 `WEB_MESSAGE_LISTENER` 时工具栏下载提示 `surf.collect.ipcUnavailable` |
+| [x] | 关闭后释放内容 WebView | Android dev | 连续开关畅游数次，`dumpsys meminfo` 看 Activities / WebViews，CDP 看页面列表 | 关闭后 CDP 页面列表立即不再有该页；页面 JS、定时器与网络停止 | 原先 `addWebMessageListener` 的监听被 Chromium 以 JNI 全局引用持有并捕获 webview，wry 又从不 `destroy()`，每关一次就整页泄漏。剩余已知泄漏：tao 在事件循环线程上取 `WindowMetrics` 的 JNI 局部引用不释放，仍会钉住部分已销毁的 Activity（5 次开关残留 2 个、约 1 MB） |
+| [x] | IPC 响应 Channel 不再进表 | Android dev | 临时插桩统计 tauri mobile `CHANNELS` 表大小，连续 invoke 100 次 | 表大小不随 invoke 增长 | `third-patches/tauri/0011`：修复前每次 invoke 的响应 Channel 都进表且永不移除（100 次 +101） |
+| [x] | 重建不残留旧主 webview | Android dev / CDP | 先确认 CDP 只有一个主界面页面并在页面上打标记，再 `adb shell settings put system font_scale 1.15` 触发 `MainActivity` 重建 | 重建后 CDP 只剩一个主界面页面且不带标记；新页面 `invoke` 正常返回 | 原先 wry 在新 Activity 里新建 webview、从不销毁旧的，旧页面继续跑并以同一 id 发 IPC（响应回到新页面，旧页面上的 `invoke` 永远挂起）。安装后首次启动的系统重建（`wm_relaunch_resume_activity` 0x80000000）也会触发。已实测；测完把 `font_scale` 改回 1.0 |
+| [x] | 畅游页重建 | Android dev / CDP | 打开畅游站点并打标记，再改 `font_scale` 触发 `SurfActivity` 重建 | 只剩一个内容页且不带标记；工具栏文案仍在；一键下载能触发并复位 | binding 经 `SurfRegistry.carried` 交给新实例。已实测：重建后点下载，Rust 回推两次 `setCollectRunning`（开始 / 结束） |
+| [x] | 渲染进程崩溃不连带应用 | Android dev | 让一个外部页面的渲染进程崩溃（原型用 `chrome://crash`；也可在畅游页触发） | 应用进程存活；主界面重建并可正常 `invoke`；畅游页关闭 | 应用内 WebView 共用一个渲染进程，此前主界面没处理 `onRenderProcessGone`，崩溃信息为 `Render process's crash wasn't handled by all associated webviews`，整个应用被杀。已用爬虫 WebView 原型实测主界面路径；畅游关闭路径未单独实测 |
+| [ ] | 关闭会话 | Android dev | 关闭 SurfActivity，再查看主界面与临时目录 | 会话 VFS 目录被清理；Cookie 已保存；`surf-session-changed` 正确 | `closed` 事件走 `drop_session` / `drop_slot` |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 一键下载、冻结快照、取消、页面自发下载（含 zip 解压）、MSE 视频捕获 | 结果与改动前一致；页面自发下载仍走 CEF 并在桌面解压 | 桌面 `surf_uses_native` 保持 true |
+
+## Android 畅游 Phase 3（导航状态与进度、OAuth 弹窗、桌面版网站、apk 拦截）
+
+工具栏后退 / 前进按内容页历史置灰，加载进度改为 `onProgressChanged` 驱动的确定进度条；「在浏览器打开」
+与新增的「桌面版网站」收进「更多」菜单。内容页开启多窗口并包装 wry 的 `WebChromeClient`：链接型新窗口
+用隐藏 transport 探针取真实 URL 后交回内容页，脚本 `window.open`（GIS 等 OAuth）进 `SurfPopup` 覆盖层，
+弹窗是共享 CookieManager 的普通 WebView，最多一个、关闭时补发 `pageFinished`。桌面版网站按站点存进
+`surf_records.desktop_mode`（迁移 v042），桌面 UA 只由 `android_desktop_user_agent()` 从系统默认 UA 派生；
+内容页建窗、弹窗、插件 `requireCookie`、畅游下载补头都认记录模式。页面自发下载的 apk / 安装包提前拒绝。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver `--skip vue` | `cargo check` 无 error；存储与迁移改动未破坏桌面 | 已运行：0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
+| [x] | Kotlin 编译 | Android SDK 36 | `./gradlew :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `SurfChromeClient` / `SurfPopup` / `SurfUaMode` / `SurfTheme` 与改动后的工具 Activity 编译通过 | 已运行：BUILD SUCCESSFUL |
+| [x] | 桌面 UA 派生单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib desktop_chrome_major` | 典型 WebView UA 解析出 `155`；缺 `Chrome/` 或版本非数字返回 `None` | 已运行：1 passed |
+| [x] | 迁移与模式写入单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib v042`、`--lib surf_records` | v042 幂等加列且默认 0；`desktop_mode` 只在值变化时写库 | 已运行：1 + 2 passed |
+| [x] | apk 判定单测 | Rust 单测 | `test-kabegame` driver：`kabegame --lib surf_common` | apk / apks / xapk / aab 与安装包 MIME 命中；媒体与 zip 不命中 | 已运行：5 passed |
+| [ ] | 导航置灰与进度 | Android dev | 刚打开站点、点链接、后退、SPA 路由切换各一次；在慢网页加载中点新链接 | 无历史时后退 / 前进置灰且按压无 ripple；有历史后对应按钮可用；进度条从左到右增长、到 100 隐藏，加载中切新链接不做回退动画 | 后退 / 前进置灰与启用已实测；进度条动画与 SPA 待复测 |
+| [x] | 链接型新窗口分流 | Android dev / 合成锚点 | 点一个 `target=_blank` 的 http 链接 | 仍在内容页打开，不出现覆盖层；后退键随即可用 | 已实测 example.org：内容页跳转、目标列表无新增 page；锚点 + 用户手势 + http(s) href 分流 |
+| [ ] | Google 登录弹窗 | Android dev / x.com 登录页 | 点「使用 Google 登录」（GIS 按钮在跨域 iframe 内） | 出现覆盖层，标题为 `accounts.google.com`；完成登录后弹窗自行关闭，内容页进入登录态，畅游记录 Cookie 立即更新 | 弹窗共享 CookieManager；关闭补发 `pageFinished` |
+| [x] | 弹窗返回键与关闭 | Android dev / 合成 `window.open` | 用户手势打开弹窗，弹窗内再导航后按返回键；再按一次；另测 `window.close()` | 先弹窗页内后退，退到头关闭弹窗，再按作用于内容页；`window.close()` 立即关闭 | 已实测：目标列表只剩内容页，覆盖层标题为来源 host；关闭畅游时的清理待复测。同时最多一个弹窗 |
+| [ ] | 弹窗渲染进程崩溃 | Android dev | 弹窗打开时打崩共用渲染进程（如 `chrome://crash`） | 应用进程存活；畅游关闭，主界面自动重建 | 弹窗与内容页都要在 `onRenderProcessGone` 返回 true |
+| [ ] | 转发型 ChromeClient | Android dev | 打开全屏视频、任意上传框、`alert` / `confirm` | 行为与包装前一致 | 升级 wry 时 diff `RustWebChromeClient` 的 override 列表 |
+| [x] | 桌面版网站切换 | Android dev | 「更多」→ 勾选 / 取消「桌面版网站」 | 页面刷新；勾选后 `navigator.userAgent` 为桌面 UA、`navigator.userAgentData.mobile === false`、platform `Linux`；取消后回到系统 UA、`mobile === true`、platform `Android` | 已实测（Chrome 155）。取消时必须在「重开桌面模式会话」后再测一次：`bind` 换实例曾把桌面 Client Hints 误当默认值，已改为进程级缓存并在首次 apply 前捕获 |
+| [x] | 按站点记住模式 | Android dev | 切桌面版后关闭畅游，再打开同站 | 同站首屏即桌面版且菜单仍勾选 | 已实测：`surf_records.desktop_mode` 1 → 0 随开关写入；重开后首屏 `navigator.userAgent` 即桌面 UA。另一个站点未单独复测 |
+| [ ] | 强制跳应用的站点 | Android dev | 移动 UA 下会跳应用商店 / 下 apk 的站点，切桌面版 | 出现网页登录入口并可登录 | |
+| [x] | 被服务端跳到手机版后切桌面版 | Android dev / weibo.com（移动 UA 302 到 `m.weibo.cn`） | 在 `m.weibo.cn` 上「更多」→ 勾选「桌面版网站」，再取消 | 勾选后回到 `weibo.com` 桌面版（帖子显示「来自 微博网页版」）；取消后回到 `m.weibo.cn` | 已实测。曾经只 `reload()` 跳转后的 `m.weibo.cn`，UA 已是桌面但页面始终是手机版；现在重载 `WebHistoryItem.originalUrl` |
+| [x] | 爬虫页面返回键收起 | Android dev / xhs-webview 运行中，主界面有可后退的历史（如打开了任务抽屉） | 在任务抽屉点「打开窗口」，再按系统返回键 | 爬虫页面收起回主界面下面，任务抽屉与主界面路由保持不变；再按返回才作用于主界面 | 已实测。曾因爬虫返回回调早于 wry 的回调注册，返回键被主界面 webview 消费，只收起了任务抽屉 |
+| [x] | 爬虫页面显示 / 收起动画 | 同上 | 打开窗口、按返回或点「收起」；在收起途中立刻再打开 | 显示从底部滑上（约 260ms），收起滑出底部（约 200ms）后露出主界面；中途再打开从当前位置滑回，不闪白、不跳 | 已录屏抽帧核对显示与收起；中途再打开未测 |
+| [x] | 爬虫并行与销毁 | Android dev / 任务并发上限 2 | 同时启动两个 xhs-webview 任务（各 3 条），等全部完成 | 运行中有 2 个 `CrawlerActivity`、2 个爬虫页面，各自完成 3/3、日志不串；结束后只剩 `MainActivity`，最近任务里没有爬虫卡片，页面与渲染资源都已释放 | 已实测（`dumpsys activity activities`）。**Java 对象有约 50% 概率残留**：连续 8 个任务后强制 GC（ART `SIGUSR1`），`dumpsys meminfo` 仍有 5 个 Activities / 5 个 WebViews（主界面 + 4 个残留），即 tao 泄漏，见 ANDROID_SURF.md 已知限制；2 个任务时碰巧 0 残留 |
+| [x] | 子 Activity 不再残留 | Android dev，冷启动 | 连续跑 8 个 xhs-webview 任务（各 1 条）；另开关畅游 6 次；各自完成后强制 GC（`run-as … kill -10 <pid>`），看 `dumpsys meminfo` 的 Activities / WebViews | 都只剩主界面 1 个 | 已实测。修前 8 个任务残留 4 个（tao 选中 id 最小的 Activity 取 `WindowMetrics`，子 Activity 的随机 id 约一半比主界面小）。主界面重建后旧 MainActivity 仍可能残留（两次重建多 1 个），为已知限制 |
+| [x] | 安卓 WebView 爬虫能跑 | Android dev / xhs-webview 0.1.3 | 推荐模式、最多 3 条 | 任务日志从「ページ読み込み · initial」一路到「完了 · 成功 3/3」，3 张图入库 | 已实测。曾因安卓 capability 清单漏了 `crawler-capability`，`crawl_heartbeat` 被 ACL 拒绝，插件一行日志都没有，120 秒后报「WebView 窗口无响应」 |
+| [x] | 安卓注入脚本不重复执行 | Android dev / xhs-webview | 同上 | 每条插件日志只出现一次，作品不重复处理 | 已实测。wry 的 `onPageStarted` 会对外部网页再 `evaluateJavascript` 一遍初始化脚本，插件曾并行跑两份；现由 `android_init_script` 每文档一次守卫挡住 |
+| [ ] | WebView 爬虫跟随桌面版 | Android dev / 小红书畅游记录已勾选「桌面版网站」 | 运行 xhs-webview 任务，展开爬虫页面；页面里查 `navigator.userAgent` / `navigator.userAgentData.mobile`；再取消该记录的桌面版重跑 | 勾选时爬虫页面为桌面版，UA 为桌面 UA、`mobile === false`；页面自发下载补的 `User-Agent` 也是桌面 UA；取消后爬虫回到移动 UA | 已实测勾选时爬虫页为桌面 UA、`mobile === false`；取消后回移动 UA 与下载补头未测。曾经 `create_crawler_activity` 不读畅游记录，爬虫恒为移动 UA，用桌面 UA 签发的 Cookie 失配。`www.` 前缀有无视为同一站点（单测 `surf_host_candidates_toggle_www_prefix`） |
+| [ ] | Google 拒绝 WebView UA | Android dev | 移动模式弹窗报 `disallowed_useragent` 后切桌面版重试 | 桌面模式下可通过 | Google 按 UA 里的 `; wv` 识别 WebView |
+| [ ] | 插件桌面 UA 配对 | Android dev / 桌面模式记录跑 weibo | 运行 `setHeader("User-Agent", cefUserAgent())` + `requireCookie` 的插件 | 任务日志出现 `taskLogDesktopUaInjected`；请求不 403 | 只替换缺失或等于默认 UA 的值 |
+| [ ] | 插件写死 UA 不覆盖 | Android dev / 桌面模式记录跑 xhs | 运行写死 UA 的插件 | UA 保持插件自己的值，不出现 `taskLogDesktopUaInjected` | |
+| [ ] | 桌面模式下载补头 | Android dev | 桌面模式下一键下载一个需要登录的媒体 | 请求 `User-Agent` 为桌面 UA（debug ingest 补头记录） | `android_identity_headers` 按会话模式取 UA |
+| [ ] | apk 下载拦截 | Android dev（不连 CDP） | 页面里点一个 apk 链接 | toast `surf.download.appPackage`，下载列表不出现该项 | 扩展名与 `application/vnd.android.package-archive` 都判 |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 桌面畅游、插件 `requireCookie`、一键下载 | 结果与改动前一致 | 桌面 `cefUserAgent()` 与 `requireCookie` 的 UA 不变 |
+
+## Android 分享 MediaStore 图片
+
+Android 图片的 `local_path` 是 MediaStore `content://` URI，原 `SharePlugin.shareFile` 把它当文件路径做 `File.exists()`，必然报「文件不存在」。现对 `content://` 直接作为 `EXTRA_STREAM` 分享并附 `ClipData` + 读授权；content URI 没有扩展名，前端推出的 `application/octet-stream` 回退为 `ContentResolver.getType`。普通文件路径仍走 FileProvider。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | MediaStore 图片分享 | Android dev | 在画廊或预览中对已下载图片点击分享 | 弹出系统分享面板，不再提示分享失败 | 原报错 `文件不存在: content://media/...` |
+| [ ] | 目标应用可读 | Android dev | 分享到聊天应用或相册类应用 | 目标应用能正常显示图片，无权限错误 | 依赖 `FLAG_GRANT_READ_URI_PERMISSION` + `ClipData` |
+| [ ] | MIME 正确 | Android dev | 分享 JPEG、PNG 与视频各一项 | 分享面板只列出能处理对应类型的应用，视频不被当作图片 | 类型来自 `ContentResolver.getType` |
+| [ ] | 外部导入图片 | Android dev | 分享从系统相册导入（沿用原 content URI）的图片 | 同样能分享并被目标应用读取 | |
+
+## Android 启动任务时请求通知权限
+
+Android 13 及以上把通知权限请求移到用户主动启动任务的入口：系统弹窗在任务入队前出现，授权或拒绝后都继续启动任务。通知状态刷新不再自行触发权限弹窗，避免任务已经运行后才询问；权限 launcher 由 `MainActivity` 在生命周期启动前注册，插件只经 host 接口调用。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 首次启动请求 | Android 13+ / 清除应用通知权限状态 | 在插件详情或任务配置中点击启动任务 | 点击后立即出现系统通知权限弹窗，任务尚未入队 | 用户动作与权限请求同一条调用链 |
+| [ ] | 授权后启动 | Android 13+ | 在权限弹窗选择允许 | 弹窗关闭后任务正常启动，任务与下载进度通知正常显示 | |
+| [ ] | 拒绝后启动 | Android 13+ | 在权限弹窗选择不允许 | 弹窗关闭后任务仍正常启动；调用不悬挂，界面不一直等待 | 前台服务仍可按 Android 规则运行 |
+| [ ] | 状态刷新不补弹窗 | Android 13+ / 通知权限未授予 | 让定时任务或已有任务产生状态、下载进度变化 | 状态刷新本身不弹通知权限框 | 只在用户主动 `start_task` 时请求 |
+| [ ] | 旧系统兼容 | Android 12 及以下 | 启动任务 | 不出现运行时通知权限弹窗，任务和通知行为保持不变 | `POST_NOTIFICATIONS` 无运行时授权要求 |
+| [ ] | 已授权重复启动 | Android 13+ / 已允许通知 | 连续启动两个任务 | 不重复弹权限框，两个任务均正常入队 | |
+
+## Android 插件标签提示
+
+Android 上的插件标签改用点击触发 Tooltip，避开 WebView 把触摸合成为短暂 hover 后在抬手时发送 `mouseleave` 的行为。桌面端继续使用延迟悬停提示。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 触发策略单测 | Vitest | 运行 `KbLabel.test.ts` | Android 标签 Tooltip 使用 `click` 且无显示延迟 | 覆盖平台分流 |
+| [x] | 点击保持 | Android dev | 打开任一带标签的插件详情并点击标签 | 抬手后提示保持显示，不会立即消失 | 真机实测抬手 1 秒后仍为 `display: block`、`aria-hidden=false`；再次点击标签或点外部均可关闭 |
+| [ ] | 多入口回归 | Android dev | 在插件列表、选择器与快捷预览中分别点击标签 | 各入口的标签提示均可保持并正常关闭 | 共用 `KbLabel` |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 鼠标悬停及移出插件标签 | 悬停 200ms 后显示，移出后关闭，无需点击 | Android 分支不影响桌面 |
+
+## Android 外部链接打开方式确认
+
+Android 不再绕过应用内统一的外部链接打开设置。首次点击插件详情中的 `baseUrl` 等外部链接时，与桌面端一样确认是在畅游中打开还是跳转系统浏览器；用户选择记住后，后续链接直接沿用该设置。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 分流单测 | Vitest | 运行 `openExternalLink.test.ts` | 选择畅游只启动畅游会话；选择系统浏览器只调用外部跳转 | 覆盖 Android 平台常量 |
+| [x] | 首次确认 | Android dev / `linkOpenMode` 为“每次询问” | 打开任一插件详情，点击正文上方的 `baseUrl` | 弹出“如何打开这个链接？”，可选择畅游或系统浏览器，不直接跳转 | 真机 CDP 点击确认 |
+| [x] | 弹窗不挤走文档 | Android dev | 打开选择框，再关闭选择框 | 全局宿主位于 `app-container` 外，遮罩固定覆盖视口；插件 Doc 留在原位，不会被约一屏高的遮罩挤到下方形成空白 | 真机修复前测得遮罩误为 `position: relative`、高约 680px；修复后为 `position: fixed`、Doc 标题纵坐标保持 377.67px |
+| [x] | 全局模态宿主层级 | Android dev | 检查 `App.vue` 挂载后的 DOM，再打开链接选择框 | 设置、导入、更新、任务、整理、收集等全局模态单例与选择框都位于 `app-container` 外；选择框遮罩不在容器内 | 真机 CDP 检查容器只保留主内容与底部导航，选择框 `insideContainer=false` |
+| [x] | 畅游打开 | Android dev | 在确认框选择“在畅游窗口打开” | 打开 Android 独立畅游页面并导航到插件 `baseUrl` | 真机打开 `https://anime-pictures.net/` 并成功显示站点 |
+| [ ] | 系统浏览器打开 | Android dev | 在确认框选择“在系统浏览器打开” | 跳转系统默认浏览器，不启动畅游会话 | |
+| [ ] | 记住选择 | Android dev | 勾选“下次保持此选择”后任选一种方式，再点击另一个外部链接 | 不再弹框，直接沿用已保存的打开方式；设置页可改回“每次询问” | |
+| [ ] | 桌面与 Web 回归 | Windows / macOS / Linux / Web | 分别点击插件 `baseUrl` | 桌面维持原确认与设置逻辑；Web 仍直接新标签页打开 | |
+
+## Android 页面标题栏全宽贴边
+
+Android 紧凑布局下所有使用公共 `PageHeader` 的页面统一紧贴状态栏安全区下缘并按视口全宽展示，标题栏不再跟随图库、画册、源等页面内容区的外围留白缩进；布局由既有 `isCompact` 响应式状态统一控制，平板横屏等非紧凑布局维持桌面 gutter。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 主导航页面 | Android dev | 依次进入图库、画册、畅游和源 | 各页标题栏紧贴状态栏安全区下缘并左右贴齐屏幕边缘，正文原有宽度和留白不变 | 四页真机 CDP 实测均为 x=0、y=42px、宽 360px，无横向溢出；图库截图确认按钮未裁切 |
+| [x] | 设置与详情页面 | Android dev | 打开设置、任务详情、插件详情和自动配置页 | 公共标题栏顶部和左右均不留页面 padding，正文仍保留原 gutter，返回与操作按钮可正常点击 | 真机实测标题栏均为 x=0、y=42px、宽 360px；设置正文保留 20px、插件与任务详情保留 16px gutter |
+| [ ] | 畅游图片页 | Android dev / 有畅游媒体记录 | 从畅游记录打开图片页 | 公共标题栏顶部和左右均不留页面 padding，查询区仍保留 20px gutter | 当前空态不挂载 `PageHeader`，需有数据场景复核 |
+| [ ] | 平板横屏回退 | Android 平板横屏 | 进入任一含公共标题栏的页面 | 非紧凑布局恢复桌面 gutter，不继续强制按视口全宽贴边 | 复用 `uiStore.isCompact`，不按平台常量判断 |
+| [ ] | 桌面回归 | Windows / macOS / Linux 非紧凑布局 | 打开任一含标题栏的页面 | 标题栏继续服从页面内容宽度，不扩展到视口边缘 | 由 `uiStore.isCompact` 响应式隔离 |
+
+## Android 畅游插件快选按钮
+
+Android 畅游首页不再把完整插件选择器塞进搜索胶囊，改为左侧固定宽度的图标按钮；点击仍复用统一 Android 插件选择弹窗，选中后把插件根 URL 填入输入框。桌面宽屏保留原有下拉选择器。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 全宽布局 | Android dev | 进入畅游首页 | 页面内容区不再保留 20px 外围 padding，正文与标题栏等宽铺满可用宽度；搜索框与下方记录卡片左右对齐 | 真机 CDP 实测容器 padding 为 0，正文与标题栏宽度均为 360px；搜索框与卡片均从 x=14.4px 起、宽 331.2px，截图确认无横向溢出 |
+| [x] | Android 首页布局 | Android dev | 进入畅游首页 | 胶囊左侧只显示插件图标按钮，URL 输入区不再被插件占位文案挤压 | 真机 HMR 截图确认 |
+| [x] | 插件选择 | Android dev | 点击插件图标，选择任一有 HTTP 根地址的插件 | 弹窗正常打开并可由返回键关闭；选中后关闭弹窗并把根 URL 填入输入框 | 真机已验证打开、返回关闭与 URL 填充 |
+| [ ] | 无障碍标签 | Android TalkBack | 聚焦插件图标按钮 | 读出“选择插件”等当前语言文案 | |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 进入畅游首页并选择插件 | 仍显示 `150px` 下拉选择器，填充 URL 与启动畅游行为不变 | |
+
+## Android 插件详情标题栏动作图标化
+
+Android / 紧凑布局的插件详情标题栏不再显示“已安装”状态 chip 或安装、更新、重装文字按钮；状态仍在正文展示，标题栏动作统一使用带无障碍标签的图标按钮。桌面宽屏继续显示原有文字与状态。
+商店插件的安装确认框与已安装插件的卸载确认框都改由统一 `useModal` 栈管理，Android 返回键可按层级关闭；安装确认框同时补齐格式化后的安装包大小，不再出现空括号。安装成功后保留当前商店详情与滚动位置，不再切换到本地详情路由；卸载成功后因详情对象已不存在，直接用 replace 切到插件列表，不再叠加历史回退。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 待安装插件标题栏 | Android dev | 从任一商店源打开未安装插件详情 | 标题栏显示下载图标按钮，不显示“安装”文字；插件名、ID 与版本获得更多空间 | 真机 CDP 截图确认 |
+| [x] | 安装确认框包大小 | Android dev / 日语 | 点击待安装插件标题栏的下载图标 | 确认文案的括号内显示格式化后的安装包大小，不出现 `()` | 修复后真机 CDP 截图显示 `1 MB` |
+| [ ] | 安装确认返回栈 | Android dev | 打开安装确认框后按系统返回键 | 只关闭确认框，仍停留在插件详情；再次按返回才离开详情 | `useModal` 统一管理 |
+| [ ] | 安装后保留详情 | Android dev | 在商店插件详情确认安装并等待成功 | 弹窗关闭并提示成功；URL、当前商店详情和滚动位置不变，操作按钮更新为重装 | |
+| [ ] | 卸载确认返回栈 | Android dev | 从“已安装”详情打开卸载确认框后按系统返回键 | 只关闭确认框，仍停留在插件详情；再次按返回才离开详情 | `useModal` 统一管理 |
+| [ ] | 卸载后返回列表 | Android dev | 在已安装插件详情确认卸载并等待成功 | 弹窗关闭并提示成功，只切换一次到插件列表；不会越过列表，也不会通过返回重新进入已删除详情 | 使用确定性 replace，不调用 `router.back()` |
+| [ ] | 更新与重装图标 | Android | 分别打开有新版和同版本的商店插件详情 | 两种状态均显示刷新图标，点击后仍进入对应更新或重装确认流程 | |
+| [ ] | 已安装插件标题栏 | Android | 从“已安装”打开插件详情 | 标题栏不显示“已安装”chip，只保留复制 ID 与卸载图标；正文状态 chip 仍存在 | |
+| [ ] | 桌面宽屏回归 | Windows / macOS / Linux | 打开待安装、可更新、可重装与已安装插件详情 | 安装类按钮仍显示文字，已安装状态 chip 仍显示，动作行为不变 | |
+
+## 本地媒体 URL 统一为 wildcard path
+
+桌面、Android 与 debug Web 的原图、缩略图、浏览器兼容副本统一把绝对路径编码在 URL path 中：`/file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}`。旧 `?path=` 形式和独立 `/download/{*path}` 均删除；三类端点继续使用各自的图库字段白名单。Windows 拖出不固定选择原图，而是使用触发拖拽的媒体元素当前 `currentSrc`，让已经回退成功的缩略图或兼容副本也能拖出。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 三类媒体加载 | Windows / macOS / Linux | 浏览网格并打开原图、缩略图和兼容副本各不相同的图片或视频 | 请求分别走三个 wildcard 端点，中文、空格、`#`、`?` 路径均正常加载 | 不出现 `?path=` |
+| [ ] | Windows 原图拖出 | Windows | 从网格或预览拖一张原图存在的媒体到资源管理器 | 通过当前 `/file/{*path}` 地址落地，文件名和内容正确 | 无 `/download` 请求 |
+| [ ] | Windows 回退源拖出 | Windows | 临时移走原图，让界面回退到缩略图或兼容副本后拖到资源管理器 | 拖出当前可见/可播放的回退源，文件名后缀与该源一致 | 分别覆盖 thumbnail、compatible |
+| [ ] | Android content URI | Android | 导入 `content://` 图片和视频，打开网格、预览并拖动视频进度 | wildcard URL 能还原完整 content URI，图片显示、视频 Range/seek 正常 | |
+| [ ] | 旧端点移除 | curl | 请求 `/file?path=...` 与 `/download/...`，再请求三个新端点 | 旧形式 404；新端点仅对图库登记路径返回媒体，任意本地路径仍为 404 | |
+| [ ] | Kabegame Server 插件 | 两台桌面端 | 从开启 Web 服务器的实例复制一页图片 | 媒体经 `/file/{*path}` 下载成功，元数据与标签不变 | |
+| [x] | 前端 URL 单测 | Vitest | 运行 `fileUrl.test.ts` | Unix、Windows 盘符、UNC、中文、保留字符与 content URI 均生成正确 URL，三端点可还原原路径，拖出文件名为当前 source 的 basename | 35 passed |
+| [x] | Rust 路径与路由单测 | `test-kabegame` | 运行 `kabegame media_route` | Unix 补回 `/`，Windows 盘符与 UNC 保持原样；query 与 `/download` 已不匹配路由 | 3 passed |
+| [x] | 桌面静态检查 | `check-kabegame` | 运行完整检查 | vue-tsc、cargo check 均无 error | 已通过，仅既存 warning |
+| [x] | Android 静态检查 | Android NDK / Gradle | 运行 Android check 与 `:app:compileUniversalDebugKotlin` | aarch64 Rust 与 Kotlin 均无 error | Kotlin BUILD SUCCESSFUL |
+| [x] | 插件打包 | `kabegame-plugin` skill | 部署 `kabegame-server` | 生成 `kabegame-server.kgpg` | 已通过；未改插件版本号 |
+
+## Web 兼容副本 CDN 转写与 OSS 挂载
+
+Web release 的媒体响应不提供 `/file`、`/thumbnail` 或 `/compatible`，所有媒体路径必须在 RPC 出口转成 CDN URL。此前只处理 `local_path` 与 `thumbnail_path`，导致 `compatible_path` 泄露服务器本地路径；线上 `images`、`thumbnails` 已指向 `/mnt/oss`，但约 19.86 GB 的 `compatibles` 仍在本地。现在四个路径字段统一转写，线上兼容目录同步到 OSS 后改为软链接。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 线上现状确认 | `cmtheit.com` | 检查文件、挂载、RPC 与 CDN | 兼容文件本地存在；`compatible_path` 未转写；OSS 无 `compatibles`；对应 CDN URL 为 404 | 已确认：2010 个文件，约 19.86 GB |
+| [x] | OSS 初次同步 | `cmtheit.com` | 将本地 `compatibles/` 两阶段同步到 `/mnt/oss/compatibles/` | 文件数与总字节一致，抽样文件 CDN 返回 200 | 2010 个文件、19,863,366,234 字节完全一致；首/中/末样本 SHA-256 一致；示例 CDN 200 |
+| [x] | 目录切换与释放空间 | `cmtheit.com` | 停服补增量，建立 OSS 软链接，启动验证后删除原目录 | 服务恢复 active；新生成兼容副本直接进入 OSS；本地不再保留约 19.86 GB 副本 | 链接解析到 `/mnt/oss/compatibles`，`/__ping` 为 `ok`；原目录已删除，根盘约 23 GB 可用 |
+| [x] | 新对象 MIME | `cmtheit.com` | 安装 `mailcap`、重启 ossfs2，经软链接写入临时 PNG 后请求 CDN | CDN `Content-Type` 为 `image/png`，探针随后删除 | 已实测；迁移批次旧对象仍保留 `application/octet-stream` 元数据，但无 `nosniff` 且均为 PNG/JPG |
+| [ ] | RPC 路径转写 | Web release | 查询含四类路径的图片行 | 所有非空本地路径均为 `https://cdn.kabegame.com/<目录>/<文件>`，无服务器绝对路径 | |
+| [x] | 静态检查与单测 | 仓库 | 跑 `image_rewrite` 测试及 `deno task check -c kabegame` | 测试、vue-tsc、cargo check 均无错误 | 7 tests passed；vue-tsc 与 cargo check 0 error，仅有既存 warning |
+
+## Web RPC 按方法拆分请求路径
+
+Web 前端把 JSON-RPC 请求从统一的 `/rpc` 改为 `/rpc/{method}`，URL 中的方法名经编码并与 body 的 `method` 保持一致，方便在浏览器 Network 面板按接口筛选。服务端继续保留 `/rpc` 兼容既有插件与外部客户端；命名路径与 body 不一致时返回 JSON-RPC `-32600`，不执行调用。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | Network 按方法过滤 | Web | 打开开发者工具 Network，触发画廊翻页、打开设置 | 请求分别显示为 `/rpc/pathql_fetch` 等具体方法，可按 URL 过滤 | |
+| [ ] | super 请求 | Web `?super=1` | 执行一个写操作 | 请求为 `/rpc/<方法>?super=1`，写操作正常完成 | |
+| [ ] | 旧入口兼容 | curl / `kabegame-server` 插件 | 继续向 `/rpc` 发送合法 JSON-RPC body | 行为与改动前一致 | |
+| [ ] | 方法不一致 | curl | 向 `/rpc/get_albums` 发送 body `method: get_tasks_page` | 返回 `-32600`，两个方法均不执行 | |
+| [x] | 前端请求单测 | Vitest | `deno task --cwd apps/kabegame test --run src/api/web.test.ts` | URL pathname 为 `/rpc/pathql_fetch`，body 仍携带同名 `method` 与参数 | 已运行，1 passed |
+| [x] | 静态检查 | 仓库 | `deno task check -c kabegame` | vue-tsc 与 cargo check 无错误 | 已运行；仅有既存 warning |
+
 ## Tauri 2.12.4 升级
 
 Tauri 栈从 2.11.2 升级到 2.12.4，`third-patches/tauri` 已重基到新上游；现有 CEF runtime 的 trait 适配回归见下一节。本节集中验证升级影响到的桌面打包、NSIS、Android 开发/安装链路、窗口与 Channel 生命周期、ACL，以及删除 0010 后的 Windows vcruntime 行为。
@@ -823,3 +1191,78 @@ Android 收集表单使用与桌面一致的 `el-select` 展示插件选择入�
 | [x] | 插件构建 | 仓库 | anime-pictures、kabegame-server `pnpm --dir ... run build` | rspack 编译通过 | 已运行 |
 | [ ] | anime-pictures API 实跑 | dev CLI / 桌面 CEF | 列表、详情、原图下载各跑一次 | 列表分页与详情 metadata 正常，oimages 原图可下载 | 需实机验证 |
 | [ ] | kabegame-server 媒体路径 | dev CLI → 4.5.2 服务端 | 抓取带本地文件的图片 | 媒体请求命中 `/file/{*path}`，图片正常入库 | 需实机验证 |
+
+## 运行配置复制为推荐配置 JSON
+
+运行配置卡片的「更多」由 `el-dropdown` 改为 `el-select`（`model-value` 恒为 `null`，选中只发命令），新增「复制为推荐配置 JSON」。导出由 `runConfigToPresetJson` 生成，字段与 `parsePluginRecommendedPreset` 读取的一致：`name`、可选 `description`、`userConfig`、有模式时的 `scheduleSpec`、非空时的 `httpHeaders`；不导出 id、时间戳、输出目录、画册与并发。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard | `deno task check -c kabegame --skip cargo` | `vue-tsc` 无 error | 已运行 |
+| [ ] | 更多菜单交互 | 桌面 CEF / Android | 点卡片「更多」依次选编辑、复制、删除 | 各动作与改前一致；选完触发器仍显示「更多」，不残留所选项；点下拉不触发卡片详情 | |
+| [ ] | 复制 JSON 内容 | 桌面 CEF / Web | 对带定时与不带定时的配置各选「复制为推荐配置 JSON」并粘贴 | 成功提示；JSON 只含上述字段，无定时时无 `scheduleSpec` | Web 走 `navigator.clipboard` |
+| [ ] | 回放为推荐配置 | 桌面 CEF + 插件源码 | 把复制内容存为插件 `configs/x.json` 并加入 `kbRecommendedConfigs`，打包安装后在「推荐」tab 预览并导入 | 预览参数、定时与原配置一致，导入成功且可正常运行 | |
+
+## Android 畅游 Phase 1
+
+Android 畅游使用独立 `SurfActivity`：顶部复用桌面 `surf-navbar.html` Tauri webview，底部普通 Android WebView 加载外部站点。导航由 Rust 命令转给 Kotlin，URL / Cookie 由 Channel 回到 Rust；内容页没有 Tauri IPC。UA 不入库：内容页保持系统 WebView 默认 UA，启动时登记为 `Kabegame.cefUserAgent()` 的返回值，插件照桌面写法与 `requireCookie()` 配对。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver | `vue-tsc` 与 Rust `cargo check` 无 error；桌面畅游引用未被共用模块搬迁破坏 | 已运行（撤 UA 列后重跑）：vue-tsc 0 error，cargo 0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | Rust Android target 与 Kotlin/Gradle 配置无 error | 已运行（撤 UA 列后重跑）：Android Rust 0 error；`:app:compileUniversalDebugKotlin` 成功 |
+| [x] | Cookie 写入去重 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib surf_record` | Cookie 相同不写库、不发事件；变化时更新 | 已运行：1 项定向单测通过；`dsl_e2e` 52 项通过 |
+| [ ] | 启动与布局 | Android 真机 | 工具箱 → 畅游 → 输入 `https://www.pixiv.net` | 打开独立 Activity；顶部 48dp 导航栏、底部站点；主 Vue 页面保留在下方 | dev 包与 prod 包都要测：dev 的 applicationId 与 Java 包不同，曾因写死 `MainActivity` 报 `failed to create window` |
+| [x] | 导航栏紧凑间距 | Android 真机 | 打开畅游站点，对比顶部五个图标按钮与地址栏 | 图标按钮按 SVG 自然宽度加 6px 左右 padding 排列，不再占用固定 40px 宽度；地址栏占用剩余宽度 | 真机 HMR 截图确认 |
+| [ ] | 导航与地址同步 | Android 真机 | 点站内链接、触发 SPA 路由，再测试地址栏回车、后退、前进、刷新 | 内容页导航正确；navbar 地址随整页与 SPA 跳转更新 | |
+| [ ] | 返回键与关闭 | Android 真机 | 页面有历史时连续按系统返回键，再点 navbar 关闭 | 先逐级后退，退到头关闭 Activity；回到原 `/surf` 且 Vue 状态不丢；会话状态立即清除 | |
+| [ ] | Cookie 保存 | Android 真机 | 登录站点后关闭 Activity，查看记录并查询数据库 | Cookie 非空且包含 HttpOnly 登录 Cookie；`surf_records` 没有 `user_agent` 列；列表由事件即时更新 | |
+| [ ] | `cefUserAgent()` 返回 WebView UA | Android 真机 / V8 插件 | 冷启动后直接运行调用 `Kabegame.cefUserAgent()` 的插件（不先开畅游） | 返回值与内容页 `navigator.userAgent` 一致，不为 `null` | |
+| [ ] | 插件登录态复用 | Android 真机 / V8 插件 | 运行需要该站登录态且调用 `requireCookie` 的插件 | 日志出现 `taskLogCookieInjected`；插件用 `cefUserAgent()` 设置的 UA 与 Cookie 签发 UA 一致，登录态有效；Cloudflare 站点（如 danbooru）不再 403 | |
+| [ ] | 旋转、键盘与重开 | Android 真机 | 旋转屏幕、聚焦登录表单，再关闭并重复打开畅游 | Activity 不因旋转重建；表单不被键盘遮挡；第二次打开无 label 残留或空白页 | |
+| [ ] | 安全边界 | Android debug / `chrome://inspect` | 分别检查 navbar 与内容页全局对象 | navbar 有 `__TAURI_INTERNALS__`；内容页 `window.ipc` 与 `__TAURI_INTERNALS__` 均为 `undefined` | |
+
+## 插件请求头大小写与 HTTP/2
+
+hyper 走 HTTP/1.1 时默认把请求头名全部转成小写，Cloudflare 视作机器人特征直接挑战（实测同一请求 curl 用 `User-Agent` 是 200，全小写是 403）。V8 插件客户端（`plugin/v8/ops.rs::build_client`）与下载器客户端（`crawler/downloader/http.rs::create_client`）开启 `http1_title_case_headers()`；桌面 reqwest 增加 `native-tls-alpn`，握手声明 `h2`，能协商 HTTP/2 的连接按规范使用小写头名。安卓 rustls 原本就会声明 h2。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 静态检查 | 仓库 / Linux standard + Android | `check-kabegame` driver（桌面、`--mode android`） | cargo 无 error；`Cargo.lock` 无变化 | 已运行 |
+| [x] | Cloudflare 站点不再 403 | 桌面 dev CLI | `run-cli.sh anime-pictures --var startPage=0 --var endPage=0 --via local`，不进畅游、无 Cookie | 列表 / 详情 API 返回 200，原图下载成功 | 已运行：修复前 API 稳定返回 `cf-mitigated: challenge`；修复后全站与 `tag=blue archive` 两轮共新下载 24 张原图、0 失败，metadata 齐全、标签 948 条与源数据一致 |
+| [ ] | 其它插件回归 | 桌面 dev CLI | 各跑一页 pixiv、danbooru、konachan、weibo | 请求与下载结果和修复前一致；需要登录态的插件 Cookie 仍生效 | 关注依赖自定义小写头名的插件 |
+| [ ] | HTTP/2 协商与代理 | 桌面，开 / 关系统代理 | 跑任一 HTTPS 插件，观察网络或服务端日志 | 支持 h2 的站点走 HTTP/2；只支持 HTTP/1.1 的站点与 HTTP 代理照常可用 | |
+| [ ] | Android 下载 | Android 真机 | 跑 anime-pictures 一页 | 不需要畅游 Cookie 也能下载 | 安卓走 rustls |
+
+## 画廊网格空白格（合成层拆分）
+
+`ImageContent` 的缩略图 / 原图层 `<img>` 带 `z-index: 1/2`，而画廊滚动容器 `.image-grid-container` 不是层叠上下文，图片的 z-index 逃到外层，绘制顺序排在底部导航等已合成层之后，无法并回滚动内容层，被 Chromium 按行拆成几十个 squashing layer（安卓实测 40 层，其中 26 个是 936×465 的整行图片层）。某层漏光栅化就整行空白，手指一点触发失效才出现；桌面 CEF 偶发。修复：滚动容器加 `isolation: isolate`（实测降到 14 层，图片不再单独成层）；同时删除 `ImageItem` 上常驻的 `will-change: transform, box-shadow` / `will-change: contents`，避免每项各自成层。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 合成层数 | Android 真机（dev 包） | CDP `LayerTree.enable` 统计画廊页图层与 compositing reasons | 不再出现 `IMG.thumbnail-layer` 的 `Overlap` 层；总层数约 14 | 修复前 40 层 |
+| [ ] | 安卓空白格 | Android 真机（dev 包） | 画廊每页 100 / 500 / 1000，快速上下滑动多屏、翻页后停在页顶，用 `adb exec-out screencap` 截图（不要连 CDP，CDP 截图 / 求值会触发重绘掩盖问题） | 不再出现整格 / 整行空白；无需点击即显示 | 修复后 adb 连续 10 帧未复现；问题偶发，需日常使用观察 |
+| [ ] | 桌面空白格 | 桌面 CEF | 每页 1000、5 列以上快速滚动，含左侧画册树的画册页 | 不再偶发空白格 | |
+| [ ] | 层叠关系 | 桌面 CEF / Android | 画廊、画册、任务详情页：页头「…」菜单、sticky 分页器、滚动按钮、右键菜单、空状态与 loading 遮罩 | 页头与分页器仍盖在图片之上；弹出菜单不被网格遮挡 | 滚动容器成为层叠上下文后，容器内 z-index 不再与外部比较 |
+| [ ] | hover / 选中动画 | 桌面 CEF | 悬停、框选、Ctrl 多选网格项 | 描边、阴影与 transform 过渡仍顺滑 | |
+
+## ElMessage 安全区
+
+vendored `message.vue` 的定位原本只用数字 offset（默认 16px），Android 顶部消息会落到状态栏 / 刘海下面被挡住。修复：`top` / `bottom` 改为 `calc(<offset>px + var(--sat|--sab, env(safe-area-inset-*)))`，安全区由 `MainActivity` 注入；堆叠计算（`bottom = height + offset`）仍只用数字，整组消息统一平移。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 顶部消息不被遮挡 | Android 真机（有刘海 / 挖孔屏更佳） | 触发任意 `ElMessage`（如复制、保存设置） | 消息完整显示在状态栏下方 16px 处 | |
+| [ ] | 多条堆叠 | Android 真机 | 连续触发 3 条以上消息，等前面的关闭 | 间距 16px 一致，关闭后其余消息上移且始终不进入状态栏 | |
+| [ ] | 桌面不变 | 桌面 CEF | 触发消息 | 位置与修复前一致（`env()` 为 0） | |
+
+## kamechan 被遮住时消息降级到 ElMessage
+
+图片预览在紧凑布局打开、或桌面应用全屏时会隐藏 kamechan，原先靠 `body.image-preview-hides-kamechan` 的 CSS，`kameMessage` 不知情仍把消息推进气泡队列，消息被吞。修复：隐藏状态改为 `kameMessage` store 的 `setKamechanHidden(owner, hidden)`（每个预览实例一个 owner），Mascot 用 `v-show` 读 `kamechanHidden`；`kameMessage` 在隐藏时写历史并走 `ElMessage`，`zIndex` 取 `modalStack.topZIndex()` 压在预览之上（vendored `message.vue` 改为尊重 `zIndex` 选项）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 安卓预览中提示 | Android 真机 | 打开图片预览，执行收藏 / 设为壁纸 / 复制等会出提示的操作 | 顶部弹出 ElMessage，显示在预览之上；kamechan 历史中也有该条 | |
+| [ ] | 桌面全屏预览提示 | 桌面 CEF | 预览进入应用全屏后触发提示 | 同上；退出全屏后新消息回到 kamechan 气泡 | 非全屏预览 kamechan 可见，仍走气泡 |
+| [ ] | 关闭预览恢复 | Android / 桌面 | 关闭预览后触发提示 | kamechan 重新显示，消息走气泡 | |
+| [ ] | kamechan 关闭时 | 任一 | 设置中关闭 kamechan，在有弹窗时触发提示 | ElMessage 显示在弹窗之上 | 原先可能被弹窗压住 |

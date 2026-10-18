@@ -17,8 +17,8 @@ use axum::{
     extract::{Path as UrlPath, Query},
     http::{
         header::{
-            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH,
-            CONTENT_RANGE, CONTENT_TYPE, RANGE,
+            HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+            RANGE,
         },
         Request, StatusCode, Uri,
     },
@@ -45,12 +45,6 @@ pub static HTTP_SERVER_PORT: OnceLock<u16> = OnceLock::new();
 /// Range 把整段视频拉进来。
 #[cfg(not(target_os = "android"))]
 const MAX_RANGE_CHUNK: u64 = 8 * 1024 * 1024;
-
-#[cfg(not(target_os = "android"))]
-#[derive(Debug, Deserialize)]
-struct FileQuery {
-    path: String,
-}
 
 #[cfg(not(target_os = "android"))]
 #[derive(Debug, Deserialize)]
@@ -126,11 +120,25 @@ async fn authorize_local_path(path: &str) -> Result<kabegame_core::storage::Imag
 }
 
 #[cfg(not(target_os = "android"))]
-async fn handle_file_query(
-    Query(query): Query<FileQuery>,
+fn absolute_path_from_route(rest: String) -> String {
+    // 通配段不带前导斜杠：Unix 绝对路径要补回来；Windows 的 `C:\...` 本身已完整。
+    let bytes = rest.as_bytes();
+    let windows_drive =
+        bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':');
+    if windows_drive || rest.starts_with(r"\\") {
+        rest
+    } else {
+        format!("/{rest}")
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+async fn handle_file_path(
+    UrlPath(rest): UrlPath<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let path = query.path.trim();
+    let path = absolute_path_from_route(rest);
+    let path = path.as_str();
     let image_info = match authorize_local_path(path).await {
         Ok(info) => info,
         Err(response) => return response,
@@ -150,61 +158,13 @@ async fn handle_file_query(
     serve_file_with_mime(path, mime, range).await
 }
 
-/// `/download/<绝对路径>`：桌面「把图片拖到文件管理器」时对方实际下载的 URL。
-///
-/// 与 `/file` 的区别只在**路径怎么传**：`/file?path=...` 把路径放在 query 里，URL 的
-/// 路径段恒为 `file`，下载方只能拿它当文件名，结果每张图都落地成没有扩展名的 `file`
-/// 且互相覆盖。这里改成把路径直接接在 `/download` 后面，文件名天然落在 URL 末段，
-/// KDE KIO 与 GNOME gvfs 直接就能取到正确的名字。
-///
-/// 为什么单开一个端点而不是改 `/file`：`/file` 还在给页面里的 `<img>` / `<video>`
-/// 供图，动它会波及现有视图的显示，没必要冒这个险。
-///
-/// 权限与 `/file` 共用 `authorize_local_path`，白名单语义不放宽。
 #[cfg(not(target_os = "android"))]
-async fn handle_download_path(
+async fn handle_thumbnail_path(
     UrlPath(rest): UrlPath<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    // 通配段不带前导斜杠：Unix 绝对路径要补回来；Windows 的 `C:\...` 本身已完整。
-    let path = if cfg!(windows) && rest.chars().nth(1) == Some(':') {
-        rest
-    } else {
-        format!("/{rest}")
-    };
+    let path = absolute_path_from_route(rest);
     let path = path.as_str();
-
-    let image_info = match authorize_local_path(path).await {
-        Ok(info) => info,
-        Err(response) => return response,
-    };
-
-    let mime = image_info
-        .media_type
-        .as_deref()
-        .and_then(kabegame_core::media::image_type::mime_from_format)
-        .map(str::to_string)
-        .or_else(|| mime_from_path(path));
-
-    let range = headers
-        .get(RANGE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    let mut response = serve_file_with_mime(path, mime, range).await;
-    // 只声明「这是一次下载」。文件名不由这条头给出——它已经在 URL 末段里了,
-    // 下载方直接从 URL 取,所以这里不需要读 path,也就没有转义与编码问题。
-    response
-        .headers_mut()
-        .insert(CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
-    response
-}
-
-#[cfg(not(target_os = "android"))]
-async fn handle_thumbnail_query(
-    Query(query): Query<FileQuery>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    let path = query.path.trim();
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
@@ -325,11 +285,12 @@ async fn serve_file_with_mime(
 }
 
 #[cfg(not(target_os = "android"))]
-async fn handle_compatible_query(
-    Query(query): Query<FileQuery>,
+async fn handle_compatible_path(
+    UrlPath(rest): UrlPath<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let path = query.path.trim();
+    let path = absolute_path_from_route(rest);
+    let path = path.as_str();
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
@@ -438,10 +399,9 @@ async fn handle_unmatched(uri: Uri) -> Response {
 #[cfg(not(target_os = "android"))]
 pub fn file_routes() -> Router {
     Router::new()
-        .route("/file", get(handle_file_query))
-        .route("/download/{*path}", get(handle_download_path))
-        .route("/thumbnail", get(handle_thumbnail_query))
-        .route("/compatible", get(handle_compatible_query))
+        .route("/file/{*path}", get(handle_file_path))
+        .route("/thumbnail/{*path}", get(handle_thumbnail_path))
+        .route("/compatible/{*path}", get(handle_compatible_path))
         .route("/proxy", get(handle_proxy_query))
 }
 
@@ -451,10 +411,9 @@ pub fn file_routes() -> Router {
 #[cfg(not(target_os = "android"))]
 pub fn file_routes_media() -> Router {
     let routes = Router::new()
-        .route("/file", get(handle_file_query))
-        .route("/download/{*path}", get(handle_download_path))
-        .route("/thumbnail", get(handle_thumbnail_query))
-        .route("/compatible", get(handle_compatible_query));
+        .route("/file/{*path}", get(handle_file_path))
+        .route("/thumbnail/{*path}", get(handle_thumbnail_path))
+        .route("/compatible/{*path}", get(handle_compatible_path));
 
     #[cfg(any(debug_assertions, not(feature = "web")))]
     {
@@ -468,22 +427,22 @@ pub fn file_routes_media() -> Router {
 
 /// web 模式专用路由。
 ///
-/// - **Release**：只保留 `/proxy`。图片和缩略图直接由 CDN 返回，web server
+/// - **Release**：只保留 `/proxy`。图片、缩略图和兼容副本直接由 CDN 返回，web server
 ///   不再经手磁盘 IO（避免并发下 IO 顶满把主进程拖死）；`commands::image`
-///   在 `ImageInfo` 序列化前把 `local_path` / `thumbnail_path` 改写成 CDN URL。
-/// - **Debug**：保留 `/file` `/thumbnail`，方便本地联调——
+///   在 `ImageInfo` 序列化前把本地媒体路径改写成 CDN URL。
+/// - **Debug**：保留 `/file` `/thumbnail` `/compatible`，方便本地联调——
 ///   开发机没 CDN，走本地文件最直观。
-#[cfg(all(not(target_os = "android"), debug_assertions))]
+#[cfg(all(feature = "web", debug_assertions))]
 pub fn file_routes_web() -> Router {
     let gated = Router::new()
-        .route("/file", get(handle_file_query))
-        .route("/thumbnail", get(handle_thumbnail_query))
-        .route("/compatible", get(handle_compatible_query))
+        .route("/file/{*path}", get(handle_file_path))
+        .route("/thumbnail/{*path}", get(handle_thumbnail_path))
+        .route("/compatible/{*path}", get(handle_compatible_path))
         .layer(from_fn(image_concurrency_mw));
     gated.route("/proxy", get(handle_proxy_query))
 }
 
-#[cfg(all(not(target_os = "android"), not(debug_assertions)))]
+#[cfg(all(feature = "web", not(debug_assertions)))]
 pub fn file_routes_web() -> Router {
     Router::new().route("/proxy", get(handle_proxy_query))
 }
@@ -577,4 +536,73 @@ pub async fn get_http_server_base_url<R: tauri::Runtime>(
         .await
         .map(|r| r.base_url.trim_end_matches('/').to_string())
         .map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod tests {
+    use super::absolute_path_from_route;
+
+    #[test]
+    fn media_route_restores_unix_absolute_path() {
+        assert_eq!(
+            absolute_path_from_route("home/cm/Pictures/a.png".to_string()),
+            "/home/cm/Pictures/a.png"
+        );
+    }
+
+    #[test]
+    fn media_route_keeps_windows_absolute_path() {
+        assert_eq!(
+            absolute_path_from_route(r"C:\Users\cm\Pictures\a.png".to_string()),
+            r"C:\Users\cm\Pictures\a.png"
+        );
+        assert_eq!(
+            absolute_path_from_route(r"\\server\share\a.png".to_string()),
+            r"\\server\share\a.png"
+        );
+    }
+
+    #[tokio::test]
+    async fn media_routes_only_accept_wildcard_path_form() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind test listener");
+        let address = listener.local_addr().expect("read test address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                super::file_routes().fallback(super::handle_unmatched),
+            )
+            .await
+            .expect("serve test router");
+        });
+
+        let base = format!("http://{address}");
+        let wildcard_body = reqwest::get(format!("{base}/file/definitely-missing-kabegame-media"))
+            .await
+            .expect("request wildcard route")
+            .text()
+            .await
+            .expect("read wildcard response");
+        let query_body = reqwest::get(format!(
+            "{base}/file?path=/definitely-missing-kabegame-media"
+        ))
+        .await
+        .expect("request removed query route")
+        .text()
+        .await
+        .expect("read query response");
+        let download_body =
+            reqwest::get(format!("{base}/download/definitely-missing-kabegame-media"))
+                .await
+                .expect("request removed download route")
+                .text()
+                .await
+                .expect("read download response");
+
+        assert_eq!(wildcard_body, "file not found");
+        assert_eq!(query_body, "not found");
+        assert_eq!(download_body, "not found");
+        server.abort();
+    }
 }

@@ -87,6 +87,45 @@ Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用�
 
 完整字段（多语言 name/description、`kbLabels` <Badge text="4.4.0" variant="note" />、`kbIcon` / `kbDoc` / `kbChangelog` / `kbAssets` 等）见 [插件清单字段](/reference/plugin-schema/)。
 
+### configs/*.json
+
+每个文件是一条推荐运行配置，出现在应用「运行配置 → 插件推荐」里，用户预览后一键导入。不必手写：
+
+1. 在应用里用本插件建一条运行配置并跑通，从卡片「更多」选「复制为推荐配置 JSON」。
+2. 粘贴存成 `configs/<名称>.json`。
+3. 把路径加进 `package.json` 的 `kbRecommendedConfigs`；没注册的文件不会打包，也不会出现在「插件推荐」里。
+
+```jsonc
+{
+  "kbRecommendedConfigs": ["configs/girls.json", "configs/<名称>.json"]
+}
+```
+
+![从运行配置复制推荐配置 JSON](../../../assets/screenshots/auto-configs/copy-preset-json-annotated.png)
+
+复制出的内容就是文件格式：
+
+```json
+{
+  "name": "主题标签（例：女生）",
+  "description": "标签「女の子」前 10 页，约 800 张",
+  "userConfig": { "tag": "女の子", "startPage": 0, "endPage": 9 },
+  "scheduleSpec": { "mode": "daily", "hour": 8, "minute": 0 }
+}
+```
+
+| 字段 | 必需 | 说明 |
+|---|---|---|
+| `name` | 是 | 标题。多语言另加 `name.en` / `name.ja` / `name.ko` / `name.zhtw`，`name` 作默认 |
+| `description` | 否 | 说明，多语言写法同 `name` |
+| `userConfig` | 否 | `kbConfig` 变量取值，键为变量 `key`；导入时按 `kbConfig` 规范化 |
+| `scheduleSpec` | 否 | 定时：`{ "mode": "interval", "intervalSecs" }`、`{ "mode": "daily", "hour", "minute" }`（`hour: -1` 为每小时）、`{ "mode": "weekly", "weekday", "hour", "minute" }`（`weekday` 0 = 周一）。导入后是否启用由用户设置决定 |
+| `httpHeaders` | 否 | 额外请求头 |
+
+:::caution
+运行配置只保存创建时界面语言的名称和说明，复制出来只有这一种语言。要多语言时自己补 `name.<lang>` / `description.<lang>`。插件 ID、站点地址由插件包决定，输出目录、画册、并发数是用户本机设置，都不写进文件。
+:::
+
 ### metadata_migrations/migrate.js
 
 单一 metadata 迁移脚本，由 `kbMetadataMigration` 引用。ES module，可导出 `migrate(metadata)`（入参与返回值都是 **JSON 字符串**）、`provideLabels(metadata)`（给历史图片补标签）与 `provideSearchTextList(metadata)`（给历史图片提供搜索片段），至少导出一个；运行在裸 V8（无 import、无宿主 API）。搜索片段应覆盖 `description.ejs` 展示原文，可增加 `<插件>_<字段>_<值>` 前缀，不收录键名、不可见链接或过期文字。按 metadata 里的 `schema` 自检、幂等、一步到位；每行无论成败只处理一次。契约与示例见 [V8 脚本 · 元数据迁移](/dev/v8-api/#元数据迁移)。

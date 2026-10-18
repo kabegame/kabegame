@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-seedBundledPlugins"
+description = "Enables the seedBundledPlugins command without any pre-configured scope."
+commands.allow = ["seedBundledPlugins"]
+
+[[permission]]
+identifier = "deny-seedBundledPlugins"
+description = "Denies the seedBundledPlugins command without any pre-configured scope."
+commands.deny = ["seedBundledPlugins"]

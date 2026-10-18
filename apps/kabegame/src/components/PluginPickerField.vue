@@ -2,7 +2,7 @@
   <div class="plugin-picker-field flex w-full min-w-0 flex-col gap-1.5">
     <div class="flex w-full min-w-0 items-center gap-2">
       <AndroidPickerSelect
-        v-if="isCompact"
+        v-if="useAndroidPicker"
         :model-value="modelValue ?? null"
         :options="androidOptions"
         :title="pickerTitleResolved"
@@ -16,29 +16,31 @@
         @update:model-value="emitValue"
       >
         <template v-if="selectTrigger" #trigger="{ open }">
-          <div
-            class="w-full"
-            role="button"
-            :tabindex="disabled ? -1 : 0"
-            :aria-disabled="disabled"
-            :aria-label="selectedTriggerLabel || placeholder || $t('common.selectPlaceholder')"
-            @click="open()"
-            @keydown.enter.prevent="open()"
-            @keydown.space.prevent="open()"
-          >
-            <!-- 复用桌面 el-select 展示当前值；实际选择交给 Android 弹窗，避免同时打开两个面板。 -->
-            <el-select
-              class="pointer-events-none w-full"
-              :model-value="modelValue ?? undefined"
-              :placeholder="placeholder || $t('common.selectPlaceholder')"
-              :disabled="disabled"
-              :size="size"
-              :tabindex="-1"
-              aria-hidden="true"
+          <slot name="compact-trigger" :open="open" :selected-label="selectedTriggerLabel" :disabled="disabled">
+            <div
+              class="w-full"
+              role="button"
+              :tabindex="disabled ? -1 : 0"
+              :aria-disabled="disabled"
+              :aria-label="selectedTriggerLabel || placeholder || $t('common.selectPlaceholder')"
+              @click="open()"
+              @keydown.enter.prevent="open()"
+              @keydown.space.prevent="open()"
             >
-              <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value" />
-            </el-select>
-          </div>
+              <!-- 复用桌面 el-select 展示当前值；实际选择交给 Android 弹窗，避免同时打开两个面板。 -->
+              <el-select
+                class="pointer-events-none w-full"
+                :model-value="modelValue ?? undefined"
+                :placeholder="placeholder || $t('common.selectPlaceholder')"
+                :disabled="disabled"
+                :size="size"
+                :tabindex="-1"
+                aria-hidden="true"
+              >
+                <el-option v-for="option in options" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+            </div>
+          </slot>
         </template>
         <template #option="{ option }">
           <div class="plugin-picker-option">
@@ -55,13 +57,8 @@
             <div class="plugin-picker-option__main">
               <div class="plugin-picker-option__name">{{ option.label }}</div>
               <div v-if="option.desc" class="plugin-picker-option__desc">{{ option.desc }}</div>
-              <!-- Webview 项：警告 pill；其余：真实插件标签 -->
               <div class="plugin-picker-option__tagrow">
-                <span v-if="option.warning" class="plugin-picker-option__warn-pill">
-                  <span class="plugin-picker-option__warn-dot">!</span>
-                  {{ $t("plugins.webviewNeedsDesktop") }}
-                </span>
-                <PluginLabelTags v-else-if="option.labels?.length" :labels="option.labels" size="small" />
+                <PluginLabelTags v-if="option.labels?.length" :labels="option.labels" size="small" />
               </div>
             </div>
           </div>
@@ -96,13 +93,6 @@
               <span v-if="option.count !== undefined" class="plugin-picker-option__count">({{ option.count }})</span>
               <!-- 尾部整体右对齐：让各行的标签落在同一条右边线上，便于纵向对比 -->
               <span class="plugin-picker-option__trailing">
-                <el-icon
-                  v-if="option.warning"
-                  class="plugin-picker-option__warning"
-                  :title="$t('plugins.androidNotSupported')"
-                >
-                  <WarningFilled />
-                </el-icon>
                 <PluginLabelTags v-if="showLabels" :labels="labelsFor(option.plugin)" size="small" fixed-slots />
               </span>
             </div>
@@ -112,14 +102,6 @@
           </HoverRevealPanel>
         </el-option>
       </el-select>
-
-      <el-icon
-        v-if="showSelectedJsWarning && selectedPluginIsJs"
-        class="plugin-picker-field__selected-warning"
-        :title="$t('plugins.jsPluginAndroidNotSupportedTitle')"
-      >
-        <WarningFilled />
-      </el-icon>
     </div>
 
     <PluginLabelTags v-if="showLabels && modelValue" :labels="labelsFor(selectedPluginObj)" />
@@ -128,7 +110,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Grid, WarningFilled } from "@kabegame/element-plus-icons";
+import { Grid } from "@kabegame/element-plus-icons";
 import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import AndroidPickerSelect from "@/components/AndroidPickerSelect.vue";
 import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
@@ -147,7 +129,6 @@ type PluginPickerOption = {
   label: string;
   pluginId?: string;
   iconSrc?: string;
-  warning?: boolean;
   count?: number;
   plugin?: Plugin;
 };
@@ -167,8 +148,6 @@ const props = withDefaults(
     selectTrigger?: boolean;
     filterable?: boolean;
     showIcons?: boolean;
-    showJsWarning?: boolean;
-    showSelectedJsWarning?: boolean;
     showLabels?: boolean;
     size?: PluginPickerSize;
     popperClass?: string;
@@ -182,8 +161,6 @@ const props = withDefaults(
     selectTrigger: false,
     filterable: true,
     showIcons: true,
-    showJsWarning: false,
-    showSelectedJsWarning: false,
     showLabels: false,
     size: "default",
     popperClass: undefined,
@@ -200,6 +177,7 @@ const uiStore = useUiStore();
 const pluginStore = usePluginStore();
 
 const isCompact = computed(() => uiStore.isCompact);
+const useAndroidPicker = computed(() => isCompact.value || props.selectTrigger);
 const pickerTitleResolved = computed(() => props.pickerTitle ?? props.placeholder ?? t("common.selectPlaceholder"));
 
 function emitValue(value: string | null | undefined) {
@@ -253,7 +231,6 @@ const pluginRows = computed((): PluginPickerOption[] => {
           label: pluginStore.pluginLabel(pluginId),
           pluginId,
           iconSrc: pluginStore.pluginIconSrc(pluginId),
-          warning: props.showJsWarning && plugin?.scriptType === "js",
           count: rowCount(pluginId),
           plugin,
         }))
@@ -271,7 +248,6 @@ const pluginRows = computed((): PluginPickerOption[] => {
       label: pluginLabel(plugin),
       pluginId: plugin.id,
       iconSrc: pluginStore.pluginIconSrc(plugin.id),
-      warning: props.showJsWarning && plugin.scriptType === "js",
       count: rowCount(value),
       plugin,
     });
@@ -314,7 +290,6 @@ const androidOptions = computed(() =>
     value: option.value,
     pluginId: option.pluginId,
     iconSrc: option.iconSrc,
-    warning: option.warning,
     count: option.count,
     desc: option.plugin ? pluginDescription(option.plugin) : undefined,
     labels: option.plugin ? labelsFor(option.plugin) : undefined,
@@ -346,10 +321,6 @@ function tileInitial(label: string) {
 const selectedPluginObj = computed<Plugin | undefined>(() => {
   const selected = options.value.find((option) => option.value === props.modelValue);
   return selected?.plugin ?? pluginStore.plugins.find((p) => p.id === selected?.pluginId);
-});
-
-const selectedPluginIsJs = computed(() => {
-  return selectedPluginObj.value?.scriptType === "js";
 });
 </script>
 
@@ -391,28 +362,13 @@ const selectedPluginIsJs = computed(() => {
   font-size: 12px;
 }
 
-.plugin-picker-option__warning,
-.plugin-picker-field__selected-warning {
-  flex-shrink: 0;
-  color: var(--el-color-danger);
-}
-
-/* 右推整个尾部而不是单独推 warning：两者都写 margin-left:auto 会平分剩余空间，
-   把 warning 顶到行中间。flex-shrink:0 保证挤压时先省略插件名而不是压扁标签。 */
+/* 右推尾部标签；flex-shrink:0 保证挤压时先省略插件名而不是压扁标签。 */
 .plugin-picker-option__trailing {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-}
-
-.plugin-picker-option__warning {
-  font-size: 18px;
-}
-
-.plugin-picker-field__selected-warning {
-  font-size: 20px;
 }
 
 /* ============ 移动端居中弹窗行内容（方案 1c 图标 + 名称 + 描述 + 标签） ============ */
@@ -477,29 +433,5 @@ const selectedPluginIsJs = computed(() => {
   &:empty {
     display: none;
   }
-}
-
-.plugin-picker-option__warn-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  background: rgba(245, 158, 11, 0.15);
-  color: #b45309;
-}
-
-.plugin-picker-option__warn-dot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 13px;
-  height: 13px;
-  border-radius: 999px;
-  background: #f59e0b;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 800;
 }
 </style>

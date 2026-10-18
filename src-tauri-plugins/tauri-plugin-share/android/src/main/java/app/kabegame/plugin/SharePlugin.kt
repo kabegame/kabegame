@@ -68,23 +68,36 @@ class SharePlugin(private val activity: Activity) : Plugin(activity) {
         val mimeType = args.mime_type
 
         try {
-            val file = File(filePath)
-            if (!file.exists()) {
-                invoke.reject("文件不存在: $filePath")
-                return
-            }
+            val uri: Uri
+            var shareType = mimeType
+            if (filePath.startsWith("content://")) {
+                // Android 图片 local_path 为 MediaStore content URI：直接分享，不能当文件路径
+                uri = Uri.parse(filePath)
+                // content URI 没有扩展名，前端推不出 MIME，回退到 ContentResolver 给出的类型
+                if (shareType.isBlank() || shareType == "application/octet-stream") {
+                    shareType = activity.contentResolver.getType(uri) ?: shareType
+                }
+            } else {
+                val file = File(filePath)
+                if (!file.exists()) {
+                    invoke.reject("文件不存在: $filePath")
+                    return
+                }
 
-            val authority = "${activity.packageName}.fileprovider"
-            val uri: Uri = try {
-                FileProvider.getUriForFile(activity, authority, file)
-            } catch (e: Exception) {
-                invoke.reject("无法获取文件 URI: ${e.message}", e)
-                return
+                val authority = "${activity.packageName}.fileprovider"
+                uri = try {
+                    FileProvider.getUriForFile(activity, authority, file)
+                } catch (e: Exception) {
+                    invoke.reject("无法获取文件 URI: ${e.message}", e)
+                    return
+                }
             }
 
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = mimeType
+                type = shareType
                 putExtra(Intent.EXTRA_STREAM, uri)
+                // 显式 ClipData，确保读权限随 chooser 传递给目标应用
+                clipData = ClipData.newRawUri(null, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 

@@ -3,8 +3,9 @@
 //! - 内容页脚本（`webview_js/surf_collect.js`，封闭 IIFE、不挂 window 全局）在页面加载时经
 //!   `surf_collect_attach` 交来一条 Tauri `Channel`；Rust 只经它向页面发 `start` / `cancel`。
 //!   不给 remote 站点开 `core:event:*`（否则任意站点可监听应用全局广播）。
-//! - 导航栏只调 `surf_collect_toggle`：空闲则开跑，运行中则取消；转圈状态由 Rust 经
-//!   `surf-collect-state` 事件定向推给导航栏。
+//! - 入口只有两个：桌面导航栏调 `surf_collect_toggle`，安卓原生工具栏经 events Channel 发
+//!   `collectToggle`；空闲则开跑，运行中则取消。转圈状态由 Rust 回推（桌面 `surf-collect-state`
+//!   事件给导航栏，安卓调 `SurfPlugin.setCollectRunning`）。
 //! - 取消后 `surf_download_image(collectRunId)` 在 Rust 侧直接拒绝，Channel 消息迟到也不会多下。
 
 use std::collections::HashMap;
@@ -19,9 +20,13 @@ use kabegame_i18n::t;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, Runtime, Webview};
+#[cfg(not(target_os = "android"))]
+use tauri::Emitter;
+use tauri::{AppHandle, Runtime, Webview};
 
-use super::surf::{host_from_surf_label, is_surf_content_label, normalize_surf_host, surf_label};
+use super::surf_common::{host_from_surf_label, is_surf_content_label};
+#[cfg(not(target_os = "android"))]
+use super::surf_common::{normalize_surf_host, surf_label};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,20 +60,29 @@ struct Slot {
     active_run: Option<u64>,
 }
 
-/// key 为内容 webview label（`surf-<host>`）。
+/// key 为内容 webview label：桌面 `surf-<host>`，安卓 `surf-<host>:<会话序号>`。
 static SLOTS: LazyLock<Mutex<HashMap<String, Slot>>> = LazyLock::new(Default::default);
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(not(target_os = "android"))]
 fn navbar_label(content_label: &str) -> String {
     format!("{content_label}-navbar")
 }
 
+/// 运行态回推：桌面推给导航栏 webview；安卓没有导航栏 webview，交给原生工具栏。
 fn emit_state<R: Runtime>(app: &AppHandle<R>, content_label: &str, running: bool) {
-    let _ = app.emit_to(
-        navbar_label(content_label).as_str(),
-        "surf-collect-state",
-        json!({ "running": running }),
-    );
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app.emit_to(
+            navbar_label(content_label).as_str(),
+            "surf-collect-state",
+            json!({ "running": running }),
+        );
+    }
+    #[cfg(target_os = "android")]
+    {
+        crate::commands::surf_android::set_collect_running(app, content_label, running);
+    }
 }
 
 fn content_label_of<R: Runtime>(webview: &Webview<R>) -> Result<String, String> {
@@ -138,19 +152,26 @@ pub async fn surf_collect_attach<R: Runtime>(
     Ok(())
 }
 
-/// 导航栏按钮：空闲时开始一键下载，运行中则取消。
+/// 导航栏按钮（桌面）：空闲时开始一键下载，运行中则取消。
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_collect_toggle<R: Runtime>(
     app: AppHandle<R>,
     host: String,
 ) -> Result<(), String> {
     let label = surf_label(&normalize_surf_host(&host));
+    toggle(&app, &label)
+}
+
+/// 一键下载按钮的公共主体：桌面由 `surf_collect_toggle(host)` 按 host 推导 label，
+/// 安卓由原生工具栏的 `CollectToggle` 直接传当前会话 label（`surf-<host>:<n>`）。
+pub(crate) fn toggle<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String> {
     let mut slots = SLOTS.lock().map_err(|e| format!("Lock error: {e}"))?;
-    let slot = slots.entry(label.clone()).or_default();
+    let slot = slots.entry(label.to_string()).or_default();
 
     if let Some(run_id) = slot.active_run.take() {
         // 先停转圈再通知页面：取消的反馈不等页面往返。
-        emit_state(&app, &label, false);
+        emit_state(app, label, false);
         if let Some(channel) = slot.channel.as_ref() {
             let _ = channel.send(CollectMsg::Cancel { run_id });
         }
@@ -171,7 +192,7 @@ pub async fn surf_collect_toggle<R: Runtime>(
         })
         .map_err(|e| format!("{}: {e}", t!("surf.collect.notReady")))?;
     slot.active_run = Some(run_id);
-    emit_state(&app, &label, true);
+    emit_state(app, label, true);
     Ok(())
 }
 
@@ -239,7 +260,7 @@ pub async fn surf_save_page_snapshot<R: Runtime>(
         "documentUrl": text("documentUrl"),
         "title": text("title"),
         "pageHtml": page_html,
-        "capturedAt": super::crawler::now_ms(),
+        "capturedAt": super::surf_receive::now_ms(),
     });
     // 空 / 超限由 core 的 page_snapshot::validate 拒绝；搜索索引只含标题与 URL 也由 core 统一处理。
     Storage::global().insert_metadata_row(&value, &host, SURF_METADATA_VERSION, None)

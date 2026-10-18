@@ -227,6 +227,19 @@ export function parsePluginRecommendedPreset(
   };
 }
 
+/**
+ * 把运行配置导出为插件 `configs/*.json` 推荐配置的文件内容，字段与 `parsePluginRecommendedPreset` 读取的一致。
+ * `pluginId` / `filename` / `baseUrl` 由插件包决定，输出目录、画册、并发等本机设置不导出。
+ */
+export function runConfigToPresetJson(cfg: RunConfig): string {
+  const out: Record<string, unknown> = { name: cfg.name };
+  if (cfg.description) out.description = cfg.description;
+  out.userConfig = cfg.userConfig ?? {};
+  if (cfg.scheduleSpec?.mode) out.scheduleSpec = cfg.scheduleSpec;
+  if (cfg.httpHeaders && Object.keys(cfg.httpHeaders).length > 0) out.httpHeaders = cfg.httpHeaders;
+  return `${JSON.stringify(out, null, 2)}\n`;
+}
+
 /** 将 `get_run_config` / `get_run_configs` 单条 JSON 规范为 `RunConfig` */
 export function parseRunConfigRaw(raw: unknown): RunConfig | null {
   if (raw == null || typeof raw !== "object") return null;
@@ -625,8 +638,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     // 推荐配置由插件作者手写，可能含 "" / [] 等旧式空值；入库前按插件定义规范化，
     // 否则定时运行会被后端严格校验拒绝。动态导入 plugins store 以避开循环依赖。
     const { usePluginStore } = await import("./plugins");
-    const defs = (usePluginStore().plugins.find((p) => p.id === preset.pluginId)?.config?.vars ??
-      []) as PluginVarDef[];
+    const defs = (usePluginStore().plugins.find((p) => p.id === preset.pluginId)?.config?.vars ?? []) as PluginVarDef[];
     return await addRunConfig({
       name: nameStr,
       description,

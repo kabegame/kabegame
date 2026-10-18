@@ -104,7 +104,7 @@ fn init(
 
     // 启动内置 Backend
     crate::core_init::init_globals()?;
-    #[cfg(not(any(feature = "web", target_os = "android")))]
+    #[cfg(not(feature = "web"))]
     commands::surf_session::clear_stale_sessions();
     #[cfg(debug_assertions)]
     crate::debug_ingest::spawn_debug_event(
@@ -177,7 +177,7 @@ fn init(
         }
         crate::drag_export::authorize_drag_image(image_id)
     });
-    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
+    #[cfg(not(feature = "web"))]
     if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
         eprintln!("Failed to init crawler webview handler: {}", e);
     }
@@ -260,7 +260,10 @@ fn init(
     }
 
     // 初始化插件缓存
-    init_kgpg_plugin();
+    init_kgpg_plugin(
+        #[cfg(target_os = "android")]
+        app.handle().clone(),
+    );
 
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     tauri::async_runtime::block_on(http_server::start_http_server())
@@ -405,6 +408,8 @@ pub(crate) fn configure_app(
         builder = builder.plugin(tauri_plugin_wallpaper::init());
         builder = builder.plugin(tauri_plugin_task_notification::init());
         builder = builder.plugin(tauri_plugin_android_battery_optimization::init());
+        builder = builder.plugin(commands::surf_android::plugin());
+        builder = builder.plugin(commands::crawler_android::plugin());
     }
 
     #[cfg(not(target_os = "android"))]
@@ -528,33 +533,23 @@ pub(crate) fn configure_app(
             delete_failed_images,
             delete_task_failed_image,
             get_active_downloads,
-            #[cfg(not(target_os = "android"))]
             surf_start_session,
-            #[cfg(not(target_os = "android"))]
             surf_close_session,
-            #[cfg(not(target_os = "android"))]
             surf_get_session_status,
-            #[cfg(not(target_os = "android"))]
+            #[cfg(target_os = "android")]
+            surf_pin_shortcut,
             surf_list_records,
-            #[cfg(not(target_os = "android"))]
             surf_get_all_records,
-            #[cfg(not(target_os = "android"))]
             surf_get_records_by_ids,
-            #[cfg(not(target_os = "android"))]
             surf_get_record,
-            #[cfg(not(target_os = "android"))]
             surf_get_record_images,
-            #[cfg(not(target_os = "android"))]
             surf_update_root_url,
-            #[cfg(not(target_os = "android"))]
             surf_update_name,
-            #[cfg(not(target_os = "android"))]
             surf_delete_record,
             #[cfg(not(target_os = "android"))]
             surf_get_cookies,
             #[cfg(not(target_os = "android"))]
             surf_open_devtools,
-            #[cfg(not(target_os = "android"))]
             surf_open_in_browser,
             #[cfg(not(target_os = "android"))]
             surf_go_back,
@@ -566,13 +561,10 @@ pub(crate) fn configure_app(
             surf_navigate,
             #[cfg(not(target_os = "android"))]
             surf_report_url,
-            #[cfg(not(target_os = "android"))]
             surf_collect_attach,
             #[cfg(not(target_os = "android"))]
             surf_collect_toggle,
-            #[cfg(not(target_os = "android"))]
             surf_collect_finished,
-            #[cfg(not(target_os = "android"))]
             surf_save_page_snapshot,
             // --- Run Configs ---
             get_run_configs,
@@ -729,55 +721,30 @@ pub(crate) fn configure_app(
             cancel_download,
             #[cfg(not(target_os = "android"))]
             apply_update_and_restart,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_open,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_create,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fread,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fwrite,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fseek,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_fstat,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_ftruncate,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_close,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_read_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_read_text_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_write_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_write_text_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_mkdir,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_read_dir,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_remove,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_stat,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_lstat,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_rename,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_copy_file,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_exists,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_truncate,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_size,
-            #[cfg(not(target_os = "android"))]
             crawl_fs_get_root,
-            #[cfg(not(target_os = "android"))]
             crawl_ffmpeg_mux,
-            #[cfg(not(target_os = "android"))]
             crawl_ffmpeg_probe,
             #[cfg(not(target_os = "android"))]
             crawl_archive_zip,
@@ -785,45 +752,25 @@ pub(crate) fn configure_app(
             crawl_archive_tar,
             #[cfg(not(target_os = "android"))]
             crawl_archive_7z,
-            #[cfg(not(target_os = "android"))]
             crawl_get_page_label,
-            #[cfg(not(target_os = "android"))]
             crawl_get_page_state,
-            #[cfg(not(target_os = "android"))]
             crawl_get_state,
-            #[cfg(not(target_os = "android"))]
             crawl_heartbeat,
-            #[cfg(not(target_os = "android"))]
             crawl_exit,
-            #[cfg(not(target_os = "android"))]
             crawl_error,
-            #[cfg(not(target_os = "android"))]
             crawl_task_log,
-            #[cfg(not(target_os = "android"))]
             crawl_add_progress,
-            #[cfg(not(target_os = "android"))]
             crawl_create_image_metadata,
-            #[cfg(not(target_os = "android"))]
             crawl_plugin_data,
-            #[cfg(not(target_os = "android"))]
             crawl_set_plugin_data,
-            #[cfg(not(target_os = "android"))]
             crawl_download_image,
-            #[cfg(not(target_os = "android"))]
             surf_download_image,
-            #[cfg(not(target_os = "android"))]
             surf_import_media,
-            #[cfg(not(target_os = "android"))]
             crawl_to,
-            #[cfg(not(target_os = "android"))]
             crawl_back,
-            #[cfg(not(target_os = "android"))]
             crawl_update_page_state,
-            #[cfg(not(target_os = "android"))]
             crawl_update_state,
-            #[cfg(not(target_os = "android"))]
             crawl_clear_site_data,
-            #[cfg(not(target_os = "android"))]
             show_crawler_window,
             get_file_drop_supported_types,
             get_file_drop_kinds,
