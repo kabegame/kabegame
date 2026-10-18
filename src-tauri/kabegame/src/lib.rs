@@ -260,7 +260,10 @@ fn init(
     }
 
     // 初始化插件缓存
-    init_kgpg_plugin();
+    init_kgpg_plugin(
+        #[cfg(target_os = "android")]
+        app.handle().clone(),
+    );
 
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     tauri::async_runtime::block_on(http_server::start_http_server())

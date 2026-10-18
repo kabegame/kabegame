@@ -427,8 +427,9 @@ export class ModePlugin extends BasePlugin {
   // - build（非 Android）：写入 resources/plugins/，随 tauri.conf.json 的
   //   bundle.resources 打进安装包；init_kgpg_plugin() 在应用启动时把这里的 .kgpg
   //   "移动"进用户插件目录（见 kabegame-core/src/plugin/mod.rs 的
-  //   PluginManager::seed_bundled_plugins）。Android 不走桌面 bundle.resources
-  //   机制，跳过。
+  //   PluginManager::seed_bundled_plugins）。Android 不在这里打包，但 tauri-cli
+  //   会把 resources/ 现有内容注入 APK assets，启动时按安装包版本标记复制进用户
+  //   插件目录（见 tauri_plugin_pathes::seed_bundled_plugins）。
   // - start：不打包插件；正式环境插件从 GitHub Releases 下载
   packagePlugins(bs: BuildSystem): void {
     // 显式跳过插件打包(rspack + kabegame-cli 均为 JS/宿主工具链步骤)。

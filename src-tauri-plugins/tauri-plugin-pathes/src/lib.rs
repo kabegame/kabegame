@@ -71,6 +71,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
                 AppPaths::init(app_paths)
                     .map_err(|e| format!("Failed to initialize AppPaths: {}", e))?;
+                // 供 seed_bundled_plugins 在启动后取用
+                app.manage(pathes);
             }
 
             #[cfg(not(target_os = "android"))]
@@ -137,4 +139,27 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             Ok(())
         })
         .build()
+}
+
+/// Android：版本变化时（首次启动 / 应用更新）把 APK 内预置的 `.kgpg` 复制进用户插件目录。
+///
+/// 版本标记 `.bundled-plugins-version` 写在插件目录里，与当前安装包一致则跳过；
+/// 同名插件以预置版本覆盖（与桌面 `PluginManager::seed_bundled_plugins` 一致）。
+/// 阻塞直到复制完成，调用方应放在阻塞线程里，并在插件缓存初始化之前执行。
+/// 尽力而为：失败只记录日志。
+#[cfg(target_os = "android")]
+pub fn seed_bundled_plugins<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(pathes) = app.try_state::<mobile::Pathes<R>>() else {
+        eprintln!("[plugin] seed_bundled_plugins: pathes 插件未初始化");
+        return;
+    };
+    let target_dir = kabegame_core::app_paths::AppPaths::global().plugins_dir();
+    match pathes.seed_bundled_plugins(target_dir.to_string_lossy().into_owned()) {
+        Ok(res) if res.skipped => {}
+        Ok(res) => eprintln!(
+            "[plugin] seed_bundled_plugins: 版本 {}，复制 {} 个，失败 {} 个",
+            res.version, res.copied, res.failed
+        ),
+        Err(e) => eprintln!("[plugin] seed_bundled_plugins: {e}"),
+    }
 }

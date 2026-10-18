@@ -353,7 +353,8 @@ impl PluginManager {
     /// 将预置在 AppPaths::bundled_plugins_dir()（resources/plugins/）下的 .kgpg
     /// 移动进用户插件目录 AppPaths::plugins_dir()（data/plugins-directory）。
     ///
-    /// 仅桌面/web（非 Android）；由 `init_kgpg_plugin()` 在插件缓存初始化之前
+    /// 仅桌面/web（非 Android；Android 由 `tauri_plugin_pathes::seed_bundled_plugins`
+    /// 从 APK assets 按版本标记复制）；由 `init_kgpg_plugin()` 在插件缓存初始化之前
     /// 无条件调用一次。尽力而为：任何一步失败仅 eprintln! 记录，不返回 Err、不 panic。
     ///
     /// 幂等/一次性：文件被移动后 resources/plugins/ 随之清空，此后每次启动该目录

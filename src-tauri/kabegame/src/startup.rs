@@ -110,14 +110,23 @@ where
         .map_err(|e| format!("Failed to receive main thread result: {}", e))?
 }
 
-pub fn init_kgpg_plugin() {
-    let task_future = async {
+pub fn init_kgpg_plugin(
+    #[cfg(target_os = "android")] app_handle: tauri::AppHandle<crate::AppRuntime>,
+) {
+    let task_future = async move {
         let pm = PluginManager::global();
-        // 新增：把预置在 resources/plugins/ 下的 .kgpg 插件"移动"进用户插件目录；
-        // 仅桌面/web（非 Android）。Android 不使用桌面 bundle.resources 机制，
-        // 编译期直接不含这一步，行为与今天完全一致。
+        // 把预置在 resources/plugins/ 下的 .kgpg 插件放进用户插件目录：
+        // 桌面/web 从安装目录"移动"过去；Android 的 resources 在 APK assets 里只读，
+        // 改为按安装包版本标记决定是否复制（见 tauri_plugin_pathes::seed_bundled_plugins）。
         #[cfg(not(target_os = "android"))]
         pm.seed_bundled_plugins().await;
+        #[cfg(target_os = "android")]
+        {
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                tauri_plugin_pathes::seed_bundled_plugins(&app_handle)
+            })
+            .await;
+        }
         // 初始化已安装插件缓存（仅用户 data 目录下的 .kgpg）
         if let Err(e) = pm.ensure_installed_cache_initialized().await {
             eprintln!("Failed to initialize plugin cache: {}", e);

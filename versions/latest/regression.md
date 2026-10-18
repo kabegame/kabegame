@@ -1,5 +1,23 @@
 # v4.5.2 regression
 
+## Android 预置插件复制（`tauri-plugin-pathes` `seedBundledPlugins`）
+
+Android 的 `resources/plugins/*.kgpg` 由 tauri-cli 注入 APK `assets/resources/plugins/`，此前只打包不复制。
+`init_kgpg_plugin` 在插件缓存初始化前经 `spawn_blocking` 调 `tauri_plugin_pathes::seed_bundled_plugins`；
+Kotlin `PathesPlugin.seedBundledPlugins` 在后台线程比较插件目录里的 `.bundled-plugins-version`
+（`versionName+versionCode+lastUpdateTime`）与当前安装包，不一致才逐个经 `.tmp` + rename 覆盖复制，
+全部成功后写入新标记；有失败则不写标记，下次启动重试。桌面 / web 仍走原 `PluginManager::seed_bundled_plugins` 移动逻辑。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
+| [x] | 桌面静态检查 | Linux standard | `check-kabegame` driver `--skip vue` | `init_kgpg_plugin` 的平台签名差异不影响桌面 | 已运行：0 error |
+| [x] | Kotlin 编译 | Android SDK | `gradle :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `PathesPlugin.seedBundledPlugins` 编译通过 | 已运行：成功 |
+| [ ] | 首次安装 | Android（清除数据后安装） | 启动应用进入插件页 | 预置插件全部出现在已安装列表；`plugins-directory` 下有 `.bundled-plugins-version`，无 `.tmp` 残留 | logcat 有 `seed_bundled_plugins: 版本 …，复制 N 个，失败 0 个` |
+| [ ] | 同版本重启 | Android | 卸载一个预置插件后冷启动 | 该插件不再被复制回来；日志无复制记录 | 标记一致直接跳过 |
+| [ ] | 应用更新 | Android | 覆盖安装新包（同版本号的 dev 包也算）后冷启动 | 重新复制，同名插件被预置版本覆盖，此前卸载的预置插件重新出现 | `lastUpdateTime` 变化触发 |
+| [ ] | 桌面回归 | Windows / macOS / Linux 安装包 | 安装后首次启动 | 预置插件照旧从 `resources/plugins/` 移入用户目录 | |
+
 ## Android WebView 爬虫 Phase 1（宿主 Activity + 停靠到主界面下）
 
 安卓 WebView 后端落地：`run_webview_session` / `crawl_*` 命令 / `crawler-capability` 全平台编译，
