@@ -24,15 +24,17 @@
       const m = bg.match(/url\(["']?([^"')]+)["']?\)/);
       if (m) return m[1];
     }
+    return null;
+  }
+
+  // 祖先背景图只作最后兜底：YouTube Shorts 的轮播项带首帧占位背景图，手势覆盖层是它的
+  // 后代、叠在 <video> 之上，若逐层就查祖先，第一层就会命中占位图而轮不到下面的视频
+  function getAncestorBackground(target) {
     const parent =
       target.closest && target.closest('[style*="background-image"]');
-    if (parent) {
-      const m2 = parent.style.backgroundImage.match(
-        /url\(["']?([^"')]+)["']?\)/,
-      );
-      if (m2) return m2[1];
-    }
-    return null;
+    if (!parent) return null;
+    const m = parent.style.backgroundImage.match(/url\(["']?([^"')]+)["']?\)/);
+    return m ? m[1] : null;
   }
 
   function toAbsolute(url) {
@@ -123,6 +125,9 @@
       media = getMediaInfo(el);
       if (media) return { media, element: el };
     }
+    // 整个栈都没有自身带媒体的元素，才回退到命中元素的背景图祖先
+    media = getAncestorBackground(element);
+    if (media) return { media, element };
     return null;
   }
 

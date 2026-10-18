@@ -64,12 +64,13 @@
     （label `surf-<host>:<n>`，与桌面共用注入脚本与按 label 认会话的命令）、原生 Kotlin 工具栏、
     `SurfRegistry` 双向会合与 `ipcAvailable` 回传、Rust 单会话权威状态、移动插件命令与 Channel 事件、
     wry `addJavascriptInterface` 换成只收主框架消息的 `addWebMessageListener`、注入脚本顶层守卫、
-    脚本下载与页面自发下载共用 `enqueue_surf_download` 并补 Cookie/UA/Referer、非媒体不下载不解压、
-    raw body 的 JSON 数字数组兼容、Cookie 合并保存与系统 WebView 默认 UA 登记（UA 不入库）、
-    安全边界、已知 Channel 生命周期与 OAuth 限制。
+    脚本下载与页面自发下载共用 `enqueue_surf_download` 并补 Cookie/UA/Referer、压缩包不下载不解压、
+    raw body 的安卓形态（分块写走 `{ base64 }`、MSE 分片合并、数字数组兼容）、关闭时手动释放内容 WebView、Cookie 合并保存与系统 WebView 默认 UA 登记（UA 不入库）、
+    安全边界、已知 Channel 生命周期（tauri 补丁 0011）、tao JNI 局部引用残留与 OAuth 限制。
   - 适用场景：新增或排查 Android 畅游启动/关闭、原生工具栏地址与一键下载状态、返回键、登录态保存、
     插件请求的 Cookie/UA 配对（403、`cefUserAgent()` 为 `null`）、页面下载被拒或类型误判、
-    `blob:` / MSE 分块写失败、Activity 重建或外部页面意外获得 IPC。
+    `blob:` / MSE 分块写失败或很慢、关闭畅游后页面仍在后台运行或内存不回落、用 CDP 测试时页面下载回调不触发、
+    Activity 重建或外部页面意外获得 IPC。
 
 ## 画廊与查询（`gallery/`）
 

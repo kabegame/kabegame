@@ -283,7 +283,25 @@ class SurfActivity : TauriActivity() {
     val label = binding?.label ?: if (::content.isInitialized) content.id else null
     label?.let { SurfRegistry.onActivityGone(it, this) }
     ipcExecutor.shutdown()
-    // 内容 webview 由 wry 在 onDestroy 里销毁（Rust.onWebviewDestroy），这里不要再 destroy。
+    // wry 的 Rust.onWebviewDestroy 只清 Rust 侧回调表，从不调 WebView.destroy()；放在 super 之后，
+    // 保证 wry 先拿到 webview id。
     super.onDestroy()
+    if (!isChangingConfigurations && ::content.isInitialized) {
+      releaseContent(content)
+    }
+  }
+
+  /**
+   * 销毁内容 WebView。`addWebMessageListener` 的监听被 Chromium 以 JNI 全局引用持有，监听闭包又捕获了
+   * webview（进而是本 Activity）：不移除监听、不 destroy，关闭后整个 Activity 连同页面渲染、定时器与网络
+   * 都会留在进程里，每开关一次畅游就漏一份。
+   */
+  private fun releaseContent(webView: RustWebView) {
+    if (ipcAvailable) {
+      runCatching { WebViewCompat.removeWebMessageListener(webView, "ipc") }
+    }
+    webView.stopLoading()
+    (webView.parent as? ViewGroup)?.removeView(webView)
+    webView.destroy()
   }
 }

@@ -66,7 +66,7 @@
             show-labels
             @update:model-value="onPluginChange"
           />
-          <el-tooltip v-if="!uiStore.isCompact" :content="$t('plugins.detail.goSurfLogin')" placement="top">
+          <el-tooltip :content="$t('plugins.detail.goSurfLogin')" placement="top">
             <span class="inline-flex flex-none">
               <el-button
                 class="!m-0 h-32px w-40px !p-0"

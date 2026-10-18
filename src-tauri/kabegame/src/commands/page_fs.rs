@@ -119,10 +119,12 @@ pub(crate) fn vfs_of_label(label: &str) -> Result<Arc<PluginVfs>, String> {
     Err(format!("Invalid fs window label: {label}"))
 }
 
-/// 安卓 Tauri 只有 postMessage IPC：`Uint8Array` 会被 `JSON.stringify` 成 JSON 数字数组，
-/// 到 Rust 变成 `InvokeBody::Json`。这里把两种形态统一还原为字节。
+/// 安卓 Tauri 只有 postMessage IPC，到 Rust 都是 `InvokeBody::Json`。这里把三种形态统一还原为字节：
 ///
-/// 代价是体积膨胀约 3–4 倍；`media_download.js` 的分块写仍可复用，不必为安卓另写协议。
+/// - `Raw`：桌面 raw body。
+/// - `{ "base64": "..." }`：安卓 `media_download.js` 的分块写。直接传 `Uint8Array` 会被
+///   `JSON.stringify` 成数字数组（约 3.6 倍体积），实测 1 MiB 一块往返要 1 s 以上；base64 只有 1.33 倍。
+/// - JSON 数字数组：页面直接传 `Uint8Array` 时的兼容形态。
 fn raw_body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
     match body {
         tauri::ipc::InvokeBody::Raw(data) => Ok(data.clone()),
@@ -131,6 +133,15 @@ fn raw_body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
             .map(|value| value.as_u64().filter(|byte| *byte <= 255).map(|byte| byte as u8))
             .collect::<Option<Vec<u8>>>()
             .ok_or_else(|| "Invalid byte array in IPC body".to_string()),
+        tauri::ipc::InvokeBody::Json(serde_json::Value::Object(map)) => match map.get("base64") {
+            Some(serde_json::Value::String(encoded)) => {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|e| format!("Invalid base64 in IPC body: {e}"))
+            }
+            _ => Err("Expected raw IPC body".to_string()),
+        },
         _ => Err("Expected raw IPC body".to_string()),
     }
 }
@@ -742,6 +753,14 @@ mod tests {
     fn raw_body_accepts_json_byte_array() {
         let body = tauri::ipc::InvokeBody::Json(serde_json::json!([0, 128, 255]));
         assert_eq!(raw_body_bytes(&body).unwrap(), vec![0, 128, 255]);
+    }
+
+    #[test]
+    fn raw_body_accepts_base64_object() {
+        let body = tauri::ipc::InvokeBody::Json(serde_json::json!({ "base64": "AID/" }));
+        assert_eq!(raw_body_bytes(&body).unwrap(), vec![0, 128, 255]);
+        let invalid = tauri::ipc::InvokeBody::Json(serde_json::json!({ "base64": "@@" }));
+        assert!(raw_body_bytes(&invalid).is_err());
     }
 
     #[test]

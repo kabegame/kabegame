@@ -89,9 +89,11 @@ Rust → Kotlin 侧：`attach`、`close`、`setCollectRunning`、`getDefaultUser
 - **脚本发起**（一键下载、长按菜单、`surf_bootstrap.js` 的 `triggerDownload`）照旧
   `invoke("surf_download_image")`。
 - **页面自发**（WebView 判定为附件的导航）由 `setDownloadListener` 拦截，交给 Rust。
-  Rust 先按文件名（`is_media_by_path`）和 MIME（`is_supported_media_mime`）判断是否为支持的
-  图片或视频，不是（含 zip / 7z / tar 等压缩包）就直接 toast 拒绝、不发起下载；是就走同一个
-  入队函数。压缩包不解压：解压属于各爬虫插件自己的事（`Kabegame.archive`），畅游只收媒体。
+  Rust 只提前拒绝**明确的压缩包**（`surf_common::is_archive_download`：扩展名或 MIME 是
+  zip / rar / 7z / tar / gz 等），toast `surf.download.unsupportedType`、不发起下载；压缩包不解压，
+  解压属于各爬虫插件自己的事（`Kabegame.archive`），畅游只收媒体。其余一律走同一个入队函数，
+  包括文件名与 MIME 都认不出的（`application/octet-stream` + URL 无扩展名很常见，`guessFileName`
+  会给出 `xxx.bin`）：由下载后处理按字节判定，真媒体入库，非媒体在那里报「格式不受支持」。
 
 入队前安卓会补三个头，平台补的头覆盖页面给的：
 
@@ -110,13 +112,19 @@ Rust → Kotlin 侧：`attach`、`close`、`setCollectRunning`、`getDefaultUser
 reqwest 下载并直接入图库；终态 toast 由 `DownloadState` 的统一分支经 `surf_toast_for_host`
 返回页内。
 
-## raw body 的 JSON 兼容
+## raw body 的安卓形态
 
 Tauri 在安卓上没有自定义协议 IPC（`ipc-protocol.js`：`canUseCustomProtocol = osName !== 'android'`），
-`Uint8Array` 作为 invoke 参数时经 `JSON.stringify` 变成 JSON 数字数组，到 Rust 是
-`InvokeBody::Json`。`page_fs::raw_body_bytes` 同时接受 `Raw` 与数组（值必须 0–255），
-`media_download.js` 的 `blob:` / MSE 分块写因此原样复用。代价是体积约膨胀 3–4 倍，所以安卓上的
-写块从 8 MiB 降到 1 MiB（避免把 ~30 MB 的 JSON 字符串经 JNI 送一次）。
+invoke 的 body 一律经 `JSON.stringify` 走 postMessage，到 Rust 是 `InvokeBody::Json`。
+`page_fs::raw_body_bytes` 接受三种形态：桌面的 `Raw`、安卓分块写用的 `{ "base64": "..." }`、
+页面直接传 `Uint8Array` 时得到的 JSON 数字数组（值必须 0–255，兼容用）。
+
+`media_download.js` 在安卓上把每块编码成 base64 再发：数字数组约是原始体积的 3.6 倍，实测 1 MiB
+一块往返 0.8–1.1 s（页面 `JSON.stringify` 约 80 ms、Rust 逐元素还原约 110 ms，其余耗在 JNI 与消息
+传递上）；base64 只有 1.33 倍，同样一块往返 40–60 ms，Rust 解码不到 1 ms。安卓写块仍是 1 MiB（整块要
+装进一条字符串消息），桌面 8 MiB。MSE 的分片常只有几 KB（YouTube Shorts 平均不到 2 KB），
+`writeBuffer` 先把分片合并到写块大小再写，否则耗时全在逐片往返上（一条 Shorts 曾要 1308 次 invoke，
+合并后 2 次）。
 
 ## Cookie 与 UA 口径
 
@@ -145,12 +153,29 @@ http/https 始终留在内容 WebView。`intent:` 仅接受 http/https 的 `brow
 
 - wry 安卓没有 `on_download`、`on_new_window`；下载与弹窗分别由 `setDownloadListener` 与单页
   语义兜底。
-- 移动端 `Channel::new_with_id` 会对 Rust 主动创建的 Channel 调 `register_channel`，`CHANNELS`
-  表只增不减。当前上游已按 webview 回收 `ChannelDataIpcQueue`，但 Channel 闭包本身仍需在升级
-  Tauri 时复查。
+- 移动端 `Channel::new_with_id` 会把 Channel 登记进 `CHANNELS` 表（供原生插件按 id 推消息），
+  表只增不减。上游连每次 IPC 调用的一次性响应 Channel 也登记，实测每次 invoke +1 且捕获 `Webview`；
+  `third-patches/tauri/0011` 让响应 Channel 不再登记。Rust 主动创建、交给 Kotlin 的 Channel（如本会话的
+  `events`）仍每会话留一项，升级 Tauri 时复查。
+- **内容 WebView 必须在 `onDestroy` 里手动释放**（`SurfActivity.releaseContent`）：先
+  `removeWebMessageListener`，再 `stopLoading`、从布局摘下、`destroy()`。Chromium 以 JNI 全局引用持有
+  WebMessageListener，监听闭包捕获了 webview 进而是 Activity，而 wry 的 `onWebviewDestroy` 只清 Rust
+  侧回调表、从不调 `WebView.destroy()`；不释放时每关一次畅游，整个页面（渲染、定时器、网络）都留在进程里。
+  配置变更（`isChangingConfigurations`）时不释放，wry 会保留回调表等 Activity 重建。
+- tao 的 `MonitorHandle::size()` 在事件循环线程（永不返回 Java）上调 `getCurrentWindowMetrics`，
+  JNI 局部引用不会释放，`WindowMetrics` 经 `ContextImpl` 钉住已销毁的 SurfActivity。WebView 已
+  `destroy()`，残留的只是 Java 对象：实测 5 次开关残留 2 个 Activity，约 1 MB。修复需要给 tao 打补丁。
+- Tauri 初始化脚本在部分页面上会执行两次（wry 的 `onPageStarted` 在请求未被拦截时再
+  `evaluateJavascript` 一遍，同时 `addDocumentStartJavaScript` 也已注入），控制台出现
+  `Cannot redefine property` 报错；注入脚本靠顶层守卫保证只生效一次。
+- 页面自发的 `blob:` / `data:` 下载（`<a download href="blob:…">`）是否触发 `onDownloadStart`
+  尚未在干净进程验证。用 CDP（`kabegame-chromium`）连着测下载时，playwright 下发的
+  `Browser.setDownloadBehavior` 会吞掉 WebView 的下载回调，连 http 附件都不触发，
+  且断开后仍残留；测页面下载必须先强制停止应用、全程不连 CDP。
 - `reqwest` 与浏览器指纹不同，个别 CDN 在 Cookie / UA / Referer 都正确时仍可能拒绝。
-- 长按菜单依赖页面的 `contextmenu` 事件；安卓 WebView 长按图片是否派发该事件未在真实站点系统验证。
-  未派发时不影响一键下载与 `setDownloadListener`，只是长按菜单不出现。
+- 长按菜单依赖页面的 `contextmenu` 事件；已在 YouTube Shorts 真机确认长按会派发。命中判断先在整个
+  元素栈里找自身带媒体的元素，祖先的背景图只作兜底（Shorts 的轮播项带首帧占位背景图，曾盖过下层
+  `<video>`，把视频认成图片）。
 - 大响应经 `fetch` 取数据：已用 `use_https_scheme(true)` 避开 https 页面的混合内容限制，
   `ipc` 自定义协议响应带 `Access-Control-Allow-Origin: *`。
 

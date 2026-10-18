@@ -131,6 +131,42 @@ pub(crate) fn surf_toast_for_host<R: Runtime>(
     let _ = webview.eval(script.as_str());
 }
 
+/// 页面自发下载是否明确是压缩包（看文件名扩展名或 MIME）。
+///
+/// 安卓畅游只在这种情况下提前拒绝：解压交给各爬虫插件。其余认不出类型的（如
+/// `application/octet-stream` 且 URL 无扩展名、`guessFileName` 给出 `xxx.bin`）照样入队，
+/// 由下载后处理按字节判定，真媒体能入库，非媒体在那里报「格式不受支持」。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn is_archive_download(name: Option<&str>, mime_type: Option<&str>) -> bool {
+    const EXTENSIONS: &[&str] = &[
+        "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "zst", "cbz", "cbr",
+    ];
+    const MIMES: &[&str] = &[
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/vnd.rar",
+        "application/x-rar-compressed",
+        "application/x-7z-compressed",
+        "application/x-tar",
+        "application/gzip",
+        "application/x-gzip",
+        "application/x-bzip2",
+        "application/x-xz",
+        "application/zstd",
+        "application/vnd.comicbook+zip",
+        "application/vnd.comicbook-rar",
+    ];
+    let by_name = name
+        .and_then(|name| std::path::Path::new(name).extension())
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext)));
+    let by_mime = mime_type
+        .and_then(|mime| mime.split(';').next())
+        .map(str::trim)
+        .is_some_and(|mime| MIMES.iter().any(|known| known.eq_ignore_ascii_case(mime)));
+    by_name || by_mime
+}
+
 /// 桌面导航栏 URL 的 query 编码；安卓没有 navbar，不参与目标编译。
 #[cfg(not(target_os = "android"))]
 pub(crate) fn encode_query_value(value: &str) -> String {
@@ -201,7 +237,18 @@ pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::host_from_surf_label;
+    use super::{host_from_surf_label, is_archive_download};
+
+    #[test]
+    fn archive_download_detected_by_name_or_mime() {
+        assert!(is_archive_download(Some("probe.zip"), None));
+        assert!(is_archive_download(Some("a.TAR.GZ"), Some("application/octet-stream")));
+        assert!(is_archive_download(None, Some("application/x-7z-compressed; charset=binary")));
+        // 认不出类型的不算压缩包，交给后处理按字节判定
+        assert!(!is_archive_download(Some("octet.bin"), Some("application/octet-stream")));
+        assert!(!is_archive_download(Some("photo.png"), Some("image/png")));
+        assert!(!is_archive_download(None, None));
+    }
 
     #[test]
     fn desktop_label_maps_back_to_host() {

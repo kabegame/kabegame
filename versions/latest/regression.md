@@ -17,11 +17,16 @@ Android 畅游的主次对调：外部内容页成为 `SurfActivity` 的 Tauri �
 | [ ] | 无 Cookie 域名的下载 | Android dev | 在内容页点下载，媒体位于从未写过 Cookie 的 CDN 域名（如未登录时的 `i.pximg.net`） | 应用不崩溃；请求不带 `Cookie` 头，照常入队下载 | 曾因 wry `RustWebView.getCookies` 对 null 抛 NPE 而闪退，现改走 SurfPlugin `getCookie` |
 | [ ] | 一键下载取消 | Android dev | 一键下载运行中点正在旋转的同一按钮 | 先停止旋转并取消尚未入队的候选；已入队项照常下载；再点一次可重新开始 | 运行中按钮仍是同一个 `ImageView`，只换图标 |
 | [ ] | 工具栏图标与动画 | Android dev，浅色 / 深色各一次 | 打开畅游站点，逐个按压工具栏按钮；地址栏聚焦后输入 `ftp://x` 回车；启动一键下载 | 图标与桌面导航栏同一套线条图标并跟随深浅色；按压出现 32dp 圆角底色；聚焦时边框变蓝，无效输入红框约 0.9s 后恢复；运行中下载按钮换成弧线并以 0.8s 一圈匀速旋转，结束后复位到下载图标且不残留角度 | 图标在 `res/drawable/ic_surf_*.xml`，关闭按钮为新增的同风格 × |
-| [ ] | 页面自发下载（媒体） | Android dev / 站点直链附件 | 点击一个图片或视频附件链接 | 直接进入该畅游记录；Cookie / Referer 生效 | `setDownloadListener` → `pageDownload` |
-| [ ] | 页面自发下载（压缩包） | Android dev | 点击 zip / 7z / tar 附件链接 | 提示 `surf.download.unsupportedType`，不发起下载、不入库 | 畅游只收媒体，解压交给插件 |
-| [ ] | `data:` 页面下载 | Android dev | 点击 `data:` 图片链接 | 经页内 `__kb_media_download__` 导入该畅游记录 | 与桌面同口径 |
-| [ ] | `blob:` / MSE 视频 | Android dev / bilibili 播放页 | 长按或右键视频触发下载 | 分块写入成功（JSON 数组兼容路径），合流后入库，进度面板正常 | 关注长视频耗时与内存 |
-| [ ] | IPC 主框架化 | Android debug / `chrome://inspect` | 在 iframe 内执行 `window.ipc.postMessage(...)`；在顶层执行 `__TAURI_INTERNALS__.invoke("surf_navigate", …)` | iframe 消息被丢弃；顶层调用因命令未注册 / 无权限被拒 | 设备不支持 `WEB_MESSAGE_LISTENER` 时工具栏下载提示 `surf.collect.ipcUnavailable` |
+| [ ] | YouTube Shorts 长按下载视频 | Android dev / `m.youtube.com/shorts/*`（桌面 CEF 畅游 YouTube Shorts 亦测） | 播放中长按视频画面 | 菜单显示「下载视频」而非「下载图片」，下载走 `blob:` / MSE 捕获 | 顶层手势覆盖层的祖先轮播项带首帧占位背景图 `frame0.jpg`，曾先于下层 `<video>` 命中；现在元素栈逐层只看自身媒体，祖先背景图仅作兜底。已在真机用新逻辑求值命中 `VIDEO` |
+| [x] | 页面自发下载（媒体） | Android dev / 站点直链附件 | 点击一个图片或视频附件链接 | 直接进入该畅游记录；Cookie / Referer 生效 | `setDownloadListener` → `pageDownload`。已用本机测试服务（`Content-Disposition: attachment` 的 PNG）实测：WebView 与 reqwest 各请求一次，后者带 `Referer`，图片入库 |
+| [x] | 页面自发下载（无类型） | Android dev | 点击 `application/octet-stream`、URL 无扩展名的图片附件（`guessFileName` 给出 `xxx.bin`） | 照样入队，后处理按字节识别为图片并入库；真非媒体在后处理报「格式不受支持」 | 原先文件名与 MIME 都认不出就直接拒绝，真图片也被挡；现在只提前拒绝明确的压缩包（`surf_common::is_archive_download`）。已实测入库 |
+| [x] | 页面自发下载（压缩包） | Android dev | 点击 zip / 7z / tar 附件链接 | 提示 `surf.download.unsupportedType`，不发起下载、不入库 | 畅游只收媒体，解压交给插件。已实测：只有 WebView 的一次请求，没有 reqwest 重下 |
+| [ ] | 页面自发 `blob:` / `data:` 下载 | Android dev | 点击页面生成的 `<a download href="blob:…">` 与 `data:` 图片链接 | `onDownloadStart` 触发，经页内 `__kb_media_download__` 导入该畅游记录 | 尚未在干净进程验证：此前的测试连着 CDP，playwright 的 `Browser.setDownloadBehavior` 劫持会吞掉 WebView 下载回调（http 附件同样不触发），结论作废。即使不触发，页面 revoke 也不影响脚本发起的下载：`media_capture.js` 的捕获表保留 Blob 对象（已实测） |
+| [x] | `blob:` / MSE 视频 | Android dev / YouTube Shorts | 长按或右键视频触发下载 | 分块写入成功，合流后入库，进度面板正常 | 安卓分块写改发 `{ base64 }`（Rust `raw_body_bytes` 解码），1 MiB 一块往返从 0.8–1.1 s 降到 40–60 ms；MSE 小分片先合并到 1 MiB 再写，一条 Shorts 从 1308 次 invoke 降到 2 次，整次约 1.5 s |
+| [x] | 直链视频下载 | Android dev / bilibili 移动版播放页 | 对 mp4 直链视频触发下载 | 补头入队，入库后可播放 | 已实测 |
+| [x] | IPC 主框架化 | Android debug / CDP | 首个文档检查 `window.ipc`；在跨源 iframe（example.com）里重放主框架截获的合法 IPC 消息 | 首个文档的 `window.ipc` 即 WebMessageListener 版本（有 `addEventListener`）；iframe 重放无任何效果，同一条消息由主框架发出时回调正常触发 | 跨源 iframe 里同样有 `window.ipc` 与 `__TAURI_INTERNALS__`（含 invoke key），隔离完全依赖 Kotlin 的 `isMainFrame` 判断。设备不支持 `WEB_MESSAGE_LISTENER` 时工具栏下载提示 `surf.collect.ipcUnavailable` |
+| [x] | 关闭后释放内容 WebView | Android dev | 连续开关畅游数次，`dumpsys meminfo` 看 Activities / WebViews，CDP 看页面列表 | 关闭后 CDP 页面列表立即不再有该页；页面 JS、定时器与网络停止 | 原先 `addWebMessageListener` 的监听被 Chromium 以 JNI 全局引用持有并捕获 webview，wry 又从不 `destroy()`，每关一次就整页泄漏。剩余已知泄漏：tao 在事件循环线程上取 `WindowMetrics` 的 JNI 局部引用不释放，仍会钉住部分已销毁的 Activity（5 次开关残留 2 个、约 1 MB） |
+| [x] | IPC 响应 Channel 不再进表 | Android dev | 临时插桩统计 tauri mobile `CHANNELS` 表大小，连续 invoke 100 次 | 表大小不随 invoke 增长 | `third-patches/tauri/0011`：修复前每次 invoke 的响应 Channel 都进表且永不移除（100 次 +101） |
 | [ ] | 关闭会话 | Android dev | 关闭 SurfActivity，再查看主界面与临时目录 | 会话 VFS 目录被清理；Cookie 已保存；`surf-session-changed` 正确 | `closed` 事件走 `drop_session` / `drop_slot` |
 | [ ] | 桌面回归 | Windows / macOS / Linux | 一键下载、冻结快照、取消、页面自发下载（含 zip 解压）、MSE 视频捕获 | 结果与改动前一致；页面自发下载仍走 CEF 并在桌面解压 | 桌面 `surf_uses_native` 保持 true |
 

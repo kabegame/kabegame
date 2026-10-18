@@ -297,8 +297,9 @@ async fn on_page_download<R: Runtime>(
         "http" | "https" => {
             let by_name = name.is_some_and(|name| image_type::is_media_by_path(Path::new(name)));
             let by_mime = mime_type.is_some_and(image_type::is_supported_media_mime);
-            if !(by_name || by_mime) {
-                // 压缩包等不下载：解压属于各爬虫插件自己的事（Kabegame.archive），畅游只收媒体。
+            // 只提前拒绝明确的压缩包：解压属于各爬虫插件自己的事（Kabegame.archive），畅游只收媒体。
+            // 认不出类型的（octet-stream + 无扩展名很常见）照样入队，由后处理按字节判定。
+            if !(by_name || by_mime) && super::surf_common::is_archive_download(name, mime_type) {
                 toast("surf.download.unsupportedType");
                 return;
             }

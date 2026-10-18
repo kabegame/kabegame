@@ -176,6 +176,7 @@ function onInput(value: string) {
 onBeforeUnmount(clearDebounce);
 
 async function focusSearchInput() {
+  if (IS_ANDROID) return;
   await nextTick();
   window.requestAnimationFrame(() => searchInputRef.value?.focus());
 }
