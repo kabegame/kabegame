@@ -1,6 +1,5 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { IS_ANDROID } from "@/env";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { fetchSurfImageCounts } from "@/utils/surfMediaCount";
 
@@ -11,13 +10,11 @@ export const useSurfImageCountsStore = defineStore("surfImageCounts", () => {
   const countOf = (host: string): number => countsByHost.value[host] ?? 0;
 
   const refreshAll = async (hosts: Iterable<string>): Promise<void> => {
-    if (IS_ANDROID) return;
     const counts = await fetchSurfImageCounts(hosts, globalRoute.hide);
     countsByHost.value = counts;
   };
 
   const refreshSome = async (hosts: Iterable<string>): Promise<void> => {
-    if (IS_ANDROID) return;
     const list = Array.from(hosts);
     if (list.length === 0) return;
     const counts = await fetchSurfImageCounts(list, globalRoute.hide);

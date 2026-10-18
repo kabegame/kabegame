@@ -56,6 +56,11 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
 
   const hideSet = new Set(hide);
   const multiHideSet = new Set(multiHide);
+  const isSingle = (ctx: ActionContext<ImageInfo>) => !ctx.selectedCount || ctx.selectedCount === 1;
+  // 详情弹窗与系统分享只有 Android 有（桌面在预览抽屉里看详情，share_file 仅 Android 编译）；
+  // 放在顶层还是「更多」子菜单由 isCompact 决定，平板宽屏走顶层。
+  const canDetail = () => IS_ANDROID && !hideSet.has("detail");
+  const canShare = () => IS_ANDROID && !hideSet.has("share");
 
   // Single-select actions
   const singleActions: ActionItem<ImageInfo>[] = [
@@ -68,12 +73,18 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       visible: () => !hideSet.has("favorite"),
     },
     {
+      key: "detail",
+      label: t("contextMenu.detail"),
+      icon: InfoFilled,
+      command: "detail",
+      visible: (ctx) => canDetail() && !uiStore.isCompact && isSingle(ctx),
+    },
+    {
       key: "share",
       label: t("contextMenu.share"),
       icon: Share,
       command: "share",
-      // 仅 Android 且单选时在「更多」子菜单中显示，顶层不展示
-      visible: () => false,
+      visible: (ctx) => canShare() && !uiStore.isCompact && isSingle(ctx),
     },
     {
       key: "copy",
@@ -163,14 +174,14 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
               label: t("contextMenu.detail"),
               icon: InfoFilled,
               command: "detail",
-              visible: () => IS_ANDROID && !hideSet.has("detail"),
+              visible: canDetail,
             },
             {
               key: "share",
               label: t("contextMenu.share"),
               icon: Share,
               command: "share",
-              visible: () => !hideSet.has("share"),
+              visible: canShare,
             },
             {
               key: "copy",

@@ -1,5 +1,55 @@
 # v4.5.2 regression
 
+## Android 图片详情弹窗按空间排版
+
+`ImageDetailDialog`（只在 Android 渲染）原先只看 `isCompact`：非紧凑一律四列 `flex: 1 1 0` 并排。横屏手机
+（800×360）与竖屏平板（宽约 800）都不紧凑，每列只剩约 180px；弹窗 `margin: 5vh` 在 360 高的屏上只有 18px，
+被 42px 的状态栏压住。现按视口分三档：`stack`（紧凑或高 <560，可折叠竖排）/ `grid`（2×2，无原生元数据列时
+插件详情占满一行）/ `row`（宽 ≥1200，四列）；上下边距与最大高度扣除 `--sat` / `--sab`；并排两档给插件详情
+`min-height: 60vh`，堆叠档的插件详情展开高度改为与弹窗最大高度一致。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型检查 | Linux | `vue-tsc --noEmit` | 无 error | 已运行：成功 |
+| [x] | 横屏手机 | vivo V2429A / Android 16 横屏（800×360），dev 包 | 预览 →「详情」 | `is-stack`，面板整宽可折叠；弹窗 y=51、高 300，不再压在状态栏下 | 已用 adb 截屏实测 |
+| [x] | 竖屏平板 | 同上，CDP 模拟 800×1280 | 同上 | `is-grid`，基本信息 \| 标签、插件详情 \| 原生元数据，每列 318px | 已实测 |
+| [x] | 大平板横屏 | 同上，CDP 模拟 1280×800 | 同上 | `is-row`，四列并排，行高 480（插件详情不被压扁） | 已实测 |
+| [ ] | 竖屏手机不回归 | Android 竖屏 | 同上 | 与之前一致：竖向堆叠、插件详情展开占满弹窗高度 | |
+| [ ] | 视频无元数据列 | Android 平板竖屏 | 视频图片「详情」 | 插件详情占满第二行 | |
+| [ ] | 旋转 | Android | 详情打开时旋转屏幕 | 布局随视口切换，不残留旧档样式 | |
+
+## Android 宽屏图片详情 / 分享入口
+
+`createImageActions` 里 `detail` 与 `share` 只在 `isCompact` 的「更多」子菜单里，顶层 `share` 恒 `visible: false`、
+顶层没有 `detail`；Android 平板宽屏 `isCompact=false`，「更多」不显示，网格菜单与 PhotoSwipe 预览操作栏都没有入口。
+现按能力门控（`IS_ANDROID`：`ImageDetailDialog` 只在 Android 渲染、`share_file` 只在 Android 编译），放哪一层按
+`isCompact` 决定；顺带修掉桌面窄窗口（web / 缩窗）「更多」里 `share` 调不存在命令的问题。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端类型检查 | Linux | `vue-tsc --noEmit` | 无 error | 已运行：成功 |
+| [x] | 菜单项计算 | vivo V2429A / Android 16，dev 包，视口 800（非紧凑） | CDP 调 `createImageActions` 求单选可见项 | 顶层含 `detail`、`share`，无 `more` | 已实测 |
+| [x] | 紧凑不变 | 同上，CDP 模拟 360 宽 | 同上 | 顶层 `favorite/open/wallpaper/more`，`more` 内首项 `detail`、`share` | 已实测 |
+| [ ] | 宽屏网格菜单 | Android 平板 / 折叠屏展开 | 长按图片 | 菜单有「详情」「分享」，点「详情」弹出详情弹窗，点「分享」拉起系统分享 | |
+| [ ] | 宽屏预览操作栏 | 同上 | 打开预览 | 底部操作栏有「详情」「分享」，详情弹窗盖在预览之上，返回键先关详情 | |
+| [ ] | 多选不显示 | 同上 | 选中多张后打开菜单 | 不出现「详情」「分享」 | |
+| [ ] | 桌面不回归 | Linux standard | 右键图片 | 不出现「详情」「分享」 | |
+| [ ] | web 窄屏 | web，视口 <768 | 「更多」子菜单 | 不再出现「分享」 | |
+
+## Android 畅游站点图片计数
+
+`useSurfImageCountsStore` 的 `refreshAll` / `refreshSome` 建立时（`30c1733e`，Android 尚无畅游）带了
+`if (IS_ANDROID) return;`，Android 支持畅游后门控没撤，计数表恒空、`countOf` 回落 0。去掉门控后两端同走
+`pathql_entry("gallery/[hide/]surf/<host>")`；真机直接调该命令返回 x.com 15、xiaohongshu 2，后端无需改动。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 后端计数 | vivo V2429A / Android 16，dev 包 | CDP 调 `pathql_entry` 查 `gallery/surf/<host>` | 返回各站点真实 `total` | 已实测 |
+| [ ] | 首页计数 | 同上 | 打开畅游页 | 各站点卡片「图片 N」与点进去的图片页总数一致 | |
+| [ ] | 下载后刷新 | 同上 | 畅游一键下载若干张后返回畅游页 | 该站点计数随 `images-change` 增加 | |
+| [ ] | 隐藏切换 | 同上 | 切换全局「显示隐藏」 | 计数按 `hide/` 前缀重算 | |
+| [ ] | 桌面不回归 | Linux standard | 打开畅游页 | 计数照旧 | |
+
 ## Android 畅游桌面快捷方式
 
 站点卡片菜单与畅游工具栏「更多」菜单新增「添加到桌面」，经 `ShortcutManagerCompat.requestPinShortcut`
