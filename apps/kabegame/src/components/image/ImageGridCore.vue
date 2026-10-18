@@ -1483,6 +1483,10 @@ defineExpose({
   min-width: 0;
   overflow: hidden;
   outline: none;
+  /* 滚动容器自成层叠上下文：ImageContent 的图层 img 带 z-index，否则会逃到外层层叠上下文、
+     排在底部导航等已合成层之后，无法并回滚动内容层，被逐行拆成几十个 squashing layer；
+     某层漏光栅化就整行空白、点一下才出现（安卓 WebView 常见，桌面 CEF 偶发）。 */
+  isolation: isolate;
 
   &.scrolls-whole-container {
     display: block;

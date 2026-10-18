@@ -401,7 +401,9 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
     box-shadow 0.25s ease;
   box-sizing: border-box;
-  will-change: transform, box-shadow;
+  /* 不要常驻 will-change：每项各自成合成层，一页上百项会撑爆 GPU 光栅预算，
+     部分格子不被绘制、直到点击触发失效才出现（安卓 WebView / 桌面 CEF 均可复现）。
+     transform 过渡期间 Chromium 会自动临时提升图层。 */
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 
@@ -470,7 +472,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     position: relative;
     cursor: pointer;
     overflow: hidden;
-    will-change: contents;
     -webkit-tap-highlight-color: transparent;
   }
 

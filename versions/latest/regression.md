@@ -1077,3 +1077,15 @@ hyper 走 HTTP/1.1 时默认把请求头名全部转成小写，Cloudflare 视�
 | [ ] | 其它插件回归 | 桌面 dev CLI | 各跑一页 pixiv、danbooru、konachan、weibo | 请求与下载结果和修复前一致；需要登录态的插件 Cookie 仍生效 | 关注依赖自定义小写头名的插件 |
 | [ ] | HTTP/2 协商与代理 | 桌面，开 / 关系统代理 | 跑任一 HTTPS 插件，观察网络或服务端日志 | 支持 h2 的站点走 HTTP/2；只支持 HTTP/1.1 的站点与 HTTP 代理照常可用 | |
 | [ ] | Android 下载 | Android 真机 | 跑 anime-pictures 一页 | 不需要畅游 Cookie 也能下载 | 安卓走 rustls |
+
+## 画廊网格空白格（合成层拆分）
+
+`ImageContent` 的缩略图 / 原图层 `<img>` 带 `z-index: 1/2`，而画廊滚动容器 `.image-grid-container` 不是层叠上下文，图片的 z-index 逃到外层，绘制顺序排在底部导航等已合成层之后，无法并回滚动内容层，被 Chromium 按行拆成几十个 squashing layer（安卓实测 40 层，其中 26 个是 936×465 的整行图片层）。某层漏光栅化就整行空白，手指一点触发失效才出现；桌面 CEF 偶发。修复：滚动容器加 `isolation: isolate`（实测降到 14 层，图片不再单独成层）；同时删除 `ImageItem` 上常驻的 `will-change: transform, box-shadow` / `will-change: contents`，避免每项各自成层。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 合成层数 | Android 真机（dev 包） | CDP `LayerTree.enable` 统计画廊页图层与 compositing reasons | 不再出现 `IMG.thumbnail-layer` 的 `Overlap` 层；总层数约 14 | 修复前 40 层 |
+| [ ] | 安卓空白格 | Android 真机（dev 包） | 画廊每页 100 / 500 / 1000，快速上下滑动多屏、翻页后停在页顶，用 `adb exec-out screencap` 截图（不要连 CDP，CDP 截图 / 求值会触发重绘掩盖问题） | 不再出现整格 / 整行空白；无需点击即显示 | 修复后 adb 连续 10 帧未复现；问题偶发，需日常使用观察 |
+| [ ] | 桌面空白格 | 桌面 CEF | 每页 1000、5 列以上快速滚动，含左侧画册树的画册页 | 不再偶发空白格 | |
+| [ ] | 层叠关系 | 桌面 CEF / Android | 画廊、画册、任务详情页：页头「…」菜单、sticky 分页器、滚动按钮、右键菜单、空状态与 loading 遮罩 | 页头与分页器仍盖在图片之上；弹出菜单不被网格遮挡 | 滚动容器成为层叠上下文后，容器内 z-index 不再与外部比较 |
+| [ ] | hover / 选中动画 | 桌面 CEF | 悬停、框选、Ctrl 多选网格项 | 描边、阴影与 transform 过渡仍顺滑 | |
