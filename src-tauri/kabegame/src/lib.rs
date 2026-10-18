@@ -177,7 +177,7 @@ fn init(
         }
         crate::drag_export::authorize_drag_image(image_id)
     });
-    #[cfg(all(not(target_os = "android"), not(feature = "web")))]
+    #[cfg(not(feature = "web"))]
     if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
         eprintln!("Failed to init crawler webview handler: {}", e);
     }
@@ -406,6 +406,7 @@ pub(crate) fn configure_app(
         builder = builder.plugin(tauri_plugin_task_notification::init());
         builder = builder.plugin(tauri_plugin_android_battery_optimization::init());
         builder = builder.plugin(commands::surf_android::plugin());
+        builder = builder.plugin(commands::crawler_android::plugin());
     }
 
     #[cfg(not(target_os = "android"))]
@@ -746,43 +747,25 @@ pub(crate) fn configure_app(
             crawl_archive_tar,
             #[cfg(not(target_os = "android"))]
             crawl_archive_7z,
-            #[cfg(not(target_os = "android"))]
             crawl_get_page_label,
-            #[cfg(not(target_os = "android"))]
             crawl_get_page_state,
-            #[cfg(not(target_os = "android"))]
             crawl_get_state,
-            #[cfg(not(target_os = "android"))]
             crawl_heartbeat,
-            #[cfg(not(target_os = "android"))]
             crawl_exit,
-            #[cfg(not(target_os = "android"))]
             crawl_error,
-            #[cfg(not(target_os = "android"))]
             crawl_task_log,
-            #[cfg(not(target_os = "android"))]
             crawl_add_progress,
-            #[cfg(not(target_os = "android"))]
             crawl_create_image_metadata,
-            #[cfg(not(target_os = "android"))]
             crawl_plugin_data,
-            #[cfg(not(target_os = "android"))]
             crawl_set_plugin_data,
-            #[cfg(not(target_os = "android"))]
             crawl_download_image,
             surf_download_image,
             surf_import_media,
-            #[cfg(not(target_os = "android"))]
             crawl_to,
-            #[cfg(not(target_os = "android"))]
             crawl_back,
-            #[cfg(not(target_os = "android"))]
             crawl_update_page_state,
-            #[cfg(not(target_os = "android"))]
             crawl_update_state,
-            #[cfg(not(target_os = "android"))]
             crawl_clear_site_data,
-            #[cfg(not(target_os = "android"))]
             show_crawler_window,
             get_file_drop_supported_types,
             get_file_drop_kinds,

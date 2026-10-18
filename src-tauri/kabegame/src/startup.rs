@@ -1,9 +1,14 @@
 // 启动步骤函数
 
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use async_trait::async_trait;
 #[cfg(not(feature = "web"))]
 use kabegame_core::crawler::downloader::DownloadState;
-use kabegame_core::crawler::{task_scheduler, TaskScheduler};
+#[cfg(not(feature = "web"))]
+use kabegame_core::crawler::webview::set_webview_handler;
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+use kabegame_core::crawler::webview::{crawler_window_label, CrawlerWebViewHandler};
+use kabegame_core::crawler::TaskScheduler;
 use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 #[cfg(not(feature = "web"))]
@@ -26,10 +31,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager, Runtime};
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-use kabegame_core::crawler::webview::{
-    crawler_window_label, set_webview_handler, CrawlerWebViewHandler,
-};
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 use tauri::webview::DownloadEvent;
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
@@ -44,35 +45,11 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
         let run = TaskScheduler::global()
             .get_run(task_id)
             .ok_or_else(|| format!("Crawler task not found for task {task_id}"))?;
-        let plugin = &run.params.plugin;
-        let (crawl_js, vars) =
-            if kabegame_core::crawler::webpage::is_webview_task(&plugin.id, &run.params.config) {
-                // 网页收集 WebView：builtin 发现脚本 + 快照 + 公共编排 + WebView 入口，
-                // vars 额外带上宿主参数（冻结开关、扩展名）
-                let mut vars = serde_json::Map::from_iter(run.params.config.clone());
-                if let serde_json::Value::Object(extra) =
-                    kabegame_core::crawler::webpage::collect_params(&run)
-                {
-                    vars.extend(extra);
-                }
-                (webpage_webview_crawl_js(), serde_json::Value::Object(vars))
-            } else {
-                let js = plugin
-                    .script
-                    .js_source()
-                    .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
-                    .to_string();
-                (
-                    js,
-                    serde_json::to_value(&run.params.config).unwrap_or_default(),
-                )
-            };
-        let vars_json = serde_json::to_string(&vars)
-            .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
+        let scripts = crawler_initialization_scripts(&run)?;
         let task_id = task_id.to_string();
         let base_url = base_url.to_string();
         run_on_main_thread_sync(&self.app, move |app| {
-            create_crawler_window(app, &task_id, &base_url, &crawl_js, &vars_json)
+            create_crawler_window(app, &task_id, &base_url, &scripts)
         })
     }
 
@@ -118,7 +95,7 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
 }
 
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
-fn run_on_main_thread_sync<R, F>(app: &AppHandle<R>, f: F) -> Result<(), String>
+pub(crate) fn run_on_main_thread_sync<R, F>(app: &AppHandle<R>, f: F) -> Result<(), String>
 where
     R: Runtime,
     F: FnOnce(AppHandle<R>) -> Result<(), String> + Send + 'static,
@@ -633,7 +610,6 @@ pub fn start_download_workers() {
 
 /// 网页收集 WebView 任务注入到 bootstrap crawl_js 槽位的脚本：发现（core builtin 载荷）+
 /// HTML+CSS 快照 + 两后端公共编排 + WebView 入口（滚动 / 发现 / 冻结 / 下载 / exit）。
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 fn webpage_webview_crawl_js() -> String {
     [
         kabegame_core::plugin::webpage::PAGE_DISCOVER_JS,
@@ -647,13 +623,78 @@ fn webpage_webview_crawl_js() -> String {
     .concat()
 }
 
+/// 一个 WebView 爬虫任务要注入的初始化脚本（桌面 CEF 窗口与安卓宿主 WebView 共用）。
+///
+/// 顺序固定：i18n → media_capture → media_download → 该任务的 bootstrap（vars + crawl.js
+/// 烘焙进去的一次性脚本）。安卓调用方负责再套一层「只注入主框架」的守卫。
+#[cfg(not(feature = "web"))]
+pub(crate) fn crawler_initialization_scripts(
+    run: &Arc<kabegame_core::crawler::task_scheduler::Task>,
+) -> Result<Vec<String>, String> {
+    let plugin = &run.params.plugin;
+    let (crawl_js, vars) =
+        if kabegame_core::crawler::webpage::is_webview_task(&plugin.id, &run.params.config) {
+            // 网页收集 WebView：builtin 发现脚本 + 快照 + 公共编排 + WebView 入口，
+            // vars 额外带上宿主参数（冻结开关、扩展名）
+            let mut vars = serde_json::Map::from_iter(run.params.config.clone());
+            if let serde_json::Value::Object(extra) =
+                kabegame_core::crawler::webpage::collect_params(run)
+            {
+                vars.extend(extra);
+            }
+            (webpage_webview_crawl_js(), serde_json::Value::Object(vars))
+        } else {
+            let js = plugin
+                .script
+                .js_source()
+                .ok_or_else(|| format!("Plugin {} missing webview crawl script", plugin.id))?
+                .to_string();
+            (
+                js,
+                serde_json::to_value(&run.params.config).unwrap_or_default(),
+            )
+        };
+    let vars_json = serde_json::to_string(&vars)
+        .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
+    // bootstrap.js 是模板：把该任务的 merged_config（vars）与插件 crawl.js 烘焙进去，
+    // 得到该任务专属的一次性注入脚本（每页 document-start 自执行，无乒乓）。
+    let bootstrap = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/webview_js/bootstrap.js"
+    ))
+    .replace("__KB_VARS_JSON__", &vars_json)
+    .replace(
+        "__KB_LANG__",
+        &serde_json::to_string(&Settings::global().get_resolved_language())
+            .map_err(|error| format!("Failed to serialize crawler language: {error}"))?,
+    )
+    .replace("/*__KB_CRAWL_JS__*/", &crawl_js);
+    Ok(vec![
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/webview_js/webview_i18n.js"
+        ))
+        .to_string(),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/webview_js/media_capture.js"
+        ))
+        .to_string(),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/webview_js/media_download.js"
+        ))
+        .to_string(),
+        bootstrap,
+    ])
+}
+
 #[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn create_crawler_window<R: Runtime>(
     app_handle: AppHandle<R>,
     task_id: &str,
     base_url: &str,
-    crawl_js: &str,
-    vars_json: &str,
+    scripts: &[String],
 ) -> Result<(), String> {
     let label = crawler_window_label(task_id);
     if let Some(window) = app_handle.get_webview_window(&label) {
@@ -671,27 +712,6 @@ pub fn create_crawler_window<R: Runtime>(
     }
 
     use tauri::{WebviewUrl, WebviewWindowBuilder};
-    // 编译时嵌入 crawler initialization scripts（从 src/webview_js 目录读取）
-    let media_capture = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/webview_js/media_capture.js"
-    ));
-    let media_download = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/webview_js/media_download.js"
-    ));
-    // bootstrap.js 是模板：把该任务的 merged_config（vars）与插件 crawl.js 烘焙进去，
-    // 得到该任务专属的一次性注入脚本（每页 document-start 自执行，无乒乓）。
-    let bootstrap_tpl = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/webview_js/bootstrap.js"
-    ));
-    let lang_json = serde_json::to_string(Settings::global().get_resolved_language())
-        .map_err(|error| format!("Failed to serialize crawler language: {error}"))?;
-    let script = bootstrap_tpl
-        .replace("__KB_VARS_JSON__", vars_json)
-        .replace("__KB_LANG__", &lang_json)
-        .replace("/*__KB_CRAWL_JS__*/", crawl_js);
     let target = if base_url.trim().is_empty() {
         "about:blank"
     } else {
@@ -700,19 +720,17 @@ pub fn create_crawler_window<R: Runtime>(
     let target_url =
         url::Url::parse(target).map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
     let task_id_for_download = task_id.to_string();
-    WebviewWindowBuilder::new(&app_handle, &label, WebviewUrl::External(target_url))
-        .title(t!("window.crawlerTitle"))
-        .visible(false)
-        .skip_taskbar(true)
-        .resizable(false)
-        .inner_size(1920.0, 1080.0)
-        .initialization_script(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/webview_js/webview_i18n.js"
-        )))
-        .initialization_script(media_capture)
-        .initialization_script(media_download)
-        .initialization_script(script)
+    let mut builder =
+        WebviewWindowBuilder::new(&app_handle, &label, WebviewUrl::External(target_url))
+            .title(t!("window.crawlerTitle"))
+            .visible(false)
+            .skip_taskbar(true)
+            .resizable(false)
+            .inner_size(1920.0, 1080.0);
+    for script in scripts {
+        builder = builder.initialization_script(script);
+    }
+    builder
         .on_page_load(move |_webview, _payload| {})
         .on_download(move |webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
@@ -807,6 +825,62 @@ pub fn create_crawler_window<R: Runtime>(
 pub fn init_crawler_webview_handler<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
     let handler = Arc::new(AppCrawlerWebViewHandler { app: app_handle });
     set_webview_handler(handler)
+}
+
+/// 安卓宿主 Activity 的建窗：Activity 只当 wry 的宿主，页面随后由 `CrawlerHost` 停靠到主界面下。
+///
+/// tao 用 `getLocalClassName()` 登记 Activity 名：dev 包 applicationId = app.kabegame.dev，
+/// 类是全限定名 `app.kabegame.MainActivity`，写死 "MainActivity" 会匹配不到，故从主窗口读实际登记名。
+/// 每段初始化脚本套 `android_init_script` 守卫：只在主框架、且每个文档只执行一次。
+#[cfg(all(target_os = "android", not(feature = "web")))]
+pub(crate) fn create_crawler_activity<R: Runtime>(
+    app: AppHandle<R>,
+    label: &str,
+    base_url: &str,
+    scripts: &[String],
+    user_agent: Option<&str>,
+) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let target = if base_url.trim().is_empty() {
+        "about:blank"
+    } else {
+        base_url
+    };
+    let target_url =
+        url::Url::parse(target).map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
+    let creator_activity = app
+        .get_webview_window("main")
+        .ok_or_else(|| "主窗口不存在".to_string())?
+        .activity_name()
+        .map_err(|e| format!("读取主窗口 Activity 名失败: {e}"))?;
+    let mut builder = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(target_url))
+        .activity_name("CrawlerActivity")
+        .created_by_activity_name(creator_activity)
+        // 超过阈值（JSON 8 KiB / raw 1 KiB）的 invoke 响应与 Channel 消息要靠 fetch
+        // `<scheme>://ipc.localhost` 取。安卓默认 http，在 https 页面里属于混合内容，改用 https。
+        .use_https_scheme(true);
+    // 非 None 时是目标站畅游记录的桌面 UA（见 crawler_android::create_task_window）；
+    // Client Hints 与视口由 CrawlerActivity 按 UA 是否被改过补齐。
+    if let Some(user_agent) = user_agent {
+        builder = builder.user_agent(user_agent);
+    }
+    for (index, script) in scripts.iter().enumerate() {
+        builder = builder.initialization_script(crate::commands::surf_common::android_init_script(
+            script.clone(),
+            &format!("crawler-{index}"),
+        ));
+    }
+    builder
+        .build()
+        .map_err(|e| format!("创建 crawler 宿主 Activity 失败: {e}"))?;
+    Ok(())
+}
+
+#[cfg(all(target_os = "android", not(feature = "web")))]
+pub fn init_crawler_webview_handler<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
+    set_webview_handler(Arc::new(
+        crate::commands::crawler_android::AndroidCrawlerWebViewHandler::new(app_handle),
+    ))
 }
 
 /// 启动 TaskScheduler（启动 DownloadQueue 的 worker）

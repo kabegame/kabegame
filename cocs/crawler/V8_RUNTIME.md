@@ -14,7 +14,8 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 - `Kabegame.requireCookie(host?): boolean` 让宿主从畅游（surf）持久化记录中读取目标 host 的 Cookie，并写入当前任务的 `Cookie` 请求头，效果等价于 `setHeader("Cookie", ...)`。返回值仅表示是否注入成功，Cookie 明文不会返回给插件脚本。
 - 省略 `host` 时从插件 `baseUrl` 解析；也可传入 host 覆盖默认值。
 - Cookie 仅来自数据库持久化的 `get_surf_record_by_host` 记录。用户必须先在畅游访问并登录目标站点；无记录或记录中没有 Cookie 时返回 `false`。
-- `Kabegame.cefUserAgent(): string | null` 返回畅游（桌面 CEF）的默认 UA，由 `ops.rs` 的 `cef_user_agent()` 按 Chromium `BuildUserAgentFromOSAndProduct` 公式拼出：平台段取 Chromium 写死的 unified platform（Windows `Windows NT 10.0; Win64; x64` / macOS `Macintosh; Intel Mac OS X 10_15_7` / Linux `X11; Linux x86_64`），版本段 `Chrome/<CEF_CHROME_MAJOR>.0.0.0`；Android 返回 `null`。`CEF_CHROME_MAJOR` 写死，升级 CEF 时手动同步（落后可接受）。用途：Cloudflare `cf_clearance` 绑定签发时的 UA，只注入 Cookie 而 UA 不一致仍会 403。
+- **Android 桌面版网站的记录**：若该记录 `desktop_mode = true`，注入 Cookie 后宿主还会把任务当前的 `User-Agent` 换成同一个桌面 UA（`android_desktop_user_agent()`），让 Cookie 与签发 UA 配对。只替换「缺失或等于系统 WebView 默认 UA」的值——插件先 `setHeader("User-Agent", cefUserAgent())` 再 `requireCookie` 的写法会自动生效；插件写死的 UA 或用户显式填的 UA 不被覆盖。替换时任务日志出现 `taskLogDesktopUaInjected`。
+- `Kabegame.cefUserAgent(): string | null` 返回畅游（桌面 CEF）的默认 UA，由 `ops.rs` 的 `cef_user_agent()` 按 Chromium `BuildUserAgentFromOSAndProduct` 公式拼出：平台段取 Chromium 写死的 unified platform（Windows `Windows NT 10.0; Win64; x64` / macOS `Macintosh; Intel Mac OS X 10_15_7` / Linux `X11; Linux x86_64`），版本段 `Chrome/<CEF_CHROME_MAJOR>.0.0.0`；Android 返回宿主登记的系统 WebView 默认 UA（未登记时为 `null`），桌面版网站模式不改变它的返回值——桌面 UA 由 `requireCookie` 在确认记录模式后替换。`CEF_CHROME_MAJOR` 写死，升级 CEF 时手动同步（落后可接受）。用途：Cloudflare `cf_clearance` 绑定签发时的 UA，只注入 Cookie 而 UA 不一致仍会 403。
 - `auth.needCookie` 标签负责提示插件需要 Cookie，并引导用户去畅游登录；插件随后调用 `requireCookie()` 取用，形成“标签提示 → 畅游登录 → 插件注入”的闭环。
 
 ### 应用界面语言

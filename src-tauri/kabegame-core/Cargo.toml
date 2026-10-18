@@ -153,3 +153,5 @@ plugin-runtime = [
 
 [dev-dependencies]
 tempfile = "3"
+# `#[tokio::test(start_paused = true)]` 需要 test-util（workspace 的 "full" 不含它）。
+tokio = { workspace = true, features = ["test-util"] }

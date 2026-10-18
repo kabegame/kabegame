@@ -1,4 +1,4 @@
-# Android 畅游（Phase 1 + Phase 2）
+# Android 畅游（Phase 1 + Phase 2 + Phase 3）
 
 Android 畅游用于打开外部站点、完成登录，并把 Cookie 与签发 Cookie 时的 User-Agent 保存到
 `surf_records`。V8 插件调用 `Kabegame.requireCookie()` 后会同时注入两者，避免
@@ -6,6 +6,11 @@ Android 畅游用于打开外部站点、完成登录，并把 Cookie 与签发 
 
 Phase 2 之后内容页就是 Tauri webview，因此一键下载、页面自发下载、`blob:` / `data:` / MSE
 捕获都与桌面共用同一套注入脚本与命令；导航栏改为 Kotlin 原生控件。
+
+Phase 3 补齐三件事：工具栏后退 / 前进按历史置灰、地址栏下方显示真实加载进度、脚本
+`window.open`（Google Identity Services 等 OAuth）在 Activity 内以覆盖层承载并保留真实
+`WindowProxy`。另外按站点记住「桌面版网站」：内容页、弹窗、插件 `requireCookie` 与畅游
+下载补头共用同一个桌面 UA，Cookie 与签发 UA 始终配对；页面自发的 apk 安装包下载提前拦截。
 
 ## Activity 与 WebView 边界
 
@@ -16,7 +21,11 @@ Phase 2 之后内容页就是 Tauri webview，因此一键下载、页面自发�
   它拿到与桌面同一份 `initialization_script`、`on_page_load`，并用真实 Tauri `invoke` 与
   `Channel` 和后端通信，权限由 capability `surf-capability` 管。
 - 顶部 48dp 是 `SurfToolbar`：后退、前进、刷新、地址栏、一键下载（运行中同一格换成转圈，
-  点转圈即取消）、在浏览器打开、关闭。全部直接操作 `RustWebView`，不经 Rust 往返。
+  点转圈即取消）、更多（⋮）、关闭。全部直接操作 `RustWebView`，不经 Rust 往返。
+  后退 / 前进按内容页历史置灰（不可用时 `isEnabled = false`、`alpha = 0.38`，不进入按压态）；
+  地址栏下方是 2dp 确定进度条，由 `WebChromeClient.onProgressChanged` 驱动，100 时隐藏。
+  「在浏览器打开」与「桌面版网站」收在「更多」菜单里（与 Chrome Android 同位置），地址栏因此更宽。
+- 颜色统一由 `SurfTheme` 提供，工具栏与弹窗标题栏共用同一套深浅色。
 
 `created_by_activity_name` 必须传主窗口 `activity_name()` 的返回值，不能写死 `"MainActivity"`：
 tao 用 `getLocalClassName()` 登记 Activity 名，类名不以 applicationId 开头时返回全限定名。dev 包
@@ -42,12 +51,22 @@ MainPipe 等主线程会死锁。设备不支持 `WEB_MESSAGE_LISTENER` 时**关
 下载），不回退到所有框架可见的通道；`attach` 把 `ipcAvailable` 回传给 Rust，一键下载按钮据此
 提示 `surf.collect.ipcUnavailable`。
 
-## 注入脚本顶层守卫
+## 注入脚本守卫（主框架 + 每文档一次）
 
-桌面 Tauri 的 `initialization_script` 只进主框架；wry 安卓用
-`addDocumentStartJavaScript(…, setOf("*"))`，脚本会进 iframe。`surf_common::surf_initialization_scripts()`
-在安卓上给每段脚本包一层 `if (window.top !== window) return;`，与桌面行为一致；安卓没有导航栏，
-`surf_url_report.js` 不注入（地址由原生工具栏直接读 `doUpdateVisitedHistory` / `onPageStarted`）。
+安卓上每段初始化脚本都经 `surf_common::android_init_script(script, key)` 包两道守卫，畅游
+（`surf_initialization_scripts`，key `surf-<序号>`）与 WebView 爬虫宿主（`create_crawler_activity`，
+key `crawler-<序号>`）共用：
+
+1. **只在主框架**：桌面 Tauri 的 `initialization_script` 只进主框架；wry 安卓用
+   `addDocumentStartJavaScript(…, setOf("*"))`，脚本会进 iframe。
+2. **每个文档只执行一次**：wry 生成的 `RustWebViewClient.onPageStarted` 对没经它拦截的请求（外部网页都是）
+   会再 `evaluateJavascript` 一遍全部初始化脚本，不看 document-start 注入是否已生效，于是同一文档里每段
+   脚本跑两次。守卫用 window 上不可枚举、不可改的 `__kb_init_<key>__` 标记挡掉第二次。没有它时，爬虫
+   bootstrap 会在同一页把插件并行跑两份（日志成对出现、作品重复处理）。`RustWebViewClient.kt` 每次构建都
+   重新生成，不能在那里改。
+
+Tauri 自己的初始化脚本不经这层守卫，第二次执行时会在控制台报 `Cannot redefine property`，无害。
+安卓没有导航栏，`surf_url_report.js` 不注入（地址由原生工具栏直接读 `doUpdateVisitedHistory` / `onPageStarted`）。
 
 ## 会合与单会话
 
@@ -69,17 +88,24 @@ label 与 `ipc_available`。新会话会先通过 Kotlin 插件关闭旧 Activit
 Vue 继续使用桌面命令名：`surf_start_session`、`surf_close_session`、`surf_get_session_status`。
 导航（后退 / 前进 / 刷新 / 地址跳转）不再有 Rust 命令，由原生工具栏直接操作 WebView。
 
-Kotlin 通过 Rust 创建的 `tauri::ipc::Channel` 上报四类消息：
+Kotlin 通过 Rust 创建的 `tauri::ipc::Channel` 上报五类消息：
 
 - `pageFinished { url, cookie }`：刷新记录的 Cookie；只有值实际变化时才写库
-  （`update_surf_record_cookie_if_changed`）并广播 `surf-records-change`。
+  （`update_surf_record_cookie_if_changed`）并广播 `surf-records-change`。弹窗可见时关闭弹窗也会
+  补发一次，OAuth 登录后立即落库。
 - `closed { cookie }`：Activity 销毁前最后保存一次，随后清除 `SESSION`、会话 VFS 目录
   （`surf_session::drop_session`）与一键下载槽位（`surf_collect::drop_slot`），并发
   `surf-session-changed { active: false }`。
 - `collectToggle`：原生工具栏的一键下载按钮，Rust 调 `surf_collect::toggle(label)`。
 - `pageDownload { url, suggestedName, mimeType }`：`setDownloadListener` 拦到的页面自发下载。
+- `desktopModeChanged { desktop }`：「更多」菜单的「桌面版网站」开关。Kotlin 是显示状态权威，
+  已经立即应用并刷新；Rust 核对当前会话后更新 `SESSION.desktop_mode` 与 `surf_records.desktop_mode`
+  （只在值变化时写库并发 `SurfRecordChanged`）。
 
-Rust → Kotlin 侧：`attach`、`close`、`setCollectRunning`、`getDefaultUserAgent`。
+导航状态、加载进度与弹窗生命周期都只在 Kotlin 内处理，不经 Rust 往返。
+
+Rust → Kotlin 侧：`attach`（含工具栏文案、`desktopUserAgent`、`desktopMode`）、`close`、
+`setCollectRunning`、`getDefaultUserAgent`。
 
 ## 下载：脚本下载与页面下载
 
@@ -89,11 +115,14 @@ Rust → Kotlin 侧：`attach`、`close`、`setCollectRunning`、`getDefaultUser
 - **脚本发起**（一键下载、长按菜单、`surf_bootstrap.js` 的 `triggerDownload`）照旧
   `invoke("surf_download_image")`。
 - **页面自发**（WebView 判定为附件的导航）由 `setDownloadListener` 拦截，交给 Rust。
-  Rust 只提前拒绝**明确的压缩包**（`surf_common::is_archive_download`：扩展名或 MIME 是
-  zip / rar / 7z / tar / gz 等），toast `surf.download.unsupportedType`、不发起下载；压缩包不解压，
-  解压属于各爬虫插件自己的事（`Kabegame.archive`），畅游只收媒体。其余一律走同一个入队函数，
-  包括文件名与 MIME 都认不出的（`application/octet-stream` + URL 无扩展名很常见，`guessFileName`
-  会给出 `xxx.bin`）：由下载后处理按字节判定，真媒体入库，非媒体在那里报「格式不受支持」。
+  Rust 先拒绝**安卓应用安装包**（`surf_common::is_app_package_download`：扩展名 apk / apks /
+  xapk / aab 或 MIME `application/vnd.android.package-archive`），toast
+  `surf.download.appPackage` 并提示可在菜单切到桌面版网站；再拒绝**明确的压缩包**
+  （`surf_common::is_archive_download`：扩展名或 MIME 是 zip / rar / 7z / tar / gz 等），
+  toast `surf.download.unsupportedType`、不发起下载；压缩包不解压，解压属于各爬虫插件自己的事
+  （`Kabegame.archive`），畅游只收媒体。其余一律走同一个入队函数，包括文件名与 MIME 都认不出的
+  （`application/octet-stream` + URL 无扩展名很常见，`guessFileName` 会给出 `xxx.bin`）：
+  由下载后处理按字节判定，真媒体入库，非媒体在那里报「格式不受支持」。
 
 入队前安卓会补三个头，平台补的头覆盖页面给的：
 
@@ -101,7 +130,9 @@ Rust → Kotlin 侧：`attach`、`close`、`setCollectRunning`、`getDefaultUser
   Rust 入口 `surf_android::cookie_header_for_url`。**不要用 wry 的 `cookies_for_url`**：wry 生成的
   `RustWebView.getCookies` 把返回值声明为非空 `String`，没有 Cookie 的 URL（媒体 CDN 如 `i.pximg.net`
   很常见）返回 null 时会在主线程抛 NPE，应用直接崩溃。
-- `User-Agent`：Phase 1 登记的系统 WebView UA（`android_webview_user_agent()`）。
+- `User-Agent`：按当前会话模式取——移动版为系统 WebView UA（`android_webview_user_agent()`），
+  桌面版为 `android_desktop_user_agent()`；派生失败时回落系统 UA。爬虫宿主取建窗时选定的 UA
+  （`crawler_android::desktop_user_agent_for_label`，见下文「WebView 爬虫」）。
 - `Referer`：`webview.url()`。
 
 `data:` / `blob:` 的页面下载，Rust 在页面外取不到字节，转回页面里 `media_download.js` 已有的
@@ -133,26 +164,94 @@ invoke 的 body 一律经 `JSON.stringify` 走 postMessage，到 Rust 是 `Invok
 覆盖已经访问过的 `Path=/xxx` Cookie；从未访问过的其它 path-only Cookie 无法枚举，这是 Android
 `CookieManager` API 的固有限制。第三方 Cookie 已开启，以兼容常见 SSO。
 
-UA 不入库。内容 WebView 不修改 `userAgentString`，因此 Cookie（如 Cloudflare `cf_clearance`）的签发 UA
-就是系统 WebView 默认 UA，同进程内所有 WebView 一致。`SurfPlugin` 注册时 Rust 异步调用 Kotlin
-`getDefaultUserAgent`（`WebSettings.getDefaultUserAgent`），经
-`kabegame_core::plugin::v8::set_android_webview_user_agent` 登记进 `OnceLock`，安卓上的
-`Kabegame.cefUserAgent()` 与畅游下载补的 `User-Agent` 都返回它。
+UA 不入库，`surf_records` 只存每站点的 `desktop_mode` 布尔值（存模式不存 UA 串：WebView 升级后
+不会留下旧 Chrome 版本）。移动模式内容页不改 `userAgentString`，Cookie 的签发 UA 就是系统 WebView
+默认 UA；桌面模式把内容页 UA 换成与当前 WebView 同 Chrome 大版本的 Linux 桌面 UA。桌面 UA 只有
+一个派生入口 `kabegame_core::plugin::v8::android_desktop_user_agent()`（由已登记的系统默认 UA 取
+`Chrome/<major>` 拼出；默认 UA 未登记或解析不出版本时返回 `None`），内容页、弹窗、插件与下载补头
+都认它：
+
+- **内容页**：`surf_start_session` 发现记录是桌面模式时用 `builder.user_agent(desktop)`，首个请求
+  就是桌面 UA（强制跳应用商店 / 下发 apk 多发生在首个请求）。切换时 Kotlin 立即改
+  `WebSettings.userAgentString`、UA Client Hints（`mobile=false`、`platform=Linux`、`model=""`）、
+  宽视口与缩放，然后**重新请求跳转前的原始地址**（`WebHistoryItem.originalUrl`，同 Chrome「桌面版网站」的
+  ORIGINAL_REQUEST_URL 重载），再发 `desktopModeChanged` 落库。不能用 `reload()`：站点按 UA 做服务端跳转时
+  （`weibo.com` → 302 → `m.weibo.cn`），`reload()` 只重载跳转后的手机版地址，UA 已换成桌面也回不到桌面版。
+  原始地址与当前地址相同（页面靠 JS 跳转）时才退回 `reload()`，这种站点要从首页重新进入。
+- **弹窗**：`SurfPopup` 构造时应用内容页同一份 `SurfUaMode`，弹窗里签发的 Cookie 也配对。
+- **Client Hints 的默认值**由 `SurfUaMode` 以进程级缓存捕获（`SurfActivity.setContentView` 在首次
+  apply 前显式捕获）。不要按实例缓存：`bind` 会换一个新的 `SurfUaMode`，而重建后的内容页可能已经
+  是桌面元数据，切回移动版时会把它误当默认值。
+- **插件 `requireCookie(host)`**：记录是桌面模式时，在注入 Cookie 之后把任务的 `User-Agent`
+  换成桌面 UA，但只替换「缺失或等于系统默认 UA」的值。现有插件都是先
+  `setHeader("User-Agent", cefUserAgent())` 再 `requireCookie`，因此无需改插件就能配对；插件写死的
+  UA（xhs、kemono、bilibili）和用户在任务 Header 里显式填的 UA 不被覆盖。命中时任务日志出现
+  `taskLogDesktopUaInjected`。
+- **畅游下载补头**：当前会话是桌面模式就补桌面 UA（见「下载」一节）。
+- **WebView 爬虫（`CrawlerActivity`）**：与畅游共用 `CookieManager`，必须同样配对。
+  `crawler_android::create_task_window` 用建窗地址（`start_url`，网页收集即来源页）的 host 查畅游记录
+  （`surf_common::android_desktop_user_agent_for_url`，host 精确匹配后再试 `www.` 前缀的有无），是桌面模式
+  就经 `builder.user_agent` 建窗，并按 label 登记，页面自发下载的补头读这份登记，任务窗口销毁时清掉；
+  `CrawlerActivity.setContentView` 发现 UA 已被改过，就用 `SurfUaMode` 在首个请求前补齐 Client Hints 与视口。
+  不能事后按任务的插件 `base_url` 重新推导：两者不一定相同。任务运行中切换畅游模式不影响已建的爬虫窗口。
+
+`SurfPlugin` 注册时 Rust 异步调用 Kotlin `getDefaultUserAgent`（`WebSettings.getDefaultUserAgent`），
+经 `kabegame_core::plugin::v8::set_android_webview_user_agent` 登记进 `OnceLock`，安卓上的
+`Kabegame.cefUserAgent()`、移动模式的下载补头与桌面 UA 的派生都以它为基准。早于登记完成打开畅游时
+`desktopUserAgent` 为 `null`，「桌面版网站」菜单项隐藏，下次打开恢复。
 
 WebView 自动更新会改变 UA 里的 Chrome 版本（并重启进程），此前签发的 UA 绑定 Cookie 可能失效，需要
-重新进畅游过一次验证；这与桌面升级 CEF 后的情况相同。
+重新进畅游过一次验证；这与桌面升级 CEF 后的情况相同。切换桌面 / 移动模式后，旧 UA 下签发的
+`cf_clearance` 也会失效一次，站点会重新校验；记录的模式与 Cookie 在下一次 `pageFinished` 同时更新。
 
-## 导航与限制
+## 导航、新窗口与限制
 
 http/https 始终留在内容 WebView。`intent:` 仅接受 http/https 的 `browser_fallback_url`，其它 scheme
-会被拦截；`on_navigation` 与 Kotlin 包装 client 同口径。`setSupportMultipleWindows` 走系统默认
-（false），保持单页语义，但依赖真实 WindowProxy 的 OAuth 弹窗可能失败。内容 WebView 只在 debug
-构建启用 WebView debugging，可用 `chrome://inspect` 查看。
+会被拦截；`on_navigation` 与 Kotlin 包装 client 同口径。内容 WebView 只在 debug 构建启用 WebView
+debugging，可用 `chrome://inspect` 查看。
+
+### 多窗口与 OAuth 弹窗
+
+wry 安卓没有 `on_new_window`，也不动 `setSupportMultipleWindows`。Phase 3 在
+`SurfActivity.setContentView` 里开启多窗口，并给内容页装转发型 `SurfChromeClient`：wry 的
+`RustWebChromeClient` 是 Kotlin `final` 类、不能继承，因此逐方法转发它的 override（全屏视频、
+权限、文件选择、JS 对话框、地理位置、控制台、标题），只额外实现 `onProgressChanged` 与
+`onCreateWindow`。
+
+新窗口请求按来源分流：
+
+- **用户点链接**（命中测试是锚点、`isUserGesture`、href 为 http/https）：普通「新标签页打开」，
+  保持单页语义，把目标 URL 交回内容页加载。pixiv 等站点的作品链接大量使用 `target=_blank`，
+  若一律弹覆盖层，一键下载和长按菜单都会失效。
+- **其余**（脚本 `window.open`，包括 GIS 按钮这种位于跨域 iframe 里的点击）：新建一个普通
+  `android.webkit.WebView` 作为 transport 目标，放在内容区之上的覆盖层 `SurfPopup` 里，显示来源
+  host 与关闭按钮。弹窗是普通 WebView（无 Tauri IPC、无注入脚本、无下载监听），与内容页同进程、
+  共享 `CookieManager`，UA / Client Hints 跟随内容页当前模式；页面 `window.close()` 经
+  `onCloseWindow` 关闭，关闭时补发一次 `pageFinished` 立即保存 Cookie，不等用户再导航。
+
+`onCreateWindow` 本身不给目标 URL：链接型先建一个不显示的 transport 目标，拿到首个 http(s)
+地址后再 `stopLoading`、销毁探针、把 URL 交回内容页。锚点里包图片时命中测试的 `extra` 是图片
+地址而非 href，同样靠探针取真实目标；探针 2 秒内没拿到 http(s) 地址就静默销毁，不会留下隐藏
+WebView。
+
+- 同时最多一个弹窗；弹窗内 `setSupportMultipleWindows(false)`，弹窗里再 `window.open` 就在弹窗
+  自身打开。
+- 工具栏始终作用于内容页；弹窗有自己的标题栏。系统返回键优先作用于弹窗：弹窗能后退就后退，
+  否则关闭弹窗；没有弹窗时先让内容页后退，退到头关闭 Activity。
+- 关闭畅游（含配置变化重建）时先关弹窗再释放内容 WebView，弹窗不跨实例保留。
 
 已知限制 / 待复查：
 
-- wry 安卓没有 `on_download`、`on_new_window`；下载与弹窗分别由 `setDownloadListener` 与单页
-  语义兜底。
+- wry 安卓没有 `on_download`、`on_new_window`；下载与弹窗分别由 `setDownloadListener` 与
+  包装后的 `WebChromeClient` 兜底。**升级 wry / Tauri 时 diff `generated/RustWebChromeClient.kt`
+  的 `override fun` 列表**：新增 override 若没在 `SurfChromeClient` 转发，会静默丢掉对应功能。
+- 探针的首个导航在部分 WebView 版本上可能先报 `about:blank`，或只走 `shouldOverrideUrlLoading`
+  不走 `onPageStarted`；两处都接了，且跳过 `about:blank`。
+- 锚点里包着脚本按钮（`href` 为 http(s) 但 `onclick` 里 `window.open`）会被当成链接交回内容页，
+  丢掉 opener。实测再按 host 白名单强制走覆盖层。
+- 部分 OAuth 提供方给弹窗设置 `Cross-Origin-Opener-Policy`，会切断 opener；此时站点通常自带
+  重定向回退，与桌面浏览器行为一致，不另做处理。
+- 弹窗里的附件下载与一键下载不处理：弹窗没有注入脚本，也不装下载监听。要下载媒体请回内容页。
 - 移动端 `Channel::new_with_id` 会把 Channel 登记进 `CHANNELS` 表（供原生插件按 id 推消息），
   表只增不减。上游连每次 IPC 调用的一次性响应 Channel 也登记，实测每次 invoke +1 且捕获 `Webview`；
   `third-patches/tauri/0011` 让响应 Channel 不再登记。Rust 主动创建、交给 Kotlin 的 Channel（如本会话的
@@ -161,13 +260,25 @@ http/https 始终留在内容 WebView。`intent:` 仅接受 http/https 的 `brow
   `removeWebMessageListener`，再 `stopLoading`、从布局摘下、`destroy()`。Chromium 以 JNI 全局引用持有
   WebMessageListener，监听闭包捕获了 webview 进而是 Activity，而 wry 的 `onWebviewDestroy` 只清 Rust
   侧回调表、从不调 `WebView.destroy()`；不释放时每关一次畅游，整个页面（渲染、定时器、网络）都留在进程里。
-  配置变更（`isChangingConfigurations`）时不释放，wry 会保留回调表等 Activity 重建。
+  **配置变化重建时同样要释放**：wry 只保留按 webview id 登记的回调表与创建参数，在新 Activity 里**新建**
+  webview（同一 id、同一初始 URL），旧 Java 对象没人再用；不释放的话旧页面继续运行，并以同一 id 向 Rust
+  发 IPC，响应却按 id 回到新页面。`MainActivity.onDestroy` 对主 webview 做同样处理。`configChanges`
+  覆盖不到的变化（字体大小、显示大小、安装后首次启动的资源更新、`recreate()`）都会走这条路。
+- 重建后的 `SurfActivity` 拿不到 binding（`attach` 只发生一次）：`onDestroy` 在 `isChangingConfigurations`
+  时把 binding 交给 `SurfRegistry.carried`，同 label 的新实例在 `onActivityReady` 接走，工具栏文案、
+  事件 Channel 与桌面模式开关照常可用；页面按初始 URL 重新加载，一键下载运行态不保留。
+- **应用内所有 WebView 共用一个渲染进程**（主界面、畅游内容页、畅游弹窗、爬虫页）。渲染进程退出（崩溃或被系统
+  回收）时，只要有一个 WebView 没在 `onRenderProcessGone` 返回 `true`，Chromium 就杀掉整个应用进程。
+  `SurfActivity` 收到后关闭畅游；`MainActivity` 摘下死掉的主 webview、post `recreate()`，由 wry 重建
+  主界面（前端从头加载，路由状态丢失）。外部页面的长任务与内存也会和主界面抢同一个渲染进程。
 - tao 的 `MonitorHandle::size()` 在事件循环线程（永不返回 Java）上调 `getCurrentWindowMetrics`，
   JNI 局部引用不会释放，`WindowMetrics` 经 `ContextImpl` 钉住已销毁的 SurfActivity。WebView 已
   `destroy()`，残留的只是 Java 对象：实测 5 次开关残留 2 个 Activity，约 1 MB。修复需要给 tao 打补丁。
-- Tauri 初始化脚本在部分页面上会执行两次（wry 的 `onPageStarted` 在请求未被拦截时再
-  `evaluateJavascript` 一遍，同时 `addDocumentStartJavaScript` 也已注入），控制台出现
-  `Cannot redefine property` 报错；注入脚本靠顶层守卫保证只生效一次。
+- 初始化脚本在外部网页上会被注入两次（见「注入脚本守卫」）。我们的脚本由 `android_init_script` 保证
+  每文档只执行一次；Tauri 自己的脚本第二次执行时在控制台报 `Cannot redefine property`，无害。
+- 安卓 `tauri.conf.json` 的 capability 清单必须含 `crawler-capability`（模板
+  `tauri.conf.json.handlebars` 的 `isAndroid` 分支）。漏掉时爬虫页的 `crawl_*` 全被 ACL 拒绝（`Command
+  crawl_heartbeat not allowed by ACL`），插件一行日志都发不出，120 秒后任务以「WebView 窗口无响应」失败。
 - 页面自发的 `blob:` / `data:` 下载（`<a download href="blob:…">`）是否触发 `onDownloadStart`
   尚未在干净进程验证。用 CDP（`kabegame-chromium`）连着测下载时，playwright 下发的
   `Browser.setDownloadBehavior` 会吞掉 WebView 的下载回调，连 http 附件都不触发，
@@ -185,7 +296,13 @@ http/https 始终留在内容 WebView。`intent:` 仅接受 http/https 的 `brow
 - `src-tauri/kabegame/src/commands/surf_common.rs`（label 解析、注入脚本、页内 toast）
 - `src-tauri/kabegame/src/commands/page_fs.rs`（`crawl_fs_*` / `crawl_ffmpeg_*`，全平台）
 - `src-tauri/kabegame/src/commands/surf_receive.rs`（下载入队与安卓补头）
-- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfActivity.kt`
-- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfToolbar.kt`
+- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfActivity.kt`（内容区、多窗口分流、桌面模式）
+- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfToolbar.kt`（导航状态、进度、更多菜单）
+- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfChromeClient.kt`（转发型 `WebChromeClient`）
+- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfPopup.kt`（OAuth 弹窗 / 链接探针）
+- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfUaMode.kt`（桌面 / 移动 UA、Client Hints、视口）
+- `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfTheme.kt`（工具栏与弹窗共用配色）
 - `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfPlugin.kt`
+- `src-tauri/kabegame-core/src/plugin/v8/ops.rs`（`android_desktop_user_agent`、`requireCookie` 的 UA 替换）
+- `src-tauri/kabegame-core/src/storage/migrations/v042_surf_record_desktop_mode.rs`
 - `apps/kabegame/src/surf-navbar.ts`（仅桌面）

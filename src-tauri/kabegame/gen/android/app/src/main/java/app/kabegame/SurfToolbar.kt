@@ -4,10 +4,7 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
 import android.content.res.ColorStateList
-import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.InsetDrawable
-import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.text.InputType
 import android.view.Gravity
@@ -18,14 +15,18 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ProgressBar
-import androidx.annotation.DrawableRes
 
 /**
- * 畅游原生工具栏：后退 / 前进 / 刷新 / 地址栏 / 一键下载 / 在浏览器打开 / 关闭。
+ * 畅游原生工具栏：后退 / 前进 / 刷新 / 地址栏 / 一键下载 / 更多 / 关闭。
  *
  * 全部操作直接落在 `RustWebView` 上，不经 Rust 往返；只有一键下载按钮发给 Rust
  * （`collectToggle`），运行态由 Rust 经 `SurfPlugin.setCollectRunning` 回推。
+ *
+ * 「在浏览器打开」与「桌面版网站」收进「更多」菜单：工具栏已有 6 个图标按钮，
+ * 地址栏需要尽量宽；桌面版网站的勾选状态由本类维护（Kotlin 是显示状态权威，
+ * 记录是持久化权威）。
  */
 class SurfToolbar(context: Context) : LinearLayout(context) {
   var onBack: (() -> Unit)? = null
@@ -34,25 +35,22 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
   var onNavigate: ((String) -> Unit)? = null
   var onCollect: (() -> Unit)? = null
   var onOpenInBrowser: ((String) -> Unit)? = null
+  var onToggleDesktop: ((Boolean) -> Unit)? = null
   var onClose: (() -> Unit)? = null
 
-  private val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-    Configuration.UI_MODE_NIGHT_YES
-  private val fgColor = if (night) 0xFFF5F5F7.toInt() else 0xFF1D1D1F.toInt()
-  private val bgColor = if (night) 0xFF1D1D1F.toInt() else 0xFFF5F5F7.toInt()
-  private val borderColor = if (night) 0xFF3A3A3C.toInt() else 0xFFD2D2D7.toInt()
-  private val inputColor = if (night) 0x14FFFFFF else 0x0F000000
-  // 桌面 hover 底色，安卓没有 hover，用作按压 ripple 颜色。
-  private val pressedColor = if (night) 0xFF3A3A3C.toInt() else 0xFFE5E5EA.toInt()
-  private val invalidColor = if (night) 0xFFFF6B5F.toInt() else 0xFFD92D20.toInt()
-  private val accent = 0xFF3B82F6.toInt()
+  private val theme = SurfTheme(context)
+  private val fgColor = theme.fg
+  private val bgColor = theme.bg
+  private val borderColor = theme.border
+  private val inputColor = theme.input
+  private val accent = theme.accent
 
   // 图标与桌面 surf-navbar.ts 是同一套 Feather SVG（res/drawable/ic_surf_*.xml）。
-  private val back = iconButton(R.drawable.ic_surf_back)
-  private val forward = iconButton(R.drawable.ic_surf_forward)
-  private val reload = iconButton(R.drawable.ic_surf_reload)
+  private val back = surfIconButton(context, theme, R.drawable.ic_surf_back)
+  private val forward = surfIconButton(context, theme, R.drawable.ic_surf_forward)
+  private val reload = surfIconButton(context, theme, R.drawable.ic_surf_reload)
   private val address = createAddress()
-  private val collect = iconButton(R.drawable.ic_surf_collect)
+  private val collect = surfIconButton(context, theme, R.drawable.ic_surf_collect)
   // 运行中换成弧线图标并旋转，对应桌面 `surf-navbar-spin 0.8s linear infinite`。
   private val collectSpin = ObjectAnimator.ofFloat(collect, View.ROTATION, 0f, 360f).apply {
     duration = 800
@@ -60,16 +58,27 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     repeatCount = ValueAnimator.INFINITE
   }
   private var collectRunning = false
-  private val openInBrowser = iconButton(R.drawable.ic_surf_open_in_browser)
-  private val close = iconButton(R.drawable.ic_surf_close)
+  private val more = surfIconButton(context, theme, R.drawable.ic_surf_more)
+  private val close = surfIconButton(context, theme, R.drawable.ic_surf_close)
   private val loadingBar = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
-    isIndeterminate = true
+    isIndeterminate = false
+    max = 100
     visibility = View.GONE
     progressTintList = ColorStateList.valueOf(accent)
+    progressBackgroundTintList = ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
     minimumHeight = dp(2)
   }
 
   private var currentUrl = ""
+  private var openLabel = ""
+  private var desktopLabel = ""
+  private var desktopMode = false
+  private var desktopAvailable = false
+
+  private companion object {
+    const val MENU_OPEN_IN_BROWSER = 1
+    const val MENU_DESKTOP = 2
+  }
 
   init {
     orientation = VERTICAL
@@ -85,7 +94,7 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
       addView(reload, LayoutParams(dp(32), dp(44)))
       addView(address, LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4); marginEnd = dp(4) })
       addView(collect, LayoutParams(dp(32), dp(44)))
-      addView(openInBrowser, LayoutParams(dp(32), dp(44)))
+      addView(more, LayoutParams(dp(32), dp(44)))
       addView(close, LayoutParams(dp(32), dp(44)))
     }
     // 高度必须包裹内容：整条工具栏是 LinearLayout 的子项（固定 48dp），进度条不能挤掉内容。
@@ -101,7 +110,7 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     reload.setOnClickListener { onReload?.invoke() }
     // 空闲=开始，运行中=取消；运行态只由 Rust 回推。
     collect.setOnClickListener { onCollect?.invoke() }
-    openInBrowser.setOnClickListener { onOpenInBrowser?.invoke(currentUrl) }
+    more.setOnClickListener { showMoreMenu(it) }
     close.setOnClickListener { onClose?.invoke() }
     address.setOnEditorActionListener { _, actionId, _ ->
       if (actionId != EditorInfo.IME_ACTION_GO) return@setOnEditorActionListener false
@@ -135,7 +144,9 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     address.hint = texts.address
     collect.contentDescription = texts.collect
     collectLabel = texts.collect
-    openInBrowser.contentDescription = texts.openInBrowser
+    more.contentDescription = texts.more
+    openLabel = texts.openInBrowser
+    desktopLabel = texts.desktopSite
     close.contentDescription = texts.close
     collectCancellation = texts.cancel
   }
@@ -158,8 +169,56 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     }
   }
 
-  fun setLoading(loading: Boolean) {
-    loadingBar.visibility = if (loading) View.VISIBLE else View.GONE
+  /** 按内容页历史置灰后退 / 前进。禁用的 View 不进入 pressed 态，ripple 与点击都不触发。 */
+  fun setNavigationState(canGoBack: Boolean, canGoForward: Boolean) {
+    setButtonEnabled(back, canGoBack)
+    setButtonEnabled(forward, canGoForward)
+  }
+
+  /** 0–99 显示确定进度，100 表示加载完成并隐藏。进度回退（新导航打断旧导航）不做动画。 */
+  fun setProgress(progress: Int) {
+    val value = progress.coerceIn(0, 100)
+    if (value >= 100) {
+      loadingBar.visibility = View.GONE
+      loadingBar.setProgress(0, false)
+      return
+    }
+    loadingBar.visibility = View.VISIBLE
+    loadingBar.setProgress(value, value > loadingBar.progress)
+  }
+
+  /** 只更新「更多」菜单的勾选态；实际切换由 Activity 完成。 */
+  fun setDesktopMode(enabled: Boolean) {
+    desktopMode = enabled
+  }
+
+  /** 派生不出桌面 UA（系统 WebView 默认 UA 尚未登记）时隐藏「桌面版网站」菜单项。 */
+  fun setDesktopAvailable(available: Boolean) {
+    desktopAvailable = available
+  }
+
+  private fun setButtonEnabled(button: ImageView, enabled: Boolean) {
+    button.isEnabled = enabled
+    button.alpha = if (enabled) 1f else 0.38f
+  }
+
+  private fun showMoreMenu(anchor: View) {
+    PopupMenu(context, anchor).apply {
+      menu.add(0, MENU_OPEN_IN_BROWSER, 0, openLabel)
+      if (desktopAvailable) {
+        menu.add(0, MENU_DESKTOP, 1, desktopLabel).apply {
+          isCheckable = true
+          isChecked = desktopMode
+        }
+      }
+      setOnMenuItemClickListener { item ->
+        when (item.itemId) {
+          MENU_OPEN_IN_BROWSER -> onOpenInBrowser?.invoke(currentUrl)
+          MENU_DESKTOP -> onToggleDesktop?.invoke(!desktopMode)
+        }
+        true
+      }
+    }.show()
   }
 
   fun setCollectRunning(running: Boolean) {
@@ -186,30 +245,13 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     super.onDetachedFromWindow()
   }
 
-  private fun iconButton(@DrawableRes icon: Int): ImageView = ImageView(context).apply {
-    setImageResource(icon)
-    scaleType = ImageView.ScaleType.CENTER
-    imageTintList = ColorStateList.valueOf(fgColor)
-    isClickable = true
-    isFocusable = true
-    // 桌面按钮是 32px、圆角 6px；格宽同为 32dp，高 44dp，ripple 取中间 32dp 方块。
-    val mask = InsetDrawable(
-      GradientDrawable().apply {
-        cornerRadius = dp(6).toFloat()
-        setColor(0xFFFFFFFF.toInt())
-      },
-      0, dp(6), 0, dp(6),
-    )
-    background = RippleDrawable(ColorStateList.valueOf(pressedColor), null, mask)
-  }
-
   private fun createAddress(): EditText = EditText(context).apply {
     setSingleLine(true)
     inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
     imeOptions = EditorInfo.IME_ACTION_GO
     setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
     setTextColor(fgColor)
-    setHintTextColor(if (night) 0x99FFFFFF.toInt() else 0x99000000.toInt())
+    setHintTextColor(if (theme.night) 0x99FFFFFF.toInt() else 0x99000000.toInt())
     setPadding(dp(10), 0, dp(10), 0)
     background = GradientDrawable().apply {
       cornerRadius = dp(8).toFloat()
@@ -223,7 +265,7 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
   }
 
   private fun markInvalid() {
-    setAddressStroke(invalidColor)
+    setAddressStroke(theme.invalid)
     postDelayed({
       setAddressStroke(if (address.hasFocus()) accent else borderColor)
     }, 900)
@@ -242,5 +284,5 @@ class SurfToolbar(context: Context) : LinearLayout(context) {
     return withScheme
   }
 
-  private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+  private fun dp(value: Int): Int = surfDp(context, value)
 }

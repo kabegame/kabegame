@@ -520,6 +520,73 @@ pub fn set_android_webview_user_agent(user_agent: &str) {
     }
 }
 
+/// 安卓畅游「桌面版网站」用的 UA：与当前系统 WebView 同 Chrome 大版本的 Linux 桌面 UA，
+/// 与 Chrome Android「桌面版网站」同一套写法。
+///
+/// 内容页建窗、弹窗、插件 `requireCookie`、畅游下载补头都只认这一个实现；存的是记录上的
+/// 模式布尔值，UA 每次由当前系统默认 UA 派生，WebView 升级后不会留下旧 Chrome 版本。
+/// 默认 UA 未登记或解析不出版本时返回 `None`（调用方据此不切换）。
+#[cfg(target_os = "android")]
+pub fn android_desktop_user_agent() -> Option<String> {
+    let default = ANDROID_WEBVIEW_USER_AGENT.get()?;
+    let major = desktop_chrome_major(default)?;
+    Some(format!(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+         Chrome/{major}.0.0.0 Safari/537.36"
+    ))
+}
+
+/// `…Version/4.0 Chrome/155.0.8059.43 Mobile Safari/537.36` → `155`。
+/// 纯函数，桌面也编译以便单测。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn desktop_chrome_major(user_agent: &str) -> Option<u32> {
+    let rest = user_agent.split("Chrome/").nth(1)?;
+    rest.split('.').next()?.parse().ok()
+}
+
+/// 桌面模式记录：把任务当前的 `User-Agent` 换成桌面 UA。
+///
+/// 只替换「缺失或等于系统 WebView 默认 UA」的值。现有插件都是先
+/// `setHeader("User-Agent", cefUserAgent())` 再 `requireCookie`，因此无需改插件就能配对；
+/// 插件写死的 UA（xhs、kemono、bilibili）和用户在任务 Header 里显式填的 UA 不被覆盖。
+/// 头名按 HTTP 规范不区分大小写，先删掉大小写变体再写，避免同一头出现两份。
+#[cfg(target_os = "android")]
+fn inject_desktop_user_agent(task_id: &str, run: &Task, host: &str) {
+    let Some(desktop) = android_desktop_user_agent() else {
+        return;
+    };
+    let default_ua = android_webview_user_agent();
+    let existing: Vec<(String, String)> = run
+        .headers_snapshot()
+        .into_iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+        .collect();
+    let replaceable = existing.is_empty()
+        || existing
+            .iter()
+            .all(|(_, value)| Some(value.as_str()) == default_ua.as_deref());
+    if !replaceable {
+        return;
+    }
+    for (name, _) in &existing {
+        let _ = run.del_header(name);
+    }
+    if let Err(e) = run.set_header("User-Agent".to_string(), desktop) {
+        emit_http_warn(
+            task_id,
+            task_log_i18n(
+                "taskLogHttpHeaderWriteFailed",
+                json!({ "detail": e.to_string() }),
+            ),
+        );
+        return;
+    }
+    emit_http_info(
+        task_id,
+        task_log_i18n("taskLogDesktopUaInjected", json!({ "host": host })),
+    );
+}
+
 #[op2]
 #[string]
 pub fn op_kabegame_cef_user_agent() -> Option<String> {
@@ -568,12 +635,19 @@ pub fn op_kabegame_require_cookie(state: &mut OpState, #[string] host: String) -
     };
     match Storage::global().get_surf_record_by_host(&host) {
         Ok(Some(rec)) if !rec.cookie.trim().is_empty() => {
+            #[cfg(target_os = "android")]
+            let desktop_mode = rec.desktop_mode;
             match run.set_header("Cookie".to_string(), rec.cookie) {
                 Ok(()) => {
                     emit_http_info(
                         &task_id,
                         task_log_i18n("taskLogCookieInjected", json!({ "host": host })),
                     );
+                    // Cookie 与签发 UA 必须配对：桌面模式记录顺带把宿主给的默认 UA 换成桌面 UA。
+                    #[cfg(target_os = "android")]
+                    if desktop_mode {
+                        inject_desktop_user_agent(&task_id, &run, &host);
+                    }
                     true
                 }
                 Err(e) => {
@@ -1380,5 +1454,19 @@ mod tests {
     #[test]
     fn ops_search_texts_non_array_is_an_argument_error() {
         assert!(parse_search_texts(Some(&json!({"text": "x"})), "task", "searchTexts").is_err());
+    }
+
+    #[test]
+    fn desktop_chrome_major_parses_webview_user_agent() {
+        let ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A; wv) \
+                  AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 \
+                  Chrome/155.0.8059.43 Mobile Safari/537.36";
+        assert_eq!(super::desktop_chrome_major(ua), Some(155));
+        // 缺 `Chrome/` 或版本段不是数字：派生不出桌面 UA，调用方不切换。
+        assert_eq!(
+            super::desktop_chrome_major("Mozilla/5.0 (Linux; Android 14)"),
+            None
+        );
+        assert_eq!(super::desktop_chrome_major("Chrome/abc Safari/537.36"), None);
     }
 }

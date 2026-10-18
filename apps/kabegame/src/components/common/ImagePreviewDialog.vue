@@ -1,7 +1,7 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
   <PhotoSwipe
-    v-if="uiStore.isCompact"
+    v-if="IS_ANDROID"
     ref="pswpRef"
     :open="previewModal.isOpen.value"
     :index="pswpCurrentIndex"
@@ -404,6 +404,7 @@ import { fetchImageById } from "../../utils/imageRow";
 import { subscribeChanges } from "../../services/dataChangeHub";
 import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
+import { IS_ANDROID } from "@/env.ts";
 
 const { t } = useI18n();
 const uiStore = useUiStore();

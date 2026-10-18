@@ -119,9 +119,13 @@ surf:
     cancel: "取消下載"
     openInBrowser: "在瀏覽器開啟"
     close: "關閉"
+    closePopup: "關閉彈出視窗"
+    more: "更多"
+    desktopSite: "電腦版網站"
   download:
     unsupportedType: "不支援的下載類型：暢遊只接收圖片和影片"
     unsupportedScheme: "不支援的下載網址"
+    appPackage: "已攔截應用程式安裝包下載。網站不提供網頁登入時，可在右上角選單切換為電腦版網站"
   collect:
     detecting: "正在偵測媒體資源…"
     none: "目前頁面未偵測到可下載的媒體資源"
@@ -176,3 +180,8 @@ webview:
     notCaptured: "未擷取到該影片的媒體串流（頁面可能在注入前就開始播放，可重新整理頁面後再試）"
     captureMissing: "找不到該影片的擷取資料"
     captureEmpty: "擷取資料中沒有媒體內容"
+
+crawler:
+  toolbar:
+    collapse: "收合"
+    cancel: "取消任務"

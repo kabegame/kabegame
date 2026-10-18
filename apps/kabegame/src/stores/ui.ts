@@ -8,10 +8,10 @@ export const useUiStore = defineStore("ui", () => {
   // 壁纸模式切换是跨多个设置项的共享状态（切换过程中需要禁用样式/过渡等控件）
   const wallpaperModeSwitching = ref(false);
 
-  // 单例紧凑布局信号：Android 恒紧凑；其余平台跟随视口宽度（Tauri 桌面缩窗至 <768 也响应）。
+  // 单例紧凑布局信号：桌面恒不紧凑；安卓或web跟随视口宽度（Tauri 桌面缩窗至 <768 也响应）。
   // 所有组件从 useUiStore().isCompact 读取，避免每组件独立订阅 resize。
   const { width: viewportWidth } = useWindowSize();
-  const isCompact = computed(() => IS_ANDROID || (IS_WEB && viewportWidth.value < COMPACT_BREAKPOINT));
+  const isCompact = computed(() => (IS_WEB || IS_ANDROID) && viewportWidth.value < COMPACT_BREAKPOINT);
 
   // 全局维护一个列数状态，用于控制图片网格的列数
   // 紧凑布局下固定为 2 列；桌面最大 6 列

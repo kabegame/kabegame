@@ -1,19 +1,19 @@
-// 桌面专属的 WebView 爬虫命令与 CEF 页面下载出口。
+// WebView 爬虫命令（桌面 + 安卓）与 CEF 页面下载出口（仅桌面）。
 //
 // 文件系统命令（`crawl_fs_*` / `crawl_ffmpeg_*`）与畅游接收命令已拆到全平台模块
 // `page_fs` / `surf_receive`；这里重新导出，保持 `super::crawler::now_ms` 这类既有引用不变。
+// 安卓的宿主 Activity / 停靠 / 页面自发下载在 `crawler_android.rs`。
 pub(crate) use super::page_fs::*;
 pub(crate) use super::surf_receive::*;
 
 use kabegame_core::crawler::task_log_i18n::task_log_i18n;
 use kabegame_core::crawler::task_scheduler::{PageStackEntry, Task, TaskError};
-use kabegame_core::crawler::webview::crawler_window_label;
+use kabegame_core::crawler::webview::{crawler_window_label, task_id_from_crawler_label};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::plugin::{
-    archive::{ExtractOptions, ExtractResult},
-    vfs::PluginVfs,
-};
+#[cfg(not(target_os = "android"))]
+use kabegame_core::plugin::archive::{ExtractOptions, ExtractResult};
+use kabegame_core::plugin::vfs::PluginVfs;
 use kabegame_core::storage::labels::{validate_label_values, LabelSpec};
 use kabegame_core::storage::search_terms::validate_search_text_values;
 use kabegame_core::storage::Storage;
@@ -33,6 +33,7 @@ pub struct CrawlToPayload {
     pub page_state: Option<Value>,
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) fn native_download_id_from_path(path: &Path) -> Option<u64> {
     path.file_name()?
         .to_str()?
@@ -126,6 +127,7 @@ pub(crate) fn finish_page_download<R: Runtime>(
 }
 
 /// CEF Requested 回调认领 worker 发起的下载并设置统一临时路径。
+#[cfg(not(target_os = "android"))]
 pub(crate) fn claim_native_download_destination(
     task_id: Option<&str>,
     surf_record_id: Option<&str>,
@@ -145,6 +147,7 @@ pub(crate) fn claim_native_download_destination(
 }
 
 /// CEF Finished 回调把终态送回对应 worker。无法找到等待者时立即清理孤儿文件。
+#[cfg(not(target_os = "android"))]
 pub(crate) fn finish_native_download(
     task_id: Option<&str>,
     surf_record_id: Option<&str>,
@@ -270,6 +273,8 @@ fn run_of<R: Runtime>(webview: &WebviewWindow<R>) -> Result<(String, Arc<Task>),
     run_of_label(webview.label())
 }
 
+// 压缩包解压是桌面专属命令（安卓不注册 `Kabegame.archive`），本模块在安卓上仍需编译其余命令。
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn crawl_archive_zip<R: Runtime>(
     webview: Webview<R>,
@@ -286,6 +291,7 @@ pub async fn crawl_archive_zip<R: Runtime>(
     .map_err(|error| format!("ZIP 解压任务执行失败：{error}"))?
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn crawl_archive_tar<R: Runtime>(
     webview: Webview<R>,
@@ -302,6 +308,7 @@ pub async fn crawl_archive_tar<R: Runtime>(
     .map_err(|error| format!("TAR 解压任务执行失败：{error}"))?
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn crawl_archive_7z<R: Runtime>(
     webview: Webview<R>,
@@ -343,6 +350,7 @@ pub async fn crawl_get_state<R: Runtime>(webview: WebviewWindow<R>) -> Result<Va
 }
 
 /// 内部：按任务 id 取消当前 WebView 任务并释放。
+#[cfg(not(target_os = "android"))]
 pub async fn crawl_cancel_for_task(task_id: &str) {
     TaskScheduler::global()
         .complete_webview_task(task_id, Err(TaskError::Canceled))
@@ -489,6 +497,17 @@ pub async fn crawl_download_image<R: Runtime>(
     };
     let labels = validate_crawler_download_labels(labels, &run.params.plugin.id, &task_id)?;
 
+    // 桌面靠 CEF 会话自己带 Cookie；安卓没有 CEF 下载通道，入队前补齐 Cookie / UA / Referer。
+    #[cfg(target_os = "android")]
+    let http_headers = if matches!(parsed.scheme(), "http" | "https") {
+        super::surf_receive::android_identity_headers(webview.as_ref(), &parsed).await
+    } else {
+        // task-vfs / data 等本地路径不需要浏览器身份。
+        HashMap::new()
+    };
+    #[cfg(not(target_os = "android"))]
+    let http_headers = HashMap::new();
+
     let dq = TaskScheduler::global().download_queue();
     // 与 V8 op 同形：统一经容量门控入队；worker 再按插件 backend 选择 CEF 或 scheme downloader。
     let cancel = run.cancel.clone();
@@ -499,7 +518,7 @@ pub async fn crawl_download_image<R: Runtime>(
         task_id,
         download_start_time,
         run.params.output_album_id.clone(),
-        HashMap::new(),
+        http_headers,
         name,
         metadata_id,
         source_url,
@@ -599,13 +618,26 @@ pub async fn crawl_clear_site_data<R: Runtime>(
     let _ = run_of(&webview)?;
     let parsed =
         Url::parse(url.trim()).map_err(|e| format!("Invalid URL for clear_site_data: {}", e))?;
-    let cookies = webview
-        .cookies_for_url(parsed)
-        .map_err(|e| format!("Failed to get cookies: {}", e))?;
-    for cookie in cookies {
-        let _ = webview.delete_cookie(cookie);
+    // 桌面走 CEF 的 cookies_for_url / delete_cookie；安卓 wry 的 delete_cookie 是空实现，
+    // 改由 CrawlerPlugin 逐个把该 URL 的 Cookie 写成过期。
+    #[cfg(target_os = "android")]
+    {
+        return super::crawler_android::crawler_android_clear_cookies(
+            webview.app_handle().clone(),
+            parsed.to_string(),
+        )
+        .await;
     }
-    Ok(())
+    #[cfg(not(target_os = "android"))]
+    {
+        let cookies = webview
+            .cookies_for_url(parsed)
+            .map_err(|e| format!("Failed to get cookies: {}", e))?;
+        for cookie in cookies {
+            let _ = webview.delete_cookie(cookie);
+        }
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -689,17 +721,81 @@ pub async fn crawl_back<R: Runtime>(
     Ok(())
 }
 
+/// `show_crawler_window` 的任务 id 解析：显式 `taskId` 优先，缺省时从调用方 webview 的
+/// label（`crawler-<task_id>`）反推；插件里的 `Kabegame.requestShowWebview()` 不带参数。
+fn resolve_show_task_id(task_id: Option<String>, caller_label: &str) -> Result<String, String> {
+    match task_id {
+        Some(id) if !id.trim().is_empty() => Ok(id.trim().to_string()),
+        _ => task_id_from_crawler_label(caller_label)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "不是爬虫窗口，无法推断任务 id".to_string()),
+    }
+}
+
+/// 显示爬虫 WebView 窗口。
+///
+/// `task_id` 可缺省：插件里 `Kabegame.requestShowWebview()` 不带参数，此时从调用方 webview 的
+/// label 反推（只有爬虫窗口自己能这么用）。桌面上浮并聚焦窗口；安卓把停靠的主界面容器提到
+/// 主 webview 之上，app 在后台时只记为待显示（安卓限制后台拉起界面）。
 #[tauri::command]
-pub fn show_crawler_window<R: Runtime>(app: AppHandle<R>, task_id: String) -> Result<(), String> {
-    let label = crawler_window_label(task_id.trim());
-    let crawler_window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| "该任务未在运行或没有 WebView 窗口".to_string())?;
-    crawler_window
-        .show()
-        .map_err(|e| format!("Failed to show crawler window: {}", e))?;
-    crawler_window
-        .set_focus()
-        .map_err(|e| format!("Failed to focus crawler window: {}", e))?;
-    Ok(())
+pub async fn show_crawler_window<R: Runtime>(
+    app: AppHandle<R>,
+    webview: Webview<R>,
+    task_id: Option<String>,
+) -> Result<(), String> {
+    let task_id = resolve_show_task_id(task_id, webview.label())?;
+    let label = crawler_window_label(&task_id);
+    #[cfg(target_os = "android")]
+    {
+        let pending = super::crawler_android::show_crawler_window_via_plugin(&app, &label).await?;
+        if pending {
+            super::crawler_android::log_pending_show(&task_id);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let crawler_window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| "该任务未在运行或没有 WebView 窗口".to_string())?;
+        crawler_window
+            .show()
+            .map_err(|e| format!("Failed to show crawler window: {}", e))?;
+        crawler_window
+            .set_focus()
+            .map_err(|e| format!("Failed to focus crawler window: {}", e))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_show_task_id;
+
+    #[test]
+    fn show_task_id_prefers_explicit_value() {
+        assert_eq!(
+            resolve_show_task_id(Some("  task-1  ".to_string()), "main").unwrap(),
+            "task-1"
+        );
+    }
+
+    #[test]
+    fn show_task_id_falls_back_to_caller_label() {
+        assert_eq!(
+            resolve_show_task_id(None, "crawler-task-2").unwrap(),
+            "task-2"
+        );
+        // 空串等同缺省（前端有时会传空 taskId）。
+        assert_eq!(
+            resolve_show_task_id(Some("   ".to_string()), "crawler-task-2").unwrap(),
+            "task-2"
+        );
+    }
+
+    #[test]
+    fn show_task_id_rejects_non_crawler_caller() {
+        assert!(resolve_show_task_id(None, "main").is_err());
+        assert!(resolve_show_task_id(Some("task-3".to_string()), "main").is_ok());
+    }
 }

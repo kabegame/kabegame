@@ -1,5 +1,37 @@
 # v4.5.2 regression
 
+## Android WebView 爬虫 Phase 1（宿主 Activity + 停靠到主界面下）
+
+安卓 WebView 后端落地：`run_webview_session` / `crawl_*` 命令 / `crawler-capability` 全平台编译，
+每个任务一个 `CrawlerActivity`（`documentLaunchMode="always"`、第一帧前 `moveTaskToBack`）只当 wry
+宿主，`CrawlerHost` 把页面装进容器垫到 `MainActivity` 主 webview 之下（`z=-1`），`show` / `hide` 只改
+Z 序。主框架 IPC 从 `SurfActivity` 抽到 `ContentWebView` 共用；`CrawlerPlugin` 用每任务 events Channel
+回传 `pageDownload` / `renderGone` / `cancel` / `closed`；`ProcessLifecycleOwner` 的前后台切换经全局
+Channel 推给 `crawler::webview::set_host_visible`，看门狗在后台挂起计时。安卓 `is_native_job` 恒为
+false，脚本下载与页面自发下载都补 Cookie / UA / Referer 后走 reqwest。前端不再拒绝 JS 插件，网页收集
+恢复 WebView 后端，插件选择器上的「需桌面浏览器 / 安卓不支持」警告一并移除。文档见 `cocs/crawler/ANDROID_WEBVIEW_CRAWLER.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver `--skip vue` | `cargo check` 无 error；共享初始化脚本抽取未破坏桌面建窗 | 已运行：0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
+| [x] | Kotlin 编译 | Android SDK 36 | `gradle :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `ContentWebView` / `CrawlerActivity` / `CrawlerHost` / `CrawlerPlugin` 与 manifest 编译通过 | 已运行：BUILD SUCCESSFUL |
+| [x] | 下载 transport 单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib native_job_only_on_desktop` | 桌面畅游 job 返回 true、安卓 false；普通 http job 与 `data:` 恒为 false | 已运行：1 passed |
+| [x] | 显示窗口 id 解析单测 | Rust 单测 | `test-kabegame` driver：`kabegame show_task_id` | 显式 `taskId` 去空白；缺省 / 空串时从 `crawler-<id>` 反推；主界面调用缺 `taskId` 报错 | 已运行：3 passed |
+| [x] | 看门狗后台挂起单测 | Rust 单测（tokio 暂停时钟） | `test-kabegame` driver：`kabegame-core --lib webview_watchdog_suspends_while_host_hidden` | 宿主不可见时虚拟时间推进 10 分钟任务仍不结束；回到可见并正常完成返回 Ok | 已运行：1 passed（`dev-dependencies` 为 `tokio` 增加 `test-util`） |
+| [ ] | WebView 网页收集 | Android dev | 网页收集选 webview 后端，收一个普通图集页 | 任务完成、图片入库、快照有 CSS；任务日志无心跳超时 | 先在畅游登录目标站可顺带验证登录态 |
+| [ ] | 最小测试插件常驻 | Android dev | 最小 JS 插件：`setInterval` 计数 5 分钟 + `requestShowWebview()` + 输入框 | 计数不掉拍；显示后可点、可输入；「收起」与返回键放回下面；主界面全程正常 | 页面在任务运行期间 rAF 约 60fps |
+| [ ] | 三分钟后台 | Android dev | 任务运行中按 Home 3 分钟再回来 | 任务不因心跳超时失败；日志可见后台暂停 / 恢复；回来后页面继续 | 无前台服务时可能被 cached freezer 冻结，属预期 |
+| [ ] | 主界面重建 | Android dev | 任务运行中改系统字体大小 | 主界面重建后容器重新挂上，任务继续，不出现两份页面 | 关注端口 detach 是否触发 `visibilitychange` |
+| [ ] | 渲染进程崩溃 | Android dev | 打崩共用渲染进程（可用 `chrome://crash` 页面） | 任务以 `renderGone` 失败；主界面重建；app 不退出 | 三处 WebView 都要接 `onRenderProcessGone` |
+| [ ] | 登录态补头 | Android dev | 先在畅游登录某站，再跑需要登录的 webview 插件并用 `Kabegame.downloadImage` 下载 | 请求带 Cookie / UA / Referer，图片入库；无 Cookie 的 CDN 不崩溃 | Cookie 走 `SurfPlugin.getCookie` |
+| [ ] | 页面自发下载 | Android dev（不连 CDP） | 在爬虫页点一个附件链接 | 落到任务 VFS `tmp/Downloads`，`onNativeDownload` 收到成功载荷并可导入 | CDP 会劫持 WebView 下载回调，测试时不要连 |
+| [ ] | `clearData` | Android dev | 插件调用 `Kabegame.clearData()` | 该 URL 的 Cookie 被写成过期；localStorage / sessionStorage 清空 | 安卓走 `CrawlerPlugin.clearCookies` |
+| [ ] | 后台 requestShowWebview | Android dev | 任务运行中按 Home，脚本调用 `requestShowWebview()`，再回到前台 | 日志出现 `taskLogWebviewPendingShow`；回到前台页面自动提到最上层 | 安卓限制后台拉起界面 |
+| [ ] | 最近任务划掉 | Android dev | 任务运行中从最近任务划掉爬虫卡片 | 任务以取消结束，日志有 `taskLogWebviewHostClosed`，主界面不受影响 | 不能 `excludeFromRecents`，否则 182 ms 被回收 |
+| [ ] | 桌面回归 | Windows / macOS / Linux | JS 插件任务、`requestShowWebview()`、`is_native_job` 下载、网页收集 webview 后端 | 结果与改动前一致；插件内 `requestShowWebview()` 不再报缺 `taskId` | |
+
+
 ## Android 畅游 Phase 2（内容页改为 Tauri webview + 原生导航栏）
 
 Android 畅游的主次对调：外部内容页成为 `SurfActivity` 的 Tauri 主 webview（label `surf-<host>:<n>`），顶部导航栏改成原生 Kotlin 控件。内容页因此拿到与桌面同一份注入脚本与按 label 认会话的命令；wry 的 `addJavascriptInterface("ipc")` 换成只收主框架消息的 `addWebMessageListener`，脚本下载与页面自发下载共用 `surf_receive::enqueue_surf_download` 并补 Cookie / UA / Referer。安卓没有 CEF 下载通道，`is_native_job` 不再把 `surf_record_id` 当作 native；`crawl_fs_*` / `crawl_ffmpeg_*` / `surf_collect_*` / `surf_download_image` / `surf_import_media` 改为全平台注册，`raw_body_bytes` 兼容 postMessage 送来的 JSON 数字数组。
@@ -27,8 +59,51 @@ Android 畅游的主次对调：外部内容页成为 `SurfActivity` 的 Tauri �
 | [x] | IPC 主框架化 | Android debug / CDP | 首个文档检查 `window.ipc`；在跨源 iframe（example.com）里重放主框架截获的合法 IPC 消息 | 首个文档的 `window.ipc` 即 WebMessageListener 版本（有 `addEventListener`）；iframe 重放无任何效果，同一条消息由主框架发出时回调正常触发 | 跨源 iframe 里同样有 `window.ipc` 与 `__TAURI_INTERNALS__`（含 invoke key），隔离完全依赖 Kotlin 的 `isMainFrame` 判断。设备不支持 `WEB_MESSAGE_LISTENER` 时工具栏下载提示 `surf.collect.ipcUnavailable` |
 | [x] | 关闭后释放内容 WebView | Android dev | 连续开关畅游数次，`dumpsys meminfo` 看 Activities / WebViews，CDP 看页面列表 | 关闭后 CDP 页面列表立即不再有该页；页面 JS、定时器与网络停止 | 原先 `addWebMessageListener` 的监听被 Chromium 以 JNI 全局引用持有并捕获 webview，wry 又从不 `destroy()`，每关一次就整页泄漏。剩余已知泄漏：tao 在事件循环线程上取 `WindowMetrics` 的 JNI 局部引用不释放，仍会钉住部分已销毁的 Activity（5 次开关残留 2 个、约 1 MB） |
 | [x] | IPC 响应 Channel 不再进表 | Android dev | 临时插桩统计 tauri mobile `CHANNELS` 表大小，连续 invoke 100 次 | 表大小不随 invoke 增长 | `third-patches/tauri/0011`：修复前每次 invoke 的响应 Channel 都进表且永不移除（100 次 +101） |
+| [x] | 重建不残留旧主 webview | Android dev / CDP | 先确认 CDP 只有一个主界面页面并在页面上打标记，再 `adb shell settings put system font_scale 1.15` 触发 `MainActivity` 重建 | 重建后 CDP 只剩一个主界面页面且不带标记；新页面 `invoke` 正常返回 | 原先 wry 在新 Activity 里新建 webview、从不销毁旧的，旧页面继续跑并以同一 id 发 IPC（响应回到新页面，旧页面上的 `invoke` 永远挂起）。安装后首次启动的系统重建（`wm_relaunch_resume_activity` 0x80000000）也会触发。已实测；测完把 `font_scale` 改回 1.0 |
+| [x] | 畅游页重建 | Android dev / CDP | 打开畅游站点并打标记，再改 `font_scale` 触发 `SurfActivity` 重建 | 只剩一个内容页且不带标记；工具栏文案仍在；一键下载能触发并复位 | binding 经 `SurfRegistry.carried` 交给新实例。已实测：重建后点下载，Rust 回推两次 `setCollectRunning`（开始 / 结束） |
+| [x] | 渲染进程崩溃不连带应用 | Android dev | 让一个外部页面的渲染进程崩溃（原型用 `chrome://crash`；也可在畅游页触发） | 应用进程存活；主界面重建并可正常 `invoke`；畅游页关闭 | 应用内 WebView 共用一个渲染进程，此前主界面没处理 `onRenderProcessGone`，崩溃信息为 `Render process's crash wasn't handled by all associated webviews`，整个应用被杀。已用爬虫 WebView 原型实测主界面路径；畅游关闭路径未单独实测 |
 | [ ] | 关闭会话 | Android dev | 关闭 SurfActivity，再查看主界面与临时目录 | 会话 VFS 目录被清理；Cookie 已保存；`surf-session-changed` 正确 | `closed` 事件走 `drop_session` / `drop_slot` |
 | [ ] | 桌面回归 | Windows / macOS / Linux | 一键下载、冻结快照、取消、页面自发下载（含 zip 解压）、MSE 视频捕获 | 结果与改动前一致；页面自发下载仍走 CEF 并在桌面解压 | 桌面 `surf_uses_native` 保持 true |
+
+## Android 畅游 Phase 3（导航状态与进度、OAuth 弹窗、桌面版网站、apk 拦截）
+
+工具栏后退 / 前进按内容页历史置灰，加载进度改为 `onProgressChanged` 驱动的确定进度条；「在浏览器打开」
+与新增的「桌面版网站」收进「更多」菜单。内容页开启多窗口并包装 wry 的 `WebChromeClient`：链接型新窗口
+用隐藏 transport 探针取真实 URL 后交回内容页，脚本 `window.open`（GIS 等 OAuth）进 `SurfPopup` 覆盖层，
+弹窗是共享 CookieManager 的普通 WebView，最多一个、关闭时补发 `pageFinished`。桌面版网站按站点存进
+`surf_records.desktop_mode`（迁移 v042），桌面 UA 只由 `android_desktop_user_agent()` 从系统默认 UA 派生；
+内容页建窗、弹窗、插件 `requireCookie`、畅游下载补头都认记录模式。页面自发下载的 apk / 安装包提前拒绝。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 桌面静态检查 | 仓库 / Linux standard | `check-kabegame` driver `--skip vue` | `cargo check` 无 error；存储与迁移改动未破坏桌面 | 已运行：0 error |
+| [x] | Android 静态检查 | Android NDK | `check-kabegame` driver `--mode android --skip vue` | aarch64 `cargo check` 无 error | 已运行：0 error |
+| [x] | Kotlin 编译 | Android SDK 36 | `./gradlew :app:compileArm64DebugKotlin -x rustBuildArm64Debug` | `SurfChromeClient` / `SurfPopup` / `SurfUaMode` / `SurfTheme` 与改动后的工具 Activity 编译通过 | 已运行：BUILD SUCCESSFUL |
+| [x] | 桌面 UA 派生单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib desktop_chrome_major` | 典型 WebView UA 解析出 `155`；缺 `Chrome/` 或版本非数字返回 `None` | 已运行：1 passed |
+| [x] | 迁移与模式写入单测 | Rust 单测 | `test-kabegame` driver：`kabegame-core --lib v042`、`--lib surf_records` | v042 幂等加列且默认 0；`desktop_mode` 只在值变化时写库 | 已运行：1 + 2 passed |
+| [x] | apk 判定单测 | Rust 单测 | `test-kabegame` driver：`kabegame --lib surf_common` | apk / apks / xapk / aab 与安装包 MIME 命中；媒体与 zip 不命中 | 已运行：5 passed |
+| [ ] | 导航置灰与进度 | Android dev | 刚打开站点、点链接、后退、SPA 路由切换各一次；在慢网页加载中点新链接 | 无历史时后退 / 前进置灰且按压无 ripple；有历史后对应按钮可用；进度条从左到右增长、到 100 隐藏，加载中切新链接不做回退动画 | 后退 / 前进置灰与启用已实测；进度条动画与 SPA 待复测 |
+| [x] | 链接型新窗口分流 | Android dev / 合成锚点 | 点一个 `target=_blank` 的 http 链接 | 仍在内容页打开，不出现覆盖层；后退键随即可用 | 已实测 example.org：内容页跳转、目标列表无新增 page；锚点 + 用户手势 + http(s) href 分流 |
+| [ ] | Google 登录弹窗 | Android dev / x.com 登录页 | 点「使用 Google 登录」（GIS 按钮在跨域 iframe 内） | 出现覆盖层，标题为 `accounts.google.com`；完成登录后弹窗自行关闭，内容页进入登录态，畅游记录 Cookie 立即更新 | 弹窗共享 CookieManager；关闭补发 `pageFinished` |
+| [x] | 弹窗返回键与关闭 | Android dev / 合成 `window.open` | 用户手势打开弹窗，弹窗内再导航后按返回键；再按一次；另测 `window.close()` | 先弹窗页内后退，退到头关闭弹窗，再按作用于内容页；`window.close()` 立即关闭 | 已实测：目标列表只剩内容页，覆盖层标题为来源 host；关闭畅游时的清理待复测。同时最多一个弹窗 |
+| [ ] | 弹窗渲染进程崩溃 | Android dev | 弹窗打开时打崩共用渲染进程（如 `chrome://crash`） | 应用进程存活；畅游关闭，主界面自动重建 | 弹窗与内容页都要在 `onRenderProcessGone` 返回 true |
+| [ ] | 转发型 ChromeClient | Android dev | 打开全屏视频、任意上传框、`alert` / `confirm` | 行为与包装前一致 | 升级 wry 时 diff `RustWebChromeClient` 的 override 列表 |
+| [x] | 桌面版网站切换 | Android dev | 「更多」→ 勾选 / 取消「桌面版网站」 | 页面刷新；勾选后 `navigator.userAgent` 为桌面 UA、`navigator.userAgentData.mobile === false`、platform `Linux`；取消后回到系统 UA、`mobile === true`、platform `Android` | 已实测（Chrome 155）。取消时必须在「重开桌面模式会话」后再测一次：`bind` 换实例曾把桌面 Client Hints 误当默认值，已改为进程级缓存并在首次 apply 前捕获 |
+| [x] | 按站点记住模式 | Android dev | 切桌面版后关闭畅游，再打开同站 | 同站首屏即桌面版且菜单仍勾选 | 已实测：`surf_records.desktop_mode` 1 → 0 随开关写入；重开后首屏 `navigator.userAgent` 即桌面 UA。另一个站点未单独复测 |
+| [ ] | 强制跳应用的站点 | Android dev | 移动 UA 下会跳应用商店 / 下 apk 的站点，切桌面版 | 出现网页登录入口并可登录 | |
+| [x] | 被服务端跳到手机版后切桌面版 | Android dev / weibo.com（移动 UA 302 到 `m.weibo.cn`） | 在 `m.weibo.cn` 上「更多」→ 勾选「桌面版网站」，再取消 | 勾选后回到 `weibo.com` 桌面版（帖子显示「来自 微博网页版」）；取消后回到 `m.weibo.cn` | 已实测。曾经只 `reload()` 跳转后的 `m.weibo.cn`，UA 已是桌面但页面始终是手机版；现在重载 `WebHistoryItem.originalUrl` |
+| [x] | 爬虫页面返回键收起 | Android dev / xhs-webview 运行中，主界面有可后退的历史（如打开了任务抽屉） | 在任务抽屉点「打开窗口」，再按系统返回键 | 爬虫页面收起回主界面下面，任务抽屉与主界面路由保持不变；再按返回才作用于主界面 | 已实测。曾因爬虫返回回调早于 wry 的回调注册，返回键被主界面 webview 消费，只收起了任务抽屉 |
+| [x] | 爬虫页面显示 / 收起动画 | 同上 | 打开窗口、按返回或点「收起」；在收起途中立刻再打开 | 显示从底部滑上（约 260ms），收起滑出底部（约 200ms）后露出主界面；中途再打开从当前位置滑回，不闪白、不跳 | 已录屏抽帧核对显示与收起；中途再打开未测 |
+| [x] | 爬虫并行与销毁 | Android dev / 任务并发上限 2 | 同时启动两个 xhs-webview 任务（各 3 条），等全部完成 | 运行中有 2 个 `CrawlerActivity`、2 个爬虫页面，各自完成 3/3、日志不串；结束后只剩 `MainActivity`，最近任务里没有爬虫卡片，强制 GC 后堆内 Activities / WebViews 都只剩主界面的 1 个 | 已实测（`dumpsys activity activities` / `dumpsys meminfo`，ART `SIGUSR1` 触发 GC） |
+| [x] | 安卓 WebView 爬虫能跑 | Android dev / xhs-webview 0.1.3 | 推荐模式、最多 3 条 | 任务日志从「ページ読み込み · initial」一路到「完了 · 成功 3/3」，3 张图入库 | 已实测。曾因安卓 capability 清单漏了 `crawler-capability`，`crawl_heartbeat` 被 ACL 拒绝，插件一行日志都没有，120 秒后报「WebView 窗口无响应」 |
+| [x] | 安卓注入脚本不重复执行 | Android dev / xhs-webview | 同上 | 每条插件日志只出现一次，作品不重复处理 | 已实测。wry 的 `onPageStarted` 会对外部网页再 `evaluateJavascript` 一遍初始化脚本，插件曾并行跑两份；现由 `android_init_script` 每文档一次守卫挡住 |
+| [ ] | WebView 爬虫跟随桌面版 | Android dev / 小红书畅游记录已勾选「桌面版网站」 | 运行 xhs-webview 任务，展开爬虫页面；页面里查 `navigator.userAgent` / `navigator.userAgentData.mobile`；再取消该记录的桌面版重跑 | 勾选时爬虫页面为桌面版，UA 为桌面 UA、`mobile === false`；页面自发下载补的 `User-Agent` 也是桌面 UA；取消后爬虫回到移动 UA | 已实测勾选时爬虫页为桌面 UA、`mobile === false`；取消后回移动 UA 与下载补头未测。曾经 `create_crawler_activity` 不读畅游记录，爬虫恒为移动 UA，用桌面 UA 签发的 Cookie 失配。`www.` 前缀有无视为同一站点（单测 `surf_host_candidates_toggle_www_prefix`） |
+| [ ] | Google 拒绝 WebView UA | Android dev | 移动模式弹窗报 `disallowed_useragent` 后切桌面版重试 | 桌面模式下可通过 | Google 按 UA 里的 `; wv` 识别 WebView |
+| [ ] | 插件桌面 UA 配对 | Android dev / 桌面模式记录跑 weibo | 运行 `setHeader("User-Agent", cefUserAgent())` + `requireCookie` 的插件 | 任务日志出现 `taskLogDesktopUaInjected`；请求不 403 | 只替换缺失或等于默认 UA 的值 |
+| [ ] | 插件写死 UA 不覆盖 | Android dev / 桌面模式记录跑 xhs | 运行写死 UA 的插件 | UA 保持插件自己的值，不出现 `taskLogDesktopUaInjected` | |
+| [ ] | 桌面模式下载补头 | Android dev | 桌面模式下一键下载一个需要登录的媒体 | 请求 `User-Agent` 为桌面 UA（debug ingest 补头记录） | `android_identity_headers` 按会话模式取 UA |
+| [ ] | apk 下载拦截 | Android dev（不连 CDP） | 页面里点一个 apk 链接 | toast `surf.download.appPackage`，下载列表不出现该项 | 扩展名与 `application/vnd.android.package-archive` 都判 |
+| [ ] | 桌面回归 | Windows / macOS / Linux | 桌面畅游、插件 `requireCookie`、一键下载 | 结果与改动前一致 | 桌面 `cefUserAgent()` 与 `requireCookie` 的 UA 不变 |
 
 ## Android 分享 MediaStore 图片
 

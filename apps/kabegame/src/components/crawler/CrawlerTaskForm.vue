@@ -61,8 +61,6 @@
             :placeholder="$t('plugins.selectSourcePlaceholder')"
             :select-trigger="IS_ANDROID"
             :popper-class="uiStore.isCompact ? undefined : 'crawl-plugin-select-dropdown'"
-            :show-js-warning="uiStore.isCompact"
-            :show-selected-js-warning="uiStore.isCompact"
             show-labels
             @update:model-value="onPluginChange"
           />
@@ -389,7 +387,7 @@ async function confirmSaveConfig() {
 
 async function submit() {
   const cfg = tc.value;
-  if (!(await guardPluginPlatform(cfg?.pluginId ?? ""))) return;
+  if (!(await guardPluginPlatform())) return;
   if (!cfg?.pluginId) {
     ElMessage.warning(t("plugins.selectSourcePlaceholder"));
     return;

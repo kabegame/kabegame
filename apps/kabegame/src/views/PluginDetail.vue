@@ -278,7 +278,7 @@ const handleStartTask = async (payload: {
   vars?: Record<string, any>;
   httpHeaders?: Record<string, string>;
 }) => {
-  if (!(await guardPluginPlatform(payload.pluginId))) return;
+  if (!(await guardPluginPlatform())) return;
   const added = await enqueueTask({
     pluginId: payload.pluginId,
     outputDir: defaultOutputDir.value || undefined,

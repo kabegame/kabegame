@@ -89,15 +89,32 @@ pub(crate) fn surf_initialization_scripts() -> Vec<String> {
     scripts.push(include_str!("../webview_js/surf_url_report.js").to_string());
     #[cfg(target_os = "android")]
     {
-        scripts = scripts.into_iter().map(top_frame_only).collect();
+        scripts = scripts
+            .into_iter()
+            .enumerate()
+            .map(|(index, script)| android_init_script(script, &format!("surf-{index}")))
+            .collect();
     }
     scripts
 }
 
-/// wry 安卓会把初始化脚本注入到每个 frame；桌面 Tauri 只注入主框架。
+/// 安卓初始化脚本的两道守卫，畅游与爬虫宿主 Activity 共用。
+///
+/// 1. 只在顶层文档运行：wry 安卓用 `addDocumentStartJavaScript(…, setOf("*"))` 注入到每个 frame，
+///    桌面 Tauri 只注入主框架。
+/// 2. 每个文档只运行一次：wry 生成的 `RustWebViewClient.onPageStarted` 对没经它拦截的请求（外部网页
+///    都是）会再 `evaluateJavascript` 一遍全部初始化脚本，且不看 document-start 注入是否已生效。
+///    没有这道守卫，爬虫 bootstrap 会在同一页里把插件并行跑两份。标记是 window 上不可枚举、不可改的
+///    属性，`key` 在同一 webview 的脚本之间必须唯一。
 #[cfg(target_os = "android")]
-fn top_frame_only(script: String) -> String {
-    format!("(function () {{\nif (window.top !== window) return;\n{script}\n}})();\n")
+pub(crate) fn android_init_script(script: String, key: &str) -> String {
+    let marker = serde_json::to_string(&format!("__kb_init_{key}__")).unwrap_or_default();
+    format!(
+        "(function () {{\nif (window.top !== window) return;\n\
+         if (Object.prototype.hasOwnProperty.call(window, {marker})) return;\n\
+         Object.defineProperty(window, {marker}, {{ value: true }});\n\
+         {script}\n}})();\n"
+    )
 }
 
 /// 内容 webview 的 label：桌面按 host 推导，安卓取当前会话（label 带会话序号）。
@@ -167,6 +184,25 @@ pub(crate) fn is_archive_download(name: Option<&str>, mime_type: Option<&str>) -
     by_name || by_mime
 }
 
+/// 页面自发下载是否明确是安卓应用安装包（apk / apks / xapk / aab）。
+///
+/// 安装包既不是媒体也不在压缩包名单：安卓畅游提前拒绝并提示切到桌面版网站，
+/// 避免入队、下载完才在后处理报「格式不受支持」。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn is_app_package_download(name: Option<&str>, mime_type: Option<&str>) -> bool {
+    const EXTENSIONS: &[&str] = &["apk", "apks", "xapk", "aab"];
+    const MIMES: &[&str] = &["application/vnd.android.package-archive"];
+    let by_name = name
+        .and_then(|name| std::path::Path::new(name).extension())
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext)));
+    let by_mime = mime_type
+        .and_then(|mime| mime.split(';').next())
+        .map(str::trim)
+        .is_some_and(|mime| MIMES.iter().any(|known| known.eq_ignore_ascii_case(mime)));
+    by_name || by_mime
+}
+
 /// 桌面导航栏 URL 的 query 编码；安卓没有 navbar，不参与目标编译。
 #[cfg(not(target_os = "android"))]
 pub(crate) fn encode_query_value(value: &str) -> String {
@@ -175,6 +211,37 @@ pub(crate) fn encode_query_value(value: &str) -> String {
 
 pub(crate) fn normalize_surf_host(host: &str) -> String {
     host.trim().to_lowercase()
+}
+
+/// 与 `host` 对应的畅游记录 host 候选：先精确匹配，再试 `www.` 前缀的有无
+/// （畅游打开 `xiaohongshu.com` 与插件 `kbBaseUrl` 写 `www.xiaohongshu.com` 应视为同一站点）。
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn surf_host_candidates(host: &str) -> Vec<String> {
+    let host = normalize_surf_host(host);
+    let alternate = match host.strip_prefix("www.") {
+        Some(bare) => bare.to_string(),
+        None => format!("www.{host}"),
+    };
+    vec![host, alternate]
+}
+
+/// 安卓上其它 WebView（爬虫宿主）打开 `url` 时应使用的 UA：该站畅游记录为桌面版网站时返回
+/// 桌面 UA，否则 `None`（保持系统默认 UA）。共用 `CookieManager`，Cookie 与签发 UA 必须配对。
+#[cfg(target_os = "android")]
+pub(crate) fn android_desktop_user_agent_for_url(url: &url::Url) -> Option<String> {
+    let host = url.host_str()?;
+    let desktop = surf_host_candidates(host).iter().any(|candidate| {
+        kabegame_core::storage::Storage::global()
+            .get_surf_record_by_host(candidate)
+            .ok()
+            .flatten()
+            .is_some_and(|record| record.desktop_mode)
+    });
+    if desktop {
+        kabegame_core::plugin::v8::android_desktop_user_agent()
+    } else {
+        None
+    }
 }
 
 #[tauri::command]
@@ -237,7 +304,38 @@ pub async fn surf_delete_record(host: String) -> Result<serde_json::Value, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{host_from_surf_label, is_archive_download};
+    use super::{
+        host_from_surf_label, is_app_package_download, is_archive_download, surf_host_candidates,
+    };
+
+    #[test]
+    fn surf_host_candidates_toggle_www_prefix() {
+        assert_eq!(
+            surf_host_candidates("WWW.XiaoHongShu.com"),
+            vec!["www.xiaohongshu.com", "xiaohongshu.com"]
+        );
+        assert_eq!(surf_host_candidates("weibo.com"), vec!["weibo.com", "www.weibo.com"]);
+    }
+
+    #[test]
+    fn app_package_download_detected_by_name_or_mime() {
+        assert!(is_app_package_download(Some("app.apk"), None));
+        assert!(is_app_package_download(Some("split.APKS"), None));
+        assert!(is_app_package_download(Some("game.xapk"), None));
+        assert!(is_app_package_download(Some("bundle.aab"), None));
+        assert!(is_app_package_download(
+            None,
+            Some("application/vnd.android.package-archive")
+        ));
+        assert!(is_app_package_download(
+            Some("download.bin"),
+            Some("application/vnd.android.package-archive; charset=binary")
+        ));
+        // 媒体与压缩包都不算安装包，各自走原逻辑。
+        assert!(!is_app_package_download(Some("photo.png"), Some("image/png")));
+        assert!(!is_app_package_download(Some("probe.zip"), Some("application/zip")));
+        assert!(!is_app_package_download(None, None));
+    }
 
     #[test]
     fn archive_download_detected_by_name_or_mime() {

@@ -941,18 +941,16 @@ impl DownloadQueue {
 }
 
 /// job 是否应由所属 CEF webview 执行，以保留爬虫或畅游窗口的会话状态。
+///
+/// 安卓没有 CEF 下载通道：脚本下载在 `crawl_download_image` / `surf_download_image` 入队前
+/// 已补齐 Cookie / UA / Referer，交给 reqwest 下载；畅游与爬虫在这一平台都必须走 scheme downloader。
 fn is_native_job(job: &DownloadRequest) -> bool {
-    matches!(job.url.scheme(), "http" | "https")
-        && (surf_uses_native(job)
+    cfg!(not(target_os = "android"))
+        && matches!(job.url.scheme(), "http" | "https")
+        && (job.surf_record_id.is_some()
             || TaskScheduler::global()
                 .get_run(&job.task_id)
                 .is_some_and(|run| run.params.uses_webview_transport()))
-}
-
-/// 桌面畅游下载交给 CEF 原生下载（浏览器自带会话）；安卓没有 CEF 下载通道，
-/// `surf_download_image` 已在入队前补齐 Cookie / UA / Referer，交给 reqwest 下载。
-fn surf_uses_native(job: &DownloadRequest) -> bool {
-    cfg!(not(target_os = "android")) && job.surf_record_id.is_some()
 }
 
 /// 持 pending 锁完成 pop→active 迁移，避免任务排空计数看见两侧都没有 job 的窗口。
@@ -1449,12 +1447,22 @@ mod tests {
     }
 
     #[test]
-    fn surf_uses_native_only_on_desktop() {
+    fn native_job_only_on_desktop() {
+        AppPaths::init_for_tests();
+        let _ = Settings::init_global();
+        let _ = Storage::init_global();
+        let _ = TaskScheduler::init_global(Arc::new(DownloadQueue::new()));
+
         // 桌面有 CEF 下载 handler，畅游下载交给浏览器；安卓没有，必须走 reqwest。
         let surf = surf_request("https://example.com/a.jpg", Some("record-1"));
-        assert_eq!(surf_uses_native(&surf), cfg!(not(target_os = "android")));
+        assert_eq!(is_native_job(&surf), cfg!(not(target_os = "android")));
 
+        // 普通 reqwest 下载（无畅游记录、任务也不是 webview transport）。
         let plain = surf_request("https://example.com/a.jpg", None);
-        assert!(!surf_uses_native(&plain));
+        assert!(!is_native_job(&plain));
+
+        // 非 http(s) 永远不走 CEF 原生下载。
+        let data = surf_request("data:image/png;base64,AAAA", Some("record-1"));
+        assert!(!is_native_job(&data));
     }
 }

@@ -176,6 +176,7 @@
   "taskLogCookieTaskMissing": "[cookie] タスクを特定できません：{detail}",
   "taskLogCookieHostInvalid": "[cookie] 対象ホストを解析できません",
   "taskLogCookieInjected": "[cookie] サーフから {host} の Cookie を注入しました",
+  "taskLogDesktopUaInjected": "[cookie] {host} にサーフの PC 版 UA を使用します",
   "taskLogCookieWriteFailed": "[cookie] Cookie の設定に失敗しました：{detail}",
   "taskLogCookieMissing": "[cookie] サーフに {host} の Cookie がありません（先にサーフでこのサイトへログインしてください）",
   "taskLogCookieReadFailed": "[cookie] サーフの記録を読み込めません：{detail}",
@@ -215,5 +216,8 @@
   "taskLogDedupByUrl": "URL 重複排除：ダウンロードをスキップ。{currentUrl} は id={existingId} の既存と一致；保存 URL：{existingUrl}；パス：{existingPath}",
   "taskLogDedupByHash": "ハッシュ重複排除：{currentUrl} は id={existingId} の画像と同一内容；既存 URL：{existingUrl}；ローカルパス：{existingPath}",
   "taskLogDedupByPath": "パス重複排除：ローカルパスが id={existingId} の画像（{existingPath}）で使用済みのためスキップしました。取得元：{currentUrl}",
-  "taskLogDedupSurfDuplicate": "サーフ：ハッシュ重複のため id={existingId} と照合して除外。現在 {currentUrl}；既存 URL：{existingUrl}；ローカルパス：{existingPath}"
+  "taskLogDedupSurfDuplicate": "サーフ：ハッシュ重複のため id={existingId} と照合して除外。現在 {currentUrl}；既存 URL：{existingUrl}；ローカルパス：{existingPath}",
+  "taskLogWebviewPendingShow": "アプリがバックグラウンドのため表示を保留しました。前面に戻るとクローラーページを最前面に表示します",
+  "taskLogWebviewRenderGone": "WebView のレンダラープロセスが終了しました（crash={crashed}）。タスクを終了します",
+  "taskLogWebviewHostClosed": "クローラーウィンドウが閉じられたため、タスクをキャンセルします"
 }

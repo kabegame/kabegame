@@ -176,6 +176,7 @@
   "taskLogCookieTaskMissing": "[cookie] Could not locate task: {detail}",
   "taskLogCookieHostInvalid": "[cookie] Could not resolve the target host",
   "taskLogCookieInjected": "[cookie] Injected the Cookie for {host} from Surf",
+  "taskLogDesktopUaInjected": "[cookie] Using the Surf desktop UA for {host}",
   "taskLogCookieWriteFailed": "[cookie] Failed to set Cookie: {detail}",
   "taskLogCookieMissing": "[cookie] Surf has no Cookie for {host} (sign in to the site in Surf first)",
   "taskLogCookieReadFailed": "[cookie] Failed to read the Surf record: {detail}",
@@ -215,5 +216,8 @@
   "taskLogDedupByUrl": "URL deduplication: skipped download. {currentUrl} matches stored image id={existingId}; stored URL: {existingUrl}; path: {existingPath}",
   "taskLogDedupByHash": "Hash deduplication: {currentUrl} matches existing image id={existingId}; existing URL: {existingUrl}; local path: {existingPath}",
   "taskLogDedupByPath": "Path deduplication: skipped, the local path is already used by image id={existingId} ({existingPath}). Source: {currentUrl}",
-  "taskLogDedupSurfDuplicate": "Surf: duplicate hash filtered vs image id={existingId}. Current: {currentUrl}; existing URL: {existingUrl}; local path: {existingPath}"
+  "taskLogDedupSurfDuplicate": "Surf: duplicate hash filtered vs image id={existingId}. Current: {currentUrl}; existing URL: {existingUrl}; local path: {existingPath}",
+  "taskLogWebviewPendingShow": "The app is in the background; the crawler page is queued to show and will be brought to the front when the app returns",
+  "taskLogWebviewRenderGone": "The WebView renderer process exited (crash={crashed}); ending the task",
+  "taskLogWebviewHostClosed": "The crawler window was closed; canceling the task"
 }

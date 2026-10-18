@@ -119,9 +119,13 @@ surf:
     cancel: "取消下载"
     openInBrowser: "在浏览器打开"
     close: "关闭"
+    closePopup: "关闭弹窗"
+    more: "更多"
+    desktopSite: "桌面版网站"
   download:
     unsupportedType: "不支持的下载类型：畅游只接收图片和视频"
     unsupportedScheme: "不支持的下载地址"
+    appPackage: "已拦截应用安装包下载。站点不给网页登录时，可在右上角菜单切换为桌面版网站"
   collect:
     detecting: "正在检测媒体资源…"
     none: "当前页面未检测到可下载的媒体资源"
@@ -176,3 +180,8 @@ webview:
     notCaptured: "未捕获到该视频的媒体流（页面可能在注入前就开始播放，可刷新页面后重试）"
     captureMissing: "找不到该视频的捕获数据"
     captureEmpty: "捕获数据中没有媒体内容"
+
+crawler:
+  toolbar:
+    collapse: "收起"
+    cancel: "取消任务"

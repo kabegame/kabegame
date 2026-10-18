@@ -41,7 +41,6 @@
   "webpageCollectTitle": "ウェブページ収集",
   "webpageSectionPage": "ページ",
   "webpageSectionSaveTo": "保存先",
-  "webpageWebviewDesktopOnly": "WebView バックエンドにはデスクトップのブラウザエンジンが必要です。Android は V8 のみ対応しています。",
   "webpageHeadersHint": "これらの HTTP ヘッダーはページの取得と、ページ上で見つかったメディア（サードパーティのドメインの場合あり）のダウンロードに使われます。信頼できないページに長期有効な認証情報を入力しないでください。",
   "webpageTaskAdded": "ウェブページ収集タスクを追加しました",
   "webpageTaskFailed": "ウェブページ収集タスクを作成できませんでした",

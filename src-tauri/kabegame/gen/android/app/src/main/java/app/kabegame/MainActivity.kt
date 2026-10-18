@@ -10,12 +10,14 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -36,6 +38,8 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
   private var filePickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var webView: WebView? = null
   private var pendingImportPath: String? = null
+  /** 爬虫页面显示时接管返回键：优先把停靠的页面放回主界面下。 */
+  private var crawlerBack: OnBackPressedCallback? = null
 
   /** 用于在 onPageFinished 时再次注入安全区（主文档加载完成后 document 才稳定） */
   private var lastSystemInsets: Insets? = null
@@ -130,6 +134,54 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
     handleIntent(intent)
   }
 
+  /**
+   * 主界面 WebView 的渲染进程退出（被外部页面拖崩或被系统回收）：这个 WebView 已不可用，
+   * 先摘下，再重建 Activity，由 wry 按原属性重建主 webview（destroy 交给 onDestroy）。
+   * 重建 post 出去，让共用渲染进程的其它 WebView 先各自收到回调。
+   */
+  private fun onMainRenderProcessGone(view: WebView) {
+    android.util.Log.w("Kabegame", "Main WebView render process gone, recreating MainActivity")
+    (view.parent as? android.view.ViewGroup)?.removeView(view)
+    window.decorView.post { if (!isFinishing && !isDestroyed) recreate() }
+  }
+
+  /**
+   * wry 从不调 WebView.destroy()。配置变化重建时它保留按 webview id 登记的回调，在新 Activity 里
+   * 新建 webview；旧实例若不销毁，页面会继续运行，并以同一 id 向 Rust 发 IPC（响应却回到新页面）。
+   * 放在 super 之后，保证 wry 先拿到 webview id。
+   */
+  override fun onDestroy() {
+    // 先摘掉爬虫容器的引用：重建后的 MainActivity 会把它们重新挂到新的内容根节点。
+    CrawlerHost.detachMain(this)
+    val old = webView
+    super.onDestroy()
+    old?.let {
+      (it.parent as? android.view.ViewGroup)?.removeView(it)
+      it.destroy()
+    }
+    webView = null
+    crawlerBack = null
+  }
+
+  /**
+   * 爬虫页面（停靠在主 webview 下面）显示时接管返回键：按返回只「收起」，不退出主界面。
+   * 没有显示任何爬虫页面时禁用本回调，交回主界面的默认返回行为。
+   */
+  private fun installCrawlerBackCallback() {
+    crawlerBack?.remove()
+    val callback = object : OnBackPressedCallback(false) {
+      override fun handleOnBackPressed() {
+        CrawlerHost.hideShown()
+      }
+    }
+    onBackPressedDispatcher.addCallback(this, callback)
+    crawlerBack = callback
+  }
+
+  fun setCrawlerBackEnabled(enabled: Boolean) {
+    crawlerBack?.isEnabled = enabled
+  }
+
   // 重写 onWebViewCreate 以捕获 WebView 实例
   override fun onWebViewCreate(webView: WebView) {
       this.webView = webView
@@ -167,6 +219,12 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
       webView.postDelayed({
           injectSafeAreaInsets(webView, webView)
       }, 500)
+
+      // 必须在 super.onWebViewCreate（wry 的 setWebView）之后注册：分发器先调用最后注册的回调，
+      // 而 wry 在 setWebView 里注册的回调会把返回键消费成主界面 webview 的后退。
+      installCrawlerBackCallback()
+      // 主界面重建后，把仍在运行的爬虫页面容器挂到新的内容根节点（爬到下面继续跑）。
+      CrawlerHost.attachMain(this)
   }
 
   /**
@@ -181,7 +239,11 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
                       android.util.Log.w("Kabegame", "Failed to get original WebViewClient, skipping content:// streaming wrapper")
                       return
                   }
-              val wrappedClient = ContentUriStreamClient(applicationContext, originalClient) { v, _ ->
+              val wrappedClient = ContentUriStreamClient(
+                  applicationContext,
+                  originalClient,
+                  onRenderProcessGoneCallback = { view -> this@MainActivity.onMainRenderProcessGone(view) },
+              ) { v, _ ->
                   v?.let {
                       this@MainActivity.injectSafeAreaInsetsForPageFinished(it)
                   }
@@ -356,6 +418,7 @@ class MainActivity : TauriActivity(), PickerLauncherHost, TaskNotificationPermis
 private class ContentUriStreamClient(
     private val context: android.content.Context,
     private val delegate: WebViewClient,
+    private val onRenderProcessGoneCallback: ((WebView) -> Unit)? = null,
     private val onPageFinishedCallback: ((WebView?, String?) -> Unit)? = null
 ) : WebViewClient() {
 
@@ -483,5 +546,12 @@ private class ContentUriStreamClient(
         error: WebResourceError?
     ) {
         delegate.onReceivedError(view, request, error)
+    }
+
+    // 应用内所有 WebView（主界面、畅游、爬虫页）共用一个渲染进程；任何一个没处理渲染进程退出，
+    // Chromium 就会杀掉整个应用进程。主界面接住后自行重建。
+    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        onRenderProcessGoneCallback?.invoke(view) ?: return false
+        return true
     }
 }

@@ -69,6 +69,20 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:windowSoftInputMode="adjustResize" />
 
+        <!--
+            WebView 爬虫宿主：只当 wry 的宿主，页面由 CrawlerHost 停靠到主界面下，Activity 自己
+            在第一帧之前退到后台。每个实例单独成栈（documentLaunchMode="always"）。
+            不能 excludeFromRecents：离开前台即被 RecentTasks 回收（原型实测 182 ms）；
+            用户从最近任务划掉等同取消任务（autoRemoveFromRecents 在 finish 时清理卡片）。
+        -->
+        <activity
+            android:name=".CrawlerActivity"
+            android:exported="false"
+            android:documentLaunchMode="always"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"

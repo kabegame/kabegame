@@ -60,17 +60,25 @@
 ## 畅游（`surf/`）
 
 - [surf/ANDROID_SURF.md](surf/ANDROID_SURF.md)
-  - 主题：Android 畅游架构（Phase 1 + Phase 2）。涵盖内容页作为 `SurfActivity` 的 Tauri 主 webview
-    （label `surf-<host>:<n>`，与桌面共用注入脚本与按 label 认会话的命令）、原生 Kotlin 工具栏、
-    `SurfRegistry` 双向会合与 `ipcAvailable` 回传、Rust 单会话权威状态、移动插件命令与 Channel 事件、
+  - 主题：Android 畅游架构（Phase 1 + Phase 2 + Phase 3）。涵盖内容页作为 `SurfActivity` 的 Tauri
+    主 webview（label `surf-<host>:<n>`，与桌面共用注入脚本与按 label 认会话的命令）、原生 Kotlin
+    工具栏（导航状态置灰、真实加载进度、「更多」菜单）、`SurfRegistry` 双向会合与 `ipcAvailable`
+    回传、Rust 单会话权威状态、移动插件命令与 Channel 事件、
     wry `addJavascriptInterface` 换成只收主框架消息的 `addWebMessageListener`、注入脚本顶层守卫、
-    脚本下载与页面自发下载共用 `enqueue_surf_download` 并补 Cookie/UA/Referer、压缩包不下载不解压、
-    raw body 的安卓形态（分块写走 `{ base64 }`、MSE 分片合并、数字数组兼容）、关闭时手动释放内容 WebView、Cookie 合并保存与系统 WebView 默认 UA 登记（UA 不入库）、
-    安全边界、已知 Channel 生命周期（tauri 补丁 0011）、tao JNI 局部引用残留与 OAuth 限制。
-  - 适用场景：新增或排查 Android 畅游启动/关闭、原生工具栏地址与一键下载状态、返回键、登录态保存、
-    插件请求的 Cookie/UA 配对（403、`cefUserAgent()` 为 `null`）、页面下载被拒或类型误判、
-    `blob:` / MSE 分块写失败或很慢、关闭畅游后页面仍在后台运行或内存不回落、用 CDP 测试时页面下载回调不触发、
-    Activity 重建或外部页面意外获得 IPC。
+    多窗口与 OAuth 弹窗覆盖层（链接回内容页、脚本开窗走普通 WebView、最多一个、返回键顺序、
+    `SurfChromeClient` 转发清单）、按站点的桌面版网站与 UA 配对（`surf_records.desktop_mode`、
+    `android_desktop_user_agent` 唯一派生、`requireCookie` 替换默认 UA、下载补头随会话模式、WebView 爬虫宿主按建窗地址跟随）、
+    脚本下载与页面自发下载共用 `enqueue_surf_download` 并补 Cookie/UA/Referer、apk 安装包与压缩包
+    提前拒绝不解压、raw body 的安卓形态（分块写走 `{ base64 }`、MSE 分片合并、数字数组兼容）、
+    关闭与配置变化重建时手动释放内容 WebView（主界面同理）、重建后 binding 交接、应用内 WebView
+    共用渲染进程须各自处理 `onRenderProcessGone`、Cookie 合并保存与系统 WebView 默认 UA 登记、
+    安全边界、已知 Channel 生命周期（tauri 补丁 0011）与 tao JNI 局部引用残留。
+  - 适用场景：新增或排查 Android 畅游启动/关闭、原生工具栏地址 / 一键下载状态 / 后退前进置灰 /
+    加载进度、返回键、登录态保存、第三方登录弹窗无反应或弹窗不关闭、`target=_blank` 被误弹覆盖层、
+    插件请求的 Cookie/UA 配对（403、`cefUserAgent()` 为 `null`、桌面模式下仍 403）、站点强制跳应用
+    商店或下 apk、页面下载被拒或类型误判、`blob:` / MSE 分块写失败或很慢、关闭畅游后页面仍在后台运行
+    或内存不回落、用 CDP 测试时页面下载回调不触发、Activity 重建后出现两个主界面页面、旧页面 `invoke`
+    挂起或工具栏失效、外部页面崩溃连带应用闪退，或外部页面意外获得 IPC。
 
 ## 画廊与查询（`gallery/`）
 
@@ -112,6 +120,18 @@
   - 主题：Crawler JS 执行链路与相关模块关系，含提交时冻结 `Task/TaskParams`、内建 `local-import` 插件化及后端展示元数据、**内建 `webpage` 网页收集**（一份 `page_discover.js` 被畅游 / WebView / V8 三处复用、V8 与 WebView 共用编排、V8 默认注入畅游 Cookie 与 CEF UA、`TaskParams::uses_webview_transport` 任务级下载 transport、`run_webview_session` / `run_v8_and_drain` 共用收尾、提交前二次校验）、`get_plugins` 追加内建且前端管理列表过滤、web 本地导入入口移除、每任务独立 WebView 窗口、media_capture/media_download/bootstrap initialization scripts、页面自发原生下载的 `Kabegame.onNativeDownload` 事件出口、Task 内 page stack/state/`TaskResult` completion、worker await completion、按 `crawler-<task_id>` label 路由命令。
   - 适用场景：调度、注入、抓取流程排查与扩展；新增内建插件或排查网页收集（发现不全、Cookie/UA 未注入、WebView 任务下载丢登录态、快照缺失）；排查 JS 任务并发、窗口创建/销毁、IPC 路由、Task 注册表状态、`Kabegame.downloadImage` 对 blob/data/MSE 的分流、`Kabegame.onNativeDownload` 每页注册与 VFS 路径导入、会话 VFS 分块写、task-vfs 提交、DRM 拒绝与显式合流。
 
+- [crawler/ANDROID_WEBVIEW_CRAWLER.md](crawler/ANDROID_WEBVIEW_CRAWLER.md)
+  - 主题：Android WebView 爬虫（crawl.js 后端）的宿主 / 停靠模型。涵盖 `CrawlerActivity` 只当 wry 宿主
+    （`moveTaskToBack`、每个实例单独成栈、不能 `excludeFromRecents`）、`CrawlerHost` 把页面装进容器
+    垫到主界面主 webview 之下（`z=-1`，始终 `visible`，`show` / `hide` 只改 Z 序）、`ContentWebView`
+    主框架 IPC 与显式释放、`CrawlerRegistry` 会合与「预期关闭」、`CrawlerPlugin` 命令与每任务
+    `pageDownload` / `renderGone` / `cancel` / `closed` 事件、`ProcessLifecycleOwner` 前后台事件与
+    看门狗挂起、共享渲染进程的 `onRenderProcessGone`、脚本下载与页面自发下载补 Cookie/UA/Referer
+    走 reqwest、与畅游的复用边界，以及已知限制（Context 弹窗、移动版 DOM、JNI 引用残留、rAF 耗电）。
+  - 适用场景：在安卓上跑 JS（WebView）插件或网页收集的 webview 后端；排查后台暂停被误判成心跳超时、
+    页面不显示或收不起来、输入法 / 点击落到错误层级、任务完成后被误标取消、页面下载丢登录态、
+    主界面重建后爬虫页面消失、渲染进程崩溃连带应用退出。
+
 - [crawler/PIXIV_METADATA.md](crawler/PIXIV_METADATA.md)
   - 主题：Pixiv Rhai 插件 `metadata.body` 白名单入库与 DB 一次性迁移。
   - 适用场景：排查画册列表因 metadata 过大变慢、扩展 EJS 所需字段。
@@ -129,7 +149,7 @@
   - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败或很慢、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
-  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛、无 WebView 后端）。
+  - 主题：V8 爬虫运行时（桌面 + Android/aarch64，仅 iOS 不支持）的 Web 平台全局与 `Kabegame.*` 宿主桥（含每任务隔离的 `Kabegame.fs` 与虚拟路径媒体工具 `Kabegame.ffmpeg`）。涵盖 `plugin-runtime` feature 门控（主 app 启用、CLI 排除 deno/rusty_v8）、标准 `fetch` 使用、任务请求头合并、相对 URL 解析差异、SDK 保留工具模块；**运行时架构**（设备端共享 baseline startup snapshot 缓存、fresh fallback、当前 fingerprint=4、V8 版本/CRC 校验、`deno_crypto` cppgc restore 后初始化；**每任务独占 current_thread runtime**，不可借用多线程 runtime 的 `Handle::block_on`，否则 deno_core op 轮询任务跨线程竞争、任务卡死或进程 abort）；**网络宿主化**（`op_kabegame_fetch`/`op_kabegame_to` 走 `reqwest`，不引入 `deno_fetch`/`deno_net`/`deno_tls`，`Response`/`Headers` 在 `prelude.js` 自实现）；**Android 交叉编译**（官方无 Android 预编译，仓库自带 `bin/android/` 自建产物 + mode-plugin 注入 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH`、`V8_FROM_SOURCE` 自建流程、NDK libc++、`RustPlugin.kt` ABI 收敛；WebView 后端另见 [crawler/ANDROID_WEBVIEW_CRAWLER.md](crawler/ANDROID_WEBVIEW_CRAWLER.md)）。
   - 适用场景：编写/迁移 V8 插件；排查 startup snapshot 生成/失效/fallback、`Kabegame.fs` / `Kabegame.ffmpeg`、`fetch`、`URL`、`crypto`、`DOMParser`；更新 JS 插件模板和类型声明；排查 V8 任务偶发卡死不动（`RefCell already borrowed`）或跑插件时进程闪退；排查 V8 后端 Android 交叉编译（依赖门控 / 自建预编译产物 / NDK 链接）或网络/`Response`/`Headers` 行为。
 
 - [crawler/TASK_CONFIG.md](crawler/TASK_CONFIG.md)

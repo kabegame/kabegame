@@ -22,6 +22,9 @@ class SurfToolbarTexts {
   lateinit var cancel: String
   lateinit var openInBrowser: String
   lateinit var close: String
+  lateinit var closePopup: String
+  lateinit var more: String
+  lateinit var desktopSite: String
 }
 
 @InvokeArg
@@ -31,6 +34,10 @@ class SurfAttachArgs {
   lateinit var url: String
   lateinit var events: Channel
   lateinit var texts: SurfToolbarTexts
+  /** 派生不出桌面 UA（默认 UA 尚未登记）时为 null，「桌面版网站」菜单项隐藏。 */
+  var desktopUserAgent: String? = null
+  /** 记录当前是否以桌面版打开；配置变化重建时以它为准。 */
+  var desktopMode: Boolean = false
 }
 
 @InvokeArg
@@ -55,6 +62,9 @@ data class SurfBinding(
   val url: String,
   val events: Channel,
   val texts: SurfToolbarTexts,
+  val desktopUserAgent: String?,
+  /** 桌面模式：切换时就地更新，配置变化重建时交给新实例。 */
+  var desktopMode: Boolean,
 )
 
 private class PendingAttach(val binding: SurfBinding, val invoke: Invoke)
@@ -69,6 +79,8 @@ private class PendingAttach(val binding: SurfBinding, val invoke: Invoke)
 object SurfRegistry {
   private val activities = HashMap<String, SurfActivity>()
   private val pending = HashMap<String, PendingAttach>()
+  /** 配置变化重建时旧实例留下的 binding，由同 label 的新实例接走。 */
+  private val carried = HashMap<String, SurfBinding>()
 
   fun attach(binding: SurfBinding, invoke: Invoke) {
     val activity = activities[binding.label]
@@ -82,16 +94,26 @@ object SurfRegistry {
 
   fun onActivityReady(label: String, activity: SurfActivity) {
     activities[label] = activity
-    pending.remove(label)?.let { attach ->
+    val attach = pending.remove(label)
+    if (attach != null) {
+      carried.remove(label)
       activity.bind(attach.binding)
       resolve(attach.invoke, activity)
+    } else {
+      carried.remove(label)?.let { activity.bind(it) }
     }
   }
 
-  fun onActivityGone(label: String, activity: SurfActivity) {
+  /** [carry] 非空表示配置变化重建：保留 binding（及未完成的 attach），等新实例接走。 */
+  fun onActivityGone(label: String, activity: SurfActivity, carry: SurfBinding? = null) {
     if (activities[label] === activity) {
       activities.remove(label)
-      pending.remove(label)?.let { attach -> attach.invoke.reject("畅游页面已关闭") }
+      if (carry != null) {
+        carried[label] = carry
+      } else {
+        carried.remove(label)
+        pending.remove(label)?.let { attach -> attach.invoke.reject("畅游页面已关闭") }
+      }
     }
   }
 
@@ -109,7 +131,15 @@ class SurfPlugin(private val activity: Activity) : Plugin(activity) {
     val args = invoke.parseArgs(SurfAttachArgs::class.java)
     activity.runOnUiThread {
       SurfRegistry.attach(
-        SurfBinding(args.label, args.host, args.url, args.events, args.texts),
+        SurfBinding(
+          args.label,
+          args.host,
+          args.url,
+          args.events,
+          args.texts,
+          args.desktopUserAgent,
+          args.desktopMode,
+        ),
         invoke,
       )
     }

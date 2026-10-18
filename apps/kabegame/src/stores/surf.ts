@@ -12,6 +12,8 @@ export interface SurfRecord {
   icon?: number[] | null;
   lastVisitAt: number;
   createdAt: number;
+  /** 安卓畅游：该站点是否以桌面版网站打开。本期只在原生菜单里可见。 */
+  desktopMode?: boolean;
   lastImage?: ImageInfo | null;
 }
 

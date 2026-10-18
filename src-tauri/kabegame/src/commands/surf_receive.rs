@@ -80,13 +80,16 @@ pub(crate) struct SurfDownloadRequest {
     pub(crate) source_url: Option<String>,
 }
 
-/// 安卓补头：`Cookie` 取媒体 URL 在 CookieManager 里的值（含 HttpOnly），`User-Agent` 用系统
-/// WebView 默认 UA（与 Cookie 签发 UA 一致），`Referer` 用内容页当前地址。
+/// 安卓补头：`Cookie` 取媒体 URL 在 CookieManager 里的值（含 HttpOnly），`User-Agent` 按当前
+/// 畅游会话的桌面 / 移动模式取 UA（与 Cookie 签发 UA 一致；爬虫会话恒为系统默认 UA），
+/// `Referer` 用内容页当前地址。
 ///
 /// Cookie 经 SurfPlugin 读取（见 `surf_android::cookie_header_for_url`），不用 wry 的
 /// `cookies_for_url`：没有 Cookie 的 URL 会让 wry 生成的 Kotlin 抛 NPE。
+///
+/// 畅游（`enqueue_surf_download`）与爬虫（`crawl_download_image`、页面自发下载）共用这一份口径。
 #[cfg(target_os = "android")]
-async fn android_surf_headers<R: Runtime>(
+pub(crate) async fn android_identity_headers<R: Runtime>(
     webview: &Webview<R>,
     url: &Url,
 ) -> HashMap<String, String> {
@@ -98,7 +101,18 @@ async fn android_surf_headers<R: Runtime>(
     {
         headers.insert("Cookie".to_string(), cookie);
     }
-    if let Some(user_agent) = kabegame_core::plugin::v8::android_webview_user_agent() {
+    // 下载补头必须与页面当前 UA 一致（Cookie 与签发 UA 配对）：畅游看会话模式，爬虫宿主看
+    // 建窗时选定的 UA。派生失败时回落到系统默认 UA，不能没有 UA。
+    let label = webview.label();
+    let user_agent = if super::surf_android::is_desktop_session(label) {
+        kabegame_core::plugin::v8::android_desktop_user_agent()
+            .or_else(kabegame_core::plugin::v8::android_webview_user_agent)
+    } else if let Some(user_agent) = super::crawler_android::desktop_user_agent_for_label(label) {
+        Some(user_agent)
+    } else {
+        kabegame_core::plugin::v8::android_webview_user_agent()
+    };
+    if let Some(user_agent) = user_agent {
         headers.insert("User-Agent".to_string(), user_agent);
     }
     if let Ok(current) = webview.url() {
@@ -122,9 +136,7 @@ pub(crate) async fn enqueue_surf_download<R: Runtime>(
         }
     }
 
-    let custom_name = req
-        .name
-        .or_else(|| surf_download_name_from_url(&req.url));
+    let custom_name = req.name.or_else(|| surf_download_name_from_url(&req.url));
     let metadata_id = match req.metadata_id {
         Some(id) => {
             let owner = Storage::global().metadata_plugin_id(id)?;
@@ -140,7 +152,7 @@ pub(crate) async fn enqueue_surf_download<R: Runtime>(
     #[cfg(target_os = "android")]
     let http_headers = {
         let mut headers = req.headers;
-        headers.extend(android_surf_headers(webview, &req.url).await);
+        headers.extend(android_identity_headers(webview, &req.url).await);
         headers
     };
     #[cfg(not(target_os = "android"))]

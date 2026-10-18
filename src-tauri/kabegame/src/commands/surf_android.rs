@@ -28,6 +28,8 @@ struct AndroidSurfSession {
     label: String,
     /// 主框架 IPC 是否可用。设备不支持 `WEB_MESSAGE_LISTENER` 时关闭，只能浏览、不能一键下载。
     ipc_available: bool,
+    /// 该站点是否以桌面版网站打开（`surf_records.desktop_mode`）。
+    desktop_mode: bool,
 }
 
 static SESSION: Mutex<Option<AndroidSurfSession>> = Mutex::new(None);
@@ -47,6 +49,9 @@ struct SurfToolbarTexts {
     cancel: String,
     open_in_browser: String,
     close: String,
+    close_popup: String,
+    more: String,
+    desktop_site: String,
 }
 
 #[derive(Serialize)]
@@ -57,6 +62,10 @@ struct AttachArgs {
     url: String,
     events: Channel<serde_json::Value>,
     texts: SurfToolbarTexts,
+    /// 派生不出桌面 UA（系统默认 UA 尚未登记）时为 `None`，Kotlin 隐藏「桌面版网站」菜单项。
+    desktop_user_agent: Option<String>,
+    /// 记录当前是否以桌面版打开；Kotlin 据此在配置变化重建后纠正 webview 的 UA。
+    desktop_mode: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -105,6 +114,10 @@ enum SurfContentEvent {
         suggested_name: Option<String>,
         mime_type: Option<String>,
     },
+    /// 「更多」菜单里的「桌面版网站」开关（Kotlin 立即生效并刷新后才上报）。
+    DesktopModeChanged {
+        desktop: bool,
+    },
 }
 
 #[derive(serde::Deserialize)]
@@ -117,8 +130,9 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("kabegame-surf")
         .setup(|app, api| {
             let handle = api.register_android_plugin("app.kabegame", "SurfPlugin")?;
-            // 畅游内容页保持系统 WebView 默认 UA；登记给 `Kabegame.cefUserAgent()`，
-            // 让插件请求与 Cookie（如 cf_clearance）的签发 UA 一致。畅游下载补 User-Agent 也用它。
+            // 内容页移动模式保持系统 WebView 默认 UA；登记给 `Kabegame.cefUserAgent()`，
+            // 让插件请求与 Cookie（如 cf_clearance）的签发 UA 一致。畅游下载补 User-Agent、
+            // 以及桌面模式派生 `android_desktop_user_agent()` 都以它为基准。
             let ua_handle = handle.clone();
             tauri::async_runtime::spawn(async move {
                 match ua_handle
@@ -163,6 +177,22 @@ fn is_current_session(label: &str) -> bool {
         .is_some_and(|session| session.label == label)
 }
 
+/// 当前会话是否以桌面版网站打开该站点。
+///
+/// 供畅游下载补头使用；爬虫会话等非畅游 label 一律返回 false（保持系统默认 UA）。
+pub(crate) fn is_desktop_session(label: &str) -> bool {
+    SESSION
+        .lock()
+        .ok()
+        .and_then(|session| {
+            session
+                .as_ref()
+                .filter(|session| session.label == label)
+                .map(|session| session.desktop_mode)
+        })
+        .unwrap_or(false)
+}
+
 fn next_label(host: &str) -> String {
     let id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     let base = super::surf_common::surf_label(host);
@@ -180,6 +210,9 @@ fn toolbar_texts() -> SurfToolbarTexts {
         cancel: t!("surf.toolbar.cancel"),
         open_in_browser: t!("surf.toolbar.openInBrowser"),
         close: t!("surf.toolbar.close"),
+        close_popup: t!("surf.toolbar.closePopup"),
+        more: t!("surf.toolbar.more"),
+        desktop_site: t!("surf.toolbar.desktopSite"),
     }
 }
 
@@ -249,6 +282,21 @@ fn on_content_event<R: Runtime>(
                 surf_toast_for_host(app, &session.host, &error, "failed");
             }
         }
+        SurfContentEvent::DesktopModeChanged { desktop } => {
+            // Kotlin 是显示状态权威，记录是持久化权威：核对当前会话后同时更新两者。
+            if !is_current_session(&session.label) {
+                return;
+            }
+            if let Ok(mut current) = SESSION.lock() {
+                if let Some(active) = current
+                    .as_mut()
+                    .filter(|active| active.label == session.label)
+                {
+                    active.desktop_mode = desktop;
+                }
+            }
+            let _ = Storage::global().set_surf_record_desktop_mode(&session.record_id, desktop);
+        }
         SurfContentEvent::PageDownload {
             url,
             suggested_name,
@@ -265,8 +313,9 @@ fn on_content_event<R: Runtime>(
 
 /// 页面自发下载（`Content-Disposition: attachment` 或 WebView 渲染不了的 MIME）。
 ///
-/// - http(s)：按文件名 / MIME 判定是否支持的媒体，不是（含 zip 等压缩包）直接拒绝、不发起下载；
-///   是则与脚本下载共用 `enqueue_surf_download`（同样补 Cookie / UA / Referer），直接入图库。
+/// - http(s)：先拒绝安卓安装包（apk / apks / xapk / aab）与明确的压缩包，都不是再按文件名 / MIME
+///   判定是否支持的媒体；是则与脚本下载共用 `enqueue_surf_download`（同样补 Cookie / UA / Referer），
+///   直接入图库。
 /// - `data:` / `blob:`：字节只在页面里，转回 `media_download.js` 的 `__kb_media_download__`。
 async fn on_page_download<R: Runtime>(
     app: &AppHandle<R>,
@@ -295,6 +344,11 @@ async fn on_page_download<R: Runtime>(
             );
         }
         "http" | "https" => {
+            // 安装包既不是媒体也不在压缩包名单：提前拒绝，否则会入队、下载完才报「格式不受支持」。
+            if super::surf_common::is_app_package_download(name, mime_type) {
+                toast("surf.download.appPackage");
+                return;
+            }
             let by_name = name.is_some_and(|name| image_type::is_media_by_path(Path::new(name)));
             let by_mime = mime_type.is_some_and(image_type::is_supported_media_mime);
             // 只提前拒绝明确的压缩包：解压属于各爬虫插件自己的事（Kabegame.archive），畅游只收媒体。
@@ -417,6 +471,14 @@ pub async fn surf_start_session<R: Runtime>(
     for script in surf_initialization_scripts() {
         builder = builder.initialization_script(script);
     }
+    // 桌面模式：首个请求就带桌面 UA。强制跳应用商店 / 下发 apk 往往发生在首个请求，
+    // 等 Kotlin 收到 attach 再换 UA 已经晚了一步。
+    let desktop_user_agent = kabegame_core::plugin::v8::android_desktop_user_agent();
+    if record.desktop_mode {
+        if let Some(user_agent) = desktop_user_agent.as_deref() {
+            builder = builder.user_agent(user_agent);
+        }
+    }
     let builder = builder
         .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
         .on_page_load({
@@ -438,6 +500,7 @@ pub async fn surf_start_session<R: Runtime>(
         record_id: record.id.clone(),
         label: label.clone(),
         ipc_available: false,
+        desktop_mode: record.desktop_mode,
     };
     *SESSION
         .lock()
@@ -468,6 +531,8 @@ pub async fn surf_start_session<R: Runtime>(
                 url: parsed.to_string(),
                 events,
                 texts: toolbar_texts(),
+                desktop_user_agent,
+                desktop_mode: record.desktop_mode,
             },
         ),
     )

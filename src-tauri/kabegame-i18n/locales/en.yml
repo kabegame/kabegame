@@ -119,9 +119,13 @@ surf:
     cancel: "Cancel download"
     openInBrowser: "Open in browser"
     close: "Close"
+    closePopup: "Close popup"
+    more: "More"
+    desktopSite: "Desktop site"
   download:
     unsupportedType: "Unsupported download type: Surf only receives images and videos"
     unsupportedScheme: "Unsupported download address"
+    appPackage: "Blocked an app installer download. If the site hides web sign-in, switch to Desktop site from the menu"
   collect:
     detecting: "Detecting media on this page…"
     none: "No downloadable media found on this page"
@@ -176,3 +180,8 @@ webview:
     notCaptured: "No media stream was captured for this video (the page may have started playing before injection; reload and try again)"
     captureMissing: "No capture data found for this video"
     captureEmpty: "The capture contains no media data"
+
+crawler:
+  toolbar:
+    collapse: "Collapse"
+    cancel: "Cancel task"

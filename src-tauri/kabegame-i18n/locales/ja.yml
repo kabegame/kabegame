@@ -119,9 +119,13 @@ surf:
     cancel: "ダウンロードをキャンセル"
     openInBrowser: "ブラウザーで開く"
     close: "閉じる"
+    closePopup: "ポップアップを閉じる"
+    more: "その他"
+    desktopSite: "PC 版サイト"
   download:
     unsupportedType: "未対応のダウンロード形式です。サーフは画像と動画のみ受け取ります"
     unsupportedScheme: "未対応のダウンロード URL です"
+    appPackage: "アプリのインストールパッケージのダウンロードをブロックしました。Web ログインが表示されない場合は、メニューから PC 版サイトに切り替えてください"
   collect:
     detecting: "メディアを検出しています…"
     none: "このページにダウンロード可能なメディアは見つかりませんでした"
@@ -176,3 +180,8 @@ webview:
     notCaptured: "この動画のメディアストリームをキャプチャできませんでした（注入前に再生が始まった可能性があります。ページを再読み込みして再試行してください）"
     captureMissing: "この動画のキャプチャデータが見つかりません"
     captureEmpty: "キャプチャにメディアデータがありません"
+
+crawler:
+  toolbar:
+    collapse: "閉じる"
+    cancel: "タスクをキャンセル"

@@ -1,30 +1,14 @@
-import { ElMessageBox } from "@kabegame/element-plus";
-import { i18n } from "@kabegame/i18n";
 import { IS_ANDROID } from "@/env";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import { usePluginStore } from "@/stores/plugins";
 import { useCrawlerStore, type CrawlTask } from "@/stores/crawler";
 import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 
 /**
- * 起任务前置守卫：web 端拦截 + Android 下 JS 插件拒绝。返回 `false` 表示应中止。
+ * 起任务前置守卫：web 端拦截。Android 上 JS（WebView）插件与 V8 插件都可运行，不再按类型拒绝。
+ * 返回 `false` 表示应中止。
  */
-export async function guardPluginPlatform(pluginId: string): Promise<boolean> {
+export async function guardPluginPlatform(): Promise<boolean> {
   if (await guardDesktopOnly("crawl", { needSuper: true })) return false;
-
-  if (IS_ANDROID) {
-    const pluginStore = usePluginStore();
-    const plugin = pluginStore.plugins.find((p) => p.id === pluginId);
-    if (plugin?.scriptType === "js") {
-      await ElMessageBox.alert(
-        i18n.global.t("plugins.jsPluginAndroidNotSupported"),
-        i18n.global.t("plugins.jsPluginAndroidNotSupportedTitle"),
-        { confirmButtonText: i18n.global.t("common.ok"), type: "warning" as const },
-      );
-      return false;
-    }
-  }
-
   return true;
 }
 

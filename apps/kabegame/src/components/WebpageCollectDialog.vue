@@ -17,9 +17,6 @@
         />
       </el-form-item>
       <PluginVarsForm v-model="form.vars" :plugin-vars="visibleVarDefs" />
-      <div v-if="IS_ANDROID" class="mb-3 text-xs text-[var(--anime-text-secondary)]">
-        {{ $t("gallery.webpageWebviewDesktopOnly") }}
-      </div>
 
       <el-divider content-position="left">{{ $t("gallery.webpageSectionSaveTo") }}</el-divider>
       <el-form-item v-if="!uiStore.isCompact" :label="$t('plugins.outputDir')">
@@ -102,11 +99,11 @@ import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
-import { IS_ANDROID, IS_WEB } from "@/env";
+import { IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { visibleVarDefs as resolveVisibleVarDefs } from "@/utils/pluginVarWhen";
-import { expandVarsForBackend, normalizeVarsForUI, optionValue, type PluginVarDef } from "@/utils/pluginVarForm";
+import { expandVarsForBackend, normalizeVarsForUI, type PluginVarDef } from "@/utils/pluginVarForm";
 import { usePluginStore } from "@/stores/plugins";
 import { WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
 import { HIDDEN_ALBUM_ID, createAlbum } from "@/services/albums";
@@ -145,16 +142,7 @@ const shellProps = computed(() =>
 /** 字段定义来自内置插件 `webpage.config.vars`（URL / 后端 / Cookie / UA），不在前端另写一套 */
 const varDefs = computed<PluginVarDef[]>(() => {
   const plugin = pluginStore.plugins.find((p) => p.id === WEBPAGE_PLUGIN_ID);
-  const defs = ((plugin?.config?.vars as PluginVarDef[] | undefined) ?? []).map((def) => ({ ...def }));
-  if (!IS_ANDROID) return defs;
-  // Android 无 CEF / 畅游：只保留 V8 后端，去掉依赖浏览器的注入开关
-  return defs
-    .filter((def) => def.key !== "injectSurfCookie" && def.key !== "injectCefUserAgent")
-    .map((def) =>
-      def.key === "backend"
-        ? { ...def, options: (def.options ?? []).filter((opt) => optionValue(opt) !== "webview") }
-        : def,
-    );
+  return ((plugin?.config?.vars as PluginVarDef[] | undefined) ?? []).map((def) => ({ ...def }));
 });
 const urlVarDef = computed(() => varDefs.value.find((def) => def.key === "url"));
 const visibleVarDefs = computed(() =>
