@@ -136,7 +136,7 @@ V8 플러그인은 자체 완결형 ES Module로, HTTP 요청, API, HTML 파싱�
 | Windows x64 | `Kabegame-standard_<버전>_x64-setup.exe` | 더블클릭으로 설치합니다. 화집 가상 디스크에는 Dokan 2.x가 필요하며, 처음 활성화할 때 앱이 설치를 안내합니다. |
 | macOS Apple 실리콘 | `Kabegame-standard_<버전>_aarch64.dmg` | macOS 11 이상을 지원하며, 설치 파일은 아직 서명되지 않았습니다. |
 | Linux amd64 | `Kabegame-standard_<버전>_amd64.deb` | `apt`로 설치합니다. 화집 가상 디스크는 `fuse3`에 의존합니다. |
-| Android | `Kabegame_<버전>_android-preview.apk` | Android 8.0 이상. 현재는 v4.3.0을 사용하세요. 이후 버전은 아직 대응 중입니다. |
+| Android | `Kabegame_<버전>_android-preview.apk` | Android 8.0 이상. 최신 버전은 Releases에서 다운로드할 수 있습니다. |
 
 macOS 첫 실행 시 개발자를 확인할 수 없거나 앱이 손상되었다고 표시되면:
 

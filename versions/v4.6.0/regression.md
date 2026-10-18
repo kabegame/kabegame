@@ -1,5 +1,15 @@
 # v4.5.2 regression
 
+## Android 发行版本限制清理
+
+README 的中文、英文、日文、韩文版本以及主站安装页移除“仅使用 v4.3.0、后续版本仍在适配”的过时提示，改为长期有效的最新版本下载说明；插件开发文档中的 4.3.0 API 基线不受影响。
+
+| 是否完成 | 标题 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 过时提示清理 | 仓库文本检索 | 搜索 Android 与“仅使用 v4.3.0”的组合 | README 与用户指南不再包含该提示；插件 API / 清单的 4.3.0 基线保留 | 已检索 |
+| [ ] | README 下载入口 | GitHub README（中文 / 英文 / 日文 / 韩文） | 查看“下载与平台”表格的 Android 行并点击 Releases | 不限制应用版本，链接进入最新发行页，可找到 Android APK | |
+| [ ] | 主站安装说明 | 文档站 `/guide/installation/` | 查看 Android 版本说明并点击 Releases | 引导下载最新 APK，仍正确展示 APK 文件名和 Android 8.0 最低要求 | |
+
 ## Android 设置统一走路由页
 
 设置原先按 `isCompact` 分流：紧凑走 `/settings` 路由页，否则开 `SettingsDialog`。Android 平板宽屏与横屏手机

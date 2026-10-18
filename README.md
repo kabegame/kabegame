@@ -136,7 +136,7 @@ V8 插件是自包含的 ES Module，适合使用 HTTP 请求、API 和 HTML 解
 | Windows x64 | `Kabegame-standard_<版本>_x64-setup.exe` | 双击安装。画册虚拟盘需要 Dokan 2.x，首次启用时应用会提示安装。 |
 | macOS Apple 芯片 | `Kabegame-standard_<版本>_aarch64.dmg` | 支持 macOS 11 及以上；安装包暂未签名。 |
 | Linux amd64 | `Kabegame-standard_<版本>_amd64.deb` | 使用 `apt` 安装；画册虚拟盘依赖 `fuse3`。 |
-| Android | `Kabegame_<版本>_android-preview.apk` | Android 8.0 及以上；目前请使用 v4.3.0，后续版本仍在适配。 |
+| Android | `Kabegame_<版本>_android-preview.apk` | Android 8.0 及以上；可从 Releases 下载最新版本。 |
 
 macOS 首次启动若提示无法验证开发者或应用已损坏：
 

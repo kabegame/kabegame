@@ -136,7 +136,7 @@ V8 プラグインは自己完結した ES Module で、HTTP リクエスト、A
 | Windows x64 | `Kabegame-standard_<バージョン>_x64-setup.exe` | ダブルクリックでインストールします。画集仮想ディスクには Dokan 2.x が必要で、初回有効時にアプリがインストールを促します。 |
 | macOS Apple シリコン | `Kabegame-standard_<バージョン>_aarch64.dmg` | macOS 11 以降に対応。インストーラーはまだ署名されていません。 |
 | Linux amd64 | `Kabegame-standard_<バージョン>_amd64.deb` | `apt` でインストールします。画集仮想ディスクは `fuse3` に依存します。 |
-| Android | `Kabegame_<バージョン>_android-preview.apk` | Android 8.0 以降。現時点では v4.3.0 を使用してください。以降のバージョンは現在対応中です。 |
+| Android | `Kabegame_<バージョン>_android-preview.apk` | Android 8.0 以降。最新版は Releases からダウンロードできます。 |
 
 macOS の初回起動で開発元を検証できない、またはアプリが壊れていると表示された場合：
 

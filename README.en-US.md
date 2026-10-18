@@ -136,7 +136,7 @@ The desktop version is the primary release; `kabegame-cli` is a separate, option
 | Windows x64 | `Kabegame-standard_<version>_x64-setup.exe` | Double-click to install. The album virtual disk needs Dokan 2.x; the app prompts you to install it the first time you enable it. |
 | macOS Apple silicon | `Kabegame-standard_<version>_aarch64.dmg` | Supports macOS 11 and later; the installer is not yet signed. |
 | Linux amd64 | `Kabegame-standard_<version>_amd64.deb` | Install with `apt`; the album virtual disk depends on `fuse3`. |
-| Android | `Kabegame_<version>_android-preview.apk` | Android 8.0 and later; use v4.3.0 for now, later versions are still being adapted. |
+| Android | `Kabegame_<version>_android-preview.apk` | Android 8.0 and later; download the latest version from Releases. |
 
 If macOS reports an unverified developer or a damaged app on first launch:
 

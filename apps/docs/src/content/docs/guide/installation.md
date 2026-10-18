@@ -82,7 +82,7 @@ sudo apt install fuse3
 
 ## Android
 
-从 [Releases](https://github.com/kabegame/kabegame/releases/latest) 页面下载 `Kabegame_<版本>_android-preview.apk`，按照以下步骤安装：
+从 [Releases](https://github.com/kabegame/kabegame/releases/latest) 页面下载最新的 `Kabegame_<版本>_android-preview.apk`，按照以下步骤安装：
 
 1. 在系统设置中允许浏览器或文件管理器「安装未知来源的应用」。
 2. 在文件管理器中点击下载的 APK，按提示完成安装。
