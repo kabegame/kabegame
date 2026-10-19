@@ -5,20 +5,17 @@
 # 给定一个版本号，把「这一版到底改了什么」和「Kabegame 的世界观 / 角色 / UI 布局」
 # 两类素材拼成一份大 prompt，交给 AI 后端（codex 或 claude）产出四格漫画剧情 JSON，
 # 最后由 scripts/regenerate-comic-prompts.py 拆成一个个可直接复制给图片生成 AI 的 prompt.md。
+# 更新内容以 changelog 为唯一主素材：代码 diff 体量大、模型读不好，不再喂给 AI。
 # 先从参数得到应用版本、AI后端、需要的漫画剧情候选数量等信息, 生成以下临时文件：
-#     changelog-<tag>.md   本版更新日志：优先 versions/v<version>/changelog.md，
-#                          老版本回退到 CHANGELOG.md 里按 "## <version>" 段落抽取。
-#     commits-<base>-<head>.txt   git log --oneline（不含 merge）
-#     diffstat-<base>-<head>.txt  git diff --stat
-#     selected-patch-<base>-<head>.diff
-#                          过滤掉 lock/target/dist/node_modules/third 和图片视频等二进制后，
-#                          最多取 80 个文件的 unified=80 patch，超过 220000 字节截断。
-#     codex-prompt.md      真正喂给 AI 的完整 prompt，由本脚本内嵌的中文指令模板
-#                          加上以上 4 个文件的路径拼成。
+#   （本版更新日志只读 versions/v<version>/changelog.md，缺失即报错；
+#     全文直接 dump 进 prompt 开头，让模型先读它，不另生成临时文件。）
+#     commits-<base>-<head>.txt   git log --oneline（不含 merge），只作 changelog 的补充参考
+#     codex-prompt.md      真正喂给 AI 的完整 prompt，由本脚本内嵌的中文指令模板、
+#                          changelog 全文和 commits 文件路径拼成。
 #   正式产物两处：
 #     --out      原始 JSON 响应，默认 versions/<tag>/4koma/generated-prompts.json
 #     --out-dir  拆分后的 prompt，默认 versions/<tag>/4koma/generated-prompts/，
-#                形如 comic-XX-slug/<具体剧情名称>.prompt.md
+#                形如 comic-XX-slug/<剧情编号>-<具体剧情名称>.prompt.md（剧情编号从 1 起）
 #
 # 每个剧情候选最终得到一份 .prompt.md（落在 --out-dir 下），可整份复制给图片生成 AI。
 # 它由 regenerate-comic-prompts.py 按以下顺序拼出：
@@ -59,21 +56,20 @@ Options:
   --out FILE       Raw JSON response. Defaults to versions/vVERSION/4koma/generated-prompts.json.
   --out-dir DIR    Directory for split prompts. Defaults to versions/vVERSION/4koma/generated-prompts.
   --backend BACKEND
-                   AI backend to use. One of: codex, claude. Defaults to codex.
-  --model MODEL    Model for the backend. Defaults to gpt-5.5 (codex) or claude-opus-4-8 (claude).
+                   AI backend to use. One of: codex, claude. Defaults to claude.
+  --model MODEL    Model for the backend. Defaults to claude-opus-5-5 (claude) or gpt-5.6-sol (codex).
   --reasoning-effort EFFORT
                    Reasoning effort / thinking level. Codex only; ignored for claude. Defaults to high.
   --dry-run        Build context and print the backend command, but do not call it.
   -h, --help       Show this help.
 
 The script combines:
-  - CHANGELOG.md section for the requested version
-  - git commits and diff stats between base..head
-  - selected git patches for changed source/docs files
+  - the changelog for the requested version (dumped into the prompt, read first)
+  - git commit subjects between base..head (supplementary only)
   - 4koma base character/UI/layout prompt files
 
-It then calls codex exec, stores the raw JSON response, and splits each comic into:
-  OUT_DIR/comic-XX-slug/具体剧情名称.prompt.md
+It then calls the AI backend (claude by default, or codex exec), stores the raw JSON response, and splits each comic into:
+  OUT_DIR/comic-XX-slug/<story no>-<具体剧情名称>.prompt.md
   ...
 USAGE
 }
@@ -101,7 +97,7 @@ story_candidates="1"
 gag_candidates="1"
 out_file="versions/${tag}/4koma/generated-prompts.json"
 out_dir="versions/${tag}/4koma/generated-prompts"
-backend="codex"
+backend="claude"
 model=""
 reasoning_effort="high"
 dry_run="0"
@@ -180,7 +176,7 @@ done
 candidates=$((story_candidates + gag_candidates))
 
 if [[ -z "$model" ]]; then
-  [[ "$backend" == "claude" ]] && model="claude-opus-4-8" || model="gpt-5.5"
+  [[ "$backend" == "claude" ]] && model="claude-opus-5-5" || model="gpt-5.6-sol"
 fi
 
 if [[ "$backend" == "claude" ]]; then
@@ -190,8 +186,9 @@ else
 fi
 command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || die "python3/python command not found"
 python_cmd="$(command -v python3 2>/dev/null || command -v python)"
-[[ -f "versions/v${version}/changelog.md" || -f CHANGELOG.md ]] \
-  || die "changelog not found: versions/v${version}/changelog.md"
+# 更新日志只认 versions/v<version>/changelog.md，没有或为空就直接报错，不回退到别处。
+changelog_file="versions/${tag}/changelog.md"
+[[ -s "$changelog_file" ]] || die "changelog not found or empty: ${changelog_file}"
 [[ -d 4koma ]] || die "4koma directory not found"
 
 if [[ -z "$head_ref" ]]; then
@@ -230,66 +227,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-changelog_file="$tmp_dir/changelog-${tag}.md"
-diffstat_file="$tmp_dir/diffstat-${base_ref//\//_}-${head_ref//\//_}.txt"
 commits_file="$tmp_dir/commits-${base_ref//\//_}-${head_ref//\//_}.txt"
-patch_file="$tmp_dir/selected-patch-${base_ref//\//_}-${head_ref//\//_}.diff"
 prompt_file="$tmp_dir/codex-prompt.md"
 
-# 更新日志自 v4.4.1 起按版本拆到 versions/v<version>/changelog.md；老版本仍可从历史
-# CHANGELOG.md（现已收敛为索引）里按段落提取，故保留 awk 回退。
-if [[ -f "versions/v${version}/changelog.md" ]]; then
-  cat "versions/v${version}/changelog.md" > "$changelog_file"
-elif [[ -f CHANGELOG.md ]]; then
-  awk -v ver="$version" '
-    $0 ~ "^## \\[?" ver "\\]?" { in_section=1; print; next }
-    in_section && /^## / { exit }
-    in_section { print }
-  ' CHANGELOG.md > "$changelog_file"
-fi
-
-if [[ ! -s "$changelog_file" ]]; then
-  echo "No changelog section found for ${version}." > "$changelog_file"
-fi
-
 git log --oneline --decorate --no-merges "${base_ref}..${head_ref}" > "$commits_file" || true
-git diff --stat "${base_ref}..${head_ref}" > "$diffstat_file"
-
-# Keep the patch useful but bounded. Binary files, locks, generated build outputs, and media are
-# not useful for prompt writing and can make the context too noisy.
-changed_files=()
-while IFS= read -r changed_file; do
-  changed_files+=("$changed_file")
-done < <(
-  git diff --name-only "${base_ref}..${head_ref}" |
-    grep -Ev '(^bun\.lock$|(^|/)package-lock\.json$|(^|/)target/|(^|/)dist/|(^|/)node_modules/|(^|/)third/|\.png$|\.jpg$|\.jpeg$|\.gif$|\.webp$|\.mp4$|\.mov$|\.dmg$|\.deb$|\.exe$)' |
-    head -n 80
-)
-
-{
-  echo "Selected patch from ${base_ref}..${head_ref}"
-  echo
-  if [[ "${#changed_files[@]}" -eq 0 ]]; then
-    echo "No selected text patches."
-  else
-    git diff --unified=80 --no-ext-diff "${base_ref}..${head_ref}" -- "${changed_files[@]}"
-  fi
-} > "$patch_file"
-
-if [[ "$(wc -c < "$patch_file")" -gt 220000 ]]; then
-  head -c 220000 "$patch_file" > "${patch_file}.truncated"
-  {
-    cat "${patch_file}.truncated"
-    echo
-    echo "[patch truncated by script at 220000 bytes]"
-  } > "$patch_file"
-fi
 
 cat > "$prompt_file" <<EOF
 你是一个严谨的软件发布漫画 prompt 策划助手。请为 Kabegame ${tag} 生成一组“发布漫画”的最终图片生成 prompts。
 
+请先完整读完下面这份本版 CHANGELOG，它是本次发布更新内容的唯一主依据；之后再去读仓库里的 prompt 文件。
+
+===== Kabegame ${tag} CHANGELOG 开始 =====
+$(cat "$changelog_file")
+===== Kabegame ${tag} CHANGELOG 结束 =====
+
 目标：
-- 结合 CHANGELOG 和真实代码改动两方信息，不要只复述 changelog。
+- 以上面的 CHANGELOG 为准挑选漫画主题和更新点，不要编造 CHANGELOG 里没有的更新；但不要逐条复述 changelog，而是把它转译成用户能看懂的场景。
 - 输出 ${count} 个不同主题的漫画，每个漫画主题下生成 ${candidates} 个剧情候选 prompt，并严格输出 JSON。
 - 每个 comic 下必须包含 ${story_candidates} 个无笑点/说明型 story candidate，和 ${gag_candidates} 个有笑点/小コント gag candidate。story candidate 至少一个，用来清楚讲明更新内容，不强制制造笑点。
 - 同一个 comic 下的所有 candidates 必须讲同一件更新内容、使用同一组核心更新点；candidate 之间只改变四格剧情的演出方式、误会点、吐槽点、オチ/落ち，不要把候选写成不同功能主题。
@@ -302,6 +255,7 @@ cat > "$prompt_file" <<EOF
 - 因为脚本会复制布局文件全文，所以不要在 title、reason、prompt、dialogue 里提到布局文件名，例如不要写“layout-01-gallery.prompt.md”。如果需要描述布局，请直接说“画廊页”“插件页”“任务详情页”等自然语言。
 - 你指向的每个 candidate.prompt 字段不要重复 prompt-04.bo.prompt.md 的通用四格格式和角色固定段落，也不要重复布局文件全文；只写该剧情候选独有的应用场景、版本主题、四格剧情（每格逐格说明）、避免项。对白建议不要写在 prompt 字段里，脚本会从 candidate.dialogue 字段单独追加到 prompt 文件末尾。
 - 同一 comic 的不同 candidate.prompt 里，版本主题和对应更新点要保持一致。story candidate 的最后一格可以是温柔收束、说明完成或轻微反差，不需要搞笑；gag candidate 的最后一格需要有明确笑点、吐槽、误会或反差オチ。
+- 每个 candidate 必须给出 characters 字段，列出这一候选四格里所有出场角色的参考图（每项 {"name", "image"}，image 只能从下面的「角色参考图」里选，一个角色一般只选一张）。出图脚本会把这些图按顺序附给图片 AI 并告诉它每张图是谁，所以 prompt 里不要再细写角色的发色、服装等外观，只写动作、表情、站位和形态变化（例如背包精灵化为小乌龟助手）。小乌龟助手包含在 kamechan 设定图里，不要单独列。
 - 每个 candidate.prompt 的四格剧情必须逐格说明登场人物、站位、动作、表情、UI 背景、画面变化，以及每格在最终 2x2 中的位置。每一格都要能作为一张 ${panel_width}x${panel_height} px 单格图独立生成；不要只写台词。对白只能作为补充。
 - 不要要求用户再补充“这是吉祥物”“请画四格漫画”“参考之前的角色”等前置语。
 - 尽量把技术更新转译为20岁到30岁普通用户能理解的视觉梗。
@@ -326,19 +280,21 @@ cat > "$prompt_file" <<EOF
 - 4koma/layout-08-image-preview.prompt.md
 - 4koma/layout-09-webpage-collect.prompt.md
 
-参考角色图：
-- 4koma/chara/kamechan.png
+角色参考图（candidate.characters 只能从这里选）：
+- 4koma/chara/kamechan.png：kamechan 主立绘（粉紫连帽外套 + 乌龟壳背包）。
+- 4koma/chara/kamechan-sette.png：kamechan 设定图，连帽外套版的三视图、表情、道具，以及小乌龟助手（背包精灵化身）的样子。kamechan 登场时默认选这张。
+- 4koma/chara/kamechan-sette-sera.png：kamechan 设定图，不穿外套的水手服版。只在剧情明确写她脱掉外套时选，不要和连帽外套版同时选。
+- 4koma/chara/pathql-majyo.png：PathQL 魔女立绘。
+- 4koma/chara/pathql-majyo-sette.png：PathQL 魔女设定图（三视图、表情、道具）。PathQL 魔女登场时默认选这张。
+- 4koma/chara/plugins-sette.png：插件小精灵设定图（Pixiv、HoYoLAB、bilibili 三只小精灵）。剧情里有插件小精灵时选。
 
 版本范围：
 - base: ${base_ref}
 - head: ${head_ref}
 - version: ${tag}
 
-请先在仓库里读取上面列出的 prompt 文件，再结合下面的上下文文件：
-- ${changelog_file}
-- ${commits_file}
-- ${diffstat_file}
-- ${patch_file}
+读完开头的 CHANGELOG 后，再在仓库里读取上面列出的 prompt 文件。
+补充参考（可选）：${commits_file} 是本版的 commit 标题列表。只有某条 CHANGELOG 看不懂时才用它定位相关提交，不要去读大段代码 diff。
 
 输出格式必须是严格 JSON。不要使用 Markdown 代码块，不要输出 JSON 之外的解释。
 
@@ -354,8 +310,8 @@ JSON 结构：
         "4koma/layout-01-gallery.prompt.md"
       ],
       "updates": [
-        "来自 changelog 或代码 diff 的具体更新点 1",
-        "来自 changelog 或代码 diff 的具体更新点 2"
+        "来自 CHANGELOG 的具体更新点 1",
+        "来自 CHANGELOG 的具体更新点 2"
       ],
       "reason": "为什么适合画，1-2 句话。不要提布局文件名。",
       "candidates": [
@@ -364,7 +320,10 @@ JSON 结构：
           "tone": "story",
           "title": "具体剧情候选标题",
           "angle": "无笑点/说明型短故事。说明同一更新内容如何发生，最后一格温柔收束或说明完成。",
-          "prompt": "完整可复制的最终图片生成 prompt 的剧情候选正文。不要提布局文件名。不要重复 prompt-04.bo.prompt.md 和布局文件全文。必须包含 Kabegame 是什么、本漫画主题、四格剧情（每格逐格说明）、版本更新点、避免项。不要在此字段里写对白建议，对白已通过 dialogue 字段单独输出。",
+          "characters": [
+            { "name": "kamechan", "image": "4koma/chara/kamechan-sette.png" }
+          ],
+          "prompt":"完整可复制的最终图片生成 prompt 的剧情候选正文。不要提布局文件名。不要重复 prompt-04.bo.prompt.md 和布局文件全文。必须包含 Kabegame 是什么、本漫画主题、四格剧情（每格逐格说明）、版本更新点、避免项。不要在此字段里写对白建议，对白已通过 dialogue 字段单独输出。",
           "dialogue": [
             "第 1 格：...",
             "第 2 格：...",
@@ -377,7 +336,11 @@ JSON 结构：
           "tone": "gag",
           "title": "另一个具体剧情候选标题",
           "angle": "有笑点/小コント。讲同一更新内容，但最后一格有明显误会、吐槽或反差オチ。",
-          "prompt": "第二个完整可复制的最终图片生成 prompt 的剧情候选正文。",
+          "characters": [
+            { "name": "kamechan", "image": "4koma/chara/kamechan-sette.png" },
+            { "name": "插件小精灵", "image": "4koma/chara/plugins-sette.png" }
+          ],
+          "prompt":"第二个完整可复制的最终图片生成 prompt 的剧情候选正文。",
           "dialogue": [
             "第 1 格：...",
             "第 2 格：...",
@@ -407,7 +370,7 @@ layouts 只能从以下文件中选择，至少 1 个，最多 3 个：
 重要约束：
 - 每个漫画至少出现一个具体 Kabegame 页面或 UI 结构。
 - 不要在图片 prompt 里要求生成大量小字；必要文字应短，或说明可留白后期加字。
-- 不要编造不存在的大功能。如果根据代码推断，请标注为“视觉隐喻”，不要当成真实 UI 功能。
+- 不要编造不存在的大功能。CHANGELOG 没写明的 UI 细节如需画出，请标注为“视觉隐喻”，不要当成真实 UI 功能。
 EOF
 
 if [[ "$backend" == "claude" ]]; then

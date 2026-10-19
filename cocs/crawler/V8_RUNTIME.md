@@ -27,9 +27,10 @@ V8 插件导出 `crawl(common, custom)`。宿主能力统一通过全局 `Kabega
 ### 插件私有虚拟文件系统
 
 - `Kabegame.fs` 是 `deno_fs` 的完整 `30_fs.js` API，包含 `open` / `create` 返回的 `FsFile` 句柄、同步与异步文件方法，以及额外的 `getRoot(): string`。它只存在于 `Kabegame` 下，不暴露宿主物理路径。
-- 每个任务创建随机 `u64` handle，`getRoot()` 返回 `/{handle}`。插件应从该值拼接 `data`、`cache`、`tmp` 三个挂载点，例如 `${Kabegame.fs.getRoot()}/data/state.json`，不要猜测或硬编码 handle。
-- 三个挂载点映射到插件 id 隔离的物理目录：`data` 用于持久数据，应用升级或覆盖安装时保留；`cache` 可被应用或系统清理；`tmp` 当前不会自动清理，插件需要自行删除不再使用的临时文件。卸载插件会 best-effort 删除三类目录；单个目录删除失败只记日志，不阻断卸载。升级不经过卸载流程，因此三类目录都保留。
-- 权限分三层：虚拟 `/` 一律拒绝；`/{handle}` 只读；`/{handle}/{data|cache|tmp}/...` 可读写。`resolve()` 统一做词法 normalize、拒绝越界和软链接、校验当前任务 handle；`realPath` / `cwd` / `readLink` 等返回路径会反向翻译为虚拟路径。`umask` 是进程级设置，无法由路径沙箱约束，因此始终拒绝。
+- 每个任务创建随机 `u64` handle，`getRoot()` 返回 `/{handle}`。插件应从该值拼接 `data`、`cache`、`tmp` 三个可写挂载点，例如 `${Kabegame.fs.getRoot()}/data/state.json`，不要猜测或硬编码 handle。声明了路径类变量的任务还会多一个只读的 `input` 挂载点。
+- 三个可写挂载点映射到插件 id 隔离的物理目录：`data` 用于持久数据，应用升级或覆盖安装时保留；`cache` 可被应用或系统清理；`tmp` 当前不会自动清理，插件需要自行删除不再使用的临时文件。卸载插件会 best-effort 删除三类目录；单个目录删除失败只记日志，不阻断卸载。升级不经过卸载流程，因此三类目录都保留。
+- `input` 是本次任务的路径类变量，任务冻结时解析：文件变量挂成 `/{handle}/input/<key>/<原文件名>`（合成目录，只含该文件），文件夹变量挂成 `/{handle}/input/<key>/` 整棵子树。`config[key]` 在 `Task::try_new` 里被改写成对应虚拟路径，所以 V8 的 `custom.<key>` 与 WebView 的 vars 拿到的都是虚拟路径。内建插件不参与。Android 只支持 `content://` 文件（`open_fd` + `/proc/self/fd/N`，`OwnedFd` 随 VFS 存活），文件夹变量在冻结时报错。
+- 权限分三层：虚拟 `/` 一律拒绝；`/{handle}` 只读；`/{handle}/{data|cache|tmp}/...` 可读写；`/{handle}/input/...` 始终只读（`Access::ReadWrite` 直接拒绝，硬链接也拒绝，复制到 `tmp` 允许）。`resolve()` 统一做词法 normalize、拒绝越界和软链接、校验当前任务 handle；`input` 分支另外拒绝子树内的任何软链接（用户选中路径在冻结时 canonicalize 一次）；`realPath` / `cwd` / `readLink` 等返回路径会反向翻译为虚拟路径。`umask` 是进程级设置，无法由路径沙箱约束，因此始终拒绝。
 - handle 只在任务注册期间有效。任务结束后调度器移除 handle 索引，旧虚拟路径无法再解析；插件不得把 `/{handle}/...` 写进持久配置或 metadata。底层 `data` 内容仍可在下一任务通过新的 `getRoot()` 访问。
 - `downloadImage()` 接受当前任务的虚拟路径并在宿主侧转换为内部 `task-vfs://` 下载；插件不能直接传 `task-vfs://`。这类入库记录使用占位 URL，不做 URL 去重，仍依靠内容 hash 去重。
 - WebView 后端复用同一个 `PluginVfs` 安全边界，但只提供异步文件系统子集，且 `getRoot()` 返回 Promise。`Kabegame.ffmpeg` 的两个高层函数则与 V8 同形。V8 类型包 `@kabegame/types` 仍只声明 V8 的完整 API，不表示两后端其余能力等价。

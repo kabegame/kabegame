@@ -1,5 +1,10 @@
 <template>
-  <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
+  <DragFileZone
+    class="plugin-browser-container"
+    v-pull-to-refresh="pullToRefreshOpts"
+    :plan="planDrop"
+    :on-drop="onDropFiles"
+  >
     <div class="plugin-browser-content">
       <PluginBrowserPageHeader
         @refresh="handleRefresh"
@@ -314,7 +319,7 @@
         </el-button>
       </template>
     </el-dialog>
-  </div>
+  </DragFileZone>
 </template>
 
 <script setup lang="ts">
@@ -351,7 +356,8 @@ import { useModal } from "@/composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { trackEvent } from "@/track/umami";
-import type { DragFileItem, DragFileOptions, DragFilePlan } from "@/directives/dragFile";
+import type { DragFileItem, DragFilePlan } from "@/utils/dragFileZones";
+import DragFileZone from "@/components/common/DragFileZone.vue";
 
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
 type PluginListItem = Plugin | StorePluginResolved;
@@ -871,35 +877,34 @@ const handleImport = async () => {
 };
 
 // ---------- 区域级文件拖入（只收 .kgpg 插件包）----------
-const dropZone = computed<DragFileOptions>(() => ({
-  plan: (items: DragFileItem[]): DragFilePlan | null => {
-    const plugins = items.filter((i) => i.isKgpg);
-    if (plugins.length === 0) return null;
-    return {
-      label: t("import.dropZone.plugins", { count: plugins.length }),
-      media: [],
-      folders: [],
-      plugins,
-    };
-  },
-  onDrop: async (plan: DragFilePlan) => {
-    let successCount = 0;
-    for (const plugin of plan.plugins) {
-      try {
-        await invoke("import_plugin_from_zip", { zipPath: plugin.path });
-        successCount++;
-      } catch (error) {
-        console.error("[PluginBrowser] 导入插件失败:", plugin.path, error);
-        ElMessage.error(t("import.importPluginFailed"));
-      }
+const planDrop = (items: DragFileItem[]): DragFilePlan | null => {
+  const plugins = items.filter((i) => i.isKgpg);
+  if (plugins.length === 0) return null;
+  return {
+    label: t("import.dropZone.plugins", { count: plugins.length }),
+    media: [],
+    folders: [],
+    plugins,
+  };
+};
+
+const onDropFiles = async (plan: DragFilePlan) => {
+  let successCount = 0;
+  for (const plugin of plan.plugins) {
+    try {
+      await invoke("import_plugin_from_zip", { zipPath: plugin.path });
+      successCount++;
+    } catch (error) {
+      console.error("[PluginBrowser] 导入插件失败:", plugin.path, error);
+      ElMessage.error(t("import.importPluginFailed"));
     }
-    if (successCount > 0) {
-      ElMessage.success(t("import.importedPluginsCount", { count: successCount }));
-      // plugin-added / plugin-updated 事件会自动更新已安装列表；商店卡片的 installedVersion 由 market store 现算
-      await pluginStore.refreshPlugins();
-    }
-  },
-}));
+  }
+  if (successCount > 0) {
+    ElMessage.success(t("import.importedPluginsCount", { count: successCount }));
+    // plugin-added / plugin-updated 事件会自动更新已安装列表；商店卡片的 installedVersion 由 market store 现算
+    await pluginStore.refreshPlugins();
+  }
+};
 
 const openDetailDialog = (plugin: PluginListItem) => {
   trackPluginBrowserEvent("plugin_browser_plugin_open", pluginAnalyticsItem(plugin));

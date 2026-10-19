@@ -233,8 +233,13 @@ Kabegame.onNativeDownload((payload) => {
 | `${root}/data/...` | 持久数据；应用重启、插件升级或覆盖安装后保留，卸载插件时清理。 |
 | `${root}/cache/...` | 可重建缓存；可能被应用或系统清理，卸载插件时也会清理。 |
 | `${root}/tmp/...` | 临时工作文件；**当前不会自动清理**，插件应自行管理和删除，卸载插件时清理。 |
+| `${root}/input/...` | **只读**输入：本次任务的路径类变量。文件变量为 `${root}/input/<key>/<原文件名>`（该目录里只有这一个文件），文件夹变量为 `${root}/input/<key>/...`（整棵子树只读）。只有声明了路径类变量时才存在。 |
 
-权限也按路径层级固定：`/` 拒绝访问，`/{handle}` 只读，三个挂载点内部可读写。路径会先做词法规范化并拒绝越界和软链接；不要依赖 `..`、软链接或宿主绝对路径。任务 handle 每次随机生成，任务结束后旧路径即失效，因此不要持久化 `root` 或任何 `/{handle}/...` 路径；下一任务应重新调用 `getRoot()`。
+权限按路径层级固定：`/` 拒绝访问，`/{handle}` 只读，`data|cache|tmp` 内部可读写，`input` 下的内容始终只读（写入 / 删除 / rename / 硬链接都会被拒绝，复制到 `tmp` 允许）。路径会先做词法规范化并拒绝越界和软链接；用户选中的路径在任务冻结时 canonicalize 一次，之后 `input` 子树内出现任何软链接都会被拒绝。任务 handle 每次随机生成，任务结束后旧路径即失效，因此不要持久化 `root` 或任何 `/{handle}/...` 路径；下一任务应重新调用 `getRoot()`。
+
+内建插件（`local-import` / `webpage`）不参与输入挂载，它们在 Rust 侧直接消费宿主路径。**Android 只支持文件变量**：`content://` 文件经系统选择器取得，文件夹变量在任务冻结时报错。
+
+`kbConfig` 声明了 `path` / `file` / `folder` / `file_or_folder` 类型时，脚本拿到的值就是上面的虚拟路径（文件变量是 `.../input/<key>/<文件名>`，文件夹变量是 `.../input/<key>`），可直接交给 `Kabegame.fs` 读取或 `Kabegame.downloadImage()` 入库；宿主绝对路径不会进入 JS。`options` 在这几个类型上是扩展名过滤（不含点号）。
 
 V8 后端暴露完整 `deno_fs` API，包括 `open`、`create`、同步方法和 `FsFile` 句柄；`umask` 因会修改进程级状态而始终被拒绝。WebView 后端不是同一套完整 API，只提供无句柄异步子集：`readFile`、`writeFile`、`mkdir`、`readDir`、`remove`、`stat`、`getRoot`。V8 的 `getRoot()` 同步返回字符串，WebView 的 `getRoot()` 返回 Promise。
 

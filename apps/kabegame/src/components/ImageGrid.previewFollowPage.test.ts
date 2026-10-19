@@ -94,6 +94,10 @@ vi.mock("@/stores/settings", () => ({
 }));
 vi.mock("@/stores/plugins", () => ({ usePluginStore: () => ({ plugins: [] }) }));
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
+// 预览弹窗会用它把 kamechan 在预览期间隐藏；不 mock 会在没有 Pinia 的测试里触发 useStore。
+vi.mock("@/stores/kameMessage", () => ({
+  useKameMessageStore: () => ({ setKamechanHidden: vi.fn() }),
+}));
 vi.mock("vue-router", () => ({
   useRoute: () => reactive({ path: "/gallery", query: {} }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),

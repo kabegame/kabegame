@@ -16,5 +16,12 @@
   "dropZone.albumMedia": "Import {count} files to \"{album}\"",
   "dropZone.albumFolders": "Import media from {count} folders to \"{album}\"",
   "dropZone.albumMixed": "Import {count} files and {folders} folders to \"{album}\"",
-  "dropZone.plugins": "Install {count} plugin packages"
+  "dropZone.plugins": "Install {count} plugin packages",
+  "pathPickFile": "Click to choose a file",
+  "pathPickFolder": "Click to choose a folder",
+  "pathDropFile": "Click or drop a file",
+  "pathDropFolder": "Click or drop a folder",
+  "pathDropEither": "Click or drop a file / folder",
+  "pathChange": "Change",
+  "dropZone.setPath": "Set to \"{name}\""
 }

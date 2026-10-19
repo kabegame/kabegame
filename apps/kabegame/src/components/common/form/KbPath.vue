@@ -1,5 +1,5 @@
 <template>
-  <div class="var-path">
+  <DragFileZone class="var-path" :plan="planDrop" :on-drop="onDropPath">
     <KbSegmentedControl
       v-if="type === 'file_or_folder' || type === 'path'"
       class="var-path__mode"
@@ -13,20 +13,24 @@
         <span class="var-path__text" :title="valueForInput">{{ valueForInput }}</span>
         <span v-if="allowUnset" class="var-path__clear" @click="emitUpdate('')">×</span>
       </div>
-      <button type="button" class="var-path__btn" @click="pick">更换</button>
+      <button type="button" class="var-path__btn" @click="pick">{{ t("import.pathChange") }}</button>
     </div>
 
     <button v-else type="button" class="var-path__drop" @click="pick">
       <el-icon><FolderOpened /></el-icon>
       <span>{{ dropText }}</span>
     </button>
-  </div>
+  </DragFileZone>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { FolderOpened } from "@kabegame/element-plus-icons";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useI18n } from "@kabegame/i18n";
+import DragFileZone from "@/components/common/DragFileZone.vue";
+import { IS_ANDROID, IS_WEB } from "@/env";
+import type { DragFileItem, DragFilePlan } from "@/utils/dragFileZones";
 import KbSegmentedControl from "./KbSegmentedControl.vue";
 
 const props = withDefaults(
@@ -44,16 +48,18 @@ const emit = defineEmits<{
   "update:modelValue": [value: string];
 }>();
 
+const { t } = useI18n();
+
 const valueForInput = computed(() => {
   return typeof props.modelValue === "string" ? props.modelValue : "";
 });
 
 /** file_or_folder / path 类型二选一由本地状态决定「更换」按钮打开哪种对话框；单一类型无需选择 */
 const pickMode = ref<"file" | "folder">("folder");
-const modeOptions = [
-  { label: "文件", value: "file" },
-  { label: "文件夹", value: "folder" },
-];
+const modeOptions = computed(() => [
+  { label: t("import.file"), value: "file" },
+  { label: t("import.folder"), value: "folder" },
+]);
 
 const effectiveMode = computed<"file" | "folder">(() => {
   if (props.type === "file") return "file";
@@ -61,12 +67,65 @@ const effectiveMode = computed<"file" | "folder">(() => {
   return pickMode.value;
 });
 
-const dropText = computed(() => (effectiveMode.value === "folder" ? "点击选择文件夹" : "点击选择文件"));
+/** 类型本身允许的拖入形态（path / file_or_folder 两种都收，与当前 pickMode 无关） */
+const allowsFolder = computed(() => props.type !== "file");
+const allowsFile = computed(() => props.type !== "folder");
+/** 桌面才有拖入；Android / web 仍然只能点选 */
+const canDrop = !IS_ANDROID && !IS_WEB;
+
+const dropText = computed(() => {
+  if (!canDrop) {
+    return effectiveMode.value === "folder" ? t("import.pathPickFolder") : t("import.pathPickFile");
+  }
+  if (allowsFolder.value && allowsFile.value) return t("import.pathDropEither");
+  return allowsFolder.value ? t("import.pathDropFolder") : t("import.pathDropFile");
+});
 
 function normalizeExtensions(extensions?: string[]): string[] {
   if (!extensions || extensions.length === 0) return ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "zip"];
   const exts = extensions.map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase()).filter(Boolean);
   return exts.length > 0 ? exts : ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "zip"];
+}
+
+function baseName(path: string): string {
+  const segments = path.replace(/\\/g, "/").split("/");
+  return segments[segments.length - 1] || path;
+}
+
+function extensionOf(path: string): string {
+  const name = baseName(path);
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+/** 单个拖入项是否符合当前变量的类型与扩展名；不符合返回 null → 提示「此处不支持」 */
+function planDrop(items: DragFileItem[]): DragFilePlan | null {
+  if (items.length !== 1) return null;
+  const item = items[0];
+  if (item.isDirectory) {
+    if (!allowsFolder.value) return null;
+  } else {
+    if (!allowsFile.value) return null;
+    if (!normalizeExtensions(props.fileExtensions).includes(extensionOf(item.path))) return null;
+  }
+  return {
+    label: t("import.dropZone.setPath", { name: baseName(item.path) }),
+    hint: item.path,
+    media: [],
+    folders: [],
+    plugins: [],
+    items: [item],
+  };
+}
+
+function onDropPath(plan: DragFilePlan) {
+  const item = plan.items?.[0];
+  if (!item) return;
+  // path / file_or_folder 的 pickMode 跟随拖入项，之后点「更换」打开对应对话框。
+  if (props.type === "path" || props.type === "file_or_folder") {
+    pickMode.value = item.isDirectory ? "folder" : "file";
+  }
+  emitUpdate(item.path);
 }
 
 async function pickFolder() {
@@ -80,7 +139,7 @@ async function pickFile() {
   const selected = await open({
     directory: false,
     multiple: false,
-    filters: [{ name: "文件", extensions: exts }],
+    filters: [{ name: t("import.file"), extensions: exts }],
   });
   if (!selected) return;
   emitUpdate(selected);

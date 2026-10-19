@@ -82,6 +82,7 @@ third/chromium/
 /ignore
 tmp/
 .tmp/
+.tmp*/
 
 # 临时忽略 kamechan emotion 图片资源
 apps/kabegame/public/kamechan/emotion*/**/*.png

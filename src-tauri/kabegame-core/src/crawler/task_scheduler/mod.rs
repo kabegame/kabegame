@@ -21,6 +21,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, Notify};
 use url::Url;
 
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+pub mod input_mounts;
 pub mod task;
 pub use task::{Task, TaskError, TaskParams, TaskResult};
 
@@ -224,11 +226,18 @@ impl TaskScheduler {
         let user_cfg = task.user_config.clone().unwrap_or_default();
         let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg, None)
             .map_err(|error| format!("配置不合法：{error}"))?;
+        // 路径类变量在冻结时解析成只读 VFS 挂载；内建插件直接消费宿主路径，返回空。
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+        let inputs = input_mounts::resolve_input_mounts(&plugin, &config)
+            .await
+            .map_err(|error| format!("配置不合法：{error}"))?;
         let params = TaskParams {
             plugin: Arc::new(plugin),
             images_dir,
             output_album_id: task.output_album_id.clone(),
             config,
+            #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+            inputs,
         };
 
         Task::try_new(req.task_id, params, task.http_headers.clone())
@@ -1424,6 +1433,8 @@ mod tests {
                 images_dir: std::path::PathBuf::new(),
                 output_album_id: None,
                 config: HashMap::new(),
+                #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+                inputs: Vec::new(),
             },
             None,
         ));

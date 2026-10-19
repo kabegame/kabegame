@@ -2,7 +2,11 @@
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <div class="gallery-content-layout">
-        <div class="gallery-grid-pane" v-drag-file="dropZone">
+        <DragFileZone
+          class="gallery-grid-pane"
+          :plan="(items) => buildDropPlan(items, null)"
+          :on-drop="(plan) => importDroppedFiles(plan, null)"
+        >
           <ImageGrid
             ref="galleryViewRef"
             :adapter="adapter"
@@ -53,7 +57,7 @@
               </div>
             </template>
           </ImageGrid>
-        </div>
+        </DragFileZone>
       </div>
     </div>
 
@@ -145,7 +149,7 @@ import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useI18n } from "@kabegame/i18n";
-import type { DragFileOptions } from "@/directives/dragFile";
+import DragFileZone from "@/components/common/DragFileZone.vue";
 import { buildDropPlan, importDroppedFiles } from "@/utils/dragFileImport";
 
 // 定义组件名称，确保 keep-alive 能正确识别
@@ -217,10 +221,7 @@ const handleOpenCollectMenu = () => {
 };
 
 // ---------- 区域级文件拖入（画廊网格区域）----------
-const dropZone = computed<DragFileOptions>(() => ({
-  plan: (items) => buildDropPlan(items, null),
-  onDrop: (plan) => importDroppedFiles(plan, null),
-}));
+// 接受规则由 DragFileZone 的 plan prop 承载；无需页面级 computed。
 
 // 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {

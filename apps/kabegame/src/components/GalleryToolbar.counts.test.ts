@@ -45,7 +45,12 @@ vi.mock("@/stores/header", () => ({
     GallerySort: "gallery-sort",
     GalleryPageSize: "gallery-page-size",
   },
-  useHeaderStore: () => ({ setFoldLabel: vi.fn() }),
+  // PageHeader 渲染 show/fold 项时会查热区定义与 fold 文案覆盖；mock 必须与 store 接口同形。
+  useHeaderStore: () => ({
+    get: vi.fn(() => undefined),
+    getFoldLabel: vi.fn(() => undefined),
+    setFoldLabel: vi.fn(),
+  }),
 }));
 vi.mock("@/stores/pageBridge", () => ({
   usePageBridgeStore: () => ({

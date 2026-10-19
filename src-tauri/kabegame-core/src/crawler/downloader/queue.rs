@@ -1394,6 +1394,8 @@ mod tests {
                     images_dir: PathBuf::new(),
                     output_album_id: None,
                     config: HashMap::new(),
+                    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+                    inputs: Vec::new(),
                 },
                 None,
             )

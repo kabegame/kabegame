@@ -1,7 +1,7 @@
 use crate::crawler::task_scheduler::PageStack;
 use crate::emitter::GlobalEmitter;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
-use crate::plugin::vfs::PluginVfs;
+use crate::plugin::vfs::{InputMount, PluginVfs};
 use crate::plugin::Plugin;
 use crate::storage::Storage;
 use serde_json::Value;
@@ -26,6 +26,9 @@ pub struct TaskParams {
     pub images_dir: PathBuf,
     pub output_album_id: Option<String>,
     pub config: HashMap<String, Value>,
+    /// 冻结时解析出的只读输入挂载；`Task::try_new` 会把它交给 VFS 并把 config 改写成虚拟路径。
+    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+    pub inputs: Vec<InputMount>,
 }
 
 impl TaskParams {
@@ -83,12 +86,25 @@ impl Task {
 
     pub fn try_new(
         task_id: String,
-        params: TaskParams,
+        mut params: TaskParams,
         http_headers: Option<HashMap<String, String>>,
     ) -> Result<Self, String> {
         let fs_handle = random_fs_handle();
         #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
-        let vfs = create_plugin_vfs(&task_id, &params.plugin.id, fs_handle)?;
+        let inputs = std::mem::take(&mut params.inputs);
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+        let vfs = create_plugin_vfs(&task_id, &params.plugin.id, fs_handle, inputs)?;
+        // V8 的 `custom.<key>` 与 WebView 的 vars 都取自 `params.config`，
+        // 改写成虚拟路径后两端都只能看到 VFS 内的只读路径。
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+        for key in vfs.input_keys() {
+            if let Some(virtual_path) = vfs.input_virtual_path(key) {
+                params.config.insert(
+                    key.to_string(),
+                    Value::String(virtual_path.to_string_lossy().into_owned()),
+                );
+            }
+        }
 
         Ok(Self {
             task_id,
@@ -320,12 +336,88 @@ fn create_plugin_vfs(
     task_id: &str,
     plugin_id: &str,
     fs_handle: u64,
+    inputs: Vec<InputMount>,
 ) -> Result<Arc<PluginVfs>, String> {
     PluginVfs::new(fs_handle, plugin_id)
-        .map(Arc::new)
+        .map(|vfs| Arc::new(vfs.with_inputs(inputs)))
         .map_err(|error| {
             format!(
                 "Failed to initialize plugin VFS for task {task_id} (plugin {plugin_id}): {error}"
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::vfs::{InputKind, InputMount};
+    use std::path::Path;
+
+    fn test_plugin() -> Plugin {
+        serde_json::from_value(serde_json::json!({
+            "id": "input-mount-test",
+            "name": "Input Mount Test",
+            "description": "",
+            "version": "1.0.0",
+            "baseUrl": "https://example.com",
+            "sizeBytes": 0,
+            "config": {},
+            "scriptType": "v8",
+        }))
+        .expect("valid plugin")
+    }
+
+    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+    #[test]
+    fn try_new_mounts_inputs_and_rewrites_config_to_virtual_paths() {
+        crate::app_paths::AppPaths::init_for_tests();
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("a.png");
+        std::fs::write(&source, b"png").unwrap();
+
+        let mut config = HashMap::new();
+        config.insert(
+            "src".to_string(),
+            Value::String(source.to_string_lossy().into_owned()),
+        );
+        config.insert("tag".to_string(), Value::String("keep".to_string()));
+
+        let run = Task::try_new(
+            "task-input-mount-test".to_string(),
+            TaskParams {
+                plugin: Arc::new(test_plugin()),
+                images_dir: PathBuf::new(),
+                output_album_id: None,
+                config,
+                inputs: vec![InputMount {
+                    key: "src".to_string(),
+                    kind: InputKind::File {
+                        host: source.clone(),
+                        name: "a.png".to_string(),
+                    },
+                }],
+            },
+            None,
+        )
+        .unwrap();
+
+        let virtual_path = format!("/{}/input/src/a.png", run.fs_handle);
+        assert_eq!(
+            run.params.config.get("src").and_then(Value::as_str),
+            Some(virtual_path.as_str())
+        );
+        // 非路径变量原样保留。
+        assert_eq!(
+            run.params.config.get("tag").and_then(Value::as_str),
+            Some("keep")
+        );
+        // VFS 已挂载且可按虚拟路径读回同一份内容。
+        assert_eq!(run.vfs.input_keys(), ["src"]);
+        assert_eq!(
+            run.vfs
+                .host_path_for_read(Path::new(&virtual_path))
+                .unwrap(),
+            source
+        );
+    }
 }

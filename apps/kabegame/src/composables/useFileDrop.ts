@@ -2,7 +2,7 @@ import { Ref, onUnmounted } from "vue";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@/api/rpc";
-import { DragFileItem, DragFilePlan, DragFileZone, hitTestDragZone } from "@/directives/dragFile";
+import { DragFileItem, DragFilePlan, DragFileZone, hitTestDragZone } from "@/utils/dragFileZones";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { claimInternalDrag } from "@/utils/dragExport";
 // #region debug-drag
@@ -51,7 +51,7 @@ const resolveZone = (p: { x: number; y: number }) => {
 
 /**
  * 文件拖拽 composable：路由层。
- * 只做类型探测 + 落点命中，具体接不接、导入什么行为下沉到各热区（v-drag-file）自己决定。
+ * 只做类型探测 + 落点命中，具体接不接、导入什么行为下沉到各热区（DragFileZone）自己决定。
  */
 export function useFileDrop(fileDropOverlayRef: Ref<any>) {
   let fileDropUnlisten: (() => void) | null = null;
