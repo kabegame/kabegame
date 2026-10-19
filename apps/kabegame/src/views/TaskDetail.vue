@@ -33,6 +33,7 @@
               :failed="failedN"
               :deleted="deletedN"
               :dedup="dedupN"
+              :dry-run="task?.isDryRun"
               :duration="durationText"
             />
           </template>

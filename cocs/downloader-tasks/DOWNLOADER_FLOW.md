@@ -501,4 +501,8 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 - 内建 `local-import` 的 `on_file` 记录 `taskLogDryRunSkipImport` 后返回，不复制文件、不写 Android
   Pictures，也不进入 postprocess。
 
-因此下载与入库计数保持 0，下载排空会立即结束，任务仍正常进入 Completed。
+两个跳过点都调用 `Task::record_dry_run_skip`：**复用 `tasks.dedup_count`** 累加跳过次数，并经
+`emit_task_image_counts` 推送计数 diff，所以不新增列、事件或前端计数通路。空跑任务的成功 / 失败 /
+删除计数恒为 0，`dedup_count` 在空跑下语义为「跳过」：任务卡片、任务详情（`TaskCountsInline`）与运行参数
+只显示这一个数字并用「空跑跳过」文案（`tasks.dryRunSkippedCount` 等），CLI 结束行为「完成 空跑跳过 N 个」。
+下载排空会立即结束，任务仍正常进入 Completed。

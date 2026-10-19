@@ -62,7 +62,10 @@
       <el-descriptions-item v-if="(task.deletedCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDeleted')">
         {{ t("tasks.drawerDeletedCount", { n: task.deletedCount ?? 0 }) }}
       </el-descriptions-item>
-      <el-descriptions-item v-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
+      <el-descriptions-item v-if="task.isDryRun" :label="t('tasks.taskRunParamsColDryRunSkipped')">
+        {{ t("tasks.drawerDryRunSkippedCount", { n: task.dedupCount ?? 0 }) }}
+      </el-descriptions-item>
+      <el-descriptions-item v-else-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
         {{ t("tasks.drawerDedupCount", { n: task.dedupCount ?? 0 }) }}
       </el-descriptions-item>
     </el-descriptions>
@@ -204,7 +207,9 @@ const showTimeSection = computed(
   () => hasStartTime.value || (props.task.endTime != null && Number(props.task.endTime) > 0),
 );
 
-const showStatsSection = computed(() => (props.task.deletedCount ?? 0) > 0 || (props.task.dedupCount ?? 0) > 0);
+const showStatsSection = computed(
+  () => !!props.task.isDryRun || (props.task.deletedCount ?? 0) > 0 || (props.task.dedupCount ?? 0) > 0,
+);
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 

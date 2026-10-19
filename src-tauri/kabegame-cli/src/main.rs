@@ -982,6 +982,11 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
     .await;
 
     match outcome {
+        TaskOutcome::Completed { dedup, .. } if args.dry_run => {
+            // 空跑复用去重计数表示「跳过」，其余计数恒为 0，不再展示
+            println!("{} 空跑跳过 {} 个", console::style("完成").green().bold(), dedup);
+            Ok(())
+        }
         TaskOutcome::Completed {
             downloaded,
             dedup,

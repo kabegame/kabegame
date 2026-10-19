@@ -612,15 +612,16 @@ impl DownloadQueue {
         post_url: Option<String>,
         labels: Vec<LabelSpec>,
     ) -> Result<(), String> {
-        if TaskScheduler::global()
+        if let Some(run) = TaskScheduler::global()
             .get_run(&task_id)
-            .is_some_and(|run| run.params.is_dry_run)
+            .filter(|run| run.params.is_dry_run)
         {
             GlobalEmitter::global().emit_task_log(
                 &task_id,
                 "info",
                 &task_log_i18n("taskLogDryRunSkipDownload", json!({ "url": url.as_str() })),
             );
+            run.record_dry_run_skip();
             return Ok(());
         }
         self.download(

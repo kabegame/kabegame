@@ -254,6 +254,14 @@ impl Task {
         )
     }
 
+    /// 空跑跳过一次下载 / 导入：复用 `dedup_count` 计数（空跑下语义为「跳过」），
+    /// 并推送计数 diff，前端与 CLI 沿用去重计数的展示通路。
+    pub fn record_dry_run_skip(&self) {
+        if let Ok(n) = Storage::global().increment_task_dedup_count(&self.task_id) {
+            GlobalEmitter::global().emit_task_image_counts(&self.task_id, None, None, None, Some(n));
+        }
+    }
+
     pub fn with_stack_top<T>(
         &self,
         f: impl FnOnce(&crate::crawler::task_scheduler::PageStackEntry) -> T,

@@ -277,6 +277,7 @@ impl FolderScanHook for LocalImportHook {
                     json!({ "path": file.url.as_str() }),
                 ),
             );
+            self.run.record_dry_run_skip();
             return Ok(());
         }
         let download_start_time = self.next_download_start_time();
