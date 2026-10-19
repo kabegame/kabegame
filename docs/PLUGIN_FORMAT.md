@@ -167,7 +167,7 @@ KGPG v3 固定头部只存 meta 与 icon，不存插件清单。完整安装、�
     const startPage = custom?.startPage ?? 0;
     const endPage = custom?.endPage ?? 0;
     const tag = custom?.tag ?? "";
-    console.log(common.base_url, startPage, endPage, tag);
+    console.log(common.baseUrl, startPage, endPage, tag);
   }
   ```
 
@@ -267,3 +267,9 @@ export async function crawl() {
 - **一次性加载**：已安装插件在首次列出时（或通过 `refresh_plugins`）被 `parse_kgpg` 一次性解析：`package.json`、`kbDoc` 文档、`kbChangelog` 更新日志、`kbAssets` 资源、`main` 脚本内容、`templates/description.ejs`、`configs/*.json` 均被读入内存并挂在 `Plugin` 结构体上。资源条目缺失只警告并跳过，不会阻止整个插件加载。
 - **运行阶段**：爬取任务、文档图片、变量定义等均直接从内存读取，不再重新打开 `.kgpg` ZIP（临时预览/导入时例外）。
 - **磁盘保留**：`.kgpg` 文件仍保留在插件目录（`Plugin.file_path`），用于插件升级、导出等操作。
+
+### 推荐配置的 dry-run
+
+`kbRecommendedConfigs` 引用的 `configs/*.json` 可以写 `"isDryRun": true`。应用导入和再次导出该推荐
+配置时会保留字段；若同时提供 `scheduleSpec`，可建立定时 dry-run，用来周期性检查站点结构或配置是否
+仍然有效。插件逻辑、翻页、请求、日志与进度照常执行，但宿主不会下载媒体或写入图库/metadata。

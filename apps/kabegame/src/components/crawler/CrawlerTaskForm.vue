@@ -27,9 +27,17 @@
         clearable
       />
     </el-form-item>
-    <el-form-item :label="$t('plugins.maxConcurrentDownloads')">
-      <MaxDownloadsField v-model="maxDownloadsValue" />
-    </el-form-item>
+    <div class="flex flex-wrap gap-x-6">
+      <el-form-item class="min-w-56 flex-1" :label="$t('plugins.maxConcurrentDownloads')">
+        <MaxDownloadsField v-model="maxDownloadsValue" />
+      </el-form-item>
+      <el-form-item class="min-w-56 flex-1" :label="$t('plugins.dryRun')">
+        <div class="flex items-center gap-2">
+          <el-switch v-model="isDryRunValue" />
+          <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
+        </div>
+      </el-form-item>
+    </div>
     <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
       <el-input
         ref="newOutputAlbumNameInputRef"
@@ -236,6 +244,7 @@ function onPluginChange(id: string | null | undefined) {
         outputAlbumId: draftOutputAlbumId.value,
         httpHeaders: draftHttpHeaders.value,
         maxConcurrentDownloads: draftMaxConcurrentDownloads.value,
+        isDryRun: draftIsDryRun.value,
       };
   void writeTaskConfig({ pluginId: id, ...carried });
 }
@@ -247,6 +256,7 @@ const draftOutputDir = ref("");
 const draftOutputAlbumId = ref<string | null>(null);
 const draftHttpHeaders = ref<Record<string, string>>({});
 const draftMaxConcurrentDownloads = ref<number | null>(null);
+const draftIsDryRun = ref(false);
 
 const outputDirValue = computed<string>({
   get: () => tc.value?.outputDir ?? draftOutputDir.value,
@@ -277,6 +287,14 @@ const maxDownloadsValue = computed<number | null>({
   set: (value) => {
     if (tc.value) tc.value.maxConcurrentDownloads = value;
     else draftMaxConcurrentDownloads.value = value;
+  },
+});
+
+const isDryRunValue = computed<boolean>({
+  get: () => (tc.value ? tc.value.isDryRun : draftIsDryRun.value),
+  set: (value) => {
+    if (tc.value) tc.value.isDryRun = value;
+    else draftIsDryRun.value = value;
   },
 });
 
@@ -372,6 +390,7 @@ async function confirmSaveConfig() {
       httpHeaders: { ...cfg.httpHeaders },
       outputAlbumId: cfg.outputAlbumId || undefined,
       maxConcurrentDownloads: cfg.maxConcurrentDownloads,
+      isDryRun: cfg.isDryRun,
       // Dialog 恒为手动任务：保存出来的配置默认不定时
       scheduleEnabled: false,
     });
@@ -426,6 +445,7 @@ async function submit() {
     outputAlbumId: cfg.outputAlbumId || undefined,
     httpHeaders,
     maxConcurrentDownloads: cfg.maxConcurrentDownloads,
+    isDryRun: cfg.isDryRun,
     // Dialog 发起的任务一律是手动任务，不带 runConfigId
     triggerSource: "manual",
   });

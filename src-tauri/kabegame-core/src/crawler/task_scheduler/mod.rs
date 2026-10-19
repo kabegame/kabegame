@@ -236,6 +236,7 @@ impl TaskScheduler {
             images_dir,
             output_album_id: task.output_album_id.clone(),
             config,
+            is_dry_run: task.is_dry_run,
             #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
             inputs,
         };
@@ -781,6 +782,13 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
             json!({ "pluginId": run.params.plugin.id, "taskId": run.task_id }),
         ),
     );
+    if run.params.is_dry_run {
+        GlobalEmitter::global().emit_task_log(
+            &run.task_id,
+            "print",
+            &task_log_i18n("taskLogDryRun", json!({})),
+        );
+    }
 
     let plugin = &run.params.plugin;
 
@@ -1433,6 +1441,7 @@ mod tests {
                 images_dir: std::path::PathBuf::new(),
                 output_album_id: None,
                 config: HashMap::new(),
+                is_dry_run: false,
                 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
                 inputs: Vec::new(),
             },

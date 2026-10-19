@@ -11,7 +11,7 @@ vi.mock("@/composables/usePluginConfig", () => ({
   fetchPluginUserDefault: vi.fn(async () => null),
 }));
 
-import { buildSubmitUserConfig, resolveTaskConfig } from "./taskConfig";
+import { buildSubmitUserConfig, resolveTaskConfig, taskConfigFromRunConfig, taskConfigFromTask } from "./taskConfig";
 
 const defs: PluginVarDef[] = [
   { key: "a", type: "string", name: "A", default: "defA" },
@@ -80,6 +80,16 @@ describe("resolveTaskConfig", () => {
     expect(resolveTaskConfig({ pluginId: "p" }, null, defs).maxConcurrentDownloads).toBeNull();
     expect(resolveTaskConfig({ pluginId: "p", maxConcurrentDownloads: 2 }, null, defs).maxConcurrentDownloads).toBe(2);
   });
+
+  it("dry-run 只取本次入参，不从用户默认继承", () => {
+    expect(resolveTaskConfig({ pluginId: "p" }, { userConfig: {}, isDryRun: true } as any, defs).isDryRun).toBe(false);
+    expect(resolveTaskConfig({ pluginId: "p", isDryRun: true }, null, defs).isDryRun).toBe(true);
+  });
+
+  it("从任务与自动配置回填 dry-run", () => {
+    expect(taskConfigFromTask({ pluginId: "p", isDryRun: true } as any).isDryRun).toBe(true);
+    expect(taskConfigFromRunConfig({ pluginId: "p", isDryRun: true } as any).isDryRun).toBe(true);
+  });
 });
 
 describe("buildSubmitUserConfig", () => {
@@ -130,10 +140,7 @@ describe("buildSubmitUserConfig", () => {
       { key: "leaf", type: "string", name: "Leaf", default: "value", when: { middle: ["show"] } },
       { key: "clearable", type: "string", name: "Clearable", default: "default" },
     ];
-    const out = buildSubmitUserConfig(
-      { gate: "off", middle: "show", leaf: "value", clearable: null },
-      chained,
-    );
+    const out = buildSubmitUserConfig({ gate: "off", middle: "show", leaf: "value", clearable: null }, chained);
     expect(out).toEqual({ gate: "off", clearable: null });
   });
 });

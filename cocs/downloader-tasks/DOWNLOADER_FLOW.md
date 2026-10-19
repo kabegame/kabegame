@@ -490,3 +490,15 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 - **容错**：清理失败（权限不足、文件被占用）记录 warn 日志，不阻塞启动。
 
 这确保上次异常退出（崩溃、强杀）遗留的溢写临时文件不会无限堆积。
+
+## 任务级 dry-run 写入边界
+
+`isDryRun` 在任务冻结后只在三个单点阻断持久化，其余插件逻辑照常执行：
+
+- `DownloadQueue::download_image` 在入队前记录 `taskLogDryRunSkipDownload` 并返回成功，覆盖 V8、WebView
+  （含 blob/data/MSE 提交）和内建 webpage；畅游直接调用 `download`，不受影响。
+- `Task::insert_metadata` 返回 `0`，覆盖 V8/WebView 的 metadata 入口，避免孤儿 metadata 行。
+- 内建 `local-import` 的 `on_file` 记录 `taskLogDryRunSkipImport` 后返回，不复制文件、不写 Android
+  Pictures，也不进入 postprocess。
+
+因此下载与入库计数保持 0，下载排空会立即结束，任务仍正常进入 Completed。

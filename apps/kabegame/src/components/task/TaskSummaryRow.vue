@@ -160,6 +160,9 @@
           </el-icon>
         </el-button>
         <div class="task-name">{{ pluginDisplayName }}</div>
+        <el-tag v-if="task.isDryRun" size="small" type="warning" effect="plain">
+          {{ t("tasks.dryRunBadge") }}
+        </el-tag>
       </div>
       <div class="task-counts">
         <span
@@ -274,6 +277,7 @@ export type TaskSummaryRowTask = {
   pluginId: string;
   runConfigId?: string;
   triggerSource?: string;
+  isDryRun: boolean;
   status: string;
   progress?: number;
   deletedCount?: number;

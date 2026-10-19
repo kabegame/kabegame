@@ -77,6 +77,8 @@ pub struct TaskInfo {
         default
     )]
     pub max_concurrent_downloads: Option<u32>,
+    #[serde(rename(serialize = "isDryRun"), alias = "isDryRun", default)]
+    pub is_dry_run: bool,
     pub status: TaskStatus,
     pub progress: f64,
     #[serde(rename(serialize = "deletedCount"), alias = "deletedCount")]
@@ -197,9 +199,9 @@ impl Storage {
             "INSERT INTO tasks (
                 id, plugin_id, output_dir, user_config, http_headers, output_album_id, run_config_id, trigger_source,
                 status, progress, deleted_count, dedup_count, success_count, failed_count, start_time, end_time, error,
-                max_concurrent_downloads
+                max_concurrent_downloads, is_dry_run
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 task.id,
                 task.plugin_id,
@@ -223,6 +225,7 @@ impl Storage {
                 task.end_time.map(|t| t as i64),
                 task.error,
                 task.max_concurrent_downloads,
+                task.is_dry_run,
             ],
         )
         .map_err(|e| format!("Failed to add task: {}", e))?;
@@ -280,7 +283,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let task: Option<TaskInfo> = conn
             .query_row(
-                "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+                "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
                  FROM tasks t WHERE t.id = ?1",
                 params![task_id],
                 |row| {
@@ -311,6 +314,7 @@ impl Storage {
                             .get::<_, Option<String>>(16)?
                             .unwrap_or_else(default_trigger_source),
                         max_concurrent_downloads: row.get(17)?,
+                        is_dry_run: row.get(18)?,
                     })
                 },
             )
@@ -331,7 +335,7 @@ impl Storage {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+            "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
              FROM tasks t WHERE t.id IN ({})",
             placeholders
         );
@@ -365,6 +369,7 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                     max_concurrent_downloads: row.get(17)?,
+                    is_dry_run: row.get(18)?,
                 })
             })
             .map_err(|e| format!("query: {}", e))?;
@@ -380,7 +385,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
-                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
                  FROM tasks t ORDER BY t.start_time DESC",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -412,6 +417,7 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                     max_concurrent_downloads: row.get(17)?,
+                    is_dry_run: row.get(18)?,
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
@@ -435,7 +441,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
-                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
                  FROM tasks t ORDER BY t.start_time DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -467,6 +473,7 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                     max_concurrent_downloads: row.get(17)?,
+                    is_dry_run: row.get(18)?,
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;

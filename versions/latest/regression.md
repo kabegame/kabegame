@@ -1,5 +1,21 @@
 # v4.6.1 regression
 
+## 任务级 dry-run（`isDryRun`）
+
+任务记录与自动配置新增冻结字段 `isDryRun`。空跑仍执行插件请求、翻页、解析、日志和进度，但下载队列、
+metadata 写入与本地导入后处理在宿主单点短路；任务应以 0 成功、0 失败正常完成。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 数据库迁移 | v042 数据库 | 启动新版应用并查看 schema | 升到 v043；`tasks` / `run_configs.is_dry_run` 默认 0 | dev 库实测 user_version=43，既有 268 条任务均为 0 |
+| [x] | V8 dry-run | dev CLI | `plugin run <kgpg> --dry-run --var end_page=1` | 有启动提示和逐图跳过日志；Completed，计数为 0，images / metadata 无新增 | wallhaven 经主程序与 `--via local` 各跑一次：print 级启动提示，24 条跳过下载 |
+| [x] | 仅打印配置 | dev CLI | 同一插件改用 `--print-config` | 只打印最终配置，不创建任务、不联网 | 经主程序（协议 v3）执行，tasks 行数不变 |
+| [x] | 三类前端入口 | 桌面 CEF | 插件收集、网页收集、本地导入分别打开 dry-run 并提交 | 卡片显示空跑徽标；运行参数显示空跑；三类任务均不入库 | 选源前打开的开关会带入；网页收集 V8 / WebView 后端分别跳过 35 / 29 个下载，快照不写 metadata；本地导入逐文件跳过 |
+| [x] | 回填与自动任务 | 桌面 CEF | 再次执行 dry-run 任务；保存为自动任务并触发 | 开关保持；定时任务的 `tasks.is_dry_run = 1` | 自动任务详情与编辑页均显示开启；`run_missed_configs` 触发出 scheduled 任务 |
+| [x] | 推荐配置 | 桌面 CEF | 导入带 `isDryRun: true` + `scheduleSpec` 的临时推荐配置 | RunConfig 保留字段，定时触发为空跑；导出仍含 `isDryRun` | 用原始预设 JSON 走 `parsePluginRecommendedPreset` → `importRecommendedPreset` → `runConfigToPresetJson`，未经插件打包；临时配置已删除 |
+| [ ] | WebView common | WebView 插件 | 输出 `Kabegame.common.isDryRun` | 普通任务为 false，空跑为 true；`Kabegame.vars` 不混入该 key | 网页收集 WebView 后端带新占位符的 bootstrap 正常运行；`Kabegame.common` 为闭包局部，CDP 读不到，值待用 WebView 插件打印 |
+| [ ] | common.baseUrl | V8 / WebView 插件 | 输出 `common.baseUrl` / `Kabegame.common.baseUrl` | 等于插件 `kbBaseUrl`（空串为 null）；不再有 `base_url` 键 | V8 由 `plugin::v8` 单测断言通过；WebView 同上待测 |
+
 ## 插件路径类变量（只读 `input` 挂载）
 
 路径类变量（`path` / `file` / `folder` / `file_or_folder`）在任务冻结时解析成 `PluginVfs` 的只读 `input`

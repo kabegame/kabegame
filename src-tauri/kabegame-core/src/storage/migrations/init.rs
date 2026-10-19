@@ -27,6 +27,7 @@ CREATE TABLE tasks (
     run_config_id   TEXT,
     trigger_source  TEXT    NOT NULL DEFAULT 'manual',
     max_concurrent_downloads INTEGER,
+    is_dry_run      INTEGER NOT NULL DEFAULT 0,
     status          TEXT    NOT NULL,
     progress        REAL    NOT NULL DEFAULT 0,
     deleted_count   INTEGER NOT NULL DEFAULT 0,
@@ -180,7 +181,8 @@ CREATE TABLE run_configs (
     schedule_spec        TEXT,
     schedule_planned_at  INTEGER,
     schedule_last_run_at INTEGER,
-    max_concurrent_downloads INTEGER
+    max_concurrent_downloads INTEGER,
+    is_dry_run           INTEGER NOT NULL DEFAULT 0
 );
 
 -- ───────────── surf_records ─────────────

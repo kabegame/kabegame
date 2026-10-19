@@ -69,6 +69,12 @@
           {{ $t("albums.recursiveSubdirs") }}
         </el-checkbox>
       </el-form-item>
+      <el-form-item :label="$t('tasks.dryRunBadge')">
+        <div class="flex items-center gap-2">
+          <el-switch v-model="isDryRun" />
+          <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
+        </div>
+      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -122,6 +128,7 @@ const newOutputAlbumName = ref("");
 const newOutputAlbumParentId = ref<string | null>(null);
 const paths = ref<string[]>([]);
 const recursive = ref(true);
+const isDryRun = ref(false);
 const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
 watch(selectedOutputAlbumId, (value) => {
   if (value !== "__create_new__") {
@@ -245,6 +252,11 @@ async function handleSubmit() {
       ...(preserveCopyToDir ? { copy_to_dir: true } : {}),
     },
     outputAlbumId,
+    undefined,
+    undefined,
+    "manual",
+    undefined,
+    isDryRun.value,
   );
 
   modal.close();
@@ -257,6 +269,7 @@ function handleOpen() {
     paths.value = [...(props.initialConfig.paths ?? [])];
     recursive.value = props.initialConfig.recursive ?? true;
     selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
+    isDryRun.value = props.initialConfig.isDryRun ?? false;
   }
 }
 
@@ -265,6 +278,7 @@ function handleClosed() {
   newOutputAlbumName.value = "";
   newOutputAlbumParentId.value = null;
   selectedOutputAlbumId.value = null;
+  isDryRun.value = false;
 }
 </script>
 

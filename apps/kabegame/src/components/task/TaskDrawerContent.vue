@@ -308,6 +308,7 @@ type ScriptTask = {
   endTime?: number | null;
   error?: string | null;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
 };
 
 const props = withDefaults(

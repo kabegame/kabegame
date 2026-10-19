@@ -26,6 +26,7 @@ pub struct TaskParams {
     pub images_dir: PathBuf,
     pub output_album_id: Option<String>,
     pub config: HashMap<String, Value>,
+    pub is_dry_run: bool,
     /// 冻结时解析出的只读输入挂载；`Task::try_new` 会把它交给 VFS 并把 config 改写成虚拟路径。
     #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
     pub inputs: Vec<InputMount>,
@@ -242,6 +243,9 @@ impl Task {
         value: &Value,
         search_terms: Option<Vec<String>>,
     ) -> Result<i64, String> {
+        if self.params.is_dry_run {
+            return Ok(0);
+        }
         Storage::global().insert_metadata_row(
             value,
             &self.params.plugin.id,
@@ -367,6 +371,29 @@ mod tests {
         .expect("valid plugin")
     }
 
+    #[test]
+    fn dry_run_insert_metadata_returns_zero_without_storage_write() {
+        crate::app_paths::AppPaths::init_for_tests();
+        let run = Task::new(
+            "task-dry-run-metadata-test".to_string(),
+            TaskParams {
+                plugin: Arc::new(test_plugin()),
+                images_dir: PathBuf::new(),
+                output_album_id: None,
+                config: HashMap::new(),
+                is_dry_run: true,
+                #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+                inputs: Vec::new(),
+            },
+            None,
+        );
+
+        assert_eq!(
+            run.insert_metadata(&serde_json::json!({ "title": "ignored" }), None),
+            Ok(0)
+        );
+    }
+
     #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
     #[test]
     fn try_new_mounts_inputs_and_rewrites_config_to_virtual_paths() {
@@ -389,6 +416,7 @@ mod tests {
                 images_dir: PathBuf::new(),
                 output_album_id: None,
                 config,
+                is_dry_run: false,
                 inputs: vec![InputMount {
                     key: "src".to_string(),
                     kind: InputKind::File {

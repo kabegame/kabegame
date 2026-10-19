@@ -612,6 +612,17 @@ impl DownloadQueue {
         post_url: Option<String>,
         labels: Vec<LabelSpec>,
     ) -> Result<(), String> {
+        if TaskScheduler::global()
+            .get_run(&task_id)
+            .is_some_and(|run| run.params.is_dry_run)
+        {
+            GlobalEmitter::global().emit_task_log(
+                &task_id,
+                "info",
+                &task_log_i18n("taskLogDryRunSkipDownload", json!({ "url": url.as_str() })),
+            );
+            return Ok(());
+        }
         self.download(
             url,
             images_dir,
@@ -1394,6 +1405,7 @@ mod tests {
                     images_dir: PathBuf::new(),
                     output_album_id: None,
                     config: HashMap::new(),
+                    is_dry_run: false,
                     #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
                     inputs: Vec::new(),
                 },

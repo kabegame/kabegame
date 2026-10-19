@@ -29,6 +29,7 @@ export function useTaskRerun() {
         outputDir: task.outputDir,
         httpHeaders: { ...(task.httpHeaders ?? {}) },
         outputAlbumId: task.outputAlbumId ?? null,
+        isDryRun: task.isDryRun,
       });
       return;
     }
@@ -39,6 +40,7 @@ export function useTaskRerun() {
         copyToDir: userConfig.copy_to_dir === true,
         outputDir: task.outputDir,
         outputAlbumId: task.outputAlbumId ?? null,
+        isDryRun: task.isDryRun,
       });
       return;
     }

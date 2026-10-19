@@ -45,7 +45,12 @@
     </el-descriptions>
 
     <el-descriptions
-      v-if="config.outputDir || config.outputAlbumId || config.maxConcurrentDownloads != null"
+      v-if="
+        config.outputDir ||
+        config.outputAlbumId ||
+        config.maxConcurrentDownloads != null ||
+        config.isDryRun !== undefined
+      "
       :title="t('tasks.taskRunParamsSectionOutput')"
       :column="1"
       border
@@ -64,6 +69,9 @@
         :span="2"
       >
         {{ config.maxConcurrentDownloads }}
+      </el-descriptions-item>
+      <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
+        {{ config.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
       </el-descriptions-item>
     </el-descriptions>
 

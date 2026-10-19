@@ -21,6 +21,7 @@ export interface CrawlTask {
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
   outputAlbumId?: string;
   runConfigId?: string;
   triggerSource: "manual" | "scheduled";
@@ -54,6 +55,7 @@ export interface RunConfig {
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
   /** 输出画册：定时任务与手动任务写入同一画册 */
   outputAlbumId?: string;
   createdAt: number;
@@ -74,6 +76,7 @@ export interface TaskConfig {
   httpHeaders: Record<string, string>;
   outputAlbumId: string | null;
   maxConcurrentDownloads: number | null;
+  isDryRun: boolean;
 }
 
 export interface MissedRunItem {
@@ -176,6 +179,7 @@ export interface PluginRecommendedPreset {
   userConfig?: Record<string, any>;
   scheduleSpec?: ScheduleSpec;
   httpHeaders?: Record<string, string>;
+  isDryRun: boolean;
 }
 
 function parseFlatI18nText(obj: Record<string, unknown>, baseKey: string): Record<string, string> | string | undefined {
@@ -224,12 +228,13 @@ export function parsePluginRecommendedPreset(
     userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
     httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
+    isDryRun: Boolean(o.isDryRun ?? o.is_dry_run ?? false),
   };
 }
 
 /**
  * 把运行配置导出为插件 `configs/*.json` 推荐配置的文件内容，字段与 `parsePluginRecommendedPreset` 读取的一致。
- * `pluginId` / `filename` / `baseUrl` 由插件包决定，输出目录、画册、并发等本机设置不导出。
+ * `pluginId` / `filename` / `baseUrl` 由插件包决定，输出目录、画册、并发等本机设置不导出；dry-run 属插件语义。
  */
 export function runConfigToPresetJson(cfg: RunConfig): string {
   const out: Record<string, unknown> = { name: cfg.name };
@@ -237,6 +242,7 @@ export function runConfigToPresetJson(cfg: RunConfig): string {
   out.userConfig = cfg.userConfig ?? {};
   if (cfg.scheduleSpec?.mode) out.scheduleSpec = cfg.scheduleSpec;
   if (cfg.httpHeaders && Object.keys(cfg.httpHeaders).length > 0) out.httpHeaders = cfg.httpHeaders;
+  if (cfg.isDryRun) out.isDryRun = true;
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
@@ -258,6 +264,7 @@ export function parseRunConfigRaw(raw: unknown): RunConfig | null {
     httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
     outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
     maxConcurrentDownloads: nullableNumField(o, "maxConcurrentDownloads", "max_concurrent_downloads"),
+    isDryRun: Boolean(o.isDryRun ?? o.is_dry_run ?? false),
     createdAt: Number(o.createdAt ?? o.created_at ?? 0),
     scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
@@ -304,6 +311,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
       httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
       maxConcurrentDownloads: nullableNumField(o, "maxConcurrentDownloads", "max_concurrent_downloads"),
+      isDryRun: Boolean(o.isDryRun ?? o.is_dry_run ?? false),
       outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
       runConfigId: (o.runConfigId ?? o.run_config_id) as string | undefined,
       triggerSource: (o.triggerSource ?? o.trigger_source ?? "manual") as CrawlTask["triggerSource"],
@@ -362,6 +370,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
         userConfig: raw.userConfig ?? raw.user_config ?? undefined,
         httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
         maxConcurrentDownloads: nullableNumField(raw, "maxConcurrentDownloads", "max_concurrent_downloads"),
+        isDryRun: Boolean(raw.isDryRun ?? raw.is_dry_run ?? false),
         outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
         runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
         triggerSource: (raw.triggerSource ?? raw.trigger_source ?? "manual") as CrawlTask["triggerSource"],
@@ -535,6 +544,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     runConfigId?: string,
     triggerSource: CrawlTask["triggerSource"] = "manual",
     maxConcurrentDownloads?: number | null,
+    isDryRun = false,
   ): Promise<boolean> {
     if (beforeAddTaskGuard) {
       try {
@@ -557,6 +567,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           runConfigId,
           triggerSource,
           maxConcurrentDownloads,
+          isDryRun,
         },
       });
       return true;
@@ -646,6 +657,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       url: preset.baseUrl || "",
       userConfig: canonicalizeUserConfig(preset.userConfig ?? {}, defs),
       httpHeaders: preset.httpHeaders ?? {},
+      isDryRun: preset.isDryRun,
       scheduleEnabled,
       scheduleSpec: spec,
       schedulePlannedAt: undefined,
@@ -671,6 +683,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       userConfig: config.userConfig ?? {},
       httpHeaders: config.httpHeaders ?? {},
       maxConcurrentDownloads: config.maxConcurrentDownloads ?? null,
+      isDryRun: config.isDryRun ?? false,
       outputAlbumId: config.outputAlbumId,
       scheduleEnabled: config.scheduleEnabled ?? false,
       scheduleSpec: config.scheduleSpec,
@@ -753,6 +766,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     userConfig?: Record<string, any>;
     outputAlbumId?: string;
     maxConcurrentDownloads?: number | null;
+    isDryRun?: boolean;
+    is_dry_run?: boolean;
     runConfigId?: string;
     triggerSource?: CrawlTask["triggerSource"];
     status: string;
@@ -771,6 +786,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     userConfig: t.userConfig,
     outputAlbumId: t.outputAlbumId,
     maxConcurrentDownloads: t.maxConcurrentDownloads ?? null,
+    isDryRun: t.isDryRun ?? t.is_dry_run ?? false,
     runConfigId: t.runConfigId,
     triggerSource: t.triggerSource ?? "manual",
     status: t.status as CrawlTask["status"],
@@ -794,6 +810,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
           userConfig?: Record<string, any>;
           outputAlbumId?: string;
           maxConcurrentDownloads?: number | null;
+          isDryRun?: boolean;
+          is_dry_run?: boolean;
           runConfigId?: string;
           triggerSource?: CrawlTask["triggerSource"];
           status: string;
@@ -826,6 +844,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
           userConfig?: Record<string, any>;
           outputAlbumId?: string;
           maxConcurrentDownloads?: number | null;
+          isDryRun?: boolean;
+          is_dry_run?: boolean;
           runConfigId?: string;
           triggerSource?: CrawlTask["triggerSource"];
           status: string;
@@ -872,6 +892,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       task.runConfigId,
       "manual",
       task.maxConcurrentDownloads ?? null,
+      task.isDryRun,
     );
   }
 

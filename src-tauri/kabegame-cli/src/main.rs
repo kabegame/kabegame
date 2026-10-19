@@ -210,6 +210,9 @@ struct RunPluginArgs {
     #[arg(long = "max-downloads", value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
     max_downloads: Option<u32>,
     /// 只解析并打印最终配置，不真正运行任务
+    #[arg(long = "print-config")]
+    print_config: bool,
+    /// 空跑任务：执行插件逻辑，但不下载或入库
     #[arg(long = "dry-run")]
     dry_run: bool,
     /// 不渲染进度条，日志逐行直出（适合 CI / 重定向到文件）
@@ -924,7 +927,7 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
 
     init_paths()?;
     let backend = choose_backend(via, LocalNeeds::TASKS).await?;
-    let mut events = if args.dry_run {
+    let mut events = if args.print_config {
         None
     } else {
         Some(backend.subscribe_task_events().await?)
@@ -938,7 +941,8 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
             output_album_id: args.album_id,
             http_headers: None,
             max_concurrent_downloads: args.max_downloads,
-            dry_run: args.dry_run,
+            print_config: args.print_config,
+            is_dry_run: args.dry_run,
         })
         .await?;
     let config_json = serde_json::to_string_pretty(&output.config).map_err(|e| e.to_string())?;
@@ -954,8 +958,11 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
     println!("{}", console::style("最终配置：").dim());
     println!("{config_json}");
 
-    if args.dry_run {
+    if args.print_config {
         return Ok(());
+    }
+    if args.dry_run {
+        println!("{}", console::style("dry-run：不会下载或入库").yellow());
     }
     let task_id = output
         .task_id

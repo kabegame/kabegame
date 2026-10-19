@@ -268,6 +268,17 @@ impl FolderScanHook for LocalImportHook {
         if self.is_canceled() {
             return Err(ScanError::Fatal("Task canceled".to_string()));
         }
+        if self.run.params.is_dry_run {
+            GlobalEmitter::global().emit_task_log(
+                &self.task_id,
+                "info",
+                &task_log_i18n(
+                    "taskLogDryRunSkipImport",
+                    json!({ "path": file.url.as_str() }),
+                ),
+            );
+            return Ok(());
+        }
         let download_start_time = self.next_download_start_time();
         let result = match file.url.scheme() {
             "file" => self.import_file_url(file, download_start_time).await,

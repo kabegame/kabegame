@@ -113,6 +113,8 @@
   "taskSettings": "Task settings",
   "maxConcurrentDownloads": "Maximum concurrent downloads",
   "maxConcurrentDownloadsFollowGlobal": "Follow global setting (currently {n})",
+  "dryRun": "Dry run",
+  "dryRunDesc": "Run the plugin without downloading or saving to the library",
   "pluginSettings": "Plugin settings",
   "advancedSettings": "Advanced settings",
   "httpHeaders": "HTTP headers",

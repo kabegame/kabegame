@@ -68,7 +68,7 @@
     </el-descriptions>
 
     <el-descriptions
-      v-if="task.outputDir || task.maxConcurrentDownloads !== undefined"
+      v-if="task.outputDir || task.maxConcurrentDownloads !== undefined || task.isDryRun !== undefined"
       :title="t('tasks.taskRunParamsSectionOutput')"
       :column="1"
       border
@@ -80,6 +80,9 @@
       </el-descriptions-item>
       <el-descriptions-item :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')" :span="2">
         {{ task.maxConcurrentDownloads == null ? t("tasks.taskRunParamsFollowGlobal") : task.maxConcurrentDownloads }}
+      </el-descriptions-item>
+      <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
+        {{ task.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
       </el-descriptions-item>
     </el-descriptions>
 
@@ -161,6 +164,7 @@ export type TaskRunParamsTask = {
   failedCount?: number;
   outputDir?: string | null;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
   userConfig?: Record<string, any> | null;
   startTime?: number | null;
   endTime?: number | null;

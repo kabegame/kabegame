@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::sync::OnceLock;
 
-/// v2 新增任务并发实时调整变体，并扩展 `PluginRunParams` 的逐任务上限字段。
-pub const IPC_PROTOCOL_VERSION: u32 = 2;
+/// v3 重命名 `PluginRunParams.printConfig`，并新增任务级 `isDryRun`。
+pub const IPC_PROTOCOL_VERSION: u32 = 3;
 
 pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();

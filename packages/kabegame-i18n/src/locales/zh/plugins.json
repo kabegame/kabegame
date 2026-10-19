@@ -113,6 +113,8 @@
   "taskSettings": "任务设置",
   "maxConcurrentDownloads": "最大并发下载",
   "maxConcurrentDownloadsFollowGlobal": "跟随全局（当前 {n}）",
+  "dryRun": "空跑（dry-run）",
+  "dryRunDesc": "执行插件但不下载、不入库",
   "pluginSettings": "插件设置",
   "advancedSettings": "高级设置",
   "httpHeaders": "HTTP 头",

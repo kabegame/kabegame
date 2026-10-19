@@ -3,6 +3,7 @@
 ## 用户侧
 
 ### Added
+- 新增任务级空跑（dry-run）：插件、网页收集、本地导入和自动任务均可完整执行而不下载、不入库；CLI 使用 `--dry-run`，原仅打印配置的行为改为 `--print-config`。
 - 插件路径类变量（`path` / `file` / `folder` / `file_or_folder`）现在真正可用：用户选中的文件或文件夹会只读挂进本次任务，插件脚本可直接用 `Kabegame.fs` 读取，或把路径交给 `Kabegame.downloadImage()` 入库；源文件不会被改动，任务结束后挂载自动失效。Android 支持选择文件（系统选择器返回的 `content://`），暂不支持文件夹变量。
 - 收集弹窗里的路径变量控件支持从系统拖入文件或文件夹（单文件 / 单文件夹，扩展名按变量 `options` 过滤）；拖入类型不符或一次拖入多项时提示「此处不支持」。
 
@@ -13,6 +14,10 @@
 
 ### Added
 - 路径类变量传入脚本的值改为**只读虚拟路径**：文件为 `{getRoot()}/input/<key>/<原文件名>`（该目录只含这一个文件），文件夹为 `{getRoot()}/input/<key>/...`；`input` 子树不可写、不可 rename、不可硬链接，复制到 `tmp` 允许。宿主绝对路径不再进入 JS。
+- 插件新增 common.isDryRun 配置
+
+### Fixed
+- 宿主注入的 `common` 键统一为 `baseUrl`：V8 `crawl(common)` 与 WebView `Kabegame.common` 一致，修正 4.6.0 只改了 SDK 类型与官方插件、宿主仍注入 `base_url`，导致读取 `common.baseUrl` 拿不到 `kbBaseUrl` 的问题。
 
 ## 开发侧
 

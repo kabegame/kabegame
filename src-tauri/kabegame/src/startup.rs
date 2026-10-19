@@ -665,12 +665,22 @@ pub(crate) fn crawler_initialization_scripts(
         };
     let vars_json = serde_json::to_string(&vars)
         .map_err(|e| format!("Failed to serialize crawler vars: {e}"))?;
+    let common_json = serde_json::to_string(&serde_json::json!({
+        "baseUrl": if plugin.base_url.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(plugin.base_url.trim().to_string())
+        },
+        "isDryRun": run.params.is_dry_run,
+    }))
+    .map_err(|e| format!("Failed to serialize crawler common config: {e}"))?;
     // bootstrap.js 是模板：把该任务的 merged_config（vars）与插件 crawl.js 烘焙进去，
     // 得到该任务专属的一次性注入脚本（每页 document-start 自执行，无乒乓）。
     let bootstrap = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/webview_js/bootstrap.js"
     ))
+    .replace("__KB_COMMON_JSON__", &common_json)
     .replace("__KB_VARS_JSON__", &vars_json)
     .replace(
         "__KB_LANG__",

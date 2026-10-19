@@ -319,6 +319,7 @@ const presetPreviewRunConfig = computed((): RunConfig | null => {
     url: preset.baseUrl || "",
     userConfig: preset.userConfig,
     httpHeaders: preset.httpHeaders,
+    isDryRun: preset.isDryRun,
     createdAt: 0,
     scheduleEnabled: !!preset.scheduleSpec,
     scheduleSpec: preset.scheduleSpec,

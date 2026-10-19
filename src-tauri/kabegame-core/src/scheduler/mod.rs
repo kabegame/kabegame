@@ -133,6 +133,7 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         run_config_id: Some(config.id.clone()),
         trigger_source: "scheduled".to_string(),
         max_concurrent_downloads: config.max_concurrent_downloads,
+        is_dry_run: config.is_dry_run,
         status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,

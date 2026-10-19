@@ -17,7 +17,10 @@ pub struct PluginRunParams {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub max_concurrent_downloads: Option<u32>,
-    pub dry_run: bool,
+    #[serde(default)]
+    pub print_config: bool,
+    #[serde(default)]
+    pub is_dry_run: bool,
 }
 
 /// 0 会让任务永远无法入队；不设上界，超过全局值时按全局值生效。
@@ -137,7 +140,7 @@ pub async fn run_plugin(
     let config = effective.clone().into_iter().collect::<BTreeMap<_, _>>();
     let plugin_file_path = plugin_file_path.map(|path| path.to_string_lossy().into_owned());
 
-    if p.dry_run {
+    if p.print_config {
         return Ok(PluginRunOutput {
             plugin_id: plugin.id,
             plugin_version: plugin.version,
@@ -168,6 +171,7 @@ pub async fn run_plugin(
     if let Some(limit) = validate_task_max_downloads(p.max_concurrent_downloads)? {
         params["maxConcurrentDownloads"] = Value::from(limit);
     }
+    params["isDryRun"] = Value::Bool(p.is_dry_run);
     let task_id = start_task(params).await?;
 
     Ok(PluginRunOutput {
@@ -394,6 +398,8 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         trigger_source: String,
         #[serde(default)]
         max_concurrent_downloads: Option<u32>,
+        #[serde(default)]
+        is_dry_run: bool,
     }
 
     fn default_trigger_source() -> String {
@@ -446,6 +452,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         run_config_id: p.run_config_id,
         trigger_source: p.trigger_source,
         max_concurrent_downloads,
+        is_dry_run: p.is_dry_run,
         status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,

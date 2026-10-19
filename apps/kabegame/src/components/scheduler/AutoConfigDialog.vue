@@ -63,9 +63,17 @@
         />
       </el-form-item>
 
-      <el-form-item :label="t('plugins.maxConcurrentDownloads')">
-        <MaxDownloadsField v-model="maxConcurrentDownloads" />
-      </el-form-item>
+      <div class="flex flex-wrap gap-x-6">
+        <el-form-item class="min-w-56 flex-1" :label="t('plugins.maxConcurrentDownloads')">
+          <MaxDownloadsField v-model="maxConcurrentDownloads" />
+        </el-form-item>
+        <el-form-item class="min-w-56 flex-1" :label="t('plugins.dryRun')">
+          <div class="flex items-center gap-2">
+            <el-switch v-model="isDryRun" />
+            <span class="text-sm text-[var(--anime-text-secondary)]">{{ t("plugins.dryRunDesc") }}</span>
+          </div>
+        </el-form-item>
+      </div>
 
       <PluginVarsForm v-if="visiblePluginVars.length > 0" v-model="form.vars" :plugin-vars="visiblePluginVars" />
 
@@ -225,6 +233,7 @@ const headersModel = ref<Record<string, string>>({});
 /** 输出画册：与 task config 同义，定时任务也写入该画册 */
 const outputAlbumId = ref<string | null>(null);
 const maxConcurrentDownloads = ref<number | null>(null);
+const isDryRun = ref(false);
 
 const viewAlbumName = ref("");
 
@@ -346,6 +355,7 @@ const loadFromConfig = async (cfg: RunConfig) => {
   headersModel.value = { ...(cfg.httpHeaders ?? {}) };
   outputAlbumId.value = cfg.outputAlbumId ?? null;
   maxConcurrentDownloads.value = cfg.maxConcurrentDownloads ?? null;
+  isDryRun.value = cfg.isDryRun;
 
   scheduleEnabled.value = !!cfg.scheduleEnabled;
   const spec = cfg.scheduleSpec;
@@ -389,6 +399,7 @@ const resetCreateForm = () => {
   headersModel.value = {};
   outputAlbumId.value = null;
   maxConcurrentDownloads.value = null;
+  isDryRun.value = false;
   form.value.pluginId = "";
   form.value.outputDir = "";
   form.value.vars = {};
@@ -651,6 +662,7 @@ const handleSave = async () => {
     httpHeaders: { ...headersModel.value },
     outputAlbumId: outputAlbumId.value || undefined,
     maxConcurrentDownloads: maxConcurrentDownloads.value,
+    isDryRun: isDryRun.value,
     ...schedule,
   };
 
