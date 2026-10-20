@@ -28,10 +28,18 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 pub struct Picker<R: Runtime>(pub(crate) PluginHandle<R>);
 
 impl<R: Runtime> Picker<R> {
-    pub async fn get_http_server_base(&self) -> crate::Result<GetHttpServerBaseResponse> {
+    pub async fn get_http_server_base(
+        &self,
+        plugin_file_upstream_port: u16,
+    ) -> crate::Result<GetHttpServerBaseResponse> {
         let result: GetHttpServerBaseResponse = self
             .0
-            .run_mobile_plugin_async("getHttpServerBase", ())
+            .run_mobile_plugin_async(
+                "getHttpServerBase",
+                crate::models::GetHttpServerBaseArgs {
+                    plugin_file_upstream_port,
+                },
+            )
             .await
             .map_err(crate::Error::from)?;
         Ok(result)
@@ -181,11 +189,7 @@ impl<R: Runtime> Picker<R> {
         Ok(result)
     }
 
-    pub async fn get_image_thumbnail(
-        &self,
-        uri: String,
-        output_path: String,
-    ) -> crate::Result<()> {
+    pub async fn get_image_thumbnail(&self, uri: String, output_path: String) -> crate::Result<()> {
         self.0
             .run_mobile_plugin_async::<()>(
                 "getImageThumbnail",

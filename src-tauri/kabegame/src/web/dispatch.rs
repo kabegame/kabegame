@@ -388,20 +388,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "list_imported_recommended_presets",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|_p| {
-                Box::pin(async move {
-                    kabegame_core::commands::task::list_imported_recommended_presets()
-                        .await
-                        .map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "get_run_config",
         MethodEntry {
             requires_super: false,
@@ -2222,9 +2208,7 @@ pub async fn dispatch(req: JsonRpcRequest, is_super: bool) -> Value {
     }
 }
 
-// Web 专属：只回 `{id, version}` 索引（详情体积大，web 客户端按需 `get_plugin_detail`
-// 单取）。桌面走 `commands::plugin::get_plugins` 回整份列表——两端形状不同，故各自实现，
-// 不下沉到 feature-agnostic 的 core commands 层。
+// Web 与桌面统一返回轻量插件列表。
 async fn web_get_plugins() -> Result<Value, RpcError> {
     let pm = kabegame_core::plugin::PluginManager::global();
     pm.ensure_installed_cache_initialized()
@@ -2232,11 +2216,7 @@ async fn web_get_plugins() -> Result<Value, RpcError> {
         .map_err(RpcError::internal)?;
     let mut plugins = pm.get_all().map_err(RpcError::internal)?;
     plugins.extend(pm.builtin_plugins());
-    let index: Vec<Value> = plugins
-        .iter()
-        .map(|p| serde_json::json!({ "id": p.id, "version": p.version }))
-        .collect();
-    Ok(Value::Array(index))
+    serde_json::to_value(plugins).map_err(|e| RpcError::internal(e.to_string()))
 }
 
 async fn web_refresh_plugins() -> Result<Value, RpcError> {

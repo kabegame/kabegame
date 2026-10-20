@@ -7,16 +7,16 @@
 ```mermaid
 flowchart TD
   subgraph write ["写入"]
-    crawl["crawl.rhai / crawl.js\ndownload_image(..., metadata)"]
+    crawl["crawl.js\nKabegame.downloadImage(..., metadata)"]
     db["metadata.data\nimages.metadata_id"]
   end
-  subgraph load ["模板加载（应用/插件初始化）"]
-    store["usePluginStore / useInstalledPluginsStore\nloadDescriptionTemplates"]
-    cmd["invoke get_plugin_template\npluginId + templateName description"]
-    zip["core: read_plugin_template\n.kgpg ZIP templates/description.ejs"]
+  subgraph load ["模板加载（打开图片详情时）"]
+    store["usePluginDescriptionTemplate\nURL Promise 缓存"]
+    cmd["GET /plugin_file/id/path?v=version"]
+    zip["core: package_file\n读取 kbDescriptionTemplate 引用条目"]
   end
   subgraph render ["详情面板渲染"]
-    detail["ImageDetailContent.vue"]
+    detail["ImagePluginDescriptionPanel.vue"]
     ejs["ejs.render(tpl, { metadata })"]
     inject["前置 script:\nDESCRIPTION_BRIDGE_INJECT_SCRIPT"]
     iframe["iframe srcdoc"]
@@ -50,20 +50,18 @@ flowchart TD
 
 ## 二、模板加载：何时、如何拿到 `.ejs` 字符串
 
-1. **包内路径**：`.kgpg`（ZIP）内 **`templates/description.ejs`**（模板逻辑名 `description`）。
-2. **后端**：`get_plugin_template(pluginId, templateName)` → `PluginManager::get_plugin_template_by_id` → **`read_plugin_template(zip_path, "description")`** 读 ZIP 条目。
-   - 实现：[src-tauri/kabegame/src/commands/plugin.rs](../../src-tauri/kabegame/src/commands/plugin.rs)（命令入口）、[src-tauri/kabegame-core/src/plugin/mod.rs](../../src-tauri/kabegame-core/src/plugin/mod.rs)（ZIP 读取）。
-3. **前端缓存**：
-   - **`usePluginStore`**（商店/预览等场景）、**`useInstalledPluginsStore`**（已安装插件）各自维护 `descriptionTemplates` / `pluginDescriptionTemplates`。
-   - **`loadDescriptionTemplates()`**：对已列出的每个插件 `invoke("get_plugin_template", { pluginId, templateName: "description" })`，结果写入 `Record<pluginId, string | null>`。
-   - 与 **`loadIcons()`** 等一起在插件列表加载完成后并发执行（见 [packages/core/src/stores/plugins.ts](../../packages/core/src/stores/plugins.ts)）。
-4. **读取模板**：`ImageDetailContent.vue` 通过 **`pluginDescriptionTemplate(pluginId)`** 先从 `usePluginStore` 取，没有再取 `useInstalledPluginsStore`。
+1. **包内路径**：由 `packageJson.kbDescriptionTemplate` 指定，不依赖固定文件名。
+2. **后端**：列表只下发清单；`/plugin_file/<id>/<path>?v=<version>` 经核心 `package_file` 白名单和版本校验后从 kgpg 读取。模板源码不常驻 `Plugin`。
+3. **前端**：`services/pluginFiles.ts::usePluginDescriptionTemplate` 在面板用到插件时获取模板，按完整 URL 缓存 Promise；失败移出缓存，更新或删除插件时失效。不同版本、商店源和导入预览各自隔离。
+4. **展示**：加载完成前不渲染 iframe，也不回退展示原始 metadata；完成后有模板则渲染，无模板则显示 metadata 键值。切换图片后忽略旧请求的晚到结果。
+
+完整 HTTP 与缓存契约见 [PLUGIN_FILE_ENDPOINT.md](PLUGIN_FILE_ENDPOINT.md)。
 
 ---
 
-## 三、渲染：`ImageDetailContent.vue` 与 `srcdoc`
+## 三、渲染：`ImagePluginDescriptionPanel.vue` 与 `srcdoc`
 
-**文件**：[packages/core/src/components/common/ImageDetailContent.vue](../../packages/core/src/components/common/ImageDetailContent.vue)
+**文件**：[apps/kabegame/src/components/common/ImagePluginDescriptionPanel.vue](../../apps/kabegame/src/components/common/ImagePluginDescriptionPanel.vue)
 
 1. **显示条件**：`image.pluginId` 存在，且 `metadata` 经 `isRenderableMetadata` 判断非空；且能取到非空模板字符串。
 2. **渲染**：
@@ -75,7 +73,7 @@ flowchart TD
 4. **不经 DOMPurify**：信任已安装插件包内容；恶意模板风险见文末「安全说明」。
 5. **无模板时**：若 `metadata` 可展示但无 `description.ejs`，走 **`showRawMetadata`**，以键值形式展示原始 `metadata`（不经过 EJS）。
 
-**注入脚本**：正文 [descriptionBridgeInject.body.js](../../packages/core/src/components/common/descriptionBridgeInject.body.js)（勿与 `descriptionBridgeInjectScript.ts` 同名 `.js`，避免 Bun 等把对 `.ts` 的解析指到无导出的 IIFE）；[descriptionBridgeInjectScript.ts](../../packages/core/src/components/common/descriptionBridgeInjectScript.ts) 内 **`import … from '…/descriptionBridgeInject.body.js?raw'`** 导出 `DESCRIPTION_BRIDGE_INJECT_SCRIPT`，供 [ImageDetailContent.vue](../../packages/core/src/components/common/ImageDetailContent.vue) 使用。
+**注入脚本**：正文 [descriptionBridgeInject.body.js](../../apps/kabegame/src/components/common/descriptionBridgeInject.body.js)（勿与 `descriptionBridgeInjectScript.ts` 同名 `.js`，避免 Bun 等把对 `.ts` 的解析指到无导出的 IIFE）；[descriptionBridgeInjectScript.ts](../../apps/kabegame/src/components/common/descriptionBridgeInjectScript.ts) 内 **`import … from '…/descriptionBridgeInject.body.js?raw'`** 导出 `DESCRIPTION_BRIDGE_INJECT_SCRIPT`，供 [ImagePluginDescriptionPanel.vue](../../apps/kabegame/src/components/common/ImagePluginDescriptionPanel.vue) 使用。
 
 ---
 
@@ -131,9 +129,9 @@ flowchart TD
 |------|------|
 | 下载写入 metadata | 各插件 `crawl.rhai` / `crawl.js`，`kabegame_core` 下载链路 |
 | 读 ZIP 模板 | `src-tauri/kabegame-core/src/plugin/mod.rs`（`read_plugin_template`） |
-| Tauri 命令 | `get_plugin_template`、`proxy_fetch` |
-| 前端模板缓存与加载 | `packages/core/src/stores/plugins.ts` |
-| EJS 渲染与 iframe | `ImageDetailContent.vue`、`descriptionBridgeInject.body.js`（`?raw`）/`descriptionBridgeInjectScript.ts` |
+| HTTP / Tauri | `/plugin_file`、`proxy_fetch` |
+| 前端模板缓存与加载 | `apps/kabegame/src/stores/plugins.ts` |
+| EJS 渲染与 iframe | `ImagePluginDescriptionPanel.vue`、`descriptionBridgeInject.body.js`（`?raw`）/`descriptionBridgeInjectScript.ts` |
 
 ---
 

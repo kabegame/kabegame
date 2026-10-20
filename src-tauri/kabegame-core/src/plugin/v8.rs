@@ -414,16 +414,17 @@ mod tests {
             labels: vec![],
             min_app_incompatible: false,
             file_path: None,
-            doc: None,
-            changelog: None,
+
             icon_png_base64: None,
-            description_template: None,
-            recommended_configs: Vec::new(),
+
             var_defs: Vec::new(),
             script: PluginScript::default(),
-            assets: None,
+
             providers: Vec::new(),
-            metadata_migration: None,
+            metadata_migration_path: None,
+            package_json: None,
+            asset_keys: Vec::new(),
+            file_origin: None,
             version_packed: 0,
         }
     }

@@ -73,8 +73,12 @@ internal class LocalHttpServer(context: Context) {
     @Volatile
     private var baseUrl: String? = null
 
+    @Volatile
+    private var pluginFileUpstreamPort: Int = 0
+
     @Synchronized
-    fun start(): String {
+    fun start(upstreamPort: Int): String {
+        pluginFileUpstreamPort = upstreamPort
         baseUrl?.let { return it }
 
         val socket = ServerSocket(0, 50, InetAddress.getByName(LOOPBACK_HOST))
@@ -115,6 +119,28 @@ internal class LocalHttpServer(context: Context) {
         }
     }
 
+    private fun forwardPluginFile(target: String, method: String, headers: Map<String, String>, output: OutputStream) {
+        val port = pluginFileUpstreamPort
+        if (port <= 0) { sendText(output, 404, "Not Found", "not found", method == "HEAD"); return }
+        val upstream = java.net.URL("http://$LOOPBACK_HOST:$port$target").openConnection() as java.net.HttpURLConnection
+        try {
+            upstream.requestMethod = method
+            upstream.connectTimeout = SOCKET_TIMEOUT_MS
+            upstream.readTimeout = SOCKET_TIMEOUT_MS
+            headers["if-none-match"]?.let { upstream.setRequestProperty("If-None-Match", it) }
+            val status = upstream.responseCode
+            val forwarded = linkedMapOf("Access-Control-Allow-Origin" to "*", "Connection" to "close")
+            for (name in listOf("Content-Type", "Content-Length", "ETag", "Cache-Control", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Expose-Headers")) {
+                upstream.getHeaderField(name)?.let { forwarded[name] = it }
+            }
+            sendHeaders(output, status, upstream.responseMessage ?: "", forwarded)
+            if (method != "HEAD" && status != 304) {
+                val body = if (status >= 400) upstream.errorStream else upstream.inputStream
+                body?.use { it.copyTo(output) }
+            }
+        } finally { upstream.disconnect() }
+    }
+
     private fun handleClient(socket: Socket) {
         socket.use { client ->
             client.soTimeout = SOCKET_TIMEOUT_MS
@@ -135,13 +161,17 @@ internal class LocalHttpServer(context: Context) {
             val method = parts[0].uppercase(Locale.US)
             val requestTarget = parts[1]
             val headers = readHeaders(input)
-            if (method != "GET" && method != "HEAD") {
+            val parsed = parseRequestTarget(requestTarget)
+            val routePath = parsed.path ?: ""
+            val pluginFile = routePath.startsWith("/plugin_file/")
+            if (method != "GET" && method != "HEAD" && !(pluginFile && method == "OPTIONS")) {
                 sendText(output, 405, "Method Not Allowed", "method not allowed")
                 return
             }
-
-            val parsed = parseRequestTarget(requestTarget)
-            val routePath = parsed.path ?: ""
+            if (pluginFile) {
+                forwardPluginFile(requestTarget, method, headers, output)
+                return
+            }
             val endpoint = MEDIA_ENDPOINTS.firstOrNull { routePath.startsWith("/$it/") }
             if (endpoint == null) {
                 sendText(output, 404, "Not Found", "not found", method == "HEAD")

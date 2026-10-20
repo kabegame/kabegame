@@ -250,3 +250,9 @@ pub struct CopiedImageEntry {
 pub struct CopyExtractedImagesToPicturesResponse {
     pub entries: Vec<CopiedImageEntry>,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetHttpServerBaseArgs {
+    pub plugin_file_upstream_port: u16,
+}

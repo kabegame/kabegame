@@ -138,17 +138,24 @@
       </div>
 
       <div v-else class="min-h-0 flex-1 overflow-auto">
-        <div v-if="filteredPresets.length" class="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
-          <RecommendedPresetGridCard
-            v-for="preset in filteredPresets"
-            :key="presetKey(preset)"
-            :preset="preset"
-            :title="presetTitle(preset)"
-            :description="presetDescription(preset)"
-            :imported="(imported.get(presetKey(preset))?.length ?? 0) > 0"
-            @card-click="openPresetPreview(preset)"
-            @import="importPreset(preset)"
-          />
+        <div v-if="recommendedDisplayEntries.length" class="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
+          <template v-for="entry in recommendedDisplayEntries" :key="entry.key">
+            <el-skeleton
+              v-if="!entry.preset"
+              animated
+              :rows="4"
+              class="rounded-lg border border-solid border-[var(--anime-border)] p-4"
+            />
+            <RecommendedPresetGridCard
+              v-else
+              :preset="entry.preset"
+              :title="presetTitle(entry.preset)"
+              :description="presetDescription(entry.preset)"
+              :imported="!!entry.preset.isImported"
+              @card-click="openPresetPreview(entry.preset)"
+              @import="importPreset(entry.preset)"
+            />
+          </template>
         </div>
         <el-empty v-else :description="t('autoConfig.noRecommendedConfigs')" />
       </div>
@@ -215,7 +222,7 @@ import {
   filterRecommendedPresets,
   presetKey,
   recommendedFacetCounts,
-  useImportedPresets,
+  useRecommendedPresets,
   type RecommendedPresetQuery,
 } from "@/services/recommendedPresets";
 
@@ -303,7 +310,6 @@ watch(
 );
 watch(tab, (value) => {
   searchDraft.value = value === "mine" ? mine.search : recommended.search;
-  if (value === "recommended") void refreshImported();
 });
 const emptyQuery: RunConfigQuery = {
   search: "",
@@ -335,7 +341,7 @@ const tabItems = computed<KbTabItem<"mine" | "recommended">[]>(() => [
   { name: "mine", label: t("autoConfig.tabMine") },
   {
     name: "recommended",
-    label: t("autoConfig.tabRecommendedWithCount", { n: crawlerStore.pluginRecommendedConfigs.length }),
+    label: t("autoConfig.tabRecommendedWithCount", { n: recommendedEntries.value.length }),
   },
 ]);
 const subtitle = computed(() =>
@@ -410,49 +416,53 @@ function showFailed() {
   mine.last = "failed";
 }
 
-const { imported, refresh: refreshImported } = useImportedPresets();
+const {
+  entries: recommendedEntries,
+  presets: recommendedPresets,
+  refresh: refreshRecommended,
+} = useRecommendedPresets(
+  computed(() => pluginStore.visiblePlugins),
+  computed(() => tab.value === "recommended"),
+);
 const presetTitle = (preset: PluginRecommendedPreset) =>
   resolveConfigText(preset.name as never, locale.value).trim() || preset.filename;
 const presetDescription = (preset: PluginRecommendedPreset) =>
   preset.description ? resolveConfigText(preset.description as never, locale.value).trim() : "";
 const filteredPresets = computed(() =>
-  filterRecommendedPresets(
-    crawlerStore.pluginRecommendedConfigs,
-    recommended,
-    imported.value,
-    presetTitle,
-    presetDescription,
-  ),
+  filterRecommendedPresets(recommendedPresets.value, recommended, presetTitle, presetDescription),
 );
+const recommendedDisplayEntries = computed(() => {
+  const loaded = new Map(
+    recommendedEntries.value.filter((entry) => entry.preset).map((entry) => [presetKey(entry.preset!), entry]),
+  );
+  // 默认顺序保持占位位置；显式排序与过滤对已经到达的配置生效。
+  if (
+    recommended.sort === "plugin" &&
+    recommended.dir === "asc" &&
+    !recommended.search &&
+    !recommended.plugin &&
+    !recommended.mode &&
+    !recommended.imported
+  )
+    return recommendedEntries.value;
+  return [
+    ...recommendedEntries.value.filter(
+      (entry) => !entry.preset && (!recommended.plugin || entry.pluginId === recommended.plugin),
+    ),
+    ...filteredPresets.value.flatMap((preset) => {
+      const entry = loaded.get(presetKey(preset));
+      return entry ? [entry] : [];
+    }),
+  ];
+});
 const recommendedPluginCounts = computed(() =>
-  recommendedFacetCounts(
-    crawlerStore.pluginRecommendedConfigs,
-    recommended,
-    "plugin",
-    imported.value,
-    presetTitle,
-    presetDescription,
-  ),
+  recommendedFacetCounts(recommendedPresets.value, recommended, "plugin", presetTitle, presetDescription),
 );
 const recommendedModeCounts = computed(() =>
-  recommendedFacetCounts(
-    crawlerStore.pluginRecommendedConfigs,
-    recommended,
-    "mode",
-    imported.value,
-    presetTitle,
-    presetDescription,
-  ),
+  recommendedFacetCounts(recommendedPresets.value, recommended, "mode", presetTitle, presetDescription),
 );
 const importedCounts = computed(() =>
-  recommendedFacetCounts(
-    crawlerStore.pluginRecommendedConfigs,
-    recommended,
-    "imported",
-    imported.value,
-    presetTitle,
-    presetDescription,
-  ),
+  recommendedFacetCounts(recommendedPresets.value, recommended, "imported", presetTitle, presetDescription),
 );
 const recommendedPluginOptions = computed(() =>
   Object.keys(recommendedPluginCounts.value).map((id) =>
@@ -536,7 +546,7 @@ async function importPreset(preset: PluginRecommendedPreset) {
     }
   }
   const config = await crawlerStore.importRecommendedPreset(preset);
-  await refreshImported();
+  await refreshRecommended();
   upsert(config);
   ElMessage.success(t("autoConfig.importRecommendedSuccess"));
 }

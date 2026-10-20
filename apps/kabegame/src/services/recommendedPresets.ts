@@ -1,9 +1,16 @@
-import { invoke } from "@/api";
-import { onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref, watch, type Ref } from "vue";
+import { usePluginStore, type Plugin } from "@/stores/plugins";
+import { parsePluginRecommendedPreset } from "@/stores/crawler";
+import { fetchRecommendedConfig, recommendedConfigPaths } from "./pluginFiles";
 import { subscribeRunConfigEvents } from "@/services/runConfigs";
 import type { PluginRecommendedPreset } from "@/stores/crawler";
 
-type ImportedPresetRow = { pluginId: string; filename: string; configIds: string[] };
+export type RecommendedPresetEntry = {
+  key: string;
+  pluginId: string;
+  filename: string;
+  preset: PluginRecommendedPreset | null;
+};
 export type RecommendedPresetQuery = {
   search: string;
   plugin: string | null;
@@ -17,38 +24,58 @@ export function presetKey(preset: Pick<PluginRecommendedPreset, "pluginId" | "fi
   return `${preset.pluginId}/${preset.filename}`;
 }
 
-export function useImportedPresets() {
-  const imported = ref(new Map<string, string[]>());
-  const loading = ref(false);
-  let timer: ReturnType<typeof setTimeout> | null = null;
-
+/** 先发布声明顺序的占位项，各 JSON 独立到达后替换；配置变化刷新宿主计算的导入态。 */
+export function useRecommendedPresets(
+  plugins: Readonly<Ref<readonly Plugin[]>> = computed(() => usePluginStore().visiblePlugins),
+  enabled: Readonly<Ref<boolean>> = computed(() => true),
+) {
+  const entries = ref<RecommendedPresetEntry[]>([]);
+  let generation = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   async function refresh() {
-    loading.value = true;
-    try {
-      const rows = await invoke<ImportedPresetRow[]>("list_imported_recommended_presets");
-      imported.value = new Map(
-        (Array.isArray(rows) ? rows : []).map((row) => [`${row.pluginId}/${row.filename}`, row.configIds ?? []]),
-      );
-    } finally {
-      loading.value = false;
-    }
+    const current = ++generation;
+    const work = plugins.value.flatMap((plugin) => recommendedConfigPaths(plugin).map((path) => ({ plugin, path })));
+    entries.value = work.map(({ plugin, path }) => ({
+      key: `${plugin.id}/${path}`,
+      pluginId: plugin.id,
+      filename: path.split("/").pop() ?? path,
+      preset: null,
+    }));
+    if (!enabled.value) return;
+    await Promise.all(
+      work.map(async ({ plugin, path }) => {
+        const key = `${plugin.id}/${path}`;
+        try {
+          const raw = await fetchRecommendedConfig(plugin, path);
+          const preset = parsePluginRecommendedPreset(raw, new Map([[plugin.id, plugin.baseUrl]]));
+          if (current !== generation) return;
+          const entry = entries.value.find((entry) => entry.key === key);
+          if (entry && preset) entry.preset = preset;
+          else entries.value = entries.value.filter((entry) => entry.key !== key);
+        } catch (error) {
+          if (current === generation) entries.value = entries.value.filter((entry) => entry.key !== key);
+          console.warn("推荐配置加载失败", error);
+        }
+      }),
+    );
   }
-
+  watch([plugins, enabled], () => void refresh(), { immediate: true });
   const unsubscribe = subscribeRunConfigEvents(() => {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
     timer = setTimeout(() => void refresh(), 200);
   });
   onScopeDispose(() => {
+    generation++;
     unsubscribe();
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   });
-  return { imported, loading, refresh };
+  const presets = computed(() => entries.value.flatMap((entry) => (entry.preset ? [entry.preset] : [])));
+  return { entries, presets, refresh };
 }
 
 export function filterRecommendedPresets(
   presets: PluginRecommendedPreset[],
   query: RecommendedPresetQuery,
-  imported: Map<string, string[]>,
   title: (preset: PluginRecommendedPreset) => string,
   description: (preset: PluginRecommendedPreset) => string,
 ) {
@@ -56,7 +83,7 @@ export function filterRecommendedPresets(
   const sign = query.dir === "asc" ? 1 : -1;
   return presets
     .filter((preset) => {
-      const importedState = (imported.get(presetKey(preset))?.length ?? 0) > 0 ? "yes" : "no";
+      const importedState = preset.isImported ? "yes" : "no";
       return (
         (!search || `${title(preset)} ${description(preset)}`.toLocaleLowerCase().includes(search)) &&
         (!query.plugin || preset.pluginId === query.plugin) &&
@@ -77,19 +104,18 @@ export function recommendedFacetCounts(
   presets: PluginRecommendedPreset[],
   query: RecommendedPresetQuery,
   dimension: "plugin" | "mode" | "imported",
-  imported: Map<string, string[]>,
   title: (preset: PluginRecommendedPreset) => string,
   description: (preset: PluginRecommendedPreset) => string,
 ) {
   const relaxed = { ...query, [dimension]: null };
   const counts: Record<string, number> = {};
-  for (const preset of filterRecommendedPresets(presets, relaxed, imported, title, description)) {
+  for (const preset of filterRecommendedPresets(presets, relaxed, title, description)) {
     const value =
       dimension === "plugin"
         ? preset.pluginId
         : dimension === "mode"
           ? (preset.scheduleSpec?.mode ?? "none")
-          : (imported.get(presetKey(preset))?.length ?? 0) > 0
+          : preset.isImported
             ? "yes"
             : "no";
     counts[value] = (counts[value] ?? 0) + 1;

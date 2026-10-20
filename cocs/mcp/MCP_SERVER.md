@@ -213,3 +213,9 @@ SELECT COUNT(*) FROM (<inner>) AS pq_sub
 
 不要把说明文字塞进 `meta`，也不要把 album/plugin 实体 JSON 写进 `note`。二者分别服务于
 “解释路径”与“传递实体数据”，混用会让 MCP 模型与其它 Provider 消费者同时失去稳定契约。
+
+## 插件资源按需读取
+
+`plugin://{id}/doc`、`changelog`、`description_template`、`asset/{path}` 仍返回原有字段形状。
+文档和更新日志读取清单的 `default` 条目；资源列表来自 `assetKeys`，单资源只在读取时从 kgpg 解包并转 base64。
+这些字节不再常驻插件列表。MCP provider 与 HTTP 共用 `plugin::package_file` 的 ZIP 读取，HTTP 的版本及来源参数见 [插件文件端点](../plugins/PLUGIN_FILE_ENDPOINT.md)。

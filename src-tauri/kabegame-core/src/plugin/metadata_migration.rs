@@ -164,7 +164,7 @@ impl Drop for MetadataMigrationRunGuard<'_> {
 }
 
 pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
-    if plugin.metadata_migration.is_none() {
+    if plugin.metadata_migration_path.is_none() {
         return;
     }
     let service = MetadataMigrationService::global();
@@ -194,7 +194,7 @@ pub fn spawn_metadata_migrations_for_plugin(plugin: Plugin) {
 /// 不论脚本装载或行级执行是否成功，都会把行版本盖为当前 packed 版本；
 /// 失败时写回原始 data，避免坏脚本在每次启动时无限重试。
 fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
-    let Some(script) = plugin.metadata_migration.as_deref() else {
+    let Some(script) = super::PluginManager::global().load_metadata_migration(plugin)? else {
         return Ok(false);
     };
     let target = plugin.version_packed;
@@ -794,8 +794,7 @@ mod tests {
             "minAppIncompatible": false
         }))
         .unwrap();
-        plugin.metadata_migration =
-            Some("export function migrate(input) { return input; }".to_string());
+        plugin.metadata_migration_path = Some("migration.js".to_string());
         plugin.version_packed = version_packed;
         plugin
     }

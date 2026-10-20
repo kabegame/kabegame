@@ -138,7 +138,7 @@ pub async fn preview_import_plugin(zip_path: String) -> Result<Value, String> {
 pub async fn preview_store_install(source_id: String, plugin_id: String) -> Result<Value, String> {
     let pm = PluginManager::global();
     let cached_path = pm.ensure_plugin_cached(&source_id, &plugin_id).await?;
-    let plugin = pm.preview_import_from_kgpg(&cached_path).await?;
+    let plugin = pm.load_remote_plugin(&source_id, &plugin_id).await?;
     let plugin_value = serde_json::to_value(plugin).map_err(|e| e.to_string())?;
     Ok(json!({
         "tmpPath": cached_path.to_string_lossy().to_string(),

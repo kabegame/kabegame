@@ -1,5 +1,6 @@
 use crate::emitter::GlobalEmitter;
-use crate::plugin::var_canonical::canonical_user_config_for_compare;
+#[cfg(test)]
+use crate::plugin::package_file::preset_content_matches;
 use crate::plugin::{PluginManager, VarDefinition, VarOption};
 use crate::providers::query::query_fetch;
 use crate::scheduler::Scheduler;
@@ -343,91 +344,6 @@ fn parse_plugin_args_to_user_config(
 pub fn get_run_configs() -> Result<Value, String> {
     let configs = Storage::global().get_run_configs()?;
     serde_json::to_value(configs).map_err(|e| e.to_string())
-}
-
-fn preset_content_matches(
-    plugin_id: &str,
-    plugin_base_url: &str,
-    defs: &[VarDefinition],
-    preset: &Value,
-    config: &RunConfig,
-) -> bool {
-    let preset_url = preset
-        .get("url")
-        .or_else(|| preset.get("baseUrl"))
-        .or_else(|| preset.get("base_url"))
-        .and_then(Value::as_str)
-        .unwrap_or(plugin_base_url)
-        .trim();
-    let preset_user_config = preset
-        .get("userConfig")
-        .or_else(|| preset.get("user_config"))
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let config_user_config =
-        serde_json::to_value(config.user_config.as_ref().cloned().unwrap_or_default())
-            .unwrap_or_else(|_| serde_json::json!({}));
-    let preset_headers = preset
-        .get("httpHeaders")
-        .or_else(|| preset.get("http_headers"))
-        .and_then(Value::as_object)
-        .filter(|headers| !headers.is_empty());
-    let config_headers = config
-        .http_headers
-        .as_ref()
-        .filter(|headers| !headers.is_empty())
-        .and_then(|headers| serde_json::to_value(headers).ok())
-        .and_then(|value| value.as_object().cloned());
-    let preset_dry_run = preset
-        .get("isDryRun")
-        .or_else(|| preset.get("is_dry_run"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    config.plugin_id == plugin_id
-        && config.url.trim() == preset_url
-        && canonical_user_config_for_compare(preset_user_config, defs)
-            == canonical_user_config_for_compare(config_user_config, defs)
-        && preset_headers.cloned() == config_headers
-        && config.is_dry_run == preset_dry_run
-}
-
-pub async fn list_imported_recommended_presets() -> Result<Value, String> {
-    let manager = PluginManager::global();
-    manager.ensure_installed_cache_initialized().await?;
-    let configs = Storage::global().get_run_configs()?;
-    let mut plugins = manager.get_all()?;
-    plugins.extend(manager.builtin_plugins());
-    plugins.sort_by(|a, b| a.id.cmp(&b.id));
-    plugins.dedup_by(|a, b| a.id == b.id);
-
-    let mut rows = Vec::new();
-    for plugin in plugins {
-        for preset in &plugin.recommended_configs {
-            let Some(filename) = preset.get("filename").and_then(Value::as_str) else {
-                continue;
-            };
-            let config_ids = configs
-                .iter()
-                .filter(|config| {
-                    preset_content_matches(
-                        &plugin.id,
-                        &plugin.base_url,
-                        &plugin.var_defs,
-                        preset,
-                        config,
-                    )
-                })
-                .map(|config| config.id.clone())
-                .collect::<Vec<_>>();
-            rows.push(serde_json::json!({
-                "pluginId": plugin.id,
-                "filename": filename,
-                "configIds": config_ids,
-            }));
-        }
-    }
-    Ok(Value::Array(rows))
 }
 
 pub fn get_all_tasks() -> Result<Value, String> {

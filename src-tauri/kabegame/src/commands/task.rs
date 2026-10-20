@@ -23,11 +23,6 @@ pub async fn get_run_configs() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn list_imported_recommended_presets() -> Result<Value, String> {
-    commands::task::list_imported_recommended_presets().await
-}
-
-#[tauri::command]
 pub async fn get_run_config(config_id: String) -> Result<Value, String> {
     commands::task::get_run_config(config_id)
 }

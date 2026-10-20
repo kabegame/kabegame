@@ -72,7 +72,8 @@
             anchor-prefix="kbdoc"
             :reset-token="plugin.id"
             :markdown="displayDoc"
-            :assets="plugin.assets ?? null"
+            :loading="docLoading"
+            :plugin="plugin"
             :empty-description="t('common.pluginNoDoc')"
             @headings="docHeadings = $event"
             @image-preview-open="emit('doc-image-preview-open', $event)"
@@ -82,7 +83,7 @@
         <div v-show="activeTab === 'config'" class="absolute inset-0">
           <PluginConfigPanel
             v-model:menu-width="menuWidth"
-            :plugin="plugin"
+            :plugin="activeTab === 'config' ? plugin : null"
             :menu-default-width="MENU_DEFAULT_WIDTH"
             :is-remote="isRemote"
             :initial-vars="initialVars"
@@ -99,12 +100,13 @@
             @loaded="pathqlCount = $event"
           />
         </div>
-        <div v-if="displayChangelog" v-show="activeTab === 'changelog'" class="absolute inset-0">
+        <div v-if="hasChangelog" v-show="activeTab === 'changelog'" class="absolute inset-0">
           <PluginDocPanel
             ref="changelogPanelRef"
             anchor-prefix="kbchangelog"
             :markdown="displayChangelog"
-            :assets="plugin.assets ?? null"
+            :loading="changelogLoading"
+            :plugin="plugin"
             :empty-description="t('plugins.detail.noChangelog')"
             @headings="changelogHeadings = $event"
             @image-preview-open="emit('doc-image-preview-open', $event)"
@@ -155,11 +157,12 @@
     </a>
 
     <div>
-      <KbTab v-if="displayChangelog" v-model="compactTab" :items="compactTabItems" class="mb-3" />
+      <KbTab v-if="hasChangelog" v-model="compactTab" :items="compactTabItems" class="mb-3" />
       <PluginDocRenderer
-        v-if="compactDocText"
+        v-if="compactDocText || compactLoading"
         :markdown="compactDocText"
-        :assets="plugin.assets ?? null"
+        :loading="compactLoading"
+        :plugin="plugin"
         :anchor-prefix="compactAnchorPrefix"
         :empty-description="t('common.pluginNoDoc')"
         @image-preview-open="emit('doc-image-preview-open', $event)"
@@ -174,7 +177,7 @@
 import { computed, ref, watch } from "vue";
 import { useLocalStorage, useThrottleFn } from "@vueuse/core";
 import { ArrowRight } from "@kabegame/element-plus-icons";
-import { useI18n, resolveManifestText, resolveManifestDoc } from "@kabegame/i18n";
+import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { KbTab, type KbTabItem } from "@kabegame/element-plus";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginDocPanel from "./PluginDocPanel.vue";
@@ -188,6 +191,7 @@ import { useUiStore } from "../../stores/ui";
 import { usePluginActionState } from "../../composables/usePluginActionState";
 import { APP_VERSION } from "../../env";
 import { openExternalLink } from "../../utils/openExternalLink";
+import { usePluginLocaleFile } from "@/services/pluginFiles";
 import { PluginRecommendedPreset } from "@/stores/crawler.ts";
 
 const { t, locale } = useI18n();
@@ -225,8 +229,6 @@ const displayDesc = computed(() =>
       ""
     : "",
 );
-const displayDoc = computed(() => resolveManifestDoc(props.plugin?.doc ?? null, locale.value ?? "zh"));
-const displayChangelog = computed(() => resolveManifestDoc(props.plugin?.changelog ?? null, locale.value ?? "zh"));
 
 const appVersionText = computed(() => APP_VERSION ?? undefined);
 
@@ -280,7 +282,7 @@ const tabItems = computed<KbTabItem<DesktopTab>[]>(() => {
     { name: "config", label: t("plugins.detail.tabConfig"), count: configVarsCount.value },
     { name: "pathql", label: t("plugins.detail.tabPathql"), count: pathqlCount.value },
   ];
-  if (displayChangelog.value) {
+  if (hasChangelog.value) {
     items.push({ name: "changelog", label: t("plugins.detail.tabChangelog") });
   }
   return items;
@@ -364,6 +366,16 @@ watch(
     compactTab.value = "doc";
   },
 );
+const selectedDocTab = computed(() => (uiStore.isCompact ? compactTab.value : activeTab.value));
+const docPlugin = computed(() => (selectedDocTab.value === "doc" ? props.plugin : null));
+const changelogPlugin = computed(() => (selectedDocTab.value === "changelog" ? props.plugin : null));
+const { text: displayDoc, loading: docLoading } = usePluginLocaleFile(docPlugin, "kbDoc");
+const { text: displayChangelog, loading: changelogLoading } = usePluginLocaleFile(changelogPlugin, "kbChangelog");
+const hasChangelog = computed(
+  () => !!props.plugin?.packageJson?.kbChangelog && Object.keys(props.plugin.packageJson.kbChangelog).length > 0,
+);
+const compactLoading = computed(() => (compactTab.value === "changelog" ? changelogLoading.value : docLoading.value));
+
 const compactTabItems = computed<KbTabItem<CompactTab>[]>(() => [
   { name: "doc", label: t("plugins.detail.tabDoc") },
   { name: "changelog", label: t("plugins.detail.tabChangelog") },

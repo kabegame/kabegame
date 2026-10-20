@@ -1,5 +1,26 @@
 # v4.6.1 regression
 
+## 插件文件按需读取（`/plugin_file`，版本参数 `v`）
+
+列表与事件仅带清单、图标和资源键；文档、模板、推荐配置、资源及脚本从 kgpg 按需读取。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端测试与检查 | macOS | 前端全量 Vitest、check-kabegame、CLI 与 Web feature 检查 | 全部通过 | 前端 292 项；桌面、CLI、Web 类型检查 0 error |
+| [x] | 轻量列表 | macOS CEF dev | 读取 `get_plugins`，进入源列表 | 不含 doc / changelog / assets / descriptionTemplate / recommendedConfigs；不预取插件文件 | 35 条记录均无旧字段；debug ingest 只出现 plugin_list_loaded |
+| [x] | 白名单、限额与快照 | core 单测 | 运行 plugin:: 过滤集 | 版本/来源隔离、越界拒绝、2MB/10MB 限额、8 项预览 LRU、按需脚本冻结、推荐导入态正确 | 104 项通过，含 package_file 6 项 |
+| [x] | HTTP 条件请求与版本 | macOS CEF dev | 文档请求；携带 ETag 再请求；缺失或错误 v | 200 / 304 / 404；文本 UTF-8、普通 no-cache | anime-pictures README 实测 |
+| [x] | 文档、更新日志与配图 | macOS CEF dev | 打开 anime-pictures，切更新日志 | 当前语言文档、default 更新日志与 HTTP 图片正常 | 韩文 README；7 个图片元素 complete 且 naturalWidth > 0；已目视截图 |
+| [x] | 按 tab 触发 | debug ingest | 从列表打开文档，再切更新日志与配置 | 相应页面才请求对应文件 | README.ko.md → CHANGELOG.md → 5 条推荐 JSON |
+| [x] | 商店详情与来源 | macOS CEF dev | 强制进入同版本商店详情，读取带 source 的文档 | 仅从对应商店包读取，与已安装来源隔离 | official_github_release/anime-pictures 返回 store 来源、HTTP 200 |
+| [x] | 导入文件预览 | macOS CEF dev | 用 kgpg 预览返回的 preview token 请求正文 | 无需安装即可显示文档；LRU 淘汰后 404 | 导入预览 token 文档实测 200；LRU 淘汰由单测覆盖 |
+| [x] | EJS 模板 | macOS CEF dev | 打开已有插件 metadata 的图片详情 | 等模板到达后渲染 iframe，不先闪原始 metadata | X WebView 图片详情 iframe 成功渲染；模板请求由 debug ingest 确认，加载态/晚到请求由前端单测覆盖 |
+| [x] | 推荐逐项加载与导入态 | macOS CEF dev | 打开自动配置推荐；导入并删除一个临时禁用定时的预设配置 | 原位替换骨架；导入态随运行配置事件更新 | 45 个占位 → 45 张卡；临时配置导入态 false→true→false，已删除且未启用定时 |
+| [x] | MCP 资源 | macOS CEF dev | PathQL 读取 plugin://anime-pictures/doc 与 asset/doc-icon.png | 原有 doc / key / mime / dataBase64 形状不变 | 文档 1 行；doc-icon.png MIME image/png、base64 长 56696 |
+| [x] | Web debug | macOS 独立 Web debug + Chromium | 用隔离数据库启动 Web 后端 7490、Vite 1422；打开插件列表、文档、更新日志和配置 | 轻量列表与文档、图片可加载，不逐插件补详情 | 4 条轻量记录（2 已安装 + 2 内建）；debug ingest：get_plugins 1 次、get_plugin_detail 0 次；README.en.md、default CHANGELOG、7 个图片元素均正常；5 条推荐配置，no-store；同源请求 200 / 304 / 错误 v 404 |
+| [x] | Web dev 文件代理 | macOS 独立 Web debug | 经 Vite 请求 `/plugin_file/anime-pictures/README.md?v=0.7.0` | 请求转发到 Rust 文件服务，返回 Markdown | 发现并修复代理清单遗漏：修复前 200 text/html（SPA 回退），修复后 200 text/markdown；正文与 banner 图片实测正常 |
+| [ ] | Android | Android | 经 Kotlin LocalHttpServer 读文档与图片 | 单 host 转发，版本与缓存头生效 | 2026-10-21 复核：adb 未安装；bin/android/arm64/{rusty_v8-build,FFmpeg-build} 均缺失，无法连接设备或交叉编译；保留待测 |
+
 ## 任务级 dry-run（`isDryRun`）
 
 任务记录与自动配置新增冻结字段 `isDryRun`。空跑仍执行插件请求、翻页、解析、日志和进度，但下载队列、

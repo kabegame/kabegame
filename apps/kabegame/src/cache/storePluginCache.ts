@@ -1,5 +1,4 @@
 import Dexie, { type Table } from "dexie";
-import type { Plugin } from "../stores/plugins";
 
 export interface CachedStorePluginIcon {
   key: string; // `${sourceId}:${pluginId}`
@@ -8,16 +7,8 @@ export interface CachedStorePluginIcon {
   cachedAt: number;
 }
 
-export interface CachedStorePluginDetail {
-  key: string; // `${sourceId}:${pluginId}`
-  version: string;
-  data: Plugin;
-  cachedAt: number;
-}
-
 class StorePluginCacheDb extends Dexie {
   icons!: Table<CachedStorePluginIcon, string>;
-  details!: Table<CachedStorePluginDetail, string>;
 
   constructor() {
     super("kbg-store-plugin-cache");
@@ -25,6 +16,7 @@ class StorePluginCacheDb extends Dexie {
       icons: "key",
       details: "key",
     });
+    this.version(2).stores({ icons: "key", details: null });
   }
 }
 

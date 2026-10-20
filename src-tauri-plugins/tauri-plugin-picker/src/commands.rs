@@ -6,9 +6,10 @@ use crate::PickerExt;
 #[tauri::command]
 pub(crate) async fn get_http_server_base<R: Runtime>(
     app: AppHandle<R>,
+    plugin_file_upstream_port: u16,
 ) -> Result<GetHttpServerBaseResponse, String> {
     app.picker()
-        .get_http_server_base()
+        .get_http_server_base(plugin_file_upstream_port)
         .await
         .map_err(|e| e.to_string())
 }
@@ -90,7 +91,10 @@ pub(crate) async fn compute_hash<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<ComputeHashResponse, String> {
-    app.picker().compute_hash(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .compute_hash(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -98,7 +102,10 @@ pub(crate) async fn get_mime_type<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<GetMimeTypeResponse, String> {
-    app.picker().get_mime_type(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .get_mime_type(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -106,7 +113,10 @@ pub(crate) async fn get_display_name<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<GetDisplayNameResponse, String> {
-    app.picker().get_display_name(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .get_display_name(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -114,7 +124,10 @@ pub(crate) async fn get_content_size<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<GetContentSizeResponse, String> {
-    app.picker().get_content_size(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .get_content_size(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -130,7 +143,10 @@ pub(crate) async fn get_image_dimensions<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<GetImageDimensionsResponse, String> {
-    app.picker().get_image_dimensions(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .get_image_dimensions(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -138,7 +154,10 @@ pub(crate) async fn get_video_dimensions<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<GetVideoDimensionsResponse, String> {
-    app.picker().get_video_dimensions(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .get_video_dimensions(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -146,7 +165,10 @@ pub(crate) async fn is_directory<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<IsDirectoryResponse, String> {
-    app.picker().is_directory(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .is_directory(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -154,7 +176,10 @@ pub(crate) async fn list_content_children<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<ListContentChildrenResponse, String> {
-    app.picker().list_content_children(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .list_content_children(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -162,7 +187,10 @@ pub(crate) async fn read_file_bytes<R: Runtime>(
     app: AppHandle<R>,
     uri: String,
 ) -> Result<ReadFileBytesResponse, String> {
-    app.picker().read_file_bytes(uri).await.map_err(|e| e.to_string())
+    app.picker()
+        .read_file_bytes(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

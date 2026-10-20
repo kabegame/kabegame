@@ -164,6 +164,7 @@ export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
 
 /** 插件包内 `configs/*.json` 推荐运行配置（已合并 pluginId、filename、baseUrl） */
 export interface PluginRecommendedPreset {
+  isImported?: boolean;
   pluginId: string;
   filename: string;
   baseUrl: string;
@@ -222,6 +223,7 @@ export function parsePluginRecommendedPreset(
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
     httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
     isDryRun: Boolean(o.isDryRun ?? o.is_dry_run ?? false),
+    isImported: Boolean(o.isImported),
   };
 }
 
@@ -241,7 +243,6 @@ export function runConfigToPresetJson(cfg: RunConfig): string {
 
 export const useCrawlerStore = defineStore("crawler", () => {
   /** 已安装插件包内 `configs/*.json` 推荐配置（启动与插件列表刷新时拉取） */
-  const pluginRecommendedConfigs = ref<PluginRecommendedPreset[]>([]);
   /**
    * 全局唯一的 task config：收集弹窗只响应式地编辑这一份对象，
    * 调用方「先写再打开」（见 apps 侧 `writeTaskConfig`）。
@@ -316,31 +317,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
     const task = normalizeTaskRow(raw);
     if (!task) throw new Error("set_task_max_concurrent_downloads: invalid payload");
     return task;
-  }
-
-  function loadPluginRecommendedConfigs(
-    installedPlugins: Array<{ id: string; baseUrl?: string; recommendedConfigs?: unknown[] }> = [],
-  ) {
-    try {
-      const baseUrlById = new Map<string, string>();
-      for (const p of installedPlugins) {
-        baseUrlById.set(p.id, p.baseUrl ?? "");
-      }
-      const collected: PluginRecommendedPreset[] = [];
-      for (const p of installedPlugins) {
-        const cfgs = p.recommendedConfigs;
-        if (!cfgs || !Array.isArray(cfgs)) continue;
-        for (const item of cfgs) {
-          const parsed = parsePluginRecommendedPreset(item, baseUrlById);
-          if (parsed) collected.push(parsed);
-        }
-      }
-      collected.sort((a, b) => a.pluginId.localeCompare(b.pluginId) || a.filename.localeCompare(b.filename));
-      pluginRecommendedConfigs.value = collected;
-    } catch (error) {
-      console.error("加载插件推荐配置失败:", error);
-      pluginRecommendedConfigs.value = [];
-    }
   }
 
   /** 导入推荐配置为本地运行配置；`scheduleEnabled` 受设置项与预设是否有 `scheduleSpec` 影响 */
@@ -467,11 +443,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
     stopTask,
     setTaskMaxConcurrentDownloads,
     retryTask,
-    pluginRecommendedConfigs,
     taskConfig,
     taskConfigRevision,
     setTaskConfig,
-    loadPluginRecommendedConfigs,
     importRecommendedPreset,
     addRunConfig,
     updateRunConfig,

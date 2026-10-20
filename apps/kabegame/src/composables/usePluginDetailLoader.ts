@@ -1,15 +1,12 @@
-import { computed, ref, watch, type Ref } from "vue";
+import { computed, onScopeDispose, ref, watch, type Ref } from "vue";
 import { invoke } from "@/api/rpc";
-import { IS_WEB } from "@/env";
-import { storePluginCacheDb } from "@/cache/storePluginCache";
-import { isPluginAssetList } from "@/utils/assetPath";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 
 export interface UsePluginDetailLoaderOptions {
   pluginId: Ref<string | null>;
   mode: Ref<"local" | "remote">;
   sourceId: Ref<string | null>;
-  /** 仅用于 web 模式下 Dexie 持久缓存的版本校验，不参与"何时重新加载"的判断 */
+  /** 商店内存缓存的版本校验 */
   expectedVersion: Ref<string | null>;
   /** 仅在 true 时才会拉取/响应变化（弹窗未打开、路由未激活时不拉取） */
   active: Ref<boolean>;
@@ -17,10 +14,7 @@ export interface UsePluginDetailLoaderOptions {
   onLoadFailure?: () => void;
 }
 
-/**
- * 插件详情的加载/缓存逻辑：已安装走内存直读，远程先查内存缓存、再查 Dexie（web 版本校验命中才用）、
- * 最后落到 get_plugin_detail。供 PluginDetailDialog.vue 使用。
- */
+/** 已安装详情直读 store，商店详情按来源和版本缓存于内存。 */
 export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
   const { pluginId, mode, sourceId, expectedVersion, active, onLoadFailure } = options;
   const pluginStore = usePluginStore();
@@ -42,7 +36,14 @@ export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
     }
   };
 
+  let generation = 0;
+  onScopeDispose(() => {
+    generation++;
+    clearSkeletonTimer();
+  });
+
   const load = async () => {
+    const current = ++generation;
     const id = pluginId.value;
     if (!id) return;
 
@@ -57,27 +58,11 @@ export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
 
     const cacheKey = `${id}::${sourceId.value}`;
     const cached = pluginStore.getCachedPluginDetail(cacheKey);
-    if (cached) {
+    if (cached && (!expectedVersion.value || cached.version === expectedVersion.value)) {
       plugin.value = cached;
       loading.value = false;
       showSkeleton.value = false;
       return;
-    }
-
-    if (IS_WEB && sourceId.value) {
-      const dexieKey = `${sourceId.value}:${id}`;
-      const dexieCached = await storePluginCacheDb.details.get(dexieKey);
-      if (
-        dexieCached &&
-        (!expectedVersion.value || dexieCached.version === expectedVersion.value) &&
-        isPluginAssetList(dexieCached.data.assets)
-      ) {
-        plugin.value = dexieCached.data;
-        pluginStore.setCachedPluginDetail(cacheKey, dexieCached.data);
-        loading.value = false;
-        showSkeleton.value = false;
-        return;
-      }
     }
 
     plugin.value = null;
@@ -92,20 +77,13 @@ export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
         pluginId: id,
         sourceId: sourceId.value ?? undefined,
       });
+      if (current !== generation) return;
       plugin.value = result;
       pluginStore.setCachedPluginDetail(cacheKey, result);
-      if (IS_WEB && sourceId.value) {
-        const dexieKey = `${sourceId.value}:${id}`;
-        void storePluginCacheDb.details.put({
-          key: dexieKey,
-          version: result.version,
-          data: result,
-          cachedAt: Date.now(),
-        });
-      }
     } catch {
-      onLoadFailure?.();
+      if (current === generation) onLoadFailure?.();
     } finally {
+      if (current !== generation) return;
       loading.value = false;
       showSkeleton.value = false;
       clearSkeletonTimer();
@@ -113,9 +91,20 @@ export function usePluginDetailLoader(options: UsePluginDetailLoaderOptions) {
   };
 
   watch(
-    [pluginId, mode, sourceId, active],
+    [
+      pluginId,
+      mode,
+      sourceId,
+      active,
+      expectedVersion,
+      () => (mode.value === "local" ? pluginStore.plugins.find((p) => p.id === pluginId.value) : null),
+    ],
     ([, , , isActive]) => {
-      if (!isActive || !pluginId.value) return;
+      if (!isActive || !pluginId.value) {
+        generation++;
+        clearSkeletonTimer();
+        return;
+      }
       void load();
     },
     { immediate: true },

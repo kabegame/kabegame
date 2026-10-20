@@ -606,7 +606,7 @@ const quickPreviewProps = (item: PluginListItem) => {
   return {
     plugin: item as QuickPreviewPluginLike,
     iconSrc: getPluginIconSrc(item),
-    images: bannerPreviewImages(installed?.assets),
+    images: bannerPreviewImages(installed),
     updateAvailableVersion: quickPreviewUpdateVersion(item),
   };
 };

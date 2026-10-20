@@ -15,6 +15,7 @@ mod commands;
 /// 构建变体上报（web/android/standard）。web 与桌面路径共用，故不随 web/not-web 门控。
 mod build_mode;
 mod debug_ingest;
+mod plugin_file_server;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
 mod content_io_provider;
@@ -568,7 +569,6 @@ pub(crate) fn configure_app(
             surf_save_page_snapshot,
             // --- Run Configs ---
             get_run_configs,
-            list_imported_recommended_presets,
             get_run_config,
             add_run_config,
             update_run_config,

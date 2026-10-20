@@ -80,11 +80,14 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     /** Launcher 由 Activity 在 onCreate 前注册并通过 PickerLauncherHost 提供，避免 RESUMED 后 register 崩溃 */
     private val launcherHost: PickerLauncherHost? = activity as? PickerLauncherHost
 
+    @InvokeArg
+    class GetHttpServerBaseArgs { var pluginFileUpstreamPort: Int = 0 }
+
     @Command
     fun getHttpServerBase(invoke: Invoke) {
         try {
             val result = JSObject()
-            result.put("baseUrl", localHttpServer.start())
+            result.put("baseUrl", localHttpServer.start(invoke.parseArgs(GetHttpServerBaseArgs::class.java).pluginFileUpstreamPort))
             invoke.resolve(result)
         } catch (e: Exception) {
             Log.e(TAG, "getHttpServerBase failed", e)

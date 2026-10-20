@@ -3,6 +3,8 @@
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod archive;
 pub mod assets;
+pub mod package_file;
+pub use package_file::PluginFileOrigin;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod ffmpeg;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
@@ -101,14 +103,14 @@ impl PluginBackend {
 #[derive(Debug, Clone, Default)]
 pub struct PluginScript {
     backend: Option<PluginBackend>,
-    source: String,
+    source: Option<Arc<str>>,
 }
 
 impl PluginScript {
     fn new(backend: PluginBackend, source: String) -> Self {
         Self {
             backend: Some(backend),
-            source,
+            source: Some(source.into()),
         }
     }
 
@@ -120,11 +122,18 @@ impl PluginScript {
     }
 
     pub fn js_source(&self) -> Option<&str> {
-        matches!(self.backend, Some(PluginBackend::Webview)).then(|| self.source.as_str())
+        self.is_webview().then(|| self.source.as_deref()).flatten()
     }
 
     pub fn v8_source(&self) -> Option<&str> {
-        matches!(self.backend, Some(PluginBackend::V8)).then(|| self.source.as_str())
+        self.is_v8().then(|| self.source.as_deref()).flatten()
+    }
+
+    pub fn is_webview(&self) -> bool {
+        self.backend == Some(PluginBackend::Webview)
+    }
+    pub fn is_v8(&self) -> bool {
+        self.backend == Some(PluginBackend::V8)
     }
 
     pub fn is_builtin(&self) -> bool {
@@ -134,7 +143,7 @@ impl PluginScript {
     /// builtin 插件携带的只读载荷（webpage 为页面发现 JS，local-import 为空）。
     /// 与 [`Self::js_source`] 分开：builtin 载荷不能冒充 WebView 插件脚本。
     pub fn builtin_source(&self) -> Option<&str> {
-        matches!(self.backend, Some(PluginBackend::Builtin)).then(|| self.source.as_str())
+        self.is_builtin().then(|| self.source.as_deref()).flatten()
     }
 }
 
@@ -156,22 +165,13 @@ fn plugin_labels_from_object(obj: &serde_json::Map<String, serde_json::Value>) -
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginAsset {
-    /// `kbAssets` 项归一化后的插件根相对路径。
-    pub key: String,
-    /// 资源内容的 base64 编码（不含 data URI 前缀）。
-    pub data_base64: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Plugin {
     pub id: String,
     /// 插件名称：string 或按语言 key 的对象（如 default、zh、ja、ko），前端按 locale 解析，default 为回退
     pub name: serde_json::Value,
     /// 插件描述：同上
     pub description: serde_json::Value,
-    /// manifest.json 里的版本号
+    /// package.json 里的版本号
     pub version: String,
     #[serde(rename = "baseUrl")]
     pub base_url: String,
@@ -182,7 +182,7 @@ pub struct Plugin {
     /// 脚本类型：js（webview crawl.js）或 v8（自包含 ES module）。
     #[serde(rename = "scriptType")]
     pub script_type: String,
-    /// manifest.json 可选字段：运行本插件所需的最低 Kabegame 应用版本（semver 主.次.补丁）
+    /// package.json 可选字段：运行本插件所需的最低 Kabegame 应用版本（semver 主.次.补丁）
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -197,12 +197,13 @@ pub struct Plugin {
     /// 插件包文件路径（.kgpg），仅已安装插件有值
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "filePath")]
     pub file_path: Option<String>,
-    /// 多语言文档：键为 "default"、"zh"、"en" 等
+    /// 原始清单和通过大小校验的资源键；正文与资源按需读取。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub doc: Option<PluginDoc>,
-    /// 多语言更新日志：键同 doc。其中的图片资源与 doc 共用 assets
+    pub package_json: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asset_keys: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changelog: Option<PluginDoc>,
+    pub file_origin: Option<PluginFileOrigin>,
     /// 图标 PNG 的 base64 编码（data:image/png;base64,... 不含前缀）
     #[serde(
         default,
@@ -210,36 +211,18 @@ pub struct Plugin {
         rename = "iconPngBase64"
     )]
     pub icon_png_base64: Option<String>,
-    /// templates/description.ejs 内容
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "descriptionTemplate"
-    )]
-    pub description_template: Option<String>,
-    /// configs/*.json 推荐运行配置列表（每项含 pluginId、filename 及预设字段）
-    #[serde(
-        default,
-        skip_serializing_if = "Vec::is_empty",
-        rename = "recommendedConfigs"
-    )]
-    pub recommended_configs: Vec<serde_json::Value>,
     /// 插件变量定义（来自 config.json 的 var 数组），仅后端使用，不序列化到前端
     #[serde(skip)]
     pub var_defs: Vec<VarDefinition>,
     /// 脚本内容及后端类型，仅后端使用，不序列化到前端
     #[serde(skip)]
     pub script: PluginScript,
-    /// 资源文件（图片等）：顺序与 kbAssets 声明顺序一致；key 为声明路径经
-    /// normalize_asset_path 归一化后的结果。doc 与 changelog 共用。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assets: Option<Vec<PluginAsset>>,
     /// 插件内 providers/ 解析出的 DSL，仅后端使用，不序列化到前端。
     #[serde(skip)]
     pub providers: Vec<PluginProviderDef>,
-    /// kbMetadataMigration 单一迁移脚本源码（ES module，export migrate），仅后端使用，不序列化到前端。
+    /// kbMetadataMigration 单一迁移脚本路径（ES module，export migrate），仅后端使用，不序列化到前端。
     #[serde(skip)]
-    pub metadata_migration: Option<String>,
+    pub metadata_migration_path: Option<String>,
     /// 插件版本的 packed 编码（每字节一段，`3.4.1` → `0x00030401`），仅后端使用，不序列化到前端。
     /// 用作 `metadata.plugin_version` 的写入值与迁移门控阈值。
     #[serde(skip)]
@@ -261,6 +244,7 @@ pub struct PluginManager {
     store_plugin_cache: ArcSwap<HashMap<String, HashMap<String, Plugin>>>,
     /// 商店插件下载进度（内存态，供 `get_store_plugins` 合并）；key = `source_id::plugin_id`
     store_download_states: std::sync::Mutex<HashMap<String, StoreDownloadState>>,
+    preview_plugins: std::sync::Mutex<std::collections::VecDeque<(String, Arc<Plugin>)>>,
     /// 是否在插件安装或刷新后调度 metadata 迁移。
     metadata_migrations: bool,
 }
@@ -315,6 +299,7 @@ impl PluginManager {
             plugins: ArcSwap::from_pointee(None),
             store_plugin_cache: ArcSwap::from_pointee(HashMap::new()),
             store_download_states: std::sync::Mutex::new(HashMap::new()),
+            preview_plugins: std::sync::Mutex::new(Default::default()),
             metadata_migrations,
         }
     }
@@ -470,7 +455,10 @@ impl PluginManager {
                     continue;
                 }
                 match self.parse_kgpg(&path, None).await {
-                    Ok(plugin) => {
+                    Ok(mut plugin) => {
+                        plugin.file_origin = Some(PluginFileOrigin::Store {
+                            source_id: source_id.clone(),
+                        });
                         let pid = plugin.id.clone();
                         cache
                             .entry(source_id.clone())
@@ -549,7 +537,8 @@ impl PluginManager {
     ) -> Result<(Plugin, Option<PathBuf>, Vec<VarDefinition>), String> {
         let p = PathBuf::from(id_or_path);
         if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            let plugin = self.parse_kgpg(&p, id_override).await?;
+            let mut plugin = self.parse_kgpg(&p, id_override).await?;
+            plugin.script = self.load_script(&plugin).await?;
             let var_defs = plugin.var_defs.clone();
             return Ok((plugin, Some(p), var_defs));
         }
@@ -557,7 +546,9 @@ impl PluginManager {
         // id 模式（已安装）
         let plugin = self.get(id_or_path).ok_or("Plugin not found!")?;
         let var_defs = plugin.var_defs.clone();
-        Ok(((*plugin).clone(), None, var_defs))
+        let mut plugin = (*plugin).clone();
+        plugin.script = self.load_script(&plugin).await?;
+        Ok((plugin, None, var_defs))
     }
 
     /// 调度器/任务场景：支持"已安装插件（plugin_id）"或"指定 `.kgpg` 文件临时运行"。
@@ -570,12 +561,15 @@ impl PluginManager {
             let path = PathBuf::from(p);
             // 任务记录里的 plugin_id 是建任务时定下的（可能来自 CLI `--id`），拿它当
             // override：否则 freeze 时按包内 name / 文件名重算，可能和任务对不上。
-            let plugin = self.parse_kgpg(&path, Some(plugin_id)).await?;
+            let mut plugin = self.parse_kgpg(&path, Some(plugin_id)).await?;
+            plugin.script = self.load_script(&plugin).await?;
             return Ok((plugin, Some(path)));
         }
         self.ensure_installed_cache_initialized().await?;
         let plugin = self.get(plugin_id).ok_or("找不到插件")?;
-        Ok(((*plugin).clone(), None))
+        let mut plugin = (*plugin).clone();
+        plugin.script = self.load_script(&plugin).await?;
+        Ok((plugin, None))
     }
 
     /// 删除插件（仅删除用户插件目录 data/plugins-directory 中的 .kgpg 文件）
@@ -1830,7 +1824,10 @@ impl PluginManager {
         fs::write(&cache_file, &bytes).map_err(|e| format!("Failed to write cache file: {}", e))?;
 
         // 解析并刷新内存缓存
-        let plugin = self.parse_kgpg(&cache_file, None).await?;
+        let mut plugin = self.parse_kgpg(&cache_file, None).await?;
+        plugin.file_origin = Some(PluginFileOrigin::Store {
+            source_id: source_id.to_string(),
+        });
         {
             let current = self.store_plugin_cache.load();
             let mut map = (**current).clone();
@@ -1957,7 +1954,17 @@ impl PluginManager {
 
     /// 从 kgpg 文件解析出 Plugin（plugin_id 见 [`resolve_kgpg_plugin_id`] 的回落链）
     pub async fn preview_import_from_kgpg(&self, zip_path: &Path) -> Result<Plugin, String> {
-        self.parse_kgpg(zip_path, None).await
+        let mut plugin = self.parse_kgpg(zip_path, None).await?;
+        let token = uuid::Uuid::new_v4().to_string();
+        plugin.file_origin = Some(PluginFileOrigin::Preview {
+            token: token.clone(),
+        });
+        let mut previews = self.preview_plugins.lock().unwrap();
+        previews.push_back((token, Arc::new(plugin.clone())));
+        while previews.len() > 8 {
+            previews.pop_front();
+        }
+        Ok(plugin)
     }
 
     /// 前端手动"刷新已安装源"：重扫插件目录并重建缓存（全量刷新）
@@ -2088,7 +2095,7 @@ impl PluginManager {
         self.refresh_plugins().await
     }
 
-    /// kgpg 文件 → Plugin（含全量字段：icon base64、doc、template、recommended_configs）
+    /// kgpg 文件 → 轻量 Plugin（图标、清单和资源键；正文及脚本校验后按需读取）
     ///
     /// plugin_id 按 [`resolve_kgpg_plugin_id`] 的回落链确定：`id_override` → 包内
     /// package.json 的 `name` → 文件名 stem。路径存在性由内部校验。
@@ -2110,20 +2117,17 @@ impl PluginManager {
         let (
             plugin_id,
             declared_id,
-            (
-                zip_manifest,
+            package_json,
+            LoadedPlugin {
+                manifest: zip_manifest,
                 config,
-                doc,
-                changelog,
                 script_type,
                 icon_png_bytes,
-                description_template,
-                recommended_configs,
                 script,
-                asset_entries,
+                asset_keys,
                 provider_entries,
-                metadata_migration_entry,
-            ),
+                metadata_migration_path,
+            },
         ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let file = fs::File::open(&zip_path)
                 .map_err(|e| format!("Failed to open plugin file: {}", e))?;
@@ -2157,7 +2161,7 @@ impl PluginManager {
                 .ok()
                 .filter(|declared| *declared != plugin_id);
             let loaded = load_plugin_v3_from_zip(&mut archive, pkg, &plugin_id)?;
-            Ok((plugin_id, declared_id, loaded))
+            Ok((plugin_id, declared_id, pkg.clone(), loaded))
         })
         .await
         .map_err(|e| format!("Failed to join ZIP parser task: {}", e))??;
@@ -2194,20 +2198,6 @@ impl PluginManager {
             })
         };
 
-        let assets = if asset_entries.is_empty() {
-            None
-        } else {
-            use base64::{engine::general_purpose::STANDARD, Engine as _};
-            let entries = asset_entries
-                .into_iter()
-                .map(|(key, bytes)| PluginAsset {
-                    key,
-                    data_base64: STANDARD.encode(&bytes),
-                })
-                .collect();
-            Some(entries)
-        };
-
         let providers =
             parse_plugin_provider_entries(&plugin_id, declared_id.as_deref(), provider_entries)?;
 
@@ -2236,16 +2226,14 @@ impl PluginManager {
             labels: manifest.labels.clone(),
             min_app_incompatible: plugin_min_app_incompatible(manifest.min_app_version.as_deref()),
             file_path: Some(path.to_string_lossy().to_string()),
-            doc,
-            changelog,
+            package_json: Some(package_json),
+            file_origin: Some(PluginFileOrigin::Installed),
             icon_png_base64,
-            description_template,
-            recommended_configs,
             var_defs,
             script,
-            assets,
+            asset_keys,
             providers,
-            metadata_migration: metadata_migration_entry,
+            metadata_migration_path,
             version_packed,
         })
     }
@@ -2257,7 +2245,6 @@ fn read_locale_md_field<R: std::io::Read + std::io::Seek>(
     archive: &mut ZipArchive<R>,
     pkg_obj: &serde_json::Map<String, serde_json::Value>,
     field: &str,
-    entries: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
     let Some(map) = pkg_obj.get(field).and_then(|value| value.as_object()) else {
         return Ok(());
@@ -2273,33 +2260,28 @@ fn read_locale_md_field<R: std::io::Read + std::io::Seek>(
         let mut text = String::new();
         file.read_to_string(&mut text)
             .map_err(|error| format!("读取 {field} \"{md_path}\" 失败: {error}"))?;
-        entries.push((lang_key.clone(), text));
     }
     Ok(())
 }
 
-/// v3 装载：按 package.json 字段拉取 zip 条目，无条目名约定。
+#[derive(Debug)]
+struct LoadedPlugin {
+    manifest: PluginManifest,
+    config: Option<PluginConfig>,
+    script_type: String,
+    icon_png_bytes: Option<Vec<u8>>,
+    script: PluginScript,
+    asset_keys: Vec<String>,
+    provider_entries: Vec<(String, String)>,
+    metadata_migration_path: Option<String>,
+}
+
+/// 安装时完整校验文本，校验后丢弃；资源只检查 ZIP 元数据。
 fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
     archive: &mut ZipArchive<R>,
     pkg: &serde_json::Value,
-    plugin_id: &str,
-) -> Result<
-    (
-        PluginManifest,         // manifest（以 ZIP 内 package.json 为权威）
-        Option<PluginConfig>,   // config
-        Option<PluginDoc>,      // doc：kbDoc 各 locale 的 md 全文
-        Option<PluginDoc>,      // changelog：kbChangelog 各 locale 的 md 全文
-        String,                 // script_type
-        Option<Vec<u8>>,        // icon_png_bytes（ZIP 内 kbIcon 字节）
-        Option<String>,         // description_template（EJS 源码）
-        Vec<serde_json::Value>, // recommended_configs
-        PluginScript,           // script（main 源码 + backend）
-        Vec<(String, Vec<u8>)>, // asset_entries：归一化路径 → 原始字节
-        Vec<(String, String)>,  // provider_entries：包内路径 → DSL 源文
-        Option<String>,         // metadata_migration_entry（.js 源码）
-    ),
-    String,
-> {
+    _plugin_id: &str,
+) -> Result<LoadedPlugin, String> {
     let pkg_obj = pkg
         .as_object()
         .ok_or_else(|| "package.json 必须是 JSON 对象".to_string())?;
@@ -2331,7 +2313,10 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         if source.trim().is_empty() {
             return Err(format!("v3 插件包 `main` 脚本不存在或为空: {}", main_path));
         }
-        script = PluginScript::new(backend, source);
+        script = PluginScript {
+            backend: Some(backend),
+            source: None,
+        };
         script_type = script.script_type_str().to_string();
     }
 
@@ -2360,7 +2345,7 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
             None
         };
 
-    let description_template: Option<String> = if let Some(tpl_path) = pkg_obj
+    if let Some(tpl_path) = pkg_obj
         .get("kbDescriptionTemplate")
         .and_then(|v| v.as_str())
     {
@@ -2374,37 +2359,23 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         let mut s = String::new();
         f.read_to_string(&mut s)
             .map_err(|e| format!("读取 \"{}\" 失败: {}", tpl_path, e))?;
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
-    } else {
-        None
-    };
+    }
 
-    let mut doc_entries: Vec<(String, String)> = Vec::new();
-    let mut changelog_entries: Vec<(String, String)> = Vec::new();
-    let mut asset_entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut asset_keys = Vec::new();
     let mut asset_total_size: usize = 0;
 
-    read_locale_md_field(archive, pkg_obj, "kbDoc", &mut doc_entries)?;
-    read_locale_md_field(archive, pkg_obj, "kbChangelog", &mut changelog_entries)?;
+    read_locale_md_field(archive, pkg_obj, "kbDoc")?;
+    read_locale_md_field(archive, pkg_obj, "kbChangelog")?;
 
     for asset_path in assets::build_asset_index(pkg) {
-        let mut asset_file = match archive.by_name(&asset_path) {
+        let asset_file = match archive.by_name(&asset_path) {
             Ok(file) => file,
             Err(_) => {
                 eprintln!("[WARN] kbAssets 项 {asset_path:?} 不在包内，已跳过");
                 continue;
             }
         };
-        let mut bytes = Vec::new();
-        asset_file
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("读取资源 \"{}\" 失败: {}", asset_path, error))?;
-
-        let asset_size = bytes.len();
+        let asset_size = usize::try_from(asset_file.size()).unwrap_or(usize::MAX);
         if asset_size > assets::ASSET_MAX_FILE_SIZE {
             eprintln!(
                 "[WARN] 资源 {asset_path:?} 超过单文件 2 MB 上限，已跳过: {asset_size} bytes"
@@ -2416,15 +2387,9 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
             continue;
         }
         asset_total_size += asset_size;
-        asset_entries.push((asset_path, bytes));
+        asset_keys.push(asset_path);
     }
 
-    let doc: Option<PluginDoc> =
-        (!doc_entries.is_empty()).then(|| doc_entries.into_iter().collect());
-    let changelog: Option<PluginDoc> =
-        (!changelog_entries.is_empty()).then(|| changelog_entries.into_iter().collect());
-
-    let mut recommended_configs: Vec<serde_json::Value> = Vec::new();
     if let Some(configs_arr) = pkg_obj
         .get("kbRecommendedConfigs")
         .and_then(|v| v.as_array())
@@ -2445,23 +2410,8 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
             f.read_to_string(&mut s)
                 .map_err(|e| format!("读取 \"{}\" 失败: {}", cfg_path, e))?;
 
-            let filename = std::path::Path::new(cfg_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            let v: serde_json::Value = serde_json::from_str(&s)
+            let _: serde_json::Value = serde_json::from_str(&s)
                 .map_err(|e| format!("解析 \"{}\" 失败: {}", cfg_path, e))?;
-            let mut obj = serde_json::Map::new();
-            obj.insert("pluginId".to_string(), serde_json::json!(plugin_id));
-            obj.insert("filename".to_string(), serde_json::json!(filename));
-            if let serde_json::Value::Object(m) = v {
-                for (k, val) in m {
-                    obj.insert(k, val);
-                }
-            }
-            recommended_configs.push(serde_json::Value::Object(obj));
         }
     }
 
@@ -2512,24 +2462,20 @@ fn load_plugin_v3_from_zip<R: std::io::Read + std::io::Seek>(
         f.read_to_string(&mut s)
             .map_err(|e| format!("读取 \"{}\" 失败: {}", mig_path, e))?;
         if !s.trim().is_empty() {
-            metadata_migration_entry = Some(s);
+            metadata_migration_entry = Some(mig_path.to_string());
         }
     }
 
-    Ok((
+    Ok(LoadedPlugin {
         manifest,
         config,
-        doc,
-        changelog,
         script_type,
         icon_png_bytes,
-        description_template,
-        recommended_configs,
         script,
-        asset_entries,
+        asset_keys,
         provider_entries,
-        metadata_migration_entry,
-    ))
+        metadata_migration_path: metadata_migration_entry,
+    })
 }
 
 fn plugin_provider_namespace_allowed(plugin_id: &str, def: &ProviderDef) -> bool {
@@ -2821,7 +2767,6 @@ pub fn read_plugin_manifest_from_kgpg_file_sync(zip_path: &Path) -> Result<Plugi
 pub type ManifestI18nText = HashMap<String, String>;
 
 /// 插件文档多语言：键 "default"（doc.md / doc_root/doc.md）及 "zh"、"en"、"ja"、"ko" 等（doc_root/doc.<lang>.md）
-pub type PluginDoc = HashMap<String, String>;
 
 fn extract_manifest_text_from_flat(
     obj: &serde_json::Map<String, serde_json::Value>,
@@ -3987,28 +3932,6 @@ mod tests {
     }
 
     #[test]
-    fn plugin_assets_serialize_as_ordered_array() {
-        let assets = vec![
-            PluginAsset {
-                key: "banner/second.png".to_string(),
-                data_base64: "second".to_string(),
-            },
-            PluginAsset {
-                key: "banner/first.png".to_string(),
-                data_base64: "first".to_string(),
-            },
-        ];
-
-        assert_eq!(
-            serde_json::to_value(assets).unwrap(),
-            serde_json::json!([
-                { "key": "banner/second.png", "dataBase64": "second" },
-                { "key": "banner/first.png", "dataBase64": "first" }
-            ])
-        );
-    }
-
-    #[test]
     fn test_extract_local_refs() {
         let md = r#"
 # Title
@@ -4078,19 +4001,15 @@ mod tests {
         ]);
 
         let mut archive = open_zip(&data);
-        let (_, _, doc, _, _, _, _, _, _, resources, _, _) =
-            load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
-
-        assert_eq!(
-            doc.as_ref()
-                .and_then(|docs| docs.get("default"))
-                .map(String::as_str),
-            Some(md)
-        );
-        assert_eq!(
-            resources,
-            vec![("images/home.png".to_string(), image.to_vec())]
-        );
+        let loaded = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
+        assert_eq!(loaded.asset_keys, vec!["images/home.png"]);
+        let mut text = String::new();
+        archive
+            .by_name("doc_root/doc.md")
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, md);
     }
 
     #[test]
@@ -4112,8 +4031,10 @@ mod tests {
         ]);
 
         let mut archive = open_zip(&data);
-        let (_, _, _, _, _, _, _, _, _, resources, _, _) =
-            load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
+        let LoadedPlugin {
+            asset_keys: resources,
+            ..
+        } = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
         assert!(resources.is_empty());
     }
 
@@ -4140,24 +4061,17 @@ mod tests {
         let plugin_id = "test-v3";
         let mut archive = open_zip(&data);
         let result = load_plugin_v3_from_zip(&mut archive, &pkg, plugin_id);
-        let (
+        let LoadedPlugin {
             manifest,
-            _config,
-            _doc,
-            _changelog,
             script_type,
-            _icon,
-            _tpl,
-            _configs,
             script,
-            _res,
-            _prov,
-            _mig,
-        ) = result.unwrap();
+            ..
+        } = result.unwrap();
 
         assert_eq!(manifest.version, "1.0.0");
         assert_eq!(script_type, "v8");
-        assert_eq!(script.v8_source(), Some(js_source));
+        assert!(script.is_v8());
+        assert!(script.v8_source().is_none());
         assert!(script.js_source().is_none());
     }
 
@@ -4256,8 +4170,11 @@ mod tests {
             ("metadata_migrations/migrate.js", mig_source.as_bytes()),
         ]);
         let mut archive = open_zip(&data);
-        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
-        assert_eq!(mig.as_deref(), Some(mig_source));
+        let LoadedPlugin {
+            metadata_migration_path: mig,
+            ..
+        } = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
+        assert_eq!(mig.as_deref(), Some("metadata_migrations/migrate.js"));
     }
 
     #[test]
@@ -4324,7 +4241,10 @@ mod tests {
             ("main.js", b"export async function crawl() {}"),
         ]);
         let mut archive = open_zip(&data);
-        let (.., mig) = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
+        let LoadedPlugin {
+            metadata_migration_path: mig,
+            ..
+        } = load_plugin_v3_from_zip(&mut archive, &pkg, "t").unwrap();
         assert!(mig.is_none());
     }
 

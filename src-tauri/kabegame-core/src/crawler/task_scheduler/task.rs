@@ -44,7 +44,7 @@ impl TaskParams {
     /// 下载是否交给本任务的 CEF 窗口执行（保留浏览器 Cookie / 登录态）。
     /// 普通插件看静态脚本类型；builtin `webpage` 看每次任务选择的后端。
     pub fn uses_webview_transport(&self) -> bool {
-        self.plugin.script.js_source().is_some()
+        self.plugin.script.is_webview()
             || crate::crawler::webpage::is_webview_task(&self.plugin.id, &self.config)
     }
 }
@@ -258,7 +258,13 @@ impl Task {
     /// 并推送计数 diff，前端与 CLI 沿用去重计数的展示通路。
     pub fn record_dry_run_skip(&self) {
         if let Ok(n) = Storage::global().increment_task_dedup_count(&self.task_id) {
-            GlobalEmitter::global().emit_task_image_counts(&self.task_id, None, None, None, Some(n));
+            GlobalEmitter::global().emit_task_image_counts(
+                &self.task_id,
+                None,
+                None,
+                None,
+                Some(n),
+            );
         }
     }
 

@@ -46,9 +46,7 @@ fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
                 kabegame_i18n::current_vd_locale(),
             )),
         );
-        map.remove("assets");
         map.remove("iconPngBase64");
-        map.remove("descriptionTemplate");
     }
     value
 }
@@ -235,7 +233,16 @@ impl Provider for PluginDescriptionTemplateProvider {
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         let rows = get_plugin(&self.plugin_id)
-            .and_then(|plugin| plugin.description_template.clone())
+            .map(|plugin| {
+                crate::plugin::package_file::read_manifest_text(
+                    &plugin,
+                    "kbDescriptionTemplate",
+                    None,
+                )
+            })
+            .transpose()
+            .map_err(plugin_error)?
+            .flatten()
             .map(|template| vec![json!({ "descriptionTemplate": template })])
             .unwrap_or_default();
         Ok(Some(rows))
@@ -253,8 +260,12 @@ impl Provider for PluginDocProvider {
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         let rows = get_plugin(&self.plugin_id)
-            .and_then(|plugin| plugin.doc.clone())
-            .and_then(|doc| doc.get("default").cloned())
+            .map(|plugin| {
+                crate::plugin::package_file::read_manifest_text(&plugin, "kbDoc", Some("default"))
+            })
+            .transpose()
+            .map_err(plugin_error)?
+            .flatten()
             .map(|doc| vec![json!({ "doc": doc })])
             .unwrap_or_default();
         Ok(Some(rows))
@@ -272,8 +283,16 @@ impl Provider for PluginChangelogProvider {
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         let rows = get_plugin(&self.plugin_id)
-            .and_then(|plugin| plugin.changelog.clone())
-            .and_then(|changelog| changelog.get("default").cloned())
+            .map(|plugin| {
+                crate::plugin::package_file::read_manifest_text(
+                    &plugin,
+                    "kbChangelog",
+                    Some("default"),
+                )
+            })
+            .transpose()
+            .map_err(plugin_error)?
+            .flatten()
             .map(|text| vec![json!({ "changelog": text })])
             .unwrap_or_default();
         Ok(Some(rows))
@@ -290,10 +309,10 @@ impl Provider for PluginAssetRootProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Vec<ListRef>, EngineError> {
-        let Some(resources) = get_plugin(&self.plugin_id).and_then(|p| p.assets.clone()) else {
+        let Some(resources) = get_plugin(&self.plugin_id).map(|p| p.asset_keys.clone()) else {
             return Ok(Vec::new());
         };
-        let mut keys: Vec<String> = resources.iter().map(|asset| asset.key.clone()).collect();
+        let mut keys: Vec<String> = resources;
         keys.sort();
         Ok(keys
             .into_iter()
@@ -336,12 +355,23 @@ impl Provider for PluginAssetProvider {
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         let rows = get_plugin(&self.plugin_id)
-            .and_then(|plugin| plugin.assets.clone())
-            .and_then(|assets| {
-                assets
-                    .into_iter()
-                    .find(|asset| asset.key == self.asset_path)
-                    .map(|asset| asset.data_base64)
+            .filter(|plugin| plugin.asset_keys.contains(&self.asset_path))
+            .map(|plugin| {
+                let path = plugin
+                    .file_path
+                    .as_ref()
+                    .ok_or("插件无文件路径".to_string())?;
+                crate::plugin::package_file::read_kgpg_entry(
+                    std::path::Path::new(path),
+                    &self.asset_path,
+                )
+            })
+            .transpose()
+            .map_err(plugin_error)?
+            .flatten()
+            .map(|bytes| {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.encode(bytes)
             })
             .map(|data| {
                 vec![json!({

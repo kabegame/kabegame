@@ -9,7 +9,8 @@
     />
     <PluginDocRenderer
       :markdown="markdown"
-      :assets="assets"
+      :plugin="plugin"
+      :loading="loading"
       :anchor-prefix="anchorPrefix"
       :empty-description="emptyDescription"
       @headings="emit('headings', $event)"
@@ -23,7 +24,8 @@
 import { computed, ref } from "vue";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginQuickPreviewCarousel from "./PluginQuickPreviewCarousel.vue";
-import { bannerPreviewImages, type PluginAsset } from "../../utils/assetPath";
+import type { Plugin } from "@/stores/plugins";
+import { bannerPreviewImages } from "../../utils/assetPath";
 
 /** 滚动容器：供外层目录点击跳转 / scrollspy 使用 */
 const scrollEl = ref<HTMLElement | null>(null);
@@ -32,7 +34,8 @@ defineExpose({ scrollEl });
 const props = withDefaults(
   defineProps<{
     markdown?: string | null;
-    assets?: PluginAsset[] | null;
+    plugin?: Plugin | null;
+    loading?: boolean;
     anchorPrefix?: string;
     showCarousel?: boolean;
     emptyDescription?: string;
@@ -53,5 +56,5 @@ const emit = defineEmits<{
 }>();
 
 // 走马灯素材：按 kbAssets 声明顺序复用 banner 图，与快捷预览构造方式一致。
-const images = computed(() => bannerPreviewImages(props.assets));
+const images = computed(() => bannerPreviewImages(props.plugin));
 </script>
