@@ -54,12 +54,13 @@
         <div class="drawer-panel-body drawer-panel-body--tasks">
           <div class="tasks-summary">
             <el-input
-              v-model="taskSearch"
+              :model-value="search"
               size="small"
               clearable
               class="tasks-search"
               :prefix-icon="Search"
               :placeholder="t('tasks.drawerSearchPlaceholder')"
+              @update:model-value="$emit('update:search', String($event ?? ''))"
             />
             <el-button
               text
@@ -73,11 +74,16 @@
           </div>
           <div class="tasks-list-col">
             <el-empty
-              v-if="taskSearchQuery && filteredTasks.length === 0"
+              v-if="!loading && search.trim() && tasks.length === 0"
               :description="t('tasks.drawerSearchEmpty')"
               :image-size="60"
             />
-            <div class="tasks-list tasks-list--virtual" v-bind="containerProps" @scroll="handleTasksListScroll">
+            <div
+              v-loading="showLoading && tasks.length === 0"
+              class="tasks-list tasks-list--virtual"
+              v-bind="containerProps"
+              @scroll="handleTasksListScroll"
+            >
               <div v-bind="wrapperProps">
                 <div v-for="item in virtualList" :key="item.data.id" class="task-drawer-virtual-item">
                   <div
@@ -177,6 +183,7 @@
                             :limit="item.data.maxConcurrentDownloads ?? null"
                             :in-flight="taskInFlight.get(item.data.id) ?? 0"
                             :editable="item.data.status === 'pending' || item.data.status === 'running'"
+                            @updated="$emit('task-patched', $event)"
                           />
                           <span v-if="shouldShowTaskProgressBar(item.data)" class="task-drawer-footer-percent">
                             {{ taskProgressText(item.data) }}
@@ -240,7 +247,7 @@
                 </div>
               </div>
             </div>
-            <div v-if="hasMore && loadingMore" class="load-more-indicator">
+            <div v-if="hasMore && showLoading && tasks.length > 0" class="load-more-indicator">
               <el-icon class="is-loading">
                 <Loading />
               </el-icon>
@@ -275,7 +282,7 @@ import TaskLogDialog from "./TaskLogDialog.vue";
 import TaskParamsDialog from "./TaskParamsDialog.vue";
 import TaskSummaryRow, { type TaskSummaryRowTask } from "./TaskSummaryRow.vue";
 import TaskConcurrencyControl from "./TaskConcurrencyControl.vue";
-import { useCrawlerStore } from "../../stores/crawler";
+import { useTaskDrawerStore } from "../../stores/taskDrawer";
 import { usePluginStore } from "../../stores/plugins";
 import type { PluginManifestText } from "../../stores/plugins";
 import type { TaskRunParamsTask } from "./TaskRunParamsContent.vue";
@@ -285,16 +292,15 @@ import { downloadPoller, useDownloadStateStore, type ActiveDownloadInfo } from "
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
-const crawlerStore = useCrawlerStore();
+const taskDrawerStore = useTaskDrawerStore();
 const downloadStateStore = useDownloadStateStore();
-
-const TASK_PAGE_SIZE = 20;
 
 type TaskStatus = "pending" | "running" | "waiting_downloads" | "completed" | "failed" | "canceled";
 type ScriptTask = {
   id: string;
   pluginId: string;
   runConfigId?: string;
+  runConfigName?: string | null;
   triggerSource?: "manual" | "scheduled" | string;
   status: TaskStatus | string;
   progress: number;
@@ -314,6 +320,13 @@ type ScriptTask = {
 const props = withDefaults(
   defineProps<{
     tasks: ScriptTask[];
+    total: number;
+    hasMore: boolean;
+    /** 真实加载态：首屏或触底请求在途，用于并发守卫与空态判断 */
+    loading: boolean;
+    /** 延迟后的加载态（useLoadingDelay），只用于转圈，快速返回时不闪 */
+    showLoading: boolean;
+    search: string;
     plugins?: Array<{ id: string; name?: PluginManifestText }>;
     /** active=false 时停止下载轮询与事件监听（main drawer 关闭时用） */
     active?: boolean;
@@ -336,21 +349,15 @@ const emit = defineEmits<{
   (e: "open-task-schedule-config", task: TaskSummaryRowTask): void;
   (e: "clear-finished-tasks"): void;
   (e: "task-contextmenu", payload: { x: number; y: number; task: ScriptTask }): void;
+  (e: "load-more"): void;
+  (e: "update:search", value: string): void;
+  (e: "task-patched", task: import("../../stores/crawler").CrawlTask): void;
 }>();
 
-const nonRunningTasksCount = computed(
-  () =>
-    props.tasks.filter(
-      (task) => task.status !== "running" && task.status !== "waiting_downloads" && task.status !== "pending",
-    ).length,
-);
+const nonRunningTasksCount = computed(() => taskDrawerStore.finishedTasksCount);
 
-/** 分页：已加载数 < 总数 则有更多 */
-const hasMore = computed(() => crawlerStore.tasksTotal > 0 && crawlerStore.tasks.length < crawlerStore.tasksTotal);
 /** 任务数量展示：有总分页时显示总数，否则显示当前条数 */
-const displayTaskCount = computed(() => (crawlerStore.tasksTotal > 0 ? crawlerStore.tasksTotal : props.tasks.length));
-
-const loadingMore = ref(false);
+const displayTaskCount = computed(() => props.total);
 
 function isCanceledTaskStatus(status: string): boolean {
   return status === "canceled" || status === "cancelled";
@@ -415,27 +422,20 @@ useModalBack(
 const isTaskRunning = (task: ScriptTask) => task.status === "running" || task.status === "waiting_downloads";
 
 /** 任务搜索：按插件 id 与当前语言下的插件名做不区分大小写的子串匹配 */
-const taskSearch = ref("");
-const taskSearchQuery = computed(() => taskSearch.value.trim().toLowerCase());
-const filteredTasks = computed(() => {
-  const q = taskSearchQuery.value;
-  if (!q) return props.tasks;
-  return props.tasks.filter(
-    (task) => task.pluginId.toLowerCase().includes(q) || getPluginName(task.pluginId).toLowerCase().includes(q),
-  );
-});
-
 const {
   list: virtualList,
   containerProps,
   wrapperProps,
   scrollTo: scrollTasksTo,
-} = useVirtualList(filteredTasks, {
+} = useVirtualList(computed(() => props.tasks), {
   itemHeight: TASK_DRAWER_ITEM_HEIGHT,
   overscan: 6,
 });
 // 搜索词变化后回到顶部：否则沿用旧 scrollTop，结果比原列表短时可视区落在结果之外，整列空白
-watch(taskSearchQuery, () => scrollTasksTo(0));
+watch(
+  () => props.search,
+  () => scrollTasksTo(0),
+);
 
 const runParamsDialog = useModal();
 const runParamsTask = ref<TaskRunParamsTask | null>(null);
@@ -466,18 +466,13 @@ function openRunParamsDialog(task: ScriptTask) {
 }
 
 async function loadMoreTasks() {
-  if (loadingMore.value || !hasMore.value) return;
-  loadingMore.value = true;
-  try {
-    await crawlerStore.loadTasksPage(TASK_PAGE_SIZE, crawlerStore.tasks.length);
-  } finally {
-    loadingMore.value = false;
-  }
+  if (props.loading || !props.hasMore) return;
+  emit("load-more");
 }
 
 function handleTasksListScroll(e: Event) {
   const el = e.target as HTMLElement | null;
-  if (!el || loadingMore.value || !hasMore.value) return;
+  if (!el || props.loading || !props.hasMore) return;
   const { scrollTop, clientHeight, scrollHeight } = el;
   const threshold = 60;
   if (scrollTop + clientHeight >= scrollHeight - threshold) {
@@ -589,9 +584,8 @@ async function openTaskWindow(taskId: string) {
 const getRunConfigName = (task: ScriptTask) => {
   const runConfigId = `${task.runConfigId ?? ""}`.trim();
   if (!runConfigId) return "-";
-  const cfg = crawlerStore.runConfigById(runConfigId);
-  if (!cfg) return runConfigId;
-  return resolveConfigText(cfg.name as any, locale.value) || runConfigId;
+  if (task.runConfigName == null) return runConfigId;
+  return resolveConfigText(task.runConfigName as any, locale.value) || runConfigId;
 };
 
 const scheduledTaskAriaLabel = (task: ScriptTask) =>

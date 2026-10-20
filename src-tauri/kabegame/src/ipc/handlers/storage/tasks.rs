@@ -77,9 +77,8 @@ pub async fn get_all_failed_images() -> IpcResponse {
 }
 
 pub async fn clear_finished_tasks() -> IpcResponse {
-    let storage = Storage::global();
-    match storage.clear_finished_tasks() {
-        Ok(n) => IpcResponse::ok_with_data("ok", serde_json::to_value(n).unwrap_or_default()),
+    match kabegame_core::commands::task::clear_finished_tasks() {
+        Ok(result) => IpcResponse::ok_with_data("ok", result),
         Err(e) => IpcResponse::err(e),
     }
 }

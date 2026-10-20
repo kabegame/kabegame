@@ -144,7 +144,10 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
         end_time: None,
         error: None,
     };
+    let payload = serde_json::to_value(&task).map_err(|e| e.to_string())?;
     Storage::global().add_task(task)?;
+    // 与手动入口 start_task 一致：入库即广播，前端分页列表只认 TaskAdded 插入新行
+    GlobalEmitter::global().emit_task_added(&payload);
 
     let req = CrawlTaskRequest {
         task_id: task_id.clone(),

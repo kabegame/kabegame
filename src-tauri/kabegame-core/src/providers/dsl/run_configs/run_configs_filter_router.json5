@@ -1,0 +1,19 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_filter_router",
+    "note": "Composable run config filters: plugin/<id>, enabled, before_<createdAt>_<id>, then x<pageSize>x/<page>.",
+    "list": {
+        "plugin": { "provider": "run_configs_plugin_router" },
+        "enabled": { "provider": "run_configs_enabled_provider" }
+    },
+    "resolve": {
+        "before_(-?[0-9]+)_(.+)": {
+            "provider": "run_configs_before_provider",
+            "properties": { "created_at": "${capture[1]}", "id": "${capture[2]}" }
+        },
+        "x([1-9][0-9]*)x": {
+            "provider": "run_configs_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        }
+    }
+}

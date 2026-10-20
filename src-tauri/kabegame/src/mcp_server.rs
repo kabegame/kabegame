@@ -88,6 +88,12 @@ Other read schemes:
   albums://id_{id}                       one Album
   tasks://all                            all Tasks (Vec<TaskInfo>)
   tasks://id_{id}                        one TaskInfo
+  tasks://status                         list: one child per status, meta.count = tasks in that status
+  tasks://status/{status}/x20x/1         first 20 tasks in one status, newest first
+  tasks://run_config/{configId}/x20x/1   first 20 tasks started by one auto-run config
+  tasks://plugin/{pluginId}/x20x/1       first 20 tasks of one plugin
+    Filter segments (status/, plugin/, plugin_search/, run_config/) can be chained. To read the
+    next page, put before_{startTime}_{id}/ (taken from the last row) ahead of x20x/1.
   surf_records://all                     all SurfRecords (Vec<SurfRecord>)
   surf_records://id_{id}                 one SurfRecord
   plugin://                              all Plugins, trimmed

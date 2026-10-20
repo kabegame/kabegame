@@ -61,7 +61,13 @@
             />
           </div>
 
-          <div v-if="filteredConfigs.length === 0" class="auto-configs-empty">
+          <!-- 首屏在途：先留白，超过延迟才转圈，快速返回时不闪空态 -->
+          <div
+            v-if="filteredConfigs.length === 0 && configLoading"
+            v-loading="configShowLoading"
+            class="auto-configs-vlist-wrap"
+          />
+          <div v-else-if="filteredConfigs.length === 0" class="auto-configs-empty">
             <el-empty :description="$t('autoConfig.noConfigs')">
               <p class="empty-hint">{{ $t("autoConfig.emptyHint") }}</p>
               <el-button type="primary" @click="goCreate">{{ $t("autoConfig.create") }}</el-button>
@@ -69,7 +75,7 @@
           </div>
 
           <div v-else class="auto-configs-vlist-wrap">
-            <div v-bind="configListContainerProps" class="auto-configs-vlist-scroll">
+            <div v-bind="configListContainerProps" class="auto-configs-vlist-scroll" @scroll="handleConfigListScroll">
               <div v-bind="configListWrapperProps">
                 <div
                   v-for="item in virtualConfigRows"
@@ -90,6 +96,7 @@
                     @more-command="handleMoreCommand"
                     @open-task-images="openTaskImages"
                     @open-task-log="openTaskLog"
+                    @config-updated="handleConfigUpdated"
                   />
                 </div>
               </div>
@@ -243,7 +250,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Arrayable, useVirtualList } from "@vueuse/core";
 import { ElMessageBox, KbTab, type KbTabItem } from "@kabegame/element-plus";
@@ -272,6 +279,14 @@ import { useSettingsStore } from "@/stores/settings";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { trackEvent } from "@/track/umami";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { usePagedRunConfigs } from "@/composables/usePagedRunConfigs";
+import {
+  fetchRunConfig,
+  fetchRunConfigPluginCounts,
+  fetchRunConfigTotal,
+  runConfigFilterPath,
+  subscribeRunConfigEvents,
+} from "@/services/runConfigs";
 
 const { t, locale } = useI18n();
 const route = useRoute();
@@ -412,7 +427,9 @@ async function importPreset(preset: PluginRecommendedPreset) {
     }
   }
   try {
-    await crawlerStore.importRecommendedPreset(preset);
+    const config = await crawlerStore.importRecommendedPreset(preset);
+    upsert(config);
+    await refreshCounts();
     ElMessage.success(t("autoConfig.importRecommendedSuccess"));
     listTab.value = "mine";
   } catch (e) {
@@ -475,25 +492,78 @@ function onRecommendedPluginChange(name: Arrayable<string | number>) {
   });
 }
 
-onMounted(async () => {
-  await crawlerStore.runConfigsReady;
-});
-
 function goPluginBrowser() {
   void router.push({ name: "PluginBrowser" });
 }
 
-const configs = computed(() => crawlerStore.runConfigs);
+const currentFilterPath = () =>
+  runConfigFilterPath({ pluginId: filterPluginId.value, onlyEnabled: onlyEnabled.value });
+const configList = usePagedRunConfigs({
+  basePath: currentFilterPath,
+  matches: (config) =>
+    (!filterPluginId.value || config.pluginId === filterPluginId.value) &&
+    (!onlyEnabled.value || config.scheduleEnabled),
+});
+const {
+  items: filteredConfigs,
+  loading: configLoading,
+  showLoading: configShowLoading,
+  start,
+  stop,
+  loadMore,
+  upsert,
+  remove,
+} = configList;
 
-const filteredConfigs = computed(() => {
-  let list = configs.value;
-  if (filterPluginId.value) {
-    list = list.filter((c) => c.pluginId === filterPluginId.value);
-  }
-  if (onlyEnabled.value) {
-    list = list.filter((c) => c.scheduleEnabled);
-  }
-  return list;
+const totalConfigCount = ref(0);
+const filteredConfigCount = ref(0);
+const scheduleMenuAllCount = ref(0);
+const scheduleMenuEnabledCount = ref(0);
+const pluginFilterCounts = ref<Record<string, number>>({});
+let countsTimer: ReturnType<typeof setTimeout> | null = null;
+let pageMounted = false;
+
+async function refreshCounts() {
+  const pluginPath = runConfigFilterPath({ pluginId: filterPluginId.value });
+  const pluginEnabledPath = runConfigFilterPath({ pluginId: filterPluginId.value, onlyEnabled: true });
+  const [all, shown, scheduleAll, scheduleEnabled, pluginCounts] = await Promise.all([
+    fetchRunConfigTotal(),
+    fetchRunConfigTotal(currentFilterPath()),
+    fetchRunConfigTotal(pluginPath),
+    fetchRunConfigTotal(pluginEnabledPath),
+    fetchRunConfigPluginCounts(onlyEnabled.value),
+  ]);
+  totalConfigCount.value = all;
+  filteredConfigCount.value = shown;
+  scheduleMenuAllCount.value = scheduleAll;
+  scheduleMenuEnabledCount.value = scheduleEnabled;
+  pluginFilterCounts.value = pluginCounts;
+}
+
+function scheduleCountsRefresh() {
+  if (countsTimer) clearTimeout(countsTimer);
+  countsTimer = setTimeout(() => {
+    countsTimer = null;
+    void refreshCounts();
+  }, 300);
+}
+
+const unsubscribeCountEvents = subscribeRunConfigEvents(scheduleCountsRefresh);
+
+onMounted(() => {
+  pageMounted = true;
+  void Promise.all([start(), refreshCounts()]);
+});
+onUnmounted(() => {
+  pageMounted = false;
+  unsubscribeCountEvents();
+  if (countsTimer) clearTimeout(countsTimer);
+});
+
+watch([filterPluginId, onlyEnabled], () => {
+  if (!pageMounted) return;
+  stop();
+  void Promise.all([start(), refreshCounts()]);
 });
 
 const configListItemHeightPx = IS_ANDROID ? 640 : 312;
@@ -509,37 +579,16 @@ const {
   overscan: 3,
 });
 
-/** 仅按插件过滤（用于「定时」下拉中的数量） */
-const configsForScheduleMenu = computed(() => {
-  if (!filterPluginId.value) return configs.value;
-  return configs.value.filter((c) => c.pluginId === filterPluginId.value);
-});
-
-const scheduleMenuAllCount = computed(() => configsForScheduleMenu.value.length);
-const scheduleMenuEnabledCount = computed(() => configsForScheduleMenu.value.filter((c) => c.scheduleEnabled).length);
-
-/** 仅按定时开关过滤（用于「插件」下拉中的数量） */
-const configsForPluginMenu = computed(() =>
-  onlyEnabled.value ? configs.value.filter((c) => c.scheduleEnabled) : configs.value,
-);
-
-const pluginMenuAllCount = computed(() => configsForPluginMenu.value.length);
-
 const pluginFilterRows = computed(() => {
-  const map = new Map<string, number>();
-  for (const c of configsForPluginMenu.value) {
-    if (!c.pluginId) continue;
-    map.set(c.pluginId, (map.get(c.pluginId) ?? 0) + 1);
-  }
-  return [...map.entries()]
+  return Object.entries(pluginFilterCounts.value)
     .map(([pluginId, count]) => ({ pluginId, count }))
     .sort((a, b) => pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)));
 });
 
 const pluginFilterPluginIds = computed(() => pluginFilterRows.value.map((row) => row.pluginId));
 
-const pluginFilterCounts = computed(() =>
-  Object.fromEntries(pluginFilterRows.value.map((row) => [row.pluginId, row.count])),
+const pluginMenuAllCount = computed(() =>
+  Object.values(pluginFilterCounts.value).reduce((total, count) => total + count, 0),
 );
 
 const pluginFilterPrependOptions = computed(() => [
@@ -547,8 +596,8 @@ const pluginFilterPrependOptions = computed(() => [
 ]);
 
 const headerSubtitle = computed(() => {
-  const total = configs.value.length;
-  const shown = filteredConfigs.value.length;
+  const total = totalConfigCount.value;
+  const shown = filteredConfigCount.value;
   if (onlyEnabled.value || filterPluginId.value) {
     return t("autoConfig.listFiltered", { shown, total });
   }
@@ -592,6 +641,8 @@ const handleDelete = async (id: string) => {
       cancelButtonText: t("common.cancel"),
     });
     await crawlerStore.deleteRunConfig(id);
+    remove(id);
+    await refreshCounts();
     ElMessage.success(t("autoConfig.deleted"));
   } catch {
     // ignore cancel
@@ -599,7 +650,8 @@ const handleDelete = async (id: string) => {
 };
 
 const handleCopy = async (id: string) => {
-  await crawlerStore.copyRunConfig(id);
+  upsert(await crawlerStore.copyRunConfig(id));
+  await refreshCounts();
   ElMessage.success(t("autoConfig.copied"));
 };
 
@@ -622,7 +674,7 @@ const handleCopyPresetJson = async (cfg: RunConfig) => {
 /** 通路 4：只把该配置的 task config 写入全局 taskConfig 再打开弹窗，不写配置 id、不关联该配置 */
 const handleRunWithConfig = async (id: string) => {
   if (await guardDesktopOnly("runConfig", { needSuper: true })) return;
-  const cfg = crawlerStore.runConfigById(id);
+  const cfg = filteredConfigs.value.find((config) => config.id === id) ?? (await fetchRunConfig(id));
   if (!cfg) return;
   await writeTaskConfig(taskConfigFromRunConfig(cfg));
   crawlerDrawerStore.open();
@@ -653,7 +705,7 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
   try {
     if (enabled && !cfg.scheduleSpec?.mode) {
       const d = new Date();
-      await crawlerStore.updateRunConfig({
+      upsert(await crawlerStore.updateRunConfig({
         ...cfg,
         scheduleEnabled: true,
         scheduleSpec: {
@@ -661,16 +713,28 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
           hour: d.getHours(),
           minute: d.getMinutes(),
         },
-      });
+      }));
     } else {
-      await crawlerStore.updateRunConfig({ ...cfg, scheduleEnabled: enabled });
+      upsert(await crawlerStore.updateRunConfig({ ...cfg, scheduleEnabled: enabled }));
     }
+    await refreshCounts();
   } catch {
     ElMessage.error(t("common.operationFailed"));
   } finally {
     scheduleTogglingId.value = null;
   }
 };
+
+function handleConfigUpdated(config: RunConfig) {
+  upsert(config);
+  void refreshCounts();
+}
+
+function handleConfigListScroll(event: Event) {
+  const element = event.target as HTMLElement;
+  if (configLoading.value) return;
+  if (element.scrollTop + element.clientHeight >= element.scrollHeight - 80) void loadMore();
+}
 
 // 帮助内容按当前 tab 区分（定时说明 / 推荐配置说明），是页面本地弹窗，不经过 HeaderFeatureId 通道。
 function openAutoConfigHelp() {

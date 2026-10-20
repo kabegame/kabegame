@@ -39,6 +39,7 @@ CREATE TABLE tasks (
     error           TEXT
 );
 CREATE INDEX idx_tasks_start_time ON tasks(start_time DESC);
+CREATE INDEX idx_tasks_run_config ON tasks(run_config_id, start_time DESC);
 
 -- ───────────── metadata ─────────────
 CREATE TABLE metadata (

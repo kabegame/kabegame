@@ -1,49 +1,93 @@
-# 任务抽屉加载流程
+# 任务列表与自动配置按需加载
 
-本文档描述任务抽屉的分页加载机制，用于减轻任务数量多时打开抽屉的卡顿。
+任务和自动配置不再由 `crawlerStore` 在启动时全量读取并常驻内存。列表由当前可见页面通过 PathQL
+按需持有：打开时加载第一页与总数、触底时按游标追加、关闭或卸载时清空并退订。应用启动期只保留
+任务状态分组计数，供右上角徽章和「清除全部」使用。
 
----
+## 1. 生命周期与数据属主
 
-## 1. 流程概览
+任务抽屉的状态由 `TaskDrawer.vue` 内的 `usePagedTaskList` 持有；自动配置页由
+`usePagedRunConfigs` 持有；配置卡片下的关联任务也各自使用 `usePagedTaskList`。任务详情与配置弹窗只查
+当前 id。`crawlerStore` 只保留命令包装与新任务表单状态，不再保存任务或运行配置列表。
 
 ```
-打开任务抽屉（TaskDrawer onMounted）
-    → crawlerStore.loadTasksPage(20, 0)
-    → invoke("get_tasks_page", { limit: 20, offset: 0 })
-    → 后端 Storage::get_tasks_page(limit, offset)
-    → 返回 { tasks, total }，写入 crawlerStore.tasks 与 tasksTotal
+打开任务抽屉
+    → 先订阅 tasks-change 与 auto-config-change
+    → 并行 fetch tasks://<过滤>/x20x/1 与 count tasks://<过滤>
+    → 合并首页请求期间缓冲的事件
 
-用户滚动任务列表到底部
-    → TaskDrawerContent handleTasksListScroll
-    → 若 scrollTop + clientHeight >= scrollHeight - 60 且 hasMore
-    → crawlerStore.loadTasksPage(20, tasks.length)
-    → append 到 tasks，更新 tasksTotal
+触底
+    → 取当前末行 (COALESCE(start_time, 0), id)
+    → fetch tasks://<过滤>/before_<startTime>_<id>/x20x/1
+    → 按 id 去重后追加
+
+关闭任务抽屉
+    → generation 自增，作废在途请求
+    → 退订两个事件源、清空当前行
+    → 仅保留 taskDrawerStore.search
 ```
 
----
+自动配置列表采用相同生命周期，排序键换成 `(created_at, id)`。卡片虚拟列表只会挂载可见卡片，因而
+关联任务查询天然按需启动。
 
-## 2. 涉及代码文件
+## 2. PathQL 路径
 
-| 层级 | 文件路径 | 作用 |
-|------|----------|------|
-| 后端存储 | `src-tauri/kabegame-core/src/storage/tasks.rs` | `get_tasks_page(limit, offset)`，LIMIT/OFFSET 分页，返回 `(Vec<TaskInfo>, u64)` |
-| 命令 | `src-tauri/kabegame/src/commands/task.rs` | `get_tasks_page` 命令，返回 `{ tasks, total }` |
-| 前端 store | `packages/core/src/stores/crawler.ts` | `loadTasksPage`、`tasksTotal`、`loadTasks`（Android 全量） |
-| 抽屉容器 | `apps/kabegame/src/components/TaskDrawer.vue` | onMounted 调用 `loadTasksPage(20, 0)`；清除完成后重置为第一页 |
-| 抽屉内容 | `packages/core/src/components/task/TaskDrawerContent.vue` | 触底检测、`loadMoreTasks`、`displayTaskCount`、`hasMore` |
+| 用途 | 路径 | 说明 |
+| --- | --- | --- |
+| 状态徽章 | `tasks://status` | `list` 一次 `GROUP BY status`，数量在 child `meta.count` |
+| 任务首页 | `tasks://x20x/1` | 按 `COALESCE(start_time,0) DESC, id DESC` |
+| 任务下一页 | `tasks://before_<ts>_<id>/x20x/1` | keyset 游标，不使用 OFFSET |
+| 任务搜索 | `tasks://~any/plugin/<id>/~or/plugin_search/<q>/~end/x20x/1` | 本地化插件名先在前端解析成插件 id，再与 id 子串分支做 OR |
+| 配置关联任务 | `tasks://run_config/<configId>/x20x/1` | 走 `idx_tasks_run_config` |
+| 自动配置首页 | `run_configs://x20x/1` | 按 `created_at DESC, id DESC` |
+| 已启用配置 | `run_configs://enabled/x20x/1` | 过滤段可与 `plugin/<id>` 任意顺序叠加 |
+| 插件计数 | `run_configs://[enabled/]plugin` | 按插件 `GROUP BY`，数量在 `meta.count` |
+| 单行 | `tasks://id_<id>` / `run_configs://id_<id>` | 详情、事件补行和命令写后返回使用 |
+
+段值必须使用 `@kabegame/pathql-client` 的 `encodeSeg`；它执行 PathQL 引擎层转义，不是 URL 编码。
+任务根查询 `LEFT JOIN run_configs` 并带出 `run_config_name`，因此一页任务不需要逐项查配置。配置已删除时
+该列为 `NULL`。
+
+游标必须取已加载列表的最后一行，并始终保留 `id` 作为同时间戳的稳定次序。列表开启期间若有新行插入
+头部或旧行删除，下一页仍从旧末行继续，不会产生 OFFSET 翻页的重复和漏行。
+
+## 3. 事件、计数与写操作
+
+`services/tasks.ts` 和 `services/runConfigs.ts` 分别维护一个底层 `listen`。首个调用方订阅时建立监听，
+最后一个调用方退订时释放；页面和卡片只获得轻量订阅函数，不会各自创建 IPC 监听。
+
+- `TaskAdded`：事件只提供 id 语义；列表通过 `tasks://id_<id>` 重读完整行，匹配当前过滤后按 id 插入。
+  这是新行进入已打开列表的**唯一入口**（不认识的任务的 `TaskChanged` 会被忽略，不再补拉），所以后端每个
+  建任务入口都必须在写库后发 `emit_task_added`：手动 `start_task` 与调度器 `schedule_trigger_once`
+  （定时触发与漏跑补跑共用）都已遵守，新增入口照此办理。
+- `TaskChanged`：只补丁已加载行；纯进度保持单调并做 100ms 节流，终态完成强制为 100%。
+- `TaskDeleted`：已加载行立即移除。
+- `configchange` / `configdelete`：任务列表开启期间更新同 `runConfigId` 行的配置名，删除后置空。
+- 自动配置列表收到 `configadd` / `configchange` 时按 id 重读该行：不再匹配过滤就移除；匹配且未加载时，
+  只有比末行新、**或列表已加载完（没有下一页）**才插入，否则留给后续游标翻页取回，避免重复。例如在
+  「仅启用」过滤下从别处重新启用一条较旧的配置，已加载完的列表必须把它补回，计数与行才一致。首页返回后
+  先按首页判定有无下一页，再合并缓冲事件。
+
+`taskDrawerStore` 是唯一常驻任务订阅者。首次创建时读取一次 `tasks://status`；新增、删除或状态变化后
+300ms 去抖重拉。徽章、终态任务数和清除确认文案均读这份计数，不依赖当前已加载页。
+
+用户直接触发的写操作在命令返回时立即应用本地结果：调整任务并发返回任务行；清除完成任务返回
+`{ taskIds, count }`；新建、复制、编辑或切换定时返回配置行；删除成功即移除。对应广播仍保留给其它
+视图，当前视图再次收到时按 id 幂等合并。停止任务是异步收尾的例外，状态只由后续 `TaskChanged`
+推进。
+
+## 4. 涉及代码
+
+| 层级 | 文件 | 职责 |
+| --- | --- | --- |
+| Provider DSL | `src-tauri/kabegame-core/src/providers/dsl/{tasks,run_configs}/` | 过滤、分组计数、游标和分页 |
+| 服务 | `apps/kabegame/src/services/{tasks,runConfigs}.ts` | 路径构造、行规范化、单例事件订阅 |
+| 分页状态 | `apps/kabegame/src/composables/{usePagedTaskList,usePagedRunConfigs}.ts` | 生命周期、事件合并、去重与在途请求作废 |
+| 徽章 | `apps/kabegame/src/stores/taskDrawer.ts` | 状态计数与搜索词 |
+| 页面 | `TaskDrawer.vue`、`AutoConfigs.vue`、`TaskDetail.vue` | 各自持有当前可见数据并立即应用写结果 |
 | 重跑弹窗 store | `apps/kabegame/src/stores/collectDialogs.ts` | 驱动网页收集与本地导入的全局弹窗宿主，并传递任务参数快照 |
 
----
-
-## 3. 约定
-
-- 每页固定 **20** 条（`TASK_PAGE_SIZE`）
-- 后端按 `start_time DESC` 排序，新任务在前
-- Android 1s 轮询仍调用 `loadTasks()` 全量，会覆盖分页结果（需保证运行中任务状态同步）
-
----
-
-## 4. 任务右键菜单
+## 5. 任务右键菜单
 
 任务行右键菜单依次提供：停止（仅 `running` / `waiting_downloads`）、详情、图片、日志、
 再次执行（按平台与任务类型判断）、保存为配置、删除。详情与日志复用

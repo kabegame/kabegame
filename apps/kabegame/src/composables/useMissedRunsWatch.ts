@@ -43,7 +43,6 @@ export function useMissedRunsWatch() {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingReason: RecheckReason | null = null;
   let checking = false;
-  let configsReadyAwaited = false;
   let unlistenFocus: (() => void) | null = null;
   let onVisibility: (() => void) | null = null;
 
@@ -52,10 +51,6 @@ export function useMissedRunsWatch() {
     if (checking) return;
     checking = true;
     try {
-      if (!configsReadyAwaited) {
-        await crawlerStore.runConfigsReady;
-        configsReadyAwaited = true;
-      }
       const items = await crawlerStore.getMissedRuns();
       if (!items.length) return;
       missedRunItems.value = items;

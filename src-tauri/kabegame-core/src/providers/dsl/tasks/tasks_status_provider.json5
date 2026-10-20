@@ -1,0 +1,16 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_status_provider",
+    "properties": {
+        "status": { "type": "string", "default": "pending", "optional": false }
+    },
+    "query": { "where": "tasks.status = ${properties.status}" },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "tasks_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

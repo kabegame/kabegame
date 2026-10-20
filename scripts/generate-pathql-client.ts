@@ -77,8 +77,14 @@ function main(): void {
     else usageError(`未知参数: ${arg}`);
   }
 
-  let cli = cliBinary("release");
-  if (!isExecutable(cli)) die(`未找到 ${cli}`);
+  let cli: string;
+  if (skipBuild) {
+    cli = resolveExistingCli();
+  } else {
+    run("deno", ["task", "b", "-c", "kabegame-cli"]);
+    cli = cliBinary("debug");
+    if (!isExecutable(cli)) die(`构建完成后仍未找到 ${cli}`);
+  }
 
   console.log(`==> 生成 ${OUT_RELATIVE}（${path.relative(ROOT, cli)}）`);
   run(cli, ["pathql", "generate", "--target", "typescript", "--out", OUT_RELATIVE]);

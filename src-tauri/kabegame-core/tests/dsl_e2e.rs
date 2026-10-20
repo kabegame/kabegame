@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 use kabegame_core::providers::programmatic::plugin_resource::register_plugin_resource_provider;
-use kabegame_core::storage::{Album, ImageInfo, SurfRecord, TaskInfo};
+use kabegame_core::storage::{Album, ImageInfo, SurfRecord};
 use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{LoaderType, ProviderRuntime, Source};
@@ -294,7 +294,27 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             failed_count INTEGER NOT NULL DEFAULT 0,
             start_time INTEGER,
             end_time INTEGER,
-            error TEXT
+            error TEXT,
+            max_concurrent_downloads INTEGER,
+            is_dry_run INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE run_configs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            plugin_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            output_dir TEXT,
+            output_album_id TEXT,
+            user_config TEXT,
+            http_headers TEXT,
+            created_at INTEGER NOT NULL,
+            schedule_enabled INTEGER NOT NULL DEFAULT 0,
+            schedule_spec TEXT,
+            schedule_planned_at INTEGER,
+            schedule_last_run_at INTEGER,
+            max_concurrent_downloads INTEGER,
+            is_dry_run INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE task_failed_images (
             id INTEGER PRIMARY KEY,
@@ -334,7 +354,11 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             (1, 'source'), (2, 'table'), (3, 'tags'), (4, 'a');
         INSERT INTO metadata_search_terms(metadata_id, term_id) VALUES
             (1, 1), (1, 2), (1, 3), (1, 4);
-        INSERT INTO tasks VALUES
+        INSERT INTO tasks (
+            id, plugin_id, output_dir, user_config, http_headers, output_album_id, run_config_id,
+            trigger_source, status, progress, deleted_count, dedup_count, success_count, failed_count,
+            start_time, end_time, error
+        ) VALUES
             (
                 '22222222-2222-2222-2222-222222222222',
                 'pixiv',
@@ -584,6 +608,14 @@ fn build_runtime_with(conn: Arc<Mutex<Connection>>) -> Arc<ProviderRuntime> {
         .unwrap();
     runtime
         .register_schema(
+            "run_configs",
+            "run_configs",
+            "kabegame",
+            "run_configs_root_provider",
+        )
+        .unwrap();
+    runtime
+        .register_schema(
             "fail-images",
             "task_failed_images",
             "kabegame",
@@ -652,6 +684,7 @@ fn schema_registration_smoke_and_schemaless_paths_fail() {
             "fail-images".to_string(),
             "images".to_string(),
             "plugin".to_string(),
+            "run_configs".to_string(),
             "surf_records".to_string(),
             "tasks".to_string()
         ]
@@ -690,15 +723,17 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
         .into_iter()
         .next()
         .unwrap();
-    let task: TaskInfo = serde_json::from_value(task).unwrap();
-    assert_eq!(task.id, TASK_A_ID);
+    assert_eq!(task["id"], TASK_A_ID);
     assert_eq!(
-        task.user_config
-            .as_ref()
-            .and_then(|config| config.get("quality"))
-            .and_then(|value| value.as_str()),
+        task["user_config"]
+            .as_str()
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .and_then(|config| config.get("quality").cloned())
+            .and_then(|value| value.as_str().map(str::to_string))
+            .as_deref(),
         Some("high")
     );
+    assert_eq!(task["is_dry_run"], 0);
 
     let failed = runtime
         .fetch("fail-images://id_1")
@@ -739,6 +774,123 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
     assert!(runtime
         .count("images://gallery/hide/surf/pixiv.test")
         .is_ok());
+}
+
+#[test]
+fn tasks_filters_status_counts_and_cursor_pages_are_consistent() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO run_configs (
+                id, name, plugin_id, url, created_at, schedule_enabled, is_dry_run
+            ) VALUES ('cfg-a', 'Config A', 'pixiv', '', 100, 1, 0);
+            INSERT INTO tasks (
+                id, plugin_id, run_config_id, trigger_source, status, progress, deleted_count,
+                dedup_count, success_count, failed_count, start_time, max_concurrent_downloads, is_dry_run
+            ) VALUES
+                ('task-5', 'pixiv',  'cfg-a', 'scheduled', 'running',   20, 0, 0, 1, 0, 50, 3, 0),
+                ('task-4', 'yande',  NULL,    'manual',    'pending',    0, 0, 0, 0, 0, 40, NULL, 0),
+                ('task-3', 'konachan', NULL,  'manual',    'failed',    50, 0, 0, 1, 1, 30, NULL, 1),
+                ('task-2', 'pixiv',  'cfg-a', 'scheduled', 'completed',100, 0, 0, 2, 0, 20, 2, 0),
+                ('task-1', 'other',  NULL,    'manual',    'canceled',  10, 0, 0, 0, 0, 10, NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn);
+
+    let status_counts = listed_counts(&runtime, "tasks://status");
+    assert!(status_counts.contains(&("completed".to_string(), 2)));
+    assert!(status_counts.contains(&("running".to_string(), 1)));
+
+    assert_eq!(runtime.count("tasks://plugin/pixiv").unwrap(), 3);
+    assert_eq!(runtime.count("tasks://plugin_search/AN").unwrap(), 2);
+    assert_eq!(runtime.count("tasks://run_config/cfg-a").unwrap(), 2);
+    assert_eq!(
+        runtime
+            .count("tasks://~any/plugin/pixiv/~or/plugin_search/yan/~end")
+            .unwrap(),
+        4
+    );
+
+    let all = ids(runtime.fetch("tasks://all").unwrap());
+    let first = runtime.fetch("tasks://x2x/1").unwrap();
+    let last = first.last().unwrap();
+    let cursor = format!(
+        "tasks://before_{}_{}",
+        last["start_time"].as_i64().unwrap_or(0),
+        pathql_rs::escape_path_segment(last["id"].as_str().unwrap())
+    );
+    let mut paged = ids(first);
+    let mut next = runtime.fetch(&format!("{cursor}/x2x/1")).unwrap();
+    while !next.is_empty() {
+        let last = next.last().unwrap();
+        let next_cursor = format!(
+            "tasks://before_{}_{}",
+            last["start_time"].as_i64().unwrap_or(0),
+            pathql_rs::escape_path_segment(last["id"].as_str().unwrap())
+        );
+        paged.extend(ids(next));
+        next = runtime.fetch(&format!("{next_cursor}/x2x/1")).unwrap();
+    }
+    assert_eq!(paged, all);
+    assert_eq!(paged.iter().collect::<HashSet<_>>().len(), paged.len());
+
+    let joined = runtime.fetch("tasks://id_task-5").unwrap();
+    assert_eq!(joined[0]["run_config_name"], "Config A");
+    assert_eq!(joined[0]["max_concurrent_downloads"], 3);
+    assert_eq!(joined[0]["is_dry_run"], 0);
+}
+
+#[test]
+fn run_configs_filters_counts_and_cursor_pages_are_consistent() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO run_configs (
+                id, name, description, plugin_id, url, user_config, http_headers, created_at,
+                schedule_enabled, schedule_spec, max_concurrent_downloads, is_dry_run
+            ) VALUES
+                ('cfg-4', 'Four', NULL, 'pixiv', '', '{"q":4}', '{"A":"b"}', 40, 1,
+                 '{"mode":"daily","hour":1,"minute":2}', 4, 1),
+                ('cfg-3', 'Three', NULL, 'pixiv', '', NULL, NULL, 30, 0, NULL, NULL, 0),
+                ('cfg-2', 'Two', NULL, 'yande', '', NULL, NULL, 20, 1, NULL, NULL, 0),
+                ('cfg-1', 'One', NULL, 'other', '', NULL, NULL, 10, 0, NULL, NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn);
+
+    let one = runtime.fetch("run_configs://id_cfg-4").unwrap();
+    assert_eq!(one[0]["name"], "Four");
+    assert_eq!(runtime.count("run_configs://enabled").unwrap(), 2);
+    assert_eq!(runtime.count("run_configs://plugin/pixiv").unwrap(), 2);
+    let plugin_counts = listed_counts(&runtime, "run_configs://plugin");
+    assert!(plugin_counts.contains(&("pixiv".to_string(), 2)));
+    assert!(plugin_counts.contains(&("yande".to_string(), 1)));
+    let enabled_counts = listed_counts(&runtime, "run_configs://enabled/plugin");
+    assert!(enabled_counts.contains(&("pixiv".to_string(), 1)));
+    assert!(enabled_counts.contains(&("yande".to_string(), 1)));
+
+    let all = ids(runtime.fetch("run_configs://all").unwrap());
+    let first = runtime.fetch("run_configs://x2x/1").unwrap();
+    let last = first.last().unwrap();
+    let second = runtime
+        .fetch(&format!(
+            "run_configs://before_{}_{}/x2x/1",
+            last["created_at"].as_i64().unwrap(),
+            pathql_rs::escape_path_segment(last["id"].as_str().unwrap())
+        ))
+        .unwrap();
+    let mut paged = ids(first);
+    paged.extend(ids(second));
+    assert_eq!(paged, all);
+    assert_eq!(paged.iter().collect::<HashSet<_>>().len(), paged.len());
 }
 
 #[test]

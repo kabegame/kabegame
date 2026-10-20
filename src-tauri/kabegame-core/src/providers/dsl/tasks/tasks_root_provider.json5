@@ -2,6 +2,15 @@
     "namespace": "kabegame",
     "name": "tasks_root_provider",
     "query": {
+        "join": [
+            {
+                "kind": "LEFT",
+                "table": "run_configs",
+                "as": "task_rc",
+                "on": "task_rc.id = tasks.run_config_id",
+                "in_need": true
+            }
+        ],
         "fields": [
             { "sql": "tasks.id", "as": "id" },
             { "sql": "tasks.plugin_id", "as": "plugin_id" },
@@ -10,6 +19,7 @@
             { "sql": "tasks.http_headers", "as": "http_headers" },
             { "sql": "tasks.output_album_id", "as": "output_album_id" },
             { "sql": "tasks.run_config_id", "as": "run_config_id" },
+            { "sql": "task_rc.name", "as": "run_config_name" },
             {
                 "sql": "COALESCE(NULLIF(tasks.trigger_source, ''), 'manual')",
                 "as": "trigger_source"
@@ -22,7 +32,9 @@
             { "sql": "tasks.failed_count", "as": "failed_count" },
             { "sql": "tasks.start_time", "as": "start_time" },
             { "sql": "tasks.end_time", "as": "end_time" },
-            { "sql": "tasks.error", "as": "error" }
+            { "sql": "tasks.error", "as": "error" },
+            { "sql": "tasks.max_concurrent_downloads", "as": "max_concurrent_downloads" },
+            { "sql": "tasks.is_dry_run", "as": "is_dry_run" }
         ],
     },
     "resolve": {
@@ -31,6 +43,12 @@
             "alias": "id",
             "provider": "tasks_id_provider",
             "properties": { "task_id": "${capture[1]}" }
+        },
+        "status|plugin|plugin_search|run_config|before_.+|x[1-9][0-9]*x": {
+            "delegate": { "provider": "tasks_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
         }
     }
 }

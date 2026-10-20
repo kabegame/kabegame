@@ -1,0 +1,37 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_root_provider",
+    "query": {
+        "fields": [
+            { "sql": "run_configs.id", "as": "id" },
+            { "sql": "run_configs.name", "as": "name" },
+            { "sql": "run_configs.description", "as": "description" },
+            { "sql": "run_configs.plugin_id", "as": "plugin_id" },
+            { "sql": "run_configs.url", "as": "url" },
+            { "sql": "run_configs.output_dir", "as": "output_dir" },
+            { "sql": "run_configs.output_album_id", "as": "output_album_id" },
+            { "sql": "run_configs.user_config", "as": "user_config" },
+            { "sql": "run_configs.http_headers", "as": "http_headers" },
+            { "sql": "run_configs.created_at", "as": "created_at" },
+            { "sql": "run_configs.schedule_enabled", "as": "schedule_enabled" },
+            { "sql": "run_configs.schedule_spec", "as": "schedule_spec" },
+            { "sql": "run_configs.schedule_planned_at", "as": "schedule_planned_at" },
+            { "sql": "run_configs.schedule_last_run_at", "as": "schedule_last_run_at" },
+            { "sql": "run_configs.max_concurrent_downloads", "as": "max_concurrent_downloads" },
+            { "sql": "run_configs.is_dry_run", "as": "is_dry_run" }
+        ]
+    },
+    "resolve": {
+        "all": { "provider": "run_configs_all_provider" },
+        "id_([^/]+)": {
+            "provider": "run_configs_id_provider",
+            "properties": { "config_id": "${capture[1]}" }
+        },
+        "plugin|enabled|before_.+|x[1-9][0-9]*x": {
+            "delegate": { "provider": "run_configs_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

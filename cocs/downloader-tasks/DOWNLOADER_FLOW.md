@@ -504,5 +504,5 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 两个跳过点都调用 `Task::record_dry_run_skip`：**复用 `tasks.dedup_count`** 累加跳过次数，并经
 `emit_task_image_counts` 推送计数 diff，所以不新增列、事件或前端计数通路。空跑任务的成功 / 失败 /
 删除计数恒为 0，`dedup_count` 在空跑下语义为「跳过」：任务卡片、任务详情（`TaskCountsInline`）与运行参数
-只显示这一个数字并用「空跑跳过」文案（`tasks.dryRunSkippedCount` 等），CLI 结束行为「完成 空跑跳过 N 个」。
+只显示这一个数字并用「空跑跳过」文案（`tasks.dryRunSkippedCount` 等），CLI 进度条显示「<插件> · 空跑跳过 N」，结束行为「完成 空跑跳过 N 个」。
 下载排空会立即结束，任务仍正常进入 Completed。

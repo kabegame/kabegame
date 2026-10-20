@@ -743,6 +743,7 @@ async fn data_import_image(args: ImportImageArgs, via: Via) -> Result<(), String
         "local-import",
         &mut events,
         !console::user_attended(),
+        false,
         move |task_id| async move { cancel_backend.cancel_task(&task_id).await },
     )
     .await;
@@ -977,6 +978,7 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
         &output.plugin_id,
         &mut events,
         plain,
+        args.dry_run,
         move |task_id| async move { cancel_backend.cancel_task(&task_id).await },
     )
     .await;
@@ -1050,6 +1052,7 @@ async fn render_task<C, Fut>(
         std::sync::Arc<kabegame_core::ipc::events::AppEvent>,
     >,
     plain: bool,
+    dry_run: bool,
     cancel: C,
 ) -> TaskOutcome
 where
@@ -1081,6 +1084,11 @@ where
 
     let refresh = |bar: &ProgressBar, progress: f64, downloaded: u64, failed: u64, dedup: u64| {
         bar.set_position((progress * 100.0) as u64);
+        if dry_run {
+            // 空跑复用去重计数表示「跳过」，其余计数恒为 0
+            bar.set_message(format!("{plugin_id} · 空跑跳过 {dedup}"));
+            return;
+        }
         let mut msg = format!("{plugin_id} · ↓{downloaded}");
         if failed > 0 {
             msg.push_str(&format!(

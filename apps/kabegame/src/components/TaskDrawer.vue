@@ -23,6 +23,11 @@
     <TaskDrawerContent
       ref="drawerContentRef"
       :tasks="tasks"
+      :total="total"
+      :has-more="hasMore"
+      :loading="loading"
+      :show-loading="showLoading"
+      :search="taskDrawerStore.search"
       :plugins="plugins"
       :active="modal.isOpen.value"
       :can-open-webview="canOpenWebview"
@@ -32,6 +37,9 @@
       @cancel-task="handleStopTaskById"
       @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu"
+      @load-more="loadMore"
+      @update:search="taskDrawerStore.search = $event"
+      @task-patched="(task) => patch(task.id, task)"
     />
   </AndroidDrawer>
   <el-drawer
@@ -50,6 +58,11 @@
     <TaskDrawerContent
       ref="drawerContentRef"
       :tasks="tasks"
+      :total="total"
+      :has-more="hasMore"
+      :loading="loading"
+      :show-loading="showLoading"
+      :search="taskDrawerStore.search"
       :plugins="plugins"
       :active="modal.isOpen.value"
       :can-open-webview="canOpenWebview"
@@ -59,6 +72,9 @@
       @cancel-task="handleStopTaskById"
       @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu"
+      @load-more="loadMore"
+      @update:search="taskDrawerStore.search = $event"
+      @task-patched="(task) => patch(task.id, task)"
     />
   </el-drawer>
 
@@ -124,10 +140,12 @@ import { useBatteryOptimizationStore } from "@/stores/batteryOptimization";
 import { useUiStore } from "@/stores/ui";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { useTaskRerun } from "@/composables/useTaskRerun";
+import { usePagedTaskList } from "@/composables/usePagedTaskList";
+import { taskSearchPath } from "@/services/tasks";
+import { useTaskDrawerStore } from "@/stores/taskDrawer";
 
 interface Props {
   modelValue: boolean;
-  tasks: CrawlTask[];
 }
 
 interface Emits {
@@ -144,6 +162,28 @@ const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
+const taskDrawerStore = useTaskDrawerStore();
+
+const normalizedSearch = computed(() => taskDrawerStore.search.trim().toLowerCase());
+const matchingPluginIds = computed(() => {
+  const query = normalizedSearch.value;
+  if (!query) return [];
+  return pluginStore.plugins
+    .filter((plugin) => pluginStore.pluginLabel(plugin.id).toLowerCase().includes(query))
+    .map((plugin) => plugin.id);
+});
+const taskList = usePagedTaskList({
+  basePath: () => taskSearchPath(taskDrawerStore.search, matchingPluginIds.value),
+  matches: (task) => {
+    const query = normalizedSearch.value;
+    return (
+      !query ||
+      task.pluginId.toLowerCase().includes(query) ||
+      pluginStore.pluginLabel(task.pluginId).toLowerCase().includes(query)
+    );
+  },
+});
+const { items: tasks, total, hasMore, loading, showLoading, loadMore, patch, remove, start, stop } = taskList;
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(
@@ -156,6 +196,8 @@ const batteryStore = useBatteryOptimizationStore();
 const { isOptimized } = storeToRefs(batteryStore);
 
 watch(modal.isOpen, (open) => {
+  if (open) void start();
+  else stop();
   if (open && IS_ANDROID) {
     void batteryStore.checkAndPromptIfNeeded();
   }
@@ -186,12 +228,7 @@ const plugins = computed(() => pluginStore.plugins);
 // 网页收集的后端是每次任务的参数，不能只看插件静态 scriptType
 const canOpenWebview = (task: Parameters<typeof canOpenTaskWebview>[0]) =>
   canOpenTaskWebview(task, pluginStore.plugins);
-const nonRunningTasksCount = computed(
-  () =>
-    props.tasks.filter(
-      (task) => task.status !== "running" && task.status !== "waiting_downloads" && task.status !== "pending",
-    ).length,
-);
+const nonRunningTasksCount = computed(() => taskDrawerStore.finishedTasksCount);
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 
@@ -214,7 +251,7 @@ function trackTaskDrawerAction(action: "view_images" | "delete_task", task: any)
 // 右键菜单（由 TaskDrawerContent 转发）
 const openTaskContextMenu = (payload: { x: number; y: number; task: { id: string } }) => {
   // core 抽屉组件只认宽松的 ScriptTask，这里按 id 取回完整的 CrawlTask
-  const task = props.tasks.find((t) => t.id === payload.task.id);
+  const task = tasks.value.find((t) => t.id === payload.task.id);
   if (!task) return;
   contextMenuTask.value = task;
   contextMenuPos.value = { x: payload.x, y: payload.y };
@@ -317,11 +354,26 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("click", handleGlobalClick);
+  if (searchTimer) clearTimeout(searchTimer);
 });
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => taskDrawerStore.search,
+  () => {
+    if (!modal.isOpen.value) return;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      searchTimer = null;
+      stop();
+      void start();
+    }, 250);
+  },
+);
 
 /** 抽屉叉号已在 popconfirm 里确认过，这里直接停止 */
 const handleStopTaskById = async (taskId: string) => {
-  const task = props.tasks.find((t) => t.id === taskId);
+  const task = tasks.value.find((t) => t.id === taskId);
   if (!task) return;
   try {
     await crawlerStore.stopTask(task.id);
@@ -343,7 +395,7 @@ const handleCancelTaskById = async (taskId: string) => {
 };
 
 const handleDeleteTaskById = async (taskId: string) => {
-  const task = props.tasks.find((t) => t.id === taskId);
+  const task = tasks.value.find((t) => t.id === taskId);
   if (!task) return;
   // 运行中的任务须先停止，抽屉不再提供「停止并删除」
   if (task.status === "running" || task.status === "waiting_downloads") {
@@ -355,6 +407,8 @@ const handleDeleteTaskById = async (taskId: string) => {
   try {
     await ElMessageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
     await crawlerStore.deleteTask(task.id);
+    remove(task.id);
+    await taskDrawerStore.refreshCounts();
     ElMessage.success(t("tasks.taskDeleted"));
   } catch (error) {
     if (error !== "cancel") {
@@ -364,7 +418,7 @@ const handleDeleteTaskById = async (taskId: string) => {
 };
 
 const handleOpenTaskImagesById = (taskId: string) => {
-  const task = props.tasks.find((t) => t.id === taskId);
+  const task = tasks.value.find((t) => t.id === taskId);
   if (!task) return;
   trackTaskDrawerAction("view_images", task);
   if (route.name === "TaskDetail") {
@@ -387,8 +441,7 @@ const handleOpenTaskScheduleConfig = (task: any) => {
     ElMessage.warning(t("autoConfig.configDeleted"));
     return;
   }
-  const runConfig = crawlerStore.runConfigById(runConfigId);
-  if (!runConfig) {
+  if (task.runConfigName == null) {
     ElMessage.warning(t("autoConfig.configDeleted"));
     return;
   }
@@ -402,10 +455,9 @@ const handleDeleteAllTasks = async () => {
   }
   if (await guardDesktopOnly("deleteTask", { needSuper: true })) return;
   try {
-    const pendingCount = props.tasks.filter((t) => t.status === "pending").length;
-    const runningCount = props.tasks.filter(
-      (task) => task.status === "running" || task.status === "waiting_downloads",
-    ).length;
+    const pendingCount = taskDrawerStore.statusCounts.pending ?? 0;
+    const runningCount =
+      (taskDrawerStore.statusCounts.running ?? 0) + (taskDrawerStore.statusCounts.waiting_downloads ?? 0);
     const preservedCount = pendingCount + runningCount;
     const deletableCount = nonRunningTasksCount.value;
     const msg =
@@ -419,9 +471,10 @@ const handleDeleteAllTasks = async () => {
     await ElMessageBox.confirm(msg, t("tasks.clearAllTasksTitle"), { type: "warning" });
 
     // 调用后端命令批量清除
-    const clearedCount = await invoke<number>("clear_finished_tasks");
-    crawlerStore.applyKeepOnlyPendingAndRunningTasks();
-    ElMessage.success(t("tasks.tasksCleared", { count: clearedCount }));
+    const result = await invoke<{ taskIds: string[]; count: number }>("clear_finished_tasks");
+    for (const taskId of result.taskIds) remove(taskId);
+    await taskDrawerStore.refreshCounts();
+    ElMessage.success(t("tasks.tasksCleared", { count: result.count }));
   } catch (error) {
     if (error !== "cancel") {
       console.error("清除任务失败:", error);

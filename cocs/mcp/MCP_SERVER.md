@@ -56,6 +56,8 @@ restart，失败返回错误且不写入新值。应用启动恢复失败时会�
 
 - 声明预置资源、18 条资源模板和 5 个工具。
 - 将 `images://`、`albums://`、`tasks://`、`surf_records://`、`plugin://` 读取交给 Provider Runtime。
+  `tasks://` 除 `all` / `id_<id>` 外，还支持可组合过滤段（`status/`、`plugin/`、`plugin_search/`、`run_config/`）、
+  游标段 `before_<startTime>_<id>` 与 `x<N>x/<页>`；`tasks://status` 的列举在 `meta.count` 里给出各状态计数。
 - 对返回行反序列化、单条/列表形态、插件二进制/文本/PathQL provider 子资源做协议适配。
 - 在 `resources/read` 和 `list_pathql_entry` 前执行 capability 检查。
 - 对未显式分页的大型 images 集合执行 MCP 专用分页护栏。
@@ -121,7 +123,8 @@ capability；它发现哪个 scheme/path，就受该读能力约束。
 时才放行。结果是：
 
 - 关闭全部 images read 后，`images://` 裸根也拒绝。
-- `fail-images://` 等未注册 scheme 没有同类 read capability，直接拒绝。
+- `fail-images://`、`run_configs://` 等未注册 scheme 没有同类 read capability，直接拒绝。
+  `run_configs://` 只供前端自动配置页与弹窗按需查询；要对 MCP 开放须先新增 read capability。
 - 部分 images read 仍开启时，`images://` 裸根可用于发现；进入具体路径后再按精确 capability 判定。
 
 这项规则同时约束资源读取和发现工具，不能只在 `list_resources` / `list_tools` 的展示层过滤。

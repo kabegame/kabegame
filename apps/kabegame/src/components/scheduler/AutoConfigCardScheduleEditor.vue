@@ -112,6 +112,7 @@ import { useCrawlerStore } from "@/stores/crawler";
 import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 
 const props = defineProps<{ config: RunConfig }>();
+const emit = defineEmits<{ (e: "updated", config: RunConfig): void }>();
 
 const { t } = useI18n();
 const crawlerStore = useCrawlerStore();
@@ -247,7 +248,7 @@ function onIntervalFieldsChange() {
 
 async function persist() {
   if (syncing.value || !props.config.scheduleEnabled) return;
-  const base = crawlerStore.runConfigs.find((c) => c.id === props.config.id) ?? props.config;
+  const base = props.config;
   if (saving.value) return;
   saving.value = true;
   try {
@@ -291,7 +292,7 @@ async function persist() {
         scheduleSpec,
       };
     }
-    await crawlerStore.updateRunConfig(next);
+    emit("updated", await crawlerStore.updateRunConfig(next));
   } catch (e) {
     ElMessage.error(t("common.operationFailed"));
     console.error(e);

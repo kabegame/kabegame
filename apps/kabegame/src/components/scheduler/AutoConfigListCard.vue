@@ -56,6 +56,7 @@
             config.scheduleSpec?.mode === 'weekly'
           "
           :config="config"
+          @updated="emit('config-updated', $event)"
         />
         <ScheduleProgressBar :config="config" />
       </div>
@@ -116,6 +117,7 @@ const emit = defineEmits<{
   (e: "more-command", cmd: string, cfg: RunConfig): void;
   (e: "open-task-images", taskId: string): void;
   (e: "open-task-log", taskId: string): void;
+  (e: "config-updated", config: RunConfig): void;
 }>();
 
 const { t, locale } = useI18n();

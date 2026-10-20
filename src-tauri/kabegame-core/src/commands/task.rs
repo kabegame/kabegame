@@ -1,5 +1,6 @@
 use crate::emitter::GlobalEmitter;
 use crate::plugin::{PluginManager, VarDefinition, VarOption};
+use crate::providers::query::query_fetch;
 use crate::scheduler::Scheduler;
 use crate::storage::{RunConfig, Storage, TaskInfo, TaskStatus};
 use serde::{Deserialize, Serialize};
@@ -490,7 +491,14 @@ pub fn set_task_max_concurrent_downloads(
 ) -> Result<Value, String> {
     let limit = validate_task_max_downloads(max_concurrent_downloads)?;
     crate::crawler::TaskScheduler::global().set_task_max_concurrent_downloads(&task_id, limit)?;
-    Ok(Value::Null)
+    GlobalEmitter::global().emit_task_changed(
+        &task_id,
+        serde_json::json!({ "maxConcurrentDownloads": limit }),
+    );
+    Ok(query_fetch(&format!("tasks://id_{task_id}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null))
 }
 
 pub fn delete_task(task_id: String) -> Result<Value, String> {
@@ -575,10 +583,13 @@ pub fn delete_task_failed_image(failed_id: i64) -> Result<Value, String> {
 pub async fn add_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
-    let result = Storage::global().add_run_config(run_config)?;
+    Storage::global().add_run_config(run_config)?;
     let _ = Scheduler::global().reload_config(&config_id).await;
     GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
-    serde_json::to_value(result).map_err(|e| e.to_string())
+    Ok(query_fetch(&format!("run_configs://id_{config_id}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null))
 }
 
 pub async fn update_run_config(config: Value) -> Result<Value, String> {
@@ -587,7 +598,10 @@ pub async fn update_run_config(config: Value) -> Result<Value, String> {
     Storage::global().update_run_config(run_config)?;
     let _ = Scheduler::global().reload_config(&config_id).await;
     GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
-    Ok(Value::Null)
+    Ok(query_fetch(&format!("run_configs://id_{config_id}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null))
 }
 
 pub async fn delete_run_config(config_id: String) -> Result<Value, String> {
@@ -619,7 +633,7 @@ pub fn clear_finished_tasks() -> Result<Value, String> {
     if !task_ids.is_empty() {
         GlobalEmitter::global().emit_images_change("change", &[], Some(&task_ids), None, None);
     }
-    serde_json::to_value(count).map_err(|e| e.to_string())
+    Ok(serde_json::json!({ "taskIds": task_ids, "count": count }))
 }
 
 pub async fn copy_run_config(config_id: String) -> Result<Value, String> {
@@ -627,7 +641,10 @@ pub async fn copy_run_config(config_id: String) -> Result<Value, String> {
     let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
     let _ = Scheduler::global().reload_config(&new_id).await;
     GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
-    serde_json::to_value(copied).map_err(|e| e.to_string())
+    Ok(query_fetch(&format!("run_configs://id_{}", copied.id))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null))
 }
 
 pub fn get_run_config(config_id: String) -> Result<Value, String> {

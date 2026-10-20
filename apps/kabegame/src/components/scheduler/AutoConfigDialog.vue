@@ -186,7 +186,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@/env";
@@ -207,6 +207,8 @@ import { coerceOptionsVarsToVisibleChoices, visibleVarDefs } from "@/utils/plugi
 import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/utils/pluginVarForm";
 import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { fetchRunConfig, subscribeRunConfigEvents } from "@/services/runConfigs";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 const { t } = useI18n();
 const crawlerStore = useCrawlerStore();
@@ -218,6 +220,10 @@ const { form, formRef, pluginVars, loadPluginVarDefs, loadPluginVars } = usePlug
 const panelMode = ref<"view" | "edit">("view");
 const detailRef = ref<InstanceType<typeof AutoConfigDetailContent> | null>(null);
 const scheduleSectionRef = ref<HTMLElement | null>(null);
+const config = ref<RunConfig | null>(null);
+const configLoading = ref(false);
+let configGeneration = 0;
+let unsubscribeConfig: (() => void) | null = null;
 
 const name = ref("");
 const description = ref("");
@@ -243,12 +249,44 @@ watch(
   (v) => (v ? modal.open() : modal.close()),
   { immediate: true },
 );
+onUnmounted(() => unsubscribeConfig?.());
 
-const viewConfig = computed(() => {
+const viewConfig = computed(() => config.value);
+
+async function loadExistingConfig() {
   const id = dialogStore.configId;
-  if (!id) return null;
-  return crawlerStore.runConfigById(id) ?? null;
-});
+  const generation = ++configGeneration;
+  configLoading.value = true;
+  const loaded = id ? await fetchRunConfig(id) : null;
+  if (generation !== configGeneration) return;
+  config.value = loaded;
+  configLoading.value = false;
+}
+
+watch(
+  () => [dialogStore.visible, dialogStore.configId, dialogStore.isCreate] as const,
+  ([visible, id, create]) => {
+    unsubscribeConfig?.();
+    unsubscribeConfig = null;
+    configGeneration++;
+    if (!visible || create || !id) {
+      config.value = null;
+      configLoading.value = false;
+      return;
+    }
+    void loadExistingConfig();
+    unsubscribeConfig = subscribeRunConfigEvents((event) => {
+      if (event.configId !== id) return;
+      if (event.reason === "configdelete") {
+        config.value = null;
+        configLoading.value = false;
+      } else {
+        void loadExistingConfig();
+      }
+    });
+  },
+  { immediate: true },
+);
 
 /** 查看态展示画册名；解析失败退回 id */
 watch(
@@ -273,7 +311,7 @@ const showScheduleDetailFields = computed(() => {
   if (scheduleEnabled.value) return true;
   if (dialogStore.isCreate) return false;
   const id = dialogStore.configId;
-  const c = id ? crawlerStore.runConfigById(id) : undefined;
+  const c = id ? config.value : undefined;
   return (
     c?.scheduleSpec?.mode === "interval" || c?.scheduleSpec?.mode === "daily" || c?.scheduleSpec?.mode === "weekly"
   );
@@ -287,7 +325,8 @@ const showMissing = computed(
     !dialogStore.isCreate &&
     panelMode.value === "view" &&
     dialogStore.configId &&
-    !viewConfig.value,
+    !viewConfig.value &&
+    !configLoading.value,
 );
 
 const dialogTitle = computed(() => {
@@ -420,7 +459,7 @@ const buildScheduleFields = (): Pick<
       };
     }
     const id = dialogStore.configId;
-    const cur = id ? crawlerStore.runConfigById(id) : undefined;
+    const cur = id ? config.value : undefined;
     const curSpec = cur?.scheduleSpec;
     if (!cur || !curSpec || (curSpec.mode !== "interval" && curSpec.mode !== "daily" && curSpec.mode !== "weekly")) {
       return {
@@ -512,7 +551,7 @@ const editScheduleProgressConfig = computed((): RunConfig | null => {
   if (panelMode.value !== "edit" || dialogStore.isCreate || !scheduleEnabled.value) return null;
   const id = dialogStore.configId;
   if (!id) return null;
-  const base = crawlerStore.runConfigById(id);
+  const base = config.value;
   if (!base) return null;
   const draft = buildScheduleFields();
   return {
@@ -570,7 +609,6 @@ watch(
   () => [dialogStore.visible, dialogStore.openGeneration] as const,
   async ([vis]) => {
     if (!vis) return;
-    await crawlerStore.runConfigsReady;
     const create = dialogStore.isCreate;
     const id = dialogStore.configId;
     const initPanel = dialogStore.initialPanel;
@@ -580,7 +618,8 @@ watch(
     if (create) {
       resetCreateForm();
     } else if (panelMode.value === "edit" && id) {
-      const cfg = crawlerStore.runConfigById(id);
+      if (configLoading.value) await loadExistingConfig();
+      const cfg = config.value;
       if (cfg) await loadFromConfig(cfg);
     }
     await nextTick();
@@ -601,7 +640,7 @@ function onDialogClosed() {
 
 const enterEdit = async () => {
   const id = dialogStore.configId;
-  const cfg = id ? crawlerStore.runConfigById(id) : null;
+  const cfg = id ? config.value : null;
   if (!cfg) {
     ElMessage.error(t("autoConfig.configDeleted"));
     return;
@@ -667,7 +706,7 @@ const handleSave = async () => {
   };
 
   if (dialogStore.isCreate) {
-    await crawlerStore.addRunConfig(payload);
+    config.value = await crawlerStore.addRunConfig(payload);
     if (scheduleEnabled.value) {
       ElMessage.success(t("autoConfig.keepRunningHint"));
     } else {
@@ -678,13 +717,13 @@ const handleSave = async () => {
   }
 
   const id = String(dialogStore.configId || "");
-  const current = crawlerStore.runConfigs.find((item) => item.id === id);
+  const current = config.value?.id === id ? config.value : null;
   if (!current) {
     ElMessage.error(t("autoConfig.configDeleted"));
     dialogStore.close();
     return;
   }
-  await crawlerStore.updateRunConfig({
+  config.value = await crawlerStore.updateRunConfig({
     ...current,
     ...payload,
   });
@@ -703,7 +742,6 @@ async function copyFullJson() {
   const text = JSON.stringify(cfg, null, 2);
   try {
     if (!IS_WEB) {
-      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
     } else {
       await navigator.clipboard.writeText(text);
