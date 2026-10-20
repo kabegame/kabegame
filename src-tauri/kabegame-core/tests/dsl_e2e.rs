@@ -316,6 +316,7 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             max_concurrent_downloads INTEGER,
             is_dry_run INTEGER NOT NULL DEFAULT 0
         );
+        CREATE INDEX idx_tasks_run_config ON tasks(run_config_id, start_time DESC);
         CREATE TABLE task_failed_images (
             id INTEGER PRIMARY KEY,
             task_id TEXT NOT NULL,
@@ -891,6 +892,91 @@ fn run_configs_filters_counts_and_cursor_pages_are_consistent() {
     paged.extend(ids(second));
     assert_eq!(paged, all);
     assert_eq!(paged.iter().collect::<HashSet<_>>().len(), paged.len());
+}
+
+#[test]
+fn run_configs_join_latest_task_filters_facets_and_sorts() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO run_configs (
+                id, name, description, plugin_id, url, created_at, schedule_enabled,
+                schedule_spec, schedule_planned_at, is_dry_run
+            ) VALUES
+                ('latest-a', 'Morning Pixiv', 'favorite artist', 'pixiv', '', 101, 1,
+                 '{"mode":"hourly","minute":30}', 1000, 0),
+                ('latest-b', 'Evening', 'wallpaper', 'yande', '', 102, 1,
+                 '{"mode":"daily","hour":20,"minute":0}', 2000, 0),
+                ('latest-c', 'Manual', 'archive', 'other', '', 103, 0, NULL, NULL, 0);
+            INSERT INTO tasks (
+                id, plugin_id, run_config_id, trigger_source, status, success_count,
+                failed_count, start_time, error, is_dry_run
+            ) VALUES
+                ('latest-a-old', 'pixiv', 'latest-a', 'scheduled', 'completed', 3, 0, 10, NULL, 0),
+                ('latest-a-new', 'pixiv', 'latest-a', 'scheduled', 'failed', 1, 2, 30, 'boom', 0),
+                ('latest-b-new', 'yande', 'latest-b', 'scheduled', 'completed', 4, 1, 20, NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn.clone());
+
+    let latest = runtime.fetch("run_configs://id_latest-a").unwrap();
+    assert_eq!(latest[0]["last_task_id"], "latest-a-new");
+    assert_eq!(latest[0]["last_result"], "failed");
+    assert_eq!(
+        ids(runtime.fetch("run_configs://last/failed").unwrap()),
+        ["latest-a"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("run_configs://mode/hourly").unwrap()),
+        ["latest-a"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("run_configs://paused").unwrap()),
+        ["latest-c"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("run_configs://search/PIXIV").unwrap()),
+        ["latest-a"]
+    );
+
+    let last_counts = listed_counts(&runtime, "run_configs://last");
+    assert!(last_counts.contains(&("failed".to_string(), 1)));
+    assert!(last_counts.contains(&("partial".to_string(), 1)));
+    assert!(last_counts.contains(&("never".to_string(), 1)));
+    let mode_counts = listed_counts(&runtime, "run_configs://mode");
+    assert!(mode_counts.contains(&("hourly".to_string(), 1)));
+    assert!(mode_counts.contains(&("none".to_string(), 1)));
+
+    let asc = ids(runtime.fetch("run_configs://sort/next/x10x/1").unwrap());
+    let desc = ids(runtime
+        .fetch("run_configs://sort/next/desc/x10x/1")
+        .unwrap());
+    assert_eq!(asc.last().map(String::as_str), Some("latest-c"));
+    assert_eq!(desc.last().map(String::as_str), Some("latest-c"));
+
+    let conn = conn.lock().unwrap();
+    let mut statement = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT run_configs.id, rc_last.id FROM run_configs LEFT JOIN tasks rc_last ON \
+             rc_last.id = (SELECT t.id FROM tasks t WHERE t.run_config_id = run_configs.id \
+             ORDER BY t.start_time DESC, t.id DESC LIMIT 1)",
+        )
+        .unwrap();
+    let details = statement
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("idx_tasks_run_config")),
+        "{details:?}"
+    );
 }
 
 #[test]

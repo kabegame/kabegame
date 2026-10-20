@@ -1,0 +1,13 @@
+namespace: kabegame
+name: run_configs_last_router
+list:
+  "${row.last_result}":
+    sql: SELECT sub.last_result, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY sub.last_result
+    data_var: row
+    provider: run_configs_last_provider
+    properties: { result: "${row.last_result}" }
+    meta: "${row}"
+resolve:
+  "(never|failed|running|canceled|partial|ok)":
+    provider: run_configs_last_provider
+    properties: { result: "${capture[1]}" }

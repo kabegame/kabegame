@@ -7,22 +7,130 @@ use std::collections::HashMap;
 ///
 /// JSON 与前端 `ScheduleSpec` 一致：`mode` + camelCase 字段名（间隔为 `intervalSecs`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "mode")]
+#[serde(tag = "mode", try_from = "ScheduleSpecRaw")]
 pub enum ScheduleSpec {
     #[serde(rename = "interval")]
     Interval {
         #[serde(rename = "intervalSecs")]
         interval_secs: i64,
     },
+    #[serde(rename = "hourly")]
+    Hourly { minute: i32 },
     #[serde(rename = "daily")]
     Daily { hour: i32, minute: i32 },
-    /// `weekday`: 0=周一 … 6=周日（与 `chrono::Weekday::num_days_from_monday()` 一致）
+    /// `weekdays`: 0=周一 … 6=周日（与 `chrono::Weekday::num_days_from_monday()` 一致）
     #[serde(rename = "weekly")]
     Weekly {
-        weekday: i32,
+        weekdays: Vec<i32>,
         hour: i32,
         minute: i32,
     },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduleSpecRaw {
+    mode: String,
+    interval_secs: Option<i64>,
+    hour: Option<i32>,
+    minute: Option<i32>,
+    weekday: Option<i32>,
+    weekdays: Option<Vec<i32>>,
+}
+
+impl TryFrom<ScheduleSpecRaw> for ScheduleSpec {
+    type Error = String;
+
+    fn try_from(raw: ScheduleSpecRaw) -> Result<Self, Self::Error> {
+        fn minute(value: Option<i32>) -> Result<i32, String> {
+            let value = value.ok_or_else(|| "schedule minute is required".to_string())?;
+            (0..=59)
+                .contains(&value)
+                .then_some(value)
+                .ok_or_else(|| "schedule minute must be between 0 and 59".to_string())
+        }
+        fn hour(value: Option<i32>) -> Result<i32, String> {
+            let value = value.ok_or_else(|| "schedule hour is required".to_string())?;
+            (0..=23)
+                .contains(&value)
+                .then_some(value)
+                .ok_or_else(|| "schedule hour must be between 0 and 23".to_string())
+        }
+
+        match raw.mode.as_str() {
+            "interval" => {
+                let interval_secs = raw
+                    .interval_secs
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "schedule intervalSecs must be greater than 0".to_string())?;
+                Ok(Self::Interval { interval_secs })
+            }
+            "hourly" => Ok(Self::Hourly {
+                minute: minute(raw.minute)?,
+            }),
+            "daily" if raw.hour == Some(-1) => Ok(Self::Hourly {
+                minute: minute(raw.minute)?,
+            }),
+            "daily" => Ok(Self::Daily {
+                hour: hour(raw.hour)?,
+                minute: minute(raw.minute)?,
+            }),
+            "weekly" => {
+                let mut weekdays = raw
+                    .weekdays
+                    .or_else(|| raw.weekday.map(|weekday| vec![weekday]))
+                    .unwrap_or_default();
+                weekdays.sort_unstable();
+                weekdays.dedup();
+                if weekdays.is_empty() || weekdays.iter().any(|weekday| !(0..=6).contains(weekday))
+                {
+                    return Err("schedule weekdays must contain values between 0 and 6".to_string());
+                }
+                Ok(Self::Weekly {
+                    weekdays,
+                    hour: hour(raw.hour)?,
+                    minute: minute(raw.minute)?,
+                })
+            }
+            mode => Err(format!("unsupported schedule mode: {mode}")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod schedule_spec_tests {
+    use super::ScheduleSpec;
+
+    #[test]
+    fn schedule_spec_accepts_legacy_and_canonicalizes_weekdays() {
+        assert_eq!(
+            serde_json::from_str::<ScheduleSpec>(r#"{"mode":"daily","hour":-1,"minute":30}"#)
+                .unwrap(),
+            ScheduleSpec::Hourly { minute: 30 }
+        );
+        assert_eq!(
+            serde_json::from_str::<ScheduleSpec>(
+                r#"{"mode":"weekly","weekday":2,"hour":8,"minute":0}"#,
+            )
+            .unwrap(),
+            ScheduleSpec::Weekly {
+                weekdays: vec![2],
+                hour: 8,
+                minute: 0,
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<ScheduleSpec>(
+                r#"{"mode":"weekly","weekdays":[4,1,4],"hour":8,"minute":0}"#,
+            )
+            .unwrap(),
+            ScheduleSpec::Weekly {
+                weekdays: vec![1, 4],
+                hour: 8,
+                minute: 0,
+            }
+        );
+    }
 }
 
 fn parse_schedule_spec_cell(s: Option<String>) -> Result<Option<ScheduleSpec>, String> {

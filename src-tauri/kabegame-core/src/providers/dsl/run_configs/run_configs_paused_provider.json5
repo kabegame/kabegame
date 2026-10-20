@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_paused_provider",
+    "query": { "where": "run_configs.schedule_enabled = 0" },
+    "resolve": { ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

@@ -1,0 +1,20 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_sort_router",
+    "list": {
+        "next": { "provider": "run_configs_sort_next_provider" },
+        "last": { "provider": "run_configs_sort_last_provider" },
+        "result": { "provider": "run_configs_sort_result_provider" },
+        "name": { "provider": "run_configs_sort_name_provider" },
+        "plugin": { "provider": "run_configs_sort_plugin_provider" },
+        "created": { "provider": "run_configs_sort_created_provider" }
+    },
+    "resolve": {
+        "next": { "provider": "run_configs_sort_next_provider" },
+        "last": { "provider": "run_configs_sort_last_provider" },
+        "result": { "provider": "run_configs_sort_result_provider" },
+        "name": { "provider": "run_configs_sort_name_provider" },
+        "plugin": { "provider": "run_configs_sort_plugin_provider" },
+        "created": { "provider": "run_configs_sort_created_provider" }
+    }
+}

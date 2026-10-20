@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame", "name": "run_configs_sort_created_provider",
+    "query": { "order": [{ "sql": "run_configs.created_at + 0", "order": "asc", "prepend": true }] },
+    "resolve": { "desc": { "provider": "run_configs_sort_created_desc_provider" }, ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

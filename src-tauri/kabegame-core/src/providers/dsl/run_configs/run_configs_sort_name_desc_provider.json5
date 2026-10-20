@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame", "name": "run_configs_sort_name_desc_provider",
+    "query": { "order": [{ "sql": "run_configs.name COLLATE NOCASE", "order": "desc", "prepend": true }] },
+    "resolve": { ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

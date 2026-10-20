@@ -10,6 +10,7 @@ pub mod metadata_migration;
 // 嵌入式 V8 后端：桌面 + Android（仅 iOS 不支持）。
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod v8;
+pub(crate) mod var_canonical;
 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
 pub mod vfs;
 pub mod webpage;
@@ -3269,7 +3270,9 @@ fn canonical_checkbox_default(
         .collect::<Vec<_>>();
     let checked = |variable: &String| match &value {
         serde_json::Value::Array(items) => items.iter().any(|item| item.as_str() == Some(variable)),
-        serde_json::Value::Object(object) => object.get(variable).and_then(|v| v.as_bool()) == Some(true),
+        serde_json::Value::Object(object) => {
+            object.get(variable).and_then(|v| v.as_bool()) == Some(true)
+        }
         serde_json::Value::String(item) => item == variable,
         _ => false,
     };

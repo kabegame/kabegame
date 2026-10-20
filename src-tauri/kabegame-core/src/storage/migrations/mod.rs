@@ -58,6 +58,7 @@ mod v041_plugin_var_null;
 mod v042_surf_record_desktop_mode;
 mod v043_task_dry_run;
 mod v044_tasks_run_config_index;
+mod v045_schedule_spec_v2;
 
 use rusqlite::Connection;
 
@@ -258,13 +259,18 @@ const MIGRATIONS: &[Migration] = &[
         name: "tasks_run_config_index",
         up: v044_tasks_run_config_index::up,
     },
+    Migration {
+        version: 45,
+        name: "schedule_spec_v2",
+        up: v045_schedule_spec_v2::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 44;
+pub const LATEST_VERSION: u32 = 45;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

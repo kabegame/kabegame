@@ -1,0 +1,12 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_state_provider",
+    "properties": { "state": { "type": "string", "default": "enabled", "optional": false } },
+    "query": { "where": "CASE WHEN run_configs.schedule_enabled = 1 THEN 'enabled' ELSE 'paused' END = ${properties.state}" },
+    "resolve": { ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

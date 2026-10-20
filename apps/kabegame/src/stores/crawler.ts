@@ -5,6 +5,7 @@ import { i18n, resolveConfigText } from "@kabegame/i18n";
 import { canonicalizeUserConfig, type PluginVarDef } from "../utils/pluginVarForm";
 import { normalizeTaskRow } from "@/services/tasks";
 import { normalizeRunConfigRow } from "@/services/runConfigs";
+import { usePluginStore } from "./plugins";
 
 export { normalizeDiffKeys } from "@/services/tasks";
 export { normalizeRunConfigRow as parseRunConfigRaw } from "@/services/runConfigs";
@@ -46,9 +47,22 @@ export interface CrawlTask {
 /** 与后端 `ScheduleSpec` JSON（`schedule_spec` 列）一致 */
 export type ScheduleSpec =
   | { mode: "interval"; intervalSecs: number }
+  | { mode: "hourly"; minute: number }
   | { mode: "daily"; hour: number; minute: number }
-  /** weekday: 0=周一 … 6=周日 */
-  | { mode: "weekly"; weekday: number; hour: number; minute: number };
+  /** weekdays: 0=周一 … 6=周日 */
+  | { mode: "weekly"; weekdays: number[]; hour: number; minute: number };
+
+export type RunConfigLastResult = "never" | "failed" | "running" | "canceled" | "partial" | "ok";
+
+export interface RunConfigLastTask {
+  id: string;
+  status: CrawlTask["status"];
+  startTime: number;
+  endTime?: number;
+  successCount: number;
+  failedCount: number;
+  error?: string;
+}
 
 export interface RunConfig {
   id: string;
@@ -68,6 +82,8 @@ export interface RunConfig {
   scheduleSpec?: ScheduleSpec;
   schedulePlannedAt?: number;
   scheduleLastRunAt?: number;
+  lastTask?: RunConfigLastTask;
+  lastResult: RunConfigLastResult;
 }
 
 /**
@@ -87,7 +103,7 @@ export interface TaskConfig {
 export interface MissedRunItem {
   configId: string;
   configName: string;
-  scheduleMode: "interval" | "daily" | "weekly";
+  scheduleMode: "interval" | "hourly" | "daily" | "weekly";
   missedCount: number;
   lastDueAt: number;
 }
@@ -100,7 +116,6 @@ function numOpt(v: unknown): number | undefined {
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 }
-
 
 /** 解析 `schedule_spec` JSON 对象或字符串 */
 export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
@@ -126,14 +141,23 @@ export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
     const hour = numOpt(o.hour);
     const minute = numOpt(o.minute);
     if (hour == null || minute == null) return undefined;
+    if (hour === -1) return { mode: "hourly", minute: Math.min(59, Math.max(0, minute)) };
     return { mode: "daily", hour, minute };
   }
+  if (mode === "hourly") {
+    const minute = numOpt(o.minute);
+    return minute == null ? undefined : { mode: "hourly", minute: Math.min(59, Math.max(0, minute)) };
+  }
   if (mode === "weekly") {
-    const weekday = numOpt(o.weekday);
+    const weekdays = Array.isArray(o.weekdays)
+      ? o.weekdays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      : numOpt(o.weekday) != null
+        ? [Number(o.weekday)]
+        : [];
     const hour = numOpt(o.hour);
     const minute = numOpt(o.minute);
-    if (weekday == null || hour == null || minute == null) return undefined;
-    return { mode: "weekly", weekday, hour, minute };
+    if (weekdays.length === 0 || hour == null || minute == null) return undefined;
+    return { mode: "weekly", weekdays: [...new Set(weekdays)].sort((a, b) => a - b), hour, minute };
   }
   return undefined;
 }
@@ -191,7 +215,7 @@ export function parsePluginRecommendedPreset(
   return {
     pluginId,
     filename,
-    baseUrl: baseUrlByPluginId.get(pluginId) ?? "",
+    baseUrl: String(o.baseUrl ?? o.base_url ?? baseUrlByPluginId.get(pluginId) ?? ""),
     name: nameText ?? filename,
     description: descText,
     userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
@@ -334,9 +358,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       descRaw != null && descRaw !== "" ? resolveConfigText(descRaw as any, locale).trim() || undefined : undefined;
     const spec = preset.scheduleSpec;
     const scheduleEnabled = Boolean(importScheduleDefault && spec);
-    // 推荐配置由插件作者手写，可能含 "" / [] 等旧式空值；入库前按插件定义规范化，
-    // 否则定时运行会被后端严格校验拒绝。动态导入 plugins store 以避开循环依赖。
-    const { usePluginStore } = await import("./plugins");
+    // 推荐配置由插件作者手写，可能含 "" / [] 等旧式空值；入库前按插件定义规范化。
     const defs = (usePluginStore().plugins.find((p) => p.id === preset.pluginId)?.config?.vars ?? []) as PluginVarDef[];
     return await addRunConfig({
       name: nameStr,
@@ -355,9 +377,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   async function addRunConfig(
-    config: Omit<RunConfig, "id" | "createdAt"> & {
+    config: Omit<RunConfig, "id" | "createdAt" | "lastResult"> & {
       id?: string;
       createdAt?: number;
+      lastResult?: RunConfigLastResult;
     },
   ) {
     const cfg: RunConfig = {
@@ -377,6 +400,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
       scheduleSpec: config.scheduleSpec,
       schedulePlannedAt: config.schedulePlannedAt,
       scheduleLastRunAt: config.scheduleLastRunAt,
+      lastTask: config.lastTask,
+      lastResult: config.lastResult ?? "never",
     };
     const saved = normalizeRunConfigRow(await invoke<unknown>("add_run_config", { config: cfg }));
     if (!saved) throw new Error("add_run_config: invalid payload");

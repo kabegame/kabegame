@@ -1,10 +1,16 @@
 {
     "namespace": "kabegame",
     "name": "run_configs_filter_router",
-    "note": "Composable run config filters: plugin/<id>, enabled, before_<createdAt>_<id>, then x<pageSize>x/<page>.",
+    "note": "Composable run config filters, facets, sorting, cursor compatibility, and page-number pagination.",
     "list": {
         "plugin": { "provider": "run_configs_plugin_router" },
-        "enabled": { "provider": "run_configs_enabled_provider" }
+        "state": { "provider": "run_configs_state_router" },
+        "enabled": { "provider": "run_configs_enabled_provider" },
+        "paused": { "provider": "run_configs_paused_provider" },
+        "last": { "provider": "run_configs_last_router" },
+        "mode": { "provider": "run_configs_mode_router" },
+        "search": { "provider": "run_configs_search_router" },
+        "sort": { "provider": "run_configs_sort_router" }
     },
     "resolve": {
         "before_(-?[0-9]+)_(.+)": {

@@ -1,4 +1,5 @@
 use crate::emitter::GlobalEmitter;
+use crate::plugin::var_canonical::canonical_user_config_for_compare;
 use crate::plugin::{PluginManager, VarDefinition, VarOption};
 use crate::providers::query::query_fetch;
 use crate::scheduler::Scheduler;
@@ -344,6 +345,91 @@ pub fn get_run_configs() -> Result<Value, String> {
     serde_json::to_value(configs).map_err(|e| e.to_string())
 }
 
+fn preset_content_matches(
+    plugin_id: &str,
+    plugin_base_url: &str,
+    defs: &[VarDefinition],
+    preset: &Value,
+    config: &RunConfig,
+) -> bool {
+    let preset_url = preset
+        .get("url")
+        .or_else(|| preset.get("baseUrl"))
+        .or_else(|| preset.get("base_url"))
+        .and_then(Value::as_str)
+        .unwrap_or(plugin_base_url)
+        .trim();
+    let preset_user_config = preset
+        .get("userConfig")
+        .or_else(|| preset.get("user_config"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let config_user_config =
+        serde_json::to_value(config.user_config.as_ref().cloned().unwrap_or_default())
+            .unwrap_or_else(|_| serde_json::json!({}));
+    let preset_headers = preset
+        .get("httpHeaders")
+        .or_else(|| preset.get("http_headers"))
+        .and_then(Value::as_object)
+        .filter(|headers| !headers.is_empty());
+    let config_headers = config
+        .http_headers
+        .as_ref()
+        .filter(|headers| !headers.is_empty())
+        .and_then(|headers| serde_json::to_value(headers).ok())
+        .and_then(|value| value.as_object().cloned());
+    let preset_dry_run = preset
+        .get("isDryRun")
+        .or_else(|| preset.get("is_dry_run"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    config.plugin_id == plugin_id
+        && config.url.trim() == preset_url
+        && canonical_user_config_for_compare(preset_user_config, defs)
+            == canonical_user_config_for_compare(config_user_config, defs)
+        && preset_headers.cloned() == config_headers
+        && config.is_dry_run == preset_dry_run
+}
+
+pub async fn list_imported_recommended_presets() -> Result<Value, String> {
+    let manager = PluginManager::global();
+    manager.ensure_installed_cache_initialized().await?;
+    let configs = Storage::global().get_run_configs()?;
+    let mut plugins = manager.get_all()?;
+    plugins.extend(manager.builtin_plugins());
+    plugins.sort_by(|a, b| a.id.cmp(&b.id));
+    plugins.dedup_by(|a, b| a.id == b.id);
+
+    let mut rows = Vec::new();
+    for plugin in plugins {
+        for preset in &plugin.recommended_configs {
+            let Some(filename) = preset.get("filename").and_then(Value::as_str) else {
+                continue;
+            };
+            let config_ids = configs
+                .iter()
+                .filter(|config| {
+                    preset_content_matches(
+                        &plugin.id,
+                        &plugin.base_url,
+                        &plugin.var_defs,
+                        preset,
+                        config,
+                    )
+                })
+                .map(|config| config.id.clone())
+                .collect::<Vec<_>>();
+            rows.push(serde_json::json!({
+                "pluginId": plugin.id,
+                "filename": filename,
+                "configIds": config_ids,
+            }));
+        }
+    }
+    Ok(Value::Array(rows))
+}
+
 pub fn get_all_tasks() -> Result<Value, String> {
     let tasks = Storage::global().get_all_tasks()?;
     serde_json::to_value(tasks).map_err(|e| e.to_string())
@@ -428,10 +514,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
     )?;
     // 网页收集：前端校验之外必须再校验一次，非法直接拒绝，不创建任务记录
     if p.plugin_id == crate::plugin::webpage::WEBPAGE_PLUGIN_ID {
-        crate::crawler::webpage::validate_submission(
-            Some(&effective),
-            p.http_headers.as_ref(),
-        )?;
+        crate::crawler::webpage::validate_submission(Some(&effective), p.http_headers.as_ref())?;
     }
 
     let task_id = uuid::Uuid::new_v4().to_string();
@@ -707,7 +790,11 @@ mod tests {
         ];
         let values = parse_plugin_args_to_user_config(
             &defs,
-            &["tag=".to_string(), "items=,,".to_string(), "option=".to_string()],
+            &[
+                "tag=".to_string(),
+                "items=,,".to_string(),
+                "option=".to_string(),
+            ],
         )
         .unwrap();
         assert_eq!(values["tag"], Value::Null);
@@ -729,9 +816,11 @@ mod tests {
             parse_plugin_args_to_user_config(&defs, &["kinds=".to_string()]).unwrap()["kinds"],
             Value::Null
         );
-        assert!(parse_plugin_args_to_user_config(&defs, &["kinds=x".to_string()])
-            .unwrap_err()
-            .contains("未知 checkbox 选项"));
+        assert!(
+            parse_plugin_args_to_user_config(&defs, &["kinds=x".to_string()])
+                .unwrap_err()
+                .contains("未知 checkbox 选项")
+        );
     }
 
     #[test]
@@ -739,9 +828,11 @@ mod tests {
         let defs = vec![var(serde_json::json!({
             "key": "quality", "type": "options", "name": "Quality", "options": ["high"]
         }))];
-        assert!(parse_plugin_args_to_user_config(&defs, &["quality=low".to_string()])
-            .unwrap_err()
-            .contains("不是有效 option"));
+        assert!(
+            parse_plugin_args_to_user_config(&defs, &["quality=low".to_string()])
+                .unwrap_err()
+                .contains("不是有效 option")
+        );
     }
 
     #[test]
@@ -763,5 +854,81 @@ mod tests {
         assert_eq!(validate_task_max_downloads(Some(1)).unwrap(), Some(1));
         assert_eq!(validate_task_max_downloads(Some(99)).unwrap(), Some(99));
         assert_eq!(validate_task_max_downloads(None).unwrap(), None);
+    }
+
+    #[test]
+    fn imported_preset_comparison_normalizes_content_and_ignores_name_and_schedule() {
+        let defs = vec![
+            var(serde_json::json!({"key":"text","type":"string","name":"Text"})),
+            var(serde_json::json!({"key":"items","type":"list","name":"Items"})),
+            var(serde_json::json!({
+                "key":"kinds","type":"checkbox","name":"Kinds","options":["a","b"]
+            })),
+        ];
+        let mut config = RunConfig {
+            id: "config-1".to_string(),
+            name: "renamed".to_string(),
+            description: None,
+            plugin_id: "plugin-a".to_string(),
+            url: " https://example.test ".to_string(),
+            output_dir: None,
+            output_album_id: None,
+            user_config: Some(HashMap::from([(
+                "kinds".to_string(),
+                serde_json::json!({"a":true,"b":false}),
+            )])),
+            http_headers: None,
+            max_concurrent_downloads: None,
+            is_dry_run: false,
+            created_at: 1,
+            schedule_enabled: true,
+            schedule_spec: Some(crate::storage::ScheduleSpec::Hourly { minute: 30 }),
+            schedule_planned_at: Some(10),
+            schedule_last_run_at: None,
+        };
+        let preset = serde_json::json!({
+            "filename":"default.json",
+            "name":"original",
+            "userConfig":{"text":"","items":[],"kinds":["a"]},
+            "httpHeaders":{},
+            "isDryRun":false
+        });
+        assert!(preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
+
+        config.is_dry_run = true;
+        assert!(!preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
+        config.is_dry_run = false;
+        config.url = "https://changed.test".to_string();
+        assert!(!preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
+        config.url = "https://example.test".to_string();
+        config.http_headers = Some(HashMap::from([(
+            "Authorization".to_string(),
+            "x".to_string(),
+        )]));
+        assert!(!preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
     }
 }

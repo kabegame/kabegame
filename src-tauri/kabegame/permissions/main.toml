@@ -75,6 +75,7 @@ commands.allow = [
   'surf_get_records_by_ids',
   'surf_get_all_records',
   "get_run_configs",
+  "list_imported_recommended_presets",
   "get_run_config",
   "add_run_config",
   "update_run_config",

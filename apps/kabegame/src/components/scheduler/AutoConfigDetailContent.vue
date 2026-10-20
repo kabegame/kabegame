@@ -81,6 +81,7 @@
         'schedule-detail--schedule-off':
           !config.scheduleEnabled &&
           (config.scheduleSpec?.mode === 'interval' ||
+            config.scheduleSpec?.mode === 'hourly' ||
             config.scheduleSpec?.mode === 'daily' ||
             config.scheduleSpec?.mode === 'weekly'),
       }"
@@ -93,12 +94,20 @@
           v-if="
             config.scheduleEnabled ||
             config.scheduleSpec?.mode === 'interval' ||
+            config.scheduleSpec?.mode === 'hourly' ||
             config.scheduleSpec?.mode === 'daily' ||
             config.scheduleSpec?.mode === 'weekly'
           "
         >
           <el-descriptions-item :label="t('autoConfig.mode')" :span="2">
             {{ scheduleModeTitle }}
+          </el-descriptions-item>
+          <el-descriptions-item
+            v-if="config.scheduleSpec?.mode === 'hourly'"
+            :label="t('autoConfig.modeHourly')"
+            :span="2"
+          >
+            {{ t("autoConfig.hourlyAt", { minute: String(config.scheduleSpec.minute).padStart(2, "0") }) }}
           </el-descriptions-item>
           <el-descriptions-item
             v-if="config.scheduleSpec?.mode === 'interval'"
@@ -283,6 +292,8 @@ const scheduleModeTitle = computed(() => {
       return t("autoConfig.modeInterval");
     case "daily":
       return t("autoConfig.modeDaily");
+    case "hourly":
+      return t("autoConfig.modeHourly");
     case "weekly":
       return t("autoConfig.modeWeekly");
     default:
@@ -313,11 +324,11 @@ const dailySummary = computed(() => {
 const weeklySummary = computed(() => {
   const s = props.config.scheduleSpec;
   if (s?.mode !== "weekly") return "—";
-  const wd = Math.min(6, Math.max(0, Number(s.weekday ?? 0)));
+  const weekdays = s.weekdays.map((wd) => t(`autoConfig.weekday${wd}`)).join(t("autoConfig.weekdaySeparator"));
   const hour = String(Number(s.hour ?? 0)).padStart(2, "0");
   const minute = String(Number(s.minute ?? 0)).padStart(2, "0");
   return t("autoConfig.weeklyAt", {
-    weekday: t(`autoConfig.weekday${wd}`),
+    weekday: weekdays,
     hour,
     minute,
   });

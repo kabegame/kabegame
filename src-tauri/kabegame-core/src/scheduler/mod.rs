@@ -191,6 +191,14 @@ pub fn compute_next_planned_at(config: &RunConfig, after: i64) -> Option<i64> {
             };
             Some(base + *interval_secs)
         }
+        Some(ScheduleSpec::Hourly { minute }) => {
+            let t = if after > 0 {
+                after
+            } else {
+                ts_to_secs(config.created_at)
+            };
+            compute_next_hourly_fire_at(t, (*minute).clamp(0, 59) as u32)
+        }
         Some(ScheduleSpec::Daily { hour, minute }) => {
             let minute = (*minute).clamp(0, 59) as u32;
             let hour = *hour;
@@ -202,7 +210,7 @@ pub fn compute_next_planned_at(config: &RunConfig, after: i64) -> Option<i64> {
             compute_next_daily_fire_at(t, hour, minute)
         }
         Some(ScheduleSpec::Weekly {
-            weekday,
+            weekdays,
             hour,
             minute,
         }) => {
@@ -213,23 +221,24 @@ pub fn compute_next_planned_at(config: &RunConfig, after: i64) -> Option<i64> {
             } else {
                 ts_to_secs(config.created_at)
             };
-            compute_next_weekly_fire_at(t, *weekday, hour, minute)
+            compute_next_weekly_fire_at(t, weekdays, hour, minute)
         }
         None => None,
     }
 }
 
+fn compute_next_hourly_fire_at(now_secs: i64, minute: u32) -> Option<i64> {
+    let now_local = Local.timestamp_opt(now_secs, 0).single()?;
+    let mut next = now_local.with_second(0)?.with_minute(minute)?;
+    if next <= now_local {
+        next = next + chrono::Duration::hours(1);
+        next = next.with_minute(minute)?.with_second(0)?;
+    }
+    Some(next.timestamp())
+}
+
 fn compute_next_daily_fire_at(now_secs: i64, hour: i32, minute: u32) -> Option<i64> {
     let now_local = Local.timestamp_opt(now_secs, 0).single()?;
-    if hour == -1 {
-        let mut next = now_local.with_second(0)?.with_minute(minute)?;
-        if next <= now_local {
-            next = next + chrono::Duration::hours(1);
-            next = next.with_minute(minute)?.with_second(0)?;
-        }
-        return Some(next.timestamp());
-    }
-
     let safe_hour = hour.clamp(0, 23) as u32;
     let mut next = now_local
         .with_hour(safe_hour)?
@@ -245,27 +254,41 @@ fn compute_next_daily_fire_at(now_secs: i64, hour: i32, minute: u32) -> Option<i
     Some(next.timestamp())
 }
 
-/// `weekday`: 0=周一 … 6=周日（`num_days_from_monday`）
-fn compute_next_weekly_fire_at(now_secs: i64, weekday: i32, hour: i32, minute: u32) -> Option<i64> {
+/// `weekdays`: 0=周一 … 6=周日（`num_days_from_monday`）
+fn compute_next_weekly_fire_at(
+    now_secs: i64,
+    weekdays: &[i32],
+    hour: i32,
+    minute: u32,
+) -> Option<i64> {
     let now_local = Local.timestamp_opt(now_secs, 0).single()?;
-    let target_dow = weekday.clamp(0, 6) as u32;
     let safe_hour = hour.clamp(0, 23) as u32;
     let cur_dow = now_local.weekday().num_days_from_monday();
-    let mut days = (target_dow as i64 - cur_dow as i64 + 7) % 7;
-    let mut date = now_local
-        .date_naive()
-        .checked_add_signed(chrono::Duration::days(days))?;
-    let mut naive = date.and_hms_opt(safe_hour, minute, 0)?;
-    let mut dt = naive.and_local_timezone(Local).single()?;
-    if dt <= now_local {
-        days += 7;
-        date = now_local
-            .date_naive()
-            .checked_add_signed(chrono::Duration::days(days))?;
-        naive = date.and_hms_opt(safe_hour, minute, 0)?;
-        dt = naive.and_local_timezone(Local).single()?;
-    }
-    Some(dt.timestamp())
+    weekdays
+        .iter()
+        .filter(|weekday| (0..=6).contains(*weekday))
+        .filter_map(|weekday| {
+            let mut days = (*weekday as i64 - cur_dow as i64 + 7) % 7;
+            let mut date = now_local
+                .date_naive()
+                .checked_add_signed(chrono::Duration::days(days))?;
+            let mut dt = date
+                .and_hms_opt(safe_hour, minute, 0)?
+                .and_local_timezone(Local)
+                .single()?;
+            if dt <= now_local {
+                days += 7;
+                date = now_local
+                    .date_naive()
+                    .checked_add_signed(chrono::Duration::days(days))?;
+                dt = date
+                    .and_hms_opt(safe_hour, minute, 0)?
+                    .and_local_timezone(Local)
+                    .single()?;
+            }
+            Some(dt.timestamp())
+        })
+        .min()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -306,6 +329,7 @@ pub fn recalc_all_planned_at(now_ts: i64) -> Result<Vec<MissedRunItem>, String> 
         };
         let mode_str = match spec {
             ScheduleSpec::Interval { .. } => "interval",
+            ScheduleSpec::Hourly { .. } => "hourly",
             ScheduleSpec::Daily { .. } => "daily",
             ScheduleSpec::Weekly { .. } => "weekly",
         };

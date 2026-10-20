@@ -1,0 +1,17 @@
+namespace: kabegame
+name: run_configs_last_provider
+properties:
+  result: { type: string, default: never, optional: false }
+query:
+  where: >-
+    CASE WHEN rc_last.id IS NULL THEN 'never'
+    WHEN rc_last.status = 'failed' THEN 'failed'
+    WHEN rc_last.status IN ('pending', 'running', 'waiting_downloads') THEN 'running'
+    WHEN rc_last.status = 'canceled' THEN 'canceled'
+    WHEN rc_last.failed_count > 0 THEN 'partial' ELSE 'ok' END = ${properties.result}
+resolve:
+  ".*":
+    delegate: { provider: run_configs_filter_router }
+    child_var: child
+    provider: "${child.provider}"
+    meta: "${child.meta}"

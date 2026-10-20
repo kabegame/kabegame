@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_search_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "run_configs_search_provider",
+            "properties": { "query": "${capture[1]}" }
+        }
+    }
+}

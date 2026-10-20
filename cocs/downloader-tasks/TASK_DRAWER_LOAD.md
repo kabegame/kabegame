@@ -1,7 +1,8 @@
 # 任务列表与自动配置按需加载
 
 任务和自动配置不再由 `crawlerStore` 在启动时全量读取并常驻内存。列表由当前可见页面通过 PathQL
-按需持有：打开时加载第一页与总数、触底时按游标追加、关闭或卸载时清空并退订。应用启动期只保留
+按需持有：打开时加载第一页与总数、触底时追加、关闭或卸载时清空并退订。任务使用 keyset 游标；
+运行配置因支持多种排序，使用页码分页。应用启动期只保留
 任务状态分组计数，供右上角徽章和「清除全部」使用。
 
 ## 1. 生命周期与数据属主
@@ -27,8 +28,8 @@
     → 仅保留 taskDrawerStore.search
 ```
 
-自动配置列表采用相同生命周期，排序键换成 `(created_at, id)`。卡片虚拟列表只会挂载可见卡片，因而
-关联任务查询天然按需启动。
+自动配置列表采用相同生命周期，但按 `x20x/<页码>` 加载并按 id 去重。详情弹窗打开后才挂载
+`AutoConfigRelatedTasks`，关联任务查询因此仍按需启动。
 
 ## 2. PathQL 路径
 
@@ -39,14 +40,16 @@
 | 任务下一页 | `tasks://before_<ts>_<id>/x20x/1` | keyset 游标，不使用 OFFSET |
 | 任务搜索 | `tasks://~any/plugin/<id>/~or/plugin_search/<q>/~end/x20x/1` | 本地化插件名先在前端解析成插件 id，再与 id 子串分支做 OR |
 | 配置关联任务 | `tasks://run_config/<configId>/x20x/1` | 走 `idx_tasks_run_config` |
-| 自动配置首页 | `run_configs://x20x/1` | 按 `created_at DESC, id DESC` |
-| 已启用配置 | `run_configs://enabled/x20x/1` | 过滤段可与 `plugin/<id>` 任意顺序叠加 |
-| 插件计数 | `run_configs://[enabled/]plugin` | 按插件 `GROUP BY`，数量在 `meta.count` |
+| 自动配置首页 | `run_configs://sort/next/x20x/1` | 页码分页；支持 `next/last/result/name/plugin/created` 与 `desc` |
+| 配置过滤 | `run_configs://paused/last/failed/mode/hourly/search/<q>/…` | 状态、最近结果、定时模式、名称/说明搜索可叠加 |
+| chip 计数 | `run_configs://<其它过滤>/state\|last\|mode\|plugin` | 打开下拉时按去掉本维度后的上下文 `GROUP BY` |
 | 单行 | `tasks://id_<id>` / `run_configs://id_<id>` | 详情、事件补行和命令写后返回使用 |
 
 段值必须使用 `@kabegame/pathql-client` 的 `encodeSeg`；它执行 PathQL 引擎层转义，不是 URL 编码。
 任务根查询 `LEFT JOIN run_configs` 并带出 `run_config_name`，因此一页任务不需要逐项查配置。配置已删除时
-该列为 `NULL`。
+该列为 `NULL`。运行配置根查询反向 `LEFT JOIN tasks`：join 条件用相关子查询按
+`(run_config_id, start_time DESC)` 取最新任务，命中 `idx_tasks_run_config`，同时投影 `last_task_*`、
+`last_result` 与 `schedule_mode`；不在 `run_configs` 冗余保存最后任务。
 
 游标必须取已加载列表的最后一行，并始终保留 `id` 作为同时间戳的稳定次序。列表开启期间若有新行插入
 头部或旧行删除，下一页仍从旧末行继续，不会产生 OFFSET 翻页的重复和漏行。
@@ -63,10 +66,10 @@
 - `TaskChanged`：只补丁已加载行；纯进度保持单调并做 100ms 节流，终态完成强制为 100%。
 - `TaskDeleted`：已加载行立即移除。
 - `configchange` / `configdelete`：任务列表开启期间更新同 `runConfigId` 行的配置名，删除后置空。
-- 自动配置列表收到 `configadd` / `configchange` 时按 id 重读该行：不再匹配过滤就移除；匹配且未加载时，
-  只有比末行新、**或列表已加载完（没有下一页）**才插入，否则留给后续游标翻页取回，避免重复。例如在
-  「仅启用」过滤下从别处重新启用一条较旧的配置，已加载完的列表必须把它补回，计数与行才一致。首页返回后
-  先按首页判定有无下一页，再合并缓冲事件。
+- 自动配置列表收到 `configadd` / `configchange` 时按 id 重读该行；同时订阅 `tasks-change`：`TaskAdded`
+  以 `runConfigId` 更新最后任务，`TaskChanged` 只合并当前 `lastTask.id`，`TaskDeleted` 命中最后任务时重读配置。
+  每次补丁后都重新计算 `last_result`、过滤匹配与当前排序位置；移入/移出时去抖重拉 count。页码间可能因并发
+  写入错位，追加时统一按 id 去重。
 
 `taskDrawerStore` 是唯一常驻任务订阅者。首次创建时读取一次 `tasks://status`；新增、删除或状态变化后
 300ms 去抖重拉。徽章、终态任务数和清除确认文案均读这份计数，不依赖当前已加载页。
@@ -80,7 +83,7 @@
 
 | 层级 | 文件 | 职责 |
 | --- | --- | --- |
-| Provider DSL | `src-tauri/kabegame-core/src/providers/dsl/{tasks,run_configs}/` | 过滤、分组计数、游标和分页 |
+| Provider DSL | `src-tauri/kabegame-core/src/providers/dsl/{tasks,run_configs}/` | 过滤、最后任务 join、分组计数、排序与分页 |
 | 服务 | `apps/kabegame/src/services/{tasks,runConfigs}.ts` | 路径构造、行规范化、单例事件订阅 |
 | 分页状态 | `apps/kabegame/src/composables/{usePagedTaskList,usePagedRunConfigs}.ts` | 生命周期、事件合并、去重与在途请求作废 |
 | 徽章 | `apps/kabegame/src/stores/taskDrawer.ts` | 状态计数与搜索词 |

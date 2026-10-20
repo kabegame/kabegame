@@ -20,8 +20,10 @@ const getScheduleTotal = (config: RunConfig): number => {
   switch (s?.mode) {
     case "interval":
       return Math.max(0, Number(s.intervalSecs ?? 0));
+    case "hourly":
+      return 3600;
     case "daily":
-      return s.hour === -1 ? 3600 : 86400;
+      return 86400;
     case "weekly":
       return 604800;
     default:

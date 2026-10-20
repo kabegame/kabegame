@@ -568,6 +568,7 @@ pub(crate) fn configure_app(
             surf_save_page_snapshot,
             // --- Run Configs ---
             get_run_configs,
+            list_imported_recommended_presets,
             get_run_config,
             add_run_config,
             update_run_config,

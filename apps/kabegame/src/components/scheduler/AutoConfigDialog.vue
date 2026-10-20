@@ -14,13 +14,31 @@
       {{ t("autoConfig.configDeleted") }}
     </div>
 
-    <AutoConfigDetailContent
-      v-else-if="panelMode === 'view' && viewConfig"
-      ref="detailRef"
-      :key="viewConfig.id"
-      :config="viewConfig"
-      :output-album-name="viewAlbumName"
-    />
+    <div v-else-if="panelMode === 'view' && viewConfig" class="flex flex-col gap-4">
+      <el-alert
+        v-if="viewConfig.lastResult === 'failed'"
+        type="error"
+        show-icon
+        :closable="false"
+        :title="t('autoConfig.lastRunFailed')"
+        :description="viewConfig.lastTask?.error"
+      />
+      <AutoConfigDetailContent
+        ref="detailRef"
+        :key="viewConfig.id"
+        :config="viewConfig"
+        :output-album-name="viewAlbumName"
+      />
+      <section>
+        <h3 class="mb-2 mt-0 text-sm font-semibold">{{ t("autoConfig.recentTasks") }}</h3>
+        <AutoConfigRelatedTasks
+          :config-id="viewConfig.id"
+          @open-task-images="openTaskImages"
+          @open-task-log="openTaskLog"
+        />
+      </section>
+      <TaskLogDialog ref="taskLogDialogRef" />
+    </div>
 
     <el-form v-else ref="formRef" :model="form" label-position="top" class="acd-edit-form">
       <el-divider content-position="left">{{ t("autoConfig.basicInfo") }}</el-divider>
@@ -86,84 +104,11 @@
         <el-form-item :label="t('autoConfig.scheduleEnabled')">
           <el-switch v-model="scheduleEnabled" />
         </el-form-item>
-
-        <div
-          v-if="showScheduleDetailFields"
-          class="acd-schedule-fields"
-          :class="{ 'acd-schedule-fields--readonly': scheduleFieldsReadonly }"
-        >
-          <el-form-item :label="t('autoConfig.mode')">
-            <el-radio-group v-model="scheduleMode" :disabled="scheduleFieldsReadonly">
-              <el-radio value="interval">{{ t("autoConfig.modeInterval") }}</el-radio>
-              <el-radio value="daily">{{ t("autoConfig.modeDaily") }}</el-radio>
-              <el-radio value="weekly">{{ t("autoConfig.modeWeekly") }}</el-radio>
-            </el-radio-group>
-          </el-form-item>
-
-          <el-form-item v-if="scheduleMode === 'interval'" :label="t('autoConfig.modeInterval')">
-            <div class="mode-line">
-              <el-input-number v-model="intervalValue" :min="1" :disabled="scheduleFieldsReadonly" />
-              <el-select v-model="intervalUnit" :disabled="scheduleFieldsReadonly">
-                <el-option value="minutes" :label="t('autoConfig.unitMinutes')" />
-                <el-option value="hours" :label="t('autoConfig.unitHours')" />
-                <el-option value="days" :label="t('autoConfig.unitDays')" />
-              </el-select>
-            </div>
-          </el-form-item>
-
-          <el-form-item v-if="scheduleMode === 'daily'" :label="t('autoConfig.modeDaily')">
-            <div class="mode-line">
-              <el-select v-model="dailyHour" :disabled="scheduleFieldsReadonly">
-                <el-option :value="-1" :label="t('autoConfig.everyHour')" />
-                <el-option
-                  v-for="h in 24"
-                  :key="`h-${h - 1}`"
-                  :value="h - 1"
-                  :label="`${String(h - 1).padStart(2, '0')}:xx`"
-                />
-              </el-select>
-              <el-select v-model="dailyMinute" :disabled="scheduleFieldsReadonly">
-                <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
-              </el-select>
-            </div>
-          </el-form-item>
-
-          <el-form-item v-if="scheduleMode === 'weekly'" :label="t('autoConfig.modeWeekly')">
-            <div class="mode-line">
-              <el-select v-model="weeklyWeekday" :disabled="scheduleFieldsReadonly">
-                <el-option
-                  v-for="wd in 7"
-                  :key="`wd-${wd - 1}`"
-                  :value="wd - 1"
-                  :label="t(`autoConfig.weekday${wd - 1}`)"
-                />
-              </el-select>
-              <el-select v-model="dailyHour" :disabled="scheduleFieldsReadonly">
-                <el-option
-                  v-for="h in 24"
-                  :key="`wh-${h - 1}`"
-                  :value="h - 1"
-                  :label="`${String(h - 1).padStart(2, '0')}:xx`"
-                />
-              </el-select>
-              <el-select v-model="dailyMinute" :disabled="scheduleFieldsReadonly">
-                <el-option
-                  v-for="m in 60"
-                  :key="`wm-${m - 1}`"
-                  :value="m - 1"
-                  :label="String(m - 1).padStart(2, '0')"
-                />
-              </el-select>
-            </div>
-          </el-form-item>
-
-          <el-alert type="info" :closable="false" :title="schedulePreview" />
-          <ScheduleProgressBar
-            v-if="editScheduleProgressConfig"
-            :config="editScheduleProgressConfig"
-            class="acd-schedule-progress"
-          />
-        </div>
+        <ScheduleSpecEditor
+          v-if="scheduleEnabled || scheduleSpec"
+          v-model="scheduleSpec"
+          :disabled="!scheduleEnabled"
+        />
       </section>
     </el-form>
 
@@ -191,7 +136,9 @@ import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import AutoConfigDetailContent from "@/components/scheduler/AutoConfigDetailContent.vue";
-import ScheduleProgressBar from "@/components/scheduler/ScheduleProgressBar.vue";
+import AutoConfigRelatedTasks from "@/components/scheduler/AutoConfigRelatedTasks.vue";
+import TaskLogDialog from "@/components/task/TaskLogDialog.vue";
+import ScheduleSpecEditor from "@/components/scheduler/ScheduleSpecEditor.vue";
 import OutputDirSelect from "@/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@/components/crawler/HttpHeadersEditor.vue";
@@ -207,13 +154,17 @@ import { coerceOptionsVarsToVisibleChoices, visibleVarDefs } from "@/utils/plugi
 import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/utils/pluginVarForm";
 import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
+import { cloneScheduleSpec } from "@/utils/scheduleText";
 import { fetchRunConfig, subscribeRunConfigEvents } from "@/services/runConfigs";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { useRouter } from "vue-router";
 
 const { t } = useI18n();
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
 const dialogStore = useAutoConfigDialogStore();
+const router = useRouter();
+const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
 const { form, formRef, pluginVars, loadPluginVarDefs, loadPluginVars } = usePluginConfig();
 
@@ -228,13 +179,7 @@ let unsubscribeConfig: (() => void) | null = null;
 const name = ref("");
 const description = ref("");
 const scheduleEnabled = ref(false);
-const scheduleMode = ref<"interval" | "daily" | "weekly">("interval");
-const intervalValue = ref(1);
-const intervalUnit = ref<"minutes" | "hours" | "days">("hours");
-const dailyHour = ref(-1);
-const dailyMinute = ref(0);
-/** 0=周一 … 6=周日 */
-const weeklyWeekday = ref(0);
+const scheduleSpec = ref<ScheduleSpec | undefined>();
 const headersModel = ref<Record<string, string>>({});
 /** 输出画册：与 task config 同义，定时任务也写入该画册 */
 const outputAlbumId = ref<string | null>(null);
@@ -306,19 +251,6 @@ watch(
   { immediate: true },
 );
 
-/** 定时已关但后端仍有 mode 时仍展示表单项（只读灰色）；新建且未启用则不展示 */
-const showScheduleDetailFields = computed(() => {
-  if (scheduleEnabled.value) return true;
-  if (dialogStore.isCreate) return false;
-  const id = dialogStore.configId;
-  const c = id ? config.value : undefined;
-  return (
-    c?.scheduleSpec?.mode === "interval" || c?.scheduleSpec?.mode === "daily" || c?.scheduleSpec?.mode === "weekly"
-  );
-});
-
-const scheduleFieldsReadonly = computed(() => !scheduleEnabled.value && showScheduleDetailFields.value);
-
 const showMissing = computed(
   () =>
     dialogStore.visible &&
@@ -337,12 +269,6 @@ const dialogTitle = computed(() => {
 
 const pluginName = (id: string) => pluginStore.pluginLabel(id);
 
-const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
-  if (unit === "days") return 86400;
-  if (unit === "hours") return 3600;
-  return 60;
-};
-
 const visiblePluginVars = computed(() => visibleVarDefs(pluginVars.value as PluginVarDef[], form.value.vars));
 
 watch(
@@ -352,37 +278,6 @@ watch(
   },
   { deep: true },
 );
-
-const schedulePreview = computed(() => {
-  if (!scheduleEnabled.value) return t("autoConfig.scheduleDisabled");
-  if (scheduleMode.value === "interval") {
-    const unitKey =
-      intervalUnit.value === "days"
-        ? "autoConfig.unitDays"
-        : intervalUnit.value === "hours"
-          ? "autoConfig.unitHours"
-          : "autoConfig.unitMinutes";
-    return t("autoConfig.intervalSummary", {
-      n: intervalValue.value,
-      unit: t(unitKey),
-    });
-  }
-  if (scheduleMode.value === "weekly") {
-    const wd = Math.min(6, Math.max(0, weeklyWeekday.value));
-    return t("autoConfig.weeklyAt", {
-      weekday: t(`autoConfig.weekday${wd}`),
-      hour: String(dailyHour.value).padStart(2, "0"),
-      minute: String(dailyMinute.value).padStart(2, "0"),
-    });
-  }
-  if (dailyHour.value === -1) {
-    return t("autoConfig.dailyHourly", { minute: String(dailyMinute.value).padStart(2, "0") });
-  }
-  return t("autoConfig.dailyAt", {
-    hour: String(dailyHour.value).padStart(2, "0"),
-    minute: String(dailyMinute.value).padStart(2, "0"),
-  });
-});
 
 const loadFromConfig = async (cfg: RunConfig) => {
   name.value = String(cfg.name ?? "");
@@ -397,44 +292,14 @@ const loadFromConfig = async (cfg: RunConfig) => {
   isDryRun.value = cfg.isDryRun;
 
   scheduleEnabled.value = !!cfg.scheduleEnabled;
-  const spec = cfg.scheduleSpec;
-  scheduleMode.value =
-    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly" ? spec.mode : "interval";
-  weeklyWeekday.value = 0;
-  if (spec?.mode === "interval") {
-    const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
-    if (secs % 86400 === 0) {
-      intervalUnit.value = "days";
-      intervalValue.value = Math.max(1, Math.round(secs / 86400));
-    } else if (secs % 3600 === 0) {
-      intervalUnit.value = "hours";
-      intervalValue.value = Math.max(1, Math.round(secs / 3600));
-    } else {
-      intervalUnit.value = "minutes";
-      intervalValue.value = Math.max(1, Math.round(secs / 60));
-    }
-  }
-  if (spec?.mode === "daily") {
-    dailyHour.value = Number(spec.hour ?? -1);
-    dailyMinute.value = Number(spec.minute ?? 0);
-  }
-  if (spec?.mode === "weekly") {
-    weeklyWeekday.value = Math.min(6, Math.max(0, Number(spec.weekday ?? 0)));
-    dailyHour.value = Math.min(23, Math.max(0, Number(spec.hour ?? 0)));
-    dailyMinute.value = Math.min(59, Math.max(0, Number(spec.minute ?? 0)));
-  }
+  scheduleSpec.value = cfg.scheduleSpec ? cloneScheduleSpec(cfg.scheduleSpec) : undefined;
 };
 
 const resetCreateForm = () => {
   name.value = "";
   description.value = "";
   scheduleEnabled.value = false;
-  scheduleMode.value = "interval";
-  intervalValue.value = 1;
-  intervalUnit.value = "hours";
-  dailyHour.value = -1;
-  dailyMinute.value = 0;
-  weeklyWeekday.value = 0;
+  scheduleSpec.value = undefined;
   headersModel.value = {};
   outputAlbumId.value = null;
   maxConcurrentDownloads.value = null;
@@ -460,8 +325,8 @@ const buildScheduleFields = (): Pick<
     }
     const id = dialogStore.configId;
     const cur = id ? config.value : undefined;
-    const curSpec = cur?.scheduleSpec;
-    if (!cur || !curSpec || (curSpec.mode !== "interval" && curSpec.mode !== "daily" && curSpec.mode !== "weekly")) {
+    const curSpec = scheduleSpec.value ?? cur?.scheduleSpec;
+    if (!cur || !curSpec) {
       return {
         scheduleEnabled: false,
         scheduleSpec: undefined,
@@ -469,99 +334,20 @@ const buildScheduleFields = (): Pick<
         scheduleLastRunAt: undefined,
       };
     }
-    if (scheduleMode.value === "interval") {
-      const scheduleSpec: ScheduleSpec = {
-        mode: "interval",
-        intervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
-      };
-      return {
-        scheduleEnabled: false,
-        scheduleSpec,
-        schedulePlannedAt: cur.schedulePlannedAt,
-        scheduleLastRunAt: cur.scheduleLastRunAt,
-      };
-    }
-    if (scheduleMode.value === "weekly") {
-      const scheduleSpec: ScheduleSpec = {
-        mode: "weekly",
-        weekday: Math.min(6, Math.max(0, weeklyWeekday.value)),
-        hour: Math.min(23, Math.max(0, dailyHour.value)),
-        minute: Math.min(59, Math.max(0, dailyMinute.value)),
-      };
-      return {
-        scheduleEnabled: false,
-        scheduleSpec,
-        schedulePlannedAt: cur.schedulePlannedAt,
-        scheduleLastRunAt: cur.scheduleLastRunAt,
-      };
-    }
-    const scheduleSpec: ScheduleSpec = {
-      mode: "daily",
-      hour: dailyHour.value,
-      minute: dailyMinute.value,
-    };
     return {
       scheduleEnabled: false,
-      scheduleSpec,
+      scheduleSpec: cloneScheduleSpec(curSpec),
       schedulePlannedAt: cur.schedulePlannedAt,
       scheduleLastRunAt: cur.scheduleLastRunAt,
     };
   }
-  if (scheduleMode.value === "interval") {
-    const scheduleSpec: ScheduleSpec = {
-      mode: "interval",
-      intervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
-    };
-    return {
-      scheduleEnabled: true,
-      scheduleSpec,
-      schedulePlannedAt: undefined,
-      scheduleLastRunAt: undefined,
-    };
-  }
-  if (scheduleMode.value === "weekly") {
-    const scheduleSpec: ScheduleSpec = {
-      mode: "weekly",
-      weekday: Math.min(6, Math.max(0, weeklyWeekday.value)),
-      hour: Math.min(23, Math.max(0, dailyHour.value)),
-      minute: Math.min(59, Math.max(0, dailyMinute.value)),
-    };
-    return {
-      scheduleEnabled: true,
-      scheduleSpec,
-      schedulePlannedAt: undefined,
-      scheduleLastRunAt: undefined,
-    };
-  }
-  const scheduleSpec: ScheduleSpec = {
-    mode: "daily",
-    hour: dailyHour.value,
-    minute: dailyMinute.value,
-  };
   return {
     scheduleEnabled: true,
-    scheduleSpec,
+    scheduleSpec: cloneScheduleSpec(scheduleSpec.value ?? { mode: "interval", intervalSecs: 3600 }),
     schedulePlannedAt: undefined,
     scheduleLastRunAt: undefined,
   };
 };
-
-/** 编辑态：表单定时字段 + 后端 planned/lastRun，供倒计时条（周期变化时进度仍以服务端计划为准） */
-const editScheduleProgressConfig = computed((): RunConfig | null => {
-  if (panelMode.value !== "edit" || dialogStore.isCreate || !scheduleEnabled.value) return null;
-  const id = dialogStore.configId;
-  if (!id) return null;
-  const base = config.value;
-  if (!base) return null;
-  const draft = buildScheduleFields();
-  return {
-    ...base,
-    scheduleEnabled: draft.scheduleEnabled,
-    scheduleSpec: draft.scheduleSpec,
-    schedulePlannedAt: base.schedulePlannedAt,
-    scheduleLastRunAt: base.scheduleLastRunAt,
-  };
-});
 
 const onPluginChange = async (pluginId: string) => {
   form.value.pluginId = pluginId;
@@ -576,34 +362,9 @@ const onPluginChange = async (pluginId: string) => {
   headersModel.value = { ...httpHeaders };
 };
 
-function monday0FromDate(d: Date): number {
-  const w = d.getDay();
-  return w === 0 ? 6 : w - 1;
-}
-
-watch(
-  () => scheduleMode.value,
-  (mode) => {
-    if (mode === "interval") {
-      dailyHour.value = -1;
-      dailyMinute.value = 0;
-      weeklyWeekday.value = 0;
-    } else if (mode === "daily") {
-      intervalValue.value = 1;
-      intervalUnit.value = "hours";
-      weeklyWeekday.value = 0;
-      dailyHour.value = -1;
-      dailyMinute.value = 0;
-    } else {
-      intervalValue.value = 1;
-      intervalUnit.value = "hours";
-      const d = new Date();
-      weeklyWeekday.value = monday0FromDate(d);
-      dailyHour.value = d.getHours();
-      dailyMinute.value = d.getMinutes();
-    }
-  },
-);
+watch(scheduleEnabled, (enabled) => {
+  if (enabled && !scheduleSpec.value) scheduleSpec.value = { mode: "interval", intervalSecs: 3600 };
+});
 
 watch(
   () => [dialogStore.visible, dialogStore.openGeneration] as const,
@@ -672,7 +433,7 @@ const handleSave = async () => {
     ElMessage.warning(t("plugins.selectSourcePlaceholder"));
     return;
   }
-  if (scheduleEnabled.value && !scheduleMode.value) {
+  if (scheduleEnabled.value && !scheduleSpec.value) {
     ElMessage.warning(t("autoConfig.needScheduleMode"));
     return;
   }
@@ -751,6 +512,15 @@ async function copyFullJson() {
     console.error(e);
     ElMessage.error(t("common.copyFailed"));
   }
+}
+
+function openTaskImages(taskId: string) {
+  void router.push({ name: "TaskDetail", params: { taskId } });
+  dialogStore.close();
+}
+
+async function openTaskLog(taskId: string) {
+  await taskLogDialogRef.value?.openTaskLog(taskId);
 }
 </script>
 

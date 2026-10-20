@@ -5,10 +5,7 @@
   <template v-else>
     <div
       v-bind="containerProps"
-      class="config-tasks-scroll config-tasks-scroll--virtual"
-      :class="
-        props.variant === 'android' ? 'config-tasks-scroll--virtual--android' : 'config-tasks-scroll--virtual--desktop'
-      "
+      class="config-tasks-scroll config-tasks-scroll--virtual config-tasks-scroll--virtual--desktop"
       @scroll="handleScroll"
     >
       <div v-bind="wrapperProps">
@@ -46,14 +43,7 @@ import type { CrawlTask } from "@/stores/crawler";
 import { usePagedTaskList } from "@/composables/usePagedTaskList";
 import { encodeSeg } from "@kabegame/pathql-client";
 
-const props = withDefaults(
-  defineProps<{
-    configId: string;
-    /** 编译期布局：安卓纵向列表用较高任务区，桌面横向用较矮任务区（替代媒体查询） */
-    variant?: "android" | "desktop";
-  }>(),
-  { variant: "desktop" },
-);
+const props = defineProps<{ configId: string }>();
 
 const emit = defineEmits<{
   (e: "open-task-images", taskId: string): void;
@@ -61,7 +51,14 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const { items: tasks, hasMore, loading, showLoading, start, loadMore } = usePagedTaskList({
+const {
+  items: tasks,
+  hasMore,
+  loading,
+  showLoading,
+  start,
+  loadMore,
+} = usePagedTaskList({
   basePath: () => `run_config/${encodeSeg(props.configId)}/`,
   matches: (task) => task.runConfigId === props.configId,
 });
@@ -103,11 +100,6 @@ function handleScroll(event: Event) {
 .config-tasks-scroll--virtual {
   width: 100%;
   overflow-x: auto;
-}
-
-.config-tasks-scroll--virtual--android {
-  height: 200px;
-  max-height: 200px;
 }
 
 .config-tasks-scroll--virtual--desktop {

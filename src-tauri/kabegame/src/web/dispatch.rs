@@ -388,6 +388,20 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "list_imported_recommended_presets",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|_p| {
+                Box::pin(async move {
+                    kabegame_core::commands::task::list_imported_recommended_presets()
+                        .await
+                        .map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_run_config",
         MethodEntry {
             requires_super: false,
