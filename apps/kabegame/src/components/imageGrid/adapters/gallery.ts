@@ -5,6 +5,7 @@ import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galle
 import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter } from "../types";
+import { albumChangeKinds, on } from "@/services/kbEvents";
 import { IS_WEB } from "@/env";
 
 /**
@@ -40,12 +41,15 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
     },
     // 空 `?path=` 表示回到默认画廊路径（如点击侧栏「画廊」）
     syncEmptyQueryPath: IS_WEB,
-    changes: {
-      relevant: (batch) =>
-        batch.images.size > 0 ||
-        (routeStore.effectiveNoAlbum && batch.albumIds.size > 0) ||
-        batch.albumStructure.size > 0,
-    },
+    refreshOn: [
+      on("images-change", (payload) => !!payload.reason),
+      // 「无画册」视图的结果集随画册成员变化
+      on("album-images-change", () => routeStore.effectiveNoAlbum),
+      on("album-changed", (payload) => {
+        const kinds = albumChangeKinds(payload);
+        return kinds.structure || (routeStore.effectiveNoAlbum && kinds.row);
+      }),
+    ],
     actionsOptions: () => ({ removeText: t("gallery.delete") }),
     remove: {
       dialogText: (count) => ({

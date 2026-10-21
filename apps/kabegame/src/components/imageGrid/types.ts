@@ -2,8 +2,7 @@ import type { Ref, ShallowRef } from "vue";
 import type { ImageInfo } from "@/types/image";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
-import type { ChangeBatch } from "@/services/dataChangeHub";
-import type { RowsSnapshot } from "@/services/liveQuery";
+import type { EventTrigger } from "@/services/kbEvents";
 
 export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
@@ -27,8 +26,8 @@ export interface GridRefreshContext {
    * 当前壁纸清理与页码越界回退。返回本次刷新被移除的 id。
    */
   refreshPage: () => Promise<{ removedIds: string[] }>;
-  /** 影响结果集的写操作唯一入口：携带当前行路径并立即应用返回行快照。 */
-  mutate: <T extends { view?: RowsSnapshot | null }>(op: (view: string | null) => Promise<T>) => Promise<T>;
+  /** 影响结果集的写操作唯一入口：写完立即补读当前行与总数，不等事件防抖。 */
+  mutate: <T>(op: () => Promise<T>) => Promise<T>;
   /** 仅修改展示字段，不重新查询视图。 */
   patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;
   loadTotalImagesCount: () => Promise<void>;
@@ -73,7 +72,8 @@ export interface GridAdapter {
   /** route.query.path 为空串时是否也执行 syncFromUrl（gallery 需要重置为默认路径） */
   syncEmptyQueryPath?: boolean;
 
-  changes?: { relevant?: (batch: ChangeBatch) => boolean };
+  /** 触发行与总数刷新的事件；每条只对一种事件，未列出的事件不刷新。 */
+  refreshOn: readonly EventTrigger[];
   /** 事件默认刷新完成后的追加动作（task: failedImagesStore.loadAll） */
   onAfterRefresh?: (ctx: GridRefreshContext, info: { removedIds: string[] }) => Promise<void> | void;
 

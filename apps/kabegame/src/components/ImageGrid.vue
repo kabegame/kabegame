@@ -111,15 +111,14 @@ import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { rowToImageInfo } from "@/utils/imageRow";
-import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 import { withGalleryPrefix } from "@/utils/path";
 import { diffById } from "@/utils/listDiff";
 import { createImageActions } from "@/actions/imageActions";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
 import { subscribeChanges } from "@/services/dataChangeHub";
-import { GRID_REFRESH_WAIT_MS, useLiveQuery, type RowsSnapshot, type TotalSnapshot } from "@/services/liveQuery";
-import { pathqlCount, pathqlView } from "@/services/pathql";
+import { GRID_REFRESH_WAIT_MS, type RowsSnapshot, type TotalSnapshot } from "@/services/liveQuery";
+import { triggerSeq$, useLivePathql } from "@/services/kbEvents";
 import { useProvideImageMetadataCache } from "@/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, fetchImageAlbums, removeImagesFromAlbum } from "@/services/albums";
@@ -414,30 +413,33 @@ const applyTotal = (snapshot: TotalSnapshot) => {
   totalImagesCount.value = snapshot.total;
 };
 
-const rowsQuery = useLiveQuery<RowsSnapshot>({
-  key: currentRowsPath,
-  read: pathqlView,
+const handleCountError = async (error: unknown) => {
+  const fallback = await adapter.onCountError?.(error, refreshCtx);
+  if (typeof fallback === "number") totalImagesCount.value = fallback;
+};
+
+// 行与总数共用同一组事件触发；各自按 key 从 pathql 数据源落地。
+const relevantChanges$ = triggerSeq$(adapter.refreshOn);
+
+const rowsQuery = useLivePathql({
   kind: "rows",
+  key: currentRowsPath,
+  changes: relevantChanges$,
   waitMs: GRID_REFRESH_WAIT_MS,
-  relevant: (batch) => adapter.changes?.relevant?.(batch) ?? true,
   onResult: applyRows,
   onError: (error) => {
     void adapter.onLoadError?.(error, rawViewPath());
   },
 });
 
-const totalQuery = useLiveQuery<TotalSnapshot>({
-  key: currentCountPath,
-  read: pathqlCount,
+const totalQuery = useLivePathql({
   kind: "total",
+  key: currentCountPath,
+  changes: relevantChanges$,
   waitMs: GRID_REFRESH_WAIT_MS,
   autoFetch: true,
-  relevant: (batch) => adapter.changes?.relevant?.(batch) ?? true,
   onResult: applyTotal,
-  onError: async (error) => {
-    const fallback = await adapter.onCountError?.(error, refreshCtx);
-    if (typeof fallback === "number") totalImagesCount.value = fallback;
-  },
+  onError: handleCountError,
 });
 
 // 加载当前页的行；总数由独立 live 状态按计数路径维护。
@@ -478,29 +480,24 @@ const refreshPage = async (): Promise<{ removedIds: string[] }> => {
   return { removedIds: lastRemovedIds };
 };
 
+/**
+ * 写操作唯一入口：写期间暂存事件通道，写完立即经请求通道补读行与总数（不等防抖），
+ * 结果仍从数据源落地；本次写产生的事件随后按 seq 跳过。补读失败不影响写操作的结果。
+ */
 const mutate: GridRefreshContext["mutate"] = async (op) => {
-  const view = rowsQuery.key();
-  const t0 = performance.now(); // DEBUG-PERF
-  const result = await op(view);
-  const t1 = performance.now(); // DEBUG-PERF
-  const current = rowsQuery.key();
-  const stillCurrent = !!view && view === current;
-  if (result.view && stillCurrent) await rowsQuery.apply(result.view);
-  void sendDebugEvent(
-    "grid_mutate",
-    {
-      adapter: adapter.id,
-      rows: view,
-      hasView: !!result.view,
-      stillCurrent,
-      seq: result.view?.seq,
-      n: result.view?.rows.length,
-      opMs: +(t1 - t0).toFixed(1),
-      applyMs: +(performance.now() - t1).toFixed(1),
-    },
-    { sessionId: "eventworker-perf" },
-  ); // DEBUG-PERF
-  return result;
+  const releaseRows = rowsQuery.hold();
+  const releaseTotal = totalQuery.hold();
+  try {
+    const result = await op();
+    await Promise.all([
+      rowsQuery.refetch().catch((error) => adapter.onLoadError?.(error, rawViewPath())),
+      totalQuery.refetch().catch(handleCountError),
+    ]);
+    return result;
+  } finally {
+    releaseRows();
+    releaseTotal();
+  }
 };
 
 const patchMany = (patches: ReadonlyMap<string, Partial<CoreImageInfo>>) => {
@@ -1249,10 +1246,10 @@ const runDefaultCommand = async (command: ContextCommand, payload: CoreContextCo
       const isUnhide = !!image.isHidden || (adapter.forceUnhide?.() ?? false);
       try {
         if (isUnhide) {
-          await refreshCtx.mutate((view) => removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids, { view }));
+          await refreshCtx.mutate(() => removeImagesFromAlbum(HIDDEN_ALBUM_ID, ids));
           ElMessage.success(t("contextMenu.unhideSuccess"));
         } else {
-          await refreshCtx.mutate((view) => addImagesToAlbum(HIDDEN_ALBUM_ID, ids, { view }));
+          await refreshCtx.mutate(() => addImagesToAlbum(HIDDEN_ALBUM_ID, ids));
           ElMessage.success(
             ids.length > 1 ? t("contextMenu.hiddenCount", { count: ids.length }) : t("contextMenu.hiddenOne"),
           );

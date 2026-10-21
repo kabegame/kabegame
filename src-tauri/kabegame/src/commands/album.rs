@@ -61,19 +61,14 @@ pub fn move_album<R: Runtime>(
 pub async fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
-    view: Option<String>,
 ) -> Result<Value, String> {
-    commands::album::add_images_to_album(album_id, image_ids, view).await
+    commands::album::add_images_to_album(album_id, image_ids).await
 }
 
 /// 将任务的全部图片加入画册（后端根据 task_id 取图，前端只负责选画册）
 #[tauri::command]
-pub async fn add_task_images_to_album(
-    task_id: String,
-    album_id: String,
-    view: Option<String>,
-) -> Result<Value, String> {
-    commands::album::add_task_images_to_album(task_id, album_id, view).await
+pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Result<Value, String> {
+    commands::album::add_task_images_to_album(task_id, album_id).await
 }
 
 #[tauri::command]
@@ -81,9 +76,8 @@ pub async fn remove_images_from_album<R: Runtime>(
     _app: AppHandle<R>,
     album_id: String,
     image_ids: Vec<String>,
-    view: Option<String>,
 ) -> Result<Value, String> {
-    commands::album::remove_images_from_album(album_id, image_ids, view).await
+    commands::album::remove_images_from_album(album_id, image_ids).await
 }
 
 #[tauri::command]

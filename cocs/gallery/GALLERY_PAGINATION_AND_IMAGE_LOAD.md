@@ -193,27 +193,46 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 
 ImageGrid 把数据变化分成两条通道：
 
-- **主动通道**：当前网格发起且会改变结果集的写操作走 `ctx.mutate`。命令携带当前
-  `view: string`（当前行路径），写入并发出事件后立即读取并返回 `{ rows, seq }`，前端直接应用，不等待防抖。
-  写命令不返回总数；总数由 hub 批次驱动的独立 live 状态在约 500ms 后更新。永久删除、隐藏/取消隐藏、
-  加入/移出画册与上划移除均已接入。
+- **请求通道（写后补读）**：当前网格发起且会改变结果集的写操作走 `ctx.mutate(() => ...)`。写命令不带
+  `view`、不返回快照，照常广播事件；`mutate` 在写期间暂存事件通道，写完立即经 `requestPathql` 新开读取
+  当前行与总数（不等防抖），结果从数据源落地，再放行暂存的事件。永久删除、隐藏/取消隐藏、
+  加入/移出画册与上划移除均已接入。首次加载、翻页与手动刷新也走这条通道。
 - **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
-- **被动通道**：下载、同步、整理、其他窗口或 MCP 引起的 `image-changed`、`images-change`、`album-images-change` 与
-  画册结构字段变更进入全局单例
+- **事件通道**：ImageGrid 的行与总数由 adapter 的 `refreshOn` 声明相关事件（每条只对一种事件：
+  `images-change`、`album-images-change`、`album-changed`），见下文「kbEvents」。
+- **字段补丁（迁移期仍在 hub）**：`image-changed` 与收藏成员变更，以及其它尚未迁移的消费方（画册树、侧栏、
+  预览、标签面板等）进入全局单例
   [`dataChangeHub.ts`](/apps/kabegame/src/services/dataChangeHub.ts)。hub 对每个订阅者按 500ms 时间窗合并
   reason 与各 id 集合，并按 imageId 浅合并 `imagePatches`（后到字段覆盖先到字段）；画册维度另含
   `albumIds` / `albumImageIds`、按到达顺序保存的 `favoriteOps`，以及
   `albumPaths` / `albumPathsWildcard` 和结构字段集合。画册成员事件携带画册 `ancestorPath`；新增、删除、
   改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。任一 `images-change` 缺少
   task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
-- [`liveQuery.ts`](/apps/kabegame/src/services/liveQuery.ts) 是「一个 key + 一个读函数」的单通道 live 状态；
-  在途请求按「读函数 + key」合并。ImageGrid 分别挂 `rowsQuery` 与 `totalQuery`，两者各自维护
-  `appliedSeq`、各自订阅 hub；`totalQuery` 在计数 key 变化或 inactive 期间标脏后重新激活时自动重读。
-  gallery/album 全部相关，task 与 surf 只按免费维度或 wildcard 粗过滤。
+### kbEvents（`services/kbEvents/`，rxjs）
 
-画册写命令除 `view` 外始终返回本次已发送事件的 `albumChanges` 副本。无状态 `services/albums.ts` 把返回的
+ImageGrid 的行与总数已迁到 [`services/kbEvents`](/apps/kabegame/src/services/kbEvents/index.ts)，
+`dataChangeHub` / `liveQuery` 在迁移期保留给其它消费方。分三层，事件源与数据源是两种不同的 observable：
+
+- **事件源** `kbEvent$(name)`：基于 `listen`（Tauri 事件或 Web SSE），同名事件共享一次监听，只取出
+  payload 的 `seq`（缺失记 0），不解析内容。`events.ts` 的 `KbEventMap` 只是类型表；`on(event, relevant)`
+  声明一条单事件触发，`triggerSeq$` 把多条合成「相关变更 seq」流。
+- **pathql 请求服务**（单例）`requestPathql(kind, path, { minSeq, join })`：按 `kind + path` 维护最新
+  `seq` 与在途读取。事件通道 `join: true` 可合并在途读取，数据源已不旧于 `minSeq` 时跳过，合并到的读取早于
+  `minSeq` 时再读一次；请求通道总是新开读取。结果只发布到 `pathqlData$(kind, path)` 这一 rows / count
+  数据源，`seq` 不倒退；调用方不直接写入快照。无订阅者且无在途读取时回收，不把离开路径的旧数据重放给后来者。
+- **`useLivePathql`**：订阅当前 key 的数据源与在途状态（旧路径的迟到结果与 loading 不影响新路径），
+  事件通道按 `waitMs` 经 `batchWindow`（空闲首个立即发，窗口内合并到窗口结束）防抖；`seq ≤ appliedSeq`
+  的事件不请求；key 为 null 时命中事件标脏，重新激活补读；`autoFetch` 用于总数（计数路径变化时自动读）；
+  `hold()` 供写操作暂存事件通道。
+- 各 adapter 的 `refreshOn`：gallery 响应带 reason 的 `images-change`、「无画册」视图下的
+  `album-images-change`，以及改结构字段（「无画册」视图下也含行字段）的 `album-changed`；album 响应
+  `images-change`、包含本画册的 `album-images-change` 与本画册的 `album-changed`；task / surf 只按
+  `taskIds` / `surfRecordIds` 或缺维度粗过滤 `images-change`。`album-added` / `album-deleted` 不带 `seq`，
+  不进网格触发。
+
+画册写命令始终返回本次已发送事件的 `albumChanges` 副本。无状态 `services/albums.ts` 把返回的
 成员事件用 `publishLocal` 立即投递；hub 记录其 `seq`，随后到达的同序号后端事件直接丢弃。画册树不维护全量
-列表或全量计数，只重拉相关的已加载目录；画册视图仍由主动快照或被动查询决定过滤、排序和分页后的最终行位置。
+列表或全量计数，只重拉相关的已加载目录；画册视图仍由写后补读或事件触发的查询决定过滤、排序和分页后的最终行位置。
 预览中的 `ImageLabelsPanel` 为避免替换底层列表导致跳页，保留 500ms 被动刷新。
 
 ### `seq` 一致性协议
@@ -221,16 +240,15 @@ ImageGrid 把数据变化分成两条通道：
 后端 `GlobalEmitter` 为 `image-changed`、`images-change`、`album-images-change` 与进入 hub 的
 `album-changed` 共用一个单调递增计数器，四者 payload 都携带 `seq`。
 
-行读取与总数读取都必须**先读取 `seq`，再执行各自查询**。带 `view` 的写命令在写库前取得全局
-`EventHold`：期间两类视图事件照常分配 `seq` 但暂存，行快照读完、守卫析构后才按序广播。因此事件不会触发
-查询来插队同一次主动行快照，且出错路径也会由 `Drop` 放行：
+行读取与总数读取都必须**先读取 `seq`，再执行各自查询**。快照 `seq = S` 表示序号不大于 S 的事件都已包含，
+事件与快照在同一条时间轴上，跨事件类型也可直接比较。ImageGrid 的写命令不再持有 `EventHold`，事件照常即时广播：
 
-- 行与总数实例各自用 `appliedSeq` 判断；某实例已覆盖事件时，该实例对
-  `maxSeq <= appliedSeq` 的回声批次不再重拉，不会因另一实例的新读取跳过变更；
-- 任意返回快照的 `seq < 本实例 appliedSeq` 时丢弃，旧的在途请求不会覆盖新状态；
+- 每个路径的数据源只发布 `seq` 不倒退的快照，旧的在途读取不会覆盖新状态；
+- 行与总数实例各自用 `appliedSeq` 判断，`seq <= appliedSeq` 的事件不再请求；
+- 写操作期间事件通道暂存，写后补读的快照 `seq` 不小于这次写产生的事件序号，放行时这些事件被跳过；
+  写响应与事件谁先到都不会多读一次；
 - 读数据期间新发出的事件具有更大的序号，随后会再触发一次拉取，允许多拉但不会漏变更。
-- 写操作应用行快照后，行实例会跳过回声批次；总数实例的序号仍落后，因而在约 500ms 批次窗口后重读。
-  若写操作删空最后一页，新总数到达后由 `usePagedGallery` 的 total watcher 把页码夹回新的最后一页。
+- 若写操作删空最后一页，新总数到达后由 `usePagedGallery` 的 total watcher 把页码夹回新的最后一页。
 
 ### `images-change`（`AppEvent::ImagesChange`，`images` 表）
 
@@ -246,7 +264,8 @@ ImageGrid 把数据变化分成两条通道：
   立即发，整理回填用 `native_metadata_image_patch` 并入本批补丁，下载入库只为同哈希的旧图补发（新图随后有 `add`）。
   前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（插件元数据为 `m<metadataId>`），面板在同一张图只换
   `imageMetadataId` 时保留旧内容重新取数，不闪。
-- ImageGrid 只通过 `dataChangeHub` 监听；`useImagesChangeRefresh.ts` 仍保留给 Surf.vue、工具栏等旧消费方。
+- ImageGrid 的行与总数经 `kbEvents` 监听，字段补丁暂经 `dataChangeHub`；`useImagesChangeRefresh.ts`
+  仍保留给 Surf.vue、工具栏等旧消费方。
   `GalleryToolbar` 接收当前 `filter`，在同一次刷新中并行读取过滤后 count 与仅保留 `hide` 上下文的总 count，
   两条都完成后才整体替换副标题计数，避免 `images-change` 后显示出跨两代的“数量 / 总数”。
 
@@ -286,9 +305,9 @@ ImageGrid 把数据变化分成两条通道：
 2. **改每页条数后仍显示旧页**：确认入口只写 `settings.galleryPageSize`，`ImageGrid` 的归一化
    `pageSize` 已更新，且本地页码按旧页首张图位置换算后触发新的 `rowsPath` 读取。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
-4. **删除后列表延迟或闪回**：确认调用从 `ctx.mutate` 传入了 `view`，返回快照的 `seq` 被
-   `rowsQuery.apply` 接收；不要靠 `images-change` 回刷当前操作。总数则应在 hub 批次窗口后独立重读。
-5. **任务/畅游详情收到无关刷新**：检查 hub 批次的 `wildcard.task/surf`。缺维度必须刷新，带维度时才允许按 id 排除。
+4. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，写后行与总数都经请求通道补读并从
+   `pathqlData$` 落地；不要靠事件防抖回刷当前操作，也不要直接写入命令返回值。
+5. **任务/畅游详情收到无关刷新**：检查 adapter `refreshOn` 对 `taskIds` / `surfRecordIds` 的判断。缺维度必须刷新，带维度时才允许按 id 排除。
 6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
    `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在
    该视图（检查 `hide/` 与过滤段）；有 `row_index` 但页码不对，查前端是否误用了
@@ -309,7 +328,8 @@ ImageGrid 把数据变化分成两条通道：
 | 本地页码 / 行路径 | `apps/kabegame/src/composables/usePagedGallery.ts`、`apps/kabegame/src/utils/galleryPath.ts` |
 | 视图快照 | `src-tauri/kabegame-core/src/commands/view.rs` |
 | 变更聚合 | `apps/kabegame/src/services/dataChangeHub.ts` |
-| 实时查询 | `apps/kabegame/src/services/liveQuery.ts` |
+| 事件源 / pathql 数据源 | `apps/kabegame/src/services/kbEvents/` |
+| 实时查询（迁移期旧实现） | `apps/kabegame/src/services/liveQuery.ts` |
 | 列表加载 | `apps/kabegame/src/components/ImageGrid.vue` |
 | 深链接定位（前端） | `apps/kabegame/src/services/imageLocate.ts` |
 | 序号 provider | `src-tauri/kabegame-core/src/providers/dsl/shared/rank_provider.json5` |

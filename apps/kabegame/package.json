@@ -27,6 +27,7 @@
     "marked": "^17.0.4",
     "photoswipe-vue": "workspace:*",
     "pinia": "^2.1.7",
+    "rxjs": "^7.8.2",
     "tauri-plugin-android-battery-optimization-api": "^0.1.0",
     "tauri-plugin-picker-api": "workspace:*",
     "vant": "^4.9.22",

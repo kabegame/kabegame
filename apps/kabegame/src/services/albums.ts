@@ -1,7 +1,6 @@
 import { invoke } from "@/api/rpc";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { albumChangeBatch, publishLocal, type ChangeBatch } from "@/services/dataChangeHub";
-import type { RowsSnapshot } from "@/services/liveQuery";
 import { pathqlEntry, pathqlFetch } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
@@ -59,13 +58,11 @@ export interface AddToAlbumResult {
   canAdd: number;
   currentCount: number;
   albumChanges: AlbumImagesChangePayload[];
-  view?: RowsSnapshot | null;
 }
 
 export interface RemoveFromAlbumResult {
   removed: number;
   albumChanges: AlbumImagesChangePayload[];
-  view?: RowsSnapshot | null;
 }
 
 function parseParentId(raw: unknown): string | null {
@@ -400,41 +397,21 @@ export async function deleteAlbum(albumId: string) {
   publishLocal(structuralBatch(album, "deleted"));
 }
 
-export async function addImagesToAlbum(
-  albumId: string,
-  imageIds: string[],
-  opts?: { view?: string | null },
-): Promise<AddToAlbumResult> {
-  const result = await invoke<AddToAlbumResult>("add_images_to_album", { albumId, imageIds, view: opts?.view ?? null });
+export async function addImagesToAlbum(albumId: string, imageIds: string[]): Promise<AddToAlbumResult> {
+  const result = await invoke<AddToAlbumResult>("add_images_to_album", { albumId, imageIds });
   publishAlbumChanges(result.albumChanges);
   return result;
 }
 
-export async function addTaskImagesToAlbum(
-  taskId: string,
-  albumId: string,
-  opts?: { view?: string | null },
-): Promise<AddToAlbumResult> {
-  const result = await invoke<AddToAlbumResult>("add_task_images_to_album", {
-    taskId,
-    albumId,
-    view: opts?.view ?? null,
-  });
+export async function addTaskImagesToAlbum(taskId: string, albumId: string): Promise<AddToAlbumResult> {
+  const result = await invoke<AddToAlbumResult>("add_task_images_to_album", { taskId, albumId });
   publishAlbumChanges(result.albumChanges);
   return result;
 }
 
-export async function removeImagesFromAlbum(
-  albumId: string,
-  imageIds: string[],
-  opts?: { view?: string | null },
-): Promise<RemoveFromAlbumResult> {
+export async function removeImagesFromAlbum(albumId: string, imageIds: string[]): Promise<RemoveFromAlbumResult> {
   if (!imageIds.length) return { removed: 0, albumChanges: [] };
-  const result = await invoke<RemoveFromAlbumResult>("remove_images_from_album", {
-    albumId,
-    imageIds,
-    view: opts?.view ?? null,
-  });
+  const result = await invoke<RemoveFromAlbumResult>("remove_images_from_album", { albumId, imageIds });
   publishAlbumChanges(result.albumChanges);
   return result;
 }

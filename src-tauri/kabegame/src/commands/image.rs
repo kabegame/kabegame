@@ -86,19 +86,13 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn batch_delete_images(
-    image_ids: Vec<String>,
-    view: Option<String>,
-) -> Result<Value, String> {
-    commands::image::batch_delete_images(image_ids, view).await
+pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
+    commands::image::batch_delete_images(image_ids).await
 }
 
 #[tauri::command]
-pub async fn batch_remove_images(
-    image_ids: Vec<String>,
-    view: Option<String>,
-) -> Result<Value, String> {
-    commands::image::batch_remove_images(image_ids, view).await
+pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
+    commands::image::batch_remove_images(image_ids).await
 }
 
 #[tauri::command]

@@ -5,6 +5,7 @@ import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridAdapter } from "../types";
+import { on } from "@/services/kbEvents";
 
 /**
  * TaskDetail（`/tasks/:id`）的 grid adapter。
@@ -29,12 +30,13 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
       // 兜底：避免“静默 0 张”让用户误判，提示可能是 provider-path 解析/缓存导致的问题
       ElMessage.error(t("tasks.loadImagesFailed"));
     },
-    changes: {
-      relevant: (batch) => {
+    refreshOn: [
+      on("images-change", (payload) => {
         const tid = params.taskId();
-        return !!tid && batch.images.size > 0 && (batch.wildcard.task || batch.taskIds.has(tid));
-      },
-    },
+        // 未携带 taskIds 表示范围未知，按命中处理
+        return !!tid && !!payload.reason && (!Array.isArray(payload.taskIds) || payload.taskIds.includes(tid));
+      }),
+    ],
     // 失败图片计数与当前页数据同源刷新
     onAfterRefresh: async () => {
       await failedImagesStore.loadAll();

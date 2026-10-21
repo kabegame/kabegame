@@ -4,6 +4,7 @@ import router from "@/router";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridAdapter } from "../types";
+import { on } from "@/services/kbEvents";
 
 /**
  * SurfImages（`/surf/:host/images`）的 grid adapter。
@@ -27,12 +28,15 @@ export function createSurfImagesAdapter(params: {
       const e = error as { message?: string } | null;
       ElMessage.error(e?.message || String(error) || t("surf.loadImagesFailed"));
     },
-    changes: {
-      relevant: (batch) => {
+    refreshOn: [
+      on("images-change", (payload) => {
         const rid = params.recordId();
-        return !!rid && batch.images.size > 0 && (batch.wildcard.surf || batch.surfRecordIds.has(rid));
-      },
-    },
+        // 未携带 surfRecordIds 表示范围未知，按命中处理
+        return (
+          !!rid && !!payload.reason && (!Array.isArray(payload.surfRecordIds) || payload.surfRecordIds.includes(rid))
+        );
+      }),
+    ],
     actionsOptions: () => ({
       removeText: t("surf.removeText"),
       multiHide: ["favorite", "addToAlbum"],

@@ -15,7 +15,6 @@ import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
-import type { RowsSnapshot } from "@/services/liveQuery";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 export type FavoriteStatusChangedDetail = {
@@ -226,11 +225,8 @@ export function useImageOperations(
       const includesCurrent =
         !!currentWallpaperImageId.value && imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
-      const result = await mutate((view) =>
-        invoke<{
-          view?: RowsSnapshot | null;
-          albumChanges: AlbumImagesChangePayload[];
-        }>("batch_delete_images", { imageIds, view }),
+      const result = await mutate(() =>
+        invoke<{ albumChanges: AlbumImagesChangePayload[] }>("batch_delete_images", { imageIds }),
       );
       for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
 
@@ -255,7 +251,7 @@ export function useImageOperations(
 
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
-      await mutate((view) => addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds, { view }));
+      await mutate(() => addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds));
 
       ElMessage.success(
         count > 1 ? i18n.global.t("contextMenu.hiddenCount", { count }) : i18n.global.t("contextMenu.hiddenOne"),
@@ -363,7 +359,7 @@ export function useImageOperations(
         // 3. 将选中的图片添加到画册
         const imageIds = imagesToProcess.map((img) => img.id);
         try {
-          await mutate((view) => addImagesToAlbum(createdAlbum.id, imageIds, { view }));
+          await mutate(() => addImagesToAlbum(createdAlbum.id, imageIds));
         } catch (error: any) {
           // 提取友好的错误信息
           const errorMessage =

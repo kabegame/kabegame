@@ -65,7 +65,6 @@ import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, addTaskImagesToAlbum, createAlbum } from "@/services/albums";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
-import type { RowsSnapshot } from "@/services/liveQuery";
 
 interface Props {
   open: boolean;
@@ -105,8 +104,7 @@ const newAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
 
-const runMutation = <T extends { view?: RowsSnapshot | null }>(operation: (view: string | null) => Promise<T>) =>
-  props.mutate ? props.mutate(operation) : operation(null);
+const runMutation = <T,>(operation: () => Promise<T>) => (props.mutate ? props.mutate(operation) : operation());
 
 watch(
   () => props.open,
@@ -169,10 +167,10 @@ const handleCreateAndAddAlbum = async () => {
     });
 
     if (isTaskMode) {
-      const result = await runMutation((view) => addTaskImagesToAlbum(props.taskId!, created.id, { view }));
+      const result = await runMutation(() => addTaskImagesToAlbum(props.taskId!, created.id));
       ElMessage.success(t("albums.createAlbumAndAddTask", { name: created.name, count: result.added }));
     } else {
-      const result = await runMutation((view) => addImagesToAlbum(created.id, props.imageIds, { view }));
+      const result = await runMutation(() => addImagesToAlbum(created.id, props.imageIds));
       ElMessage.success(t("albums.createAlbumAndAdd", { name: created.name, count: result.added }));
     }
 
@@ -200,7 +198,7 @@ const confirmAddToAlbum = async () => {
 
   try {
     if (isTaskMode) {
-      const result = await runMutation((view) => addTaskImagesToAlbum(props.taskId!, albumId, { view }));
+      const result = await runMutation(() => addTaskImagesToAlbum(props.taskId!, albumId));
       if (result.added === 0) {
         ElMessage.info(t("albums.allInAlbum"));
       } else {
@@ -211,7 +209,7 @@ const confirmAddToAlbum = async () => {
       return;
     }
 
-    const result = await runMutation((view) => addImagesToAlbum(albumId, props.imageIds, { view }));
+    const result = await runMutation(() => addImagesToAlbum(albumId, props.imageIds));
     const skippedCount = result.attempted - result.added;
     if (result.added === 0) {
       ElMessage.info(t("albums.allInAlbum"));

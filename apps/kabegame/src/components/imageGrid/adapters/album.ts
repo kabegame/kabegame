@@ -10,7 +10,7 @@ import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
-import type { RowsSnapshot } from "@/services/liveQuery";
+import { albumChangeKinds, on } from "@/services/kbEvents";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 /**
@@ -52,13 +52,9 @@ export function createAlbumDetailAdapter(params: {
     confirm: async (images, ctx) => {
       const count = images.length;
       try {
-        const result = await ctx.mutate((view) =>
-          invoke<{
-            view?: RowsSnapshot | null;
-            albumChanges: AlbumImagesChangePayload[];
-          }>("batch_delete_images", {
+        const result = await ctx.mutate(() =>
+          invoke<{ albumChanges: AlbumImagesChangePayload[] }>("batch_delete_images", {
             imageIds: images.map((img) => img.id),
-            view,
           }),
         );
         for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
@@ -92,12 +88,19 @@ export function createAlbumDetailAdapter(params: {
       console.error("获取画册总图片数失败:", error);
       return ctx.images.value.length;
     },
-    changes: {
-      relevant: (batch) => {
+    refreshOn: [
+      on("images-change", (payload) => !!params.albumId() && !!payload.reason),
+      on("album-images-change", (payload) => {
         const id = params.albumId();
-        return !!id && (batch.images.size > 0 || batch.albumIds.has(id));
-      },
-    },
+        return !!id && (payload.albumIds ?? []).includes(id);
+      }),
+      on("album-changed", (payload) => {
+        const id = params.albumId();
+        if (!id || payload.albumId !== id) return false;
+        const kinds = albumChangeKinds(payload);
+        return kinds.structure || kinds.row;
+      }),
+    ],
     actionsOptions: () => ({
       removeText: t("gallery.removeFromAlbum"),
       deleteText: t("gallery.deleteImageFiles"),
@@ -130,11 +133,10 @@ export function createAlbumDetailAdapter(params: {
         if (!id) return;
         const count = images.length;
         try {
-          await ctx.mutate((view) =>
+          await ctx.mutate(() =>
             removeImagesFromAlbum(
               id,
               images.map((img) => img.id),
-              { view },
             ),
           );
           clearCurrentWallpaperIfIncluded(images);
@@ -157,11 +159,10 @@ export function createAlbumDetailAdapter(params: {
       const id = params.albumId();
       if (!id || images.length === 0) return;
       try {
-        await ctx.mutate((view) =>
+        await ctx.mutate(() =>
           removeImagesFromAlbum(
             id,
             images.map((img) => img.id),
-            { view },
           ),
         );
         clearCurrentWallpaperIfIncluded(images);

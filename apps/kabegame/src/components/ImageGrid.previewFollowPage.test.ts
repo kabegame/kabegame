@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImageGrid from "./ImageGrid.vue";
 import type { GridAdapter } from "@/components/imageGrid/types";
 import type { RowsSnapshot } from "@/services/liveQuery";
-import { pathqlView } from "@/services/pathql";
 import { withPaged } from "@/utils/galleryPath";
 
 const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) => Promise<number | null>>());
@@ -45,19 +44,20 @@ vi.mock("@/services/pathql", () => ({
   pathqlList: vi.fn(),
   pathqlFetch: vi.fn(),
 }));
-vi.mock("@/services/liveQuery", () => ({
-  GRID_REFRESH_WAIT_MS: 500,
-  useLiveQuery: (opts: {
+vi.mock("@/services/liveQuery", () => ({ GRID_REFRESH_WAIT_MS: 500 }));
+vi.mock("@/services/kbEvents", () => ({
+  triggerSeq$: () => ({}),
+  useLivePathql: (opts: {
+    kind: "rows" | "total";
     key: () => string | null;
-    read: unknown;
     onResult: (snapshot: RowsSnapshot) => Promise<void> | void;
   }) => {
-    const isRows = opts.read === pathqlView;
+    const isRows = opts.kind === "rows";
     if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
     return {
       loading: isRows ? queryLoading : ref(false),
       refetch: isRows ? refetch : totalRefetch,
-      apply: opts.onResult,
+      hold: () => () => {},
       key: opts.key,
     };
   },
@@ -125,6 +125,7 @@ function mountGrid() {
     routeStore,
     isActive: () => true,
     computeCountPath: () => "hide",
+    refreshOn: [],
     remove: { dialogText: () => ({ title: "remove", message: "remove" }) },
   };
   const wrapper = shallowMount(ImageGrid, { props: { adapter } });

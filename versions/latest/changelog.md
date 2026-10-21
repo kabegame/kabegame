@@ -8,6 +8,7 @@
 - 收集弹窗里的路径变量控件支持从系统拖入文件或文件夹（单文件 / 单文件夹，扩展名按变量 `options` 过滤）；拖入类型不符或一次拖入多项时提示「此处不支持」。
 
 ### Optimized
+- 画廊、画册、任务与畅游图片网格在删除、隐藏、加入 / 移出画册后立即刷新当前页与总数，后台下载等事件按序号去重合并，同一变更不再重复读取。
 - 运行配置新增、导入、编辑、复制、定时开关与删除立即同步当前列表和推荐导入状态；事件按序号补位，避免重复刷新和推荐卡片闪回骨架。
 - 插件列表改为轻量清单，文档、配图、模板与推荐配置经 `/plugin_file?...v=<版本>` 按需加载；自动配置推荐逐项显示并刷新导入状态，任务脚本在冻结时读取。
 - 运行配置页改为 chip 过滤与卡片网格，可按状态、最近结果、插件和定时模式筛选并切换六种排序；卡片直接显示最后一次任务和下次运行。插件推荐会标记是否已导入，定时规则新增每小时与每周多选日期。
@@ -29,4 +30,5 @@
 ## 开发侧
 
 ### Changed
+- 新增 `services/kbEvents`（rxjs）：后端事件源 `kbEvent$` 与 pathql 请求服务 / `pathqlData$` 数据源分离；ImageGrid 改用 `useLivePathql`，adapter 以 `refreshOn` 按单事件声明刷新条件。`batch_delete_images`、`batch_remove_images`、`add_images_to_album`、`add_task_images_to_album`、`remove_images_from_album` 去掉 `view` 参数与返回快照。
 - 桌面文件拖入的 `v-drag-file` 指令重构为 `<DragFileZone>` 组件：注册表持有响应式 props，命中改为按 z 序（`elementsFromPoint` + 父链），修复 teleport 弹窗遮挡时底下热区抢 drop 的问题；画廊、画册、插件页与路径控件的热区行为保持不变。

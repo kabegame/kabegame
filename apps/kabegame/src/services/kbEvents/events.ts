@@ -1,0 +1,54 @@
+import { filter, map, merge, type Observable } from "rxjs";
+import type { ImageChangedPayload, ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
+import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import { kbEvent$ } from "./eventSource";
+
+export type AlbumChangedPayload = {
+  seq?: number;
+  albumId?: string;
+  changes?: Record<string, unknown>;
+};
+
+/** 已接入的后端事件与 payload 类型；核心事件源本身不依赖此表。 */
+export interface KbEventMap {
+  "images-change": ImagesChangePayload;
+  "image-changed": ImageChangedPayload;
+  "album-images-change": AlbumImagesChangePayload;
+  "album-changed": AlbumChangedPayload;
+}
+
+/** 一种事件的触发条件：每条只对一种事件。 */
+export interface EventTrigger {
+  event: string;
+  relevant: (payload: unknown) => boolean;
+}
+
+export function on<K extends keyof KbEventMap>(
+  event: K,
+  relevant: (payload: KbEventMap[K]) => boolean = () => true,
+): EventTrigger {
+  return { event, relevant: relevant as (payload: unknown) => boolean };
+}
+
+/** 把若干单事件触发合成一条「相关变更序号」流，供请求服务的事件通道使用。 */
+export function triggerSeq$(triggers: readonly EventTrigger[]): Observable<number> {
+  return merge(
+    ...triggers.map((trigger) =>
+      kbEvent$(trigger.event).pipe(
+        filter((event) => trigger.relevant(event.payload)),
+        map((event) => event.seq),
+      ),
+    ),
+  );
+}
+
+const ALBUM_STRUCTURE_FIELDS = ["name", "parentId", "labelKey", "albumType"];
+// 只改画册行展示的字段：不影响图片结果集，只有画册自身的视图关心
+const ALBUM_ROW_FIELDS = ["syncMode"];
+
+/** album-changed 是否改了画册结构字段 / 行展示字段。 */
+export function albumChangeKinds(payload: AlbumChangedPayload): { structure: boolean; row: boolean } {
+  const changes = payload.changes ?? {};
+  const has = (field: string) => Object.prototype.hasOwnProperty.call(changes, field);
+  return { structure: ALBUM_STRUCTURE_FIELDS.some(has), row: ALBUM_ROW_FIELDS.some(has) };
+}
