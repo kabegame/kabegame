@@ -3,6 +3,7 @@ import { affectsAlbumDir, type ChangeBatch } from "./dataChangeHub";
 
 function batch(paths: string[], wildcard = false): ChangeBatch {
   return {
+    runConfigs: new Map(),
     images: new Set(),
     imageIds: new Set(),
     imagePatches: new Map(),

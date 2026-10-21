@@ -13,21 +13,22 @@ pub async fn get_run_configs() -> IpcResponse {
 }
 
 pub async fn add_run_config(config: &serde_json::Value) -> IpcResponse {
-    match kabegame_core::commands::task::add_run_config(config.clone()).await {
+    match kabegame_core::commands::task::add_run_config(config.clone(), None, None).await {
         Ok(result) => IpcResponse::ok_with_data("added", result),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn update_run_config(config: &serde_json::Value) -> IpcResponse {
-    match kabegame_core::commands::task::update_run_config(config.clone()).await {
+    match kabegame_core::commands::task::update_run_config(config.clone(), None, None).await {
         Ok(result) => IpcResponse::ok_with_data("updated", result),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn delete_run_config(config_id: &str) -> IpcResponse {
-    match kabegame_core::commands::task::delete_run_config(config_id.to_string()).await {
+    match kabegame_core::commands::task::delete_run_config(config_id.to_string(), None, None).await
+    {
         Ok(_) => IpcResponse::ok("deleted"),
         Err(e) => IpcResponse::err(e),
     }

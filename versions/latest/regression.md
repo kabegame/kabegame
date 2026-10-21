@@ -1,5 +1,22 @@
 # v4.6.1 regression
 
+## 运行配置写后主动同步与异步补位
+
+配置行采用与画廊 `pathql_view` 相同的 `{ rows, seq }` 快照；推荐导入态随写命令返回，总数独立读取。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端回归 | macOS Vitest | 全量前端测试 | 全部通过 | 38 个文件、297 项；新增事件早到、同序号去重、切路径、失败释放、其它配置外部事件放行、累计窗口与总数分离、晚到 HTTP 不覆盖导入态用例 |
+| [x] | 编译与兼容入口 | macOS | 桌面 vue-tsc / cargo check；CLI 与 Web feature check | 0 error | 使用 check-kabegame 驱动；CLI 需 --skip vue（无前端目录） |
+| [x] | 后端相关测试 | macOS core | commands::task::tests | 全部通过 | 8 项，包含导入内容规范化及忽略名称/定时的匹配规则 |
+| [x] | 自身新增、编辑、复制与删除 | macOS CEF dev | 新增与 blue-archive 推荐内容相同且禁用定时的临时配置；改名、改 URL、恢复 URL、复制、删除原件、删除副本 | 命令返回时立即同步行与导入态 | false→true→true→false→true→true→true→false；删除原件后有副本仍为已导入；未等待广播 |
+| [x] | 自身操作不重复拉取 | debug ingest config-sync | 连续执行以上 7 次写操作并检查带 ts 的记录 | 不额外重读行或整批推荐 JSON；总数单独补读 | config_write_applied 7 次、config_count_read 7 次；写期间 config_view_read / config_recommended_read 均 0；每次返回 45 项导入态；临时插桩已删除 |
+| [x] | 实际推荐导入入口 | macOS CEF dev | 调用 importRecommendedPreset 导入无定时预设 | 返回时列表出现、isImported=true | scheduleEnabled=false；随后走旧形状命令删除，验证异步补位 |
+| [x] | 外部事件补位 | macOS CEF dev | 不经主动通道直接调用 delete_run_config | 事件后更新当前行、总数和推荐导入态 | 700ms 后 isImported=false、行已移除；debug ingest 确认补读行与推荐 JSON；未包装 invoke |
+| [x] | 筛选移入与移出 | macOS CEF dev | 搜索 config-sync-filter；新增匹配项，再把名字改出筛选范围 | 写响应中的当前视图立即变为 1 行、0 行 | 总数由独立通道更新，不由前端插入/排序推算 |
+| [x] | 清理与目视 | macOS CEF dev | 删除本轮全部临时配置，恢复原筛选 | 不遗留数据或定时任务；推荐卡片完整 | 5 条原配置、total=5、45 张已加载推荐卡；已目视截图 /tmp/kabegame-config-sync.png；未启用临时定时任务 |
+| [ ] | Android | Android dev | 同样执行导入、编辑和删除 | 与桌面一致 | 沿用既有环境限制：缺 adb 与 Android rusty_v8 / FFmpeg 自建产物，待真机验证 |
+
 ## 插件文件按需读取（`/plugin_file`，版本参数 `v`）
 
 列表与事件仅带清单、图标和资源键；文档、模板、推荐配置、资源及脚本从 kgpg 按需读取。

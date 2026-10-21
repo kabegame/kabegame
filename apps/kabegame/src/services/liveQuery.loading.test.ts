@@ -58,6 +58,7 @@ function createRowsQuery(
 
 function batch(maxSeq: number): ChangeBatch {
   return {
+    runConfigs: new Map(),
     images: new Set(["updated"]),
     imageIds: new Set(),
     imagePatches: new Map(),

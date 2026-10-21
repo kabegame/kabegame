@@ -11,10 +11,7 @@ import {
 import { fetchRunConfig, subscribeRunConfigEvents, type RunConfigEvent } from "@/services/runConfigs";
 import type { CrawlTask } from "@/stores/crawler";
 
-export function usePagedTaskList(options: {
-  basePath: () => string;
-  matches: (task: CrawlTask) => boolean;
-}) {
+export function usePagedTaskList(options: { basePath: () => string; matches: (task: CrawlTask) => boolean }) {
   const items = shallowRef<CrawlTask[]>([]);
   const total = ref(0);
   // 真实加载态 loading 只做并发守卫与空态判断；showLoading 超过延迟才为真，供 v-loading 转圈，避免快速返回时闪烁
@@ -103,7 +100,7 @@ export function usePagedTaskList(options: {
       return;
     }
     if (event.reason !== "configchange") return;
-    const config = await fetchRunConfig(event.configId);
+    const config = event.config !== undefined ? event.config : await fetchRunConfig(event.configId);
     if (activeGeneration !== generation) return;
     items.value = items.value.map((task) =>
       task.runConfigId === event.configId ? { ...task, runConfigName: config?.name ?? null } : task,

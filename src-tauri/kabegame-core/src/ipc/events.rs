@@ -358,6 +358,8 @@ pub enum AppEvent {
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
     AutoConfigChange {
+        #[serde(default)]
+        seq: u64,
         reason: String,
         #[serde(rename = "configId")]
         config_id: String,

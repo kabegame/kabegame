@@ -1,5 +1,5 @@
 ---
-description: ImageGrid 写操作必须通过视图快照主动更新，展示字段改动使用就地 patch
+description: ImageGrid 与运行配置写操作通过视图快照主动更新，事件异步补位
 globs: "apps/kabegame/src/**/*.{ts,vue}, src-tauri/kabegame*/src/**/*.rs"
 alwaysApply: false
 ---
@@ -39,3 +39,17 @@ alwaysApply: false
   entry 总数。`~~` 之后的逐行计数用 `group_by`，不要 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
 - 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行
   单画册查询并通过 `dataChangeHub` 的 `ancestorPath` 相关性订阅刷新；不得重新引入全量列表。
+
+## 运行配置写操作
+
+- 新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，携带可选 `view`
+  和活跃推荐文件引用；立即应用 `{ rows, seq }` 与推荐导入态，不依赖自身广播刷新。
+- 当前已加载 N 页作为一个累计行窗口，写后由后端重新过滤、排序与补齐，不自行插入或重排配置行。
+  总数用独立 `liveQuery`，翻页不重查未变的计数路径。
+- core、Tauri 薄包装和 Web dispatch 支持可选 `view` / `recommended`；两者均不传时保持旧 IPC 的单行/null 返回。
+- 写库前取得 `GlobalEmitter::hold()`；配置事件分配全局 `seq`，行快照和推荐导入态读完才放行广播。
+- 前端在发命令前缓冲配置事件，主动快照落地后经 hub 发布返回行，再放行未覆盖的外部事件。
+  失败也必须释放缓冲；同序号与同配置已被主动结果覆盖的旧事件不重复刷新。
+- 路径/插件来源切换后丢弃旧响应；推荐导入态拒绝旧序号，在途 HTTP 不得覆盖新写结果。
+  外部事件经 hub 补位，推荐卡片刷新期间保留内容；自身操作不重拉整批推荐 JSON。
+- 详情与任务关联名优先消费本地返回行；远端事件没有返回行时才按 id 补读。

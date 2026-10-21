@@ -1,4 +1,4 @@
-import { listen } from "@/api";
+import { subscribeChanges } from "./dataChangeHub";
 import { pathqlCount, pathqlFetch, pathqlList } from "@/services/pathql";
 import type { CrawlTask, RunConfig, RunConfigLastResult, RunConfigLastTask, ScheduleSpec } from "@/stores/crawler";
 import { encodeSeg } from "@kabegame/pathql-client";
@@ -18,6 +18,8 @@ export type RunConfigQuery = {
 export type RunConfigEvent = {
   reason: "configadd" | "configdelete" | "configchange";
   configId: string;
+  seq: number;
+  config?: RunConfig | null;
 };
 
 function numberOpt(value: unknown): number | undefined {
@@ -207,38 +209,22 @@ export function compareRunConfigs(sort: RunConfigSort, dir: "asc" | "desc") {
   };
 }
 
-const configSubscribers = new Set<(event: RunConfigEvent) => void>();
-let configUnlisten: (() => void) | null = null;
-let configListenPending: Promise<void> | null = null;
-
-function ensureConfigListener() {
-  if (configUnlisten || configListenPending) return;
-  configListenPending = listen("auto-config-change", (event) => {
-    const row = event.payload as Record<string, unknown> | null;
-    const reason = String(row?.reason ?? "") as RunConfigEvent["reason"];
-    const configId = String(row?.configId ?? row?.config_id ?? "").trim();
-    if (!configId || !["configadd", "configdelete", "configchange"].includes(reason)) return;
-    for (const subscriber of [...configSubscribers]) subscriber({ reason, configId });
-  })
-    .then((unlisten) => {
-      configListenPending = null;
-      if (configSubscribers.size === 0) unlisten();
-      else configUnlisten = unlisten;
-    })
-    .catch((error) => {
-      configListenPending = null;
-      console.error("监听运行配置事件失败:", error);
-    });
-}
-
+/** 统一经过 dataChangeHub：本地写结果即时投递，后端事件按 seq 补位。 */
 export function subscribeRunConfigEvents(handler: (event: RunConfigEvent) => void): () => void {
-  configSubscribers.add(handler);
-  ensureConfigListener();
-  return () => {
-    configSubscribers.delete(handler);
-    if (configSubscribers.size === 0 && configUnlisten) {
-      configUnlisten();
-      configUnlisten = null;
-    }
-  };
+  return subscribeChanges({
+    waitMs: 200,
+    filter: (batch) => batch.runConfigs.size > 0,
+    onBatch: (batch) => {
+      for (const [configId, change] of batch.runConfigs) {
+        handler({
+          reason: change.reason,
+          configId,
+          seq: batch.maxSeq,
+          ...(Object.prototype.hasOwnProperty.call(change, "config")
+            ? { config: normalizeRunConfigRow(change.config) }
+            : {}),
+        });
+      }
+    },
+  });
 }

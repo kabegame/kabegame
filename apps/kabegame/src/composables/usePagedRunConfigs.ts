@@ -1,15 +1,15 @@
+import { pathqlCount, pathqlView } from "@/services/pathql";
+import { useLiveQuery, type RowsSnapshot, type TotalSnapshot } from "@/services/liveQuery";
+import { registerRunConfigView } from "@/services/runConfigWrites";
+import { normalizeRunConfigRow } from "@/services/runConfigs";
 import { onScopeDispose, ref, shallowRef } from "vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import {
   compareRunConfigs,
   fetchRunConfig,
-  fetchRunConfigPage,
-  fetchRunConfigTotal,
   lastResultOf,
   lastTaskFromCrawlTask,
   RUN_CONFIG_PAGE_SIZE,
-  subscribeRunConfigEvents,
-  type RunConfigEvent,
   type RunConfigSort,
 } from "@/services/runConfigs";
 import { normalizeTaskRow, subscribeTaskEvents, type TaskEvent } from "@/services/tasks";
@@ -26,8 +26,8 @@ export function usePagedRunConfigs(options: {
   const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
   const hasMore = ref(false);
   let generation = 0;
-  let page = 1;
-  let unsubscribeConfig: (() => void) | null = null;
+  const page = ref(1);
+  const active = ref(false);
   let unsubscribeTasks: (() => void) | null = null;
   let countTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -36,15 +36,33 @@ export function usePagedRunConfigs(options: {
     return compareRunConfigs(key, dir);
   }
 
+  const rowsQuery = useLiveQuery<RowsSnapshot>({
+    key: () => (active.value ? `run_configs://${options.basePath()}x${page.value * RUN_CONFIG_PAGE_SIZE}x/1` : null),
+    read: pathqlView,
+    waitMs: 200,
+    relevant: (batch) => batch.runConfigs.size > 0,
+    onResult: (snapshot) => {
+      items.value = snapshot.rows.map(normalizeRunConfigRow).filter((config): config is RunConfig => config !== null);
+      hasMore.value = items.value.length >= page.value * RUN_CONFIG_PAGE_SIZE && items.value.length < total.value;
+    },
+  });
+  const totalQuery = useLiveQuery<TotalSnapshot>({
+    key: () => (active.value ? `run_configs://${options.countPath().replace(/\/$/, "")}` : null),
+    read: pathqlCount,
+    waitMs: 200,
+    relevant: (batch) => batch.runConfigs.size > 0,
+    onResult: (snapshot) => {
+      total.value = snapshot.total;
+      hasMore.value = items.value.length >= page.value * RUN_CONFIG_PAGE_SIZE && items.value.length < total.value;
+    },
+  });
+  const unregisterView = registerRunConfigView({ key: rowsQuery.key, apply: rowsQuery.apply });
+
   function scheduleCountRefresh() {
     if (countTimer) clearTimeout(countTimer);
-    const activeGeneration = generation;
-    countTimer = setTimeout(async () => {
+    countTimer = setTimeout(() => {
       countTimer = null;
-      const count = await fetchRunConfigTotal(options.countPath());
-      if (activeGeneration !== generation) return;
-      total.value = count;
-      hasMore.value = items.value.length < total.value;
+      void totalQuery.refetch();
     }, 200);
   }
 
@@ -66,17 +84,6 @@ export function usePagedRunConfigs(options: {
     const seen = new Set<string>();
     items.value = next.sort(comparator()).filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)));
     if (index === -1 || refreshCount) scheduleCountRefresh();
-  }
-
-  async function applyConfigEvent(event: RunConfigEvent, activeGeneration: number) {
-    if (activeGeneration !== generation) return;
-    if (event.reason === "configdelete") {
-      remove(event.configId, true);
-      return;
-    }
-    const config = await fetchRunConfig(event.configId);
-    if (activeGeneration !== generation || !config) return;
-    upsert(config, true);
   }
 
   // taskId → 配置 id：TaskChanged / TaskDeleted 不带 runConfigId，只能靠 TaskAdded 时记下
@@ -133,34 +140,23 @@ export function usePagedRunConfigs(options: {
   }
 
   async function start() {
-    unsubscribeConfig?.();
     unsubscribeTasks?.();
     const activeGeneration = ++generation;
-    const configBuffer: RunConfigEvent[] = [];
     const taskBuffer: TaskEvent[] = [];
     let ready = false;
-    page = 1;
+    page.value = 1;
+    active.value = true;
     startLoading();
     items.value = [];
     total.value = 0;
     hasMore.value = false;
-    unsubscribeConfig = subscribeRunConfigEvents((event) =>
-      ready ? void applyConfigEvent(event, activeGeneration) : configBuffer.push(event),
-    );
     unsubscribeTasks = subscribeTaskEvents((event) =>
       ready ? void applyTaskEvent(event, activeGeneration) : taskBuffer.push(event),
     );
     try {
-      const [firstPage, count] = await Promise.all([
-        fetchRunConfigPage(options.basePath(), 1),
-        fetchRunConfigTotal(options.countPath()),
-      ]);
+      await Promise.all([rowsQuery.refetch(), totalQuery.refetch()]);
       if (activeGeneration !== generation) return;
-      items.value = firstPage;
-      total.value = count;
-      hasMore.value = firstPage.length === RUN_CONFIG_PAGE_SIZE && firstPage.length < count;
       ready = true;
-      for (const event of configBuffer) await applyConfigEvent(event, activeGeneration);
       for (const event of taskBuffer) await applyTaskEvent(event, activeGeneration);
     } finally {
       if (activeGeneration === generation) finishLoading();
@@ -170,15 +166,14 @@ export function usePagedRunConfigs(options: {
   async function loadMore() {
     if (loading.value || !hasMore.value) return;
     const activeGeneration = generation;
-    const nextPage = page + 1;
+    // 当前已加载的 N 页作为同一视图窗口，写操作才能按后端排序补齐窗口内的行。
+    page.value++;
     startLoading();
     try {
-      const rows = await fetchRunConfigPage(options.basePath(), nextPage);
-      if (activeGeneration !== generation) return;
-      page = nextPage;
-      const known = new Set(items.value.map((config) => config.id));
-      items.value = [...items.value, ...rows.filter((config) => !known.has(config.id))].sort(comparator());
-      hasMore.value = rows.length === RUN_CONFIG_PAGE_SIZE && items.value.length < total.value;
+      await rowsQuery.refetch();
+    } catch (error) {
+      if (activeGeneration === generation) page.value--;
+      throw error;
     } finally {
       if (activeGeneration === generation) finishLoading();
     }
@@ -186,9 +181,8 @@ export function usePagedRunConfigs(options: {
 
   function stop() {
     generation++;
-    unsubscribeConfig?.();
+    active.value = false;
     unsubscribeTasks?.();
-    unsubscribeConfig = null;
     unsubscribeTasks = null;
     if (countTimer) clearTimeout(countTimer);
     items.value = [];
@@ -197,6 +191,9 @@ export function usePagedRunConfigs(options: {
     finishLoading();
   }
 
-  onScopeDispose(stop);
-  return { items, total, loading, showLoading, hasMore, start, loadMore, stop, upsert, remove };
+  onScopeDispose(() => {
+    stop();
+    unregisterView();
+  });
+  return { items, total, loading, showLoading, hasMore, start, loadMore, stop };
 }

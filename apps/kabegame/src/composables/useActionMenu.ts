@@ -25,12 +25,12 @@ export interface UseActionMenuReturn<T> {
  * Composable for a single-target context menu / action sheet (e.g. album card right-click).
  * Use with ActionRenderer: bind visible, position, context, @close=hide, @command to your handler.
  */
-export function useActionMenu<T>(_options?: UseActionMenuOptions<T>): UseActionMenuReturn<T> {
+export function useActionMenu<T>(options?: UseActionMenuOptions<T>): UseActionMenuReturn<T> {
   const visible = ref(false);
   const position = ref({ x: 0, y: 0 });
   const context = ref<ActionMenuContext<T>>({ target: null });
   const modal = useModal({
-    owner: _options?.owner,
+    owner: options?.owner,
     onClose: () => {
       visible.value = false;
     },

@@ -30,7 +30,7 @@ static HELD_VIEW_EVENTS: Mutex<(usize, Vec<Arc<AppEvent>>)> = Mutex::new((0, Vec
 /// 持有期间，视图相关事件仍分配序号，但延迟到最后一个守卫析构时广播。
 pub struct EventHold(());
 
-/// 返回最近一次已发出的图片或画册图片变更序号。
+/// 返回最近一次已分配的视图变更序号（图片、画册成员与运行配置）。
 #[cfg(feature = "ipc-server")]
 pub fn current_change_seq() -> u64 {
     CHANGE_SEQ.load(Ordering::SeqCst)
@@ -446,12 +446,15 @@ impl GlobalEmitter {
     }
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
-    pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) {
+    pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) -> u64 {
+        let seq = next_change_seq();
         let event = std::sync::Arc::new(AppEvent::AutoConfigChange {
+            seq,
             reason: reason.to_string(),
             config_id: config_id.to_string(),
         });
-        EventBroadcaster::global().broadcast(event);
+        dispatch_view_event(event);
+        seq
     }
 
     /// 插件新增安装（首次安装，完整 Plugin JSON）
@@ -631,7 +634,9 @@ impl GlobalEmitter {
 
     pub fn emit_album_deleted(&self, _album: &crate::storage::Album) {}
 
-    pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) {}
+    pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) -> u64 {
+        0
+    }
 
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 

@@ -52,6 +52,8 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 
 **ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate` 携带可选 `view`（当前行路径），并立即应用后端返回的 `{ rows, seq }` 行快照；总数由计数路径的独立 live 状态维护，写后经 `dataChangeHub` 刷新。只改展示字段的操作走 `ctx.patch`，不得依赖事件回刷自身操作。带 `view` 的后端写命令必须在写库前取得 `GlobalEmitter::hold()`，行快照读完后才放行事件。被动 `images-change` / `album-images-change` 统一经 `dataChangeHub` / `liveQuery`。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
 
+**运行配置写操作**——新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，携带当前累计窗口的可选 `view` 和活跃推荐文件引用；写后立即应用 `{ rows, seq }` 与推荐导入态，不依赖自身广播刷新。配置事件携带全局 `seq` 并经过 `dataChangeHub` / `liveQuery` 补位，总数独立维护；命令在写库前持有 `GlobalEmitter::hold()`，读完快照才放行事件。前端缓冲响应前到达的配置事件，落地快照后跳过已覆盖序号；失败也必须释放缓冲。详见 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`。
+
 **画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每一层与 `~~/children` 都叠加 `search/<q>`——自身或子孙命中才保留，树形与展开态不变）；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数：目录页一次三路 fetch——`<过滤段>/x<N>x/<页>` 取这一页的画册行；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录显示它）与 `image_count`（子树成员行数，标签叶子即直接图片数；标签目录不出行），没有行的画册计 0；行与 `child_count` 先渲染，`image_count` 单独到达后再补；口径与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数一致（e2e 逐项比对），`/hide` 对应 `hide/` 前缀；单画册入口仍用这两条 images:// 路径。`~~` 之后的逐行计数一律用 `group_by`，不要 `list_with_count`（每项再包一层 COUNT 会把整个结构重跑 N 次）；子树判断用 `ancestor_path` 前缀区间走索引（见 `cocs/provider-dsl/RULES.md` §2.1）。隐藏等全局过滤只能用路径表达，不得新增计数列、SQL 视图或专用计数命令。
 
 **桌面端和 Android 端的视频导入都使用 rsmpeg/FFmpeg（仅排除 iOS）：**

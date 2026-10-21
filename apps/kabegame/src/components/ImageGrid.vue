@@ -2,7 +2,6 @@
   <ImageGridCore
     ref="coreRef"
     v-bind="coreGridBind"
-    :window-aspect-ratio="props.windowAspectRatio"
     :on-context-command="handleContextCommand"
     @open-task="handleOpenTask"
     @image-dblclick="handleImageDblclick"
@@ -176,7 +175,6 @@ interface Props {
   enableScrollStableEmit?: boolean;
   enableVirtualScroll?: boolean;
   virtualOverscan?: number;
-  windowAspectRatio?: number; // 外部传入的窗口宽高比（可选）
   scrollWholeContainer?: boolean;
 }
 

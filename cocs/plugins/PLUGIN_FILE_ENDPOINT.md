@@ -51,7 +51,7 @@ Android 在 Rust 主进程按需启动仅含该路由的 `127.0.0.1:0` axum 服�
 `utils/fileUrl.ts::pluginFileUrl` 拼接版本与来源 URL。`services/pluginFiles.ts` 按完整 URL 缓存文本 Promise；请求失败删除缓存。插件安装或更新版本变化，以及删除插件时，按 pluginId 失效。
 文档和更新日志的语言路径遵循 locale → default，打开相应 tab 才请求。Markdown 的本地图片必须命中 `assetKeys`，然后改写为 HTTP URL；banner 按声明顺序生成同源 URL。
 图片详情等模板请求完成后再决定渲染 EJS 或原始 metadata，切换插件时忽略晚到的旧结果。
-自动配置推荐 tab 按清单先生成同一个 grid 中的占位卡，各配置独立完成后替换；运行配置事件防抖重拉动态导入态。商店详情只做内存缓存；Dexie 只保留商店图标表。
+自动配置推荐 tab 按清单先生成同一个 grid 中的占位卡，各配置独立完成后替换；自身配置写命令直接返回并应用动态导入态，序号去重；外部运行配置事件才防抖重读，期间保留已有卡片。写结果与在途 HTTP 的竞态处理见 [任务与配置按需加载](../downloader-tasks/TASK_DRAWER_LOAD.md#运行配置写操作主动同步结果异步补位)。商店详情只做内存缓存；Dexie 只保留商店图标表。
 
 任务冻结时 `load_script` 从 main 读取源码到 `TaskParams.plugin`，以 `Arc<str>` 保存快照；列表仍只持 backend。内建插件继续携带静态源码。
 迁移调度只保留路径，执行时读取迁移脚本。MCP 的 doc / changelog / template / asset 复用按需 ZIP 读取，输出字段形状保持不变。

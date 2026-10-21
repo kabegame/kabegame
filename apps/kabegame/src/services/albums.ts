@@ -274,6 +274,7 @@ function publishAlbumChanges(changes: AlbumImagesChangePayload[]) {
 function structuralBatch(album: Album | null, kind: string, extraPath?: string): ChangeBatch {
   const paths = [album?.ancestorPath, extraPath].filter((path): path is string => !!path);
   return {
+    runConfigs: new Map(),
     images: new Set(),
     imageIds: new Set(),
     imagePatches: new Map(),

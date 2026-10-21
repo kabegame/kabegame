@@ -225,6 +225,8 @@ watch(
       if (event.reason === "configdelete") {
         config.value = null;
         configLoading.value = false;
+      } else if (event.config) {
+        config.value = event.config;
       } else {
         void loadExistingConfig();
       }

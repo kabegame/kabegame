@@ -7,7 +7,14 @@ import { BoundedSet } from "@/utils/BoundedSet";
 import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 const perf = (name: string, payload: unknown) => void sendDebugEvent(name, payload, { sessionId: "eventworker-perf" }); // DEBUG-PERF
 
+export type RunConfigChange = {
+  reason: "configadd" | "configdelete" | "configchange";
+  /** 本地写返回的行可直接补到详情；后端事件不携带它。 */
+  config?: Record<string, unknown> | null;
+};
+
 export interface ChangeBatch {
+  runConfigs: Map<string, RunConfigChange>;
   images: Set<string>;
   imageIds: Set<string>;
   /** imageId → 该批次内合并后的字段 patch */
@@ -52,6 +59,7 @@ function mergeImagePatches(target: Map<string, Partial<ImageInfo>>, incoming: Re
 function mergeBatch(target: ChangeBatch | null, incoming: ChangeBatch): ChangeBatch {
   if (!target) {
     return {
+      runConfigs: new Map(incoming.runConfigs),
       images: new Set(incoming.images),
       imageIds: new Set(incoming.imageIds),
       imagePatches: new Map([...incoming.imagePatches].map(([id, patch]) => [id, { ...patch }])),
@@ -69,6 +77,7 @@ function mergeBatch(target: ChangeBatch | null, incoming: ChangeBatch): ChangeBa
       maxSeq: incoming.maxSeq,
     };
   }
+  for (const [id, change] of incoming.runConfigs) target.runConfigs.set(id, change);
   setValues(target.images, incoming.images);
   setValues(target.imageIds, incoming.imageIds);
   mergeImagePatches(target.imagePatches, incoming.imagePatches);
@@ -131,6 +140,10 @@ const deliveredSeqs = new BoundedSet<number>(4096);
 
 /** 本地写命令的结果立即投递；随后到达的同 seq 后端事件会被丢弃。 */
 export function publishLocal(batch: ChangeBatch) {
+  for (const id of batch.runConfigs.keys()) {
+    localConfigSeqs.set(id, Math.max(localConfigSeqs.get(id) ?? 0, batch.maxSeq));
+  }
+  while (localConfigSeqs.size > 4096) localConfigSeqs.delete(localConfigSeqs.keys().next().value!);
   if (batch.maxSeq > 0) deliveredSeqs.add(batch.maxSeq);
   for (const subscriber of subscribers) {
     if (subscriber.active) void drain(subscriber, mergeBatch(null, batch));
@@ -159,8 +172,9 @@ type ChangeSource = {
   toBatch: (payload: unknown) => ChangeBatch | null;
 };
 
-function emptyBatch(seq = 0): ChangeBatch {
+export function emptyBatch(seq = 0): ChangeBatch {
   return {
+    runConfigs: new Map(),
     images: new Set(),
     imageIds: new Set(),
     imagePatches: new Map(),
@@ -179,7 +193,48 @@ function emptyBatch(seq = 0): ChangeBatch {
   };
 }
 
+// 用户写操作期间先缓冲配置事件，命令快照落地后再补外部变更。
+// 只挡配置通道，图片/任务等事件继续正常流转；失败时也必须释放。
+let configWriteDepth = 0;
+let heldConfigBatches: ChangeBatch[] = [];
+const localConfigSeqs = new Map<string, number>();
+function coveredConfigBatch(batch: ChangeBatch): boolean {
+  return (
+    batch.runConfigs.size > 0 &&
+    [...batch.runConfigs.keys()].every((id) => batch.maxSeq > 0 && batch.maxSeq <= (localConfigSeqs.get(id) ?? 0))
+  );
+}
+export function holdRunConfigEvents(): () => void {
+  configWriteDepth++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--configWriteDepth > 0) return;
+    const batches = heldConfigBatches;
+    heldConfigBatches = [];
+    for (const batch of batches) if (!coveredConfigBatch(batch)) emitBatch(batch);
+  };
+}
+
 const sources: ChangeSource[] = [
+  {
+    event: "auto-config-change",
+    toBatch(raw): ChangeBatch | null {
+      const payload = raw as {
+        seq?: number;
+        reason?: RunConfigChange["reason"];
+        configId?: string;
+        config_id?: string;
+      };
+      const id = payload.configId ?? payload.config_id;
+      if (!id || !payload.reason || !["configadd", "configchange", "configdelete"].includes(payload.reason))
+        return null;
+      const batch = emptyBatch(Number(payload.seq) || 0);
+      batch.runConfigs.set(id, { reason: payload.reason });
+      return batch;
+    },
+  },
   {
     event: "image-changed",
     toBatch(raw): ChangeBatch {
@@ -300,7 +355,9 @@ function ensureSourcesStarted() {
       const batch = source.toBatch(payload);
       if (!batch) return;
       if (batch.maxSeq > 0 && deliveredSeqs.has(batch.maxSeq)) return;
-      emitBatch(batch);
+      if (coveredConfigBatch(batch)) return;
+      if (batch.runConfigs.size > 0 && configWriteDepth > 0) heldConfigBatches.push(batch);
+      else emitBatch(batch);
     }).catch((error) => {
       console.error(`监听 ${source.event} 失败:`, error);
     });

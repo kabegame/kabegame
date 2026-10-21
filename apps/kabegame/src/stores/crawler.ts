@@ -1,3 +1,4 @@
+import { writeRunConfig } from "@/services/runConfigWrites";
 import { defineStore } from "pinia";
 import { ref, unref } from "vue";
 import { invoke } from "../api";
@@ -242,7 +243,6 @@ export function runConfigToPresetJson(cfg: RunConfig): string {
 }
 
 export const useCrawlerStore = defineStore("crawler", () => {
-  /** 已安装插件包内 `configs/*.json` 推荐配置（启动与插件列表刷新时拉取） */
   /**
    * 全局唯一的 task config：收集弹窗只响应式地编辑这一份对象，
    * 调用方「先写再打开」（见 apps 侧 `writeTaskConfig`）。
@@ -379,23 +379,23 @@ export const useCrawlerStore = defineStore("crawler", () => {
       lastTask: config.lastTask,
       lastResult: config.lastResult ?? "never",
     };
-    const saved = normalizeRunConfigRow(await invoke<unknown>("add_run_config", { config: cfg }));
+    const saved = normalizeRunConfigRow(await writeRunConfig("add_run_config", { config: cfg }));
     if (!saved) throw new Error("add_run_config: invalid payload");
     return saved;
   }
 
   async function updateRunConfig(config: RunConfig) {
-    const saved = normalizeRunConfigRow(await invoke<unknown>("update_run_config", { config }));
+    const saved = normalizeRunConfigRow(await writeRunConfig("update_run_config", { config }));
     if (!saved) throw new Error("update_run_config: invalid payload");
     return saved;
   }
 
   async function deleteRunConfig(configId: string) {
-    await invoke("delete_run_config", { configId });
+    await writeRunConfig("delete_run_config", { configId });
   }
 
   async function copyRunConfig(configId: string) {
-    const raw = await invoke<unknown>("copy_run_config", { configId });
+    const raw = await writeRunConfig("copy_run_config", { configId });
     const copied = normalizeRunConfigRow(raw);
     if (!copied) throw new Error("copy_run_config: invalid payload");
     return copied;

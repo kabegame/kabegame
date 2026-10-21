@@ -579,35 +579,150 @@ pub fn delete_task_failed_image(failed_id: i64) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn add_run_config(config: Value) -> Result<Value, String> {
+/// 活跃推荐配置的定位信息；写操作只回传导入态，不重复传输正文。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecommendedConfigRequest {
+    pub key: String,
+    pub plugin_id: String,
+    pub version: String,
+    pub origin: Option<crate::plugin::PluginFileOrigin>,
+    pub path: String,
+}
+
+async fn run_config_write_result(
+    config_id: String,
+    reason: &str,
+    seq: u64,
+    config: Value,
+    view: Option<String>,
+    recommended: Option<Vec<RecommendedConfigRequest>>,
+) -> Result<Value, String> {
+    // 老 IPC 调用方继续收到原来的单行 / null；前端写通道始终传 recommended（可为空数组）。
+    if view.is_none() && recommended.is_none() {
+        return Ok(config);
+    }
+    let snapshot = match view {
+        Some(path) => Some(super::view::snapshot_rows(path).await?),
+        None => None,
+    };
+    let requests = recommended.unwrap_or_default();
+    let recommended_seq = crate::emitter::current_change_seq();
+    let states = tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
+        use crate::plugin::package_file::{
+            allowed_entry, is_recommended_config, preset_content_matches, read_plugin_text,
+        };
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let manager = PluginManager::global();
+        let configs = Storage::global().get_run_configs()?;
+        let mut states = Vec::new();
+        for request in requests {
+            let origin = request
+                .origin
+                .unwrap_or(crate::plugin::PluginFileOrigin::Installed);
+            let Some(plugin) =
+                manager.resolve_plugin_file(&request.plugin_id, &origin, &request.version)
+            else {
+                continue;
+            };
+            let Some(entry) = allowed_entry(&plugin, &request.path)
+                .filter(|path| is_recommended_config(&plugin, path))
+            else {
+                continue;
+            };
+            // 插件被卸载、升级或推荐文件损坏时跳过该项，不让附带的导入态读取掩盖已成功的写操作。
+            let text = match read_plugin_text(&plugin, &entry) {
+                Ok(Some(text)) => text,
+                Ok(None) => continue,
+                Err(error) => {
+                    eprintln!("读取推荐配置导入态失败: {error}");
+                    continue;
+                }
+            };
+            let preset = match serde_json::from_str::<Value>(&text) {
+                Ok(preset) => preset,
+                Err(error) => {
+                    eprintln!("解析推荐配置导入态失败: {error}");
+                    continue;
+                }
+            };
+            let imported = configs.iter().any(|config| {
+                preset_content_matches(
+                    &plugin.id,
+                    &plugin.base_url,
+                    &plugin.var_defs,
+                    &preset,
+                    config,
+                )
+            });
+            states.push(serde_json::json!({ "key": request.key, "isImported": imported }));
+        }
+        Ok(states)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(
+        serde_json::json!({ "configId":config_id, "reason":reason, "config":config, "seq":seq,
+        "view":snapshot, "recommended":states, "recommendedSeq":recommended_seq }),
+    )
+}
+
+pub async fn add_run_config(
+    config: Value,
+    view: Option<String>,
+    recommended: Option<Vec<RecommendedConfigRequest>>,
+) -> Result<Value, String> {
+    let _hold = GlobalEmitter::global().hold();
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
     Storage::global().add_run_config(run_config)?;
     let _ = Scheduler::global().reload_config(&config_id).await;
-    GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
-    Ok(query_fetch(&format!("run_configs://id_{config_id}"))?
+    let seq = GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
+    let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
         .into_iter()
         .next()
-        .unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    run_config_write_result(config_id, "configadd", seq, saved, view, recommended).await
 }
 
-pub async fn update_run_config(config: Value) -> Result<Value, String> {
+pub async fn update_run_config(
+    config: Value,
+    view: Option<String>,
+    recommended: Option<Vec<RecommendedConfigRequest>>,
+) -> Result<Value, String> {
+    let _hold = GlobalEmitter::global().hold();
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
     Storage::global().update_run_config(run_config)?;
     let _ = Scheduler::global().reload_config(&config_id).await;
-    GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
-    Ok(query_fetch(&format!("run_configs://id_{config_id}"))?
+    let seq = GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
+    let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
         .into_iter()
         .next()
-        .unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    run_config_write_result(config_id, "configchange", seq, saved, view, recommended).await
 }
 
-pub async fn delete_run_config(config_id: String) -> Result<Value, String> {
+pub async fn delete_run_config(
+    config_id: String,
+    view: Option<String>,
+    recommended: Option<Vec<RecommendedConfigRequest>>,
+) -> Result<Value, String> {
+    let _hold = GlobalEmitter::global().hold();
     let _ = Scheduler::global().remove_config(&config_id).await;
     Storage::global().delete_run_config(&config_id)?;
-    GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
-    Ok(Value::Null)
+    let seq = GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
+    run_config_write_result(
+        config_id,
+        "configdelete",
+        seq,
+        Value::Null,
+        view,
+        recommended,
+    )
+    .await
 }
 
 pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
@@ -635,15 +750,21 @@ pub fn clear_finished_tasks() -> Result<Value, String> {
     Ok(serde_json::json!({ "taskIds": task_ids, "count": count }))
 }
 
-pub async fn copy_run_config(config_id: String) -> Result<Value, String> {
+pub async fn copy_run_config(
+    config_id: String,
+    view: Option<String>,
+    recommended: Option<Vec<RecommendedConfigRequest>>,
+) -> Result<Value, String> {
+    let _hold = GlobalEmitter::global().hold();
     let new_id = uuid::Uuid::new_v4().to_string();
     let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
     let _ = Scheduler::global().reload_config(&new_id).await;
-    GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
-    Ok(query_fetch(&format!("run_configs://id_{}", copied.id))?
+    let seq = GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
+    let saved = query_fetch(&format!("run_configs://id_{}", copied.id))?
         .into_iter()
         .next()
-        .unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    run_config_write_result(copied.id, "configadd", seq, saved, view, recommended).await
 }
 
 pub fn get_run_config(config_id: String) -> Result<Value, String> {

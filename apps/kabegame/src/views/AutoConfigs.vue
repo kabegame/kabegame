@@ -126,7 +126,6 @@
             :schedule-toggling-id="scheduleTogglingId"
             @card-click="autoConfigDialog.openExisting(config.id, 'view')"
             @schedule-enabled="(enabled) => toggleSchedule(config, enabled)"
-            @config-updated="upsert"
             @run="runNow(config)"
           />
         </div>
@@ -303,7 +302,7 @@ const list = usePagedRunConfigs({
   matches,
   sort: () => ({ key: mine.sort, dir: mine.dir }),
 });
-const { items: configs, total, loading, showLoading, hasMore, start, loadMore, upsert } = list;
+const { items: configs, total, loading, showLoading, hasMore, start, loadMore } = list;
 watch(
   () => runConfigViewPath(mine),
   () => void start(),
@@ -416,11 +415,7 @@ function showFailed() {
   mine.last = "failed";
 }
 
-const {
-  entries: recommendedEntries,
-  presets: recommendedPresets,
-  refresh: refreshRecommended,
-} = useRecommendedPresets(
+const { entries: recommendedEntries, presets: recommendedPresets } = useRecommendedPresets(
   computed(() => pluginStore.visiblePlugins),
   computed(() => tab.value === "recommended"),
 );
@@ -480,7 +475,7 @@ const importedOptions = computed(() => [
 async function toggleSchedule(config: RunConfig, enabled: boolean) {
   scheduleTogglingId.value = config.id;
   try {
-    upsert(await crawlerStore.updateRunConfig({ ...config, scheduleEnabled: enabled }));
+    await crawlerStore.updateRunConfig({ ...config, scheduleEnabled: enabled });
   } finally {
     scheduleTogglingId.value = null;
   }
@@ -545,9 +540,7 @@ async function importPreset(preset: PluginRecommendedPreset) {
       return;
     }
   }
-  const config = await crawlerStore.importRecommendedPreset(preset);
-  await refreshRecommended();
-  upsert(config);
+  await crawlerStore.importRecommendedPreset(preset);
   ElMessage.success(t("autoConfig.importRecommendedSuccess"));
 }
 </script>
