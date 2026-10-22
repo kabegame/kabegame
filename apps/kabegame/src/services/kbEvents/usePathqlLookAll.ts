@@ -4,7 +4,7 @@ import { pathqlAllKey } from "./pathqlSource";
 import { usePathqlLooker } from "./usePathqlLooker";
 
 /** 一组查询作为一个 key 观察；发请求仍由用户操作与核心事件窗口负责。 */
-export function useLookAll<const Qs extends readonly PathqlQuery[]>(opts: {
+export function usePathqlLookAll<const Qs extends readonly PathqlQuery[]>(opts: {
   queries: () => Qs | null;
   refreshOn: readonly EventTrigger[];
   onResult: (results: PathqlResults<Qs>) => void | Promise<void>;

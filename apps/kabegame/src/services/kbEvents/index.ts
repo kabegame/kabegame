@@ -23,4 +23,5 @@ export {
   type SnapshotOf,
 } from "./pathqlSource";
 export { usePathqlLooker } from "./usePathqlLooker";
-export { useLookAll } from "./useLookAll";
+export { usePathqlLookMany } from "./usePathqlLookMany";
+export { usePathqlLookAll as useLookAll } from "./usePathqlLookAll";

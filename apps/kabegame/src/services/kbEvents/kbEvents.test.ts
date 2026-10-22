@@ -17,6 +17,7 @@ import {
   type SnapshotOf,
 } from "./pathqlSource";
 import { usePathqlLooker } from "./usePathqlLooker";
+import { usePathqlLookMany } from "./usePathqlLookMany";
 
 type Row = Record<string, unknown>;
 
@@ -444,5 +445,114 @@ describe("usePathqlLooker", () => {
     await flushPromises();
     expect(pathqlFetch).toHaveBeenLastCalledWith("g/new");
     expect(results.map(ids)).toEqual([["new"], ["new-2"]]);
+  });
+});
+
+describe("usePathqlLookMany", () => {
+  function mountMany(
+    keys: ReturnType<typeof ref<string[]>>,
+    refreshOn: readonly EventTrigger[] | ((key: string) => readonly EventTrigger[]) = [on("images-change")],
+  ) {
+    const results: [string, unknown[]][] = [];
+    const errors: [string, unknown][] = [];
+    let looker!: ReturnType<typeof usePathqlLookMany<"rows">>;
+    const wrapper = mount(
+      defineComponent({
+        setup() {
+          looker = usePathqlLookMany({
+            kind: "rows",
+            keys: () => keys.value ?? [],
+            refreshOn,
+            onResult: (key, snapshot) => void results.push([key, ids(snapshot)]),
+            onError: (key, error) => void errors.push([key, error]),
+          });
+          return () => null;
+        },
+      }),
+    );
+    cleanups.push(() => wrapper.unmount());
+    return { results, errors, looker: () => looker, unmount: () => wrapper.unmount() };
+  }
+
+  it("不发请求；加入的 key 各自观察，移除后退订：迟到结果不推，事件也不再刷新它", async () => {
+    const keys = ref(["m1/a"]);
+    const lateRead = deferred<Row[]>();
+    pathqlFetch.mockResolvedValueOnce(rows("a")).mockReturnValueOnce(lateRead.promise);
+    const { results } = mountMany(keys);
+    await flushPromises();
+    expect(pathqlFetch).not.toHaveBeenCalled();
+
+    request("rows", "m1/a");
+    await flushPromises();
+    keys.value = ["m1/a", "m1/b"];
+    request("rows", "m1/b");
+    keys.value = ["m1/a"];
+    lateRead.resolve(rows("b"));
+    await flushPromises();
+    expect(results).toEqual([["m1/a", ["a"]]]);
+
+    pathqlFetch.mockResolvedValueOnce(rows("a-2"));
+    imagesChange("add");
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(3);
+    expect(pathqlFetch).toHaveBeenLastCalledWith("m1/a");
+    expect(results).toEqual([
+      ["m1/a", ["a"]],
+      ["m1/a", ["a-2"]],
+    ]);
+  });
+
+  it("refreshOn 按 key 给出各自的过滤器，事件只刷新相关 key", async () => {
+    const keys = ref(["m2/add", "m2/delete"]);
+    pathqlFetch.mockResolvedValueOnce(rows("added"));
+    const { results } = mountMany(keys, (key) => [on("images-change", (payload) => `m2/${payload.reason}` === key)]);
+    imagesChange("add");
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+    expect(pathqlFetch).toHaveBeenCalledWith("m2/add");
+    expect(results).toEqual([["m2/add", ["added"]]]);
+  });
+
+  it("loading / error 按 key 区分，失败时带 key 通知 onError", async () => {
+    const keys = ref(["m3/ok", "m3/bad"]);
+    const okRead = deferred<Row[]>();
+    pathqlFetch.mockImplementation((path) => (path === "m3/ok" ? okRead.promise : Promise.reject(new Error("boom"))));
+    const { errors, looker } = mountMany(keys);
+
+    request("rows", "m3/ok");
+    request("rows", "m3/bad");
+    expect(looker().loading("m3/ok")).toBe(true);
+    expect(looker().anyLoading.value).toBe(true);
+    await flushPromises();
+    expect(errors).toEqual([["m3/bad", new Error("boom")]]);
+    expect(looker().error("m3/bad")).toEqual(new Error("boom"));
+    expect(looker().loading("m3/bad")).toBe(false);
+    expect(looker().error("m3/ok")).toBeNull();
+    expect(looker().anyLoading.value).toBe(true);
+
+    okRead.resolve(rows("ok"));
+    await flushPromises();
+    expect(looker().anyLoading.value).toBe(false);
+  });
+
+  it("已有数据的 key 加入时直接拿到最后可得的数据，不发请求", async () => {
+    pathqlFetch.mockResolvedValueOnce(rows("shared"));
+    look("rows", "m4/a");
+    request("rows", "m4/a");
+    await flushPromises();
+
+    const keys = ref<string[]>([]);
+    const { results } = mountMany(keys);
+    keys.value = ["m4/a"];
+    expect(results).toEqual([["m4/a", ["shared"]]]);
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("卸载后全部退订，事件不再触发请求", async () => {
+    const { unmount } = mountMany(ref(["m5/a", "m5/b"]));
+    unmount();
+    imagesChange("add");
+    await flushPromises();
+    expect(pathqlFetch).not.toHaveBeenCalled();
   });
 });

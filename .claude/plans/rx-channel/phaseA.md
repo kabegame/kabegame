@@ -287,6 +287,10 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 - **验证**：vue-tsc 0 error，Vitest 39 文件 / 308 项；dev 真机直接调命令验证收藏补丁与 `image-changed` 窗口合并（见回归文档）。
 
 ### Phase C — 其余实时数据消费方
+- **核心工具：动态 key 观察**（已完成）：`usePathqlLookMany({ kind, keys, refreshOn, onResult(key, s), onError(key, e) })`，
+  key 列表增删时逐个注册 / 退订观察方，每个 key 独立的数据源与刷新窗口，加入新 key 不影响已有 key；`refreshOn` 可按 key 给出过滤器；
+  返回按 key 的 `loading(key)` / `error(key)` 与 `anyLoading`。同样只看不查：新加入的 key 由调用方请求（展开是用户操作），
+  已有数据的 key 加入即拿到最后可得的数据。供懒加载分支（时间菜单年 / 月 / 日、画册树目录页）与按站点的畅游计数使用。
 - **pathql 计数类**：~~`GalleryToolbar` 的分子 / 分母~~（已完成：分子注入 ImageGrid provide 的 `gridTotalKey`，
   分子分母由 ImageGrid 通过 `useLookAll` 同批 `pathql_all` 读取，工具栏只注入 `{ total, unfilteredTotal }`，去掉了 `useImagesChangeRefresh`）、
   `GalleryFilterControl.loadFilterCounts`（现在没有过期保护，并发时会交错写入）、`HiddenCleanupControl`、Surf 页计数。
