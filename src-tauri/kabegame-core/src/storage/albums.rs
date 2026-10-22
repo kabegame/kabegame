@@ -564,7 +564,16 @@ impl Storage {
             .map_err(|e| format!("Failed to commit transaction: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_changed(album_id, json!({ "labelKey": new_key }));
+            let mut changes = json!({ "labelKey": new_key });
+            // 写库已提交：读不到路径时发不带路径的事件（前端按通配刷新），不能让已成功的写入报错
+            if let Ok(ancestor_path) = conn.query_row(
+                "SELECT ancestor_path FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get::<_, String>(0),
+            ) {
+                changes["ancestorPath"] = json!(ancestor_path);
+            }
+            emitter.emit_album_changed(album_id, changes);
         }
         Ok(())
     }
@@ -923,7 +932,16 @@ impl Storage {
         .map_err(|e| format!("Failed to rename album: {}", e))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_changed(album_id, json!({ "name": new_name_trimmed }));
+            let mut changes = json!({ "name": new_name_trimmed });
+            // 写库已提交：读不到路径时发不带路径的事件（前端按通配刷新），不能让已成功的写入报错
+            if let Ok(ancestor_path) = conn.query_row(
+                "SELECT ancestor_path FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get::<_, String>(0),
+            ) {
+                changes["ancestorPath"] = json!(ancestor_path);
+            }
+            emitter.emit_album_changed(album_id, changes);
         }
         Ok(())
     }

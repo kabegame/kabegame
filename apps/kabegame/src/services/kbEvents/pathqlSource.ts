@@ -3,6 +3,7 @@ import { pathqlAll, pathqlFetch, type PathqlQuery } from "@/services/pathql";
 import { batchWindow } from "./batchWindow";
 import { PATHQL_REFRESH_WAIT_MS } from "./constants";
 import { triggers$, type EventTrigger } from "./events";
+import type { KbEvent } from "./eventSource";
 export type PathqlKind = "rows" | "all";
 
 /** `seq` 是请求服务按 key 分配的请求序号，只用于判断结果新旧，与后端事件序号无关。 */
@@ -62,6 +63,8 @@ interface Entry<S> {
   status$: BehaviorSubject<PathqlStatus>;
   /** 观察方的过滤器投票：窗口内任一同意就刷新一次。 */
   votes$: Subject<void>;
+  /** 同一后端事件被多个观察方同意时，每个 key 只投一票。 */
+  votedEvents: WeakSet<KbEvent>;
   refresh: Subscription;
   refs: number;
 }
@@ -84,6 +87,7 @@ function acquire<K extends PathqlKind>(kind: K, key: string): Entry<SnapshotOf<K
       data$: new ReplaySubject(1),
       status$: new BehaviorSubject<PathqlStatus>({ seq: 0, loading: false, error: null }),
       votes$,
+      votedEvents: new WeakSet(),
       // 每个 key 一个统一窗口：空闲时首票立即刷新，窗口内的票合并到窗口结束再刷新一次
       refresh: votes$
         .pipe(batchWindow(PATHQL_REFRESH_WAIT_MS, () => true))
@@ -150,7 +154,13 @@ export function lookPathql<K extends PathqlKind>(
         .pipe(map((status) => ({ type: "status", status }) as const))
         .subscribe((signal) => subscriber.next(signal)),
     );
-    subscription.add(triggers$(refreshOn).subscribe(() => entry.votes$.next()));
+    subscription.add(
+      triggers$(refreshOn).subscribe((event) => {
+        if (entry.votedEvents.has(event)) return;
+        entry.votedEvents.add(event);
+        entry.votes$.next();
+      }),
+    );
     return () => {
       subscription.unsubscribe();
       release(kind, key, entry);

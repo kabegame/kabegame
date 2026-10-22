@@ -10,12 +10,13 @@ vi.mock("@/services/pathql", () => ({
   pathqlList,
 }));
 
-function createSource() {
+function createSource(delta = false, prefix = "") {
   const ctx: GalleryFilterTreeContext = {
     filter: computed(() => ({ type: "all" as const })),
     filters: computed(() => ({})),
     dimension: computed(() => null),
-    prefix: computed(() => ""),
+    prefix: computed(() => prefix),
+    countBaseline: delta ? computed(() => 0) : undefined,
     visible: computed(() => true),
     pathForSegment: (segment) => segment,
     registerRefreshTarget: () => () => {},
@@ -43,7 +44,8 @@ describe("facetTreeSource 分组计数枚举", () => {
     ]);
     const source = createSource();
 
-    const nodes = await source.roots("size");
+    const page = source.dataSource.page({ kind: "section", sectionId: "size" }, 1)!;
+    const nodes = page.parse([await pathqlList(page.queries[0].path, false)]);
 
     expect(pathqlList).toHaveBeenCalledWith("gallery/size/_kb_co", false);
     expect(nodes).toEqual([
@@ -60,11 +62,18 @@ describe("facetTreeSource 分组计数枚举", () => {
     ]);
     const source = createSource();
 
-    const nodes = await source.dataSource.getChildren({
-      kind: "plugin",
-      pluginId: "demo",
-      version: "1.0.0",
-    } as FacetNode);
+    const page = source.dataSource.page(
+      {
+        kind: "children",
+        parent: {
+          kind: "plugin",
+          pluginId: "demo",
+          version: "1.0.0",
+        } as FacetNode,
+      },
+      1,
+    )!;
+    const nodes = page.parse([await pathqlList(page.queries[0].path, false)]);
 
     expect(pathqlList).toHaveBeenCalledWith("gallery/plugin/demo/extend/_kb_co", false);
     const base = { kind: "plugin-extend", pluginId: "demo" };
@@ -73,5 +82,31 @@ describe("facetTreeSource 分组计数枚举", () => {
       { ...base, name: "score", extendPath: "score", isLeaf: false, isPlain: false, count: 4 },
       { ...base, name: "title", extendPath: "title", isLeaf: false, isPlain: true, count: null },
     ]);
+  });
+});
+
+describe("facetTreeSource 查询描述与事件过滤", () => {
+  it("数据源只描述查询；diff 模式同样列 _kb_co、没有事件刷新", () => {
+    const source = createSource(true);
+    const page = source.dataSource.page({ kind: "section", sectionId: "size" }, 1)!;
+    expect(page.queries).toEqual([{ kind: "list", path: "gallery/size/_kb_co", withCount: false }]);
+    expect(source.dataSource.refreshOn({ kind: "section", sectionId: "size" }, "page")).toEqual([]);
+    expect(pathqlList).not.toHaveBeenCalled();
+  });
+
+  it("侧栏忽略无 reason 事件，只有画册敏感上下文响应成员与结构事件", () => {
+    const triggers = (prefix: string) =>
+      createSource(false, prefix).dataSource.refreshOn({ kind: "section", sectionId: "date" }, "page");
+    const relevant = (prefix: string, event: string, payload: unknown) =>
+      triggers(prefix)
+        .find((trigger) => trigger.event === event)!
+        .relevant(payload);
+    expect(relevant("", "images-change", {})).toBe(false);
+    expect(relevant("", "images-change", { reason: "import" })).toBe(true);
+    expect(relevant("", "album-images-change", {})).toBe(false);
+    expect(relevant("gallery/hide", "album-images-change", {})).toBe(true);
+    expect(relevant("gallery/album/a", "album-changed", { changes: { name: "新名字" } })).toBe(true);
+    expect(relevant("gallery/album/a", "album-changed", { changes: { syncMode: "none" } })).toBe(false);
+    expect(relevant("gallery/no-album", "album-added", {})).toBe(true);
   });
 });

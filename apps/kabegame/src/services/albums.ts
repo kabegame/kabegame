@@ -1,6 +1,7 @@
 import { invoke } from "@/api/rpc";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { albumChangeBatch, publishLocal, type ChangeBatch } from "@/services/dataChangeHub";
+import type { TreePage } from "@/components/tree/types";
 import { pathqlEntry, pathqlFetch } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
@@ -40,16 +41,9 @@ export interface Album {
 }
 
 export interface AlbumNode extends Album {
-  /** null = 图片计数还在路上（与行分开查询，见 `fetchAlbumPage`）。 */
+  /** null = 图片计数还在路上（与行分开查询，见 `albumPageQueries`）。 */
   count: number | null;
   childCount: number;
-}
-
-/** 一页画册：行与子画册数先到；图片计数是慢查询，单独返回，到了再补进行里。 */
-export interface AlbumPage {
-  nodes: AlbumNode[];
-  /** id → 图片计数；页里只有标签目录时不查询，直接是空表。 */
-  imageCounts: Promise<Map<string, number>>;
 }
 
 export interface AddToAlbumResult {
@@ -146,72 +140,55 @@ function countsById(rows: Record<string, unknown>[], column: "child_count" | "im
   return new Map(rows.map((row) => [String(row.id), Number(row[column] ?? 0)]));
 }
 
-/**
- * 一页画册与逐项计数，三路并行，各一条 SQL。计数都在 `~~` 子查询边界之后，只作用于这一页，
- * 按画册 `GROUP BY` 出行：`~~/children/[search/<q>/]<类型段>` 的 `child_count` 是同一组类型（与搜索）
- * 过滤下的直接子画册数，`~~/images[/hide]` 的 `image_count` 是子树成员行数（标签叶子即直接图片数；
- * `hide` 与 images:// 的 `hide/` 前缀同口径）。没有计数行的画册记 0。
- *
- * 行与 `child_count` 一起等（展开箭头靠它）；`image_count` 要把整页子树的成员行全 join 一遍，
- * 标签森林的根页能到百万行、秒级，所以不挡行渲染，经 `imageCounts` 单独交付。
- */
-async function fetchPageWithCounts(
-  base: string,
-  kinds: ReadonlyArray<AlbumKind> | undefined,
-  prefix: GalleryPrefix,
-  search?: string,
-): Promise<AlbumPage> {
-  // 子画册计数用同一组类型与搜索过滤，展开箭头与展开后看到的子项一致
-  const childFilters = `${albumSearchSegment(search)}${albumKindSegment(kinds)}`.replace(/\/$/, "");
-  // 与行查询同时发出；标签目录在 provider 里就被排除，不出计数行
-  const images = pathqlFetch<Record<string, unknown>>(`${base}/~~/images${prefix === "hide/" ? "/hide" : ""}`);
-  // 行查询失败或这一页不需要图片计数时没人接它的失败，别冒成 unhandled rejection
-  images.catch(() => {});
-  const [rows, children] = await Promise.all([
-    pathqlFetch<Record<string, unknown>>(base),
-    pathqlFetch<Record<string, unknown>>(`${base}/~~/children${childFilters ? `/${childFilters}` : ""}`),
-  ]);
-  const childCounts = countsById(children, "child_count");
-  const nodes: AlbumNode[] = rows.map((row) => {
-    const album = normalizeAlbumRow(row);
-    const childCount = childCounts.get(album.id) ?? 0;
-    // 标签目录不能挂图，显示子画册数
-    return { ...album, childCount, count: album.type === "label_dir" ? childCount : null };
-  });
-  const pending = nodes.filter((node) => node.count === null);
-  // 没有计数行的画册记 0
-  const imageCounts = pending.length
-    ? images.then((rows) => {
-        const counts = countsById(rows, "image_count");
-        return new Map(pending.map((node) => [node.id, counts.get(node.id) ?? 0]));
-      })
-    : Promise.resolve(new Map<string, number>());
-  return { nodes, imageCounts };
-}
-
-/**
- * 树的一层（根分区或某个父画册下）的一页。`search` 非空时每层都叠加搜索过滤段：自身或子孙命中才保留，
- * 于是搜索结果仍按树展示，命中项的祖先一路保留。
- */
-export async function fetchAlbumPage(
+/** 描述一页画册：行与子画册数在同一快照，图片计数独立补充，不挡行渲染；没有允许类型时返回 null（不读）。 */
+export function albumPageQueries(
   target: { parentId: string } | { section: AlbumRootSection },
   page: number,
   prefix: GalleryPrefix,
   kinds?: ReadonlyArray<AlbumKind>,
   pageSize: number = ALBUM_PAGE_SIZE,
   search?: string,
-): Promise<AlbumPage> {
-  // 根分区的类型集合即分区本身
+): TreePage<AlbumNode> | null {
   const scope = "parentId" in target ? `parent/${encodeURIComponent(target.parentId)}` : "roots";
-  const sectionKinds = "section" in target ? SECTION_KINDS[target.section] : undefined;
-  const effectiveKinds = kinds?.length ? kinds : sectionKinds;
+  const effectiveKinds = kinds ?? ("section" in target ? SECTION_KINDS[target.section] : undefined);
   const base = albumPageBase(
     `${scope}/${albumSearchSegment(search)}`.replace(/\/$/, ""),
     effectiveKinds,
     page,
     pageSize,
   );
-  return fetchPageWithCounts(base, effectiveKinds, prefix, search);
+  const childFilters = `${albumSearchSegment(search)}${albumKindSegment(effectiveKinds)}`.replace(/\/$/, "");
+  if (effectiveKinds?.length === 0) return null;
+  return {
+    queries: [
+      { kind: "fetch", path: base },
+      { kind: "fetch", path: `${base}/~~/children${childFilters ? `/${childFilters}` : ""}` },
+    ],
+    parse(results) {
+      const children = countsById(results[1] as Record<string, unknown>[], "child_count");
+      return (results[0] as Record<string, unknown>[]).map((row) => {
+        const album = normalizeAlbumRow(row);
+        const childCount = children.get(album.id) ?? 0;
+        return { ...album, childCount, count: album.type === "label_dir" ? childCount : null };
+      });
+    },
+    extra: {
+      // 分组没有行代表 0；同快照读本页 id，补充结果先于结构到达时也能完整补零。
+      queries: [
+        { kind: "fetch", path: base },
+        { kind: "fetch", path: `${base}/~~/images${prefix === "hide/" ? "/hide" : ""}` },
+      ],
+      parse(results) {
+        const counts = countsById(results[1] as Record<string, unknown>[], "image_count");
+        return new Map(
+          (results[0] as Record<string, unknown>[])
+            .map(normalizeAlbumRow)
+            .filter((album) => album.type !== "label_dir")
+            .map((album) => [album.id, { count: counts.get(album.id) ?? 0 }]),
+        );
+      },
+    },
+  };
 }
 
 /** 不限层级地找自身或子孙命中 `query` 的画册（例如查重名时再按 `name` 精确比较）；只取行，不带计数。 */

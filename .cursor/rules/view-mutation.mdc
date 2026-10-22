@@ -32,19 +32,24 @@ alwaysApply: false
 `ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页，保留 500ms
 被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入 `mutate` 后请求。
 
-## 画册查询与计数
+## 树观察方与画册计数
 
-- 前端不设全量画册 store，也不持有全量画册计数。目录树与所有画册选择器复用 app 侧
-  `AlbumTreeView` / `AlbumPicker`，按目录分页查询；搜索时每层与 `~~/children` 都叠加 `search/<q>`
-  （自身或子孙命中才保留，树形与展开态不变）。单个详情用 `services/albums.ts` 查询并订阅 hub。
-- 计数由 PathQL 路径表达，不新增 SQL 视图、计数列或专用计数命令：目录页一次三路 fetch——
-  `albums://<过滤段>/x<N>x/<页>` 取这一页的画册行（默认按创建时间排序）；`…/~~/children[/<类型段>]` 与
-  `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的
-  直接子画册数）与 `image_count`（子树成员行数，标签叶子即直接图片数；标签目录不出行），没有行的画册计 0；口径与
-  `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 一致。单画册入口仍读这两条 images:// 路径的
-  entry 总数。`~~` 之后的逐行计数用 `group_by`，不要 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
-- 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行
-  单画册查询并通过 `dataChangeHub` 的 `ancestorPath` 相关性订阅刷新；不得重新引入全量列表。
+- `TreeQuerySource` 只描述 `TreePage.queries` / `parse` / 可选 `extra` 和单事件 `refreshOn`，不直接读数据。
+  `useTreeModel` 用 `usePathqlLookMany(kind: "all")` 观察可见展开分支的已加载页，一页一个 `pathqlAllKey`；
+  新 key、重新展开 / 激活、加载更多、手动刷新经 `pathqlRequest$.next` 请求。Promise 由模型等待表完成，核心契约不变。
+- 收起（含祖先收起）即停观察，保留句柄与页数据；重新展开请求。换 key 时保留旧子项直到新结果到达，
+  出错不清空。补充查询只按元素 key 补字段、不挡行渲染；结构重读沿用已有补丁。
+- 画册树和侧栏过滤树不得订阅 `dataChangeHub` / `liveQuery`。侧栏隐藏停观察、显示整组请求；
+  高级 diff 候选树事件过滤器为空，每次展开下拉读一次、打开期间不随事件刷新，不另建纯净列表缓存。
+- 前端不设全量画册 store 或全量计数。目录树与选择器复用 `AlbumTreeView` / `AlbumPicker`，按目录分页查询；
+  搜索时每层与 `~~/children` 都叠加 `search/<q>`（自身或子孙命中才保留）。单画册详情仍用服务查询并订阅 hub。
+- 结构页一批 `pathql_all` 同快照读取 `albums://<过滤段>/x<N>x/<页>` 行与 `…/~~/children[/<类型段>]`；
+  `extra` 独立批次读取本页行（零计数补齐）与 `…/~~/images[/hide]`。两种逐行计数都在 `~~` 后按画册
+  `GROUP BY`，没有行记 0，禁止 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
+  标签目录显示 `child_count`，叶子显示 `image_count`；行先渲染、图片计数后补。
+- 画册成员事件只刷新相关可见目录的 extra，结构事件刷新结构与 extra；`albumEventPaths` 取新旧路径，
+  缺路径按通配，父目录只匹配严格后代。隐藏等全局过滤只能用路径表达，不得新增 SQL 视图、计数列或专用计数命令。
+- 同一后端事件被多个观察方同意时，一个 key 只投一票；不同事件仍按核心统一 500ms 窗口合并。
 
 ## 运行配置写操作
 

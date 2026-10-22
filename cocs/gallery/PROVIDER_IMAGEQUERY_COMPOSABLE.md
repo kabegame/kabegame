@@ -190,10 +190,15 @@
   `meta.image_count`。
 - 面板顶层直接是该维度的子项（年份、区间、插件……），没有维度根，也没有「任意」行；清除维度用 chip 右上角的叉号。
   因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
-- 侧栏只建立一个 `dataChangeHub` 订阅。可见时命中相关批次就重列根与所有已加载分支（`model.reload()`）；不可见时只记脏，
-  下次打开补刷。插件增删改由 `pluginStore` 的 `id:version` 签名触发插件分支刷新，并使高级查询的纯净候选缓存失效。
-- 高级查询弹窗是 diff 模式：对每个候选仍逐项计算应用草稿后的预测计数，显示 `+N` / `−N`。它只在面板打开、
-  草稿变化或新候选载入时重算，不订阅数据变更；候选列表有纯净路径缓存，数据变化只使缓存失效，不立即重查。
+- 侧栏以 `TreeQuerySource` 描述每个分支的一条 list 查询，经 `usePathqlLookMany` 观察 `all` key，
+  只观察自身与所有祖先都展开的分支。`refreshOn` 对有 reason 的 `images-change` 投票，画册敏感上下文另看
+  `album-images-change` 与画册结构事件；同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
+  侧栏隐藏时观察集合为空，每次显示都整组请求；插件 `id:version` 签名变化调用 `model.refresh()`。
+- 高级查询弹窗是 diff 模式：候选列举同样走 `<路径>/_kb_co`（与侧栏只差路径是否带草稿，不带计数），`refreshOn` 为空，
+  打开期间不随数据变更刷新；候选在下拉面板里，每次展开都重新挂载、读一次候选，不再有独立纯净列表缓存或缓存失效订阅。
+  逐候选预测计数仍在面板打开、草稿变化或新候选载入时计算，显示 `+N` / `−N`。
+- 查询参数改变导致 key 改变时继续展示旧页，新的结构结果到达再按 key diff，保留句柄与展开态；读取失败保留上一份子项。
+  `expand` / `loadMore` / `refresh` 等待由模型实现，`pathqlRequest$.next` 仍即发即返回。
 - Android picker 与头部 `GalleryFilterControl` 也列举 `…/_kb_co` 并读取 `meta.count`；Android picker 的插件扩展
   选项不显示计数，同样 `withCount=false`。
 
@@ -247,7 +252,7 @@
 - **高级弹窗只编辑追加部分**：简单条件作为不可编辑的上下文参与命中计数与 facet 预测，弹窗打开、应用、清空、取消均不改简单条件；清除高级后再次打开是空白草稿，不默认插入空条件行，只展示添加条件/或组入口。简单 chip 修改时保留高级条件，简单 facet 计数也带上高级约束。弹窗内仍保留最终路径预览。
 - Android：查询行提供同样可独立清除的高级 chip，简单过滤 / 排序 / 每页条数仍由各页 `PageHeader` 的 fold 触发；高级条件生效时简单过滤入口仍可用。
 - **高级查询在四条路由上都可用**。detail 路由的查询体写在根前缀之后（`album/<id>/~any/…/~end/sort/…`）：`~` 组合器由引擎在 provider resolve 之前拦截（[`where_group.rs`](/src-tauri/pathql-rs/src/provider/where_group.rs)），分支从组入口 provider 出发，故不需要 DSL 配合；但原子的**搜索格**是普通路径段，需要 `gallery_album_provider` / `gallery_task_provider` / `gallery_surf_provider` 的 resolve 分支里列出 `search`（已加），否则 `album/<id>/search/<mode>/<q>` 路由不到。新形态的规范路径统一根前缀在前、搜索原子在体内；旧形态（`search/<mode>/<q>` 前缀在根之前、`no-album` 混在维度序列体首）解析层仍兼容，写回即归一为新形态。简单与高级条件同时生效，两部分互相作为计数上下文；编辑任意一部分不清空另一部分。
-- **高级弹窗的 facet 树：枚举与计数分家**（[`useAdvancedQueryFacets.ts`](/apps/kabegame/src/composables/useAdvancedQueryFacets.ts) + [`galleryFilterTree/context.ts`](/apps/kabegame/src/components/galleryFilterTree/context.ts)）。旧「减格树」（把其余条件折叠成上下文再列维度）是简单查询「不断收窄」时代的产物，在高级查询里其他条件（尤其取非行的兄弟约束）会把候选列表挤没。现在：**枚举**走纯净路径 `<contextPrefix>/<维度 router>`，与草稿树无关，候选全集稳定，经 `listProviderDirsPure` 按路径缓存（不带 count，images-change / plugin 事件整体失效）；**计数**走整树预测——把候选值经 `filterFromTreeSegment`（`serializeFilterForTree` 的逆）写进 NodePath 所指原子的对应维度，序列化整棵草稿树取命中数，节点上显示与当前命中数基线（`useAdvancedHitCount`）的净变化 `+N/−N/0`（取非/或组的符号由整树语义自然得出）。context 的接缝：`pathForSegment` 恒为计数路径，`listPathForSegment` 缺省回退它（侧栏减格语义不变），`countBaseline` 有值即进入 diff 显示。简单过滤树（`GalleryFilterTree.vue`）仍是减格路径 + 绝对计数，查询条传入的前缀额外带上高级条件。plugin extend 候选与其它维度一致，可直接用在高级条件里：宿主的 `plugin_entry_provider` 只 join `plugin_im` 不投影列，插件分支只贡献 where + LEFT JOIN，能进 `~any` / `~not` 组（约定见 provider-dsl/RULES.md §3.3.2）。
+- **高级弹窗的 facet 树：枚举与计数分家**（[`useAdvancedQueryFacets.ts`](/apps/kabegame/src/composables/useAdvancedQueryFacets.ts) + [`galleryFilterTree/context.ts`](/apps/kabegame/src/components/galleryFilterTree/context.ts)）。旧「减格树」（把其余条件折叠成上下文再列维度）是简单查询「不断收窄」时代的产物，在高级查询里其他条件（尤其取非行的兄弟约束）会把候选列表挤没。现在：**枚举**走纯净路径 `<contextPrefix>/<维度 router>`，与草稿树无关，候选由树的 pathql 观察方列举 `<路径>/_kb_co`（不带 count；事件过滤器为空，每次展开下拉读一次，打开期间不随事件刷新；插件签名变化显式刷新）；**计数**走整树预测——把候选值经 `filterFromTreeSegment`（`serializeFilterForTree` 的逆）写进 NodePath 所指原子的对应维度，序列化整棵草稿树取命中数，节点上显示与当前命中数基线（`useAdvancedHitCount`）的净变化 `+N/−N/0`（取非/或组的符号由整树语义自然得出）。context 的接缝：`pathForSegment` 恒为计数路径，`listPathForSegment` 缺省回退它（侧栏减格语义不变），`countBaseline` 有值即进入 diff 显示。简单过滤树（`GalleryFilterTree.vue`）仍是减格路径 + 绝对计数，查询条传入的前缀额外带上高级条件。plugin extend 候选与其它维度一致，可直接用在高级条件里：宿主的 `plugin_entry_provider` 只 join `plugin_im` 不投影列，插件分支只贡献 where + LEFT JOIN，能进 `~any` / `~not` 组（约定见 provider-dsl/RULES.md §3.3.2）。
 - 按种类数量：Tauri 命令 `get_gallery_media_type_counts`（全库）、`get_album_media_type_counts`（单画册）；数据来自 `Storage::get_gallery_media_type_counts` / `get_album_media_type_counts`（[`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)），过滤下拉与折叠标签旁展示 `(n)`。
 
 **分页与每页条数（SimplePage）**：路径末尾页码、`galleryPageSize` 设置与 `browse_gallery_provider` 调用链见 [`GALLERY_PAGINATION_AND_IMAGE_LOAD.md`](GALLERY_PAGINATION_AND_IMAGE_LOAD.md)（与本文的 ImageQuery 组合正交，可对照阅读）。

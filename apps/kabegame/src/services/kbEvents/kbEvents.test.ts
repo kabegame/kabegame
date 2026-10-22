@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { batchWindow } from "./batchWindow";
 import { kbEvent$ } from "./eventSource";
 import { imagePatches$ } from "./imagePatches";
-import { on, type EventTrigger } from "./events";
+import { on, albumEventPaths, albumEventAffectsDir, type EventTrigger } from "./events";
 import {
   lookPathql,
   pathqlAllKey,
@@ -299,6 +299,21 @@ describe("pathqlRequest$", () => {
 });
 
 describe("核心刷新窗口", () => {
+  it("同一事件被多个观察方同时同意只投一票，不在窗口尾重复请求", async () => {
+    vi.useFakeTimers();
+    pathqlFetch.mockResolvedValue(rows("fresh"));
+    const a = look("rows", "shared-tree", [on("images-change")]);
+    const b = look("rows", "shared-tree", [on("images-change")]);
+    await flushPromises();
+    imagesChange("add");
+    await flushPromises();
+    vi.advanceTimersByTime(500);
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+    expect(a.data.map(ids)).toEqual([["fresh"]]);
+    expect(b.data.map(ids)).toEqual([["fresh"]]);
+  });
+
   it("同一路径的观察方各带过滤器：任一同意就在窗口内刷新一次，结果推给全部观察方", async () => {
     vi.useFakeTimers();
     const adds = look("rows", "w/1", [on("images-change", (p) => p.reason === "add")]);
@@ -554,5 +569,37 @@ describe("usePathqlLookMany", () => {
     imagesChange("add");
     await flushPromises();
     expect(pathqlFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("画册单事件路径相关性", () => {
+  it("新增 / 删除 / 成员事件从顶层读路径，改名 / 改 key 从 changes 读路径", () => {
+    for (const name of ["album-added", "album-deleted", "album-images-change"]) {
+      expect(albumEventPaths(name, { ancestorPath: "/a/b/" })).toEqual(["/a/b/"]);
+    }
+    expect(albumEventPaths("album-changed", { changes: { name: "新名称", ancestorPath: "/a/b/" } })).toEqual(["/a/b/"]);
+    expect(albumEventPaths("album-changed", { changes: { labelKey: "key", ancestorPath: "/a/b/" } })).toEqual([
+      "/a/b/",
+    ]);
+  });
+
+  it("移动同时匹配新旧祖先，严格后代不包含自身和兄弟", () => {
+    const payload = { changes: { parentId: "new", oldAncestorPath: "/old/item/", ancestorPath: "/new/item/" } };
+    expect(albumEventPaths("album-changed", payload)).toEqual(["/new/item/", "/old/item/"]);
+    expect(albumEventAffectsDir("album-changed", payload, "/old/")).toBe(true);
+    expect(albumEventAffectsDir("album-changed", payload, "/new/")).toBe(true);
+    expect(albumEventAffectsDir("album-changed", payload, "/other/")).toBe(false);
+    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/b/c/" }, "/a/b/")).toBe(true);
+    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/b/c/" }, "/a/b/c/")).toBe(false);
+    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/b/c/" }, "/a/bb/")).toBe(false);
+    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/" }, null)).toBe(true);
+  });
+
+  it("缺失路径或移动缺失旧路径时通配，兼容旧事件", () => {
+    for (const payload of [null, {}, { ancestorPath: "" }]) {
+      expect(albumEventPaths("album-deleted", payload)).toBe("wildcard");
+    }
+    expect(albumEventPaths("album-changed", { changes: { parentId: null, ancestorPath: "/a/" } })).toBe("wildcard");
+    expect(albumEventAffectsDir("album-changed", {}, "/unrelated/")).toBe(true);
   });
 });

@@ -9,13 +9,13 @@ import {
   isProviderPlain,
   isSameGalleryFilter,
   joinProviderPath,
-  listProviderDirs,
-  listProviderDirsPure,
   normalizeProviderPath,
   type GalleryFilterTreeContext,
   type ProviderChildDir,
 } from "./context";
-import type { TreeDataSource } from "@/components/tree/types";
+import { withGalleryPrefix } from "@/utils/path";
+import { on, albumChangeKinds } from "@/services/kbEvents/events";
+import type { TreeQuerySource } from "@/components/tree/types";
 
 /**
  * 画廊过滤树的节点数据：旧特化组件（Date/DateChild/MediaType/Size/
@@ -70,9 +70,8 @@ export interface GalleryFacetSourceDeps {
 }
 
 export interface GalleryFacetSource {
-  dataSource: TreeDataSource<FacetNode>;
+  dataSource: TreeQuerySource<FacetNode>;
   /** 顶层即该维度的子项；没有维度根，也没有「任意」行（清除走 chip 叉号）。 */
-  roots(dimension: GalleryBrowseDimension): Promise<FacetNode[]>;
   descriptor(node: FacetNode): FacetDescriptor;
 }
 
@@ -86,11 +85,13 @@ export function createGalleryFacetSource(
 ): GalleryFacetSource {
   const { t, pluginStore } = deps;
 
-  // diff 模式走纯净缓存；侧栏每层只列举一次，计数直接读 meta.count。
   const deltaMode = computed(() => !!ctx.countBaseline);
   const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
-  const listDirs = (path: string) =>
-    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(joinProviderPath(path, "_kb_co"), false);
+
+  function hasAlbumSensitiveContext() {
+    const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
+    return /(^|\/)(?:album|album-tree|no-album|hide)(?:\/|$)/.test(path);
+  }
 
   function groupedCount(entry: ProviderChildDir): number | null {
     const count = entry.meta?.count;
@@ -230,16 +231,14 @@ export function createGalleryFacetSource(
   }
 
   /** 列出某维度的第一层，即面板顶层。 */
-  async function listDimension(dimension: GalleryBrowseDimension): Promise<FacetNode[]> {
+  function parseDimension(dimension: GalleryBrowseDimension, entries: ProviderChildDir[]): FacetNode[] {
     switch (dimension) {
       case "date": {
-        const entries = await listDirs(listPathForSegment("date"));
         return entries
           .filter((entry) => /^(\d{4})y$/.test(entry.name))
           .map((entry) => ({ kind: "date", segments: [entry.name], count: groupedCount(entry) }));
       }
       case "mediaType": {
-        const entries = await listDirs(listPathForSegment("media-type"));
         return entries
           .filter((entry) => entry.name === "image" || entry.name === "video")
           .map((entry) => ({
@@ -249,15 +248,12 @@ export function createGalleryFacetSource(
           }));
       }
       case "size": {
-        const entries = await listDirs(listPathForSegment("size"));
         return entries.map((entry) => ({ kind: "size", range: entry.name, count: groupedCount(entry) }));
       }
       case "aspect": {
-        const entries = await listDirs(listPathForSegment("aspect"));
         return entries.map((entry) => ({ kind: "aspect", range: entry.name, count: groupedCount(entry) }));
       }
       case "plugin": {
-        const entries = await listDirs(listPathForSegment("plugin"));
         return entries.map((entry) => ({
           kind: "plugin",
           pluginId: entry.name,
@@ -268,7 +264,7 @@ export function createGalleryFacetSource(
     }
   }
 
-  const dataSource: TreeDataSource<FacetNode> = {
+  const dataSource: TreeQuerySource<FacetNode> = {
     getKey(node) {
       switch (node.kind) {
         case "date":
@@ -304,63 +300,118 @@ export function createGalleryFacetSource(
           return !node.isLeaf;
       }
     },
-    async getChildren(node): Promise<FacetNode[]> {
-      try {
+    page(branch, page) {
+      if (page !== 1) return null;
+      let segment: string;
+      if (branch.kind === "section") {
+        const segments: Record<GalleryBrowseDimension, string> = {
+          date: "date",
+          mediaType: "media-type",
+          size: "size",
+          aspect: "aspect",
+          plugin: "plugin",
+        };
+        segment = segments[branch.sectionId as GalleryBrowseDimension];
+      } else {
+        const node = branch.parent;
         switch (node.kind) {
-          case "date": {
-            const pattern = dateChildPattern(node.segments);
-            const entries = await listDirs(listPathForSegment(["date", ...node.segments].join("/")));
-            return entries
-              .filter((entry) => !pattern || pattern.test(entry.name))
-              .map((entry) => ({
-                kind: "date",
-                segments: [...node.segments, entry.name],
-                count: groupedCount(entry),
-              }));
-          }
-          case "media-kind": {
-            const entries = await listDirs(listPathForSegment(`media-type/${node.mediaKind}`));
-            return entries.map((entry) => ({
-              kind: "media-format",
-              mediaKind: node.mediaKind,
-              format: entry.name,
-              count: groupedCount(entry),
-            }));
-          }
-          case "plugin": {
-            const entries = await listDirs(listPathForSegment(`plugin/${encodeURIComponent(node.pluginId)}/extend`));
-            return entries.map((entry) => ({
-              kind: "plugin-extend",
-              pluginId: node.pluginId,
-              name: entry.name,
-              extendPath: entry.name,
-              isLeaf: isProviderLeaf(entry),
-              isPlain: isProviderPlain(entry),
-              count: extensionCount(entry),
-            }));
-          }
-          case "plugin-extend": {
-            if (node.isLeaf) return [];
-            const entries = await listDirs(listPathForSegment(pluginExtendSegment(node)));
-            return entries.map((entry) => ({
-              kind: "plugin-extend",
-              pluginId: node.pluginId,
-              name: entry.name,
-              extendPath: joinProviderPath(node.extendPath, entry.name),
-              isLeaf: isProviderLeaf(entry),
-              isPlain: isProviderPlain(entry),
-              count: extensionCount(entry),
-            }));
-          }
+          case "date":
+            segment = ["date", ...node.segments].join("/");
+            break;
+          case "media-kind":
+            segment = `media-type/${node.mediaKind}`;
+            break;
+          case "plugin":
+            segment = `plugin/${encodeURIComponent(node.pluginId)}/extend`;
+            break;
+          case "plugin-extend":
+            if (node.isLeaf) return null;
+            segment = pluginExtendSegment(node);
+            break;
           default:
-            return [];
+            return null;
         }
-      } catch {
-        // 旧实现：枚举失败 → 空子集 + loaded（不再自动重试）
-        return [];
       }
+      const path = listPathForSegment(segment);
+      return {
+        queries: [
+          {
+            kind: "list",
+            // 侧栏与高级候选都列 `_kb_co`；两者只差路径是否带草稿（listPathForSegment 已处理）
+            path: withGalleryPrefix(joinProviderPath(path, "_kb_co")),
+            withCount: false,
+          },
+        ],
+        parse(results) {
+          const entries = (Array.isArray(results[0]) ? results[0] : []).filter(
+            (entry): entry is ProviderChildDir => !!entry && typeof entry.name === "string" && !!entry.name.trim(),
+          );
+          return branch.kind === "section"
+            ? parseDimension(branch.sectionId as GalleryBrowseDimension, entries)
+            : parseChildren(branch.parent, entries);
+        },
+      };
+    },
+    refreshOn() {
+      return deltaMode.value
+        ? []
+        : [
+            on("images-change", (payload) => !!payload.reason),
+            on("album-images-change", () => hasAlbumSensitiveContext()),
+            on("album-changed", (payload) => hasAlbumSensitiveContext() && albumChangeKinds(payload).structure),
+            on("album-added", () => hasAlbumSensitiveContext()),
+            on("album-deleted", () => hasAlbumSensitiveContext()),
+          ];
     },
   };
+
+  function parseChildren(node: FacetNode, entries: ProviderChildDir[]): FacetNode[] {
+    switch (node.kind) {
+      case "date": {
+        const pattern = dateChildPattern(node.segments);
+        return entries
+          .filter((entry) => !pattern || pattern.test(entry.name))
+          .map((entry) => ({
+            kind: "date",
+            segments: [...node.segments, entry.name],
+            count: groupedCount(entry),
+          }));
+      }
+      case "media-kind": {
+        return entries.map((entry) => ({
+          kind: "media-format",
+          mediaKind: node.mediaKind,
+          format: entry.name,
+          count: groupedCount(entry),
+        }));
+      }
+      case "plugin": {
+        return entries.map((entry) => ({
+          kind: "plugin-extend",
+          pluginId: node.pluginId,
+          name: entry.name,
+          extendPath: entry.name,
+          isLeaf: isProviderLeaf(entry),
+          isPlain: isProviderPlain(entry),
+          count: extensionCount(entry),
+        }));
+      }
+      case "plugin-extend": {
+        if (node.isLeaf) return [];
+        return entries.map((entry) => ({
+          kind: "plugin-extend",
+          pluginId: node.pluginId,
+          name: entry.name,
+          extendPath: joinProviderPath(node.extendPath, entry.name),
+          isLeaf: isProviderLeaf(entry),
+          isPlain: isProviderPlain(entry),
+          count: extensionCount(entry),
+        }));
+      }
+      default:
+        return [];
+    }
+  }
 
   function descriptor(node: FacetNode): FacetDescriptor {
     const selectable = !(node.kind === "plugin-extend" && node.isPlain);
@@ -377,14 +428,6 @@ export function createGalleryFacetSource(
 
   return {
     dataSource,
-    async roots(dimension) {
-      try {
-        return await listDimension(dimension);
-      } catch {
-        // 与 getChildren 一致：枚举失败 → 空列表
-        return [];
-      }
-    },
     descriptor,
   };
 }

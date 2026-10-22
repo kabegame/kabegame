@@ -6,6 +6,8 @@ export {
   on,
   triggers$,
   albumChangeKinds,
+  albumEventPaths,
+  albumEventAffectsDir,
   type EventTrigger,
   type KbEventMap,
   type AlbumChangedPayload,

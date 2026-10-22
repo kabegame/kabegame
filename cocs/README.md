@@ -84,7 +84,7 @@
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统与前端唯一查询对象 `GalleryQuery`。涵盖四个页面共用的查询行、搜索表达式与高级条件持久化边界、宽高比生成列和区间段、**维度列举带分组计数**（侧栏 / Android picker / 头部控件列举 `{维度路径}/_kb_co` 并读 `meta.count`，插件扩展读插件 router 的 `meta.image_count`、缺失不显示，面板顶层直接列维度子项、没有根节点与根 COUNT）、侧栏单个 `dataChangeHub` 订阅的可见刷新 / 不可见记脏 / 插件签名刷新、高级查询 diff 逐候选预测与候选缓存失效，以及收藏 / 隐藏标记的相关 EXISTS 取舍。
+  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统与前端唯一查询对象 `GalleryQuery`。涵盖四个页面共用的查询行、搜索表达式与高级条件持久化边界、宽高比生成列和区间段、**维度列举带分组计数**（侧栏 / Android picker / 头部控件列举 `{维度路径}/_kb_co` 并读 `meta.count`，插件扩展读插件 router 的 `meta.image_count`、缺失不显示，面板顶层直接列维度子项、没有根节点与根 COUNT）、侧栏树的逐页 pathql 观察 / 可见分支刷新 / 隐藏停观察 / 插件签名刷新、高级查询 diff 逐候选预测与常驻候选观察，以及收藏 / 隐藏标记的相关 EXISTS 取舍。
   - 适用场景：新增过滤、排序、数据源；排查 provider 查询路径或高级查询路由；排查过滤树、Android picker、头部控件或 MCP 的列举计数与筛选结果不一致；排查侧栏下载中不刷新、隐藏期补刷、插件增删后候选不更新或高级查询 `+N/−N` 刷新时机；排查宽高比分桶、排序、收藏 / 隐藏标记或 `hide` 计数性能。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)

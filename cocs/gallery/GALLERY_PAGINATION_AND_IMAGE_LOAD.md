@@ -221,7 +221,7 @@ ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否�
   顺序取最后一次），再 `merge` 成一条交给 `patchMany`。两者改的字段不重叠（`image-changed` 不带 `favorite`），
   两条流之间不需要排序。预览弹窗在裸 id 模式下也订阅它，另用 `triggers$` 对 `images-change` /
   `album-images-change` 重读当前图。
-- **其它尚未迁移的消费方**（画册树、侧栏、头部计数、标签面板等）仍在全局单例
+- **其它尚未迁移的消费方**（单画册详情、头部计数、标签面板等）仍在全局单例
   [`dataChangeHub.ts`](/apps/kabegame/src/services/dataChangeHub.ts)。hub 对每个订阅者按 500ms 时间窗合并
   reason 与各 id 集合；画册维度含 `albumIds` / `albumImageIds`、`albumPaths` / `albumPathsWildcard` 和结构字段集合。
   画册成员事件携带画册 `ancestorPath`；新增、删除、改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。
@@ -319,13 +319,19 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   `directCounts`。
 - 隐藏/取消隐藏除精确画册成员事件外，一定再发一条 `images-change("change", ids)`，供任务、畅游、工具栏和
   过滤树等其它可见性视图兜底刷新。
-- 前端不增量维护全量计数。目录页一次三路 fetch：`albums://<过滤段>/x<N>x/<页>` 取这一页的画册行
-  （默认按创建时间排序）；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册
-  `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录直接显示它）与 `image_count`
-  （子树成员行数，标签叶子即直接成员数），没有行的画册计 0；与 `images://gallery/[hide/]album/<id>`、
-  `album-tree/<id>` 的 entry 总数同口径。`/hide` 对应 `hide/` 前缀（不数隐藏画册里的图片）。`label_dir` 不挂图，
-  `~~/images` 不给它出行。行与 `child_count` 先到即渲染，`image_count` 是慢查询，单独到达后再补进树行。每页固定 3 条 SQL，
-  内层分页物化为 CTE、子树走 `idx_albums_ancestor_path` 区间，见 [../provider-dsl/RULES.md](../provider-dsl/RULES.md) §2.1。
+- 前端不维护全量画册列表或计数。`albumPageQueries` 描述每页结构批次：`albums://<过滤段>/x<N>x/<页>`
+  行与 `…/~~/children[/search/<q>][/<类型段>]` 的 `child_count` 经 `pathql_all` 同快照读取。
+  `TreePage.extra` 另批读取本页行与 `…/~~/images[/hide]` 的 `image_count`，本页行用来为无分组结果的画册补 0，
+  也保证补充结果先到时可应用。每页两批、共四条 fetch；各页之间与结构 / extra 之间不保证同一快照。
+  两个计数在 `~~` 后按画册 `GROUP BY`；图片数是子树成员行数（标签叶子即直接成员），
+  与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` entry 总数同口径。`label_dir` 不挂图，显示直接子画册数。
+  行与 `child_count` 先渲染，图片计数独立补丁、不挡行渲染，结构刷新沿用最近补丁。内层分页物化为 CTE、
+  子树走 `idx_albums_ancestor_path` 区间，见 [../provider-dsl/RULES.md](../provider-dsl/RULES.md) §2.1。
+- 画册树 / 侧栏以 `TreeQuerySource` 描述查询和单事件过滤器，`useTreeModel` 只观察可见展开分支的已加载页，
+  一页一个 `all` key。新 key 与手动刷新经 `pathqlRequest$` 请求，Promise 在模型等待表中完成；核心不返回结果。
+  收起 / 不活跃停观察而保留数据，再展开 / 激活重新请求；换 key 与错误均不清空旧子项。
+  `album-images-change` 只重读相关目录的 extra，结构事件重读结构与 extra（移动改变子树计数、新增 / 删除改变页成员）；
+  `albumEventPaths` 从事件中取新旧路径，缺失则通配，子目录只匹配严格后代。多个实例对同一事件、同 key 只投一票。
 - Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 
 ## 排查清单

@@ -1,7 +1,5 @@
 import { computed, inject, provide, type ComputedRef, type InjectionKey } from "vue";
 import { pathqlEntry, pathqlList } from "@/services/pathql";
-import { subscribeChanges } from "@/services/dataChangeHub";
-import { GRID_REFRESH_WAIT_MS } from "@/services/liveQuery";
 import { withGalleryPrefix } from "@/utils/path";
 import {
   buildDimensionCountPath,
@@ -47,7 +45,7 @@ export interface GalleryFilterTreeContext {
   listPathForSegment?: (segment: string) => string;
   /**
    * 当前整树命中数基线。提供即进入 diff 模式：节点计数显示
-   * `count − baseline`（+N/−N/0），且枚举走纯净列表（可缓存、不带 count）。
+   * `count − baseline`（+N/−N/0），且枚举走纯净列表（由观察方保有、不带 count）。
    */
   countBaseline?: ComputedRef<number | null>;
   registerRefreshTarget: (target: RefreshTarget) => () => void;
@@ -121,50 +119,6 @@ export async function listProviderDirs(path: string, withCount = true): Promise<
   return (Array.isArray(entries) ? entries : []).filter(
     (entry): entry is ProviderChildDir => !!entry && typeof entry.name === "string" && entry.name.trim().length > 0,
   );
-}
-
-// 纯净枚举缓存：diff 模式下列表路径与草稿树无关，同一 (context, 维度) 的候选
-// 全集在弹窗反复开合间不变，可整段复用。数据变更只让缓存失效、不触发重查：已打开的高级面板
-// 不随数据刷新，下次打开时才重新列举；插件签名变化时由宿主显式清缓存。
-const pureListCache = new Map<string, Promise<ProviderChildDir[]>>();
-let pureListCacheInvalidationReady = false;
-
-export function invalidatePureProviderListCache() {
-  pureListCache.clear();
-}
-
-function ensurePureListCacheInvalidation() {
-  if (pureListCacheInvalidationReady) return;
-  pureListCacheInvalidationReady = true;
-  subscribeChanges({
-    waitMs: GRID_REFRESH_WAIT_MS,
-    // 只看成员与结构变化；纯字段补丁（image-changed）不改变候选全集
-    filter: (batch) => batch.images.size > 0 || batch.albumIds.size > 0 || batch.albumStructure.size > 0,
-    onBatch: invalidatePureProviderListCache,
-  });
-}
-
-export function listProviderDirsPure(path: string): Promise<ProviderChildDir[]> {
-  ensurePureListCacheInvalidation();
-  const key = normalizeProviderPath(path);
-  const cached = pureListCache.get(key);
-  if (cached) return cached;
-  const promise = listProviderDirs(joinProviderPath(path, "_kb_co"), false);
-  pureListCache.set(key, promise);
-  promise.catch(() => {
-    if (pureListCache.get(key) === promise) pureListCache.delete(key);
-  });
-  return promise;
-}
-
-/** 树节点的枚举出口：diff 模式走纯净缓存列表，侧栏列举 `_kb_co` 上的分组计数。 */
-export function useProviderTreeList() {
-  const context = useGalleryFilterTreeContext();
-  const deltaMode = computed(() => !!context.countBaseline);
-  const listPathForSegment = (segment: string) => (context.listPathForSegment ?? context.pathForSegment)(segment);
-  const listDirs = (path: string) =>
-    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(joinProviderPath(path, "_kb_co"), false);
-  return { deltaMode, listPathForSegment, listDirs };
 }
 
 export async function countProviderPath(path: string): Promise<number> {

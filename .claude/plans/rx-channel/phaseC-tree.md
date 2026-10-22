@@ -1,6 +1,6 @@
 # Phase C（树）：useTreeModel 重写为 pathql 观察方
 
-状态：方案，未实施。
+状态：已实施，未真机验证。
 
 ### 总体设计思路
 
@@ -276,8 +276,68 @@ refreshOn: (branch, part) =>
 - 侧栏每次重新显示都读一次，不再区分隐藏期间是否有变更。
 - 新进入观察集合的 key 一律请求，即使别的实例刚读过同一 key（例如两个选择器先后打开同一目录）。
 
-### 待定事项
-1. 是否同意「只观察可见分支」（收起即停刷新）。
-2. 分页：一页一个 key（推荐），还是一个分支一个 key（同一快照，但加载更多重读前面所有页）。
-3. 补充查询是否用通用的 `extra` 机制，还是只为画册树特化。
-4. 出错时保留上一份子项（推荐），还是像现在一样清空。
+### 已确定事项
+
+1. 只观察可见分支，收起保留数据、停观察，再展开重新请求。
+2. 一页一个 key。
+3. 使用通用 `TreePage.extra`。
+4. 读取失败保留上一份子项。
+
+### 实施记录
+
+六个方案点已实施；`KbTreePanel` 与 `AlbumTreePanel` / `Albums.handleRefresh` 现有接口足够，未改视图和刷新转发代码。
+未操作真机，新增回归 case 全部保持未勾选。
+
+自动化验证（2026-10-22）：
+
+- `apps/kabegame` 下 `npx vitest run`：41 个文件、348 项通过，退出码 0。
+- `node ./node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json`：无输出，0 error，退出码 0。
+- 裸 `cargo check -p kabegame-core` 首次因 `rusty_ffmpeg: No linking method set!` 失败；
+  按仓库 `check-kabegame` 技能确认 FFmpeg pkgconfig 与 macOS SDK 环境后，使用相同环境重跑此命令：
+  `Finished dev profile`，12 个既有 warning，退出码 0。技能驱动的桌面 `cargo check -p kabegame --features standard` 也通过。
+- 已执行 `deno task format`；恢复其触及的任务外纯排版变动，修改文件的 Prettier 检查通过；`git diff --check` 通过。
+- Rust 仅对 `storage/albums.rs` 执行 `rustfmt --edition 2021`，未执行 `cargo fmt -p`。
+
+实际偏离与理由：
+
+- `affectsAlbumDir` 与其测试保留：`useAlbumQuery` 仍使用批次版本，本阶段未迁移单画册详情。
+- `extra.queries` 为 `[fetch base, fetch base/~~/images…]`，比草案多读取一次便宜的本页行。
+  分组计数会省略零计数行；extra 可能先于结构到达，独立快照需要完整 id 列表才能补零，也不能依赖结构解析的可变闭包。
+- extra 同时响应结构事件：移动会改变子树图片数，新增 / 删除 / 搜索命中变化会改变本页成员；只响应成员事件会留下空计数或旧计数。
+  成员事件仍只刷新 extra，不重读结构。
+- 高级 diff 候选树用 `active: true` 常驻观察，侧栏才跟随 `ctx.visible`。统一在隐藏时停观察会导致每次打开高级面板重新列举，
+  与「反复开合不重读候选」冲突；预测计数仍只在可见时计算。
+- 系统项搜索与 scope 排除在响应式行投影中过滤，两个系统画册的查询保持固定；只改本地显示条件不改变查询 key，也无需额外请求。
+- 观察表支持同 key 的多个分支 / 页引用；等待表按 key 合并（对应当前页的 page / extra），退订与卸载也释放，
+  避免取消观察后 Promise 悬挂。复用现有 key 的新分支从最近观察结果补落地。加载更多失败后先重试失败页，避免跳页。
+- 核心增加同一事件对象的投票去重（每 key 一个 WeakSet），不改变请求与观察契约。
+  两个树实例都同意同一事件时，原实现会把第二票留到窗口尾，再读一次；去重后同一事件只请求一次，不影响不同事件的窗口合并。
+
+复核修正（Claude，2026-10-22）：
+
+- **diff 模式候选路径回归**：实施版在 diff 模式下列纯路径（不带 `_kb_co`），并有测试固定了这一行为；旧 `listProviderDirsPure`
+  同样列 `<路径>/_kb_co`（只是不带计数）。已改回两种模式都列 `_kb_co`，测试同步修正。
+- **空类型页**：`albumPageQueries` 没有允许类型时原返回空查询组，模型会对 key `"[]"` 发一次空的 `pathql_all`；改为返回 `null`（没有这一页，不读）。
+- **后端**：改名 / 改 key 在写库提交之后读 `ancestor_path`，原实现读失败会让已成功的写入返回错误；改为读不到就发不带路径的事件（前端按通配刷新）。
+- 复核后重跑：`npx vitest run` 41 文件 / 348 项通过；vue-tsc 0 error；带 FFmpeg 环境的 `cargo check -p kabegame-core` 通过，警告均为既有、不在 `storage/albums.rs`。
+
+### 真机验收（2026-10-22，macOS CEF dev + debug ingest）
+
+逐条结果见 `versions/latest/regression.md`「树模型迁到 pathql 观察方」。动态下载用 `kabegame-cli plugin run konachan --via app`
+（单页 40 张，可带 `--album-id`）；分页与读取失败借助临时把树页大小改为 3、给子项结构查询插入非法段的调试开关，验完还原。
+
+- 通过：首次加载、动态下载（展开 / 收起）、分页、搜索、hide、增 / 改名 / 移动 / 删 / 改 key、多实例共享、读取失败与刷新按钮、
+  侧栏打开 / 隐藏期间下载、高级面板。
+- 修正预期：高级候选在下拉面板里，每次展开都重新挂载并读一次候选（下拉本就不做响应式更新），打开期间不随事件刷新；
+  原文「反复开合不重读候选」不成立，已改 AGENTS.md、view-mutation.mdc、PROVIDER_IMAGEQUERY_COMPOSABLE.md 与回归文档。
+  上面「实施记录」里 diff 树 `active: true` 的理由（避免重开重列举）因此并不成立，但保留它无害。
+- 未测：慢计数（本机库约 4k 张，计数约 60ms，复现不出秒级）、插件签名变化、Web SSE、Android。
+
+发现的问题（均非本次引入，未修）：
+
+1. **根分区相关性过宽**：根分区把任意画册结构事件都当作相关。下载会自动建标签（一页约 60 次 `album-added`），
+   普通 / 本地文件夹 / 系统分区的结构页也随之按窗口频率重读（系统分区 61s 内 51 次）。旧实现同样整片 `reloadRoots`。
+   可按 `album-added` 的 `albumType` 与路径根判定分区，系统分区只认收藏 / 隐藏两个 id。
+2. **改名也重读计数**：`extra` 响应结构事件（为了移动与增删），纯改名 / 改 key 其实不改变图片数，可按变更字段收窄。
+3. **画册详情网格**：停在收藏画册时，任何带 reason 的 `images-change` 都会让它的行与总数刷新（Phase A album adapter 的 `refreshOn`）。
+4. 改动 `.vue` 触发 HMR 后画廊可能变空白（phaseA 记录过的 `@/router` 实例问题），验收前需整页刷新。
