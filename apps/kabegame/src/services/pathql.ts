@@ -1,5 +1,5 @@
 import { invoke } from "@/api/rpc";
-import type { RowsSnapshot, TotalSnapshot } from "@/services/liveQuery";
+import type { TotalSnapshot } from "@/services/liveQuery";
 
 export interface ProviderNote {
   title: string;
@@ -29,10 +29,6 @@ export function pathqlList(path: string, withCount = false): Promise<ProviderLis
 
 export function pathqlFetch<T = Record<string, unknown>>(path: string): Promise<T[]> {
   return invoke<T[]>("pathql_fetch", { path });
-}
-
-export function pathqlView(path: string): Promise<RowsSnapshot> {
-  return invoke<RowsSnapshot>("pathql_view", { path });
 }
 
 export function pathqlCount(path: string): Promise<TotalSnapshot> {

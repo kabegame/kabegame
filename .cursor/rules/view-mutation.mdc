@@ -1,5 +1,5 @@
 ---
-description: ImageGrid 只经 pathqlRequest$ 发请求（用户操作、事件窗口），观察方只看最后可得数据与最新请求状态；运行配置写操作返回视图快照，事件异步补位
+description: ImageGrid 只经 pathqlRequest$ 发请求（用户操作、事件窗口），观察方只看最后可得数据与最新请求状态；运行配置同批观察累计行与总数，写后由事件刷新
 globs: "apps/kabegame/src/**/*.{ts,vue}, src-tauri/kabegame*/src/**/*.rs"
 alwaysApply: false
 ---
@@ -55,14 +55,16 @@ alwaysApply: false
 
 ## 运行配置写操作
 
-- 新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，携带可选 `view`；
-  立即应用 `{ rows, seq }`，不依赖自身广播刷新。
-- 当前已加载 N 页作为一个累计行窗口，写后由后端重新过滤、排序与补齐，不自行插入或重排配置行。
-  总数用独立 `liveQuery`，翻页不重查未变的计数路径。
-- core、Tauri 薄包装和 Web dispatch 支持可选 `view`，共享命令始终返回对象；IPC handler 自行取 config，保留单行/null 返回。
-- 写库前取得 `GlobalEmitter::hold()`；配置事件分配全局 `seq`，行快照读完才放行广播。
-- 前端在发命令前缓冲配置事件，主动快照落地后经 hub 发布返回行，再放行未覆盖的外部事件。
-  失败也必须释放缓冲；同序号与同配置已被主动结果覆盖的旧事件不重复刷新。
-- 路径切换后丢弃旧视图响应，外部配置事件经 hub 补位。推荐导入态独立观察 plugin:// 来源版本的 recommended rows，
+- 新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，只传业务参数；
+  core、Tauri 与 Web 命令直接返回保存后的单行，删除返回 null。IPC / CLI 请求与单行/null 返回保持兼容。
+- `usePagedRunConfigs` 使用一个 `usePathqlLookAll`，同一读快照查询 `[fetch 累计窗口, count 计数路径]`；
+  只由 `start` / `loadMore` 通过 `pathqlRequest$` 发起用户请求。加载更多以已落地页加一为目标，失败后重试同 key。
+- 写后不主动请求、不注入本地结果；`auto-config-change` 由核心统一 500ms 窗口刷新。
+  新增带 runConfigId 的任务、任意任务状态变化和删除任务同样触发刷新；张数、错误与结束时间等展示字段
+  只补丁已在手且 `lastTask.id` 匹配的行，不重新过滤、排序或请求。
+- 页头失败数观察 `run_configs://last` 的 list，挂载请求一次；筛选下拉仍在打开时一次性读取分面。
+  详情弹窗观察编码后的 id rows key，换 key 请求一次，空结果视为删除；任务关联名直接订阅配置事件，
+  改名按 id 读取，删除清空，不经 hub。
+- 写库提交后先发推荐导入态的插件事件，再发配置事件。推荐配置独立观察 plugin:// 来源版本的 recommended rows，
   由同插件的 plugin-changed（version / recommendedConfigs）驱动；刷新期间保留内容，失败保留已有结果。
-- 详情与任务关联名优先消费本地返回行；远端事件没有返回行时才按 id 补读。
+- 配置事件的全局 `seq` 保留，观察方仍按前端请求序号落地；`pathql_count` 保留供任务列表使用。

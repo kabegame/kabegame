@@ -132,7 +132,7 @@
 只读已安装包与同 id 且包文件仍在本地的 `store_plugin_cache` 条目，不下载。写库提交后按 pluginId 合并，
 每个插件最多发送一条 `plugin-changed { pluginId, changes: { recommendedConfigs: { <path>: { imported } } } }`，
 仅包含导入态实际变化的路径；同一路径优先采用已安装插件的新状态，没有该状态时采用变化来源的新状态。
-事件经既有 `GlobalEmitter::hold()` 与 `auto-config-change` 同批放行；只改名称、计划时间等不影响匹配的字段不发插件事件。
+写库提交后先发推荐导入态的插件事件，再发 `auto-config-change`；只改名称、计划时间等不影响匹配的字段不发插件事件。
 覆盖安装（升级或同版本重装）也发 `plugin-changed`，`changes` 是必含 `version` 的完整插件 JSON；首次安装与卸载仍用 `plugin-added` / `plugin-deleted`。
 
 商店来源按各自本地包内容独立计算，即使与已安装版本不同也参与路径变化检测；预览不在比较范围。

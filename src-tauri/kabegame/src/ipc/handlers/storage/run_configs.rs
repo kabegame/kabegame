@@ -1,4 +1,4 @@
-//! Run Configs 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
+//! 运行配置的 app IPC 入口。
 use kabegame_core::ipc::ipc::IpcResponse;
 use kabegame_core::storage::Storage;
 
@@ -13,29 +13,24 @@ pub async fn get_run_configs() -> IpcResponse {
 }
 
 pub async fn add_run_config(config: &serde_json::Value) -> IpcResponse {
-    match kabegame_core::commands::task::add_run_config(config.clone(), None).await {
-        Ok(result) => run_config_response("added", result),
+    match kabegame_core::commands::task::add_run_config(config.clone()).await {
+        Ok(result) => IpcResponse::ok_with_data("added", result),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn update_run_config(config: &serde_json::Value) -> IpcResponse {
-    match kabegame_core::commands::task::update_run_config(config.clone(), None).await {
-        Ok(result) => run_config_response("updated", result),
+    match kabegame_core::commands::task::update_run_config(config.clone()).await {
+        Ok(result) => IpcResponse::ok_with_data("updated", result),
         Err(e) => IpcResponse::err(e),
     }
 }
 
 pub async fn delete_run_config(config_id: &str) -> IpcResponse {
-    match kabegame_core::commands::task::delete_run_config(config_id.to_string(), None).await {
+    match kabegame_core::commands::task::delete_run_config(config_id.to_string()).await {
         Ok(_) => IpcResponse::ok("deleted"),
         Err(e) => IpcResponse::err(e),
     }
-}
-
-/// app IPC 保持旧单行载荷，共享写结果的外层对象不跨此 IPC 边界。
-fn run_config_response(message: &str, mut result: serde_json::Value) -> IpcResponse {
-    IpcResponse::ok_with_data(message, result["config"].take())
 }
 
 #[cfg(test)]
@@ -44,14 +39,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn ipc_run_config_response_keeps_legacy_single_row_or_null() {
+    fn ipc_run_config_write_keeps_single_row_or_null() {
         for config in [json!({"id": "a", "pluginId": "p"}), serde_json::Value::Null] {
-            let response = run_config_response(
-                "added",
-                json!({
-                    "config": config, "configId": "a", "seq": 7, "view": null
-                }),
-            );
+            let response = IpcResponse::ok_with_data("added", config.clone());
             assert!(response.ok);
             assert_eq!(response.data, config);
         }

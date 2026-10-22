@@ -131,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { useI18n } from "@kabegame/i18n";
 import { IS_ANDROID, IS_WEB } from "@/env";
@@ -155,7 +155,9 @@ import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "@/u
 import type { RunConfig, ScheduleSpec } from "@/stores/crawler";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import { cloneScheduleSpec } from "@/utils/scheduleText";
-import { fetchRunConfig, subscribeRunConfigEvents } from "@/services/runConfigs";
+import { normalizeRunConfigRow } from "@/services/runConfigs";
+import { on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
+import { encodeSeg } from "@kabegame/pathql-client";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useRouter } from "vue-router";
 
@@ -172,9 +174,39 @@ const panelMode = ref<"view" | "edit">("view");
 const detailRef = ref<InstanceType<typeof AutoConfigDetailContent> | null>(null);
 const scheduleSectionRef = ref<HTMLElement | null>(null);
 const config = ref<RunConfig | null>(null);
-const configLoading = ref(false);
-let configGeneration = 0;
-let unsubscribeConfig: (() => void) | null = null;
+const configKey = computed(() =>
+  dialogStore.visible && !dialogStore.isCreate && dialogStore.configId
+    ? `run_configs://id_${encodeSeg(dialogStore.configId)}`
+    : null,
+);
+const landedKey = ref<string | null>(null);
+const configLoading = computed(() => !!configKey.value && landedKey.value !== configKey.value);
+
+// 先清理旧配置，再切换观察方，避免重放新 key 的已有数据后又被清空。
+watch(
+  configKey,
+  () => {
+    config.value = null;
+    landedKey.value = null;
+  },
+  { flush: "sync" },
+);
+usePathqlLooker({
+  kind: "rows",
+  key: () => configKey.value,
+  refreshOn: [on("auto-config-change", (payload) => payload.configId === dialogStore.configId)],
+  onResult: ({ rows }) => {
+    config.value = normalizeRunConfigRow(rows[0]);
+    landedKey.value = configKey.value;
+  },
+});
+watch(
+  configKey,
+  (key) => {
+    if (key) pathqlRequest$.next(["rows", key]);
+  },
+  { immediate: true, flush: "sync" },
+);
 
 const name = ref("");
 const description = ref("");
@@ -194,46 +226,8 @@ watch(
   (v) => (v ? modal.open() : modal.close()),
   { immediate: true },
 );
-onUnmounted(() => unsubscribeConfig?.());
 
 const viewConfig = computed(() => config.value);
-
-async function loadExistingConfig() {
-  const id = dialogStore.configId;
-  const generation = ++configGeneration;
-  configLoading.value = true;
-  const loaded = id ? await fetchRunConfig(id) : null;
-  if (generation !== configGeneration) return;
-  config.value = loaded;
-  configLoading.value = false;
-}
-
-watch(
-  () => [dialogStore.visible, dialogStore.configId, dialogStore.isCreate] as const,
-  ([visible, id, create]) => {
-    unsubscribeConfig?.();
-    unsubscribeConfig = null;
-    configGeneration++;
-    if (!visible || create || !id) {
-      config.value = null;
-      configLoading.value = false;
-      return;
-    }
-    void loadExistingConfig();
-    unsubscribeConfig = subscribeRunConfigEvents((event) => {
-      if (event.configId !== id) return;
-      if (event.reason === "configdelete") {
-        config.value = null;
-        configLoading.value = false;
-      } else if (event.config) {
-        config.value = event.config;
-      } else {
-        void loadExistingConfig();
-      }
-    });
-  },
-  { immediate: true },
-);
 
 /** 查看态展示画册名；解析失败退回 id */
 watch(
@@ -369,7 +363,7 @@ watch(scheduleEnabled, (enabled) => {
 });
 
 watch(
-  () => [dialogStore.visible, dialogStore.openGeneration] as const,
+  () => [dialogStore.visible, dialogStore.openGeneration, configLoading.value] as const,
   async ([vis]) => {
     if (!vis) return;
     const create = dialogStore.isCreate;
@@ -377,11 +371,11 @@ watch(
     const initPanel = dialogStore.initialPanel;
     const scrollSched = dialogStore.scrollSchedule;
     panelMode.value = create ? "edit" : initPanel;
+    if (configLoading.value) return;
     await nextTick();
     if (create) {
       resetCreateForm();
     } else if (panelMode.value === "edit" && id) {
-      if (configLoading.value) await loadExistingConfig();
       const cfg = config.value;
       if (cfg) await loadFromConfig(cfg);
     }

@@ -10,6 +10,12 @@ export type AlbumChangedPayload = {
   changes?: Record<string, unknown>;
 };
 
+export type AutoConfigChangePayload = {
+  seq?: number;
+  reason?: "configadd" | "configchange" | "configdelete";
+  configId?: string;
+};
+
 export type PluginChangedPayload = {
   pluginId?: string;
   changes?: { version?: string; recommendedConfigs?: Record<string, { imported: boolean }> } & Record<string, unknown>;
@@ -17,6 +23,8 @@ export type PluginChangedPayload = {
 
 /** 已接入的后端事件与 payload 类型；核心事件源本身不依赖此表。 */
 export interface KbEventMap {
+  "auto-config-change": AutoConfigChangePayload;
+  "tasks-change": unknown;
   "plugin-added": { plugin?: Plugin };
   "plugin-changed": PluginChangedPayload;
   "plugin-deleted": { pluginId?: string };

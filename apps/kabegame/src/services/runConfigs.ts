@@ -1,7 +1,7 @@
-import { subscribeChanges } from "./dataChangeHub";
-import { pathqlCount, pathqlFetch, pathqlList } from "@/services/pathql";
+import { pathqlFetch, pathqlList } from "@/services/pathql";
 import type { CrawlTask, RunConfig, RunConfigLastResult, RunConfigLastTask, ScheduleSpec } from "@/stores/crawler";
 import { encodeSeg } from "@kabegame/pathql-client";
+import { normalizeTaskEvent, normalizeTaskRow } from "@/services/tasks";
 
 export const RUN_CONFIG_PAGE_SIZE = 20;
 export type RunConfigSort = "next" | "last" | "result" | "name" | "plugin" | "created";
@@ -15,12 +15,14 @@ export type RunConfigQuery = {
   sort: RunConfigSort;
   dir: "asc" | "desc";
 };
-export type RunConfigEvent = {
-  reason: "configadd" | "configdelete" | "configchange";
-  configId: string;
-  seq: number;
-  config?: RunConfig | null;
-};
+/** 会改变最近任务或最近结果的信号，交给核心事件窗口重读配置。 */
+export function isRunConfigTaskSignal(payload: unknown): boolean {
+  const event = normalizeTaskEvent(payload);
+  if (!event) return false;
+  if (event.type === "TaskAdded") return !!normalizeTaskRow(event.task)?.runConfigId;
+  if (event.type === "TaskDeleted") return true;
+  return event.diff.status != null;
+}
 
 function numberOpt(value: unknown): number | undefined {
   if (value == null || value === "") return undefined;
@@ -157,17 +159,6 @@ export function runConfigViewPath(query: RunConfigQuery): string {
   return `${runConfigFilterPath(query)}sort/${query.sort}/${query.dir === "desc" ? "desc/" : ""}`;
 }
 
-export async function fetchRunConfigPage(base: string, page = 1): Promise<RunConfig[]> {
-  const rows = await pathqlFetch<Record<string, unknown>>(
-    `run_configs://${base}x${RUN_CONFIG_PAGE_SIZE}x/${Math.max(1, page)}`,
-  );
-  return rows.map(normalizeRunConfigRow).filter((config): config is RunConfig => config != null);
-}
-
-export async function fetchRunConfigTotal(base = ""): Promise<number> {
-  return (await pathqlCount(`run_configs://${base.replace(/\/$/, "")}`)).total;
-}
-
 export async function fetchRunConfigFacet(dim: RunConfigFacet, query: RunConfigQuery): Promise<Record<string, number>> {
   const entries = await pathqlList(`run_configs://${runConfigFilterPath(query, dim)}${dim}`);
   return Object.fromEntries(
@@ -207,24 +198,4 @@ export function compareRunConfigs(sort: RunConfigSort, dir: "asc" | "desc") {
     if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
     return b.id.localeCompare(a.id);
   };
-}
-
-/** 统一经过 dataChangeHub：本地写结果即时投递，后端事件按 seq 补位。 */
-export function subscribeRunConfigEvents(handler: (event: RunConfigEvent) => void): () => void {
-  return subscribeChanges({
-    waitMs: 200,
-    filter: (batch) => batch.runConfigs.size > 0,
-    onBatch: (batch) => {
-      for (const [configId, change] of batch.runConfigs) {
-        handler({
-          reason: change.reason,
-          configId,
-          seq: batch.maxSeq,
-          ...(Object.prototype.hasOwnProperty.call(change, "config")
-            ? { config: normalizeRunConfigRow(change.config) }
-            : {}),
-        });
-      }
-    },
-  });
 }

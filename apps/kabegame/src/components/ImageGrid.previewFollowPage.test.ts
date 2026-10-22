@@ -11,7 +11,6 @@ const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) =>
 const jumpToPage = vi.hoisted(() => vi.fn<(page: number) => Promise<void>>());
 const refetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const totalRefetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
-const pathqlViewMock = vi.hoisted(() => vi.fn());
 const pathqlAllMock = vi.hoisted(() => vi.fn());
 const handlePreviewPageBoundary = vi.hoisted(() => vi.fn());
 const previewImageId = ref("");
@@ -38,7 +37,6 @@ vi.mock("@/services/imageLocate", () => ({
   pageOfRowIndex: (rowIndex: number, pageSize: number) => Math.floor((rowIndex - 1) / pageSize) + 1,
 }));
 vi.mock("@/services/pathql", () => ({
-  pathqlView: pathqlViewMock,
   pathqlAll: pathqlAllMock,
   pathqlEntry: vi.fn(),
   pathqlList: vi.fn(),

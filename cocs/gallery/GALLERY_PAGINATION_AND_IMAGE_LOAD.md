@@ -304,7 +304,7 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 - Payload 为 `seq` + `patches[]`；每组 patch 用 `imageIds` 表示共享同一份 `diff` 的图片。`diff` 键为
   `ImageInfo` camelCase 字段，值是绝对值快照，不是增量。
 - 同一次写入先发 `image-changed`即时 patch 当前页，再发 `images-change("change", ids)`；后者保留
-  500ms 权威快照对账，处理排序、搜索成员与分面变化。`EventHold` 保持两条事件的顺序。
+  500ms 权威快照对账，处理排序、搜索成员与分面变化。发送器按调用顺序直接广播两条事件。
 - 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`imageMetadataId`、`postUrl`、
   `thumbnailPath`、`compatiblePath`、`localPath`、`surfRecordId`、`taskId`、`lastSetWallpaperAt`、
   `isHidden`、`favorite`、`type`、`size`。`width` / `height` 刻意排除，避免正在预览时打断 PhotoSwipe 缩放。

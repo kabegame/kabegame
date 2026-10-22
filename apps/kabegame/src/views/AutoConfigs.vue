@@ -185,7 +185,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, onScopeDispose, reactive, ref, watch, type PropType } from "vue";
+import { computed, defineComponent, h, onMounted, reactive, ref, watch, type PropType } from "vue";
 import {
   ElMessageBox,
   KbFilterDropdown,
@@ -212,11 +212,12 @@ import {
   fetchRunConfigFacet,
   runConfigFilterPath,
   runConfigViewPath,
-  subscribeRunConfigEvents,
+  isRunConfigTaskSignal,
   type RunConfigFacet,
   type RunConfigQuery,
 } from "@/services/runConfigs";
-import { subscribeTaskEvents } from "@/services/tasks";
+import { on, pathqlRequest$, usePathqlLookAll } from "@/services/kbEvents";
+import { recommendedConfigPaths } from "@/services/pluginFiles";
 import {
   filterRecommendedPresets,
   presetKey,
@@ -286,21 +287,10 @@ const FilterChip = defineComponent({
   },
 });
 
-function matches(config: RunConfig) {
-  const search = mine.search.trim().toLocaleLowerCase();
-  return (
-    (!search || `${config.name} ${config.description ?? ""}`.toLocaleLowerCase().includes(search)) &&
-    (!mine.state || (mine.state === "enabled" ? config.scheduleEnabled : !config.scheduleEnabled)) &&
-    (!mine.last || config.lastResult === mine.last) &&
-    (!mine.plugin || config.pluginId === mine.plugin) &&
-    (!mine.mode || (config.scheduleSpec?.mode ?? "none") === mine.mode)
-  );
-}
 const list = usePagedRunConfigs({
   basePath: () => runConfigViewPath(mine),
   countPath: () => runConfigFilterPath(mine),
-  matches,
-  sort: () => ({ key: mine.sort, dir: mine.dir }),
+  onError: () => ElMessage.error(t("common.refreshFailed")),
 });
 const { items: configs, total, loading, showLoading, hasMore, start, loadMore } = list;
 watch(
@@ -319,28 +309,34 @@ const emptyQuery: RunConfigQuery = {
   sort: "next",
   dir: "asc",
 };
-let failedTimer: ReturnType<typeof setTimeout> | null = null;
-async function refreshFailedTotal() {
-  failedTotal.value = (await fetchRunConfigFacet("last", emptyQuery)).failed ?? 0;
-}
-function scheduleFailedRefresh() {
-  if (failedTimer) clearTimeout(failedTimer);
-  failedTimer = setTimeout(() => void refreshFailedTotal(), 200);
-}
-const unsubscribeFailureConfig = subscribeRunConfigEvents(scheduleFailedRefresh);
-const unsubscribeFailureTasks = subscribeTaskEvents(scheduleFailedRefresh);
-onScopeDispose(() => {
-  unsubscribeFailureConfig();
-  unsubscribeFailureTasks();
-  if (failedTimer) clearTimeout(failedTimer);
+const failedLooker = usePathqlLookAll({
+  queries: () =>
+    [{ kind: "list", path: `run_configs://${runConfigFilterPath(emptyQuery, "last")}last`, withCount: false }] as const,
+  refreshOn: [on("auto-config-change"), on("tasks-change", isRunConfigTaskSignal)],
+  onResult: ([entries]) => {
+    failedTotal.value = Number(
+      (entries.find((entry) => entry.name === "failed")?.meta as { count?: number } | null)?.count ?? 0,
+    );
+  },
 });
-onMounted(() => void Promise.all([start(), pluginStore.loadPlugins(), refreshFailedTotal()]));
+onMounted(() => {
+  start();
+  void pluginStore.loadPlugins();
+  const key = failedLooker.key();
+  if (key) pathqlRequest$.next(["all", key]);
+});
 
+// 推荐列表只在推荐 tab 读取；其它 tab 的计数取插件声明的推荐文件数，随插件 store 更新，不发请求
+const declaredRecommendedCount = computed(() =>
+  pluginStore.visiblePlugins.reduce((sum, plugin) => sum + recommendedConfigPaths(plugin).length, 0),
+);
 const tabItems = computed<KbTabItem<"mine" | "recommended">[]>(() => [
   { name: "mine", label: t("autoConfig.tabMine") },
   {
     name: "recommended",
-    label: t("autoConfig.tabRecommendedWithCount", { n: recommendedEntries.value.length }),
+    label: t("autoConfig.tabRecommendedWithCount", {
+      n: tab.value === "recommended" ? recommendedEntries.value.length : declaredRecommendedCount.value,
+    }),
   },
 ]);
 const subtitle = computed(() =>

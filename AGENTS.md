@@ -63,10 +63,10 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 `plugin-changed` 使用 `{ pluginId, changes }`：覆盖安装传必含 `version` 的完整插件 JSON，推荐导入态只传
 `recommendedConfigs: { <path>: { imported } }`。运行配置 add / update / delete / copy 经 core 共享命令比较写前后状态，
 范围为受影响 id 的已安装包与本地有包的商店缓存，不触发下载；每次写入每插件最多一条，仅含变化路径，优先取已安装新状态。
-写库提交后事件经既有 `hold()` 与配置事件同批放行。插件 store 只合并含 version 的变更；推荐配置通过 `useRecommendedPresets` 观察来源版本路径的 `recommended` rows，
+写库提交后先发推荐导入态的插件事件，再发配置事件。插件 store 只合并含 version 的变更；推荐配置通过 `useRecommendedPresets` 观察来源版本路径的 `recommended` rows，
 只对同插件含 `version` 或 `recommendedConfigs` 的事件刷新，新 key 请求一次，失败保留已有内容。详见 `.cursor/rules/plugin-resources.mdc`。
 
-**运行配置写操作**——新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，携带当前累计窗口的可选 `view`；写后立即应用 `{ rows, seq }`，不依赖自身广播刷新。配置事件携带全局 `seq` 并经过 `dataChangeHub` / `liveQuery` 补位，总数独立维护；命令在写库前持有 `GlobalEmitter::hold()`，读完快照才放行事件。前端缓冲响应前到达的配置事件，落地快照后跳过已覆盖序号；失败也必须释放缓冲。详见 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`。
+**运行配置写操作**——新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，命令只接收业务参数，直接返回保存后的单行（删除返回 null），写库提交后照常广播事件。列表由 `usePagedRunConfigs` 作为一个 `usePathqlLookAll` 观察方，同批读取累计窗口行与总数；`start` / `loadMore` 通过 `pathqlRequest$` 发请求，加载更多以已落地页加一为目标，失败重试同一个 key。写后不主动刷新，`auto-config-change` 与任务刷新信号由核心统一 500ms 窗口重读；任务新增带 runConfigId、任意状态变化和删除为刷新信号，张数、错误与结束时间只补丁 `lastTask.id` 匹配行的展示字段。页头失败数观察 `run_configs://last`，详情弹窗观察编码后的 id 路径；任务列表直接订阅配置事件，改名按 id 读取，删除清空关联配置名。IPC 与 CLI 保持原请求及单行/null 返回，配置事件的全局 `seq` 保留但观察方按前端请求序号落地。详见 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`。
 
 **画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每层与 `~~/children` 都叠加 `search/<q>`，自身或子孙命中才保留）。树数据源 `TreeQuerySource` 只描述查询、解析与单事件 `refreshOn`，模型用 `usePathqlLookMany` 观察每个可见分支的已加载页，一页一个 `pathqlAllKey`，只经 `pathqlRequest$` 发请求。收起停止观察、保留句柄和数据，再展开重读；换 key 或读取失败保留上一份子项。侧栏隐藏停观察、恢复整组重读；高级查询的候选树在下拉面板里、事件过滤器为空，每次展开读一次、打开期间不随事件刷新，不另设纯净列表缓存。`expand` / `loadMore` / `refresh` 的 Promise 由模型自己的等待表完成，核心不提供请求并等待。
 

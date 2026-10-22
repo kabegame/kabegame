@@ -266,7 +266,7 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 - 调用方无法知道「我这次刷新」成功与否：TaskDetail 的「刷新成功」提示只对应失败图片列表，网格失败经 adapter 提示。
 - `App.vue` 的 `<keep-alive>` 被注释，切页即重新挂载，「标脏后重新激活请求」当前在桌面不可达，仅单测覆盖。
 - `ctx.patch` 与字段补丁（`image-changed`、收藏 `favoriteOps`）仍经 `dataChangeHub`。
-- 后端 `pathql_view` 不再被 ImageGrid 使用，但运行配置仍在用，Phase C 迁完后删除。
+- Phase C 运行配置迁移已完成：旧后端行快照命令与事件暂存守卫已删除，任务列表仍保留 `pathql_count`。
 
 ---
 
@@ -296,9 +296,10 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
   ~~`GalleryFilterControl.loadFilterCounts`~~（已删除：该头部控件自 `5cf762b4` 查询栏改为 chip 后不再挂载，连同 `GalleryTimeFilterSubmenu` 与时间菜单树函数删除）、~~`HiddenCleanupControl`~~（已完成：`useLookAll` 观察隐藏画册 count，setup 请求一次）、~~Surf 页计数~~（已完成：组件作用域 `useSurfImageCounts` 按记录与 hide 观察动态 `all` key，新 key 自动请求，离开即退订，删除 pinia 计数 store）。
 - **树 / 列举类**：`GalleryFacetTreeInner` 侧栏、`AlbumTreeView` / ~~`useAlbumQuery`~~（已完成：详情 / 祖先 / 子树数为 key A，按落地画册类型生成图片计数 key B；按自身 `ancestorPath` 判定事件相关性，composable 等待 A 与变化后的 B，失败 / 切换 / 卸载均释放等待）。
   它们读的是 `listProviderDirs` / `albums://` 分页而非单一 rows/count，需要给请求服务加一种「列举」kind，或让组件在事件触发后自行分页重读。
-- **运行配置**：`usePagedRunConfigs` / `runConfigs.ts` / `runConfigWrites.ts` 仍是「写命令带 `view` + 后端 `hold` + 返回快照 + 前端 `holdRunConfigEvents`」。
-  改成与 ImageGrid 相同的「操作后直接请求」，后端 `add/update/delete/copy_run_config` 去掉 `view` 与 `hold()`；
-  推荐导入态单独作为一个数据源（它不是 pathql）。完成后 `GlobalEmitter::hold()` / `EventHold`、`pathql_view` 不再有调用方，可一并删除。
+- **运行配置**（已完成，2026-10-22）：`usePagedRunConfigs` 使用一个 `all` key 同批观察累计行窗口与总数，
+  写后依赖配置事件；任务展示字段补丁与新增/状态变化/删除刷新信号分开。失败数、详情与任务关联名全部迁出 hub，
+  写命令直接返回单行/null，已删除旧行快照命令、事件暂存守卫与 hub 配置通道；推荐导入态继续独立观察来源版本的 recommended rows。
+
 
 ### Phase D — 用户意图类请求（`switchMap`，只认最新一次）
 - **对象**：ImageGrid 预览定位（`locatePreviewedImage` + `pendingPreviewLocate` + 多个 watch 拼成的状态机）、`ImagePreviewDialog` 的 `resolveToken`。

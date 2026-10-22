@@ -8,7 +8,8 @@ import {
   TASK_PAGE_SIZE,
   type TaskEvent,
 } from "@/services/tasks";
-import { fetchRunConfig, subscribeRunConfigEvents, type RunConfigEvent } from "@/services/runConfigs";
+import { fetchRunConfig } from "@/services/runConfigs";
+import { kbEvent$, type AutoConfigChangePayload } from "@/services/kbEvents";
 import type { CrawlTask } from "@/stores/crawler";
 
 export function usePagedTaskList(options: { basePath: () => string; matches: (task: CrawlTask) => boolean }) {
@@ -91,8 +92,8 @@ export function usePagedTaskList(options: { basePath: () => string; matches: (ta
     });
   }
 
-  async function applyConfigEvent(event: RunConfigEvent, activeGeneration: number) {
-    if (activeGeneration !== generation) return;
+  async function applyConfigEvent(event: AutoConfigChangePayload, activeGeneration: number) {
+    if (activeGeneration !== generation || !event.configId) return;
     if (event.reason === "configdelete") {
       items.value = items.value.map((task) =>
         task.runConfigId === event.configId ? { ...task, runConfigName: null } : task,
@@ -100,7 +101,7 @@ export function usePagedTaskList(options: { basePath: () => string; matches: (ta
       return;
     }
     if (event.reason !== "configchange") return;
-    const config = event.config !== undefined ? event.config : await fetchRunConfig(event.configId);
+    const config = await fetchRunConfig(event.configId);
     if (activeGeneration !== generation) return;
     items.value = items.value.map((task) =>
       task.runConfigId === event.configId ? { ...task, runConfigName: config?.name ?? null } : task,
@@ -118,7 +119,7 @@ export function usePagedTaskList(options: { basePath: () => string; matches: (ta
     cleanupSubscriptions();
     const activeGeneration = ++generation;
     const buffered: TaskEvent[] = [];
-    const bufferedConfigs: RunConfigEvent[] = [];
+    const bufferedConfigs: AutoConfigChangePayload[] = [];
     let ready = false;
     startLoading();
     items.value = [];
@@ -129,10 +130,12 @@ export function usePagedTaskList(options: { basePath: () => string; matches: (ta
       if (!ready) buffered.push(event);
       else void applyTaskEvent(event, activeGeneration);
     });
-    unsubscribeConfigs = subscribeRunConfigEvents((event) => {
+    const configs = kbEvent$<AutoConfigChangePayload>("auto-config-change").subscribe(({ payload: event }) => {
       if (!ready) bufferedConfigs.push(event);
       else void applyConfigEvent(event, activeGeneration);
     });
+
+    unsubscribeConfigs = () => configs.unsubscribe();
 
     const base = options.basePath();
     try {

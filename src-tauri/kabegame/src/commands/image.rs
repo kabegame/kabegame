@@ -7,7 +7,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Runtime};
 
 use kabegame_core::commands;
-use kabegame_core::commands::view::{RowsSnapshot, TotalSnapshot};
+use kabegame_core::commands::view::TotalSnapshot;
 use kabegame_core::providers::PathqlQuery;
 
 #[tauri::command]
@@ -23,11 +23,6 @@ pub async fn pathql_list(path: String, with_count: bool) -> Result<Value, String
 #[tauri::command]
 pub async fn pathql_fetch(path: String) -> Result<Value, String> {
     commands::image::pathql_fetch(path).await
-}
-
-#[tauri::command]
-pub async fn pathql_view(path: String) -> Result<RowsSnapshot, String> {
-    commands::view::pathql_view(path).await
 }
 
 #[tauri::command]

@@ -195,27 +195,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "pathql_view",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    struct Args {
-                        path: String,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result = kabegame_core::commands::view::pathql_view(args.path)
-                        .await
-                        .map_err(RpcError::internal)?;
-                    crate::web::image_rewrite::rewrite_image_value(&mut result.rows);
-                    serde_json::to_value(result).map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "pathql_count",
         MethodEntry {
             requires_super: false,
@@ -1459,10 +1438,9 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         config_id: String,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::task::copy_run_config(args.config_id, args.view)
+                    kabegame_core::commands::task::copy_run_config(args.config_id)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1599,10 +1577,9 @@ pub fn init_registry() {
                     #[derive(serde::Deserialize)]
                     struct Args {
                         config: Value,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::task::add_run_config(args.config, args.view)
+                    kabegame_core::commands::task::add_run_config(args.config)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1619,10 +1596,9 @@ pub fn init_registry() {
                     #[derive(serde::Deserialize)]
                     struct Args {
                         config: Value,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::task::update_run_config(args.config, args.view)
+                    kabegame_core::commands::task::update_run_config(args.config)
                         .await
                         .map_err(RpcError::internal)
                 })
@@ -1640,10 +1616,9 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         config_id: String,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    kabegame_core::commands::task::delete_run_config(args.config_id, args.view)
+                    kabegame_core::commands::task::delete_run_config(args.config_id)
                         .await
                         .map_err(RpcError::internal)
                 })

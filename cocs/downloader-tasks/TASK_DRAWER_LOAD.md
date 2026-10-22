@@ -28,8 +28,10 @@
     → 仅保留 taskDrawerStore.search
 ```
 
-自动配置列表采用相同生命周期。已加载 N 页作为一个累计窗口，用 `x<20*N>x/1` 读取，
-通过 `pathql_view` 返回 `{ rows, seq }`；滚动加载下一页时扩大窗口，不重查未变的计数路径。详情弹窗打开后才挂载
+自动配置列表按组件作用域观察数据。已加载 N 页作为一个累计窗口，用 `x<20*N>x/1` 读取，
+一个 `usePathqlLookAll` key 同批查询 `[fetch 累计行, count 总数]`，共享同一读快照。`start` 换筛选/排序时清空，
+`loadMore` 以已落地页加一扩大窗口；失败后重试同一个 key，保留原行与总数。请求只经 `pathqlRequest$` 发出，
+结果由观察方落地。详情弹窗打开后才挂载
 `AutoConfigRelatedTasks`，关联任务查询因此仍按需启动。
 
 ## 2. PathQL 路径
@@ -57,9 +59,9 @@
 
 ## 3. 事件、计数与写操作
 
-`services/tasks.ts` 维护一个底层 `tasks-change` 监听；`services/runConfigs.ts` 通过
-`dataChangeHub` 的单例 `auto-config-change` 通道订阅。页面和卡片只获得轻量订阅函数，
-不会各自创建 IPC 监听。配置事件携带全局递增 `seq`，与图片视图快照共用序号域。
+`services/tasks.ts` 为任务列表保留共享 `tasks-change` 监听；运行配置消费方通过 `kbEvents` 的
+`kbEvent$` / `on` 观察事件，同名事件共享 `@/api.listen`，分别接入 Tauri 与 Web SSE。
+配置事件仍携带全局递增 `seq`；配置观察方只依赖 pathql 核心的前端请求序号，不使用事件序号配对响应。
 
 - `TaskAdded`：事件只提供 id 语义；列表通过 `tasks://id_<id>` 重读完整行，匹配当前过滤后按 id 插入。
   这是新行进入已打开列表的**唯一入口**（不认识的任务的 `TaskChanged` 会被忽略，不再补拉），所以后端每个
@@ -68,10 +70,16 @@
 - `TaskChanged`：只补丁已加载行；纯进度保持单调并做 100ms 节流，终态完成强制为 100%。
 - `TaskDeleted`：已加载行立即移除。
 - `configchange` / `configdelete`：任务列表开启期间更新同 `runConfigId` 行的配置名，删除后置空。
-- 自动配置列表的配置变更统一经 `dataChangeHub` / `liveQuery` 补读当前累计窗口和独立总数，
-  不再前端插行、删除或重排。仍订阅 `tasks-change`：`TaskAdded`
-  以 `runConfigId` 更新最后任务，`TaskChanged` 只合并当前 `lastTask.id`，`TaskDeleted` 命中最后任务时重读配置。
-  任务状态补丁后重新计算 `last_result`、过滤匹配与当前排序位置；移入/移出时去抖重拉 count。
+- 自动配置列表观察 `auto-config-change`，以及共享 `isRunConfigTaskSignal` 识别的任务刷新信号：
+  带 `runConfigId` 的任务新增、任意任务状态变化、任务删除。核心按 key 用统一 500ms 窗口重读行与总数，
+  不在前端插入、删除、过滤或重排行。
+- `TaskChanged` 中的 `status` / `endTime` / `successCount` / `failedCount` / `error` 只补丁
+  `lastTask.id` 匹配的行并重算 `lastResult`；进度等其它字段不进入配置行。仅张数/进度变化不触发请求。
+- 页头失败数独立观察 `run_configs://last` 的 list，取 `failed` 项的 `meta.count`，挂载请求一次，
+  后续使用与列表相同的事件过滤器；chip 分面仍在打开下拉时一次性读取。
+- 详情弹窗观察编码后的 `run_configs://id_<id>` rows key，打开或换配置时请求一次；
+  当前 key 尚无落地数据时保持加载态，空结果视为已删除。任务关联配置名直接订阅配置事件，
+  启动期缓冲保留，`configchange` 一律按 id 读取，`configdelete` 清空关联名。
 
 `taskDrawerStore` 是唯一常驻任务订阅者。首次创建时读取一次 `tasks://status`；新增、删除或状态变化后
 300ms 去抖重拉。徽章、终态任务数和清除确认文案均读这份计数，不依赖当前已加载页。
@@ -79,29 +87,22 @@
 用户直接触发的写操作在命令返回时立即应用本地结果：调整任务并发返回任务行；清除完成任务返回
 `{ taskIds, count }`。停止任务是异步收尾的例外，状态只由后续 `TaskChanged` 推进。
 
-### 运行配置写操作：主动同步结果，异步补位
+### 运行配置写操作：命令返回行，观察方消费事件
 
 `crawlerStore` 的新增、导入、复制、编辑、定时开关与删除统一调用 `services/runConfigWrites.ts`。
-页面注册当前行视图。写命令携带可选 `view`；core 在写库前取得 `GlobalEmitter::hold()`，
-写后读取行快照，读完才释放广播。Tauri / Web dispatch 只转发；共享命令始终返回对象，
-app IPC handler 自行取 `config` 字段保留旧单行载荷，删除保持无 data 的 null 响应。
+命令只接收业务参数，core 写库后直接返回保存的 PathQL 单行（删除返回 null）；Tauri / Web dispatch
+直接转发。app IPC 新增/更新直接返回单行，删除保留无 data 的 null 响应，CLI 请求与协议版本不变。
+前端写服务直接返回 `invoke` 结果，不登记当前窗口、不缓冲或本地发布配置事件。
 
-返回形状为 `{ configId, reason, config, seq, view }`，`view` 是 `{ rows, seq }` 或 null。
-推荐配置由下面的独立观察方读取，不再附在写响应中。
+写库提交后照常广播 `auto-config-change`；写后不主动请求，列表、失败数与详情由核心事件窗口刷新。
+调用方不需要知道观察 key；换路径后旧结果由观察方隔离。列表行与总数同批落地，不依赖后端快照序号。
+推荐导入态由下面的独立观察方读取，不附在写响应中。
 
-前端按以下顺序完成自身操作：
-
-1. 发起命令前缓冲配置事件，处理广播早于 IPC 响应到达的情况；其它事件通道正常流转。
-2. 当前路径仍相同时应用行快照；列表、筛选和排序以该快照为准。路径切换后的旧响应不覆盖新页。
-3. 把返回行发布到 hub，详情和任务关联名直接消费；独立总数由 hub 驱动重读。
-4. 释放事件缓冲。同配置已覆盖的旧事件和同序号事件跳过；未覆盖的外部变更继续补位。命令失败也必须释放。
-
-列表行的 `liveQuery` 跳过 `maxSeq <= appliedSeq` 的批次；总数有自己的序号和生命周期。
 运行配置 add / copy 比较新配置插件，update 比较新旧插件，delete 比较旧插件的推荐导入态；
 只读已安装包与同 id 且包文件仍在本地的 `store_plugin_cache` 条目，不下载。写库提交后按 pluginId 合并，
 每个插件最多发送一条 `plugin-changed { pluginId, changes: { recommendedConfigs: { <path>: { imported } } } }`，
 仅包含导入态实际变化的路径；同一路径优先采用已安装插件的新状态，没有该状态时采用变化来源的新状态。
-事件经既有 `GlobalEmitter::hold()` 与 `auto-config-change` 同批放行；只改名称、计划时间等不影响匹配的字段不发插件事件。
+写库提交后先发推荐导入态的插件事件，再发 `auto-config-change`；只改名称、计划时间等不影响匹配的字段不发插件事件。
 覆盖安装（升级或同版本重装）也发 `plugin-changed`，`changes` 是必含 `version` 的完整插件 JSON；首次安装与卸载仍用 `plugin-added` / `plugin-deleted`。
 
 ### 推荐配置观察方
@@ -127,10 +128,10 @@ provider 仅持坐标，每次现场解析，版本不符为空；商店只读�
 | 层级 | 文件 | 职责 |
 | --- | --- | --- |
 | Provider DSL | `src-tauri/kabegame-core/src/providers/dsl/{tasks,run_configs}/` | 过滤、最后任务 join、分组计数、排序与分页 |
-| 服务 | `apps/kabegame/src/services/{tasks,runConfigs,runConfigWrites}.ts` | 路径构造、行规范化、事件订阅与配置主动快照 |
-| 分页状态 | `apps/kabegame/src/composables/{usePagedTaskList,usePagedRunConfigs}.ts` | 生命周期、事件合并、去重与在途请求作废 |
+| 服务 | `apps/kabegame/src/services/{tasks,runConfigs,runConfigWrites}.ts` | 路径构造、行规范化、事件解析与配置写命令 |
+| 分页状态 | `apps/kabegame/src/composables/{usePagedTaskList,usePagedRunConfigs}.ts` | 任务游标分页与事件合并；配置累计窗口观察与展示补丁 |
 | 徽章 | `apps/kabegame/src/stores/taskDrawer.ts` | 状态计数与搜索词 |
-| 页面 | `TaskDrawer.vue`、`AutoConfigs.vue`、`TaskDetail.vue` | 各自持有当前可见数据并立即应用写结果 |
+| 页面 | `TaskDrawer.vue`、`AutoConfigs.vue`、`TaskDetail.vue` | 各自持有当前可见数据，配置写后由观察方刷新 |
 | 重跑弹窗 store | `apps/kabegame/src/stores/collectDialogs.ts` | 驱动网页收集与本地导入的全局弹窗宿主，并传递任务参数快照 |
 
 ## 5. 任务右键菜单

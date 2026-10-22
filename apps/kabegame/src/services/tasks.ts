@@ -16,11 +16,7 @@ function numberOpt(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined;
 }
 
-function nullableNumberField(
-  row: Record<string, unknown>,
-  camel: string,
-  snake: string,
-): number | null | undefined {
+function nullableNumberField(row: Record<string, unknown>, camel: string, snake: string): number | null | undefined {
   const key = Object.prototype.hasOwnProperty.call(row, camel) ? camel : snake;
   if (!Object.prototype.hasOwnProperty.call(row, key)) return undefined;
   const value = row[key];
@@ -103,10 +99,7 @@ export function normalizeDiffKeys(diff: Record<string, unknown>): Partial<CrawlT
 export function taskSearchPath(query: string, pluginIds: string[]): string {
   const q = query.trim();
   if (!q) return "";
-  const branches = [
-    ...[...new Set(pluginIds)].map((id) => `plugin/${encodeSeg(id)}`),
-    `plugin_search/${encodeSeg(q)}`,
-  ];
+  const branches = [...[...new Set(pluginIds)].map((id) => `plugin/${encodeSeg(id)}`), `plugin_search/${encodeSeg(q)}`];
   return `~any/${branches.join("/~or/")}/~end/`;
 }
 
@@ -140,7 +133,7 @@ const taskSubscribers = new Set<(event: TaskEvent) => void>();
 let taskUnlisten: (() => void) | null = null;
 let taskListenPending: Promise<void> | null = null;
 
-function normalizeTaskEvent(payload: unknown): TaskEvent | null {
+export function normalizeTaskEvent(payload: unknown): TaskEvent | null {
   if (payload == null || typeof payload !== "object") return null;
   const row = payload as Record<string, unknown>;
   const type = String(row.type ?? "");

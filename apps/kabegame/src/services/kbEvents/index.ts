@@ -11,6 +11,7 @@ export {
   type EventTrigger,
   type KbEventMap,
   type AlbumChangedPayload,
+  type AutoConfigChangePayload,
 } from "./events";
 export {
   pathqlRequest$,

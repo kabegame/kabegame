@@ -25,10 +25,10 @@ alwaysApply: false
   覆盖安装的 changes 是必含 version 的完整插件；导入态变化只含 `recommendedConfigs: { <path>: { imported } }`。
 - 运行配置 add / update / delete / copy 统一经 core 共享写命令，在写前后比较受影响插件的本地导入态。
   包括已安装插件与同 id 且本地包存在的商店缓存；不下载、不访问网络。每次写入每个 pluginId 至多一条，只含变化路径，
-  状态优先取已安装来源，否则取变化项。写后事件经既有 hold 与配置事件同批放行。
+  状态优先取已安装来源，否则取变化项。写库提交后先发推荐导入态的插件事件，再发配置事件。
 - 插件 store 只合并含 version 的 patch。推荐配置由 `useRecommendedPresets` 以 `usePathqlLookMany(kind: "rows")`
   观察 `plugin://…/recommended`；新 key 进入集合请求一次，enabled=false 无 key，refresh 请求当前全部 key。
   refreshOn 只接受同 pluginId 且含 version / recommendedConfigs 的事件，核心按统一 500ms 窗口刷新。
   行按清单顺序落地，首次失败移除占位，已有内容在失败时保留；不另设序号、HTTP 标注或写结果导入态通路。
 - recommended 目录 fetch 返回 `recommended_rows`，list 列出声明文件 path；单项路径与 asset 一样按单段编码。
-  行由宿主覆盖 pluginId、filename、path、isImported。写通路的 view / hold 保持原机制。
+  行由宿主覆盖 pluginId、filename、path、isImported。运行配置写命令只返回保存后的单行/null，观察方由事件刷新。

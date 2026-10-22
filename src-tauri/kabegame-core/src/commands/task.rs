@@ -674,41 +674,22 @@ fn emit_recommended_diff(before: RecommendedSnapshot) {
     }
 }
 
-async fn run_config_write_result(
-    config_id: String,
-    reason: &str,
-    seq: u64,
-    config: Value,
-    view: Option<String>,
-) -> Result<Value, String> {
-    let snapshot = match view {
-        Some(path) => Some(super::view::snapshot_rows(path).await?),
-        None => None,
-    };
-    Ok(
-        serde_json::json!({ "configId":config_id, "reason":reason, "config":config, "seq":seq,
-        "view":snapshot }),
-    )
-}
-
-pub async fn add_run_config(config: Value, view: Option<String>) -> Result<Value, String> {
-    let _hold = GlobalEmitter::global().hold();
+pub async fn add_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
     let before = recommended_diff_scope(vec![run_config.plugin_id.clone()])?;
     Storage::global().add_run_config(run_config)?;
     emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&config_id).await;
-    let seq = GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
+    GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
     let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
         .into_iter()
         .next()
         .unwrap_or(Value::Null);
-    run_config_write_result(config_id, "configadd", seq, saved, view).await
+    Ok(saved)
 }
 
-pub async fn update_run_config(config: Value, view: Option<String>) -> Result<Value, String> {
-    let _hold = GlobalEmitter::global().hold();
+pub async fn update_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
     let mut plugin_ids = vec![run_config.plugin_id.clone()];
@@ -719,16 +700,15 @@ pub async fn update_run_config(config: Value, view: Option<String>) -> Result<Va
     Storage::global().update_run_config(run_config)?;
     emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&config_id).await;
-    let seq = GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
+    GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
     let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
         .into_iter()
         .next()
         .unwrap_or(Value::Null);
-    run_config_write_result(config_id, "configchange", seq, saved, view).await
+    Ok(saved)
 }
 
-pub async fn delete_run_config(config_id: String, view: Option<String>) -> Result<Value, String> {
-    let _hold = GlobalEmitter::global().hold();
+pub async fn delete_run_config(config_id: String) -> Result<Value, String> {
     let plugin_ids = Storage::global()
         .get_run_config(&config_id)?
         .map(|config| vec![config.plugin_id])
@@ -737,8 +717,8 @@ pub async fn delete_run_config(config_id: String, view: Option<String>) -> Resul
     let _ = Scheduler::global().remove_config(&config_id).await;
     Storage::global().delete_run_config(&config_id)?;
     emit_recommended_diff(before);
-    let seq = GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
-    run_config_write_result(config_id, "configdelete", seq, Value::Null, view).await
+    GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
+    Ok(Value::Null)
 }
 
 pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
@@ -766,8 +746,7 @@ pub fn clear_finished_tasks() -> Result<Value, String> {
     Ok(serde_json::json!({ "taskIds": task_ids, "count": count }))
 }
 
-pub async fn copy_run_config(config_id: String, view: Option<String>) -> Result<Value, String> {
-    let _hold = GlobalEmitter::global().hold();
+pub async fn copy_run_config(config_id: String) -> Result<Value, String> {
     let new_id = uuid::Uuid::new_v4().to_string();
     let source = Storage::global()
         .get_run_config(&config_id)?
@@ -776,12 +755,12 @@ pub async fn copy_run_config(config_id: String, view: Option<String>) -> Result<
     let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
     emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&new_id).await;
-    let seq = GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
+    GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
     let saved = query_fetch(&format!("run_configs://id_{}", copied.id))?
         .into_iter()
         .next()
         .unwrap_or(Value::Null);
-    run_config_write_result(copied.id, "configadd", seq, saved, view).await
+    Ok(saved)
 }
 
 pub fn get_run_config(config_id: String) -> Result<Value, String> {
@@ -801,19 +780,12 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn run_config_write_result_always_returns_object_without_view() {
-        for config in [serde_json::json!({"id": "a"}), Value::Null] {
-            let result =
-                run_config_write_result("a".into(), "configchange", 7, config.clone(), None)
-                    .await
-                    .unwrap();
-            assert_eq!(
-                result,
-                serde_json::json!({
-                    "configId": "a", "reason": "configchange", "seq": 7, "config": config, "view": null
-                })
-            );
-        }
+    async fn run_config_writes_reject_invalid_rows_without_runtime() {
+        // 反序列化失败应直接返回错误，不需要初始化存储、插件或任务运行时。
+        assert!(add_run_config(serde_json::json!({ "id": "a" }))
+            .await
+            .is_err());
+        assert!(update_run_config(Value::Null).await.is_err());
     }
 
     fn recommended_config(plugin_id: &str) -> RunConfig {

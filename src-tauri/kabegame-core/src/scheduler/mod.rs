@@ -82,8 +82,14 @@ async fn scheduler_loop(notify: Arc<Notify>) {
                 }
                 None => {
                     if let Some(next) = compute_next_planned_at(&config, now_ts) {
-                        let _ = Storage::global()
-                            .set_run_config_schedule_planned_at(&config.id, Some(next));
+                        // 写入下次运行时间同样是配置行变化，观察方靠事件补上「下次运行」
+                        if Storage::global()
+                            .set_run_config_schedule_planned_at(&config.id, Some(next))
+                            .is_ok()
+                        {
+                            GlobalEmitter::global()
+                                .emit_auto_config_change("configchange", &config.id);
+                        }
                         if next >= now_ts - DUE_WINDOW_SECS && next <= now_ts + DUE_WINDOW_SECS {
                             config.schedule_planned_at = Some(next);
                             due_configs.push(config);

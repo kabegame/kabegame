@@ -19,16 +19,10 @@ use serde_json::json;
 #[cfg(feature = "ipc-server")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "ipc-server")]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(feature = "ipc-server")]
 static CHANGE_SEQ: AtomicU64 = AtomicU64::new(0);
-
-#[cfg(feature = "ipc-server")]
-static HELD_VIEW_EVENTS: Mutex<(usize, Vec<Arc<AppEvent>>)> = Mutex::new((0, Vec::new()));
-
-/// 持有期间，视图相关事件仍分配序号，但延迟到最后一个守卫析构时广播。
-pub struct EventHold(());
 
 /// 返回最近一次已分配的视图变更序号（图片、画册成员与运行配置）。
 #[cfg(feature = "ipc-server")]
@@ -54,34 +48,7 @@ pub(crate) fn next_change_seq() -> u64 {
 
 #[cfg(feature = "ipc-server")]
 pub(crate) fn dispatch_view_event(event: Arc<AppEvent>) {
-    let mut held = HELD_VIEW_EVENTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if held.0 > 0 {
-        held.1.push(event);
-    } else {
-        EventBroadcaster::global().broadcast(event);
-    }
-}
-
-#[cfg(feature = "ipc-server")]
-impl Drop for EventHold {
-    fn drop(&mut self) {
-        let mut held = HELD_VIEW_EVENTS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        held.0 = held.0.saturating_sub(1);
-        if held.0 == 0 {
-            for event in held.1.drain(..) {
-                EventBroadcaster::global().broadcast(event);
-            }
-        }
-    }
-}
-
-#[cfg(not(feature = "ipc-server"))]
-impl Drop for EventHold {
-    fn drop(&mut self) {}
+    EventBroadcaster::global().broadcast(event);
 }
 
 // ==================== IPC 实现 ====================
@@ -121,14 +88,6 @@ impl GlobalEmitter {
     /// 如果已初始化返回 Some，否则返回 None
     pub fn try_global() -> Option<&'static GlobalEmitter> {
         GLOBAL_EMITTER.get()
-    }
-
-    pub fn hold(&self) -> EventHold {
-        let mut held = HELD_VIEW_EVENTS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        held.0 += 1;
-        EventHold(())
     }
 
     /// 发送任务日志事件
@@ -532,10 +491,6 @@ impl GlobalEmitter {
     /// 尝试获取全局 emitter 引用（No-op）
     pub fn try_global() -> Option<&'static GlobalEmitter> {
         Some(Self::global())
-    }
-
-    pub fn hold(&self) -> EventHold {
-        EventHold(())
     }
 
     pub fn emit_task_log(&self, _task_id: &str, _level: &str, _message: &str) {}
