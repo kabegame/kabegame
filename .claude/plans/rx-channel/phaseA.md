@@ -293,8 +293,8 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
   已有数据的 key 加入即拿到最后可得的数据。供懒加载分支（时间菜单年 / 月 / 日、画册树目录页）与按站点的畅游计数使用。
 - **pathql 计数类**：~~`GalleryToolbar` 的分子 / 分母~~（已完成：分子注入 ImageGrid provide 的 `gridTotalKey`，
   分子分母由 ImageGrid 通过 `useLookAll` 同批 `pathql_all` 读取，工具栏只注入 `{ total, unfilteredTotal }`，去掉了 `useImagesChangeRefresh`）、
-  `GalleryFilterControl.loadFilterCounts`（现在没有过期保护，并发时会交错写入）、`HiddenCleanupControl`、Surf 页计数。
-- **树 / 列举类**：`GalleryFacetTreeInner` 侧栏、`AlbumTreeView` / `useAlbumQuery`（按 `ancestorPath` 相关性）。
+  `GalleryFilterControl.loadFilterCounts`（现在没有过期保护，并发时会交错写入）、~~`HiddenCleanupControl`~~（已完成：`useLookAll` 观察隐藏画册 count，setup 请求一次）、~~Surf 页计数~~（已完成：组件作用域 `useSurfImageCounts` 按记录与 hide 观察动态 `all` key，新 key 自动请求，离开即退订，删除 pinia 计数 store）。
+- **树 / 列举类**：`GalleryFacetTreeInner` 侧栏、`AlbumTreeView` / ~~`useAlbumQuery`~~（已完成：详情 / 祖先 / 子树数为 key A，按落地画册类型生成图片计数 key B；按自身 `ancestorPath` 判定事件相关性，composable 等待 A 与变化后的 B，失败 / 切换 / 卸载均释放等待）。
   它们读的是 `listProviderDirs` / `albums://` 分页而非单一 rows/count，需要给请求服务加一种「列举」kind，或让组件在事件触发后自行分页重读。
 - **运行配置**：`usePagedRunConfigs` / `runConfigs.ts` / `runConfigWrites.ts` 仍是「写命令带 `view` + 后端 `hold` + 返回快照 + 前端 `holdRunConfigEvents`」。
   改成与 ImageGrid 相同的「操作后直接请求」，后端 `add/update/delete/copy_run_config` 去掉 `view` 与 `hold()`；

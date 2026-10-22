@@ -42,7 +42,9 @@ alwaysApply: false
 - 画册树和侧栏过滤树不得订阅 `dataChangeHub` / `liveQuery`。侧栏隐藏停观察、显示整组请求；
   高级 diff 候选树事件过滤器为空，每次展开下拉读一次、打开期间不随事件刷新，不另建纯净列表缓存。
 - 前端不设全量画册 store 或全量计数。目录树与选择器复用 `AlbumTreeView` / `AlbumPicker`，按目录分页查询；
-  搜索时每层与 `~~/children` 都叠加 `search/<q>`（自身或子孙命中才保留）。单画册详情仍用服务查询并订阅 hub。
+  搜索时每层与 `~~/children` 都叠加 `search/<q>`（自身或子孙命中才保留）。画册页头部由 `useAlbumQuery` 观察详情 / 祖先 / 子树数的 `all` key 与按类型生成的计数 key，
+  不订阅 hub；先注册观察方再请求，新计数 key 自动请求，刷新 Promise 在 composable 等待两段请求完成或失败。
+  结构事件以自身完整 `ancestorPath` 判定祖先链，计数结构事件只匹配严格后代；其它一次性查询仍用 `services/albums.ts`。
 - 结构页一批 `pathql_all` 同快照读取 `albums://<过滤段>/x<N>x/<页>` 行与 `…/~~/children[/<类型段>]`；
   `extra` 独立批次读取本页行（零计数补齐）与 `…/~~/images[/hide]`。两种逐行计数都在 `~~` 后按画册
   `GROUP BY`，没有行记 0，禁止 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。

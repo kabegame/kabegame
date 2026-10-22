@@ -364,18 +364,6 @@ function ensureSourcesStarted() {
   }
 }
 
-/** 目录路径为 null 表示分区根；其它目录只关心其后代路径。 */
-export function affectsAlbumDir(batch: ChangeBatch, dirAncestorPath: string | null): boolean {
-  if (batch.albumPathsWildcard) return true;
-  if (dirAncestorPath === null) {
-    return batch.albumPaths.size > 0 || batch.albumIds.size > 0 || batch.albumStructure.size > 0;
-  }
-  for (const path of batch.albumPaths) {
-    if (path !== dirAncestorPath && path.startsWith(dirAncestorPath)) return true;
-  }
-  return false;
-}
-
 /** 返回某图片在当前合并批次中的字段 patch。 */
 export function imagePatchFor(batch: ChangeBatch, imageId: string): Partial<ImageInfo> | undefined {
   return batch.imagePatches.get(imageId);

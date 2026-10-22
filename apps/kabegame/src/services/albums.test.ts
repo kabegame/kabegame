@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { albumPageQueries } from "./albums";
+import { albumImageCountQuery, normalizeAlbumRow, albumPageQueries } from "./albums";
 
 const pathqlFetch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlEntry: vi.fn() }));
@@ -47,5 +47,16 @@ describe("画册页查询描述", () => {
 
   it("没有允许类型时没有这一页，不发任何查询", () => {
     expect(albumPageQueries({ section: "normal" }, 1, "", [])).toBeNull();
+  });
+});
+
+describe("画册头部图片计数查询", () => {
+  it.each([
+    ["label_dir", "albums://parent/a%2Fb"],
+    ["label", "images://gallery/album/a%2Fb"],
+    ["normal", "images://gallery/album-tree/a%2Fb"],
+    ["local_folder", "images://gallery/album-tree/a%2Fb"],
+  ])("%s 的固定空前缀查询", (type, path) => {
+    expect(albumImageCountQuery(normalizeAlbumRow({ id: "a/b", type }))).toEqual({ kind: "count", path });
   });
 });

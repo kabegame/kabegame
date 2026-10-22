@@ -2,7 +2,7 @@ import { invoke } from "@/api/rpc";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { albumChangeBatch, publishLocal, type ChangeBatch } from "@/services/dataChangeHub";
 import type { TreePage } from "@/components/tree/types";
-import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import { pathqlEntry, pathqlFetch, type PathqlQuery } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { useSettingsStore } from "@/stores/settings";
@@ -208,14 +208,14 @@ export async function fetchAlbum(id: string): Promise<Album | null> {
   return rows[0] ? normalizeAlbumRow(rows[0]) : null;
 }
 
-export async function fetchAlbumCount(album: Album, prefix: GalleryPrefix): Promise<number> {
-  if (album.type === "label_dir") {
-    return (await pathqlEntry(`albums://parent/${encodeURIComponent(album.id)}`)).total ?? 0;
-  }
-  if (album.type === "label") {
-    return (await pathqlEntry(`images://gallery/${prefix}album/${encodeURIComponent(album.id)}`)).total ?? 0;
-  }
-  return (await pathqlEntry(`images://gallery/${prefix}album-tree/${encodeURIComponent(album.id)}`)).total ?? 0;
+/** 当前画册头部计数：标签目录数直接子画册，其余数直接成员或子树图片，不叠加隐藏过滤。 */
+export function albumImageCountQuery(album: Album): PathqlQuery & { kind: "count" } {
+  const id = encodeURIComponent(album.id);
+  const path =
+    album.type === "label_dir"
+      ? `albums://parent/${id}`
+      : `images://gallery/${album.type === "label" ? "album" : "album-tree"}/${id}`;
+  return { kind: "count", path };
 }
 
 export async function fetchDescendantCount(id: string): Promise<number> {
