@@ -58,7 +58,6 @@
     :message="removeDialogText?.message ?? ''"
     :title="removeDialogText?.title"
     :confirm-text="removeDialogText?.confirmText"
-    hide-checkbox
     @close="cancelRemoveImages"
     @confirm="confirmRemoveImages"
   />
