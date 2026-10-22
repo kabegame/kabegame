@@ -4,7 +4,6 @@ import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import type { ImageInfo } from "@/types/image";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/services/albums";
-import { albumChangeBatch, publishLocal } from "@/services/dataChangeHub";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
 import { fileNameFromUrlOrPath, fileToUrl } from "@/utils/fileUrl";
@@ -15,7 +14,6 @@ import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -225,10 +223,7 @@ export function useImageOperations(
       const includesCurrent =
         !!currentWallpaperImageId.value && imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
-      const result = await mutate(() =>
-        invoke<{ albumChanges: AlbumImagesChangePayload[] }>("batch_delete_images", { imageIds }),
-      );
-      for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
+      await mutate(() => invoke("batch_delete_images", { imageIds }));
 
       if (includesCurrent) {
         currentWallpaperImageId.value = null;

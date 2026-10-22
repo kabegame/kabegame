@@ -221,16 +221,14 @@ ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否�
   顺序取最后一次），再 `merge` 成一条交给 `patchMany`。两者改的字段不重叠（`image-changed` 不带 `favorite`），
   两条流之间不需要排序。预览弹窗在裸 id 模式下也订阅它，另用 `triggers$` 对 `images-change` /
   `album-images-change` 重读当前图。
-- **其它尚未迁移的消费方**（单画册详情、头部计数、标签面板等）仍在全局单例
-  [`dataChangeHub.ts`](/apps/kabegame/src/services/dataChangeHub.ts)。hub 对每个订阅者按 500ms 时间窗合并
-  reason 与各 id 集合；画册维度含 `albumIds` / `albumImageIds`、`albumPaths` / `albumPathsWildcard` 和结构字段集合。
+- **其它消费方**（画册树、画册页头部、运行配置、标签面板等）同样是 pathql 核心的观察方，不再有全局事件聚合器。
   画册成员事件携带画册 `ancestorPath`；新增、删除、改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。
-  任一 `images-change` 缺少 task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
+  `images-change` 缺少 task/surf/plugin 维度时按该维度通配处理。
 
 ### kbEvents（`services/kbEvents/`，rxjs）
 
-ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/kabegame/src/services/kbEvents/index.ts)，
-`dataChangeHub` / `liveQuery` 在迁移期保留给其它消费方。分三层，事件源与数据源是两种不同的 observable：
+前端的事件与 pathql 数据源统一在 [`services/kbEvents`](/apps/kabegame/src/services/kbEvents/index.ts)，
+事件 payload 类型也定义在这里（`events.ts`）。分三层，事件源与数据源是两种不同的 observable：
 
 - **事件源** `kbEvent$(name)`：基于 `listen`（Tauri 事件或 Web SSE），同名事件共享一次监听，不解析内容。
   `events.ts` 的 `KbEventMap` 只是类型表；`on(event, relevant)` 声明一条单事件触发，`triggers$` 把多条合成刷新信号流。
@@ -260,15 +258,16 @@ ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/ka
   `taskIds` / `surfRecordIds` 或缺维度粗过滤 `images-change`。`album-added` / `album-deleted` 旧实现实际
   不触发网格刷新，暂不列入。
 
-画册写命令始终返回本次已发送事件的 `albumChanges` 副本。无状态 `services/albums.ts` 把返回的
-成员事件用 `publishLocal` 立即投递；hub 记录其 `seq`，随后到达的同序号后端事件直接丢弃。画册树不维护全量
-列表或全量计数，只重拉相关的已加载目录；画册视图仍由操作后请求或事件触发的查询决定过滤、排序和分页后的最终行位置。
-预览中的 `ImageLabelsPanel` 为避免替换底层列表导致跳页，保留 500ms 被动刷新。
+画册写命令仍返回本次已发送事件的 `albumChanges` 副本（IPC / CLI 协议不变），前端不再消费：无状态
+`services/albums.ts` 只调命令，不做本地事件投递。发起写入的组件请求自己观察的 key，其它观察方等后端事件。
+画册树不维护全量列表或全量计数，只重拉相关的已加载目录；画册视图仍由操作后请求或事件触发的查询决定过滤、排序和分页后的最终行位置。
+预览中的 `ImageLabelsPanel` 不走 `mutate`（替换底层列表会跳页），作为 `albums://of_image_<id>/album_kind/label`
+的 rows 观察方：切图与面板内增删后请求自身 key，别处成员变更与已挂标签改名 / 删除经核心窗口刷新。
 
 ### 一致性
 
 后端 `GlobalEmitter` 为 `image-changed`、`images-change`、`album-images-change` 与 `album-changed`
-共用一个单调递增计数器，四者 payload 都携带 `seq`；迁移期的 `dataChangeHub` 仍用它做本地发布去重。
+共用一个单调递增计数器，四者 payload 都携带 `seq`；前端目前不消费它（`kbEvent$` 只透传）。
 
 ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 
@@ -292,8 +291,7 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   立即发，整理回填用 `native_metadata_image_patch` 并入本批补丁，下载入库只为同哈希的旧图补发（新图随后有 `add`）。
   前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（插件元数据为 `m<metadataId>`），面板在同一张图只换
   `imageMetadataId` 时保留旧内容重新取数，不闪。
-- ImageGrid 的行、总数与字段补丁都经 `kbEvents` 监听；`useImagesChangeRefresh.ts`
-  仍保留给 Surf.vue、工具栏等旧消费方。
+- ImageGrid 的行、总数与字段补丁都经 `kbEvents` 监听。
   `GalleryToolbar` 在 ImageGrid 的插槽内，只注入 `gridTotalKey` 的 `{ total, unfilteredTotal }`。
   分子与 adapter 可选的分母由 ImageGrid 同批 `pathql_all` 读取，在同一次回调赋值；工具栏不再注册计数观察方、
   发请求或配对。画廊有过滤（查询非空或「无画册」）时加入仅保留 `hide` 上下文的全部数量分母，
@@ -365,9 +363,7 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 | 路由视图本体 | `apps/kabegame/src/stores/{gallery,albumDetail,taskDetail,surfImages}Route.ts` |
 | 本地页码 / 行路径 | `apps/kabegame/src/composables/usePagedGallery.ts`、`apps/kabegame/src/utils/galleryPath.ts` |
 | 视图快照 | `src-tauri/kabegame-core/src/commands/view.rs` |
-| 变更聚合 | `apps/kabegame/src/services/dataChangeHub.ts` |
 | 事件源 / pathql 数据源 | `apps/kabegame/src/services/kbEvents/` |
-| 实时查询（迁移期旧实现） | `apps/kabegame/src/services/liveQuery.ts` |
 | 列表加载 | `apps/kabegame/src/components/ImageGrid.vue` |
 | 深链接定位（前端） | `apps/kabegame/src/services/imageLocate.ts` |
 | 序号 provider | `src-tauri/kabegame-core/src/providers/dsl/shared/rank_provider.json5` |

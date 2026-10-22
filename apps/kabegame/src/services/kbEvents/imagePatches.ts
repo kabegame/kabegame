@@ -1,6 +1,5 @@
 import { merge, type Observable } from "rxjs";
-import type { ImageChangedPayload } from "@/composables/useImagesChangeRefresh";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import type { AlbumImagesChangePayload, ImageChangedPayload } from "./events";
 import type { ImageInfo } from "@/types/image";
 import { FAVORITE_ALBUM_ID } from "@/services/albums";
 import { batchWindow } from "./batchWindow";

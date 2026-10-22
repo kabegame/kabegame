@@ -22,15 +22,18 @@ alwaysApply: false
   pending，序号不大于已确认的返回静默丢弃；不依赖后端 `seq`。观察方看到的 `data` 是最后可得的数据，
   `loading` / `error` 只属于最新请求（二者序号相同，可以领先于数据的序号）；更早请求的失败看不到，
   调用方也不能按某次请求接错误——失败统一经观察方的 `onError`。
-- ImageGrid 不得重新建立裸 `listen`，也不再订阅 `dataChangeHub`。字段补丁经 `imagePatches$`：
+- 前端不得重新建立裸 `listen` 或另建事件聚合器；事件一律经 `kbEvent$` / `on` / `triggers$`。字段补丁经 `imagePatches$`：
   `image-changed` 与收藏画册的 `album-images-change` 各自防抖、各自合并成 `imageId → 字段`，再汇成一条，
   只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜，粗信号重读用 `triggers$`。
-- `dataChangeHub` 迁移期仍保留给其它消费方，新增消费方优先用 `kbEvents`。
+- 写命令返回的 `albumChanges` 与事件 `seq` 前端不再消费，不做本地事件投递：发起写入的组件只请求自己观察的 key，
+  其它观察方等后端事件。
 
 ## 已知例外
 
-`ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页，保留 500ms
-被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入 `mutate` 后请求。
+`ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页。面板是
+`albums://of_image_<id>/album_kind/label` 的 rows 观察方，切图与面板内增删后只请求自己的 key（增删先本地改给即时反馈），
+别处的成员变更、已挂标签改名 / 删除经核心窗口刷新，读取失败保留已有标签。其它从 ImageGrid 发起的隐藏/取消隐藏、
+加入/移出画册、上划移除均已纳入 `mutate` 后请求。
 
 ## 树观察方与画册计数
 
@@ -39,11 +42,11 @@ alwaysApply: false
   新 key、重新展开 / 激活、加载更多、手动刷新经 `pathqlRequest$.next` 请求。Promise 由模型等待表完成，核心契约不变。
 - 收起（含祖先收起）即停观察，保留句柄与页数据；重新展开请求。换 key 时保留旧子项直到新结果到达，
   出错不清空。补充查询只按元素 key 补字段、不挡行渲染；结构重读沿用已有补丁。
-- 画册树和侧栏过滤树不得订阅 `dataChangeHub` / `liveQuery`。侧栏隐藏停观察、显示整组请求；
+- 画册树和侧栏过滤树只做 pathql 观察方。侧栏隐藏停观察、显示整组请求；
   高级 diff 候选树事件过滤器为空，每次展开下拉读一次、打开期间不随事件刷新，不另建纯净列表缓存。
 - 前端不设全量画册 store 或全量计数。目录树与选择器复用 `AlbumTreeView` / `AlbumPicker`，按目录分页查询；
   搜索时每层与 `~~/children` 都叠加 `search/<q>`（自身或子孙命中才保留）。画册页头部由 `useAlbumQuery` 观察详情 / 祖先 / 子树数的 `all` key 与按类型生成的计数 key，
-  不订阅 hub；先注册观察方再请求，新计数 key 自动请求，刷新 Promise 在 composable 等待两段请求完成或失败。
+  先注册观察方再请求，新计数 key 自动请求，刷新 Promise 在 composable 等待两段请求完成或失败。
   结构事件以自身完整 `ancestorPath` 判定祖先链，计数结构事件只匹配严格后代；其它一次性查询仍用 `services/albums.ts`。
 - 结构页一批 `pathql_all` 同快照读取 `albums://<过滤段>/x<N>x/<页>` 行与 `…/~~/children[/<类型段>]`；
   `extra` 独立批次读取本页行（零计数补齐）与 `…/~~/images[/hide]`。两种逐行计数都在 `~~` 后按画册

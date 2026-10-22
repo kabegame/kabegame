@@ -301,12 +301,22 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
   写命令直接返回单行/null，已删除旧行快照命令、事件暂存守卫与 hub 配置通道；推荐导入态继续独立观察来源版本的 recommended rows。
 
 
-### Phase D — 用户意图类请求（`switchMap`，只认最新一次）
+### Phase D — 用户意图类请求（`switchMap`，只认最新一次）（暂不实施，2026-10-23）
+- **结论**：现有实现已满足「只认最新一次」（切图 / 换视图 / 关跟页丢弃迟到结果），定位状态机边界情况多且已调稳，保留现状。
+  预览弹窗裸 id 模式的 `resolveToken` 同样保留。
 - **对象**：ImageGrid 预览定位（`locatePreviewedImage` + `pendingPreviewLocate` + 多个 watch 拼成的状态机）、`ImagePreviewDialog` 的 `resolveToken`。
 - **做法**：意图流 `switchMap` 到 `rank → 跳页 → 等 rowsQuery 数据源里出现满足条件的数据（filter + take(1)）`，
   用户切图 / 换视图 / 关跟页即取消。这类触发来自用户而非事件流，「只认最新一次」在这里是对的。
 
-### Phase E — 纯失效与收尾
+### Phase E — 纯失效与收尾（已完成，2026-10-23）
+- **结果**：`pureListCache` 早已不存在；`liveQuery.ts` 已删（`GRID_REFRESH_WAIT_MS` 在 `kbEvents/constants.ts`）。
+  `ImageLabelsPanel` 改为 `albums://of_image_<id>/album_kind/label` 的 rows 观察方：切图与面板内增删后请求自身 key，
+  别处成员变更与已挂标签改名 / 删除经核心窗口刷新，出错保留已有标签。`publishLocal` 不改成「写服务主动请求」，
+  而是直接删除——hub 最后只剩标签面板一个订阅方，写入方只请求自己观察的 key，其它观察方等事件。
+  已删除 `dataChangeHub.ts`、`useImagesChangeRefresh.ts`、`useAlbumImagesChangeRefresh.ts`，事件 payload 类型迁入
+  `kbEvents/events.ts`；`renameAlbum` / `moveAlbum` / `setLabelKey` / `deleteAlbum` 只为投递而做的 `fetchAlbum` 预读一并删除。
+  后端事件 `seq` 与写命令返回的 `albumChanges` 保留（IPC / CLI 协议不变），前端不再消费。
+- 原计划：
 - `galleryFilterTree/context.ts` 的 `pureListCache` 失效直接 `subscribe` 事件源即可。
 - `ImageLabelsPanel` 的被动刷新改为 `kbEvent$` 订阅（保留「预览内不替换底层列表」的例外语义）。
 - **本地发布**：画册写命令返回的 `albumChanges` 目前经 `publishLocal` 立即投递给画册树等。迁完后改为写服务对受影响的数据源直接请求，

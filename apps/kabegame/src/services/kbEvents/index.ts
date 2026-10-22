@@ -12,6 +12,10 @@ export {
   type KbEventMap,
   type AlbumChangedPayload,
   type AutoConfigChangePayload,
+  type ImagesChangePayload,
+  type ImagePatchEntry,
+  type ImageChangedPayload,
+  type AlbumImagesChangePayload,
 } from "./events";
 export {
   pathqlRequest$,

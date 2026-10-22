@@ -289,7 +289,6 @@
 | `apps/kabegame/src/actions/imageActions.ts` | 操作结果提示文案 |
 | `apps/kabegame/src/actions/albumActions.ts` | 同上 |
 | `apps/kabegame/src/actions/surfRecordActions.ts` | 同上 |
-| `apps/kabegame/src/composables/useImagesChangeRefresh.ts` | 若有提示 |
 | `apps/kabegame/src/composables/useFileDrop.ts` | 拖拽提示文案 |
 
 **说明**：TS 中需在调用处注入 `i18n`（如 `useI18n().t`）或通过 `import { i18n } from '@kabegame/i18n'` 使用 `i18n.global.t`，再替换硬编码字符串。

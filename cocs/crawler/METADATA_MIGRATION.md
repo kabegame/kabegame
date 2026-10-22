@@ -83,7 +83,7 @@ L3 查询 / 前端：
 
 - `src-tauri/kabegame-core/src/providers/dsl/images/images_metadata_full_provider.json5`：`images://id_{id}/metadata_full` 的完整 metadata 行路径。
 - `apps/kabegame/src/components/common/ImagePluginDescriptionPanel.vue`：详情区读取完整 metadata，并把返回的 `plugin_version` 交给模板渲染。
-- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/dataChangeHub.ts`：metadata 缓存（key 仅为 `m<metadataId>`，值为 `{ data, pluginVersion }`）与图片字段 patch 批处理。
+- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/kbEvents/imagePatches.ts`：metadata 缓存（key 仅为 `m<metadataId>`，值为 `{ data, pluginVersion }`）与图片字段 patch 批处理。
 - `apps/kabegame/src/stores/metadataMigration.ts`、`components/busy/BusyMetadataMigrationCard.vue`：迁移运行态镜像与无取消按钮的忙碌卡片。
 
 ## 排查要点

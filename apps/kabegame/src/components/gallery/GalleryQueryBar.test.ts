@@ -17,7 +17,6 @@ vi.mock("@/services/pathql", () => ({
   pathqlEntry: vi.fn(async () => ({ total: 0 })),
   pathqlList: vi.fn(async () => []),
 }));
-vi.mock("@/services/dataChangeHub", () => ({ subscribeChanges: vi.fn(() => vi.fn()) }));
 vi.mock("@kabegame/i18n", () => ({
   useI18n: () => ({ t: (key: string) => key, locale: { value: "zh" } }),
 }));

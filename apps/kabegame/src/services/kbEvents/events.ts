@@ -1,8 +1,38 @@
 import { filter, merge, type Observable } from "rxjs";
-import type { ImageChangedPayload, ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import type { ImageInfo } from "@/types/image";
 import type { Plugin } from "@/stores/plugins";
 import { kbEvent$, type KbEvent } from "./eventSource";
+
+/** 后端 `AppEvent::ImagesChange` / `images` 表粗粒度失效信号（reason: add | delete | change） */
+export type ImagesChangePayload = {
+  seq: number;
+  reason?: "add" | "delete" | "change";
+  imageIds?: string[];
+  taskIds?: string[];
+  surfRecordIds?: string[];
+  pluginIds?: string[];
+};
+
+export type ImagePatchEntry = {
+  imageIds: string[];
+  /** `ImageInfo` camelCase 字段的绝对值快照。 */
+  diff: Partial<ImageInfo>;
+};
+
+export type ImageChangedPayload = {
+  seq: number;
+  patches: ImagePatchEntry[];
+};
+
+/** 后端 `AppEvent::AlbumImagesChange` / 事件名 `album-images-change`。 */
+export type AlbumImagesChangePayload = {
+  seq: number;
+  reason: "add" | "add-hidden" | "delete" | "delete-hidden" | "hide" | "unhide" | "order";
+  /** 后端恒按单画册拆分，保留数组形状以兼容事件协议。 */
+  albumIds: string[];
+  imageIds: string[];
+  ancestorPath: string;
+};
 
 export type AlbumChangedPayload = {
   seq?: number;

@@ -18,7 +18,6 @@ vi.mock("@/api", () => ({
   }),
 }));
 vi.mock("@/services/pathql", () => ({ pathqlAll, pathqlFetch: vi.fn() }));
-vi.mock("@/services/dataChangeHub", () => ({ subscribeChanges: vi.fn() }));
 
 function deferred() {
   let resolve!: (value: unknown[]) => void;

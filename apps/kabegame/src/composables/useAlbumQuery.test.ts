@@ -17,7 +17,6 @@ vi.mock("@/api", () => ({
 }));
 vi.mock("@/api/rpc", () => ({ invoke: vi.fn() }));
 vi.mock("@/services/pathql", () => ({ pathqlAll, pathqlFetch: vi.fn(), pathqlEntry: vi.fn() }));
-vi.mock("@/services/dataChangeHub", () => ({ albumChangeBatch: vi.fn(), publishLocal: vi.fn() }));
 vi.mock("@/stores/settings", () => ({ useSettingsStore: vi.fn() }));
 vi.mock("@kabegame/element-plus", () => ({ ElMessageBox: {} }));
 vi.mock("@kabegame/i18n", () => ({ i18n: {} }));

@@ -1,5 +1,10 @@
 import { invoke } from "@/api/rpc";
-import type { TotalSnapshot } from "@/services/liveQuery";
+
+/** `pathql_count` 的返回：总数与读取时的全局变更序号。 */
+export interface TotalSnapshot {
+  total: number;
+  seq: number;
+}
 
 export interface ProviderNote {
   title: string;

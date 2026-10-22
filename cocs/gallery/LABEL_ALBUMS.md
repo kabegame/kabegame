@@ -129,7 +129,8 @@ IPC `ipc.rs` / `client.rs` / `handlers/storage/albums.rs`。
   `AlbumPicker` 的 `scope` 只列标签目录。
 - 预览弹窗：core `ImagePreviewDialog` 开 `#info-extra` slot、`ImageGrid` 透传为 `#preview-info-extra`，
   由 app 层 `components/ImageGrid.vue` 渲染 `ImageLabelsPanel.vue`（列出 / 删除 / 从已有添加 / 当场新建 /
-  复制 key / 点击跳转）。紧凑布局（PhotoSwipe）没有信息区，标签面板仅桌面预览可见。
+  复制 key / 点击跳转）。面板是 `albums://of_image_<id>/album_kind/label` 的 rows 观察方：切图与面板内增删后
+  请求自身 key，别处成员变更与已挂标签改名 / 删除经事件窗口刷新，读取失败保留已有标签。紧凑布局（PhotoSwipe）没有信息区，标签面板仅桌面预览可见。
   标签按完整父目录 key 路径、不区分大小写的字母序排列，目录内按标签 key 排序；根级标签排在最前。
   `utils/imageLabelPresentation.ts` 对小写目录路径执行 FNV-1a 与雪崩混合，再投射至 OKLCH
   的浅亮低色度区间（L 0.94–0.96、C 0.025–0.035）；同目录共用色板，根级标签使用中性色。
