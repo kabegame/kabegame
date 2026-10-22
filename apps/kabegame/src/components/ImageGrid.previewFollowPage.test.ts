@@ -57,7 +57,7 @@ vi.mock("@/services/kbEvents", async () => {
       if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
       return { loading: isRows ? queryLoading : ref(false) };
     },
-    useLookAll: (opts: { queries: () => readonly unknown[] | null }) => ({
+    usePathqlLookAll: (opts: { queries: () => readonly unknown[] | null }) => ({
       loading: ref(false),
       error: ref(null),
       key: () => {

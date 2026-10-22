@@ -1,5 +1,13 @@
 # v4.6.1 regression
 
+## 删除未挂载的头部筛选下拉
+
+`GalleryFilterControl`（及 `GalleryTimeFilterSubmenu`、时间菜单树函数、`HeaderFeatureId.GalleryFilter`、两个独占 i18n 键）自查询栏改为 chip 后不再挂载，整体删除；时间文案函数 `buildTimeMenuScopeLabels` / `formatTimeFilterDetail` 保留。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 画廊与时间 chip | 桌面 CEF | 整页刷新画廊；在时间 chip 面板选年份，再清除 | 页面无报错、总数正常；chip 显示格式化后的日期文案，清除后恢复「全部时间」 | 2026-10-22：总数 4287，选中后 chip 为「시간별 · 2026 연간」，清除后恢复 |
+
 ## 三个小消费方迁到 kbEvents（Phase C）
 
 隐藏图数、畅游站点计数与画册页头部统一观察 pathql `all` key；事件相关性由核心窗口投票，用户操作经 `pathqlRequest$` 请求。2026-10-22 在 macOS CEF dev 上用 debug ingest 按 key 统计请求次数，并用 CLI `pathql query --entry` 核对数值。

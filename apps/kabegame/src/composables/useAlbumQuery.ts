@@ -6,7 +6,7 @@ import {
   albumEventPaths,
   on,
   pathqlRequest$,
-  useLookAll,
+  usePathqlLookAll,
 } from "@/services/kbEvents";
 
 /** 只观察当前画册的结构快照与独立图片计数；不缓存全量画册。 */
@@ -27,7 +27,7 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
     return !!path && albumEventAffectsDir(name, payload, path);
   };
 
-  const detail = useLookAll({
+  const detail = usePathqlLookAll({
     queries: () => {
       if (!albumId.value) return null;
       const id = encodeURIComponent(albumId.value);
@@ -53,7 +53,7 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
       if (!album.value) imageCount.value = 0;
     },
   });
-  const count = useLookAll({
+  const count = usePathqlLookAll({
     queries: () =>
       album.value && album.value.id === albumId.value ? ([albumImageCountQuery(album.value)] as const) : null,
     refreshOn: [

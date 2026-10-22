@@ -25,7 +25,6 @@ import { i18n } from "@kabegame/i18n";
 import CollectAction from "./comps/CollectAction.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import FailedImagesHeaderButton from "@/components/common/FailedImagesHeaderButton.vue";
-import GalleryFilterControl from "./comps/GalleryFilterControl.vue";
 import GallerySortControl from "./comps/GallerySortControl.vue";
 
 const t = (key: string) => i18n.global.t(key);
@@ -122,12 +121,6 @@ export function registerHeaderFeatures() {
       label: t("header.failedImages"),
       icon: WarningFilled,
       comp: FailedImagesHeaderButton,
-    },
-    {
-      id: HeaderFeatureId.GalleryFilter,
-      label: t("gallery.filter"),
-      icon: Filter,
-      comp: GalleryFilterControl,
     },
     {
       id: HeaderFeatureId.GallerySort,

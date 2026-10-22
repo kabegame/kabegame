@@ -124,7 +124,7 @@ import {
   imagePatches$,
   pathqlRequest$,
   usePathqlLooker,
-  useLookAll,
+  usePathqlLookAll,
   type PathqlRows,
 } from "@/services/kbEvents";
 import { useProvideImageMetadataCache } from "@/composables/useImageMetadataCache";
@@ -438,7 +438,7 @@ const rowsLooker = usePathqlLooker({
   },
 });
 
-const countLooker = useLookAll({
+const countLooker = usePathqlLookAll({
   queries: countQueries,
   refreshOn: adapter.refreshOn,
   onResult: ([total, unfiltered]) => {

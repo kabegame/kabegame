@@ -26,4 +26,4 @@ export {
 } from "./pathqlSource";
 export { usePathqlLooker } from "./usePathqlLooker";
 export { usePathqlLookMany } from "./usePathqlLookMany";
-export { usePathqlLookAll as useLookAll } from "./usePathqlLookAll";
+export { usePathqlLookAll as usePathqlLookAll } from "./usePathqlLookAll";

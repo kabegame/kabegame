@@ -199,8 +199,8 @@
   逐候选预测计数仍在面板打开、草稿变化或新候选载入时计算，显示 `+N` / `−N`。
 - 查询参数改变导致 key 改变时继续展示旧页，新的结构结果到达再按 key diff，保留句柄与展开态；读取失败保留上一份子项。
   `expand` / `loadMore` / `refresh` 等待由模型实现，`pathqlRequest$.next` 仍即发即返回。
-- Android picker 与头部 `GalleryFilterControl` 也列举 `…/_kb_co` 并读取 `meta.count`；Android picker 的插件扩展
-  选项不显示计数，同样 `withCount=false`。
+- 前端维度列举只剩过滤树（`facetTreeSource`，侧栏与 chip 面板共用）。原头部筛选下拉 `GalleryFilterControl` 与 Android 时间 picker
+  自查询栏改为 chip 后已不再挂载，连同 `GalleryTimeFilterSubmenu` 与时间菜单树构建函数一并删除。
 
 | 维度 | 列举 SQL 所在 | 说明 |
 | --- | --- | --- |

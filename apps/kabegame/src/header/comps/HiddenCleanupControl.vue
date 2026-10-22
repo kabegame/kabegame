@@ -19,7 +19,7 @@ import { Delete } from "@kabegame/element-plus-icons";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
-import { on, pathqlRequest$, useLookAll } from "@/services/kbEvents";
+import { on, pathqlRequest$, usePathqlLookAll } from "@/services/kbEvents";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
 
@@ -29,7 +29,7 @@ const store = useHiddenCleanupStore();
 // 隐藏画册的直接图片数由 album-images-change 事件持续刷新，不需要单独的计数命令
 const hiddenCount = ref(0);
 const hiddenQueries = [{ kind: "count", path: `images://gallery/album/${HIDDEN_ALBUM_ID}` }] as const;
-const hiddenLooker = useLookAll({
+const hiddenLooker = usePathqlLookAll({
   queries: () => hiddenQueries,
   refreshOn: [on("album-images-change", (p) => !!p.albumIds?.includes(HIDDEN_ALBUM_ID))],
   onResult: ([count]) => {
