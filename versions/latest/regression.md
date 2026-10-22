@@ -2,21 +2,33 @@
 
 ## 画廊网格事件与 pathql 数据源迁到 kbEvents（rxjs）
 
-ImageGrid 的行与总数改由 `services/kbEvents` 维护：事件源 `kbEvent$` 与 pathql rows / count 数据源分离，adapter `refreshOn` 每条只对一种事件；写命令（批量删除、加入 / 移出画册、任务图片加入画册）不再带 `view`、不返回快照、照常广播，`ctx.mutate` 写期间暂存事件、写后立即经请求通道补读行与总数。`dataChangeHub` / `liveQuery` 迁移期保留给其它消费方。
+ImageGrid 的行与总数改由 `services/kbEvents` 维护：事件源 `kbEvent$` 与 pathql rows / count 数据源分离，adapter `refreshOn` 每条只对一种事件；写命令（批量删除、加入 / 移出画册、任务图片加入画册）不再带 `view`、不返回快照、照常广播；行读 `pathql_fetch`、总数读 `pathql_count`；行与总数是 pathql 核心上某个 key 的观察方，只看不请求，核心对每个 key 统一 500ms 窗口、任一观察方过滤器同意即刷新，用户操作（含 `ctx.mutate` 完成后）直接请求，按前端请求序号「更大才更新、更小丢弃」。`dataChangeHub` / `liveQuery` 迁移期保留给其它消费方。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [x] | 前端回归 | macOS Vitest | 全量前端测试 | 全部通过 | 39 个文件、305 项；新增 kbEvents 用例：防抖窗口、事件共享监听、seq 不倒退、合并在途 + minSeq 补读、写期间暂存与放行跳过、未激活标脏补读、换路径不受旧读取影响 |
+| [x] | 前端回归 | macOS Vitest | 全量前端测试 | 全部通过 | 39 个文件、310 项；kbEvents 用例：防抖窗口、事件共享监听、请求序列逐步时序（含 A/B 乱序丢弃）、总数取 total 且序号由前端分配、后注册观察方拿到当前数据；核心窗口：同一 key 多观察方各带过滤器、任一同意即刷新一次并推给全部观察方、统一 500ms 窗口合并多票、观察方全部退订后不再刷新、事件刷新失败推给观察方；观察方：不发请求、key 为 null 不注册、换 key 后旧结果与旧过滤器不影响新 key |
 | [x] | 编译 | macOS | check-kabegame（vue-tsc + cargo check） | 0 error | web dispatch 在桌面构建中编译，一并覆盖 |
-| [x] | 隐藏立即更新 | macOS CEF dev | 画廊右键「隐藏」首张图 | 列表与总数在命令返回后立即更新，不等 500ms；不闪回 | 400ms 内首图 8065 移出、总数 3988→3987；永久删除会删 dev 文件，未真机执行，与隐藏共用 `ctx.mutate` |
-| [x] | 写后不重复读取 | debug ingest | 同上操作，统计 pathql_view / pathql_count 调用 | 每次写各补读一次行与总数，本次写的事件按 seq 跳过 | 两种到达顺序都覆盖：隐藏时事件晚于响应（seq 52 ≤ appliedSeq 52 跳过）；画册移除时事件早于响应（holds=1 暂存，放行时 seq 100 已覆盖）；均为 rows 1 次 + total 1 次；临时插桩已删除 |
+| [x] | 隐藏立即更新 | macOS CEF dev | 画廊右键「隐藏」首张图 | 列表与总数在命令返回后立即更新，不等 500ms；不闪回 | 按 id 校验（后台收集会改变首图与总数，不能只看「首图 + 总数」）：8164 离开网格、`is_hidden=1`、总数 4069→4068；永久删除会删 dev 文件，未真机执行，与隐藏共用 `ctx.mutate` |
+| [x] | 请求序列 | debug ingest | 同上操作，记录每次请求的序号 | 操作后直接请求，本次写的事件由核心窗口再请求一次，按序号依次落地；外部写入只有核心窗口请求 | 观察方改造后复测：隐藏时 rows / total 各两次——mutate 用户请求（序号 2）与约 13ms 后核心窗口请求（序号 3，空闲首票立即发出）；外部取消隐藏只由核心窗口各请求 1 次（序号 4），8164 回到首位、`is_hidden=0`、总数回到 4069；临时插桩已删除 |
 | [ ] | 画册内移除 / 上划移除 / 加入画册 | macOS CEF dev | 画册详情移除图片；加入画册对话框（含任务详情「全部加入」） | 当前画册立即更新；目标画册打开时为新内容 | 收藏画册右键「从画册移除」已实测立即更新；上划移除与加入画册对话框未实测 |
 | [x] | 外部写入经事件通道刷新 | macOS CEF dev | 直接调 `remove_images_from_album` 取消隐藏；在收藏画册页直接调 `add_images_to_album` 加收藏 | 画廊 / 画册视图立即刷新，行与总数各读一次 | 防抖首发立即请求；画册视图因包含本画册的 `album-images-change` 刷新，画廊对不相关的收藏变更不触发；测试数据均已还原 |
 | [ ] | 后台下载刷新 | macOS CEF dev | 运行收集任务时停留在画廊、任务详情、畅游图片页 | 约 500ms 节奏持续刷新，无关任务 / 畅游记录不触发刷新 | |
-| [x] | 离开期间的变更 | macOS CEF dev | 停留在画册页时直接调命令隐藏 8065，再切回画廊 | 回到画廊即为最新行与总数 | 首图 8066、总数 3987；当前 App.vue 未启用 keep-alive，页面重新挂载读取，旧实例已退订（离开期间无事件日志）；「标脏后重新激活补读」仅单测覆盖 |
+| [x] | 离开期间的变更 | macOS CEF dev | 停留在画册页时直接调命令隐藏 / 取消隐藏 8164，再切回画廊 | 回到画廊即为最新行与总数 | 按 id 校验：隐藏后切回 8164 不在、总数 4068，取消隐藏后切回 8164 在首位、总数 4069，行与总数各请求 1 次；改 kbEvents 源码触发 HMR 后 `@/router` 会重建出未挂到 app 的实例，adapter `isActive` 恒 false、切回画廊为空——属开发期现象，整页重载即恢复，测试前先重载；当前 App.vue 未启用 keep-alive，页面重新挂载读取，旧实例已退订（离开期间无事件日志）；「标脏后重新激活补读」仅单测覆盖 |
 | [ ] | 「无画册」与画册改名 | macOS CEF dev | 画廊开启「无画册」，把图片加入画册；改画册名 | 「无画册」视图移除该图；改名后画册视图刷新 | |
 | [ ] | Web 版 SSE | Web debug | 另开窗口删除图片 | 画廊经 SSE 事件刷新 | |
 | [ ] | Android | Android dev | 隐藏、删除、加入画册 | 与桌面一致 | |
+
+## 画廊字段补丁迁到 kbEvents（Phase B）
+
+ImageGrid 与预览弹窗的字段补丁改用 `imagePatches$`：`image-changed` 与收藏画册的 `album-images-change` 各自经 `batchWindow` 防抖、各自合并成 `imageId → 字段`，再汇成一条交给 `patchMany`；预览弹窗（裸 id 模式）另用 `triggers$` 对 `images-change` / `album-images-change` 重读当前图。两者不再订阅 `dataChangeHub`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 前端回归 | macOS Vitest | 全量前端测试 + vue-tsc | 全部通过、0 error | 39 个文件、308 项；新增 `imagePatches$` 用例：两种事件各自开窗、同 id 字段合并、收藏只看收藏画册且按到达顺序取最后一次、无关事件串不发出 |
+| [x] | 外部收藏同步 | macOS CEF dev + debug ingest | 页面内直接调 `toggle_image_favorite` 收藏再取消画廊首图（绕开 UI 自身 `ctx.patch`） | 当前行的 `favorite` 随事件立即更新 | 8065：两次各一批补丁，`favorite` true → false，已还原；临时插桩已删除 |
+| [x] | `image-changed` 防抖合并 | macOS CEF dev + debug ingest | 直接调命令隐藏 8066，100ms 后取消隐藏 | 首批立即发出 `isHidden: true`，窗口结束时合并发出 `isHidden: false` | 第二批在 +501ms；此时该图因行刷新暂不在视图，结束后回到列表，数据已还原 |
+| [ ] | 预览弹窗单图保鲜 | macOS CEF dev | 关闭「预览跟随翻页」，预览一张随后被移出视图的图，再在别处改它的收藏 / 隐藏 | 弹窗内收藏状态即时更新，隐藏后重读当前图 | 裸 id 模式不易触达，未真机 |
+| [ ] | Android | Android dev | 后台下载补全缩略图、收藏 | 网格字段即时更新 | |
 
 ## 运行配置写后主动同步与异步补位
 

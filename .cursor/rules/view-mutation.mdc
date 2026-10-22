@@ -1,5 +1,5 @@
 ---
-description: ImageGrid 写后经请求通道立即补读、运行配置写操作返回视图快照，事件异步补位
+description: ImageGrid 操作后直接请求、事件防抖后请求，按前端请求序号落地；运行配置写操作返回视图快照，事件异步补位
 globs: "apps/kabegame/src/**/*.{ts,vue}, src-tauri/kabegame*/src/**/*.rs"
 alwaysApply: false
 ---
@@ -7,23 +7,26 @@ alwaysApply: false
 # ImageGrid 视图写操作
 
 - 凡从 `ImageGrid` 发起、可能改变当前查询结果集的写操作，必须走 `GridRefreshContext.mutate(() => ...)`。
-  写命令不接收也不返回 `view`；`mutate` 在写期间暂存事件通道，写完立即经 pathql 请求通道补读当前行与
-  总数（不等防抖），结果仍从数据源落地，本次写产生的事件随后按 `seq` 跳过。禁止调用方直接写入快照。
+  写命令不接收也不返回 `view`；`mutate` 在操作完成后作为用户操作直接请求当前行与总数（不防抖），
+  结果仍从数据源落地。禁止调用方直接写入查询结果。
 - 只改变当前行展示字段、不会改变结果集的写操作走 `GridRefreshContext.patch`。当前只有收藏符合此规则。
-- 写命令照常广播事件（主应用前端、后台任务、MCP、CLI 都靠它同步），不得为主动补读加 `hold` 或返回快照。
-- 行读取与总数读取（`pathql_view` / `pathql_count`）都必须先读取全局 `seq` 再查询；
-  `images-change`、`album-images-change`、`album-changed` 携带递增 `seq`。
-- ImageGrid 的行与总数经 `services/kbEvents` 的 `useLivePathql` 维护：事件通道由 adapter 的 `refreshOn`
-  （每条只对一种事件）合成相关 `seq` 流、防抖后请求；请求通道是首次加载、翻页、手动刷新与写后补读。
-  两者都经 `requestPathql`，结果只从 `pathqlData$` 按路径落地且 `seq` 不倒退。翻页只改变行路径，
-  不得重读未变的计数路径。
-- ImageGrid 不得重新建立裸 `listen`；字段补丁（`image-changed`、收藏）仍暂经 `dataChangeHub`，
-  迁移期两套共存，新增消费方优先用 `kbEvents`。
+- 写命令照常广播事件（主应用前端、后台任务、MCP、CLI 都靠它同步），不得为前端少读一次而加 `hold` 或返回快照。
+- ImageGrid 的行与总数是 pathql 核心上某个 key 的**观察方**（`usePathqlLooker` / `lookPathql`），只看数据、
+  不发请求，行读 `pathql_fetch`、总数读 `pathql_count`。观察方注册自己的过滤器（adapter 的 `refreshOn`，
+  每条只对一种事件）；核心对每个 key 用统一的 500ms 窗口（`PATHQL_REFRESH_WAIT_MS`），窗口内任一观察方的
+  过滤器同意就刷新一次，结果推给该 key 的全部观察方。观察方不得自带防抖时间。
+- 用户操作（首次加载、翻页、手动刷新、`mutate`）由发起方直接调 `requestPathql`，不防抖。前端不区分操作是否写入。
+  每次请求按 key 分配递增序号、可并行，返回时序号大于当前数据状态才更新，更小的静默丢弃；不依赖后端 `seq`。
+  翻页只改变行路径，不得重读未变的计数路径。
+- ImageGrid 不得重新建立裸 `listen`，也不再订阅 `dataChangeHub`。字段补丁经 `imagePatches$`：
+  `image-changed` 与收藏画册的 `album-images-change` 各自防抖、各自合并成 `imageId → 字段`，再汇成一条，
+  只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜，粗信号重读用 `triggers$`。
+- `dataChangeHub` 迁移期仍保留给其它消费方，新增消费方优先用 `kbEvents`。
 
 ## 已知例外
 
 `ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页，保留 500ms
-被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入写后补读协议。
+被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入 `mutate` 后直接请求。
 
 ## 画册查询与计数
 

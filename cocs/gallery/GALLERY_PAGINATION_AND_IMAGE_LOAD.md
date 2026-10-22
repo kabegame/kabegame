@@ -80,8 +80,8 @@
 ### 拉取当前页图片
 
 - **组件**：[`apps/kabegame/src/components/ImageGrid.vue`](/apps/kabegame/src/components/ImageGrid.vue)。
-- 行与总数拆成两个带 `seq` 的独立读：`pathql_view(path)` 返回 `{ rows, seq }`，
-  `pathql_count(path)` 返回 `{ total, seq }`。
+- 行与总数拆成两个独立读：行用 `pathql_fetch(path)`，总数用 `pathql_count(path)` 的 `total`；
+  新旧由前端请求服务按路径分配的请求序号判断（见下文「kbEvents」）。
 - 两者在后端都通过 PathQL 只读连接池执行，可以在不同连接上并行查询，不再与单写连接互相排队。
 - 行路径带页码，首次加载、翻页、换筛选和相关数据变更都会重读；计数路径由 adapter 的
   `computeCountPath` 推导，只在路径变化或相关数据变更时重读。单纯翻页不再跑 COUNT。
@@ -189,65 +189,68 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 
 ## 图片与画册成员变更事件
 
-### ImageGrid 的主动 / 被动双通道
+### ImageGrid 的刷新来源
 
-ImageGrid 把数据变化分成两条通道：
+ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否写入：
 
-- **请求通道（写后补读）**：当前网格发起且会改变结果集的写操作走 `ctx.mutate(() => ...)`。写命令不带
-  `view`、不返回快照，照常广播事件；`mutate` 在写期间暂存事件通道，写完立即经 `requestPathql` 新开读取
-  当前行与总数（不等防抖），结果从数据源落地，再放行暂存的事件。永久删除、隐藏/取消隐藏、
-  加入/移出画册与上划移除均已接入。首次加载、翻页与手动刷新也走这条通道。
+- **用户操作（不防抖）**：首次加载、翻页、手动刷新，以及当前网格发起且会改变结果集的操作
+  （`ctx.mutate(() => ...)`）。写命令不带 `view`、不返回快照，照常广播事件；`mutate` 在操作完成后直接请求
+  当前行与总数，结果从数据源落地。永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
 - **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
-- **事件通道**：ImageGrid 的行与总数由 adapter 的 `refreshOn` 声明相关事件（每条只对一种事件：
-  `images-change`、`album-images-change`、`album-changed`），见下文「kbEvents」。
-- **字段补丁（迁移期仍在 hub）**：`image-changed` 与收藏成员变更，以及其它尚未迁移的消费方（画册树、侧栏、
-  预览、标签面板等）进入全局单例
+- **事件（防抖）**：adapter 的 `refreshOn` 声明相关事件（每条只对一种事件：
+  `images-change`、`album-images-change`、`album-changed`），防抖后请求，见下文「kbEvents」。
+- **字段补丁（不发请求）**：`imagePatches$` 把 `image-changed` 与收藏画册的 `album-images-change`
+  各自经 `batchWindow` 防抖、各自合并成 `Map<imageId, Partial<ImageInfo>>`（同 id 后到字段覆盖先到；收藏按到达
+  顺序取最后一次），再 `merge` 成一条交给 `patchMany`。两者改的字段不重叠（`image-changed` 不带 `favorite`），
+  两条流之间不需要排序。预览弹窗在裸 id 模式下也订阅它，另用 `triggers$` 对 `images-change` /
+  `album-images-change` 重读当前图。
+- **其它尚未迁移的消费方**（画册树、侧栏、头部计数、标签面板等）仍在全局单例
   [`dataChangeHub.ts`](/apps/kabegame/src/services/dataChangeHub.ts)。hub 对每个订阅者按 500ms 时间窗合并
-  reason 与各 id 集合，并按 imageId 浅合并 `imagePatches`（后到字段覆盖先到字段）；画册维度另含
-  `albumIds` / `albumImageIds`、按到达顺序保存的 `favoriteOps`，以及
-  `albumPaths` / `albumPathsWildcard` 和结构字段集合。画册成员事件携带画册 `ancestorPath`；新增、删除、
-  改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。任一 `images-change` 缺少
-  task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
+  reason 与各 id 集合；画册维度含 `albumIds` / `albumImageIds`、`albumPaths` / `albumPathsWildcard` 和结构字段集合。
+  画册成员事件携带画册 `ancestorPath`；新增、删除、改名、移动事件也提供新旧祖先路径，已加载目录用路径前缀判断相关性。
+  任一 `images-change` 缺少 task/surf/plugin 维度时把该维度记为 wildcard。回调串行执行，执行期间的新批次会合并后补跑。
+
 ### kbEvents（`services/kbEvents/`，rxjs）
 
-ImageGrid 的行与总数已迁到 [`services/kbEvents`](/apps/kabegame/src/services/kbEvents/index.ts)，
+ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/kabegame/src/services/kbEvents/index.ts)，
 `dataChangeHub` / `liveQuery` 在迁移期保留给其它消费方。分三层，事件源与数据源是两种不同的 observable：
 
-- **事件源** `kbEvent$(name)`：基于 `listen`（Tauri 事件或 Web SSE），同名事件共享一次监听，只取出
-  payload 的 `seq`（缺失记 0），不解析内容。`events.ts` 的 `KbEventMap` 只是类型表；`on(event, relevant)`
-  声明一条单事件触发，`triggerSeq$` 把多条合成「相关变更 seq」流。
-- **pathql 请求服务**（单例）`requestPathql(kind, path, { minSeq, join })`：按 `kind + path` 维护最新
-  `seq` 与在途读取。事件通道 `join: true` 可合并在途读取，数据源已不旧于 `minSeq` 时跳过，合并到的读取早于
-  `minSeq` 时再读一次；请求通道总是新开读取。结果只发布到 `pathqlData$(kind, path)` 这一 rows / count
-  数据源，`seq` 不倒退；调用方不直接写入快照。无订阅者且无在途读取时回收，不把离开路径的旧数据重放给后来者。
-- **`useLivePathql`**：订阅当前 key 的数据源与在途状态（旧路径的迟到结果与 loading 不影响新路径），
-  事件通道按 `waitMs` 经 `batchWindow`（空闲首个立即发，窗口内合并到窗口结束）防抖；`seq ≤ appliedSeq`
-  的事件不请求；key 为 null 时命中事件标脏，重新激活补读；`autoFetch` 用于总数（计数路径变化时自动读）；
-  `hold()` 供写操作暂存事件通道。
+- **事件源** `kbEvent$(name)`：基于 `listen`（Tauri 事件或 Web SSE），同名事件共享一次监听，不解析内容。
+  `events.ts` 的 `KbEventMap` 只是类型表；`on(event, relevant)` 声明一条单事件触发，`triggers$` 把多条合成刷新信号流。
+- **pathql 核心**（单例，`pathqlSource.ts`）：按 `kind + key` 维护请求序列、rows / count 数据状态与观察方注册。
+  - **请求**：`requestPathql(kind, key)` 每次序号 +1，可与在途请求并行；返回时序号大于当前数据状态的就更新，
+    更小的静默丢弃（如接连发出 A、B，B 先返回则更新，A 后返回被丢弃）。用户操作直接调用，不防抖。
+  - **观察方**：`lookPathql(kind, key, refreshOn)` 订阅期间注册一个观察方，收到数据、在途状态与事件刷新失败；
+    观察方只看不请求。`refreshOn` 是观察方的过滤器，同一 key 所有观察方的过滤器向核心的**同一个 500ms 窗口**
+    （`PATHQL_REFRESH_WAIT_MS`，经 `batchWindow`：空闲首票立即刷新，窗口内的票合并到窗口结束）投票，
+    任一同意就刷新一次，结果推给该 key 的全部观察方。
+  - 没有观察方且没有在途请求时回收该 key，不把离开路径的旧数据重放给后来者，也不再随事件刷新。
+- **`usePathqlLooker`**：Vue 组合式观察方。key 变化时注销旧 key、注册新 key（旧路径的迟到结果与 loading 不影响新路径），
+  key 为 null 时不注册；不带防抖时间、不发请求。ImageGrid 在计数路径变化时自己请求总数，首次加载 / 翻页 / 刷新 / `mutate` 自己请求行。
+- **`imagePatches$(waitMs)`**（`imagePatches.ts`）：字段补丁流，每种事件一个 `batchWindow` + 自己的 reduce
+  （`reduceImageChanged` / `reduceFavoriteChanges`），合并后 `merge`；与数据源无关，不发请求。
 - 各 adapter 的 `refreshOn`：gallery 响应带 reason 的 `images-change`、「无画册」视图下的
   `album-images-change`，以及改结构字段（「无画册」视图下也含行字段）的 `album-changed`；album 响应
   `images-change`、包含本画册的 `album-images-change` 与本画册的 `album-changed`；task / surf 只按
-  `taskIds` / `surfRecordIds` 或缺维度粗过滤 `images-change`。`album-added` / `album-deleted` 不带 `seq`，
-  不进网格触发。
+  `taskIds` / `surfRecordIds` 或缺维度粗过滤 `images-change`。`album-added` / `album-deleted` 旧实现实际
+  不触发网格刷新，暂不列入。
 
 画册写命令始终返回本次已发送事件的 `albumChanges` 副本。无状态 `services/albums.ts` 把返回的
 成员事件用 `publishLocal` 立即投递；hub 记录其 `seq`，随后到达的同序号后端事件直接丢弃。画册树不维护全量
-列表或全量计数，只重拉相关的已加载目录；画册视图仍由写后补读或事件触发的查询决定过滤、排序和分页后的最终行位置。
+列表或全量计数，只重拉相关的已加载目录；画册视图仍由操作后请求或事件触发的查询决定过滤、排序和分页后的最终行位置。
 预览中的 `ImageLabelsPanel` 为避免替换底层列表导致跳页，保留 500ms 被动刷新。
 
-### `seq` 一致性协议
+### 一致性
 
-后端 `GlobalEmitter` 为 `image-changed`、`images-change`、`album-images-change` 与进入 hub 的
-`album-changed` 共用一个单调递增计数器，四者 payload 都携带 `seq`。
+后端 `GlobalEmitter` 为 `image-changed`、`images-change`、`album-images-change` 与 `album-changed`
+共用一个单调递增计数器，四者 payload 都携带 `seq`；迁移期的 `dataChangeHub` 仍用它做本地发布去重。
 
-行读取与总数读取都必须**先读取 `seq`，再执行各自查询**。快照 `seq = S` 表示序号不大于 S 的事件都已包含，
-事件与快照在同一条时间轴上，跨事件类型也可直接比较。ImageGrid 的写命令不再持有 `EventHold`，事件照常即时广播：
+ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 
-- 每个路径的数据源只发布 `seq` 不倒退的快照，旧的在途读取不会覆盖新状态；
-- 行与总数实例各自用 `appliedSeq` 判断，`seq <= appliedSeq` 的事件不再请求；
-- 写操作期间事件通道暂存，写后补读的快照 `seq` 不小于这次写产生的事件序号，放行时这些事件被跳过；
-  写响应与事件谁先到都不会多读一次；
-- 读数据期间新发出的事件具有更大的序号，随后会再触发一次拉取，允许多拉但不会漏变更。
+- 每次请求（事件防抖后或用户操作）都在发出时分配新序号，可并行；返回时序号大于当前数据状态才更新，
+  旧的在途请求不会覆盖新状态；
+- 写操作完成后的直接请求与随后到达的本次写事件触发的请求各一次，允许多读，按序号落地，结果一致；
+- 读数据期间新发出的事件会再触发一次请求，允许多拉但不会漏变更；
 - 若写操作删空最后一页，新总数到达后由 `usePagedGallery` 的 total watcher 把页码夹回新的最后一页。
 
 ### `images-change`（`AppEvent::ImagesChange`，`images` 表）
@@ -264,7 +267,7 @@ ImageGrid 的行与总数已迁到 [`services/kbEvents`](/apps/kabegame/src/serv
   立即发，整理回填用 `native_metadata_image_patch` 并入本批补丁，下载入库只为同哈希的旧图补发（新图随后有 `add`）。
   前端原生元数据缓存 key 为 `imageId@n<imageMetadataId>`（插件元数据为 `m<metadataId>`），面板在同一张图只换
   `imageMetadataId` 时保留旧内容重新取数，不闪。
-- ImageGrid 的行与总数经 `kbEvents` 监听，字段补丁暂经 `dataChangeHub`；`useImagesChangeRefresh.ts`
+- ImageGrid 的行、总数与字段补丁都经 `kbEvents` 监听；`useImagesChangeRefresh.ts`
   仍保留给 Surf.vue、工具栏等旧消费方。
   `GalleryToolbar` 接收当前 `filter`，在同一次刷新中并行读取过滤后 count 与仅保留 `hide` 上下文的总 count，
   两条都完成后才整体替换副标题计数，避免 `images-change` 后显示出跨两代的“数量 / 总数”。
@@ -278,7 +281,7 @@ ImageGrid 的行与总数已迁到 [`services/kbEvents`](/apps/kabegame/src/serv
 - 可 patch 字段为 `displayName`、`pluginId`、`metadataId`、`imageMetadataId`、`postUrl`、
   `thumbnailPath`、`compatiblePath`、`localPath`、`surfRecordId`、`taskId`、`lastSetWallpaperAt`、
   `isHidden`、`favorite`、`type`、`size`。`width` / `height` 刻意排除，避免正在预览时打断 PhotoSwipe 缩放。
-- Grid 用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` 变化会自然改变 metadata cache key，
+- Grid 经 `imagePatches$` 收到合并后的补丁，用 `patchMany` 单次遍历当前页并替换一次数组；`metadataId` 变化会自然改变 metadata cache key，
   无需额外失效。
 
 ### `album-images-change`（`AppEvent::AlbumImagesChange`，`album_images` 表）
@@ -305,7 +308,7 @@ ImageGrid 的行与总数已迁到 [`services/kbEvents`](/apps/kabegame/src/serv
 2. **改每页条数后仍显示旧页**：确认入口只写 `settings.galleryPageSize`，`ImageGrid` 的归一化
    `pageSize` 已更新，且本地页码按旧页首张图位置换算后触发新的 `rowsPath` 读取。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
-4. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，写后行与总数都经请求通道补读并从
+4. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，操作后行与总数都直接请求并从
    `pathqlData$` 落地；不要靠事件防抖回刷当前操作，也不要直接写入命令返回值。
 5. **任务/畅游详情收到无关刷新**：检查 adapter `refreshOn` 对 `taskIds` / `surfRecordIds` 的判断。缺维度必须刷新，带维度时才允许按 id 排除。
 6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查

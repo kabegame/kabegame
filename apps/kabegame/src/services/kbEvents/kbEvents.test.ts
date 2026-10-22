@@ -3,21 +3,29 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent, nextTick, ref } from "vue";
 import { Subject } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RowsSnapshot } from "@/services/liveQuery";
 import { batchWindow } from "./batchWindow";
 import { kbEvent$ } from "./eventSource";
-import { pathqlData$, requestPathql } from "./pathqlSource";
-import { useLivePathql } from "./useLivePathql";
+import { imagePatches$ } from "./imagePatches";
+import { on, type EventTrigger } from "./events";
+import { lookPathql, requestPathql, type PathqlKind, type PathqlRows, type SnapshotOf } from "./pathqlSource";
+import { usePathqlLooker } from "./usePathqlLooker";
+
+type Row = Record<string, unknown>;
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
-const pathqlView = vi.hoisted(() => vi.fn<(path: string) => Promise<RowsSnapshot>>());
+const pathqlFetch = vi.hoisted(() => vi.fn<(path: string) => Promise<Row[]>>());
+const pathqlCount = vi.hoisted(() => vi.fn<(path: string) => Promise<{ total: number; seq: number }>>());
 vi.mock("@/api", () => ({
   listen: vi.fn((event: string, handler: (event: { payload: unknown }) => void) => {
     listeners.set(event, handler);
-    return Promise.resolve(() => listeners.delete(event));
+    // 与真实 listen 一致：只注销自己的回调，迟到的旧注销不能把新回调删掉
+    return Promise.resolve(() => {
+      if (listeners.get(event) === handler) listeners.delete(event);
+    });
   }),
 }));
-vi.mock("@/services/pathql", () => ({ pathqlView, pathqlCount: vi.fn() }));
+vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlCount }));
+vi.mock("@/services/albums", () => ({ FAVORITE_ALBUM_ID: "favorite" }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,13 +37,18 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function rows(ids: string[], seq: number): RowsSnapshot {
-  return { rows: ids.map((id) => ({ id })), seq };
+function rows(...ids: string[]): Row[] {
+  return ids.map((id) => ({ id }));
+}
+
+function ids(snapshot: PathqlRows) {
+  return snapshot.rows.map((row) => row.id);
 }
 
 const cleanups: (() => void)[] = [];
 beforeEach(() => {
-  pathqlView.mockReset();
+  pathqlFetch.mockReset();
+  pathqlCount.mockReset();
 });
 afterEach(() => {
   cleanups.splice(0).forEach((dispose) => dispose());
@@ -68,17 +81,13 @@ describe("batchWindow", () => {
 });
 
 describe("kbEvent$", () => {
-  it("同名事件共享一次监听，并取出 payload 的 seq", async () => {
-    const seen: number[][] = [[], []];
-    const a = kbEvent$("demo-event").subscribe((event) => seen[0]!.push(event.seq));
-    const b = kbEvent$("demo-event").subscribe((event) => seen[1]!.push(event.seq));
+  it("同名事件共享一次监听，退订后释放", async () => {
+    const seen: number[] = [];
+    const a = kbEvent$("demo-event").subscribe(() => seen.push(1));
+    const b = kbEvent$("demo-event").subscribe(() => seen.push(2));
     await flushPromises();
-    listeners.get("demo-event")!({ payload: { seq: 7 } });
     listeners.get("demo-event")!({ payload: {} });
-    expect(seen).toEqual([
-      [7, 0],
-      [7, 0],
-    ]);
+    expect(seen).toEqual([1, 2]);
     a.unsubscribe();
     b.unsubscribe();
     await flushPromises();
@@ -86,56 +95,195 @@ describe("kbEvent$", () => {
   });
 });
 
-describe("requestPathql", () => {
-  it("数据源只发 seq 不倒退的快照；迟到的旧读取不覆盖新数据", async () => {
-    const older = deferred<RowsSnapshot>();
-    const newer = deferred<RowsSnapshot>();
-    pathqlView.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    const seen: number[] = [];
-    const subscription = pathqlData$("rows", "p/1").subscribe((snapshot) => seen.push(snapshot.seq));
+describe("imagePatches$", () => {
+  it("两种事件各自防抖、各自合并成 imageId → 字段补丁", async () => {
+    vi.useFakeTimers();
+    const batches: Record<string, unknown>[] = [];
+    const subscription = imagePatches$(500).subscribe((batch) => batches.push(Object.fromEntries(batch)));
     cleanups.push(() => subscription.unsubscribe());
+    await flushPromises();
+    const imageChanged = (patches: { imageIds: string[]; diff: Record<string, unknown> }[]) =>
+      listeners.get("image-changed")!({ payload: { seq: 1, patches } });
+    const albumChanged = (albumId: string, reason: string, imageIds: string[]) =>
+      listeners.get("album-images-change")!({ payload: { seq: 1, albumIds: [albumId], reason, imageIds } });
 
-    const first = requestPathql("rows", "p/1");
-    const second = requestPathql("rows", "p/1");
-    newer.resolve(rows(["b"], 5));
-    await second;
-    older.resolve(rows(["a"], 3));
-    await first;
-    expect(seen).toEqual([5]);
-  });
+    // 空闲时首个事件立即成批
+    imageChanged([{ imageIds: ["a"], diff: { isHidden: true } }]);
+    expect(batches).toEqual([{ a: { isHidden: true } }]);
 
-  it("事件通道合并在途读取；读取早于事件序号时再读一次；已覆盖的序号直接跳过", async () => {
-    const inFlight = deferred<RowsSnapshot>();
-    pathqlView.mockReturnValueOnce(inFlight.promise).mockResolvedValueOnce(rows(["c"], 9));
-    const seen: number[] = [];
-    const subscription = pathqlData$("rows", "p/2").subscribe((snapshot) => seen.push(snapshot.seq));
-    cleanups.push(() => subscription.unsubscribe());
+    // 窗口内同一 id 的字段合并，后到覆盖先到
+    imageChanged([{ imageIds: ["a", "b"], diff: { isHidden: false } }]);
+    imageChanged([{ imageIds: ["a"], diff: { width: 10 } }]);
+    // 收藏流独立开窗：首个收藏事件立即发出
+    albumChanged("favorite", "add", ["a"]);
+    expect(batches[1]).toEqual({ a: { favorite: true } });
+    // 非收藏画册与非成员增删的 reason 不产生补丁；同 id 按到达顺序取最后一次
+    albumChanged("other", "add", ["c"]);
+    albumChanged("favorite", "order", ["c"]);
+    albumChanged("favorite", "add-hidden", ["b"]);
+    albumChanged("favorite", "delete", ["b"]);
 
-    const explicit = requestPathql("rows", "p/2");
-    const joined = requestPathql("rows", "p/2", { join: true, minSeq: 8 });
-    inFlight.resolve(rows(["a"], 4));
-    await Promise.all([explicit, joined]);
-    expect(pathqlView).toHaveBeenCalledTimes(2);
-    expect(seen).toEqual([4, 9]);
+    vi.advanceTimersByTime(500);
+    expect(batches.slice(2)).toEqual([
+      { a: { isHidden: false, width: 10 }, b: { isHidden: false } },
+      { b: { favorite: false } },
+    ]);
 
-    await requestPathql("rows", "p/2", { join: true, minSeq: 9 });
-    expect(pathqlView).toHaveBeenCalledTimes(2);
+    // 一串事件全部无关时不发出
+    albumChanged("other", "delete", ["a"]);
+    vi.advanceTimersByTime(500);
+    expect(batches).toHaveLength(4);
   });
 });
 
-describe("useLivePathql", () => {
-  function mountLive(key = ref<string | null>("g/1")) {
-    const changes = new Subject<number>();
-    const results: RowsSnapshot[] = [];
-    let live!: ReturnType<typeof useLivePathql<"rows">>;
+/** 以观察方身份注册并记录收到的信号。 */
+function look<K extends PathqlKind>(kind: K, path: string, refreshOn: readonly EventTrigger[] = []) {
+  const data: SnapshotOf<K>[] = [];
+  const loading: boolean[] = [];
+  const errors: unknown[] = [];
+  const subscription = lookPathql(kind, path, refreshOn).subscribe((signal) => {
+    if (signal.type === "data") data.push(signal.snapshot);
+    else if (signal.type === "loading") loading.push(signal.loading);
+    else errors.push(signal.error);
+  });
+  cleanups.push(() => subscription.unsubscribe());
+  return { data, loading, errors, stop: () => subscription.unsubscribe() };
+}
+
+function imagesChange(reason: string) {
+  listeners.get("images-change")!({ payload: { seq: 1, reason } });
+}
+
+describe("requestPathql", () => {
+  it("按请求序号维护数据状态：更大的序号更新，更小的静默丢弃", async () => {
+    const looker = look("rows", "p/1");
+    expect(looker.data).toEqual([]); // 初始无数据
+
+    // 第一次请求返回 → 更新
+    pathqlFetch.mockResolvedValueOnce(rows("r1"));
+    await requestPathql("rows", "p/1");
+    expect(looker.data.map(ids)).toEqual([["r1"]]);
+
+    // 第二次请求未返回时第三次也发出；先返回的第二次仍更新（是最近返回的请求），随后第三次序号更大也更新
+    const second = deferred<Row[]>();
+    const third = deferred<Row[]>();
+    pathqlFetch.mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise);
+    const r2 = requestPathql("rows", "p/1");
+    const r3 = requestPathql("rows", "p/1");
+    second.resolve(rows("r2"));
+    await r2;
+    expect(looker.data.map(ids)).toEqual([["r1"], ["r2"]]);
+    third.resolve(rows("r3"));
+    await r3;
+    expect(looker.data.map(ids)).toEqual([["r1"], ["r2"], ["r3"]]);
+
+    // 接连发出 A、B：B 先返回更新；A 后返回序号更小，静默丢弃
+    const a = deferred<Row[]>();
+    const b = deferred<Row[]>();
+    pathqlFetch.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    const ra = requestPathql("rows", "p/1");
+    const rb = requestPathql("rows", "p/1");
+    b.resolve(rows("B"));
+    await rb;
+    a.resolve(rows("A"));
+    await ra;
+    expect(looker.data.map(ids)).toEqual([["r1"], ["r2"], ["r3"], ["B"]]);
+    expect(pathqlFetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("总数取 pathql_count 的 total，序号由前端分配", async () => {
+    const looker = look("total", "c/1");
+    pathqlCount.mockResolvedValueOnce({ total: 42, seq: 999 });
+    await requestPathql("total", "c/1");
+    expect(looker.data).toEqual([{ total: 42, seq: 1 }]);
+  });
+
+  it("后注册的观察方先拿到当前数据状态", async () => {
+    look("rows", "p/2");
+    pathqlFetch.mockResolvedValueOnce(rows("x"));
+    await requestPathql("rows", "p/2");
+    const late = look("rows", "p/2");
+    expect(late.data.map(ids)).toEqual([["x"]]);
+  });
+});
+
+describe("核心刷新窗口", () => {
+  it("同一路径的观察方各带过滤器：任一同意就在窗口内刷新一次，结果推给全部观察方", async () => {
+    vi.useFakeTimers();
+    const adds = look("rows", "w/1", [on("images-change", (p) => p.reason === "add")]);
+    const deletes = look("rows", "w/1", [on("images-change", (p) => p.reason === "delete")]);
+    await flushPromises();
+
+    // 没有过滤器同意：不刷新
+    imagesChange("change");
+    await flushPromises();
+    expect(pathqlFetch).not.toHaveBeenCalled();
+
+    // 只有一个同意：空闲时立即刷新一次，两个观察方都看到
+    pathqlFetch.mockResolvedValueOnce(rows("d"));
+    imagesChange("delete");
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+    expect(adds.data.map(ids)).toEqual([["d"]]);
+    expect(deletes.data.map(ids)).toEqual([["d"]]);
+  });
+
+  it("统一 500ms 窗口：窗口内多次同意（来自不同观察方）合并到窗口结束只刷新一次", async () => {
+    vi.useFakeTimers();
+    look("rows", "w/2", [on("images-change", (p) => p.reason === "add")]);
+    look("rows", "w/2", [on("images-change", (p) => p.reason === "delete")]);
+    await flushPromises();
+    pathqlFetch.mockResolvedValue(rows("x"));
+
+    imagesChange("add");
+    imagesChange("delete");
+    imagesChange("add");
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(499);
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("观察方全部退订后该路径不再随事件刷新", async () => {
+    vi.useFakeTimers();
+    const looker = look("rows", "w/3", [on("images-change")]);
+    await flushPromises();
+    looker.stop();
+    const other = look("rows", "w/other", [on("images-change", () => false)]); // 保持事件源在监听
+    await flushPromises();
+    imagesChange("add");
+    vi.advanceTimersByTime(500);
+    await flushPromises();
+    expect(pathqlFetch).not.toHaveBeenCalled();
+    expect(other.data).toEqual([]);
+  });
+
+  it("事件触发的刷新失败推给观察方", async () => {
+    const looker = look("rows", "w/4", [on("images-change")]);
+    await flushPromises();
+    pathqlFetch.mockRejectedValueOnce(new Error("boom"));
+    imagesChange("add");
+    await flushPromises();
+    expect(looker.errors).toEqual([new Error("boom")]);
+    expect(looker.loading).toEqual([false, true, false]);
+  });
+});
+
+describe("usePathqlLooker", () => {
+  function mountLooker(key = ref<string | null>("g/1"), refreshOn: readonly EventTrigger[] = [on("images-change")]) {
+    const results: PathqlRows[] = [];
+    let looker!: ReturnType<typeof usePathqlLooker<"rows">>;
     const wrapper = mount(
       defineComponent({
         setup() {
-          live = useLivePathql({
+          looker = usePathqlLooker({
             kind: "rows",
             key: () => key.value,
-            changes,
-            waitMs: 500,
+            refreshOn,
             onResult: (snapshot) => void results.push(snapshot),
           });
           return () => null;
@@ -143,72 +291,55 @@ describe("useLivePathql", () => {
       }),
     );
     cleanups.push(() => wrapper.unmount());
-    return { key, changes, results, live: () => live };
+    return { key, results, looker: () => looker };
   }
 
-  it("事件通道防抖请求，结果从数据源落地", async () => {
-    vi.useFakeTimers();
-    pathqlView.mockResolvedValueOnce(rows(["a"], 3)).mockResolvedValueOnce(rows(["b"], 6));
-    const { changes, results } = mountLive();
+  it("观察方不发请求，只看到用户请求或事件刷新的结果", async () => {
+    pathqlFetch.mockResolvedValueOnce(rows("user")).mockResolvedValueOnce(rows("event"));
+    const { results } = mountLooker();
+    await flushPromises();
+    expect(pathqlFetch).not.toHaveBeenCalled();
 
-    changes.next(3);
-    changes.next(5);
-    changes.next(6);
+    await requestPathql("rows", "g/1");
+    imagesChange("add");
     await flushPromises();
-    expect(pathqlView).toHaveBeenCalledTimes(1);
-    expect(results.map((s) => s.seq)).toEqual([3]);
-    vi.advanceTimersByTime(500);
-    await flushPromises();
-    expect(pathqlView).toHaveBeenCalledTimes(2);
-    expect(results.map((s) => s.seq)).toEqual([3, 6]);
+    expect(results.map(ids)).toEqual([["user"], ["event"]]);
   });
 
-  it("写期间暂存事件，写后显式补读覆盖的序号放行时跳过", async () => {
-    pathqlView.mockResolvedValueOnce(rows(["after-write"], 10));
-    const { changes, results, live } = mountLive();
-
-    const release = live().hold();
-    changes.next(10);
+  it("key 为 null 时不注册，事件不触发请求", async () => {
+    mountLooker(ref<string | null>(null));
+    look("rows", "keep-listening", [on("images-change", () => false)]);
     await flushPromises();
-    expect(pathqlView).not.toHaveBeenCalled();
-    await live().refetch();
-    release();
+    imagesChange("add");
     await flushPromises();
-    expect(pathqlView).toHaveBeenCalledTimes(1);
-    expect(results.map((s) => s.rows[0]!.id)).toEqual(["after-write"]);
+    expect(pathqlFetch).not.toHaveBeenCalled();
   });
 
-  it("未激活期间命中事件标脏，重新激活后补读", async () => {
-    pathqlView.mockResolvedValueOnce(rows(["fresh"], 2));
-    const { key, changes, results } = mountLive(ref<string | null>(null));
+  it("换 key 后旧路径的迟到结果与在途状态都不影响新观察，事件只刷新新路径", async () => {
+    const oldRead = deferred<Row[]>();
+    const newRead = deferred<Row[]>();
+    pathqlFetch.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise);
+    const { key, results, looker } = mountLooker(ref<string | null>("g/old"));
 
-    changes.next(2);
-    await flushPromises();
-    expect(pathqlView).not.toHaveBeenCalled();
-    key.value = "g/1";
+    const first = requestPathql("rows", "g/old");
+    expect(looker().loading.value).toBe(true);
+    key.value = "g/new";
     await nextTick();
-    await flushPromises();
-    expect(results.map((s) => s.rows[0]!.id)).toEqual(["fresh"]);
-  });
-
-  it("换路径后旧路径的迟到结果与在途状态都不影响新路径", async () => {
-    const oldRead = deferred<RowsSnapshot>();
-    const newRead = deferred<RowsSnapshot>();
-    pathqlView.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise);
-    const { key, results, live } = mountLive();
-
-    const first = live().refetch();
-    expect(live().loading.value).toBe(true);
-    key.value = "g/2";
-    expect(live().loading.value).toBe(false);
-    const second = live().refetch();
-    expect(live().loading.value).toBe(true);
-    oldRead.resolve(rows(["old"], 8));
+    expect(looker().loading.value).toBe(false);
+    const second = requestPathql("rows", "g/new");
+    expect(looker().loading.value).toBe(true);
+    oldRead.resolve(rows("old"));
     await first;
     expect(results).toEqual([]);
-    newRead.resolve(rows(["new"], 5));
+    newRead.resolve(rows("new"));
     await second;
-    expect(results.map((s) => s.rows[0]!.id)).toEqual(["new"]);
-    expect(live().loading.value).toBe(false);
+    expect(results.map(ids)).toEqual([["new"]]);
+    expect(looker().loading.value).toBe(false);
+
+    pathqlFetch.mockResolvedValueOnce(rows("new-2"));
+    imagesChange("add");
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenLastCalledWith("g/new");
+    expect(results.map(ids)).toEqual([["new"], ["new-2"]]);
   });
 });

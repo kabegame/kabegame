@@ -1,8 +1,10 @@
 export { kbEvent$, type KbEvent } from "./eventSource";
 export { batchWindow } from "./batchWindow";
+export { GRID_REFRESH_WAIT_MS, PATHQL_REFRESH_WAIT_MS } from "./constants";
+export { imagePatches$, reduceImageChanged, reduceFavoriteChanges, type ImagePatchBatch } from "./imagePatches";
 export {
   on,
-  triggerSeq$,
+  triggers$,
   albumChangeKinds,
   type EventTrigger,
   type KbEventMap,
@@ -10,10 +12,11 @@ export {
 } from "./events";
 export {
   requestPathql,
-  pathqlData$,
-  pathqlLoading$,
+  lookPathql,
+  type LookerSignal,
   type PathqlKind,
-  type PathqlRequestOptions,
+  type PathqlRows,
+  type PathqlTotal,
   type SnapshotOf,
 } from "./pathqlSource";
-export { useLivePathql } from "./useLivePathql";
+export { usePathqlLooker } from "./usePathqlLooker";

@@ -1,7 +1,7 @@
-import { filter, map, merge, type Observable } from "rxjs";
+import { filter, merge, type Observable } from "rxjs";
 import type { ImageChangedPayload, ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-import { kbEvent$ } from "./eventSource";
+import { kbEvent$, type KbEvent } from "./eventSource";
 
 export type AlbumChangedPayload = {
   seq?: number;
@@ -30,15 +30,10 @@ export function on<K extends keyof KbEventMap>(
   return { event, relevant: relevant as (payload: unknown) => boolean };
 }
 
-/** 把若干单事件触发合成一条「相关变更序号」流，供请求服务的事件通道使用。 */
-export function triggerSeq$(triggers: readonly EventTrigger[]): Observable<number> {
+/** 把若干单事件触发合成一条相关事件流，作为刷新信号。 */
+export function triggers$(triggers: readonly EventTrigger[]): Observable<KbEvent> {
   return merge(
-    ...triggers.map((trigger) =>
-      kbEvent$(trigger.event).pipe(
-        filter((event) => trigger.relevant(event.payload)),
-        map((event) => event.seq),
-      ),
-    ),
+    ...triggers.map((trigger) => kbEvent$(trigger.event).pipe(filter((event) => trigger.relevant(event.payload)))),
   );
 }
 

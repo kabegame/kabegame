@@ -26,7 +26,7 @@ export interface GridRefreshContext {
    * 当前壁纸清理与页码越界回退。返回本次刷新被移除的 id。
    */
   refreshPage: () => Promise<{ removedIds: string[] }>;
-  /** 影响结果集的写操作唯一入口：写完立即补读当前行与总数，不等事件防抖。 */
+  /** 改变结果集的操作入口：完成后直接请求当前行与总数，不等事件防抖。 */
   mutate: <T>(op: () => Promise<T>) => Promise<T>;
   /** 仅修改展示字段，不重新查询视图。 */
   patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;

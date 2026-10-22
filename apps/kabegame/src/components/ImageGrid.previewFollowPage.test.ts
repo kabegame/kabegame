@@ -4,7 +4,7 @@ import { computed, nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImageGrid from "./ImageGrid.vue";
 import type { GridAdapter } from "@/components/imageGrid/types";
-import type { RowsSnapshot } from "@/services/liveQuery";
+import type { PathqlRows as RowsSnapshot } from "@/services/kbEvents";
 import { withPaged } from "@/utils/galleryPath";
 
 const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) => Promise<number | null>>());
@@ -44,24 +44,22 @@ vi.mock("@/services/pathql", () => ({
   pathqlList: vi.fn(),
   pathqlFetch: vi.fn(),
 }));
-vi.mock("@/services/liveQuery", () => ({ GRID_REFRESH_WAIT_MS: 500 }));
-vi.mock("@/services/kbEvents", () => ({
-  triggerSeq$: () => ({}),
-  useLivePathql: (opts: {
-    kind: "rows" | "total";
-    key: () => string | null;
-    onResult: (snapshot: RowsSnapshot) => Promise<void> | void;
-  }) => {
-    const isRows = opts.kind === "rows";
-    if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
-    return {
-      loading: isRows ? queryLoading : ref(false),
-      refetch: isRows ? refetch : totalRefetch,
-      hold: () => () => {},
-      key: opts.key,
-    };
-  },
-}));
+vi.mock("@/services/kbEvents", async () => {
+  const { NEVER } = await import("rxjs");
+  return {
+    GRID_REFRESH_WAIT_MS: 500,
+    triggers$: () => NEVER,
+    imagePatches$: () => NEVER,
+    on: (event: string) => ({ event, relevant: () => true }),
+    batchWindow: () => (source: unknown) => source,
+    usePathqlLooker: (opts: { kind: "rows" | "total"; onResult: (snapshot: RowsSnapshot) => Promise<void> | void }) => {
+      const isRows = opts.kind === "rows";
+      if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
+      return { loading: isRows ? queryLoading : ref(false) };
+    },
+    requestPathql: (kind: "rows" | "total") => (kind === "rows" ? refetch() : totalRefetch()),
+  };
+});
 vi.mock("@/composables/usePagedGallery", () => ({
   usePagedGallery: () => {
     const viewBody = computed(() => routeStore.computedPath);
@@ -87,7 +85,6 @@ vi.mock("@/composables/useImageMetadataCache", () => ({
   useProvideImageMetadataCache: () => ({ clearCache: vi.fn() }),
 }));
 vi.mock("@/composables/useImageOperations", () => ({ useImageOperations: () => ({}) }));
-vi.mock("@/services/dataChangeHub", () => ({ subscribeChanges: () => vi.fn() }));
 vi.mock("@/stores/galleryRoute", () => ({ useGalleryRouteStore: () => routeStore }));
 vi.mock("@/stores/settings", () => ({
   useSettingsStore: () => settings,

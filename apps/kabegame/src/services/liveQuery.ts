@@ -3,7 +3,7 @@ import { subscribeChanges, type ChangeBatch } from "@/services/dataChangeHub";
 import { sendDebugEvent } from "@/debugIngest"; // DEBUG-PERF
 const perf = (name: string, payload: unknown) => void sendDebugEvent(name, payload, { sessionId: "eventworker-perf" }); // DEBUG-PERF
 
-export const GRID_REFRESH_WAIT_MS = 500;
+export { GRID_REFRESH_WAIT_MS } from "./kbEvents/constants";
 
 export interface RowsSnapshot {
   rows: Record<string, unknown>[];
