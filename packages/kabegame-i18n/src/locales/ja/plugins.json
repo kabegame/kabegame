@@ -211,7 +211,6 @@
     "providerListLabel": "list 分岐",
     "providerListBranches": "{n} 件",
     "providerDefaultInjected": "アプリが注入したデフォルト provider（パッケージ内にファイルなし）",
-    "providerInstallFirst": "インストール後に閲覧できます",
     "noChangelog": "このソースには更新履歴がありません",
     "noConfigVars": "このソースには設定項目がありません",
     "noProviders": "このソースは PathQL provider を提供していません",

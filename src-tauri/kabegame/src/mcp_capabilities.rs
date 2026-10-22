@@ -136,6 +136,7 @@ mcp_capabilities! {
             PLUGIN_READ_CHANGELOG => "changelog",
             PLUGIN_READ_ASSET => "asset",
             PLUGIN_READ_PROVIDER => "provider",
+            PLUGIN_READ_RECOMMENDED => "recommended",
         }
     }
 }
@@ -185,17 +186,92 @@ fn read_collection_capability_id(
     }
 }
 
+/// 去掉来源坐标，供权限判定和资源内容解包共用；id 层也返回插件 lite 行。
+pub fn plugin_resource_subpath<'a>(segments: &'a [&'a str]) -> Option<&'a [&'a str]> {
+    let entry = match segments {
+        ["installed", entry @ ..] => entry,
+        ["byStore" | "byPreview", _source, entry @ ..] => entry,
+        _ => return None,
+    };
+    match entry {
+        [_id] => Some(&entry[1..]),
+        [_id, _version, rest @ ..] => Some(rest),
+        _ => None,
+    }
+}
+
 fn read_plugin_capability_id(segments: &[&str]) -> Option<&'static str> {
     match segments {
-        [] => Some(ids::PLUGIN_READ_LIST),
-        [_id] => Some(ids::PLUGIN_READ_INFO),
-        [_id, "icon"] => Some(ids::PLUGIN_READ_ICON),
-        [_id, "description_template"] => Some(ids::PLUGIN_READ_DESCRIPTION_TEMPLATE),
-        [_id, "doc"] => Some(ids::PLUGIN_READ_DOC),
-        [_id, "changelog"] => Some(ids::PLUGIN_READ_CHANGELOG),
-        [_id, "asset", ..] => Some(ids::PLUGIN_READ_ASSET),
-        [_id, "provider", ..] => Some(ids::PLUGIN_READ_PROVIDER),
+        [] | ["installed" | "byStore" | "byPreview"] | ["byStore" | "byPreview", _] => {
+            return Some(ids::PLUGIN_READ_LIST)
+        }
+        _ => {}
+    }
+    match plugin_resource_subpath(segments)? {
+        [] => Some(ids::PLUGIN_READ_INFO),
+        ["icon"] => Some(ids::PLUGIN_READ_ICON),
+        ["description_template"] => Some(ids::PLUGIN_READ_DESCRIPTION_TEMPLATE),
+        ["doc"] => Some(ids::PLUGIN_READ_DOC),
+        ["changelog"] => Some(ids::PLUGIN_READ_CHANGELOG),
+        ["asset", ..] => Some(ids::PLUGIN_READ_ASSET),
+        ["provider", ..] => Some(ids::PLUGIN_READ_PROVIDER),
+        ["recommended"] | ["recommended", _] => Some(ids::PLUGIN_READ_RECOMMENDED),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod plugin_resource_tests {
+    use super::*;
+
+    #[test]
+    fn plugin_resource_capabilities_follow_origin_coordinates() {
+        for base in [
+            vec!["installed"],
+            vec!["byStore", "source"],
+            vec!["byPreview", "token"],
+        ] {
+            let mut path = base;
+            path.extend(["plugin-id", "1.2.3"]);
+            assert_eq!(
+                read_capability_id("plugin", &path),
+                Some(ids::PLUGIN_READ_INFO)
+            );
+            for (resource, capability) in [
+                ("icon", ids::PLUGIN_READ_ICON),
+                ("doc", ids::PLUGIN_READ_DOC),
+                ("changelog", ids::PLUGIN_READ_CHANGELOG),
+                (
+                    "description_template",
+                    ids::PLUGIN_READ_DESCRIPTION_TEMPLATE,
+                ),
+                ("asset", ids::PLUGIN_READ_ASSET),
+                ("provider", ids::PLUGIN_READ_PROVIDER),
+                ("recommended", ids::PLUGIN_READ_RECOMMENDED),
+            ] {
+                path.push(resource);
+                assert_eq!(read_capability_id("plugin", &path), Some(capability));
+                if resource == "recommended" {
+                    path.push("configs/default.json");
+                    assert_eq!(
+                        plugin_resource_subpath(&path),
+                        Some(&path[path.len() - 2..])
+                    );
+                    assert_eq!(read_capability_id("plugin", &path), Some(capability));
+                    path.pop();
+                }
+                path.pop();
+            }
+        }
+        assert_eq!(
+            read_capability_id("plugin", &[]),
+            Some(ids::PLUGIN_READ_LIST)
+        );
+        assert_eq!(
+            read_capability_id("plugin", &["installed"]),
+            Some(ids::PLUGIN_READ_LIST)
+        );
+        assert_eq!(read_capability_id("plugin", &["old-id", "doc"]), None);
     }
 }
 

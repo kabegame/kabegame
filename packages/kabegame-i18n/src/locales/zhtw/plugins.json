@@ -211,7 +211,6 @@
     "providerListLabel": "list 分支",
     "providerListBranches": "{n} 條",
     "providerDefaultInjected": "應用注入的預設 provider，包內無對應檔案",
-    "providerInstallFirst": "安裝後可查看",
     "noChangelog": "此源暫無更新記錄",
     "noConfigVars": "此源沒有配置項",
     "noProviders": "此源未貢獻 PathQL Provider",

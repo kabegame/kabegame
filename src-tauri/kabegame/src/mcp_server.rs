@@ -1,7 +1,7 @@
-//! MCP 的 `plugin://{id}/asset/{path}` 中，path 是归一化后的插件根相对路径；
+//! MCP 的 `plugin://installed/{pluginId}/{version}/asset/{path}` 中，path 是归一化后的插件根相对路径；
 //! 资源来自 `kbAssets`，由文档与更新日志共用。
-//! `plugin://{id}/provider` 列出插件贡献的 PathQL provider；
-//! `plugin://{id}/provider/{name}` 返回完整定义及其 DSL 源文。
+//! `plugin://installed/{pluginId}/{version}/provider` 列出插件贡献的 PathQL provider；
+//! `plugin://installed/{pluginId}/{version}/provider/{name}` 返回完整定义及其 DSL 源文。
 
 use kabegame_core::{
     emitter::GlobalEmitter,
@@ -25,8 +25,8 @@ use rmcp::{
 use serde_json::{json, Value};
 
 use crate::mcp_capabilities::{
-    all_mcp_capabilities, capability_for_tool, is_capability_enabled, read_capability_id,
-    McpCapabilityKind,
+    all_mcp_capabilities, capability_for_tool, is_capability_enabled, plugin_resource_subpath,
+    read_capability_id, McpCapabilityKind,
 };
 
 const MCP_INSTRUCTIONS: &str = r#"Kabegame read resources form a LAZY TREE. resources/list does NOT enumerate the
@@ -96,15 +96,19 @@ Other read schemes:
     next page, put before_{startTime}_{id}/ (taken from the last row) ahead of x20x/1.
   surf_records://all                     all SurfRecords (Vec<SurfRecord>)
   surf_records://id_{id}                 one SurfRecord
-  plugin://                              all Plugins, trimmed
-  plugin://{id}                          one Plugin, trimmed
-  plugin://{id}/icon                     base64 PNG blob
-  plugin://{id}/description_template     EJS template
-  plugin://{id}/doc                      default-locale doc.md
-  plugin://{id}/changelog                default-locale CHANGELOG.md
-  plugin://{id}/asset/{path}             one plugin asset, MIME by extension
-  plugin://{id}/provider                 list of PathQL providers this plugin contributes
-  plugin://{id}/provider/{name}          one provider def + its DSL source
+  plugin://                              all installed Plugins, trimmed
+  plugin://byStore/{sourceId}/{pluginId}/{version}/…  cached store package, same sub-resources
+  plugin://byPreview/{token}/{pluginId}/{version}/…   preview package, resolve only (not listed)
+  plugin://installed/{pluginId}/{version}                          one Plugin, trimmed
+  plugin://installed/{pluginId}/{version}/icon                     base64 PNG blob
+  plugin://installed/{pluginId}/{version}/description_template     EJS template
+  plugin://installed/{pluginId}/{version}/doc                      default-locale doc.md
+  plugin://installed/{pluginId}/{version}/changelog                default-locale CHANGELOG.md
+  plugin://installed/{pluginId}/{version}/asset/{path}             one plugin asset, MIME by extension
+  plugin://installed/{pluginId}/{version}/recommended              recommended config rows with isImported
+  plugin://installed/{pluginId}/{version}/recommended/{path}       one recommended config (encode path as one segment)
+  plugin://installed/{pluginId}/{version}/provider                 list of PathQL providers this plugin contributes
+  plugin://installed/{pluginId}/{version}/provider/{name}          one provider def + its DSL source
 
 For asset, path is the normalized plugin-root-relative path declared in kbAssets. Documentation
 and changelogs share these entries. "Trimmed" plugin JSON has assets, iconPngBase64, and
@@ -514,9 +518,9 @@ impl ServerHandler for KabegameMcpServer {
             }
             "plugin" => {
                 let rows = fetch_resource_rows(&runtime_uri).await?;
-                match segments.as_slice() {
-                    [] => json_value_resource(Value::Array(rows), request.uri),
-                    [_plugin_id] => {
+                match plugin_resource_subpath(segments.as_slice()) {
+                    None => json_value_resource(Value::Array(rows), request.uri),
+                    Some([]) => {
                         let value = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
                                 "plugin_not_found",
@@ -525,7 +529,7 @@ impl ServerHandler for KabegameMcpServer {
                         })?;
                         json_value_resource(value, request.uri)
                     }
-                    [_plugin_id, "icon"] => {
+                    Some(["icon"]) => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
                                 "no_icon",
@@ -548,7 +552,7 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type("image/png")])
                         .into())
                     }
-                    [_plugin_id, "description_template"] => {
+                    Some(["description_template"]) => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
                                 "no_description_template",
@@ -571,7 +575,7 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type("text/plain")])
                         .into())
                     }
-                    [_plugin_id, "doc"] => {
+                    Some(["doc"]) => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
                                 "no_plugin_doc",
@@ -591,7 +595,7 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type("text/markdown")])
                         .into())
                     }
-                    [_plugin_id, "changelog"] => {
+                    Some(["changelog"]) => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
                                 "no_plugin_changelog",
@@ -614,7 +618,7 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type("text/markdown")])
                         .into())
                     }
-                    [_plugin_id, "asset", _path] => {
+                    Some(["asset", _path]) => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
                                 "asset_not_found",
@@ -641,15 +645,15 @@ impl ServerHandler for KabegameMcpServer {
                         .with_mime_type(mime)])
                         .into())
                     }
-                    [_plugin_id, "provider"] => {
+                    Some(["provider"] | ["recommended"]) => {
                         let value = serde_json::to_value(rows)
                             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                         json_value_resource(value, request.uri)
                     }
-                    [_plugin_id, "provider", _name] => {
+                    Some(["provider", _name] | ["recommended", _name]) => {
                         let row = rows.into_iter().next().ok_or_else(|| {
                             McpError::resource_not_found(
-                                "provider_not_found",
+                                "plugin_resource_not_found",
                                 Some(json!({ "uri": request.uri })),
                             )
                         })?;
@@ -764,7 +768,7 @@ impl ServerHandler for KabegameMcpServer {
                 ),
                 (
                     "plugin.read.info",
-                    ResourceTemplate::new("plugin://{pluginId}", "Plugin info (trimmed)")
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}", "Plugin info (trimmed)")
                         .with_description(
                             "Plugin metadata without assets/iconPngBase64/descriptionTemplate. \
                              Fetch those via sub-path resources on demand.",
@@ -773,13 +777,13 @@ impl ServerHandler for KabegameMcpServer {
                 ),
                 (
                     "plugin.read.doc",
-                    ResourceTemplate::new("plugin://{pluginId}/doc", "Plugin documentation")
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}/doc", "Plugin documentation")
                         .with_description("Plugin doc.md content in Markdown (default locale).")
                         .with_mime_type("text/markdown"),
                 ),
                 (
                     "plugin.read.changelog",
-                    ResourceTemplate::new("plugin://{pluginId}/changelog", "Plugin changelog")
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}/changelog", "Plugin changelog")
                         .with_description(
                             "Plugin CHANGELOG.md content in Markdown (default locale).",
                         )
@@ -787,14 +791,14 @@ impl ServerHandler for KabegameMcpServer {
                 ),
                 (
                     "plugin.read.icon",
-                    ResourceTemplate::new("plugin://{pluginId}/icon", "Plugin icon")
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}/icon", "Plugin icon")
                         .with_description("Plugin icon as base64-encoded PNG.")
                         .with_mime_type("image/png"),
                 ),
                 (
                     "plugin.read.description_template",
                     ResourceTemplate::new(
-                        "plugin://{pluginId}/description_template",
+                        "plugin://installed/{pluginId}/{version}/description_template",
                         "Plugin description template",
                     )
                     .with_description("EJS template used to render plugin descriptions.")
@@ -802,7 +806,7 @@ impl ServerHandler for KabegameMcpServer {
                 ),
                 (
                     "plugin.read.asset",
-                    ResourceTemplate::new("plugin://{pluginId}/asset/{assetPath}", "Plugin asset")
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}/asset/{assetPath}", "Plugin asset")
                         .with_description(
                         "A single asset. assetPath is the normalized plugin-root-relative path \
                          declared in kbAssets; documentation and changelogs share these entries. \
@@ -810,9 +814,21 @@ impl ServerHandler for KabegameMcpServer {
                     ),
                 ),
                 (
+                    "plugin.read.recommended",
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}/recommended", "Plugin recommended configs")
+                        .with_description("Recommended config rows in manifest order, including current isImported state.")
+                        .with_mime_type("application/json"),
+                ),
+                (
+                    "plugin.read.recommended",
+                    ResourceTemplate::new("plugin://installed/{pluginId}/{version}/recommended/{path}", "Plugin recommended config")
+                        .with_description("One recommended config; encode the full manifest-relative path as one segment, as for asset.")
+                        .with_mime_type("application/json"),
+                ),
+                (
                     "plugin.read.provider",
                     ResourceTemplate::new(
-                        "plugin://{pluginId}/provider",
+                        "plugin://installed/{pluginId}/{version}/provider",
                         "Plugin PathQL providers",
                     )
                     .with_description(
@@ -824,7 +840,7 @@ impl ServerHandler for KabegameMcpServer {
                 (
                     "plugin.read.provider",
                     ResourceTemplate::new(
-                        "plugin://{pluginId}/provider/{name}",
+                        "plugin://installed/{pluginId}/{version}/provider/{name}",
                         "Plugin PathQL provider detail",
                     )
                     .with_description(
@@ -1265,8 +1281,8 @@ mod tests {
     #[test]
     fn resource_segments_split_after_scheme() {
         assert_eq!(
-            resource_segments("plugin://pixiv/asset/readme.png"),
-            vec!["pixiv", "asset", "readme.png"]
+            resource_segments("plugin://installed/pixiv/1.0.0/asset/readme.png"),
+            vec!["installed", "pixiv", "1.0.0", "asset", "readme.png"]
         );
         assert!(resource_segments("plugin://").is_empty());
     }
@@ -1274,13 +1290,28 @@ mod tests {
     #[test]
     fn resource_segments_only_split_unescaped_slashes() {
         assert_eq!(
-            resource_segments(r"plugin://a\/b/asset/readme.png"),
-            vec![r"a\/b", "asset", "readme.png"]
+            resource_segments(r"plugin://installed/a\/b/1.0.0/asset/readme.png"),
+            vec!["installed", r"a\/b", "1.0.0", "asset", "readme.png"]
         );
         assert_eq!(
-            resource_segments(&normalize_mcp_uri_path("plugin://a%2Fb")),
-            vec!["a", "b"]
+            resource_segments(&normalize_mcp_uri_path("plugin://installed/a%2Fb/1.0.0")),
+            vec!["installed", "a", "b", "1.0.0"]
         );
+    }
+
+    #[test]
+    fn plugin_resource_recommended_file_uses_asset_path_encoding() {
+        for origin in ["installed", "byStore/source", "byPreview/token"] {
+            let base = format!("plugin://{origin}/test/1/recommended");
+            let uri = child_runtime_path(&base, "configs/a b.json");
+            assert!(uri.ends_with("configs%5C%2Fa%20b.json"));
+            let normalized = normalize_mcp_uri_path(&uri);
+            let segments = resource_segments(&normalized);
+            assert_eq!(
+                super::plugin_resource_subpath(&segments),
+                Some(["recommended", r"configs\/a b.json"].as_slice())
+            );
+        }
     }
 
     #[test]

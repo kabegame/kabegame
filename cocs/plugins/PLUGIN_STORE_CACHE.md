@@ -87,7 +87,7 @@
 - **启动加载与刷新**：App 在已安装插件加载后调用一次 `startRefreshPlugins()`。store 先通过 `ensureSources()` / `ensureStorePlugins(sourceId)` 从后端 SQLite index 缓存恢复各源列表与导航角标，再用 `revalidateInBackground(sourceId, { force: true })` 静默强制刷新所有源；全平台（含 Web）一致，且不改 `loadingBySource`，启动刷新期间进入插件页不会闪骨架屏。
 - **周期与 tab 兜底**：启动强制刷新完成后，store 每 4h 对当时存在的所有源静默强制刷新一次；进入商店 tab 仍调用 `revalidateInBackground`，由后端按 `updated_at` 与 4h 阈值决定是否走网络。周期刷新必须强制，避免首次网络写入时间晚于定时器起点而使 4h 首轮被 stale 判断跳过。
 - **保存**：数据存在 Pinia store，跨路由存活。App 没有 keep-alive，`PluginBrowser` 从详情返回会重挂载，但直接复用 store，不重拉列表与图标、不闪骨架屏。
-- **installedVersion 现算**：store 只存后端原始列表，`pluginsBySource` 在读取时按 `usePluginStore().visiblePlugins` 叠加 `installedVersion`。安装 / 更新 / 删除插件由 `plugin-added/updated/deleted` 驱动 `pluginStore`，商店卡片自动跟随，无需重拉商店。
+- **installedVersion 现算**：store 只存后端原始列表，`pluginsBySource` 在读取时按 `usePluginStore().visiblePlugins` 叠加 `installedVersion`。安装 / 更新 / 删除插件由 `plugin-added` / `plugin-changed` / `plugin-deleted` 驱动 `pluginStore`，商店卡片自动跟随，无需重拉商店。
 - **可更新唯一判据**：`isStoreUpdateAvailable` 同时要求商店版本高于已安装版本且 `minAppIncompatible` 不为真；`updatableInstalledIds` 按插件 id 去重。桌面侧栏、紧凑端底部 tab 的数字角标，插件页各商店源 tab 的数字角标（只计该源条目），商店卡片红点和商店条目快捷预览统一读这套结果，不兼容的新版本不会提示更新。已安装 tab 的卡片与快捷预览不提示更新：从那里点进去的是本地插件详情，不能执行更新，入口只在商店源。角标统一用组件库的 `v-corner-badge`（与 `el-badge` 同外观）。
 - **安装守卫**：前端详情按钮继续按 `minAppIncompatible` 禁用；后端共同入口 `install_plugin_from_kgpg` 在复制前复用 `check_min_app_version` 校验完整解析所得 `min_app_version`，因此商店安装、文件导入和拖入导入都不能绕过最低应用版本要求。
 - **事件刷新**：store 首次使用时注册一次 `plugin-sources-changed` → `loadSources()`。后端在 storage 层 `add_source` / `update_source` / `delete_source` 写库后（释放锁后）以 `reason: added|updated|deleted` + `sourceId` 广播；官方源名 i18n 同步也发同名事件。自身写操作完成后页面直接 `loadSources()`，不依赖事件回刷；重复刷新幂等。
@@ -125,3 +125,18 @@
 
 - **优点**：与实现一一对应，区分 DB 索引缓存与磁盘包缓存，并写明 `preview_store_install` 分支。
 - **可维护性**：后续若增加「刷新时清空 store-cache」或 SHA256 校验策略，只需更新本文档与对应小节。
+
+## 运行配置写入与本地推荐导入态
+
+运行配置 add / copy 比较新配置插件，update 比较新旧插件，delete 比较旧插件的推荐导入态；
+只读已安装包与同 id 且包文件仍在本地的 `store_plugin_cache` 条目，不下载。写库提交后按 pluginId 合并，
+每个插件最多发送一条 `plugin-changed { pluginId, changes: { recommendedConfigs: { <path>: { imported } } } }`，
+仅包含导入态实际变化的路径；同一路径优先采用已安装插件的新状态，没有该状态时采用变化来源的新状态。
+事件经既有 `GlobalEmitter::hold()` 与 `auto-config-change` 同批放行；只改名称、计划时间等不影响匹配的字段不发插件事件。
+覆盖安装（升级或同版本重装）也发 `plugin-changed`，`changes` 是必含 `version` 的完整插件 JSON；首次安装与卸载仍用 `plugin-added` / `plugin-deleted`。
+
+商店来源按各自本地包内容独立计算，即使与已安装版本不同也参与路径变化检测；预览不在比较范围。
+导入态 patch 不触发插件 store 的列表、详情缓存更新（只有含 `version` 的完整覆盖安装 patch 才应用）。
+推荐卡片通过 `useRecommendedPresets` 观察 `plugin://byStore/<sourceId>/<id>/<version>/recommended`，
+同插件的 version / recommendedConfigs patch 驱动核心刷新；商店包只读本地缓存。预览使用 byPreview，
+已安装使用 installed；均共用来源基址和同一观察方。

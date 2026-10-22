@@ -869,7 +869,7 @@ const handleImport = async () => {
     ElMessage.success(t("plugins.importSuccess"));
     importDialog.close();
     selectedFilePath.value = null;
-    // plugin-added / plugin-updated 事件更新已安装列表；商店卡片的 installedVersion 由 market store 现算
+    // plugin-added / plugin-changed 事件更新已安装列表；商店卡片的 installedVersion 由 market store 现算
   } catch (error) {
     console.error("导入源失败:", error);
     ElMessage.error(error instanceof Error ? error.message : t("plugins.importFailed"));
@@ -901,7 +901,7 @@ const onDropFiles = async (plan: DragFilePlan) => {
   }
   if (successCount > 0) {
     ElMessage.success(t("import.importedPluginsCount", { count: successCount }));
-    // plugin-added / plugin-updated 事件会自动更新已安装列表；商店卡片的 installedVersion 由 market store 现算
+    // plugin-added / plugin-changed 事件会自动更新已安装列表；商店卡片的 installedVersion 由 market store 现算
     await pluginStore.refreshPlugins();
   }
 };

@@ -50,9 +50,23 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。
 
+**插件 PathQL 来源寻址**——`plugin://installed/<id>/<version>`、`plugin://byStore/<sourceId>/<id>/<version>`、
+`plugin://byPreview/<token>/<id>/<version>` 统一提供 `icon` / `description_template` / `doc` / `changelog` / `asset` / `provider` / `recommended`。
+根 fetch 保持已安装插件 lite 列表，根 list 只显示 `installed` / `byStore`；预览 token 不可列举。
+资源 provider 只保存 `PluginCoord`，每次读取经 `PluginManager::resolve_plugin_file` 重新解析，版本不符为空；
+商店来源只读本地 `store_plugin_cache`，任何子资源都不得下载或请求网络。各路径段单独编码，不保留旧的仅 id 路径。
+详见 `.cursor/rules/plugin-resources.mdc` 和 `cocs/mcp/MCP_SERVER.md`。
+
 **ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate(() => ...)`；写命令不带 `view`、不返回快照、照常广播事件，`mutate` 在操作完成后作为用户操作请求行与总数，结果仍从数据源落地。行与总数是 `services/kbEvents` pathql 核心上某个 key 的观察方（`usePathqlLooker`，行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批（分子与 adapter 可选分母在同一读快照中读取）），只看数据不发请求：观察方注册过滤器（adapter `refreshOn`，每条只对一种事件），核心对每个 key 用统一 500ms 窗口，窗口内任一过滤器同意就刷新一次并推给全部观察方。唯一请求入口是 `pathqlRequest$.next([kind, key])`，next 即返回、不等待；主动请求只有事件窗口与用户操作（路径变化、手动刷新、`mutate` 等）两条通路，前端不区分操作是否写入。每个 key 维护 pending 窗口：序号递增、可并行，任一请求返回即取消它之前的全部 pending；观察方看到最后可得的数据，`loading` / `error` 只属于最新请求，失败统一经观察方 `onError`。只改展示字段的操作走 `ctx.patch`；后端字段补丁经 `kbEvents` 的 `imagePatches$`（`image-changed` 与收藏画册的 `album-images-change` 各自防抖、各自合并成 `imageId → 字段`，只打到已在手的行与预览对象，不发请求）。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
 
-**运行配置写操作**——新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，携带当前累计窗口的可选 `view` 和活跃推荐文件引用；写后立即应用 `{ rows, seq }` 与推荐导入态，不依赖自身广播刷新。配置事件携带全局 `seq` 并经过 `dataChangeHub` / `liveQuery` 补位，总数独立维护；命令在写库前持有 `GlobalEmitter::hold()`，读完快照才放行事件。前端缓冲响应前到达的配置事件，落地快照后跳过已覆盖序号；失败也必须释放缓冲。详见 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`。
+**插件变更事件与推荐导入态**——事件统一为 `plugin-added` / `plugin-changed` / `plugin-deleted`。
+`plugin-changed` 使用 `{ pluginId, changes }`：覆盖安装传必含 `version` 的完整插件 JSON，推荐导入态只传
+`recommendedConfigs: { <path>: { imported } }`。运行配置 add / update / delete / copy 经 core 共享命令比较写前后状态，
+范围为受影响 id 的已安装包与本地有包的商店缓存，不触发下载；每次写入每插件最多一条，仅含变化路径，优先取已安装新状态。
+写库提交后事件经既有 `hold()` 与配置事件同批放行。插件 store 只合并含 version 的变更；推荐配置通过 `useRecommendedPresets` 观察来源版本路径的 `recommended` rows，
+只对同插件含 `version` 或 `recommendedConfigs` 的事件刷新，新 key 请求一次，失败保留已有内容。详见 `.cursor/rules/plugin-resources.mdc`。
+
+**运行配置写操作**——新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，携带当前累计窗口的可选 `view`；写后立即应用 `{ rows, seq }`，不依赖自身广播刷新。配置事件携带全局 `seq` 并经过 `dataChangeHub` / `liveQuery` 补位，总数独立维护；命令在写库前持有 `GlobalEmitter::hold()`，读完快照才放行事件。前端缓冲响应前到达的配置事件，落地快照后跳过已覆盖序号；失败也必须释放缓冲。详见 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`。
 
 **画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每层与 `~~/children` 都叠加 `search/<q>`，自身或子孙命中才保留）。树数据源 `TreeQuerySource` 只描述查询、解析与单事件 `refreshOn`，模型用 `usePathqlLookMany` 观察每个可见分支的已加载页，一页一个 `pathqlAllKey`，只经 `pathqlRequest$` 发请求。收起停止观察、保留句柄和数据，再展开重读；换 key 或读取失败保留上一份子项。侧栏隐藏停观察、恢复整组重读；高级查询的候选树在下拉面板里、事件过滤器为空，每次展开读一次、打开期间不随事件刷新，不另设纯净列表缓存。`expand` / `loadMore` / `refresh` 的 Promise 由模型自己的等待表完成，核心不提供请求并等待。
 

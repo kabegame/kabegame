@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment happy-dom
+import { flushPromises } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, ref } from "vue";
-import { registerRecommendedImportStates, recommendedConfigKey } from "./runConfigWrites";
 import type { Plugin } from "@/stores/plugins";
 import {
   useRecommendedPresets,
@@ -8,122 +9,156 @@ import {
   recommendedFacetCounts,
   type RecommendedPresetQuery,
 } from "./recommendedPresets";
-import { fetchRecommendedConfig } from "./pluginFiles";
+import { pluginResourceBase } from "./pluginFiles";
 
-const hooks = vi.hoisted(() => ({ handler: (() => {}) as (event: { seq: number }) => void, dispose: vi.fn() }));
-vi.mock("./runConfigWrites", () => ({
-  recommendedConfigKey: (plugin: Plugin, path: string) => JSON.stringify([plugin.id, plugin.version, path]),
-  registerRecommendedImportStates: vi.fn(() => vi.fn()),
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
+const pathqlFetch = vi.hoisted(() => vi.fn());
+vi.mock("@/api", () => ({
+  listen: vi.fn((event, handler) => {
+    listeners.set(event, handler);
+    return Promise.resolve(() => {
+      if (listeners.get(event) === handler) listeners.delete(event);
+    });
+  }),
 }));
-vi.mock("./pluginFiles", () => ({
-  recommendedConfigPaths: (plugin: Plugin) => plugin.packageJson?.kbRecommendedConfigs ?? [],
-  fetchRecommendedConfig: vi.fn(),
-}));
-vi.mock("@/services/runConfigs", () => ({
-  subscribeRunConfigEvents: (handler: (event: { seq: number }) => void) => {
-    hooks.handler = handler;
-    return hooks.dispose;
-  },
-}));
+vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlAll: vi.fn() }));
+vi.mock("@/services/albums", () => ({ FAVORITE_ALBUM_ID: "favorite" }));
 vi.mock("@/stores/plugins", () => ({ usePluginStore: () => ({ visiblePlugins: [] }) }));
 const plugin: Plugin = {
   id: "test",
   name: {},
   description: {},
   version: "1.0.0",
-  baseUrl: "",
+  baseUrl: "https://example.test",
   sizeBytes: 0,
   config: {},
   packageJson: { kbRecommendedConfigs: ["configs/a.json", "configs/b.json"] },
 };
 const preset = (filename: string, isImported = false) => ({ pluginId: "test", filename, name: filename, isImported });
-afterEach(() => {
-  vi.clearAllMocks();
+const rows = (isImported = false) =>
+  ["a", "b"].map((name) => ({ ...preset(`${name}.json`, isImported), path: `configs/${name}.json` }));
+const cleanups: (() => void)[] = [];
+function start(plugins = ref([plugin]), enabled = ref(true)) {
+  const scope = effectScope();
+  cleanups.push(() => scope.stop());
+  return scope.run(() => useRecommendedPresets(plugins, enabled))!;
+}
+function changed(pluginId: string, changes: Record<string, unknown>) {
+  listeners.get("plugin-changed")?.({ payload: { pluginId, changes } });
+}
+beforeEach(() => {
+  pathqlFetch.mockReset().mockResolvedValue(rows());
+});
+afterEach(async () => {
+  cleanups.splice(0).forEach((dispose) => dispose());
+  await flushPromises();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-describe("推荐配置渐进加载", () => {
-  it("只在启用时请求，先发布占位，乱序完成仍替换原位置", async () => {
-    const finish = new Map<string, (value: unknown) => void>();
-    vi.mocked(fetchRecommendedConfig).mockImplementation(
-      (_, path) => new Promise((resolve) => finish.set(path, resolve)),
+describe("推荐配置观察方", () => {
+  it("三种来源逐段编码，provider 与推荐共用来源基址", () => {
+    const p = { ...plugin, id: "a/b", version: "1 2" };
+    expect(pluginResourceBase(p)).toBe("plugin://installed/a%2Fb/1%202");
+    expect(pluginResourceBase({ ...p, fileOrigin: { kind: "store", sourceId: "s/a" } })).toBe(
+      "plugin://byStore/s%2Fa/a%2Fb/1%202",
     );
-    const scope = effectScope();
+    expect(pluginResourceBase({ ...p, fileOrigin: { kind: "preview", token: "t/a" } })).toBe(
+      "plugin://byPreview/t%2Fa/a%2Fb/1%202",
+    );
+  });
+  it("启用时先按声明顺序占位，每个来源只请求一次并按 path 落地", async () => {
+    let finish!: (value: unknown) => void;
+    pathqlFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const plugins = ref([plugin]);
     const enabled = ref(false);
-    const state = scope.run(() => useRecommendedPresets(ref([plugin]), enabled))!;
-    expect(state.entries.value.map((entry) => entry.preset)).toEqual([null, null]);
-    expect(fetchRecommendedConfig).not.toHaveBeenCalled();
+    const state = start(plugins, enabled);
+    expect(state.entries.value).toEqual([]);
+    expect(pathqlFetch).not.toHaveBeenCalled();
     enabled.value = true;
     await nextTick();
-    finish.get("configs/b.json")!(preset("b.json"));
+    expect(state.entries.value.map((e) => e.preset)).toEqual([null, null]);
+    expect(pathqlFetch).toHaveBeenCalledExactlyOnceWith("plugin://installed/test/1.0.0/recommended");
+    finish(rows().reverse());
+    await flushPromises();
+    expect(state.presets.value.map((p) => p.filename)).toEqual(["a.json", "b.json"]);
+    expect(state.presets.value[0].baseUrl).toBe(plugin.baseUrl);
+    plugins.value = [
+      plugin,
+      { ...plugin, fileOrigin: { kind: "store", sourceId: "s" } },
+      { ...plugin, fileOrigin: { kind: "preview", token: "t" } },
+    ];
+    await flushPromises();
+    expect(pathqlFetch.mock.calls.map(([key]) => key)).toEqual([
+      "plugin://installed/test/1.0.0/recommended",
+      "plugin://byStore/s/test/1.0.0/recommended",
+      "plugin://byPreview/t/test/1.0.0/recommended",
+    ]);
+    expect(new Set(state.entries.value.map((e) => e.key)).size).toBe(6);
+    enabled.value = false;
     await nextTick();
-    expect(state.entries.value.map((entry) => entry.preset?.filename ?? null)).toEqual([null, "b.json"]);
-    finish.get("configs/a.json")!(preset("a.json"));
-    await nextTick();
-    expect(state.presets.value.map((entry) => entry.filename)).toEqual(["a.json", "b.json"]);
-    scope.stop();
-    expect(hooks.dispose).toHaveBeenCalled();
-  });
-  it("配置事件防抖刷新 isImported，插件切换后丢弃旧结果", async () => {
-    vi.useFakeTimers();
-    const fetcher = vi.mocked(fetchRecommendedConfig);
-    fetcher.mockResolvedValue(preset("a.json", false));
-    const plugins = ref([{ ...plugin, packageJson: { kbRecommendedConfigs: ["configs/a.json"] } }]);
-    const scope = effectScope();
-    const state = scope.run(() => useRecommendedPresets(plugins))!;
-    await nextTick();
-    expect(state.presets.value[0].isImported).toBe(false);
-    fetcher.mockResolvedValue(preset("a.json", true));
-    hooks.handler({ seq: 10 });
-    hooks.handler({ seq: 10 });
-    await vi.advanceTimersByTimeAsync(200);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(state.presets.value[0].isImported).toBe(true);
-    let finish!: (value: unknown) => void;
-    fetcher.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    const refresh = state.refresh();
-    plugins.value = [];
-    await nextTick();
-    finish(preset("old.json"));
-    await refresh;
+    state.refresh();
+    changed("test", { version: "2" });
     expect(state.entries.value).toEqual([]);
-    scope.stop();
+    expect(pathqlFetch).toHaveBeenCalledTimes(3);
   });
-  it("主动导入态立即生效，晚到 HTTP 与同序号事件均不能覆盖或重复读取", async () => {
+  it("只对本插件的 version 或 recommendedConfigs 刷新，核心合并窗口", async () => {
     vi.useFakeTimers();
+    const state = start();
+    await flushPromises();
+    changed("other", { version: "2" });
+    changed("test", { name: "renamed" });
+    changed("test", {});
+    await vi.advanceTimersByTimeAsync(500);
+    expect(pathqlFetch).toHaveBeenCalledTimes(1);
+    pathqlFetch.mockResolvedValue(rows(true));
+    changed("test", { recommendedConfigs: { "configs/a.json": { imported: true } } });
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(2);
+    expect(state.presets.value[0].isImported).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    changed("test", { version: "1.0.0" });
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(3);
+  });
+  it("失败保留上一份内容，首次失败移除占位，刷新可恢复", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const state = start();
+    await flushPromises();
+    pathqlFetch.mockRejectedValue(new Error("read failed"));
+    state.refresh();
+    await flushPromises();
+    expect(state.presets.value.map((p) => p.filename)).toEqual(["a.json", "b.json"]);
+    const second = start(ref([{ ...plugin, version: "2" }]));
+    await flushPromises();
+    expect(second.entries.value).toEqual([]);
+    pathqlFetch.mockResolvedValue(rows());
+    second.refresh();
+    await flushPromises();
+    expect(second.presets.value).toHaveLength(2);
+  });
+  it("版本切换退订旧 key，晚到结果不覆盖新版本", async () => {
     let finish!: (value: unknown) => void;
-    vi.mocked(fetchRecommendedConfig).mockImplementation(
+    pathqlFetch.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           finish = resolve;
         }),
     );
-    const plugins = ref([{ ...plugin, packageJson: { kbRecommendedConfigs: ["configs/a.json"] } }]);
-    const scope = effectScope();
-    const state = scope.run(() => useRecommendedPresets(plugins))!;
-    const target = vi.mocked(registerRecommendedImportStates).mock.calls.at(-1)![0];
-    target.apply([{ key: recommendedConfigKey(plugin, "configs/a.json"), isImported: true }], 20);
-    finish(preset("a.json", false));
-    await nextTick();
-    expect(state.presets.value[0].isImported).toBe(true);
-    target.apply([{ key: recommendedConfigKey(plugin, "configs/a.json"), isImported: false }], 19);
-    expect(state.presets.value[0].isImported).toBe(true);
-    hooks.handler({ seq: 20 });
-    await vi.advanceTimersByTimeAsync(200);
-    expect(fetchRecommendedConfig).toHaveBeenCalledTimes(1);
-    // 外部变更补位期间保持已有卡片，不退回骨架。
-    hooks.handler({ seq: 21 });
-    await vi.advanceTimersByTimeAsync(200);
-    expect(state.presets.value[0].isImported).toBe(true);
-    finish(preset("a.json", false));
-    await nextTick();
+    const plugins = ref([plugin]);
+    const state = start(plugins);
+    plugins.value = [{ ...plugin, version: "2" }];
+    await flushPromises();
+    expect(pathqlFetch).toHaveBeenCalledTimes(2);
+    expect(state.entries.value.every((e) => e.key.startsWith("plugin://installed/test/2/recommended/"))).toBe(true);
+    finish(rows(true));
+    await flushPromises();
     expect(state.presets.value[0].isImported).toBe(false);
-    scope.stop();
   });
   it("过滤与 facet 都使用宿主返回的导入态", () => {
     const presets = [preset("a.json", false), preset("b.json", true)].map((item) => ({

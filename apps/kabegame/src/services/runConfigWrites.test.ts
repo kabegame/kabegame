@@ -4,7 +4,7 @@ import { defineComponent, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@/api";
 import { subscribeChanges } from "./dataChangeHub";
-import { registerRunConfigView, registerRecommendedImportStates, writeRunConfig } from "./runConfigWrites";
+import { registerRunConfigView, writeRunConfig } from "./runConfigWrites";
 import { usePagedRunConfigs } from "@/composables/usePagedRunConfigs";
 import { pathqlView, pathqlCount } from "./pathql";
 
@@ -47,33 +47,36 @@ function result(seq: number) {
     seq,
     config: { id: "a" },
     view: { rows: [{ id: "replacement" }], seq },
-    recommended: [],
-    recommendedSeq: seq,
   };
 }
 
 describe("配置主动快照与事件补位", () => {
-  it("事件先到时缓冲，先应用快照和导入态，再发布本地结果；后续同序号事件去重", async () => {
+  it("事件先到时缓冲，先应用快照，再发布本地结果；后续同序号事件去重", async () => {
     const batch = vi.fn();
     cleanups.push(subscribeChanges({ waitMs: 0, filter: (b) => b.runConfigs.size > 0, onBatch: batch }));
     const apply = vi.fn();
-    const imported = vi.fn();
     cleanups.push(registerRunConfigView({ key: () => "run_configs://x20x/1", apply }));
-    cleanups.push(registerRecommendedImportStates({ requests: () => [], apply: imported }));
     const response = deferred<ReturnType<typeof result>>();
     vi.mocked(invoke).mockReturnValueOnce(response.promise);
     const writing = writeRunConfig("update_run_config", { config: { id: "a" } });
+    expect(invoke).toHaveBeenCalledWith("update_run_config", { config: { id: "a" }, view: "run_configs://x20x/1" });
     emit(100);
     expect(batch).not.toHaveBeenCalled();
     response.resolve(result(100));
     await writing;
     expect(apply).toHaveBeenCalledWith(result(100).view);
-    expect(imported).toHaveBeenCalledWith([], 100);
     expect(batch).toHaveBeenCalledTimes(1);
     expect(apply.mock.invocationCallOrder[0]).toBeLessThan(batch.mock.invocationCallOrder[0]);
-    expect(imported.mock.invocationCallOrder[0]).toBeLessThan(batch.mock.invocationCallOrder[0]);
     emit(100);
     expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it("没有活跃视图时仍消费对象中的单行或 null", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...result(105), view: null });
+    expect(await writeRunConfig("add_run_config", {})).toEqual({ id: "a" });
+    expect(invoke).toHaveBeenLastCalledWith("add_run_config", { view: null });
+    vi.mocked(invoke).mockResolvedValueOnce({ ...result(106), config: null, view: null });
+    expect(await writeRunConfig("delete_run_config", {})).toBeNull();
   });
 
   it("路径切换拒绝旧视图；写失败仍放行外部事件", async () => {

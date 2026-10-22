@@ -3,6 +3,7 @@ import { computed, ref, unref } from "vue";
 import { invoke, listen } from "../api";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
 import { invalidatePluginFiles } from "@/services/pluginFiles";
+import type { PluginChangedPayload } from "@/services/kbEvents/events";
 import type { PluginLabel } from "./pluginLabels";
 
 /** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
@@ -183,7 +184,12 @@ export const usePluginStore = defineStore("plugins", () => {
         }
       };
       await listen<{ plugin: Plugin }>("plugin-added", (event) => applyPlugin(event.payload?.plugin));
-      await listen<{ plugin: Plugin }>("plugin-updated", (event) => applyPlugin(event.payload?.plugin));
+      await listen<PluginChangedPayload>("plugin-changed", (event) => {
+        const { pluginId, changes } = event.payload ?? {};
+        if (!pluginId || changes?.version === undefined) return;
+        const previous = plugins.value.find((item) => item.id === pluginId);
+        applyPlugin({ ...previous, ...changes } as Plugin);
+      });
 
       await listen<{ pluginId: string }>("plugin-deleted", (event) => {
         const id = String(event.payload?.pluginId ?? "").trim();

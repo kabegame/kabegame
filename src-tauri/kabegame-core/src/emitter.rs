@@ -473,12 +473,13 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 插件更新/重装（同 ID 覆盖安装，完整 Plugin JSON）
-    pub fn emit_plugin_updated(&self, plugin: &serde_json::Value) {
-        let event = std::sync::Arc::new(AppEvent::PluginUpdated {
-            plugin: plugin.clone(),
+    /// 插件变更：完整插件或推荐配置导入态 patch，与配置事件受同一 hold 约束。
+    pub fn emit_plugin_changed(&self, plugin_id: &str, changes: serde_json::Value) {
+        let event = std::sync::Arc::new(AppEvent::PluginChanged {
+            plugin_id: plugin_id.to_string(),
+            changes,
         });
-        EventBroadcaster::global().broadcast(event);
+        dispatch_view_event(event);
     }
 
     /// 从存储读取任务并发送 `TaskChanged`，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
@@ -646,5 +647,5 @@ impl GlobalEmitter {
 
     pub fn emit_plugin_deleted(&self, _plugin_id: &str) {}
 
-    pub fn emit_plugin_updated(&self, _plugin: &serde_json::Value) {}
+    pub fn emit_plugin_changed(&self, _plugin_id: &str, _changes: serde_json::Value) {}
 }

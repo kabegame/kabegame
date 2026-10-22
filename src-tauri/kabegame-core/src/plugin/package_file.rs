@@ -1,7 +1,7 @@
 //! 插件文件的统一按需读取出口；HTTP 与 MCP 共用白名单和 ZIP 读取逻辑。
 use super::{assets::normalize_asset_path, Plugin, PluginManager, PluginScript, VarDefinition};
 use crate::plugin::var_canonical::canonical_user_config_for_compare;
-use crate::storage::{RunConfig, Storage};
+use crate::storage::RunConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{io::Read, path::Path, sync::Arc};
@@ -20,6 +20,28 @@ pub enum PluginFileOrigin {
 }
 
 impl PluginManager {
+    /// 导入态比较只读已安装记录和有本地包的商店缓存，不涉及预览或下载。
+    pub(crate) fn recommended_diff_plugins(&self, id: &str) -> Vec<(bool, Arc<Plugin>)> {
+        let mut plugins = Vec::new();
+        if let Some(plugin) = self.get(id) {
+            plugins.push((true, plugin));
+        }
+        let cache = self.store_plugin_cache.load();
+        let mut sources: Vec<_> = cache.keys().collect();
+        sources.sort();
+        for source in sources {
+            if let Some(plugin) = cache[source].get(id).filter(|plugin| {
+                plugin
+                    .file_path
+                    .as_deref()
+                    .is_some_and(|path| Path::new(path).is_file())
+            }) {
+                plugins.push((false, Arc::new(plugin.clone())));
+            }
+        }
+        plugins
+    }
+
     pub fn resolve_plugin_file(
         &self,
         id: &str,
@@ -47,6 +69,54 @@ impl PluginManager {
             }
         };
         (plugin.id == id && plugin.version == version).then_some(plugin)
+    }
+
+    /// 只枚举本地缓存的来源，不触发商店下载，也不公开预览凭据。
+    pub(crate) fn plugin_file_store_sources(&self) -> Vec<String> {
+        let mut sources: Vec<_> = self.store_plugin_cache.load().keys().cloned().collect();
+        sources.sort();
+        sources
+    }
+
+    pub(crate) fn plugin_file_ids(&self, origin: &PluginFileOrigin) -> Result<Vec<String>, String> {
+        let mut ids: Vec<_> = match origin {
+            PluginFileOrigin::Installed => self.get_all()?.iter().map(|p| p.id.clone()).collect(),
+            PluginFileOrigin::Store { source_id } => self
+                .store_plugin_cache
+                .load()
+                .get(source_id)
+                .map(|plugins| plugins.keys().cloned().collect())
+                .unwrap_or_default(),
+            PluginFileOrigin::Preview { .. } => Vec::new(),
+        };
+        ids.sort();
+        Ok(ids)
+    }
+
+    /// id 层尚未携带版本；只读来源元数据，资源读取仍须经 resolve_plugin_file 校验。
+    pub(crate) fn plugin_file_version(
+        &self,
+        id: &str,
+        origin: &PluginFileOrigin,
+    ) -> Option<String> {
+        match origin {
+            PluginFileOrigin::Installed => Some(self.get(id)?.version.clone()),
+            PluginFileOrigin::Store { source_id } => Some(
+                self.store_plugin_cache
+                    .load()
+                    .get(source_id)?
+                    .get(id)?
+                    .version
+                    .clone(),
+            ),
+            PluginFileOrigin::Preview { token } => self
+                .preview_plugins
+                .lock()
+                .ok()?
+                .iter()
+                .find(|(key, plugin)| key == token && plugin.id == id)
+                .map(|(_, plugin)| plugin.version.clone()),
+        }
     }
 
     pub async fn load_script(&self, plugin: &Plugin) -> Result<PluginScript, String> {
@@ -184,39 +254,72 @@ pub fn etag_for(plugin: &Plugin) -> Result<String, String> {
     ))
 }
 
-pub fn annotate_recommended_config(
-    plugin: &Plugin,
-    path: &str,
-    json: Value,
-) -> Result<Value, String> {
-    let configs = Storage::global().get_run_configs()?;
-    Ok(annotate_with_configs(plugin, path, json, &configs))
+/// 按清单顺序读取推荐文件；损坏或缺失的项跳过，两种导入态投影共用此出口。
+fn read_recommended_configs(plugin: &Plugin) -> Vec<(String, Value)> {
+    plugin
+        .package_json
+        .as_ref()
+        .and_then(|pkg| pkg.get("kbRecommendedConfigs"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|path| {
+            let result = read_plugin_text(plugin, path)
+                .and_then(|text| text.ok_or_else(|| "推荐文件不存在".to_string()))
+                .and_then(|text| serde_json::from_str(&text).map_err(|error| error.to_string()));
+            match result {
+                Ok(content) => Some((path.to_string(), content)),
+                Err(error) => {
+                    eprintln!("[WARN] 读取推荐配置 {}/{path} 失败: {error}", plugin.id);
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
-fn annotate_with_configs(plugin: &Plugin, path: &str, json: Value, configs: &[RunConfig]) -> Value {
-    let imported = configs.iter().any(|config| {
+fn recommended_is_imported(plugin: &Plugin, content: &Value, configs: &[RunConfig]) -> bool {
+    configs.iter().any(|config| {
         preset_content_matches(
             &plugin.id,
             &plugin.base_url,
             &plugin.var_defs,
-            &json,
+            content,
             config,
         )
-    });
-    let mut object = json.as_object().cloned().unwrap_or_default();
-    object.insert("pluginId".into(), Value::String(plugin.id.clone()));
-    object.insert(
-        "filename".into(),
-        Value::String(
-            Path::new(path)
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("")
-                .to_string(),
-        ),
-    );
-    object.insert("isImported".into(), Value::Bool(imported));
-    Value::Object(object)
+    })
+}
+
+pub fn recommended_import_states(plugin: &Plugin, configs: &[RunConfig]) -> Vec<(String, bool)> {
+    read_recommended_configs(plugin)
+        .into_iter()
+        .map(|(path, content)| (path, recommended_is_imported(plugin, &content, configs)))
+        .collect()
+}
+
+pub fn recommended_rows(plugin: &Plugin, configs: &[RunConfig]) -> Vec<Value> {
+    read_recommended_configs(plugin)
+        .into_iter()
+        .map(|(path, content)| {
+            let imported = recommended_is_imported(plugin, &content, configs);
+            let mut object = content.as_object().cloned().unwrap_or_default();
+            object.insert("pluginId".into(), Value::String(plugin.id.clone()));
+            object.insert(
+                "filename".into(),
+                Value::String(
+                    Path::new(&path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                ),
+            );
+            object.insert("path".into(), Value::String(path));
+            object.insert("isImported".into(), Value::Bool(imported));
+            Value::Object(object)
+        })
+        .collect()
 }
 pub(crate) fn preset_content_matches(
     plugin_id: &str,
@@ -321,6 +424,231 @@ mod tests {
         let header = crate::kgpg::build_kgpg3_header(None).unwrap();
         crate::kgpg::write_kgpg3_from_zip_bytes(&path, &header, &zip).unwrap();
         (dir, path)
+    }
+
+    // 复用本模块的包体夹具，覆盖真实 PathQL runtime 的前缀缓存行为。
+    #[test]
+    fn plugin_resource_origins_subresources_and_live_coordinates() {
+        use crate::providers::programmatic::plugin_resource::register_plugin_resource_provider;
+        use pathql_rs::provider::{
+            ClosureExecutor, ProviderContext, ProviderRuntime, ResolveRef, SqlDialect,
+        };
+
+        crate::app_paths::AppPaths::init_for_tests();
+        let _ = crate::storage::Storage::init_global();
+        PluginManager::init_global().unwrap();
+        let manager = PluginManager::global();
+        let mut installed = plugin();
+        let (_dir, path) = kgpg(&installed, &[]);
+        installed.file_path = Some(path.to_string_lossy().into_owned());
+        installed.icon_png_base64 = Some("installed-icon".into());
+        installed.providers = vec![super::super::PluginProviderDef {
+            source_path: "providers/entry.yaml".into(),
+            source: Some("installed DSL".into()),
+            def: serde_json::from_value(json!({
+                "name": "entry_provider", "namespace": "plugins.test-file"
+            }))
+            .unwrap(),
+        }];
+        let mut store = installed.clone();
+        store.icon_png_base64 = Some("store-icon".into());
+        store.providers[0].source = Some("cached store DSL".into());
+        let mut preview = installed.clone();
+        preview.icon_png_base64 = Some("preview-icon".into());
+        manager.plugins.store(Arc::new(Some(HashMap::from([(
+            installed.id.clone(),
+            Arc::new(installed.clone()),
+        )]))));
+        manager.store_plugin_cache.store(Arc::new(HashMap::from([(
+            "source".into(),
+            HashMap::from([(store.id.clone(), store.clone())]),
+        )])));
+        manager
+            .preview_plugins
+            .lock()
+            .unwrap()
+            .push_back(("secret".into(), Arc::new(preview)));
+
+        let runtime = ProviderRuntime::new(
+            Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_, _| {
+                panic!("插件资源不应执行 SQL")
+            })),
+            Default::default(),
+        );
+        register_plugin_resource_provider(&runtime).unwrap();
+        runtime
+            .register_programmatic_schema("plugin", "kabegame", "plugin_resource_root_provider")
+            .unwrap();
+        let names = |path: &str| -> Vec<String> {
+            runtime
+                .list(path)
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect()
+        };
+        assert_eq!(names("plugin://"), ["installed", "byStore"]);
+        assert_eq!(
+            runtime.fetch("plugin://").unwrap(),
+            runtime.fetch("plugin://installed").unwrap()
+        );
+        assert_eq!(names("plugin://byStore"), ["source"]);
+        assert_eq!(names("plugin://byStore/source"), ["test-file"]);
+        assert!(names("plugin://byPreview").is_empty());
+        assert!(names("plugin://byPreview/secret").is_empty());
+        assert!(runtime.resolve("plugin://test-file").is_err());
+
+        let ctx = ProviderContext::new(
+            Arc::new(pathql_rs::ProviderRegistry::new()),
+            runtime.clone(),
+        );
+        for (origin, icon) in [
+            ("installed", "installed-icon"),
+            ("byStore/source", "store-icon"),
+            ("byPreview/secret", "preview-icon"),
+        ] {
+            let id_path = format!("plugin://{origin}/test-file");
+            assert_eq!(names(&id_path), ["1.2.3"]);
+            let node = runtime.resolve(&id_path).unwrap();
+            assert!(matches!(
+                node.provider
+                    .unwrap()
+                    .resolve("wrong", &node.composed, &ctx),
+                ResolveRef::Terminal(None)
+            ));
+            let base = format!("{id_path}/1.2.3");
+            let rows = runtime.fetch(&base).unwrap();
+            assert_eq!(rows, runtime.fetch(&id_path).unwrap());
+            assert!(rows[0].get("iconPngBase64").is_none());
+            assert_eq!(
+                names(&base),
+                [
+                    "icon",
+                    "description_template",
+                    "doc",
+                    "changelog",
+                    "asset",
+                    "provider",
+                    "recommended"
+                ]
+            );
+            assert_eq!(
+                runtime.fetch(&format!("{base}/icon")).unwrap(),
+                vec![json!({"iconPngBase64": icon})]
+            );
+            assert!(runtime.fetch(&format!("{base}/doc")).unwrap()[0]["doc"]
+                .as_str()
+                .unwrap()
+                .starts_with("# Original"));
+            assert_eq!(
+                runtime.fetch(&format!("{base}/changelog")).unwrap()[0]["changelog"],
+                "# Changes"
+            );
+            assert_eq!(
+                runtime
+                    .fetch(&format!("{base}/description_template"))
+                    .unwrap()[0]["descriptionTemplate"],
+                "<%= metadata.title %>"
+            );
+            assert_eq!(names(&format!("{base}/asset")), ["images/a b.png"]);
+            // 含斜杠的资源键按 runtime 转义规则作为单段传入。
+            assert_eq!(
+                runtime
+                    .fetch(&format!("{base}/asset/images\\/a b.png"))
+                    .unwrap()[0]["dataBase64"],
+                "aW1hZ2U="
+            );
+            assert_eq!(
+                names(&format!("{base}/recommended")),
+                ["configs/default.json"]
+            );
+            let recommended = runtime.fetch(&format!("{base}/recommended")).unwrap();
+            assert_eq!(recommended.len(), 1);
+            assert_eq!(recommended[0]["path"], "configs/default.json");
+            assert_eq!(recommended[0]["pluginId"], "test-file");
+            assert!(recommended[0]["isImported"].is_boolean());
+            assert_eq!(
+                runtime
+                    .fetch(&format!("{base}/recommended/configs\\/default.json"))
+                    .unwrap(),
+                recommended
+            );
+            assert_eq!(names(&format!("{base}/provider")), ["entry_provider"]);
+            assert_eq!(
+                runtime.fetch(&format!("{base}/provider")).unwrap()[0]["name"],
+                "entry_provider"
+            );
+            assert!(runtime
+                .fetch(&format!("{base}/provider/entry_provider"))
+                .unwrap()[0]["def"]
+                .is_object());
+        }
+        assert_eq!(
+            runtime
+                .fetch("plugin://byStore/source/test-file/1.2.3/provider/entry_provider")
+                .unwrap()[0]["source"],
+            "cached store DSL"
+        );
+        assert!(runtime
+            .resolve("plugin://byStore/source/not-cached/1.2.3")
+            .is_err());
+        assert!(runtime
+            .resolve("plugin://byStore/missing/test-file/1.2.3")
+            .is_err());
+        assert!(runtime
+            .resolve("plugin://byPreview/wrong/test-file/1.2.3")
+            .is_err());
+        assert!(manager.store_download_states.lock().unwrap().is_empty());
+        assert_eq!(manager.store_plugin_cache.load()["source"].len(), 1);
+
+        // 同一个 runtime 和同一个路径已经被缓存，覆盖同版本后必须读到新 Plugin。
+        let resource = "plugin://installed/test-file/1.2.3";
+        installed.icon_png_base64 = Some("reinstalled-icon".into());
+        installed.providers[0].source = Some("reinstalled DSL".into());
+        manager.plugins.store(Arc::new(Some(HashMap::from([(
+            installed.id.clone(),
+            Arc::new(installed.clone()),
+        )]))));
+        assert_eq!(
+            runtime.fetch(&format!("{resource}/icon")).unwrap()[0]["iconPngBase64"],
+            "reinstalled-icon"
+        );
+        assert_eq!(
+            runtime
+                .fetch(&format!("{resource}/provider/entry_provider"))
+                .unwrap()[0]["source"],
+            "reinstalled DSL"
+        );
+        installed.version = "2.0.0".into();
+        manager.plugins.store(Arc::new(Some(HashMap::from([(
+            installed.id.clone(),
+            Arc::new(installed),
+        )]))));
+        assert!(runtime
+            .fetch(&format!("{resource}/icon"))
+            .unwrap()
+            .is_empty());
+        assert!(runtime
+            .fetch(&format!("{resource}/recommended"))
+            .unwrap()
+            .is_empty());
+        assert!(runtime
+            .fetch(&format!("{resource}/recommended/configs\\/default.json"))
+            .unwrap()
+            .is_empty());
+        assert!(names(&format!("{resource}/recommended")).is_empty());
+        assert!(names(resource).is_empty());
+        assert_eq!(names("plugin://installed/test-file"), ["2.0.0"]);
+        assert!(!runtime
+            .fetch("plugin://installed/test-file/2.0.0")
+            .unwrap()
+            .is_empty());
+        manager.plugins.store(Arc::new(Some(HashMap::new())));
+        assert!(runtime
+            .fetch("plugin://installed/test-file/2.0.0")
+            .unwrap()
+            .is_empty());
+        assert!(names("plugin://installed/test-file").is_empty());
     }
 
     #[test]
@@ -495,22 +823,89 @@ mod tests {
     }
 
     #[test]
-    fn package_file_annotates_imported_state_and_overrides_untrusted_identity() {
-        let plugin = plugin();
-        let config: RunConfig = serde_json::from_value(json!({
-            "id":"c", "name":"renamed", "pluginId":plugin.id, "url":"https://example.test", "createdAt":1
-        })).unwrap();
-        let mut plugin = plugin;
+    fn recommended_rows_and_import_states_share_content_and_skip_broken_files() {
+        let mut plugin = plugin();
         plugin.base_url = "https://example.test".into();
-        let raw = json!({"pluginId":"fake","filename":"fake.json","isImported":false});
-        let value = annotate_with_configs(&plugin, "configs/default.json", raw.clone(), &[config]);
-        assert_eq!(value["pluginId"], plugin.id);
-        assert_eq!(value["filename"], "default.json");
-        assert_eq!(value["isImported"], true);
+        plugin.package_json.as_mut().unwrap()["kbRecommendedConfigs"] = json!([
+            "configs/default.json",
+            "configs/second.json",
+            "broken.json",
+            "missing.json"
+        ]);
+        let (_dir, path) = kgpg(&plugin, &[
+            ("configs/second.json", br#"{"pluginId":"fake","filename":"fake","path":"fake","isImported":true,"url":"https://other.test"}"#),
+            ("broken.json", b"not json"),
+        ]);
+        plugin.file_path = Some(path.to_string_lossy().into_owned());
+        let config: RunConfig = serde_json::from_value(json!({
+            "id":"c", "name":"renamed", "pluginId":plugin.id,
+            "url":"https://example.test", "createdAt":1
+        }))
+        .unwrap();
+        let configs = [config];
+        let states = recommended_import_states(&plugin, &configs);
         assert_eq!(
-            annotate_with_configs(&plugin, "configs/default.json", raw, &[])["isImported"],
-            false
+            states,
+            vec![
+                ("configs/default.json".into(), true),
+                ("configs/second.json".into(), false)
+            ]
         );
+        let rows = recommended_rows(&plugin, &configs);
+        assert_eq!(rows.len(), 2);
+        for (row, (path, imported)) in rows.iter().zip(&states) {
+            assert_eq!(row["pluginId"], plugin.id);
+            assert_eq!(row["path"], *path);
+            assert_eq!(
+                row["filename"],
+                Path::new(path).file_name().unwrap().to_str().unwrap()
+            );
+            assert_eq!(row["isImported"], *imported);
+        }
+        assert_eq!(rows[1]["url"], "https://other.test");
+        assert!(recommended_import_states(&plugin, &[])
+            .iter()
+            .all(|(_, imported)| !imported));
+        assert!(recommended_rows(&plugin, &[])
+            .iter()
+            .all(|row| row["isImported"] == false));
+    }
+
+    #[test]
+    fn recommended_diff_scope_uses_installed_and_local_store_packages_only() {
+        let manager = PluginManager::new();
+        let mut installed = plugin();
+        let (_dir, path) = kgpg(&installed, &[]);
+        installed.file_path = Some(path.to_string_lossy().into_owned());
+        manager.plugins.store(Arc::new(Some(HashMap::from([(
+            installed.id.clone(),
+            Arc::new(installed.clone()),
+        )]))));
+        let mut missing = installed.clone();
+        missing.file_path = Some(
+            path.with_extension("missing")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        manager.store_plugin_cache.store(Arc::new(HashMap::from([
+            (
+                "local".into(),
+                HashMap::from([(installed.id.clone(), installed.clone())]),
+            ),
+            (
+                "missing".into(),
+                HashMap::from([(installed.id.clone(), missing)]),
+            ),
+        ])));
+        let scope = manager.recommended_diff_plugins(&installed.id);
+        assert_eq!(scope.len(), 2);
+        assert!(scope[0].0);
+        assert!(!scope[1].0);
+        assert!(manager.recommended_diff_plugins("uncached").is_empty());
+        manager.plugins.store(Arc::new(Some(HashMap::new())));
+        let scope = manager.recommended_diff_plugins(&installed.id);
+        assert_eq!(scope.len(), 1);
+        assert!(!scope[0].0);
     }
 
     #[test]

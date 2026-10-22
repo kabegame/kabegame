@@ -804,7 +804,7 @@ impl PluginManager {
         if let Some(emitter) = crate::emitter::GlobalEmitter::try_global() {
             if let Ok(payload) = serde_json::to_value(&plugin) {
                 if was_update {
-                    emitter.emit_plugin_updated(&payload);
+                    emitter.emit_plugin_changed(&plugin.id, payload);
                 } else {
                     emitter.emit_plugin_added(&payload);
                 }
@@ -820,7 +820,7 @@ impl PluginManager {
     }
 
     /// 从商店下载（若未缓存）并安装插件。
-    /// 通过 `install_plugin_from_kgpg` 自动发送 `plugin-added` / `plugin-updated` 事件。
+    /// 通过 `install_plugin_from_kgpg` 自动发送 `plugin-added` / `plugin-changed` 事件。
     pub async fn install_from_store(
         &self,
         source_id: &str,

@@ -82,25 +82,45 @@
 ### 运行配置写操作：主动同步结果，异步补位
 
 `crawlerStore` 的新增、导入、复制、编辑、定时开关与删除统一调用 `services/runConfigWrites.ts`。
-页面注册当前行视图，推荐列表注册活跃的推荐文件定位信息（插件 id、版本、来源、路径）。写命令携带
-可选 `view` 和 `recommended`；core 在写库前取得 `GlobalEmitter::hold()`，写后读取行快照和推荐导入态，
-读完才释放广播。Tauri / Web dispatch 只转发；旧 app IPC 不传这两个参数，仍返回单行或 null。
+页面注册当前行视图。写命令携带可选 `view`；core 在写库前取得 `GlobalEmitter::hold()`，
+写后读取行快照，读完才释放广播。Tauri / Web dispatch 只转发；共享命令始终返回对象，
+app IPC handler 自行取 `config` 字段保留旧单行载荷，删除保持无 data 的 null 响应。
 
-返回形状为 `{ configId, reason, config, seq, view, recommended, recommendedSeq }`：
-`view` 是 `{ rows, seq }`，`recommended` 只包含 `{ key, isImported }`，匹配规则复用
-`preset_content_matches`，不重复传输推荐正文。导入态快照先取序号再查配置，与行快照同样保守地覆盖事件。
+返回形状为 `{ configId, reason, config, seq, view }`，`view` 是 `{ rows, seq }` 或 null。
+推荐配置由下面的独立观察方读取，不再附在写响应中。
 
 前端按以下顺序完成自身操作：
 
 1. 发起命令前缓冲配置事件，处理广播早于 IPC 响应到达的情况；其它事件通道正常流转。
 2. 当前路径仍相同时应用行快照；列表、筛选和排序以该快照为准。路径切换后的旧响应不覆盖新页。
-3. 直接应用推荐导入态，并用序号拒绝旧结果；此前发出的 HTTP 响应不能覆盖新的主动导入态。
-4. 把返回行发布到 hub，详情和任务关联名直接消费；独立总数由 hub 驱动重读。
-5. 释放事件缓冲。同配置已覆盖的旧事件和同序号事件跳过；未覆盖的外部变更继续补位。命令失败也必须释放。
+3. 把返回行发布到 hub，详情和任务关联名直接消费；独立总数由 hub 驱动重读。
+4. 释放事件缓冲。同配置已覆盖的旧事件和同序号事件跳过；未覆盖的外部变更继续补位。命令失败也必须释放。
 
 列表行的 `liveQuery` 跳过 `maxSeq <= appliedSeq` 的批次；总数有自己的序号和生命周期。
-推荐页在外部变更后 200ms 防抖重读导入态，期间保留已有卡片；自身导入、编辑与删除不重拉整批推荐 JSON，
-不把卡片重置为骨架。插件列表、版本或来源变化时才重建推荐项。
+运行配置 add / copy 比较新配置插件，update 比较新旧插件，delete 比较旧插件的推荐导入态；
+只读已安装包与同 id 且包文件仍在本地的 `store_plugin_cache` 条目，不下载。写库提交后按 pluginId 合并，
+每个插件最多发送一条 `plugin-changed { pluginId, changes: { recommendedConfigs: { <path>: { imported } } } }`，
+仅包含导入态实际变化的路径；同一路径优先采用已安装插件的新状态，没有该状态时采用变化来源的新状态。
+事件经既有 `GlobalEmitter::hold()` 与 `auto-config-change` 同批放行；只改名称、计划时间等不影响匹配的字段不发插件事件。
+覆盖安装（升级或同版本重装）也发 `plugin-changed`，`changes` 是必含 `version` 的完整插件 JSON；首次安装与卸载仍用 `plugin-added` / `plugin-deleted`。
+
+### 推荐配置观察方
+
+`useRecommendedPresets` 共用于自动配置推荐 tab、插件详情与收集对话框的 `PluginConfigPanel`。
+通过共享 `pluginResourceBase` 生成已安装、byStore、byPreview 三种来源的版本路径，各段独立编码。
+每个声明了推荐文件的插件一个 `plugin://…/<id>/<version>/recommended` rows key，使用 `usePathqlLookMany` 观察。
+新 key 进入集合时经 `pathqlRequest$` 请求一次，手动 refresh 请求全部活跃 key；enabled=false 时没有 key。
+只接受同插件含 `version` 或 `recommendedConfigs` 的 `plugin-changed`，统一由核心 500ms 窗口刷新。
+只改计划时间不产生导入态事件，也不读取推荐行；升级后换 key、退订旧版本。
+
+后端 `recommended_rows` 按 kbRecommendedConfigs 声明顺序读取本地 JSON，共用匹配规则，
+由宿主覆盖 `pluginId`、basename `filename`、完整 `path` 与 `isImported`。
+匹配比较插件、URL、规范化变量、HTTP headers 和 dry-run，忽略名称、定时设置；坏文件跳过并 WARN。
+推荐目录 list 列出每个声明 path，单项 recommended/<path> 与 asset 使用相同的单段转义规则。
+provider 仅持坐标，每次现场解析，版本不符为空；商店只读缓存，不下载。
+
+前端先按清单顺序发布占位，收到行后按 path 替换；已有内容在刷新和失败时保留，首次失败移除占位。
+在途结果的新旧由 pathql 核心 pending 窗口判断，不维护推荐专用序号，也不依赖运行配置事件补位。
 
 ## 4. 涉及代码
 

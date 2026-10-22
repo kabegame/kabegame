@@ -579,15 +579,99 @@ pub fn delete_task_failed_image(failed_id: i64) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-/// 活跃推荐配置的定位信息；写操作只回传导入态，不重复传输正文。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecommendedConfigRequest {
-    pub key: String,
-    pub plugin_id: String,
-    pub version: String,
-    pub origin: Option<crate::plugin::PluginFileOrigin>,
-    pub path: String,
+struct RecommendedPluginState {
+    plugin_id: String,
+    installed: bool,
+    paths: BTreeMap<String, bool>,
+}
+
+struct RecommendedSnapshot {
+    plugins: Vec<(bool, std::sync::Arc<crate::plugin::Plugin>)>,
+    states: Vec<RecommendedPluginState>,
+}
+
+fn recommended_snapshot_states(
+    plugins: &[(bool, std::sync::Arc<crate::plugin::Plugin>)],
+    configs: &[RunConfig],
+) -> Vec<RecommendedPluginState> {
+    plugins
+        .iter()
+        .map(|(installed, plugin)| RecommendedPluginState {
+            plugin_id: plugin.id.clone(),
+            installed: *installed,
+            paths: crate::plugin::package_file::recommended_import_states(plugin, configs)
+                .into_iter()
+                .collect(),
+        })
+        .collect()
+}
+
+fn recommended_diff_scope(plugin_ids: Vec<String>) -> Result<RecommendedSnapshot, String> {
+    let ids: std::collections::BTreeSet<_> = plugin_ids.into_iter().collect();
+    let plugins: Vec<_> = ids
+        .iter()
+        .flat_map(|id| PluginManager::global().recommended_diff_plugins(id))
+        .collect();
+    let configs = Storage::global().get_run_configs()?;
+    let states = recommended_snapshot_states(&plugins, &configs);
+    Ok(RecommendedSnapshot { plugins, states })
+}
+
+/// 前后使用同一来源集合；先合并实际变化的路径，再优先取已安装插件的新状态。
+fn recommended_import_changes(
+    before: &[RecommendedPluginState],
+    after: &[RecommendedPluginState],
+) -> BTreeMap<String, Value> {
+    let mut changed: BTreeMap<String, BTreeMap<String, bool>> = BTreeMap::new();
+    for (old, new) in before.iter().zip(after) {
+        for (path, imported) in &new.paths {
+            if old
+                .paths
+                .get(path)
+                .is_some_and(|previous| previous != imported)
+            {
+                changed
+                    .entry(new.plugin_id.clone())
+                    .or_default()
+                    .entry(path.clone())
+                    .or_insert(*imported);
+            }
+        }
+    }
+    for installed in after.iter().filter(|state| state.installed) {
+        if let Some(paths) = changed.get_mut(&installed.plugin_id) {
+            for (path, imported) in paths {
+                if let Some(value) = installed.paths.get(path) {
+                    *imported = *value;
+                }
+            }
+        }
+    }
+    changed
+        .into_iter()
+        .map(|(id, paths)| {
+            let paths: serde_json::Map<String, Value> = paths
+                .into_iter()
+                .map(|(path, imported)| (path, serde_json::json!({ "imported": imported })))
+                .collect();
+            (id, serde_json::json!({ "recommendedConfigs": paths }))
+        })
+        .collect()
+}
+
+fn emit_recommended_diff(before: RecommendedSnapshot) {
+    // 写库已经成功，附带快照失败不能把成功的写入报告成失败。
+    let configs = match Storage::global().get_run_configs() {
+        Ok(configs) => configs,
+        Err(error) => {
+            eprintln!("[WARN] 读取写后推荐配置导入态失败: {error}");
+            return;
+        }
+    };
+    let after = recommended_snapshot_states(&before.plugins, &configs);
+    for (id, changes) in recommended_import_changes(&before.states, &after) {
+        GlobalEmitter::global().emit_plugin_changed(&id, changes);
+    }
 }
 
 async fn run_config_write_result(
@@ -596,133 +680,65 @@ async fn run_config_write_result(
     seq: u64,
     config: Value,
     view: Option<String>,
-    recommended: Option<Vec<RecommendedConfigRequest>>,
 ) -> Result<Value, String> {
-    // 老 IPC 调用方继续收到原来的单行 / null；前端写通道始终传 recommended（可为空数组）。
-    if view.is_none() && recommended.is_none() {
-        return Ok(config);
-    }
     let snapshot = match view {
         Some(path) => Some(super::view::snapshot_rows(path).await?),
         None => None,
     };
-    let requests = recommended.unwrap_or_default();
-    let recommended_seq = crate::emitter::current_change_seq();
-    let states = tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
-        use crate::plugin::package_file::{
-            allowed_entry, is_recommended_config, preset_content_matches, read_plugin_text,
-        };
-        if requests.is_empty() {
-            return Ok(Vec::new());
-        }
-        let manager = PluginManager::global();
-        let configs = Storage::global().get_run_configs()?;
-        let mut states = Vec::new();
-        for request in requests {
-            let origin = request
-                .origin
-                .unwrap_or(crate::plugin::PluginFileOrigin::Installed);
-            let Some(plugin) =
-                manager.resolve_plugin_file(&request.plugin_id, &origin, &request.version)
-            else {
-                continue;
-            };
-            let Some(entry) = allowed_entry(&plugin, &request.path)
-                .filter(|path| is_recommended_config(&plugin, path))
-            else {
-                continue;
-            };
-            // 插件被卸载、升级或推荐文件损坏时跳过该项，不让附带的导入态读取掩盖已成功的写操作。
-            let text = match read_plugin_text(&plugin, &entry) {
-                Ok(Some(text)) => text,
-                Ok(None) => continue,
-                Err(error) => {
-                    eprintln!("读取推荐配置导入态失败: {error}");
-                    continue;
-                }
-            };
-            let preset = match serde_json::from_str::<Value>(&text) {
-                Ok(preset) => preset,
-                Err(error) => {
-                    eprintln!("解析推荐配置导入态失败: {error}");
-                    continue;
-                }
-            };
-            let imported = configs.iter().any(|config| {
-                preset_content_matches(
-                    &plugin.id,
-                    &plugin.base_url,
-                    &plugin.var_defs,
-                    &preset,
-                    config,
-                )
-            });
-            states.push(serde_json::json!({ "key": request.key, "isImported": imported }));
-        }
-        Ok(states)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
     Ok(
         serde_json::json!({ "configId":config_id, "reason":reason, "config":config, "seq":seq,
-        "view":snapshot, "recommended":states, "recommendedSeq":recommended_seq }),
+        "view":snapshot }),
     )
 }
 
-pub async fn add_run_config(
-    config: Value,
-    view: Option<String>,
-    recommended: Option<Vec<RecommendedConfigRequest>>,
-) -> Result<Value, String> {
+pub async fn add_run_config(config: Value, view: Option<String>) -> Result<Value, String> {
     let _hold = GlobalEmitter::global().hold();
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
+    let before = recommended_diff_scope(vec![run_config.plugin_id.clone()])?;
     Storage::global().add_run_config(run_config)?;
+    emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&config_id).await;
     let seq = GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
     let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
         .into_iter()
         .next()
         .unwrap_or(Value::Null);
-    run_config_write_result(config_id, "configadd", seq, saved, view, recommended).await
+    run_config_write_result(config_id, "configadd", seq, saved, view).await
 }
 
-pub async fn update_run_config(
-    config: Value,
-    view: Option<String>,
-    recommended: Option<Vec<RecommendedConfigRequest>>,
-) -> Result<Value, String> {
+pub async fn update_run_config(config: Value, view: Option<String>) -> Result<Value, String> {
     let _hold = GlobalEmitter::global().hold();
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
+    let mut plugin_ids = vec![run_config.plugin_id.clone()];
+    if let Some(old) = Storage::global().get_run_config(&config_id)? {
+        plugin_ids.push(old.plugin_id);
+    }
+    let before = recommended_diff_scope(plugin_ids)?;
     Storage::global().update_run_config(run_config)?;
+    emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&config_id).await;
     let seq = GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
     let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
         .into_iter()
         .next()
         .unwrap_or(Value::Null);
-    run_config_write_result(config_id, "configchange", seq, saved, view, recommended).await
+    run_config_write_result(config_id, "configchange", seq, saved, view).await
 }
 
-pub async fn delete_run_config(
-    config_id: String,
-    view: Option<String>,
-    recommended: Option<Vec<RecommendedConfigRequest>>,
-) -> Result<Value, String> {
+pub async fn delete_run_config(config_id: String, view: Option<String>) -> Result<Value, String> {
     let _hold = GlobalEmitter::global().hold();
+    let plugin_ids = Storage::global()
+        .get_run_config(&config_id)?
+        .map(|config| vec![config.plugin_id])
+        .unwrap_or_default();
+    let before = recommended_diff_scope(plugin_ids)?;
     let _ = Scheduler::global().remove_config(&config_id).await;
     Storage::global().delete_run_config(&config_id)?;
+    emit_recommended_diff(before);
     let seq = GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
-    run_config_write_result(
-        config_id,
-        "configdelete",
-        seq,
-        Value::Null,
-        view,
-        recommended,
-    )
-    .await
+    run_config_write_result(config_id, "configdelete", seq, Value::Null, view).await
 }
 
 pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<Value, String> {
@@ -750,21 +766,22 @@ pub fn clear_finished_tasks() -> Result<Value, String> {
     Ok(serde_json::json!({ "taskIds": task_ids, "count": count }))
 }
 
-pub async fn copy_run_config(
-    config_id: String,
-    view: Option<String>,
-    recommended: Option<Vec<RecommendedConfigRequest>>,
-) -> Result<Value, String> {
+pub async fn copy_run_config(config_id: String, view: Option<String>) -> Result<Value, String> {
     let _hold = GlobalEmitter::global().hold();
     let new_id = uuid::Uuid::new_v4().to_string();
+    let source = Storage::global()
+        .get_run_config(&config_id)?
+        .ok_or("运行配置不存在")?;
+    let before = recommended_diff_scope(vec![source.plugin_id])?;
     let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
+    emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&new_id).await;
     let seq = GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
     let saved = query_fetch(&format!("run_configs://id_{}", copied.id))?
         .into_iter()
         .next()
         .unwrap_or(Value::Null);
-    run_config_write_result(copied.id, "configadd", seq, saved, view, recommended).await
+    run_config_write_result(copied.id, "configadd", seq, saved, view).await
 }
 
 pub fn get_run_config(config_id: String) -> Result<Value, String> {
@@ -782,6 +799,136 @@ pub fn get_missed_runs() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn run_config_write_result_always_returns_object_without_view() {
+        for config in [serde_json::json!({"id": "a"}), Value::Null] {
+            let result =
+                run_config_write_result("a".into(), "configchange", 7, config.clone(), None)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                result,
+                serde_json::json!({
+                    "configId": "a", "reason": "configchange", "seq": 7, "config": config, "view": null
+                })
+            );
+        }
+    }
+
+    fn recommended_config(plugin_id: &str) -> RunConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "config", "name": "名称", "pluginId": plugin_id,
+            "url": "https://example.test", "createdAt": 1
+        }))
+        .unwrap()
+    }
+
+    fn recommended_states(configs: &[RunConfig]) -> Vec<RecommendedPluginState> {
+        ["a", "b"]
+            .into_iter()
+            .map(|id| RecommendedPluginState {
+                plugin_id: id.into(),
+                installed: true,
+                paths: [
+                    ("default.json", "https://example.test"),
+                    ("other.json", "https://other.test"),
+                ]
+                .into_iter()
+                .map(|(path, url)| {
+                    (
+                        path.into(),
+                        configs.iter().any(|config| {
+                            preset_content_matches(id, url, &[], &serde_json::json!({}), config)
+                        }),
+                    )
+                })
+                .collect(),
+            })
+            .collect()
+    }
+
+    fn recommended_changes(before: &[RunConfig], after: &[RunConfig]) -> BTreeMap<String, Value> {
+        recommended_import_changes(&recommended_states(before), &recommended_states(after))
+    }
+
+    #[test]
+    fn recommended_diff_add_emits_only_new_matches() {
+        let config = recommended_config("a");
+        let changes = recommended_changes(&[], &[config.clone()]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"],
+            serde_json::json!({
+                "recommendedConfigs": {"default.json": {"imported": true}}
+            })
+        );
+        assert!(recommended_changes(&[config.clone()], &[config.clone(), config]).is_empty());
+        assert!(recommended_changes(&[], &[recommended_config("unrelated")]).is_empty());
+    }
+
+    #[test]
+    fn recommended_diff_update_checks_both_plugins_and_ignores_schedule() {
+        let old = recommended_config("a");
+        let mut new = old.clone();
+        new.plugin_id = "b".into();
+        let changes = recommended_changes(&[old.clone()], &[new]);
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            changes["a"]["recommendedConfigs"]["default.json"]["imported"],
+            false
+        );
+        assert_eq!(
+            changes["b"]["recommendedConfigs"]["default.json"]["imported"],
+            true
+        );
+        let mut renamed = old.clone();
+        renamed.name = "重命名".into();
+        renamed.schedule_enabled = true;
+        renamed.schedule_spec = Some(crate::storage::ScheduleSpec::Hourly { minute: 30 });
+        renamed.schedule_planned_at = Some(100);
+        assert!(recommended_changes(&[old], &[renamed]).is_empty());
+    }
+
+    #[test]
+    fn recommended_diff_delete_emits_only_last_match_removal() {
+        let config = recommended_config("a");
+        let changes = recommended_changes(&[config.clone()], &[]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"],
+            serde_json::json!({
+                "recommendedConfigs": {"default.json": {"imported": false}}
+            })
+        );
+        assert!(recommended_changes(&[config.clone(), config.clone()], &[config]).is_empty());
+        assert!(recommended_changes(&[recommended_config("unrelated")], &[]).is_empty());
+    }
+
+    #[test]
+    fn recommended_diff_merges_sources_and_prefers_installed_new_state() {
+        let state = |installed, imported| RecommendedPluginState {
+            plugin_id: "a".into(),
+            installed,
+            paths: BTreeMap::from([("default.json".into(), imported)]),
+        };
+        let before = [state(true, false), state(false, false), state(false, false)];
+        let after = [state(true, false), state(false, true), state(false, true)];
+        let changes = recommended_import_changes(&before, &after);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"],
+            serde_json::json!({
+                "recommendedConfigs": {"default.json": {"imported": false}}
+            })
+        );
+        let changes = recommended_import_changes(&before[1..], &after[1..]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"]["recommendedConfigs"]["default.json"]["imported"],
+            true
+        );
+    }
 
     fn var(value: Value) -> VarDefinition {
         serde_json::from_value(value).expect("var definition")

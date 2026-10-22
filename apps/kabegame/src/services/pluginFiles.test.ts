@@ -3,7 +3,6 @@ import { effectScope, nextTick, ref } from "vue";
 import type { Plugin } from "@/stores/plugins";
 import {
   fetchPluginText,
-  fetchRecommendedConfig,
   invalidatePluginFiles,
   resolvePluginLocalePath,
   usePluginDescriptionTemplate,
@@ -11,8 +10,8 @@ import {
 
 vi.mock("@/utils/fileUrl", () => ({
   initHttpServerBaseUrl: vi.fn().mockResolvedValue(undefined),
-  pluginFileUrl: (plugin: Plugin, path: string, t?: string) =>
-    `${plugin.id}/${plugin.version}/${JSON.stringify(plugin.fileOrigin)}/${path}?t=${t ?? ""}`,
+  pluginFileUrl: (plugin: Plugin, path: string) =>
+    `${plugin.id}/${plugin.version}/${JSON.stringify(plugin.fileOrigin)}/${path}`,
 }));
 const plugin: Plugin = {
   id: "test",
@@ -55,18 +54,6 @@ describe("插件文本请求缓存", () => {
     fetchMock.mockResolvedValueOnce(response("updated"));
     expect(await fetchPluginText(plugin, "a.md")).toBe("updated");
     expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-  it("推荐配置每次请求最新导入态，不进入文本缓存", async () => {
-    fetchMock
-      .mockResolvedValueOnce(response('{"isImported":false}'))
-      .mockResolvedValueOnce(response('{"isImported":true}'));
-    expect(await fetchRecommendedConfig(plugin, "a.json")).toEqual({ isImported: false });
-    expect(await fetchRecommendedConfig(plugin, "a.json")).toEqual({ isImported: true });
-    expect(
-      fetchMock.mock.calls.every(
-        ([url, options]) => url.endsWith("?t=recommendedConfig") && options.cache === "no-store",
-      ),
-    ).toBe(true);
   });
   it("语言路径采用 locale → default 回落", () => {
     const paths = { default: "README.md", zh: "中文.md" };

@@ -96,11 +96,29 @@ restart，失败返回错误且不写入新值。应用启动恢复失败时会�
 - `images://id_{id}/metadata` → `images.read.metadata`
 - 其它表资源按 list / by_id，plugin 再细分 info、icon、doc、provider 等子资源
 
+插件资源按来源和版本寻址，各段单独编码：
+
+| 来源 | 插件路径 | 发现方式 |
+| --- | --- | --- |
+| 已安装 | `plugin://installed/{pluginId}/{version}` | `installed` 列举 id，id 下列举当前版本 |
+| 商店缓存 | `plugin://byStore/{sourceId}/{pluginId}/{version}` | `byStore` 列举缓存源，源下列举缓存插件 id |
+| 本地预览 | `plugin://byPreview/{token}/{pluginId}/{version}` | 仅凭 token resolve，不可列举 |
+
+三种来源均支持 `icon`、`description_template`、`doc`、`changelog`、`asset/{path}`、
+`provider[/<name>]`、`recommended[/<path>]`。商店来源只读本地缓存，不下载、不发网络请求；版本不符解析为空。
+根 `plugin://` 的 fetch 仍返回已安装插件 lite 列表，list 只列出 `installed` 和 `byStore`。
+旧的仅 id 路径已删除。provider 只保存坐标，每次读时重新解析，重装和卸载不会留下旧 Plugin。
+
+推荐资源使用 `plugin.read.recommended` 能力：目录 fetch 返回按清单顺序的推荐配置行（含当前 isImported），
+list 列出每个文件 path；`recommended/<path>` 返回单行。宿主覆盖 pluginId、filename、path、isImported。
+含 `/` 的文件 path 与 asset 一样作为单段，MCP 传输前先做引擎转义再 percent-encode（如 `configs%5C%2Fdefault.json`）。
+动态读取不走 HTTP 文件缓存，导入态由运行配置写后的 plugin-changed 驱动前端观察方刷新。
+
 插件贡献的 PathQL provider 通过两级只读资源按需读取：
 
-- `plugin://{id}/provider` 返回按名称排序的轻量摘要列表，包含 name、namespace、
+- `plugin://installed/{id}/{version}/provider` 返回按名称排序的轻量摘要列表，包含 name、namespace、
   sourcePath 与结构化 note。
-- `plugin://{id}/provider/{name}` 返回完整序列化定义和包内 DSL 源文；应用兜底注入的
+- `plugin://installed/{id}/{version}/provider/{name}` 返回完整序列化定义和包内 DSL 源文；应用兜底注入的
   `entry_provider` 没有包内源文，因此 source 为 null。
 
 `read_resource` 和 `list_pathql_entry` 都复用 `is_uri_capability_enabled`。发现工具没有独立
@@ -216,6 +234,6 @@ SELECT COUNT(*) FROM (<inner>) AS pq_sub
 
 ## 插件资源按需读取
 
-`plugin://{id}/doc`、`changelog`、`description_template`、`asset/{path}` 仍返回原有字段形状。
+`plugin://installed/{id}/{version}/doc`、`changelog`、`description_template`、`asset/{path}` 仍返回原有字段形状。
 文档和更新日志读取清单的 `default` 条目；资源列表来自 `assetKeys`，单资源只在读取时从 kgpg 解包并转 base64。
 这些字节不再常驻插件列表。MCP provider 与 HTTP 共用 `plugin::package_file` 的 ZIP 读取，HTTP 的版本及来源参数见 [插件文件端点](../plugins/PLUGIN_FILE_ENDPOINT.md)。

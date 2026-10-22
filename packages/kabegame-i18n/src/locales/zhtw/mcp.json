@@ -54,7 +54,8 @@
         "doc": { "name": "外掛文件", "desc": "讀取外掛預設文件" },
         "changelog": { "name": "外掛更新日誌", "desc": "讀取外掛預設更新日誌" },
         "asset": { "name": "外掛資源", "desc": "讀取外掛文件與更新日誌引用的資源檔案" },
-        "provider": { "name": "外掛 PathQL Provider", "desc": "讀取外掛提供的 PathQL provider 定義與原始碼" }
+        "provider": { "name": "外掛 PathQL Provider", "desc": "讀取外掛提供的 PathQL provider 定義與原始碼" },
+        "recommended": { "name": "外掛推薦設定", "desc": "讀取推薦設定與目前匯入狀態" }
       }
     }
   }

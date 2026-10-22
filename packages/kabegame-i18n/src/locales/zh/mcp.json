@@ -54,7 +54,8 @@
         "doc": { "name": "插件文档", "desc": "读取插件默认文档" },
         "changelog": { "name": "插件更新日志", "desc": "读取插件默认更新日志" },
         "asset": { "name": "插件资源", "desc": "读取插件文档与更新日志引用的资源文件" },
-        "provider": { "name": "插件 PathQL Provider", "desc": "读取插件贡献的 PathQL provider 定义与源码" }
+        "provider": { "name": "插件 PathQL Provider", "desc": "读取插件贡献的 PathQL provider 定义与源码" },
+        "recommended": { "name": "插件推荐配置", "desc": "读取推荐配置与当前导入态" }
       }
     }
   }

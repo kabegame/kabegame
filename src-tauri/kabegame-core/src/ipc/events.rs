@@ -86,7 +86,7 @@ app_event_kinds! {
     AutoConfigChange,
     PluginAdded,
     PluginDeleted,
-    PluginUpdated,
+    PluginChanged,
     DownloadRemoved,
 }
 
@@ -121,7 +121,7 @@ impl AppEventKind {
             AppEventKind::AutoConfigChange => "auto-config-change",
             AppEventKind::PluginAdded => "plugin-added",
             AppEventKind::PluginDeleted => "plugin-deleted",
-            AppEventKind::PluginUpdated => "plugin-updated",
+            AppEventKind::PluginChanged => "plugin-changed",
             AppEventKind::DownloadRemoved => "download-removed",
         }
         .to_string()
@@ -151,7 +151,7 @@ impl AppEventKind {
             "auto-config-change" => Some(AppEventKind::AutoConfigChange),
             "plugin-added" => Some(AppEventKind::PluginAdded),
             "plugin-deleted" => Some(AppEventKind::PluginDeleted),
-            "plugin-updated" => Some(AppEventKind::PluginUpdated),
+            "plugin-changed" => Some(AppEventKind::PluginChanged),
             "download-removed" => Some(AppEventKind::DownloadRemoved),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(AppEventKind::TasksChange),
             _ => None,
@@ -372,8 +372,12 @@ pub enum AppEvent {
         #[serde(rename = "pluginId")]
         plugin_id: String,
     },
-    /// 插件更新/重装（同 ID 覆盖安装）
-    PluginUpdated { plugin: serde_json::Value },
+    /// 插件变更：覆盖安装携带完整插件 JSON（含 version），导入态只携带 recommendedConfigs patch。
+    PluginChanged {
+        #[serde(rename = "pluginId")]
+        plugin_id: String,
+        changes: serde_json::Value,
+    },
 
     /// 下载条目移除（后端 wait 完成后发出，前端据此从活跃列表删除）
     #[serde(rename_all = "camelCase")]
@@ -383,6 +387,31 @@ pub enum AppEvent {
 #[cfg(test)]
 mod tests {
     use super::{AppEvent, AppEventKind};
+
+    #[test]
+    fn plugin_changed_serializes_patch_and_roundtrips_event_kind() {
+        let changes = serde_json::json!({"recommendedConfigs": {"a.json": {"imported": true}}});
+        let event = AppEvent::PluginChanged {
+            plugin_id: "a".into(),
+            changes: changes.clone(),
+        };
+        assert_eq!(event.kind(), AppEventKind::PluginChanged);
+        let payload = serde_json::to_value(event).unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({"type":"plugin-changed", "pluginId":"a", "changes":changes})
+        );
+        let decoded: AppEvent = serde_json::from_value(payload).unwrap();
+        assert_eq!(decoded.kind(), AppEventKind::PluginChanged);
+        assert_eq!(
+            AppEventKind::PluginChanged.as_event_name(),
+            "plugin-changed"
+        );
+        assert_eq!(
+            AppEventKind::from_event_name("plugin-changed"),
+            Some(AppEventKind::PluginChanged)
+        );
+    }
 
     #[test]
     fn app_shutdown_uses_app_event_name() {
@@ -459,7 +488,7 @@ impl AppEvent {
             AppEvent::AutoConfigChange { .. } => AppEventKind::AutoConfigChange,
             AppEvent::PluginAdded { .. } => AppEventKind::PluginAdded,
             AppEvent::PluginDeleted { .. } => AppEventKind::PluginDeleted,
-            AppEvent::PluginUpdated { .. } => AppEventKind::PluginUpdated,
+            AppEvent::PluginChanged { .. } => AppEventKind::PluginChanged,
             AppEvent::DownloadRemoved { .. } => AppEventKind::DownloadRemoved,
         }
     }

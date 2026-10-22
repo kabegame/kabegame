@@ -8,21 +8,13 @@ use serde_json::Value;
 use kabegame_core::commands;
 
 #[tauri::command]
-pub async fn add_run_config(
-    config: Value,
-    view: Option<String>,
-    recommended: Option<Vec<commands::task::RecommendedConfigRequest>>,
-) -> Result<Value, String> {
-    commands::task::add_run_config(config, view, recommended).await
+pub async fn add_run_config(config: Value, view: Option<String>) -> Result<Value, String> {
+    commands::task::add_run_config(config, view).await
 }
 
 #[tauri::command]
-pub async fn update_run_config(
-    config: Value,
-    view: Option<String>,
-    recommended: Option<Vec<commands::task::RecommendedConfigRequest>>,
-) -> Result<Value, String> {
-    commands::task::update_run_config(config, view, recommended).await
+pub async fn update_run_config(config: Value, view: Option<String>) -> Result<Value, String> {
+    commands::task::update_run_config(config, view).await
 }
 
 #[tauri::command]
@@ -36,21 +28,13 @@ pub async fn get_run_config(config_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn delete_run_config(
-    config_id: String,
-    view: Option<String>,
-    recommended: Option<Vec<commands::task::RecommendedConfigRequest>>,
-) -> Result<Value, String> {
-    commands::task::delete_run_config(config_id, view, recommended).await
+pub async fn delete_run_config(config_id: String, view: Option<String>) -> Result<Value, String> {
+    commands::task::delete_run_config(config_id, view).await
 }
 
 #[tauri::command]
-pub async fn copy_run_config(
-    config_id: String,
-    view: Option<String>,
-    recommended: Option<Vec<commands::task::RecommendedConfigRequest>>,
-) -> Result<Value, String> {
-    commands::task::copy_run_config(config_id, view, recommended).await
+pub async fn copy_run_config(config_id: String, view: Option<String>) -> Result<Value, String> {
+    commands::task::copy_run_config(config_id, view).await
 }
 
 #[tauri::command]

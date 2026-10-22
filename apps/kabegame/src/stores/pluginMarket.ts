@@ -104,7 +104,7 @@ export const usePluginMarketStore = defineStore("pluginMarket", () => {
     return m;
   });
 
-  /** 已安装列表变化（plugin-added/updated/deleted 驱动 pluginStore）时自动重算，无需重拉商店 */
+  /** 已安装列表变化（plugin-added / plugin-changed / plugin-deleted 驱动 pluginStore）时自动重算，无需重拉商店 */
   const pluginsBySource = computed(() => {
     const m = installedVersionById.value;
     const out: Record<string, StorePluginResolved[]> = {};

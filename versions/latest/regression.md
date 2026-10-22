@@ -1,5 +1,24 @@
 # v4.6.1 regression
 
+## 插件来源资源、变更事件与推荐配置观察方（Phase C 步骤 1–3）
+
+三种来源按版本寻址；推荐配置统一观察 `plugin://…/recommended` rows。以下 case 交由人工真机验收，
+运行时请求与事件次数使用 debug ingest 固定 session 记录，以事件 ts 判定顺序，验完删除临时插桩。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 来源树与版本 | 桌面 CEF / MCP | 展开 plugin:// → installed、byStore；查询错误版本、旧仅 id 路径和未缓存商店插件 | 根 fetch 仍是已安装 lite 列表；根 list 只有 installed/byStore；错误版本和未缓存为空，无下载 | 部分实测（桌面 CEF pathql_list/fetch）：根列 installed/byStore，installed 33 个、byStore 只列 4 个已缓存包；pixiv installed 1.5.2 与 byStore 1.2.11 provider 不同；旧路径、错误版本、未缓存均 not found。MCP 客户端未测 |
+| [x] | 商店 provider | 桌面 CEF | 打开未安装但已缓存插件的商店详情 PathQL tab，选择 provider | byStore 对应版本的 provider 列表与 DSL 正常，不要求安装 | anime-pictures 0.7.0 商店详情列出 5 个 provider，与已安装同版本逐字段一致 |
+| [ ] | 已安装、商店与预览推荐 | 桌面 CEF / Android / Web | 打开已安装插件详情、未安装商店详情、本地 kgpg 预览及收集对话框 | 对应 installed/byStore/byPreview 推荐均显示，声明顺序不变；导入态正确 | 部分实测（桌面）：pixiv 已安装 9 项、anime-pictures byStore 5 项、konachan 本地 kgpg byPreview 2 项均显示；Android / Web、收集对话框未测 |
+| [x] | 首次读取与禁用 | 桌面 CEF / debug ingest | 打开自动配置页推荐 tab，再离开或禁用 | 每个声明推荐的插件 key 读一次；无旧动态 HTTP 请求；禁用无观察 key | 停在「我的配置」tab 0 次；切到推荐 tab 后 12 个插件各读 1 次，均为 installed 路径 |
+| [x] | 导入与删除 | 桌面 CEF / debug ingest | 导入一项推荐，再删除最后一项匹配配置 | 每次至多一条该插件 plugin-changed，只含变化 path；只有该插件 key 重读一次，已导入状态跟随变化 | 导入 anihonet「每日手机排行」：1 条 imported:true，仅 anihonet key 重读 1 次，按钮变「已导入」；删除：1 条 imported:false，仅该 key 重读 1 次，按钮恢复 |
+| [ ] | 无关配置变化 | 桌面 CEF / debug ingest | 只改配置名、计划时间；导入重复匹配配置 | 推荐导入态不变时无 plugin-changed，推荐 key 0 次读取 | 部分实测：改名 + 计划时间 20:00→21:30：0 条事件、0 次读取；重复匹配配置未测 |
+| [ ] | 匹配字段与换插件 | 桌面 CEF | 修改 URL/变量/headers/dry-run，或把配置改为另一个插件 | 相关插件导入态实际变化才推送，旧、新插件各自刷新 | 部分实测：end_page 5→6→5 依次推送 false / true；换插件只有单测覆盖 |
+| [ ] | 覆盖安装与卸载 | 桌面 CEF | 同版本重装、升级、卸载插件 | 覆盖安装 plugin-changed 带完整含 version 插件；store 更新；升级换 key 并退订旧 key，旧版本空；卸载无旧缓存内容 | 部分实测：同版本重装 e-shuushuu 推送完整插件 JSON（含 version）、store 同步；在推荐 tab 重装 konachan 只重读 konachan 1 次。升级、卸载未测 |
+| [ ] | 失败与竞态 | 桌面 CEF / debug ingest | 推荐读取失败、手动刷新恢复；请求在途时切换来源或版本 | 已有卡片保留；首次失败移除骨架，恢复可重读；旧 key 晚到不覆盖新内容 | |
+| [ ] | MCP 推荐发现与权限 | MCP 客户端 / Bundle | 展开三种来源版本下的 recommended，读单个含斜杠 path；关闭 recommended 能力 | 目录 list 声明路径、fetch 有序行；单项为对象；路径按 asset 规则转义；禁用后读取被拒绝 | 预览仅凭已有 token |
+| [ ] | 旧 CLI / IPC 返回 | 桌面 CLI / IPC 客户端 | 新增、更新、删除运行配置 | add/update data 保持旧单行，delete 保持 null；前端无 view 时仍收到对象写结果 | view/hold 留给 C3 |
+
 ## 删除未挂载的头部筛选下拉
 
 `GalleryFilterControl`（及 `GalleryTimeFilterSubmenu`、时间菜单树函数、`HeaderFeatureId.GalleryFilter`、两个独占 i18n 键）自查询栏改为 chip 后不再挂载，整体删除；时间文案函数 `buildTimeMenuScopeLabels` / `formatTimeFilterDetail` 保留。

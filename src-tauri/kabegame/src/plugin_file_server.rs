@@ -14,7 +14,6 @@ struct FileQuery {
     v: Option<String>,
     source: Option<String>,
     preview: Option<String>,
-    t: Option<String>,
 }
 
 pub fn plugin_file_routes() -> Router {
@@ -69,29 +68,11 @@ async fn handle_plugin_file(
     let Some(entry) = allowed_entry(&plugin, &path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let annotate = match query.t.as_deref() {
-        None => false,
-        Some("recommendedConfig") if is_recommended_config(&plugin, &entry) => true,
-        _ => return StatusCode::NOT_FOUND.into_response(),
-    };
     let result = tokio::task::spawn_blocking(move || -> Result<Response, String> {
         let Some(file) = plugin.file_path.as_ref() else {
             return Err("无插件文件".into());
         };
         let bytes = read_kgpg_entry(std::path::Path::new(file), &entry)?.ok_or("无条目")?;
-        if annotate {
-            let json = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-            let body = serde_json::to_vec(&annotate_recommended_config(&plugin, &entry, json)?)
-                .map_err(|e| e.to_string())?;
-            return Ok((
-                [
-                    ("content-type", "application/json; charset=utf-8"),
-                    ("cache-control", "no-store"),
-                ],
-                body,
-            )
-                .into_response());
-        }
         let etag = etag_for(&plugin)?;
         let matches = headers
             .get("if-none-match")

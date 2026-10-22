@@ -74,9 +74,14 @@ export function recommendedConfigPaths(plugin: Plugin): string[] {
   return Array.isArray(paths) ? paths.filter((path): path is string => typeof path === "string") : [];
 }
 
-export async function fetchRecommendedConfig(plugin: Plugin, path: string): Promise<unknown> {
-  await initHttpServerBaseUrl();
-  const response = await fetch(pluginFileUrl(plugin, path, "recommendedConfig"), { cache: "no-store" });
-  if (!response.ok) throw new Error(`plugin_file: ${response.status}`);
-  return response.json();
+/** 来源和版本各占一段，供插件子资源共用。 */
+export function pluginResourceBase(plugin: Pick<Plugin, "id" | "version" | "fileOrigin">): string {
+  const origin = plugin.fileOrigin;
+  const segments =
+    origin?.kind === "store"
+      ? ["byStore", origin.sourceId]
+      : origin?.kind === "preview"
+        ? ["byPreview", origin.token]
+        : ["installed"];
+  return `plugin://${[...segments, plugin.id, plugin.version].map(encodeURIComponent).join("/")}`;
 }

@@ -211,7 +211,6 @@
     "providerListLabel": "list branches",
     "providerListBranches": "{n} branches",
     "providerDefaultInjected": "App-injected default provider; no file inside the package",
-    "providerInstallFirst": "Install to view",
     "noChangelog": "This source has no changelog",
     "noConfigVars": "This source has no config fields",
     "noProviders": "This source contributes no PathQL providers",

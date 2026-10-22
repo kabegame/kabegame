@@ -1,6 +1,7 @@
 import { filter, merge, type Observable } from "rxjs";
 import type { ImageChangedPayload, ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import type { Plugin } from "@/stores/plugins";
 import { kbEvent$, type KbEvent } from "./eventSource";
 
 export type AlbumChangedPayload = {
@@ -9,8 +10,16 @@ export type AlbumChangedPayload = {
   changes?: Record<string, unknown>;
 };
 
+export type PluginChangedPayload = {
+  pluginId?: string;
+  changes?: { version?: string; recommendedConfigs?: Record<string, { imported: boolean }> } & Record<string, unknown>;
+};
+
 /** 已接入的后端事件与 payload 类型；核心事件源本身不依赖此表。 */
 export interface KbEventMap {
+  "plugin-added": { plugin?: Plugin };
+  "plugin-changed": PluginChangedPayload;
+  "plugin-deleted": { pluginId?: string };
   "images-change": ImagesChangePayload;
   "image-changed": ImageChangedPayload;
   "album-images-change": AlbumImagesChangePayload;

@@ -211,7 +211,6 @@
     "providerListLabel": "list 분기",
     "providerListBranches": "{n}개",
     "providerDefaultInjected": "앱이 주입한 기본 provider(패키지 안에 파일 없음)",
-    "providerInstallFirst": "설치 후 확인 가능",
     "noChangelog": "이 소스에는 업데이트 내역이 없습니다",
     "noConfigVars": "이 소스에는 설정 항목이 없습니다",
     "noProviders": "이 소스는 PathQL provider를 제공하지 않습니다",

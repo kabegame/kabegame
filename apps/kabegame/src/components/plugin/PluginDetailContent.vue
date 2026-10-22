@@ -94,8 +94,7 @@
         <div v-show="activeTab === 'pathql'" class="absolute inset-0">
           <PluginProviderPanel
             v-model:menu-width="menuWidth"
-            :plugin-id="plugin.id"
-            :can-query="canQueryProvider"
+            :plugin="plugin"
             :menu-default-width="MENU_DEFAULT_WIDTH"
             @loaded="pathqlCount = $event"
           />
@@ -237,9 +236,6 @@ const { actionState } = usePluginActionState(
   () => props.plugin,
   () => props.isRemote,
 );
-
-// PathQL provider 只反映「已安装表」里的定义；isRemote 时该表要么查不到、要么是另一个版本，一律不查
-const canQueryProvider = computed(() => !props.isRemote);
 
 function handleOpenBaseUrl() {
   if (props.plugin?.baseUrl) void openExternalLink(props.plugin.baseUrl);

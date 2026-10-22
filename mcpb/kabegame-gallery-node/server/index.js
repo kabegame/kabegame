@@ -41,6 +41,7 @@ const PLUGIN_SUB_RESOURCES = new Set([
   "changelog",
   "asset",
   "provider",
+  "recommended",
 ]);
 
 function toBool(value, defaultValue = false) {
@@ -146,6 +147,13 @@ function imagePathToUri(path) {
     return `images://${trimmed}`;
   }
   return `images://gallery/${trimmed}`;
+}
+
+// 与 PathQL escape_path_segment 一致：先引擎转义，再包 URI 传输层。
+function pluginPathSegment(value) {
+  let escaped = value.replaceAll("\\", "\\\\").replaceAll("/", "\\/");
+  if (escaped.startsWith("~")) escaped = `\\${escaped}`;
+  return encodeURIComponent(escaped);
 }
 
 function idSegment(id) {
@@ -448,17 +456,22 @@ const ALL_TOOLS = [
       description:
         "Read plugin info or sub-resource. " +
         "Omit plugin_id to list all (trimmed) plugins. " +
-        "With plugin_id and resource='info' (default), returns the trimmed plugin object. " +
+        "With plugin_id, version and resource='info' (default), returns the trimmed plugin object. " +
         "Other resource values: 'icon' (base64 PNG), 'description_template' (EJS), " +
         "'doc' (doc.md, default locale), 'changelog' (CHANGELOG.md, default locale), " +
         "'asset' (requires plugin-root-relative `key`), " +
-        "'provider' (list PathQL providers, or one provider's def+source with `key`=name).",
+        "'provider' (list PathQL providers, or one provider's def+source with `key`=name), " +
+        "'recommended' (config rows with isImported, optionally one file with `key`=path).",
       inputSchema: {
         type: "object",
         properties: {
           plugin_id: {
             type: "string",
             description: "Plugin ID. Omit to list all plugins (trimmed).",
+          },
+          version: {
+            type: "string",
+            description: "Installed plugin version. Required with plugin_id; obtain from the plugin list.",
           },
           resource: {
             type: "string",
@@ -470,6 +483,7 @@ const ALL_TOOLS = [
               "changelog",
               "asset",
               "provider",
+              "recommended",
             ],
             description: "Sub-resource to fetch. Defaults to 'info'.",
           },
@@ -477,7 +491,7 @@ const ALL_TOOLS = [
             type: "string",
             description:
               "Required when resource='asset' (plugin-root-relative path) or resource='provider' " +
-              "with a specific provider name; omit for resource='provider' to list all providers.",
+              "with a specific provider name; recommended accepts a file path key, or omits it to list all rows.",
           },
         },
       },
@@ -724,7 +738,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const result = await readResource("plugin://");
           return toolResponse(makeSuccess(result));
         }
-        let uri = `plugin://${args.plugin_id}`;
+        assertRequiredIdentifier(args.version, "version", 128);
+        let uri = `plugin://installed/${encodeURIComponent(args.plugin_id)}/${encodeURIComponent(args.version)}`;
         switch (resource) {
           case "info":
             break;
@@ -743,6 +758,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           case "asset": {
             assertRequiredIdentifier(args.key, "key", 512);
             uri += `/asset/${args.key}`;
+            break;
+          }
+          case "recommended": {
+            uri += "/recommended";
+            if (isNonEmptyString(args.key)) uri += `/${pluginPathSegment(args.key)}`;
             break;
           }
           case "provider": {

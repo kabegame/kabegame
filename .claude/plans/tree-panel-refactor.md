@@ -129,7 +129,7 @@ export interface GalleryFilterTreeContext {
   registerRefreshTarget: (target: RefreshTarget) => () => void;
 }
 const pureListCache = new Map<string, Promise<ProviderChildDir[]>>();
-// images-change / album-images-change / plugin-added / plugin-updated / plugin-deleted 五事件全局 clear
+// images-change / album-images-change / plugin-added / plugin-changed / plugin-deleted 五事件全局 clear
 export function useProviderTreeList() { /* deltaMode ? listProviderDirsPure : listProviderDirs */ }
 export async function countProviderPath(path: string): Promise<number> { /* pathqlEntry(...).total */ }
 ```
@@ -382,7 +382,7 @@ export function createGalleryFacetSource(ctx: GalleryFilterTreeContext, deps: {.
     active: boolean;
     filterOnSelect: GalleryFilter;                       // emit("update:filter") 载荷
     imagesFilter?: (p: ImagesChangePayload) => boolean;  // plugin 系的 unknownOrMatchingPlugin
-    extraSources?: TreeRefreshSource[];                  // dim-plugins 的 plugin-added/updated/deleted
+    extraSources?: TreeRefreshSource[];                  // dim-plugins 的 plugin-added / plugin-changed / plugin-deleted
   };
 }
 ```

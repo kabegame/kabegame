@@ -6,10 +6,13 @@ use pathql_rs::provider::{
 };
 use serde_json::{json, Value};
 
+use crate::plugin::package_file::{is_recommended_config, recommended_rows};
 use crate::plugin::{
-    assets::mime_for_asset, manifest_value_display_for_locale, Plugin, PluginManager,
+    assets::mime_for_asset, manifest_value_display_for_locale, package_file::PluginFileOrigin,
+    Plugin, PluginManager,
 };
 use crate::providers::query::{parse_note, ProviderNote};
+use crate::storage::Storage;
 
 pub fn register_plugin_resource_provider(runtime: &ProviderRuntime) -> Result<(), EngineError> {
     runtime.register_programmatic_provider("kabegame", "plugin_resource_root_provider", |_| {
@@ -21,8 +24,37 @@ fn plugin_manager() -> Option<&'static PluginManager> {
     PluginManager::global_opt()
 }
 
-fn get_plugin(plugin_id: &str) -> Option<Arc<Plugin>> {
-    plugin_manager()?.get(plugin_id)
+/// runtime 会缓存路径前缀的 provider；坐标每次读取都重新解析，不能持有旧 Plugin。
+#[derive(Clone)]
+pub struct PluginCoord {
+    pub origin: PluginFileOrigin,
+    pub id: String,
+    pub version: String,
+}
+
+impl PluginCoord {
+    fn plugin(&self) -> Option<Arc<Plugin>> {
+        plugin_manager()?.resolve_plugin_file(&self.id, &self.origin, &self.version)
+    }
+}
+
+fn current_coord(origin: &PluginFileOrigin, id: &str) -> Option<PluginCoord> {
+    let coord = PluginCoord {
+        origin: origin.clone(),
+        id: id.into(),
+        version: plugin_manager()?.plugin_file_version(id, origin)?,
+    };
+    coord.plugin()?;
+    Some(coord)
+}
+
+fn child(name: &str, provider: impl Provider + 'static) -> ChildEntry {
+    ChildEntry {
+        total: None,
+        name: name.into(),
+        provider: Some(Arc::new(provider)),
+        meta: None,
+    }
 }
 
 fn all_plugins() -> Result<Vec<Arc<Plugin>>, EngineError> {
@@ -59,33 +91,31 @@ impl Provider for PluginRootProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Vec<ListRef>, EngineError> {
-        Ok(all_plugins()?
-            .into_iter()
-            .map(|plugin| {
-                ListRef::Direct(ChildEntry {
-                    total: None,
-                    name: plugin.id.clone(),
-                    provider: Some(Arc::new(PluginEntryProvider {
-                        plugin_id: plugin.id.clone(),
-                    })),
-                    meta: None,
-                })
-            })
-            .collect())
+        // byPreview 的 token 是凭据，根和预览层都不可枚举它。
+        Ok(vec![
+            ListRef::Direct(child(
+                "installed",
+                PluginOriginProvider {
+                    origin: PluginFileOrigin::Installed,
+                },
+            )),
+            ListRef::Direct(child("byStore", PluginStoreRootProvider)),
+        ])
     }
 
     fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
-        if get_plugin(name).is_none() {
-            return ResolveRef::Terminal(None);
-        }
-        ResolveRef::Terminal(Some(ChildEntry {
-            total: None,
-            name: name.to_string(),
-            provider: Some(Arc::new(PluginEntryProvider {
-                plugin_id: name.to_string(),
-            })),
-            meta: None,
-        }))
+        let entry = match name {
+            "installed" => Some(child(
+                name,
+                PluginOriginProvider {
+                    origin: PluginFileOrigin::Installed,
+                },
+            )),
+            "byStore" => Some(child(name, PluginStoreRootProvider)),
+            "byPreview" => Some(child(name, PluginPreviewRootProvider)),
+            _ => None,
+        };
+        ResolveRef::Terminal(entry)
     }
 
     fn fetch_rows(
@@ -94,13 +124,188 @@ impl Provider for PluginRootProvider {
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         Ok(Some(
-            all_plugins()?.iter().map(serialize_plugin_lite).collect(),
+            all_plugins()?
+                .iter()
+                .filter_map(|p| {
+                    PluginCoord {
+                        origin: PluginFileOrigin::Installed,
+                        id: p.id.clone(),
+                        version: p.version.clone(),
+                    }
+                    .plugin()
+                })
+                .map(|p| serialize_plugin_lite(&p))
+                .collect(),
+        ))
+    }
+}
+
+struct PluginStoreRootProvider;
+
+impl Provider for PluginStoreRootProvider {
+    fn list(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Vec<ListRef>, EngineError> {
+        Ok(plugin_manager()
+            .map(|m| m.plugin_file_store_sources())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|source_id| {
+                ListRef::Direct(child(
+                    &source_id,
+                    PluginOriginProvider {
+                        origin: PluginFileOrigin::Store {
+                            source_id: source_id.clone(),
+                        },
+                    },
+                ))
+            })
+            .collect())
+    }
+
+    fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        let exists = plugin_manager()
+            .is_some_and(|m| m.plugin_file_store_sources().iter().any(|s| s == name));
+        ResolveRef::Terminal(exists.then(|| {
+            child(
+                name,
+                PluginOriginProvider {
+                    origin: PluginFileOrigin::Store {
+                        source_id: name.into(),
+                    },
+                },
+            )
+        }))
+    }
+}
+
+struct PluginPreviewRootProvider;
+
+impl Provider for PluginPreviewRootProvider {
+    fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        ResolveRef::Terminal(Some(child(
+            name,
+            PluginOriginProvider {
+                origin: PluginFileOrigin::Preview { token: name.into() },
+            },
+        )))
+    }
+}
+
+struct PluginOriginProvider {
+    origin: PluginFileOrigin,
+}
+
+impl Provider for PluginOriginProvider {
+    fn list(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Vec<ListRef>, EngineError> {
+        let ids = plugin_manager()
+            .map(|m| m.plugin_file_ids(&self.origin))
+            .transpose()
+            .map_err(plugin_error)?
+            .unwrap_or_default();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| {
+                current_coord(&self.origin, &id)?;
+                Some(ListRef::Direct(child(
+                    &id,
+                    PluginIdProvider {
+                        origin: self.origin.clone(),
+                        id: id.clone(),
+                    },
+                )))
+            })
+            .collect())
+    }
+
+    fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        ResolveRef::Terminal(current_coord(&self.origin, name).map(|_| {
+            child(
+                name,
+                PluginIdProvider {
+                    origin: self.origin.clone(),
+                    id: name.into(),
+                },
+            )
+        }))
+    }
+
+    fn fetch_rows(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Option<Vec<Value>>, EngineError> {
+        let ids = plugin_manager()
+            .map(|m| m.plugin_file_ids(&self.origin))
+            .transpose()
+            .map_err(plugin_error)?
+            .unwrap_or_default();
+        Ok(Some(
+            ids.iter()
+                .filter_map(|id| current_coord(&self.origin, id)?.plugin())
+                .map(|p| serialize_plugin_lite(&p))
+                .collect(),
+        ))
+    }
+}
+
+// id 层不固定版本，重读时总是返回来源里的当前版本。
+struct PluginIdProvider {
+    origin: PluginFileOrigin,
+    id: String,
+}
+
+impl Provider for PluginIdProvider {
+    fn list(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Vec<ListRef>, EngineError> {
+        Ok(current_coord(&self.origin, &self.id)
+            .map(|coord| {
+                vec![ListRef::Direct(child(
+                    &coord.version.clone(),
+                    PluginEntryProvider { coord },
+                ))]
+            })
+            .unwrap_or_default())
+    }
+
+    fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        let coord = PluginCoord {
+            origin: self.origin.clone(),
+            id: self.id.clone(),
+            version: name.into(),
+        };
+        ResolveRef::Terminal(
+            coord
+                .plugin()
+                .map(|_| child(name, PluginEntryProvider { coord })),
+        )
+    }
+
+    fn fetch_rows(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Option<Vec<Value>>, EngineError> {
+        Ok(Some(
+            current_coord(&self.origin, &self.id)
+                .and_then(|coord| coord.plugin())
+                .map(|p| vec![serialize_plugin_lite(&p)])
+                .unwrap_or_default(),
         ))
     }
 }
 
 struct PluginEntryProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginEntryProvider {
@@ -109,12 +314,15 @@ impl Provider for PluginEntryProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Vec<ListRef>, EngineError> {
+        if self.coord.plugin().is_none() {
+            return Ok(Vec::new());
+        }
         Ok(vec![
             ListRef::Direct(ChildEntry {
                 total: None,
                 name: "icon".into(),
                 provider: Some(Arc::new(PluginIconProvider {
-                    plugin_id: self.plugin_id.clone(),
+                    coord: self.coord.clone(),
                 })),
                 meta: None,
             }),
@@ -122,7 +330,7 @@ impl Provider for PluginEntryProvider {
                 total: None,
                 name: "description_template".into(),
                 provider: Some(Arc::new(PluginDescriptionTemplateProvider {
-                    plugin_id: self.plugin_id.clone(),
+                    coord: self.coord.clone(),
                 })),
                 meta: None,
             }),
@@ -130,7 +338,7 @@ impl Provider for PluginEntryProvider {
                 total: None,
                 name: "doc".into(),
                 provider: Some(Arc::new(PluginDocProvider {
-                    plugin_id: self.plugin_id.clone(),
+                    coord: self.coord.clone(),
                 })),
                 meta: None,
             }),
@@ -138,7 +346,7 @@ impl Provider for PluginEntryProvider {
                 total: None,
                 name: "changelog".into(),
                 provider: Some(Arc::new(PluginChangelogProvider {
-                    plugin_id: self.plugin_id.clone(),
+                    coord: self.coord.clone(),
                 })),
                 meta: None,
             }),
@@ -146,7 +354,7 @@ impl Provider for PluginEntryProvider {
                 total: None,
                 name: "asset".into(),
                 provider: Some(Arc::new(PluginAssetRootProvider {
-                    plugin_id: self.plugin_id.clone(),
+                    coord: self.coord.clone(),
                 })),
                 meta: None,
             }),
@@ -154,32 +362,46 @@ impl Provider for PluginEntryProvider {
                 total: None,
                 name: "provider".into(),
                 provider: Some(Arc::new(PluginProviderRootProvider {
-                    plugin_id: self.plugin_id.clone(),
+                    coord: self.coord.clone(),
                 })),
                 meta: None,
             }),
+            ListRef::Direct(child(
+                "recommended",
+                PluginRecommendedProvider {
+                    coord: self.coord.clone(),
+                    path: None,
+                },
+            )),
         ])
     }
 
     fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        if self.coord.plugin().is_none() {
+            return ResolveRef::Terminal(None);
+        }
         let provider: Option<Arc<dyn Provider>> = match name {
             "icon" => Some(Arc::new(PluginIconProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
             })),
             "description_template" => Some(Arc::new(PluginDescriptionTemplateProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
             })),
             "doc" => Some(Arc::new(PluginDocProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
             })),
             "changelog" => Some(Arc::new(PluginChangelogProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
             })),
             "asset" => Some(Arc::new(PluginAssetRootProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
             })),
             "provider" => Some(Arc::new(PluginProviderRootProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
+            })),
+            "recommended" => Some(Arc::new(PluginRecommendedProvider {
+                coord: self.coord.clone(),
+                path: None,
             })),
             _ => None,
         };
@@ -197,7 +419,8 @@ impl Provider for PluginEntryProvider {
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
         Ok(Some(
-            get_plugin(&self.plugin_id)
+            self.coord
+                .plugin()
                 .map(|plugin| vec![serialize_plugin_lite(&plugin)])
                 .unwrap_or_default(),
         ))
@@ -205,7 +428,7 @@ impl Provider for PluginEntryProvider {
 }
 
 struct PluginIconProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginIconProvider {
@@ -214,7 +437,9 @@ impl Provider for PluginIconProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .and_then(|plugin| plugin.icon_png_base64.clone())
             .map(|icon| vec![json!({ "iconPngBase64": icon })])
             .unwrap_or_default();
@@ -223,7 +448,7 @@ impl Provider for PluginIconProvider {
 }
 
 struct PluginDescriptionTemplateProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginDescriptionTemplateProvider {
@@ -232,7 +457,9 @@ impl Provider for PluginDescriptionTemplateProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .map(|plugin| {
                 crate::plugin::package_file::read_manifest_text(
                     &plugin,
@@ -250,7 +477,7 @@ impl Provider for PluginDescriptionTemplateProvider {
 }
 
 struct PluginDocProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginDocProvider {
@@ -259,7 +486,9 @@ impl Provider for PluginDocProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .map(|plugin| {
                 crate::plugin::package_file::read_manifest_text(&plugin, "kbDoc", Some("default"))
             })
@@ -273,7 +502,7 @@ impl Provider for PluginDocProvider {
 }
 
 struct PluginChangelogProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginChangelogProvider {
@@ -282,7 +511,9 @@ impl Provider for PluginChangelogProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .map(|plugin| {
                 crate::plugin::package_file::read_manifest_text(
                     &plugin,
@@ -300,7 +531,7 @@ impl Provider for PluginChangelogProvider {
 }
 
 struct PluginAssetRootProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginAssetRootProvider {
@@ -309,7 +540,7 @@ impl Provider for PluginAssetRootProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Vec<ListRef>, EngineError> {
-        let Some(resources) = get_plugin(&self.plugin_id).map(|p| p.asset_keys.clone()) else {
+        let Some(resources) = self.coord.plugin().map(|p| p.asset_keys.clone()) else {
             return Ok(Vec::new());
         };
         let mut keys: Vec<String> = resources;
@@ -321,7 +552,7 @@ impl Provider for PluginAssetRootProvider {
                     total: None,
                     name: key.clone(),
                     provider: Some(Arc::new(PluginAssetProvider {
-                        plugin_id: self.plugin_id.clone(),
+                        coord: self.coord.clone(),
                         asset_path: key,
                     })),
                     meta: None,
@@ -331,11 +562,14 @@ impl Provider for PluginAssetRootProvider {
     }
 
     fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        if self.coord.plugin().is_none() {
+            return ResolveRef::Terminal(None);
+        }
         ResolveRef::Terminal(Some(ChildEntry {
             total: None,
             name: name.to_string(),
             provider: Some(Arc::new(PluginAssetProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
                 asset_path: name.to_string(),
             })),
             meta: None,
@@ -344,7 +578,7 @@ impl Provider for PluginAssetRootProvider {
 }
 
 struct PluginAssetProvider {
-    plugin_id: String,
+    coord: PluginCoord,
     asset_path: String,
 }
 
@@ -354,7 +588,9 @@ impl Provider for PluginAssetProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .filter(|plugin| plugin.asset_keys.contains(&self.asset_path))
             .map(|plugin| {
                 let path = plugin
@@ -387,7 +623,7 @@ impl Provider for PluginAssetProvider {
 }
 
 struct PluginProviderRootProvider {
-    plugin_id: String,
+    coord: PluginCoord,
 }
 
 impl Provider for PluginProviderRootProvider {
@@ -396,7 +632,7 @@ impl Provider for PluginProviderRootProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Vec<ListRef>, EngineError> {
-        let Some(plugin) = get_plugin(&self.plugin_id) else {
+        let Some(plugin) = self.coord.plugin() else {
             return Ok(Vec::new());
         };
         let mut providers: Vec<_> = plugin.providers.iter().collect();
@@ -409,7 +645,7 @@ impl Provider for PluginProviderRootProvider {
                     total: None,
                     name: name.clone(),
                     provider: Some(Arc::new(PluginProviderItemProvider {
-                        plugin_id: self.plugin_id.clone(),
+                        coord: self.coord.clone(),
                         name,
                     })),
                     meta: None,
@@ -419,7 +655,7 @@ impl Provider for PluginProviderRootProvider {
     }
 
     fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
-        let exists = get_plugin(&self.plugin_id).is_some_and(|plugin| {
+        let exists = self.coord.plugin().is_some_and(|plugin| {
             plugin
                 .providers
                 .iter()
@@ -432,7 +668,7 @@ impl Provider for PluginProviderRootProvider {
             total: None,
             name: name.to_string(),
             provider: Some(Arc::new(PluginProviderItemProvider {
-                plugin_id: self.plugin_id.clone(),
+                coord: self.coord.clone(),
                 name: name.to_string(),
             })),
             meta: None,
@@ -444,7 +680,9 @@ impl Provider for PluginProviderRootProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .map(|plugin| {
                 let mut providers: Vec<_> = plugin.providers.iter().collect();
                 providers.sort_by(|a, b| a.def.name.0.cmp(&b.def.name.0));
@@ -477,7 +715,7 @@ impl Provider for PluginProviderRootProvider {
 }
 
 struct PluginProviderItemProvider {
-    plugin_id: String,
+    coord: PluginCoord,
     name: String,
 }
 
@@ -487,7 +725,9 @@ impl Provider for PluginProviderItemProvider {
         _composed: &ProviderQuery,
         _ctx: &ProviderContext,
     ) -> Result<Option<Vec<Value>>, EngineError> {
-        let rows = get_plugin(&self.plugin_id)
+        let rows = self
+            .coord
+            .plugin()
             .and_then(|plugin| {
                 plugin
                     .providers
@@ -508,6 +748,82 @@ impl Provider for PluginProviderItemProvider {
                     })
             })
             .unwrap_or_default();
+        Ok(Some(rows))
+    }
+}
+
+/// 推荐目录与单项共用坐标，声明路径作为单个段（与 asset 相同）。
+struct PluginRecommendedProvider {
+    coord: PluginCoord,
+    path: Option<String>,
+}
+
+impl Provider for PluginRecommendedProvider {
+    fn list(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Vec<ListRef>, EngineError> {
+        if self.path.is_some() {
+            return Ok(Vec::new());
+        }
+        let Some(plugin) = self.coord.plugin() else {
+            return Ok(Vec::new());
+        };
+        Ok(plugin
+            .package_json
+            .as_ref()
+            .and_then(|pkg| pkg.get("kbRecommendedConfigs"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|path| {
+                ListRef::Direct(child(
+                    path,
+                    PluginRecommendedProvider {
+                        coord: self.coord.clone(),
+                        path: Some(path.into()),
+                    },
+                ))
+            })
+            .collect())
+    }
+
+    fn resolve(&self, name: &str, _composed: &ProviderQuery, _ctx: &ProviderContext) -> ResolveRef {
+        let exists = self.path.is_none()
+            && self
+                .coord
+                .plugin()
+                .is_some_and(|plugin| is_recommended_config(&plugin, name));
+        ResolveRef::Terminal(exists.then(|| {
+            child(
+                name,
+                PluginRecommendedProvider {
+                    coord: self.coord.clone(),
+                    path: Some(name.into()),
+                },
+            )
+        }))
+    }
+
+    fn fetch_rows(
+        &self,
+        _composed: &ProviderQuery,
+        _ctx: &ProviderContext,
+    ) -> Result<Option<Vec<Value>>, EngineError> {
+        let Some(plugin) = self.coord.plugin() else {
+            return Ok(Some(Vec::new()));
+        };
+        let configs = Storage::global().get_run_configs().map_err(plugin_error)?;
+        let rows = recommended_rows(&plugin, &configs)
+            .into_iter()
+            .filter(|row| {
+                self.path.as_ref().is_none_or(|path| {
+                    row.get("path").and_then(Value::as_str) == Some(path.as_str())
+                })
+            })
+            .collect();
         Ok(Some(rows))
     }
 }

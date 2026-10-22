@@ -25,7 +25,8 @@
 
 - 状态：基于 SQL 的内置 Provider（root/gallery/shared/VD）均由 `dsl_loader::DSL_FILES` 中的 DSL 提供；
   唯一保留的 programmatic provider 是 `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs`
-  （`plugin://` schema，行数据来自 `PluginManager` 而非 SQL），由 `providers/init.rs` 经
+  （`plugin://` schema，按 `installed/<id>/<version>`、`byStore/<sourceId>/<id>/<version>`、
+  `byPreview/<token>/<id>/<version>` 寻址；预览不可列举，商店只读缓存，元数据来自 `PluginManager`，recommended 行附带 Storage 当前导入态；不走 SQL provider），由 `providers/init.rs` 经
   `register_programmatic_provider` 注册。
 
 - [provider-dsl/RULES.md](provider-dsl/RULES.md)
@@ -112,7 +113,7 @@
   - 适用场景：新增视频处理调用点；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `deno task build:ffmpeg` 与桌面构建的关系。
 
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
-  - 主题：任务列表与运行配置的 PathQL 按需加载；任务 keyset 与配置页码分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务事件补丁、状态徽章、配置写后行快照与推荐导入态主动同步、seq 事件补位，以及任务右键菜单与再次执行的数据流。
+  - 主题：任务列表与运行配置的 PathQL 按需加载；任务 keyset 与配置页码分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务事件补丁、状态徽章、配置写后行快照、推荐导入态 plugin-changed 观察刷新、配置 seq 事件补位，以及任务右键菜单与再次执行的数据流。
   - 适用场景：任务数量多时打开抽屉卡顿、`loadTasksPage` 与 `get_tasks_page` 行为；排查右键菜单层级、菜单动作或三类任务重跑参数回填。
 
 ## 爬虫（`crawler/`）
@@ -168,7 +169,8 @@
 ## 插件（`plugins/`）
 
 - [plugins/PLUGIN_FILE_ENDPOINT.md](plugins/PLUGIN_FILE_ENDPOINT.md)
-  - 主题：插件轻量记录与 `/plugin_file` 按需读取，`v` / `source` / `preview` / `t` 参数、白名单、404、ETag、推荐配置动态导入态、Android loopback 转发、前端缓存失效与任务脚本快照。
+  - 推荐配置由 `plugin://…/recommended` rows 观察方读取，按来源版本隔离；写后 `plugin-changed` 差异驱动相关 key 刷新。
+  - 主题：插件轻量记录与 `/plugin_file` 按需读取，`v` / `source` / `preview` 参数、白名单、404、ETag、推荐配置动态导入态、Android loopback 转发、前端缓存失效与任务脚本快照。
   - 适用场景：排查文档/图片/模板加载、错误版本或预览失效、商店来源隔离、推荐配置导入态、启动插件负载和脚本按需读取。
 
 - [plugins/PLUGIN_ASSETS.md](plugins/PLUGIN_ASSETS.md)

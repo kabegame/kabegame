@@ -267,14 +267,11 @@ describe("pluginFileUrl", () => {
     expect(url.searchParams.get("v")).toBe("1.2.3");
     expect([...url.searchParams.keys()]).toEqual(["v"]);
   });
-  it("隔离商店来源与预览 token，推荐配置带 t", async () => {
+  it("隔离商店来源与预览 token", async () => {
     const { mod } = await loadReady();
     const plugin = { id: "test", version: "1.0.0" };
-    const store = new URL(
-      mod.pluginFileUrl({ ...plugin, fileOrigin: { kind: "store", sourceId: "a&b" } }, "a.json", "recommendedConfig"),
-    );
+    const store = new URL(mod.pluginFileUrl({ ...plugin, fileOrigin: { kind: "store", sourceId: "a&b" } }, "a.json"));
     expect(store.searchParams.get("source")).toBe("a&b");
-    expect(store.searchParams.get("t")).toBe("recommendedConfig");
     const preview = new URL(
       mod.pluginFileUrl({ ...plugin, fileOrigin: { kind: "preview", token: "abc/def" } }, "a.md"),
     );

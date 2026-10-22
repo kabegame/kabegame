@@ -1,9 +1,8 @@
-import { computed, onScopeDispose, ref, watch, type Ref } from "vue";
+import { computed, shallowReactive, watch, type Ref } from "vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import { parsePluginRecommendedPreset } from "@/stores/crawler";
-import { fetchRecommendedConfig, recommendedConfigPaths } from "./pluginFiles";
-import { recommendedConfigKey, registerRecommendedImportStates } from "./runConfigWrites";
-import { subscribeRunConfigEvents } from "@/services/runConfigs";
+import { pluginResourceBase, recommendedConfigPaths } from "./pluginFiles";
+import { on, pathqlRequest$, usePathqlLookMany } from "./kbEvents";
 import type { PluginRecommendedPreset } from "@/stores/crawler";
 
 export type RecommendedPresetEntry = {
@@ -25,99 +24,80 @@ export function presetKey(preset: Pick<PluginRecommendedPreset, "pluginId" | "fi
   return `${preset.pluginId}/${preset.filename}`;
 }
 
-/** 先发布声明顺序的占位项，各 JSON 独立到达后替换；配置变化刷新宿主计算的导入态。 */
+/** 按插件观察推荐行；声明顺序占位，事件刷新由核心的统一窗口处理。 */
 export function useRecommendedPresets(
   plugins: Readonly<Ref<readonly Plugin[]>> = computed(() => usePluginStore().visiblePlugins),
   enabled: Readonly<Ref<boolean>> = computed(() => true),
 ) {
-  const entries = ref<RecommendedPresetEntry[]>([]);
-  let generation = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let appliedSeq = 0;
-  let importRevision = 0;
-  let pendingSeq = 0;
-  const latestImported = new Map<string, boolean>();
-  const workItems = () =>
-    plugins.value.flatMap((plugin) => recommendedConfigPaths(plugin).map((path) => ({ plugin, path })));
-  async function refresh(rebuild = false, seq = 0) {
-    const current = ++generation;
-    const revision = importRevision;
-    const work = workItems();
-    if (rebuild) {
-      appliedSeq = 0;
-      latestImported.clear();
-      entries.value = work.map(({ plugin, path }) => ({
-        key: recommendedConfigKey(plugin, path),
-        pluginId: plugin.id,
-        filename: path.split("/").pop() ?? path,
-        preset: null,
-      }));
-    }
-    if (!enabled.value) return;
-    await Promise.all(
-      work.map(async ({ plugin, path }) => {
-        const key = recommendedConfigKey(plugin, path);
-        try {
-          const raw = await fetchRecommendedConfig(plugin, path);
-          const preset = parsePluginRecommendedPreset(raw, new Map([[plugin.id, plugin.baseUrl]]));
-          if (current !== generation) return;
-          const entry = entries.value.find((entry) => entry.key === key);
-          if (entry && preset) {
-            // 写结果先到时，不能让此前发出的旧 HTTP 响应覆盖即时导入态。
-            if (revision !== importRevision && latestImported.has(key)) preset.isImported = latestImported.get(key);
-            entry.preset = preset;
-          } else entries.value = entries.value.filter((entry) => entry.key !== key);
-        } catch (error) {
-          if (current === generation) entries.value = entries.value.filter((entry) => entry.key !== key);
-          console.warn("推荐配置加载失败", error);
-        }
-      }),
-    );
-    if (current === generation) appliedSeq = Math.max(appliedSeq, seq);
-  }
-  const unregister = registerRecommendedImportStates({
-    requests: () =>
-      enabled.value
-        ? workItems().map(({ plugin, path }) => ({
-            key: recommendedConfigKey(plugin, path),
-            pluginId: plugin.id,
-            version: plugin.version,
-            origin: plugin.fileOrigin,
-            path,
-          }))
-        : [],
-    apply: (states, seq) => {
-      if (seq < appliedSeq) return;
-      appliedSeq = seq;
-      importRevision++;
-      for (const state of states) {
-        latestImported.set(state.key, state.isImported);
-        const entry = entries.value.find((entry) => entry.key === state.key);
-        if (entry?.preset) entry.preset.isImported = state.isImported;
-      }
-      if (pendingSeq <= seq) {
-        clearTimeout(timer);
-        pendingSeq = 0;
-      }
+  const pluginsByKey = computed(
+    () =>
+      new Map<string, Plugin>(
+        enabled.value
+          ? plugins.value
+              .filter((plugin) => recommendedConfigPaths(plugin).length)
+              .map((plugin) => [`${pluginResourceBase(plugin)}/recommended`, plugin] as const)
+          : [],
+      ),
+  );
+  const keys = computed(() => [...pluginsByKey.value.keys()]);
+  const loaded = shallowReactive(new Map<string, RecommendedPresetEntry[]>());
+  const entries = computed(() =>
+    [...pluginsByKey.value].flatMap(
+      ([key, plugin]) =>
+        loaded.get(key) ??
+        recommendedConfigPaths(plugin).map((path) => ({
+          key: `${key}/${encodeURIComponent(path)}`,
+          pluginId: plugin.id,
+          filename: path.split("/").pop() ?? path,
+          preset: null,
+        })),
+    ),
+  );
+
+  usePathqlLookMany({
+    kind: "rows",
+    keys: () => keys.value,
+    refreshOn: (key) => [
+      on(
+        "plugin-changed",
+        (payload) =>
+          payload.pluginId === pluginsByKey.value.get(key)?.id &&
+          (payload.changes?.version !== undefined || payload.changes?.recommendedConfigs !== undefined),
+      ),
+    ],
+    onResult: (key, { rows }) => {
+      const plugin = pluginsByKey.value.get(key);
+      if (!plugin) return;
+      const byPath = new Map(rows.map((row) => [row.path, row]));
+      loaded.set(
+        key,
+        recommendedConfigPaths(plugin).flatMap((path) => {
+          const preset = parsePluginRecommendedPreset(byPath.get(path), new Map([[plugin.id, plugin.baseUrl]]));
+          return preset
+            ? [{ key: `${key}/${encodeURIComponent(path)}`, pluginId: plugin.id, filename: preset.filename, preset }]
+            : [];
+        }),
+      );
+    },
+    onError: (key, error) => {
+      // 已有内容保留；首次失败则移除骨架，手动刷新仍可恢复。
+      if (!loaded.has(key)) loaded.set(key, []);
+      console.warn("推荐配置加载失败", error);
     },
   });
-  watch([plugins, enabled], () => void refresh(true), { immediate: true });
-  const unsubscribe = subscribeRunConfigEvents((event) => {
-    if (event.seq > 0 && event.seq <= appliedSeq) return;
-    pendingSeq = Math.max(pendingSeq, event.seq);
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      const seq = pendingSeq;
-      pendingSeq = 0;
-      void refresh(false, seq);
-    }, 200);
-  });
-  onScopeDispose(() => {
-    generation++;
-    unsubscribe();
-    unregister();
-    clearTimeout(timer);
-  });
+  watch(
+    keys,
+    (next, previous = []) => {
+      const before = new Set(previous);
+      for (const key of loaded.keys()) if (!pluginsByKey.value.has(key)) loaded.delete(key);
+      // 观察方已同步注册；新增 key 是用户操作，只请求该 key。
+      for (const key of next) if (!before.has(key)) pathqlRequest$.next(["rows", key]);
+    },
+    { immediate: true, flush: "sync" },
+  );
+  function refresh() {
+    for (const key of keys.value) pathqlRequest$.next(["rows", key]);
+  }
   const presets = computed(() => entries.value.flatMap((entry) => (entry.preset ? [entry.preset] : [])));
   return { entries, presets, refresh };
 }

@@ -10,8 +10,8 @@
 ### Optimized
 - 画册树与画廊筛选树只刷新可见展开分支；加载更多只读新页，搜索与读取失败时保留旧内容，图片计数独立更新。
 - 画廊、画册、任务与畅游图片网格在删除、隐藏、加入 / 移出画册后立即刷新当前页与总数，后台下载等事件按窗口合并刷新；并发的刷新请求只采用最新发出的结果，旧结果不会覆盖新列表。
-- 运行配置新增、导入、编辑、复制、定时开关与删除立即同步当前列表和推荐导入状态；事件按序号补位，避免重复刷新和推荐卡片闪回骨架。
-- 插件列表改为轻量清单，文档、配图、模板与推荐配置经 `/plugin_file?...v=<版本>` 按需加载；自动配置推荐逐项显示并刷新导入状态，任务脚本在冻结时读取。
+- 运行配置新增、导入、编辑、复制、定时开关与删除立即同步当前列表；推荐导入态由插件变更事件只刷新相关插件，刷新失败保留已有卡片。
+- 插件列表改为轻量清单，文档、配图与模板经 `/plugin_file?...v=<版本>` 按需加载；推荐配置按来源和版本读取，商店详情也可查看包内 PathQL provider，任务脚本在冻结时读取。
 - 运行配置页改为 chip 过滤与卡片网格，可按状态、最近结果、插件和定时模式筛选并切换六种排序；卡片直接显示最后一次任务和下次运行。插件推荐会标记是否已导入，定时规则新增每小时与每周多选日期。
 - 任务抽屉与自动配置页改为按需分页加载：启动时只查询一次各状态任务数用于右上角徽章，打开抽屉时先加载 20 条，滚动到底继续加载，关闭后释放（只记住搜索词）；自动配置页及每张配置卡片下的任务列表同样分页加载。任务很多时启动和打开抽屉不再卡顿。
 
@@ -31,6 +31,7 @@
 ## 开发侧
 
 ### Changed
+- 插件资源与 MCP 改为 `plugin://installed/<id>/<version>`、`byStore/<sourceId>/<id>/<version>`、`byPreview/<token>/<id>/<version>`，旧仅 id 路径移除；新增 recommended 目录/单项资源与读能力。插件事件统一为 plugin-added / plugin-changed / plugin-deleted；推荐配置由 kbEvents rows 观察方按 plugin-changed 刷新，移除动态 HTTP 标注和写响应的推荐导入态。
 - 隐藏图数、畅游站点计数与画册页头部迁到 kbEvents pathql 观察方；畅游计数随页面释放，画册详情与图片计数分 key 观察，手动刷新等待两段落地。
 - 树数据源改为 `TreeQuerySource` 查询描述，逐页观察 pathql `all` key；补充字段统一走 `TreePage.extra`，移除纯净候选缓存，Promise 等待保留在模型中。
 - 新增 `services/kbEvents`（rxjs）：后端事件源 `kbEvent$` 与 pathql 核心数据源分离；ImageGrid 的行与总数改为 pathql 核心上的观察方 `usePathqlLooker`（行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批，按前端请求序号落地，不再依赖后端快照 `seq`）：观察方只看不请求，以 `refreshOn` 按单事件注册过滤器，核心对每个 key 统一 500ms 窗口、任一过滤器同意即刷新。唯一请求入口 `pathqlRequest$.next([kind, key])` 即发即返回，主动请求只有事件窗口与用户操作（路径变化、手动刷新、`mutate`）两条通路；每个 key 维护 pending 窗口，任一请求返回即取消更早的 pending，观察方看到最后可得的数据与最新请求的 loading / error。`usePagedGallery` 不再负责加载，`GridRefreshContext` 去掉 `refreshPage` / `loadTotalImagesCount`。ImageGrid 同批读取分子与 adapter 可选分母，向插槽 provide `{ total, unfilteredTotal }`（`gridTotalKey`），画廊工具栏只注入这一对数量。新增宿主 `pathql_all`：查询按序执行、整批失败，阻塞线程钉住只读连接并开启事务，保证整批 SQL 共享同一个 WAL 读快照。字段补丁改用 `imagePatches$`（`image-changed` 与收藏画册成员变更各自防抖、各自合并），ImageGrid 与预览弹窗不再订阅 `dataChangeHub`。`batch_delete_images`、`batch_remove_images`、`add_images_to_album`、`add_task_images_to_album`、`remove_images_from_album` 去掉 `view` 参数与返回快照。
