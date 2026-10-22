@@ -399,7 +399,9 @@ const handleRefresh = async () => {
   if (!taskId.value) return;
   isRefreshing.value = true;
   try {
-    await Promise.all([taskViewRef.value?.refresh(), failedImagesStore.loadAll()]);
+    // 图片列表请求即返回，结果与错误经 ImageGrid 的观察方落地
+    taskViewRef.value?.refresh();
+    await failedImagesStore.loadAll();
     ElMessage.success(t("tasks.refreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);

@@ -7,7 +7,14 @@ import { batchWindow } from "./batchWindow";
 import { kbEvent$ } from "./eventSource";
 import { imagePatches$ } from "./imagePatches";
 import { on, type EventTrigger } from "./events";
-import { lookPathql, requestPathql, type PathqlKind, type PathqlRows, type SnapshotOf } from "./pathqlSource";
+import {
+  lookPathql,
+  pathqlRequest$,
+  type PathqlKind,
+  type PathqlRows,
+  type PathqlStatus,
+  type SnapshotOf,
+} from "./pathqlSource";
 import { usePathqlLooker } from "./usePathqlLooker";
 
 type Row = Record<string, unknown>;
@@ -139,71 +146,122 @@ describe("imagePatches$", () => {
 /** 以观察方身份注册并记录收到的信号。 */
 function look<K extends PathqlKind>(kind: K, path: string, refreshOn: readonly EventTrigger[] = []) {
   const data: SnapshotOf<K>[] = [];
-  const loading: boolean[] = [];
-  const errors: unknown[] = [];
+  const statuses: PathqlStatus[] = [];
   const subscription = lookPathql(kind, path, refreshOn).subscribe((signal) => {
     if (signal.type === "data") data.push(signal.snapshot);
-    else if (signal.type === "loading") loading.push(signal.loading);
-    else errors.push(signal.error);
+    else statuses.push(signal.status);
   });
   cleanups.push(() => subscription.unsubscribe());
-  return { data, loading, errors, stop: () => subscription.unsubscribe() };
+  return {
+    data,
+    statuses,
+    status: () => statuses[statuses.length - 1],
+    stop: () => subscription.unsubscribe(),
+  };
+}
+
+function request(kind: PathqlKind, path: string) {
+  pathqlRequest$.next([kind, path]);
 }
 
 function imagesChange(reason: string) {
   listeners.get("images-change")!({ payload: { seq: 1, reason } });
 }
 
-describe("requestPathql", () => {
-  it("按请求序号维护数据状态：更大的序号更新，更小的静默丢弃", async () => {
+describe("pathqlRequest$", () => {
+  it("next 即返回；返回的请求取消它之前的全部 pending，更早的结果静默丢弃", async () => {
     const looker = look("rows", "p/1");
     expect(looker.data).toEqual([]); // 初始无数据
+    expect(looker.status()).toEqual({ seq: 0, loading: false, error: null });
 
-    // 第一次请求返回 → 更新
-    pathqlFetch.mockResolvedValueOnce(rows("r1"));
-    await requestPathql("rows", "p/1");
+    const r1 = deferred<Row[]>();
+    const r2 = deferred<Row[]>();
+    const r3 = deferred<Row[]>();
+    pathqlFetch.mockReturnValueOnce(r1.promise).mockReturnValueOnce(r2.promise).mockReturnValueOnce(r3.promise);
+    request("rows", "p/1");
+    request("rows", "p/1");
+    request("rows", "p/1");
+    expect(pathqlFetch).toHaveBeenCalledTimes(3); // 三个请求并行在途
+    expect(looker.status()).toEqual({ seq: 3, loading: true, error: null });
+
+    // 2 先返回：更新数据并确认、取消 1；最新请求 3 仍在途
+    r2.resolve(rows("r2"));
+    await flushPromises();
+    expect(looker.data.map(ids)).toEqual([["r2"]]);
+    expect(looker.status()).toEqual({ seq: 3, loading: true, error: null });
+
+    // 1 返回：已被取消，丢弃
+    r1.resolve(rows("r1"));
+    await flushPromises();
+    expect(looker.data.map(ids)).toEqual([["r2"]]);
+
+    // 3 返回：更新，最新请求结束
+    r3.resolve(rows("r3"));
+    await flushPromises();
+    expect(looker.data.map(ids)).toEqual([["r2"], ["r3"]]);
+    expect(looker.status()).toEqual({ seq: 3, loading: false, error: null });
+  });
+
+  it("loading / error 只属于最新请求；数据是最后可得的，序号可以落后于状态", async () => {
+    const looker = look("rows", "p/err");
+    const r1 = deferred<Row[]>();
+    const r2 = deferred<Row[]>();
+    pathqlFetch.mockReturnValueOnce(r1.promise).mockReturnValueOnce(r2.promise);
+    request("rows", "p/err");
+    request("rows", "p/err");
+
+    r1.resolve(rows("r1"));
+    await flushPromises();
+    expect(looker.data.map((s) => s.seq)).toEqual([1]);
+    expect(looker.status()).toEqual({ seq: 2, loading: true, error: null });
+
+    // 最新请求失败：状态带上错误，数据仍是请求 1 的
+    r2.reject(new Error("boom"));
+    await flushPromises();
+    expect(looker.status()).toEqual({ seq: 2, loading: false, error: new Error("boom") });
     expect(looker.data.map(ids)).toEqual([["r1"]]);
 
-    // 第二次请求未返回时第三次也发出；先返回的第二次仍更新（是最近返回的请求），随后第三次序号更大也更新
-    const second = deferred<Row[]>();
-    const third = deferred<Row[]>();
-    pathqlFetch.mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise);
-    const r2 = requestPathql("rows", "p/1");
-    const r3 = requestPathql("rows", "p/1");
-    second.resolve(rows("r2"));
-    await r2;
-    expect(looker.data.map(ids)).toEqual([["r1"], ["r2"]]);
-    third.resolve(rows("r3"));
-    await r3;
-    expect(looker.data.map(ids)).toEqual([["r1"], ["r2"], ["r3"]]);
-
-    // 接连发出 A、B：B 先返回更新；A 后返回序号更小，静默丢弃
-    const a = deferred<Row[]>();
-    const b = deferred<Row[]>();
-    pathqlFetch.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
-    const ra = requestPathql("rows", "p/1");
-    const rb = requestPathql("rows", "p/1");
-    b.resolve(rows("B"));
-    await rb;
-    a.resolve(rows("A"));
-    await ra;
-    expect(looker.data.map(ids)).toEqual([["r1"], ["r2"], ["r3"], ["B"]]);
-    expect(pathqlFetch).toHaveBeenCalledTimes(5);
+    // 更早的请求失败：只确认、取消它之前的 pending，不进状态；新请求开始时清掉旧错误
+    const r3 = deferred<Row[]>();
+    const r4 = deferred<Row[]>();
+    pathqlFetch.mockReturnValueOnce(r3.promise).mockReturnValueOnce(r4.promise);
+    request("rows", "p/err");
+    request("rows", "p/err");
+    expect(looker.status()).toEqual({ seq: 4, loading: true, error: null });
+    r3.reject(new Error("old"));
+    await flushPromises();
+    expect(looker.status()).toEqual({ seq: 4, loading: true, error: null });
+    r4.resolve(rows("r4"));
+    await flushPromises();
+    expect(looker.status()).toEqual({ seq: 4, loading: false, error: null });
+    expect(looker.data.map(ids)).toEqual([["r1"], ["r4"]]);
   });
 
   it("总数取 pathql_count 的 total，序号由前端分配", async () => {
     const looker = look("total", "c/1");
     pathqlCount.mockResolvedValueOnce({ total: 42, seq: 999 });
-    await requestPathql("total", "c/1");
+    request("total", "c/1");
+    await flushPromises();
     expect(looker.data).toEqual([{ total: 42, seq: 1 }]);
   });
 
-  it("后注册的观察方先拿到当前数据状态", async () => {
+  it("后注册的观察方先拿到最后可得的数据与最新状态", async () => {
     look("rows", "p/2");
     pathqlFetch.mockResolvedValueOnce(rows("x"));
-    await requestPathql("rows", "p/2");
+    request("rows", "p/2");
+    await flushPromises();
     const late = look("rows", "p/2");
     expect(late.data.map(ids)).toEqual([["x"]]);
+    expect(late.status()).toEqual({ seq: 1, loading: false, error: null });
+  });
+
+  it("没有观察方的路径请求返回后即回收，后来者不拿到旧数据", async () => {
+    pathqlFetch.mockResolvedValueOnce(rows("gone"));
+    request("rows", "p/3");
+    await flushPromises();
+    const late = look("rows", "p/3");
+    expect(late.data).toEqual([]);
+    expect(late.status()).toEqual({ seq: 0, loading: false, error: null });
   });
 });
 
@@ -262,20 +320,21 @@ describe("核心刷新窗口", () => {
     expect(other.data).toEqual([]);
   });
 
-  it("事件触发的刷新失败推给观察方", async () => {
+  it("事件触发的刷新失败经最新状态推给观察方", async () => {
     const looker = look("rows", "w/4", [on("images-change")]);
     await flushPromises();
     pathqlFetch.mockRejectedValueOnce(new Error("boom"));
     imagesChange("add");
     await flushPromises();
-    expect(looker.errors).toEqual([new Error("boom")]);
-    expect(looker.loading).toEqual([false, true, false]);
+    expect(looker.statuses.map((s) => s.loading)).toEqual([false, true, false]);
+    expect(looker.status()).toEqual({ seq: 1, loading: false, error: new Error("boom") });
   });
 });
 
 describe("usePathqlLooker", () => {
   function mountLooker(key = ref<string | null>("g/1"), refreshOn: readonly EventTrigger[] = [on("images-change")]) {
     const results: PathqlRows[] = [];
+    const errors: unknown[] = [];
     let looker!: ReturnType<typeof usePathqlLooker<"rows">>;
     const wrapper = mount(
       defineComponent({
@@ -285,13 +344,14 @@ describe("usePathqlLooker", () => {
             key: () => key.value,
             refreshOn,
             onResult: (snapshot) => void results.push(snapshot),
+            onError: (error) => void errors.push(error),
           });
           return () => null;
         },
       }),
     );
     cleanups.push(() => wrapper.unmount());
-    return { key, results, looker: () => looker };
+    return { key, results, errors, looker: () => looker };
   }
 
   it("观察方不发请求，只看到用户请求或事件刷新的结果", async () => {
@@ -300,10 +360,21 @@ describe("usePathqlLooker", () => {
     await flushPromises();
     expect(pathqlFetch).not.toHaveBeenCalled();
 
-    await requestPathql("rows", "g/1");
+    request("rows", "g/1");
+    await flushPromises();
     imagesChange("add");
     await flushPromises();
     expect(results.map(ids)).toEqual([["user"], ["event"]]);
+  });
+
+  it("最新请求失败时通知 onError，并暴露 error", async () => {
+    const { errors, looker } = mountLooker(ref<string | null>("g/err"));
+    pathqlFetch.mockRejectedValueOnce(new Error("boom"));
+    request("rows", "g/err");
+    await flushPromises();
+    expect(errors).toEqual([new Error("boom")]);
+    expect(looker().error.value).toEqual(new Error("boom"));
+    expect(looker().loading.value).toBe(false);
   });
 
   it("key 为 null 时不注册，事件不触发请求", async () => {
@@ -321,18 +392,18 @@ describe("usePathqlLooker", () => {
     pathqlFetch.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise);
     const { key, results, looker } = mountLooker(ref<string | null>("g/old"));
 
-    const first = requestPathql("rows", "g/old");
+    request("rows", "g/old");
     expect(looker().loading.value).toBe(true);
     key.value = "g/new";
     await nextTick();
     expect(looker().loading.value).toBe(false);
-    const second = requestPathql("rows", "g/new");
+    request("rows", "g/new");
     expect(looker().loading.value).toBe(true);
     oldRead.resolve(rows("old"));
-    await first;
+    await flushPromises();
     expect(results).toEqual([]);
     newRead.resolve(rows("new"));
-    await second;
+    await flushPromises();
     expect(results.map(ids)).toEqual([["new"]]);
     expect(looker().loading.value).toBe(false);
 

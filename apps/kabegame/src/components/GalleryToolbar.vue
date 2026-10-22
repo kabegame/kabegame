@@ -46,11 +46,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Close, Filter } from "@kabegame/element-plus-icons";
-import { pathqlCount } from "@/services/pathql";
+import { on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
+import { gridTotalKey } from "@/components/imageGrid/gridTotal";
 import { withGalleryPrefix } from "@/utils/path";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
@@ -60,7 +60,6 @@ import { usePageBridgeStore } from "@/stores/pageBridge";
 import {
   hasActiveQuery,
   querySearchTerm,
-  buildGalleryCountPath,
   type GalleryQuery,
   type GalleryQueryPatch,
   type GallerySort,
@@ -77,9 +76,8 @@ import { DEFAULT_GALLERY_PAGE_SIZE } from "@/utils/galleryPageSize";
 
 interface Props {
   isLoadingAll?: boolean;
-  totalCount?: number;
   bigPageEnabled?: boolean;
-  /** 当前画廊过滤条件；工具栏用它把过滤后数量与无过滤总数作为一对刷新。 */
+  /** 当前画廊过滤条件；有过滤时才显示无过滤总数（分母）。 */
   filter?: GalleryQuery;
   sort?: GallerySort;
   /** 每页条数（与设置同步，用于工具栏展示） */
@@ -90,7 +88,6 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
-  totalCount: 0,
   bigPageEnabled: false,
   filter: () => [] as GalleryQuery,
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
@@ -143,54 +140,56 @@ const failedCountFoldLabel = computed(() => {
 
 // ---------- 总数（分子 / 分母）----------
 /**
- * 分子与分母必须作为一份显示快照提交。ImageGrid 的 totalCount 继续服务分页，
- * 这里只把它当首次加载 / 查询失败时的降级值，避免两个独立刷新时序拼出割裂文案。
+ * 分子是 ImageGrid 注入的当前视图总数，不再单独订阅同一计数路径；分母（只带 hide 上下文的全部数量）
+ * 只有工具栏用，由它自己观察。两者都落定才作为一份显示快照提交，避免独立刷新时序拼出割裂文案。
  */
-const countPair = ref<{ count: number; total: number } | null>(null);
-const unfilteredCountPath = computed(() => withGalleryPrefix(galleryHide.value ? "hide" : "gallery"));
-const filteredCountPath = computed(() => {
-  if (!galleryRouteStore.effectiveNoAlbum && props.filter.length === 0) return unfilteredCountPath.value;
-  const body = buildGalleryCountPath(galleryRouteStore.effectiveNoAlbum, props.filter);
-  return withGalleryPrefix(galleryHide.value ? `hide/${body}` : body);
+const gridTotal = inject(gridTotalKey);
+if (!gridTotal) throw new Error("GalleryToolbar 必须放在 ImageGrid 的插槽内");
+
+/** 有过滤（含「无画册」）时才显示分母；无过滤时分子即全部，不读分母。 */
+const denominatorKey = computed(() =>
+  galleryRouteStore.effectiveNoAlbum || props.filter.length > 0
+    ? withGalleryPrefix(galleryHide.value ? "hide" : "gallery")
+    : null,
+);
+const denominator = ref<{ key: string; total: number } | null>(null);
+const denominatorLooker = usePathqlLooker({
+  kind: "total",
+  key: () => denominatorKey.value,
+  refreshOn: [on("images-change", (payload) => !!payload.reason)],
+  onResult: (snapshot) => {
+    if (denominatorKey.value) denominator.value = { key: denominatorKey.value, total: snapshot.total };
+  },
 });
-let countRequestVersion = 0;
-
-async function refreshCountPair() {
-  const requestVersion = ++countRequestVersion;
-  const filteredPath = filteredCountPath.value;
-  const unfilteredPath = unfilteredCountPath.value;
-  try {
-    if (filteredPath === unfilteredPath) {
-      const snapshot = await pathqlCount(filteredPath);
-      if (requestVersion !== countRequestVersion) return;
-      countPair.value = { count: snapshot.total, total: snapshot.total };
-      return;
-    }
-    const [filtered, unfiltered] = await Promise.all([pathqlCount(filteredPath), pathqlCount(unfilteredPath)]);
-    if (requestVersion !== countRequestVersion) return;
-    countPair.value = { count: filtered.total, total: unfiltered.total };
-  } catch {
-    if (requestVersion === countRequestVersion) countPair.value = null;
-  }
-}
-
+// 分母路径只有工具栏在用：路径变化即请求。
 watch(
-  [filteredCountPath, unfilteredCountPath],
-  () => {
-    countPair.value = null;
-    void refreshCountPair();
+  denominatorKey,
+  (key) => {
+    if (key) pathqlRequest$.next(["total", key]);
   },
   { immediate: true },
 );
 
-useImagesChangeRefresh({
-  enabled: ref(true),
-  waitMs: 500,
-  onRefresh: refreshCountPair,
-});
+const countPair = ref<{ count: number; total: number | null } | null>(null);
+watch(
+  () => {
+    if (!gridTotal.settled.value) return null;
+    const count = gridTotal.total.value;
+    const key = denominatorKey.value;
+    if (!key) return { count, total: null };
+    if (denominatorLooker.loading.value) return null;
+    // 分母读失败时只显示分子
+    if (denominatorLooker.error.value != null) return { count, total: null };
+    return denominator.value?.key === key ? { count, total: denominator.value.total } : null;
+  },
+  (pair) => {
+    if (pair) countPair.value = pair;
+  },
+  { immediate: true },
+);
 
 const totalCountText = computed(() => {
-  const count = countPair.value?.count ?? props.totalCount;
+  const count = countPair.value?.count ?? gridTotal.total.value;
   if (count === 0) {
     return t("gallery.noImages");
   }

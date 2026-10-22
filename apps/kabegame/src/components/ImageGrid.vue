@@ -83,12 +83,14 @@ import {
   onBeforeUnmount,
   onDeactivated,
   onMounted,
-  nextTick,
+  provide,
+  readonly,
   ref,
   shallowRef,
   useAttrs,
   watch,
 } from "vue";
+import { gridTotalKey } from "@/components/imageGrid/gridTotal";
 import type { Subscription } from "rxjs";
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
@@ -120,7 +122,7 @@ import { usePagedGallery } from "@/composables/usePagedGallery";
 import {
   GRID_REFRESH_WAIT_MS,
   imagePatches$,
-  requestPathql,
+  pathqlRequest$,
   usePathqlLooker,
   type PathqlRows,
   type PathqlTotal,
@@ -333,9 +335,9 @@ const currentWallpaperImageId = computed<string | null>({
   },
 });
 
-let loadImagesInFlight = false;
 const totalImagesCount = ref(0);
-let lastRemovedIds: string[] = [];
+/** totalImagesCount 对应的计数路径。 */
+const loadedCountKey = ref<string | null>(null);
 let ensurePageAfterRemoval: () => Promise<void> = async () => {};
 let refreshCtx!: GridRefreshContext;
 
@@ -348,21 +350,7 @@ const paged = usePagedGallery({
   images,
   loadedKey,
   viewRef: coreRef,
-  loading: { startLoading, finishLoading },
   rootPathFallback: adapter.rootPathFallback,
-  // 首次 immediate watcher 会在 live query 初始化前触发，延后一轮再读取行状态。
-  load: async (path) => {
-    loadImagesInFlight = true;
-    try {
-      await nextTick();
-      await loadImages(path);
-    } finally {
-      loadImagesInFlight = false;
-    }
-  },
-  computeCountPath: adapter.computeCountPath,
-  isActive: () => isRouteActive.value && adapter.isActive(),
-  onLoadError: adapter.onLoadError,
 });
 
 const rawViewPath = () => paged.rowsPath.value;
@@ -394,14 +382,12 @@ const applyRows = async (snapshot: PathqlRows) => {
   images.value = snapshot.rows.map(rowToImageInfo);
   loadedKey.value = raw;
   latestSnapshotSeq = snapshot.seq;
-  lastRemovedIds = [];
   // 先结算用户主动操作，再决定是否跟页；预览对象仍是上一帧的 ImageInfo。
   if (sameView) resolvePreviewAnchor();
 
   if (!sameView) return;
   if (container) container.scrollTop = previousScrollTop;
   const { removedIds } = diffById(previous, images.value);
-  lastRemovedIds = removedIds;
   if (removedIds.length > 0) {
     const selected = coreRef.value?.getSelectedIds?.() as Set<string> | undefined;
     if (selected && removedIds.some((id) => selected.has(id))) clearSelection();
@@ -417,6 +403,7 @@ const applyRows = async (snapshot: PathqlRows) => {
 
 const applyTotal = (snapshot: PathqlTotal) => {
   totalImagesCount.value = snapshot.total;
+  loadedCountKey.value = currentCountPath();
 };
 
 const handleCountError = async (error: unknown) => {
@@ -425,6 +412,7 @@ const handleCountError = async (error: unknown) => {
 };
 
 // 行与总数各自作为观察方注册到 pathql 核心；adapter 的过滤器决定事件窗口内是否刷新。
+// 观察方只看最后可得的数据与最新请求的状态，错误也只来自最新请求。
 const rowsLooker = usePathqlLooker({
   kind: "rows",
   key: currentRowsPath,
@@ -435,7 +423,7 @@ const rowsLooker = usePathqlLooker({
   },
 });
 
-usePathqlLooker({
+const totalLooker = usePathqlLooker({
   kind: "total",
   key: currentCountPath,
   refreshOn: adapter.refreshOn,
@@ -443,37 +431,45 @@ usePathqlLooker({
   onError: handleCountError,
 });
 
-/** 用户操作：直接请求当前行 / 总数，不防抖；结果经观察方落地，错误抛给调用方。 */
-const requestRows = async () => {
+// 插槽内组件（如画廊工具栏）直接注入总数，不再单独订阅同一计数路径。
+provide(gridTotalKey, {
+  total: readonly(totalImagesCount),
+  settled: computed(() => !totalLooker.loading.value && loadedCountKey.value === currentCountPath()),
+});
+
+/** 用户操作：next 一个请求即返回，不防抖、不等待；结果与错误经观察方落地。 */
+const requestRows = () => {
   const key = currentRowsPath();
-  if (key) await requestPathql("rows", key);
+  if (key) pathqlRequest$.next(["rows", key]);
 };
-const requestTotal = async () => {
+const requestTotal = () => {
   const key = currentCountPath();
-  if (key) await requestPathql("total", key);
+  if (key) pathqlRequest$.next(["total", key]);
 };
 
-// 计数路径变化（换筛选、换数据源、激活）即请求总数；翻页不改计数路径，不重读。
+// 路径变化（导航、翻页、换筛选、激活）是用户操作，key 一变即请求；翻页不改计数路径，不重读总数。
+// 放在观察方之后：观察方先按 sync watch 换到新 key，请求返回时一定有人在看。
+watch(
+  currentRowsPath,
+  (key) => {
+    if (key) pathqlRequest$.next(["rows", key]);
+  },
+  { immediate: true },
+);
 watch(
   currentCountPath,
-  (key, previous) => {
-    if (key && key !== previous) void requestTotal().catch(handleCountError);
+  (key) => {
+    if (key) pathqlRequest$.next(["total", key]);
   },
   { immediate: true },
 );
 
-// 加载当前页的行；总数由独立 live 状态按计数路径维护。
-async function loadImages(path?: string) {
-  const raw = path || paged.rowsPath.value;
-  if (!raw) return;
-  if (adapter.validatePath && !adapter.validatePath(raw)) return;
-  loadImagesInFlight = true;
-  try {
-    await requestRows();
-  } finally {
-    loadImagesInFlight = false;
-  }
-}
+// 当前路径还没有数据、且最新请求在途时才显示加载遮罩；已有数据时的刷新不遮挡。
+watch(
+  () => rowsLooker.loading.value && loadedKey.value !== rawViewPath(),
+  (waiting) => (waiting ? startLoading() : finishLoading()),
+  { immediate: true },
+);
 
 const {
   currentPage: gridCurrentPage,
@@ -482,34 +478,16 @@ const {
   handleJumpToPage: jumpToPage,
   ensureValidPageAfterMassRemoval,
 } = paged;
-const loadTotalImagesCount = requestTotal;
 ensurePageAfterRemoval = paged.ensureValidPageAfterMassRemoval;
 
 /**
- * 当前页与总数并行刷新：保留滚动位置；对被移除的图片做
- * 选中清理、当前壁纸清理与页码越界回退。
- */
-const refreshPage = async (): Promise<{ removedIds: string[] }> => {
-  lastRemovedIds = [];
-  try {
-    await Promise.all([requestRows(), requestTotal()]);
-  } catch (error) {
-    await adapter.onLoadError?.(error, rawViewPath());
-    return { removedIds: [] };
-  }
-  return { removedIds: lastRemovedIds };
-};
-
-/**
- * 改变结果集的操作入口：操作完成即作为用户操作直接请求行与总数（不防抖），
- * 结果仍从数据源落地。刷新失败不影响操作本身的结果。
+ * 改变结果集的操作入口：操作完成即作为用户操作请求行与总数（不防抖、不等待），
+ * 结果仍从数据源落地。
  */
 const mutate: GridRefreshContext["mutate"] = async (op) => {
   const result = await op();
-  await Promise.all([
-    requestRows().catch((error) => adapter.onLoadError?.(error, rawViewPath())),
-    requestTotal().catch(handleCountError),
-  ]);
+  requestRows();
+  requestTotal();
   return result;
 };
 
@@ -539,10 +517,8 @@ const patch: GridRefreshContext["patch"] = (ids, fields) => {
 refreshCtx = {
   images,
   computedPath: gridCurrentPath,
-  refreshPage,
   mutate,
   patch,
-  loadTotalImagesCount: requestTotal,
   ensureValidPageAfterMassRemoval,
   clearSelection,
 };
@@ -591,36 +567,15 @@ const syncActivePathFromUrl = () => {
   }
 };
 
-/** 手动刷新：重拉当前页 + 总数（错误向上抛，由 view 决定提示文案） */
-const refresh = async (opts?: { resetScroll?: boolean }) => {
-  await Promise.all([requestRows(), requestTotal()]);
+/** 手动刷新：请求当前页与总数即返回；结果、错误与进行中状态经观察方看到（暴露的 `loading`）。 */
+const refresh = (opts?: { resetScroll?: boolean }) => {
+  requestRows();
+  requestTotal();
   if (opts?.resetScroll) {
     const el = getContainerEl();
     if (el) el.scrollTop = 0;
   }
 };
-
-// isActive 后置就绪（如 taskId/albumName 异步初始化）时 currentPath 不变，
-// usePagedGallery 的 path watch 不会重发——在激活翻转时补一次加载。
-watch(
-  () => isRouteActive.value && adapter.isActive(),
-  (active) => {
-    if (!active || loadImagesInFlight) return;
-    const path = paged.rowsPath.value;
-    if (!path || loadedKey.value === path) return;
-    startLoading();
-    void (async () => {
-      try {
-        await loadImages(path);
-      } catch (error) {
-        await adapter.onLoadError?.(error, path);
-        return;
-      } finally {
-        finishLoading();
-      }
-    })();
-  },
-);
 
 // route.query.path → routeStore 同步
 watch(
@@ -944,7 +899,7 @@ async function locatePreviewedImage(id: string) {
     request.targetPage = page;
     if (page === paged.currentPage.value) {
       // rank 已读到更新的数据，而本页快照还没跟上，重取本页后再协调。
-      await requestRows();
+      requestRows();
     } else {
       await jumpToPage(page);
     }
@@ -991,23 +946,7 @@ onActivated(() => {
   console.log("grid reactivate");
   syncActivePathFromUrl();
   void applyPreviewFromUrl();
-  // keep-alive 重新激活：路径已变或列表为空时按当前路由 path 刷新，
-  // 保证从其它页面返回后顺序与路由、header 一致。
-  const pathToLoad = gridCurrentPath.value;
-  if (
-    !loadImagesInFlight &&
-    pathToLoad &&
-    adapter.isActive() &&
-    (images.value.length === 0 || loadedKey.value !== pathToLoad)
-  ) {
-    void (async () => {
-      try {
-        await loadImages(pathToLoad);
-      } catch (error) {
-        await adapter.onLoadError?.(error, pathToLoad);
-      }
-    })();
-  }
+  // keep-alive 重新激活：isRouteActive 翻转让 key 从 null 变回路径，由路径 watch 请求。
 });
 onDeactivated(() => {
   isRouteActive.value = false;
@@ -1313,8 +1252,8 @@ defineExpose({
   openPreviewById: (id: string) => coreRef.value?.openPreviewById?.(id),
   closePreview: () => coreRef.value?.closePreview?.(),
   refresh,
-  refreshPage,
-  loadTotalImagesCount,
+  /** 当前行最新请求是否在途。 */
+  loading: rowsLooker.loading,
   ensureValidPageAfterMassRemoval,
   jumpToPage,
   openAddToAlbum,

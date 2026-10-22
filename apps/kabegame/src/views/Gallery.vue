@@ -21,7 +21,6 @@
             <template #before-grid="{ totalCount, currentPage, pageSize, jumpToPage }">
               <!-- 顶部工具栏 -->
               <GalleryToolbar
-                :total-count="totalCount"
                 :big-page-enabled="totalCount > pageSize"
                 :filter="galleryRouteStore.query"
                 :sort="galleryRouteStore.sort"
@@ -343,12 +342,17 @@ const handleManualRefresh = async () => {
     return;
   }
   isRefreshing.value = true;
-  try {
-    await galleryViewRef.value?.refresh({ resetScroll: true });
-  } finally {
-    isRefreshing.value = false;
-  }
+  galleryViewRef.value?.refresh({ resetScroll: true });
+  // 请求即返回；没有发出请求（路径未就绪）时直接收起
+  if (!galleryViewRef.value?.loading) isRefreshing.value = false;
 };
+// 刷新结果经观察方落地：最新请求结束即收起
+watch(
+  () => galleryViewRef.value?.loading,
+  (loading) => {
+    if (!loading) isRefreshing.value = false;
+  },
+);
 
 // ---------- Event-driven refresh ----------
 

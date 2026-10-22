@@ -57,7 +57,9 @@ vi.mock("@/services/kbEvents", async () => {
       if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
       return { loading: isRows ? queryLoading : ref(false) };
     },
-    requestPathql: (kind: "rows" | "total") => (kind === "rows" ? refetch() : totalRefetch()),
+    pathqlRequest$: {
+      next: ([kind]: readonly ["rows" | "total", string]) => void (kind === "rows" ? refetch() : totalRefetch()),
+    },
   };
 });
 vi.mock("@/composables/usePagedGallery", () => ({
@@ -73,7 +75,6 @@ vi.mock("@/composables/usePagedGallery", () => ({
       pendingPreviewBoundary,
       handleJumpToPage: jumpToPage,
       handlePreviewPageBoundary,
-      loadTotalImagesCount: vi.fn(),
       ensureValidPageAfterMassRemoval: vi.fn(async () => {}),
     };
   },
@@ -305,6 +306,7 @@ describe("预览跟随后台新增图片", () => {
     const wrapper = await render();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     const originalImage = core.props("previewImage");
+    refetch.mockClear(); // 挂载时按路径发出的请求不计
     locateImageRowIndex.mockResolvedValue(1);
     refetch.mockImplementation(async () => applySnapshot!(snapshot(["new-2", "new-1"], 2)));
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));

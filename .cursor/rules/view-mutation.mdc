@@ -1,5 +1,5 @@
 ---
-description: ImageGrid 操作后直接请求、事件防抖后请求，按前端请求序号落地；运行配置写操作返回视图快照，事件异步补位
+description: ImageGrid 只经 pathqlRequest$ 发请求（用户操作、事件窗口），观察方只看最后可得数据与最新请求状态；运行配置写操作返回视图快照，事件异步补位
 globs: "apps/kabegame/src/**/*.{ts,vue}, src-tauri/kabegame*/src/**/*.rs"
 alwaysApply: false
 ---
@@ -7,17 +7,21 @@ alwaysApply: false
 # ImageGrid 视图写操作
 
 - 凡从 `ImageGrid` 发起、可能改变当前查询结果集的写操作，必须走 `GridRefreshContext.mutate(() => ...)`。
-  写命令不接收也不返回 `view`；`mutate` 在操作完成后作为用户操作直接请求当前行与总数（不防抖），
+  写命令不接收也不返回 `view`；`mutate` 在操作完成后作为用户操作请求当前行与总数（不防抖、不等待），
   结果仍从数据源落地。禁止调用方直接写入查询结果。
 - 只改变当前行展示字段、不会改变结果集的写操作走 `GridRefreshContext.patch`。当前只有收藏符合此规则。
 - 写命令照常广播事件（主应用前端、后台任务、MCP、CLI 都靠它同步），不得为前端少读一次而加 `hold` 或返回快照。
 - ImageGrid 的行与总数是 pathql 核心上某个 key 的**观察方**（`usePathqlLooker` / `lookPathql`），只看数据、
   不发请求，行读 `pathql_fetch`、总数读 `pathql_count`。观察方注册自己的过滤器（adapter 的 `refreshOn`，
   每条只对一种事件）；核心对每个 key 用统一的 500ms 窗口（`PATHQL_REFRESH_WAIT_MS`），窗口内任一观察方的
-  过滤器同意就刷新一次，结果推给该 key 的全部观察方。观察方不得自带防抖时间。
-- 用户操作（首次加载、翻页、手动刷新、`mutate`）由发起方直接调 `requestPathql`，不防抖。前端不区分操作是否写入。
-  每次请求按 key 分配递增序号、可并行，返回时序号大于当前数据状态才更新，更小的静默丢弃；不依赖后端 `seq`。
-  翻页只改变行路径，不得重读未变的计数路径。
+  过滤器同意就刷新一次，结果推给该 key 的全部观察方。观察方不得自带防抖时间，也不得自己发请求。
+- 唯一请求入口是 `pathqlRequest$.next([kind, key])`：next 即返回，不 await、不交还结果。主动请求只有两条通路——
+  核心的事件窗口，与发起方的用户操作（路径变化即导航 / 翻页 / 换筛选 / 激活、手动刷新、`mutate`、预览定位重取本页）。
+  前端不区分操作是否写入。翻页只改变行路径，不得重读未变的计数路径。
+- 每个 key 维护 pending 窗口 `(acked, requested]`：请求序号递增、可并行；任一请求返回即确认并取消它之前的全部
+  pending，序号不大于已确认的返回静默丢弃；不依赖后端 `seq`。观察方看到的 `data` 是最后可得的数据，
+  `loading` / `error` 只属于最新请求（二者序号相同，可以领先于数据的序号）；更早请求的失败看不到，
+  调用方也不能按某次请求接错误——失败统一经观察方的 `onError`。
 - ImageGrid 不得重新建立裸 `listen`，也不再订阅 `dataChangeHub`。字段补丁经 `imagePatches$`：
   `image-changed` 与收藏画册的 `album-images-change` 各自防抖、各自合并成 `imageId → 字段`，再汇成一条，
   只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜，粗信号重读用 `triggers$`。
@@ -26,7 +30,7 @@ alwaysApply: false
 ## 已知例外
 
 `ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页，保留 500ms
-被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入 `mutate` 后直接请求。
+被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入 `mutate` 后请求。
 
 ## 画册查询与计数
 

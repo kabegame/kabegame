@@ -193,9 +193,9 @@ Surf 记录列表不分页：`packages/core/src/stores/surf.ts` 初始化时一�
 
 ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否写入：
 
-- **用户操作（不防抖）**：首次加载、翻页、手动刷新，以及当前网格发起且会改变结果集的操作
-  （`ctx.mutate(() => ...)`）。写命令不带 `view`、不返回快照，照常广播事件；`mutate` 在操作完成后直接请求
-  当前行与总数，结果从数据源落地。永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
+- **用户操作（不防抖）**：路径变化（导航、翻页、换筛选、激活）、手动刷新，以及当前网格发起且会改变结果集的操作
+  （`ctx.mutate(() => ...)`）。写命令不带 `view`、不返回快照，照常广播事件；`mutate` 在操作完成后
+  `pathqlRequest$.next` 当前行与总数即返回，结果从数据源落地。永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
 - **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
 - **事件（防抖）**：adapter 的 `refreshOn` 声明相关事件（每条只对一种事件：
   `images-change`、`album-images-change`、`album-changed`），防抖后请求，见下文「kbEvents」。
@@ -218,15 +218,23 @@ ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/ka
 - **事件源** `kbEvent$(name)`：基于 `listen`（Tauri 事件或 Web SSE），同名事件共享一次监听，不解析内容。
   `events.ts` 的 `KbEventMap` 只是类型表；`on(event, relevant)` 声明一条单事件触发，`triggers$` 把多条合成刷新信号流。
 - **pathql 核心**（单例，`pathqlSource.ts`）：按 `kind + key` 维护请求序列、rows / count 数据状态与观察方注册。
-  - **请求**：`requestPathql(kind, key)` 每次序号 +1，可与在途请求并行；返回时序号大于当前数据状态的就更新，
-    更小的静默丢弃（如接连发出 A、B，B 先返回则更新，A 后返回被丢弃）。用户操作直接调用，不防抖。
-  - **观察方**：`lookPathql(kind, key, refreshOn)` 订阅期间注册一个观察方，收到数据、在途状态与事件刷新失败；
+  - **请求**：唯一入口 `pathqlRequest$.next([kind, key])`，next 即返回、不等待、不交还结果。主动请求只有两条通路：
+    核心的事件窗口与发起方的用户操作。每次请求序号 +1，可与在途请求并行；每个 key 维护 pending 窗口
+    `(acked, requested]`，像 TCP 累计确认：任一请求返回就确认并取消它之前的全部 pending，序号不大于已确认的返回
+    静默丢弃（如 1、2、3 在途，2 先返回则更新并取消 1；1 再返回被丢弃；3 返回再更新）。
+  - **观察方**：`lookPathql(kind, key, refreshOn)` 订阅期间注册一个观察方，收到 `data`（最后可得的数据）与
+    `status`（最新请求的 `{ seq, loading, error }`）。loading 与 error 只属于最新请求，二者序号相同，可以领先于
+    数据的序号：最新请求失败时数据仍是更早成功的那次；更早请求的失败只确认、不进状态。新请求发出即清掉旧错误。
     观察方只看不请求。`refreshOn` 是观察方的过滤器，同一 key 所有观察方的过滤器向核心的**同一个 500ms 窗口**
     （`PATHQL_REFRESH_WAIT_MS`，经 `batchWindow`：空闲首票立即刷新，窗口内的票合并到窗口结束）投票，
     任一同意就刷新一次，结果推给该 key 的全部观察方。
   - 没有观察方且没有在途请求时回收该 key，不把离开路径的旧数据重放给后来者，也不再随事件刷新。
 - **`usePathqlLooker`**：Vue 组合式观察方。key 变化时注销旧 key、注册新 key（旧路径的迟到结果与 loading 不影响新路径），
-  key 为 null 时不注册；不带防抖时间、不发请求。ImageGrid 在计数路径变化时自己请求总数，首次加载 / 翻页 / 刷新 / `mutate` 自己请求行。
+  key 为 null 时不注册；不带防抖时间、不发请求，返回 `loading` / `error`，最新请求失败时调 `onError`。
+  ImageGrid 把路径变化当作用户操作：行路径与计数路径各一个 watch，key 一变就 `pathqlRequest$.next`（翻页不改计数路径，
+  不重读总数）；手动刷新、`mutate`、预览定位重取本页同样只 next。首次加载失败与事件刷新失败都经 `onError` 交给
+  adapter 的 `onLoadError` / `onCountError`。加载遮罩只在「当前路径还没有数据且最新请求在途」时显示，已有数据时的
+  刷新不遮挡；`usePagedGallery` 只管页码、`rowsPath` 与预览边界，不再负责加载。
 - **`imagePatches$(waitMs)`**（`imagePatches.ts`）：字段补丁流，每种事件一个 `batchWindow` + 自己的 reduce
   （`reduceImageChanged` / `reduceFavoriteChanges`），合并后 `merge`；与数据源无关，不发请求。
 - 各 adapter 的 `refreshOn`：gallery 响应带 reason 的 `images-change`、「无画册」视图下的
@@ -247,9 +255,9 @@ ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/ka
 
 ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 
-- 每次请求（事件防抖后或用户操作）都在发出时分配新序号，可并行；返回时序号大于当前数据状态才更新，
+- 每次请求（事件窗口或用户操作）都在发出时分配新序号，可并行；任一请求返回即取消它之前的全部 pending，
   旧的在途请求不会覆盖新状态；
-- 写操作完成后的直接请求与随后到达的本次写事件触发的请求各一次，允许多读，按序号落地，结果一致；
+- 写操作完成后的用户请求与随后到达的本次写事件触发的请求各一次，允许多读，按序号落地，结果一致；
 - 读数据期间新发出的事件会再触发一次请求，允许多拉但不会漏变更；
 - 若写操作删空最后一页，新总数到达后由 `usePagedGallery` 的 total watcher 把页码夹回新的最后一页。
 
@@ -269,8 +277,10 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   `imageMetadataId` 时保留旧内容重新取数，不闪。
 - ImageGrid 的行、总数与字段补丁都经 `kbEvents` 监听；`useImagesChangeRefresh.ts`
   仍保留给 Surf.vue、工具栏等旧消费方。
-  `GalleryToolbar` 接收当前 `filter`，在同一次刷新中并行读取过滤后 count 与仅保留 `hide` 上下文的总 count，
-  两条都完成后才整体替换副标题计数，避免 `images-change` 后显示出跨两代的“数量 / 总数”。
+  `GalleryToolbar` 在 ImageGrid 的插槽内，分子注入 ImageGrid provide 的总数（`imageGrid/gridTotal.ts` 的
+  `gridTotalKey`：`total` 与 `settled`——当前计数路径的数据已到且最新请求不在途），不再单独订阅同一计数路径；
+  分母（仅保留 `hide` 上下文的总数）只有它用，由它自己注册观察方、路径变化时请求，无过滤时 key 为 null 不读。
+  两者都落定才整体替换副标题计数，避免显示出跨两代的“数量 / 总数”；分母读失败只显示分子。
 
 ### `image-changed`（`AppEvent::ImageChanged`，`ImageInfo` 字段）
 
@@ -308,14 +318,16 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 2. **改每页条数后仍显示旧页**：确认入口只写 `settings.galleryPageSize`，`ImageGrid` 的归一化
    `pageSize` 已更新，且本地页码按旧页首张图位置换算后触发新的 `rowsPath` 读取。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
-4. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，操作后行与总数都直接请求并从
-   `pathqlData$` 落地；不要靠事件防抖回刷当前操作，也不要直接写入命令返回值。
-5. **任务/畅游详情收到无关刷新**：检查 adapter `refreshOn` 对 `taskIds` / `surfRecordIds` 的判断。缺维度必须刷新，带维度时才允许按 id 排除。
-6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
+4. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，操作后行与总数都经 `pathqlRequest$` 请求并从
+   观察方落地；不要靠事件防抖回刷当前操作，也不要直接写入命令返回值。
+5. **切回页面后网格为空但总数正常**（dev）：改 `kbEvents` 源码后的 HMR 会让 `@/router` 重建出未挂到 app 的
+   实例，adapter `isActive` 恒为 false、key 一直是 null。整页重载即恢复，真机测试前先重载。
+6. **任务/畅游详情收到无关刷新**：检查 adapter `refreshOn` 对 `taskIds` / `surfRecordIds` 的判断。缺维度必须刷新，带维度时才允许按 id 排除。
+7. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
    `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在
    该视图（检查 `hide/` 与过滤段）；有 `row_index` 但页码不对，查前端是否误用了
    `stripComposablePathTail` 而把 `_kb_desc` 剥掉了。
-7. **定位落到相邻页 / 分页在某处重复或漏行**：当前排序不是全序。检查该 sort provider 的 `order` 是否
+8. **定位落到相邻页 / 分页在某处重复或漏行**：当前排序不是全序。检查该 sort provider 的 `order` 是否
    以 `images.id asc` 收尾；排序路由负责先清空上游排序，下游 provider 必须自己补回这条兜底。
 
 ## 涉及文件（速查）

@@ -11,9 +11,11 @@ export {
   type AlbumChangedPayload,
 } from "./events";
 export {
-  requestPathql,
+  pathqlRequest$,
   lookPathql,
   type LookerSignal,
+  type PathqlRequest,
+  type PathqlStatus,
   type PathqlKind,
   type PathqlRows,
   type PathqlTotal,

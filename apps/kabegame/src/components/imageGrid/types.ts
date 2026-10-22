@@ -21,16 +21,10 @@ export interface GridRefreshContext {
   /** 当前页图片列表；adapter 可整体替换 .value 做就地更新（如收藏星标） */
   images: ShallowRef<ImageInfo[]>;
   computedPath: Readonly<Ref<string>>;
-  /**
-   * 刷新当前页（保留滚动）+ 重算总数；对被移除的图片做选中清理、
-   * 当前壁纸清理与页码越界回退。返回本次刷新被移除的 id。
-   */
-  refreshPage: () => Promise<{ removedIds: string[] }>;
-  /** 改变结果集的操作入口：完成后直接请求当前行与总数，不等事件防抖。 */
+  /** 改变结果集的操作入口：完成后请求当前行与总数即返回，不等事件防抖，结果经观察方落地。 */
   mutate: <T>(op: () => Promise<T>) => Promise<T>;
   /** 仅修改展示字段，不重新查询视图。 */
   patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;
-  loadTotalImagesCount: () => Promise<void>;
   ensureValidPageAfterMassRemoval: () => Promise<void>;
   clearSelection: () => void;
 }

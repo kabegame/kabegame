@@ -9,6 +9,10 @@
 > 2. 第二版的订阅方（`useLivePathql`）自己防抖、自己发请求，是 queryer。已改为观察方模型：订阅方只是某个 key
 >    的 looker，只看数据、注册过滤器；事件窗口（统一 500ms）与请求都由 pathql 核心处理，同一 key 的过滤器
 >    任一同意就在该窗口刷新一次，并更新所有观察方看到的数据。
+> 3. 第三版的 `requestPathql` 让调用方原地 await、接自己那次请求的错误，首次加载也散在 `usePagedGallery` 的路径 watch、
+>    激活 watch、`onActivated` 等处隐式发起。已改为 `pathqlRequest$.next([kind, key])` 即发即返回，主动请求只有
+>    事件窗口与用户操作两条通路；每个 key 维护 pending 窗口（累计确认），观察方看到最后可得的数据与最新请求的
+>    loading / error，调用方不再按某次请求接结果或错误。
 
 ### 总体设计思路
 
@@ -26,23 +30,26 @@ Phase A 把异步问题建模成两类触发 + 一个请求序列：
 
 1. **事件源**（`kbEvent$`）：每个后端事件名一个共享 observable，底层就是现有的 `listen`（Tauri 事件或 Web SSE），
    对内容无感。消费方用 `on(event, relevant)` 声明「一种事件 + 相关性判断」，多条触发由 `triggers$` 合成一条刷新信号流。
-2. **pathql 核心**（单例）：按 `kind + key` 维护请求序列、数据状态与观察方注册。请求（`requestPathql`）每次序号 +1，
-   可与在途请求并行；返回时序号大于当前数据状态的就更新，更小的静默丢弃：
+2. **pathql 核心**（单例）：按 `kind + key` 维护请求序列、数据与观察方注册。唯一入口 `pathqlRequest$.next([kind, key])`
+   即发即返回，不交还结果。每次序号 +1、可与在途请求并行；pending 窗口是 `(acked, requested]`，像 TCP 累计确认：
+   任一请求返回就确认并取消它之前的全部 pending，序号不大于已确认的返回静默丢弃：
 
    ```
    无数据 → 请求1 返回 → 更新
-   请求2 未返回时请求3 也发出 → 2 先返回：更新（最近返回的请求）→ 3 返回：序号更大，更新
-   接连发出 A、B → B 先返回：更新 → A 返回：序号更小，静默丢弃
+   1、2、3 在途 → 2 先返回：更新并取消 1，最新请求 3 仍 loading → 1 返回：丢弃 → 3 返回：更新，loading 结束
+   1、2 在途 → 1 成功：数据是 1 → 2 失败：状态 {seq 2, error}，数据仍是 1
    ```
 
-   请求本身不把结果交还给调用方去写。事件刷新也由核心处理：每个 key 一个统一的 500ms 窗口
-   （`PATHQL_REFRESH_WAIT_MS`，经 `batchWindow`：空闲首票立即刷新，窗口内的票合并到窗口结束再刷新一次）。
-3. **观察方**（`lookPathql` / `usePathqlLooker`）：某个 key 的 looker，只看该 key 的数据状态（始终表示
-   「最近发出且已返回」的那次请求）、在途状态与事件刷新失败，不发请求、不带防抖时间。注册时带上自己的过滤器
-   （`refreshOn`），同一 key 所有观察方的过滤器向核心的同一个窗口投票，任一同意就刷新一次，结果推给全部观察方。
+   事件刷新也由核心处理：每个 key 一个统一的 500ms 窗口（`PATHQL_REFRESH_WAIT_MS`，经 `batchWindow`：
+   空闲首票立即刷新，窗口内的票合并到窗口结束再刷新一次），窗口触发时同样只 next。
+3. **观察方**（`lookPathql` / `usePathqlLooker`）：某个 key 的 looker，只看两样东西——`data`（最后可得的数据）与
+   `status`（最新请求的 `{ seq, loading, error }`，二者序号相同，可以领先于数据的序号）。looker 一直期待最新数据，
+   不关心请求何时由谁发出，因此也定位不到某次具体请求的错误，只看到最新请求的。不发请求、不带防抖时间；
+   注册时带上自己的过滤器（`refreshOn`），同一 key 所有观察方的过滤器向核心的同一个窗口投票，任一同意就刷新一次。
    数据流和事件源是两种不同的 observable：事件源是「发生了什么」，数据流是「现在是什么」。
 
-用户操作（首次加载、翻页、手动刷新、写操作完成后）由发起方直接调 `requestPathql`，不经窗口；结果同样只经观察方落地。
+主动请求只有两条通路：核心的事件窗口，与发起方的用户操作（路径变化即导航 / 翻页 / 换筛选 / 激活、手动刷新、
+写操作完成后、预览定位重取本页），都只 next；结果与错误只经观察方落地。
 
 关键决策：
 
@@ -51,6 +58,8 @@ Phase A 把异步问题建模成两类触发 + 一个请求序列：
   再经防抖触发一次请求——允许多读，两次请求按序号落地，结果一致。
 - **序号由前端请求服务分配，与后端事件 `seq` 无关**。应用规则是「大于当前数据状态的序号」，而不是「只认最后发出的那次」：
   后者在持续下载、单次读取超过防抖窗口时会让每个结果都被下一次请求作废，列表永远不更新。
+- **请求即发即返回，状态只看最新**。调用方 await 某次请求、接它的错误，会让「谁发的请求」渗进消费逻辑；
+  并行请求下单次请求的成败也不代表最终数据状态。所以请求只是一条触发通道，消费统一经观察方。
 - **订阅方只看不查**。窗口与请求集中在核心：同一 key 被多个组件观察时只有一个窗口、一份请求序列，
   不会因为订阅方各自防抖而重复请求；观察方也就不需要各自的防抖时间。
 - **每条触发只对一种事件**，中心不认识事件内容；类型表 `KbEventMap` 只是给 `on()` 用的类型门面。
@@ -117,31 +126,37 @@ export function triggers$(triggers: readonly EventTrigger[]): Observable<KbEvent
 
 ### 点 2 — pathql 核心（`services/kbEvents/pathqlSource.ts`）
 - **新增**
-  - `requestPathql(kind, key)`：唯一请求入口。`rows` 读 `pathql_fetch`，`total` 读 `pathql_count` 的 `total`；
-    返回的 promise 在结果处理完后 resolve，只用于等待与接错误。用户操作直接调用。
-  - `lookPathql(kind, key, refreshOn)`：订阅期间注册一个观察方，发出 `data` / `loading` / `error` 三种信号；
+  - `pathqlRequest$`：唯一请求入口（`Subject<[kind, path]>`）。`rows` 读 `pathql_fetch`，`total` 读 `pathql_count` 的 `total`。
+  - `lookPathql(kind, key, refreshOn)`：订阅期间注册一个观察方，发出 `data` / `status` 两种信号；
     `refreshOn` 订阅期间向该 key 的刷新窗口投票。
-  - 每个 key 一个刷新窗口（`votes$.pipe(batchWindow(PATHQL_REFRESH_WAIT_MS))`），窗口触发时由核心调用 `requestPathql`，
-    失败经 `error` 信号推给观察方。
+  - 每个 key 一个刷新窗口（`votes$.pipe(batchWindow(PATHQL_REFRESH_WAIT_MS))`），窗口触发时 `pathqlRequest$.next`。
     > 说明：条目在无观察方且无在途请求时回收（同时停掉窗口），避免把已离开路径的旧数据重放给后来者。
 ```ts
-export async function requestPathql(kind: PathqlKind, path: string): Promise<void> {
+export const pathqlRequest$ = new Subject<PathqlRequest>();
+
+function settle<S>(entry: Entry<S>, seq: number, result: { snapshot: S } | { error: unknown }) {
+  if (seq <= entry.acked) return;                // 已被更晚的返回取消
+  entry.acked = seq;                             // 确认并取消之前的全部 pending
+  if ("snapshot" in result) entry.data$.next(result.snapshot);
+  if (seq === entry.requested) {                 // loading / error 只属于最新请求
+    entry.status$.next({ seq, loading: false, error: "error" in result ? result.error : null });
+  }
+}
+
+pathqlRequest$.subscribe(([kind, path]) => {
   const entry = acquire(kind, path);
   const seq = ++entry.requested;                 // 请求序号，前端分配
-  // ……pending + 1
-  const snapshot = await readers[kind](path, seq);
-  if (seq > entry.applied) {                     // 更大的序号更新数据状态
-    entry.applied = seq;
-    entry.data$.next(snapshot);
-  }                                              // 更小的静默丢弃
-  // ……pending - 1、release
-}
+  entry.status$.next({ seq, loading: true, error: null });
+  void readers[kind](path, seq)
+    .then((snapshot) => settle(entry, seq, { snapshot }), (error) => settle(entry, seq, { error }))
+    .finally(() => release(kind, path, entry));
+});
 ```
 
 ### 点 3 — 组合式观察方 `usePathqlLooker`（`services/kbEvents/usePathqlLooker.ts`）
 - **新增**
   - key 变化时 `switchMap` 注销旧 key、注册新 key（旧路径的迟到结果与 loading 不影响新路径），key 为 null 时不注册；
-  - 只返回 `loading`；数据交给 `onResult`，事件刷新失败交给 `onError`；不带防抖时间、不发请求。
+  - 返回 `loading` / `error`（最新请求的）；数据交给 `onResult`，最新请求失败交给 `onError`；不带防抖时间、不发请求。
 ```ts
 const rowsLooker = usePathqlLooker({
   kind: "rows",
@@ -150,26 +165,30 @@ const rowsLooker = usePathqlLooker({
   onResult: applyRows,
   onError: (error) => void adapter.onLoadError?.(error, rawViewPath()),
 });
-// 用户操作：发起方直接请求
-const requestRows = async () => {
+// 用户操作：next 即返回
+const requestRows = () => {
   const key = currentRowsPath();
-  if (key) await requestPathql("rows", key);
+  if (key) pathqlRequest$.next(["rows", key]);
 };
+// 路径变化（导航、翻页、换筛选、激活）也是用户操作；总数同理按计数路径
+watch(currentRowsPath, (key) => { if (key) pathqlRequest$.next(["rows", key]); }, { immediate: true });
 ```
 
 ### 点 4 — ImageGrid 与 adapter（`components/ImageGrid.vue`、`components/imageGrid/`）
 - **修改**
-  - 行与总数各注册一个观察方，共用 `adapter.refreshOn` 作为过滤器；总数在计数路径变化时由 ImageGrid 自己请求，
-    翻页不改计数路径就不重读（总数逻辑保持不变，仍服务分页与各页副标题）。
-  - `mutate` 改为「操作 → 直接请求行与总数」，签名从 `(op: (view) => …)` 变为 `(op: () => …)`。
+  - 行与总数各注册一个观察方，共用 `adapter.refreshOn` 作为过滤器；行路径与计数路径各一个 watch，key 一变就请求，
+    翻页不改计数路径就不重读（总数逻辑保持不变，仍服务分页与各页副标题）。首次加载不再散在 `usePagedGallery`
+    的路径 watch、激活 watch 与 `onActivated` 里，`usePagedGallery` 只管页码、`rowsPath` 与预览边界。
+  - 加载遮罩只在「当前路径还没有数据且最新请求在途」时显示；首次加载与事件刷新失败都经观察方 `onError` 交给 adapter。
+  - `mutate` 改为「操作 → 请求行与总数（不等待）」，签名从 `(op: (view) => …)` 变为 `(op: () => …)`。
+  - `refresh()` 不再返回 promise：Gallery 的刷新态随暴露的 `loading` 收起，TaskDetail 只等失败图片列表。
+    `GridRefreshContext` 去掉无人使用的 `refreshPage` / `loadTotalImagesCount`。
   - `GridAdapter.changes.relevant(batch)` 改为 `refreshOn: EventTrigger[]`，每条一种事件。
 ```ts
 const mutate: GridRefreshContext["mutate"] = async (op) => {
   const result = await op();            // 修改：不再传 view
-  await Promise.all([                   // 新增：作为用户操作直接请求，结果仍从数据源落地
-    requestRows().catch((error) => adapter.onLoadError?.(error, rawViewPath())),
-    requestTotal().catch(handleCountError),
-  ]);
+  requestRows();                        // 新增：作为用户操作请求，不等待，结果仍从数据源落地
+  requestTotal();
   return result;
 };
 ```
@@ -205,8 +224,9 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 ### 点 6 — 依赖、测试与文档
 - **新增**
   - `rxjs@^7.8.2`（`apps/kabegame/package.json`；`concurrently` 仍用其嵌套的 6.6.7）。
-  - `kbEvents.test.ts`：防抖窗口、事件共享监听；请求序列按上文时序逐步断言（含 A/B 乱序丢弃）、总数取 `total` 且序号由前端分配、
-    新订阅者拿到当前数据；事件防抖只在开头与结尾各请求一次、用户操作在防抖窗口内也立即请求、事件与用户请求并行时晚发出者优先、
+  - `kbEvents.test.ts`：防抖窗口、事件共享监听；pending 窗口按上文时序逐步断言（累计确认、更早结果丢弃）、
+    loading / error 只属于最新请求且数据可落后于状态、总数取 `total` 且序号由前端分配、新订阅者拿到最后数据与最新状态、
+    无观察方的路径返回后回收；事件防抖只在开头与结尾各请求一次、用户操作在防抖窗口内也立即请求、事件与用户请求并行时晚发出者优先、
     未激活标脏后请求、换路径不受旧请求影响。
 - **修改**
   - `ImageGrid.previewFollowPage.test.ts` 的 mock 改到 `@/services/kbEvents`。
@@ -214,7 +234,7 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 
 ### 验证
 
-- vue-tsc 0 error（初版另跑过 cargo check 0 error）；前端 Vitest 39 个文件、310 项通过。核心窗口用例：
+- vue-tsc 0 error（初版另跑过 cargo check 0 error）；前端 Vitest 39 个文件、313 项通过。核心窗口用例：
   同一 key 多观察方各带过滤器、任一同意即刷新一次并推给全部观察方；统一 500ms 窗口合并多票；观察方全部退订后不再刷新；
   事件刷新失败推给观察方。观察方用例：不发请求、key 为 null 不注册、换 key 后旧结果与旧过滤器不影响新 key。
 - dev 真机 + debug ingest（临时插桩已删除）：
@@ -224,6 +244,9 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
   - 直接调 `remove_images_from_album` 模拟外部取消隐藏：8164 回到首位、`is_hidden=0`、总数回到 4069，
     只由核心窗口刷新，rows / total 各请求 1 次（序号 4）；画廊与画册视图各自只对相关事件刷新。
   - 停在画册页时隐藏 / 取消隐藏 8164 再切回画廊：重新挂载即读到最新行与总数，各请求 1 次。
+  - `pathqlRequest$` 改造后（视频筛选视图 103 / 4057）：整页重载首次加载与手动刷新 rows / total 各 1 次，
+    观察方先于请求注册；隐藏 8158 时 mutate 请求（序号 2）与事件窗口请求（序号 3）几乎同时发出，3 先返回落地并确认，
+    2 随后返回被丢弃；离开期间取消隐藏再切回即为最新。
     注意：改 kbEvents 源码后的 HMR 会让 `@/router` 重建出未挂到 app 的实例，gallery adapter 的 `isActive` 恒为 false，
     切回画廊为空；整页重载即恢复，真机测试前先重载。
 - 未真机：永久删除、上划移除、加入画册对话框、后台下载节奏、「无画册」视图、Web SSE、Android（见回归文档）。
@@ -231,7 +254,10 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 ### 已知边界
 
 - 写操作每次会多一次请求（用户请求 + 本次写的事件经防抖再请求），按模型接受。
-- 同一 key 被多个组件观察时共用核心的一个窗口，事件只刷新一次；但用户请求不合并在途请求。
+- 同一 key 被多个组件观察时共用核心的一个窗口，事件只刷新一次；但用户请求不合并在途请求，
+  多个组件各自按路径变化请求同一 key 时会各读一次。
+- 更早请求的失败只确认、不进状态；若最新请求成功，这次失败对任何观察方都不可见，按模型接受。
+- 调用方无法知道「我这次刷新」成功与否：TaskDetail 的「刷新成功」提示只对应失败图片列表，网格失败经 adapter 提示。
 - `App.vue` 的 `<keep-alive>` 被注释，切页即重新挂载，「标脏后重新激活请求」当前在桌面不可达，仅单测覆盖。
 - `ctx.patch` 与字段补丁（`image-changed`、收藏 `favoriteOps`）仍经 `dataChangeHub`。
 - 后端 `pathql_view` 不再被 ImageGrid 使用，但运行配置仍在用，Phase C 迁完后删除。
@@ -255,7 +281,8 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 - **验证**：vue-tsc 0 error，Vitest 39 文件 / 308 项；dev 真机直接调命令验证收藏补丁与 `image-changed` 窗口合并（见回归文档）。
 
 ### Phase C — 其余实时数据消费方
-- **pathql 计数类**：`GalleryToolbar` 的分子 / 分母（注册为计数路径的观察方，与 ImageGrid 同路径时共享同一窗口与数据，顺带去掉 `useImagesChangeRefresh`）、
+- **pathql 计数类**：~~`GalleryToolbar` 的分子 / 分母~~（已完成：分子注入 ImageGrid provide 的 `gridTotalKey`，
+  不再单独订阅同一路径；分母自己观察 `gallery/hide`，两者都落定才提交快照，去掉了 `useImagesChangeRefresh`）、
   `GalleryFilterControl.loadFilterCounts`（现在没有过期保护，并发时会交错写入）、`HiddenCleanupControl`、Surf 页计数。
 - **树 / 列举类**：`GalleryFacetTreeInner` 侧栏、`AlbumTreeView` / `useAlbumQuery`（按 `ancestorPath` 相关性）。
   它们读的是 `listProviderDirs` / `albums://` 分页而非单一 rows/count，需要给请求服务加一种「列举」kind，或让组件在事件触发后自行分页重读。
