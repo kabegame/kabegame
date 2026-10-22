@@ -5,7 +5,9 @@
 //! 返回 `ImageInfo`（或嵌套）的函数一律回**原始本地路径**；web 模式的 CDN 改写
 //! 由 `kabegame::web::dispatch` 在本层返回之后施加，本层不感知 web。
 
-use crate::providers::{decode_provider_path_segments, query_entry, query_fetch, query_list};
+use crate::providers::{
+    decode_provider_path_segments, query_all, query_entry, query_fetch, query_list, PathqlQuery,
+};
 use crate::settings::Settings;
 use crate::storage::image_events::{
     begin_delete_images_with_events, delete_images_with_events, emit_native_metadata_attached,
@@ -36,6 +38,19 @@ pub async fn pathql_fetch(path: String) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())??;
     serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+pub async fn pathql_all(mut queries: Vec<PathqlQuery>) -> Result<Vec<Value>, String> {
+    for query in &mut queries {
+        let (PathqlQuery::List { path, .. }
+        | PathqlQuery::Entry { path }
+        | PathqlQuery::Fetch { path }
+        | PathqlQuery::Count { path }) = query;
+        *path = decode_provider_path_segments(path);
+    }
+    tokio::task::spawn_blocking(move || query_all(&queries))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 pub fn get_images_count() -> Result<Value, String> {

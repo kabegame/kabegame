@@ -12,13 +12,15 @@ export {
 } from "./events";
 export {
   pathqlRequest$,
+  pathqlAllKey,
   lookPathql,
   type LookerSignal,
   type PathqlRequest,
   type PathqlStatus,
   type PathqlKind,
   type PathqlRows,
-  type PathqlTotal,
+  type PathqlAll,
   type SnapshotOf,
 } from "./pathqlSource";
 export { usePathqlLooker } from "./usePathqlLooker";
+export { useLookAll } from "./useLookAll";

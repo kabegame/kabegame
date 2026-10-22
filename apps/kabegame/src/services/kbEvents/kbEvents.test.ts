@@ -9,6 +9,7 @@ import { imagePatches$ } from "./imagePatches";
 import { on, type EventTrigger } from "./events";
 import {
   lookPathql,
+  pathqlAllKey,
   pathqlRequest$,
   type PathqlKind,
   type PathqlRows,
@@ -21,7 +22,7 @@ type Row = Record<string, unknown>;
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 const pathqlFetch = vi.hoisted(() => vi.fn<(path: string) => Promise<Row[]>>());
-const pathqlCount = vi.hoisted(() => vi.fn<(path: string) => Promise<{ total: number; seq: number }>>());
+const pathqlAll = vi.hoisted(() => vi.fn<(queries: readonly unknown[]) => Promise<unknown[]>>());
 vi.mock("@/api", () => ({
   listen: vi.fn((event: string, handler: (event: { payload: unknown }) => void) => {
     listeners.set(event, handler);
@@ -31,7 +32,7 @@ vi.mock("@/api", () => ({
     });
   }),
 }));
-vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlCount }));
+vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlAll }));
 vi.mock("@/services/albums", () => ({ FAVORITE_ALBUM_ID: "favorite" }));
 
 function deferred<T>() {
@@ -55,7 +56,7 @@ function ids(snapshot: PathqlRows) {
 const cleanups: (() => void)[] = [];
 beforeEach(() => {
   pathqlFetch.mockReset();
-  pathqlCount.mockReset();
+  pathqlAll.mockReset();
 });
 afterEach(() => {
   cleanups.splice(0).forEach((dispose) => dispose());
@@ -237,12 +238,43 @@ describe("pathqlRequest$", () => {
     expect(looker.data.map(ids)).toEqual([["r1"], ["r4"]]);
   });
 
-  it("总数取 pathql_count 的 total，序号由前端分配", async () => {
-    const looker = look("total", "c/1");
-    pathqlCount.mockResolvedValueOnce({ total: 42, seq: 999 });
-    request("total", "c/1");
+  it("all 的规范化 key 不受字段顺序和 list 默认值影响", () => {
+    expect(
+      pathqlAllKey([
+        { kind: "list", path: "images://gallery" },
+        { kind: "count", path: "c/1" },
+      ]),
+    ).toBe(
+      pathqlAllKey([
+        { path: "images://gallery", withCount: false, kind: "list" },
+        { path: "c/1", kind: "count" },
+      ]),
+    );
+    expect(pathqlAllKey([{ kind: "list", path: "p", withCount: true }])).not.toBe(
+      pathqlAllKey([{ kind: "list", path: "p" }]),
+    );
+  });
+
+  it("all 返回整批 results，沿用 pending 窗口并丢弃更早返回", async () => {
+    const queries = [
+      { kind: "count", path: "c/1" },
+      { kind: "count", path: "c/all" },
+    ] as const;
+    const key = pathqlAllKey(queries);
+    const looker = look("all", key);
+    const oldRead = deferred<unknown[]>();
+    const newRead = deferred<unknown[]>();
+    pathqlAll.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise);
+    request("all", key);
+    request("all", key);
+    expect(pathqlAll).toHaveBeenLastCalledWith(queries);
+    expect(looker.status()).toEqual({ seq: 2, loading: true, error: null });
+    newRead.resolve([42, 100]);
     await flushPromises();
-    expect(looker.data).toEqual([{ total: 42, seq: 1 }]);
+    oldRead.resolve([41, 99]);
+    await flushPromises();
+    expect(looker.data).toEqual([{ results: [42, 100], seq: 2 }]);
+    expect(looker.status()).toEqual({ seq: 2, loading: false, error: null });
   });
 
   it("后注册的观察方先拿到最后可得的数据与最新状态", async () => {

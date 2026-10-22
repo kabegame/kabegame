@@ -60,6 +60,8 @@ export interface GridAdapter {
   rootPathFallback?: () => string;
   /** 返回 false 则跳过本次路径加载（如 album 校验 `album/` 前缀） */
   validatePath?: (path: string) => boolean;
+  /** 有过滤时返回不带过滤的全部数量计数路径，与分子同批读取；返回 null 不读。 */
+  computeUnfilteredCountPath?: () => string | null;
   computeCountPath: (path: string) => string;
   onCountError?: (error: unknown, ctx: GridRefreshContext) => Promise<number | void> | number | void;
   onLoadError?: (error: unknown, path: string) => Promise<void> | void;

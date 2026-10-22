@@ -14,6 +14,12 @@
 >    事件窗口与用户操作两条通路；每个 key 维护 pending 窗口（累计确认），观察方看到最后可得的数据与最新请求的
 >    loading / error，调用方不再按某次请求接结果或错误。
 
+> 4. 修订（2026-10-22）：新增宿主 `pathql_all`，在 `spawn_blocking` 线程钉住只读连接并开启读事务，整批 SQL
+>    共用同一个 WAL 快照；按序返回、任一失败整批失败。前端 `kind: "all"` 以规范化查询数组 JSON 为 key，
+>    `useLookAll` 复用核心 pending / 事件窗口；删除核心 `total` kind。ImageGrid 同批读分子及 adapter 可选分母，
+>    provide `{ total, unfilteredTotal }`，工具栏只注入，删除独立分母观察方及前端配对逻辑。
+>    验证：vue-tsc、桌面 cargo check 通过；Vitest 40 文件 / 321 项，Rust providers 单测 17 项通过；当前无 dev / CDP，未真机。
+
 ### 总体设计思路
 
 旧的 `dataChangeHub` 把所有事件合并成一个大而全的 `ChangeBatch`（图片、画册、任务、运行配置等字段都在一个结构里），
@@ -282,7 +288,7 @@ pub async fn add_images_to_album(album_id: String, image_ids: Vec<String>) -> Re
 
 ### Phase C — 其余实时数据消费方
 - **pathql 计数类**：~~`GalleryToolbar` 的分子 / 分母~~（已完成：分子注入 ImageGrid provide 的 `gridTotalKey`，
-  不再单独订阅同一路径；分母自己观察 `gallery/hide`，两者都落定才提交快照，去掉了 `useImagesChangeRefresh`）、
+  分子分母由 ImageGrid 通过 `useLookAll` 同批 `pathql_all` 读取，工具栏只注入 `{ total, unfilteredTotal }`，去掉了 `useImagesChangeRefresh`）、
   `GalleryFilterControl.loadFilterCounts`（现在没有过期保护，并发时会交错写入）、`HiddenCleanupControl`、Surf 页计数。
 - **树 / 列举类**：`GalleryFacetTreeInner` 侧栏、`AlbumTreeView` / `useAlbumQuery`（按 `ancestorPath` 相关性）。
   它们读的是 `listProviderDirs` / `albums://` 分页而非单一 rows/count，需要给请求服务加一种「列举」kind，或让组件在事件触发后自行分页重读。

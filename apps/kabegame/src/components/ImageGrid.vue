@@ -124,8 +124,8 @@ import {
   imagePatches$,
   pathqlRequest$,
   usePathqlLooker,
+  useLookAll,
   type PathqlRows,
-  type PathqlTotal,
 } from "@/services/kbEvents";
 import { useProvideImageMetadataCache } from "@/composables/useImageMetadataCache";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
@@ -336,8 +336,7 @@ const currentWallpaperImageId = computed<string | null>({
 });
 
 const totalImagesCount = ref(0);
-/** totalImagesCount 对应的计数路径。 */
-const loadedCountKey = ref<string | null>(null);
+const unfilteredTotal = ref<number | null>(null);
 let ensurePageAfterRemoval: () => Promise<void> = async () => {};
 let refreshCtx!: GridRefreshContext;
 
@@ -371,6 +370,26 @@ const currentCountPath = (): string | null => {
   return withGalleryPrefix(count);
 };
 
+const currentUnfilteredCountPath = (): string | null => {
+  if (!isRouteActive.value || !adapter.isActive()) return null;
+  const rowsPath = rawViewPath();
+  if (!rowsPath || (adapter.validatePath && !adapter.validatePath(rowsPath))) return null;
+  const count = adapter.computeUnfilteredCountPath?.();
+  return count ? withGalleryPrefix(count) : null;
+};
+
+const countQueries = () => {
+  const path = currentCountPath();
+  if (!path) return null;
+  const unfiltered = currentUnfilteredCountPath();
+  return unfiltered
+    ? ([
+        { kind: "count", path },
+        { kind: "count", path: unfiltered },
+      ] as const)
+    : ([{ kind: "count", path }] as const);
+};
+
 const applyRows = async (snapshot: PathqlRows) => {
   const raw = rawViewPath();
   const sameView = loadedKey.value === raw;
@@ -401,12 +420,8 @@ const applyRows = async (snapshot: PathqlRows) => {
   await adapter.onAfterRefresh?.(refreshCtx, { removedIds });
 };
 
-const applyTotal = (snapshot: PathqlTotal) => {
-  totalImagesCount.value = snapshot.total;
-  loadedCountKey.value = currentCountPath();
-};
-
 const handleCountError = async (error: unknown) => {
+  unfilteredTotal.value = null;
   const fallback = await adapter.onCountError?.(error, refreshCtx);
   if (typeof fallback === "number") totalImagesCount.value = fallback;
 };
@@ -423,18 +438,20 @@ const rowsLooker = usePathqlLooker({
   },
 });
 
-const totalLooker = usePathqlLooker({
-  kind: "total",
-  key: currentCountPath,
+const countLooker = useLookAll({
+  queries: countQueries,
   refreshOn: adapter.refreshOn,
-  onResult: applyTotal,
+  onResult: ([total, unfiltered]) => {
+    totalImagesCount.value = total;
+    unfilteredTotal.value = unfiltered ?? null;
+  },
   onError: handleCountError,
 });
 
 // 插槽内组件（如画廊工具栏）直接注入总数，不再单独订阅同一计数路径。
 provide(gridTotalKey, {
   total: readonly(totalImagesCount),
-  settled: computed(() => !totalLooker.loading.value && loadedCountKey.value === currentCountPath()),
+  unfilteredTotal: readonly(unfilteredTotal),
 });
 
 /** 用户操作：next 一个请求即返回，不防抖、不等待；结果与错误经观察方落地。 */
@@ -443,8 +460,8 @@ const requestRows = () => {
   if (key) pathqlRequest$.next(["rows", key]);
 };
 const requestTotal = () => {
-  const key = currentCountPath();
-  if (key) pathqlRequest$.next(["total", key]);
+  const key = countLooker.key();
+  if (key) pathqlRequest$.next(["all", key]);
 };
 
 // 路径变化（导航、翻页、换筛选、激活）是用户操作，key 一变即请求；翻页不改计数路径，不重读总数。
@@ -457,9 +474,9 @@ watch(
   { immediate: true },
 );
 watch(
-  currentCountPath,
+  countLooker.key,
   (key) => {
-    if (key) pathqlRequest$.next(["total", key]);
+    if (key) pathqlRequest$.next(["all", key]);
   },
   { immediate: true },
 );

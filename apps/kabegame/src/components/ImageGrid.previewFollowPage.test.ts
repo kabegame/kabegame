@@ -12,7 +12,7 @@ const jumpToPage = vi.hoisted(() => vi.fn<(page: number) => Promise<void>>());
 const refetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const totalRefetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const pathqlViewMock = vi.hoisted(() => vi.fn());
-const pathqlCountMock = vi.hoisted(() => vi.fn());
+const pathqlAllMock = vi.hoisted(() => vi.fn());
 const handlePreviewPageBoundary = vi.hoisted(() => vi.fn());
 const previewImageId = ref("");
 const queryLoading = ref(false);
@@ -39,7 +39,7 @@ vi.mock("@/services/imageLocate", () => ({
 }));
 vi.mock("@/services/pathql", () => ({
   pathqlView: pathqlViewMock,
-  pathqlCount: pathqlCountMock,
+  pathqlAll: pathqlAllMock,
   pathqlEntry: vi.fn(),
   pathqlList: vi.fn(),
   pathqlFetch: vi.fn(),
@@ -52,13 +52,21 @@ vi.mock("@/services/kbEvents", async () => {
     imagePatches$: () => NEVER,
     on: (event: string) => ({ event, relevant: () => true }),
     batchWindow: () => (source: unknown) => source,
-    usePathqlLooker: (opts: { kind: "rows" | "total"; onResult: (snapshot: RowsSnapshot) => Promise<void> | void }) => {
+    usePathqlLooker: (opts: { kind: "rows" | "all"; onResult: (snapshot: RowsSnapshot) => Promise<void> | void }) => {
       const isRows = opts.kind === "rows";
       if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
       return { loading: isRows ? queryLoading : ref(false) };
     },
+    useLookAll: (opts: { queries: () => readonly unknown[] | null }) => ({
+      loading: ref(false),
+      error: ref(null),
+      key: () => {
+        const queries = opts.queries();
+        return queries?.length ? JSON.stringify(queries) : null;
+      },
+    }),
     pathqlRequest$: {
-      next: ([kind]: readonly ["rows" | "total", string]) => void (kind === "rows" ? refetch() : totalRefetch()),
+      next: ([kind]: readonly ["rows" | "all", string]) => void (kind === "rows" ? refetch() : totalRefetch()),
     },
   };
 });

@@ -46,6 +46,23 @@
 - **命令**：`get_image_metadata`（[`kabegame/src/commands/image.rs`](/src-tauri/kabegame/src/commands/image.rs)），参数 **`imageId`**（与前端 camelCase 一致）。
 - **实现**：[`Storage::get_metadata`](/src-tauri/kabegame-core/src/storage/images.rs) 通过 provider 路径读取 `metadata.data`。
 
+### 聚合查询：`pathql_all`
+
+`pathql_all({ queries })` 接受 `list` / `entry` / `fetch` / `count` 查询数组，按请求顺序执行并一次返回对应的结果数组；
+任一查询失败整批失败（`count` 失败不会吞成 0）。`list` 的 `withCount` 缺省为 false。每条路径在命令边界解码一次。
+Tauri 与 Web JSON-RPC 复用 core 命令；Web 只对 `fetch` 下标的结果做媒体路径改写。
+
+宿主在 `spawn_blocking` 的同一线程钉住一个只读连接，开启读事务；PathQL 运行时串行执行 SQL，
+执行器经 thread-local 复用该连接，整批 SQL 从首次读取起共享同一个 WAL 快照，中途提交的写入不可见。
+嵌套调用沿用外层快照，正常返回、失败或 panic 都会结束事务并归还连接。
+`plugin://` 数据来自插件内存等非 SQL 来源，不受该数据库快照约束。
+
+前端 `pathqlAllKey` 按固定字段顺序（`list` 显式补 `withCount: false`）规范化查询数组 JSON；
+`kind: "all"` 把整批视为核心上的一个 key，复用 pending 窗口、观察方与事件窗口。
+`useLookAll` 是 `usePathqlLooker` 的薄包装，只观察 `results`，不发请求。
+ImageGrid 一批读 `[count(分子)]` 或 `[count(分子), count(分母)]`，分子只读一次；分子分母共享 SQL 读快照，
+行仍独立请求。翻页不改变计数批 key，不重读计数。
+
 ### 与 VD / Greedy 的区别
 
 - **SimplePage**：一页行数 = 用户设置的 `galleryPageSize`（经上述 clamp）。
@@ -80,8 +97,8 @@
 ### 拉取当前页图片
 
 - **组件**：[`apps/kabegame/src/components/ImageGrid.vue`](/apps/kabegame/src/components/ImageGrid.vue)。
-- 行与总数拆成两个独立读：行用 `pathql_fetch(path)`，总数用 `pathql_count(path)` 的 `total`；
-  新旧由前端请求服务按路径分配的请求序号判断（见下文「kbEvents」）。
+- 行与计数批分开读取：行用 `pathql_fetch(path)`，总数用 `useLookAll` 观察 `pathql_all(queries)` 的计数批；
+  新旧由前端请求服务按 key 分配的请求序号判断（见下文「kbEvents」）。
 - 两者在后端都通过 PathQL 只读连接池执行，可以在不同连接上并行查询，不再与单写连接互相排队。
 - 行路径带页码，首次加载、翻页、换筛选和相关数据变更都会重读；计数路径由 adapter 的
   `computeCountPath` 推导，只在路径变化或相关数据变更时重读。单纯翻页不再跑 COUNT。
@@ -168,8 +185,8 @@ URL 入口只设置目标 id，不负责取图或定位；列表更新、
 - [`apps/kabegame/src/views/TaskDetail.vue`](/apps/kabegame/src/views/TaskDetail.vue)
 - [`apps/kabegame/src/views/SurfImages.vue`](/apps/kabegame/src/views/SurfImages.vue)
 
-过滤树等辅助请求仍可独立读取计数；ImageGrid 的列表与分页总数必须分别走 `pathql_view`
-与 `pathql_count`，不得在翻页时因行路径变化重读未变的计数路径。
+过滤树等辅助请求仍可独立读取计数；ImageGrid 的列表与分页总数必须分别走 `pathql_fetch`
+与 `pathql_all` 计数批，不得在翻页时因行路径变化重读未变的计数路径。
 
 ### UI：每页条数入口
 
@@ -217,7 +234,7 @@ ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/ka
 
 - **事件源** `kbEvent$(name)`：基于 `listen`（Tauri 事件或 Web SSE），同名事件共享一次监听，不解析内容。
   `events.ts` 的 `KbEventMap` 只是类型表；`on(event, relevant)` 声明一条单事件触发，`triggers$` 把多条合成刷新信号流。
-- **pathql 核心**（单例，`pathqlSource.ts`）：按 `kind + key` 维护请求序列、rows / count 数据状态与观察方注册。
+- **pathql 核心**（单例，`pathqlSource.ts`）：按 `kind + key` 维护请求序列、rows / all 数据状态与观察方注册。
   - **请求**：唯一入口 `pathqlRequest$.next([kind, key])`，next 即返回、不等待、不交还结果。主动请求只有两条通路：
     核心的事件窗口与发起方的用户操作。每次请求序号 +1，可与在途请求并行；每个 key 维护 pending 窗口
     `(acked, requested]`，像 TCP 累计确认：任一请求返回就确认并取消它之前的全部 pending，序号不大于已确认的返回
@@ -231,7 +248,7 @@ ImageGrid 的行、总数与字段补丁已迁到 [`services/kbEvents`](/apps/ka
   - 没有观察方且没有在途请求时回收该 key，不把离开路径的旧数据重放给后来者，也不再随事件刷新。
 - **`usePathqlLooker`**：Vue 组合式观察方。key 变化时注销旧 key、注册新 key（旧路径的迟到结果与 loading 不影响新路径），
   key 为 null 时不注册；不带防抖时间、不发请求，返回 `loading` / `error`，最新请求失败时调 `onError`。
-  ImageGrid 把路径变化当作用户操作：行路径与计数路径各一个 watch，key 一变就 `pathqlRequest$.next`（翻页不改计数路径，
+  ImageGrid 把路径变化当作用户操作：行路径与规范化计数批 key 各一个 watch，key 一变就 `pathqlRequest$.next`（翻页不改计数路径，
   不重读总数）；手动刷新、`mutate`、预览定位重取本页同样只 next。首次加载失败与事件刷新失败都经 `onError` 交给
   adapter 的 `onLoadError` / `onCountError`。加载遮罩只在「当前路径还没有数据且最新请求在途」时显示，已有数据时的
   刷新不遮挡；`usePagedGallery` 只管页码、`rowsPath` 与预览边界，不再负责加载。
@@ -277,10 +294,10 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   `imageMetadataId` 时保留旧内容重新取数，不闪。
 - ImageGrid 的行、总数与字段补丁都经 `kbEvents` 监听；`useImagesChangeRefresh.ts`
   仍保留给 Surf.vue、工具栏等旧消费方。
-  `GalleryToolbar` 在 ImageGrid 的插槽内，分子注入 ImageGrid provide 的总数（`imageGrid/gridTotal.ts` 的
-  `gridTotalKey`：`total` 与 `settled`——当前计数路径的数据已到且最新请求不在途），不再单独订阅同一计数路径；
-  分母（仅保留 `hide` 上下文的总数）只有它用，由它自己注册观察方、路径变化时请求，无过滤时 key 为 null 不读。
-  两者都落定才整体替换副标题计数，避免显示出跨两代的“数量 / 总数”；分母读失败只显示分子。
+  `GalleryToolbar` 在 ImageGrid 的插槽内，只注入 `gridTotalKey` 的 `{ total, unfilteredTotal }`。
+  分子与 adapter 可选的分母由 ImageGrid 同批 `pathql_all` 读取，在同一次回调赋值；工具栏不再注册计数观察方、
+  发请求或配对。画廊有过滤（查询非空或「无画册」）时加入仅保留 `hide` 上下文的全部数量分母，
+  无过滤时只读分子，`unfilteredTotal` 为 null；整批失败时保留现有分子错误处理并清空分母。
 
 ### `image-changed`（`AppEvent::ImageChanged`，`ImageInfo` 字段）
 

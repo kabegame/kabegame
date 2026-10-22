@@ -12,7 +12,7 @@ alwaysApply: false
 - 只改变当前行展示字段、不会改变结果集的写操作走 `GridRefreshContext.patch`。当前只有收藏符合此规则。
 - 写命令照常广播事件（主应用前端、后台任务、MCP、CLI 都靠它同步），不得为前端少读一次而加 `hold` 或返回快照。
 - ImageGrid 的行与总数是 pathql 核心上某个 key 的**观察方**（`usePathqlLooker` / `lookPathql`），只看数据、
-  不发请求，行读 `pathql_fetch`、总数读 `pathql_count`。观察方注册自己的过滤器（adapter 的 `refreshOn`，
+  不发请求，行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批（分子与 adapter 可选分母在同一读快照中读取）。观察方注册自己的过滤器（adapter 的 `refreshOn`，
   每条只对一种事件）；核心对每个 key 用统一的 500ms 窗口（`PATHQL_REFRESH_WAIT_MS`），窗口内任一观察方的
   过滤器同意就刷新一次，结果推给该 key 的全部观察方。观察方不得自带防抖时间，也不得自己发请求。
 - 唯一请求入口是 `pathqlRequest$.next([kind, key])`：next 即返回，不 await、不交还结果。主动请求只有两条通路——

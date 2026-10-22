@@ -32,6 +32,8 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
       const rootPath = buildGalleryCountPath(routeStore.effectiveNoAlbum, routeStore.query);
       return routeStore.hide ? `hide/${rootPath}` : rootPath;
     },
+    computeUnfilteredCountPath: () =>
+      routeStore.effectiveNoAlbum || routeStore.query.length > 0 ? (routeStore.hide ? "hide" : "gallery") : null,
     onCountError: (error) => {
       console.error("加载画廊总数失败:", error);
     },

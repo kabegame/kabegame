@@ -22,7 +22,6 @@
               <!-- 顶部工具栏 -->
               <GalleryToolbar
                 :big-page-enabled="totalCount > pageSize"
-                :filter="galleryRouteStore.query"
                 :sort="galleryRouteStore.sort"
                 :page-size="pageSize"
                 :provider-context-prefix="galleryRouteStore.computedContextPath"

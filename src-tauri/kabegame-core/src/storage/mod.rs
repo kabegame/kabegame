@@ -291,7 +291,7 @@ fn configure_connection(conn: &Connection) {
 }
 
 /// PathQL 只读连接池：每条连接 query_only，并独立注册 DSL 函数。
-fn open_reader_pool(db_path: &Path) -> Result<ReaderPool, String> {
+pub(crate) fn open_reader_pool(db_path: &Path) -> Result<ReaderPool, String> {
     disable_sqlite_memstatus();
     let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
         configure_connection(conn);

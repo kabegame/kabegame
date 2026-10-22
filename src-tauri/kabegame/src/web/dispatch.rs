@@ -236,6 +236,33 @@ pub fn init_registry() {
     );
 
     map.insert(
+        "pathql_all",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    use kabegame_core::providers::PathqlQuery;
+                    #[derive(serde::Deserialize)]
+                    struct Args {
+                        queries: Vec<PathqlQuery>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    let mut results =
+                        kabegame_core::commands::image::pathql_all(args.queries.clone())
+                            .await
+                            .map_err(RpcError::internal)?;
+                    for (query, result) in args.queries.iter().zip(&mut results) {
+                        if matches!(query, PathqlQuery::Fetch { .. }) {
+                            crate::web::image_rewrite::rewrite_image_value(result);
+                        }
+                    }
+                    serde_json::to_value(results).map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
         "get_images_count",
         MethodEntry {
             requires_super: false,

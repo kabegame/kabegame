@@ -8,6 +8,7 @@ use tauri::{AppHandle, Runtime};
 
 use kabegame_core::commands;
 use kabegame_core::commands::view::{RowsSnapshot, TotalSnapshot};
+use kabegame_core::providers::PathqlQuery;
 
 #[tauri::command]
 pub async fn pathql_entry(path: String) -> Result<Value, String> {
@@ -32,6 +33,11 @@ pub async fn pathql_view(path: String) -> Result<RowsSnapshot, String> {
 #[tauri::command]
 pub async fn pathql_count(path: String) -> Result<TotalSnapshot, String> {
     commands::view::pathql_count(path).await
+}
+
+#[tauri::command]
+pub async fn pathql_all(queries: Vec<PathqlQuery>) -> Result<Vec<Value>, String> {
+    commands::image::pathql_all(queries).await
 }
 
 #[tauri::command]

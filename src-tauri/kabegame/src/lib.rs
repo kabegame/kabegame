@@ -514,6 +514,7 @@ pub(crate) fn configure_app(
             pathql_fetch,
             pathql_view,
             pathql_count,
+            pathql_all,
             toggle_image_favorite,
             // --- Tasks ---
             get_all_tasks,

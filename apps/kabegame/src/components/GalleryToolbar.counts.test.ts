@@ -4,12 +4,9 @@ import { reactive, ref, toRef } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GalleryToolbar from "./GalleryToolbar.vue";
 import { gridTotalKey } from "@/components/imageGrid/gridTotal";
-import { pathqlRequest$ } from "@/services/kbEvents";
 import type { GalleryQuery } from "@/utils/galleryPath";
 
-type CountSnapshot = { total: number; seq: number };
-
-const pathqlCount = vi.hoisted(() => vi.fn<(path: string) => Promise<CountSnapshot>>());
+const pathqlAll = vi.hoisted(() => vi.fn());
 const routeStore = reactive({
   query: [] as GalleryQuery,
   hide: true,
@@ -18,7 +15,7 @@ const routeStore = reactive({
   contextPathFor: vi.fn(() => "hide/"),
 });
 
-vi.mock("@/services/pathql", () => ({ pathqlCount, pathqlFetch: vi.fn() }));
+vi.mock("@/services/pathql", () => ({ pathqlAll, pathqlFetch: vi.fn() }));
 vi.mock("@/api", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@/services/albums", () => ({ FAVORITE_ALBUM_ID: "favorite" }));
 vi.mock("pinia", async (importOriginal) => ({
@@ -69,21 +66,12 @@ vi.mock("@kabegame/i18n", () => ({
   }),
 }));
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 
-function render(filter: GalleryQuery) {
+function render() {
   const wrapper = shallowMount(GalleryToolbar, {
-    props: { filter },
     global: {
-      provide: { [gridTotalKey as symbol]: { total: gridTotal, settled: gridSettled } },
+      provide: { [gridTotalKey as symbol]: { total: gridTotal, unfilteredTotal } },
       mocks: { $t: (key: string) => key },
       stubs: {
         PageHeader: { template: '<div class="subtitle"><slot name="subtitle" /></div>' },
@@ -97,12 +85,12 @@ function render(filter: GalleryQuery) {
 }
 
 const gridTotal = ref(7);
-const gridSettled = ref(false);
+const unfilteredTotal = ref<number | null>(null);
 
 beforeEach(() => {
-  pathqlCount.mockReset();
+  pathqlAll.mockReset();
   gridTotal.value = 7;
-  gridSettled.value = false;
+  unfilteredTotal.value = null;
   routeStore.query = [];
   routeStore.hide = true;
   routeStore.effectiveNoAlbum = false;
@@ -113,44 +101,28 @@ afterEach(() => {
 });
 
 describe("GalleryToolbar 计数快照", () => {
-  it("分子取 ImageGrid 注入的总数，分母自己观察；两者都落定才同时更新副标题", async () => {
-    const firstTotal = deferred<CountSnapshot>();
-    const nextTotal = deferred<CountSnapshot>();
-    pathqlCount.mockImplementationOnce(() => firstTotal.promise).mockImplementationOnce(() => nextTotal.promise);
-
-    const filter: GalleryQuery = [{ is: { plugin: { pluginId: "pixiv" } } }];
-    const wrapper = render(filter);
-    // 只读分母，分子不再单独订阅
-    expect(pathqlCount).toHaveBeenCalledTimes(1);
-    expect(pathqlCount).toHaveBeenCalledWith("gallery/hide");
-    expect(wrapper.get(".subtitle").text()).toBe("7");
-
-    gridTotal.value = 8;
-    gridSettled.value = true;
+  it.each([
+    [7, null, "7"],
+    [7, 10, "7 / 10"],
+    [7, 7, "7"],
+    [7, 6, "7"],
+    [0, 10, "gallery.noImages"],
+  ])("分子 %s、分母 %s 的文案为 %s，工具栏不请求 pathql", async (count, total, text) => {
+    gridTotal.value = count as number;
+    unfilteredTotal.value = total as number | null;
+    const wrapper = render();
     await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("8");
-    firstTotal.resolve({ total: 10, seq: 1 });
-    await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("8 / 10");
-
-    // 刷新：分子在途时分母先回来，不提交半份快照
-    gridSettled.value = false;
-    pathqlRequest$.next(["total", "gallery/hide"]);
-    nextTotal.resolve({ total: 11, seq: 2 });
-    await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("8 / 10");
-    gridTotal.value = 9;
-    gridSettled.value = true;
-    await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("9 / 11");
+    expect(wrapper.get(".subtitle").text()).toBe(text);
+    expect(pathqlAll).not.toHaveBeenCalled();
   });
 
-  it("无过滤时不读分母，只显示分子", async () => {
-    const wrapper = render([]);
-    gridTotal.value = 12;
-    gridSettled.value = true;
+  it("同一回调更新注入的分子分母后整体更新文案", async () => {
+    unfilteredTotal.value = 10;
+    const wrapper = render();
+    gridTotal.value = 8;
+    unfilteredTotal.value = 11;
     await flushPromises();
-    expect(pathqlCount).not.toHaveBeenCalled();
-    expect(wrapper.get(".subtitle").text()).toBe("12");
+    expect(wrapper.get(".subtitle").text()).toBe("8 / 11");
+    expect(pathqlAll).not.toHaveBeenCalled();
   });
 });

@@ -49,21 +49,13 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Close, Filter } from "@kabegame/element-plus-icons";
-import { on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
 import { gridTotalKey } from "@/components/imageGrid/gridTotal";
-import { withGalleryPrefix } from "@/utils/path";
 import FailedImagesDialog from "@/components/FailedImagesDialog.vue";
 import GalleryQueryBar from "@/components/gallery/GalleryQueryBar.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@/stores/header";
 import { usePageBridgeStore } from "@/stores/pageBridge";
-import {
-  hasActiveQuery,
-  querySearchTerm,
-  type GalleryQuery,
-  type GalleryQueryPatch,
-  type GallerySort,
-} from "@/utils/galleryPath";
+import { hasActiveQuery, querySearchTerm, type GalleryQueryPatch, type GallerySort } from "@/utils/galleryPath";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import {
   useGalleryRouteStore,
@@ -77,8 +69,6 @@ import { DEFAULT_GALLERY_PAGE_SIZE } from "@/utils/galleryPageSize";
 interface Props {
   isLoadingAll?: boolean;
   bigPageEnabled?: boolean;
-  /** 当前画廊过滤条件；有过滤时才显示无过滤总数（分母）。 */
-  filter?: GalleryQuery;
   sort?: GallerySort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
@@ -89,7 +79,6 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   bigPageEnabled: false,
-  filter: () => [] as GalleryQuery,
   sort: () => ({ field: "by-id", desc: false }) as GallerySort,
   pageSize: DEFAULT_GALLERY_PAGE_SIZE,
   providerContextPrefix: "",
@@ -139,61 +128,16 @@ const failedCountFoldLabel = computed(() => {
 });
 
 // ---------- 总数（分子 / 分母）----------
-/**
- * 分子是 ImageGrid 注入的当前视图总数，不再单独订阅同一计数路径；分母（只带 hide 上下文的全部数量）
- * 只有工具栏用，由它自己观察。两者都落定才作为一份显示快照提交，避免独立刷新时序拼出割裂文案。
- */
+/** 分子分母由 ImageGrid 同批读取，来自同一读快照；工具栏只注入这一对数量。 */
 const gridTotal = inject(gridTotalKey);
 if (!gridTotal) throw new Error("GalleryToolbar 必须放在 ImageGrid 的插槽内");
 
-/** 有过滤（含「无画册」）时才显示分母；无过滤时分子即全部，不读分母。 */
-const denominatorKey = computed(() =>
-  galleryRouteStore.effectiveNoAlbum || props.filter.length > 0
-    ? withGalleryPrefix(galleryHide.value ? "hide" : "gallery")
-    : null,
-);
-const denominator = ref<{ key: string; total: number } | null>(null);
-const denominatorLooker = usePathqlLooker({
-  kind: "total",
-  key: () => denominatorKey.value,
-  refreshOn: [on("images-change", (payload) => !!payload.reason)],
-  onResult: (snapshot) => {
-    if (denominatorKey.value) denominator.value = { key: denominatorKey.value, total: snapshot.total };
-  },
-});
-// 分母路径只有工具栏在用：路径变化即请求。
-watch(
-  denominatorKey,
-  (key) => {
-    if (key) pathqlRequest$.next(["total", key]);
-  },
-  { immediate: true },
-);
-
-const countPair = ref<{ count: number; total: number | null } | null>(null);
-watch(
-  () => {
-    if (!gridTotal.settled.value) return null;
-    const count = gridTotal.total.value;
-    const key = denominatorKey.value;
-    if (!key) return { count, total: null };
-    if (denominatorLooker.loading.value) return null;
-    // 分母读失败时只显示分子
-    if (denominatorLooker.error.value != null) return { count, total: null };
-    return denominator.value?.key === key ? { count, total: denominator.value.total } : null;
-  },
-  (pair) => {
-    if (pair) countPair.value = pair;
-  },
-  { immediate: true },
-);
-
 const totalCountText = computed(() => {
-  const count = countPair.value?.count ?? gridTotal.total.value;
+  const count = gridTotal.total.value;
   if (count === 0) {
     return t("gallery.noImages");
   }
-  const total = countPair.value?.total;
+  const total = gridTotal.unfilteredTotal.value;
   // 没过滤(或分母还没回来)时不写 "16892 / 16892" 这种废话。
   if (total == null || total <= count) {
     return t("gallery.totalImages", { count });
