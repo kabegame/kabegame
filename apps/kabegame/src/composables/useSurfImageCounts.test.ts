@@ -51,7 +51,7 @@ function fixture() {
   return { counts, wrapper };
 }
 const paths = () => pathqlAll.mock.calls.map(([queries]) => queries[0].path).sort();
-const emit = (payload: unknown) => listeners.get("images-change")?.({ payload });
+const emit = (payload: unknown, name = "images-added") => listeners.get(name)?.({ payload });
 
 describe("Surf 页内动态计数观察", () => {
   it("首次加载每记录一个 all key，countOf 保持站点接口并编码 host", async () => {
@@ -85,19 +85,20 @@ describe("Surf 页内动态计数观察", () => {
   });
 
   it.each([
-    [{ reason: "add", surfRecordIds: ["one"] }, ["a.com"]],
-    [{ reason: "delete", surfRecordIds: ["two"] }, ["b.com"]],
-    [{ reason: "change" }, ["a.com", "b.com"]],
-    [{ reason: "add", surfRecordIds: null }, ["a.com", "b.com"]],
-    [{ reason: "add", surfRecordIds: [] }, []],
-    [{ reason: "add", surfRecordIds: ["unknown"] }, []],
-    [{ surfRecordIds: ["one"] }, []],
-  ])("事件相关性 %j → %j", async (payload, hosts) => {
+    ["images-added", { images: [{ surfRecordId: "one" }] }, ["a.com"]],
+    ["images-added", { images: [{ surfRecordId: "unknown" }] }, []],
+    ["images-added", { images: [] }, []],
+    ["images-deleted", { imageIds: ["a"] }, ["a.com", "b.com"]],
+    ["images-change", { patches: [{ id: "a", width: 1 }] }, ["a.com", "b.com"]],
+    ["image-changed", { patch: { id: "a", width: 1 } }, ["a.com", "b.com"]],
+    ["album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] }, ["a.com", "b.com"]],
+    ["album-images-change", { albumIds: ["other"] }, []],
+  ])("事件相关性 %s %j → %j", async (name, payload, hosts) => {
     vi.useFakeTimers();
     fixture();
     await flushPromises();
     pathqlAll.mockClear();
-    emit(payload);
+    emit(payload, name);
     await flushPromises();
     expect(paths()).toEqual(hosts.map((host) => `gallery/surf/${host}`));
   });
@@ -109,9 +110,9 @@ describe("Surf 页内动态计数观察", () => {
     pathqlAll.mockClear();
     stores.surf.records[0] = { id: "replacement", host: "a.com" };
     await flushPromises();
-    emit({ reason: "add", surfRecordIds: ["one"] });
+    emit({ images: [{ surfRecordId: "one" }] });
     expect(paths()).toEqual([]);
-    emit({ reason: "add", surfRecordIds: ["replacement"] });
+    emit({ images: [{ surfRecordId: "replacement" }] });
     await flushPromises();
     expect(paths()).toEqual(["gallery/surf/a.com"]);
   });
@@ -149,10 +150,10 @@ describe("Surf 页内动态计数观察", () => {
     await flushPromises();
     expect(counts.countOf("a.com")).toBe(0);
     pathqlAll.mockClear();
-    emit({ reason: "add", surfRecordIds: ["one"] });
+    emit({ images: [{ surfRecordId: "one" }] });
     expect(paths()).toEqual([]);
     wrapper.unmount();
-    emit({ reason: "add" });
+    emit({ images: [] });
     expect(paths()).toEqual([]);
   });
 });

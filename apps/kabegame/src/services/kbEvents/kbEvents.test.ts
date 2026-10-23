@@ -34,7 +34,10 @@ vi.mock("@/api", () => ({
   }),
 }));
 vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlAll }));
-vi.mock("@/services/albums", () => ({ FAVORITE_ALBUM_ID: "favorite" }));
+vi.mock("@/services/albums", () => ({
+  FAVORITE_ALBUM_ID: "favorite",
+  HIDDEN_ALBUM_ID: "00000000-0000-0000-0000-000000000000",
+}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -105,24 +108,29 @@ describe("kbEvent$", () => {
 });
 
 describe("imagePatches$", () => {
-  it("两种事件各自防抖、各自合并成 imageId → 字段补丁", async () => {
+  it("单图与多图共用补丁窗口，收藏成员独立合并", async () => {
     vi.useFakeTimers();
     const batches: Record<string, unknown>[] = [];
-    const subscription = imagePatches$(500).subscribe((batch) => batches.push(Object.fromEntries(batch)));
+    const subscription = imagePatches$(500, { patchHidden: () => true }).subscribe((batch) => batches.push(Object.fromEntries(batch)));
     cleanups.push(() => subscription.unsubscribe());
     await flushPromises();
-    const imageChanged = (patches: { imageIds: string[]; diff: Record<string, unknown> }[]) =>
-      listeners.get("image-changed")!({ payload: { seq: 1, patches } });
+    const imageChanged = (patch: { id: string } & Record<string, unknown>) =>
+      listeners.get("image-changed")!({ payload: { seq: 1, patch } });
+    const imagesChanged = (patches: ({ id: string } & Record<string, unknown>)[]) =>
+      listeners.get("images-change")!({ payload: { seq: 1, patches } });
     const albumChanged = (albumId: string, reason: string, imageIds: string[]) =>
       listeners.get("album-images-change")!({ payload: { seq: 1, albumIds: [albumId], reason, imageIds } });
 
     // 空闲时首个事件立即成批
-    imageChanged([{ imageIds: ["a"], diff: { isHidden: true } }]);
-    expect(batches).toEqual([{ a: { isHidden: true } }]);
+    imageChanged({ id: "a", width: 1 });
+    expect(batches).toEqual([{ a: { width: 1 } }]);
 
     // 窗口内同一 id 的字段合并，后到覆盖先到
-    imageChanged([{ imageIds: ["a", "b"], diff: { isHidden: false } }]);
-    imageChanged([{ imageIds: ["a"], diff: { width: 10 } }]);
+    imagesChanged([
+      { id: "a", width: 2 },
+      { id: "b", width: 2 },
+    ]);
+    imageChanged({ id: "a", width: 10 });
     // 收藏流独立开窗：首个收藏事件立即发出
     albumChanged("favorite", "add", ["a"]);
     expect(batches[1]).toEqual({ a: { favorite: true } });
@@ -133,15 +141,32 @@ describe("imagePatches$", () => {
     albumChanged("favorite", "delete", ["b"]);
 
     vi.advanceTimersByTime(500);
-    expect(batches.slice(2)).toEqual([
-      { a: { isHidden: false, width: 10 }, b: { isHidden: false } },
-      { b: { favorite: false } },
-    ]);
+    expect(batches.slice(2)).toEqual([{ a: { width: 10 }, b: { width: 2 } }, { b: { favorite: false } }]);
 
     // 一串事件全部无关时不发出
     albumChanged("other", "delete", ["a"]);
     vi.advanceTimersByTime(500);
     expect(batches).toHaveLength(4);
+  });
+  it("隐藏与取消隐藏仅从隐藏画册直接成员推导，独立于字段与收藏窗口", async () => {
+    vi.useFakeTimers();
+    const batches: Record<string, unknown>[] = [];
+    const sub = imagePatches$(500, { patchHidden: () => true }).subscribe((batch) => batches.push(Object.fromEntries(batch)));
+    cleanups.push(() => sub.unsubscribe());
+    await flushPromises();
+    const emit = (albumId: string, reason: string) =>
+      listeners.get("album-images-change")!({
+        payload: { seq: 1, albumIds: [albumId], reason, imageIds: ["a"] },
+      });
+    emit("other", "add-hidden");
+    emit("00000000-0000-0000-0000-000000000000", "hide");
+    expect(batches).toEqual([]);
+    emit("00000000-0000-0000-0000-000000000000", "add-hidden");
+    vi.advanceTimersByTime(500);
+    expect(batches).toEqual([{ a: { isHidden: true } }]);
+    emit("00000000-0000-0000-0000-000000000000", "delete-hidden");
+    vi.advanceTimersByTime(500);
+    expect(batches.at(-1)).toEqual({ a: { isHidden: false } });
   });
 });
 
@@ -166,8 +191,8 @@ function request(kind: PathqlKind, path: string) {
   pathqlRequest$.next([kind, path]);
 }
 
-function imagesChange(reason: string) {
-  listeners.get("images-change")!({ payload: { seq: 1, reason } });
+function imagesChange(displayName: string) {
+  listeners.get("images-change")!({ payload: { seq: 1, patches: [{ id: "a", displayName }] } });
 }
 
 describe("pathqlRequest$", () => {
@@ -316,8 +341,12 @@ describe("核心刷新窗口", () => {
 
   it("同一路径的观察方各带过滤器：任一同意就在窗口内刷新一次，结果推给全部观察方", async () => {
     vi.useFakeTimers();
-    const adds = look("rows", "w/1", [on("images-change", (p) => p.reason === "add")]);
-    const deletes = look("rows", "w/1", [on("images-change", (p) => p.reason === "delete")]);
+    const adds = look("rows", "w/1", [
+      on("images-change", (p) => p.patches.some((patch) => patch.displayName === "add")),
+    ]);
+    const deletes = look("rows", "w/1", [
+      on("images-change", (p) => p.patches.some((patch) => patch.displayName === "delete")),
+    ]);
     await flushPromises();
 
     // 没有过滤器同意：不刷新
@@ -336,8 +365,8 @@ describe("核心刷新窗口", () => {
 
   it("统一 500ms 窗口：窗口内多次同意（来自不同观察方）合并到窗口结束只刷新一次", async () => {
     vi.useFakeTimers();
-    look("rows", "w/2", [on("images-change", (p) => p.reason === "add")]);
-    look("rows", "w/2", [on("images-change", (p) => p.reason === "delete")]);
+    look("rows", "w/2", [on("images-change", (p) => p.patches.some((patch) => patch.displayName === "add"))]);
+    look("rows", "w/2", [on("images-change", (p) => p.patches.some((patch) => patch.displayName === "delete"))]);
     await flushPromises();
     pathqlFetch.mockResolvedValue(rows("x"));
 
@@ -520,7 +549,9 @@ describe("usePathqlLookMany", () => {
   it("refreshOn 按 key 给出各自的过滤器，事件只刷新相关 key", async () => {
     const keys = ref(["m2/add", "m2/delete"]);
     pathqlFetch.mockResolvedValueOnce(rows("added"));
-    const { results } = mountMany(keys, (key) => [on("images-change", (payload) => `m2/${payload.reason}` === key)]);
+    const { results } = mountMany(keys, (key) => [
+      on("images-change", (payload) => `m2/${payload.patches[0].displayName}` === key),
+    ]);
     imagesChange("add");
     await flushPromises();
     expect(pathqlFetch).toHaveBeenCalledTimes(1);

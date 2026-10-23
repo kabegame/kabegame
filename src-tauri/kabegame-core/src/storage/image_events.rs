@@ -1,11 +1,11 @@
-//! 在修改 `images` / `album_images` 后统一发射 `images-change` / `album-images-change`。
+//! 在修改 `images` / `album_images` 后统一发射图片增删、字段补丁与 `album-images-change`。
 
 #[cfg(feature = "ipc-server")]
 use crate::emitter::dispatch_view_event;
 use crate::emitter::{next_change_seq, GlobalEmitter};
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
-use crate::ipc::events::ImagePatch;
+use crate::ipc::events::ImageFieldPatch;
 use crate::storage::albums::AddToAlbumResult;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
 use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
@@ -128,27 +128,23 @@ fn split_by_hidden(changed: &[String], pairs: &[(String, String)]) -> (Vec<Strin
 }
 
 /// 原生元数据挂载的补丁：`image_metadata_id` 是图片字段，按 `imageMetadataId` 下发绝对值。
-pub fn native_metadata_image_patch(image_id: &str, metadata_id: i64) -> ImagePatch {
-    ImagePatch {
-        image_ids: vec![image_id.to_string()],
-        diff: json!({ "imageMetadataId": metadata_id }),
+pub fn native_metadata_image_patch(image_id: &str, metadata_id: i64) -> ImageFieldPatch {
+    ImageFieldPatch {
+        id: image_id.to_string(),
+        fields: json!({ "imageMetadataId": metadata_id })
+            .as_object()
+            .unwrap()
+            .clone(),
     }
 }
 
-/// 原生元数据挂载写库后调用：先 `image-changed` 补丁当前页，再 `images-change("change")`——
-/// 原生元数据参与 `search/native-metadata`，搜索成员可能变了。
+/// 原生元数据挂载写库后发送单图字段补丁。
 pub fn emit_native_metadata_attached(image_id: &str, metadata_id: i64) {
     if let Some(emitter) = GlobalEmitter::try_global() {
-        let changed = vec![image_id.to_string()];
-        emitter.emit_image_changed_uniform(&changed, json!({ "imageMetadataId": metadata_id }));
-        emitter.emit_images_change("change", &changed, None, None, None);
-    }
-}
-
-fn emit_image_hidden_changed(changed: &[String], is_hidden: bool) {
-    if let Some(emitter) = GlobalEmitter::try_global() {
-        emitter.emit_image_changed_uniform(changed, json!({ "isHidden": is_hidden }));
-        emitter.emit_images_change("change", changed, None, None, None);
+        emitter.emit_image_fields(
+            &[image_id.to_string()],
+            json!({ "imageMetadataId": metadata_id }),
+        );
     }
 }
 
@@ -179,7 +175,6 @@ pub fn emit_membership_added(
                 out.push(payload);
             }
         }
-        emit_image_hidden_changed(changed, true);
     } else {
         let (hidden_ids, visible_ids) = split_by_hidden(changed, &pairs);
         if let Some(payload) =
@@ -229,7 +224,6 @@ pub fn emit_membership_removed(
                 out.push(payload);
             }
         }
-        emit_image_hidden_changed(changed, false);
     } else {
         let (hidden_ids, visible_ids) = split_by_hidden(changed, pairs_before);
         if let Some(payload) =
@@ -291,7 +285,7 @@ pub fn begin_delete_images_with_events(
     for tid in &task_ids {
         emit_task_image_counts_full(tid);
     }
-    GlobalEmitter::global().emit_images_change("delete", image_ids, Some(&task_ids), None, None);
+    GlobalEmitter::global().emit_images_deleted(image_ids);
 
     let mut album_changes = Vec::new();
     for (album_id, changed) in grouped_memberships(&pairs_before) {
@@ -397,53 +391,196 @@ mod tests {
         assert_eq!(grouped[HIDDEN_ALBUM_ID], vec!["hidden"]);
     }
 
+    /// 在同一个事件循环中覆盖协议出口与真实写命令，避免多个转发任务争用全局接收器。
     #[cfg(feature = "ipc-server")]
     #[tokio::test(flavor = "current_thread")]
-    async fn hidden_field_change_emits_patch_before_view_invalidation() {
-        use crate::ipc::events::{AppEvent, AppEventKind};
+    async fn phase_a_image_event_protocol() {
+        use crate::ipc::events::{AppEvent, AppEventKind, ImageFieldPatch};
         use crate::ipc::server::EventBroadcaster;
         use tokio::time::{timeout, Duration};
 
-        let _ = EventBroadcaster::init_global(16);
+        crate::app_paths::AppPaths::init_for_tests();
+        let _ = crate::settings::Settings::init_global();
+        let _ = Storage::init_global();
+        let _ = EventBroadcaster::init_global(64);
         let _ = GlobalEmitter::init_global();
-        let mut patch_rx = EventBroadcaster::global().subscribe(AppEventKind::ImageChanged);
-        let mut change_rx = EventBroadcaster::global().subscribe(AppEventKind::ImagesChange);
+        let emitter = GlobalEmitter::global();
+        let mut rx = EventBroadcaster::global().subscribe_all_stream();
         let forward = tokio::spawn(EventBroadcaster::start_forward_task());
-
-        let image_ids = vec!["image-a".to_string(), "image-b".to_string()];
-        emit_image_hidden_changed(&image_ids, true);
-
-        let (_, patch_event) = timeout(Duration::from_secs(1), patch_rx.recv())
-            .await
-            .expect("image-changed timeout")
-            .expect("image-changed channel closed");
-        let (_, change_event) = timeout(Duration::from_secs(1), change_rx.recv())
-            .await
-            .expect("images-change timeout")
-            .expect("images-change channel closed");
-        forward.abort();
-
-        let (patch_seq, patches) = match &*patch_event {
-            AppEvent::ImageChanged { seq, patches } => (*seq, patches),
-            event => panic!("unexpected patch event: {event:?}"),
+        let patch = |id: &str, fields: serde_json::Value| ImageFieldPatch {
+            id: id.into(),
+            fields: fields.as_object().unwrap().clone(),
         };
-        assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].image_ids, image_ids);
-        assert_eq!(patches[0].diff, json!({ "isHidden": true }));
+        async fn next(
+            rx: &mut tokio::sync::mpsc::UnboundedReceiver<(u64, Arc<AppEvent>)>,
+        ) -> Arc<AppEvent> {
+            timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .1
+        }
+        for kind in [
+            AppEventKind::ImagesAdded,
+            AppEventKind::ImagesDeleted,
+            AppEventKind::ImagesChange,
+            AppEventKind::ImageChanged,
+        ] {
+            assert!(AppEventKind::ALL.contains(&kind));
+            assert_eq!(
+                AppEventKind::from_event_name(&kind.as_event_name()),
+                Some(kind)
+            );
+        }
+        emitter.emit_image_patches(vec![]);
+        emitter.emit_image_patches(vec![patch("a", json!({}))]);
+        emitter.emit_image_fields(&["a".into()], json!({}));
+        emitter.emit_images_added(&[]);
+        emitter.emit_images_deleted(&[]);
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
 
-        let change_seq = match &*change_event {
-            AppEvent::ImagesChange {
-                seq,
-                reason,
-                image_ids: changed,
-                ..
-            } => {
-                assert_eq!(reason, "change");
-                assert_eq!(changed, &image_ids);
-                *seq
+        emitter.emit_image_patches(vec![
+            patch("a", json!({"width": 1})),
+            patch("a", json!({"width": 2, "metadataId": 9})),
+            patch("b", json!({})),
+        ]);
+        let single = next(&mut rx).await;
+        match &*single {
+            AppEvent::ImageChanged { patch, .. } => {
+                assert_eq!(patch.id, "a");
+                assert_eq!(
+                    patch.fields,
+                    json!({"width": 2, "metadataId": 9})
+                        .as_object()
+                        .unwrap()
+                        .clone()
+                );
             }
-            event => panic!("unexpected change event: {event:?}"),
+            event => panic!("unexpected event: {event:?}"),
+        }
+        let serialized = serde_json::to_value(&*single).unwrap();
+        assert_eq!(serialized["type"], "image-changed");
+        assert_eq!(serialized["patch"]["id"], "a");
+        assert!(serialized["patch"].get("fields").is_none());
+        assert!(serialized.get("patches").is_none());
+        emitter.emit_image_fields(&["a".into(), "b".into()], json!({"surfRecordId": null}));
+        match &*next(&mut rx).await {
+            AppEvent::ImagesChange { patches, .. } => {
+                assert_eq!(patches.len(), 2);
+                assert!(patches.iter().all(|p| p.fields["surfRecordId"].is_null()));
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+
+        let image: crate::storage::ImageInfo = serde_json::from_value(json!({
+            "id": "", "url": "https://example.test/a", "local_path": "/tmp/phase-a-missing",
+            "plugin_id": "phase-a", "task_id": null, "surf_record_id": null,
+            "crawled_at": 42, "image_metadata_id": 7, "metadata_id": null,
+            "thumbnail_path": "/tmp/phase-a-thumb", "display_name": "phase-a"
+        }))
+        .unwrap();
+        emitter.emit_images_added(std::slice::from_ref(&image));
+        let added = next(&mut rx).await;
+        assert_eq!(added.kind(), AppEventKind::ImagesAdded);
+        let serialized = serde_json::to_value(&*added).unwrap();
+        assert_eq!(
+            serialized["images"][0],
+            serde_json::to_value(&image).unwrap()
+        );
+        assert_eq!(serialized["images"][0]["imageMetadataId"], 7);
+        let decoded: AppEvent = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), serialized);
+        assert!(serialized.get("reason").is_none());
+        let inserted = Storage::global().add_image(image).unwrap();
+
+        // 隐藏增删只产生画册成员事件。
+        let ids = vec![inserted.id.clone()];
+        Storage::global()
+            .add_images_to_album(HIDDEN_ALBUM_ID, &ids)
+            .unwrap();
+        emit_membership_added(HIDDEN_ALBUM_ID, &ids).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesChange { reason, .. } if reason == "add-hidden")
+        );
+        let paths = HashMap::from([(HIDDEN_ALBUM_ID.to_string(), format!("/{HIDDEN_ALBUM_ID}/"))]);
+        Storage::global()
+            .remove_images_from_album(HIDDEN_ALBUM_ID, &ids)
+            .unwrap();
+        emit_membership_removed(
+            HIDDEN_ALBUM_ID,
+            &ids,
+            &[(HIDDEN_ALBUM_ID.into(), inserted.id.clone())],
+            &paths,
+            MembershipRemovalContext::AlbumMutation,
+        );
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesChange { reason, .. } if reason == "delete-hidden")
+        );
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        begin_delete_images_with_events(&ids, false).unwrap();
+        let deleted = next(&mut rx).await;
+        assert_eq!(deleted.kind(), AppEventKind::ImagesDeleted);
+        let serialized = serde_json::to_value(&*deleted).unwrap();
+        assert_eq!(serialized.as_object().unwrap().len(), 3);
+        assert_eq!(serialized["imageIds"], json!(ids));
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        // 删除任务、清理已完成任务：外键把图片 task_id 置空，发 taskId: null 补丁。
+        let task_id = format!("phase-a-{}", uuid::Uuid::new_v4());
+        let insert_task_with_image = |n: u32| {
+            Storage::global()
+                .db
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO tasks (id, plugin_id, status) VALUES (?1, 'phase-a', 'completed')",
+                    [&task_id],
+                )
+                .unwrap();
+            let image: crate::storage::ImageInfo = serde_json::from_value(json!({
+                "id": "", "url": format!("https://example.test/task-{n}"),
+                "local_path": format!("/tmp/phase-a-task-{n}"), "plugin_id": "phase-a",
+                "task_id": task_id, "crawled_at": 42, "thumbnail_path": ""
+            }))
+            .unwrap();
+            Storage::global().add_image(image).unwrap().id
         };
-        assert!(patch_seq < change_seq);
+        let task_image_nulled = |event: &AppEvent, image_id: &str| match event {
+            AppEvent::ImageChanged { patch, .. } => {
+                patch.id == image_id && patch.fields.get("taskId") == Some(&json!(null))
+            }
+            AppEvent::ImagesChange { patches, .. } => patches
+                .iter()
+                .any(|p| p.id == image_id && p.fields.get("taskId") == Some(&json!(null))),
+            _ => false,
+        };
+
+        let image_id = insert_task_with_image(1);
+        crate::commands::task::delete_task(task_id.clone()).unwrap();
+        assert!(task_image_nulled(&*next(&mut rx).await, &image_id));
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::TaskDeleted { task_id: id } if id == &task_id)
+        );
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        let image_id = insert_task_with_image(2);
+        let cleared = crate::commands::task::clear_finished_tasks().unwrap();
+        assert!(cleared["taskIds"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task_id)));
+        let (mut saw_deleted, mut saw_patch) = (false, false);
+        while let Ok(Some((_, event))) = timeout(Duration::from_millis(30), rx.recv()).await {
+            match &*event {
+                AppEvent::TaskDeleted { task_id: id } => saw_deleted |= id == &task_id,
+                AppEvent::ImageChanged { .. } | AppEvent::ImagesChange { .. } => {
+                    saw_patch |= task_image_nulled(&event, &image_id)
+                }
+                event => panic!("unexpected event after clear: {event:?}"),
+            }
+        }
+        assert!(saw_deleted && saw_patch);
+        forward.abort();
     }
 }

@@ -1,11 +1,18 @@
 export { kbEvent$, type KbEvent } from "./eventSource";
 export { batchWindow } from "./batchWindow";
 export { GRID_REFRESH_WAIT_MS, PATHQL_REFRESH_WAIT_MS } from "./constants";
-export { imagePatches$, reduceImageChanged, reduceFavoriteChanges, type ImagePatchBatch } from "./imagePatches";
+export {
+  imagePatches$,
+  reducePatches,
+  reduceHiddenChanges,
+  reduceFavoriteChanges,
+  type ImagePatchBatch,
+} from "./imagePatches";
 export {
   on,
   triggers$,
   albumChangeKinds,
+  isHiddenAlbumChange,
   albumEventPaths,
   albumEventAffectsDir,
   type EventTrigger,
@@ -13,7 +20,10 @@ export {
   type AlbumChangedPayload,
   type AutoConfigChangePayload,
   type ImagesChangePayload,
-  type ImagePatchEntry,
+  type ImageFieldPatch,
+  type ImagePatchPayload,
+  type ImagesAddedPayload,
+  type ImagesDeletedPayload,
   type ImageChangedPayload,
   type AlbumImagesChangePayload,
 } from "./events";
@@ -32,3 +42,5 @@ export {
 export { usePathqlLooker } from "./usePathqlLooker";
 export { usePathqlLookMany } from "./usePathqlLookMany";
 export { usePathqlLookAll as usePathqlLookAll } from "./usePathqlLookAll";
+
+export { addedTrigger, patchTriggers, hiddenTrigger, imageMayMatchQuery, type ImageViewState } from "./imageViewRelevance";

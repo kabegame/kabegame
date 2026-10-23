@@ -27,6 +27,7 @@ use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-client")]
 use crate::ipc::client::client_instance;
 use crate::storage::tasks::TaskFailedImage;
+use crate::storage::ImageInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -74,6 +75,8 @@ app_event_kinds! {
     WallpaperUpdateImage,
     ImageChanged,
     ImagesChange,
+    ImagesAdded,
+    ImagesDeleted,
     AlbumImagesChange,
     SettingChange,
     AlbumAdded,
@@ -109,6 +112,8 @@ impl AppEventKind {
             AppEventKind::WallpaperUpdateImage => "wallpaper-update-image",
             AppEventKind::ImageChanged => "image-changed",
             AppEventKind::ImagesChange => "images-change",
+            AppEventKind::ImagesAdded => "images-added",
+            AppEventKind::ImagesDeleted => "images-deleted",
             AppEventKind::AlbumImagesChange => "album-images-change",
             AppEventKind::SettingChange => "setting-change",
             AppEventKind::AlbumAdded => "album-added",
@@ -139,6 +144,8 @@ impl AppEventKind {
             "wallpaper-update-image" => Some(AppEventKind::WallpaperUpdateImage),
             "image-changed" => Some(AppEventKind::ImageChanged),
             "images-change" => Some(AppEventKind::ImagesChange),
+            "images-added" => Some(AppEventKind::ImagesAdded),
+            "images-deleted" => Some(AppEventKind::ImagesDeleted),
             "album-images-change" => Some(AppEventKind::AlbumImagesChange),
             "setting-change" => Some(AppEventKind::SettingChange),
             "album-added" => Some(AppEventKind::AlbumAdded),
@@ -169,12 +176,12 @@ impl AppEventKind {
     }
 }
 
-/// 一组图片共享同一份字段绝对值快照。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImagePatch {
-    pub image_ids: Vec<String>,
-    pub diff: serde_json::Value,
+/// 一张图片的字段绝对值；字段名使用 ImageInfo 的 camelCase 命名。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageFieldPatch {
+    pub id: String,
+    #[serde(flatten)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// 应用事件类型；payload 通过 `Arc` 共享，不直接 Clone。
@@ -227,23 +234,24 @@ pub enum AppEvent {
         error: Option<String>,
     },
 
-    /// `images` 表增删改（reason: `add` | `delete` | `change`）
-    ImagesChange {
+    /// 图片行真正插入，携带完整行。
+    ImagesAdded { seq: u64, images: Vec<ImageInfo> },
+
+    /// 图片行真正删除，只携带 id。
+    ImagesDeleted {
         seq: u64,
-        reason: String,
         #[serde(rename = "imageIds")]
         image_ids: Vec<String>,
-        #[serde(rename = "taskIds", skip_serializing_if = "Option::is_none")]
-        task_ids: Option<Vec<String>>,
-        #[serde(rename = "surfRecordIds", skip_serializing_if = "Option::is_none")]
-        surf_record_ids: Option<Vec<String>>,
-        #[serde(rename = "pluginIds", skip_serializing_if = "Option::is_none")]
-        plugin_ids: Option<Vec<String>>,
     },
 
-    /// `ImageInfo` 字段增量更新；`diff` 是 camelCase 绝对值快照。
-    #[serde(rename_all = "camelCase")]
-    ImageChanged { seq: u64, patches: Vec<ImagePatch> },
+    /// 多张图片的字段变化，每张图一条补丁。
+    ImagesChange {
+        seq: u64,
+        patches: Vec<ImageFieldPatch>,
+    },
+
+    /// 单张图片的字段变化。
+    ImageChanged { seq: u64, patch: ImageFieldPatch },
 
     /// `album_images` 成员或顺序变更。
     AlbumImagesChange {
@@ -471,6 +479,8 @@ impl AppEvent {
             AppEvent::HiddenCleanupFinished { .. } => AppEventKind::HiddenCleanupFinished,
             AppEvent::ImageChanged { .. } => AppEventKind::ImageChanged,
             AppEvent::ImagesChange { .. } => AppEventKind::ImagesChange,
+            AppEvent::ImagesAdded { .. } => AppEventKind::ImagesAdded,
+            AppEvent::ImagesDeleted { .. } => AppEventKind::ImagesDeleted,
             AppEvent::AlbumImagesChange { .. } => AppEventKind::AlbumImagesChange,
             AppEvent::WallpaperUpdateImage { .. } => AppEventKind::WallpaperUpdateImage,
             AppEvent::SettingChange { .. } => AppEventKind::SettingChange,

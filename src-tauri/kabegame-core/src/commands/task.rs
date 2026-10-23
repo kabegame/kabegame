@@ -504,7 +504,6 @@ pub fn delete_task(task_id: String) -> Result<Value, String> {
     let storage = Storage::global();
     storage.delete_task(&task_id)?;
     GlobalEmitter::global().emit_task_deleted(&task_id);
-    GlobalEmitter::global().emit_images_change("change", &[], Some(&[task_id]), None, None);
     Ok(Value::Null)
 }
 
@@ -739,9 +738,6 @@ pub fn clear_finished_tasks() -> Result<Value, String> {
     let count = storage.clear_finished_tasks()?;
     for tid in &task_ids {
         GlobalEmitter::global().emit_task_deleted(tid);
-    }
-    if !task_ids.is_empty() {
-        GlobalEmitter::global().emit_images_change("change", &[], Some(&task_ids), None, None);
     }
     Ok(serde_json::json!({ "taskIds": task_ids, "count": count }))
 }

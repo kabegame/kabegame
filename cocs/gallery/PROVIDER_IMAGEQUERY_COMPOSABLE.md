@@ -191,7 +191,7 @@
 - 面板顶层直接是该维度的子项（年份、区间、插件……），没有维度根，也没有「任意」行；清除维度用 chip 右上角的叉号。
   因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
 - 侧栏以 `TreeQuerySource` 描述每个分支的一条 list 查询，经 `usePathqlLookMany` 观察 `all` key，
-  只观察自身与所有祖先都展开的分支。`refreshOn` 对有 reason 的 `images-change` 投票，画册敏感上下文另看
+  只观察自身与所有祖先都展开的分支。`refreshOn` 对 `images-added` / `images-deleted` / `images-change` / `image-changed` 与隐藏画册成员变化投票，画册敏感上下文另看
   `album-images-change` 与画册结构事件；同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
   侧栏隐藏时观察集合为空，每次显示都整组请求；插件 `id:version` 签名变化调用 `model.refresh()`。
 - 高级查询弹窗是 diff 模式：候选列举同样走 `<路径>/_kb_co`（与侧栏只差路径是否带草稿，不带计数），`refreshOn` 为空，

@@ -388,7 +388,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 **效果**：调用 `Storage::update_image_display_name`。
 
-**副作用**：先通过 `image-changed` 即时更新图片的可见名，再通过 `images-change` 让已打开的画廊视图对账排序与成员。
+**副作用**：通过 `image-changed { patch: { id, displayName } }` 更新图片可见名，并触发已打开的画廊视图对账排序与成员。
 
 ## MCPB stdio 桥（`kabegame-gallery-node`）
 

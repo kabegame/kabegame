@@ -23,10 +23,22 @@ alwaysApply: false
   `loading` / `error` 只属于最新请求（二者序号相同，可以领先于数据的序号）；更早请求的失败看不到，
   调用方也不能按某次请求接错误——失败统一经观察方的 `onError`。
 - 前端不得重新建立裸 `listen` 或另建事件聚合器；事件一律经 `kbEvent$` / `on` / `triggers$`。字段补丁经 `imagePatches$`：
-  `image-changed` 与收藏画册的 `album-images-change` 各自防抖、各自合并成 `imageId → 字段`，再汇成一条，
+  `image-changed { patch }` 与 `images-change { patches }` 共用字段补丁窗口，收藏与隐藏画册的 `album-images-change` 分别推导 `favorite` / `isHidden`、各自合并成 `imageId → 字段`，再汇成一条，
   只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜，粗信号重读用 `triggers$`。
 - 写命令返回的 `albumChanges` 与事件 `seq` 前端不再消费，不做本地事件投递：发起写入的组件只请求自己观察的 key，
   其它观察方等后端事件。
+
+## 图片事件协议（过滤走查 Phase A）
+
+- `images-added { seq, images: ImageInfo[] }` 表示图片行插入；下载原生元数据持久化后将新 `imageMetadataId` 带在完整行中。
+- `images-deleted { seq, imageIds }` 表示图片行删除；不带任务 / 畅游归属。
+- 字段变化仅经 `emit_image_patches` / `emit_image_fields`：按 id 合并、丢弃空字段；一张发
+  `image-changed { seq, patch }`，多张发 `images-change { seq, patches }`，补丁是 `{ id, ...字段绝对值 }`。
+  不带旧 `reason` / `imageIds` / `taskIds` / `surfRecordIds` / `pluginIds`。
+- 隐藏 / 取消隐藏只发画册成员事件，前端从隐藏画册的 `add-hidden` / `delete-hidden` 推导 `isHidden`。
+  删除任务不发图片事件，任务详情读回空行时返回或回画廊。
+- 本阶段保留宽刷新：gallery / album 对所有图片事件刷新，task / surf 对新增按行归属判断、删除与字段补丁均刷新；
+  隐藏画册成员变化照旧刷新。Phase B 才收紧相关性，Phase C / D 才改整理与迁移循环。
 
 ## 已知例外
 

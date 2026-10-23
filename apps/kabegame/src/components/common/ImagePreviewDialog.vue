@@ -867,7 +867,7 @@ const startImageSubscription = (id: string) => {
   const subscription = new Subscription();
   // 字段补丁只改「当前 id 的内容」，绝不改「当前 id 本身」
   subscription.add(
-    imagePatches$(PREVIEW_REFRESH_WAIT_MS).subscribe((patches) => {
+    imagePatches$(PREVIEW_REFRESH_WAIT_MS, { patchHidden: () => true }).subscribe((patches) => {
       const fields = patches.get(id);
       if (currentId.value !== id || !fields || !resolvedImage.value) return;
       resolvedImage.value = { ...resolvedImage.value, ...fields };
@@ -877,8 +877,8 @@ const startImageSubscription = (id: string) => {
   // 不是跳下一张；跳不跳是上层的事（它有列表和用户意图）。
   subscription.add(
     triggers$([
-      // 带 reason 的批次范围未知，必须当作命中自己，漏了会静默不刷新；允许资源倾斜，建议打开跟页设置
-      on("images-change", (p) => !!p.reason || (p.imageIds ?? []).includes(id)),
+      // 字段直接打补丁；删除仅在包含当前图片时重解析。
+      on("images-deleted", (p) => p.imageIds.includes(id)),
       // 收藏 / 隐藏是画册成员变更，会影响 isHidden，字段补丁之外仍要重拉
       on("album-images-change", (p) => (p.imageIds ?? []).includes(id)),
     ])

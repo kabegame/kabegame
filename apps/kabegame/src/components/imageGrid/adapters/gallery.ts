@@ -5,7 +5,7 @@ import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galle
 import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter } from "../types";
-import { albumChangeKinds, on } from "@/services/kbEvents";
+import { albumChangeKinds, addedTrigger, patchTriggers, hiddenTrigger, on } from "@/services/kbEvents";
 import { IS_WEB } from "@/env";
 
 /**
@@ -15,6 +15,7 @@ import { IS_WEB } from "@/env";
 export function createGalleryAdapter(params: { analytics: ImageAnalytics }): GridAdapter {
   const routeStore = useGalleryRouteStore();
   const t = i18n.global.t;
+  const view = () => ({ query: routeStore.query, sort: routeStore.sort, hide: routeStore.hide });
 
   const isDefaultGalleryRoute = () => !hasActiveQuery(routeStore.query);
 
@@ -27,6 +28,7 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
   return {
     id: "gallery",
     routeStore,
+    viewState: view,
     isActive: () => router.currentRoute.value.path === "/gallery",
     computeCountPath: () => {
       const rootPath = buildGalleryCountPath(routeStore.effectiveNoAlbum, routeStore.query);
@@ -44,8 +46,9 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
     // 空 `?path=` 表示回到默认画廊路径（如点击侧栏「画廊」）
     syncEmptyQueryPath: IS_WEB,
     refreshOn: [
-      on("images-change", (payload) => !!payload.reason),
-      // 「无画册」视图的结果集随画册成员变化
+      addedTrigger(view),
+      ...patchTriggers(view),
+      hiddenTrigger(view),
       on("album-images-change", () => routeStore.effectiveNoAlbum),
       on("album-changed", (payload) => {
         const kinds = albumChangeKinds(payload);

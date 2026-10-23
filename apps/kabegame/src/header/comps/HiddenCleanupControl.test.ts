@@ -42,7 +42,7 @@ describe("隐藏图数 pathql 观察", () => {
     expect(wrapper.text()).toContain("7");
     pathqlAll.mockClear();
     listeners.get("album-images-change")?.({ payload: { albumIds: ["other"] } });
-    listeners.get("images-change")?.({ payload: { reason: "delete" } });
+    listeners.get("images-deleted")?.({ payload: { seq: 1, imageIds: ["a"] } });
     expect(pathqlAll).not.toHaveBeenCalled();
     pathqlAll.mockResolvedValue([2]);
     listeners.get("album-images-change")?.({ payload: { albumIds: [HIDDEN_ALBUM_ID] } });

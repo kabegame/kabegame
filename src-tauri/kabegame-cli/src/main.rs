@@ -1134,7 +1134,7 @@ where
                 }
                 // 计数只认这个快照：downloader 每次落库/去重后都会
                 // `emit_task_image_counts_snapshot` 发一份读自 DB 的全量计数。
-                // 曾经这里还按 `images-change(add)` 自行累加，但那两类事件走的是
+                // 曾经这里还按 `images-added` 自行累加，但那两类事件走的是
                 // 各自的 broadcast channel、再由独立 task 汇进同一个 mpsc，
                 // 相互之间没有顺序保证：快照先到就会被随后的累加又叠一次，
                 // 于是每张图都多计一次（实测稳定 +1）。

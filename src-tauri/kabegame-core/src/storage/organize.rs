@@ -2,7 +2,7 @@ use crate::crawler::downloader::{
     generate_thumbnail, image_needs_independent_thumbnail, image_thumbnail_dimensions_acceptable,
 };
 use crate::emitter::GlobalEmitter;
-use crate::ipc::events::ImagePatch;
+use crate::ipc::events::ImageFieldPatch;
 use crate::settings::Settings;
 use crate::storage::image_events::native_metadata_image_patch;
 use crate::storage::Storage;
@@ -387,18 +387,8 @@ fn emit_organize_finished(
     );
 }
 
-fn emit_organize_images_change(image_patches: &mut Vec<ImagePatch>) {
-    if image_patches.is_empty() {
-        return;
-    }
-    let mut image_ids = image_patches
-        .iter()
-        .flat_map(|patch| patch.image_ids.iter().cloned())
-        .collect::<Vec<_>>();
-    image_ids.sort();
-    image_ids.dedup();
-    GlobalEmitter::global().emit_image_changed(std::mem::take(image_patches));
-    GlobalEmitter::global().emit_images_change("change", &image_ids, None, None, None);
+fn emit_organize_images_change(image_patches: &mut Vec<ImageFieldPatch>) {
+    GlobalEmitter::global().emit_image_patches(std::mem::take(image_patches));
 }
 
 fn organize_range_upper_bound(offset: Option<usize>, limit: Option<usize>) -> Option<usize> {
@@ -578,7 +568,7 @@ fn run_organize(
 
         let mut remove_ids: Vec<String> = Vec::new();
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
-        let mut changed_image_patches: Vec<ImagePatch> = Vec::new();
+        let mut changed_image_patches: Vec<ImageFieldPatch> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
         let mut native_metadata_list: Vec<(i64, String, String)> = Vec::new();
         #[cfg(not(target_os = "android"))]
@@ -713,9 +703,12 @@ fn run_organize(
             match action {
                 ThumbnailRefreshAction::UseOriginal { id, local_path } => {
                     storage.replace_image_thumbnail_path(&id.to_string(), &local_path)?;
-                    changed_image_patches.push(ImagePatch {
-                        image_ids: vec![id.to_string()],
-                        diff: serde_json::json!({ "thumbnailPath": local_path }),
+                    changed_image_patches.push(ImageFieldPatch {
+                        id: id.to_string(),
+                        fields: serde_json::json!({ "thumbnailPath": local_path })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
                     });
                     regenerated_total += 1;
                 }
@@ -728,9 +721,12 @@ fn run_organize(
                             .map(|path| path.to_string_lossy().to_string())
                             .unwrap_or_else(|| local_path.clone());
                         storage.replace_image_thumbnail_path(&id.to_string(), &thumb_str)?;
-                        changed_image_patches.push(ImagePatch {
-                            image_ids: vec![id.to_string()],
-                            diff: serde_json::json!({ "thumbnailPath": thumb_str }),
+                        changed_image_patches.push(ImageFieldPatch {
+                            id: id.to_string(),
+                            fields: serde_json::json!({ "thumbnailPath": thumb_str })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
                         });
                         regenerated_total += 1;
                     }
@@ -756,9 +752,12 @@ fn run_organize(
                                 result.preview_path.to_string_lossy().to_string();
                             storage
                                 .replace_image_thumbnail_path(&id.to_string(), &preview_path_str)?;
-                            changed_image_patches.push(ImagePatch {
-                                image_ids: vec![id.to_string()],
-                                diff: serde_json::json!({ "thumbnailPath": preview_path_str }),
+                            changed_image_patches.push(ImageFieldPatch {
+                                id: id.to_string(),
+                                fields: serde_json::json!({ "thumbnailPath": preview_path_str })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
                             });
                             regenerated_total += 1;
                         }
@@ -852,9 +851,12 @@ fn run_organize(
                         eprintln!("[organize] compatible_path update failed for {id}: {e}");
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &path_str);
-                        changed_image_patches.push(ImagePatch {
-                            image_ids: vec![id.to_string()],
-                            diff: serde_json::json!({ "compatiblePath": path_str }),
+                        changed_image_patches.push(ImageFieldPatch {
+                            id: id.to_string(),
+                            fields: serde_json::json!({ "compatiblePath": path_str })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
                         });
                         regenerated_total += 1;
                     }
@@ -868,9 +870,12 @@ fn run_organize(
                         );
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &local_path);
-                        changed_image_patches.push(ImagePatch {
-                            image_ids: vec![id.to_string()],
-                            diff: serde_json::json!({ "compatiblePath": local_path }),
+                        changed_image_patches.push(ImageFieldPatch {
+                            id: id.to_string(),
+                            fields: serde_json::json!({ "compatiblePath": local_path })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
                         });
                     }
                 }
@@ -929,7 +934,7 @@ fn run_organize(
             match storage.replace_image_native_metadata(&image_id, expected_version, &json) {
                 Ok(metadata_id) => {
                     backfilled_total += 1;
-                    // 原生元数据参与搜索：随本批补丁一起发 image-changed + images-change。
+                    // 原生元数据参与搜索：随本批逐图补丁按图片数量分流发送。
                     changed_image_patches.push(native_metadata_image_patch(&image_id, metadata_id));
                 }
                 Err(e) => {

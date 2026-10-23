@@ -94,15 +94,16 @@ describe("facetTreeSource 查询描述与事件过滤", () => {
     expect(pathqlList).not.toHaveBeenCalled();
   });
 
-  it("侧栏忽略无 reason 事件，只有画册敏感上下文响应成员与结构事件", () => {
+  it("侧栏响应四种图片事件与隐藏成员，画册敏感上下文另响应成员与结构事件", () => {
     const triggers = (prefix: string) =>
       createSource(false, prefix).dataSource.refreshOn({ kind: "section", sectionId: "date" }, "page");
     const relevant = (prefix: string, event: string, payload: unknown) =>
       triggers(prefix)
         .find((trigger) => trigger.event === event)!
         .relevant(payload);
-    expect(relevant("", "images-change", {})).toBe(false);
-    expect(relevant("", "images-change", { reason: "import" })).toBe(true);
+    expect(relevant("", "images-change", { seq: 1, patches: [] })).toBe(true);
+    for (const event of ["images-added", "images-deleted", "image-changed"]) expect(relevant("", event, {})).toBe(true);
+    expect(relevant("", "album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] })).toBe(true);
     expect(relevant("", "album-images-change", {})).toBe(false);
     expect(relevant("gallery/hide", "album-images-change", {})).toBe(true);
     expect(relevant("gallery/album/a", "album-changed", { changes: { name: "新名字" } })).toBe(true);

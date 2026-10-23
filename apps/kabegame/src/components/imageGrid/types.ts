@@ -2,7 +2,7 @@ import type { Ref, ShallowRef } from "vue";
 import type { ImageInfo } from "@/types/image";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
-import type { EventTrigger } from "@/services/kbEvents";
+import type { EventTrigger, ImageViewState } from "@/services/kbEvents";
 
 export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
@@ -54,6 +54,8 @@ export interface GridRemoveConfig {
 export interface GridAdapter {
   id: GridAdapterId;
   routeStore: GridRouteStore;
+  /** 事件相关性与隐藏补丁门控读取当前路由状态。 */
+  viewState: () => ImageViewState;
   /** 视图是否处于可加载状态（路由匹配 + 关键参数就绪）；keep-alive 激活态由 ImageGrid 自己守卫 */
   isActive: () => boolean;
   /** currentPath 为空时的兜底加载路径；返回空串则跳过加载 */

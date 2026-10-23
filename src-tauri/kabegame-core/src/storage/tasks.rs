@@ -520,8 +520,14 @@ impl Storage {
     }
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
-        let (failed_image_ids, metadata_ids): (Vec<i64>, Vec<i64>) = {
+        let ((failed_image_ids, metadata_ids), image_ids): ((Vec<i64>, Vec<i64>), Vec<String>) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            // images.task_id 外键 ON DELETE SET NULL：删任务会清空这些图片的归属
+            let image_ids = query_string_ids(
+                &conn,
+                "SELECT CAST(id AS TEXT) FROM images WHERE task_id = ?1",
+                params![task_id],
+            )?;
             let rows = {
                 let mut stmt = conn
                     .prepare("SELECT id, metadata_id FROM task_failed_images WHERE task_id = ?1")
@@ -554,12 +560,14 @@ impl Storage {
             .map_err(|e| format!("Failed to delete task failed images: {}", e))?;
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
                 .map_err(|e| format!("Failed to delete task: {}", e))?;
-            rows
+            (rows, image_ids)
         };
 
         if !failed_image_ids.is_empty() {
             GlobalEmitter::global().emit_failed_images_removed(task_id, &failed_image_ids);
         }
+        GlobalEmitter::global()
+            .emit_image_fields(&image_ids, serde_json::json!({ "taskId": null }));
         let _ = self.gc_metadata(&metadata_ids);
         Ok(())
     }
@@ -632,12 +640,20 @@ impl Storage {
     }
 
     pub fn clear_finished_tasks(&self) -> Result<usize, String> {
-        let (count, removed_failed_by_task, metadata_ids): (
+        let (count, removed_failed_by_task, metadata_ids, image_ids): (
             usize,
             Vec<(String, Vec<i64>)>,
             Vec<i64>,
+            Vec<String>,
         ) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let image_ids = query_string_ids(
+                &conn,
+                "SELECT CAST(id AS TEXT) FROM images WHERE task_id IN (
+                    SELECT id FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')
+                 )",
+                [],
+            )?;
             let (removed_failed_by_task, metadata_ids): (Vec<(String, Vec<i64>)>, Vec<i64>) = {
                 let mut stmt = conn
                     .prepare(
@@ -697,7 +713,7 @@ impl Storage {
                     [],
                 )
                 .map_err(|e| format!("Failed to clear finished tasks: {}", e))?;
-            (count, removed_failed_by_task, metadata_ids)
+            (count, removed_failed_by_task, metadata_ids, image_ids)
         };
 
         for (task_id, ids) in removed_failed_by_task {
@@ -705,6 +721,8 @@ impl Storage {
                 GlobalEmitter::global().emit_failed_images_removed(&task_id, &ids);
             }
         }
+        GlobalEmitter::global()
+            .emit_image_fields(&image_ids, serde_json::json!({ "taskId": null }));
         let _ = self.gc_metadata(&metadata_ids);
         Ok(count)
     }
@@ -974,4 +992,19 @@ impl Storage {
             .map(|image| image.id)
             .collect())
     }
+}
+
+fn query_string_ids(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("Failed to prepare image ids query: {e}"))?;
+    let rows = stmt
+        .query_map(params, |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to query image ids: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read image ids: {e}"))
 }

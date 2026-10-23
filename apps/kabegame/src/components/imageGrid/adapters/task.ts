@@ -5,7 +5,7 @@ import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridAdapter } from "../types";
-import { on } from "@/services/kbEvents";
+import { addedTrigger, patchTriggers, hiddenTrigger } from "@/services/kbEvents";
 
 /**
  * TaskDetail（`/tasks/:id`）的 grid adapter。
@@ -15,10 +15,12 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
   const routeStore = useTaskDetailRouteStore();
   const failedImagesStore = useFailedImagesStore();
   const t = i18n.global.t;
+  const view = () => ({ query: routeStore.query, sort: routeStore.sort, hide: routeStore.hide });
 
   return {
     id: "task",
     routeStore,
+    viewState: view,
     isActive: () => router.currentRoute.value.name === "TaskDetail" && !!params.taskId(),
     rootPathFallback: () => (params.taskId() ? `task/${params.taskId()}` : ""),
     computeCountPath: stripComposablePathTail,
@@ -31,11 +33,10 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
       ElMessage.error(t("tasks.loadImagesFailed"));
     },
     refreshOn: [
-      on("images-change", (payload) => {
-        const tid = params.taskId();
-        // 未携带 taskIds 表示范围未知，按命中处理
-        return !!tid && !!payload.reason && (!Array.isArray(payload.taskIds) || payload.taskIds.includes(tid));
-      }),
+      addedTrigger(view, (image) => !!params.taskId() && image.taskId === params.taskId()),
+      // 删除 / 清理任务会把旧图 taskId 置空；缺少旧归属，保守重读。
+      ...patchTriggers(view, { taskId: () => true }),
+      hiddenTrigger(view),
     ],
     // 失败图片计数与当前页数据同源刷新
     onAfterRefresh: async () => {

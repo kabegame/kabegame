@@ -12,10 +12,6 @@ vi.mock("@/stores/galleryRoute", () => ({
 vi.mock("@/router", () => ({ default: { currentRoute: { value: { path: "/gallery" } } } }));
 vi.mock("@kabegame/i18n", () => ({ i18n: { global: { t: (key: string) => key } } }));
 vi.mock("@/utils/kameMessage", () => ({ kameMessage: { warning: vi.fn() } }));
-vi.mock("@/services/kbEvents", () => ({
-  on: (event: string, relevant: (payload: unknown) => boolean) => ({ event, relevant }),
-  albumChangeKinds: vi.fn(),
-}));
 
 beforeEach(() => {
   routeStore.query = [];

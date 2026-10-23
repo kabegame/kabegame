@@ -9,7 +9,7 @@ import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
-import { albumChangeKinds, on } from "@/services/kbEvents";
+import { albumChangeKinds, patchTriggers, on } from "@/services/kbEvents";
 
 /**
  * 画册页（`/albums`）中栏的 grid adapter。
@@ -27,6 +27,7 @@ export function createAlbumDetailAdapter(params: {
   const routeStore = useAlbumDetailRouteStore();
   const settingsStore = useSettingsStore();
   const t = i18n.global.t;
+  const view = () => ({ query: routeStore.query, sort: routeStore.sort, hide: routeStore.hide });
 
   const includesCurrentWallpaper = (images: ImageInfo[]) => {
     const current = settingsStore.values.currentWallpaperImageId;
@@ -65,6 +66,7 @@ export function createAlbumDetailAdapter(params: {
   return {
     id: "album",
     routeStore,
+    viewState: view,
     isActive: () => {
       const cur = router.currentRoute.value;
       const routeAlbumId = typeof cur.params.albumId === "string" ? cur.params.albumId : "";
@@ -82,11 +84,9 @@ export function createAlbumDetailAdapter(params: {
       return ctx.images.value.length;
     },
     refreshOn: [
-      on("images-change", (payload) => !!params.albumId() && !!payload.reason),
-      on("album-images-change", (payload) => {
-        const id = params.albumId();
-        return !!id && (payload.albumIds ?? []).includes(id);
-      }),
+      ...patchTriggers(view),
+      // 隐藏 / 取消隐藏也会给当前画册发 hide / unhide 成员事件。
+      on("album-images-change", (payload) => !!params.albumId() && payload.albumIds.includes(params.albumId())),
       on("album-changed", (payload) => {
         const id = params.albumId();
         if (!id || payload.albumId !== id) return false;

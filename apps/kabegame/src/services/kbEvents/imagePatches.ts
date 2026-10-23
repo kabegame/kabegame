@@ -1,7 +1,7 @@
-import { merge, type Observable } from "rxjs";
-import type { AlbumImagesChangePayload, ImageChangedPayload } from "./events";
+import { filter, merge, type Observable } from "rxjs";
+import type { AlbumImagesChangePayload, ImageChangedPayload, ImagesChangePayload, ImagePatchPayload } from "./events";
 import type { ImageInfo } from "@/types/image";
-import { FAVORITE_ALBUM_ID } from "@/services/albums";
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import { batchWindow } from "./batchWindow";
 import { kbEvent$, type KbEvent } from "./eventSource";
 
@@ -14,11 +14,23 @@ function mergeInto(batch: ImagePatchBatch, imageIds: readonly string[], fields: 
   }
 }
 
-/** 一串 image-changed → 字段补丁；同一 id 后到的字段覆盖先到的。 */
-export function reduceImageChanged(events: readonly KbEvent<ImageChangedPayload>[]): ImagePatchBatch | null {
+/** 单图与多图补丁共用一个窗口，同一 id 后到的字段覆盖先到的。 */
+export function reducePatches(events: readonly KbEvent<ImagePatchPayload>[]): ImagePatchBatch | null {
   const batch: ImagePatchBatch = new Map();
   for (const { payload } of events) {
-    for (const patch of payload.patches ?? []) mergeInto(batch, patch.imageIds ?? [], patch.diff ?? {});
+    const patches = "patch" in payload ? [payload.patch] : payload.patches;
+    for (const { id, ...fields } of patches) mergeInto(batch, [id], fields);
+  }
+  return batch.size > 0 ? batch : null;
+}
+
+/** 隐藏状态仅由隐藏画册的直接成员增删推导。 */
+export function reduceHiddenChanges(events: readonly KbEvent<AlbumImagesChangePayload>[]): ImagePatchBatch | null {
+  const batch: ImagePatchBatch = new Map();
+  for (const { payload } of events) {
+    if (!payload.albumIds.includes(HIDDEN_ALBUM_ID)) continue;
+    const isHidden = payload.reason === "add-hidden" ? true : payload.reason === "delete-hidden" ? false : null;
+    if (isHidden !== null) mergeInto(batch, payload.imageIds, { isHidden });
   }
   return batch.size > 0 ? batch : null;
 }
@@ -39,14 +51,16 @@ export function reduceFavoriteChanges(events: readonly KbEvent<AlbumImagesChange
   return batch.size > 0 ? batch : null;
 }
 
-/**
- * 图片字段补丁流：image-changed 与收藏画册成员变更各自防抖、各自合并，再汇成一条。
- * 两者改的字段不重叠（image-changed 不带 favorite），所以两条流之间不需要排序。
- * 只给已在手的对象打补丁，不发请求。
- */
-export function imagePatches$(waitMs: number): Observable<ImagePatchBatch> {
+/** 图片字段、收藏、隐藏成员各自合并，只给已在手的对象打补丁，不发请求。 */
+export function imagePatches$(waitMs: number, opts: { patchHidden: () => boolean }): Observable<ImagePatchBatch> {
   return merge(
-    kbEvent$<ImageChangedPayload>("image-changed").pipe(batchWindow(waitMs, reduceImageChanged)),
+    merge(kbEvent$<ImageChangedPayload>("image-changed"), kbEvent$<ImagesChangePayload>("images-change")).pipe(
+      batchWindow(waitMs, reducePatches),
+    ),
     kbEvent$<AlbumImagesChangePayload>("album-images-change").pipe(batchWindow(waitMs, reduceFavoriteChanges)),
+    kbEvent$<AlbumImagesChangePayload>("album-images-change").pipe(
+      filter(() => opts.patchHidden()),
+      batchWindow(waitMs, reduceHiddenChanges),
+    ),
   );
 }

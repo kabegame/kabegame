@@ -246,6 +246,10 @@ usePathqlLooker({
   ],
   onResult: ({ rows }) => {
     task.value = normalizeTaskRow(rows[0]);
+    if (!rows[0] && taskId.value) {
+      if (window.history.length > 1) router.back();
+      else void router.replace("/gallery");
+    }
   },
 });
 // 换任务才清空；页面停用再激活时保留旧数据，等这次读取覆盖

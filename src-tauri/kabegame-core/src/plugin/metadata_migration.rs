@@ -2,13 +2,13 @@ use deno_core::{resolve_url, serde_v8, v8, JsRuntime, PollEventLoopOptions, Runt
 
 use super::Plugin;
 use crate::emitter::GlobalEmitter;
-use crate::ipc::events::ImagePatch;
+use crate::ipc::events::ImageFieldPatch;
 use crate::storage::images::MigratedMetadataRow;
 use crate::storage::labels::{validate_labels, LabelInput, LabelSpec};
 use crate::storage::search_terms::validate_search_text_values;
 use crate::storage::Storage;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -242,13 +242,7 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
 
     if let Some(emitter) = GlobalEmitter::try_global() {
         if changed {
-            let plugin_ids = vec![plugin.id.clone()];
-            let image_ids = image_patches
-                .iter()
-                .flat_map(|patch| patch.image_ids.iter().cloned())
-                .collect::<Vec<_>>();
-            emitter.emit_image_changed(image_patches);
-            emitter.emit_images_change("change", &image_ids, None, None, Some(&plugin_ids));
+            emitter.emit_image_patches(image_patches);
         }
     }
     Ok(changed)
@@ -274,7 +268,7 @@ async fn run_metadata_migrations(
     script: &str,
     rows: Vec<(i64, String, u32)>,
     mut on_row_done: impl FnMut(),
-) -> Result<(bool, Vec<String>, Vec<ImagePatch>), String> {
+) -> Result<(bool, Vec<String>, Vec<ImageFieldPatch>), String> {
     let mut engine = MigrationEngine::new();
     let exports = match engine.load_script(script).await {
         Ok(exports) => Some(exports),
@@ -479,19 +473,16 @@ impl MigrationRun {
         }
     }
 
-    fn finish(self) -> (bool, Vec<String>, Vec<ImagePatch>) {
-        let mut groups = BTreeMap::<i64, Vec<String>>::new();
-        for (image_id, metadata_id) in self.final_metadata {
-            groups.entry(metadata_id).or_default().push(image_id);
-        }
-        let image_patches = groups
+    fn finish(self) -> (bool, Vec<String>, Vec<ImageFieldPatch>) {
+        let image_patches = self
+            .final_metadata
             .into_iter()
-            .map(|(metadata_id, mut image_ids)| {
-                image_ids.sort_by_key(|id| id.parse::<i64>().unwrap_or(i64::MAX));
-                ImagePatch {
-                    image_ids,
-                    diff: serde_json::json!({ "metadataId": metadata_id }),
-                }
+            .map(|(id, metadata_id)| ImageFieldPatch {
+                id,
+                fields: serde_json::json!({ "metadataId": metadata_id })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             })
             .collect();
         (self.changed, self.touched, image_patches)
@@ -691,6 +682,25 @@ impl MigrationEngine {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn phase_a_finish_expands_final_metadata_per_image() {
+        let mut run = super::MigrationRun::default();
+        run.changed = true;
+        run.final_metadata.insert("1".into(), 10);
+        run.final_metadata.insert("2".into(), 10);
+        run.final_metadata.insert("1".into(), 20);
+        let (changed, _, patches) = run.finish();
+        assert!(changed);
+        assert_eq!(patches.len(), 2);
+        let fields = patches
+            .into_iter()
+            .map(|patch| (patch.id, patch.fields))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(fields["1"]["metadataId"], 20);
+        assert_eq!(fields["2"]["metadataId"], 10);
+        assert!(fields.values().all(|fields| fields.len() == 1));
+    }
+
     use super::*;
     use rusqlite::Connection;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -731,7 +741,7 @@ mod tests {
         storage: Storage,
         script: String,
         target: u32,
-    ) -> (bool, Vec<String>, Vec<ImagePatch>) {
+    ) -> (bool, Vec<String>, Vec<ImageFieldPatch>) {
         run_blocking(move || {
             let rows = storage
                 .metadata_rows_below_plugin_version("demo", target)
@@ -966,9 +976,9 @@ export function provideSearchTextList(_input) { return ["fresh"]; }
         assert_eq!(version, 2);
         assert_eq!(image_metadata_search_terms(&check, "1"), ["fresh"]);
         assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].image_ids, ["1"]);
+        assert_eq!(patches[0].id, "1");
         assert_eq!(
-            patches[0].diff,
+            serde_json::Value::Object(patches[0].fields.clone()),
             serde_json::json!({ "metadataId": metadata_id })
         );
 
@@ -1026,11 +1036,11 @@ export function provideLabels(input) {
         let (changed, albums, images) = run_runner(storage, script, 2);
         assert!(changed);
         assert_eq!(images.len(), 1);
-        assert_eq!(images[0].image_ids, ["1"]);
+        assert_eq!(images[0].id, "1");
         let (metadata_id, _, version) = image_metadata_row(&check, "1");
         assert_ne!(metadata_id, 1);
         assert_eq!(
-            images[0].diff,
+            serde_json::Value::Object(images[0].fields.clone()),
             serde_json::json!({ "metadataId": metadata_id })
         );
         assert_eq!(albums.len(), 1);
@@ -1154,7 +1164,10 @@ export function migrate(_input) { return "{}"; }
         assert!(changed);
         assert_eq!(image_metadata_row(&check, "1").0, 100);
         assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].diff, serde_json::json!({ "metadataId": 100 }));
+        assert_eq!(
+            serde_json::Value::Object(patches[0].fields.clone()),
+            serde_json::json!({ "metadataId": 100 })
+        );
         let conn = check.db.lock().unwrap();
         let rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM metadata", [], |row| row.get(0))

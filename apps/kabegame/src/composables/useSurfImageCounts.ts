@@ -1,7 +1,7 @@
 import { computed, shallowReactive, watch } from "vue";
 import { useSurfStore } from "@/stores/surf";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
-import { on, pathqlAllKey, pathqlRequest$, usePathqlLookMany } from "@/services/kbEvents";
+import { isHiddenAlbumChange, on, pathqlAllKey, pathqlRequest$, usePathqlLookMany } from "@/services/kbEvents";
 import { buildGallerySurfPath } from "@/utils/surfMediaCount";
 import { withGalleryPrefix } from "@/utils/path";
 
@@ -28,10 +28,14 @@ export function useSurfImageCounts() {
     kind: "all",
     keys: () => keys.value,
     refreshOn: (key) => [
-      on("images-change", (p) => {
+      on("images-added", (p) => {
         const record = recordsByKey.value.get(key);
-        return !!record && !!p.reason && (!Array.isArray(p.surfRecordIds) || p.surfRecordIds.includes(record.id));
+        return !!record && p.images.some((image) => image.surfRecordId === record.id);
       }),
+      on("images-deleted"),
+      on("images-change", (p) => p.patches.some((patch) => Object.hasOwn(patch, "surfRecordId"))),
+      on("image-changed", (p) => Object.hasOwn(p.patch, "surfRecordId")),
+      on("album-images-change", (p) => globalRoute.hide && isHiddenAlbumChange(p)),
     ],
     onResult: (key, { results }) => {
       const record = recordsByKey.value.get(key);

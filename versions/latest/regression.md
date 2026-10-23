@@ -1,5 +1,37 @@
 # v4.6.1 regression
 
+## 过滤走查 Phase A：图片事件协议拆分
+
+本节覆盖本次协议拆分；后文既有的 `images-change(reason)` / 隐藏 `image-changed` 记录为历史验收，
+不代表当前协议。只实施 Phase A，刷新收紧、整理与迁移循环改造仍待后续阶段。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 字段补丁出口与事件登记 | Rust / EventBroadcaster 全量订阅 | 运行 `storage::image_events`（启用 ipc-server） | 0 张及空字段不发；同 id 合并、后到覆盖；1 张发 patch、多张发 patches；新事件可全量订阅与解析名字 | 2026-10-23：2 passed |
+| [x] | 新增完整行与 IPC 载荷往返 | Rust / serde | 运行 `phase_a_image_event_protocol` | images-added 携带完整 camelCase ImageInfo，含 imageMetadataId；反序列化不丢字段 | 同上，覆盖 localPath / crawledAt 等别名 |
+| [x] | 删除、隐藏与删除任务出口 | Rust / 临时 SQLite / EventBroadcaster | 实际添加并隐藏 / 取消隐藏 / 删除图片；删除任务、清除完成任务 | 删除只发 images-deleted；隐藏增删仅发 album-images-change；删除 / 清理任务为原属图片发 taskId: null 补丁，再发 TaskDeleted | 2026-10-23 补 taskId 补丁后重跑 `storage::`：102 passed |
+| [x] | metadata 迁移补丁与去重 | Rust / V8 / 临时 SQLite | 运行 `metadata_migration` | 每张图片一个最终 metadataId 补丁；去重覆盖最终 id；同 metadata 的图片不再分组共享 diff | 23 passed；循环结构未改 |
+| [x] | 整理与查询映射 | Rust | 运行 `organize`、`providers::query::tests` | 缩略图策略与查询不回退，整理仍按原批次发补丁 | 5 + 16 passed |
+| [x] | 前端补丁、四 adapter、分面与计数 | Vitest / happy-dom | `deno task test -c kabegame --skip cargo` | 单图 / 多图共用窗口；收藏 / 隐藏独立窗口；四 adapter 保持宽刷新；任务 / 畅游新增从行判断归属 | 49 文件、439 用例通过，含新增 13 项 adapter 矩阵 |
+| [x] | 删除任务后离开详情 | Vitest / happy-dom | 任务删除读到空行，分别模拟有 / 无浏览历史 | 有历史 back，否则 replace /gallery；卸载后停止观察 | 随前端全量测试通过 |
+| [x] | 主应用与 CLI 回归 | macOS Rust | `deno task test -c kabegame --skip vue -- --lib`（跳过下行受限项）、CLI 全量 | MCP、轮播与 CLI 既有行为不回退 | 主应用 35 passed / 1 filtered；CLI 27 passed；测试时临时创建 target/debug/Frameworks → ../Frameworks，结束清理 |
+| [ ] | HTTP 监听路由用例 | macOS 沙箱 Rust | `http_server::tests::media_routes_only_accept_wildcard_path_form` | 本地临时端口绑定后验证媒体路由 | 完整 app --lib 实跑为 35 passed / 1 failed；失败原文：`bind test listener: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }`。此文件未修改 |
+| [x] | 完整类型与编译检查 | macOS standard | `deno task check -c kabegame`（经 check-kabegame driver） | vue-tsc 与 cargo check 均通过 | 最终 0 / 0 error，退出码 0；未运行 cargo fmt -p、未改 third/、未提交 |
+| [x] | 本地导入真机链路 | 桌面 CEF dev（macOS） | 经 `start_task` 起 local-import，导入一张带 EXIF 的测试 JPEG | 一条 images-added，完整行；画廊出现新图 | 2026-10-23 macOS CEF dev，debug ingest `phase-a-verify`：1 条 `images-added`，载荷 23 个 camelCase 字段（含 taskId / surfRecordId:null / pluginId:local-import / imageMetadataId:8638），无 images-change / image-changed；画廊 rows 与 count 各请求 1 次，总数 4275→4276，新图在首位 |
+| [x] | 下载真机链路 | 桌面 CEF dev（macOS） | safebooru id 范围 1–2、3–4 两个小任务，第二个任务运行时打开其详情页 | images-added 带 taskId 与已挂 imageMetadataId；任务详情刷新 | 同上：每张图一条 `images-added`（4 张，id 8416–8419），均带 taskId、pluginId:safebooru、imageMetadataId 8639–8642；详情页网格在两次新增窗口内各重读 1 次，2 张图出现 |
+| [x] | 删除真机链路 | 桌面 CEF dev（macOS） | 右键删除导入的测试图；再批量删除 4 张下载图 | 只发 images-deleted，只带 id；画廊行与总数更新 | 同上：单删 1 条 `images-deleted {imageIds:["8415"]}`，总数 5460→5459（隐藏过滤关闭时）；批量 1 条带 4 个 id，另有既有的按画册拆分 `album-images-change` reason=delete（标签画册 113 条），画廊只请求 2 次；无 image-changed / images-change |
+| [ ] | 下载 / 本地导入 / 删除（其它平台） | Android / Web | 同上 | 同上 | 未测：本轮只有 macOS 桌面 dev |
+| [x] | 隐藏 / 取消隐藏真机链路 | 桌面 CEF dev（macOS） | 右键隐藏导入的测试图（隐藏过滤开）；关过滤后取消隐藏、再隐藏、再取消隐藏 | 只发 album-images-change add-hidden / delete-hidden；开过滤时剔除，关过滤时变灰 / 恢复 | 2026-10-23 同上：四次操作各只有 1 条 `album-images-change`（reason 依次 add-hidden / delete-hidden / add-hidden / delete-hidden，albumIds 为隐藏画册），0 条 image-changed / images-change；开过滤时图被剔除、总数 4280→4279；关过滤时卡片带 `image-item-hidden` 变灰，取消隐藏后恢复 |
+| [x] | MCP 改名真机链路 | 桌面 CEF dev（macOS） / MCP HTTP | 临时开启应用 Web 服务器，MCP `rename_image` 改测试图名称，测完关闭 | 单张 image-changed，字段就地更新，视图照旧刷新 | 同上：1 条 `image-changed {patch:{id:"8415",displayName:"phaseA-renamed.jpg"}}`，无 reason；画廊照旧宽刷新 1 次；预览标题显示新名称 |
+| [x] | 设壁纸真机链路 | 桌面 CEF dev（macOS，窗口模式） | 对本地导入的测试图调用 `set_wallpaper_by_image_id` | 单张 image-changed，只带 lastSetWallpaperAt，无 reason | 2026-10-23 macOS CEF dev，debug ingest `phase-a-verify-2`：1 条 `image-changed {seq:12, patch:{id:"8422", lastSetWallpaperAt:1792765473}}`，无 reason；画廊照旧宽刷新 1 次；壁纸窗口显示测试图。测后 `clear_current_wallpaper_image_id` 恢复原状态（原本为 null，壁纸窗口为空），系统桌面图片全程未变 |
+| [x] | 原生元数据懒挂载真机链路 | 桌面 CEF dev（macOS） | 把测试图的 `image_metadata.parser_version` 置 0（直接写 dev 库），重载页面后打开其预览 | 单张 image-changed，只带 imageMetadataId；EXIF 面板正常 | 同上：打开预览即触发（原生元数据面板折叠时也会请求），1 条 `image-changed {seq:13, patch:{id:"8422", imageMetadataId:8646}}`；旧行 8645 删除，新行 parser_version=1；展开面板显示 Make / Model / Software 3 项 |
+| [x] | 整理补字段真机链路 | 桌面 CEF dev（macOS） | 把两张测试图的 thumbnail_path 置空、其中一张原生元数据置过期（三张原本就没有 compatible_path），只对含测试图的区间 [5455, 5458) 运行整理，只开补缩略图 / 补兼容副本 / 补原生元数据（去重、清除失效、删源文件均关） | 按图片数量分流，多张发 images-change；按 id 合并字段，无 reason；界面就地更新 | 同上：1 条 `images-change {seq:14}` 带 3 个补丁：8420 {thumbnailPath, compatiblePath, imageMetadataId:8647}、8421 {thumbnailPath, compatiblePath}、8422 {compatiblePath}；无 reason；库内字段一致，旧元数据行 8643 删除；画廊卡片照常加载，宽刷新 1 次 |
+| [ ] | 整理补字段、原生元数据懒挂载、设壁纸（其它平台） | Android / Web | 同上 | 同上 | 未测：本轮只有 macOS 桌面 dev |
+| [x] | 当前任务被删 | 桌面 CEF dev（macOS） | 打开本次创建的 safebooru 任务详情，从页面外调用 `delete_task`（等价抽屉删除） | 无图片事件；详情离开 | 2026-10-23 同上：只有 `tasks-change TaskDeleted`，0 条图片事件；详情页重读任务行为空后回到 /gallery。注意：`images.task_id` 外键为 ON DELETE SET NULL，删任务后该任务图片的 task_id 实际被清空（8418 / 8419 已核实），不发图片事件。此观察早于 tasks.rs 补发 taskId 补丁的改动，改动后的行为见下一行 |
+| [x] | 删除任务后原属图片 taskId 补丁 | 桌面 CEF dev（macOS） | 起 1 张、2 张两个 local-import 任务；在普通画廊打开其图片预览并展开「图片信息」，确认有「打开任务」按钮后，从页面外调用 `delete_task` | 1 张发 image-changed、多张发 images-change，补丁为 `{id, taskId: null}`；预览中「打开任务」按钮就地消失，无需重开 | 2026-10-23 macOS CEF dev，debug ingest `phase-a-verify-2`：单图任务 1 条 `image-changed {seq:8, patch:{id:"8420", taskId:null}}`；双图任务 1 条 `images-change {seq:11, patches:[{id:"8421",taskId:null},{id:"8422",taskId:null}]}`；两次 `.detail-open-task-btn` 都从 1 变 0，预览未关闭。「清除已完成任务」未真机测：任务列表里还有用户自己的 1 个已完成任务，会被一起清掉，按约定跳过（Rust `storage::image_events` 已覆盖） |
+| [ ] | Windows 虚拟盘 | Windows | VD 浏览时下载 / 删除 / 改名 | 新增通知对应任务目录、图片增删 / 字段补丁刷新画廊树 | 用户确认不测 |
+
+
 ## 原生元数据一图一行
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |

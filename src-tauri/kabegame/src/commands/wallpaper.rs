@@ -50,7 +50,6 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         return Err("图片不存在".to_string());
     };
     let local_path = info.local_path;
-    let plugin_id = info.plugin_id;
 
     let requires_window_mode =
         kabegame_core::media::image_type::requires_window_mode(Path::new(&local_path));
@@ -93,18 +92,7 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         .is_ok()
     {
         GlobalEmitter::global()
-            .emit_image_changed_uniform(&ids, serde_json::json!({ "lastSetWallpaperAt": now }));
-        if let Some(plugin_id) = plugin_id {
-            GlobalEmitter::global().emit_images_change(
-                "change",
-                &ids,
-                None,
-                None,
-                Some(&[plugin_id]),
-            );
-        } else {
-            GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
-        }
+            .emit_image_fields(&ids, serde_json::json!({ "lastSetWallpaperAt": now }));
     }
     Ok(())
 }

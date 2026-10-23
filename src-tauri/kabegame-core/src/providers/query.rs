@@ -590,6 +590,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .map(|t| t as u64)
             .unwrap_or(0),
         metadata_id: i("metadata_id"),
+        image_metadata_id: i("image_metadata_id"),
         thumbnail_path: s("thumbnail_path").unwrap_or_default(),
         hash: s("hash").unwrap_or_default(),
         favorite: b("is_favorite"),

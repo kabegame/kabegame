@@ -120,6 +120,7 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
 import {
   GRID_REFRESH_WAIT_MS,
+  on,
   imagePatches$,
   pathqlRequest$,
   usePathqlLooker,
@@ -317,7 +318,7 @@ let lastLocateAttempt: string | null = null;
 
 /* ---------------- 数据层 ----------------
  * 本组件持有 images / loadedKey，接管路径加载、usePagedGallery 分页、
- * route.query.path 同步与 images-change / album-images-change 事件刷新。
+ * route.query.path 同步与 图片增删、字段补丁 / album-images-change 事件刷新。
  */
 const images = shallowRef<ImageInfo[]>([]);
 const loadedKey = ref("");
@@ -425,12 +426,18 @@ const handleCountError = async (error: unknown) => {
   if (typeof fallback === "number") totalImagesCount.value = fallback;
 };
 
+// 后台删除只在当前已持有的行命中时刷新；用户删除仍由 mutate 主动请求。
+const refreshOn = [...adapter.refreshOn, on("images-deleted", (payload) => {
+  const ids = new Set(images.value.map((image) => image.id));
+  return payload.imageIds.some((id) => ids.has(id));
+})];
+
 // 行与总数各自作为观察方注册到 pathql 核心；adapter 的过滤器决定事件窗口内是否刷新。
 // 观察方只看最后可得的数据与最新请求的状态，错误也只来自最新请求。
 const rowsLooker = usePathqlLooker({
   kind: "rows",
   key: currentRowsPath,
-  refreshOn: adapter.refreshOn,
+  refreshOn,
   onResult: applyRows,
   onError: (error) => {
     void adapter.onLoadError?.(error, rawViewPath());
@@ -439,7 +446,7 @@ const rowsLooker = usePathqlLooker({
 
 const countLooker = usePathqlLookAll({
   queries: countQueries,
-  refreshOn: adapter.refreshOn,
+  refreshOn,
   onResult: ([total, unfiltered]) => {
     totalImagesCount.value = total;
     unfilteredTotal.value = unfiltered ?? null;
@@ -539,10 +546,10 @@ refreshCtx = {
   clearSelection,
 };
 
-// 字段补丁（image-changed、收藏）只打到已在手的行与预览对象上，不发请求。
+// 字段补丁（image-changed / images-change、收藏与隐藏成员）只打到已在手的行与预览对象上，不发请求。
 let imagePatchSubscription: Subscription | null = null;
 onMounted(() => {
-  imagePatchSubscription = imagePatches$(GRID_REFRESH_WAIT_MS).subscribe(patchMany);
+  imagePatchSubscription = imagePatches$(GRID_REFRESH_WAIT_MS, { patchHidden: () => !adapter.viewState().hide }).subscribe(patchMany);
 });
 onBeforeUnmount(() => {
   imagePatchSubscription?.unsubscribe();

@@ -445,7 +445,11 @@ impl Storage {
     }
 
     /// 仅在 Cookie 实际变化时写库并发 `SurfRecordChanged`；安卓内容页每次加载完成都会上报。
-    pub fn update_surf_record_cookie_if_changed(&self, id: &str, cookie: &str) -> Result<(), String> {
+    pub fn update_surf_record_cookie_if_changed(
+        &self,
+        id: &str,
+        cookie: &str,
+    ) -> Result<(), String> {
         let cookie = cookie.trim();
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let changed = update_surf_record_cookie_row_if_changed(&conn, id, cookie)?;
@@ -500,15 +504,7 @@ impl Storage {
             .map_err(|e| format!("Failed to delete surf_record: {}", e))?;
         drop(conn);
         GlobalEmitter::global().emit_surf_record_deleted(id);
-        GlobalEmitter::global()
-            .emit_image_changed_uniform(&image_ids, json!({ "surfRecordId": null }));
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &image_ids,
-            None,
-            Some(&[id.to_string()]),
-            None,
-        );
+        GlobalEmitter::global().emit_image_fields(&image_ids, json!({ "surfRecordId": null }));
         Ok(())
     }
 }

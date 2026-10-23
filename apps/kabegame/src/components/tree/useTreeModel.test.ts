@@ -106,7 +106,7 @@ function fixture(opts: { extra?: boolean; paged?: boolean; defaultExpanded?: boo
   cleanups.push(() => wrapper.unmount());
   return { model, prefix, active, data, paths, wrapper };
 }
-const emitChange = () => listeners.get("images-change")?.({ payload: { reason: "import" } });
+const emitChange = () => listeners.get("images-change")?.({ payload: { seq: 1, patches: [{ id: "a", width: 1 }] } });
 
 describe("useTreeModel pathql 观察方", () => {
   it("展开发请求并等待结果；同 key 保留句柄、替换 element", async () => {

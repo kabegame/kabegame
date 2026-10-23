@@ -1,7 +1,8 @@
+import { addedTrigger, patchTriggers, hiddenTrigger, type ImageViewState } from "@/services/kbEvents";
 import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
 import type { usePluginStore } from "@/stores/plugins";
-import { GALLERY_ASPECT_BUCKETS, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
+import { parseQueryBody, queryFromFilterSet, removeFilterDimension, GALLERY_ASPECT_BUCKETS, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
 import { buildTimeMenuScopeLabels, type TimeMenuScopeLabels } from "@/utils/galleryTimeFilterMenu";
 import {
   dateFilterSegment,
@@ -84,6 +85,29 @@ export function createGalleryFacetSource(
   deps: GalleryFacetSourceDeps,
 ): GalleryFacetSource {
   const { t, pluginStore } = deps;
+
+  // 侧栏的前缀包含根归属与追加高级查询；当前维度要从简单条件中扣掉（减格计数）。
+  const contextQuery = computed(() => {
+    const body = normalizeProviderPath(ctx.prefix.value)
+      .replace(/^images:\/\//, "")
+      .replace(/^gallery(?:\/|$)/, "")
+      .replace(/^hide(?:\/|$)/, "")
+      .replace(/^(?:album|album-tree|task|surf)\/[^/]+(?:\/|$)/, "")
+      .replace(/^no-album(?:\/_kb_fc)?(?:\/|$)/, "");
+    return parseQueryBody(body.split("/").filter(Boolean));
+  });
+  const view = (): ImageViewState => ({
+    query: [...(contextQuery.value ?? []), ...queryFromFilterSet(
+      ctx.dimension.value ? removeFilterDimension(ctx.filters.value, ctx.dimension.value) : ctx.filters.value,
+    )],
+    sort: { field: "by-time", desc: false },
+    hide: /(^|\/)hide(?:\/|$)/.test(ctx.prefix.value),
+  });
+  // 无法解析上下文时保留刷新，不能把未知条件当成没有依赖。
+  const imageTriggers = [addedTrigger(view), ...patchTriggers(view)].map((trigger) => ({
+    ...trigger,
+    relevant: (payload: unknown) => contextQuery.value === null || trigger.relevant(payload),
+  }));
 
   const deltaMode = computed(() => !!ctx.countBaseline);
   const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
@@ -356,7 +380,9 @@ export function createGalleryFacetSource(
       return deltaMode.value
         ? []
         : [
-            on("images-change", (payload) => !!payload.reason),
+            ...imageTriggers,
+            on("images-deleted"),
+            hiddenTrigger(view),
             on("album-images-change", () => hasAlbumSensitiveContext()),
             on("album-changed", (payload) => hasAlbumSensitiveContext() && albumChangeKinds(payload).structure),
             on("album-added", () => hasAlbumSensitiveContext()),

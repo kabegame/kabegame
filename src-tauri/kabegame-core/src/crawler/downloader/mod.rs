@@ -90,30 +90,10 @@ pub(super) fn rebind_deduped_metadata(
             if let Some(new_post_url) = new_post_url {
                 diff.insert("postUrl".to_string(), json!(new_post_url));
             }
-            let mut plugin_ids = Vec::new();
-            if let Some(existing_plugin_id) = existing
-                .plugin_id
-                .as_ref()
-                .filter(|plugin_id| !plugin_id.is_empty())
-            {
-                plugin_ids.push(existing_plugin_id.clone());
-            }
-            if let Some(new_plugin_id) = new_plugin_id {
-                if !plugin_ids.iter().any(|id| id == new_plugin_id) {
-                    plugin_ids.push(new_plugin_id.to_string());
-                }
-            }
-            GlobalEmitter::global().emit_image_changed_uniform(
-                std::slice::from_ref(&existing.id),
-                serde_json::Value::Object(diff),
-            );
-            GlobalEmitter::global().emit_images_change(
-                "change",
-                std::slice::from_ref(&existing.id),
-                existing.task_id.as_ref().map(std::slice::from_ref),
-                existing.surf_record_id.as_ref().map(std::slice::from_ref),
-                (!plugin_ids.is_empty()).then_some(plugin_ids.as_slice()),
-            );
+            GlobalEmitter::global().emit_image_patches(vec![crate::ipc::events::ImageFieldPatch {
+                id: existing.id.clone(),
+                fields: diff,
+            }]);
         }
         Err(e) => eprintln!("[downloader] rebind deduped metadata failed: {e}"),
     }
@@ -873,14 +853,17 @@ pub enum PostprocessSource<'a> {
     ContentUri,
 }
 
-async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[u8]>) {
+async fn persist_native_metadata_best_effort(
+    image: &ImageInfo,
+    bytes: Option<&[u8]>,
+) -> Option<i64> {
     let format_key = image.media_type.as_deref().unwrap_or("");
     if !crate::media::native_metadata::supports_native_metadata(format_key) {
-        return;
+        return None;
     }
     let Some(expected_version) = crate::media::native_metadata::parser_version_for(format_key)
     else {
-        return;
+        return None;
     };
 
     let storage = Storage::global();
@@ -892,7 +875,7 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
         #[cfg(target_os = "android")]
         {
             // content:// 溢写不在下载链路整文件读取，留给查看命令懒计算。
-            return;
+            return None;
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -900,7 +883,7 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
                 Ok(bytes) => bytes,
                 Err(e) => {
                     eprintln!("[downloader] read image for native metadata failed: {e}");
-                    return;
+                    return None;
                 }
             };
             &file_bytes
@@ -910,17 +893,21 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
     let Some(metadata) =
         crate::media::native_metadata::parse_native_metadata(format_key, source_bytes)
     else {
-        return;
+        return None;
     };
     let json = match serde_json::to_string(&metadata) {
         Ok(json) => json,
         Err(e) => {
             eprintln!("[downloader] serialize native metadata failed: {e}");
-            return;
+            return None;
         }
     };
-    if let Err(e) = storage.replace_image_native_metadata(&image.id, expected_version, &json) {
-        eprintln!("[downloader] store native metadata failed: {e}");
+    match storage.replace_image_native_metadata(&image.id, expected_version, &json) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            eprintln!("[downloader] store native metadata failed: {e}");
+            None
+        }
     }
 }
 
@@ -1459,6 +1446,7 @@ pub async fn postprocess_downloaded_image(
                 surf_record_id: surf_record_id.map(|v| v.to_string()),
                 crawled_at: download_start_time,
                 metadata_id,
+                image_metadata_id: None,
                 thumbnail_path: thumbnail_path_str,
                 favorite: false,
                 is_hidden: false,
@@ -1478,21 +1466,13 @@ pub async fn postprocess_downloaded_image(
             let t_add = (!auto_deduplicate).then(Instant::now);
 
             let inserted = match Storage::global().add_image(image_info) {
-                Ok(inserted) => {
+                Ok(mut inserted) => {
                     let add_ms = t_add.map(|t| t.elapsed().as_millis() as u64);
                     let image_id = inserted.id.clone();
-                    persist_native_metadata_best_effort(&inserted, bytes).await;
+                    inserted.image_metadata_id = persist_native_metadata_best_effort(&inserted, bytes).await;
+                    GlobalEmitter::global().emit_images_added(std::slice::from_ref(&inserted));
                     let t_album = (!auto_deduplicate).then(Instant::now);
                     let ids = vec![image_id.clone()];
-                    let task_opt = task_id.map(|t| vec![t.to_string()]);
-                    let surf_opt = surf_record_id.map(|s| vec![s.to_string()]);
-                    GlobalEmitter::global().emit_images_change(
-                        "add",
-                        &ids,
-                        task_opt.as_ref().map(|v| v.as_slice()),
-                        surf_opt.as_ref().map(|v| v.as_slice()),
-                        Some(&[plugin_id.to_string()]),
-                    );
                     if let Some(album_id) = output_album_id {
                         if !album_id.trim().is_empty() {
                             let added = Storage::global()

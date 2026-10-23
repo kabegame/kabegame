@@ -12,7 +12,7 @@ use std::sync::Arc;
 ///
 /// 监听以下事件并触发对应操作：
 /// - `AlbumAdded` / `AlbumChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
-/// - `ImagesChange` → 按 `task_ids` 通知任务目录，并 `notify_gallery_tree_changed`
+/// - `ImagesAdded` → 从图片行读取 task_id 通知任务目录；图片增删与字段补丁均刷新画廊树
 /// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
 /// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
 #[cfg(target_os = "windows")]
@@ -24,7 +24,10 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         AppEventKind::AlbumAdded,
         AppEventKind::AlbumChanged,
         AppEventKind::AlbumDeleted,
+        AppEventKind::ImagesAdded,
+        AppEventKind::ImagesDeleted,
         AppEventKind::ImagesChange,
+        AppEventKind::ImageChanged,
         AppEventKind::AlbumImagesChange,
         AppEventKind::TasksChange,
     ];
@@ -39,14 +42,19 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                     AppEvent::AlbumAdded { .. } => {
                         vd_service.bump_albums();
                     }
-                    AppEvent::ImagesChange { task_ids, .. } => {
-                        if let Some(ids) = task_ids {
-                            for tid in ids {
-                                if !tid.is_empty() {
-                                    vd_service.notify_task_dir_changed(&tid);
-                                }
-                            }
+                    AppEvent::ImagesAdded { images, .. } => {
+                        for tid in images
+                            .iter()
+                            .filter_map(|image| image.task_id.as_deref())
+                            .filter(|tid| !tid.is_empty())
+                        {
+                            vd_service.notify_task_dir_changed(tid);
                         }
+                        vd_service.notify_gallery_tree_changed();
+                    }
+                    AppEvent::ImagesDeleted { .. }
+                    | AppEvent::ImagesChange { .. }
+                    | AppEvent::ImageChanged { .. } => {
                         vd_service.notify_gallery_tree_changed();
                     }
                     AppEvent::AlbumImagesChange { album_ids, .. } => {

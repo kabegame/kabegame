@@ -218,7 +218,7 @@ describe("useAlbumQuery 两段 pathql 观察", () => {
     ["album-images-change", { albumIds: ["self"] }, ["B"]],
     ["album-images-change", { ancestorPath: "/root/self/child/" }, ["B"]],
     ["album-images-change", { albumIds: ["sibling"], ancestorPath: "/root/sibling/" }, []],
-    ["images-change", { reason: "add" }, []],
+    ["images-added", { seq: 1, images: [] }, []],
   ])("事件相关性 %s %j → %j", async (name, payload, expected) => {
     vi.useFakeTimers();
     pathqlAll.mockImplementation(normalResponse);

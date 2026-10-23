@@ -21,7 +21,7 @@ export interface ImageInfo {
   crawledAt?: number;
   /** 外键 `metadata.id`（插件元数据）；列表常带此字段以合并懒加载请求 */
   metadataId?: number;
-  /** 外键 `image_metadata.id`（原生元数据）；查看时才懒解析，挂上后经 image-changed 补丁更新，用于原生元数据缓存失效 */
+  /** 外键 `image_metadata.id`（原生元数据）；查看时才懒解析，挂上后经 image-changed / images-change 补丁更新，用于原生元数据缓存失效 */
   imageMetadataId?: number;
   hash?: string;
   order?: number;

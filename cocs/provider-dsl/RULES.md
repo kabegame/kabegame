@@ -565,7 +565,7 @@ key 形态分两类（7b 起）：
 **缓存键**：normalize 后的完整路径（大小写敏感）；
 **缓存值**：`(Arc<dyn Provider>, ImageQuery)`。
 
-**失效**：由数据变更事件（`images-change` / `album-images-change` / 插件装卸 等）显式清空相关前缀；
+**失效**：由写入路径直接调用缓存失效函数清空相关前缀；前端观察方则响应图片增删 / 字段补丁、`album-images-change` 与插件装卸等事件重读；
 不靠 TTL。前端不直接感知 LRU 状态，靠事件订阅触发刷新。
 
 ### 4.5 meta 字段统一语义

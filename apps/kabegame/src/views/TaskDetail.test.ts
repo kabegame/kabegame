@@ -6,6 +6,7 @@ import TaskDetail from "./TaskDetail.vue";
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 const pathqlFetch = vi.hoisted(() => vi.fn());
+const router = vi.hoisted(() => ({ back: vi.fn(), replace: vi.fn() }));
 const route = reactive({ name: "TaskDetail", params: { taskId: "t/a" } });
 const routeStore = reactive({
   taskId: "t/a",
@@ -28,7 +29,7 @@ vi.mock("@/api", () => ({
   }),
 }));
 vi.mock("@/services/pathql", () => ({ pathqlFetch, pathqlAll: vi.fn() }));
-vi.mock("vue-router", () => ({ useRoute: () => route, useRouter: () => ({ back: vi.fn() }) }));
+vi.mock("vue-router", () => ({ useRoute: () => route, useRouter: () => router }));
 vi.mock("pinia", async (importOriginal) => ({
   ...(await importOriginal<typeof import("pinia")>()),
   storeToRefs: () => ({ taskId: toRef(routeStore, "taskId") }),
@@ -74,6 +75,9 @@ const row = (id: string) => ({ id, plugin_id: "test", status: "running", progres
 const cleanups: (() => void)[] = [];
 beforeEach(() => {
   pathqlFetch.mockReset().mockResolvedValue([row("t/a")]);
+  router.back.mockClear();
+  router.replace.mockClear();
+  vi.spyOn(window.history, "length", "get").mockReturnValue(1);
   routeStore.taskId = "t/a";
   route.params.taskId = "t/a";
 });
@@ -83,6 +87,7 @@ afterEach(async () => {
     .reverse()
     .forEach((cleanup) => cleanup());
   await flushPromises();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 function fixture() {
@@ -153,11 +158,20 @@ describe("TaskDetail 任务 rows 观察方", () => {
     await flushPromises();
     expect(pathqlFetch).toHaveBeenCalledTimes(1);
     expect(state.task).toBeNull();
+    expect(router.replace).toHaveBeenCalledWith("/gallery");
     wrapper.unmount();
     pathqlFetch.mockClear();
     emit({ type: "TaskDeleted", taskId: "t/a" });
     emit({ type: "TaskChanged", taskId: "t/a", diff: { progress: 90 } });
     await vi.advanceTimersByTimeAsync(1000);
     expect(pathqlFetch).not.toHaveBeenCalled();
+  });
+  it("任务不存在且有浏览历史时返回上一页", async () => {
+    vi.spyOn(window.history, "length", "get").mockReturnValue(2);
+    pathqlFetch.mockResolvedValueOnce([]);
+    fixture();
+    await flushPromises();
+    expect(router.back).toHaveBeenCalledOnce();
+    expect(router.replace).not.toHaveBeenCalled();
   });
 });

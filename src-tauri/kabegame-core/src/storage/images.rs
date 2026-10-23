@@ -19,6 +19,7 @@ pub struct ImageInfo {
     pub id: String,
     /// 图片源 URL，本地导入时可为空。
     pub url: Option<String>,
+    #[serde(alias = "localPath")]
     pub local_path: String,
     #[serde(rename(serialize = "pluginId"), alias = "pluginId")]
     #[serde(default)]
@@ -28,11 +29,19 @@ pub struct ImageInfo {
     #[serde(rename(serialize = "surfRecordId"), alias = "surfRecordId")]
     #[serde(default)]
     pub surf_record_id: Option<String>,
+    #[serde(alias = "crawledAt")]
     pub crawled_at: u64,
     /// 外键指向 `metadata.id`；下载入口已将 raw metadata 预先归一化为该 id。
     #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
+    /// 原生元数据外键，新增事件在持久化后携带最终值。
+    #[serde(
+        rename(serialize = "imageMetadataId"),
+        alias = "imageMetadataId",
+        default
+    )]
+    pub image_metadata_id: Option<i64>,
     #[serde(rename(serialize = "thumbnailPath"), alias = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -52,7 +61,7 @@ pub struct ImageInfo {
     )]
     pub is_hidden: bool,
     /// 本地文件是否存在（用于前端标记缺失文件：仍展示条目，但提示用户源文件已丢失/移动）
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "localExists")]
     pub local_exists: bool,
     #[serde(default)]
     pub hash: String,

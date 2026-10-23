@@ -33,6 +33,7 @@
 ## 开发侧
 
 ### Changed
+- 图片事件拆为新增完整行 `images-added`、删除 id `images-deleted`、单图字段 `image-changed.patch` 与多图字段 `images-change.patches`；移除旧 reason / 归属列表与成对粗事件。隐藏由画册成员推导；删除 / 清理任务时外键置空图片归属，为原属图片发 `taskId: null` 补丁，删除当前任务后详情自动离开；本阶段保持现有宽刷新策略。
 - 原生元数据改为一图一行，移除按哈希共享与引用计数 GC；重解析换新行使缓存失效，删除或替换历史共享行时保留仍被其它图片引用的行。
 - 删除畅游记录的 `lastImage` 字段、最新图片查询与 PathQL 占位输出，读取站点记录时不再逐条查询图片。
 - 任务列表、状态计数与详情迁到 kbEvents pathql 观察方；任务分页改为累计窗口同批读取行与总数，移除游标、代数号、事件缓冲、独立任务监听和前端 pathqlCount 封装。
@@ -41,5 +42,5 @@
 - 预览标签面板改为 kbEvents pathql 观察方（切图与面板内增删后请求自身 key，别处变更经事件窗口刷新，读取失败保留已有标签）；删除 `dataChangeHub` 与本地事件投递 `publishLocal`，事件 payload 类型迁入 `kbEvents/events.ts`，画册改名 / 移动 / 改 key / 删除不再为投递预读画册。
 - 隐藏图数、畅游站点计数与画册页头部迁到 kbEvents pathql 观察方；畅游计数随页面释放，画册详情与图片计数分 key 观察，手动刷新等待两段落地。
 - 树数据源改为 `TreeQuerySource` 查询描述，逐页观察 pathql `all` key；补充字段统一走 `TreePage.extra`，移除纯净候选缓存，Promise 等待保留在模型中。
-- 新增 `services/kbEvents`（rxjs）：后端事件源 `kbEvent$` 与 pathql 核心数据源分离；ImageGrid 的行与总数改为 pathql 核心上的观察方 `usePathqlLooker`（行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批，按前端请求序号落地，不再依赖后端快照 `seq`）：观察方只看不请求，以 `refreshOn` 按单事件注册过滤器，核心对每个 key 统一 500ms 窗口、任一过滤器同意即刷新。唯一请求入口 `pathqlRequest$.next([kind, key])` 即发即返回，主动请求只有事件窗口与用户操作（路径变化、手动刷新、`mutate`）两条通路；每个 key 维护 pending 窗口，任一请求返回即取消更早的 pending，观察方看到最后可得的数据与最新请求的 loading / error。`usePagedGallery` 不再负责加载，`GridRefreshContext` 去掉 `refreshPage` / `loadTotalImagesCount`。ImageGrid 同批读取分子与 adapter 可选分母，向插槽 provide `{ total, unfilteredTotal }`（`gridTotalKey`），画廊工具栏只注入这一对数量。新增宿主 `pathql_all`：查询按序执行、整批失败，阻塞线程钉住只读连接并开启事务，保证整批 SQL 共享同一个 WAL 读快照。字段补丁改用 `imagePatches$`（`image-changed` 与收藏画册成员变更各自防抖、各自合并），ImageGrid 与预览弹窗不再订阅 `dataChangeHub`。`batch_delete_images`、`batch_remove_images`、`add_images_to_album`、`add_task_images_to_album`、`remove_images_from_album` 去掉 `view` 参数与返回快照。
+- 新增 `services/kbEvents`（rxjs）：后端事件源 `kbEvent$` 与 pathql 核心数据源分离；ImageGrid 的行与总数改为 pathql 核心上的观察方 `usePathqlLooker`（行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批，按前端请求序号落地，不再依赖后端快照 `seq`）：观察方只看不请求，以 `refreshOn` 按单事件注册过滤器，核心对每个 key 统一 500ms 窗口、任一过滤器同意即刷新。唯一请求入口 `pathqlRequest$.next([kind, key])` 即发即返回，主动请求只有事件窗口与用户操作（路径变化、手动刷新、`mutate`）两条通路；每个 key 维护 pending 窗口，任一请求返回即取消更早的 pending，观察方看到最后可得的数据与最新请求的 loading / error。`usePagedGallery` 不再负责加载，`GridRefreshContext` 去掉 `refreshPage` / `loadTotalImagesCount`。ImageGrid 同批读取分子与 adapter 可选分母，向插槽 provide `{ total, unfilteredTotal }`（`gridTotalKey`），画廊工具栏只注入这一对数量。新增宿主 `pathql_all`：查询按序执行、整批失败，阻塞线程钉住只读连接并开启事务，保证整批 SQL 共享同一个 WAL 读快照。字段补丁改用 `imagePatches$`（单图 / 多图字段补丁共用窗口，收藏与隐藏画册成员变更各自防抖合并），ImageGrid 与预览弹窗不再订阅 `dataChangeHub`。`batch_delete_images`、`batch_remove_images`、`add_images_to_album`、`add_task_images_to_album`、`remove_images_from_album` 去掉 `view` 参数与返回快照。
 - 桌面文件拖入的 `v-drag-file` 指令重构为 `<DragFileZone>` 组件：注册表持有响应式 props，命中改为按 z 序（`elementsFromPoint` + 父链），修复 teleport 弹窗遮挡时底下热区抢 drop 的问题；画廊、画册、插件页与路径控件的热区行为保持不变。

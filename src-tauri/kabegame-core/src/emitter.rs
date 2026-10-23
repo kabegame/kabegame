@@ -8,10 +8,11 @@
 use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
-use crate::ipc::events::ImagePatch;
+use crate::ipc::events::ImageFieldPatch;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
 use crate::storage::tasks::TaskFailedImage;
+use crate::storage::ImageInfo;
 #[cfg(feature = "ipc-server")]
 use crate::storage::Storage;
 #[cfg(feature = "ipc-server")]
@@ -220,49 +221,66 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送 `ImageInfo` 字段绝对值快照。
-    pub fn emit_image_changed(&self, patches: Vec<ImagePatch>) {
-        if patches.is_empty() {
-            return;
+    /// 字段变化唯一出口：按 id 合并，后到字段覆盖；空字段丢弃，按图片数量分流。
+    pub fn emit_image_patches(&self, patches: Vec<ImageFieldPatch>) {
+        let mut merged =
+            std::collections::BTreeMap::<String, serde_json::Map<String, serde_json::Value>>::new();
+        for patch in patches {
+            merged.entry(patch.id).or_default().extend(patch.fields);
         }
-        let seq = next_change_seq();
-        let event = std::sync::Arc::new(AppEvent::ImageChanged { seq, patches });
-        dispatch_view_event(event);
+        let mut patches: Vec<_> = merged
+            .into_iter()
+            .filter(|(_, fields)| !fields.is_empty())
+            .map(|(id, fields)| ImageFieldPatch { id, fields })
+            .collect();
+        let event = match patches.len() {
+            0 => return,
+            1 => AppEvent::ImageChanged {
+                seq: next_change_seq(),
+                patch: patches.pop().unwrap(),
+            },
+            _ => AppEvent::ImagesChange {
+                seq: next_change_seq(),
+                patches,
+            },
+        };
+        dispatch_view_event(Arc::new(event));
     }
 
-    /// 发送一批图片共享同一份字段绝对值快照的增量事件。
-    pub fn emit_image_changed_uniform(&self, image_ids: &[String], diff: serde_json::Value) {
+    /// 一组图片共享字段，展开为逐图补丁。
+    pub fn emit_image_fields(&self, image_ids: &[String], fields: serde_json::Value) {
+        let Some(fields) = fields.as_object() else {
+            return;
+        };
+        self.emit_image_patches(
+            image_ids
+                .iter()
+                .map(|id| ImageFieldPatch {
+                    id: id.clone(),
+                    fields: fields.clone(),
+                })
+                .collect(),
+        );
+    }
+
+    pub fn emit_images_added(&self, images: &[ImageInfo]) {
+        if images.is_empty() {
+            return;
+        }
+        dispatch_view_event(Arc::new(AppEvent::ImagesAdded {
+            seq: next_change_seq(),
+            images: images.to_vec(),
+        }));
+    }
+
+    pub fn emit_images_deleted(&self, image_ids: &[String]) {
         if image_ids.is_empty() {
             return;
         }
-        self.emit_image_changed(vec![ImagePatch {
+        dispatch_view_event(Arc::new(AppEvent::ImagesDeleted {
+            seq: next_change_seq(),
             image_ids: image_ids.to_vec(),
-            diff,
-        }]);
-    }
-
-    /// 发送 `images` 表变更事件（reason: `add` | `delete` | `change`）
-    pub fn emit_images_change(
-        &self,
-        reason: &str,
-        image_ids: &[String],
-        task_ids: Option<&[String]>,
-        surf_record_ids: Option<&[String]>,
-        plugin_ids: Option<&[String]>,
-    ) {
-        let seq = next_change_seq();
-        let opt_vec = |s: Option<&[String]>| {
-            s.and_then(|v| if v.is_empty() { None } else { Some(v.to_vec()) })
-        };
-        let event = std::sync::Arc::new(AppEvent::ImagesChange {
-            seq,
-            reason: reason.to_string(),
-            image_ids: image_ids.to_vec(),
-            task_ids: opt_vec(task_ids),
-            surf_record_ids: opt_vec(surf_record_ids),
-            plugin_ids: opt_vec(plugin_ids),
-        });
-        dispatch_view_event(event);
+        }));
     }
 
     /// 畅游记录新增（完整 record JSON）
@@ -544,19 +562,10 @@ impl GlobalEmitter {
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
-    pub fn emit_image_changed(&self, _patches: Vec<ImagePatch>) {}
-
-    pub fn emit_image_changed_uniform(&self, _image_ids: &[String], _diff: serde_json::Value) {}
-
-    pub fn emit_images_change(
-        &self,
-        _reason: &str,
-        _image_ids: &[String],
-        _task_ids: Option<&[String]>,
-        _surf_record_ids: Option<&[String]>,
-        _plugin_ids: Option<&[String]>,
-    ) {
-    }
+    pub fn emit_image_patches(&self, _patches: Vec<ImageFieldPatch>) {}
+    pub fn emit_image_fields(&self, _image_ids: &[String], _fields: serde_json::Value) {}
+    pub fn emit_images_added(&self, _images: &[ImageInfo]) {}
+    pub fn emit_images_deleted(&self, _image_ids: &[String]) {}
 
     pub fn emit_surf_record_added(&self, _record: serde_json::Value) {}
 

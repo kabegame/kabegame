@@ -1,28 +1,16 @@
+import { HIDDEN_ALBUM_ID } from "@/services/albums";
 import { filter, merge, type Observable } from "rxjs";
 import type { ImageInfo } from "@/types/image";
 import type { Plugin } from "@/stores/plugins";
 import { kbEvent$, type KbEvent } from "./eventSource";
 
-/** 后端 `AppEvent::ImagesChange` / `images` 表粗粒度失效信号（reason: add | delete | change） */
-export type ImagesChangePayload = {
-  seq: number;
-  reason?: "add" | "delete" | "change";
-  imageIds?: string[];
-  taskIds?: string[];
-  surfRecordIds?: string[];
-  pluginIds?: string[];
-};
-
-export type ImagePatchEntry = {
-  imageIds: string[];
-  /** `ImageInfo` camelCase 字段的绝对值快照。 */
-  diff: Partial<ImageInfo>;
-};
-
-export type ImageChangedPayload = {
-  seq: number;
-  patches: ImagePatchEntry[];
-};
+/** 一张图片的字段绝对值。 */
+export type ImageFieldPatch = { id: string } & Partial<ImageInfo>;
+export type ImagesAddedPayload = { seq: number; images: ImageInfo[] };
+export type ImagesDeletedPayload = { seq: number; imageIds: string[] };
+export type ImagesChangePayload = { seq: number; patches: ImageFieldPatch[] };
+export type ImageChangedPayload = { seq: number; patch: ImageFieldPatch };
+export type ImagePatchPayload = ImagesChangePayload | ImageChangedPayload;
 
 /** 后端 `AppEvent::AlbumImagesChange` / 事件名 `album-images-change`。 */
 export type AlbumImagesChangePayload = {
@@ -58,6 +46,8 @@ export interface KbEventMap {
   "plugin-added": { plugin?: Plugin };
   "plugin-changed": PluginChangedPayload;
   "plugin-deleted": { pluginId?: string };
+  "images-added": ImagesAddedPayload;
+  "images-deleted": ImagesDeletedPayload;
   "images-change": ImagesChangePayload;
   "image-changed": ImageChangedPayload;
   "album-images-change": AlbumImagesChangePayload;
@@ -118,4 +108,9 @@ export function albumEventAffectsDir(name: string, payload: unknown, ancestorPat
     ancestorPath === null ||
     paths.some((path) => path !== ancestorPath && path.startsWith(ancestorPath))
   );
+}
+
+/** 隐藏画册成员变化；各观察方按自身 hide 状态决定是否刷新。 */
+export function isHiddenAlbumChange(payload: AlbumImagesChangePayload): boolean {
+  return (payload.albumIds ?? []).includes(HIDDEN_ALBUM_ID);
 }
