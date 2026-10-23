@@ -33,6 +33,7 @@
 ## 开发侧
 
 ### Changed
+- 删除畅游记录的 `lastImage` 字段、最新图片查询与 PathQL 占位输出，读取站点记录时不再逐条查询图片。
 - 任务列表、状态计数与详情迁到 kbEvents pathql 观察方；任务分页改为累计窗口同批读取行与总数，移除游标、代数号、事件缓冲、独立任务监听和前端 pathqlCount 封装。
 - 运行配置列表改为同批观察累计行与总数，失败数与详情统一由事件刷新；写命令直接返回单行/null，移除旧行快照与事件暂存通路，CLI / app IPC 保持兼容。
 - 插件资源与 MCP 改为 `plugin://installed/<id>/<version>`、`byStore/<sourceId>/<id>/<version>`、`byPreview/<token>/<id>/<version>`，旧仅 id 路径移除；新增 recommended 目录/单项资源与读能力。插件事件统一为 plugin-added / plugin-changed / plugin-deleted；推荐配置由 kbEvents rows 观察方按 plugin-changed 刷新，移除动态 HTTP 标注和写响应的推荐导入态。

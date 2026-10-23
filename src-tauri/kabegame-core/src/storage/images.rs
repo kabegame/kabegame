@@ -346,14 +346,6 @@ fn insert_image_metadata_row(
 // 这些函数用于一次性裁剪旧版 pixiv 图片的 metadata.body 字段，
 // 仅针对早于 3.5.x 的历史数据库，v4.0 不再支持从那些版本直接升级。
 
-pub(crate) fn row_optional_u64_ts(
-    row: &rusqlite::Row,
-    idx: usize,
-) -> rusqlite::Result<Option<u64>> {
-    let v: Option<i64> = row.get(idx)?;
-    Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
-}
-
 fn first_gallery_image_at(path: &str) -> Result<Option<ImageInfo>, String> {
     let mut image = crate::providers::images_at(path)?.into_iter().next();
     if let Some(ref mut image) = image {

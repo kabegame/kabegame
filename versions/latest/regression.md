@@ -1,5 +1,13 @@
 # v4.6.1 regression
 
+## 畅游记录移除最新图片字段
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 记录反序列化与站点图片查询 | Rust / 内存 SQLite | 运行 `dsl_e2e::plural_resource_schemas_fetch_and_deserialize_rows` | 删除字段后记录仍可反序列化为 `SurfRecord`，按 host 查询图片及隐藏图片路径正常 | 2026-10-23：1 passed |
+| [ ] | 站点记录与事件 | 桌面 CEF | 打开畅游页，进入已有站点，修改站点名称后返回 | 站点列表、名称、图标及访问时间正常；记录读取与新增事件不包含 `lastImage` / `last_image` | |
+| [ ] | PathQL 站点元数据 | 桌面 CEF / CLI | 查询 `surf_records://all`、`surf_records://id_<id>`，列举 `images://gallery/surf` | 站点字段与列表正常，均不包含最新图片字段；站点图片仍可按 host 查询 | |
+
 ## 插件来源资源、变更事件与推荐配置观察方（Phase C 步骤 1–3）
 
 三种来源按版本寻址；推荐配置统一观察 `plugin://…/recommended` rows。以下 case 交由人工真机验收，
