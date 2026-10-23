@@ -1,5 +1,3 @@
-import { listen } from "@/api";
-import { pathqlCount, pathqlFetch, pathqlList } from "@/services/pathql";
 import type { CrawlTask } from "@/stores/crawler";
 import { encodeSeg } from "@kabegame/pathql-client";
 
@@ -103,36 +101,6 @@ export function taskSearchPath(query: string, pluginIds: string[]): string {
   return `~any/${branches.join("/~or/")}/~end/`;
 }
 
-export function taskCursorSeg(last: CrawlTask): string {
-  return `before_${last.startTime ?? 0}_${encodeSeg(last.id)}/`;
-}
-
-export async function fetchTaskPage(base: string, after?: CrawlTask): Promise<CrawlTask[]> {
-  const cursor = after ? taskCursorSeg(after) : "";
-  const rows = await pathqlFetch<Record<string, unknown>>(`tasks://${base}${cursor}x${TASK_PAGE_SIZE}x/1`);
-  return rows.map(normalizeTaskRow).filter((task): task is CrawlTask => task != null);
-}
-
-export async function fetchTaskTotal(base: string): Promise<number> {
-  return (await pathqlCount(`tasks://${base.replace(/\/$/, "")}`)).total;
-}
-
-export async function fetchTask(id: string): Promise<CrawlTask | null> {
-  const rows = await pathqlFetch<Record<string, unknown>>(`tasks://id_${encodeSeg(id)}`);
-  return normalizeTaskRow(rows[0]);
-}
-
-export async function fetchTaskStatusCounts(): Promise<Record<string, number>> {
-  const entries = await pathqlList("tasks://status");
-  return Object.fromEntries(
-    entries.map((entry) => [entry.name, Number((entry.meta as Record<string, unknown> | null)?.count ?? 0)]),
-  );
-}
-
-const taskSubscribers = new Set<(event: TaskEvent) => void>();
-let taskUnlisten: (() => void) | null = null;
-let taskListenPending: Promise<void> | null = null;
-
 export function normalizeTaskEvent(payload: unknown): TaskEvent | null {
   if (payload == null || typeof payload !== "object") return null;
   const row = payload as Record<string, unknown>;
@@ -146,34 +114,4 @@ export function normalizeTaskEvent(payload: unknown): TaskEvent | null {
     return { type, taskId, diff: normalizeDiffKeys(diff) };
   }
   return null;
-}
-
-function ensureTaskListener() {
-  if (taskUnlisten || taskListenPending) return;
-  taskListenPending = listen("tasks-change", (event) => {
-    const normalized = normalizeTaskEvent(event.payload);
-    if (!normalized) return;
-    for (const subscriber of [...taskSubscribers]) subscriber(normalized);
-  })
-    .then((unlisten) => {
-      taskListenPending = null;
-      if (taskSubscribers.size === 0) unlisten();
-      else taskUnlisten = unlisten;
-    })
-    .catch((error) => {
-      taskListenPending = null;
-      console.error("监听任务事件失败:", error);
-    });
-}
-
-export function subscribeTaskEvents(handler: (event: TaskEvent) => void): () => void {
-  taskSubscribers.add(handler);
-  ensureTaskListener();
-  return () => {
-    taskSubscribers.delete(handler);
-    if (taskSubscribers.size === 0 && taskUnlisten) {
-      taskUnlisten();
-      taskUnlisten = null;
-    }
-  };
 }

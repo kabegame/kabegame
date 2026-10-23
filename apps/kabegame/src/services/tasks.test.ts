@@ -1,64 +1,16 @@
-import { effectScope } from "vue";
-import { flushPromises } from "@vue/test-utils";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  listeners: new Map<string, (event: { payload: unknown }) => void>(),
-  listen: vi.fn(),
-  pathqlCount: vi.fn(),
-  pathqlFetch: vi.fn(),
-  pathqlList: vi.fn(),
-}));
-
-vi.mock("@/api", () => ({ listen: mocks.listen }));
-vi.mock("@/services/pathql", () => ({
-  pathqlCount: mocks.pathqlCount,
-  pathqlFetch: mocks.pathqlFetch,
-  pathqlList: mocks.pathqlList,
-}));
-
-import { usePagedTaskList } from "@/composables/usePagedTaskList";
-import { normalizeTaskRow, taskSearchPath } from "./tasks";
+import { describe, expect, it } from "vitest";
+import { normalizeTaskEvent, normalizeTaskRow, taskSearchPath } from "./tasks";
 
 function rawTask(id: string, overrides: Record<string, unknown> = {}) {
-  return {
-    id,
-    plugin_id: "plugin/a",
-    status: "running",
-    progress: 10,
-    start_time: 100,
-    ...overrides,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
+  return { id, plugin_id: "plugin/a", status: "running", progress: 10, start_time: 100, ...overrides };
 }
 
 describe("任务 PathQL 服务", () => {
-  beforeEach(() => {
-    mocks.listeners.clear();
-    mocks.listen.mockReset().mockImplementation(async (name, handler) => {
-      mocks.listeners.set(name, handler);
-      return () => mocks.listeners.delete(name);
-    });
-    mocks.pathqlCount.mockReset().mockResolvedValue({ total: 1 });
-    mocks.pathqlFetch.mockReset().mockResolvedValue([rawTask("task-1")]);
-    mocks.pathqlList.mockReset().mockResolvedValue([]);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("为插件精确命中与文本搜索生成编码后的 ~any 路径", () => {
     expect(taskSearchPath("作者 / 标签", ["plugin/a", "plugin/a", "空 格"])).toBe(
       "~any/plugin/plugin\\/a/~or/plugin/空 格/~or/plugin_search/作者 \\/ 标签/~end/",
     );
+    expect(taskSearchPath("  ", ["plugin/a"])).toBe("");
   });
 
   it("把 PathQL 的 JSON 字符串列与 SQLite 0/1 规范化为任务行", () => {
@@ -83,40 +35,33 @@ describe("任务 PathQL 服务", () => {
     });
   });
 
-  it("幂等合并任务事件，并在 stop 后丢弃在途的新增任务查询", async () => {
-    const scope = effectScope();
-    const pager = scope.run(() =>
-      usePagedTaskList({
-        basePath: () => "",
-        matches: () => true,
-      }),
-    )!;
+  it.each([null, undefined, {}, { id: "missing-plugin" }])("空行或无效行 %j 返回 null", (row) => {
+    expect(normalizeTaskRow(row)).toBeNull();
+  });
 
-    await pager.start();
-    const taskListener = mocks.listeners.get("tasks-change")!;
-    taskListener({
-      payload: {
+  it("统一任务事件的 id 与 diff 字段，供观察方过滤器和补丁共用", () => {
+    expect(normalizeTaskEvent({ type: "TaskAdded", task: { id: "t" } })).toEqual({
+      type: "TaskAdded",
+      task: { id: "t" },
+    });
+    expect(normalizeTaskEvent({ type: "TaskDeleted", task_id: "t" })).toEqual({
+      type: "TaskDeleted",
+      taskId: "t",
+    });
+    expect(
+      normalizeTaskEvent({
         type: "TaskChanged",
-        taskId: "task-1",
-        diff: { progress: 80, success_count: 3 },
-      },
+        task_id: "t",
+        diff: { start_time: 0, end_time: 20, success_count: 3, failed_count: 1, status: "completed", progress: 100 },
+      }),
+    ).toEqual({
+      type: "TaskChanged",
+      taskId: "t",
+      diff: { startTime: 0, endTime: 20, successCount: 3, failedCount: 1, status: "completed", progress: 100 },
     });
-    await flushPromises();
-    expect(pager.items.value).toHaveLength(1);
-    expect(pager.items.value[0]).toMatchObject({ progress: 80, successCount: 3 });
+  });
 
-    const pending = deferred<Record<string, unknown>[]>();
-    mocks.pathqlFetch.mockImplementation((path: string) => {
-      if (path === "tasks://id_task-2") return pending.promise;
-      return Promise.resolve([rawTask("task-1")]);
-    });
-    taskListener({ payload: { type: "TaskAdded", task: { id: "task-2" } } });
-    pager.stop();
-    pending.resolve([rawTask("task-2", { start_time: 200 })]);
-    await flushPromises();
-
-    expect(pager.items.value).toEqual([]);
-    expect(pager.total.value).toBe(0);
-    scope.stop();
+  it.each([null, {}, { type: "TaskChanged" }, { type: "other", taskId: "t" }])("忽略无效事件 %j", (payload) => {
+    expect(normalizeTaskEvent(payload)).toBeNull();
   });
 });

@@ -60,7 +60,6 @@ const {
   loadMore,
 } = usePagedTaskList({
   basePath: () => `run_config/${encodeSeg(props.configId)}/`,
-  matches: (task) => task.runConfigId === props.configId,
 });
 onMounted(() => void start());
 

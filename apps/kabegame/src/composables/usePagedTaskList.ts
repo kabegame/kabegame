@@ -1,27 +1,75 @@
-import { onScopeDispose, ref, shallowRef } from "vue";
+import { computed, onScopeDispose, ref, shallowRef, watch } from "vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
-import {
-  fetchTask,
-  fetchTaskPage,
-  fetchTaskTotal,
-  subscribeTaskEvents,
-  TASK_PAGE_SIZE,
-  type TaskEvent,
-} from "@/services/tasks";
+import { normalizeTaskEvent, normalizeTaskRow, TASK_PAGE_SIZE } from "@/services/tasks";
 import { fetchRunConfig } from "@/services/runConfigs";
-import { kbEvent$, type AutoConfigChangePayload } from "@/services/kbEvents";
+import { kbEvent$, on, pathqlRequest$, usePathqlLookAll, type AutoConfigChangePayload } from "@/services/kbEvents";
 import type { CrawlTask } from "@/stores/crawler";
 
-export function usePagedTaskList(options: { basePath: () => string; matches: (task: CrawlTask) => boolean }) {
+export function usePagedTaskList(options: {
+  basePath: () => string;
+  /** 最新一次读取失败时通知，已有行保留。 */
+  onError?: (error: unknown) => void;
+}) {
   const items = shallowRef<CrawlTask[]>([]);
   const total = ref(0);
-  // 真实加载态 loading 只做并发守卫与空态判断；showLoading 超过延迟才为真，供 v-loading 转圈，避免快速返回时闪烁
-  const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
-  const hasMore = ref(false);
-  let generation = 0;
-  let unsubscribeTasks: (() => void) | null = null;
-  let unsubscribeConfigs: (() => void) | null = null;
+  const active = ref(false);
+  const page = ref(1);
+  const landedPage = ref(0);
+  const { showLoading, startLoading, finishLoading } = useLoadingDelay();
   const lastProgressUpdateAt = new Map<string, number>();
+
+  const looker = usePathqlLookAll({
+    queries: () =>
+      active.value
+        ? ([
+            { kind: "fetch", path: `tasks://${options.basePath()}x${page.value * TASK_PAGE_SIZE}x/1` },
+            { kind: "count", path: `tasks://${options.basePath().replace(/\/$/, "")}` },
+          ] as const)
+        : null,
+    refreshOn: [
+      on("tasks-change", (payload) => {
+        const event = normalizeTaskEvent(payload);
+        return (
+          !!event && (event.type !== "TaskChanged" || Object.prototype.hasOwnProperty.call(event.diff, "startTime"))
+        );
+      }),
+    ],
+    onResult: ([rows, count]) => {
+      items.value = rows.map(normalizeTaskRow).filter((task): task is CrawlTask => task !== null);
+      total.value = count;
+      landedPage.value = page.value;
+    },
+    onError: options.onError,
+  });
+  const hasMore = computed(
+    () =>
+      landedPage.value > 0 &&
+      items.value.length >= landedPage.value * TASK_PAGE_SIZE &&
+      items.value.length < total.value,
+  );
+  watch(looker.loading, (loading) => (loading ? startLoading() : finishLoading()), { flush: "sync" });
+
+  function refresh() {
+    const key = looker.key();
+    if (key) pathqlRequest$.next(["all", key]);
+  }
+
+  function start() {
+    active.value = true;
+    page.value = 1;
+    landedPage.value = 0;
+    items.value = [];
+    total.value = 0;
+    lastProgressUpdateAt.clear();
+    refresh();
+  }
+
+  function loadMore() {
+    if (looker.loading.value || !hasMore.value) return;
+    // 失败后仍以已落地页为基准，重试同一个累计窗口。
+    page.value = landedPage.value + 1;
+    refresh();
+  }
 
   function replaceAt(index: number, task: CrawlTask) {
     const next = items.value.slice();
@@ -35,41 +83,10 @@ export function usePagedTaskList(options: { basePath: () => string; matches: (ta
     replaceAt(index, { ...items.value[index], ...fields });
   }
 
-  function remove(id: string) {
-    const exists = items.value.some((task) => task.id === id);
-    if (!exists) return false;
-    items.value = items.value.filter((task) => task.id !== id);
-    total.value = Math.max(0, total.value - 1);
-    hasMore.value = items.value.length < total.value;
-    return true;
-  }
-
-  async function applyTaskEvent(event: TaskEvent, activeGeneration: number) {
-    if (activeGeneration !== generation) return;
-    if (event.type === "TaskAdded") {
-      const taskId = String(
-        (event.task as Record<string, unknown> | null)?.id ??
-          (event.task as Record<string, unknown> | null)?.taskId ??
-          "",
-      ).trim();
-      if (!taskId) return;
-      const task = await fetchTask(taskId);
-      if (activeGeneration !== generation || !task || !options.matches(task)) return;
-      const index = items.value.findIndex((item) => item.id === task.id);
-      if (index === -1) {
-        items.value = [task, ...items.value];
-        total.value++;
-      } else {
-        replaceAt(index, { ...items.value[index], ...task });
-      }
-      hasMore.value = items.value.length < total.value;
-      return;
-    }
-    if (event.type === "TaskDeleted") {
-      remove(event.taskId);
-      lastProgressUpdateAt.delete(event.taskId);
-      return;
-    }
+  const taskPatches = kbEvent$("tasks-change").subscribe(({ payload }) => {
+    if (!active.value) return;
+    const event = normalizeTaskEvent(payload);
+    if (event?.type !== "TaskChanged") return;
     const index = items.value.findIndex((task) => task.id === event.taskId);
     if (index === -1) return;
     const current = items.value[index];
@@ -90,94 +107,43 @@ export function usePagedTaskList(options: { basePath: () => string; matches: (ta
       ...normalized,
       progress: status === "completed" ? 100 : (normalized.progress ?? current.progress),
     });
-  }
+  });
 
-  async function applyConfigEvent(event: AutoConfigChangePayload, activeGeneration: number) {
-    if (activeGeneration !== generation || !event.configId) return;
-    if (event.reason === "configdelete") {
-      items.value = items.value.map((task) =>
-        task.runConfigId === event.configId ? { ...task, runConfigName: null } : task,
-      );
-      return;
-    }
-    if (event.reason !== "configchange") return;
-    const config = await fetchRunConfig(event.configId);
-    if (activeGeneration !== generation) return;
-    items.value = items.value.map((task) =>
-      task.runConfigId === event.configId ? { ...task, runConfigName: config?.name ?? null } : task,
-    );
-  }
-
-  function cleanupSubscriptions() {
-    unsubscribeTasks?.();
-    unsubscribeTasks = null;
-    unsubscribeConfigs?.();
-    unsubscribeConfigs = null;
-  }
-
-  async function start() {
-    cleanupSubscriptions();
-    const activeGeneration = ++generation;
-    const buffered: TaskEvent[] = [];
-    const bufferedConfigs: AutoConfigChangePayload[] = [];
-    let ready = false;
-    startLoading();
-    items.value = [];
-    total.value = 0;
-    hasMore.value = false;
-
-    unsubscribeTasks = subscribeTaskEvents((event) => {
-      if (!ready) buffered.push(event);
-      else void applyTaskEvent(event, activeGeneration);
-    });
-    const configs = kbEvent$<AutoConfigChangePayload>("auto-config-change").subscribe(({ payload: event }) => {
-      if (!ready) bufferedConfigs.push(event);
-      else void applyConfigEvent(event, activeGeneration);
-    });
-
-    unsubscribeConfigs = () => configs.unsubscribe();
-
-    const base = options.basePath();
-    try {
-      const [page, count] = await Promise.all([fetchTaskPage(base), fetchTaskTotal(base)]);
-      if (activeGeneration !== generation) return;
-      items.value = page;
-      total.value = count;
-      ready = true;
-      for (const event of buffered) await applyTaskEvent(event, activeGeneration);
-      for (const event of bufferedConfigs) await applyConfigEvent(event, activeGeneration);
-      hasMore.value = page.length === TASK_PAGE_SIZE && items.value.length < total.value;
-    } finally {
-      if (activeGeneration === generation) finishLoading();
-    }
-  }
-
-  async function loadMore() {
-    if (loading.value || !hasMore.value || items.value.length === 0) return;
-    const activeGeneration = generation;
-    startLoading();
-    try {
-      const page = await fetchTaskPage(options.basePath(), items.value.at(-1));
-      if (activeGeneration !== generation) return;
-      const known = new Set(items.value.map((task) => task.id));
-      const appended = page.filter((task) => !known.has(task.id));
-      items.value = [...items.value, ...appended];
-      hasMore.value = page.length === TASK_PAGE_SIZE && items.value.length < total.value;
-    } finally {
-      if (activeGeneration === generation) finishLoading();
-    }
-  }
+  const configPatches = kbEvent$<AutoConfigChangePayload>("auto-config-change").subscribe(
+    async ({ payload: event }) => {
+      if (!active.value || !event.configId) return;
+      if (event.reason === "configdelete") {
+        items.value = items.value.map((task) =>
+          task.runConfigId === event.configId ? { ...task, runConfigName: null } : task,
+        );
+        return;
+      }
+      if (event.reason !== "configchange") return;
+      try {
+        const config = await fetchRunConfig(event.configId);
+        if (!active.value) return;
+        items.value = items.value.map((task) =>
+          task.runConfigId === event.configId ? { ...task, runConfigName: config?.name ?? null } : task,
+        );
+      } catch (error) {
+        console.error("读取任务关联配置失败:", error);
+      }
+    },
+  );
 
   function stop() {
-    generation++;
-    cleanupSubscriptions();
+    active.value = false;
+    landedPage.value = 0;
     items.value = [];
     total.value = 0;
     finishLoading();
-    hasMore.value = false;
     lastProgressUpdateAt.clear();
   }
 
-  onScopeDispose(stop);
-  return { items, total, loading, showLoading, hasMore, start, loadMore, stop, patch, remove };
+  onScopeDispose(() => {
+    stop();
+    taskPatches.unsubscribe();
+    configPatches.unsubscribe();
+  });
+  return { items, total, loading: looker.loading, showLoading, hasMore, start, loadMore, stop, patch, refresh };
 }

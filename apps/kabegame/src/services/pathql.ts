@@ -1,11 +1,5 @@
 import { invoke } from "@/api/rpc";
 
-/** `pathql_count` 的返回：总数与读取时的全局变更序号。 */
-export interface TotalSnapshot {
-  total: number;
-  seq: number;
-}
-
 export interface ProviderNote {
   title: string;
   content: string;
@@ -34,10 +28,6 @@ export function pathqlList(path: string, withCount = false): Promise<ProviderLis
 
 export function pathqlFetch<T = Record<string, unknown>>(path: string): Promise<T[]> {
   return invoke<T[]>("pathql_fetch", { path });
-}
-
-export function pathqlCount(path: string): Promise<TotalSnapshot> {
-  return invoke<TotalSnapshot>("pathql_count", { path });
 }
 
 export type PathqlQuery =

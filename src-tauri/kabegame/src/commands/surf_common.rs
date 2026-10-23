@@ -276,15 +276,6 @@ pub async fn surf_get_record(host: String) -> Result<Option<SurfRecord>, String>
 }
 
 #[tauri::command]
-pub async fn surf_get_record_images(
-    host: String,
-    offset: usize,
-    limit: usize,
-) -> Result<serde_json::Value, String> {
-    kabegame_core::commands::surf::surf_get_record_images(host, offset, limit)
-}
-
-#[tauri::command]
 pub async fn surf_update_root_url(
     host: String,
     root_url: String,

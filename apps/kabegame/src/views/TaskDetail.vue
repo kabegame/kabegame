@@ -130,7 +130,9 @@ import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGithubIssueUrl, type GithubIssueField } from "@/composables/useGithubIssueUrl";
 import { useTaskRerun } from "@/composables/useTaskRerun";
-import { fetchTask, subscribeTaskEvents, type TaskEvent } from "@/services/tasks";
+import { normalizeTaskEvent, normalizeTaskRow } from "@/services/tasks";
+import { kbEvent$, on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
+import { encodeSeg } from "@kabegame/pathql-client";
 import type { CrawlTask } from "@/stores/crawler";
 
 const { t } = useI18n();
@@ -227,20 +229,34 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
 };
 
 const task = ref<CrawlTask | null>(null);
-let taskLoadGeneration = 0;
-
-async function loadTask() {
-  const id = taskId.value;
-  const generation = ++taskLoadGeneration;
-  const loaded = id ? await fetchTask(id) : null;
-  if (generation !== taskLoadGeneration) return;
-  task.value = loaded;
+/** 页面是否处于可见存活期，控制任务观察与计时。 */
+const isLive = ref(false);
+const taskKey = computed(() => (isLive.value && taskId.value ? `tasks://id_${encodeSeg(taskId.value)}` : null));
+function requestTask() {
+  if (taskKey.value) pathqlRequest$.next(["rows", taskKey.value]);
 }
-
-// 首次加载由 startLive 在订阅之后发起；这里只负责页面存活期间换任务
-watch(taskId, () => {
-  if (isLive) void loadTask();
+usePathqlLooker({
+  kind: "rows",
+  key: () => taskKey.value,
+  refreshOn: [
+    on("tasks-change", (payload) => {
+      const event = normalizeTaskEvent(payload);
+      return event?.type === "TaskDeleted" && event.taskId === taskId.value;
+    }),
+  ],
+  onResult: ({ rows }) => {
+    task.value = normalizeTaskRow(rows[0]);
+  },
 });
+// 换任务才清空；页面停用再激活时保留旧数据，等这次读取覆盖
+watch(taskId, () => (task.value = null), { flush: "sync" });
+watch(
+  taskKey,
+  (key) => {
+    if (key) requestTask();
+  },
+  { immediate: true, flush: "sync" },
+);
 
 const taskName = computed(() => {
   const tsk = task.value;
@@ -287,8 +303,6 @@ const failedImages = computed(() => failedImagesStore.byTaskId(taskId.value));
 const currentTime = ref<number>(Date.now());
 let timeUpdateInterval: number | null = null;
 let unlistenTasksChange: (() => void) | null = null;
-/** 页面是否处于可见存活期（mounted / activated 之间）；订阅与计时只在此期间存在 */
-let isLive = false;
 
 const successN = computed(() => task.value?.successCount ?? 0);
 const failedN = computed(() => task.value?.failedCount ?? failedImages.value.length);
@@ -314,7 +328,7 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
 
 // 运行时间计时器：只在页面存活且任务处于 running 时走，由任务状态驱动启停
 const syncClock = () => {
-  const ticking = isLive && taskStatusFromStore.value === "running";
+  const ticking = isLive.value && taskStatusFromStore.value === "running";
   if (ticking && timeUpdateInterval === null) {
     currentTime.value = Date.now();
     timeUpdateInterval = window.setInterval(() => {
@@ -327,35 +341,24 @@ const syncClock = () => {
 };
 watch(taskStatusFromStore, syncClock);
 
-/** 只合并本页任务的事件；处理器按当前 taskId 过滤，换任务不必重新订阅 */
-const handleTaskEvent = (event: TaskEvent) => {
-  const id = event.type === "TaskAdded" ? "" : event.taskId;
-  if (!id || id !== taskId.value) return;
-  if (event.type === "TaskDeleted") {
-    task.value = null;
-    return;
-  }
-  if (event.type !== "TaskChanged") return;
-  // 首次加载还没回来：重读一次，确保拿到这次变更之后的快照
-  if (!task.value) {
-    void loadTask();
-    return;
-  }
-  task.value = { ...task.value, ...event.diff };
-};
-
-// 页面存活期：先订阅再读任务，订阅前错过的变更由这次读取补上
+// 页面存活期：先订阅补丁，再激活观察 key 并请求，错过的变更由首读补上。
 const startLive = () => {
-  if (isLive) return;
-  isLive = true;
-  unlistenTasksChange = subscribeTaskEvents(handleTaskEvent);
-  void loadTask();
+  if (isLive.value) return;
+  const subscription = kbEvent$("tasks-change").subscribe(({ payload }) => {
+    const event = normalizeTaskEvent(payload);
+    if (event?.type !== "TaskChanged" || event.taskId !== taskId.value) return;
+    // 首读未回时请求自己的 key，由核心 pending 窗口处理先后返回。
+    if (!task.value) requestTask();
+    else task.value = { ...task.value, ...event.diff };
+  });
+  unlistenTasksChange = () => subscription.unsubscribe();
+  isLive.value = true;
   syncClock();
 };
 
 const stopLive = () => {
-  if (!isLive) return;
-  isLive = false;
+  if (!isLive.value) return;
+  isLive.value = false;
   unlistenTasksChange?.();
   unlistenTasksChange = null;
   syncClock();
@@ -370,7 +373,7 @@ const durationText = computed(() => {
 
 // 监听路由参数变化：切换到另一个任务时重置查询。
 // 路由 store 往往已先从 URL 同步了 taskId，此时条件不成立——所以订阅与计时不能挂在这里，
-// 统一由 startLive / stopLive 跟随组件生命周期，换任务由 watch(taskId) 重读。
+// 统一由 startLive / stopLive 跟随组件生命周期，换任务由 taskKey 的 watch 请求。
 watch(
   () => route.params.taskId,
   (newId) => {
@@ -401,6 +404,7 @@ const handleRefresh = async () => {
   try {
     // 图片列表请求即返回，结果与错误经 ImageGrid 的观察方落地
     taskViewRef.value?.refresh();
+    requestTask();
     await failedImagesStore.loadAll();
     ElMessage.success(t("tasks.refreshSuccess"));
   } catch (error) {

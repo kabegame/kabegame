@@ -232,10 +232,6 @@ export const useSurfStore = defineStore("surf", () => {
     return ensureRecordByHost(host);
   }
 
-  async function getRecordImages(host: string, localOffset: number, limit: number) {
-    return invoke<RangedImages>("surf_get_record_images", { host, offset: localOffset, limit });
-  }
-
   /** Android：把站点固定到桌面。请求发出后系统 Toast 已提示，失败时抛错。 */
   async function pinShortcut(host: string) {
     await invoke("surf_pin_shortcut", { host: normalizeHost(host) });
@@ -277,7 +273,6 @@ export const useSurfStore = defineStore("surf", () => {
     ensureRecordsByIds,
     ensureRecordByHost,
     getRecord,
-    getRecordImages,
     startSession,
     closeSession,
     pinShortcut,

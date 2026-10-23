@@ -70,4 +70,15 @@ alwaysApply: false
   改名按 id 读取，删除清空，不经 hub。
 - 写库提交后先发推荐导入态的插件事件，再发配置事件。推荐配置独立观察 plugin:// 来源版本的 recommended rows，
   由同插件的 plugin-changed（version / recommendedConfigs）驱动；刷新期间保留内容，失败保留已有结果。
-- 配置事件的全局 `seq` 保留，观察方仍按前端请求序号落地；`pathql_count` 保留供任务列表使用。
+- 配置事件的全局 `seq` 保留，观察方仍按前端请求序号落地；前端不再封装 `pathqlCount` / `TotalSnapshot`，计数经 `pathql_all`；后端 `pathql_count` 保留。
+
+## 任务列表、状态计数与详情观察方
+
+- `usePagedTaskList` 同批观察 `[fetch 累计窗口, count 总数]`，任务分页不再使用 before_ 游标。
+  start 清空并请求首窗，loadMore 以已落地页加一为目标，失败重试同 key；仅新增、删除、startTime 变化刷新。
+  其它任务 diff 经 `kbEvent$` + `normalizeTaskEvent` 补丁已有行；纯进度保留单调与 100ms 节流，completed 为 100%。
+- 状态计数在 store scope 中观察 tasks://status 的 list all key，创建时请求一次；仅新增、删除、status 变化刷新。
+  任务详情在存活期观察编码后的 id rows key，换 key 请求一次；自身删除重读，空行置 null，其它 diff 补丁，
+  首读未回则请求自身 key。loading / error 与旧结果隔离统一交给核心，不另设代数号或事件缓冲。
+- 任务关联名直接订阅配置事件，改名按 id 读取、删除清空，不缓冲事件。抽屉删除 / 清空成功后请求当前列表
+  与计数 key，refreshCounts 即发即返回；不本地增减 total，不投递本地事件。

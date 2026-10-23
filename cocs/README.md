@@ -113,7 +113,7 @@
   - 适用场景：新增视频处理调用点；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `deno task build:ffmpeg` 与桌面构建的关系。
 
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
-  - 主题：任务列表与运行配置的 PathQL 按需加载；任务 keyset 与配置页码分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务事件补丁、状态徽章、配置累计行与总数同批观察、写后事件刷新、推荐导入态 plugin-changed 观察刷新，以及任务右键菜单与再次执行的数据流。
+  - 主题：任务列表与运行配置的 PathQL 按需加载；任务与配置累计窗口分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务 / 配置列表累计行与总数同批观察、任务状态计数与详情观察方、事件刷新及高频字段补丁、写后事件刷新、推荐导入态 plugin-changed 观察刷新，以及任务右键菜单与再次执行的数据流。
   - 适用场景：任务数量多时打开抽屉卡顿、`loadTasksPage` 与 `get_tasks_page` 行为；排查右键菜单层级、菜单动作或三类任务重跑参数回填。
 
 ## 爬虫（`crawler/`）

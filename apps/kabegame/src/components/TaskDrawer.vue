@@ -174,16 +174,8 @@ const matchingPluginIds = computed(() => {
 });
 const taskList = usePagedTaskList({
   basePath: () => taskSearchPath(taskDrawerStore.search, matchingPluginIds.value),
-  matches: (task) => {
-    const query = normalizedSearch.value;
-    return (
-      !query ||
-      task.pluginId.toLowerCase().includes(query) ||
-      pluginStore.pluginLabel(task.pluginId).toLowerCase().includes(query)
-    );
-  },
 });
-const { items: tasks, total, hasMore, loading, showLoading, loadMore, patch, remove, start, stop } = taskList;
+const { items: tasks, total, hasMore, loading, showLoading, loadMore, patch, refresh, start, stop } = taskList;
 
 const modal = useModal({ onClose: () => emit("update:modelValue", false) });
 watch(
@@ -407,8 +399,8 @@ const handleDeleteTaskById = async (taskId: string) => {
   try {
     await ElMessageBox.confirm(t("tasks.deleteTaskConfirm"), t("tasks.confirmDelete"), { type: "warning" });
     await crawlerStore.deleteTask(task.id);
-    remove(task.id);
-    await taskDrawerStore.refreshCounts();
+    refresh();
+    taskDrawerStore.refreshCounts();
     ElMessage.success(t("tasks.taskDeleted"));
   } catch (error) {
     if (error !== "cancel") {
@@ -472,8 +464,8 @@ const handleDeleteAllTasks = async () => {
 
     // 调用后端命令批量清除
     const result = await invoke<{ taskIds: string[]; count: number }>("clear_finished_tasks");
-    for (const taskId of result.taskIds) remove(taskId);
-    await taskDrawerStore.refreshCounts();
+    refresh();
+    taskDrawerStore.refreshCounts();
     ElMessage.success(t("tasks.tasksCleared", { count: result.count }));
   } catch (error) {
     if (error !== "cancel") {
