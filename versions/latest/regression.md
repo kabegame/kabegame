@@ -1,5 +1,19 @@
 # v4.6.1 regression
 
+## 原生元数据一图一行
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 独占写入与替换 | Rust / 内存 SQLite（外键开启） | 运行 `storage::images::native_metadata_tests::replace_attaches_new_row_and_deletes_old_row` | 首次挂新行；同哈希图片各占一行；再次写入换新 id、旧行删除 | 2026-10-23：`deno task test -c kabegame-core --skip vue -- --lib native_metadata`，15 passed（含新增 4 项） |
+| [x] | 图片不存在 | Rust / 内存 SQLite（外键开启） | 运行 `storage::images::native_metadata_tests::replace_missing_image_returns_error_without_inserting_row` | 返回 `native-metadata:image-not-found`，不插入元数据 | 2026-10-23：`deno task test -c kabegame-core --skip vue -- --lib native_metadata`，15 passed（含新增 4 项） |
+| [x] | 历史共享行重解析 | Rust / 内存 SQLite（外键开启） | 运行 `storage::images::native_metadata_tests::replace_preserves_historical_shared_row_with_foreign_keys` | A 换新行成功，B 仍指向旧行，外键拒绝不回滚替换事务 | 2026-10-23：`deno task test -c kabegame-core --skip vue -- --lib native_metadata`，15 passed（含新增 4 项） |
+| [x] | 历史共享行删除 | Rust / 内存 SQLite（外键开启） | 运行 `storage::images::native_metadata_tests::remove_preserves_shared_row_until_last_image_is_removed` | 批量移除 A 成功且共享行保留；再单张移除 B 后共享行删除，任务计数与画册成员正常 | 2026-10-23：`deno task test -c kabegame-core --skip vue -- --lib native_metadata`，15 passed（含新增 4 项） |
+| [x] | PNG 参数预览与搜索 | 桌面 CEF dev | 打开带 PNG 参数的图片预览，查看原生元数据，再按其中参数搜索 | 面板正常，原生元数据搜索命中；版本过期时换新 id，预览缓存与搜索成员更新 | 2026-10-23 dev（CDP）：图片 437 预览面板渲染 `parameters`，`get_image_native_metadata` 返回 v1，`image_metadata_id` 仍为 2164、未写新行；`search/native-metadata/playing dodoco` 命中 436、437，与库内计数 2 一致。过期：把 2540/6239/7272 共享的行 3607 置 `parser_version=0` 后预览 2540，换上独占新行 8631（v1），3607 被外键拒删而保留，6239/7272 仍指向它。预览缓存与搜索成员的事件刷新未单独观察 |
+| [x] | 整理逐图补充 | 桌面 CEF dev | 对两张同哈希且原生元数据缺失或过期的图片执行补充整理 | 两图均解析并独占不同元数据行，补充计数按图片累计 | 2026-10-23 dev（CDP，只开「补充原生元数据」）：上条遗留的 6239/7272 各得 8632/8633，最后一张替换后 3607 删除；另把 2535/6228 共享的 3602 置过期再整理，`organize-finished` 报 `backfilled: 2`，两图得 8636/8637，3602 删除；全程孤儿行 0 |
+| [x] | 历史共享行界面删除 | 桌面 CEF dev / SQLite | 只读查询 `SELECT image_metadata_id, COUNT(*) FROM images WHERE image_metadata_id IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1` 找共享行；在界面删除其中一张，查看另一张预览，再删最后一张 | 首次删除成功、另一张仍显示原生元数据、共享行仍在；最后一张删除后共享行消失 | 2026-10-23 dev（CDP，经用户同意）：共享行 1868（图片 83、6560）。为保留源文件改用「从图库移除」命令（与删除共用删行代码）：`batch_remove_images([6560])` 成功，1868 保留，83 的 `get_image_native_metadata` 仍返回 v1 且未重写；`remove_image(83)` 后 1868 删除，孤儿行 0，两张源文件仍在磁盘 |
+
+编译检查：2026-10-23 `deno task check -c kabegame` 的 vue-tsc 与 kabegame-core 通过；主应用当时因 `surf_get_record_images` 命令注册缺少宏而失败（`src-tauri/kabegame/src/lib.rs:546`），已由用户另行修复，真机 case 运行在 20:30 启动的 dev 构建上。
+
 ## 畅游记录移除最新图片字段
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |

@@ -884,22 +884,6 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
     };
 
     let storage = Storage::global();
-    match storage.ensure_native_metadata_for_hash(&image.hash, expected_version, None) {
-        Ok(Some(attached)) => {
-            crate::storage::image_events::emit_native_metadata_attached(
-                &attached,
-                // 按哈希共享会一并挂到同哈希的旧图上；新图本身随后有 `add` 事件。
-                Some(image.id.as_str()),
-            );
-            return;
-        }
-        Ok(None) => {}
-        Err(e) => {
-            eprintln!("[downloader] native metadata sharing failed: {e}");
-            return;
-        }
-    }
-
     #[cfg(not(target_os = "android"))]
     let file_bytes;
     let source_bytes = if let Some(bytes) = bytes {
@@ -935,14 +919,8 @@ async fn persist_native_metadata_best_effort(image: &ImageInfo, bytes: Option<&[
             return;
         }
     };
-    match storage.ensure_native_metadata_for_hash(&image.hash, expected_version, Some(&json)) {
-        Ok(Some(attached)) => crate::storage::image_events::emit_native_metadata_attached(
-            &attached,
-            // 按哈希共享会一并挂到同哈希的旧图上；新图本身随后有 `add` 事件。
-            Some(image.id.as_str()),
-        ),
-        Ok(None) => {}
-        Err(e) => eprintln!("[downloader] store native metadata failed: {e}"),
+    if let Err(e) = storage.replace_image_native_metadata(&image.id, expected_version, &json) {
+        eprintln!("[downloader] store native metadata failed: {e}");
     }
 }
 

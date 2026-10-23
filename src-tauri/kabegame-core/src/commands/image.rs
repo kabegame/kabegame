@@ -110,43 +110,14 @@ pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String
 
     // 查看时才懒解析 / 挂载：挂载会改变 `search/native-metadata` 的成员，必须通知视图重查——
     // 否则带原生元数据过滤的列表要等手动刷新才会把这张图移出（预览自己会保留它）。
-    let shared =
-        storage.ensure_native_metadata_for_image(&image_id, &row.hash, expected_version, None)?;
-    if let Some(attached) = &shared {
-        emit_native_metadata_attached(attached, None);
-    }
-    if shared.is_some() {
-        if let Some(shared) = storage.get_image_native_metadata_row(&image_id)? {
-            if shared.parser_version == Some(expected_version) {
-                if let Some(data) = shared.data.as_deref() {
-                    return native_metadata_payload(data, expected_version);
-                }
-            }
-        }
-    }
-
     let bytes = crate::media::native_metadata::read_image_bytes(&row.local_path).await?;
     let parsed = crate::media::native_metadata::parse_native_metadata(format_key, &bytes)
         .ok_or_else(|| "native-metadata:unsupported-format".to_string())?;
     let json = serde_json::to_string(&parsed)
         .map_err(|e| format!("native-metadata:serialize-failed:{e}"))?;
-    if let Some(attached) = storage.ensure_native_metadata_for_image(
-        &image_id,
-        &row.hash,
-        expected_version,
-        Some(&json),
-    )? {
-        emit_native_metadata_attached(&attached, None);
-    }
-
-    let stored = storage
-        .get_image_native_metadata_row(&image_id)?
-        .ok_or_else(|| "native-metadata:image-not-found".to_string())?;
-    let data = stored
-        .data
-        .as_deref()
-        .ok_or_else(|| "native-metadata:store-failed".to_string())?;
-    native_metadata_payload(data, expected_version)
+    let metadata_id = storage.replace_image_native_metadata(&image_id, expected_version, &json)?;
+    emit_native_metadata_attached(&image_id, metadata_id);
+    native_metadata_payload(&json, expected_version)
 }
 
 fn native_metadata_payload(data: &str, parser_version: u32) -> Result<Value, String> {

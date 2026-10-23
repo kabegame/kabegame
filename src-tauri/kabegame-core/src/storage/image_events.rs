@@ -7,7 +7,6 @@ use crate::emitter::{next_change_seq, GlobalEmitter};
 use crate::ipc::events::AppEvent;
 use crate::ipc::events::ImagePatch;
 use crate::storage::albums::AddToAlbumResult;
-use crate::storage::images::NativeMetadataAttached;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
 use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use serde::{Deserialize, Serialize};
@@ -129,37 +128,19 @@ fn split_by_hidden(changed: &[String], pairs: &[(String, String)]) -> (Vec<Strin
 }
 
 /// 原生元数据挂载的补丁：`image_metadata_id` 是图片字段，按 `imageMetadataId` 下发绝对值。
-pub fn native_metadata_image_patch(attached: &NativeMetadataAttached) -> Option<ImagePatch> {
-    if attached.changed_image_ids.is_empty() {
-        return None;
+pub fn native_metadata_image_patch(image_id: &str, metadata_id: i64) -> ImagePatch {
+    ImagePatch {
+        image_ids: vec![image_id.to_string()],
+        diff: json!({ "imageMetadataId": metadata_id }),
     }
-    Some(ImagePatch {
-        image_ids: attached.changed_image_ids.clone(),
-        diff: json!({ "imageMetadataId": attached.metadata_id }),
-    })
 }
 
 /// 原生元数据挂载写库后调用：先 `image-changed` 补丁当前页，再 `images-change("change")`——
-/// 原生元数据参与 `search/native-metadata`，搜索成员可能变了。`skip_image_id` 给下载链路排除
-/// 随后会发 `add` 的新图。
-pub fn emit_native_metadata_attached(
-    attached: &NativeMetadataAttached,
-    skip_image_id: Option<&str>,
-) {
-    let changed = attached
-        .changed_image_ids
-        .iter()
-        .filter(|id| Some(id.as_str()) != skip_image_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    if changed.is_empty() {
-        return;
-    }
+/// 原生元数据参与 `search/native-metadata`，搜索成员可能变了。
+pub fn emit_native_metadata_attached(image_id: &str, metadata_id: i64) {
     if let Some(emitter) = GlobalEmitter::try_global() {
-        emitter.emit_image_changed_uniform(
-            &changed,
-            json!({ "imageMetadataId": attached.metadata_id }),
-        );
+        let changed = vec![image_id.to_string()];
+        emitter.emit_image_changed_uniform(&changed, json!({ "imageMetadataId": metadata_id }));
         emitter.emit_images_change("change", &changed, None, None, None);
     }
 }

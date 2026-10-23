@@ -543,7 +543,6 @@ pub(crate) fn configure_app(
             surf_get_all_records,
             surf_get_records_by_ids,
             surf_get_record,
-            surf_get_record_images,
             surf_update_root_url,
             surf_update_name,
             surf_delete_record,

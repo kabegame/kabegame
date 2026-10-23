@@ -67,7 +67,6 @@ commands.allow = [
   "surf_pin_shortcut",
   "surf_list_records",
   "surf_get_record",
-  "surf_get_record_images",
   "surf_update_root_url",
   "surf_update_name",
   "surf_delete_record",

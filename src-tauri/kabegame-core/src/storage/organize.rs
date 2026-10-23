@@ -580,8 +580,7 @@ fn run_organize(
         let mut refresh_list: Vec<ThumbnailRefreshAction> = Vec::new();
         let mut changed_image_patches: Vec<ImagePatch> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
-        let mut native_metadata_list: Vec<(i64, String, String, String)> = Vec::new();
-        let mut native_metadata_hashes: HashSet<String> = HashSet::new();
+        let mut native_metadata_list: Vec<(i64, String, String)> = Vec::new();
         #[cfg(not(target_os = "android"))]
         let mut compat_list: Vec<(i64, String, String)> = Vec::new();
 
@@ -657,22 +656,14 @@ fn run_organize(
                 }
             }
 
-            // 6. 补充原生元数据。即将删除的图片不处理；同一非空 hash 在本批只选一个代表。
+            // 6. 补充原生元数据。即将删除的图片不处理；版本不符的图片逐张解析。
             if options.backfill_native_metadata && !should_remove.contains(&row.id) {
                 let format_key = row.format_key.as_deref().unwrap_or("").to_string();
                 if let Some(expected_version) =
                     crate::media::native_metadata::parser_version_for(&format_key)
                 {
                     if row.native_parser_version != Some(i64::from(expected_version)) {
-                        let hash = row.hash.trim();
-                        if hash.is_empty() || native_metadata_hashes.insert(row.hash.clone()) {
-                            native_metadata_list.push((
-                                row.id,
-                                row.hash.clone(),
-                                row.local_path.clone(),
-                                format_key,
-                            ));
-                        }
+                        native_metadata_list.push((row.id, row.local_path.clone(), format_key));
                     }
                 }
             }
@@ -888,7 +879,7 @@ fn run_organize(
         }
 
         // 执行原生元数据补充。失败只记录并跳过，不中断整批整理。
-        for (id, hash, local_path, format_key) in native_metadata_list {
+        for (id, local_path, format_key) in native_metadata_list {
             let Some(expected_version) =
                 crate::media::native_metadata::parser_version_for(&format_key)
             else {
@@ -907,23 +898,6 @@ fn run_organize(
             }
 
             let image_id = id.to_string();
-            match storage.ensure_native_metadata_for_image(&image_id, &hash, expected_version, None)
-            {
-                Ok(Some(attached)) => {
-                    backfilled_total += 1;
-                    // 原生元数据参与搜索：随本批补丁一起发 image-changed + images-change。
-                    changed_image_patches.extend(native_metadata_image_patch(&attached));
-                    continue;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!(
-                        "[organize] native metadata shared lookup failed for {id} ({local_path}): {e}"
-                    );
-                    continue;
-                }
-            }
-
             let bytes = match handle
                 .block_on(crate::media::native_metadata::read_image_bytes(&local_path))
             {
@@ -952,21 +926,11 @@ fn run_organize(
                     continue;
                 }
             };
-            match storage.ensure_native_metadata_for_image(
-                &image_id,
-                &hash,
-                expected_version,
-                Some(&json),
-            ) {
-                Ok(Some(attached)) => {
+            match storage.replace_image_native_metadata(&image_id, expected_version, &json) {
+                Ok(metadata_id) => {
                     backfilled_total += 1;
                     // 原生元数据参与搜索：随本批补丁一起发 image-changed + images-change。
-                    changed_image_patches.extend(native_metadata_image_patch(&attached));
-                }
-                Ok(None) => {
-                    eprintln!(
-                        "[organize] native metadata store returned no result for {id} ({local_path})"
-                    );
+                    changed_image_patches.push(native_metadata_image_patch(&image_id, metadata_id));
                 }
                 Err(e) => {
                     eprintln!(
