@@ -296,7 +296,7 @@ pub async fn surf_start_session<R: Runtime>(app: AppHandle<R>, url: String) -> R
 ### 点 4 — Kotlin `SurfPlugin`（app 模块）
 
 - **新增** `src-tauri/kabegame/gen/android/app/src/main/java/app/kabegame/SurfPlugin.kt`
-  > 说明：放在 app 模块而不是 `src-tauri-plugins/`，因为它要引用 `SurfActivity`，而
+  > 说明：放在 app 模块而不是 `src-tauri/tauri-plugin-*/` 插件模块，因为它要引用 `SurfActivity`，而
   > `SurfActivity` 继承的 `TauriActivity` 是 app 模块里生成的类，插件库引用不到。
   - `SurfRegistry`（object）：以 label 为键做双向会合。`attach` 先到，就把配置挂起等 Activity；
     Activity 先就绪，就等配置。两边都到齐后调用 `activity.bind(config)`。这样不依赖 tao 的

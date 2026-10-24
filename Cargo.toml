@@ -6,11 +6,11 @@ members = [
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
   "src-tauri/tauri-runtime-cef",
-  "src-tauri-plugins/tauri-plugin-picker",
-  "src-tauri-plugins/tauri-plugin-pathes",
-  "src-tauri-plugins/tauri-plugin-share",
-  "src-tauri-plugins/tauri-plugin-wallpaper",
-  "src-tauri-plugins/tauri-plugin-task-notification",
+  "src-tauri/tauri-plugin-picker",
+  "src-tauri/tauri-plugin-pathes",
+  "src-tauri/tauri-plugin-share",
+  "src-tauri/tauri-plugin-wallpaper",
+  "src-tauri/tauri-plugin-task-notification",
 ]
 # Keep the vendored cef-rs workspace as the owner of its inherited metadata.
 # third/deno is the upstream denoland/deno monorepo (submodule, pinned v2.9.0 + third-patches/deno):
@@ -76,11 +76,11 @@ rsmpeg = { version = "0.18.0", default-features = false, features = ["ffmpeg8_1"
 percent-encoding = "2"
 sha2 = "0.10"
 tauri-build = {version = "2.7.3", features = []}
-tauri-plugin-pathes = {path = "./src-tauri-plugins/tauri-plugin-pathes"}
-tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}
-tauri-plugin-share = {path = "./src-tauri-plugins/tauri-plugin-share"}
-tauri-plugin-task-notification = {path = "./src-tauri-plugins/tauri-plugin-task-notification"}
-tauri-plugin-wallpaper = {path = "./src-tauri-plugins/tauri-plugin-wallpaper"}
+tauri-plugin-pathes = {path = "./src-tauri/tauri-plugin-pathes"}
+tauri-plugin-picker = {path = "./src-tauri/tauri-plugin-picker"}
+tauri-plugin-share = {path = "./src-tauri/tauri-plugin-share"}
+tauri-plugin-task-notification = {path = "./src-tauri/tauri-plugin-task-notification"}
+tauri-plugin-wallpaper = {path = "./src-tauri/tauri-plugin-wallpaper"}
 tar = "0.4"
 tokio = {version = "1", features = ["full"]}
 url = "2.5"

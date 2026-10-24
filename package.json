@@ -5,8 +5,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "src-tauri-plugins/tauri-plugin-picker",
-    "src-tauri-plugins/tauri-plugin-share"
+    "src-tauri/tauri-plugin-picker",
+    "src-tauri/tauri-plugin-share"
   ],
   "scripts": {
     "dev": "deno run -A scripts/run.ts dev",

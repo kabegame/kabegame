@@ -7188,14 +7188,14 @@
           ]
         }
       },
-      "src-tauri-plugins/tauri-plugin-picker": {
+      "src-tauri/tauri-plugin-picker": {
         "packageJson": {
           "dependencies": [
             "npm:@tauri-apps/api@2"
           ]
         }
       },
-      "src-tauri-plugins/tauri-plugin-share": {
+      "src-tauri/tauri-plugin-share": {
         "packageJson": {
           "dependencies": [
             "npm:@tauri-apps/api@2"

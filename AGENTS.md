@@ -23,7 +23,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `src-tauri/kabegame-core/` — `kabegame-core`：共享 Rust 库（爬虫引擎、插件系统、存储）
 - `src-tauri/kabegame/` — Tauri GUI 应用（桌面端 + Android）
 - `src-tauri/kabegame-cli/` — 无界面 CLI
-- `src-tauri-plugins/` — 自定义 Tauri 插件（picker、pathes、share、compress、wallpaper、task-notification）
+- `src-tauri/tauri-plugin-*/` — 自定义 Tauri 插件（picker、pathes、share、wallpaper、task-notification），与应用和共享 Rust 库同级
 - `src-crawler-plugins/` — JS/TS 爬虫插件子仓库，一个单独的 pnpm workspace 根
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块gitlink指向上游，但运行时附带仓库的补丁
 

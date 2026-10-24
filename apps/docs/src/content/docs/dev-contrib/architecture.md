@@ -18,8 +18,8 @@ Kabegame 是一个由 Deno 构建系统编排的 monorepo。Vue 前端、Tauri �
 │   ├── kabegame/                 # 桌面与 Android Tauri GUI
 │   ├── kabegame-cli/             # 无界面命令行工具
 │   ├── tauri-runtime-cef/        # 自研桌面 Tauri CEF runtime
-│   └── pathql-rs/                # PathQL 查询引擎
-├── src-tauri-plugins/            # picker、pathes、share、wallpaper 等自定义插件
+│   ├── pathql-rs/                # PathQL 查询引擎
+│   └── tauri-plugin-*/           # picker、pathes、share、wallpaper、task-notification
 ├── src-crawler-plugins/          # JS/TS 爬虫插件及 .kgpg 打包流程
 ├── scripts/                      # Deno + Tapable 构建系统与依赖构建脚本
 ├── third/                        # Git 子模块形式的内嵌上游依赖
@@ -29,7 +29,7 @@ Kabegame 是一个由 Deno 构建系统编排的 monorepo。Vue 前端、Tauri �
 
 - `apps/kabegame/` 只负责主应用前端；跨应用组件、composable、类型与 i18n 放在 `packages/`。
 - `src-tauri/kabegame-core/` 是 GUI 与 CLI 共享的业务核心；`src-tauri/kabegame/` 负责 Tauri 壳和平台接线。
-- `src-tauri-plugins/` 收纳平台能力。应用路径与数据目录计算统一归 `tauri-plugin-pathes` 管理。
+- `src-tauri/tauri-plugin-*/` 收纳平台能力，与应用和共享 Rust 库同级。应用路径与数据目录计算统一归 `tauri-plugin-pathes` 管理。
 - `src-crawler-plugins/` 中的插件以 JavaScript / TypeScript 编写，并打包成 `.kgpg`。
 - `third/` 尽量保持接近上游；Kabegame 的定制通过 `third-patches/` 的有序补丁维护。
 

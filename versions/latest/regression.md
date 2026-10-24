@@ -1,5 +1,24 @@
 # v4.6.1 regression
 
+## 自定义 Tauri 插件目录合并
+
+2026-10-24：macOS 上完成静态校验；未运行桌面或 Android 应用。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Workspace 与依赖解析 | macOS / Cargo / Deno | 读取 Cargo metadata，安装 Deno workspace 依赖并执行前后端检查 | 五个插件均从 `src-tauri/tauri-plugin-*/` 解析，前后端检查通过 | `cargo metadata --no-deps --locked`、`deno install --frozen` 和 check-kabegame driver 均通过；vue-tsc / cargo check 0 error；前端包链接指向新目录 |
+| [x] | 文档与路径一致 | 仓库 / apps/docs | 搜索旧目录名，核对文档目录树与插件文件内容 | 无旧目录引用，插件源码完整保留 | 已跟踪文件与相关目录无旧引用；109 个已跟踪文件迁移前后哈希核对，仅 pathes Cargo.toml 按预期调整依赖；无新增忽略命中，schema 仍忽略；`git diff --check` 通过 |
+| [ ] | Android 插件接线 | Android dev | 启动应用，选择媒体、分享、设置壁纸并运行任务 | 插件加载正常，数据路径、权限和任务通知行为正常 | 当前无运行中的应用，待真机验证 |
+
+## 运行配置页桌面页头间距
+
+2026-10-24：前端类型检查、`AutoConfigs.vue` 的 Prettier 检查及 `git diff --check` 通过；全仓格式检查报告 8 个未修改文件的既有格式问题。以下真机项目未执行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 桌面页头间距 | 桌面 CEF | 在画廊与运行配置页之间切换，检查「我的配置」与「插件推荐」 | 运行配置页头上、左、右均有 20px 间距，与画廊一致；下方标签、筛选和列表不重复缩进 | 当前无运行中的应用，待真机验证 |
+| [ ] | 紧凑布局 | Android / 窄屏 Web | 打开运行配置页并切换两个标签 | 页头保持全宽，内容区保留原有左右及底部 20px 间距，无水平溢出 | 待真机验证 |
+
 ## 四格漫画模板独立编号
 
 2026-10-24：在 macOS PhotoCraft 查看更新后的 `4koma/template.psd`，确认四个画格与独立的 `编号1`–`编号4`；实际运行 `scripts/compose-comic.py` 并目视检查生成的 3072×2048 PNG。验证产物位于 `.kabegame/debug/compose-comic-check/`（不入库）。

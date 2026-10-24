@@ -5,6 +5,8 @@
 
 专题文档按主题放在子目录中；**索引条目一律链到具体 `.md` 文件**，便于一键打开。
 
+Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插件目录为 `src-tauri/tauri-plugin-<name>/`。完整目录结构见 [架构与项目结构](../apps/docs/src/content/docs/dev-contrib/architecture.md)。
+
 ## 阅读顺序建议
 
 1. 先看本索引，定位目标主题。

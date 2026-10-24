@@ -1,5 +1,5 @@
 <template>
-  <div class="flex h-full min-h-0 flex-col">
+  <div class="flex h-full min-h-0 flex-col" :class="{ 'p-5': !uiStore.isCompact }">
     <PageHeader :title="t('autoConfig.tabTitle')" :show="headerShowFeatures" :fold="[]" sticky>
       <template #subtitle>
         <span>{{ subtitle }}</span>
@@ -17,7 +17,7 @@
       </template>
     </PageHeader>
 
-    <div class="flex min-h-0 flex-1 flex-col px-5 pb-5">
+    <div class="flex min-h-0 flex-1 flex-col" :class="{ 'px-5 pb-5': uiStore.isCompact }">
       <KbTab v-model="tab" :items="tabItems" class="mb-3 flex-none" />
       <div class="mb-4 flex flex-none flex-wrap items-center gap-2">
         <KbFilterDropdown
@@ -208,6 +208,7 @@ import { useCrawlerStore, type PluginRecommendedPreset, type RunConfig } from "@
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { HeaderFeatureId } from "@/stores/header";
+import { useUiStore } from "@/stores/ui";
 import {
   fetchRunConfigFacet,
   runConfigFilterPath,
@@ -227,6 +228,7 @@ import {
 } from "@/services/recommendedPresets";
 
 const { t, locale } = useI18n();
+const uiStore = useUiStore();
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
 const autoConfigDialog = useAutoConfigDialogStore();
