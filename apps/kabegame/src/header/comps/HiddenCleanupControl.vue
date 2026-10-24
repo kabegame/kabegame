@@ -26,12 +26,16 @@ import * as hiddenCleanupService from "@/services/hiddenCleanup";
 const { t } = useI18n();
 const store = useHiddenCleanupStore();
 
-// 隐藏画册的直接图片数由 album-images-change 事件持续刷新，不需要单独的计数命令
+// 隐藏画册的直接图片数由成员增删事件持续刷新，不需要单独的计数命令
 const hiddenCount = ref(0);
 const hiddenQueries = [{ kind: "count", path: `images://gallery/album/${HIDDEN_ALBUM_ID}` }] as const;
 const hiddenLooker = usePathqlLookAll({
   queries: () => hiddenQueries,
-  refreshOn: [on("album-images-change", (p) => !!p.albumIds?.includes(HIDDEN_ALBUM_ID))],
+  refreshOn: [
+    on("album-images-added", (p) => p.albumId === HIDDEN_ALBUM_ID),
+    on("album-images-deleted", (p) => p.albumId === HIDDEN_ALBUM_ID),
+    on("album-images-change", (p) => p.albumId === HIDDEN_ALBUM_ID),
+  ],
   onResult: ([count]) => {
     hiddenCount.value = count;
   },

@@ -6,9 +6,10 @@
 //! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
 use crate::crawler::downloader::DownloadState;
+pub use crate::ipc::events::AlbumFieldPatch;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
-use crate::ipc::events::ImageFieldPatch;
+use crate::ipc::events::{DeletedAlbum, ImageFieldPatch};
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
 use crate::storage::tasks::TaskFailedImage;
@@ -383,43 +384,62 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送画册属性变更事件（重命名、移动等；`changes` 为增量 JSON）
-    pub fn emit_album_changed(&self, album_id: &str, changes: serde_json::Value) {
-        let seq = next_change_seq();
-        let event = std::sync::Arc::new(AppEvent::AlbumChanged {
-            seq,
-            album_id: album_id.to_string(),
-            changes,
-        });
-        EventBroadcaster::global().broadcast(event);
+    /// 画册字段按 id 合并，空补丁不发，位置字段不得混入补丁。
+    pub fn emit_album_patches(&self, patches: Vec<AlbumFieldPatch>) {
+        let mut merged =
+            std::collections::BTreeMap::<String, serde_json::Map<String, serde_json::Value>>::new();
+        for mut patch in patches {
+            patch.fields.remove("parentId");
+            patch.fields.remove("ancestorPath");
+            patch.fields.remove("oldAncestorPath");
+            merged.entry(patch.id).or_default().extend(patch.fields);
+        }
+        let mut patches: Vec<_> = merged
+            .into_iter()
+            .filter(|(_, fields)| !fields.is_empty())
+            .map(|(id, fields)| AlbumFieldPatch { id, fields })
+            .collect();
+        let event = match patches.len() {
+            0 => return,
+            1 => AppEvent::AlbumChanged {
+                seq: next_change_seq(),
+                patch: patches.pop().unwrap(),
+            },
+            _ => AppEvent::AlbumsChange {
+                seq: next_change_seq(),
+                patches,
+            },
+        };
+        dispatch_view_event(Arc::new(event));
     }
 
-    /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
-    pub fn emit_album_added(&self, album: &crate::storage::Album) {
-        let event = std::sync::Arc::new(AppEvent::AlbumAdded {
-            id: album.id.clone(),
-            name: album.name.clone(),
-            created_at: album.created_at,
-            parent_id: album.parent_id.clone(),
-            album_type: album.kind.clone(),
-            sync_folder: album.sync_folder.clone(),
-            folder_status: album.folder_status.clone(),
-            sync_mode: album.sync_mode.clone(),
-            ancestor_path: album.ancestor_path.clone(),
-            label_key: album.label_key.clone(),
-            label_path: album.label_path.clone(),
-        });
-        EventBroadcaster::global().broadcast(event);
+    pub fn emit_albums_added(&self, albums: &[crate::storage::Album]) {
+        if !albums.is_empty() {
+            dispatch_view_event(Arc::new(AppEvent::AlbumsAdded {
+                seq: next_change_seq(),
+                albums: albums.to_vec(),
+            }));
+        }
     }
 
-    /// 发送画册删除事件（底层 DB 删除后由 storage 调用）
-    pub fn emit_album_deleted(&self, album: &crate::storage::Album) {
-        let event = std::sync::Arc::new(AppEvent::AlbumDeleted {
-            album_id: album.id.clone(),
-            parent_id: album.parent_id.clone(),
-            ancestor_path: album.ancestor_path.clone(),
-        });
-        EventBroadcaster::global().broadcast(event);
+    pub fn emit_albums_deleted(&self, albums: &[DeletedAlbum]) {
+        if !albums.is_empty() {
+            dispatch_view_event(Arc::new(AppEvent::AlbumsDeleted {
+                seq: next_change_seq(),
+                albums: albums.to_vec(),
+            }));
+        }
+    }
+
+    pub fn emit_album_moved(&self, id: &str, old: &str, new: &str) {
+        if old != new {
+            dispatch_view_event(Arc::new(AppEvent::AlbumMoved {
+                seq: next_change_seq(),
+                id: id.to_string(),
+                old_ancestor_path: old.to_string(),
+                new_ancestor_path: new.to_string(),
+            }));
+        }
     }
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
@@ -593,11 +613,10 @@ impl GlobalEmitter {
 
     pub fn emit_app_shutdown(&self, _reason: &str) {}
 
-    pub fn emit_album_changed(&self, _album_id: &str, _changes: serde_json::Value) {}
-
-    pub fn emit_album_added(&self, _album: &crate::storage::Album) {}
-
-    pub fn emit_album_deleted(&self, _album: &crate::storage::Album) {}
+    pub fn emit_album_patches(&self, _patches: Vec<AlbumFieldPatch>) {}
+    pub fn emit_albums_added(&self, _albums: &[crate::storage::Album]) {}
+    pub fn emit_albums_deleted(&self, _albums: &[DeletedAlbum]) {}
+    pub fn emit_album_moved(&self, _id: &str, _old: &str, _new: &str) {}
 
     pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) -> u64 {
         0

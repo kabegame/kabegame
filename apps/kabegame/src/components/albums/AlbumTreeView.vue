@@ -67,7 +67,16 @@ import { syncModeIcon, syncModeIconClass, syncModeTooltip } from "@/utils/albumS
 import KbTreePanel from "@/components/tree/KbTreePanel.vue";
 import type { TreeQuerySource, TreeDndController, TreeRowState, TreeSection } from "@/components/tree/types";
 import { useTreeModel } from "@/components/tree/useTreeModel";
-import { on, albumChangeKinds, albumEventAffectsDir } from "@/services/kbEvents/events";
+import {
+  on,
+  albumChangeKinds,
+  albumPatchTriggers,
+  albumEventAffectsDir,
+  moveAlbumPath,
+  type AlbumMovedPayload,
+  type AlbumImagesPayload,
+} from "@/services/kbEvents/events";
+import { kbEvent$ } from "@/services/kbEvents/eventSource";
 import {
   ALBUM_PAGE_SIZE,
   FAVORITE_ALBUM_ID,
@@ -184,20 +193,29 @@ const dataSource: TreeQuerySource<AlbumNode> = {
         ? null
         : (model.nodeByKey(branch.parent.id)?.element.ancestorPath ?? branch.parent.ancestorPath);
     const structure = [
-      on("album-added", (payload) => albumEventAffectsDir("album-added", payload, path())),
-      on("album-deleted", (payload) => albumEventAffectsDir("album-deleted", payload, path())),
-      on("album-changed", (payload) => {
-        const kinds = albumChangeKinds(payload);
+      on("albums-added", (payload) => albumEventAffectsDir("albums-added", payload, path())),
+      on("albums-deleted", (payload) => albumEventAffectsDir("albums-deleted", payload, path())),
+      on("album-moved", (payload) => albumEventAffectsDir("album-moved", payload, path())),
+      ...albumPatchTriggers((patch) => {
+        const kinds = albumChangeKinds(patch);
+        const held = model.nodeByKey(patch.id)?.element.ancestorPath;
         return (
-          (kinds.structure || (part === "page" && kinds.row)) && albumEventAffectsDir("album-changed", payload, path())
+          (kinds.structure || (part === "page" && kinds.row)) &&
+          (!held || path() === null || (held !== path() && held.startsWith(path()!)))
         );
       }),
     ];
+    // 带 hide/ 前缀的计数受任何隐藏 / 取消隐藏影响，事件不带图片所在的其它画册，一律刷新；其余按事件路径定位。
+    const memberHit = (payload: AlbumImagesPayload) =>
+      (!!prefix.value && payload.albumId === HIDDEN_ALBUM_ID) ||
+      albumEventAffectsDir("album-images-added", payload, path());
     return part === "page"
       ? structure
       : [
           ...structure,
-          on("album-images-change", (payload) => albumEventAffectsDir("album-images-change", payload, path())),
+          on("album-images-added", memberHit),
+          on("album-images-deleted", memberHit),
+          on("album-images-change", memberHit),
         ];
   },
   totalChildren: (node) => node.childCount,
@@ -222,6 +240,14 @@ const model = useTreeModel<AlbumNode>({
       !!searchQuery.value &&
       !displayName(node).toLowerCase().includes(searchQuery.value.toLowerCase())),
 });
+
+const movedPaths = kbEvent$<AlbumMovedPayload>("album-moved").subscribe(({ payload }) => {
+  model.mapElements((album) => moveAlbumPath(album, payload));
+  if (selectedPath.value.startsWith(payload.oldAncestorPath)) {
+    selectedPath.value = payload.newAncestorPath + selectedPath.value.slice(payload.oldAncestorPath.length);
+  }
+});
+onBeforeUnmount(() => movedPaths.unsubscribe());
 
 /** 按选中画册的祖先链逐级展开（必要时逐页加载更多）；不重载整树，切换选中只付祖先链的代价。 */
 async function ensureSelectedExpanded() {

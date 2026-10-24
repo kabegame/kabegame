@@ -12,6 +12,10 @@ export {
   on,
   triggers$,
   albumChangeKinds,
+  albumPatches,
+  albumPatchTriggers,
+  pathHasAlbum,
+  moveAlbumPath,
   isHiddenAlbumChange,
   albumEventPaths,
   albumEventAffectsDir,
@@ -25,7 +29,10 @@ export {
   type ImagesAddedPayload,
   type ImagesDeletedPayload,
   type ImageChangedPayload,
-  type AlbumImagesChangePayload,
+  type AlbumImagesPayload,
+  type AlbumMovedPayload,
+  type AlbumFieldPatch,
+  type AlbumPatchPayload,
 } from "./events";
 export {
   pathqlRequest$,

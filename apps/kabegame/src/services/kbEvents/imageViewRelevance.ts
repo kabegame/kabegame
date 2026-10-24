@@ -137,6 +137,10 @@ export function deletedTrigger(heldIds?: () => Iterable<string>): EventTrigger {
   });
 }
 
-export function hiddenTrigger(view: () => ImageViewState): EventTrigger {
-  return on("album-images-change", (payload) => view().hide && isHiddenAlbumChange(payload));
+export function hiddenTrigger(view: () => ImageViewState): EventTrigger[] {
+  return [
+    on("album-images-added", (payload) => view().hide && isHiddenAlbumChange(payload)),
+    on("album-images-deleted", (payload) => view().hide && isHiddenAlbumChange(payload)),
+    on("album-images-change", (payload) => view().hide && isHiddenAlbumChange(payload)),
+  ];
 }

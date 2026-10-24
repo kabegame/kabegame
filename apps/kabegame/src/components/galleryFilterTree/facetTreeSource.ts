@@ -22,7 +22,7 @@ import {
   type ProviderChildDir,
 } from "./context";
 import { withGalleryPrefix } from "@/utils/path";
-import { on, albumChangeKinds } from "@/services/kbEvents/events";
+import { on, albumChangeKinds, albumPatchTriggers } from "@/services/kbEvents/events";
 import type { TreeQuerySource } from "@/components/tree/types";
 
 /**
@@ -398,11 +398,14 @@ export function createGalleryFacetSource(
         : [
             ...imageTriggers,
             on("images-deleted"),
-            hiddenTrigger(view),
+            ...hiddenTrigger(view),
+            on("album-images-added", () => hasAlbumSensitiveContext()),
+            on("album-images-deleted", () => hasAlbumSensitiveContext()),
             on("album-images-change", () => hasAlbumSensitiveContext()),
-            on("album-changed", (payload) => hasAlbumSensitiveContext() && albumChangeKinds(payload).structure),
-            on("album-added", () => hasAlbumSensitiveContext()),
-            on("album-deleted", () => hasAlbumSensitiveContext()),
+            ...albumPatchTriggers((patch) => hasAlbumSensitiveContext() && albumChangeKinds(patch).structure),
+            on("album-moved", () => hasAlbumSensitiveContext()),
+            on("albums-added", () => hasAlbumSensitiveContext()),
+            on("albums-deleted", () => hasAlbumSensitiveContext()),
           ];
     },
   };

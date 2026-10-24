@@ -311,29 +311,6 @@ emit_image_hidden_changed(changed, false);
 | 文档 | `.cursor/rules/view-mutation.mdc`、`cocs/gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md`、`cocs/gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md`、`cocs/downloader-tasks/DOWNLOADER_FLOW.md`、`cocs/crawler/METADATA_MIGRATION.md`、`apps/docs/src/content/docs/reference/mcp.md:391`、`apps/docs/src/content/docs/dev/v8-api.mdx:272` | 描述了「image-changed + images-change 成对」 | 需同步。 |
 
 ---
-
-## 疑点（留给用户判断）
-
-- **Q1 单图 / 批量边界不稳定**：
-  - S2 / S11 只挂一张图，但按哈希共享会连带同哈希的 0..N 张；S11 从用户视角是「看一张图」。
-  - S21 / S22 是批量命令，但上下文菜单隐藏单张最常见；S3 / S16–S20 恒为单张；S10 / S12 / S13 恒为批量。
-  - 是按「调用签名能否多张」归类（本文做法），还是按「这次实际几张」在运行时选事件？
-- **Q2 `delete_task` / `clear_finished_tasks` 的空 `imageIds` change 给谁用**：images 表没变。现在的实际受众是任务详情网格（`task.ts:34-38` 的 `taskIds` 过滤）和 Windows 虚拟盘任务目录（`vd_listener.rs:42-49`）。另外 gallery / album / facet / 预览因 `!!reason` 也会跟着刷新。改为 `tasks-change` 驱动，还是保留某种 images 级信号？
-- **Q3 删除畅游记录在 0 张图时也发空 `imageIds` 的 change**（`surf_records.rs:519` 无空保护）：S13 是否要和 Q2 一起处理？
-- **Q4「补丁里带上新的 id」指哪个 id**：有两个元数据外键——`metadataId`（插件 metadata，S3 / S12，行按 id 不可变，内容一变 id 必变）与 `imageMetadataId`（原生元数据，S2 / S10 / S11，按哈希共享）。两者现在都已作为补丁字段带新值；是否还需要别的（如旧 id，用于前端清旧缓存）？
-- **Q5 `images-added` 的载荷粒度**：只给 id，还是带每张图的 `taskId` / `surfRecordId` / `pluginId` / `crawledAt` / `mediaType`？任务网格、畅游网格和虚拟盘都依赖 task / surf 维度。另外畅游导入时 `pluginIds=[host]` 而库里 `plugin_id` 为 NULL（S1 备注），是否顺带纠正。
-- **Q6 `images-deleted` 的 id 来源**：现在发的是**请求的** id（`image_events.rs:313`），不是实际删除的；也不带 `surfRecordIds` / `pluginIds`。是否改为实际删除结果、是否补齐维度。
-- **Q7 本地文件夹哈希变化重导入（S5）**：语义上是「同一文件内容变了」，实现上是删旧行 + 插新行（新 id）。按目标语义它就是 deleted + added；前端预览/选择会丢失旧 id，这是否可接受。
-- **Q8 S1 的事件顺序**：同哈希旧图的原生元数据补丁（S2）先于新图 add 发出；新图自己的 `imageMetadataId` 没有任何补丁（N4）；画册成员事件晚于 add。新 `images-added` 是否要把新图的字段一次带全。
-- **Q9 隐藏是否算 images 字段变化（S21 / S22）**：`isHidden` 来自 `album_images`，images 行未变；`album-images-change` 已有 `add-hidden` / `hide` / `unhide` / `delete-hidden`。改语义后是否继续发 `images-change` 批量补丁，还是只留 `album-images-change` 并由前端推出 `isHidden`（类似收藏 N6 的做法）？
-- **Q10 单图 `image-changed` 不再补发 `images-change` 后的重查缺口**：`displayName`（S16）、`lastSetWallpaperAt`（S17–S20）、`metadataId`（S3，影响插件 metadata 搜索）、`surfRecordId`（S13）、`imageMetadataId`（S2 / S11，影响 `search/native-metadata`）都可能影响排序或过滤结果集。现在靠成对的 `images-change` 让网格对账；改后单图变化要由前端自己按字段判断是否重查，还是这些场景仍走批量 `images-change`？
-- **Q11 S12 的载荷体量**：插件 metadata 迁移可能一次改该插件全部图片，现在 `image-changed` 按 metadataId 分组压缩，`images-change` 带全量 `imageIds`。改成「每张图一条补丁」后体量可能很大，是否需要保留分组形式或分批发送。
-- **Q12 S10 整理在取消时的补发**（`organize.rs:712/786/898`）与每批末尾（`:979`）各发一次，一次整理会发多条批量事件；是否需要合并。
-- **Q13 Web SSE 不做 CDN 路径改写**：补丁里的 `thumbnailPath` / `compatiblePath` 在 Web release 下是服务器本地路径（现状已如此，新载荷会延续）。
-- **Q14 `pluginIds` 去留**：后端多处费力组装（S1 / S3 / S4 / S12 / S18–S20），但前端与后端均无消费者。
-- **Q15 虚拟盘监听只在 Windows 启用**（`core_init.rs:113`）：macOS / Linux 的 FUSE 挂载没有对应的事件监听。改语义时是否一并考虑。
-
----
 ---
 
 # 画册成员事件发送场景清单（album-images-change 走查）

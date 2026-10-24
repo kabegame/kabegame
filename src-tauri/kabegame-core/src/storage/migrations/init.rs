@@ -140,8 +140,8 @@ CREATE UNIQUE INDEX idx_albums_sync_folder
 
 -- ───────────── album_images ─────────────
 CREATE TABLE album_images (
-    album_id TEXT    NOT NULL,
-    image_id INTEGER NOT NULL,
+    album_id TEXT    NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
     "order"  INTEGER,
     PRIMARY KEY (album_id, image_id)
 );

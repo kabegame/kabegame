@@ -371,7 +371,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 **效果**：调用 `Storage::add_images_to_album`，若提供了 `image_orders` 则再调 `update_album_images_order`。响应文本形如 `"Added X/Y images to album 'id'."`。
 
-**副作用**：画册图片列表变化会通过 `album-images-change` 事件广播；已打开的画册画廊视图会实时刷新。
+**副作用**：画册新增成员通过 `album-images-added` 广播，移出成员通过 `album-images-deleted` 广播，`album-images-change` 仅表示实际命中的成员排序变化（载荷含 seq、albumId、ancestorPath、imageIds）；已打开的画册画廊视图会实时刷新。
 
 ### `rename_image`
 

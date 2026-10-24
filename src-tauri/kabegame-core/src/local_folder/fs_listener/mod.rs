@@ -217,9 +217,11 @@ async fn run_listener(
     let mut first_at: Option<Instant> = None;
     let mut last_at: Option<Instant> = None;
     let mut album_events = EventBroadcaster::global().subscribe_filtered_stream(&[
-        AppEventKind::AlbumAdded,
+        AppEventKind::AlbumsAdded,
         AppEventKind::AlbumChanged,
-        AppEventKind::AlbumDeleted,
+        AppEventKind::AlbumsChange,
+        AppEventKind::AlbumMoved,
+        AppEventKind::AlbumsDeleted,
     ]);
 
     loop {
@@ -386,5 +388,8 @@ fn persist_folder_status(album_id: &str, status: &crate::local_folder::FolderSta
         eprintln!("[local_folder.fs_listener] persist status for {album_id} failed: {err}");
         return;
     }
-    GlobalEmitter::global().emit_album_changed(album_id, json!({ "folderStatus": status_json }));
+    GlobalEmitter::global().emit_album_patches(vec![crate::emitter::AlbumFieldPatch::new(
+        album_id,
+        json!({ "folderStatus": status_json }),
+    )]);
 }

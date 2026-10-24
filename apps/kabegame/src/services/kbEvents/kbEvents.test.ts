@@ -6,7 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { batchWindow } from "./batchWindow";
 import { kbEvent$ } from "./eventSource";
 import { imagePatches$ } from "./imagePatches";
-import { on, albumEventPaths, albumEventAffectsDir, type EventTrigger } from "./events";
+import {
+  on,
+  albumEventPaths,
+  albumEventAffectsDir,
+  albumPatches,
+  albumChangeKinds,
+  pathHasAlbum,
+  moveAlbumPath,
+  type EventTrigger,
+} from "./events";
 import {
   lookPathql,
   pathqlAllKey,
@@ -120,8 +129,8 @@ describe("imagePatches$", () => {
       listeners.get("image-changed")!({ payload: { seq: 1, patch } });
     const imagesChanged = (patches: ({ id: string } & Record<string, unknown>)[]) =>
       listeners.get("images-change")!({ payload: { seq: 1, patches } });
-    const albumChanged = (albumId: string, reason: string, imageIds: string[]) =>
-      listeners.get("album-images-change")!({ payload: { seq: 1, albumIds: [albumId], reason, imageIds } });
+    const albumChanged = (albumId: string, name: string, imageIds: string[]) =>
+      listeners.get(name)?.({ payload: { seq: 1, albumId, imageIds } });
 
     // 空闲时首个事件立即成批
     imageChanged({ id: "a", width: 1 });
@@ -134,19 +143,19 @@ describe("imagePatches$", () => {
     ]);
     imageChanged({ id: "a", width: 10 });
     // 收藏流独立开窗：首个收藏事件立即发出
-    albumChanged("favorite", "add", ["a"]);
+    albumChanged("favorite", "album-images-added", ["a"]);
     expect(batches[1]).toEqual({ a: { favorite: true } });
-    // 非收藏画册与非成员增删的 reason 不产生补丁；同 id 按到达顺序取最后一次
-    albumChanged("other", "add", ["c"]);
-    albumChanged("favorite", "order", ["c"]);
-    albumChanged("favorite", "add-hidden", ["b"]);
-    albumChanged("favorite", "delete", ["b"]);
+    // 非收藏画册与排序事件不产生补丁；同 id 按到达顺序取最后一次
+    albumChanged("other", "album-images-added", ["c"]);
+    albumChanged("favorite", "album-images-change", ["c"]);
+    albumChanged("favorite", "album-images-added", ["b"]);
+    albumChanged("favorite", "album-images-deleted", ["b"]);
 
     vi.advanceTimersByTime(500);
     expect(batches.slice(2)).toEqual([{ a: { width: 10 }, b: { width: 2 } }, { b: { favorite: false } }]);
 
     // 一串事件全部无关时不发出
-    albumChanged("other", "delete", ["a"]);
+    albumChanged("other", "album-images-deleted", ["a"]);
     vi.advanceTimersByTime(500);
     expect(batches).toHaveLength(4);
   });
@@ -159,24 +168,24 @@ describe("imagePatches$", () => {
     );
     cleanups.push(() => sub.unsubscribe());
     await flushPromises();
-    const hidden = (reason: string) =>
-      listeners.get("album-images-change")!({
+    const hidden = (name: string, imagesDeleted = false) =>
+      listeners.get(name)?.({
         payload: {
-          albumIds: ["00000000-0000-0000-0000-000000000000"],
-          reason,
+          albumId: "00000000-0000-0000-0000-000000000000",
+          imagesDeleted,
           imageIds: ["a"],
         },
       });
-    hidden("add-hidden");
+    hidden("album-images-added");
     listeners.get("image-changed")!({ payload: { patch: { id: "a", thumbnailPath: "new" } } });
-    listeners.get("album-images-change")!({ payload: { albumIds: ["favorite"], reason: "add", imageIds: ["a"] } });
+    listeners.get("album-images-added")!({ payload: { albumId: "favorite", imageIds: ["a"] } });
     vi.advanceTimersByTime(500);
     expect(batches).toEqual([{ a: { thumbnailPath: "new" } }, { a: { favorite: true } }]);
     patchHidden = true;
-    hidden("add-hidden");
+    hidden("album-images-added");
     expect(batches.at(-1)).toEqual({ a: { isHidden: true } });
     patchHidden = false;
-    hidden("delete-hidden");
+    hidden("album-images-deleted");
     vi.advanceTimersByTime(500);
     expect(batches).toHaveLength(3);
   });
@@ -188,19 +197,23 @@ describe("imagePatches$", () => {
     );
     cleanups.push(() => sub.unsubscribe());
     await flushPromises();
-    const emit = (albumId: string, reason: string) =>
-      listeners.get("album-images-change")!({
-        payload: { seq: 1, albumIds: [albumId], reason, imageIds: ["a"] },
+    const emit = (albumId: string, name: string, imagesDeleted = false) =>
+      listeners.get(name)?.({
+        payload: { seq: 1, albumId, imagesDeleted, imageIds: ["a"] },
       });
-    emit("other", "add-hidden");
-    emit("00000000-0000-0000-0000-000000000000", "hide");
+    emit("other", "album-images-added");
+    emit("00000000-0000-0000-0000-000000000000", "album-images-change");
     expect(batches).toEqual([]);
-    emit("00000000-0000-0000-0000-000000000000", "add-hidden");
+    emit("00000000-0000-0000-0000-000000000000", "album-images-added");
     vi.advanceTimersByTime(500);
     expect(batches).toEqual([{ a: { isHidden: true } }]);
-    emit("00000000-0000-0000-0000-000000000000", "delete-hidden");
+    emit("00000000-0000-0000-0000-000000000000", "album-images-deleted");
     vi.advanceTimersByTime(500);
     expect(batches.at(-1)).toEqual({ a: { isHidden: false } });
+    const beforeDelete = batches.length;
+    emit("00000000-0000-0000-0000-000000000000", "album-images-deleted", true);
+    vi.advanceTimersByTime(500);
+    expect(batches).toHaveLength(beforeDelete);
   });
 });
 
@@ -637,34 +650,44 @@ describe("usePathqlLookMany", () => {
   });
 });
 
-describe("画册单事件路径相关性", () => {
-  it("新增 / 删除 / 成员事件从顶层读路径，改名 / 改 key 从 changes 读路径", () => {
-    for (const name of ["album-added", "album-deleted", "album-images-change"]) {
-      expect(albumEventPaths(name, { ancestorPath: "/a/b/" })).toEqual(["/a/b/"]);
+describe("画册事件路径与字段协议", () => {
+  it("增删展开根路径，移动同时匹配两侧，补丁不参与位置判断", () => {
+    for (const name of ["albums-added", "albums-deleted"]) {
+      expect(albumEventPaths(name, { albums: [{ ancestorPath: "/a/b/" }, { ancestorPath: "/c/" }] })).toEqual([
+        "/a/b/",
+        "/c/",
+      ]);
     }
-    expect(albumEventPaths("album-changed", { changes: { name: "新名称", ancestorPath: "/a/b/" } })).toEqual(["/a/b/"]);
-    expect(albumEventPaths("album-changed", { changes: { labelKey: "key", ancestorPath: "/a/b/" } })).toEqual([
-      "/a/b/",
-    ]);
+    expect(albumEventPaths("album-images-added", { ancestorPath: "/a/b/" })).toEqual(["/a/b/"]);
+    expect(albumEventPaths("album-changed", { patch: { id: "a", name: "新名" } })).toEqual([]);
+    const moved = { seq: 1, id: "item", oldAncestorPath: "/old/item/", newAncestorPath: "/new/item/" };
+    expect(albumEventPaths("album-moved", moved)).toEqual(["/old/item/", "/new/item/"]);
+    for (const parent of ["/old/", "/new/"]) expect(albumEventAffectsDir("album-moved", moved, parent)).toBe(true);
+    expect(albumEventAffectsDir("album-moved", moved, "/other/")).toBe(false);
+    expect(albumEventAffectsDir("albums-added", { albums: [{ ancestorPath: "/a/b/" }] }, "/a/b/")).toBe(false);
+    expect(albumEventPaths("album-moved", { newAncestorPath: "/a/" })).toBe("wildcard");
   });
-
-  it("移动同时匹配新旧祖先，严格后代不包含自身和兄弟", () => {
-    const payload = { changes: { parentId: "new", oldAncestorPath: "/old/item/", ancestorPath: "/new/item/" } };
-    expect(albumEventPaths("album-changed", payload)).toEqual(["/new/item/", "/old/item/"]);
-    expect(albumEventAffectsDir("album-changed", payload, "/old/")).toBe(true);
-    expect(albumEventAffectsDir("album-changed", payload, "/new/")).toBe(true);
-    expect(albumEventAffectsDir("album-changed", payload, "/other/")).toBe(false);
-    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/b/c/" }, "/a/b/")).toBe(true);
-    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/b/c/" }, "/a/b/c/")).toBe(false);
-    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/b/c/" }, "/a/bb/")).toBe(false);
-    expect(albumEventAffectsDir("album-added", { ancestorPath: "/a/" }, null)).toBe(true);
+  it("单条与批量补丁展开，成员表只属于隐藏画册，路径段不能误匹配", () => {
+    const patch = { id: "a", name: "新名" };
+    expect(albumPatches({ seq: 1, patch })).toEqual([patch]);
+    expect(albumPatches({ seq: 1, patches: [patch] })).toEqual([patch]);
+    expect(albumChangeKinds({ seq: 1, patches: [{ id: "a", syncMode: "none" }, patch] })).toEqual({
+      structure: true,
+      row: true,
+    });
+    expect(albumChangeKinds({ id: "a", parentId: "x" } as never).structure).toBe(false);
+    expect(pathHasAlbum("/aa/b/", "a")).toBe(false);
+    expect(pathHasAlbum("/aa/b/", "aa")).toBe(true);
   });
-
-  it("缺失路径或移动缺失旧路径时通配，兼容旧事件", () => {
-    for (const payload of [null, {}, { ancestorPath: "" }]) {
-      expect(albumEventPaths("album-deleted", payload)).toBe("wildcard");
-    }
-    expect(albumEventPaths("album-changed", { changes: { parentId: null, ancestorPath: "/a/" } })).toBe("wildcard");
-    expect(albumEventAffectsDir("album-changed", {}, "/unrelated/")).toBe(true);
+  it("连续移动改写根和子孙路径，只更新移动根的 parentId", () => {
+    const moved = { seq: 1, id: "a", oldAncestorPath: "/old/a/", newAncestorPath: "/new/a/" };
+    const child = { id: "b", ancestorPath: "/old/a/b/", parentId: "a" };
+    const root = { id: "a", ancestorPath: "/old/a/", parentId: "old" };
+    expect(moveAlbumPath(root, moved)).toMatchObject({ parentId: "new", ancestorPath: "/new/a/" });
+    const after = moveAlbumPath(child, moved);
+    expect(after).toMatchObject({ parentId: "a", ancestorPath: "/new/a/b/" });
+    expect(
+      moveAlbumPath(after, { seq: 2, id: "b", oldAncestorPath: "/new/a/b/", newAncestorPath: "/b/" }),
+    ).toMatchObject({ parentId: null, ancestorPath: "/b/" });
   });
 });

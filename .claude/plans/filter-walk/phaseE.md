@@ -1,394 +1,319 @@
-# 过滤走查 Phase E：画册方面按事件内容收紧刷新
+# 过滤走查 Phase E：画册事件协议对齐
 
-> 依赖 [phaseB.md](phaseB.md) 的 `imageViewRelevance`（`ImageViewState`、`patchTriggers`、`deletedTrigger`、`hiddenTrigger`）。
-> 与 [phaseC.md](phaseC.md)、[phaseD.md](phaseD.md) 无关，可以独立实施。
+> 场景清单见 [zoucha.md](zoucha.md)「画册成员事件发送场景清单」（M1–M25、MN1–MN8、MQ1–MQ13）。
+> 本阶段只改协议与机械适配，前端按新事件收紧刷新放在 [phaseF.md](phaseF.md)。与 phaseC / phaseD 无关。
 
 ### 总体设计思路
 
-Phase B 收紧的是图片事件（新增 / 删除 / 字段补丁）。画册方面的事件（`album-images-change` 七种 reason、`album-changed` /
-`album-added` / `album-deleted`）各观察方基本还是「画册对上就刷新」：不看 reason，也不看自己读的路径带不带 `hide/`、
-算不算子树，结果是画册页过度刷新最明显。例如隐藏一张图，后端会给它所在的每个画册发一条 `hide`；即使画册页没开 hide、
-本来只需要把卡片打灰，网格的行和总数、页头计数、侧栏画册树的计数也全都要重读一遍。重命名当前画册时，网格同样会重读，
-但网格读的 `album/<id>` 只含直接成员，跟画册名毫无关系。
+Phase A 把图片事件对齐成了三种形态：表里真正插入的行发 `images-added { seq, images }`（带完整行），真正删除发
+`images-deleted { seq, imageIds }`，字段变化按 id 合成补丁，一张图发 `image-changed { seq, patch }`，多张发
+`images-change { seq, patches }`。画册方面有两张表，事件还没对齐：
 
-本阶段沿用 Phase B 的原则：**不新增 SQL**，只在现有 `refreshOn` 上收紧，判断不了就刷新。核心是一个公共判断
-`membershipAffects(payload, hide)`：七种 reason 各自改变什么后端早已分好，观察方只要说清自己读的路径带不带 `hide/`，
-就能判断一条成员事件会不会改变自己的结果集。具体是：
+- **`albums` 表**：`album-added` 带完整行但一次一条、没有 seq；`album-changed` 是 `{ albumId, changes }` 增量，
+  批量场景（本地文件夹改链、类型转换、同步模式规整）逐条发；`album-deleted` 只发被删子树的根、没有 seq。
+  另外，各处 `album-changed` 带不带 `ancestorPath` 全看调用方，前端要么读事件里的路径，要么按通配刷新，没有利用自己手里的路径。
+- **`album_images` 表**：所有变化都挤在 `album-images-change` 里，靠七种 reason 区分，其中好几种其实不对应这张表的增删。
+  - `hide` / `unhide` 发给隐藏图片所在的其它画册，这些画册的成员行一行都没变；
+  - 删画册时，补发一条 `imageIds` 为空的 `order` 代替「成员全没了」，而且这时画册已删，路径查不到。
 
-- `add` / `delete` 是可见成员增删，一律相关；
-- `add-hidden` / `delete-hidden` 是已隐藏图片的增删，只有不带 `hide/` 的路径能看到；
-- `hide` / `unhide` 是成员没变、隐藏状态变了，只有带 `hide/` 的路径受影响；
-- `order` 不改变任何结果集，只有按画册顺序排序的行需要重读；
-- 隐藏画册本身的事件一律相关，因为读隐藏画册的路径从不带 `hide/`。
+本阶段让两张表都按「增 / 删 / 改」对齐图片事件：
 
-画册结构事件按「我读的东西依赖画册的哪部分」收紧：
+- **`albums` 表**：
+  - `albums-added { seq, albums }` 带完整行；
+  - `albums-deleted { seq, albums: [{ id, ancestorPath }] }` 只带被删的根（用户删的那几个，不展开子树）及其路径；
+  - 移动单独发 `album-moved { seq, id, oldAncestorPath, newAncestorPath }`，只带被移动的根；
+  - 其余字段变化改成 `{ id, ...字段绝对值 }` 补丁，按画册数分流成 `album-changed` / `albums-change`。补丁里**不会出现**
+    `parentId` 和 `ancestorPath`，前端处理补丁时不用考虑位置变化。
+- **`album_images` 表**：
+  - `album-images-added` 与 `album-images-deleted` 只对真实插入和删除的成员行发；
+  - `album-images-change` 只对改列（排序）发。
+  - 去掉 `reason`，不再发 `hide` / `unhide`，也不再按「图片是否已隐藏」拆两条。
 
-- **网格**：直接成员不依赖画册名、父级和类型，只有查询里开了标签搜索时，标签路径（`label_path`）变化才影响结果；
-- **页头计数**（`album-tree/<id>`，含子树）：只有子画册移入移出（`parentId`）和删除会改变它，改名不会，新建的画册也是空的；
-- **页头详情**：祖先改名会改面包屑，子孙改名不影响，只有子孙的增删和移动会改子画册数。
+隐藏和收藏不需要专门的事件，它们就是两个系统画册的成员增删。隐藏会改变图片在所有画册里的可见性，但事件**不带**
+图片所在的其它画册，也不带图片行，观察方按自己的 hide 开关处理：开了 hide 的视图收到隐藏画册的 added / deleted
+就重新查询；没开的视图结果集不变，只按 `imageIds` 给手里的图打 `isHidden` 补丁。这样后端不必为隐藏多收集成员或多读图片，
+前端也不用维护「这张图还在哪些画册里」的判断。删图同样会给隐藏画册发 deleted，用 `imagesDeleted: true` 和取消隐藏区分开。
 
 关键决策：
 
-- **不改后端事件**，所有判断都只用 payload 已有的字段（reason、albumIds、ancestorPath、changes 的键）。
-- **成员事件已覆盖删除**：画册成员被整行删除时，后端会按画册发 `delete` / `delete-hidden`。所以画册页总数不必再对任何
-  `images-deleted` 刷新，让 adapter 声明这一点即可。
-- **标签搜索时宁愿多刷**：成员事件的 payload 不带画册类型，分不出是不是标签画册。所以查询用了标签搜索时，任何成员增删
-  都刷新。这也顺便补上了现在漏掉的刷新：画廊和画册页在标签搜索下给图挂标签时，现在都不刷新。
+- **移动单独成事件，带新旧两条路径**：位置变化只经 `album-moved` 送达，补丁只发其它真正变化的字段，不为定位补路径。
+  `ancestorPath` 形如 `/根/…/自身/`，含每一级祖先的 id，所以有了新旧两条路径，前端可以算出全部影响：
+  - 新旧父目录各是哪一个；
+  - 哪些观察方在旧子树或新子树下（前缀比较，不要求被移动的画册已加载）；
+  - 已加载子孙的路径怎么改写（把 `oldAncestorPath` 前缀换成 `newAncestorPath`）。
+  只带根就够，子孙的新路径都由根的前缀替换得到。
+- **删除同样带路径**：`albums-deleted` 给每个被删的根带上它的 `ancestorPath`，与移动对称。有了路径，前端不需要被删的画册
+  已经加载，按前缀就能算出：
+  - 被删的是不是我或我的祖先（被删路径是我路径的前缀）；
+  - 是不是我的子孙（被删路径以我的路径开头）；
+  - 画册树哪些目录与祖先计数受影响。
+  这个路径在 `delete_album` 删除前读出的根画册行里就有，不加查询。
+- **删画册只带根，不再补发成员事件**：子孙的路径都以根路径开头，前端按前缀就能认出整棵子树，展开子树不增加信息。
+  「这些画册的成员全没了」由 `albums-deleted` 表达。成员 id 要多查一次整棵子树，可能很大，所以不填。
+- **凡是会改变位置或计数的事件都带路径，只有补丁不带**：新增、删除、移动、成员事件都可能发生在没加载的画册上，却会改变
+  已显示祖先的计数，所以都带 `ancestorPath`。成员事件随下载高频发生，涉及的画册常常是深层的标签叶子，带上路径尤其重要。
+  补丁改的名称和行字段只显示在已加载的行上，前端用持有路径定位就够了。
+- **成员事件只带单个 `albumId`**：后端本来就按画册拆分，去掉恒为单元素的 `albumIds` 数组。
 
 ### 现状锚点
 
-**a. 画册页网格**（`components/imageGrid/adapters/album.ts:84`）
-```ts
-refreshOn: [
-  ...patchTriggers(view),
-  // 现状：本画册的任何成员事件都刷新，不看 reason（hide / unhide / add-hidden / order 都会触发行与总数重读）
-  on("album-images-change", (payload) => !!params.albumId() && payload.albumIds.includes(params.albumId())),
-  // 现状：本画册改名 / 移动 / 改 labelKey / 改 syncMode 都重读网格；网格读 album/<id>，只含直接成员
-  on("album-changed", (payload) => {
-    const id = params.albumId();
-    if (!id || payload.albumId !== id) return false;
-    const kinds = albumChangeKinds(payload);
-    return kinds.structure || kinds.row;
-  }),
-],
+**a. 画册表事件**（`kabegame-core/src/emitter.rs:386-422`）
+```rust
+// 现状：一次一个画册，没有 seq，没有批量
+pub fn emit_album_added(&self, album: &crate::storage::Album) { /* AppEvent::AlbumAdded { id, name, createdAt, parentId, albumType, … } */ }
+// 现状：{ seq, albumId, changes }，changes 是增量 JSON，有没有 ancestorPath 由调用方决定
+pub fn emit_album_changed(&self, album_id: &str, changes: serde_json::Value) { /* … */ }
+// 现状：只发被删的根，没有 seq
+pub fn emit_album_deleted(&self, album: &crate::storage::Album) { /* AppEvent::AlbumDeleted { albumId, parentId, ancestorPath } */ }
 ```
 
-**b. ImageGrid 总数的删除触发**（`components/ImageGrid.vue:431`）
-```ts
-const rowsRefreshOn = [...adapter.refreshOn, deletedTrigger(() => images.value.map((image) => image.id))];
-const countRefreshOn = [
-  ...adapter.refreshOn,
-  deletedTrigger(), // 现状：任何删除都重读总数；画册页的成员删除另有 album-images-change，这里对画册页是多余的
-  on("images-added", () => !!currentUnfilteredCountPath()),
-];
+**b. 带不带路径全看调用方的 album-changed**（改后统一只发变化字段，不再补路径）
+```rust
+// local_folder/sync.rs:73、local_folder/fs_listener/mod.rs:389 —— 现状：同步期间频繁发，没有 ancestorPath
+GlobalEmitter::global().emit_album_changed(album_id, json!({ "folderStatus": status_json }));
+// storage/albums.rs:964 —— 现状：收藏画册改名（语言切换），没有 ancestorPath
+emitter.emit_album_changed(FAVORITE_ALBUM_ID, json!({ "name": name_trimmed }));
+// storage/albums.rs:1704-1720 —— 现状：本地文件夹转普通画册，逐条发，没有 ancestorPath
+for id in &converted_ids { emitter.emit_album_changed(id, json!({ "albumType": "normal", "syncFolder": null, "folderStatus": null, "syncMode": "none" })); }
+// storage/albums.rs:1830-1837 —— 现状：改链改了 parentId，却没有 ancestorPath / oldAncestorPath，前端只能通配
+emitter.emit_album_changed(&change.id, json!({ "parentId": change.parent_id, "name": name }));
 ```
 
-**c. 画册页头**（`composables/useAlbumQuery.ts:19`）
-```ts
-// 现状：sameChain 同时匹配祖先（path.startsWith(p)）与子孙（p.startsWith(path)）
-const sameChain = (name, payload, id) => { /* ... */ return paths === "wildcard" || paths.some((p) => p.startsWith(path) || path.startsWith(p)); };
-
-const detail = usePathqlLookAll({
-  // albums://id_、ancestors_、subtree_（子画册数）
-  refreshOn: [
-    // 现状：子孙改名也重读详情
-    on("album-changed", (p) => p.albumId === albumId.value || (albumChangeKinds(p).structure && sameChain("album-changed", p, p.albumId))),
-    on("album-added", (p) => sameChain("album-added", p, p.id)),
-    on("album-deleted", (p) => sameChain("album-deleted", p, p.albumId)),
-  ],
-});
-const count = usePathqlLookAll({
-  // images://gallery/album-tree/<id>：含子树，不带 hide/ 前缀
-  refreshOn: [
-    // 现状：不看 reason；hide / unhide / order 不改变这个计数也会重读
-    on("album-images-change", (p) => !!albumId.value && (!!p.albumIds?.includes(albumId.value) || (!!self() && !!p.ancestorPath?.startsWith(self()!)))),
-    // 现状：新建子画册（空的）也重读
-    on("album-added", (p) => affectsCount("album-added", p)),
-    on("album-deleted", (p) => affectsCount("album-deleted", p)),
-    // 现状：子画册改名也重读
-    on("album-changed", (p) => albumChangeKinds(p).structure && affectsCount("album-changed", p)),
-  ],
-});
-```
-
-**d. 画册树**（`components/albums/AlbumTreeView.vue:177`）
-```ts
-const prefix = computed(() => (route.hide ? "hide/" : "")); // extra 的计数路径带这个前缀，隐藏画册那一行除外
-refreshOn(branch, part) {
-  const path = () => (branch.kind === "section" ? null : /* 父节点 ancestorPath */);
-  const structure = [
-    on("album-added", (payload) => albumEventAffectsDir("album-added", payload, path())),
-    on("album-deleted", (payload) => albumEventAffectsDir("album-deleted", payload, path())),
-    // 现状：extra（图片计数）也对改名刷新
-    on("album-changed", (payload) => { /* (kinds.structure || (part === "page" && kinds.row)) && affectsDir */ }),
-  ];
-  return part === "page"
-    ? structure
-    : [
-        ...structure,
-        // 现状：分区根 path() 为 null，任何画册的任何成员事件都重读每个分区的计数（含收藏 / 隐藏那一区），也不看 reason
-        on("album-images-change", (payload) => albumEventAffectsDir("album-images-change", payload, path())),
-      ];
-},
-```
-
-**e. 画廊**（`components/imageGrid/adapters/gallery.ts:48`）
-```ts
-on("album-images-change", () => routeStore.effectiveNoAlbum), // 现状：无画册时不看 reason；标签搜索时挂标签不刷新（漏）
-on("album-changed", (payload) => {
-  const kinds = albumChangeKinds(payload);
-  return kinds.structure || (routeStore.effectiveNoAlbum && kinds.row); // 现状：任何画册改名都重读画廊
-}),
-// 现状：不听 album-deleted；无画册时靠删画册后补发的空 order 事件刷新，标签搜索时删标签不刷新（漏）
-```
-
-**f. 画廊侧栏**（`components/galleryFilterTree/facetTreeSource.ts:120`）
-```ts
-function hasAlbumSensitiveContext() {
-  const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
-  // 现状：hide 也算画册敏感；hide 开启时往普通画册加图也重读侧栏，而隐藏画册成员已由 hiddenTrigger 负责
-  return /(^|\/)(?:album|album-tree|no-album|hide)(?:\/|$)/.test(path);
+**c. 删除画册**（`storage/albums.rs:866-897`）
+```rust
+let subtree_ids = self.collect_subtree_album_ids_bfs(album_id)?; // 现状：BFS 拿到了各子画册的 ancestor_path，只留下了 id
+// … 一条递归 CTE 删光子树成员，DELETE albums（子画册 ON DELETE CASCADE）
+emitter.emit_album_deleted(&deleted_album);                     // 现状：只发根
+for id in subtree_ids {
+    emit_album_images_order_changed(&id, &[]);                  // 现状：空 order 代替「成员全没了」；画册已删，ancestorPath 退回 "/<id>/"
 }
 ```
 
-**g. 后端成员事件的 reason**（`kabegame-core/src/storage/image_events.rs:152`）
+**d. 成员事件**（`storage/image_events.rs:65-241`）
 ```rust
-// 加入隐藏画册：隐藏画册发 add-hidden，图片所在的其它每个画册各发 hide
-// 加入普通画册：可见图发 add，已隐藏的图发 add-hidden；移除同理（delete / delete-hidden / unhide）
-// 整行删除走 ImagesDeleted 上下文：每个画册发 delete / delete-hidden
-// 排序：order（删画册时还会给子树每个画册补发一条 imageIds 为空的 order）
+// 现状：一个函数发七种 reason；albumIds 恒为单元素
+fn emit_album_images_change(reason: &str, album_id: &str, image_ids: &[String], ancestor_paths: &HashMap<String, String>)
+    -> Option<AlbumImagesChangePayload>;
+// 加入隐藏画册：HIDDEN 发 add-hidden，图片所在的每个其它画册（含收藏）各发 hide —— 后者的成员行没变
+// 加入普通画册：按写后是否在 HIDDEN 拆成 add / add-hidden 两条
+// 移出隐藏画册（AlbumMutation）：HIDDEN 发 delete-hidden，其它每个画册各发 unhide
+// 整行删图（ImagesDeleted）：每个原属画册发 delete / delete-hidden，HIDDEN 也是 delete-hidden —— 与取消隐藏分不开
 ```
 
-### 点 1 — 公共判断（`services/kbEvents/events.ts`、`imageViewRelevance.ts`）
+**e. 不发成员事件的写入口**（zoucha.md MN1–MN5）
+```rust
+// kabegame/src/ipc/handlers/storage/albums.rs:71-121 —— 现状：直接调 Storage，不发事件、不校验可写
+StorageAddImagesToAlbum / StorageRemoveImagesFromAlbum / StorageUpdateAlbumImagesOrder
+// kabegame/src/mcp_server.rs:1117-1148、:1186-1195 —— 现状：改序不发事件
+```
+
+**f. 前端事件类型**（`apps/kabegame/src/services/kbEvents/events.ts:16-56`）
+```ts
+export type AlbumImagesChangePayload = {
+  seq: number;
+  reason: "add" | "add-hidden" | "delete" | "delete-hidden" | "hide" | "unhide" | "order";
+  albumIds: string[];
+  imageIds: string[];
+  ancestorPath: string;
+};
+export type AlbumChangedPayload = { seq?: number; albumId?: string; changes?: Record<string, unknown> };
+"album-added": { id?: string; ancestorPath?: string };
+"album-deleted": { albumId?: string; ancestorPath?: string };
+```
+
+### 点 1 — `albums` 表事件（`ipc/events.rs`、`emitter.rs`、`storage/albums.rs`、`local_folder/*`）
 
 - **新增**
-```ts
-// events.ts
-/** 一条成员事件会不会改变某条路径的结果集；hide 指该路径是否带 `hide/` 前缀。order 不改结果集，由需要的观察方单独判断。 */
-export function membershipAffects(payload: AlbumImagesChangePayload, hide: boolean): boolean {
-  if (isHiddenAlbumChange(payload)) return true; // 读隐藏画册的路径从不带 hide/
-  switch (payload.reason) {
-    case "add":
-    case "delete":
-      return true;
-    case "add-hidden":
-    case "delete-hidden":
-      return !hide;
-    case "hide":
-    case "unhide":
-      return hide;
-    case "order":
-      return false;
-    default:
-      return true; // 未知 reason 保守刷新
-  }
+```rust
+// ipc/events.rs
+AlbumsAdded { seq: u64, albums: Vec<Album> },
+AlbumsDeleted { seq: u64, albums: Vec<DeletedAlbum> },          // 只含被删的根；DeletedAlbum { id, ancestorPath }
+AlbumMoved { seq: u64, id: String, old_ancestor_path: String, new_ancestor_path: String }, // 只含被移动的根
+AlbumChanged { seq: u64, patch: AlbumFieldPatch },              // 修改：原 { albumId, changes }
+AlbumsChange { seq: u64, patches: Vec<AlbumFieldPatch> },
+```
+```rust
+// emitter.rs
+/// 画册字段绝对值，只含真正变化的字段；永远不含 parentId / ancestorPath（位置变化走 album-moved）
+pub struct AlbumFieldPatch { pub id: String, pub fields: serde_json::Map<String, serde_json::Value> }
+
+pub fn emit_albums_added(&self, albums: &[Album]);
+pub fn emit_albums_deleted(&self, albums: &[DeletedAlbum]);
+pub fn emit_album_moved(&self, id: &str, old_ancestor_path: &str, new_ancestor_path: &str);
+/// 同 emit_image_patches：按 id 合并、空补丁不发、按画册数分流 album-changed / albums-change
+pub fn emit_album_patches(&self, patches: Vec<AlbumFieldPatch>);
+```
+- **修改**
+  - **新增入口**：
+    - `add_album`、`add_label_album`：`emit_albums_added(&[album])`。
+    - `apply_label_assignments`（`:792-796`）与 `add_local_folder_albums_tx`（`:1932-1936`）：把本次新建的画册合成一条 `albums-added`。
+  - **删除**：`delete_album` 发 `albums-deleted { albums: [{ id, ancestorPath }] }`，路径取删除前读出的 `deleted_album`。
+  - **移动**：凡是改变 `parent_id` 的写入都发 `album-moved`，不再发带 `parentId` 的补丁。
+    - `move_album`（`:1990-2090`）：现在已经读了新旧路径，改成 `emit_album_moved(album_id, &old, &new)`。
+    - `rechain_local_folder_albums`（`:1731-1840`）：每个改了父级的画册各发一条 `album-moved`。旧路径取自改链前的行，
+      新路径取自事务里已经重算的值，不新增查询。同时改了名的，另发 `{ id, name }` 补丁。
+      如果一次改链里同时移动了祖先和它的子孙，按祖先在前的顺序发，子孙的 `oldAncestorPath` 取祖先移动之后的路径，
+      保证前端按顺序改写前缀时每一步都能对上。
+    - `convert_local_folder_album_to_normal`（`:1600-1729`）里被提升到顶层的画册（`lifted`）同样发 `album-moved`。
+  - **其余字段变化**：改名、改 labelKey、改同步模式、改 folderStatus、类型转换、收藏画册改名一律走 `emit_album_patches`，
+    补丁只含变化的字段，不为定位附带 `ancestorPath`。类型转换、同步模式规整这两种批量场景，一次调用只发一条 `albums-change`。
+```rust
+// storage/albums.rs —— 删除画册
+let subtree_ids = self.collect_subtree_album_ids_bfs(album_id)?; // 不变：只用于删除，不再用于发事件
+// … 删除逻辑不变
+if let Some(emitter) = GlobalEmitter::try_global() {
+    emitter.emit_albums_deleted(&[DeletedAlbum {                 // 修改：只带被删的根及其路径
+        id: deleted_album.id.clone(),
+        ancestor_path: deleted_album.ancestor_path.clone(),
+    }]);
+    // 删除：逐个子画册补发空 order
 }
 ```
-```ts
-// imageViewRelevance.ts
-/**
- * 查询用了标签搜索时，标签路径与标签成员都会改变结果。成员事件分不出是不是标签画册，所以任何成员增删都算；
- * 删画册会连带删掉成员，也要刷新。
- */
-export function labelSearchTriggers(view: () => ImageViewState): EventTrigger[] {
-  const uses = () => queryUsesSearchMode(view().query, "label");
-  return [
-    on("album-images-change", (payload) => uses() && membershipAffects(payload, view().hide)),
-    on("album-changed", (payload) => uses() && albumChangeKinds(payload).structure),
-    on("album-deleted", () => uses()),
-  ];
+- **删除**
+  - `emit_album_added`、`emit_album_changed`、`emit_album_deleted`；`AppEvent::AlbumAdded` / `AlbumDeleted`。
+
+### 点 2 — `album_images` 表事件（`ipc/events.rs`、`storage/image_events.rs`、`storage/images.rs`）
+
+- **新增**
+```rust
+// ipc/events.rs —— 三种事件共用一个载荷，事件名区分增 / 删 / 改
+AlbumImagesAdded { seq: u64, #[serde(flatten)] body: AlbumImagesPayload },
+AlbumImagesDeleted { seq: u64, #[serde(flatten)] body: AlbumImagesPayload },
+AlbumImagesChange { seq: u64, #[serde(flatten)] body: AlbumImagesPayload },   // 修改：只剩排序
+
+pub struct AlbumImagesPayload {
+    pub album_id: String,
+    pub ancestor_path: String,
+    pub image_ids: Vec<String>,
+    /// 整行删图造成的成员删除；隐藏画册的这类删除不是取消隐藏
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub images_deleted: bool,
 }
 ```
 - **修改**
-  - `albumChangeKinds` 多返回 `moved`（changes 含 `parentId`），供只关心移动的计数观察方使用。
-```ts
-export function albumChangeKinds(payload: AlbumChangedPayload): { structure: boolean; row: boolean; moved: boolean } {
-  const changes = payload.changes ?? {};
-  const has = (field: string) => Object.prototype.hasOwnProperty.call(changes, field);
-  return { structure: ALBUM_STRUCTURE_FIELDS.some(has), row: ALBUM_ROW_FIELDS.some(has), moved: has("parentId") }; // 修改：新增 moved
+```rust
+// storage/image_events.rs
+pub fn emit_membership_added(album_id: &str, changed: &[String]) -> Result<(), String> {
+    if changed.is_empty() { return Ok(()); }
+    // 修改：只取本画册的路径（主键查一次），不再为拆分收集图片的全部成员；不给其它画册发 hide
+    emit_album_images("added", membership_payload(album_id, changed, album_ancestor_path(album_id)));
+    Ok(())
 }
-```
-  - `index.ts` 导出 `membershipAffects`、`labelSearchTriggers`。
 
-### 点 2 — 画册页网格（`adapters/album.ts`、`imageGrid/types.ts`、`ImageGrid.vue`）
+/// 移出画册（含取消隐藏）；修改：去掉 pairs_before / ancestor_paths / context 参数，不再发 unhide
+pub fn emit_membership_removed(album_id: &str, changed: &[String]) {
+    if changed.is_empty() { return; }
+    emit_album_images("deleted", membership_payload(album_id, changed, album_ancestor_path(album_id)));
+}
+
+// begin_delete_images_with_events：按删前成员逐画册发 deleted，复用删前已收集的路径，带 imagesDeleted: true
+
+/// 排序：只带 UPDATE 实际命中的 id（修改：原为请求里的全部 id）
+pub fn emit_album_images_order_changed(album_id: &str, image_ids: &[String]);
+```
+  - `toggle_image_favorite_with_event`、`remove_images_from_album_with_event`、本地文件夹同步移出不再预先收集写前成员。
+  - `delete_album` 不再调 `emit_album_images_order_changed`（见点 1）。
+- **删除**
+  - `reason`、`split_by_hidden`、`hidden_image_ids` 与七种 reason 的拆分；`hide` / `unhide` 两条派生事件；`MembershipRemovalContext`。
+  - 命令返回值里的 `albumChanges`（`commands/album.rs:150/169`、`commands/image.rs:170/177`、`AddToAlbumResult.album_changes`），前端不消费。
+
+### 点 3 — 补齐不发事件的写入口（MN1–MN5）
 
 - **修改**
-```ts
-// album.ts
-// 新增：成员判断用实际路径的 hide；隐藏画册页忽略 hide（ignoreHide），viewState 保持原值，避免影响 patchHidden
-const pathHidesHidden = () => routeStore.hide && params.albumId() !== HIDDEN_ALBUM_ID;
-refreshOn: [
-  ...patchTriggers(view),
-  // 修改：本画册的成员事件按 reason 判断；hide 关闭时 hide / unhide 只由 imagePatches$ 打灰，不刷新
-  on("album-images-change", (payload) =>
-    !!params.albumId() && payload.albumIds.includes(params.albumId()) && membershipAffects(payload, pathHidesHidden())),
-  // 新增：order 只在按画册顺序排序时重读（总数也会跟着读一次，换来不改 ImageGrid 的触发拆分）
-  on("album-images-change", (payload) =>
-    payload.reason === "order" && payload.albumIds.includes(params.albumId()) && routeStore.sort.field === "by-album-order"),
-  // 新增：标签搜索时跟随标签结构与成员
-  ...labelSearchTriggers(view),
-  // 删除：本画册的 album-changed 触发（直接成员不依赖画册名 / 父级 / labelKey / syncMode；画册行由页头观察）
-],
-// 新增：画册成员的整行删除都会到达本画册的 delete / delete-hidden，总数不再听 images-deleted
-deletesViaMembership: true,
-```
-```ts
-// types.ts
-export interface GridAdapter {
-  // ...
-  /** 新增：成员删除都经 album-images-change 到达；ImageGrid 的总数不再追加任何删除都刷新的 deletedTrigger() */
-  deletesViaMembership?: boolean;
-}
-```
-```ts
-// ImageGrid.vue
-const countRefreshOn = [
-  ...adapter.refreshOn,
-  ...(adapter.deletesViaMembership ? [] : [deletedTrigger()]), // 修改
-  on("images-added", () => !!currentUnfilteredCountPath()),
-];
-```
-    > 说明：行的 `deletedTrigger(heldIds)` 保留，命中时与成员事件落在同一个 500ms 窗口，不会多读。
+  - IPC 的 `StorageAddImagesToAlbum` / `StorageRemoveImagesFromAlbum` / `StorageUpdateAlbumImagesOrder`（`ipc/handlers/storage/albums.rs:71-121`）
+    改为调 core 命令（`commands/album.rs`），这样会校验画册可写，并照常发事件。
+  - MCP `set_album_images_order` 与 `add_images_to_album` 的 `image_orders` 改序后，各发一条 `album-images-change`。
+  - IPC `StorageDeleteAlbum` 改走 `commands::album::delete_album`，补上轮播画册清空和虚拟盘 `bump_albums`。
 
-### 点 3 — 画册页头（`composables/useAlbumQuery.ts`）
+### 点 4 — 事件注册与非前端订阅方
 
 - **修改**
+  - `ipc/events.rs` 的 `app_event_kinds!` 与名称映射（`:68-166`、`:257-266`、`:484`）登记：
+    `albums-added`、`albums-deleted`、`album-moved`、`album-changed`、`albums-change`、`album-images-added`、`album-images-deleted`、`album-images-change`。
+  - **虚拟盘监听**（`kabegame/src/vd_listener.rs`）：
+    - 画册表的五种事件 → `bump_albums()`；
+    - 成员事件 → 通知 `albumId` 的目录；隐藏画册事件整体 `bump_albums()`，因为隐藏图在每个画册目录里都是隐藏文件，事件又不带它们在哪些画册。
+  - **VS Code 扩展**（`/Users/didi/Code/vscode-kabegame-background-cover/src/KabegameIpcClient.ts:69-77`、`:339-345`）：
+    按新事件名订阅，并补订 Phase A 的 `images-added` / `images-deleted` / `image-changed`。
+
+### 点 5 — 前端机械适配（行为与现状等价，不做收紧）
+
+- **修改**
+  - **类型**（`events.ts`）：
 ```ts
-// 新增：按方向区分祖先（含自身）与严格子孙
-const relation = (name: string, payload: unknown): { ancestor: boolean; descendant: boolean } => {
-  const path = self();
-  const paths = albumEventPaths(name, payload);
-  if (!path || paths === "wildcard") return { ancestor: true, descendant: true };
-  return {
-    ancestor: paths.some((p) => path.startsWith(p)),
-    descendant: paths.some((p) => p !== path && p.startsWith(path)),
-  };
+export type AlbumImagesPayload = {
+  seq: number;
+  albumId: string;
+  ancestorPath: string;
+  imageIds: string[];
+  imagesDeleted?: boolean; // 删图造成
 };
-
-const detail = usePathqlLookAll({
-  refreshOn: [
-    on("album-changed", (p) => {
-      if (p.albumId === albumId.value) return true;
-      const kinds = albumChangeKinds(p);
-      const r = relation("album-changed", p);
-      // 修改：祖先的结构变化改面包屑；子孙只有移动会改子画册数
-      return (r.ancestor && kinds.structure) || (r.descendant && kinds.moved);
-    }),
-    on("album-added", (p) => relation("album-added", p).descendant), // 修改：新画册只可能是子孙
-    on("album-deleted", (p) => sameChain("album-deleted", p, p.albumId)), // 不变：删自身 / 祖先要回落，删子孙改子画册数
-  ],
-});
-const count = usePathqlLookAll({
-  // images://gallery/album-tree/<id>：不带 hide/ 前缀
-  refreshOn: [
-    on("album-images-change", (p) =>
-      !!albumId.value &&
-      (!!p.albumIds?.includes(albumId.value) || (!!self() && !!p.ancestorPath?.startsWith(self()!))) &&
-      membershipAffects(p, false)), // 修改：hide / unhide / order 不改这个计数
-    // 删除：album-added（新画册是空的；带图新建的标签画册随后会发成员事件）
-    on("album-deleted", (p) => affectsCount("album-deleted", p)),
-    on("album-changed", (p) => albumChangeKinds(p).moved && affectsCount("album-changed", p)), // 修改：只有移入移出改变子树
-  ],
-});
+export type AlbumFieldPatch = { id: string } & Partial<Album>;
+export type AlbumMovedPayload = { seq: number; id: string; oldAncestorPath: string; newAncestorPath: string };
+// KbEventMap：albums-added { seq, albums }、albums-deleted { seq, albums: { id, ancestorPath }[] }、album-moved: AlbumMovedPayload、
+// album-changed { seq, patch }、albums-change { seq, patches }、album-images-added / -deleted / -change: AlbumImagesPayload
 ```
-
-### 点 4 — 画册树（`components/albums/AlbumTreeView.vue`）
-
-- **修改**
-```ts
-refreshOn(branch, part) {
-  const path = () => /* 不变 */;
-  // 新增：分区根按事件所在根画册归属分区；根画册不在已加载节点里，说明它不在任何已显示的页上
-  const inBranch = (name: string, payload: unknown, albumIds: readonly string[] = []) => {
-    if (branch.kind !== "section") return albumEventAffectsDir(name, payload, path());
-    if (branch.sectionId === "system") return albumIds.some((id) => id === FAVORITE_ALBUM_ID || id === HIDDEN_ALBUM_ID);
-    const paths = albumEventPaths(name, payload);
-    if (paths === "wildcard") return true;
-    return paths.some((p) => {
-      const root = model.nodeByKey(p.split("/").filter(Boolean)[0] ?? "")?.element;
-      return !root || sectionOf(root) === branch.sectionId; // 找不到时保守刷新
-    });
-  };
-  const structure = [
-    on("album-added", (payload) => albumEventAffectsDir("album-added", payload, path())),
-    on("album-deleted", (payload) => albumEventAffectsDir("album-deleted", payload, path())),
-    on("album-changed", (payload) => {
-      const kinds = albumChangeKinds(payload);
-      // 修改：page 读名称与行字段，看 structure / row；extra 只读计数，只看移动
-      const relevant = part === "page" ? kinds.structure || kinds.row : kinds.moved;
-      return relevant && albumEventAffectsDir("album-changed", payload, path());
-    }),
-  ];
-  return part === "page"
-    ? structure
-    : [
-        ...structure,
-        // 修改：按 reason 与 prefix 判断，分区根再按根画册归属分区
-        on("album-images-change", (payload) =>
-          membershipAffects(payload, !!prefix.value) && inBranch("album-images-change", payload, payload.albumIds)),
-      ];
-},
-```
-    > 说明：分区根的 extra 现在要等根画册节点加载后才能判断归属。找不到根画册时保守刷新，所以首屏和翻页不会漏刷。
-
-### 点 5 — 画廊与侧栏（`adapters/gallery.ts`、`galleryFilterTree/facetTreeSource.ts`）
-
-- **修改**
-```ts
-// gallery.ts
-refreshOn: [
-  addedTrigger(view),
-  ...patchTriggers(view),
-  hiddenTrigger(view),
-  ...labelSearchTriggers(view), // 新增：补上标签搜索下挂标签 / 删标签 / 改标签路径的刷新
-  // 修改：无画册时按 reason；隐藏只看隐藏画册之外的归属，hide / unhide 由 hiddenTrigger 负责
-  on("album-images-change", (payload) => routeStore.effectiveNoAlbum && membershipAffects(payload, routeStore.hide)),
-  // 修改：只有无画册时才关心画册结构 / 行字段；任意画册改名不再重读画廊
-  on("album-changed", (payload) => {
-    const kinds = albumChangeKinds(payload);
-    return routeStore.effectiveNoAlbum && (kinds.structure || kinds.row);
-  }),
-  // 新增：删画册会让其成员变成无画册；现在靠补发的空 order 事件，order 被 membershipAffects 排除后改听 album-deleted
-  on("album-deleted", () => routeStore.effectiveNoAlbum),
-],
-```
-```ts
-// facetTreeSource.ts
-function hasAlbumSensitiveContext() {
-  const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
-  // 修改：去掉 hide（隐藏画册成员已由 hiddenTrigger 负责）；标签搜索时同样依赖画册
-  return /(^|\/)(?:album|album-tree|no-album)(?:\/|$)/.test(path) ||
-    (contextQuery.value !== null && queryUsesSearchMode(contextQuery.value, "label"));
-}
-```
-  - 侧栏的 `album-images-change` 改为 `hasAlbumSensitiveContext() && membershipAffects(payload, view().hide)`。
+  - **helper**：`albumChangeKinds` 改读补丁形态。
+    - 一条批量事件按画册展开：任一画册相关就算相关。
+    - 新增 `albumPatches(payload)`，把单条和批量统一成数组。
+    - 新增 `pathHasAlbum(ancestorPath, id)`，判断路径段里有没有某个 id，即「id 是我或我的祖先」。
+    - `albumEventPaths` / `albumEventAffectsDir`：`album-moved` 返回 `[oldAncestorPath, newAncestorPath]`；
+      `albums-added` / `albums-deleted` 返回各画册的 `ancestorPath`；补丁不再参与位置判断。
+    - `albumChangeKinds` 的 `structure` 去掉 `parentId`（补丁里不会再有），移动一律经 `album-moved`。
+  - **移动后的前缀改写**：收到 `album-moved` 时，把持有路径以 `oldAncestorPath` 开头的画册行（树节点、页头的自身与祖先链、
+    标签面板的标签）改写成 `newAncestorPath` 前缀，后续用持有路径做计算才不会用错。被移动的画册自己的 `parentId`
+    取 `newAncestorPath` 的倒数第二段（顶层为 null）。
+  - **补丁**（`imagePatches.ts`）：
+    - `reduceFavoriteChanges`：收藏画册的 added → `favorite: true`，deleted → `false`。
+    - `reduceHiddenChanges`：隐藏画册的 added → `isHidden: true`，deleted 且不是 `imagesDeleted` → `false`。
+  - **各订阅方换成新事件、保持现有刷新口径**：
+    - 原先依赖 `hide` / `unhide` 的观察方改按 hide 开关处理隐藏画册事件：画册页网格挂 `hiddenTrigger`（hide 开刷新、关时只补丁）；
+      画册树 extra 在带 `hide/` 前缀时对隐藏画册事件一律刷新；页头计数不带 `hide/`，不再响应隐藏；
+    - 原先依赖空 `order` 的观察方（画廊无画册、标签面板、画册树、侧栏）改听 `albums-deleted`；
+    - 原先只听 `album-added` / `album-deleted` 的观察方改听复数事件，按每个画册的 `ancestorPath` 判断，口径与现在相同。
+    涉及的文件：
+    `adapters/{gallery,album}.ts`、`imageViewRelevance.ts`（`hiddenTrigger`）、`useAlbumQuery.ts`、`AlbumTreeView.vue`、
+    `facetTreeSource.ts`、`ImageLabelsPanel.vue`、`ImagePreviewDialog.vue`、`HiddenCleanupControl.vue`、`useSurfImageCounts.ts`。
 
 ### 点 6 — 测试、文档
 
-- **测试**
-  - `membershipAffects`：七种 reason 在 hide 开 / 关下的取值，隐藏画册事件恒为真，未知 reason 为真。
-  - `labelSearchTriggers`：没用标签搜索时全为假，用了时三种事件各自为真。
-  - 画册 adapter（`adapters/imageEvents.test.ts`）：
-    - hide 关时 hide / unhide 不刷新，hide 开时 add-hidden 不刷新；
-    - 隐藏画册页忽略 hide；
-    - order 只在 by-album-order 下刷新；
-    - 改名不刷新。
-  - `ImageGrid.previewFollowPage.test.ts`：`deletesViaMembership` 时总数不听 `images-deleted`，行仍按包含判断。
-  - `useAlbumQuery`：子孙改名不刷新详情、子孙移动刷新详情与计数、新建子画册只刷新详情、hide 类事件不刷新计数。
-  - `AlbumTreeView`：分区根只对本分区根画册的事件刷新 extra、系统区只认收藏 / 隐藏、改名不刷新 extra。
-  - 画廊：任意画册改名不刷新、无画册时 album-deleted 刷新、标签搜索时挂标签刷新。
-  - `facetTreeSource`：只有 hide 的上下文不再响应普通画册成员。
+- **后端测试**：
+  - `image_events.rs`：加入 / 移出普通画册各发一条、隐藏 / 取消隐藏只发隐藏画册自身一条且不带成员表与图片行、
+    删图带 `imagesDeleted`、不再有 `hide` / `unhide`。
+  - `albums.rs`：
+    - 删画册只发一条、只含根及其真实路径、没有成员事件；批量新建合成一条；
+    - 移动、改链、提升到顶层都发 `album-moved`，新旧路径正确，任何补丁都不含 `parentId` / `ancestorPath`；
+    - 改链同时移动祖先与子孙时祖先在前，子孙的旧路径接得上祖先移动后的路径。
+- **前端测试**：`kbEvents.test.ts`、`imageEvents.test.ts`、`facetTreeSource.test.ts`、`HiddenCleanupControl.test.ts`、
+  `ImagePreviewDialog.events.test.ts`、`useTreeModel.test.ts`、`useSurfImageCounts.test.ts`、`useAlbumQuery.test.ts` 换成新事件构造。
 - **文档**：
-  - `cocs/gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md`：`album-images-change` 七种 reason 段补「各观察方按 reason 与 hide 前缀判断」。
-  - `cocs/gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md`：侧栏画册敏感上下文。
-  - `AGENTS.md` 与 `.cursor/rules/view-mutation.mdc` 的 ImageGrid 段：`deletesViaMembership`、成员事件按 reason 判断。
+  - `AGENTS.md` 的「图片事件协议」段增补画册两张表的事件，`.cursor/rules/view-mutation.mdc` 同步；
+  - `cocs/gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md`：「七种 reason」段改写；
+  - `cocs/downloader-tasks/DOWNLOADER_FLOW.md`、`cocs/crawler/METADATA_MIGRATION.md`、`cocs/gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md`、
+    `cocs/gallery/LABEL_ALBUMS.md`；`apps/docs/src/content/docs/reference/mcp.md:374`；
   - `versions/latest/regression.md`、`changelog.md`。
 
 ### 验证
 
-用 debug ingest 在 `pathqlSource.ts` 的请求入口插桩（`// DEBUG-ALBUM`），按 key 统计重读次数。
-
-| 场景 | 预期 |
+| 场景 | 预期事件 |
 |---|---|
-| 画册页 hide 关，隐藏本画册一张图 | 网格 0 次，卡片原地打灰；页头计数 0 次；树 extra 只重读隐藏画册所在的系统区 |
-| 画册页 hide 开，隐藏本画册一张图 | 网格行与总数各 1 次，图被剔除；页头计数 0 次 |
-| 画册页 hide 开，把一张已隐藏的图加进本画册 | 网格 0 次；页头计数 1 次 |
-| 重命名当前画册 | 网格 0 次；页头详情 1 次；树 page 1 次、extra 0 次 |
-| 重命名子画册 | 页头详情 0 次、计数 0 次 |
-| 新建子画册 | 页头详情 1 次（子画册数 +1）、计数 0 次 |
-| 把带图的子画册移出当前画册 | 页头详情与计数各 1 次 |
-| 画册页按画册顺序 / 按时间排序时拖动排序 | 前者网格重读，后者 0 次 |
-| 画廊删除一张不在当前画册的图 | 画册页总数 0 次 |
-| 往普通画册加图（下载输出画册） | 只重读该画册所在分区的树 extra，其它分区 0 次 |
-| 画廊重命名任意画册 | 画廊 0 次（未开无画册、未用标签搜索时） |
-| 画廊开无画册后删除一个带图画册 | 画廊刷新，原成员出现 |
-| 画廊用标签搜索时给图挂上匹配的标签 | 画廊刷新，图出现（现状不刷新） |
-| 画廊只开 hide，往普通画册加图 | 侧栏 0 次 |
+| 加图到普通画册（含已隐藏的图） | 一条 `album-images-added`，`imageIds` 含全部新增 |
+| 隐藏一张在 A、收藏里的图 | 隐藏画册一条 `album-images-added`，只有 `imageIds`；A、收藏不再收到事件 |
+| 取消隐藏 | 隐藏画册一条 `album-images-deleted`，只有 `imageIds` |
+| 删一张隐藏的图 | `images-deleted`，以及每个原属画册各一条 `album-images-deleted`，都带 `imagesDeleted: true` |
+| 拖动排序 | 一条 `album-images-change`，只含实际改序的 id |
+| 删带子画册的画册（含折叠分支深处没加载的） | 一条 `albums-deleted`，只含根及其路径，没有成员事件；树里根与已展开的子孙一起消失，祖先计数精确刷新 |
+| 下载挂多个新标签 | 一条 `albums-added`，加上每个叶子一条 `album-images-added` |
+| 本地文件夹同步 | `album-changed { patch: { id, folderStatus } }` |
+| 移动画册（含折叠分支深处没加载的画册） | 一条 `album-moved`，带新旧路径；树的新旧父目录与两侧祖先计数精确刷新，已展开的子孙路径被改写 |
+| 本地文件夹改链 | 每个改了父级的画册一条 `album-moved`；改名的另有 `{ id, name }` 补丁 |
+| 现有页面 | 刷新行为与改动前一致（phaseF 再收紧） |
+| 虚拟盘 / VS Code 扩展 | 隐藏、加图、删画册后目录与背景照常更新 |
 
 ### 已知边界
 
-- **标签搜索时多刷**：成员事件分不出标签画册，开了标签搜索后任何画册的成员增删都会刷新。
-- **order 也会重读总数**：按画册顺序排序时拖动会多读一次总数。拆开行与总数的触发需要给 adapter 加第二份 `refreshOn`，
-  不值得为这一次请求增加复杂度。同理，按设壁纸时间、名称排序的字段补丁现在也会连带重读总数，本阶段不处理。
-- **分区根依赖已加载节点**：根画册节点没加载时保守刷新。分区很长、只加载了前几页时，后面页的画册事件仍会重读第一页的计数。
-- **页外字段补丁**：表外字段对页外图片仍会刷新画册页总数（Phase B 的保守口径），因为前端不知道页外图片是不是本画册成员。
+- **hide 开启的视图对隐藏一律刷新**：事件不带图片所在画册和图片行，hide 开的视图对任何隐藏 / 取消隐藏都重新查询，
+  即使变化的图与当前视图无关。
+- **子孙路径不逐个发**：移动画册时，子孙的 `ancestorPath` 由前端按根的新旧路径前缀改写。
+- **删画册不带成员 id**：需要知道哪些图离开画册的观察方（无画册、标签搜索），只能按画册整体判断。
+- **外部 IPC 集成**：事件名改了，第三方订阅方需要跟着改。仓库内已知的只有 VS Code 扩展。

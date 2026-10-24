@@ -211,12 +211,13 @@ describe("新增与隐藏触发", () => {
   });
   it("hide 开启才响应隐藏画册", () => {
     let state = view();
-    const trigger = hiddenTrigger(() => state);
-    const payload = { albumIds: ["00000000-0000-0000-0000-000000000000"] };
+    const triggers = hiddenTrigger(() => state);
+    const trigger = triggers[0];
+    const payload = { albumId: "00000000-0000-0000-0000-000000000000" };
     expect(trigger.relevant(payload)).toBe(false);
     state = view({ hide: true });
     expect(trigger.relevant(payload)).toBe(true);
-    expect(trigger.relevant({ albumIds: ["other"] })).toBe(false);
+    expect(trigger.relevant({ albumId: "other" })).toBe(false);
   });
 });
 

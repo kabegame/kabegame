@@ -93,8 +93,8 @@ describe("Surf 页内动态计数观察", () => {
     ["images-deleted", { imageIds: ["a"] }, ["a.com", "b.com"]],
     ["images-change", { patches: [{ id: "a", width: 1 }] }, []],
     ["image-changed", { patch: { id: "a", width: 1 } }, []],
-    ["album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] }, []],
-    ["album-images-change", { albumIds: ["other"] }, []],
+    ["album-images-added", { albumId: "00000000-0000-0000-0000-000000000000" }, []],
+    ["album-images-added", { albumId: "other" }, []],
   ])("事件相关性 %s %j → %j", async (name, payload, hosts) => {
     vi.useFakeTimers();
     fixture();
@@ -111,7 +111,7 @@ describe("Surf 页内动态计数观察", () => {
     fixture();
     await flushPromises();
     pathqlAll.mockClear();
-    emit({ albumIds: ["00000000-0000-0000-0000-000000000000"] }, "album-images-change");
+    emit({ albumId: "00000000-0000-0000-0000-000000000000" }, "album-images-added");
     await flushPromises();
     expect(paths()).toEqual(["gallery/hide/surf/a.com", "gallery/hide/surf/b.com"]);
   });

@@ -9,7 +9,7 @@ import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
-import { albumChangeKinds, patchTriggers, on } from "@/services/kbEvents";
+import { albumChangeKinds, albumPatchTriggers, hiddenTrigger, patchTriggers, on } from "@/services/kbEvents";
 
 /**
  * 画册页（`/albums`）中栏的 grid adapter。
@@ -85,12 +85,16 @@ export function createAlbumDetailAdapter(params: {
     },
     refreshOn: [
       ...patchTriggers(view),
-      // 隐藏 / 取消隐藏也会给当前画册发 hide / unhide 成员事件。
-      on("album-images-change", (payload) => !!params.albumId() && payload.albumIds.includes(params.albumId())),
-      on("album-changed", (payload) => {
-        const id = params.albumId();
-        if (!id || payload.albumId !== id) return false;
-        const kinds = albumChangeKinds(payload);
+      on("album-images-added", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
+      on("album-images-deleted", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
+      // 隐藏 / 取消隐藏只发隐藏画册自身的事件：hide 开启就刷新，关闭时由 imagePatches$ 按 id 打 isHidden 补丁
+      ...hiddenTrigger(view),
+      on("album-images-change", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
+      on("albums-deleted", (payload) => payload.albums.some((album) => album.id === params.albumId())),
+      on("album-moved", (payload) => payload.id === params.albumId()),
+      ...albumPatchTriggers((patch) => {
+        if (!params.albumId() || patch.id !== params.albumId()) return false;
+        const kinds = albumChangeKinds(patch);
         return kinds.structure || kinds.row;
       }),
     ],

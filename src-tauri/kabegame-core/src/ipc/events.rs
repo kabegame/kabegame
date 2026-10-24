@@ -26,11 +26,36 @@
 use crate::crawler::downloader::DownloadState;
 #[cfg(feature = "ipc-client")]
 use crate::ipc::client::client_instance;
+use crate::storage::image_events::AlbumImagesPayload;
 use crate::storage::tasks::TaskFailedImage;
-use crate::storage::ImageInfo;
+use crate::storage::{Album, ImageInfo};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// 画册字段绝对值；位置字段永远经 AlbumMoved 发送。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumFieldPatch {
+    pub id: String,
+    #[serde(flatten)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AlbumFieldPatch {
+    pub fn new(id: &str, fields: serde_json::Value) -> Self {
+        Self {
+            id: id.to_string(),
+            fields: fields.as_object().cloned().unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedAlbum {
+    pub id: String,
+    pub ancestor_path: String,
+}
 
 macro_rules! app_event_kinds {
     (
@@ -77,11 +102,15 @@ app_event_kinds! {
     ImagesChange,
     ImagesAdded,
     ImagesDeleted,
+    AlbumImagesAdded,
+    AlbumImagesDeleted,
     AlbumImagesChange,
     SettingChange,
-    AlbumAdded,
+    AlbumsAdded,
+    AlbumMoved,
     AlbumChanged,
-    AlbumDeleted,
+    AlbumsChange,
+    AlbumsDeleted,
     SurfRecordsChange,
     FailedImagesChange,
     TasksChange,
@@ -114,11 +143,15 @@ impl AppEventKind {
             AppEventKind::ImagesChange => "images-change",
             AppEventKind::ImagesAdded => "images-added",
             AppEventKind::ImagesDeleted => "images-deleted",
+            AppEventKind::AlbumImagesAdded => "album-images-added",
+            AppEventKind::AlbumImagesDeleted => "album-images-deleted",
+            AppEventKind::AlbumMoved => "album-moved",
+            AppEventKind::AlbumsChange => "albums-change",
             AppEventKind::AlbumImagesChange => "album-images-change",
             AppEventKind::SettingChange => "setting-change",
-            AppEventKind::AlbumAdded => "album-added",
+            AppEventKind::AlbumsAdded => "albums-added",
             AppEventKind::AlbumChanged => "album-changed",
-            AppEventKind::AlbumDeleted => "album-deleted",
+            AppEventKind::AlbumsDeleted => "albums-deleted",
             AppEventKind::SurfRecordsChange => "surf-records-change",
             AppEventKind::FailedImagesChange => "failed-images-change",
             AppEventKind::TasksChange => "tasks-change",
@@ -146,11 +179,15 @@ impl AppEventKind {
             "images-change" => Some(AppEventKind::ImagesChange),
             "images-added" => Some(AppEventKind::ImagesAdded),
             "images-deleted" => Some(AppEventKind::ImagesDeleted),
+            "album-images-added" => Some(AppEventKind::AlbumImagesAdded),
+            "album-images-deleted" => Some(AppEventKind::AlbumImagesDeleted),
+            "album-moved" => Some(AppEventKind::AlbumMoved),
+            "albums-change" => Some(AppEventKind::AlbumsChange),
             "album-images-change" => Some(AppEventKind::AlbumImagesChange),
             "setting-change" => Some(AppEventKind::SettingChange),
-            "album-added" => Some(AppEventKind::AlbumAdded),
+            "albums-added" => Some(AppEventKind::AlbumsAdded),
             "album-changed" => Some(AppEventKind::AlbumChanged),
-            "album-deleted" => Some(AppEventKind::AlbumDeleted),
+            "albums-deleted" => Some(AppEventKind::AlbumsDeleted),
             "surf-records-change" => Some(AppEventKind::SurfRecordsChange),
             "failed-images-change" => Some(AppEventKind::FailedImagesChange),
             "tasks-change" => Some(AppEventKind::TasksChange),
@@ -214,7 +251,10 @@ pub enum AppEvent {
     },
 
     /// 连接状态变化
-    ConnectionStatus { connected: bool, message: String },
+    ConnectionStatus {
+        connected: bool,
+        message: String,
+    },
 
     /// 整理完成事件
     OrganizeFinished {
@@ -235,7 +275,10 @@ pub enum AppEvent {
     },
 
     /// 图片行真正插入，携带完整行。
-    ImagesAdded { seq: u64, images: Vec<ImageInfo> },
+    ImagesAdded {
+        seq: u64,
+        images: Vec<ImageInfo>,
+    },
 
     /// 图片行真正删除，只携带 id。
     ImagesDeleted {
@@ -251,18 +294,26 @@ pub enum AppEvent {
     },
 
     /// 单张图片的字段变化。
-    ImageChanged { seq: u64, patch: ImageFieldPatch },
+    ImageChanged {
+        seq: u64,
+        patch: ImageFieldPatch,
+    },
 
-    /// `album_images` 成员或顺序变更。
+    /// 真实新增 / 删除的成员与排序共用载荷。
+    AlbumImagesAdded {
+        seq: u64,
+        #[serde(flatten)]
+        body: AlbumImagesPayload,
+    },
+    AlbumImagesDeleted {
+        seq: u64,
+        #[serde(flatten)]
+        body: AlbumImagesPayload,
+    },
     AlbumImagesChange {
         seq: u64,
-        reason: String,
-        #[serde(rename = "albumIds")]
-        album_ids: Vec<String>,
-        #[serde(rename = "imageIds")]
-        image_ids: Vec<String>,
-        #[serde(rename = "ancestorPath")]
-        ancestor_path: String,
+        #[serde(flatten)]
+        body: AlbumImagesPayload,
     },
 
     /// 壁纸图片更新事件
@@ -277,49 +328,38 @@ pub enum AppEvent {
         changes: serde_json::Value,
     },
 
-    /// 画册添加
-    AlbumAdded {
-        id: String,
-        name: String,
-        #[serde(rename = "createdAt")]
-        created_at: u64,
-        #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
-        parent_id: Option<String>,
-        /// 画册自身类型；事件类型已占用顶层 `type` 键，因此必须使用独立字段名。
-        #[serde(rename = "albumType")]
-        album_type: String,
-        #[serde(rename = "syncFolder", skip_serializing_if = "Option::is_none")]
-        sync_folder: Option<String>,
-        #[serde(rename = "folderStatus", skip_serializing_if = "Option::is_none")]
-        folder_status: Option<String>,
-        #[serde(rename = "syncMode")]
-        sync_mode: String,
-        #[serde(rename = "ancestorPath")]
-        ancestor_path: String,
-        #[serde(rename = "labelKey", skip_serializing_if = "Option::is_none")]
-        label_key: Option<String>,
-        #[serde(rename = "labelPath", skip_serializing_if = "Option::is_none")]
-        label_path: Option<String>,
+    /// 新建画册完整行。
+    AlbumsAdded {
+        seq: u64,
+        albums: Vec<Album>,
     },
-    /// 画册属性变更（重命名、移动父级等；`changes` 为增量，如 `{ "name": "..." }`、`{ "parentId": "..." | null }`）
+    /// 只包含被删除子树的根与删除前路径。
+    AlbumsDeleted {
+        seq: u64,
+        albums: Vec<DeletedAlbum>,
+    },
+    /// 位置变化只发送移动的根，子孙由路径前缀改写。
+    AlbumMoved {
+        seq: u64,
+        id: String,
+        #[serde(rename = "oldAncestorPath")]
+        old_ancestor_path: String,
+        #[serde(rename = "newAncestorPath")]
+        new_ancestor_path: String,
+    },
     AlbumChanged {
         seq: u64,
-        #[serde(rename = "albumId")]
-        album_id: String,
-        changes: serde_json::Value,
+        patch: AlbumFieldPatch,
     },
-    /// 画册删除（底层 DB 删除后发出）
-    AlbumDeleted {
-        #[serde(rename = "albumId")]
-        album_id: String,
-        #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
-        parent_id: Option<String>,
-        #[serde(rename = "ancestorPath")]
-        ancestor_path: String,
+    AlbumsChange {
+        seq: u64,
+        patches: Vec<AlbumFieldPatch>,
     },
     /// 畅游记录新增（完整 JSON，与前端 `SurfRecord` 对齐）
     #[serde(rename = "SurfRecordAdded")]
-    SurfRecordAdded { record: serde_json::Value },
+    SurfRecordAdded {
+        record: serde_json::Value,
+    },
     /// 畅游记录删除
     #[serde(rename = "SurfRecordDeleted")]
     SurfRecordDeleted {
@@ -347,7 +387,9 @@ pub enum AppEvent {
     },
     /// 任务新增（完整任务 JSON）
     #[serde(rename = "TaskAdded")]
-    TaskAdded { task: serde_json::Value },
+    TaskAdded {
+        task: serde_json::Value,
+    },
     /// 任务删除（仅 ID）
     #[serde(rename = "TaskDeleted")]
     TaskDeleted {
@@ -362,7 +404,9 @@ pub enum AppEvent {
         diff: serde_json::Value,
     },
     /// 应用关闭事件（进程退出前发出）。
-    AppShutdown { reason: String },
+    AppShutdown {
+        reason: String,
+    },
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
     AutoConfigChange {
@@ -374,7 +418,9 @@ pub enum AppEvent {
     },
 
     /// 插件新增安装（首次安装）
-    PluginAdded { plugin: serde_json::Value },
+    PluginAdded {
+        plugin: serde_json::Value,
+    },
     /// 插件卸载
     PluginDeleted {
         #[serde(rename = "pluginId")]
@@ -389,7 +435,9 @@ pub enum AppEvent {
 
     /// 下载条目移除（后端 wait 完成后发出，前端据此从活跃列表删除）
     #[serde(rename_all = "camelCase")]
-    DownloadRemoved { id: u64 },
+    DownloadRemoved {
+        id: u64,
+    },
 }
 
 #[cfg(test)]
@@ -437,28 +485,22 @@ mod tests {
     }
 
     #[test]
-    fn album_added_serializes_complete_album_fields_without_type_collision() {
-        let event = AppEvent::AlbumAdded {
-            id: "child-id".to_string(),
-            name: "child".to_string(),
-            created_at: 123,
-            parent_id: Some("parent-id".to_string()),
-            album_type: "local_folder".to_string(),
-            sync_folder: Some("/pictures/child".to_string()),
-            folder_status: Some(r#"{"state":"ok"}"#.to_string()),
-            sync_mode: "delegated".to_string(),
-            ancestor_path: "/parent-id/child-id/".to_string(),
-            label_key: None,
-            label_path: None,
-        };
-
-        let payload = serde_json::to_value(event).expect("AlbumAdded 应可序列化");
-        assert_eq!(payload["type"], "album-added");
-        assert_eq!(payload["albumType"], "local_folder");
-        assert_eq!(payload["syncFolder"], "/pictures/child");
-        assert_eq!(payload["folderStatus"], r#"{"state":"ok"}"#);
-        assert_eq!(payload["syncMode"], "delegated");
-        assert_eq!(payload["ancestorPath"], "/parent-id/child-id/");
+    fn albums_added_serializes_complete_rows() {
+        let album: crate::storage::Album = serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "child", "created_at": 123, "parent_id": "parent",
+            "type": "local_folder", "sync_folder": "/pictures/child", "folder_status": null,
+            "ancestor_path": "/parent/child/", "sync_mode": "delegated",
+            "label_key": null, "label_path": null
+        }))
+        .unwrap();
+        let payload = serde_json::to_value(AppEvent::AlbumsAdded {
+            seq: 1,
+            albums: vec![album],
+        })
+        .unwrap();
+        assert_eq!(payload["type"], "albums-added");
+        assert_eq!(payload["albums"][0]["type"], "local_folder");
+        assert_eq!(payload["albums"][0]["ancestorPath"], "/parent/child/");
     }
 }
 
@@ -481,12 +523,16 @@ impl AppEvent {
             AppEvent::ImagesChange { .. } => AppEventKind::ImagesChange,
             AppEvent::ImagesAdded { .. } => AppEventKind::ImagesAdded,
             AppEvent::ImagesDeleted { .. } => AppEventKind::ImagesDeleted,
+            AppEvent::AlbumImagesAdded { .. } => AppEventKind::AlbumImagesAdded,
+            AppEvent::AlbumImagesDeleted { .. } => AppEventKind::AlbumImagesDeleted,
+            AppEvent::AlbumMoved { .. } => AppEventKind::AlbumMoved,
+            AppEvent::AlbumsChange { .. } => AppEventKind::AlbumsChange,
             AppEvent::AlbumImagesChange { .. } => AppEventKind::AlbumImagesChange,
             AppEvent::WallpaperUpdateImage { .. } => AppEventKind::WallpaperUpdateImage,
             AppEvent::SettingChange { .. } => AppEventKind::SettingChange,
-            AppEvent::AlbumAdded { .. } => AppEventKind::AlbumAdded,
+            AppEvent::AlbumsAdded { .. } => AppEventKind::AlbumsAdded,
             AppEvent::AlbumChanged { .. } => AppEventKind::AlbumChanged,
-            AppEvent::AlbumDeleted { .. } => AppEventKind::AlbumDeleted,
+            AppEvent::AlbumsDeleted { .. } => AppEventKind::AlbumsDeleted,
             AppEvent::SurfRecordAdded { .. }
             | AppEvent::SurfRecordDeleted { .. }
             | AppEvent::SurfRecordChanged { .. } => AppEventKind::SurfRecordsChange,

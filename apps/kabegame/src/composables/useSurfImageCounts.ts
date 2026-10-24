@@ -37,6 +37,8 @@ export function useSurfImageCounts() {
         p.patches.some((patch) => Object.prototype.hasOwnProperty.call(patch, "surfRecordId")),
       ),
       on("image-changed", (p) => Object.prototype.hasOwnProperty.call(p.patch, "surfRecordId")),
+      on("album-images-added", (p) => globalRoute.hide && isHiddenAlbumChange(p)),
+      on("album-images-deleted", (p) => globalRoute.hide && isHiddenAlbumChange(p)),
       on("album-images-change", (p) => globalRoute.hide && isHiddenAlbumChange(p)),
     ],
     onResult: (key, { results }) => {

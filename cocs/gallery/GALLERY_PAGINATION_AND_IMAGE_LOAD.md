@@ -264,8 +264,8 @@ ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否�
 区间左闭右开，`unknown` 是空值或非正数。宽高比预设桶复用 `aspectBucketForDimensions`，任意区间用整数交叉乘法，
 左开右闭，宽高缺失或非正只有 `unknown` 命中。无法可靠解析的单位 / 区间、超出 JS 安全整数的计算视为可能。
 
-任务 / 畅游的新增另检查 `taskId` / `surfRecordId`；画册不听图片新增，成员进出由本画册的 `album-images-change` 负责，
-隐藏 / 取消隐藏也经本画册的 hide / unhide 事件处理。画廊 noAlbum 与画册结构事件保持原有规则，留待后续走查。
+任务 / 畅游的新增另检查 `taskId` / `surfRecordId`；画册不听图片新增，成员进出由本画册的 `album-images-added` / `album-images-deleted` 负责，
+隐藏 / 取消隐藏只是隐藏画册自身的成员增删：hide 开启的视图（含画册页）一律刷新，hide 关闭时只由 `imagePatches$` 按 id 打 `isHidden` 补丁。画廊 noAlbum 与画册结构事件保持原有规则，留待后续走查。
 
 单图 / 多图字段变化共用 `patchTriggers`，忽略 id 本身，空补丁不刷新，任一相关字段即刷新：
 
@@ -291,15 +291,14 @@ ImageGrid 的删除触发由 `deletedTrigger(heldIds?)` 生成，行与总数分
 侧栏 / 畅游等只有计数的观察方没有行可比较，删除一律刷新。新增不判断排序位置，默认画廊下载仍刷新。
 裸 id 预览不因新增或字段变化重新解析；只在删除 / 画册成员事件包含当前 id 时重读，字段与收藏 / 隐藏直接保鲜。
 
-画册写命令仍返回本次已发送事件的 `albumChanges` 副本（IPC / CLI 协议不变），前端不再消费：无状态
-`services/albums.ts` 只调命令，不做本地事件投递。发起写入的组件请求自己观察的 key，其它观察方等后端事件。
+画册与图片删除写命令不再返回 `albumChanges` 副本；无状态 services 不做本地事件投递。发起写入的组件请求自己观察的 key，其它观察方等后端事件。
 画册树不维护全量列表或全量计数，只重拉相关的已加载目录；画册视图仍由操作后请求或事件触发的查询决定过滤、排序和分页后的最终行位置。
 预览中的 `ImageLabelsPanel` 不走 `mutate`（替换底层列表会跳页），作为 `albums://of_image_<id>/album_kind/label`
 的 rows 观察方：切图与面板内增删后请求自身 key，别处成员变更与已挂标签改名 / 删除经核心窗口刷新。
 
 ### 一致性
 
-后端 `GlobalEmitter` 为图片增删、单图 / 多图补丁、`album-images-change` 与 `album-changed`
+后端 `GlobalEmitter` 为图片、画册行与画册成员的全部增删改事件
 共用一个单调递增计数器，payload 都携带 `seq`；前端目前不消费它（`kbEvent$` 只透传）。
 
 ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
@@ -336,14 +335,29 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 - `GalleryToolbar` 只注入 `gridTotalKey` 的 `{ total, unfilteredTotal }`；分子与可选分母仍由同一
   `pathql_all` 读快照读取，工具栏不另注册观察方。
 
-### `album-images-change`（`AppEvent::AlbumImagesChange`，`album_images` 表）
+### 画册行与成员事件（Phase E）
 
-- `image_events.rs` 的私有发送器保证每条事件只描述一个画册；公开写入口统一为
-  `emit_membership_added` / `emit_membership_removed`，`imageIds` 只含实际插入或删除的成员。
-- Payload：`seq`、`reason`、单元素 `albumIds`、该画册实际变化的 `imageIds` 与 `ancestorPath`；不再携带
-  `directCounts`。
-- 隐藏 / 取消隐藏仅发画册成员事件；隐藏画册自身的 `add-hidden` / `delete-hidden` 推导
-  `isHidden` 补丁，其他画册的 `hide` / `unhide` 保持成员语义。所有视图与过滤树仍据隐藏画册成员变化刷新。
+| 表 | 事件 | Payload |
+| --- | --- | --- |
+| albums | `albums-added` | `{ seq, albums: Album[] }`，一次写操作批量发送完整行 |
+| albums | `albums-deleted` | `{ seq, albums: [{ id, ancestorPath }] }`，只包含被删子树根 |
+| albums | `album-moved` | `{ seq, id, oldAncestorPath, newAncestorPath }`，只包含移动根 |
+| albums | `album-changed` / `albums-change` | `{ seq, patch }` / `{ seq, patches }`，只含真正变化的绝对值，永不含 parentId / ancestorPath |
+| album_images | `album-images-added` / `album-images-deleted` | `{ seq, albumId, ancestorPath, imageIds, imagesDeleted? }` |
+| album_images | `album-images-change` | 排序，只有实际 UPDATE 改变的成员 id；空操作不发 |
+
+- `image_events.rs` 只对实际新增 / 移除的成员发增删，不再有七种 reason，也不按是否隐藏拆分。
+  隐藏 / 取消隐藏只发隐藏画册自身一条 added / deleted，不带图片所在的其它画册，也不带图片行：
+  hide 开启的观察方收到就刷新（带 `hide/` 前缀的画册树计数一律刷新），hide 关闭的网格与预览只按 `imageIds` 打 `isHidden` 补丁。
+  整行删图的每个原属画册各发 deleted，带 `imagesDeleted: true`，不作为取消隐藏补丁。
+- 收藏 / 隐藏的 added 与 deleted 分别推导 `favorite` / `isHidden` 展示补丁；排序不产生这些补丁。
+- `emit_album_patches` 按 id 合并、丢弃空字段，单画册发 `album-changed`，多画册发 `albums-change`。
+  删画册只发根删除事件，不补发空 order；依赖原空 order 的观察方改听 `albums-deleted`。
+- 移动、文件夹改链与转换提升均发 `album-moved`。改链同时动祖先与子孙时，祖先在前，子孙旧路径接续祖先移动后的路径。
+  树（含收起的已加载节点）、页头自身与祖先、标签面板收到移动即改写路径前缀，移动根 parentId 从新路径计算。
+- IPC 加入 / 移出 / 排序 / 删除画册统一走 core 命令；MCP 两个改序入口发排序事件；虚拟盘按 albumId 通知目录，隐藏画册事件整体失效画册目录。
+  外部 IPC 订阅者需迁移事件名，VS Code 扩展由其仓库独立修改。
+- Phase E 只换协议与机械适配：画册网格、页头、分区根和侧栏保留原刷新口径；按图判断隐藏、改名不刷网格等收紧留给 Phase F。
 - 前端不维护全量画册列表或计数。`albumPageQueries` 描述每页结构批次：`albums://<过滤段>/x<N>x/<页>`
   行与 `…/~~/children[/search/<q>][/<类型段>]` 的 `child_count` 经 `pathql_all` 同快照读取。
   `TreePage.extra` 另批读取本页行与 `…/~~/images[/hide]` 的 `image_count`，本页行用来为无分组结果的画册补 0，
@@ -355,8 +369,8 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
 - 画册树 / 侧栏以 `TreeQuerySource` 描述查询和单事件过滤器，`useTreeModel` 只观察可见展开分支的已加载页，
   一页一个 `all` key。新 key 与手动刷新经 `pathqlRequest$` 请求，Promise 在模型等待表中完成；核心不返回结果。
   收起 / 不活跃停观察而保留数据，再展开 / 激活重新请求；换 key 与错误均不清空旧子项。
-  `album-images-change` 只重读相关目录的 extra，结构事件重读结构与 extra（移动改变子树计数、新增 / 删除改变页成员）；
-  `albumEventPaths` 从事件中取新旧路径，缺失则通配，子目录只匹配严格后代。多个实例对同一事件、同 key 只投一票。
+  成员增删与排序事件只重读相关目录的 extra，结构事件重读结构与 extra（移动改变子树计数、新增 / 删除改变页成员）；
+  `albumEventPaths` 从增删或移动事件中取路径，补丁用已持有路径定位、未知时保守通配，子目录只匹配严格后代。多个实例对同一事件、同 key 只投一票。
 - 仓库内已无旧 `src-plasma-wallpaper-plugin` 源码；外部集成订阅应按上述四种图片事件协议迁移。
 
 ## 排查清单

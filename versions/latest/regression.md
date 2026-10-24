@@ -1,5 +1,39 @@
 # v4.6.1 regression
 
+## 过滤走查 Phase E：画册事件协议对齐
+
+2026-10-24：实现 Phase E 点 1–6，仅对齐协议与机械适配，保留 Phase B 后的既有刷新口径；不实现 Phase F 的收紧。
+2026-10-24 在 macOS 桌面 CEF dev 真机验证（二进制晚于全部 Phase E 源码改动，收到的都是新事件名）：在前端事件源与事件窗口刷新入口用 debug ingest 插桩（session `album-phaseE`，`// DEBUG-ALBUM`，验证后已删除），按事件 ts 排序读取；测试图为现生成的本地导入副本，测试画册、标签、本地文件夹、任务与下载图测后删除，画廊 / 画册页选择、收藏与隐藏计数、Web 服务器已还原。未勾选的行未真机验证。
+运行时事件与次数验收应使用 debug ingest 固定 session、按 ts 排序；不得包装 invoke 或按网络请求计数。
+本节协议覆盖后文 Phase A / B 的历史事件名记录；VS Code 扩展由主会话在外部仓库单独修改。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 普通画册加入可见 / 隐藏图 | 桌面 CEF / IPC | 同批加入普通图和已隐藏图 | 一条 album-images-added，imageIds 包含全部实际新增；无 reason 或隐藏状态拆分 | macOS：同批加入普通图 8621 与已隐藏图 8622，一条 album-images-added，imageIds 为两张，无 reason、无拆分 |
+| [x] | 隐藏 A 与收藏中的图 | 桌面 CEF | 把同时属于 A、收藏的图片加入隐藏画册 | 仅隐藏画册一条 added，不带 memberships / images，不给 A、收藏发事件；hide 开的画廊、画册页刷新剔除，hide 关时只打灰 | 2026-10-24 复测（改为不带成员表与图片行后，session `album-hide2`）：隐藏 8753 只有隐藏画册一条 added，载荷仅 albumId / ancestorPath / imageIds / seq；画廊 hide 开行与总数各 1 次后剔除，hide 关 0 次、卡片打灰；画册页 hide 开网格行与总数各 1 次剔除、hide 关网格 0 次打灰，页头计数均 0 次 |
+| [x] | 取消隐藏 | 桌面 CEF / IPC | 从隐藏画册移出图片 | 隐藏画册一条 deleted，只有 imageIds；hide 开的视图刷新，hide 关时按 id 取消打灰 | 2026-10-24 复测：隐藏画册一条 deleted，仅 imageIds；画廊 / 画册页 hide 开行与总数各 1 次后图回来，hide 关 0 次、取消打灰；画册树分区根仍按原保守口径重读（Phase F 收紧） |
+| [x] | 删除隐藏图 | 桌面 CEF | 删除同时属于其它画册的隐藏图 | images-deleted 加每个原属画册一条 album-images-deleted，均有 imagesDeleted: true；不当作取消隐藏 | macOS：删除同属 PE-A、收藏的隐藏图 8622：images-deleted 一条，隐藏 / 收藏 / PE-A 各一条 album-images-deleted，均带 imagesDeleted: true，无 memberships / images |
+| [x] | 拖动 / 外部改序 | 桌面 CEF / IPC / MCP | 拖动排序，调用 set_album_images_order 与 add_images_to_album.image_orders，混入不存在 id | 一条 album-images-change，只含实际改序的成员 id；无命中或值未变不发 | macOS：IPC update_album_images_order 混入不存在 id 与值未变 id，只发一条 album-images-change，imageIds 仅实际改序的 1 张；全部未变 / 无命中不发。MCP set_album_images_order 同样只含实际改序 id、无命中不发。界面拖动与 add_images_to_album.image_orders 未测 |
+| [x] | 删除带子画册的根 | 桌面 CEF | 删除带图、含折叠深层子画册的根 | 一条 albums-deleted，仅根及真实路径，无成员事件 / 空 order；树根和已展开子孙消失，祖先计数刷新 | macOS：PE-P/PE-R 下两层子画册（c2 分支折叠未加载）各带图，删 PE-R 只有一条 albums-deleted，仅根及 `/P/R/` 路径，无成员事件；树中 R 与已展开子孙消失，PE-P 计数 5→1，页头 1 张 / 0 子画册，库内子孙与成员行清空 |
+| [x] | 下载挂多个新标签 | 桌面 CEF / CLI | 下载一张带多个新标签的图 | 一条 albums-added，加每个实际新增成员叶子一条 album-images-added | macOS：konachan tags 模式下载 maozi_tutu 2 张。第一张一条 albums-added（新叶子 konachan/artist/maozi_tutu）加 16 个叶子各一条 album-images-added；第二张无 albums-added、16 条 added。本次只新建 1 个叶子（其余标签已存在），多个新叶子同批未覆盖 |
+| [x] | 本地文件夹同步状态 | 桌面 CEF | 同步本地文件夹并切换同步模式 | folderStatus 单画册 patch；批量规整为一条 albums-change，补丁不带 parentId / ancestorPath | macOS：同步后每个画册一条 album-changed { id, folderStatus }；PE-LF 切 recursive / none 各一条 albums-change（4 个补丁，只含 syncMode）；所有补丁无 parentId / ancestorPath |
+| [x] | 移动折叠深层画册 | 桌面 CEF | 移动有展开子孙的画册，再操作其子孙 | 一条 album-moved 带新旧路径；两侧目录与祖先计数刷新，树 / 页头 / 标签持有路径前缀立即改写 | macOS：move_album 两次（P→A、A→P，带展开的 M/M1/M2）各一条 album-moved 带新旧路径；新旧父目录与根 extra 刷新、计数正确，移动后展开状态保留；随后给 M2 加图只刷新新链 P / M / M1 的 extra，不刷旧父 A；M1 改名一条 album-changed { id, name }；页头面包屑变为 PE-A/PE-M/PE-M1/PE-M2。标签叶子 pe-l 从 pe-ld 移到 pe-ld2，预览标签面板标题变 pe-ld2/pe-l，点击跳到新路径 |
+| [x] | 本地文件夹改链 / 转换提升 | 桌面 CEF | 一次改链同时移动祖先和子孙，再把子树转普通画册 | 每个改父级的根各一条 moved，祖先在前、子孙 old 接续前序移动；改名另有 name 补丁；提升同样发 moved | macOS：先建 s1 本地文件夹画册再建父目录 PE-LF，改链为 s1 一条 album-moved（只发根，d1 不单发）；把 s1 转普通画册：一条 album-moved（提升到根）加一条 albums-change（s1、d1 的 albumType / syncFolder / folderStatus）。同一次改链同时移动祖先与子孙、改名 name 补丁未触发 |
+| [x] | 现有页面刷新口径 | 桌面 CEF | 依次浏览画廊、画册、任务、畅游、侧栏、预览和标签面板，隐藏 / 取消隐藏 / 改名 / 删除画册 | 与既有口径相同；空 order 依赖改听 albums-deleted；本阶段不按图 / 分区收紧 | macOS：画廊（hide 开）、隐藏画册页、任务详情、画册树、画册页头、预览标签面板、插件维度过滤弹层在隐藏 / 取消隐藏 / 收藏 / 改名 / 移动 / 删除画册时照常更新，口径未收紧；本行操作期间挂了 console.error / warn / 未捕获错误收集器，结果为空。畅游页未测 |
+| [x] | 成员表外键迁移 | 桌面 CEF / 开发库 | 已有库升级到 v046，迁移前造画册不存在、图片不存在、image_id 为空串的成员行 | 悬空行被清理、其余成员与排序保留，外键检查为 0，索引保留 | 单测覆盖四类脏行；开发库副本实跑 84822 行全保留、0 悬空、外键检查与 integrity_check 通过；dev 重启后真实开发库已升到 v046 |
+| [x] | 写入不存在的画册 / 图片 | 桌面 CEF / IPC | 调用 add_images_to_album：画册 id 不存在；画册存在但图片 id 为空串或不存在 | 前者报「画册不存在」；后者 added 0、不写行、不发成员事件 | macOS：两种调用均被拦下，库中 0 行；单测覆盖外键开启下的跳过 |
+| [ ] | 虚拟盘 / VS Code 扩展 | Windows / 外部扩展 | 隐藏、加入图片、删除画册后查看目录与背景 | 虚拟盘按 albumId 通知，隐藏画册事件整体失效画册目录；外部扩展按新事件订阅后照常更新 | 主会话已改外部扩展订阅（新旧事件名并列），未联调；虚拟盘 vd_listener 只在 Windows 生效，本机未测 |
+
+自动化验证（2026-10-24，测试与真机分开记录）：
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 图片与画册事件协议 | Rust / 临时 SQLite / EventBroadcaster | test-kabegame driver：kabegame-core --lib storage::image_events --features ipc-server | 普通增删不拆分、隐藏成员表含收藏、取消隐藏完整行 / 超限省略、删图标记、排序实际命中；批量新增、根删除、改链连续前缀、转换提升、补丁去位置与按数量分流 | 2 passed；命令与日志见本次交付说明 |
+| [x] | 画册存储 | Rust / 内存 SQLite | test-kabegame driver：kabegame-core --lib storage::albums | 层级、改链、标签、类型转换、删除与同步模式保持正确 | 23 passed |
+| [x] | 本地文件夹 | Rust / 临时目录 | test-kabegame driver：kabegame-core --lib local_folder | 同步、导入、改链、转换和成员写入不回退 | 41 passed |
+| [x] | 前端全量回归 | macOS / Vitest | npx vitest run --maxWorkers=2 | 新事件、补丁、订阅方、连续移动与收起节点路径测试通过 | 51 files passed；529 tests passed。首次运行退出 1（旧夹具失败、无完整汇总）；修正夹具后限制 2 workers 完整通过 |
+| [x] | 前端与 Rust 检查 | macOS / standard | check-kabegame driver（deno task check -c kabegame） | vue-tsc 与 cargo check 0 error | 退出码 0；vue-tsc 0 error、cargo 0 error；既有 warnings 保留 |
+
 ## 过滤走查 Phase B：前端图片视图按内容刷新
 
 只改前端 refreshOn 与补丁门控，不新增 SQL / 后端命令，不涉及 Phase C / D。

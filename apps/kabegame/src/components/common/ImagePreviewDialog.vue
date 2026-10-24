@@ -880,7 +880,9 @@ const startImageSubscription = (id: string) => {
       // 字段直接打补丁；删除仅在包含当前图片时重解析。
       on("images-deleted", (p) => p.imageIds.includes(id)),
       // 收藏 / 隐藏是画册成员变更，会影响 isHidden，字段补丁之外仍要重拉
-      on("album-images-change", (p) => (p.imageIds ?? []).includes(id)),
+      on("album-images-added", (p) => p.imageIds.includes(id)),
+      on("album-images-deleted", (p) => p.imageIds.includes(id)),
+      on("album-images-change", (p) => p.imageIds.includes(id)),
     ])
       .pipe(batchWindow(PREVIEW_REFRESH_WAIT_MS, () => true))
       .subscribe(() => {

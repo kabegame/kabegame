@@ -1,102 +1,102 @@
-//! 在修改 `images` / `album_images` 后统一发射图片增删、字段补丁与 `album-images-change`。
+//! 在修改 `images` / `album_images` 后统一发射图片增删、字段补丁与画册成员增删 / 排序事件。
 
 #[cfg(feature = "ipc-server")]
 use crate::emitter::dispatch_view_event;
-use crate::emitter::{next_change_seq, GlobalEmitter};
+#[cfg(feature = "ipc-server")]
+use crate::emitter::next_change_seq;
+use crate::emitter::GlobalEmitter;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
 use crate::ipc::events::ImageFieldPatch;
 use crate::storage::albums::AddToAlbumResult;
 use crate::storage::source_purge::{purge_source_files, PurgeReport};
-use crate::storage::{Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+#[cfg(test)]
+use crate::storage::HIDDEN_ALBUM_ID;
+use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 #[cfg(feature = "ipc-server")]
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AlbumImagesChangePayload {
-    pub seq: u64,
-    pub reason: String,
-    pub album_ids: Vec<String>,
-    pub image_ids: Vec<String>,
+pub struct AlbumImagesPayload {
+    pub album_id: String,
     pub ancestor_path: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MembershipRemovalContext {
-    /// 单独从某个画册移出；移出 HIDDEN 时需要为其它画册发 `unhide`。
-    AlbumMutation,
-    /// 图片整行被删除；所有原成员只按删除前隐藏状态分类，不产生 `unhide`。
-    ImagesDeleted,
+    pub image_ids: Vec<String>,
+    /// 整行删图造成的成员删除；隐藏画册的这类删除不是取消隐藏
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub images_deleted: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct DeleteImagesResult {
     pub purge: PurgeReport,
-    pub album_changes: Vec<AlbumImagesChangePayload>,
 }
 
 /// 已完成数据库删除与事件生成、尚未回收源文件的中间结果。
 pub struct PendingImageDelete {
     paths: Vec<String>,
-    album_changes: Vec<AlbumImagesChangePayload>,
 }
 
 impl PendingImageDelete {
     pub async fn finish(self) -> DeleteImagesResult {
         DeleteImagesResult {
             purge: purge_source_files(&self.paths).await,
-            album_changes: self.album_changes,
         }
     }
 }
 
 impl std::ops::Deref for DeleteImagesResult {
     type Target = PurgeReport;
-
     fn deref(&self) -> &Self::Target {
         &self.purge
     }
 }
 
-fn emit_album_images_change(
-    reason: &str,
-    album_id: &str,
-    image_ids: &[String],
-    ancestor_paths: &HashMap<String, String>,
-) -> Option<AlbumImagesChangePayload> {
-    if album_id.trim().is_empty() || (image_ids.is_empty() && reason != "order") {
-        return None;
+fn emit_album_images(kind: &str, body: AlbumImagesPayload) {
+    if body.album_id.is_empty()
+        || body.image_ids.is_empty()
+        || GlobalEmitter::try_global().is_none()
+    {
+        return;
     }
-    debug_assert!(matches!(
-        reason,
-        "add" | "add-hidden" | "delete" | "delete-hidden" | "hide" | "unhide" | "order"
-    ));
-    if GlobalEmitter::try_global().is_none() {
-        return None;
-    }
-    let payload = AlbumImagesChangePayload {
-        seq: next_change_seq(),
-        reason: reason.to_string(),
-        album_ids: vec![album_id.to_string()],
-        image_ids: image_ids.to_vec(),
-        ancestor_path: ancestor_paths
-            .get(album_id)
-            .cloned()
-            .unwrap_or_else(|| format!("/{album_id}/")),
-    };
     #[cfg(feature = "ipc-server")]
-    dispatch_view_event(Arc::new(AppEvent::AlbumImagesChange {
-        seq: payload.seq,
-        reason: payload.reason.clone(),
-        album_ids: payload.album_ids.clone(),
-        image_ids: payload.image_ids.clone(),
-        ancestor_path: payload.ancestor_path.clone(),
-    }));
-    Some(payload)
+    {
+        let seq = next_change_seq();
+        let event = match kind {
+            "added" => AppEvent::AlbumImagesAdded { seq, body },
+            "deleted" => AppEvent::AlbumImagesDeleted { seq, body },
+            "order" => AppEvent::AlbumImagesChange { seq, body },
+            _ => unreachable!("未知画册成员事件"),
+        };
+        dispatch_view_event(Arc::new(event));
+    }
+    #[cfg(not(feature = "ipc-server"))]
+    let _ = (kind, body);
+}
+
+fn membership_payload(
+    album_id: &str,
+    changed: &[String],
+    ancestor_path: Option<String>,
+) -> AlbumImagesPayload {
+    AlbumImagesPayload {
+        album_id: album_id.to_string(),
+        ancestor_path: ancestor_path.unwrap_or_else(|| format!("/{album_id}/")),
+        image_ids: changed.to_vec(),
+        images_deleted: false,
+    }
+}
+
+/// 画册自身的路径；读不到时由 membership_payload 退回 `/<id>/`（系统画册本来就是这个路径）。
+fn album_ancestor_path(album_id: &str) -> Option<String> {
+    Storage::global()
+        .get_album_by_id(album_id)
+        .ok()
+        .flatten()
+        .map(|album| album.ancestor_path)
 }
 
 fn grouped_memberships(pairs: &[(String, String)]) -> BTreeMap<String, Vec<String>> {
@@ -108,23 +108,6 @@ fn grouped_memberships(pairs: &[(String, String)]) -> BTreeMap<String, Vec<Strin
         }
     }
     grouped
-}
-
-fn hidden_image_ids(pairs: &[(String, String)]) -> HashSet<&str> {
-    pairs
-        .iter()
-        .filter_map(|(album_id, image_id)| {
-            (album_id == HIDDEN_ALBUM_ID).then_some(image_id.as_str())
-        })
-        .collect()
-}
-
-fn split_by_hidden(changed: &[String], pairs: &[(String, String)]) -> (Vec<String>, Vec<String>) {
-    let hidden = hidden_image_ids(pairs);
-    changed
-        .iter()
-        .cloned()
-        .partition(|image_id| hidden.contains(image_id.as_str()))
 }
 
 /// 原生元数据挂载的补丁：`image_metadata_id` 是图片字段，按 `imageMetadataId` 下发绝对值。
@@ -148,112 +131,38 @@ pub fn emit_native_metadata_attached(image_id: &str, metadata_id: i64) {
     }
 }
 
-/// 实际新增的成员写库后调用；按画册与隐藏状态拆分并返回已发送 payload 的副本。
-pub fn emit_membership_added(
-    album_id: &str,
-    changed: &[String],
-) -> Result<Vec<AlbumImagesChangePayload>, String> {
+/// 实际新增的成员写库后调用；隐藏也只是隐藏画册的成员新增，不派生其它画册事件。
+pub fn emit_membership_added(album_id: &str, changed: &[String]) -> Result<(), String> {
     if changed.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
-    let (pairs, ancestor_paths) =
-        Storage::global().collect_album_memberships_with_paths(changed)?;
-    let mut out = Vec::new();
-    if album_id == HIDDEN_ALBUM_ID {
-        if let Some(payload) =
-            emit_album_images_change("add-hidden", album_id, changed, &ancestor_paths)
-        {
-            out.push(payload);
-        }
-        for (affected_album, ids) in grouped_memberships(&pairs) {
-            if affected_album == HIDDEN_ALBUM_ID {
-                continue;
-            }
-            if let Some(payload) =
-                emit_album_images_change("hide", &affected_album, &ids, &ancestor_paths)
-            {
-                out.push(payload);
-            }
-        }
-    } else {
-        let (hidden_ids, visible_ids) = split_by_hidden(changed, &pairs);
-        if let Some(payload) =
-            emit_album_images_change("add", album_id, &visible_ids, &ancestor_paths)
-        {
-            out.push(payload);
-        }
-        if let Some(payload) =
-            emit_album_images_change("add-hidden", album_id, &hidden_ids, &ancestor_paths)
-        {
-            out.push(payload);
-        }
-    }
-    Ok(out)
+    emit_album_images(
+        "added",
+        membership_payload(album_id, changed, album_ancestor_path(album_id)),
+    );
+    Ok(())
 }
 
-/// 实际移除的成员写库后调用；`pairs_before` 必须来自写库前状态。
-pub fn emit_membership_removed(
-    album_id: &str,
-    changed: &[String],
-    pairs_before: &[(String, String)],
-    ancestor_paths: &HashMap<String, String>,
-    context: MembershipRemovalContext,
-) -> Vec<AlbumImagesChangePayload> {
+/// 实际移出画册的成员写库后调用（取消隐藏也走这里）；整行删图另走 begin_delete_images_with_events。
+pub fn emit_membership_removed(album_id: &str, changed: &[String]) {
     if changed.is_empty() {
-        return Vec::new();
+        return;
     }
-    let mut out = Vec::new();
-    if context == MembershipRemovalContext::AlbumMutation && album_id == HIDDEN_ALBUM_ID {
-        if let Some(payload) =
-            emit_album_images_change("delete-hidden", album_id, changed, ancestor_paths)
-        {
-            out.push(payload);
-        }
-        let changed_set: HashSet<&str> = changed.iter().map(String::as_str).collect();
-        for (affected_album, ids) in grouped_memberships(pairs_before) {
-            if affected_album == HIDDEN_ALBUM_ID {
-                continue;
-            }
-            let affected: Vec<String> = ids
-                .into_iter()
-                .filter(|image_id| changed_set.contains(image_id.as_str()))
-                .collect();
-            if let Some(payload) =
-                emit_album_images_change("unhide", &affected_album, &affected, ancestor_paths)
-            {
-                out.push(payload);
-            }
-        }
-    } else {
-        let (hidden_ids, visible_ids) = split_by_hidden(changed, pairs_before);
-        if let Some(payload) =
-            emit_album_images_change("delete", album_id, &visible_ids, ancestor_paths)
-        {
-            out.push(payload);
-        }
-        if let Some(payload) =
-            emit_album_images_change("delete-hidden", album_id, &hidden_ids, ancestor_paths)
-        {
-            out.push(payload);
-        }
-    }
-    out
+    emit_album_images(
+        "deleted",
+        membership_payload(album_id, changed, album_ancestor_path(album_id)),
+    );
 }
 
-/// 排序不改变计数，但会使画册视图失效。
-pub fn emit_album_images_order_changed(
-    album_id: &str,
-    image_ids: &[String],
-) -> Vec<AlbumImagesChangePayload> {
-    let ancestor_paths = Storage::global()
-        .get_album_by_id(album_id)
-        .ok()
-        .flatten()
-        .map(|album| HashMap::from([(album.id, album.ancestor_path)]))
-        .unwrap_or_default();
-    emit_album_images_change("order", album_id, image_ids, &ancestor_paths)
-        .into_iter()
-        .collect()
+/// 排序不改变成员，只发送实际 UPDATE 命中的 id；空操作不发事件。
+pub fn emit_album_images_order_changed(album_id: &str, image_ids: &[String]) {
+    if image_ids.is_empty() {
+        return;
+    }
+    emit_album_images(
+        "order",
+        membership_payload(album_id, image_ids, album_ancestor_path(album_id)),
+    );
 }
 
 fn emit_task_image_counts_full(task_id: &str) {
@@ -287,20 +196,13 @@ pub fn begin_delete_images_with_events(
     }
     GlobalEmitter::global().emit_images_deleted(image_ids);
 
-    let mut album_changes = Vec::new();
     for (album_id, changed) in grouped_memberships(&pairs_before) {
-        album_changes.extend(emit_membership_removed(
-            &album_id,
-            &changed,
-            &pairs_before,
-            &ancestor_paths,
-            MembershipRemovalContext::ImagesDeleted,
-        ));
+        let mut body =
+            membership_payload(&album_id, &changed, ancestor_paths.get(&album_id).cloned());
+        body.images_deleted = true;
+        emit_album_images("deleted", body);
     }
-    Ok(PendingImageDelete {
-        paths,
-        album_changes,
-    })
+    Ok(PendingImageDelete { paths })
 }
 
 /// 删除 `images` 表行、发射精确事件并回收源文件。
@@ -319,8 +221,8 @@ pub fn add_images_to_album_with_event(
     image_ids: &[String],
 ) -> Result<AddToAlbumResult, String> {
     Storage::global().ensure_album_is_writable(album_id)?;
-    let mut result = Storage::global().add_images_to_album(album_id, image_ids)?;
-    result.album_changes = emit_membership_added(album_id, &result.inserted_ids)?;
+    let result = Storage::global().add_images_to_album(album_id, image_ids)?;
+    emit_membership_added(album_id, &result.inserted_ids)?;
     Ok(result)
 }
 
@@ -328,27 +230,15 @@ pub fn add_images_to_album_with_event(
 pub fn remove_images_from_album_with_event(
     album_id: &str,
     image_ids: &[String],
-) -> Result<(Vec<String>, Vec<AlbumImagesChangePayload>), String> {
+) -> Result<Vec<String>, String> {
     Storage::global().ensure_album_is_writable(album_id)?;
-    let (pairs_before, ancestor_paths) =
-        Storage::global().collect_album_memberships_with_paths(image_ids)?;
     let removed = Storage::global().remove_images_from_album(album_id, image_ids)?;
-    let album_changes = emit_membership_removed(
-        album_id,
-        &removed,
-        &pairs_before,
-        &ancestor_paths,
-        MembershipRemovalContext::AlbumMutation,
-    );
-    Ok((removed, album_changes))
+    emit_membership_removed(album_id, &removed);
+    Ok(removed)
 }
 
 /// 切换收藏；重复设置同一状态时不发成员增量。
 pub fn toggle_image_favorite_with_event(image_id: &str, favorite: bool) -> Result<(), String> {
-    let (pairs_before, ancestor_paths) = (!favorite)
-        .then(|| Storage::global().collect_album_memberships_with_paths(&[image_id.to_string()]))
-        .transpose()?
-        .unwrap_or_default();
     if !Storage::global().toggle_image_favorite(image_id, favorite)? {
         return Ok(());
     }
@@ -356,13 +246,7 @@ pub fn toggle_image_favorite_with_event(image_id: &str, favorite: bool) -> Resul
     if favorite {
         emit_membership_added(FAVORITE_ALBUM_ID, &changed)?;
     } else {
-        emit_membership_removed(
-            FAVORITE_ALBUM_ID,
-            &changed,
-            &pairs_before,
-            &ancestor_paths,
-            MembershipRemovalContext::AlbumMutation,
-        );
+        emit_membership_removed(FAVORITE_ALBUM_ID, &changed);
     }
     Ok(())
 }
@@ -370,31 +254,12 @@ pub fn toggle_image_favorite_with_event(image_id: &str, favorite: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn membership_change_classification_uses_each_images_hidden_state() {
-        let changed = vec!["visible".to_string(), "hidden".to_string()];
-        let pairs = vec![
-            ("album-a".to_string(), "visible".to_string()),
-            ("album-a".to_string(), "hidden".to_string()),
-            (HIDDEN_ALBUM_ID.to_string(), "hidden".to_string()),
-            ("album-b".to_string(), "hidden".to_string()),
-        ];
-
-        let (hidden, visible) = split_by_hidden(&changed, &pairs);
-        assert_eq!(hidden, vec!["hidden"]);
-        assert_eq!(visible, vec!["visible"]);
-
-        let grouped = grouped_memberships(&pairs);
-        assert_eq!(grouped["album-a"], vec!["visible", "hidden"]);
-        assert_eq!(grouped["album-b"], vec!["hidden"]);
-        assert_eq!(grouped[HIDDEN_ALBUM_ID], vec!["hidden"]);
-    }
+    use std::collections::HashMap;
 
     /// 在同一个事件循环中覆盖协议出口与真实写命令，避免多个转发任务争用全局接收器。
     #[cfg(feature = "ipc-server")]
     #[tokio::test(flavor = "current_thread")]
-    async fn phase_a_image_event_protocol() {
+    async fn phase_a_and_e_image_event_protocol() {
         use crate::ipc::events::{AppEvent, AppEventKind, ImageFieldPatch};
         use crate::ipc::server::EventBroadcaster;
         use tokio::time::{timeout, Duration};
@@ -402,7 +267,7 @@ mod tests {
         crate::app_paths::AppPaths::init_for_tests();
         let _ = crate::settings::Settings::init_global();
         let _ = Storage::init_global();
-        let _ = EventBroadcaster::init_global(64);
+        let _ = EventBroadcaster::init_global(256);
         let _ = GlobalEmitter::init_global();
         let emitter = GlobalEmitter::global();
         let mut rx = EventBroadcaster::global().subscribe_all_stream();
@@ -425,6 +290,14 @@ mod tests {
             AppEventKind::ImagesDeleted,
             AppEventKind::ImagesChange,
             AppEventKind::ImageChanged,
+            AppEventKind::AlbumsAdded,
+            AppEventKind::AlbumsDeleted,
+            AppEventKind::AlbumMoved,
+            AppEventKind::AlbumChanged,
+            AppEventKind::AlbumsChange,
+            AppEventKind::AlbumImagesAdded,
+            AppEventKind::AlbumImagesDeleted,
+            AppEventKind::AlbumImagesChange,
         ] {
             assert!(AppEventKind::ALL.contains(&kind));
             assert_eq!(
@@ -500,21 +373,14 @@ mod tests {
             .unwrap();
         emit_membership_added(HIDDEN_ALBUM_ID, &ids).unwrap();
         assert!(
-            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesChange { reason, .. } if reason == "add-hidden")
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesAdded { body, .. } if body.album_id == HIDDEN_ALBUM_ID && body.ancestor_path == format!("/{HIDDEN_ALBUM_ID}/"))
         );
-        let paths = HashMap::from([(HIDDEN_ALBUM_ID.to_string(), format!("/{HIDDEN_ALBUM_ID}/"))]);
         Storage::global()
             .remove_images_from_album(HIDDEN_ALBUM_ID, &ids)
             .unwrap();
-        emit_membership_removed(
-            HIDDEN_ALBUM_ID,
-            &ids,
-            &[(HIDDEN_ALBUM_ID.into(), inserted.id.clone())],
-            &paths,
-            MembershipRemovalContext::AlbumMutation,
-        );
+        emit_membership_removed(HIDDEN_ALBUM_ID, &ids);
         assert!(
-            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesChange { reason, .. } if reason == "delete-hidden")
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesDeleted { body, .. } if body.album_id == HIDDEN_ALBUM_ID && body.image_ids == ids && !body.images_deleted)
         );
         assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
 
@@ -524,6 +390,262 @@ mod tests {
         let serialized = serde_json::to_value(&*deleted).unwrap();
         assert_eq!(serialized.as_object().unwrap().len(), 3);
         assert_eq!(serialized["imageIds"], json!(ids));
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        // Phase E：真实成员增删不按隐藏状态拆分；隐藏只给自身发事件。
+        let storage = Storage::global();
+        let a = storage.add_album("phase-e-a", None).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsAdded { albums, .. } if albums.len() == 1)
+        );
+        let child = storage.add_album("phase-e-child", Some(&a.id)).unwrap();
+        next(&mut rx).await;
+        let b = storage.add_album("phase-e-b", None).unwrap();
+        next(&mut rx).await;
+        let mut images = Vec::new();
+        for n in 0..2 {
+            let image = serde_json::from_value(json!({
+                "id": "", "url": format!("https://example.test/phase-e-{n}"),
+                "local_path": format!("/tmp/phase-e-{n}"), "plugin_id": "phase-e",
+                "task_id": null, "crawled_at": 42, "thumbnail_path": ""
+            }))
+            .unwrap();
+            images.push(storage.add_image(image).unwrap().id);
+        }
+        add_images_to_album_with_event(&a.id, &images).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesAdded { body, .. } if body.image_ids == images && body.ancestor_path == a.ancestor_path)
+        );
+        toggle_image_favorite_with_event(&images[0], true).unwrap();
+        next(&mut rx).await;
+        add_images_to_album_with_event(HIDDEN_ALBUM_ID, &images[..1]).unwrap();
+        let hidden = next(&mut rx).await;
+        assert!(
+            matches!(&*hidden, AppEvent::AlbumImagesAdded { body, .. } if body.album_id == HIDDEN_ALBUM_ID && body.image_ids == images[..1])
+        );
+        // 隐藏只发隐藏画册自身一条，不带其它画册成员与图片行，也不给 A / 收藏派生事件
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+        let encoded = serde_json::to_value(&*hidden).unwrap();
+        assert!(encoded.get("reason").is_none() && encoded.get("albumIds").is_none());
+        assert!(encoded.get("memberships").is_none() && encoded.get("images").is_none());
+        assert!(encoded.get("imagesDeleted").is_none());
+        add_images_to_album_with_event(&b.id, &images).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesAdded { body, .. } if body.image_ids == images)
+        );
+        remove_images_from_album_with_event(&b.id, &images).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesDeleted { body, .. } if body.image_ids == images && !body.images_deleted)
+        );
+        remove_images_from_album_with_event(HIDDEN_ALBUM_ID, &images[..1]).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesDeleted { body, .. } if
+            body.album_id == HIDDEN_ALBUM_ID && body.image_ids == images[..1] && !body.images_deleted)
+        );
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+        crate::commands::album::update_album_images_order(
+            a.id.clone(),
+            vec![(images[0].clone(), -10), ("missing".into(), 1)],
+        )
+        .unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesChange { body, .. } if body.image_ids == images[..1])
+        );
+        crate::commands::album::update_album_images_order(
+            a.id.clone(),
+            vec![(images[0].clone(), -10)],
+        )
+        .unwrap();
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+        // NULL 旧序也能被更新。
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE album_images SET \"order\" = NULL WHERE album_id = ?1 AND image_id = ?2",
+                rusqlite::params![a.id, images[1]],
+            )
+            .unwrap();
+        crate::commands::album::update_album_images_order(
+            a.id.clone(),
+            vec![(images[1].clone(), -20)],
+        )
+        .unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumImagesChange { body, .. } if body.image_ids == images[1..])
+        );
+        add_images_to_album_with_event(HIDDEN_ALBUM_ID, &images[..1]).unwrap();
+        next(&mut rx).await;
+        begin_delete_images_with_events(&images[..1], false).unwrap();
+        assert!(matches!(
+            &*next(&mut rx).await,
+            AppEvent::ImagesDeleted { .. }
+        ));
+        for _ in 0..3 {
+            assert!(
+                matches!(&*next(&mut rx).await, AppEvent::AlbumImagesDeleted { body, .. } if body.images_deleted)
+            );
+        }
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        // 移动只发根；补丁合并、去掉位置字段，删除子树不再发空排序。
+        storage.move_album(&a.id, Some(&b.id)).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumMoved { id, old_ancestor_path, new_ancestor_path, .. }
+            if id == &a.id && old_ancestor_path == &a.ancestor_path && new_ancestor_path == &format!("{}{}/", b.ancestor_path, a.id))
+        );
+        emitter.emit_album_patches(vec![
+            crate::emitter::AlbumFieldPatch::new(
+                &a.id,
+                json!({ "name": "first", "parentId": "bad" }),
+            ),
+            crate::emitter::AlbumFieldPatch::new(
+                &a.id,
+                json!({ "name": "last", "ancestorPath": "bad" }),
+            ),
+            crate::emitter::AlbumFieldPatch::new(&b.id, json!({})),
+        ]);
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumChanged { patch, .. } if patch.fields == json!({ "name": "last" }).as_object().unwrap().clone())
+        );
+        emitter.emit_album_patches(vec![
+            crate::emitter::AlbumFieldPatch::new(&a.id, json!({ "name": "a" })),
+            crate::emitter::AlbumFieldPatch::new(&b.id, json!({ "syncMode": "none" })),
+        ]);
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsChange { patches, .. } if patches.len() == 2)
+        );
+        storage.delete_album(&a.id).unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsDeleted { albums, .. } if albums.len() == 1 && albums[0].id == a.id && albums[0].ancestor_path == format!("{}{}/", b.ancestor_path, a.id))
+        );
+        assert!(storage.get_album_by_id(&child.id).unwrap().is_none());
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        let labels = vec![
+            crate::storage::labels::LabelSpec {
+                segments: vec!["phase-e-labels".into()],
+                key: "one".into(),
+                name: None,
+            },
+            crate::storage::labels::LabelSpec {
+                segments: vec!["phase-e-labels".into()],
+                key: "two".into(),
+                name: None,
+            },
+        ];
+        storage
+            .apply_labels_to_images(&labels, &images[1..])
+            .unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsAdded { albums, .. } if albums.len() == 3)
+        );
+        for _ in 0..2 {
+            assert!(matches!(
+                &*next(&mut rx).await,
+                AppEvent::AlbumImagesAdded { .. }
+            ));
+        }
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+
+        // 本地文件夹批量创建、同时改链祖先与子孙、转换提升均走同一协议。
+        use crate::local_folder::create::build_entries_non_recursive;
+        let folder_base = tempfile::tempdir().unwrap();
+        let outer = build_entries_non_recursive("phase-e-outer", folder_base.path(), None);
+        let root_path = folder_base.path().join("root");
+        std::fs::create_dir_all(root_path.join("mid/leaf")).unwrap();
+        let folder_root = build_entries_non_recursive("phase-e-root", &root_path, None);
+        let mid = build_entries_non_recursive("phase-e-mid", &root_path.join("mid"), None);
+        let leaf = build_entries_non_recursive(
+            "phase-e-leaf",
+            &root_path.join("mid/leaf"),
+            Some(&folder_root.id),
+        );
+        let created = storage
+            .add_local_folder_albums_tx(&[
+                outer.clone(),
+                folder_root.clone(),
+                mid.clone(),
+                leaf.clone(),
+            ])
+            .unwrap();
+        let added = next(&mut rx).await;
+        assert!(matches!(&*added, AppEvent::AlbumsAdded { albums, .. } if albums.len() == 4));
+        let serialized = serde_json::to_value(&*added).unwrap();
+        assert_eq!(
+            serde_json::to_value(serde_json::from_value::<AppEvent>(serialized.clone()).unwrap())
+                .unwrap(),
+            serialized
+        );
+        let mut held: HashMap<_, _> = created
+            .iter()
+            .map(|a| (a.id.clone(), a.ancestor_path.clone()))
+            .collect();
+        let changed = storage.rechain_local_folder_albums().unwrap();
+        assert_eq!(changed.len(), 3);
+        let mut moved_ids = Vec::new();
+        for _ in 0..3 {
+            let event = next(&mut rx).await;
+            match &*event {
+                AppEvent::AlbumMoved {
+                    id,
+                    old_ancestor_path,
+                    new_ancestor_path,
+                    ..
+                } => {
+                    assert_eq!(
+                        held[id], *old_ancestor_path,
+                        "每条移动的旧路径必须接上前序事件"
+                    );
+                    moved_ids.push(id.clone());
+                    for path in held.values_mut() {
+                        if let Some(suffix) = path.strip_prefix(old_ancestor_path) {
+                            *path = format!("{new_ancestor_path}{suffix}");
+                        }
+                    }
+                }
+                event => panic!("改链意外事件: {event:?}"),
+            }
+        }
+        assert!(
+            moved_ids
+                .iter()
+                .position(|id| id == &folder_root.id)
+                .unwrap()
+                < moved_ids.iter().position(|id| id == &leaf.id).unwrap()
+        );
+        for (id, path) in &held {
+            assert_eq!(
+                storage.get_album_by_id(id).unwrap().unwrap().ancestor_path,
+                *path
+            );
+        }
+        assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
+        storage
+            .set_album_sync_mode(&outer.id, crate::local_folder::SyncMode::Recursive)
+            .unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsChange { patches, .. } if patches.len() == 4 && patches.iter().all(|p|
+            p.fields.len() == 1 && p.fields.contains_key("syncMode")))
+        );
+        storage
+            .set_album_sync_mode(&outer.id, crate::local_folder::SyncMode::None)
+            .unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsChange { patches, .. } if patches.len() == 4)
+        );
+        storage
+            .convert_local_folder_album_to_normal(&folder_root.id)
+            .unwrap();
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumMoved { id, old_ancestor_path, new_ancestor_path, .. }
+            if id == &folder_root.id && old_ancestor_path == &held[id] && new_ancestor_path == &format!("/{id}/"))
+        );
+        assert!(
+            matches!(&*next(&mut rx).await, AppEvent::AlbumsChange { patches, .. } if patches.len() == 3 && patches.iter().all(|p|
+            p.fields.get("albumType") == Some(&json!("normal")) && !p.fields.contains_key("parentId") && !p.fields.contains_key("ancestorPath") && !p.fields.contains_key("folderStatus") && !p.fields.contains_key("syncMode")))
+        );
         assert!(timeout(Duration::from_millis(30), rx.recv()).await.is_err());
 
         // 删除任务、清理已完成任务：外键把图片 task_id 置空，发 taskId: null 补丁。

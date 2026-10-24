@@ -1,8 +1,8 @@
-use crate::emitter::GlobalEmitter;
+use crate::emitter::{AlbumFieldPatch, GlobalEmitter};
+use crate::ipc::events::DeletedAlbum;
 use crate::local_folder::SyncMode;
 #[cfg(feature = "ipc-server")]
 use crate::storage::image_events::emit_membership_added;
-use crate::storage::image_events::{emit_album_images_order_changed, AlbumImagesChangePayload};
 use crate::storage::labels::{is_label_key, LabelSpec};
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
 use kabegame_i18n::t;
@@ -36,22 +36,30 @@ pub(crate) fn is_label_forest_kind(kind: &str) -> bool {
 pub struct Album {
     pub id: String,
     pub name: String,
+    #[serde(alias = "createdAt")]
     pub created_at: u64,
+    #[serde(alias = "parentId")]
     pub parent_id: Option<String>,
     /// "normal" | "local_folder" | "label" | "label_dir"（未来可扩展）
     #[serde(rename(serialize = "type"), alias = "type")]
     pub kind: String,
     /// 仅 kind=="local_folder" 时为 Some，存绝对路径
+    #[serde(alias = "syncFolder")]
     pub sync_folder: Option<String>,
     /// 仅 kind=="local_folder" 时使用，JSON 字符串，Phase 2 起填充
+    #[serde(alias = "folderStatus")]
     pub folder_status: Option<String>,
     /// 从根画册到自身的 id 链，格式为 `/root-id/.../self-id/`
+    #[serde(alias = "ancestorPath")]
     pub ancestor_path: String,
     /// 本地文件夹画册的逐画册同步状态
+    #[serde(alias = "syncMode")]
     pub sync_mode: String,
     /// kind 为 "label" 或 "label_dir" 时为 Some，用于插件定位与搜索
+    #[serde(alias = "labelKey")]
     pub label_key: Option<String>,
     /// 从标签森林根到自身的 key 链，格式为 `root/.../self`
+    #[serde(alias = "labelPath")]
     pub label_path: Option<String>,
 }
 
@@ -80,7 +88,6 @@ pub struct AddToAlbumResult {
     pub current_count: usize,
     #[serde(skip)]
     pub inserted_ids: Vec<String>,
-    pub album_changes: Vec<AlbumImagesChangePayload>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,12 +118,14 @@ struct LocalFolderRechainRow {
     parent_id: Option<String>,
     sync_path: PathBuf,
     created_at: i64,
+    ancestor_path: String,
 }
 
 #[derive(Debug)]
 struct AlbumRechainChange {
     id: String,
-    parent_id: Option<String>,
+    old_ancestor_path: String,
+    new_ancestor_path: String,
     name: Option<String>,
 }
 
@@ -125,20 +134,35 @@ struct AlbumRechainChange {
 pub(crate) struct SyncModeChange {
     pub id: String,
     pub sync_mode: SyncMode,
-    /// 前端据此只刷新该画册所在目录，而不是整棵树。
+    /// 规整过程已有的路径，保留给调用方；字段补丁不携带它。
     pub ancestor_path: String,
 }
 
-/// 发送 `syncMode` 变更事件；载荷带 `ancestorPath`，供前端按目录定位要刷新的树节点。
+/// 同一次写操作的同步模式变更合成一批补丁，不携带路径。
+fn sync_mode_patches(changes: &[SyncModeChange]) -> Vec<AlbumFieldPatch> {
+    changes
+        .iter()
+        .map(|change| {
+            AlbumFieldPatch::new(&change.id, json!({ "syncMode": change.sync_mode.as_str() }))
+        })
+        .collect()
+}
+
 fn emit_sync_mode_changes(emitter: &GlobalEmitter, changes: &[SyncModeChange]) {
-    for change in changes {
-        emitter.emit_album_changed(
-            &change.id,
-            json!({
-                "syncMode": change.sync_mode.as_str(),
-                "ancestorPath": change.ancestor_path,
-            }),
-        );
+    emitter.emit_album_patches(sync_mode_patches(changes));
+}
+
+/// 祖先先移动，后续子孙旧路径接续前面已发出的前缀替换。
+fn ordered_rechain_moves(changes: &mut [AlbumRechainChange]) {
+    changes.sort_by_key(|change| change.old_ancestor_path.len());
+    for index in 0..changes.len() {
+        let old = changes[index].old_ancestor_path.clone();
+        let new = changes[index].new_ancestor_path.clone();
+        for child in &mut changes[index + 1..] {
+            if let Some(suffix) = child.old_ancestor_path.strip_prefix(&old) {
+                child.old_ancestor_path = format!("{new}{suffix}");
+            }
+        }
     }
 }
 
@@ -508,7 +532,7 @@ impl Storage {
             label_path: None,
         };
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_added(&album);
+            emitter.emit_albums_added(std::slice::from_ref(&album));
         }
         Ok(album)
     }
@@ -528,7 +552,7 @@ impl Storage {
         let kind = if directory { "label_dir" } else { "label" };
         let album = Self::insert_label_album(&conn, key, name, parent_id, kind)?;
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_added(&album);
+            emitter.emit_albums_added(std::slice::from_ref(&album));
         }
         Ok(album)
     }
@@ -541,11 +565,11 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {e}"))?;
-        let (kind, parent_id): (String, Option<String>) = tx
+        let (kind, parent_id, old_key): (String, Option<String>, Option<String>) = tx
             .query_row(
-                "SELECT type, parent_id FROM albums WHERE id = ?1",
+                "SELECT type, parent_id, label_key FROM albums WHERE id = ?1",
                 params![album_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to query label album: {e}"))?
@@ -564,16 +588,12 @@ impl Storage {
             .map_err(|e| format!("Failed to commit transaction: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            let mut changes = json!({ "labelKey": new_key });
-            // 写库已提交：读不到路径时发不带路径的事件（前端按通配刷新），不能让已成功的写入报错
-            if let Ok(ancestor_path) = conn.query_row(
-                "SELECT ancestor_path FROM albums WHERE id = ?1",
-                params![album_id],
-                |row| row.get::<_, String>(0),
-            ) {
-                changes["ancestorPath"] = json!(ancestor_path);
+            if old_key.as_deref() != Some(new_key) {
+                emitter.emit_album_patches(vec![AlbumFieldPatch::new(
+                    album_id,
+                    json!({ "labelKey": new_key }),
+                )]);
             }
-            emitter.emit_album_changed(album_id, changes);
         }
         Ok(())
     }
@@ -770,6 +790,8 @@ impl Storage {
                                   WHERE album_id = p.value ->> 0)
                                 + ROW_NUMBER() OVER (PARTITION BY p.value ->> 0 ORDER BY p.key)
                            FROM json_each(?1) AS p
+                          -- 图片 id 查出后可能已被并发删除：跳过，避免一行违反外键让整批失败
+                          WHERE EXISTS (SELECT 1 FROM images WHERE id = CAST(p.value ->> 1 AS INTEGER))
                          RETURNING album_id, CAST(image_id AS TEXT)",
                     )
                     .map_err(|e| format!("prepare label memberships: {e}"))?;
@@ -790,9 +812,7 @@ impl Storage {
         };
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            for album in &created {
-                emitter.emit_album_added(album);
-            }
+            emitter.emit_albums_added(&created);
         }
         let mut album_ids = Vec::new();
         for leaf_id in leaf_ids.into_iter().flatten() {
@@ -863,7 +883,6 @@ impl Storage {
         let deleted_album = self
             .get_album_by_id(album_id)?
             .ok_or_else(|| "画册不存在".to_string())?;
-        let subtree_ids = self.collect_subtree_album_ids_bfs(album_id)?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
             "WITH RECURSIVE sub(id) AS (
@@ -891,10 +910,10 @@ impl Storage {
             .map_err(|e| format!("Failed to delete album: {}", e))?;
         drop(conn);
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_deleted(&deleted_album);
-            for id in subtree_ids {
-                emit_album_images_order_changed(&id, &[]);
-            }
+            emitter.emit_albums_deleted(&[DeletedAlbum {
+                id: deleted_album.id,
+                ancestor_path: deleted_album.ancestor_path,
+            }]);
         }
         Ok(())
     }
@@ -908,11 +927,11 @@ impl Storage {
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let current_parent_id: Option<String> = conn
+        let (current_parent_id, old_name): (Option<String>, String) = conn
             .query_row(
-                "SELECT parent_id FROM albums WHERE id = ?1",
+                "SELECT parent_id, name FROM albums WHERE id = ?1",
                 params![album_id],
-                |row| row.get::<_, Option<String>>(0),
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to read album parent: {}", e))?
@@ -932,16 +951,12 @@ impl Storage {
         .map_err(|e| format!("Failed to rename album: {}", e))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            let mut changes = json!({ "name": new_name_trimmed });
-            // 写库已提交：读不到路径时发不带路径的事件（前端按通配刷新），不能让已成功的写入报错
-            if let Ok(ancestor_path) = conn.query_row(
-                "SELECT ancestor_path FROM albums WHERE id = ?1",
-                params![album_id],
-                |row| row.get::<_, String>(0),
-            ) {
-                changes["ancestorPath"] = json!(ancestor_path);
+            if old_name != new_name_trimmed {
+                emitter.emit_album_patches(vec![AlbumFieldPatch::new(
+                    album_id,
+                    json!({ "name": new_name_trimmed }),
+                )]);
             }
-            emitter.emit_album_changed(album_id, changes);
         }
         Ok(())
     }
@@ -955,13 +970,16 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let updated = conn
             .execute(
-                "UPDATE albums SET name = ?1 WHERE id = ?2",
+                "UPDATE albums SET name = ?1 WHERE id = ?2 AND name <> ?1",
                 params![name_trimmed, FAVORITE_ALBUM_ID],
             )
             .map_err(|e| format!("Failed to set favorite album name: {}", e))?;
         if updated > 0 {
             if let Some(emitter) = GlobalEmitter::try_global() {
-                emitter.emit_album_changed(FAVORITE_ALBUM_ID, json!({ "name": name_trimmed }));
+                emitter.emit_album_patches(vec![AlbumFieldPatch::new(
+                    FAVORITE_ALBUM_ID,
+                    json!({ "name": name_trimmed }),
+                )]);
             }
         }
         Ok(())
@@ -1033,8 +1051,10 @@ impl Storage {
             )
             .optional()
             .map_err(|e| format!("Failed to query album type: {e}"))?;
-        if kind.as_deref() == Some("label_dir") {
-            return Err(t!("albums.errors.labelDirNoImages").to_string());
+        match kind.as_deref() {
+            None => return Err("画册不存在".to_string()),
+            Some("label_dir") => return Err(t!("albums.errors.labelDirNoImages").to_string()),
+            _ => {}
         }
 
         let current_count: usize = tx
@@ -1053,6 +1073,7 @@ impl Storage {
             )
             .unwrap_or(0);
 
+        // 不存在的图片 id 违反外键，单条语句失败、事务继续，不计入 inserted_ids，也不发成员事件
         let mut inserted_ids = Vec::new();
         for id in image_ids {
             max_order += 1;
@@ -1077,7 +1098,6 @@ impl Storage {
             can_add: image_ids.len(),
             current_count: current_count + added,
             inserted_ids,
-            album_changes: Vec::new(),
         })
     }
 
@@ -1208,23 +1228,27 @@ impl Storage {
         &self,
         album_id: &str,
         image_orders: &[(String, i64)],
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
+        let mut changed = Vec::new();
         for (id, order) in image_orders {
-            tx.execute(
-                "UPDATE album_images SET \"order\" = ?1 WHERE album_id = ?2 AND image_id = ?3",
+            let affected = tx.execute(
+                "UPDATE album_images SET \"order\" = ?1 WHERE album_id = ?2 AND image_id = ?3 AND \"order\" IS NOT ?1",
                 params![order, album_id, id],
             )
             .map_err(|e| format!("Failed to update album image order: {}", e))?;
+            if affected > 0 && !changed.contains(id) {
+                changed.push(id.clone());
+            }
         }
 
         tx.commit()
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-        Ok(())
+        Ok(changed)
     }
 
     pub(crate) fn ensure_album_name_unique_ci(
@@ -1464,9 +1488,12 @@ impl Storage {
 
     /// 自顶向下重算全表 `albums.ancestor_path` 与标签画册的 `label_path`。
     /// 画册数量级小（几百至几千），全表重算换掉所有增量维护逻辑。
-    pub(crate) fn rebuild_album_ancestor_paths(conn: &Connection) -> Result<(), String> {
-        conn.execute(
-            r#"
+    pub(crate) fn rebuild_album_ancestor_paths(
+        conn: &Connection,
+    ) -> Result<HashMap<String, String>, String> {
+        let mut stmt = conn
+            .prepare(
+                r#"
 WITH RECURSIVE tree(id, path, lpath) AS (
     SELECT id, '/' || id || '/', CASE WHEN type IN ('label', 'label_dir') THEN label_key END
       FROM albums WHERE parent_id IS NULL
@@ -1477,11 +1504,15 @@ WITH RECURSIVE tree(id, path, lpath) AS (
 )
 UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
   FROM tree WHERE albums.id = tree.id
+RETURNING id, ancestor_path
 "#,
-            [],
-        )
-        .map_err(|e| format!("rebuild_album_ancestor_paths: {e}"))?;
-        Ok(())
+            )
+            .map_err(|e| format!("rebuild_album_ancestor_paths: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| format!("read rebuilt album paths: {e}"))?;
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|e| format!("collect rebuilt album paths: {e}"))
     }
 
     pub(crate) fn album_ancestor_path_of(
@@ -1583,15 +1614,18 @@ UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
             .map_err(|e| format!("commit set_album_sync_mode: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emit_sync_mode_changes(
-                emitter,
-                &[SyncModeChange {
-                    id: album_id.to_string(),
-                    sync_mode: mode,
-                    ancestor_path,
-                }],
-            );
-            emit_sync_mode_changes(emitter, &normalized);
+            let mut changes = normalized;
+            if mode != current_mode {
+                changes.insert(
+                    0,
+                    SyncModeChange {
+                        id: album_id.to_string(),
+                        sync_mode: mode,
+                        ancestor_path,
+                    },
+                );
+            }
+            emit_sync_mode_changes(emitter, &changes);
         }
         Ok(())
     }
@@ -1632,11 +1666,11 @@ UPDATE albums SET ancestor_path = tree.path, label_path = tree.lpath
             return Err(t!("albums.localFolderErrors.delegatedConversion").to_string());
         }
 
-        let converted_ids = {
+        let converted_albums = {
             let mut stmt = tx
                 .prepare(
                     r#"
-SELECT id
+SELECT id, name, created_at, parent_id, type, sync_folder, folder_status, ancestor_path, sync_mode, label_key, label_path
   FROM albums
  WHERE type = 'local_folder'
    AND substr(ancestor_path, 1, length(?1)) = ?1
@@ -1645,12 +1679,16 @@ SELECT id
                 )
                 .map_err(|e| format!("prepare local folder album conversion ids: {e}"))?;
             let rows = stmt
-                .query_map(params![root_ancestor_path], |row| row.get::<_, String>(0))
+                .query_map(params![root_ancestor_path], album_from_storage_row)
                 .map_err(|e| format!("query local folder album conversion ids: {e}"))?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("read local folder album conversion ids: {e}"))?
         };
 
+        let converted_ids: Vec<_> = converted_albums
+            .iter()
+            .map(|album| album.id.clone())
+            .collect();
         tx.execute(
             r#"
 UPDATE albums
@@ -1700,25 +1738,31 @@ UPDATE albums
             .map_err(|e| format!("commit local folder album conversion: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            for id in &converted_ids {
-                emitter.emit_album_changed(
-                    id,
-                    json!({
-                        "albumType": "normal",
-                        "syncFolder": null,
-                        "folderStatus": null,
-                        "syncMode": "none",
-                    }),
-                );
-            }
+            let mut patches: Vec<_> = converted_albums
+                .iter()
+                .map(|album| {
+                    let mut patch =
+                        AlbumFieldPatch::new(&album.id, json!({ "albumType": "normal" }));
+                    if album.sync_folder.is_some() {
+                        patch.fields.insert("syncFolder".into(), json!(null));
+                    }
+                    if album.folder_status.is_some() {
+                        patch.fields.insert("folderStatus".into(), json!(null));
+                    }
+                    if album.sync_mode != "none" {
+                        patch.fields.insert("syncMode".into(), json!("none"));
+                    }
+                    patch
+                })
+                .collect();
             if let Some((id, renamed)) = lifted {
-                let payload = match renamed {
-                    Some(name) => json!({ "parentId": null, "name": name }),
-                    None => json!({ "parentId": null }),
-                };
-                emitter.emit_album_changed(&id, payload);
+                emitter.emit_album_moved(&id, &root_ancestor_path, &format!("/{id}/"));
+                if let Some(name) = renamed {
+                    patches.push(AlbumFieldPatch::new(&id, json!({ "name": name })));
+                }
             }
-            emit_sync_mode_changes(emitter, &normalized);
+            patches.extend(sync_mode_patches(&normalized));
+            emitter.emit_album_patches(patches);
         }
 
         Ok(converted_ids)
@@ -1733,7 +1777,7 @@ UPDATE albums
         let mut rows = {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, parent_id, sync_folder, created_at
+                    "SELECT id, name, parent_id, sync_folder, created_at, ancestor_path
                        FROM albums
                       WHERE type = 'local_folder' AND sync_folder IS NOT NULL
                       ORDER BY created_at ASC, id ASC",
@@ -1750,6 +1794,7 @@ UPDATE albums
                         parent_id: row.get(2)?,
                         sync_path,
                         created_at: row.get(4)?,
+                        ancestor_path: row.get(5)?,
                     })
                 })
                 .map_err(|e| format!("query rechain_local_folder_albums: {e}"))?;
@@ -1816,26 +1861,36 @@ UPDATE albums
             .map_err(|e| format!("rechain local folder album {}: {e}", album.id))?;
             changes.push(AlbumRechainChange {
                 id: album.id.clone(),
-                parent_id: desired_parent,
+                old_ancestor_path: album.ancestor_path.clone(),
+                new_ancestor_path: String::new(),
                 name: (resolved_name != album.name).then_some(resolved_name),
             });
         }
         if !changes.is_empty() {
-            Self::rebuild_album_ancestor_paths(&tx)?;
+            let paths = Self::rebuild_album_ancestor_paths(&tx)?;
+            for change in &mut changes {
+                change.new_ancestor_path =
+                    paths.get(&change.id).cloned().expect("改链画册已重算路径");
+            }
+            ordered_rechain_moves(&mut changes);
         }
         let sync_mode_changes = normalize_local_folder_sync_modes(&tx)?;
         tx.commit()
             .map_err(|e| format!("commit rechain_local_folder_albums: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
+            let mut patches = sync_mode_patches(&sync_mode_changes);
             for change in &changes {
-                let payload = match &change.name {
-                    Some(name) => json!({ "parentId": change.parent_id, "name": name }),
-                    None => json!({ "parentId": change.parent_id }),
-                };
-                emitter.emit_album_changed(&change.id, payload);
+                emitter.emit_album_moved(
+                    &change.id,
+                    &change.old_ancestor_path,
+                    &change.new_ancestor_path,
+                );
+                if let Some(name) = &change.name {
+                    patches.push(AlbumFieldPatch::new(&change.id, json!({ "name": name })));
+                }
             }
-            emit_sync_mode_changes(emitter, &sync_mode_changes);
+            emitter.emit_album_patches(patches);
         }
         Ok(changes.into_iter().map(|change| change.id).collect())
     }
@@ -1931,9 +1986,7 @@ UPDATE albums
         tx.commit().map_err(|e| format!("commit: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            for album in &created {
-                emitter.emit_album_added(album);
-            }
+            emitter.emit_albums_added(&created);
         }
 
         Ok(created)
@@ -2072,14 +2125,7 @@ UPDATE albums
             .map_err(|e| format!("Failed to read moved album ancestor path: {e}"))?;
 
         if let Some(emitter) = GlobalEmitter::try_global() {
-            emitter.emit_album_changed(
-                album_id,
-                json!({
-                    "parentId": new_parent_id,
-                    "ancestorPath": new_ancestor_path,
-                    "oldAncestorPath": old_ancestor_path,
-                }),
-            );
+            emitter.emit_album_moved(album_id, &old_ancestor_path, &new_ancestor_path);
         }
         Ok(())
     }
@@ -2091,10 +2137,60 @@ mod tests {
     use crate::local_folder::create::build_entries_non_recursive;
     use std::path::Path;
 
+    #[test]
+    fn rechain_moves_rewrite_descendant_old_paths_after_ancestor() {
+        let mut changes = vec![
+            AlbumRechainChange {
+                id: "child".into(),
+                old_ancestor_path: "/old/root/child/".into(),
+                new_ancestor_path: "/child/".into(),
+                name: None,
+            },
+            AlbumRechainChange {
+                id: "root".into(),
+                old_ancestor_path: "/old/root/".into(),
+                new_ancestor_path: "/new/root/".into(),
+                name: None,
+            },
+        ];
+        ordered_rechain_moves(&mut changes);
+        assert_eq!(changes[0].id, "root");
+        assert_eq!(changes[1].old_ancestor_path, "/new/root/child/");
+        assert_eq!(changes[1].new_ancestor_path, "/child/");
+    }
+
     fn test_storage() -> Storage {
         let conn = Connection::open_in_memory().unwrap();
         crate::storage::migrations::init::create_all_tables(&conn);
         Storage::from_test_connection(conn)
+    }
+
+    #[test]
+    fn add_images_rejects_missing_album_and_skips_missing_images() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::storage::migrations::init::create_all_tables(&conn);
+        // 与生产连接一致开启外键；测试连接默认关闭
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO images (id, local_path, crawled_at) VALUES (1, '/tmp/fk-1.jpg', 1);",
+        )
+        .unwrap();
+        let storage = Storage::from_test_connection(conn);
+        let album = storage.add_album("fk", None).unwrap();
+
+        assert!(storage
+            .add_images_to_album("missing album", &["1".to_string()])
+            .is_err());
+        let result = storage
+            .add_images_to_album(&album.id, &["1".into(), "".into(), "99".into()])
+            .unwrap();
+        assert_eq!(result.inserted_ids, ["1"]);
+
+        let conn = storage.db.lock().unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM album_images", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     fn add_local_folder(storage: &Storage, name: &str, path: &Path) -> Album {
@@ -2983,18 +3079,8 @@ VALUES
                 .unwrap();
         }
 
-        // delete_album 末尾的 `emit_album_images_order_changed` 会调用 `Storage::global()`
-        // （默认 feature 下 `GlobalEmitter::try_global()` 恒为 Some），而单测进程没有全局
-        // Storage——既有的 `apply_labels_and_delete_label_subtree_remove_memberships`
-        // 同样在这步 panic。该副作用发生在 `drop(conn)` 之后，落库结果已经生效，
-        // 所以这里吞掉 panic，直接用连接断言清空结果。
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            storage.delete_album(&root.id)
-        }));
-        assert!(
-            storage.get_album_by_id(&root.id).unwrap().is_none(),
-            "根画册应已删除，说明落库在 panic 前完成"
-        );
+        storage.delete_album(&root.id).unwrap();
+        assert!(storage.get_album_by_id(&root.id).unwrap().is_none());
 
         let conn = storage.db.lock().unwrap();
         for id in ["c-root", "c-child", "c-grandchild"] {

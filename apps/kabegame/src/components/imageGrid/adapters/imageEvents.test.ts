@@ -89,16 +89,17 @@ describe("Phase B 四个 adapter 的图片相关性", () => {
     expect(accepts(filters, "images-added", payload("current"))).toBe(false);
     expect(accepts(filters, "images-added", payload("current", "y"))).toBe(name !== "album");
   });
-  it.each(Object.entries(adapters))("%s：hide 关闭不响应隐藏画册，开启后响应（画册等自身成员事件）", (name, create) => {
+  it.each(Object.entries(adapters))("%s：hide 关闭不响应隐藏画册（只打补丁），开启后一律响应", (_name, create) => {
     const filters = create().refreshOn;
-    const payload = { seq: 1, reason: "add-hidden", albumIds: ["hidden"], imageIds: ["other"] };
-    expect(accepts(filters, "album-images-change", payload)).toBe(false);
-    state.hide = true;
-    expect(accepts(filters, "album-images-change", payload)).toBe(name !== "album");
-    expect(accepts(filters, "album-images-change", { ...payload, albumIds: ["other"] })).toBe(false);
-    if (name === "album") {
-      expect(accepts(filters, "album-images-change", { ...payload, reason: "hide", albumIds: ["current"] })).toBe(true);
+    const payload = { seq: 1, albumId: "hidden", imageIds: ["other"] };
+    for (const event of ["album-images-added", "album-images-deleted"]) {
+      expect(accepts(filters, event, payload)).toBe(false);
     }
+    state.hide = true;
+    for (const event of ["album-images-added", "album-images-deleted"]) {
+      expect(accepts(filters, event, payload)).toBe(true);
+    }
+    expect(accepts(filters, "album-images-added", { ...payload, albumId: "other" })).toBe(false);
   });
   it("taskId 置空只打补丁不刷新；畅游归属变化刷新（单图 / 批量）", () => {
     for (const [adapter, field, expected] of [
@@ -113,8 +114,23 @@ describe("Phase B 四个 adapter 的图片相关性", () => {
   });
   it("画廊无画册与当前画册仍响应原有成员变化", () => {
     state.noAlbum = true;
-    const payload = { seq: 1, reason: "add", albumIds: ["current"], imageIds: ["other"] };
-    expect(accepts(adapters.gallery().refreshOn, "album-images-change", payload)).toBe(true);
-    expect(accepts(adapters.album().refreshOn, "album-images-change", payload)).toBe(true);
+    const payload = { seq: 1, albumId: "current", imageIds: ["other"] };
+    expect(accepts(adapters.gallery().refreshOn, "album-images-added", payload)).toBe(true);
+    expect(accepts(adapters.album().refreshOn, "album-images-added", payload)).toBe(true);
+  });
+  it("Phase E 保留改名、任意排序与无画册删除的刷新口径", () => {
+    const patch = { seq: 1, patch: { id: "current", name: "新名" } };
+    expect(accepts(adapters.album().refreshOn, "album-changed", patch)).toBe(true);
+    expect(accepts(adapters.gallery().refreshOn, "albums-change", { patches: [patch.patch] })).toBe(true);
+    expect(accepts(adapters.album().refreshOn, "album-images-change", { albumId: "current", imageIds: ["x"] })).toBe(
+      true,
+    );
+    state.noAlbum = true;
+    expect(
+      accepts(adapters.gallery().refreshOn, "albums-deleted", { albums: [{ id: "other", ancestorPath: "/other/" }] }),
+    ).toBe(true);
+    // 任务 / 畅游的无画册缺口留给 Phase F，本次不改变它们的普通成员刷新条件。
+    expect(accepts(adapters.task().refreshOn, "album-images-added", { albumId: "current" })).toBe(false);
+    expect(accepts(adapters.surf().refreshOn, "album-images-added", { albumId: "current" })).toBe(false);
   });
 });

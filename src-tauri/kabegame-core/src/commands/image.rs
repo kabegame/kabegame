@@ -166,13 +166,13 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
 pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
     let pending = begin_delete_images_with_events(&image_ids, true)?;
     clear_current_wallpaper_if_removed(&image_ids);
-    let result = pending.finish().await;
-    Ok(json!({ "albumChanges": result.album_changes }))
+    pending.finish().await;
+    Ok(Value::Null)
 }
 
 pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
     let pending = begin_delete_images_with_events(&image_ids, false)?;
     clear_current_wallpaper_if_removed(&image_ids);
-    let result = pending.finish().await;
-    Ok(json!({ "albumChanges": result.album_changes }))
+    pending.finish().await;
+    Ok(Value::Null)
 }

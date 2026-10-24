@@ -18,6 +18,8 @@ export interface TreeModel<T> {
   nodeByKey(key: string): TreeNodeHandle<T> | undefined;
   /** 全部存活句柄，包含收起分支。 */
   allNodes(): TreeNodeHandle<T>[];
+  /** 同步已加载行与收起分支的持有数据，不发请求。 */
+  mapElements(map: (element: T) => T): void;
   rowIndexByKey(key: string): number;
   expand(key: string): Promise<void>;
   collapse(key: string): void;
@@ -502,6 +504,12 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     rows,
     nodeByKey: (key) => handles.get(key),
     allNodes: () => [...handles.values()],
+    mapElements(map) {
+      for (const pages of pageData.values()) {
+        for (const [page, elements] of pages) pages.set(page, elements.map(map));
+      }
+      for (const handle of handles.values()) handle.element = map(handle.element);
+    },
     rowIndexByKey: (key) => rowIndex.get(key) ?? -1,
     expand,
     collapse,

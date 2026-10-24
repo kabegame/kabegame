@@ -261,7 +261,7 @@ export function useImageOperations(
   // 注意：按 hash 去重已改为后端“分批后台任务 + 事件驱动 UI 同步”，逻辑迁移到 Gallery.vue
 
   // 批量切换收藏：任一未收藏 → 全部收藏，否则全部取消收藏。
-  // 当前列表在命令成功后就地更新；其他入口仍由 album-images-change 同步。
+  // 当前列表在命令成功后就地更新；其他入口仍由画册成员增删事件同步。
   const toggleFavoriteForImages = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length === 0) return;
     const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));

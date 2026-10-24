@@ -35,7 +35,7 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
     refreshOn: [
       addedTrigger(view, (image) => !!params.taskId() && image.taskId === params.taskId()),
       ...patchTriggers(view),
-      hiddenTrigger(view),
+      ...hiddenTrigger(view),
     ],
     // 失败图片计数与当前页数据同源刷新
     onAfterRefresh: async () => {

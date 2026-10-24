@@ -5,7 +5,14 @@ import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galle
 import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter } from "../types";
-import { albumChangeKinds, addedTrigger, patchTriggers, hiddenTrigger, on } from "@/services/kbEvents";
+import {
+  albumChangeKinds,
+  albumPatchTriggers,
+  addedTrigger,
+  patchTriggers,
+  hiddenTrigger,
+  on,
+} from "@/services/kbEvents";
 import { IS_WEB } from "@/env";
 
 /**
@@ -48,10 +55,14 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
     refreshOn: [
       addedTrigger(view),
       ...patchTriggers(view),
-      hiddenTrigger(view),
+      ...hiddenTrigger(view),
+      on("album-images-added", () => routeStore.effectiveNoAlbum),
+      on("album-images-deleted", () => routeStore.effectiveNoAlbum),
       on("album-images-change", () => routeStore.effectiveNoAlbum),
-      on("album-changed", (payload) => {
-        const kinds = albumChangeKinds(payload);
+      on("albums-deleted", () => routeStore.effectiveNoAlbum),
+      on("album-moved"),
+      ...albumPatchTriggers((patch) => {
+        const kinds = albumChangeKinds(patch);
         return kinds.structure || (routeStore.effectiveNoAlbum && kinds.row);
       }),
     ],

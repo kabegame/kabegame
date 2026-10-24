@@ -146,8 +146,7 @@ pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Resu
             "added": 0,
             "attempted": 0,
             "canAdd": 0,
-            "currentCount": 0,
-            "albumChanges": []
+            "currentCount": 0
         }));
     }
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
@@ -161,12 +160,11 @@ pub async fn remove_images_from_album(
     image_ids: Vec<String>,
 ) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
-    let (removed, album_changes) = remove_images_from_album_with_event(&album_id, &image_ids)?;
+    let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
     #[cfg(feature = "virtual-driver")]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
     Ok(serde_json::json!({
         "removed": removed.len(),
-        "albumChanges": album_changes,
     }))
 }
 
@@ -174,11 +172,8 @@ pub fn update_album_images_order(
     album_id: String,
     image_orders: Vec<(String, i64)>,
 ) -> Result<Value, String> {
-    Storage::global().update_album_images_order(&album_id, &image_orders)?;
-    let image_ids: Vec<String> = image_orders
-        .into_iter()
-        .map(|(image_id, _)| image_id)
-        .collect();
+    Storage::global().ensure_album_is_writable(&album_id)?;
+    let image_ids = Storage::global().update_album_images_order(&album_id, &image_orders)?;
     emit_album_images_order_changed(&album_id, &image_ids);
     Ok(Value::Null)
 }

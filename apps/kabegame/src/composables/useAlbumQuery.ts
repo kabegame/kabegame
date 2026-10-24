@@ -2,6 +2,11 @@ import { computed, onScopeDispose, ref, watch, type Ref } from "vue";
 import { albumImageCountQuery, normalizeAlbumRow, type Album } from "@/services/albums";
 import {
   albumChangeKinds,
+  albumPatchTriggers,
+  kbEvent$,
+  moveAlbumPath,
+  type AlbumMovedPayload,
+  type AlbumImagesPayload,
   albumEventAffectsDir,
   albumEventPaths,
   on,
@@ -16,16 +21,23 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
   const imageCount = ref(0);
   const descendantCount = ref(0);
   const self = () => (album.value?.id === albumId.value ? album.value?.ancestorPath : undefined);
-  const sameChain = (name: string, payload: unknown, id: string | undefined) => {
+  const sameChainPath = (paths: string[] | "wildcard", id: string | undefined) => {
     const path = self();
     if (!path) return !!albumId.value && id === albumId.value;
-    const paths = albumEventPaths(name, payload);
     return paths === "wildcard" || paths.some((p) => p.startsWith(path) || path.startsWith(p));
   };
+  const sameChain = (name: string, payload: unknown, id: string | undefined) =>
+    sameChainPath(albumEventPaths(name, payload), id);
   const affectsCount = (name: string, payload: unknown) => {
     const path = self();
     return !!path && albumEventAffectsDir(name, payload, path);
   };
+
+  // 补丁不携带位置；已持有行用自身路径定位，未知行保持保守刷新。
+  const heldPath = (id: string) => [album.value, ...ancestors.value].find((a) => a?.id === id)?.ancestorPath;
+  // 计数路径 album-tree/<id> 不带 hide/：只看自身或子孙的成员增删（隐藏画册事件只在当前画册就是隐藏画册时命中）
+  const memberAffectsCount = (p: AlbumImagesPayload) =>
+    !!albumId.value && (p.albumId === albumId.value || (!!self() && p.ancestorPath.startsWith(self()!)));
 
   const detail = usePathqlLookAll({
     queries: () => {
@@ -38,13 +50,15 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
       ] as const;
     },
     refreshOn: [
-      on(
-        "album-changed",
-        (p) =>
-          p.albumId === albumId.value || (albumChangeKinds(p).structure && sameChain("album-changed", p, p.albumId)),
+      ...albumPatchTriggers(
+        (patch) =>
+          patch.id === albumId.value ||
+          (albumChangeKinds(patch).structure &&
+            sameChainPath(heldPath(patch.id) ? [heldPath(patch.id)!] : "wildcard", patch.id)),
       ),
-      on("album-added", (p) => sameChain("album-added", p, p.id)),
-      on("album-deleted", (p) => sameChain("album-deleted", p, p.albumId)),
+      on("albums-added", (p) => p.albums.some((a) => sameChain("albums-added", { albums: [a] }, a.id))),
+      on("albums-deleted", (p) => p.albums.some((a) => sameChain("albums-deleted", { albums: [a] }, a.id))),
+      on("album-moved", (p) => sameChain("album-moved", p, p.id)),
     ],
     onResult: ([rows, parents, subtree]) => {
       album.value = rows[0] ? normalizeAlbumRow(rows[0]) : null;
@@ -57,20 +71,33 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
     queries: () =>
       album.value && album.value.id === albumId.value ? ([albumImageCountQuery(album.value)] as const) : null,
     refreshOn: [
+      on("album-images-added", memberAffectsCount),
+      on("album-images-deleted", memberAffectsCount),
+      on("album-images-change", memberAffectsCount),
+      on("albums-added", (p) => affectsCount("albums-added", p)),
       on(
-        "album-images-change",
+        "albums-deleted",
         (p) =>
-          !!albumId.value &&
-          (!!p.albumIds?.includes(albumId.value) || (!!self() && !!p.ancestorPath?.startsWith(self()!))),
+          !!self() &&
+          p.albums.some((a) => self()!.startsWith(a.ancestorPath) || affectsCount("albums-deleted", { albums: [a] })),
       ),
-      on("album-added", (p) => affectsCount("album-added", p)),
-      on("album-deleted", (p) => affectsCount("album-deleted", p)),
-      on("album-changed", (p) => albumChangeKinds(p).structure && affectsCount("album-changed", p)),
+      on("album-moved", (p) => affectsCount("album-moved", p)),
+      ...albumPatchTriggers(
+        (patch) =>
+          albumChangeKinds(patch).structure &&
+          !!self() &&
+          (!heldPath(patch.id) || (heldPath(patch.id) !== self() && heldPath(patch.id)!.startsWith(self()!))),
+      ),
     ],
     onResult: ([total]) => {
       imageCount.value = total;
     },
   });
+  const moved = kbEvent$<AlbumMovedPayload>("album-moved").subscribe(({ payload }) => {
+    if (album.value) album.value = moveAlbumPath(album.value, payload);
+    ancestors.value = ancestors.value.map((a) => moveAlbumPath(a, payload));
+  });
+  onScopeDispose(() => moved.unsubscribe());
   const loading = computed(() => detail.loading.value || count.loading.value);
 
   // Promise 等待属于模型；post 等待本轮 A 落地、B 换 key 并发出请求后再检查，避免中间态提前完成。

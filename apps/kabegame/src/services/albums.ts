@@ -1,5 +1,4 @@
 import { invoke } from "@/api/rpc";
-import type { AlbumImagesChangePayload } from "@/services/kbEvents";
 import type { TreePage } from "@/components/tree/types";
 import { pathqlEntry, pathqlFetch, type PathqlQuery } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
@@ -50,12 +49,10 @@ export interface AddToAlbumResult {
   attempted: number;
   canAdd: number;
   currentCount: number;
-  albumChanges: AlbumImagesChangePayload[];
 }
 
 export interface RemoveFromAlbumResult {
   removed: number;
-  albumChanges: AlbumImagesChangePayload[];
 }
 
 function parseParentId(raw: unknown): string | null {
@@ -349,6 +346,6 @@ export async function addTaskImagesToAlbum(taskId: string, albumId: string): Pro
 }
 
 export async function removeImagesFromAlbum(albumId: string, imageIds: string[]): Promise<RemoveFromAlbumResult> {
-  if (!imageIds.length) return { removed: 0, albumChanges: [] };
+  if (!imageIds.length) return { removed: 0 };
   return invoke<RemoveFromAlbumResult>("remove_images_from_album", { albumId, imageIds });
 }

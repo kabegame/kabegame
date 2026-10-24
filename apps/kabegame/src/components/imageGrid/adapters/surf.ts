@@ -33,7 +33,7 @@ export function createSurfImagesAdapter(params: {
     refreshOn: [
       addedTrigger(view, (image) => !!params.recordId() && image.surfRecordId === params.recordId()),
       ...patchTriggers(view, { surfRecordId: () => true }),
-      hiddenTrigger(view),
+      ...hiddenTrigger(view),
     ],
     actionsOptions: () => ({
       removeText: t("surf.removeText"),

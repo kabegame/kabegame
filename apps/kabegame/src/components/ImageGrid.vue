@@ -319,7 +319,7 @@ let lastLocateAttempt: string | null = null;
 
 /* ---------------- 数据层 ----------------
  * 本组件持有 images / loadedKey，接管路径加载、usePagedGallery 分页、
- * route.query.path 同步与 图片增删、字段补丁 / album-images-change 事件刷新。
+ * route.query.path 同步与 图片增删、字段补丁 / 画册成员增删与排序事件刷新。
  */
 const images = shallowRef<ImageInfo[]>([]);
 const loadedKey = ref("");

@@ -192,7 +192,7 @@
   因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
 - 侧栏以 `TreeQuerySource` 描述每个分支的一条 list 查询，经 `usePathqlLookMany` 观察 `all` key，
   只观察自身与所有祖先都展开的分支。`refreshOn` 对 `images-added` / `images-deleted` / `images-change` / `image-changed` 与隐藏画册成员变化投票，画册敏感上下文另看
-  `album-images-change` 与画册结构事件；同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
+  `album-images-added` / `album-images-deleted` / 排序 `album-images-change` 与画册增删、移动、字段补丁事件；隐藏 / 取消隐藏只是隐藏画册自身的成员增删，由隐藏触发在 hide 开启时刷新；本阶段保留含 hide 的画册敏感上下文与既有保守刷新，同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
   侧栏隐藏时观察集合为空，每次显示都整组请求；插件 `id:version` 签名变化调用 `model.refresh()`。
 - 高级查询弹窗是 diff 模式：候选列举同样走 `<路径>/_kb_co`（与侧栏只差路径是否带草稿，不带计数），`refreshOn` 为空，
   打开期间不随数据变更刷新；候选在下拉面板里，每次展开都重新挂载、读一次候选，不再有独立纯净列表缓存或缓存失效订阅。

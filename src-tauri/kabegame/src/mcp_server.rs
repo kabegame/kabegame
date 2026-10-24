@@ -1135,9 +1135,11 @@ impl ServerHandler for KabegameMcpServer {
                     .map(|o| (o.image_id, o.order))
                     .collect();
 
-                Storage::global()
-                    .update_album_images_order(&args.album_id, &pairs)
-                    .map_err(|e| McpError::internal_error(e, None))?;
+                kabegame_core::commands::album::update_album_images_order(
+                    args.album_id.clone(),
+                    pairs,
+                )
+                .map_err(|e| McpError::internal_error(e, None))?;
 
                 Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Updated order for {count} images in album '{}'. \
@@ -1189,9 +1191,11 @@ impl ServerHandler for KabegameMcpServer {
                         .iter()
                         .map(|o| (o.image_id.clone(), o.order))
                         .collect();
-                    Storage::global()
-                        .update_album_images_order(&args.album_id, &pairs)
-                        .map_err(|e| McpError::internal_error(e, None))?;
+                    kabegame_core::commands::album::update_album_images_order(
+                        args.album_id.clone(),
+                        pairs,
+                    )
+                    .map_err(|e| McpError::internal_error(e, None))?;
                 }
 
                 if result.added > 0 {

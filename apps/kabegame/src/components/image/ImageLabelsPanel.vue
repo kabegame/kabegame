@@ -99,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { onScopeDispose, computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@kabegame/i18n";
 import { Close, CopyDocument, Plus, PriceTag } from "@kabegame/element-plus-icons";
@@ -118,7 +118,16 @@ import {
   type Album,
   type AlbumNode,
 } from "@/services/albums";
-import { on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
+import {
+  on,
+  pathqlRequest$,
+  usePathqlLooker,
+  albumPatchTriggers,
+  kbEvent$,
+  moveAlbumPath,
+  pathHasAlbum,
+  type AlbumMovedPayload,
+} from "@/services/kbEvents";
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { isLabelKey } from "@/utils/labelKey";
 import { labelKeysText, writeClipboardText } from "@/utils/imageLabels";
@@ -163,11 +172,14 @@ usePathqlLooker({
   kind: "rows",
   key: () => labelsKey.value,
   refreshOn: [
-    // 成员变更：命中当前图片，或事件未带 imageIds（全量）
-    on("album-images-change", (payload) => !payload.imageIds?.length || payload.imageIds.includes(props.image.id)),
-    // 结构变更：当前已挂的标签被改名 / 移动 / 删除，tag 文案要跟着变
-    on("album-changed", (payload) => labels.value.some((label) => label.id === payload.albumId)),
-    on("album-deleted", (payload) => labels.value.some((label) => label.id === payload.albumId)),
+    // 收藏 / 隐藏仍按原口径重读，不在 Phase E 收紧。
+    on("album-images-added", (p) => p.imageIds.includes(props.image.id)),
+    on("album-images-deleted", (p) => p.imageIds.includes(props.image.id)),
+    on("album-images-change", (p) => p.imageIds.includes(props.image.id)),
+    ...albumPatchTriggers((patch) => labels.value.some((label) => label.id === patch.id)),
+    on("album-moved", (p) => labels.value.some((label) => pathHasAlbum(label.ancestorPath, p.id))),
+    // 原空 order 对任意画册删除都刷新标签；Phase E 保留这一口径。
+    on("albums-deleted"),
   ],
   onResult: ({ rows }) => {
     labels.value = rows.map((row) => normalizeAlbumRow(row as Record<string, unknown>));
@@ -175,6 +187,11 @@ usePathqlLooker({
   // 读取失败保留已有标签
   onError: (error) => console.warn("load image labels failed", error),
 });
+
+const movedPaths = kbEvent$<AlbumMovedPayload>("album-moved").subscribe(({ payload }) => {
+  labels.value = labels.value.map((label) => moveAlbumPath(label, payload));
+});
+onScopeDispose(() => movedPaths.unsubscribe());
 
 function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : (error as Error)?.message || String(error);

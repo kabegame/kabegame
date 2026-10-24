@@ -23,6 +23,7 @@ interface Element {
   id: string;
   children?: boolean;
   count?: number | null;
+  ancestorPath?: string;
 }
 function deferred() {
   let resolve!: (value: unknown[]) => void;
@@ -86,7 +87,7 @@ function fixture(opts: { extra?: boolean; paged?: boolean; defaultExpanded?: boo
             : undefined,
       };
     },
-    refreshOn: (_branch, part) => [on(opts.extra && part === "extra" ? "album-images-change" : "images-change")],
+    refreshOn: (_branch, part) => [on(opts.extra && part === "extra" ? "album-images-added" : "images-change")],
     pageSize: opts.paged ? 1 : undefined,
   };
   let model!: TreeModel<Element>;
@@ -286,13 +287,35 @@ describe("useTreeModel pathql 观察方", () => {
     const second = fixture({ extra: true, defaultExpanded: true });
     await flushPromises();
     pathqlAll.mockClear();
-    listeners.get("album-images-change")!({ payload: { ancestorPath: "/root/child/" } });
+    listeners.get("album-images-added")!({
+      payload: { albumId: "child", ancestorPath: "/root/child/", imageIds: ["x"] },
+    });
     await flushPromises();
     vi.advanceTimersByTime(500);
     await flushPromises();
     expect(first.paths()).toEqual(["a/extra/root/1"]);
     expect(first.model.nodeByKey("child")?.element.count).toBe(9);
     expect(second.model.nodeByKey("child")?.element.count).toBe(9);
+  });
+
+  it("移动路径映射覆盖收起分支的持有节点，补充计数不恢复旧路径", async () => {
+    const { model } = fixture({ extra: true });
+    await flushPromises();
+    await model.expand("root");
+    await model.expand("child");
+    model.collapse("child");
+    await nextTick();
+    model.mapElements((element) => ({ ...element, ancestorPath: `/old/${element.id}/` }));
+    pathqlAll.mockClear();
+    model.mapElements((element) => ({ ...element, ancestorPath: element.ancestorPath?.replace("/old/", "/new/") }));
+    expect(model.nodeByKey("leaf")?.element.ancestorPath).toBe("/new/leaf/");
+    expect(pathqlAll).not.toHaveBeenCalled();
+    listeners.get("album-images-added")?.({
+      payload: { albumId: "child", imageIds: ["x"], ancestorPath: "/new/child/" },
+    });
+    await flushPromises();
+    expect(model.nodeByKey("child")?.element).toMatchObject({ ancestorPath: "/new/child/", count: 9 });
+    expect(model.nodeByKey("leaf")?.element.ancestorPath).toBe("/new/leaf/");
   });
 
   it("新增分支复用已有 key 时应用最近结果并释放展开等待", async () => {

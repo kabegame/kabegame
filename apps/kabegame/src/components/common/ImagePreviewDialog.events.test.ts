@@ -115,10 +115,10 @@ describe("裸 id 预览的事件保鲜", () => {
     await flushPromises();
     expect(fetchImageById).toHaveBeenCalledExactlyOnceWith("next");
     fetchImageById.mockClear();
-    emit("album-images-change", { albumIds: ["other"], imageIds: ["current"], reason: "add" });
+    emit("album-images-added", { albumId: "other", imageIds: ["current"] });
     vi.advanceTimersByTime(300);
     expect(fetchImageById).not.toHaveBeenCalled();
-    emit("album-images-change", { albumIds: ["other"], imageIds: ["next"], reason: "add" });
+    emit("album-images-added", { albumId: "other", imageIds: ["next"] });
     await flushPromises();
     expect(fetchImageById).toHaveBeenCalledExactlyOnceWith("next");
   });

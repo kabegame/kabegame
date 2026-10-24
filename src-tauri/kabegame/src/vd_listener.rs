@@ -11,9 +11,9 @@ use std::sync::Arc;
 /// 启动虚拟磁盘事件监听器
 ///
 /// 监听以下事件并触发对应操作：
-/// - `AlbumAdded` / `AlbumChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
+/// - 画册新增 / 删除 / 移动 / 单条与批量字段补丁 → `vd_service.bump_albums()`
 /// - `ImagesAdded` → 从图片行读取 task_id 通知任务目录；图片增删与字段补丁均刷新画廊树
-/// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
+/// - 成员增删与排序 → 按 `albumId` 通知画册目录（隐藏画册事件整体 `bump_albums()`），并 `notify_gallery_tree_changed`
 /// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
 #[cfg(target_os = "windows")]
 pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
@@ -21,13 +21,17 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
 
     // 订阅我们关心的事件类型
     let event_kinds = vec![
-        AppEventKind::AlbumAdded,
+        AppEventKind::AlbumsAdded,
         AppEventKind::AlbumChanged,
-        AppEventKind::AlbumDeleted,
+        AppEventKind::AlbumsChange,
+        AppEventKind::AlbumMoved,
+        AppEventKind::AlbumsDeleted,
         AppEventKind::ImagesAdded,
         AppEventKind::ImagesDeleted,
         AppEventKind::ImagesChange,
         AppEventKind::ImageChanged,
+        AppEventKind::AlbumImagesAdded,
+        AppEventKind::AlbumImagesDeleted,
         AppEventKind::AlbumImagesChange,
         AppEventKind::TasksChange,
     ];
@@ -39,7 +43,9 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         match rx.recv().await {
             Some((_id, event)) => {
                 match &*event {
-                    AppEvent::AlbumAdded { .. } => {
+                    AppEvent::AlbumsAdded { .. }
+                    | AppEvent::AlbumsChange { .. }
+                    | AppEvent::AlbumMoved { .. } => {
                         vd_service.bump_albums();
                     }
                     AppEvent::ImagesAdded { images, .. } => {
@@ -57,18 +63,21 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                     | AppEvent::ImageChanged { .. } => {
                         vd_service.notify_gallery_tree_changed();
                     }
-                    AppEvent::AlbumImagesChange { album_ids, .. } => {
-                        for aid in album_ids {
-                            if !aid.is_empty() {
-                                vd_service.notify_album_dir_changed(&aid);
-                            }
+                    AppEvent::AlbumImagesAdded { body, .. }
+                    | AppEvent::AlbumImagesDeleted { body, .. }
+                    | AppEvent::AlbumImagesChange { body, .. } => {
+                        if body.album_id == kabegame_core::storage::HIDDEN_ALBUM_ID {
+                            // 隐藏图在每个画册目录里都是隐藏文件，事件不带图片所在的其它画册，整体失效画册目录
+                            vd_service.bump_albums();
+                        } else {
+                            vd_service.notify_album_dir_changed(&body.album_id);
                         }
                         vd_service.notify_gallery_tree_changed();
                     }
                     AppEvent::AlbumChanged { .. } => {
                         vd_service.bump_albums();
                     }
-                    AppEvent::AlbumDeleted { .. } => {
+                    AppEvent::AlbumsDeleted { .. } => {
                         vd_service.bump_albums();
                     }
                     AppEvent::TaskAdded { .. } | AppEvent::TaskDeleted { .. } => {

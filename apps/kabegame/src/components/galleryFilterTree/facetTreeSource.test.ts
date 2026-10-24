@@ -110,11 +110,11 @@ describe("facetTreeSource 查询描述与事件过滤", () => {
     expect(relevant("", "images-deleted", { imageIds: ["any"] })).toBe(true);
     expect(relevant("", "image-changed", { patch: { id: "a", thumbnailPath: "p" } })).toBe(false);
     expect(relevant("", "image-changed", { patch: { id: "a", width: 1 } })).toBe(true);
-    expect(relevant("", "album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] })).toBe(false);
-    expect(relevant("gallery/hide", "album-images-change", {})).toBe(true);
-    expect(relevant("gallery/album/a", "album-changed", { changes: { name: "新名字" } })).toBe(true);
-    expect(relevant("gallery/album/a", "album-changed", { changes: { syncMode: "none" } })).toBe(false);
-    expect(relevant("gallery/no-album", "album-added", {})).toBe(true);
+    expect(relevant("", "album-images-added", { albumId: "00000000-0000-0000-0000-000000000000" })).toBe(false);
+    expect(relevant("gallery/hide", "album-images-added", {})).toBe(true);
+    expect(relevant("gallery/album/a", "album-changed", { patch: { id: "a", name: "新名字" } })).toBe(true);
+    expect(relevant("gallery/album/a", "album-changed", { patch: { id: "a", syncMode: "none" } })).toBe(false);
+    expect(relevant("gallery/no-album", "albums-added", { albums: [] })).toBe(true);
   });
 
   it("新增使用减格上下文，高级查询与搜索字段依赖也保留", () => {
