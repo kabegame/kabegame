@@ -77,9 +77,10 @@ fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, 
     }
 
     client_builder = client_builder
-        // HTTP/1.1 下 hyper 默认把头名全部转成小写发出，Cloudflare 视作机器人特征直接挑战
-        // （同一请求 curl 以 User-Agent 大小写发出是 200、全小写是 403）。改为首字母大写兜底；
-        // 能协商 h2 的连接不受影响（h2 规定头名小写，见 Cargo.toml 的 native-tls-alpn）。
+        // HTTP/1.1 下 hyper 默认把头名全部转成小写发出，Cloudflare 视作机器人特征之一
+        // （curl 带 Chrome UA 走 h1：首字母大写 200、全小写 403）。改为首字母大写兜底；
+        // 但 reqwest 的 h1 即使大写仍会被挑战，真正的放行条件是协商到 h2——桌面靠
+        // 两端都开 native-tls-alpn（见 kabegame-core/Cargo.toml）。
         .http1_title_case_headers()
         .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
         .connect_timeout(Duration::from_secs(10))
