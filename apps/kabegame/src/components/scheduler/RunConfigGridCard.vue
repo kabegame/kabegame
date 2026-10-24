@@ -43,7 +43,26 @@
           class="inline-flex flex-none cursor-pointer items-center gap-1.25 rounded-lg border border-dashed border-[var(--anime-border)] bg-transparent px-2 py-0.5 text-[12.5px] text-[var(--anime-text-primary)] hover:border-solid hover:border-[var(--anime-primary)] hover:text-[var(--anime-primary-dark)]"
           :class="{ 'text-[var(--anime-text-muted)]': !config.scheduleSpec }"
         >
-          <el-icon class="text-[13px] text-[var(--anime-text-secondary)]"><Clock /></el-icon>
+          <!-- 进度圆盘：扇形为本周期剩余时间占比，从 12 点方向顺时针收缩 -->
+          <svg
+            v-if="progress.active"
+            viewBox="0 0 16 16"
+            class="size-[13px] flex-none -rotate-90 text-[var(--anime-primary)]"
+            aria-hidden="true"
+          >
+            <circle cx="8" cy="8" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <circle
+              cx="8"
+              cy="8"
+              r="2.75"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="5.5"
+              pathLength="100"
+              :stroke-dasharray="`${(1 - progress.percent) * 100} 100`"
+            />
+          </svg>
+          <el-icon v-else class="text-[13px] text-[var(--anime-text-secondary)]"><Clock /></el-icon>
           {{ specShortText(config.scheduleSpec, t) }}
         </button>
       </ScheduleEditorPopover>
@@ -51,7 +70,6 @@
         <template v-if="nextRunAt">
           {{ t("autoConfig.nextShort") }}
           <b class="font-medium text-[var(--anime-text-primary)]">{{ formatRunTime(nextRunAt, t) }}</b>
-          · {{ relTime(nextRunAt, t) }}
         </template>
         <template v-else-if="!config.scheduleSpec">{{ t("autoConfig.manualOnly") }}</template>
         <template v-else-if="!config.scheduleEnabled">{{ t("autoConfig.paused") }}</template>
@@ -98,12 +116,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, toRef } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Clock, Grid, VideoPlay } from "@kabegame/element-plus-icons";
 import { usePluginStore } from "@/stores/plugins";
 import type { RunConfig } from "@/stores/crawler";
-import { formatRunTime, relTime, specShortText } from "@/utils/scheduleText";
+import { formatRunTime, specShortText } from "@/utils/scheduleText";
+import { useScheduleProgress } from "@/composables/useScheduleProgress";
 import ConfigGridCard from "./ConfigGridCard.vue";
 import ScheduleEditorPopover from "./ScheduleEditorPopover.vue";
 
@@ -117,6 +136,7 @@ defineEmits<{
 const { t } = useI18n();
 const pluginStore = usePluginStore();
 const icon = computed(() => pluginStore.pluginIconSrc(props.config.pluginId));
+const progress = useScheduleProgress(toRef(props, "config"));
 // planned_at 后端存秒；兼容历史上可能出现的毫秒值
 const nextRunAt = computed(() => {
   const planned = props.config.schedulePlannedAt;

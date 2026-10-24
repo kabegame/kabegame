@@ -147,8 +147,6 @@
   "yesterday": "昨天",
   "tomorrow": "明天",
   "dayAfterTomorrow": "后天",
-  "relativeAfter": "{n} {unit}后",
-  "relativeBefore": "{n} {unit}前",
   "nextRun": "下次运行",
   "notScheduled": "未安排",
   "runNow": "运行",

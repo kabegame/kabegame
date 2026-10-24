@@ -147,8 +147,6 @@
   "yesterday": "어제",
   "tomorrow": "내일",
   "dayAfterTomorrow": "모레",
-  "relativeAfter": "{n} {unit} 후",
-  "relativeBefore": "{n} {unit} 전",
   "nextRun": "다음 실행",
   "notScheduled": "예약 없음",
   "runNow": "실행",

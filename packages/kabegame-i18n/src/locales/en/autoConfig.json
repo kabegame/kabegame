@@ -147,8 +147,6 @@
   "yesterday": "Yesterday",
   "tomorrow": "Tomorrow",
   "dayAfterTomorrow": "Day after tomorrow",
-  "relativeAfter": "in {n} {unit}",
-  "relativeBefore": "{n} {unit} ago",
   "nextRun": "Next run",
   "notScheduled": "Not scheduled",
   "runNow": "Run",

@@ -64,26 +64,6 @@ export function formatRunTime(timestamp: number, t: Translate, now = new Date())
   return `${dayLabel(timestamp, t, now)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function relTime(timestamp: number, t: Translate, now = Date.now()): string {
-  const delta = timestamp - now;
-  const absolute = Math.abs(delta);
-  const n =
-    absolute < 60000
-      ? 1
-      : absolute < 3600000
-        ? Math.round(absolute / 60000)
-        : absolute < 86400000
-          ? Math.round(absolute / 3600000)
-          : Math.round(absolute / 86400000);
-  const unit =
-    absolute < 3600000
-      ? t("autoConfig.unitMinutes")
-      : absolute < 86400000
-        ? t("autoConfig.unitHours")
-        : t("autoConfig.unitDays");
-  return t(delta >= 0 ? "autoConfig.relativeAfter" : "autoConfig.relativeBefore", { n, unit });
-}
-
 export function previewNextRuns(spec: ScheduleSpec | null | undefined, count = 3, now = new Date()): number[] {
   if (!spec) return [];
   const result: number[] = [];

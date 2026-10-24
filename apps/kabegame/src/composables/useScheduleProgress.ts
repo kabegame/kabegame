@@ -15,7 +15,18 @@ const tsToSecs = (ts?: number) => {
   return ts > 9_999_999_999 ? Math.floor(ts / 1000) : Math.floor(ts);
 };
 
-const getScheduleTotal = (config: RunConfig): number => {
+/** 每周多选日期时，本周期从上一个选中日的同一时刻算起，而不是固定 7 天 */
+const getWeeklyTotal = (weekdays: number[], plannedSecs: number): number => {
+  const planned = new Date(plannedSecs * 1000);
+  for (let day = 1; day <= 7; day++) {
+    const prev = new Date(planned);
+    prev.setDate(prev.getDate() - day);
+    if (weekdays.includes((prev.getDay() + 6) % 7)) return plannedSecs - Math.floor(prev.getTime() / 1000);
+  }
+  return 604800;
+};
+
+const getScheduleTotal = (config: RunConfig, plannedSecs: number): number => {
   const s = config.scheduleSpec;
   switch (s?.mode) {
     case "interval":
@@ -25,7 +36,7 @@ const getScheduleTotal = (config: RunConfig): number => {
     case "daily":
       return 86400;
     case "weekly":
-      return 604800;
+      return getWeeklyTotal(s.weekdays, plannedSecs);
     default:
       return 0;
   }
@@ -33,8 +44,8 @@ const getScheduleTotal = (config: RunConfig): number => {
 
 /** 基于「下一次触发 planned_at」与周期 total 的倒计时进度（与后端 planned_at 语义一致） */
 const getScheduleProgressParts = (config: RunConfig, nowSecs: number) => {
-  const total = getScheduleTotal(config);
   const planned = tsToSecs(config.schedulePlannedAt);
+  const total = getScheduleTotal(config, planned);
   if (total <= 0 || !planned) {
     return { percent: 0, remaining: 0, total: 0 };
   }
