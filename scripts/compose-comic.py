@@ -3,7 +3,8 @@
 Compose 4 single-panel images onto the 4koma PSD template.
 
 Panel slots are read from layers named '01', '02', '03', '04'.
-The PSD is composited with those layers hidden to produce the frame overlay.
+The background is cut out at the panel slots before foreground layers (including
+the separate '编号1'…'编号4' badges) are composited on top.
 
 Usage:
   python scripts/compose-comic.py PANEL_TL PANEL_TR PANEL_BL PANEL_BR [options]
@@ -50,8 +51,8 @@ def load_psd(psd_path: Path) -> tuple[Image.Image, list[tuple[int,int,int,int]]]
     """
     Open a PSD and return (frame_RGBA, [tl_bbox, tr_bbox, bl_bbox, br_bbox]).
 
-    The frame is the PSD composited with the 4 placeholder layers hidden —
-    it provides the decorative border that will float on top of the panels.
+    The frame has transparent panel slots and preserves foreground decorations.
+    Layers above the last placeholder are composited after cutting the holes.
     The bboxes are the exact (left, top, right, bottom) of each placeholder layer.
     """
     psd = psd_tools.PSDImage.open(str(psd_path))
@@ -82,12 +83,25 @@ def load_psd(psd_path: Path) -> tuple[Image.Image, list[tuple[int,int,int,int]]]
         (l.left, l.top, l.right, l.bottom) for l in slots
     ]
 
-    # Render frame with slots hidden
-    for layer in slots:
-        layer.visible = False
-    frame_img = psd.composite()
-    if frame_img is None:
-        frame_img = Image.new("RGBA", (psd.width, psd.height), (240, 220, 255, 255))
+    # PSD 图层按从底到顶排列；画格上方的编号等装饰需要在挖洞后叠加。
+    layers = list(psd)
+    last_slot_index = max(i for i, layer in enumerate(layers) if layer in slots)
+    background = [layer for layer in layers[:last_slot_index] if layer not in slots]
+    foreground = layers[last_slot_index + 1:]
+
+    frame_img = psd.composite(
+        layer_filter=lambda layer: layer in background and layer.is_visible(),
+        ignore_preview=True,
+    ).convert("RGBA")
+    for region in regions:
+        frame_img.paste((0, 0, 0, 0), region)
+
+    if foreground:
+        decorations = psd.composite(
+            layer_filter=lambda layer: layer in foreground and layer.is_visible(),
+            ignore_preview=True,
+        ).convert("RGBA")
+        frame_img = Image.alpha_composite(frame_img, decorations)
 
     return frame_img.convert("RGBA"), regions
 
@@ -231,8 +245,7 @@ def main() -> None:
     # Composite:
     #   1. White canvas
     #   2. Paste panels at exact slot positions
-    #   3. Cut panel-area holes in the frame (so panels show through)
-    #   4. Alpha-composite the holey frame on top (border/flowers float above panels)
+    #   3. 叠加已挖洞的背景与前景装饰，保留画格内的独立编号
     # -----------------------------------------------------------------------
     canvas = Image.new("RGBA", (tw, th), (255, 255, 255, 255))
 
@@ -244,15 +257,7 @@ def main() -> None:
         fitted = fit_image(src, slot_w, slot_h, args.fit)
         canvas.paste(fitted, (x1, y1))
 
-    # Cut holes in frame at exact slot positions
-    frame_overlay = frame.copy()
-    for x1, y1, x2, y2 in regions:
-        slot_w, slot_h = x2 - x1, y2 - y1
-        frame_overlay.paste(
-            Image.new("RGBA", (slot_w, slot_h), (0, 0, 0, 0)), (x1, y1)
-        )
-
-    canvas = Image.alpha_composite(canvas, frame_overlay)
+    canvas = Image.alpha_composite(canvas, frame)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.convert("RGB").save(out_path, "PNG", optimize=False)

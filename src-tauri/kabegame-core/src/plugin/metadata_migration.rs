@@ -220,9 +220,10 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
         &script,
         rows,
         || service.advance(&plugin_id),
+        emit_metadata_patches,
     ));
     let gc_result = storage.gc_orphan_search_terms();
-    let (changed, _touched_albums, image_patches) = match result {
+    let (changed, _touched_albums) = match result {
         Ok(result) => {
             gc_result?;
             run_guard.finish(None);
@@ -240,12 +241,31 @@ fn run_metadata_migrations_for_plugin(plugin: &Plugin) -> Result<bool, String> {
         }
     };
 
-    if let Some(emitter) = GlobalEmitter::try_global() {
-        if changed {
-            emitter.emit_image_patches(image_patches);
-        }
-    }
     Ok(changed)
+}
+
+/// 改指到新 metadata 行的图片逐图展开 `{ id, metadataId }`，同一图片以后出现的为准。
+fn metadata_patches(repointed: &[(String, i64)]) -> Vec<ImageFieldPatch> {
+    repointed
+        .iter()
+        .map(|(id, metadata_id)| ImageFieldPatch {
+            id: id.clone(),
+            fields: serde_json::json!({ "metadataId": metadata_id })
+                .as_object()
+                .unwrap()
+                .clone(),
+        })
+        .collect()
+}
+
+/// 写库提交后立即发补丁：后续批次或去重失败时，已提交的改指照样到达前端。
+fn emit_metadata_patches(repointed: &[(String, i64)]) {
+    if repointed.is_empty() {
+        return;
+    }
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        emitter.emit_image_patches(metadata_patches(repointed));
+    }
 }
 
 /// 每攒够这么多行写一次库：一个事务的持锁时间有上限，崩溃时未提交的批次下次启动按版本门控重跑。
@@ -259,8 +279,8 @@ struct PendingRow {
     write: bool,
 }
 
-/// 逐行调用 V8 算出新 data / 标签 / 搜索词，按 [`MIGRATION_BATCH`] 攒批写库，整轮结束后一次
-/// 合并内容相同的行。返回 `(是否有写入, 新增成员的标签画册, 按最终 metadata id 分组的图片补丁)`。
+/// 逐行调用 V8 算出新 data / 标签 / 搜索词，按 [`MIGRATION_BATCH`] 攒批写库，每批提交后立即发改指补丁，
+/// 整轮结束后一次合并内容相同的行并再发去重改指的补丁。返回 `(是否有写入, 新增成员的标签画册)`。
 async fn run_metadata_migrations(
     storage: &Storage,
     plugin_id: &str,
@@ -268,7 +288,8 @@ async fn run_metadata_migrations(
     script: &str,
     rows: Vec<(i64, String, u32)>,
     mut on_row_done: impl FnMut(),
-) -> Result<(bool, Vec<String>, Vec<ImageFieldPatch>), String> {
+    mut on_repointed: impl FnMut(&[(String, i64)]),
+) -> Result<(bool, Vec<String>), String> {
     let mut engine = MigrationEngine::new();
     let exports = match engine.load_script(script).await {
         Ok(exports) => Some(exports),
@@ -369,20 +390,21 @@ async fn run_metadata_migrations(
                 write,
             });
             if batch.len() >= MIGRATION_BATCH {
-                run.flush(storage, plugin_id, target, &mut batch, &mut on_row_done)?;
+                run.flush(storage, plugin_id, target, &mut batch, &mut on_row_done, &mut on_repointed)?;
             }
         }
-        run.flush(storage, plugin_id, target, &mut batch, &mut on_row_done)
+        run.flush(storage, plugin_id, target, &mut batch, &mut on_row_done, &mut on_repointed)
     }
     .await;
 
     // 已写入的批次即便后续失败也要去重，否则重复行会一直留着。
     let deduped = storage.dedup_migrated_metadata(plugin_id, target, &run.new_ids);
-    migrated?;
-    for (image_id, metadata_id) in deduped? {
-        run.final_metadata.insert(image_id, metadata_id);
+    if let Ok(repointed) = &deduped {
+        on_repointed(repointed);
     }
-    Ok(run.finish())
+    migrated?;
+    deduped?;
+    Ok((run.changed, run.touched))
 }
 
 #[derive(Default)]
@@ -390,8 +412,6 @@ struct MigrationRun {
     changed: bool,
     touched: Vec<String>,
     new_ids: Vec<i64>,
-    /// 图片 → 最终 metadata id；去重改指会覆盖批量写回时的值。
-    final_metadata: HashMap<String, i64>,
 }
 
 impl MigrationRun {
@@ -403,6 +423,7 @@ impl MigrationRun {
         target: u32,
         batch: &mut Vec<PendingRow>,
         on_row_done: &mut impl FnMut(),
+        on_repointed: &mut impl FnMut(&[(String, i64)]),
     ) -> Result<(), String> {
         if batch.is_empty() {
             return Ok(());
@@ -418,7 +439,7 @@ impl MigrationRun {
         let written = storage.writeback_migrated_metadata_batch(plugin_id, target, &rows)?;
         self.changed |= !written.new_ids.is_empty();
         self.new_ids.extend(written.new_ids);
-        self.final_metadata.extend(written.repointed);
+        on_repointed(&written.repointed);
         for _ in 0..processed {
             on_row_done();
         }
@@ -471,21 +492,6 @@ impl MigrationRun {
                 eprintln!("[metadata-migration] plugin `{plugin_id}` label apply failed: {error}")
             }
         }
-    }
-
-    fn finish(self) -> (bool, Vec<String>, Vec<ImageFieldPatch>) {
-        let image_patches = self
-            .final_metadata
-            .into_iter()
-            .map(|(id, metadata_id)| ImageFieldPatch {
-                id,
-                fields: serde_json::json!({ "metadataId": metadata_id })
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            })
-            .collect();
-        (self.changed, self.touched, image_patches)
     }
 }
 
@@ -683,15 +689,10 @@ impl MigrationEngine {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn phase_a_finish_expands_final_metadata_per_image() {
-        let mut run = super::MigrationRun::default();
-        run.changed = true;
-        run.final_metadata.insert("1".into(), 10);
-        run.final_metadata.insert("2".into(), 10);
-        run.final_metadata.insert("1".into(), 20);
-        let (changed, _, patches) = run.finish();
-        assert!(changed);
-        assert_eq!(patches.len(), 2);
+    fn metadata_patches_expand_per_image_with_later_winning() {
+        let patches =
+            super::metadata_patches(&[("1".into(), 10), ("2".into(), 10), ("1".into(), 20)]);
+        assert_eq!(patches.len(), 3);
         let fields = patches
             .into_iter()
             .map(|patch| (patch.id, patch.fields))
@@ -746,7 +747,8 @@ mod tests {
             let rows = storage
                 .metadata_rows_below_plugin_version("demo", target)
                 .unwrap();
-            tokio::runtime::Handle::current()
+            let mut patches = Vec::new();
+            let (changed, albums) = tokio::runtime::Handle::current()
                 .block_on(run_metadata_migrations(
                     &storage,
                     "demo",
@@ -754,8 +756,10 @@ mod tests {
                     &script,
                     rows,
                     || {},
+                    |repointed| patches.extend(metadata_patches(repointed)),
                 ))
-                .unwrap()
+                .unwrap();
+            (changed, albums, patches)
         })
     }
 
@@ -828,6 +832,7 @@ mod tests {
                     || {
                         observed.fetch_add(1, Ordering::Relaxed);
                     },
+                    |_| {},
                 ))
                 .unwrap();
         });
@@ -1005,7 +1010,8 @@ export function provideSearchTextList(_input) { return ["fresh"]; }
         let check = storage.clone();
         let data = image_metadata_row(&check, "1").1;
         let (changed, _, patches) = run_blocking(move || {
-            tokio::runtime::Handle::current()
+            let mut patches = Vec::new();
+            let (changed, albums) = tokio::runtime::Handle::current()
                 .block_on(run_metadata_migrations(
                     &storage,
                     "demo",
@@ -1013,8 +1019,10 @@ export function provideSearchTextList(_input) { return ["fresh"]; }
                     "export function migrate(input) { return input; }",
                     vec![(1, data, 0)],
                     || {},
+                    |repointed| patches.extend(metadata_patches(repointed)),
                 ))
-                .unwrap()
+                .unwrap();
+            (changed, albums, patches)
         });
 
         assert!(!changed);
@@ -1163,9 +1171,11 @@ export function migrate(_input) { return "{}"; }
         );
         assert!(changed);
         assert_eq!(image_metadata_row(&check, "1").0, 100);
-        assert_eq!(patches.len(), 1);
+        // 写回提交后先改指到本轮新行，结尾去重再改指到已有行，前端以后到的补丁为准
+        assert_eq!(patches.len(), 2);
+        assert_ne!(patches[0].fields["metadataId"], 100);
         assert_eq!(
-            serde_json::Value::Object(patches[0].fields.clone()),
+            serde_json::Value::Object(patches[1].fields.clone()),
             serde_json::json!({ "metadataId": 100 })
         );
         let conn = check.db.lock().unwrap();
@@ -1181,7 +1191,8 @@ export function migrate(_input) { return "{}"; }
         let check = storage.clone();
         let data = image_metadata_row(&check, "1").1;
         let (changed, _, patches) = run_blocking(move || {
-            tokio::runtime::Handle::current()
+            let mut patches = Vec::new();
+            let (changed, albums) = tokio::runtime::Handle::current()
                 .block_on(run_metadata_migrations(
                     &storage,
                     "demo",
@@ -1189,8 +1200,10 @@ export function migrate(_input) { return "{}"; }
                     "export function migrate(input) { return input; }",
                     vec![(999, "{}".to_string(), 0), (1, data, 0)],
                     || {},
+                    |repointed| patches.extend(metadata_patches(repointed)),
                 ))
-                .unwrap()
+                .unwrap();
+            (changed, albums, patches)
         });
         assert!(changed);
         assert_eq!(patches.len(), 1);

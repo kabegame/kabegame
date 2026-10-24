@@ -56,7 +56,7 @@
    `metadata-migration-finished { pluginId, total, processed, error }`；成功静默，失败由前端 toast。
    flush 按批提交而不是整轮一个事务：持写锁的时间有上限，下载与用户操作不会被一整轮迁移卡住；崩溃时已提交批次的版本已推进，未提交批次下次启动按版本门控重跑。
 9. 新建标签画册合并为一条 `albums-added`，每个真实新增成员的叶子发 `album-images-added`；metadata 有实际变更时，用写回与去重两步 `RETURNING` 的改指结果（去重覆盖写回）
-   按最终结果逐图展开 `{ id, metadataId }`，经 `emit_image_patches` 按图片数量分流为 `image-changed { patch }` / `images-change { patches }`，前端补丁字段并对账视图成员与排序。Phase A 保留整轮末尾一次发送，循环改造留给 Phase D。
+   逐图展开 `{ id, metadataId }`，经 `emit_image_patches` 按图片数量分流为 `image-changed { patch }` / `images-change { patches }`，前端补丁字段并对账视图成员与排序。每批写回提交后立即发出本批改指，结尾去重的改指再发一次（同一图片以后到的为准）；后续批次或去重失败时，已提交批次的补丁已经发出，不会丢。
 
 前端通过聚合 `get_busy_tasks_snapshot.metadataMigrations` 每 500ms 拉取运行态，在忙碌面板中按插件显示
 图标、名称、百分比与 `processed / total`，不提供取消按钮。任务从快照消失即移除卡片；finished 事件

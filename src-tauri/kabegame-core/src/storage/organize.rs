@@ -702,7 +702,10 @@ fn run_organize(
             }
             match action {
                 ThumbnailRefreshAction::UseOriginal { id, local_path } => {
-                    storage.replace_image_thumbnail_path(&id.to_string(), &local_path)?;
+                    // 写库失败会中止整理：先把本批已写入的补丁发出，前端不停留在旧路径
+                    storage
+                        .replace_image_thumbnail_path(&id.to_string(), &local_path)
+                        .inspect_err(|_| emit_organize_images_change(&mut changed_image_patches))?;
                     changed_image_patches.push(ImageFieldPatch {
                         id: id.to_string(),
                         fields: serde_json::json!({ "thumbnailPath": local_path })
@@ -720,7 +723,11 @@ fn run_organize(
                         let thumb_str = thumbnail_path
                             .map(|path| path.to_string_lossy().to_string())
                             .unwrap_or_else(|| local_path.clone());
-                        storage.replace_image_thumbnail_path(&id.to_string(), &thumb_str)?;
+                        storage
+                            .replace_image_thumbnail_path(&id.to_string(), &thumb_str)
+                            .inspect_err(|_| {
+                                emit_organize_images_change(&mut changed_image_patches)
+                            })?;
                         changed_image_patches.push(ImageFieldPatch {
                             id: id.to_string(),
                             fields: serde_json::json!({ "thumbnailPath": thumb_str })
@@ -751,7 +758,10 @@ fn run_organize(
                             let preview_path_str =
                                 result.preview_path.to_string_lossy().to_string();
                             storage
-                                .replace_image_thumbnail_path(&id.to_string(), &preview_path_str)?;
+                                .replace_image_thumbnail_path(&id.to_string(), &preview_path_str)
+                                .inspect_err(|_| {
+                                    emit_organize_images_change(&mut changed_image_patches)
+                                })?;
                             changed_image_patches.push(ImageFieldPatch {
                                 id: id.to_string(),
                                 fields: serde_json::json!({ "thumbnailPath": preview_path_str })

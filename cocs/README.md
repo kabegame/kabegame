@@ -147,7 +147,7 @@
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
-  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 行按 id 不可变、按批（512 行）写回与整轮末尾一次去重合并（只合并本轮新建行）、批量挂标签、搜索词典与映射重建，以及按最终 `metadataId` 分组的变更事件。
+  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 行按 id 不可变、按批（512 行）写回与整轮末尾一次去重合并（只合并本轮新建行）、批量挂标签、搜索词典与映射重建，以及每批写回提交后立即发出、结尾去重再补发的 `metadataId` 补丁事件。
   - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败或很慢、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
