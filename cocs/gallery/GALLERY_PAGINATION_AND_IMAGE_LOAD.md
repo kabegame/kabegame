@@ -214,13 +214,13 @@ ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否�
   （`ctx.mutate(() => ...)`）。写命令不带 `view`、不返回快照，照常广播事件；`mutate` 在操作完成后
   `pathqlRequest$.next` 当前行与总数即返回，结果从数据源落地。永久删除、隐藏/取消隐藏、加入/移出画册与上划移除均已接入。
 - **就地字段更新**：不会改变结果集的收藏走 `ctx.patch`，成功后立即修改当前行的 `favorite`。
-- **事件（防抖）**：adapter `refreshOn` 声明四种图片事件、画册成员与结构事件，核心按统一窗口请求。
+- **事件（防抖）**：adapter `refreshOn` 按内容判断新增 / 字段与画册事件，ImageGrid 为行追加当前持有行的删除包含判断、为总数追加任何删除都刷新，核心按统一窗口请求。
 - **字段补丁（不发请求）**：`imagePatches$` 将单图 / 多图补丁共用一个窗口，收藏与隐藏画册成员各自开窗，
   合并为 `Map<imageId, Partial<ImageInfo>>` 后交给 `patchMany`；同 id 后到字段覆盖先到。
-  裸 id 预览另用 `triggers$` 对单图 / 多图字段事件、包含当前 id 的删除及成员事件重读当前图。
+  裸 id 预览的字段事件只打补丁，另用 `triggers$` 对包含当前 id 的删除及成员事件重读当前图。
 - **其它消费方**（画册树、画册页头部、运行配置、标签面板等）同样是 pathql 核心的观察方。
   画册成员携带 `ancestorPath`，结构事件提供新旧祖先路径，已加载目录按路径前缀判断相关性。
-  任务 / 畅游新增按完整行归属判断；删除与字段变化保持宽刷新，后续 Phase B 再收紧。
+  任务 / 畅游新增按完整行归属判断；只有计数的观察方删除一律刷新，字段变化依赖见下表。
 
 ### kbEvents（`services/kbEvents/`，rxjs）
 
@@ -247,13 +247,49 @@ ImageGrid 的行与总数只有两种刷新来源，前端不区分操作是否�
   不重读总数）；手动刷新、`mutate`、预览定位重取本页同样只 next。首次加载失败与事件刷新失败都经 `onError` 交给
   adapter 的 `onLoadError` / `onCountError`。加载遮罩只在「当前路径还没有数据且最新请求在途」时显示，已有数据时的
   刷新不遮挡；`usePagedGallery` 只管页码、`rowsPath` 与预览边界，不再负责加载。
-- **`imagePatches$(waitMs)`**（`imagePatches.ts`）：`image-changed` 与 `images-change` 共用
+- **`imagePatches$(waitMs, { patchHidden })`**（`imagePatches.ts`）：`image-changed` 与 `images-change` 共用
   `batchWindow` / `reducePatches`，按 id 合并字段绝对值；收藏与隐藏画册成员分别经
-  `reduceFavoriteChanges` / `reduceHiddenChanges` 独立开窗，再 `merge`，只补丁已有对象，不发请求。
-- 各 adapter 的 `refreshOn` 在 Phase A 保持宽刷新：gallery / album 对四种图片事件刷新；task / surf
-  的新增按完整行里的 `taskId` / `surfRecordId` 判断，删除与字段补丁均刷新。隐藏画册成员变化也刷新所有视图。
-  gallery 的无画册成员相关性、album 的本画册成员相关性及原有结构事件条件保持不变。
-  按内容收紧相关性留给 Phase B。
+  `reduceFavoriteChanges` / `reduceHiddenChanges` 独立开窗，再 `merge`，只补丁已有对象，不发请求。隐藏流入窗前读取 `patchHidden()`：
+  网格 hide 关闭才打 `isHidden` 补丁，开启时直接靠刷新剔除 / 补回，避免先变灰；裸 id 预览始终打补丁。
+- 各 adapter 的 `viewState()` 提供当前查询、排序与 hide；相关性 helper 只收紧已有 `refreshOn`，不新增后端查询通路。
+
+### 按事件内容判断相关性（过滤走查 Phase B）
+
+`imageViewRelevance.ts` 采用「能证明无关才跳过」：`images-added` 任一行可能命中就刷新，
+只检查顶层 AND 的 `is` 原子，`any` / `not` 内条件与搜索一律视为可能。插件 id 不同排除，同插件的扩展内容不判断。
+媒体类型与 `gallery_media_type_provider` 一致：忽略大小写，裸 `video` 与 `video/…` 都是视频，其余是图片；
+格式取 `/` 后的小写值（无 `/` 则整串）。日期按 `crawled_at_seconds` 的 `> 253402300799` 阈值转换秒 / 毫秒，
+格式化为系统本地年月日；Web 因服务器时区未知不排除，缺失或超出可靠范围的日期也视为可能。
+大小与 `gallery_size_range_provider` 一致，B / KB / MB / GB 不区分大小写，默认下界 1、上界 2^53−1，
+区间左闭右开，`unknown` 是空值或非正数。宽高比预设桶复用 `aspectBucketForDimensions`，任意区间用整数交叉乘法，
+左开右闭，宽高缺失或非正只有 `unknown` 命中。无法可靠解析的单位 / 区间、超出 JS 安全整数的计算视为可能。
+
+任务 / 畅游的新增另检查 `taskId` / `surfRecordId`；画册不听图片新增，成员进出由本画册的 `album-images-change` 负责，
+隐藏 / 取消隐藏也经本画册的 hide / unhide 事件处理。画廊 noAlbum 与画册结构事件保持原有规则，留待后续走查。
+
+单图 / 多图字段变化共用 `patchTriggers`，忽略 id 本身，空补丁不刷新，任一相关字段即刷新：
+
+| 字段 | 触发条件 |
+| --- | --- |
+| `thumbnailPath`、`compatiblePath` | 只打补丁 |
+| `lastSetWallpaperAt` | 按设壁纸时间排序 |
+| `displayName` | 按名称排序或有效 display-name 搜索 |
+| `metadataId` | 有效 metadata 搜索或插件维度（含扩展） |
+| `imageMetadataId` | 有效 native-metadata 搜索 |
+| `pluginId` | 插件维度 |
+| `postUrl` | 有效 url 搜索 |
+| `taskId` | 从不刷新：只在删除 / 清理任务时置空，供预览「打开任务」按钮就地消失；被删任务的详情页自行离开 |
+| 表外字段（含 `surfRecordId`） | 保守刷新；畅游 adapter 显式声明归属依赖 |
+
+`queryUsesSearchMode` 与维度依赖都递归 any / not；空词、未勾选模式不生效。
+侧栏计数把当前浏览维度从简单条件扣掉，合并前缀高级查询；前缀无法解析时新增 / 补丁仍刷新。插件分面另依赖 `pluginId` 分组与扩展用到的 `metadataId`，两者变化保守刷新。
+畅游计数的新增按记录 id，补丁仅在出现 `surfRecordId` 字段时刷新（null 也算）；hide 开启才因隐藏画册变化刷新。
+
+ImageGrid 的删除触发由 `deletedTrigger(heldIds?)` 生成，行与总数分开：行传当前持有行 id，后台删除 id 不在其中时不重读行；
+总数不传，任何删除都重读，页外删除后总数也随之更新。
+有分母（过滤时的未过滤总数）时，计数批另对任何 `images-added` 重读：分母与分子同批读取，而 adapter 的新增判断只看过滤后的查询。
+侧栏 / 畅游等只有计数的观察方没有行可比较，删除一律刷新。新增不判断排序位置，默认画廊下载仍刷新。
+裸 id 预览不因新增或字段变化重新解析；只在删除 / 画册成员事件包含当前 id 时重读，字段与收藏 / 隐藏直接保鲜。
 
 画册写命令仍返回本次已发送事件的 `albumChanges` 副本（IPC / CLI 协议不变），前端不再消费：无状态
 `services/albums.ts` 只调命令，不做本地事件投递。发起写入的组件请求自己观察的 key，其它观察方等后端事件。
@@ -290,11 +326,11 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   不支持或解析失败时为空。查看时懒挂原生元数据发单图字段补丁；整理按原批次收集逐图补丁，
   metadata 迁移整轮末尾按最终 `{ id, metadataId }` 展开发送，循环结构留给 Phase C / D。
 - 删除畅游记录只为实际关联图片发送 `{ id, surfRecordId: null }`，0 张不发。
-  删除任务不修改图片行，不发图片事件；TaskDetail 读到空行时，有历史返回，否则回 `/gallery`。
+  删除 / 清理任务时外键置空，为原属图片发 `{ id, taskId: null }` 补丁，只打补丁、不触发任何视图刷新；TaskDetail 读到空行时，有历史返回，否则回 `/gallery`。
 - `ImageGrid` 对字段补丁用 `patchMany` 更新在手行和预览；同一图片变更 `metadataId` /
-  `imageMetadataId` 后自然更换 metadata cache key。排序、搜索成员与分面变化仍由四种图片事件触发权威查询。
-- 裸 id 预览对单图 / 多图字段事件继续重解析，删除事件包含当前 id 时重解析；新增不影响已在手的图。
-- 删除事件仍可带请求中的不存在 id；任务视图在 Phase A 对任意删除刷新。
+  `imageMetadataId` 后自然更换 metadata cache key。排序、搜索成员与分面变化按字段依赖触发权威查询。
+- 裸 id 预览对字段只打补丁，删除 / 成员事件包含当前 id 时重解析；新增不影响已在手的图。
+- 删除事件仍可带请求中的不存在 id；网格统一只在当前持有行命中时刷新。
   Windows 虚拟盘对新增从完整行提取 taskId 通知任务目录，图片增删 / 字段补丁刷新画廊树；
   删除不再携带 taskId，正在浏览的任务目录不会因图片删除立即更新。
 - `GalleryToolbar` 只注入 `gridTotalKey` 的 `{ total, unfilteredTotal }`；分子与可选分母仍由同一
@@ -334,7 +370,7 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
    观察方落地；不要靠事件防抖回刷当前操作，也不要直接写入命令返回值。
 5. **切回页面后网格为空但总数正常**（dev）：改 `kbEvents` 源码后的 HMR 会让 `@/router` 重建出未挂到 app 的
    实例，adapter `isActive` 恒为 false、key 一直是 null。整页重载即恢复，真机测试前先重载。
-6. **任务/畅游详情收到无关刷新**：检查新增事件行里的 `taskId` / `surfRecordId`；Phase A 对删除与字段补丁保留宽刷新。
+6. **任务/畅游详情收到无关刷新**：检查新增事件行里的 `taskId` / `surfRecordId`；字段补丁按依赖表判断，删除时行只检查当前持有行，总数任何删除都重读。
 7. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
    `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在
    该视图（检查 `hide/` 与过滤段）；有 `row_index` 但页码不对，查前端是否误用了

@@ -24,11 +24,13 @@ alwaysApply: false
   调用方也不能按某次请求接错误——失败统一经观察方的 `onError`。
 - 前端不得重新建立裸 `listen` 或另建事件聚合器；事件一律经 `kbEvent$` / `on` / `triggers$`。字段补丁经 `imagePatches$`：
   `image-changed { patch }` 与 `images-change { patches }` 共用字段补丁窗口，收藏与隐藏画册的 `album-images-change` 分别推导 `favorite` / `isHidden`、各自合并成 `imageId → 字段`，再汇成一条，
-  只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜，粗信号重读用 `triggers$`。
+  只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜；字段事件不重新解析，只对包含当前 id 的删除 / 画册成员事件经 `triggers$` 重读。
+  `imagePatches$(waitMs, { patchHidden })` 必须显式门控：网格 `patchHidden: () => !adapter.viewState().hide`，预览始终 true；
+  hide 开启时不先打灰，靠隐藏成员事件重读剔除 / 补回。
 - 写命令返回的 `albumChanges` 与事件 `seq` 前端不再消费，不做本地事件投递：发起写入的组件只请求自己观察的 key，
   其它观察方等后端事件。
 
-## 图片事件协议（过滤走查 Phase A）
+## 图片事件协议与相关性过滤
 
 - `images-added { seq, images: ImageInfo[] }` 表示图片行插入；下载原生元数据持久化后将新 `imageMetadataId` 带在完整行中。
 - `images-deleted { seq, imageIds }` 表示图片行删除；不带任务 / 畅游归属。
@@ -36,9 +38,17 @@ alwaysApply: false
   `image-changed { seq, patch }`，多张发 `images-change { seq, patches }`，补丁是 `{ id, ...字段绝对值 }`。
   不带旧 `reason` / `imageIds` / `taskIds` / `surfRecordIds` / `pluginIds`。
 - 隐藏 / 取消隐藏只发画册成员事件，前端从隐藏画册的 `add-hidden` / `delete-hidden` 推导 `isHidden`。
-  删除任务不发图片事件，任务详情读回空行时返回或回画廊。
-- 本阶段保留宽刷新：gallery / album 对所有图片事件刷新，task / surf 对新增按行归属判断、删除与字段补丁均刷新；
-  隐藏画册成员变化照旧刷新。Phase B 才收紧相关性，Phase C / D 才改整理与迁移循环。
+  删除 / 清理任务为原属图片发 `taskId: null` 字段补丁；只打补丁（供预览「打开任务」按钮消失），不触发视图刷新；任务详情读回空行时返回或回画廊。
+- 四个 adapter 提供 `viewState()`（当前 query / sort / hide），`refreshOn` 共用 `imageViewRelevance`：
+  新增只检查顶层 AND 原子的插件、媒体类型、日期、大小与宽高比；any / not、搜索、插件扩展内容无法判断时视为可能。
+  日期按 `crawled_at_seconds` 阈值与系统本地时区，Web 不排除；大小左闭右开，宽高比左开右闭，unknown 与 provider 同口径。
+  task / surf 新增另比完整行归属；画册不听新增，依靠自身成员事件。补丁按字段依赖表（查询维度 / 搜索模式 / 排序）判断，
+  未列字段保守刷新；任务 taskId、畅游 surfRecordId 的归属补丁刷新。
+- ImageGrid 用 `deletedTrigger(heldIds?)` 为行与总数分别追加 `images-deleted`：行传当前持有行 id，只在包含删除 id 时刷新；
+  总数不传，任何删除都刷新（页外删除也会改变总数）。只有计数的观察方同样一律刷新。
+- hide 开启才响应隐藏画册变化；画册由自身 hide / unhide 成员事件刷新，画廊 noAlbum 与结构事件条件保持原有规则。
+  侧栏按减格上下文（含前缀高级查询）判断新增与补丁，无法解析前缀则保守刷新；插件分面的 pluginId / metadataId 变化还会影响分组与扩展计数，始终刷新；畅游计数仅在归属补丁变化时重读。
+  整理与迁移循环仍属后续 Phase C / D。
 
 ## 已知例外
 

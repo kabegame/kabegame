@@ -1,3 +1,4 @@
+import type { GalleryFilterSet, GalleryBrowseDimension } from "@/utils/galleryQuery";
 import { computed, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { usePluginStore } from "@/stores/plugins";
@@ -10,11 +11,16 @@ vi.mock("@/services/pathql", () => ({
   pathqlList,
 }));
 
-function createSource(delta = false, prefix = "") {
+function createSource(
+  delta = false,
+  prefix = "",
+  filters: GalleryFilterSet = {},
+  dimension: GalleryBrowseDimension | null = null,
+) {
   const ctx: GalleryFilterTreeContext = {
     filter: computed(() => ({ type: "all" as const })),
-    filters: computed(() => ({})),
-    dimension: computed(() => null),
+    filters: computed(() => filters),
+    dimension: computed(() => dimension),
     prefix: computed(() => prefix),
     countBaseline: delta ? computed(() => 0) : undefined,
     visible: computed(() => true),
@@ -94,20 +100,88 @@ describe("facetTreeSource 查询描述与事件过滤", () => {
     expect(pathqlList).not.toHaveBeenCalled();
   });
 
-  it("侧栏响应四种图片事件与隐藏成员，画册敏感上下文另响应成员与结构事件", () => {
+  it("侧栏按内容过滤图片事件，删除照常刷新，画册敏感上下文保留原有规则", () => {
     const triggers = (prefix: string) =>
       createSource(false, prefix).dataSource.refreshOn({ kind: "section", sectionId: "date" }, "page");
     const relevant = (prefix: string, event: string, payload: unknown) =>
-      triggers(prefix)
-        .find((trigger) => trigger.event === event)!
-        .relevant(payload);
-    expect(relevant("", "images-change", { seq: 1, patches: [] })).toBe(true);
-    for (const event of ["images-added", "images-deleted", "image-changed"]) expect(relevant("", event, {})).toBe(true);
-    expect(relevant("", "album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] })).toBe(true);
-    expect(relevant("", "album-images-change", {})).toBe(false);
+      triggers(prefix).some((trigger) => trigger.event === event && trigger.relevant(payload));
+    expect(relevant("", "images-change", { seq: 1, patches: [] })).toBe(false);
+    expect(relevant("", "images-added", { images: [{ id: "new" }] })).toBe(true);
+    expect(relevant("", "images-deleted", { imageIds: ["any"] })).toBe(true);
+    expect(relevant("", "image-changed", { patch: { id: "a", thumbnailPath: "p" } })).toBe(false);
+    expect(relevant("", "image-changed", { patch: { id: "a", width: 1 } })).toBe(true);
+    expect(relevant("", "album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] })).toBe(false);
     expect(relevant("gallery/hide", "album-images-change", {})).toBe(true);
     expect(relevant("gallery/album/a", "album-changed", { changes: { name: "新名字" } })).toBe(true);
     expect(relevant("gallery/album/a", "album-changed", { changes: { syncMode: "none" } })).toBe(false);
     expect(relevant("gallery/no-album", "album-added", {})).toBe(true);
+  });
+
+  it("新增使用减格上下文，高级查询与搜索字段依赖也保留", () => {
+    const filters: GalleryFilterSet = { plugin: { pluginId: "y" }, mediaType: { kind: "video" } };
+    const triggers = createSource(
+      false,
+      "images://gallery/hide/task/t/no-album/_kb_fc/~not/search/metadata/foo/~end/_kb_fc/",
+      filters,
+      "mediaType",
+    ).dataSource.refreshOn({ kind: "section", sectionId: "mediaType" }, "page");
+    const accepts = (event: string, payload: unknown) =>
+      triggers.some((trigger) => trigger.event === event && trigger.relevant(payload));
+    expect(accepts("images-added", { images: [{ pluginId: "x", type: "video/mp4" }] })).toBe(false);
+    // 正在浏览 mediaType，当前 video chip 被扣掉，图片仍可能改变此维度的计数。
+    expect(accepts("images-added", { images: [{ pluginId: "y", type: "image/png" }] })).toBe(true);
+    expect(accepts("image-changed", { patch: { id: "a", metadataId: 1 } })).toBe(true);
+    const searchTriggers = createSource(
+      false,
+      "gallery/surf/site/~any/search/native-metadata/foo/~or/search/display-name/bar/~end/",
+    ).dataSource.refreshOn({ kind: "section", sectionId: "date" }, "page");
+    expect(
+      searchTriggers.some(
+        (trigger) => trigger.event === "image-changed" && trigger.relevant({ patch: { id: "a", imageMetadataId: 1 } }),
+      ),
+    ).toBe(true);
+    const filtered = createSource(false, "gallery/media-type/video/").dataSource.refreshOn(
+      { kind: "section", sectionId: "date" },
+      "page",
+    );
+    expect(
+      filtered.find((trigger) => trigger.event === "images-added")!.relevant({ images: [{ type: "image/png" }] }),
+    ).toBe(false);
+  });
+
+  it("插件分面的分组与扩展依赖 pluginId / metadataId，即使减格上下文没有插件过滤", () => {
+    const source = createSource();
+    const branches = [
+      { kind: "section" as const, sectionId: "plugin" },
+      { kind: "children" as const, parent: { kind: "plugin" as const, pluginId: "x", version: "1" } },
+    ];
+    for (const branch of branches) {
+      const triggers = source.dataSource.refreshOn(branch, "page");
+      for (const field of ["pluginId", "metadataId"]) {
+        expect(
+          triggers
+            .find((trigger) => trigger.event === "image-changed")!
+            .relevant({ patch: { id: "a", [field]: null } }),
+        ).toBe(true);
+      }
+      expect(
+        triggers
+          .find((trigger) => trigger.event === "image-changed")!
+          .relevant({ patch: { id: "a", thumbnailPath: "new" } }),
+      ).toBe(false);
+    }
+  });
+
+  it("无法解析的前缀保守刷新", () => {
+    const triggers = createSource(false, "gallery/new-provider/unknown").dataSource.refreshOn(
+      { kind: "section", sectionId: "date" },
+      "page",
+    );
+    expect(triggers.find((trigger) => trigger.event === "images-added")!.relevant({ images: [{ id: "a" }] })).toBe(
+      true,
+    );
+    expect(
+      triggers.find((trigger) => trigger.event === "image-changed")!.relevant({ patch: { id: "a", metadataId: 1 } }),
+    ).toBe(true);
   });
 });

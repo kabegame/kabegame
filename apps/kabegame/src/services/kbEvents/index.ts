@@ -43,4 +43,11 @@ export { usePathqlLooker } from "./usePathqlLooker";
 export { usePathqlLookMany } from "./usePathqlLookMany";
 export { usePathqlLookAll as usePathqlLookAll } from "./usePathqlLookAll";
 
-export { addedTrigger, patchTriggers, hiddenTrigger, imageMayMatchQuery, type ImageViewState } from "./imageViewRelevance";
+export {
+  addedTrigger,
+  deletedTrigger,
+  patchTriggers,
+  hiddenTrigger,
+  imageMayMatchQuery,
+  type ImageViewState,
+} from "./imageViewRelevance";

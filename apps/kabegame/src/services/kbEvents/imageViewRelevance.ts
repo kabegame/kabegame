@@ -45,13 +45,13 @@ function aspectMayMatch(image: ImageInfo, range: string): boolean {
   if (unknown) return false;
   // 数据库宽高是整数；异常行不拿前端舍入结果排除。
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) return true;
-  if (GALLERY_ASPECT_BUCKETS.some((bucket) => bucket.range === range)) {
-    return aspectBucketForDimensions(width, height) === range;
-  }
   const [minW, minH] = match[1] ? [Number(match[1]), Number(match[2])] : [0, 1];
   const [maxW, maxH] = match[3] ? [Number(match[3]), Number(match[4])] : [1, 0];
   const products = [width! * minH!, height! * minW!, width! * maxH!, height! * maxW!];
   if (!products.every(Number.isSafeInteger)) return true;
+  if (GALLERY_ASPECT_BUCKETS.some((bucket) => bucket.range === range)) {
+    return aspectBucketForDimensions(width, height) === range;
+  }
   return products[0]! > products[1]! && products[2]! <= products[3]!;
 }
 
@@ -75,7 +75,11 @@ export function imageMayMatchQuery(image: ImageInfo, query: GalleryQuery): boole
       const date = new Date(seconds * 1000);
       const year = date.getFullYear();
       if (Number.isFinite(year) && year >= 0 && year <= 9999) {
-        const local = [String(year).padStart(4, "0"), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+        const local = [
+          String(year).padStart(4, "0"),
+          String(date.getMonth() + 1).padStart(2, "0"),
+          String(date.getDate()).padStart(2, "0"),
+        ].join("-");
         if (!local.startsWith(atom.date.segment)) return false;
       }
     }
@@ -85,13 +89,20 @@ export function imageMayMatchQuery(image: ImageInfo, query: GalleryQuery): boole
   });
 }
 
-export function addedTrigger(view: () => ImageViewState, accept: (image: ImageInfo) => boolean = () => true): EventTrigger {
-  return on("images-added", (payload) => payload.images.some((image) => accept(image) && imageMayMatchQuery(image, view().query)));
+export function addedTrigger(
+  view: () => ImageViewState,
+  accept: (image: ImageInfo) => boolean = () => true,
+): EventTrigger {
+  return on("images-added", (payload) =>
+    payload.images.some((image) => accept(image) && imageMayMatchQuery(image, view().query)),
+  );
 }
 
 type FieldDeps = Record<string, (view: ImageViewState) => boolean>;
 /** 表外字段保守刷新；这里只列能证明无关的展示字段及其依赖。 */
 const FIELD_DEPS: FieldDeps = {
+  // 只在删除 / 清理任务时置空，用于预览「打开任务」按钮；被删任务的详情页自行离开
+  taskId: () => false,
   thumbnailPath: () => false,
   compatiblePath: () => false,
   lastSetWallpaperAt: (v) => v.sort.field === "by-set-time",
@@ -104,13 +115,26 @@ const FIELD_DEPS: FieldDeps = {
 
 export function patchTriggers(view: () => ImageViewState, extra: FieldDeps = {}): EventTrigger[] {
   const deps = { ...FIELD_DEPS, ...extra };
-  const relevant = (patch: ImageFieldPatch) => Object.keys(patch).some((field) =>
-    field !== "id" && (!Object.hasOwn(deps, field) || deps[field]!(view())),
-  );
+  const relevant = (patch: ImageFieldPatch) =>
+    Object.keys(patch).some(
+      (field) => field !== "id" && (!Object.prototype.hasOwnProperty.call(deps, field) || deps[field]!(view())),
+    );
   return [
     on("image-changed", (payload) => relevant(payload.patch)),
     on("images-change", (payload) => payload.patches.some(relevant)),
   ];
+}
+
+/**
+ * images-deleted：传 heldIds 时只在删除命中已持有的行才刷新（行观察方）；
+ * 不传则任何删除都刷新（总数等计数观察方，结果集可能包含页外的图）。
+ */
+export function deletedTrigger(heldIds?: () => Iterable<string>): EventTrigger {
+  return on("images-deleted", (payload) => {
+    if (!heldIds) return true;
+    const ids = new Set(heldIds());
+    return payload.imageIds.some((id) => ids.has(id));
+  });
 }
 
 export function hiddenTrigger(view: () => ImageViewState): EventTrigger {

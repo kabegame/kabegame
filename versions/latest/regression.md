@@ -1,9 +1,44 @@
 # v4.6.1 regression
 
+## 过滤走查 Phase B：前端图片视图按内容刷新
+
+只改前端 refreshOn 与补丁门控，不新增 SQL / 后端命令，不涉及 Phase C / D。
+2026-10-23 在 macOS 桌面 CEF dev 真机验证，在事件窗口刷新入口用 debug ingest 按 kind + key 计数（`// DEBUG-FILTER`，验证后已删除）；新增用本地导入代替下载，两者走同一条 `images-added`。未勾选的行未真机验证，自动化测试记录另列。
+后台删除页外图只刷新总数、不重读当前页行。
+2026-10-24 以同样方法补测剩余项（session `filter-phaseB`，插桩已删除）；测试图、任务、临时画册与畅游记录测后删除，视图、壁纸、Web 服务器已还原。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 不同插件新增 | 桌面 CEF / Android | 画廊筛插件 Y，下载插件 X | 当前网格行与总数 0 次事件重读 | macOS：筛 konachan 导入 local-import，画廊 0 次；对照筛 local-import，行与总数各 1 次 |
+| [x] | 不同媒体类型新增 | 桌面 CEF / Android | 画廊筛视频，下载图片 | 当前网格行与总数 0 次事件重读 | macOS：路径 `media-type/video` 下导入 PNG，画廊 0 次 |
+| [x] | 默认新增 | 桌面 CEF / Android | 默认画廊下载图片 | 正常刷新行与总数 | 不判断新增排序位置；macOS：行与总数各 1 次 |
+| [x] | 跨任务新增 | 桌面 CEF / Android | 任务 A 详情停留，任务 B 下载 | 任务 A 网格 0 次事件重读 | macOS：任务 A 详情页导入（新建任务 B），0 次 |
+| [x] | 整理缩略图 | 桌面 CEF / Android | 整理仅补 thumbnailPath / compatiblePath | 就地补丁，0 次事件重读 | 元数据补丁另按查询依赖；macOS（2026-10-24）：导入 >512KB 的 PNG（生成独立缩略图），删其缩略图文件后按区间只开补缩略图整理：单张 `image-changed {thumbnailPath}`、两张 `images-change` 各带 thumbnailPath，画廊行与总数 0 次，卡片元素未重建、img 换成新缩略图；HEIC 测试图删兼容副本后开补兼容副本整理，`image-changed {compatiblePath}`，0 次。Android 未测：无设备 |
+| [x] | 设壁纸排序依赖 | 桌面 CEF | 轮播 / 设置壁纸，分别默认排序与按设壁纸时间排序 | 默认 0 次重读；按设壁纸时间重读 | macOS（2026-10-24）：单次 `set_wallpaper_by_image_id`（未开轮播），默认按时间降序只收 `image-changed {lastSetWallpaperAt}`，0 次；按设壁纸时间降序行与总数各 1 次，该图排到首位。测前当前壁纸为 null，测后 `clear_current_wallpaper_image_id` 还原 |
+| [x] | 名称依赖 | 桌面 CEF / Android | MCP 改名，分别默认、按名称排序、按名称搜索 | 默认只打补丁；名称排序 / 搜索重读 | macOS：默认排序 0 次；按名称排序行与总数各 1 次（补丁触发由行与总数共用）；2026-10-24 补测：查询 `search/display-name/pb`（核对 computedPath）下改名，行与总数各 1 次，改出搜索词的图被剔除；对照只勾元数据搜索 `search/metadata/pb` 时改名 0 次。Android 未测 |
+| [x] | 隐藏显示 | 桌面 CEF / Android | hide 关闭，隐藏一张图 | 图片变灰，不因隐藏事件重读 | 另测后台操作；用户 mutate 仍主动请求；macOS：后台加入隐藏画册，0 次，卡片带 `image-item-hidden` |
+| [x] | 隐藏过滤 | 桌面 CEF / Android | hide 开启，隐藏一张图 | 不先变灰，重读后消失；取消隐藏重读补回 | 画册由自身 hide / unhide 事件刷新；macOS：行与总数各 1 次，MutationObserver 全程未见变灰，卡片消失；2026-10-24 补测 hide 开启下 `remove_images_from_album`（隐藏画册）取消隐藏：行与总数各 1 次，图回到原位。注意 hide 开启时任何隐藏成员变化都刷新，即使该图不在当前过滤结果内（筛 konachan 时隐藏 local-import 图，行与总数各 1 次）。Android 未测 |
+| [x] | 后台删除页外图 | 桌面 CEF / Android | 从其它入口删除本页外图片 | 本页行不刷新，总数刷新 1 次 | macOS（2026-10-24）：升序第 1 页外删除，仅总数 1 次、行 0 次；对照删除本页图，行与总数各 1 次 |
+| [x] | 预览期间下载 | 桌面 CEF / Android | 打开裸 id 预览，再下载新图 | 预览不重新解析；当前图删除才重新解析，字段只打补丁 | 相关成员事件仍重读；macOS：预览中导入并 MCP 改名，弹窗元素未重建，标题经补丁更新 |
+| [x] | 任务归属置空 | 桌面 CEF / Android | 删除任务 / 清理已完成任务 | taskId: null 单图 / 批量补丁只打到行与预览（「打开任务」按钮消失），任何网格 0 次事件重读 | 当前任务详情仍按任务删除离开；macOS：画廊开着导入图的预览，从页面外 `delete_task`，画廊 0 次重读（仅 tasks://status 1 次），弹窗未重建，按钮 1→0；2026-10-24 补测 `clear_finished_tasks`（库内只有本次 2 个已完成任务，共 3 张图）：1 条 `images-change` 带 3 个 `taskId: null`，画廊行与总数 0 次、tasks://status 2 次，预览弹窗未重建，按钮 1→0。Android 未测 |
+| [x] | 侧栏与畅游计数 | 桌面 CEF / Android / Web | 插件 / 媒体 / 日期 / 大小 / 宽高比组合过滤，改变新增归属与隐藏状态 | 侧栏按减格上下文；畅游按记录 id / surfRecordId 补丁，删除一律刷新，hide 开启才因隐藏刷新 | Web 日期保守视为可能；macOS（2026-10-24，侧栏即维度 chip 下拉面板，只观察打开的面板）：筛 konachan 开媒体面板导入 local-import 图 0 次，开插件面板（减格后无条件）`plugin/_kb_co` 1 次；筛 local-import 开媒体面板 1 次；日期 2020 开大小面板 0 次、2026-10 时 1 次；大小 50MB- 开宽高比面板 0 次、2MB-5MB 时 1 次；宽高比 16x9- 开日期面板导入竖图 0 次、-3x4 时 1 次。插件面板：改名 0 次；hide 开启隐藏 1 次、关闭 0 次；删除 1 次。畅游页 15 个站点计数：本站新增只刷新该站 1 次、其余 0；hide 关闭隐藏 / 取消隐藏 0 次，开启时各站各 1 次；删除各站各 1 次。pluginId / metadataId 补丁未能真机造出（单测覆盖）；Android / Web 未测 |
+| [x] | 畅游网格 | 桌面 CEF / Android | 站点图片网格（`/surf/:host/images`）：本站 / 他站新增、hide 开 / 关隐藏、删除 | 本站新增重读、他站 0 次；hide 开启隐藏重读且不先变灰，关闭时 0 次并变灰；删除持有行重读行与总数、页外只刷新总数 | macOS（2026-10-24）：本地 HTTP 服务 + 临时畅游记录 127.0.0.1，内容页调用 `surf_download_image`。127.0.0.1 网格本站新增行与总数各 1 次；hide 开启隐藏行与总数各 1 次、MutationObserver 未见变灰；hide 关闭取消隐藏 / 隐藏 0 次、卡片带 `image-item-hidden`；wallhaven.cc 网格他站新增 0 次、删除页外图仅总数 1 次；127.0.0.1 网格删除持有图行与总数各 1 次。临时记录与图片已删除。Android 未测 |
+| [x] | 画册详情 | 桌面 CEF / Android | 画册详情：导入不在画册的新图；把测试图加入 / 移出该画册；hide 开启隐藏画册内测试图 | 导入 0 次；加入 / 移出重读；隐藏重读剔除且不先变灰 | macOS（2026-10-24，临时画册）：导入 0 次；加入、移出各行与总数 1 次；hide 开启隐藏行与总数各 1 次（本画册 `hide` 成员事件），未见变灰，图被剔除；取消隐藏各 1 次补回。临时画册已删除，画册路径设置已还原。Android 未测 |
+| [x] | 任务详情隐藏 | 桌面 CEF / Android | 任务详情：hide 开 / 关下隐藏本任务测试图 | hide 开启重读剔除，关闭 0 次并变灰 | macOS（2026-10-24）：hide 开启隐藏行与总数各 1 次、未变灰、图消失，取消隐藏各 1 次补回；hide 关闭隐藏 0 次，卡片带 `image-item-hidden`。Android 未测 |
+| [x] | 带过滤时页头分母 | 桌面 CEF | 画廊筛插件 Y，导入插件 X 的图 | 页头「分子 / 未过滤总数」的分母应随新增更新，分子不变 | macOS（2026-10-24）：首测未通过（分母停在旧值）；ImageGrid 计数批在有分母时对任何 images-added 刷新后复测，筛 konachan 导入 local-import 图，页头 `530 / 3922` → `530 / 3923` |
+| [ ] | Phase B（其它平台） | Android / Web | 同上各项 | 同上 | 未测：本轮无 Android 设备，Web 不测 |
+
+自动化验证（2026-10-23）：
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Phase B 单测与前端回归 | macOS / Vitest | `deno task test -c kabegame --skip cargo` | 新增判断各维度、秒 / 毫秒日期、unknown、any / not、搜索模式、逐字段依赖、隐藏补丁门控、删除触发（行包含 / 总数全刷）、预览解析、adapter 与计数相关性均通过 | 51 files passed；527 tests passed |
+| [x] | 前端类型与 Rust 检查 | macOS / standard | `.claude/skills/check-kabegame/driver.sh`（包装 `deno task check -c kabegame`） | vue-tsc 与 cargo check 通过 | 退出码 0；vue-tsc 0 error、cargo 0 error；既有 warnings 保留 |
+
 ## 过滤走查 Phase A：图片事件协议拆分
 
 本节覆盖本次协议拆分；后文既有的 `images-change(reason)` / 隐藏 `image-changed` 记录为历史验收，
-不代表当前协议。只实施 Phase A，刷新收紧、整理与迁移循环改造仍待后续阶段。
+不代表当前协议。以下是 Phase A 当时验收记录；刷新相关性以新增的 Phase B 节为准，整理与迁移循环仍待后续阶段。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |

@@ -111,7 +111,9 @@ describe("imagePatches$", () => {
   it("单图与多图共用补丁窗口，收藏成员独立合并", async () => {
     vi.useFakeTimers();
     const batches: Record<string, unknown>[] = [];
-    const subscription = imagePatches$(500, { patchHidden: () => true }).subscribe((batch) => batches.push(Object.fromEntries(batch)));
+    const subscription = imagePatches$(500, { patchHidden: () => true }).subscribe((batch) =>
+      batches.push(Object.fromEntries(batch)),
+    );
     cleanups.push(() => subscription.unsubscribe());
     await flushPromises();
     const imageChanged = (patch: { id: string } & Record<string, unknown>) =>
@@ -148,10 +150,42 @@ describe("imagePatches$", () => {
     vi.advanceTimersByTime(500);
     expect(batches).toHaveLength(4);
   });
+  it("patchHidden 动态门控仅影响隐藏补丁，字段与收藏继续保鲜", async () => {
+    vi.useFakeTimers();
+    let patchHidden = false;
+    const batches: Record<string, unknown>[] = [];
+    const sub = imagePatches$(500, { patchHidden: () => patchHidden }).subscribe((batch) =>
+      batches.push(Object.fromEntries(batch)),
+    );
+    cleanups.push(() => sub.unsubscribe());
+    await flushPromises();
+    const hidden = (reason: string) =>
+      listeners.get("album-images-change")!({
+        payload: {
+          albumIds: ["00000000-0000-0000-0000-000000000000"],
+          reason,
+          imageIds: ["a"],
+        },
+      });
+    hidden("add-hidden");
+    listeners.get("image-changed")!({ payload: { patch: { id: "a", thumbnailPath: "new" } } });
+    listeners.get("album-images-change")!({ payload: { albumIds: ["favorite"], reason: "add", imageIds: ["a"] } });
+    vi.advanceTimersByTime(500);
+    expect(batches).toEqual([{ a: { thumbnailPath: "new" } }, { a: { favorite: true } }]);
+    patchHidden = true;
+    hidden("add-hidden");
+    expect(batches.at(-1)).toEqual({ a: { isHidden: true } });
+    patchHidden = false;
+    hidden("delete-hidden");
+    vi.advanceTimersByTime(500);
+    expect(batches).toHaveLength(3);
+  });
   it("隐藏与取消隐藏仅从隐藏画册直接成员推导，独立于字段与收藏窗口", async () => {
     vi.useFakeTimers();
     const batches: Record<string, unknown>[] = [];
-    const sub = imagePatches$(500, { patchHidden: () => true }).subscribe((batch) => batches.push(Object.fromEntries(batch)));
+    const sub = imagePatches$(500, { patchHidden: () => true }).subscribe((batch) =>
+      batches.push(Object.fromEntries(batch)),
+    );
     cleanups.push(() => sub.unsubscribe());
     await flushPromises();
     const emit = (albumId: string, reason: string) =>

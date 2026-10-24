@@ -120,6 +120,7 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import { usePagedGallery } from "@/composables/usePagedGallery";
 import {
   GRID_REFRESH_WAIT_MS,
+  deletedTrigger,
   on,
   imagePatches$,
   pathqlRequest$,
@@ -426,18 +427,21 @@ const handleCountError = async (error: unknown) => {
   if (typeof fallback === "number") totalImagesCount.value = fallback;
 };
 
-// 后台删除只在当前已持有的行命中时刷新；用户删除仍由 mutate 主动请求。
-const refreshOn = [...adapter.refreshOn, on("images-deleted", (payload) => {
-  const ids = new Set(images.value.map((image) => image.id));
-  return payload.imageIds.some((id) => ids.has(id));
-})];
+// 后台删除：行只在当前已持有的行命中时刷新，总数任何删除都刷新；用户删除仍由 mutate 主动请求。
+const rowsRefreshOn = [...adapter.refreshOn, deletedTrigger(() => images.value.map((image) => image.id))];
+const countRefreshOn = [
+  ...adapter.refreshOn,
+  deletedTrigger(),
+  // 分母与分子同批读取；分母不带过滤，任何新增都会改变它
+  on("images-added", () => !!currentUnfilteredCountPath()),
+];
 
 // 行与总数各自作为观察方注册到 pathql 核心；adapter 的过滤器决定事件窗口内是否刷新。
 // 观察方只看最后可得的数据与最新请求的状态，错误也只来自最新请求。
 const rowsLooker = usePathqlLooker({
   kind: "rows",
   key: currentRowsPath,
-  refreshOn,
+  refreshOn: rowsRefreshOn,
   onResult: applyRows,
   onError: (error) => {
     void adapter.onLoadError?.(error, rawViewPath());
@@ -446,7 +450,7 @@ const rowsLooker = usePathqlLooker({
 
 const countLooker = usePathqlLookAll({
   queries: countQueries,
-  refreshOn,
+  refreshOn: countRefreshOn,
   onResult: ([total, unfiltered]) => {
     totalImagesCount.value = total;
     unfilteredTotal.value = unfiltered ?? null;
@@ -549,7 +553,9 @@ refreshCtx = {
 // 字段补丁（image-changed / images-change、收藏与隐藏成员）只打到已在手的行与预览对象上，不发请求。
 let imagePatchSubscription: Subscription | null = null;
 onMounted(() => {
-  imagePatchSubscription = imagePatches$(GRID_REFRESH_WAIT_MS, { patchHidden: () => !adapter.viewState().hide }).subscribe(patchMany);
+  imagePatchSubscription = imagePatches$(GRID_REFRESH_WAIT_MS, {
+    patchHidden: () => !adapter.viewState().hide,
+  }).subscribe(patchMany);
 });
 onBeforeUnmount(() => {
   imagePatchSubscription?.unsubscribe();

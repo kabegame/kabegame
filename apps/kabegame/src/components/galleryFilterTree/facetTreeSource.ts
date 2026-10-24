@@ -2,7 +2,14 @@ import { addedTrigger, patchTriggers, hiddenTrigger, type ImageViewState } from 
 import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
 import type { usePluginStore } from "@/stores/plugins";
-import { parseQueryBody, queryFromFilterSet, removeFilterDimension, GALLERY_ASPECT_BUCKETS, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
+import {
+  parseQueryBody,
+  queryFromFilterSet,
+  removeFilterDimension,
+  GALLERY_ASPECT_BUCKETS,
+  type GalleryBrowseDimension,
+  type GalleryFilter,
+} from "@/utils/galleryPath";
 import { buildTimeMenuScopeLabels, type TimeMenuScopeLabels } from "@/utils/galleryTimeFilterMenu";
 import {
   dateFilterSegment,
@@ -97,17 +104,15 @@ export function createGalleryFacetSource(
     return parseQueryBody(body.split("/").filter(Boolean));
   });
   const view = (): ImageViewState => ({
-    query: [...(contextQuery.value ?? []), ...queryFromFilterSet(
-      ctx.dimension.value ? removeFilterDimension(ctx.filters.value, ctx.dimension.value) : ctx.filters.value,
-    )],
+    query: [
+      ...(contextQuery.value ?? []),
+      ...queryFromFilterSet(
+        ctx.dimension.value ? removeFilterDimension(ctx.filters.value, ctx.dimension.value) : ctx.filters.value,
+      ),
+    ],
     sort: { field: "by-time", desc: false },
     hide: /(^|\/)hide(?:\/|$)/.test(ctx.prefix.value),
   });
-  // 无法解析上下文时保留刷新，不能把未知条件当成没有依赖。
-  const imageTriggers = [addedTrigger(view), ...patchTriggers(view)].map((trigger) => ({
-    ...trigger,
-    relevant: (payload: unknown) => contextQuery.value === null || trigger.relevant(payload),
-  }));
 
   const deltaMode = computed(() => !!ctx.countBaseline);
   const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
@@ -376,7 +381,18 @@ export function createGalleryFacetSource(
         },
       };
     },
-    refreshOn() {
+    refreshOn(branch) {
+      const pluginFacet =
+        branch.kind === "section"
+          ? branch.sectionId === "plugin"
+          : branch.parent.kind === "plugin" || branch.parent.kind === "plugin-extend";
+      // 插件分面自身也依赖分组键与扩展 metadata，不能只看减格后的查询条件。
+      const extra = pluginFacet ? { pluginId: () => true, metadataId: () => true } : undefined;
+      // 无法解析上下文时保留刷新，不能把未知条件当成没有依赖。
+      const imageTriggers = [addedTrigger(view), ...patchTriggers(view, extra)].map((trigger) => ({
+        ...trigger,
+        relevant: (payload: unknown) => contextQuery.value === null || trigger.relevant(payload),
+      }));
       return deltaMode.value
         ? []
         : [

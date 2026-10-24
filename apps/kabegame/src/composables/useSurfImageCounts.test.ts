@@ -88,10 +88,12 @@ describe("Surf 页内动态计数观察", () => {
     ["images-added", { images: [{ surfRecordId: "one" }] }, ["a.com"]],
     ["images-added", { images: [{ surfRecordId: "unknown" }] }, []],
     ["images-added", { images: [] }, []],
+    ["image-changed", { patch: { id: "a", surfRecordId: null } }, ["a.com", "b.com"]],
+    ["images-change", { patches: [{ id: "a", surfRecordId: "two" }] }, ["a.com", "b.com"]],
     ["images-deleted", { imageIds: ["a"] }, ["a.com", "b.com"]],
-    ["images-change", { patches: [{ id: "a", width: 1 }] }, ["a.com", "b.com"]],
-    ["image-changed", { patch: { id: "a", width: 1 } }, ["a.com", "b.com"]],
-    ["album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] }, ["a.com", "b.com"]],
+    ["images-change", { patches: [{ id: "a", width: 1 }] }, []],
+    ["image-changed", { patch: { id: "a", width: 1 } }, []],
+    ["album-images-change", { albumIds: ["00000000-0000-0000-0000-000000000000"] }, []],
     ["album-images-change", { albumIds: ["other"] }, []],
   ])("事件相关性 %s %j → %j", async (name, payload, hosts) => {
     vi.useFakeTimers();
@@ -101,6 +103,17 @@ describe("Surf 页内动态计数观察", () => {
     emit(payload, name);
     await flushPromises();
     expect(paths()).toEqual(hosts.map((host) => `gallery/surf/${host}`));
+  });
+
+  it("hide 开启时隐藏画册变化刷新各站点计数", async () => {
+    vi.useFakeTimers();
+    stores.route.hide = true;
+    fixture();
+    await flushPromises();
+    pathqlAll.mockClear();
+    emit({ albumIds: ["00000000-0000-0000-0000-000000000000"] }, "album-images-change");
+    await flushPromises();
+    expect(paths()).toEqual(["gallery/hide/surf/a.com", "gallery/hide/surf/b.com"]);
   });
 
   it("相同 host 更换记录 id 不重读 key，过滤器读取最新 id", async () => {

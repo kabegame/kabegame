@@ -34,8 +34,7 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
     },
     refreshOn: [
       addedTrigger(view, (image) => !!params.taskId() && image.taskId === params.taskId()),
-      // 删除 / 清理任务会把旧图 taskId 置空；缺少旧归属，保守重读。
-      ...patchTriggers(view, { taskId: () => true }),
+      ...patchTriggers(view),
       hiddenTrigger(view),
     ],
     // 失败图片计数与当前页数据同源刷新
