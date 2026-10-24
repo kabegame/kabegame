@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_run_config_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "tasks_run_config_provider",
+            "properties": { "run_config_id": "${capture[1]}" }
+        }
+    }
+}

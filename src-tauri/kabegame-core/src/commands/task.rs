@@ -1,5 +1,8 @@
 use crate::emitter::GlobalEmitter;
+#[cfg(test)]
+use crate::plugin::package_file::preset_content_matches;
 use crate::plugin::{PluginManager, VarDefinition, VarOption};
+use crate::providers::query::query_fetch;
 use crate::scheduler::Scheduler;
 use crate::storage::{RunConfig, Storage, TaskInfo, TaskStatus};
 use serde::{Deserialize, Serialize};
@@ -17,7 +20,10 @@ pub struct PluginRunParams {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub max_concurrent_downloads: Option<u32>,
-    pub dry_run: bool,
+    #[serde(default)]
+    pub print_config: bool,
+    #[serde(default)]
+    pub is_dry_run: bool,
 }
 
 /// 0 会让任务永远无法入队；不设上界，超过全局值时按全局值生效。
@@ -137,7 +143,7 @@ pub async fn run_plugin(
     let config = effective.clone().into_iter().collect::<BTreeMap<_, _>>();
     let plugin_file_path = plugin_file_path.map(|path| path.to_string_lossy().into_owned());
 
-    if p.dry_run {
+    if p.print_config {
         return Ok(PluginRunOutput {
             plugin_id: plugin.id,
             plugin_version: plugin.version,
@@ -168,6 +174,7 @@ pub async fn run_plugin(
     if let Some(limit) = validate_task_max_downloads(p.max_concurrent_downloads)? {
         params["maxConcurrentDownloads"] = Value::from(limit);
     }
+    params["isDryRun"] = Value::Bool(p.is_dry_run);
     let task_id = start_task(params).await?;
 
     Ok(PluginRunOutput {
@@ -394,6 +401,8 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         trigger_source: String,
         #[serde(default)]
         max_concurrent_downloads: Option<u32>,
+        #[serde(default)]
+        is_dry_run: bool,
     }
 
     fn default_trigger_source() -> String {
@@ -421,10 +430,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
     )?;
     // 网页收集：前端校验之外必须再校验一次，非法直接拒绝，不创建任务记录
     if p.plugin_id == crate::plugin::webpage::WEBPAGE_PLUGIN_ID {
-        crate::crawler::webpage::validate_submission(
-            Some(&effective),
-            p.http_headers.as_ref(),
-        )?;
+        crate::crawler::webpage::validate_submission(Some(&effective), p.http_headers.as_ref())?;
     }
 
     let task_id = uuid::Uuid::new_v4().to_string();
@@ -446,6 +452,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         run_config_id: p.run_config_id,
         trigger_source: p.trigger_source,
         max_concurrent_downloads,
+        is_dry_run: p.is_dry_run,
         status: TaskStatus::Pending,
         progress: 0.0,
         deleted_count: 0,
@@ -483,14 +490,20 @@ pub fn set_task_max_concurrent_downloads(
 ) -> Result<Value, String> {
     let limit = validate_task_max_downloads(max_concurrent_downloads)?;
     crate::crawler::TaskScheduler::global().set_task_max_concurrent_downloads(&task_id, limit)?;
-    Ok(Value::Null)
+    GlobalEmitter::global().emit_task_changed(
+        &task_id,
+        serde_json::json!({ "maxConcurrentDownloads": limit }),
+    );
+    Ok(query_fetch(&format!("tasks://id_{task_id}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null))
 }
 
 pub fn delete_task(task_id: String) -> Result<Value, String> {
     let storage = Storage::global();
     storage.delete_task(&task_id)?;
     GlobalEmitter::global().emit_task_deleted(&task_id);
-    GlobalEmitter::global().emit_images_change("change", &[], Some(&[task_id]), None, None);
     Ok(Value::Null)
 }
 
@@ -565,27 +578,144 @@ pub fn delete_task_failed_image(failed_id: i64) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+struct RecommendedPluginState {
+    plugin_id: String,
+    installed: bool,
+    paths: BTreeMap<String, bool>,
+}
+
+struct RecommendedSnapshot {
+    plugins: Vec<(bool, std::sync::Arc<crate::plugin::Plugin>)>,
+    states: Vec<RecommendedPluginState>,
+}
+
+fn recommended_snapshot_states(
+    plugins: &[(bool, std::sync::Arc<crate::plugin::Plugin>)],
+    configs: &[RunConfig],
+) -> Vec<RecommendedPluginState> {
+    plugins
+        .iter()
+        .map(|(installed, plugin)| RecommendedPluginState {
+            plugin_id: plugin.id.clone(),
+            installed: *installed,
+            paths: crate::plugin::package_file::recommended_import_states(plugin, configs)
+                .into_iter()
+                .collect(),
+        })
+        .collect()
+}
+
+fn recommended_diff_scope(plugin_ids: Vec<String>) -> Result<RecommendedSnapshot, String> {
+    let ids: std::collections::BTreeSet<_> = plugin_ids.into_iter().collect();
+    let plugins: Vec<_> = ids
+        .iter()
+        .flat_map(|id| PluginManager::global().recommended_diff_plugins(id))
+        .collect();
+    let configs = Storage::global().get_run_configs()?;
+    let states = recommended_snapshot_states(&plugins, &configs);
+    Ok(RecommendedSnapshot { plugins, states })
+}
+
+/// 前后使用同一来源集合；先合并实际变化的路径，再优先取已安装插件的新状态。
+fn recommended_import_changes(
+    before: &[RecommendedPluginState],
+    after: &[RecommendedPluginState],
+) -> BTreeMap<String, Value> {
+    let mut changed: BTreeMap<String, BTreeMap<String, bool>> = BTreeMap::new();
+    for (old, new) in before.iter().zip(after) {
+        for (path, imported) in &new.paths {
+            if old
+                .paths
+                .get(path)
+                .is_some_and(|previous| previous != imported)
+            {
+                changed
+                    .entry(new.plugin_id.clone())
+                    .or_default()
+                    .entry(path.clone())
+                    .or_insert(*imported);
+            }
+        }
+    }
+    for installed in after.iter().filter(|state| state.installed) {
+        if let Some(paths) = changed.get_mut(&installed.plugin_id) {
+            for (path, imported) in paths {
+                if let Some(value) = installed.paths.get(path) {
+                    *imported = *value;
+                }
+            }
+        }
+    }
+    changed
+        .into_iter()
+        .map(|(id, paths)| {
+            let paths: serde_json::Map<String, Value> = paths
+                .into_iter()
+                .map(|(path, imported)| (path, serde_json::json!({ "imported": imported })))
+                .collect();
+            (id, serde_json::json!({ "recommendedConfigs": paths }))
+        })
+        .collect()
+}
+
+fn emit_recommended_diff(before: RecommendedSnapshot) {
+    // 写库已经成功，附带快照失败不能把成功的写入报告成失败。
+    let configs = match Storage::global().get_run_configs() {
+        Ok(configs) => configs,
+        Err(error) => {
+            eprintln!("[WARN] 读取写后推荐配置导入态失败: {error}");
+            return;
+        }
+    };
+    let after = recommended_snapshot_states(&before.plugins, &configs);
+    for (id, changes) in recommended_import_changes(&before.states, &after) {
+        GlobalEmitter::global().emit_plugin_changed(&id, changes);
+    }
+}
+
 pub async fn add_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
-    let result = Storage::global().add_run_config(run_config)?;
+    let before = recommended_diff_scope(vec![run_config.plugin_id.clone()])?;
+    Storage::global().add_run_config(run_config)?;
+    emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&config_id).await;
     GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
-    serde_json::to_value(result).map_err(|e| e.to_string())
+    let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null);
+    Ok(saved)
 }
 
 pub async fn update_run_config(config: Value) -> Result<Value, String> {
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
     let config_id = run_config.id.clone();
+    let mut plugin_ids = vec![run_config.plugin_id.clone()];
+    if let Some(old) = Storage::global().get_run_config(&config_id)? {
+        plugin_ids.push(old.plugin_id);
+    }
+    let before = recommended_diff_scope(plugin_ids)?;
     Storage::global().update_run_config(run_config)?;
+    emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&config_id).await;
     GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
-    Ok(Value::Null)
+    let saved = query_fetch(&format!("run_configs://id_{config_id}"))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null);
+    Ok(saved)
 }
 
 pub async fn delete_run_config(config_id: String) -> Result<Value, String> {
+    let plugin_ids = Storage::global()
+        .get_run_config(&config_id)?
+        .map(|config| vec![config.plugin_id])
+        .unwrap_or_default();
+    let before = recommended_diff_scope(plugin_ids)?;
     let _ = Scheduler::global().remove_config(&config_id).await;
     Storage::global().delete_run_config(&config_id)?;
+    emit_recommended_diff(before);
     GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
     Ok(Value::Null)
 }
@@ -609,18 +739,24 @@ pub fn clear_finished_tasks() -> Result<Value, String> {
     for tid in &task_ids {
         GlobalEmitter::global().emit_task_deleted(tid);
     }
-    if !task_ids.is_empty() {
-        GlobalEmitter::global().emit_images_change("change", &[], Some(&task_ids), None, None);
-    }
-    serde_json::to_value(count).map_err(|e| e.to_string())
+    Ok(serde_json::json!({ "taskIds": task_ids, "count": count }))
 }
 
 pub async fn copy_run_config(config_id: String) -> Result<Value, String> {
     let new_id = uuid::Uuid::new_v4().to_string();
+    let source = Storage::global()
+        .get_run_config(&config_id)?
+        .ok_or("运行配置不存在")?;
+    let before = recommended_diff_scope(vec![source.plugin_id])?;
     let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
+    emit_recommended_diff(before);
     let _ = Scheduler::global().reload_config(&new_id).await;
     GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
-    serde_json::to_value(copied).map_err(|e| e.to_string())
+    let saved = query_fetch(&format!("run_configs://id_{}", copied.id))?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null);
+    Ok(saved)
 }
 
 pub fn get_run_config(config_id: String) -> Result<Value, String> {
@@ -638,6 +774,129 @@ pub fn get_missed_runs() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn run_config_writes_reject_invalid_rows_without_runtime() {
+        // 反序列化失败应直接返回错误，不需要初始化存储、插件或任务运行时。
+        assert!(add_run_config(serde_json::json!({ "id": "a" }))
+            .await
+            .is_err());
+        assert!(update_run_config(Value::Null).await.is_err());
+    }
+
+    fn recommended_config(plugin_id: &str) -> RunConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "config", "name": "名称", "pluginId": plugin_id,
+            "url": "https://example.test", "createdAt": 1
+        }))
+        .unwrap()
+    }
+
+    fn recommended_states(configs: &[RunConfig]) -> Vec<RecommendedPluginState> {
+        ["a", "b"]
+            .into_iter()
+            .map(|id| RecommendedPluginState {
+                plugin_id: id.into(),
+                installed: true,
+                paths: [
+                    ("default.json", "https://example.test"),
+                    ("other.json", "https://other.test"),
+                ]
+                .into_iter()
+                .map(|(path, url)| {
+                    (
+                        path.into(),
+                        configs.iter().any(|config| {
+                            preset_content_matches(id, url, &[], &serde_json::json!({}), config)
+                        }),
+                    )
+                })
+                .collect(),
+            })
+            .collect()
+    }
+
+    fn recommended_changes(before: &[RunConfig], after: &[RunConfig]) -> BTreeMap<String, Value> {
+        recommended_import_changes(&recommended_states(before), &recommended_states(after))
+    }
+
+    #[test]
+    fn recommended_diff_add_emits_only_new_matches() {
+        let config = recommended_config("a");
+        let changes = recommended_changes(&[], &[config.clone()]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"],
+            serde_json::json!({
+                "recommendedConfigs": {"default.json": {"imported": true}}
+            })
+        );
+        assert!(recommended_changes(&[config.clone()], &[config.clone(), config]).is_empty());
+        assert!(recommended_changes(&[], &[recommended_config("unrelated")]).is_empty());
+    }
+
+    #[test]
+    fn recommended_diff_update_checks_both_plugins_and_ignores_schedule() {
+        let old = recommended_config("a");
+        let mut new = old.clone();
+        new.plugin_id = "b".into();
+        let changes = recommended_changes(&[old.clone()], &[new]);
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            changes["a"]["recommendedConfigs"]["default.json"]["imported"],
+            false
+        );
+        assert_eq!(
+            changes["b"]["recommendedConfigs"]["default.json"]["imported"],
+            true
+        );
+        let mut renamed = old.clone();
+        renamed.name = "重命名".into();
+        renamed.schedule_enabled = true;
+        renamed.schedule_spec = Some(crate::storage::ScheduleSpec::Hourly { minute: 30 });
+        renamed.schedule_planned_at = Some(100);
+        assert!(recommended_changes(&[old], &[renamed]).is_empty());
+    }
+
+    #[test]
+    fn recommended_diff_delete_emits_only_last_match_removal() {
+        let config = recommended_config("a");
+        let changes = recommended_changes(&[config.clone()], &[]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"],
+            serde_json::json!({
+                "recommendedConfigs": {"default.json": {"imported": false}}
+            })
+        );
+        assert!(recommended_changes(&[config.clone(), config.clone()], &[config]).is_empty());
+        assert!(recommended_changes(&[recommended_config("unrelated")], &[]).is_empty());
+    }
+
+    #[test]
+    fn recommended_diff_merges_sources_and_prefers_installed_new_state() {
+        let state = |installed, imported| RecommendedPluginState {
+            plugin_id: "a".into(),
+            installed,
+            paths: BTreeMap::from([("default.json".into(), imported)]),
+        };
+        let before = [state(true, false), state(false, false), state(false, false)];
+        let after = [state(true, false), state(false, true), state(false, true)];
+        let changes = recommended_import_changes(&before, &after);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"],
+            serde_json::json!({
+                "recommendedConfigs": {"default.json": {"imported": false}}
+            })
+        );
+        let changes = recommended_import_changes(&before[1..], &after[1..]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes["a"]["recommendedConfigs"]["default.json"]["imported"],
+            true
+        );
+    }
 
     fn var(value: Value) -> VarDefinition {
         serde_json::from_value(value).expect("var definition")
@@ -683,7 +942,11 @@ mod tests {
         ];
         let values = parse_plugin_args_to_user_config(
             &defs,
-            &["tag=".to_string(), "items=,,".to_string(), "option=".to_string()],
+            &[
+                "tag=".to_string(),
+                "items=,,".to_string(),
+                "option=".to_string(),
+            ],
         )
         .unwrap();
         assert_eq!(values["tag"], Value::Null);
@@ -705,9 +968,11 @@ mod tests {
             parse_plugin_args_to_user_config(&defs, &["kinds=".to_string()]).unwrap()["kinds"],
             Value::Null
         );
-        assert!(parse_plugin_args_to_user_config(&defs, &["kinds=x".to_string()])
-            .unwrap_err()
-            .contains("未知 checkbox 选项"));
+        assert!(
+            parse_plugin_args_to_user_config(&defs, &["kinds=x".to_string()])
+                .unwrap_err()
+                .contains("未知 checkbox 选项")
+        );
     }
 
     #[test]
@@ -715,9 +980,11 @@ mod tests {
         let defs = vec![var(serde_json::json!({
             "key": "quality", "type": "options", "name": "Quality", "options": ["high"]
         }))];
-        assert!(parse_plugin_args_to_user_config(&defs, &["quality=low".to_string()])
-            .unwrap_err()
-            .contains("不是有效 option"));
+        assert!(
+            parse_plugin_args_to_user_config(&defs, &["quality=low".to_string()])
+                .unwrap_err()
+                .contains("不是有效 option")
+        );
     }
 
     #[test]
@@ -739,5 +1006,81 @@ mod tests {
         assert_eq!(validate_task_max_downloads(Some(1)).unwrap(), Some(1));
         assert_eq!(validate_task_max_downloads(Some(99)).unwrap(), Some(99));
         assert_eq!(validate_task_max_downloads(None).unwrap(), None);
+    }
+
+    #[test]
+    fn imported_preset_comparison_normalizes_content_and_ignores_name_and_schedule() {
+        let defs = vec![
+            var(serde_json::json!({"key":"text","type":"string","name":"Text"})),
+            var(serde_json::json!({"key":"items","type":"list","name":"Items"})),
+            var(serde_json::json!({
+                "key":"kinds","type":"checkbox","name":"Kinds","options":["a","b"]
+            })),
+        ];
+        let mut config = RunConfig {
+            id: "config-1".to_string(),
+            name: "renamed".to_string(),
+            description: None,
+            plugin_id: "plugin-a".to_string(),
+            url: " https://example.test ".to_string(),
+            output_dir: None,
+            output_album_id: None,
+            user_config: Some(HashMap::from([(
+                "kinds".to_string(),
+                serde_json::json!({"a":true,"b":false}),
+            )])),
+            http_headers: None,
+            max_concurrent_downloads: None,
+            is_dry_run: false,
+            created_at: 1,
+            schedule_enabled: true,
+            schedule_spec: Some(crate::storage::ScheduleSpec::Hourly { minute: 30 }),
+            schedule_planned_at: Some(10),
+            schedule_last_run_at: None,
+        };
+        let preset = serde_json::json!({
+            "filename":"default.json",
+            "name":"original",
+            "userConfig":{"text":"","items":[],"kinds":["a"]},
+            "httpHeaders":{},
+            "isDryRun":false
+        });
+        assert!(preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
+
+        config.is_dry_run = true;
+        assert!(!preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
+        config.is_dry_run = false;
+        config.url = "https://changed.test".to_string();
+        assert!(!preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
+        config.url = "https://example.test".to_string();
+        config.http_headers = Some(HashMap::from([(
+            "Authorization".to_string(),
+            "x".to_string(),
+        )]));
+        assert!(!preset_content_matches(
+            "plugin-a",
+            "https://example.test",
+            &defs,
+            &preset,
+            &config
+        ));
     }
 }

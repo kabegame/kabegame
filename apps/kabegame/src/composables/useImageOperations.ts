@@ -4,7 +4,6 @@ import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import type { ImageInfo } from "@/types/image";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/services/albums";
-import { albumChangeBatch, publishLocal } from "@/services/dataChangeHub";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
 import { fileNameFromUrlOrPath, fileToUrl } from "@/utils/fileUrl";
@@ -15,8 +14,6 @@ import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
-import type { RowsSnapshot } from "@/services/liveQuery";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -226,13 +223,7 @@ export function useImageOperations(
       const includesCurrent =
         !!currentWallpaperImageId.value && imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
-      const result = await mutate((view) =>
-        invoke<{
-          view?: RowsSnapshot | null;
-          albumChanges: AlbumImagesChangePayload[];
-        }>("batch_delete_images", { imageIds, view }),
-      );
-      for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
+      await mutate(() => invoke("batch_delete_images", { imageIds }));
 
       if (includesCurrent) {
         currentWallpaperImageId.value = null;
@@ -255,7 +246,7 @@ export function useImageOperations(
 
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
-      await mutate((view) => addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds, { view }));
+      await mutate(() => addImagesToAlbum(HIDDEN_ALBUM_ID, imageIds));
 
       ElMessage.success(
         count > 1 ? i18n.global.t("contextMenu.hiddenCount", { count }) : i18n.global.t("contextMenu.hiddenOne"),
@@ -270,7 +261,7 @@ export function useImageOperations(
   // 注意：按 hash 去重已改为后端“分批后台任务 + 事件驱动 UI 同步”，逻辑迁移到 Gallery.vue
 
   // 批量切换收藏：任一未收藏 → 全部收藏，否则全部取消收藏。
-  // 当前列表在命令成功后就地更新；其他入口仍由 album-images-change 同步。
+  // 当前列表在命令成功后就地更新；其他入口仍由画册成员增删事件同步。
   const toggleFavoriteForImages = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length === 0) return;
     const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
@@ -363,7 +354,7 @@ export function useImageOperations(
         // 3. 将选中的图片添加到画册
         const imageIds = imagesToProcess.map((img) => img.id);
         try {
-          await mutate((view) => addImagesToAlbum(createdAlbum.id, imageIds, { view }));
+          await mutate(() => addImagesToAlbum(createdAlbum.id, imageIds));
         } catch (error: any) {
           // 提取友好的错误信息
           const errorMessage =

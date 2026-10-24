@@ -2,7 +2,9 @@
   "version": "5",
   "specifiers": {
     "jsr:@b-fuze/deno-dom@0.1.56": "0.1.56",
+    "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/fs@1": "1.0.24",
+    "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@^1.1.5": "1.1.6",
     "npm:@astrojs/starlight@0.33": "0.33.2_astro@5.18.1__@types+node@22.20.1__sass@1.102.0_@types+node@22.20.1_sass@1.102.0",
@@ -62,6 +64,7 @@
     "npm:pinia@^2.3.1": "2.3.1_typescript@5.9.3_vue@3.5.40__typescript@5.9.3",
     "npm:playwright@^1.59.1": "1.59.1",
     "npm:prettier@^3.9.9": "3.9.9",
+    "npm:rxjs@^7.8.2": "7.8.2",
     "npm:sass@^1.102.0": "1.102.0",
     "npm:sass@^1.97.1": "1.102.0",
     "npm:sharp@0.34": "0.34.5",
@@ -92,6 +95,12 @@
     "@b-fuze/deno-dom@0.1.56": {
       "integrity": "8030e2dc1d8750f1682b53462ab893d9c3470f2287feecbe22f44a88c54ab148"
     },
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal@^1.0.12"
+      ]
+    },
     "@std/fs@1.0.24": {
       "integrity": "f3061b45b81673a2bece689da041df32d174be064c89eb6397fb5718d3fb7877",
       "dependencies": [
@@ -104,7 +113,7 @@
     "@std/path@1.1.6": {
       "integrity": "c68485c2a4dfbb5ae3cc74fae4e8c4e5d874cf8a8ed12927917235c758b46cbe",
       "dependencies": [
-        "jsr:@std/internal"
+        "jsr:@std/internal@^1.0.14"
       ]
     }
   },
@@ -2720,7 +2729,7 @@
         "chalk@4.1.2",
         "date-fns",
         "lodash",
-        "rxjs",
+        "rxjs@6.6.7",
         "spawn-command",
         "supports-color@8.1.1",
         "tree-kill",
@@ -5921,6 +5930,12 @@
         "tslib@1.14.1"
       ]
     },
+    "rxjs@7.8.2": {
+      "integrity": "sha512-dhKf903U/PQZY6boNNtAGdWbG85WAbjT/1xYoZIC7FAY0yWapOBQVsVrDl58W86//e1VpMNBtRV4MaXfdMySFA==",
+      "dependencies": [
+        "tslib@2.8.1"
+      ]
+    },
     "safe-array-concat@1.1.4": {
       "integrity": "sha512-wtZlHyOje6OZTGqAoaDKxFkgRtkF9CnHAVnCHKfuj200wAgL+bSJhdsCD2l0Qx/2ekEXjPWcyKkfGb5CPboslg==",
       "dependencies": [
@@ -7098,6 +7113,7 @@
             "npm:happy-dom@^20.7.0",
             "npm:marked@^17.0.4",
             "npm:pinia@^2.1.7",
+            "npm:rxjs@^7.8.2",
             "npm:sass@^1.97.1",
             "npm:tauri-plugin-android-battery-optimization-api@0.1",
             "npm:typescript@^5.4.5",
@@ -7172,14 +7188,14 @@
           ]
         }
       },
-      "src-tauri-plugins/tauri-plugin-picker": {
+      "src-tauri/tauri-plugin-picker": {
         "packageJson": {
           "dependencies": [
             "npm:@tauri-apps/api@2"
           ]
         }
       },
-      "src-tauri-plugins/tauri-plugin-share": {
+      "src-tauri/tauri-plugin-share": {
         "packageJson": {
           "dependencies": [
             "npm:@tauri-apps/api@2"

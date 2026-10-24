@@ -41,18 +41,16 @@ import { usePluginStore } from "@/stores/plugins";
 import { serializeFilterSet, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
 import KbTreePanel from "@/components/tree/KbTreePanel.vue";
 import { useTreeModel } from "@/components/tree/useTreeModel";
-import { subscribeChanges, type ChangeBatch } from "@/services/dataChangeHub";
-import { GRID_REFRESH_WAIT_MS } from "@/services/liveQuery";
 import type { TreeRowState } from "@/components/tree/types";
-import { invalidatePureProviderListCache, normalizeProviderPath, type GalleryFilterTreeContext } from "./context";
+import type { GalleryFilterTreeContext } from "./context";
 import { createGalleryFacetSource, type FacetNode } from "./facetTreeSource";
 import { useFacetNodeCounts } from "./useFacetNodeCounts";
 
 /**
- * 画廊过滤树内核：模型 + 计数适配层 + dataChangeHub 刷新 + KbTreePanel 装配。
+ * 画廊过滤树内核：模型 + 计数适配层 + pathql 观察 + KbTreePanel 装配。
  * GalleryFilterTree（侧栏 chip 面板，:key 整树重建）与 AdvancedFacetTreePanel
  * （高级弹窗 facet，常驻不重建）共用。ctx / dimension 视为 mount 期常量。
- * 没有维度根：顶层直接是该维度的子项，根列表本身就是一次 `_kb_co` 列举。
+ * 没有维度根：顶层直接是该维度的子项，侧栏根列表就是一次 `_kb_co` 列举，高级候选使用纯净路径。
  */
 const props = defineProps<{
   ctx: GalleryFilterTreeContext;
@@ -72,92 +70,27 @@ const isDeltaMode = !!props.ctx.countBaseline;
 
 const model = useTreeModel<FacetNode>({
   dataSource: source.dataSource,
-  sections: () => [{ id: "facets", roots: () => source.roots(props.dimension) }],
+  sections: () => [{ id: props.dimension }],
+  // 高级面板常驻观察候选；侧栏隐藏时停观察、显示时补读。
+  active: () => isDeltaMode || props.ctx.visible.value,
   // active 祖先链展开（选中某日时其年、月展开）
   defaultExpanded: (element) => source.descriptor(element).defaultExpanded,
 });
 
 const counts = useFacetNodeCounts({ ctx: props.ctx, model, source });
 
-let sidebarDirty = false;
-let pluginDirty = false;
-
-async function refreshSidebar() {
-  if (isDeltaMode) return;
-  sidebarDirty = false;
-  // 插件扩展的 pluginIds 可以继续细分，但其它维度仍要整体刷新；
-  // 这里统一重列根与已加载分支，保持一个 hub 订阅与一致的计数快照。
-  await model.reload();
-}
-
-async function refreshPluginRoots() {
-  pluginDirty = false;
-  // 插件维度的根就是插件列表
-  await model.reload();
-}
-
-function hasAlbumSensitiveContext() {
-  const path = normalizeProviderPath(props.ctx.prefix.value).replace(/^images:\/\//, "");
-  return /(^|\/)(?:album|album-tree|no-album|hide)(?:\/|$)/.test(path);
-}
-
-function sidebarBatchRelevant(batch: ChangeBatch) {
-  if (batch.images.size > 0) return true;
-  return hasAlbumSensitiveContext() && (batch.albumIds.size > 0 || batch.albumStructure.size > 0);
-}
-
-const unsubscribeChanges = isDeltaMode
-  ? () => {}
-  : subscribeChanges({
-      waitMs: GRID_REFRESH_WAIT_MS,
-      filter: sidebarBatchRelevant,
-      onBatch: async () => {
-        if (!props.ctx.visible.value) {
-          sidebarDirty = true;
-          return;
-        }
-        await refreshSidebar();
-      },
-    });
-
 const pluginSignature = () => pluginStore.plugins.map((plugin) => `${plugin.id}:${plugin.version}`).join("|");
-watch(pluginSignature, async () => {
-  invalidatePureProviderListCache();
-  if (props.dimension !== "plugin") return;
-  if (!props.ctx.visible.value) {
-    pluginDirty = true;
-    return;
-  }
-  await refreshPluginRoots();
+watch(pluginSignature, () => {
+  if (props.dimension === "plugin") void model.refresh();
 });
 
-watch(
-  () => props.ctx.visible.value,
-  async (visible) => {
-    if (!visible) return;
-    // 隐藏期命中变更时才重枚举已加载分支；未记脏则沿用已有计数。
-    if (!isDeltaMode && sidebarDirty) await refreshSidebar();
-    if (pluginDirty) await refreshPluginRoots();
-  },
-  { immediate: true },
-);
-
-// 整树集中刷新（GalleryFilterTree.refresh() / refreshProviderFilterTree 入口）：
-// 侧栏重列根与已加载分支；diff 模式另刷预测计数。
 const unregisterBranchTarget = props.ctx.registerRefreshTarget({
   refresh: async () => {
-    if (isDeltaMode) {
-      await model.reload();
-      await counts.refreshAll();
-    } else {
-      await refreshSidebar();
-    }
+    await model.refresh();
+    if (isDeltaMode) await counts.refreshAll();
   },
 });
-onBeforeUnmount(() => {
-  unsubscribeChanges();
-  unregisterBranchTarget();
-});
+onBeforeUnmount(unregisterBranchTarget);
 
 /**
  * 旧 syncAutoExpand 等价物：面板可见期间，active 祖先链的 defaultExpanded

@@ -69,6 +69,7 @@
 </template>
 
 <script setup lang="ts">
+import { usePluginDescriptionTemplate } from "@/services/pluginFiles";
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import ejs from "ejs";
 import { useI18n } from "@kabegame/i18n";
@@ -325,9 +326,8 @@ onUnmounted(() => {
   window.removeEventListener("message", onIframeBridgeMessage);
 });
 
-function pluginDescriptionTemplate(pluginId: string): string | undefined {
-  return pluginStore.pluginDescriptionTemplate(pluginId);
-}
+const templatePlugin = computed(() => pluginStore.plugins.find((p) => p.id === props.image?.pluginId));
+const { text: descriptionTemplate, loading: templateLoading } = usePluginDescriptionTemplate(templatePlugin);
 
 /**
  * iframe srcdoc 是独立文档，无法继承主应用 :root 上的 --anime-*。
@@ -377,7 +377,7 @@ const descriptionSrcdoc = computed(() => {
   if (pageSnapshot.value) return "";
 
   if (!img?.pluginId || !isRenderableMetadata(meta)) return "";
-  const tpl = pluginDescriptionTemplate(img.pluginId);
+  const tpl = descriptionTemplate.value;
   if (!tpl?.trim()) return "";
   try {
     let body = ejs.render(
@@ -397,9 +397,9 @@ const descriptionSrcdoc = computed(() => {
 const showRawMetadata = computed(() => {
   const img = props.image;
   const meta = effectiveMetadata.value;
-  if (pageSnapshot.value) return false;
+  if (pageSnapshot.value || templateLoading.value) return false;
   if (!img?.pluginId || !isRenderableMetadata(meta)) return false;
-  const tpl = pluginDescriptionTemplate(img.pluginId);
+  const tpl = descriptionTemplate.value;
   if (tpl?.trim()) return false;
   return meta != null && typeof meta === "object" && !Array.isArray(meta);
 });

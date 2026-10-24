@@ -103,7 +103,7 @@
                     :image="entry.image"
                     :prefer="gridPrefer"
                     :selected="selectedIds.has(entry.image.id)"
-                    :window-aspect-ratio="aspectRatioOf(entry.image)"
+                    :aspect-ratio="aspectRatioOf(entry.image)"
                     fill-box
                     :horizontal="isHorizontal"
                     :hover-original="gridHoverOriginal"
@@ -251,7 +251,6 @@ interface Props {
   enableScrollButtons?: boolean;
   enableVirtualScroll?: boolean;
   virtualOverscan?: number;
-  windowAspectRatio?: number; // 外部传入的窗口宽高比（可选，不传则使用实际窗口宽高比）
   /** 让外层 image-grid-container 自己成为滚动容器，before-grid 与图片共享同一个 sticky 上下文。 */
   scrollWholeContainer?: boolean;
   /** 插件列表（用于桌面预览内详情抽屉显示插件名称） */

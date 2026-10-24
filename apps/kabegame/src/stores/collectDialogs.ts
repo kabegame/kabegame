@@ -6,6 +6,7 @@ export interface WebpageCollectInitialConfig {
   outputDir?: string;
   httpHeaders?: Record<string, string>;
   outputAlbumId?: string | null;
+  isDryRun?: boolean;
 }
 
 export interface LocalImportInitialConfig {
@@ -14,6 +15,7 @@ export interface LocalImportInitialConfig {
   outputAlbumId?: string | null;
   outputDir?: string;
   copyToDir?: boolean;
+  isDryRun?: boolean;
 }
 
 export const useCollectDialogsStore = defineStore("collectDialogs", () => {

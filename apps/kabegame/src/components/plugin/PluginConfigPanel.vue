@@ -56,13 +56,14 @@
 </template>
 
 <script setup lang="ts">
+import { useRecommendedPresets } from "@/services/recommendedPresets";
 import { computed, ref, watch } from "vue";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";
 import PluginVarsForm from "../crawler/PluginVarsForm.vue";
 import type { Plugin } from "../../stores/plugins";
-import { parsePluginRecommendedPreset, type PluginRecommendedPreset } from "../../stores/crawler";
+import { type PluginRecommendedPreset } from "../../stores/crawler";
 import { normalizeVarsForUI, expandVarsForBackend, type PluginVarDef } from "../../utils/pluginVarForm";
 import { coerceOptionsVarsToVisibleChoices, visibleVarDefs } from "../../utils/pluginVarWhen";
 
@@ -100,17 +101,7 @@ const vars = computed<PluginVarDef[]>(() => {
   return Array.isArray(raw) ? (raw as PluginVarDef[]) : [];
 });
 
-const presets = computed<PluginRecommendedPreset[]>(() => {
-  const plugin = props.plugin;
-  if (!plugin) return [];
-  const raw = plugin.recommendedConfigs;
-  if (!Array.isArray(raw) || !raw.length) return [];
-  const baseUrlByPluginId = new Map<string, string>([[plugin.id, plugin.baseUrl ?? ""]]);
-  return raw
-    .map((item) => parsePluginRecommendedPreset(item, baseUrlByPluginId))
-    .filter((p): p is PluginRecommendedPreset => p != null)
-    .sort((a, b) => a.filename.localeCompare(b.filename));
-});
+const { presets } = useRecommendedPresets(computed(() => (props.plugin ? [props.plugin] : [])));
 
 // 左栏菜单：第一组只有「配置」，第二组是推荐配置（无推荐配置时整组不渲染）
 const menuGroups = computed<KbMenuGroup[]>(() => {

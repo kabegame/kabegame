@@ -99,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { onScopeDispose, computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@kabegame/i18n";
 import { Close, CopyDocument, Plus, PriceTag } from "@kabegame/element-plus-icons";
@@ -109,15 +109,27 @@ import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@/composables/useModal";
 import type { ImageInfo } from "@/types/image";
 import {
+  FAVORITE_ALBUM_ID,
+  HIDDEN_ALBUM_ID,
   addImagesToAlbum,
   createLabelAlbum,
   fetchAlbum,
-  fetchImageAlbums,
+  imageAlbumsPath,
+  normalizeAlbumRow,
   removeImagesFromAlbum,
   type Album,
   type AlbumNode,
 } from "@/services/albums";
-import { subscribeChanges } from "@/services/dataChangeHub";
+import {
+  on,
+  pathqlRequest$,
+  usePathqlLooker,
+  albumPatchTriggers,
+  kbEvent$,
+  moveAlbumPath,
+  pathHasAlbum,
+  type AlbumMovedPayload,
+} from "@/services/kbEvents";
 import { useAlbumIdPathState } from "@/composables/useAlbumIdPathState";
 import { isLabelKey } from "@/utils/labelKey";
 import { labelKeysText, writeClipboardText } from "@/utils/imageLabels";
@@ -142,42 +154,54 @@ const picking = ref(false);
 const labels = ref<Album[]>([]);
 const presentedLabels = computed(() => presentImageLabels(labels.value));
 
-let loadSeq = 0;
-async function load() {
-  const imageId = props.image.id;
-  const seq = ++loadSeq;
-  try {
-    // 只要标签画册：走 PathQL 的 album_kind/label 段由后端过滤
-    const albums = await fetchImageAlbums(imageId, ["label"]);
-    // 快速切图时丢弃过期结果
-    if (seq === loadSeq) labels.value = albums;
-  } catch (error) {
-    console.warn("load image labels failed", error);
-    if (seq === loadSeq) labels.value = [];
-  }
-}
+// 只要标签画册：走 PathQL 的 album_kind/label 段由后端过滤
+const labelsKey = computed(() => imageAlbumsPath(props.image.id, ["label"]));
+const requestLabels = () => pathqlRequest$.next(["rows", labelsKey.value]);
 
+// 切图是用户操作：先清掉上一张的标签，再请求新 key，避免新图上残留旧标签
 watch(
-  () => props.image.id,
+  labelsKey,
   () => {
     picking.value = false;
-    void load();
+    labels.value = [];
+    requestLabels();
   },
-  { immediate: true },
+  { immediate: true, flush: "sync" },
 );
 
-// 其它入口（插件下载、迁移、画册页移除）改动成员，或已挂标签被改名 / 删除时同步刷新。
-// 走 dataChangeHub 而非裸 listen：批次合并 + 回调串行 + 本地写命令去重都由枢纽负责。
-const unsubscribe = subscribeChanges({
-  waitMs: 500,
-  filter: (batch) =>
-    // 成员变更：命中当前图片，或事件未带 imageIds（全量）
-    (batch.albumImages.size > 0 && (batch.albumImageIds.size === 0 || batch.albumImageIds.has(props.image.id))) ||
-    // 结构变更：当前已挂的标签被改名 / 移动 / 删除，tag 文案要跟着变
-    labels.value.some((label) => batch.albumIds.has(label.id)),
-  onBatch: load,
+// 其它入口（插件下载、迁移、画册页移除）改动成员，或已挂标签被改名 / 删除时，由核心窗口重读。
+usePathqlLooker({
+  kind: "rows",
+  key: () => labelsKey.value,
+  refreshOn: [
+    // 收藏 / 隐藏不是标签，交给图片补丁流。
+    on(
+      "album-images-added",
+      (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(props.image.id),
+    ),
+    on(
+      "album-images-deleted",
+      (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(props.image.id),
+    ),
+    ...albumPatchTriggers((patch) => labels.value.some((label) => label.id === patch.id)),
+    on("album-moved", (p) => labels.value.some((label) => pathHasAlbum(label.ancestorPath, p.id))),
+    on("albums-deleted", (p) =>
+      labels.value.some((label) =>
+        p.albums.some((a) => !a.ancestorPath || label.ancestorPath.startsWith(a.ancestorPath)),
+      ),
+    ),
+  ],
+  onResult: ({ rows }) => {
+    labels.value = rows.map((row) => normalizeAlbumRow(row as Record<string, unknown>));
+  },
+  // 读取失败保留已有标签
+  onError: (error) => console.warn("load image labels failed", error),
 });
-onBeforeUnmount(unsubscribe);
+
+const movedPaths = kbEvent$<AlbumMovedPayload>("album-moved").subscribe(({ payload }) => {
+  labels.value = labels.value.map((label) => moveAlbumPath(label, payload));
+});
+onScopeDispose(() => movedPaths.unsubscribe());
 
 function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : (error as Error)?.message || String(error);
@@ -186,7 +210,9 @@ function errorMessage(error: unknown): string {
 async function removeLabel(label: Album) {
   try {
     await removeImagesFromAlbum(label.id, [props.image.id]);
+    // 本地先改给即时反馈；这是用户操作，写完再请求一次，结果以数据源为准
     labels.value = labels.value.filter((item) => item.id !== label.id);
+    requestLabels();
   } catch (error) {
     ElMessage.error(errorMessage(error));
   }
@@ -196,6 +222,7 @@ async function addLabel(label: Album) {
   try {
     await addImagesToAlbum(label.id, [props.image.id]);
     if (!labels.value.some((item) => item.id === label.id)) labels.value = [...labels.value, label];
+    requestLabels();
     picking.value = false;
   } catch (error) {
     ElMessage.error(errorMessage(error));

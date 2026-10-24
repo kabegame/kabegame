@@ -39,15 +39,6 @@ pub fn surf_get_record(host: String) -> Result<Option<SurfRecord>, String> {
     Storage::global().get_surf_record_by_host(&host)
 }
 
-pub fn surf_get_record_images(host: String, offset: usize, limit: usize) -> Result<Value, String> {
-    let host = normalize_surf_host(&host);
-    let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {
-        return Err("畅游记录不存在".to_string());
-    };
-    let page_limit = if limit == 0 { 50 } else { limit };
-    let images = Storage::global().get_surf_record_images(&record.id, offset, page_limit)?;
-    serde_json::to_value(images).map_err(|e| e.to_string())
-}
 
 pub fn surf_update_root_url(host: String, root_url: String) -> Result<Value, String> {
     let host = normalize_surf_host(&host);

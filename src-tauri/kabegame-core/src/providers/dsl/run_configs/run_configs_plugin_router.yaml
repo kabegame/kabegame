@@ -1,0 +1,14 @@
+namespace: kabegame
+name: run_configs_plugin_router
+note: Run config plugins with counts for the current composed selection.
+list:
+  "${row.plugin_id}":
+    sql: SELECT sub.plugin_id AS plugin_id, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY sub.plugin_id
+    data_var: row
+    provider: run_configs_plugin_provider
+    properties: { plugin_id: "${row.plugin_id}" }
+    meta: "${row}"
+resolve:
+  "(.+)":
+    provider: run_configs_plugin_provider
+    properties: { plugin_id: "${capture[1]}" }

@@ -4,7 +4,7 @@ import { i18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import type { Album } from "@/services/albums";
-import type { DragFileItem, DragFilePlan } from "@/directives/dragFile";
+import type { DragFileItem, DragFilePlan } from "@/utils/dragFileZones";
 
 const normalizeLocalPath = (path: string): string => {
   const unified = path.trim().replace(/\\/g, "/");

@@ -16,5 +16,12 @@
   "dropZone.albumMedia": "{count} 件のファイルを「{album}」にインポート",
   "dropZone.albumFolders": "{count} 件のフォルダ内のメディアを「{album}」にインポート",
   "dropZone.albumMixed": "{count} 件のファイルと {folders} 件のフォルダを「{album}」にインポート",
-  "dropZone.plugins": "{count} 件のプラグインパッケージをインストール"
+  "dropZone.plugins": "{count} 件のプラグインパッケージをインストール",
+  "pathPickFile": "ファイルを選択",
+  "pathPickFolder": "フォルダーを選択",
+  "pathDropFile": "ファイルを選択またはドロップ",
+  "pathDropFolder": "フォルダーを選択またはドロップ",
+  "pathDropEither": "ファイル / フォルダーを選択またはドロップ",
+  "pathChange": "変更",
+  "dropZone.setPath": "「{name}」に設定"
 }

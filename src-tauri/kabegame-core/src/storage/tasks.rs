@@ -77,6 +77,8 @@ pub struct TaskInfo {
         default
     )]
     pub max_concurrent_downloads: Option<u32>,
+    #[serde(rename(serialize = "isDryRun"), alias = "isDryRun", default)]
+    pub is_dry_run: bool,
     pub status: TaskStatus,
     pub progress: f64,
     #[serde(rename(serialize = "deletedCount"), alias = "deletedCount")]
@@ -197,9 +199,9 @@ impl Storage {
             "INSERT INTO tasks (
                 id, plugin_id, output_dir, user_config, http_headers, output_album_id, run_config_id, trigger_source,
                 status, progress, deleted_count, dedup_count, success_count, failed_count, start_time, end_time, error,
-                max_concurrent_downloads
+                max_concurrent_downloads, is_dry_run
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 task.id,
                 task.plugin_id,
@@ -223,6 +225,7 @@ impl Storage {
                 task.end_time.map(|t| t as i64),
                 task.error,
                 task.max_concurrent_downloads,
+                task.is_dry_run,
             ],
         )
         .map_err(|e| format!("Failed to add task: {}", e))?;
@@ -280,7 +283,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let task: Option<TaskInfo> = conn
             .query_row(
-                "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+                "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
                  FROM tasks t WHERE t.id = ?1",
                 params![task_id],
                 |row| {
@@ -311,6 +314,7 @@ impl Storage {
                             .get::<_, Option<String>>(16)?
                             .unwrap_or_else(default_trigger_source),
                         max_concurrent_downloads: row.get(17)?,
+                        is_dry_run: row.get(18)?,
                     })
                 },
             )
@@ -331,7 +335,7 @@ impl Storage {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+            "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
              FROM tasks t WHERE t.id IN ({})",
             placeholders
         );
@@ -365,6 +369,7 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                     max_concurrent_downloads: row.get(17)?,
+                    is_dry_run: row.get(18)?,
                 })
             })
             .map_err(|e| format!("query: {}", e))?;
@@ -380,7 +385,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
-                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
                  FROM tasks t ORDER BY t.start_time DESC",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -412,6 +417,7 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                     max_concurrent_downloads: row.get(17)?,
+                    is_dry_run: row.get(18)?,
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
@@ -435,7 +441,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
-                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads
+                 , t.run_config_id, t.trigger_source, t.max_concurrent_downloads, t.is_dry_run
                  FROM tasks t ORDER BY t.start_time DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -467,6 +473,7 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                     max_concurrent_downloads: row.get(17)?,
+                    is_dry_run: row.get(18)?,
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
@@ -513,8 +520,14 @@ impl Storage {
     }
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
-        let (failed_image_ids, metadata_ids): (Vec<i64>, Vec<i64>) = {
+        let ((failed_image_ids, metadata_ids), image_ids): ((Vec<i64>, Vec<i64>), Vec<String>) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            // images.task_id 外键 ON DELETE SET NULL：删任务会清空这些图片的归属
+            let image_ids = query_string_ids(
+                &conn,
+                "SELECT CAST(id AS TEXT) FROM images WHERE task_id = ?1",
+                params![task_id],
+            )?;
             let rows = {
                 let mut stmt = conn
                     .prepare("SELECT id, metadata_id FROM task_failed_images WHERE task_id = ?1")
@@ -547,12 +560,14 @@ impl Storage {
             .map_err(|e| format!("Failed to delete task failed images: {}", e))?;
             conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
                 .map_err(|e| format!("Failed to delete task: {}", e))?;
-            rows
+            (rows, image_ids)
         };
 
         if !failed_image_ids.is_empty() {
             GlobalEmitter::global().emit_failed_images_removed(task_id, &failed_image_ids);
         }
+        GlobalEmitter::global()
+            .emit_image_fields(&image_ids, serde_json::json!({ "taskId": null }));
         let _ = self.gc_metadata(&metadata_ids);
         Ok(())
     }
@@ -625,12 +640,20 @@ impl Storage {
     }
 
     pub fn clear_finished_tasks(&self) -> Result<usize, String> {
-        let (count, removed_failed_by_task, metadata_ids): (
+        let (count, removed_failed_by_task, metadata_ids, image_ids): (
             usize,
             Vec<(String, Vec<i64>)>,
             Vec<i64>,
+            Vec<String>,
         ) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let image_ids = query_string_ids(
+                &conn,
+                "SELECT CAST(id AS TEXT) FROM images WHERE task_id IN (
+                    SELECT id FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')
+                 )",
+                [],
+            )?;
             let (removed_failed_by_task, metadata_ids): (Vec<(String, Vec<i64>)>, Vec<i64>) = {
                 let mut stmt = conn
                     .prepare(
@@ -690,7 +713,7 @@ impl Storage {
                     [],
                 )
                 .map_err(|e| format!("Failed to clear finished tasks: {}", e))?;
-            (count, removed_failed_by_task, metadata_ids)
+            (count, removed_failed_by_task, metadata_ids, image_ids)
         };
 
         for (task_id, ids) in removed_failed_by_task {
@@ -698,6 +721,8 @@ impl Storage {
                 GlobalEmitter::global().emit_failed_images_removed(&task_id, &ids);
             }
         }
+        GlobalEmitter::global()
+            .emit_image_fields(&image_ids, serde_json::json!({ "taskId": null }));
         let _ = self.gc_metadata(&metadata_ids);
         Ok(count)
     }
@@ -967,4 +992,19 @@ impl Storage {
             .map(|image| image.id)
             .collect())
     }
+}
+
+fn query_string_ids(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("Failed to prepare image ids query: {e}"))?;
+    let rows = stmt
+        .query_map(params, |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to query image ids: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read image ids: {e}"))
 }

@@ -23,13 +23,7 @@
 
     <div class="flex-1 min-w-0 min-h-0 overflow-y-auto [scrollbar-width:none]">
       <el-empty
-        v-if="!canQuery"
-        :description="t('plugins.detail.providerInstallFirst')"
-        :image-size="80"
-        class="mt-10"
-      />
-      <el-empty
-        v-else-if="!loading && !summaries.length"
+        v-if="!loading && !summaries.length"
         :description="t('plugins.detail.noProviders')"
         :image-size="80"
         class="mt-10"
@@ -149,6 +143,8 @@ import { useI18n } from "@kabegame/i18n";
 import KbMenuList, { type KbMenuGroup } from "../common/KbMenuList.vue";
 import KbResizable from "../common/KbResizable.vue";
 import { invoke } from "../../api";
+import type { Plugin } from "@/stores/plugins";
+import { pluginResourceBase } from "@/services/pluginFiles";
 
 interface ProviderSummary {
   name: string;
@@ -166,9 +162,7 @@ interface ProviderDetail {
 }
 
 const props = defineProps<{
-  pluginId: string | null;
-  /** 只有已安装且版本与展示对象一致时才发请求；否则 provider 定义可能对不上正在看的版本 */
-  canQuery: boolean;
+  plugin: Plugin | null;
   /** 双击把手复位到的左栏宽度；上下限由 kb-side-pane 的 CSS 变量给 */
   menuDefaultWidth?: number;
 }>();
@@ -188,6 +182,9 @@ const detailByName = ref<Record<string, ProviderDetail>>({});
 const selectedName = ref<string | null>(null);
 const loading = ref(false);
 const viewMode = ref<"pretty" | "source">("pretty");
+
+const resourceBase = computed(() => (props.plugin ? pluginResourceBase(props.plugin) : null));
+let generation = 0;
 
 const namespace = computed(() => summaries.value[0]?.namespace ?? "");
 // 左栏菜单：单组无标题（标题位给命名空间），provider 名是标识符故走 mono
@@ -209,29 +206,34 @@ watch(selectedName, () => {
 });
 
 async function loadSummaries() {
+  const current = ++generation;
+  const base = resourceBase.value;
   summaries.value = [];
   detailByName.value = {};
   selectedName.value = null;
-  if (!props.canQuery || !props.pluginId) return;
+  loading.value = false;
+  if (!base) return;
   loading.value = true;
   try {
     const rows = await invoke<ProviderSummary[]>("pathql_fetch", {
-      path: `plugin://${props.pluginId}/provider`,
+      path: `${base}/provider`,
     });
+    if (current !== generation) return;
     summaries.value = Array.isArray(rows) ? rows : [];
     if (summaries.value.length) {
       selectedName.value = summaries.value[0].name;
     }
     emit("loaded", summaries.value.length);
   } catch {
+    if (current !== generation) return;
     summaries.value = [];
   } finally {
-    loading.value = false;
+    if (current === generation) loading.value = false;
   }
 }
 
 watch(
-  () => [props.pluginId, props.canQuery] as const,
+  resourceBase,
   () => {
     void loadSummaries();
   },
@@ -239,12 +241,15 @@ watch(
 );
 
 watch(selectedName, async (name) => {
-  if (!name || !props.pluginId || detailByName.value[name]) return;
+  const base = resourceBase.value;
+  const current = generation;
+  if (!name || !base || detailByName.value[name]) return;
   try {
     const rows = await invoke<ProviderDetail[]>("pathql_fetch", {
-      path: `plugin://${props.pluginId}/provider/${encodeURIComponent(name)}`,
+      path: `${base}/provider/${encodeURIComponent(name)}`,
     });
     const row = Array.isArray(rows) ? rows[0] : null;
+    if (current !== generation) return;
     if (row) detailByName.value = { ...detailByName.value, [name]: row };
   } catch {
     /* 保持未加载态，源码/概览区留空 */

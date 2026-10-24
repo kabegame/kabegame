@@ -1,9 +1,15 @@
+import { writeRunConfig } from "@/services/runConfigWrites";
 import { defineStore } from "pinia";
-import { computed, ref, unref } from "vue";
-import { invoke, listen } from "../api";
+import { ref, unref } from "vue";
+import { invoke } from "../api";
 import { i18n, resolveConfigText } from "@kabegame/i18n";
-import { IS_ANDROID } from "../env";
 import { canonicalizeUserConfig, type PluginVarDef } from "../utils/pluginVarForm";
+import { normalizeTaskRow } from "@/services/tasks";
+import { normalizeRunConfigRow } from "@/services/runConfigs";
+import { usePluginStore } from "./plugins";
+
+export { normalizeDiffKeys } from "@/services/tasks";
+export { normalizeRunConfigRow as parseRunConfigRaw } from "@/services/runConfigs";
 
 /** 创建爬虫任务前的异步守卫；返回 `false` 时不创建任务（如最低应用版本不满足） */
 export type CrawlerBeforeAddTaskGuard = (pluginId: string) => Promise<boolean>;
@@ -21,8 +27,10 @@ export interface CrawlTask {
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
   outputAlbumId?: string;
   runConfigId?: string;
+  runConfigName?: string | null;
   triggerSource: "manual" | "scheduled";
   status: "pending" | "running" | "waiting_downloads" | "completed" | "failed" | "canceled";
   progress: number;
@@ -40,9 +48,22 @@ export interface CrawlTask {
 /** 与后端 `ScheduleSpec` JSON（`schedule_spec` 列）一致 */
 export type ScheduleSpec =
   | { mode: "interval"; intervalSecs: number }
+  | { mode: "hourly"; minute: number }
   | { mode: "daily"; hour: number; minute: number }
-  /** weekday: 0=周一 … 6=周日 */
-  | { mode: "weekly"; weekday: number; hour: number; minute: number };
+  /** weekdays: 0=周一 … 6=周日 */
+  | { mode: "weekly"; weekdays: number[]; hour: number; minute: number };
+
+export type RunConfigLastResult = "never" | "failed" | "running" | "canceled" | "partial" | "ok";
+
+export interface RunConfigLastTask {
+  id: string;
+  status: CrawlTask["status"];
+  startTime: number;
+  endTime?: number;
+  successCount: number;
+  failedCount: number;
+  error?: string;
+}
 
 export interface RunConfig {
   id: string;
@@ -54,6 +75,7 @@ export interface RunConfig {
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
   /** 输出画册：定时任务与手动任务写入同一画册 */
   outputAlbumId?: string;
   createdAt: number;
@@ -61,6 +83,8 @@ export interface RunConfig {
   scheduleSpec?: ScheduleSpec;
   schedulePlannedAt?: number;
   scheduleLastRunAt?: number;
+  lastTask?: RunConfigLastTask;
+  lastResult: RunConfigLastResult;
 }
 
 /**
@@ -74,12 +98,13 @@ export interface TaskConfig {
   httpHeaders: Record<string, string>;
   outputAlbumId: string | null;
   maxConcurrentDownloads: number | null;
+  isDryRun: boolean;
 }
 
 export interface MissedRunItem {
   configId: string;
   configName: string;
-  scheduleMode: "interval" | "daily" | "weekly";
+  scheduleMode: "interval" | "hourly" | "daily" | "weekly";
   missedCount: number;
   lastDueAt: number;
 }
@@ -91,43 +116,6 @@ function numOpt(v: unknown): number | undefined {
   if (v == null || v === "") return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
-}
-
-function nullableNumOpt(v: unknown): number | null | undefined {
-  if (v === null) return null;
-  return numOpt(v);
-}
-
-function nullableNumField(o: Record<string, unknown>, camel: string, snake: string): number | null | undefined {
-  if (Object.prototype.hasOwnProperty.call(o, camel)) return nullableNumOpt(o[camel]);
-  if (Object.prototype.hasOwnProperty.call(o, snake)) return nullableNumOpt(o[snake]);
-  return undefined;
-}
-
-export function normalizeDiffKeys(diff: Record<string, unknown>): Partial<CrawlTask> {
-  const out: Partial<CrawlTask> = {};
-  const status = diff.status;
-  if (status != null && typeof status === "string") out.status = status as CrawlTask["status"];
-  const progress = diff.progress;
-  if (progress != null && Number.isFinite(Number(progress))) out.progress = Number(progress);
-  const st = diff.startTime ?? diff.start_time;
-  if (st != null && Number.isFinite(Number(st))) out.startTime = Number(st);
-  const et = diff.endTime ?? diff.end_time;
-  if (et != null && Number.isFinite(Number(et))) out.endTime = Number(et);
-  if (diff.error != null) out.error = String(diff.error);
-  const sc = diff.successCount ?? diff.success_count;
-  if (sc != null && Number.isFinite(Number(sc))) out.successCount = Number(sc);
-  const delc = diff.deletedCount ?? diff.deleted_count;
-  if (delc != null && Number.isFinite(Number(delc))) out.deletedCount = Number(delc);
-  const fc = diff.failedCount ?? diff.failed_count;
-  if (fc != null && Number.isFinite(Number(fc))) out.failedCount = Number(fc);
-  const ddc = diff.dedupCount ?? diff.dedup_count;
-  if (ddc != null && Number.isFinite(Number(ddc))) out.dedupCount = Number(ddc);
-  if (Object.prototype.hasOwnProperty.call(diff, "maxConcurrentDownloads")) {
-    const value = diff.maxConcurrentDownloads;
-    out.maxConcurrentDownloads = value == null ? null : Number(value);
-  }
-  return out;
 }
 
 /** 解析 `schedule_spec` JSON 对象或字符串 */
@@ -154,20 +142,30 @@ export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
     const hour = numOpt(o.hour);
     const minute = numOpt(o.minute);
     if (hour == null || minute == null) return undefined;
+    if (hour === -1) return { mode: "hourly", minute: Math.min(59, Math.max(0, minute)) };
     return { mode: "daily", hour, minute };
   }
+  if (mode === "hourly") {
+    const minute = numOpt(o.minute);
+    return minute == null ? undefined : { mode: "hourly", minute: Math.min(59, Math.max(0, minute)) };
+  }
   if (mode === "weekly") {
-    const weekday = numOpt(o.weekday);
+    const weekdays = Array.isArray(o.weekdays)
+      ? o.weekdays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+      : numOpt(o.weekday) != null
+        ? [Number(o.weekday)]
+        : [];
     const hour = numOpt(o.hour);
     const minute = numOpt(o.minute);
-    if (weekday == null || hour == null || minute == null) return undefined;
-    return { mode: "weekly", weekday, hour, minute };
+    if (weekdays.length === 0 || hour == null || minute == null) return undefined;
+    return { mode: "weekly", weekdays: [...new Set(weekdays)].sort((a, b) => a - b), hour, minute };
   }
   return undefined;
 }
 
 /** 插件包内 `configs/*.json` 推荐运行配置（已合并 pluginId、filename、baseUrl） */
 export interface PluginRecommendedPreset {
+  isImported?: boolean;
   pluginId: string;
   filename: string;
   baseUrl: string;
@@ -176,6 +174,7 @@ export interface PluginRecommendedPreset {
   userConfig?: Record<string, any>;
   scheduleSpec?: ScheduleSpec;
   httpHeaders?: Record<string, string>;
+  isDryRun: boolean;
 }
 
 function parseFlatI18nText(obj: Record<string, unknown>, baseKey: string): Record<string, string> | string | undefined {
@@ -218,18 +217,20 @@ export function parsePluginRecommendedPreset(
   return {
     pluginId,
     filename,
-    baseUrl: baseUrlByPluginId.get(pluginId) ?? "",
+    baseUrl: String(o.baseUrl ?? o.base_url ?? baseUrlByPluginId.get(pluginId) ?? ""),
     name: nameText ?? filename,
     description: descText,
     userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
     scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
     httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
+    isDryRun: Boolean(o.isDryRun ?? o.is_dry_run ?? false),
+    isImported: Boolean(o.isImported),
   };
 }
 
 /**
  * 把运行配置导出为插件 `configs/*.json` 推荐配置的文件内容，字段与 `parsePluginRecommendedPreset` 读取的一致。
- * `pluginId` / `filename` / `baseUrl` 由插件包决定，输出目录、画册、并发等本机设置不导出。
+ * `pluginId` / `filename` / `baseUrl` 由插件包决定，输出目录、画册、并发等本机设置不导出；dry-run 属插件语义。
  */
 export function runConfigToPresetJson(cfg: RunConfig): string {
   const out: Record<string, unknown> = { name: cfg.name };
@@ -237,43 +238,11 @@ export function runConfigToPresetJson(cfg: RunConfig): string {
   out.userConfig = cfg.userConfig ?? {};
   if (cfg.scheduleSpec?.mode) out.scheduleSpec = cfg.scheduleSpec;
   if (cfg.httpHeaders && Object.keys(cfg.httpHeaders).length > 0) out.httpHeaders = cfg.httpHeaders;
+  if (cfg.isDryRun) out.isDryRun = true;
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-/** 将 `get_run_config` / `get_run_configs` 单条 JSON 规范为 `RunConfig` */
-export function parseRunConfigRaw(raw: unknown): RunConfig | null {
-  if (raw == null || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  const id = String(o.id ?? "").trim();
-  const pluginId = String(o.pluginId ?? o.plugin_id ?? "").trim();
-  if (!id || !pluginId) return null;
-  return {
-    id,
-    name: String(o.name ?? ""),
-    description: o.description != null && o.description !== "" ? String(o.description) : undefined,
-    pluginId,
-    url: String(o.url ?? ""),
-    outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
-    userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
-    httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
-    outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
-    maxConcurrentDownloads: nullableNumField(o, "maxConcurrentDownloads", "max_concurrent_downloads"),
-    createdAt: Number(o.createdAt ?? o.created_at ?? 0),
-    scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
-    scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
-    schedulePlannedAt: numOpt(o.schedulePlannedAt ?? o.schedule_planned_at),
-    scheduleLastRunAt: numOpt(o.scheduleLastRunAt ?? o.schedule_last_run_at),
-  };
-}
-
 export const useCrawlerStore = defineStore("crawler", () => {
-  const tasks = ref<CrawlTask[]>([]);
-  /** 分页加载时的总任务数（用于判断是否还有更多） */
-  const tasksTotal = ref(0);
-  const isCrawling = ref(false);
-  const runConfigs = ref<RunConfig[]>([]);
-  /** 已安装插件包内 `configs/*.json` 推荐配置（启动与插件列表刷新时拉取） */
-  const pluginRecommendedConfigs = ref<PluginRecommendedPreset[]>([]);
   /**
    * 全局唯一的 task config：收集弹窗只响应式地编辑这一份对象，
    * 调用方「先写再打开」（见 apps 侧 `writeTaskConfig`）。
@@ -288,243 +257,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
     taskConfigRevision.value++;
   }
 
-  const lastProgressUpdateAt = new Map<string, number>();
-  const loadingTaskPromises = new Map<string, Promise<void>>();
-
-  function parseTaskFromRaw(raw: unknown): CrawlTask | null {
-    if (raw == null || typeof raw !== "object") return null;
-    const o = raw as Record<string, unknown>;
-    const id = String(o.id ?? o.taskId ?? o.task_id ?? "").trim();
-    const pluginId = String(o.pluginId ?? o.plugin_id ?? "").trim();
-    if (!id || !pluginId) return null;
-    return {
-      id,
-      pluginId,
-      outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
-      userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
-      httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
-      maxConcurrentDownloads: nullableNumField(o, "maxConcurrentDownloads", "max_concurrent_downloads"),
-      outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
-      runConfigId: (o.runConfigId ?? o.run_config_id) as string | undefined,
-      triggerSource: (o.triggerSource ?? o.trigger_source ?? "manual") as CrawlTask["triggerSource"],
-      status: (o.status || "pending") as CrawlTask["status"],
-      progress: Number(o.progress ?? 0),
-      deletedCount: Number(o.deletedCount ?? o.deleted_count ?? 0),
-      dedupCount: Number(o.dedupCount ?? o.dedup_count ?? 0),
-      successCount: Number(o.successCount ?? o.success_count ?? 0),
-      failedCount: Number(o.failedCount ?? o.failed_count ?? 0),
-      startTime: (o.startTime ?? o.start_time) as number | undefined,
-      endTime: (o.endTime ?? o.end_time) as number | undefined,
-      error: o.error != null ? String(o.error) : undefined,
-    };
-  }
-
-  const ensureTaskLoaded = async (taskId: string) => {
-    const id = String(taskId || "").trim();
-    if (!id) return;
-    if (tasks.value.some((t) => t.id === id)) return;
-    const existing = loadingTaskPromises.get(id);
-    if (existing) {
-      await existing;
-      return;
-    }
-
-    const p = (async () => {
-      try {
-        const t = await invoke<unknown>("get_task", { taskId: id });
-        const task = parseTaskFromRaw(t);
-        if (!task) return;
-        if (!tasks.value.some((x) => x.id === task.id)) {
-          tasks.value.unshift(task);
-        }
-      } catch {
-        // ignore
-      }
-    })().finally(() => {
-      loadingTaskPromises.delete(id);
-    });
-
-    loadingTaskPromises.set(id, p);
-    await p;
-  };
-
-  /** 从后端拉取单个任务并更新 store（用于安卓轮询，避免丢失 task_status 事件） */
-  const syncTaskFromBackend = async (id: string) => {
-    try {
-      const raw = await invoke<any>("get_task", { taskId: id });
-      if (!raw || typeof raw !== "object") return;
-      const idx = tasks.value.findIndex((t) => t.id === id);
-      if (idx === -1) return;
-      const task: CrawlTask = {
-        id: String(raw.id ?? raw.taskId ?? raw.task_id ?? id),
-        pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
-        outputDir: raw.outputDir ?? raw.output_dir ?? undefined,
-        userConfig: raw.userConfig ?? raw.user_config ?? undefined,
-        httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
-        maxConcurrentDownloads: nullableNumField(raw, "maxConcurrentDownloads", "max_concurrent_downloads"),
-        outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
-        runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
-        triggerSource: (raw.triggerSource ?? raw.trigger_source ?? "manual") as CrawlTask["triggerSource"],
-        status: (raw.status || "pending") as CrawlTask["status"],
-        progress: Number(raw.progress ?? 0),
-        deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
-        dedupCount: Number(raw.dedupCount ?? raw.dedup_count ?? 0),
-        successCount: Number(raw.successCount ?? raw.success_count ?? 0),
-        failedCount: Number(raw.failedCount ?? raw.failed_count ?? 0),
-        startTime: raw.startTime ?? raw.start_time ?? undefined,
-        endTime: raw.endTime ?? raw.end_time ?? undefined,
-        error: raw.error ?? undefined,
-      };
-      if (task.id && task.pluginId) tasks.value[idx] = task;
-    } catch {
-      // ignore
-    }
-  };
-
-  /** 单条拉取并合并进 runConfigs，避免 auto-config 事件触发全表刷新 */
-  async function patchRunConfigById(configId: string) {
-    const id = String(configId || "").trim();
-    if (!id) return;
-    try {
-      const raw = await invoke<unknown>("get_run_config", { configId: id });
-      const cfg = parseRunConfigRaw(raw);
-      if (!cfg) {
-        await loadRunConfigs();
-        return;
-      }
-      const idx = runConfigs.value.findIndex((c) => c.id === id);
-      if (idx === -1) {
-        runConfigs.value = [...runConfigs.value.filter((c) => c.id !== id), cfg].sort(
-          (a, b) => Number(b.createdAt) - Number(a.createdAt),
-        );
-      } else {
-        const next = runConfigs.value.slice();
-        next[idx] = cfg;
-        runConfigs.value = next;
-      }
-    } catch {
-      await loadRunConfigs();
-    }
-  }
-
-  (async () => {
-    try {
-      await listen("tasks-change", async (event) => {
-        const payload = event.payload as Record<string, unknown> | null;
-        const type = String(payload?.type ?? "");
-        if (type === "TaskAdded") {
-          const raw = payload?.task;
-          const task = parseTaskFromRaw(raw);
-          if (task && !tasks.value.some((t) => t.id === task.id)) {
-            tasks.value.unshift(task);
-            tasksTotal.value++;
-          }
-          return;
-        }
-        if (type === "TaskDeleted") {
-          const taskId = String(payload?.taskId ?? payload?.task_id ?? "").trim();
-          if (!taskId) return;
-          const idx = tasks.value.findIndex((t) => t.id === taskId);
-          if (idx !== -1) {
-            tasks.value.splice(idx, 1);
-            tasksTotal.value = Math.max(0, tasksTotal.value - 1);
-          }
-          return;
-        }
-        if (type === "TaskChanged") {
-          const taskId = String(payload?.taskId ?? payload?.task_id ?? "").trim();
-          if (!taskId) return;
-          const diffRaw = payload?.diff;
-          const diff =
-            diffRaw != null && typeof diffRaw === "object" && !Array.isArray(diffRaw)
-              ? (diffRaw as Record<string, unknown>)
-              : {};
-
-          if (!tasks.value.some((t) => t.id === taskId)) {
-            await ensureTaskLoaded(taskId);
-          }
-
-          const idx = tasks.value.findIndex((t) => t.id === taskId);
-          if (idx === -1) return;
-          const cur = tasks.value[idx];
-          const merged = normalizeDiffKeys(diff);
-
-          const mergedProgress = merged.progress;
-          if (mergedProgress != null) {
-            const diffKeys = Object.keys(diff).filter((k) => diff[k] != null);
-            const onlyProgress = diffKeys.length > 0 && diffKeys.every((k) => k === "progress");
-            if (onlyProgress) {
-              if (mergedProgress <= (cur.progress ?? 0)) {
-                return;
-              }
-              const now = Date.now();
-              const lastAt = lastProgressUpdateAt.get(taskId) ?? 0;
-              if (mergedProgress < 100 && now - lastAt < 100) {
-                return;
-              }
-              lastProgressUpdateAt.set(taskId, now);
-            }
-          }
-
-          const nextStatus = (merged.status ?? cur.status) as CrawlTask["status"];
-          const next: CrawlTask = {
-            ...cur,
-            ...merged,
-            progress: nextStatus === "completed" ? 100 : merged.progress != null ? merged.progress : cur.progress,
-          };
-          tasks.value[idx] = next;
-
-          const errStr = next.error ?? "";
-          const isCanceled = errStr.includes("Task canceled");
-          if (next.status === "failed" && !isCanceled && errStr) {
-            window.dispatchEvent(
-              new CustomEvent("task-error-display", {
-                detail: {
-                  taskId,
-                  pluginId: cur.pluginId,
-                  error: errStr,
-                },
-              }),
-            );
-          }
-        }
-      });
-
-      await listen("auto-config-change", async (event) => {
-        const payload: any = event.payload as any;
-        const reason = String(payload?.reason ?? "");
-        const configId = String(payload?.configId ?? payload?.config_id ?? "").trim();
-        if (!configId) {
-          await loadRunConfigs();
-          return;
-        }
-        if (reason === "configdelete") {
-          runConfigs.value = runConfigs.value.filter((c) => c.id !== configId);
-          return;
-        }
-        if (reason === "configadd" || reason === "configchange") {
-          await patchRunConfigById(configId);
-          return;
-        }
-        await loadRunConfigs();
-      });
-
-      if (IS_ANDROID) {
-        setInterval(() => {
-          const list = tasks.value;
-          for (let i = 0; i < list.length; i++) {
-            const t = list[i];
-            if (t.status === "running" || t.status === "waiting_downloads" || t.status === "pending") {
-              void syncTaskFromBackend(t.id);
-            }
-          }
-        }, 1000);
-      }
-    } catch (error) {
-      console.error("设置全局事件监听器失败:", error);
-    }
-  })();
-
   /** @returns 是否已创建任务（前置守卫拒绝时为 `false`） */
   async function addTask(
     pluginId: string,
@@ -535,6 +267,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     runConfigId?: string,
     triggerSource: CrawlTask["triggerSource"] = "manual",
     maxConcurrentDownloads?: number | null,
+    isDryRun = false,
   ): Promise<boolean> {
     if (beforeAddTaskGuard) {
       try {
@@ -557,6 +290,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           runConfigId,
           triggerSource,
           maxConcurrentDownloads,
+          isDryRun,
         },
       });
       return true;
@@ -576,48 +310,13 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   async function setTaskMaxConcurrentDownloads(taskId: string, value: number | null) {
-    await invoke("set_task_max_concurrent_downloads", {
+    const raw = await invoke<unknown>("set_task_max_concurrent_downloads", {
       taskId,
       maxConcurrentDownloads: value,
     });
-    const task = tasks.value.find((item) => item.id === taskId);
-    if (task) task.maxConcurrentDownloads = value;
-  }
-
-  async function loadRunConfigs() {
-    try {
-      const raw = await invoke<unknown[]>("get_run_configs");
-      const list = Array.isArray(raw) ? raw : [];
-      runConfigs.value = list.map((x) => parseRunConfigRaw(x)).filter((c): c is RunConfig => c != null);
-    } catch (error) {
-      console.error("加载运行配置失败:", error);
-      runConfigs.value = [];
-    }
-  }
-
-  function loadPluginRecommendedConfigs(
-    installedPlugins: Array<{ id: string; baseUrl?: string; recommendedConfigs?: unknown[] }> = [],
-  ) {
-    try {
-      const baseUrlById = new Map<string, string>();
-      for (const p of installedPlugins) {
-        baseUrlById.set(p.id, p.baseUrl ?? "");
-      }
-      const collected: PluginRecommendedPreset[] = [];
-      for (const p of installedPlugins) {
-        const cfgs = p.recommendedConfigs;
-        if (!cfgs || !Array.isArray(cfgs)) continue;
-        for (const item of cfgs) {
-          const parsed = parsePluginRecommendedPreset(item, baseUrlById);
-          if (parsed) collected.push(parsed);
-        }
-      }
-      collected.sort((a, b) => a.pluginId.localeCompare(b.pluginId) || a.filename.localeCompare(b.filename));
-      pluginRecommendedConfigs.value = collected;
-    } catch (error) {
-      console.error("加载插件推荐配置失败:", error);
-      pluginRecommendedConfigs.value = [];
-    }
+    const task = normalizeTaskRow(raw);
+    if (!task) throw new Error("set_task_max_concurrent_downloads: invalid payload");
+    return task;
   }
 
   /** 导入推荐配置为本地运行配置；`scheduleEnabled` 受设置项与预设是否有 `scheduleSpec` 影响 */
@@ -635,9 +334,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       descRaw != null && descRaw !== "" ? resolveConfigText(descRaw as any, locale).trim() || undefined : undefined;
     const spec = preset.scheduleSpec;
     const scheduleEnabled = Boolean(importScheduleDefault && spec);
-    // 推荐配置由插件作者手写，可能含 "" / [] 等旧式空值；入库前按插件定义规范化，
-    // 否则定时运行会被后端严格校验拒绝。动态导入 plugins store 以避开循环依赖。
-    const { usePluginStore } = await import("./plugins");
+    // 推荐配置由插件作者手写，可能含 "" / [] 等旧式空值；入库前按插件定义规范化。
     const defs = (usePluginStore().plugins.find((p) => p.id === preset.pluginId)?.config?.vars ?? []) as PluginVarDef[];
     return await addRunConfig({
       name: nameStr,
@@ -646,6 +343,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       url: preset.baseUrl || "",
       userConfig: canonicalizeUserConfig(preset.userConfig ?? {}, defs),
       httpHeaders: preset.httpHeaders ?? {},
+      isDryRun: preset.isDryRun,
       scheduleEnabled,
       scheduleSpec: spec,
       schedulePlannedAt: undefined,
@@ -655,9 +353,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   async function addRunConfig(
-    config: Omit<RunConfig, "id" | "createdAt"> & {
+    config: Omit<RunConfig, "id" | "createdAt" | "lastResult"> & {
       id?: string;
       createdAt?: number;
+      lastResult?: RunConfigLastResult;
     },
   ) {
     const cfg: RunConfig = {
@@ -671,54 +370,36 @@ export const useCrawlerStore = defineStore("crawler", () => {
       userConfig: config.userConfig ?? {},
       httpHeaders: config.httpHeaders ?? {},
       maxConcurrentDownloads: config.maxConcurrentDownloads ?? null,
+      isDryRun: config.isDryRun ?? false,
       outputAlbumId: config.outputAlbumId,
       scheduleEnabled: config.scheduleEnabled ?? false,
       scheduleSpec: config.scheduleSpec,
       schedulePlannedAt: config.schedulePlannedAt,
       scheduleLastRunAt: config.scheduleLastRunAt,
+      lastTask: config.lastTask,
+      lastResult: config.lastResult ?? "never",
     };
-    await invoke("add_run_config", { config: cfg });
-    runConfigs.value = [cfg, ...runConfigs.value.filter((c) => c.id !== cfg.id)].sort(
-      (a, b) => Number(b.createdAt) - Number(a.createdAt),
-    );
-    return cfg;
+    const saved = normalizeRunConfigRow(await writeRunConfig("add_run_config", { config: cfg }));
+    if (!saved) throw new Error("add_run_config: invalid payload");
+    return saved;
   }
 
   async function updateRunConfig(config: RunConfig) {
-    await invoke("update_run_config", { config });
-    const idx = runConfigs.value.findIndex((c) => c.id === config.id);
-    if (idx !== -1) {
-      const next = runConfigs.value.slice();
-      next[idx] = config;
-      runConfigs.value = next;
-    }
+    const saved = normalizeRunConfigRow(await writeRunConfig("update_run_config", { config }));
+    if (!saved) throw new Error("update_run_config: invalid payload");
+    return saved;
   }
 
   async function deleteRunConfig(configId: string) {
-    await invoke("delete_run_config", { configId });
-    runConfigs.value = runConfigs.value.filter((c) => c.id !== configId);
+    await writeRunConfig("delete_run_config", { configId });
   }
 
   async function copyRunConfig(configId: string) {
-    const raw = await invoke<unknown>("copy_run_config", { configId });
-    const copied = parseRunConfigRaw(raw);
-    if (!copied) {
-      await loadRunConfigs();
-      throw new Error("copy_run_config: invalid payload");
-    }
-    runConfigs.value = [copied, ...runConfigs.value.filter((c) => c.id !== copied.id)].sort(
-      (a, b) => Number(b.createdAt) - Number(a.createdAt),
-    );
+    const raw = await writeRunConfig("copy_run_config", { configId });
+    const copied = normalizeRunConfigRow(raw);
+    if (!copied) throw new Error("copy_run_config: invalid payload");
     return copied;
   }
-
-  const runConfigById = computed(() => {
-    const map = new Map<string, RunConfig>();
-    for (const item of runConfigs.value) {
-      map.set(item.id, item);
-    }
-    return (id: string): RunConfig | undefined => map.get(id);
-  });
 
   async function getMissedRuns(): Promise<MissedRunItem[]> {
     try {
@@ -739,127 +420,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   async function deleteTask(taskId: string) {
-    try {
-      await invoke("delete_task", { taskId });
-    } catch (error) {
-      console.error("从数据库删除任务失败:", error);
-    }
-  }
-
-  const mapTaskRaw = (t: {
-    id: string;
-    pluginId: string;
-    outputDir?: string;
-    userConfig?: Record<string, any>;
-    outputAlbumId?: string;
-    maxConcurrentDownloads?: number | null;
-    runConfigId?: string;
-    triggerSource?: CrawlTask["triggerSource"];
-    status: string;
-    progress: number;
-    deletedCount: number;
-    dedupCount?: number;
-    successCount?: number;
-    failedCount?: number;
-    startTime?: number;
-    endTime?: number;
-    error?: string;
-  }): CrawlTask => ({
-    id: t.id,
-    pluginId: t.pluginId,
-    outputDir: t.outputDir,
-    userConfig: t.userConfig,
-    outputAlbumId: t.outputAlbumId,
-    maxConcurrentDownloads: t.maxConcurrentDownloads ?? null,
-    runConfigId: t.runConfigId,
-    triggerSource: t.triggerSource ?? "manual",
-    status: t.status as CrawlTask["status"],
-    progress: t.progress ?? 0,
-    deletedCount: t.deletedCount || 0,
-    dedupCount: t.dedupCount ?? 0,
-    successCount: t.successCount ?? 0,
-    failedCount: t.failedCount ?? 0,
-    startTime: t.startTime,
-    endTime: t.endTime,
-    error: t.error,
-  });
-
-  async function loadTasks() {
-    try {
-      const finalTasks = await invoke<
-        Array<{
-          id: string;
-          pluginId: string;
-          outputDir?: string;
-          userConfig?: Record<string, any>;
-          outputAlbumId?: string;
-          maxConcurrentDownloads?: number | null;
-          runConfigId?: string;
-          triggerSource?: CrawlTask["triggerSource"];
-          status: string;
-          progress: number;
-          deletedCount: number;
-          dedupCount?: number;
-          successCount?: number;
-          failedCount?: number;
-          startTime?: number;
-          endTime?: number;
-          error?: string;
-        }>
-      >("get_all_tasks");
-
-      tasks.value = finalTasks.map(mapTaskRaw);
-      tasksTotal.value = tasks.value.length;
-    } catch (error) {
-      console.error("加载任务失败:", error);
-    }
-  }
-
-  /** 分页加载任务（用于任务抽屉触底加载，减轻首次打开卡顿） */
-  async function loadTasksPage(limit: number, offset: number): Promise<{ total: number } | null> {
-    try {
-      const res = await invoke<{
-        tasks: Array<{
-          id: string;
-          pluginId: string;
-          outputDir?: string;
-          userConfig?: Record<string, any>;
-          outputAlbumId?: string;
-          maxConcurrentDownloads?: number | null;
-          runConfigId?: string;
-          triggerSource?: CrawlTask["triggerSource"];
-          status: string;
-          progress: number;
-          deletedCount: number;
-          dedupCount?: number;
-          successCount?: number;
-          failedCount?: number;
-          startTime?: number;
-          endTime?: number;
-          error?: string;
-        }>;
-        total: number;
-      }>("get_tasks_page", { limit, offset });
-
-      const mapped = (res.tasks || []).map(mapTaskRaw);
-      if (offset === 0) {
-        tasks.value = mapped;
-      } else {
-        tasks.value = [...tasks.value, ...mapped];
-      }
-      tasksTotal.value = res.total ?? 0;
-      return { total: res.total ?? 0 };
-    } catch (error) {
-      console.error("分页加载任务失败:", error);
-      return null;
-    }
-  }
-
-  // Android：每隔 60s 轮询一次任务列表，避免 task_status / task_progress 事件丢失导致界面不同步
-  if (IS_ANDROID) {
-    setInterval(() => {
-      void loadTasks();
-    }, 60000);
+    await invoke("delete_task", { taskId });
   }
 
   async function retryTask(task: CrawlTask): Promise<boolean> {
@@ -872,49 +433,26 @@ export const useCrawlerStore = defineStore("crawler", () => {
       task.runConfigId,
       "manual",
       task.maxConcurrentDownloads ?? null,
+      task.isDryRun,
     );
   }
-
-  /** 与后端 clear_finished_tasks 一致：本地只保留未结束任务 */
-  function applyKeepOnlyPendingAndRunningTasks() {
-    tasks.value = tasks.value.filter(
-      (t) => t.status === "pending" || t.status === "running" || t.status === "waiting_downloads",
-    );
-    tasksTotal.value = tasks.value.length;
-  }
-
-  const runConfigsReady = loadRunConfigs();
-  const tasksReady = loadTasks();
 
   return {
-    tasks,
-    tasksTotal,
-    isCrawling,
     addTask,
     deleteTask,
     stopTask,
     setTaskMaxConcurrentDownloads,
     retryTask,
-    runConfigs,
-    pluginRecommendedConfigs,
     taskConfig,
     taskConfigRevision,
     setTaskConfig,
-    loadRunConfigs,
-    loadPluginRecommendedConfigs,
     importRecommendedPreset,
     addRunConfig,
     updateRunConfig,
     deleteRunConfig,
     copyRunConfig,
-    runConfigById,
     getMissedRuns,
     runMissedConfigs,
     dismissMissedConfigs,
-    loadTasks,
-    loadTasksPage,
-    runConfigsReady,
-    tasksReady,
-    applyKeepOnlyPendingAndRunningTasks,
   };
 });

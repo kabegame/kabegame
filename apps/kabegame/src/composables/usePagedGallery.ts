@@ -7,11 +7,6 @@ type PagedRouteStore = {
   computedPath: string;
 };
 
-type PagedGalleryLoading = {
-  startLoading: () => void;
-  finishLoading: () => void;
-};
-
 type PreviewBoundary = {
   direction: "prev" | "next";
   targetPage: number;
@@ -30,17 +25,11 @@ type UsePagedGalleryParams = {
   images: Ref<ImageInfo[]>;
   loadedKey: Ref<string>;
   viewRef: Ref<any>;
-  loading: PagedGalleryLoading;
-  load: (path: string) => Promise<void>;
-  computeCountPath: (path: string) => string;
-  isActive: () => boolean;
   rootPathFallback?: () => string;
-  onCountError?: (error: unknown) => Promise<number | void> | number | void;
-  onLoadError?: (error: unknown, path: string) => Promise<void> | void;
   messages?: PagedGalleryMessages;
 };
 
-// 页面导航、clamp
+// 页面导航、clamp；只产出行路径，加载由使用方按路径请求。
 export function usePagedGallery(params: UsePagedGalleryParams) {
   const totalImagesCount = params.totalImagesCount;
   const currentPage = ref(1);
@@ -54,17 +43,6 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     next: "已进入下一页",
     prev: "已进入上一页",
     ...params.messages,
-  };
-
-  const loadTotalImagesCount = async () => {
-    try {
-      await params.load(rowsPath.value);
-    } catch (error) {
-      const fallback = await params.onCountError?.(error);
-      if (typeof fallback === "number") {
-        totalImagesCount.value = fallback;
-      }
-    }
   };
 
   const handleJumpToPage = async (page: number) => {
@@ -177,29 +155,13 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     { flush: "post" },
   );
 
-  watch(
-    rowsPath,
-    async (newPath) => {
-      const pending = pendingPreviewBoundary.value;
-      if (pending && currentPage.value !== pending.targetPage) {
-        pendingPreviewBoundary.value = null;
-      }
-      if (!params.isActive()) return;
-      if (!newPath) return;
-      if (params.loadedKey.value === newPath) return;
-
-      params.loading.startLoading();
-      try {
-        await params.load(newPath);
-      } catch (error) {
-        await params.onLoadError?.(error, newPath);
-        return;
-      } finally {
-        params.loading.finishLoading();
-      }
-    },
-    { immediate: true },
-  );
+  // 离开边界目标页时放弃这次交接
+  watch(rowsPath, () => {
+    const pending = pendingPreviewBoundary.value;
+    if (pending && currentPage.value !== pending.targetPage) {
+      pendingPreviewBoundary.value = null;
+    }
+  });
 
   return {
     totalImagesCount,
@@ -209,7 +171,6 @@ export function usePagedGallery(params: UsePagedGalleryParams) {
     pageSize,
     bigPageEnabled,
     pendingPreviewBoundary,
-    loadTotalImagesCount,
     handleJumpToPage,
     handlePreviewPageBoundary,
     ensureValidPageAfterMassRemoval,

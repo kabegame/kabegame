@@ -99,6 +99,7 @@ pub async fn import_local_file(
         surf_record_id: None,
         crawled_at,
         metadata_id,
+        image_metadata_id: None,
         thumbnail_path,
         favorite: false,
         is_hidden: false,
@@ -128,9 +129,7 @@ pub async fn import_local_file(
         None
     };
 
-    let image_ids = vec![image_id.clone()];
-    let plugin_ids = vec![LOCAL_FOLDER_PLUGIN_ID.to_string()];
-    GlobalEmitter::global().emit_images_change("add", &image_ids, None, None, Some(&plugin_ids));
+    GlobalEmitter::global().emit_images_added(std::slice::from_ref(&inserted));
     if let (Some(album_id), Some(membership)) = (album_id, membership) {
         crate::storage::image_events::emit_membership_added(album_id, &membership.inserted_ids)?;
     }

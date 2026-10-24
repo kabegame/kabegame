@@ -210,6 +210,9 @@ struct RunPluginArgs {
     #[arg(long = "max-downloads", value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
     max_downloads: Option<u32>,
     /// 只解析并打印最终配置，不真正运行任务
+    #[arg(long = "print-config")]
+    print_config: bool,
+    /// 空跑任务：执行插件逻辑，但不下载或入库
     #[arg(long = "dry-run")]
     dry_run: bool,
     /// 不渲染进度条，日志逐行直出（适合 CI / 重定向到文件）
@@ -740,6 +743,7 @@ async fn data_import_image(args: ImportImageArgs, via: Via) -> Result<(), String
         "local-import",
         &mut events,
         !console::user_attended(),
+        false,
         move |task_id| async move { cancel_backend.cancel_task(&task_id).await },
     )
     .await;
@@ -924,7 +928,7 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
 
     init_paths()?;
     let backend = choose_backend(via, LocalNeeds::TASKS).await?;
-    let mut events = if args.dry_run {
+    let mut events = if args.print_config {
         None
     } else {
         Some(backend.subscribe_task_events().await?)
@@ -938,7 +942,8 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
             output_album_id: args.album_id,
             http_headers: None,
             max_concurrent_downloads: args.max_downloads,
-            dry_run: args.dry_run,
+            print_config: args.print_config,
+            is_dry_run: args.dry_run,
         })
         .await?;
     let config_json = serde_json::to_string_pretty(&output.config).map_err(|e| e.to_string())?;
@@ -954,8 +959,11 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
     println!("{}", console::style("最终配置：").dim());
     println!("{config_json}");
 
-    if args.dry_run {
+    if args.print_config {
         return Ok(());
+    }
+    if args.dry_run {
+        println!("{}", console::style("dry-run：不会下载或入库").yellow());
     }
     let task_id = output
         .task_id
@@ -970,11 +978,17 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
         &output.plugin_id,
         &mut events,
         plain,
+        args.dry_run,
         move |task_id| async move { cancel_backend.cancel_task(&task_id).await },
     )
     .await;
 
     match outcome {
+        TaskOutcome::Completed { dedup, .. } if args.dry_run => {
+            // 空跑复用去重计数表示「跳过」，其余计数恒为 0，不再展示
+            println!("{} 空跑跳过 {} 个", console::style("完成").green().bold(), dedup);
+            Ok(())
+        }
         TaskOutcome::Completed {
             downloaded,
             dedup,
@@ -1038,6 +1052,7 @@ async fn render_task<C, Fut>(
         std::sync::Arc<kabegame_core::ipc::events::AppEvent>,
     >,
     plain: bool,
+    dry_run: bool,
     cancel: C,
 ) -> TaskOutcome
 where
@@ -1069,6 +1084,11 @@ where
 
     let refresh = |bar: &ProgressBar, progress: f64, downloaded: u64, failed: u64, dedup: u64| {
         bar.set_position((progress * 100.0) as u64);
+        if dry_run {
+            // 空跑复用去重计数表示「跳过」，其余计数恒为 0
+            bar.set_message(format!("{plugin_id} · 空跑跳过 {dedup}"));
+            return;
+        }
         let mut msg = format!("{plugin_id} · ↓{downloaded}");
         if failed > 0 {
             msg.push_str(&format!(
@@ -1114,7 +1134,7 @@ where
                 }
                 // 计数只认这个快照：downloader 每次落库/去重后都会
                 // `emit_task_image_counts_snapshot` 发一份读自 DB 的全量计数。
-                // 曾经这里还按 `images-change(add)` 自行累加，但那两类事件走的是
+                // 曾经这里还按 `images-added` 自行累加，但那两类事件走的是
                 // 各自的 broadcast channel、再由独立 task 汇进同一个 mpsc，
                 // 相互之间没有顺序保证：快照先到就会被随后的累加又叠一次，
                 // 于是每张图都多计一次（实测稳定 +1）。

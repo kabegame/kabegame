@@ -60,7 +60,7 @@ export function facetValueLabel(dimension: FacetDimension, value: string, t: (ke
  * 高级面板 facet 树：枚举与计数分家。
  *
  * - 枚举（listPathForSegment）：纯净路径 `<contextPrefix>/<segment>`，不折叠任何
- *   草稿条件——候选全集与草稿树无关，稳定且可缓存（listProviderDirsPure）。
+ *   草稿条件——候选全集与草稿树无关，由常驻树的 pathql 观察方保有。
  *   减格枚举是简单查询「不断收窄 slot」时代的产物；高级查询里其他条件（尤其
  *   取非行的兄弟约束）会把候选列表挤没，反而丢信息。
  * - 计数（pathForSegment）：把候选值写进 NodePath 所指原子的对应维度，序列化

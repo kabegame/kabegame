@@ -35,7 +35,7 @@ Android 视频源是 `content://` URI，FFmpeg 无法直接打开。改由 `Cont
 | `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 桌面（`#[cfg(not(android))]`）：`run_ffmpeg_transcode` / `filter_encode_write` / `generate_video_preview_from_path` 产 H.264 MP4，`compress_video_for_preview(&Path)` 直调。Android：`compress_video_for_preview(&str uri)` 经 `open_fd` → `/proc/self/fd/N` → `run_ffmpeg_gif`（`#[cfg(android)]`）产 10fps GIF。`encode_write` 两侧共用。 |
 | `src-tauri/kabegame-core/src/crawler/content_io.rs` | `ContentIoProvider` 新增 `open_fd(uri) -> i32`。 |
 | `src-tauri/kabegame/src/content_io_provider.rs` | Channel 代理新增 `OpenFd` 请求/响应，转发到 PickerPlugin `open_fd`。 |
-| `src-tauri-plugins/tauri-plugin-picker/**` | 新增 `openFd` 命令（models/commands/mobile/lib/build/permissions + Kotlin `openFd` = `openFileDescriptor().detachFd()`）。 |
+| `src-tauri/tauri-plugin-picker/**` | 新增 `openFd` 命令（models/commands/mobile/lib/build/permissions + Kotlin `openFd` = `openFileDescriptor().detachFd()`）。 |
 | `src-tauri/kabegame-core/src/media/dimensions.rs` | 桌面 `resolve_video_dimensions_sync` 用 rsmpeg 读 codecpar；Android 同步 stub 返回 `None`，`content://` 视频宽高由 async `ContentIoProvider.get_video_dimensions` 提供。 |
 | `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | 下载入库 postprocess：Android content URI 视频把 URI 传给 `compress_video_for_preview`；桌面直接传文件路径。 |
 | `src-tauri/kabegame-core/src/storage/organize.rs` | `RegenerateVideo` 缩略图重建同样按平台分流调 `compress_video_for_preview`。 |

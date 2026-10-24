@@ -168,6 +168,8 @@
   // Kabegame 是闭包局部常量，crawl.js 被模板进同一闭包内即可直接引用；
   // 不挂到 window，避免站点通过全局检测。
   const Kabegame = Object.freeze({
+    // 该任务的宿主公共参数（静态，建窗时烘焙）。
+    common: Object.freeze(__KB_COMMON_JSON__),
     // 该任务的 merged_config（静态，建窗时烘焙）。
     vars: Object.freeze(__KB_VARS_JSON__),
     getLang() {

@@ -98,6 +98,16 @@ ModePlugin 注入的环境变量算出，测试环境必须与应用一致，不
 - 由 `src-tauri/{kabegame-core,kabegame}/build.rs` 注入的 `kabegame_data` Rust cfg 控制
 
 ### 其他
+
+#### 四格漫画合成
+
+`python3 scripts/compose-comic.py TL TR BL BR --output-size 3072x2048 --out comic.png`
+按左上、右上、左下、右下顺序把四张图放入 `4koma/template.psd`。
+依赖 Pillow 与 psd-tools；`--show-regions` 可查看画格坐标。
+模板用顶层 `01`–`04` 图层的边界定义画格，底层背景先按画格挖洞，
+再叠加最高画格图层上方的可见装饰（包括 `编号1`–`编号4`），最后统一缩放。
+编号等前景装饰应放在全部画格图层上方；合成后的装饰不能再次按画格挖洞。
+
 ```bash
 deno task format                 # Prettier 格式化前端源码（apps/ 与 packages/ 的代码文件）
                                  # 规则见 .cursor/rules/code-formatting.mdc；packages 范围与排除项

@@ -127,6 +127,15 @@ node package-plugin.js --outDir ../data/plugins-directory
   - `max`: 最大值（可选，仅用于 `int` 和 `float` 类型）
   - `width`: 表单栅格宽度（可选，1~4，默认 4 = 独占一行）
 
+**路径类（`path` / `file` / `folder` / `file_or_folder`）说明：**
+- 用户在收集弹窗里选择、或从系统拖入文件 / 文件夹；任务冻结时宿主把选中项以**只读**方式挂进本次任务的 VFS。
+- 脚本拿到的不是宿主绝对路径，而是虚拟路径：
+  - 文件变量：`{Kabegame.fs.getRoot()}/input/<key>/<原文件名>`
+  - 文件夹变量：`{Kabegame.fs.getRoot()}/input/<key>/...`（整棵子树只读可见）
+- 因此可以直接用 `Kabegame.fs` 读取，或把虚拟路径交给 `Kabegame.downloadImage()` 入库；插件看不到、也不能改写或移走用户的原始文件。
+- `file` / `path` / `file_or_folder` 的 `options` 是**扩展名过滤**（不含点号），既用于系统选择框，也用于拖入判断。
+- **Android 只支持文件变量**（来自系统选择器的 `content://` 文件）；文件夹变量在冻结时直接报错。
+
 **date（日期）说明：**
 - 收集表单使用日期选择器；写入运行配置并传入脚本的值为 **`YYYY-MM-DD` 字符串**（例如 `"2025-03-26"`）
 - 在 Rhai 中与 `string` 一样使用（拼接 URL、作为查询参数等）

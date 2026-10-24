@@ -12,7 +12,8 @@ plugin config（插件变量 JSON，后端格式）
   checkbox 在后端是完整对象 `{ a: true, b: false }`，表单内部用数组 `["a"]`（`normalizeVarsForUI` / `expandVarsForBackend`）。
 - **task config**：`TaskConfig`（`apps/kabegame/src/stores/crawler.ts`）——
   `pluginId` / `userConfig` / `outputDir` / `httpHeaders` / `outputAlbumId` /
-  `maxConcurrentDownloads`。最后一个字段为 `null` 时跟随应用全局下载并发。
+  `maxConcurrentDownloads` / `isDryRun`。并发字段为 `null` 时跟随应用全局下载并发；`isDryRun`
+  是本次任务的冻结参数，空跑时仍执行插件逻辑、请求、翻页、日志与进度，但不下载、不入库。
 - **自动任务 config**：`RunConfig`，等于 task config 再加 `name` / `description` / `url` /
   `scheduleEnabled` / `scheduleSpec` / `schedulePlannedAt` / `scheduleLastRunAt`。
   用户保存的配置一律是这一层，「保存为配置」恒为 `scheduleEnabled: false`。
@@ -26,6 +27,17 @@ plugin config（插件变量 JSON，后端格式）
 合并后按不动点计算 `when`：每轮只让当前仍可见的字段参与条件匹配，隐藏一个字段会使依赖它的下游字段继续隐藏。隐藏字段从最终对象中删除；依赖图成环在插件解析与安装阶段直接拒绝。剩余值只允许是声明类型的规范值或 `null`，`required: true` 和 boolean 不接受 `null`。options 的 `variable: ""` 是合法选项，不按空值处理。
 
 `start_task` 在建任务前完成上述处理，并把最终快照写入 `TaskInfo.user_config`；因此用户之后修改默认配置不会让既有任务漂移。调度器运行前再次用当前插件定义校验该快照，插件升级使旧任务失配时任务直接失败。
+
+### 路径类变量的冻结解析
+
+`user_config` 里 `path` / `file` / `folder` / `file_or_folder` 的值是**用户选择的宿主路径（Android 为 `content://`）**，数据库永远保留这个原值。调度器 `freeze_task` 在配置合并 / 校验之后调用 `input_mounts::resolve_input_mounts`：
+
+- 桌面：必须是绝对路径 → `canonicalize`（不存在即报「配置不合法」）→ 按声明类型检查 `is_file` / `is_dir`；`path` / `file_or_folder` 两者都接受。
+- Android：只接受 `content://`；`folder` 类型或目录 URI 直接报错（「Android 暂不支持文件夹类型的插件变量」）；文件经 `ContentIoProvider.open_fd` 得到 fd，挂载 `/proc/self/fd/N`，文件名取 `get_display_name`。
+- 内建插件（`local-import` / `webpage`）跳过，它们直接用宿主路径。
+- 变量 key 不能含 `/`、`\` 或为 `.` / `..`；文件名不可用时退回 `file`。
+
+解析结果作为 `TaskParams.inputs` 交给 `Task::try_new`，后者把它挂到 `PluginVfs` 的只读 `input` 挂载点，并**就地改写 `params.config[key]` 为虚拟路径**（文件 `/{handle}/input/<key>/<文件名>`、文件夹 `/{handle}/input/<key>`）。V8 的 `custom.<key>` 与 WebView bootstrap 烘焙的 vars 都读取这份 config，因此两端一致且都不接触宿主路径。改写只发生在运行时 `TaskParams`，不写回任务记录。
 
 ## 3. 全局唯一的 taskConfig 与「先写再打开」
 
@@ -68,6 +80,8 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
   `""` 与 `{}` 也算显式值，不回落到用户默认。
 - **任务并发**：`maxConcurrentDownloads` 只取本次入参，缺失或显式 `null` 都表示跟随全局；
   它不属于插件用户默认配置，不能从 `userDefault` 继承。
+- **空跑**：`isDryRun` 同样只取本次入参，缺失为 `false`，不从 `userDefault` 继承；再次执行和
+  `RunConfig` 回填原值，推荐配置导入/导出保留该字段，供定时站点结构检查使用。
 
 弹窗内改选来源插件本身也是一次写入：`writeTaskConfig({ pluginId })`，
 于是 vars / outputDir / headers 取「用户默认 > 插件默认」。
@@ -90,12 +104,13 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 
 表单分三段，顺序固定：
 
-1. **任务设置**（最上）：输出目录（仅非紧凑）、输出画册（含「新建画册」）、任务最大下载并发（`MaxDownloadsField`：「跟随全局」开关打开时存 `null`，关闭时以当前全局值为初值显示 `KbNumber`）。
+1. **任务设置**（最上）：输出目录（仅非紧凑）、输出画册（含「新建画册」）、任务最大下载并发（`MaxDownloadsField`：「跟随全局」开关打开时存 `null`，关闭时以当前全局值为初值显示 `KbNumber`）与空跑开关。
 2. **插件设置**（中间）：选择源 + 插件变量。
 3. **高级设置**（最下）：HTTP 头。
 
 **没有选源时三段都显示**：任务设置/高级设置编辑的是组件内的本地草稿
-（`draftOutputDir` / `draftOutputAlbumId` / `draftHttpHeaders` / `draftMaxConcurrentDownloads`），`taskConfig` 仍为 `null`；
+（`draftOutputDir` / `draftOutputAlbumId` / `draftHttpHeaders` / `draftMaxConcurrentDownloads` /
+`draftIsDryRun`），`taskConfig` 仍为 `null`；
 一旦选到源，草稿随 `writeTaskConfig({ pluginId, ...draft })` 一并并入 task config，
 不会白填。（已经选过源之后再换插件不带草稿，避免把上一个任务的目录/头带给新插件。）
 

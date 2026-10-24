@@ -63,7 +63,8 @@
         "provider": {
           "name": "プラグイン PathQL Provider",
           "desc": "プラグインが提供する PathQL provider の定義とソースを読み取ります"
-        }
+        },
+        "recommended": { "name": "プラグイン推奨設定", "desc": "推奨設定と現在のインポート状態を読み取る" }
       }
     }
   }

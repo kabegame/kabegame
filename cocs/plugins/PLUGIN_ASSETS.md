@@ -70,7 +70,7 @@
 
 ## 3. 归一化契约（唯一裁决者）
 
-**`kbAssets` 项、Markdown 引用串、运行时 `Plugin.assets[].key`，三者是同一个东西**：
+**`kbAssets` 项、Markdown 引用串、运行时 `Plugin.assetKeys`，三者是同一个东西**：
 插件根相对路径，经一次归一化后逐字比较。规则按序：
 
 1. `trim`
@@ -127,11 +127,12 @@ package.json (kbAssets + kbDoc + kbChangelog)
     ├─ 加载 parse_kgpg → load_plugin_v3_from_zip
     │     read_locale_md_field() 对 kbDoc / kbChangelog 各跑一次（缺条目 = 硬错误）
     │     build_asset_index(pkg) → Vec<归一化路径>（保留 kbAssets 声明顺序）
-    │     按路径读字节 → base64 → Plugin.assets（数组项为 { key, dataBase64 }，继续保序）
-    │     md 推**原文**，不改写引用；资源条目缺失只 WARN 跳过，不让整个插件装不上
+    │     用 ZipFile::size() 校验 2MB / 10MB 上限，只保留 Plugin.assetKeys（继续保序）
+    │     md 读出校验后丢弃，不常驻正文或资源字节；资源条目缺失只 WARN 跳过
     │
     └─ 展示
-          ├─ 文档正文：PluginDocRenderer.vue 用 normalizeAssetPath(引用) 查 assets
+          ├─ 文档正文：PluginDocRenderer.vue 用 normalizeAssetPath(引用) 查 assetKeys
+          │            命中后用 pluginFileUrl(plugin, key) 指向 /plugin_file/<id>/<path>?v=<version>
           │            外链归一化返回 null → 原样交给 marked（不误判成「加载失败」）
           └─ 快捷预览走马灯：见第 5 节
 ```
@@ -151,7 +152,7 @@ package.json (kbAssets + kbDoc + kbChangelog)
 | 常量 | 值 | 位置 |
 |---|---|---|
 | `ASSET_MAX_FILE_SIZE` | 2 MB | 打包期**硬报错** / 加载期 WARN 跳过 |
-| `ASSET_MAX_TOTAL_SIZE` | 10 MB | 打包期 WARN / 加载期超出部分不内嵌 |
+| `ASSET_MAX_TOTAL_SIZE` | 10 MB | 打包期 WARN / 加载期超出部分不放入 assetKeys、HTTP 白名单不放行 |
 
 均定义在 `assets.rs`，CLI 与 core 共用，不再各自写死。doc 与 changelog 共享同一份预算。
 
@@ -164,14 +165,14 @@ package.json (kbAssets + kbDoc + kbChangelog)
 弹出（`HoverRevealPanel trigger="contextmenu"`，点面板外或 Esc 关闭，不随鼠标移出消失；
 悬停自动弹出在卡片网格里太容易误触），插件选择器的下拉行保持 hover 400ms；紧凑端都是长按
 500ms 弹出同一面板的底部抽屉形态。面板里的**示例图走马灯直接复用
-`Plugin.assets`** —— 不额外增加任何后端接口或资源。
+`Plugin.assetKeys`** —— 由 `/plugin_file` 按需提供图片字节；列表只保留键。
 
 | 关注点 | 处理 |
 |---|---|
 | **只收 banner 图** | `isBannerAsset(key)`：完整归一化路径以 `banner` 开头，大小写不敏感。见下 |
-| 顺序 | `Plugin.assets` 按 `kbAssets` 数组声明顺序下发；过滤后不再排序，走马灯直接沿用作者声明顺序 |
+| 顺序 | `Plugin.assetKeys` 按 `kbAssets` 数组声明顺序下发；过滤后不再排序，走马灯直接沿用作者声明顺序 |
 | 图注 | **不显示**。走马灯是橱窗，图上压一行从文件名推导的字符串（`Banner 1`）既非作者本意也无信息量 |
-| MIME | `guessAssetMime(key)`，与 Rust `mime_for_asset` 及打包白名单口径一致 |
+| MIME | HTTP `Content-Type` 由 Rust `mime_for_asset` 从媒体格式表推断 |
 | **只对已安装插件出图** | 商店里未安装的条目**不出图**。原因见下 |
 | **没图就没有 banner 区** | 没有 banner 图时面板不渲染走马灯区域（也不放空态占位），只剩头部、描述、标签与页脚 |
 
@@ -192,12 +193,12 @@ package.json (kbAssets + kbDoc + kbChangelog)
 
 ### 为什么未安装条目不出图
 
-唯一能拿到远程插件 `assets` 的接口 `get_plugin_detail(source_id)` 内部会调用
+唯一能拿到远程插件 `assetKeys` 的接口 `get_plugin_detail(source_id)` 内部会调用
 `ensure_plugin_cached`，把**整个 .kgpg 下载到本地磁盘缓存**（可能几 MB）。快捷预览是高频
 轻量交互，鼠标划过卡片列表就会触发一串后台整包下载，产生非预期流量。因此快捷预览只做
 best-effort：
 
-- 本身就是已安装插件 → 直接用内存里的 `assets`（零成本）
+- 本身就是已安装插件 → 用内存里的 `assetKeys` 生成 URL，实际图片按需从已装包读取
 - 商店条目且 `installedVersion === version` → 同一份内容，复用本地已装包
 - 其余 → 不出图，面板不含 banner 区
 
@@ -222,20 +223,12 @@ best-effort：
 
 ---
 
-## 6. 插件详情：弹窗，非路由
+## 6. 插件详情与导入预览
 
-插件/源详情原本是独立路由 `/plugin-detail/:id`（`PluginDetail.vue` + 三个 URL query
-镜像设置键）。现已改为**弹窗**，与导入预览弹窗（`PluginImportDialog.vue`）形态一致：
-
-- `apps/kabegame/src/components/plugin/PluginDetailDialog.vue` —— 弹窗外壳 + 安装/更新/
-  卸载/复制 ID 等动作，自行订阅 `plugin-store-download-progress` 显示下载进度
-- `apps/kabegame/src/composables/usePluginDetailLoader.ts` —— 详情加载与缓存
-  （已安装内存直读 → 内存缓存 → web 侧 Dexie 版本校验 → `get_plugin_detail`）
-- 两者都复用 `PluginDetailContent.vue`，与导入预览共享同一套详情渲染
-
-随之删除：`/plugin-detail` 路由与 `PluginDetail.vue`、settings 的
-`pluginDetailMode` / `pluginDetailSourceId` / `pluginDetailVersion` 三个 query 镜像键
-及其 codec、`route.pluginDetail` i18n 键、`useActiveRoute` 里对该路径前缀的匹配。
+「源」页面通过独立路由 `/plugins/:pluginId` 打开详情；商店条目需要远程包时在 query 中携带来源与版本。
+详情页与 `PluginImportDialog.vue` 复用 `PluginDetailContent.vue`，按当前 tab 获取文档/更新日志/推荐配置。
+`usePluginDetailLoader.ts` 已安装记录直接读 store，商店轻量详情按来源与版本缓存于内存，不使用 Dexie 详情表。
+导入文件由后端登记 preview token，从 `/plugin_file?...&preview=<token>` 读取；商店预览使用 source。
 
 ---
 
@@ -245,13 +238,15 @@ best-effort：
 |---|---|---|
 | 归一化 / 建表 / 常量 | `src-tauri/kabegame-core/src/plugin/assets.rs` | `normalize_asset_path`、`build_asset_index`、`mime_for_asset`、两个限额常量 |
 | 引用提取 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `extract_local_refs(md)` —— 只回原始引用串，按插件根解析，不拼 md 目录 |
-| 加载 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_locale_md_field`（kbDoc / kbChangelog 共用）、`load_plugin_v3_from_zip` 的资源段、`Plugin.assets` / `Plugin.changelog` |
+| 加载 | `src-tauri/kabegame-core/src/plugin/mod.rs` | `read_locale_md_field`（kbDoc / kbChangelog 共用）、`load_plugin_v3_from_zip` 的资源段、`Plugin.assetKeys` / `Plugin.packageJson` |
 | 打包 | `src-tauri/kabegame-cli/src/main.rs` | `pack_plugin_v3` 清单解析 + 无条件交叉校验 + `collect_v3_entries` 全量白名单收集（只收清单显式引用的文件） |
-| PathQL | `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs` | `plugin://{id}/asset/{path}`、`plugin://{id}/changelog`，MIME 复用 `mime_for_asset` |
+| PathQL | `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs` | `plugin://installed/{id}/{version}/asset/{path}`、`plugin://installed/{id}/{version}/changelog`，MIME 复用 `mime_for_asset` |
 | MCP | `src-tauri/kabegame/src/mcp_capabilities.rs`、`mcp_server.rs` | capability `plugin.read.asset` / `plugin.read.changelog`，资源模板与说明文案 |
 | MCP bundle | `mcpb/kabegame-gallery-node/server/index.js` | `read_plugin` 工具的 `resource` 枚举（`asset` / `changelog`） |
-| 前端归一化 | `apps/kabegame/src/utils/assetPath.ts` | `normalizeAssetPath`、`guessAssetMime`、`humanizeAssetLabel` |
-| 文档渲染 | `apps/kabegame/src/components/plugin/PluginDocRenderer.vue` | 查 `assets` 内联 base64 图片 |
+| 前端归一化 | `apps/kabegame/src/utils/assetPath.ts` | `normalizeAssetPath`、`bannerPreviewImages` |
+| 文档渲染 | `apps/kabegame/src/components/plugin/PluginDocRenderer.vue` | 查 `assetKeys`，用 `pluginFileUrl` 生成 HTTP 图片 URL |
 
 格式规范另见 `docs/PLUGIN_FORMAT.md`、`apps/docs/src/content/docs/dev/format.mdx`、
 `.../dev/packaging.md`、`.../reference/plugin-schema.mdx`。
+
+按需读取、来源、版本与 HTTP 缓存契约见 [PLUGIN_FILE_ENDPOINT.md](PLUGIN_FILE_ENDPOINT.md)。

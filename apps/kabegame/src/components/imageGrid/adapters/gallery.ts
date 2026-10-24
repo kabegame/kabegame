@@ -5,6 +5,14 @@ import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galle
 import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter } from "../types";
+import {
+  albumPatchTriggers,
+  addedTrigger,
+  patchTriggers,
+  hiddenTrigger,
+  labelSearchTriggers,
+  noAlbumTriggers,
+} from "@/services/kbEvents";
 import { IS_WEB } from "@/env";
 
 /**
@@ -14,6 +22,7 @@ import { IS_WEB } from "@/env";
 export function createGalleryAdapter(params: { analytics: ImageAnalytics }): GridAdapter {
   const routeStore = useGalleryRouteStore();
   const t = i18n.global.t;
+  const view = () => ({ query: routeStore.query, sort: routeStore.sort, hide: routeStore.hide });
 
   const isDefaultGalleryRoute = () => !hasActiveQuery(routeStore.query);
 
@@ -26,11 +35,14 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
   return {
     id: "gallery",
     routeStore,
+    viewState: view,
     isActive: () => router.currentRoute.value.path === "/gallery",
     computeCountPath: () => {
       const rootPath = buildGalleryCountPath(routeStore.effectiveNoAlbum, routeStore.query);
       return routeStore.hide ? `hide/${rootPath}` : rootPath;
     },
+    computeUnfilteredCountPath: () =>
+      routeStore.effectiveNoAlbum || routeStore.query.length > 0 ? (routeStore.hide ? "hide" : "gallery") : null,
     onCountError: (error) => {
       console.error("加载画廊总数失败:", error);
     },
@@ -40,12 +52,14 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
     },
     // 空 `?path=` 表示回到默认画廊路径（如点击侧栏「画廊」）
     syncEmptyQueryPath: IS_WEB,
-    changes: {
-      relevant: (batch) =>
-        batch.images.size > 0 ||
-        (routeStore.effectiveNoAlbum && batch.albumIds.size > 0) ||
-        batch.albumStructure.size > 0,
-    },
+    refreshOn: [
+      addedTrigger(view),
+      ...patchTriggers(view),
+      ...hiddenTrigger(view),
+      ...labelSearchTriggers(view),
+      ...noAlbumTriggers(() => routeStore.effectiveNoAlbum),
+      ...albumPatchTriggers((_patch, kinds) => routeStore.effectiveNoAlbum && (kinds.structure || kinds.row)),
+    ],
     actionsOptions: () => ({ removeText: t("gallery.delete") }),
     remove: {
       dialogText: (count) => ({

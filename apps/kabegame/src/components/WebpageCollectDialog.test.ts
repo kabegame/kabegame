@@ -27,6 +27,7 @@ vi.mock("@kabegame/i18n", () => ({
   usePluginConfigI18n: () => ({
     varDisplayName: (def: { key: string }) => def.key,
     varDescripts: () => "",
+    optionDisplayName: (opt: string | { variable: string }) => (typeof opt === "string" ? opt : opt.variable),
   }),
 }));
 vi.mock("@/utils/kameMessage", () => ({
@@ -166,10 +167,11 @@ describe("WebpageCollectDialog", () => {
     expect(vm.urlError).toBe("credentials");
   });
 
-  it("offers only the V8 backend on Android", async () => {
+  it("keeps the WebView backend and V8 switches on Android", async () => {
     env.android = true;
     const vm = await open();
-    expect(vm.visibleVarDefs.map((def) => def.key)).toEqual(["backend"]);
-    expect(vm.visibleVarDefs[0]!.options!.map((opt) => opt.variable)).toEqual(["v8"]);
+    // v4.6.0 起 Android 恢复 WebView 后端与 Cookie / UA 注入开关，与桌面一致。
+    expect(vm.visibleVarDefs.map((def) => def.key)).toEqual(["backend", "injectSurfCookie", "injectCefUserAgent"]);
+    expect(vm.visibleVarDefs[0]!.options!.map((opt) => opt.variable)).toEqual(["v8", "webview"]);
   });
 });

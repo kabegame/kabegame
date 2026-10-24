@@ -21,6 +21,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, Notify};
 use url::Url;
 
+#[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+pub mod input_mounts;
 pub mod task;
 pub use task::{Task, TaskError, TaskParams, TaskResult};
 
@@ -224,11 +226,19 @@ impl TaskScheduler {
         let user_cfg = task.user_config.clone().unwrap_or_default();
         let config = build_effective_user_config_from_var_defs(&plugin.var_defs, user_cfg, None)
             .map_err(|error| format!("配置不合法：{error}"))?;
+        // 路径类变量在冻结时解析成只读 VFS 挂载；内建插件直接消费宿主路径，返回空。
+        #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+        let inputs = input_mounts::resolve_input_mounts(&plugin, &config)
+            .await
+            .map_err(|error| format!("配置不合法：{error}"))?;
         let params = TaskParams {
             plugin: Arc::new(plugin),
             images_dir,
             output_album_id: task.output_album_id.clone(),
             config,
+            is_dry_run: task.is_dry_run,
+            #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+            inputs,
         };
 
         Task::try_new(req.task_id, params, task.http_headers.clone())
@@ -772,6 +782,13 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
             json!({ "pluginId": run.params.plugin.id, "taskId": run.task_id }),
         ),
     );
+    if run.params.is_dry_run {
+        GlobalEmitter::global().emit_task_log(
+            &run.task_id,
+            "print",
+            &task_log_i18n("taskLogDryRun", json!({})),
+        );
+    }
 
     let plugin = &run.params.plugin;
 
@@ -1395,16 +1412,17 @@ mod tests {
             labels: Vec::new(),
             min_app_incompatible: false,
             file_path: None,
-            doc: None,
-            changelog: None,
+
             icon_png_base64: None,
-            description_template: None,
-            recommended_configs: Vec::new(),
+
             var_defs: Vec::new(),
             script: crate::plugin::PluginScript::default(),
-            assets: None,
+
             providers: Vec::new(),
-            metadata_migration: None,
+            metadata_migration_path: None,
+            package_json: None,
+            asset_keys: Vec::new(),
+            file_origin: None,
             version_packed: 0,
         }
     }
@@ -1424,6 +1442,9 @@ mod tests {
                 images_dir: std::path::PathBuf::new(),
                 output_album_id: None,
                 config: HashMap::new(),
+                is_dry_run: false,
+                #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+                inputs: Vec::new(),
             },
             None,
         ));

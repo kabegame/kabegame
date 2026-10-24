@@ -11,6 +11,62 @@
             <span class="task-inline-name">{{ pluginDisplayName }}</span>
             <div class="task-inline-stats" @click.stop>
               <span
+                v-if="task.isDryRun"
+                class="task-inline-stat count-dedup"
+                :class="{ 'is-zero': dedupN === 0 }"
+                :title="t('tasks.dryRunSkippedCount', { n: dedupN })"
+              >
+                {{ dedupN }}
+              </span>
+              <template v-else>
+                <span
+                  class="task-inline-stat count-success"
+                  :class="{ 'is-zero': successN === 0 }"
+                  :title="t('tasks.totalCount', { n: successN })"
+                >
+                  {{ successN }}
+                </span>
+                <span class="task-inline-sep" aria-hidden="true">/</span>
+                <span
+                  class="task-inline-stat count-failed"
+                  :class="{ 'is-zero': failedN === 0 }"
+                  :title="t('tasks.failedCount', { n: failedN })"
+                >
+                  {{ failedN }}
+                </span>
+                <span class="task-inline-sep" aria-hidden="true">/</span>
+                <span
+                  class="task-inline-stat count-deleted"
+                  :class="{ 'is-zero': deletedN === 0 }"
+                  :title="t('tasks.deletedCount', { n: deletedN })"
+                >
+                  {{ deletedN }}
+                </span>
+                <span class="task-inline-sep" aria-hidden="true">/</span>
+                <span
+                  class="task-inline-stat count-dedup"
+                  :class="{ 'is-zero': dedupN === 0 }"
+                  :title="t('tasks.dedupCount', { n: dedupN })"
+                >
+                  {{ dedupN }}
+                </span>
+              </template>
+            </div>
+          </div>
+        </el-tooltip>
+        <div v-else class="task-inline-inner">
+          <span class="task-inline-name">{{ pluginDisplayName }}</span>
+          <div class="task-inline-stats">
+            <span
+              v-if="task.isDryRun"
+              class="task-inline-stat count-dedup"
+              :class="{ 'is-zero': dedupN === 0 }"
+              :title="t('tasks.dryRunSkippedCount', { n: dedupN })"
+            >
+              {{ dedupN }}
+            </span>
+            <template v-else>
+              <span
                 class="task-inline-stat count-success"
                 :class="{ 'is-zero': successN === 0 }"
                 :title="t('tasks.totalCount', { n: successN })"
@@ -41,43 +97,7 @@
               >
                 {{ dedupN }}
               </span>
-            </div>
-          </div>
-        </el-tooltip>
-        <div v-else class="task-inline-inner">
-          <span class="task-inline-name">{{ pluginDisplayName }}</span>
-          <div class="task-inline-stats">
-            <span
-              class="task-inline-stat count-success"
-              :class="{ 'is-zero': successN === 0 }"
-              :title="t('tasks.totalCount', { n: successN })"
-            >
-              {{ successN }}
-            </span>
-            <span class="task-inline-sep" aria-hidden="true">/</span>
-            <span
-              class="task-inline-stat count-failed"
-              :class="{ 'is-zero': failedN === 0 }"
-              :title="t('tasks.failedCount', { n: failedN })"
-            >
-              {{ failedN }}
-            </span>
-            <span class="task-inline-sep" aria-hidden="true">/</span>
-            <span
-              class="task-inline-stat count-deleted"
-              :class="{ 'is-zero': deletedN === 0 }"
-              :title="t('tasks.deletedCount', { n: deletedN })"
-            >
-              {{ deletedN }}
-            </span>
-            <span class="task-inline-sep" aria-hidden="true">/</span>
-            <span
-              class="task-inline-stat count-dedup"
-              :class="{ 'is-zero': dedupN === 0 }"
-              :title="t('tasks.dedupCount', { n: dedupN })"
-            >
-              {{ dedupN }}
-            </span>
+            </template>
           </div>
         </div>
       </div>
@@ -160,48 +180,64 @@
           </el-icon>
         </el-button>
         <div class="task-name">{{ pluginDisplayName }}</div>
+        <el-tag v-if="task.isDryRun" size="small" type="warning" effect="plain">
+          {{ t("tasks.dryRunBadge") }}
+        </el-tag>
       </div>
       <div class="task-counts">
         <span
-          class="count-item count-success"
-          :class="{ 'is-zero': successN === 0 }"
-          :title="t('tasks.totalCount', { n: successN })"
-        >
-          <el-icon>
-            <CircleCheck />
-          </el-icon>
-          <span>{{ successN }}</span>
-        </span>
-        <span
-          class="count-item count-failed"
-          :class="{ 'is-zero': failedN === 0 }"
-          :title="t('tasks.failedCount', { n: failedN })"
-        >
-          <el-icon>
-            <WarningFilled />
-          </el-icon>
-          <span>{{ failedN }}</span>
-        </span>
-        <span
-          class="count-item count-deleted"
-          :class="{ 'is-zero': deletedN === 0 }"
-          :title="t('tasks.deletedCount', { n: deletedN })"
-        >
-          <el-icon>
-            <Delete />
-          </el-icon>
-          <span>{{ deletedN }}</span>
-        </span>
-        <span
+          v-if="task.isDryRun"
           class="count-item count-dedup"
           :class="{ 'is-zero': dedupN === 0 }"
-          :title="t('tasks.dedupCount', { n: dedupN })"
+          :title="t('tasks.dryRunSkippedCount', { n: dedupN })"
         >
           <el-icon>
-            <CopyDocument />
+            <DArrowRight />
           </el-icon>
           <span>{{ dedupN }}</span>
         </span>
+        <template v-else>
+          <span
+            class="count-item count-success"
+            :class="{ 'is-zero': successN === 0 }"
+            :title="t('tasks.totalCount', { n: successN })"
+          >
+            <el-icon>
+              <CircleCheck />
+            </el-icon>
+            <span>{{ successN }}</span>
+          </span>
+          <span
+            class="count-item count-failed"
+            :class="{ 'is-zero': failedN === 0 }"
+            :title="t('tasks.failedCount', { n: failedN })"
+          >
+            <el-icon>
+              <WarningFilled />
+            </el-icon>
+            <span>{{ failedN }}</span>
+          </span>
+          <span
+            class="count-item count-deleted"
+            :class="{ 'is-zero': deletedN === 0 }"
+            :title="t('tasks.deletedCount', { n: deletedN })"
+          >
+            <el-icon>
+              <Delete />
+            </el-icon>
+            <span>{{ deletedN }}</span>
+          </span>
+          <span
+            class="count-item count-dedup"
+            :class="{ 'is-zero': dedupN === 0 }"
+            :title="t('tasks.dedupCount', { n: dedupN })"
+          >
+            <el-icon>
+              <CopyDocument />
+            </el-icon>
+            <span>{{ dedupN }}</span>
+          </span>
+        </template>
       </div>
     </div>
     <div class="task-summary-actions task-summary-actions--stacked">
@@ -260,6 +296,7 @@ import {
   AlarmClock,
   CircleCheck,
   CopyDocument,
+  DArrowRight,
   Delete,
   Document,
   InfoFilled,
@@ -274,6 +311,7 @@ export type TaskSummaryRowTask = {
   pluginId: string;
   runConfigId?: string;
   triggerSource?: string;
+  isDryRun: boolean;
   status: string;
   progress?: number;
   deletedCount?: number;

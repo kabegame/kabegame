@@ -370,8 +370,10 @@
 </template>
 
 <script setup lang="ts">
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { Subscription } from "rxjs";
 import { ArrowLeftBold, ArrowRightBold, DArrowLeft, DArrowRight } from "@kabegame/element-plus-icons";
 import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
@@ -402,7 +404,7 @@ import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
 import { fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { fetchImageById } from "../../utils/imageRow";
-import { subscribeChanges } from "../../services/dataChangeHub";
+import { batchWindow, imagePatches$, on, triggers$ } from "../../services/kbEvents";
 import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
 import { IS_ANDROID } from "@/env.ts";
@@ -832,11 +834,11 @@ const syncPreviewSource = (img: ImageInfo | null) => {
  */
 
 let resolveToken = 0;
-let unsubscribeImageChanges: (() => void) | null = null;
+let imageSubscription: Subscription | null = null;
 
 const stopImageSubscription = () => {
-  unsubscribeImageChanges?.();
-  unsubscribeImageChanges = null;
+  imageSubscription?.unsubscribe();
+  imageSubscription = null;
 };
 
 /** 返回 false 表示已 emit resolve-failed（调用方不必再处理）。 */
@@ -859,37 +861,41 @@ const resolveCurrentImage = async (id: string): Promise<boolean> => {
   }
 };
 
+const PREVIEW_REFRESH_WAIT_MS = 300;
+
 const startImageSubscription = (id: string) => {
   stopImageSubscription();
-  unsubscribeImageChanges = subscribeChanges({
-    waitMs: 300,
-    filter: (batch) =>
-      batch.imagePatches.has(id) ||
-      batch.imageIds.has(id) ||
-      // 收藏 / 隐藏是画册成员变更，走 album-images-change，不在 imageIds 里
-      batch.albumImageIds.has(id) ||
-      batch.favoriteOps.some((op) => op.imageIds.includes(id)) ||
-      // 末项兜 wildcard：范围未知的批次必须当作命中自己，漏了会静默不刷新，允许资源倾斜所以放着，建议打开跟页设置
-      batch.images.size > 0,
-    onBatch: async (batch) => {
-      if (currentId.value !== id) return;
-
-      // 事件只改「当前 id 的内容」，绝不改「当前 id 本身」
-      const fields: Partial<ImageInfo> = { ...batch.imagePatches.get(id) };
-      // favoriteOps 带真实值，按到达顺序取最后一次
-      for (const op of batch.favoriteOps) {
-        if (op.imageIds.includes(id)) fields.favorite = op.favorite;
-      }
-      if (Object.keys(fields).length > 0) {
-        if (resolvedImage.value) resolvedImage.value = { ...resolvedImage.value, ...fields };
-        // 画册成员变更还会影响 isHidden，粗信号仍要重拉；字段 patch 只是让 UI 先到位
-        if (!batch.albumImageIds.has(id) && !batch.imageIds.has(id) && batch.images.size === 0) return;
-      }
-      // 粗信号：重拉一次。确认 0 行才算消失——这里 emit resolve-failed，
-      // 不是跳下一张；跳不跳是上层的事（它有列表和用户意图）。
-      await resolveCurrentImage(id);
-    },
-  });
+  const subscription = new Subscription();
+  // 字段补丁只改「当前 id 的内容」，绝不改「当前 id 本身」
+  subscription.add(
+    imagePatches$(PREVIEW_REFRESH_WAIT_MS, { patchHidden: () => true }).subscribe((patches) => {
+      const fields = patches.get(id);
+      if (currentId.value !== id || !fields || !resolvedImage.value) return;
+      resolvedImage.value = { ...resolvedImage.value, ...fields };
+    }),
+  );
+  // 粗信号：重拉一次。确认 0 行才算消失——这里 emit resolve-failed，
+  // 不是跳下一张；跳不跳是上层的事（它有列表和用户意图）。
+  subscription.add(
+    triggers$([
+      // 字段直接打补丁；删除仅在包含当前图片时重解析。
+      on("images-deleted", (p) => p.imageIds.includes(id)),
+      // 收藏 / 隐藏由 imagePatches$ 补丁保鲜，普通画册成员变化才重解析
+      on(
+        "album-images-added",
+        (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(id),
+      ),
+      on(
+        "album-images-deleted",
+        (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(id),
+      ),
+    ])
+      .pipe(batchWindow(PREVIEW_REFRESH_WAIT_MS, () => true))
+      .subscribe(() => {
+        if (currentId.value === id) void resolveCurrentImage(id);
+      }),
+  );
+  imageSubscription = subscription;
 };
 
 watch(
@@ -915,7 +921,7 @@ watch(
     }
 
     // string 形式：弹窗所有。换了 id 才重新解析 / 重新订阅
-    if (id !== prevId || !unsubscribeImageChanges) {
+    if (id !== prevId || !imageSubscription) {
       resolvedImage.value = null;
       void resolveCurrentImage(id);
       startImageSubscription(id);

@@ -63,6 +63,10 @@
         "provider": {
           "name": "Plugin PathQL provider",
           "desc": "Read PathQL provider definitions and source contributed by a plugin"
+        },
+        "recommended": {
+          "name": "Plugin recommended configs",
+          "desc": "Read recommended configs and current import state"
         }
       }
     }

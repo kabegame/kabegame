@@ -1,51 +1,65 @@
 <template>
   <div class="task-counts-inline">
+    <!-- 空跑复用去重计数表示「跳过」，其余计数恒为 0，只显示这一个 -->
     <span
-      class="count-item count-success"
-      :class="{ 'is-zero': success === 0 }"
-      :title="t('tasks.totalCount', { n: success })"
-    >
-      <el-icon>
-        <CircleCheck />
-      </el-icon>
-      <span>{{ success }}</span>
-    </span>
-    <span
-      class="count-item count-failed"
-      :class="{ 'is-zero': failed === 0 }"
-      :title="t('tasks.failedCount', { n: failed })"
-    >
-      <el-icon>
-        <WarningFilled />
-      </el-icon>
-      <span>{{ failed }}</span>
-    </span>
-    <span
-      class="count-item count-deleted"
-      :class="{ 'is-zero': deleted === 0 }"
-      :title="t('tasks.deletedCount', { n: deleted })"
-    >
-      <el-icon>
-        <Delete />
-      </el-icon>
-      <span>{{ deleted }}</span>
-    </span>
-    <span
+      v-if="dryRun"
       class="count-item count-dedup"
       :class="{ 'is-zero': dedup === 0 }"
-      :title="t('tasks.dedupCount', { n: dedup })"
+      :title="t('tasks.dryRunSkippedCount', { n: dedup })"
     >
       <el-icon>
-        <CopyDocument />
+        <DArrowRight />
       </el-icon>
       <span>{{ dedup }}</span>
     </span>
+    <template v-else>
+      <span
+        class="count-item count-success"
+        :class="{ 'is-zero': success === 0 }"
+        :title="t('tasks.totalCount', { n: success })"
+      >
+        <el-icon>
+          <CircleCheck />
+        </el-icon>
+        <span>{{ success }}</span>
+      </span>
+      <span
+        class="count-item count-failed"
+        :class="{ 'is-zero': failed === 0 }"
+        :title="t('tasks.failedCount', { n: failed })"
+      >
+        <el-icon>
+          <WarningFilled />
+        </el-icon>
+        <span>{{ failed }}</span>
+      </span>
+      <span
+        class="count-item count-deleted"
+        :class="{ 'is-zero': deleted === 0 }"
+        :title="t('tasks.deletedCount', { n: deleted })"
+      >
+        <el-icon>
+          <Delete />
+        </el-icon>
+        <span>{{ deleted }}</span>
+      </span>
+      <span
+        class="count-item count-dedup"
+        :class="{ 'is-zero': dedup === 0 }"
+        :title="t('tasks.dedupCount', { n: dedup })"
+      >
+        <el-icon>
+          <CopyDocument />
+        </el-icon>
+        <span>{{ dedup }}</span>
+      </span>
+    </template>
     <span v-if="duration" class="count-duration">{{ duration }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CircleCheck, CopyDocument, Delete, WarningFilled } from "@kabegame/element-plus-icons";
+import { CircleCheck, CopyDocument, DArrowRight, Delete, WarningFilled } from "@kabegame/element-plus-icons";
 import { useI18n } from "@kabegame/i18n";
 
 defineProps<{
@@ -54,6 +68,7 @@ defineProps<{
   deleted: number;
   dedup: number;
   duration?: string;
+  dryRun?: boolean;
 }>();
 
 const { t } = useI18n();

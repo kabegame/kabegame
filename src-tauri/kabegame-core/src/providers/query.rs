@@ -5,7 +5,7 @@
 //! `TemplateContext`。
 
 use pathql_rs::ProviderRuntime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::storage::gallery::{DateGroup, DayGroup, GalleryMediaTypeCounts, PluginGroup};
@@ -13,9 +13,63 @@ use crate::storage::gallery_time::{gallery_month_groups_from_days, GalleryTimeFi
 use crate::storage::images::{parse_metadata_json, MetadataFull};
 use crate::storage::organize::OrganizeScanRow;
 use crate::storage::tasks::TaskFailedImage;
-use crate::storage::ImageInfo;
+use crate::storage::{ImageInfo, Storage};
 
 use super::init::provider_runtime;
+use super::sql_executor::with_read_snapshot;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum PathqlQuery {
+    List {
+        path: String,
+        #[serde(default, rename = "withCount")]
+        with_count: bool,
+    },
+    Entry {
+        path: String,
+    },
+    Fetch {
+        path: String,
+    },
+    Count {
+        path: String,
+    },
+}
+
+/// 一组查询在同一个读快照里依次执行，按请求顺序返回；任一失败整批失败。
+pub fn query_all(queries: &[PathqlQuery]) -> Result<Vec<Value>, String> {
+    with_read_snapshot(&Storage::global().readers, || {
+        query_all_with_runtime(provider_runtime(), queries)
+    })?
+}
+
+fn query_all_with_runtime(
+    rt: &ProviderRuntime,
+    queries: &[PathqlQuery],
+) -> Result<Vec<Value>, String> {
+    queries
+        .iter()
+        .map(|query| {
+            match query {
+                PathqlQuery::List { path, with_count } => {
+                    serde_json::to_value(query_list_with_runtime(rt, path, *with_count)?)
+                }
+                PathqlQuery::Entry { path } => {
+                    serde_json::to_value(query_entry_with_runtime(rt, path)?)
+                }
+                PathqlQuery::Fetch { path } => {
+                    serde_json::to_value(query_fetch_with_runtime(rt, path)?)
+                }
+                PathqlQuery::Count { path } => serde_json::to_value(
+                    rt.count(&normalize_for_runtime(&trim_provider_path(path)))
+                        .map_err(|e| e.to_string())?,
+                ),
+            }
+            .map_err(|e| e.to_string())
+        })
+        .collect()
+}
 
 /// 把前端传入的 provider 路径段还原为引擎路径段。
 pub fn decode_provider_path_segments(raw: &str) -> String {
@@ -536,6 +590,7 @@ fn json_row_to_image_info(row: &Value) -> Result<ImageInfo, String> {
             .map(|t| t as u64)
             .unwrap_or(0),
         metadata_id: i("metadata_id"),
+        image_metadata_id: i("image_metadata_id"),
         thumbnail_path: s("thumbnail_path").unwrap_or_default(),
         hash: s("hash").unwrap_or_default(),
         favorite: b("is_favorite"),
@@ -566,8 +621,8 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        decode_provider_path_segments, query_entry_with_runtime, query_fetch_with_runtime,
-        query_list_with_runtime, runtime_path,
+        decode_provider_path_segments, query_all_with_runtime, query_entry_with_runtime,
+        query_fetch_with_runtime, query_list_with_runtime, runtime_path, PathqlQuery,
     };
     use crate::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 
@@ -845,6 +900,74 @@ mod tests {
         );
         let rows = query_fetch_with_runtime(runtime, path).unwrap();
         assert_eq!(row_ids(&rows), expected, "fetch mismatch for {path}");
+    }
+
+    #[test]
+    fn pathql_query_deserializes_kinds_and_list_count_default() {
+        let queries: Vec<PathqlQuery> = serde_json::from_value(serde_json::json!([
+            {"kind": "list", "path": "images://gallery"},
+            {"kind": "list", "path": "images://gallery", "withCount": true},
+            {"kind": "list", "path": "images://gallery", "withCount": false},
+            {"kind": "entry", "path": "images://gallery/all"},
+            {"kind": "fetch", "path": "images://gallery/all"},
+            {"kind": "count", "path": "images://gallery/all"}
+        ]))
+        .unwrap();
+        assert!(
+            matches!(&queries[0], PathqlQuery::List { path, with_count: false } if path == "images://gallery")
+        );
+        assert!(matches!(
+            &queries[1],
+            PathqlQuery::List {
+                with_count: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &queries[2],
+            PathqlQuery::List {
+                with_count: false,
+                ..
+            }
+        ));
+        assert!(matches!(&queries[3], PathqlQuery::Entry { .. }));
+        assert!(matches!(&queries[4], PathqlQuery::Fetch { .. }));
+        assert!(matches!(&queries[5], PathqlQuery::Count { .. }));
+        assert!(serde_json::from_value::<PathqlQuery>(
+            serde_json::json!({"kind": "unknown", "path": "x"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn query_all_preserves_order_and_fails_as_a_batch() {
+        let runtime = build_runtime();
+        let queries = vec![
+            PathqlQuery::Count {
+                path: "gallery/all/".into(),
+            },
+            PathqlQuery::Fetch {
+                path: "images://gallery/all/_kb_x10x/1".into(),
+            },
+            PathqlQuery::List {
+                path: "images://gallery/plugin".into(),
+                with_count: true,
+            },
+            PathqlQuery::Entry {
+                path: "images://gallery/all".into(),
+            },
+        ];
+        let results = query_all_with_runtime(&runtime, &queries).unwrap();
+        assert_eq!(results[0], 12);
+        assert_eq!(results[1].as_array().unwrap().len(), 10);
+        assert_eq!(results[2][0]["total"], 5);
+        assert_eq!(results[3]["total"], 12);
+        let mut invalid = queries;
+        invalid.push(PathqlQuery::Count {
+            path: "images://gallery/~any/plugin/p1".into(),
+        });
+        assert!(query_all_with_runtime(&runtime, &invalid).is_err());
+        assert!(query_all_with_runtime(&runtime, &[]).unwrap().is_empty());
     }
 
     #[test]

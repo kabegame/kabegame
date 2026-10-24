@@ -1,0 +1,12 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_mode_provider",
+    "properties": { "mode": { "type": "string", "default": "none", "optional": false } },
+    "query": { "where": "COALESCE(json_extract(run_configs.schedule_spec, '$.mode'), 'none') = ${properties.mode}" },
+    "resolve": { ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

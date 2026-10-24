@@ -337,11 +337,8 @@ fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
                     .update_image_last_set_wallpaper_at(&ids[0], now)
                     .is_ok()
                 {
-                    GlobalEmitter::global().emit_image_changed_uniform(
-                        &ids,
-                        serde_json::json!({ "lastSetWallpaperAt": now }),
-                    );
-                    GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
+                    GlobalEmitter::global()
+                        .emit_image_fields(&ids, serde_json::json!({ "lastSetWallpaperAt": now }));
                 }
             }
             IpcResponse::ok("updated")

@@ -180,7 +180,7 @@ const confirmInstall = async () => {
     await invoke("install_from_store", { sourceId, pluginId: targetPluginId });
     installConfirmDialog.close();
     ElMessage.success(successMsg);
-    // plugin-added / plugin-updated 事件会自动刷新 pluginStore；保留当前商店详情与滚动位置。
+    // plugin-added / plugin-changed 事件会自动刷新 pluginStore；保留当前商店详情与滚动位置。
   } catch {
     ElMessage.error(t("plugins.installUpdateFailed"));
   } finally {

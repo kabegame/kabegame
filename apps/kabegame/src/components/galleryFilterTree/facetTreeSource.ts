@@ -1,7 +1,17 @@
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
+import { queryUsesSearchMode } from "@/utils/galleryQuery";
+import { addedTrigger, patchTriggers, hiddenTrigger, type ImageViewState } from "@/services/kbEvents";
 import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
 import type { usePluginStore } from "@/stores/plugins";
-import { GALLERY_ASPECT_BUCKETS, type GalleryBrowseDimension, type GalleryFilter } from "@/utils/galleryPath";
+import {
+  parseQueryBody,
+  queryFromFilterSet,
+  removeFilterDimension,
+  GALLERY_ASPECT_BUCKETS,
+  type GalleryBrowseDimension,
+  type GalleryFilter,
+} from "@/utils/galleryPath";
 import { buildTimeMenuScopeLabels, type TimeMenuScopeLabels } from "@/utils/galleryTimeFilterMenu";
 import {
   dateFilterSegment,
@@ -9,13 +19,13 @@ import {
   isProviderPlain,
   isSameGalleryFilter,
   joinProviderPath,
-  listProviderDirs,
-  listProviderDirsPure,
   normalizeProviderPath,
   type GalleryFilterTreeContext,
   type ProviderChildDir,
 } from "./context";
-import type { TreeDataSource } from "@/components/tree/types";
+import { withGalleryPrefix } from "@/utils/path";
+import { on, albumPatchTriggers, type AlbumImagesPayload } from "@/services/kbEvents/events";
+import type { TreeQuerySource } from "@/components/tree/types";
 
 /**
  * 画廊过滤树的节点数据：旧特化组件（Date/DateChild/MediaType/Size/
@@ -70,9 +80,8 @@ export interface GalleryFacetSourceDeps {
 }
 
 export interface GalleryFacetSource {
-  dataSource: TreeDataSource<FacetNode>;
+  dataSource: TreeQuerySource<FacetNode>;
   /** 顶层即该维度的子项；没有维度根，也没有「任意」行（清除走 chip 叉号）。 */
-  roots(dimension: GalleryBrowseDimension): Promise<FacetNode[]>;
   descriptor(node: FacetNode): FacetDescriptor;
 }
 
@@ -86,11 +95,52 @@ export function createGalleryFacetSource(
 ): GalleryFacetSource {
   const { t, pluginStore } = deps;
 
-  // diff 模式走纯净缓存；侧栏每层只列举一次，计数直接读 meta.count。
+  // 侧栏的前缀包含根归属与追加高级查询；当前维度要从简单条件中扣掉（减格计数）。
+  const contextQuery = computed(() => {
+    const body = normalizeProviderPath(ctx.prefix.value)
+      .replace(/^images:\/\//, "")
+      .replace(/^gallery(?:\/|$)/, "")
+      .replace(/^hide(?:\/|$)/, "")
+      .replace(/^(?:album|album-tree|task|surf)\/[^/]+(?:\/|$)/, "")
+      .replace(/^no-album(?:\/_kb_fc)?(?:\/|$)/, "");
+    return parseQueryBody(body.split("/").filter(Boolean));
+  });
+  const view = (): ImageViewState => ({
+    query: [
+      ...(contextQuery.value ?? []),
+      ...queryFromFilterSet(
+        ctx.dimension.value ? removeFilterDimension(ctx.filters.value, ctx.dimension.value) : ctx.filters.value,
+      ),
+    ],
+    sort: { field: "by-time", desc: false },
+    hide: /(^|\/)hide(?:\/|$)/.test(ctx.prefix.value),
+  });
+
   const deltaMode = computed(() => !!ctx.countBaseline);
   const listPathForSegment = (segment: string) => (ctx.listPathForSegment ?? ctx.pathForSegment)(segment);
-  const listDirs = (path: string) =>
-    deltaMode.value ? listProviderDirsPure(path) : listProviderDirs(joinProviderPath(path, "_kb_co"), false);
+
+  function hasAlbumSensitiveContext() {
+    const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
+    return (
+      contextQuery.value === null ||
+      /(^|\/)(?:album|album-tree|no-album)(?:\/|$)/.test(path) ||
+      queryUsesSearchMode(view().query, "label")
+    );
+  }
+
+  function memberAffectsContext(p: AlbumImagesPayload) {
+    if (contextQuery.value === null || queryUsesSearchMode(view().query, "label")) return true;
+    // 隐藏由 hiddenTrigger 按 hide 开关处理；收藏只影响收藏 / 无画册上下文。
+    if (p.albumId === HIDDEN_ALBUM_ID) return false;
+    if (p.albumId === FAVORITE_ALBUM_ID) {
+      const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
+      return (
+        /(^|\/)no-album(?:\/|$)/.test(path) ||
+        new RegExp(`(^|/)(?:album|album-tree)/${FAVORITE_ALBUM_ID}(?:/|$)`).test(path)
+      );
+    }
+    return hasAlbumSensitiveContext();
+  }
 
   function groupedCount(entry: ProviderChildDir): number | null {
     const count = entry.meta?.count;
@@ -230,16 +280,14 @@ export function createGalleryFacetSource(
   }
 
   /** 列出某维度的第一层，即面板顶层。 */
-  async function listDimension(dimension: GalleryBrowseDimension): Promise<FacetNode[]> {
+  function parseDimension(dimension: GalleryBrowseDimension, entries: ProviderChildDir[]): FacetNode[] {
     switch (dimension) {
       case "date": {
-        const entries = await listDirs(listPathForSegment("date"));
         return entries
           .filter((entry) => /^(\d{4})y$/.test(entry.name))
           .map((entry) => ({ kind: "date", segments: [entry.name], count: groupedCount(entry) }));
       }
       case "mediaType": {
-        const entries = await listDirs(listPathForSegment("media-type"));
         return entries
           .filter((entry) => entry.name === "image" || entry.name === "video")
           .map((entry) => ({
@@ -249,15 +297,12 @@ export function createGalleryFacetSource(
           }));
       }
       case "size": {
-        const entries = await listDirs(listPathForSegment("size"));
         return entries.map((entry) => ({ kind: "size", range: entry.name, count: groupedCount(entry) }));
       }
       case "aspect": {
-        const entries = await listDirs(listPathForSegment("aspect"));
         return entries.map((entry) => ({ kind: "aspect", range: entry.name, count: groupedCount(entry) }));
       }
       case "plugin": {
-        const entries = await listDirs(listPathForSegment("plugin"));
         return entries.map((entry) => ({
           kind: "plugin",
           pluginId: entry.name,
@@ -268,7 +313,7 @@ export function createGalleryFacetSource(
     }
   }
 
-  const dataSource: TreeDataSource<FacetNode> = {
+  const dataSource: TreeQuerySource<FacetNode> = {
     getKey(node) {
       switch (node.kind) {
         case "date":
@@ -304,63 +349,133 @@ export function createGalleryFacetSource(
           return !node.isLeaf;
       }
     },
-    async getChildren(node): Promise<FacetNode[]> {
-      try {
+    page(branch, page) {
+      if (page !== 1) return null;
+      let segment: string;
+      if (branch.kind === "section") {
+        const segments: Record<GalleryBrowseDimension, string> = {
+          date: "date",
+          mediaType: "media-type",
+          size: "size",
+          aspect: "aspect",
+          plugin: "plugin",
+        };
+        segment = segments[branch.sectionId as GalleryBrowseDimension];
+      } else {
+        const node = branch.parent;
         switch (node.kind) {
-          case "date": {
-            const pattern = dateChildPattern(node.segments);
-            const entries = await listDirs(listPathForSegment(["date", ...node.segments].join("/")));
-            return entries
-              .filter((entry) => !pattern || pattern.test(entry.name))
-              .map((entry) => ({
-                kind: "date",
-                segments: [...node.segments, entry.name],
-                count: groupedCount(entry),
-              }));
-          }
-          case "media-kind": {
-            const entries = await listDirs(listPathForSegment(`media-type/${node.mediaKind}`));
-            return entries.map((entry) => ({
-              kind: "media-format",
-              mediaKind: node.mediaKind,
-              format: entry.name,
-              count: groupedCount(entry),
-            }));
-          }
-          case "plugin": {
-            const entries = await listDirs(listPathForSegment(`plugin/${encodeURIComponent(node.pluginId)}/extend`));
-            return entries.map((entry) => ({
-              kind: "plugin-extend",
-              pluginId: node.pluginId,
-              name: entry.name,
-              extendPath: entry.name,
-              isLeaf: isProviderLeaf(entry),
-              isPlain: isProviderPlain(entry),
-              count: extensionCount(entry),
-            }));
-          }
-          case "plugin-extend": {
-            if (node.isLeaf) return [];
-            const entries = await listDirs(listPathForSegment(pluginExtendSegment(node)));
-            return entries.map((entry) => ({
-              kind: "plugin-extend",
-              pluginId: node.pluginId,
-              name: entry.name,
-              extendPath: joinProviderPath(node.extendPath, entry.name),
-              isLeaf: isProviderLeaf(entry),
-              isPlain: isProviderPlain(entry),
-              count: extensionCount(entry),
-            }));
-          }
+          case "date":
+            segment = ["date", ...node.segments].join("/");
+            break;
+          case "media-kind":
+            segment = `media-type/${node.mediaKind}`;
+            break;
+          case "plugin":
+            segment = `plugin/${encodeURIComponent(node.pluginId)}/extend`;
+            break;
+          case "plugin-extend":
+            if (node.isLeaf) return null;
+            segment = pluginExtendSegment(node);
+            break;
           default:
-            return [];
+            return null;
         }
-      } catch {
-        // 旧实现：枚举失败 → 空子集 + loaded（不再自动重试）
-        return [];
       }
+      const path = listPathForSegment(segment);
+      return {
+        queries: [
+          {
+            kind: "list",
+            // 侧栏与高级候选都列 `_kb_co`；两者只差路径是否带草稿（listPathForSegment 已处理）
+            path: withGalleryPrefix(joinProviderPath(path, "_kb_co")),
+            withCount: false,
+          },
+        ],
+        parse(results) {
+          const entries = (Array.isArray(results[0]) ? results[0] : []).filter(
+            (entry): entry is ProviderChildDir => !!entry && typeof entry.name === "string" && !!entry.name.trim(),
+          );
+          return branch.kind === "section"
+            ? parseDimension(branch.sectionId as GalleryBrowseDimension, entries)
+            : parseChildren(branch.parent, entries);
+        },
+      };
+    },
+    refreshOn(branch) {
+      const pluginFacet =
+        branch.kind === "section"
+          ? branch.sectionId === "plugin"
+          : branch.parent.kind === "plugin" || branch.parent.kind === "plugin-extend";
+      // 插件分面自身也依赖分组键与扩展 metadata，不能只看减格后的查询条件。
+      const extra = pluginFacet ? { pluginId: () => true, metadataId: () => true } : undefined;
+      // 无法解析上下文时保留刷新，不能把未知条件当成没有依赖。
+      const imageTriggers = [addedTrigger(view), ...patchTriggers(view, extra)].map((trigger) => ({
+        ...trigger,
+        relevant: (payload: unknown) => contextQuery.value === null || trigger.relevant(payload),
+      }));
+      return deltaMode.value
+        ? []
+        : [
+            ...imageTriggers,
+            on("images-deleted"),
+            ...hiddenTrigger(view),
+            on("album-images-added", memberAffectsContext),
+            on("album-images-deleted", (p) => !p.imagesDeleted && memberAffectsContext(p)),
+            ...albumPatchTriggers((_patch, kinds) => hasAlbumSensitiveContext() && kinds.structure),
+            on("album-moved", () => hasAlbumSensitiveContext()),
+            on("albums-added", () => hasAlbumSensitiveContext()),
+            on("albums-deleted", () => hasAlbumSensitiveContext()),
+          ];
     },
   };
+
+  function parseChildren(node: FacetNode, entries: ProviderChildDir[]): FacetNode[] {
+    switch (node.kind) {
+      case "date": {
+        const pattern = dateChildPattern(node.segments);
+        return entries
+          .filter((entry) => !pattern || pattern.test(entry.name))
+          .map((entry) => ({
+            kind: "date",
+            segments: [...node.segments, entry.name],
+            count: groupedCount(entry),
+          }));
+      }
+      case "media-kind": {
+        return entries.map((entry) => ({
+          kind: "media-format",
+          mediaKind: node.mediaKind,
+          format: entry.name,
+          count: groupedCount(entry),
+        }));
+      }
+      case "plugin": {
+        return entries.map((entry) => ({
+          kind: "plugin-extend",
+          pluginId: node.pluginId,
+          name: entry.name,
+          extendPath: entry.name,
+          isLeaf: isProviderLeaf(entry),
+          isPlain: isProviderPlain(entry),
+          count: extensionCount(entry),
+        }));
+      }
+      case "plugin-extend": {
+        if (node.isLeaf) return [];
+        return entries.map((entry) => ({
+          kind: "plugin-extend",
+          pluginId: node.pluginId,
+          name: entry.name,
+          extendPath: joinProviderPath(node.extendPath, entry.name),
+          isLeaf: isProviderLeaf(entry),
+          isPlain: isProviderPlain(entry),
+          count: extensionCount(entry),
+        }));
+      }
+      default:
+        return [];
+    }
+  }
 
   function descriptor(node: FacetNode): FacetDescriptor {
     const selectable = !(node.kind === "plugin-extend" && node.isPlain);
@@ -377,14 +492,6 @@ export function createGalleryFacetSource(
 
   return {
     dataSource,
-    async roots(dimension) {
-      try {
-        return await listDimension(dimension);
-      } catch {
-        // 与 getChildren 一致：枚举失败 → 空列表
-        return [];
-      }
-    },
     descriptor,
   };
 }

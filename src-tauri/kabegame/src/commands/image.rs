@@ -7,7 +7,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Runtime};
 
 use kabegame_core::commands;
-use kabegame_core::commands::view::{RowsSnapshot, TotalSnapshot};
+use kabegame_core::commands::view::TotalSnapshot;
+use kabegame_core::providers::PathqlQuery;
 
 #[tauri::command]
 pub async fn pathql_entry(path: String) -> Result<Value, String> {
@@ -25,13 +26,13 @@ pub async fn pathql_fetch(path: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn pathql_view(path: String) -> Result<RowsSnapshot, String> {
-    commands::view::pathql_view(path).await
+pub async fn pathql_count(path: String) -> Result<TotalSnapshot, String> {
+    commands::view::pathql_count(path).await
 }
 
 #[tauri::command]
-pub async fn pathql_count(path: String) -> Result<TotalSnapshot, String> {
-    commands::view::pathql_count(path).await
+pub async fn pathql_all(queries: Vec<PathqlQuery>) -> Result<Vec<Value>, String> {
+    commands::image::pathql_all(queries).await
 }
 
 #[tauri::command]
@@ -86,19 +87,13 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn batch_delete_images(
-    image_ids: Vec<String>,
-    view: Option<String>,
-) -> Result<Value, String> {
-    commands::image::batch_delete_images(image_ids, view).await
+pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
+    commands::image::batch_delete_images(image_ids).await
 }
 
 #[tauri::command]
-pub async fn batch_remove_images(
-    image_ids: Vec<String>,
-    view: Option<String>,
-) -> Result<Value, String> {
-    commands::image::batch_remove_images(image_ids, view).await
+pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
+    commands::image::batch_remove_images(image_ids).await
 }
 
 #[tauri::command]

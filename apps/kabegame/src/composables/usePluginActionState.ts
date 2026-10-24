@@ -25,7 +25,7 @@ export function usePluginActionState(
 ) {
   const pluginStore = usePluginStore();
 
-  /** store 里同 id 的已安装插件（plugin-added/updated/deleted 事件驱动保鲜） */
+  /** store 里同 id 的已安装插件（plugin-added / plugin-changed / plugin-deleted 事件驱动保鲜） */
   const installedMatch = computed(() => {
     const id = toValue(plugin)?.id;
     return id ? (pluginStore.plugins.find((p) => p.id === id) ?? null) : null;

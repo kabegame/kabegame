@@ -222,7 +222,8 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 
 测试 id 可以用 `--id` 自己指定；连续改连续跑时，可以加 `--no-deploy` 跳过重新打包。
 `--var` 的 key 必须是 `kbConfig` 里的 key，写错时 CLI 会列出可用项。配置要尽量缩到一两页，
-验证的是链路，不是把整站抓下来。只想看配置解析结果，就把 `--dry-run` 透传给 `plugin run`。
+验证的是链路，不是把整站抓下来。只想看配置解析结果，就把 `--print-config` 透传给 `plugin run`；
+需要完整执行插件逻辑但不下载或入库时，使用 `--dry-run`。
 
 **验证门槛**（看摘要）：
 - `任务：completed` 或者限时取消，且没有 `✗ 进程崩溃`；

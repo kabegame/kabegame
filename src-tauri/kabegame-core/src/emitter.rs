@@ -6,12 +6,14 @@
 //! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
 use crate::crawler::downloader::DownloadState;
+pub use crate::ipc::events::AlbumFieldPatch;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
-use crate::ipc::events::ImagePatch;
+use crate::ipc::events::{DeletedAlbum, ImageFieldPatch};
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
 use crate::storage::tasks::TaskFailedImage;
+use crate::storage::ImageInfo;
 #[cfg(feature = "ipc-server")]
 use crate::storage::Storage;
 #[cfg(feature = "ipc-server")]
@@ -19,18 +21,12 @@ use serde_json::json;
 #[cfg(feature = "ipc-server")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "ipc-server")]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(feature = "ipc-server")]
 static CHANGE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(feature = "ipc-server")]
-static HELD_VIEW_EVENTS: Mutex<(usize, Vec<Arc<AppEvent>>)> = Mutex::new((0, Vec::new()));
-
-/// 持有期间，视图相关事件仍分配序号，但延迟到最后一个守卫析构时广播。
-pub struct EventHold(());
-
-/// 返回最近一次已发出的图片或画册图片变更序号。
+/// 返回最近一次已分配的视图变更序号（图片、画册成员与运行配置）。
 #[cfg(feature = "ipc-server")]
 pub fn current_change_seq() -> u64 {
     CHANGE_SEQ.load(Ordering::SeqCst)
@@ -54,34 +50,7 @@ pub(crate) fn next_change_seq() -> u64 {
 
 #[cfg(feature = "ipc-server")]
 pub(crate) fn dispatch_view_event(event: Arc<AppEvent>) {
-    let mut held = HELD_VIEW_EVENTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if held.0 > 0 {
-        held.1.push(event);
-    } else {
-        EventBroadcaster::global().broadcast(event);
-    }
-}
-
-#[cfg(feature = "ipc-server")]
-impl Drop for EventHold {
-    fn drop(&mut self) {
-        let mut held = HELD_VIEW_EVENTS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        held.0 = held.0.saturating_sub(1);
-        if held.0 == 0 {
-            for event in held.1.drain(..) {
-                EventBroadcaster::global().broadcast(event);
-            }
-        }
-    }
-}
-
-#[cfg(not(feature = "ipc-server"))]
-impl Drop for EventHold {
-    fn drop(&mut self) {}
+    EventBroadcaster::global().broadcast(event);
 }
 
 // ==================== IPC 实现 ====================
@@ -121,14 +90,6 @@ impl GlobalEmitter {
     /// 如果已初始化返回 Some，否则返回 None
     pub fn try_global() -> Option<&'static GlobalEmitter> {
         GLOBAL_EMITTER.get()
-    }
-
-    pub fn hold(&self) -> EventHold {
-        let mut held = HELD_VIEW_EVENTS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        held.0 += 1;
-        EventHold(())
     }
 
     /// 发送任务日志事件
@@ -261,49 +222,66 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送 `ImageInfo` 字段绝对值快照。
-    pub fn emit_image_changed(&self, patches: Vec<ImagePatch>) {
-        if patches.is_empty() {
-            return;
+    /// 字段变化唯一出口：按 id 合并，后到字段覆盖；空字段丢弃，按图片数量分流。
+    pub fn emit_image_patches(&self, patches: Vec<ImageFieldPatch>) {
+        let mut merged =
+            std::collections::BTreeMap::<String, serde_json::Map<String, serde_json::Value>>::new();
+        for patch in patches {
+            merged.entry(patch.id).or_default().extend(patch.fields);
         }
-        let seq = next_change_seq();
-        let event = std::sync::Arc::new(AppEvent::ImageChanged { seq, patches });
-        dispatch_view_event(event);
+        let mut patches: Vec<_> = merged
+            .into_iter()
+            .filter(|(_, fields)| !fields.is_empty())
+            .map(|(id, fields)| ImageFieldPatch { id, fields })
+            .collect();
+        let event = match patches.len() {
+            0 => return,
+            1 => AppEvent::ImageChanged {
+                seq: next_change_seq(),
+                patch: patches.pop().unwrap(),
+            },
+            _ => AppEvent::ImagesChange {
+                seq: next_change_seq(),
+                patches,
+            },
+        };
+        dispatch_view_event(Arc::new(event));
     }
 
-    /// 发送一批图片共享同一份字段绝对值快照的增量事件。
-    pub fn emit_image_changed_uniform(&self, image_ids: &[String], diff: serde_json::Value) {
+    /// 一组图片共享字段，展开为逐图补丁。
+    pub fn emit_image_fields(&self, image_ids: &[String], fields: serde_json::Value) {
+        let Some(fields) = fields.as_object() else {
+            return;
+        };
+        self.emit_image_patches(
+            image_ids
+                .iter()
+                .map(|id| ImageFieldPatch {
+                    id: id.clone(),
+                    fields: fields.clone(),
+                })
+                .collect(),
+        );
+    }
+
+    pub fn emit_images_added(&self, images: &[ImageInfo]) {
+        if images.is_empty() {
+            return;
+        }
+        dispatch_view_event(Arc::new(AppEvent::ImagesAdded {
+            seq: next_change_seq(),
+            images: images.to_vec(),
+        }));
+    }
+
+    pub fn emit_images_deleted(&self, image_ids: &[String]) {
         if image_ids.is_empty() {
             return;
         }
-        self.emit_image_changed(vec![ImagePatch {
+        dispatch_view_event(Arc::new(AppEvent::ImagesDeleted {
+            seq: next_change_seq(),
             image_ids: image_ids.to_vec(),
-            diff,
-        }]);
-    }
-
-    /// 发送 `images` 表变更事件（reason: `add` | `delete` | `change`）
-    pub fn emit_images_change(
-        &self,
-        reason: &str,
-        image_ids: &[String],
-        task_ids: Option<&[String]>,
-        surf_record_ids: Option<&[String]>,
-        plugin_ids: Option<&[String]>,
-    ) {
-        let seq = next_change_seq();
-        let opt_vec = |s: Option<&[String]>| {
-            s.and_then(|v| if v.is_empty() { None } else { Some(v.to_vec()) })
-        };
-        let event = std::sync::Arc::new(AppEvent::ImagesChange {
-            seq,
-            reason: reason.to_string(),
-            image_ids: image_ids.to_vec(),
-            task_ids: opt_vec(task_ids),
-            surf_record_ids: opt_vec(surf_record_ids),
-            plugin_ids: opt_vec(plugin_ids),
-        });
-        dispatch_view_event(event);
+        }));
     }
 
     /// 畅游记录新增（完整 record JSON）
@@ -406,52 +384,74 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送画册属性变更事件（重命名、移动等；`changes` 为增量 JSON）
-    pub fn emit_album_changed(&self, album_id: &str, changes: serde_json::Value) {
-        let seq = next_change_seq();
-        let event = std::sync::Arc::new(AppEvent::AlbumChanged {
-            seq,
-            album_id: album_id.to_string(),
-            changes,
-        });
-        EventBroadcaster::global().broadcast(event);
+    /// 画册字段按 id 合并，空补丁不发，位置字段不得混入补丁。
+    pub fn emit_album_patches(&self, patches: Vec<AlbumFieldPatch>) {
+        let mut merged =
+            std::collections::BTreeMap::<String, serde_json::Map<String, serde_json::Value>>::new();
+        for mut patch in patches {
+            patch.fields.remove("parentId");
+            patch.fields.remove("ancestorPath");
+            patch.fields.remove("oldAncestorPath");
+            merged.entry(patch.id).or_default().extend(patch.fields);
+        }
+        let mut patches: Vec<_> = merged
+            .into_iter()
+            .filter(|(_, fields)| !fields.is_empty())
+            .map(|(id, fields)| AlbumFieldPatch { id, fields })
+            .collect();
+        let event = match patches.len() {
+            0 => return,
+            1 => AppEvent::AlbumChanged {
+                seq: next_change_seq(),
+                patch: patches.pop().unwrap(),
+            },
+            _ => AppEvent::AlbumsChange {
+                seq: next_change_seq(),
+                patches,
+            },
+        };
+        dispatch_view_event(Arc::new(event));
     }
 
-    /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
-    pub fn emit_album_added(&self, album: &crate::storage::Album) {
-        let event = std::sync::Arc::new(AppEvent::AlbumAdded {
-            id: album.id.clone(),
-            name: album.name.clone(),
-            created_at: album.created_at,
-            parent_id: album.parent_id.clone(),
-            album_type: album.kind.clone(),
-            sync_folder: album.sync_folder.clone(),
-            folder_status: album.folder_status.clone(),
-            sync_mode: album.sync_mode.clone(),
-            ancestor_path: album.ancestor_path.clone(),
-            label_key: album.label_key.clone(),
-            label_path: album.label_path.clone(),
-        });
-        EventBroadcaster::global().broadcast(event);
+    pub fn emit_albums_added(&self, albums: &[crate::storage::Album]) {
+        if !albums.is_empty() {
+            dispatch_view_event(Arc::new(AppEvent::AlbumsAdded {
+                seq: next_change_seq(),
+                albums: albums.to_vec(),
+            }));
+        }
     }
 
-    /// 发送画册删除事件（底层 DB 删除后由 storage 调用）
-    pub fn emit_album_deleted(&self, album: &crate::storage::Album) {
-        let event = std::sync::Arc::new(AppEvent::AlbumDeleted {
-            album_id: album.id.clone(),
-            parent_id: album.parent_id.clone(),
-            ancestor_path: album.ancestor_path.clone(),
-        });
-        EventBroadcaster::global().broadcast(event);
+    pub fn emit_albums_deleted(&self, albums: &[DeletedAlbum]) {
+        if !albums.is_empty() {
+            dispatch_view_event(Arc::new(AppEvent::AlbumsDeleted {
+                seq: next_change_seq(),
+                albums: albums.to_vec(),
+            }));
+        }
+    }
+
+    pub fn emit_album_moved(&self, id: &str, old: &str, new: &str) {
+        if old != new {
+            dispatch_view_event(Arc::new(AppEvent::AlbumMoved {
+                seq: next_change_seq(),
+                id: id.to_string(),
+                old_ancestor_path: old.to_string(),
+                new_ancestor_path: new.to_string(),
+            }));
+        }
     }
 
     /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
-    pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) {
+    pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) -> u64 {
+        let seq = next_change_seq();
         let event = std::sync::Arc::new(AppEvent::AutoConfigChange {
+            seq,
             reason: reason.to_string(),
             config_id: config_id.to_string(),
         });
-        EventBroadcaster::global().broadcast(event);
+        dispatch_view_event(event);
+        seq
     }
 
     /// 插件新增安装（首次安装，完整 Plugin JSON）
@@ -470,12 +470,13 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 插件更新/重装（同 ID 覆盖安装，完整 Plugin JSON）
-    pub fn emit_plugin_updated(&self, plugin: &serde_json::Value) {
-        let event = std::sync::Arc::new(AppEvent::PluginUpdated {
-            plugin: plugin.clone(),
+    /// 插件变更：完整插件或推荐配置导入态 patch，与配置事件受同一 hold 约束。
+    pub fn emit_plugin_changed(&self, plugin_id: &str, changes: serde_json::Value) {
+        let event = std::sync::Arc::new(AppEvent::PluginChanged {
+            plugin_id: plugin_id.to_string(),
+            changes,
         });
-        EventBroadcaster::global().broadcast(event);
+        dispatch_view_event(event);
     }
 
     /// 从存储读取任务并发送 `TaskChanged`，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
@@ -530,10 +531,6 @@ impl GlobalEmitter {
         Some(Self::global())
     }
 
-    pub fn hold(&self) -> EventHold {
-        EventHold(())
-    }
-
     pub fn emit_task_log(&self, _task_id: &str, _level: &str, _message: &str) {}
 
     pub fn emit_download_state(
@@ -585,19 +582,10 @@ impl GlobalEmitter {
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
-    pub fn emit_image_changed(&self, _patches: Vec<ImagePatch>) {}
-
-    pub fn emit_image_changed_uniform(&self, _image_ids: &[String], _diff: serde_json::Value) {}
-
-    pub fn emit_images_change(
-        &self,
-        _reason: &str,
-        _image_ids: &[String],
-        _task_ids: Option<&[String]>,
-        _surf_record_ids: Option<&[String]>,
-        _plugin_ids: Option<&[String]>,
-    ) {
-    }
+    pub fn emit_image_patches(&self, _patches: Vec<ImageFieldPatch>) {}
+    pub fn emit_image_fields(&self, _image_ids: &[String], _fields: serde_json::Value) {}
+    pub fn emit_images_added(&self, _images: &[ImageInfo]) {}
+    pub fn emit_images_deleted(&self, _image_ids: &[String]) {}
 
     pub fn emit_surf_record_added(&self, _record: serde_json::Value) {}
 
@@ -625,13 +613,14 @@ impl GlobalEmitter {
 
     pub fn emit_app_shutdown(&self, _reason: &str) {}
 
-    pub fn emit_album_changed(&self, _album_id: &str, _changes: serde_json::Value) {}
+    pub fn emit_album_patches(&self, _patches: Vec<AlbumFieldPatch>) {}
+    pub fn emit_albums_added(&self, _albums: &[crate::storage::Album]) {}
+    pub fn emit_albums_deleted(&self, _albums: &[DeletedAlbum]) {}
+    pub fn emit_album_moved(&self, _id: &str, _old: &str, _new: &str) {}
 
-    pub fn emit_album_added(&self, _album: &crate::storage::Album) {}
-
-    pub fn emit_album_deleted(&self, _album: &crate::storage::Album) {}
-
-    pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) {}
+    pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) -> u64 {
+        0
+    }
 
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 
@@ -641,5 +630,5 @@ impl GlobalEmitter {
 
     pub fn emit_plugin_deleted(&self, _plugin_id: &str) {}
 
-    pub fn emit_plugin_updated(&self, _plugin: &serde_json::Value) {}
+    pub fn emit_plugin_changed(&self, _plugin_id: &str, _changes: serde_json::Value) {}
 }

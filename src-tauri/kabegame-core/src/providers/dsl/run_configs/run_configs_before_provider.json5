@@ -1,0 +1,19 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_before_provider",
+    "properties": {
+        "created_at": { "type": "number", "default": 0, "optional": false },
+        "id": { "type": "string", "default": "", "optional": false }
+    },
+    "query": {
+        "where": "(run_configs.created_at < ${properties.created_at} OR (run_configs.created_at = ${properties.created_at} AND run_configs.id < ${properties.id}))"
+    },
+    "resolve": {
+        ".*": {
+            "delegate": { "provider": "run_configs_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

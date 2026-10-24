@@ -1,12 +1,12 @@
 <template>
-  <span v-if="tasks.length === 0" class="config-no-tasks">{{ t("autoConfig.noRelatedTasks") }}</span>
+  <!-- 首屏在途：先留白，超过延迟才转圈，快速返回时不闪「暂无」 -->
+  <div v-if="tasks.length === 0 && loading" v-loading="showLoading" class="h-10" />
+  <span v-else-if="tasks.length === 0" class="config-no-tasks">{{ t("autoConfig.noRelatedTasks") }}</span>
   <template v-else>
     <div
       v-bind="containerProps"
-      class="config-tasks-scroll config-tasks-scroll--virtual"
-      :class="
-        props.variant === 'android' ? 'config-tasks-scroll--virtual--android' : 'config-tasks-scroll--virtual--desktop'
-      "
+      class="config-tasks-scroll config-tasks-scroll--virtual config-tasks-scroll--virtual--desktop"
+      @scroll="handleScroll"
     >
       <div v-bind="wrapperProps">
         <div v-for="item in virtualList" :key="item.data.id" class="config-task-virtual-item">
@@ -33,23 +33,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useModal } from "@/composables/useModal";
 import { useVirtualList } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
-import { useCrawlerStore } from "@/stores/crawler";
 import TaskSummaryRow from "@/components/task/TaskSummaryRow.vue";
 import TaskParamsDialog from "@/components/task/TaskParamsDialog.vue";
 import type { CrawlTask } from "@/stores/crawler";
+import { usePagedTaskList } from "@/composables/usePagedTaskList";
+import { encodeSeg } from "@kabegame/pathql-client";
 
-const props = withDefaults(
-  defineProps<{
-    configId: string;
-    /** 编译期布局：安卓纵向列表用较高任务区，桌面横向用较矮任务区（替代媒体查询） */
-    variant?: "android" | "desktop";
-  }>(),
-  { variant: "desktop" },
-);
+const props = defineProps<{ configId: string }>();
 
 const emit = defineEmits<{
   (e: "open-task-images", taskId: string): void;
@@ -57,21 +51,17 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const crawlerStore = useCrawlerStore();
-
-const tasks = computed(() => {
-  const id = props.configId;
-  const list: CrawlTask[] = [];
-  for (const task of crawlerStore.tasks) {
-    if (task.runConfigId === id) list.push(task);
-  }
-  list.sort((a, b) => {
-    const ta = Number(a.startTime ?? a.endTime ?? 0);
-    const tb = Number(b.startTime ?? b.endTime ?? 0);
-    return tb - ta;
-  });
-  return list;
+const {
+  items: tasks,
+  hasMore,
+  loading,
+  showLoading,
+  start,
+  loadMore,
+} = usePagedTaskList({
+  basePath: () => `run_config/${encodeSeg(props.configId)}/`,
 });
+onMounted(() => void start());
 
 /** 单行 TaskSummaryRow（inline + 多枚操作图标 + 状态 tag）固定高度，须与 itemHeight 一致 */
 const RELATED_TASK_ROW_PX = 60;
@@ -92,6 +82,12 @@ function openRunParams(task: CrawlTask) {
   runParamsTask.value = task;
   runParamsDialog.open();
 }
+
+function handleScroll(event: Event) {
+  const element = event.target as HTMLElement;
+  if (loading.value || !hasMore.value) return;
+  if (element.scrollTop + element.clientHeight >= element.scrollHeight - 40) void loadMore();
+}
 </script>
 
 <style scoped lang="scss">
@@ -103,11 +99,6 @@ function openRunParams(task: CrawlTask) {
 .config-tasks-scroll--virtual {
   width: 100%;
   overflow-x: auto;
-}
-
-.config-tasks-scroll--virtual--android {
-  height: 200px;
-  max-height: 200px;
 }
 
 .config-tasks-scroll--virtual--desktop {

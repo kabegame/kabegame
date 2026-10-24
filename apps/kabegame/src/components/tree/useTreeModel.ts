@@ -1,47 +1,42 @@
-import { shallowReactive, shallowRef, watch, type Ref, type ShallowRef } from "vue";
-import type { TreeDataSource, TreeNodeHandle, TreeRow, TreeSection } from "./types";
+import {
+  computed,
+  nextTick,
+  onScopeDispose,
+  shallowReactive,
+  shallowRef,
+  watch,
+  watchEffect,
+  type Ref,
+  type ShallowRef,
+} from "vue";
+import { pathqlAllKey, pathqlRequest$ } from "@/services/kbEvents/pathqlSource";
+import { usePathqlLookMany } from "@/services/kbEvents/usePathqlLookMany";
+import type { TreeBranch, TreePage, TreeQuerySource, TreeNodeHandle, TreeRow, TreeSection } from "./types";
 
-/**
- * 树模型：持有节点句柄表（展开/懒加载态），对外产出扁平可见行数组。
- *
- * 同构 vscode indexTreeModel 的可见行投影，但不抄它的增量 splice 簿记——
- * 本仓消费者都是百级节点，结构变化后 O(n) 全量 rebuild 并整体替换
- * shallowRef，由 v-for 的 keyed patch 吃掉差量。节点内部可变状态
- * （loading/计数等）在 shallowReactive 句柄上，视图直接读，不触发投影重建。
- */
 export interface TreeModel<T> {
   rows: ShallowRef<TreeRow<T>[]>;
   nodeByKey(key: string): TreeNodeHandle<T> | undefined;
-  /** 全部存活句柄（含收起的）；auto-expand 同步等遍历用。 */
+  /** 全部存活句柄，包含收起分支。 */
   allNodes(): TreeNodeHandle<T>[];
-  /** 行 key → 当前投影中的行下标（sticky/DnD 用）；不存在返回 -1。 */
+  /** 同步已加载行与收起分支的持有数据，不发请求。 */
+  mapElements(map: (element: T) => T): void;
   rowIndexByKey(key: string): number;
   expand(key: string): Promise<void>;
   collapse(key: string): void;
   toggle(key: string): Promise<void>;
-  /** 重新枚举某节点子项：按 key diff，保留仍存在后代的句柄（展开态/计数态不丢）。 */
-  refreshChildren(key: string): Promise<void>;
-  /** 刷新所有已加载分支的子项枚举（整树集中刷新入口用）。 */
-  refreshLoadedChildren(): Promise<void>;
-  reloadRoots(): Promise<void>;
   loadMore(target: string | { sectionId: string }): Promise<void>;
-  loadedHandles(): TreeNodeHandle<T>[];
-  /** 重新枚举各分区根与所有已加载分支（key diff 保留句柄；用户展开态按 key 记忆，重建的句柄照样恢复）。 */
-  reload(): Promise<void>;
+  /** 请求当前观察集合，等各查询结果或错误落地；不等待随后出现的新分支。 */
+  refresh(): Promise<void>;
 }
 
 export interface TreeModelOptions<T> {
-  dataSource: TreeDataSource<T>;
+  dataSource: TreeQuerySource<T>;
   sections: () => TreeSection<T>[];
-  /** 节点创建时的默认展开判定（对应旧 defaultExpanded / autoExpandRoot 语义）。 */
+  active?: () => boolean;
   defaultExpanded?: (element: T, depth: number) => boolean;
-  /** 名称过滤：非空时投影只保留命中行及其祖先链（只作用于已加载子树）。 */
   filterText?: Ref<string>;
   getFilterLabel?: (element: T) => string;
-  /** 行剔除（对应旧 emptyState="hide"）；返回 true 的节点不进投影。 */
   isRowHidden?: (element: T) => boolean;
-  /** 分支首次完成子项枚举时回调（供宿主注册事件驱动的子项重枚举）。 */
-  onChildrenLoaded?: (handle: TreeNodeHandle<T>) => void;
 }
 
 interface SectionState<T> {
@@ -52,19 +47,47 @@ interface SectionState<T> {
   loading: boolean;
 }
 
+interface PageRef<T> {
+  branchId: string;
+  branch: TreeBranch<T>;
+  page: number;
+  part: "page" | "extra";
+  spec: TreePage<T>;
+}
+
+/** 只描述、观察当前可见分支；用户操作经唯一请求入口发出，结果通过 key diff 落地。 */
 export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
   const { dataSource } = options;
   const rows = shallowRef<TreeRow<T>[]>([]);
   const handles = new Map<string, TreeNodeHandle<T>>();
   const rowIndex = new Map<string, number>();
-  const sectionStates: SectionState<T>[] = [];
-  /** 每节点子项枚举的防竞态 token（对应旧实现的 listToken）。 */
-  const loadTokens = new Map<string, number>();
-  /**
-   * 用户展开过的 key（expand 记入、collapse 移除），独立于句柄存活：
-   * 节点被过滤掉（句柄释放）或暂时没有子项（被迫收起）后再出现时，按 key 恢复展开态。
-   */
+  const sectionStates = shallowReactive<SectionState<T>[]>([]);
   const expandedMemory = new Set<string>();
+  // 数据按分支、页保存，查询参数换 key 时保留上一份内容。
+  const pageData = new Map<string, Map<number, T[]>>();
+  const extraPatches = new Map<string, Map<number, Map<string, Partial<T>>>>();
+  // 一次等待只绑定当前 key；退订、分支移除与卸载也必须释放等待。
+  const waiters = new Map<string, Set<() => void>>();
+  const snapshots = new Map<string, readonly unknown[]>();
+  let disposed = false;
+
+  function settle(key: string) {
+    const pending = waiters.get(key);
+    waiters.delete(key);
+    pending?.forEach((resolve) => resolve());
+  }
+
+  function waitFor(key: string): Promise<void> {
+    return new Promise((resolve) => {
+      const pending = waiters.get(key) ?? new Set();
+      pending.add(resolve);
+      waiters.set(key, pending);
+    });
+  }
+
+  function childrenId(key: string) {
+    return `children:${key}`;
+  }
 
   function createHandle(
     element: T,
@@ -82,101 +105,234 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
       sectionId,
       hasChildren,
       children: null,
-      expanded: hasChildren ? expandedMemory.has(key) || (options.defaultExpanded?.(element, depth) ?? false) : false,
+      expanded: hasChildren && (expandedMemory.has(key) || (options.defaultExpanded?.(element, depth) ?? false)),
       loading: false,
       loaded: false,
       hasMore: false,
-      loadedPages: 0,
+      loadedPages: 1,
       subtreeRowCount: 0,
     }) as TreeNodeHandle<T>;
     handles.set(key, handle);
     return handle;
   }
 
+  function clearBranch(id: string) {
+    pageData.delete(id);
+    extraPatches.delete(id);
+  }
+
   function dropSubtree(handle: TreeNodeHandle<T>) {
-    // 按身份而非 key 删：节点在树内移动时（如画册从子画册拖到根），新位置的
-    // 句柄已经用同一 key 占了表位，这里释放旧位置的残影不能把新句柄一起抹掉。
+    // 移动时新位置可能已用同 key 登记，释放旧位置不能抹掉新句柄及其页数据。
     if (handles.get(handle.key) === handle) {
       handles.delete(handle.key);
-      loadTokens.delete(handle.key);
+      clearBranch(childrenId(handle.key));
     }
     for (const child of handle.children ?? []) dropSubtree(child);
   }
 
-  async function loadChildren(handle: TreeNodeHandle<T>): Promise<void> {
-    if (!handle.hasChildren) return;
-    const token = (loadTokens.get(handle.key) ?? 0) + 1;
-    loadTokens.set(handle.key, token);
-    handle.loading = true;
-    let elements: T[] = [];
-    try {
-      elements = dataSource.getChildrenPage
-        ? await dataSource.getChildrenPage(handle.element, 1)
-        : await dataSource.getChildren(handle.element);
-    } catch {
-      elements = [];
-    }
-    // 竞态/已被移除：丢弃结果
-    if (loadTokens.get(handle.key) !== token || !handles.has(handle.key)) return;
-    applyChildren(handle, elements);
-    handle.loadedPages = 1;
-    handle.hasMore = dataSource.getChildrenPage
-      ? dataSource.totalChildren
-        ? elements.length < dataSource.totalChildren(handle.element)
-        : elements.length >= (dataSource.pageSize ?? 100)
-      : false;
-    handle.loading = false;
-    const firstLoad = !handle.loaded;
-    handle.loaded = true;
-    rebuild();
-    if (firstLoad) options.onChildrenLoaded?.(handle);
-  }
-
-  /**
-   * 把存活句柄对齐到新的元素快照。子项掉光时必须回到未加载态：
-   * 光改 hasChildren 不清 children，投影仍会照着旧数组渲染（子节点被移走后
-   * 会在旧父下留残影），而 loadChildren 又因 !hasChildren 直接返回、清不掉。
-   */
   function syncExistingHandle(handle: TreeNodeHandle<T>, element: T) {
     handle.element = element;
     handle.hasChildren = dataSource.hasChildren(element);
-    // 之前因为没有子项被迫收起、但用户展开过：子项回来后恢复展开（由调用方级联加载）
-    if (handle.hasChildren && !handle.expanded && expandedMemory.has(handle.key)) handle.expanded = true;
+    if (handle.hasChildren && expandedMemory.has(handle.key)) handle.expanded = true;
     if (!handle.hasChildren) {
       for (const child of handle.children ?? []) dropSubtree(child);
       handle.children = null;
       handle.expanded = false;
       handle.loaded = false;
       handle.hasMore = false;
-      handle.loadedPages = 0;
+      handle.loadedPages = 1;
+      clearBranch(childrenId(handle.key));
     }
   }
 
-  /** 子项 key diff：保留仍存在的句柄（含其后代与展开态），新键新建，消失键整棵释放。 */
-  function applyChildren(handle: TreeNodeHandle<T>, elements: T[]) {
-    const prev = new Map((handle.children ?? []).map((c) => [c.key, c]));
-    const next: TreeNodeHandle<T>[] = [];
-    for (const element of elements) {
+  function diff(previous: TreeNodeHandle<T>[], elements: T[], parent: TreeNodeHandle<T> | null, sectionId: string) {
+    const prev = new Map(previous.map((handle) => [handle.key, handle]));
+    const next = elements.map((element) => {
       const key = dataSource.getKey(element);
-      const existing = prev.get(key);
-      if (existing) {
-        prev.delete(key);
-        syncExistingHandle(existing, element);
-        next.push(existing);
-      } else {
-        const created = createHandle(element, handle.depth + 1, handle, handle.sectionId);
-        next.push(created);
-      }
-    }
+      const handle = prev.get(key);
+      if (!handle) return createHandle(element, parent ? parent.depth + 1 : 0, parent, sectionId);
+      prev.delete(key);
+      syncExistingHandle(handle, element);
+      return handle;
+    });
     for (const removed of prev.values()) dropSubtree(removed);
-    handle.children = next;
-    // 新建的默认展开节点级联加载
-    for (const child of next) {
-      if (child.expanded && child.hasChildren && child.children === null && !child.loading) {
-        void loadChildren(child);
+    return next;
+  }
+
+  watch(
+    options.sections,
+    (sections) => {
+      const prev = new Map(sectionStates.map((state) => [state.section.id, state]));
+      const next = sections.map((section) => {
+        const state = prev.get(section.id);
+        prev.delete(section.id);
+        if (state) {
+          state.section = section;
+          return state;
+        }
+        return shallowReactive({
+          section,
+          roots: [],
+          loadedPages: 1,
+          hasMore: false,
+          loading: false,
+        }) as SectionState<T>;
+      });
+      for (const state of prev.values()) {
+        state.roots.forEach(dropSubtree);
+        clearBranch(`section:${state.section.id}`);
+      }
+      sectionStates.splice(0, sectionStates.length, ...next);
+    },
+    { immediate: true },
+  );
+
+  const observed = computed(() => {
+    // 同一个 key 可以服务多个分支 / 页，不能用最后一个引用覆盖前面的引用。
+    const out = new Map<string, PageRef<T>[]>();
+    function add(branchId: string, branch: TreeBranch<T>, pages: number) {
+      for (let page = 1; page <= Math.max(1, pages); page++) {
+        const spec = dataSource.page(branch, page);
+        if (!spec) break;
+        const put = (part: "page" | "extra", key: string) => {
+          const refs = out.get(key) ?? [];
+          refs.push({ branchId, branch, page, part, spec });
+          out.set(key, refs);
+        };
+        put("page", pathqlAllKey(spec.queries));
+        if (spec.extra) put("extra", pathqlAllKey(spec.extra.queries));
       }
     }
+    function walk(nodes: TreeNodeHandle<T>[]) {
+      for (const handle of nodes) {
+        if (!handle.expanded || !handle.hasChildren || options.isRowHidden?.(handle.element)) continue;
+        add(childrenId(handle.key), { kind: "children", parent: handle.element }, handle.loadedPages);
+        walk(handle.children ?? []);
+      }
+    }
+    if (!(options.active?.() ?? true)) return out;
+    for (const state of sectionStates) {
+      add(`section:${state.section.id}`, { kind: "section", sectionId: state.section.id }, state.loadedPages);
+      walk(state.roots);
+    }
+    return out;
+  });
+
+  function patchesOf(branchId: string): Map<string, Partial<T>> {
+    const patches = new Map<string, Partial<T>>();
+    for (const [, page] of [...(extraPatches.get(branchId)?.entries() ?? [])].sort(([a], [b]) => a - b)) {
+      for (const [key, patch] of page) patches.set(key, { ...patches.get(key), ...patch });
+    }
+    return patches;
   }
+
+  function applyBranch(ref: PageRef<T>) {
+    const pages = pageData.get(ref.branchId);
+    if (!pages) return;
+    const unique = new Map<string, T>();
+    const patches = patchesOf(ref.branchId);
+    for (const [, elements] of [...pages.entries()].sort(([a], [b]) => a - b)) {
+      for (const element of elements) {
+        const key = dataSource.getKey(element);
+        unique.set(key, patches.has(key) ? { ...element, ...patches.get(key) } : element);
+      }
+    }
+    const elements = [...unique.values()];
+    const parent = ref.branch.kind === "children" ? handles.get(dataSource.getKey(ref.branch.parent)) : undefined;
+    const sectionId = ref.branch.kind === "section" ? ref.branch.sectionId : undefined;
+    const state = sectionStates.find((state) => state.section.id === sectionId);
+    const owner = parent ?? state;
+    if (!owner) return;
+    const last = pages.get(owner.loadedPages);
+    owner.hasMore =
+      !!dataSource.pageSize &&
+      (parent && dataSource.totalChildren
+        ? elements.length < dataSource.totalChildren(parent.element)
+        : (last?.length ?? 0) >= dataSource.pageSize);
+    if (parent) {
+      parent.children = diff(parent.children ?? [], elements, parent, parent.sectionId);
+      parent.loaded = true;
+    } else if (state) state.roots = diff(state.roots, elements, null, state.section.id);
+  }
+
+  function applyPage(ref: PageRef<T>, results: readonly unknown[]) {
+    if (ref.part === "page") {
+      const pages = pageData.get(ref.branchId) ?? new Map<number, T[]>();
+      pages.set(ref.page, ref.spec.parse(results));
+      pageData.set(ref.branchId, pages);
+    } else {
+      const pages = extraPatches.get(ref.branchId) ?? new Map<number, Map<string, Partial<T>>>();
+      pages.set(ref.page, ref.spec.extra!.parse(results));
+      extraPatches.set(ref.branchId, pages);
+      const branch = ref.branch;
+      const nodes =
+        branch.kind === "children"
+          ? handles.get(dataSource.getKey(branch.parent))?.children
+          : sectionStates.find((state) => state.section.id === branch.sectionId)?.roots;
+      const patches = patchesOf(ref.branchId);
+      // 补充结果只修改当前句柄字段；不重建结构，也不影响展开加载状态。
+      for (const handle of nodes ?? []) {
+        const patch = patches.get(handle.key);
+        if (patch) handle.element = { ...handle.element, ...patch };
+      }
+      return;
+    }
+    applyBranch(ref);
+  }
+
+  const look = usePathqlLookMany({
+    kind: "all",
+    keys: () => [...observed.value.keys()],
+    refreshOn: (key) => (observed.value.get(key) ?? []).flatMap((ref) => dataSource.refreshOn(ref.branch, ref.part)),
+    onResult: (key, snapshot) => {
+      snapshots.set(key, snapshot.results);
+      try {
+        for (const ref of observed.value.get(key) ?? []) applyPage(ref, snapshot.results);
+      } finally {
+        settle(key);
+      }
+    },
+    onError: (key) => settle(key),
+  });
+
+  watch(
+    observed,
+    (next, prev) => {
+      for (const key of prev?.keys() ?? [])
+        if (!next.has(key)) {
+          snapshots.delete(key);
+          settle(key);
+        }
+      for (const [key, refs] of next) {
+        if (!prev?.has(key)) {
+          pathqlRequest$.next(["all", key]);
+          continue;
+        }
+        // 新分支复用正在观察的同一 key 时，不会再注册观察方；从最近结果补落地。
+        const added = refs.filter(
+          (ref) =>
+            !prev
+              .get(key)!
+              .some((old) => old.branchId === ref.branchId && old.page === ref.page && old.part === ref.part),
+        );
+        const snapshot = snapshots.get(key);
+        if (snapshot) for (const ref of added) applyPage(ref, snapshot);
+        if (added.length && !look.loading(key)) settle(key);
+      }
+    },
+    { immediate: true, flush: "sync" },
+  );
+
+  // loading 只来自结构页；慢补充查询不会让展开箭头一直转圈。
+  watchEffect(() => {
+    const busy = new Set<string>();
+    for (const [key, refs] of observed.value) {
+      if (look.loading(key)) for (const ref of refs) if (ref.part === "page") busy.add(ref.branchId);
+    }
+    for (const state of sectionStates) state.loading = busy.has(`section:${state.section.id}`);
+    for (const handle of handles.values()) handle.loading = busy.has(childrenId(handle.key));
+    rebuild();
+  });
 
   function matchesFilter(handle: TreeNodeHandle<T>, text: string): boolean {
     const label = options.getFilterLabel?.(handle.element) ?? "";
@@ -263,209 +419,102 @@ export function useTreeModel<T>(options: TreeModelOptions<T>): TreeModel<T> {
     rows.value = out;
   }
 
-  /**
-   * 自顶向下重枚举所有已加载分支的子项（父先于子）。
-   * 只重枚举根不够：节点在分支之间移动后，旧父的 children 仍挂着它（旧位置留残影），
-   * 而移进来的新父不会自己发现它（新位置不出现）。未加载的分支保持惰性。
-   */
-  async function refreshLoadedBranches(): Promise<void> {
-    const walk = async (nodes: TreeNodeHandle<T>[]): Promise<void> => {
-      for (const node of nodes) {
-        if (node.loaded) await refreshChildren(node.key);
-        if (node.children) await walk(node.children);
-      }
-    };
-    for (const state of sectionStates) await walk(state.roots);
+  async function waitPage(branchId: string, page: number): Promise<void> {
+    // 同步观察方先登记，自动请求 watcher 随后运行，等待不会漏掉新请求的结果。
+    const key = [...observed.value].find(([, refs]) =>
+      refs.some((ref) => ref.branchId === branchId && ref.page === page && ref.part === "page"),
+    )?.[0];
+    if (key && !disposed && (look.loading(key) || !snapshots.has(key))) await waitFor(key);
   }
 
-  async function reloadSection(state: SectionState<T>): Promise<void> {
-    let elements: T[] = [];
-    try {
-      if (dataSource.getRootsPage) {
-        const pages = Math.max(1, state.loadedPages);
-        const chunks = await Promise.all(
-          Array.from({ length: pages }, (_, index) => dataSource.getRootsPage!(state.section.id, index + 1)),
-        );
-        elements = chunks.flat();
-        state.loadedPages = pages;
-        state.hasMore = (chunks.at(-1)?.length ?? 0) >= (dataSource.pageSize ?? 100);
-      } else {
-        elements = await state.section.roots();
-        state.hasMore = false;
-      }
-    } catch {
-      elements = [];
-    }
-    const prev = new Map(state.roots.map((r) => [r.key, r]));
-    const next: TreeNodeHandle<T>[] = [];
-    for (const element of elements) {
-      const key = dataSource.getKey(element);
-      const existing = prev.get(key);
-      if (existing) {
-        prev.delete(key);
-        syncExistingHandle(existing, element);
-        next.push(existing);
-      } else {
-        const created = createHandle(element, 0, null, state.section.id);
-        next.push(created);
-      }
-    }
-    for (const removed of prev.values()) dropSubtree(removed);
-    state.roots = next;
-    for (const root of next) {
-      if (root.expanded && root.hasChildren && root.children === null && !root.loading) {
-        void loadChildren(root);
-      }
-    }
-  }
-
-  async function reload(): Promise<void> {
-    const sections = options.sections();
-    // 分区结构变化（增删分区）时整体重建分区表，句柄按 key 复用
-    if (sectionStates.length !== sections.length || sectionStates.some((s, i) => s.section.id !== sections[i].id)) {
-      const prevRoots = new Map(sectionStates.flatMap((s) => s.roots.map((r) => [r.key, r] as const)));
-      sectionStates.length = 0;
-      for (const section of sections) {
-        sectionStates.push({ section, roots: [], loadedPages: 0, hasMore: false, loading: false });
-      }
-      // 旧根句柄整棵释放（分区变化视为结构性重置）
-      for (const root of prevRoots.values()) dropSubtree(root);
-    } else {
-      sectionStates.forEach((s, i) => (s.section = sections[i]));
-    }
-    await Promise.all(sectionStates.map((state) => reloadSection(state)));
-    await refreshLoadedBranches();
-    rebuild();
+  function pendingPages(branchId: string): string[] {
+    return [...observed.value]
+      .filter(
+        ([key, refs]) =>
+          (look.loading(key) || waiters.has(key)) &&
+          refs.some((ref) => ref.branchId === branchId && ref.part === "page"),
+      )
+      .map(([key]) => key);
   }
 
   async function expand(key: string): Promise<void> {
     const handle = handles.get(key);
-    if (!handle || !handle.hasChildren || handle.expanded) return;
+    if (!handle || !handle.hasChildren) return;
+    if (handle.expanded) {
+      await Promise.all(pendingPages(childrenId(key)).map(waitFor));
+      return;
+    }
     handle.expanded = true;
     expandedMemory.add(key);
-    if (handle.children === null) {
-      rebuild(); // 先把 loading 态行投出去
-      await loadChildren(handle);
-    } else {
-      rebuild();
-    }
+    await waitPage(childrenId(key), 1);
   }
 
-  function collapse(key: string): void {
-    const handle = handles.get(key);
-    if (!handle || !handle.expanded) return;
-    handle.expanded = false;
-    expandedMemory.delete(key);
-    rebuild();
-  }
-
-  async function toggle(key: string): Promise<void> {
+  function collapse(key: string) {
     const handle = handles.get(key);
     if (!handle) return;
-    if (handle.expanded) collapse(key);
+    handle.expanded = false;
+    expandedMemory.delete(key);
+  }
+
+  async function toggle(key: string) {
+    if (handles.get(key)?.expanded) collapse(key);
     else await expand(key);
   }
 
-  async function refreshChildren(key: string): Promise<void> {
-    const handle = handles.get(key);
-    if (!handle || !handle.hasChildren) return;
-    if (!dataSource.getChildrenPage || handle.loadedPages <= 1) {
-      await loadChildren(handle);
-      return;
-    }
-    const token = (loadTokens.get(handle.key) ?? 0) + 1;
-    loadTokens.set(handle.key, token);
-    handle.loading = true;
-    try {
-      const chunks = await Promise.all(
-        Array.from({ length: handle.loadedPages }, (_, index) =>
-          dataSource.getChildrenPage!(handle.element, index + 1),
-        ),
-      );
-      if (loadTokens.get(handle.key) !== token || !handles.has(handle.key)) return;
-      const unique = new Map<string, T>();
-      for (const element of chunks.flat()) unique.set(dataSource.getKey(element), element);
-      applyChildren(handle, [...unique.values()]);
-      handle.hasMore = dataSource.totalChildren
-        ? unique.size < dataSource.totalChildren(handle.element)
-        : (chunks.at(-1)?.length ?? 0) >= (dataSource.pageSize ?? 100);
-      rebuild();
-    } finally {
-      handle.loading = false;
-    }
-  }
-
-  async function refreshLoadedChildren(): Promise<void> {
-    const loaded = [...handles.values()].filter((h) => h.loaded);
-    await Promise.all(loaded.map((h) => refreshChildren(h.key)));
-  }
-
-  async function reloadRoots(): Promise<void> {
-    await Promise.all(sectionStates.map(reloadSection));
-    rebuild();
-  }
-
   async function loadMore(target: string | { sectionId: string }): Promise<void> {
-    if (typeof target !== "string") {
-      const state = sectionStates.find((item) => item.section.id === target.sectionId);
-      if (!state || !dataSource.getRootsPage || state.loading || !state.hasMore) return;
-      state.loading = true;
-      rebuild();
-      try {
-        const nextPage = state.loadedPages + 1;
-        const elements = await dataSource.getRootsPage(state.section.id, nextPage);
-        const existing = new Set(state.roots.map((root) => root.key));
-        for (const element of elements) {
-          const key = dataSource.getKey(element);
-          if (!existing.has(key)) state.roots.push(createHandle(element, 0, null, state.section.id));
-        }
-        state.loadedPages = nextPage;
-        state.hasMore = elements.length >= (dataSource.pageSize ?? 100);
-      } finally {
-        state.loading = false;
-        rebuild();
-      }
+    const owner =
+      typeof target === "string" ? handles.get(target) : sectionStates.find((s) => s.section.id === target.sectionId);
+    const id = typeof target === "string" ? childrenId(target) : `section:${target.sectionId}`;
+    if (!owner) return;
+    const pending = pendingPages(id);
+    if (pending.length) {
+      await Promise.all(pending.map(waitFor));
       return;
     }
-    const handle = handles.get(target);
-    if (!handle || !dataSource.getChildrenPage || handle.loading || !handle.hasMore) return;
-    handle.loading = true;
-    rebuild();
-    try {
-      const nextPage = handle.loadedPages + 1;
-      const elements = await dataSource.getChildrenPage(handle.element, nextPage);
-      const combined = [...(handle.children ?? []).map((child) => child.element), ...elements];
-      const unique = new Map(combined.map((element) => [dataSource.getKey(element), element]));
-      applyChildren(handle, [...unique.values()]);
-      handle.loadedPages = nextPage;
-      handle.hasMore = dataSource.totalChildren
-        ? unique.size < dataSource.totalChildren(handle.element)
-        : elements.length >= (dataSource.pageSize ?? 100);
-    } finally {
-      handle.loading = false;
-      rebuild();
+    if (!dataSource.pageSize || !owner.hasMore) return;
+    const failed = [...observed.value].find(
+      ([key, refs]) => look.error(key) != null && refs.some((ref) => ref.branchId === id && ref.part === "page"),
+    )?.[0];
+    if (failed) {
+      // 保留旧子项时也保留失败页的页码；再次加载先重试，不能跳过缺失的一页。
+      const retry = waitFor(failed);
+      pathqlRequest$.next(["all", failed]);
+      await retry;
+      return;
     }
+    owner.loadedPages++;
+    await waitPage(id, owner.loadedPages);
   }
 
-  if (options.filterText) {
-    watch(options.filterText, () => rebuild());
+  async function refresh(): Promise<void> {
+    await nextTick();
+    if (disposed) return;
+    const keys = [...observed.value.keys()];
+    const pending = keys.map(waitFor);
+    for (const key of keys) pathqlRequest$.next(["all", key]);
+    await Promise.all(pending);
   }
 
-  void reload();
+  onScopeDispose(() => {
+    disposed = true;
+    for (const key of [...waiters.keys()]) settle(key);
+  });
 
   return {
     rows,
     nodeByKey: (key) => handles.get(key),
     allNodes: () => [...handles.values()],
+    mapElements(map) {
+      for (const pages of pageData.values()) {
+        for (const [page, elements] of pages) pages.set(page, elements.map(map));
+      }
+      for (const handle of handles.values()) handle.element = map(handle.element);
+    },
     rowIndexByKey: (key) => rowIndex.get(key) ?? -1,
     expand,
     collapse,
     toggle,
-    refreshChildren,
-    refreshLoadedChildren,
-    reloadRoots,
     loadMore,
-    loadedHandles: () => [...handles.values()].filter((handle) => handle.loaded),
-    reload,
+    refresh,
   };
 }

@@ -612,6 +612,18 @@ impl DownloadQueue {
         post_url: Option<String>,
         labels: Vec<LabelSpec>,
     ) -> Result<(), String> {
+        if let Some(run) = TaskScheduler::global()
+            .get_run(&task_id)
+            .filter(|run| run.params.is_dry_run)
+        {
+            GlobalEmitter::global().emit_task_log(
+                &task_id,
+                "info",
+                &task_log_i18n("taskLogDryRunSkipDownload", json!({ "url": url.as_str() })),
+            );
+            run.record_dry_run_skip();
+            return Ok(());
+        }
         self.download(
             url,
             images_dir,
@@ -1324,16 +1336,17 @@ mod tests {
             labels: Vec::new(),
             min_app_incompatible: false,
             file_path: None,
-            doc: None,
-            changelog: None,
+
             icon_png_base64: None,
-            description_template: None,
-            recommended_configs: Vec::new(),
+
             var_defs: Vec::new(),
             script: PluginScript::default(),
-            assets: None,
+
             providers: Vec::new(),
-            metadata_migration: None,
+            metadata_migration_path: None,
+            package_json: None,
+            asset_keys: Vec::new(),
+            file_origin: None,
             version_packed: 0,
         }
     }
@@ -1394,6 +1407,9 @@ mod tests {
                     images_dir: PathBuf::new(),
                     output_album_id: None,
                     config: HashMap::new(),
+                    is_dry_run: false,
+                    #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
+                    inputs: Vec::new(),
                 },
                 None,
             )

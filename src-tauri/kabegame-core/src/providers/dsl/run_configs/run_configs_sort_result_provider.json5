@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame", "name": "run_configs_sort_result_provider",
+    "query": { "order": [{ "sql": "CASE WHEN rc_last.status = 'failed' THEN 0 WHEN rc_last.failed_count > 0 THEN 1 WHEN rc_last.status IN ('pending', 'running', 'waiting_downloads') THEN 2 WHEN rc_last.status = 'canceled' THEN 3 WHEN rc_last.id IS NULL THEN 5 ELSE 4 END", "order": "asc", "prepend": true }] },
+    "resolve": { "desc": { "provider": "run_configs_sort_result_desc_provider" }, ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

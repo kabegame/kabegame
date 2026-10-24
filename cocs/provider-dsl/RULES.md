@@ -216,6 +216,18 @@ COUNT，把整个结构重跑 N 次。
   - 不与 `in_need` 同时使用（auto-allocated 必然唯一，`in_need` 无意义 → 加载期拒绝）
   - 同一 ident 在一条路径上只能声明一次，二次声明即报错；建议 ident 带 provider 前缀，避免跨 provider 撞名
 
+`join.on` 可以使用相关子查询。需要从一对多表取每个宿主行的最新一条、又不想把结果冗余回宿主表时，
+让子查询用宿主表主键相关，并保证过滤与排序有联合索引：
+
+```json5
+join: [{
+  kind: "LEFT", table: "tasks", as: "latest", in_need: true,
+  on: "latest.id = (SELECT t.id FROM tasks t WHERE t.run_config_id = run_configs.id ORDER BY t.start_time DESC, t.id DESC LIMIT 1)",
+}]
+```
+
+这里应有 `tasks(run_config_id, start_time DESC)`；用 `EXPLAIN QUERY PLAN` 固化索引命中，避免相关子查询退化为逐行全表扫描。
+
 ### 3.3 where（WhereQuery 谓词树）
 
 `where` 是一棵递归的 **WhereQuery** 树，靠**形状**判别，无标签：
@@ -553,7 +565,7 @@ key 形态分两类（7b 起）：
 **缓存键**：normalize 后的完整路径（大小写敏感）；
 **缓存值**：`(Arc<dyn Provider>, ImageQuery)`。
 
-**失效**：由数据变更事件（`images-change` / `album-images-change` / 插件装卸 等）显式清空相关前缀；
+**失效**：由写入路径直接调用缓存失效函数清空相关前缀；前端观察方则响应图片增删 / 字段补丁、画册成员增删 / 排序事件与插件装卸等事件重读；
 不靠 TTL。前端不直接感知 LRU 状态，靠事件订阅触发刷新。
 
 ### 4.5 meta 字段统一语义

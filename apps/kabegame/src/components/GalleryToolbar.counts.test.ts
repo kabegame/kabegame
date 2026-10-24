@@ -3,12 +3,10 @@ import { flushPromises, shallowMount } from "@vue/test-utils";
 import { reactive, ref, toRef } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GalleryToolbar from "./GalleryToolbar.vue";
+import { gridTotalKey } from "@/components/imageGrid/gridTotal";
 import type { GalleryQuery } from "@/utils/galleryPath";
 
-type CountSnapshot = { total: number; seq: number };
-
-const pathqlCount = vi.hoisted(() => vi.fn<(path: string) => Promise<CountSnapshot>>());
-const refreshCapture = vi.hoisted(() => ({ run: null as null | (() => Promise<void>) }));
+const pathqlAll = vi.hoisted(() => vi.fn());
 const routeStore = reactive({
   query: [] as GalleryQuery,
   hide: true,
@@ -17,12 +15,9 @@ const routeStore = reactive({
   contextPathFor: vi.fn(() => "hide/"),
 });
 
-vi.mock("@/services/pathql", () => ({ pathqlCount }));
-vi.mock("@/composables/useImagesChangeRefresh", () => ({
-  useImagesChangeRefresh: (params: { onRefresh: () => void | Promise<void> }) => {
-    refreshCapture.run = async () => void (await params.onRefresh());
-  },
-}));
+vi.mock("@/services/pathql", () => ({ pathqlAll, pathqlFetch: vi.fn() }));
+vi.mock("@/api", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+vi.mock("@/services/albums", () => ({ FAVORITE_ALBUM_ID: "favorite" }));
 vi.mock("pinia", async (importOriginal) => ({
   ...(await importOriginal<typeof import("pinia")>()),
   storeToRefs: (store: typeof routeStore) => ({ hide: toRef(store, "hide") }),
@@ -45,7 +40,12 @@ vi.mock("@/stores/header", () => ({
     GallerySort: "gallery-sort",
     GalleryPageSize: "gallery-page-size",
   },
-  useHeaderStore: () => ({ setFoldLabel: vi.fn() }),
+  // PageHeader 渲染 show/fold 项时会查热区定义与 fold 文案覆盖；mock 必须与 store 接口同形。
+  useHeaderStore: () => ({
+    get: vi.fn(() => undefined),
+    getFoldLabel: vi.fn(() => undefined),
+    setFoldLabel: vi.fn(),
+  }),
 }));
 vi.mock("@/stores/pageBridge", () => ({
   usePageBridgeStore: () => ({
@@ -66,20 +66,12 @@ vi.mock("@kabegame/i18n", () => ({
   }),
 }));
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 
-function render(filter: GalleryQuery) {
+function render() {
   const wrapper = shallowMount(GalleryToolbar, {
-    props: { filter, totalCount: 7 },
     global: {
+      provide: { [gridTotalKey as symbol]: { total: gridTotal, unfilteredTotal } },
       mocks: { $t: (key: string) => key },
       stubs: {
         PageHeader: { template: '<div class="subtitle"><slot name="subtitle" /></div>' },
@@ -92,9 +84,13 @@ function render(filter: GalleryQuery) {
   return wrapper;
 }
 
+const gridTotal = ref(7);
+const unfilteredTotal = ref<number | null>(null);
+
 beforeEach(() => {
-  pathqlCount.mockReset();
-  refreshCapture.run = null;
+  pathqlAll.mockReset();
+  gridTotal.value = 7;
+  unfilteredTotal.value = null;
   routeStore.query = [];
   routeStore.hide = true;
   routeStore.effectiveNoAlbum = false;
@@ -105,39 +101,28 @@ afterEach(() => {
 });
 
 describe("GalleryToolbar 计数快照", () => {
-  it("等待过滤后数量与总数都返回，再同时更新副标题", async () => {
-    const firstFiltered = deferred<CountSnapshot>();
-    const firstTotal = deferred<CountSnapshot>();
-    const nextFiltered = deferred<CountSnapshot>();
-    const nextTotal = deferred<CountSnapshot>();
-    pathqlCount
-      .mockImplementationOnce(() => firstFiltered.promise)
-      .mockImplementationOnce(() => firstTotal.promise)
-      .mockImplementationOnce(() => nextFiltered.promise)
-      .mockImplementationOnce(() => nextTotal.promise);
+  it.each([
+    [7, null, "7"],
+    [7, 10, "7 / 10"],
+    [7, 7, "7"],
+    [7, 6, "7"],
+    [0, 10, "gallery.noImages"],
+  ])("分子 %s、分母 %s 的文案为 %s，工具栏不请求 pathql", async (count, total, text) => {
+    gridTotal.value = count as number;
+    unfilteredTotal.value = total as number | null;
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.get(".subtitle").text()).toBe(text);
+    expect(pathqlAll).not.toHaveBeenCalled();
+  });
 
-    const filter: GalleryQuery = [{ is: { plugin: { pluginId: "pixiv" } } }];
-    const wrapper = render(filter);
-    expect(pathqlCount).toHaveBeenNthCalledWith(1, "gallery/hide/plugin/pixiv");
-    expect(pathqlCount).toHaveBeenNthCalledWith(2, "gallery/hide");
-    expect(wrapper.get(".subtitle").text()).toBe("7");
-
-    firstFiltered.resolve({ total: 8, seq: 1 });
+  it("同一回调更新注入的分子分母后整体更新文案", async () => {
+    unfilteredTotal.value = 10;
+    const wrapper = render();
+    gridTotal.value = 8;
+    unfilteredTotal.value = 11;
     await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("7");
-    firstTotal.resolve({ total: 10, seq: 1 });
-    await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("8 / 10");
-
-    const refresh = refreshCapture.run;
-    expect(refresh).not.toBeNull();
-    const refreshing = refresh!();
-    nextTotal.resolve({ total: 11, seq: 2 });
-    await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("8 / 10");
-    nextFiltered.resolve({ total: 9, seq: 2 });
-    await refreshing;
-    await flushPromises();
-    expect(wrapper.get(".subtitle").text()).toBe("9 / 11");
+    expect(wrapper.get(".subtitle").text()).toBe("8 / 11");
+    expect(pathqlAll).not.toHaveBeenCalled();
   });
 });

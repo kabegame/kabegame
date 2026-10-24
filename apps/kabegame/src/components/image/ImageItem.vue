@@ -95,7 +95,7 @@ interface Props {
   selected?: boolean; // 是否被选中
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
-  windowAspectRatio?: number; // gallery 布局：盒子宽高比（宽/高）
+  aspectRatio?: number; // gallery 布局：盒子宽高比（宽/高）
   fillBox?: boolean; // gallery 布局：盒宽高比等于图片自然比，填满且不留 letterbox 背景
   horizontal?: boolean; // 水平方向：盒子用 height: 100% 撑满主轴，width 由 aspect-ratio 决定
   videoPlaying?: boolean; // 视频是否正在播放（由上层协调，确保同一时间只有一个视频在播放）
@@ -237,7 +237,7 @@ onUnmounted(() => {
 // 非画廊网格盒子恒为正方形；画廊布局由上层按图片比例给盒子尺寸。ImageContent 始终 contain。
 const aspectRatioStyle = computed(() => {
   if (props.fillBox) {
-    const r = props.windowAspectRatio && props.windowAspectRatio > 0 ? props.windowAspectRatio : null;
+    const r = props.aspectRatio && props.aspectRatio > 0 ? props.aspectRatio : null;
     return r ? { aspectRatio: `${r}` } : { aspectRatio: "16 / 9" };
   }
   return { aspectRatio: "1 / 1" };

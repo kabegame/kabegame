@@ -1,5 +1,11 @@
 <template>
-  <div class="albums-page" :class="{ 'is-compact': isCompact }" v-pull-to-refresh="pullToRefreshOpts" v-drag-file="dropZone">
+  <DragFileZone
+    class="albums-page"
+    :class="{ 'is-compact': isCompact }"
+    v-pull-to-refresh="pullToRefreshOpts"
+    :plan="planDrop"
+    :on-drop="onDropFiles"
+  >
     <!-- 单个 ImageGrid、单个滚动容器（sticky 体系与 Gallery 同源）：#header 页头全宽 sticky 钉顶，
          #aside 树列排在页头之下、自身 sticky 钉在页头下缘，中栏 = before-grid（查询行 / sticky 分页）
          + 图片流，图片能滚到页头下方 -->
@@ -297,7 +303,7 @@
         <el-button type="primary" @click="confirmMoveAlbum">{{ $t("common.ok") }}</el-button>
       </template>
     </el-dialog>
-  </div>
+  </DragFileZone>
 </template>
 
 <script setup lang="ts">
@@ -350,7 +356,8 @@ import type { AlbumKind, AlbumSyncMode } from "@/types/album";
 import { isLabelForestKind } from "@/types/album";
 import { isLabelKey } from "@/utils/labelKey";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
-import type { DragFileOptions } from "@/directives/dragFile";
+import DragFileZone from "@/components/common/DragFileZone.vue";
+import type { DragFileItem, DragFilePlan } from "@/utils/dragFileZones";
 import { buildDropPlan, importDroppedFiles } from "@/utils/dragFileImport";
 import { pathqlFetch } from "@/services/pathql";
 import { rowToImageInfo } from "@/utils/imageRow";
@@ -825,20 +832,20 @@ const handleCreateAlbum = async () => {
 };
 
 // ---------- 区域级文件拖入（导入当前选中画册）----------
-const dropZone = computed<DragFileOptions>(() => ({
-  plan: (items) => {
-    const target = selectedAlbum.value;
-    if (!target || target.id === FAVORITE_ALBUM_ID || target.id === HIDDEN_ALBUM_ID || target.type === "label_dir") {
-      return null;
-    }
-    return buildDropPlan(items, selectedAlbumName.value);
-  },
-  onDrop: async (plan) => {
-    const target = selectedAlbum.value;
-    if (!target) return;
-    await importDroppedFiles(plan, target);
-  },
-}));
+// 收藏 / 隐藏 / 标签目录 / 无选中的拒绝仍写在 plan() 开头，每次命中都读最新选中态。
+const planDrop = (items: DragFileItem[]): DragFilePlan | null => {
+  const target = selectedAlbum.value;
+  if (!target || target.id === FAVORITE_ALBUM_ID || target.id === HIDDEN_ALBUM_ID || target.type === "label_dir") {
+    return null;
+  }
+  return buildDropPlan(items, selectedAlbumName.value);
+};
+
+const onDropFiles = async (plan: DragFilePlan) => {
+  const target = selectedAlbum.value;
+  if (!target) return;
+  await importDroppedFiles(plan, target);
+};
 
 // ---------- 画册右键菜单（树节点） ----------
 const albumActions = computed(() => createAlbumActions());

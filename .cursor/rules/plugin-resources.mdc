@@ -1,0 +1,34 @@
+---
+description: 插件 PathQL 按来源和版本寻址，坐标现场解析，子资源只读本地包
+globs: "src-tauri/kabegame-core/src/commands/task.rs, src-tauri/kabegame-core/src/emitter.rs, src-tauri/kabegame-core/src/ipc/events.rs, apps/kabegame/src/stores/plugins.ts, apps/kabegame/src/services/kbEvents/events.ts, src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs, src-tauri/kabegame-core/src/plugin/package_file.rs, src-tauri/kabegame/src/mcp*.rs, apps/kabegame/src/components/plugin/*.vue"
+alwaysApply: false
+---
+
+# 插件 PathQL 资源
+
+- 插件路径为 `plugin://installed/<id>/<version>`、`plugin://byStore/<sourceId>/<id>/<version>`、
+  `plugin://byPreview/<token>/<id>/<version>`；不保留仅 id 寻址的别名，各路径段单独编码。
+- 根 fetch 仍为已安装插件 lite 列表，根 list 只列出 `installed` 和 `byStore`。
+  `byPreview` 不出现在根 list，也不列举 token 或 token 下的插件，只能凭已知坐标 resolve。
+- 三种来源均支持 `icon`、`description_template`、`doc`、`changelog`、`asset`、`provider`、`recommended`。
+- runtime 按路径前缀缓存 provider：资源 provider 只保存 `PluginCoord { origin, id, version }`，
+  每次 list / resolve / fetch 经 `PluginManager::resolve_plugin_file` 重新解析，禁止持有 `Arc<Plugin>`。
+  版本不符 resolve 为 `Terminal(None)`，同版本覆盖、升级或卸载后不得继续读取旧 Plugin。
+- 商店来源只读本地 `store_plugin_cache`。任何子资源都不得调用 `ensure_plugin_cached` 或发网络请求；
+  未缓存的商店插件解析为空。
+
+索引与约定同步维护于 `AGENTS.md`；资源说明见 `cocs/mcp/MCP_SERVER.md`。
+
+## 插件事件与推荐导入态
+
+- 插件事件统一用 `plugin-added` / `plugin-changed` / `plugin-deleted`，变更 payload 为 `{ pluginId, changes }`。
+  覆盖安装的 changes 是必含 version 的完整插件；导入态变化只含 `recommendedConfigs: { <path>: { imported } }`。
+- 运行配置 add / update / delete / copy 统一经 core 共享写命令，在写前后比较受影响插件的本地导入态。
+  包括已安装插件与同 id 且本地包存在的商店缓存；不下载、不访问网络。每次写入每个 pluginId 至多一条，只含变化路径，
+  状态优先取已安装来源，否则取变化项。写库提交后先发推荐导入态的插件事件，再发配置事件。
+- 插件 store 只合并含 version 的 patch。推荐配置由 `useRecommendedPresets` 以 `usePathqlLookMany(kind: "rows")`
+  观察 `plugin://…/recommended`；新 key 进入集合请求一次，enabled=false 无 key，refresh 请求当前全部 key。
+  refreshOn 只接受同 pluginId 且含 version / recommendedConfigs 的事件，核心按统一 500ms 窗口刷新。
+  行按清单顺序落地，首次失败移除占位，已有内容在失败时保留；不另设序号、HTTP 标注或写结果导入态通路。
+- recommended 目录 fetch 返回 `recommended_rows`，list 列出声明文件 path；单项路径与 asset 一样按单段编码。
+  行由宿主覆盖 pluginId、filename、path、isImported。运行配置写命令只返回保存后的单行/null，观察方由事件刷新。

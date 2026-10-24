@@ -7,22 +7,130 @@ use std::collections::HashMap;
 ///
 /// JSON 与前端 `ScheduleSpec` 一致：`mode` + camelCase 字段名（间隔为 `intervalSecs`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "mode")]
+#[serde(tag = "mode", try_from = "ScheduleSpecRaw")]
 pub enum ScheduleSpec {
     #[serde(rename = "interval")]
     Interval {
         #[serde(rename = "intervalSecs")]
         interval_secs: i64,
     },
+    #[serde(rename = "hourly")]
+    Hourly { minute: i32 },
     #[serde(rename = "daily")]
     Daily { hour: i32, minute: i32 },
-    /// `weekday`: 0=周一 … 6=周日（与 `chrono::Weekday::num_days_from_monday()` 一致）
+    /// `weekdays`: 0=周一 … 6=周日（与 `chrono::Weekday::num_days_from_monday()` 一致）
     #[serde(rename = "weekly")]
     Weekly {
-        weekday: i32,
+        weekdays: Vec<i32>,
         hour: i32,
         minute: i32,
     },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduleSpecRaw {
+    mode: String,
+    interval_secs: Option<i64>,
+    hour: Option<i32>,
+    minute: Option<i32>,
+    weekday: Option<i32>,
+    weekdays: Option<Vec<i32>>,
+}
+
+impl TryFrom<ScheduleSpecRaw> for ScheduleSpec {
+    type Error = String;
+
+    fn try_from(raw: ScheduleSpecRaw) -> Result<Self, Self::Error> {
+        fn minute(value: Option<i32>) -> Result<i32, String> {
+            let value = value.ok_or_else(|| "schedule minute is required".to_string())?;
+            (0..=59)
+                .contains(&value)
+                .then_some(value)
+                .ok_or_else(|| "schedule minute must be between 0 and 59".to_string())
+        }
+        fn hour(value: Option<i32>) -> Result<i32, String> {
+            let value = value.ok_or_else(|| "schedule hour is required".to_string())?;
+            (0..=23)
+                .contains(&value)
+                .then_some(value)
+                .ok_or_else(|| "schedule hour must be between 0 and 23".to_string())
+        }
+
+        match raw.mode.as_str() {
+            "interval" => {
+                let interval_secs = raw
+                    .interval_secs
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| "schedule intervalSecs must be greater than 0".to_string())?;
+                Ok(Self::Interval { interval_secs })
+            }
+            "hourly" => Ok(Self::Hourly {
+                minute: minute(raw.minute)?,
+            }),
+            "daily" if raw.hour == Some(-1) => Ok(Self::Hourly {
+                minute: minute(raw.minute)?,
+            }),
+            "daily" => Ok(Self::Daily {
+                hour: hour(raw.hour)?,
+                minute: minute(raw.minute)?,
+            }),
+            "weekly" => {
+                let mut weekdays = raw
+                    .weekdays
+                    .or_else(|| raw.weekday.map(|weekday| vec![weekday]))
+                    .unwrap_or_default();
+                weekdays.sort_unstable();
+                weekdays.dedup();
+                if weekdays.is_empty() || weekdays.iter().any(|weekday| !(0..=6).contains(weekday))
+                {
+                    return Err("schedule weekdays must contain values between 0 and 6".to_string());
+                }
+                Ok(Self::Weekly {
+                    weekdays,
+                    hour: hour(raw.hour)?,
+                    minute: minute(raw.minute)?,
+                })
+            }
+            mode => Err(format!("unsupported schedule mode: {mode}")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod schedule_spec_tests {
+    use super::ScheduleSpec;
+
+    #[test]
+    fn schedule_spec_accepts_legacy_and_canonicalizes_weekdays() {
+        assert_eq!(
+            serde_json::from_str::<ScheduleSpec>(r#"{"mode":"daily","hour":-1,"minute":30}"#)
+                .unwrap(),
+            ScheduleSpec::Hourly { minute: 30 }
+        );
+        assert_eq!(
+            serde_json::from_str::<ScheduleSpec>(
+                r#"{"mode":"weekly","weekday":2,"hour":8,"minute":0}"#,
+            )
+            .unwrap(),
+            ScheduleSpec::Weekly {
+                weekdays: vec![2],
+                hour: 8,
+                minute: 0,
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<ScheduleSpec>(
+                r#"{"mode":"weekly","weekdays":[4,1,4],"hour":8,"minute":0}"#,
+            )
+            .unwrap(),
+            ScheduleSpec::Weekly {
+                weekdays: vec![1, 4],
+                hour: 8,
+                minute: 0,
+            }
+        );
+    }
 }
 
 fn parse_schedule_spec_cell(s: Option<String>) -> Result<Option<ScheduleSpec>, String> {
@@ -63,6 +171,8 @@ pub struct RunConfig {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub max_concurrent_downloads: Option<u32>,
+    #[serde(default)]
+    pub is_dry_run: bool,
     pub created_at: u64,
     #[serde(default)]
     pub schedule_enabled: bool,
@@ -78,7 +188,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
                  FROM run_configs
                  WHERE id = ?1
                  LIMIT 1",
@@ -130,6 +240,9 @@ impl Storage {
             max_concurrent_downloads: row
                 .get(14)
                 .map_err(|e| format!("Failed to parse max_concurrent_downloads: {}", e))?,
+            is_dry_run: row
+                .get(15)
+                .map_err(|e| format!("Failed to parse is_dry_run: {}", e))?,
             created_at: row
                 .get::<_, i64>(9)
                 .map_err(|e| format!("Failed to parse created_at: {}", e))?
@@ -207,9 +320,9 @@ impl Storage {
         conn.execute(
             "INSERT INTO run_configs (
                 id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
+                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 config.id,
                 config.name,
@@ -226,6 +339,7 @@ impl Storage {
                 config.schedule_planned_at,
                 config.schedule_last_run_at,
                 config.max_concurrent_downloads,
+                config.is_dry_run,
             ],
         )
         .map_err(|e| format!("Failed to add run config: {}", e))?;
@@ -238,7 +352,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
                  FROM run_configs
                  ORDER BY created_at DESC",
             )
@@ -268,6 +382,7 @@ impl Storage {
                     user_config,
                     http_headers,
                     max_concurrent_downloads: row.get(14)?,
+                    is_dry_run: row.get(15)?,
                     created_at: row.get::<_, i64>(9)? as u64,
                     schedule_enabled: row.get::<_, i64>(10)? != 0,
                     schedule_spec,
@@ -297,8 +412,8 @@ impl Storage {
              SET name = ?1, description = ?2, plugin_id = ?3, url = ?4, output_dir = ?5, output_album_id = ?6,
                  user_config = ?7, http_headers = ?8,
                  schedule_enabled = ?9, schedule_spec = ?10, schedule_planned_at = ?11, schedule_last_run_at = ?12,
-                 max_concurrent_downloads = ?13
-             WHERE id = ?14",
+                 max_concurrent_downloads = ?13, is_dry_run = ?14
+             WHERE id = ?15",
             params![
                 config.name,
                 config.description,
@@ -313,6 +428,7 @@ impl Storage {
                 config.schedule_planned_at,
                 config.schedule_last_run_at,
                 config.max_concurrent_downloads,
+                config.is_dry_run,
                 config.id,
             ],
         )
@@ -333,7 +449,7 @@ impl Storage {
             .prepare(
                 "SELECT
                     name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
+                    schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
                  FROM run_configs
                  WHERE id = ?1",
             )
@@ -371,6 +487,7 @@ impl Storage {
                 schedule_planned_at: None,
                 schedule_last_run_at: None,
                 max_concurrent_downloads: row.get(13)?,
+                is_dry_run: row.get(14)?,
             })
         });
 
@@ -385,9 +502,9 @@ impl Storage {
         conn.execute(
             "INSERT INTO run_configs (
                 id, name, description, plugin_id, url, output_dir, output_album_id, user_config, http_headers, created_at,
-                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads
+                schedule_enabled, schedule_spec, schedule_planned_at, schedule_last_run_at, max_concurrent_downloads, is_dry_run
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 copied.id,
                 copied.name,
@@ -404,6 +521,7 @@ impl Storage {
                 copied.schedule_planned_at,
                 copied.schedule_last_run_at,
                 copied.max_concurrent_downloads,
+                copied.is_dry_run,
             ],
         )
         .map_err(|e| format!("Failed to insert copied run config: {}", e))?;
@@ -435,6 +553,7 @@ mod tests {
             user_config: None,
             http_headers: None,
             max_concurrent_downloads: None,
+            is_dry_run: false,
             created_at: 1,
             schedule_enabled: false,
             schedule_spec: None,

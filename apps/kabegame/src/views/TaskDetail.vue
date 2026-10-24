@@ -33,6 +33,7 @@
               :failed="failedN"
               :deleted="deletedN"
               :dedup="dedupN"
+              :dry-run="task?.isDryRun"
               :duration="durationText"
             />
           </template>
@@ -88,11 +89,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onActivated, onDeactivated, watch } from "vue";
+import { ref, computed, onActivated, onDeactivated, onMounted, onUnmounted, watch } from "vue";
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@/api/rpc";
-import { listen } from "@/api/rpc";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import ImageGrid from "@/components/ImageGrid.vue";
@@ -130,6 +130,10 @@ import { useI18n } from "@kabegame/i18n";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { useGithubIssueUrl, type GithubIssueField } from "@/composables/useGithubIssueUrl";
 import { useTaskRerun } from "@/composables/useTaskRerun";
+import { normalizeTaskEvent, normalizeTaskRow } from "@/services/tasks";
+import { kbEvent$, on, pathqlRequest$, usePathqlLooker } from "@/services/kbEvents";
+import { encodeSeg } from "@kabegame/pathql-client";
+import type { CrawlTask } from "@/stores/crawler";
 
 const { t } = useI18n();
 const { openIssue } = useGithubIssueUrl();
@@ -224,11 +228,39 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
   void taskDetailRouteStore.navigate(patch, options);
 };
 
-// 任务数据一律从 crawlerStore 读取
-const task = computed(() => {
-  if (!taskId.value) return null;
-  return crawlerStore.tasks.find((t) => t.id === taskId.value) ?? null;
+const task = ref<CrawlTask | null>(null);
+/** 页面是否处于可见存活期，控制任务观察与计时。 */
+const isLive = ref(false);
+const taskKey = computed(() => (isLive.value && taskId.value ? `tasks://id_${encodeSeg(taskId.value)}` : null));
+function requestTask() {
+  if (taskKey.value) pathqlRequest$.next(["rows", taskKey.value]);
+}
+usePathqlLooker({
+  kind: "rows",
+  key: () => taskKey.value,
+  refreshOn: [
+    on("tasks-change", (payload) => {
+      const event = normalizeTaskEvent(payload);
+      return event?.type === "TaskDeleted" && event.taskId === taskId.value;
+    }),
+  ],
+  onResult: ({ rows }) => {
+    task.value = normalizeTaskRow(rows[0]);
+    if (!rows[0] && taskId.value) {
+      if (window.history.length > 1) router.back();
+      else void router.replace("/gallery");
+    }
+  },
 });
+// 换任务才清空；页面停用再激活时保留旧数据，等这次读取覆盖
+watch(taskId, () => (task.value = null), { flush: "sync" });
+watch(
+  taskKey,
+  (key) => {
+    if (key) requestTask();
+  },
+  { immediate: true, flush: "sync" },
+);
 
 const taskName = computed(() => {
   const tsk = task.value;
@@ -298,53 +330,42 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
   }
 };
 
-// 清理定时器的函数（页面失活时调用，节省资源）
-const stopTimers = () => {
-  // 清理定时器
-  if (timeUpdateInterval !== null) {
+// 运行时间计时器：只在页面存活且任务处于 running 时走，由任务状态驱动启停
+const syncClock = () => {
+  const ticking = isLive.value && taskStatusFromStore.value === "running";
+  if (ticking && timeUpdateInterval === null) {
+    currentTime.value = Date.now();
+    timeUpdateInterval = window.setInterval(() => {
+      currentTime.value = Date.now();
+    }, 1000);
+  } else if (!ticking && timeUpdateInterval !== null) {
     clearInterval(timeUpdateInterval);
     timeUpdateInterval = null;
   }
 };
+watch(taskStatusFromStore, syncClock);
 
-// 启动定时器和事件监听器的函数
-const startTimersAndListeners = async () => {
-  // 如果已经启动，则跳过
-  if (timeUpdateInterval !== null) {
-    return;
-  }
-
-  // 启动定时器，每秒更新当前时间（用于实时显示运行时间）
-  currentTime.value = Date.now();
-  timeUpdateInterval = window.setInterval(() => {
-    currentTime.value = Date.now();
-  }, 1000);
-
-  // 监听 `tasks-change`：本页任务终态时停止运行时间计时（进度由 crawler store 统一更新）
-  if (!unlistenTasksChange) {
-    unlistenTasksChange = await listen("tasks-change", async (event) => {
-      const payload: any = event.payload;
-      if (String(payload?.type ?? "") !== "TaskChanged") return;
-      const tid = String(payload?.taskId ?? payload?.task_id ?? "").trim();
-      if (!tid || tid !== taskId.value) return;
-      const diff = payload?.diff ?? {};
-      const status = typeof diff.status === "string" ? diff.status : "";
-      if (status === "completed" || status === "failed" || status === "canceled") {
-        stopTimers();
-      }
-    });
-  }
+// 页面存活期：先订阅补丁，再激活观察 key 并请求，错过的变更由首读补上。
+const startLive = () => {
+  if (isLive.value) return;
+  const subscription = kbEvent$("tasks-change").subscribe(({ payload }) => {
+    const event = normalizeTaskEvent(payload);
+    if (event?.type !== "TaskChanged" || event.taskId !== taskId.value) return;
+    // 首读未回时请求自己的 key，由核心 pending 窗口处理先后返回。
+    if (!task.value) requestTask();
+    else task.value = { ...task.value, ...event.diff };
+  });
+  unlistenTasksChange = () => subscription.unsubscribe();
+  isLive.value = true;
+  syncClock();
 };
 
-// 清理所有定时器和事件监听器的函数（组件真正销毁时调用）
-const stopTimersAndListeners = () => {
-  // 清理定时器
-  stopTimers();
-  // 移除事件监听器
-  if (unlistenTasksChange) {
-    unlistenTasksChange();
-    unlistenTasksChange = null;
-  }
+const stopLive = () => {
+  if (!isLive.value) return;
+  isLive.value = false;
+  unlistenTasksChange?.();
+  unlistenTasksChange = null;
+  syncClock();
 };
 
 const durationText = computed(() => {
@@ -354,16 +375,15 @@ const durationText = computed(() => {
   return formatDuration(src.startTime, src.endTime, isRunning ? currentTime.value : undefined);
 });
 
-// 监听路由参数变化：首个挂载与切换到另一个任务时初始化
+// 监听路由参数变化：切换到另一个任务时重置查询。
+// 路由 store 往往已先从 URL 同步了 taskId，此时条件不成立——所以订阅与计时不能挂在这里，
+// 统一由 startLive / stopLive 跟随组件生命周期，换任务由 taskKey 的 watch 请求。
 watch(
   () => route.params.taskId,
-  async (newId) => {
+  (newId) => {
     // keep-alive 场景：离开任务页后 route 仍会变化（比如其它页面也有 :id）。
     // 这里必须只在 TaskDetail 激活时才响应，否则会错误地把其它页面的 id 当成 taskId。
-
     if (newId && typeof newId === "string" && newId !== taskId.value) {
-      // 清理旧的定时器和监听器
-      stopTimersAndListeners();
       // 切换到新任务（列表与总数由 ImageGrid 按 isActive/currentPath 自动加载）
       rememberTaskDetailSearchModes(DEFAULT_GALLERY_SEARCH_MODES);
       taskDetailRouteStore.patch({
@@ -371,8 +391,6 @@ watch(
         // 换任务就是换数据源：上一个任务的查询不该跟过来
         query: [],
       });
-      // 重新启动定时器和监听器
-      await startTimersAndListeners();
     }
   },
   { immediate: true },
@@ -388,7 +406,10 @@ const handleRefresh = async () => {
   if (!taskId.value) return;
   isRefreshing.value = true;
   try {
-    await Promise.all([taskViewRef.value?.refresh(), failedImagesStore.loadAll()]);
+    // 图片列表请求即返回，结果与错误经 ImageGrid 的观察方落地
+    taskViewRef.value?.refresh();
+    requestTask();
+    await failedImagesStore.loadAll();
     ElMessage.success(t("tasks.refreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);
@@ -467,13 +488,14 @@ const handleHeaderAddToAlbum = () => {
   taskViewRef.value?.openAddToAlbum({ taskId: taskId.value });
 };
 
-onActivated(async () => {
-  await startTimersAndListeners();
-});
+// 未包 keep-alive 时只走 mounted / unmounted；包了则 activated / deactivated 也会成对触发，startLive 幂等
+onMounted(startLive);
+onActivated(startLive);
+onUnmounted(stopLive);
 
 onDeactivated(async () => {
   await taskDetailRouteStore.clear();
-  stopTimersAndListeners();
+  stopLive();
 });
 </script>
 

@@ -155,7 +155,7 @@
       <UpdateDialog />
       <DownloadProgressDialog />
     </template>
-    <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+    <TaskDrawer v-model="taskDrawerVisible" />
     <AutoConfigDialog />
     <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
     <CrawlerDialog v-model="crawlerDrawerVisible" />
@@ -296,7 +296,7 @@ const bottomTabs = computed(() => {
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
-const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskDrawerStore);
+const { visible: taskDrawerVisible } = storeToRefs(taskDrawerStore);
 
 // kamechan 开着时它承载全局工具箱入口，侧栏底部 / 紧凑端 tab 的入口让位
 const { settingValue: kamechanEnabled } = useSettingKeyState("kamechanEnabled");

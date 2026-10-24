@@ -106,6 +106,7 @@ mod tests {
         DownloadErrorKind, DownloadOutcome, SpillWriter, DOWNLOAD_SPILL_THRESHOLD,
     };
     use crate::crawler::{DownloadQueue, TaskScheduler};
+    use crate::plugin::vfs::{InputKind, InputMount};
     use std::sync::Arc;
 
     const HANDLE: u64 = 7_654_321;
@@ -205,5 +206,46 @@ mod tests {
 
         assert_eq!(error.kind, DownloadErrorKind::Fatal);
         assert!(!error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn downloads_from_read_only_input_mount() {
+        init_paths();
+        let plugin_id = format!("task-vfs-input-{}", std::process::id());
+        let source_dir = std::env::temp_dir().join(format!(
+            "kabegame-task-vfs-input-{}-{}",
+            std::process::id(),
+            HANDLE
+        ));
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("a.png");
+        std::fs::write(&source, b"input-image").unwrap();
+        let vfs = Arc::new(test_vfs(&plugin_id).with_inputs(vec![InputMount {
+            key: "src".to_string(),
+            kind: InputKind::File {
+                host: source.clone(),
+                name: "a.png".to_string(),
+            },
+            #[cfg(target_os = "android")]
+            owned_fd: None,
+        }]));
+        let url = Url::parse(&format!("task-vfs://{HANDLE}/input/src/a.png")).unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "kabegame-task-vfs-input-output-{}",
+            std::process::id()
+        ));
+        let mut writer = SpillWriter::new_in(5, output_dir);
+
+        download_from_vfs(Arc::clone(&vfs), HANDLE, &url, &mut writer)
+            .await
+            .expect("read input mount file");
+        assert_eq!(writer.total, Some(11));
+        match writer.finalize().await.unwrap() {
+            DownloadOutcome::Bytes(bytes) => assert_eq!(bytes, b"input-image"),
+            DownloadOutcome::Path(_) => panic!("small input file should stay in memory"),
+        }
+        // 下载只读不会改动用户源文件。
+        assert_eq!(std::fs::read(&source).unwrap(), b"input-image");
+        let _ = std::fs::remove_file(&source);
     }
 }

@@ -195,27 +195,6 @@ pub fn init_registry() {
     );
 
     map.insert(
-        "pathql_view",
-        MethodEntry {
-            requires_super: false,
-            handler: Arc::new(|p| {
-                Box::pin(async move {
-                    #[derive(serde::Deserialize)]
-                    struct Args {
-                        path: String,
-                    }
-                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result = kabegame_core::commands::view::pathql_view(args.path)
-                        .await
-                        .map_err(RpcError::internal)?;
-                    crate::web::image_rewrite::rewrite_image_value(&mut result.rows);
-                    serde_json::to_value(result).map_err(RpcError::internal)
-                })
-            }),
-        },
-    );
-
-    map.insert(
         "pathql_count",
         MethodEntry {
             requires_super: false,
@@ -230,6 +209,33 @@ pub fn init_registry() {
                         .await
                         .map_err(RpcError::internal)?;
                     serde_json::to_value(result).map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
+    map.insert(
+        "pathql_all",
+        MethodEntry {
+            requires_super: false,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    use kabegame_core::providers::PathqlQuery;
+                    #[derive(serde::Deserialize)]
+                    struct Args {
+                        queries: Vec<PathqlQuery>,
+                    }
+                    let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
+                    let mut results =
+                        kabegame_core::commands::image::pathql_all(args.queries.clone())
+                            .await
+                            .map_err(RpcError::internal)?;
+                    for (query, result) in args.queries.iter().zip(&mut results) {
+                        if matches!(query, PathqlQuery::Fetch { .. }) {
+                            crate::web::image_rewrite::rewrite_image_value(result);
+                        }
+                    }
+                    serde_json::to_value(results).map_err(RpcError::internal)
                 })
             }),
         },
@@ -1047,19 +1053,11 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         image_ids: Vec<String>,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result = kabegame_core::commands::image::batch_delete_images(
-                        args.image_ids,
-                        args.view,
-                    )
-                    .await
-                    .map_err(RpcError::internal)?;
-                    if let Some(rows) = result.pointer_mut("/view/rows") {
-                        crate::web::image_rewrite::rewrite_image_value(rows);
-                    }
-                    Ok(result)
+                    kabegame_core::commands::image::batch_delete_images(args.image_ids)
+                        .await
+                        .map_err(RpcError::internal)
                 })
             }),
         },
@@ -1075,19 +1073,11 @@ pub fn init_registry() {
                     #[serde(rename_all = "camelCase")]
                     struct Args {
                         image_ids: Vec<String>,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
-                    let mut result = kabegame_core::commands::image::batch_remove_images(
-                        args.image_ids,
-                        args.view,
-                    )
-                    .await
-                    .map_err(RpcError::internal)?;
-                    if let Some(rows) = result.pointer_mut("/view/rows") {
-                        crate::web::image_rewrite::rewrite_image_value(rows);
-                    }
-                    Ok(result)
+                    kabegame_core::commands::image::batch_remove_images(args.image_ids)
+                        .await
+                        .map_err(RpcError::internal)
                 })
             }),
         },
@@ -1276,21 +1266,13 @@ pub fn init_registry() {
                     struct Args {
                         album_id: String,
                         image_ids: Vec<String>,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_images_to_album(
                         args.album_id,
                         args.image_ids,
-                        args.view,
                     )
                     .await
-                    .map(|mut result| {
-                        if let Some(rows) = result.pointer_mut("/view/rows") {
-                            crate::web::image_rewrite::rewrite_image_value(rows);
-                        }
-                        result
-                    })
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1308,21 +1290,13 @@ pub fn init_registry() {
                     struct Args {
                         task_id: String,
                         album_id: String,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::add_task_images_to_album(
                         args.task_id,
                         args.album_id,
-                        args.view,
                     )
                     .await
-                    .map(|mut result| {
-                        if let Some(rows) = result.pointer_mut("/view/rows") {
-                            crate::web::image_rewrite::rewrite_image_value(rows);
-                        }
-                        result
-                    })
                     .map_err(RpcError::internal)
                 })
             }),
@@ -1340,21 +1314,13 @@ pub fn init_registry() {
                     struct Args {
                         album_id: String,
                         image_ids: Vec<String>,
-                        view: Option<String>,
                     }
                     let args: Args = serde_json::from_value(p).map_err(RpcError::invalid_params)?;
                     kabegame_core::commands::album::remove_images_from_album(
                         args.album_id,
                         args.image_ids,
-                        args.view,
                     )
                     .await
-                    .map(|mut result| {
-                        if let Some(rows) = result.pointer_mut("/view/rows") {
-                            crate::web::image_rewrite::rewrite_image_value(rows);
-                        }
-                        result
-                    })
                     .map_err(RpcError::internal)
                 })
             }),
@@ -2208,9 +2174,7 @@ pub async fn dispatch(req: JsonRpcRequest, is_super: bool) -> Value {
     }
 }
 
-// Web 专属：只回 `{id, version}` 索引（详情体积大，web 客户端按需 `get_plugin_detail`
-// 单取）。桌面走 `commands::plugin::get_plugins` 回整份列表——两端形状不同，故各自实现，
-// 不下沉到 feature-agnostic 的 core commands 层。
+// Web 与桌面统一返回轻量插件列表。
 async fn web_get_plugins() -> Result<Value, RpcError> {
     let pm = kabegame_core::plugin::PluginManager::global();
     pm.ensure_installed_cache_initialized()
@@ -2218,11 +2182,7 @@ async fn web_get_plugins() -> Result<Value, RpcError> {
         .map_err(RpcError::internal)?;
     let mut plugins = pm.get_all().map_err(RpcError::internal)?;
     plugins.extend(pm.builtin_plugins());
-    let index: Vec<Value> = plugins
-        .iter()
-        .map(|p| serde_json::json!({ "id": p.id, "version": p.version }))
-        .collect();
-    Ok(Value::Array(index))
+    serde_json::to_value(plugins).map_err(|e| RpcError::internal(e.to_string()))
 }
 
 async fn web_refresh_plugins() -> Result<Value, RpcError> {

@@ -22,6 +22,7 @@ kabegame-i18n = { workspace = true }
 pathql-rs = { workspace = true }
 dirs = "5.0"
 tokio = {workspace = true}
+axum = { version = "0.8", features = ["multipart"] }
 url = "2"
 uuid = {workspace = true}
 # 页面 VFS 命令（`crawl_fs_*` / `crawl_ffmpeg_*`）桌面与安卓共用；core 的 plugin-runtime 在安卓上
@@ -41,7 +42,6 @@ tauri-plugin-opener = { version = "2", optional = true }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client", "plugin-runtime"] }
 governor = "0.10"
-axum = { version = "0.8", features = ["multipart"] }
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 reqwest = { version = "0.11", features = ["stream", "native-tls"] }

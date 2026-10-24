@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_all_provider",
+    "query": {
+        "order": [
+            { "sql": "run_configs.created_at", "order": "desc" },
+            { "sql": "run_configs.id", "order": "desc" }
+        ]
+    }
+}

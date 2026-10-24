@@ -219,7 +219,6 @@ enum RotationSource {
 struct ImageLite {
     id: String,
     local_path: String,
-    plugin_id: Option<String>,
 }
 
 pub struct WallpaperRotator {
@@ -298,7 +297,6 @@ impl WallpaperRotator {
             .map(|img| ImageLite {
                 id: img.id,
                 local_path: img.local_path,
-                plugin_id: img.plugin_id,
             })
             .collect())
     }
@@ -596,22 +594,10 @@ impl WallpaperRotator {
                     .update_image_last_set_wallpaper_at(&ids[0], now_ts)
                     .is_ok()
                 {
-                    GlobalEmitter::global().emit_image_changed_uniform(
+                    GlobalEmitter::global().emit_image_fields(
                         &ids,
                         serde_json::json!({ "lastSetWallpaperAt": now_ts }),
                     );
-                    if let Some(plugin_id) = selected_image.plugin_id.clone() {
-                        GlobalEmitter::global().emit_images_change(
-                            "change",
-                            &ids,
-                            None,
-                            None,
-                            Some(&[plugin_id]),
-                        );
-                    } else {
-                        GlobalEmitter::global()
-                            .emit_images_change("change", &ids, None, None, None);
-                    }
                 }
 
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器
@@ -891,21 +877,8 @@ impl WallpaperRotator {
             .update_image_last_set_wallpaper_at(&ids[0], now_ts)
             .is_ok()
         {
-            GlobalEmitter::global().emit_image_changed_uniform(
-                &ids,
-                serde_json::json!({ "lastSetWallpaperAt": now_ts }),
-            );
-            if let Some(plugin_id) = selected_image.plugin_id.clone() {
-                GlobalEmitter::global().emit_images_change(
-                    "change",
-                    &ids,
-                    None,
-                    None,
-                    Some(&[plugin_id]),
-                );
-            } else {
-                GlobalEmitter::global().emit_images_change("change", &ids, None, None, None);
-            }
+            GlobalEmitter::global()
+                .emit_image_fields(&ids, serde_json::json!({ "lastSetWallpaperAt": now_ts }));
         }
 
         // 如果轮播已启用但未运行，启动轮播器

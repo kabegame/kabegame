@@ -1,8 +1,9 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { useCrawlerStore } from "./crawler";
 import { IS_WEB } from "@/env";
 import { trackEvent } from "@/track/umami";
+import { normalizeTaskEvent } from "@/services/tasks";
+import { on, pathqlRequest$, usePathqlLookAll } from "@/services/kbEvents";
 
 function currentUrl() {
   return typeof location === "undefined" ? "" : location.pathname + location.search;
@@ -10,27 +11,35 @@ function currentUrl() {
 
 export const useTaskDrawerStore = defineStore("taskDrawer", () => {
   const visible = ref(false);
-  const crawlerStore = useCrawlerStore();
-
-  // 获取所有任务（包括排队中、运行中、失败、取消和已完成的任务）
-  const tasks = computed(() => {
-    return crawlerStore.tasks.filter(
-      (task) =>
-        task.status === "pending" ||
-        task.status === "running" ||
-        task.status === "waiting_downloads" ||
-        task.status === "failed" ||
-        task.status === "canceled" ||
-        task.status === "completed",
-    );
+  const search = ref("");
+  const statusCounts = ref<Record<string, number>>({});
+  const countsLooker = usePathqlLookAll({
+    queries: () => [{ kind: "list", path: "tasks://status" }] as const,
+    refreshOn: [
+      on("tasks-change", (payload) => {
+        const event = normalizeTaskEvent(payload);
+        return !!event && (event.type !== "TaskChanged" || Object.prototype.hasOwnProperty.call(event.diff, "status"));
+      }),
+    ],
+    onResult: ([entries]) => {
+      statusCounts.value = Object.fromEntries(
+        entries.map((entry) => [entry.name, Number((entry.meta as Record<string, unknown> | null)?.count ?? 0)]),
+      );
+    },
   });
+
+  const sum = (statuses: string[]) => statuses.reduce((total, status) => total + (statusCounts.value[status] ?? 0), 0);
 
   // 右上角徽章显示：排队中 + 运行中
-  const activeTasksCount = computed(() => {
-    return crawlerStore.tasks.filter(
-      (task) => task.status === "pending" || task.status === "running" || task.status === "waiting_downloads",
-    ).length;
-  });
+  const activeTasksCount = computed(() => sum(["pending", "running", "waiting_downloads"]));
+  const finishedTasksCount = computed(() => sum(["completed", "failed", "canceled"]));
+  const allTasksCount = computed(() => activeTasksCount.value + finishedTasksCount.value);
+
+  function refreshCounts() {
+    const key = countsLooker.key();
+    if (key) pathqlRequest$.next(["all", key]);
+  }
+  refreshCounts();
 
   function open() {
     if (IS_WEB && !visible.value) {
@@ -38,7 +47,7 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
         action: "open",
         url: currentUrl(),
         active_task_count: activeTasksCount.value,
-        task_count: tasks.value.length,
+        task_count: allTasksCount.value,
       });
     }
     visible.value = true;
@@ -50,7 +59,7 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
         action: "close",
         url: currentUrl(),
         active_task_count: activeTasksCount.value,
-        task_count: tasks.value.length,
+        task_count: allTasksCount.value,
       });
     }
     visible.value = false;
@@ -66,8 +75,11 @@ export const useTaskDrawerStore = defineStore("taskDrawer", () => {
 
   return {
     visible,
-    tasks,
+    search,
+    statusCounts,
     activeTasksCount,
+    finishedTasksCount,
+    refreshCounts,
     open,
     close,
     toggle,

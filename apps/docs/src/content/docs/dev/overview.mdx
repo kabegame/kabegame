@@ -108,7 +108,7 @@ V8 插件导出 `async function crawl(common, custom)`，宿主能力通过全�
 
 ```ts
 export async function crawl(common, custom) {
-  const baseUrl = common.base_url ?? "https://example.com";
+  const baseUrl = common.baseUrl ?? "https://example.com";
   await Kabegame.to(`${baseUrl}/gallery`);
 
   const doc = await Kabegame.currentDocument();
