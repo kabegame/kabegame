@@ -6,12 +6,12 @@ import { buildGalleryCountPath, hasActiveQuery } from "@/utils/galleryPath";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter } from "../types";
 import {
-  albumChangeKinds,
   albumPatchTriggers,
   addedTrigger,
   patchTriggers,
   hiddenTrigger,
-  on,
+  labelSearchTriggers,
+  noAlbumTriggers,
 } from "@/services/kbEvents";
 import { IS_WEB } from "@/env";
 
@@ -56,15 +56,9 @@ export function createGalleryAdapter(params: { analytics: ImageAnalytics }): Gri
       addedTrigger(view),
       ...patchTriggers(view),
       ...hiddenTrigger(view),
-      on("album-images-added", () => routeStore.effectiveNoAlbum),
-      on("album-images-deleted", () => routeStore.effectiveNoAlbum),
-      on("album-images-change", () => routeStore.effectiveNoAlbum),
-      on("albums-deleted", () => routeStore.effectiveNoAlbum),
-      on("album-moved"),
-      ...albumPatchTriggers((patch) => {
-        const kinds = albumChangeKinds(patch);
-        return kinds.structure || (routeStore.effectiveNoAlbum && kinds.row);
-      }),
+      ...labelSearchTriggers(view),
+      ...noAlbumTriggers(() => routeStore.effectiveNoAlbum),
+      ...albumPatchTriggers((_patch, kinds) => routeStore.effectiveNoAlbum && (kinds.structure || kinds.row)),
     ],
     actionsOptions: () => ({ removeText: t("gallery.delete") }),
     remove: {

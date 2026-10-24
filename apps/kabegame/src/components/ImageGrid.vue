@@ -427,11 +427,11 @@ const handleCountError = async (error: unknown) => {
   if (typeof fallback === "number") totalImagesCount.value = fallback;
 };
 
-// 后台删除：行只在当前已持有的行命中时刷新，总数任何删除都刷新；用户删除仍由 mutate 主动请求。
+// 后台删除：行按持有 id 判断；画册总数由成员删除定位，其余总数响应任何删除。用户写操作仍由 mutate 请求。
 const rowsRefreshOn = [...adapter.refreshOn, deletedTrigger(() => images.value.map((image) => image.id))];
 const countRefreshOn = [
   ...adapter.refreshOn,
-  deletedTrigger(),
+  ...(adapter.deletesViaMembership ? [] : [deletedTrigger()]),
   // 分母与分子同批读取；分母不带过滤，任何新增都会改变它
   on("images-added", () => !!currentUnfilteredCountPath()),
 ];

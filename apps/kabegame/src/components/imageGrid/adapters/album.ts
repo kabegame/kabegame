@@ -9,7 +9,7 @@ import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
-import { albumChangeKinds, albumPatchTriggers, hiddenTrigger, patchTriggers, on } from "@/services/kbEvents";
+import { labelSearchTriggers, hiddenTrigger, patchTriggers, on } from "@/services/kbEvents";
 
 /**
  * 画册页（`/albums`）中栏的 grid adapter。
@@ -89,15 +89,11 @@ export function createAlbumDetailAdapter(params: {
       on("album-images-deleted", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
       // 隐藏 / 取消隐藏只发隐藏画册自身的事件：hide 开启就刷新，关闭时由 imagePatches$ 按 id 打 isHidden 补丁
       ...hiddenTrigger(view),
-      on("album-images-change", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
+      on("album-images-change", (p) => p.albumId === params.albumId() && routeStore.sort.field === "by-album-order"),
+      ...labelSearchTriggers(view),
       on("albums-deleted", (payload) => payload.albums.some((album) => album.id === params.albumId())),
-      on("album-moved", (payload) => payload.id === params.albumId()),
-      ...albumPatchTriggers((patch) => {
-        if (!params.albumId() || patch.id !== params.albumId()) return false;
-        const kinds = albumChangeKinds(patch);
-        return kinds.structure || kinds.row;
-      }),
     ],
+    deletesViaMembership: true,
     actionsOptions: () => ({
       removeText: t("gallery.removeFromAlbum"),
       deleteText: t("gallery.deleteImageFiles"),

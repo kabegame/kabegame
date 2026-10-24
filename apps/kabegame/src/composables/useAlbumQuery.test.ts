@@ -204,10 +204,9 @@ describe("useAlbumQuery 两段 pathql 观察", () => {
     ["album-changed", { patch: { id: "self", syncMode: "shallow" } }, ["A"]],
     ["album-changed", { patch: { id: "other", syncMode: "shallow" } }, []],
     ["album-changed", { patch: { id: "root", name: "改名" } }, ["A"]],
-    // 不持有子孙行的路径，结构补丁继续保守刷新，不采用 Phase F 的收紧。
-    ["albums-change", { patches: [{ id: "child", name: "改名" }] }, ["A", "B"]],
+    ["albums-change", { patches: [{ id: "child", name: "改名" }] }, []],
     ["album-moved", { id: "child", oldAncestorPath: "/root/self/child/", newAncestorPath: "/else/child/" }, ["A", "B"]],
-    ["albums-added", { albums: [{ id: "self", ancestorPath: "/root/self/" }] }, ["A"]],
+    ["albums-added", { albums: [{ id: "child", ancestorPath: "/root/self/child/" }] }, ["A"]],
     ["albums-deleted", { albums: [{ id: "child", ancestorPath: "/root/self/child/" }] }, ["A", "B"]],
     ["albums-added", { albums: [{ id: "sibling", ancestorPath: "/root/sibling/" }] }, []],
     ["album-images-added", { albumId: "self", ancestorPath: "/root/self/" }, ["B"]],
@@ -219,6 +218,16 @@ describe("useAlbumQuery 两段 pathql 观察", () => {
       { albumId: "00000000-0000-0000-0000-000000000000", ancestorPath: "/00000000-0000-0000-0000-000000000000/" },
       [],
     ],
+    [
+      "album-moved",
+      { id: "child", oldAncestorPath: "/root/self/a/child/", newAncestorPath: "/root/self/b/child/" },
+      ["A"],
+    ],
+    ["album-moved", { id: "child", oldAncestorPath: "/else/child/", newAncestorPath: "/root/self/child/" }, ["A", "B"]],
+    ["albums-deleted", { albums: [{ id: "self", ancestorPath: "/root/self/" }] }, ["A"]],
+    ["albums-deleted", { albums: [{ id: "root", ancestorPath: "/root/" }] }, ["A"]],
+    ["albums-deleted", { albums: [{ id: "other", ancestorPath: "/other/" }] }, []],
+    ["album-images-change", { albumId: "self", ancestorPath: "/root/self/" }, []],
     ["images-added", { seq: 1, images: [] }, []],
   ])("事件相关性 %s %j → %j", async (name, payload, expected) => {
     vi.useFakeTimers();
@@ -229,6 +238,44 @@ describe("useAlbumQuery 两段 pathql 观察", () => {
     emit(name, payload);
     await flushPromises();
     expect(pathqlAll.mock.calls.map(([queries]) => (queries.length === 3 ? "A" : "B")).sort()).toEqual(expected);
+  });
+
+  it.each([
+    ["label_dir", "album-images-added", { albumId: "self", ancestorPath: "/root/self/" }, false],
+    ["label_dir", "albums-added", { albums: [{ id: "child", ancestorPath: "/root/self/child/" }] }, true],
+    ["label_dir", "albums-added", { albums: [{ id: "deep", ancestorPath: "/root/self/child/deep/" }] }, false],
+    ["label_dir", "albums-deleted", { albums: [{ id: "child", ancestorPath: "/root/self/child/" }] }, true],
+    ["label_dir", "albums-deleted", { albums: [{ id: "self", ancestorPath: "/root/self/" }] }, false],
+    [
+      "label_dir",
+      "album-moved",
+      { id: "child", oldAncestorPath: "/other/child/", newAncestorPath: "/root/self/child/" },
+      true,
+    ],
+    [
+      "label_dir",
+      "album-moved",
+      { id: "deep", oldAncestorPath: "/root/self/child/deep/", newAncestorPath: "/root/self/else/deep/" },
+      false,
+    ],
+    ["label", "album-images-added", { albumId: "self", ancestorPath: "/root/self/" }, true],
+    ["label", "album-images-deleted", { albumId: "child", ancestorPath: "/root/self/child/" }, false],
+    ["label", "albums-added", { albums: [{ id: "child", ancestorPath: "/root/self/child/" }] }, false],
+    [
+      "label",
+      "album-moved",
+      { id: "child", oldAncestorPath: "/other/child/", newAncestorPath: "/root/self/child/" },
+      false,
+    ],
+  ] as const)("%s 类型计数：%s %j → %s", async (type, event, payload, expected) => {
+    vi.useFakeTimers();
+    pathqlAll.mockImplementation(async (queries) => (queries.length === 3 ? detailResult("self", type) : [12]));
+    fixture();
+    await flushPromises();
+    pathqlAll.mockClear();
+    emit(event, payload);
+    await flushPromises();
+    expect(pathqlAll.mock.calls.some(([queries]) => queries.length === 1)).toBe(expected);
   });
 
   it("移动祖先即刻改写自身与祖先持有路径，连续移动使用前一次的新路径", async () => {
@@ -247,7 +294,7 @@ describe("useAlbumQuery 两段 pathql 观察", () => {
     await flushPromises();
   });
 
-  it("self 未知时 A 只认相同 id，B 尚未注册", async () => {
+  it("self 未知时路径事件保守刷新，B 尚未注册", async () => {
     vi.useFakeTimers();
     const pending = deferred();
     pathqlAll.mockImplementation(() => pending.promise);
@@ -256,7 +303,9 @@ describe("useAlbumQuery 两段 pathql 观察", () => {
     pathqlAll.mockClear();
     emit("albums-added", { albums: [] });
     emit("albums-deleted", { albums: [{ id: "other", ancestorPath: "/other/" }] });
-    expect(pathqlAll).not.toHaveBeenCalled();
+    expect(pathqlAll).toHaveBeenCalledTimes(1);
+    pathqlAll.mockClear();
+    vi.advanceTimersByTime(500);
     emit("albums-deleted", { albums: [{ id: "self", ancestorPath: "/self/" }] });
     expect(pathqlAll).toHaveBeenCalledTimes(1);
     pending.resolve(detailResult());

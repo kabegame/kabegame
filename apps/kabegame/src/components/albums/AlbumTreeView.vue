@@ -69,9 +69,9 @@ import type { TreeQuerySource, TreeDndController, TreeRowState, TreeSection } fr
 import { useTreeModel } from "@/components/tree/useTreeModel";
 import {
   on,
-  albumChangeKinds,
   albumPatchTriggers,
   albumEventAffectsDir,
+  albumEventPaths,
   moveAlbumPath,
   type AlbumMovedPayload,
   type AlbumImagesPayload,
@@ -192,31 +192,54 @@ const dataSource: TreeQuerySource<AlbumNode> = {
       branch.kind === "section"
         ? null
         : (model.nodeByKey(branch.parent.id)?.element.ancestorPath ?? branch.parent.ancestorPath);
+    const affects = (name: string, payload: unknown) => albumEventAffectsDir(name, payload, path());
+    // 分区根按路径首段的根画册归属分区；系统区只有收藏 / 隐藏，不受画册结构影响。
+    const inSection = (ancestorPath: string | undefined, row?: Album) => {
+      if (branch.kind !== "section") return false;
+      if (branch.sectionId === "system") return false;
+      const rootId = ancestorPath?.split("/").filter(Boolean)[0];
+      const root = rootId ? (model.nodeByKey(rootId)?.element ?? (row?.id === rootId ? row : undefined)) : undefined;
+      // 根节点未加载时无法判断分区，保守刷新。
+      return !root || sectionOf(root) === branch.sectionId;
+    };
+    const structureHit = (name: string, payload: unknown, rows?: Album[]) => {
+      if (branch.kind !== "section") return affects(name, payload);
+      const paths = albumEventPaths(name, payload);
+      return paths === "wildcard" || paths.some((p, i) => inSection(p, rows?.[i]));
+    };
+    const inBranch = (payload: AlbumImagesPayload) =>
+      branch.kind === "section" ? inSection(payload.ancestorPath) : affects("album-images-added", payload);
+    // 名称等字段只显示在直接父目录的页上；有搜索词时子孙命中会改变祖先是否保留，放宽到祖先页。
+    const patchHit = (held: string) => {
+      if (searchQuery.value) {
+        return branch.kind === "section" ? inSection(held) : affects("album-images-added", { ancestorPath: held });
+      }
+      const parent = `/${held.split("/").filter(Boolean).slice(0, -1).join("/")}/`;
+      return branch.kind === "section" ? parent === "//" && inSection(held) : parent === path();
+    };
+    const memberHit = (p: AlbumImagesPayload) => {
+      const system = p.albumId === FAVORITE_ALBUM_ID || p.albumId === HIDDEN_ALBUM_ID;
+      if (branch.kind === "section" && branch.sectionId === "system") return system;
+      // 收藏只改变系统区计数，不能在找不到根节点时误刷普通分区。
+      if (p.albumId === FAVORITE_ALBUM_ID) return false;
+      if (p.albumId === HIDDEN_ALBUM_ID) return !!prefix.value && !p.imagesDeleted;
+      return inBranch(p);
+    };
     const structure = [
-      on("albums-added", (payload) => albumEventAffectsDir("albums-added", payload, path())),
-      on("albums-deleted", (payload) => albumEventAffectsDir("albums-deleted", payload, path())),
-      on("album-moved", (payload) => albumEventAffectsDir("album-moved", payload, path())),
-      ...albumPatchTriggers((patch) => {
-        const kinds = albumChangeKinds(patch);
-        const held = model.nodeByKey(patch.id)?.element.ancestorPath;
-        return (
-          (kinds.structure || (part === "page" && kinds.row)) &&
-          (!held || path() === null || (held !== path() && held.startsWith(path()!)))
-        );
-      }),
+      on("albums-added", (payload) => structureHit("albums-added", payload, payload.albums)),
+      on("albums-deleted", (payload) => structureHit("albums-deleted", payload)),
+      on("album-moved", (payload) => structureHit("album-moved", payload)),
+      // 字段补丁只影响已加载行；extra 不依赖名称、同步状态等展示字段。
+      ...(part === "page"
+        ? albumPatchTriggers((patch, kinds) => {
+            const held = model.nodeByKey(patch.id)?.element.ancestorPath;
+            return (kinds.structure || kinds.row) && !!held && patchHit(held);
+          })
+        : []),
     ];
-    // 带 hide/ 前缀的计数受任何隐藏 / 取消隐藏影响，事件不带图片所在的其它画册，一律刷新；其余按事件路径定位。
-    const memberHit = (payload: AlbumImagesPayload) =>
-      (!!prefix.value && payload.albumId === HIDDEN_ALBUM_ID) ||
-      albumEventAffectsDir("album-images-added", payload, path());
     return part === "page"
       ? structure
-      : [
-          ...structure,
-          on("album-images-added", memberHit),
-          on("album-images-deleted", memberHit),
-          on("album-images-change", memberHit),
-        ];
+      : [...structure, on("album-images-added", memberHit), on("album-images-deleted", memberHit)];
   },
   totalChildren: (node) => node.childCount,
   pageSize: ALBUM_PAGE_SIZE,

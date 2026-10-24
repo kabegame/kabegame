@@ -4,15 +4,19 @@ import { createAlbumDetailAdapter } from "./album";
 import { createTaskDetailAdapter } from "./task";
 import { createSurfImagesAdapter } from "./surf";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
+import type { GallerySort } from "@/utils/galleryPath";
 import type { GalleryQuery } from "@/utils/galleryQuery";
 import type { EventTrigger } from "@/services/kbEvents";
 
 const state = vi.hoisted(() => ({
   id: "current",
   noAlbum: false,
+  get effectiveNoAlbum() {
+    return this.noAlbum;
+  },
   hide: false,
   query: [] as GalleryQuery,
-  sort: { field: "by-time" as const, desc: false },
+  sort: { field: "by-time", desc: false } as GallerySort,
 }));
 vi.mock("@/router", () => ({ default: { currentRoute: { value: { path: "/gallery" } } } }));
 vi.mock("@kabegame/i18n", () => ({ i18n: { global: { t: (key: string) => key } } }));
@@ -65,6 +69,7 @@ beforeEach(() => {
   state.noAlbum = false;
   state.hide = false;
   state.query = [];
+  state.sort = { field: "by-time", desc: false };
 });
 
 describe("Phase B 四个 adapter 的图片相关性", () => {
@@ -118,19 +123,49 @@ describe("Phase B 四个 adapter 的图片相关性", () => {
     expect(accepts(adapters.gallery().refreshOn, "album-images-added", payload)).toBe(true);
     expect(accepts(adapters.album().refreshOn, "album-images-added", payload)).toBe(true);
   });
-  it("Phase E 保留改名、任意排序与无画册删除的刷新口径", () => {
+  it("画册改名、移动不刷新网格，排序只在 by-album-order 下刷新", () => {
+    const album = adapters.album();
     const patch = { seq: 1, patch: { id: "current", name: "新名" } };
-    expect(accepts(adapters.album().refreshOn, "album-changed", patch)).toBe(true);
-    expect(accepts(adapters.gallery().refreshOn, "albums-change", { patches: [patch.patch] })).toBe(true);
-    expect(accepts(adapters.album().refreshOn, "album-images-change", { albumId: "current", imageIds: ["x"] })).toBe(
-      true,
-    );
+    expect(accepts(album.refreshOn, "album-changed", patch)).toBe(false);
+    expect(accepts(album.refreshOn, "album-moved", { id: "current" })).toBe(false);
+    const order = { albumId: "current", imageIds: ["x"] };
+    expect(accepts(album.refreshOn, "album-images-change", order)).toBe(false);
+    state.sort.field = "by-album-order";
+    expect(accepts(album.refreshOn, "album-images-change", order)).toBe(true);
+    expect(accepts(album.refreshOn, "album-images-change", { ...order, albumId: "other" })).toBe(false);
+    expect(album.deletesViaMembership).toBe(true);
+    expect(accepts(album.refreshOn, "albums-deleted", { albums: [{ id: "current" }] })).toBe(true);
+  });
+  it.each(["gallery", "task", "surf"] as const)(
+    "%s：无画册时加入、收藏、删画册刷新，隐藏与删图删除不重复触发",
+    (name) => {
+      const filters = adapters[name]().refreshOn;
+      expect(accepts(filters, "album-images-added", { albumId: "normal" })).toBe(false);
+      expect(accepts(filters, "album-images-added", { albumId: "favorite" })).toBe(false);
+      state.noAlbum = true;
+      expect(accepts(filters, "album-images-added", { albumId: "normal" })).toBe(true);
+      expect(accepts(filters, "album-images-added", { albumId: "favorite" })).toBe(true);
+      expect(accepts(filters, "album-images-deleted", { albumId: "normal", imagesDeleted: true })).toBe(false);
+      expect(accepts(filters, "album-images-added", { albumId: "hidden" })).toBe(false);
+      expect(accepts(filters, "album-images-deleted", { albumId: "hidden" })).toBe(false);
+      expect(accepts(filters, "albums-deleted", { albums: [{ id: "other" }] })).toBe(true);
+      expect(accepts(filters, "album-images-change", { albumId: "normal" })).toBe(false);
+    },
+  );
+  it("画廊不因任意画册改名、移动或收藏刷新，无画册时才响应画册字段", () => {
+    const filters = adapters.gallery().refreshOn;
+    expect(accepts(filters, "albums-change", { patches: [{ id: "other", name: "新名" }] })).toBe(false);
+    expect(accepts(filters, "album-moved", { id: "other" })).toBe(false);
     state.noAlbum = true;
-    expect(
-      accepts(adapters.gallery().refreshOn, "albums-deleted", { albums: [{ id: "other", ancestorPath: "/other/" }] }),
-    ).toBe(true);
-    // 任务 / 畅游的无画册缺口留给 Phase F，本次不改变它们的普通成员刷新条件。
-    expect(accepts(adapters.task().refreshOn, "album-images-added", { albumId: "current" })).toBe(false);
-    expect(accepts(adapters.surf().refreshOn, "album-images-added", { albumId: "current" })).toBe(false);
+    expect(accepts(filters, "albums-change", { patches: [{ id: "other", name: "新名" }] })).toBe(true);
+    expect(accepts(filters, "album-moved", { id: "other" })).toBe(false);
+  });
+  it.each(Object.entries(adapters))("%s：标签搜索响应挂标签、路径变更，不响应排序", (_name, create) => {
+    const filters = create().refreshOn;
+    state.query = [{ is: { search: { modes: ["label"], query: "tag" } } }];
+    expect(accepts(filters, "album-images-added", { albumId: "label", imageIds: ["x"] })).toBe(true);
+    expect(accepts(filters, "album-moved", { id: "label-dir" })).toBe(true);
+    expect(accepts(filters, "albums-change", { patches: [{ id: "label", labelKey: "tag" }] })).toBe(true);
+    expect(accepts(filters, "album-images-change", { albumId: "label" })).toBe(false);
   });
 });

@@ -1,13 +1,12 @@
 import { computed, onScopeDispose, ref, watch, type Ref } from "vue";
 import { albumImageCountQuery, normalizeAlbumRow, type Album } from "@/services/albums";
 import {
-  albumChangeKinds,
   albumPatchTriggers,
   kbEvent$,
   moveAlbumPath,
   type AlbumMovedPayload,
   type AlbumImagesPayload,
-  albumEventAffectsDir,
+  pathHasAlbum,
   albumEventPaths,
   on,
   pathqlRequest$,
@@ -21,23 +20,25 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
   const imageCount = ref(0);
   const descendantCount = ref(0);
   const self = () => (album.value?.id === albumId.value ? album.value?.ancestorPath : undefined);
-  const sameChainPath = (paths: string[] | "wildcard", id: string | undefined) => {
-    const path = self();
-    if (!path) return !!albumId.value && id === albumId.value;
-    return paths === "wildcard" || paths.some((p) => p.startsWith(path) || path.startsWith(p));
+  const inChain = (id: string) => id === albumId.value || (!!self() && pathHasAlbum(self()!, id));
+  // 路径尚未落地或事件缺路径时无法排除影响，保持保守刷新。
+  const underSelf = (path: string) => !self() || !path || (path !== self() && path.startsWith(self()!));
+  const inChainPath = (path: string) => !self() || !path || self()!.startsWith(path);
+  const labelDir = () => album.value?.type === "label_dir";
+  const label = () => album.value?.type === "label";
+  const directChild = (path: string) => {
+    if (!self() || !path) return true;
+    const parts = path.split("/").filter(Boolean);
+    return `/${parts.slice(0, -1).join("/")}/` === self();
   };
-  const sameChain = (name: string, payload: unknown, id: string | undefined) =>
-    sameChainPath(albumEventPaths(name, payload), id);
-  const affectsCount = (name: string, payload: unknown) => {
-    const path = self();
-    return !!path && albumEventAffectsDir(name, payload, path);
+  const anyPath = (name: string, payload: unknown, test: (path: string) => boolean) => {
+    const paths = albumEventPaths(name, payload);
+    return paths === "wildcard" || paths.some(test);
   };
-
-  // 补丁不携带位置；已持有行用自身路径定位，未知行保持保守刷新。
-  const heldPath = (id: string) => [album.value, ...ancestors.value].find((a) => a?.id === id)?.ancestorPath;
-  // 计数路径 album-tree/<id> 不带 hide/：只看自身或子孙的成员增删（隐藏画册事件只在当前画册就是隐藏画册时命中）
+  // 计数不叠加 hide/：标签目录无成员计数，标签只看直接成员，其余看自身与子树。
   const memberAffectsCount = (p: AlbumImagesPayload) =>
-    !!albumId.value && (p.albumId === albumId.value || (!!self() && p.ancestorPath.startsWith(self()!)));
+    !labelDir() &&
+    (p.albumId === albumId.value || (!label() && (!self() || !p.ancestorPath || p.ancestorPath.startsWith(self()!))));
 
   const detail = usePathqlLookAll({
     queries: () => {
@@ -50,15 +51,10 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
       ] as const;
     },
     refreshOn: [
-      ...albumPatchTriggers(
-        (patch) =>
-          patch.id === albumId.value ||
-          (albumChangeKinds(patch).structure &&
-            sameChainPath(heldPath(patch.id) ? [heldPath(patch.id)!] : "wildcard", patch.id)),
-      ),
-      on("albums-added", (p) => p.albums.some((a) => sameChain("albums-added", { albums: [a] }, a.id))),
-      on("albums-deleted", (p) => p.albums.some((a) => sameChain("albums-deleted", { albums: [a] }, a.id))),
-      on("album-moved", (p) => sameChain("album-moved", p, p.id)),
+      ...albumPatchTriggers((patch, kinds) => patch.id === albumId.value || (inChain(patch.id) && kinds.structure)),
+      on("albums-added", (p) => anyPath("albums-added", p, underSelf)),
+      on("albums-deleted", (p) => anyPath("albums-deleted", p, (path) => inChainPath(path) || underSelf(path))),
+      on("album-moved", (p) => inChain(p.id) || underSelf(p.oldAncestorPath) || underSelf(p.newAncestorPath)),
     ],
     onResult: ([rows, parents, subtree]) => {
       album.value = rows[0] ? normalizeAlbumRow(rows[0]) : null;
@@ -73,21 +69,15 @@ export function useAlbumQuery(albumId: Ref<string | null>) {
     refreshOn: [
       on("album-images-added", memberAffectsCount),
       on("album-images-deleted", memberAffectsCount),
-      on("album-images-change", memberAffectsCount),
-      on("albums-added", (p) => affectsCount("albums-added", p)),
-      on(
-        "albums-deleted",
-        (p) =>
-          !!self() &&
-          p.albums.some((a) => self()!.startsWith(a.ancestorPath) || affectsCount("albums-deleted", { albums: [a] })),
-      ),
-      on("album-moved", (p) => affectsCount("album-moved", p)),
-      ...albumPatchTriggers(
-        (patch) =>
-          albumChangeKinds(patch).structure &&
-          !!self() &&
-          (!heldPath(patch.id) || (heldPath(patch.id) !== self() && heldPath(patch.id)!.startsWith(self()!))),
-      ),
+      on("albums-added", (p) => labelDir() && anyPath("albums-added", p, directChild)),
+      on("albums-deleted", (p) => !label() && anyPath("albums-deleted", p, labelDir() ? directChild : underSelf)),
+      on("album-moved", (p) => {
+        if (label()) return false;
+        if (labelDir()) return anyPath("album-moved", p, directChild);
+        if (inChain(p.id)) return false;
+        if (!self() || !p.oldAncestorPath || !p.newAncestorPath) return true;
+        return underSelf(p.oldAncestorPath) !== underSelf(p.newAncestorPath);
+      }),
     ],
     onResult: ([total]) => {
       imageCount.value = total;

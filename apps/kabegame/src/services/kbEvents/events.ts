@@ -97,10 +97,12 @@ export function albumChangeKinds(payload: AlbumPatchPayload | AlbumFieldPatch): 
 }
 
 /** 批量事件任意画册相关就刷新，每条触发仍只对应一种事件。 */
-export function albumPatchTriggers(relevant: (patch: AlbumFieldPatch) => boolean): EventTrigger[] {
+export function albumPatchTriggers(
+  relevant: (patch: AlbumFieldPatch, kinds: ReturnType<typeof albumChangeKinds>) => boolean,
+): EventTrigger[] {
   return [
-    on("album-changed", (p) => albumPatches(p).some(relevant)),
-    on("albums-change", (p) => albumPatches(p).some(relevant)),
+    on("album-changed", (p) => albumPatches(p).some((patch) => relevant(patch, albumChangeKinds(patch)))),
+    on("albums-change", (p) => albumPatches(p).some((patch) => relevant(patch, albumChangeKinds(patch)))),
   ];
 }
 

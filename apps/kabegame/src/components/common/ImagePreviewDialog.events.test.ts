@@ -3,6 +3,7 @@ import { flushPromises, shallowMount } from "@vue/test-utils";
 import { ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImagePreviewDialog from "./ImagePreviewDialog.vue";
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import ImageContent from "../image/ImageContent.vue";
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
@@ -121,6 +122,33 @@ describe("裸 id 预览的事件保鲜", () => {
     emit("album-images-added", { albumId: "other", imageIds: ["next"] });
     await flushPromises();
     expect(fetchImageById).toHaveBeenCalledExactlyOnceWith("next");
+  });
+  it("收藏与隐藏成员只补丁，不重解析；整行删图标记不推导取消隐藏，排序不重解析", async () => {
+    const wrapper = await fixture();
+    const row = () => wrapper.findComponent(ImageContent).props("image");
+    for (const [albumId, field] of [
+      [FAVORITE_ALBUM_ID, "favorite"],
+      [HIDDEN_ALBUM_ID, "isHidden"],
+    ] as const) {
+      emit("album-images-added", { albumId, imageIds: ["current"] });
+      vi.advanceTimersByTime(300);
+      await flushPromises();
+      expect(row()).toMatchObject({ [field]: true });
+      if (field === "isHidden") {
+        emit("album-images-deleted", { albumId, imageIds: ["current"], imagesDeleted: true });
+        vi.advanceTimersByTime(300);
+        await flushPromises();
+        expect(row()).toMatchObject({ isHidden: true });
+      }
+      emit("album-images-deleted", { albumId, imageIds: ["current"] });
+      vi.advanceTimersByTime(300);
+      await flushPromises();
+      expect(row()).toMatchObject({ [field]: false });
+    }
+    emit("album-images-change", { albumId: "other", imageIds: ["current"] });
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    expect(fetchImageById).not.toHaveBeenCalled();
   });
   it("传入完整行时由上层保鲜，不自行解析或订阅", async () => {
     const wrapper = shallowMount(ImagePreviewDialog, {

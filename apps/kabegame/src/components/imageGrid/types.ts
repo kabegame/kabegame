@@ -72,6 +72,8 @@ export interface GridAdapter {
 
   /** 触发行与总数刷新的事件；每条只对一种事件，未列出的事件不刷新。 */
   refreshOn: readonly EventTrigger[];
+  /** 删图都有本画册的成员删除事件，总数不再追加 images-deleted 触发。 */
+  deletesViaMembership?: boolean;
   /** 事件默认刷新完成后的追加动作（task: failedImagesStore.loadAll） */
   onAfterRefresh?: (ctx: GridRefreshContext, info: { removedIds: string[] }) => Promise<void> | void;
 

@@ -1,3 +1,4 @@
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import type { GalleryFilterSet, GalleryBrowseDimension } from "@/utils/galleryQuery";
 import { computed, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -100,7 +101,7 @@ describe("facetTreeSource 查询描述与事件过滤", () => {
     expect(pathqlList).not.toHaveBeenCalled();
   });
 
-  it("侧栏按内容过滤图片事件，删除照常刷新，画册敏感上下文保留原有规则", () => {
+  it("侧栏按内容过滤图片事件，删除照常刷新，只有 hide 不再响应普通成员", () => {
     const triggers = (prefix: string) =>
       createSource(false, prefix).dataSource.refreshOn({ kind: "section", sectionId: "date" }, "page");
     const relevant = (prefix: string, event: string, payload: unknown) =>
@@ -111,7 +112,18 @@ describe("facetTreeSource 查询描述与事件过滤", () => {
     expect(relevant("", "image-changed", { patch: { id: "a", thumbnailPath: "p" } })).toBe(false);
     expect(relevant("", "image-changed", { patch: { id: "a", width: 1 } })).toBe(true);
     expect(relevant("", "album-images-added", { albumId: "00000000-0000-0000-0000-000000000000" })).toBe(false);
-    expect(relevant("gallery/hide", "album-images-added", {})).toBe(true);
+    expect(relevant("gallery/hide", "album-images-added", { albumId: "normal" })).toBe(false);
+    expect(relevant("gallery/hide", "album-images-added", { albumId: HIDDEN_ALBUM_ID })).toBe(true);
+    expect(relevant("gallery", "album-images-added", { albumId: HIDDEN_ALBUM_ID })).toBe(false);
+    expect(relevant("gallery/album/a", "album-images-added", { albumId: FAVORITE_ALBUM_ID })).toBe(false);
+    expect(relevant("gallery/no-album", "album-images-added", { albumId: FAVORITE_ALBUM_ID })).toBe(true);
+    expect(relevant(`gallery/album/${FAVORITE_ALBUM_ID}`, "album-images-added", { albumId: FAVORITE_ALBUM_ID })).toBe(
+      true,
+    );
+    expect(relevant("gallery/search/label/tag", "album-images-added", { albumId: "label" })).toBe(true);
+    expect(relevant("gallery/album/a", "album-images-change", { albumId: "a" })).toBe(false);
+    expect(relevant("gallery/no-album", "album-images-deleted", { albumId: "a", imagesDeleted: true })).toBe(false);
+    expect(relevant("gallery/unknown-provider", "album-images-added", { albumId: "a" })).toBe(true);
     expect(relevant("gallery/album/a", "album-changed", { patch: { id: "a", name: "新名字" } })).toBe(true);
     expect(relevant("gallery/album/a", "album-changed", { patch: { id: "a", syncMode: "none" } })).toBe(false);
     expect(relevant("gallery/no-album", "albums-added", { albums: [] })).toBe(true);
@@ -147,6 +159,20 @@ describe("facetTreeSource 查询描述与事件过滤", () => {
     expect(
       filtered.find((trigger) => trigger.event === "images-added")!.relevant({ images: [{ type: "image/png" }] }),
     ).toBe(false);
+  });
+
+  it("简单标签搜索同样构成画册依赖，hide 的隐藏删除仍刷新且不看图片 id", () => {
+    const accepts = (prefix: string, filters: GalleryFilterSet, event: string, payload: unknown) =>
+      createSource(false, prefix, filters)
+        .dataSource.refreshOn({ kind: "section", sectionId: "size" }, "page")
+        .some((trigger) => trigger.event === event && trigger.relevant(payload));
+    expect(
+      accepts("gallery", { search: { modes: ["label"], query: "tag" } }, "album-images-added", { albumId: "tag" }),
+    ).toBe(true);
+    expect(
+      accepts("gallery/hide", {}, "album-images-deleted", { albumId: HIDDEN_ALBUM_ID, imageIds: ["off-page"] }),
+    ).toBe(true);
+    expect(accepts("gallery/album/a", {}, "album-images-deleted", { albumId: HIDDEN_ALBUM_ID })).toBe(false);
   });
 
   it("插件分面的分组与扩展依赖 pluginId / metadataId，即使减格上下文没有插件过滤", () => {

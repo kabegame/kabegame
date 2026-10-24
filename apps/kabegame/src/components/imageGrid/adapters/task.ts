@@ -5,7 +5,7 @@ import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridAdapter } from "../types";
-import { addedTrigger, patchTriggers, hiddenTrigger } from "@/services/kbEvents";
+import { addedTrigger, patchTriggers, hiddenTrigger, noAlbumTriggers, labelSearchTriggers } from "@/services/kbEvents";
 
 /**
  * TaskDetail（`/tasks/:id`）的 grid adapter。
@@ -36,6 +36,8 @@ export function createTaskDetailAdapter(params: { taskId: () => string }): GridA
       addedTrigger(view, (image) => !!params.taskId() && image.taskId === params.taskId()),
       ...patchTriggers(view),
       ...hiddenTrigger(view),
+      ...noAlbumTriggers(() => routeStore.effectiveNoAlbum),
+      ...labelSearchTriggers(view),
     ],
     // 失败图片计数与当前页数据同源刷新
     onAfterRefresh: async () => {

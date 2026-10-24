@@ -109,6 +109,8 @@ import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import { useModal } from "@/composables/useModal";
 import type { ImageInfo } from "@/types/image";
 import {
+  FAVORITE_ALBUM_ID,
+  HIDDEN_ALBUM_ID,
   addImagesToAlbum,
   createLabelAlbum,
   fetchAlbum,
@@ -172,14 +174,22 @@ usePathqlLooker({
   kind: "rows",
   key: () => labelsKey.value,
   refreshOn: [
-    // 收藏 / 隐藏仍按原口径重读，不在 Phase E 收紧。
-    on("album-images-added", (p) => p.imageIds.includes(props.image.id)),
-    on("album-images-deleted", (p) => p.imageIds.includes(props.image.id)),
-    on("album-images-change", (p) => p.imageIds.includes(props.image.id)),
+    // 收藏 / 隐藏不是标签，交给图片补丁流。
+    on(
+      "album-images-added",
+      (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(props.image.id),
+    ),
+    on(
+      "album-images-deleted",
+      (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(props.image.id),
+    ),
     ...albumPatchTriggers((patch) => labels.value.some((label) => label.id === patch.id)),
     on("album-moved", (p) => labels.value.some((label) => pathHasAlbum(label.ancestorPath, p.id))),
-    // 原空 order 对任意画册删除都刷新标签；Phase E 保留这一口径。
-    on("albums-deleted"),
+    on("albums-deleted", (p) =>
+      labels.value.some((label) =>
+        p.albums.some((a) => !a.ancestorPath || label.ancestorPath.startsWith(a.ancestorPath)),
+      ),
+    ),
   ],
   onResult: ({ rows }) => {
     labels.value = rows.map((row) => normalizeAlbumRow(row as Record<string, unknown>));

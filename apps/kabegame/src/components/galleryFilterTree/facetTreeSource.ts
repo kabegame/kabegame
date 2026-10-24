@@ -1,3 +1,5 @@
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
+import { queryUsesSearchMode } from "@/utils/galleryQuery";
 import { addedTrigger, patchTriggers, hiddenTrigger, type ImageViewState } from "@/services/kbEvents";
 import { computed, type ComputedRef, type Ref } from "vue";
 import type { useI18n } from "@kabegame/i18n";
@@ -22,7 +24,7 @@ import {
   type ProviderChildDir,
 } from "./context";
 import { withGalleryPrefix } from "@/utils/path";
-import { on, albumChangeKinds, albumPatchTriggers } from "@/services/kbEvents/events";
+import { on, albumPatchTriggers, type AlbumImagesPayload } from "@/services/kbEvents/events";
 import type { TreeQuerySource } from "@/components/tree/types";
 
 /**
@@ -119,7 +121,25 @@ export function createGalleryFacetSource(
 
   function hasAlbumSensitiveContext() {
     const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
-    return /(^|\/)(?:album|album-tree|no-album|hide)(?:\/|$)/.test(path);
+    return (
+      contextQuery.value === null ||
+      /(^|\/)(?:album|album-tree|no-album)(?:\/|$)/.test(path) ||
+      queryUsesSearchMode(view().query, "label")
+    );
+  }
+
+  function memberAffectsContext(p: AlbumImagesPayload) {
+    if (contextQuery.value === null || queryUsesSearchMode(view().query, "label")) return true;
+    // 隐藏由 hiddenTrigger 按 hide 开关处理；收藏只影响收藏 / 无画册上下文。
+    if (p.albumId === HIDDEN_ALBUM_ID) return false;
+    if (p.albumId === FAVORITE_ALBUM_ID) {
+      const path = normalizeProviderPath(ctx.prefix.value).replace(/^images:\/\//, "");
+      return (
+        /(^|\/)no-album(?:\/|$)/.test(path) ||
+        new RegExp(`(^|/)(?:album|album-tree)/${FAVORITE_ALBUM_ID}(?:/|$)`).test(path)
+      );
+    }
+    return hasAlbumSensitiveContext();
   }
 
   function groupedCount(entry: ProviderChildDir): number | null {
@@ -399,10 +419,9 @@ export function createGalleryFacetSource(
             ...imageTriggers,
             on("images-deleted"),
             ...hiddenTrigger(view),
-            on("album-images-added", () => hasAlbumSensitiveContext()),
-            on("album-images-deleted", () => hasAlbumSensitiveContext()),
-            on("album-images-change", () => hasAlbumSensitiveContext()),
-            ...albumPatchTriggers((patch) => hasAlbumSensitiveContext() && albumChangeKinds(patch).structure),
+            on("album-images-added", memberAffectsContext),
+            on("album-images-deleted", (p) => !p.imagesDeleted && memberAffectsContext(p)),
+            ...albumPatchTriggers((_patch, kinds) => hasAlbumSensitiveContext() && kinds.structure),
             on("album-moved", () => hasAlbumSensitiveContext()),
             on("albums-added", () => hasAlbumSensitiveContext()),
             on("albums-deleted", () => hasAlbumSensitiveContext()),

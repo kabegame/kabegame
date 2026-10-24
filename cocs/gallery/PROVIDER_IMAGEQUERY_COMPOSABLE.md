@@ -192,7 +192,10 @@
   因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
 - 侧栏以 `TreeQuerySource` 描述每个分支的一条 list 查询，经 `usePathqlLookMany` 观察 `all` key，
   只观察自身与所有祖先都展开的分支。`refreshOn` 对 `images-added` / `images-deleted` / `images-change` / `image-changed` 与隐藏画册成员变化投票，画册敏感上下文另看
-  `album-images-added` / `album-images-deleted` / 排序 `album-images-change` 与画册增删、移动、字段补丁事件；隐藏 / 取消隐藏只是隐藏画册自身的成员增删，由隐藏触发在 hide 开启时刷新；本阶段保留含 hide 的画册敏感上下文与既有保守刷新，同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
+  `album-images-added` / `album-images-deleted` 与画册增删、移动、结构字段补丁事件，排序不影响侧栏计数。
+  Phase F 的画册敏感上下文只含 `album` / `album-tree` / `no-album` 或有效标签搜索（含减格后的简单条件与前缀高级查询）；只有 hide 不响应普通画册成员。
+  收藏成员只影响收藏 / 无画册上下文或标签搜索；隐藏 / 取消隐藏由 `hiddenTrigger` 在 hide 开启时整体刷新，不按图片判断；标签搜索因无法识别画册类型，对任意成员增删保守刷新。
+  带 `imagesDeleted` 的成员删除交给 `images-deleted`，未知前缀无法排除依赖时保守刷新，同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
   侧栏隐藏时观察集合为空，每次显示都整组请求；插件 `id:version` 签名变化调用 `model.refresh()`。
 - 高级查询弹窗是 diff 模式：候选列举同样走 `<路径>/_kb_co`（与侧栏只差路径是否带草稿，不带计数），`refreshOn` 为空，
   打开期间不随数据变更刷新；候选在下拉面板里，每次展开都重新挂载、读一次候选，不再有独立纯净列表缓存或缓存失效订阅。

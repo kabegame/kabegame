@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addedTrigger,
+  noAlbumTriggers,
+  labelSearchTriggers,
   deletedTrigger,
   hiddenTrigger,
   imageMayMatchQuery,
@@ -232,5 +234,51 @@ describe("删除触发", () => {
     expect(rows.relevant({ seq: 1, imageIds: ["a"] })).toBe(false);
     const count = deletedTrigger();
     expect(count.relevant({ seq: 1, imageIds: ["x"] })).toBe(true);
+  });
+});
+
+describe("Phase F 画册依赖", () => {
+  const accepts = (triggers: ReturnType<typeof noAlbumTriggers>, event: string, payload: unknown) =>
+    triggers.some((t) => t.event === event && t.relevant(payload));
+  it("无画册只响应非隐藏成员增删，整行删图与排序不触发", () => {
+    let active = false;
+    const triggers = noAlbumTriggers(() => active);
+    const normal = { albumId: "normal" };
+    expect(accepts(triggers, "album-images-added", normal)).toBe(false);
+    active = true;
+    for (const albumId of ["normal", "00000000-0000-0000-0000-000000000001"]) {
+      for (const event of ["album-images-added", "album-images-deleted"]) {
+        expect(accepts(triggers, event, { albumId })).toBe(true);
+        expect(accepts(triggers, event, { albumId: "00000000-0000-0000-0000-000000000000" })).toBe(false);
+      }
+      expect(accepts(triggers, "album-images-deleted", { albumId, imagesDeleted: true })).toBe(false);
+    }
+    expect(accepts(triggers, "album-images-change", normal)).toBe(false);
+    expect(accepts(triggers, "albums-deleted", { albums: [] })).toBe(true);
+    expect(accepts(triggers, "images-deleted", { imageIds: ["x"] })).toBe(false);
+  });
+  it("标签搜索递归依赖成员增删与标签路径，普通搜索不响应；排序与图片删除不在此处理", () => {
+    let state = view({ query: search("display-name") });
+    const triggers = labelSearchTriggers(() => state);
+    expect(accepts(triggers, "album-images-added", {})).toBe(false);
+    state = view({ query: [{ not: search("label") }] });
+    for (const event of ["album-images-added", "album-images-deleted", "album-moved", "albums-deleted"]) {
+      expect(accepts(triggers, event, {})).toBe(true);
+    }
+    expect(accepts(triggers, "album-changed", { patch: { id: "a", name: "new" } })).toBe(true);
+    expect(
+      accepts(triggers, "albums-change", {
+        patches: [
+          { id: "a", syncMode: "none" },
+          { id: "b", labelKey: "new" },
+        ],
+      }),
+    ).toBe(true);
+    expect(accepts(triggers, "albums-change", { patches: [{ id: "a", syncMode: "none" }] })).toBe(false);
+    // Phase F 的已知边界：成员事件无法区分标签类型，系统成员与删图成员也保守接收。
+    expect(accepts(triggers, "album-images-added", { albumId: "00000000-0000-0000-0000-000000000000" })).toBe(true);
+    expect(accepts(triggers, "album-images-deleted", { albumId: "tag", imagesDeleted: true })).toBe(true);
+    expect(accepts(triggers, "album-images-change", {})).toBe(false);
+    expect(accepts(triggers, "images-deleted", {})).toBe(false);
   });
 });

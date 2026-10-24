@@ -80,6 +80,29 @@ on("album-images-added", (p) => p.imageIds.includes(props.image.id)), // 现状�
 // adapters/task.ts:35-39、surf.ts:33-37 —— 现状：不听普通成员事件，加入画册 / 收藏后不刷新
 ```
 
+### 实施修正（phaseE 落地后核对，优先于下面各点的代码块）
+
+上面的锚点写于 phaseE 落地前，实施时以当前代码为准，并按下面几条修正：
+
+- **页头计数按画册类型分口径**（点 4）：`albumImageCountQuery` 对 `label_dir` 数的是 `albums://parent/<id>`（直接子画册数），
+  `label` 数 `album/<id>`，其余数 `album-tree/<id>`。
+  - `label_dir`：计数只听画册表事件，判断「是否自己的直接子项」——`albums-added` 新行、`albums-deleted` 被删根、
+    `album-moved` 的新旧路径，任一路径的父路径等于自身路径就刷新；不听成员事件。
+  - `label`：只听自身 albumId 的成员增删。
+  - 其余：按点 4 的代码块。
+- **画廊**（点 6）：现有的「无画册」成员触发直接换成 `noAlbumTriggers`；删掉无条件的 `on("album-moved")`（「无画册」不依赖位置，
+  标签搜索由 `labelSearchTriggers` 负责）；`album-images-change` 不再触发（「无画册」不依赖排序）；**保留 `hiddenTrigger(view)`**。
+- **画册页网格**（点 3）：删掉自身 `album-moved` 与自身 `albumPatchTriggers`；保留自身 `albums-deleted`；保留 `hiddenTrigger`。
+- **任务 / 畅游**（点 2）：同时补 `noAlbumTriggers` 与 `labelSearchTriggers`，它们与画廊共用 `GalleryQuery`。
+- **画册树**（点 5）：`albumEventAffectsDir` 的现签名是 `(name, payload, ancestorPath)`，按新签名改写；
+  系统区收藏计数带 `hide/` 前缀，`systemHit` 对隐藏画册事件返回 true 正好覆盖。
+  分区根的 `path()` 为 null，`albumEventAffectsDir` 对 null 一律命中，所以结构事件与补丁也要按根画册所属分区判断
+  （新建的根未加载时按新行自身类型），系统区不听结构事件；改名补丁只刷新直接父目录页（分区根即根级行），
+  有搜索词时子孙命中会改变祖先是否保留，才放宽到祖先页。（真机首轮第 6、13、16 条因此失败后补上。）
+- **预览**（点 6）：`imagePatches$` 已传 `patchHidden: () => true`，收藏 / 隐藏只补丁；`album-images-change` 不再重解析。
+- **删图**：后端删图对每个原属画册各发带 `imagesDeleted: true` 的成员删除（`storage/image_events.rs`），所以画册页
+  `deletesViaMembership` 安全。
+
 ### 点 1 — 公共判断（`services/kbEvents/imageViewRelevance.ts`、`events.ts`）
 
 - **新增**

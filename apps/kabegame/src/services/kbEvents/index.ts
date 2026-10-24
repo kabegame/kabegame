@@ -55,6 +55,8 @@ export {
   deletedTrigger,
   patchTriggers,
   hiddenTrigger,
+  labelSearchTriggers,
+  noAlbumTriggers,
   imageMayMatchQuery,
   type ImageViewState,
 } from "./imageViewRelevance";

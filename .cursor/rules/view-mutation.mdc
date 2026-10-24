@@ -24,7 +24,7 @@ alwaysApply: false
   调用方也不能按某次请求接错误——失败统一经观察方的 `onError`。
 - 前端不得重新建立裸 `listen` 或另建事件聚合器；事件一律经 `kbEvent$` / `on` / `triggers$`。字段补丁经 `imagePatches$`：
   `image-changed { patch }` 与 `images-change { patches }` 共用字段补丁窗口，收藏与隐藏画册的 `album-images-added` / `album-images-deleted` 分别推导 `favorite` / `isHidden`、各自合并成 `imageId → 字段`，再汇成一条，
-  只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜；字段事件不重新解析，只对包含当前 id 的删除 / 画册成员事件经 `triggers$` 重读。
+  只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜；字段事件不重新解析，只对包含当前 id 的删除 / 非系统画册成员增删经 `triggers$` 重读；收藏 / 隐藏与排序不重解析。
   `imagePatches$(waitMs, { patchHidden })` 必须显式门控：网格 `patchHidden: () => !adapter.viewState().hide`，预览始终 true；
   hide 开启时不先打灰，靠隐藏成员事件重读剔除 / 补回。
 - 写命令不再返回 `albumChanges`；事件 `seq` 前端不消费，不做本地事件投递：发起写入的组件只请求自己观察的 key，
@@ -45,15 +45,17 @@ alwaysApply: false
   task / surf 新增另比完整行归属；画册不听新增，依靠自身成员事件。补丁按字段依赖表（查询维度 / 搜索模式 / 排序）判断，
   未列字段保守刷新；任务 taskId、畅游 surfRecordId 的归属补丁刷新。
 - ImageGrid 用 `deletedTrigger(heldIds?)` 为行与总数分别追加 `images-deleted`：行传当前持有行 id，只在包含删除 id 时刷新；
-  总数不传，任何删除都刷新（页外删除也会改变总数）。只有计数的观察方同样一律刷新。
-- hide 开启才响应隐藏画册变化，开启时一律刷新（画册页同样），关闭时只按 `imageIds` 打 `isHidden` 补丁；画廊 noAlbum 与结构事件条件保持原有规则。
+  总数默认不传，任何删除都刷新（页外删除也会改变总数）。画册 adapter 标记 `deletesViaMembership`，总数不追加此触发，后端删图向每个原属画册发送带 `imagesDeleted` 的成员删除，按本画册定位；其它纯计数观察方仍一律刷新。
+- hide 开启才响应隐藏画册变化，开启时一律刷新（画册页同样），关闭时只按 `imageIds` 打 `isHidden` 补丁；画廊、任务、畅游共用 `noAlbumTriggers`，忽略隐藏成员与带 `imagesDeleted` 的删除（后者交给图片删除触发）。
+  收藏在普通视图只补丁，收藏画册自身、无画册条件、树系统区及相应侧栏才刷新；四个网格共用 `labelSearchTriggers`，有效标签搜索对成员增删、结构补丁、移动与删除刷新，因事件无法识别标签类型，成员增删保守全收。
+  画册网格不因自身改名 / 移动重读；成员排序只在 `by-album-order` 下刷新，仍连带读总数。
   侧栏按减格上下文（含前缀高级查询）判断新增与补丁，无法解析前缀则保守刷新；插件分面的 pluginId / metadataId 变化还会影响分组与扩展计数，始终刷新；畅游计数仅在归属补丁变化时重读。
   整理与迁移循环仍属后续 Phase C / D。
 
 ## 画册事件协议（Phase E）
 
 - 画册表按增删改对齐：`albums-added { seq, albums }` 携带完整行，`albums-deleted { seq, albums: [{ id, ancestorPath }] }` 只带被删根，`album-moved { seq, id, oldAncestorPath, newAncestorPath }` 只带移动根；其它字段按 id 合并为 `album-changed { seq, patch }` / `albums-change { seq, patches }`，补丁只含实际变化字段，永不含 parentId / ancestorPath。移动按前缀改写已持有的子孙路径，移动根的 parentId 取新路径倒数第二段。成员真实增删发 `album-images-added` / `album-images-deleted`，`album-images-change` 只表示实际改序，均为 `{ seq, albumId, ancestorPath, imageIds, imagesDeleted? }`；无 reason、hide/unhide 派生事件或按隐藏状态拆分。隐藏 / 取消隐藏只是隐藏画册自身的成员增删，不带其它画册与图片行：hide 开启的观察方一律刷新，关闭时只按 imageIds 打 isHidden 补丁；整行删图引起的成员删除带 imagesDeleted: true，不作为取消隐藏补丁。删画册不补发空排序事件，写命令不再返回 albumChanges。
-- 本阶段仅机械迁移事件；隐藏成员表命中、改名、排序、分区根与侧栏仍保持既有保守刷新口径，不引入 Phase F 的按图收紧。
+- Phase F 只在前端收紧 refreshOn，不新增 SQL；隐藏仍按 hide 开关整体刷新，不按图判断。侧栏画册敏感上下文为 album / album-tree / no-album 或有效标签搜索，只有 hide 不响应普通成员；未知前缀保守刷新。收藏成员只影响收藏 / 无画册上下文（标签搜索仍保守）。标签面板跳过系统成员与排序，删除标签目录按已挂标签路径前缀判断。
 
 ## 已知例外
 
@@ -74,12 +76,13 @@ alwaysApply: false
 - 前端不设全量画册 store 或全量计数。目录树与选择器复用 `AlbumTreeView` / `AlbumPicker`，按目录分页查询；
   搜索时每层与 `~~/children` 都叠加 `search/<q>`（自身或子孙命中才保留）。画册页头部由 `useAlbumQuery` 观察详情 / 祖先 / 子树数的 `all` key 与按类型生成的计数 key，
   先注册观察方再请求，新计数 key 自动请求，刷新 Promise 在 composable 等待两段请求完成或失败。
-  结构事件以自身完整 `ancestorPath` 判定祖先链，计数结构事件只匹配严格后代；其它一次性查询仍用 `services/albums.ts`。
+  详情按自身完整 `ancestorPath` 判定祖先链，自身任意补丁与祖先结构补丁刷新，子孙改名不刷新。
+  页头计数不带 hide：label_dir 只听直接子画册增删 / 移动，label 只听自身成员增删，其余听自身 / 子树成员增删、严格子孙删除与跨边界移动；空子画册新增、补丁与内部移动不刷新图片计数。其它一次性查询仍用 `services/albums.ts`。
 - 结构页一批 `pathql_all` 同快照读取 `albums://<过滤段>/x<N>x/<页>` 行与 `…/~~/children[/<类型段>]`；
   `extra` 独立批次读取本页行（零计数补齐）与 `…/~~/images[/hide]`。两种逐行计数都在 `~~` 后按画册
   `GROUP BY`，没有行记 0，禁止 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
   标签目录显示 `child_count`，叶子显示 `image_count`；行先渲染、图片计数后补。
-- 画册成员事件只刷新相关可见目录的 extra，结构事件刷新结构与 extra；`albumEventPaths` 取新旧路径，
+- 画册成员增删只刷新相关可见目录的 extra：普通分区按根节点归属判断，根未加载保守刷新；系统区只认收藏 / 隐藏，收藏不触发其它分区。hide 前缀计数对隐藏增删整体刷新，隐藏画册带 imagesDeleted 的删除只处理系统区，其它计数由原属画册成员删除定位。排序不刷计数；字段补丁只刷已持有行的 page，增删 / 移动刷新结构与 extra；`albumEventPaths` 取新旧路径，
   缺路径按通配，父目录只匹配严格后代。隐藏等全局过滤只能用路径表达，不得新增 SQL 视图、计数列或专用计数命令。
 - 同一后端事件被多个观察方同意时，一个 key 只投一票；不同事件仍按核心统一 500ms 窗口合并。
 

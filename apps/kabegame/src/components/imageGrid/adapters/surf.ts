@@ -4,7 +4,7 @@ import router from "@/router";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { GridAdapter } from "../types";
-import { addedTrigger, patchTriggers, hiddenTrigger } from "@/services/kbEvents";
+import { addedTrigger, patchTriggers, hiddenTrigger, noAlbumTriggers, labelSearchTriggers } from "@/services/kbEvents";
 
 /**
  * SurfImages（`/surf/:host/images`）的 grid adapter。
@@ -34,6 +34,8 @@ export function createSurfImagesAdapter(params: {
       addedTrigger(view, (image) => !!params.recordId() && image.surfRecordId === params.recordId()),
       ...patchTriggers(view, { surfRecordId: () => true }),
       ...hiddenTrigger(view),
+      ...noAlbumTriggers(() => routeStore.effectiveNoAlbum),
+      ...labelSearchTriggers(view),
     ],
     actionsOptions: () => ({
       removeText: t("surf.removeText"),

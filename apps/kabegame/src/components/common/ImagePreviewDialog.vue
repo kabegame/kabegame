@@ -370,6 +370,7 @@
 </template>
 
 <script setup lang="ts">
+import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { Subscription } from "rxjs";
@@ -879,10 +880,15 @@ const startImageSubscription = (id: string) => {
     triggers$([
       // 字段直接打补丁；删除仅在包含当前图片时重解析。
       on("images-deleted", (p) => p.imageIds.includes(id)),
-      // 收藏 / 隐藏是画册成员变更，会影响 isHidden，字段补丁之外仍要重拉
-      on("album-images-added", (p) => p.imageIds.includes(id)),
-      on("album-images-deleted", (p) => p.imageIds.includes(id)),
-      on("album-images-change", (p) => p.imageIds.includes(id)),
+      // 收藏 / 隐藏由 imagePatches$ 补丁保鲜，普通画册成员变化才重解析
+      on(
+        "album-images-added",
+        (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(id),
+      ),
+      on(
+        "album-images-deleted",
+        (p) => ![FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID].includes(p.albumId) && p.imageIds.includes(id),
+      ),
     ])
       .pipe(batchWindow(PREVIEW_REFRESH_WAIT_MS, () => true))
       .subscribe(() => {

@@ -1,3 +1,4 @@
+import { HIDDEN_ALBUM_ID } from "@/services/albums";
 import { IS_WEB } from "@/env";
 import type { ImageInfo } from "@/types/image";
 import {
@@ -8,7 +9,14 @@ import {
   type GalleryQuery,
 } from "@/utils/galleryQuery";
 import type { GallerySort } from "@/utils/galleryPath";
-import { isHiddenAlbumChange, on, type EventTrigger, type ImageFieldPatch } from "./events";
+import {
+  albumChangeKinds,
+  albumPatchTriggers,
+  isHiddenAlbumChange,
+  on,
+  type EventTrigger,
+  type ImageFieldPatch,
+} from "./events";
 
 export interface ImageViewState {
   query: GalleryQuery;
@@ -142,5 +150,26 @@ export function hiddenTrigger(view: () => ImageViewState): EventTrigger[] {
     on("album-images-added", (payload) => view().hide && isHiddenAlbumChange(payload)),
     on("album-images-deleted", (payload) => view().hide && isHiddenAlbumChange(payload)),
     on("album-images-change", (payload) => view().hide && isHiddenAlbumChange(payload)),
+  ];
+}
+
+/** 标签搜索依赖标签路径与成员；成员事件无法区分标签画册，保守响应所有成员增删。 */
+export function labelSearchTriggers(view: () => ImageViewState): EventTrigger[] {
+  const uses = () => queryUsesSearchMode(view().query, "label");
+  return [
+    on("album-images-added", uses),
+    on("album-images-deleted", uses),
+    ...albumPatchTriggers((_patch, kinds) => uses() && kinds.structure),
+    on("album-moved", uses),
+    on("albums-deleted", uses),
+  ];
+}
+
+/** 无画册包含收藏，忽略隐藏成员与整行删图；后者由 images-deleted 负责。 */
+export function noAlbumTriggers(noAlbum: () => boolean): EventTrigger[] {
+  return [
+    on("album-images-added", (p) => noAlbum() && p.albumId !== HIDDEN_ALBUM_ID),
+    on("album-images-deleted", (p) => noAlbum() && p.albumId !== HIDDEN_ALBUM_ID && !p.imagesDeleted),
+    on("albums-deleted", noAlbum),
   ];
 }

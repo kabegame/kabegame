@@ -680,6 +680,26 @@ describe("列表读取在途时切图", () => {
 });
 
 describe("ImageGrid 删除相关性", () => {
+  it("成员删除可定位的画册总数不听 images-deleted，行仍保留持有 id 判断", async () => {
+    const member: EventTrigger = {
+      event: "album-images-deleted",
+      relevant: (p) => (p as { albumId: string }).albumId === "self",
+    };
+    mountGrid({ deletesViaMembership: true, refreshOn: [member] });
+    await applySnapshot!(snapshot(["a"], 1));
+    expect(countTriggers.some((t) => t.event === "images-deleted")).toBe(false);
+    expect(
+      countTriggers.some(
+        (t) => t.event === "album-images-deleted" && t.relevant({ albumId: "self", imagesDeleted: true }),
+      ),
+    ).toBe(true);
+    expect(
+      countTriggers.some(
+        (t) => t.event === "album-images-deleted" && t.relevant({ albumId: "other", imagesDeleted: true }),
+      ),
+    ).toBe(false);
+    expect(rowTriggers.find((t) => t.event === "images-deleted")!.relevant({ imageIds: ["a"] })).toBe(true);
+  });
   it("总数任何删除都刷新，不看当前持有的行", async () => {
     mountGrid();
     await applySnapshot!(snapshot(["a", "b"], 1));
