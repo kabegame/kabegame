@@ -4,7 +4,7 @@
     "name": "rank_provider",
     // 给上游查询的每一行附加 1 起的序号列 row_index,用于「这张图在当前视图的第几位」。
     //
-    // 只能写在子查询边界 `~~` 之后、并且后面还要再接一个 `~~`,形如
+    // 用法一：预览定位。只能写在子查询边界 `~~` 之后、并且后面还要再接一个 `~~`,形如
     //   images://gallery/<过滤>/<排序>[/_kb_desc]/~~/rank/~~/id_<id>
     // 三层各自的职责:
     //   内层 pq_nest_1 — 过滤 + ORDER BY,**没有 LIMIT/OFFSET**(定位要的是全集里的序号)
@@ -22,10 +22,13 @@
     // 并列前提:上游排序必须是全序,否则并列组内次序可能与分页查询不一致、定位落到相邻页。
     // gallery 的各 sort provider 均以 `images.id asc` 收尾来保证这一点。
     //
-    // 返回行的形态:`images://gallery/...` 的 SELECT 本来就同时有 `images.*` 和一组同名别名列
-    // (见 gallery_route 的 type 注释),单层查询下由 sql_executor 后写胜折成一份;但物化成 CTE 时
-    // SQLite 会把重名输出列消歧成 `width:1` 之类,外层 `images.*` 展开后两份都在。
-    // 消费方只读 `row_index`(名字唯一,不会被消歧),别指望这条路径的行能当普通 ImageInfo 用。
+    // 用法二：分页行查询，先窄路由切页，再为本页打序号，最后回表补 gallery 字段：
+    //   images://filter/<过滤>/<排序>/_kb_x100x/2/~~/rank/~~p/lookup/gallery
+    // 此时内层有 LIMIT/OFFSET，row_index 是本页内序号；lookup 只按 p.row_index 排序。
+    // album_order 等窄字段随边界默认的 images.* 与 p.* 保留，外层不重放内层排序。
+    //
+    // 定位用法返回行的形态:外层 `images.*` 展开的是内层 gallery 字段,再加 row_index。
+    // 消费方只读 `row_index`,别指望这条路径的行能当普通 ImageInfo 用。
     "query": {
         "fields": [{ "sql": "ROW_NUMBER() OVER ()", "as": "row_index" }]
     },

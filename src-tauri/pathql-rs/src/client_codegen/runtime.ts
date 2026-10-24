@@ -78,9 +78,10 @@ class NodeBase {
     return this._spawn([...this._segments, ...grouped]);
   }
 
-  /** `~~` 子查询边界：此前的查询整体成为 FROM，从该 scheme 的根重新开始；传入 `pql.<scheme>`。 */
-  $nest<T extends NodeBase>(root: T): T {
-    return root._spawn([...this._segments, "~~"]);
+  /** `~~` 子查询边界：此前的查询整体成为 FROM，从该 scheme 的根重新开始；传入 `pql.<scheme>`。
+   * 传 `alias` 得到 `~~<alias>`：外层以该别名引用内层，表名空出来供 join 回原表。 */
+  $nest<T extends NodeBase>(root: T, alias?: string): T {
+    return root._spawn([...this._segments, alias ? `~~${alias}` : "~~"]);
   }
 
   $not(cb: (b: this) => BranchNode): this {
@@ -103,7 +104,7 @@ type AnyProviderMethods = {
   readonly $not: (
     cb: (b: AnyProviderNode) => AnyProviderNode,
   ) => AnyProviderNode;
-  readonly $nest: <T extends NodeBase>(root: T) => T;
+  readonly $nest: <T extends NodeBase>(root: T, alias?: string) => T;
 };
 
 type AnyProviderNode = AnyProviderMethods & {

@@ -1,0 +1,8 @@
+{
+    "namespace": "kabegame",
+    "name": "gallery_entry_router",
+    // 宽入口先折入窄路由的默认排序，再进入只补字段的 gallery_route。
+    // 这样 gallery/~not/... 在组外已有排序基线；lookup/gallery 直接补字段，不经过本入口。
+    "query": { "delegate": { "provider": "gallery_router" } },
+    "resolve": { "gallery": { "provider": "gallery_route" } }
+}

@@ -30,7 +30,7 @@
         }
     },
     // host 形如 "pixiv.net", 允许字母数字加点和短横; 与 plugin slug 正则有重叠 (短 host
-    // 如 "pixiv" 可能也命中 plugin 模式), 但 plugins / surfs 各自挂在不同上层 (gallery_route.list
+    // 如 "pixiv" 可能也命中 plugin 模式), 但 plugins / surfs 各自挂在不同上层 (gallery_router.list
     // 的 `surf` / `plugin` 段), 所以路径前缀已隔离, regex 重叠不致冲突。
     "resolve": {
         "([a-zA-Z0-9][a-zA-Z0-9.-]*)": {

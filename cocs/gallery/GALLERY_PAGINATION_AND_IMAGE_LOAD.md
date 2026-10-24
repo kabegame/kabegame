@@ -6,7 +6,7 @@
 ## 与 `PROVIDER_IMAGEQUERY_COMPOSABLE.md` 的关系
 
 - `PROVIDER_IMAGEQUERY_COMPOSABLE.md` 描述 **ImageQuery 如何组合**（JOIN / WHERE / ORDER）以及 Provider 解析与缓存。
-- **本文档**描述：**路径 + 页码 + 每页条数** 如何落到 **一次浏览请求**（`browse_gallery_provider`）与前端 `offset` / 分页器对齐。
+- **本文档**描述：**路径 + 页码 + 每页条数** 如何落到 **行读取与计数批**（`pathql_fetch` / `pathql_all`）与前端 `offset` / 分页器对齐。
 
 两者互补：查询语义见前者，分页与加载条数见本文。
 
@@ -16,23 +16,34 @@
 |------|------|
 | **视图本体 `viewBody`** | 路由 `query.path`、route store 与 localStorage 只保存「看什么、怎么排」（如 `album/<uuid>/sort/by-time/_kb_desc`），不含页码和页大小。 |
 | **行路径 `rowsPath`** | `ImageGrid` 查询出口把分页尾追加到视图本体：`withPaged(viewBody, pageSize, page)` → `<viewBody>/_kb_x<N>x/<页>`。 |
-| **SimplePage** | Provider 解析结果为「叶子」：`ProviderDescriptor::SimplePage { query, page }`。后端按 `ImageQuery` 计数 + **offset/limit** 取一页。 |
+| **取数路径** | `toLookupRowsPath(withGalleryPrefix(rowsPath))` → `images://filter/<视图>/_kb_x<N>x/<页>/~~/rank/~~p/lookup/gallery`；只用于行请求。 |
+| **SimplePage（历史实现）** | Provider 解析结果为「叶子」：`ProviderDescriptor::SimplePage { query, page }`。后端按 `ImageQuery` 计数 + **offset/limit** 取一页。 |
 | **Greedy / 非 SimplePage** | 目录树、range 分解等；后端 `browse.rs` 内仍用固定 `LEAF_SIZE = 100` 做贪心分段，**不使用**用户配置的每页条数。 |
 | **每页条数 `galleryPageSize`** | 用户设置 `100 / 500 / 1000`，持久化在 Rust `Settings`（JSON 键 `galleryPageSize`），仅影响 **SimplePage** 的 `limit` 与 offset 计算。 |
 
 ## 后端
 
-### 命令：`browse_gallery_provider`
+### 画廊窄路由分页与回表
 
-- **位置**：[`src-tauri/kabegame/src/commands/image.rs`](/src-tauri/kabegame/src/commands/image.rs)（Tauri 命令，参数 `page_size`）。
-- **前端 invoke**：必须使用 **camelCase** 参数名 **`pageSize`**（与 Tauri 对前端参数名的约定一致），否则会出现缺少参数错误。
-- **实现**：[`src-tauri/kabegame-core/src/gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs) 的 `browse_gallery_provider(storage, provider_rt, path, page_size)`。
+当前网格行读取统一为 `pathql_fetch`，provider 分为三层：
 
-### SimplePage 分支（可配置页大小）
+```text
+images://filter/<视图>/_kb_x<N>x/<页> /~~/ rank /~~p/ lookup/gallery
+         id 过滤、排序、切页             本页取序       主键回表、补字段、按 p.row_index 排序
+```
 
-- 对 `page_size` 做白名单归一：`100 | 500 | 1000`，否则按 `100`。
-- `offset = (page - 1) * page_size`，`get_images_info_range_by_query(query, offset, page_size)`。
-- 返回 `GalleryBrowseResult`：`total`、`base_offset`、`range_total`、`entries`（当前页图片列表）。
+- `images_root_provider` 只贡献 `images.id AS id`。`filter` 直接进入 `gallery_router`，后者持有全部
+  list / resolve 与默认排序；hide、搜索、画册、任务、畅游等子 provider 的 delegate 全部折回窄路由。
+- `gallery_route` 只持有 21 个列表字段，list / resolve 委托 `gallery_router`。宽入口 `images://gallery`
+  在根 resolve 经过 `gallery_entry_router` 先折默认排序，再进入字段层，保证裸 `gallery/~not/...`
+  组合器在组外已有排序基线；原有裸 gallery 与全局分页默认顺序也保留。
+- `rank` 扫内层物化 CTE，为本页行打从 1 起的 `row_index`；`lookup` 将 images 按 `images.id = p.id`
+  回表，最后的 `gallery` 补字段。外层只按 `p.row_index` 排，不重放可能引用内层 JOIN 别名的排序。
+  画册的 `album_order` 经 `images.*` / `p.*` 保留，按画册顺序的翻页不丢字段、不变序。
+- `filter` / `lookup` 是根 resolve 的内部入口，不列举。MCP、侧栏与维度列举仍走 gallery 宽入口，
+  因为分组 SQL 会读取 `sub.type` / `sub.crawled_at` 等列。过滤的 resolve 不依赖动态列举反查。
+- `no-album` 的收藏条件直接查成员 EXISTS，不引用 `is_favorite` 投影别名，因此窄入口也能独立执行。
+- 本次只改 provider 与前端路径转换，复用已有 `~~` / `~~p`，没有增加引擎能力。
 
 ### Metadata 懒加载（列表不带插件 JSON）
 
@@ -65,7 +76,7 @@ ImageGrid 一批读 `[count(分子)]` 或 `[count(分子), count(分母)]`，分
 
 ### 与 VD / Greedy 的区别
 
-- **SimplePage**：一页行数 = 用户设置的 `galleryPageSize`（经上述 clamp）。
+- **网格分页**：一页行数 = 用户设置的 `galleryPageSize`（前端归一为 100 / 500 / 1000）。
 - **Greedy 等路径**：`browse.rs` 仍使用文件内 `LEAF_SIZE = 100` 做目录拆分，**不**读 `galleryPageSize`。
 
 ### 设置持久化
@@ -97,7 +108,10 @@ ImageGrid 一批读 `[count(分子)]` 或 `[count(分子), count(分母)]`，分
 ### 拉取当前页图片
 
 - **组件**：[`apps/kabegame/src/components/ImageGrid.vue`](/apps/kabegame/src/components/ImageGrid.vue)。
-- 行与计数批分开读取：行用 `pathql_fetch(path)`，总数用 `useLookAll` 观察 `pathql_all(queries)` 的计数批；
+- `withPaged` 生成的分页路径仍是 `rawViewPath`、`loadedKey`、路径校验、计数推导与预览定位的依据。
+  只在 `currentRowsPath` 出口用 `toLookupRowsPath` 改写行取数路径；rows 观察方及其请求使用转换后的 key，
+  不把 lookup 路径写回路由或本地分页状态。画册单行封面仍走原来的宽路径。
+- 行与计数批分开读取：行用 `pathql_fetch(lookupPath)`，总数用 `useLookAll` 观察 `pathql_all(queries)` 的计数批；
   新旧由前端请求服务按 key 分配的请求序号判断（见下文「kbEvents」）。
 - 两者在后端都通过 PathQL 只读连接池执行，可以在不同连接上并行查询，不再与单写连接互相排队。
 - 行路径带页码，首次加载、翻页、换筛选和相关数据变更都会重读；计数路径由 adapter 的
@@ -126,7 +140,7 @@ images://gallery/hide/album/<id>/sort/by-time/_kb_desc  /~~/ rank /~~/ id_2719
   `_kb_desc` 与排序段。不要复用 `stripComposablePathTail`，它连 `_kb_desc` 一起剥，会把序号算反。
 - `ROW_NUMBER() OVER ()` 不写 ORDER BY，靠的是 `~~` 把内层冻结为物化 CTE 后、扫描序即内层
   `ORDER BY` 序（见 `cocs/provider-dsl/RULES.md` §2.1）。**前提是排序为全序**：gallery 的每条
-  sort provider 都以 `images.id asc` 收尾，`gallery_route` 的默认排序同样带这条兜底。
+  sort provider 都以 `images.id asc` 收尾，`gallery_router` 的默认排序同样带这条兜底。
   少了它，`ORDER BY … LIMIT` 的 top-N sorter 与全量 sort 可能给同一并列组不同次序 —— 定位会落到
   相邻页，分页本身也会在并列跨页处重复/漏行。
 - 空结果 = 这张图**不在该视图里**（被过滤掉、或 `hide/` 开着而它已隐藏），不是错误：保持单图模式。

@@ -13,7 +13,7 @@
 - `fields[]` accepts either full object form `{ "sql": "...", "as": "...", "in_need": true }`
   or shorthand string form `"images.url"`, equivalent to `{ "sql": "images.url" }`.
 - When a query has no selected fields, SQL rendering emits `SELECT <table>.*` for a registered
-  table, `SELECT <alias>.*` after a `~~` boundary, and `SELECT *` otherwise.
+  table, `SELECT <alias>.*` after a `~~` / `~~<alias>` boundary, and `SELECT *` otherwise.
 
 ## Phase 7c completion note
 
@@ -115,7 +115,8 @@ A/~~/B/~~/C  ⇒  C(from B(from A))
 语义：
 
 - 走到 `~~` 时，引擎把当前 composed 原样冻结，新建一层令其 FROM 为内层、别名为 schema 的**表名**，并以
-  一条 `<表名>.*` 承接内层 SELECT 的全部列；边界后只把 provider 视角切回 schema 根，**不重放**根 provider
+  一条 `<表名>.*` 承接内层 SELECT 的全部列（写成 `~~<别名>` 时，下文的 `<表名>` 一律换成该别名，见下方
+  「`~~<别名>`」）；边界后只把 provider 视角切回 schema 根，**不重放**根 provider
   的任何 query 贡献（fields / join / where / order 一概不重放，见 `runtime.rs` 的 `SegmentKind::Nest`
   分支与 `ProviderQuery::from_nested`）。所以新一层的初始贡献**只有**那条 `<表名>.*`。
   provider 因此永远只写 `albums.xxx`，不知道自己在第几层；也不需要任何 provider 声明
@@ -135,12 +136,41 @@ A/~~/B/~~/C  ⇒  C(from B(from A))
     的序号定位即建立在此，见 `shared/rank_provider.json5` 与 `dsl_e2e.rs` 的
     `gallery_rank_locates_image_position_within_view`（含一个 122 行全并列组的逐项比对）。
     依赖这一点的前提是内层排序为**全序**，否则并列组内次序可能与分页查询不一致。
-- 约束：`~any` / `~not` 组内不得出现 `~~`（分支是旁路，封进去的只是当前分支视角）；程序化 schema
-  （§3.1）没有 SQL 可封装，出现 `~~` 报 `SubqueryUnsupported`；`~~x` 这类以 `~` 开头的非记号段仍报错，
+- 约束：`~any` / `~not` 组内不得出现 `~~` / `~~<别名>`（分支是旁路，封进去的只是当前分支视角）；程序化 schema
+  （§3.1）没有 SQL 可封装，出现边界报 `SubqueryUnsupported`；`~~` 后缀不是合法别名（如 `~~x-y`）时仍报保留段错误，
   字面段写 `\~~`。
 - 缓存：`…/~~` 所在前缀是合法缓存边界；provider key 跨层累积，内层任一 provider 被重新注册都会让外层
   路径的缓存失效。
-- TS 客户端：`pql.albums.….x10x.$page(1).$nest(pql.albums).images`。
+- TS 客户端：`pql.albums.….x10x.$page(1).$nest(pql.albums).images`；带别名写 `$nest(pql.images, "p")`。
+
+**`~~<别名>`：表名留给外层回表**
+
+缺省别名就是表名，于是外层的 `images.xxx` 指向内层 CTE，没法再 join 原表。`~~<别名>` 把内层改挂到这个别名下，
+表名空出来，外层可以按主键 join 回原表取列。典型用途是**延迟回表**：不能走索引的排序（随机、名称……）要把
+全部候选行送进排序器，行越宽越慢；让内层只投影 id 排序、切页，外层只为这一页回表取宽列。
+
+```text
+images://filter/<过滤…>/sort/random-<seed>/_kb_desc/_kb_x100x/200 /~~/ rank /~~p/ lookup/gallery
+         内层：过滤 + 全序排序 + 切页，只带 id                  中层：本页 row_index  外层：回表补字段、按 p.row_index 排序
+```
+
+- 别名必须是简单、非 SQL 关键字的标识符（与 schema 表名同一规则）。不合规的 `~~xxx` 仍是保留段，报
+  `ReservedPathSegment`（原因写明是别名非法）；字面段写 `\~~xxx`。
+- 外层规则不变：从 schema 根起步、初始只有一条 `<别名>.*`、**不继承内层排序**。回表 join 由路径上的 provider
+  显式贡献（引擎不知道主键）。画廊先在中层用 `rank` 按物化 CTE 的扫描序打 `row_index`，再经 `~~p`
+  回表；外层只按 `p.row_index` 排序，**不重放内层排序段**，因此 `by-album-order` 等引用内层 JOIN 别名的排序也成立。
+  不能省掉最后的 ORDER BY：外层出现 INNER JOIN 时规划器可能改由被 join 的表驱动。rank 取序依赖内层全序，
+  与预览定位共用同一约定；本页内序号从 1 开始。
+- 内层宽度由路径上的 provider 决定：没有 provider 贡献 fields 时渲染器回退成 `SELECT <表名>.*`，并不会变窄，
+  需要窄内层就让某个 provider 只贡献主键列（Kabegame 的 `images://` 根只贡献 `images.id AS id`）。
+- Kabegame 的宽入口 `gallery` 经 `gallery_entry_router` 在组外折入 `gallery_router` 的默认排序，再由
+  `gallery_route` 补 21 个字段；`filter` 直接进入 `gallery_router`，所有子 provider 的 delegate 也折回它。
+  `lookup/gallery` 直接进入只含字段的 `gallery_route`，外层不会再叠默认排序。入口先折排序是为了兼容
+  `gallery/~not/...`：若直到组内才由 delegate 加默认排序，会违反分支只贡献 WHERE / LEFT JOIN 的约束。
+- `filter` / `lookup` 只挂根 resolve，不列举。filter 下只做路径解析与行查询，维度列举仍走 gallery：列举 SQL
+  会读取 `sub.type` / `sub.crawled_at` 等宽列。`no-album` 的收藏判断用成员 EXISTS，不能依赖宽投影别名。
+- 画册的 `album_order` 是允许保留的窄字段，经中层 `images.*`、外层 `p.*` 穿过边界；列表宽字段只在末尾补一次。
+- prod 的命令、逐次耗时与 id 一致性记录见 `versions/latest/regression.md`「画廊窄路由分页与边界后回表」。
 
 渲染（方言差异，见 `pathql-rs/src/compose/dialect.rs`）：
 
@@ -164,7 +194,7 @@ SELECT … FROM pq_nest_1 AS albums INNER JOIN albums AS tree ON … WHERE (hid_
 - `SELECT <表名>.*` 配合 `GROUP BY` 在 Postgres 或启用 `ONLY_FULL_GROUP_BY` 的 MySQL 下可能非法，因为数据库
   无法从 CTE 识别主键函数依赖；此前根 provider 的显式字段也有相同限制。
 - 对 Kabegame 现有路径，改动前后列集合不变：`albums://` 中贡献 fields 的 children / images provider 都在
-  边界之后，`images://` 根本来就使用 `images.*`。新语义主要避免以后在边界前新增的字段静默消失。
+  边界之后。新语义主要避免以后在边界前新增的字段静默消失。
 
 性能提示：物化只保证内层只算一次，边界之后的 join 条件仍要能走索引。子树判断用前缀区间
 
@@ -199,7 +229,7 @@ COUNT，把整个结构重跑 N 次。
 - `from` 不再是 ContribQuery 字段；DSL `query` 中出现 `"from"` 会被 schema/serde 拒绝。
 - FROM 由引擎计算：host 调用 `register_schema(scheme, table, namespace, provider_name)` 只登记**数据表名**
   （必须是非 SQL 关键字的简单标识符，加载期校验），冷启动时 FROM 即该表；遇到 `~~` 时 FROM 是上一层
-  查询、别名仍是表名（§2.1）。
+  查询、别名缺省仍是表名，`~~<别名>` 时为该别名（§2.1）。
 - Kabegame 当前注册 `images://` → `images`，`albums://` → `albums`，`fail-images://` → `task_failed_images` 等。
 - 行不来自 SQL 的 schema 用 `register_programmatic_schema(scheme, namespace, provider_name)`（如 `plugin://`，
   行由 Rust provider 的 `fetch_rows` 给出）：没有 FROM，`count` 取 `fetch_rows` 的行数，路径里不能用 `~~`。
@@ -314,7 +344,7 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 
 `plugin/<id>/extend/...` 由宿主的 `plugin_entry_provider` 接入，再委托给插件自带的
 `plugins.<id>.entry_provider`。宿主只贡献一条 `LEFT JOIN metadata AS plugin_im`，**不投影任何列**：
-列表行始终是 `images.*`，爬取期 metadata 每行数 KB，带进每个 fetch 会让一页行体积放大约 10 倍。
+列表行只有 gallery 枚举的列表字段，爬取期 metadata 每行数 KB，带进每个 fetch 会让一页行体积放大约 10 倍。
 
 因此插件 provider 与宿主之间有一份固定约定，三条缺一不可：
 
@@ -323,7 +353,7 @@ gallery://all/~any/plugin/pixiv/~or/album/收藏/~end/~not/plugin/yande/~end
 - **`where` 整体包 `COALESCE((…), 0)`**。元数据缺字段或没有 metadata 行时，`json_extract` 得到 NULL，
   `NOT (NULL)` 仍是 NULL，`~not` 会把这些图整批排除；包成 0 后取非才为真。与宿主的搜索 provider
   对缺失元数据的处理一致。
-- **`list.sql` 自行 join `metadata`**。`${composed}` 只有 `images.*`，其中的 `metadata_id` 是唯一入口：
+- **`list.sql` 自行 join `metadata`**。`${composed}` 只有列表字段，其中的 `metadata_id` 是唯一入口：
 
 ```sql
 -- 需要逐行 metadata：在 composed 外包一层补出列，其余表达式不动
@@ -680,7 +710,7 @@ Resolve 条目可标记 `passthrough: true`：命中后只把目标 provider 的
 
 Kabegame 用 `_kb_co` 折叠 `{ order: { all: "clear" } }`。列举维度时必须把它放在**维度路径末尾**，
 即先解析 `{维度路径}/_kb_co`，再对该节点 list。若写成 `{上下文}/_kb_co/{维度}`，后续 `hide`、搜索等
-provider 通过 `.*` 委托 `gallery_route` 时会再次叠加画廊根排序，抵消清空排序的目的。
+provider 通过 `.*` 委托 `gallery_router` 时会再次叠加画廊默认排序，抵消清空排序的目的。
 
 ### 5.4 加载期检查 (7b 起简化)
 
@@ -714,10 +744,10 @@ Resolve delegate 的 query scope chain 由 runtime 统一折叠；规范性合�
 **典型应用**（gallery_hide_router 模式）：
 ```jsonc
 "resolve": {
-    ".*": { "delegate": { "provider": "gallery_route" } }
+    ".*": { "delegate": { "provider": "gallery_router" } }
 }
 ```
-含义：本节点不自己解决任何 segment，把 name 转给 `gallery_route.resolve(name, ...)`。本节点的 contrib（如 hide WHERE）随 apply_query 自然累积。
+含义：本节点不自己解决任何 segment，把 name 转给 `gallery_router.resolve(name, ...)`。本节点的 contrib（如 hide WHERE）随 apply_query 自然累积。
 
 ---
 
@@ -1131,7 +1161,8 @@ Contract:
 
 - `scheme` is the public path prefix before `://`.
 - `table` must be a plain identifier (not an SQL keyword). The engine seeds `ProviderQuery.from` with it before
-  the schema root provider contributes query fragments, and uses it as the alias of the previous level after `~~`.
+  the schema root provider contributes query fragments, and uses it as the alias of the previous level after `~~`
+  (`~~<alias>` overrides that alias so the outer level can join the table back).
 - `namespace` + `provider_name` locate the schema root provider in the registry.
 - `register_global_table(prefix, namespace, name)` 实例化一张全局 resolve 表；`prefix` 不得为空，后一次登记会替换前一张表并清空旧缓存。
 - Re-registering a scheme is an error. Missing schemes are runtime errors.

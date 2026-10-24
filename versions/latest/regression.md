@@ -499,3 +499,59 @@ metadata 写入与本地导入后处理在宿主单点短路；任务应以 0 �
 | [ ] | 配置关联任务与名称 | 桌面 CEF / Android / Web | 打开配置详情关联任务列表并加载更多，改名 / 删除关联配置 | 关联任务按配置路径累计读取；改名按 id 读取并补丁，删除清空关联名 | |
 | [x] | 任务详情首读与被删除 | 桌面 CEF（韩语） | 打开测试任务详情，再从抽屉删除该任务 | 进入时 `tasks://id_<id>` 请求 1 次，显示 dry-run 跳过 35 张；删除后重读空行，页面回到通用标题与空态 | |
 | [ ] | 任务详情切任务与离页返回 | 桌面 CEF / Android / Web | 运行中任务详情切到另一任务；离页再返回 | 换任务清空后首读一次；离页返回保留旧数据直到重读覆盖，diff 实时补丁 | |
+
+## PathQL `~~<别名>` 子查询边界与 images 根只投影 id
+
+`~~<别名>` 把此前的查询物化成 CTE 并挂在该别名下，表名空出来，外层可以 `JOIN images ON images.id = <别名>.id` 回表；不带别名的 `~~` 行为不变。images 根不再贡献 `images.*`，只贡献 `images.id AS id`：gallery 与 VD 各自枚举列表字段（gallery 补 `image_metadata_id`），原始行 `images://x<N>x/<页>`、`images://id_<id>` 由 `image_basic_provider` 逐列枚举 ImageInfo 用到的列（不再含 `description` / `wallpaper_compatible_path`）。宽高比列举改按 `width` / `height` 判有效，不再从上游读 `aspect_ratio` 生成列。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 随机序深页结果与耗时 | release CLI，prod 库 5.6 万张 | `pathql query` 原报告的三组 `~not/~any` + `sort/random-…/_kb_desc/_kb_x100x/200` | 100 行，与按 SplitMix64 独立计算的排序切页逐项一致；热缓存 250–280ms → 约 210ms | 行字段为 gallery 枚举列，含 `image_metadata_id`、不含 `description` |
+| [x] | 原始行 | release CLI，prod 库 | `images://id_<id>`、`images://x3x/1` | 能解码为 ImageInfo（含 `type` / `local_path` / `image_metadata_id`），按 id 升序 | organize 扫描走 `x<N>x` |
+| [x] | rank 定位 | release CLI，prod 库 | `images://gallery/sort/random-1/~~/rank/~~/id_<id>` | 返回 `row_index` | 外层 `id_` 的列须是 gallery 字段子集 |
+| [x] | 宽高比分组计数 | release CLI，prod 库 | `pathql query --list images://gallery/aspect` | 四个区间桶之和等于全表数，unknown 与 `aspect_ratio IS NULL` 计数一致 | |
+| [x] | `~~<别名>` 与非法别名 | release CLI，prod 库 | `images://gallery/all/_kb_x3x/1/~~p`；`…/~~select` | 前者返回 3 行；后者报 `invalid subquery alias` | 回表链路由 pathql 端到端测试覆盖 |
+| [x] | 画廊 / 画册 / 任务 / 畅游网格 | 桌面 CEF（macOS dev，韩语，dev 库 5,296 张） | 各页翻页、预览、看原生元数据面板 | 缩略图、收藏 / 隐藏标记、原生元数据正常；无列缺失报错 | 四类网格行请求均为 `filter/…/~~/rank/~~p/lookup/gallery`，每页与宽版逐项相同，翻页只读行；可见缩略图无破图、无文件异常徽标、控制台无报错。预览基本信息完整；原生元数据：webp 3 组 22 项、pixai webp 1 组 4 项，空 groups 的 jpg 显示空态（库内 `groups:[]`）。hide 关时隐藏图带 `image-item-hidden`，右键菜单按收藏 / 隐藏状态切换为「즐겨찾기 해제」「숨김 해제」。截图 `/private/tmp/claude-601/-Users-didi-Code-kabegame/54d2af2c-23b3-48bf-8a93-ed17e869518b/scratchpad/shots/t3-native-meta.png`、`t21-*-preview.png` |
+| [x] | 宽高比筛选侧栏 | 桌面 CEF（macOS dev，hide 开） | 打开过滤侧栏 → 宽高比 | 各桶计数与点击后结果数一致 | `gallery/hide/aspect/_kb_co` 五桶：1710 / 213 / 661 / 1602 / 0，合计 4186 等于总数；逐个点击后页头分别为 1710 / 213 / 661 / 1602 / 空态。dev 库无缺尺寸图片，unknown 为 0 属实 |
+| [ ] | 虚拟盘 | 桌面（Dokan / FUSE） | 浏览按画册 / 宽高比目录 | 文件列表与改动前一致 | 未测：本机 macFUSE 5.3.3 内核扩展未加载（无 `/dev/macfuse*`），dev 开启画册盘报 `挂载失败: File exists` / `No such file or directory`，需系统授权后重试。替代观测：app 内 pathql 读 `images://vd/i18n-ko/크기 비율별` 四桶 2202 / 271 / 846 / 1977，合计 5296；叶子 fetch 2202 行、无报错；缺少改动前基线，不能证明「一致」 |
+| [x] | MCP 原始行 | 桌面 MCP（dev 应用 Web 服务器 127.0.0.1:7490，StreamableHTTP） | 读 `images://id_<id>` 与 `images://x100x/1` | 返回 ImageInfo 字段，不再含 `description` | `id_8751` 返回单个 ImageInfo（含 type / localPath / imageMetadataId）；`x100x/1`、`x100x/2` 各 100 行，id 升序；均无 `description` / `wallpaperCompatiblePath`。原始行不带收藏 / 隐藏列，favorite / isHidden 恒为 false |
+
+
+## 画廊窄路由分页与边界后回表
+
+`gallery_router` 只持有路由与默认排序，所有子 provider 的 delegate 都回到它；`gallery_route` 只补列表字段。
+ImageGrid 的行取数出口把分页路径转换为 `filter/<视图>/_kb_x<N>x/<页>/~~/rank/~~p/lookup/gallery`：
+窄内层过滤排序切页，中层 rank 为本页取序，外层主键回表、统一补字段并只按 `p.row_index` 排序。
+原分页路径仍供 loadedKey、校验、计数与预览定位使用；rows 观察方和请求用转换后的 key。
+
+实施时补齐两处实际兼容点：宽入口 `gallery_entry_router` 在进入字段层之前委托窄路由折默认排序，
+避免 `gallery/~not/...` 在组内首次加 order（裸 gallery 与全局分页的默认排序也保留）；`no-album`
+的收藏条件改用成员 EXISTS，不再依赖窄查询没有的 `is_favorite` 投影。没有改 pathql-rs 引擎；
+其集成测试仅同步新 provider 依赖清单与拆分后的折叠预期。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 窄页与宽页逐项一致 | core 内存 SQLite E2E | 13 类视图各取第 1、2、3、99 页，每页 2 行 | id 顺序及解码后的 ImageInfo 全字段相同，画册保留 album_order，越界页为空 | 默认、hide、随机倒序、名称、画册顺序正反、画册子树、裸 / hide 前缀 NOT/ANY、标签、任务、畅游、无画册；名称与画册顺序专门改成与 id 不同 |
+| [x] | 窄路由不依赖宽列枚举 | core 内存 SQLite E2E | 逐个维度从 filter 直接解析 / fetch | 只投影 id 与可选 album_order，无缺列错误；根 list 不出现 filter / lookup | 覆盖日期年/月/日、插件、媒体格式、语种、大小、宽高比、搜索、by_* 等 30 条路径；SQL 断言末尾只有 ORDER BY p.row_index ASC |
+| [x] | 宽入口兼容与自动回归 | macOS arm64 | driver 跑 dsl_e2e；pathql-rs 全 features；前端 check / test | 全部通过 | core 57 passed / 0 failed；pathql-rs 648 passed / 0 failed；前端 53 文件、571 passed / 0 failed；vue-tsc 退出 0 |
+| [x] | 前端行路径与翻页计数 | Vitest ImageGrid 组件 | 挂载、翻到第 2 页；继续执行现有预览跟页测试 | 行请求为 filter/…/~~/rank/~~p/lookup/gallery；翻页不加计数请求；定位仍使用原视图 | 含原有预览目标等待快照、跳页、保留对象与缩放等自动用例；尚未进行真实 CEF 交互 |
+| [x] | prod 原报告随机序深页 | release CLI，只读 prod 库 55,593 张 | 下方两条路径预热后各执行 3 次，逐行比较 id 与列表字段 | 第 200 页均 100 行，id 序列完全相同；除新增 row_index，其余字段逐项相同 | 热缓存 SQL：宽 199 / 201 / 201ms；lookup 105 / 102 / 102ms；均值 200.3 → 103.0ms，降低 48.6% |
+| [x] | 独立排序核对 | Python sqlite3 只读连接 | 只执行相同过滤得到候选 id，再在 Python 独立计算有符号 SplitMix64，按随机键与 id 反序切片 [19900:20000] | 独立结果与两条 CLI 路径逐项相同 | 过滤后 53,903 个候选，核对 100 个 id |
+| [x] | prod 大画册完整顺序 | release CLI + Python sqlite3 只读 | 画册 57eddb92-2854-4665-a38c-0a43ac533ef7，by-album-order，x20000x/1 | 13,710 行 id 和 album_order 逐项相同，与独立成员排序相同 | 宽路径 SQL 170ms，lookup 52ms；字段一次补齐 |
+| [x] | 画廊随机序与画册翻页 | 桌面 CEF（macOS dev） | 随机排序翻页、画册按画册顺序翻页 | 缩略图、收藏 / 隐藏标记与顺序正常 | 画廊 hide + 三重 `~not` 搜索 + `random-424242`，500/页第 1–3 页（另补 aspect + `random-99/_kb_desc` 第 9 页）：DOM 首几张与 lookup 行一致，与宽版 id 序列和字段逐项相同。画册「测试」by-album-order 100/页：100 / 100 / 53 = 253（hide 开），album_order 页内单调，与宽版一致；hide 关时第 2 页倒序含 10 张隐藏图。截图 `/private/tmp/claude-601/-Users-didi-Code-kabegame/54d2af2c-23b3-48bf-8a93-ed17e869518b/scratchpad/shots/t1-random-p2.png`、`t5-album-p1.png` |
+| [x] | 任务 / 畅游与预览深链接 | 桌面 CEF（macOS dev，100/页） | 任务 / 畅游网格翻页，打开 pvwimgid 深链接并跟页 | 数据归属与目标页正确、预览不闪回 | 任务 yandere：100 + 69 = 169，全部 task_id 匹配、id 不重复；深链 `pvwimgid=8591`：第 1 页 → rank → 第 2 页后打开，打开后未再关闭。畅游 yande.re 临时挂 60 张测试图（测完已还原）：100 + 44 = 144，归属正确；`pvwimgid=6940` 同样跳到第 2 页、不闪回。画廊随机序深链跳到第 6 页，预览内下一张正确 |
+| [x] | 侧栏过滤树计数 | 桌面 CEF（macOS dev，hide 开） | 展开日期 / 媒体类型 / 大小 / 宽高比，组合过滤 | 仍走 gallery 列举，计数正确且无缺列错误 | 列举均为 `gallery/hide/…/_kb_co`。日期：2026 年 4186 → 10 月 3483 + 8 月 703，10 月下 11 天合计 3483；选 10 月 → 3483。叠加类型：图片 3448 + 视频 35，jpg / png / webp 合计 3448，选 jpg → 2639。叠加大小：8 档合计 2639，选 512KB–1MB → 726。叠加宽高比：351 / 62 / 110 / 203 合计 726，选宽屏 → 62，最终行与宽版一致。全程无 pathql 错误 |
+
+prod 复现命令（2026-10-24，macOS arm64）：
+
+```bash
+deno task b -c kabegame-cli --release
+KABEGAME_SQL_DEBUG=1 target/release/kabegame-cli pathql query 'gallery/hide/~not/~any/search/metadata/pussy/~or/search/native-metadata/pussy/~end/~end/~not/~any/search/metadata/r18/~or/search/native-metadata/r18/~end/~end/~not/~any/search/metadata/r-18/~or/search/native-metadata/r-18/~end/~end/sort/random-7921476028795849/_kb_desc/_kb_x100x/200'
+KABEGAME_SQL_DEBUG=1 target/release/kabegame-cli pathql query 'filter/hide/~not/~any/search/metadata/pussy/~or/search/native-metadata/pussy/~end/~end/~not/~any/search/metadata/r18/~or/search/native-metadata/r18/~end/~end/~not/~any/search/metadata/r-18/~or/search/native-metadata/r-18/~end/~end/sort/random-7921476028795849/_kb_desc/_kb_x100x/200/~~/rank/~~p/lookup/gallery'
+```
+
+上述耗时取 `KABEGAME_SQL_DEBUG` 的主 SELECT / WITH PROFILE，不混入 CLI 启动与 JSON 输出。
+同批命令的进程墙钟时间：宽路径 267.0 / 271.2 / 270.8ms，lookup 173.1 / 169.2 / 170.6ms。
+首次观测宽路径 1730ms、lookup 129ms；未清理 OS 缓存且执行有先后，不能视为可比的严格冷缓存测试。
+预热后再各测 3 次，最终热缓存记录如表。日志、JSON、独立核对脚本结果临时保存在 `/tmp/gallery-prod/`
+（`summary.json`、`verification.json`、逐次 stderr 与 JSON）；没有对 prod 库执行写操作。

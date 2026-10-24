@@ -74,11 +74,11 @@ pub struct ImageInfo {
     pub display_name: String,
     /// 存储格式 key（`image/jpg`、`video/mp4`…）。
     ///
-    /// 线上键名统一为 `type`，**不要再加 `media_type` 别名**：provider 树的上游
-    /// (`images_root_provider`) 贡献 `images.*`，展开后已含一个 `type` 列；只要哪个
+    /// 线上键名统一为 `type`，**不要再加 `media_type` 别名**：原始行路径
+    /// (`image_basic_provider`) 贡献 `images.*`，展开后已含一个 `type` 列；只要哪个
     /// 下游 provider 再取名 `media_type`，两个键就会同时出现在同一行 JSON 里，
     /// 而 serde 对同一字段的两个可接受键名会直接报 `duplicate field type`，
-    /// 令整棵 gallery 子树无法反序列化。
+    /// 令整棵子树无法反序列化。
     #[serde(rename = "type")]
     #[serde(default)]
     pub media_type: Option<String>,

@@ -105,7 +105,13 @@ import type {
 } from "@/components/common/ImageBasicInfoPanel.vue";
 import { usePluginStore } from "@/stores/plugins";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
-import { singleFilterToSet, queryFromFilterSet, type GalleryFilter, type GalleryQuery } from "@/utils/galleryPath";
+import {
+  singleFilterToSet,
+  queryFromFilterSet,
+  toLookupRowsPath,
+  type GalleryFilter,
+  type GalleryQuery,
+} from "@/utils/galleryPath";
 import { normalizeGalleryPageSize } from "@/utils/galleryPageSize";
 import { locateImageRowIndex, pageOfRowIndex } from "@/services/imageLocate";
 import EmptyState from "@/components/common/EmptyState.vue";
@@ -359,7 +365,7 @@ const currentRowsPath = (): string | null => {
   if (!isRouteActive.value || !adapter.isActive()) return null;
   const path = rawViewPath();
   if (!path || (adapter.validatePath && !adapter.validatePath(path))) return null;
-  return withGalleryPrefix(path);
+  return toLookupRowsPath(withGalleryPrefix(path));
 };
 
 const currentCountPath = (): string | null => {

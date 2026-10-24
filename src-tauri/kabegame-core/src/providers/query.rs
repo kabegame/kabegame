@@ -1157,7 +1157,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(row_ids(&rows), BTreeSet::from([1, 2]));
-        // 列表行只有 images.*：metadata 每行数 KB，不能随细分路径带给前端。
+        // 列表行只有 gallery 字段：metadata 每行数 KB，不能随细分路径带给前端。
         for row in &rows {
             let obj = row.as_object().unwrap();
             assert!(

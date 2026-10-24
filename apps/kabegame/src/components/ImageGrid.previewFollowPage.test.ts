@@ -22,6 +22,7 @@ const routeStore = reactive({
   navigate: vi.fn(async () => {}),
   syncFromUrl: vi.fn(),
 });
+const requestedRowPaths: string[] = [];
 let rowTriggers: readonly EventTrigger[] = [];
 let countTriggers: readonly EventTrigger[] = [];
 let applySnapshot: ((snapshot: RowsSnapshot) => Promise<void>) | null = null;
@@ -78,7 +79,10 @@ vi.mock("@/services/kbEvents", async () => {
       };
     },
     pathqlRequest$: {
-      next: ([kind]: readonly ["rows" | "all", string]) => void (kind === "rows" ? refetch() : totalRefetch()),
+      next: ([kind, key]: readonly ["rows" | "all", string]) => {
+        if (kind === "rows") requestedRowPaths.push(key);
+        void (kind === "rows" ? refetch() : totalRefetch());
+      },
     },
   };
 });
@@ -174,6 +178,7 @@ beforeEach(() => {
   currentPage.value = 1;
   routeStore.computedPath = "hide/sort/by-time/_kb_desc";
   applySnapshot = null;
+  requestedRowPaths.length = 0;
   pendingPreviewBoundary.value = null;
   refetch.mockReset();
   totalRefetch.mockReset();
@@ -191,6 +196,16 @@ afterEach(() => {
 });
 
 describe("预览跟随后台新增图片", () => {
+  it("行请求走 lookup，翻页只改变窄路由内层页码", async () => {
+    await render();
+    expect(requestedRowPaths).toEqual(["filter/hide/sort/by-time/_kb_desc/_kb_x2x/1/~~/rank/~~p/lookup/gallery"]);
+    const countCalls = totalRefetch.mock.calls.length;
+    currentPage.value = 2;
+    await nextTick();
+    expect(requestedRowPaths.at(-1)).toBe("filter/hide/sort/by-time/_kb_desc/_kb_x2x/2/~~/rank/~~p/lookup/gallery");
+    expect(totalRefetch.mock.calls.length).toBe(countCalls);
+  });
+
   it("挂载后只写不读 URL：外部改 pvwimgid 不改变预览目标", async () => {
     const wrapper = await render();
     previewImageId.value = "other";

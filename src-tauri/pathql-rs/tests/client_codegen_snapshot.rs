@@ -178,9 +178,11 @@ fn typescript_snapshot_contains_expected_runtime_types_and_edges() {
     assert!(!output.contains("encodeURIComponent"));
     assert!(output.contains("type AnyProviderNode = AnyProviderMethods & {"));
     // `~~` 子查询边界: 具体节点与占位节点都能接回某个 scheme 的根
-    assert!(output.contains("$nest<T extends NodeBase>(root: T): T {"));
-    assert!(output.contains("return root._spawn([...this._segments, \"~~\"]);"));
-    assert!(output.contains("readonly $nest: <T extends NodeBase>(root: T) => T;"));
+    assert!(output.contains("$nest<T extends NodeBase>(root: T, alias?: string): T {"));
+    assert!(
+        output.contains("return root._spawn([...this._segments, alias ? `~~${alias}` : \"~~\"]);")
+    );
+    assert!(output.contains("readonly $nest: <T extends NodeBase>(root: T, alias?: string) => T;"));
     // 全局表成员放在共同基类；透传条目保持当前节点类型，且不在表自身重复生成。
     assert!(output.contains("get _g_all(): TestAllProviderNode"));
     assert_eq!(output.matches("get _g_all()").count(), 1);

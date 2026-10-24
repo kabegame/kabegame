@@ -1169,9 +1169,19 @@ fn image_basic_delegate_contributes_fields_order_and_schema_from() {
         .build_sql(&ctx, SqlDialect::Sqlite)
         .unwrap();
 
-    assert!(sql.contains("SELECT images.*"), "{sql}");
+    // 根只贡献 id，原始行的列由 image_basic_provider 逐列枚举，不用 `images.*`
+    assert!(
+        sql.starts_with("SELECT images.id AS id, images.url, images.local_path,"),
+        "{sql}"
+    );
+    assert!(!sql.contains("images.*"), "{sql}");
     assert!(sql.contains("FROM images"), "{sql}");
     assert!(sql.contains("ORDER BY images.id ASC"), "{sql}");
+
+    // 根本身只投影 id
+    let root = runtime.resolve("images://").unwrap();
+    let (root_sql, _) = root.composed.build_sql(&ctx, SqlDialect::Sqlite).unwrap();
+    assert_eq!(root_sql, "SELECT images.id AS id FROM images");
 }
 
 #[test]
@@ -1426,6 +1436,150 @@ fn gallery_rank_locates_image_position_within_view() {
     assert_eq!(rank(&runtime, &album_view, "1"), Some(1));
     assert_eq!(rank(&runtime, &album_view, "5"), Some(5));
     assert_eq!(rank(&runtime, &album_view, "6"), None);
+}
+
+#[test]
+fn gallery_lookup_rows_match_wide_pages_and_keep_album_order() {
+    let runtime = build_runtime();
+    // 把画册顺序改成与 id、时间都不同，确保外层只按本页 row_index 恢复内层顺序。
+    // 名称也与 id 逆序，避免 by-name 仅因 id 恰好同序而通过。
+    let conn = fixture_db();
+    conn.lock().unwrap().execute_batch(
+        "UPDATE album_images SET \"order\" = 10 - image_id WHERE album_id = '11111111-1111-1111-1111-111111111111';
+         UPDATE images SET display_name = 'z-last' WHERE id = 1;
+         UPDATE images SET display_name = 'a-first' WHERE id = 2;",
+    ).unwrap();
+    let album_runtime = build_runtime_with(conn);
+    let views = [
+        "all".to_string(),
+        "no-album/_kb_fc/sort/by-id".to_string(),
+        "~not/~any/search/metadata/table/~or/search/native-metadata/r18/~end/~end/sort/by-id"
+            .to_string(),
+        "hide/sort/by-time".to_string(),
+        "sort/random-7921476028795849/_kb_desc".to_string(),
+        "sort/by-name".to_string(),
+        format!("album/{ALBUM_A_ID}/sort/by-album-order"),
+        format!("album/{ALBUM_A_ID}/sort/by-album-order/_kb_desc"),
+        format!("album-tree/{ALBUM_A_ID}/sort/by-id"),
+        "hide/~not/~any/search/metadata/table/~or/search/native-metadata/r18/~end/~end/sort/by-id"
+            .to_string(),
+        "search/label/Hatsune/sort/by-id".to_string(),
+        format!("task/{TASK_A_ID}/sort/by-time/_kb_desc"),
+        "surf/pixiv.test/sort/by-id".to_string(),
+    ];
+    for view in &views {
+        for page in [1, 2, 3, 99] {
+            let rt = if view.starts_with("album/") || view == "sort/by-name" {
+                &album_runtime
+            } else {
+                &runtime
+            };
+            let tail = format!("{view}/_kb_x2x/{page}");
+            let wide = rt.fetch(&format!("images://gallery/{tail}")).unwrap();
+            let path = format!("images://filter/{tail}/~~/rank/~~p/lookup/gallery");
+            let lookup = rt
+                .fetch(&path)
+                .unwrap_or_else(|err| panic!("{path}: {err}"));
+            assert_eq!(ids(lookup.clone()), ids(wide.clone()), "{path}");
+            for (index, (row, expected)) in lookup.into_iter().zip(wide).enumerate() {
+                assert_eq!(row["row_index"], index + 1, "{path}");
+                if view.starts_with("album/") {
+                    assert!(row["album_order"].is_number(), "{path}: {row}");
+                }
+                let actual: ImageInfo = serde_json::from_value(row).unwrap();
+                let expected: ImageInfo = serde_json::from_value(expected).unwrap();
+                assert_eq!(
+                    serde_json::to_value(actual).unwrap(),
+                    serde_json::to_value(expected).unwrap(),
+                    "{path}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn gallery_filter_dimensions_resolve_without_wide_enumeration_or_projection() {
+    let runtime = build_runtime();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    // 这些维度的列举会读 sub.type / sub.crawled_at 等宽列，窄入口若退回 list 反查即失败。
+    // 逐个 fetch 同时覆盖 resolve 与真实 SQL，不在 filter 下列举维度。
+    for view in [
+        "all".to_string(),
+        "hide/all".to_string(),
+        "wallpaper-order".to_string(),
+        "no-album".to_string(),
+        "name/english".to_string(),
+        "plugin/pixiv".to_string(),
+        "media-type/image/jpeg".to_string(),
+        "date/2023y/04m/05d".to_string(),
+        format!("album/{ALBUM_A_ID}"),
+        format!("album-tree/{ALBUM_A_ID}"),
+        format!("task/{TASK_A_ID}"),
+        "surf/pixiv.test".to_string(),
+        "size/0B-1KB".to_string(),
+        "size/unknown".to_string(),
+        "aspect/4x3-16x9".to_string(),
+        "aspect/unknown".to_string(),
+        "by_id/1".to_string(),
+        "by_path/%2Ftmp%2Fimage-1.jpg".to_string(),
+        "by_compatible_path/missing".to_string(),
+        "by_thumbnail_path/missing".to_string(),
+        "by_url/https%3A%2F%2Fexample.test%2F1.jpg".to_string(),
+        "by_hash/missing".to_string(),
+        "bigger_crawler_time/1".to_string(),
+        "search/display-name/image".to_string(),
+        "search/local-path/tmp".to_string(),
+        "search/url/example".to_string(),
+        "search/metadata/table".to_string(),
+        "search/native-metadata/r18".to_string(),
+        "search/label/Hatsune".to_string(),
+        "sort/by-name".to_string(),
+    ] {
+        let path = format!("images://filter/{view}/_kb_x2x/1");
+        let resolved = runtime
+            .resolve(&path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+        let (sql, _) = resolved
+            .composed
+            .build_sql(&ctx, SqlDialect::Sqlite)
+            .unwrap();
+        let projection = sql.split(" FROM ").next().unwrap();
+        // 画册允许附带 album_order，其余过滤不能把 gallery 字段重新带进排序器。
+        assert!(projection.contains("images.id AS id"), "{path}: {sql}");
+        for wide in [
+            "images.url",
+            "images.local_path",
+            "images.thumbnail_path",
+            "is_favorite",
+            "is_hidden",
+        ] {
+            assert!(!projection.contains(wide), "{path}: {sql}");
+        }
+        let narrow = runtime
+            .fetch(&path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+        assert!(
+            narrow.iter().all(|row| row
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| key == "id" || key == "album_order")),
+            "{path}"
+        );
+    }
+    let root = runtime.list("images://").unwrap();
+    assert!(!root
+        .iter()
+        .any(|child| child.name == "filter" || child.name == "lookup"));
+    let resolved = runtime.resolve("images://filter/album/11111111-1111-1111-1111-111111111111/sort/by-album-order/_kb_x2x/1/~~/rank/~~p/lookup/gallery").unwrap();
+    let (sql, _) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(sql.contains("images.id = p.id"), "{sql}");
+    assert!(sql.ends_with("ORDER BY p.row_index ASC"), "{sql}");
 }
 
 #[test]
@@ -2585,7 +2739,6 @@ fn image_collection_paths_decode_into_image_info() {
     let runtime = build_runtime();
 
     for path in [
-        "images://",
         "images://x2x/1",
         "images://gallery/all",
         "images://gallery/all/_kb_x2x/1",

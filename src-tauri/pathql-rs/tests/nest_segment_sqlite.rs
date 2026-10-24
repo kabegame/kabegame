@@ -39,6 +39,7 @@ fn local_params_for(values: &[TemplateValue]) -> Vec<rusqlite::types::Value> {
 ///      ├ counts             → 同样的 join + COUNT + group_by albums.id: fetch 一次出整页计数
 ///      │   └ hide           → 同 images/hide 的 where
 ///      ├ unclear            → where_clear 掉 albums.parent_id（验证清不到内层）
+///      ├ lookup             → 只用于 `~~pg` 之后: join 回 albums 原表取列, 按名称倒序
 ///      └ "~~"（字面）        → where albums.name = 'A'（验证 `\~~` 转义）
 /// ```
 const PROVIDERS: &[&str] = &[
@@ -55,6 +56,7 @@ const PROVIDERS: &[&str] = &[
             parent: { provider: "parent_router" },
             images: { provider: "images_provider" },
             unclear: { provider: "unclear_provider" },
+            lookup: { provider: "lookup_provider" },
             "~~": { provider: "literal_tilde_provider" },
         },
         resolve: {
@@ -141,6 +143,14 @@ const PROVIDERS: &[&str] = &[
     r#"{
         name: "unclear_provider",
         query: { where_clear: ["albums.parent_id"], where: "1 = 1" },
+    }"#,
+    r#"{
+        name: "lookup_provider",
+        query: {
+            fields: [{ sql: "albums.name", as: "name" }],
+            join: [{ kind: "INNER", table: "albums", as: "albums", on: "albums.id = pg.id" }],
+            order: [{ sql: "albums.name", order: "desc" }],
+        },
     }"#,
     r#"{
         name: "literal_tilde_provider",
@@ -310,6 +320,61 @@ fn nest_wraps_previous_query_as_from_aliased_by_table() {
     );
 }
 
+// ===== `~~<别名>`: 内层另取别名, 外层可 join 回原表 =====
+
+#[test]
+fn nest_alias_frees_table_name_for_join_back() {
+    let rt = runtime();
+    let node = rt.resolve("t://parent/P/p_2/~~pg/lookup").unwrap();
+    match node.composed.from {
+        Some(FromSource::Subquery { ref alias, .. }) => assert_eq!(alias, "pg"),
+        ref other => panic!("expected subquery FROM, got {other:?}"),
+    }
+    let (sql, _) = node
+        .composed
+        .build_sql(&Default::default(), SqlDialect::Sqlite)
+        .unwrap();
+    assert!(
+        sql.contains(") SELECT pg.*, albums.name AS name FROM pq_nest_1 AS pg INNER JOIN albums AS albums ON albums.id = pg.id ORDER BY albums.name DESC"),
+        "{sql}"
+    );
+    // 内层切出第 2 页 [C, D], 外层回表后按自己的排序输出
+    let rows = rt.fetch("t://parent/P/p_2/~~pg/lookup").unwrap();
+    let got: Vec<&str> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(got, ["D", "C"]);
+}
+
+#[test]
+fn nest_alias_works_across_multiple_levels() {
+    let rt = runtime();
+    // 第一层取别名, 第二层缺省回到表名
+    let node = rt.resolve("t://parent/P/~~a/~~").unwrap();
+    let (sql, _) = node
+        .composed
+        .build_sql(&Default::default(), SqlDialect::Sqlite)
+        .unwrap();
+    assert!(sql.contains("SELECT a.* FROM pq_nest_1 AS a"), "{sql}");
+    assert!(
+        sql.ends_with("SELECT albums.* FROM pq_nest_2 AS albums"),
+        "{sql}"
+    );
+    assert_eq!(names(&rt, "t://parent/P/~~a/~~").len(), 4);
+}
+
+#[test]
+fn invalid_nest_alias_is_rejected() {
+    let rt = runtime();
+    for seg in ["~~select", "~~1p", "~~x-y"] {
+        let path = format!("t://parent/P/{seg}");
+        match rt.resolve(&path) {
+            Err(EngineError::ReservedPathSegment(_, reason)) => {
+                assert!(reason.contains("invalid subquery alias"), "{reason}")
+            }
+            other => panic!("{path}: expected ReservedPathSegment, got {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn fields_accumulated_before_nest_survive_the_next_boundary() {
     let rt = runtime();
@@ -415,7 +480,7 @@ fn nest_under_programmatic_schema_rejected() {
 fn nest_marker_is_exact_and_escapable() {
     let rt = runtime();
     assert!(matches!(
-        rt.resolve("t://parent/P/~~x"),
+        rt.resolve("t://parent/P/~~x-y"),
         Err(EngineError::ReservedPathSegment(_, _))
     ));
     // 转义后是普通字面段, 路由到名为 `~~` 的静态项

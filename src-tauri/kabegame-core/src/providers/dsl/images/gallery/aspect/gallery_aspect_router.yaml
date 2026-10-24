@@ -10,10 +10,10 @@ note: >-
   positive. The legacy dimension and dimensions entry points are aliases of aspect.
 # 列举应用的五个桶（与前端 GALLERY_ASPECT_BUCKETS、VD 同一组、同一顺序），计数放进 meta.count：
 # - 四个区间桶：一条 SQL 在上游结果集上按 CASE 分组计数（一次扫描），再与固定桶表 LEFT JOIN 补 0。
-#   CASE 用与 aspect_range_provider 相同的整数交叉乘法和左开右闭边界，有效性同样看 aspect_ratio；
-#   改一处同步另一处。
+#   CASE 用与 aspect_range_provider 相同的整数交叉乘法和左开右闭边界；有效性按 aspect_ratio 生成列的
+#   定义直接看 width / height（上游只投影列表字段，不带 aspect_ratio）。改一处同步另一处。
 # - unknown 单独一项：动态列举项的 provider 名不能按行切换，而它走的是 gallery_aspect_unknown_router。
-#   谓词与 aspect_unknown_provider 相同（aspect_ratio IS NULL，可走索引）。
+#   谓词与 aspect_unknown_provider（aspect_ratio IS NULL）等价，同样按 width / height 展开。
 # 段名解析走下方 resolve，不跑这些 SQL。
 list:
   "${out.bucket}":
@@ -36,7 +36,7 @@ list:
           END AS bucket,
           COUNT(*) AS count
         FROM (${composed}) AS sub
-        WHERE sub.aspect_ratio IS NOT NULL
+        WHERE sub.width > 0 AND sub.height > 0
         GROUP BY bucket
       ) AS c ON c.bucket = b.bucket
       ORDER BY b.ord
@@ -51,7 +51,7 @@ list:
       count: "${out.count}"
   "${unknown.bucket}":
     sql: |-
-      SELECT 'unknown' AS bucket, COUNT(*) AS count FROM (${composed}) AS sub WHERE sub.aspect_ratio IS NULL
+      SELECT 'unknown' AS bucket, COUNT(*) AS count FROM (${composed}) AS sub WHERE NOT (COALESCE(sub.width, 0) > 0 AND COALESCE(sub.height, 0) > 0)
     data_var: unknown
     provider: gallery_aspect_unknown_router
     meta:

@@ -18,7 +18,7 @@
     },
     "resolve": {
         ".*": {
-            "delegate": { "provider": "gallery_route" },
+            "delegate": { "provider": "gallery_router" },
             "child_var": "child",
             "provider": "${child.provider}",
             "meta": "${child.meta}"

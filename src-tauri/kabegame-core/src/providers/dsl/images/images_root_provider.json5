@@ -2,7 +2,10 @@
     "namespace": "kabegame",
     "name": "images_root_provider",
     "query": {
-        "fields": ["images.*"],
+        // 根只贡献 id，不用 `images.*`：gallery / vd / 原始行各自枚举需要的列
+        // （以同名 `as: "id"` 覆盖本条）。窄的根让 `…/_kb_x<N>x/<页>/~~<别名>` 内层只排 id，
+        // 外层再 join 回 images 取列。
+        "fields": [{ "sql": "images.id", "as": "id" }],
     },
     "list": {
         "gallery": { "provider": "gallery_route" },
@@ -12,6 +15,14 @@
         "rank": { "provider": "rank_provider" }
     },
     "resolve": {
+        "gallery": {
+            "delegate": { "provider": "gallery_entry_router" },
+            "child_var": "child",
+            "provider": "${child.provider}"
+        },
+        // 内部行查询入口不列举：filter 下的维度只解析，列举仍须走 gallery 宽入口。
+        "filter": { "provider": "gallery_router" },
+        "lookup": { "provider": "images_lookup_provider" },
         "x([1-9][0-9]*)x": {
             "alias": "page_size",
             "delegate": { "provider": "image_basic_provider" },

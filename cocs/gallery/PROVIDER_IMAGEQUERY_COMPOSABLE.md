@@ -8,6 +8,33 @@
 - 让上层 Provider 组合片段，下层 Provider 只接收组合后的 `ImageQuery` 并执行。
 - Gallery 与 VD 复用同一套查询表达，不再依赖字符串嗅探。
 
+## 当前 DSL 路由与行查询
+
+画廊过滤、排序、分页共用 `gallery_router`，它不贡献字段；`gallery_route` 只枚举 21 个列表字段，
+并将 list / resolve 委托给窄路由。所有 hide、搜索、画册、任务、畅游等子 provider 的 delegate 回到
+`gallery_router`，不会给窄查询重新补宽列。images 根仍只投影 `images.id AS id`。
+
+网格先用窄路由按 id 过滤、全序排序与分页，再为这一页回表：
+
+```text
+images://filter/<视图>/_kb_x<N>x/<页>/~~/rank/~~p/lookup/gallery
+```
+
+`rank` 扫物化 CTE 打本页 `row_index`，`lookup` 用 `images.id = p.id` 回表并按 `p.row_index` 排序，
+末尾 `gallery_route` 统一补字段。外层不重放内层排序，`by-album-order` 不会引用不到内层的 `ai`；
+`album_order` 作为窄字段穿过两层边界保留。收藏、隐藏等宽列表字段仅对本页求值。
+`no-album` 直接用收藏成员 EXISTS，不能引用宽投影的 `is_favorite` 别名。
+
+宽路径 `images://gallery` 在根 resolve 经 `gallery_entry_router` 先折入窄路由的默认排序，再补字段；
+这样 `gallery/~not/...` 的分支不会在组内首次增加排序。lookup 的 gallery 直接补字段，跳过该入口。
+`filter` / `lookup` 不在根 list 中；窄入口只解析已知路径，不用于列举，因为维度分组 SQL 要读取宽列。
+MCP、侧栏、计数和预览定位继续使用 gallery 路径。
+
+前端 `withPaged` 生成的路径仍供 `rawViewPath`、`loadedKey`、校验与计数推导使用；
+ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请求 key 使用转换后的完整路径。
+路由、预览定位与画册单行封面不改写。后文的 ImageQuery / SimplePage 是旧实现背景，当前读取链以此节及
+[`GALLERY_PAGINATION_AND_IMAGE_LOAD.md`](GALLERY_PAGINATION_AND_IMAGE_LOAD.md) 为准。
+
 ## 核心结构
 
 `ImageQuery` 已从旧的 `decorator + params` 重构为结构化模型：

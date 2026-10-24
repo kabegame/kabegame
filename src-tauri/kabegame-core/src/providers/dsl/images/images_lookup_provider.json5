@@ -1,0 +1,11 @@
+{
+    "namespace": "kabegame",
+    "name": "images_lookup_provider",
+    // 固定接在 filter/<分页视图>/~~/rank/~~p 后：只为这一页回表，按内层序号恢复顺序。
+    // gallery_route 在末尾统一补字段；不重放可能引用内层 JOIN 别名的排序。
+    "query": {
+        "join": [{ "kind": "INNER", "table": "images", "as": "images", "on": "images.id = p.id" }],
+        "order": [{ "sql": "p.row_index", "order": "asc" }]
+    },
+    "list": { "gallery": { "provider": "gallery_route" } }
+}

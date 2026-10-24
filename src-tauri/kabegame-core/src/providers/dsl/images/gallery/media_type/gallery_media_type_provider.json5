@@ -11,8 +11,7 @@
     },
     "list": {
         "${fmt.format}": {
-            // 列名统一为 type（原 media_type）：上游 images.* 已带一个 type 列，
-            // 两个名字并存会让 ImageInfo 反序列化报 duplicate field。
+            // 列名统一为 type（原 media_type），读 gallery_route 投影的 `type` 列。
             // 分组计数 count 随列举带出，list(with_count=false) 即可拿到每种格式的行数。
             "sql": "SELECT format, cnt AS count FROM (SELECT LOWER(SUBSTR(COALESCE(sub.type, ''), INSTR(COALESCE(sub.type, ''), '/') + 1)) AS format, COUNT(*) AS cnt FROM (${composed}) AS sub WHERE LOWER(COALESCE(sub.type, '')) LIKE '%/%' GROUP BY format) WHERE format != '' AND cnt > 0 ORDER BY format ASC",
             "data_var": "fmt",

@@ -43,6 +43,11 @@
                 "in_need": true
             },
             {
+                "sql": "images.image_metadata_id",
+                "as": "image_metadata_id",
+                "in_need": true
+            },
+            {
                 "sql": "COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path)",
                 "as": "thumbnail_path",
                 "in_need": true
@@ -83,13 +88,9 @@
                 "in_need": true
             },
             {
-                // as 必须是 "type" 而不是 "media_type":上游 images_root_provider 贡献
-                // `images.*`,展开后已含一个 type 列。ImageInfo 的该字段是
+                // as 必须是 "type" 而不是 "media_type":ImageInfo 的该字段是
                 // `#[serde(rename = "type", alias = "media_type")]` —— 两个键名都吃,
-                // 所以一旦 SELECT 里同时出现 type 和 media_type,反序列化就报
-                // `duplicate field type`,整条 gallery 路径读不出数据。
-                // 用同名 type 时,sql_executor 的 obj.insert 后写覆盖前者,
-                // 而本 COALESCE 排在 images.* 之后,最终取到的正是补过默认值的结果。
+                // 下游列举 SQL(gallery_media_type_provider)也按 `sub.type` 读。
                 "sql": "COALESCE(images.type, 'image')",
                 "as": "type",
                 "in_need": true,
@@ -114,113 +115,22 @@
                 "as": "post_url",
                 "in_need": true
             }
-        ],
-        // `images.id` 是全序兜底,不是额外的排序维度:gallery 的每条排序都必须以它收尾。
-        // 单键排序在并列组上不是全序,ORDER BY ... LIMIT 的 top-N sorter 与全量 sort 可以给
-        // 同一组并列行不同次序 —— 那会让分页在并列跨页处重复/漏行,也会让
-        // `~~/rank/~~/id_<id>` 的定位落到相邻页。各 sort provider 用 clear:"all" 清掉本条后
-        // 要自己补回 images.id;`/_kb_desc` 的 {all:"revert"} 会连兜底一起翻转,正好是整个升序列的逆序。
-        "order": [
-            { "sql": "images.crawled_at", "order": "asc" },
-            { "sql": "images.id", "order": "asc" }
         ]
     },
     "note": "Gallery root. Each segment narrows the previous one; filters AND together. Combine two dimensions with `_kb_fc`: gallery/plugin/patreon/_kb_fc/media-type/image/_kb_x100x/1. `sort` is a sibling of `all`, not a child of it. `/_kb_desc` reverses the current order. `hide/` is a PREFIX excluding hidden images. Always end a collection path with /_kb_x<N>x/<page>. Global `_kb_` entries are resolved before this provider and are not listed as children.",
+    // 路由表的静态维度没有 meta，省略 meta 以保留 None，避免透传成 JSON null。
     "list": {
-        "all": {
-            "provider": "gallery_all_router"
-        },
-        "wallpaper-order": {
-            "provider": "gallery_wallpaper_order_router"
-        },
-        "no-album": {
-            "provider": "gallery_no_album_router"
-        },
-        "name": {
-            "provider": "gallery_name_router"
-        },
-        "plugin": {
-            "provider": "gallery_plugins_router"
-        },
-        "task": {
-            "provider": "gallery_tasks_router"
-        },
-        "surf": {
-            "provider": "gallery_surfs_router"
-        },
-        "media-type": {
-            "provider": "gallery_media_type_router"
-        },
-        "date": {
-            "provider": "gallery_dates_router"
-        },
-        "album": {
-            "provider": "gallery_albums_router"
-        },
-        "album-tree": {
-            "provider": "gallery_album_tree_router"
-        },
-        "hide": {
-            "provider": "gallery_hide_router"
-        },
-        "search": {
-            "provider": "gallery_search_router"
-        },
-        "sort": {
-            "provider": "gallery_sort_router"
-        },
-        "by_id": {
-            "provider": "gallery_by_id_router"
-        },
-        "by_path": {
-            "provider": "gallery_by_path_router"
-        },
-        "by_compatible_path": {
-            "provider": "gallery_by_compatible_path_router"
-        },
-        "by_thumbnail_path": {
-            "provider": "gallery_by_thumbnail_path_router"
-        },
-        "by_url": {
-            "provider": "gallery_by_url_router"
-        },
-        "by_hash": {
-            "provider": "gallery_by_hash_router"
-        },
-        "bigger_crawler_time": {
-            "provider": "gallery_bigger_crawler_time_router"
-        },
-        "size": {
-            "provider": "gallery_size_router"
-        },
-        "aspect": {
-            "provider": "gallery_aspect_router"
+        "${child.name}": {
+            "delegate": { "provider": "gallery_router" },
+            "child_var": "child",
+            "provider": "${child.provider}"
         }
     },
     "resolve": {
-        "names": {
-            "provider": "gallery_name_router"
-        },
-        "plugins": {
-            "provider": "gallery_plugins_router"
-        },
-        "tasks": {
-            "provider": "gallery_tasks_router"
-        },
-        "surfs": {
-            "provider": "gallery_surfs_router"
-        },
-        "dates": {
-            "provider": "gallery_dates_router"
-        },
-        "albums": {
-            "provider": "gallery_albums_router"
-        },
-        "dimension": {
-            "provider": "gallery_aspect_router"
-        },
-        "dimensions": {
-            "provider": "gallery_aspect_router"
+        ".*": {
+            "delegate": { "provider": "gallery_router" },
+            "child_var": "child",
+            "provider": "${child.provider}"
         }
     }
 }

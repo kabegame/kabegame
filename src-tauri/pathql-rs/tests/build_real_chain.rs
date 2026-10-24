@@ -46,6 +46,7 @@ fn fold_provider_query(state: &mut ProviderQuery, registry: &ProviderRegistry, n
 fn fold_gallery_page_chain(registry: &ProviderRegistry) -> ProviderQuery {
     let mut state = ProviderQuery::new();
     state.from = Some(pathql_rs::compose::FromSource::table("images"));
+    fold_provider_query(&mut state, registry, "gallery_router");
     fold_provider_query(&mut state, registry, "gallery_route");
     fold_provider_query(&mut state, registry, "gallery_all_router"); // delegate, skipped
     fold_provider_query(&mut state, registry, "gallery_paginate_router");
@@ -121,6 +122,7 @@ fn build_gallery_page_chain_renders_executable_sql() {
             surf_record_id TEXT,
             crawled_at INTEGER,
             metadata_id INTEGER,
+            image_metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
             hash TEXT,
             width INTEGER,
@@ -188,6 +190,7 @@ fn build_gallery_page_chain_with_page_2_offsets_correctly() {
             surf_record_id TEXT,
             crawled_at INTEGER,
             metadata_id INTEGER,
+            image_metadata_id INTEGER,
             thumbnail_path TEXT NOT NULL DEFAULT '',
             hash TEXT,
             width INTEGER,

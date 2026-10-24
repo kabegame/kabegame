@@ -154,6 +154,14 @@ export function withPaged(viewBody: string, pageSize: number, page: number): str
   return `${viewBody.replace(/\/+$/, "")}/_kb_x${pageSize}x/${p}`;
 }
 
+/**
+ * 行读取分三层：filter 只带 id 过滤、排序、切页；rank 给本页打序号；lookup 回表补 gallery 字段。
+ * 分页路径仍供视图 key、计数与预览定位使用，只在行取数出口转换，不重放内层排序。
+ */
+export function toLookupRowsPath(galleryPagedPath: string): string {
+  return galleryPagedPath.replace(/^(images:\/\/)?gallery\//, "$1filter/") + "/~~/rank/~~p/lookup/gallery";
+}
+
 /** 无排序/分页的计数路径；空查询回退 `all`。 */
 export function buildComposableCountPath(rootPrefix: string, noAlbum: boolean, query: GalleryQuery): string {
   const rp = rootPrefix ? `${normalizePath(rootPrefix)}/` : "";
