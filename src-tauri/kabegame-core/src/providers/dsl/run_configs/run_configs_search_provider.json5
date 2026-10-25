@@ -1,0 +1,14 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_search_provider",
+    "properties": { "query": { "type": "string", "default": "", "optional": false } },
+    "query": {
+        "where": "instr(lower(run_configs.name), lower(${properties.query})) > 0 OR instr(lower(COALESCE(run_configs.description, '')), lower(${properties.query})) > 0"
+    },
+    "resolve": { ".*": {
+        "delegate": { "provider": "run_configs_filter_router" },
+        "child_var": "child",
+        "provider": "${child.provider}",
+        "meta": "${child.meta}"
+    } }
+}

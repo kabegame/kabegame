@@ -8,6 +8,33 @@
 - 让上层 Provider 组合片段，下层 Provider 只接收组合后的 `ImageQuery` 并执行。
 - Gallery 与 VD 复用同一套查询表达，不再依赖字符串嗅探。
 
+## 当前 DSL 路由与行查询
+
+画廊过滤、排序、分页共用 `gallery_router`，它不贡献字段；`gallery_route` 只枚举 21 个列表字段，
+并将 list / resolve 委托给窄路由。所有 hide、搜索、画册、任务、畅游等子 provider 的 delegate 回到
+`gallery_router`，不会给窄查询重新补宽列。images 根仍只投影 `images.id AS id`。
+
+网格先用窄路由按 id 过滤、全序排序与分页，再为这一页回表：
+
+```text
+images://filter/<视图>/_kb_x<N>x/<页>/~~/rank/~~p/lookup/gallery
+```
+
+`rank` 扫物化 CTE 打本页 `row_index`，`lookup` 用 `images.id = p.id` 回表并按 `p.row_index` 排序，
+末尾 `gallery_route` 统一补字段。外层不重放内层排序，`by-album-order` 不会引用不到内层的 `ai`；
+`album_order` 作为窄字段穿过两层边界保留。收藏、隐藏等宽列表字段仅对本页求值。
+`no-album` 直接用收藏成员 EXISTS，不能引用宽投影的 `is_favorite` 别名。
+
+宽路径 `images://gallery` 在根 resolve 经 `gallery_entry_router` 先折入窄路由的默认排序，再补字段；
+这样 `gallery/~not/...` 的分支不会在组内首次增加排序。lookup 的 gallery 直接补字段，跳过该入口。
+`filter` / `lookup` 不在根 list 中；窄入口只解析已知路径，不用于列举，因为维度分组 SQL 要读取宽列。
+MCP、侧栏、计数和预览定位继续使用 gallery 路径。
+
+前端 `withPaged` 生成的路径仍供 `rawViewPath`、`loadedKey`、校验与计数推导使用；
+ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请求 key 使用转换后的完整路径。
+路由、预览定位与画册单行封面不改写。后文的 ImageQuery / SimplePage 是旧实现背景，当前读取链以此节及
+[`GALLERY_PAGINATION_AND_IMAGE_LOAD.md`](GALLERY_PAGINATION_AND_IMAGE_LOAD.md) 为准。
+
 ## 核心结构
 
 `ImageQuery` 已从旧的 `decorator + params` 重构为结构化模型：
@@ -190,12 +217,20 @@
   `meta.image_count`。
 - 面板顶层直接是该维度的子项（年份、区间、插件……），没有维度根，也没有「任意」行；清除维度用 chip 右上角的叉号。
   因此打开面板只有一条 `_kb_co` 列举，不再有根 COUNT，子项也不逐节点 COUNT。
-- 侧栏只建立一个 `dataChangeHub` 订阅。可见时命中相关批次就重列根与所有已加载分支（`model.reload()`）；不可见时只记脏，
-  下次打开补刷。插件增删改由 `pluginStore` 的 `id:version` 签名触发插件分支刷新，并使高级查询的纯净候选缓存失效。
-- 高级查询弹窗是 diff 模式：对每个候选仍逐项计算应用草稿后的预测计数，显示 `+N` / `−N`。它只在面板打开、
-  草稿变化或新候选载入时重算，不订阅数据变更；候选列表有纯净路径缓存，数据变化只使缓存失效，不立即重查。
-- Android picker 与头部 `GalleryFilterControl` 也列举 `…/_kb_co` 并读取 `meta.count`；Android picker 的插件扩展
-  选项不显示计数，同样 `withCount=false`。
+- 侧栏以 `TreeQuerySource` 描述每个分支的一条 list 查询，经 `usePathqlLookMany` 观察 `all` key，
+  只观察自身与所有祖先都展开的分支。`refreshOn` 对 `images-added` / `images-deleted` / `images-change` / `image-changed` 与隐藏画册成员变化投票，画册敏感上下文另看
+  `album-images-added` / `album-images-deleted` 与画册增删、移动、结构字段补丁事件，排序不影响侧栏计数。
+  Phase F 的画册敏感上下文只含 `album` / `album-tree` / `no-album` 或有效标签搜索（含减格后的简单条件与前缀高级查询）；只有 hide 不响应普通画册成员。
+  收藏成员只影响收藏 / 无画册上下文或标签搜索；隐藏 / 取消隐藏由 `hiddenTrigger` 在 hide 开启时整体刷新，不按图片判断；标签搜索因无法识别画册类型，对任意成员增删保守刷新。
+  带 `imagesDeleted` 的成员删除交给 `images-deleted`，未知前缀无法排除依赖时保守刷新，同 key 共用核心窗口。收起保留数据、停止观察，再展开重读。
+  侧栏隐藏时观察集合为空，每次显示都整组请求；插件 `id:version` 签名变化调用 `model.refresh()`。
+- 高级查询弹窗是 diff 模式：候选列举同样走 `<路径>/_kb_co`（与侧栏只差路径是否带草稿，不带计数），`refreshOn` 为空，
+  打开期间不随数据变更刷新；候选在下拉面板里，每次展开都重新挂载、读一次候选，不再有独立纯净列表缓存或缓存失效订阅。
+  逐候选预测计数仍在面板打开、草稿变化或新候选载入时计算，显示 `+N` / `−N`。
+- 查询参数改变导致 key 改变时继续展示旧页，新的结构结果到达再按 key diff，保留句柄与展开态；读取失败保留上一份子项。
+  `expand` / `loadMore` / `refresh` 等待由模型实现，`pathqlRequest$.next` 仍即发即返回。
+- 前端维度列举只剩过滤树（`facetTreeSource`，侧栏与 chip 面板共用）。原头部筛选下拉 `GalleryFilterControl` 与 Android 时间 picker
+  自查询栏改为 chip 后已不再挂载，连同 `GalleryTimeFilterSubmenu` 与时间菜单树构建函数一并删除。
 
 | 维度 | 列举 SQL 所在 | 说明 |
 | --- | --- | --- |
@@ -247,7 +282,7 @@
 - **高级弹窗只编辑追加部分**：简单条件作为不可编辑的上下文参与命中计数与 facet 预测，弹窗打开、应用、清空、取消均不改简单条件；清除高级后再次打开是空白草稿，不默认插入空条件行，只展示添加条件/或组入口。简单 chip 修改时保留高级条件，简单 facet 计数也带上高级约束。弹窗内仍保留最终路径预览。
 - Android：查询行提供同样可独立清除的高级 chip，简单过滤 / 排序 / 每页条数仍由各页 `PageHeader` 的 fold 触发；高级条件生效时简单过滤入口仍可用。
 - **高级查询在四条路由上都可用**。detail 路由的查询体写在根前缀之后（`album/<id>/~any/…/~end/sort/…`）：`~` 组合器由引擎在 provider resolve 之前拦截（[`where_group.rs`](/src-tauri/pathql-rs/src/provider/where_group.rs)），分支从组入口 provider 出发，故不需要 DSL 配合；但原子的**搜索格**是普通路径段，需要 `gallery_album_provider` / `gallery_task_provider` / `gallery_surf_provider` 的 resolve 分支里列出 `search`（已加），否则 `album/<id>/search/<mode>/<q>` 路由不到。新形态的规范路径统一根前缀在前、搜索原子在体内；旧形态（`search/<mode>/<q>` 前缀在根之前、`no-album` 混在维度序列体首）解析层仍兼容，写回即归一为新形态。简单与高级条件同时生效，两部分互相作为计数上下文；编辑任意一部分不清空另一部分。
-- **高级弹窗的 facet 树：枚举与计数分家**（[`useAdvancedQueryFacets.ts`](/apps/kabegame/src/composables/useAdvancedQueryFacets.ts) + [`galleryFilterTree/context.ts`](/apps/kabegame/src/components/galleryFilterTree/context.ts)）。旧「减格树」（把其余条件折叠成上下文再列维度）是简单查询「不断收窄」时代的产物，在高级查询里其他条件（尤其取非行的兄弟约束）会把候选列表挤没。现在：**枚举**走纯净路径 `<contextPrefix>/<维度 router>`，与草稿树无关，候选全集稳定，经 `listProviderDirsPure` 按路径缓存（不带 count，images-change / plugin 事件整体失效）；**计数**走整树预测——把候选值经 `filterFromTreeSegment`（`serializeFilterForTree` 的逆）写进 NodePath 所指原子的对应维度，序列化整棵草稿树取命中数，节点上显示与当前命中数基线（`useAdvancedHitCount`）的净变化 `+N/−N/0`（取非/或组的符号由整树语义自然得出）。context 的接缝：`pathForSegment` 恒为计数路径，`listPathForSegment` 缺省回退它（侧栏减格语义不变），`countBaseline` 有值即进入 diff 显示。简单过滤树（`GalleryFilterTree.vue`）仍是减格路径 + 绝对计数，查询条传入的前缀额外带上高级条件。plugin extend 候选与其它维度一致，可直接用在高级条件里：宿主的 `plugin_entry_provider` 只 join `plugin_im` 不投影列，插件分支只贡献 where + LEFT JOIN，能进 `~any` / `~not` 组（约定见 provider-dsl/RULES.md §3.3.2）。
+- **高级弹窗的 facet 树：枚举与计数分家**（[`useAdvancedQueryFacets.ts`](/apps/kabegame/src/composables/useAdvancedQueryFacets.ts) + [`galleryFilterTree/context.ts`](/apps/kabegame/src/components/galleryFilterTree/context.ts)）。旧「减格树」（把其余条件折叠成上下文再列维度）是简单查询「不断收窄」时代的产物，在高级查询里其他条件（尤其取非行的兄弟约束）会把候选列表挤没。现在：**枚举**走纯净路径 `<contextPrefix>/<维度 router>`，与草稿树无关，候选由树的 pathql 观察方列举 `<路径>/_kb_co`（不带 count；事件过滤器为空，每次展开下拉读一次，打开期间不随事件刷新；插件签名变化显式刷新）；**计数**走整树预测——把候选值经 `filterFromTreeSegment`（`serializeFilterForTree` 的逆）写进 NodePath 所指原子的对应维度，序列化整棵草稿树取命中数，节点上显示与当前命中数基线（`useAdvancedHitCount`）的净变化 `+N/−N/0`（取非/或组的符号由整树语义自然得出）。context 的接缝：`pathForSegment` 恒为计数路径，`listPathForSegment` 缺省回退它（侧栏减格语义不变），`countBaseline` 有值即进入 diff 显示。简单过滤树（`GalleryFilterTree.vue`）仍是减格路径 + 绝对计数，查询条传入的前缀额外带上高级条件。plugin extend 候选与其它维度一致，可直接用在高级条件里：宿主的 `plugin_entry_provider` 只 join `plugin_im` 不投影列，插件分支只贡献 where + LEFT JOIN，能进 `~any` / `~not` 组（约定见 provider-dsl/RULES.md §3.3.2）。
 - 按种类数量：Tauri 命令 `get_gallery_media_type_counts`（全库）、`get_album_media_type_counts`（单画册）；数据来自 `Storage::get_gallery_media_type_counts` / `get_album_media_type_counts`（[`storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)），过滤下拉与折叠标签旁展示 `(n)`。
 
 **分页与每页条数（SimplePage）**：路径末尾页码、`galleryPageSize` 设置与 `browse_gallery_provider` 调用链见 [`GALLERY_PAGINATION_AND_IMAGE_LOAD.md`](GALLERY_PAGINATION_AND_IMAGE_LOAD.md)（与本文的 ImageQuery 组合正交，可对照阅读）。

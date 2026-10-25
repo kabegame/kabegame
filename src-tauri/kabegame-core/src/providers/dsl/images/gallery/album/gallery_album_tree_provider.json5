@@ -27,7 +27,7 @@
     "resolve": {
         // 排序与分页前缀段由全局表优先接住；其它段再走下面的 `.*` 委托。
         ".*": {
-            "delegate": { "provider": "gallery_route" },
+            "delegate": { "provider": "gallery_router" },
             "child_var": "child",
             "provider": "${child.provider}",
             "meta": "${child.meta}"

@@ -5,8 +5,9 @@
 //! 返回 `ImageInfo`（或嵌套）的函数一律回**原始本地路径**；web 模式的 CDN 改写
 //! 由 `kabegame::web::dispatch` 在本层返回之后施加，本层不感知 web。
 
-use crate::commands::view::snapshot_rows;
-use crate::providers::{decode_provider_path_segments, query_entry, query_fetch, query_list};
+use crate::providers::{
+    decode_provider_path_segments, query_all, query_entry, query_fetch, query_list, PathqlQuery,
+};
 use crate::settings::Settings;
 use crate::storage::image_events::{
     begin_delete_images_with_events, delete_images_with_events, emit_native_metadata_attached,
@@ -37,6 +38,19 @@ pub async fn pathql_fetch(path: String) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())??;
     serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+pub async fn pathql_all(mut queries: Vec<PathqlQuery>) -> Result<Vec<Value>, String> {
+    for query in &mut queries {
+        let (PathqlQuery::List { path, .. }
+        | PathqlQuery::Entry { path }
+        | PathqlQuery::Fetch { path }
+        | PathqlQuery::Count { path }) = query;
+        *path = decode_provider_path_segments(path);
+    }
+    tokio::task::spawn_blocking(move || query_all(&queries))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 pub fn get_images_count() -> Result<Value, String> {
@@ -96,43 +110,14 @@ pub async fn get_image_native_metadata(image_id: String) -> Result<Value, String
 
     // 查看时才懒解析 / 挂载：挂载会改变 `search/native-metadata` 的成员，必须通知视图重查——
     // 否则带原生元数据过滤的列表要等手动刷新才会把这张图移出（预览自己会保留它）。
-    let shared =
-        storage.ensure_native_metadata_for_image(&image_id, &row.hash, expected_version, None)?;
-    if let Some(attached) = &shared {
-        emit_native_metadata_attached(attached, None);
-    }
-    if shared.is_some() {
-        if let Some(shared) = storage.get_image_native_metadata_row(&image_id)? {
-            if shared.parser_version == Some(expected_version) {
-                if let Some(data) = shared.data.as_deref() {
-                    return native_metadata_payload(data, expected_version);
-                }
-            }
-        }
-    }
-
     let bytes = crate::media::native_metadata::read_image_bytes(&row.local_path).await?;
     let parsed = crate::media::native_metadata::parse_native_metadata(format_key, &bytes)
         .ok_or_else(|| "native-metadata:unsupported-format".to_string())?;
     let json = serde_json::to_string(&parsed)
         .map_err(|e| format!("native-metadata:serialize-failed:{e}"))?;
-    if let Some(attached) = storage.ensure_native_metadata_for_image(
-        &image_id,
-        &row.hash,
-        expected_version,
-        Some(&json),
-    )? {
-        emit_native_metadata_attached(&attached, None);
-    }
-
-    let stored = storage
-        .get_image_native_metadata_row(&image_id)?
-        .ok_or_else(|| "native-metadata:image-not-found".to_string())?;
-    let data = stored
-        .data
-        .as_deref()
-        .ok_or_else(|| "native-metadata:store-failed".to_string())?;
-    native_metadata_payload(data, expected_version)
+    let metadata_id = storage.replace_image_native_metadata(&image_id, expected_version, &json)?;
+    emit_native_metadata_attached(&image_id, metadata_id);
+    native_metadata_payload(&json, expected_version)
 }
 
 fn native_metadata_payload(data: &str, parser_version: u32) -> Result<Value, String> {
@@ -178,46 +163,16 @@ pub async fn remove_image(image_id: String) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub async fn batch_delete_images(
-    image_ids: Vec<String>,
-    view: Option<String>,
-) -> Result<Value, String> {
-    let hold = view
-        .as_ref()
-        .map(|_| crate::emitter::GlobalEmitter::global().hold());
+pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<Value, String> {
     let pending = begin_delete_images_with_events(&image_ids, true)?;
     clear_current_wallpaper_if_removed(&image_ids);
-    let snapshot = match view {
-        Some(path) => Some(snapshot_rows(path).await),
-        None => None,
-    };
-    drop(hold);
-    let result = pending.finish().await;
-    let mut out = json!({ "albumChanges": result.album_changes });
-    if let Some(snapshot) = snapshot {
-        out["view"] = serde_json::to_value(snapshot?).map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    pending.finish().await;
+    Ok(Value::Null)
 }
 
-pub async fn batch_remove_images(
-    image_ids: Vec<String>,
-    view: Option<String>,
-) -> Result<Value, String> {
-    let hold = view
-        .as_ref()
-        .map(|_| crate::emitter::GlobalEmitter::global().hold());
+pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<Value, String> {
     let pending = begin_delete_images_with_events(&image_ids, false)?;
     clear_current_wallpaper_if_removed(&image_ids);
-    let snapshot = match view {
-        Some(path) => Some(snapshot_rows(path).await),
-        None => None,
-    };
-    drop(hold);
-    let result = pending.finish().await;
-    let mut out = json!({ "albumChanges": result.album_changes });
-    if let Some(snapshot) = snapshot {
-        out["view"] = serde_json::to_value(snapshot?).map_err(|e| e.to_string())?;
-    }
-    Ok(out)
+    pending.finish().await;
+    Ok(Value::Null)
 }

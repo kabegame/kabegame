@@ -41,11 +41,9 @@ const videoPlaying = computed(() => isVideo.value && !!props.active && !props.pa
 
 const handleReady = () => emit("ready");
 const handleError = () => emit("error");
-const a = 10;
 
 const handleVideoPlayFail = () => {
   if (!props.active) return;
-  console.log(a);
   emit("videoPlayFail");
 };
 </script>

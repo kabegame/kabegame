@@ -10,8 +10,7 @@
             { "sql": "surf_records.cookie", "as": "cookie" },
             { "sql": "surf_records.icon", "as": "icon" },
             { "sql": "surf_records.last_visit_at", "as": "last_visit_at" },
-            { "sql": "surf_records.created_at", "as": "created_at" },
-            { "sql": "NULL", "as": "last_image" }
+            { "sql": "surf_records.created_at", "as": "created_at" }
         ],
     },
     "resolve": {

@@ -1,0 +1,12 @@
+---
+description: 自定义 Tauri 插件与应用及共享 Rust 库统一位于 src-tauri
+globs: "Cargo.toml, package.json, deno.lock, src-tauri/**"
+alwaysApply: false
+---
+
+# 自定义 Tauri 插件目录
+
+- 自定义 Tauri 插件统一放在 `src-tauri/tauri-plugin-<name>/`，与 `kabegame`、`kabegame-core` 等 crate 同级。
+- Cargo workspace 成员与依赖路径、前端 workspace、锁文件和文档统一使用该路径。
+- 插件内对共享核心库的相对依赖使用 `../kabegame-core`；Android 代码仍在各插件自己的 `android/` 下。
+- 仓库结构索引见 `AGENTS.md` 与 `apps/docs/src/content/docs/dev-contrib/architecture.md`，目录变更时同步维护。

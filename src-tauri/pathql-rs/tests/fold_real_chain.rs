@@ -30,7 +30,8 @@ fn fold_gallery_page_chain() {
     let mut state = ProviderQuery::new();
     state.from = Some(pathql_rs::compose::FromSource::table("images"));
 
-    // Schema seeds from=images; gallery_route contributes fields, joins, and order.
+    // schema 提供 FROM，窄路由提供默认排序，gallery_route 只补列表字段。
+    fold_provider_query(&mut state, &r, "gallery_router");
     fold_provider_query(&mut state, &r, "gallery_route");
     // 7b: gallery_all_router 遘ｻ髯､莠・query 蟄玲ｮｵ (莉・Contrib 謾ｹ荳ｺ郤ｯ router; order/limit/offset 荳顔ｧｻ蛻ｰ
     // gallery_route, 蛻・｡ｵ騾夊ｿ・list 蜉ｨ諤・｡ｹ蟋疲汚 page_size_provider + gallery_page_router)
@@ -67,12 +68,13 @@ fn fold_gallery_page_chain() {
     }
 
     // 7b: order 譚･閾ｪ gallery_route (荳顔ｧｻ蜷・
-    assert_eq!(state.order.entries.len(), 1);
+    assert_eq!(state.order.entries.len(), 2);
     assert_eq!(state.order.entries[0].0, "images.crawled_at");
+    assert_eq!(state.order.entries[1].0, "images.id");
     assert!(!state.order.revert);
 
     assert_eq!(state.fields.len(), 21);
-    assert_eq!(state.joins.len(), 3);
+    assert!(state.joins.is_empty());
     assert!(state.wheres.is_empty());
 
     // no refs allocated
@@ -107,8 +109,7 @@ fn fold_gallery_route_alone_keeps_schema_from() {
     );
     assert_eq!(state.limit, None);
     assert_eq!(state.fields.len(), 21);
-    assert_eq!(state.joins.len(), 3);
-    // 7b: gallery_route 邇ｰ荵溯ｴ｡迪ｮ order
-    assert_eq!(state.order.entries.len(), 1);
-    assert_eq!(state.order.entries[0].0, "images.crawled_at");
+    assert!(state.joins.is_empty());
+    // 字段层不贡献排序，lookup/gallery 外层保持只有 p.row_index。
+    assert!(state.order.entries.is_empty());
 }

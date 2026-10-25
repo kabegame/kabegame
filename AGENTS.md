@@ -23,7 +23,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `src-tauri/kabegame-core/` — `kabegame-core`：共享 Rust 库（爬虫引擎、插件系统、存储）
 - `src-tauri/kabegame/` — Tauri GUI 应用（桌面端 + Android）
 - `src-tauri/kabegame-cli/` — 无界面 CLI
-- `src-tauri-plugins/` — 自定义 Tauri 插件（picker、pathes、share、compress、wallpaper、task-notification）
+- `src-tauri/tauri-plugin-*/` — 自定义 Tauri 插件（picker、pathes、share、wallpaper、task-notification），与应用和共享 Rust 库同级
 - `src-crawler-plugins/` — JS/TS 爬虫插件子仓库，一个单独的 pnpm workspace 根
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块gitlink指向上游，但运行时附带仓库的补丁
 
@@ -50,9 +50,31 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。
 
-**ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate` 携带可选 `view`（当前行路径），并立即应用后端返回的 `{ rows, seq }` 行快照；总数由计数路径的独立 live 状态维护，写后经 `dataChangeHub` 刷新。只改展示字段的操作走 `ctx.patch`，不得依赖事件回刷自身操作。带 `view` 的后端写命令必须在写库前取得 `GlobalEmitter::hold()`，行快照读完后才放行事件。被动 `images-change` / `album-images-change` 统一经 `dataChangeHub` / `liveQuery`。仅预览内的 `ImageLabelsPanel` 标签增删保留被动刷新例外，详见 `.cursor/rules/view-mutation.mdc`。
+**插件 PathQL 来源寻址**——`plugin://installed/<id>/<version>`、`plugin://byStore/<sourceId>/<id>/<version>`、
+`plugin://byPreview/<token>/<id>/<version>` 统一提供 `icon` / `description_template` / `doc` / `changelog` / `asset` / `provider` / `recommended`。
+根 fetch 保持已安装插件 lite 列表，根 list 只显示 `installed` / `byStore`；预览 token 不可列举。
+资源 provider 只保存 `PluginCoord`，每次读取经 `PluginManager::resolve_plugin_file` 重新解析，版本不符为空；
+商店来源只读本地 `store_plugin_cache`，任何子资源都不得下载或请求网络。各路径段单独编码，不保留旧的仅 id 路径。
+详见 `.cursor/rules/plugin-resources.mdc` 和 `cocs/mcp/MCP_SERVER.md`。
 
-**画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每一层与 `~~/children` 都叠加 `search/<q>`——自身或子孙命中才保留，树形与展开态不变）；其它入口用 `services/albums.ts` 做单画册查询并订阅 `dataChangeHub`。计数：目录页一次三路 fetch——`<过滤段>/x<N>x/<页>` 取这一页的画册行；`…/~~/children[/<类型段>]` 与 `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的直接子画册数，标签目录显示它）与 `image_count`（子树成员行数，标签叶子即直接图片数；标签目录不出行），没有行的画册计 0；行与 `child_count` 先渲染，`image_count` 单独到达后再补；口径与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数一致（e2e 逐项比对），`/hide` 对应 `hide/` 前缀；单画册入口仍用这两条 images:// 路径。`~~` 之后的逐行计数一律用 `group_by`，不要 `list_with_count`（每项再包一层 COUNT 会把整个结构重跑 N 次）；子树判断用 `ancestor_path` 前缀区间走索引（见 `cocs/provider-dsl/RULES.md` §2.1）。隐藏等全局过滤只能用路径表达，不得新增计数列、SQL 视图或专用计数命令。
+**图片事件协议**——`images-added { seq, images: ImageInfo[] }` 只表示图片行插入，`images-deleted { seq, imageIds }` 只表示删除；字段变化统一按 id 合并为 `{ id, ...camelCase字段绝对值 }`，一张发 `image-changed { seq, patch }`，多张发 `images-change { seq, patches }`，空补丁不发。图片事件不再带 reason 或归属 id 列表；隐藏与收藏仅从画册成员事件推导；删除 / 清理任务时为原属图片发 `taskId: null` 补丁。前端按事件内容与查询 / 排序 / hide 判断相关性，不能证明无关就刷新；整理与迁移循环改造留待后续。
+
+画册表按增删改对齐：`albums-added { seq, albums }` 携带完整行，`albums-deleted { seq, albums: [{ id, ancestorPath }] }` 只带被删根，`album-moved { seq, id, oldAncestorPath, newAncestorPath }` 只带移动根；其它字段按 id 合并为 `album-changed { seq, patch }` / `albums-change { seq, patches }`，补丁只含实际变化字段，永不含 parentId / ancestorPath。移动按前缀改写已持有的子孙路径，移动根的 parentId 取新路径倒数第二段。成员真实增删发 `album-images-added` / `album-images-deleted`，`album-images-change` 只表示实际改序，均为 `{ seq, albumId, ancestorPath, imageIds, imagesDeleted? }`；无 reason、hide/unhide 派生事件或按隐藏状态拆分。隐藏 / 取消隐藏只是隐藏画册自身的成员增删，不带其它画册与图片行：hide 开启的观察方一律刷新，关闭时只按 imageIds 打 isHidden 补丁；整行删图引起的成员删除带 imagesDeleted: true，不作为取消隐藏补丁。删画册不补发空排序事件，写命令不再返回 albumChanges。
+
+**ImageGrid 视图写操作**——可能改变当前结果集的写操作必须经 `ctx.mutate(() => ...)`；写命令不带 `view`、不返回快照、照常广播事件，`mutate` 在操作完成后作为用户操作请求行与总数，结果仍从数据源落地。行与总数是 `services/kbEvents` pathql 核心上某个 key 的观察方（`usePathqlLooker`，行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批（分子与 adapter 可选分母在同一读快照中读取）），只看数据不发请求：观察方注册过滤器（adapter `refreshOn`，每条只对一种事件），新增按完整行与查询判断（任务 / 畅游另比归属，画册由成员事件刷新）；字段补丁按 `imageViewRelevance` 依赖表判断，表外字段保守刷新；ImageGrid 用 `deletedTrigger` 追加删除判断：行只在当前持有行命中时刷新，总数与其它只有计数的观察方默认任何删除都刷新；画册 adapter 标记 `deletesViaMembership`，总数只由本画册成员删除定位，不追加全局删除触发。核心对每个 key 用统一 500ms 窗口，窗口内任一过滤器同意就刷新一次并推给全部观察方。唯一请求入口是 `pathqlRequest$.next([kind, key])`，next 即返回、不等待；主动请求只有事件窗口与用户操作（路径变化、手动刷新、`mutate` 等）两条通路，前端不区分操作是否写入。每个 key 维护 pending 窗口：序号递增、可并行，任一请求返回即取消它之前的全部 pending；观察方看到最后可得的数据，`loading` / `error` 只属于最新请求，失败统一经观察方 `onError`。只改展示字段的操作走 `ctx.patch`；后端字段补丁经 `kbEvents` 的 `imagePatches$`（`image-changed { patch }` 与 `images-change { patches }` 共用字段补丁窗口，收藏与隐藏画册的 `album-images-added` / `album-images-deleted` 分别推导 `favorite` / `isHidden`、各自合并成 `imageId → 字段`，只打到已在手的行与预览对象，不发请求；必须传 `patchHidden`，网格在 hide 关闭时才打隐藏补丁，hide 开启时由成员事件刷新剔除，裸 id 预览始终打补丁且字段事件不重解析）。收藏在普通视图只补丁，收藏画册自身、无画册条件与树系统区 / 相应侧栏才刷新；有效标签搜索无法判断成员画册类型，仍对所有成员增删保守刷新。画廊、任务与畅游共用 `noAlbumTriggers`（跳过隐藏与带 `imagesDeleted` 的成员删除），四个网格共用 `labelSearchTriggers`。画册网格不听自身改名 / 移动，排序只在 `by-album-order` 下刷新；裸 id 预览与标签面板跳过收藏 / 隐藏及排序的重读。前端不再有全局事件聚合器或本地事件投递：写入方只请求自己观察的 key，其它观察方等后端事件。预览内的 `ImageLabelsPanel` 标签增删不走 `mutate`（避免替换底层列表跳页），面板作为自身 key 的观察方在增删后请求，详见 `.cursor/rules/view-mutation.mdc`。
+
+**插件变更事件与推荐导入态**——事件统一为 `plugin-added` / `plugin-changed` / `plugin-deleted`。
+`plugin-changed` 使用 `{ pluginId, changes }`：覆盖安装传必含 `version` 的完整插件 JSON，推荐导入态只传
+`recommendedConfigs: { <path>: { imported } }`。运行配置 add / update / delete / copy 经 core 共享命令比较写前后状态，
+范围为受影响 id 的已安装包与本地有包的商店缓存，不触发下载；每次写入每插件最多一条，仅含变化路径，优先取已安装新状态。
+写库提交后先发推荐导入态的插件事件，再发配置事件。插件 store 只合并含 version 的变更；推荐配置通过 `useRecommendedPresets` 观察来源版本路径的 `recommended` rows，
+只对同插件含 `version` 或 `recommendedConfigs` 的事件刷新，新 key 请求一次，失败保留已有内容。详见 `.cursor/rules/plugin-resources.mdc`。
+
+**运行配置写操作**——新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，命令只接收业务参数，直接返回保存后的单行（删除返回 null），写库提交后照常广播事件。列表由 `usePagedRunConfigs` 作为一个 `usePathqlLookAll` 观察方，同批读取累计窗口行与总数；`start` / `loadMore` 通过 `pathqlRequest$` 发请求，加载更多以已落地页加一为目标，失败重试同一个 key。写后不主动刷新，`auto-config-change` 与任务刷新信号由核心统一 500ms 窗口重读；任务新增带 runConfigId、任意状态变化和删除为刷新信号，张数、错误与结束时间只补丁 `lastTask.id` 匹配行的展示字段。页头失败数观察 `run_configs://last`，详情弹窗观察编码后的 id 路径；任务列表同批观察累计窗口与总数，新增 / 删除 / startTime 变化刷新，进度等 diff 就地补丁；状态计数观察 tasks://status，新增 / 删除 / status 变化刷新；详情观察任务 id，删除重读、其它 diff 补丁。任务关联配置名直接订阅配置事件，无代数号或缓冲，改名按 id 读取、删除清空；抽屉删除 / 清空成功后只请求自身列表与计数 key。IPC 与 CLI 保持原请求及单行/null 返回，配置事件的全局 `seq` 保留但观察方按前端请求序号落地。详见 `cocs/downloader-tasks/TASK_DRAWER_LOAD.md`。
+
+**画册数据按需查询**——前端不得持有全量画册列表或全量计数。树与选择器统一复用 app 侧 `AlbumTreeView` / `AlbumPicker`，按目录分页查询 `albums://`（过滤段 `parent/<id>` / `roots` / `album_kind/<kind>` / `search/<q>` 各折叠一条 where，多个类型用 `~any/.../~or/.../~end` 取 OR；末尾 `x<页大小>x/<页码>` 切页，默认按创建时间排序，分页节点不得重写过滤；搜索不另起平铺列表，树的每层与 `~~/children` 都叠加 `search/<q>`，自身或子孙命中才保留）。树数据源 `TreeQuerySource` 只描述查询、解析与单事件 `refreshOn`，模型用 `usePathqlLookMany` 观察每个可见分支的已加载页，一页一个 `pathqlAllKey`，只经 `pathqlRequest$` 发请求。收起停止观察、保留句柄和数据，再展开重读；换 key 或读取失败保留上一份子项。侧栏隐藏停观察、恢复整组重读；高级查询的候选树在下拉面板里、事件过滤器为空，每次展开读一次、打开期间不随事件刷新，不另设纯净列表缓存。`expand` / `loadMore` / `refresh` 的 Promise 由模型自己的等待表完成，核心不提供请求并等待。
+
+计数：结构页以一批 `pathql_all` 同快照读取画册行与 `…/~~/children[/<类型段>]` 的 `child_count`；`TreePage.extra` 独立批次读取本页行（用于零计数补齐）与 `…/~~/images[/hide]` 的 `image_count`。两种分组均在 `~~` 子查询边界之后按画册 `GROUP BY`，不使用 `list_with_count`。行与子画册数先渲染，图片计数按 key 打补丁并在结构刷新后保留；标签目录显示直接子画册数，图片查询不为标签目录出行。成员事件只刷新相关可见目录的 extra：普通分区按根节点归属判断（根未知保守刷新），系统区只认收藏 / 隐藏；带 hide/ 的计数对隐藏成员增删整体刷新，隐藏画册带 imagesDeleted 的删除交给各原属画册定位。排序不刷树计数，字段补丁只刷已持有行的 page；增删移动按路径刷新行与 extra；路径缺失按通配，移动同时考虑新旧 `ancestorPath`，某父目录只匹配严格后代。口径与 `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 的 entry 总数一致；子树判断用 `ancestor_path` 前缀区间走索引（见 `cocs/provider-dsl/RULES.md` §2.1）。画册页头部用 `useAlbumQuery` 观察两个 `all` key：详情 / 祖先 / 子树数同批，图片计数按落地类型独立观察；事件以自身完整 `ancestorPath` 判定祖先链或严格后代，用户刷新由 composable 等待两段请求完成。页头详情只关心自身补丁与祖先结构补丁、子孙增删移动；计数按类型：label_dir 只听直接子画册结构增删移动，label 只听自身成员增删，其余听子树成员增删、严格子孙删除及跨子树边界移动，改名与空子画册新增不刷新图片计数。其它一次性读取仍用 `services/albums.ts`，不得新增全量 store。隐藏等全局过滤只能用路径表达，不得新增计数列、SQL 视图或专用计数命令。
 
 **桌面端和 Android 端的视频导入都使用 rsmpeg/FFmpeg（仅排除 iOS）：**
 - 桌面端构建（Windows/macOS/Linux 上的标准版/CLI）会链接 rsmpeg/FFmpeg，用于预览图压缩和视频尺寸读取（使用 `deno task build:ffmpeg` 产生的本机静态库）。
@@ -82,8 +104,6 @@ deno task --cwd src-crawler-plugins generate-index  # 重新生成插件商店�
 
 详细用法与验证约束见 [scripts/AGENTS.md](scripts/AGENTS.md)。
 
-- `deno install`：安装 workspace 依赖。
-- `deno task prepare`：安装仓库 Git hooks。
 - `deno task dev`：（最常用）启动指定组件的开发模式。
 - `deno task dev:frontend`：只启动 Kabegame 前端开发服务器。
 - `deno task start`：运行已有构建产物。
@@ -130,11 +150,11 @@ struct Foo {
 }
 ```
 ````
-对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行或几行 [changlog](versions/latest/changelog.md)
+对主仓库在进行更改后要把回归补充到 [回归文档](versions/latest/regression.md)，格式参考 [4.5.1版本回归](./versions/v4.5.1/regression.md). 以及一行或几行 [changlog](versions/latest/changelog.md)，并在当前环境尽量真机勾选case。
 
 对插件的更改要写到 [插件changelog](./src-crawler-plugins/CHANGELOG.md)，总插件仓库版本号 4.5.1.x 表示在主应用发版 4.5.1 和 4.5.2 之间的迭代版本。如果主应用发版到 4.5.2 就会跟着更新到 4.5.2，然后如果继续更新就是 4.5.2.1。src-crawler-plugins/package.json 里的 version 是其最新版本，所以changelog.md要比较才知道顶部版本是最新还是需要新加一节，注意不要改 version，改了之后commit 会打新tag。
 
-在需要的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序，只有在需要打开外部网站或调试kabegame-web才允许用 ageng-browser
+在需要真测的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序操作界面，只有在需要打开外部网站或调试web版本才允许用 ageng-browser。
 
 **观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `spawn_debug_event`，固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。
 

@@ -403,6 +403,7 @@ pub fn file_routes() -> Router {
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
         .route("/compatible/{*path}", get(handle_compatible_path))
         .route("/proxy", get(handle_proxy_query))
+        .merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 /// 桌面应用 Web 服务器暴露的媒体路由。
@@ -427,8 +428,8 @@ pub fn file_routes_media() -> Router {
 
 /// web 模式专用路由。
 ///
-/// - **Release**：只保留 `/proxy`。图片、缩略图和兼容副本直接由 CDN 返回，web server
-///   不再经手磁盘 IO（避免并发下 IO 顶满把主进程拖死）；`commands::image`
+/// - **Release**：保留 `/proxy` 与 `/plugin_file`。图库图片、缩略图和兼容副本直接由 CDN 返回，
+///   只对插件包做按需磁盘读取；`commands::image`
 ///   在 `ImageInfo` 序列化前把本地媒体路径改写成 CDN URL。
 /// - **Debug**：保留 `/file` `/thumbnail` `/compatible`，方便本地联调——
 ///   开发机没 CDN，走本地文件最直观。
@@ -439,12 +440,16 @@ pub fn file_routes_web() -> Router {
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
         .route("/compatible/{*path}", get(handle_compatible_path))
         .layer(from_fn(image_concurrency_mw));
-    gated.route("/proxy", get(handle_proxy_query))
+    gated
+        .route("/proxy", get(handle_proxy_query))
+        .merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 #[cfg(all(feature = "web", not(debug_assertions)))]
 pub fn file_routes_web() -> Router {
-    Router::new().route("/proxy", get(handle_proxy_query))
+    Router::new()
+        .route("/proxy", get(handle_proxy_query))
+        .merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 /// Debug-only：/file 与 /thumbnail 的并发闸（10 个并发 + 无限排队）。
@@ -532,7 +537,7 @@ pub async fn get_http_server_base_url<R: tauri::Runtime>(
     use tauri_plugin_picker::PickerExt;
 
     app.picker()
-        .get_http_server_base()
+        .get_http_server_base(crate::plugin_file_server::start_plugin_file_server().await?)
         .await
         .map(|r| r.base_url.trim_end_matches('/').to_string())
         .map_err(|e| e.to_string())

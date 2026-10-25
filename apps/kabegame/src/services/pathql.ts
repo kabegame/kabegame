@@ -1,5 +1,4 @@
 import { invoke } from "@/api/rpc";
-import type { RowsSnapshot, TotalSnapshot } from "@/services/liveQuery";
 
 export interface ProviderNote {
   title: string;
@@ -31,10 +30,22 @@ export function pathqlFetch<T = Record<string, unknown>>(path: string): Promise<
   return invoke<T[]>("pathql_fetch", { path });
 }
 
-export function pathqlView(path: string): Promise<RowsSnapshot> {
-  return invoke<RowsSnapshot>("pathql_view", { path });
-}
+export type PathqlQuery =
+  | { kind: "list"; path: string; withCount?: boolean }
+  | { kind: "entry"; path: string }
+  | { kind: "fetch"; path: string }
+  | { kind: "count"; path: string };
 
-export function pathqlCount(path: string): Promise<TotalSnapshot> {
-  return invoke<TotalSnapshot>("pathql_count", { path });
+export type PathqlResultOf<Q extends PathqlQuery> = Q extends { kind: "list" }
+  ? ProviderListChild[]
+  : Q extends { kind: "entry" }
+    ? ProviderEntry
+    : Q extends { kind: "fetch" }
+      ? Record<string, unknown>[]
+      : number;
+
+export type PathqlResults<Qs extends readonly PathqlQuery[]> = { [I in keyof Qs]: PathqlResultOf<Qs[I]> };
+
+export function pathqlAll<const Qs extends readonly PathqlQuery[]>(queries: Qs): Promise<PathqlResults<Qs>> {
+  return invoke<PathqlResults<Qs>>("pathql_all", { queries });
 }

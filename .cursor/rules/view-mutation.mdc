@@ -1,41 +1,114 @@
 ---
-description: ImageGrid 写操作必须通过视图快照主动更新，展示字段改动使用就地 patch
+description: ImageGrid 只经 pathqlRequest$ 发请求（用户操作、事件窗口），观察方只看最后可得数据与最新请求状态；运行配置同批观察累计行与总数，写后由事件刷新
 globs: "apps/kabegame/src/**/*.{ts,vue}, src-tauri/kabegame*/src/**/*.rs"
 alwaysApply: false
 ---
 
 # ImageGrid 视图写操作
 
-- 凡从 `ImageGrid` 发起、可能改变当前查询结果集的写操作，必须走
-  `GridRefreshContext.mutate(view => ...)`，并把 `view` 传给后端命令；命令完成后直接应用返回的
-  `RowsSnapshot { rows, seq }`，禁止依赖变更事件回刷用户自己的操作。
+- 凡从 `ImageGrid` 发起、可能改变当前查询结果集的写操作，必须走 `GridRefreshContext.mutate(() => ...)`。
+  写命令不接收也不返回 `view`；`mutate` 在操作完成后作为用户操作请求当前行与总数（不防抖、不等待），
+  结果仍从数据源落地。禁止调用方直接写入查询结果。
 - 只改变当前行展示字段、不会改变结果集的写操作走 `GridRefreshContext.patch`。当前只有收藏符合此规则。
-- 新增可能影响 ImageGrid 结果集的写命令时，core、Tauri 薄包装与 web dispatch 都必须支持可选
-  `view: string`（当前行路径）；未传 `view` 时必须保持原行为，传入时在写入并发出事件后返回最新行快照。
-- 带 `view` 的写命令必须在写库前调用 `GlobalEmitter::hold()`；写入期间的 `images-change` /
-  `album-images-change` 照常分配 `seq` 但延迟广播，必须等快照读完、守卫析构后再按序放行。
-- 行读取与总数读取都必须先读取全局 `seq`，再分别查询 rows 或 count。`images-change` 携带递增 `seq`；
-  `album-images-change` 同样携带递增 `seq`。
-- 总数不随写命令返回；ImageGrid 为行路径和计数路径分别维护 live 状态，写后总数由
-  `dataChangeHub` 批次驱动重读。翻页只改变行路径，不得重读未变的计数路径。
-- 被动更新统一经 `dataChangeHub` / `liveQuery`，ImageGrid 不得重新建立独立的
-  `images-change` / `album-images-change` 监听。
+- 写命令照常广播事件（主应用前端、后台任务、MCP、CLI 都靠它同步），不得为前端少读一次而加 `hold` 或返回快照。
+- ImageGrid 的行与总数是 pathql 核心上某个 key 的**观察方**（`usePathqlLooker` / `lookPathql`），只看数据、
+  不发请求，行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批（分子与 adapter 可选分母在同一读快照中读取）。观察方注册自己的过滤器（adapter 的 `refreshOn`，
+  每条只对一种事件）；核心对每个 key 用统一的 500ms 窗口（`PATHQL_REFRESH_WAIT_MS`），窗口内任一观察方的
+  过滤器同意就刷新一次，结果推给该 key 的全部观察方。观察方不得自带防抖时间，也不得自己发请求。
+- 唯一请求入口是 `pathqlRequest$.next([kind, key])`：next 即返回，不 await、不交还结果。主动请求只有两条通路——
+  核心的事件窗口，与发起方的用户操作（路径变化即导航 / 翻页 / 换筛选 / 激活、手动刷新、`mutate`、预览定位重取本页）。
+  前端不区分操作是否写入。翻页只改变行路径，不得重读未变的计数路径。
+- 每个 key 维护 pending 窗口 `(acked, requested]`：请求序号递增、可并行；任一请求返回即确认并取消它之前的全部
+  pending，序号不大于已确认的返回静默丢弃；不依赖后端 `seq`。观察方看到的 `data` 是最后可得的数据，
+  `loading` / `error` 只属于最新请求（二者序号相同，可以领先于数据的序号）；更早请求的失败看不到，
+  调用方也不能按某次请求接错误——失败统一经观察方的 `onError`。
+- 前端不得重新建立裸 `listen` 或另建事件聚合器；事件一律经 `kbEvent$` / `on` / `triggers$`。字段补丁经 `imagePatches$`：
+  `image-changed { patch }` 与 `images-change { patches }` 共用字段补丁窗口，收藏与隐藏画册的 `album-images-added` / `album-images-deleted` 分别推导 `favorite` / `isHidden`、各自合并成 `imageId → 字段`，再汇成一条，
+  只打到已在手的行与预览对象，不发请求。预览弹窗（裸 id 模式）同样用它保鲜；字段事件不重新解析，只对包含当前 id 的删除 / 非系统画册成员增删经 `triggers$` 重读；收藏 / 隐藏与排序不重解析。
+  `imagePatches$(waitMs, { patchHidden })` 必须显式门控：网格 `patchHidden: () => !adapter.viewState().hide`，预览始终 true；
+  hide 开启时不先打灰，靠隐藏成员事件重读剔除 / 补回。
+- 写命令不再返回 `albumChanges`；事件 `seq` 前端不消费，不做本地事件投递：发起写入的组件只请求自己观察的 key，
+  其它观察方等后端事件。
+
+## 图片事件协议与相关性过滤
+
+- `images-added { seq, images: ImageInfo[] }` 表示图片行插入；下载原生元数据持久化后将新 `imageMetadataId` 带在完整行中。
+- `images-deleted { seq, imageIds }` 表示图片行删除；不带任务 / 畅游归属。
+- 字段变化仅经 `emit_image_patches` / `emit_image_fields`：按 id 合并、丢弃空字段；一张发
+  `image-changed { seq, patch }`，多张发 `images-change { seq, patches }`，补丁是 `{ id, ...字段绝对值 }`。
+  不带旧 `reason` / `imageIds` / `taskIds` / `surfRecordIds` / `pluginIds`。
+- 隐藏 / 取消隐藏只发画册成员事件，前端从隐藏画册的 `album-images-added` / `album-images-deleted` 推导 `isHidden`，带 `imagesDeleted` 的删除不推导取消隐藏。
+  删除 / 清理任务为原属图片发 `taskId: null` 字段补丁；只打补丁（供预览「打开任务」按钮消失），不触发视图刷新；任务详情读回空行时返回或回画廊。
+- 四个 adapter 提供 `viewState()`（当前 query / sort / hide），`refreshOn` 共用 `imageViewRelevance`：
+  新增只检查顶层 AND 原子的插件、媒体类型、日期、大小与宽高比；any / not、搜索、插件扩展内容无法判断时视为可能。
+  日期按 `crawled_at_seconds` 阈值与系统本地时区，Web 不排除；大小左闭右开，宽高比左开右闭，unknown 与 provider 同口径。
+  task / surf 新增另比完整行归属；画册不听新增，依靠自身成员事件。补丁按字段依赖表（查询维度 / 搜索模式 / 排序）判断，
+  未列字段保守刷新；任务 taskId、畅游 surfRecordId 的归属补丁刷新。
+- ImageGrid 用 `deletedTrigger(heldIds?)` 为行与总数分别追加 `images-deleted`：行传当前持有行 id，只在包含删除 id 时刷新；
+  总数默认不传，任何删除都刷新（页外删除也会改变总数）。画册 adapter 标记 `deletesViaMembership`，总数不追加此触发，后端删图向每个原属画册发送带 `imagesDeleted` 的成员删除，按本画册定位；其它纯计数观察方仍一律刷新。
+- hide 开启才响应隐藏画册变化，开启时一律刷新（画册页同样），关闭时只按 `imageIds` 打 `isHidden` 补丁；画廊、任务、畅游共用 `noAlbumTriggers`，忽略隐藏成员与带 `imagesDeleted` 的删除（后者交给图片删除触发）。
+  收藏在普通视图只补丁，收藏画册自身、无画册条件、树系统区及相应侧栏才刷新；四个网格共用 `labelSearchTriggers`，有效标签搜索对成员增删、结构补丁、移动与删除刷新，因事件无法识别标签类型，成员增删保守全收。
+  画册网格不因自身改名 / 移动重读；成员排序只在 `by-album-order` 下刷新，仍连带读总数。
+  侧栏按减格上下文（含前缀高级查询）判断新增与补丁，无法解析前缀则保守刷新；插件分面的 pluginId / metadataId 变化还会影响分组与扩展计数，始终刷新；畅游计数仅在归属补丁变化时重读。
+  整理与迁移循环仍属后续 Phase C / D。
+
+## 画册事件协议（Phase E）
+
+- 画册表按增删改对齐：`albums-added { seq, albums }` 携带完整行，`albums-deleted { seq, albums: [{ id, ancestorPath }] }` 只带被删根，`album-moved { seq, id, oldAncestorPath, newAncestorPath }` 只带移动根；其它字段按 id 合并为 `album-changed { seq, patch }` / `albums-change { seq, patches }`，补丁只含实际变化字段，永不含 parentId / ancestorPath。移动按前缀改写已持有的子孙路径，移动根的 parentId 取新路径倒数第二段。成员真实增删发 `album-images-added` / `album-images-deleted`，`album-images-change` 只表示实际改序，均为 `{ seq, albumId, ancestorPath, imageIds, imagesDeleted? }`；无 reason、hide/unhide 派生事件或按隐藏状态拆分。隐藏 / 取消隐藏只是隐藏画册自身的成员增删，不带其它画册与图片行：hide 开启的观察方一律刷新，关闭时只按 imageIds 打 isHidden 补丁；整行删图引起的成员删除带 imagesDeleted: true，不作为取消隐藏补丁。删画册不补发空排序事件，写命令不再返回 albumChanges。
+- Phase F 只在前端收紧 refreshOn，不新增 SQL；隐藏仍按 hide 开关整体刷新，不按图判断。侧栏画册敏感上下文为 album / album-tree / no-album 或有效标签搜索，只有 hide 不响应普通成员；未知前缀保守刷新。收藏成员只影响收藏 / 无画册上下文（标签搜索仍保守）。标签面板跳过系统成员与排序，删除标签目录按已挂标签路径前缀判断。
 
 ## 已知例外
 
-`ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页，保留 500ms
-被动刷新。其它从 ImageGrid 发起的隐藏/取消隐藏、加入/移出画册、上划移除均已纳入主动快照协议。
+`ImageLabelsPanel` 在预览内增删标签不走 `ctx.mutate`：预览打开时替换底层列表会导致跳页。面板是
+`albums://of_image_<id>/album_kind/label` 的 rows 观察方，切图与面板内增删后只请求自己的 key（增删先本地改给即时反馈），
+别处的成员变更、已挂标签改名 / 删除经核心窗口刷新，读取失败保留已有标签。其它从 ImageGrid 发起的隐藏/取消隐藏、
+加入/移出画册、上划移除均已纳入 `mutate` 后请求。
 
-## 画册查询与计数
+## 树观察方与画册计数
 
-- 前端不设全量画册 store，也不持有全量画册计数。目录树与所有画册选择器复用 app 侧
-  `AlbumTreeView` / `AlbumPicker`，按目录分页查询；搜索时每层与 `~~/children` 都叠加 `search/<q>`
-  （自身或子孙命中才保留，树形与展开态不变）。单个详情用 `services/albums.ts` 查询并订阅 hub。
-- 计数由 PathQL 路径表达，不新增 SQL 视图、计数列或专用计数命令：目录页一次三路 fetch——
-  `albums://<过滤段>/x<N>x/<页>` 取这一页的画册行（默认按创建时间排序）；`…/~~/children[/<类型段>]` 与
-  `…/~~/images[/hide]` 在 `~~` 子查询边界之后按画册 `GROUP BY`，分别给出 `child_count`（同类型过滤下的
-  直接子画册数）与 `image_count`（子树成员行数，标签叶子即直接图片数；标签目录不出行），没有行的画册计 0；口径与
-  `images://gallery/[hide/]album/<id>`、`album-tree/<id>` 一致。单画册入口仍读这两条 images:// 路径的
-  entry 总数。`~~` 之后的逐行计数用 `group_by`，不要 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
-- 隐藏等全局过滤只能以 `hide/` 这类路径前缀表达。新增画册展示入口必须复用上述树/选择器，或进行
-  单画册查询并通过 `dataChangeHub` 的 `ancestorPath` 相关性订阅刷新；不得重新引入全量列表。
+- `TreeQuerySource` 只描述 `TreePage.queries` / `parse` / 可选 `extra` 和单事件 `refreshOn`，不直接读数据。
+  `useTreeModel` 用 `usePathqlLookMany(kind: "all")` 观察可见展开分支的已加载页，一页一个 `pathqlAllKey`；
+  新 key、重新展开 / 激活、加载更多、手动刷新经 `pathqlRequest$.next` 请求。Promise 由模型等待表完成，核心契约不变。
+- 收起（含祖先收起）即停观察，保留句柄与页数据；重新展开请求。换 key 时保留旧子项直到新结果到达，
+  出错不清空。补充查询只按元素 key 补字段、不挡行渲染；结构重读沿用已有补丁。
+- 画册树和侧栏过滤树只做 pathql 观察方。侧栏隐藏停观察、显示整组请求；
+  高级 diff 候选树事件过滤器为空，每次展开下拉读一次、打开期间不随事件刷新，不另建纯净列表缓存。
+- 前端不设全量画册 store 或全量计数。目录树与选择器复用 `AlbumTreeView` / `AlbumPicker`，按目录分页查询；
+  搜索时每层与 `~~/children` 都叠加 `search/<q>`（自身或子孙命中才保留）。画册页头部由 `useAlbumQuery` 观察详情 / 祖先 / 子树数的 `all` key 与按类型生成的计数 key，
+  先注册观察方再请求，新计数 key 自动请求，刷新 Promise 在 composable 等待两段请求完成或失败。
+  详情按自身完整 `ancestorPath` 判定祖先链，自身任意补丁与祖先结构补丁刷新，子孙改名不刷新。
+  页头计数不带 hide：label_dir 只听直接子画册增删 / 移动，label 只听自身成员增删，其余听自身 / 子树成员增删、严格子孙删除与跨边界移动；空子画册新增、补丁与内部移动不刷新图片计数。其它一次性查询仍用 `services/albums.ts`。
+- 结构页一批 `pathql_all` 同快照读取 `albums://<过滤段>/x<N>x/<页>` 行与 `…/~~/children[/<类型段>]`；
+  `extra` 独立批次读取本页行（零计数补齐）与 `…/~~/images[/hide]`。两种逐行计数都在 `~~` 后按画册
+  `GROUP BY`，没有行记 0，禁止 `list_with_count`（见 `cocs/provider-dsl/RULES.md` §2.1）。
+  标签目录显示 `child_count`，叶子显示 `image_count`；行先渲染、图片计数后补。
+- 画册成员增删只刷新相关可见目录的 extra：普通分区按根节点归属判断，根未加载保守刷新；系统区只认收藏 / 隐藏，收藏不触发其它分区。hide 前缀计数对隐藏增删整体刷新，隐藏画册带 imagesDeleted 的删除只处理系统区，其它计数由原属画册成员删除定位。排序不刷计数；字段补丁只刷已持有行的 page，增删 / 移动刷新结构与 extra；`albumEventPaths` 取新旧路径，
+  缺路径按通配，父目录只匹配严格后代。隐藏等全局过滤只能用路径表达，不得新增 SQL 视图、计数列或专用计数命令。
+- 同一后端事件被多个观察方同意时，一个 key 只投一票；不同事件仍按核心统一 500ms 窗口合并。
+
+## 运行配置写操作
+
+- 新增、导入、复制、编辑、定时开关和删除统一经 `services/runConfigWrites.ts`，只传业务参数；
+  core、Tauri 与 Web 命令直接返回保存后的单行，删除返回 null。IPC / CLI 请求与单行/null 返回保持兼容。
+- `usePagedRunConfigs` 使用一个 `usePathqlLookAll`，同一读快照查询 `[fetch 累计窗口, count 计数路径]`；
+  只由 `start` / `loadMore` 通过 `pathqlRequest$` 发起用户请求。加载更多以已落地页加一为目标，失败后重试同 key。
+- 写后不主动请求、不注入本地结果；`auto-config-change` 由核心统一 500ms 窗口刷新。
+  新增带 runConfigId 的任务、任意任务状态变化和删除任务同样触发刷新；张数、错误与结束时间等展示字段
+  只补丁已在手且 `lastTask.id` 匹配的行，不重新过滤、排序或请求。
+- 页头失败数观察 `run_configs://last` 的 list，挂载请求一次；筛选下拉仍在打开时一次性读取分面。
+  详情弹窗观察编码后的 id rows key，换 key 请求一次，空结果视为删除；任务关联名直接订阅配置事件，
+  改名按 id 读取，删除清空，不经 hub。
+- 写库提交后先发推荐导入态的插件事件，再发配置事件。推荐配置独立观察 plugin:// 来源版本的 recommended rows，
+  由同插件的 plugin-changed（version / recommendedConfigs）驱动；刷新期间保留内容，失败保留已有结果。
+- 配置事件的全局 `seq` 保留，观察方仍按前端请求序号落地；前端不再封装 `pathqlCount` / `TotalSnapshot`，计数经 `pathql_all`；后端 `pathql_count` 保留。
+
+## 任务列表、状态计数与详情观察方
+
+- `usePagedTaskList` 同批观察 `[fetch 累计窗口, count 总数]`，任务分页不再使用 before_ 游标。
+  start 清空并请求首窗，loadMore 以已落地页加一为目标，失败重试同 key；仅新增、删除、startTime 变化刷新。
+  其它任务 diff 经 `kbEvent$` + `normalizeTaskEvent` 补丁已有行；纯进度保留单调与 100ms 节流，completed 为 100%。
+- 状态计数在 store scope 中观察 tasks://status 的 list all key，创建时请求一次；仅新增、删除、status 变化刷新。
+  任务详情在存活期观察编码后的 id rows key，换 key 请求一次；自身删除重读，空行置 null，其它 diff 补丁，
+  首读未回则请求自身 key。loading / error 与旧结果隔离统一交给核心，不另设代数号或事件缓冲。
+- 任务关联名直接订阅配置事件，改名按 id 读取、删除清空，不缓冲事件。抽屉删除 / 清空成功后请求当前列表
+  与计数 key，refreshCounts 即发即返回；不本地增减 total，不投递本地事件。

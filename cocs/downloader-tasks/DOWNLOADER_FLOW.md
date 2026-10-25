@@ -160,8 +160,8 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByUrl`
 - 如果指定了输出画册，把已存在图片加入该画册；只有成员实际插入时才发送按单画册拆分的
-  `album-images-change`
-- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行，先发 `image-changed`（`metadataId` / 可选 `pluginId` / 可选 `postUrl`），再发 `images-change(change)`；`task_id` / `surf_record_id` 均不变
+  `album-images-added` / `album-images-deleted` / `album-images-change`
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行，发单图 `image-changed { patch: { id, metadataId, pluginId?, postUrl? } }`；`task_id` / `surf_record_id` 均不变
 - `dedupUpdateMetadata` 开启且本次带插件标签（`DownloadRequest.labels`）时，给已有图片补挂标签（见 §6「插件标签」）
 - 增加 `tasks.dedup_count` 并通过 `tasks-change` / `TaskChanged` 发送新的 `dedupCount`
 - 发送 Completed，清理对应失败记录，跳过下载读取
@@ -172,7 +172,7 @@ worker 在读取 bytes 前先查 `Storage::find_image_by_url(job.url)`。命中�
 
 - 记录 `taskLogDedupByHash`
 - 按需加入输出画册
-- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行，先发 `image-changed`（`metadataId` / 可选 `pluginId` / 可选 `postUrl`），再发 `images-change(change)`；`task_id` / `surf_record_id` 均不变
+- `dedupUpdateMetadata` 开启且本次带 metadata 时，按下载来源改挂新 metadata：插件下载同时把 `plugin_id` 改为当前插件；畅游下载只更新无 `plugin_id` 的畅游旧图，不覆盖插件来源。本次带非空 `post_url` 时一并覆盖帖子地址（未带则保留旧值）。改挂后 GC 无引用旧行，发单图 `image-changed { patch: { id, metadataId, pluginId?, postUrl? } }`；`task_id` / `surf_record_id` 均不变
 - `dedupUpdateMetadata` 开启时同样给已有图片补挂插件标签
 - 后处理最终分支收到 `imported = false` 后增加 `tasks.dedup_count`
 - 发送 Completed，清理对应失败记录
@@ -191,14 +191,24 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 2. 计算 hash（同 source 分发）。
 3. 查 `Storage::find_image_by_hash` 做 hash 去重。
 4. 未命中去重时，根据格式键计算最终目标路径/文件名，落盘（或映射回标准 MIME 后执行 Android MediaStore copy）。
-5. 生成缩略图/预览，写入 `images` 表，广播事件。
-6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`；先按 `hash` 查同哈希图片是否已挂 `parser_version` 匹配的 `image_metadata` 行（命中则共享 id 回填所有同哈希图片，不重复解析），未命中才解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算）。任何失败仅 log，不阻断入库。按哈希共享会把元数据一并挂到同哈希的旧图上，改变它们的 `search/native-metadata` 成员，因此经 `image_events::emit_native_metadata_attached` 对这些旧图补发 `image-changed`（`imageMetadataId`）与 `images-change("change")`（新图本身随后的 `add` 已覆盖）。注意 `image_metadata` 表现指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
+5. 生成缩略图/预览，写入 `images` 表。
+6. `add_image` 成功后 best-effort 计算**原生元数据**（JPEG EXIF / PNG chunk，`media::native_metadata`）：仅对 `image/jpg`、`image/png`，逐张解析（优先内存 `bytes`，桌面 `Path` 读文件；Android 无 bytes 的 content:// 溢写场景跳过，留给 `get_image_native_metadata` 查看时懒计算），经 `replace_image_native_metadata(image_id, parser_version, json)` 存为一图一行，不按 hash 共享。任何失败仅 log，不阻断入库；将挂上的 id 写回新图 `ImageInfo.imageMetadataId` 后发 `images-added { images }`，不另发挂载事件。查看与整理先读解析器版本，版本不符才解析并替换为新行，通过逐图字段补丁（`imageMetadataId`）按图片数量分流为 `image-changed` / `images-change`，更新缓存和搜索成员。换版本或删图时直接删除本图旧行；历史共享行仍有其它图片引用时，忽略外键拒绝、留给最后一张图替换或删除时清理，不做历史数据迁移。注意 `image_metadata` 表指原生元数据（v024 起），插件业务元数据表已改名 `metadata`。
+
+### 图片事件（过滤走查 Phase A）
+
+- 新图与本地导入发 `images-added { seq, images: ImageInfo[] }`；删除统一发 `images-deleted { seq, imageIds }`。
+- 字段变化按 id 合并为 `{ id, ...camelCase字段绝对值 }`：一张发 `image-changed { seq, patch }`，多张发
+  `images-change { seq, patches }`，空字段不发；不再成对发粗失效事件，不带 reason 或归属 id 列表。
+- 隐藏与取消隐藏仅发隐藏画册的 `album-images-added` / `album-images-deleted`（不带其它画册与图片行，删图带 imagesDeleted）；前端从隐藏画册直接成员推导 `isHidden`。
+  删除任务仅发任务删除事件。整理与 metadata 迁移本阶段只更换发送函数，不调整循环。
+- 前端本阶段保留宽刷新；任务与畅游视图的新增依据行归属，删除与字段变化仍刷新。
+  事件完整协议见 [图库分页与事件](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
 
 ### 插件标签
 
 插件在 `downloadImage` 的 `labels` 里声明标签（V8 经 `parse_download_opts`，WebView 经 `crawl_download_image`，两处都调用 `storage::labels::validate_label_values`）。入口**只校验、不建画册**——下载可能失败；校验后的 `Vec<LabelSpec>` 随 `DownloadRequest` / `ActiveDownloadInfo` 搬运，失败时序列化进 `task_failed_images.labels`，重试时还原。
 
-入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建 `label_dir`，末端找或建 `label`，只在叶子上挂图，随后发 `album-added`（新建的画册），并为每个实际新增成员的标签叶子分别发送 `album-images-change`。某项撞到相反类型时只跳过该标签并写任务 warn，同批其它标签继续；去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
+入库成功那一刻（`postprocess_downloaded_image` 新图分支）才调用 `apply_download_labels` → `Storage::apply_labels_to_images`：沿 `category` 逐级按 key 找或建 `label_dir`，末端找或建 `label`，只在叶子上挂图，随后批量发一条 `albums-added { seq, albums }`（本次新建的画册），并为每个实际新增成员的标签叶子分别发送 `album-images-added`。某项撞到相反类型时只跳过该标签并写任务 warn，同批其它标签继续；去重命中（URL / hash 两处）仅在 `dedupUpdateMetadata` 开启时补挂。挂标签是附加信息，不影响图片入库结果。标签画册的数据模型见 [../gallery/LABEL_ALBUMS.md](../gallery/LABEL_ALBUMS.md)。
 
 `images.plugin_id` 仅表示爬虫插件来源，可为空；畅游来源图片不再把 host 写入 `plugin_id`，而是写入 `surf_record_id`，详情页再通过 Surf 记录解析 host。普通爬虫任务仍写入 `plugin_id`。
 
@@ -346,7 +356,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 
 ### 统一源文件清除
 
-删除图片时，`Storage::delete_image` / `batch_delete_images` 只在 DB 锁内删除记录、缩略图和应用拥有的兼容副本，并返回待清除的 `local_path`。`image_events::delete_images_with_events` 在 DB 事务提交和 `images-change` / `album-images-change` 发射完成后，统一异步调用 `storage::source_purge::purge_source_files`；调用方不能自行绕过该入口。
+删除图片时，`Storage::delete_image` / `batch_delete_images` 只在 DB 锁内删除记录、缩略图和应用拥有的兼容副本，并返回待清除的 `local_path`。`image_events::delete_images_with_events` 在 DB 事务提交和 `images-deleted` / `album-images-deleted`（imagesDeleted: true）发射完成后，统一异步调用 `storage::source_purge::purge_source_files`；调用方不能自行绕过该入口。
 
 - 桌面：进入 `safe_delete::trash_source_files_batch`，保留软链接、网络盘、虚拟盘与未知文件系统护栏。安全路径按 256 条分块调用 `trash::delete_all`；任一块失败后只对该块逐条降级到 `trash_source_file`，避免 macOS Finder AppleScript 触发 `ARG_MAX` / 超时，也避免单条路径竞态消失拖垮整批。
 - Android：`content://` URI 交给 picker 插件的 `deleteMediaUris`。先逐条 `ContentResolver.delete`，app 自己写入 MediaStore 的媒体通常无需弹窗即可直接删除；权限异常项在 API 30+ 合并成一次 `MediaStore.createDeleteRequest` 系统授权。API 26–29 没有批量授权 API，权限异常项保留并计入 `skipped`。非 `content://` 值按普通文件路径执行 `remove_file`，覆盖旧系统 `copyFileToPicturesLegacy` 写入的真实文件。
@@ -426,12 +436,12 @@ Android 通知不依赖前端轮询：首个 `download-state` 启动后端单例
 
 下载器入库时按表拆分事件：
 
-- 新增或刷新 `images`：发送 `images-change`
+- 新增 `images` 发 `images-added { images }`，字段更新按图片数量发 `image-changed { patch }` / `images-change { patches }`，删除发 `images-deleted { imageIds }`
 - 输出画册、标签或去重补画册影响 `album_images`：统一走 `emit_membership_added`，只对实际插入的 id
-  发送单画册 `album-images-change`。payload 带 `seq`、该画册的 `ancestorPath`，不带 `directCounts`；
-  前端 hub 按祖先路径刷新已加载目录，计数由目录页 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` entry 组合得到。
+  发送单画册 `album-images-added`。payload 带 `seq`、`albumId`、`imageIds` 与该画册的 `ancestorPath`，不带 `directCounts`；
+  前端树观察方按祖先路径刷新已加载目录，计数由目录页 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` entry 组合得到。
 
-画廊分页、任务视图和 Plasma 依赖这两个事件区分刷新范围。详情见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
+画廊分页、任务与畅游视图依据图片增删 / 字段补丁及画册成员事件刷新。详情见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
 
 ### 任务图片计数
 
@@ -490,3 +500,19 @@ CEF/surf 下载已由 worker 统一执行，终态后同样通过 `wait_then_fin
 - **容错**：清理失败（权限不足、文件被占用）记录 warn 日志，不阻塞启动。
 
 这确保上次异常退出（崩溃、强杀）遗留的溢写临时文件不会无限堆积。
+
+## 任务级 dry-run 写入边界
+
+`isDryRun` 在任务冻结后只在三个单点阻断持久化，其余插件逻辑照常执行：
+
+- `DownloadQueue::download_image` 在入队前记录 `taskLogDryRunSkipDownload` 并返回成功，覆盖 V8、WebView
+  （含 blob/data/MSE 提交）和内建 webpage；畅游直接调用 `download`，不受影响。
+- `Task::insert_metadata` 返回 `0`，覆盖 V8/WebView 的 metadata 入口，避免孤儿 metadata 行。
+- 内建 `local-import` 的 `on_file` 记录 `taskLogDryRunSkipImport` 后返回，不复制文件、不写 Android
+  Pictures，也不进入 postprocess。
+
+两个跳过点都调用 `Task::record_dry_run_skip`：**复用 `tasks.dedup_count`** 累加跳过次数，并经
+`emit_task_image_counts` 推送计数 diff，所以不新增列、事件或前端计数通路。空跑任务的成功 / 失败 /
+删除计数恒为 0，`dedup_count` 在空跑下语义为「跳过」：任务卡片、任务详情（`TaskCountsInline`）与运行参数
+只显示这一个数字并用「空跑跳过」文案（`tasks.dryRunSkippedCount` 等），CLI 进度条显示「<插件> · 空跑跳过 N」，结束行为「完成 空跑跳过 N 个」。
+下载排空会立即结束，任务仍正常进入 Completed。

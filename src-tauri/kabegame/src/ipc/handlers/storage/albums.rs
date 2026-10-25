@@ -1,4 +1,5 @@
 //! Albums 相关代码
+use kabegame_core::commands::album;
 use kabegame_core::ipc::ipc::IpcResponse;
 use kabegame_core::storage::Storage;
 
@@ -46,9 +47,8 @@ pub async fn add_label_album(
 }
 
 pub async fn delete_album(album_id: &str) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.delete_album(album_id) {
-        Ok(()) => IpcResponse::ok("deleted"),
+    match album::delete_album(album_id.to_string()) {
+        Ok(_) => IpcResponse::ok("deleted"),
         Err(e) => IpcResponse::err(e),
     }
 }
@@ -69,8 +69,7 @@ pub async fn set_label_key(album_id: &str, new_key: &str) -> IpcResponse {
 }
 
 pub async fn add_images_to_album(album_id: &str, image_ids: &[String]) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.add_images_to_album(album_id, image_ids) {
+    match album::add_images_to_album(album_id.to_string(), image_ids.to_vec()).await {
         Ok(result) => {
             IpcResponse::ok_with_data("ok", serde_json::to_value(result).unwrap_or_default())
         }
@@ -79,12 +78,8 @@ pub async fn add_images_to_album(album_id: &str, image_ids: &[String]) -> IpcRes
 }
 
 pub async fn remove_images_from_album(album_id: &str, image_ids: &[String]) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.remove_images_from_album(album_id, image_ids) {
-        Ok(removed) => IpcResponse::ok_with_data(
-            "ok",
-            serde_json::to_value(removed.len()).unwrap_or_default(),
-        ),
+    match album::remove_images_from_album(album_id.to_string(), image_ids.to_vec()).await {
+        Ok(removed) => IpcResponse::ok_with_data("ok", removed["removed"].clone()),
         Err(e) => IpcResponse::err(e),
     }
 }
@@ -113,9 +108,8 @@ pub async fn update_album_images_order(
     album_id: &str,
     image_orders: &[(String, i64)],
 ) -> IpcResponse {
-    let storage = Storage::global();
-    match storage.update_album_images_order(album_id, image_orders) {
-        Ok(()) => IpcResponse::ok("ok"),
+    match album::update_album_images_order(album_id.to_string(), image_orders.to_vec()) {
+        Ok(_) => IpcResponse::ok("ok"),
         Err(e) => IpcResponse::err(e),
     }
 }

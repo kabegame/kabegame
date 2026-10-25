@@ -529,6 +529,15 @@ export function queryUsesDimension(query: GalleryQuery, dimension: GalleryFilter
   });
 }
 
+/** 查询里是否有生效的搜索词勾选了该模式（包含 any / not）。 */
+export function queryUsesSearchMode(query: GalleryQuery, mode: GallerySearchPathMode): boolean {
+  return query.some((node) => {
+    if (isIsNode(node)) return isActiveSearchTerm(node.is.search) && searchTermModes(node.is.search!).includes(mode);
+    if (isAnyNode(node)) return node.any.some((branch) => queryUsesSearchMode(branch, mode));
+    return queryUsesSearchMode(node.not, mode);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 归一化与树操作
 // ---------------------------------------------------------------------------

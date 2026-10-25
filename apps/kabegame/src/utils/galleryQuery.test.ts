@@ -23,6 +23,7 @@ import {
   stripComposablePathTail,
   stripPageTail,
   withPaged,
+  toLookupRowsPath,
 } from "./galleryPath";
 
 const simple: GalleryFilterSet = {
@@ -437,5 +438,16 @@ describe("aspectBucketForDimensions", () => {
       expect(parsed).not.toBeNull();
       expect(serializeQueryBody(parsed!).body).toBe(body);
     }
+  });
+});
+
+describe("画廊行查询回表路径", () => {
+  it.each([
+    "gallery/sort/by-time/_kb_x100x/2",
+    "images://gallery/hide/sort/random-42/_kb_desc/_kb_x2x/3",
+    "images://gallery/album/a/sort/by-album-order/_kb_x2x/1",
+    "images://gallery/~not/~any/search/metadata/r18/~or/search/native-metadata/r18/~end/~end/sort/by-name/_kb_x2x/99",
+  ])("只替换入口并追加边界，完整保留过滤排序分页：%s", (path) => {
+    expect(toLookupRowsPath(path)).toBe(path.replace("gallery/", "filter/") + "/~~/rank/~~p/lookup/gallery");
   });
 });

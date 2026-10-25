@@ -2,8 +2,7 @@ import type { Ref, ShallowRef } from "vue";
 import type { ImageInfo } from "@/types/image";
 import type { CreateImageActionsOptions } from "@/actions/imageActions";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
-import type { ChangeBatch } from "@/services/dataChangeHub";
-import type { RowsSnapshot } from "@/services/liveQuery";
+import type { EventTrigger, ImageViewState } from "@/services/kbEvents";
 
 export type GridAdapterId = "gallery" | "task" | "album" | "surf";
 
@@ -22,16 +21,10 @@ export interface GridRefreshContext {
   /** 当前页图片列表；adapter 可整体替换 .value 做就地更新（如收藏星标） */
   images: ShallowRef<ImageInfo[]>;
   computedPath: Readonly<Ref<string>>;
-  /**
-   * 刷新当前页（保留滚动）+ 重算总数；对被移除的图片做选中清理、
-   * 当前壁纸清理与页码越界回退。返回本次刷新被移除的 id。
-   */
-  refreshPage: () => Promise<{ removedIds: string[] }>;
-  /** 影响结果集的写操作唯一入口：携带当前行路径并立即应用返回行快照。 */
-  mutate: <T extends { view?: RowsSnapshot | null }>(op: (view: string | null) => Promise<T>) => Promise<T>;
+  /** 改变结果集的操作入口：完成后请求当前行与总数即返回，不等事件防抖，结果经观察方落地。 */
+  mutate: <T>(op: () => Promise<T>) => Promise<T>;
   /** 仅修改展示字段，不重新查询视图。 */
   patch: (ids: Iterable<string>, fields: Partial<ImageInfo>) => void;
-  loadTotalImagesCount: () => Promise<void>;
   ensureValidPageAfterMassRemoval: () => Promise<void>;
   clearSelection: () => void;
 }
@@ -61,19 +54,26 @@ export interface GridRemoveConfig {
 export interface GridAdapter {
   id: GridAdapterId;
   routeStore: GridRouteStore;
+  /** 事件相关性与隐藏补丁门控读取当前路由状态。 */
+  viewState: () => ImageViewState;
   /** 视图是否处于可加载状态（路由匹配 + 关键参数就绪）；keep-alive 激活态由 ImageGrid 自己守卫 */
   isActive: () => boolean;
   /** currentPath 为空时的兜底加载路径；返回空串则跳过加载 */
   rootPathFallback?: () => string;
   /** 返回 false 则跳过本次路径加载（如 album 校验 `album/` 前缀） */
   validatePath?: (path: string) => boolean;
+  /** 有过滤时返回不带过滤的全部数量计数路径，与分子同批读取；返回 null 不读。 */
+  computeUnfilteredCountPath?: () => string | null;
   computeCountPath: (path: string) => string;
   onCountError?: (error: unknown, ctx: GridRefreshContext) => Promise<number | void> | number | void;
   onLoadError?: (error: unknown, path: string) => Promise<void> | void;
   /** route.query.path 为空串时是否也执行 syncFromUrl（gallery 需要重置为默认路径） */
   syncEmptyQueryPath?: boolean;
 
-  changes?: { relevant?: (batch: ChangeBatch) => boolean };
+  /** 触发行与总数刷新的事件；每条只对一种事件，未列出的事件不刷新。 */
+  refreshOn: readonly EventTrigger[];
+  /** 删图都有本画册的成员删除事件，总数不再追加 images-deleted 触发。 */
+  deletesViaMembership?: boolean;
   /** 事件默认刷新完成后的追加动作（task: failedImagesStore.loadAll） */
   onAfterRefresh?: (ctx: GridRefreshContext, info: { removedIds: string[] }) => Promise<void> | void;
 

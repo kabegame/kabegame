@@ -1,3 +1,4 @@
+import type { Plugin } from "@/stores/plugins";
 import { invoke } from "../api";
 import { IS_WEB } from "../env";
 
@@ -74,4 +75,13 @@ export function compatibleToUrl(compatiblePath: string): string {
   if (abs) return abs;
   if (httpServerBaseUrl === null) return "";
   return localMediaUrl("compatible", path);
+}
+
+/** 所有平台共享插件文件 host；清单路径逐段编码，来源与版本进入缓存键。 */
+export function pluginFileUrl(plugin: Pick<Plugin, "id" | "version" | "fileOrigin">, relPath: string): string {
+  if (httpServerBaseUrl === null) return "";
+  const query = new URLSearchParams({ v: plugin.version });
+  if (plugin.fileOrigin?.kind === "store") query.set("source", plugin.fileOrigin.sourceId);
+  if (plugin.fileOrigin?.kind === "preview") query.set("preview", plugin.fileOrigin.token);
+  return `${httpServerBaseUrl}/plugin_file/${encodeURIComponent(plugin.id)}/${relPath.split("/").map(encodeURIComponent).join("/")}?${query}`;
 }

@@ -16,5 +16,12 @@
   "dropZone.albumMedia": "將 {count} 個檔案匯入「{album}」",
   "dropZone.albumFolders": "將 {count} 個資料夾中的媒體匯入「{album}」",
   "dropZone.albumMixed": "將 {count} 個檔案和 {folders} 個資料夾匯入「{album}」",
-  "dropZone.plugins": "安裝 {count} 個源插件包"
+  "dropZone.plugins": "安裝 {count} 個源插件包",
+  "pathPickFile": "點擊選擇檔案",
+  "pathPickFolder": "點擊選擇資料夾",
+  "pathDropFile": "點擊選擇或拖入檔案",
+  "pathDropFolder": "點擊選擇或拖入資料夾",
+  "pathDropEither": "點擊選擇或拖入檔案 / 資料夾",
+  "pathChange": "更換",
+  "dropZone.setPath": "設為「{name}」"
 }

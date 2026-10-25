@@ -14,31 +14,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, ref } from "vue";
 import { Delete } from "@kabegame/element-plus-icons";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { HIDDEN_ALBUM_ID } from "@/services/albums";
-import { pathqlEntry } from "@/services/pathql";
-import { subscribeChanges } from "@/services/dataChangeHub";
+import { on, pathqlRequest$, usePathqlLookAll } from "@/services/kbEvents";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
 
 const { t } = useI18n();
 const store = useHiddenCleanupStore();
 
-// 隐藏画册的直接图片数由 album-images-change 事件持续刷新，不需要单独的计数命令
+// 隐藏画册的直接图片数由成员增删事件持续刷新，不需要单独的计数命令
 const hiddenCount = ref(0);
-async function refreshCount() {
-  hiddenCount.value = (await pathqlEntry(`images://gallery/album/${HIDDEN_ALBUM_ID}`)).total ?? 0;
-}
-void refreshCount();
-const unsubscribe = subscribeChanges({
-  waitMs: 500,
-  filter: (batch) => batch.albumIds.has(HIDDEN_ALBUM_ID),
-  onBatch: refreshCount,
+const hiddenQueries = [{ kind: "count", path: `images://gallery/album/${HIDDEN_ALBUM_ID}` }] as const;
+const hiddenLooker = usePathqlLookAll({
+  queries: () => hiddenQueries,
+  refreshOn: [
+    on("album-images-added", (p) => p.albumId === HIDDEN_ALBUM_ID),
+    on("album-images-deleted", (p) => p.albumId === HIDDEN_ALBUM_ID),
+    on("album-images-change", (p) => p.albumId === HIDDEN_ALBUM_ID),
+  ],
+  onResult: ([count]) => {
+    hiddenCount.value = count;
+  },
 });
-onBeforeUnmount(unsubscribe);
+pathqlRequest$.next(["all", hiddenLooker.key()!]);
 
 const disabled = computed(() => store.running || hiddenCount.value <= 0);
 

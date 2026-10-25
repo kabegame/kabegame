@@ -15,7 +15,6 @@ import "vant/lib/toast/style";
 /** Vant 使用项目配色。若使用 Vant，请在其样式之后引入，顺序：anime-theme → vant 样式 → vant-theme */
 import "@/styles/vant-theme.css";
 import { vPullToRefresh } from "@/directives/pullToRefresh";
-import { vDragFile } from "@/directives/dragFile";
 import { vHscrollFade } from "@/directives/hscrollFade";
 import { IS_ANDROID, IS_MACOS } from "@/env";
 import { Toast, Picker, Popup, Button } from "vant";
@@ -50,7 +49,6 @@ window.addEventListener(
 const app = createApp(App);
 
 app.directive("pull-to-refresh", vPullToRefresh);
-app.directive("drag-file", vDragFile);
 app.directive("corner-badge", vCornerBadge);
 app.directive("hscroll-fade", vHscrollFade);
 

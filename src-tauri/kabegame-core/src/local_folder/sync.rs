@@ -70,7 +70,10 @@ fn persist_status(album_id: &str, status: &FolderStatus) {
     if let Err(err) = Storage::global().update_album_folder_status(album_id, Some(&status_json)) {
         eprintln!("[local_folder] persist status for {album_id} failed: {err}");
     }
-    GlobalEmitter::global().emit_album_changed(album_id, json!({ "folderStatus": status_json }));
+    GlobalEmitter::global().emit_album_patches(vec![crate::emitter::AlbumFieldPatch::new(
+        album_id,
+        json!({ "folderStatus": status_json }),
+    )]);
 }
 
 fn base_finished(album: &Album, opts: FullSyncOptions) -> FolderSyncFinished {
@@ -221,9 +224,8 @@ async fn handle_subdirs(
             .collect();
         if !missing.is_empty() {
             let created = create_child_albums(&parent.id, &missing)?;
-            FolderSyncService::global().update(&parent.id, |state| {
-                state.created_albums += created.len()
-            });
+            FolderSyncService::global()
+                .update(&parent.id, |state| state.created_albums += created.len());
             Storage::global().rechain_local_folder_albums()?;
             crate::local_folder::fs_listener::reconcile_now().await;
             for album in &created {
@@ -353,16 +355,8 @@ impl FullDirHook {
             }
         }
         if !unlink.is_empty() {
-            let (pairs_before, ancestor_paths) =
-                Storage::global().collect_album_memberships_with_paths(&unlink)?;
             let removed = Storage::global().remove_images_from_album(&self.album_id, &unlink)?;
-            crate::storage::image_events::emit_membership_removed(
-                &self.album_id,
-                &removed,
-                &pairs_before,
-                &ancestor_paths,
-                crate::storage::image_events::MembershipRemovalContext::AlbumMutation,
-            );
+            crate::storage::image_events::emit_membership_removed(&self.album_id, &removed);
         }
         if !missing.is_empty() {
             delete_images_with_events(&missing, false).await?;

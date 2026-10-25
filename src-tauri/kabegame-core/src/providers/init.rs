@@ -97,6 +97,14 @@ fn init_runtime() -> Arc<ProviderRuntime> {
         .unwrap_or_else(|e| panic!("register `tasks` schema failed: {}", e));
     runtime
         .register_schema(
+            "run_configs",
+            "run_configs",
+            "kabegame",
+            "run_configs_root_provider",
+        )
+        .unwrap_or_else(|e| panic!("register `run_configs` schema failed: {}", e));
+    runtime
+        .register_schema(
             "fail-images",
             "task_failed_images",
             "kabegame",

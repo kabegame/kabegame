@@ -110,7 +110,7 @@ SDK 还导出用于给 `crawl` 加类型的辅助（纯类型，无运行时开�
 | 类型 | 说明 |
 |---|---|
 | `kbCrawlFn<CustomCfg>` | `crawl` 入口的签名：`(common: KbCommonCfg, custom: CustomCfg) => void \| Promise<void>`。 |
-| `KbCommonCfg` | `common` 的形状：`{ base_url: string \| null }`。 |
+| `KbCommonCfg` | `common` 的形状：`{ baseUrl: string \| null; isDryRun: boolean }`。 |
 | `kbCustomCfg<Fields>` | 由字段列表构建 `custom` 的类型。 |
 | `kbCfgField<K, T, M>` | 描述一个 `custom` 字段。第三个泛型可用 `{ required: true }` 去掉 `null`，或用 `{ when: true }` 把 key 标为可选。 |
 | `kbCfgInt` / `kbCfgStr` / `kbCfgBool` / `kbCfgDate` / `kbCfgList<T>` / `kbCfgOption<T>` / `kbCfgCheckbox` | 各 `kbConfig` 变量类型对应的值类型。 |

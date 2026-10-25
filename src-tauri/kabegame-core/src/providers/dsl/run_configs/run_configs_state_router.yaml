@@ -1,0 +1,15 @@
+namespace: kabegame
+name: run_configs_state_router
+list:
+  "${row.state}":
+    sql: >-
+      SELECT CASE WHEN sub.schedule_enabled = 1 THEN 'enabled' ELSE 'paused' END AS state,
+      COUNT(*) AS count FROM (${composed}) AS sub GROUP BY state
+    data_var: row
+    provider: run_configs_state_provider
+    properties: { state: "${row.state}" }
+    meta: "${row}"
+resolve:
+  "(enabled|paused)":
+    provider: run_configs_state_provider
+    properties: { state: "${capture[1]}" }

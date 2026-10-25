@@ -56,6 +56,10 @@ mod v039_metadata_id_indexes;
 mod v040_album_images_order_index;
 mod v041_plugin_var_null;
 mod v042_surf_record_desktop_mode;
+mod v043_task_dry_run;
+mod v044_tasks_run_config_index;
+mod v045_schedule_spec_v2;
+mod v046_album_images_foreign_keys;
 
 use rusqlite::Connection;
 
@@ -246,13 +250,33 @@ const MIGRATIONS: &[Migration] = &[
         name: "surf_record_desktop_mode",
         up: v042_surf_record_desktop_mode::up,
     },
+    Migration {
+        version: 43,
+        name: "task_dry_run",
+        up: v043_task_dry_run::up,
+    },
+    Migration {
+        version: 44,
+        name: "tasks_run_config_index",
+        up: v044_tasks_run_config_index::up,
+    },
+    Migration {
+        version: 45,
+        name: "schedule_spec_v2",
+        up: v045_schedule_spec_v2::up,
+    },
+    Migration {
+        version: 46,
+        name: "album_images_foreign_keys",
+        up: v046_album_images_foreign_keys::up,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 42;
+pub const LATEST_VERSION: u32 = 46;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

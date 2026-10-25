@@ -1,0 +1,10 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_plugin_search_router",
+    "resolve": {
+        "(.+)": {
+            "provider": "tasks_plugin_search_provider",
+            "properties": { "q": "${capture[1]}" }
+        }
+    }
+}

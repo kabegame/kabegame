@@ -2,6 +2,29 @@
     "namespace": "kabegame",
     "name": "image_basic_provider",
     "query": {
+        // `images://x<N>x/<页>` / `images://id_<id>` 是原始行（organize 扫描、MCP）：逐列枚举 ImageInfo
+        // 用到的列（id 由根贡献），不用 `images.*`。`…/~~/rank/~~/id_<id>` 也经过这里，此时 FROM 是
+        // gallery 投影出的 CTE，所以这里的列必须是 gallery_route 字段的子集。
+        "fields": [
+            "images.url",
+            "images.local_path",
+            "images.plugin_id",
+            "images.task_id",
+            "images.surf_record_id",
+            "images.crawled_at",
+            "images.metadata_id",
+            "images.image_metadata_id",
+            "images.thumbnail_path",
+            "images.hash",
+            "images.type",
+            "images.width",
+            "images.height",
+            "images.display_name",
+            "images.last_set_wallpaper_at",
+            "images.size",
+            "images.compatible_path",
+            "images.post_url"
+        ],
         "order": [{ "sql": "images.id", "order": "asc" }]
     },
     "resolve": {

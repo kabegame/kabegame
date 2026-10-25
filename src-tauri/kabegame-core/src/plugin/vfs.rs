@@ -1,6 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io;
+#[cfg(target_os = "android")]
+use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -17,18 +20,39 @@ enum Access {
     ReadWrite,
 }
 
+/// 一次任务冻结时解析出的路径类变量挂载。
+#[derive(Debug)]
+pub struct InputMount {
+    /// 插件变量 key，对应虚拟路径 `/{handle}/input/<key>`
+    pub key: String,
+    pub kind: InputKind,
+    /// Android `content://` 打开的 fd，随 VFS 一起存活到任务结束。
+    #[cfg(target_os = "android")]
+    pub owned_fd: Option<OwnedFd>,
+}
+
+#[derive(Debug)]
+pub enum InputKind {
+    /// 文件变量：合成目录 `input/<key>` 下只有这一个文件名。
+    File { host: PathBuf, name: String },
+    /// 文件夹变量：整棵子树只读可见。
+    Dir { host: PathBuf },
+}
+
 #[derive(Debug)]
 pub struct PluginVfs {
     handle: u64,
     data_root: PathBuf,
     cache_root: PathBuf,
     tmp_root: PathBuf,
+    inputs: Vec<InputMount>,
     inner: RealFs,
     bytes_written: AtomicU64,
 }
 
 #[derive(Debug)]
 struct MountReadDir {
+    entries: Vec<FsDirEntry>,
     index: AtomicUsize,
 }
 
@@ -36,17 +60,26 @@ struct MountReadDir {
 impl FsReadDir for MountReadDir {
     async fn next(&self) -> FsResult<Option<FsDirEntry>> {
         let index = self.index.fetch_add(1, Ordering::Relaxed);
-        Ok(mount_entries().get(index).cloned())
+        Ok(self.entries.get(index).cloned())
     }
 }
 
-fn mount_entries() -> [FsDirEntry; 3] {
-    ["data", "cache", "tmp"].map(|name| FsDirEntry {
-        name: name.to_string(),
+fn dir_entry(name: impl Into<String>) -> FsDirEntry {
+    FsDirEntry {
+        name: name.into(),
         is_file: false,
         is_directory: true,
         is_symlink: false,
-    })
+    }
+}
+
+fn file_entry(name: impl Into<String>) -> FsDirEntry {
+    FsDirEntry {
+        name: name.into(),
+        is_file: true,
+        is_directory: false,
+        is_symlink: false,
+    }
 }
 
 fn permission_denied(message: impl Into<String>) -> FsError {
@@ -118,8 +151,41 @@ impl PluginVfs {
             data_root,
             cache_root,
             tmp_root,
+            inputs: Vec::new(),
             inner: RealFs,
             bytes_written: AtomicU64::new(0),
+        }
+    }
+
+    /// 挂载本次任务的路径类变量为只读 `input` 挂载点。
+    pub fn with_inputs(mut self, inputs: Vec<InputMount>) -> Self {
+        self.inputs = inputs;
+        self
+    }
+
+    /// 已挂载的输入变量 key，供任务构造时把 `config` 改写成虚拟路径。
+    pub fn input_keys(&self) -> Vec<&str> {
+        self.inputs.iter().map(|mount| mount.key.as_str()).collect()
+    }
+
+    /// 某个输入变量在脚本侧应使用的虚拟路径；未挂载时为 `None`。
+    pub fn input_virtual_path(&self, key: &str) -> Option<PathBuf> {
+        self.inputs
+            .iter()
+            .find(|mount| mount.key == key)
+            .map(|mount| self.input_virtual_path_of(mount))
+    }
+
+    /// 虚拟路径统一用 `/` 分隔：它会作为字符串交给 JS，也会被 `task-vfs://` URL 解析。
+    fn input_base_path(&self, key: &str) -> String {
+        format!("/{}/input/{key}", self.handle)
+    }
+
+    fn input_virtual_path_of(&self, mount: &InputMount) -> PathBuf {
+        let base = self.input_base_path(&mount.key);
+        match &mount.kind {
+            InputKind::File { name, .. } => PathBuf::from(format!("{base}/{name}")),
+            InputKind::Dir { .. } => PathBuf::from(base),
         }
     }
 
@@ -171,10 +237,11 @@ impl PluginVfs {
         ]
     }
 
-    /// 校验虚拟路径并翻译为插件私有的宿主路径。
+    /// 词法规范化虚拟路径：校验绝对路径 / handle，并折叠 `.` 与 `..`。
     ///
     /// `..` 只允许在 `/{handle}` 内折叠；尝试越过该会话根会立即失败。
-    fn resolve(&self, virtual_path: &Path, need: Access) -> FsResult<PathBuf> {
+    /// 返回路径中 `/{handle}` 之后的部分。
+    fn normalize_virtual(&self, virtual_path: &Path) -> FsResult<Vec<OsString>> {
         if !virtual_path.has_root() {
             return Err(permission_denied("插件 VFS 只接受绝对路径"));
         }
@@ -211,6 +278,12 @@ impl PluginVfs {
                 }
             }
         }
+        Ok(normalized)
+    }
+
+    /// 校验虚拟路径并翻译为插件私有的宿主路径。
+    fn resolve(&self, virtual_path: &Path, need: Access) -> FsResult<PathBuf> {
+        let normalized = self.normalize_virtual(virtual_path)?;
 
         if normalized.is_empty() {
             if need == Access::ReadWrite {
@@ -223,6 +296,9 @@ impl PluginVfs {
         let mount = normalized[0]
             .to_str()
             .ok_or_else(|| not_found("插件 VFS 挂载点不存在"))?;
+        if mount == "input" {
+            return self.resolve_input(&normalized[1..], need);
+        }
         let root = match mount {
             "data" => &self.data_root,
             "cache" => &self.cache_root,
@@ -240,30 +316,124 @@ impl PluginVfs {
         Ok(real_path)
     }
 
+    /// `input` 挂载只读：文件变量仅暴露 `input/<key>/<name>`，文件夹变量暴露整棵子树。
+    fn resolve_input(&self, rest: &[OsString], need: Access) -> FsResult<PathBuf> {
+        if self.inputs.is_empty() {
+            return Err(not_found("插件 VFS 挂载点不存在"));
+        }
+        if need == Access::ReadWrite {
+            return Err(permission_denied("插件 VFS 输入挂载为只读"));
+        }
+
+        let Some(key) = rest.first().and_then(|segment| segment.to_str()) else {
+            // `/{handle}/input` 是合成目录，与会话根一样不用于真实列目录。
+            return Ok(self.data_root.clone());
+        };
+        let mount = self
+            .inputs
+            .iter()
+            .find(|mount| mount.key == key)
+            .ok_or_else(|| not_found("插件 VFS 输入挂载不存在"))?;
+
+        match &mount.kind {
+            InputKind::File { host, name } => match rest {
+                // `input/<key>` 是合成目录：stat 用宿主文件的父目录，内容由
+                // `synthetic_dir_entries` 提供，不会泄漏同目录其它文件。
+                [_] => host
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .ok_or_else(|| not_found("插件 VFS 输入文件路径无效")),
+                // 文件变量只暴露这一个路径，多余层级一律 not found，不能忽略尾段读源文件。
+                [_, only] if only.to_str() == Some(name.as_str()) => Ok(host.clone()),
+                _ => Err(not_found("插件 VFS 输入文件不存在")),
+            },
+            InputKind::Dir { host } => {
+                self.check_input_symlinks(host, &rest[1..].iter().collect::<PathBuf>())?;
+                let mut real_path = host.clone();
+                real_path.extend(rest.iter().skip(1));
+                Ok(real_path)
+            }
+        }
+    }
+
+    /// 输入子树里任何一层软链接都拒绝：用户授权的是冻结时的真实目录，软链接可以逃出去。
+    fn check_input_symlinks(&self, root: &Path, relative: &Path) -> FsResult<()> {
+        let mut current = root.to_path_buf();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => continue,
+                Component::Normal(segment) => current.push(segment),
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(permission_denied("插件 VFS 输入路径包含非法路径段"));
+                }
+            }
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(permission_denied("插件 VFS 输入挂载拒绝软链接"));
+                }
+                Ok(_) => {}
+                // 不存在的尾段交给上层 API 报 NotFound；此前存在的层已确认不是软链接。
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_checked(&self, path: &CheckedPath, need: Access) -> FsResult<CheckedPathBuf> {
         self.resolve(path, need).map(CheckedPathBuf::unsafe_new)
     }
 
-    fn is_virtual_root(&self, virtual_path: &Path) -> bool {
-        if self.resolve(virtual_path, Access::ReadOnly).is_err() {
-            return false;
-        }
-
-        // `resolve` 已完成全部安全校验；这里仅重放词法深度，以区分合成会话根与
-        // 同样映射到 data_root 的 `/handle/data`。
-        let mut components = virtual_path.components();
-        let _ = components.next();
-        let _ = components.next();
-        let mut depth = 0usize;
-        for component in components {
-            match component {
-                Component::CurDir => {}
-                Component::Normal(_) => depth += 1,
-                Component::ParentDir => depth = depth.saturating_sub(1),
-                Component::RootDir | Component::Prefix(_) => return false,
+    /// 合成目录（会话根 / `input` 根 / 文件变量的 `input/<key>`）的条目；不是合成目录时返回 `None`。
+    fn synthetic_dir_entries(&self, virtual_path: &Path) -> Option<Vec<FsDirEntry>> {
+        let normalized = self.normalize_virtual(virtual_path).ok()?;
+        match normalized.as_slice() {
+            [] => {
+                let mut entries = vec![dir_entry("data"), dir_entry("cache"), dir_entry("tmp")];
+                if !self.inputs.is_empty() {
+                    entries.push(dir_entry("input"));
+                }
+                Some(entries)
             }
+            [mount] if mount.to_str() == Some("input") && !self.inputs.is_empty() => Some(
+                self.inputs
+                    .iter()
+                    .map(|mount| dir_entry(mount.key.as_str()))
+                    .collect(),
+            ),
+            [mount, key] if mount.to_str() == Some("input") => {
+                let found = self
+                    .inputs
+                    .iter()
+                    .find(|found| key.to_str() == Some(found.key.as_str()))?;
+                match &found.kind {
+                    InputKind::File { name, .. } => Some(vec![file_entry(name.as_str())]),
+                    // 文件夹挂载是真实目录，交给内核列目录。
+                    InputKind::Dir { .. } => None,
+                }
+            }
+            _ => None,
         }
-        depth == 0
+    }
+
+    /// 合成目录的规范虚拟路径（`/` 分隔，供 `realpath` 回传给脚本）。
+    fn synthetic_virtual_path(&self, virtual_path: &Path) -> Option<PathBuf> {
+        self.synthetic_dir_entries(virtual_path)?;
+        let normalized = self.normalize_virtual(virtual_path).ok()?;
+        let mut text = format!("/{}", self.handle);
+        for segment in &normalized {
+            text.push('/');
+            text.push_str(&segment.to_string_lossy());
+        }
+        Some(PathBuf::from(text))
+    }
+
+    /// 宿主路径是否落在某个输入挂载内。
+    fn is_input_real_path(&self, real_path: &Path) -> bool {
+        self.inputs.iter().any(|mount| match &mount.kind {
+            InputKind::File { host, .. } => host == real_path,
+            InputKind::Dir { host } => real_path.starts_with(host),
+        })
     }
 
     fn root_for_real_path<'a>(&'a self, path: &Path) -> Option<(&'static str, &'a Path, PathBuf)> {
@@ -283,6 +453,36 @@ impl PluginVfs {
             if let Ok(canonical_root) = std::fs::canonicalize(root) {
                 if let Ok(relative) = real_path.strip_prefix(canonical_root) {
                     return Ok(self.virtual_root().join(mount).join(relative));
+                }
+            }
+        }
+        for mount in &self.inputs {
+            match &mount.kind {
+                InputKind::File { host, name } => {
+                    if host == real_path {
+                        return Ok(PathBuf::from(format!(
+                            "{}/{name}",
+                            self.input_base_path(&mount.key)
+                        )));
+                    }
+                    // Android 的 `/proc/self/fd/N` 会被 realpath 解析成真实文件路径。
+                    if std::fs::canonicalize(host).is_ok_and(|canonical| canonical == real_path) {
+                        return Ok(PathBuf::from(format!(
+                            "{}/{name}",
+                            self.input_base_path(&mount.key)
+                        )));
+                    }
+                }
+                InputKind::Dir { host } => {
+                    let base = self.input_base_path(&mount.key);
+                    if let Ok(relative) = real_path.strip_prefix(host) {
+                        return Ok(PathBuf::from(base).join(relative));
+                    }
+                    if let Ok(canonical_host) = std::fs::canonicalize(host) {
+                        if let Ok(relative) = real_path.strip_prefix(canonical_host) {
+                            return Ok(PathBuf::from(base).join(relative));
+                        }
+                    }
                 }
             }
         }
@@ -487,8 +687,8 @@ impl FileSystem for PluginVfs {
     forward_async!(statfs_async, Access::ReadOnly, (bigint: bool), FsStatFs);
 
     fn realpath_sync(&self, path: &CheckedPath) -> FsResult<PathBuf> {
-        if self.is_virtual_root(path) {
-            return Ok(self.virtual_root());
+        if let Some(virtual_path) = self.synthetic_virtual_path(path) {
+            return Ok(virtual_path);
         }
         let path = self.resolve_checked(path, Access::ReadOnly)?;
         let real = self.inner.realpath_sync(&path.as_checked_path())?;
@@ -496,8 +696,8 @@ impl FileSystem for PluginVfs {
     }
 
     async fn realpath_async(&self, path: CheckedPathBuf) -> FsResult<PathBuf> {
-        if self.is_virtual_root(&path) {
-            return Ok(self.virtual_root());
+        if let Some(virtual_path) = self.synthetic_virtual_path(&path) {
+            return Ok(virtual_path);
         }
         let path = self.resolve_checked(&path.as_checked_path(), Access::ReadOnly)?;
         let real = self.inner.realpath_async(path).await?;
@@ -505,16 +705,17 @@ impl FileSystem for PluginVfs {
     }
 
     fn read_dir_sync(&self, path: &CheckedPath) -> FsResult<Vec<FsDirEntry>> {
-        if self.is_virtual_root(path) {
-            return Ok(mount_entries().into());
+        if let Some(entries) = self.synthetic_dir_entries(path) {
+            return Ok(entries);
         }
         let path = self.resolve_checked(path, Access::ReadOnly)?;
         self.inner.read_dir_sync(&path.as_checked_path())
     }
 
     async fn read_dir_async(&self, path: CheckedPathBuf) -> FsResult<FsReadDirRc> {
-        if self.is_virtual_root(&path) {
+        if let Some(entries) = self.synthetic_dir_entries(&path) {
             return Ok(deno_fs::sync::new_rc(MountReadDir {
+                entries,
                 index: AtomicUsize::new(0),
             }));
         }
@@ -540,6 +741,10 @@ impl FileSystem for PluginVfs {
 
     fn link_sync(&self, oldpath: &CheckedPath, newpath: &CheckedPath) -> FsResult<()> {
         let oldpath = self.resolve_checked(oldpath, Access::ReadOnly)?;
+        if self.is_input_real_path(&oldpath) {
+            // 硬链接会与用户文件共享 inode，绕开 input 的只读约束。
+            return Err(permission_denied("插件 VFS 不允许为输入挂载创建硬链接"));
+        }
         let newpath = self.resolve_checked(newpath, Access::ReadWrite)?;
         self.inner
             .link_sync(&oldpath.as_checked_path(), &newpath.as_checked_path())
@@ -547,6 +752,9 @@ impl FileSystem for PluginVfs {
 
     async fn link_async(&self, oldpath: CheckedPathBuf, newpath: CheckedPathBuf) -> FsResult<()> {
         let oldpath = self.resolve_checked(&oldpath.as_checked_path(), Access::ReadOnly)?;
+        if self.is_input_real_path(&oldpath) {
+            return Err(permission_denied("插件 VFS 不允许为输入挂载创建硬链接"));
+        }
         let newpath = self.resolve_checked(&newpath.as_checked_path(), Access::ReadWrite)?;
         self.inner.link_async(oldpath, newpath).await
     }
@@ -692,7 +900,7 @@ impl FileSystem for PluginVfs {
     }
 
     fn exists_sync(&self, path: &CheckedPath) -> bool {
-        if self.is_virtual_root(path) {
+        if self.synthetic_dir_entries(path).is_some() {
             return true;
         }
         self.resolve_checked(path, Access::ReadOnly)
@@ -700,7 +908,7 @@ impl FileSystem for PluginVfs {
     }
 
     async fn exists_async(&self, path: CheckedPathBuf) -> FsResult<bool> {
-        if self.is_virtual_root(&path) {
+        if self.synthetic_dir_entries(&path).is_some() {
             return Ok(true);
         }
         let path = self.resolve_checked(&path.as_checked_path(), Access::ReadOnly)?;
@@ -959,5 +1167,272 @@ mod tests {
             .host_path_for_read(Path::new("/4242/data/../../outside.mp4"))
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    fn file_mount(key: &str, host: PathBuf, name: &str) -> InputMount {
+        InputMount {
+            key: key.to_string(),
+            kind: InputKind::File {
+                host,
+                name: name.to_string(),
+            },
+            #[cfg(target_os = "android")]
+            owned_fd: None,
+        }
+    }
+
+    fn dir_mount(key: &str, host: PathBuf) -> InputMount {
+        InputMount {
+            key: key.to_string(),
+            kind: InputKind::Dir { host },
+            #[cfg(target_os = "android")]
+            owned_fd: None,
+        }
+    }
+
+    fn test_vfs_with(temp: &tempfile::TempDir, inputs: Vec<InputMount>) -> PluginVfs {
+        PluginVfs::from_roots(
+            HANDLE,
+            temp.path().join("data/plugin-test"),
+            temp.path().join("cache/plugin-test"),
+            temp.path().join("tmp/plugin-test"),
+        )
+        .with_inputs(inputs)
+    }
+
+    fn names(entries: &[FsDirEntry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.name.as_str()).collect()
+    }
+
+    #[test]
+    fn input_file_mount_exposes_one_read_only_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let picked = source.join("picked.png");
+        std::fs::write(&picked, b"png-bytes").unwrap();
+        std::fs::write(source.join("sibling.png"), b"hidden").unwrap();
+        let vfs = test_vfs_with(&temp, vec![file_mount("src", picked.clone(), "picked.png")]);
+
+        assert_eq!(
+            names(&vfs.read_dir_sync(&checked("/4242")).unwrap()),
+            ["data", "cache", "tmp", "input"]
+        );
+        assert_eq!(
+            names(&vfs.read_dir_sync(&checked("/4242/input")).unwrap()),
+            ["src"]
+        );
+        // 文件变量的合成目录里只有选中的那一个文件。
+        assert_eq!(
+            names(&vfs.read_dir_sync(&checked("/4242/input/src")).unwrap()),
+            ["picked.png"]
+        );
+
+        let contents = vfs
+            .read_file_sync(&checked("/4242/input/src/picked.png"), OpenOptions::read())
+            .unwrap();
+        assert_eq!(&*contents, b"png-bytes");
+        // 同目录的其它文件不可见。
+        let error = vfs
+            .read_file_sync(&checked("/4242/input/src/sibling.png"), OpenOptions::read())
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        // 文件变量只有 `input/<key>/<name>` 两层，多余尾段不能被忽略。
+        let error = vfs
+            .read_file_sync(
+                &checked("/4242/input/src/picked.png/extra"),
+                OpenOptions::read(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        assert_eq!(
+            vfs.realpath_sync(&checked("/4242/input/src/picked.png"))
+                .unwrap(),
+            PathBuf::from("/4242/input/src/picked.png")
+        );
+        assert_eq!(
+            vfs.realpath_sync(&checked("/4242/input")).unwrap(),
+            PathBuf::from("/4242/input")
+        );
+        assert!(vfs.exists_sync(&checked("/4242/input/src")));
+        // 文件变量的 `input/<key>` 是合成目录，stat 用宿主文件父目录。
+        assert!(
+            vfs.stat_sync(&checked("/4242/input/src"))
+                .unwrap()
+                .is_directory
+        );
+        assert_eq!(
+            vfs.input_virtual_path("src").unwrap(),
+            PathBuf::from("/4242/input/src/picked.png")
+        );
+        assert!(vfs.input_virtual_path("unknown").is_none());
+        assert_eq!(vfs.input_keys(), ["src"]);
+    }
+
+    #[test]
+    fn input_mounts_reject_every_write_and_allow_copy_out() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let picked = source.join("picked.png");
+        std::fs::write(&picked, b"png-bytes").unwrap();
+        let vfs = test_vfs_with(&temp, vec![file_mount("src", picked.clone(), "picked.png")]);
+
+        let virtual_file = checked("/4242/input/src/picked.png");
+        assert_eq!(
+            vfs.write_file_sync(&virtual_file, write_options(), b"x")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            vfs.mkdir_sync(&checked("/4242/input/new-dir"), false, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            vfs.remove_sync(&virtual_file, false).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            vfs.rename_sync(&virtual_file, &checked("/4242/tmp/picked.png"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        // 读取源之后复制到 tmp 是允许的（插件可以拿输入文件的副本继续处理）。
+        vfs.copy_file_sync(&virtual_file, &checked("/4242/tmp/copy.png"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(
+                vfs.host_path_for_read(Path::new("/4242/tmp/copy.png"))
+                    .unwrap()
+            )
+            .unwrap(),
+            b"png-bytes"
+        );
+        // 硬链接会与用户文件共享 inode，必须拒绝，否则可以借 tmp 改写只读输入。
+        assert_eq!(
+            vfs.link_sync(&virtual_file, &checked("/4242/tmp/link.png"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        // 用户源文件没有被改动。
+        assert_eq!(std::fs::read(&picked).unwrap(), b"png-bytes");
+    }
+
+    #[test]
+    fn input_dir_mount_exposes_subtree_read_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("folder");
+        std::fs::create_dir_all(folder.join("nested")).unwrap();
+        std::fs::write(folder.join("nested/a.txt"), b"a").unwrap();
+        let vfs = test_vfs_with(&temp, vec![dir_mount("dir", folder.clone())]);
+
+        assert_eq!(
+            names(&vfs.read_dir_sync(&checked("/4242/input/dir")).unwrap()),
+            ["nested"]
+        );
+        let contents = vfs
+            .read_file_sync(
+                &checked("/4242/input/dir/nested/a.txt"),
+                OpenOptions::read(),
+            )
+            .unwrap();
+        assert_eq!(&*contents, b"a");
+        assert_eq!(
+            vfs.realpath_sync(&checked("/4242/input/dir/nested/a.txt"))
+                .unwrap(),
+            PathBuf::from("/4242/input/dir/nested/a.txt")
+        );
+        assert_eq!(
+            vfs.input_virtual_path("dir").unwrap(),
+            PathBuf::from("/4242/input/dir")
+        );
+        assert_eq!(
+            vfs.write_file_sync(
+                &checked("/4242/input/dir/nested/a.txt"),
+                write_options(),
+                b"x"
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        // `..` 只能在会话根内折叠，越过会话根立即失败。
+        assert_eq!(
+            vfs.resolve(
+                Path::new("/4242/input/dir/../../../etc/passwd"),
+                Access::ReadOnly
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn input_dir_mount_rejects_symlinks_inside_subtree() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("folder");
+        std::fs::create_dir_all(folder.join("nested")).unwrap();
+        let outside = temp.path().join("outside.txt");
+        std::fs::write(&outside, b"secret").unwrap();
+        symlink(&outside, folder.join("escape.txt")).unwrap();
+        symlink(&outside, folder.join("nested/inner-escape.txt")).unwrap();
+        let vfs = test_vfs_with(&temp, vec![dir_mount("dir", folder)]);
+
+        for path in [
+            "/4242/input/dir/escape.txt",
+            "/4242/input/dir/nested/inner-escape.txt",
+        ] {
+            assert_eq!(
+                vfs.read_file_sync(&checked(path), OpenOptions::read())
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::PermissionDenied,
+                "{path}"
+            );
+            assert_eq!(
+                vfs.realpath_sync(&checked(path)).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn input_mounts_are_absent_without_inputs() {
+        let test = test_vfs();
+        assert!(test.vfs.input_keys().is_empty());
+        assert_eq!(
+            test.vfs
+                .resolve(Path::new("/4242/input/x"), Access::ReadOnly)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            test.vfs
+                .read_dir_sync(&checked("/4242/input"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            names(
+                &test
+                    .vfs
+                    .read_dir_sync(&checked(test.vfs.virtual_root()))
+                    .unwrap()
+            ),
+            ["data", "cache", "tmp"]
+        );
     }
 }

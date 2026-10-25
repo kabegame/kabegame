@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use super::{EngineError, Provider};
 use crate::ast::{JoinKind, WhereQuery};
+use crate::compose::build::is_plain_table_name;
 use crate::compose::ProviderQuery;
 
 /// 路径段经组合器解释后的形态。
@@ -38,7 +39,8 @@ pub(crate) enum SegmentKind {
     /// 闭合当前组。
     Close,
     /// `~~` 子查询边界：此前的 composed 整体成为 FROM，从 schema 根重新折叠。
-    Nest,
+    /// `~~<别名>` 指定外层引用内层用的别名（简单、非关键字标识符）；`None` 时用 schema 表名。
+    Nest(Option<String>),
     /// 未转义的 `~` 前缀保留段。
     Reserved(String),
     /// 普通路径段（已解反斜线转义，或无需转义而原样保留）。
@@ -68,7 +70,10 @@ pub(crate) fn classify_segment(seg: &str) -> SegmentKind {
         "~or" => SegmentKind::Branch,
         "~not" => SegmentKind::OpenNot,
         "~end" => SegmentKind::Close,
-        "~~" => SegmentKind::Nest,
+        "~~" => SegmentKind::Nest(None),
+        _ if seg.strip_prefix("~~").is_some_and(is_plain_table_name) => {
+            SegmentKind::Nest(Some(seg[2..].to_string()))
+        }
         _ if seg.starts_with('~') => SegmentKind::Reserved(seg.to_string()),
         _ if seg.contains('\\') => SegmentKind::Literal(unescape_path_segment(seg)),
         // percent-decode 过渡兜底已移除：percent 是传输层职责，在 URI 边界
@@ -350,13 +355,18 @@ mod tests {
         assert_eq!(classify_segment("~or"), SegmentKind::Branch);
         assert_eq!(classify_segment("~not"), SegmentKind::OpenNot);
         assert_eq!(classify_segment("~end"), SegmentKind::Close);
-        assert_eq!(classify_segment("~~"), SegmentKind::Nest);
+        assert_eq!(classify_segment("~~"), SegmentKind::Nest(None));
+        assert_eq!(classify_segment("~~p"), SegmentKind::Nest(Some("p".into())));
     }
 
     #[test]
     fn nest_marker_is_exact_and_escapable() {
-        // 只有恰好 `~~` 是边界; 带后缀仍是保留段 (见下), 转义后是字面
+        // 只有 `~~` 与 `~~<别名>` 是边界; 别名非法仍是保留段 (见下), 转义后是字面
         assert_eq!(classify_segment(r"\~~"), SegmentKind::Literal("~~".into()));
+        assert_eq!(
+            classify_segment(r"\~~p"),
+            SegmentKind::Literal("~~p".into())
+        );
         assert_eq!(escape_path_segment("~~"), r"\~~");
         assert_eq!(
             classify_segment(&escape_path_segment("~~")),
@@ -386,12 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_double_tilde_segments_are_reserved() {
+    fn unknown_and_invalid_nest_alias_segments_are_reserved() {
         assert_eq!(classify_segment("~x"), SegmentKind::Reserved("~x".into()));
-        assert_eq!(
-            classify_segment("~~foo"),
-            SegmentKind::Reserved("~~foo".into())
-        );
+        // `~~` 后缀不是简单、非关键字标识符时不当边界
+        for seg in ["~~foo-bar", "~~1p", "~~select", "~~~", "~~p.q"] {
+            assert_eq!(classify_segment(seg), SegmentKind::Reserved(seg.into()));
+        }
     }
 
     #[test]
@@ -631,14 +641,18 @@ mod tests {
     fn branch_without_group_rejected() {
         let mut stack = GroupStack::default();
         let err = expect_err(stack.branch("p", &q_with_wheres(&[])));
-        assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("without an enclosing")));
+        assert!(
+            matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("without an enclosing"))
+        );
     }
 
     #[test]
     fn close_without_group_rejected() {
         let mut stack = GroupStack::default();
         let err = expect_err(stack.close("p", &q_with_wheres(&[])));
-        assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("without a matching")));
+        assert!(
+            matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("without a matching"))
+        );
     }
 
     #[test]
@@ -647,7 +661,9 @@ mod tests {
         let base = q_with_wheres(&[]);
         stack.open(GroupKind::Not, None, &base);
         let err = expect_err(stack.branch("p", &base));
-        assert!(matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("not allowed inside")));
+        assert!(
+            matches!(err, EngineError::WhereGroup(_, msg) if msg.contains("not allowed inside"))
+        );
     }
 
     #[test]

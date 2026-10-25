@@ -19,8 +19,8 @@
 `--data` 参数），再以
 短超时执行 `IpcClient::connect()` 与 `Status`：
 
-1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v2：加入任务并发实时调整变体和
-   `PluginRunParams.max_concurrent_downloads`）；
+1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v3：`PluginRunParams.dryRun` 更名为
+   `printConfig`，并新增真正执行任务的 `isDryRun`）；
 2. `Status.dataDir` 与 CLI 的数据目录规范化后相同。
 
 两项都满足才选 `App`。socket / 命名管道地址按 `debug_assertions` 区分：debug 构建（`deno task dev` 的
@@ -44,6 +44,9 @@ profile 区分，不按 `kabegame_data` 区分（debug 构建可以是 `--data p
 并把 `--max-downloads` 写入 `PluginRunParams.max_concurrent_downloads`，再通过
 `commands::task::start_task` 提交。app handler 传 `webview_available=true`（Android 除外），
 CLI local 传 `false`；因此 app 模式可运行 WebView，local 模式只运行 V8。
+
+`plugin run --print-config` 只解析并打印最终配置，不创建任务；`--dry-run` 会创建并完整运行任务，
+但下载、metadata 和本地导入写入由宿主短路。v3 字段变化会让新版 CLI 在连接旧主程序时自动回退本地执行。
 
 ### TaskSetMaxConcurrentDownloads
 

@@ -25,8 +25,8 @@ pub use query::{
     album_preview_at, child_runtime_path, count_at, decode_provider_path_segments,
     failed_images_at, gallery_date_groups_at, gallery_day_groups_at, gallery_media_type_counts_at,
     gallery_plugin_groups_at, gallery_time_filter_payload_at, gallery_total_count_at, images_at,
-    metadata_at, metadata_full_at, organize_batch_at, query_entry, query_fetch, query_list,
-    runtime_path, ProviderEntry, ProviderListChild, ProviderNote,
+    metadata_at, metadata_full_at, organize_batch_at, query_all, query_entry, query_fetch,
+    query_list, runtime_path, PathqlQuery, ProviderEntry, ProviderListChild, ProviderNote,
 };
 
 /// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。

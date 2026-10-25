@@ -13,7 +13,7 @@
     -> worker 取 Arc<Task>，把任务置为 Running
     -> WebView 分支初始化 Task.page_stack 顶部 initial 页面，并 begin_webview_session()
     -> AppCrawlerWebViewHandler 创建 label=`crawler-<task_id>` 的独立 WebView 窗口并加载 base_url/about:blank
-    -> startup.rs 从 Task.params.plugin 读取 crawl.js，从 Task.params.config 读取冻结配置，并读取已解析的应用语言，烘焙进 bootstrap 的三个占位符
+    -> startup.rs 从 Task.params.plugin 读取 crawl.js，从 Task.params.config 读取冻结配置，并读取公共参数与已解析的应用语言，烘焙进 bootstrap 的四个占位符
     -> 页面每次加载执行 media_capture.js -> media_download.js -> bootstrap
     -> crawl.js 通过 Kabegame.pageLabel()/pageState()/state() 读取 Task 内状态
     -> Kabegame.to()/back() 直接维护 Task.page_stack 并 navigate
@@ -87,7 +87,7 @@ Tauri initialization script 在每次页面加载时执行：
 4. 烘焙后的 `bootstrap.js` 捕获并隐藏 `__TAURI_INTERNALS__`。
 5. 闭包内构造 `Kabegame`，直接执行插件 `crawl.js`。
 
-bootstrap 的三个占位符分别承载冻结配置 JSON、已解析语言的 JSON 字符串字面量和插件 `crawl.js`；每个占位符字面量在模板中只能出现一次。`Kabegame.getLang()` 同步返回建窗时烘焙的语言常量。
+bootstrap 的四个占位符分别承载冻结配置 JSON、公共参数 JSON、已解析语言的 JSON 字符串字面量和插件 `crawl.js`；每个占位符字面量在模板中只能出现一次。`Kabegame.getLang()` 同步返回建窗时烘焙的语言常量。
 
 跨页状态不能依赖上一页 JS 变量；应使用 `Kabegame.state()` / `updateState()` 与 `Kabegame.pageState()` / `updatePageState()`。
 
@@ -184,3 +184,10 @@ const off = Kabegame.onNativeDownload((payload) => {
 - WebView 后端桌面（隐藏 CEF 窗口）与 Android（`CrawlerActivity` 宿主 + 停靠容器）都可用；两端共用同一份初始化脚本、`crawl_*` 命令与 page stack。
 - `Task` 内部锁使用 std 锁，调用方不得跨 `.await` 持有这些锁。
 - `TaskScheduler` 队列只保存 `task_id`，运行参数一律从 `TaskScheduler::get_run(task_id)` 读取。
+
+## WebView 任务公共参数
+
+bootstrap 在建窗时把 `{ baseUrl, isDryRun }` 烘焙为冻结的 `Kabegame.common`；用户插件变量仍只放在
+`Kabegame.vars`，避免与用户配置 key 冲突。V8 的 `crawl(common, custom)` 同样能读取
+`common.isDryRun`。空跑不改变页面加载、请求、解析、日志、进度或任务收尾，只由下载、metadata 与
+local-import 三个宿主写入点统一短路。

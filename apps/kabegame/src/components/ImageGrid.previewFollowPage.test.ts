@@ -4,16 +4,14 @@ import { computed, nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImageGrid from "./ImageGrid.vue";
 import type { GridAdapter } from "@/components/imageGrid/types";
-import type { RowsSnapshot } from "@/services/liveQuery";
-import { pathqlView } from "@/services/pathql";
+import type { EventTrigger, PathqlRows as RowsSnapshot } from "@/services/kbEvents";
 import { withPaged } from "@/utils/galleryPath";
 
 const locateImageRowIndex = vi.hoisted(() => vi.fn<(view: string, id: string) => Promise<number | null>>());
 const jumpToPage = vi.hoisted(() => vi.fn<(page: number) => Promise<void>>());
 const refetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const totalRefetch = vi.hoisted(() => vi.fn<() => Promise<void>>());
-const pathqlViewMock = vi.hoisted(() => vi.fn());
-const pathqlCountMock = vi.hoisted(() => vi.fn());
+const pathqlAllMock = vi.hoisted(() => vi.fn());
 const handlePreviewPageBoundary = vi.hoisted(() => vi.fn());
 const previewImageId = ref("");
 const queryLoading = ref(false);
@@ -24,6 +22,9 @@ const routeStore = reactive({
   navigate: vi.fn(async () => {}),
   syncFromUrl: vi.fn(),
 });
+const requestedRowPaths: string[] = [];
+let rowTriggers: readonly EventTrigger[] = [];
+let countTriggers: readonly EventTrigger[] = [];
 let applySnapshot: ((snapshot: RowsSnapshot) => Promise<void>) | null = null;
 const settings = reactive({
   values: {
@@ -39,29 +40,52 @@ vi.mock("@/services/imageLocate", () => ({
   pageOfRowIndex: (rowIndex: number, pageSize: number) => Math.floor((rowIndex - 1) / pageSize) + 1,
 }));
 vi.mock("@/services/pathql", () => ({
-  pathqlView: pathqlViewMock,
-  pathqlCount: pathqlCountMock,
+  pathqlAll: pathqlAllMock,
   pathqlEntry: vi.fn(),
   pathqlList: vi.fn(),
   pathqlFetch: vi.fn(),
 }));
-vi.mock("@/services/liveQuery", () => ({
-  GRID_REFRESH_WAIT_MS: 500,
-  useLiveQuery: (opts: {
-    key: () => string | null;
-    read: unknown;
-    onResult: (snapshot: RowsSnapshot) => Promise<void> | void;
-  }) => {
-    const isRows = opts.read === pathqlView;
-    if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
-    return {
-      loading: isRows ? queryLoading : ref(false),
-      refetch: isRows ? refetch : totalRefetch,
-      apply: opts.onResult,
-      key: opts.key,
-    };
-  },
-}));
+vi.mock("@/services/kbEvents", async () => {
+  const { NEVER } = await import("rxjs");
+  const { deletedTrigger } = await vi.importActual<typeof import("@/services/kbEvents/imageViewRelevance")>(
+    "@/services/kbEvents/imageViewRelevance",
+  );
+  return {
+    deletedTrigger,
+    GRID_REFRESH_WAIT_MS: 500,
+    triggers$: () => NEVER,
+    imagePatches$: () => NEVER,
+    on: (event: string, relevant: (payload: unknown) => boolean = () => true) => ({ event, relevant }),
+    batchWindow: () => (source: unknown) => source,
+    usePathqlLooker: (opts: {
+      kind: "rows" | "all";
+      refreshOn: readonly EventTrigger[];
+      onResult: (snapshot: RowsSnapshot) => Promise<void> | void;
+    }) => {
+      const isRows = opts.kind === "rows";
+      if (isRows) rowTriggers = opts.refreshOn;
+      if (isRows) applySnapshot = async (snapshot) => void (await opts.onResult(snapshot));
+      return { loading: isRows ? queryLoading : ref(false) };
+    },
+    usePathqlLookAll: (opts: { queries: () => readonly unknown[] | null; refreshOn: readonly EventTrigger[] }) => {
+      countTriggers = opts.refreshOn;
+      return {
+        loading: ref(false),
+        error: ref(null),
+        key: () => {
+          const queries = opts.queries();
+          return queries?.length ? JSON.stringify(queries) : null;
+        },
+      };
+    },
+    pathqlRequest$: {
+      next: ([kind, key]: readonly ["rows" | "all", string]) => {
+        if (kind === "rows") requestedRowPaths.push(key);
+        void (kind === "rows" ? refetch() : totalRefetch());
+      },
+    },
+  };
+});
 vi.mock("@/composables/usePagedGallery", () => ({
   usePagedGallery: () => {
     const viewBody = computed(() => routeStore.computedPath);
@@ -75,7 +99,6 @@ vi.mock("@/composables/usePagedGallery", () => ({
       pendingPreviewBoundary,
       handleJumpToPage: jumpToPage,
       handlePreviewPageBoundary,
-      loadTotalImagesCount: vi.fn(),
       ensureValidPageAfterMassRemoval: vi.fn(async () => {}),
     };
   },
@@ -87,13 +110,16 @@ vi.mock("@/composables/useImageMetadataCache", () => ({
   useProvideImageMetadataCache: () => ({ clearCache: vi.fn() }),
 }));
 vi.mock("@/composables/useImageOperations", () => ({ useImageOperations: () => ({}) }));
-vi.mock("@/services/dataChangeHub", () => ({ subscribeChanges: () => vi.fn() }));
 vi.mock("@/stores/galleryRoute", () => ({ useGalleryRouteStore: () => routeStore }));
 vi.mock("@/stores/settings", () => ({
   useSettingsStore: () => settings,
 }));
 vi.mock("@/stores/plugins", () => ({ usePluginStore: () => ({ plugins: [] }) }));
 vi.mock("@/stores/ui", () => ({ useUiStore: () => ({ isCompact: false }) }));
+// 预览弹窗会用它把 kamechan 在预览期间隐藏；不 mock 会在没有 Pinia 的测试里触发 useStore。
+vi.mock("@/stores/kameMessage", () => ({
+  useKameMessageStore: () => ({ setKamechanHidden: vi.fn() }),
+}));
 vi.mock("vue-router", () => ({
   useRoute: () => reactive({ path: "/gallery", query: {} }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -115,13 +141,16 @@ function snapshot(ids: string[], seq: number): RowsSnapshot {
   };
 }
 
-function mountGrid() {
+function mountGrid(overrides: Partial<GridAdapter> = {}) {
   const adapter: GridAdapter = {
     id: "gallery",
     routeStore,
+    viewState: () => ({ query: [], sort: { field: "by-time", desc: false }, hide: true }),
     isActive: () => true,
     computeCountPath: () => "hide",
+    refreshOn: [],
     remove: { dialogText: () => ({ title: "remove", message: "remove" }) },
+    ...overrides,
   };
   const wrapper = shallowMount(ImageGrid, { props: { adapter } });
   wrappers.push(wrapper);
@@ -149,6 +178,7 @@ beforeEach(() => {
   currentPage.value = 1;
   routeStore.computedPath = "hide/sort/by-time/_kb_desc";
   applySnapshot = null;
+  requestedRowPaths.length = 0;
   pendingPreviewBoundary.value = null;
   refetch.mockReset();
   totalRefetch.mockReset();
@@ -166,6 +196,16 @@ afterEach(() => {
 });
 
 describe("预览跟随后台新增图片", () => {
+  it("行请求走 lookup，翻页只改变窄路由内层页码", async () => {
+    await render();
+    expect(requestedRowPaths).toEqual(["filter/hide/sort/by-time/_kb_desc/_kb_x2x/1/~~/rank/~~p/lookup/gallery"]);
+    const countCalls = totalRefetch.mock.calls.length;
+    currentPage.value = 2;
+    await nextTick();
+    expect(requestedRowPaths.at(-1)).toBe("filter/hide/sort/by-time/_kb_desc/_kb_x2x/2/~~/rank/~~p/lookup/gallery");
+    expect(totalRefetch.mock.calls.length).toBe(countCalls);
+  });
+
   it("挂载后只写不读 URL：外部改 pvwimgid 不改变预览目标", async () => {
     const wrapper = await render();
     previewImageId.value = "other";
@@ -303,6 +343,7 @@ describe("预览跟随后台新增图片", () => {
     const wrapper = await render();
     const core = wrapper.getComponent({ name: "ImageGridCore" });
     const originalImage = core.props("previewImage");
+    refetch.mockClear(); // 挂载时按路径发出的请求不计
     locateImageRowIndex.mockResolvedValue(1);
     refetch.mockImplementation(async () => applySnapshot!(snapshot(["new-2", "new-1"], 2)));
     await applySnapshot!(snapshot(["new-2", "new-1"], 2));
@@ -650,5 +691,60 @@ describe("列表读取在途时切图", () => {
     await nextTick();
     expect(core.props("previewImage")).toMatchObject({ id: "next-image" });
     expect(locateImageRowIndex).not.toHaveBeenCalled();
+  });
+});
+
+describe("ImageGrid 删除相关性", () => {
+  it("成员删除可定位的画册总数不听 images-deleted，行仍保留持有 id 判断", async () => {
+    const member: EventTrigger = {
+      event: "album-images-deleted",
+      relevant: (p) => (p as { albumId: string }).albumId === "self",
+    };
+    mountGrid({ deletesViaMembership: true, refreshOn: [member] });
+    await applySnapshot!(snapshot(["a"], 1));
+    expect(countTriggers.some((t) => t.event === "images-deleted")).toBe(false);
+    expect(
+      countTriggers.some(
+        (t) => t.event === "album-images-deleted" && t.relevant({ albumId: "self", imagesDeleted: true }),
+      ),
+    ).toBe(true);
+    expect(
+      countTriggers.some(
+        (t) => t.event === "album-images-deleted" && t.relevant({ albumId: "other", imagesDeleted: true }),
+      ),
+    ).toBe(false);
+    expect(rowTriggers.find((t) => t.event === "images-deleted")!.relevant({ imageIds: ["a"] })).toBe(true);
+  });
+  it("总数任何删除都刷新，不看当前持有的行", async () => {
+    mountGrid();
+    await applySnapshot!(snapshot(["a", "b"], 1));
+    const trigger = countTriggers.find((entry) => entry.event === "images-deleted")!;
+    expect(trigger.relevant({ imageIds: ["off-page"] })).toBe(true);
+    expect(trigger.relevant({ imageIds: ["b"] })).toBe(true);
+  });
+  it("行按包含判断，并读取最新持有的行", async () => {
+    mountGrid();
+    await applySnapshot!(snapshot(["a", "b"], 1));
+    const trigger = rowTriggers.find((entry) => entry.event === "images-deleted")!;
+    expect(trigger.relevant({ imageIds: ["off-page"] })).toBe(false);
+    expect(trigger.relevant({ imageIds: [] })).toBe(false);
+    expect(trigger.relevant({ imageIds: ["off-page", "b"] })).toBe(true);
+    await applySnapshot!(snapshot(["c"], 2));
+    expect(trigger.relevant({ imageIds: ["a"] })).toBe(false);
+    expect(trigger.relevant({ imageIds: ["c"] })).toBe(true);
+  });
+});
+
+describe("ImageGrid 分母相关性", () => {
+  it("有分母时总数对任何新增刷新，行不受影响；无分母时不追加", async () => {
+    let unfiltered: string | null = "hide";
+    mountGrid({ computeUnfilteredCountPath: () => unfiltered });
+    await applySnapshot!(snapshot(["a"], 1));
+    const added = (triggers: readonly EventTrigger[]) =>
+      triggers.some((entry) => entry.event === "images-added" && entry.relevant({ images: [{ id: "new" }] }));
+    expect(added(countTriggers)).toBe(true);
+    expect(added(rowTriggers)).toBe(false);
+    unfiltered = null;
+    expect(added(countTriggers)).toBe(false);
   });
 });

@@ -40,6 +40,7 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
 import { decreasedTaskConcurrency, effectiveTaskConcurrency, increasedTaskConcurrency } from "./taskConcurrency";
+import type { CrawlTask } from "@/stores/crawler";
 
 const props = defineProps<{
   taskId: string;
@@ -47,6 +48,7 @@ const props = defineProps<{
   inFlight: number;
   editable: boolean;
 }>();
+const emit = defineEmits<{ (e: "updated", task: CrawlTask): void }>();
 
 const { t } = useI18n();
 const crawlerStore = useCrawlerStore();
@@ -64,7 +66,8 @@ async function update(value: number | null) {
   if (busy.value) return;
   busy.value = true;
   try {
-    await crawlerStore.setTaskMaxConcurrentDownloads(props.taskId, value);
+    const task = await crawlerStore.setTaskMaxConcurrentDownloads(props.taskId, value);
+    emit("updated", task);
   } catch (error) {
     console.error("更新任务并发失败:", error);
     ElMessage.error(t("tasks.concurrencyUpdateFailed"));

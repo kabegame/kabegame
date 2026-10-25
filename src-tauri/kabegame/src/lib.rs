@@ -15,6 +15,7 @@ mod commands;
 /// 构建变体上报（web/android/standard）。web 与桌面路径共用，故不随 web/not-web 门控。
 mod build_mode;
 mod debug_ingest;
+mod plugin_file_server;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
 mod content_io_provider;
@@ -511,8 +512,8 @@ pub(crate) fn configure_app(
             pathql_entry,
             pathql_list,
             pathql_fetch,
-            pathql_view,
             pathql_count,
+            pathql_all,
             toggle_image_favorite,
             // --- Tasks ---
             get_all_tasks,
@@ -542,7 +543,6 @@ pub(crate) fn configure_app(
             surf_get_all_records,
             surf_get_records_by_ids,
             surf_get_record,
-            surf_get_record_images,
             surf_update_root_url,
             surf_update_name,
             surf_delete_record,

@@ -58,6 +58,12 @@
           :picker-title="$t('albums.parentAlbum')"
         />
       </el-form-item>
+      <el-form-item :label="$t('plugins.dryRun')">
+        <div class="flex items-center gap-2">
+          <el-switch v-model="isDryRun" />
+          <span class="text-sm text-[var(--anime-text-secondary)]">{{ $t("plugins.dryRunDesc") }}</span>
+        </div>
+      </el-form-item>
 
       <!-- Header 只对 V8 后端生效；WebView 的身份只来自浏览器会话 -->
       <template v-if="isV8">
@@ -154,6 +160,7 @@ const form = ref({ url: "", outputDir: "", vars: {} as Record<string, any> });
 const headers = ref<Record<string, string>>({});
 const urlError = ref<WebpageUrlError | null>(null);
 const submitting = ref(false);
+const isDryRun = ref(false);
 
 const isV8 = computed(() => form.value.vars.backend !== "webview");
 const urlErrorText = computed(() => (urlError.value ? t(`gallery.webpageUrlError.${urlError.value}`) : ""));
@@ -175,6 +182,7 @@ function resetForm() {
   headers.value = {};
   urlError.value = null;
   selectedOutputAlbumId.value = null;
+  isDryRun.value = false;
   newOutputAlbumName.value = "";
   newOutputAlbumParentId.value = null;
 }
@@ -195,6 +203,7 @@ watch(
         );
         headers.value = { ...(props.initialConfig.httpHeaders ?? {}) };
         selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
+        isDryRun.value = props.initialConfig.isDryRun ?? false;
       }
       modal.open();
     } else {
@@ -259,6 +268,7 @@ async function handleSubmit() {
       userConfig,
       outputAlbumId,
       httpHeaders,
+      isDryRun: isDryRun.value,
       triggerSource: "manual",
     });
     if (!added) {

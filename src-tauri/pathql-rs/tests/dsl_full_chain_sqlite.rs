@@ -47,6 +47,10 @@ const PROVIDER_FILES: &[&str] = &[
     "images/images_root_provider.json5",
     "images/image_basic_provider.json5",
     "images/gallery/gallery_route.json5",
+    // 画廊宽入口与窄路由拆分后，全链路夹具也注册对应依赖。
+    "images/gallery/gallery_router.json5",
+    "images/gallery/gallery_entry_router.json5",
+    "images/images_lookup_provider.json5",
     "images/gallery/gallery_hide_router.json5",
     "images/gallery/all_router/gallery_all_router.json5",
     "kb_global.json5",

@@ -1,7 +1,6 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { invoke, listen, type UnlistenFn } from "../api";
-import type { ImageInfo } from "../types/image";
 
 export interface SurfRecord {
   id: string;
@@ -14,19 +13,11 @@ export interface SurfRecord {
   createdAt: number;
   /** 安卓畅游：该站点是否以桌面版网站打开。本期只在原生菜单里可见。 */
   desktopMode?: boolean;
-  lastImage?: ImageInfo | null;
 }
 
 export interface SurfSessionStatus {
   active: boolean;
   surfHost?: string | null;
-}
-
-interface RangedImages {
-  images: ImageInfo[];
-  total: number;
-  offset: number;
-  limit: number;
 }
 
 function normalizeHost(host: string) {
@@ -47,7 +38,6 @@ function normalizeSurfRecord(raw: unknown): SurfRecord | null {
     icon: Array.isArray(r.icon) ? (r.icon as number[]) : null,
     lastVisitAt: Number(r.lastVisitAt ?? r.last_visit_at ?? 0) || 0,
     createdAt: Number(r.createdAt ?? r.created_at ?? 0) || 0,
-    lastImage: (r.lastImage ?? r.last_image) as ImageInfo | null | undefined,
   };
 }
 
@@ -232,10 +222,6 @@ export const useSurfStore = defineStore("surf", () => {
     return ensureRecordByHost(host);
   }
 
-  async function getRecordImages(host: string, localOffset: number, limit: number) {
-    return invoke<RangedImages>("surf_get_record_images", { host, offset: localOffset, limit });
-  }
-
   /** Android：把站点固定到桌面。请求发出后系统 Toast 已提示，失败时抛错。 */
   async function pinShortcut(host: string) {
     await invoke("surf_pin_shortcut", { host: normalizeHost(host) });
@@ -277,7 +263,6 @@ export const useSurfStore = defineStore("surf", () => {
     ensureRecordsByIds,
     ensureRecordByHost,
     getRecord,
-    getRecordImages,
     startSession,
     closeSession,
     pinShortcut,

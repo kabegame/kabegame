@@ -1,7 +1,9 @@
+import type { Plugin } from "@/stores/plugins";
+import { pluginFileUrl } from "./fileUrl";
 /**
  * 插件资源路径归一化。
  *
- * 这是 `kbAssets` 项、文档 md 里的引用串、后端 `Plugin.assets[].key`
+ * 这是 `kbAssets` 项、文档 md 里的引用串、后端 `Plugin.assetKeys`
  * 三者的**唯一裁决者**：三者都使用归一化后的插件根相对路径。
  *
  * 同构 Rust 实现：`src-tauri/kabegame-core/src/plugin/assets.rs::normalize_asset_path`
@@ -72,47 +74,6 @@ export function normalizeAssetPath(raw: string): string | null {
   return key || null;
 }
 
-/** 按扩展名猜 MIME；与 Rust `assets.rs::mime_for_asset` 及打包器白名单口径一致。 */
-export function guessAssetMime(pathOrKey: string): string {
-  const ext = pathOrKey.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "gif":
-      return "image/gif";
-    case "webp":
-      return "image/webp";
-    case "avif":
-      return "image/avif";
-    case "bmp":
-      return "image/bmp";
-    default:
-      return "image/png";
-  }
-}
-
-/** 后端下发的单个插件资源；所在数组顺序与 `kbAssets` 声明顺序一致。 */
-export interface PluginAsset {
-  key: string;
-  dataBase64: string;
-}
-
-/** 判断持久缓存中的资源字段是否已使用当前数组协议。 */
-export function isPluginAssetList(value: unknown): value is PluginAsset[] | null | undefined {
-  return (
-    value == null ||
-    (Array.isArray(value) &&
-      value.every(
-        (asset) =>
-          typeof asset === "object" &&
-          asset !== null &&
-          typeof (asset as PluginAsset).key === "string" &&
-          typeof (asset as PluginAsset).dataBase64 === "string",
-      ))
-  );
-}
-
 /**
  * 是否是「展示位」资源：完整归一化路径以 `banner` 开头，大小写不敏感。
  *
@@ -124,15 +85,8 @@ export function isBannerAsset(key: string): boolean {
   return key.toLowerCase().startsWith("banner");
 }
 
-/**
- * 从已安装插件的 `Plugin.assets` 挑出展示位图，并按数组原顺序转成走马灯素材。
- */
-export function bannerPreviewImages(assets?: PluginAsset[] | null): { key: string; src: string }[] {
-  if (!assets) return [];
-  return assets
-    .filter((asset) => isBannerAsset(asset.key))
-    .map((asset) => ({
-      key: asset.key,
-      src: `data:${guessAssetMime(asset.key)};base64,${asset.dataBase64}`,
-    }));
+/** 按清单声明顺序生成展示位图片 URL。 */
+export function bannerPreviewImages(plugin?: Plugin | null): { key: string; src: string }[] {
+  if (!plugin) return [];
+  return (plugin.assetKeys ?? []).filter(isBannerAsset).map((key) => ({ key, src: pluginFileUrl(plugin, key) }));
 }

@@ -1,0 +1,13 @@
+namespace: kabegame
+name: run_configs_mode_router
+list:
+  "${row.schedule_mode}":
+    sql: SELECT sub.schedule_mode, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY sub.schedule_mode
+    data_var: row
+    provider: run_configs_mode_provider
+    properties: { mode: "${row.schedule_mode}" }
+    meta: "${row}"
+resolve:
+  "(interval|hourly|daily|weekly|none)":
+    provider: run_configs_mode_provider
+    properties: { mode: "${capture[1]}" }

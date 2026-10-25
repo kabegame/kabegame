@@ -2,6 +2,9 @@
     "namespace": "kabegame",
     "name": "tasks_all_provider",
     "query": {
-        "order": [{ "sql": "tasks.start_time", "order": "desc" }]
+        "order": [
+            { "sql": "COALESCE(tasks.start_time, 0)", "order": "desc" },
+            { "sql": "tasks.id", "order": "desc" }
+        ]
     }
 }

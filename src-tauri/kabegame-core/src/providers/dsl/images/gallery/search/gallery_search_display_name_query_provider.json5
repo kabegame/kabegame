@@ -11,10 +11,10 @@
     "query": {
         "where": "images.display_name LIKE '%' || REPLACE(REPLACE(REPLACE(${properties.query}, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%' ESCAPE '\\'"
     },
-    // list / resolve 都委派 gallery_route — 让搜索结果可以继续走 all/_kb_x<N>x/N 等分页或
+    // list / resolve 都委派 gallery_router — 让搜索结果可以继续走 all/_kb_x<N>x/N 等分页或
     "resolve": {
         ".*": {
-            "delegate": { "provider": "gallery_route" },
+            "delegate": { "provider": "gallery_router" },
             "child_var": "child",
             "provider": "${child.provider}",
             "meta": "${child.meta}"

@@ -330,11 +330,8 @@ impl IpcClient {
             .await
     }
 
-    pub async fn storage_clear_finished_tasks(&self) -> Result<usize, String> {
-        let v = self
-            .request_data(IpcRequest::StorageClearFinishedTasks)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
+    pub async fn storage_clear_finished_tasks(&self) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::StorageClearFinishedTasks).await
     }
 
     // ==================== Storage - Run Configs ====================
@@ -354,8 +351,11 @@ impl IpcClient {
     }
 
     /// 更新运行配置
-    pub async fn storage_update_run_config(&self, config: serde_json::Value) -> Result<(), String> {
-        self.request_ok(IpcRequest::StorageUpdateRunConfig { config })
+    pub async fn storage_update_run_config(
+        &self,
+        config: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.request_data(IpcRequest::StorageUpdateRunConfig { config })
             .await
     }
 

@@ -112,7 +112,7 @@ images://gallery/plugin/<pluginId>/_kb_desc/_kb_x100x/1
 | `albums://` | `all` / `id_{id}` | 两者 | — | `Vec<Album>` 或 `Album` | `application/json` | — |
 | `tasks://` | `all` / `id_{id}` | 两者 | — | `Vec<TaskInfo>` 或 `TaskInfo` | `application/json` | — |
 | `surf_records://` | `all` / `id_{id}` | 两者 | — | `Vec<SurfRecord>` 或 `SurfRecord` | `application/json` | — |
-| `plugin://` | `` / `{id}` / `{id}/icon` / `{id}/description_template` / `{id}/doc` / `{id}/changelog` / `{id}/asset/{path}` | 两者 + 子资源 | — | 瘦身的 Plugin / 二进制 / 文本 | 多种 | — |
+| `plugin://` | `` / `installed/{id}/{version}` / `installed/{id}/{version}/{resource}` / `byStore/{sourceId}/{id}/{version}/{resource}` / `byPreview/{token}/{id}/{version}/{resource}` | 两者 + 子资源 | — | 瘦身的 Plugin / 二进制 / 文本 | 多种 | — |
 
 :::caution
 `provider://`、`image://`、`album://`、`task://`、`surf://` 已停用。请改用 `images://` 与复数表资源 scheme。
@@ -180,15 +180,23 @@ images://gallery/plugin/<pluginId>/_kb_desc/_kb_x100x/1
 
 ## `plugin://`
 
+按来源和版本寻址：`installed/{id}/{version}`、`byStore/{sourceId}/{id}/{version}`、
+`byPreview/{token}/{id}/{version}`。三种来源均支持下表子资源以及 `provider[/<name>]`、`recommended[/<path>]`。
+商店只读已缓存到本地的包，缺失时不会下载；版本不符解析为空。每段须单独编码。
+根 fetch 返回已安装插件 lite 列表，根 list 只列出 `installed`、`byStore`；预览凭 token 解析，不可列举。
+旧的仅 id 路径已删除。
+
 | 形态 | 返回 | MIME | since 版本 |
 |---|---|---|---|
 | `plugin://` | `Vec<Plugin>`，瘦身 | `application/json` | — |
-| `plugin://{id}` | 单个瘦身 `Plugin` | `application/json` | — |
-| `plugin://{id}/icon` | Base64 图标 PNG | `image/png` | — |
-| `plugin://{id}/description_template` | EJS 描述模板 | `text/plain` | — |
-| `plugin://{id}/doc` | 默认语言的 `doc.md` | `text/markdown` | — |
-| `plugin://{id}/changelog` | 默认语言的 `CHANGELOG.md` | `text/markdown` | — |
-| `plugin://{id}/asset/{path}` | `kbAssets` 声明的单个插件资源 | 按扩展推断（见下） | — |
+| `plugin://installed/{id}/{version}` | 单个瘦身 `Plugin` | `application/json` | — |
+| `plugin://installed/{id}/{version}/icon` | Base64 图标 PNG | `image/png` | — |
+| `plugin://installed/{id}/{version}/description_template` | EJS 描述模板 | `text/plain` | — |
+| `plugin://installed/{id}/{version}/doc` | 默认语言的 `doc.md` | `text/markdown` | — |
+| `plugin://installed/{id}/{version}/changelog` | 默认语言的 `CHANGELOG.md` | `text/markdown` | — |
+| `plugin://installed/{id}/{version}/recommended` | 推荐行列表（含 `isImported`） | `application/json` | — |
+| `plugin://installed/{id}/{version}/recommended/{path}` | 单条推荐配置（文件路径按 asset 单段转义） | `application/json` | — |
+| `plugin://installed/{id}/{version}/asset/{path}` | `kbAssets` 声明的单个插件资源 | 按扩展推断（见下） | — |
 
 `asset` 的 MIME 推断：`.png` → `image/png`，`.jpg` / `.jpeg` → `image/jpeg`，`.webp` → `image/webp`，`.svg` → `image/svg+xml`，`.gif` → `image/gif`，其它回落到 `application/octet-stream`。路径是 `kbAssets` 中归一化后的插件根相对路径，文档与更新日志共用这些资源。
 
@@ -227,7 +235,7 @@ images://gallery/plugin/<pluginId>/_kb_desc/_kb_x100x/1
 - `images://gallery/search/display-name/{query}/all/_kb_desc/_kb_x100x/{page}`
 - `images://gallery/by_id/{imageId}`
 - `albums://id_{albumId}`、`tasks://id_{taskId}`、`surf_records://id_{surfRecordId}`
-- `plugin://{pluginId}`、`plugin://{pluginId}/doc`、`plugin://{pluginId}/changelog`、`plugin://{pluginId}/icon`、`plugin://{pluginId}/description_template`、`plugin://{pluginId}/asset/{assetPath}`
+- `plugin://installed/{pluginId}/{version}`、`plugin://installed/{pluginId}/{version}/doc`、`plugin://installed/{pluginId}/{version}/changelog`、`plugin://installed/{pluginId}/{version}/icon`、`plugin://installed/{pluginId}/{version}/description_template`、`plugin://installed/{pluginId}/{version}/asset/{assetPath}`
 
 新增的 5 条 gallery 模板都复用 `images.read.gallery` capability id。
 
@@ -363,7 +371,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 **效果**：调用 `Storage::add_images_to_album`，若提供了 `image_orders` 则再调 `update_album_images_order`。响应文本形如 `"Added X/Y images to album 'id'."`。
 
-**副作用**：画册图片列表变化会通过 `album-images-change` 事件广播；已打开的画册画廊视图会实时刷新。
+**副作用**：画册新增成员通过 `album-images-added` 广播，移出成员通过 `album-images-deleted` 广播，`album-images-change` 仅表示实际命中的成员排序变化（载荷含 seq、albumId、ancestorPath、imageIds）；已打开的画册画廊视图会实时刷新。
 
 ### `rename_image`
 
@@ -380,7 +388,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 **效果**：调用 `Storage::update_image_display_name`。
 
-**副作用**：先通过 `image-changed` 即时更新图片的可见名，再通过 `images-change` 让已打开的画廊视图对账排序与成员。
+**副作用**：通过 `image-changed { patch: { id, displayName } }` 更新图片可见名，并触发已打开的画廊视图对账排序与成员。
 
 ## MCPB stdio 桥（`kabegame-gallery-node`）
 
@@ -465,7 +473,7 @@ Rust 端通过 HTTP transport 暴露四个写入工具。Stdio Bundle 会透传�
 
 #### `read_plugin`
 
-省略 `plugin_id` 时转发 `plugin://`；提供 `plugin_id` 时默认转发 `plugin://{plugin_id}`。`resource` 可取 `icon`、`description_template`、`doc`、`changelog`、`asset`，其中 `asset` 需要 `key`。
+省略 `plugin_id` 时转发 `plugin://`；提供 `plugin_id` 时还需传 `version`，默认转发 `plugin://installed/{plugin_id}/{version}`。`resource` 可取 `icon`、`description_template`、`doc`、`changelog`、`asset`，其中 `asset` 需要 `key`；也支持 `provider` 和 `recommended`，不传 `key` 列出全部，传名称或文件路径读单项。
 
 #### `set_album_images_order`
 
@@ -529,7 +537,7 @@ MCPB 暴露 `list_pathql_entry`、和 HTTP MCP 同名的四个写工具，并额
   `/_kb_x<N>x/<page>`。
 - **鉴权收紧**：关闭某个 scheme 的全部 read capability 后，该 scheme 的裸根也会返回 `resource_disabled`；未注册 scheme 直接拒绝。
 - **旧 scheme 不再支持**：`provider://`、`image://`、`album://`、`task://`、`surf://` 没有兼容别名，会被 capability gate 以 `resource_disabled` 拒绝。
-- **不要批量拉 plugin 重字段**：`plugin://` 和 `plugin://{id}` 返回瘦身对象，图标、描述模板、文档与文档资源要按子路径单独读取。
+- **不要批量拉 plugin 重字段**：`plugin://` 和 `plugin://installed/{id}/{version}` 返回瘦身对象，图标、描述模板、文档与文档资源要按子路径单独读取。
 - **metadata 懒加载**：图片列表结果只带 `metadataId`，只有 `images://id_{id}/metadata` 会返回完整 metadata。
 - **`surf_records://id_{id}` 以记录 id 为键**，不是 host。
 - **不提供删除工具**：MCP 没有 delete-image / delete-album。服务器 instructions 明确建议模型把想删的图片收集到一个「待删除」画册里，由用户最终确认。

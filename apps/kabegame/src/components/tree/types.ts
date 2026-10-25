@@ -1,25 +1,28 @@
-/**
- * VSCode 式树基座的公共类型（模型/视图分离 + 扁平行投影）。
- *
- * 设计对齐 vscode `src/vs/base/browser/ui/tree`：
- * - `TreeDataSource`  ≈ IAsyncDataSource（懒加载子项）
- * - `TreeNodeHandle`  ≈ ITreeNode（但为 shallowReactive 句柄，视图直接读）
- * - `TreeDndController` ≈ ITreeDragAndDrop（运输层为 pointer 状态机，见 useTreeDnd）
- *
- * 本模块对 app 其余部分零依赖（不 import stores / galleryPath），
- * 便于将来上提到共享包。
- */
+import type { PathqlQuery } from "@/services/pathql";
+import type { EventTrigger } from "@/services/kbEvents/events";
 
-/** 懒加载数据源：展开未加载节点时基座调用 getChildren 并管理 loading/loaded 态。 */
-export interface TreeDataSource<T> {
+/** 树的分支：分区根列表，或某节点的子项。 */
+export type TreeBranch<T> = { kind: "section"; sectionId: string } | { kind: "children"; parent: T };
+
+/** 结构查询先渲染；补充查询按元素 key 打字段补丁，不阻塞结构。 */
+export interface TreePage<T> {
+  queries: readonly PathqlQuery[];
+  parse(results: readonly unknown[]): T[];
+  extra?: {
+    queries: readonly PathqlQuery[];
+    parse(results: readonly unknown[]): Map<string, Partial<T>>;
+  };
+}
+
+export interface TreeQuerySource<T> {
   getKey(element: T): string;
   hasChildren(element: T): boolean;
-  /** 可同步可异步；抛错视为空子集（由调用方决定是否在源内自行兜底）。 */
-  getChildren(element: T): T[] | Promise<T[]>;
-  getChildrenPage?(element: T, page: number): Promise<T[]>;
-  totalChildren?(element: T): number;
-  getRootsPage?(sectionId: string, page: number): Promise<T[]>;
+  /** 页码从 1 起；null 表示没有此页。可读响应式参数，父元素只依赖 id、ancestorPath 等稳定字段。 */
+  page(branch: TreeBranch<T>, page: number): TreePage<T> | null;
+  refreshOn(branch: TreeBranch<T>, part: "page" | "extra"): readonly EventTrigger[];
+  /** 不提供则只有一页。 */
   pageSize?: number;
+  totalChildren?(element: T): number;
 }
 
 /**
@@ -36,7 +39,7 @@ export interface TreeNodeHandle<T> {
   /** null = 尚未加载（懒加载）；[] = 已加载且为空。 */
   children: TreeNodeHandle<T>[] | null;
   expanded: boolean;
-  /** getChildren 进行中（对应旧实现的 aria-busy）。 */
+  /** 结构查询进行中（对应旧实现的 aria-busy）。 */
   loading: boolean;
   /** 至少成功枚举过一次子项（对应旧实现的 loaded ref）。 */
   loaded: boolean;
@@ -59,7 +62,6 @@ export interface TreeSection<T> {
   /** 渲染 section-header 行（内容由 #section-header slot 提供）。 */
   header?: boolean;
   separatorBefore?: boolean;
-  roots: () => T[] | Promise<T[]>;
 }
 
 /** 行状态：由消费者按元素给出，基座只负责套用样式类与拦截交互。 */

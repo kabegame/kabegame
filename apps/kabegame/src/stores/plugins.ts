@@ -1,12 +1,10 @@
 import { defineStore } from "pinia";
 import { computed, ref, unref } from "vue";
 import { invoke, listen } from "../api";
-import { IS_WEB } from "../env";
-import { pluginCacheDb } from "../cache/pluginCache";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
-import { useCrawlerStore } from "./crawler";
+import { invalidatePluginFiles } from "@/services/pluginFiles";
+import type { PluginChangedPayload } from "@/services/kbEvents/events";
 import type { PluginLabel } from "./pluginLabels";
-import { isPluginAssetList, type PluginAsset } from "../utils/assetPath";
 
 /** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
 export type PluginManifestText = Record<string, string>;
@@ -39,9 +37,6 @@ export function resolvePluginIdDisplayName(
   return resolvePluginRecordDisplayName(plugin);
 }
 
-/** 插件文档多语言：键 "default" 及 "zh"、"en"、"ja"、"ko" 等，与 name/description 同构 */
-export type PluginManifestDoc = Record<string, string>;
-
 /** 插件 config 变量 name/descripts/options[].name：后端下发的 Record，键为 "default" 及语言码 "zh"、"en" 等，与 manifest 同构 */
 export type PluginConfigText = Record<string, string>;
 
@@ -72,17 +67,17 @@ export interface Plugin {
   minAppIncompatible?: boolean;
   /** 插件包文件路径（.kgpg），仅已安装插件有值 */
   filePath?: string | null;
-  /** 多语言文档 */
-  doc?: PluginManifestDoc | null;
-  changelog?: PluginManifestDoc | null;
+  packageJson?: {
+    kbDoc?: Record<string, string>;
+    kbChangelog?: Record<string, string>;
+    kbDescriptionTemplate?: string;
+    kbRecommendedConfigs?: string[];
+    [key: string]: unknown;
+  } | null;
+  assetKeys?: string[];
+  fileOrigin?: { kind: "installed" } | { kind: "store"; sourceId: string } | { kind: "preview"; token: string };
   /** 图标 PNG base64（不含 data: 前缀） */
   iconPngBase64?: string | null;
-  /** templates/description.ejs 内容 */
-  descriptionTemplate?: string | null;
-  /** configs/*.json 推荐运行配置列表 */
-  recommendedConfigs?: any[];
-  /** 插件资源；顺序与 kbAssets 声明顺序一致，key 为归一化后的插件根相对路径 */
-  assets?: PluginAsset[] | null;
 }
 
 /**
@@ -178,45 +173,22 @@ export const usePluginStore = defineStore("plugins", () => {
     if (eventListenersInitialized) return;
     eventListenersInitialized = true;
     try {
-      await listen<{ plugin: Plugin }>("plugin-added", (event) => {
-        const p = event.payload?.plugin as Plugin;
+      const applyPlugin = (p: Plugin) => {
         if (!p?.id) return;
-        if (!plugins.value.some((x) => x.id === p.id)) {
-          plugins.value = sortPluginsById([...plugins.value, p]);
+        const previous = plugins.value.find((item) => item.id === p.id);
+        if (previous?.version !== p.version) invalidatePluginFiles(p.id);
+        plugins.value = sortPluginsById([...plugins.value.filter((item) => item.id !== p.id), p]);
+        if (activePlugin.value?.id === p.id) activePlugin.value = p;
+        for (const [key, cached] of Object.entries(pluginDetailCache.value)) {
+          if (cached.id === p.id) delete pluginDetailCache.value[key];
         }
-        if (IS_WEB) {
-          void pluginCacheDb.plugins.put({
-            id: p.id,
-            version: p.version,
-            data: p,
-            cachedAt: Date.now(),
-          });
-        }
-        const crawler = useCrawlerStore();
-        crawler.loadPluginRecommendedConfigs(plugins.value);
-      });
-
-      await listen<{ plugin: Plugin }>("plugin-updated", (event) => {
-        const p = event.payload?.plugin as Plugin;
-        if (!p?.id) return;
-        const idx = plugins.value.findIndex((x) => x.id === p.id);
-        if (idx >= 0) {
-          const next = plugins.value.slice();
-          next[idx] = p;
-          plugins.value = sortPluginsById(next);
-        } else {
-          plugins.value = sortPluginsById([...plugins.value, p]);
-        }
-        if (IS_WEB) {
-          void pluginCacheDb.plugins.put({
-            id: p.id,
-            version: p.version,
-            data: p,
-            cachedAt: Date.now(),
-          });
-        }
-        const crawler = useCrawlerStore();
-        crawler.loadPluginRecommendedConfigs(plugins.value);
+      };
+      await listen<{ plugin: Plugin }>("plugin-added", (event) => applyPlugin(event.payload?.plugin));
+      await listen<PluginChangedPayload>("plugin-changed", (event) => {
+        const { pluginId, changes } = event.payload ?? {};
+        if (!pluginId || changes?.version === undefined) return;
+        const previous = plugins.value.find((item) => item.id === pluginId);
+        applyPlugin({ ...previous, ...changes } as Plugin);
       });
 
       await listen<{ pluginId: string }>("plugin-deleted", (event) => {
@@ -225,9 +197,7 @@ export const usePluginStore = defineStore("plugins", () => {
         plugins.value = sortPluginsById(plugins.value.filter((p) => p.id !== id));
         if (activePlugin.value?.id === id) activePlugin.value = null;
         delete pluginDetailCache.value[id];
-        if (IS_WEB) {
-          void pluginCacheDb.plugins.delete(id);
-        }
+        invalidatePluginFiles(id);
       });
     } catch (e) {
       console.warn("init plugin event listeners failed", e);
@@ -245,59 +215,20 @@ export const usePluginStore = defineStore("plugins", () => {
     return pluginIconDataUrl(pluginId);
   }
 
-  /** 从已加载的插件列表中返回多语言 doc */
-  function pluginDoc(pluginId: string): PluginManifestDoc | null | undefined {
-    const p = plugins.value.find((x) => x.id === pluginId);
-    if (!p) return undefined;
-    return p.doc ?? null;
-  }
-
-  /** 从已加载的插件列表中返回 description.ejs 模板内容 */
-  function pluginDescriptionTemplate(pluginId: string): string | undefined {
-    const p = plugins.value.find((x) => x.id === pluginId);
-    const v = p?.descriptionTemplate;
-    return typeof v === "string" && v.length > 0 ? v : undefined;
+  function applyList(result: Plugin[]) {
+    for (const previous of plugins.value) {
+      if (result.find((p) => p.id === previous.id)?.version !== previous.version) invalidatePluginFiles(previous.id);
+    }
+    plugins.value = sortPluginsById(result);
+    clearPluginDetailCache();
   }
 
   /** 从缓存读取插件列表（不重新扫盘）；首次调用时由 startup 的 ensure_installed_cache_initialized 保证缓存已就绪 */
   async function loadPlugins(): Promise<void> {
     await initEventListeners();
     try {
-      if (IS_WEB) {
-        const index = await invoke<Array<{ id: string; version: string }>>("get_plugins");
-        const list = await Promise.all(
-          index.map(async ({ id, version }) => {
-            const cached = await pluginCacheDb.plugins.get(id);
-            if (cached && cached.version === version && isPluginAssetList(cached.data.assets)) {
-              return cached.data;
-            }
-            const full = await invoke<Plugin>("get_plugin_detail", {
-              pluginId: id,
-            });
-            await pluginCacheDb.plugins.put({
-              id,
-              version,
-              data: full,
-              cachedAt: Date.now(),
-            });
-            return full;
-          }),
-        );
-        const validIds = new Set(index.map((i) => i.id));
-        const keys = await pluginCacheDb.plugins.toCollection().primaryKeys();
-        const stale = keys.filter((k) => !validIds.has(String(k)));
-        if (stale.length) await pluginCacheDb.plugins.bulkDelete(stale);
-        const sorted = sortPluginsById(list);
-        plugins.value = sorted;
-        const crawler = useCrawlerStore();
-        crawler.loadPluginRecommendedConfigs(sorted);
-      } else {
-        const result = await invoke<Plugin[]>("get_plugins");
-        const sorted = sortPluginsById(result);
-        plugins.value = sorted;
-        const crawler = useCrawlerStore();
-        crawler.loadPluginRecommendedConfigs(sorted);
-      }
+      const result = await invoke<Plugin[]>("get_plugins");
+      applyList(result);
     } catch (error) {
       console.error("加载插件失败:", error);
       throw error;
@@ -307,18 +238,8 @@ export const usePluginStore = defineStore("plugins", () => {
   /** 重新扫描磁盘并刷新缓存（用于手动刷新、安装/删除后） */
   async function refreshPlugins(): Promise<void> {
     try {
-      if (IS_WEB) {
-        // web: 服务器重扫磁盘后返回索引 [{id, version}]；本地 Dexie 缓存清空后走 loadPlugins 流程补全
-        await invoke("refresh_plugins");
-        await pluginCacheDb.plugins.clear();
-        await loadPlugins();
-        return;
-      }
       const result = await invoke<Plugin[]>("refresh_plugins");
-      const sorted = sortPluginsById(result);
-      plugins.value = sorted;
-      const crawler = useCrawlerStore();
-      crawler.loadPluginRecommendedConfigs(sorted);
+      applyList(result);
     } catch (error) {
       console.error("刷新插件失败:", error);
       throw error;
@@ -369,8 +290,6 @@ export const usePluginStore = defineStore("plugins", () => {
     refreshPlugins,
     pluginIconDataUrl,
     pluginIconSrc,
-    pluginDoc,
-    pluginDescriptionTemplate,
     deletePlugin,
     setActivePlugin,
     getCachedPluginDetail,

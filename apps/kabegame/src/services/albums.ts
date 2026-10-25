@@ -1,8 +1,6 @@
 import { invoke } from "@/api/rpc";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
-import { albumChangeBatch, publishLocal, type ChangeBatch } from "@/services/dataChangeHub";
-import type { RowsSnapshot } from "@/services/liveQuery";
-import { pathqlEntry, pathqlFetch } from "@/services/pathql";
+import type { TreePage } from "@/components/tree/types";
+import { pathqlEntry, pathqlFetch, type PathqlQuery } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { useSettingsStore } from "@/stores/settings";
@@ -41,16 +39,9 @@ export interface Album {
 }
 
 export interface AlbumNode extends Album {
-  /** null = 图片计数还在路上（与行分开查询，见 `fetchAlbumPage`）。 */
+  /** null = 图片计数还在路上（与行分开查询，见 `albumPageQueries`）。 */
   count: number | null;
   childCount: number;
-}
-
-/** 一页画册：行与子画册数先到；图片计数是慢查询，单独返回，到了再补进行里。 */
-export interface AlbumPage {
-  nodes: AlbumNode[];
-  /** id → 图片计数；页里只有标签目录时不查询，直接是空表。 */
-  imageCounts: Promise<Map<string, number>>;
 }
 
 export interface AddToAlbumResult {
@@ -58,14 +49,10 @@ export interface AddToAlbumResult {
   attempted: number;
   canAdd: number;
   currentCount: number;
-  albumChanges: AlbumImagesChangePayload[];
-  view?: RowsSnapshot | null;
 }
 
 export interface RemoveFromAlbumResult {
   removed: number;
-  albumChanges: AlbumImagesChangePayload[];
-  view?: RowsSnapshot | null;
 }
 
 function parseParentId(raw: unknown): string | null {
@@ -149,72 +136,55 @@ function countsById(rows: Record<string, unknown>[], column: "child_count" | "im
   return new Map(rows.map((row) => [String(row.id), Number(row[column] ?? 0)]));
 }
 
-/**
- * 一页画册与逐项计数，三路并行，各一条 SQL。计数都在 `~~` 子查询边界之后，只作用于这一页，
- * 按画册 `GROUP BY` 出行：`~~/children/[search/<q>/]<类型段>` 的 `child_count` 是同一组类型（与搜索）
- * 过滤下的直接子画册数，`~~/images[/hide]` 的 `image_count` 是子树成员行数（标签叶子即直接图片数；
- * `hide` 与 images:// 的 `hide/` 前缀同口径）。没有计数行的画册记 0。
- *
- * 行与 `child_count` 一起等（展开箭头靠它）；`image_count` 要把整页子树的成员行全 join 一遍，
- * 标签森林的根页能到百万行、秒级，所以不挡行渲染，经 `imageCounts` 单独交付。
- */
-async function fetchPageWithCounts(
-  base: string,
-  kinds: ReadonlyArray<AlbumKind> | undefined,
-  prefix: GalleryPrefix,
-  search?: string,
-): Promise<AlbumPage> {
-  // 子画册计数用同一组类型与搜索过滤，展开箭头与展开后看到的子项一致
-  const childFilters = `${albumSearchSegment(search)}${albumKindSegment(kinds)}`.replace(/\/$/, "");
-  // 与行查询同时发出；标签目录在 provider 里就被排除，不出计数行
-  const images = pathqlFetch<Record<string, unknown>>(`${base}/~~/images${prefix === "hide/" ? "/hide" : ""}`);
-  // 行查询失败或这一页不需要图片计数时没人接它的失败，别冒成 unhandled rejection
-  images.catch(() => {});
-  const [rows, children] = await Promise.all([
-    pathqlFetch<Record<string, unknown>>(base),
-    pathqlFetch<Record<string, unknown>>(`${base}/~~/children${childFilters ? `/${childFilters}` : ""}`),
-  ]);
-  const childCounts = countsById(children, "child_count");
-  const nodes: AlbumNode[] = rows.map((row) => {
-    const album = normalizeAlbumRow(row);
-    const childCount = childCounts.get(album.id) ?? 0;
-    // 标签目录不能挂图，显示子画册数
-    return { ...album, childCount, count: album.type === "label_dir" ? childCount : null };
-  });
-  const pending = nodes.filter((node) => node.count === null);
-  // 没有计数行的画册记 0
-  const imageCounts = pending.length
-    ? images.then((rows) => {
-        const counts = countsById(rows, "image_count");
-        return new Map(pending.map((node) => [node.id, counts.get(node.id) ?? 0]));
-      })
-    : Promise.resolve(new Map<string, number>());
-  return { nodes, imageCounts };
-}
-
-/**
- * 树的一层（根分区或某个父画册下）的一页。`search` 非空时每层都叠加搜索过滤段：自身或子孙命中才保留，
- * 于是搜索结果仍按树展示，命中项的祖先一路保留。
- */
-export async function fetchAlbumPage(
+/** 描述一页画册：行与子画册数在同一快照，图片计数独立补充，不挡行渲染；没有允许类型时返回 null（不读）。 */
+export function albumPageQueries(
   target: { parentId: string } | { section: AlbumRootSection },
   page: number,
   prefix: GalleryPrefix,
   kinds?: ReadonlyArray<AlbumKind>,
   pageSize: number = ALBUM_PAGE_SIZE,
   search?: string,
-): Promise<AlbumPage> {
-  // 根分区的类型集合即分区本身
+): TreePage<AlbumNode> | null {
   const scope = "parentId" in target ? `parent/${encodeURIComponent(target.parentId)}` : "roots";
-  const sectionKinds = "section" in target ? SECTION_KINDS[target.section] : undefined;
-  const effectiveKinds = kinds?.length ? kinds : sectionKinds;
+  const effectiveKinds = kinds ?? ("section" in target ? SECTION_KINDS[target.section] : undefined);
   const base = albumPageBase(
     `${scope}/${albumSearchSegment(search)}`.replace(/\/$/, ""),
     effectiveKinds,
     page,
     pageSize,
   );
-  return fetchPageWithCounts(base, effectiveKinds, prefix, search);
+  const childFilters = `${albumSearchSegment(search)}${albumKindSegment(effectiveKinds)}`.replace(/\/$/, "");
+  if (effectiveKinds?.length === 0) return null;
+  return {
+    queries: [
+      { kind: "fetch", path: base },
+      { kind: "fetch", path: `${base}/~~/children${childFilters ? `/${childFilters}` : ""}` },
+    ],
+    parse(results) {
+      const children = countsById(results[1] as Record<string, unknown>[], "child_count");
+      return (results[0] as Record<string, unknown>[]).map((row) => {
+        const album = normalizeAlbumRow(row);
+        const childCount = children.get(album.id) ?? 0;
+        return { ...album, childCount, count: album.type === "label_dir" ? childCount : null };
+      });
+    },
+    extra: {
+      // 分组没有行代表 0；同快照读本页 id，补充结果先于结构到达时也能完整补零。
+      queries: [
+        { kind: "fetch", path: base },
+        { kind: "fetch", path: `${base}/~~/images${prefix === "hide/" ? "/hide" : ""}` },
+      ],
+      parse(results) {
+        const counts = countsById(results[1] as Record<string, unknown>[], "image_count");
+        return new Map(
+          (results[0] as Record<string, unknown>[])
+            .map(normalizeAlbumRow)
+            .filter((album) => album.type !== "label_dir")
+            .map((album) => [album.id, { count: counts.get(album.id) ?? 0 }]),
+        );
+      },
+    },
+  };
 }
 
 /** 不限层级地找自身或子孙命中 `query` 的画册（例如查重名时再按 `name` 精确比较）；只取行，不带计数。 */
@@ -234,14 +204,14 @@ export async function fetchAlbum(id: string): Promise<Album | null> {
   return rows[0] ? normalizeAlbumRow(rows[0]) : null;
 }
 
-export async function fetchAlbumCount(album: Album, prefix: GalleryPrefix): Promise<number> {
-  if (album.type === "label_dir") {
-    return (await pathqlEntry(`albums://parent/${encodeURIComponent(album.id)}`)).total ?? 0;
-  }
-  if (album.type === "label") {
-    return (await pathqlEntry(`images://gallery/${prefix}album/${encodeURIComponent(album.id)}`)).total ?? 0;
-  }
-  return (await pathqlEntry(`images://gallery/${prefix}album-tree/${encodeURIComponent(album.id)}`)).total ?? 0;
+/** 当前画册头部计数：标签目录数直接子画册，其余数直接成员或子树图片，不叠加隐藏过滤。 */
+export function albumImageCountQuery(album: Album): PathqlQuery & { kind: "count" } {
+  const id = encodeURIComponent(album.id);
+  const path =
+    album.type === "label_dir"
+      ? `albums://parent/${id}`
+      : `images://gallery/${album.type === "label" ? "album" : "album-tree"}/${id}`;
+  return { kind: "count", path };
 }
 
 export async function fetchDescendantCount(id: string): Promise<number> {
@@ -253,43 +223,23 @@ export async function fetchAlbumAncestors(id: string): Promise<Album[]> {
   return rows.map(normalizeAlbumRow);
 }
 
-/** 图片直接所属的画册；`kinds` 走路径上的 `album_kind` 段由后端过滤，不在前端筛。 */
-export async function fetchImageAlbums(imageId: string, kinds?: ReadonlyArray<AlbumKind>): Promise<Album[]> {
+/** 图片直接所属画册的路径；`kinds` 走路径上的 `album_kind` 段由后端过滤，不在前端筛。 */
+export function imageAlbumsPath(imageId: string, kinds?: ReadonlyArray<AlbumKind>): string {
   // albumKindSegment 带尾斜杠（供拼分页段用），这里是路径末段，去掉它
   const kindSegment = albumKindSegment(kinds).replace(/\/$/, "");
   const scope = `of_image_${encodeURIComponent(imageId)}`;
-  const rows = await pathqlFetch<Record<string, unknown>>(`albums://${scope}${kindSegment ? `/${kindSegment}` : ""}`);
+  return `albums://${scope}${kindSegment ? `/${kindSegment}` : ""}`;
+}
+
+/** 图片直接所属的画册。 */
+export async function fetchImageAlbums(imageId: string, kinds?: ReadonlyArray<AlbumKind>): Promise<Album[]> {
+  const rows = await pathqlFetch<Record<string, unknown>>(imageAlbumsPath(imageId, kinds));
   return rows.map(normalizeAlbumRow);
 }
 
 export async function fetchLocalFolderAlbums(): Promise<Album[]> {
   const rows = await pathqlFetch<Record<string, unknown>>("albums://byType/local_folder");
   return rows.map(normalizeAlbumRow);
-}
-
-function publishAlbumChanges(changes: AlbumImagesChangePayload[]) {
-  for (const change of changes) publishLocal(albumChangeBatch(change));
-}
-
-function structuralBatch(album: Album | null, kind: string, extraPath?: string): ChangeBatch {
-  const paths = [album?.ancestorPath, extraPath].filter((path): path is string => !!path);
-  return {
-    images: new Set(),
-    imageIds: new Set(),
-    imagePatches: new Map(),
-    taskIds: new Set(),
-    surfRecordIds: new Set(),
-    pluginIds: new Set(),
-    albumImages: new Set(),
-    albumIds: new Set(album ? [album.id] : []),
-    albumImageIds: new Set(),
-    favoriteOps: [],
-    albumStructure: new Set([kind]),
-    albumPaths: new Set(paths),
-    albumPathsWildcard: paths.length === 0,
-    wildcard: { task: false, surf: false, plugin: false },
-    maxSeq: 0,
-  };
 }
 
 function errorMessage(error: unknown): Error {
@@ -301,7 +251,6 @@ export async function createAlbum(name: string, opts: { reload?: boolean; parent
     const created = normalizeAlbumRow(
       await invoke<Record<string, unknown>>("add_album", { name, parentId: opts.parentId ?? null }),
     );
-    publishLocal(structuralBatch(created, "added"));
     return created;
   } catch (error) {
     throw errorMessage(error);
@@ -323,7 +272,6 @@ export async function createLabelAlbum(args: {
         directory: args.directory ?? false,
       }),
     );
-    publishLocal(structuralBatch(created, "added"));
     return created;
   } catch (error) {
     throw errorMessage(error);
@@ -342,7 +290,6 @@ export async function createLocalFolderAlbum(
       recursive: args.recursive,
     });
     const rows = (Array.isArray(raw) ? raw : [raw]).map((row) => normalizeAlbumRow(row as Record<string, unknown>));
-    for (const row of rows) publishLocal(structuralBatch(row, "added"));
     return rows;
   } catch (error) {
     throw errorMessage(error);
@@ -350,38 +297,30 @@ export async function createLocalFolderAlbum(
 }
 
 export async function renameAlbum(albumId: string, newName: string) {
-  const album = await fetchAlbum(albumId);
   try {
     await invoke("rename_album", { albumId, newName });
-    publishLocal(structuralBatch(album, "name"));
   } catch (error) {
     throw errorMessage(error);
   }
 }
 
 export async function moveAlbum(albumId: string, newParentId: string | null) {
-  const before = await fetchAlbum(albumId);
   try {
     await invoke("move_album", { albumId, newParentId });
-    const after = await fetchAlbum(albumId);
-    publishLocal(structuralBatch(after, "parentId", before?.ancestorPath));
   } catch (error) {
     throw errorMessage(error);
   }
 }
 
 export async function setLabelKey(albumId: string, newKey: string) {
-  const album = await fetchAlbum(albumId);
   try {
     await invoke("set_label_key", { albumId, newKey });
-    publishLocal(structuralBatch(album, "labelKey"));
   } catch (error) {
     throw errorMessage(error);
   }
 }
 
 export async function deleteAlbum(albumId: string) {
-  const album = await fetchAlbum(albumId);
   const settingsStore = useSettingsStore();
   if (settingsStore.values.wallpaperRotationAlbumId === albumId) {
     await ElMessageBox.confirm(
@@ -396,44 +335,17 @@ export async function deleteAlbum(albumId: string) {
     );
   }
   await invoke("delete_album", { albumId });
-  publishLocal(structuralBatch(album, "deleted"));
 }
 
-export async function addImagesToAlbum(
-  albumId: string,
-  imageIds: string[],
-  opts?: { view?: string | null },
-): Promise<AddToAlbumResult> {
-  const result = await invoke<AddToAlbumResult>("add_images_to_album", { albumId, imageIds, view: opts?.view ?? null });
-  publishAlbumChanges(result.albumChanges);
-  return result;
+export async function addImagesToAlbum(albumId: string, imageIds: string[]): Promise<AddToAlbumResult> {
+  return invoke<AddToAlbumResult>("add_images_to_album", { albumId, imageIds });
 }
 
-export async function addTaskImagesToAlbum(
-  taskId: string,
-  albumId: string,
-  opts?: { view?: string | null },
-): Promise<AddToAlbumResult> {
-  const result = await invoke<AddToAlbumResult>("add_task_images_to_album", {
-    taskId,
-    albumId,
-    view: opts?.view ?? null,
-  });
-  publishAlbumChanges(result.albumChanges);
-  return result;
+export async function addTaskImagesToAlbum(taskId: string, albumId: string): Promise<AddToAlbumResult> {
+  return invoke<AddToAlbumResult>("add_task_images_to_album", { taskId, albumId });
 }
 
-export async function removeImagesFromAlbum(
-  albumId: string,
-  imageIds: string[],
-  opts?: { view?: string | null },
-): Promise<RemoveFromAlbumResult> {
-  if (!imageIds.length) return { removed: 0, albumChanges: [] };
-  const result = await invoke<RemoveFromAlbumResult>("remove_images_from_album", {
-    albumId,
-    imageIds,
-    view: opts?.view ?? null,
-  });
-  publishAlbumChanges(result.albumChanges);
-  return result;
+export async function removeImagesFromAlbum(albumId: string, imageIds: string[]): Promise<RemoveFromAlbumResult> {
+  if (!imageIds.length) return { removed: 0 };
+  return invoke<RemoveFromAlbumResult>("remove_images_from_album", { albumId, imageIds });
 }

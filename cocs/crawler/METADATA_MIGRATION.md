@@ -55,8 +55,8 @@
    每批 flush 完成后 `processed` 推进该批行数（进度只反映已落库的行）。成功、错误或 guard 异常退出都会从运行态移除，并发送
    `metadata-migration-finished { pluginId, total, processed, error }`；成功静默，失败由前端 toast。
    flush 按批提交而不是整轮一个事务：持写锁的时间有上限，下载与用户操作不会被一整轮迁移卡住；崩溃时已提交批次的版本已推进，未提交批次下次启动按版本门控重跑。
-9. 标签成员有变化时聚合发出 `album-images-change`；metadata 有实际变更时，用写回与去重两步 `RETURNING` 的改指结果（去重覆盖写回）
-   按最终 `metadataId` 分组发只含 `{ metadataId }` 的 `image-changed`，再发 `images-change`（`reason = "change"`）对账视图成员与排序。
+9. 新建标签画册合并为一条 `albums-added`，每个真实新增成员的叶子发 `album-images-added`；metadata 有实际变更时，用写回与去重两步 `RETURNING` 的改指结果（去重覆盖写回）
+   逐图展开 `{ id, metadataId }`，经 `emit_image_patches` 按图片数量分流为 `image-changed { patch }` / `images-change { patches }`，前端补丁字段并对账视图成员与排序。每批写回提交后立即发出本批改指，结尾去重的改指再发一次（同一图片以后到的为准）；后续批次或去重失败时，已提交批次的补丁已经发出，不会丢。
 
 前端通过聚合 `get_busy_tasks_snapshot.metadataMigrations` 每 500ms 拉取运行态，在忙碌面板中按插件显示
 图标、名称、百分比与 `processed / total`，不提供取消按钮。任务从快照消失即移除卡片；finished 事件
@@ -77,13 +77,13 @@ L2 插件 / V8：
 
 - `src-tauri/kabegame-core/src/plugin/mod.rs`：`kbMetadataMigration` 解析、`pack_plugin_version`、安装 / 启动后调度迁移。
 - `src-tauri/kabegame-core/src/plugin/v8/ops.rs`：写入自动盖章（从 `Task.params.plugin_version()` 读取）。
-- `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）、同插件串行/pending 续跑、运行态快照与 finished 事件，以及 `image-changed` / `images-change(change)` 成对事件；CLI 不再提供 `plugin run migrate`。
+- `src-tauri/kabegame-core/src/plugin/metadata_migration.rs`：裸 `JsRuntime` 迁移运行器（side ES module + `migrate` 导出）、同插件串行/pending 续跑、运行态快照与 finished 事件，以及 按图片数量分流的单图 / 多图字段补丁事件；CLI 不再提供 `plugin run migrate`。
 
 L3 查询 / 前端：
 
 - `src-tauri/kabegame-core/src/providers/dsl/images/images_metadata_full_provider.json5`：`images://id_{id}/metadata_full` 的完整 metadata 行路径。
 - `apps/kabegame/src/components/common/ImagePluginDescriptionPanel.vue`：详情区读取完整 metadata，并把返回的 `plugin_version` 交给模板渲染。
-- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/dataChangeHub.ts`：metadata 缓存（key 仅为 `m<metadataId>`，值为 `{ data, pluginVersion }`）与图片字段 patch 批处理。
+- `apps/kabegame/src/composables/useImageMetadataCache.ts`、`apps/kabegame/src/services/kbEvents/imagePatches.ts`：metadata 缓存（key 仅为 `m<metadataId>`，值为 `{ data, pluginVersion }`）与图片字段 patch 批处理。
 - `apps/kabegame/src/stores/metadataMigration.ts`、`components/busy/BusyMetadataMigrationCard.vue`：迁移运行态镜像与无取消按钮的忙碌卡片。
 
 ## 排查要点
@@ -93,6 +93,6 @@ L3 查询 / 前端：
 - 搜索列表未生效：查看 `[metadata-migration] ... provideSearchTextList` 日志；失败会回退到默认 JSON 展开，不会阻塞迁移。
 - 部分行内容未升级：查看日志里的 `[metadata-migration]` 装载 / 执行错误。失败行也会盖当前版本，不会自动重试；修复脚本后需提升插件版本才会再次入选。
 - 迁移反复执行：确认插件版本确实已提升；单个版本无论成败只处理一次。`migrate` 仍应幂等，以安全支持后续版本的再次执行。
-- 详情区仍显示旧内容：确认前端是否先收到只含最终 `metadataId` 的 `image-changed`，以及随后的
-  `images-change` 是否为 `reason = "change"` 且 `pluginIds` 包含该插件；模板版本应来自同一次
+- 详情区仍显示旧内容：确认前端是否收到 `{ id, metadataId }` 字段补丁：单图为
+  `image-changed.patch`，多图为 `images-change.patches`，不再有 `reason` / `pluginIds`；模板版本应来自同一次
   `get_image_metadata_full` 返回并与 data 一起缓存，不能再从图片行读取。

@@ -2,7 +2,7 @@
   <el-dialog
     :model-value="open"
     :z-index="zIndex"
-    :title="title"
+    :title="title ?? t('albums.confirmDelete')"
     :width="width"
     destroy-on-close
     @update:model-value="
@@ -13,61 +13,44 @@
   >
     <div style="margin-bottom: 16px">
       <p style="margin-bottom: 8px">{{ message }}</p>
-      <el-checkbox v-model="deleteFiles" :label="checkboxLabel" v-if="!hideCheckbox" />
-      <p v-if="!hideCheckbox" class="var-description" :style="{ color: deleteFiles ? 'var(--el-color-danger)' : '' }">
-        {{ deleteFiles ? dangerText : safeText }}
-      </p>
     </div>
     <template #footer>
-      <el-button @click="emit('close')">{{ cancelText }}</el-button>
-      <el-button type="primary" :loading="confirmLoading" @click="emitConfirm">{{ confirmText }}</el-button>
+      <el-button @click="emit('close')">{{ cancelText ?? t("common.cancel") }}</el-button>
+      <el-button type="primary" :loading="confirmLoading" @click="emitConfirm">
+        {{ confirmText ?? t("common.ok") }}
+      </el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, watch } from "vue";
+import { nextTick, onBeforeUnmount, watch } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 
 interface Props {
   open: boolean;
   zIndex: number;
-  deleteFiles?: boolean;
   message: string;
+  /** 以下文案缺省时取当前语言的通用文案 */
   title?: string;
-  checkboxLabel?: string;
-  dangerText?: string;
-  safeText?: string;
   confirmText?: string;
   cancelText?: string;
   confirmLoading?: boolean;
   width?: string;
-  hideCheckbox?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  deleteFiles: false,
-  title: "确认删除",
-  checkboxLabel: "同时从电脑删除源文件（慎用）",
-  dangerText: "警告：该操作将永久删除电脑文件，不可恢复！",
-  safeText: "不勾选仅从列表移除记录，保留电脑文件。",
-  confirmText: "确定",
-  cancelText: "取消",
   confirmLoading: false,
   width: "420px",
-  hideCheckbox: false,
 });
 
 const emit = defineEmits<{
-  (e: "update:deleteFiles", v: boolean): void;
   (e: "close"): void;
   (e: "confirm"): void;
 }>();
 
-const deleteFiles = computed({
-  get: () => props.deleteFiles,
-  set: (v) => emit("update:deleteFiles", v),
-});
+const { t } = useI18n();
 
 const emitConfirm = async () => {
   if (await guardDesktopOnly("deleteImages", { needSuper: true })) return;
@@ -93,8 +76,6 @@ watch(
 
     keyHandler = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
-      const activeElement = document.activeElement;
-      if (activeElement?.tagName === "INPUT" && (activeElement as HTMLInputElement).type === "checkbox") return;
       e.preventDefault();
       emitConfirm();
     };

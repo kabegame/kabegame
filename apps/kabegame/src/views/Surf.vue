@@ -240,7 +240,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from "vue";
+import { onMounted, ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
@@ -250,8 +250,7 @@ import PageHeader from "@/components/common/PageHeader.vue";
 import { useModal } from "@/composables/useModal";
 import { HeaderFeatureId } from "@/stores/header";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
-import { useSurfImageCountsStore } from "@/stores/surfImageCounts";
-import { useGlobalPathRoute } from "@/stores/pathRoute";
+import { useSurfImageCounts } from "@/composables/useSurfImageCounts";
 import { usePluginStore } from "@/stores/plugins";
 import { useI18n } from "@kabegame/i18n";
 import { useActionMenu } from "@/composables/useActionMenu";
@@ -259,15 +258,13 @@ import ActionRenderer from "@/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
 import { useSettingsStore } from "@/stores/settings";
 import PluginPickerField from "@/components/PluginPickerField.vue";
-import { useImagesChangeRefresh, type ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { formatAbsoluteTime, formatRelativeTime } from "@/utils/relativeTime";
 import { IS_ANDROID } from "@/env";
 
 const { t } = useI18n();
 const router = useRouter();
 const surfStore = useSurfStore();
-const surfCounts = useSurfImageCountsStore();
-const globalRoute = useGlobalPathRoute();
+const surfCounts = useSurfImageCounts();
 const pluginStore = usePluginStore();
 const settingsStore = useSettingsStore();
 const appBackgroundCardClass = computed(() =>
@@ -643,34 +640,6 @@ const handleRecordMenuCommand = async (command: SurfRecordMenuCommand) => {
     }
   }
 };
-
-const allSurfHosts = () => surfStore.records.map((record) => record.host);
-
-useImagesChangeRefresh({
-  enabled: ref(true),
-  onRefresh: async (payload: ImagesChangePayload) => {
-    const recordIds = (payload.surfRecordIds ?? []).map((id) => String(id).trim()).filter(Boolean);
-    if (recordIds.length === 0) {
-      await surfCounts.refreshAll(allSurfHosts());
-      return;
-    }
-    const hosts = recordIds.map((id) => surfStore.hostById(id)).filter((host): host is string => !!host);
-    await surfCounts.refreshSome(hosts);
-  },
-});
-
-watch(
-  () => globalRoute.hide,
-  () => void surfCounts.refreshAll(allSurfHosts()),
-);
-
-// 记录集合变化（含 init 首次灌入、后续增删）即重算。immediate 覆盖「store 已被别处
-// 初始化过、length 不再变化」的情况；此时 init() 不触发第二次，不会打两轮全量 count。
-watch(
-  () => surfStore.orderedIds.length,
-  () => void surfCounts.refreshAll(allSurfHosts()),
-  { immediate: true },
-);
 
 onMounted(async () => {
   await surfStore.init();

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use kabegame_core::providers::dsl_loader::{register_embedded_dsl, validate_dsl};
 use kabegame_core::providers::programmatic::plugin_resource::register_plugin_resource_provider;
-use kabegame_core::storage::{Album, ImageInfo, SurfRecord, TaskInfo};
+use kabegame_core::storage::{Album, ImageInfo, SurfRecord};
 use pathql_rs::provider::{ClosureExecutor, EngineError, SqlDialect};
 use pathql_rs::template::eval::{TemplateContext, TemplateValue};
 use pathql_rs::{LoaderType, ProviderRuntime, Source};
@@ -294,8 +294,29 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             failed_count INTEGER NOT NULL DEFAULT 0,
             start_time INTEGER,
             end_time INTEGER,
-            error TEXT
+            error TEXT,
+            max_concurrent_downloads INTEGER,
+            is_dry_run INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE run_configs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            plugin_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            output_dir TEXT,
+            output_album_id TEXT,
+            user_config TEXT,
+            http_headers TEXT,
+            created_at INTEGER NOT NULL,
+            schedule_enabled INTEGER NOT NULL DEFAULT 0,
+            schedule_spec TEXT,
+            schedule_planned_at INTEGER,
+            schedule_last_run_at INTEGER,
+            max_concurrent_downloads INTEGER,
+            is_dry_run INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_tasks_run_config ON tasks(run_config_id, start_time DESC);
         CREATE TABLE task_failed_images (
             id INTEGER PRIMARY KEY,
             task_id TEXT NOT NULL,
@@ -334,7 +355,11 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
             (1, 'source'), (2, 'table'), (3, 'tags'), (4, 'a');
         INSERT INTO metadata_search_terms(metadata_id, term_id) VALUES
             (1, 1), (1, 2), (1, 3), (1, 4);
-        INSERT INTO tasks VALUES
+        INSERT INTO tasks (
+            id, plugin_id, output_dir, user_config, http_headers, output_album_id, run_config_id,
+            trigger_source, status, progress, deleted_count, dedup_count, success_count, failed_count,
+            start_time, end_time, error
+        ) VALUES
             (
                 '22222222-2222-2222-2222-222222222222',
                 'pixiv',
@@ -584,6 +609,14 @@ fn build_runtime_with(conn: Arc<Mutex<Connection>>) -> Arc<ProviderRuntime> {
         .unwrap();
     runtime
         .register_schema(
+            "run_configs",
+            "run_configs",
+            "kabegame",
+            "run_configs_root_provider",
+        )
+        .unwrap();
+    runtime
+        .register_schema(
             "fail-images",
             "task_failed_images",
             "kabegame",
@@ -652,6 +685,7 @@ fn schema_registration_smoke_and_schemaless_paths_fail() {
             "fail-images".to_string(),
             "images".to_string(),
             "plugin".to_string(),
+            "run_configs".to_string(),
             "surf_records".to_string(),
             "tasks".to_string()
         ]
@@ -690,15 +724,17 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
         .into_iter()
         .next()
         .unwrap();
-    let task: TaskInfo = serde_json::from_value(task).unwrap();
-    assert_eq!(task.id, TASK_A_ID);
+    assert_eq!(task["id"], TASK_A_ID);
     assert_eq!(
-        task.user_config
-            .as_ref()
-            .and_then(|config| config.get("quality"))
-            .and_then(|value| value.as_str()),
+        task["user_config"]
+            .as_str()
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .and_then(|config| config.get("quality").cloned())
+            .and_then(|value| value.as_str().map(str::to_string))
+            .as_deref(),
         Some("high")
     );
+    assert_eq!(task["is_dry_run"], 0);
 
     let failed = runtime
         .fetch("fail-images://id_1")
@@ -739,6 +775,208 @@ fn plural_resource_schemas_fetch_and_deserialize_rows() {
     assert!(runtime
         .count("images://gallery/hide/surf/pixiv.test")
         .is_ok());
+}
+
+#[test]
+fn tasks_filters_status_counts_and_cursor_pages_are_consistent() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO run_configs (
+                id, name, plugin_id, url, created_at, schedule_enabled, is_dry_run
+            ) VALUES ('cfg-a', 'Config A', 'pixiv', '', 100, 1, 0);
+            INSERT INTO tasks (
+                id, plugin_id, run_config_id, trigger_source, status, progress, deleted_count,
+                dedup_count, success_count, failed_count, start_time, max_concurrent_downloads, is_dry_run
+            ) VALUES
+                ('task-5', 'pixiv',  'cfg-a', 'scheduled', 'running',   20, 0, 0, 1, 0, 50, 3, 0),
+                ('task-4', 'yande',  NULL,    'manual',    'pending',    0, 0, 0, 0, 0, 40, NULL, 0),
+                ('task-3', 'konachan', NULL,  'manual',    'failed',    50, 0, 0, 1, 1, 30, NULL, 1),
+                ('task-2', 'pixiv',  'cfg-a', 'scheduled', 'completed',100, 0, 0, 2, 0, 20, 2, 0),
+                ('task-1', 'other',  NULL,    'manual',    'canceled',  10, 0, 0, 0, 0, 10, NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn);
+
+    let status_counts = listed_counts(&runtime, "tasks://status");
+    assert!(status_counts.contains(&("completed".to_string(), 2)));
+    assert!(status_counts.contains(&("running".to_string(), 1)));
+
+    assert_eq!(runtime.count("tasks://plugin/pixiv").unwrap(), 3);
+    assert_eq!(runtime.count("tasks://plugin_search/AN").unwrap(), 2);
+    assert_eq!(runtime.count("tasks://run_config/cfg-a").unwrap(), 2);
+    assert_eq!(
+        runtime
+            .count("tasks://~any/plugin/pixiv/~or/plugin_search/yan/~end")
+            .unwrap(),
+        4
+    );
+
+    let all = ids(runtime.fetch("tasks://all").unwrap());
+    let first = runtime.fetch("tasks://x2x/1").unwrap();
+    let last = first.last().unwrap();
+    let cursor = format!(
+        "tasks://before_{}_{}",
+        last["start_time"].as_i64().unwrap_or(0),
+        pathql_rs::escape_path_segment(last["id"].as_str().unwrap())
+    );
+    let mut paged = ids(first);
+    let mut next = runtime.fetch(&format!("{cursor}/x2x/1")).unwrap();
+    while !next.is_empty() {
+        let last = next.last().unwrap();
+        let next_cursor = format!(
+            "tasks://before_{}_{}",
+            last["start_time"].as_i64().unwrap_or(0),
+            pathql_rs::escape_path_segment(last["id"].as_str().unwrap())
+        );
+        paged.extend(ids(next));
+        next = runtime.fetch(&format!("{next_cursor}/x2x/1")).unwrap();
+    }
+    assert_eq!(paged, all);
+    assert_eq!(paged.iter().collect::<HashSet<_>>().len(), paged.len());
+
+    let joined = runtime.fetch("tasks://id_task-5").unwrap();
+    assert_eq!(joined[0]["run_config_name"], "Config A");
+    assert_eq!(joined[0]["max_concurrent_downloads"], 3);
+    assert_eq!(joined[0]["is_dry_run"], 0);
+}
+
+#[test]
+fn run_configs_filters_counts_and_cursor_pages_are_consistent() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO run_configs (
+                id, name, description, plugin_id, url, user_config, http_headers, created_at,
+                schedule_enabled, schedule_spec, max_concurrent_downloads, is_dry_run
+            ) VALUES
+                ('cfg-4', 'Four', NULL, 'pixiv', '', '{"q":4}', '{"A":"b"}', 40, 1,
+                 '{"mode":"daily","hour":1,"minute":2}', 4, 1),
+                ('cfg-3', 'Three', NULL, 'pixiv', '', NULL, NULL, 30, 0, NULL, NULL, 0),
+                ('cfg-2', 'Two', NULL, 'yande', '', NULL, NULL, 20, 1, NULL, NULL, 0),
+                ('cfg-1', 'One', NULL, 'other', '', NULL, NULL, 10, 0, NULL, NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn);
+
+    let one = runtime.fetch("run_configs://id_cfg-4").unwrap();
+    assert_eq!(one[0]["name"], "Four");
+    assert_eq!(runtime.count("run_configs://enabled").unwrap(), 2);
+    assert_eq!(runtime.count("run_configs://plugin/pixiv").unwrap(), 2);
+    let plugin_counts = listed_counts(&runtime, "run_configs://plugin");
+    assert!(plugin_counts.contains(&("pixiv".to_string(), 2)));
+    assert!(plugin_counts.contains(&("yande".to_string(), 1)));
+    let enabled_counts = listed_counts(&runtime, "run_configs://enabled/plugin");
+    assert!(enabled_counts.contains(&("pixiv".to_string(), 1)));
+    assert!(enabled_counts.contains(&("yande".to_string(), 1)));
+
+    let all = ids(runtime.fetch("run_configs://all").unwrap());
+    let first = runtime.fetch("run_configs://x2x/1").unwrap();
+    let last = first.last().unwrap();
+    let second = runtime
+        .fetch(&format!(
+            "run_configs://before_{}_{}/x2x/1",
+            last["created_at"].as_i64().unwrap(),
+            pathql_rs::escape_path_segment(last["id"].as_str().unwrap())
+        ))
+        .unwrap();
+    let mut paged = ids(first);
+    paged.extend(ids(second));
+    assert_eq!(paged, all);
+    assert_eq!(paged.iter().collect::<HashSet<_>>().len(), paged.len());
+}
+
+#[test]
+fn run_configs_join_latest_task_filters_facets_and_sorts() {
+    let conn = fixture_db();
+    {
+        let conn = conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO run_configs (
+                id, name, description, plugin_id, url, created_at, schedule_enabled,
+                schedule_spec, schedule_planned_at, is_dry_run
+            ) VALUES
+                ('latest-a', 'Morning Pixiv', 'favorite artist', 'pixiv', '', 101, 1,
+                 '{"mode":"hourly","minute":30}', 1000, 0),
+                ('latest-b', 'Evening', 'wallpaper', 'yande', '', 102, 1,
+                 '{"mode":"daily","hour":20,"minute":0}', 2000, 0),
+                ('latest-c', 'Manual', 'archive', 'other', '', 103, 0, NULL, NULL, 0);
+            INSERT INTO tasks (
+                id, plugin_id, run_config_id, trigger_source, status, success_count,
+                failed_count, start_time, error, is_dry_run
+            ) VALUES
+                ('latest-a-old', 'pixiv', 'latest-a', 'scheduled', 'completed', 3, 0, 10, NULL, 0),
+                ('latest-a-new', 'pixiv', 'latest-a', 'scheduled', 'failed', 1, 2, 30, 'boom', 0),
+                ('latest-b-new', 'yande', 'latest-b', 'scheduled', 'completed', 4, 1, 20, NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+    let runtime = build_runtime_with(conn.clone());
+
+    let latest = runtime.fetch("run_configs://id_latest-a").unwrap();
+    assert_eq!(latest[0]["last_task_id"], "latest-a-new");
+    assert_eq!(latest[0]["last_result"], "failed");
+    assert_eq!(
+        ids(runtime.fetch("run_configs://last/failed").unwrap()),
+        ["latest-a"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("run_configs://mode/hourly").unwrap()),
+        ["latest-a"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("run_configs://paused").unwrap()),
+        ["latest-c"]
+    );
+    assert_eq!(
+        ids(runtime.fetch("run_configs://search/PIXIV").unwrap()),
+        ["latest-a"]
+    );
+
+    let last_counts = listed_counts(&runtime, "run_configs://last");
+    assert!(last_counts.contains(&("failed".to_string(), 1)));
+    assert!(last_counts.contains(&("partial".to_string(), 1)));
+    assert!(last_counts.contains(&("never".to_string(), 1)));
+    let mode_counts = listed_counts(&runtime, "run_configs://mode");
+    assert!(mode_counts.contains(&("hourly".to_string(), 1)));
+    assert!(mode_counts.contains(&("none".to_string(), 1)));
+
+    let asc = ids(runtime.fetch("run_configs://sort/next/x10x/1").unwrap());
+    let desc = ids(runtime
+        .fetch("run_configs://sort/next/desc/x10x/1")
+        .unwrap());
+    assert_eq!(asc.last().map(String::as_str), Some("latest-c"));
+    assert_eq!(desc.last().map(String::as_str), Some("latest-c"));
+
+    let conn = conn.lock().unwrap();
+    let mut statement = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT run_configs.id, rc_last.id FROM run_configs LEFT JOIN tasks rc_last ON \
+             rc_last.id = (SELECT t.id FROM tasks t WHERE t.run_config_id = run_configs.id \
+             ORDER BY t.start_time DESC, t.id DESC LIMIT 1)",
+        )
+        .unwrap();
+    let details = statement
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("idx_tasks_run_config")),
+        "{details:?}"
+    );
 }
 
 #[test]
@@ -931,9 +1169,19 @@ fn image_basic_delegate_contributes_fields_order_and_schema_from() {
         .build_sql(&ctx, SqlDialect::Sqlite)
         .unwrap();
 
-    assert!(sql.contains("SELECT images.*"), "{sql}");
+    // 根只贡献 id，原始行的列由 image_basic_provider 逐列枚举，不用 `images.*`
+    assert!(
+        sql.starts_with("SELECT images.id AS id, images.url, images.local_path,"),
+        "{sql}"
+    );
+    assert!(!sql.contains("images.*"), "{sql}");
     assert!(sql.contains("FROM images"), "{sql}");
     assert!(sql.contains("ORDER BY images.id ASC"), "{sql}");
+
+    // 根本身只投影 id
+    let root = runtime.resolve("images://").unwrap();
+    let (root_sql, _) = root.composed.build_sql(&ctx, SqlDialect::Sqlite).unwrap();
+    assert_eq!(root_sql, "SELECT images.id AS id FROM images");
 }
 
 #[test]
@@ -1188,6 +1436,150 @@ fn gallery_rank_locates_image_position_within_view() {
     assert_eq!(rank(&runtime, &album_view, "1"), Some(1));
     assert_eq!(rank(&runtime, &album_view, "5"), Some(5));
     assert_eq!(rank(&runtime, &album_view, "6"), None);
+}
+
+#[test]
+fn gallery_lookup_rows_match_wide_pages_and_keep_album_order() {
+    let runtime = build_runtime();
+    // 把画册顺序改成与 id、时间都不同，确保外层只按本页 row_index 恢复内层顺序。
+    // 名称也与 id 逆序，避免 by-name 仅因 id 恰好同序而通过。
+    let conn = fixture_db();
+    conn.lock().unwrap().execute_batch(
+        "UPDATE album_images SET \"order\" = 10 - image_id WHERE album_id = '11111111-1111-1111-1111-111111111111';
+         UPDATE images SET display_name = 'z-last' WHERE id = 1;
+         UPDATE images SET display_name = 'a-first' WHERE id = 2;",
+    ).unwrap();
+    let album_runtime = build_runtime_with(conn);
+    let views = [
+        "all".to_string(),
+        "no-album/_kb_fc/sort/by-id".to_string(),
+        "~not/~any/search/metadata/table/~or/search/native-metadata/r18/~end/~end/sort/by-id"
+            .to_string(),
+        "hide/sort/by-time".to_string(),
+        "sort/random-7921476028795849/_kb_desc".to_string(),
+        "sort/by-name".to_string(),
+        format!("album/{ALBUM_A_ID}/sort/by-album-order"),
+        format!("album/{ALBUM_A_ID}/sort/by-album-order/_kb_desc"),
+        format!("album-tree/{ALBUM_A_ID}/sort/by-id"),
+        "hide/~not/~any/search/metadata/table/~or/search/native-metadata/r18/~end/~end/sort/by-id"
+            .to_string(),
+        "search/label/Hatsune/sort/by-id".to_string(),
+        format!("task/{TASK_A_ID}/sort/by-time/_kb_desc"),
+        "surf/pixiv.test/sort/by-id".to_string(),
+    ];
+    for view in &views {
+        for page in [1, 2, 3, 99] {
+            let rt = if view.starts_with("album/") || view == "sort/by-name" {
+                &album_runtime
+            } else {
+                &runtime
+            };
+            let tail = format!("{view}/_kb_x2x/{page}");
+            let wide = rt.fetch(&format!("images://gallery/{tail}")).unwrap();
+            let path = format!("images://filter/{tail}/~~/rank/~~p/lookup/gallery");
+            let lookup = rt
+                .fetch(&path)
+                .unwrap_or_else(|err| panic!("{path}: {err}"));
+            assert_eq!(ids(lookup.clone()), ids(wide.clone()), "{path}");
+            for (index, (row, expected)) in lookup.into_iter().zip(wide).enumerate() {
+                assert_eq!(row["row_index"], index + 1, "{path}");
+                if view.starts_with("album/") {
+                    assert!(row["album_order"].is_number(), "{path}: {row}");
+                }
+                let actual: ImageInfo = serde_json::from_value(row).unwrap();
+                let expected: ImageInfo = serde_json::from_value(expected).unwrap();
+                assert_eq!(
+                    serde_json::to_value(actual).unwrap(),
+                    serde_json::to_value(expected).unwrap(),
+                    "{path}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn gallery_filter_dimensions_resolve_without_wide_enumeration_or_projection() {
+    let runtime = build_runtime();
+    let mut ctx = TemplateContext::default();
+    ctx.globals = runtime.globals().clone();
+    // 这些维度的列举会读 sub.type / sub.crawled_at 等宽列，窄入口若退回 list 反查即失败。
+    // 逐个 fetch 同时覆盖 resolve 与真实 SQL，不在 filter 下列举维度。
+    for view in [
+        "all".to_string(),
+        "hide/all".to_string(),
+        "wallpaper-order".to_string(),
+        "no-album".to_string(),
+        "name/english".to_string(),
+        "plugin/pixiv".to_string(),
+        "media-type/image/jpeg".to_string(),
+        "date/2023y/04m/05d".to_string(),
+        format!("album/{ALBUM_A_ID}"),
+        format!("album-tree/{ALBUM_A_ID}"),
+        format!("task/{TASK_A_ID}"),
+        "surf/pixiv.test".to_string(),
+        "size/0B-1KB".to_string(),
+        "size/unknown".to_string(),
+        "aspect/4x3-16x9".to_string(),
+        "aspect/unknown".to_string(),
+        "by_id/1".to_string(),
+        "by_path/%2Ftmp%2Fimage-1.jpg".to_string(),
+        "by_compatible_path/missing".to_string(),
+        "by_thumbnail_path/missing".to_string(),
+        "by_url/https%3A%2F%2Fexample.test%2F1.jpg".to_string(),
+        "by_hash/missing".to_string(),
+        "bigger_crawler_time/1".to_string(),
+        "search/display-name/image".to_string(),
+        "search/local-path/tmp".to_string(),
+        "search/url/example".to_string(),
+        "search/metadata/table".to_string(),
+        "search/native-metadata/r18".to_string(),
+        "search/label/Hatsune".to_string(),
+        "sort/by-name".to_string(),
+    ] {
+        let path = format!("images://filter/{view}/_kb_x2x/1");
+        let resolved = runtime
+            .resolve(&path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+        let (sql, _) = resolved
+            .composed
+            .build_sql(&ctx, SqlDialect::Sqlite)
+            .unwrap();
+        let projection = sql.split(" FROM ").next().unwrap();
+        // 画册允许附带 album_order，其余过滤不能把 gallery 字段重新带进排序器。
+        assert!(projection.contains("images.id AS id"), "{path}: {sql}");
+        for wide in [
+            "images.url",
+            "images.local_path",
+            "images.thumbnail_path",
+            "is_favorite",
+            "is_hidden",
+        ] {
+            assert!(!projection.contains(wide), "{path}: {sql}");
+        }
+        let narrow = runtime
+            .fetch(&path)
+            .unwrap_or_else(|err| panic!("{path}: {err}"));
+        assert!(
+            narrow.iter().all(|row| row
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| key == "id" || key == "album_order")),
+            "{path}"
+        );
+    }
+    let root = runtime.list("images://").unwrap();
+    assert!(!root
+        .iter()
+        .any(|child| child.name == "filter" || child.name == "lookup"));
+    let resolved = runtime.resolve("images://filter/album/11111111-1111-1111-1111-111111111111/sort/by-album-order/_kb_x2x/1/~~/rank/~~p/lookup/gallery").unwrap();
+    let (sql, _) = resolved
+        .composed
+        .build_sql(&ctx, SqlDialect::Sqlite)
+        .unwrap();
+    assert!(sql.contains("images.id = p.id"), "{sql}");
+    assert!(sql.ends_with("ORDER BY p.row_index ASC"), "{sql}");
 }
 
 #[test]
@@ -2347,7 +2739,6 @@ fn image_collection_paths_decode_into_image_info() {
     let runtime = build_runtime();
 
     for path in [
-        "images://",
         "images://x2x/1",
         "images://gallery/all",
         "images://gallery/all/_kb_x2x/1",

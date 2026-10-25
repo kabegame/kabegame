@@ -19,6 +19,7 @@ pub struct ImageInfo {
     pub id: String,
     /// 图片源 URL，本地导入时可为空。
     pub url: Option<String>,
+    #[serde(alias = "localPath")]
     pub local_path: String,
     #[serde(rename(serialize = "pluginId"), alias = "pluginId")]
     #[serde(default)]
@@ -28,11 +29,19 @@ pub struct ImageInfo {
     #[serde(rename(serialize = "surfRecordId"), alias = "surfRecordId")]
     #[serde(default)]
     pub surf_record_id: Option<String>,
+    #[serde(alias = "crawledAt")]
     pub crawled_at: u64,
     /// 外键指向 `metadata.id`；下载入口已将 raw metadata 预先归一化为该 id。
     #[serde(rename(serialize = "metadataId"), alias = "metadataId")]
     #[serde(default)]
     pub metadata_id: Option<i64>,
+    /// 原生元数据外键，新增事件在持久化后携带最终值。
+    #[serde(
+        rename(serialize = "imageMetadataId"),
+        alias = "imageMetadataId",
+        default
+    )]
+    pub image_metadata_id: Option<i64>,
     #[serde(rename(serialize = "thumbnailPath"), alias = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -52,7 +61,7 @@ pub struct ImageInfo {
     )]
     pub is_hidden: bool,
     /// 本地文件是否存在（用于前端标记缺失文件：仍展示条目，但提示用户源文件已丢失/移动）
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "localExists")]
     pub local_exists: bool,
     #[serde(default)]
     pub hash: String,
@@ -65,11 +74,11 @@ pub struct ImageInfo {
     pub display_name: String,
     /// 存储格式 key（`image/jpg`、`video/mp4`…）。
     ///
-    /// 线上键名统一为 `type`，**不要再加 `media_type` 别名**：provider 树的上游
-    /// (`images_root_provider`) 贡献 `images.*`，展开后已含一个 `type` 列；只要哪个
+    /// 线上键名统一为 `type`，**不要再加 `media_type` 别名**：原始行路径
+    /// (`image_basic_provider`) 贡献 `images.*`，展开后已含一个 `type` 列；只要哪个
     /// 下游 provider 再取名 `media_type`，两个键就会同时出现在同一行 JSON 里，
     /// 而 serde 对同一字段的两个可接受键名会直接报 `duplicate field type`，
-    /// 令整棵 gallery 子树无法反序列化。
+    /// 令整棵子树无法反序列化。
     #[serde(rename = "type")]
     #[serde(default)]
     pub media_type: Option<String>,
@@ -155,21 +164,11 @@ pub struct MetadataFull {
     pub plugin_id: String,
 }
 
-/// 原生元数据挂载结果。原生元数据参与 `search/native-metadata`，挂载会改变图片的搜索成员，
-/// 调用方要为 `changed_image_ids` 发 `images-change("change")`，否则正在显示的视图不会重查。
-#[derive(Debug, Clone)]
-pub struct NativeMetadataAttached {
-    pub metadata_id: i64,
-    /// 本次挂载实际改了 `image_metadata_id` 的图片；已挂着同一行的不算。
-    pub changed_image_ids: Vec<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct ImageNativeMetadataRow {
     pub image_metadata_id: Option<i64>,
     pub data: Option<String>,
     pub parser_version: Option<u32>,
-    pub hash: String,
     pub local_path: String,
     pub format_key: Option<String>,
 }
@@ -345,14 +344,6 @@ fn insert_image_metadata_row(
 //     trim_pixiv_plugin_metadata_if_needed、migrate_pixiv_metadata_trim
 // 这些函数用于一次性裁剪旧版 pixiv 图片的 metadata.body 字段，
 // 仅针对早于 3.5.x 的历史数据库，v4.0 不再支持从那些版本直接升级。
-
-pub(crate) fn row_optional_u64_ts(
-    row: &rusqlite::Row,
-    idx: usize,
-) -> rusqlite::Result<Option<u64>> {
-    let v: Option<i64> = row.get(idx)?;
-    Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
-}
 
 fn first_gallery_image_at(path: &str) -> Result<Option<ImageInfo>, String> {
     let mut image = crate::providers::images_at(path)?.into_iter().next();
@@ -686,153 +677,45 @@ impl Storage {
         Ok(())
     }
 
-    /// 查找同内容哈希且解析器版本匹配的原生元数据，并回填到全部同哈希图片。
-    /// 未命中时仅在传入 JSON 后创建新行；空哈希不跨图片共享。
-    pub fn ensure_native_metadata_for_hash(
-        &self,
-        hash: &str,
-        expected_version: u32,
-        json_if_missing: Option<&str>,
-    ) -> Result<Option<NativeMetadataAttached>, String> {
-        let hash = hash.trim();
-        if hash.is_empty() {
-            return Ok(None);
-        }
-
-        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("begin ensure native metadata: {e}"))?;
-        let candidate_ids = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT DISTINCT image_metadata_id
-                     FROM images
-                     WHERE hash = ?1 AND image_metadata_id IS NOT NULL",
-                )
-                .map_err(|e| format!("prepare native metadata candidates: {e}"))?;
-            let rows = stmt
-                .query_map(params![hash], |row| row.get::<_, i64>(0))
-                .map_err(|e| format!("query native metadata candidates: {e}"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("collect native metadata candidates: {e}"))?
-        };
-
-        let current_id = tx
-            .query_row(
-                "SELECT im.id
-                 FROM images i
-                 INNER JOIN image_metadata im ON im.id = i.image_metadata_id
-                WHERE i.hash = ?1 AND im.parser_version = ?2
-                 ORDER BY im.id
-                 LIMIT 1",
-                params![hash, i64::from(expected_version)],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(|e| format!("select shared native metadata: {e}"))?;
-
-        let metadata_id = if let Some(id) = current_id {
-            id
-        } else if let Some(json) = json_if_missing {
-            insert_image_metadata_row(&tx, json, expected_version)?
-        } else {
-            tx.commit()
-                .map_err(|e| format!("commit native metadata miss: {e}"))?;
-            return Ok(None);
-        };
-
-        let changed_image_ids = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT id FROM images
-                     WHERE hash = ?1 AND image_metadata_id IS NOT ?2",
-                )
-                .map_err(|e| format!("prepare native metadata backfill targets: {e}"))?;
-            let rows = stmt
-                .query_map(params![hash, metadata_id], |row| row.get::<_, i64>(0))
-                .map_err(|e| format!("query native metadata backfill targets: {e}"))?;
-            rows.map(|row| row.map(|id| id.to_string()))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("collect native metadata backfill targets: {e}"))?
-        };
-        tx.execute(
-            "UPDATE images SET image_metadata_id = ?1 WHERE hash = ?2",
-            params![metadata_id, hash],
-        )
-        .map_err(|e| format!("backfill shared native metadata: {e}"))?;
-        gc_native_metadata_candidates(&tx, &candidate_ids, Some(metadata_id))?;
-        tx.commit()
-            .map_err(|e| format!("commit shared native metadata: {e}"))?;
-        Ok(Some(NativeMetadataAttached {
-            metadata_id,
-            changed_image_ids,
-        }))
-    }
-
-    /// 空哈希历史数据退化为仅挂载当前图片；正常哈希仍走共享路径。
-    pub fn ensure_native_metadata_for_image(
+    /// 把解析结果存成本图独占的新行并改挂；旧行随即删除。新 id 让前端按 `imageMetadataId` 的缓存失效。
+    pub fn replace_image_native_metadata(
         &self,
         image_id: &str,
-        hash: &str,
-        expected_version: u32,
-        json_if_missing: Option<&str>,
-    ) -> Result<Option<NativeMetadataAttached>, String> {
-        if !hash.trim().is_empty() {
-            return self.ensure_native_metadata_for_hash(hash, expected_version, json_if_missing);
-        }
-
+        parser_version: u32,
+        json: &str,
+    ) -> Result<i64, String> {
+        // 1. 在事务内查询当前图片关联的旧行；图片不存在时返回错误，不写入元数据。
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let tx = conn
             .transaction()
-            .map_err(|e| format!("begin image native metadata: {e}"))?;
-        let current = tx
+            .map_err(|e| format!("begin replace image native metadata: {e}"))?;
+        let old_id = tx
             .query_row(
-                "SELECT im.id, im.parser_version
-                 FROM images i
-                 LEFT JOIN image_metadata im ON im.id = i.image_metadata_id
-                 WHERE i.id = ?1",
+                "SELECT image_metadata_id FROM images WHERE id = ?1",
                 params![image_id],
-                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+                |row| row.get::<_, Option<i64>>(0),
             )
             .optional()
-            .map_err(|e| format!("select image native metadata: {e}"))?;
-        let Some((old_id, old_version)) = current else {
-            tx.commit()
-                .map_err(|e| format!("commit missing image native metadata: {e}"))?;
-            return Ok(None);
-        };
-        if let (Some(metadata_id), Some(version)) = (old_id, old_version) {
-            if version == i64::from(expected_version) {
-                tx.commit()
-                    .map_err(|e| format!("commit current image native metadata: {e}"))?;
-                return Ok(Some(NativeMetadataAttached {
-                    metadata_id,
-                    changed_image_ids: Vec::new(),
-                }));
-            }
-        }
-        let Some(json) = json_if_missing else {
-            tx.commit()
-                .map_err(|e| format!("commit image native metadata miss: {e}"))?;
-            return Ok(None);
-        };
+            .map_err(|e| format!("select image native metadata: {e}"))?
+            .ok_or_else(|| "native-metadata:image-not-found".to_string())?;
 
-        let metadata_id = insert_image_metadata_row(&tx, json, expected_version)?;
+        // 2. 保存调用方提供的解析结果为新行，并只改挂当前图片。
+        let metadata_id = insert_image_metadata_row(&tx, json, parser_version)?;
         tx.execute(
             "UPDATE images SET image_metadata_id = ?1 WHERE id = ?2",
             params![metadata_id, image_id],
         )
         .map_err(|e| format!("attach image native metadata: {e}"))?;
+
+        // 3. 一图一行，旧行只属于本图；历史共享行仍被别的图引用时外键会拒绝，留给对方清理。
         if let Some(old_id) = old_id {
-            gc_native_metadata_candidates(&tx, &[old_id], Some(metadata_id))?;
+            let _ = tx.execute("DELETE FROM image_metadata WHERE id = ?1", params![old_id]);
         }
+
+        // 4. 提交事务后返回新行 ID，供调用方发送补丁并使前端缓存失效。
         tx.commit()
             .map_err(|e| format!("commit image native metadata: {e}"))?;
-        Ok(Some(NativeMetadataAttached {
-            metadata_id,
-            changed_image_ids: vec![image_id.to_string()],
-        }))
+        Ok(metadata_id)
     }
 
     pub fn get_image_native_metadata_row(
@@ -842,7 +725,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         conn.query_row(
             "SELECT i.image_metadata_id, im.data, im.parser_version,
-                    COALESCE(i.hash, ''), i.local_path, i.type
+                    i.local_path, i.type
              FROM images i
              LEFT JOIN image_metadata im ON im.id = i.image_metadata_id
              WHERE i.id = ?1",
@@ -855,22 +738,13 @@ impl Storage {
                     image_metadata_id: row.get(0)?,
                     data: row.get(1)?,
                     parser_version,
-                    hash: row.get(3)?,
-                    local_path: row.get(4)?,
-                    format_key: row.get(5)?,
+                    local_path: row.get(3)?,
+                    format_key: row.get(4)?,
                 })
             },
         )
         .optional()
         .map_err(|e| format!("get image native metadata row: {e}"))
-    }
-
-    pub fn gc_image_metadata(&self, candidate_ids: &[i64]) -> Result<usize, String> {
-        if candidate_ids.is_empty() {
-            return Ok(0);
-        }
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
-        gc_native_metadata_candidates(&conn, candidate_ids, None)
     }
 
     pub fn find_image_by_path(local_path: &str) -> Result<Option<ImageInfo>, String> {
@@ -1029,187 +903,6 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
-    pub fn delete_image(&self, image_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut local_paths_to_purge = Vec::new();
-
-        let image_paths: Option<(
-            String,
-            String,
-            Option<i64>,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-        )> = conn
-            .query_row(
-                "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
-                params![image_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query image path: {}", e))?;
-        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _, _)| *id);
-        let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
-
-        // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
-        let task_ids: Vec<String> = conn
-            .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
-            .and_then(|mut stmt| {
-                stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
-                    .and_then(|rows| {
-                        let mut ids = Vec::new();
-                        for row_result in rows {
-                            if let Ok(id) = row_result {
-                                ids.push(id);
-                            }
-                        }
-                        Ok(ids)
-                    })
-            })
-            .map_err(|e| format!("Failed to query task IDs: {}", e))?;
-
-        if let Some((
-            local_path,
-            thumbnail_path,
-            _,
-            _,
-            compatible_path,
-            wallpaper_compatible_path,
-        )) = image_paths
-        {
-            remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
-            remove_compatible_file_if_owned(compatible_path.as_deref());
-            remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
-            // purge 是异步操作（Android 需经过 IPC，且可能弹系统授权窗），不能在持有 DB 锁时执行。
-            local_paths_to_purge.push(local_path);
-        }
-
-        conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
-            .map_err(|e| format!("Failed to delete image from DB: {}", e))?;
-
-        let _ = conn.execute(
-            "DELETE FROM album_images WHERE image_id = ?1",
-            params![image_id],
-        );
-
-        // 更新所有相关任务的 deleted_count 与 success_count（当前存活图片数）
-        for task_id in task_ids {
-            let _ = conn.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + 1, success_count = MAX(0, success_count - 1) WHERE id = ?1",
-                params![task_id],
-            );
-        }
-
-        self.invalidate_images_total_cache();
-        drop(conn);
-        if let Some(metadata_id) = metadata_id {
-            let _ = self.gc_metadata(&[metadata_id]);
-        }
-        if let Some(image_metadata_id) = image_metadata_id {
-            let _ = self.gc_image_metadata(&[image_metadata_id]);
-        }
-
-        Ok(local_paths_to_purge)
-    }
-
-    pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let image_paths: Option<(
-            String,
-            String,
-            Option<i64>,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-        )> = conn
-            .query_row(
-                "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
-                params![image_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query image path: {}", e))?;
-        let metadata_id = image_paths.as_ref().and_then(|(_, _, id, _, _, _)| *id);
-        let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
-
-        // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
-        let task_ids: Vec<String> = conn
-            .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
-            .and_then(|mut stmt| {
-                stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
-                    .and_then(|rows| {
-                        let mut ids = Vec::new();
-                        for row_result in rows {
-                            if let Ok(id) = row_result {
-                                ids.push(id);
-                            }
-                        }
-                        Ok(ids)
-                    })
-            })
-            .map_err(|e| format!("Failed to query task IDs: {}", e))?;
-
-        if let Some((
-            local_path,
-            thumbnail_path,
-            _,
-            _,
-            compatible_path,
-            wallpaper_compatible_path,
-        )) = image_paths
-        {
-            remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
-            remove_compatible_file_if_owned(compatible_path.as_deref());
-            remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
-        }
-
-        conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
-            .map_err(|e| format!("Failed to remove image from DB: {}", e))?;
-
-        let _ = conn.execute(
-            "DELETE FROM album_images WHERE image_id = ?1",
-            params![image_id],
-        );
-
-        // 更新所有相关任务的 deleted_count 与 success_count
-        for task_id in task_ids {
-            let _ = conn.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + 1, success_count = MAX(0, success_count - 1) WHERE id = ?1",
-                params![task_id],
-            );
-        }
-
-        self.invalidate_images_total_cache();
-        drop(conn);
-        if let Some(metadata_id) = metadata_id {
-            let _ = self.gc_metadata(&[metadata_id]);
-        }
-        if let Some(image_metadata_id) = image_metadata_id {
-            let _ = self.gc_image_metadata(&[image_metadata_id]);
-        }
-
-        Ok(())
-    }
-
     pub fn batch_delete_images(&self, image_ids: &[String]) -> Result<Vec<String>, String> {
         if image_ids.is_empty() {
             return Ok(Vec::new());
@@ -1220,7 +913,6 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
         let mut metadata_ids = Vec::new();
-        let mut image_metadata_ids = Vec::new();
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
@@ -1275,20 +967,18 @@ impl Storage {
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
+            let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
             if let Some((
                 local_path,
                 thumbnail_path,
                 metadata_id,
-                image_metadata_id,
+                _,
                 compatible_path,
                 wallpaper_compatible_path,
             )) = image_paths
             {
                 if let Some(metadata_id) = metadata_id {
                     metadata_ids.push(metadata_id);
-                }
-                if let Some(image_metadata_id) = image_metadata_id {
-                    image_metadata_ids.push(image_metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
@@ -1298,6 +988,14 @@ impl Storage {
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to delete image: {}", e))?;
+
+            if let Some(image_metadata_id) = image_metadata_id {
+                // 一图一行，旧行只属于本图；历史共享行仍被别的图引用时外键会拒绝，留给对方清理。
+                let _ = tx.execute(
+                    "DELETE FROM image_metadata WHERE id = ?1",
+                    params![image_metadata_id],
+                );
+            }
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
         }
@@ -1316,7 +1014,6 @@ impl Storage {
         self.invalidate_images_total_cache();
         drop(conn);
         let _ = self.gc_metadata(&metadata_ids);
-        let _ = self.gc_image_metadata(&image_metadata_ids);
 
         Ok(local_paths_to_purge)
     }
@@ -1331,7 +1028,6 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
         let mut metadata_ids = Vec::new();
-        let mut image_metadata_ids = Vec::new();
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
@@ -1383,20 +1079,18 @@ impl Storage {
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
+            let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
             if let Some((
                 local_path,
                 thumbnail_path,
                 metadata_id,
-                image_metadata_id,
+                _,
                 compatible_path,
                 wallpaper_compatible_path,
             )) = image_paths
             {
                 if let Some(metadata_id) = metadata_id {
                     metadata_ids.push(metadata_id);
-                }
-                if let Some(image_metadata_id) = image_metadata_id {
-                    image_metadata_ids.push(image_metadata_id);
                 }
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
@@ -1405,6 +1099,14 @@ impl Storage {
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to remove image: {}", e))?;
+
+            if let Some(image_metadata_id) = image_metadata_id {
+                // 一图一行，旧行只属于本图；历史共享行仍被别的图引用时外键会拒绝，留给对方清理。
+                let _ = tx.execute(
+                    "DELETE FROM image_metadata WHERE id = ?1",
+                    params![image_metadata_id],
+                );
+            }
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
         }
@@ -1423,7 +1125,6 @@ impl Storage {
         self.invalidate_images_total_cache();
         drop(conn);
         let _ = self.gc_metadata(&metadata_ids);
-        let _ = self.gc_image_metadata(&image_metadata_ids);
 
         Ok(())
     }
@@ -1450,20 +1151,6 @@ impl Storage {
         .map_err(|e| format!("Failed to update favorite membership: {e}"))?;
 
         Ok(changed > 0)
-    }
-
-    pub fn update_image_thumbnail_path(
-        &self,
-        image_id: &str,
-        thumbnail_path: &str,
-    ) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE images SET thumbnail_path = ?1 WHERE id = ?2",
-            params![thumbnail_path, image_id],
-        )
-        .map_err(|e| format!("Failed to update thumbnail path: {}", e))?;
-        Ok(())
     }
 
     pub fn replace_image_thumbnail_path(
@@ -1588,32 +1275,6 @@ impl Storage {
 
         Ok(id)
     }
-}
-
-fn gc_native_metadata_candidates(
-    conn: &rusqlite::Connection,
-    candidate_ids: &[i64],
-    keep_id: Option<i64>,
-) -> Result<usize, String> {
-    let mut deleted = 0usize;
-    let mut seen = HashSet::new();
-    for &id in candidate_ids {
-        if Some(id) == keep_id || !seen.insert(id) {
-            continue;
-        }
-        let changed = conn
-            .execute(
-                "DELETE FROM image_metadata
-                 WHERE id = ?1
-                   AND NOT EXISTS (
-                       SELECT 1 FROM images WHERE image_metadata_id = ?1
-                   )",
-                params![id],
-            )
-            .map_err(|e| format!("gc image metadata: {e}"))?;
-        deleted += changed;
-    }
-    Ok(deleted)
 }
 
 #[cfg(test)]
@@ -1820,84 +1481,174 @@ mod rebind_image_metadata_tests {
 }
 
 #[cfg(test)]
-mod native_metadata_attach_tests {
+mod native_metadata_tests {
     use super::*;
 
     fn storage() -> Storage {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE image_metadata (
+            "PRAGMA foreign_keys = ON;
+            CREATE TABLE image_metadata (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 data           TEXT    NOT NULL,
                 search_text    TEXT    NOT NULL DEFAULT '',
                 parser_version INTEGER NOT NULL DEFAULT 0
             );
-            CREATE TABLE images (
-                id                INTEGER PRIMARY KEY,
-                hash              TEXT NOT NULL DEFAULT '',
-                image_metadata_id INTEGER
+            CREATE TABLE tasks (
+                id            TEXT PRIMARY KEY,
+                deleted_count INTEGER NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO images (id, hash) VALUES (1, 'h'), (2, 'h'), (3, 'other'), (4, '');",
+            CREATE TABLE images (
+                id                        INTEGER PRIMARY KEY,
+                hash                      TEXT NOT NULL DEFAULT '',
+                image_metadata_id         INTEGER REFERENCES image_metadata(id),
+                local_path                TEXT NOT NULL DEFAULT '',
+                thumbnail_path            TEXT NOT NULL DEFAULT '',
+                metadata_id               INTEGER,
+                task_id                   TEXT REFERENCES tasks(id),
+                compatible_path           TEXT,
+                wallpaper_compatible_path TEXT,
+                type                      TEXT NOT NULL DEFAULT 'image/png'
+            );
+            CREATE TABLE album_images (
+                album_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE
+            );
+            INSERT INTO tasks (id, success_count) VALUES ('task', 2);
+            INSERT INTO images (id, hash, task_id) VALUES (1, 'h', 'task'), (2, 'h', 'task');
+            INSERT INTO album_images (album_id, image_id) VALUES ('album', 1), ('album', 2);",
         )
         .unwrap();
         Storage::from_test_connection(conn)
     }
 
-    fn sorted(mut ids: Vec<String>) -> Vec<String> {
-        ids.sort();
-        ids
-    }
-
-    #[test]
-    fn hash_attach_reports_only_images_whose_metadata_id_changed() {
-        let storage = storage();
-        // 未命中且不给 JSON：不写库，也就没有要通知的图片。
-        assert!(storage
-            .ensure_native_metadata_for_hash("h", 1, None)
-            .unwrap()
-            .is_none());
-
-        let first = storage
-            .ensure_native_metadata_for_hash("h", 1, Some(r#"{"prompt":"1girl"}"#))
-            .unwrap()
-            .unwrap();
-        assert_eq!(sorted(first.changed_image_ids), ["1", "2"]);
-
-        // 已挂着同一行：命中共享，但没有图片真的变了。
-        let again = storage
-            .ensure_native_metadata_for_image("1", "h", 1, None)
-            .unwrap()
-            .unwrap();
-        assert_eq!(again.metadata_id, first.metadata_id);
-        assert!(again.changed_image_ids.is_empty());
-
-        // 同哈希的新图入库后再共享：只报新图。
+    fn metadata_exists(storage: &Storage, metadata_id: i64) -> bool {
         storage
             .db
             .lock()
             .unwrap()
-            .execute("INSERT INTO images (id, hash) VALUES (5, 'h')", [])
-            .unwrap();
-        let shared = storage
-            .ensure_native_metadata_for_hash("h", 1, None)
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM image_metadata WHERE id = ?1)",
+                params![metadata_id],
+                |row| row.get(0),
+            )
             .unwrap()
+    }
+
+    fn share_metadata(storage: &Storage) -> i64 {
+        let metadata_id = storage.replace_image_native_metadata("1", 1, "{}").unwrap();
+        storage
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE images SET image_metadata_id = ?1 WHERE id = 2",
+                params![metadata_id],
+            )
             .unwrap();
-        assert_eq!(shared.changed_image_ids, ["5"]);
+        metadata_id
     }
 
     #[test]
-    fn empty_hash_attach_reports_the_image_once() {
+    fn replace_attaches_new_row_and_deletes_old_row() {
         let storage = storage();
-        let attached = storage
-            .ensure_native_metadata_for_image("4", "", 1, Some("{}"))
+        let json = r#"{"prompt":"1girl"}"#;
+        let first = storage.replace_image_native_metadata("1", 1, json).unwrap();
+        let row = storage.get_image_native_metadata_row("1").unwrap().unwrap();
+        assert_eq!(row.image_metadata_id, Some(first));
+        assert_eq!(row.parser_version, Some(1));
+        assert_eq!(row.data.as_deref(), Some(json));
+        // 同哈希图片不会自动挂载；相同解析结果也各自独占一行。
+        assert_eq!(
+            storage
+                .get_image_native_metadata_row("2")
+                .unwrap()
+                .unwrap()
+                .image_metadata_id,
+            None
+        );
+        let other = storage.replace_image_native_metadata("2", 1, json).unwrap();
+        assert_ne!(other, first);
+
+        // 即使解析器版本未变，写入口也无条件换新行，让缓存键失效。
+        let second = storage.replace_image_native_metadata("1", 1, "{}").unwrap();
+        assert!(second > other);
+        let row = storage.get_image_native_metadata_row("1").unwrap().unwrap();
+        assert_eq!(row.image_metadata_id, Some(second));
+        assert_eq!(row.data.as_deref(), Some("{}"));
+        assert!(!metadata_exists(&storage, first));
+        assert!(metadata_exists(&storage, other));
+    }
+
+    #[test]
+    fn replace_missing_image_returns_error_without_inserting_row() {
+        let storage = storage();
+        assert_eq!(
+            storage.replace_image_native_metadata("missing", 1, "{}"),
+            Err("native-metadata:image-not-found".to_string())
+        );
+        let count: i64 = storage
+            .db
+            .lock()
             .unwrap()
+            .query_row("SELECT COUNT(*) FROM image_metadata", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(attached.changed_image_ids, ["4"]);
-        let current = storage
-            .ensure_native_metadata_for_image("4", "", 1, None)
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn replace_preserves_historical_shared_row_with_foreign_keys() {
+        let storage = storage();
+        let shared = share_metadata(&storage);
+        let replacement = storage.replace_image_native_metadata("1", 2, "{}").unwrap();
+        assert_ne!(replacement, shared);
+        let row = storage.get_image_native_metadata_row("1").unwrap().unwrap();
+        assert_eq!(row.image_metadata_id, Some(replacement));
+        assert_eq!(row.parser_version, Some(2));
+        let other = storage.get_image_native_metadata_row("2").unwrap().unwrap();
+        assert_eq!(other.image_metadata_id, Some(shared));
+        assert_eq!(other.data.as_deref(), Some("{}"));
+        assert!(metadata_exists(&storage, shared));
+    }
+
+    #[test]
+    fn remove_preserves_shared_row_until_last_image_is_removed() {
+        let storage = storage();
+        let shared = share_metadata(&storage);
+        storage.batch_remove_images(&["1".to_string()]).unwrap();
+        assert!(storage
+            .get_image_native_metadata_row("1")
             .unwrap()
+            .is_none());
+        assert!(metadata_exists(&storage, shared));
+        assert_eq!(
+            storage
+                .get_image_native_metadata_row("2")
+                .unwrap()
+                .unwrap()
+                .image_metadata_id,
+            Some(shared)
+        );
+
+        storage.batch_remove_images(&["2".to_string()]).unwrap();
+        assert!(storage
+            .get_image_native_metadata_row("2")
+            .unwrap()
+            .is_none());
+        assert!(!metadata_exists(&storage, shared));
+        let conn = storage.db.lock().unwrap();
+        let counts: (i64, i64) = conn
+            .query_row(
+                "SELECT deleted_count, success_count FROM tasks WHERE id = 'task'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
-        assert_eq!(current.metadata_id, attached.metadata_id);
-        assert!(current.changed_image_ids.is_empty());
+        assert_eq!(counts, (2, 0));
+        let members: i64 = conn
+            .query_row("SELECT COUNT(*) FROM album_images", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(members, 0);
     }
 }

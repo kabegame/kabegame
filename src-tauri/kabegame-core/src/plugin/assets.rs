@@ -72,15 +72,14 @@ pub fn mime_for_asset(key_or_path: &str) -> &'static str {
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("svg") => "image/svg+xml",
-        Some("gif") => "image/gif",
-        Some("bmp") => "image/bmp",
-        _ => "application/octet-stream",
+    if ext.as_deref() == Some("svg") {
+        return "image/svg+xml";
     }
+    ext.as_deref()
+        .and_then(crate::media::image_type::media_format_by_ext)
+        .filter(|format| format.is_image())
+        .map(|format| format.mime)
+        .unwrap_or("application/octet-stream")
 }
 
 /// 是否是「展示位」资源：完整归一化路径以 `banner` 开头，大小写不敏感。

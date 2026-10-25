@@ -62,13 +62,16 @@
       <el-descriptions-item v-if="(task.deletedCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDeleted')">
         {{ t("tasks.drawerDeletedCount", { n: task.deletedCount ?? 0 }) }}
       </el-descriptions-item>
-      <el-descriptions-item v-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
+      <el-descriptions-item v-if="task.isDryRun" :label="t('tasks.taskRunParamsColDryRunSkipped')">
+        {{ t("tasks.drawerDryRunSkippedCount", { n: task.dedupCount ?? 0 }) }}
+      </el-descriptions-item>
+      <el-descriptions-item v-else-if="(task.dedupCount ?? 0) > 0" :label="t('tasks.taskRunParamsColDedup')">
         {{ t("tasks.drawerDedupCount", { n: task.dedupCount ?? 0 }) }}
       </el-descriptions-item>
     </el-descriptions>
 
     <el-descriptions
-      v-if="task.outputDir || task.maxConcurrentDownloads !== undefined"
+      v-if="task.outputDir || task.maxConcurrentDownloads !== undefined || task.isDryRun !== undefined"
       :title="t('tasks.taskRunParamsSectionOutput')"
       :column="1"
       border
@@ -80,6 +83,9 @@
       </el-descriptions-item>
       <el-descriptions-item :label="t('tasks.taskRunParamsColMaxConcurrentDownloads')" :span="2">
         {{ task.maxConcurrentDownloads == null ? t("tasks.taskRunParamsFollowGlobal") : task.maxConcurrentDownloads }}
+      </el-descriptions-item>
+      <el-descriptions-item :label="t('tasks.taskRunParamsColDryRun')" :span="2">
+        {{ task.isDryRun ? t("autoConfig.enabled") : t("autoConfig.disabled") }}
       </el-descriptions-item>
     </el-descriptions>
 
@@ -161,6 +167,7 @@ export type TaskRunParamsTask = {
   failedCount?: number;
   outputDir?: string | null;
   maxConcurrentDownloads?: number | null;
+  isDryRun: boolean;
   userConfig?: Record<string, any> | null;
   startTime?: number | null;
   endTime?: number | null;
@@ -200,7 +207,9 @@ const showTimeSection = computed(
   () => hasStartTime.value || (props.task.endTime != null && Number(props.task.endTime) > 0),
 );
 
-const showStatsSection = computed(() => (props.task.deletedCount ?? 0) > 0 || (props.task.dedupCount ?? 0) > 0);
+const showStatsSection = computed(
+  () => !!props.task.isDryRun || (props.task.deletedCount ?? 0) > 0 || (props.task.dedupCount ?? 0) > 0,
+);
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 

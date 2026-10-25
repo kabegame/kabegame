@@ -1,5 +1,5 @@
 import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 const lastGalleryRoute = ref("/gallery");
 
@@ -14,13 +14,7 @@ export function useActiveRoute() {
     () => route.fullPath,
     () => {
       if (route.path.startsWith("/gallery")) {
-        const queryPath = route.query?.path as string | undefined;
-        // task/* 路径为任务页专用，Gallery Tab 应指向主画廊而非任务视图
-        if (queryPath?.startsWith("task/")) {
-          lastGalleryRoute.value = route.path;
-        } else {
-          lastGalleryRoute.value = route.fullPath || route.path;
-        }
+        lastGalleryRoute.value = route.fullPath || route.path;
       }
     },
     { immediate: true },

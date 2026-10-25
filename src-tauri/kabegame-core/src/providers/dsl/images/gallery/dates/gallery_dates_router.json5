@@ -5,7 +5,7 @@
     // 7c S7-b: programmatic GalleryDatesRouter 迁 DSL。年→月→日 三层结构。
     // 排序由 gallery_sort_router 独立处理。
     "list": {
-        // 从 composed 抽 distinct 年 (DESC, 最近的先)。${composed} 已带 gallery_route fields/joins。
+        // 从 composed 抽 distinct 年 (DESC, 最近的先)。列举仅供 gallery 宽入口使用，${composed} 已带 gallery_route 的字段。
         "${out.meta.year}y": {
             "delegate": {
                 "provider": "dates_provider"

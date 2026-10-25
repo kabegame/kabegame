@@ -4,14 +4,12 @@ import { i18n } from "@kabegame/i18n";
 import router from "@/router";
 import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID, removeImagesFromAlbum } from "@/services/albums";
-import { albumChangeBatch, publishLocal } from "@/services/dataChangeHub";
 import { useSettingsStore } from "@/stores/settings";
 import { stripComposablePathTail } from "@/utils/galleryPath";
 import type { ImageInfo } from "@/types/image";
 import type { ImageAnalytics } from "@/track/imageAnalytics";
 import type { GridAdapter, GridRemoveConfig } from "../types";
-import type { RowsSnapshot } from "@/services/liveQuery";
-import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
+import { labelSearchTriggers, hiddenTrigger, patchTriggers, on } from "@/services/kbEvents";
 
 /**
  * 画册页（`/albums`）中栏的 grid adapter。
@@ -29,6 +27,7 @@ export function createAlbumDetailAdapter(params: {
   const routeStore = useAlbumDetailRouteStore();
   const settingsStore = useSettingsStore();
   const t = i18n.global.t;
+  const view = () => ({ query: routeStore.query, sort: routeStore.sort, hide: routeStore.hide });
 
   const includesCurrentWallpaper = (images: ImageInfo[]) => {
     const current = settingsStore.values.currentWallpaperImageId;
@@ -52,16 +51,7 @@ export function createAlbumDetailAdapter(params: {
     confirm: async (images, ctx) => {
       const count = images.length;
       try {
-        const result = await ctx.mutate((view) =>
-          invoke<{
-            view?: RowsSnapshot | null;
-            albumChanges: AlbumImagesChangePayload[];
-          }>("batch_delete_images", {
-            imageIds: images.map((img) => img.id),
-            view,
-          }),
-        );
-        for (const change of result.albumChanges) publishLocal(albumChangeBatch(change));
+        await ctx.mutate(() => invoke("batch_delete_images", { imageIds: images.map((img) => img.id) }));
         clearCurrentWallpaperIfIncluded(images);
         ElMessage.success(
           count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess"),
@@ -76,6 +66,7 @@ export function createAlbumDetailAdapter(params: {
   return {
     id: "album",
     routeStore,
+    viewState: view,
     isActive: () => {
       const cur = router.currentRoute.value;
       const routeAlbumId = typeof cur.params.albumId === "string" ? cur.params.albumId : "";
@@ -92,12 +83,17 @@ export function createAlbumDetailAdapter(params: {
       console.error("获取画册总图片数失败:", error);
       return ctx.images.value.length;
     },
-    changes: {
-      relevant: (batch) => {
-        const id = params.albumId();
-        return !!id && (batch.images.size > 0 || batch.albumIds.has(id));
-      },
-    },
+    refreshOn: [
+      ...patchTriggers(view),
+      on("album-images-added", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
+      on("album-images-deleted", (payload) => !!params.albumId() && payload.albumId === params.albumId()),
+      // 隐藏 / 取消隐藏只发隐藏画册自身的事件：hide 开启就刷新，关闭时由 imagePatches$ 按 id 打 isHidden 补丁
+      ...hiddenTrigger(view),
+      on("album-images-change", (p) => p.albumId === params.albumId() && routeStore.sort.field === "by-album-order"),
+      ...labelSearchTriggers(view),
+      on("albums-deleted", (payload) => payload.albums.some((album) => album.id === params.albumId())),
+    ],
+    deletesViaMembership: true,
     actionsOptions: () => ({
       removeText: t("gallery.removeFromAlbum"),
       deleteText: t("gallery.deleteImageFiles"),
@@ -130,11 +126,10 @@ export function createAlbumDetailAdapter(params: {
         if (!id) return;
         const count = images.length;
         try {
-          await ctx.mutate((view) =>
+          await ctx.mutate(() =>
             removeImagesFromAlbum(
               id,
               images.map((img) => img.id),
-              { view },
             ),
           );
           clearCurrentWallpaperIfIncluded(images);
@@ -157,11 +152,10 @@ export function createAlbumDetailAdapter(params: {
       const id = params.albumId();
       if (!id || images.length === 0) return;
       try {
-        await ctx.mutate((view) =>
+        await ctx.mutate(() =>
           removeImagesFromAlbum(
             id,
             images.map((img) => img.id),
-            { view },
           ),
         );
         clearCurrentWallpaperIfIncluded(images);

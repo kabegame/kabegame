@@ -1,0 +1,61 @@
+{
+    "namespace": "kabegame",
+    "name": "run_configs_root_provider",
+    "query": {
+        "join": [
+            {
+                "kind": "LEFT",
+                "table": "tasks",
+                "as": "rc_last",
+                "on": "rc_last.id = (SELECT t.id FROM tasks t WHERE t.run_config_id = run_configs.id ORDER BY t.start_time DESC, t.id DESC LIMIT 1)",
+                "in_need": true
+            }
+        ],
+        "fields": [
+            { "sql": "run_configs.id", "as": "id" },
+            { "sql": "run_configs.name", "as": "name" },
+            { "sql": "run_configs.description", "as": "description" },
+            { "sql": "run_configs.plugin_id", "as": "plugin_id" },
+            { "sql": "run_configs.url", "as": "url" },
+            { "sql": "run_configs.output_dir", "as": "output_dir" },
+            { "sql": "run_configs.output_album_id", "as": "output_album_id" },
+            { "sql": "run_configs.user_config", "as": "user_config" },
+            { "sql": "run_configs.http_headers", "as": "http_headers" },
+            { "sql": "run_configs.created_at", "as": "created_at" },
+            { "sql": "run_configs.schedule_enabled", "as": "schedule_enabled" },
+            { "sql": "run_configs.schedule_spec", "as": "schedule_spec" },
+            { "sql": "run_configs.schedule_planned_at", "as": "schedule_planned_at" },
+            { "sql": "run_configs.schedule_last_run_at", "as": "schedule_last_run_at" },
+            { "sql": "run_configs.max_concurrent_downloads", "as": "max_concurrent_downloads" },
+            { "sql": "run_configs.is_dry_run", "as": "is_dry_run" },
+            { "sql": "rc_last.id", "as": "last_task_id" },
+            { "sql": "rc_last.status", "as": "last_task_status" },
+            { "sql": "rc_last.start_time", "as": "last_task_start_time" },
+            { "sql": "rc_last.end_time", "as": "last_task_end_time" },
+            { "sql": "rc_last.success_count", "as": "last_task_success_count" },
+            { "sql": "rc_last.failed_count", "as": "last_task_failed_count" },
+            { "sql": "rc_last.error", "as": "last_task_error" },
+            {
+                "sql": "CASE WHEN rc_last.id IS NULL THEN 'never' WHEN rc_last.status = 'failed' THEN 'failed' WHEN rc_last.status IN ('pending', 'running', 'waiting_downloads') THEN 'running' WHEN rc_last.status = 'canceled' THEN 'canceled' WHEN rc_last.failed_count > 0 THEN 'partial' ELSE 'ok' END",
+                "as": "last_result"
+            },
+            {
+                "sql": "COALESCE(json_extract(run_configs.schedule_spec, '$.mode'), 'none')",
+                "as": "schedule_mode"
+            }
+        ]
+    },
+    "resolve": {
+        "all": { "provider": "run_configs_all_provider" },
+        "id_([^/]+)": {
+            "provider": "run_configs_id_provider",
+            "properties": { "config_id": "${capture[1]}" }
+        },
+        "plugin|state|enabled|paused|last|mode|search|sort|before_.+|x[1-9][0-9]*x": {
+            "delegate": { "provider": "run_configs_filter_router" },
+            "child_var": "child",
+            "provider": "${child.provider}",
+            "meta": "${child.meta}"
+        }
+    }
+}

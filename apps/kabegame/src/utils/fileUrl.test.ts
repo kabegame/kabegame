@@ -258,3 +258,30 @@ describe("thumbnailToUrl / compatibleToUrl", () => {
     expect(mod.compatibleToUrl(cdn)).toBe(cdn);
   });
 });
+
+describe("pluginFileUrl", () => {
+  it("按段编码路径，版本参数统一为 v", async () => {
+    const { mod } = await loadReady();
+    const url = new URL(mod.pluginFileUrl({ id: "test-plugin", version: "1.2.3" }, "docs/中文 a#.md"));
+    expect(url.pathname).toBe("/plugin_file/test-plugin/docs/%E4%B8%AD%E6%96%87%20a%23.md");
+    expect(url.searchParams.get("v")).toBe("1.2.3");
+    expect([...url.searchParams.keys()]).toEqual(["v"]);
+  });
+  it("隔离商店来源与预览 token", async () => {
+    const { mod } = await loadReady();
+    const plugin = { id: "test", version: "1.0.0" };
+    const store = new URL(mod.pluginFileUrl({ ...plugin, fileOrigin: { kind: "store", sourceId: "a&b" } }, "a.json"));
+    expect(store.searchParams.get("source")).toBe("a&b");
+    const preview = new URL(
+      mod.pluginFileUrl({ ...plugin, fileOrigin: { kind: "preview", token: "abc/def" } }, "a.md"),
+    );
+    expect(preview.searchParams.get("preview")).toBe("abc/def");
+    expect(preview.searchParams.has("source")).toBe(false);
+  });
+  it("web 使用同源前缀", async () => {
+    vi.stubEnv("VITE_API_ROOT", "/api/");
+    const { mod } = await loadModule({ isWeb: true });
+    await mod.initHttpServerBaseUrl();
+    expect(mod.pluginFileUrl({ id: "test", version: "1.0.0" }, "a.md")).toBe("/api/plugin_file/test/a.md?v=1.0.0");
+  });
+});

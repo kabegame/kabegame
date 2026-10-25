@@ -23,8 +23,6 @@ export enum HeaderFeatureId {
   OpenTaskWebview = "openTaskWebview",
   FailedImages = "failedImages",
   AddToAlbum = "addToAlbum",
-  /** 画廊：过滤（全部 / 设置过壁纸等，仅 Android 放入 fold） */
-  GalleryFilter = "galleryFilter",
   /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开 van-picker） */
   GallerySort = "gallerySort",
   /** 画廊每页条数（仅 Android 放入 fold） */

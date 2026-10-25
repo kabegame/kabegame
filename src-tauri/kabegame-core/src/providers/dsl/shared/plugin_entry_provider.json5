@@ -10,7 +10,7 @@
     "query": {
         // 契约：插件 provider 的 where 通过 `plugin_im.data` 读取爬取期 metadata。
         // 这里只 join、不投影：列表行不带 metadata（每行数 KB JSON），插件分支也因此只贡献
-        // where + LEFT JOIN，能进 ~any / ~not 组。list.sql 拿到的 ${composed} 只有 images.*，
+        // where + LEFT JOIN，能进 ~any / ~not 组。list.sql 拿到的 ${composed} 只有列表字段（含 id / metadata_id），
         // 需自行 JOIN metadata ON id = composed_result.metadata_id。见 RULES §3.3.2。
         "join": [{
             "kind": "LEFT",

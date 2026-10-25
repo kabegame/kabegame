@@ -22,8 +22,8 @@
 - `read_album(album_id?)`：`albums://all` 列表 / `albums://id_{id}` 单条
 - `read_task(task_id?)`：`tasks://all` 列表 / `tasks://id_{id}` 单条
 - `read_surf(surf_record_id?)`：`surf_records://all` 列表 / `surf_records://id_{id}` 单条
-- `read_plugin(plugin_id?, resource?, key?)`：`plugin://` 列表（trimmed）；`resource` 取
-  `info`(默认) | `icon` | `description_template` | `doc` | `changelog` | `asset` | `provider`
+- `read_plugin(plugin_id?, version?, resource?, key?)`：`plugin://` 列表（trimmed）；传 plugin_id 时须传 version，读取 `plugin://installed/<id>/<version>`；`resource` 取
+  `info`(默认) | `icon` | `description_template` | `doc` | `changelog` | `asset` | `provider` | `recommended`
   （`asset` 需插件根相对路径 `key`；`provider` 不传 `key` 时列出全部，传
   `key`=provider 名时读取具体定义与 DSL 源文）
 
@@ -80,8 +80,9 @@ mcpb pack .
 - `read_album` / `read_task` / `read_surf`
   - 对应 id（`album_id` / `task_id` / `surf_record_id`）可选；省略即列出全部
 - `read_plugin`
-  - `plugin_id` 可选；`resource` 默认 `info`，可选
-    `info` | `icon` | `description_template` | `doc` | `changelog` | `asset` | `provider`
+  - `plugin_id` 可选，提供时须传 `version`（从插件列表取）；`resource` 默认 `info`，可选
+    `info` | `icon` | `description_template` | `doc` | `changelog` | `asset` | `provider` | `recommended`
+  - `resource = recommended` 时省略 `key` 返回推荐配置行列表（含导入态），传完整文件路径 `key` 返回单行
   - `resource = asset` 时 `key` 必填（`kbAssets` 中的插件根相对路径，长度 <= 512）
   - `resource = provider` 时省略 `key` 可列出全部 provider；传 `key`=provider 名可读取具体定义与 DSL 源文
   - 当 `plugin_id` 省略时，仅允许 `resource = info`（即列出全部）

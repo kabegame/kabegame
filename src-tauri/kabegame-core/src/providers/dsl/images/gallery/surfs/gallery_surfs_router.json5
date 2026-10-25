@@ -10,7 +10,7 @@
     // meta 由 runtime 按 SQL 行字段构造，避免 host function 访问连接。
     "list": {
         "${out.host}": {
-            "sql": "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, NULL AS icon, sr.last_visit_at, sr.created_at, NULL AS last_image FROM surf_records sr WHERE EXISTS (SELECT 1 FROM images WHERE surf_record_id = sr.id) ORDER BY COALESCE(sr.last_visit_at, sr.created_at) DESC",
+            "sql": "SELECT sr.id, sr.host, sr.name, sr.root_url, sr.cookie, NULL AS icon, sr.last_visit_at, sr.created_at FROM surf_records sr WHERE EXISTS (SELECT 1 FROM images WHERE surf_record_id = sr.id) ORDER BY COALESCE(sr.last_visit_at, sr.created_at) DESC",
             "data_var": "out",
             "provider": "gallery_surf_provider",
             "properties": { "host": "${out.host}" },
@@ -24,14 +24,13 @@
                     "cookie": "${out.cookie}",
                     "icon": "${out.icon}",
                     "lastVisitAt": "${out.last_visit_at}",
-                    "createdAt": "${out.created_at}",
-                    "lastImage": "${out.last_image}"
+                    "createdAt": "${out.created_at}"
                 }
             }
         }
     },
     // host 形如 "pixiv.net", 允许字母数字加点和短横; 与 plugin slug 正则有重叠 (短 host
-    // 如 "pixiv" 可能也命中 plugin 模式), 但 plugins / surfs 各自挂在不同上层 (gallery_route.list
+    // 如 "pixiv" 可能也命中 plugin 模式), 但 plugins / surfs 各自挂在不同上层 (gallery_router.list
     // 的 `surf` / `plugin` 段), 所以路径前缀已隔离, regex 重叠不致冲突。
     "resolve": {
         "([a-zA-Z0-9][a-zA-Z0-9.-]*)": {

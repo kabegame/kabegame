@@ -1,7 +1,7 @@
 use super::webpage::{self, WEBPAGE_PLUGIN_ID};
 use super::{
-    pack_plugin_version, validate_var_defs, var_definition_to_frontend_value, Plugin, PluginBackend,
-    PluginScript,
+    pack_plugin_version, validate_var_defs, var_definition_to_frontend_value, Plugin,
+    PluginBackend, PluginScript,
 };
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -124,17 +124,17 @@ fn builtin_plugin(
         labels: vec![],
         min_app_incompatible: false,
         file_path: None,
-        doc: None,
-        changelog: None,
+
         icon_png_base64: Some(BASE64_STANDARD.encode(BUILTIN_PLUGIN_ICON_PNG)),
         // webpage 的页面快照由详情面板按 metadata.kind 专门渲染，不走 EJS 模板
-        description_template: None,
-        recommended_configs: Vec::new(),
         var_defs,
         script: PluginScript::new(PluginBackend::Builtin, builtin_source),
-        assets: None,
+
         providers: Vec::new(),
-        metadata_migration: None,
+        metadata_migration_path: None,
+        package_json: None,
+        asset_keys: Vec::new(),
+        file_origin: None,
         version_packed: pack_plugin_version(BUILTIN_PLUGIN_VERSION)
             .expect("内建插件版本号必须是有效的 a.b.c 格式"),
     }
@@ -154,8 +154,8 @@ mod tests {
             assert_eq!(p.version_packed, 0x0001_0000);
             assert_eq!(p.script_type, "builtin");
             assert!(p.script.is_builtin());
-            assert!(p.recommended_configs.is_empty());
-            assert!(p.description_template.is_none());
+            assert!(p.asset_keys.is_empty());
+            assert!(p.package_json.is_none());
             assert_eq!(p.icon_png_base64, local.icon_png_base64);
         }
         assert_eq!(local.script.builtin_source(), Some(""));

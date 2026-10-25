@@ -1,0 +1,14 @@
+namespace: kabegame
+name: tasks_status_router
+note: Task statuses with counts for the current composed task selection.
+list:
+  "${row.status}":
+    sql: SELECT sub.status AS status, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY sub.status
+    data_var: row
+    provider: tasks_status_provider
+    properties: { status: "${row.status}" }
+    meta: "${row}"
+resolve:
+  "([a-z_]+)":
+    provider: tasks_status_provider
+    properties: { status: "${capture[1]}" }

@@ -63,7 +63,8 @@
         "provider": {
           "name": "플러그인 PathQL Provider",
           "desc": "플러그인이 제공하는 PathQL provider 정의와 소스 코드를 읽습니다"
-        }
+        },
+        "recommended": { "name": "플러그인 추천 설정", "desc": "추천 설정과 현재 가져오기 상태 읽기" }
       }
     }
   }

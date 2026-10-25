@@ -1,10 +1,8 @@
 use crate::emitter::GlobalEmitter;
-use crate::storage::images::RangedImages;
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID};
+use crate::storage::Storage;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
@@ -20,8 +18,6 @@ pub struct SurfRecord {
     /// 安卓畅游是否以桌面版网站打开该站。只存模式不存 UA 串，UA 每次由系统默认 UA 派生。
     #[serde(default)]
     pub desktop_mode: bool,
-    #[serde(default)]
-    pub last_image: Option<ImageInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,21 +140,17 @@ impl Storage {
                 last_visit_at,
                 created_at,
                 desktop_mode,
-            )) => {
-                let last_image = self.find_latest_image_by_surf_record(&id)?;
-                Ok(Some(SurfRecord {
-                    id,
-                    host,
-                    name,
-                    root_url,
-                    cookie,
-                    icon,
-                    last_visit_at: last_visit_at as u64,
-                    created_at: created_at as u64,
-                    desktop_mode: desktop_mode != 0,
-                    last_image,
-                }))
-            }
+            )) => Ok(Some(SurfRecord {
+                id,
+                host,
+                name,
+                root_url,
+                cookie,
+                icon,
+                last_visit_at: last_visit_at as u64,
+                created_at: created_at as u64,
+                desktop_mode: desktop_mode != 0,
+            })),
             None => Ok(None),
         }
     }
@@ -201,26 +193,22 @@ impl Storage {
                 last_visit_at,
                 created_at,
                 desktop_mode,
-            )) => {
-                let last_image = self.find_latest_image_by_surf_record(&id)?;
-                Ok(Some(SurfRecord {
-                    id,
-                    host,
-                    name,
-                    root_url,
-                    cookie,
-                    icon,
-                    last_visit_at: last_visit_at as u64,
-                    created_at: created_at as u64,
-                    desktop_mode: desktop_mode != 0,
-                    last_image,
-                }))
-            }
+            )) => Ok(Some(SurfRecord {
+                id,
+                host,
+                name,
+                root_url,
+                cookie,
+                icon,
+                last_visit_at: last_visit_at as u64,
+                created_at: created_at as u64,
+                desktop_mode: desktop_mode != 0,
+            })),
             None => Ok(None),
         }
     }
 
-    /// 批量查询多个畅游记录。返回 id → SurfRecord 映射；`last_image` 字段为 None（批量场景不需要）。
+    /// 批量查询多个畅游记录，返回 id → SurfRecord 映射。
     pub fn get_surf_records_by_ids(
         &self,
         ids: &[String],
@@ -255,7 +243,6 @@ impl Storage {
                     last_visit_at: r.get::<_, i64>(6)? as u64,
                     created_at: r.get::<_, i64>(7)? as u64,
                     desktop_mode: r.get::<_, i64>(8)? != 0,
-                    last_image: None,
                 })
             })
             .map_err(|e| format!("query: {}", e))?;
@@ -311,7 +298,6 @@ impl Storage {
         let mut records = Vec::with_capacity(raw.len());
         for (id, host, name, root_url, cookie, icon, last_visit_at, created_at, desktop_mode) in raw {
             records.push(SurfRecord {
-                last_image: self.find_latest_image_by_surf_record(&id)?,
                 id,
                 host,
                 name,
@@ -459,7 +445,11 @@ impl Storage {
     }
 
     /// 仅在 Cookie 实际变化时写库并发 `SurfRecordChanged`；安卓内容页每次加载完成都会上报。
-    pub fn update_surf_record_cookie_if_changed(&self, id: &str, cookie: &str) -> Result<(), String> {
+    pub fn update_surf_record_cookie_if_changed(
+        &self,
+        id: &str,
+        cookie: &str,
+    ) -> Result<(), String> {
         let cookie = cookie.trim();
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
         let changed = update_surf_record_cookie_row_if_changed(&conn, id, cookie)?;
@@ -514,166 +504,8 @@ impl Storage {
             .map_err(|e| format!("Failed to delete surf_record: {}", e))?;
         drop(conn);
         GlobalEmitter::global().emit_surf_record_deleted(id);
-        GlobalEmitter::global()
-            .emit_image_changed_uniform(&image_ids, json!({ "surfRecordId": null }));
-        GlobalEmitter::global().emit_images_change(
-            "change",
-            &image_ids,
-            None,
-            Some(&[id.to_string()]),
-            None,
-        );
+        GlobalEmitter::global().emit_image_fields(&image_ids, json!({ "surfRecordId": null }));
         Ok(())
-    }
-
-    pub fn get_surf_record_images(
-        &self,
-        surf_record_id: &str,
-        offset: usize,
-        limit: usize,
-    ) -> Result<RangedImages, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let total: usize = conn
-            .query_row(
-                "SELECT COUNT(*) FROM images WHERE surf_record_id = ?1",
-                params![surf_record_id],
-                |row| row.get::<_, i64>(0).map(|count| count as usize),
-            )
-            .map_err(|e| format!("Failed to query surf images total: {}", e))?;
-        let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata_id,
-             COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-             images.hash,
-             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
-             images.width,
-             images.height,
-             images.display_name,
-             COALESCE(images.type, 'image') as type,
-             images.last_set_wallpaper_at,
-             images.size,
-             images.compatible_path,
-             images.post_url
-             FROM images
-             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
-             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
-             WHERE images.surf_record_id = ?1
-             ORDER BY images.crawled_at DESC
-             LIMIT ?2 OFFSET ?3",
-            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
-        );
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(|e| format!("Failed to prepare surf images query: {}", e))?;
-        let rows = stmt
-            .query_map(
-                params![surf_record_id, limit as i64, offset as i64],
-                |row| {
-                    let local_path: String = row.get(2)?;
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get::<_, Option<String>>(1)?,
-                        local_path: local_path.clone(),
-                        plugin_id: row.get::<_, Option<String>>(3)?,
-                        task_id: row.get(4)?,
-                        surf_record_id: Some(surf_record_id.to_string()),
-                        crawled_at: row.get::<_, i64>(5)? as u64,
-                        metadata_id: row.get::<_, Option<i64>>(6)?,
-                        thumbnail_path: row.get(7)?,
-                        hash: row.get(8)?,
-                        favorite: row.get::<_, i64>(9)? != 0,
-                        is_hidden: row.get::<_, i64>(10)? != 0,
-                        local_exists: PathBuf::from(&local_path).exists(),
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: crate::media::image_type::normalize_stored_media_type(
-                            row.get::<_, Option<String>>(14)?,
-                        ),
-                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
-                            row, 15,
-                        )?,
-                        size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
-                        album_order: None,
-                        compatible_path: row.get::<_, Option<String>>(17)?,
-                        post_url: row.get::<_, Option<String>>(18)?,
-                    })
-                },
-            )
-            .map_err(|e| format!("Failed to query surf images: {}", e))?;
-        let mut images = Vec::new();
-        for row in rows {
-            images.push(row.map_err(|e| format!("Failed to read surf image row: {}", e))?);
-        }
-
-        Ok(RangedImages {
-            images,
-            total,
-            offset,
-            limit,
-        })
-    }
-
-    pub fn find_latest_image_by_surf_record(
-        &self,
-        surf_record_id: &str,
-    ) -> Result<Option<ImageInfo>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata_id,
-             COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
-             images.hash,
-             CASE WHEN ai_fav.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             CASE WHEN ai_hid.image_id IS NOT NULL THEN 1 ELSE 0 END as is_hidden,
-             images.width,
-             images.height,
-             images.display_name,
-             COALESCE(images.type, 'image') as type,
-             images.last_set_wallpaper_at,
-             images.size,
-             images.compatible_path,
-             images.post_url
-             FROM images
-             LEFT JOIN album_images ai_fav ON images.id = ai_fav.image_id AND ai_fav.album_id = '{}'
-             LEFT JOIN album_images ai_hid ON images.id = ai_hid.image_id AND ai_hid.album_id = '{}'
-             WHERE images.surf_record_id = ?1
-             ORDER BY images.crawled_at DESC
-             LIMIT 1",
-            FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID
-        );
-        let result = conn
-            .query_row(&query, params![surf_record_id], |row| {
-                let local_path: String = row.get(2)?;
-                Ok(ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get::<_, Option<String>>(1)?,
-                    local_path: local_path.clone(),
-                    plugin_id: row.get::<_, Option<String>>(3)?,
-                    task_id: row.get(4)?,
-                    surf_record_id: Some(surf_record_id.to_string()),
-                    crawled_at: row.get::<_, i64>(5)? as u64,
-                    metadata_id: row.get::<_, Option<i64>>(6)?,
-                    thumbnail_path: row.get(7)?,
-                    hash: row.get(8)?,
-                    favorite: row.get::<_, i64>(9)? != 0,
-                    is_hidden: row.get::<_, i64>(10)? != 0,
-                    local_exists: PathBuf::from(&local_path).exists(),
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
-                    media_type: crate::media::image_type::normalize_stored_media_type(
-                        row.get::<_, Option<String>>(14)?,
-                    ),
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
-                    size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
-                    album_order: None,
-                    compatible_path: row.get::<_, Option<String>>(17)?,
-                    post_url: row.get::<_, Option<String>>(18)?,
-                })
-            })
-            .optional()
-            .map_err(|e| format!("Failed to query latest surf image: {}", e))?;
-        Ok(result)
     }
 }
 

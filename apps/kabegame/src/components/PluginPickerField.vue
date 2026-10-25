@@ -212,7 +212,7 @@ function quickPreviewProps(plugin: Plugin) {
   return {
     plugin: { ...plugin, labels: labelsFor(plugin) } as QuickPreviewPluginLike,
     iconSrc: pluginStore.pluginIconSrc(plugin.id),
-    images: bannerPreviewImages(plugin.assets),
+    images: bannerPreviewImages(plugin),
   };
 }
 

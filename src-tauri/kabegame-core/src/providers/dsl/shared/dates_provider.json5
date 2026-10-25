@@ -7,7 +7,7 @@
     },
     "list": {
         // 从 composed 按年分组 (DESC, 最近的先)，一次扫描同时给出每年行数 count（画廊过滤树直接读它）。
-        // ${composed} 已带 gallery_route fields/joins。
+        // 画廊列举从 gallery 宽入口进入，${composed} 已带 crawled_at；filter 窄入口只解析日期段。
         "${out.year}": {
             "sql": "SELECT strftime('%Y', crawled_at_seconds(sub.crawled_at), 'unixepoch', 'localtime') AS year, COUNT(*) AS count FROM (${composed}) AS sub GROUP BY year HAVING year IS NOT NULL ORDER BY year DESC",
             "data_var": "out",

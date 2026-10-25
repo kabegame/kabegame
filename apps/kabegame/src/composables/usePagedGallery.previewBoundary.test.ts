@@ -26,10 +26,6 @@ function setupPager() {
           images,
           loadedKey,
           viewRef: ref({ openPreviewById }),
-          loading: { startLoading: vi.fn(), finishLoading: vi.fn() },
-          load: vi.fn(async () => {}),
-          computeCountPath: () => "gallery/all",
-          isActive: () => true,
         });
         return () => null;
       },

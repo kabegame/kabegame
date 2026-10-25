@@ -473,7 +473,7 @@ impl ProviderRuntime {
                     }
                     continue;
                 }
-                SegmentKind::Nest => {
+                SegmentKind::Nest(alias) => {
                     // 组内不许封边界: 分支是旁路, 此刻的 composed 只是当前分支视角。
                     if !group_stack.is_empty() {
                         return Err(EngineError::WhereGroup(
@@ -488,9 +488,10 @@ impl ProviderRuntime {
                             scheme.to_string(),
                         ));
                     };
-                    // 此前的查询整体冻结为子查询，以表名为别名；新层承接内层全部列，
-                    // 只把 provider 视角切回根，不重放根贡献。
-                    composed = ProviderQuery::from_nested(std::mem::take(&mut composed), table);
+                    // 此前的查询整体冻结为子查询，别名取 `~~<别名>`，缺省为表名；新层承接内层全部列，
+                    // 只把 provider 视角切回根，不重放根贡献。另取别名时表名空出来，外层可再 join 原表。
+                    let alias = alias.as_deref().unwrap_or(table);
+                    composed = ProviderQuery::from_nested(std::mem::take(&mut composed), alias);
                     current = Some(schema.provider.clone());
                     // 保留外层已有的 key: 内层任一 provider 变更都要让本路径失效。
                     extend_provider_keys(&mut provider_keys, schema.provider_keys.clone());
@@ -499,11 +500,18 @@ impl ProviderRuntime {
                     continue;
                 }
                 SegmentKind::Reserved(raw) => {
-                    return Err(EngineError::ReservedPathSegment(
-                        path_so_far.clone(),
+                    let reason = if raw.starts_with("~~") {
+                        format!(
+                            "invalid subquery alias in `{raw}`: `~~<alias>` needs a simple, non-keyword identifier; escape a literal segment as `\\~~...`"
+                        )
+                    } else {
                         format!(
                             "unrecognized reserved segment `{raw}`; escape a literal segment starting with `~` as `\\~...`"
-                        ),
+                        )
+                    };
+                    return Err(EngineError::ReservedPathSegment(
+                        path_so_far.clone(),
+                        reason,
                     ));
                 }
                 SegmentKind::Literal(name) => name,

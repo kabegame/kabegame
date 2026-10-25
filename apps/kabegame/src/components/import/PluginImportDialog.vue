@@ -159,7 +159,7 @@ const doInstall = async () => {
   try {
     await invoke("import_plugin_from_zip", { zipPath: props.kgpgPath });
     ElMessage.success(successMsg);
-    // plugin-added / plugin-updated event auto-updates the store
+    // plugin-added / plugin-changed 事件自动更新插件 store
     emit("success");
     modal.close();
   } catch (e: any) {

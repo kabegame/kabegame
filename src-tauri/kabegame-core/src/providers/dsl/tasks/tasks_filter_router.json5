@@ -1,0 +1,21 @@
+{
+    "namespace": "kabegame",
+    "name": "tasks_filter_router",
+    "note": "Composable task filters: status/<status>, plugin/<id>, plugin_search/<query>, run_config/<id>, before_<startTime>_<id>, then x<pageSize>x/<page>.",
+    "list": {
+        "status": { "provider": "tasks_status_router" },
+        "plugin": { "provider": "tasks_plugin_router" },
+        "plugin_search": { "provider": "tasks_plugin_search_router" },
+        "run_config": { "provider": "tasks_run_config_router" }
+    },
+    "resolve": {
+        "before_(-?[0-9]+)_(.+)": {
+            "provider": "tasks_before_provider",
+            "properties": { "ts": "${capture[1]}", "id": "${capture[2]}" }
+        },
+        "x([1-9][0-9]*)x": {
+            "provider": "tasks_paginate_router",
+            "properties": { "page_size": "${capture[1]}" }
+        }
+    }
+}
