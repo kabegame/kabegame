@@ -84,7 +84,7 @@ async function resolvePort() {
 /**
  * 判定"主窗口"。实测 dev 下同时存在：
  *   http://localhost:1420/            ← 主窗口（SPA，路径随路由变）
- *   http://localhost:1420/wallpaper.html ← 壁纸窗口
+ *   http://localhost:1420/index.html?window=wallpaper ← 壁纸窗口（与主窗口同一个 index.html）
  * 另外用户开了 crawler 任务 / surf 时还会有指向外部站点的窗口。
  * 注意 host 是 `localhost` 不是 `127.0.0.1`——按 host 硬匹配会全落空。
  */
@@ -100,7 +100,8 @@ function isMainWindow(rawUrl) {
   const isAppOrigin =
     u.port === "1420" || u.protocol === "tauri:" || u.hostname === "tauri.localhost";
   if (!isAppOrigin) return false;
-  // 排除 wallpaper.html 这类独立入口页；主窗口是 SPA，路径不带 .html。
+  // 排除壁纸窗口（index.html?window=wallpaper）与 surf-navbar.html 这类显式 .html 入口；
+  // 主窗口是 SPA，路径不带 .html。
   return !u.pathname.endsWith(".html");
 }
 
@@ -183,7 +184,7 @@ async function main() {
   --port N        CDP 端口；不传则向 vite dev server（127.0.0.1:${VITE_PORT}）
                   要 app 上报的随机端口（Android 由 driver.sh --android 经 adb forward 给出）
   --url <substr>  选择 URL 含该子串的 page
-                  （不传则自动挑主窗口，排除 wallpaper.html 等辅助窗口）`);
+                  （不传则自动挑主窗口，排除壁纸窗口等辅助窗口）`);
     return 0;
   }
 

@@ -265,7 +265,7 @@ WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>
 | C. 垫片改写路径 | 宿主给页面的路径换成 `http://127.0.0.1:<port>/wpe-user/<token>/<文件>`；垫片再拦截 `HTMLImageElement.src`、`style.backgroundImage` 等 setter，把 `file:///http://…` 修正回来 | 不碰 CEF | 页面拼接方式五花八门，样例里还有 `fixFilename` 之类的自定义处理，拦截覆盖不全，属于脆弱方案 |
 | D. 暂不支持 | 面板里这两类属性显示「暂不支持」，页面收到空值 | 零成本 | 依赖用户图片的壁纸不可用，例如样例 796697921 就是「从文件夹播放图片」 |
 
-**推荐**：Phase 5 前先做一个最小实测验证 B。若 Chromium 在渲染侧就拦掉 HTTP 页面对 `file:` 的请求，则在 A 和 D 之间选。A 改动面大但最贴近 WPE，适合把 file / directory 当成重要能力时选。
+**推荐**：Phase 6 前先做一个最小实测验证 B。若 Chromium 在渲染侧就拦掉 HTTP 页面对 `file:` 的请求，则在 A 和 D 之间选。A 改动面大但最贴近 WPE，适合把 file / directory 当成重要能力时选。
 
 ### 难点二：`localStorage` 源随端口变化
 
@@ -288,17 +288,17 @@ WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>
 | B. 全局鼠标钩子转发 | 主进程装低级鼠标钩子或 Raw Input；光标位于桌面空白处（命中 WorkerW / 桌面列表视图背景）时，把坐标经 CEF `SendMouseMoveEvent` / `SendMouseClickEvent` 发给壁纸 browser。只转发移动和点击，不转发滚轮和按键，与 WPE 一致 | 与 WPE 行为一致 | 需要判断「点在图标上还是空白处」；CEF 窗口模式下合成事件的可行性要实测；有安全与性能顾虑 |
 | C. 只转发移动 | B 的子集，只发 `mousemove` | 能覆盖视差和悬停显示，风险最小 | 点击仍不可用 |
 
-**推荐**：第二阶段先 A，并在 Phase 4 末尾留一个 C 的可行性实测。B 作为后续增强。
+**推荐**：第二阶段先 A，并在 Phase 5 末尾留一个 C 的可行性实测。B 作为后续增强。
 
 ## 八、与 PLAN 设计的冲突与缺口
 
-1. **显示条件必须求值 JS**。PLAN 的 Phase 5 写的是「只支持 `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS」。实际样例用了 `.endsWith()` / `.startsWith()` / `!==` / `>`。建议改为在沙箱里求值，例如只注入各属性 `{ value }` 的 `new Function` 加超时，或者在 iframe 垫片侧求值后回传结果。面板运行在 Kabegame 自身界面里，直接 `eval` 第三方字符串不可取。
-2. **目录服务 MIME 缺口**。PLAN 的 Phase 2 / 3 默认 `/wpe` 能直接服务网页。实测它对 html / js / css / json 都返回 `application/octet-stream`，必须在 Phase 2 补 web MIME 表，否则 iframe 无法渲染入口页。
+1. **显示条件必须求值 JS**。PLAN 的 Phase 6 写的是「只支持 `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS」。实际样例用了 `.endsWith()` / `.startsWith()` / `!==` / `>`。建议改为在沙箱里求值，例如只注入各属性 `{ value }` 的 `new Function` 加超时，或者在 iframe 垫片侧求值后回传结果。面板运行在 Kabegame 自身界面里，直接 `eval` 第三方字符串不可取。
+2. **目录服务 MIME 缺口**。PLAN 的 Phase 3 / 3 默认 `/wpe` 能直接服务网页。实测它对 html / js / css / json 都返回 `application/octet-stream`，必须在 Phase 3 补 web MIME 表，否则 iframe 无法渲染入口页。
 3. **WPE 关闭了同源策略**（`disable-web-security`）。依赖跨域请求的壁纸（天气、RSS 之类）在 Kabegame 的 HTTP 源下会被 CORS 拦截。PLAN 没提到这一点。建议记入已知边界。不建议为壁纸窗口全局关闭同源策略，因为它和主界面在同一个 browser 进程里。
-4. **CEF IPC 入口不区分 frame**。实测子 frame POST `cef-ipc://` 会被转交给 Tauri，目前只靠 invoke key 挡住。PLAN 假设的「IPC 垫片只注入主 frame，所以天然隔离」只对了一半。建议 Phase 3 在 `tauri-runtime-cef` 的 `cef-ipc` 处理器里校验请求来自主 frame，或校验 Origin 属于应用源，作为纵深防御。这是对 `src-tauri/tauri-runtime-cef` 的改动，范围由用户决定。
+4. **CEF IPC 入口不区分 frame**。实测子 frame POST `cef-ipc://` 会被转交给 Tauri，目前只靠 invoke key 挡住。PLAN 假设的「IPC 垫片只注入主 frame，所以天然隔离」只对了一半。建议 Phase 4 在 `tauri-runtime-cef` 的 `cef-ipc` 处理器里校验请求来自主 frame，或校验 Origin 属于应用源，作为纵深防御。这是对 `src-tauri/tauri-runtime-cef` 的改动，范围由用户决定。
 5. **`thumbnail` 是完整 data URL**。PLAN 写的是「base64 PNG」。实现时宿主应给 `data:image/png;base64,…`，页面直接赋给 `img.src`。
-6. **兼容补丁**。WPE 会把 `zcompat/web` 补丁写回壁纸目录，Kabegame 必须改为响应时在内存中替换。PLAN 未提及，建议放进 Phase 3。
-7. **暂停的实现方式**。PLAN 写的是「转发 `setPaused`」。WPE 实际是垫片冻结计时、动画、媒体和 `AudioContext` 后，再回调页面的 `setPaused`。建议 Phase 3 照此实现，否则不处理 `setPaused` 的壁纸暂停后仍占 CPU / GPU。
+6. **兼容补丁**。WPE 会把 `zcompat/web` 补丁写回壁纸目录，Kabegame 必须改为响应时在内存中替换。PLAN 未提及，建议放进 Phase 4。
+7. **暂停的实现方式**。PLAN 写的是「转发 `setPaused`」。WPE 实际是垫片冻结计时、动画、媒体和 `AudioContext` 后，再回调页面的 `setPaused`。建议 Phase 4 照此实现，否则不处理 `setPaused` 的壁纸暂停后仍占 CPU / GPU。
 8. **单个视频文件当网页播放**（`wallpaperOnVideoEnded`、`.webm` / `.ogv` / `.gif` 包装页）是 WPE 对 webm 视频壁纸的内部做法，与 Web 类型无关，不纳入第二阶段。
 
 ## 九、仍未确认

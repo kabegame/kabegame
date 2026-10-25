@@ -19,9 +19,10 @@
 把 `local_path` 当文件用的地方（哈希、元数据解析、媒体服务、拖出、虚拟盘、原生壁纸、删除源文件）都要
 按类型分流，而不是按扩展名猜。图库展示尽量用 WPE 自带资源：每个壁纸目录里都有 `preview.jpg` /
 `preview.gif`（少数还有 png / svg），**直接作为 `thumbnail_path`**——gif 就用 `<img>` 播 gif，不转成预览
-视频，与 WPE 浏览器里的观感一致。预览大图不再自己播放 WPE 内容，而是**内嵌一个壁纸本体**：把壁纸窗口的页面（`wallpaper.html`）以预览模式嵌进
-弹窗，按桌面分辨率布局再等比缩放，用户看到的就是设到桌面上的样子，并且可以直接交互（桌面窗口挂在 WorkerW 下
-收不到鼠标，预览里可以）。Video、Web、Scene 都只在壁纸本体里实现一次，桌面与预览共用。视频行的 `compatible_path` **始终有值**：浏览器能播时就是入口视频本身的绝对路径，
+视频，与 WPE 浏览器里的观感一致。壁纸的渲染只有一份 Vue 组件 `WallpaperStage`：壁纸窗口（与主窗口同一个 `index.html`）用它播桌面壁纸；图库对没有
+单文件媒体形态的类型（Web、Scene）经 `ImageContent` 切到它，预览大图再按桌面分辨率布局并等比缩放，用户看到的就是
+设到桌面上的样子，并且可以直接交互（桌面窗口挂在 WorkerW 下收不到鼠标，预览里可以）。WPE 视频在图库里仍按普通
+视频对待（预览可 seek），只有桌面窗口用 `WallpaperStage` 播它。视频行的 `compatible_path` **始终有值**：浏览器能播时就是入口视频本身的绝对路径，
 播不了时才在 Kabegame 自己的 `compatibles_dir` 里生成兼容副本（与现有视频兼容机制相同，不碰用户目录）；
 预览大图、应用背景、壁纸窗口全部经 `/compatible` 播它，不走任何跳转。
 
@@ -284,7 +285,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
 | 阶段 | 目录 | 状态 |
 |---|---|---|
 | 1 Video | [1-video/PLAN.md](1-video/PLAN.md) | 已实现，初步真机测试完成 |
-| 2 Web | [2-web/PLAN.md](2-web/PLAN.md) | Phase 1 完成（[API.md](2-web/API.md)） |
+| 2 Web | [2-web/PLAN.md](2-web/PLAN.md) | Phase 1 完成（[API.md](2-web/API.md)）；Phase 2 壁纸窗口 Vue 化方案已写，实施中 |
 | 3 Scene | `3-scene/`（未建） | — |
 | 4 Scene 特效 | `4-scene-fx/`（未建） | — |
 
@@ -302,8 +303,9 @@ const sourceOptions = computed<OptionItem[]>(() => [
    音量 / 倍速覆盖对应字段，其余字段沿用作者值；不读 WPE 里用户改过的属性（见 [1-video 点 7b](1-video/PLAN.md)）。
 7. **视频播放源**：`compatible_path` 始终设置——入口视频本身或生成的兼容视频；预览、应用背景、壁纸窗口及后续
    播放端都只走它，不走 `/wpe/<id>/` 跳转。
-8. **预览内嵌壁纸本体**（2026-10-25 调整）：`ImagePreviewDialog` 对 WPE 行不再自己渲染，改为内嵌壁纸窗口页面的
-   预览模式，按桌面分辨率布局后缩放，可交互；各类型的渲染只在壁纸本体里实现一次。
+8. **预览内嵌壁纸本体**（2026-10-25 调整，10-26 细化）：壁纸渲染只有一份 Vue 组件 `WallpaperStage`，壁纸窗口与主窗口
+   同一个 `index.html`；`ImagePreviewDialog` 对非视频 WPE 行（web / scene）经 `ImageContent` 切到它，按桌面分辨率布局后
+   缩放，可交互。WPE 视频在图库里仍按普通视频对待（保留 seek），只有桌面壁纸窗口用 `WallpaperStage` 播它。
 9. **Scene 走 WebGPU**（2026-10-25）：Scene 在壁纸本体里用 WebGPU canvas 渲染，shader 翻译到 WGSL，不做原生 wgpu。
 
 ## 待定决策

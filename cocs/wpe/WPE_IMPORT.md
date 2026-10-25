@@ -114,6 +114,19 @@ MediaFormat { key: "x-wpe/scene", .. } // 占位
 
 ## 六、壁纸窗口
 
+壁纸窗口与主窗口加载同一个 `index.html`，URL 为 `index.html?window=wallpaper`（`wallpaper/manager/window.rs`）。
+`main.ts` 只做分发：按 `windowKind.ts` 的 `WINDOW_KIND` 动态导入 `bootstrap/app.ts`（主界面，原 `main.ts` 全部内容）
+或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router / 组件库 / vant，不 `loadAll` 设置）。
+Web 发布版与 Android 硬门控为主窗口。
+
+- `views/WallpaperWindow.vue`：壁纸窗口根，负责看门狗（`sessionStorage.wallpaperInitRetry` + reload）、`setting-change`
+  监听、启动时五个 getter 并行、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件。
+- `components/wallpaper/WallpaperStage.vue`：纯渲染组件（不 invoke / listen / 读 store），base / top 双层、
+  prep → enter → commit 过渡（两帧 rAF、1400ms 兜底）、去重与严格串行、tile、base 图退避重试、视频 base / top 元素交换、
+  音量 / 倍速 / 循环，以及下表的 WPE 作者属性；铺满父元素，额外支持 `paused` / `interactive`（供后续预览内嵌）。
+  DOM 仍按原实现命令式操作（模板 ref 只在挂载时取一次），过渡组合类放在 scoped `<style>`。
+- 后端组装目标的逻辑在 `commands/wallpaper.rs` 的 `build_wallpaper_target(info)`，`get_current_wallpaper_target` 复用它。
+
 `get_current_wallpaper_target` 返回 `{ id, path, type, compatiblePath, wpeVideo }`：
 
 - 普通图片 / 视频：保持原行为（按扩展名或 type 播图 / 播视频）；
@@ -147,4 +160,6 @@ MediaFormat { key: "x-wpe/scene", .. } // 占位
 - `src-tauri/kabegame-core/src/media/image_type.rs`、`storage/images.rs`、`storage/organize.rs`
 - `src-tauri/kabegame/src/http_server.rs`、`commands/wallpaper.rs`、`wallpaper/rotator.rs`
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
-  `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`wallpaper.ts`
+  `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`
+- 壁纸窗口：`src-tauri/kabegame/src/wallpaper/manager/window.rs`、`apps/kabegame/src/main.ts`、`windowKind.ts`、
+  `bootstrap/{app,wallpaper}.ts`、`views/WallpaperWindow.vue`、`components/wallpaper/{WallpaperStage.vue,types.ts}`

@@ -6,7 +6,7 @@
 //!
 //! 只读 `project.json` 的 `general.properties`，**不读** WPE 的 `config.json` /
 //! `wproperties`——用户在 WPE 里改过的值不带入。Kabegame 自己的样式 / 音量 / 倍速
-//! 在壁纸窗口前端覆盖（见 `apps/kabegame/src/wallpaper.ts`），后端只给作者值。
+//! 在壁纸窗口前端覆盖（见 `apps/kabegame/src/components/wallpaper/WallpaperStage.vue`），后端只给作者值。
 
 use serde::Serialize;
 use serde_json::Value;

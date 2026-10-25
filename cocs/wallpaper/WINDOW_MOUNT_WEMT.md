@@ -1,6 +1,6 @@
 # Windows 窗口壁纸挂载
 
-Windows 标准版的窗口壁纸由 `tauri-plugin-wemt` 挂到 Explorer 的背景 `WorkerW`。壁纸页面仍由 `WindowWallpaperManager` 按需创建，等页面 ready 后挂载，离开窗口壁纸模式时先解绑再销毁。主程序保留 CEF 窗口与页面生命周期，插件只处理桌面宿主、父子关系、窗口样式、位置及状态。
+Windows 标准版的窗口壁纸由 `tauri-plugin-wemt` 挂到 Explorer 的背景 `WorkerW`。壁纸页面（`index.html?window=wallpaper`，根组件 `WallpaperWindow.vue`）仍由 `WindowWallpaperManager` 按需创建，等页面 ready 后挂载，离开窗口壁纸模式时先解绑再销毁。主程序保留 CEF 窗口与页面生命周期，插件只处理桌面宿主、父子关系、窗口样式、位置及状态。
 
 ## WPE 证据与实现边界
 

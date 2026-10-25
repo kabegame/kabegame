@@ -109,9 +109,9 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 - [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
   - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
     Steam 库发现与任意文件夹识别、`wpe-import` 内建任务与「壁纸」收集入口、`/wpe/<id>/<rel>` 目录服务、
-    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值 + Kabegame 覆盖）。
+    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值 + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、`/wpe` 越界、
-    删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源。
+    删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发。
 
 ## 下载与任务（`downloader-tasks/`）
 

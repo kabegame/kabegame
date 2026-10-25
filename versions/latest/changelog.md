@@ -46,6 +46,7 @@
 - 壁纸窗口改用 `get_current_wallpaper_target`（`{ id, path, type, compatiblePath, wpeVideo }`），`x-wpe/video` 经 `/wpe/<id>/` 或兼容副本播放，并在舞台层复现作者的对齐位置 / 翻转 / 背景色 / 颜色调整（Kabegame 样式、音量、倍速覆盖作者值）；轮播与可用性判定从路径扩展名改为按行 `type`。
 - 画廊拆出 `gallery_router` 窄路由，子 provider 全部回指它；ImageGrid 行查询先按 id 过滤排序切页，经 `~~/rank/~~p/lookup/gallery` 为本页回表补字段并按序号取序，保留原分页状态、计数与预览定位路径；宽入口提前折默认排序兼容 WHERE 组合器，`no-album` 不再依赖宽投影别名。
 - PathQL 子查询边界支持 `~~<别名>`：内层挂到该别名下、表名留给外层 `JOIN` 回原表，用于随机 / 名称等不可走索引排序的「内层只排 id、外层回表」；TS 客户端 `$nest(root, alias?)`。images 根改为只投影 `images.id`，gallery / VD / 原始行各自枚举列，不再用 `images.*`；宽高比列举按 `width` / `height` 判有效。
+- 壁纸窗口 Vue 化：与主窗口共用 `index.html`（`?window=wallpaper`），`main.ts` 按窗口动态导入 `bootstrap/app.ts` / `bootstrap/wallpaper.ts`（后者不装路由、组件库与 vant）；渲染拆为纯组件 `WallpaperStage.vue`（双层过渡、tile、WPE 视频属性，预留 `paused` / `interactive`）与负责 IPC / 看门狗 / ready 握手的 `WallpaperWindow.vue`，删除 `wallpaper.html` / `wallpaper.ts` 及其 rollup 入口；后端抽出 `build_wallpaper_target`。行为不变。dev 调试面板增加帧率（MIN / AVG，复用主窗口 `frameMonitor` store）。
 - 自定义 Tauri 插件目录统一迁入 `src-tauri/tauri-plugin-*/`，同步 Cargo / Deno workspace、依赖路径、忽略规则及架构文档。
 - 四格漫画合成脚本适配新版 PSD：背景按画格挖洞后再叠加前景装饰，保留独立编号图层，并随成品尺寸一起缩放。
 - 过滤走查 Phase E：画册行事件对齐批量新增 / 根删除 / 根移动与字段补丁；成员事件按真实增删和排序分流，隐藏 / 取消隐藏只发隐藏画册自身事件，hide 开启的视图刷新、关闭时按 id 打隐藏补丁。IPC / MCP 写入口补齐事件，前端保留原刷新口径并改写移动后的持有路径。

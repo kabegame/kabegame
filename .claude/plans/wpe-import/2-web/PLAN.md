@@ -1,13 +1,14 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25，产出 [API.md](API.md)）；Phase 2 起为实现清单，开工前各自补点级方案
+> 状态：Phase 1 完成（2026-10-25，产出 [API.md](API.md)）；Phase 2 方案已写（[phase-2-wallpaper-vue.md](phase-2-wallpaper-vue.md)）；Phase 3 起为实现清单，开工前各自补点级方案
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
 > 本目录文件：
 > - `PLAN.md`：本文件，第二阶段计划（总体设计 + Phase 路线 + 实现清单）。
 > - [`API.md`](API.md)：Phase 1 的产出，WPE Web 壁纸接口参考、运行环境、兼容矩阵与难点方案（已完成）。
-> - `phase-N-<名称>.md`：Phase 2 起各 Phase 开工前的点级方案（待写）。
+> - [`phase-2-wallpaper-vue.md`](phase-2-wallpaper-vue.md)：Phase 2 点级方案——壁纸窗口 Vue 化、`WallpaperStage` 组件、预览内嵌。
+> - `phase-N-<名称>.md`：Phase 3 起各 Phase 开工前的点级方案（待写）。
 
 ## 总体设计思路
 
@@ -23,15 +24,18 @@ WPE 的 Web 壁纸是一个普通网页目录：`project.json` 的 `type` 为 `w
 第一阶段已有的目录服务 `/wpe/<imageId>/<rel>` 访问，入口页的相对引用自然落在同一前缀下，目录服务的越界校验就是页面
 能读到的文件边界。
 
-**宿主只有一个：壁纸本体**（`wallpaper.html`）。图库预览不再自己渲染 WPE 内容，而是把壁纸本体以预览模式嵌进
-`ImagePreviewDialog`：按桌面分辨率布局、等比缩放，用户在预览里看到的就是设到桌面上的样子，并且能直接交互（桌面窗口
-挂在 WorkerW 下收不到鼠标，预览里可以）。壁纸本体在桌面窗口里经 IPC 取目标和设置；嵌在预览里时它是子 frame，
-CEF 不给子 frame 注入 IPC，所以改由预览弹窗把目标与设置喂给它。渲染逻辑只写一份，Video / Web 以及之后的 Scene
-（WebGPU）都只在壁纸本体里实现，桌面与预览自动一致。点级方案见 [phase-2-preview-embed.md](phase-2-preview-embed.md)。
+**壁纸的渲染只有一份：`WallpaperStage.vue`**。Phase 2 先把壁纸窗口 Vue 化：壁纸窗口与主窗口加载同一个
+`index.html`（`?window=wallpaper`），`main.ts` 按窗口种类分发到两套 bootstrap；壁纸窗口的根 `WallpaperWindow.vue`
+负责 IPC（设置、当前壁纸、ready 握手、看门狗），渲染交给纯组件 `WallpaperStage`。图库侧的接入点是 `ImageContent`：
+它保留缩略图 → 原图的降级链条，只在 `x-wpe/*` 行要以原图形态显示时切到 `WpeWallpaperContent`（取目标、读设置）→
+`WallpaperStage`；`ImagePreviewDialog` 再把它放进按主显示器分辨率定尺寸、整体缩放的「桌面画布」里，用户看到的就是
+设到桌面上的样子，并且可以交互（桌面窗口挂在 WorkerW 下收不到鼠标，预览里可以）。Video / Web 以及之后的 Scene
+（WebGPU）都只在 `WallpaperStage` 里实现一次，桌面、预览、应用背景自动一致。点级方案见
+[phase-2-wallpaper-vue.md](phase-2-wallpaper-vue.md)。
 
-页面是第三方代码，必须与 Kabegame 自己的界面隔离。壁纸本体用**跨源 iframe** 承载 Web 壁纸，`src` 指向本地 HTTP
+页面是第三方代码，必须与 Kabegame 自己的界面隔离。`WallpaperStage` 用**跨源 iframe** 承载 Web 壁纸，`src` 指向本地 HTTP
 服务的 `/wpe/<id>/`。HTTP 服务的源（`http://127.0.0.1:<port>`）与应用前端的源不同，页面拿不到父页面 DOM，也拿不到
-Tauri IPC（Phase 1 已真机确认）。壁纸本体与页面之间只走 `postMessage`：壁纸本体发「属性 / 通用设置 / 暂停 / 音频帧 /
+Tauri IPC（Phase 1 已真机确认）。宿主与页面之间只走 `postMessage`：`WallpaperStage` 内的 `WpeWebHost` 发「属性 / 通用设置 / 暂停 / 音频帧 /
 媒体信息」，页面里的垫片把它们翻译成 WPE 的回调。垫片由目录服务在返回 `.html` 时**在 `<head>` 最前面插入一个
 `<script>`** 注入，保证先于作者脚本执行，不依赖 CEF 的初始化脚本机制。
 
@@ -43,7 +47,7 @@ Tauri IPC（Phase 1 已真机确认）。壁纸本体与页面之间只走 `post
 
 用户可调属性是 Web 壁纸体验的核心，但它需要在 Kabegame 里新建一套「逐壁纸设置」：按 `project.json` 渲染属性面板
 （类型、顺序、分组、显示条件、本地化），把用户值存在 Kabegame 自己的库里，改动经事件推给正在显示该壁纸的所有宿主。
-存储形态和面板位置在 Phase 5 开工前再定。
+存储形态和面板位置在 Phase 6 开工前再定。
 
 已知的结构性难点有三个，都留给 Phase 1 调研后再定方案，不在本计划里拍板：
 `file` / `directory` 属性按 WPE 约定给页面本地绝对路径、页面自己拼 `file:///`，而 HTTP 源的页面加载不了 `file://`；
@@ -141,14 +145,15 @@ Tauri 自身的 `__TAURI_INTERNALS__` 初始化脚本是否同样只进主 frame
 | Phase | 内容 | 产出 | 依赖 |
 |---|---|---|---|
 | Phase 1 | 接口整理（公开资料 + 本机样例 + 运行环境调研） | `API.md` 与兼容矩阵；三个难点的方案建议 | — |
-| Phase 2 | 预览内嵌壁纸本体 + Web 导入 | 壁纸本体拆出预览模式；`ImagePreviewDialog` 对 WPE 行内嵌它；`x-wpe/web` 入库；壁纸本体加 Web 分支；`/wpe` 补网页 MIME | Phase 1 |
-| Phase 3 | 运行时垫片与宿主协议 | 注入脚本、`postMessage` 协议、作者默认值推送、通用设置与暂停 | Phase 2 |
-| Phase 4 | 桌面窗口收尾 | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 3 |
-| Phase 5 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性 | Phase 3 |
-| Phase 6 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 4 |
+| Phase 2 | 壁纸窗口 Vue 化 | 同 `index.html` 分发；`WallpaperStage`（纯渲染）/ `WallpaperWindow`（IPC 根）；删除 `wallpaper.html` / `wallpaper.ts`；壁纸行为不变 | — |
+| Phase 3 | Web 导入 + 预览内嵌 | `x-wpe/web` 入库；`WallpaperStage` 加跨源 iframe 分支；`ImageContent` 对非视频 WPE 行切到 `WpeWallpaperContent`；预览「桌面画布」；`/wpe` 补网页 MIME；CSP `frame-src` 放行本地 HTTP 源 | Phase 2 |
+| Phase 4 | 运行时垫片与宿主协议 | 注入脚本、`postMessage` 协议、作者默认值推送、通用设置与暂停 | Phase 3 |
+| Phase 5 | 桌面窗口收尾 | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 4 |
+| Phase 6 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性 | Phase 4 |
+| Phase 7 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 5 |
 | — | RGB 外设、鼠标交互 | 空实现 / 暂不做（见待定决策） | — |
 
-Phase 2 落地后，Web 壁纸在预览和桌面里都能显示「无属性」状态的页面，用来验证目录服务、MIME 和隔离；Phase 3 再补属性。
+Phase 2 不涉及 Web 壁纸，但它是后面所有渲染的落点；Phase 3 落地后，Web 壁纸在预览和桌面里都能显示「无属性」状态的页面，用来验证目录服务、MIME 和隔离；Phase 4 再补属性。
 
 ---
 
@@ -216,8 +221,8 @@ Phase 2 落地后，Web 壁纸在预览和桌面里都能显示「无属性」�
 - 本机 Slideshow 样例在 iframe 里不推任何属性时的表现，用来评估「作者默认值」的必要性。
 
 **结论（2026-10-25，详见 [API.md 第五节](API.md)）**：前两项已验证；第三项**未验证**，原因是库里没有 `x-wpe/web` 行，
-而且 `/wpe` 对 `.html` 返回 `application/octet-stream`，入口页无法在 iframe 里渲染，留到 Phase 2 补 MIME 后再测。
-Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [API.md 第八节](API.md)，Phase 2 / 3 / 5 开工前要先处理。
+而且 `/wpe` 对 `.html` 返回 `application/octet-stream`，入口页无法在 iframe 里渲染，留到 Phase 3 补 MIME 后再测。
+Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [API.md 第八节](API.md)，Phase 3 / 4 / 6 开工前要先处理。
 
 ### Phase 1 不做
 - 不写任何主仓库代码，不改 `wpe-import` 任务。
@@ -229,14 +234,28 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 
 以下按 Phase 列出要做的事，粒度到「点」；每个 Phase 开工前另写 `phase-N-<名称>.md`，补现状代码块与目标代码块。
 
-### Phase 2 — 预览内嵌壁纸本体 + Web 导入
-点级方案见 [phase-2-preview-embed.md](phase-2-preview-embed.md)，以下为摘要。
-- **修改**（壁纸本体与预览）
-  - `wallpaper.ts` 拆成「渲染层 + 数据来源」：桌面模式沿用 IPC，预览模式由父页面经同源桥喂目标与设置。
-  - 新增 `get_wallpaper_target(imageId)`，与 `get_current_wallpaper_target` 共用组装逻辑。
-  - `ImagePreviewDialog.vue`：WPE 行内嵌 `wallpaper.html?embed=preview`，按主屏分辨率布局后缩放，可交互。
-  - 壁纸本体新增 Web 分支：跨源 iframe 加载 `/wpe/<id>/`，切走即销毁。
+### Phase 2 — 壁纸窗口 Vue 化
+点级方案见 [phase-2-wallpaper-vue.md](phase-2-wallpaper-vue.md)。要点：
+- Rust：壁纸窗口改加载 `index.html?window=wallpaper`；抽出 `build_wallpaper_target` 供后续按 id 取目标复用。
+- 前端入口：`main.ts` 按 `?window=` 动态导入 `bootstrap/app.ts` 或 `bootstrap/wallpaper.ts`；删除 `wallpaper.html` /
+  `wallpaper.ts` 与 rollup 第二入口。
+- `WallpaperStage.vue`（纯渲染：双层过渡、tile、WPE 视频属性、音量 / 倍速、`paused` / `interactive`，可嵌入任意容器）
+  与 `WallpaperWindow.vue`（IPC 根：设置、当前壁纸、ready 握手、看门狗、dev 面板）。
+- 不改任何壁纸业务行为；图库侧不动（WPE 视频的预览 / 背景继续走普通视频链路，保留 seek）；回归覆盖壁纸窗口全部既有功能。
+
+### Phase 3 — Web 导入 + 预览内嵌
+接入点的点级定义见 [phase-2-wallpaper-vue.md](phase-2-wallpaper-vue.md) 末尾「留给 Phase 3 的接入点」。
+- **修改**（`WallpaperStage.vue`、`http_server.rs`、`tauri.conf.json`）
+  - `WallpaperStage` 新增 Web 分支：跨源 iframe 加载 `/wpe/<id>/`，切走即销毁；过渡沿用双层机制。
+- **新增**（预览内嵌）
+  - 命令 `get_wallpaper_target_for_image(imageId)`（复用 `build_wallpaper_target`，ACL 补白名单）。
+  - `ImageContent` 新增 `wallpaper` 模式：非视频 WPE 行（web / scene）的原图形态渲染 `WpeWallpaperContent`
+    （取目标、读 `settingsStore`）→ `WallpaperStage`；`x-wpe/video` 继续走 `<video>` 链，`VideoControls` / seek 不变。
+  - `ImagePreviewDialog` 对非视频 WPE 行外包 `WallpaperDesktopCanvas`（主显示器分辨率 + 缩放，可交互），不挂
+    `VideoControls`；应用背景层自动受益。
   - `/wpe` 目录服务补网页资源 MIME（html / js / css / json / svg / 字体 / wasm 等）。
+  - CSP `frame-src` 增加 `http://127.0.0.1:*`（现状只有 `'self' blob: data: about:`，dev 下 Tauri 不注入 CSP 所以 Phase 1
+    实测没撞上，prod 会拦）。
 - **修改**（导入，`crawler/wpe_import.rs`、`commands/wpe.rs`、`wpe/scan.rs`）
   - 导入分派增加 `WpeKind::Web` 分支 `import_wpe_web`：`type = x-wpe/web`，`thumbnail_path` 引用作者预览，
     `compatible_path` 留空，`hash` / `size` 取入口 html，宽高留空，`metadata` 存 `project.json` 原文，
@@ -251,7 +270,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
   - 第一阶段为 `x-wpe/video` 加过的分流点逐个确认对 `x-wpe/web` 同样成立：删除护栏、整理跳过、虚拟盘隐藏、
     原生壁纸拒绝、拖出 / 复制禁用。
 
-### Phase 3 — 运行时垫片与宿主协议
+### Phase 4 — 运行时垫片与宿主协议
 - **新增**
   - 垫片脚本 `wpe-runtime/shim.js`（前端源码打包进 app，由 HTTP 服务以固定路由提供）：定义 Phase 1 清单里的全部全局
     接口；监听父页面 `message`，按消息类型调用页面注册的回调；注册函数在收到数据前不回调。
@@ -266,17 +285,17 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
   - `wpe/properties.rs` 增加 `resolve_web_props(project)`：把 `general.properties` 换算成「推给页面的值」形态，
     剔除 `group` / `text` 等纯展示条目；本地化字符串按当前语言替换。
 
-### Phase 4 — 桌面窗口收尾
+### Phase 5 — 桌面窗口收尾
 - **修改**（`kabegame/src/wallpaper/rotator.rs`、`commands/wallpaper.rs`）
-  - 确认 `x-wpe/web` 只在窗口模式可用（Phase 2 起壁纸本体已能显示 Web，轮播口径在此复核）；
+  - 确认 `x-wpe/web` 只在窗口模式可用（Phase 3 起壁纸本体已能显示 Web，轮播口径在此复核）；
     壁纸目标对 Web 行返回 `wpeWeb`（作者默认值层）。
 - **修改**（`apps/kabegame/src/wallpaper.ts`）
   - `applyGeneralProperties({ fps })` 取 Kabegame 的壁纸帧率设置（没有就新增一项全局设置，走 settings 架构）。
-  - `setPaused`：沿用壁纸窗口现有的暂停条件（窗口被遮挡、全屏应用、省电等，以 Phase 4 开工时的实现为准）。
+  - `setPaused`：沿用壁纸窗口现有的暂停条件（窗口被遮挡、全屏应用、省电等，以 Phase 5 开工时的实现为准）。
 - **新增**
   - 多显示器：每个壁纸窗口各一个 iframe，属性变更广播到全部宿主。
 
-### Phase 5 — 用户属性
+### Phase 6 — 用户属性
 - **新增**
   - 逐壁纸属性存储（形态待定，见待定决策），值只存「用户改过的键」，读取时叠加在作者默认值之上。
   - 属性面板组件：按 `order` 排序、`group` 分组、`text` 说明行；`condition` 表达式求值决定显隐（只支持文档里的
@@ -286,7 +305,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - **修改**
   - `get_current_wallpaper_target` 返回「作者默认值 + 用户值」合并后的属性。
 
-### Phase 6 — 音频可视化与媒体集成
+### Phase 7 — 音频可视化与媒体集成
 - **新增**（后端，Windows 优先）
   - 系统音频回环采集（WASAPI loopback）→ 每声道 64 段频谱、约 30 次每秒；只在当前壁纸声明了
     `supportsaudioprocessing` 时启动，切走或暂停即停止。
@@ -303,9 +322,13 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 
 1. **目录结构**：`wpe-import/` 是总纲，每个阶段一个子目录；第二阶段在 `wpe-import/2-web/`；Phase 1 只做接口整理，产出 `API.md`；实现按Phase推进。
 2. **入库模型沿用第一阶段**：目录即一行，`type = x-wpe/web`，作者预览原样作缩略图，不复制、不改写用户目录。
-3. **预览内嵌壁纸本体**（2026-10-25）：`ImagePreviewDialog` 对 WPE 行内嵌壁纸本体的预览模式，按桌面分辨率布局后缩放，
-   可交互；壁纸本体是唯一宿主，Web 壁纸在其中以跨源 iframe 加载。
-4. **Scene 走 WebGPU**（2026-10-25）：第三阶段在壁纸本体里用 WebGPU canvas 渲染，预览自然复用。
+3. **预览内嵌壁纸本体**（2026-10-25，10-26 细化）：壁纸渲染只有一份 `WallpaperStage`；`ImageContent` 对**非视频**
+   WPE 行（web / scene）的原图形态切到它，`ImagePreviewDialog` 外包桌面比例画布并缩放，可交互；Web 壁纸在
+   `WallpaperStage` 里以跨源 iframe 加载。**WPE 视频除外**：图库里按普通视频对待（`compatible_path` + `<video>`），
+   保留 `VideoControls` 与 seek，只有桌面壁纸窗口用 `WallpaperStage` 播它。
+4. **Scene 走 WebGPU**（2026-10-25）：第三阶段在 `WallpaperStage` 里用 WebGPU canvas 渲染，预览自然复用。
+5. **壁纸窗口 Vue 化**（2026-10-26）：壁纸窗口与主窗口同一个 `index.html`，按 `?window=wallpaper` 分发 bootstrap，
+   不再有独立的 `wallpaper.html` / `wallpaper.ts`。
 
 ## 待定决策（需用户确认）
 
@@ -317,7 +340,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 5. **用户属性存储**：新表 `wpe_user_properties(image_id, json)`，还是挂在现有 metadata / 设置体系里。
 6. **桌面鼠标交互**：预览里已可交互；桌面窗口在 WorkerW 下仍收不到鼠标。第二阶段不做（推荐，记入已知边界），
    还是加全局鼠标钩子转发。
-7. **Phase 6 是否纳入第二阶段**：音频与媒体集成成本最高、Rust 侧全新，可以推到 Scene 之后。
+7. **Phase 7 是否纳入第二阶段**：音频与媒体集成成本最高、Rust 侧全新，可以推到 Scene 之后。
 
 ## 待验证
 
@@ -327,7 +350,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - [x] iframe 跟随 `/wpe/<id>/` 的 307：正常，Format error 只发生在 `<video>` 元素上。
 - [x] `wallpaperMediaIntegration` 常量：`PLAYBACK_STOPPED: 0`、`PLAYBACK_PLAYING: 1`、`PLAYBACK_PAUSED: 2`（REA 注入脚本原文）。
 - [ ] `group` / `text` 条目是否会出现在推给页面的 `applyUserProperties` 里：未确认，需要 WPE 真机抓取。
-- [ ] Slideshow 样例不推属性时的表现：未验证，等 Phase 2 补 MIME 后再测。
+- [ ] Slideshow 样例不推属性时的表现：未验证，等 Phase 3 补 MIME 后再测。
 
 ## 资料来源
 

@@ -10,7 +10,7 @@ const WALLPAPER_LABEL: &str = "wallpaper";
 
 /// 窗口模式壁纸管理器。
 ///
-/// **本 manager 不负责壁纸内容**——内容由壁纸页面（`wallpaper.ts`）监听
+/// **本 manager 不负责壁纸内容**——内容由壁纸页面（`WallpaperWindow.vue`）监听
 /// `setting-change` 自驱动渲染。本 manager 只负责窗口的**生命周期**：
 /// `init()` 建窗口并挂到桌面层，`cleanup()` 销毁它。窗口一旦建立即常显，
 /// 中途不 hide/show。
@@ -56,11 +56,11 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             return Ok(w);
         }
 
-        // 独立的 wallpaper.html，只渲染壁纸层。
+        // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         let builder = WebviewWindowBuilder::new(
             &self.app,
             WALLPAPER_LABEL,
-            WebviewUrl::App("wallpaper.html".into()),
+            WebviewUrl::App("index.html?window=wallpaper".into()),
         )
         // 固定标题，便于脚本/调试定位到正确窗口。
         .title(t!("window.wallpaperTitle"))

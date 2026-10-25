@@ -1,5 +1,28 @@
 # v4.6.1 regression
 
+## 壁纸窗口 Vue 化
+
+2026-10-26：壁纸窗口改为 `index.html?window=wallpaper` + `WallpaperWindow.vue` + `WallpaperStage.vue`，纯重构。静态验证：check-kabegame driver 的 vue-tsc 0 error；cargo check 因运行中的 dev app 占用 `target/debug` 的 CEF 文件（`cef-dll-sys` 复制阶段 `os error 32`），改用独立 `CARGO_TARGET_DIR` 跑同一 driver，0 error。真机为 Windows 11 桌面 CEF dev（窗口模式，轮播开启），经 CDP 读壁纸窗口 DOM 与 dev 调试面板验证——壁纸窗口挂到 WorkerW 后 `shot --url wallpaper` 等帧超时无法截图，但页面本身不降频（调试面板帧率 MIN 141 / AVG 144）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 入口分发 | Windows 桌面 CEF | `targets` 列出窗口，读壁纸窗口的脚本与 DOM | 壁纸窗口 URL 为 `index.html?window=wallpaper`、只加载 `main.ts`，页面无组件库元素；html / body 透明；默认截图仍是主窗口 | 实测 body / html 背景 `rgba(0,0,0,0)`、无 `.el-*` 元素；主窗口截图正常 |
+| [x] | 图片显示 | Windows 桌面 CEF | 当前壁纸为普通图片时读 `img.base` | 原图加载完成、铺满 2560×1440，ready 握手 `ready invoked: yes` | `naturalWidth` 5512 |
+| [x] | 五种样式 | Windows 桌面 CEF | 依次设样式 fit / tile / center / stretch / fill | 图片 `object-fit` 依次为 contain / （tile 显示平铺层、图片层隐藏）/ none / fill / cover，调试面板 `last style ts` 与 `mode` 立即更新 | 逐项读 DOM 符合 |
+| [x] | 过渡 fade / slide / zoom | Windows 桌面 CEF | 轮播开启时切过渡（触发一次轮播） | top 层类名依次 `top <过渡> prep` → `top <过渡> enter` → 提交后回到 `top`，base 换成新图 | 三种都观察到完整序列；首次切 slide 未触发轮播，重试后正常。2026-10-26 页面内 MutationObserver 精确计时（12093 → 12091 视频切视频、fade）：prep 679ms → enter 689ms（两帧 rAF 10ms）→ 1494ms 提交（800ms 动画走完由 transitionend 触发），1400ms 兜底未介入；此前「两帧 rAF 约 2s」是 CDP 轮询类名的测量假象 |
+| [x] | 调试面板帧率 | Windows 桌面 CEF dev | 读壁纸窗口 `.debug-panel` 第一行 | 显示 `fps: MIN n AVG n`，与主窗口 FrameMonitor 同一 store、300ms 采样；WorkerW 下播放 WPE 视频时接近显示器刷新率 | 2026-10-26 实测 MIN 141 / AVG 144（144Hz 屏） |
+| [x] | 过渡 none | Windows 桌面 CEF | 过渡为 none 时换壁纸 | 直接替换 base，无 prep / enter | 窗口重建后初始为 none，直设 base |
+| [x] | 视频与音量 / 倍速 | Windows 桌面 CEF | 设普通视频 426，再把音量改 0.5、倍速改 1.5 | base 视频播放（未静音、`currentTime` 前进），音量与倍速实时生效 | 读到 `volume 0.5`、`playbackRate 1.5`；测后已恢复 1 / 1 |
+| [x] | WPE 视频作者属性 | Windows 桌面 CEF | 在 slide 过渡下从视频切到 WPE 视频 12091 | 播 `compatible_path`；视频→视频走 top 层 prep → enter 后 base / top 元素交换；`schemecolor` 成为留边背景色，`object-position` 50% 50% | 背景 `rgb(113, 69, 160)`；该壁纸无翻转 / 偏移 / 颜色属性，transform 与 filter 为空，翻转与滤镜未能用真实数据验证 |
+| [x] | 关闭再开启窗口模式 | Windows 桌面 CEF | 切到原生模式再切回窗口模式 | 壁纸窗口销毁后重建，ready 握手完成并显示当前壁纸 | 重建后 `targets` 重新出现壁纸窗口，图片已加载；另经一次 dev 重启（应用冷启动直接建窗）同样握手并显示 |
+| [x] | 看门狗计数 | Windows 桌面 CEF | 设 `sessionStorage.wallpaperInitRetry=2` 后 reload 壁纸窗口 | init 跑完后重新握手并清零计数 | 重载后计数为 null、图片已加载；真正的 init 卡死重载未能人为制造 |
+| [x] | dev 调试面板 | Windows 桌面 CEF | 读 `.debug-panel` | label / ready / 三个时间戳 / mode / media / transition / rawPath 与原面板一致 |  |
+| [x] | 主窗口不受影响 | Windows 桌面 CEF | 主窗口正常使用；派发 Ctrl+Shift+R | 画廊正常渲染（组件库样式在）；Ctrl+Shift+R 重载主窗口 | `performance.timeOrigin` 变化、重载后仍在 `/gallery` |
+| [x] | 图库 WPE 视频预览不变 | Windows 桌面 CEF | `/gallery?pvwimgid=12091` 打开预览并拖进度到 60s | 普通视频预览：`<video>` 播 `compatible_path`，有 `VideoControls` 与进度条，seek 生效；不出现壁纸组件 | 进度显示 `01:00 / 01:58` |
+| [ ] | 视觉核对 | Windows 桌面 CEF | 肉眼看桌面壁纸的过渡动画、tile、WPE 留边色 | 与重构前一致 | 壁纸窗口无法经 CDP 截图，需人工看桌面 |
+| [ ] | macOS 窗口壁纸 | macOS 桌面 CEF | 同上各项 | 同上 | 本机为 Windows，未验证 |
+| [ ] | release 构建 | Windows / macOS 打包 | 安装包里开启窗口壁纸 | `tauri://localhost/index.html?window=wallpaper` 能加载并分发到壁纸 bootstrap（asset 协议忽略 query） | 未打包验证 |
+
 ## WPE 壁纸导入（第一阶段：Video）
 
 2026-10-25：新增 Wallpaper Engine 壁纸目录导入（`x-wpe/video`）、`/wpe/<id>/` 目录服务、删除/整理/虚拟盘/原生壁纸分流与壁纸窗口视频属性复现。静态验证：`cargo check -p kabegame --features standard` 与前端 `vue-tsc` / `vitest` 结果见本节末尾；真机使用本机 Wallpaper Engine 2.8.0.42（Steam 库 `D:/Applications/Steam`，创意工坊 2 个 + `defaultprojects` 19 个）。

@@ -5,7 +5,7 @@ use crate::wallpaper::rotator::pick_random_gallery_wallpaper;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
-use kabegame_core::storage::Storage;
+use kabegame_core::storage::{ImageInfo, Storage};
 use kabegame_core::wpe::properties::WpeVideoProps;
 use std::path::Path;
 use tauri::AppHandle;
@@ -54,7 +54,12 @@ pub async fn get_current_wallpaper_target_from_settings(
     let Some(info) = img else {
         return Ok(None);
     };
+    Ok(Some(build_wallpaper_target(info).await))
+}
 
+/// 由图片行组装壁纸目标（当前壁纸与后续的预览内嵌共用）：
+/// WPE 视频读 `project.json` 解析作者属性，其它类型 `wpe_video` 为 None。
+async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
     let wpe_video = if kabegame_core::media::image_type::is_wpe_video_type(info.media_type.as_deref())
     {
         let dir = std::path::PathBuf::from(&info.local_path);
@@ -67,13 +72,13 @@ pub async fn get_current_wallpaper_target_from_settings(
         None
     };
 
-    Ok(Some(WallpaperTarget {
-        id,
+    WallpaperTarget {
+        id: info.id,
         path: info.local_path,
         media_type: info.media_type,
         compatible_path: info.compatible_path,
         wpe_video,
-    }))
+    }
 }
 
 #[tauri::command]
