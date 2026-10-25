@@ -116,10 +116,15 @@ pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bo
     if !Path::new(&img.local_path).exists() {
         return false;
     }
+    let ty = img.media_type.as_deref();
+    // 目录型 WPE 壁纸第一阶段只支持窗口模式；原生 / Plasma 插件没有内容可渲染。
+    if kabegame_core::media::image_type::is_wpe_type(ty) {
+        return wallpaper_mode == "window";
+    }
     if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
         return true;
     }
-    !kabegame_core::media::image_type::is_video_by_path(Path::new(&img.local_path))
+    !kabegame_core::media::image_type::is_video_like_type(ty)
 }
 
 /// 随机模式: 从 `<base>/_kb_x100x/` 随机抽一页, 再从该页可用图中随机取一张;
@@ -219,6 +224,7 @@ enum RotationSource {
 struct ImageLite {
     id: String,
     local_path: String,
+    media_type: Option<String>,
 }
 
 pub struct WallpaperRotator {
@@ -268,14 +274,19 @@ impl WallpaperRotator {
             .to_ascii_lowercase()
     }
 
-    /// 轮播候选是否允许：根据壁纸模式筛选。
-    /// - 窗口模式（window）、插件模式（plasma-plugin）：图片与视频均可参与轮播。
-    /// - 原生模式（native）等：仅图片参与轮播，视频壁纸过滤掉。
-    fn media_allowed_in_mode(path: &str, wallpaper_mode: &str) -> bool {
+    /// 轮播候选是否允许：根据壁纸模式与行的 `type` 筛选。
+    /// - 窗口模式（window）：图片、视频与目录型 WPE 壁纸均可参与。
+    /// - 插件模式（plasma-plugin）：图片与视频可用；目录型 WPE 壁纸不可用。
+    /// - 原生模式（native）等：仅图片参与轮播，视频与 WPE 壁纸过滤掉。
+    fn media_allowed_in_mode(image: &ImageLite, wallpaper_mode: &str) -> bool {
+        let ty = image.media_type.as_deref();
+        if kabegame_core::media::image_type::is_wpe_type(ty) {
+            return wallpaper_mode == "window";
+        }
         if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
             return true;
         }
-        !kabegame_core::media::image_type::is_video_by_path(Path::new(path))
+        !kabegame_core::media::image_type::is_video_like_type(ty)
     }
 
     async fn load_images_for_source(
@@ -297,6 +308,7 @@ impl WallpaperRotator {
             .map(|img| ImageLite {
                 id: img.id,
                 local_path: img.local_path,
+                media_type: img.media_type,
             })
             .collect())
     }
@@ -490,7 +502,7 @@ impl WallpaperRotator {
                             let current_idx = (start_idx + i) % images.len();
                             let image = &images[current_idx];
                             if Path::new(&image.local_path).exists()
-                                && Self::media_allowed_in_mode(&image.local_path, &wallpaper_mode)
+                                && Self::media_allowed_in_mode(image, &wallpaper_mode)
                             {
                                 selected = Some(image.clone());
                                 if !is_gallery {
@@ -517,7 +529,7 @@ impl WallpaperRotator {
                                 if !Path::new(&img.local_path).exists() {
                                     return None;
                                 }
-                                if !Self::media_allowed_in_mode(&img.local_path, &wallpaper_mode) {
+                                if !Self::media_allowed_in_mode(img, &wallpaper_mode) {
                                     return None;
                                 }
                                 if let Some(ref cur) = current_norm {
@@ -536,10 +548,7 @@ impl WallpaperRotator {
                                 .enumerate()
                                 .filter_map(|(idx, img)| {
                                     if Path::new(&img.local_path).exists()
-                                        && Self::media_allowed_in_mode(
-                                            &img.local_path,
-                                            &wallpaper_mode,
-                                        )
+                                        && Self::media_allowed_in_mode(img, &wallpaper_mode)
                                     {
                                         Some(idx)
                                     } else {
@@ -814,7 +823,7 @@ impl WallpaperRotator {
                     let current_idx = (start_idx + i) % images.len();
                     let image = &images[current_idx];
                     if Path::new(&image.local_path).exists()
-                        && Self::media_allowed_in_mode(&image.local_path, &wallpaper_mode)
+                        && Self::media_allowed_in_mode(image, &wallpaper_mode)
                     {
                         selected = Some(image.clone());
                         if !is_gallery {
@@ -837,7 +846,7 @@ impl WallpaperRotator {
                     .iter()
                     .filter(|img| {
                         Path::new(&img.local_path).exists()
-                            && Self::media_allowed_in_mode(&img.local_path, &wallpaper_mode)
+                            && Self::media_allowed_in_mode(img, &wallpaper_mode)
                     })
                     .collect();
 

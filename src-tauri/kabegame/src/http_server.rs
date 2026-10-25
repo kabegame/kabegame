@@ -22,7 +22,7 @@ use axum::{
         },
         Request, StatusCode, Uri,
     },
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
@@ -143,6 +143,10 @@ async fn handle_file_path(
         Ok(info) => info,
         Err(response) => return response,
     };
+    // 目录型 WPE 壁纸的 local_path 是目录，不能当文件读；入口视频走 /wpe/<id>/<rel>。
+    if kabegame_core::media::image_type::is_wpe_type(image_info.media_type.as_deref()) {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    }
 
     let mime = image_info
         .media_type
@@ -318,6 +322,88 @@ async fn handle_compatible_path(
     }
 }
 
+/// 按图片 id 授权并返回目录型 WPE 壁纸行；非 WPE 行一律 404。
+#[cfg(not(target_os = "android"))]
+fn authorize_wpe_row(id: &str) -> Result<kabegame_core::storage::ImageInfo, Response> {
+    let info = match kabegame_core::storage::Storage::find_image_by_id(id) {
+        Ok(Some(info)) => info,
+        _ => return Err((StatusCode::NOT_FOUND, "wallpaper not found").into_response()),
+    };
+    if !kabegame_core::media::image_type::is_wpe_type(info.media_type.as_deref())
+        || !std::path::Path::new(&info.local_path).is_dir()
+    {
+        return Err((StatusCode::NOT_FOUND, "wallpaper not found").into_response());
+    }
+    Ok(info)
+}
+
+/// 逐段编码相对路径，保留 `/` 作为分隔符。
+#[cfg(not(target_os = "android"))]
+fn encode_relative_path(rel: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    rel.split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| utf8_percent_encode(segment, NON_ALPHANUMERIC).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// `/wpe/<id>/`：302 到 `project.json` 声明的入口文件。
+#[cfg(not(target_os = "android"))]
+async fn handle_wpe_entry(UrlPath(id): UrlPath<String>) -> Response {
+    let info = match authorize_wpe_row(&id) {
+        Ok(info) => info,
+        Err(response) => return response,
+    };
+    let dir = std::path::PathBuf::from(&info.local_path);
+    let project = match tokio::task::spawn_blocking(move || kabegame_core::wpe::read_project(&dir))
+        .await
+    {
+        Ok(Ok(project)) => project,
+        _ => return (StatusCode::NOT_FOUND, "wallpaper not found").into_response(),
+    };
+    let Some(file) = project.file.as_deref() else {
+        return (StatusCode::NOT_FOUND, "wallpaper entry missing").into_response();
+    };
+    let location = format!("/wpe/{}/{}", encode_relative_path(&id), encode_relative_path(file));
+    Redirect::temporary(&location).into_response()
+}
+
+/// `/wpe/<id>/<rel>`：只提供该壁纸目录内的普通文件，越界请求拒绝。
+#[cfg(not(target_os = "android"))]
+async fn handle_wpe_file(
+    UrlPath((id, rel)): UrlPath<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let info = match authorize_wpe_row(&id) {
+        Ok(info) => info,
+        Err(response) => return response,
+    };
+    let rel = rel.trim_matches('/');
+    if rel.is_empty() {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    }
+
+    let Ok(root) = std::path::Path::new(&info.local_path).canonicalize() else {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    };
+    let Ok(target) = root.join(rel).canonicalize() else {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    };
+    // canonicalize 后必须仍位于该壁纸目录内，同时拒绝目录本身。
+    if !target.starts_with(&root) || !target.is_file() {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    }
+
+    let target = target.to_string_lossy().into_owned();
+    let mime = mime_from_path(&target);
+    let range = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    serve_file_with_mime(&target, mime, range).await
+}
+
 /// 代理 GET 请求：/proxy?url=xxx，用 reqwest 拉取目标 URL 后流式返回（初步实现，无任务上下文）
 #[cfg(not(target_os = "android"))]
 async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
@@ -402,6 +488,8 @@ pub fn file_routes() -> Router {
         .route("/file/{*path}", get(handle_file_path))
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
         .route("/compatible/{*path}", get(handle_compatible_path))
+        .route("/wpe/{id}/", get(handle_wpe_entry))
+        .route("/wpe/{id}/{*rel}", get(handle_wpe_file))
         .route("/proxy", get(handle_proxy_query))
         .merge(crate::plugin_file_server::plugin_file_routes())
 }
@@ -414,7 +502,9 @@ pub fn file_routes_media() -> Router {
     let routes = Router::new()
         .route("/file/{*path}", get(handle_file_path))
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
-        .route("/compatible/{*path}", get(handle_compatible_path));
+        .route("/compatible/{*path}", get(handle_compatible_path))
+        .route("/wpe/{id}/", get(handle_wpe_entry))
+        .route("/wpe/{id}/{*rel}", get(handle_wpe_file));
 
     #[cfg(any(debug_assertions, not(feature = "web")))]
     {

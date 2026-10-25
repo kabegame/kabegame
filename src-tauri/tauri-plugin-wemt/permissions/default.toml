@@ -1,0 +1,6 @@
+# Default permissions: mounting is the whole point of the plugin, so all four
+# commands are enabled by default. Applications that only want to observe state
+# should switch to `permissions = ["allow-status"]`.
+[default]
+description = "Allows mounting, unmounting, querying and refreshing the desktop wallpaper mount."
+permissions = ["allow-attach", "allow-detach", "allow-status", "allow-refresh"]

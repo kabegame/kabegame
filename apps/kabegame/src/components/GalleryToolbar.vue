@@ -89,6 +89,7 @@ const emit = defineEmits<{
   showCrawlerDialog: [];
   showLocalImport: [];
   showWebpageCollect: [];
+  showWallpaperImport: [];
   openCollectMenu: [];
 }>();
 
@@ -221,6 +222,8 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
           emit("showCrawlerDialog");
         } else if (payload.data.value === "webpage") {
           emit("showWebpageCollect");
+        } else if (payload.data.value === "wallpaper") {
+          emit("showWallpaperImport");
         }
       }
       break;

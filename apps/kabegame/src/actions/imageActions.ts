@@ -19,6 +19,7 @@ import type { ActionItem, ActionContext } from "@/actions/types";
 import type { ImageInfo } from "@/types/image";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { i18n } from "@kabegame/i18n";
+import { isWpeMediaType } from "@/utils/mediaMime";
 import { useUiStore } from "@/stores/ui";
 
 export interface CreateImageActionsOptions {
@@ -57,6 +58,9 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
   const hideSet = new Set(hide);
   const multiHideSet = new Set(multiHide);
   const isSingle = (ctx: ActionContext<ImageInfo>) => !ctx.selectedCount || ctx.selectedCount === 1;
+  /** 目录型 WPE 壁纸没有单个源文件：复制 / 分享 / 删源文件都不适用。 */
+  const isWpeTarget = (ctx: ActionContext<ImageInfo>) =>
+    isWpeMediaType(ctx.target?.type);
   // 详情弹窗与系统分享只有 Android 有（桌面在预览抽屉里看详情，share_file 仅 Android 编译）；
   // 放在顶层还是「更多」子菜单由 isCompact 决定，平板宽屏走顶层。
   const canDetail = () => IS_ANDROID && !hideSet.has("detail");
@@ -84,7 +88,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       label: t("contextMenu.share"),
       icon: Share,
       command: "share",
-      visible: (ctx) => canShare() && !uiStore.isCompact && isSingle(ctx),
+      visible: (ctx) => canShare() && !uiStore.isCompact && isSingle(ctx) && !isWpeTarget(ctx),
     },
     {
       key: "copy",
@@ -92,7 +96,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       icon: IS_WEB ? Download : DocumentCopy,
       command: IS_WEB ? "download" : "copy",
       visible: (ctx) => {
-        if (hideSet.has("copy")) return false;
+        if (hideSet.has("copy") || isWpeTarget(ctx)) return false;
         const count = ctx.selectedCount ?? 1;
         if (uiStore.isCompact) return count > 1;
         if (IS_WEB) return count <= 20;
@@ -181,14 +185,14 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
               label: t("contextMenu.share"),
               icon: Share,
               command: "share",
-              visible: canShare,
+              visible: (ctx) => canShare() && !isWpeTarget(ctx),
             },
             {
               key: "copy",
               label: IS_WEB ? t("contextMenu.downloadImage") : t("contextMenu.copyImage"),
               icon: IS_WEB ? Download : DocumentCopy,
               command: IS_WEB ? "download" : "copy",
-              visible: () => !hideSet.has("copy"),
+              visible: (ctx) => !hideSet.has("copy") && !isWpeTarget(ctx),
             },
             {
               key: "copyLabels",
@@ -258,6 +262,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       visible: (ctx) =>
         showDelete &&
         !hideSet.has("deleteFile") &&
+        !isWpeTarget(ctx) &&
         (!uiStore.isCompact || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
       suffix: (ctx) => {
         const count = ctx.selectedCount ?? 1;

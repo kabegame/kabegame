@@ -3,6 +3,7 @@
 ## 用户侧
 
 ### Added
+- 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加任意壁纸目录或 Steam 库；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
 - 新增任务级空跑（dry-run）：插件、网页收集、本地导入和自动任务均可完整执行而不下载、不入库；CLI 使用 `--dry-run`，原仅打印配置的行为改为 `--print-config`。空跑任务只显示一个「跳过」数字，统计插件发现了多少个本应下载 / 导入的项目。
 - 插件路径类变量（`path` / `file` / `folder` / `file_or_folder`）现在真正可用：用户选中的文件或文件夹会只读挂进本次任务，插件脚本可直接用 `Kabegame.fs` 读取，或把路径交给 `Kabegame.downloadImage()` 入库；源文件不会被改动，任务结束后挂载自动失效。Android 支持选择文件（系统选择器返回的 `content://`），暂不支持文件夹变量。
 - 收集弹窗里的路径变量控件支持从系统拖入文件或文件夹（单文件 / 单文件夹，扩展名按变量 `options` 过滤）；拖入类型不符或一次拖入多项时提示「此处不支持」。
@@ -21,6 +22,7 @@
 - 任务抽屉与自动配置页改为按需分页加载：启动时只查询一次各状态任务数用于右上角徽章，打开抽屉时先加载 20 条，滚动到底继续加载，关闭后释放（只记住搜索词）；自动配置页及每张配置卡片下的任务列表同样分页加载。任务很多时启动和打开抽屉不再卡顿。
 
 ### Fixed
+- Windows 窗口壁纸改挂到桌面背景 WorkerW，移除点击桌面和最小化时反复修正图标层 Z-order 的逻辑。
 - 修复运行配置页桌面布局的页头缺少周围间距，与画廊统一为 20px 页面内边距。
 - 修复图片删除 / 从画册移除确认框的「取消」按钮在非中文界面下仍显示中文。
 - 修复 Web 开发模式遗漏 `/plugin_file` 代理导致插件文档和配图请求返回页面 HTML。
@@ -39,6 +41,9 @@
 ## 开发侧
 
 ### Changed
+- 新增目录型媒体格式 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）与 `is_wpe_type` / `wpe_kind` / `is_video_like_type`；`images.local_path` 在目录型行上是 WPE 壁纸目录，所有把它当文件用的调用点按 type 分流：`/file` 返回 404、新增 `/wpe/<imageId>/<rel>` 目录服务（302 到 `project.json` 入口、越界拒绝）、整理跳过缩略图 / 兼容副本 / 哈希去重 / 无法识别清理、虚拟盘隐藏、原生壁纸与 Plasma 拒绝、WPE 行删除不进源文件回收。
+- 新增 `kabegame-core::wpe`（Steam 库发现、任意目录识别、`project.json` 解析、作者视频属性换算）与内建任务 `wpe-import`；缩略图删除改为只删 `thumbnails_dir` 内由 Kabegame 生成的文件，避免删掉 WPE 的 `preview.*`。
+- 壁纸窗口改用 `get_current_wallpaper_target`（`{ id, path, type, compatiblePath, wpeVideo }`），`x-wpe/video` 经 `/wpe/<id>/` 或兼容副本播放，并在舞台层复现作者的对齐位置 / 翻转 / 背景色 / 颜色调整（Kabegame 样式、音量、倍速覆盖作者值）；轮播与可用性判定从路径扩展名改为按行 `type`。
 - 画廊拆出 `gallery_router` 窄路由，子 provider 全部回指它；ImageGrid 行查询先按 id 过滤排序切页，经 `~~/rank/~~p/lookup/gallery` 为本页回表补字段并按序号取序，保留原分页状态、计数与预览定位路径；宽入口提前折默认排序兼容 WHERE 组合器，`no-album` 不再依赖宽投影别名。
 - PathQL 子查询边界支持 `~~<别名>`：内层挂到该别名下、表名留给外层 `JOIN` 回原表，用于随机 / 名称等不可走索引排序的「内层只排 id、外层回表」；TS 客户端 `$nest(root, alias?)`。images 根改为只投影 `images.id`，gallery / VD / 原始行各自枚举列，不再用 `images.*`；宽高比列举按 `width` / `height` 判有效。
 - 自定义 Tauri 插件目录统一迁入 `src-tauri/tauri-plugin-*/`，同步 Cargo / Deno workspace、依赖路径、忽略规则及架构文档。

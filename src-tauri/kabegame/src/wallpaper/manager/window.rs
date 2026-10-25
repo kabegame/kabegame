@@ -71,7 +71,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         #[cfg(target_os = "windows")]
         let builder = builder.transparent(true);
 
-        // 建成时不可见：挂载会把它改成 Progman 的子窗口并搬到桌面层，
+        // 建成时不可见：挂载会把它改成背景 WorkerW 的子窗口并搬到桌面层，
         // 期间若可见会先在屏幕上闪一下全屏窗口。`mount()` 内部挂完即 show，
         // 之后在 window 模式的整个生命周期里保持常显、不再 hide。
         builder
@@ -112,13 +112,17 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     }
 
     fn cleanup(&self) -> Result<(), String> {
-        // 离开 window 模式：销毁窗口，而不是藏起来。窗口挂载时被改成了 Progman 的
+        // 离开 window 模式：销毁窗口，而不是藏起来。窗口挂载时被改成了 WorkerW 的
         // 子窗口（WS_CHILD + 改过的扩展样式），留着它下次只会在一个已被改过的窗口上
         // 再挂一次。
         if let Ok(mut wp) = self.wallpaper_window.lock() {
             *wp = None;
         }
         if let Some(window) = self.app.get_webview_window(WALLPAPER_LABEL) {
+            #[cfg(target_os = "windows")]
+            if let Err(error) = tauri_plugin_wemt::detach_window(&window) {
+                eprintln!("[wallpaper] 解绑桌面窗口失败，仍将销毁窗口: {error}");
+            }
             // `destroy()` 而非 `close()`：这是程序化拆除，不是「请求关闭」。
             // `close()` 会走 CloseRequested 事件，可被 `api.prevent_close()` 拦下
             // （`lib.rs` 已对 `crawler-*` 这么做）——一旦哪天拦截条件放宽到本窗口，

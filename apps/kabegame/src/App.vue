@@ -205,7 +205,6 @@ import OrganizeDialog from "./components/OrganizeDialog.vue";
 import FrameMonitor from "./components/common/FrameMonitor.vue";
 import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
-import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -214,7 +213,7 @@ import { fetchImageById } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@/env";
 import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
-import { isVideoMediaType } from "@/utils/mediaMime";
+import { isVideoPlaybackType } from "@/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { usePluginMarketStore } from "./stores/pluginMarket";
 import { useFailedImagesStore } from "./stores/failedImages";
@@ -373,9 +372,6 @@ const {
   init: initMissedRunsWatch,
 } = useMissedRunsWatch();
 
-// 窗口事件监听
-const { init: initWindowEvents } = useWindowEvents();
-
 // 文件拖拽
 const { init: initFileDrop } = useFileDrop(fileDropOverlayRef);
 
@@ -396,7 +392,7 @@ const bgImageToken = ref(0);
 const bgContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 let bgResolveToken = 0;
 
-const isVideoBackground = (image: ImageInfo | undefined) => isVideoMediaType(image?.type);
+const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(image?.type);
 
 const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
   !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
@@ -584,7 +580,6 @@ onMounted(async () => {
   await initMissedRunsWatch();
 
   // 初始化各个 composables
-  await initWindowEvents();
   // 安卓下不支持拖拽导入，跳过初始化
   if (!IS_ANDROID) {
     await initFileDrop();

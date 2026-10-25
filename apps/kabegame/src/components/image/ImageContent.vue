@@ -26,7 +26,7 @@
           class="ic-img thumbnail-layer z-1"
           :style="{ objectFit: fit }"
           :alt="image.id"
-          :draggable="nativeDrag"
+          :draggable="dragEnabled"
           @load="onLoad"
           @error="onImgError(thumbSlot, $event)"
           @dragstart="onDragStart"
@@ -40,7 +40,7 @@
           class="ic-img original-layer z-2"
           :style="{ objectFit: fit }"
           :alt="image.id"
-          :draggable="nativeDrag"
+          :draggable="dragEnabled"
           @load="onLoad"
           @error="onImgError(origSlot, $event)"
           @dragstart="onDragStart"
@@ -57,7 +57,7 @@
         class="ic-img"
         :style="{ objectFit: fit }"
         :alt="image.id"
-        :draggable="nativeDrag"
+        :draggable="dragEnabled"
         @load="onLoad"
         @error="onImgError(thumbSlot, $event)"
         @dragstart="onDragStart"
@@ -71,7 +71,7 @@
         :src="videoSlot.src"
         class="ic-img ic-video"
         :style="{ objectFit: fit }"
-        :draggable="nativeDrag"
+        :draggable="dragEnabled"
         :muted="videoMuted"
         :loop="videoLoop"
         :controls="nativeVideoControls"
@@ -96,7 +96,7 @@ import { computed, reactive, ref, watch, watchEffect } from "vue";
 import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
-import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
+import { displayImageMimeType, isVideoMediaType, isWpeMediaType, isWpeVideoType } from "../../utils/mediaMime";
 import { beginInternalDrag, DRAG_IMAGE_ID_MIME } from "../../utils/dragExport";
 // #region debug-drag
 import { sendDebugEvent } from "../../debugIngest";
@@ -224,7 +224,7 @@ const onDragStart = (event: DragEvent) => {
     { sessionId: "drag-internal" },
   );
   // #endregion debug-drag
-  if (!props.nativeDrag) {
+  if (!dragEnabled.value) {
     event.preventDefault();
     return;
   }
@@ -253,7 +253,7 @@ const onDragStart = (event: DragEvent) => {
  * preventDefault 会抑制原生拖拽起手，故改为仅在 nativeDrag 关闭时保留旧行为。
  */
 const onVideoMouseDown = (event: MouseEvent) => {
-  if (!props.nativeDrag) event.preventDefault();
+  if (!dragEnabled.value) event.preventDefault();
 };
 
 const emit = defineEmits<{
@@ -267,7 +267,15 @@ const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
 // ---- Media type / 渲染形态（三者互斥） ----
 const isVideo = computed(() => isVideoMediaType(props.image.type));
+const isWpe = computed(() => isWpeMediaType(props.image.type));
+const isWpeVideo = computed(() => isWpeVideoType(props.image.type));
+/** 目录型壁纸没有可拖出的真实媒体文件（local_path 是目录），关闭原生拖拽。 */
+const dragEnabled = computed(() => props.nativeDrag && !isWpe.value);
 const mode = computed<"image" | "gif" | "video">(() => {
+  // 目录型视频壁纸：网格/缩略位用 WPE 自带 preview（gif 原生播放），预览与背景播入口视频。
+  if (isWpeVideo.value) {
+    return props.prefer === "thumbnail" && hasWpePreview.value ? "image" : "video";
+  }
   if (!isVideo.value) return "image";
   return IS_ANDROID && props.prefer === "thumbnail" ? "gif" : "video";
 });
@@ -287,6 +295,11 @@ const thumbPath = computed(() => {
   return "";
 });
 
+/** WPE 预览是否真的独立于壁纸目录（缺 preview 时 thumbnail_path 会回落成目录本身）。 */
+const hasWpePreview = computed(
+  () => !!thumbPath.value && thumbPath.value !== localPath.value,
+);
+
 interface Source {
   tag: ImageSourceTag;
   url: string;
@@ -303,7 +316,8 @@ const buildChain = (...paths: string[]): Source[] => {
   const seen = new Set<string>();
   const chain: Source[] = [];
   for (const path of paths) {
-    if (!path || seen.has(path)) continue;
+    // 目录型壁纸的 local 是目录、不可播放；播放只走 compatible_path（入口视频本身或兼容副本）。
+    if (!path || seen.has(path) || (isWpe.value && path === localPath.value)) continue;
     seen.add(path);
     chain.push(sourceOf(path));
   }

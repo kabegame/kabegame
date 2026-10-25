@@ -29,6 +29,7 @@
                 @show-crawler-dialog="handleShowCrawlerDialog"
                 @show-local-import="handleShowLocalImport"
                 @show-webpage-collect="handleShowWebpageCollect"
+                @show-wallpaper-import="handleShowWallpaperImport"
                 @open-collect-menu="handleOpenCollectMenu"
               />
 
@@ -71,6 +72,12 @@
       :model-value="webpageCollectDialog.isOpen.value"
       @update:model-value="webpageCollectDialog.close"
     />
+    <!-- 壁纸（Wallpaper Engine）：仅桌面端开放 -->
+    <WallpaperImportDialog
+      v-if="!IS_WEB && !IS_ANDROID"
+      :model-value="wallpaperImportDialog.isOpen.value"
+      @update:model-value="wallpaperImportDialog.close"
+    />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
     <el-dialog
@@ -101,6 +108,12 @@
           </el-icon>
           <span>{{ $t("gallery.webpage") }}</span>
         </div>
+        <div v-if="!IS_WEB && !IS_ANDROID" class="collect-menu-option" @click="onDesktopCollectWallpaper">
+          <el-icon>
+            <Picture />
+          </el-icon>
+          <span>{{ $t("gallery.wallpaper") }}</span>
+        </div>
       </div>
     </el-dialog>
 
@@ -126,7 +139,7 @@ import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { Plus, FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
+import { Plus, FolderOpened, Connection, Link, Picture } from "@kabegame/element-plus-icons";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useUiStore } from "@/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
@@ -134,6 +147,7 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import WebpageCollectDialog from "@/components/WebpageCollectDialog.vue";
+import WallpaperImportDialog from "@/components/WallpaperImportDialog.vue";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
@@ -191,6 +205,7 @@ watch(
 const listenersCreated = ref(false);
 const localImportDialog = useModal();
 const webpageCollectDialog = useModal();
+const wallpaperImportDialog = useModal();
 const mediaPicker = useModal();
 const collectSourcePicker = useModal();
 const collectMenuDialog = useModal();
@@ -211,6 +226,12 @@ const handleShowWebpageCollect = () => {
   if (IS_WEB) return;
   analytics.track("gallery_import_entry", { entry: "webpage" });
   webpageCollectDialog.open();
+};
+
+const handleShowWallpaperImport = () => {
+  if (IS_WEB || IS_ANDROID) return;
+  analytics.track("gallery_import_entry", { entry: "wallpaper" });
+  wallpaperImportDialog.open();
 };
 
 const handleOpenCollectMenu = () => {
@@ -254,8 +275,16 @@ const onDesktopCollectWebpage = () => {
   webpageCollectDialog.open();
 };
 
+// 桌面：选择收集方式对话框 → 壁纸（Wallpaper Engine）
+const onDesktopCollectWallpaper = () => {
+  if (IS_WEB || IS_ANDROID) return;
+  analytics.track("gallery_import_entry", { entry: "wallpaper", source: "empty_state_dialog" });
+  collectMenuDialog.close();
+  wallpaperImportDialog.open();
+};
+
 // 紧凑布局：收集方式选择器选「本地」→ MediaPicker，「远程」→ 收集 drawer，「网页」→ 网页收集 drawer
-const handleCollectSourceSelect = (source: "local" | "remote" | "webpage") => {
+const handleCollectSourceSelect = (source: "local" | "remote" | "webpage" | "wallpaper") => {
   analytics.track("gallery_import_entry", {
     entry: source === "local" ? "local" : source === "webpage" ? "webpage" : "network",
     source: "compact_picker",
@@ -267,6 +296,9 @@ const handleCollectSourceSelect = (source: "local" | "remote" | "webpage") => {
   } else if (source === "webpage") {
     if (IS_WEB) return;
     webpageCollectDialog.open();
+  } else if (source === "wallpaper") {
+    if (IS_WEB || IS_ANDROID) return;
+    wallpaperImportDialog.open();
   } else {
     crawlerDrawerStore.open();
   }

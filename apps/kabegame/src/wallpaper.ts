@@ -1,12 +1,41 @@
 import { listen, type UnlistenFn } from "@/api/rpc";
 import { invoke } from "@/api/rpc";
-import { fileToUrl, initHttpServerBaseUrl } from "@/utils/fileUrl";
+import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl } from "@/utils/fileUrl";
 import { IS_DEV } from "@/env";
 
 type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 type Transition = "none" | "fade" | "slide" | "zoom";
 type Phase = "idle" | "prep" | "enter";
 type MediaType = "image" | "video";
+
+/** WPE 视频壁纸的作者默认播放属性（后端 `WpeVideoProps`）。 */
+interface WpeVideoProps {
+  alignment: "cover" | "fill" | "stretch" | "center" | "free";
+  /** −1…1：cover / fill 时沿溢出轴的位置（0 居中）。 */
+  position: number;
+  offsetX: number;
+  offsetY: number;
+  zoom: number;
+  flipH: boolean;
+  background: [number, number, number] | null;
+  rate: number | null;
+  volume: number | null;
+  color: {
+    brightness: number;
+    contrast: number;
+    saturation: number;
+    hue: number;
+  } | null;
+}
+
+/** 当前壁纸目标：普通文件按扩展名 / 类型播图或播视频，目录型 WPE 壁纸播 `compatiblePath`。 */
+interface WallpaperTarget {
+  id: string;
+  path: string;
+  type?: string;
+  compatiblePath?: string;
+  wpeVideo?: WpeVideoProps | null;
+}
 
 // 状态管理
 let baseSrc = "";
@@ -16,8 +45,9 @@ let topVideoSrc = "";
 let phase: Phase = "idle";
 let lastRawPath = "";
 let currentPath = "";
-let pendingPath = "";
-let queuedPath = "";
+let currentTarget: WallpaperTarget | null = null;
+let pendingTarget: WallpaperTarget | null = null;
+let queuedTarget: WallpaperTarget | null = null;
 let busy = false;
 let mode: Mode = "fill";
 let transition: Transition = "fade";
@@ -38,6 +68,7 @@ let transitionGuardTimer: number | null = null;
 
 // DOM 元素引用
 let rootEl: HTMLElement | null = null;
+let stageEl: HTMLElement | null = null;
 let baseImgEl: HTMLImageElement | null = null;
 let topImgEl: HTMLImageElement | null = null;
 let baseVideoEl: HTMLVideoElement | null = null;
@@ -78,15 +109,6 @@ let baseImgRetryTimer: number | null = null;
 // 防止并发请求同一路径的 Map（仅用于 prefetch 去重）
 const inflight = new Set<string>();
 
-// Z-order 修复节流
-let lastZOrderFixAt = 0;
-function handleWallpaperPointerDown() {
-  const now = Date.now();
-  if (now - lastZOrderFixAt < 400) return;
-  lastZOrderFixAt = now;
-  invoke("fix_wallpaper_zorder");
-}
-
 function getPathExt(path: string): string {
   return (path.split(".").pop() || "").toLowerCase();
 }
@@ -96,11 +118,36 @@ function isVideoPath(path: string): boolean {
   return ["mp4", "mov", "wmv", "webm", "mkv"].includes(ext);
 }
 
-async function getVideoUrl(path: string): Promise<string> {
+function targetKey(target: WallpaperTarget): string {
+  return `${target.id}|${target.path}`;
+}
+
+function isWpeTarget(target: WallpaperTarget): boolean {
+  return (target.type || "").trim().toLowerCase().startsWith("x-wpe/");
+}
+
+/** 是否按视频播放：优先看行类型，缺失时回退旧扩展名逻辑。 */
+function isVideoTarget(target: WallpaperTarget): boolean {
+  const type = (target.type || "").trim().toLowerCase();
+  if (type === "x-wpe/video" || type === "video" || type.startsWith("video/")) return true;
+  if (type) return false;
+  return isVideoPath(target.path);
+}
+
+async function getVideoUrl(target: WallpaperTarget): Promise<string> {
   await initHttpServerBaseUrl();
-  const url = fileToUrl(path);
+  if (isWpeTarget(target)) {
+    // compatible_path 始终有值：入口视频本身，或解不了的编码生成的兼容副本。
+    const compatible = (target.compatiblePath || "").trim();
+    const url = compatible ? compatibleToUrl(compatible) : "";
+    if (!url) {
+      throw new Error(`无法获取视频 URL: ${target.path}`);
+    }
+    return url;
+  }
+  const url = fileToUrl(target.path);
   if (!url) {
-    throw new Error(`无法获取视频 URL: ${path}`);
+    throw new Error(`无法获取视频 URL: ${target.path}`);
   }
   return url;
 }
@@ -115,13 +162,13 @@ async function getImageUrl(path: string): Promise<string> {
   return url;
 }
 
-function prefetchPath(path: string) {
-  if (!path) return;
-  if (isVideoPath(path)) return;
-  if (inflight.has(path)) return;
-  inflight.add(path);
-  void getImageUrl(path)
-    .finally(() => inflight.delete(path))
+function prefetchTarget(target: WallpaperTarget) {
+  if (!target?.path) return;
+  if (isVideoTarget(target) || isWpeTarget(target)) return;
+  if (inflight.has(target.path)) return;
+  inflight.add(target.path);
+  void getImageUrl(target.path)
+    .finally(() => inflight.delete(target.path))
     .catch(() => {});
 }
 
@@ -150,6 +197,130 @@ function getImgStyle(): Record<string, string> {
   return base;
 }
 
+/** 正在渲染的目标：过渡期间 top 层是新目标。 */
+function renderingTarget(): WallpaperTarget | null {
+  return pendingTarget ?? currentTarget;
+}
+
+function isRenderingWpeVideo(): boolean {
+  const target = renderingTarget();
+  return !!target && isWpeTarget(target) && isVideoTarget(target);
+}
+
+/** Kabegame 的壁纸样式覆盖 WPE 作者对齐方式（与点 7b 的合并表一致）。 */
+function effectiveAlignment(): WpeVideoProps["alignment"] {
+  switch (mode) {
+    case "fill":
+      return "cover";
+    case "fit":
+      return "fill"; // WPE 的 fill 等价于 contain
+    case "stretch":
+      return "stretch";
+    case "center":
+      return "center";
+    case "tile":
+      return "cover";
+  }
+  return "cover";
+}
+
+function objectFitForAlignment(alignment: WpeVideoProps["alignment"]): string {
+  switch (alignment) {
+    case "fill":
+      return "contain";
+    case "stretch":
+      return "fill";
+    case "center":
+    case "free":
+      return "none";
+    case "cover":
+    default:
+      return "cover";
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Number.isFinite(value) ? value : 0));
+}
+
+/**
+ * 视频元素样式：WPE 视频按作者 `alignmentposition` 决定溢出轴位置；
+ * 其余视频沿用旧逻辑（cover / center）。
+ */
+function getVideoStyle(): Record<string, string> {
+  const imgStyle = getImgStyle();
+  const target = renderingTarget();
+  if (!target || !isWpeTarget(target) || !isVideoTarget(target)) {
+    return {
+      objectFit: imgStyle.objectFit || "cover",
+      objectPosition: imgStyle.objectPosition || "center",
+    };
+  }
+
+  const alignment = effectiveAlignment();
+  const props = target.wpeVideo;
+  const position = clamp(props?.position ?? 0, -1, 1);
+  const percent = `${50 + position * 50}%`;
+  const objectPosition =
+    alignment === "cover" || alignment === "fill" ? `${percent} ${percent}` : "center";
+
+  return {
+    objectFit: objectFitForAlignment(alignment),
+    objectPosition,
+  };
+}
+
+/** WPE 颜色调整（−1…1）→ CSS filter；量纲待真机对比校准。 */
+function wpeVideoFilter(props: WpeVideoProps | null | undefined): string {
+  const color = props?.color;
+  if (!color) return "";
+  const brightness = 1 + clamp(color.brightness, -1, 1);
+  const contrast = 1 + clamp(color.contrast, -1, 1);
+  const saturation = 1 + clamp(color.saturation, -1, 1);
+  const hue = clamp(color.hue, -1, 1) * 180;
+  return `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) hue-rotate(${hue}deg)`;
+}
+
+/**
+ * 把只在整屏生效的 WPE 属性放到 stage 上：
+ * - `flip_h` → `scaleX(-1)`；
+ * - center / free 的 `offset` / `zoom` → 整体位移与缩放（避开视频元素自己的过渡 transform）；
+ * - `schemecolor` → 容器背景色（留边颜色）。
+ */
+function applyWpeStageStyles() {
+  if (!stageEl) return;
+  const target = renderingTarget();
+  const active = !!target && isWpeTarget(target) && isVideoTarget(target);
+  const props = active ? target?.wpeVideo : null;
+  const alignment = active ? effectiveAlignment() : "cover";
+
+  const transforms: string[] = [];
+  if (active && props) {
+    if (props.flipH) transforms.push("scaleX(-1)");
+    if (alignment === "center" || alignment === "free") {
+      const x = clamp(props.offsetX, -1, 1) * 100;
+      const y = clamp(props.offsetY, -1, 1) * 100;
+      transforms.push(`translate(${x}%, ${y}%)`);
+    }
+    if (alignment === "free") {
+      transforms.push(`scale(${clamp(props.zoom, 0.01, 8)})`);
+    }
+  }
+  stageEl.style.transform = transforms.join(" ");
+
+  if (rootEl) {
+    const background = active ? props?.background : null;
+    rootEl.style.backgroundColor = background
+      ? `rgb(${background[0]}, ${background[1]}, ${background[2]})`
+      : "";
+  }
+
+  const filter = active ? wpeVideoFilter(props) : "";
+  for (const el of [baseVideoEl, topVideoEl]) {
+    if (el) el.style.filter = filter;
+  }
+}
+
 function getBaseTileStyle(): Record<string, string> {
   return {
     backgroundImage: baseSrc ? `url("${baseSrc}")` : "",
@@ -176,6 +347,7 @@ function getTopClasses(): string[] {
 
 function applyStyles() {
   const imgStyle = getImgStyle();
+  const videoStyle = getVideoStyle();
 
   // 应用图片样式
   if (baseImgEl) {
@@ -192,16 +364,18 @@ function applyStyles() {
   }
   if (baseVideoEl) {
     Object.assign(baseVideoEl.style, {
-      objectFit: imgStyle.objectFit || "cover",
-      objectPosition: imgStyle.objectPosition || "center",
+      objectFit: videoStyle.objectFit || "cover",
+      objectPosition: videoStyle.objectPosition || "center",
     });
   }
   if (topVideoEl) {
     Object.assign(topVideoEl.style, {
-      objectFit: imgStyle.objectFit || "cover",
-      objectPosition: imgStyle.objectPosition || "center",
+      objectFit: videoStyle.objectFit || "cover",
+      objectPosition: videoStyle.objectPosition || "center",
     });
   }
+
+  applyWpeStageStyles();
 
   // 应用 tile 样式
   if (baseTileEl) {
@@ -244,8 +418,9 @@ function commitTopToBase() {
     baseVideoSrc = topVideoSrc;
     topVideoSrc = "";
     phase = "idle";
-    currentPath = pendingPath || currentPath;
-    pendingPath = "";
+    if (pendingTarget) currentTarget = pendingTarget;
+    currentPath = currentTarget?.path || currentPath;
+    pendingTarget = null;
     busy = false;
     // top 已在播放新内容，直接提升为 base；旧 base 降为 top 待复用
     if (topVideoEl) topVideoEl.className = "wallpaper-img base";
@@ -254,13 +429,13 @@ function commitTopToBase() {
     resetVideoElement(topVideoEl);
     updateModeDisplay();
     applyStyles();
-    if (queuedPath && queuedPath !== currentPath) {
-      const next = queuedPath;
-      queuedPath = "";
-      prefetchPath(next);
-      setTimeout(() => void setImagePath(next), 0);
+    if (queuedTarget && (!currentTarget || targetKey(queuedTarget) !== targetKey(currentTarget))) {
+      const next = queuedTarget;
+      queuedTarget = null;
+      prefetchTarget(next);
+      setTimeout(() => void setTarget(next), 0);
     } else {
-      queuedPath = "";
+      queuedTarget = null;
     }
     updateDebugPanel();
     return;
@@ -269,8 +444,9 @@ function commitTopToBase() {
   baseSrc = topSrc;
   topSrc = "";
   phase = "idle";
-  currentPath = pendingPath || currentPath;
-  pendingPath = "";
+  if (pendingTarget) currentTarget = pendingTarget;
+  currentPath = currentTarget?.path || currentPath;
+  pendingTarget = null;
   busy = false;
 
   // 更新 DOM
@@ -293,15 +469,15 @@ function commitTopToBase() {
   applyStyles();
 
   // 处理队列
-  if (queuedPath && queuedPath !== currentPath) {
-    const next = queuedPath;
-    queuedPath = "";
-    prefetchPath(next);
+  if (queuedTarget && (!currentTarget || targetKey(queuedTarget) !== targetKey(currentTarget))) {
+    const next = queuedTarget;
+    queuedTarget = null;
+    prefetchTarget(next);
     setTimeout(() => {
-      void setImagePath(next);
+      void setTarget(next);
     }, 0);
   } else {
-    queuedPath = "";
+    queuedTarget = null;
   }
 }
 
@@ -323,7 +499,7 @@ function handleImageError(type: "base" | "top") {
     }
     topSrc = "";
     phase = "idle";
-    pendingPath = "";
+    pendingTarget = null;
     busy = false;
     if (topImgEl) {
       clearImgSrc(topImgEl);
@@ -431,11 +607,11 @@ async function playVideo(el: HTMLVideoElement | null, src: string) {
   }
 }
 
-async function setImagePath(path: string) {
-  if (!path) return;
-  lastRawPath = path;
+async function setTarget(target: WallpaperTarget) {
+  if (!target.path) return;
+  lastRawPath = target.path;
 
-  const normalizedPath = path
+  const normalizedPath = target.path
     .trimStart()
     .replace(/^\\\\\?\\/, "")
     .trim();
@@ -446,29 +622,32 @@ async function setImagePath(path: string) {
     return;
   }
 
+  const next: WallpaperTarget = { ...target, path: normalizedPath };
+
   // 去重 1
   if (
-    normalizedPath === currentPath &&
+    currentTarget &&
+    targetKey(next) === targetKey(currentTarget) &&
     ((currentMediaType === "image" && !!baseSrc) || (currentMediaType === "video" && !!baseVideoEl?.src))
   ) {
     return;
   }
   // 去重 2
-  if (normalizedPath === pendingPath && phase !== "idle") {
+  if (pendingTarget && targetKey(next) === targetKey(pendingTarget) && phase !== "idle") {
     return;
   }
 
   // 严格串行
   if (busy || phase !== "idle") {
-    queuedPath = normalizedPath;
-    prefetchPath(normalizedPath);
+    queuedTarget = next;
+    prefetchTarget(next);
     return;
   }
   busy = true;
   try {
-    const isVideoMedia = isVideoPath(normalizedPath);
+    const isVideoMedia = isVideoTarget(next);
     if (isVideoMedia) {
-      const videoUrl = await getVideoUrl(normalizedPath);
+      const videoUrl = await getVideoUrl(next);
       lastError = "";
       currentMediaType = "video";
       clearImgSrc(topImgEl);
@@ -485,9 +664,10 @@ async function setImagePath(path: string) {
         baseVideoSrc = videoUrl;
         topVideoSrc = "";
         phase = "idle";
+        currentTarget = next;
         currentPath = normalizedPath;
-        pendingPath = "";
-        queuedPath = "";
+        pendingTarget = null;
+        queuedTarget = null;
         resetVideoElement(topVideoEl);
         await playVideo(baseVideoEl, videoUrl);
         updateModeDisplay();
@@ -500,8 +680,8 @@ async function setImagePath(path: string) {
       // 有过渡：新视频进 top 层，与图片同一套 prep → enter
       topVideoSrc = videoUrl;
       phase = "prep";
-      pendingPath = normalizedPath;
-      queuedPath = "";
+      pendingTarget = next;
+      queuedTarget = null;
       resetVideoElement(topVideoEl);
       if (topVideoEl) {
         topVideoEl.src = videoUrl;
@@ -551,9 +731,10 @@ async function setImagePath(path: string) {
       baseSrc = url;
       topSrc = "";
       phase = "idle";
+      currentTarget = next;
       currentPath = normalizedPath;
-      pendingPath = "";
-      queuedPath = "";
+      pendingTarget = null;
+      queuedTarget = null;
       busy = false;
 
       // 更新 DOM
@@ -581,8 +762,8 @@ async function setImagePath(path: string) {
     // 有过渡：top 覆盖 base，进入动画
     topSrc = url;
     phase = "prep";
-    pendingPath = normalizedPath;
-    queuedPath = "";
+    pendingTarget = next;
+    queuedTarget = null;
 
     // 更新 DOM
     if (mode !== "tile") {
@@ -629,7 +810,7 @@ async function setImagePath(path: string) {
     busy = false;
     topSrc = "";
     phase = "idle";
-    pendingPath = "";
+    pendingTarget = null;
     if (topImgEl) {
       clearImgSrc(topImgEl);
       topImgEl.style.opacity = "0";
@@ -640,6 +821,11 @@ async function setImagePath(path: string) {
     }
     updateDebugPanel();
   }
+}
+
+/** 兼容旧调用：只带路径时按扩展名回退判断类型。 */
+function setImagePath(path: string) {
+  void setTarget({ id: "", path });
 }
 
 function updateDebugPanel() {
@@ -667,9 +853,7 @@ function initDOM() {
     throw new Error("找不到 .wallpaper-root 元素");
   }
   rootEl = root;
-
-  // 绑定点击事件
-  root.addEventListener("pointerdown", handleWallpaperPointerDown);
+  stageEl = root.querySelector(".wallpaper-stage") as HTMLElement | null;
 
   // 获取图片元素
   baseImgEl = document.getElementById("base-img") as HTMLImageElement;
@@ -712,7 +896,7 @@ function initDOM() {
       }
       topVideoSrc = "";
       phase = "idle";
-      pendingPath = "";
+      pendingTarget = null;
       busy = false;
       resetVideoElement(topVideoEl);
       updateModeDisplay();
@@ -839,9 +1023,9 @@ async function init() {
     if ("currentWallpaperImageId" in changes) {
       lastImageTs = new Date().toLocaleTimeString();
       try {
-        const path = await invoke<unknown>("get_current_wallpaper_path");
-        if (path && typeof path === "string") {
-          setImagePath(path);
+        const target = await invoke<WallpaperTarget | null>("get_current_wallpaper_target");
+        if (target?.path) {
+          setTarget(target);
         }
       } catch {
         // 忽略，可能是无壁纸
@@ -860,12 +1044,12 @@ async function init() {
 
   // 初始化时从 settings 拉取当前状态
   try {
-    const [styleRes, transitionRes, volumeRes, playbackRateRes, pathRes] = await Promise.all([
+    const [styleRes, transitionRes, volumeRes, playbackRateRes, targetRes] = await Promise.all([
       invoke<string>("get_wallpaper_rotation_style"),
       invoke<string>("get_wallpaper_rotation_transition"),
       invoke<number>("get_wallpaper_volume"),
       invoke<number>("get_wallpaper_video_playback_rate"),
-      invoke<string | null>("get_current_wallpaper_path"),
+      invoke<WallpaperTarget | null>("get_current_wallpaper_target"),
     ]);
     if (styleRes && typeof styleRes === "string") {
       mode = styleRes as Mode;
@@ -883,8 +1067,8 @@ async function init() {
     applyStyles();
     applyWallpaperVolume();
     applyVideoLoopMode();
-    if (pathRes && typeof pathRes === "string") {
-      setImagePath(pathRes);
+    if (targetRes?.path) {
+      void setTarget(targetRes);
     }
   } catch (e) {
     lastError = `init settings fetch failed: ${String(e)}`;
@@ -910,7 +1094,8 @@ function cleanup() {
   unlistenSettingChange = null;
 
   inflight.clear();
-  queuedPath = "";
+  queuedTarget = null;
+  pendingTarget = null;
   busy = false;
   if (transitionGuardTimer) {
     window.clearTimeout(transitionGuardTimer);

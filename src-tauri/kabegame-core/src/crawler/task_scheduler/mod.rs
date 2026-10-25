@@ -5,6 +5,7 @@ use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use crate::plugin::webpage::WEBPAGE_PLUGIN_ID;
+use crate::wpe::WPE_IMPORT_PLUGIN_ID;
 use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
@@ -802,6 +803,11 @@ async fn run_task(download_queue: Arc<DownloadQueue>, run: Arc<Task>) -> TaskRes
             // 网页收集会向异步下载队列提交候选，必须经下载排空收尾（在各后端路径内完成）
             WEBPAGE_PLUGIN_ID => {
                 crate::crawler::webpage::run_builtin_webpage(download_queue, Arc::clone(&run)).await
+            }
+            WPE_IMPORT_PLUGIN_ID => {
+                crate::crawler::wpe_import::run_builtin_wpe_import(Arc::clone(&run))
+                    .await
+                    .map_err(TaskError::Other)
             }
             other => Err(TaskError::Other(format!("未知内建插件: {other}"))),
         };

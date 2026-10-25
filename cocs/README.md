@@ -104,6 +104,15 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、`make_visible` 唤醒 + 500ms 快照轮询、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、数据库成员写守卫保持只读）。
   - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为。
 
+## Wallpaper Engine 壁纸（`wpe/`）
+
+- [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
+  - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
+    Steam 库发现与任意文件夹识别、`wpe-import` 内建任务与「壁纸」收集入口、`/wpe/<id>/<rel>` 目录服务、
+    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值 + Kabegame 覆盖）。
+  - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、`/wpe` 越界、
+    删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源。
+
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
@@ -243,6 +252,9 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：新增设置 key；新增运行时状态类单键刷新；迁移 URL query 状态；排查设置保存态、web readonly 回弹、query 参数同步和 localStorage 迁移。
 
 ## 壁纸（`wallpaper/`）
+
+- [wallpaper/WINDOW_MOUNT_WEMT.md](wallpaper/WINDOW_MOUNT_WEMT.md)
+  - 主题：Windows 窗口壁纸按 WPE 运行时层级挂到 WorkerW，移除旧 Progman 同级 Z-order 修正；列出证据、实现边界与真机验证项。
 
 - [wallpaper/NATIVE_WALLPAPER_COMPAT.md](wallpaper/NATIVE_WALLPAPER_COMPAT.md)
   - 主题：Linux / Windows 原生壁纸的图片格式兼容层。涵盖独立的 `wallpaper_compatible_path`、惰性 JPEG/PNG 转码与复用、样式重应用路径、best-effort 回退，以及删除图片时对兼容副本的安全清理。

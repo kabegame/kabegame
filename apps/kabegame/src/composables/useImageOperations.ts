@@ -7,7 +7,7 @@ import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
 import { fileNameFromUrlOrPath, fileToUrl } from "@/utils/fileUrl";
-import { isVideoMediaType } from "@/utils/mediaMime";
+import { isWpeMediaType } from "@/utils/mediaMime";
 import { IS_WEB } from "@/env";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
@@ -58,6 +58,9 @@ export function useImageOperations(
   const getImageDownloadUrl = (image: ImageInfo) =>
     fileToUrl(image.localPath) || fileToUrl(image.thumbnailPath || "") || image.url || "";
 
+  /** 目录型 WPE 壁纸没有可复制 / 拖出 / 分享的单个源文件。 */
+  const isWpeImage = (image: ImageInfo) => isWpeMediaType(image.type);
+
   const getImageFileName = (image: ImageInfo) =>
     fileNameFromUrlOrPath(fileToUrl(image.localPath)) ||
     fileNameFromUrlOrPath(image.localPath) ||
@@ -67,6 +70,10 @@ export function useImageOperations(
 
   // web 模式：先转成同源 blob URL 再 download，避免跨域直链忽略 download 后跳转到图片页。
   const handleDownloadImage = async (image: ImageInfo) => {
+    if (isWpeImage(image)) {
+      ElMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
+      return;
+    }
     const url = getImageDownloadUrl(image);
     if (!url) {
       ElMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
@@ -95,6 +102,10 @@ export function useImageOperations(
 
   // 复制图片到剪贴板（不依赖 Tauri 剪贴板插件：本地文件用后端 copy_image_to_clipboard，否则用 navigator.clipboard）
   const handleCopyImage = async (image: ImageInfo) => {
+    if (isWpeImage(image)) {
+      ElMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
+      return;
+    }
     try {
       if (IS_WEB && typeof ClipboardItem === "undefined") {
         throw new Error("ClipboardItem is not supported");
@@ -300,6 +311,10 @@ export function useImageOperations(
 
   // 分享单张图片（Android share sheet / 桌面系统分享）
   const shareImage = async (image: ImageInfo) => {
+    if (isWpeImage(image)) {
+      ElMessage.warning(i18n.global.t("gallery.wpeNoSourceFile"));
+      return;
+    }
     try {
       const filePath = image.localPath;
       if (!filePath) {
@@ -317,9 +332,13 @@ export function useImageOperations(
     }
   };
 
-  // 在资源管理器中打开图片所在文件夹
+  // 在资源管理器中打开图片所在文件夹；WPE 的 local_path 就是壁纸目录，直接打开它。
   const openImageFolder = async (image: ImageInfo) => {
     try {
+      if (isWpeImage(image)) {
+        await invoke("open_path", { path: image.localPath });
+        return;
+      }
       await invoke("open_file_folder", { filePath: image.localPath });
     } catch (error) {
       console.error("打开文件夹失败:", error);

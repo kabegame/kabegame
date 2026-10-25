@@ -24,6 +24,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `src-tauri/kabegame/` — Tauri GUI 应用（桌面端 + Android）
 - `src-tauri/kabegame-cli/` — 无界面 CLI
 - `src-tauri/tauri-plugin-*/` — 自定义 Tauri 插件（picker、pathes、share、wallpaper、task-notification），与应用和共享 Rust 库同级
+- `src-tauri/tauri-plugin-wemt/` — Windows 窗口壁纸的 WorkerW 挂载插件；主应用不再对 Progman 图标层反复修正 Z-order，见 [挂载说明](cocs/wallpaper/WINDOW_MOUNT_WEMT.md)
 - `src-crawler-plugins/` — JS/TS 爬虫插件子仓库，一个单独的 pnpm workspace 根
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块gitlink指向上游，但运行时附带仓库的补丁
 
@@ -49,6 +50,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `kabegame_core::media::image_type::MEDIA_FORMATS` 是唯一的格式表，包含格式键、标准 MIME 值、扩展名、别名和支持标志。`images.type` 存储 `image/jpg` 和 `video/mov` 等格式键；仅在需要标准 MIME 的边界（HTTP Content-Type / Android MediaStore）使用 `mime_from_format`。
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。
+- 格式表也包含目录型条目 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）：这类行的 `local_path` 是 Wallpaper Engine 壁纸**目录**；视频行的 `compatible_path` 始终有值（入口视频本身或兼容副本），所有播放端只走它，`/wpe/<imageId>/<rel>` 留给后续阶段的相对资源；任何把 `local_path` 当文件用的地方都必须先按 `is_wpe_type` 分流（见 [WPE 导入文档](cocs/wpe/WPE_IMPORT.md)）。
 
 **插件 PathQL 来源寻址**——`plugin://installed/<id>/<version>`、`plugin://byStore/<sourceId>/<id>/<version>`、
 `plugin://byPreview/<token>/<id>/<version>` 统一提供 `icon` / `description_template` / `doc` / `changelog` / `asset` / `provider` / `recommended`。

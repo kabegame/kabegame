@@ -49,7 +49,8 @@
       </div>
       <div class="detail-item">
         <span class="detail-label">{{ t("gallery.imageDetailType") }}</span>
-        <div class="detail-value detail-inline-links">
+        <span v-if="isWpeImage" class="detail-value">Wallpaper Engine · {{ wpeKindText }}</span>
+        <div v-else class="detail-value detail-inline-links">
           <button
             type="button"
             class="detail-filter-link"
@@ -163,7 +164,7 @@ import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore, type Plugin } from "../../stores/plugins";
 import { useSurfStore } from "../../stores/surf";
-import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
+import { displayImageMimeType, isVideoMediaType, isWpeMediaType, wpeKind } from "../../utils/mediaMime";
 import { aspectBucketForDimensions } from "../../utils/galleryQuery";
 import { openExternalLink } from "../../utils/openExternalLink";
 
@@ -291,6 +292,17 @@ const mediaTypeParts = computed((): { kind: "image" | "video"; format: string } 
     kind,
     format: !format || format === "image" || format === "video" ? "" : format,
   };
+});
+
+/** 目录型 WPE 壁纸：类型显示成「Wallpaper Engine · 视频」，不提供媒体类型过滤链接。 */
+const isWpeImage = computed(() => isWpeMediaType(props.image?.type));
+const wpeKindText = computed(() => {
+  const kind = wpeKind(props.image?.type);
+  if (!kind) return "";
+  if (kind === "video") return t("gallery.wpeKindVideo");
+  if (kind === "web") return t("gallery.wpeKindWeb");
+  if (kind === "scene") return t("gallery.wpeKindScene");
+  return kind;
 });
 
 const mediaKindFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({

@@ -27,6 +27,7 @@ pub mod wallpaper;
 #[cfg(not(target_os = "android"))]
 pub mod web_server;
 pub mod window;
+pub mod wpe;
 
 pub use album::*;
 pub use crawler::*;
@@ -54,3 +55,4 @@ pub use wallpaper::*;
 #[cfg(not(target_os = "android"))]
 pub use web_server::*;
 pub use window::*;
+pub use wpe::*;

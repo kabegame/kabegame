@@ -1,0 +1,32 @@
+[package]
+name = "tauri-plugin-wemt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Mount a Tauri window behind desktop icons as a Windows wallpaper host child (WorkerW), modelled on observed Wallpaper Engine 2.8 behaviour."
+license = "MIT OR Apache-2.0"
+keywords = ["tauri", "wallpaper", "workerw", "windows"]
+categories = ["gui"]
+
+[lib]
+name = "tauri_plugin_wemt"
+crate-type = ["lib", "cdylib"]
+
+[features]
+default = ["plugin"]
+# `plugin` pulls in Tauri and the command surface. Without it the crate builds
+# the platform layer only, which is useful for offline verification of the
+# Win32 logic (`cargo check --no-default-features`).
+plugin = ["dep:tauri"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tauri = { version = "2.12", default-features = false, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }

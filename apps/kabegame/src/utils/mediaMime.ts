@@ -9,6 +9,32 @@ export function isVideoMediaType(t: string | undefined): boolean {
   return s === "video" || s.startsWith("video/");
 }
 
+/** 目录型 WPE 壁纸：`local_path` 是目录；视频播放走 `compatible_path`（入口视频本身或兼容副本）。 */
+export function wpeKind(t: string | undefined): string | null {
+  if (t == null) return null;
+  const s = String(t).trim().toLowerCase();
+  if (!s.startsWith("x-wpe/")) return null;
+  const kind = s.slice("x-wpe/".length).trim();
+  return kind || null;
+}
+
+export function isWpeMediaType(t: string | undefined): boolean {
+  return wpeKind(t) != null;
+}
+
+/** 第一阶段只有 `x-wpe/video` 会入库；其余类型仅占位。 */
+export function isWpeVideoType(t: string | undefined): boolean {
+  return wpeKind(t) === "video";
+}
+
+/**
+ * 播放形态判定：普通视频或目录型 WPE 视频壁纸。
+ * 预览、背景与壁纸窗口用这个；只应展示静图的场景仍用 {@link isVideoMediaType}。
+ */
+export function isVideoPlaybackType(t: string | undefined): boolean {
+  return isVideoMediaType(t) || isWpeVideoType(t);
+}
+
 /** 详情等展示用：无值时与后端默认一致 */
 export function displayImageMimeType(t: string | undefined): string {
   const s = t == null ? "" : String(t).trim();

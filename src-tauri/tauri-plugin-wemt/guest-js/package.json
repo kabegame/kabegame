@@ -1,0 +1,10 @@
+{
+  "name": "@tauri-plugin/wemt-api",
+  "version": "0.1.0",
+  "description": "TypeScript bindings for tauri-plugin-wemt",
+  "type": "module",
+  "main": "index.ts",
+  "peerDependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  }
+}

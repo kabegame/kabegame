@@ -402,10 +402,10 @@ import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
 import { useModal } from "../../composables/useModal";
-import { fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
+import { compatibleToUrl, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { fetchImageById } from "../../utils/imageRow";
 import { batchWindow, imagePatches$, on, triggers$ } from "../../services/kbEvents";
-import { isNativeMetadataEligible, isVideoMediaType } from "../../utils/mediaMime";
+import { isNativeMetadataEligible, isVideoPlaybackType, isWpeVideoType } from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
 import { IS_ANDROID } from "@/env.ts";
 
@@ -503,7 +503,7 @@ const previewImage = computed<ImageInfo | null>(() =>
 );
 /** 只给了 id 且还没解析出来：画 loading，不是「不存在」。 */
 const previewResolving = computed(() => typeof props.image === "string" && !resolvedImage.value);
-const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type));
+const isPreviewVideo = computed(() => isVideoPlaybackType(previewImage.value?.type));
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
 const audioKeepAlive = useAudioKeepAlive();
@@ -569,12 +569,22 @@ const toFileUrl = (path: string | undefined) => {
   return fileToUrl(normalized);
 };
 
-const getOriginalPreviewUrl = (image: ImageInfo) => toFileUrl(image.localPath);
+const getOriginalPreviewUrl = (image: ImageInfo) => {
+  // 目录型壁纸的 local_path 不是文件：播放只走 compatible_path（入口视频本身或兼容副本）。
+  if (isWpeVideoType(image.type)) {
+    const compatible = normalizeDesktopPath(image.compatiblePath);
+    return compatible ? compatibleToUrl(compatible) : "";
+  }
+  return toFileUrl(image.localPath);
+};
 
 const getThumbnailPreviewUrl = (image: ImageInfo) => {
   const thumbPath = image.thumbnailPath;
   const normalized = normalizeDesktopPath(thumbPath);
-  return normalized ? thumbnailToUrl(normalized) : getOriginalPreviewUrl(image);
+  if (normalized && normalized !== normalizeDesktopPath(image.localPath)) {
+    return thumbnailToUrl(normalized);
+  }
+  return getOriginalPreviewUrl(image);
 };
 
 // 计算 cover scale（填满屏幕的缩放比例）
@@ -801,12 +811,13 @@ const pswpDataSource = computed(() => {
   const fallbackH = 1080;
   return pswpWindow.value.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
-    const isVideo = isVideoMediaType(img.type);
+    const isVideo = isVideoPlaybackType(img.type);
+    const thumbUrl = getThumbnailPreviewUrl(img);
     return {
       src: url,
       type: isVideo ? "video" : "image",
       mime: isVideo && img.type?.startsWith("video/") ? img.type : undefined,
-      poster: isVideo ? getThumbnailPreviewUrl(img) : undefined,
+      poster: isVideo && thumbUrl !== url ? thumbUrl : undefined,
       controls: isVideo ? true : undefined,
       playsInline: isVideo ? true : undefined,
       width: img.width || fallbackW,

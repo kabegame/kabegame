@@ -1,5 +1,43 @@
 # v4.6.1 regression
 
+## WPE 壁纸导入（第一阶段：Video）
+
+2026-10-25：新增 Wallpaper Engine 壁纸目录导入（`x-wpe/video`）、`/wpe/<id>/` 目录服务、删除/整理/虚拟盘/原生壁纸分流与壁纸窗口视频属性复现。静态验证：`cargo check -p kabegame --features standard` 与前端 `vue-tsc` / `vitest` 结果见本节末尾；真机使用本机 Wallpaper Engine 2.8.0.42（Steam 库 `D:/Applications/Steam`，创意工坊 2 个 + `defaultprojects` 19 个）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 自动发现 | Windows 桌面 CEF | 打开「开始收集 → 壁纸」对话框 | 每类来源一张卡片，带「N 个壁纸 / N 个可导入（视频且未入库）/ N 个已导入」标签；有可导入的来源默认勾选；底部显示将导入的数量，全都已入库时提示「本机的视频壁纸都已导入」；同一 Steam 库不会因注册表与 vdf 路径大小写不同而重复计数 | 2026-10-25 真机：创意工坊 2 个（1 视频已入库）、`defaultprojects` 19 个（0 视频），均只出现一次；修复前 `wpe_scan` / `wpe_recognize_dir` / `get_current_wallpaper_target` 未登记 ACL，对话框无结果 |
+| [ ] | 手动添加文件夹 | Windows 桌面 CEF | 依次选择创意工坊 `431960` 根、`wallpaper_engine` 安装目录、一个壁纸目录 | 均能识别并追加到自定义文件夹列表；普通目录提示未识别 |  |
+| [ ] | 导入视频壁纸 | Windows 桌面 CEF | 提交壁纸任务，导入创意工坊 2725770343 | 生成一行 `type=x-wpe/video`，`local_path` 为壁纸目录，缩略图为 `preview.gif`，标签进入 `WPE/Retro`，创意工坊链接可打开 | 入口视频 276MB，不产生壁纸副本 |
+| [ ] | 幂等 | Windows 桌面 CEF | 对同一来源再运行一次任务 | 不新增行；任务日志显示「已存在」并只补目标画册成员 |  |
+| [ ] | 网格预览 | Windows 桌面 CEF | 在画廊查看导入的壁纸 | 网格显示作者 `preview.gif`（动图），右上角显示「WPE · 视频」；悬停不加载入口视频 |  |
+| [ ] | 预览大图播放 | Windows 桌面 CEF | 双击打开预览并拖动进度 | 播放 `<dir>/Wallpaper-1.mp4`（经 `/wpe/<id>/` 302），Range 拖动生效 |  |
+| [ ] | 应用背景 | Windows 桌面 CEF | 把 WPE 壁纸设为当前壁纸并开启应用背景 | 主界面背景播放同一入口视频 |  |
+| [ ] | 窗口壁纸与轮播 | Windows 桌面 CEF | 窗口模式下设为壁纸；切换轮播来源到该壁纸所在画册 | 桌面显示入口视频；轮播在窗口模式选中 WPE 行 |  |
+| [ ] | 非窗口模式拒绝 | Windows 桌面 CEF | 原生模式设为壁纸；从窗口模式切到原生模式 | 前者提示切换窗口模式；后者改用画廊可用图片兜底且不把目录交给原生后端 |  |
+| [ ] | 删除护栏 | Windows 桌面 CEF | 删除该记录（含勾选「删除源文件」） | 记录消失，WPE 目录与 `preview.gif` 完好；任务计数正确 |  |
+| [ ] | `/wpe` 越界与 `/file` | Windows 桌面 CEF / HTTP | 请求 `/wpe/<id>/../project.json`、`/wpe/<id>/` 与 `/file/<壁纸目录>` | 越界 404；`/wpe/<id>/` 302 到入口；`/file/<目录>` 404 |  |
+| [ ] | 整理 | Windows 桌面 CEF | 整理勾选重建缩略图、兼容副本与「移除无法识别媒体」，范围覆盖该行 | WPE 行不被删除、缩略图不被覆盖、兼容副本不按目录重建 |  |
+| [ ] | 虚拟盘 | Windows 桌面 CEF | 打开虚拟盘浏览各维度 | 不出现 WPE 行，其余图片计数不受影响 |  |
+| [ ] | 详情与操作 | Windows 桌面 CEF | 打开详情；右键查看菜单 | 类型显示「Wallpaper Engine · 视频」并有创意工坊链接；复制 / 分享 / 删除源文件不可用，「在文件夹中显示」打开壁纸目录 |  |
+| [ ] | 空跑 | Windows 桌面 CEF | 勾选空跑运行壁纸任务 | 不写库，只统计并记录将导入的目录 |  |
+| [ ] | 创意工坊取消订阅 | Windows 桌面 CEF | 移走壁纸目录后刷新图库 | 行仍在并标记缺失，不自动删除记录 |  |
+| [ ] | 属性待校准 | Windows 桌面 CEF | 在 WPE 中对照 `fill`（contain）几何与 `wec_*` 滤镜 | 几何与亮度 / 对比度 / 饱和度 / 色相观感接近；差异记录到 WPE 文档 | 计划内的待真机验证项 |
+
+## Windows 窗口壁纸 WorkerW 挂载
+
+2026-10-25：根据 REA 的 WPE 调用链及已有运行时层级记录，替换 Windows 的 Progman 挂载路径；验证状态以下表为准。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | WorkerW 层级 | Windows 11 CEF | 开启窗口壁纸，枚举 Progman 子窗口 | 壁纸 HWND 的父窗口是无图标视图的整屏 WorkerW；图标可见且壁纸铺满屏幕 | 待新二进制真机验证 |
+| [ ] | 无 Z-order 修正 | Windows 11 CEF | 点击桌面，最小化/隐藏/恢复主窗口，执行 Win+D | 图标始终位于壁纸上方；无 `fix_wallpaper_zorder` 调用 | 待真机验证 |
+| [ ] | 生命周期 | Windows 11 CEF | 反复切换窗口壁纸模式 | 每次窗口创建后挂载，退出模式时解绑并销毁，重进不沿用旧 HWND | 待真机验证 |
+| [ ] | 多屏/DPI | Windows 11 CEF | 在负坐标副屏与不同缩放显示器上挂载、变更分辨率 | 窗口位置和尺寸与目标监视器一致 | 待设备验证 |
+| [ ] | Explorer 重建 | Windows 11 CEF | 受控重启 Explorer 后调用 `wemt_refresh` | 失效宿主被识别，重新发现并挂载 | 待受控验证；自动触发尚未接入 |
+
+静态验证：`tauri-plugin-wemt` 默认特性及 `--no-default-features` 的 `cargo check` 通过；插件格式、前端变更文件 Prettier、`git diff --check` 通过。应用级 `cargo check` 因本机运行中的 CEF 占用其运行时文件，在 `cef-dll-sys` 复制阶段以 `os error 32` 中断；前端 `vue-tsc` 因本机 `node_modules/vitest/dist/chunks/global.d.DVsSRdQ5.d.ts` 文件内容异常（开头 32 字节均为零）而报 `TS1127`。这两项尚不能作为变更代码的通过证据。
+
 ## 运行配置卡片进度圆盘
 
 2026-10-24：前端类型检查（`deno task check -c kabegame --skip cargo`）与修改文件的 Prettier 检查通过。在 macOS 桌面 CEF dev 真机打开运行配置页，经 CDP 读取圆盘扇形占比并截图核对。

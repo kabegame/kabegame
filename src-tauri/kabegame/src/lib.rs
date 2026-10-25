@@ -402,6 +402,11 @@ pub(crate) fn configure_app(
         )
         .plugin(tauri_plugin_pathes::init());
 
+    #[cfg(all(target_os = "windows", feature = "standard"))]
+    {
+        builder = builder.plugin(tauri_plugin_wemt::init());
+    }
+
     #[cfg(target_os = "android")]
     {
         builder = builder.plugin(tauri_plugin_picker::init());
@@ -660,6 +665,7 @@ pub(crate) fn configure_app(
             clear_current_wallpaper_image_id,
             get_wallpaper_capabilities,
             get_current_wallpaper_path,
+            get_current_wallpaper_target,
             set_wallpaper_rotation_enabled,
             get_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
@@ -684,7 +690,7 @@ pub(crate) fn configure_app(
             set_wallpaper_video_playback_rate,
             get_wallpaper_disabled,
             set_wallpaper_disabled,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            #[cfg(target_os = "macos")]
             fix_wallpaper_zorder,
             // --- Virtual Drive ---
             #[cfg(feature = "standard")]
@@ -777,6 +783,8 @@ pub(crate) fn configure_app(
             get_webview_i18n,
             proxy_fetch,
             get_supported_image_types,
+            wpe_scan,
+            wpe_recognize_dir,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

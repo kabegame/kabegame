@@ -4,6 +4,7 @@ use super::{
     PluginBackend, PluginScript,
 };
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
+use crate::wpe::WPE_IMPORT_PLUGIN_ID;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -15,7 +16,7 @@ const BUILTIN_PLUGIN_ICON_PNG: &[u8] = include_bytes!("builtin_icon.png");
 /// 内建插件统一版本：需求版本 1.0，按 `pack_plugin_version` 的 a.b.c 契约写为 1.0.0。
 const BUILTIN_PLUGIN_VERSION: &str = "1.0.0";
 
-/// 内建插件静态表（local-import / webpage），不进入已安装插件列表。
+/// 内建插件静态表（local-import / webpage / wpe-import），不进入已安装插件列表。
 pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
     static BUILTIN_PLUGINS: OnceLock<HashMap<String, Arc<Plugin>>> = OnceLock::new();
     BUILTIN_PLUGINS.get_or_init(|| {
@@ -68,8 +69,83 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
             String::new(),
         );
 
-        let webpage_var_defs = webpage::var_defs();
-        validate_var_defs(&webpage_var_defs).expect("webpage 内建插件变量定义校验失败");
+        // 「壁纸」入口：自动发现 Steam 库里的 WPE 壁纸目录。第一阶段只导入 video 型；
+        // `extraDirs` 由对话框「添加文件夹」识别后传入（未选时省略，缺失即空）。
+        let wpe_import_var_defs: Vec<super::VarDefinition> = serde_json::from_value(json!([
+            {
+                "key": "sources",
+                "type": "checkbox",
+                "name": "Sources",
+                "name.zh": "来源",
+                "name.zhtw": "來源",
+                "name.ja": "ソース",
+                "name.ko": "소스",
+                "default": ["workshop", "defaultprojects", "myprojects"],
+                "options": [
+                    {
+                        "variable": "workshop",
+                        "name": "Workshop subscriptions",
+                        "name.zh": "创意工坊订阅",
+                        "name.zhtw": "工作坊訂閱",
+                        "name.ja": "ワークショップ購読",
+                        "name.ko": "창작마당 구독"
+                    },
+                    {
+                        "variable": "defaultprojects",
+                        "name": "Wallpaper Engine defaults",
+                        "name.zh": "官方默认壁纸",
+                        "name.zhtw": "官方預設桌布",
+                        "name.ja": "公式デフォルト",
+                        "name.ko": "기본 월페이퍼"
+                    },
+                    {
+                        "variable": "myprojects",
+                        "name": "My projects",
+                        "name.zh": "我的项目",
+                        "name.zhtw": "我的專案",
+                        "name.ja": "マイプロジェクト",
+                        "name.ko": "내 프로젝트"
+                    }
+                ]
+            },
+            {
+                "key": "extraDirs",
+                "type": "list",
+                "name": "Extra folders",
+                "name.zh": "额外的文件夹",
+                "name.zhtw": "額外的資料夾",
+                "name.ja": "追加フォルダ",
+                "name.ko": "추가 폴더"
+            }
+        ]))
+        .expect("wpe-import 内建插件变量定义必须合法");
+        validate_var_defs(&wpe_import_var_defs).expect("wpe-import 内建插件变量定义校验失败");
+        let wpe_import_vars = wpe_import_var_defs
+            .iter()
+            .map(var_definition_to_frontend_value)
+            .collect();
+        let wpe_import = builtin_plugin(
+            WPE_IMPORT_PLUGIN_ID,
+            json!({
+                "default": "Wallpaper Engine",
+                "zh": "壁纸导入",
+                "zhtw": "桌布匯入",
+                "ja": "壁紙インポート",
+                "ko": "월페이퍼 가져오기",
+            }),
+            json!({
+                "default": "Import Wallpaper Engine wallpapers (video only in this phase)",
+                "zh": "导入本机 Wallpaper Engine 壁纸（当前阶段仅视频）",
+                "zhtw": "匯入本機 Wallpaper Engine 桌布（目前僅影片）",
+                "ja": "ローカルの Wallpaper Engine 壁紙をインポート（現段階は動画のみ）",
+                "ko": "로컬 Wallpaper Engine 월페이퍼 가져오기(현재 동영상만)",
+            }),
+            HashMap::from([("vars".to_string(), Value::Array(wpe_import_vars))]),
+            wpe_import_var_defs,
+            String::new(),
+        );
+
+        let webpage_var_defs = webpage::var_defs();        validate_var_defs(&webpage_var_defs).expect("webpage 内建插件变量定义校验失败");
         let webpage_vars: Vec<Value> = webpage_var_defs
             .iter()
             .map(var_definition_to_frontend_value)
@@ -98,6 +174,7 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
         HashMap::from([
             (LOCAL_FOLDER_PLUGIN_ID.to_string(), Arc::new(local_import)),
             (WEBPAGE_PLUGIN_ID.to_string(), Arc::new(webpage)),
+            (WPE_IMPORT_PLUGIN_ID.to_string(), Arc::new(wpe_import)),
         ])
     })
 }

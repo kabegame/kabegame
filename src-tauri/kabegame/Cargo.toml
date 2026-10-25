@@ -61,6 +61,7 @@ tauri = { version = "2.12.4", features = ["dbus", "common-controls-v6", "x11", "
 ], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+tauri-plugin-wemt = { workspace = true, optional = true }
 windows = {version = "0.52", features = [
   "Win32_Foundation",
   "Win32_System_Com",
@@ -119,6 +120,7 @@ default = []
 
 # Standard desktop build: shared Tauri stack + virtual driver + video ingestion
 standard = [
+    "dep:tauri-plugin-wemt",
     "dep:cef",
     "dep:gtk",
     "kabegame-core/virtual-driver",
