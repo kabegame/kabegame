@@ -116,12 +116,11 @@
           @click.stop
           @wheel.stop
         >
-          <!-- 面板自带折叠外壳：展开的 flex:1 争夺侧栏空间，收拢的只占标题行 -->
+          <!-- 面板自带折叠外壳：展开的 flex:1 争夺侧栏空间，收拢的只占标题行；基本信息内容紧凑，按自然高度 -->
           <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-left">
             <ImageBasicInfoPanel
               :image="previewImage"
               :plugins="plugins"
-              fill-when-expanded
               @open-task="emit('open-task', $event)"
               @open-gallery-filter="handleOpenGalleryFilter"
               @open-surf-record="emit('open-surf-record', $event)"

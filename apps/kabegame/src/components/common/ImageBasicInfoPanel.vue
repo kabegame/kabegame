@@ -10,140 +10,161 @@
     <template #title>
       {{ t("gallery.imageDetailBasicSection") }}
     </template>
-    <div class="detail-fields-body">
-      <div v-if="image.displayName" class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailDisplayName") }}</span>
-        <span class="detail-value line-clamp-2" :title="image.displayName">
-          {{ image.displayName }}
-        </span>
+    <div class="basic-info-body">
+      <!-- 名称作标题；源、收藏时间、任务入口放在名称下 -->
+      <div v-if="image.displayName" class="basic-info-name line-clamp-2" :title="image.displayName">
+        {{ image.displayName }}
       </div>
-      <div class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailSource") }}</span>
-        <div class="detail-value-row">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="basic-info-avatar">
+          <img v-if="sourceIconSrc" :src="sourceIconSrc" alt="" class="h-full w-full object-cover" />
+          <el-icon v-else><component :is="sourceKind === 'surf' ? Compass : Picture" /></el-icon>
+        </span>
+        <div class="flex-1 min-w-0">
           <button
             v-if="sourceClickEnabled"
             type="button"
-            class="detail-filter-link"
+            class="basic-info-link basic-info-source"
             :title="sourceTitle"
             @click="handleOpenSource"
           >
             {{ sourceLabel }}
           </button>
-          <span v-else class="detail-value">{{ sourceLabel }}</span>
-          <el-button
-            v-if="image.taskId"
-            text
-            circle
-            size="small"
-            type="primary"
-            class="detail-open-task-btn"
-            :title="t('gallery.imageDetailOpenTask')"
-            :aria-label="t('gallery.imageDetailOpenTask')"
-            @click="handleOpenTask"
-          >
-            <el-icon>
-              <List />
-            </el-icon>
-          </el-button>
+          <span v-else class="basic-info-source">{{ sourceLabel }}</span>
+          <div class="basic-info-date" :title="t('gallery.imageDetailCrawledAt')">
+            <template v-if="dateParts">
+              <button
+                type="button"
+                class="basic-info-link"
+                :title="t('gallery.filterByTime')"
+                @click="emitGalleryFilter(dateYearFilterTarget)"
+              >
+                {{ dateParts.year }}
+              </button>
+              <span>-</span>
+              <button
+                type="button"
+                class="basic-info-link"
+                :title="t('gallery.filterByTime')"
+                @click="emitGalleryFilter(dateMonthFilterTarget)"
+              >
+                {{ dateParts.month }}
+              </button>
+              <span>-</span>
+              <button
+                type="button"
+                class="basic-info-link"
+                :title="t('gallery.filterByTime')"
+                @click="emitGalleryFilter(dateDayFilterTarget)"
+              >
+                {{ dateParts.day }}
+              </button>
+              <span v-if="dateParts.time" class="ml-1.5">{{ dateParts.time }}</span>
+            </template>
+            <span v-else>{{ formatDate(image.crawledAt) }}</span>
+          </div>
         </div>
+        <el-button
+          v-if="image.taskId"
+          text
+          circle
+          size="small"
+          type="primary"
+          class="shrink-0"
+          :title="t('gallery.imageDetailOpenTask')"
+          :aria-label="t('gallery.imageDetailOpenTask')"
+          @click="handleOpenTask"
+        >
+          <el-icon>
+            <List />
+          </el-icon>
+        </el-button>
       </div>
-      <div class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailType") }}</span>
-        <div class="detail-value detail-inline-links">
+
+      <!-- 媒体属性芯片：每个可点的片段都是一个画廊筛选 -->
+      <div class="flex flex-wrap items-center gap-1.5">
+        <span class="basic-info-chip">
+          <el-icon class="mr-0.5"><component :is="mediaTypeParts.kind === 'video' ? VideoCamera : Picture" /></el-icon>
           <button
             type="button"
-            class="detail-filter-link"
+            class="basic-info-link"
             :title="t('gallery.filterByMediaType')"
             @click="emitGalleryFilter(mediaKindFilterTarget)"
           >
-            {{ mediaTypeParts.kind }}
+            {{ mediaKindLabel }}
           </button>
           <template v-if="mediaTypeParts.format">
-            <span class="detail-link-separator">/</span>
+            <span class="mx-0.5 opacity-60">/</span>
             <button
               type="button"
-              class="detail-filter-link"
+              class="basic-info-link uppercase"
               :title="t('gallery.filterByMediaType')"
               @click="emitGalleryFilter(mediaFormatFilterTarget)"
             >
               {{ mediaTypeParts.format }}
             </button>
           </template>
-        </div>
-      </div>
-      <div v-if="image.postUrl && !isFileUrl(image.postUrl)" class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailUrl") }}</span>
-        <span
-          class="detail-value line-clamp-2 clickable-link"
-          :title="image.postUrl"
-          @click="handleOpenUrl(image.postUrl)"
-        >
-          {{ image.postUrl }}
         </span>
-      </div>
-      <div class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailLocalPath") }}</span>
-        <span
-          class="detail-value line-clamp-2 clickable-link"
-          :title="image.localPath"
-          @click="handleOpenPath(image.localPath)"
-          @contextmenu.prevent.stop="handleCopyLocalPath(image.localPath)"
+        <button
+          v-if="image.size != null"
+          type="button"
+          class="basic-info-chip basic-info-link"
+          :title="t('gallery.filterBySize')"
+          @click="emitGalleryFilter(sizeFilterTarget)"
         >
-          {{ image.localPath }}
-        </span>
+          {{ imageFileSizeLabel }}
+        </button>
+        <span v-if="imageDimensionsLabel" class="basic-info-chip">{{ imageDimensionsLabel }}</span>
+        <!-- 宽高比画成与图片同比例的矩形框，放得下就把比值写在框里 -->
+        <button
+          v-if="aspectFilterTarget && aspectFrame"
+          type="button"
+          class="basic-info-aspect"
+          :title="`${t('gallery.filterByAspect')} · ${aspectFrame.label}`"
+          @click="emitGalleryFilter(aspectFilterTarget)"
+        >
+          <span class="basic-info-aspect-frame" :style="{ width: `${aspectFrame.width}px` }">
+            <template v-if="aspectFrame.labelInside">{{ aspectFrame.label }}</template>
+          </span>
+          <span v-if="!aspectFrame.labelInside">{{ aspectFrame.label }}</span>
+        </button>
       </div>
-      <div class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailCrawledAt") }}</span>
-        <div v-if="dateParts" class="detail-value detail-inline-links">
+
+      <div v-if="showPostUrl || image.localPath" class="basic-info-links">
+        <div v-if="showPostUrl" class="basic-info-link-row">
+          <el-icon class="basic-info-row-icon"><Link /></el-icon>
+          <span class="basic-info-row-text" :title="image.postUrl" @click="handleOpenUrl(image.postUrl)">
+            {{ image.postUrl }}
+          </span>
           <button
             type="button"
-            class="detail-filter-link"
-            :title="t('gallery.filterByTime')"
-            @click="emitGalleryFilter(dateYearFilterTarget)"
+            class="basic-info-copy"
+            :title="t('gallery.imageDetailCopy')"
+            :aria-label="t('gallery.imageDetailCopy')"
+            @click="handleCopyText(image.postUrl)"
           >
-            {{ dateParts.year }}
+            <el-icon><CopyDocument /></el-icon>
           </button>
-          <span class="detail-link-separator">-</span>
-          <button
-            type="button"
-            class="detail-filter-link"
-            :title="t('gallery.filterByTime')"
-            @click="emitGalleryFilter(dateMonthFilterTarget)"
-          >
-            {{ dateParts.month }}
-          </button>
-          <span class="detail-link-separator">-</span>
-          <button
-            type="button"
-            class="detail-filter-link"
-            :title="t('gallery.filterByTime')"
-            @click="emitGalleryFilter(dateDayFilterTarget)"
-          >
-            {{ dateParts.day }}
-          </button>
-          <span v-if="dateParts.time" class="detail-date-time">{{ dateParts.time }}</span>
         </div>
-        <span v-else class="detail-value">{{ formatDate(image.crawledAt) }}</span>
-      </div>
-      <div v-if="image.size != null" class="detail-item">
-        <span class="detail-label">{{ t("gallery.imageDetailSize") }}</span>
-        <div class="detail-value-row detail-value-row-wrap">
+        <div v-if="image.localPath" class="basic-info-link-row">
+          <el-icon class="basic-info-row-icon"><Folder /></el-icon>
+          <!-- 路径从左侧省略、保留文件名；LRM 防止 rtl 方向把开头的 / 甩到末尾 -->
+          <span
+            class="basic-info-row-text basic-info-row-text--tail"
+            :title="image.localPath"
+            @click="handleOpenPath(image.localPath)"
+            @contextmenu.prevent.stop="handleCopyText(image.localPath)"
+          >
+            {{ `\u200E${image.localPath}\u200E` }}
+          </span>
           <button
             type="button"
-            class="detail-filter-link"
-            :title="t('gallery.filterBySize')"
-            @click="emitGalleryFilter(sizeFilterTarget)"
+            class="basic-info-copy"
+            :title="t('gallery.imageDetailCopy')"
+            :aria-label="t('gallery.imageDetailCopy')"
+            @click="handleCopyText(image.localPath)"
           >
-            {{ imageFileSizeLabel }}
-          </button>
-          <button
-            v-if="aspectFilterTarget"
-            type="button"
-            class="detail-filter-link detail-filter-link-muted"
-            :title="t('gallery.filterByAspect')"
-            @click="emitGalleryFilter(aspectFilterTarget)"
-          >
-            ({{ imageDimensionsLabel }})
+            <el-icon><CopyDocument /></el-icon>
           </button>
         </div>
       </div>
@@ -158,7 +179,7 @@ import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "../../api";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
-import { List } from "@kabegame/element-plus-icons";
+import { Compass, CopyDocument, Folder, Link, List, Picture, VideoCamera } from "@kabegame/element-plus-icons";
 import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore, type Plugin } from "../../stores/plugins";
@@ -267,6 +288,11 @@ const sourceLabel = computed(() => {
 
 const sourceClickEnabled = computed(() => sourceKind.value !== "unknown");
 
+const sourceIconSrc = computed(() => {
+  if (sourceKind.value !== "plugin") return undefined;
+  return pluginStore.pluginIconSrc(props.image?.pluginId?.trim() ?? "");
+});
+
 const sourceTitle = computed(() => {
   if (sourceKind.value === "plugin") return t("gallery.filterByPlugin");
   return surfSourceHost.value || sourceLabel.value;
@@ -293,6 +319,10 @@ const mediaTypeParts = computed((): { kind: "image" | "video"; format: string } 
   };
 });
 
+const mediaKindLabel = computed(() =>
+  t(mediaTypeParts.value.kind === "video" ? "gallery.imageDetailKindVideo" : "gallery.imageDetailKindImage"),
+);
+
 const mediaKindFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({
   type: "media-type",
   kind: mediaTypeParts.value.kind,
@@ -308,7 +338,46 @@ const imageDimensionsLabel = computed((): string => {
   const height = props.image?.height;
   if (!Number.isFinite(width) || !Number.isFinite(height)) return "";
   if ((width as number) <= 0 || (height as number) <= 0) return "";
-  return `${Math.round(width as number)} x ${Math.round(height as number)}`;
+  return `${Math.round(width as number)} × ${Math.round(height as number)}`;
+});
+
+/** 常见比例；实际比值与之相差 1.5% 内就显示该比例，否则显示小数比值。 */
+const COMMON_ASPECT_RATIOS: Array<[number, number]> = [
+  [1, 1],
+  [5, 4],
+  [4, 3],
+  [3, 2],
+  [5, 3],
+  [16, 10],
+  [16, 9],
+  [2, 1],
+  [21, 9],
+  [32, 9],
+];
+
+/** 框高固定 22px（与芯片同高），宽按比例换算并夹在 [12, 56]；比值文字放得下才写进框里。 */
+const ASPECT_FRAME_HEIGHT = 22;
+
+const aspectFrame = computed(() => {
+  const width = props.image?.width;
+  const height = props.image?.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if ((width as number) <= 0 || (height as number) <= 0) return null;
+  const ratio = (width as number) / (height as number);
+  const portrait = ratio < 1;
+  const long = portrait ? 1 / ratio : ratio;
+  const common = COMMON_ASPECT_RATIOS.find(([a, b]) => Math.abs(long / (a / b) - 1) <= 0.015);
+  const label = common
+    ? portrait
+      ? `${common[1]}:${common[0]}`
+      : `${common[0]}:${common[1]}`
+    : portrait
+      ? `1:${long.toFixed(2)}`
+      : `${long.toFixed(2)}:1`;
+  const frameWidth = Math.min(56, Math.max(12, Math.round(ASPECT_FRAME_HEIGHT * ratio)));
+  // 11px 等宽数字约 6.5px/字，左右各留 3px
+  const labelInside = frameWidth >= label.length * 6.5 + 6;
+  return { label, width: frameWidth, labelInside };
 });
 
 const imageFileSizeLabel = computed((): string => {
@@ -421,9 +490,10 @@ const formatDate = (timestamp?: number) => {
   return d.toLocaleString(toLocaleTag(loc));
 };
 
-const isFileUrl = (url?: string) => {
-  return url && url.toLowerCase().startsWith("file://");
-};
+const showPostUrl = computed(() => {
+  const url = props.image?.postUrl;
+  return !!url && !url.toLowerCase().startsWith("file://");
+});
 
 const handleOpenUrl = async (url?: string) => {
   if (!url) return;
@@ -451,17 +521,17 @@ const handleOpenPath = async (path?: string) => {
   }
 };
 
-const handleCopyLocalPath = async (path?: string) => {
-  if (!path) return;
+const handleCopyText = async (text?: string) => {
+  if (!text) return;
   try {
     if (IS_WEB) {
-      await navigator.clipboard.writeText(path);
+      await navigator.clipboard.writeText(text);
     } else {
-      await writeText(path);
+      await writeText(text);
     }
     ElMessage.success(t("common.copySuccess"));
   } catch (error) {
-    console.error("复制本地路径失败:", error);
+    console.error("复制失败:", error);
     ElMessage.error(t("common.copyFailed"));
   }
 };
@@ -472,91 +542,74 @@ const handleCopyLocalPath = async (path?: string) => {
 .image-basic-info-panel {
   min-width: 0;
 
-  .detail-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .detail-label {
-    font-weight: 500;
-    color: var(--anime-text-secondary);
-    min-width: 80px;
-    flex-shrink: 0;
-  }
-
-  .detail-fields-body {
+  .basic-info-body {
     display: flex;
     min-height: 0;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     padding: 0 12px 12px;
-    /* fill 模式（preview 侧栏）下内容超高时内部滚动 */
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--anime-text-primary);
+    /* 面板被压矮时内部滚动 */
     overflow-y: auto;
-  }
 
-  .detail-value-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .detail-value-row-wrap {
-    flex-wrap: wrap;
-    row-gap: 4px;
-  }
-
-  .detail-inline-links {
-    display: inline-flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 0;
-  }
-
-  .detail-link-separator,
-  .detail-date-time {
-    color: var(--anime-text-primary);
-  }
-
-  .detail-date-time {
-    margin-left: 8px;
-  }
-
-  .detail-open-task-btn {
-    flex-shrink: 0;
-  }
-
-  .detail-value {
-    color: var(--anime-text-primary);
-    word-break: break-all;
-    flex: 1;
-    min-width: 0;
-
-    &.clickable-link {
-      color: var(--anime-primary);
-      cursor: pointer;
-      text-decoration: underline;
-      transition: color 0.3s ease;
-
-      &:hover {
-        color: var(--anime-primary-dark);
-      }
+    /* line-clamp 的 overflow:hidden 会让 flex 子项被压到 0 高 */
+    > * {
+      flex-shrink: 0;
     }
   }
 
-  .detail-filter-link {
-    min-width: 0;
+  .basic-info-name {
+    font-size: 15px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+
+  .basic-info-avatar {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    overflow: hidden;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--anime-primary) 12%, transparent);
+    color: var(--anime-primary);
+    font-size: 16px;
+  }
+
+  .basic-info-source {
+    display: block;
     max-width: 100%;
+    overflow: hidden;
+    color: var(--anime-primary);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .basic-info-date {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    color: var(--anime-text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 可点筛选片段：外观随所在位置，悬停才出主色下划线 */
+  .basic-info-link {
+    min-width: 0;
     border: 0;
     background: transparent;
     padding: 0;
+    color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
-    word-break: break-all;
-    transition: color 0.3s ease;
+    transition: color 0.2s ease;
 
     &:hover {
       color: var(--anime-primary);
@@ -572,10 +625,117 @@ const handleCopyLocalPath = async (path?: string) => {
     }
   }
 
-  .detail-filter-link-muted {
-    color: var(--anime-text-secondary);
+  .basic-info-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--anime-primary) 10%, transparent);
+    color: var(--anime-primary-dark);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  button.basic-info-chip:hover {
+    background: color-mix(in srgb, var(--anime-primary) 18%, transparent);
+    text-decoration-line: none;
+  }
+
+  .basic-info-aspect {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    color: var(--anime-primary-dark);
+    cursor: pointer;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    transition: color 0.2s ease;
 
     &:hover {
+      color: var(--anime-primary);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--anime-primary);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+  }
+
+  .basic-info-aspect-frame {
+    display: inline-flex;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    border: 1.5px solid currentColor;
+    border-radius: 3px;
+    line-height: 1;
+  }
+
+  .basic-info-links {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--anime-border) 70%, transparent);
+  }
+
+  .basic-info-link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .basic-info-row-icon {
+    flex-shrink: 0;
+    color: var(--anime-text-secondary);
+    font-size: 15px;
+  }
+
+  .basic-info-row-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--anime-primary);
+    cursor: pointer;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &:hover {
+      color: var(--anime-primary-dark);
+      text-decoration: underline;
+    }
+
+    /* 路径从左省略，保留末尾文件名 */
+    &--tail {
+      direction: rtl;
+      text-align: left;
+    }
+  }
+
+  .basic-info-copy {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--anime-text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+
+    &:hover {
+      background: color-mix(in srgb, var(--anime-primary) 10%, transparent);
       color: var(--anime-primary);
     }
   }
