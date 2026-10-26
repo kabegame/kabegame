@@ -46,6 +46,9 @@ pub struct CrawlTaskRequest {
     /// 可选：直接从指定 .kgpg 文件运行（用于插件编辑器/临时插件）
     #[serde(default)]
     pub plugin_file_path: Option<String>,
+    /// CLI `--freeze-template`：冻结插件描述模板进本任务 metadata；只在内存中，不入任务记录
+    #[serde(default)]
+    pub freeze_template: bool,
 }
 
 /// 一次状态跳转附带的元数据（时间戳、错误信息）。
@@ -231,12 +234,21 @@ impl TaskScheduler {
         let inputs = input_mounts::resolve_input_mounts(&plugin, &config)
             .await
             .map_err(|error| format!("配置不合法：{error}"))?;
+        // 只在请求开启时读一次包内模板；读包失败让任务失败，不静默降级。内建插件无包文件得 None。
+        let frozen_template = if req.freeze_template {
+            crate::plugin::package_file::read_manifest_text(&plugin, "kbDescriptionTemplate", None)?
+                .filter(|template| !template.trim().is_empty())
+                .map(Arc::<str>::from)
+        } else {
+            None
+        };
         let params = TaskParams {
             plugin: Arc::new(plugin),
             images_dir,
             output_album_id: task.output_album_id.clone(),
             config,
             is_dry_run: task.is_dry_run,
+            frozen_template,
             #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
             inputs,
         };
@@ -1443,6 +1455,7 @@ mod tests {
                 output_album_id: None,
                 config: HashMap::new(),
                 is_dry_run: false,
+                frozen_template: None,
                 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
                 inputs: Vec::new(),
             },

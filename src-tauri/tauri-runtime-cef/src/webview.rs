@@ -792,10 +792,10 @@ mod imp {
         handler: &Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>,
         requested: u32,
     ) -> PermissionResponse {
-        let audio = MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw();
-        let video = MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw();
-        let desktop_audio = MediaAccessPermissionTypes::DESKTOP_AUDIO_CAPTURE.get_raw();
-        let desktop_video = MediaAccessPermissionTypes::DESKTOP_VIDEO_CAPTURE.get_raw();
+        let audio = MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw() as u32;
+        let video = MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw() as u32;
+        let desktop_audio = MediaAccessPermissionTypes::DESKTOP_AUDIO_CAPTURE.get_raw() as u32;
+        let desktop_video = MediaAccessPermissionTypes::DESKTOP_VIDEO_CAPTURE.get_raw() as u32;
         let known = audio | video | desktop_audio | desktop_video;
         let mut kinds = Vec::new();
         if requested & audio != 0 {
@@ -869,10 +869,11 @@ mod imp {
             ),
             (PermissionRequestTypes::SENSORS, PermissionKind::Sensors),
         ];
-        let mut known = 0;
+        let mut known = 0u32;
         let mut kinds = Vec::new();
         for (permission, kind) in mappings {
-            let permission = permission.get_raw();
+            // bindgen 枚举在 MSVC 上是 i32、Linux 上是 u32,统一成回调参数的 u32
+            let permission = permission.get_raw() as u32;
             known |= permission;
             if requested & permission != 0 {
                 kinds.push(kind);

@@ -23,7 +23,7 @@ K=.claude/skills/kabegame-plugin/scripts
 | `$K/probe.ts json <file\|url> [a.b.0]` | JSON 或 HTML 内嵌 state 的结构概览 |
 | `$K/probe.ts media <url> [--referer R]` | Range 拉前 64 字节，按魔数判定是不是真媒体 |
 | `$K/deploy.sh <id> [--release]` | 构建 + 打包到 `.kabegame/debug/data/plugins-directory/<id>.kgpg` |
-| `$K/run-cli.sh <id> [--release] [--id T] [--secs N] [--var k=v]…` | deploy → CLI（默认 dev）`plugin run <kgpg> --id <id>-test`，限时取消并摘要 |
+| `$K/run-cli.sh <id> [--release] [--id T] [--secs N] [--no-freeze-template] [--var k=v]…` | deploy → CLI（默认 dev）`plugin run <kgpg> --id <id>-test --freeze-template`，限时取消并摘要 |
 | `$K/app-run.sh <id> '<userConfig JSON>' [--secs N]` | 在 dev app 里跑任务（WebView 插件唯一验证途径） |
 | `$K/render-desc.ts <id> --db [--release] [--where <sql>]` | 从库里取真实 metadata 渲染 `description.ejs` 并截图 |
 
@@ -209,9 +209,10 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
 它会依次执行：
 1. `deploy.sh`：用 `package-plugin.ts` 打包到 `.kabegame/debug/data/plugins-directory/<id>.kgpg`。
    打包到 dev 目录是为了让开发中的 app 也能看到这一版；
-2. `target/debug/kabegame-cli plugin run <该 .kgpg> --id <id>-test --plain --output-dir <临时目录>`：
+2. `target/debug/kabegame-cli plugin run <该 .kgpg> --id <id>-test --freeze-template --plain --output-dir <临时目录>`：
    路径模式临时运行，不安装。`--id` 换成测试 id，这样插件数据目录、`default-configs`、入库的
-   `plugin_id` 都和正式插件隔离开；dev 版 CLI 以 `--data dev` 构建，库落在仓库内 `.kabegame/debug/data`（与 dev app 共用）。
+   `plugin_id` 都和正式插件隔离开。`--freeze-template` 把这版 `description.ejs` 冻结进每行 metadata：
+   测试 id 未安装、app 找不到它的插件模板，有了冻结模板，详情面板照样渲染（`--no-freeze-template` 关掉）；dev 版 CLI 以 `--data dev` 构建，库落在仓库内 `.kabegame/debug/data`（与 dev app 共用）。
    dev app 正在运行时，CLI 会自动经 IPC 交给主程序执行（任务出现在 app 的任务抽屉里）。
    到了时限就发 SIGINT 取消；
 3. 从所用数据目录的 `images.db` 读任务计数，再汇总日志和本次新增的文件数。
@@ -241,11 +242,14 @@ $K/run-cli.sh <id> --secs 60 --var mode=search --var keyword=miku --var start_pa
   （dev CLI 的库在 `.kabegame/debug/data/images.db`，release 在系统数据目录，查询写法见 metadata-labels.md）；
 - labels：本次任务里图片关联的 label 数量约等于源数据的 tag 总数，被跳过的只该是 key 派生不出来的那些；
 - 模板：`$K/render-desc.ts <id> --db --where "<挑一条信息最全的，比如有评论的>"`，用 Read 看截图，
-  和第 2 步的源站截图逐块对照（卡片、标签配色、信息表、评论）。要看到 app 里的真实效果，
-  在 dev app 里跑一次（`app-run.sh`），再打开那张图的预览：
+  和第 2 步的源站截图逐块对照（卡片、标签配色、信息表、评论）。要看到 app 里的真实效果：
+  `run-cli.sh` 默认冻结了模板，dev app 运行时直接打开测试 id 那张图的预览即可（模板改了要重跑，
+  旧图仍是旧的冻结模板）；WebView 插件在 dev app 里跑一次（`app-run.sh`）再打开预览：
   ```bash
   C=.claude/skills/kabegame-chromium/driver.sh
-  $C eval "(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.\$router;await r.push({query:{...r.currentRoute.value.query,pvwimgid:'<图片id>'}})})()"
+  # 图片网格只在挂载时读一次 URL，只 push pvwimgid 不会打开预览：加完参数再重载页面
+  $C eval "(async()=>{const r=document.querySelector('#app').__vue_app__.config.globalProperties.\$router;await r.push({query:{...r.currentRoute.value.query,pvwimgid:'<图片id>'}});location.reload()})()"
+  sleep 3   # 等重载完成；截图全白就 eval 'document.readyState' 确认后重截
   $C shot $SP/preview.png
   ```
   看完再把 `pvwimgid` 从 query 里删掉，把用户的界面还原。

@@ -1408,6 +1408,7 @@ mod tests {
                     output_album_id: None,
                     config: HashMap::new(),
                     is_dry_run: false,
+                    frozen_template: None,
                     #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
                     inputs: Vec::new(),
                 },

@@ -17,7 +17,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - [cli/CLI_IPC.md](cli/CLI_IPC.md)
   - 主题：`kabegame-cli` 的 app 优先/local 回退进程模型，`Backend` 抽象、`--via`
-    选择、`ipcProtocol` / `dataDir` 门控、`PluginRun` 共享实现、`--print-config` / 任务级 dry-run、逐任务下载并发的
+    选择、`ipcProtocol` / `dataDir` 门控（当前 v4）、`PluginRun` 共享实现、`--print-config` / 任务级 dry-run、只在内存中传递的 `--freeze-template`、逐任务下载并发的
     `TaskSetMaxConcurrentDownloads`、`local-import` 任务、`pathql query` 本进程只读 Storage、
     CLI 禁用 metadata 迁移、`KABEGAME_SQL_DEBUG` 以及 `IpcClient` 连接/事件语义。
   - 适用场景：新增 CLI 数据命令、IPC 协议变体，或排查 CLI 与运行中主程序的数据/任务差异、
@@ -149,7 +149,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：插件需要缓存 tag taxonomy、emoji 元数据、token、TTL 状态，或在描述模板中读取爬虫预先计算的数据。
 
 - [crawler/METADATA_MIGRATION.md](crawler/METADATA_MIGRATION.md)
-  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 行按 id 不可变、按批（512 行）写回与整轮末尾一次去重合并（只合并本轮新建行）、批量挂标签、搜索词典与映射重建，以及每批写回提交后立即发出、结尾去重再补发的 `metadataId` 补丁事件。
+  - 主题：插件图片 metadata 迁移流程——单一脚本的 `migrate` / `provideLabels` / `provideSearchTextList` 契约、packed 插件版本门控、同插件串行 + pending 续跑、`MetadataMigrationService` 运行态与忙碌卡片、`metadata` 行按 id 不可变、按批（512 行）写回与整轮末尾一次去重合并（只合并本轮新建行，冻结模板 `template` 原样拷贝并参与分区）、批量挂标签、搜索词典与映射重建，以及每批写回提交后立即发出、结尾去重再补发的 `metadataId` 补丁事件。
   - 适用场景：插件升级后历史图片详情或搜索片段变化；排查 metadata 迁移失败或很慢、缓存未刷新、去重合并、版本编码（a.b.c 每段 ≤255）问题。
 
 - [crawler/V8_RUNTIME.md](crawler/V8_RUNTIME.md)
@@ -184,8 +184,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：插件列表或导航更新角标延迟、缓存失效与命中行为分析；排查不兼容版本仍提示或被导入、从插件详情返回后 tab 丢失或商店列表重拉、源增删后 tab 未刷新、商店卡片已安装状态不同步。
 
 - [plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md](plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md)
-  - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → `/plugin_file` 懒加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`）。
-  - 适用场景：编写/调试 `description.ejs`、理解模板从 ZIP 到展示的流程、排查详情区空白或跨域请求失败。
+  - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → `/plugin_file` 懒加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`），以及 CLI `--freeze-template` 冻结进 `metadata.template` 的模板（与插件模板并行获取、非空即覆盖，去重覆盖时随 data 一起替换或清空，迁移原样保留）。
+  - 适用场景：编写/调试 `description.ejs`、理解模板从 ZIP 到展示的流程、排查详情区空白或跨域请求失败；`--id` 测试 id 下载的图片看不到模板。
 
 ## Tauri（`tauri/`）
 

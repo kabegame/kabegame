@@ -19,8 +19,8 @@
 `--data` 参数），再以
 短超时执行 `IpcClient::connect()` 与 `Status`：
 
-1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v3：`PluginRunParams.dryRun` 更名为
-   `printConfig`，并新增真正执行任务的 `isDryRun`）；
+1. `Status.ipcProtocol >= IPC_PROTOCOL_VERSION`（当前为 v4。v3 把 `PluginRunParams.dryRun` 更名为
+   `printConfig`，并新增真正执行任务的 `isDryRun`；v4 新增 `freezeTemplate`）；
 2. `Status.dataDir` 与 CLI 的数据目录规范化后相同。
 
 两项都满足才选 `App`。socket / 命名管道地址按 `debug_assertions` 区分：debug 构建（`deno task dev` 的
@@ -47,6 +47,11 @@ CLI local 传 `false`；因此 app 模式可运行 WebView，local 模式只运�
 
 `plugin run --print-config` 只解析并打印最终配置，不创建任务；`--dry-run` 会创建并完整运行任务，
 但下载、metadata 和本地导入写入由宿主短路。v3 字段变化会让新版 CLI 在连接旧主程序时自动回退本地执行。
+
+`--freeze-template` 对应 `PluginRunParams.freeze_template`，经 `start_task` 的 `freezeTemplate` 进入
+内存中的 `CrawlTaskRequest`（和 `plugin_file_path` 一样不入任务记录）。`freeze_task` 读一次包内描述模板，
+`Task::insert_metadata` 写进本任务每行 `metadata.template`，详情面板优先用它渲染，`--id` 测试 id 未安装
+也能看模板。旧主程序会静默丢弃这个字段，所以协议升到 v4，让新 CLI 回退本地执行。
 
 ### TaskSetMaxConcurrentDownloads
 

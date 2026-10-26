@@ -30,6 +30,7 @@ pub(crate) fn insert_metadata(
             plugin_id,
             plugin_version,
             None,
+            None,
         )?))
     } else {
         Ok(None)

@@ -162,6 +162,8 @@ pub struct MetadataFull {
     /// 图片下载时的插件版本（packed u32）。
     pub plugin_version: u32,
     pub plugin_id: String,
+    /// CLI `--freeze-template` 冻结的描述模板；非空时前端用它覆盖插件包内模板。
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -230,19 +232,51 @@ pub(crate) fn parse_metadata_json(s: Option<String>) -> Option<Value> {
     })
 }
 
-/// 只插入一行 `metadata` 并返回 id，不写搜索词。
+/// 只插入一行 `metadata` 并返回 id，不写搜索词。`template` 为冻结的描述模板（None 不冻结）。
 fn insert_metadata_data_row(
     conn: &rusqlite::Connection,
     data_json: &str,
     plugin_id: &str,
     plugin_version: u32,
+    template: Option<&str>,
 ) -> Result<i64, String> {
     conn.prepare_cached(
-        "INSERT INTO metadata (data, plugin_id, plugin_version)
-         VALUES (?1, ?2, ?3)",
+        "INSERT INTO metadata (data, plugin_id, plugin_version, template)
+         VALUES (?1, ?2, ?3, ?4)",
     )
-    .and_then(|mut stmt| stmt.execute(params![data_json, plugin_id, i64::from(plugin_version)]))
+    .and_then(|mut stmt| {
+        stmt.execute(params![
+            data_json,
+            plugin_id,
+            i64::from(plugin_version),
+            template
+        ])
+    })
     .map_err(|e| format!("insert metadata: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// 迁移写回：插一行新 data / 版本，冻结模板从旧行原样拷贝（旧行此时尚未删除）。
+fn insert_migrated_metadata_row(
+    conn: &rusqlite::Connection,
+    data_json: &str,
+    plugin_id: &str,
+    plugin_version: u32,
+    old_id: i64,
+) -> Result<i64, String> {
+    conn.prepare_cached(
+        "INSERT INTO metadata (data, plugin_id, plugin_version, template)
+         SELECT ?1, ?2, ?3, template FROM metadata WHERE id = ?4",
+    )
+    .and_then(|mut stmt| {
+        stmt.execute(params![
+            data_json,
+            plugin_id,
+            i64::from(plugin_version),
+            old_id
+        ])
+    })
+    .map_err(|e| format!("insert migrated metadata: {}", e))?;
     Ok(conn.last_insert_rowid())
 }
 
@@ -263,9 +297,11 @@ pub(crate) fn insert_metadata_id(
     data_json: &str,
     plugin_id: &str,
     plugin_version: u32,
+    template: Option<&str>,
     search_terms: Option<&[String]>,
 ) -> Result<i64, String> {
-    let metadata_id = insert_metadata_data_row(conn, data_json, plugin_id, plugin_version)?;
+    let metadata_id =
+        insert_metadata_data_row(conn, data_json, plugin_id, plugin_version, template)?;
     let terms = resolve_search_terms(data_json, search_terms);
     insert_metadata_search_terms(conn, &[(metadata_id, &terms)])?;
     Ok(metadata_id)
@@ -381,11 +417,13 @@ impl Storage {
     /// V8 `Kabegame.createImageMetadata`：将 JSON 写入 `metadata` 并返回 id。
     /// `plugin_version` 为写入时运行插件的 packed 版本（应用维护，插件不可读写）。
     /// 页面快照 metadata 先经 `page_snapshot::validate`（空 / 超限直接报错）。
+    /// `template` 为任务冻结的描述模板（CLI `--freeze-template`），None 不冻结。
     pub fn insert_metadata_row(
         &self,
         value: &Value,
         plugin_id: &str,
         plugin_version: u32,
+        template: Option<&str>,
         search_terms: Option<Vec<String>>,
     ) -> Result<i64, String> {
         super::page_snapshot::validate(value)?;
@@ -395,8 +433,14 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("begin insert metadata: {e}"))?;
-        let metadata_id =
-            insert_metadata_id(&tx, &s, plugin_id, plugin_version, search_terms.as_deref())?;
+        let metadata_id = insert_metadata_id(
+            &tx,
+            &s,
+            plugin_id,
+            plugin_version,
+            template,
+            search_terms.as_deref(),
+        )?;
         tx.commit()
             .map_err(|e| format!("commit insert metadata: {e}"))?;
         Ok(metadata_id)
@@ -434,7 +478,7 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("begin insert metadata text: {e}"))?;
-        let metadata_id = insert_metadata_id(&tx, data_json, "", 0, None)?;
+        let metadata_id = insert_metadata_id(&tx, data_json, "", 0, None, None)?;
         tx.commit()
             .map_err(|e| format!("commit insert metadata text: {e}"))?;
         Ok(metadata_id)
@@ -542,7 +586,13 @@ impl Storage {
         let mut pairs = Vec::with_capacity(alive.len());
         let mut terms = Vec::with_capacity(alive.len());
         for row in rows.iter().filter(|row| alive.contains(&row.old_id)) {
-            let new_id = insert_metadata_data_row(&tx, &row.data, plugin_id, plugin_version)?;
+            let new_id = insert_migrated_metadata_row(
+                &tx,
+                &row.data,
+                plugin_id,
+                plugin_version,
+                row.old_id,
+            )?;
             pairs.push((row.old_id, new_id));
             terms.push((
                 new_id,
@@ -583,11 +633,11 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("begin dedup_migrated_metadata: {e}"))?;
         let pairs: Vec<(i64, i64)> = {
-            // 先按 length 分区再比 data：长度不同的行不必逐字节比较。
+            // 先按 length 分区再比 data：长度不同的行不必逐字节比较；冻结模板不同的行不合并。
             let mut stmt = tx
                 .prepare(
                     "WITH canon AS (
-                         SELECT id, MIN(id) OVER (PARTITION BY length(data), data) AS keep_id
+                         SELECT id, MIN(id) OVER (PARTITION BY length(data), data, template) AS keep_id
                            FROM metadata
                           WHERE plugin_id = ?1 AND plugin_version = ?2
                      )
@@ -1289,7 +1339,8 @@ mod metadata_search_terms_override_tests {
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 data           TEXT    NOT NULL,
                 plugin_version INTEGER NOT NULL DEFAULT 0,
-                plugin_id      TEXT    NOT NULL DEFAULT ''
+                plugin_id      TEXT    NOT NULL DEFAULT '',
+                template       TEXT
             );
             CREATE TABLE search_terms (
                 id INTEGER PRIMARY KEY,
@@ -1325,7 +1376,7 @@ mod metadata_search_terms_override_tests {
     fn page_snapshot_indexes_only_title_and_url() {
         let conn = conn();
         let data = r#"{"kind":"kabegame.surfPageSnapshot","title":"Title","sourceUrl":"https://example.com/p","pageHtml":"<html>huge body</html>"}"#;
-        let id = insert_metadata_id(&conn, data, "webpage", 0, None).unwrap();
+        let id = insert_metadata_id(&conn, data, "webpage", 0, None, None).unwrap();
         let terms = search_terms_of(&conn, id);
         assert_eq!(terms, ["Title", "https://example.com/p"]);
         assert!(!terms.iter().any(|term| term.contains("huge body")));
@@ -1334,7 +1385,7 @@ mod metadata_search_terms_override_tests {
     #[test]
     fn default_insert_still_flattens_json() {
         let conn = conn();
-        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0, None).unwrap();
+        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0, None, None).unwrap();
         assert!(search_terms_of(&conn, id)
             .iter()
             .any(|term| term == "sakura"));
@@ -1343,7 +1394,8 @@ mod metadata_search_terms_override_tests {
     #[test]
     fn explicit_empty_search_terms_disable_metadata_search() {
         let conn = conn();
-        let id = insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0, Some(&[])).unwrap();
+        let id =
+            insert_metadata_id(&conn, r#"{"title":"sakura"}"#, "", 0, None, Some(&[])).unwrap();
         assert!(search_terms_of(&conn, id).is_empty());
     }
 }
@@ -1650,5 +1702,157 @@ mod native_metadata_tests {
             .query_row("SELECT COUNT(*) FROM album_images", [], |row| row.get(0))
             .unwrap();
         assert_eq!(members, 0);
+    }
+}
+
+#[cfg(test)]
+mod frozen_template_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn storage() -> Storage {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+            CREATE TABLE metadata (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                data           TEXT    NOT NULL,
+                plugin_version INTEGER NOT NULL DEFAULT 0,
+                plugin_id      TEXT    NOT NULL DEFAULT '',
+                template       TEXT
+            );
+            CREATE TABLE search_terms (
+                id INTEGER PRIMARY KEY,
+                text TEXT NOT NULL UNIQUE
+            );
+            CREATE TABLE metadata_search_terms (
+                metadata_id INTEGER NOT NULL REFERENCES metadata(id) ON DELETE CASCADE,
+                term_id INTEGER NOT NULL REFERENCES search_terms(id),
+                PRIMARY KEY (term_id, metadata_id)
+            ) WITHOUT ROWID;
+            CREATE TABLE images (
+                id             TEXT PRIMARY KEY,
+                metadata_id    INTEGER,
+                plugin_id      TEXT,
+                post_url       TEXT
+            );
+            CREATE TABLE task_failed_images (
+                metadata_id INTEGER
+            );",
+        )
+        .unwrap();
+        Storage::from_test_connection(conn)
+    }
+
+    fn template_of(storage: &Storage, metadata_id: i64) -> Option<String> {
+        let conn = storage.db.lock().unwrap();
+        conn.query_row(
+            "SELECT template FROM metadata WHERE id = ?1",
+            params![metadata_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn image_metadata_id(storage: &Storage, image_id: &str) -> i64 {
+        let conn = storage.db.lock().unwrap();
+        conn.query_row(
+            "SELECT metadata_id FROM images WHERE id = ?1",
+            params![image_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn insert_stamps_frozen_template() {
+        let storage = storage();
+        let frozen = storage
+            .insert_metadata_row(&json!({"a": 1}), "demo-test", 1, Some("<b>tpl</b>"), None)
+            .unwrap();
+        let plain = storage
+            .insert_metadata_row(&json!({"a": 1}), "demo-test", 1, None, None)
+            .unwrap();
+        assert_eq!(template_of(&storage, frozen).as_deref(), Some("<b>tpl</b>"));
+        assert_eq!(template_of(&storage, plain), None);
+    }
+
+    #[test]
+    fn migration_writeback_keeps_frozen_template_and_dedup_splits_by_template() {
+        let storage = storage();
+        let frozen = storage
+            .insert_metadata_row(&json!({"v": 1}), "demo", 1, Some("tpl"), None)
+            .unwrap();
+        let plain = storage
+            .insert_metadata_row(&json!({"v": 1}), "demo", 1, None, None)
+            .unwrap();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO images (id, metadata_id, plugin_id) VALUES ('img-frozen', ?1, 'demo'), ('img-plain', ?2, 'demo')",
+                params![frozen, plain],
+            )
+            .unwrap();
+        }
+
+        let rows = [frozen, plain].map(|old_id| MigratedMetadataRow {
+            old_id,
+            data: r#"{"v":2}"#.to_string(),
+            search_terms: None,
+        });
+        let batch = storage
+            .writeback_migrated_metadata_batch("demo", 2, &rows)
+            .unwrap();
+        assert_eq!(batch.new_ids.len(), 2);
+        let new_frozen = image_metadata_id(&storage, "img-frozen");
+        let new_plain = image_metadata_id(&storage, "img-plain");
+        assert_eq!(template_of(&storage, new_frozen).as_deref(), Some("tpl"));
+        assert_eq!(template_of(&storage, new_plain), None);
+
+        // data 相同但模板不同，整轮去重不能合并到一起
+        let repointed = storage
+            .dedup_migrated_metadata("demo", 2, &batch.new_ids)
+            .unwrap();
+        assert!(repointed.is_empty(), "{repointed:?}");
+        assert_ne!(
+            image_metadata_id(&storage, "img-frozen"),
+            image_metadata_id(&storage, "img-plain")
+        );
+    }
+
+    #[test]
+    fn dedup_rebind_to_unfrozen_row_clears_template() {
+        let storage = storage();
+        let frozen = storage
+            .insert_metadata_row(&json!({"v": 1}), "demo-test", 1, Some("tpl"), None)
+            .unwrap();
+        {
+            let conn = storage.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO images (id, metadata_id, plugin_id) VALUES ('img', ?1, 'demo-test')",
+                params![frozen],
+            )
+            .unwrap();
+        }
+        // 后一次未开 --freeze-template 的运行：新行无模板，去重覆盖改挂过去
+        let next = storage
+            .insert_metadata_row(&json!({"v": 2}), "demo-test", 1, None, None)
+            .unwrap();
+        storage
+            .rebind_image_metadata("img", next, Some("demo-test"), None)
+            .unwrap();
+
+        let current = image_metadata_id(&storage, "img");
+        assert_eq!(current, next);
+        assert_eq!(template_of(&storage, current), None);
+        let conn = storage.db.lock().unwrap();
+        let old_alive: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM metadata WHERE id = ?1",
+                params![frozen],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_alive, 0, "旧冻结行无人引用后被 GC");
     }
 }
