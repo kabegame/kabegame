@@ -328,12 +328,13 @@ function startDrag(event: PointerEvent) {
 
   cleanupDrag();
   const rect = el.getBoundingClientRect();
+  const insets = hostSafeInsets();
   dragState = {
     pointerId: event.pointerId,
     startClientX: event.clientX,
     startClientY: event.clientY,
-    startLeft: rect.left,
-    startBottom: window.innerHeight - rect.bottom,
+    startLeft: rect.left - insets.left,
+    startBottom: window.innerHeight - rect.bottom - insets.bottom,
     hostWidth: rect.width,
     hostHeight: rect.height,
     dragged: false,
@@ -396,13 +397,29 @@ function consumeSuppressedClick(event: MouseEvent) {
   return true;
 }
 
+/** 宿主 margin 等于系统栏安全区（见样式），left / bottom 是相对安全区的坐标。 */
+function hostSafeInsets() {
+  const el = hostEl.value;
+  if (!el) return { top: 0, right: 0, bottom: 0, left: 0 };
+  const cs = getComputedStyle(el);
+  return {
+    top: parseFloat(cs.marginTop) || 0,
+    right: parseFloat(cs.marginRight) || 0,
+    bottom: parseFloat(cs.marginBottom) || 0,
+    left: parseFloat(cs.marginLeft) || 0,
+  };
+}
+
 function clampPosition(
   nextPosition: { left: number; bottom: number },
   hostWidth = hostEl.value?.getBoundingClientRect().width ?? 0,
   hostHeight = hostEl.value?.getBoundingClientRect().height ?? 0,
 ) {
-  const maxLeft = Math.max(viewportMarginPx, viewportSize.value.width - hostWidth - viewportMarginPx);
-  const maxBottom = Math.max(viewportMarginPx, viewportSize.value.height - hostHeight - viewportMarginPx);
+  const insets = hostSafeInsets();
+  const safeWidth = viewportSize.value.width - insets.left - insets.right;
+  const safeHeight = viewportSize.value.height - insets.top - insets.bottom;
+  const maxLeft = Math.max(viewportMarginPx, safeWidth - hostWidth - viewportMarginPx);
+  const maxBottom = Math.max(viewportMarginPx, safeHeight - hostHeight - viewportMarginPx);
   return {
     left: Math.min(Math.max(viewportMarginPx, nextPosition.left), maxLeft),
     bottom: Math.min(Math.max(viewportMarginPx, nextPosition.bottom), maxBottom),
@@ -523,6 +540,9 @@ onBeforeUnmount(() => {
   position: fixed;
   left: 18px;
   bottom: 18px;
+  /* 让开 Android 系统栏：left / bottom 相对安全区计算，脚本按这四个 margin 夹取拖动范围 */
+  margin: var(--sat, env(safe-area-inset-top, 0px)) var(--sar, env(safe-area-inset-right, 0px))
+    var(--sab, env(safe-area-inset-bottom, 0px)) var(--sal, env(safe-area-inset-left, 0px));
   z-index: 1600;
   width: 128px;
   height: 264px;
@@ -652,8 +672,8 @@ onBeforeUnmount(() => {
   .kamechan-host {
     width: 96px;
     height: 204px;
-    left: max(10px, env(safe-area-inset-left));
-    bottom: calc(74px + env(safe-area-inset-bottom));
+    left: 10px;
+    bottom: 74px;
   }
 
   .kamechan-mascot {

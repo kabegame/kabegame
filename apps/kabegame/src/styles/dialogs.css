@@ -1,10 +1,18 @@
+/* 所有平台统一：限高、header / footer 固定、仅 body 滚动。上下边距叠加 Android 注入的
+   系统栏 inset（--sat / --sab，桌面为 0），平板宽屏布局的弹窗不会被状态栏 / 导航栏挡住。 */
 :root {
   --kabegame-desktop-dialog-gap: 5dvh;
-  --kabegame-desktop-dialog-max-height: 90dvh;
-  --kabegame-desktop-dialog-margin: var(--kabegame-desktop-dialog-gap) auto;
+  --kabegame-desktop-dialog-inset-top: var(--sat, env(safe-area-inset-top, 0px));
+  --kabegame-desktop-dialog-inset-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
+  --kabegame-desktop-dialog-max-height: calc(
+    100dvh - 2 * var(--kabegame-desktop-dialog-gap) - var(--kabegame-desktop-dialog-inset-top) -
+      var(--kabegame-desktop-dialog-inset-bottom)
+  );
+  --kabegame-desktop-dialog-margin: calc(var(--kabegame-desktop-dialog-gap) + var(--kabegame-desktop-dialog-inset-top))
+    auto calc(var(--kabegame-desktop-dialog-gap) + var(--kabegame-desktop-dialog-inset-bottom));
 }
 
-html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog) {
+.el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog) {
   height: auto !important;
   max-height: var(--kabegame-desktop-dialog-max-height) !important;
   display: flex !important;
@@ -13,16 +21,14 @@ html:not(.platform-android) .el-dialog:not(.image-preview-dialog):not(.plugin-im
   overflow: hidden !important;
 }
 
-html:not(.platform-android)
-  .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
+.el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
   .el-dialog__header {
   flex-shrink: 0 !important;
   padding: 20px 20px 10px !important;
   border-bottom: 1px solid var(--anime-border);
 }
 
-html:not(.platform-android)
-  .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
+.el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
   .el-dialog__body {
   flex: 1 1 auto !important;
   overflow-y: auto !important;
@@ -32,8 +38,7 @@ html:not(.platform-android)
   max-height: none !important;
 }
 
-html:not(.platform-android)
-  .el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
+.el-dialog:not(.image-preview-dialog):not(.plugin-import-dialog):not(.exit-confirm-dialog):not(.is-workbench)
   .el-dialog__footer {
   flex-shrink: 0 !important;
   padding: 10px 20px 20px !important;

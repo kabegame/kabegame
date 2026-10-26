@@ -818,8 +818,8 @@ const handleRootClick = (event: MouseEvent) => {
     return;
   }
 
-  // 紧凑模式选择模式下，点击空白处不清空选择（仅通过取消按钮退出）
-  if (isCompact.value && androidSelectionMode.value) {
+  // 紧凑模式 / Android 选择模式下，点击空白处不清空选择（仅通过取消按钮退出）
+  if ((isCompact.value || IS_ANDROID) && androidSelectionMode.value) {
     return;
   }
 
@@ -1426,8 +1426,9 @@ watch(currentPreviewIndex, (newIndex) => {
   const image = list[newIndex];
   if (!image) return;
 
-  // 紧凑模式下预览与选择解耦，不同步选中项
-  if (isCompact.value) {
+  // 紧凑模式 / Android 下预览与选择解耦，不同步选中项：Android 上有选中即进入多选模式并占返回栈，
+  // 平板宽屏若同步选中，返回键会先清掉这个看不见的多选而关不掉预览
+  if (isCompact.value || IS_ANDROID) {
     // 仅滚动到目标图片
     scrollToIndex(newIndex);
     return;
@@ -1442,7 +1443,7 @@ watch(currentPreviewIndex, (newIndex) => {
 
 // 退出紧凑模式选择模式（清空选择）
 const exitAndroidSelectionMode = () => {
-  if (!isCompact.value) return;
+  if (!isCompact.value && !IS_ANDROID) return;
   clearSelection();
 };
 

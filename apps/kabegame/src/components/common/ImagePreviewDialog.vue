@@ -390,7 +390,6 @@ import KbResizable from "./KbResizable.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
-import { useUiStore } from "../../stores/ui";
 import { useSettingsStore } from "../../stores/settings";
 import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
@@ -409,7 +408,8 @@ import type { Plugin } from "@/stores/plugins";
 import { IS_ANDROID } from "@/env.ts";
 
 const { t } = useI18n();
-const uiStore = useUiStore();
+/** 与模板 v-if 一致：Android（含平板宽屏）一律用 PhotoSwipe，不能按 isCompact 宽度断点判断。 */
+const USE_PSWP = IS_ANDROID;
 const settingsStore = useSettingsStore();
 const previewModal = useModal({ layers: 3 });
 const previewContextMenu = useModal();
@@ -506,7 +506,7 @@ const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type)
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
 const audioKeepAlive = useAudioKeepAlive();
-const desktopVideoActive = computed(() => !uiStore.isCompact && previewVisible.value && isPreviewVideo.value);
+const desktopVideoActive = computed(() => !USE_PSWP && previewVisible.value && isPreviewVideo.value);
 watch(desktopVideoActive, (active) => {
   if (active) audioKeepAlive.start();
   else audioKeepAlive.stop();
@@ -514,7 +514,7 @@ watch(desktopVideoActive, (active) => {
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 const isAppFullscreen = ref(false);
-const previewShouldHideKamechan = computed(() => (uiStore.isCompact ? previewVisible.value : isAppFullscreen.value));
+const previewShouldHideKamechan = computed(() => (USE_PSWP ? previewVisible.value : isAppFullscreen.value));
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
@@ -614,7 +614,7 @@ const markPreviewInteracting = () => {
   zoomTo: panzoomZoomTo,
 } = usePanzoomPreview(
   previewVisible,
-  computed(() => !uiStore.isCompact),
+  computed(() => !USE_PSWP),
   {
     onPanzoomStart: () => notifyPreviewInteracting(true),
     onPanzoomEnd: markPreviewInteracting,
@@ -1027,12 +1027,6 @@ watch(
 watch(previewVisible, (visible) => {
   if (!visible) stopSlideshow();
 });
-watch(
-  () => uiStore.isCompact,
-  (compact) => {
-    if (compact) stopSlideshow();
-  },
-);
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
   if (!previewImage.value) return;
@@ -1052,7 +1046,7 @@ const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
 }));
 
 const handlePswpActionClose = () => {
-  if (uiStore.isCompact) {
+  if (USE_PSWP) {
     // 关闭 ActionSheet 时隐藏 PSWP UI（使用 setUiVisible 避免 toggle 语义歧义）
     pswpRef.value?.setUiVisible(false);
   } else {
@@ -1066,7 +1060,7 @@ const handlePreviewActionCommand = (command: string) => {
     command,
     image: previewImage.value,
   };
-  if (uiStore.isCompact) {
+  if (USE_PSWP) {
     // 紧凑模式（PhotoSwipe）：hide PSWP UI after command
     // ActionSheet 的 handleClick 会同时 emit command 和 close，所以这里不需要再调用 setUiVisible
     // close 事件会通过 handlePswpActionClose 处理 UI 隐藏
@@ -1107,7 +1101,7 @@ const handlePreviewWheel = (event: WheelEvent) => {
 // ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
 const handlePreviewReady = () => {
   previewImageLoading.value = false;
-  if (uiStore.isCompact || isPreviewVideo.value) return;
+  if (USE_PSWP || isPreviewVideo.value) return;
   void measureContainerAfterRender().then(() => {
     panzoomReset();
   });
@@ -1203,7 +1197,7 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
 
 /** 紧凑模式预览关闭后的清理（不调用 pswp.close），避免 destroy 时重复关闭且确保遮罩移除 */
 function doAndroidPreviewCleanup() {
-  if (!uiStore.isCompact) return;
+  if (!USE_PSWP) return;
   previewModal.close();
   videoPaused.value = false;
   if (longPressTimer) {
@@ -1227,7 +1221,7 @@ function notifyCompactPreviewClose(image: ImageInfo | null) {
 }
 
 watch(previewVisible, (visible) => {
-  if (!uiStore.isCompact) return;
+  if (!USE_PSWP) return;
   if (visible) {
     compactCloseNotified = false;
     return;
@@ -1238,7 +1232,7 @@ watch(previewVisible, (visible) => {
 const closePreview = () => {
   const closedImage = previewImage.value;
   isAppFullscreen.value = false;
-  if (uiStore.isCompact) {
+  if (USE_PSWP) {
     previewModal.close();
     doAndroidPreviewCleanup();
     notifyCompactPreviewClose(closedImage);
@@ -1268,7 +1262,7 @@ const performSwipeDelete = () => {
 watch(
   () => previewVisible.value,
   async (visible) => {
-    if (visible && !uiStore.isCompact) {
+    if (visible && !USE_PSWP) {
       await nextTick();
       await measureContainerAfterRender();
     }
@@ -1278,7 +1272,7 @@ watch(
 watch(
   () => previewImage.value?.id,
   (id) => {
-    if (id && !uiStore.isCompact) {
+    if (id && !USE_PSWP) {
       if (isPreviewVideo.value) return;
       panzoomReset();
     }
@@ -1382,7 +1376,7 @@ let pswpShownId: string | null = null;
 
 /** 只重置本地手势 / 播放状态。同一张图被重定位（下载刷新、窗口平移）时不算换图。 */
 const handlePswpChange = ({ index }: { index: number }) => {
-  if (!uiStore.isCompact || index < 0) return;
+  if (!USE_PSWP || index < 0) return;
   const target = pswpWindow.value[index];
   if (!target || target.id === pswpShownId) return;
   pswpShownId = target.id;
@@ -1400,12 +1394,12 @@ const handlePswpChange = ({ index }: { index: number }) => {
 
 /** 用户滑动已落定：和桌面箭头一样请求上层切图，上层回设的新窗口通常与当前显示一致。 */
 const handlePswpSwipe = ({ direction }: { direction: "prev" | "next"; index: number }) => {
-  if (!uiStore.isCompact) return;
+  if (!USE_PSWP) return;
   requestSwitch(direction);
 };
 
 const handlePswpReachBoundary = ({ direction }: { direction: "prev" | "next"; index: number }) => {
-  if (!uiStore.isCompact) return;
+  if (!USE_PSWP) return;
   // 窗口边缘 ≠ 列表边界：是不是真的到头由上层的 canPrev / canNext 说了算
   requestSwitch(direction);
 };
@@ -1416,7 +1410,7 @@ const handleVideoDoubleTap = () => {
 };
 
 const handleVideoPlayFail = () => {
-  if (!uiStore.isCompact) return;
+  if (!USE_PSWP) return;
   // 播放失败视为暂停态，并展示控件提示用户；双击可在用户手势内重试播放
   videoPaused.value = true;
   pswpRef.value?.setUiVisible(true);
@@ -1461,7 +1455,7 @@ onUnmounted(() => {
   }
 });
 
-if (!uiStore.isCompact) {
+if (!USE_PSWP) {
   watch(
     () => previewContainerRef.value,
     (container) => {
