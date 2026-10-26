@@ -29,6 +29,11 @@
                 "sql": "im.plugin_id",
                 "as": "plugin_id",
                 "in_need": true
+            },
+            {
+                "sql": "im.template",
+                "as": "template",
+                "in_need": true
             }
         ],
         "limit": 1

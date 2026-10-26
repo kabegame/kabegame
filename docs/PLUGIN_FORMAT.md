@@ -25,6 +25,7 @@ plugin-name.kgpg
 - 由 `ImageDetailContent.vue` 用 EJS 将 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。
 - 框架在模板内容**之前**自动注入脚本，提供 **`window.__bridge.fetch(url, options)`**（如 `headers`、`json: true` 解析 JSON）：通过 `postMessage` 由主窗口调用 Tauri 命令 **`proxy_fetch`** 发起 HTTP GET，绕过浏览器 CORS；插件模板内可直接调用，无需手写 postMessage。
 - 约定：`metadata` 由爬取脚本在 `download_image` 时传入（如 PixAI 存完整 `listArtworks` 的 `node`）。
+- 冻结模板：`kabegame-cli plugin run --freeze-template` 把本次运行插件的模板写进每行 `metadata.template`。详情面板同时获取冻结模板与已安装插件的模板，冻结模板非空时优先使用，因此 `--id` 测试 id 的图片也能渲染。冻结模板随 metadata 行保存，插件升级后不会更新。
 
 ## 清单 v3：package.json 自描述
 

@@ -39,6 +39,8 @@
 
 写入统一进入 `metadata` 表，按 `(plugin_id, plugin_version, data)` 去重合并。`plugin_id` / `plugin_version` 落在 `metadata` 上而不是 `images` 上：metadata 行可被多张图片、失败重试记录或后续合并引用。metadata 行的 `data + plugin_version` **按 id 不可变**；迁移令任一内容变化时都会改指向新 id 或已有相同行。图片列表只携带 `metadata_id`，它变化就等价于 metadata 内容变化。
 
+可空列 `template` 是 CLI `--freeze-template` 冻结的描述模板，同样按 id 不可变。迁移只改 data 与版本：写回时用 `INSERT … SELECT template FROM metadata WHERE id = <旧 id>` 把它原样带到新行，整轮去重按 `(length(data), data, template)` 分区，模板不同的行不合并。插件升级后冻结模板不更新，由开启该参数的 CLI 使用者自己负责。测试 id 不会对应已安装插件，所以这类行不会被迁移。
+
 ## 执行流程
 
 1. 插件解析阶段读取 `kbMetadataMigration` 脚本源码挂到 `Plugin.metadata_migration`，并把 `Plugin.version` pack 成 `Plugin.version_packed`。

@@ -414,6 +414,7 @@ pub fn metadata_full_at(image_id: &str) -> Result<Option<MetadataFull>, String> 
         data: parse_metadata_json(json_string(row, "data")),
         plugin_version,
         plugin_id: json_string(row, "plugin_id").unwrap_or_default(),
+        template: json_string(row, "template").filter(|t| !t.trim().is_empty()),
     }))
 }
 

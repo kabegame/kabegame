@@ -27,6 +27,8 @@ pub struct TaskParams {
     pub output_album_id: Option<String>,
     pub config: HashMap<String, Value>,
     pub is_dry_run: bool,
+    /// CLI `--freeze-template` 时冻结的插件描述模板，盖进本任务写入的每行 metadata。
+    pub frozen_template: Option<Arc<str>>,
     /// 冻结时解析出的只读输入挂载；`Task::try_new` 会把它交给 VFS 并把 config 改写成虚拟路径。
     #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
     pub inputs: Vec<InputMount>,
@@ -236,7 +238,7 @@ impl Task {
         self.with_stack_top(|entry| entry.headers.clone())
     }
 
-    /// 写入一行图片 metadata。plugin_id 与 packed 版本由本任务参数盖章
+    /// 写入一行图片 metadata。plugin_id、packed 版本与冻结模板由本任务参数盖章
     /// （应用维护，插件不可传入）；WebView `downloadImage` 与 V8 ops 共用此入口。
     pub fn insert_metadata(
         &self,
@@ -250,6 +252,7 @@ impl Task {
             value,
             &self.params.plugin.id,
             self.params.plugin_version(),
+            self.params.frozen_template.as_deref(),
             search_terms,
         )
     }
@@ -396,6 +399,7 @@ mod tests {
                 output_album_id: None,
                 config: HashMap::new(),
                 is_dry_run: true,
+                frozen_template: None,
                 #[cfg(all(not(target_os = "ios"), feature = "plugin-runtime"))]
                 inputs: Vec::new(),
             },
@@ -431,6 +435,7 @@ mod tests {
                 output_album_id: None,
                 config,
                 is_dry_run: false,
+                frozen_template: None,
                 inputs: vec![InputMount {
                     key: "src".to_string(),
                     kind: InputKind::File {

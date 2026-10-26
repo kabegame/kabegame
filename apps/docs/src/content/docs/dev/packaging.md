@@ -127,7 +127,8 @@ kabegame-cli plugin run ./my-plugin.kgpg --id my-plugin-test --var page=1
 
 - `--id` 换一个测试 ID，试跑产生的插件数据、默认配置和入库图片就不会和正式安装的插件混在一起。
 - `--var key=value` 覆盖 `kbConfig` 里的配置项，可以重复；值按该配置项的类型转换。key 写错时 CLI 会列出可用的 key。
-- `--dry-run` 只打印解析后的最终配置，不真的运行。
+- `--print-config` 只打印解析后的最终配置，不真的运行；`--dry-run` 完整执行插件逻辑，但不下载、不入库。
+- `--freeze-template` 把这次打包的 `description.ejs` 存进每张图片的 metadata。测试 ID 没有安装，应用找不到它的模板；加上这个参数后，在应用里打开试跑图片的详情就能看到模板渲染效果。
 - `--output-dir <目录>` 指定图片保存位置；`--plain` 不画进度条，日志逐行输出。
 
 Kabegame 应用正在运行时，CLI 会把任务交给应用执行，任务也会出现在应用的任务抽屉里，这时 V8 和 WebView 插件都能跑。应用没有运行时，任务在 CLI 进程内执行，**只支持 V8 后端**。用 `--via app` 或 `--via local` 可以强制选择其中一种。完整参数见 [命令行工具 · plugin run](/reference/cli/#plugin-run)。

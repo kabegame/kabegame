@@ -46,7 +46,8 @@ CREATE TABLE metadata (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     data           TEXT    NOT NULL,
     plugin_version INTEGER NOT NULL DEFAULT 0,
-    plugin_id      TEXT    NOT NULL DEFAULT ''
+    plugin_id      TEXT    NOT NULL DEFAULT '',
+    template       TEXT
 );
 CREATE INDEX idx_metadata_dedup
     ON metadata(plugin_id, plugin_version);

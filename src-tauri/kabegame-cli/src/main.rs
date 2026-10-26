@@ -215,6 +215,10 @@ struct RunPluginArgs {
     /// 空跑任务：执行插件逻辑，但不下载或入库
     #[arg(long = "dry-run")]
     dry_run: bool,
+    /// 把本次运行插件的 description.ejs 冻结进每行 metadata：详情面板优先用它渲染，
+    /// 测试 id 未安装也能看模板。只影响本次任务，不入任务记录；插件升级后冻结模板也不更新。
+    #[arg(long = "freeze-template")]
+    freeze_template: bool,
     /// 不渲染进度条，日志逐行直出（适合 CI / 重定向到文件）
     #[arg(long = "plain")]
     plain: bool,
@@ -944,6 +948,7 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
             max_concurrent_downloads: args.max_downloads,
             print_config: args.print_config,
             is_dry_run: args.dry_run,
+            freeze_template: args.freeze_template,
         })
         .await?;
     let config_json = serde_json::to_string_pretty(&output.config).map_err(|e| e.to_string())?;
@@ -964,6 +969,9 @@ async fn run_plugin(args: RunPluginArgs, via: Via) -> Result<(), String> {
     }
     if args.dry_run {
         println!("{}", console::style("dry-run：不会下载或入库").yellow());
+    }
+    if args.freeze_template {
+        println!("{}", console::style("冻结描述模板：写入 metadata.template").dim());
     }
     let task_id = output
         .task_id

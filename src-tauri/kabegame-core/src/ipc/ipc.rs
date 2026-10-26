@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::sync::OnceLock;
 
-/// v3 重命名 `PluginRunParams.printConfig`，并新增任务级 `isDryRun`。
-pub const IPC_PROTOCOL_VERSION: u32 = 3;
+/// v3 重命名 `PluginRunParams.printConfig`，并新增任务级 `isDryRun`；
+/// v4 新增 `PluginRunParams.freezeTemplate`（旧主程序会静默丢弃，故升版让新 CLI 回退本地）。
+pub const IPC_PROTOCOL_VERSION: u32 = 4;
 
 pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();

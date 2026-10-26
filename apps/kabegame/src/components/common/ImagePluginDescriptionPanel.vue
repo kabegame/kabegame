@@ -81,6 +81,7 @@ import { invoke } from "../../api";
 import { getEjsBridgeCache, setEjsBridgeCache } from "../../cache/ejsBridgeCache";
 import {
   imageMetadataResolverKey,
+  normalizeFrozenTemplate,
   type ImageMetadataResolver,
   type ResolvedImageMetadata,
 } from "../../composables/useImageMetadataCache";
@@ -117,10 +118,13 @@ const injectedResolveMetadata = inject<ImageMetadataResolver | null>(imageMetada
 /** 列表未带 metadata 时由懒加载写入；undefined 表示尚未完成一次解析 */
 const resolvedMetadata = ref<unknown | null | undefined>(undefined);
 const resolvedPluginVersion = ref(0);
+/** metadata 行冻结的描述模板（CLI `--freeze-template`） */
+const resolvedTemplate = ref<string | null>(null);
 
 async function loadMetadataForImage(img: ImageDetailLike | null) {
   resolvedMetadata.value = undefined;
   resolvedPluginVersion.value = 0;
+  resolvedTemplate.value = null;
   if (!img?.id) {
     resolvedMetadata.value = null;
     return;
@@ -135,12 +139,13 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
     if (injectedResolveMetadata) {
       resolved = await injectedResolveMetadata(img.id, img.metadataId);
     } else {
-      const full = await invoke<{ data?: unknown | null; pluginVersion?: number | null } | null>(
-        "get_image_metadata_full",
-        {
-          imageId: img.id,
-        },
-      );
+      const full = await invoke<{
+        data?: unknown | null;
+        pluginVersion?: number | null;
+        template?: string | null;
+      } | null>("get_image_metadata_full", {
+        imageId: img.id,
+      });
       resolved = full
         ? {
             data: full.data ?? null,
@@ -148,11 +153,13 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
               typeof full.pluginVersion === "number" && Number.isFinite(full.pluginVersion) && full.pluginVersion >= 0
                 ? Math.floor(full.pluginVersion)
                 : 0,
+            template: normalizeFrozenTemplate(full.template),
           }
         : null;
     }
     resolvedMetadata.value = resolved?.data ?? null;
     resolvedPluginVersion.value = resolved?.pluginVersion ?? 0;
+    resolvedTemplate.value = resolved?.template ?? null;
   } catch (e) {
     console.error("image detail metadata load failed", e);
     resolvedMetadata.value = null;
@@ -327,7 +334,10 @@ onUnmounted(() => {
 });
 
 const templatePlugin = computed(() => pluginStore.plugins.find((p) => p.id === props.image?.pluginId));
-const { text: descriptionTemplate, loading: templateLoading } = usePluginDescriptionTemplate(templatePlugin);
+const { text: pluginTemplate, loading: pluginTemplateLoading } = usePluginDescriptionTemplate(templatePlugin);
+// metadata 冻结模板与插件模板并行获取，前者非空即覆盖；有冻结模板时不等插件模板
+const descriptionTemplate = computed(() => resolvedTemplate.value ?? pluginTemplate.value);
+const templateLoading = computed(() => !resolvedTemplate.value && pluginTemplateLoading.value);
 
 /**
  * iframe srcdoc 是独立文档，无法继承主应用 :root 上的 --anime-*。
