@@ -1,0 +1,10 @@
+# 仓库统一使用 LF 换行，检出时也保持 LF（与 core.autocrlf 设置无关）
+* text=auto eol=lf
+
+# Windows 批处理需要 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 补丁需逐字节应用到上游文件（部分上游文件本身是 CRLF），不做换行转换
+*.patch -text
+*.diff -text
