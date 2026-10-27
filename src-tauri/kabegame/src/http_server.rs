@@ -398,14 +398,28 @@ async fn handle_wpe_file(
     let target = target.to_string_lossy().into_owned();
     let mime = wpe_mime_from_path(&target);
     if mime.as_deref().is_some_and(|m| m.starts_with("text/html")) {
-        // HTML 走专用产出点（Phase 4 在此注入垫片）；其它文件照旧流式 + Range。
+        // HTML 走专用产出点；其它文件照旧流式 + Range。
         return serve_wpe_html(&target).await;
     }
     let range = headers
         .get(RANGE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    serve_file_with_mime(&target, mime, range).await
+    let revalidate = mime.as_deref().is_some_and(wpe_needs_revalidate);
+    let mut out = serve_file_with_mime(&target, mime, range).await;
+    if revalidate {
+        // 壁纸文件会被原地改写（创意工坊更新、作者覆盖），脚本 / 样式 / 数据不能吃一年 immutable，
+        // 否则切回壁纸仍跑旧代码；图片、字体与音视频保持共用路径的 immutable。
+        out.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+    out
+}
+
+/// `/wpe` 下需要每次再验证的资源：页面代码与数据（js / css / json / wasm / 文本等）。
+#[cfg(not(target_os = "android"))]
+fn wpe_needs_revalidate(mime: &str) -> bool {
+    mime.starts_with("text/") || mime.starts_with("application/")
 }
 
 /// `/wpe` 专属的网页资源 MIME 表。只服务 WPE 网页壁纸目录，**不进 `MEDIA_FORMATS`**：
@@ -450,8 +464,8 @@ fn wpe_mime_from_path(path: &str) -> Option<String> {
 }
 
 /// WPE 网页壁纸 HTML 的专用产出点：读整文件、`text/html; charset=utf-8`、`no-store`，忽略 Range。
-/// 本 Phase 原样返回、不注入任何脚本；**Phase 4 在这里把垫片 `<script>` 插到 `<head>` 最前面**，
-/// 并对 zcompat 兼容补丁做内存替换（不写回用户目录）。
+/// 原样返回、不改写：WPE 垫片由 all-frames 初始化脚本注入，不经这里。只服务图库预览的 HTTP iframe
+/// （桌面壁纸窗口走 `file://`）；预览若要对 zcompat 兼容补丁做内存替换，在这里做（不写回用户目录）。
 #[cfg(not(target_os = "android"))]
 async fn serve_wpe_html(path: &str) -> Response {
     match tokio::fs::read(path).await {
@@ -700,7 +714,19 @@ pub async fn get_http_server_base_url<R: tauri::Runtime>(
 
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
-    use super::{absolute_path_from_route, wpe_mime_from_path};
+    use super::{absolute_path_from_route, wpe_mime_from_path, wpe_needs_revalidate};
+
+    #[test]
+    fn wpe_revalidates_page_code_but_not_media() {
+        for path in ["/w/script.js", "/w/style.css", "/w/data.json", "/w/a.wasm", "/w/lyric.txt"] {
+            let mime = wpe_mime_from_path(path).unwrap();
+            assert!(wpe_needs_revalidate(&mime), "{path} -> {mime}");
+        }
+        for path in ["/w/preview.jpg", "/w/font.woff2", "/w/mv.webm", "/w/song.mp3", "/w/icon.svg"] {
+            let mime = wpe_mime_from_path(path).unwrap();
+            assert!(!wpe_needs_revalidate(&mime), "{path} -> {mime}");
+        }
+    }
 
     #[test]
     fn wpe_web_mime_table_covers_page_resources() {

@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3 方案已写（[phase-3-web-import-preview.md](phase-3-web-import-preview.md)），待用户确认关键决策；Phase 5 起为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 方案已写（2026-10-27）；Phase 6 起为实现清单
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -9,7 +9,9 @@
 > - [`API.md`](API.md)：Phase 1 的产出，WPE Web 壁纸接口参考、运行环境、兼容矩阵与难点方案（已完成）。
 > - [`phase-2-wallpaper-vue.md`](phase-2-wallpaper-vue.md)：Phase 2 点级方案——壁纸窗口 Vue 化、`WallpaperStage` 组件、预览内嵌。
 > - [`phase-3-web-import-preview.md`](phase-3-web-import-preview.md)：Phase 3 点级方案——Web 导入、`/wpe` 网页 MIME、CSP、`WallpaperStage` iframe 分支、预览「桌面画布」；文末为关键决策。
-> - `phase-N-<名称>.md`：Phase 5 起各 Phase 开工前的点级方案（待写）。
+> - [`phase-4-file-host-input.md`](phase-4-file-host-input.md)：Phase 4 点级方案——桌面 `file://` 宿主与鼠标转发。
+> - [`phase-5-shim-host.md`](phase-5-shim-host.md)：Phase 5 点级方案——运行时垫片、`file:` 来源判定与受限 IPC、拉取 / 推送协议、预览桥。
+> - `phase-N-<名称>.md`：Phase 6 起各 Phase 开工前的点级方案（待写）。
 
 ## 总体设计思路
 
@@ -149,7 +151,7 @@ Tauri 自身的 `__TAURI_INTERNALS__` 初始化脚本是否同样只进主 frame
 | Phase 2 | 壁纸窗口 Vue 化 | 同 `index.html` 分发；`WallpaperStage`（纯渲染）/ `WallpaperWindow`（IPC 根）；删除 `wallpaper.html` / `wallpaper.ts`；壁纸行为不变 | — |
 | Phase 3 | Web 导入 + 预览内嵌 | `x-wpe/web` 入库；`WallpaperStage` 加跨源 iframe 分支；`ImageContent` 对非视频 WPE 行切到 `WpeWallpaperContent`；预览「桌面画布」；`/wpe` 补网页 MIME；CSP `frame-src` 放行本地 HTTP 源 | Phase 2 |
 | Phase 4 | 桌面 `file://` 宿主 + 鼠标转发 | CEF 补丁 0004 按浏览器开文件访问；壁纸窗口对网页壁纸主 frame 导航到 `file://` 入口、切走导航回应用页；运行时按壁纸目录拦截 `file:` 请求、`file://` 文档不注入 Tauri 脚本；Windows 桌面鼠标移动 / 左键点击转发 | Phase 3 |
-| Phase 5 | 运行时垫片与宿主协议 | 注入脚本、`postMessage` 协议、作者默认值推送、通用设置与暂停 | Phase 3 |
+| Phase 5 | 运行时垫片与宿主协议 | all-frames 垫片；`file:` 来源判定 + `wpe-web-capability`；桌面「拉取命令 + `listen` 推送」、预览「`postMessage` ↔ 父页面调命令」；作者默认值与界面语言 | Phase 4 |
 | Phase 6 | 桌面窗口收尾 | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
 | Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性 | Phase 5 |
 | Phase 8 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 6 |
@@ -283,19 +285,14 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - 删除 `DEBUG-WPE-FILE` / `DEBUG-WPE-INPUT` 临时代码。
 
 ### Phase 5 — 运行时垫片与宿主协议
-- **新增**
-  - 垫片脚本 `wpe-runtime/shim.js`（前端源码打包进 app，由 HTTP 服务以固定路由提供）：定义 Phase 1 清单里的全部全局
-    接口；监听父页面 `message`，按消息类型调用页面注册的回调；注册函数在收到数据前不回调。
-  - 宿主侧 `WpeWebHost`（壁纸本体内的模块，桌面与预览因共用壁纸本体而共用它）：握手、推送作者默认值与通用设置、
-    转发暂停；校验 `event.source` 与 `event.origin`，只接受自己那个 iframe 的消息。
-  - 协议版本号写进握手消息，垫片与宿主不一致时宿主降级为「只推属性」。
-- **修改**（`http_server.rs`）
-  - `handle_wpe_file` 对 `text/html` 响应在 `<head>` 最前面插入垫片 `<script>`；没有 `<head>` 时插在文档最前面。
-    改写只发生在响应体，不碰磁盘文件；带 `Range` 的 HTML 请求直接返回整页。
-  - 新增垫片路由，与 `/wpe` 同在本地媒体路由下，Web 发布版不挂。
-- **新增**（后端）
-  - `wpe/properties.rs` 增加 `resolve_web_props(project)`：把 `general.properties` 换算成「推给页面的值」形态，
-    剔除 `group` / `text` 等纯展示条目；本地化字符串按当前语言替换。
+点级方案见 [phase-5-shim-host.md](phase-5-shim-host.md)（2026-10-27 按已确认决策 10 重写）。要点：
+- 垫片 `webview_js/wpe_shim.js` 以 `initialization_script_for_all_frames` 注入壁纸窗口与主窗口，按地址自判启用。
+  它采用拉取 + 订阅：load 后首次全量投递，之后按差异投递；首次投递后页面换 listener 时补投全量。
+- 运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（否则回退到应用页、被当成本地来源拿到全部权限），
+  并删除 Phase 4 的「`file:` 文档不注入初始化脚本」规则。
+- 新增 `wpe-web-capability`（壁纸窗口 + 远程 `file:///*`）：只开 `wpe_web_pull_state` 与事件 `listen` / `unlisten`。
+- 桌面：拉 `wpe_web_pull_state`，推送用 `wpe-web-state` 事件；预览：iframe `postMessage` 给父页面，父页面调 `get_wpe_web_state` 再发回。
+- 状态 `{ imageId, rev, user, general: { language } }` 只在 Rust 侧计算；`fps`、暂停留给 Phase 6。
 
 ### Phase 6 — 桌面窗口收尾
 - **修改**（`kabegame/src/wallpaper/rotator.rs`、`commands/wallpaper.rs`）
@@ -354,11 +351,16 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
    壁纸目录的入口 `file://`，与 WPE 进程模型一致；文件访问由 CEF 补丁 0004 只对壁纸窗口开启，越界读取由运行时按壁纸目录拦截。
    图库预览仍用 HTTP 跨源 iframe。先导实验与补丁依据见 [API.md §5.2](API.md)。
 9. **桌面鼠标转发第一版只做移动 + 左键**（2026-10-27）：照 WPE 的轮询方式，不装键盘钩子，不转发滚轮。
+10. **宿主协议不照搬 WPE，自己用 Tauri 实现**（2026-10-27）：
+    - 桌面壁纸窗口的 `file://` 页面允许注入 Tauri IPC，但只给受限权限（`wpe-web-capability`），推送用 Tauri `listen`；
+    - 预览 iframe 用 `postMessage` 向主 frame（应用页）拉取，由应用页调用 Tauri 命令，推送也由应用页 `postMessage`；
+    - `listen` 没有事件名作用域，壁纸页面因此能订阅应用全局事件，用户确认这是可接受的取舍，也算开放给壁纸的一项能力。
+    - 依据与 WPE 的对照见 [API.md §4.8](API.md)，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)。
 
 ## 待定决策（需用户确认）
 
 1. ~~宿主形态~~：已由决策 3 确定。
-2. ~~**垫片注入方式**~~ 已定（2026-10-27）：用 Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口（预览 iframe）同一份垫片、按 `location` 自判是否启用；不改写 HTML 响应。运行时对 `file:` 文档只放行 all-frames 脚本（Tauri 自身脚本都是 main-frame-only）。细节见 Phase 5 方案。
+2. ~~**垫片注入方式**~~ 已定（2026-10-27）：用 Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口（预览 iframe）同一份垫片、按 `location` 自判是否启用；不改写 HTML 响应。桌面 `file:` 文档照常注入 Tauri 脚本，权限由 ACL 按远程 `file:` 来源限制（已确认决策 10）。细节见 Phase 5 方案。
 3. ~~**`file` / `directory` 属性**~~ 已定路线（2026-10-26，phase-3 决策 2）：Phase 3 不支持；Phase 7 前先测本地 scheme，再测 `file://`。原文：WPE 约定页面自己拼 `file:///`，HTTP 源的页面读不了本地文件。Phase 1 调研后在
    「CEF 放开 `file://` 并改用 `file://` 加载页面」「垫片改写路径到白名单路由」「暂不支持这两类属性」之间选。
 4. ~~**`localStorage` 持久化**~~ 已定（2026-10-26）：自定义协议 `kb-wpe`，Phase 5 落地；所有网页壁纸共用一个稳定源。

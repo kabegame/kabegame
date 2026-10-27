@@ -101,12 +101,13 @@
 - 页面晚于首推才赋值，收不到首推，也不会补推；
 - 页面中途换成另一个对象，之后的推送打到新对象上。
 
-首推的具体时刻是 CEF `OnLoadEnd`（即 `load` 之后）还是更早，**未确认**，见第九节。
+首推时刻（[REA] §4.8）：宿主的推送在页面加载期间排队，**整页加载结束**（晚于 `window` `load` 事件的同步处理）后按序投递；
+加载结束后的推送立即投递。所以在 `DOMContentLoaded` 或 `load` 回调里定义 listener 也能收到首推。
 
 | 回调 | 签名 | 触发时机 | 边界 | 来源 |
 |---|---|---|---|---|
 | `applyUserProperties` | `(properties) => void`，`properties = { [key]: { value, text?, ... } }` | 加载时推一次，之后用户改属性时推 | **只含值变化的键**，页面逐键判断存在性 | [官方] |
-| `applyGeneralProperties` | `(properties) => void` | 加载时推一次，之后 WPE 全局设置变化时推 | 已确认有 `fps`（数字，0 应视为不限）；[REA] 同一处还引用 `language`、`steamlanguage`，推测也推界面语言（**未确认**） | [官方] fps；[REA] |
+| `applyGeneralProperties` | `(properties) => void` | 加载时推一次，之后 WPE 全局设置变化时推 | 已确认有 `fps`（数字，0 应视为不限）；[REA] 推给页面的是主程序发来的整份全局设置 JSON，其中 `language` 已被换算成 WPE 语言码（连字符形式，36 项码表从 `0x14011ed20` 读出，如 `en-us`、`zh-chs`、`zh-cht`、`ja-jp`、`ko-kr`；由 `steamlanguage` 的 `english` / `schinese` / `tchinese` / `japanese` / `koreana` 等名称映射）；除 `fps` / `language` 外还有哪些字段取决于主程序，未确认 | [官方] fps；[REA] |
 | `setPaused` | `(isPaused: boolean) => void` | 暂停 / 恢复时 | 可选；WPE 暂停时本就冻结页面的计时与动画，见 4.4 | [官方]；[REA] |
 | `userDirectoryFilesAddedOrChanged` | `(propertyName: string, changedFiles: string[]) => void` | directory 属性在 `fetchall` 模式下，文件新增或修改时 | 列表是**完整本地路径**，页面拼 `file:///`；WPE 会监视目录变化（[REA] `FindFirstChangeNotification`） | [官方]；[REA] |
 | `userDirectoryFilesRemoved` | `(propertyName: string, removedFiles: string[]) => void` | 同上，文件删除时 | 同上 | [官方] |
@@ -152,7 +153,7 @@
 | `wallpaperRequestTakeScreenshotResponse` / `window.__wpxTakeSnapshot` | WPE 给壁纸截图，页面回传 JPEG 字节 | [REA] 注入脚本 |
 | `window.___wpxShared.onLoad(fn)` | WPE 内部的「load 之后执行」队列，用来推插件就绪 | [REA] |
 
-这些接口没有公开文档，页面不应依赖。垫片只把 `wallpaperGetUtilities` 定义成空对象，其余不提供。
+这些接口没有公开文档，页面不应依赖。垫片只把 `wallpaperGetUtilities` 定义成返回空对象的函数（WPE 把它挂成原生函数，§4.8），其余不提供。
 
 ## 四、运行环境约定
 
@@ -192,7 +193,11 @@
 - [REA] 每个显示器一个 `webwallpaper64.exe` 实例，各自的 `-parenthwnd` 和 `-cacheId`，例如 `monitor0`。
 
 ### 4.4 暂停
-- [REA] WPE 注入了一段运行时脚本（全局标记 `___STAHP`），暂停时调用 `window.___wpxPause()`，恢复时调用 `window.___wpxUnpause()`，然后才回调页面的 `setPaused`。
+> 追记：也许可以用chromium的原生PageLifecycle暂停
+- [REA] WPE 注入了一段运行时脚本（全局标记 `___STAHP`）。暂停状态变化时宿主执行一段 JS（命令 4，只在状态真的改变时发）：
+  - 暂停：先 `if(listener&&listener.setPaused&&!window.___wpxAnimLocked){listener.setPaused(true);}`，再 `window.___wpxPause();`；
+  - 恢复：先 `window.___wpxUnpause();`，再同样带判断地 `setPaused(false)`。
+  - 即页面的 `setPaused(true)` 在冻结之前、`setPaused(false)` 在解冻之后被调用。
 - 暂停的实现方式：
   - 包装 `requestAnimationFrame` / `setInterval` / `setTimeout`：暂停期间新回调进队列，每类最多 1000 个，恢复时补发。
   - 给所有带 CSS 动画的元素设 `animation-play-state: paused`，伪元素用注入的 class 处理。
@@ -213,7 +218,7 @@
   - 浏览器以窗口模式（非 OSR）嵌在宿主窗口下，挂载后与 Explorer 线程解除输入队列关联（`AttachThreadInput(…, FALSE)`），否则会抢走 Explorer 的鼠标捕获、桌面框选失效。
   - 暂停期间跳过整段鼠标轮询。
 
-### 4.6 兼容补丁
+### ~~4.6 兼容补丁~~（不做）
 - [磁盘] + [REA] WPE 自带 `assets/zcompat/web/<workshopid>.json`，本机有 5 个。内容是对指定壁纸的 js 文件做 `replace` → `insert` 的文本替换，例如给 `texImage2D` 调用加空值判断。
 - [REA] 有日志 `Failed writing compat fix at %S`，说明 **WPE 会把补丁写回壁纸目录**。Kabegame 不写用户目录，只能在加载时按同一份规则在内存中替换：
   预览走 `/wpe` 响应体；桌面是 `file://` 加载，要在 CEF 资源层替换响应（初始化脚本做不到，它改不了别人的文件内容）。
@@ -224,6 +229,52 @@
   - `document.documentElement.style.filter = 'contrast(…) brightness(…) saturate(…) hue-rotate(…deg)'`，对应 `wec_*`；
   - `document.documentElement.style.transform = 'scaleX(-1)'`，对应 `alignmentfliph`。
 - 说明第一阶段的颜色调整与水平翻转这组标准属性，对 Web 壁纸也以 CSS 作用在 `<html>` 上。是否在面板里出现、默认值如何，**未确认**。
+
+### 4.8 宿主与页面的通道（推 / 拉）
+[REA] 2026-10-27 对 `webwallpaper64.exe` 静态分析（函数名为 Ghidra 默认命名，没有运行 WPE）。同一进程也承载图片 / 视频壁纸，
+对象 `+0x360` 区分 0 网页、1 图片、2 视频，下文只说网页。
+
+**宿主 → 页面：拼 JS 字符串，在主 frame 里 Eval；页面加载完成前排队。**
+- 主程序经命名管道下发命令，webwallpaper64 的浏览器进程把每条命令拼成一段 JS：
+  - 命令 6（用户属性）：负载是 `{ properties, name }`。`name` 必须等于命令 1 记下的当前 URL，否则整条丢弃（防止旧壁纸的属性打到新页面上）。
+    `properties` 里的 directory 属性先按 `fetchall` / `ondemand` 处理，再整体拼成
+    `if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.applyUserProperties){…applyUserProperties(<JSON>);}`。
+  - 命令 7（全局设置）：换算 `language` 后把整份 JSON 拼进带同样判断的 `applyGeneralProperties(...)`；同一负载里的 `fps`、
+    `processpriority`、`videoaudiooutput` 也被进程自己消费（例如 `fps` 改主循环帧率）。
+  - 命令 4（暂停）：见 §4.4。
+- 所有 JS 走同一个出口 `FUN_14001d650`：
+  - 已就绪：封成 CEF 进程消息 `ExecuteJavaScriptAsync` 发给渲染进程，渲染进程在 `OnProcessMessageReceived` 里取**主 frame** 的
+    V8 上下文 `Enter → Eval → Exit`；
+  - 未就绪：存进一个先进先出队列。
+- 就绪标志：
+  - 命令 1（加载 URL）调用的导航函数 `FUN_14000bd80` 先清空队列，再把标志置假；
+  - 浏览器侧 `CefLoadHandler::OnLoadingStateChange(isLoading=false)`（`FUN_1400120a0`，虚表槽 `0x14011ded0`）把标志置真，
+    先重放 RGB 插件注册（`onPluginLoaded`），再按入队顺序发出队列里的 JS。
+- 结论：
+  - 加载期间到达的推送，等 Chromium 报告整页停止加载（晚于 `window` `load` 事件的同步处理）后一次性投递；之后到达的立即投递。
+  - 页面不需要也没有任何缓存，listener 在投递那一刻不存在就丢掉（§3.1）。
+  - 页面自己 `location.reload()` 不会让标志复位（只有命令 1 复位），刷新后的页面能否再收到属性取决于主程序是否重推。
+- 渲染侧 `OnLoadEnd`（`FUN_140012a80`）另发 `OnRendererLoadEnded` 给浏览器进程，浏览器进程经管道回报主程序命令 14。
+  主程序收到后做什么没有分析（`wallpaper64.exe` 未反编译），见第九节。
+
+**页面 → 宿主：原生 V8 函数，订阅式。**
+- 渲染侧 `OnContextCreated`（`FUN_140013280`）对每个 V8 上下文执行（未见主 frame 判断）：
+  - 在 `window` 上挂原生函数：`wallpaperRegisterAudioListener`、`wallpaperRegisterMedia{Properties,Thumbnail,Playback,Timeline,Status}Listener`、
+    `wallpaperGetUtilities`、`wallpaperRequestRandomFileForProperty`、`wallpaperOnVideoEnded`、`wallpaperRequestTakeScreenshotResponse`；
+  - 然后 `Eval` 运行时脚本（`___STAHP`，§4.4）。
+- 订阅：浏览器进程收到 `AudioContextRegistered` 后发管道命令 13，收到 `MediaIntegrationContextRegistered` 也上报主程序。
+  数据回程是进程消息 `SendAudioSample`、`SendMedia{Property,Thumbnail,Playback,Timeline,Status}Update`，由渲染进程直接调用页面登记的回调，
+  不经过拼 JS 字符串。[推断] 注册函数在渲染进程保存回调后发出上述消息，即主程序在页面注册之后才开始送数据。
+- 请求 / 应答：`wallpaperRequestRandomFileForProperty` 走 `RequestRandomFile` → `RequestRandomFileResponse`。
+- [推断] 新一次加载开始时（`OnLoadingStateChange(isLoading=true)`）渲染侧释放已登记的回调引用。
+
+**对 Kabegame 的含义**（2026-10-27 决定不照搬，PLAN 已确认决策 10，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)）：
+- 只借用两条结论：首次投递不早于 `load`；页面没有 listener 时丢弃。
+- 其余换成 Tauri 的拉取 + 订阅：
+  - 垫片在文档开始时拉一份完整状态；
+  - 桌面 `file://` 页面经受限 capability 调用拉取命令，并 `listen` 推送事件；
+  - 预览 iframe 经父页面中转；
+  - 差异与投递时机由垫片决定，宿主不排队。
 
 ## 五、Kabegame 实测（2026-10-25，dev，主窗口内临时 iframe 指向 `/wpe/12091/`，测后已移除）
 
@@ -296,7 +347,7 @@
 | 页面加载 | 壁纸窗口主 frame 整窗导航到入口 `file://`，切走时导航回应用页；导航唯一属主是 Rust `wallpaper/wpe_web_host.rs` | 主窗口里的跨源 sandbox iframe，`/wpe/<id>/` 307 到入口，相对资源同前缀 |
 | 文件访问 | CEF 补丁 0004：建窗 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`，只对该浏览器打开偏好 | 不涉及；HTTP 源读不了 `file:` |
 | 越界拦截 | `tauri-runtime-cef/src/file_access.rs` 的 `check_file_request`，在 `on_before_resource_load` 里取消：不在当前壁纸目录内（两端都 `canonicalize`）、符号链接、目录、不存在的 `file:` 请求 | `/wpe` 目录服务做 `..` 越界校验 |
-| MIME | 由 Chromium 按扩展名判定 | `/wpe` 专属网页 MIME 表（`http_server.rs` 的 `wpe_mime_from_path`），HTML 从 `serve_wpe_html` 产出（`no-store`），其余文件走共用的 `serve_file_with_mime`（支持 Range，immutable 缓存） |
+| MIME | 由 Chromium 按扩展名判定；`file:` 不走 HTTP 缓存 | `/wpe` 专属网页 MIME 表（`http_server.rs` 的 `wpe_mime_from_path`）。HTML 从 `serve_wpe_html` 产出（`no-store`）；其余文件走共用的 `serve_file_with_mime`（支持 Range），文本类（js / css / json 等）覆盖为 `no-cache`，图片、字体、音视频保持 immutable |
 | Tauri 脚本 | 开了文件访问的浏览器里，`file:` 文档（及继承它的 about:blank / srcdoc 子 frame）不注入任何初始化脚本（`subprocess.rs`） | 只注入主 frame，跨源 iframe 里没有 |
 | IPC | `file:` 文档 Origin 为 `null`，`cef-ipc` 入口直接拒绝 | `cef-ipc` 只收主 frame 或与 webview 初始 URL 同源的子 frame（`ipc.rs`） |
 | `localStorage` 源 | `file://`，跨重启稳定，所有网页壁纸共用 | `http://127.0.0.1:<随机端口>`，随启动变化 |
@@ -317,12 +368,12 @@
 
 | 接口 / 能力 | 优先级 | Phase | 实现方式 |
 |---|---|---|---|
-| 垫片先于页面脚本执行 | P0 | 5 | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在 `file:` 文档或本地 `/wpe/<id>/` 下定义接口，应用页和其它 iframe 里什么都不做。运行时对 `file:` 文档只放行 all-frames 脚本（Tauri 自身脚本都是 main-frame-only）。不改写 HTML 响应 |
+| 垫片先于页面脚本执行 | P0 | 5 | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在 `file:` 文档或本地 `/wpe/<id>/` 下定义接口，应用页和其它 iframe 里什么都不做。桌面 `file:` 文档照常注入 Tauri 脚本，运行时把 IPC 来源改写成 frame URL，ACL 只给 `wpe-web-capability`。不改写 HTML 响应 |
 | 页面读同目录资源 | P0 | 已完成 | 桌面：补丁 0004 按窗口开文件访问 + 运行时目录拦截；预览：`/wpe` 网页 MIME 表 |
-| `applyUserProperties` 首推作者默认值 | P0 | 5 | 宿主在页面加载完成时推 `{ key: { value } }` 全量，combo 带 `text`。桌面由 Rust `wpe_web_host` 对主 frame 执行脚本；预览由父页面在 iframe `load` 时 `postMessage`，垫片只收 `window.parent` 的消息。垫片收到时读当前 listener 投递，不缓存、不补推（§3.1） |
+| `applyUserProperties` 首推作者默认值 | P0 | 5 | 状态里的 `user` 为 `{ key: { type, value } }`（只含带 `value` 的条目）。垫片拉取：桌面调 `wpe_web_pull_state`，预览 `postMessage` 给父页面、由父页面调 `get_wpe_web_state`。`load` 后首次全量投递，之后按差异投递；首次投递后页面换 listener 时补投全量 |
 | `applyUserProperties` 增量推送 | P1 | 7 | 用户改属性后只推变化的键 |
-| `applyGeneralProperties({ fps })` | P1 | 5（值）/ 6（设置） | 首推一次；没有对应设置时推 0（不限） |
-| `applyGeneralProperties` 的 `language` | P2 | 5 | 推 Kabegame 当前语言，换算成 WPE 语言码（字段名未确认，先不推也可） |
+| `applyGeneralProperties({ fps })` | P1 | 6 | 有了帧率设置再推。不推 0：按 `1000 / fps` 算间隔的页面会停住，而不推时页面保留自己的默认值 |
+| `applyGeneralProperties` 的 `language` | P2 | 5 | 推 Kabegame 当前语言，字段名 `language`，值用 WPE 语言码（`zh-chs` / `zh-cht` / `en-us` / `ja-jp` / `ko-kr`，§3.1）；语言变化时桌面经 `wpe-web-state` 事件、预览经父页面推送 |
 | `setPaused` + 冻结计时 / 动画 / 媒体 | P1 | 5（垫片）/ 6（触发） | 垫片照搬 WPE 的 `___wpxPause` 思路（§4.4）；宿主按壁纸窗口的暂停条件触发 |
 | `localization` 文案 | P1 | 7 | 面板按 Kabegame 语言映射到 WPE 语言码，缺失回退 `en-us`，再回退原文 |
 | `condition` 显隐 | P1 | 7 | 必须能求值 JS 表达式（见第八节第 1 条） |
@@ -397,9 +448,10 @@ WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>
 
 ## 九、仍未确认
 
-- WPE 首推 `applyUserProperties` / `applyGeneralProperties` 的时刻：CEF `OnLoadEnd`（`load` 之后）还是更早。影响在 `DOMContentLoaded` 里才定义 listener 的页面；可在 `webwallpaper64.exe` 里查这两个名字的调用位置确认。
-- `group` / `text` 条目是否出现在 `applyUserProperties` 里。样例作者自带的回退代码会把整份 `general.properties` 原样推给页面，说明页面能容忍；但 WPE 的真实行为未知。
-- `applyGeneralProperties` 是否携带 `language` / `steamlanguage`，以及字段格式。
+- 主程序 `wallpaper64.exe` 收到命令 14（渲染侧 load 结束）后是否重推属性，以及首推的命令 6 是紧跟命令 1 发出还是等命令 14。
+  webwallpaper64 一侧不论哪种都在页面加载结束后才投递（§4.8），只影响「页面自己刷新后能否再收到属性」。
+- `group` / `text` 条目是否出现在 `applyUserProperties` 里。属性 JSON 由主程序生成，webwallpaper64 只处理 directory 条目、不筛选；样例作者自带的回退代码会把整份 `general.properties` 原样推给页面，说明页面能容忍。
+- `applyGeneralProperties` 除 `fps` / `language` 外的字段。
 - 滑块 Precision 是否另有字段（kaguya 只用了 `step`）。
 - `fileType` 的取值格式，以及它和 `filter` 的关系（kaguya 用的是 `filter`）。
 - Kabegame 壁纸窗口挂在 WorkerW 下时，是否被 Chromium 判为遮挡而降频。

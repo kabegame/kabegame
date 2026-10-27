@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 爬虫窗口 capability 收回事件权限
+
+2026-10-27：`capabilities/crawler.json` 删除 `core:event:allow-listen` / `allow-emit` / `allow-emit-to`。capability 按「窗口 + 来源」授权，被爬站点与插件脚本在同一主 frame、同一来源，插件能调的站点都能调；此前站点可订阅 `app.emit` 广播的全部 AppEvent（`images-added` 含本地路径等），也可向主窗口伪造事件（如 `app-import-plugin` 弹出导入对话框）。`webview_js/` 与 `src-crawler-plugins/` 均未调用 `plugin:event|`。静态验证：JSON 合法；未跑 cargo check。真机：dev 未运行，未验证。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | WebView 插件照常运行 | 桌面 CEF dev | 跑一个 WebView 插件（或网页收集的 webview 后端），最多 3 条 | 心跳、翻页、下载、页面自发下载回调均正常，任务成功结束 | 未验证：dev 未运行 |
+| [ ] | 站点不能订阅事件 | 桌面 CEF dev | 任务运行中经 CDP 在爬虫窗口执行 `__TAURI_INTERNALS__.invoke('plugin:event\|listen', { event: 'images-added', target: { kind: 'Any' }, handler: __TAURI_INTERNALS__.transformCallback(() => {}) })` | Promise 被 ACL 拒绝（`event.listen not allowed`） | 未验证 |
+| [ ] | 站点不能伪造事件 | 桌面 CEF dev | 同上执行 `invoke('plugin:event\|emit', { event: 'app-import-plugin', payload: { kgpgPath: 'x' } })` | 被 ACL 拒绝，主窗口不弹导入对话框 | 未验证 |
+| [ ] | Android WebView 爬虫 | Android dev | 跑一个 WebView 插件 | 同桌面，任务成功结束（安卓同样使用 `crawler-capability`） | 未验证 |
+
 ## 合并：WPE 与路径轮播 / 基本信息芯片
 
 2026-10-27：feat/wpe-import 合入 main 时，rotator 改为 main 的路径轮播，WPE 规则落在 `collect_available` 的逐张检查（`RotationSource.allow_wpe`）；基本信息面板改为 main 的芯片排版，WPE 行显示「Wallpaper Engine · 类型」芯片；预览弹窗的桌面判定统一用 `USE_PSWP`。合并在临时 worktree 完成，未真机运行。
@@ -63,7 +74,7 @@
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| [ ] | 壁纸文件原地更新 | Windows 桌面 CEF | 网页壁纸已显示过一次后，修改其目录里的 js（或创意工坊更新），切走再切回 | `/wpe` 的 js / css 返回 `Cache-Control: no-cache`，切回后加载新文件，不读旧缓存 | 2026-10-27 发现：3679122549 的 `script.js` 被格式化后触发混淆器 `selfDefending` 死循环，恢复成单行后仍加载旧缓存（一年 immutable）；改为 `no-cache`，待 dev 重建后真机验证 |
+| [ ] | 壁纸文件原地更新 | Windows 桌面 CEF（图库预览） | 预览过一次 kaguya 后，修改其目录里的 js（或创意工坊更新），关闭预览再打开；DevTools 看 `/wpe` 响应头 | `/wpe` 的 js / css / json 等文本资源返回 `Cache-Control: no-cache`，重新打开加载新文件；图片、字体、音视频仍为 immutable；桌面壁纸走 `file://`，不经 `/wpe`，不受影响 | 2026-10-27 发现：3679122549 的 `script.js` 被格式化后触发混淆器 `selfDefending` 死循环，恢复成单行后仍加载旧缓存（一年 immutable）；`handle_wpe_file` 按 MIME 覆盖为 `no-cache`（`wpe_needs_revalidate`），待 dev 重建后真机验证 |
 | [x] | 扫描计数 | Windows 桌面 CEF | 打开「开始收集 → 壁纸」对话框 | 每张来源卡片显示「N 个壁纸 / N 个可导入 / 视频 v · 网页 w / N 个已导入」，为 0 的类型省略；可导入 = 已支持类型（视频 / 网页）且未入库；全部已入库时底部提示「本机可导入的壁纸都已导入」 | 创意工坊「7 个壁纸 / 0 个可导入 / 视频 3 · 网页 4 / 7 个已导入」，`defaultprojects`「19 个壁纸 / 0 个可导入 / 网页 2 / 2 个已导入」；删掉一行后变为「1 个可导入」并自动勾选该来源 |
 | [x] | 导入 web | Windows 桌面 CEF | 提交壁纸任务（创意工坊、`defaultprojects`） | 每个网页壁纸一行 `type=x-wpe/web`，`local_path` 为目录，缩略图为作者 `preview.*`，`compatible_path` 与宽高为空，`hash` / `size` 取入口 html，标签进 `WPE/<tag>`；scene / application / 其它计入跳过 | 新增 6 行（含 796697921 与 `defaultprojects` 的 corsair_collection / corsair_o_tron），796697921 挂到 `WPE/Abstract`；`defaultprojects` 其余 17 个按 scene / other 跳过 |
 | [x] | dry-run | Windows 桌面 CEF | 勾选空跑提交 `defaultprojects` | 日志逐目录「dry-run 跳过」，`images` / `metadata` 行数不变 | 两条 `taskLogDryRunSkipImport`，`images` 8828 / `metadata` 4769 不变 |

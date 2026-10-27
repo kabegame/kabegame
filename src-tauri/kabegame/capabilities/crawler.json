@@ -7,9 +7,6 @@
     "urls": ["https://*.*:*", "http://*.*:*"]
   },
   "permissions": [
-    "core:event:allow-listen",
-    "core:event:allow-emit",
-    "core:event:allow-emit-to",
     "core:window:allow-hide",
     "crawler"
   ]
