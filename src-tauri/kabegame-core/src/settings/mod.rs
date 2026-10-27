@@ -102,14 +102,12 @@ pub enum SettingKey {
     DefaultDownloadDir,
     /// 壁纸轮播启用
     WallpaperRotationEnabled,
-    /// 壁纸轮播画册ID，为空则为画廊
-    WallpaperRotationAlbumId,
-    /// 壁纸轮播是否包含子画册（递归合并后按图片 id 去重；默认包含）
-    WallpaperRotationIncludeSubalbums,
+    /// 壁纸轮播来源 PathQL 路径（不含分页尾）；None 表示默认全画廊随机路径
+    WallpaperRotationPath,
+    /// 壁纸轮播下一张在路径中的 0 起序号；路径变化时清零
+    WallpaperRotationPosition,
     /// 壁纸轮播间隔分钟
     WallpaperRotationIntervalMinutes,
-    /// 壁纸轮播模式（随机、顺序）
-    WallpaperRotationMode,
     /// 壁纸样式
     WallpaperStyle,
     /// 壁纸轮播过渡效果
@@ -327,10 +325,9 @@ impl Settings {
             SettingKey::SurfFreezePage => SettingValue::Bool(true),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
-            SettingKey::WallpaperRotationAlbumId => SettingValue::OptionString(None),
-            SettingKey::WallpaperRotationIncludeSubalbums => SettingValue::Bool(true),
+            SettingKey::WallpaperRotationPath => SettingValue::OptionString(None),
+            SettingKey::WallpaperRotationPosition => SettingValue::U32(0),
             SettingKey::WallpaperRotationIntervalMinutes => SettingValue::U32(60),
-            SettingKey::WallpaperRotationMode => SettingValue::String("random".to_string()),
             SettingKey::WallpaperStyle => {
                 SettingValue::String(Self::default_wallpaper_rotation_style())
             }
@@ -431,10 +428,9 @@ impl Settings {
             SettingKey::SurfFreezePage,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperRotationEnabled,
-            SettingKey::WallpaperRotationAlbumId,
-            SettingKey::WallpaperRotationIncludeSubalbums,
+            SettingKey::WallpaperRotationPath,
+            SettingKey::WallpaperRotationPosition,
             SettingKey::WallpaperRotationIntervalMinutes,
-            SettingKey::WallpaperRotationMode,
             SettingKey::WallpaperStyle,
             SettingKey::WallpaperRotationTransition,
             SettingKey::WallpaperStyleByMode,
@@ -491,8 +487,20 @@ impl Settings {
             None
         };
 
+        // 迁移失败不阻断启动：放弃整个迁移、不写回，按原 JSON 解析，下次启动重试
         let migrated = if let Some(ref mut json) = json_value {
-            migrations::run_pending(json)?
+            let from_version = migrations::current_version(json);
+            match migrations::run_pending(json) {
+                Ok(true) => {
+                    Self::backup_before_migration(file, from_version);
+                    true
+                }
+                Ok(false) => false,
+                Err(e) => {
+                    eprintln!("[settings-migration] 迁移失败，保留原设置文件: {e}");
+                    false
+                }
+            }
         } else {
             false
         };
@@ -508,6 +516,31 @@ impl Settings {
         }
 
         Ok((cells, !file_exists || migrated))
+    }
+
+    /// 迁移写回前把原文件复制为 `settings.json.bak-v<旧版本>`，只保留最近一份。
+    fn backup_before_migration(file: &Path, from_version: u32) {
+        let Some(dir) = file.parent() else {
+            return;
+        };
+        let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        let prefix = format!("{name}.bak-v");
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+        let backup = dir.join(format!("{prefix}{from_version}"));
+        if let Err(e) = fs::copy(file, &backup) {
+            eprintln!(
+                "[settings-migration] 备份原设置文件失败 ({}): {e}",
+                backup.display()
+            );
+        }
     }
 
     fn get_value_from_json(key: SettingKey, json: &serde_json::Value) -> Option<SettingValue> {
@@ -545,9 +578,6 @@ impl Settings {
             SettingKey::ImportRecommendedScheduleEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
-            SettingKey::WallpaperRotationIncludeSubalbums => {
-                Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
-            }
             SettingKey::FastFolderSync => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
             SettingKey::SurfFreezePage => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
             #[cfg(feature = "virtual-driver")]
@@ -558,6 +588,7 @@ impl Settings {
             | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
             | SettingKey::WallpaperRotationIntervalMinutes
+            | SettingKey::WallpaperRotationPosition
             | SettingKey::WebServerPort => Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32)),
             SettingKey::DownloadIntervalMs => {
                 let v = json.as_u64().unwrap_or(500) as u32;
@@ -576,7 +607,6 @@ impl Settings {
             }
             SettingKey::ImageClickAction
             | SettingKey::GalleryImageObjectPosition
-            | SettingKey::WallpaperRotationMode
             | SettingKey::WallpaperStyle
             | SettingKey::WallpaperRotationTransition
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
@@ -588,21 +618,13 @@ impl Settings {
             )),
             SettingKey::GalleryImageAspectRatio
             | SettingKey::DefaultDownloadDir
-            | SettingKey::CurrentWallpaperImageId => match json {
+            | SettingKey::CurrentWallpaperImageId
+            | SettingKey::WallpaperRotationPath => match json {
                 serde_json::Value::String(s) if !s.trim().is_empty() => {
                     Ok(SettingValue::OptionString(Some(s.clone())))
                 }
                 _ => Ok(SettingValue::OptionString(None)),
             },
-            SettingKey::WallpaperRotationAlbumId => {
-                match json {
-                    serde_json::Value::String(s) => {
-                        // 空字符串表示全画廊轮播，需要保留
-                        Ok(SettingValue::OptionString(Some(s.clone())))
-                    }
-                    _ => Ok(SettingValue::OptionString(None)),
-                }
-            }
             SettingKey::Language => match json {
                 serde_json::Value::String(s) if !s.trim().is_empty() => {
                     Ok(SettingValue::OptionString(Some(s.clone())))
@@ -739,14 +761,11 @@ impl Settings {
             SettingKey::SurfFreezePage => "surfFreezePage".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
-            SettingKey::WallpaperRotationAlbumId => "wallpaperRotationAlbumId".to_string(),
-            SettingKey::WallpaperRotationIncludeSubalbums => {
-                "wallpaperRotationIncludeSubalbums".to_string()
-            }
+            SettingKey::WallpaperRotationPath => "wallpaperRotationPath".to_string(),
+            SettingKey::WallpaperRotationPosition => "wallpaperRotationPosition".to_string(),
             SettingKey::WallpaperRotationIntervalMinutes => {
                 "wallpaperRotationIntervalMinutes".to_string()
             }
-            SettingKey::WallpaperRotationMode => "wallpaperRotationMode".to_string(),
             SettingKey::WallpaperStyle => "wallpaperStyle".to_string(),
             SettingKey::WallpaperRotationTransition => "wallpaperRotationTransition".to_string(),
             SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
@@ -1008,18 +1027,20 @@ impl Settings {
             .unwrap_or(false)
     }
 
-    pub fn get_wallpaper_rotation_album_id(&self) -> Option<String> {
+    /// 轮播来源路径；None 表示尚未设置，由 rotator 落到默认随机路径。
+    pub fn get_wallpaper_rotation_path(&self) -> Option<String> {
         Self::cells()
-            .get(&SettingKey::WallpaperRotationAlbumId)
+            .get(&SettingKey::WallpaperRotationPath)
             .and_then(|c| c.load().as_option_string())
             .flatten()
     }
 
-    pub fn get_wallpaper_rotation_include_subalbums(&self) -> bool {
+    /// 下一张在轮播路径中的 0 起序号（调用方按当前 count 取模）。
+    pub fn get_wallpaper_rotation_position(&self) -> u32 {
         Self::cells()
-            .get(&SettingKey::WallpaperRotationIncludeSubalbums)
-            .map(|c| c.load().as_bool().unwrap_or(true))
-            .unwrap_or(true)
+            .get(&SettingKey::WallpaperRotationPosition)
+            .map(|c| c.load().as_u32().unwrap_or(0))
+            .unwrap_or(0)
     }
 
     pub fn get_wallpaper_disabled(&self) -> bool {
@@ -1034,13 +1055,6 @@ impl Settings {
             .get(&SettingKey::WallpaperRotationIntervalMinutes)
             .map(|c| c.load().as_u32().unwrap_or(60))
             .unwrap_or(60)
-    }
-
-    pub fn get_wallpaper_rotation_mode(&self) -> String {
-        Self::cells()
-            .get(&SettingKey::WallpaperRotationMode)
-            .map(|c| c.load().as_string().unwrap_or_else(|| "random".to_string()))
-            .unwrap_or_else(|| "random".to_string())
     }
 
     pub fn get_wallpaper_rotation_style(&self) -> String {
@@ -1431,23 +1445,39 @@ impl Settings {
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_album_id(&self, album_id: Option<String>) -> Result<(), String> {
+    /// 设置轮播来源路径。值真正变化时把位置清零（路径变化从第一张开始）；
+    /// 停止 / 开始轮播不经过这里，所以同一路径的位置得以保持。
+    pub fn set_wallpaper_rotation_path(&self, path: Option<String>) -> Result<(), String> {
+        let normalized = path.and_then(|s| {
+            let t = s.trim().trim_end_matches('/').to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        if self.get_wallpaper_rotation_path() == normalized {
+            return Ok(());
+        }
         let cells = Self::cells();
-        let new_value = SettingValue::OptionString(album_id);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationAlbumId) {
+        let new_value = SettingValue::OptionString(normalized);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationPath) {
             cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationAlbumId, &new_value);
-        Ok(())
+        Self::emit_setting_change(SettingKey::WallpaperRotationPath, &new_value);
+        self.set_wallpaper_rotation_position(0)
     }
 
-    pub fn set_wallpaper_rotation_include_subalbums(&self, include: bool) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_position(&self, position: u32) -> Result<(), String> {
+        if self.get_wallpaper_rotation_position() == position {
+            return Ok(());
+        }
         let cells = Self::cells();
-        let new_value = SettingValue::Bool(include);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIncludeSubalbums) {
+        let new_value = SettingValue::U32(position);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationPosition) {
             cell.store(Arc::new(new_value.clone()));
         }
-        Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value);
+        Self::emit_setting_change(SettingKey::WallpaperRotationPosition, &new_value);
         Ok(())
     }
 
@@ -1468,16 +1498,6 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationIntervalMinutes, &new_value);
-        Ok(())
-    }
-
-    pub fn set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
-        let cells = Self::cells();
-        let new_value = SettingValue::String(mode);
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationMode) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::WallpaperRotationMode, &new_value);
         Ok(())
     }
 
@@ -1777,6 +1797,57 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_rotation_settings_migrate_with_backup() {
+        let dir = std::env::temp_dir().join(format!(
+            "kabegame-settings-migrate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+        fs::write(
+            &file,
+            serde_json::json!({
+                "schemaVersion": 2,
+                "wallpaperRotationEnabled": true,
+                "wallpaperRotationAlbumId": "11111111-1111-1111-1111-111111111111",
+                "wallpaperRotationIncludeSubalbums": false,
+                "wallpaperRotationMode": "sequential"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let (cells, needs_write) = Settings::load_settings_map(&file).unwrap();
+        let backup_exists = dir.join("settings.json.bak-v2").exists();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(needs_write);
+        assert!(backup_exists);
+        assert!(cells[&SettingKey::WallpaperRotationEnabled]
+            .load()
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            cells[&SettingKey::WallpaperRotationPath]
+                .load()
+                .as_option_string()
+                .flatten()
+                .as_deref(),
+            Some("images://gallery/hide/album/11111111-1111-1111-1111-111111111111/sort/by-album-order")
+        );
+        assert_eq!(
+            cells[&SettingKey::WallpaperRotationPosition]
+                .load()
+                .as_u32(),
+            Some(0)
+        );
+    }
 
     #[test]
     fn settings_legacy_mcp_listener_values_do_not_enable_web_server() {

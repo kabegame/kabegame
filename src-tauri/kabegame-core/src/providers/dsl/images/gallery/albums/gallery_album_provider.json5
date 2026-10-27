@@ -44,7 +44,6 @@
             "provider": "gallery_album_media_type_provider",
             "properties": { "kind": "video" }
         },
-        "bigger_order": { "provider": "gallery_album_bigger_order_router" },
         "id_([^/]+)": {
             "provider": "gallery_by_id_provider",
             "properties": { "image_id": "${capture[1]}" }

@@ -1,8 +1,5 @@
 <template>
-  <div
-    class="settings-container"
-    :class="{ 'settings-container--embedded': embedded }"
-  >
+  <div class="settings-container" :class="{ 'settings-container--embedded': embedded }">
     <div class="settings-content">
       <!-- embedded（桌面弹窗）时标题与关闭按钮由 el-dialog 自带 header 提供，这里不再自绘 -->
       <PageHeader
@@ -198,18 +195,14 @@
                   <WallpaperRotationEnabledSetting />
                 </SettingRow>
 
+                <!-- 轮播来源只读展示：入口已迁到画廊过滤栏 ⋯ 面板的「用当前视图轮播」 -->
                 <SettingRow
-                  :label="$t('settings.wallpaperSelectAlbum')"
-                  :description="$t('settings.wallpaperSelectAlbumDesc')"
+                  :label="$t('settings.wallpaperRotationPath')"
+                  :description="$t('settings.wallpaperRotationPathDesc')"
                 >
-                  <WallpaperRotationTargetSetting />
-                </SettingRow>
-                <SettingRow
-                  v-if="wallpaperRotationTargetsAlbum"
-                  :label="$t('settings.wallpaperRotationIncludeSubalbums')"
-                  :description="$t('settings.wallpaperRotationIncludeSubalbumsDesc')"
-                >
-                  <SettingSwitchControl setting-key="wallpaperRotationIncludeSubalbums" />
+                  <code class="setting-rotation-path" :title="wallpaperRotationPathDisplay">
+                    {{ wallpaperRotationPathDisplay }}
+                  </code>
                 </SettingRow>
                 <SettingRow v-if="currentWallpaperPath" :label="$t('settings.wallpaperCurrent')">
                   <button type="button" class="setting-current-wallpaper-path" @click="openCurrentWallpaperPath">
@@ -227,13 +220,6 @@
                     :max="1440"
                     :step="10"
                   />
-                </SettingRow>
-
-                <SettingRow
-                  :label="$t('settings.wallpaperRotationMode')"
-                  :description="$t('settings.wallpaperRotationModeDesc')"
-                >
-                  <SettingRadioControl setting-key="wallpaperRotationMode" :options="wallpaperModeOptions" />
                 </SettingRow>
 
                 <SettingRow
@@ -404,7 +390,6 @@ import DownloadIntervalSetting from "@/components/settings/items/DownloadInterva
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
-import WallpaperRotationTargetSetting from "@/components/settings/items/WallpaperRotationTargetSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
@@ -448,10 +433,6 @@ const previewSwitchDirectionOptions = computed(() => [
   { label: t("settings.previewSwitchDirectionAuto"), value: "auto" },
   { label: t("settings.previewSwitchDirectionPrev"), value: "prev" },
   { label: t("settings.previewSwitchDirectionNext"), value: "next" },
-]);
-const wallpaperModeOptions = computed(() => [
-  { label: t("settings.wallpaperModeRandom"), value: "random" },
-  { label: t("settings.wallpaperModeSequential"), value: "sequential" },
 ]);
 const galleryLayoutModeOptions = computed(() => [
   { label: t("settings.galleryLayoutModeGrid"), value: "grid" },
@@ -578,11 +559,12 @@ watch(activeTab, (tab, previousTab) => {
   });
 });
 
-const wallpaperRotationTargetsAlbum = computed(() => {
-  const raw = settingsStore.values.wallpaperRotationAlbumId as string | null | undefined;
-  if (raw == null) return false;
-  return String(raw).trim().length > 0;
-});
+// 未设置时后端落到默认全画廊随机路径
+const wallpaperRotationPathDisplay = computed(
+  () =>
+    (settingsStore.values.wallpaperRotationPath as string | null | undefined) ||
+    t("settings.wallpaperRotationPathDefault"),
+);
 const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));
 const currentWallpaperPath = ref<string | null>(null);
 async function refreshCurrentWallpaperPath() {
@@ -824,6 +806,17 @@ onActivated(async () => {
 :deep(.setting-control .el-select .el-input__wrapper),
 :deep(.setting-control .android-picker-select) {
   min-height: 34px;
+}
+
+.setting-rotation-path {
+  display: block;
+  max-width: 460px;
+  overflow: hidden;
+  color: var(--anime-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  user-select: text;
+  white-space: nowrap;
 }
 
 .setting-current-wallpaper-path {

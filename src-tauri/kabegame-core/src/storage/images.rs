@@ -90,7 +90,6 @@ pub struct ImageInfo {
     #[serde(default)]
     pub size: Option<u64>,
     /// 仅在画册路径 (`/gallery/album/<id>/...`) 下被填: 该图片在 album_images 表中的 `order` 列。
-    /// 顺序壁纸轮播 (sequential mode) 用它定位 next 图片 (`bigger_order` 路径)。
     /// 非画册路径的查询里恒为 None。
     #[serde(rename(serialize = "albumOrder"), alias = "albumOrder")]
     #[serde(default)]

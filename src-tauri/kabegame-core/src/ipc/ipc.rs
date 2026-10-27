@@ -373,10 +373,8 @@ pub enum IpcRequest {
     SettingsGetAutoDeduplicate,
     SettingsGetDefaultDownloadDir,
     SettingsGetWallpaperRotationEnabled,
-    SettingsGetWallpaperRotationAlbumId,
-    SettingsGetWallpaperRotationIncludeSubalbums,
+    SettingsGetWallpaperRotationPath,
     SettingsGetWallpaperRotationIntervalMinutes,
-    SettingsGetWallpaperRotationMode,
     SettingsGetWallpaperStyle,
     SettingsGetWallpaperRotationTransition,
     SettingsGetWallpaperStyleByMode,
@@ -401,11 +399,8 @@ pub enum IpcRequest {
     SettingsSetWallpaperRotationEnabled {
         enabled: bool,
     },
-    SettingsSetWallpaperRotationAlbumId {
-        album_id: Option<String>,
-    },
-    SettingsSetWallpaperRotationIncludeSubalbums {
-        include_subalbums: bool,
+    SettingsSetWallpaperRotationPath {
+        path: Option<String>,
     },
     SettingsSetWallpaperRotationTransition {
         transition: String,
@@ -447,9 +442,6 @@ pub enum IpcRequest {
     },
     SettingsSetWallpaperRotationIntervalMinutes {
         minutes: u32,
-    },
-    SettingsSetWallpaperRotationMode {
-        mode: String,
     },
     SettingsSetCurrentWallpaperImageId {
         image_id: Option<String>,

@@ -4,6 +4,7 @@ import { pathqlEntry, pathqlFetch, type PathqlQuery } from "@/services/pathql";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { i18n } from "@kabegame/i18n";
 import { useSettingsStore } from "@/stores/settings";
+import { rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
 import { isLabelForestKind, type AlbumKind, type AlbumSyncMode } from "@/types/album";
 
 export type { AlbumKind, AlbumSyncMode } from "@/types/album";
@@ -322,7 +323,7 @@ export async function setLabelKey(albumId: string, newKey: string) {
 
 export async function deleteAlbum(albumId: string) {
   const settingsStore = useSettingsStore();
-  if (settingsStore.values.wallpaperRotationAlbumId === albumId) {
+  if (rotationAlbumIdFromPath(settingsStore.values.wallpaperRotationPath) === albumId) {
     await ElMessageBox.confirm(
       i18n.global.t("albums.deleteAlbumRotationConfirm"),
       i18n.global.t("albums.deleteAlbumRotationTitle"),

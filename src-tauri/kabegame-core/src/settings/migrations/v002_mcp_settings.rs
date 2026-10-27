@@ -12,3 +12,20 @@ pub fn up(json: &mut Value) -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn fills_missing_mcp_keys_without_overwriting() {
+        let mut v = json!({ "mcpPort": 8000 });
+        super::up(&mut v).unwrap();
+        let once = v.clone();
+        super::up(&mut v).unwrap();
+        assert_eq!(v, once);
+        assert_eq!(v["mcpPort"], 8000);
+        assert_eq!(v["mcpEnabled"], false);
+        assert_eq!(v["mcpDisabledCapabilities"], json!([]));
+    }
+}

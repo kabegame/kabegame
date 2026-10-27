@@ -34,11 +34,9 @@ export interface AppSettings {
   surfFreezePage: boolean;
   defaultDownloadDir: string | null;
   wallpaperRotationEnabled: boolean;
-  wallpaperRotationAlbumId: string | null;
-  /** 轮播指定画册时是否包含子画册（默认 true，与 07-wallpaper 设计一致） */
-  wallpaperRotationIncludeSubalbums: boolean;
+  /** 轮播来源 PathQL 路径（不含分页尾）；null 表示默认全画廊随机路径。由「用当前视图轮播」写入 */
+  wallpaperRotationPath: string | null;
   wallpaperRotationIntervalMinutes: number;
-  wallpaperRotationMode: "random" | "sequential" | string;
   wallpaperStyle: "fill" | "fit" | "stretch" | "center" | "tile" | string;
   wallpaperRotationTransition: "none" | "fade" | "slide" | "zoom" | string;
   /** 按 wallpaperMode 记忆各模式的最后 style/transition（切换模式时用于恢复） */

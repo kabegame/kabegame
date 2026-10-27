@@ -168,6 +168,25 @@
         <template #icon><MoreFilled /></template>
         <template #panel>
           <div class="chip-settings">
+            <!-- 顶部区域：视图级动作。「用当前视图轮播」把本视图（过滤 + 排序，不含分页）的
+                 PathQL 路径设为壁纸轮播来源；设置页只展示当前轮播路径，入口在这里。 -->
+            <template v-if="showRotationAction">
+              <button
+                type="button"
+                class="chip-settings__action"
+                :disabled="isRotatingThisView || rotationBusy"
+                @click="rotateWithCurrentView"
+              >
+                <span class="chip-settings__icon"><Picture /></span>
+                <span class="flex-1 text-left">
+                  {{ isRotatingThisView ? t("gallery.rotatingThisView") : t("gallery.rotateThisView") }}
+                </span>
+              </button>
+              <!-- 保存的过滤：预留区域，后续在这里列出用户保存的过滤设置 -->
+              <div class="chip-settings__saved-filters" />
+              <div class="chip-settings__divider" />
+            </template>
+
             <template v-for="(group, index) in chipToggleGroups" :key="index">
               <div v-if="index > 0 && group.length" class="chip-settings__divider" />
               <div v-if="index === 0 && group.length" class="chip-settings__title">
@@ -224,7 +243,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, provide, ref, useSlots, watch, type Component } from "vue";
+import { computed, inject, markRaw, provide, ref, useSlots, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { KbFilterDropdown, type KbFilterDropdownOption } from "@kabegame/element-plus";
 import {
@@ -242,6 +261,7 @@ import {
   List,
   MagicStick,
   MoreFilled,
+  Picture,
   Rank,
   Search,
   Sort,
@@ -274,6 +294,11 @@ import {
   type GallerySortField,
 } from "@/utils/galleryPath";
 import { galleryDimensionChipValue, gallerySortFieldLabel } from "@/utils/galleryFilterLabels";
+import { filterMediaKind } from "@/utils/galleryQuery";
+import { viewRotationPath, wallpaperModeSupportsVideo } from "@/utils/wallpaperRotationPath";
+import { gridViewPathKey } from "@/components/imageGrid/gridViewPath";
+import { kameMessage as ElMessage } from "@/utils/kameMessage";
+import { IS_WEB } from "@/env";
 import { DEFAULT_GALLERY_PAGE_SIZE, GALLERY_PAGE_SIZE_OPTIONS, isGalleryPageSizeOption } from "@/utils/galleryPageSize";
 import {
   cloneQuery,
@@ -376,6 +401,40 @@ const labelContext = computed(() => ({
   locale: String(locale.value),
   pluginLabel: (id: string) => pluginStore.pluginLabel(id),
 }));
+
+// ---------- 用当前视图轮播 ----------
+const rotationBusy = ref(false);
+// 所在 ImageGrid 注入的当前视图路径；不在 ImageGrid 插槽里则不提供该动作
+const gridViewPath = inject(gridViewPathKey, null);
+const rotationPath = computed(() => (gridViewPath?.value ? viewRotationPath(gridViewPath.value) : ""));
+const showRotationAction = computed(() => !IS_WEB && !!rotationPath.value);
+const isRotatingThisView = computed(
+  () =>
+    !!settingsStore.values.wallpaperRotationEnabled &&
+    settingsStore.values.wallpaperRotationPath === rotationPath.value,
+);
+
+async function rotateWithCurrentView() {
+  const path = rotationPath.value;
+  if (!path || rotationBusy.value) return;
+  rotationBusy.value = true;
+  try {
+    // 先换路径再开启：开启时直接按新路径拉起轮播
+    if (!(await settingsStore.save("wallpaperRotationPath", path))) return;
+    if (!settingsStore.values.wallpaperRotationEnabled) await settingsStore.save("wallpaperRotationEnabled", true);
+    // 原生壁纸只能显示图片：后端有效路径会追加图片过滤（见 rotator 的 wallpaper_file_available），
+    // 这里直接看过滤对象是否已限定为图片，没有就提示视频会被跳过
+    const skipsVideo =
+      !wallpaperModeSupportsVideo(settingsStore.values.wallpaperMode) &&
+      filterMediaKind(activeFilters.value) !== "image";
+    if (skipsVideo) ElMessage.warning(t("gallery.rotateThisViewSkipsVideo"));
+    else ElMessage.success(t("gallery.rotateThisViewSuccess"));
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e));
+  } finally {
+    rotationBusy.value = false;
+  }
+}
 
 function navigate(patch: GalleryQueryPatch, options?: { push?: boolean }) {
   emit("navigate", patch, options);
@@ -864,6 +923,28 @@ defineExpose({
   color: var(--anime-text-secondary);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.chip-settings__action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--anime-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--anime-primary) 8%, var(--anime-bg-card));
+  }
+
+  &:disabled {
+    color: var(--anime-text-secondary);
+    cursor: default;
+  }
 }
 
 .chip-settings__divider {

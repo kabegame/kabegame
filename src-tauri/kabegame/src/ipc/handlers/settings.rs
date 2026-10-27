@@ -23,14 +23,10 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsGetAutoDeduplicate => Some(get_auto_deduplicate()),
         IpcRequest::SettingsGetDefaultDownloadDir => Some(get_default_download_dir()),
         IpcRequest::SettingsGetWallpaperRotationEnabled => Some(get_wallpaper_rotation_enabled()),
-        IpcRequest::SettingsGetWallpaperRotationAlbumId => Some(get_wallpaper_rotation_album_id()),
-        IpcRequest::SettingsGetWallpaperRotationIncludeSubalbums => {
-            Some(get_wallpaper_rotation_include_subalbums())
-        }
+        IpcRequest::SettingsGetWallpaperRotationPath => Some(get_wallpaper_rotation_path()),
         IpcRequest::SettingsGetWallpaperRotationIntervalMinutes => {
             Some(get_wallpaper_rotation_interval_minutes())
         }
-        IpcRequest::SettingsGetWallpaperRotationMode => Some(get_wallpaper_rotation_mode()),
         IpcRequest::SettingsGetWallpaperStyle => Some(get_wallpaper_rotation_style()),
         IpcRequest::SettingsGetWallpaperRotationTransition => {
             Some(get_wallpaper_rotation_transition())
@@ -62,11 +58,8 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetWallpaperRotationEnabled { enabled } => {
             Some(set_wallpaper_rotation_enabled(*enabled))
         }
-        IpcRequest::SettingsSetWallpaperRotationAlbumId { album_id } => {
-            Some(set_wallpaper_rotation_album_id(album_id.clone()))
-        }
-        IpcRequest::SettingsSetWallpaperRotationIncludeSubalbums { include_subalbums } => {
-            Some(set_wallpaper_rotation_include_subalbums(*include_subalbums))
+        IpcRequest::SettingsSetWallpaperRotationPath { path } => {
+            Some(set_wallpaper_rotation_path(path.clone()))
         }
         IpcRequest::SettingsSetWallpaperRotationTransition { transition } => {
             Some(set_wallpaper_rotation_transition(transition.clone()))
@@ -100,9 +93,6 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
         IpcRequest::SettingsSetWallpaperRotationIntervalMinutes { minutes } => {
             Some(set_wallpaper_rotation_interval_minutes(*minutes))
         }
-        IpcRequest::SettingsSetWallpaperRotationMode { mode } => {
-            Some(set_wallpaper_rotation_mode(mode.clone()))
-        }
         IpcRequest::SettingsSetCurrentWallpaperImageId { image_id } => {
             Some(set_current_wallpaper_image_id(image_id.clone()))
         }
@@ -127,15 +117,11 @@ fn set_wallpaper_rotation_enabled(enabled: bool) -> IpcResponse {
     }
 }
 
-fn set_wallpaper_rotation_album_id(album_id: Option<String>) -> IpcResponse {
-    match Settings::global().set_wallpaper_rotation_album_id(album_id) {
-        Ok(()) => IpcResponse::ok("updated"),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> IpcResponse {
-    match Settings::global().set_wallpaper_rotation_include_subalbums(include_subalbums) {
+fn set_wallpaper_rotation_path(path: Option<String>) -> IpcResponse {
+    let normalized = path
+        .as_deref()
+        .and_then(kabegame_core::wallpaper_rotation::normalize_path);
+    match Settings::global().set_wallpaper_rotation_path(normalized) {
         Ok(()) => IpcResponse::ok("updated"),
         Err(e) => IpcResponse::err(e),
     }
@@ -317,13 +303,6 @@ fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> IpcResponse {
     }
 }
 
-fn set_wallpaper_rotation_mode(mode: String) -> IpcResponse {
-    match Settings::global().set_wallpaper_rotation_mode(mode) {
-        Ok(()) => IpcResponse::ok("updated"),
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
 fn set_current_wallpaper_image_id(image_id: Option<String>) -> IpcResponse {
     match Settings::global().set_current_wallpaper_image_id(image_id.clone()) {
         Ok(()) => {
@@ -410,26 +389,16 @@ fn get_wallpaper_rotation_enabled() -> IpcResponse {
     IpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 
-fn get_wallpaper_rotation_album_id() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_rotation_album_id();
+fn get_wallpaper_rotation_path() -> IpcResponse {
+    let v = Settings::global().get_wallpaper_rotation_path();
     IpcResponse::ok_with_data(
         "ok",
         serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
     )
 }
 
-fn get_wallpaper_rotation_include_subalbums() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_rotation_include_subalbums();
-    IpcResponse::ok_with_data("ok", serde_json::json!(v))
-}
-
 fn get_wallpaper_rotation_interval_minutes() -> IpcResponse {
     let v = Settings::global().get_wallpaper_rotation_interval_minutes();
-    IpcResponse::ok_with_data("ok", serde_json::json!(v))
-}
-
-fn get_wallpaper_rotation_mode() -> IpcResponse {
-    let v = Settings::global().get_wallpaper_rotation_mode();
     IpcResponse::ok_with_data("ok", serde_json::json!(v))
 }
 

@@ -308,7 +308,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App<crate::AppRuntime>) {
         }
     });
     tauri::async_runtime::spawn(async {
-        if let Err(e) = WallpaperRotator::global().ensure_running(true).await {
+        if let Err(e) = WallpaperRotator::global().ensure_running().await {
             eprintln!("[WARN] Failed to ensure wallpaper rotator running: {}", e);
         }
     });

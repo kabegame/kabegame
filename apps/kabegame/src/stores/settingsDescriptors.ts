@@ -170,20 +170,13 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     tauri("autoDeduplicate", "get_auto_deduplicate", "set_auto_deduplicate", "enabled"),
     tauri("dedupUpdateMetadata", "get_dedup_update_metadata", "set_dedup_update_metadata", "enabled"),
     tauri("wallpaperRotationEnabled", "get_wallpaper_rotation_enabled", "set_wallpaper_rotation_enabled", "enabled"),
-    tauri("wallpaperRotationAlbumId", "get_wallpaper_rotation_album_id", "set_wallpaper_rotation_album_id", "albumId"),
-    tauri(
-      "wallpaperRotationIncludeSubalbums",
-      "get_wallpaper_rotation_include_subalbums",
-      "set_wallpaper_rotation_include_subalbums",
-      "includeSubalbums",
-    ),
+    tauri("wallpaperRotationPath", "get_wallpaper_rotation_path", "set_wallpaper_rotation_path", "path"),
     tauri(
       "wallpaperRotationIntervalMinutes",
       "get_wallpaper_rotation_interval_minutes",
       "set_wallpaper_rotation_interval_minutes",
       "minutes",
     ),
-    tauri("wallpaperRotationMode", "get_wallpaper_rotation_mode", "set_wallpaper_rotation_mode", "mode"),
     tauri("wallpaperStyle", "get_wallpaper_rotation_style", "set_wallpaper_style", "style"),
     tauri(
       "wallpaperRotationTransition",
@@ -286,10 +279,8 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     const webReadonlyEntries = [
       readonly("imageClickAction", "preview"),
       readonly("wallpaperRotationEnabled", false),
-      readonly("wallpaperRotationAlbumId", null),
-      readonly("wallpaperRotationIncludeSubalbums", true),
+      readonly("wallpaperRotationPath", null),
       readonly("wallpaperRotationIntervalMinutes", 30),
-      readonly("wallpaperRotationMode", "random"),
       readonly("wallpaperVolume", 0.5),
       readonly("wallpaperVideoPlaybackRate", 1),
       readonly("wallpaperStyle", "fill"),
