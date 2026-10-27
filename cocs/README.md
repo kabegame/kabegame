@@ -249,7 +249,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：排查 GNOME/Windows 设置 WebP、AVIF、HEIC、HEIF 后壁纸空白；扩展原生壁纸格式白名单；维护兼容副本生命周期。
 
 - [wallpaper/ROTATION_PATHQL.md](wallpaper/ROTATION_PATHQL.md)
-  - 主题：壁纸轮播只认一个 PathQL 路径 `wallpaperRotationPath` 与持久化位置 `wallpaperRotationPosition`（路径变化才清零，停开轮播保持）；每次切换 count → 出错回落默认随机路径 → 取第「位置 + 1」张（画廊走 lookup 形态）；原生模式在尾部拼 `_kb_fc/media-type/image` 只留图片；切换壁纸模式按当前壁纸 id 经 `~~/rank` 重定位；兼容副本仍由原生后端按需生成；「用当前视图轮播」经 `ImageGrid` 注入的视图路径；Android Worker 只消费 Rust 预取的 `rotation_queue.json`；旧三键的 v003 设置迁移。
+  - 主题：壁纸轮播只认一个 PathQL 路径 `wallpaperRotationPath` 与持久化位置 `wallpaperRotationPosition`（换路径置 `-1` 并立即切到第 1 张，停开轮播保持）；每次切换 count → 出错回落默认随机路径 → 按当前壁纸 id 经 `~~/rank` 定起点（不在路径里才用位置）→ 取该张（画廊走 lookup 形态）；轮播线程跳过 notify 残留 permit；原生模式在尾部拼 `_kb_fc/media-type/image` 只留图片；切换壁纸模式按当前壁纸 id 经 `~~/rank` 重定位；兼容副本仍由原生后端按需生成；「用当前视图轮播」经 `ImageGrid` 注入的视图路径；Android Worker 只消费 Rust 预取的 `rotation_queue.json`；旧三键的 v003 设置迁移。
   - 适用场景：改轮播选图 / 位置语义、加新的轮播入口；排查轮播不前进、停开后从头开始、换模式后跳张、路径失效回落、原生模式出现视频；Android 后台轮播不换图或位置不同步。
 
 ## 构建打包（`build/`）

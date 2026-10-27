@@ -59,7 +59,7 @@ pub async fn handle_settings_request(req: &IpcRequest) -> Option<IpcResponse> {
             Some(set_wallpaper_rotation_enabled(*enabled))
         }
         IpcRequest::SettingsSetWallpaperRotationPath { path } => {
-            Some(set_wallpaper_rotation_path(path.clone()))
+            Some(set_wallpaper_rotation_path(path.clone()).await)
         }
         IpcRequest::SettingsSetWallpaperRotationTransition { transition } => {
             Some(set_wallpaper_rotation_transition(transition.clone()))
@@ -117,11 +117,17 @@ fn set_wallpaper_rotation_enabled(enabled: bool) -> IpcResponse {
     }
 }
 
-fn set_wallpaper_rotation_path(path: Option<String>) -> IpcResponse {
-    let normalized = path
-        .as_deref()
-        .and_then(kabegame_core::wallpaper_rotation::normalize_path);
-    match Settings::global().set_wallpaper_rotation_path(normalized) {
+/// 与 Tauri 命令同一实现：校验路径、换路径时立即设第 1 张。web 版没有壁纸后端，只写设置。
+async fn set_wallpaper_rotation_path(path: Option<String>) -> IpcResponse {
+    #[cfg(not(feature = "web"))]
+    let res =
+        crate::commands::wallpaper::set_wallpaper_rotation_path(path.unwrap_or_default()).await;
+    #[cfg(feature = "web")]
+    let res = Settings::global().set_wallpaper_rotation_path(
+        path.as_deref()
+            .and_then(kabegame_core::wallpaper_rotation::normalize_path),
+    );
+    match res {
         Ok(()) => IpcResponse::ok("updated"),
         Err(e) => IpcResponse::err(e),
     }

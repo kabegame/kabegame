@@ -155,7 +155,9 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String>
 }
 
 /// 设置轮播来源 PathQL 路径（不含分页尾）；空串表示默认全画廊随机路径。
-/// 先校验路径能 count、非空且能取到图片行；路径变化时位置清零（从第一张开始）。
+/// 先校验路径能 count、非空且能取到图片行。路径变化时设置层把位置置为
+/// `WALLPAPER_ROTATION_FROM_START`，这里随即唤醒轮播立刻切到新路径的第 1 张（不论轮播是否开启），
+/// 之后按当前壁纸续接。
 #[tauri::command]
 pub async fn set_wallpaper_rotation_path(path: String) -> Result<(), String> {
     reject_if_wallpaper_disabled()?;
@@ -169,12 +171,19 @@ pub async fn set_wallpaper_rotation_path(path: String) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())??;
     }
+    let changed = settings.get_wallpaper_rotation_path() != normalized;
     settings
         .set_wallpaper_rotation_path(normalized)
         .map_err(|e| format!("Settings error: {}", e))?;
+    let rotator = WallpaperRotator::global();
+    if changed {
+        // 线程运行中：由线程切换并重置计时器；未运行：在这里直接切一次
+        rotator.rotate().await?;
+    }
 
+    // 已开启时 ensure_running 会重置计时器，下一次自动切换从现在起算
     if settings.get_wallpaper_rotation_enabled() {
-        WallpaperRotator::global()
+        rotator
             .ensure_running()
             .await
             .map_err(|e| format!("启动轮播失败: {}", e))?;

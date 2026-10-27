@@ -148,12 +148,17 @@ pub enum SettingKey {
     McpDisabledCapabilities,
 }
 
+/// `wallpaperRotationPosition` 的特殊值：刚换了轮播路径，下一次切换从第 1 张开始，
+/// 不按当前壁纸 id 定位。切换成功后被写成正常位置。
+pub const WALLPAPER_ROTATION_FROM_START: i64 = -1;
+
 // 用于序列化的值类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SettingValue {
     Bool(bool),
     U32(u32),
+    I64(i64),
     F64(f64),
     String(String),
     OptionString(Option<String>),
@@ -174,6 +179,13 @@ impl SettingValue {
     fn as_u32(&self) -> Option<u32> {
         match self {
             SettingValue::U32(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            SettingValue::I64(n) => Some(*n),
             _ => None,
         }
     }
@@ -326,7 +338,7 @@ impl Settings {
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
             SettingKey::WallpaperRotationPath => SettingValue::OptionString(None),
-            SettingKey::WallpaperRotationPosition => SettingValue::U32(0),
+            SettingKey::WallpaperRotationPosition => SettingValue::I64(0),
             SettingKey::WallpaperRotationIntervalMinutes => SettingValue::U32(60),
             SettingKey::WallpaperStyle => {
                 SettingValue::String(Self::default_wallpaper_rotation_style())
@@ -588,8 +600,10 @@ impl Settings {
             | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
             | SettingKey::WallpaperRotationIntervalMinutes
-            | SettingKey::WallpaperRotationPosition
             | SettingKey::WebServerPort => Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32)),
+            SettingKey::WallpaperRotationPosition => {
+                Ok(SettingValue::I64(json.as_i64().unwrap_or(0).max(-1)))
+            }
             SettingKey::DownloadIntervalMs => {
                 let v = json.as_u64().unwrap_or(500) as u32;
                 let v = v.clamp(100, 10000);
@@ -798,6 +812,7 @@ impl Settings {
         match val {
             SettingValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
             SettingValue::U32(n) => Ok(serde_json::Value::Number((*n).into())),
+            SettingValue::I64(n) => Ok(serde_json::Value::Number((*n).into())),
             SettingValue::F64(n) => serde_json::Number::from_f64(*n)
                 .map(serde_json::Value::Number)
                 .ok_or_else(|| "Invalid F64 for JSON".to_string()),
@@ -1035,11 +1050,12 @@ impl Settings {
             .flatten()
     }
 
-    /// 下一张在轮播路径中的 0 起序号（调用方按当前 count 取模）。
-    pub fn get_wallpaper_rotation_position(&self) -> u32 {
+    /// 下一张在轮播路径中的 0 起序号（调用方按当前 count 取模）；
+    /// [`WALLPAPER_ROTATION_FROM_START`] 表示刚换了路径，下一次从第 1 张开始、不按当前壁纸定位。
+    pub fn get_wallpaper_rotation_position(&self) -> i64 {
         Self::cells()
             .get(&SettingKey::WallpaperRotationPosition)
-            .map(|c| c.load().as_u32().unwrap_or(0))
+            .map(|c| c.load().as_i64().unwrap_or(0))
             .unwrap_or(0)
     }
 
@@ -1445,8 +1461,8 @@ impl Settings {
         Ok(())
     }
 
-    /// 设置轮播来源路径。值真正变化时把位置清零（路径变化从第一张开始）；
-    /// 停止 / 开始轮播不经过这里，所以同一路径的位置得以保持。
+    /// 设置轮播来源路径。值真正变化时把位置置为 [`WALLPAPER_ROTATION_FROM_START`]
+    /// （路径变化从第一张开始）；停止 / 开始轮播不经过这里，所以同一路径的位置得以保持。
     pub fn set_wallpaper_rotation_path(&self, path: Option<String>) -> Result<(), String> {
         let normalized = path.and_then(|s| {
             let t = s.trim().trim_end_matches('/').to_string();
@@ -1465,15 +1481,16 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationPath, &new_value);
-        self.set_wallpaper_rotation_position(0)
+        self.set_wallpaper_rotation_position(WALLPAPER_ROTATION_FROM_START)
     }
 
-    pub fn set_wallpaper_rotation_position(&self, position: u32) -> Result<(), String> {
+    pub fn set_wallpaper_rotation_position(&self, position: i64) -> Result<(), String> {
+        let position = position.max(WALLPAPER_ROTATION_FROM_START);
         if self.get_wallpaper_rotation_position() == position {
             return Ok(());
         }
         let cells = Self::cells();
-        let new_value = SettingValue::U32(position);
+        let new_value = SettingValue::I64(position);
         if let Some(cell) = cells.get(&SettingKey::WallpaperRotationPosition) {
             cell.store(Arc::new(new_value.clone()));
         }
@@ -1844,7 +1861,7 @@ mod tests {
         assert_eq!(
             cells[&SettingKey::WallpaperRotationPosition]
                 .load()
-                .as_u32(),
+                .as_i64(),
             Some(0)
         );
     }

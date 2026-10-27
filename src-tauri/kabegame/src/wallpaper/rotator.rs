@@ -1,13 +1,15 @@
 //! 壁纸轮播：一律读设置里的一个 PathQL 路径，按持久化位置逐张前进。
 //!
-//! 每次切换：`count(有效路径)` → 出错落回默认随机路径 → 取第 `位置 + 1` 张（页大小 1）→
-//! 设壁纸后写回 `currentWallpaperImageId` 与 `位置 + 1`。路径与有效路径的约定见
+//! 每次切换：`count(有效路径)` → 出错落回默认随机路径 → 定起点（当前壁纸 id 在路径里的下一张，
+//! 找不到才用持久化位置）→ 取该位置的一张（页大小 1）→ 设壁纸后写回 `currentWallpaperImageId`
+//! 与 `位置 + 1`。换路径时设置层把位置置为 `WALLPAPER_ROTATION_FROM_START`（-1），下一次从第 1 张
+//! 开始、不按当前 id 定位；`set_wallpaper_rotation_path` 命令随即唤醒轮播切这一次。路径与有效路径的约定见
 //! `kabegame_core::wallpaper_rotation`，整体说明见 `cocs/wallpaper/ROTATION_PATHQL.md`。
 
 use super::manager::WallpaperController;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::providers::{count_at, images_at, query_fetch};
-use kabegame_core::settings::Settings;
+use kabegame_core::settings::{Settings, WALLPAPER_ROTATION_FROM_START};
 use kabegame_core::storage::{ImageInfo, Storage};
 use kabegame_core::wallpaper_rotation as rotation_path;
 use std::path::Path;
@@ -52,7 +54,7 @@ struct RotationSource {
     fallback: bool,
 }
 
-/// 把设置路径换成新的默认随机路径（位置随之清零）。
+/// 把设置路径换成新的默认随机路径（位置随之置为从头开始）。
 fn fall_back_to_default(reason: &str) -> Result<String, String> {
     let path = rotation_path::default_path();
     eprintln!("[WALLPAPER_ROTATOR] {reason}，回落默认路径 {path}");
@@ -100,6 +102,35 @@ fn wrapped_position(position: u64, count: u64) -> u64 {
         0
     } else {
         position
+    }
+}
+
+/// 当前壁纸在 `effective` 里的 1 起序号，即下一张的 0 起位置；当前 id 为空或不在路径里返回 None。
+fn locate_after_current(effective: &str) -> Option<u64> {
+    let id = Settings::global().get_current_wallpaper_image_id()?;
+    query_fetch(&rotation_path::rank_path(effective, &id))
+        .ok()?
+        .into_iter()
+        .next()?
+        .get("row_index")?
+        .as_u64()
+}
+
+/// 本轮起点：查询视图会随图片增删、改字段而变，持久化位置可能已经错位，所以优先取
+/// 「当前壁纸的下一张」并写回位置；当前壁纸不在路径里时才用持久化位置。
+/// 刚换的路径（位置为 `WALLPAPER_ROTATION_FROM_START`）从第 1 张开始，不定位。
+fn start_position(src: &RotationSource) -> u64 {
+    let settings = Settings::global();
+    let position = settings.get_wallpaper_rotation_position();
+    if position == WALLPAPER_ROTATION_FROM_START {
+        return 0;
+    }
+    match locate_after_current(&src.effective) {
+        Some(n) => {
+            let _ = settings.set_wallpaper_rotation_position(n as i64);
+            wrapped_position(n, src.count)
+        }
+        None => wrapped_position(position.max(0) as u64, src.count),
     }
 }
 
@@ -154,19 +185,13 @@ fn collect_available(
 /// 选出下一张：返回图与写回的新位置；本轮没有可用图返回 None。
 /// 取行出错与 count 出错同等对待：回落默认路径重试一次。
 fn pick_next(wallpaper_mode: &str) -> Result<Option<(ImageInfo, u64)>, String> {
-    let settings = Settings::global();
     let mut src = resolve_source(wallpaper_mode)?;
-    let picked = match collect_available(
-        &src,
-        u64::from(settings.get_wallpaper_rotation_position()),
-        1,
-        1,
-    ) {
+    let picked = match collect_available(&src, start_position(&src), 1, 1) {
         Ok(v) => v,
         Err(e) if !src.fallback => {
             let default = fall_back_to_default(&format!("取行 {} 失败: {e}", src.path))?;
             src = count_source(default, wallpaper_mode, true)?;
-            collect_available(&src, 0, 1, 1)?
+            collect_available(&src, start_position(&src), 1, 1)?
         }
         Err(e) => return Err(e),
     };
@@ -187,7 +212,7 @@ async fn advance_and_apply() -> Result<bool, String> {
     };
 
     // 先推进位置：即使这张设壁纸失败，下一轮也不会卡在同一张上
-    settings.set_wallpaper_rotation_position(next_position.min(u64::from(u32::MAX)) as u32)?;
+    settings.set_wallpaper_rotation_position(next_position as i64)?;
 
     // 交给后端的是原始 local_path：原生后端在 native.rs 里经
     // wallpaper_compat::ensure_native_wallpaper_path 按需生成 / 复用 wallpaper_compatible_path
@@ -215,24 +240,20 @@ async fn advance_and_apply() -> Result<bool, String> {
     Ok(true)
 }
 
-/// 切换壁纸模式会改变有效路径（加 / 去媒体过滤）：按当前壁纸 id 在新有效路径里重定位，
-/// 保持「当前壁纸的下一张」。当前 id 为空或不在新有效路径里则保留原位置。
+/// 切换壁纸模式会改变有效路径（加 / 去媒体过滤）：按当前壁纸 id 在新有效路径里重定位位置。
+/// 下一次切换本身也会重定位，这里提前写回，让设置里的位置与新模式一致。
+/// 当前 id 为空、不在新有效路径里，或刚换了路径还没切过，则保留原位置。
 pub fn relocate_position_for_mode(wallpaper_mode: &str) {
     let settings = Settings::global();
-    let (Some(id), Some(path)) = (
-        settings.get_current_wallpaper_image_id(),
-        settings.get_wallpaper_rotation_path(),
-    ) else {
+    let Some(path) = settings.get_wallpaper_rotation_path() else {
         return;
     };
+    if settings.get_wallpaper_rotation_position() == WALLPAPER_ROTATION_FROM_START {
+        return;
+    }
     let effective = rotation_path::effective_path(&path, wallpaper_mode);
-    let row_index = query_fetch(&rotation_path::rank_path(&effective, &id))
-        .ok()
-        .and_then(|rows| rows.into_iter().next())
-        .and_then(|row| row.get("row_index").and_then(|v| v.as_u64()));
-    // row_index 是当前壁纸的 1 起序号，恰好等于下一张的 0 起位置
-    if let Some(n) = row_index {
-        let _ = settings.set_wallpaper_rotation_position(n.min(u64::from(u32::MAX)) as u32);
+    if let Some(n) = locate_after_current(&effective) {
+        let _ = settings.set_wallpaper_rotation_position(n as i64);
     }
 }
 
@@ -295,22 +316,19 @@ mod android_queue {
         {
             let same_path = old.get("path").and_then(|v| v.as_str())
                 == settings.get_wallpaper_rotation_path().as_deref();
-            if same_path {
-                if let Some(pos) = old.get("position").and_then(|v| v.as_u64()) {
-                    let _ = settings
-                        .set_wallpaper_rotation_position(pos.min(u64::from(u32::MAX)) as u32);
+            // 只有 Worker 真的切过（写了 currentImageId）才同步：否则文件里的 position 只是
+            // 上次写下的起点，会把刚换路径时的 WALLPAPER_ROTATION_FROM_START 覆盖掉
+            let consumed_id = old.get("currentImageId").and_then(|v| v.as_str());
+            if let (true, Some(id)) = (same_path, consumed_id) {
+                if let Some(pos) = old.get("position").and_then(|v| v.as_i64()) {
+                    let _ = settings.set_wallpaper_rotation_position(pos);
                 }
-                if let Some(id) = old.get("currentImageId").and_then(|v| v.as_str()) {
-                    let _ = settings.set_current_wallpaper_image_id(Some(id.to_string()));
-                }
+                let _ = settings.set_current_wallpaper_image_id(Some(id.to_string()));
             }
         }
 
         let src = resolve_source(&settings.get_wallpaper_mode())?;
-        let start = wrapped_position(
-            u64::from(settings.get_wallpaper_rotation_position()),
-            src.count.max(1),
-        );
+        let start = start_position(&src);
         let items: Vec<serde_json::Value> = collect_available(&src, start, QUEUE_LEN, 100)?
             .into_iter()
             .map(|(pos, img)| {
@@ -410,10 +428,10 @@ impl WallpaperRotator {
             ticker.tick().await;
 
             loop {
-                tokio::select! {
-                    _ = ticker.tick() => { /* timer */ }
-                    _ = notify.notified() => { /* manual/reset */ }
-                }
+                let woke_by_timer = tokio::select! {
+                    _ = ticker.tick() => true,
+                    _ = notify.notified() => false, // manual/reset
+                };
 
                 // 检查状态：如果是 Stopping 或 running=false，则退出
                 let current_state = state.load(Ordering::Acquire);
@@ -444,10 +462,17 @@ impl WallpaperRotator {
 
                 // 处理控制指令
                 let flags = control_flags.swap(0, Ordering::Relaxed);
-                if (flags & FLAG_RESET) != 0 && (flags & FLAG_ROTATE) == 0 {
-                    // 仅重置定时器，不触发切换
-                    ticker.reset();
-                    continue;
+                if (flags & FLAG_ROTATE) == 0 {
+                    if (flags & FLAG_RESET) != 0 {
+                        // 仅重置定时器，不触发切换
+                        ticker.reset();
+                        continue;
+                    }
+                    if !woke_by_timer {
+                        // notify 留下的 permit：标志已在上一轮一并处理（如 rotate 紧跟 reset），
+                        // 不能当成定时器到期再切一次
+                        continue;
+                    }
                 }
 
                 if let Err(e) = advance_and_apply().await {
