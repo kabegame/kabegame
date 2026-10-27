@@ -11,6 +11,7 @@ members = [
   "src-tauri/tauri-plugin-share",
   "src-tauri/tauri-plugin-wallpaper",
   "src-tauri/tauri-plugin-task-notification",
+  "src-tauri/tauri-plugin-wemt",
 ]
 # Keep the vendored cef-rs workspace as the owner of its inherited metadata.
 # third/deno is the upstream denoland/deno monorepo (submodule, pinned v2.9.0 + third-patches/deno):
@@ -27,7 +28,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "4.6.1"
+version = "4.7.0"
 
 [workspace.dependencies]
 arc-swap= "1.7"
@@ -81,6 +82,7 @@ tauri-plugin-picker = {path = "./src-tauri/tauri-plugin-picker"}
 tauri-plugin-share = {path = "./src-tauri/tauri-plugin-share"}
 tauri-plugin-task-notification = {path = "./src-tauri/tauri-plugin-task-notification"}
 tauri-plugin-wallpaper = {path = "./src-tauri/tauri-plugin-wallpaper"}
+tauri-plugin-wemt = {path = "./src-tauri/tauri-plugin-wemt"}
 tar = "0.4"
 tokio = {version = "1", features = ["full"]}
 url = "2.5"

@@ -184,7 +184,27 @@ fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Opt
             return;
         }
     }
-    let _ = fs::remove_file(thumb);
+    // 只删除 Kabegame 自己生成、位于 `thumbnails_dir` 内的缩略图。
+    // 目录型 WPE 壁纸的缩略图直接引用用户目录里的 `preview.gif` / `preview.jpg`，
+    // 不校验归属就会在删记录时删掉用户的预览图。
+    let Ok(root) = crate::app_paths::AppPaths::global()
+        .thumbnails_dir()
+        .canonicalize()
+    else {
+        return;
+    };
+    let Ok(target) = Path::new(thumb).canonicalize() else {
+        return;
+    };
+    if !target.starts_with(&root) || !target.is_file() {
+        return;
+    }
+    if let Err(e) = fs::remove_file(&target) {
+        eprintln!(
+            "[storage] remove thumbnail file failed ({}): {e}",
+            target.display()
+        );
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -850,6 +870,21 @@ impl Storage {
         ))
     }
 
+    /// 全部目录型 WPE 壁纸的 `local_path`，供收集入口统计「已导入」。
+    ///
+    /// 只读；不参与图库查询口径（WPE 行在虚拟盘等位置另行过滤）。
+    pub fn list_wpe_local_paths(&self) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let mut stmt = conn
+            .prepare("SELECT local_path FROM images WHERE type LIKE 'x-wpe/%'")
+            .map_err(|e| format!("prepare list_wpe_local_paths: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query list_wpe_local_paths: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read list_wpe_local_paths: {e}"))
+    }
+
     /// 为本地文件夹同步查询某 album 当前的图片 id 快照（作为「待删除候选」基线）。
     pub fn list_album_image_ids_for_sync(&self, album_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -998,9 +1033,10 @@ impl Storage {
                 Option<i64>,
                 Option<String>,
                 Option<String>,
+                Option<String>,
             )> = tx
                 .query_row(
-                    "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path FROM images WHERE id = ?1",
+                    "SELECT local_path, thumbnail_path, metadata_id, image_metadata_id, compatible_path, wallpaper_compatible_path, type FROM images WHERE id = ?1",
                     params![id],
                     |row| {
                         Ok((
@@ -1010,13 +1046,14 @@ impl Storage {
                             row.get(3)?,
                             row.get(4)?,
                             row.get(5)?,
+                            row.get(6)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(|e| format!("Failed to query image path: {}", e))?;
 
-            let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _)| *id);
+            let image_metadata_id = image_paths.as_ref().and_then(|(_, _, _, id, _, _, _)| *id);
             if let Some((
                 local_path,
                 thumbnail_path,
@@ -1024,6 +1061,7 @@ impl Storage {
                 _,
                 compatible_path,
                 wallpaper_compatible_path,
+                media_type,
             )) = image_paths
             {
                 if let Some(metadata_id) = metadata_id {
@@ -1032,7 +1070,11 @@ impl Storage {
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
                 remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
-                local_paths_to_purge.push(local_path);
+                // 目录型 WPE 壁纸的 local_path 是用户目录：从图库删除只删记录，
+                // 绝不把整个壁纸目录（或其中文件）送进回收站。
+                if !crate::media::image_type::is_wpe_type(media_type.as_deref()) {
+                    local_paths_to_purge.push(local_path);
+                }
             }
 
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])

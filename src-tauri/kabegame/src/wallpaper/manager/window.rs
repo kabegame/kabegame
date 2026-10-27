@@ -1,17 +1,17 @@
 use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
 use crate::wallpaper::window::WallpaperWindow;
 use async_trait::async_trait;
+use crate::wallpaper::wpe_web_host::{self, WALLPAPER_LABEL};
 use kabegame_i18n::t;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-/// 壁纸窗口的 label。窗口是**懒建**的：只在 `wallpaperMode == "window"` 期间存在。
-const WALLPAPER_LABEL: &str = "wallpaper";
-
-/// 窗口模式壁纸管理器。
+/// 窗口模式壁纸管理器。壁纸窗口的 label 见 [`WALLPAPER_LABEL`]，窗口是**懒建**的：
+/// 只在 `wallpaperMode == "window"` 期间存在。
 ///
-/// **本 manager 不负责壁纸内容**——内容由壁纸页面（`wallpaper.ts`）监听
-/// `setting-change` 自驱动渲染。本 manager 只负责窗口的**生命周期**：
+/// **本 manager 不负责壁纸内容**——内容由壁纸页面（`WallpaperWindow.vue`）监听
+/// `setting-change` 自驱动渲染；网页壁纸（`x-wpe/web`）例外，由 `wpe_web_host` 把整个
+/// 窗口导航到壁纸入口的 `file://`。本 manager 只负责窗口的**生命周期**：
 /// `init()` 建窗口并挂到桌面层，`cleanup()` 销毁它。窗口一旦建立即常显，
 /// 中途不 hide/show。
 ///
@@ -56,11 +56,15 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             return Ok(w);
         }
 
-        // 独立的 wallpaper.html，只渲染壁纸层。
+        // 网页壁纸以 file:// 加载并读同目录文件：建窗前登记 label，CEF 只给这个 browser
+        // 打开文件访问偏好，file: 请求由运行时按当前壁纸目录约束（初始拒绝全部）。
+        tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);
+
+        // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         let builder = WebviewWindowBuilder::new(
             &self.app,
             WALLPAPER_LABEL,
-            WebviewUrl::App("wallpaper.html".into()),
+            WebviewUrl::App("index.html?window=wallpaper".into()),
         )
         // 固定标题，便于脚本/调试定位到正确窗口。
         .title(t!("window.wallpaperTitle"))
@@ -71,7 +75,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         #[cfg(target_os = "windows")]
         let builder = builder.transparent(true);
 
-        // 建成时不可见：挂载会把它改成 Progman 的子窗口并搬到桌面层，
+        // 建成时不可见：挂载会把它改成背景 WorkerW 的子窗口并搬到桌面层，
         // 期间若可见会先在屏幕上闪一下全屏窗口。`mount()` 内部挂完即 show，
         // 之后在 window 模式的整个生命周期里保持常显、不再 hide。
         builder
@@ -112,13 +116,19 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     }
 
     fn cleanup(&self) -> Result<(), String> {
-        // 离开 window 模式：销毁窗口，而不是藏起来。窗口挂载时被改成了 Progman 的
+        // 离开 window 模式：销毁窗口，而不是藏起来。窗口挂载时被改成了 WorkerW 的
         // 子窗口（WS_CHILD + 改过的扩展样式），留着它下次只会在一个已被改过的窗口上
         // 再挂一次。
         if let Ok(mut wp) = self.wallpaper_window.lock() {
             *wp = None;
         }
+        // 网页壁纸宿主随窗口复位：回到应用页模式、文件根目录清空、停止鼠标转发。
+        wpe_web_host::reset();
         if let Some(window) = self.app.get_webview_window(WALLPAPER_LABEL) {
+            #[cfg(target_os = "windows")]
+            if let Err(error) = tauri_plugin_wemt::detach_window(&window) {
+                eprintln!("[wallpaper] 解绑桌面窗口失败，仍将销毁窗口: {error}");
+            }
             // `destroy()` 而非 `close()`：这是程序化拆除，不是「请求关闭」。
             // `close()` 会走 CloseRequested 事件，可被 `api.prevent_close()` 拦下
             // （`lib.rs` 已对 `crawler-*` 这么做）——一旦哪天拦截条件放宽到本窗口，

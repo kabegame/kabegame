@@ -30,6 +30,10 @@
           <el-icon><Link /></el-icon>
           {{ t("gallery.webpage") }}
         </el-dropdown-item>
+        <el-dropdown-item v-if="!IS_WEB && !IS_ANDROID" command="wallpaper">
+          <el-icon><Picture /></el-icon>
+          {{ t("gallery.wallpaper") }}
+        </el-dropdown-item>
       </el-dropdown-menu>
     </template>
   </el-dropdown>
@@ -37,9 +41,9 @@
 
 <script setup lang="ts">
 import { useI18n } from "@kabegame/i18n";
-import { Plus, ArrowDown, FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
+import { Plus, ArrowDown, FolderOpened, Connection, Link, Picture } from "@kabegame/element-plus-icons";
 import { useUiStore } from "@/stores/ui";
-import { IS_WEB } from "@/env";
+import { IS_ANDROID, IS_WEB } from "@/env";
 
 const { t } = useI18n();
 

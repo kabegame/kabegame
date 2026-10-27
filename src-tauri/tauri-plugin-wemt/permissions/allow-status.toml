@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-status"
+description = "Allows `wemt_status`: read the current mount state without changing it."
+commands.allow = ["wemt_status"]

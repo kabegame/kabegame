@@ -49,6 +49,14 @@
         <VideoPlay v-else />
       </el-icon>
     </div>
+    <!-- WPE 壁纸：预览图即作者提供的动图 / 静图，网格不加载入口视频 / 页面 -->
+    <div v-else-if="isWpe" class="wpe-video-badge" aria-hidden="true">
+      <el-icon :size="12">
+        <VideoPlay v-if="isWpeVideo" />
+        <Monitor v-else />
+      </el-icon>
+      <span>{{ wpeBadgeText }}</span>
+    </div>
     <!-- 视频标识：GIF 等不可控形态，仅作为静态指示 -->
     <div v-else-if="isVideo" class="video-play-badge" aria-hidden="true">
       <el-icon :size="14">
@@ -81,10 +89,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { WarningFilled, VideoPlay, VideoPause } from "@kabegame/element-plus-icons";
+import { WarningFilled, VideoPlay, VideoPause, Monitor } from "@kabegame/element-plus-icons";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
-import { isVideoMediaType } from "../../utils/mediaMime";
+import { isVideoMediaType, isWpeMediaType, isWpeVideoType, wpeKind } from "../../utils/mediaMime";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@/stores/ui";
 import { useI18n } from "@kabegame/i18n";
@@ -249,6 +257,20 @@ const rootStyle = computed<Record<string, string> | undefined>(() => {
 });
 
 const isVideo = computed(() => isVideoMediaType(props.image.type));
+/** WPE 视频壁纸：网格里只播自带预览图，不悬停加载入口视频。 */
+const isWpeVideo = computed(() => isWpeVideoType(props.image.type));
+/** 所有 WPE 壁纸（视频 / 网页 / …）：网格固定显示作者预览图，不悬停加载原图形态。 */
+const isWpe = computed(() => isWpeMediaType(props.image.type));
+const WPE_KIND_KEYS: Record<string, string> = {
+  web: "gallery.wpeKindWeb",
+  scene: "gallery.wpeKindScene",
+};
+/** 角标文案：视频沿用「WPE · 视频」，其它类型按种类映射（「WPE · 网页」）。 */
+const wpeBadgeText = computed(() => {
+  if (isWpeVideo.value) return t("gallery.wpeVideoBadge");
+  const key = WPE_KIND_KEYS[wpeKind(props.image.type) ?? ""];
+  return key ? `WPE · ${t(key)}` : "WPE";
+});
 
 function pathFromUrlLike(value: string | undefined): string {
   const raw = (value || "").trim();
@@ -291,6 +313,8 @@ let hoverImageOriginalTimer: ReturnType<typeof setTimeout> | null = null;
 // 图片在 hover 时把 prefer 临时升级为 original（替代旧的 forceDesktopLayers）。
 const effectivePrefer = computed<ImagePrefer>(() => {
   if (isVideo.value) return "thumbnail";
+  // WPE 的缩略位本身就是作者提供的动图 / 静图，网格固定用它，滚动时不加载入口视频或页面。
+  if (isWpe.value) return "thumbnail";
   return hoverOriginalActive.value ? "original" : props.prefer;
 });
 const canHoverOriginalPreview = computed(
@@ -298,6 +322,7 @@ const canHoverOriginalPreview = computed(
     props.hoverOriginal &&
     !isCompact.value &&
     !isVideo.value &&
+    !isWpe.value &&
     props.prefer === "thumbnail" &&
     // 原始文件已确认失败（原图链末环 local 已死）时不再升级为原图
     !failedSources.value.includes("local"),
@@ -331,7 +356,7 @@ const handleMouseEnter = () => {
   if (isCompact.value) return;
   clearHoverPreviewTimer();
   clearHoverImageOriginalTimer();
-  if (isVideo.value) {
+  if (isVideo.value && !isWpeVideo.value) {
     hoverPreviewTimer = setTimeout(() => {
       hoverPreviewTimer = null;
       if (isControllableVideo.value) {
@@ -340,7 +365,7 @@ const handleMouseEnter = () => {
         return;
       }
     }, HOVER_PREVIEW_DELAY_MS);
-  } else {
+  } else if (!isWpe.value) {
     hoverImageOriginalTimer = setTimeout(() => {
       if (canHoverOriginalPreview.value) {
         hoverOriginalActive.value = true;
@@ -564,9 +589,29 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
+/* WPE 视频角标：图标 + 短文字，与可控视频的圆形按钮区分 */
+.wpe-video-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  pointer-events: none;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
 /* 可控视频的播放/暂停按钮：让 badge 接收点击 */
-.video-play-badge-interactive {
-  pointer-events: auto;
+.video-play-badge-interactive {  pointer-events: auto;
   cursor: pointer;
   transition:
     background 0.15s ease,

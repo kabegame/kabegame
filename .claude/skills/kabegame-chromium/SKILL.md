@@ -84,7 +84,7 @@ dev 二进制时，扫描兜底照样能找到 app。`CDP 登记 : <旧号>（�
 kabegame 同时开着多个 CEF 窗口，实测 `targets` 输出：
 
 ```
-http://localhost:1420/wallpaper.html    ← 壁纸窗口（排在前面！）
+http://localhost:1420/index.html?window=wallpaper    ← 壁纸窗口（排在前面！与主窗口同一个 index.html）
 http://localhost:1420/gallery           ← 主窗口（SPA，路径随路由变）
 ```
 
@@ -99,6 +99,18 @@ $S targets
 $S shot /tmp/wp.png --url wallpaper
 $S shot /tmp/surf.png --url surf
 ```
+
+`isMainWindow()` 的「路径不以 `.html` 结尾」对壁纸窗口仍成立（路径是 `/index.html`，主窗口是 `/` 或路由路径），
+`--url wallpaper` 子串仍能选中它。
+
+**Windows 上壁纸窗口挂到 `WorkerW` 后 CDP 截不到图**：`shot --url wallpaper` 与裸 `Page.captureScreenshot` 都会等帧
+超时。这**不是**页面降频——2026-10-26 在页面内直接计时：rAF 稳定 ~144Hz（dev 调试面板 `.debug-panel` 第一行有
+MIN / AVG 帧率），fade 过渡 prep → enter 相隔 10ms、提交由 800ms `transitionend` 触发；之前「rAF 约 1s、靠 1400ms
+兜底」的记录是用 CDP 轮询类名造成的测量假象。要测壁纸窗口的时序，在页面里装 `MutationObserver` / `performance.now()`
+记时间线，再一次性读出，不要靠多次 eval 推算。验证壁纸窗口改用 `eval --url wallpaper`
+读 DOM（`img.base` 的 `naturalWidth`、`<video>` 的 `paused` / `volume` / `playbackRate`、dev 调试面板 `.debug-panel`
+的文字）。另外 playwright 的 `connectOverCDP` 会 attach 全部 page，任一窗口忙（如本机在跑 cargo）都会让
+所有命令握手超时；此时可直连单个 page 的 `webSocketDebuggerUrl`（`/json/list`）发 `Runtime.evaluate`。
 
 ## Android（`--android`）
 
@@ -225,7 +237,7 @@ $S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原�
 | `无法加载 playwright-core` | 仓库根跑 `bun install` 恢复依赖 |
 | 点击超时 | 目标被浮层遮住；`cdp.mjs` 已 force，若仍失败检查选择器是否命中隐藏元素 |
 | `eval` 查 DOM 少了某些条目 | 工具箱里 `整理`/`检查更新` 是自定义 `comp`，渲染在 `.tool-row-comp` 而非 `.tool-row`，选择器要带上 |
-| 截到的是全屏壁纸 | 选中了 `wallpaper.html`。别用 `--url localhost:1420`，用默认启发式 |
+| 截到的是全屏壁纸 | 选中了壁纸窗口（`index.html?window=wallpaper`）。别用 `--url localhost:1420`，用默认启发式 |
 
 ## 相关
 

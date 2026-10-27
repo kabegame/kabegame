@@ -83,7 +83,9 @@
 
       <!-- 媒体属性芯片：每个可点的片段都是一个画廊筛选 -->
       <div class="flex flex-wrap items-center gap-1.5">
-        <span class="basic-info-chip">
+        <!-- 目录型 WPE 壁纸：显示「Wallpaper Engine · 类型」，不提供媒体类型筛选 -->
+        <span v-if="isWpeImage" class="basic-info-chip">Wallpaper Engine · {{ wpeKindText }}</span>
+        <span v-else class="basic-info-chip">
           <el-icon class="mr-0.5"><component :is="mediaTypeParts.kind === 'video' ? VideoCamera : Picture" /></el-icon>
           <button
             type="button"
@@ -184,7 +186,7 @@ import { IS_ANDROID, IS_WEB } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { usePluginStore, type Plugin } from "../../stores/plugins";
 import { useSurfStore } from "../../stores/surf";
-import { displayImageMimeType, isVideoMediaType } from "../../utils/mediaMime";
+import { displayImageMimeType, isVideoMediaType, isWpeMediaType, wpeKind } from "../../utils/mediaMime";
 import { aspectBucketForDimensions } from "../../utils/galleryQuery";
 import { openExternalLink } from "../../utils/openExternalLink";
 
@@ -322,6 +324,16 @@ const mediaTypeParts = computed((): { kind: "image" | "video"; format: string } 
 const mediaKindLabel = computed(() =>
   t(mediaTypeParts.value.kind === "video" ? "gallery.imageDetailKindVideo" : "gallery.imageDetailKindImage"),
 );
+/** 目录型 WPE 壁纸：类型显示成「Wallpaper Engine · 视频」，不提供媒体类型过滤链接。 */
+const isWpeImage = computed(() => isWpeMediaType(props.image?.type));
+const wpeKindText = computed(() => {
+  const kind = wpeKind(props.image?.type);
+  if (!kind) return "";
+  if (kind === "video") return t("gallery.wpeKindVideo");
+  if (kind === "web") return t("gallery.wpeKindWeb");
+  if (kind === "scene") return t("gallery.wpeKindScene");
+  return kind;
+});
 
 const mediaKindFilterTarget = computed<ImageDetailGalleryFilterTarget>(() => ({
   type: "media-type",

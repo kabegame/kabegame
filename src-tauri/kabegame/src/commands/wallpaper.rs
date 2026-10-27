@@ -5,7 +5,8 @@ use crate::wallpaper::rotator::pick_random_gallery_wallpaper;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
-use kabegame_core::storage::Storage;
+use kabegame_core::storage::{ImageInfo, Storage};
+use kabegame_core::wpe::properties::WpeVideoProps;
 use std::path::Path;
 use tauri::AppHandle;
 
@@ -24,17 +25,80 @@ fn reject_if_wallpaper_disabled() -> Result<(), String> {
 pub async fn get_current_wallpaper_path_from_settings<R: tauri::Runtime>(
     _app: &tauri::AppHandle<R>,
 ) -> Result<Option<String>, String> {
-    // 从 Settings 获取 settings + image localPath
-    if let Some(id) = Settings::global().get_current_wallpaper_image_id() {
-        let img = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
-        if let Some(info) = img {
-            Ok(Some(info.local_path))
-        } else {
-            Ok(None)
-        }
+    Ok(get_current_wallpaper_target_from_settings()
+        .await?
+        .map(|target| target.path))
+}
+
+/// 当前壁纸的完整目标：窗口前端据此决定播图还是播视频。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallpaperTarget {
+    pub id: String,
+    pub path: String,
+    /// `images.type`（如 `video/mp4`、`x-wpe/video`、`x-wpe/web`）。
+    #[serde(rename = "type")]
+    pub media_type: Option<String>,
+    /// 浏览器兼容副本：普通视频仅在不可直接播放时有值；WPE 视频始终有值；WPE 网页为空
+    /// （页面经 `/wpe/<id>/` 加载）。
+    pub compatible_path: Option<String>,
+    /// 目录型 WPE 视频壁纸的作者默认播放属性；其它类型为 null。
+    pub wpe_video: Option<WpeVideoProps>,
+}
+
+pub async fn get_current_wallpaper_target_from_settings(
+) -> Result<Option<WallpaperTarget>, String> {
+    let Some(id) = Settings::global().get_current_wallpaper_image_id() else {
+        return Ok(None);
+    };
+    let img = Storage::find_image_by_id(&id).map_err(|e| format!("Storage error: {}", e))?;
+    let Some(info) = img else {
+        return Ok(None);
+    };
+    Ok(Some(build_wallpaper_target(info).await))
+}
+
+/// 由图片行组装壁纸目标（当前壁纸、图库预览、应用背景共用）：
+/// WPE 视频的作者属性取自图片 metadata（导入时写入的 `project.json` 原文），不重读磁盘——
+/// 用户属性以后也作为同一份元数据里的一段合并进来；其它类型 `wpe_video` 为 None。
+async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
+    let wpe_video = if kabegame_core::media::image_type::is_wpe_video_type(info.media_type.as_deref())
+    {
+        let image_id = info.id.clone();
+        let raw = tokio::task::spawn_blocking(move || Storage::global().get_metadata(&image_id))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        Some(
+            raw.map(|raw| kabegame_core::wpe::properties::resolve_video_props_from_raw(&raw))
+                .unwrap_or_default(),
+        )
     } else {
-        Ok(None)
+        None
+    };
+
+    WallpaperTarget {
+        id: info.id,
+        path: info.local_path,
+        media_type: info.media_type,
+        compatible_path: info.compatible_path,
+        wpe_video,
     }
+}
+
+/// 图库预览 / 应用背景按 id 取壁纸目标，与当前壁纸共用 [`build_wallpaper_target`]，
+/// 所以预览画布与桌面拿到的是同一份目标结构。行不存在返回 None。
+#[tauri::command]
+pub async fn get_wallpaper_target_for_image(
+    image_id: String,
+) -> Result<Option<WallpaperTarget>, String> {
+    let Some(info) =
+        Storage::find_image_by_id(&image_id).map_err(|e| format!("Storage error: {}", e))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(build_wallpaper_target(info).await))
 }
 
 #[tauri::command]
@@ -49,7 +113,15 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let Some(info) = image else {
         return Err("图片不存在".to_string());
     };
+    let media_type = info.media_type.clone();
     let local_path = info.local_path;
+
+    // 目录型 WPE 壁纸第一阶段只支持窗口模式；用与视频相同的错误码让前端引导切换模式。
+    if kabegame_core::media::image_type::is_wpe_type(media_type.as_deref())
+        && settings.get_wallpaper_mode() != "window"
+    {
+        return Err("REQUIRES_WINDOW_MODE".to_string());
+    }
 
     let requires_window_mode =
         kabegame_core::media::image_type::requires_window_mode(Path::new(&local_path));
@@ -117,6 +189,14 @@ pub async fn get_current_wallpaper_path<R: tauri::Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<String>, String> {
     get_current_wallpaper_path_from_settings(&app).await
+}
+
+/// 壁纸窗口使用的当前壁纸目标（含类型、兼容副本与 WPE 视频属性）。
+#[tauri::command]
+pub async fn get_current_wallpaper_target<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+) -> Result<Option<WallpaperTarget>, String> {
+    get_current_wallpaper_target_from_settings().await
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -355,7 +435,34 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
         .trim_start_matches(r"\\?\")
         .to_string();
 
-    let resolved_wallpaper = if Path::new(&current_cleaned).exists() {
+    // 目录型 WPE 壁纸只在窗口模式有内容；切到原生 / 插件模式时换成画廊里可用的兜底图。
+    let current_is_wpe = Settings::global()
+        .get_current_wallpaper_image_id()
+        .and_then(|id| Storage::find_image_by_id(&id).ok().flatten())
+        .is_some_and(|img| {
+            kabegame_core::media::image_type::is_wpe_type(img.media_type.as_deref())
+        });
+
+    let resolved_wallpaper = if current_is_wpe && mode != "window" {
+        match pick_random_gallery_wallpaper(&mode) {
+            Some(p) => {
+                eprintln!(
+                    "[WARN] set_wallpaper_mode: 当前壁纸是 WPE 目录型壁纸，切到 {} 模式改用兜底图片: {}",
+                    mode, p
+                );
+                p
+            }
+            None => {
+                if was_running {
+                    let _ = rotator.start().await;
+                }
+                return Err(
+                    "当前壁纸是 Wallpaper Engine 壁纸，只能使用窗口模式；画廊中没有其它可用图片可兜底。"
+                        .to_string(),
+                );
+            }
+        }
+    } else if Path::new(&current_cleaned).exists() {
         current_cleaned.clone()
     } else if let Some(p) = pick_random_gallery_wallpaper(&mode) {
         eprintln!(

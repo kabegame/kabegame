@@ -15,7 +15,7 @@
 import { computed } from "vue";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
-import { isVideoMediaType } from "../../utils/mediaMime";
+import { isVideoPlaybackType } from "../../utils/mediaMime";
 
 /**
  * PhotoSwipe 每张幻灯片的内容封装：复用 ImageContent（缩略图→原图流式覆盖）。
@@ -35,7 +35,7 @@ const emit = defineEmits<{
   videoPlayFail: [];
 }>();
 
-const isVideo = computed(() => isVideoMediaType(props.image.type));
+const isVideo = computed(() => isVideoPlaybackType(props.image.type));
 // 激活且未被用户暂停时播放；非激活或双击暂停时暂停，与控件显隐无关。
 const videoPlaying = computed(() => isVideo.value && !!props.active && !props.paused);
 

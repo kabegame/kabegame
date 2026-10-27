@@ -281,7 +281,7 @@
 |------|------------|
 | `apps/kabegame/src/composables/useImageOperations.ts` | 消息提示、确认框文案（如删除成功、是否删除等） |
 | `apps/kabegame/src/composables/useProviderPathRoute.ts` | 面包屑或路由展示用中文（若有） |
-| `apps/kabegame/src/wallpaper.ts` | 壁纸相关 toast/错误提示 |
+| `apps/kabegame/src/components/wallpaper/WallpaperStage.vue` / `views/WallpaperWindow.vue` | 壁纸窗口错误提示（目前仅 dev 调试面板） |
 | `apps/kabegame/src/services/albums.ts` / `components/albums/*.vue` | 画册查询、选择器与默认画册名等用户可见字符串 |
 | `apps/kabegame/src/stores/taskDrawer.ts` | 若有展示用文案 |
 | `apps/kabegame/src/settings/quickSettingsRegistry.ts` | 快捷设置项 label/描述 |

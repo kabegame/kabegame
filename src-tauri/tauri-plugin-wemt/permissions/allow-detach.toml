@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-detach"
+description = "Allows `wemt_detach`: restore the window's original parent, style and rectangle."
+commands.allow = ["wemt_detach"]

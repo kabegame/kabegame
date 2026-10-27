@@ -44,6 +44,7 @@ use tauri_runtime::UserEvent;
 
 #[cfg(target_os = "macos")]
 mod app_mac;
+mod file_access;
 mod runtime;
 mod subprocess;
 mod webview;
@@ -59,6 +60,53 @@ mod protocol;
 /// Start a native CEF download from the webview identified by `webview_label`.
 pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
     webview::start_download(webview_label, url)
+}
+
+// ---- 文件文档策略 ----
+//
+// 某个 webview 需要以 `file://` 加载本地页面、并让页面读同目录文件时（WPE 网页壁纸），
+// 应用先在建窗前登记 label，再按需设置允许的根目录。两层边界都只作用于登记过的 label：
+// 建 browser 时 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004
+// 据此只给它打开 `allow_file_access_from_file_urls`）；它的每个 `file:` 请求在
+// `OnBeforeResourceLoad` 里过目录约束。它的 `file:` 文档也不注入任何初始化脚本。
+
+/// 建窗前登记 `webview_label`。该 label 的 browser 在 `extra_info` 里带
+/// `kabegame.allow_file_access_from_file_urls = true`（CEF 补丁 0004 据此打开文件访问偏好），
+/// 并启用 `file:` 目录约束；初始根目录为空（拒绝所有 `file:` 请求）。
+pub fn allow_file_documents(webview_label: &str) {
+    file_access::allow_file_documents(webview_label)
+}
+
+/// 设置 / 清空 `webview_label` 允许的根目录。`Some(dir)` 只放行 `dir` 内的普通文件
+/// （拒绝越界、符号链接、目录、不存在）；`None` 拒绝所有 `file:` 请求。未登记的 label 返回 Err。
+pub fn set_file_document_root(
+    webview_label: &str,
+    root: Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    file_access::set_file_document_root(webview_label, root)
+}
+
+// ---- 鼠标注入 ----
+
+/// 注入到 webview 的鼠标事件；坐标是视图坐标（DIP，相对 browser 视图左上角）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseInjection {
+    /// 移动（`send_mouse_move_event`）。不带按键标志，页面里不会启动拖放 / 拖选（同 WE）。
+    Move { x: i32, y: i32 },
+    /// 离开视图（`send_mouse_move_event(mouse_leave = 1)`）。
+    Leave { x: i32, y: i32 },
+    /// 左键按下（`send_mouse_click_event(LEFT, up = 0, click_count = 1)`）。
+    LeftDown { x: i32, y: i32 },
+    /// 左键抬起（`send_mouse_click_event(LEFT, up = 1, click_count = 1)`）。
+    LeftUp { x: i32, y: i32 },
+}
+
+/// 经 `CefBrowserHost::SendMouse*Event` 向 `webview_label` 注入鼠标事件。
+///
+/// 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序；只投递到 CEF UI 线程、不等回执，
+/// 找不到 browser 时静默返回 `Ok`。投递失败（CEF 未运行）返回 Err。
+pub fn inject_mouse(webview_label: &str, input: MouseInjection) -> Result<(), String> {
+    webview::inject_mouse(webview_label, input)
 }
 
 /// CEF 驱动的 Tauri runtime。

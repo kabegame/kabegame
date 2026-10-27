@@ -104,6 +104,20 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：本地文件夹同步的 `fs_listener` / `synchronizer` 双管道、路径集合 + `stat` 分类、逐画册 slot 与并发限制、全量/diff 触发矩阵、文件与文件夹删除语义、`make_visible` 唤醒 + 500ms 快照轮询、延迟卡片和逐任务 toast；并记录手动增删边界（Del/右键删除源文件、拖入经 `local-import` 扁平复制到 `sync_folder`、数据库成员写守卫保持只读）。
   - 适用场景：新增或排查本地文件夹监听与同步；理解目录删除为什么保留图片行；维护取消、抢占、进度和事件溢出行为。
 
+## Wallpaper Engine 壁纸（`wpe/`）
+
+- [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
+  - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
+    Steam 库发现与任意文件夹识别、`wpe-import` 内建任务与「壁纸」收集入口、`/wpe/<id>/<rel>` 目录服务、
+    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
+    **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`/wpe` 专属网页 MIME 表与 HTML 产出点 `serve_wpe_html`、CSP `frame-src`、`WallpaperStage` 独立 web 层（跨源 sandbox iframe、不参与双层过渡、切走即销毁）、
+    `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览「桌面画布」`WallpaperDesktopCanvas`、`get_wallpaper_target_for_image`、背景层退回预览图，以及 `cef-ipc` 只收主 frame 的纵深防御；
+    **桌面 `file://` 宿主与鼠标转发**：`wpe_web_host` 作为壁纸窗口导航唯一属主（网页壁纸时整窗导航到入口 `file://`、切走导航回记住的应用页）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求、`file:` 文档不注入初始化脚本，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）。
+  - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、`/wpe` 越界或 MIME 不对、
+    删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
+    排查网页壁纸白屏 / iframe 被 CSP 拦截 / 预览画布比例或交互 / 切走后渲染进程未回收、子 frame 伪造 `cef-ipc` 请求；
+    排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面里出现 `__TAURI_INTERNALS__` / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件。
+
 ## 下载与任务（`downloader-tasks/`）
 
 - [downloader-tasks/DOWNLOADER_FLOW.md](downloader-tasks/DOWNLOADER_FLOW.md)
@@ -206,8 +220,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：排查 Linux 拖到 GIMP/Krita、浏览器上传框或文件管理器仍得到 localhost URL；升级 CEF/Chromium 或 cef-rs bindings；修改拖出授权、webview label 白名单或 custom mime；确认 Windows `DownloadURL` 为什么不受影响。
 
 - [../third-patches/cef/README.md](../third-patches/cef/README.md)
-  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` reset/apply 模型与 re-vendor 流程。现有三个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补完整的落点侧回调；0003 给 Linux 与 macOS Chromium/CEF 补真实文件拖出的起手侧 delegate、`OnStartDragging` 与 custom data 读取（macOS 另需让 `WebDragSource` 提供 `public.file-url` 并摘掉 renderer 污染标记）。生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
-  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移；给 CEF client 加新回调；维护 Linux 真实文件拖出的 Chromium/CEF 两半 patch。
+  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` reset/apply 模型与 re-vendor 流程。现有四个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补完整的落点侧回调；0003 给 Linux 与 macOS Chromium/CEF 补真实文件拖出的起手侧 delegate、`OnStartDragging` 与 custom data 读取（macOS 另需让 `WebDragSource` 提供 `public.file-url` 并摘掉 renderer 污染标记）；0004 按浏览器开启 `allow_file_access_from_file_urls`（建窗 `extra_info` 的 `kabegame.allow_file_access_from_file_urls`，供 `file://` 加载的 WPE 网页壁纸 fetch 同目录文件，目录限制由嵌入方在 `OnBeforeResourceLoad` 负责）。生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
+  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移；给 CEF client 加新回调；维护 Linux 真实文件拖出的 Chromium/CEF 两半 patch；排查某个窗口的 `file://` 页面 fetch 同目录文件失败或意外能读本地文件。
 
 ## 调试（`debug/`）
 
@@ -243,6 +257,9 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：新增设置 key；新增运行时状态类单键刷新；迁移 URL query 状态；排查设置保存态、web readonly 回弹、query 参数同步和 localStorage 迁移。
 
 ## 壁纸（`wallpaper/`）
+
+- [wallpaper/WINDOW_MOUNT_WEMT.md](wallpaper/WINDOW_MOUNT_WEMT.md)
+  - 主题：Windows 窗口壁纸按 WPE 运行时层级挂到 WorkerW，移除旧 Progman 同级 Z-order 修正；列出证据、实现边界与真机验证项。
 
 - [wallpaper/NATIVE_WALLPAPER_COMPAT.md](wallpaper/NATIVE_WALLPAPER_COMPAT.md)
   - 主题：Linux / Windows 原生壁纸的图片格式兼容层。涵盖独立的 `wallpaper_compatible_path`、惰性 JPEG/PNG 转码与复用、样式重应用路径、best-effort 回退，以及删除图片时对兼容副本的安全清理。
