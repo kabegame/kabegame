@@ -203,86 +203,71 @@ pub async fn get_current_wallpaper_target<R: tauri::Runtime>(
 #[serde(rename_all = "camelCase")]
 pub struct RotationStartResult {
     pub started: bool,
-    pub source: String,
-    pub album_id: Option<String>,
+    /// 实际使用的轮播路径
+    pub path: Option<String>,
+    /// 原路径 count / 取行出错，已回落默认随机路径
     pub fallback: bool,
     pub warning: Option<String>,
 }
 
-// TODO: setting-change event driven
+/// 开启时直接拉起轮播线程（位置沿用设置里保存的值，路径不变就接着上次的下一张）；
+/// 拉起失败（如轮播路径下没有图片）回滚为关闭并返回错误。
 #[tauri::command]
-pub fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
+pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
     if enabled {
         reject_if_wallpaper_disabled()?;
     }
-    Settings::global()
+    let settings = Settings::global();
+    settings
         .set_wallpaper_rotation_enabled(enabled)
         .map_err(|e| format!("Settings error: {}", e))?;
 
+    let rotator = WallpaperRotator::global();
     if !enabled {
-        let rotator = WallpaperRotator::global();
-        rotator.stop();
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), String> {
-    reject_if_wallpaper_disabled()?;
-    if album_id != "" {
-        let include = Settings::global().get_wallpaper_rotation_include_subalbums();
-        let images = Storage::global()
-            .get_album_images_for_wallpaper_rotation(&album_id, include)
-            .map_err(|e| e.to_string())?;
-        if images.is_empty() {
-            return Err(String::from("该画册没有画哟，先去画廊添加进去吧！"));
-        }
-    }
-    let normalized: Option<String> = if album_id.clone() == "" {
-        None
-    } else {
-        Some(album_id)
-    };
-
-    Settings::global()
-        .set_wallpaper_rotation_album_id(normalized.clone())
-        .map_err(|e| format!("Settings error: {}", e))?;
-
-    if normalized.is_none() {
-        let rotator = WallpaperRotator::global();
         rotator.stop();
         return Ok(());
     }
-
-    let settings = Settings::global();
-    let enabled = settings.get_wallpaper_rotation_enabled();
-    let album_id_opt = settings.get_wallpaper_rotation_album_id();
-
-    if enabled {
-        let rotator = WallpaperRotator::global();
-        let start_from_current = album_id_opt.map(|s| s.is_empty()).unwrap_or(false);
-        rotator
-            .ensure_running(start_from_current)
-            .await
-            .map_err(|e| format!("启动轮播失败: {}", e))?;
+    if let Err(e) = rotator.ensure_running().await {
+        let _ = settings.set_wallpaper_rotation_enabled(false);
+        return Err(format!("启动轮播失败: {}", e));
     }
-
     Ok(())
 }
 
+/// 设置轮播来源 PathQL 路径（不含分页尾）；空串表示默认全画廊随机路径。
+/// 先校验路径能 count、非空且能取到图片行。路径变化时设置层把位置置为
+/// `WALLPAPER_ROTATION_FROM_START`，这里随即唤醒轮播立刻切到新路径的第 1 张（不论轮播是否开启），
+/// 之后按当前壁纸续接。
 #[tauri::command]
-pub fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Result<(), String> {
+pub async fn set_wallpaper_rotation_path(path: String) -> Result<(), String> {
     reject_if_wallpaper_disabled()?;
-    Settings::global()
-        .set_wallpaper_rotation_include_subalbums(include_subalbums)
+    let settings = Settings::global();
+    let normalized = kabegame_core::wallpaper_rotation::normalize_path(&path);
+    if let Some(p) = normalized.clone() {
+        let mode = settings.get_wallpaper_mode();
+        tokio::task::spawn_blocking(move || {
+            crate::wallpaper::rotator::validate_rotation_path(&p, &mode)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    let changed = settings.get_wallpaper_rotation_path() != normalized;
+    settings
+        .set_wallpaper_rotation_path(normalized)
         .map_err(|e| format!("Settings error: {}", e))?;
-
     let rotator = WallpaperRotator::global();
-    if rotator.is_running() {
-        rotator.reset();
+    if changed {
+        // 线程运行中：由线程切换并重置计时器；未运行：在这里直接切一次
+        rotator.rotate().await?;
     }
 
+    // 已开启时 ensure_running 会重置计时器，下一次自动切换从现在起算
+    if settings.get_wallpaper_rotation_enabled() {
+        rotator
+            .ensure_running()
+            .await
+            .map_err(|e| format!("启动轮播失败: {}", e))?;
+    }
     Ok(())
 }
 
@@ -290,59 +275,19 @@ pub fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Resu
 pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
     reject_if_wallpaper_disabled()?;
     let settings = Settings::global();
-    let enabled = settings.get_wallpaper_rotation_enabled();
-    let album_id_opt = settings.get_wallpaper_rotation_album_id();
-
-    if !enabled {
+    if !settings.get_wallpaper_rotation_enabled() {
         return Err("壁纸轮播未启用".to_string());
     }
-
-    let rotator = WallpaperRotator::global();
-    let mut did_fallback = false;
-    let mut warning: Option<String> = None;
-
-    if let Some(saved) = album_id_opt.as_deref() {
-        if !saved.trim().is_empty() {
-            match rotator.ensure_running(false).await {
-                Ok(_) => {
-                    return Ok(RotationStartResult {
-                        started: true,
-                        source: "album".to_string(),
-                        album_id: Some(saved.to_string()),
-                        fallback: false,
-                        warning: None,
-                    });
-                }
-                Err(e) => {
-                    if e.contains("画册内没有图片") {
-                        return Err(e);
-                    }
-                    if e.contains("画册不存在") {
-                        eprintln!(
-                            "[WARN] start_wallpaper_rotation: saved album_id missing, fallback to gallery. err={}",
-                            e
-                        );
-                        did_fallback = true;
-                        warning = Some("上次选择的画册不存在，已回退到画廊轮播".to_string());
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-    }
-
-    settings
-        .set_wallpaper_rotation_album_id(Some("".to_string()))
-        .map_err(|e| format!("Settings error: {}", e))?;
-    rotator.ensure_running(true).await?;
-
+    let before = settings.get_wallpaper_rotation_path();
+    WallpaperRotator::global().ensure_running().await?;
+    let path = settings.get_wallpaper_rotation_path();
+    // 原先有路径、启动后被换掉 = count 出错回落了默认路径
+    let fallback = before.is_some() && before != path;
     Ok(RotationStartResult {
         started: true,
-        source: "gallery".to_string(),
-        album_id: Some("".to_string()),
-        fallback: did_fallback,
-        warning,
+        path,
+        fallback,
+        warning: fallback.then(|| "原轮播路径不可用，已回退到画廊随机轮播".to_string()),
     })
 }
 
@@ -364,14 +309,6 @@ pub fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), Strin
     }
 
     Ok(())
-}
-
-#[tauri::command]
-pub fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
-    reject_if_wallpaper_disabled()?;
-    Settings::global()
-        .set_wallpaper_rotation_mode(mode)
-        .map_err(|e| format!("Settings error: {}", e))
 }
 
 #[tauri::command]
@@ -488,6 +425,7 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
             // 切出 window 会留下孤儿窗口。
             apply_backend_lifecycle(controller, &old_mode, &mode)?;
             settings.set_wallpaper_mode(mode.clone())?;
+            crate::wallpaper::rotator::relocate_position_for_mode(&mode);
             return Ok(());
         }
     };
@@ -580,6 +518,8 @@ pub async fn set_wallpaper_mode<R: tauri::Runtime>(
     }
 
     settings.set_wallpaper_mode(mode.clone())?;
+    // 有效路径随模式加 / 去媒体过滤：按当前壁纸 id 重定位，保持「下一张」语义
+    crate::wallpaper::rotator::relocate_position_for_mode(&mode);
 
     if rotation_enabled {
         let _ = rotator.start().await;
@@ -647,7 +587,7 @@ pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
         }
         // 之前开启过轮播则恢复轮播
         if settings.get_wallpaper_rotation_enabled() {
-            if let Err(e) = rotator.ensure_running(true).await {
+            if let Err(e) = rotator.ensure_running().await {
                 eprintln!("[WARN] set_wallpaper_disabled: 恢复轮播失败: {}", e);
             }
         }

@@ -24,6 +24,9 @@ pub struct PluginRunParams {
     pub print_config: bool,
     #[serde(default)]
     pub is_dry_run: bool,
+    /// 把插件描述模板冻结进本任务 metadata（CLI `--freeze-template`，v4 协议新增）
+    #[serde(default)]
+    pub freeze_template: bool,
 }
 
 /// 0 会让任务永远无法入队；不设上界，超过全局值时按全局值生效。
@@ -175,6 +178,9 @@ pub async fn run_plugin(
         params["maxConcurrentDownloads"] = Value::from(limit);
     }
     params["isDryRun"] = Value::Bool(p.is_dry_run);
+    if p.freeze_template {
+        params["freezeTemplate"] = Value::Bool(true);
+    }
     let task_id = start_task(params).await?;
 
     Ok(PluginRunOutput {
@@ -403,6 +409,9 @@ pub async fn start_task(task: Value) -> Result<String, String> {
         max_concurrent_downloads: Option<u32>,
         #[serde(default)]
         is_dry_run: bool,
+        /// 只经 CLI PluginRun 传入；前端不用
+        #[serde(default)]
+        freeze_template: bool,
     }
 
     fn default_trigger_source() -> String {
@@ -470,6 +479,7 @@ pub async fn start_task(task: Value) -> Result<String, String> {
     let req = crate::crawler::CrawlTaskRequest {
         task_id: task_id.clone(),
         plugin_file_path: p.plugin_file_path,
+        freeze_template: p.freeze_template,
     };
     crate::crawler::TaskScheduler::global()
         .submit_task(req)

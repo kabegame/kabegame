@@ -307,6 +307,7 @@
 </template>
 
 <script setup lang="ts">
+import { albumRotationPath, rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
 import { ref, computed, watch } from "vue";
 import { ElMessageBox } from "@kabegame/element-plus";
 import { kameMessage as ElMessage } from "@/utils/kameMessage";
@@ -592,7 +593,7 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
 // ---------- 虚拟磁盘 ----------
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
-const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
+const { set: setWallpaperRotationPath } = useSettingKeyState("wallpaperRotationPath");
 const albumDriveEnabled = computed(
   () => !IS_ANDROID && !IS_WEB && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled,
 );
@@ -607,12 +608,8 @@ const openVirtualDrive = async () => {
   }
 };
 
-// 当前轮播画册ID
-const currentRotationAlbumId = computed(() => {
-  const raw = settingsStore.values.wallpaperRotationAlbumId as any as string | null | undefined;
-  const id = (raw ?? "").trim();
-  return id ? id : null;
-});
+// 当前轮播画册ID：轮播路径直接以某画册为根时才有
+const currentRotationAlbumId = computed(() => rotationAlbumIdFromPath(settingsStore.values.wallpaperRotationPath));
 // 轮播是否开启
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
@@ -733,7 +730,7 @@ const createAlbumParentScope = computed<AlbumTreeViewScope>(() =>
 const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
   if (currentRotationAlbumId.value !== deletedAlbumId) return;
   try {
-    await setWallpaperRotationAlbumId(null);
+    await setWallpaperRotationPath(null);
   } catch {
     // 静默失败
   }
@@ -1015,9 +1012,9 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
   if (command === "setWallpaperRotation") {
     try {
       // 如果轮播未开启，先开启轮播
+      // 先换成该画册默认视图的轮播路径，再开启轮播（开启时直接按新路径拉起）
+      await setWallpaperRotationPath(albumRotationPath(id));
       if (!wallpaperRotationEnabled.value) await setWallpaperRotationEnabled(true);
-      // 设置轮播画册
-      await setWallpaperRotationAlbumId(id);
       ElMessage.success(t("albums.rotationStarted", { name }));
     } catch (error) {
       console.error("设置轮播画册失败:", error);

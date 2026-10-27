@@ -780,6 +780,23 @@ body,
   padding-top: var(--sat, env(safe-area-inset-top, 24px));
 }
 
+// 宽屏布局（Android 平板 / 横屏）：侧栏与主内容区各自让开状态栏、导航栏与刘海，
+// 背景仍铺到系统栏下面。侧栏按左侧 inset 加宽，菜单宽度不变。桌面端这些值都是 0。
+.app-container:not(.app-container-compact) {
+  .app-sidebar {
+    width: calc(64px + var(--sal, env(safe-area-inset-left, 0px))) !important;
+    padding-top: var(--sat, env(safe-area-inset-top, 0px));
+    padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
+    padding-left: var(--sal, env(safe-area-inset-left, 0px));
+  }
+
+  .app-main {
+    padding-top: var(--sat, env(safe-area-inset-top, 0px));
+    padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
+    padding-right: var(--sar, env(safe-area-inset-right, 0px));
+  }
+}
+
 /* 紧凑布局公共页头贴齐视口边缘：把页面的水平 gutter 下移到正文，避免全宽页头被
    各页面的滚动/裁剪容器截断；正文仍保持原来的 20px（详情页 16px）留白。 */
 .app-container.app-container-compact {
@@ -1151,9 +1168,12 @@ body,
 </style>
 
 <style lang="scss">
-/* 安卓下全局 Dialog 宽度固定为 90vw（el-dialog 挂载在 body，需非 scoped） */
-html.platform-android .el-dialog {
-  width: 90vw !important;
-  max-width: 90vw !important;
+/* 安卓紧凑宽度（< COMPACT_BREAKPOINT）下全局 Dialog 宽度固定为 90vw；平板宽屏与桌面一致按各自 width。
+   el-dialog 挂载在 body，需非 scoped。 */
+@media (max-width: 767.98px) {
+  html.platform-android .el-dialog {
+    width: 90vw !important;
+    max-width: 90vw !important;
+  }
 }
 </style>

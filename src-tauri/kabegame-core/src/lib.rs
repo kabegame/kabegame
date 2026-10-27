@@ -20,6 +20,7 @@ pub mod scheduler;
 pub mod settings;
 pub mod storage;
 pub mod wallpaper_compat;
+pub mod wallpaper_rotation;
 pub mod wpe;
 pub mod workarounds;
 

@@ -43,10 +43,14 @@ pub fn set_label_key(album_id: String, new_key: String) -> Result<Value, String>
 
 pub fn delete_album(album_id: String) -> Result<Value, String> {
     Storage::global().delete_album(&album_id)?;
-    if let Some(id) = Settings::global().get_wallpaper_rotation_album_id() {
-        if id == album_id {
-            Settings::global().set_wallpaper_rotation_album_id(None)?;
-        }
+    // 轮播路径以该画册为根：回到默认路径（位置随之清零）
+    let rotation_path = Settings::global().get_wallpaper_rotation_path();
+    if rotation_path
+        .as_deref()
+        .and_then(crate::wallpaper_rotation::album_id_of)
+        == Some(album_id.as_str())
+    {
+        Settings::global().set_wallpaper_rotation_path(None)?;
     }
     #[cfg(feature = "virtual-driver")]
     crate::virtual_driver::VirtualDriveService::global().bump_albums();

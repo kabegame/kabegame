@@ -59,6 +59,7 @@
 </template>
 
 <script setup lang="ts">
+import { rotationAlbumIdFromPath } from "@/utils/wallpaperRotationPath";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Delete, Folder, Monitor, Picture, PriceTag, StarFilled } from "@kabegame/element-plus-icons";
@@ -360,7 +361,10 @@ function displayName(node: Album) {
 }
 const settings = useSettingsStore();
 function isRotatingAlbum(node: Album) {
-  return !!settings.values.wallpaperRotationEnabled && settings.values.wallpaperRotationAlbumId === node.id;
+  return (
+    !!settings.values.wallpaperRotationEnabled &&
+    rotationAlbumIdFromPath(settings.values.wallpaperRotationPath) === node.id
+  );
 }
 function folderStatusBad(node: Album) {
   return !!node.folderStatus && node.folderStatus.state !== "ok";

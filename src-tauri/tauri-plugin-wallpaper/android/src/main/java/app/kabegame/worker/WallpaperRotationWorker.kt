@@ -4,23 +4,21 @@ import android.app.WallpaperManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.database.sqlite.SQLiteDatabase
 import android.util.Log
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import app.kabegame.util.BitmapStyleProcessor
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
-import java.util.ArrayDeque
 
 class WallpaperRotationWorker(
     private val appContext: android.content.Context,
     params: WorkerParameters
 ) : Worker(appContext, params) {
 
-    private data class ImageRow(val id: String, val localPath: String)
     private data class RotationPayload(val imagePath: String, val style: String)
 
     override fun doWork(): Result {
@@ -51,205 +49,62 @@ class WallpaperRotationWorker(
         }
     }
 
+    /**
+     * 消费 Rust 预取的轮播队列 `rotation_queue.json`：
+     * `{ path, count, position, currentImageId?, items: [{ id, localPath, position }] }`。
+     *
+     * Worker 在冷进程里跑、没有 PathQL，选图规则全在 Rust（`wallpaper/rotator.rs` 的 android_queue）：
+     * 这里只弹出首个文件仍在的 item，把推进后的位置与当前壁纸 id 写回队列文件，
+     * 由 Rust 下次刷新队列时同步回 settings.json（Worker 不写 settings.json，避免与运行中的应用互相覆盖）。
+     */
     private fun rotateWallpaper(): RotationPayload? {
         val dataDir = appContext.filesDir
-        val settingsFile = File(dataDir, "settings.json")
-        val settingsJson = readJsonObject(settingsFile) ?: JSONObject()
+        val settingsJson = readJsonObject(File(dataDir, "settings.json")) ?: JSONObject()
 
         val enabled = settingsJson.optBoolean("wallpaperRotationEnabled", false)
         if (!enabled) {
             return null
         }
-
-        val albumId = settingsJson.optString("wallpaperRotationAlbumId", "")
-            .trim()
-            .ifEmpty { null }
-        val includeSubalbums = settingsJson.optBoolean("wallpaperRotationIncludeSubalbums", true)
-        val rotationMode = settingsJson.optString("wallpaperRotationMode", "random")
-        val currentImageId = settingsJson.optString("currentWallpaperImageId", "")
-            .trim()
-            .ifEmpty { null }
         var style = settingsJson.optString("wallpaperStyle", "fill").ifBlank { "fill" }
         if (style == "system") {
             style = "fill"
         }
 
-        val images = queryImages(albumId, includeSubalbums)
-        if (images.isEmpty()) {
+        val queueFile = File(dataDir, "rotation_queue.json")
+        val queue = readJsonObject(queueFile) ?: return null
+        // 队列属于旧路径（设置已改、Rust 尚未刷新）：不动作，等 Rust 重建
+        val settingsPath = settingsJson.optString("wallpaperRotationPath", "")
+        if (queue.optString("path", "") != settingsPath) {
             return null
         }
 
-        val rotationStateFile = File(dataDir, "rotation_state.json")
-        val rotationStateJson = readJsonObject(rotationStateFile)
-        val selectedIndex = if (rotationMode == "sequential") {
-            val startIndex = if (rotationStateJson != null) {
-                rotationStateJson.optInt("currentIndex", 0)
-            } else if (currentImageId != null) {
-                val pos = images.indexOfFirst { it.id == currentImageId }
-                if (pos >= 0) (pos + 1) % images.size else 0
-            } else {
-                0
+        val items = queue.optJSONArray("items") ?: return null
+        var pickedIndex = -1
+        for (i in 0 until items.length()) {
+            val item = items.optJSONObject(i) ?: continue
+            if (imagePathExists(item.optString("localPath", ""))) {
+                pickedIndex = i
+                break
             }
-            pickSequentialIndex(images, startIndex) ?: return null
-        } else {
-            pickRandomIndex(images, currentImageId) ?: return null
         }
+        if (pickedIndex < 0) {
+            return null
+        }
+        val picked = items.getJSONObject(pickedIndex)
 
-        val selected = images[selectedIndex]
-        val nextIndex = (selectedIndex + 1) % images.size
-
-        settingsJson.put("currentWallpaperImageId", selected.id)
-        writeJsonAtomic(settingsFile, settingsJson)
-        writeJsonAtomic(rotationStateFile, JSONObject().put("currentIndex", nextIndex))
+        val rest = JSONArray()
+        for (i in pickedIndex + 1 until items.length()) {
+            rest.put(items.get(i))
+        }
+        queue.put("items", rest)
+        queue.put("position", picked.optLong("position", 0) + 1)
+        queue.put("currentImageId", picked.optString("id", ""))
+        writeJsonAtomic(queueFile, queue)
 
         return RotationPayload(
-            imagePath = selected.localPath,
+            imagePath = picked.optString("localPath", ""),
             style = style
         )
-    }
-
-    private fun queryImages(albumId: String?, includeSubalbums: Boolean): List<ImageRow> {
-        val dbFile = File(appContext.filesDir, "databases/images.db")
-        if (!dbFile.exists()) {
-            return emptyList()
-        }
-
-        return SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
-            if (albumId != null) {
-                if (!includeSubalbums) {
-                    queryAlbumImagesDirect(db, albumId)
-                } else {
-                    queryAlbumImagesWithDescendants(db, albumId)
-                }
-            } else {
-                val result = mutableListOf<ImageRow>()
-                val cursor = db.rawQuery(
-                    "SELECT CAST(id AS TEXT) as id, local_path FROM images ORDER BY crawled_at ASC",
-                    null
-                )
-                cursor.use {
-                    val idIdx = cursor.getColumnIndexOrThrow("id")
-                    val pathIdx = cursor.getColumnIndexOrThrow("local_path")
-                    while (cursor.moveToNext()) {
-                        result.add(
-                            ImageRow(
-                                id = cursor.getString(idIdx),
-                                localPath = cursor.getString(pathIdx)
-                            )
-                        )
-                    }
-                }
-                result
-            }
-        }
-    }
-
-    private fun queryAlbumImagesDirect(db: SQLiteDatabase, albumId: String): List<ImageRow> {
-        val result = mutableListOf<ImageRow>()
-        val cursor = db.rawQuery(
-            """
-            SELECT CAST(i.id AS TEXT) as id, i.local_path
-            FROM images i
-            INNER JOIN album_images ai ON i.id = ai.image_id
-            WHERE ai.album_id = ?
-            ORDER BY COALESCE(ai."order", ai.rowid) ASC
-            """.trimIndent(),
-            arrayOf(albumId)
-        )
-        cursor.use {
-            val idIdx = cursor.getColumnIndexOrThrow("id")
-            val pathIdx = cursor.getColumnIndexOrThrow("local_path")
-            while (cursor.moveToNext()) {
-                result.add(
-                    ImageRow(
-                        id = cursor.getString(idIdx),
-                        localPath = cursor.getString(pathIdx)
-                    )
-                )
-            }
-        }
-        return result
-    }
-
-    private fun collectSubtreeAlbumIdsBfs(db: SQLiteDatabase, rootId: String): List<String> {
-        val out = mutableListOf<String>()
-        val queue = ArrayDeque<String>()
-        queue.add(rootId)
-        while (queue.isNotEmpty()) {
-            val id = queue.removeFirst()
-            out.add(id)
-            val c = db.rawQuery(
-                "SELECT id FROM albums WHERE parent_id = ? ORDER BY created_at ASC",
-                arrayOf(id)
-            )
-            c.use {
-                val idx = it.getColumnIndexOrThrow("id")
-                while (it.moveToNext()) {
-                    queue.add(it.getString(idx))
-                }
-            }
-        }
-        return out
-    }
-
-    private fun queryAlbumImagesWithDescendants(db: SQLiteDatabase, rootAlbumId: String): List<ImageRow> {
-        val check = db.rawQuery("SELECT 1 FROM albums WHERE id = ? LIMIT 1", arrayOf(rootAlbumId))
-        check.use {
-            if (!it.moveToFirst()) {
-                return emptyList()
-            }
-        }
-        val merged = mutableListOf<ImageRow>()
-        val seen = HashSet<String>()
-        for (aid in collectSubtreeAlbumIdsBfs(db, rootAlbumId)) {
-            for (row in queryAlbumImagesDirect(db, aid)) {
-                if (seen.add(row.id)) {
-                    merged.add(row)
-                }
-            }
-        }
-        return merged
-    }
-
-    private fun pickRandomIndex(images: List<ImageRow>, currentId: String?): Int? {
-        val candidates = mutableListOf<Int>()
-        for (idx in images.indices) {
-            val image = images[idx]
-            if (!imagePathExists(image.localPath)) {
-                continue
-            }
-            if (currentId != null && images.size > 1 && image.id == currentId) {
-                continue
-            }
-            candidates.add(idx)
-        }
-
-        if (candidates.isEmpty()) {
-            for (idx in images.indices) {
-                if (imagePathExists(images[idx].localPath)) {
-                    candidates.add(idx)
-                }
-            }
-        }
-        if (candidates.isEmpty()) {
-            return null
-        }
-        val seed = (System.nanoTime().ushr(1) % candidates.size.toLong()).toInt()
-        return candidates[seed]
-    }
-
-    private fun pickSequentialIndex(images: List<ImageRow>, startIndex: Int): Int? {
-        if (images.isEmpty()) {
-            return null
-        }
-        val normalizedStart = ((startIndex % images.size) + images.size) % images.size
-        for (offset in images.indices) {
-            val idx = (normalizedStart + offset) % images.size
-            if (imagePathExists(images[idx].localPath)) {
-                return idx
-            }
-        }
-        return null
     }
 
     private fun imagePathExists(path: String): Boolean {

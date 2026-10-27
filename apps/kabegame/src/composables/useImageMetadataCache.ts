@@ -6,6 +6,8 @@ import { imageMetadataCacheDb } from "../cache/imageMetadataCache";
 export interface ResolvedImageMetadata {
   data: unknown | null;
   pluginVersion: number;
+  /** CLI `--freeze-template` 冻结的描述模板；非空时覆盖插件包内模板 */
+  template: string | null;
 }
 
 /** 按 metadataId 解析插件 metadata（全局 LRU + IndexedDB 缓存，最多 1024 条） */
@@ -20,6 +22,11 @@ const MAX_CACHE_SIZE = 1024;
 
 function normalizePluginVersion(version: number | null | undefined): number {
   return typeof version === "number" && Number.isFinite(version) && version >= 0 ? Math.floor(version) : 0;
+}
+
+/** 空白模板视为未冻结；IndexedDB 旧条目没有该字段，同样归一为 null */
+export function normalizeFrozenTemplate(template: unknown): string | null {
+  return typeof template === "string" && template.trim() ? template : null;
 }
 
 const cacheKeyFor = (metadataId: number): string => `m${metadataId}`;
@@ -71,7 +78,7 @@ function ensureInit(): Promise<void> {
     .toArray()
     .then((all) => {
       for (const { cacheKey, data } of all) {
-        mem.load(cacheKey, data);
+        mem.load(cacheKey, { ...data, template: normalizeFrozenTemplate(data.template) });
       }
     })
     .catch(() => {});
@@ -84,15 +91,18 @@ function ensureInit(): Promise<void> {
  */
 export function useProvideImageMetadataCache() {
   async function fetchMetadata(imageId: string): Promise<(ResolvedImageMetadata & { id: number }) | null> {
-    const full = await invoke<{ id: number; data?: unknown | null; pluginVersion?: number | null } | null>(
-      "get_image_metadata_full",
-      { imageId },
-    );
+    const full = await invoke<{
+      id: number;
+      data?: unknown | null;
+      pluginVersion?: number | null;
+      template?: string | null;
+    } | null>("get_image_metadata_full", { imageId });
     if (!full) return null;
     return {
       id: full.id,
       data: full.data ?? null,
       pluginVersion: normalizePluginVersion(full.pluginVersion),
+      template: normalizeFrozenTemplate(full.template),
     };
   }
 
@@ -115,6 +125,7 @@ export function useProvideImageMetadataCache() {
     const value: ResolvedImageMetadata = {
       data: full.data,
       pluginVersion: full.pluginVersion,
+      template: full.template,
     };
     // 查询期间 metadata 可能已经迁移，必须按返回行自己的 id 缓存。
     const returnedKey = cacheKeyFor(full.id);

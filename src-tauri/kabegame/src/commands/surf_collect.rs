@@ -263,5 +263,5 @@ pub async fn surf_save_page_snapshot<R: Runtime>(
         "capturedAt": super::surf_receive::now_ms(),
     });
     // 空 / 超限由 core 的 page_snapshot::validate 拒绝；搜索索引只含标题与 URL 也由 core 统一处理。
-    Storage::global().insert_metadata_row(&value, &host, SURF_METADATA_VERSION, None)
+    Storage::global().insert_metadata_row(&value, &host, SURF_METADATA_VERSION, None, None)
 }

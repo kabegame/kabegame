@@ -273,7 +273,7 @@ fn finish_insert(
 
 fn insert_project_metadata(project: &WpeProject) -> Result<i64, String> {
     Storage::global()
-        .insert_metadata_row(&project.raw, WPE_IMPORT_PLUGIN_ID, 0, None)
+        .insert_metadata_row(&project.raw, WPE_IMPORT_PLUGIN_ID, 0, None, None)
         .map_err(|e| format!("写入 metadata 失败：{e}"))
 }
 

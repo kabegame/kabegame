@@ -1,11 +1,20 @@
+//! 壁纸轮播：一律读设置里的一个 PathQL 路径，按持久化位置逐张前进。
+//!
+//! 每次切换：`count(有效路径)` → 出错落回默认随机路径 → 定起点（当前壁纸 id 在路径里的下一张，
+//! 找不到才用持久化位置）→ 取该位置的一张（页大小 1）→ 设壁纸后写回 `currentWallpaperImageId`
+//! 与 `位置 + 1`。换路径时设置层把位置置为 `WALLPAPER_ROTATION_FROM_START`（-1），下一次从第 1 张
+//! 开始、不按当前 id 定位；`set_wallpaper_rotation_path` 命令随即唤醒轮播切这一次。路径与有效路径的约定见
+//! `kabegame_core::wallpaper_rotation`，整体说明见 `cocs/wallpaper/ROTATION_PATHQL.md`。
+
 use super::manager::WallpaperController;
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::providers::{images_at, provider_runtime};
-use kabegame_core::settings::Settings;
+use kabegame_core::providers::{count_at, images_at, query_fetch};
+use kabegame_core::settings::{Settings, WALLPAPER_ROTATION_FROM_START};
 use kabegame_core::storage::{ImageInfo, Storage};
+use kabegame_core::wallpaper_rotation as rotation_path;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use tauri::AppHandle;
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
@@ -27,181 +36,329 @@ pub(crate) fn random_index(len: usize) -> usize {
     (x as usize) % len
 }
 
-/// 顺序壁纸轮播 marker (区分 gallery / album)。
-/// `Time(t)` = images.crawled_at; `Order(n)` = album_images."order"。
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum CurrentMarker {
-    Time(i64),
-    Order(i64),
+/// 文件是否还在。媒体类型不在这里判断：原生模式的有效路径已带 `_kb_fc/media-type/image`
+/// （见 `rotation_path::effective_path`），前端「用当前视图轮播」的视频跳过提示与此对应。
+/// Android 的 `content://` 无法用 `Path::exists` 判断，视为存在。
+pub(crate) fn wallpaper_file_available(img: &ImageInfo) -> bool {
+    img.local_path.starts_with("content://") || Path::new(&img.local_path).exists()
 }
 
-/// 给定 source + 当前壁纸 image id, 查 storage 拿 marker 初值; 找不到返回 None
-/// (caller 用 None 时路径段填 0, 表示从最早一张开始)。
-fn current_marker_for_source(
-    source: &RotationSource,
-    current_id: Option<&str>,
-) -> Option<CurrentMarker> {
-    let id = current_id?.trim();
-    if id.is_empty() {
-        return None;
-    }
-    match source {
-        RotationSource::Gallery => {
-            let img = Storage::find_image_by_id(id).ok().flatten()?;
-            Some(CurrentMarker::Time(img.crawled_at as i64))
-        }
-        RotationSource::Album(album_id) => Storage::get_album_image_order(album_id, id)
-            .ok()
-            .flatten()
-            .map(CurrentMarker::Order),
-    }
+/// 本轮解析出的轮播来源。
+struct RotationSource {
+    /// 设置里的原始路径
+    path: String,
+    /// 按壁纸模式加过媒体过滤的路径，count 与取行都用它
+    effective: String,
+    count: u64,
+    /// count / 取行出错后改用了默认随机路径
+    fallback: bool,
+    /// 目录型 WPE 壁纸能否参与：只有窗口模式能渲染，原生 / Plasma 插件逐张跳过。
+    /// 不放进有效路径：`media-type/image` 是「非视频」，WPE 行仍会被 count 进来。
+    allow_wpe: bool,
 }
 
-fn extract_marker_from(source: &RotationSource, img: &ImageInfo) -> CurrentMarker {
-    match source {
-        RotationSource::Album(_) => CurrentMarker::Order(img.album_order.unwrap_or(0)),
-        RotationSource::Gallery => CurrentMarker::Time(img.crawled_at as i64),
-    }
+/// 把设置路径换成新的默认随机路径（位置随之置为从头开始）。
+fn fall_back_to_default(reason: &str) -> Result<String, String> {
+    let path = rotation_path::default_path();
+    eprintln!("[WALLPAPER_ROTATOR] {reason}，回落默认路径 {path}");
+    Settings::global().set_wallpaper_rotation_path(Some(path.clone()))?;
+    Ok(path)
 }
 
-fn sequential_path(source: &RotationSource, marker: Option<CurrentMarker>) -> String {
-    match (source, marker) {
-        (RotationSource::Album(id), Some(CurrentMarker::Order(o))) => {
-            format!(
-                "images://gallery/hide/album/{}/bigger_order/{}/l100l",
-                id, o
-            )
-        }
-        (RotationSource::Album(id), _) => {
-            format!("images://gallery/hide/album/{}/bigger_order/0/l100l", id)
-        }
-        (RotationSource::Gallery, Some(CurrentMarker::Time(t))) => {
-            format!("images://gallery/hide/bigger_crawler_time/{}/l100l", t)
-        }
-        (RotationSource::Gallery, _) => {
-            "images://gallery/hide/bigger_crawler_time/0/l100l".to_string()
-        }
-    }
-}
-
-/// 顺序模式: 在 source 上从 current_marker 之后取下一批 100 张, 找首张可用图返回; 全 100 张
-/// 不可用则用最后一张的 marker 推进, 直到 path 返回空 (后面没有了) → None。
-fn load_next_sequential(
-    source: &RotationSource,
-    current_marker: Option<CurrentMarker>,
+fn count_source(
+    path: String,
     wallpaper_mode: &str,
-) -> Result<Option<ImageInfo>, String> {
-    let mut marker = current_marker;
-    loop {
-        let path = sequential_path(source, marker);
-        let images = images_at(&path)?;
-        if images.is_empty() {
-            return Ok(None);
+    fallback: bool,
+) -> Result<RotationSource, String> {
+    let effective = rotation_path::effective_path(&path, wallpaper_mode);
+    let count = count_at(&effective)? as u64;
+    Ok(RotationSource {
+        path,
+        effective,
+        count,
+        fallback,
+        allow_wpe: wallpaper_mode == "window",
+    })
+}
+
+/// 读设置路径并 count；未设置时写入默认随机路径，count 出错时回落默认路径再 count 一次。
+fn resolve_source(wallpaper_mode: &str) -> Result<RotationSource, String> {
+    let path = match Settings::global().get_wallpaper_rotation_path() {
+        Some(p) => p,
+        None => {
+            let p = rotation_path::default_path();
+            Settings::global().set_wallpaper_rotation_path(Some(p.clone()))?;
+            p
         }
-        if let Some(img) = images
-            .iter()
-            .find(|img| is_wallpaper_suitable(img, wallpaper_mode))
-        {
-            return Ok(Some(img.clone()));
+    };
+    match count_source(path.clone(), wallpaper_mode, false) {
+        Ok(src) => Ok(src),
+        Err(e) => {
+            let default = fall_back_to_default(&format!("count {path} 失败: {e}"))?;
+            count_source(default, wallpaper_mode, true)
         }
-        // 这 100 张全不可用 → 推进 marker 到最后一张, 继续下一批
-        let last = images.last().expect("non-empty checked above");
-        marker = Some(extract_marker_from(source, last));
     }
 }
 
-/// 单图可作壁纸判定（路径存在 + 媒体类型匹配 wallpaper_mode）。
-/// random / sequential 共用; 集中放置便于以后扩展（格式过滤、最小分辨率等）。
-pub(crate) fn is_wallpaper_suitable(img: &ImageInfo, wallpaper_mode: &str) -> bool {
-    if !Path::new(&img.local_path).exists() {
-        return false;
+/// 设置位置在当前 count 下的起点：越过末尾统一回到第 1 张。
+fn wrapped_position(position: u64, count: u64) -> u64 {
+    if position >= count {
+        0
+    } else {
+        position
     }
-    let ty = img.media_type.as_deref();
-    // 目录型 WPE 壁纸第一阶段只支持窗口模式；原生 / Plasma 插件没有内容可渲染。
-    if kabegame_core::media::image_type::is_wpe_type(ty) {
-        return wallpaper_mode == "window";
-    }
-    if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
-        return true;
-    }
-    !kabegame_core::media::image_type::is_video_like_type(ty)
 }
 
-/// 随机模式: 从 `<base>/_kb_x100x/` 随机抽一页, 再从该页可用图中随机取一张;
-/// 该页没有可用图则换下一页 (不重复抽);
-/// 所有页都 try 完返回 None。base 由 source 决定:
-/// - Gallery → `images://gallery/hide/all/_kb_x100x`
-/// - Album(id) → `images://gallery/hide/album/<id>/_kb_x100x`
-fn load_random_image_for_wallpaper(
-    source: &RotationSource,
-    wallpaper_mode: &str,
-) -> Result<Option<ImageInfo>, String> {
-    let rt = provider_runtime();
-    let base_path = random_base_path(source);
-    let mut pages: Vec<String> = rt
-        .list(&base_path)
-        .map_err(|e| format!("list {}: {}", base_path, e))?
+/// 当前壁纸在 `effective` 里的 1 起序号，即下一张的 0 起位置；当前 id 为空或不在路径里返回 None。
+fn locate_after_current(effective: &str) -> Option<u64> {
+    let id = Settings::global().get_current_wallpaper_image_id()?;
+    query_fetch(&rotation_path::rank_path(effective, &id))
+        .ok()?
         .into_iter()
-        .filter(|c| c.name.parse::<usize>().is_ok())
-        .map(|c| c.name)
-        .collect();
+        .next()?
+        .get("row_index")?
+        .as_u64()
+}
 
-    while !pages.is_empty() {
-        let idx = random_index(pages.len());
-        let page = pages.swap_remove(idx);
-        let path = format!("{}/{}", base_path, page);
-        let images = images_at(&path)?;
-        let mut candidates: Vec<ImageInfo> = images
-            .into_iter()
-            .filter(|img| is_wallpaper_suitable(img, wallpaper_mode))
-            .collect();
-        if !candidates.is_empty() {
-            let idx = random_index(candidates.len());
-            return Ok(Some(candidates.swap_remove(idx)));
+/// 本轮起点：查询视图会随图片增删、改字段而变，持久化位置可能已经错位，所以优先取
+/// 「当前壁纸的下一张」并写回位置；当前壁纸不在路径里时才用持久化位置。
+/// 刚换的路径（位置为 `WALLPAPER_ROTATION_FROM_START`）从第 1 张开始，不定位。
+fn start_position(src: &RotationSource) -> u64 {
+    let settings = Settings::global();
+    let position = settings.get_wallpaper_rotation_position();
+    if position == WALLPAPER_ROTATION_FROM_START {
+        return 0;
+    }
+    match locate_after_current(&src.effective) {
+        Some(n) => {
+            let _ = settings.set_wallpaper_rotation_position(n as i64);
+            wrapped_position(n, src.count)
+        }
+        None => wrapped_position(position.max(0) as u64, src.count),
+    }
+}
+
+/// 从 `start` 起循环取最多 `limit` 张文件仍在的图，返回 `(0 起位置, 图)`；最多扫一整轮。
+/// 按 `chunk` 张一页取行：切换壁纸用 1，Android 预取队列用 100。
+fn collect_available(
+    src: &RotationSource,
+    start: u64,
+    limit: usize,
+    chunk: u64,
+) -> Result<Vec<(u64, ImageInfo)>, String> {
+    let mut out = Vec::new();
+    if src.count == 0 || limit == 0 {
+        return Ok(out);
+    }
+    let chunk = chunk.max(1);
+    let mut pos = wrapped_position(start, src.count);
+    let mut scanned = 0u64;
+    while out.len() < limit && scanned < src.count {
+        let page = pos / chunk + 1;
+        let rows = images_at(&rotation_path::rows_path(&src.effective, chunk, page))?;
+        if rows.is_empty() {
+            // count 之后数据变少：本页已越过末尾，回到开头继续扫
+            if pos == 0 {
+                break;
+            }
+            pos = 0;
+            continue;
+        }
+        let page_start = (page - 1) * chunk;
+        for (i, img) in rows.into_iter().enumerate() {
+            let p = page_start + i as u64;
+            if p < pos {
+                continue;
+            }
+            scanned += 1;
+            let wpe_ok = src.allow_wpe
+                || !kabegame_core::media::image_type::is_wpe_type(img.media_type.as_deref());
+            if wpe_ok && wallpaper_file_available(&img) {
+                out.push((p, img));
+            }
+            if out.len() >= limit || scanned >= src.count {
+                break;
+            }
+        }
+        pos = page * chunk;
+        if pos >= src.count {
+            pos = 0;
         }
     }
-    Ok(None)
+    Ok(out)
 }
 
-fn random_base_path(source: &RotationSource) -> String {
-    match source {
-        RotationSource::Album(id) => format!("images://gallery/hide/album/{}/_kb_x100x", id),
-        RotationSource::Gallery => "images://gallery/hide/all/_kb_x100x".to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{random_base_path, sequential_path, CurrentMarker, RotationSource};
-
-    #[test]
-    fn gallery_source_paths_have_images_scheme() {
-        let album = RotationSource::Album("album-1".to_string());
-        let gallery = RotationSource::Gallery;
-
-        for path in [
-            sequential_path(&album, Some(CurrentMarker::Order(12))),
-            sequential_path(&album, None),
-            sequential_path(&gallery, Some(CurrentMarker::Time(34))),
-            sequential_path(&gallery, None),
-            random_base_path(&album),
-            random_base_path(&gallery),
-        ] {
-            assert!(
-                path.starts_with("images://gallery/hide/"),
-                "unexpected provider path: {path}"
-            );
+/// 选出下一张：返回图与写回的新位置；本轮没有可用图返回 None。
+/// 取行出错与 count 出错同等对待：回落默认路径重试一次。
+fn pick_next(wallpaper_mode: &str) -> Result<Option<(ImageInfo, u64)>, String> {
+    let mut src = resolve_source(wallpaper_mode)?;
+    let picked = match collect_available(&src, start_position(&src), 1, 1) {
+        Ok(v) => v,
+        Err(e) if !src.fallback => {
+            let default = fall_back_to_default(&format!("取行 {} 失败: {e}", src.path))?;
+            src = count_source(default, wallpaper_mode, true)?;
+            collect_available(&src, start_position(&src), 1, 1)?
         }
+        Err(e) => return Err(e),
+    };
+    Ok(picked.into_iter().next().map(|(pos, img)| (img, pos + 1)))
+}
+
+/// 切到下一张并写回状态；定时器与手动切换共用。返回是否换了壁纸。
+async fn advance_and_apply() -> Result<bool, String> {
+    let settings = Settings::global();
+    let wallpaper_mode = settings.get_wallpaper_mode();
+    let mode = wallpaper_mode.clone();
+    let picked = tokio::task::spawn_blocking(move || pick_next(&mode))
+        .await
+        .map_err(|e| format!("轮播选图任务失败: {e}"))??;
+    let Some((image, next_position)) = picked else {
+        eprintln!("[WALLPAPER_ROTATOR] 轮播路径下没有可用图片，跳过本轮");
+        return Ok(false);
+    };
+
+    // 先推进位置：即使这张设壁纸失败，下一轮也不会卡在同一张上
+    settings.set_wallpaper_rotation_position(next_position as i64)?;
+
+    // 交给后端的是原始 local_path：原生后端在 native.rs 里经
+    // wallpaper_compat::ensure_native_wallpaper_path 按需生成 / 复用 wallpaper_compatible_path
+    let manager = WallpaperController::global().active_manager().await?;
+    let style = settings.get_wallpaper_rotation_style();
+    let transition = settings.get_wallpaper_rotation_transition();
+    manager
+        .set_wallpaper(&image.local_path, &style, &transition)
+        .await?;
+    eprintln!("[WALLPAPER_ROTATOR] 壁纸已更换: {}", image.local_path);
+
+    let _ = settings.set_current_wallpaper_image_id(Some(image.id.clone()));
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let ids = vec![image.id];
+    if Storage::global()
+        .update_image_last_set_wallpaper_at(&ids[0], now_ts)
+        .is_ok()
+    {
+        GlobalEmitter::global()
+            .emit_image_fields(&ids, serde_json::json!({ "lastSetWallpaperAt": now_ts }));
+    }
+    Ok(true)
+}
+
+/// 切换壁纸模式会改变有效路径（加 / 去媒体过滤）：按当前壁纸 id 在新有效路径里重定位位置。
+/// 下一次切换本身也会重定位，这里提前写回，让设置里的位置与新模式一致。
+/// 当前 id 为空、不在新有效路径里，或刚换了路径还没切过，则保留原位置。
+pub fn relocate_position_for_mode(wallpaper_mode: &str) {
+    let settings = Settings::global();
+    let Some(path) = settings.get_wallpaper_rotation_path() else {
+        return;
+    };
+    if settings.get_wallpaper_rotation_position() == WALLPAPER_ROTATION_FROM_START {
+        return;
+    }
+    let effective = rotation_path::effective_path(&path, wallpaper_mode);
+    if let Some(n) = locate_after_current(&effective) {
+        let _ = settings.set_wallpaper_rotation_position(n as i64);
     }
 }
 
-/// 模式切换 / 兜底场景: 从画廊里随机取一张可作壁纸的图, 返回 local_path。
+/// 校验一个将要设为轮播来源的路径：count 成功、非空，且第 1 张能解析成图片行。
+pub fn validate_rotation_path(path: &str, wallpaper_mode: &str) -> Result<(), String> {
+    let effective = rotation_path::effective_path(path, wallpaper_mode);
+    let count = count_at(&effective).map_err(|e| format!("轮播路径无效: {e}"))?;
+    if count == 0 {
+        return Err("该视图下没有可作壁纸的图片".to_string());
+    }
+    images_at(&rotation_path::rows_path(&effective, 1, 1))
+        .map_err(|e| format!("轮播路径无效: {e}"))?;
+    Ok(())
+}
+
+/// 模式切换 / 兜底场景：从默认随机路径里随机取一张文件仍在的图，返回 local_path。
 /// `commands::wallpaper::set_wallpaper_mode` 在原壁纸文件不存在时用作 fallback。
 pub fn pick_random_gallery_wallpaper(wallpaper_mode: &str) -> Option<String> {
-    load_random_image_for_wallpaper(&RotationSource::Gallery, wallpaper_mode)
-        .ok()
-        .flatten()
-        .map(|img| img.local_path)
+    let src = count_source(rotation_path::default_path(), wallpaper_mode, false).ok()?;
+    if src.count == 0 {
+        return None;
+    }
+    let start = random_index(src.count.min(usize::MAX as u64) as usize) as u64;
+    collect_available(&src, start, 1, 1)
+        .ok()?
+        .into_iter()
+        .next()
+        .map(|(_, img)| img.local_path)
+}
+
+/// Android：WorkManager Worker 在冷进程里跑、没有 PathQL，由这里预取后续可用图写成队列文件，
+/// Worker 只弹队首。格式：`{ path, count, position, currentImageId?, items: [{ id, localPath, position }] }`。
+#[cfg(target_os = "android")]
+mod android_queue {
+    use super::*;
+
+    const QUEUE_LEN: usize = 100;
+    const QUEUE_FILE: &str = "rotation_queue.json";
+    /// 旧版 Worker 的游标文件，迁到队列后删除
+    const LEGACY_STATE_FILE: &str = "rotation_state.json";
+
+    fn data_dir() -> std::path::PathBuf {
+        let settings_json = kabegame_core::app_paths::AppPaths::global().settings_json();
+        settings_json
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    }
+
+    /// 先把 Worker 推进的位置与当前壁纸同步回设置，再从该位置重新预取。
+    pub fn refill() -> Result<(), String> {
+        let dir = data_dir();
+        let file = dir.join(QUEUE_FILE);
+        let _ = std::fs::remove_file(dir.join(LEGACY_STATE_FILE));
+        let settings = Settings::global();
+
+        if let Some(old) = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        {
+            let same_path = old.get("path").and_then(|v| v.as_str())
+                == settings.get_wallpaper_rotation_path().as_deref();
+            // 只有 Worker 真的切过（写了 currentImageId）才同步：否则文件里的 position 只是
+            // 上次写下的起点，会把刚换路径时的 WALLPAPER_ROTATION_FROM_START 覆盖掉
+            let consumed_id = old.get("currentImageId").and_then(|v| v.as_str());
+            if let (true, Some(id)) = (same_path, consumed_id) {
+                if let Some(pos) = old.get("position").and_then(|v| v.as_i64()) {
+                    let _ = settings.set_wallpaper_rotation_position(pos);
+                }
+                let _ = settings.set_current_wallpaper_image_id(Some(id.to_string()));
+            }
+        }
+
+        let src = resolve_source(&settings.get_wallpaper_mode())?;
+        let start = start_position(&src);
+        let items: Vec<serde_json::Value> = collect_available(&src, start, QUEUE_LEN, 100)?
+            .into_iter()
+            .map(|(pos, img)| {
+                serde_json::json!({ "id": img.id, "localPath": img.local_path, "position": pos })
+            })
+            .collect();
+        let queue = serde_json::json!({
+            "path": src.path,
+            "count": src.count,
+            "position": start,
+            "items": items,
+        });
+        let tmp = dir.join(format!("{QUEUE_FILE}.tmp"));
+        std::fs::write(&tmp, queue.to_string()).map_err(|e| format!("写轮播队列失败: {e}"))?;
+        std::fs::rename(&tmp, &file).map_err(|e| format!("替换轮播队列失败: {e}"))
+    }
+}
+
+/// Android 上刷新 Worker 队列；其它平台无操作。
+pub fn refresh_android_queue() {
+    #[cfg(target_os = "android")]
+    if let Err(e) = android_queue::refill() {
+        eprintln!("[WALLPAPER_ROTATOR] 刷新 Android 轮播队列失败: {e}");
+    }
 }
 
 // 轮播线程控制标志位
@@ -214,26 +371,13 @@ const STATE_STARTING: u8 = 1; // 开启中
 const STATE_RUNNING: u8 = 2; // 运行中
 const STATE_STOPPING: u8 = 3; // 关闭中
 
-#[derive(Debug, Clone)]
-enum RotationSource {
-    Album(String),
-    Gallery,
-}
-
-#[derive(Debug, Clone)]
-struct ImageLite {
-    id: String,
-    local_path: String,
-    media_type: Option<String>,
-}
-
 pub struct WallpaperRotator {
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     app: AppHandle<crate::AppRuntime>,
     running: Arc<AtomicBool>,
-    state: Arc<AtomicU8>,             // 轮播状态：Idle/Starting/Running/Stopping
-    current_index: Arc<Mutex<usize>>, // 用于顺序模式
-    control_flags: Arc<AtomicU8>,     // 轮播线程控制标志位
-    notify: Arc<Notify>,              // 唤醒轮播线程（手动切换/重置）
+    state: Arc<AtomicU8>,         // 轮播状态：Idle/Starting/Running/Stopping
+    control_flags: Arc<AtomicU8>, // 轮播线程控制标志位
+    notify: Arc<Notify>,          // 唤醒轮播线程（手动切换/重置）
 }
 
 // 全局 WallpaperRotator 单例
@@ -261,86 +405,14 @@ impl WallpaperRotator {
             app,
             running: Arc::new(AtomicBool::new(false)),
             state: Arc::new(AtomicU8::new(STATE_IDLE)),
-            current_index: Arc::new(Mutex::new(0)),
             control_flags: Arc::new(AtomicU8::new(0)),
             notify: Arc::new(Notify::new()),
         }
     }
 
-    fn normalize_path(p: &str) -> String {
-        // Windows 下避免因为 \\?\ 前缀 / 斜杠方向 / 大小写导致“当前壁纸”比对失败
-        p.trim_start_matches(r"\\?\")
-            .replace('/', "\\")
-            .to_ascii_lowercase()
-    }
-
-    /// 轮播候选是否允许：根据壁纸模式与行的 `type` 筛选。
-    /// - 窗口模式（window）：图片、视频与目录型 WPE 壁纸均可参与。
-    /// - 插件模式（plasma-plugin）：图片与视频可用；目录型 WPE 壁纸不可用。
-    /// - 原生模式（native）等：仅图片参与轮播，视频与 WPE 壁纸过滤掉。
-    fn media_allowed_in_mode(image: &ImageLite, wallpaper_mode: &str) -> bool {
-        let ty = image.media_type.as_deref();
-        if kabegame_core::media::image_type::is_wpe_type(ty) {
-            return wallpaper_mode == "window";
-        }
-        if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
-            return true;
-        }
-        !kabegame_core::media::image_type::is_video_like_type(ty)
-    }
-
-    async fn load_images_for_source(
-        source: &RotationSource,
-        _include_subalbums: bool,
-        rotation_mode: &str,
-        wallpaper_mode: &str,
-    ) -> Result<Vec<ImageLite>, String> {
-        // 两种模式都走 path-only API, 内置可用性过滤; loader 只返 0 / 1 张。
-        let picked = if rotation_mode == "sequential" {
-            let current_id = Settings::global().get_current_wallpaper_image_id();
-            let marker = current_marker_for_source(source, current_id.as_deref());
-            load_next_sequential(source, marker, wallpaper_mode)?
-        } else {
-            load_random_image_for_wallpaper(source, wallpaper_mode)?
-        };
-        Ok(picked
-            .into_iter()
-            .map(|img| ImageLite {
-                id: img.id,
-                local_path: img.local_path,
-                media_type: img.media_type,
-            })
-            .collect())
-    }
-
-    async fn get_current_wallpaper_path(_app: &AppHandle<crate::AppRuntime>) -> Option<String> {
-        let id = Settings::global().get_current_wallpaper_image_id()?;
-        let img = Storage::find_image_by_id(&id).ok().flatten()?;
-        let p = img.local_path;
-        if Path::new(&p).exists() {
-            Some(p)
-        } else {
-            None
-        }
-    }
-
-    fn align_sequential_index_from_current(&self, images: &[ImageLite], current_path: &str) {
-        let cur = Self::normalize_path(current_path);
-        if let Some(pos) = images
-            .iter()
-            .position(|img| Self::normalize_path(&img.local_path) == cur)
-        {
-            if let Ok(mut idx) = self.current_index.lock() {
-                *idx = (pos + 1) % images.len();
-            }
-        }
-    }
-
     fn spawn_task(&self) {
-        let app = self.app.clone();
         let running = Arc::clone(&self.running);
         let state = Arc::clone(&self.state);
-        let current_index = Arc::clone(&self.current_index);
         let notify = Arc::clone(&self.notify);
         let control_flags = Arc::clone(&self.control_flags);
 
@@ -362,12 +434,10 @@ impl WallpaperRotator {
             ticker.tick().await;
 
             loop {
-                tokio::select! {
-                    _ = ticker.tick() => { /* timer */ }
-                    _ = notify.notified() => { /* manual/reset */ }
-                }
-
-                eprintln!("[WALLPAPER_ROTATOR] 尝试轮播下一张");
+                let woke_by_timer = tokio::select! {
+                    _ = ticker.tick() => true,
+                    _ = notify.notified() => false, // manual/reset
+                };
 
                 // 检查状态：如果是 Stopping 或 running=false，则退出
                 let current_state = state.load(Ordering::Acquire);
@@ -376,14 +446,10 @@ impl WallpaperRotator {
                     break;
                 }
 
-                // 获取设置
                 let settings = Settings::global();
-                let enabled = settings.get_wallpaper_rotation_enabled();
-                let wallpaper_mode = settings.get_wallpaper_mode();
 
                 // 未启用轮播：仅保持线程等待（便于后续快速启用），不做任何切换
-                if !enabled {
-                    eprintln!("未启用轮播，跳过");
+                if !settings.get_wallpaper_rotation_enabled() {
                     continue;
                 }
 
@@ -402,211 +468,21 @@ impl WallpaperRotator {
 
                 // 处理控制指令
                 let flags = control_flags.swap(0, Ordering::Relaxed);
-                if (flags & FLAG_RESET) != 0 && (flags & FLAG_ROTATE) == 0 {
-                    // 仅重置定时器，不触发切换
-                    ticker.reset();
-                    continue;
-                }
-
-                // 选择轮播来源：画册 / 画廊
-                let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
-                let rotation_mode = settings.get_wallpaper_rotation_mode();
-                let source = match settings.get_wallpaper_rotation_album_id() {
-                    Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
-                    _ => RotationSource::Gallery,
-                };
-
-                // 获取图片列表
-                let mut source = source;
-                let mut images = match Self::load_images_for_source(
-                    &source,
-                    include_subalbums,
-                    &rotation_mode,
-                    &wallpaper_mode,
-                )
-                .await
-                {
-                    Ok(imgs) => imgs,
-                    Err(e) => {
-                        // 画册不存在：回退到画廊
-                        if e.contains("画册不存在") {
-                            if settings
-                                .set_wallpaper_rotation_album_id(Some("".to_string()))
-                                .is_ok()
-                            {
-                                source = RotationSource::Gallery;
-                                Self::load_images_for_source(
-                                    &source,
-                                    false,
-                                    &rotation_mode,
-                                    &wallpaper_mode,
-                                )
-                                .await
-                                .unwrap_or_default()
-                            } else {
-                                eprintln!("获取轮播图片失败: {}", e);
-                                Vec::new()
-                            }
-                        } else {
-                            eprintln!("获取轮播图片失败: {}", e);
-                            Vec::new()
-                        }
-                    }
-                };
-
-                // 无可用图片：画册->画廊->关闭轮播并清空 currentWallpaperImageId
-                if images.is_empty() {
-                    match source {
-                        RotationSource::Album(_) => {
-                            // 先回退到画廊
-                            if settings
-                                .set_wallpaper_rotation_album_id(Some("".to_string()))
-                                .is_ok()
-                            {
-                                source = RotationSource::Gallery;
-                                images = Self::load_images_for_source(
-                                    &source,
-                                    false,
-                                    &rotation_mode,
-                                    &wallpaper_mode,
-                                )
-                                .await
-                                .unwrap_or_default();
-                            }
-                        }
-                        RotationSource::Gallery => {}
-                    }
-
-                    if images.is_empty() {
-                        // 画廊也没有：降级到非轮播
-                        let _ = settings.set_wallpaper_rotation_enabled(false);
-                        let _ = settings.set_wallpaper_rotation_album_id(None);
-                        let _ = settings.set_current_wallpaper_image_id(None);
-                    }
-                    eprintln!("无可用轮播图片，退出");
-                    continue;
-                }
-
-                // 选择图片
-                let selected_image = match rotation_mode.as_str() {
-                    "sequential" => {
-                        // Album：按 current_index 递进；Gallery：images 已按 id > current 预排序，从 0 开始即可。
-                        let is_gallery = matches!(source, RotationSource::Gallery);
-                        let mut idx = match current_index.lock() {
-                            Ok(i) => i,
-                            Err(_) => continue,
-                        };
-                        let start_idx = if is_gallery { 0 } else { *idx };
-                        let mut selected: Option<ImageLite> = None;
-                        for i in 0..images.len() {
-                            let current_idx = (start_idx + i) % images.len();
-                            let image = &images[current_idx];
-                            if Path::new(&image.local_path).exists()
-                                && Self::media_allowed_in_mode(image, &wallpaper_mode)
-                            {
-                                selected = Some(image.clone());
-                                if !is_gallery {
-                                    *idx = (current_idx + 1) % images.len();
-                                }
-                                break;
-                            }
-                        }
-                        match selected {
-                            Some(s) => s,
-                            None => continue,
-                        }
-                    }
-                    _ => {
-                        // 随机模式：尽量排除当前壁纸
-                        let current_wallpaper_path = Self::get_current_wallpaper_path(&app).await;
-                        let current_norm =
-                            current_wallpaper_path.as_deref().map(Self::normalize_path);
-
-                        let existing_indices: Vec<usize> = images
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(idx, img)| {
-                                if !Path::new(&img.local_path).exists() {
-                                    return None;
-                                }
-                                if !Self::media_allowed_in_mode(img, &wallpaper_mode) {
-                                    return None;
-                                }
-                                if let Some(ref cur) = current_norm {
-                                    if Self::normalize_path(&img.local_path) == *cur {
-                                        return None;
-                                    }
-                                }
-                                Some(idx)
-                            })
-                            .collect();
-
-                        let candidates = if existing_indices.is_empty() {
-                            // 没有候选：退化为“任意存在的图片”
-                            images
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(idx, img)| {
-                                    if Path::new(&img.local_path).exists()
-                                        && Self::media_allowed_in_mode(img, &wallpaper_mode)
-                                    {
-                                        Some(idx)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                        } else {
-                            existing_indices
-                        };
-                        if candidates.is_empty() {
-                            continue;
-                        }
-                        let random_idx = random_index(candidates.len());
-                        images[candidates[random_idx]].clone()
-                    }
-                };
-
-                eprintln!("选择图片 {}", selected_image.local_path);
-
-                // 设置壁纸
-                let wallpaper_path = selected_image.local_path.clone();
-
-                let controller = WallpaperController::global();
-                let manager = match controller.active_manager().await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        eprintln!("获取壁纸后端失败: {}", e);
+                if (flags & FLAG_ROTATE) == 0 {
+                    if (flags & FLAG_RESET) != 0 {
+                        // 仅重置定时器，不触发切换
+                        ticker.reset();
                         continue;
                     }
-                };
-
-                let style = settings.get_wallpaper_rotation_style();
-                let transition = settings.get_wallpaper_rotation_transition();
-                if let Err(e) = manager
-                    .set_wallpaper(&wallpaper_path, &style, &transition)
-                    .await
-                {
-                    eprintln!("设置壁纸失败: {}", e);
-                    continue;
+                    if !woke_by_timer {
+                        // notify 留下的 permit：标志已在上一轮一并处理（如 rotate 紧跟 reset），
+                        // 不能当成定时器到期再切一次
+                        continue;
+                    }
                 }
 
-                // 同步更新全局”当前壁纸”（imageId）
-                let _ = settings.set_current_wallpaper_image_id(Some(selected_image.id.clone()));
-
-                let now_ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let ids = vec![selected_image.id.clone()];
-                if Storage::global()
-                    .update_image_last_set_wallpaper_at(&ids[0], now_ts)
-                    .is_ok()
-                {
-                    GlobalEmitter::global().emit_image_fields(
-                        &ids,
-                        serde_json::json!({ "lastSetWallpaperAt": now_ts }),
-                    );
+                if let Err(e) = advance_and_apply().await {
+                    eprintln!("[WALLPAPER_ROTATOR] 轮播切换失败: {}", e);
                 }
 
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器
@@ -619,33 +495,22 @@ impl WallpaperRotator {
         });
     }
 
+    /// 按"当前设置"确保轮播线程存在；未启用轮播时不启动。
     pub async fn start(&self) -> Result<(), String> {
-        // 兼容旧调用点：start() 尝试按"当前设置"确保轮播线程存在。
-        // 注意：如果用户未启用轮播或未选择来源（album_id=None），这里不会强制启动线程。
-        let settings = Settings::global();
-        if !settings.get_wallpaper_rotation_enabled() {
+        if !Settings::global().get_wallpaper_rotation_enabled() {
             return Ok(());
         }
-        let album_id = settings.get_wallpaper_rotation_album_id();
-        let start_from_current = album_id
-            .as_deref()
-            .map(|s| s.trim().is_empty())
-            .unwrap_or(false);
-        self.ensure_running(start_from_current).await
+        self.ensure_running().await
     }
 
-    /// 确保轮播线程已启动（必要时会做一次“启动前验证/首张壁纸兜底”）。
-    ///
-    /// - start_from_current=true：当轮播来源为“画廊”（album_id="") 时，优先从当前壁纸开始（不立刻换壁纸）。
-    /// - 注意：开启/切换轮播不会立刻切换当前壁纸；首次自动切换发生在 interval 到期后（或用户手动触发 rotate）。
-    pub async fn ensure_running(&self, _start_from_current: bool) -> Result<(), String> {
+    /// 确保轮播线程已启动。开启 / 恢复轮播不会立刻换壁纸，首次自动切换发生在 interval 到期后
+    /// （或用户手动触发 rotate）；位置沿用设置里保存的值，路径不变就接着上次的下一张。
+    pub async fn ensure_running(&self) -> Result<(), String> {
         // 壁纸功能已关闭：静默跳过，不启动轮播线程。
         if Settings::global().get_wallpaper_disabled() {
             return Ok(());
         }
-        // 已在运行：切换轮播来源时不应报错，直接 reset 让任务按新设置继续运行即可。
-        // 画廊顺序模式由 `current_wallpaper_image_id` 在 DB 层面定位下一张（`images.id > ?`），
-        // 不再需要预加载全画廊并对齐 `current_index`。
+        // 已在运行：设置变化后 reset 让任务按新设置继续运行即可。
         if self.running.load(Ordering::Relaxed) {
             self.reset();
             return Ok(());
@@ -673,45 +538,19 @@ impl WallpaperRotator {
                 return Err("壁纸轮播未启用".to_string());
             }
 
-            let album_id = settings.get_wallpaper_rotation_album_id();
-            let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
-            let source = match album_id {
-                Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
-                _ => RotationSource::Gallery,
-            };
-
-            let rotation_mode = settings.get_wallpaper_rotation_mode();
-            let wallpaper_mode = settings.get_wallpaper_mode();
-            let images = Self::load_images_for_source(
-                &source,
-                include_subalbums,
-                &rotation_mode,
-                &wallpaper_mode,
-            )
-            .await?;
-            if images.is_empty() {
-                return Err(match source {
-                    RotationSource::Album(_) => "画册内没有图片".to_string(),
-                    RotationSource::Gallery => "画廊内没有图片".to_string(),
-                });
-            }
-
-            // Album 顺序模式：基于当前壁纸对齐 current_index（不触发立即切换）。
-            // Gallery 顺序模式改由 `images.id > current` 在 DB 层定位下一张，无需对齐。
-            if matches!(source, RotationSource::Album(_)) && rotation_mode == "sequential" {
-                if let Some(cur) = Self::get_current_wallpaper_path(&self.app).await {
-                    if images.iter().any(|img| {
-                        Self::normalize_path(&img.local_path) == Self::normalize_path(&cur)
-                    }) {
-                        self.align_sequential_index_from_current(&images, &cur);
-                    }
-                }
+            let mode = settings.get_wallpaper_mode();
+            let src = tokio::task::spawn_blocking(move || resolve_source(&mode))
+                .await
+                .map_err(|e| format!("轮播启动校验失败: {e}"))??;
+            if src.count == 0 {
+                return Err("轮播路径下没有图片".to_string());
             }
 
             #[cfg(target_os = "android")]
             {
                 use tauri_plugin_wallpaper::WallpaperExt;
 
+                refresh_android_queue();
                 let interval = settings.get_wallpaper_rotation_interval_minutes().max(15) as u32;
 
                 self.app
@@ -745,158 +584,28 @@ impl WallpaperRotator {
 
     /// 立刻切换到下一张壁纸（用于托盘菜单/快捷操作）
     ///
-    /// - 如果轮播器正在运行，使用 interval 的 reset_immediately 来立即触发切换
-    /// - 如果轮播已启用但未运行，直接 start 一个实例
-    /// - 如果轮播未启用，执行一次壁纸切换（需要画册ID）
-    /// - 依赖当前设置：画册、随机/顺序、原生/窗口模式、style/transition
+    /// - 轮播线程正在运行：设置标志位 + notify，由线程立即处理一次切换
+    /// - 否则在当前任务里切换一次；轮播已启用则随后启动轮播线程
     pub async fn rotate(&self) -> Result<(), String> {
         // 壁纸功能已关闭：静默跳过，不切换壁纸。
         if Settings::global().get_wallpaper_disabled() {
             return Ok(());
         }
-        // 检查轮播器是否正在运行
+        // 桌面端运行中：轮播线程可能正在 await tick，交给它处理
+        #[cfg(not(target_os = "android"))]
         if self.running.load(Ordering::Relaxed) {
-            // 轮播线程里可能正在 await tick；如果这里去抢 std::sync::Mutex 会卡住很久。
-            // 改为：设置标志位 + notify，轮播线程会立即处理一次切换。
             self.control_flags.fetch_or(FLAG_ROTATE, Ordering::Relaxed);
             self.notify.notify_one();
             return Ok(());
         }
-        println!("[DEBUG] 切换 轮播器没有运行，启动");
 
-        // 获取设置
-        let settings = Settings::global();
-        let album_id = settings.get_wallpaper_rotation_album_id();
-        let include_subalbums = settings.get_wallpaper_rotation_include_subalbums();
-        let rotation_mode = settings.get_wallpaper_rotation_mode();
-        let wallpaper_mode = settings.get_wallpaper_mode();
-        let source = match album_id {
-            Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
-            _ => RotationSource::Gallery,
-        };
+        advance_and_apply().await?;
+        refresh_android_queue();
 
-        let mut source = source;
-        let mut images = Self::load_images_for_source(
-            &source,
-            include_subalbums,
-            &rotation_mode,
-            &wallpaper_mode,
-        )
-        .await
-        .unwrap_or_default();
-
-        // 无可用图片：画册->画廊->关闭轮播并清空 currentWallpaperImageId
-        if images.is_empty() {
-            if matches!(source, RotationSource::Album(_)) {
-                // 回退到画廊
-                let _ = settings.set_wallpaper_rotation_album_id(Some("".to_string()));
-                source = RotationSource::Gallery;
-                images =
-                    Self::load_images_for_source(&source, false, &rotation_mode, &wallpaper_mode)
-                        .await
-                        .unwrap_or_default();
-            }
-
-            if images.is_empty() {
-                // 画廊也没有：降级到非轮播
-                let _ = settings.set_wallpaper_rotation_enabled(false);
-                let _ = settings.set_wallpaper_rotation_album_id(None);
-                let _ = settings.set_current_wallpaper_image_id(None);
-                return Ok(());
-            }
-        }
-
-        // 选择图片
-        let selected_image = match rotation_mode.as_str() {
-            "sequential" => {
-                // Album：按 current_index 递进；Gallery：images 已按 id > current 预排序，从 0 开始即可。
-                let is_gallery = matches!(source, RotationSource::Gallery);
-                let mut idx = self
-                    .current_index
-                    .lock()
-                    .map_err(|e| format!("无法获取顺序索引: {}", e))?;
-                let start_idx = if is_gallery { 0 } else { *idx };
-                let mut found = false;
-                let mut selected: Option<ImageLite> = None;
-
-                for i in 0..images.len() {
-                    let current_idx = (start_idx + i) % images.len();
-                    let image = &images[current_idx];
-                    if Path::new(&image.local_path).exists()
-                        && Self::media_allowed_in_mode(image, &wallpaper_mode)
-                    {
-                        selected = Some(image.clone());
-                        if !is_gallery {
-                            *idx = (current_idx + 1) % images.len();
-                        }
-                        found = true;
-                        break;
-                    }
-                }
-
-                if !found {
-                    return Err("顺序模式下没有找到存在的图片".to_string());
-                }
-
-                selected.unwrap()
-            }
-            _ => {
-                // 随机模式：找到所有存在的图片，然后随机抽取一张
-                let existing_images: Vec<&ImageLite> = images
-                    .iter()
-                    .filter(|img| {
-                        Path::new(&img.local_path).exists()
-                            && Self::media_allowed_in_mode(img, &wallpaper_mode)
-                    })
-                    .collect();
-
-                if existing_images.is_empty() {
-                    return Err("随机模式下没有找到存在的图片".to_string());
-                }
-
-                let random_idx = random_index(existing_images.len());
-                existing_images[random_idx].clone()
-            }
-        };
-
-        // 设置壁纸
-        let wallpaper_path = selected_image.local_path.clone();
-
-        // 使用壁纸管理器设置壁纸
-        let controller = WallpaperController::global();
-        let manager = controller.active_manager().await?;
-
-        let style = settings.get_wallpaper_rotation_style();
-        let transition = settings.get_wallpaper_rotation_transition();
-        manager
-            .set_wallpaper(&wallpaper_path, &style, &transition)
-            .await?;
-
-        println!("壁纸已更换: {}", wallpaper_path);
-
-        // 同步更新全局"当前壁纸"（imageId）
-        let _ = settings.set_current_wallpaper_image_id(Some(selected_image.id.clone()));
-
-        let now_ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let ids = vec![selected_image.id.clone()];
-        if Storage::global()
-            .update_image_last_set_wallpaper_at(&ids[0], now_ts)
-            .is_ok()
-        {
-            GlobalEmitter::global()
-                .emit_image_fields(&ids, serde_json::json!({ "lastSetWallpaperAt": now_ts }));
-        }
-
-        // 如果轮播已启用但未运行，启动轮播器
-        let enabled = settings.get_wallpaper_rotation_enabled();
+        let enabled = Settings::global().get_wallpaper_rotation_enabled();
         if enabled && !self.running.load(Ordering::Relaxed) {
-            // 这里不要求“从当前壁纸开始”，因为 rotate 本身就是用户手动触发的一次切换
-            self.ensure_running(false).await?;
+            self.ensure_running().await?;
         }
-
         Ok(())
     }
 
@@ -935,6 +644,7 @@ impl WallpaperRotator {
             let app = self.app.clone();
             tauri::async_runtime::spawn(async move {
                 use tauri_plugin_wallpaper::WallpaperExt;
+                let _ = tokio::task::spawn_blocking(refresh_android_queue).await;
                 let interval = Settings::global().get_wallpaper_rotation_interval_minutes();
                 let _ = app
                     .wallpaper()
@@ -962,5 +672,17 @@ impl WallpaperRotator {
             STATE_STOPPING => "stopping".to_string(),
             _ => "unknown".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrapped_position;
+
+    #[test]
+    fn position_past_end_wraps_to_first() {
+        assert_eq!(wrapped_position(3, 10), 3);
+        assert_eq!(wrapped_position(10, 10), 0);
+        assert_eq!(wrapped_position(25, 7), 0);
     }
 }

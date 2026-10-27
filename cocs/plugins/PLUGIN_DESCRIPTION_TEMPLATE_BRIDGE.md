@@ -42,7 +42,8 @@ flowchart TD
 
 - 爬虫在 `download_image` 的 opts 里传入 **`metadata`**（任意 JSON，由插件自行约定结构）。
 - 后端在 Rhai/WebView 入口写入 `metadata` 表，后续 `images` / `task_failed_images` 只保存 `metadata_id`。
-- 详情区按需加载 metadata 后，EJS **仅接收** `ejs.render(tpl, { metadata })` 中的 `metadata`，与 `pluginId` 配合使用。
+- 详情区按需加载 metadata 后，EJS 接收 `ejs.render(tpl, { metadata, plugin_version })`：`metadata` 为写入时的 JSON，`plugin_version` 为写入时插件的 packed 版本。
+- **冻结模板**：CLI `plugin run --freeze-template` 在任务冻结时（`freeze_task`）读一次包内 `kbDescriptionTemplate`，放进 `TaskParams.frozen_template`；`Task::insert_metadata` 把它写进本任务每行 `metadata.template`，与 `plugin_id` / `plugin_version` 一起盖章。开关只在内存中经 `CrawlTaskRequest` 传递，不入任务记录，前端不提供。内建插件没有包文件，dry-run 不写 metadata，都不冻结。
 
 详见 [DOWNLOADER_FLOW.md](../downloader-tasks/DOWNLOADER_FLOW.md)、[crawler/V8_RUNTIME.md](../crawler/V8_RUNTIME.md) 中 `downloadImage` / `metadata` 说明。
 
@@ -53,7 +54,9 @@ flowchart TD
 1. **包内路径**：由 `packageJson.kbDescriptionTemplate` 指定，不依赖固定文件名。
 2. **后端**：列表只下发清单；`/plugin_file/<id>/<path>?v=<version>` 经核心 `package_file` 白名单和版本校验后从 kgpg 读取。模板源码不常驻 `Plugin`。
 3. **前端**：`services/pluginFiles.ts::usePluginDescriptionTemplate` 在面板用到插件时获取模板，按完整 URL 缓存 Promise；失败移出缓存，更新或删除插件时失效。不同版本、商店源和导入预览各自隔离。
-4. **展示**：加载完成前不渲染 iframe，也不回退展示原始 metadata；完成后有模板则渲染，无模板则显示 metadata 键值。切换图片后忽略旧请求的晚到结果。
+4. **冻结模板优先**：`get_image_metadata_full` 返回行的 `template`（`images://id_<id>/metadata_full`）。面板并行获取它和插件模板，不等前者为空再去拉后者；最终模板为「冻结模板非空 ? 冻结模板 : 插件模板」，有冻结模板时不等插件模板加载完。插件模板只在 `pluginStore.plugins`（已安装列表）里按 `image.pluginId` 查找，所以 `--id` 测试 id 的图片只能靠冻结模板渲染。
+5. **展示**：加载完成前不渲染 iframe，也不回退展示原始 metadata；完成后有模板则渲染，无模板则显示 metadata 键值。切换图片后忽略旧请求的晚到结果。
+6. **冻结模板的生命周期**：它随 metadata 行按 id 不可变。开启「去重时更新元数据」时，去重命中会把旧图改挂到本次新建的 metadata 行，data 与模板一起被覆盖；本次未冻结时模板随之清空。metadata 迁移把冻结模板原样带到新行，插件升级后不跟着更新（见 [METADATA_MIGRATION.md](../crawler/METADATA_MIGRATION.md)）。前端 metadata 缓存按 metadataId，改挂后自然失效。
 
 完整 HTTP 与缓存契约见 [PLUGIN_FILE_ENDPOINT.md](PLUGIN_FILE_ENDPOINT.md)。
 
@@ -96,7 +99,7 @@ flowchart TD
 ### 4.2 `__bridge.getLocale` / `__bridge.getPluginData` / `__bridge.getCache` / `__bridge.setCache` / `__bridge.openUrl` / 全局 `<a>` 点击桥接
 
 1. **`getLocale()`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getLocale' }`；父窗口回 **`{ type: 'ejs-bridge-response', id, data }`**，`data` 为应用当前 i18n locale 字符串（如 `en`、`zh`、`ja`、`zhtw`）。
-2. **`getPluginData()`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getPluginData' }`；父窗口用当前图片的 `image.pluginId` 调用只读命令 `get_plugin_data`，回 **`{ type: 'ejs-bridge-response', id, data }`**。iframe 不能指定 plugin id，也没有写入 API。
+2. **`getPluginData()`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getPluginData' }`；父窗口用当前图片的 `image.pluginId` 调用只读命令 `get_plugin_data`，回 **`{ type: 'ejs-bridge-response', id, data }`**。iframe 不能指定 plugin id，也没有写入 API。测试 id 运行写入的插件数据也记在测试 id 下，冻结模板因此能读到。
 3. **`getCache(key)` / `setCache(key, data)`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'getCache' | 'setCache', key, data? }`；父窗口按当前图片的 `image.pluginId` 给 `key` 加插件作用域后读写宿主 IndexedDB + LRU 缓存。iframe 不能跨插件读取缓存。
 4. **`openUrl(url)`**：iframe 发送 `{ type: 'ejs-bridge', id, action: 'openUrl', url }`；父窗口校验 **`http:` / `https:`** 后调用 **`@tauri-apps/plugin-opener` 的 `openUrl`**，成功回 **`{ type: 'ejs-bridge-response', id }`**，失败回 **`error`** 字符串。
 5. **全局 `<a>` 点击桥接**：注入脚本在 iframe 文档级监听点击事件，命中 `<a>` 后优先取 `data-url`，否则取 `href`（仅放行 `http` / `https`），再通过 `openUrl` 交给宿主打开。
@@ -128,9 +131,10 @@ flowchart TD
 | 阶段 | 路径 |
 |------|------|
 | 下载写入 metadata | 各插件 `crawl.rhai` / `crawl.js`，`kabegame_core` 下载链路 |
-| 读 ZIP 模板 | `src-tauri/kabegame-core/src/plugin/mod.rs`（`read_plugin_template`） |
+| 读 ZIP 模板 | `src-tauri/kabegame-core/src/plugin/package_file.rs`（`read_manifest_text`） |
+| 冻结模板 | `crawler/task_scheduler/mod.rs`（`freeze_task`）、`task.rs`（`Task::insert_metadata`）、`storage/images.rs`（`metadata.template`） |
 | HTTP / Tauri | `/plugin_file`、`proxy_fetch` |
-| 前端模板缓存与加载 | `apps/kabegame/src/stores/plugins.ts` |
+| 前端模板缓存与加载 | `apps/kabegame/src/services/pluginFiles.ts`、`composables/useImageMetadataCache.ts`（冻结模板） |
 | EJS 渲染与 iframe | `ImagePluginDescriptionPanel.vue`、`descriptionBridgeInject.body.js`（`?raw`）/`descriptionBridgeInjectScript.ts` |
 
 ---

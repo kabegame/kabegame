@@ -90,6 +90,7 @@ import {
   watch,
 } from "vue";
 import { gridTotalKey } from "@/components/imageGrid/gridTotal";
+import { gridViewPathKey } from "@/components/imageGrid/gridViewPath";
 import type { Subscription } from "rxjs";
 import { useModal } from "@/composables/useModal";
 import { useRoute, useRouter } from "vue-router";
@@ -469,6 +470,11 @@ provide(gridTotalKey, {
   total: readonly(totalImagesCount),
   unfilteredTotal: readonly(unfilteredTotal),
 });
+// 插槽内的查询行注入当前视图路径（不含分页尾），用于「用当前视图轮播」。
+provide(
+  gridViewPathKey,
+  computed(() => paged.viewBody.value),
+);
 
 /** 用户操作：next 一个请求即返回，不防抖、不等待；结果与错误经观察方落地。 */
 const requestRows = () => {

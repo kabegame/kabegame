@@ -585,9 +585,9 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    pub async fn settings_get_wallpaper_rotation_album_id(&self) -> Result<Option<String>, String> {
+    pub async fn settings_get_wallpaper_rotation_path(&self) -> Result<Option<String>, String> {
         let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperRotationAlbumId)
+            .request_data(IpcRequest::SettingsGetWallpaperRotationPath)
             .await?;
         if v.is_null() {
             Ok(None)
@@ -596,23 +596,9 @@ impl IpcClient {
         }
     }
 
-    pub async fn settings_get_wallpaper_rotation_include_subalbums(&self) -> Result<bool, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperRotationIncludeSubalbums)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
     pub async fn settings_get_wallpaper_rotation_interval_minutes(&self) -> Result<u32, String> {
         let v = self
             .request_data(IpcRequest::SettingsGetWallpaperRotationIntervalMinutes)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    pub async fn settings_get_wallpaper_rotation_mode(&self) -> Result<String, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetWallpaperRotationMode)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
@@ -724,22 +710,12 @@ impl IpcClient {
             .await
     }
 
-    pub async fn settings_set_wallpaper_rotation_album_id(
+    pub async fn settings_set_wallpaper_rotation_path(
         &self,
-        album_id: Option<String>,
+        path: Option<String>,
     ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperRotationAlbumId { album_id })
+        self.request_ok(IpcRequest::SettingsSetWallpaperRotationPath { path })
             .await
-    }
-
-    pub async fn settings_set_wallpaper_rotation_include_subalbums(
-        &self,
-        include_subalbums: bool,
-    ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperRotationIncludeSubalbums {
-            include_subalbums,
-        })
-        .await
     }
 
     pub async fn settings_set_wallpaper_rotation_transition(
@@ -818,11 +794,6 @@ impl IpcClient {
         minutes: u32,
     ) -> Result<(), String> {
         self.request_ok(IpcRequest::SettingsSetWallpaperRotationIntervalMinutes { minutes })
-            .await
-    }
-
-    pub async fn settings_set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetWallpaperRotationMode { mode })
             .await
     }
 

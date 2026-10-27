@@ -1191,31 +1191,6 @@ impl Storage {
         Ok(out)
     }
 
-    /// 壁纸轮播等场景：取指定画册下的图片。`include_descendants` 为真时按 BFS（根在前，子画册按 `created_at`）合并子树内各 `album_images`，同一 `image_id` 只保留首次出现。画册不存在时返回 `画册不存在`。
-    pub fn get_album_images_for_wallpaper_rotation(
-        &self,
-        album_id: &str,
-        include_descendants: bool,
-    ) -> Result<Vec<ImageInfo>, String> {
-        if self.get_album_by_id(album_id)?.is_none() {
-            return Err("画册不存在".to_string());
-        }
-        if !include_descendants {
-            return self.get_album_images(album_id);
-        }
-        let order = self.collect_subtree_album_ids_bfs(album_id)?;
-        let mut seen = HashSet::new();
-        let mut merged = Vec::new();
-        for aid in order {
-            for img in self.get_album_images(&aid)? {
-                if seen.insert(img.id.clone()) {
-                    merged.push(img);
-                }
-            }
-        }
-        Ok(merged)
-    }
-
     pub fn get_album_preview(
         &self,
         album_id: &str,

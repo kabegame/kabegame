@@ -53,6 +53,8 @@ model Metadata {
   data          String // JSON string
   pluginVersion Int    @default(0) @map("plugin_version")
   pluginId      String @default("") @map("plugin_id")
+  /// CLI `plugin run --freeze-template` 冻结的描述 EJS 模板；非空时详情面板用它覆盖插件包内模板
+  template      String?
 
   images           Image[]
   taskFailedImages TaskFailedImage[]

@@ -89,7 +89,9 @@ kabegame-cli plugin run <plugin> [选项]
 | `--output-dir`   | 否   | 图片输出目录。优先级高于插件默认配置里保存的 `outputDir`。                                          |
 | `--album-id`     | 否   | 目标画册 id。                                                                                     |
 | `--max-downloads N` | 否 | 本任务最大并发下载数，必须为正整数；超过全局上限时仍按全局值生效。不传则跟随全局设置。              |
-| `--dry-run`      | 否   | 只解析并打印最终配置，不真正建任务。                                                              |
+| `--print-config` | 否   | 只解析并打印最终配置，不真正建任务。                                                              |
+| `--dry-run`      | 否   | 空跑：创建任务并完整执行插件逻辑，但不下载、不入库。                                              |
+| `--freeze-template` | 否 | 把本次运行插件的 `description.ejs` 冻结进每张图片的 metadata，应用详情面板优先用它渲染。用 `--id` 测试 id 跑出的图片也能直接看模板效果；只影响本次任务，插件升级后冻结的模板也不更新。 |
 | `--plain`        | 否   | 不渲染进度条，日志逐行直出。非 TTY（管道、CI）会自动进入此模式。                                    |
 
 **配置解析**与主应用一致，三层叠加后打印成 JSON：
@@ -100,7 +102,7 @@ kabegame-cli plugin run <plugin> [选项]
 
 `--var key=` 会显式清空字段并提交 `null`，不会回落到用户默认或插件 `default`。checkbox 用逗号分隔已勾选项，例如 `--var wallpaper_type=desktop,mobile`；CLI 会补齐为包含全部 variable 的 boolean 对象，空值仍是 `null`。options 必须严格匹配声明的 `variable` 或显示名，未知值直接报错；只有清单中确实声明了 `variable: ""` 时，空字符串才是合法选项。
 
-隐藏字段不会出现在最终 JSON 中。可见的 `required: true` 字段若为 `null`，`--dry-run` 与正式运行都会在创建任务前报错。
+隐藏字段不会出现在最终 JSON 中。可见的 `required: true` 字段若为 `null`，`--print-config` 与正式运行都会在创建任务前报错。
 
 **插件 id 怎么定**：`--id` → 包内 `package.json` 的 `name` → `.kgpg` 文件名 stem，取第一个非空的。三者都要过 id 合法性校验（ASCII 字母/数字/`_`/`-`，≤ 64 字节），且不能撞内建插件 id；报错里会写明这个 id 是从哪儿来的。
 
@@ -116,7 +118,8 @@ kabegame-cli plugin pack --plugin-dir ./plugins/kabegame-plugin-kemono --output 
 kabegame-cli plugin run /tmp/kemono.kgpg --var page=1
 
 # 换个 id 跑同一个包：数据目录 / 默认配置 / 入库 plugin_id 都隔离开，方便对照测试
-kabegame-cli plugin run /tmp/kemono.kgpg --id kemono-test
+# 加 --freeze-template 后，测试 id 的图片在应用详情里也能渲染描述模板
+kabegame-cli plugin run /tmp/kemono.kgpg --id kemono-test --freeze-template
 
 # 先安装，再按 id 运行
 kabegame-cli plugin import ./packed/kemono.kgpg
@@ -126,7 +129,7 @@ kabegame-cli plugin run kemono \
   --max-downloads 2
 
 # 只看最终配置，不跑
-kabegame-cli plugin run kemono --dry-run --var source=tag --var tag=nsfw
+kabegame-cli plugin run kemono --print-config --var source=tag --var tag=nsfw
 ```
 
 输出形态：进度条常驻最后一行，日志从它上方滚出（同 cargo / apt）。

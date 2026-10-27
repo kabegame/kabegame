@@ -158,6 +158,7 @@ async fn schedule_trigger_once(config: &RunConfig) -> Result<String, String> {
     let req = CrawlTaskRequest {
         task_id: task_id.clone(),
         plugin_file_path: None,
+        freeze_template: false,
     };
     TaskScheduler::global().submit_task(req).await?;
     let now_s = now_secs();

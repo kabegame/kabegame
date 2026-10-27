@@ -57,7 +57,7 @@ Options:
   --out-dir DIR    Directory for split prompts. Defaults to versions/vVERSION/4koma/generated-prompts.
   --backend BACKEND
                    AI backend to use. One of: codex, claude. Defaults to claude.
-  --model MODEL    Model for the backend. Defaults to claude-opus-5-5 (claude) or gpt-5.6-sol (codex).
+  --model MODEL    Model for the backend. Defaults to claude-opus-5-5 (claude) or gpt-6.1-sol (codex).
   --reasoning-effort EFFORT
                    Reasoning effort / thinking level. Codex only; ignored for claude. Defaults to high.
   --dry-run        Build context and print the backend command, but do not call it.
@@ -176,7 +176,7 @@ done
 candidates=$((story_candidates + gag_candidates))
 
 if [[ -z "$model" ]]; then
-  [[ "$backend" == "claude" ]] && model="claude-opus-5-5" || model="gpt-5.6-sol"
+  [[ "$backend" == "claude" ]] && model="claude-opus-5-5" || model="gpt-6.1-sol"
 fi
 
 if [[ "$backend" == "claude" ]]; then

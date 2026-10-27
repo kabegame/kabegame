@@ -115,23 +115,13 @@ pub fn get_wallpaper_rotation_enabled() -> bool {
 }
 
 #[tauri::command]
-pub fn get_wallpaper_rotation_album_id() -> Option<String> {
-    Settings::global().get_wallpaper_rotation_album_id()
-}
-
-#[tauri::command]
-pub fn get_wallpaper_rotation_include_subalbums() -> bool {
-    Settings::global().get_wallpaper_rotation_include_subalbums()
+pub fn get_wallpaper_rotation_path() -> Option<String> {
+    Settings::global().get_wallpaper_rotation_path()
 }
 
 #[tauri::command]
 pub fn get_wallpaper_rotation_interval_minutes() -> u32 {
     Settings::global().get_wallpaper_rotation_interval_minutes()
-}
-
-#[tauri::command]
-pub fn get_wallpaper_rotation_mode() -> String {
-    Settings::global().get_wallpaper_rotation_mode()
 }
 
 #[tauri::command]

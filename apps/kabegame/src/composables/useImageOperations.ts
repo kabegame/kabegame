@@ -14,6 +14,7 @@ import { setWallpaperOrBackground } from "@/utils/wallpaperMode";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { i18n } from "@kabegame/i18n";
 import type { GridRefreshContext } from "@/components/imageGrid/types";
+import { albumRotationPath } from "@/utils/wallpaperRotationPath";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -33,7 +34,7 @@ export function useImageOperations(
   const settingsStore = useSettingsStore();
 
   const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
-  const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
+  const { set: setWallpaperRotationPath } = useSettingKeyState("wallpaperRotationPath");
   const detectImageMimeByPath = (path: string): string => {
     const ext = (path.split(".").pop() || "").toLowerCase();
     if (ext === "png") return "image/png";
@@ -384,13 +385,11 @@ export function useImageOperations(
           throw error;
         }
 
-        // 5. 如果轮播未开启，开启它
+        // 5. 轮播路径换成新画册的默认视图，再开启轮播（开启时直接按新路径拉起）
+        await setWallpaperRotationPath(albumRotationPath(createdAlbum.id));
         if (!settingsStore.values.wallpaperRotationEnabled) {
           await setWallpaperRotationEnabled(true);
         }
-
-        // 6. 设置轮播画册为新创建的画册
-        await setWallpaperRotationAlbumId(createdAlbum.id);
 
         ElMessage.success(
           i18n.global.t("gallery.rotationStartedWithCount", {

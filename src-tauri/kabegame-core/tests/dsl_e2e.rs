@@ -2440,9 +2440,6 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
     let image_filter_album_order = runtime
         .fetch("images://gallery/hide/album/33333333-3333-3333-3333-333333333333/media-type/image/_kb_fc/sort/by-album-order/_kb_x3x/1")
         .unwrap();
-    let bigger_order = runtime
-        .fetch("images://gallery/album/33333333-3333-3333-3333-333333333333/bigger_order/1/l100l")
-        .unwrap();
     let limited = runtime
         .fetch(
             "images://gallery/album/33333333-3333-3333-3333-333333333333/sort/by-album-order/l3l",
@@ -2458,7 +2455,6 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
     assert!(image_only_wallpaper_order.is_empty());
     assert!(album_wallpaper_order.is_empty());
     assert_eq!(ids(image_filter_album_order), ["8", "7", "6"]);
-    assert_eq!(ids(bigger_order), ["7", "6"]);
     assert_eq!(ids(limited), ["8", "7", "6"]);
 
     let single = runtime
@@ -3132,4 +3128,84 @@ fn album_search_matches_metacharacters_literally_and_keeps_tree_shape() {
         "child_count",
     );
     assert_eq!(unfiltered.get(pixiv), Some(&2));
+}
+
+/// 壁纸轮播在原生模式下给任意视图尾部拼 `_kb_fc/media-type/image`：
+/// count 只数图片，逐张取行（页大小 1，lookup 形态）与原视图去掉视频后的顺序一致，rank 定位也一致。
+#[test]
+fn wallpaper_rotation_image_only_tail_keeps_view_order() {
+    use kabegame_core::wallpaper_rotation::{effective_path, rank_path, rows_path};
+
+    let conn = fixture_db();
+    // 让画册 A 也含一个视频，且排在画册顺序最前
+    conn.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO album_images(album_id, image_id, \"order\") VALUES (?1, 118, 0)",
+            [ALBUM_A_ID],
+        )
+        .unwrap();
+    let runtime = build_runtime_with(conn);
+
+    let views = [
+        "images://gallery/all".to_string(),
+        "images://gallery/hide/all".to_string(),
+        "images://gallery/hide/sort/random-7921476028795849".to_string(),
+        "images://gallery/sort/by-id/_kb_desc".to_string(),
+        format!("images://gallery/hide/album/{ALBUM_A_ID}"),
+        format!("images://gallery/hide/album/{ALBUM_A_ID}/sort/by-album-order"),
+        format!("images://gallery/album-tree/{ALBUM_A_ID}/sort/by-id"),
+        "images://gallery/search/display-name/image-11/sort/by-id".to_string(),
+        "images://gallery/~not/~any/search/metadata/table/~or/search/native-metadata/r18/~end/~end/sort/by-time/_kb_desc"
+            .to_string(),
+    ];
+    for view in &views {
+        assert_eq!(effective_path(view, "window"), *view);
+        let eff = effective_path(view, "native");
+        let wide = runtime.fetch(&format!("{view}/_kb_x500x/1")).unwrap();
+        let expected: Vec<String> = wide
+            .iter()
+            .filter(|row| {
+                !row["type"]
+                    .as_str()
+                    .is_some_and(|t| t.starts_with("video"))
+            })
+            .map(|row| ids(vec![row.clone()]).remove(0))
+            .collect();
+        assert_eq!(
+            runtime.count(&eff).unwrap_or_else(|e| panic!("{eff}: {e}")),
+            expected.len(),
+            "{eff}"
+        );
+        assert!(
+            runtime.count(view).unwrap() >= expected.len(),
+            "{view}"
+        );
+        let probe: Vec<usize> = (1..=expected.len().min(4))
+            .chain(std::iter::once(expected.len()))
+            .filter(|n| *n >= 1)
+            .collect();
+        for n in probe {
+            let path = rows_path(&eff, 1, n as u64);
+            let row = ids(runtime.fetch(&path).unwrap_or_else(|e| panic!("{path}: {e}")));
+            assert_eq!(row, [expected[n - 1].clone()], "{path}");
+            assert_eq!(
+                rank(&runtime, &eff, &expected[n - 1]),
+                Some(n as i64),
+                "{}",
+                rank_path(&eff, &expected[n - 1])
+            );
+        }
+        // 越过末尾取行为空，而不是报错
+        assert!(runtime
+            .fetch(&rows_path(&eff, 1, expected.len() as u64 + 1))
+            .unwrap()
+            .is_empty());
+    }
+    // 视频只在非原生模式的有效路径里
+    let album_eff = effective_path(
+        &format!("images://gallery/hide/album/{ALBUM_A_ID}/sort/by-album-order"),
+        "native",
+    );
+    assert_eq!(rank(&runtime, &album_eff, "118"), None);
 }
