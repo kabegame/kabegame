@@ -358,7 +358,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 ## 待定决策（需用户确认）
 
 1. ~~宿主形态~~：已由决策 3 确定。
-2. **垫片注入方式**：目录服务改写 HTML 插入 `<script>`（推荐），还是 CEF 初始化脚本注入子 frame。
+2. ~~**垫片注入方式**~~ 已定（2026-10-27）：用 Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口（预览 iframe）同一份垫片、按 `location` 自判是否启用；不改写 HTML 响应。运行时对 `file:` 文档只放行 all-frames 脚本（Tauri 自身脚本都是 main-frame-only）。细节见 Phase 5 方案。
 3. ~~**`file` / `directory` 属性**~~ 已定路线（2026-10-26，phase-3 决策 2）：Phase 3 不支持；Phase 7 前先测本地 scheme，再测 `file://`。原文：WPE 约定页面自己拼 `file:///`，HTTP 源的页面读不了本地文件。Phase 1 调研后在
    「CEF 放开 `file://` 并改用 `file://` 加载页面」「垫片改写路径到白名单路由」「暂不支持这两类属性」之间选。
 4. ~~**`localStorage` 持久化**~~ 已定（2026-10-26）：自定义协议 `kb-wpe`，Phase 5 落地；所有网页壁纸共用一个稳定源。

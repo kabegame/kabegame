@@ -37,7 +37,7 @@
 | [~] | 切回应用页 | Windows 桌面 CEF dev | kaguya → 普通图片 → 普通视频 → kaguya | 切到图片 / 视频时壁纸窗口回到 `index.html?window=wallpaper` 并正常显示（ready 握手 yes）；再切回 kaguya 又导航到 `file://`；网页 → 网页（kaguya → Slideshow）直接换 `file://` 入口 | 2026-10-27 真机（Windows 11 dev，CDP）：kaguya → 图片 12823 回到 `index.html?window=wallpaper`，图片已加载（opacity 1）；再切回 kaguya 又导航到 `file://`。视频与网页→网页未测 |
 | [ ] | 鼠标转发 | Windows 桌面 CEF dev | 在 kaguya 页面经 CDP 挂 `mousemove` / `mousedown` / `mouseup` 计数，用户在桌面空白处移动、点击，再点在别的应用窗口上 | 桌面移动 / 点击后计数增长且 down / up 成对；点在别的应用窗口上 `mousedown` 不增长（移动仍增长，与 WPE 一致）；Explorer 照常收到点击 | 未验证：需要 dev 运行并由用户在桌面上实际操作 |
 | [x] | 桌面框选不被吞 | Windows 桌面 CEF dev | 网页壁纸生效时在桌面空白处拖拽框选图标、单击 / 双击图标 | 框选矩形正常出现并选中图标；图标交互不受影响；页面仍收到 down / up | 2026-10-27 用户实测：wemt 挂载后补 `AttachThreadInput(…, FALSE)` 拆输入队列（同 WE，见 `2-web/WPE_INPUT_RE.md`）后，框选与各种拖动均不再被吞 |
-| [ ] | 拖动页面图片不挂住 | Windows 桌面 CEF dev | 在桌面上按住 kaguya 页面里的图片拖动后松开，再继续移动 / 点击 | 不启动拖放（与 WE 一致），桌面上不会多出图片文件；之后页面仍响应鼠标，点击主窗口无系统提示音 | 未验证：移动注入改为 `modifiers=0`；修改前实测会启动 OLE 拖放挂住、图片被拖到桌面 |
+| [x] | 拖动页面图片不挂住 | Windows 桌面 CEF dev | 在桌面上按住 kaguya 页面里的图片拖动后松开，再继续移动 / 点击 | 不启动拖放（与 WE 一致），桌面上不会多出图片文件；之后页面仍响应鼠标，点击主窗口无系统提示音 | 用户真机确认：拖动不再启动拖放；修改前实测会启动 OLE 拖放挂住、图片被拖到桌面 |
 | [ ] | 开机即网页壁纸 | Windows 桌面 CEF dev | 当前壁纸为 kaguya 时切原生模式再切回窗口模式（或重启 dev） | 窗口重建 → 应用页 ready → 导航到 `file://`，鼠标转发重新启动 | 未验证：dev 未运行 |
 | [ ] | 离开窗口模式 | Windows 桌面 CEF dev | 网页壁纸时切到原生模式 | 窗口销毁，`wpe_web_host` 复位（根目录清空、转发线程退出），无残留线程注入报错 | 未验证：dev 未运行 |
 | [ ] | 图库预览不变 | Windows 桌面 CEF dev | 打开 12099 预览 | 仍是 `/wpe/<id>/` 跨源 iframe 桌面画布，可交互 | 未验证：dev 未运行；本次未改预览代码 |

@@ -1,6 +1,7 @@
 # WPE Web 壁纸接口参考与兼容矩阵（Phase 1 产出）
 
-> 状态：Phase 1 完成（2026-10-25）。上级：[PLAN.md](PLAN.md)。
+> 状态：Phase 1 产出（2026-10-25），随 Phase 3 / 4 落地持续修订（最近 2026-10-27）。上级：[PLAN.md](PLAN.md)。
+> 第六节起的「Phase」列与 PLAN 当前的 Phase 路线一致；鼠标转发的逆向细节见 [WPE_INPUT_RE.md](WPE_INPUT_RE.md)。
 >
 > 来源标记：
 > - **[官方]**：`docs.wallpaperengine.io/en/web/` 原文。
@@ -11,9 +12,17 @@
 > - **[实测]**：2026-10-25 在运行中的 Kabegame dev 上经 CDP 实测。Kabegame CEF 报告为 Chrome 149。
 > - **[非官方]**：社区资料，附链接。
 >
-> 本机样例：
-> - 创意工坊 `796697921`，即 Slideshow，`D:\Applications\Steam\steamapps\workshop\content\431960\796697921`。
-> - 官方默认项目 `corsair_collection`、`corsair_o_tron`，位于 `…\wallpaper_engine\projects\defaultprojects\`。
+> 本机样例（只读）：
+> - **主样例：创意工坊 `3679122549`，即 kaguya（「[16:9] 超かぐや姫 All-in-One」）**，`D:\Applications\Steam\steamapps\workshop\content\431960\3679122549`，Kabegame dev 库 id 12097。
+>   - 入口 `index.html` + 混淆过的 `script.js`（带 `selfDefending`，格式化后会死循环，只能原样读）+ `style.css`；
+>     歌单、封面、MV、字幕全从 `data.json` 经 `fetch` 解析，媒体在 `music/` `mv/` `cover/` `subtitle/` `background/` `thumb/`。
+>   - 定义 `wallpaperPropertyListener.applyUserProperties` / `applyGeneralProperties`（§5.1 实测）；用了 4 处 `localStorage`；页面有点击交互和鼠标视差（`bg_mouse_sensitivity`）。
+>   - 属性：`schemecolor`、`text_color`、`visualizer_color`（color），`bg_mouse_sensitivity`、`playback_rate`、`audio_sensitivity`（带 `step` 的小数滑块），
+>     `custom_user_bg`（file，`filter: "*.jpg|*.png|*.jpeg|*.webp"`，无默认值）。
+>   - 后续 Phase 的验收都以它为准。
+> - 字段与写法的补充证据：
+>   - 创意工坊 `796697921`，即 Slideshow（directory 属性、`condition`、`group` / `text` 条目）。
+>   - 官方默认项目 `corsair_collection`、`corsair_o_tron`，位于 `…\wallpaper_engine\projects\defaultprojects\`（RGB、键盘）。
 
 ---
 
@@ -44,6 +53,8 @@
 | `min` / `max` | 滑块范围 | [样例] |
 | `options` | combo 选项数组 `[{ "label": "...", "value": "..." }]`；样例里也出现过没有 `label`、只有 `value` 的项 | [官方] localization 示例；[样例] corsair_collection |
 | `mode` | directory 属性的模式：`ondemand` 或 `fetchall` | [官方] properties；[样例] 796697921 的 `customdirectory` |
+| `step` | 滑块步长，可为小数（如 `0.1`、`0.25`） | [样例] kaguya 的 3 个滑块 |
+| `filter` | file 属性的可选文件过滤，`|` 分隔的通配符，如 `"*.jpg|*.png|*.jpeg|*.webp"` | [样例] kaguya 的 `custom_user_bg` |
 | `fileType` | file / directory 属性的文件类型，由编辑器写入 | [REA] 字符串 `fileType`、`directory`、`ondemand`、`fetchall` 相邻；样例未出现 |
 
 **显示条件 `condition`**
@@ -56,7 +67,7 @@
   - 裸真值 `backgroundImageVisible.value`
 - 也就是说，条件里会用到字符串方法、`===` / `!==` / `>`、`&&`，以及直接引用其它属性的 `.value`。
 
-**滑块精度**：[官方] 编辑器里有 Fraction 与 Precision（默认 2）选项，但文档没给 JSON 字段名。本机样例都是整数滑块，没有出现 `step` / `precision` / `fraction` 字段。**未确认**。
+**滑块精度**：[官方] 编辑器里有 Fraction 与 Precision（默认 2）选项，但文档没给 JSON 字段名。[样例] kaguya 的小数滑块写成 `step`（`0.1` / `0.25`），没有 `precision` / `fraction`；面板按 `step` 取值即可，Precision 是否另有字段**未确认**。
 
 ## 二、属性类型
 
@@ -67,7 +78,7 @@
 | `bool` | `true` / `false` | 复选框 | [官方] |
 | `combo` | `.value` 为选中项的 value，`.text` 为标签（官方建议只用 value） | 下拉 | [官方] |
 | `textinput` | 字符串 | 文本框 | [官方] |
-| `file` | 本地绝对路径；页面自己拼 `'file:///' + value` | 文件选择，按 `fileType` 过滤 | [官方] |
+| `file` | 本地绝对路径；页面自己拼 `'file:///' + value` | 文件选择，按 `filter`（或 `fileType`）过滤；可以没有默认值 | [官方]；[样例] kaguya |
 | `directory` | `.value` 表示是否已设置；文件经目录接口单独给，见第三节 | 文件夹选择，`mode` 决定交付方式 | [官方] |
 | `group` | 不推（未确认） | 分组标题 | [样例] 796697921 有 7 个，文档未写 |
 | `text` | 不推（未确认） | 纯说明文字，`text` 可含 HTML | [样例] 796697921 有 7 个，文档未写 |
@@ -79,11 +90,18 @@
 
 ## 三、全局接口清单
 
-所有接口挂在页面的 `window` 上。WPE 用一段注入脚本提供它们，那段脚本在页面脚本之前执行（[REA] 见第四节）。
+所有接口挂在页面的 `window` 上。WPE 用一段注入脚本提供它们，那段脚本在页面脚本之前执行（[REA] 见第四节）。Kabegame 用 all-frames 初始化脚本复刻这段注入，见第六节第一行。
 
 ### 3.1 宿主回调：`window.wallpaperPropertyListener`
 
 页面必须在全局、任何事件之外定义该对象，否则会漏掉加载时的首批推送。[官方] propertylistener
+
+**推送语义**：该对象由页面自己定义，注入脚本不定义它，也不拦截对它的赋值（[REA] 注入脚本只定义 `wallpaperRegister*` /
+`wallpaperMediaIntegration` / `___wpx*`）。推送时机由宿主决定，每次推送都在那一刻读 `window.wallpaperPropertyListener`，有对应回调就调用，没有就丢弃：
+- 页面晚于首推才赋值，收不到首推，也不会补推；
+- 页面中途换成另一个对象，之后的推送打到新对象上。
+
+首推的具体时刻是 CEF `OnLoadEnd`（即 `load` 之后）还是更早，**未确认**，见第九节。
 
 | 回调 | 签名 | 触发时机 | 边界 | 来源 |
 |---|---|---|---|---|
@@ -187,11 +205,19 @@
   - 796697921 在鼠标靠近屏幕边缘时显示控制条（`mousemove`），控制按钮用 `click`。
   - corsair_collection 有 `mousemove` / `click` / `keydown`，`pulseanimation` 里还有一个选项叫 `mousespeed`。
 - [非官方] WPE 开发者在论坛说，点击是「检查光标下的窗口后转发给壁纸浏览器」实现的；滚轮和按键出于安全考虑不转发。[Steam 讨论 1](https://steamcommunity.com/app/431960/discussions/1/135513901706643121)、[Steam 讨论 2](https://steamcommunity.com/app/431960/discussions/2/1736588252406358010)
-- [REA] 在 `webwallpaper64.exe` 里没有找到鼠标转发相关的字符串。主程序有 `ui_browse_properties_mouse_parallax` 等 Scene 用的鼠标字符串。转发的具体实现**未定位**，这是有限否定，只覆盖已定义字符串。
+- [REA] 转发全部在 `webwallpaper64.exe` 里，完整证据见 [WPE_INPUT_RE.md](WPE_INPUT_RE.md)。要点：
+  - 不装鼠标钩子：主线程约 200Hz 的循环里轮询 `GetKeyState(VK_LBUTTON)` 与 `GetCursorPos`。
+  - 移动：光标坐标一变就 `SendMouseMoveEvent`（`ScreenToClient` 换算），不做命中判定、不检查显示器、不发 leave；`modifiers = 0`，**不带左键标志**，所以页面里拖不动东西、也不会启动拖放。
+  - 点击：`SendMouseClickEvent(MBT_LEFT, clickCount = 1, modifiers = 0)`；左键状态变化时用 `WindowFromPoint` 加类名 / 属性判定光标下是不是桌面，按下只在命中桌面时发，抬起无论落在哪里都发。
+  - 不转发滚轮、右键、中键。键盘经 `WH_KEYBOARD_LL` 收集，只在本地文件壁纸上安装，且要求上一次按键落在桌面上、桌面图标已隐藏（`FWF_NOICONS`）。
+  - 浏览器以窗口模式（非 OSR）嵌在宿主窗口下，挂载后与 Explorer 线程解除输入队列关联（`AttachThreadInput(…, FALSE)`），否则会抢走 Explorer 的鼠标捕获、桌面框选失效。
+  - 暂停期间跳过整段鼠标轮询。
 
 ### 4.6 兼容补丁
 - [磁盘] + [REA] WPE 自带 `assets/zcompat/web/<workshopid>.json`，本机有 5 个。内容是对指定壁纸的 js 文件做 `replace` → `insert` 的文本替换，例如给 `texImage2D` 调用加空值判断。
-- [REA] 有日志 `Failed writing compat fix at %S`，说明 **WPE 会把补丁写回壁纸目录**。Kabegame 不能这样做，只能在 `/wpe` 响应里按同一份规则在内存中替换。
+- [REA] 有日志 `Failed writing compat fix at %S`，说明 **WPE 会把补丁写回壁纸目录**。Kabegame 不写用户目录，只能在加载时按同一份规则在内存中替换：
+  预览走 `/wpe` 响应体；桌面是 `file://` 加载，要在 CEF 资源层替换响应（初始化脚本做不到，它改不了别人的文件内容）。
+- [样例] 本机订阅的网页壁纸都不在这 5 个之内。
 
 ### 4.7 视频属性对 Web 的作用
 - [REA] 同一可执行文件里有：
@@ -208,7 +234,7 @@
 | iframe 内 `__TAURI_INTERNALS__` / `__TAURI__` / `window.ipc` | 都是 `undefined` | Tauri 初始化脚本与 CEF IPC 垫片都只进主 frame |
 | iframe 内 `fetch('cef-ipc://localhost/', POST)` | **返回 204** | CEF 的 `cef-ipc` scheme 处理器不区分 frame，子 frame 的请求也会交给 Tauri |
 | 子 frame 伪造的 IPC 消息（不带 invoke key，回调 id 取自主 frame） | 主 frame 的成功和失败回调**都没触发** | 被 Tauri 静默丢弃；同一条消息从主 frame 发出也被丢弃，而正常 `invoke` 成功、回调通路正常。所以**实际门槛是 invoke key**，子 frame 拿不到它 |
-| iframe 内相对 `fetch('./project.json')` | 200，但 `Content-Type: application/octet-stream` | 目录服务的 MIME 只来自媒体格式表；**`.html` / `.js` / `.css` / `.json` 都不会给正确 MIME** |
+| iframe 内相对 `fetch('./project.json')` | 200，但 `Content-Type: application/octet-stream` | 当时目录服务的 MIME 只来自媒体格式表，`.html` / `.js` / `.css` / `.json` 都拿不到正确 MIME；Phase 3 已补 `/wpe` 网页 MIME 表 |
 | `../` 越界 | 404 | 越界校验生效 |
 | iframe 内 `localStorage` | 可用，源为 `http://127.0.0.1:33050` | 端口随机，源随启动变化 |
 | iframe 内加载 `file:///C:/Windows/...jpg` | 失败 | HTTP 源的页面读不了 `file://`，与预期一致 |
@@ -227,13 +253,13 @@
 | `invoke` | 被拒：`Origin header is not a valid URL`（`file://` 页面的 Origin 是 `null`，`cef-ipc` 入口直接拒绝） | 同左 |
 
 结论：
-- Chromium 把每个 `file://` 文档当作独立的不透明源，**标签式子资源能加载，`fetch` / XHR 一律失败**。WPE 靠 `--disable-web-security` 绕过（§4.1）。Kabegame 若走 `file://` 路线，必须给 CEF 加 `allow-file-access-from-files` 或关同源策略，而命令行开关是全进程生效的，会同时作用于主界面与畅游窗口，安全面不可接受。
-- `file://` 源的 `localStorage` 跨重启稳定且与端口无关，但所有壁纸共用一个 `file://` 源（WPE 也是如此，按显示器隔离）。
-- `file://` 主 frame 会拿到 Tauri 初始化脚本（含 `__TAURI_INTERNALS__`），虽然 `invoke` 被 Origin 校验挡住，但壁纸页面不该看到这些对象；HTTP + 跨源 iframe 路线天然没有这个问题。
-- 因此 **Phase 3 维持 HTTP `/wpe/<id>/` + 跨源 iframe 路线**：同源 `fetch` / XHR 自然可用，kaguya 这类依赖 `fetch` 的壁纸才跑得起来。`localStorage` 稳定性另行解决（固定端口或固定主机名的自定义协议，见 §7 难点二）。
-- 临时命令带 `DEBUG-WPE-FILE` 注释（`commands/window.rs`、`lib.rs`、`permissions/main.toml`），验证完删除。
-
-> **更新（2026-10-27，用户决定安全面可接受，改走 `file://` 主 frame 路线）**：上面的「维持 HTTP 路线」结论作废。
+- Chromium 把每个 `file://` 文档当作独立的不透明源，**标签式子资源能加载，`fetch` / XHR 一律失败**。WPE 靠 `--disable-web-security` 绕过（§4.1）。
+  对应的命令行开关是全进程生效的，会同时作用于主界面与畅游窗口，所以 Kabegame 只能按窗口打开文件访问，见 §5.2。
+- `file://` 源的 `localStorage` 跨重启稳定且与端口无关，所有网页壁纸共用一个 `file://` 源（WPE 也是如此，按显示器隔离）。
+- `file://` 主 frame 默认会拿到 Tauri 初始化脚本（含 `__TAURI_INTERNALS__`）；`invoke` 虽被 Origin 校验挡住，壁纸页面也不该看到这些对象，
+  所以运行时对开了文件访问的窗口里的 `file:` 文档不注入 Tauri 脚本（§5.3）。
+- Phase 3 的预览与桌面都先走 HTTP `/wpe/<id>/` + 跨源 iframe；按 §5.2 的结论，Phase 4 起桌面改为 `file://` 主 frame（PLAN 已确认决策 8），预览保持 HTTP iframe。
+- 实验用的临时命令已在 Phase 4 删除。
 
 ### 5.2 单窗口同源开关可行性与先导实验（2026-10-27）
 
@@ -259,11 +285,24 @@
 
 结论：
 - **只开 `allow_file_access_from_file_urls` 就足以让依赖 `fetch` 的网页壁纸跑起来**，0004 补丁的偏好部分只需这一项。
-- 打开后页面能读任意本地文件，**必须照 WPE 做资源拦截**（§4.1 的 `FUN_140016950`）：对开启了该标记的浏览器，在
-  `ResourceRequestHandler::on_before_resource_load`（运行时已实现该钩子，`webview.rs`）里取消所有不在当前壁纸目录内的 `file:` 请求，
-  并拒绝符号链接与非普通文件；`file` / `directory` 用户属性的白名单留到 Phase 7。
+- 打开后页面能读任意本地文件，所以照 WPE 做资源拦截（§4.1 的 `FUN_140016950`），实现见 §5.3。
 - 跨源 http 请求仍被 CORS 拦。WPE 是全局 `--disable-web-security`；Kabegame 若要支持，需要在补丁里另改网络服务的
   `URLLoaderFactoryParams.disable_web_security`（Chromium 侧，当前读全局命令行），**第一版不做**，记入已知边界。
+
+### 5.3 两种宿主的现状（Phase 4 落地后）
+
+| 项 | 桌面壁纸窗口 | 图库预览 |
+|---|---|---|
+| 页面加载 | 壁纸窗口主 frame 整窗导航到入口 `file://`，切走时导航回应用页；导航唯一属主是 Rust `wallpaper/wpe_web_host.rs` | 主窗口里的跨源 sandbox iframe，`/wpe/<id>/` 307 到入口，相对资源同前缀 |
+| 文件访问 | CEF 补丁 0004：建窗 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`，只对该浏览器打开偏好 | 不涉及；HTTP 源读不了 `file:` |
+| 越界拦截 | `tauri-runtime-cef/src/file_access.rs` 的 `check_file_request`，在 `on_before_resource_load` 里取消：不在当前壁纸目录内（两端都 `canonicalize`）、符号链接、目录、不存在的 `file:` 请求 | `/wpe` 目录服务做 `..` 越界校验 |
+| MIME | 由 Chromium 按扩展名判定 | `/wpe` 专属网页 MIME 表（`http_server.rs` 的 `wpe_mime_from_path`），HTML 从 `serve_wpe_html` 产出（`no-store`），其余文件走共用的 `serve_file_with_mime`（支持 Range，immutable 缓存） |
+| Tauri 脚本 | 开了文件访问的浏览器里，`file:` 文档（及继承它的 about:blank / srcdoc 子 frame）不注入任何初始化脚本（`subprocess.rs`） | 只注入主 frame，跨源 iframe 里没有 |
+| IPC | `file:` 文档 Origin 为 `null`，`cef-ipc` 入口直接拒绝 | `cef-ipc` 只收主 frame 或与 webview 初始 URL 同源的子 frame（`ipc.rs`） |
+| `localStorage` 源 | `file://`，跨重启稳定，所有网页壁纸共用 | `http://127.0.0.1:<随机端口>`，随启动变化 |
+| 鼠标 | Windows：`wallpaper/input_forward.rs` 每 16ms 轮询，照 §4.5 转发移动与左键；挂载后 `AttachThreadInput(…, FALSE)` 与 Explorer 解除输入队列关联（`tauri-plugin-wemt`） | 页面本身可交互（iframe 接收指针事件） |
+| 带声自动播放 | 运行时全局 `autoplay-policy=no-user-gesture-required` | 同一进程，同一策略 |
+| WPE 接口 | 没有，Phase 5 补 | 同左 |
 
 ## 六、兼容矩阵
 
@@ -274,92 +313,96 @@
 - **空实现**：定义接口但永不回调。
 - **不做**：不提供。
 
+「Phase」列写「已完成」的项已在 Phase 3 / 4 落地，现状见 §5.3。
+
 | 接口 / 能力 | 优先级 | Phase | 实现方式 |
 |---|---|---|---|
-| 垫片先于页面脚本执行 | P0 | 3 | 目录服务在 html 的 `<head>` 最前插 `<script>`，脚本同源同步加载 |
-| 目录服务给 web 资源正确 MIME | P0 | 2 | `/wpe` 增加 web 扩展名表：html、js、mjs、css、json、svg、woff/woff2/ttf/otf、wasm、webm、ogg/ogv、mp3、wav 等 |
-| `applyUserProperties` 首推作者默认值 | P0 | 3 | 垫片握手后宿主推 `{ key: { value } }` 全量；combo 带 `text` |
-| `applyUserProperties` 增量推送 | P1 | 5 | 用户改属性后只推变化的键 |
-| `applyGeneralProperties({ fps })` | P1 | 3（值）/ 4（设置） | 首推一次；没有对应设置时推 0（不限） |
-| `applyGeneralProperties` 的 `language` | P2 | 3 | 推 Kabegame 当前语言，换算成 WPE 语言码（未确认字段名，先不推也可） |
-| `setPaused` + 冻结计时 / 动画 / 媒体 | P1 | 3（垫片）/ 4（触发） | 垫片照搬 WPE 的 `___wpxPause` 思路；宿主按壁纸窗口的暂停条件发消息 |
-| `localization` 文案 | P1 | 5 | 面板按 Kabegame 语言映射到 WPE 语言码，缺失回退 `en-us`，再回退原文 |
-| `condition` 显隐 | P1 | 5 | 必须能求值 JS 表达式（见冲突 1） |
-| `file` 属性 | P2 | 5 | 见难点一 |
-| `directory` 属性：`fetchall` / `ondemand` | P2 | 5 | 见难点一；`fetchall` 需要宿主监视目录并推增删 |
-| `wallpaperRegisterAudioListener` | P1 | 6 | WASAPI 回环 + FFT，128 浮点、约 30Hz、`NaN` 置 0；未实现前空实现 |
-| 媒体集成 5 个注册函数 | P2 | 6 | 系统媒体会话；`thumbnail` 用 `data:image/png;base64,` 前缀；未实现前空实现 |
-| `wallpaperMediaIntegration` 常量 | P1 | 3 | 垫片直接定义 `{ PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 }` |
-| `wallpaperPluginListener` / `wpPlugins.led` / `window.cue` | 空实现 | 3 | 不调用 `onPluginLoaded`；`wpPlugins`、`cue` 不定义，页面按文档会先检查插件已加载 |
-| `wallpaperGetUtilities` | 空实现 | 3 | 空对象 |
+| 垫片先于页面脚本执行 | P0 | 5 | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在 `file:` 文档或本地 `/wpe/<id>/` 下定义接口，应用页和其它 iframe 里什么都不做。运行时对 `file:` 文档只放行 all-frames 脚本（Tauri 自身脚本都是 main-frame-only）。不改写 HTML 响应 |
+| 页面读同目录资源 | P0 | 已完成 | 桌面：补丁 0004 按窗口开文件访问 + 运行时目录拦截；预览：`/wpe` 网页 MIME 表 |
+| `applyUserProperties` 首推作者默认值 | P0 | 5 | 宿主在页面加载完成时推 `{ key: { value } }` 全量，combo 带 `text`。桌面由 Rust `wpe_web_host` 对主 frame 执行脚本；预览由父页面在 iframe `load` 时 `postMessage`，垫片只收 `window.parent` 的消息。垫片收到时读当前 listener 投递，不缓存、不补推（§3.1） |
+| `applyUserProperties` 增量推送 | P1 | 7 | 用户改属性后只推变化的键 |
+| `applyGeneralProperties({ fps })` | P1 | 5（值）/ 6（设置） | 首推一次；没有对应设置时推 0（不限） |
+| `applyGeneralProperties` 的 `language` | P2 | 5 | 推 Kabegame 当前语言，换算成 WPE 语言码（字段名未确认，先不推也可） |
+| `setPaused` + 冻结计时 / 动画 / 媒体 | P1 | 5（垫片）/ 6（触发） | 垫片照搬 WPE 的 `___wpxPause` 思路（§4.4）；宿主按壁纸窗口的暂停条件触发 |
+| `localization` 文案 | P1 | 7 | 面板按 Kabegame 语言映射到 WPE 语言码，缺失回退 `en-us`，再回退原文 |
+| `condition` 显隐 | P1 | 7 | 必须能求值 JS 表达式（见第八节第 1 条） |
+| `file` 属性 | P2 | 7 | 见难点一；kaguya 的 `custom_user_bg` 即此类 |
+| `directory` 属性：`fetchall` / `ondemand` | P2 | 7 | 见难点一；`fetchall` 需要宿主监视目录并推增删 |
+| `wallpaperRegisterAudioListener` | P1 | 5（空实现）/ 8 | WASAPI 回环 + FFT，128 浮点、约 30Hz、`NaN` 置 0 |
+| 媒体集成 5 个注册函数 | P2 | 5（空实现）/ 8 | 系统媒体会话；`thumbnail` 用 `data:image/png;base64,` 前缀 |
+| `wallpaperMediaIntegration` 常量 | P1 | 5 | 垫片直接定义 `{ PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 }` |
+| `wallpaperPluginListener` / `wpPlugins.led` / `window.cue` | 空实现 | 5 | 不调用 `onPluginLoaded`；`wpPlugins`、`cue` 不定义，页面按文档会先检查插件已加载 |
+| `wallpaperGetUtilities` | 空实现 | 5 | 空对象 |
 | `wallpaperOnVideoEnded` / 截图接口 | 不做 | — | WPE 内部用 |
-| 自动播放带声音的媒体 | P1 | 4 | iframe 加 `allow="autoplay"`，并确认壁纸窗口的 CEF 自动播放策略 |
-| 背景不降频 | P1 | 4 | 壁纸窗口本就常驻；预览场景不需要 |
-| 跨域 `fetch`（关同源策略） | P2 | — | 不复刻 `disable-web-security`；页面访问外网 API 依赖对方的 CORS。见冲突 3 |
-| `localStorage` 持久化 | P2 | 4 | 见难点二 |
-| 鼠标交互 | P2 | — | 见难点三 |
-| 兼容补丁 `zcompat/web` | P2 | 3 | 读 WPE 安装目录里的规则，在 `/wpe` 响应体中替换，不写盘 |
-| 颜色调整 / 翻转作用于 `<html>` | P2 | 4 | 复用第一阶段的 `wec_*` / `alignmentfliph` 换算，由宿主经垫片设 `documentElement.style` |
-| 挖矿脚本拦截 | P2 | 3 | 目录服务不涉及外网；如需对齐，可由 CEF 请求拦截屏蔽 `coinhive.com` / `arc.io/widget` |
+| 带声自动播放 | P1 | 已完成 | 运行时全局 `autoplay-policy=no-user-gesture-required`，桌面与预览同一进程同一策略 |
+| 背景不降频 | P1 | 6 | WPE 关掉了遮挡检测与后台降频（§4.1）；Kabegame 壁纸窗口挂在 WorkerW 下，是否被判为遮挡而降频待测 |
+| 跨域 `fetch`（关同源策略） | P2 | — | 不做：桌面只开了 `file:` 访问，跨源 http 仍受 CORS 约束（§5.2）；页面访问外网 API 依赖对方的 CORS |
+| `localStorage` 持久化 | P2 | 桌面已完成 / 预览见难点二 | 桌面 `file://` 源稳定；预览源随端口变化 |
+| 鼠标交互 | P2 | 已完成（Windows） | 移动 + 左键，照 WPE 轮询转发（§4.5、难点三）；滚轮、右键、键盘不转发 |
+| 兼容补丁 `zcompat/web` | P2 | 未排期 | 读 WPE 安装目录里的规则在内存中替换，不写盘：预览在 `/wpe` 响应体替换，桌面要在 CEF 资源层替换响应。本机订阅的壁纸都不受影响 |
+| 颜色调整 / 翻转作用于 `<html>` | P2 | 未排期 | 复用第一阶段的 `wec_*` / `alignmentfliph` 换算，由宿主设 `documentElement.style`（桌面执行脚本，预览经垫片） |
+| 挖矿脚本拦截 | P2 | 未排期 | 桌面可在 `on_before_resource_load` 里一并取消 `coinhive.com` / `arc.io/widget` 请求 |
 
-## 七、三个难点：可选方案与推荐
-
-推荐只是建议，最终由用户决定。
+## 七、难点与现状
 
 ### 难点一：`file` / `directory` 属性的 `file:///` 路径
 
-WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>`、CSS `url()` 或 `fetch`。HTTP 源的页面加载 `file://` 会失败（[实测]）。
+WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>`、CSS `url()` 或 `fetch`。kaguya 的 `custom_user_bg`（自定义背景图）就是这种 `file` 属性。
+
+- **桌面**：页面已是 `file://` 源且开了文件访问，这类路径本身能加载，挡住它的只有运行时的目录拦截。照 WPE 的两张白名单（§4.1 拦截逻辑第 3 步），
+  把 `file` 属性的值和 `directory` 属性展开的文件加进当前壁纸的放行集合即可，不需要改页面，也不需要改 CEF。
+- **预览**：HTTP 源的页面加载 `file:` 会失败（§5 实测）。可选方案：
 
 | 方案 | 做法 | 优点 | 缺点 |
 |---|---|---|---|
-| A. 页面改用 `file://` 加载 | 壁纸 iframe 直接指向 `file:///<壁纸目录>/index.html`，CEF 放开 `allow-file-access-from-files`，同时用请求拦截复刻 WPE 的白名单（项目目录 + 属性路径） | 与 WPE 环境逐字节一致，页面零改动 | 要在 `tauri-runtime-cef` 里加 `file:` 请求拦截和 per-browser 白名单；`file://` 源和应用源的隔离、主窗口预览能否加载 `file://` 子 frame 都要重新论证；垫片注入要换成 CEF 初始化脚本或拦截改写 |
-| B. CEF 层把 `file:` 请求改道 | 页面仍走 HTTP 源，但在 CEF `GetResourceHandler` 里对**来自 `/wpe` 页面的** `file:///<白名单路径>` 请求，由 Kabegame 读文件返回 | 页面零改动，HTTP 源与隔离模型不变 | 跨源（HTTP 页面加载 `file:`）在 Chromium 渲染进程里可能在发请求前就被拦，需要实测；拦截器要能识别请求方 frame 的源 |
-| C. 垫片改写路径 | 宿主给页面的路径换成 `http://127.0.0.1:<port>/wpe-user/<token>/<文件>`；垫片再拦截 `HTMLImageElement.src`、`style.backgroundImage` 等 setter，把 `file:///http://…` 修正回来 | 不碰 CEF | 页面拼接方式五花八门，样例里还有 `fixFilename` 之类的自定义处理，拦截覆盖不全，属于脆弱方案 |
-| D. 暂不支持 | 面板里这两类属性显示「暂不支持」，页面收到空值 | 零成本 | 依赖用户图片的壁纸不可用，例如样例 796697921 就是「从文件夹播放图片」 |
+| B. CEF 层把 `file:` 请求改道 | 在 CEF `GetResourceHandler` 里对**来自 `/wpe` 页面的** `file:///<白名单路径>` 请求，由 Kabegame 读文件返回 | 页面零改动 | HTTP 页面加载 `file:` 可能在渲染进程发请求前就被拦，需要实测；拦截器要能识别请求方 frame 的源 |
+| C. 垫片改写路径 | 宿主给页面的路径换成 `/wpe` 下的白名单路由；垫片再拦截 `HTMLImageElement.src`、`style.backgroundImage` 等 setter，把 `file:///http://…` 修正回来 | 不碰 CEF | 页面拼接方式五花八门，样例里还有 `fixFilename` 之类的自定义处理，拦截覆盖不全，属于脆弱方案 |
+| D. 预览不支持 | 预览里页面收不到这两类属性的值，按作者默认值显示 | 零成本 | 预览与桌面在这类属性上表现不同 |
 
-**推荐**：Phase 7 前先做一个最小实测验证 B。若 Chromium 在渲染侧就拦掉 HTTP 页面对 `file:` 的请求，则在 A 和 D 之间选。A 改动面大但最贴近 WPE，适合把 file / directory 当成重要能力时选。
+**推荐**：桌面按白名单扩展实现；预览先 D，Phase 7 前实测 B，可行再补。
 
-### 难点二：`localStorage` 源随端口变化
+### 难点二：`localStorage` 的源
+
+- **桌面**：`file://` 源，跨重启稳定，所有网页壁纸共用，与 WPE 同屏共享一致。Kabegame 多个显示器共用一个 CEF profile，所以多屏之间也共享，比 WPE 少一层按显示器的隔离。
+- **预览**：`http://127.0.0.1:<随机端口>`，每次启动都会变；与桌面也不同源，预览里写的存储桌面读不到（kaguya 用了 4 处 `localStorage`）。
+- PLAN 已确认决策 4 的自定义协议 `kb-wpe` 原本同时解决两边；桌面由 `file://` 解决后，它只影响预览。可选：
 
 | 方案 | 做法 | 优点 | 缺点 |
 |---|---|---|---|
-| A. 固定端口 | 本地 HTTP 服务优先绑定固定端口，被占用时回退随机 | 改动最小，所有壁纸共享一个源，与 WPE「同屏共享」接近 | 端口冲突时回退会丢数据；固定端口更容易被本机其它程序探测 |
-| B. 每个壁纸独立源 | 例如 `http://<imageId>.wpe.localhost:<port>/`，Chromium 把 `*.localhost` 解析到回环 | 壁纸之间隔离，比 WPE 更干净 | 端口仍随机时问题没解决，要配合 A；目录服务要按 Host 分发 |
-| C. 宿主代管存储 | 垫片用自己实现的 `localStorage` 替身，读写经 postMessage 交给宿主，存在 Kabegame 库里，按壁纸 id 隔离 | 不依赖端口与源，可以按壁纸清理 | `localStorage` 是同步 API，替身要在页面脚本前预载全部数据；`indexedDB` 等无法覆盖 |
-| D. 接受不持久 | 不处理 | 零成本 | 依赖本地存储的壁纸每次重启丢状态 |
+| A. `kb-wpe` 自定义协议 | 预览 iframe 改走固定源的自定义协议 | 预览源稳定 | 要注册新 scheme、同步改 CSP 与目录服务；预览与桌面仍不同源 |
+| B. 固定端口 | 本地 HTTP 服务优先绑定固定端口，被占用时回退随机 | 改动最小 | 端口冲突时回退会丢数据；固定端口更容易被本机其它程序探测 |
+| C. 接受不持久 | 不处理 | 零成本 | 预览里依赖本地存储的状态每次重启丢失 |
 
-**推荐**：A（固定端口 + 冲突回退）。本机三个样例都没用 `localStorage`，需求强度低。若以后要隔离，再叠加 B。
+**推荐**：C。预览是临时查看，桌面才是长期运行的地方；`kb-wpe` 是否保留在 Phase 5 方案里定。
 
 ### 难点三：鼠标交互
 
-壁纸窗口挂在 WorkerW 下，桌面图标层在上面，页面收不到鼠标事件。
-
-| 方案 | 做法 | 优点 | 缺点 |
-|---|---|---|---|
-| A. 不做 | 记入已知边界 | 零成本 | 视差、悬停控制条、点击交互失效，例如 796697921 的边缘控制条 |
-| B. 全局鼠标钩子转发 | 主进程装低级鼠标钩子或 Raw Input；光标位于桌面空白处（命中 WorkerW / 桌面列表视图背景）时，把坐标经 CEF `SendMouseMoveEvent` / `SendMouseClickEvent` 发给壁纸 browser。只转发移动和点击，不转发滚轮和按键，与 WPE 一致 | 与 WPE 行为一致 | 需要判断「点在图标上还是空白处」；CEF 窗口模式下合成事件的可行性要实测；有安全与性能顾虑 |
-| C. 只转发移动 | B 的子集，只发 `mousemove` | 能覆盖视差和悬停显示，风险最小 | 点击仍不可用 |
-
-**推荐**：第二阶段先 A，并在 Phase 6 末尾留一个 C 的可行性实测。B 作为后续增强。
+壁纸窗口挂在 WorkerW 下，桌面图标层在上面，页面本身收不到鼠标事件。Phase 4 已照 WPE 的做法实现（Windows，§4.5、§5.3）：
+- `wallpaper/input_forward.rs` 每 16ms 轮询光标与左键（WPE 约 5ms）；移动无条件转发、`modifiers = 0`；左键按下只在光标下是桌面（Progman / WorkerW）时转发，抬起总是转发。
+- 挂载后 `AttachThreadInput(…, FALSE)` 解除与 Explorer 的输入队列关联，桌面框选不受影响。
+- 不转发滚轮、右键、键盘；macOS / Linux 不转发。
+- 待定：轮询间隔是否缩到与 WPE 接近的 5–8ms。
 
 ## 八、与 PLAN 设计的冲突与缺口
 
-1. **显示条件必须求值 JS**。PLAN 的 Phase 7 写的是「只支持 `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS」。实际样例用了 `.endsWith()` / `.startsWith()` / `!==` / `>`。建议改为在沙箱里求值，例如只注入各属性 `{ value }` 的 `new Function` 加超时，或者在 iframe 垫片侧求值后回传结果。面板运行在 Kabegame 自身界面里，直接 `eval` 第三方字符串不可取。
-2. **目录服务 MIME 缺口**。PLAN 的 Phase 3 / 3 默认 `/wpe` 能直接服务网页。实测它对 html / js / css / json 都返回 `application/octet-stream`，必须在 Phase 3 补 web MIME 表，否则 iframe 无法渲染入口页。
-3. **WPE 关闭了同源策略**（`disable-web-security`）。依赖跨域请求的壁纸（天气、RSS 之类）在 Kabegame 的 HTTP 源下会被 CORS 拦截。PLAN 没提到这一点。建议记入已知边界。不建议为壁纸窗口全局关闭同源策略，因为它和主界面在同一个 browser 进程里。
-4. **CEF IPC 入口不区分 frame**。实测子 frame POST `cef-ipc://` 会被转交给 Tauri，目前只靠 invoke key 挡住。PLAN 假设的「IPC 垫片只注入主 frame，所以天然隔离」只对了一半。建议 Phase 5 在 `tauri-runtime-cef` 的 `cef-ipc` 处理器里校验请求来自主 frame，或校验 Origin 属于应用源，作为纵深防御。这是对 `src-tauri/tauri-runtime-cef` 的改动，范围由用户决定。
-5. **`thumbnail` 是完整 data URL**。PLAN 写的是「base64 PNG」。实现时宿主应给 `data:image/png;base64,…`，页面直接赋给 `img.src`。
-6. **兼容补丁**。WPE 会把 `zcompat/web` 补丁写回壁纸目录，Kabegame 必须改为响应时在内存中替换。PLAN 未提及，建议放进 Phase 5。
-7. **暂停的实现方式**。PLAN 写的是「转发 `setPaused`」。WPE 实际是垫片冻结计时、动画、媒体和 `AudioContext` 后，再回调页面的 `setPaused`。建议 Phase 5 照此实现，否则不处理 `setPaused` 的壁纸暂停后仍占 CPU / GPU。
-8. **单个视频文件当网页播放**（`wallpaperOnVideoEnded`、`.webm` / `.ogv` / `.gif` 包装页）是 WPE 对 webm 视频壁纸的内部做法，与 Web 类型无关，不纳入第二阶段。
+1. **显示条件必须求值 JS**。PLAN 的 Phase 7 写的是「只支持 `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS」。实际样例用了 `.endsWith()` / `.startsWith()` / `!==` / `>`。建议改为在沙箱里求值，例如只注入各属性 `{ value }` 的 `new Function` 加超时，或者在垫片侧求值后回传结果。面板运行在 Kabegame 自身界面里，直接 `eval` 第三方字符串不可取。
+2. **垫片注入与推送通道**。PLAN 的 Phase 5 正文按「iframe + `postMessage` + 目录服务改写 HTML」写。桌面已是 `file://` 主 frame，没有父页面，也不经目录服务。注入改用 all-frames 初始化脚本（PLAN 待定决策 2），桌面推送改由 Rust 对主 frame 执行脚本；`WpeWebHost` 这个名字也与 Rust 的 `wpe_web_host` 重名。Phase 5 开工前重写该节。
+3. **WPE 关闭了同源策略**（`disable-web-security`）。Kabegame 桌面只开了 `file:` 访问，依赖跨域请求的壁纸（天气、RSS 之类）会被 CORS 拦截，记入已知边界。
+4. **`thumbnail` 是完整 data URL**。PLAN 写的是「base64 PNG」。实现时宿主应给 `data:image/png;base64,…`，页面直接赋给 `img.src`。
+5. **兼容补丁**。WPE 会把 `zcompat/web` 补丁写回壁纸目录，Kabegame 只能在加载时内存替换；桌面走 `file://`，替换要放在 CEF 资源层。PLAN 未排期。
+6. **暂停的实现方式**。PLAN 写的是「转发 `setPaused`」。WPE 实际是垫片冻结计时、动画、媒体和 `AudioContext` 后，再回调页面的 `setPaused`。建议 Phase 5 的垫片照此实现、Phase 6 接触发条件，否则不处理 `setPaused` 的壁纸暂停后仍占 CPU / GPU。
+7. **单个视频文件当网页播放**（`wallpaperOnVideoEnded`、`.webm` / `.ogv` / `.gif` 包装页）是 WPE 对 webm 视频壁纸的内部做法，与 Web 类型无关，不纳入第二阶段。
+
+已在 Phase 3 处理：`/wpe` 网页 MIME 表；`cef-ipc` 只收主 frame 或同源子 frame 的请求（§5.3）。
 
 ## 九、仍未确认
 
+- WPE 首推 `applyUserProperties` / `applyGeneralProperties` 的时刻：CEF `OnLoadEnd`（`load` 之后）还是更早。影响在 `DOMContentLoaded` 里才定义 listener 的页面；可在 `webwallpaper64.exe` 里查这两个名字的调用位置确认。
 - `group` / `text` 条目是否出现在 `applyUserProperties` 里。样例作者自带的回退代码会把整份 `general.properties` 原样推给页面，说明页面能容忍；但 WPE 的真实行为未知。
 - `applyGeneralProperties` 是否携带 `language` / `steamlanguage`，以及字段格式。
-- 滑块 Fraction / Precision 在 `project.json` 中的字段名。
-- `fileType` 的取值格式。
-- WPE 鼠标转发的具体实现。
+- 滑块 Precision 是否另有字段（kaguya 只用了 `step`）。
+- `fileType` 的取值格式，以及它和 `filter` 的关系（kaguya 用的是 `filter`）。
+- Kabegame 壁纸窗口挂在 WorkerW 下时，是否被 Chromium 判为遮挡而降频。
 
 ## 资料来源
 
