@@ -144,7 +144,13 @@ fn clamp_unit(value: f32) -> f32 {
 
 /// 解析作者默认值。缺失的字段用 WPE 标准默认值（cover / 居中 / 100%）。
 pub fn resolve_video_props(project: &WpeProject) -> WpeVideoProps {
-    let Some(props) = properties(&project.raw) else {
+    resolve_video_props_from_raw(&project.raw)
+}
+
+/// 同 [`resolve_video_props`]，直接吃 `project.json` 原文。壁纸目标组装用它读图片 metadata
+/// （导入时写入的 `project.json` 原文），不重读磁盘；用户属性落地后也合并在这份元数据里。
+pub fn resolve_video_props_from_raw(raw: &Value) -> WpeVideoProps {
+    let Some(props) = properties(raw) else {
         return WpeVideoProps::default();
     };
 

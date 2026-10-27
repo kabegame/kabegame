@@ -37,7 +37,7 @@ export interface WallpaperStageDebugState {
   mode: Mode;
   transition: Transition;
   phase: "idle" | "prep" | "enter";
-  media: "image" | "video";
+  media: "image" | "video" | "web";
   rawPath: string;
   currentPath: string;
   lastError: string;

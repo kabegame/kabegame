@@ -42,7 +42,12 @@ impl WpeKind {
         }
     }
 
-    /// 可入库的目录型格式键；第一阶段只实现 `video`。
+    /// Kabegame 已支持入库的类型（目前 video 与 web）；scene 落地时只需在这里加一项。
+    pub fn is_supported(&self) -> bool {
+        matches!(self, Self::Video | Self::Web)
+    }
+
+    /// 目录型格式键；是否已支持入库见 [`WpeKind::is_supported`]。
     pub fn media_type(self) -> Option<&'static str> {
         match self {
             Self::Video => Some("x-wpe/video"),
@@ -101,7 +106,7 @@ impl WpeProject {
 pub enum WpeSkip {
     /// 目录里没有 `project.json`。
     NoProject,
-    /// 类型不受支持（web / scene / application / 其它，第一阶段只导入 video）。
+    /// 类型不受支持（scene / application / 其它；目前只导入 video 与 web）。
     Unsupported(WpeKind),
     /// 声明了入口但入口文件不存在。
     MissingEntry(String),
@@ -203,7 +208,8 @@ pub fn read_project(dir: &Path) -> Result<WpeProject, WpeSkip> {
         }
     });
 
-    if kind == WpeKind::Video {
+    // 已支持入库的类型都要求入口文件存在（video 是视频文件，web 是入口 html）。
+    if kind.is_supported() {
         let Some(file) = file.as_deref() else {
             return Err(WpeSkip::MissingEntry("project.json 未声明 file".to_string()));
         };
@@ -326,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_kinds_are_preserved_for_stats() {
+    fn web_project_requires_entry() {
         let dir = temp_dir("web");
         fs::write(dir.join("index.html"), b"<html></html>").unwrap();
         fs::write(
@@ -336,7 +342,14 @@ mod tests {
         .unwrap();
         let project = read_project(&dir).expect("web project should parse");
         assert_eq!(project.kind, WpeKind::Web);
+        assert!(project.kind.is_supported());
         assert_eq!(project.kind.media_type(), Some("x-wpe/web"));
+
+        fs::remove_file(dir.join("index.html")).unwrap();
+        match read_project(&dir) {
+            Err(WpeSkip::MissingEntry(file)) => assert_eq!(file, "index.html"),
+            other => panic!("expected MissingEntry, got {other:?}"),
+        }
         fs::remove_dir_all(dir).ok();
     }
 }

@@ -6,7 +6,7 @@ Windows 标准版的窗口壁纸由 `tauri-plugin-wemt` 挂到 Explorer 的背�
 
 本机 Wallpaper Engine 2.8.0.42 的 `wallpaper64.exe` SHA-256 为 `40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0`。REA 静态证据 `ev_98646988f59bc6e9d8dc6a5f0ff9cf811e579189b8a41df17f008a0553c6c1ac` 显示：桌面准备函数查找 `Progman`，按条件发送 `0x52c`（新桌面分支参数 `0xd,1`），枚举并重试查找 `WorkerW`，设置 `WallpaperEngineParent`。运行时切换壁纸记录显示：主渲染窗口创建时已经是 WorkerW 子窗口，不经过临时容器的 `0x404` 路径。报告见 [step3-callchain-report-20261025.md](../../src-tauri/tauri-plugin-wemt/step3-callchain-report-20261025.md)。
 
-Tauri/CEF 的窗口先由应用创建，再由插件转成 `WS_CHILD` 并 `SetParent` 到 WorkerW；这与 WPE 主窗口最终层级一致，但创建顺序不同。插件使用自己的 `WemtHost` 属性，不占用 WE 的标记。宿主选择优先 `Progman` 直属、无图标视图子窗口的整屏 WorkerW；若尚未创建则发送 `0x52c` 并有界重试。子窗口位置用 `MapWindowPoints` 转为宿主客户区坐标。
+Tauri/CEF 的窗口先由应用创建，再由插件转成 `WS_CHILD` 并 `SetParent` 到 WorkerW；这与 WPE 主窗口最终层级一致，但创建顺序不同。插件使用自己的 `WemtHost` 属性，不占用 WE 的标记。宿主选择优先 `Progman` 直属、无图标视图子窗口的整屏 WorkerW；若尚未创建则发送 `0x52c` 并有界重试。子窗口位置用 `MapWindowPoints` 转为宿主客户区坐标。`SetParent` 成功后立即 `AttachThreadInput(本窗口线程, 宿主线程, FALSE)` 拆开跨线程挂子窗口时隐式合并的输入队列（WE 的 `wallpaper64` / `webwallpaper64` 挂载后同样如此）：不拆的话，网页壁纸鼠标转发注入按下时 Chromium 的 `SetCapture` 会抢走 Explorer 列表视图的捕获，桌面框选被吞。
 
 ## 为什么移除 Z-order 修正
 

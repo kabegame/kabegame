@@ -17,9 +17,10 @@ use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, MapWindowPoints, MonitorFromWindow, HDC, HMONITOR,
     MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
 };
+use windows_sys::Win32::System::Threading::AttachThreadInput;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, FindWindowExW, FindWindowW, GetClassNameW, GetParent, GetPropW, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, RemovePropW, SendMessageTimeoutW,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, RemovePropW, SendMessageTimeoutW,
     SetParent, SetPropW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
     GW_CHILD, GW_HWNDNEXT, MONITORINFOF_PRIMARY, SMTO_NORMAL, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOOWNERZORDER, SWP_NOZORDER, SW_HIDE, SW_SHOW,
@@ -349,6 +350,7 @@ pub fn mount(
         let _ = restore(snap);
         return Err(error);
     }
+    detach_input_queue(window, host);
 
     // SetWindowPos 对子窗口使用父窗口客户区坐标；监视器矩形是桌面坐标。
     let mut origin = POINT {
@@ -380,6 +382,19 @@ pub fn mount(
         new_style as u32,
         (ex_style | WS_EX_NOACTIVATE as isize) as u32,
     ))
+}
+
+/// 拆开壁纸窗口线程与 Explorer 宿主线程的输入队列。
+///
+/// 跨线程 `SetParent` 会隐式合并两边的输入队列，此后本窗口（Chromium aura）在注入按下时的
+/// `SetCapture` 会抢走 Explorer 列表视图的捕获，桌面框选随即中断。WE 在挂载后同样调用
+/// `AttachThreadInput(子窗口线程, 父窗口线程, FALSE)`（见 `WPE_INPUT_RE.md`）。尽力而为，失败不影响挂载。
+fn detach_input_queue(window: HWND, host: HWND) {
+    let ours = unsafe { GetWindowThreadProcessId(window, null_mut()) };
+    let theirs = unsafe { GetWindowThreadProcessId(host, null_mut()) };
+    if ours != 0 && theirs != 0 && ours != theirs {
+        unsafe { AttachThreadInput(ours, theirs, 0) };
+    }
 }
 
 /// Undo a mount: parent, style, extended style and rectangle.

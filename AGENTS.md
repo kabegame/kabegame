@@ -50,7 +50,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `kabegame_core::media::image_type::MEDIA_FORMATS` 是唯一的格式表，包含格式键、标准 MIME 值、扩展名、别名和支持标志。`images.type` 存储 `image/jpg` 和 `video/mov` 等格式键；仅在需要标准 MIME 的边界（HTTP Content-Type / Android MediaStore）使用 `mime_from_format`。
 - 在 Rust 中使用 `kabegame_core::media::image_type::*`（例如 `is_image_by_path`、`supported_image_extensions`），不要硬编码扩展名或 MIME 值。前端使用 `get_supported_image_types` Tauri 命令；其 `mimeByExt` 的值仍为标准 MIME。
 - `supported_video_extensions()` 始终返回内置视频列表。前端 `isVideoMediaType` 通过检查 `type.startsWith("video/")` 决定图库展示。
-- 格式表也包含目录型条目 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）：这类行的 `local_path` 是 Wallpaper Engine 壁纸**目录**；视频行的 `compatible_path` 始终有值（入口视频本身或兼容副本），所有播放端只走它，`/wpe/<imageId>/<rel>` 留给后续阶段的相对资源；任何把 `local_path` 当文件用的地方都必须先按 `is_wpe_type` 分流（见 [WPE 导入文档](cocs/wpe/WPE_IMPORT.md)）。
+- 格式表也包含目录型条目 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）：这类行的 `local_path` 是 Wallpaper Engine 壁纸**目录**；视频行的 `compatible_path` 始终有值（入口视频本身或兼容副本），所有播放端只走它；`x-wpe/web` 行 `compatible_path` 为空：桌面壁纸窗口由 Rust（`wallpaper/wpe_web_host.rs`）把整个窗口导航到入口的 `file://` 加载（CEF 补丁 0004 只对壁纸窗口开文件访问 + 运行时按壁纸目录拦截 `file:` 请求，`file:` 文档不注入初始化脚本），图库预览经本地媒体服务 `/wpe/<imageId>/` 跨源 iframe 加载（307 到入口、相对资源同前缀，网页 MIME 用 `/wpe` 专属表、不进 `MEDIA_FORMATS`）；任何把 `local_path` 当文件用的地方都必须先按 `is_wpe_type` 分流（见 [WPE 导入文档](cocs/wpe/WPE_IMPORT.md)）。
 
 **插件 PathQL 来源寻址**——`plugin://installed/<id>/<version>`、`plugin://byStore/<sourceId>/<id>/<version>`、
 `plugin://byPreview/<token>/<id>/<version>` 统一提供 `icon` / `description_template` / `doc` / `changelog` / `asset` / `provider` / `recommended`。

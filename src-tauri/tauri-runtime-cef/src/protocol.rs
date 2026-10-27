@@ -39,6 +39,14 @@ pub(crate) struct WebviewProtocols {
 
 // browser id (i32) -> 该 browser 对应的 webview label + 各 scheme handler
 static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = OnceLock::new();
+/// 发起请求的 frame 身份,由 scheme factory 的 `create(browser, frame, ..)` 取得,经
+/// `http::Request` 的 extension 交给协议 handler。CEF 对非 frame 发起的请求(如
+/// `CefURLRequest`)给 `frame = NULL`,此时不插入该 extension。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RequestFrame {
+    pub(crate) is_main: bool,
+}
+
 // 已向 CEF 全局注册过 factory 的 scheme 集合(每 scheme 只注册一次)
 static REGISTERED_SCHEMES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -79,7 +87,7 @@ wrap_scheme_handler_factory! {
         fn create(
             &self,
             browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
+            frame: Option<&mut Frame>,
             _scheme_name: Option<&CefString>,
             _request: Option<&mut cef::Request>,
         ) -> Option<ResourceHandler> {
@@ -88,10 +96,13 @@ wrap_scheme_handler_factory! {
             let entry = guard.get(&id)?;
             let protocol = entry.schemes.get(&self.logical_scheme)?.clone();
             let label = entry.label.clone();
+            // 记下发起请求的 frame 是否为主 frame(`cef-ipc` 据此拒绝子 frame,见 crate::ipc)
+            let main_frame = frame.map(|frame| frame.is_main() == 1);
             Some(CefResourceHandler::new(
                 label,
                 protocol,
                 Arc::new(Mutex::new(ResponseState::default())),
+                main_frame,
             ))
         }
     }
@@ -102,6 +113,8 @@ wrap_resource_handler! {
         webview_label: String,
         protocol: Arc<ProtocolHandler>,
         state: Arc<Mutex<ResponseState>>,
+        // 发起请求的 frame 是否为主 frame;`None` 表示 CEF 未给出 frame。
+        main_frame: Option<bool>,
     }
 
     impl ResourceHandler {
@@ -117,7 +130,7 @@ wrap_resource_handler! {
                 return 0;
             };
 
-            let request = match request_to_http(request) {
+            let mut request = match request_to_http(request) {
                 Ok(request) => request,
                 Err(()) => {
                     self.state.lock().unwrap().response = Some(bad_request());
@@ -125,6 +138,9 @@ wrap_resource_handler! {
                     return 1;
                 }
             };
+            if let Some(is_main) = self.main_frame {
+                request.extensions_mut().insert(RequestFrame { is_main });
+            }
 
             self.state.lock().unwrap().open_in_progress = true;
             let state = self.state.clone();

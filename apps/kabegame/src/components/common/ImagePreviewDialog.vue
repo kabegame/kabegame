@@ -202,12 +202,19 @@
               />
             </svg>
           </button>
+          <!-- 网页壁纸是跨源 iframe，指针在它上面时容器收不到 mousemove；照底部工具条的常驻热区，
+               在箭头所在的竖向中段各放一条常驻热区唤出箭头 -->
+          <template v-if="isPreviewWallpaper">
+            <div v-if="props.canPrev" class="preview-nav-hotzone left" @mouseenter="previewHoverSide = 'left'" />
+            <div v-if="props.canNext" class="preview-nav-hotzone right" @mouseenter="previewHoverSide = 'right'" />
+          </template>
           <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态 -->
           <div
             v-if="props.canPrev"
             class="preview-nav-zone left"
             :class="{ visible: previewHoverSide === 'left' }"
             @click.stop="goPrev"
+            @mouseleave="handleNavZoneLeave"
           >
             <div class="preview-nav-stack">
               <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
@@ -238,6 +245,7 @@
             class="preview-nav-zone right"
             :class="{ visible: previewHoverSide === 'right' }"
             @click.stop="goNext"
+            @mouseleave="handleNavZoneLeave"
           >
             <div class="preview-nav-stack">
               <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
@@ -263,7 +271,21 @@
               </button>
             </div>
           </div>
-          <div v-if="previewImage && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
+          <!-- 非视频 WPE 壁纸（web / scene）：主屏比例的「桌面画布」，页面按桌面尺寸渲染且可交互；
+               不走 Panzoom，也不挂 VideoControls -->
+          <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
+            <WallpaperDesktopCanvas>
+              <ImageContent
+                ref="previewContentRef"
+                :image="previewImage"
+                prefer="original"
+                video-playing
+                interactive
+                @ready="handlePreviewReady"
+              />
+            </WallpaperDesktopCanvas>
+          </div>
+          <div v-if="previewImage && isPreviewStatic" ref="panzoomWrapperRef" class="panzoom-wrapper">
             <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
             <ImageContent
               ref="previewContentRef"
@@ -279,29 +301,49 @@
             :is-fullscreen="isAppFullscreen"
             :keep-visible="zoomSliderDragging"
           >
-            <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 11h14v2H5z" />
-              </svg>
-            </button>
-            <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" />
-              </svg>
-            </button>
-            <div class="zoom-progress-wrap">
-              <PreviewRangeSlider
-                :model-value="zoomSliderValue"
-                :min="100"
-                :max="1000"
-                :step="1"
-                :aria-label="t('gallery.zoomRatio')"
-                @drag-start="handleZoomSliderDragStart"
-                @update:model-value="handleZoomSliderInput"
-                @change="handleZoomSliderCommit"
-              />
-              <span class="zoom-progress-text">{{ zoomPercentText }}</span>
-            </div>
+            <!-- 缩放只对 Panzoom 图片有意义；桌面画布只保留全屏 -->
+            <template v-if="isPreviewStatic">
+              <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 11h14v2H5z" />
+                </svg>
+              </button>
+              <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" />
+                </svg>
+              </button>
+              <div class="zoom-progress-wrap">
+                <PreviewRangeSlider
+                  :model-value="zoomSliderValue"
+                  :min="100"
+                  :max="1000"
+                  :step="1"
+                  :aria-label="t('gallery.zoomRatio')"
+                  @drag-start="handleZoomSliderDragStart"
+                  @update:model-value="handleZoomSliderInput"
+                  @change="handleZoomSliderCommit"
+                />
+                <span class="zoom-progress-text">{{ zoomPercentText }}</span>
+              </div>
+            </template>
+            <!-- 网页壁纸的右键落在跨源 iframe 里、到不了预览容器，菜单项按原顺序平铺成图标按钮 -->
+            <template v-if="isPreviewWallpaper && wallpaperBarActions.length > 0">
+              <template v-for="action in wallpaperBarActions" :key="action.key">
+                <span v-if="action.divider" class="control-bar-divider" />
+                <button
+                  class="control-btn"
+                  type="button"
+                  :title="action.label"
+                  :aria-label="action.label"
+                  :disabled="action.disabled"
+                  @click="handlePreviewActionCommand(action.command)"
+                >
+                  <el-icon><component :is="action.icon" /></el-icon>
+                </button>
+              </template>
+              <span class="control-bar-divider" />
+            </template>
             <button
               class="control-btn"
               type="button"
@@ -371,7 +413,7 @@
 
 <script setup lang="ts">
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
-import type { Ref } from "vue";
+import type { Component, Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { Subscription } from "rxjs";
 import { ArrowLeftBold, ArrowRightBold, DArrowLeft, DArrowRight } from "@kabegame/element-plus-icons";
@@ -379,6 +421,7 @@ import { useLocalStorage } from "@vueuse/core";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
+import WallpaperDesktopCanvas from "../wallpaper/WallpaperDesktopCanvas.vue";
 import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
@@ -405,7 +448,12 @@ import { useModal } from "../../composables/useModal";
 import { compatibleToUrl, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { fetchImageById } from "../../utils/imageRow";
 import { batchWindow, imagePatches$, on, triggers$ } from "../../services/kbEvents";
-import { isNativeMetadataEligible, isVideoPlaybackType, isWpeVideoType } from "../../utils/mediaMime";
+import {
+  isNativeMetadataEligible,
+  isVideoPlaybackType,
+  isWpeVideoType,
+  isWpeWallpaperContentType,
+} from "../../utils/mediaMime";
 import type { Plugin } from "@/stores/plugins";
 import { IS_ANDROID } from "@/env.ts";
 
@@ -504,10 +552,16 @@ const previewImage = computed<ImageInfo | null>(() =>
 /** 只给了 id 且还没解析出来：画 loading，不是「不存在」。 */
 const previewResolving = computed(() => typeof props.image === "string" && !resolvedImage.value);
 const isPreviewVideo = computed(() => isVideoPlaybackType(previewImage.value?.type));
+/** 非视频 WPE 壁纸（web / scene）：桌面画布内嵌壁纸组件，WPE 视频仍是视频预览。 */
+const isPreviewWallpaper = computed(() => isWpeWallpaperContentType(previewImage.value?.type));
+/** Panzoom 图片分支的条件。 */
+const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpaper.value);
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
 const audioKeepAlive = useAudioKeepAlive();
-const desktopVideoActive = computed(() => !uiStore.isCompact && previewVisible.value && isPreviewVideo.value);
+const desktopVideoActive = computed(
+  () => !uiStore.isCompact && previewVisible.value && (isPreviewVideo.value || isPreviewWallpaper.value),
+);
 watch(desktopVideoActive, (active) => {
   if (active) audioKeepAlive.start();
   else audioKeepAlive.stop();
@@ -1063,6 +1117,30 @@ const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
   selectedCount: previewImage.value ? 1 : 0,
 }));
 
+// 网页壁纸预览的工具条按钮：右键菜单的可见项按原顺序平铺（桌面菜单没有子菜单）
+const wallpaperBarActions = computed(() => {
+  const ctx = previewActionContext.value;
+  return props.actions
+    .filter((action) => action.command && action.icon && (action.visible === undefined || action.visible(ctx)))
+    .map((action, index) => {
+      const label = typeof action.label === "function" ? action.label(ctx) : action.label;
+      const suffix = typeof action.suffix === "function" ? action.suffix(ctx) : action.suffix;
+      const divider = typeof action.dividerBefore === "function" ? action.dividerBefore(ctx) : action.dividerBefore;
+      return {
+        key: action.key,
+        command: action.command!,
+        label: suffix ? `${label} ${suffix}` : label,
+        // 同 ActionRenderer：函数即按上下文解析（图标组件都是对象，不会被误调用）
+        icon:
+          typeof action.icon === "function"
+            ? (action.icon as (c: ActionContext<ImageInfo>) => Component)(ctx)
+            : action.icon,
+        disabled: typeof action.disabled === "function" ? action.disabled(ctx) : !!action.disabled,
+        divider: index > 0 && !!divider,
+      };
+    });
+});
+
 const handlePswpActionClose = () => {
   if (uiStore.isCompact) {
     // 关闭 ActionSheet 时隐藏 PSWP UI（使用 setUiVisible 避免 toggle 语义歧义）
@@ -1107,8 +1185,13 @@ const handlePreviewMouseLeave = () => {
   previewHoverSide.value = null;
 };
 
+// 从箭头区移进网页壁纸 iframe 后容器再也收不到 mousemove，只能在离开时收起
+const handleNavZoneLeave = (event: MouseEvent) => {
+  if ((event.relatedTarget as Element | null)?.tagName === "IFRAME") previewHoverSide.value = null;
+};
+
 const handlePreviewWheel = (event: WheelEvent) => {
-  if (isPreviewVideo.value) return;
+  if (isPreviewVideo.value || isPreviewWallpaper.value) return;
   handlePanzoomWheel(event);
 };
 
@@ -1119,7 +1202,7 @@ const handlePreviewWheel = (event: WheelEvent) => {
 // ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
 const handlePreviewReady = () => {
   previewImageLoading.value = false;
-  if (uiStore.isCompact || isPreviewVideo.value) return;
+  if (uiStore.isCompact || isPreviewVideo.value || isPreviewWallpaper.value) return;
   void measureContainerAfterRender().then(() => {
     panzoomReset();
   });
@@ -1291,7 +1374,7 @@ watch(
   () => previewImage.value?.id,
   (id) => {
     if (id && !uiStore.isCompact) {
-      if (isPreviewVideo.value) return;
+      if (isPreviewVideo.value || isPreviewWallpaper.value) return;
       panzoomReset();
     }
   },
@@ -1875,6 +1958,23 @@ defineExpose({
 
     .el-icon {
       font-size: 18px;
+    }
+  }
+
+  // 只在网页壁纸预览时渲染：叠在 iframe 上、低于箭头区，只占箭头所在的中段以少挡页面交互
+  .preview-nav-hotzone {
+    position: absolute;
+    top: 30%;
+    bottom: 30%;
+    width: min(20%, 96px);
+    z-index: 1;
+
+    &.left {
+      left: 0;
+    }
+
+    &.right {
+      right: 0;
     }
   }
 

@@ -22,9 +22,11 @@ pub struct WpeSourceInfo {
     pub recognized: Option<String>,
     pub paths: Vec<String>,
     pub total: usize,
-    /// 可导入数量（第一阶段只统计 `video`，且入口文件存在）。
+    /// 入口文件存在的 `video` 壁纸数量。
     pub video: usize,
-    /// 其中尚未入库、本次导入会新增的数量。
+    /// 入口文件存在的 `web` 壁纸数量。
+    pub web: usize,
+    /// Kabegame 已支持的类型（[`WpeKind::is_supported`]）中尚未入库、本次导入会新增的数量。
     pub pending: usize,
     /// 已在库中的数量（按 `local_path` 命中）。
     pub imported: usize,
@@ -38,6 +40,7 @@ impl WpeSourceInfo {
             paths: Vec::new(),
             total: 0,
             video: 0,
+            web: 0,
             pending: 0,
             imported: 0,
         }
@@ -66,7 +69,8 @@ pub fn path_key(path: &str) -> String {
 pub struct DirCounts {
     pub total: usize,
     pub video: usize,
-    /// 可导入且尚未入库。
+    pub web: usize,
+    /// 已支持的类型且尚未入库。
     pub pending: usize,
     pub imported: usize,
 }
@@ -75,6 +79,7 @@ impl WpeSourceInfo {
     fn add_counts(&mut self, counts: DirCounts) {
         self.total += counts.total;
         self.video += counts.video;
+        self.web += counts.web;
         self.pending += counts.pending;
         self.imported += counts.imported;
     }
@@ -92,12 +97,13 @@ pub fn count_dirs(dirs: &[PathBuf], imported: &HashSet<String>) -> DirCounts {
         if already {
             counts.imported += 1;
         }
-        if matches!(
-            read_project(&normalized),
-            Ok(project) if project.kind == WpeKind::Video
-        ) {
-            counts.video += 1;
-            if !already {
+        if let Ok(project) = read_project(&normalized) {
+            match project.kind {
+                WpeKind::Video => counts.video += 1,
+                WpeKind::Web => counts.web += 1,
+                _ => {}
+            }
+            if project.kind.is_supported() && !already {
                 counts.pending += 1;
             }
         }
@@ -225,15 +231,19 @@ mod tests {
         wallpaper(&content.join("1"), "video", "a.mp4");
         wallpaper(&content.join("2"), "web", "index.html");
         wallpaper(&content.join("3"), "video", "missing.mp4");
+        wallpaper(&content.join("4"), "web", "index.html");
+        wallpaper(&content.join("5"), "scene", "scene.json");
         let dirs = expand_dir(&content);
         fs::remove_file(content.join("3").join("missing.mp4")).unwrap();
 
         let imported = HashSet::from([path_key(&normalize_local_dir(&content.join("2")).unwrap().to_string_lossy())]);
         let counts = count_dirs(&dirs, &imported);
-        assert_eq!(counts.total, 3);
-        // 1 是唯一入口存在的 video；3 的入口已删；已入库的 2 是 web，不影响 pending。
+        assert_eq!(counts.total, 5);
+        // 1 是唯一入口存在的 video；3 的入口已删；2、4 是 web，其中 2 已入库；5 是暂不支持的 scene。
         assert_eq!(counts.video, 1);
-        assert_eq!(counts.pending, 1);
+        assert_eq!(counts.web, 2);
+        // pending = 未入库的已支持类型：1（video）+ 4（web）。
+        assert_eq!(counts.pending, 2);
         assert_eq!(counts.imported, 1);
         fs::remove_dir_all(root).ok();
     }

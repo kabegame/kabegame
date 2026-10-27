@@ -187,4 +187,16 @@ defineExpose({
 :deep(.control-bar-spacer) {
   flex: 1;
 }
+
+:deep(.control-bar-divider) {
+  width: 1px;
+  height: 18px;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+:deep(.control-btn:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 </style>

@@ -348,7 +348,7 @@ fn encode_relative_path(rel: &str) -> String {
         .join("/")
 }
 
-/// `/wpe/<id>/`：302 到 `project.json` 声明的入口文件。
+/// `/wpe/<id>/`：307 到 `project.json` 声明的入口文件（iframe 文档加载会跟随）。
 #[cfg(not(target_os = "android"))]
 async fn handle_wpe_entry(UrlPath(id): UrlPath<String>) -> Response {
     let info = match authorize_wpe_row(&id) {
@@ -396,12 +396,77 @@ async fn handle_wpe_file(
     }
 
     let target = target.to_string_lossy().into_owned();
-    let mime = mime_from_path(&target);
+    let mime = wpe_mime_from_path(&target);
+    if mime.as_deref().is_some_and(|m| m.starts_with("text/html")) {
+        // HTML 走专用产出点（Phase 4 在此注入垫片）；其它文件照旧流式 + Range。
+        return serve_wpe_html(&target).await;
+    }
     let range = headers
         .get(RANGE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     serve_file_with_mime(&target, mime, range).await
+}
+
+/// `/wpe` 专属的网页资源 MIME 表。只服务 WPE 网页壁纸目录，**不进 `MEDIA_FORMATS`**：
+/// 那张表是「可入库的媒体格式」唯一事实来源，网页类型混进去会污染 `supported_media_extensions`
+/// 一类派生。表外扩展名回落媒体格式表，再查不到就是 `application/octet-stream`。
+#[cfg(not(target_os = "android"))]
+const WPE_WEB_MIME: &[(&str, &str)] = &[
+    ("html", "text/html; charset=utf-8"),
+    ("htm", "text/html; charset=utf-8"),
+    ("js", "text/javascript"),
+    ("mjs", "text/javascript"),
+    ("css", "text/css"),
+    ("json", "application/json"),
+    ("map", "application/json"),
+    ("svg", "image/svg+xml"),
+    ("xml", "application/xml"),
+    ("txt", "text/plain; charset=utf-8"),
+    ("wasm", "application/wasm"),
+    ("woff", "font/woff"),
+    ("woff2", "font/woff2"),
+    ("ttf", "font/ttf"),
+    ("otf", "font/otf"),
+    ("webm", "video/webm"),
+    ("ogg", "video/ogg"),
+    ("ogv", "video/ogg"),
+    ("oga", "audio/ogg"),
+    ("mp3", "audio/mpeg"),
+    ("wav", "audio/wav"),
+];
+
+/// `/wpe/<id>/<rel>` 的 MIME：先查网页表，再回落媒体格式表（图片 / 视频）；无扩展名返回 `None`。
+#[cfg(not(target_os = "android"))]
+fn wpe_mime_from_path(path: &str) -> Option<String> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase();
+    if let Some((_, mime)) = WPE_WEB_MIME.iter().find(|(key, _)| *key == ext) {
+        return Some((*mime).to_string());
+    }
+    mime_from_path(path)
+}
+
+/// WPE 网页壁纸 HTML 的专用产出点：读整文件、`text/html; charset=utf-8`、`no-store`，忽略 Range。
+/// 本 Phase 原样返回、不注入任何脚本；**Phase 4 在这里把垫片 `<script>` 插到 `<head>` 最前面**，
+/// 并对 zcompat 兼容补丁做内存替换（不写回用户目录）。
+#[cfg(not(target_os = "android"))]
+async fn serve_wpe_html(path: &str) -> Response {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let mut out = (StatusCode::OK, bytes).into_response();
+            out.headers_mut().insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            out.headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            out
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "file not found").into_response(),
+    }
 }
 
 /// 代理 GET 请求：/proxy?url=xxx，用 reqwest 拉取目标 URL 后流式返回（初步实现，无任务上下文）
@@ -635,7 +700,18 @@ pub async fn get_http_server_base_url<R: tauri::Runtime>(
 
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
-    use super::absolute_path_from_route;
+    use super::{absolute_path_from_route, wpe_mime_from_path};
+
+    #[test]
+    fn wpe_web_mime_table_covers_page_resources() {
+        assert_eq!(wpe_mime_from_path("C:/w/index.HTML").as_deref(), Some("text/html; charset=utf-8"));
+        assert_eq!(wpe_mime_from_path("/w/main.css").as_deref(), Some("text/css"));
+        assert_eq!(wpe_mime_from_path("/w/wallpaper.js").as_deref(), Some("text/javascript"));
+        assert_eq!(wpe_mime_from_path("/w/project.json").as_deref(), Some("application/json"));
+        // 图片仍回落媒体格式表；无扩展名不猜测。
+        assert_eq!(wpe_mime_from_path("/w/preview.png").as_deref(), Some("image/png"));
+        assert_eq!(wpe_mime_from_path("/w/LICENSE"), None);
+    }
 
     #[test]
     fn media_route_restores_unix_absolute_path() {

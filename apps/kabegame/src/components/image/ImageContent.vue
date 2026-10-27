@@ -63,6 +63,17 @@
         @dragstart="onDragStart"
       />
 
+      <!-- 非视频 WPE 壁纸（web / scene）的原图形态：交给壁纸组件渲染（预览「桌面画布」内可交互） -->
+      <WpeWallpaperContent
+        v-else-if="mode === 'wallpaper'"
+        :image="image"
+        :playing="videoPlaying"
+        :muted="videoMuted"
+        :interactive="interactive"
+        @ready="onWallpaperReady"
+        @error="onWallpaperError"
+      />
+
       <!-- 视频 -->
       <video
         v-else
@@ -96,7 +107,14 @@ import { computed, reactive, ref, watch, watchEffect } from "vue";
 import { storeToRefs } from "pinia";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageNotFound from "../common/ImageNotFound.vue";
-import { displayImageMimeType, isVideoMediaType, isWpeMediaType, isWpeVideoType } from "../../utils/mediaMime";
+import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
+import {
+  displayImageMimeType,
+  isVideoMediaType,
+  isWpeMediaType,
+  isWpeVideoType,
+  isWpeWallpaperContentType,
+} from "../../utils/mediaMime";
 import { beginInternalDrag, DRAG_IMAGE_ID_MIME } from "../../utils/dragExport";
 // #region debug-drag
 import { sendDebugEvent } from "../../debugIngest";
@@ -177,6 +195,8 @@ interface Props {
    * 例如预览的 panzoom 在已缩放状态下要靠拖动平移画面（见 `usePanzoomPreview` 的 canPan）。
    */
   nativeDrag?: boolean;
+  /** 只对 `wallpaper` 形态生效：壁纸页面是否接收指针事件（预览「桌面画布」为 true）。 */
+  interactive?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -187,6 +207,7 @@ const props = withDefaults(defineProps<Props>(), {
   resetVideoOnPause: false,
   fit: "contain",
   nativeDrag: true,
+  interactive: false,
 });
 
 /** 拖拽落盘的建议文件名：跟随当前实际加载的 source，退回 displayName / id。 */
@@ -269,9 +290,15 @@ const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 const isVideo = computed(() => isVideoMediaType(props.image.type));
 const isWpe = computed(() => isWpeMediaType(props.image.type));
 const isWpeVideo = computed(() => isWpeVideoType(props.image.type));
+/** 非视频 WPE（web / scene）：原图形态交给壁纸组件，不走缩略 / 原图链。 */
+const isWpeWallpaperContent = computed(() => isWpeWallpaperContentType(props.image.type));
 /** 目录型壁纸没有可拖出的真实媒体文件（local_path 是目录），关闭原生拖拽。 */
 const dragEnabled = computed(() => props.nativeDrag && !isWpe.value);
-const mode = computed<"image" | "gif" | "video">(() => {
+const mode = computed<"image" | "gif" | "video" | "wallpaper">(() => {
+  // 非视频 WPE：缩略位仍是作者 preview.*；原图形态交给壁纸组件。
+  if (isWpeWallpaperContent.value) {
+    return props.prefer === "thumbnail" ? "image" : "wallpaper";
+  }
   // 目录型视频壁纸：网格/缩略位用 WPE 自带 preview（gif 原生播放），预览与背景播入口视频。
   if (isWpeVideo.value) {
     return props.prefer === "thumbnail" && hasWpePreview.value ? "image" : "video";
@@ -313,6 +340,8 @@ const sourceOf = (path: string): Source => {
 };
 
 const buildChain = (...paths: string[]): Source[] => {
+  // wallpaper 形态不参与缩略 / 原图链：内容由壁纸组件按 id 取目标渲染。
+  if (mode.value === "wallpaper") return [];
   const seen = new Set<string>();
   const chain: Source[] = [];
   for (const path of paths) {
@@ -374,10 +403,15 @@ const onImgError = (slot: typeof thumbSlot, e: Event) => {
 const origEngaged = computed(() => props.prefer === "original" || thumbSlot.dead);
 
 const videoEl = ref<HTMLVideoElement | null>(null);
+/** wallpaper 形态：壁纸目标取不到（行已删 / IPC 失败）时置 true，显示丢失态。 */
+const wallpaperFailed = ref(false);
 
 // ---- 终态 ----
 const isLost = computed(() => {
   switch (mode.value) {
+    case "wallpaper":
+      // 目录消失直接丢失；其它失败由壁纸组件的致命 error 决定
+      return props.image.localExists === false || wallpaperFailed.value;
     case "video":
       return videoSlot.dead;
     case "gif":
@@ -398,6 +432,7 @@ watch(
     origSlot.reset();
     videoSlot.reset();
     failedSources.value = [];
+    wallpaperFailed.value = false;
     if (isLost.value)
       finishLoading(); // 一条可加载的链都没有
     else startLoading();
@@ -421,6 +456,17 @@ const onLoad = (e: Event) => {
   if (isStaleMediaEvent(e)) return;
   finishLoading();
   emit("ready");
+};
+
+const onWallpaperReady = () => {
+  finishLoading();
+  emit("ready");
+};
+
+/** 致命错误进丢失态（isLost 的 watch 负责 emit error）；非致命只结束加载态，页面仍保留。 */
+const onWallpaperError = (_message: string, fatal: boolean) => {
+  if (fatal) wallpaperFailed.value = true;
+  else finishLoading();
 };
 
 const onVideoError = (e: Event) => {

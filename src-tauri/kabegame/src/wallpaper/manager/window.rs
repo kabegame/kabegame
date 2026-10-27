@@ -1,17 +1,17 @@
 use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
 use crate::wallpaper::window::WallpaperWindow;
 use async_trait::async_trait;
+use crate::wallpaper::wpe_web_host::{self, WALLPAPER_LABEL};
 use kabegame_i18n::t;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-/// 壁纸窗口的 label。窗口是**懒建**的：只在 `wallpaperMode == "window"` 期间存在。
-const WALLPAPER_LABEL: &str = "wallpaper";
-
-/// 窗口模式壁纸管理器。
+/// 窗口模式壁纸管理器。壁纸窗口的 label 见 [`WALLPAPER_LABEL`]，窗口是**懒建**的：
+/// 只在 `wallpaperMode == "window"` 期间存在。
 ///
 /// **本 manager 不负责壁纸内容**——内容由壁纸页面（`WallpaperWindow.vue`）监听
-/// `setting-change` 自驱动渲染。本 manager 只负责窗口的**生命周期**：
+/// `setting-change` 自驱动渲染；网页壁纸（`x-wpe/web`）例外，由 `wpe_web_host` 把整个
+/// 窗口导航到壁纸入口的 `file://`。本 manager 只负责窗口的**生命周期**：
 /// `init()` 建窗口并挂到桌面层，`cleanup()` 销毁它。窗口一旦建立即常显，
 /// 中途不 hide/show。
 ///
@@ -55,6 +55,10 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         if let Some(w) = self.app.get_webview_window(WALLPAPER_LABEL) {
             return Ok(w);
         }
+
+        // 网页壁纸以 file:// 加载并读同目录文件：建窗前登记 label，CEF 只给这个 browser
+        // 打开文件访问偏好，file: 请求由运行时按当前壁纸目录约束（初始拒绝全部）。
+        tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         let builder = WebviewWindowBuilder::new(
@@ -118,6 +122,8 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         if let Ok(mut wp) = self.wallpaper_window.lock() {
             *wp = None;
         }
+        // 网页壁纸宿主随窗口复位：回到应用页模式、文件根目录清空、停止鼠标转发。
+        wpe_web_host::reset();
         if let Some(window) = self.app.get_webview_window(WALLPAPER_LABEL) {
             #[cfg(target_os = "windows")]
             if let Err(error) = tauri_plugin_wemt::detach_window(&window) {

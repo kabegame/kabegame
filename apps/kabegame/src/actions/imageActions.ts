@@ -58,7 +58,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
   const hideSet = new Set(hide);
   const multiHideSet = new Set(multiHide);
   const isSingle = (ctx: ActionContext<ImageInfo>) => !ctx.selectedCount || ctx.selectedCount === 1;
-  /** 目录型 WPE 壁纸没有单个源文件：复制 / 分享 / 删源文件都不适用。 */
+  /** 目录型 WPE 壁纸没有单个源文件：复制 / 分享 / 删源文件都不适用；「打开」即打开目录，「欣赏更多」也不再需要。 */
   const isWpeTarget = (ctx: ActionContext<ImageInfo>) =>
     isWpeMediaType(ctx.target?.type);
   // 详情弹窗与系统分享只有 Android 有（桌面在预览抽屉里看详情，share_file 仅 Android 编译）；
@@ -129,8 +129,12 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       label: t("contextMenu.openFolder"),
       icon: Folder,
       command: "openFolder",
-      // Hide on Android
-      visible: (ctx) => !hideSet.has("openFolder") && !IS_ANDROID && (!ctx.selectedCount || ctx.selectedCount === 1),
+      // Hide on Android；WPE 壁纸的「打开」已经是打开壁纸目录，不再重复
+      visible: (ctx) =>
+        !hideSet.has("openFolder") &&
+        !IS_ANDROID &&
+        !isWpeTarget(ctx) &&
+        (!ctx.selectedCount || ctx.selectedCount === 1),
     },
     {
       key: "wallpaper",

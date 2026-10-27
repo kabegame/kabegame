@@ -94,20 +94,28 @@ fn windows_steam_path() -> Option<PathBuf> {
 /// 兼容两种格式：新格式每个库是对象（`path` + `apps`），旧格式直接是 `"1" "D:\\..."`。
 pub fn parse_library_folders(text: &str) -> Vec<(PathBuf, bool)> {
     let tokens = tokenize_vdf(text);
-    let mut cursor = 0usize;
-    let Some(root) = parse_vdf_object(&tokens, &mut cursor) else {
+    // VDF 顶层没有花括号，是裸的「键 值」序列（通常只有一个 "libraryfolders" 键），
+    // 所以按隐式对象体解析，不能要求首 token 是 `{`。
+    let Some(root) = parse_vdf_body(&tokens, &mut 0usize, false) else {
         return Vec::new();
     };
+    // 旧格式写作 "LibraryFolders"，键名不区分大小写。
     let Some(libraryfolders) = root
-        .get("libraryfolders")
-        .and_then(Value::as_object)
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("libraryfolders"))
+        .and_then(|(_, value)| value.as_object())
         .cloned()
     else {
         return Vec::new();
     };
 
     let mut out = Vec::new();
-    for value in libraryfolders.values() {
+    for (key, value) in &libraryfolders {
+        // 库条目的键是序号（"0"、"1"…）；旧格式同级还有 TimeNextStatsReport 等统计字段，
+        // 它们的值也是字符串，必须按键过滤掉。
+        if !key.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
         match value {
             Value::String(path) => {
                 let path = normalize_vdf_path(path);
@@ -206,15 +214,27 @@ enum VdfToken {
     Str(String),
 }
 
+/// 解析一个带花括号的 VDF 对象（`{ 键 值 ... }`）。
 fn parse_vdf_object(tokens: &[VdfToken], cursor: &mut usize) -> Option<Map<String, Value>> {
     if !matches!(tokens.get(*cursor), Some(VdfToken::Open)) {
         return None;
     }
     *cursor += 1;
+    parse_vdf_body(tokens, cursor, true)
+}
+
+/// 解析「键 值」序列。`braced` 为 true 时遇到 `}` 结束并消费它；为 false 时表示顶层
+/// 隐式对象，读到 token 末尾结束，遇到多余的 `}` 视为格式错误。
+fn parse_vdf_body(
+    tokens: &[VdfToken],
+    cursor: &mut usize,
+    braced: bool,
+) -> Option<Map<String, Value>> {
     let mut map = Map::new();
     loop {
         match tokens.get(*cursor) {
-            Some(VdfToken::Close) => {
+            None if !braced => return Some(map),
+            Some(VdfToken::Close) if braced => {
                 *cursor += 1;
                 return Some(map);
             }

@@ -9,6 +9,7 @@ import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { IS_DEV } from "@/env";
 import WallpaperStage from "@/components/wallpaper/WallpaperStage.vue";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
+import { wpeKind } from "@/utils/mediaMime";
 import {
   FRAME_MONITOR_SAMPLE_MS,
   getFrameMonitorLevel,
@@ -46,6 +47,16 @@ const lastTransitionTs = ref("");
 /** 窗口侧错误；与 WallpaperStage 的 lastError 按赋值时刻「后写者胜」合并显示（原实现两者共用一个变量）。 */
 const windowError = ref("");
 const windowErrorAt = ref(0);
+
+/**
+ * 接收当前壁纸目标。桌面网页壁纸（`x-wpe/web`）由 Rust（`wpe_web_host`）把整个窗口导航到
+ * `file://` 入口，这里不渲染、保持现有画面，避免与 Rust 抢导航。
+ */
+function acceptTarget(target: WallpaperTarget | null) {
+  if (!target?.path) return;
+  if (wpeKind(target.type) === "web") return;
+  state.target = target;
+}
 
 function setWindowError(message: string) {
   windowError.value = message;
@@ -127,9 +138,7 @@ async function init() {
       lastImageTs.value = new Date().toLocaleTimeString();
       try {
         const target = await invoke<WallpaperTarget | null>("get_current_wallpaper_target");
-        if (target?.path) {
-          state.target = target;
-        }
+        acceptTarget(target);
       } catch {
         // 忽略，可能是无壁纸
       }
@@ -166,9 +175,7 @@ async function init() {
     if (typeof playbackRateRes === "number" && Number.isFinite(playbackRateRes)) {
       state.playbackRate = Math.min(3, Math.max(0.25, playbackRateRes));
     }
-    if (targetRes?.path) {
-      state.target = targetRes;
-    }
+    acceptTarget(targetRes);
   } catch (e) {
     setWindowError(`init settings fetch failed: ${String(e)}`);
   }

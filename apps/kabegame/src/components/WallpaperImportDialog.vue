@@ -175,8 +175,11 @@ interface WpeSourceInfo {
   recognized?: string | null;
   paths: string[];
   total: number;
+  /** 入口存在的视频壁纸数量。 */
   video: number;
-  /** 可导入且尚未入库。 */
+  /** 入口存在的网页壁纸数量。 */
+  web: number;
+  /** 已支持的类型（视频 / 网页）中尚未入库的数量。 */
   pending: number;
   imported: number;
 }
@@ -256,12 +259,22 @@ function toggle(source: WpeSourceInfo) {
   selected[source.kind] = !isSelected(source);
 }
 
-/** 三枚计数小标签：壁纸总数 / 待导入（视频且未入库，为 0 时置灰）/ 已导入（为 0 时不显示）。 */
+/**
+ * 计数小标签：壁纸总数 / 待导入（已支持类型且未入库，为 0 时置灰）/ 按类型分布（为 0 的类型省略，
+ * 都为 0 时不显示）/ 已导入（为 0 时不显示）。
+ */
 function statChips(source: WpeSourceInfo): { tone: "plain" | "primary" | "muted"; text: string }[] {
   const chips: { tone: "plain" | "primary" | "muted"; text: string }[] = [
     { tone: "plain", text: t("gallery.wpeStatTotal", { n: source.total }) },
-    { tone: source.pending > 0 ? "primary" : "muted", text: t("gallery.wpeStatVideo", { n: source.pending }) },
+    { tone: source.pending > 0 ? "primary" : "muted", text: t("gallery.wpeStatImportable", { n: source.pending }) },
   ];
+  const kinds = [
+    { n: source.video ?? 0, kind: t("gallery.wpeKindVideo") },
+    { n: source.web ?? 0, kind: t("gallery.wpeKindWeb") },
+  ]
+    .filter((item) => item.n > 0)
+    .map((item) => t("gallery.wpeStatKinds", item));
+  if (kinds.length) chips.push({ tone: "plain", text: kinds.join(" · ") });
   if (source.imported > 0) chips.push({ tone: "muted", text: t("gallery.wpeStatImported", { n: source.imported }) });
   return chips;
 }

@@ -36,10 +36,11 @@ pub async fn get_current_wallpaper_path_from_settings<R: tauri::Runtime>(
 pub struct WallpaperTarget {
     pub id: String,
     pub path: String,
-    /// `images.type`（如 `video/mp4`、`x-wpe/video`）。
+    /// `images.type`（如 `video/mp4`、`x-wpe/video`、`x-wpe/web`）。
     #[serde(rename = "type")]
     pub media_type: Option<String>,
-    /// 浏览器兼容副本（仅入口视频不可直接播放时有值）。
+    /// 浏览器兼容副本：普通视频仅在不可直接播放时有值；WPE 视频始终有值；WPE 网页为空
+    /// （页面经 `/wpe/<id>/` 加载）。
     pub compatible_path: Option<String>,
     /// 目录型 WPE 视频壁纸的作者默认播放属性；其它类型为 null。
     pub wpe_video: Option<WpeVideoProps>,
@@ -57,17 +58,22 @@ pub async fn get_current_wallpaper_target_from_settings(
     Ok(Some(build_wallpaper_target(info).await))
 }
 
-/// 由图片行组装壁纸目标（当前壁纸与后续的预览内嵌共用）：
-/// WPE 视频读 `project.json` 解析作者属性，其它类型 `wpe_video` 为 None。
+/// 由图片行组装壁纸目标（当前壁纸、图库预览、应用背景共用）：
+/// WPE 视频的作者属性取自图片 metadata（导入时写入的 `project.json` 原文），不重读磁盘——
+/// 用户属性以后也作为同一份元数据里的一段合并进来；其它类型 `wpe_video` 为 None。
 async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
     let wpe_video = if kabegame_core::media::image_type::is_wpe_video_type(info.media_type.as_deref())
     {
-        let dir = std::path::PathBuf::from(&info.local_path);
-        tokio::task::spawn_blocking(move || kabegame_core::wpe::read_project(&dir))
+        let image_id = info.id.clone();
+        let raw = tokio::task::spawn_blocking(move || Storage::global().get_metadata(&image_id))
             .await
             .ok()
             .and_then(Result::ok)
-            .map(|project| kabegame_core::wpe::properties::resolve_video_props(&project))
+            .flatten();
+        Some(
+            raw.map(|raw| kabegame_core::wpe::properties::resolve_video_props_from_raw(&raw))
+                .unwrap_or_default(),
+        )
     } else {
         None
     };
@@ -79,6 +85,20 @@ async fn build_wallpaper_target(info: ImageInfo) -> WallpaperTarget {
         compatible_path: info.compatible_path,
         wpe_video,
     }
+}
+
+/// 图库预览 / 应用背景按 id 取壁纸目标，与当前壁纸共用 [`build_wallpaper_target`]，
+/// 所以预览画布与桌面拿到的是同一份目标结构。行不存在返回 None。
+#[tauri::command]
+pub async fn get_wallpaper_target_for_image(
+    image_id: String,
+) -> Result<Option<WallpaperTarget>, String> {
+    let Some(info) =
+        Storage::find_image_by_id(&image_id).map_err(|e| format!("Storage error: {}", e))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(build_wallpaper_target(info).await))
 }
 
 #[tauri::command]

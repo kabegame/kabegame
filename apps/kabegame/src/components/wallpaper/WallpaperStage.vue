@@ -7,17 +7,34 @@
  * - 只靠 props 驱动：不 invoke、不 listen、不读 settingsStore；数据绑定由调用方
  *   （壁纸窗口 `WallpaperWindow.vue`，以及后续的图库预览）负责。
  * - 铺满父元素（父元素需有确定尺寸），可放在任意尺寸容器里。
+ * - WPE 网页壁纸（`x-wpe/web`）走独立的 web 层：一次只存在一个跨源 iframe，不参与 base / top
+ *   双层过渡；切入时等页面 load 后整层淡入盖住媒体层，切走时新媒体先直设到 base、web 层淡出后
+ *   **销毁** iframe（先置 about:blank 再移除），让渲染进程回收。
  * - DOM 仍按原实现命令式操作：模板 ref 只在 onMounted 时取一次元素，存到普通变量里
  *   （同原 `initDOM()`）。原因是视频 commit 会交换 base / top 两个 `<video>` 的角色，
  *   且清 src 必须用 `removeAttribute` 才不触发 error；若改成响应式 class / style / src 绑定，
  *   Vue 的 patch 会与这些命令式改动互相覆盖。这些元素在模板里只有静态属性，Vue 不会再 patch 它们。
  */
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl } from "@/utils/fileUrl";
+import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl, wpeEntryUrl } from "@/utils/fileUrl";
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
 
 type Phase = "idle" | "prep" | "enter";
-type MediaType = "image" | "video";
+type MediaType = "image" | "video" | "web";
+
+/**
+ * WPE 网页壁纸 iframe 的 sandbox：
+ * - `allow-same-origin` 必须有，否则页面变成 opaque origin，`localStorage` 抛错、相对资源的 Cookie 语义改变；
+ * - 不给 top-navigation / popups / modals / downloads：壁纸页面不需要导航父窗口、弹窗或下载，
+ *   `alert` 在壁纸里也不该出现。
+ */
+const WEB_SANDBOX = "allow-scripts allow-same-origin allow-pointer-lock allow-forms";
+/** iframe 没有 error 事件（404 也会触发 load），只能靠超时兜底。 */
+const WEB_LOAD_TIMEOUT_MS = 8_000;
+/** 首次导航的补发时机：届时仍停在初始 about:blank 就重新赋一次 src（见 createWebFrame）。 */
+const WEB_NAV_KICK_MS = 3_000;
+/** web 层淡入 / 淡出的兜底时长（略长于 CSS 过渡）。 */
+const WEB_FADE_GUARD_MS = 1_400;
 
 interface Props {
   /** 要显示什么；null 清空。 */
@@ -52,6 +69,7 @@ const baseVideoRef = ref<HTMLVideoElement | null>(null);
 const topVideoRef = ref<HTMLVideoElement | null>(null);
 const baseTileRef = ref<HTMLElement | null>(null);
 const topTileRef = ref<HTMLElement | null>(null);
+const webLayerRef = ref<HTMLElement | null>(null);
 
 // 状态管理
 let baseSrc = "";
@@ -81,6 +99,20 @@ let baseVideoEl: HTMLVideoElement | null = null;
 let topVideoEl: HTMLVideoElement | null = null;
 let baseTileEl: HTMLElement | null = null;
 let topTileEl: HTMLElement | null = null;
+let webLayerEl: HTMLElement | null = null;
+
+// ---- web 层（WPE 网页壁纸）----
+// iframe 命令式创建 / 销毁（同媒体层的命令式约定）；webToken 每次销毁递增，
+// 让还在 await 的进入 / 离开流程发现自己已过期后放弃。
+let webFrameEl: HTMLIFrameElement | null = null;
+let webToken = 0;
+let webVisible = false;
+let webLoadTimer: number | null = null;
+let webKickTimer: number | null = null;
+let webLoadResolve: (() => void) | null = null;
+let webFadeTimer: number | null = null;
+let webFadeResolve: (() => void) | null = null;
+let webFadeCleanup: (() => void) | null = null;
 
 // ---- base 层图片加载重试 ----
 // base 层加载失败即白屏，不能只记日志：带退避重试（瞬时故障——如唤醒瞬间
@@ -128,6 +160,20 @@ function targetKey(target: WallpaperTarget): string {
 
 function isWpeTarget(target: WallpaperTarget): boolean {
   return (target.type || "").trim().toLowerCase().startsWith("x-wpe/");
+}
+
+/** WPE 网页壁纸：走独立 web 层（iframe），不进 base / top 双层。 */
+function isWebTarget(target: WallpaperTarget): boolean {
+  return (target.type || "").trim().toLowerCase() === "x-wpe/web";
+}
+
+async function getWebUrl(target: WallpaperTarget): Promise<string> {
+  await initHttpServerBaseUrl();
+  const url = wpeEntryUrl(target.id);
+  if (!url) {
+    throw new Error(`无法获取网页壁纸 URL: ${target.path}`);
+  }
+  return url;
 }
 
 /** 是否按视频播放：优先看行类型，缺失时回退旧扩展名逻辑。 */
@@ -398,6 +444,237 @@ function applyStyles() {
   }
 }
 
+// ---- web 层 ----
+
+/** web 层类名：`animated <transition>` 决定过渡曲线，`visible` 决定终态；none 时瞬时切换。 */
+function setWebLayerClasses(visible: boolean) {
+  webVisible = visible;
+  if (!webLayerEl) return;
+  const classes = ["wallpaper-web-layer"];
+  if (props.transition !== "none") classes.push("animated", props.transition);
+  if (visible) classes.push("visible");
+  webLayerEl.className = classes.join(" ");
+}
+
+function settleWebLoad() {
+  if (webLoadTimer) {
+    window.clearTimeout(webLoadTimer);
+    webLoadTimer = null;
+  }
+  if (webKickTimer) {
+    window.clearTimeout(webKickTimer);
+    webKickTimer = null;
+  }
+  const resolve = webLoadResolve;
+  webLoadResolve = null;
+  resolve?.();
+}
+
+function settleWebFade() {
+  if (webFadeTimer) {
+    window.clearTimeout(webFadeTimer);
+    webFadeTimer = null;
+  }
+  webFadeCleanup?.();
+  webFadeCleanup = null;
+  const resolve = webFadeResolve;
+  webFadeResolve = null;
+  resolve?.();
+}
+
+/** 等 web 层当前这次 opacity 过渡结束（transition 为 none 时立即返回）。 */
+function waitWebFade(): Promise<void> {
+  settleWebFade();
+  const el = webLayerEl;
+  if (!el || props.transition === "none") return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    webFadeResolve = resolve;
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target !== el || e.propertyName !== "opacity") return;
+      settleWebFade();
+    };
+    el.addEventListener("transitionend", onEnd);
+    webFadeCleanup = () => el.removeEventListener("transitionend", onEnd);
+    webFadeTimer = window.setTimeout(settleWebFade, WEB_FADE_GUARD_MS);
+  });
+}
+
+/** iframe 的指针事件：预览内嵌可交互，桌面窗口与媒体层一样不接收。 */
+function applyWebInteractive() {
+  if (webFrameEl) webFrameEl.style.pointerEvents = props.interactive ? "auto" : "none";
+}
+
+/** paused 对 web 层只做 visibility: hidden（省掉合成，不冻结页面脚本；冻结留给后续垫片）。 */
+function applyWebPaused() {
+  if (webLayerEl) webLayerEl.style.visibility = props.paused ? "hidden" : "";
+}
+
+/**
+ * iframe 是否还停在插入时的初始 about:blank（与父页面同源，可读 location）；已导航到跨源页面时读取会抛错。
+ * 导航进行中（尚未提交）也会返回 true，所以只在补发时机检查。
+ */
+function isInitialBlank(frame: HTMLIFrameElement): boolean {
+  try {
+    return frame.contentWindow?.location.href === "about:blank";
+  } catch {
+    return false;
+  }
+}
+
+/** 创建 iframe 并等待它的 load（或超时）；被 teardownWeb 打断时也会返回。 */
+function createWebFrame(url: string): Promise<void> {
+  settleWebLoad();
+  const layer = webLayerEl;
+  if (!layer) return Promise.resolve();
+  const frame = document.createElement("iframe");
+  frame.className = "wallpaper-web-frame";
+  frame.setAttribute("sandbox", WEB_SANDBOX);
+  frame.setAttribute("allow", "autoplay; fullscreen");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.setAttribute("title", "wallpaper-web");
+  frame.addEventListener("load", () => {
+    if (frame !== webFrameEl) return;
+    const src = frame.getAttribute("src") || "";
+    if (!src || src === "about:blank") return;
+    settleWebLoad();
+    markReady();
+  });
+  webFrameEl = frame;
+  applyWebInteractive();
+  const done = new Promise<void>((resolve) => {
+    webLoadResolve = resolve;
+  });
+  webLoadTimer = window.setTimeout(() => {
+    webLoadTimer = null;
+    if (frame !== webFrameEl) return;
+    setLastError("wpe web entry load timeout");
+    updateDebugPanel();
+    settleWebLoad();
+  }, WEB_LOAD_TIMEOUT_MS);
+  // 真机（CEF 149）偶发：「先设 src 再插入」的 iframe 首次导航不启动，一直停在初始 about:blank，
+  // 重新赋一次 src 即恢复。所以先插入再设 src（插入时初始空文档的 load 由上面的 src 判断忽略），
+  // 并在补发时机仍停在初始文档时再赋一次。
+  layer.appendChild(frame);
+  frame.src = url;
+  webKickTimer = window.setTimeout(() => {
+    webKickTimer = null;
+    if (frame !== webFrameEl || !isInitialBlank(frame)) return;
+    frame.src = url;
+  }, WEB_NAV_KICK_MS);
+  return done;
+}
+
+/** 销毁 iframe：先置 about:blank 让渲染进程立刻卸载页面，再移出 DOM；同时打断进行中的进入 / 离开。 */
+function teardownWeb() {
+  webToken += 1;
+  settleWebLoad();
+  settleWebFade();
+  const frame = webFrameEl;
+  webFrameEl = null;
+  if (frame) {
+    try {
+      frame.src = "about:blank";
+    } catch {
+      // ignore
+    }
+    frame.remove();
+  }
+  setWebLayerClasses(false);
+  if (webLayerEl) webLayerEl.style.display = "none";
+}
+
+/** 清空 base / top 媒体层（web 淡入完成后释放底下的图片 / 视频）。 */
+function clearMediaLayers() {
+  baseSrc = "";
+  topSrc = "";
+  baseVideoSrc = "";
+  topVideoSrc = "";
+  clearImgSrc(baseImgEl);
+  clearImgSrc(topImgEl);
+  if (topImgEl) topImgEl.style.opacity = "0";
+  if (baseTileEl) baseTileEl.style.backgroundImage = "";
+  if (topTileEl) {
+    topTileEl.style.backgroundImage = "";
+    topTileEl.style.opacity = "0";
+  }
+  resetVideoElement(baseVideoEl);
+  resetVideoElement(topVideoEl);
+}
+
+/** 处理串行队列里积压的下一个目标（与 commitTopToBase 末尾同一逻辑）。 */
+function drainQueue() {
+  if (queuedTarget && (!currentTarget || targetKey(queuedTarget) !== targetKey(currentTarget))) {
+    const next = queuedTarget;
+    queuedTarget = null;
+    prefetchTarget(next);
+    setTimeout(() => void setTarget(next), 0);
+  } else {
+    queuedTarget = null;
+  }
+}
+
+/**
+ * 切入网页壁纸：等新页面 load 后整层淡入盖住当前媒体层，淡入完成再释放媒体层。
+ * web → web 时先淡出旧页面并销毁，保证同一时间只有一个 iframe。调用方已置 busy。
+ */
+async function enterWeb(next: WallpaperTarget, normalizedPath: string) {
+  const url = await getWebUrl(next);
+  setLastError("");
+  if (webFrameEl) {
+    if (webVisible && props.transition !== "none") {
+      const leaving = webToken;
+      setWebLayerClasses(false);
+      await waitWebFade();
+      if (leaving !== webToken) return;
+    }
+    teardownWeb();
+  }
+  const token = webToken;
+  pendingTarget = next;
+  phase = "prep";
+  if (webLayerEl) webLayerEl.style.display = "block";
+  setWebLayerClasses(false);
+  applyWebPaused();
+  updateDebugPanel();
+
+  // 等页面 load（或超时）再淡入，避免先露出一块空白页
+  await createWebFrame(url);
+  if (token !== webToken) return;
+  // 等浏览器渲染 prep 状态，再切到 visible 触发过渡
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  if (token !== webToken) return;
+  phase = "enter";
+  setWebLayerClasses(true);
+  updateDebugPanel();
+  await waitWebFade();
+  if (token !== webToken) return;
+
+  clearMediaLayers();
+  currentMediaType = "web";
+  currentTarget = next;
+  currentPath = normalizedPath;
+  pendingTarget = null;
+  phase = "idle";
+  busy = false;
+  updateModeDisplay();
+  applyStyles();
+  updateDebugPanel();
+  drainQueue();
+}
+
+/** 从网页壁纸切走：新媒体已直设到 base，web 层淡出后销毁 iframe。 */
+async function leaveWeb() {
+  if (!webFrameEl) return;
+  const token = webToken;
+  if (props.transition !== "none" && webVisible) {
+    setWebLayerClasses(false);
+    await waitWebFade();
+    if (token !== webToken) return;
+  }
+  teardownWeb();
+}
+
 /** 安全清除 img 元素的 src：使用 removeAttribute 避免触发 error 事件 */
 function clearImgSrc(el: HTMLImageElement | null) {
   if (!el) return;
@@ -629,7 +906,9 @@ async function setTarget(target: WallpaperTarget) {
   if (
     currentTarget &&
     targetKey(next) === targetKey(currentTarget) &&
-    ((currentMediaType === "image" && !!baseSrc) || (currentMediaType === "video" && !!baseVideoEl?.src))
+    ((currentMediaType === "image" && !!baseSrc) ||
+      (currentMediaType === "video" && !!baseVideoEl?.src) ||
+      (currentMediaType === "web" && !!webFrameEl))
   ) {
     return;
   }
@@ -646,6 +925,13 @@ async function setTarget(target: WallpaperTarget) {
   }
   busy = true;
   try {
+    if (isWebTarget(next)) {
+      queuedTarget = null;
+      await enterWeb(next, normalizedPath);
+      return;
+    }
+    // 从网页壁纸切走：媒体层此时为空，下面两条分支都会走「首帧直设」，设好后再淡出并销毁 web 层
+    const fromWeb = !!webFrameEl;
     const isVideoMedia = isVideoTarget(next);
     if (isVideoMedia) {
       const videoUrl = await getVideoUrl(next);
@@ -675,6 +961,7 @@ async function setTarget(target: WallpaperTarget) {
         applyStyles();
         busy = false;
         updateDebugPanel();
+        if (fromWeb) void leaveWeb();
         return;
       }
 
@@ -764,6 +1051,7 @@ async function setTarget(target: WallpaperTarget) {
       }
       applyStyles();
       updateDebugPanel();
+      if (fromWeb) void leaveWeb();
       return;
     }
 
@@ -854,6 +1142,13 @@ function markReady() {
 }
 
 function updateModeDisplay() {
+  if (currentMediaType === "web") {
+    // 网页壁纸：媒体层已清空，全部隐藏（web 层自己管显示）
+    for (const el of [baseImgEl, topImgEl, baseTileEl, topTileEl, baseVideoEl, topVideoEl]) {
+      if (el) el.style.display = "none";
+    }
+    return;
+  }
   if (currentMediaType === "video") {
     if (baseImgEl) baseImgEl.style.display = "none";
     if (topImgEl) topImgEl.style.display = "none";
@@ -885,7 +1180,7 @@ function updateModeDisplay() {
 }
 
 function applyStyleFromMode() {
-  if (currentMediaType === "video") {
+  if (currentMediaType === "video" || currentMediaType === "web") {
     applyStyles();
     updateDebugPanel();
     return;
@@ -916,6 +1211,7 @@ function applyStyleFromMode() {
 
 /** 新增能力 paused：暂停 / 恢复当前视频。桌面窗口不传 paused（恒为 false），只在其变化时触发。 */
 function applyPaused() {
+  applyWebPaused();
   if (currentMediaType !== "video") return;
   if (props.paused) {
     baseVideoEl?.pause();
@@ -947,6 +1243,8 @@ function clearTarget() {
   baseVideoSrc = "";
   topVideoSrc = "";
   readyEmittedKey = "";
+  teardownWeb();
+  if (currentMediaType === "web") currentMediaType = "image";
   clearImgSrc(baseImgEl);
   clearImgSrc(topImgEl);
   if (topImgEl) topImgEl.style.opacity = "0";
@@ -972,6 +1270,7 @@ function initDOM() {
   topVideoEl = topVideoRef.value;
   baseTileEl = baseTileRef.value;
   topTileEl = topTileRef.value;
+  webLayerEl = webLayerRef.value;
 
   // 绑定事件监听器
   // 空 src / 无 src 属性不视为加载错误，仅当有实际 src 加载失败时才触发错误处理
@@ -1054,6 +1353,7 @@ function cleanup() {
   topVideoSrc = "";
   resetVideoElement(baseVideoEl);
   resetVideoElement(topVideoEl);
+  teardownWeb();
 }
 
 watch(
@@ -1067,8 +1367,13 @@ watch(
   () => props.transition,
   () => {
     applyStyles();
+    if (webFrameEl) setWebLayerClasses(webVisible);
     updateDebugPanel();
   },
+);
+watch(
+  () => props.interactive,
+  () => applyWebInteractive(),
 );
 watch(
   () => props.volume,
@@ -1148,6 +1453,9 @@ defineExpose({ debugState });
       <div ref="baseTileRef" class="wallpaper-tile base" style="display: none"></div>
       <div ref="topTileRef" class="wallpaper-tile top" style="display: none"></div>
     </div>
+    <!-- Web 层：独立于 base / top 双层，也不受 stage 的 WPE 视频 transform 影响；一次只存在一个 iframe，
+         由 createWebFrame / teardownWeb 命令式创建与销毁 -->
+    <div ref="webLayerRef" class="wallpaper-web-layer" style="display: none"></div>
   </div>
 </template>
 
@@ -1235,6 +1543,48 @@ defineExpose({ debugState });
   transition:
     opacity 900ms ease,
     transform 900ms ease;
+}
+
+/* web 层：盖在媒体层之上，整层淡入淡出；slide / zoom 复用媒体层的位移 / 缩放起点 */
+.wallpaper-web-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  transform: none;
+}
+
+.wallpaper-web-layer.animated {
+  transition: opacity 800ms ease-in-out;
+}
+
+.wallpaper-web-layer.animated.slide,
+.wallpaper-web-layer.animated.zoom {
+  transition:
+    opacity 800ms ease,
+    transform 800ms ease;
+}
+
+.wallpaper-web-layer.slide:not(.visible) {
+  transform: translateX(32px);
+}
+
+.wallpaper-web-layer.zoom:not(.visible) {
+  transform: scale(1.06);
+}
+
+.wallpaper-web-layer.visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* iframe 是命令式创建的，没有本组件的 data-v 属性，需 :deep；pointer-events 由 applyWebInteractive 内联设置 */
+.wallpaper-web-layer :deep(.wallpaper-web-frame) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
 }
 
 /* interactive：预览内嵌时媒体层接收指针事件（桌面窗口不启用，保持 pointer-events: none） */

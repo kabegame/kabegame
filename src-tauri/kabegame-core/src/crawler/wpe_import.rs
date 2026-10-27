@@ -1,10 +1,14 @@
 //! 内建 `wpe-import` 任务：把 Wallpaper Engine 壁纸目录原地引用入库。
 //!
-//! 只处理第一阶段支持的 `video` 类型：`local_path` 存壁纸目录本身，`type` 为
-//! `x-wpe/video`，缩略图直接引用 WPE 自带的 `preview.*`。`compatible_path` 始终有值：
-//! 浏览器能播时就是入口视频本身，不能播时才在 `compatibles_dir` 生成兼容副本；所有
-//! 播放端（预览、应用背景、壁纸窗口）统一走 `/compatible`。不复制、不转码、不改写用户
-//! 目录里的任何文件。
+//! 入库 `video` 与 `web` 两类：`local_path` 存壁纸目录本身，`type` 为 `x-wpe/video` /
+//! `x-wpe/web`，缩略图直接引用 WPE 自带的 `preview.*`。
+//!
+//! - 视频行的 `compatible_path` 始终有值：浏览器能播时就是入口视频本身，不能播时才在
+//!   `compatibles_dir` 生成兼容副本；所有播放端（预览、应用背景、壁纸窗口）统一走 `/compatible`。
+//! - 网页行没有可播放媒体，`compatible_path` 留空、宽高留空；`hash` / `size` 取入口 html。
+//!   页面经本地 HTTP 服务的 `/wpe/<id>/` 按原目录加载。
+//!
+//! 不复制、不转码、不改写用户目录里的任何文件。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -194,6 +198,85 @@ async fn backfill_compatible_path(
     );
 }
 
+/// 视频 / 网页两类壁纸共用的行组装：来源字段、作者预览图、创意工坊链接与 metadata。
+/// 调用方各自覆盖 `media_type` / `width` / `height` / `compatible_path`。
+fn base_image_info(
+    project: &WpeProject,
+    task_id: &str,
+    metadata_id: i64,
+    hash: String,
+    size: Option<u64>,
+) -> ImageInfo {
+    let thumbnail_path = project
+        .preview_path()
+        .map(|path| {
+            path.to_string_lossy()
+                .trim_start_matches("\\\\?\\")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let crawled_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let workshop_url = project.workshop_url();
+    ImageInfo {
+        id: String::new(),
+        url: workshop_url.clone(),
+        local_path: project.dir_string(),
+        plugin_id: Some(WPE_IMPORT_PLUGIN_ID.to_string()),
+        task_id: Some(task_id.to_string()),
+        surf_record_id: None,
+        crawled_at,
+        metadata_id: Some(metadata_id),
+        image_metadata_id: None,
+        thumbnail_path,
+        favorite: false,
+        is_hidden: false,
+        local_exists: true,
+        hash,
+        width: None,
+        height: None,
+        display_name: project.title.clone(),
+        media_type: None,
+        last_set_wallpaper_at: None,
+        size,
+        album_order: None,
+        compatible_path: None,
+        post_url: workshop_url,
+    }
+}
+
+/// 写库、广播、挂画册与标签、记日志：两类壁纸新增行之后的公共步骤。
+fn finish_insert(
+    task_id: &str,
+    project: &WpeProject,
+    album_id: Option<&str>,
+    image: ImageInfo,
+) -> Result<ImportOutcome, String> {
+    let inserted = Storage::global().add_image(image)?;
+    let image_id = inserted.id.clone();
+    GlobalEmitter::global().emit_images_added(std::slice::from_ref(&inserted));
+
+    join_album(task_id, album_id, &image_id)?;
+    apply_wpe_tags(task_id, project, &image_id);
+
+    emit_log(
+        task_id,
+        "info",
+        "taskLogWpeImported",
+        json!({ "title": project.title, "path": project.dir_string() }),
+    );
+
+    Ok(ImportOutcome::Imported)
+}
+
+fn insert_project_metadata(project: &WpeProject) -> Result<i64, String> {
+    Storage::global()
+        .insert_metadata_row(&project.raw, WPE_IMPORT_PLUGIN_ID, 0, None)
+        .map_err(|e| format!("写入 metadata 失败：{e}"))
+}
+
 /// 导入一个视频壁纸目录（幂等：已入库只补画册成员与缺失的 `compatible_path`）。
 async fn import_wpe_video(
     task_id: &str,
@@ -221,70 +304,58 @@ async fn import_wpe_video(
     let size = std::fs::metadata(&entry).ok().map(|meta| meta.len());
 
     let compatible_path = Some(resolve_compatible_path(task_id, &entry, probe.as_ref(), &dir_string).await);
-
-    let thumbnail_path = project
-        .preview_path()
-        .map(|path| {
-            path.to_string_lossy()
-                .trim_start_matches("\\\\?\\")
-                .to_string()
-        })
-        .unwrap_or_default();
-
-    let metadata_id = Storage::global()
-        .insert_metadata_row(&project.raw, WPE_IMPORT_PLUGIN_ID, 0, None)
-        .map_err(|e| format!("写入 metadata 失败：{e}"))?;
-
-    let crawled_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let workshop_url = project.workshop_url();
+    let metadata_id = insert_project_metadata(project)?;
 
     let image = ImageInfo {
-        id: String::new(),
-        url: workshop_url.clone(),
-        local_path: dir_string.clone(),
-        plugin_id: Some(WPE_IMPORT_PLUGIN_ID.to_string()),
-        task_id: Some(task_id.to_string()),
-        surf_record_id: None,
-        crawled_at,
-        metadata_id: Some(metadata_id),
-        image_metadata_id: None,
-        thumbnail_path,
-        favorite: false,
-        is_hidden: false,
-        local_exists: true,
-        hash,
         width,
         height,
-        display_name: project.title.clone(),
         media_type: Some("x-wpe/video".to_string()),
-        last_set_wallpaper_at: None,
-        size,
-        album_order: None,
         compatible_path,
-        post_url: workshop_url,
+        ..base_image_info(project, task_id, metadata_id, hash, size)
     };
+    finish_insert(task_id, project, album_id, image)
+}
 
-    // 导入时把作者默认值算出来并写进 metadata 的兄弟字段没有必要；壁纸窗口按需实时读
-    // project.json，这里只在详情展示时用原始 JSON，因此不再重复解析属性。
+/// 导入一个网页壁纸目录（幂等：已入库只补画册成员）。页面没有可播放媒体，
+/// `compatible_path` 留空；页面没有固有尺寸，宽高留空。
+async fn import_wpe_web(
+    task_id: &str,
+    project: &WpeProject,
+    album_id: Option<&str>,
+) -> Result<ImportOutcome, String> {
+    let dir_string = project.dir_string();
+    let entry = project
+        .entry_path()
+        .filter(|path| path.is_file())
+        .ok_or_else(|| "缺少入口文件".to_string())?;
 
-    let inserted = Storage::global().add_image(image)?;
-    let image_id = inserted.id.clone();
-    GlobalEmitter::global().emit_images_added(std::slice::from_ref(&inserted));
+    if let Some(existing) = Storage::find_image_by_path(&dir_string).map_err(|e| e.to_string())? {
+        join_album(task_id, album_id, &existing.id)?;
+        return Ok(ImportOutcome::Existing);
+    }
 
-    join_album(task_id, album_id, &image_id)?;
-    apply_wpe_tags(task_id, project, &image_id);
+    let hash = compute_file_hash(&entry).await?;
+    let size = std::fs::metadata(&entry).ok().map(|meta| meta.len());
+    let metadata_id = insert_project_metadata(project)?;
 
-    emit_log(
-        task_id,
-        "info",
-        "taskLogWpeImported",
-        json!({ "title": project.title, "path": dir_string }),
-    );
+    let image = ImageInfo {
+        media_type: Some("x-wpe/web".to_string()),
+        ..base_image_info(project, task_id, metadata_id, hash, size)
+    };
+    finish_insert(task_id, project, album_id, image)
+}
 
-    Ok(ImportOutcome::Imported)
+/// 按类型分派到对应的导入函数；调用方保证 `project.kind.is_supported()`。
+async fn import_wpe_project(
+    task_id: &str,
+    project: &WpeProject,
+    album_id: Option<&str>,
+) -> Result<ImportOutcome, String> {
+    match project.kind {
+        WpeKind::Video => import_wpe_video(task_id, project, album_id).await,
+        WpeKind::Web => import_wpe_web(task_id, project, album_id).await,
+        kind => Err(format!("暂不支持的壁纸类型：{}", kind.as_str())),
+    }
 }
 
 fn skip_reason(project_result: &Result<WpeProject, WpeSkip>) -> Option<&WpeSkip> {
@@ -339,7 +410,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         let project_result = read_project(&normalized);
 
         match &project_result {
-            Ok(project) if project.kind == WpeKind::Video => {
+            Ok(project) if project.kind.is_supported() => {
                 if run.params.is_dry_run {
                     emit_log(
                         &task_id,
@@ -349,7 +420,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
                     );
                     run.record_dry_run_skip();
                 } else {
-                    match import_wpe_video(&task_id, project, run.params.output_album_id.as_deref())
+                    match import_wpe_project(&task_id, project, run.params.output_album_id.as_deref())
                         .await
                     {
                         Ok(ImportOutcome::Imported) => imported += 1,
@@ -406,7 +477,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
             }
         }
 
-        // 已入库的目录在文件系统层面无需再做任何事；import_wpe_video 内部按 local_path 幂等。
+        // 已入库的目录在文件系统层面无需再做任何事；各 import 函数内部按 local_path 幂等。
         run.set_progress(((index + 1) as f64 / total as f64) * 100.0);
     }
 

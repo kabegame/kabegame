@@ -666,6 +666,7 @@ pub(crate) fn configure_app(
             get_wallpaper_capabilities,
             get_current_wallpaper_path,
             get_current_wallpaper_target,
+            get_wallpaper_target_for_image,
             set_wallpaper_rotation_enabled,
             get_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,

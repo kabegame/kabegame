@@ -26,6 +26,12 @@
 
   The generated C API, `libcef_dll` cpptoc/ctocpp glue and API hashes are **not** part of this patch — they are produced by `tools/version_manager.py` during `cef_create_projects.sh`, which `scripts/build-chromium.ts` runs.
 
+- `0004-per-browser-file-access.patch` — lets a client turn on `WebPreferences::allow_file_access_from_file_urls` for a single browser instead of the whole process. Chromium keeps that preference per `WebContents`; the global `--allow-file-access-from-files` switch only seeds its default, and `CefBrowserSettings` does not expose it. The patch reads the bool key `kabegame.allow_file_access_from_file_urls` from the browser's creation-time `extra_info` dictionary inside `ChromeContentBrowserClientCef::OverrideWebPreferences`, right after `SetCefPrefs`. `CefBrowserHostBase::InitializeBrowser` calls `NotifyPreferencesChanged()` once the browser is attached, so the flag is in place before the first navigation commits.
+
+  Kabegame uses it for Wallpaper Engine web wallpapers, which are loaded from their own directory as `file://` and read sibling files with `fetch` / XHR, the same way WPE loads them. Without the preference every `file://` document has an opaque origin and those reads fail. With it, the document can read **any** `file://` URL, so the embedder must confine loads itself; Kabegame cancels `file:` requests outside the wallpaper directory in `OnBeforeResourceLoad`, mirroring WPE's own resource interceptor. Cross-origin `http(s)` requests are still subject to CORS, because the network service reads `--disable-web-security` from the global command line; this patch deliberately leaves that alone.
+
+  No public API, C API or `libcef_dll` glue changes: the key travels in the existing `extra_info` dictionary that `CefBrowserHost::CreateBrowser` / `CefBrowserView::CreateBrowserView` already accept.
+
 Apply this series manually before running CEF's `patcher.py`:
 
 ```bash

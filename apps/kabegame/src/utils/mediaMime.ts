@@ -22,9 +22,17 @@ export function isWpeMediaType(t: string | undefined): boolean {
   return wpeKind(t) != null;
 }
 
-/** 第一阶段只有 `x-wpe/video` 会入库；其余类型仅占位。 */
+/** WPE 视频壁纸：图库里按普通视频处理（`<video>` 播 `compatible_path`）。 */
 export function isWpeVideoType(t: string | undefined): boolean {
   return wpeKind(t) === "video";
+}
+
+/**
+ * 交给壁纸组件（`WpeWallpaperContent` → `WallpaperStage`）渲染原图形态的 WPE 类型：
+ * web，以及未来的 scene 等非视频类型。缩略位仍是作者 `preview.*`。
+ */
+export function isWpeWallpaperContentType(t: string | undefined): boolean {
+  return isWpeMediaType(t) && !isWpeVideoType(t);
 }
 
 /**

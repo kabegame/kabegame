@@ -286,7 +286,7 @@ const sourceOptions = computed<OptionItem[]>(() => [
 |---|---|---|
 | 1 Video | [1-video/PLAN.md](1-video/PLAN.md) | 已实现，初步真机测试完成 |
 | 2 Web | [2-web/PLAN.md](2-web/PLAN.md) | Phase 1 完成（[API.md](2-web/API.md)）；Phase 2 壁纸窗口 Vue 化方案已写，实施中 |
-| 3 Scene | `3-scene/`（未建） | — |
+| 3 Scene | [3-scene/RESEARCH.md](3-scene/RESEARCH.md) | 前期调研完成（格式 / 方言 / WebGPU 可行性 / Phase 拆分 / 关键决策待确认） |
 | 4 Scene 特效 | `4-scene-fx/`（未建） | — |
 
 ---
@@ -307,6 +307,11 @@ const sourceOptions = computed<OptionItem[]>(() => [
    同一个 `index.html`；`ImagePreviewDialog` 对非视频 WPE 行（web / scene）经 `ImageContent` 切到它，按桌面分辨率布局后
    缩放，可交互。WPE 视频在图库里仍按普通视频对待（保留 seek），只有桌面壁纸窗口用 `WallpaperStage` 播它。
 9. **Scene 走 WebGPU**（2026-10-25）：Scene 在壁纸本体里用 WebGPU canvas 渲染，shader 翻译到 WGSL，不做原生 wgpu。
+
+10. **用户属性即元数据**（2026-10-26）：WPE 壁纸的用户可调属性与 `project.json` 同存于图片 `metadata`，由 WPE 定制详情面板写入，
+    走元数据不可变语义（新行 + 改指 + `image-changed { metadataId }`），不另建表、不进 settings；宿主收到补丁后模拟 WPE 的
+    属性变化事件推给页面。
+11. **Web 壁纸页面源**（2026-10-26）：最终用自定义 Tauri 协议 **`kb-wpe`**（Phase 4 落地），Phase 3 先用本地 HTTP 服务。
 
 ## 待定决策
 

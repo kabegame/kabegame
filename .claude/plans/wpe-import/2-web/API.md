@@ -213,6 +213,58 @@
 | iframe 内 `localStorage` | 可用，源为 `http://127.0.0.1:33050` | 端口随机，源随启动变化 |
 | iframe 内加载 `file:///C:/Windows/...jpg` | 失败 | HTTP 源的页面读不了 `file://`，与预期一致 |
 
+### 5.1 `file://` 直开窗口实测（2026-10-27，dev，临时命令 `debug_wpe_open_file_window` 开普通 CEF 窗口，`WebviewUrl::External(file:///…/index.html)`）
+
+动机：WPE 自己就是以 `file://` 加载页面（§4.1），验证 Kabegame 不经本地 HTTP 服务、按 WPE 原样加载能走多远。Tauri 与 CEF 运行时都不拦 `file` 协议，窗口能开、标题正确。
+
+| 项 | Slideshow `796697921` | Kaguya `3679122549`（混淆脚本、重媒体） |
+|---|---|---|
+| 页面渲染 | 正常：播放列表面板 + 「Use the settings panel…」提示（未推属性的状态） | 只有外壳：时钟、播放器 UI；主区域一直 `Loading...`，封面图裂、`<video>` / `<audio>` 无 src |
+| `<script>` / `<link>` 相对子资源经 `file://` | 17 个脚本全部执行，`wallpaperPropertyListener` 已定义（5 个回调） | `script.js` 执行，`wallpaperPropertyListener` 已定义（`applyUserProperties` / `applyGeneralProperties`） |
+| 页面 `fetch` / XHR 读同目录文件 | `./project.json` → `Failed to fetch` / XHR error | `fetch("data.json")` → `Failed to fetch`，这正是它卡在 `Loading...` 的原因（歌单、封面、MV、字幕全从 `data.json` 解析） |
+| `localStorage` | 可用，源为 `file://` | 同左（kaguya 用了 4 处 `localStorage`） |
+| `__TAURI_INTERNALS__` | **存在**（初始化脚本仍注入到 `file://` 主 frame） | 同左 |
+| `invoke` | 被拒：`Origin header is not a valid URL`（`file://` 页面的 Origin 是 `null`，`cef-ipc` 入口直接拒绝） | 同左 |
+
+结论：
+- Chromium 把每个 `file://` 文档当作独立的不透明源，**标签式子资源能加载，`fetch` / XHR 一律失败**。WPE 靠 `--disable-web-security` 绕过（§4.1）。Kabegame 若走 `file://` 路线，必须给 CEF 加 `allow-file-access-from-files` 或关同源策略，而命令行开关是全进程生效的，会同时作用于主界面与畅游窗口，安全面不可接受。
+- `file://` 源的 `localStorage` 跨重启稳定且与端口无关，但所有壁纸共用一个 `file://` 源（WPE 也是如此，按显示器隔离）。
+- `file://` 主 frame 会拿到 Tauri 初始化脚本（含 `__TAURI_INTERNALS__`），虽然 `invoke` 被 Origin 校验挡住，但壁纸页面不该看到这些对象；HTTP + 跨源 iframe 路线天然没有这个问题。
+- 因此 **Phase 3 维持 HTTP `/wpe/<id>/` + 跨源 iframe 路线**：同源 `fetch` / XHR 自然可用，kaguya 这类依赖 `fetch` 的壁纸才跑得起来。`localStorage` 稳定性另行解决（固定端口或固定主机名的自定义协议，见 §7 难点二）。
+- 临时命令带 `DEBUG-WPE-FILE` 注释（`commands/window.rs`、`lib.rs`、`permissions/main.toml`），验证完删除。
+
+> **更新（2026-10-27，用户决定安全面可接受，改走 `file://` 主 frame 路线）**：上面的「维持 HTTP 路线」结论作废。
+
+### 5.2 单窗口同源开关可行性与先导实验（2026-10-27）
+
+**能否按窗口控制**：可以，但要给 CEF 打补丁。
+- `web_security_enabled` / `allow_file_access_from_file_urls` / `allow_universal_access_from_file_urls` 在 Chromium 里是**每个 WebContents 一份**的
+  `WebPreferences`，命令行开关只决定默认值。
+- CEF 每次计算偏好都走 `ChromeContentBrowserClientCef::OverrideWebPreferences`（`libcef/browser/chrome/chrome_content_browser_client_cef.cc`），
+  其中 `CefBrowserHostBase::GetBrowserForContents(web_contents)` 按浏览器拿到 `browser`，`browser->browser_info()->extra_info()`
+  可读到建窗时传入的字典（运行时已用 `extra_info` 传初始化脚本，见 `tauri-runtime-cef/src/subprocess.rs`）。
+- CEF 的 `cef_browser_settings_t` 不含这三项（只认全局命令行，`renderer_prefs.cc` 的 `SetDefaultPrefs`）。所以需要补丁 0004：在
+  `OverrideWebPreferences` 里读 `extra_info` 标记并打开文件访问偏好。不改公开 API 结构，不需要重新生成 capi / cef-rs 绑定，但要重编 CEF。
+
+**先导实验**：dev 下临时全局追加 `--allow-file-access-from-files`（即上述偏好的全局来源，`runtime.rs` 带 `DEBUG-WPE-FILE`），
+重开 kaguya 的 `file://` 窗口：
+
+| 项 | 结果 |
+|---|---|
+| `fetch("data.json")` | 200，27 首歌 |
+| 页面渲染 | 完整：背景、封面、歌词字幕、播放器、时钟；`music/Remember.flac` 自动播放中 |
+| `fetch('../796697921/project.json')`（别的壁纸目录） | 200 |
+| `fetch('file:///C:/Windows/win.ini')` | **200，可读到任意本地文件** |
+| `fetch('https://example.com/')` | `Failed to fetch`（跨源 http 仍受 CORS 约束） |
+
+结论：
+- **只开 `allow_file_access_from_file_urls` 就足以让依赖 `fetch` 的网页壁纸跑起来**，0004 补丁的偏好部分只需这一项。
+- 打开后页面能读任意本地文件，**必须照 WPE 做资源拦截**（§4.1 的 `FUN_140016950`）：对开启了该标记的浏览器，在
+  `ResourceRequestHandler::on_before_resource_load`（运行时已实现该钩子，`webview.rs`）里取消所有不在当前壁纸目录内的 `file:` 请求，
+  并拒绝符号链接与非普通文件；`file` / `directory` 用户属性的白名单留到 Phase 7。
+- 跨源 http 请求仍被 CORS 拦。WPE 是全局 `--disable-web-security`；Kabegame 若要支持，需要在补丁里另改网络服务的
+  `URLLoaderFactoryParams.disable_web_security`（Chromium 侧，当前读全局命令行），**第一版不做**，记入已知边界。
+
 ## 六、兼容矩阵
 
 优先级定义：
@@ -265,7 +317,7 @@ WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>
 | C. 垫片改写路径 | 宿主给页面的路径换成 `http://127.0.0.1:<port>/wpe-user/<token>/<文件>`；垫片再拦截 `HTMLImageElement.src`、`style.backgroundImage` 等 setter，把 `file:///http://…` 修正回来 | 不碰 CEF | 页面拼接方式五花八门，样例里还有 `fixFilename` 之类的自定义处理，拦截覆盖不全，属于脆弱方案 |
 | D. 暂不支持 | 面板里这两类属性显示「暂不支持」，页面收到空值 | 零成本 | 依赖用户图片的壁纸不可用，例如样例 796697921 就是「从文件夹播放图片」 |
 
-**推荐**：Phase 6 前先做一个最小实测验证 B。若 Chromium 在渲染侧就拦掉 HTTP 页面对 `file:` 的请求，则在 A 和 D 之间选。A 改动面大但最贴近 WPE，适合把 file / directory 当成重要能力时选。
+**推荐**：Phase 7 前先做一个最小实测验证 B。若 Chromium 在渲染侧就拦掉 HTTP 页面对 `file:` 的请求，则在 A 和 D 之间选。A 改动面大但最贴近 WPE，适合把 file / directory 当成重要能力时选。
 
 ### 难点二：`localStorage` 源随端口变化
 
@@ -288,17 +340,17 @@ WPE 给页面的是本地绝对路径，页面自己拼 `file:///` 交给 `<img>
 | B. 全局鼠标钩子转发 | 主进程装低级鼠标钩子或 Raw Input；光标位于桌面空白处（命中 WorkerW / 桌面列表视图背景）时，把坐标经 CEF `SendMouseMoveEvent` / `SendMouseClickEvent` 发给壁纸 browser。只转发移动和点击，不转发滚轮和按键，与 WPE 一致 | 与 WPE 行为一致 | 需要判断「点在图标上还是空白处」；CEF 窗口模式下合成事件的可行性要实测；有安全与性能顾虑 |
 | C. 只转发移动 | B 的子集，只发 `mousemove` | 能覆盖视差和悬停显示，风险最小 | 点击仍不可用 |
 
-**推荐**：第二阶段先 A，并在 Phase 5 末尾留一个 C 的可行性实测。B 作为后续增强。
+**推荐**：第二阶段先 A，并在 Phase 6 末尾留一个 C 的可行性实测。B 作为后续增强。
 
 ## 八、与 PLAN 设计的冲突与缺口
 
-1. **显示条件必须求值 JS**。PLAN 的 Phase 6 写的是「只支持 `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS」。实际样例用了 `.endsWith()` / `.startsWith()` / `!==` / `>`。建议改为在沙箱里求值，例如只注入各属性 `{ value }` 的 `new Function` 加超时，或者在 iframe 垫片侧求值后回传结果。面板运行在 Kabegame 自身界面里，直接 `eval` 第三方字符串不可取。
+1. **显示条件必须求值 JS**。PLAN 的 Phase 7 写的是「只支持 `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS」。实际样例用了 `.endsWith()` / `.startsWith()` / `!==` / `>`。建议改为在沙箱里求值，例如只注入各属性 `{ value }` 的 `new Function` 加超时，或者在 iframe 垫片侧求值后回传结果。面板运行在 Kabegame 自身界面里，直接 `eval` 第三方字符串不可取。
 2. **目录服务 MIME 缺口**。PLAN 的 Phase 3 / 3 默认 `/wpe` 能直接服务网页。实测它对 html / js / css / json 都返回 `application/octet-stream`，必须在 Phase 3 补 web MIME 表，否则 iframe 无法渲染入口页。
 3. **WPE 关闭了同源策略**（`disable-web-security`）。依赖跨域请求的壁纸（天气、RSS 之类）在 Kabegame 的 HTTP 源下会被 CORS 拦截。PLAN 没提到这一点。建议记入已知边界。不建议为壁纸窗口全局关闭同源策略，因为它和主界面在同一个 browser 进程里。
-4. **CEF IPC 入口不区分 frame**。实测子 frame POST `cef-ipc://` 会被转交给 Tauri，目前只靠 invoke key 挡住。PLAN 假设的「IPC 垫片只注入主 frame，所以天然隔离」只对了一半。建议 Phase 4 在 `tauri-runtime-cef` 的 `cef-ipc` 处理器里校验请求来自主 frame，或校验 Origin 属于应用源，作为纵深防御。这是对 `src-tauri/tauri-runtime-cef` 的改动，范围由用户决定。
+4. **CEF IPC 入口不区分 frame**。实测子 frame POST `cef-ipc://` 会被转交给 Tauri，目前只靠 invoke key 挡住。PLAN 假设的「IPC 垫片只注入主 frame，所以天然隔离」只对了一半。建议 Phase 5 在 `tauri-runtime-cef` 的 `cef-ipc` 处理器里校验请求来自主 frame，或校验 Origin 属于应用源，作为纵深防御。这是对 `src-tauri/tauri-runtime-cef` 的改动，范围由用户决定。
 5. **`thumbnail` 是完整 data URL**。PLAN 写的是「base64 PNG」。实现时宿主应给 `data:image/png;base64,…`，页面直接赋给 `img.src`。
-6. **兼容补丁**。WPE 会把 `zcompat/web` 补丁写回壁纸目录，Kabegame 必须改为响应时在内存中替换。PLAN 未提及，建议放进 Phase 4。
-7. **暂停的实现方式**。PLAN 写的是「转发 `setPaused`」。WPE 实际是垫片冻结计时、动画、媒体和 `AudioContext` 后，再回调页面的 `setPaused`。建议 Phase 4 照此实现，否则不处理 `setPaused` 的壁纸暂停后仍占 CPU / GPU。
+6. **兼容补丁**。WPE 会把 `zcompat/web` 补丁写回壁纸目录，Kabegame 必须改为响应时在内存中替换。PLAN 未提及，建议放进 Phase 5。
+7. **暂停的实现方式**。PLAN 写的是「转发 `setPaused`」。WPE 实际是垫片冻结计时、动画、媒体和 `AudioContext` 后，再回调页面的 `setPaused`。建议 Phase 5 照此实现，否则不处理 `setPaused` 的壁纸暂停后仍占 CPU / GPU。
 8. **单个视频文件当网页播放**（`wallpaperOnVideoEnded`、`.webm` / `.ogv` / `.gif` 包装页）是 WPE 对 webm 视频壁纸的内部做法，与 Web 类型无关，不纳入第二阶段。
 
 ## 九、仍未确认
