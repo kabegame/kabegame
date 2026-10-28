@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-refresh"
+description = "Allows `wemt_refresh`: re-discover the desktop host and remount after an Explorer restart."
+commands.allow = ["wemt_refresh"]

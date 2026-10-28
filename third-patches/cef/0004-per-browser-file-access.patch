@@ -1,0 +1,25 @@
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index 06b6f895433c4ce0fa93dab7d38392ffa4bf48a1..d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -426,6 +426,20 @@ void ChromeContentBrowserClientCef::OverrideWebPreferences(
+   if (browser) {
+     renderer_prefs::SetCefPrefs(browser->settings(), *prefs);
+ 
++    // Kabegame: per-browser opt-in for file:// documents reading other file://
++    // URLs (fetch / XHR). This is the per-WebContents equivalent of the global
++    // --allow-file-access-from-files switch, enabled only for browsers created
++    // with the extra_info key below (Wallpaper Engine web wallpapers loaded from
++    // their own directory). The embedder is responsible for confining which
++    // file:// URLs such a browser may load, e.g. in OnBeforeResourceLoad.
++    if (auto extra_info = browser->browser_info()->extra_info()) {
++      const CefString key("kabegame.allow_file_access_from_file_urls");
++      if (extra_info->HasKey(key) &&
++          extra_info->GetType(key) == VTYPE_BOOL && extra_info->GetBool(key)) {
++        prefs->allow_file_access_from_file_urls = true;
++      }
++    }
++
+     // Runtime override takes precedence over CefBrowserSettings.
+     if (browser->ax_viewport_collapse().has_value()) {
+       prefs->accessibility_viewport_collapse =

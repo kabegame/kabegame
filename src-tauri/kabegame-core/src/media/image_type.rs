@@ -42,6 +42,11 @@ impl MediaFormat {
     pub fn is_image(&self) -> bool {
         self.key.starts_with("image/")
     }
+
+    /// 是否为目录型 WPE 壁纸（`local_path` 是目录，不是可直接读取的媒体文件）。
+    pub fn is_wpe(&self) -> bool {
+        self.key.starts_with("x-wpe/")
+    }
 }
 
 /// 媒体格式的唯一事实来源。
@@ -158,6 +163,33 @@ pub const MEDIA_FORMATS: &[MediaFormat] = &[
         browser_safe: false,
         native_wallpaper_safe: false,
     },
+    // 目录型 WPE 壁纸：`local_path` 是壁纸目录，入口文件与预览由目录服务解析。
+    // 扩展名为空表示不能按扩展名摄入，只能经 `project.json` 入库；
+    // `mime` 只是格式表占位，目录型条目永远不经 `mime_from_format` 出边界。
+    MediaFormat {
+        key: "x-wpe/video",
+        mime: "application/x-wpe-project",
+        extensions: &[],
+        aliases: &[],
+        browser_safe: false,
+        native_wallpaper_safe: false,
+    },
+    MediaFormat {
+        key: "x-wpe/web",
+        mime: "application/x-wpe-project",
+        extensions: &[],
+        aliases: &[],
+        browser_safe: false,
+        native_wallpaper_safe: false,
+    },
+    MediaFormat {
+        key: "x-wpe/scene",
+        mime: "application/x-wpe-project",
+        extensions: &[],
+        aliases: &[],
+        browser_safe: false,
+        native_wallpaper_safe: false,
+    },
 ];
 
 /// 按格式键、标准 MIME 或 MIME 别名解析媒体格式。
@@ -177,6 +209,48 @@ pub fn media_format(input: &str) -> Option<&'static MediaFormat> {
     MEDIA_FORMATS.iter().find(|format| {
         format.key == base || format.mime == base || format.aliases.contains(&base.as_str())
     })
+}
+
+/// 目录型 WPE 壁纸的类型键前缀。
+pub const WPE_FORMAT_PREFIX: &str = "x-wpe/";
+
+/// 格式键是否表示目录型 WPE 壁纸。
+pub fn is_wpe_format_key(value: &str) -> bool {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with(WPE_FORMAT_PREFIX)
+}
+
+/// `images.type` 是否表示目录型 WPE 壁纸。
+pub fn is_wpe_type(media_type: Option<&str>) -> bool {
+    wpe_kind(media_type).is_some()
+}
+
+/// 取 WPE 壁纸的子类型（`video` / `web` / `scene` / 其它作者自定义值）。
+///
+/// 返回小写后缀；非 `x-wpe/*` 返回 `None`。
+pub fn wpe_kind(media_type: Option<&str>) -> Option<String> {
+    let raw = media_type?.trim();
+    raw.to_ascii_lowercase()
+        .strip_prefix(WPE_FORMAT_PREFIX)
+        .map(str::to_string)
+}
+
+/// 是否为 `x-wpe/video`（目录型视频壁纸）。
+pub fn is_wpe_video_type(media_type: Option<&str>) -> bool {
+    wpe_kind(media_type).as_deref() == Some("video")
+}
+
+/// 按 `images.type` 判断是否「播放为视频」：`video/*`、历史 `video` 或 `x-wpe/video`。
+///
+/// 这是后端唯一需要区分「视频形态」的判断口径；不要再用扩展名猜目录型壁纸。
+pub fn is_video_like_type(media_type: Option<&str>) -> bool {
+    let Some(raw) = media_type.map(str::trim).filter(|t| !t.is_empty()) else {
+        return false;
+    };
+    let lower = raw.to_ascii_lowercase();
+    lower == "video" || lower.starts_with("video/") || lower == "x-wpe/video"
 }
 
 /// 按扩展名解析媒体格式。
@@ -519,5 +593,37 @@ mod tests {
             normalize_stored_media_type(Some("text/plain".to_string())).as_deref(),
             Some("text/plain")
         );
+    }
+
+    #[test]
+    fn wpe_directory_formats_are_resolvable_but_not_ingestible() {
+        let format = media_format("x-wpe/video").expect("x-wpe/video 必须能解析");
+        assert_eq!(format.key, "x-wpe/video");
+        assert!(format.is_wpe());
+        assert!(!format.ingestible());
+        assert!(!format.is_image());
+        assert!(!format.is_video());
+        assert_eq!(
+            normalize_stored_media_type(Some("x-wpe/video".to_string())).as_deref(),
+            Some("x-wpe/video")
+        );
+        assert!(media_format("x-wpe/web").is_some());
+        assert!(media_format("x-wpe/scene").is_some());
+        // 目录型条目不得进入按扩展名摄入的列表。
+        assert!(!supported_media_extensions().iter().any(|ext| ext == "x-wpe/video"));
+        assert!(!mime_by_ext().values().any(|m| m == "application/x-wpe-project"));
+
+        assert_eq!(wpe_kind(Some("x-wpe/video")).as_deref(), Some("video"));
+        assert!(is_wpe_type(Some("X-WPE/VIDEO")));
+        assert!(!is_wpe_type(Some("video/mp4")));
+        assert!(is_wpe_video_type(Some("x-wpe/video")));
+        assert!(!is_wpe_video_type(Some("x-wpe/web")));
+
+        assert!(is_video_like_type(Some("x-wpe/video")));
+        assert!(is_video_like_type(Some("video/mp4")));
+        assert!(is_video_like_type(Some("video")));
+        assert!(!is_video_like_type(Some("x-wpe/web")));
+        assert!(!is_video_like_type(Some("image/jpg")));
+        assert!(!is_video_like_type(None));
     }
 }

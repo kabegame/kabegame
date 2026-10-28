@@ -11,8 +11,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpened, Connection, Link } from "@kabegame/element-plus-icons";
-import { IS_WEB } from "@/env";
+import { FolderOpened, Connection, Link, Picture } from "@kabegame/element-plus-icons";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 
@@ -21,7 +21,7 @@ interface Props {
   title?: string;
 }
 
-type CollectSource = "local" | "remote" | "webpage";
+type CollectSource = "local" | "remote" | "webpage" | "wallpaper";
 
 const props = withDefaults(defineProps<Props>(), {
   title: undefined,
@@ -61,10 +61,20 @@ const sourceOptions = computed<OptionItem[]>(() => [
         },
       ]
     : []),
+  ...(!IS_WEB && !IS_ANDROID
+    ? [
+        {
+          id: "wallpaper",
+          title: t("gallery.wallpaper"),
+          desc: t("gallery.wallpaperDesc"),
+          icon: Picture,
+        },
+      ]
+    : []),
 ]);
 
 const handleSelect = (id: string) => {
-  if (id === "local" || id === "remote" || id === "webpage") {
+  if (id === "local" || id === "remote" || id === "webpage" || id === "wallpaper") {
     emit("select", id);
   }
 };

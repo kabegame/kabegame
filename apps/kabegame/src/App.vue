@@ -18,7 +18,7 @@
           :native-drag="false"
           :key="`bg-${bgImageToken}`"
           :image="bgImage"
-          prefer="original"
+          :prefer="bgPrefer"
           class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
           :style="bgImageStyle"
           :video-playing="bgVisible && bgMediaType === 'video'"
@@ -205,7 +205,6 @@ import OrganizeDialog from "./components/OrganizeDialog.vue";
 import FrameMonitor from "./components/common/FrameMonitor.vue";
 import KamechanMascot from "./components/kamechan/KamechanMascot.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
-import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { listen, emit, UnlistenFn } from "@/api/rpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -214,7 +213,7 @@ import { fetchImageById } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@/env";
 import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
-import { isVideoMediaType } from "@/utils/mediaMime";
+import { isVideoPlaybackType, isWpeWallpaperContentType } from "@/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { usePluginMarketStore } from "./stores/pluginMarket";
 import { useFailedImagesStore } from "./stores/failedImages";
@@ -373,9 +372,6 @@ const {
   init: initMissedRunsWatch,
 } = useMissedRunsWatch();
 
-// 窗口事件监听
-const { init: initWindowEvents } = useWindowEvents();
-
 // 文件拖拽
 const { init: initFileDrop } = useFileDrop(fileDropOverlayRef);
 
@@ -396,10 +392,23 @@ const bgImageToken = ref(0);
 const bgContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 let bgResolveToken = 0;
 
-const isVideoBackground = (image: ImageInfo | undefined) => isVideoMediaType(image?.type);
+const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(image?.type);
 
-const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
-  !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
+/**
+ * 非视频 WPE 壁纸（web / scene）的背景退回作者预览静态图：背景层应静音、不交互、低开销，
+ * 而第三方页面无法从外部静音、会持续跑脚本，主界面的交互层也会时有时无地遮挡它的指针事件。
+ */
+const isWallpaperContentBackground = (image: ImageInfo | null | undefined) => isWpeWallpaperContentType(image?.type);
+
+const hasAppBackgroundSource = (image: ImageInfo | null | undefined) => {
+  if (isWallpaperContentBackground(image)) {
+    // 只有独立的作者预览图可用（缺 preview 时不显示背景，而不是去渲染页面）
+    return !!image?.thumbnailPath && image.thumbnailPath !== image.localPath;
+  }
+  return !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
+};
+
+const bgPrefer = computed(() => (isWallpaperContentBackground(bgImage.value) ? "thumbnail" : "original"));
 
 const shouldShowAppBackground = () =>
   !!settingsStore.values.appBackgroundEnabled &&
@@ -584,7 +593,6 @@ onMounted(async () => {
   await initMissedRunsWatch();
 
   // 初始化各个 composables
-  await initWindowEvents();
   // 安卓下不支持拖拽导入，跳过初始化
   if (!IS_ANDROID) {
     await initFileDrop();

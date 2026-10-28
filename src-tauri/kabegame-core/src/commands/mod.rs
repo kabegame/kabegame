@@ -10,3 +10,4 @@ pub mod settings;
 pub mod surf;
 pub mod task;
 pub mod view;
+pub mod wpe;

@@ -422,7 +422,16 @@ enum CompatResult {
     Unknown,
 }
 
+/// 目录型 WPE 壁纸行：`local_path` 是目录，整理流程不能按文件处理。
+fn is_wpe_row(row: &OrganizeScanRow) -> bool {
+    crate::media::image_type::is_wpe_type(row.format_key.as_deref())
+}
+
 fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAction> {
+    // WPE 的缩略图直接引用壁纸目录里的 preview.*，不重建、也不覆盖成 Kabegame 生成的图。
+    if is_wpe_row(row) {
+        return None;
+    }
     let local_path = row.local_path.trim();
     if local_path.is_empty() {
         return None;
@@ -594,7 +603,9 @@ fn run_organize(
             }
 
             // 1. 去重判断：非胜者 id 即重复项，移除。
-            if options.dedupe && !row.hash.is_empty() {
+            // 目录型 WPE 壁纸不参与哈希去重：删掉目录型记录会静默丢失壁纸来源，
+            // 且入口视频的哈希与普通视频相同并不代表二者可互相替代。
+            if options.dedupe && !row.hash.is_empty() && !is_wpe_row(row) {
                 if let Some(&winner) = winner_ids.get(&row.hash) {
                     if row.id != winner {
                         remove_ids.push(row.id.to_string());
@@ -613,8 +624,10 @@ fn run_organize(
             }
 
             // 3. 移除磁盘存在但 infer 无法在支持 MIME 列表中识别的媒体
+            // WPE 行的 local_path 是目录，infer 必然失败；不能据此把整张壁纸判成「无法识别」。
             if options.remove_unrecognized
                 && !should_remove.contains(&row.id)
+                && !is_wpe_row(row)
                 && Path::new(&row.local_path).exists()
                 && crate::media::image_type::mime_type_from_path(Path::new(&row.local_path))
                     .is_none()
@@ -637,6 +650,7 @@ fn run_organize(
                 let compatible_path = row.compatible_path.trim();
                 if options.regen_compatible
                     && !should_remove.contains(&row.id)
+                    && !is_wpe_row(row)
                     && (compatible_path.is_empty() || !Path::new(compatible_path).exists())
                 {
                     let local = row.local_path.trim();

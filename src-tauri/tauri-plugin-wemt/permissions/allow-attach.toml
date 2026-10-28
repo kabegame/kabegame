@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-attach"
+description = "Allows `wemt_attach`: parent the window to the desktop WorkerW host."
+commands.allow = ["wemt_attach"]

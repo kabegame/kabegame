@@ -22,6 +22,11 @@ async fn resolve_native_wallpaper_path(file_path: &str) -> Result<String, String
         return Ok(file_path.to_string());
     };
 
+    // 目录型 WPE 壁纸没有可交给原生后端的静态文件；原生模式不得把目录当图片转码。
+    if crate::media::image_type::is_wpe_type(info.media_type.as_deref()) {
+        return Ok(file_path.to_string());
+    }
+
     let storage = Storage::global();
     if let Some(path) = storage.get_image_wallpaper_compatible_path(&info.id)? {
         if Path::new(&path).exists() {

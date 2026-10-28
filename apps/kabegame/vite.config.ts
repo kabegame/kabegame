@@ -49,15 +49,12 @@ function ensureWebEnv(mode: string) {
 export default defineConfig(async ({ mode, command }) => {
   ensureWebEnv(mode);
 
-  const { default: pubConfig, root, isMacOS, isWindows } = await import("../../vite.config.pub");
+  const { default: pubConfig, root } = await import("../../vite.config.pub");
 
   const isWeb = process.env.KABEGAME_MODE === "web" || mode === "web";
-  const isProd = command === "build";
-  // web mode: no wallpaper window, chunking always on
-  const hasWallpaper = !isWeb && (isWindows || isMacOS);
+  // 壁纸窗口与主窗口共用 index.html（?window=wallpaper，由 main.ts 分发），不再单开入口。
   const hasSurfNavbar = !isWeb;
   const rollupInput = {
-    ...(hasWallpaper && { wallpaper: "./wallpaper.html" }),
     ...(hasSurfNavbar && { "surf-navbar": "./surf-navbar.html" }),
   };
   const webDevApiProxy = isWeb
@@ -82,7 +79,7 @@ export default defineConfig(async ({ mode, command }) => {
     },
     build: {
       // 桌面/Android 与 web 的产物目录必须分开：两者的平台 define（__WEB__ /
-      // __MACOS__ 等）、rollup input（wallpaper/surf-navbar）、chunking 策略完全
+      // __MACOS__ 等）、rollup input（surf-navbar）、chunking 策略完全
       // 不同，共用一个目录时后跑的构建会静默覆盖前者。build-web.ts 是「宿主出
       // 前端 → 容器编 Rust 嵌入」两段式，中间若插入一次桌面构建，web 二进制就
       // 会嵌到桌面 bundle（invoke 走 __TAURI_INTERNALS__，浏览器里全挂）。
@@ -96,7 +93,7 @@ export default defineConfig(async ({ mode, command }) => {
       rollupOptions: {
         input: rollupInput,
         output: {
-          inlineDynamicImports: !hasWallpaper && !hasSurfNavbar && !isWeb,
+          inlineDynamicImports: !hasSurfNavbar && !isWeb,
           ...(isWeb && {
             manualChunks(id: string) {
               // vendored 的 element-plus / icons 是仓内源码（packages/kabegame-element-plus*），

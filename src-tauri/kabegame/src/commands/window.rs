@@ -1,25 +1,5 @@
 // 窗口管理相关命令
 
-#[cfg(target_os = "windows")]
-pub(super) async fn fix_wallpaper_window_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    use tauri::Manager;
-    use windows_sys::Win32::Foundation::HWND;
-
-    // 非 window 模式下没有壁纸窗口可压。
-    if kabegame_core::settings::Settings::global().get_wallpaper_mode() != "window" {
-        return;
-    }
-
-    let Some(wallpaper_window) = app.get_webview_window("wallpaper") else {
-        return;
-    };
-    let Ok(tauri_hwnd) = wallpaper_window.hwnd() else {
-        return;
-    };
-
-    crate::wallpaper::window::zorder::restore(Some(tauri_hwnd.0 as HWND));
-}
-
 /// 隐藏主窗口。关闭按钮（`CloseRequested`）与托盘「隐藏窗口」共用同一条路径：
 /// 本应用常驻后台，关闭窗口一律只隐藏、保活在托盘，不提供「关闭即退出」的分支。
 /// 退出只走托盘菜单「退出」/ macOS Cmd+Q / `exit_app`。
@@ -34,25 +14,13 @@ pub(crate) fn hide_main_window<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> R
     // 不保存 window_state：用户要求每次居中弹出
     window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
 
-    // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
-    #[cfg(target_os = "windows")]
-    {
-        tauri::async_runtime::spawn(async move {
-            fix_wallpaper_window_zorder(app).await;
-        });
-    }
-
     Ok(())
 }
 
 /// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
 #[tauri::command]
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    #[cfg(target_os = "windows")]
-    fix_wallpaper_window_zorder(app).await;
-
-    #[cfg(target_os = "macos")]
     {
         use tauri::Manager;
         if let Some(window) = app.get_webview_window("wallpaper") {
@@ -65,10 +33,12 @@ pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 /// 解决壁纸窗口尚未注册事件监听时，后端先 emit 导致事件丢失的问题。
 #[tauri::command]
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-pub fn wallpaper_window_ready<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> Result<(), String> {
+pub fn wallpaper_window_ready<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");
     crate::wallpaper::WallpaperWindow::<R>::mark_ready();
+    // 应用页启动完成后检查一次：开机即网页壁纸时由此把窗口导航到 file:// 入口。
+    crate::wallpaper::wpe_web_host::spawn_sync(app);
     Ok(())
 }
 

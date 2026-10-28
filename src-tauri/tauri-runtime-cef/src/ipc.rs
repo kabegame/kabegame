@@ -10,6 +10,13 @@
 //! 本模块只补 CEF 缺的回退通道:提供 `window.ipc.postMessage` 实现 —— 经 CEF 自有的
 //! `cef-ipc://` 自定义协议 POST,转发给 Tauri `PendingWebview` 的 `ipc_handler`
 //! (JSON 通道,`Uint8Array` payload 会退化成数字数组,不能承载二进制)。
+//!
+//! 纵深防御:`cef-ipc` scheme handler 本身不区分 frame,子 frame(例如图库里跨源 iframe
+//! 承载的 WPE 网页壁纸)也能 POST 进来,此前只靠 Tauri 的 invoke key 挡住。现在只接受
+//! **主 frame**(畅游窗口的注入脚本跑在主 frame,Origin 是站点源,所以不能按「应用源」判),
+//! 或与该 webview 初始 URL **同源**的子 frame(同源子 frame 本来就能被主 frame 脚本完全访问,
+//! 放行不扩大攻击面);其余返回 400。frame 身份由 scheme factory 的 `frame.is_main()` 提供
+//! (见 [`crate::protocol::RequestFrame`]);CEF 未给出 frame 时维持原行为。
 
 use std::{borrow::Cow, sync::Mutex};
 
@@ -22,7 +29,7 @@ use tauri_runtime::{
     UserEvent,
 };
 
-use crate::Cef;
+use crate::{protocol::RequestFrame, Cef};
 
 pub(crate) const CEF_IPC_SCHEME: &str = "cef-ipc";
 
@@ -88,6 +95,12 @@ fn post_message_request(
         return Err("CEF IPC postMessage only accepts POST".to_string());
     }
 
+    if let Some(frame) = request.extensions().get::<RequestFrame>() {
+        if !frame.is_main && !is_same_origin_as(&request, fallback_url) {
+            return Err("CEF IPC postMessage is only accepted from the main frame".to_string());
+        }
+    }
+
     // Tauri 的 handle_ipc_message 会对该 URI 做 `Url::parse(...).expect(...)`;
     // opaque origin(错误页、Cloudflare 拦截页、沙箱 iframe)的 Origin 头是字面量
     // "null",能过 http::Uri 但过不了 url::Url,必须在此过滤,否则整个进程 abort。
@@ -112,6 +125,24 @@ fn post_message_request(
         .map_err(|error| format!("invalid CEF IPC postMessage request: {error}"))
 }
 
+/// 请求的 `Origin` 是否与 webview 初始 URL 同源(子 frame 白名单)。缺 Origin、opaque
+/// (`null`)或解析失败一律视为不同源。
+fn is_same_origin_as(request: &HttpRequest<Vec<u8>>, initial_url: &str) -> bool {
+    let Some(origin) = request
+        .headers()
+        .get(http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| url::Url::parse(value).ok())
+    else {
+        return false;
+    };
+    let Ok(initial) = url::Url::parse(initial_url) else {
+        return false;
+    };
+    let origin = origin.origin();
+    origin.is_tuple() && origin == initial.origin()
+}
+
 fn text_response(status: StatusCode, message: String) -> HttpResponse<Cow<'static, [u8]>> {
     HttpResponse::builder()
         .status(status)
@@ -127,4 +158,49 @@ fn empty_response(status: StatusCode) -> HttpResponse<Cow<'static, [u8]>> {
         .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(Cow::Borrowed(&[] as &[u8]))
         .expect("static empty response must be valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(origin: Option<&str>, frame: Option<bool>) -> HttpRequest<Vec<u8>> {
+        let mut builder = HttpRequest::builder()
+            .method(http::Method::POST)
+            .uri("cef-ipc://localhost/");
+        if let Some(origin) = origin {
+            builder = builder.header(http::header::ORIGIN, origin);
+        }
+        let mut request = builder.body(b"{}".to_vec()).unwrap();
+        if let Some(is_main) = frame {
+            request.extensions_mut().insert(RequestFrame { is_main });
+        }
+        request
+    }
+
+    const APP: &str = "http://tauri.localhost/";
+
+    #[test]
+    fn main_frame_is_accepted_with_any_origin() {
+        // 畅游窗口注入脚本：主 frame，Origin 是站点源
+        assert!(post_message_request(request(Some("https://example.com"), Some(true)), APP).is_ok());
+    }
+
+    #[test]
+    fn cross_origin_subframe_is_rejected() {
+        // 图库里承载 WPE 网页壁纸的跨源 iframe
+        assert!(post_message_request(request(Some("http://127.0.0.1:33050"), Some(false)), APP).is_err());
+        assert!(post_message_request(request(Some("null"), Some(false)), APP).is_err());
+        assert!(post_message_request(request(None, Some(false)), APP).is_err());
+    }
+
+    #[test]
+    fn same_origin_subframe_is_accepted() {
+        assert!(post_message_request(request(Some("http://tauri.localhost"), Some(false)), APP).is_ok());
+    }
+
+    #[test]
+    fn unknown_frame_keeps_previous_behavior() {
+        assert!(post_message_request(request(Some("https://example.com"), None), APP).is_ok());
+    }
 }

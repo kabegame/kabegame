@@ -470,13 +470,18 @@ fn json_bool(row: &Value, key: &str) -> bool {
 }
 
 fn vd_image_entry_from_row(row: &Value) -> Option<VdImageEntry> {
+    // 目录型 WPE 壁纸的 local_path 是目录，第一阶段不进虚拟盘（隐藏行，计数口径同源）。
+    let media_type = json_string(row, "type").unwrap_or_else(|| "image".to_string());
+    if crate::media::image_type::is_wpe_type(Some(&media_type)) {
+        return None;
+    }
     Some(VdImageEntry {
         id: json_string(row, "id")?,
         local_path: json_string(row, "local_path")?,
         display_name: json_string(row, "display_name").unwrap_or_default(),
         // 行内键名统一为 type（provider 树不再产出 media_type 列）；
         // "image" 仅作为缺失值的历史兼容兜底。
-        media_type: json_string(row, "type").unwrap_or_else(|| "image".to_string()),
+        media_type,
         is_hidden: json_bool(row, "is_hidden"),
         crawled_at: json_u64(row, "crawled_at").unwrap_or(0),
     })

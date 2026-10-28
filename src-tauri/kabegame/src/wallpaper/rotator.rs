@@ -52,6 +52,9 @@ struct RotationSource {
     count: u64,
     /// count / 取行出错后改用了默认随机路径
     fallback: bool,
+    /// 目录型 WPE 壁纸能否参与：只有窗口模式能渲染，原生 / Plasma 插件逐张跳过。
+    /// 不放进有效路径：`media-type/image` 是「非视频」，WPE 行仍会被 count 进来。
+    allow_wpe: bool,
 }
 
 /// 把设置路径换成新的默认随机路径（位置随之置为从头开始）。
@@ -74,6 +77,7 @@ fn count_source(
         effective,
         count,
         fallback,
+        allow_wpe: wallpaper_mode == "window",
     })
 }
 
@@ -167,7 +171,9 @@ fn collect_available(
                 continue;
             }
             scanned += 1;
-            if wallpaper_file_available(&img) {
+            let wpe_ok = src.allow_wpe
+                || !kabegame_core::media::image_type::is_wpe_type(img.media_type.as_deref());
+            if wpe_ok && wallpaper_file_available(&img) {
                 out.push((p, img));
             }
             if out.len() >= limit || scanned >= src.count {

@@ -106,6 +106,86 @@ mod imp {
             .map_err(|_| "CEF start_download timed out".to_string())?
     }
 
+    /// 经 `CefBrowserHost::SendMouse*Event` 向某个 webview 注入鼠标事件。
+    ///
+    /// 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序。移动事件是高频的：这里只
+    /// `post_task` 不等回执，找不到 browser 时静默忽略。
+    ///
+    /// 移动与离开一律不带按键标志（与 WE 的 `modifiers=0` 一致）：Blink 只在移动事件
+    /// `button == kLeft` 时进入拖动处理（`MouseEventManager::HandleMouseDraggedEvent`），
+    /// 带上左键标志会让拖动页面图片启动 Win32 OLE 拖放；那是阻塞 UI 线程的模态循环，
+    /// 而真实的抬起发生在 Explorer 里、本线程收不到，拖放就挂住、不再响应注入。
+    pub(crate) fn inject_mouse(
+        webview_label: &str,
+        input: crate::MouseInjection,
+    ) -> std::result::Result<(), String> {
+        use crate::MouseInjection;
+        // `EVENTFLAG_LEFT_MOUSE_BUTTON`（cef_types.h：1 << 4）。
+        let left_flag = cef::sys::cef_event_flags_t::EVENTFLAG_LEFT_MOUSE_BUTTON.0 as u32;
+        let label = webview_label.to_string();
+        let mut task = CefUiTask::new(Arc::new(Mutex::new(Some(Box::new(move || {
+            let browser = webview_browser_ids()
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&label).copied())
+                .and_then(browser_host_get_browser_by_identifier);
+            let Some(host) = browser.and_then(|browser| browser.host()) else {
+                return;
+            };
+            let event = |x: i32, y: i32, modifiers: u32| cef::MouseEvent { x, y, modifiers };
+            match input {
+                MouseInjection::Move { x, y } => {
+                    host.send_mouse_move_event(Some(&event(x, y, 0)), 0)
+                }
+                MouseInjection::Leave { x, y } => {
+                    host.send_mouse_move_event(Some(&event(x, y, 0)), 1)
+                }
+                MouseInjection::LeftDown { x, y } => {
+                    host.send_mouse_click_event(
+                        Some(&event(x, y, left_flag)),
+                        cef::MouseButtonType::LEFT,
+                        0,
+                        1,
+                    );
+                    // Views 窗口收到按下会 SetCapture 抢鼠标：真实的左键抬起随后被送进本窗口
+                    // （页面收到两次 mouseup），Explorer 也收不到抬起，桌面框选卡住。注入的输入
+                    // 本来就不依赖系统捕获（抬起同样由注入补齐），所以按下后立刻还回去。
+                    #[cfg(target_os = "windows")]
+                    release_own_mouse_capture();
+                }
+                MouseInjection::LeftUp { x, y } => host.send_mouse_click_event(
+                    Some(&event(x, y, 0)),
+                    cef::MouseButtonType::LEFT,
+                    1,
+                    1,
+                ),
+            }
+        }) as CefUiTaskCallback))));
+        if cef::post_task(ThreadId::UI, Some(&mut task)) == 0 {
+            return Err("CEF failed to post inject_mouse task".to_string());
+        }
+        Ok(())
+    }
+
+    /// 释放本线程上属于本进程窗口的鼠标捕获（只在注入按下之后、CEF UI 线程上调用）。
+    /// `GetCapture` 只返回调用线程输入队列的捕获窗口，所以不会碰到别的进程。
+    #[cfg(target_os = "windows")]
+    fn release_own_mouse_capture() {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        unsafe {
+            let hwnd = GetCapture();
+            if hwnd == 0 {
+                return;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == std::process::id() {
+                ReleaseCapture();
+            }
+        }
+    }
+
     #[derive(Clone)]
     pub struct CefWebviewDispatcher<T: UserEvent> {
         pub(crate) window_id: WindowId,
@@ -713,13 +793,22 @@ mod imp {
                 &self,
                 browser: Option<&mut Browser>,
                 _frame: Option<&mut Frame>,
-                _request: Option<&mut Request>,
+                request: Option<&mut Request>,
                 _is_navigation: ::std::os::raw::c_int,
                 is_download: ::std::os::raw::c_int,
                 _request_initiator: Option<&CefString>,
                 _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
             ) -> Option<ResourceRequestHandler> {
                 if is_download != 1 {
+                    // 登记了文件文档策略的 webview：每个 `file:` 请求都要过目录约束。
+                    let is_file_request = request
+                        .map(|request| CefString::from(&request.url()).to_string())
+                        .is_some_and(|url| crate::file_access::is_file_url(&url));
+                    if is_file_request
+                        && crate::file_access::is_file_document_webview(&self.label)
+                    {
+                        return Some(FileDocumentGuardHandler::new(self.label.clone()));
+                    }
                     return None;
                 }
                 let referrer = browser
@@ -919,6 +1008,43 @@ mod imp {
                     );
                 }
                 ReturnValue::CONTINUE
+            }
+        }
+    }
+
+    // 开了文件访问的 webview 的 `file:` 请求闸门：每次请求时读取该 label 当前允许的
+    // 根目录（壁纸切换时由应用更新），只放行根目录内的普通文件。
+    wrap_resource_request_handler! {
+        pub(crate) struct FileDocumentGuardHandler {
+            label: String,
+        }
+        impl ResourceRequestHandler {
+            fn on_before_resource_load(
+                &self,
+                _browser: Option<&mut Browser>,
+                _frame: Option<&mut Frame>,
+                request: Option<&mut Request>,
+                _callback: Option<&mut Callback>,
+            ) -> ReturnValue {
+                let Some(request) = request else {
+                    return ReturnValue::CANCEL;
+                };
+                let url = CefString::from(&request.url()).to_string();
+                let root = crate::file_access::file_document_root(&self.label);
+                match crate::file_access::check_file_request(&url, root.as_deref()) {
+                    Ok(_) => ReturnValue::CONTINUE,
+                    Err(reason) => {
+                        let root = root
+                            .as_deref()
+                            .map(|root| root.display().to_string())
+                            .unwrap_or_else(|| "<none>".to_string());
+                        eprintln!(
+                            "[cef-runtime] deny file: {url} (outside {root}; {reason:?}) webview '{}'",
+                            self.label
+                        );
+                        ReturnValue::CANCEL
+                    }
+                }
             }
         }
     }
@@ -1390,6 +1516,21 @@ mod imp {
         let mut initialization_scripts_extra_info =
             crate::subprocess::initialization_scripts_extra_info(&initialization_scripts_payload)
                 .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
+        // 登记过文件文档策略的 webview：同一个字典里带上文件访问标记，CEF 补丁 0004 据此只给
+        // 这个 browser 打开 `allow_file_access_from_file_urls`。弹窗路径（on_before_popup）
+        // 另建字典、不带此键，偏好不随弹窗扩散。
+        if crate::file_access::is_file_document_webview(&webview_label)
+            && initialization_scripts_extra_info.set_bool(
+                Some(&CefString::from(
+                    crate::file_access::ALLOW_FILE_ACCESS_EXTRA_INFO_KEY,
+                )),
+                1,
+            ) == 0
+        {
+            return Err(Error::CreateWebview(Box::new(io::Error::other(
+                "CEF failed to write file-access extra_info",
+            ))));
+        }
         let on_page_load = pending.on_page_load_handler.take().map(Rc::new);
         let download_handler = pending
             .download_handler
