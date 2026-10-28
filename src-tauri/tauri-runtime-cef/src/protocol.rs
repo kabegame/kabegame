@@ -42,9 +42,11 @@ static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = Once
 /// 发起请求的 frame 身份,由 scheme factory 的 `create(browser, frame, ..)` 取得,经
 /// `http::Request` 的 extension 交给协议 handler。CEF 对非 frame 发起的请求(如
 /// `CefURLRequest`)给 `frame = NULL`,此时不插入该 extension。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct RequestFrame {
     pub(crate) is_main: bool,
+    /// 发起请求的 frame 当前 URL;`file:` 文档据此改写 `Origin`,IPC 来源判成远程 `file:`。
+    pub(crate) url: Option<String>,
 }
 
 // 已向 CEF 全局注册过 factory 的 scheme 集合(每 scheme 只注册一次)
@@ -96,13 +98,17 @@ wrap_scheme_handler_factory! {
             let entry = guard.get(&id)?;
             let protocol = entry.schemes.get(&self.logical_scheme)?.clone();
             let label = entry.label.clone();
-            // 记下发起请求的 frame 是否为主 frame(`cef-ipc` 据此拒绝子 frame,见 crate::ipc)
-            let main_frame = frame.map(|frame| frame.is_main() == 1);
+            // 记下发起请求的 frame:是否主 frame(`cef-ipc` 据此拒绝子 frame,见 crate::ipc)
+            // 与当前 URL(`file:` 文档据此改写 Origin,见 `pin_file_frame_origin`)
+            let request_frame = frame.map(|frame| RequestFrame {
+                is_main: frame.is_main() == 1,
+                url: Some(CefString::from(&frame.url()).to_string()).filter(|url| !url.is_empty()),
+            });
             Some(CefResourceHandler::new(
                 label,
                 protocol,
                 Arc::new(Mutex::new(ResponseState::default())),
-                main_frame,
+                request_frame,
             ))
         }
     }
@@ -113,8 +119,8 @@ wrap_resource_handler! {
         webview_label: String,
         protocol: Arc<ProtocolHandler>,
         state: Arc<Mutex<ResponseState>>,
-        // 发起请求的 frame 是否为主 frame;`None` 表示 CEF 未给出 frame。
-        main_frame: Option<bool>,
+        // 发起请求的 frame;`None` 表示 CEF 未给出 frame。
+        request_frame: Option<RequestFrame>,
     }
 
     impl ResourceHandler {
@@ -138,8 +144,9 @@ wrap_resource_handler! {
                     return 1;
                 }
             };
-            if let Some(is_main) = self.main_frame {
-                request.extensions_mut().insert(RequestFrame { is_main });
+            if let Some(frame) = &self.request_frame {
+                pin_file_frame_origin(&mut request, frame);
+                request.extensions_mut().insert(frame.clone());
             }
 
             self.state.lock().unwrap().open_in_progress = true;
@@ -379,6 +386,24 @@ fn rewrite_windows_localhost_uri(uri: http::Uri) -> http::Uri {
     }
 }
 
+/// `file:` 文档的 `Origin` 是 `null`:Tauri 的 `ipc://` 主通道解析失败后,前端脚本改走
+/// `cef-ipc` 回退通道,而回退通道拿不到合法 Origin 时会退到 webview 初始 URL(应用页),
+/// 请求就被当成本地来源。这里统一把 `file:` frame 发出的请求的 `Origin` 改写成 frame 自己的
+/// URL,两条通道都判成远程 `file:` 来源,由 ACL 按 `remote.urls` 匹配 capability。
+/// 其它来源的 `Origin` 头不动。
+fn pin_file_frame_origin(request: &mut HttpRequest<Vec<u8>>, frame: &RequestFrame) {
+    let Some(url) = frame
+        .url
+        .as_deref()
+        .filter(|url| crate::file_access::is_file_url(url))
+    else {
+        return;
+    };
+    if let Ok(value) = http::HeaderValue::from_str(url) {
+        request.headers_mut().insert(http::header::ORIGIN, value);
+    }
+}
+
 fn request_to_http(request: &cef::Request) -> std::result::Result<HttpRequest<Vec<u8>>, ()> {
     let cef_method = request.method();
     let method = CefString::from(&cef_method)
@@ -456,6 +481,62 @@ mod tests {
         let response = bad_request();
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(response.body().as_ref(), b"invalid CEF protocol request");
+    }
+
+    fn request_with_origin(origin: Option<&str>) -> HttpRequest<Vec<u8>> {
+        let mut builder = HttpRequest::builder().uri("ipc://localhost/cmd");
+        if let Some(origin) = origin {
+            builder = builder.header(http::header::ORIGIN, origin);
+        }
+        builder.body(Vec::new()).unwrap()
+    }
+
+    fn frame(url: &str) -> RequestFrame {
+        RequestFrame {
+            is_main: true,
+            url: Some(url.to_string()),
+        }
+    }
+
+    fn origin_of(request: &HttpRequest<Vec<u8>>) -> Option<&str> {
+        request
+            .headers()
+            .get(http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    #[test]
+    fn file_frame_origin_is_pinned_to_frame_url() {
+        const ENTRY: &str = "file:///D:/wpe/3679122549/index.html";
+        // `file:` 文档的 Origin 是字面量 "null"
+        let mut request = request_with_origin(Some("null"));
+        pin_file_frame_origin(&mut request, &frame(ENTRY));
+        assert_eq!(origin_of(&request), Some(ENTRY));
+        // 缺 Origin 同样补上
+        let mut request = request_with_origin(None);
+        pin_file_frame_origin(&mut request, &frame(ENTRY));
+        assert_eq!(origin_of(&request), Some(ENTRY));
+    }
+
+    #[test]
+    fn non_file_frame_origin_is_untouched() {
+        let mut request = request_with_origin(Some("http://127.0.0.1:33050"));
+        pin_file_frame_origin(&mut request, &frame("http://127.0.0.1:33050/wpe/1/index.html"));
+        assert_eq!(origin_of(&request), Some("http://127.0.0.1:33050"));
+        // 非 file: frame 缺 Origin 时也不补
+        let mut request = request_with_origin(None);
+        pin_file_frame_origin(&mut request, &frame("http://tauri.localhost/"));
+        assert_eq!(origin_of(&request), None);
+        // frame URL 未知时不动
+        let mut request = request_with_origin(Some("null"));
+        pin_file_frame_origin(
+            &mut request,
+            &RequestFrame {
+                is_main: true,
+                url: None,
+            },
+        );
+        assert_eq!(origin_of(&request), Some("null"));
     }
 
     #[test]

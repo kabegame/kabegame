@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 方案已写（2026-10-27）；Phase 6 起为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 起为实现清单
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -285,14 +285,19 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - 删除 `DEBUG-WPE-FILE` / `DEBUG-WPE-INPUT` 临时代码。
 
 ### Phase 5 — 运行时垫片与宿主协议
-点级方案见 [phase-5-shim-host.md](phase-5-shim-host.md)（2026-10-27 按已确认决策 10 重写）。要点：
+> 状态：已实现（2026-10-28），真机回归见 `versions/latest/regression.md`。
+
+点级方案见 [phase-5-shim-host.md](phase-5-shim-host.md)（2026-10-27 按已确认决策 10 重写，2026-10-28 两次修订）。要点：
 - 垫片 `webview_js/wpe_shim.js` 以 `initialization_script_for_all_frames` 注入壁纸窗口与主窗口，按地址自判启用。
-  它采用拉取 + 订阅：load 后首次全量投递，之后按差异投递；首次投递后页面换 listener 时补投全量。
+  传输只有 `pull` / `listen` 两个原语：桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`；预览 iframe 都 `postMessage` 给宿主页，
+  宿主页调 `get_wpe_web_state`，并用 `useTauriProxy()` 代为 listen（`kbEvent$` 合并成一条管道转发）。宿主不主动推送。
+- 重拉触发：`setting-change` 的 `language`；本张图片的 `metadataId` 补丁（metadata 按 id 不可变，属性一改就换 id）。
+  load 后首次全量投递；之后用户属性按键差异、通用属性整份；首次投递后页面换 listener 时补投全量；乱序按垫片的拉取编号丢弃。
 - 运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（否则回退到应用页、被当成本地来源拿到全部权限），
   并删除 Phase 4 的「`file:` 文档不注入初始化脚本」规则。
 - 新增 `wpe-web-capability`（壁纸窗口 + 远程 `file:///*`）：只开 `wpe_web_pull_state` 与事件 `listen` / `unlisten`。
-- 桌面：拉 `wpe_web_pull_state`，推送用 `wpe-web-state` 事件；预览：iframe `postMessage` 给父页面，父页面调 `get_wpe_web_state` 再发回。
-- 状态 `{ imageId, rev, user, general: { language } }` 只在 Rust 侧计算；`fps`、暂停留给 Phase 6。
+- Tauri 不在导航时清 JS 事件监听：补丁 0011 加 `clear_js_listeners()`，`WallpaperWindow` 每次导航成功后调用。
+- 状态 `{ imageId, user, general: { language } }` 只在 Rust 侧计算；`fps`、暂停留给 Phase 6。
 
 ### Phase 6 — 桌面窗口收尾
 - **修改**（`kabegame/src/wallpaper/rotator.rs`、`commands/wallpaper.rs`）
@@ -310,7 +315,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
     保存 = 新 metadata 行 + 图片改指 + `image-changed { metadataId }`。
   - 属性面板组件：按 `order` 排序、`group` 分组、`text` 说明行；`condition` 表达式求值决定显隐（只支持文档里的
     `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS）；`localization` 按当前语言取文案。
-  - 面板入口：预览大图详情区与壁纸设置页；改动经事件推给所有正在显示该壁纸的宿主，只推变化的键。
+  - 面板入口：预览大图详情区与壁纸设置页；保存后的 `metadataId` 补丁由各宿主里的垫片自己重拉，按键差异投递（Phase 5 已接好）。
   - `file` / `directory` 属性的选择与文件交付，方案按 Phase 1 结论落地。
 - **修改**
   - `get_current_wallpaper_target` 返回「作者默认值 + 用户值」合并后的属性。
@@ -353,7 +358,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 9. **桌面鼠标转发第一版只做移动 + 左键**（2026-10-27）：照 WPE 的轮询方式，不装键盘钩子，不转发滚轮。
 10. **宿主协议不照搬 WPE，自己用 Tauri 实现**（2026-10-27）：
     - 桌面壁纸窗口的 `file://` 页面允许注入 Tauri IPC，但只给受限权限（`wpe-web-capability`），推送用 Tauri `listen`；
-    - 预览 iframe 用 `postMessage` 向主 frame（应用页）拉取，由应用页调用 Tauri 命令，推送也由应用页 `postMessage`；
+    - 预览 iframe 用 `postMessage` 向主 frame（应用页）拉取，由应用页调用 Tauri 命令；订阅也 `postMessage` 登记，由应用页代为 listen 并转发（2026-10-28）；
     - `listen` 没有事件名作用域，壁纸页面因此能订阅应用全局事件，用户确认这是可接受的取舍，也算开放给壁纸的一项能力。
     - 依据与 WPE 的对照见 [API.md §4.8](API.md)，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)。
 

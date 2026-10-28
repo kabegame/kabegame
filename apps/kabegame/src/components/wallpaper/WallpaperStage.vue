@@ -5,7 +5,9 @@
  *
  * 约束：
  * - 只靠 props 驱动：不 invoke、不 listen、不读 settingsStore；数据绑定由调用方
- *   （壁纸窗口 `WallpaperWindow.vue`，以及后续的图库预览）负责。
+ *   （壁纸窗口 `WallpaperWindow.vue`，以及后续的图库预览）负责。唯一例外是 web 层 iframe 的
+ *   宿主桥（`wpeWebBridge.ts`）：页面里的 WPE 垫片碰不到 IPC，由桥代为拉取状态、代为 listen，
+ *   随 iframe 一起创建与销毁。
  * - 铺满父元素（父元素需有确定尺寸），可放在任意尺寸容器里。
  * - WPE 网页壁纸（`x-wpe/web`）走独立的 web 层：一次只存在一个跨源 iframe，不参与 base / top
  *   双层过渡；切入时等页面 load 后整层淡入盖住媒体层，切走时新媒体先直设到 base、web 层淡出后
@@ -18,6 +20,7 @@
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl, wpeEntryUrl } from "@/utils/fileUrl";
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
+import { attachWpeWebBridge } from "./wpeWebBridge";
 
 type Phase = "idle" | "prep" | "enter";
 type MediaType = "image" | "video" | "web";
@@ -105,6 +108,8 @@ let webLayerEl: HTMLElement | null = null;
 // iframe 命令式创建 / 销毁（同媒体层的命令式约定）；webToken 每次销毁递增，
 // 让还在 await 的进入 / 离开流程发现自己已过期后放弃。
 let webFrameEl: HTMLIFrameElement | null = null;
+/** 当前 iframe 的宿主桥（替页面里的 WPE 垫片拉取状态、代为 listen），随 iframe 销毁。 */
+let webBridge: { dispose(): void } | null = null;
 let webToken = 0;
 let webVisible = false;
 let webLoadTimer: number | null = null;
@@ -522,7 +527,7 @@ function isInitialBlank(frame: HTMLIFrameElement): boolean {
 }
 
 /** 创建 iframe 并等待它的 load（或超时）；被 teardownWeb 打断时也会返回。 */
-function createWebFrame(url: string): Promise<void> {
+function createWebFrame(url: string, imageId: string): Promise<void> {
   settleWebLoad();
   const layer = webLayerEl;
   if (!layer) return Promise.resolve();
@@ -554,6 +559,9 @@ function createWebFrame(url: string): Promise<void> {
   // 真机（CEF 149）偶发：「先设 src 再插入」的 iframe 首次导航不启动，一直停在初始 about:blank，
   // 重新赋一次 src 即恢复。所以先插入再设 src（插入时初始空文档的 load 由上面的 src 判断忽略），
   // 并在补发时机仍停在初始文档时再赋一次。
+  // 宿主桥在插入 DOM、设 src 之前挂上：垫片在文档开始时就会发 listen / pull
+  webBridge?.dispose();
+  webBridge = attachWpeWebBridge(frame, url, imageId);
   layer.appendChild(frame);
   frame.src = url;
   webKickTimer = window.setTimeout(() => {
@@ -569,6 +577,8 @@ function teardownWeb() {
   webToken += 1;
   settleWebLoad();
   settleWebFade();
+  webBridge?.dispose();
+  webBridge = null;
   const frame = webFrameEl;
   webFrameEl = null;
   if (frame) {
@@ -638,7 +648,7 @@ async function enterWeb(next: WallpaperTarget, normalizedPath: string) {
   updateDebugPanel();
 
   // 等页面 load（或超时）再淡入，避免先露出一块空白页
-  await createWebFrame(url);
+  await createWebFrame(url, next.id);
   if (token !== webToken) return;
   // 等浏览器渲染 prep 状态，再切到 visible 触发过渡
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));

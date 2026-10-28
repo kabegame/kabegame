@@ -1,16 +1,33 @@
 # Phase 5 — 运行时垫片与宿主协议
 
-> 状态：方案（2026-10-27），待实施。
+> 状态：方案（2026-10-27）；已实施（2026-10-28），真机回归待做。实施偏差见文末「实施记录」。
+>
+> 2026-10-28 第一次修订：Phase 4 的 `wpe_web_host`（全局 `STATE` + 监听 `setting-change`）已删除，导航收回
+> `WindowWallpaperManager::set_wallpaper_path`，网页壁纸状态随 `WallpaperWindow` 对象走。本方案随之去掉对它的依赖：
+> 桌面拉取按调用方 label 找 manager 里的 `WallpaperWindow` 取当前网页目录（点 6）。
+>
+> 2026-10-28 第二次修订（用户指定）：
+> - 两种宿主的传输统一成两个原语：`pull` 和 `listen`。
+>   - 壁纸窗口：直接 `invoke`、直接 `listen`。
+>   - 预览 iframe：`pull` 和 `listen` 都 `postMessage` 给宿主页代办。宿主用 `useTauriProxy()` 代为 listen，登记过的事件经 `kbEvent$` 合并成一条管道转发给 iframe。
+>   - 宿主不再主动推送。
+> - 更新的触发：
+>   - 界面语言变化，来自 `setting-change`；
+>   - 属性变化，来自图片 metadata 改变。metadata 按 id 不可变，改了就换 `metadataId`。垫片订阅 `metadataId` 补丁后手动重拉。
+> - 重拉后用户属性仍按键做差异，只推值变化的键。WPE 页面没有「整份替换」的接口。
+> - 去掉 Rust 侧的 `rev`，乱序由垫片自己的拉取序号丢弃。
+> - 新增点 7：Tauri 在导航后不清理旧文档注册的 JS 事件监听，壁纸窗口导航时要手动清掉。
+>
 > 范围：
 > - WPE 全局接口垫片 `wpe_shim.js`，以 all-frames 初始化脚本注入；
 > - 桌面壁纸窗口 `file://` 页面放开 Tauri IPC，但只给一组受限权限；
 > - 运行时修正 `file:` frame 的 IPC 来源判定；
-> - 作者默认值（`applyUserProperties`）与界面语言（`applyGeneralProperties`）的拉取和推送；
-> - 预览 iframe 经父页面中转。
+> - 作者默认值（`applyUserProperties`）与界面语言（`applyGeneralProperties`）的拉取与更新投递；
+> - 预览 iframe 经宿主页代办拉取与监听。
 >
 > **不做**：
 > - 暂停冻结与 `setPaused`、FPS（Phase 6）；
-> - 用户改属性与增量推送的触发源（Phase 7，本 Phase 的 diff 投递已能承接）；
+> - 用户改属性的存储与面板（Phase 7）。Phase 7 保存时写新 metadata 行并发 `metadataId` 补丁，本 Phase 的垫片已订阅并重拉；
 > - `file` / `directory` 属性与 `wallpaperRequestRandomFileForProperty`（Phase 7 再定）；
 > - 音频与媒体数据（Phase 8，注册函数先收下回调、不回调）；
 > - zcompat 兼容补丁（本机没有受影响的壁纸）；
@@ -19,42 +36,66 @@
 ## 总体设计思路
 
 WPE 网页壁纸要靠宿主提供的一组全局接口才能完成初始化。最关键的是 `window.wallpaperPropertyListener.applyUserProperties`：宿主把作者默认值推给它之后，多数壁纸才开始画。Phase 5 用一份 JS 垫片 `wpe_shim.js` 在壁纸页面里定义这组接口，并负责把属性投递给页面。
-我们不照搬 WPE 的「宿主拼 JS 字符串、加载完成前在宿主侧排队」（[API.md §4.8](API.md)），改成**拉取 + 订阅**：
-- 垫片在文档开始时向宿主拉一份完整状态快照，再订阅之后的状态更新；
-- 什么时候回调页面、回调哪些键，全部由垫片决定。宿主只负责给出「当前完整状态」，不排队，也不记页面收到过什么。
 
-两种宿主共用这一份垫片，只是传输通道不同：
+我们不照搬 WPE 的做法（宿主拼 JS 字符串，加载完成前在宿主侧排队，见 [API.md §4.8](API.md)），改成由垫片驱动：
+- 垫片向宿主**拉取**一份完整状态；
+- 垫片**订阅**应用事件，看到相关变化就重拉；
+- 宿主只回答「当前完整状态」和「转发事件」，不推状态、不排队，也不记录页面收到过什么；
+- 什么时候回调页面、回调哪些键，全部由垫片决定。
 
-**桌面壁纸窗口**：主 frame 就是壁纸目录里的 `file://` 入口（Phase 4）。Phase 5 让 Tauri 的初始化脚本照常注入这个页面，垫片直接用 `__TAURI_INTERNALS__`：
-- 拉取：调用 `wpe_web_pull_state`。这个命令不接收 id，由 `wpe_web_host` 记下的当前壁纸决定返回谁的状态。
-- 推送：`wpe_web_host` 在状态变化时向壁纸窗口发 `wpe-web-state` 事件，垫片用 `plugin:event|listen` 接收。
+**传输只有两个原语**，两种宿主各实现一份：
+- `pull()` 返回当前完整状态；
+- `listen(names, onEvent)` 把若干应用事件合并到同一个 `onEvent({ name, payload })`。
 
-**图库预览**：页面是主窗口里的跨源 HTTP iframe，外部页面始终碰不到 IPC。
-- 拉取：垫片 `postMessage` 给父页面（应用页），父页面的预览桥用主窗口权限调用 `get_wpe_web_state(imageId)`，再 `postMessage` 回 iframe。
-- 推送：界面语言变化时，父页面重新拉一次，再把新状态发过去。
+垫片在它们之上实现相同的投递逻辑：
 
-**桌面放开 IPC 的前提**是 `file://` 页面的请求被 Tauri 判成远程来源 `file:///…`，只有专门的 `wpe-web-capability` 对它生效。这个前提**目前不成立**：
-- `file://` 文档的 `Origin` 请求头是 `null`。Tauri 的 `ipc://` 主通道解析失败后，前端脚本会自动改走 `cef-ipc` 回退通道。
-- 运行时在回退通道里拿不到合法 `Origin` 时，退回用 webview 的初始 URL，也就是应用页。于是请求被当成 `Origin::Local`，拿到 `main-capability` 的全部命令。
-- Phase 4 文档写的「`cef-ipc` 入口本来也拒绝」并不成立，只是 Phase 4 没注入 invoke key，这个缺口才没暴露出来。
+| | `pull` | `listen` |
+|---|---|---|
+| 桌面壁纸窗口（主 frame 是 `file://` 入口） | `invoke("wpe_web_pull_state")`。命令不接收 id：按调用方 webview 的 label 找到 manager 里的 `WallpaperWindow`，取它当前的网页目录，再用 `Storage::find_image_by_path` 找到那一行 | 直接 `plugin:event|listen` |
+| 图库预览（主窗口里的跨源 HTTP iframe，碰不到 IPC） | `postMessage({ type: "pull", id })` 给宿主页。宿主页用主窗口权限调 `get_wpe_web_state(imageId)`，回 `{ type: "state", id, state }` | `postMessage({ type: "listen", events })` 登记。宿主页的 `useTauriProxy()` 代为 listen：同名只订阅一次，所有登记过的事件经 `kbEvent$` 合并成一条管道，逐条回 `{ type: "event", name, payload }` |
 
-所以第一步是在运行时的协议层统一修正：请求来自 `file:` frame 时，把 `Origin` 改写成该 frame 的真实 URL。两条 IPC 通道都经过协议层，一处修好。之后再删掉 Phase 4「`file:` 文档不注入任何初始化脚本」的规则，安全边界改由 ACL 承担：
-- Tauri 自身的脚本都只进主 frame，子 frame 拿不到 invoke key；
-- 垫片自己按地址判断是否启用。
+**什么时候重拉**：
+- `setting-change` 带 `language`：界面语言变了。
+- `image-changed` / `images-change` 里有本张图片的 `metadataId` 补丁：属性变了。图片 metadata 按 id 不可变，Phase 7 的设置面板保存时会写一行新 metadata，让图片改指它。
 
-**接受的取舍**：`core:event:allow-listen` 没有按事件名的作用域，壁纸页面因此能订阅应用的全部全局事件。用户确认这是可接受的取舍，也算是开放给壁纸的一项能力。命令层仍然只开一个拉取命令。
+垫片先订阅再拉取。之后每次重拉都拿到完整状态，与上次投递的状态比较后再回调页面。
 
 **投递语义**（我们自己的规则，不跟 WPE）：
-- 第一次完整投递在 `window` 的 `load` 事件之后。为 WPE 写的页面默认回调时 DOM 已就绪，WPE 自己也晚于 `load` 投递。
-- 之后到达的状态与上次投递的状态做差：用户属性只推值变化的键，通用属性有变化就整份推。
-- 第一次投递之后，页面若给 `wallpaperPropertyListener` 换了新对象，垫片在下一个微任务把当前完整状态补投给它。这依靠在 `window` 上安装这个属性的访问器，页面无论写成 `window.x = …` 还是顶层 `var x = …` 都会走到 setter。
-- `load` 之前的赋值只记下来，不提前回调。
+- **首次投递**：在 `window` 的 `load` 事件之后，用户属性和通用属性各推一份完整的。为 WPE 写的页面默认回调时 DOM 已就绪，WPE 自己也晚于 `load` 投递。`load` 之前的赋值只记下来，不提前回调。
+- **之后的投递**：
+  - 用户属性只推值变化的键。WPE 的 `applyUserProperties` 本来就是「只含变化的键」（API.md §3.1），页面没有接收整份替换的接口。作者删掉的键不推，页面没有撤销接口。
+  - 通用属性有变化就推一整份，与 WPE 的命令 7 一致。
+- **换 listener**：首次投递之后，页面若给 `wallpaperPropertyListener` 换了新对象，垫片在下一个微任务把当前完整状态补投给它。这依靠在 `window` 上安装这个属性的访问器，页面无论写成 `window.x = …` 还是顶层 `var x = …` 都会走到 setter。
+- **乱序**：多次拉取可能乱序返回。垫片给每次拉取编号，某次结果落地后丢弃编号更早、返回更晚的结果，做法同 pathql 的 pending 窗口。Rust 不维护版本号。
 
 **状态只在 Rust 侧计算，只有一份来源**：
-- 用户属性取自图片 metadata（导入时存的 `project.json` 原文）里 `general.properties` 中带 `value` 的条目。
-- 通用属性第一版只有 `language`，用 WPE 码表的连字符形式（`zh-chs` 等，见 API.md §3.1）。
+- 用户属性取自图片 metadata（导入时存的 `project.json` 原文）里 `general.properties` 中带 `value` 的条目；
+- 通用属性第一版只有 `language`，用 WPE 码表的连字符形式（`zh-chs` 等，见 API.md §3.1）；
 - `fps` 等 Phase 6 有了设置再推。推 0 会让按 `1000 / fps` 算间隔的页面停住。
-- 每份状态带一个单调递增的 `rev`，垫片丢弃比已收到的更旧的状态，避免拉取结果和推送事件交错时旧的覆盖新的。
+
+**桌面放开 IPC 的前提**是：`file://` 页面的请求被 Tauri 判成远程来源 `file:///…`，只有专门的 `wpe-web-capability` 对它生效。这个前提**目前不成立**：
+- `file://` 文档的 `Origin` 请求头是 `null`。Tauri 的 `ipc://` 主通道解析失败后，前端脚本会自动改走 `cef-ipc` 回退通道。
+- 运行时在回退通道里拿不到合法 `Origin` 时，退回用 webview 的初始 URL，也就是应用页。于是请求被当成 `Origin::Local`，拿到 `main-capability` 的全部命令。
+- Phase 4 文档里「`cef-ipc` 入口本来也拒绝」的说法不成立。Phase 4 只是没注入 invoke key，这个缺口才没暴露出来。
+
+所以：
+- 第一步在运行时的协议层统一修正：请求来自 `file:` frame 时，把 `Origin` 改写成该 frame 的真实 URL。两条 IPC 通道都经过协议层，一处修好。
+- 然后删掉 Phase 4「`file:` 文档不注入任何初始化脚本」的规则，安全边界改由 ACL 承担：
+  - Tauri 自身的脚本都只进主 frame，子 frame 拿不到 invoke key；
+  - 垫片自己按地址判断是否启用。
+
+**导航不会清理 JS 事件监听**（点 7）：
+- Tauri 按 webview label 记录 JS 注册的监听，只在 webview 销毁时清理（现状锚点 j）。
+- 壁纸窗口在应用页和 `file://` 入口之间反复导航，旧文档注册的监听会一直留在 Rust 侧。之后每个这类事件仍在当前文档里 eval 一段投递脚本：
+  - 网页、图片轮换多少次，就积累多少组；
+  - 垫片订阅的 `image-changed` / `images-change` 在下载时很频繁；
+  - 现在 Phase 4 的 `file://` 页面就会收到应用页留下的 `setting-change` 投递脚本。页面只要自己定义 `window.__internal_unstable_listeners_function_id__`，就能读到这些设置变化。
+- 处理方式：加一个 Tauri 补丁提供 `clear_js_listeners()`，`WallpaperWindow` 每次导航成功后清掉。
+
+**接受的取舍**：
+- `core:event:allow-listen` 没有按事件名的作用域，壁纸页面因此能订阅应用的全部全局事件。
+- 预览的宿主代办同样不限事件名，与桌面一致。
+- 用户确认这是可接受的取舍，也算开放给壁纸的一项能力。命令层仍然只开一个拉取命令。
 
 ## 现状锚点
 
@@ -84,7 +125,7 @@ let uri = request
     .unwrap_or(fallback_url)                          // 现状：退回 webview 初始 URL（应用页）→ Tauri 判成 Origin::Local
     .to_string();
 ```
-Tauri 的 `ipc://` 主通道（`tauri/src/ipc/protocol.rs` 的 `parse_invoke_request`）同样读 `Origin`；值是 `null` 时报「Origin header is not a valid URL」，前端随即改走上面的回退通道。
+Tauri 的 `ipc://` 主通道（`tauri/src/ipc/protocol.rs` 的 `parse_invoke_request`）同样读 `Origin`。值是 `null` 时报「Origin header is not a valid URL」，前端随即改走上面的回退通道。
 
 **c. `file:` 文档跳过所有初始化脚本**（`tauri-runtime-cef/src/subprocess.rs`，Phase 4）
 ```rust
@@ -109,19 +150,20 @@ if self.file_document_browsers.borrow().contains(&browser.identifier()) {
 ```
 `main` 权限集包含应用的全部命令（`permissions/main.toml`）。
 
-**e. `wpe_web_host` 只管导航，不对页面说话**（`kabegame/src/wallpaper/wpe_web_host.rs`）
+**e. 网页壁纸状态只在 `WallpaperWindow` 里，没有对外读取入口**（`kabegame/src/wallpaper/window.rs`，2026-10-28 起）
 ```rust
-enum HostMode {
-    App,
-    File { image_id: String, entry_url: Url },   // 现状：记了当前网页壁纸 id，但没有对外读取入口
+struct WebPage {
+    dir: PathBuf,                    // 壁纸目录（= images.local_path 的规范形式）
+    entry: Url,
 }
-
-pub fn start_listener<R: Runtime>(app: AppHandle<R>) {
-    // …
-    if changes.get("currentWallpaperImageId").is_some() {
-        sync(&app).await;                          // 现状：只响应当前壁纸变化
-    }
+pub struct WallpaperWindow<R: Runtime> {
+    window: WebviewWindow<R>,
+    app_url: Option<Url>,
+    web: Option<WebPage>,            // 现状：None = 应用页；没有 getter
+    // …Windows：hwnd、forwarder
 }
+// manager/window.rs：WindowWallpaperManager { wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>, … }
+// WallpaperController 只以 Arc<dyn WallpaperManager> 持有它，命令侧拿不到具体类型。
 ```
 
 **f. 两个窗口都没有 all-frames 初始化脚本**
@@ -156,11 +198,44 @@ fn properties(raw: &Value) -> Option<&serde_json::Map<String, Value>> {
 pub fn resolve_video_props_from_raw(raw: &Value) -> WpeVideoProps { /* … */ }   // 现状：没有网页用的属性输出
 ```
 
+**i. 前端后端事件的唯一入口**（`apps/kabegame/src/services/kbEvents/eventSource.ts`）
+```ts
+/**
+ * 后端事件的唯一入口（Tauri 事件或 Web SSE，由 `listen` 分流）。
+ * 同名事件只注册一次监听、所有订阅者共享，最后一个订阅者退订后释放；核心不解析事件内容。
+ */
+export function kbEvent$<T = unknown>(name: string): Observable<KbEvent<T>> { /* …share() */ }
+// 现状：宿主页没有替别的页面代办 listen 的封装
+```
+
+**j. Tauri 的 JS 监听按 label 记录，只在销毁 webview 时清理**（`third/tauri/crates/tauri/src/event/listener.rs`、`event/mod.rs`）
+```rust
+// listen_js：label → 事件名 → { (target, id) }
+listeners.entry(source_webview_label.to_string()).or_default().entry(event).or_default().insert(JsHandler::new(target, id));
+
+/// Removes all JS event listeners registered from the given webview.
+fn remove_webview_js_listeners(&self, webview_label: &str) { /* … */ }   // 现状：私有，只被下面调用
+/// Removes all event listeners associated with a destroyed webview.
+pub(crate) fn remove_webview_listeners(&self, label: &str) { self.remove_webview_js_listeners(label); /* … */ }
+
+// 投递：向该 webview 当前文档 eval，函数名是固定的（不随机）
+"(function () {{ const fn = window['{}']; fn && fn({{event: '{}', payload: {}}}, {ids}) }})()"
+// function_name = "__internal_unstable_listeners_function_id__"
+```
+现状：壁纸窗口导航到 `file://` 后，应用页（`WallpaperWindow.vue`）注册的 `setting-change` 监听仍在，每次设置变化都会向网页壁纸文档 eval 上面这段脚本。
+
+**k. 属性变化的事件形态**（`AGENTS.md` 图片事件协议、`apps/kabegame/src/types/image.ts`）
+```ts
+// 字段变化按 id 合并成补丁：一张发 image-changed { seq, patch }，多张发 images-change { seq, patches }
+export type ImageFieldPatch = { id: string } & Partial<ImageInfo>;   // ImageInfo.metadataId?: number
+// setting-change 的 payload：{ changes: { <key>: <value> } }（emit_setting_change 构造），language 变化即 changes.language
+```
+
 ## 点 1 — 运行时：`file:` frame 的 IPC 来源按 frame URL 判定（`tauri-runtime-cef/src/protocol.rs`、`ipc.rs`）
 - **修改**
   - `RequestFrame` 增加 `url`，scheme factory 在 `create` 里读 `frame.url()`。
   - `CefResourceHandler::open`：frame URL 是 `file:` 时，把请求的 `Origin` 头改写成 frame URL，再交给协议 handler。
-    > 说明：`ipc://` 主通道（Tauri）与 `cef-ipc` 回退通道都从这里进入，一处改写，两条通道都会判成 `Origin::Remote { url: file:///… }`。
+    > 说明：`ipc://` 主通道（Tauri）与 `cef-ipc` 回退通道都从这里进入，一处改写后两条通道都会判成 `Origin::Remote { url: file:///… }`。
     > 只改写 `file:` frame，其它来源的 `Origin` 头不动。
   - `ipc.rs` 的回退顺序改为「`Origin` 头 → frame URL → webview 初始 URL」。`Origin` 头缺失或为 `null` 且已知 frame 时，不再退回应用页。
 ```rust
@@ -216,7 +291,7 @@ let uri = request
 ## 点 2 — 运行时：删除「`file:` 文档不注入初始化脚本」（`tauri-runtime-cef/src/subprocess.rs`）
 - **删除**
   - `InitializationRenderProcessHandler::file_document_browsers` 字段、`on_browser_created` 里的登记与 `on_browser_destroyed` 里的移除。
-  - `on_context_created` 里的整段跳过逻辑（现状锚点 c）；`allows_file_documents` 若因此不再使用一并删除。
+  - `on_context_created` 里的整段跳过逻辑（现状锚点 c）；`allows_file_documents` 若因此不再使用，一并删除。
     > 说明：文件访问偏好（补丁 0004）与 `file:` 目录拦截不受影响，二者读的是浏览器进程侧的登记，不经过这里。
 ```rust
 fn on_context_created(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, context: Option<&mut V8Context>) {
@@ -251,7 +326,7 @@ fn on_context_created(&self, browser: Option<&mut Browser>, frame: Option<&mut F
 ```
   > 说明：
   > - `local: false`：应用页回到壁纸窗口时仍只受 `main-capability` 约束。
-  > - 不给 `core:default`，页面拿不到窗口、路径、应用信息等核心命令。
+  > - 不给 `core:default`：页面拿不到窗口、路径、应用信息等核心命令。
   > - `allow-listen` 能订阅全部全局事件，是用户确认过的取舍（见总体设计思路）。
 - **新增** `permissions/wpe-web.toml`
 ```toml
@@ -263,7 +338,7 @@ commands.allow = ["wpe_web_pull_state"]
 - **修改** `tauri.conf.json.handlebars`：桌面分支的 `security.capabilities` 追加 `"wpe-web-capability"`，Android 分支不加。
 - **新增**（测试，`kabegame/src/commands/wpe_web.rs`）：`tauri::utils::acl::RemoteUrlPattern::from_str("file:///*")` 能匹配
   `file:///D:/x/y/index.html`，不匹配 `http://127.0.0.1/`。
-  > 说明：`urlpattern` 对 `file:` 的匹配未实测；不匹配时改用 `file://*`，并在本点记录实际可用的写法。
+  > 说明：`urlpattern` 对 `file:` 的匹配未实测。不匹配时改用 `file://*`，并在本点记录实际可用的写法。
 
 ## 点 4 — core：网页属性与语言码（`kabegame-core/src/wpe/properties.rs`）
 - **新增**
@@ -296,17 +371,19 @@ pub fn wpe_language_code(locale: &str) -> &'static str {
     }
 }
 ```
-- **新增**（测试）：kaguya 的 `project.json` 片段 → 带 `value` 的键全部输出、`type` 保留、无 `value` 的条目被跳过；五种语言的映射。
+- **新增**（测试）：
+  - kaguya 的 `project.json` 片段：带 `value` 的键全部输出、`type` 保留、无 `value` 的条目被跳过；
+  - 五种语言的映射。
 
 ## 点 5 — 应用：状态构建与两条命令（新增 `kabegame/src/commands/wpe_web.rs`；修改 `lib.rs`、`permissions/main.toml`）
 - **新增**
 ```rust
-/// 推给网页壁纸的完整状态。垫片按 `rev` 丢弃旧状态，按 `imageId` 丢弃别的壁纸的状态。
+/// 网页壁纸页面拉取的完整状态。乱序由垫片按自己的拉取序号丢弃，这里不带版本号。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WpeWebState {
+    /// 垫片按它过滤 `metadataId` 补丁（只认本张）。
     pub image_id: String,
-    pub rev: u64,
     pub user: serde_json::Map<String, serde_json::Value>,
     pub general: WpeWebGeneral,
 }
@@ -316,84 +393,127 @@ pub struct WpeWebGeneral {
     pub language: &'static str,
 }
 
-static REV: AtomicU64 = AtomicU64::new(0);
-
-/// 按 id 组装状态；行不存在或不是 `x-wpe/web` 返回 None。metadata 读取放 blocking 线程。
+/// 按 id 组装状态，每次都读图片当前的 metadata；行不存在或不是 `x-wpe/web` 返回 None。metadata 读取放 blocking 线程。
 pub async fn build_wpe_web_state(image_id: &str) -> Result<Option<WpeWebState>, String> { /* … */ }
 
-/// 预览桥（主窗口应用页，main-capability）。
+/// 预览宿主页（主窗口应用页，main-capability）替 iframe 拉取。
 #[tauri::command]
 pub async fn get_wpe_web_state(image_id: String) -> Result<Option<WpeWebState>, String> {
     build_wpe_web_state(&image_id).await
 }
 
-/// 桌面网页壁纸页面（wpe-web-capability）。不接收 id：只返回 `wpe_web_host` 当前导航到的那张，
-/// 页面拿不到别的图片的 metadata。
+/// 桌面网页壁纸页面（wpe-web-capability）。不接收 id：按调用方窗口找到 manager 里的 `WallpaperWindow`，
+/// 只返回它当前显示的那张，页面拿不到别的图片的 metadata。
 #[tauri::command]
 pub async fn wpe_web_pull_state<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
 ) -> Result<WpeWebState, String> {
-    if webview.label() != WALLPAPER_LABEL {
-        return Err("wpe_web_pull_state: not the wallpaper window".into());
-    }
-    let image_id = wpe_web_host::current_image_id().ok_or("no web wallpaper")?;
-    build_wpe_web_state(&image_id).await?.ok_or_else(|| "web wallpaper row missing".into())
+    // 只有窗口模式的壁纸窗口会返回 Some：别的 label、应用页、非窗口模式都是 None。
+    let dir = WallpaperController::global()
+        .manager_for_mode("window")
+        .web_wallpaper_dir(webview.label())
+        .ok_or("no web wallpaper")?;
+    // dir 来自 read_project 的规范化目录，与入库时的 local_path 同形。
+    let image = Storage::find_image_by_path(&dir.to_string_lossy())?
+        .ok_or("web wallpaper row missing")?;
+    build_wpe_web_state(&image.id).await?.ok_or_else(|| "web wallpaper row missing".into())
 }
+
+/// 垫片注入脚本（壁纸窗口与主窗口共用，all-frames）。
+pub const WPE_SHIM_JS: &str = include_str!("../webview_js/wpe_shim.js");
 ```
 - **修改**
   - `lib.rs`：注册 `get_wpe_web_state`、`wpe_web_pull_state`。
-  - `permissions/main.toml`：加 `get_wpe_web_state`（`wpe_web_pull_state` 只在 `wpe-web` 权限集里）。
+  - `permissions/main.toml`：加 `get_wpe_web_state`。`wpe_web_pull_state` 只放在 `wpe-web` 权限集里。
 
-## 点 6 — `wpe_web_host`：对外读当前壁纸，语言变化时推送（`kabegame/src/wallpaper/wpe_web_host.rs`）
+## 点 6 — 窗口 manager：按 label 读当前网页目录（`kabegame/src/wallpaper/window.rs`、`manager/window.rs`、`manager/mod.rs`）
 - **新增**
 ```rust
-/// 垫片注入脚本（壁纸窗口与主窗口共用，all-frames）。
-pub const WPE_SHIM_JS: &str = include_str!("../webview_js/wpe_shim.js");
-/// 桌面推送事件名：载荷是完整的 `WpeWebState`。
-pub const WPE_WEB_STATE_EVENT: &str = "wpe-web-state";
-
-/// 当前导航到的网页壁纸 id（App 模式为 None）。
-pub fn current_image_id() -> Option<String> {
-    match &lock_state().mode {
-        HostMode::File { image_id, .. } => Some(image_id.clone()),
-        HostMode::App => None,
+// wallpaper/window.rs
+impl<R: Runtime> WallpaperWindow<R> {
+    pub fn label(&self) -> &str {                        // 新增
+        self.window.label()
+    }
+    /// 当前显示的网页壁纸目录；停在应用页时为 None。
+    pub fn web_dir(&self) -> Option<&Path> {             // 新增
+        self.web.as_ref().map(|web| web.dir.as_path())
     }
 }
 
-/// 当前网页壁纸的状态有变化：重建并发给壁纸窗口。
-async fn push_state<R: Runtime>(app: &AppHandle<R>) {
-    let Some(image_id) = current_image_id() else { return };
-    match crate::commands::wpe_web::build_wpe_web_state(&image_id).await {
-        Ok(Some(state)) => {
-            let _ = app.emit_to(EventTarget::webview_window(WALLPAPER_LABEL), WPE_WEB_STATE_EVENT, state);
-        }
-        Ok(None) => {}
-        Err(error) => eprintln!("[wpe-web-host] 组装网页壁纸状态失败: {error}"),
-    }
+// manager/mod.rs：WallpaperManager trait
+/// `label` 窗口当前显示的网页壁纸目录。只有窗口模式实现，其它后端恒为 None。
+fn web_wallpaper_dir(&self, _label: &str) -> Option<PathBuf> {   // 新增：默认实现
+    None
+}
+
+// manager/window.rs：WindowWallpaperManager
+fn web_wallpaper_dir(&self, label: &str) -> Option<PathBuf> {    // 新增
+    let guard = self.wallpaper_window.lock().ok()?;
+    let wp = guard.as_ref().filter(|wp| wp.label() == label)?;  // 以后多显示器：在窗口列表里按 label 找
+    wp.web_dir().map(Path::to_path_buf)
 }
 ```
-- **修改**
+- **说明**
+  - 状态只有 `WallpaperWindow` 一处属主：命令按 label 读它，Rust 不另记「当前网页壁纸 id」，也不推状态。
+    多显示器时，每块屏的窗口各自回答自己的目录。
+  - 锁内只读字段，不调会同步等主线程的窗口 getter。`label()` 是本地字段，不等主线程，与 Phase 4 收回后的锁约定一致。
+
+## 点 7 — 导航后清掉旧文档的 JS 事件监听（新增 `third-patches/tauri/0011-tauri-webview-clear-js-listeners.patch`；修改 `wallpaper/window.rs`）
+- **新增**（Tauri 补丁，`crates/tauri`）
 ```rust
-pub fn start_listener<R: Runtime>(app: AppHandle<R>) {
-    tauri::async_runtime::spawn(async move {
-        let mut rx = EventBroadcaster::global().subscribe_filtered_stream(&[AppEventKind::SettingChange]);
-        while let Some((_, event)) = rx.recv().await {
-            if let AppEvent::SettingChange { changes } = &*event {
-                if changes.get("currentWallpaperImageId").is_some() {
-                    sync(&app).await;
-                }
-                if changes.get("language").is_some() {
-                    push_state(&app).await;            // 新增：界面语言变化 → applyGeneralProperties
-                }
-            }
-        }
-    });
+// crates/tauri/src/event/listener.rs
+/// Removes all JS event listeners registered from the given webview.
+pub(crate) fn remove_webview_js_listeners(&self, webview_label: &str) {   // 修改：fn → pub(crate)
+    // …不变
+}
+
+// crates/tauri/src/webview/mod.rs
+impl<R: Runtime> Webview<R> {
+    /// 新增：丢弃本 webview 里由 JS 注册的全部事件监听（Rust 侧 `listen` 不受影响）。
+    /// 导航到新文档后旧文档的监听不会自动移除，之后的事件仍会向新文档 eval 投递脚本；
+    /// 嵌入方在确认换了文档时调用。
+    pub fn clear_js_listeners(&self) {
+        self.manager().listeners().remove_webview_js_listeners(self.label());
+    }
+}
+
+// crates/tauri/src/webview/webview_window.rs
+impl<R: Runtime> WebviewWindow<R> {
+    /// 新增：见 [`Webview::clear_js_listeners`]。
+    pub fn clear_js_listeners(&self) {
+        self.webview.clear_js_listeners()
+    }
 }
 ```
-  - `STATE.lock()` 的中毒处理抽成 `lock_state()`，`sync` / `reset` / `current_image_id` 共用。
-  - 模块文档补一段：页面经 `wpe_web_pull_state` 拉取、经 `wpe-web-state` 接收推送。
+- **修改**（`wallpaper/window.rs`）
+```rust
+pub fn show_web(&mut self, dir: PathBuf, entry: Url) -> Result<(), String> {
+    // …同入口返回、校验 app_url、设根目录
+    if let Err(error) = self.window.navigate(entry.clone()) {
+        // …恢复根目录、返回 Err（不变：页面没换，监听保留）
+    }
+    // 新增：旧文档（应用页或上一张网页壁纸）注册的监听随它作废。
+    // 新文档要先加载、执行脚本才会 listen，晚于这里。
+    self.window.clear_js_listeners();
+    // …记 web、启动转发（不变）
+}
 
-## 点 7 — 垫片 `wpe_shim.js` 与注入（新增 `kabegame/src/webview_js/wpe_shim.js`；修改 `startup.rs`、`wallpaper/manager/window.rs`）
+pub fn show_app(&mut self) {
+    // …取走 web、停转发、清根目录
+    if let Err(error) = self.window.navigate(app_url.clone()) {
+        // …记日志、返回（不变）
+    }
+    self.window.clear_js_listeners();   // 新增：同上，清掉网页壁纸垫片的监听
+    // …
+}
+```
+  > 说明：
+  > - 放在 `navigate` 成功之后：导航失败时页面没换，不能拿走它仍在用的监听。
+  > - 只处理 manager 发起的导航。页面自己 `location.reload()` 会留下一组垫片监听，量很小，不额外处理。
+  > - `cleanup()` 销毁窗口时 Tauri 自己会清，不用调。
+- **修改** `third-patches/tauri/README.md`：补丁列表加 0011。
+
+## 点 8 — 垫片 `wpe_shim.js` 与注入（新增 `kabegame/src/webview_js/wpe_shim.js`；修改 `startup.rs`、`wallpaper/manager/window.rs`）
 - **新增** `webview_js/wpe_shim.js`
 ```js
 // WPE 网页壁纸运行时垫片：all-frames 初始化脚本，桌面壁纸窗口与主窗口共用。
@@ -432,7 +552,7 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) {
     return {};
   };
 
-  // ---- 投递：load 后首次全量；之后按差异；首次之后换 listener 补投全量 ----
+  // ---- 投递：load 后首次全量；之后用户属性按键差异、通用属性整份；首次之后换 listener 补投全量 ----
   var listener;
   var latest = null; // 收到的最新状态
   var delivered = null; // 上次投递给页面的状态
@@ -481,11 +601,10 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) {
     return out;
   }
   function receive(next) {
-    if (!next || typeof next.rev !== "number") return;
-    if (latest && (next.imageId !== latest.imageId || next.rev <= latest.rev)) return;
     latest = next;
     if (!loaded) return;
     if (!delivered) return deliverFull(next);
+    // WPE 没有整份替换的接口：只推值变化的键；作者删掉的键页面无从撤销，不推
     var changed = changedUser(delivered.user, next.user);
     if (changed) call("applyUserProperties", changed);
     if (JSON.stringify(delivered.general) !== JSON.stringify(next.general)) {
@@ -498,94 +617,226 @@ pub fn start_listener<R: Runtime>(app: AppHandle<R>) {
     if (latest && !delivered) deliverFull(latest);
   });
 
-  // ---- 传输 ----
-  if (desktop) {
-    var internals = window.__TAURI_INTERNALS__;
-    if (!internals) return;
-    internals.invoke("plugin:event|listen", {
-      event: "wpe-web-state",
-      target: { kind: "Any" },
-      handler: internals.transformCallback(function (event) {
-        receive(event.payload);
-      }),
+  // ---- 传输：pull() → Promise<state>；listen(names, onEvent) → Promise，各事件并入同一个 onEvent ----
+  var transport = desktop ? tauriTransport(window.__TAURI_INTERNALS__) : parentTransport();
+  if (!transport) return;
+
+  // 拉取编号：某次结果落地后，丢弃更早发出、更晚返回的结果
+  var issued = 0;
+  var applied = 0;
+  function pull() {
+    var seq = ++issued;
+    transport.pull().then(
+      function (state) {
+        if (!state || seq <= applied) return;
+        applied = seq;
+        receive(state);
+      },
+      function (error) {
+        console.warn("[kb-wpe] pull", error);
+      },
+    );
+  }
+
+  function patchesOf(event) {
+    var payload = event.payload || {};
+    if (event.name === "image-changed") return payload.patch ? [payload.patch] : [];
+    if (event.name === "images-change") return Array.isArray(payload.patches) ? payload.patches : [];
+    return [];
+  }
+  function shouldPull(event) {
+    if (event.name === "setting-change") {
+      var payload = event.payload || {};
+      var changes = payload.changes && typeof payload.changes === "object" ? payload.changes : payload;
+      return Object.prototype.hasOwnProperty.call(changes, "language");
+    }
+    // 图片 metadata 按 id 不可变：属性改了就换 metadataId。首个状态到达前不知道本张 id，任何 metadataId 补丁都重拉
+    var id = latest && latest.imageId;
+    return patchesOf(event).some(function (patch) {
+      return patch && typeof patch === "object" && "metadataId" in patch && (!id || String(patch.id) === id);
     });
-    internals.invoke("wpe_web_pull_state").then(receive, function (error) {
-      console.warn("[kb-wpe] pull", error);
-    });
-  } else {
+  }
+
+  // 先订阅再拉取：订阅生效之后的变化都会触发重拉
+  transport
+    .listen(["setting-change", "image-changed", "images-change"], function (event) {
+      if (shouldPull(event)) pull();
+    })
+    .catch(function (error) {
+      console.warn("[kb-wpe] listen", error);
+    })
+    .then(pull);
+
+  function tauriTransport(internals) {
+    if (!internals) return null;
+    return {
+      pull: function () {
+        return internals.invoke("wpe_web_pull_state");
+      },
+      listen: function (names, onEvent) {
+        return Promise.all(
+          names.map(function (name) {
+            return internals.invoke("plugin:event|listen", {
+              event: name,
+              target: { kind: "Any" },
+              handler: internals.transformCallback(function (event) {
+                onEvent({ name: name, payload: event.payload });
+              }),
+            });
+          }),
+        );
+      },
+    };
+  }
+
+  function parentTransport() {
+    var nextId = 0;
+    var pending = {}; // 拉取 id → 落地回调
+    var onEvent = null;
+    // 发出的消息只有拉取编号与事件名，不含数据；宿主页按 event.source 认 iframe
+    function post(message) {
+      message.kbWpe = 1;
+      window.parent.postMessage(message, "*");
+    }
     window.addEventListener("message", function (event) {
       var data = event.data;
       if (event.source !== window.parent || !data || data.kbWpe !== 1) return;
-      if (data.type === "state") receive(data.state);
+      if (data.type === "state" && pending[data.id]) {
+        var settle = pending[data.id];
+        delete pending[data.id];
+        settle(data);
+      } else if (data.type === "event" && onEvent) {
+        onEvent({ name: data.name, payload: data.payload });
+      }
     });
-    window.parent.postMessage({ kbWpe: 1, type: "pull" }, "*");
+    return {
+      pull: function () {
+        var id = ++nextId;
+        return new Promise(function (resolve, reject) {
+          pending[id] = function (data) {
+            if (data.error) reject(data.error);
+            else resolve(data.state);
+          };
+          post({ type: "pull", id: id });
+        });
+      },
+      listen: function (names, handler) {
+        onEvent = handler;
+        post({ type: "listen", events: names });
+        // 宿主页收到消息即登记；宿主自己的 Tauri listen 何时生效不回报，预览接受这一点窗口
+        return Promise.resolve();
+      },
+    };
   }
 })();
 ```
   > 说明：
-  > - 先 `listen` 再 `pull`：两者之间发生的推送不会漏，交错到达靠 `rev` 去重。
-  > - 首次全量里先 `applyUserProperties` 再 `applyGeneralProperties`，WPE 的实际顺序未确认。
+  > - 切换壁纸不需要通知页面：网页 → 网页时整页导航到新入口，新文档里的垫片重新订阅、重新拉取；切走时页面直接被卸载（桌面的旧监听由点 7 清掉）。
+  > - 首次全量里先 `applyUserProperties` 再 `applyGeneralProperties`。WPE 的实际顺序未确认。
   > - 页面自己的嵌套 iframe 不启用：预览里它们的父窗口不是 top，桌面里它们不是 top。
-  > - 预览发 `pull` 用 `"*"`：消息不含任何数据，父页面按 `event.source` 认 iframe。
+  > - 下载期间 `images-change` 很频繁，每条都会投递给垫片。垫片只按 id 过滤，开销是一次 eval（桌面）或一次 `postMessage`（预览）。
 - **修改**
-  - `wallpaper/manager/window.rs`：壁纸窗口 builder 加 `.initialization_script_for_all_frames(wpe_web_host::WPE_SHIM_JS)`。
+  - `wallpaper/manager/window.rs`：壁纸窗口 builder 加 `.initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS)`。
   - `startup.rs`：主窗口 builder 同样加（`#[cfg(not(target_os = "android"))]`）。
     > 说明：垫片在应用页和其它 iframe 里第一行就返回，不定义任何全局。
 
-## 点 8 — 预览桥（新增 `apps/kabegame/src/components/wallpaper/wpeWebBridge.ts`；修改 `WallpaperStage.vue`）
-- **新增**
+## 点 9 — 预览宿主页：`useTauriProxy` 与预览桥（新增 `apps/kabegame/src/composables/useTauriProxy.ts`、`components/wallpaper/wpeWebBridge.ts`；修改 `WallpaperStage.vue`）
+- **新增** `composables/useTauriProxy.ts`
 ```ts
-import { watch } from "vue";
-import { i18n } from "@kabegame/i18n";
-import { invoke } from "@/api/rpc";
+import { Subject, mergeMap } from "rxjs";
+import { getCurrentScope, onScopeDispose } from "vue";
+import { kbEvent$, type KbEvent } from "@/services/kbEvents";
 
-/** 后端 `WpeWebState`：推给网页壁纸页面的完整状态。 */
+export interface TauriProxy {
+  /** 代为订阅这些后端事件；同名只订阅一次，并入同一条管道交给 `forward`。 */
+  listen(names: Iterable<string>): void;
+  /** 退订全部；在组件 / effectScope 里创建时随作用域自动调用。 */
+  dispose(): void;
+}
+
+/**
+ * 替不能直接用 IPC 的页面（预览 iframe 里的网页壁纸）代办 Tauri 能力，目前只有 `listen`。
+ * 登记过的事件经 `kbEvent$` 合并成一条管道，按到达顺序交给 `forward`。
+ */
+export function useTauriProxy(forward: (event: KbEvent) => void): TauriProxy {
+  const listened = new Set<string>();
+  const names$ = new Subject<string>();
+  // 新名字并入同一条管道；已有订阅不重建，不会出现退订再订阅的空档
+  const subscription = names$.pipe(mergeMap((name) => kbEvent$(name))).subscribe(forward);
+
+  const proxy: TauriProxy = {
+    listen(names) {
+      for (const name of names) {
+        if (listened.has(name)) continue;
+        listened.add(name);
+        names$.next(name);
+      }
+    },
+    dispose() {
+      subscription.unsubscribe();
+    },
+  };
+  if (getCurrentScope()) onScopeDispose(proxy.dispose);
+  return proxy;
+}
+```
+- **新增** `components/wallpaper/wpeWebBridge.ts`
+```ts
+import { invoke } from "@/api/rpc";
+import { useTauriProxy } from "@/composables/useTauriProxy";
+
+/** 后端 `WpeWebState`：网页壁纸页面拉取的完整状态。 */
 export interface WpeWebState {
   imageId: string;
-  rev: number;
   user: Record<string, { type?: string; value: unknown }>;
   general: { language: string };
 }
 
 /**
- * 预览 iframe 与网页壁纸垫片之间的中转：iframe 发 `pull` → 用主窗口权限取状态 → postMessage 回去；
- * 界面语言变化时主动重发。外部页面不接触 IPC。
+ * 预览 iframe 的宿主端：替网页壁纸垫片拉取状态、代为 listen。
+ * - `pull { id }` → 用主窗口权限调 `get_wpe_web_state`，回 `state { id, state | error }`；
+ * - `listen { events }` → `tauriProxy.listen`，事件逐条回 `event { name, payload }`。
+ * 只认本 iframe（`event.source`），只发往它加载时的源；外部页面不接触 IPC。
  */
 export function attachWpeWebBridge(frame: HTMLIFrameElement, frameUrl: string, imageId: string) {
   const origin = new URL(frameUrl, location.href).origin;
   let disposed = false;
-  let pulled = false;
+  const post = (message: Record<string, unknown>) => {
+    if (!disposed) frame.contentWindow?.postMessage({ kbWpe: 1, ...message }, origin);
+  };
+  const tauriProxy = useTauriProxy((event) => post({ type: "event", name: event.name, payload: event.payload }));
 
-  async function send() {
-    const state = await invoke<WpeWebState | null>("get_wpe_web_state", { imageId });
-    if (disposed || !state || !frame.contentWindow) return;
-    frame.contentWindow.postMessage({ kbWpe: 1, type: "state", state }, origin);
+  async function pull(id: number) {
+    try {
+      const state = await invoke<WpeWebState | null>("get_wpe_web_state", { imageId });
+      post(state ? { type: "state", id, state } : { type: "state", id, error: "not a web wallpaper" });
+    } catch (error) {
+      post({ type: "state", id, error: String(error) });
+    }
   }
+
   function onMessage(event: MessageEvent) {
-    if (event.source !== frame.contentWindow || event.data?.kbWpe !== 1) return;
-    if (event.data.type === "pull") {
-      pulled = true;
-      void send();
+    const data = event.data;
+    if (event.source !== frame.contentWindow || data?.kbWpe !== 1) return;
+    if (data.type === "pull" && typeof data.id === "number") void pull(data.id);
+    else if (data.type === "listen" && Array.isArray(data.events)) {
+      tauriProxy.listen(data.events.filter((name: unknown): name is string => typeof name === "string" && name !== ""));
     }
   }
   window.addEventListener("message", onMessage);
-  const stopLocale = watch(
-    () => String(i18n.global.locale),
-    () => {
-      if (pulled) void send();
-    },
-  );
 
   return {
     dispose() {
       disposed = true;
       window.removeEventListener("message", onMessage);
-      stopLocale();
+      tauriProxy.dispose();
     },
   };
 }
 ```
-  > 说明：`i18n.global.locale` 是否为 ref 以实测为准（现有代码用 `unref(i18n.global.locale)` 读取）。是 ref 时直接 `watch` 它。
+  > 说明：
+  > - 桥在 `enterWeb` 的 `await` 之后创建，那时已没有活动的 effect scope，`useTauriProxy` 不会自动释放，由 `dispose()` 显式退订。
+  > - 不限 iframe 能登记的事件名，与桌面 `allow-listen` 一致（总体设计思路的取舍）。
 - **修改** `WallpaperStage.vue`
 ```ts
 let webBridge: { dispose(): void } | null = null;      // 新增
@@ -611,45 +862,95 @@ function teardownWeb() {
 }
 ```
 
-## 点 9 — 文档与回归
+## 点 10 — 文档与回归
 - **修改**
   - `cocs/wpe/WPE_IMPORT.md`：
     - 「初始化脚本隔离」改为「照常注入 + 远程 `file:` 来源 + `wpe-web-capability`」，删掉「`cef-ipc` 入口本来也拒绝」这句错误描述；
-    - 新增「运行时垫片与宿主协议」一节：两种传输、投递语义、`rev`、接受的全局事件可见性。
-  - `cocs/README.md`：WPE 条目补垫片与协议；适用场景里「页面里出现 `__TAURI_INTERNALS__`」改为「页面调用应用命令被 ACL 拒绝 / 收不到属性」。
+    - 新增「运行时垫片与宿主协议」一节，包括：
+      - `pull` / `listen` 两个原语与两种实现；
+      - `useTauriProxy` 代办；
+      - 重拉触发（语言、`metadataId`）；
+      - 投递语义与拉取编号；
+      - 导航时清 JS 监听；
+      - 接受的全局事件可见性。
+  - `cocs/README.md`：WPE 条目补垫片与协议。适用场景里「页面里出现 `__TAURI_INTERNALS__`」改为「页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应」。
   - `AGENTS.md`：WPE 那条里的「`file:` 文档不注入初始化脚本」改为「`file:` 文档照常注入 Tauri 脚本，IPC 按远程 `file:` 来源只给 `wpe-web-capability`」。
   - `src-tauri/tauri-runtime-cef/README.md`：协议层 `Origin` 改写与删除注入跳过。
+  - `third-patches/tauri/README.md`：补丁列表加 0011 `clear_js_listeners`（与点 7 同一处，实施时一起写）。
   - `API.md` §8 落地表与 `PLAN.md` Phase 5 段：标记已完成。
+    > 说明：两处的 pull / listen、重拉触发、宿主代办与 Phase 7 的触发方式已随本次修订（2026-10-28）改好，实施时只改状态。
   - `versions/latest/regression.md`：
-    - Phase 4 的「初始化脚本隔离」行改成新的期望（`__TAURI_INTERNALS__` 存在，应用命令被拒）；
+    - Phase 4 的「初始化脚本隔离」行改成新的期望：`__TAURI_INTERNALS__` 存在，应用命令被拒；
     - 新增本 Phase 各行（见下）。
   - `versions/latest/changelog.md`：一行「网页壁纸可读取作者默认属性与界面语言」。
 
 ## 验收清单（Windows 11 dev，用 `kabegame-chromium`；Rust 改动后 dev 自行重建，不轮询）
-- 单测：点 1 的 `Origin` 改写与回退顺序；点 3 的 `file:///*` 模式匹配；点 4 的属性与语言码。
-- 桌面 kaguya（壁纸窗口 `file://`）：
-  - `typeof __TAURI_INTERNALS__ === "object"`；
-  - 页面控制台 `__TAURI_INTERNALS__.invoke("get_image_by_id", { imageId: "1" })` 被 ACL 拒绝，且错误里是远程 `file:` 来源；
-  - `invoke("wpe_web_pull_state")` 返回 kaguya 的状态；
-  - 用 debug ingest 插桩记录 `applyUserProperties` 的调用：`load` 之后恰好一次，键与 `project.json` 中带 `value` 的条目一致；
-  - 切换界面语言 → `applyGeneralProperties({ language })` 收到新码，`applyUserProperties` 不再调用。
-- 桌面安全：
-  - `fetch("ipc://localhost/get_image_by_id")` 绕过 `invoke` 直接请求同样被拒；
+- **单测**：
+  - 点 1 的 `Origin` 改写与回退顺序；
+  - 点 3 的 `file:///*` 模式匹配；
+  - 点 4 的属性与语言码。
+- **桌面 kaguya**（壁纸窗口在 `file://`）：
+  - `typeof __TAURI_INTERNALS__ === "object"`。
+  - 页面控制台 `__TAURI_INTERNALS__.invoke("get_settings", { keys: ["language"] })` 返回 `Command get_settings not allowed by ACL`。dev 构建的依赖关了 `debug-assertions`，错误文本不含来源；同页 `wpe_web_pull_state` 成功即说明被判成远程 `file:` 来源。
+  - `invoke("wpe_web_pull_state")` 返回 kaguya 的状态。
+  - 用 debug ingest 插桩记录 `applyUserProperties` 的调用：在 `load` 之后恰好一次，键与 `project.json` 中带 `value` 的条目一致。
+  - 切换界面语言：垫片重新拉取；`applyGeneralProperties({ language })` 收到新码；`applyUserProperties` 不再被调用（属性没变）。
+  - 在主窗口 `emit("image-changed", { seq: 0, patch: { id: <kaguya id>, metadataId: <原值> } })` 模拟 metadata 补丁：垫片重新拉取；属性没变，所以不回调 `applyUserProperties`。真正的差异投递等 Phase 7 有了保存再回归。
+  - 主窗口里调用 `wpe_web_pull_state`（若有权限）返回 `no web wallpaper`。切回图片壁纸后，壁纸窗口同样返回它。
+- **桌面安全**：
+  - `fetch("ipc://localhost/get_settings")` 绕过 `invoke` 直接请求，同样被拒；
   - 嵌套 iframe 里没有 `__TAURI_INTERNALS__`；
   - 回到图片壁纸后，应用页照常（`main-capability` 生效）。
-- 预览 12099：
+- **导航清监听**：
+  - 用 debug ingest 插桩，在 `show_web` / `show_app` 前后记录本 label 的 JS 监听数；
+  - 图片 → kaguya → 图片 → kaguya 循环两轮：监听数不增长，应用页的 `setting-change` 照常生效。
+- **预览 12099**：
   - iframe 内 `window.__kbWpeShim === true`，主窗口应用页里 `__kbWpeShim` 为 `undefined`；
+  - 宿主页 debug ingest：收到一次 `listen`（三个事件名）和一次 `pull`；
   - `applyUserProperties` 在 iframe `load` 后被调用一次；
-  - 切语言后 iframe 收到新的 general。
-- 换 listener：首次投递后在页面控制台执行 `window.wallpaperPropertyListener = { applyUserProperties: console.log }`，下一个微任务打印全量属性。
+  - 切语言：经 `useTauriProxy` 转发 `setting-change`，iframe 重拉，收到新的 general；
+  - 关闭预览：`dispose` 后宿主页不再转发。
+- **换 listener**：首次投递后在页面控制台执行 `window.wallpaperPropertyListener = { applyUserProperties: console.log }`，下一个微任务打印全量属性。
 
 ## 风险与回退
-- **all-frames 脚本能否进跨源 iframe 的渲染进程**（站点隔离，未实测）。CEF 应把 `extra_info` 发给承载该 browser 任一 frame 的渲染进程，但需要真机确认。
-  不成立时，预览改为在 `serve_wpe_html` 里给 HTML 插 `<script src="/wpe-shim.js">`，同一份 `wpe_shim.js` 经 HTTP 路由提供。桌面不受影响。
+- **all-frames 脚本能否进跨源 iframe 的渲染进程**（站点隔离，未实测）：
+  - CEF 应把 `extra_info` 发给承载该 browser 任一 frame 的渲染进程，但需要真机确认。
+  - 不成立时，预览改为在 `serve_wpe_html` 里给 HTML 插 `<script src="/wpe-shim.js">`，同一份 `wpe_shim.js` 经 HTTP 路由提供。桌面不受影响。
 - **`file:` 请求的 `Origin` 头实际值**（`null`，或者 `file://`）不影响点 1：改写只看 frame URL。用 debug ingest 记录一次，写进 API.md。
-- **`urlpattern` 对 `file:` 的匹配**：见点 3 测试。实在不支持时改用运行时 `app.add_capability`，按当前壁纸入口的精确 URL 生成 capability。
+- **`urlpattern` 对 `file:` 的匹配**：见点 3 测试。实在不支持时，改用运行时 `app.add_capability`，按当前壁纸入口的精确 URL 生成 capability。
+- **清监听的时序**（点 7）：
+  - 清理紧跟在 `navigate` 投递成功之后。新文档的 `listen` 要等加载、执行脚本才发出，实际不会早于清理。
+  - 若真机观察到新文档的监听被误清（换壁纸后语言变化页面没反应），改为在 Tauri 补丁里按「导航前已存在的 id」清理。
 
 ## 不做 / 留到后续
-- Phase 6：`paused` 进状态，垫片实现冻结（参照 API.md §4.4）与 `setPaused`；`fps` 设置与推送。
-- Phase 7：用户属性叠加在作者默认值之上；`image-changed { metadataId }` 触发 `push_state` 与预览重拉；`file` / `directory` 属性。
-- Phase 8：注册函数开始收到数据。数据回程沿用本 Phase 的通道：桌面走事件，预览走父页面 `postMessage`。
+- **Phase 6**：`paused` 进状态，垫片实现冻结（参照 API.md §4.4）与 `setPaused`；`fps` 设置与推送。
+- **Phase 7**：
+  - 用户属性叠加在作者默认值之上；
+  - 保存时写新 metadata 行，并发 `image-changed { metadataId }`。本 Phase 的垫片已订阅，重拉后按键差异投递，Rust 仍不推状态；
+  - `file` / `directory` 属性。
+- **Phase 8**：注册函数开始收到数据。数据回程沿用本 Phase 的通道：桌面走 `listen`，预览走 `useTauriProxy` 转发。
+
+## 实施记录（2026-10-28）
+
+点 1–10 按方案实现，静态验证与单测通过，真机回归待做（`versions/latest/regression.md` Phase 5 节）。与方案的偏差：
+
+- **点 1 `cef-ipc` 的 `file:` URI**：方案的 `ipc.rs` 代码把 frame URL 直接交给 `HttpRequest::builder().uri(..)`，但
+  `http::Uri` 不接受空 authority，`file:///D:/…` 解析失败（单测 `file_url_survives_http_uri` 已确认），回退通道会对
+  `file:` 页面一律返回 400。实现里交给 `ipc_handler` 前改写成等价的 `file://localhost/…`（`http_uri_for`），Tauri 用
+  `url::Url` 解析时把 `file:` 的 `localhost` 归一为空，拿到的仍是 `file:///…`。`ipc://` 主通道直接 `Url::parse(Origin)`，
+  不受影响。
+- **点 3 `file:///*`**：`RemoteUrlPattern::from_str("file:///*")` 实测可用——匹配入口（含百分号编码路径与
+  `file://localhost/…` 归一后的形式），不匹配 `http://127.0.0.1/`、本地 HTTP 预览源与应用页。按方案原写法使用。
+- **点 5**：`commands/wpe_web.rs` 与两条命令只在非 Android 编译（`#[cfg(not(target_os = "android"))]`），与 capability
+  只进桌面分支一致；`get_wpe_web_state` 仍登记在 `main.toml`。
+- **点 7**：补丁里的文档注释用英文（与上游及 0001–0010 一致）。`deno task patch tauri --check` 预检 0001–0011 通过；
+  三个文件不被前序补丁触碰，补丁直接取自 `git -C third/tauri diff -- <三个文件>`。
+- **点 9**：`createWebFrame` 挂新桥前先 `dispose()` 旧桥（防御性，正常路径 `teardownWeb` 已释放）。
+- **点 10**：
+  - 生成文件 `src-tauri/kabegame/tauri.conf.json`（gitignore）同步加了 `wpe-web-capability`：`deno task check` 不渲染
+    handlebars 模板，不同步的话 cargo check 不会校验新 capability；dev / build 启动时会重新渲染。
+  - `API.md` §6 的 `setPaused` 行 Phase 列从「5（垫片）/ 6（触发）」改为 6，与本方案「不做：暂停冻结与 `setPaused`」一致。
+  - 顺带修正文档冲突：`cocs/surf/ANDROID_SURF.md` 与 `cocs/README.md` 把响应 Channel 补丁写成 0011，实际文件是 0010，
+    新的 0011 是本 Phase 的 `clear_js_listeners`；`cocs/tauri/TAURI_CLI_FORK.md` 补了 0010 / 0011 条目与升级复查点；
+    `cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md` 补了远程 `file:` 来源一节。
+  - Phase 4 回归的「初始化脚本隔离」行改为新期望并取消勾选（原结果保留在备注里）。

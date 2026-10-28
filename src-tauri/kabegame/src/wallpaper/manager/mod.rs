@@ -14,6 +14,7 @@ pub use plasma_plugin::PlasmaPluginWallpaperManager;
 pub use window::WindowWallpaperManager;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
@@ -285,6 +286,12 @@ pub trait WallpaperManager: Send + Sync {
         self.set_transition(transition).await?;
         self.set_wallpaper_path(file_path).await?;
         Ok(())
+    }
+
+    /// `label` 窗口当前显示的网页壁纸目录（`wpe_web_pull_state` 据此找到当前那张）。
+    /// 只有窗口模式实现，其它后端恒为 None。
+    fn web_wallpaper_dir(&self, _label: &str) -> Option<PathBuf> {
+        None
     }
 
     /// 清理资源（如关闭窗口等）

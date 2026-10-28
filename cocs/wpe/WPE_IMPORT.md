@@ -115,8 +115,8 @@ MediaFormat { key: "x-wpe/scene", .. } // 占位
   就故意进入死循环，页面 `load` 永不触发。任何改写作者 js 的逻辑（Phase 4 的 zcompat 替换）都不能改变被检测函数的
   原文；同站点的 `/wpe` iframe 共用一个渲染进程，一个卡死的页面会连带后续网页壁纸一起超时。
 - `text/html` 响应走专用产出点 `serve_wpe_html`：读整文件、`text/html; charset=utf-8`、`Cache-Control: no-store`、
-  忽略 Range，**原样返回、不注入任何脚本**。Phase 4 在这里把垫片 `<script>` 插进 `<head>` 最前面，并对 zcompat 兼容
-  补丁做内存替换（不写回用户目录）。
+  忽略 Range，**原样返回、不注入任何脚本**。WPE 垫片由主窗口的 all-frames 初始化脚本注入（见第六节「运行时垫片与宿主
+  协议」），不改写 HTML；zcompat 兼容补丁的内存替换若以后要做，仍放在这里（不写回用户目录）。
 - 不下发 CSP 头（与 WPE 一致）；主窗口 CSP 的 `frame-src` 放行 `http://127.0.0.1:*`（`tauri.conf.json.handlebars`）。
 
 **Video 阶段不用它播放**：CEF 的 `<video>` 跟随 `/wpe/<id>/` 的 307 后报 `MEDIA_ELEMENT_ERROR: Format error`
@@ -137,7 +137,8 @@ Web 发布版与 Android 硬门控为主窗口。
 
 - `views/WallpaperWindow.vue`：壁纸窗口根，负责看门狗（`sessionStorage.wallpaperInitRetry` + reload）、`setting-change`
   监听、启动时五个 getter 并行、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件。
-- `components/wallpaper/WallpaperStage.vue`：纯渲染组件（不 invoke / listen / 读 store），base / top 双层、
+- `components/wallpaper/WallpaperStage.vue`：纯渲染组件（不 invoke / listen / 读 store；唯一例外是 web 层 iframe 的宿主桥
+  `wpeWebBridge.ts`，见「运行时垫片与宿主协议」），base / top 双层、
   prep → enter → commit 过渡（两帧 rAF、1400ms 兜底）、去重与严格串行、tile、base 图退避重试、视频 base / top 元素交换、
   音量 / 倍速 / 循环，以及下表的 WPE 作者属性；铺满父元素，额外支持 `paused` / `interactive`（供后续预览内嵌）。
   DOM 仍按原实现命令式操作（模板 ref 只在挂载时取一次），过渡组合类放在 scoped `<style>`。
@@ -171,14 +172,24 @@ Web 发布版与 Android 硬门控为主窗口。
 WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://` 从壁纸目录直接加载，靠关掉同源策略读同目录文件。
 Kabegame 在桌面上照此做：
 
-- **导航属主**：`wallpaper/wpe_web_host.rs` 是壁纸窗口导航的唯一属主。当前壁纸是 `x-wpe/web` 时，`read_project`
-  取 `file`（复用目录内相对路径校验）得入口，把壁纸窗口的**整个主 frame** 导航到 `file:///…/<file>`；切到别的
-  壁纸时导航回应用页，由 Vue 照旧渲染图片 / 视频。应用页 URL 不手拼：第一次离开应用页前从壁纸 webview 读当前
-  URL 记住（dev 是 vite 地址，prod 是内置资源地址）；没有回程地址就不离开。同一 image id 不重复导航。
-- **触发点**：Rust 侧订阅 `setting-change` 里的 `currentWallpaperImageId`（`EventBroadcaster` 事件流，不新增事件
-  类型）；`wallpaper_window_ready` 握手后检查一次（开机即网页壁纸：建窗 → 应用页 ready → 导航到 `file://`）；
-  窗口销毁（`WindowWallpaperManager::cleanup`）时复位为应用页模式、清空根目录、停止鼠标转发。并发触发由一把
-  异步锁串行化；窗口 getter（`url()` / `hwnd()`）在拿状态锁之前取，避免持锁等主线程。
+- **导航属主**：窗口模式的 `WindowWallpaperManager::set_wallpaper_path(path)`（`wallpaper/manager/window.rs`）按
+  路径判定：是目录且 `read_project` 读出 `kind == Web`（复用目录内相对路径校验与入口存在校验）时，调用
+  `WallpaperWindow::show_web(dir, entry)` 把壁纸窗口的**整个主 frame** 导航到 `file:///…/<file>`；其它路径（图片、
+  视频文件、`x-wpe/video` 目录）调用 `show_app()` 导航回应用页，由 Vue 照旧渲染图片 / 视频。目录读 `project.json`
+  失败时返回错误、窗口不动。两个方法都幂等：同一入口不重复导航（改样式等重复调用不重新加载页面），本来就在应用页时
+  `show_app` 什么都不做。
+- **状态属主**：网页壁纸状态全部收在 `WallpaperWindow`（`wallpaper/window.rs`）对象里——应用页 URL（`mount()` 等到
+  前端 ready 后读一次 `window.url()`，非 `file:` 才记，dev 是 vite 地址、prod 是内置资源地址，不手拼）、当前网页目录与
+  入口、Windows 上 `mount()` 时取的窗口句柄与鼠标转发线程。没有回程地址时 `show_web` 报错、不离开应用页。窗口对象由
+  `init()` 建立、`cleanup()` 丢弃，`Drop` 清空文件根目录，转发线程由 `InputForwarder` 的 `Drop` 停止。以后每块屏一个
+  `WallpaperWindow` 即可各自持有入口、根目录与转发线程（运行时接口本来就按 label 区分）。
+- **触发点**：统一是 `set_wallpaper_path`——按 id 设壁纸、轮播、启动恢复（`init()` 建窗等 ready 挂载之后
+  `init_wallpaper_on_startup`，所以开机即网页壁纸也覆盖到）、切换到窗口模式、关闭后重新开启壁纸、改壁纸样式都会走到
+  这里。不监听 `setting-change`，也不挂在 `wallpaper_window_ready` 握手上。当前壁纸 id 被清空（例如删除了当前壁纸
+  那一行）时不调用它，窗口**保持原页面**，与 Vue 对 `null` 目标保持现有画面（`acceptTarget`）及原生模式一致。
+- **并发与锁**：判定与导航在 manager 的 `wallpaper_window` 锁内同步完成（只读一个小的 `project.json`，不 await），
+  多个调用天然串行。窗口 getter（`url()` / `hwnd()`）会同步等主线程回执，只在 `mount()`（不持锁）里调用；锁内只调
+  投递即返回的 `navigate`，避免持锁等主线程。
 - **文件访问只对壁纸窗口开**：建窗前 `tauri_runtime_cef::allow_file_documents("wallpaper")`，该 browser 建窗时
   `extra_info` 带 bool 键 `kabegame.allow_file_access_from_file_urls`，CEF 补丁
   [`0004`](../../third-patches/cef/README.md) 据此只给它打开 `WebPreferences::allow_file_access_from_file_urls`
@@ -188,15 +199,80 @@ Kabegame 在桌面上照此做：
   符号链接 / 目录 / 不存在），目标与根目录 canonicalize 后目标必须严格位于根目录内（Windows 大小写不敏感）；
   当前没有网页壁纸（根目录为空）时一律拒绝。拒绝时 stderr 记 `[cef-runtime] deny file: …`。根目录在导航前由
   `set_file_document_root("wallpaper", Some(dir))` 设置，离开时清空。
-- **初始化脚本隔离**：渲染进程对带上述键的 browser，`file:` 文档（以及主 frame 是 `file:` 时的子 frame）不注入
-  任何初始化脚本，页面里 `__TAURI_INTERNALS__` 为 `undefined`；`file://` 的 Origin 是 `null`，`cef-ipc` 入口本来也拒绝。
+- **初始化脚本照常注入，IPC 按远程 `file:` 来源限权**（Phase 5 起；Phase 4 曾对 `file:` 文档跳过所有初始化脚本）：
+  - 页面里有 `__TAURI_INTERNALS__`（Tauri 自身脚本只进主 frame，页面自己的嵌套 iframe 拿不到 invoke key），还有
+    all-frames 的 WPE 垫片。
+  - `file:` 文档的 `Origin` 请求头是 `null`。Phase 4 文档曾写「`cef-ipc` 入口本来也拒绝」，这不成立：Tauri 的
+    `ipc://` 主通道解析 `null` 失败后前端改走 `cef-ipc` 回退通道，回退通道拿不到合法 Origin 时退到 webview 初始 URL
+    （应用页），请求被当成 `Origin::Local`、拿到 `main-capability` 的全部命令；当时只是没注入 invoke key，缺口没暴露。
+  - 现在运行时在协议层统一修正（`tauri-runtime-cef` 的 `protocol::pin_file_frame_origin`）：scheme factory 记下发起请求
+    的 frame URL，`file:` frame 的请求把 `Origin` 改写成 frame URL；`cef-ipc` 的来源取值顺序为「`Origin` 头 → frame URL
+    → 初始 URL」。两条通道都判成 `Origin::Remote { url: file:///… }`。
+  - 对这个来源生效的只有 `capabilities/wpe-web.json` 的 `wpe-web-capability`：`windows: ["wallpaper"]`、
+    `remote.urls: ["file:///*"]`、`local: false`（应用页回到壁纸窗口时仍只受 `main-capability` 约束），权限只有
+    `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state`；不给
+    `core:default`，页面拿不到窗口、路径、应用信息等核心命令。`main-capability` 是 `local: true`，对远程来源不生效，
+    `get_settings` 等应用命令一律被 ACL 拒绝（`Command … not allowed by ACL`）。
 - 网页壁纸只在窗口模式出现；导航本身不经过 Vue，切换没有过渡动画（WPE 也是直接切换）；壁纸样式、音量、倍速对
   `file://` 页面不生效。
+
+### 运行时垫片与宿主协议
+
+WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关键的是 `window.wallpaperPropertyListener.applyUserProperties`：
+宿主把作者默认值推给它之后，多数壁纸才开始画。Kabegame 用一份 JS 垫片 `webview_js/wpe_shim.js` 定义这组接口并投递属性，
+**不照搬 WPE 的「宿主拼 JS、加载完成前排队」**（`API.md` §4.8），改成垫片驱动：垫片向宿主**拉取**完整状态、**订阅**
+应用事件后重拉；宿主只回答「当前完整状态」和「转发事件」，不推状态、不排队、不记页面收到过什么。
+
+- **注入与启用**：同一份垫片以 `initialization_script_for_all_frames` 挂在壁纸窗口（`wallpaper/manager/window.rs`）与
+  主窗口（`startup.rs`）上，按地址自判：只在「顶层 `file:` 文档」（桌面壁纸窗口）或「父窗口就是 top、地址是本地
+  `127.0.0.1` / `localhost` 的 `/wpe/<id>/…`」（图库预览 iframe）里启用，其它文档第一行就返回、不定义任何全局。页面自己的
+  嵌套 iframe 不启用。启用后定义 `wallpaperMediaIntegration` 常量、六个 `wallpaperRegister*Listener`（收下回调、Phase 8 前
+  不回调）、空的 `wallpaperRequestRandomFileForProperty` 与 `wallpaperGetUtilities`，并标记 `window.__kbWpeShim === true`。
+- **状态**（只在 Rust 侧计算，`commands/wpe_web.rs` 的 `build_wpe_web_state`）：`{ imageId, user, general: { language } }`。
+  `user` 取自图片 metadata（导入时存的 `project.json` 原文）里 `general.properties` 中带 `value` 的条目，形如
+  `{ key: { type, value } }`（`kabegame_core::wpe::properties::resolve_web_user_props`；分组、说明行、无默认值的 `file`
+  属性不推）；`language` 是界面语言换成的 WPE 语言码（`wpe_language_code`：`zh-chs` / `zh-cht` / `ja-jp` / `ko-kr`，其余
+  `en-us`）。`fps` 留给 Phase 6（推 0 会让按 `1000 / fps` 算间隔的页面停住）。Rust 不带版本号。
+- **两个传输原语**，两种宿主各实现一份：
+
+  | | `pull()` → 完整状态 | `listen(names, onEvent)` |
+  |---|---|---|
+  | 桌面壁纸窗口（主 frame 是 `file://` 入口） | `invoke("wpe_web_pull_state")`：不接收 id，按调用方 webview 的 label 经 `WallpaperManager::web_wallpaper_dir` 找到 manager 里的 `WallpaperWindow`、取它当前的网页目录，再 `Storage::find_image_by_path` 找到那一行；别的 label、停在应用页、非窗口模式都返回 `no web wallpaper`，页面拿不到别的图片的 metadata | 直接 `plugin:event\|listen`（`core:event:allow-listen`） |
+  | 图库预览（主窗口里的跨源 HTTP iframe，碰不到 IPC） | `postMessage({ kbWpe: 1, type: "pull", id })` 给宿主页；宿主页（`components/wallpaper/wpeWebBridge.ts`）用主窗口权限调 `get_wpe_web_state(imageId)`，回 `{ type: "state", id, state }` 或带 `error` | `postMessage({ type: "listen", events })` 登记；宿主页的 `useTauriProxy()`（`composables/useTauriProxy.ts`）代为 listen：同名只订阅一次，登记过的事件经 `kbEvent$` 并入一条管道（`mergeMap`），逐条回 `{ type: "event", name, payload }` |
+
+  宿主桥由 `WallpaperStage` 在创建 iframe 时挂上（插入 DOM、设 src 之前），随 iframe 销毁（`teardownWeb` 里 `dispose()`
+  退订）；只认 `event.source === iframe.contentWindow` 的消息，只向 iframe 加载时的源回消息。垫片发出的消息只有拉取编号与
+  事件名，不含数据。
+- **重拉触发**：`setting-change` 带 `language`（界面语言变了）；`image-changed` / `images-change` 里有**本张**图片
+  （`state.imageId`）的 `metadataId` 补丁——图片 metadata 按 id 不可变，属性一改就换 `metadataId`（Phase 7 的设置面板保存时
+  写新 metadata 行）；首个状态到达前任何 `metadataId` 补丁都重拉。垫片**先订阅再拉取**，订阅生效后的变化都会触发重拉。
+- **投递语义**（我们自己的规则）：
+  - 首次投递在 `window` 的 `load` 之后，用户属性与通用属性各推一份完整的（先 `applyUserProperties` 再
+    `applyGeneralProperties`，WPE 的实际顺序未确认）；`load` 之前到达的状态只记下来。
+  - 之后每次重拉都拿到完整状态：用户属性只推**值变化的键**（WPE 的 `applyUserProperties` 本来就是「只含变化的键」，页面
+    没有整份替换的接口；作者删掉的键不推，页面没有撤销接口）；通用属性有变化就推一整份。
+  - 首次投递之后页面换了 `wallpaperPropertyListener` 对象，下一个微任务把当前完整状态补投给它：垫片在 `window` 上装这个
+    属性的访问器，页面写 `window.x = …` 或顶层 `var x = …` 都走到 setter。
+  - 乱序：垫片给每次拉取编号，某次结果落地后丢弃编号更早、返回更晚的结果（同 pathql 的 pending 窗口）。
+  - 页面回调抛错只记 `console.error("[kb-wpe] …")`，不影响后续投递。
+- **导航时清 JS 事件监听**：Tauri 按 webview label 记录 JS 注册的监听，只在 webview 销毁时清理；壁纸窗口在应用页与
+  `file://` 入口之间反复导航，旧文档的监听会留在 Rust 侧，之后每个这类事件仍向当前文档 eval 一段投递脚本（网页壁纸因此能
+  读到应用页留下的 `setting-change`）。tauri 补丁 [`0011`](../../third-patches/tauri/README.md) 提供
+  `WebviewWindow::clear_js_listeners()`，`WallpaperWindow::show_web` / `show_app` 在 `navigate` 投递成功之后调用（导航失败时
+  页面没换，不动监听；新文档要加载、执行脚本才会 listen，晚于清理）。页面自己 `location.reload()` 留下的一组垫片监听不额外
+  处理；销毁窗口时 Tauri 自己会清。
+- **接受的取舍**：`core:event:allow-listen` 没有按事件名的作用域，桌面网页壁纸因此能订阅应用的全部全局事件；预览的宿主
+  代办同样不限事件名。这是用户确认过的取舍，也算开放给壁纸的一项能力；命令层只开一个拉取命令。
+- **不做**（后续 Phase）：暂停冻结与 `setPaused`、`fps`（Phase 6）；用户改属性的存储与面板、`file` / `directory` 属性
+  （Phase 7，保存时发 `metadataId` 补丁，垫片已订阅并重拉）；音频与媒体数据（Phase 8，数据回程沿用 `listen` /
+  `useTauriProxy`）；Web 发布版没有初始化脚本能力，预览仍是无属性状态。
+- **待真机确认**：all-frames 脚本能否进站点隔离下跨源 iframe 的渲染进程（不成立时改为 `serve_wpe_html` 插
+  `<script src>`，桌面不受影响）；`file:` 请求 `Origin` 头的实际值（`null` 或 `file://`，不影响改写）。
 
 ### 桌面鼠标转发（Windows）
 
 `wallpaper/input_forward.rs`：照 WPE 的做法不装鼠标钩子，由后台线程每 16ms 轮询 `GetCursorPos` 与
-`GetAsyncKeyState(VK_LBUTTON)`，只在「窗口模式 + 当前是网页壁纸」（`wpe_web_host` 进入 `file://` 时启动、离开时停止）运行。
+`GetAsyncKeyState(VK_LBUTTON)`，只在「窗口模式 + 当前是网页壁纸」（`WallpaperWindow::show_web` 进入 `file://` 时启动、`show_app` 离开或窗口对象丢弃时停止）运行。
 
 - 光标在壁纸窗口客户区内：`ScreenToClient` 得物理坐标，除以 `GetDpiForWindow / 96` 得视图坐标，坐标变化就经
   `tauri_runtime_cef::inject_mouse` 注入 `Move`（不带按键标志，与 WE 一致：带左键会让页面图片拖动启动 OLE 拖放并挂住 UI 线程）；离开客户区时注入一次 `Leave`。
@@ -242,14 +318,19 @@ Kabegame 在桌面上照此做：
 （`protocol::RequestFrame`）交给 `ipc.rs` 的 `post_message_request`：只接受主 frame，或与该 webview 初始 URL 同源的
 子 frame，其余返回 400。畅游窗口的注入脚本跑在主 frame（Origin 是站点源），因此按「主 frame」放行而不是按「应用源」；
 CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 handler 承接，不在本防御范围内（仍靠 invoke key）。
+`RequestFrame` 同时带 frame URL：`file:` frame 的 `Origin` 在协议层被改写成 frame URL，两条通道都按远程 `file:` 来源走 ACL
+（见上「初始化脚本照常注入，IPC 按远程 `file:` 来源限权」）。
 
 **待真机校准**：`fill`（WPE）→ `contain` 的几何、`wec_*` 的 −1…1 与 CSS filter 量纲。
 
 ## 七、已知边界
 
 - 只导入 `video` 与 `web`；`scene` / `application` 只占位并计入跳过。
-- 网页壁纸收不到任何 WPE 接口回调（`wallpaperPropertyListener` / `applyUserProperties` 等，Phase 4 垫片接手），页面以
-  「无属性」状态运行；`file` / `directory` 类型属性不支持（例如 Slideshow 显示「未选择目录」）。
+- 网页壁纸只收到作者默认值（`applyUserProperties`）与界面语言（`applyGeneralProperties({ language })`）；用户改属性、
+  `fps`、`setPaused`、音频与媒体数据尚未实现（注册函数只收下回调）；`file` / `directory` 类型属性不支持（例如 Slideshow
+  显示「未选择目录」）。Web 发布版的预览没有垫片，页面以「无属性」状态运行。
+- 桌面网页壁纸能订阅应用的全部全局事件（`core:event:allow-listen` 无事件名作用域，已接受的取舍），应用命令只开
+  `wpe_web_pull_state`。
 - 桌面 `file://` 页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；
   壁纸样式 / 音量 / 倍速对桌面网页壁纸不生效；桌面只转发鼠标移动与左键（Windows），无键盘 / 滚轮 / 右键。
 - 图库预览的页面源是本地 HTTP 服务 `http://127.0.0.1:<随机端口>`，端口每次启动变化，`localStorage` / `indexedDB` 不持久
@@ -269,10 +350,16 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
 - `src-tauri/kabegame-core/src/media/image_type.rs`、`storage/images.rs`、`storage/organize.rs`
 - `src-tauri/kabegame/src/http_server.rs`、`commands/wallpaper.rs`、`wallpaper/rotator.rs`、`permissions/main.toml`、
   `tauri.conf.json.handlebars`（CSP `frame-src`）
-- `src-tauri/tauri-runtime-cef/src/{protocol.rs,ipc.rs}`（IPC 纵深防御）、`file_access.rs` / `webview.rs` /
-  `subprocess.rs`（文件文档策略、`file:` 目录拦截、初始化脚本隔离、鼠标注入）、`third-patches/cef/0004-per-browser-file-access.patch`
-- 桌面网页壁纸宿主：`src-tauri/kabegame/src/wallpaper/{wpe_web_host.rs,input_forward.rs}`、`commands/window.rs`
-  （`wallpaper_window_ready`）、`startup.rs`（订阅当前壁纸变化）
+- `src-tauri/tauri-runtime-cef/src/{protocol.rs,ipc.rs}`（IPC 纵深防御、`file:` frame 的 `Origin` 改写与来源回退顺序）、
+  `file_access.rs` / `webview.rs` / `subprocess.rs`（文件文档策略、`file:` 目录拦截、初始化脚本注入、鼠标注入）、
+  `third-patches/cef/0004-per-browser-file-access.patch`
+- 运行时垫片与宿主协议：`src-tauri/kabegame/src/webview_js/wpe_shim.js`、`commands/wpe_web.rs`（`WpeWebState`、
+  `get_wpe_web_state` / `wpe_web_pull_state`、`remote.urls` 匹配单测）、`capabilities/wpe-web.json`、`permissions/wpe-web.toml`、
+  `kabegame-core/src/wpe/properties.rs`（`resolve_web_user_props` / `wpe_language_code`）、`wallpaper/manager/{mod.rs,window.rs}`
+  （`web_wallpaper_dir`）、`third-patches/tauri/0011-tauri-webview-clear-js-listeners.patch`、
+  `apps/kabegame/src/composables/useTauriProxy.ts`、`components/wallpaper/wpeWebBridge.ts`
+- 桌面网页壁纸宿主：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`set_wallpaper_path` 判定、`WALLPAPER_LABEL`）、
+  `wallpaper/window.rs`（`WallpaperWindow` 状态、`show_web` / `show_app` / `Drop`）、`wallpaper/input_forward.rs`
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/{mediaMime,fileUrl}.ts`
 - 壁纸窗口：`src-tauri/kabegame/src/wallpaper/manager/window.rs`、`apps/kabegame/src/main.ts`、`windowKind.ts`、

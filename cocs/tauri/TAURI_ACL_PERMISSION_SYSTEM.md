@@ -40,6 +40,9 @@
 
 - `capabilities/main.json`：主窗口权限（`main` / `wallpaper`）。
 - `capabilities/crawler.json`：爬虫窗口权限（`crawler`）+ remote URL 访问范围。
+- `capabilities/wpe-web.json`：桌面壁纸窗口里 `file://` 加载的 WPE 网页壁纸（`wpe-web-capability`，`local: false`、
+  `remote.urls: ["file:///*"]`），只给 `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的
+  `wpe_web_pull_state`；只在桌面分支的 `tauri.conf.json.handlebars` 里启用。
 
 ### 3) build 入口
 
@@ -112,6 +115,15 @@ Command <name> not allowed by ACL
 
 - 仅为单个新命令快速加一条 app 级 permission，就立刻挂到全局 capability。
 - 未评估 `main` 窗口现有命令集合就切换到严格 ACL。
+
+## 远程 `file:` 来源（WPE 网页壁纸）
+
+`file:` 文档的 `Origin` 请求头是 `null`。CEF runtime 的 `cef-ipc` 回退通道过去拿不到合法 Origin 时会退到 webview
+初始 URL（应用页），请求被 Tauri 判成 `Origin::Local`，于是本地 capability（`main-capability`）的全部命令都能调。
+现在 `tauri-runtime-cef` 在协议层把 `file:` frame 的 `Origin` 改写成 frame URL（`protocol::pin_file_frame_origin`），
+Tauri 判成 `Origin::Remote { url: file:///… }`，只有 `remote.urls` 匹配它的 capability 生效。`RemoteUrlPattern`
+对 `file:///*` 的匹配有单测（`kabegame/src/commands/wpe_web.rs`）。给网页壁纸开新命令时只加进
+`permissions/wpe-web.toml`，不要加 `core:default` 或把壁纸窗口的本地 capability 改成也接受远程来源。
 
 ## 快速排查清单
 

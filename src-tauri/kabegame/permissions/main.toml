@@ -156,6 +156,7 @@ commands.allow = [
   "get_wallpaper_target_for_image",
   "wpe_scan",
   "wpe_recognize_dir",
+  "get_wpe_web_state",
   "set_wallpaper_rotation_enabled",
   "get_wallpaper_rotation_enabled",
   "set_wallpaper_rotation_path",

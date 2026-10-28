@@ -19,7 +19,6 @@ use std::{
 };
 
 /// 建 browser 时 `extra_info` 里的 bool 键；CEF 补丁 0004 读它打开文件访问偏好。
-/// 渲染进程也读它：带键 browser 的 `file:` 文档不注入初始化脚本。
 pub(crate) const ALLOW_FILE_ACCESS_EXTRA_INFO_KEY: &str =
     "kabegame.allow_file_access_from_file_urls";
 

@@ -288,7 +288,7 @@ WebView。
 - 弹窗里的附件下载与一键下载不处理：弹窗没有注入脚本，也不装下载监听。要下载媒体请回内容页。
 - 移动端 `Channel::new_with_id` 会把 Channel 登记进 `CHANNELS` 表（供原生插件按 id 推消息），
   表只增不减。上游连每次 IPC 调用的一次性响应 Channel 也登记，实测每次 invoke +1 且捕获 `Webview`；
-  `third-patches/tauri/0011` 让响应 Channel 不再登记。Rust 主动创建、交给 Kotlin 的 Channel（如本会话的
+  `third-patches/tauri/0010` 让响应 Channel 不再登记。Rust 主动创建、交给 Kotlin 的 Channel（如本会话的
   `events`）仍每会话留一项，升级 Tauri 时复查。
 - **内容 WebView 必须在 `onDestroy` 里手动释放**（`SurfActivity.releaseContent`）：先
   `removeWebMessageListener`，再 `stopLoading`、从布局摘下、`destroy()`。Chromium 以 JNI 全局引用持有

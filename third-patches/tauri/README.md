@@ -84,6 +84,15 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   `Channel::new_unregistered` and uses it for these response channels only; channels created by
   `channel_on` / `Channel::new` (the ones native plugins look up) are still registered.
   Re-check on bump: `ipc/channel.rs` `new_with_id` / `from_callback_fn`.
+- `0011-tauri-webview-clear-js-listeners.patch` — JS event listeners (`plugin:event|listen`) are
+  tracked per webview label and only dropped when the webview is destroyed, so navigating a
+  long-lived webview to another document keeps the old document's listeners and every later
+  matching event is still `eval`-ed into the new document. The patch makes
+  `Listeners::remove_webview_js_listeners` `pub(crate)` and adds public
+  `Webview::clear_js_listeners()` / `WebviewWindow::clear_js_listeners()` (Rust-side `listen`
+  handlers are untouched). Kabegame calls it after the wallpaper window navigates between the
+  app page and a WPE web wallpaper's `file://` entry (`wallpaper/window.rs` `show_web` /
+  `show_app`). Re-check on bump: `event/listener.rs` `remove_webview_js_listeners`.
 
 Apply the whole series manually before building against `third/tauri`:
 

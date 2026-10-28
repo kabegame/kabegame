@@ -1,9 +1,6 @@
 //! CEF renderer-process support shared by the browser runtime and helper binary.
 
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-};
+use std::{cell::RefCell, collections::HashMap};
 
 use cef::*;
 use serde::{Deserialize, Serialize};
@@ -39,14 +36,6 @@ pub(crate) fn initialization_scripts_extra_info(payload: &str) -> Result<Diction
     Ok(dictionary)
 }
 
-/// extra_info 是否带文件文档标记（见 `file_access::ALLOW_FILE_ACCESS_EXTRA_INFO_KEY`）。
-fn allows_file_documents(extra_info: &DictionaryValue) -> bool {
-    let key = CefString::from(crate::file_access::ALLOW_FILE_ACCESS_EXTRA_INFO_KEY);
-    extra_info.has_key(Some(&key)) != 0
-        && extra_info.get_type(Some(&key)) == ValueType::BOOL
-        && extra_info.bool(Some(&key)) != 0
-}
-
 fn initialization_scripts_from_extra_info(
     extra_info: Option<&mut DictionaryValue>,
 ) -> Result<Option<Vec<InitializationScript>>, String> {
@@ -64,8 +53,6 @@ fn initialization_scripts_from_extra_info(
 wrap_render_process_handler! {
     struct InitializationRenderProcessHandler {
         scripts_by_browser: RefCell<HashMap<i32, Vec<InitializationScript>>>,
-        // 建窗时带文件文档标记的 browser：它们的 `file:` 文档不注入任何初始化脚本。
-        file_document_browsers: RefCell<HashSet<i32>>,
     }
 
     impl RenderProcessHandler {
@@ -75,11 +62,6 @@ wrap_render_process_handler! {
             extra_info: Option<&mut DictionaryValue>,
         ) {
             let Some(browser) = browser else { return };
-            if extra_info.as_deref().is_some_and(allows_file_documents) {
-                self.file_document_browsers
-                    .borrow_mut()
-                    .insert(browser.identifier());
-            }
             match initialization_scripts_from_extra_info(extra_info) {
                 Ok(Some(scripts)) => {
                     self.scripts_by_browser
@@ -99,9 +81,6 @@ wrap_render_process_handler! {
                 self.scripts_by_browser
                     .borrow_mut()
                     .remove(&browser.identifier());
-                self.file_document_browsers
-                    .borrow_mut()
-                    .remove(&browser.identifier());
             }
         }
 
@@ -119,30 +98,11 @@ wrap_render_process_handler! {
                 return;
             };
             let is_main_frame = frame.is_main() == 1;
-            let source_url = CefString::from(&frame.url()).to_string();
-            // 开了文件访问的 browser 承载的是外部本地页面（WPE 网页壁纸）：`file:` 文档
-            // 不注入任何初始化脚本，页面看不到 `__TAURI_INTERNALS__`。子 frame 若是
-            // about:blank / srcdoc 这类继承父文档的页面，按主 frame 是否为 `file:` 判定。
-            if self
-                .file_document_browsers
-                .borrow()
-                .contains(&browser.identifier())
-            {
-                let main_is_file = || {
-                    browser
-                        .main_frame()
-                        .map(|main| {
-                            crate::file_access::is_file_url(&CefString::from(&main.url()).to_string())
-                        })
-                        .unwrap_or(false)
-                };
-                if crate::file_access::is_file_url(&source_url)
-                    || (!is_main_frame && main_is_file())
-                {
-                    return;
-                }
-            }
-            let source_url = CefString::from(source_url.as_str());
+            // `file:` 文档（桌面 WPE 网页壁纸）也照常注入：Tauri 自身脚本只进主 frame，
+            // IPC 权限由 ACL 按远程 `file:` 来源限定（运行时把 `file:` frame 的 Origin 改写成
+            // frame URL，见 `protocol::pin_file_frame_origin`）；all-frames 脚本自己按地址判断是否启用。
+            let source_url = frame.url();
+            let source_url = CefString::from(&source_url);
             for (index, script) in scripts.iter().enumerate() {
                 if script.for_main_frame_only && !is_main_frame {
                     continue;
@@ -172,10 +132,7 @@ wrap_render_process_handler! {
 }
 
 pub(crate) fn initialization_render_process_handler() -> RenderProcessHandler {
-    InitializationRenderProcessHandler::new(
-        RefCell::new(HashMap::new()),
-        RefCell::new(HashSet::new()),
-    )
+    InitializationRenderProcessHandler::new(RefCell::new(HashMap::new()))
 }
 
 #[cfg(test)]

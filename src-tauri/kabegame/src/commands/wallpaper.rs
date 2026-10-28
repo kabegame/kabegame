@@ -357,7 +357,7 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
 ///
 /// 后端资源的存续与 `wallpaperMode` **同寿命**，与"当前有没有壁纸"无关，因此
 /// `set_wallpaper_mode` 的**每一条**成功路径都必须调用本函数——包括无当前壁纸的
-/// 早返回。`WindowWallpaperManager::set_wallpaper_path` 已是 no-op，不再兜底懒挂载：
+/// 早返回。`WindowWallpaperManager::set_wallpaper_path` 不兜底懒挂载（窗口不存在时什么都不做）：
 /// 切入 window 时漏掉 `init()` 就永远建不出窗口；切出 window 时漏掉 `cleanup()`
 /// 会留下一个孤儿壁纸窗口继续挂在桌面上。
 ///
@@ -574,7 +574,7 @@ pub async fn set_wallpaper_disabled<R: tauri::Runtime>(
         //
         // 顺序不可颠倒，且这一步不可省：上面 `disabled` 分支的 `cleanup()` 已经把
         // 壁纸窗口**销毁**了（不是隐藏），而 `init_wallpaper_on_startup()` 终点是
-        // `set_wallpaper_path()` —— 它在 window 模式下是 no-op，不会兜底建窗。
+        // `set_wallpaper_path()` —— 它在 window 模式下不会兜底建窗。
         // 少了这行，关掉再打开壁纸就永远显示不出来。
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         if let Err(e) = WallpaperController::global().init() {

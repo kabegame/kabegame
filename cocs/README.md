@@ -76,7 +76,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     关闭与配置变化重建时手动释放内容 WebView（主界面同理）、重建后 binding 交接、应用内 WebView
     共用渲染进程须各自处理 `onRenderProcessGone`、Cookie 合并保存与系统 WebView 默认 UA 登记、
     安全边界、桌面快捷方式（intent 经 `MainActivity` + 只带 host、冷启动 Channel 收件箱、重放保护、
-    favicon 自适应图标与删除后禁用、国产 ROM 静默拦截）、已知 Channel 生命周期（tauri 补丁 0011）与 tao JNI 局部引用残留。
+    favicon 自适应图标与删除后禁用、国产 ROM 静默拦截）、已知 Channel 生命周期（tauri 补丁 0010）与 tao JNI 局部引用残留。
   - 适用场景：新增或排查 Android 畅游启动/关闭、原生工具栏地址 / 一键下载状态 / 后退前进置灰 /
     加载进度、返回键、登录态保存、第三方登录弹窗无反应或弹窗不关闭、`target=_blank` 被误弹覆盖层、
     插件请求的 Cookie/UA 配对（403、`cefUserAgent()` 为 `null`、桌面模式下仍 403）、站点强制跳应用
@@ -112,11 +112,13 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`/wpe` 专属网页 MIME 表与 HTML 产出点 `serve_wpe_html`、CSP `frame-src`、`WallpaperStage` 独立 web 层（跨源 sandbox iframe、不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览「桌面画布」`WallpaperDesktopCanvas`、`get_wallpaper_target_for_image`、背景层退回预览图，以及 `cef-ipc` 只收主 frame 的纵深防御；
-    **桌面 `file://` 宿主与鼠标转发**：`wpe_web_host` 作为壁纸窗口导航唯一属主（网页壁纸时整窗导航到入口 `file://`、切走导航回记住的应用页）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求、`file:` 文档不注入初始化脚本，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）。
+    **桌面 `file://` 宿主与鼠标转发**：`WindowWallpaperManager::set_wallpaper_path` 按路径判定并导航自己的窗口（网页壁纸时整窗导航到入口 `file://`、切走导航回 `mount()` 时记住的应用页，幂等；入口、根目录与转发线程随 `WallpaperWindow` 对象走、`Drop` 清理）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）；
+    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（远程 `file:` 来源只得 `wpe-web-capability`）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及接受的全局事件可见性。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、`/wpe` 越界或 MIME 不对、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 预览画布比例或交互 / 切走后渲染进程未回收、子 frame 伪造 `cef-ipc` 请求；
-    排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面里出现 `__TAURI_INTERNALS__` / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件。
+    排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应 / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件；
+    排查壁纸窗口导航后旧文档的事件监听残留、预览 iframe 收不到属性或关闭预览后仍在转发事件。
 
 ## 下载与任务（`downloader-tasks/`）
 

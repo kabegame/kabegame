@@ -68,7 +68,8 @@ pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
 // 应用先在建窗前登记 label，再按需设置允许的根目录。两层边界都只作用于登记过的 label：
 // 建 browser 时 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004
 // 据此只给它打开 `allow_file_access_from_file_urls`）；它的每个 `file:` 请求在
-// `OnBeforeResourceLoad` 里过目录约束。它的 `file:` 文档也不注入任何初始化脚本。
+// `OnBeforeResourceLoad` 里过目录约束。它的 `file:` 文档照常注入初始化脚本（Tauri 自身脚本
+// 只进主 frame）；IPC 来源在协议层按 frame URL 判成远程 `file:`，权限由应用的 ACL 限定。
 
 /// 建窗前登记 `webview_label`。该 label 的 browser 在 `extra_info` 里带
 /// `kabegame.allow_file_access_from_file_urls = true`（CEF 补丁 0004 据此打开文件访问偏好），

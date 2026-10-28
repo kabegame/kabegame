@@ -782,6 +782,10 @@ pub(crate) fn configure_app(
             get_supported_image_types,
             wpe_scan,
             wpe_recognize_dir,
+            #[cfg(not(target_os = "android"))]
+            get_wpe_web_state,
+            #[cfg(not(target_os = "android"))]
+            wpe_web_pull_state,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

@@ -1,5 +1,9 @@
 # Phase 4 — 桌面 `file://` 宿主 + 鼠标转发
 
+> **2026-10-28 更新**：点 3 的 `wpe_web_host`（全局 `STATE` + 监听 `setting-change` / ready 握手）已删除，导航收回
+> `WindowWallpaperManager::set_wallpaper_path`，状态随 `WallpaperWindow` 对象走（见 `cocs/wpe/WPE_IMPORT.md`「桌面网页壁纸：
+> `file://` 宿主」）。下文点 3、点 5 中关于 `WpeWebHost` 的描述仅作历史记录。
+>
 > 状态：方案（2026-10-27）。上级：[PLAN.md](PLAN.md)（已确认决策 8、9）。前置：Phase 3 已完成；CEF 补丁
 > [0004](../../../../third-patches/cef/0004-per-browser-file-access.patch) 已写入并由用户编译完成。
 >

@@ -169,7 +169,10 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
             .resizable(true)
             .fullscreen(false)
             .visible(true)
-            .devtools(true);
+            .devtools(true)
+            // WPE 网页壁纸垫片：只在图库预览的 /wpe/<id>/ 直接子 iframe 里启用，应用页与其它 iframe
+            // 里第一行就返回。
+            .initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS);
 
     // #[cfg(not(target_os = "macos"))]
     // let builder = builder.transparent(true);
@@ -283,10 +286,6 @@ pub fn init_wallpaper_controller(app: &mut tauri::App<crate::AppRuntime>) {
         eprintln!("Failed to initialize WallpaperRotator: {}", e);
         return;
     }
-
-    // 桌面网页壁纸的 file:// 宿主：订阅当前壁纸变化，决定壁纸窗口停在应用页还是壁纸入口。
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    crate::wallpaper::wpe_web_host::start_listener(app.app_handle().clone());
 
     // 壁纸窗口不在此创建：它与 `wallpaperMode == "window"` 同寿命，由
     // `WindowWallpaperManager::init()` 在进入 window 模式时创建并挂到桌面层，
