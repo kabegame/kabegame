@@ -91,6 +91,7 @@ import type { ActionContext, ActionItem } from "@/actions/types";
 import { useI18n } from "@kabegame/i18n";
 import appLogoUrl from "@/assets/icon-small.png";
 import { useKamechanMachine } from "./useKamechanMachine";
+import { kamechanWaveImageUrl } from "@/assets/illustrations";
 import KameBubble from "./KameBubble.vue";
 import KameToolboxBubble from "./KameToolboxBubble.vue";
 import KamechanHistoryDialog from "./KamechanHistoryDialog.vue";
@@ -520,11 +521,10 @@ onMounted(() => {
   restorePersistedPosition();
   window.addEventListener("resize", clampCurrentPosition, { passive: true });
 
-  for (const src of ["/kamechan/stand/stand.png", "/kamechan/wave/wave.png"]) {
-    const image = new Image();
-    image.src = src;
-    void image.decode?.().catch(() => {});
-  }
+  // 站立图挂载即渲染；只预取挥手图，避免第一次挥手闪白
+  const waveImage = new Image();
+  waveImage.src = kamechanWaveImageUrl;
+  void waveImage.decode?.().catch(() => {});
 });
 
 onBeforeUnmount(() => {

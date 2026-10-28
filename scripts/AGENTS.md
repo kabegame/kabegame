@@ -35,6 +35,10 @@ deno task build:web                    # Web 发布版（demo.kabegame.com）：
                                        # 切勿在 x86_64 模拟容器中执行 JS 构建：Rosetta-for-Linux
                                        # 会在不报错的情况下把所有 V8 double 截断为整数部分（0.96→0），
                                        # 从而悄然破坏 sass/rollup 输出。参见脚本头部和 compose 文件。
+                                       # 生产 web 构建的 Vite base 指向 https://cdn.kabegame.com/web/；
+                                       # bash scripts/deploy-web.sh 先把 dist-kabegame-web/（除 index.html）
+                                       # 传到 OSS 挂载目录、校验入口脚本 MIME，再换二进制。
+                                       # 见 cocs/web/CDN_MEDIA.md。
 ```
 
 对于仅含 Cargo 的 `kabegame-cli` 组件，`deno task b` 默认执行 **debug** 构建；传入 `--release` 才会执行 release 构建。主应用的桌面端/Android 构建始终通过 `tauri build`，无论是否传入 `--release` 都是 release 构建。

@@ -12,6 +12,7 @@
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useUiStore } from "@/stores/ui";
+import { albumEmptyImageUrl } from "@/assets/illustrations";
 
 const props = defineProps<{
   /** 传入时替换主提示（用于壁纸顺序空状态等）；不传则使用默认 emptyStateTip */
@@ -33,7 +34,7 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const uiStore = useUiStore();
 
-const imageSrc = computed(() => props.image ?? "/album-empty.png");
+const imageSrc = computed(() => props.image ?? albumEmptyImageUrl);
 
 const primaryText = computed(() => props.primaryTip ?? t("common.emptyStateTip"));
 

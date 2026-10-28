@@ -1,11 +1,13 @@
 <template>
   <div class="image-not-found">
-    <img v-if="showImage" src="/lost.png" alt="图片走丢了" class="lost-image" />
+    <img v-if="showImage" :src="lostImageUrl" alt="图片走丢了" class="lost-image" />
     <p class="lost-text">这张图走丢了捏</p>
   </div>
 </template>
 
 <script setup lang="ts">
+import { lostImageUrl } from "@/assets/illustrations";
+
 interface Props {
   showImage?: boolean; // 是否显示图片，默认为 true
 }

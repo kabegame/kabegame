@@ -11,6 +11,7 @@
 ### Changed
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
 - 图片详情的「基本信息」改为卡片式排版：名称作标题，源与收藏时间并在一行，类型、大小、尺寸做成可点筛选的芯片，宽高比画成与图片同比例的矩形框；URL 与本地路径各占一行，省略显示并带复制按钮，整体高度明显降低。
+- Web 版（demo.kabegame.com）首屏打开明显变快：脚本、样式和插画改从 CDN 加载并自动压缩，不再挤占服务器那点带宽；吉祥物、空状态等插画在 Web 版换成按显示尺寸压缩的 WebP（合计 8.2 MB → 244 KB），桌面与 Android 仍用原图。
 
 ### Fixed
 - Windows 窗口壁纸改挂到桌面背景 WorkerW，移除点击桌面和最小化时反复修正图标层 Z-order 的逻辑。
@@ -33,6 +34,8 @@
 - 设置迁移框架与数据库迁移对齐：模块文档写明新增步骤与约束，迁移失败不写回、照常启动，迁移写回前备份 `settings.json.bak-v<旧版本>`，每个迁移带单测；新增 v003 把旧轮播三键换算成路径。
 - metadata 表新增可空列 `template`（v047 迁移）；`images://id_<id>/metadata_full` 与 `get_image_metadata_full` 返回该字段。metadata 迁移把冻结模板原样带到新行，整轮去重按模板分区；开启「去重时更新元数据」时，后一次运行改挂到新行，data 与模板一起被覆盖，未冻结时清空。
 - app IPC 协议升到 v4（`PluginRunParams.freezeTemplate`），新 CLI 连接旧主程序时自动回退本地执行。
+- 生产 web 构建（`isWeb && command === "build"`）的 Vite `base` 指向 `https://cdn.kabegame.com/web/`，`index.html` 仍由二进制内嵌返回。`scripts/deploy-web.sh` 新增第 0 步：先经服务器暂存目录把 `dist-kabegame-web/`（除 `index.html`）`cp` 进 OSS 挂载目录 `/mnt/oss/web/`，校验入口脚本 MIME 后才停服换二进制，OSS 上只增不删。详见 `cocs/web/CDN_MEDIA.md`。
+- `public/` 下的吉祥物、空状态、失物、冲浪插画移到 `apps/kabegame/src/assets/`，经 `src/assets/illustrations.ts` 按 `IS_WEB` 取 WebP 或原图；`vite.config.ts` 新增 `dropUnreferencedSrcAssets` 插件，删掉产物中未被引用的那一份。吉祥物启动时只预取挥手图。
 - 新增目录型媒体格式 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）与 `is_wpe_type` / `wpe_kind` / `is_video_like_type`；`images.local_path` 在目录型行上是 WPE 壁纸目录，所有把它当文件用的调用点按 type 分流：`/file` 返回 404、新增 `/wpe/<imageId>/<rel>` 目录服务（307 到 `project.json` 入口、越界拒绝，供网页壁纸的相对资源）、整理跳过缩略图 / 兼容副本 / 哈希去重 / 无法识别清理、虚拟盘隐藏、原生壁纸与 Plasma 拒绝、WPE 行删除不进源文件回收。
 - 新增 `kabegame-core::wpe`（Steam 库发现、任意目录识别、`project.json` 解析、作者视频属性换算）与内建任务 `wpe-import`；缩略图删除改为只删 `thumbnails_dir` 内由 Kabegame 生成的文件，避免删掉 WPE 的 `preview.*`。
 - 修复 `libraryfolders.vdf` 解析：顶层键值序列没有花括号，原解析器直接返回空，其它盘的 Steam 库从未被发现；旧格式 `LibraryFolders` 键改为不区分大小写，并只把数字键当库条目。
