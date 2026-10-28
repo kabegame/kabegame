@@ -29,7 +29,7 @@
              直接用 ImageContent，并显式 fit="cover" —— 它默认 contain，会给横图留上下灰边。 -->
         <ImageContent v-if="cover" :key="cover.id" :image="cover" prefer="thumbnail" fit="cover" :native-drag="false" />
         <div v-else class="album-detail-cover-empty">
-          <img src="/album-empty.png" alt="" class="album-detail-cover-empty-img" />
+          <img :src="albumEmptyImageUrl" alt="" class="album-detail-cover-empty-img" />
         </div>
       </div>
 
@@ -139,6 +139,7 @@ import ImageContent from "@/components/image/ImageContent.vue";
 import type { ImageInfo } from "@/types/image";
 import { HIDDEN_ALBUM_ID, type Album } from "@/services/albums";
 import { syncModeIcon, syncModeIconClass, syncModeLabel, syncModeTooltip } from "@/utils/albumSyncMode";
+import { albumEmptyImageUrl } from "@/assets/illustrations";
 
 /**
  * 画册页右栏「画册信息」面板：纯展示 + 派发，无副作用。

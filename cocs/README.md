@@ -53,8 +53,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## Web 版（`web/`）
 
 - [web/CDN_MEDIA.md](web/CDN_MEDIA.md)
-  - 主题：Web release 的媒体路径 CDN 转写边界，原图、缩略图、浏览器兼容副本与壁纸兼容副本的字段映射，以及线上 `images` / `thumbnails` / `compatibles` 必须同时指向 OSS 挂载的部署约束。
-  - 适用场景：Web RPC 返回服务器本地路径、CDN 媒体 404、调整媒体字段或迁移线上媒体目录。
+  - 主题：Web release 的媒体路径 CDN 转写边界，原图、缩略图、浏览器兼容副本与壁纸兼容副本的字段映射，以及线上 `images` / `thumbnails` / `compatibles` 必须同时指向 OSS 挂载的部署约束；**前端静态资源**经生产 web 构建的 Vite `base` 指向 `cdn.kabegame.com/web/`（服务器出口带宽仅 4～5 Mbps 且共享，OSS 并发约 5 倍并自带 gzip），`deploy-web.sh` 先经服务器本地暂存目录 `cp` 进 ossfs2 挂载点（ossfs2 按写入时文件名定 MIME，rsync 临时文件改名会让 JS 变成 `octet-stream`）、校验入口脚本类型后才停服，只增不删；bucket CORS 放行 demo 域名；插画经 `src/assets/illustrations.ts` 按模式取 WebP / 原图，`dropUnreferencedSrcAssets` 删掉未引用的那份。
+  - 适用场景：Web RPC 返回服务器本地路径、CDN 媒体 404、调整媒体字段或迁移线上媒体目录；demo 首屏慢、静态资源 404 / 被浏览器拒绝执行（MIME、CORS）、部署 web 版、新增插画或 `public/` 大文件。
 
 - [web/RPC_TRACKING.md](web/RPC_TRACKING.md)
   - 主题：Web 前端使用 `/rpc/{method}` 让浏览器可按方法过滤请求，服务端保留 `/rpc` 兼容入口；两种入口都发以方法名命名、url 为 `/rpc/<方法名>` 的 umami 事件（data: method / ok / code / ms），不读取、不转发客户端请求头；`web` feature 门控，由 `KABEGAME_UMAMI_*` 环境变量开启（systemd drop-in）；有界队列丢弃策略、`no_proxy` 直连，以及 umami isbot 会静默丢弃 `名字/版本` 形式 UA 的坑。

@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, ref } from "vue";
+import { kamechanStandImageUrl, kamechanWaveImageUrl } from "@/assets/illustrations";
 
 export type KamechanState = "standing" | "waving";
 export type KamechanEvent = "wave" | "reset";
@@ -9,7 +10,7 @@ export function useKamechanMachine() {
   const state = ref<KamechanState>("standing");
   let waveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const imageSrc = computed(() => (state.value === "waving" ? "/kamechan/wave/wave.png" : "/kamechan/stand/stand.png"));
+  const imageSrc = computed(() => (state.value === "waving" ? kamechanWaveImageUrl : kamechanStandImageUrl));
 
   function clearWaveTimer() {
     if (waveTimer === null) {

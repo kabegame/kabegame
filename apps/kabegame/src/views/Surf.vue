@@ -13,7 +13,7 @@
         <!-- Logo：搜索栏上方 -->
         <div class="surf-logo">
           <img
-            src="/swim.png"
+            :src="swimImageUrl"
             :alt="$t('surf.title')"
             draggable="false"
             class="surf-logo-img"
@@ -260,6 +260,7 @@ import { useSettingsStore } from "@/stores/settings";
 import PluginPickerField from "@/components/PluginPickerField.vue";
 import { formatAbsoluteTime, formatRelativeTime } from "@/utils/relativeTime";
 import { IS_ANDROID } from "@/env";
+import { swimImageUrl } from "@/assets/illustrations";
 
 const { t } = useI18n();
 const router = useRouter();

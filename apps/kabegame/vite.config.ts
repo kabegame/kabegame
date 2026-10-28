@@ -1,8 +1,12 @@
-import { defineConfig, UserConfig } from "vite";
+import { defineConfig, UserConfig, type Plugin } from "vite";
 import path from "path";
 
 import { merge } from "lodash-es";
 
+// 生产 web（demo.kabegame.com）的静态资源从 OSS 读：index.html 仍由二进制内嵌返回，
+// 其余文件由 scripts/deploy-web.sh 上传到 OSS 挂载目录 /mnt/oss/web/。
+// 服务器出口带宽只有几 Mbps 且所有访客共享，CDN 并发速度约为源站的 5 倍并自带 gzip。
+const webCdnBase = "https://cdn.kabegame.com/web/";
 const webDevApiTarget = "http://127.0.0.1:7490";
 const webDevApiProxyPaths = [
   "/rpc",
@@ -15,18 +19,40 @@ const webDevApiProxyPaths = [
   "/mcp",
   "/__ping",
 ];
+// src/assets/illustrations.ts 按 IS_WEB 二选一，代码里另一份会被折叠掉，但 Vite 加载
+// import 时就已发射资源文件；这里删掉没有任何产物引用的 src/assets 资源，
+// 免得 web 产物带上原图、本地产物带上 WebP。
+function dropUnreferencedSrcAssets(): Plugin {
+  return {
+    name: "kabegame:drop-unreferenced-src-assets",
+    apply: "build",
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      const texts = Object.values(bundle).map((file) =>
+        file.type === "chunk" ? file.code : typeof file.source === "string" ? file.source : "",
+      );
+      for (const [fileName, file] of Object.entries(bundle)) {
+        if (file.type !== "asset" || !file.originalFileNames.some((name) => name.includes("src/assets/"))) continue;
+        const baseName = path.posix.basename(fileName);
+        if (!texts.some((text) => text.includes(baseName))) delete bundle[fileName];
+      }
+    },
+  };
+}
+
 function ensureWebEnv(mode: string) {
   if (mode !== "web") return;
   process.env.KABEGAME_MODE ??= "web";
   process.env.VITE_KABEGAME_MODE ??= "web";
 }
 
-export default defineConfig(async ({ mode }) => {
+export default defineConfig(async ({ mode, command }) => {
   ensureWebEnv(mode);
 
   const { default: pubConfig, root, isMacOS, isWindows } = await import("../../vite.config.pub");
 
   const isWeb = process.env.KABEGAME_MODE === "web" || mode === "web";
+  const isProd = command === "build";
   // web mode: no wallpaper window, chunking always on
   const hasWallpaper = !isWeb && (isWindows || isMacOS);
   const hasSurfNavbar = !isWeb;
@@ -47,7 +73,8 @@ export default defineConfig(async ({ mode }) => {
       )
     : undefined;
 
-  return merge<UserConfig, UserConfig>(pubConfig, {
+  const config = merge<UserConfig, UserConfig>(pubConfig, {
+    base: isWeb && isProd ? webCdnBase : "/",
     server: {
       allowedHosts: true,
       port: 1420,
@@ -90,4 +117,7 @@ export default defineConfig(async ({ mode }) => {
     },
     publicDir: "./public",
   });
+  // 不经 merge：lodash 按下标合并数组，会把插件揉进 pubConfig 的第 0 个插件
+  config.plugins = [...(config.plugins ?? []), dropUnreferencedSrcAssets()];
+  return config;
 });
