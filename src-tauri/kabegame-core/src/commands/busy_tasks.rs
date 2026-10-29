@@ -1,3 +1,4 @@
+use crate::storage::backfill_service::{BackfillJobState, BackfillService};
 use crate::storage::hidden_cleanup::{HiddenCleanupRunState, HiddenCleanupService};
 use crate::storage::organize::{OrganizeRunState, OrganizeService};
 use serde::Serialize;
@@ -16,6 +17,8 @@ pub struct BusyTasksSnapshot {
     pub metadata_migrations: Vec<crate::plugin::metadata_migration::MetadataMigrationTaskState>,
     #[cfg(not(all(not(target_os = "ios"), feature = "plugin-runtime")))]
     pub metadata_migrations: Vec<Value>,
+    /// 后台回填作业（含排队中的）。
+    pub backfills: Vec<BackfillJobState>,
 }
 
 pub fn get_busy_tasks_snapshot() -> Result<Value, String> {
@@ -31,6 +34,7 @@ pub fn get_busy_tasks_snapshot() -> Result<Value, String> {
             .snapshot(),
         #[cfg(not(all(not(target_os = "ios"), feature = "plugin-runtime")))]
         metadata_migrations: Vec::new(),
+        backfills: BackfillService::global().snapshot(),
     };
     serde_json::to_value(snapshot).map_err(|error| error.to_string())
 }

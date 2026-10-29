@@ -18,6 +18,13 @@ pub fn exit_app<R: Runtime>(app: AppHandle<R>) {
     app.exit(0);
 }
 
+/// 启动进度快照：只读 `startup_state` 的 watch，不碰 `Storage::global()`，全局单例就绪前也可调用。
+/// 前端启动页先监听 `startup-progress` 再调它，收到 `ready` 后卸载自己、挂载主界面。
+#[tauri::command]
+pub fn get_startup_state() -> kabegame_core::storage::startup_state::StartupPhase {
+    kabegame_core::storage::startup_state::snapshot()
+}
+
 /// 注入网页（畅游 / WebView 爬虫窗口）的脚本文案：当前应用语言下 `webview.*` 的整张表。
 /// 页面加载时由 `webview_i18n.js` 拉取一次，切换语言后新加载的页面即用新语言。
 #[tauri::command]

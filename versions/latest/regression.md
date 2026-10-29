@@ -83,6 +83,26 @@
 | [ ] | 站点不能订阅事件 | 桌面 CEF dev | 任务运行中经 CDP 在爬虫窗口执行 `__TAURI_INTERNALS__.invoke('plugin:event\|listen', { event: 'images-added', target: { kind: 'Any' }, handler: __TAURI_INTERNALS__.transformCallback(() => {}) })` | Promise 被 ACL 拒绝（`event.listen not allowed`） | 未验证 |
 | [ ] | 站点不能伪造事件 | 桌面 CEF dev | 同上执行 `invoke('plugin:event\|emit', { event: 'app-import-plugin', payload: { kgpgPath: 'x' } })` | 被 ACL 拒绝，主窗口不弹导入对话框 | 未验证 |
 | [ ] | Android WebView 爬虫 | Android dev | 跑一个 WebView 插件 | 同桌面，任务成功结束（安卓同样使用 `crawler-capability`） | 未验证 |
+## 下载落盘先占坑（消除 `images.local_path` UNIQUE 冲突）
+
+2026-10-29：下载目标文件名从 `exists()` 查询改为原子创建 + 原生占用标记（Unix `flock`、Windows 只共享读的 share mode）：`occupy_unique_path` / `occupy_unique_download_path[_with_name]` 返回 `OccupiedFile` 守卫，后处理持有到 `add_image` 结束；溢写文件在 Unix 同设备上「锁源 → 硬链接 → 删源名」零拷贝，Windows / 跨设备经句柄复制；本地导入复制进目标目录同样占坑；文件夹同步给新文件建行前探测标记、命中放弃，探测未命中再按路径查一次；下载器对新建文件入库后按直接父目录补挂文件夹画册。不改 SQL。静态验证：check-kabegame driver 的 cargo check（`kabegame` 与 `kabegame-cli`）0 error；vue-tsc 报 1 个既有错误（`apps/kabegame/vite.config.ts(74,20)` 的 `isProd` 未定义，来自 HEAD 合并提交，本次未改前端）。Windows 分支本机（macOS）无法编译，只核对了 `windows-sys` 0.52 常量类型。真机（macOS dev，CDP + dev CLI 经 IPC 交给 app）：用临时 V8 插件 `collide-test` 从本地 HTTP 服务一次入队 16 个 `…/set<n>/img.png`（同名、内容各异）制造碰撞，结果见各行备注；测试图片、画册与插件已清理。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 占坑换名与探测 | macOS 单测 | `test-kabegame` 跑 `downloader::util` | 已有 `a.jpg` 时依次得到 `a(1).jpg`、`a(2).jpg`；守卫存活时 `is_occupied_for_download` 为真、drop 后为假；无残留 `.kabegame-occupy-*` | 2026-10-29：`downloader::util` 12 个全部通过（新增 4 个，旧 4 个适配新签名） |
+| [x] | 溢写文件零拷贝搬运 | macOS 单测（APFS） | `occupy_move_relocates_without_copy` | `move_from` 后源名消失、目标与源同一 inode、内容一致、`is_moved()` 为真 | 2026-10-29 通过 |
+| [x] | 经句柄复制 | macOS 单测 | `occupy_copy_from_writes_through_handle` | `copy_from` 后目标内容一致、源文件保留、仍带占用标记 | 2026-10-29 通过 |
+| [x] | 同名并发不撞 | macOS 单测 | 16 线程同时占坑 `same.jpg` 并各自写入 | 16 条互不相同的路径，内容各是自己线程写的 | 2026-10-29 通过 |
+| [x] | 同步放弃占坑文件 | macOS 单测 | `local_folder::sync_skips_new_file_occupied_by_download` | 守卫存活时 diff 与全量同步都不建行；drop 后 diff 同步照常导入并挂画册 | 2026-10-29 通过 |
+| [x] | 文件归属画册 | macOS 单测 | `local_folder::album_for_file_matches_direct_parent_only` | 直接父目录命中画册；子目录无子画册时不归父画册；`sync_mode = none` 不收 | 2026-10-29 通过；`local_folder` 共 43 个，42 过 1 败，失败的 `replace_image_thumbnail_path_deletes_old_independent_thumbnail` 是既有问题（WPE 改动后只删 `thumbnails_dir` 内缩略图，用例把旧缩略图放在临时目录），与本次无关 |
+| [x] | 文档示例 | macOS doctest | `test-kabegame` 跑 `--doc occupy_unique_download_path` | `no_run` 示例能编译 | 2026-10-29 通过 |
+| [x] | 多图同名不再撞库 | macOS 桌面 CEF dev | 临时插件一次入队 16 个同名 `img.png`（内容各异）经 dev CLI → IPC 在 app 下载 | 不再出现 `UNIQUE constraint failed: images.local_path`；下载目录得到 `name.jpg`、`name(1).jpg`…，各文件 hash 不同、对应各自 URL | 2026-10-29 真机：任务 completed、新下载 16 / 失败 0、日志无 UNIQUE；目录为 `img.png` … `img(15).png`，16 行 hash 互不相同且每行 hash 与磁盘文件 sha256 一致（无覆盖）；编号与 URL 序号错位（set3→`img(3)`、set0→`img(4)`）证明确为并发抢名；无残留 `.kabegame-occupy-*` |
+| [x] | 下载目录即文件夹画册 | macOS 桌面 CEF dev | `add_local_folder_album` 指向空目录并 `set_album_sync_mode` 为 `shallow`，再把另外 16 个同名图下载到该目录；之后 `sync_local_folder_album` 手动全量同步 | 同步卡片不报错、不产生重复行；下载结束后图片已在该画册（下载器补挂）；再手动全量同步无变化 | 2026-10-29 真机：目录下 16 行全部 `plugin_id = collide-test-test`、无 `local-import` 重复行；画册成员 16 / 本次行 16、`folder_status.state = ok`；手动全量同步后成员与行数仍为 16 |
+| [ ] | 拖入文件夹画册 | macOS 桌面 CEF | 向文件夹画册拖入几张图（含与已有文件同名的） | 复制进 `sync_folder` 并改名不冲突，立即入库并挂到该画册，无 UNIQUE 报错 | 未验证：未真机运行 |
+| [ ] | 大文件仍零拷贝 | macOS 桌面 CEF | 下载超过 5 MiB 的视频（走溢写），对照 `.kabegame/debug` 与耗时 | 无复制耗时回退，目标与溢写文件同设备时为硬链接搬运 | 未验证：未真机运行 |
+| [ ] | 畅游下载 | macOS 桌面 CEF | 畅游窗口一键下载 / 右键下载图片与视频 | 照常入库，下载目录无残留 `.kabegame-occupy-*` 或 `.part` | 未验证：走 relocate 分支，代码未改 |
+| [ ] | Windows 读写与删除 | Windows 桌面 CEF | 下载图片与大视频；构造一次后处理失败（如去重兜底命中） | 缩略图 / 尺寸 / 兼容副本照常生成；失败分支能删掉新建文件（先 drop 守卫再删）；溢写文件经句柄复制后源 `.part` 被删 | 未验证：本机为 macOS，Windows 分支未编译 |
+| [ ] | 不支持硬链接的盘 | Linux / macOS，FAT / exFAT 下载目录 | 下载目录设在 U 盘上下载几张同名图 | 退回 `create_new` + 上锁，照常换名入库，无残留临时文件 | 未验证 |
 
 ## 合并：WPE 与路径轮播 / 基本信息芯片
 
@@ -324,3 +344,27 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 部署后首屏 | 线上 demo | 清缓存打开首页，按慢速 4G 再测一次 | 首次绘制、首个 pageview 明显提前 | 部署前的同口径对照：不限速 FCP 6.9 s → 1.8 s，慢速 4G 18.2 s → 5.6 s |
 | [x] | 本地模式插画：吉祥物站立图、冲浪 logo | 桌面 CEF dev | 经 CDP 读画廊页吉祥物与畅游页 logo 的 `currentSrc` / 尺寸并截图 | 加载 `src/assets` 下的原图 PNG，显示与改动前一致 | `/src/assets/kamechan/stand.png` 668×1540、`/src/assets/swim.png` 1254×1254，截图正常 |
 | [ ] | 本地模式插画：挥手、空状态、空封面、失物图 | 桌面 / Android dev | 点吉祥物挥手；打开空画册与空图库；触发图片丢失 | 显示原图 PNG | 未在 app 里触发；构建产物里这几张也只引用 PNG |
+
+## 数据库异步回填 + 启动页（`backfill_jobs` / `BackfillService` / Init app）
+
+迁移拆成同步 schema 迁移与可恢复回填：回填登记进 `backfill_jobs`，按批提交并同事务写游标；带 `min_backfill_version` 的迁移前同步排干被依赖的回填（启动页显示进度），其余进入界面后由 `BackfillService` 在后台跑（忙碌卡片）。桌面启动拆成主线程建窗 → 线程内重型初始化 → 主线程收尾，主窗口先挂启动页，`ready` 后卸载再挂主界面。框架验证用的两个临时作业（重建 `metadata_search_terms`、补算 `images.compatible_path`）已在验证后删除，发布态注册表为空；下表「dev 实测」各行均在临时作业仍存在时于 macOS dev 完成，dev 库验证前清空了全部搜索词、`compatible_path` 列与 `compatibles/` 下 548 个文件（1.4 G）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 旧库升级：迁移 + 后台回填 | macOS dev（库 v47） | `deno task dev` 启动 | 主窗口出现，v048 / v049 执行并登记两个作业；进入画廊后忙碌卡片「更新数据库」依次显示两个作业（排队中的显示「排队中」）并推进；结束后卡片消失 | 重型初始化约 1 s 就 ready，启动页未来得及挂载（首个阶段事件即 ready）；卡片截图「更新数据库 / 补算兼容副本 23% 1,242 / 5,299」 |
+| [x] | 回填终态数据 | dev 库 | 作业结束后查库 | 搜索词映射重建；`compatible_path` 无空行，需要的图片重新生成兼容副本，其余写哨兵；`compatibles/` 无孤儿文件 | 映射 550,644 / 词典 113,517（清空前 316,602 / 77,686，差异来自插件自定义 `searchTexts` 被默认展开规则重建，属预期取舍）；空行 0，哨兵 4,887，副本 412（jpg 295 / png 39 / webp 78）= 目录内 412 个文件（902 M）；无视频需要转码 |
+| [x] | 补丁免刷新 | dev | 回填期间停留画廊 | 被补 `compatiblePath` 的行经 `images-change` / `image-changed` 就地更新 | debug ingest 统计前端收到 5,295 / 5,299 条 `compatiblePath` 补丁（差额是强杀重启期间主界面尚未挂监听的批次） |
+| [x] | 中断续跑 | dev | 兼容副本作业进行中 `kill -9` 主进程，再启动 | 从游标续跑、不重做；无孤儿文件 | 强杀时 cursor 1952 / processed 1295、73 个副本 = 73 行引用；重启日志 `start image_compatible_path (processed 1295/…)`，终态 processed = total = 5299 |
+| [x] | 阻塞回填（启动页进度条） | dev | 清空词表、把搜索词作业重置为未完成，`KABEGAME_BACKFILL_SYNC_THROUGH=48 deno task dev` | 启动页显示「正在更新数据：重建搜索词」与进度条 / 计数，完成后依次 services → ready，卸载启动页进入画廊 | 截图「3,600 / 3,959」；前端收到 2600→3959 的进度事件后 ready 并卸载 |
+| [x] | 初始化失败 | dev | 临时注入作业失败（`DEBUG-backfill`，已删除）+ 阻塞开关启动 | 启动页显示「启动失败」与错误文本，「退出」按钮可退出；作业记 `attempts=1` 与 `last_error`、游标不前进，版本不变 | 截图正常；点退出后进程经 CEF 正常 shutdown 退出 |
+| [x] | CLI 本地模式不跑后台回填 | dev CLI（主程序关闭） | 作业未完成时 `kabegame-cli --via local data import-image <已入库图片>` | 命令照常执行；未被依赖的作业保持 pending | 去重 1、作业仍 done=0；同命令加 `KABEGAME_BACKFILL_SYNC_THROUGH=48` 时在阻塞阶段排干（done=1，映射恢复 550,644）；`pathql query` 正常 |
+| [x] | `--minimized` 自启动 | dev 二进制直跑 | 作业未完成时 `target/debug/kabegame --minimized` | 不建主窗口，初始化照常 ready，后台回填跑完 | 日志 `Startup ready` → `metadata_search_terms_rebuild done` |
+| [x] | 无作业时的正常启动 | dev（删除临时作业、库复位 v48） | `deno task dev` | 直接进入画廊，无忙碌卡片，不新增 `backfill_jobs` 行 | 启动页未挂载（ready 早于页面加载）；库仍 v48、作业 0 行 |
+| [ ] | 启动页在慢启动下可见 | 桌面 release / 慢盘 | 首次升级大库启动 | 重型初始化期间窗口显示「正在加载插件」「正在升级数据库（vNNN …）」等阶段 | 本机 dev 重型初始化太快，只在阻塞回填时看到启动页 |
+| [ ] | 回填期间写操作 | dev | 后台回填进行中下载 / 删除 / 收藏 | 均正常；批间释放写锁，不报 busy | 未在长作业期间实测 |
+| [ ] | 初始化失败的原生对话框 | `--minimized` | 让重型初始化失败 | 无主窗口时弹致命错误对话框 | 未实测；有主窗口时改为启动页显示错误 |
+| [x] | 整理「补充兼容格式」不变 | 代码 | — | 行为不变 | 验证用的抽取已撤回，`organize.rs` / `images.rs` 与改动前一致 |
+| [x] | 原生壁纸兼容副本 | 代码 | — | `wallpaper_compatible_path` 仍惰性生成，不做回填 | 未触碰相关代码 |
+| [ ] | Android 启动 | Android dev 真机 | 冷启动 | 启动页一闪或直接进入主界面，无白屏卡死 | 本机没有 adb，也没有 `bin/android/arm64/` 自建产物，未实测、也未做 `--mode android` 交叉检查 |
+| [ ] | Linux / Windows 启动 | 桌面 | 冷启动（含托盘、壁纸窗口、`init_post` 回主线程） | 主窗口先出现，托盘与壁纸照常 | 只在 macOS 实测 |
+| [ ] | Web 版 | web 服务 | 启动服务端并打开页面 | 跳过启动页，后台回填照常 | 未实测 |

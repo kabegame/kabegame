@@ -103,5 +103,13 @@
   "timeDaysAgo": "{n} day ago | {n} days ago",
   "timeWeeksAgo": "{n} week ago | {n} weeks ago",
   "timeMonthsAgo": "{n} month ago | {n} months ago",
-  "timeYearsAgo": "{n} year ago | {n} years ago"
+  "timeYearsAgo": "{n} year ago | {n} years ago",
+  "startup": {
+    "settings": "Loading settings…",
+    "plugins": "Loading plugins…",
+    "schema": "Upgrading database (v{version} {name})…",
+    "backfill": "Updating data: {name}",
+    "services": "Starting services…",
+    "failed": "Startup failed"
+  }
 }

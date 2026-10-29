@@ -97,16 +97,99 @@ use kabegame_core::virtual_driver::VirtualDriveService;
 use axum::{routing::get, Router};
 use std::net::SocketAddr;
 
+/// 启动分三段（见 `cocs/storage/DB_MIGRATIONS_AND_BACKFILLS.md`）：
+///
+/// 1. [`init_pre`]（主线程、毫秒级）：Settings / i18n / 事件广播、事件循环、启动进度转发与主窗口。
+///    主窗口先显示前端的启动页（Init app），它只读 `get_startup_state` / `startup-progress`。
+/// 2. `core_init::init_heavy_globals`（桌面与 Android 在独立线程）：插件、Storage（迁移 + 阻塞回填）、
+///    调度器与各 Service。
+/// 3. [`init_post`]（经 `run_on_main_thread` 回主线程）：托盘、壁纸、下载 worker、IPC / Web / HTTP 服务等；
+///    随后启动后台回填并置 `Ready`，启动页卸载、挂载主界面。任一步失败置 `Failed`，启动页显示错误。
+#[cfg(not(feature = "web"))]
 fn init(
-    #[cfg(not(feature = "web"))] app: &mut tauri::App<crate::AppRuntime>,
+    app: &mut tauri::App<crate::AppRuntime>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    #[cfg(feature = "web")]
-    crate::core_init::init_app_paths_for_web()?;
+    let app_handle = app.app_handle().clone();
+    init_pre(&app_handle)?;
+    std::thread::Builder::new()
+        .name("kabegame-init".to_string())
+        .spawn(move || run_heavy_init(app_handle))
+        .map_err(|e| format!("Failed to spawn init thread: {e}"))?;
+    Ok(())
+}
 
-    // 启动内置 Backend
-    crate::core_init::init_globals()?;
-    #[cfg(not(feature = "web"))]
-    commands::surf_session::clear_stale_sessions();
+#[cfg(feature = "web")]
+fn init() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    crate::core_init::init_app_paths_for_web()?;
+    init_pre()?;
+    crate::core_init::init_heavy_globals()?;
+    init_post()?;
+    // web 的服务端在监听前已初始化完；后台回填照常启动（这里在 tokio runtime 上下文内）。
+    if let Err(e) = kabegame_core::storage::backfill_service::BackfillService::global()
+        .start_pending(kabegame_core::storage::Storage::global())
+    {
+        eprintln!("[backfill] 启动后台回填失败: {e}");
+    }
+    kabegame_core::storage::startup_state::set(
+        kabegame_core::storage::startup_state::StartupPhase::Ready,
+    );
+    Ok(())
+}
+
+/// 重型初始化线程：heavy → 回主线程 init_post → 后台回填 → Ready；失败置 Failed。
+#[cfg(not(feature = "web"))]
+fn run_heavy_init(app_handle: AppHandle<crate::AppRuntime>) {
+    use kabegame_core::storage::startup_state::{self, StartupPhase};
+
+    // 重型初始化里的 panic 不能让线程静默退出（启动页会一直转圈），统一转成 Failed。
+    let heavy =
+        std::panic::catch_unwind(crate::core_init::init_heavy_globals).unwrap_or_else(|panic| {
+            let detail = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            Err(format!("初始化线程 panic: {detail}"))
+        });
+    let result = heavy.and_then(|()| {
+        startup::run_on_main_thread_sync(&app_handle, |app| {
+            init_post(&app).map_err(|e| e.to_string())
+        })
+    });
+    match result {
+        Ok(()) => {
+            // start_pending 需要 tokio 上下文；它只读一次待办列表就返回，作业在 blocking 线程池里跑。
+            let started = tauri::async_runtime::block_on(async {
+                kabegame_core::storage::backfill_service::BackfillService::global()
+                    .start_pending(kabegame_core::storage::Storage::global())
+            });
+            if let Err(e) = started {
+                eprintln!("[backfill] 启动后台回填失败: {e}");
+            }
+            startup_state::set(StartupPhase::Ready);
+            println!("  ✓ Startup ready");
+        }
+        Err(error) => {
+            eprintln!("应用初始化过程中出现了错误！:{}", error);
+            startup_state::set(StartupPhase::Failed {
+                message: error.clone(),
+            });
+            // 没有主窗口（--minimized 自启动）时看不到启动页的错误，回落原生对话框。
+            if app_handle.get_webview_window("main").is_none() {
+                utils::show_error(
+                    &app_handle,
+                    kabegame_i18n::t!("dialog.initFatalError", detail = error),
+                );
+            }
+        }
+    }
+}
+
+/// 主线程、毫秒级：重型初始化之前必须就绪的部分。
+fn init_pre(
+    #[cfg(not(feature = "web"))] app_handle: &AppHandle<crate::AppRuntime>,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    crate::core_init::init_fast_globals()?;
     #[cfg(debug_assertions)]
     crate::debug_ingest::spawn_debug_event(
         std::env::var("KABEGAME_DEBUG_SESSION_ID").unwrap_or_else(|_| "backend".to_string()),
@@ -117,35 +200,34 @@ fn init(
             "debug_assertions": cfg!(debug_assertions),
         }),
     );
-    // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
-    #[cfg(all(target_os = "linux", not(feature = "web")))]
-    {
-        crate::linux_desktop::init_linux_desktop();
-    }
 
-    // 公共步骤
+    // 事件管线只依赖 EventBroadcaster，提前启动。
     start_event_loop(
         #[cfg(not(feature = "web"))]
-        app.app_handle().clone(),
+        app_handle.clone(),
     );
+    start_event_forward_task();
+    #[cfg(not(feature = "web"))]
+    start_startup_progress_forwarder(app_handle.clone());
+
     // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if !startup::is_auto_startup() {
-        if let Err(e) = create_main_window(&app.app_handle()) {
+        if let Err(e) = create_main_window(app_handle) {
             return Err(Box::new(std::io::Error::other(e)));
         }
     }
     // CEF Chrome ProcessSingleton：并发双开（如开机自启竞态，IPC 单例守卫因 socket
     // 未就绪而双双放行）时，第二个实例的启动会被转交到本进程（runtime 已拦截 Chrome
     // 默认的「弹一个浏览器窗口」）。这里把它转成与 IPC AppShowWindow / AppImportPlugin
-    // 相同的应用语义（见 ipc/handlers/mod.rs）。
+    // 相同的应用语义（见 ipc/handlers/mod.rs）。只碰窗口，不依赖重型全局单例，随主窗口一起尽早安装。
     #[cfg(all(
         not(feature = "web"),
         any(target_os = "linux", target_os = "windows", target_os = "macos"),
         feature = "standard"
     ))]
     {
-        let app_handle = app.app_handle().clone();
+        let app_handle = app_handle.clone();
         tauri_runtime_cef::set_already_running_app_relaunch_handler(move |argv| {
             let app_handle = app_handle.clone();
             // 回调在 CEF UI 线程（主线程）上；窗口操作转投异步上下文，与 IPC 处理器一致。
@@ -164,6 +246,37 @@ fn init(
             });
         });
     }
+    Ok(())
+}
+
+/// 把启动进度 watch 转发成 `startup-progress` 事件，直到 Ready / Failed。
+#[cfg(not(feature = "web"))]
+fn start_startup_progress_forwarder(app_handle: AppHandle<crate::AppRuntime>) {
+    tauri::async_runtime::spawn(async move {
+        let mut rx = kabegame_core::storage::startup_state::subscribe();
+        loop {
+            let phase = rx.borrow_and_update().clone();
+            let _ = app_handle.emit("startup-progress", &phase);
+            if phase.is_terminal() || rx.changed().await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// 全局单例就绪之后的启动步骤（原 `init()` 中 `init_globals` 之后、建窗之外的全部步骤）。
+/// 桌面与 Android 在主线程执行。
+fn init_post(
+    #[cfg(not(feature = "web"))] app_handle: &AppHandle<crate::AppRuntime>,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    #[cfg(not(feature = "web"))]
+    commands::surf_session::clear_stale_sessions();
+    // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
+    #[cfg(all(target_os = "linux", not(feature = "web")))]
+    {
+        crate::linux_desktop::init_linux_desktop();
+    }
+
     // 只在 Linux / macOS 的 CEF standard 模式安装 resolver:不安装即关闭真实文件
     // 注入,Windows 的 DownloadURL 虚拟文件路径因此完全不受影响。平台启用门控集中在
     // 此处一次完成;CEF API 与三份 cef-rs bindings 保持相同 struct 布局,避免按平台
@@ -179,27 +292,25 @@ fn init(
         crate::drag_export::authorize_drag_image(image_id)
     });
     #[cfg(not(feature = "web"))]
-    if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
+    if let Err(e) = init_crawler_webview_handler(app_handle.clone()) {
         eprintln!("Failed to init crawler webview handler: {}", e);
     }
     // 初始化壁纸控制器
     #[cfg(not(feature = "web"))]
-    init_wallpaper_controller(app);
+    init_wallpaper_controller(app_handle);
     // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
     start_task_scheduler();
     // 初始化download worker
     init_download_workers();
     // 初始化任务阻塞worker线程池
     start_download_workers();
-    // 启动事件转发任务
-    start_event_forward_task();
 
     // 首次启动：处理打开kgpg文件启动参数（仅local）
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
     if let Some(path) = startup::extract_kgpg_file_from_args() {
-        let app_handle_clone = app.app_handle().clone();
+        let app_handle_clone = app_handle.clone();
         // 等待前端准备好
-        app.app_handle().once("app-ready", move |_| {
+        app_handle.once("app-ready", move |_| {
             let _ = app_handle_clone.emit(
                 "app-import-plugin",
                 serde_json::json!({
@@ -213,12 +324,12 @@ fn init(
     {
         startup::start_ipc_server(
             #[cfg(not(feature = "web"))]
-            app.app_handle().clone(),
+            app_handle.clone(),
         );
     }
     #[cfg(all(target_os = "android", not(feature = "web")))]
     {
-        let provider = content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
+        let provider = content_io_provider::PickerContentIoProvider::new(app_handle.clone());
         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
         // 设置内容IO提供者
         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
@@ -263,7 +374,7 @@ fn init(
     // 初始化插件缓存
     init_kgpg_plugin(
         #[cfg(target_os = "android")]
-        app.handle().clone(),
+        app_handle.clone(),
     );
 
     #[cfg(all(not(target_os = "android"), not(feature = "web")))]
@@ -714,6 +825,7 @@ pub(crate) fn configure_app(
             open_album_virtual_drive_folder,
             // --- Misc ---
             exit_app,
+            get_startup_state,
             #[cfg(not(target_os = "android"))]
             check_for_updates,
             #[cfg(not(target_os = "android"))]

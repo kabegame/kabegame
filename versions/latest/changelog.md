@@ -12,6 +12,7 @@
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
 - 图片详情的「基本信息」改为卡片式排版：名称作标题，源与收藏时间并在一行，类型、大小、尺寸做成可点筛选的芯片，宽高比画成与图片同比例的矩形框；URL 与本地路径各占一行，省略显示并带复制按钮，整体高度明显降低。
 - Web 版（demo.kabegame.com）首屏打开明显变快：脚本、样式和插画改从 CDN 加载并自动压缩，不再挤占服务器那点带宽；吉祥物、空状态等插画在 Web 版换成按显示尺寸压缩的 WebP（合计 8.2 MB → 244 KB），桌面与 Android 仍用原图。
+- 启动时主窗口立即出现：数据库升级等耗时初始化改在后台进行，期间窗口显示启动页与进度（升级需要先补算数据时显示进度条），完成后自动进入主界面；初始化失败会在启动页显示错误并可直接退出。其余数据补算在进入界面后于后台继续，可在「我正在忙这些」里看到进度，中途退出下次启动接着做。
 
 ### Fixed
 - Windows 窗口壁纸改挂到桌面背景 WorkerW，移除点击桌面和最小化时反复修正图标层 Z-order 的逻辑。
@@ -20,6 +21,7 @@
 - Android 吉祥物亀ちゃん不再被底部导航栏挡住脚部，拖动范围也限制在系统栏之内。
 - Android 预览图片视频滑动后不暂停播放的问题
 - WebView 爬虫打开的网站不再能订阅应用事件（此前可读到图库新增图片的本地路径等信息），也不能向主界面伪造事件。
+- 修复下载时偶发「UNIQUE constraint failed: images.local_path」：同一帖子多张同名图片并发下载不再互相覆盖、丢图，会依次存成 `name.jpg`、`name(1).jpg`……；下载目录同时是文件夹画册时，新下载的图片也会立刻进入该画册，不再与文件夹同步抢着入库。
 
 ## 插件开发侧
 
@@ -45,4 +47,6 @@
 - WPE 第二阶段 Phase 6a：图库预览的网页壁纸 iframe 改为加载入口 `file://`（入口由 Rust 用与桌面壁纸窗口共用的 `wallpaper::web_entry` 现算），主窗口建窗前 `allow_file_documents("main")`、预览挂载 / 卸载经新命令 `set_wpe_web_preview`（只在 `permissions/main.toml`，拒绝壁纸窗口）设 / 清 `file:` 根目录并返回入口；应用页给 iframe 赋 `file:` 的 `src` 原本会被渲染进程 `CanDisplay` 与浏览器进程 `FilterURL` 拦下，为此新增 CEF 补丁 0005（建窗 `extra_info` 的 `kabegame.allow_local_resources`：渲染侧 `GrantLoadLocalResources`、浏览器侧 `GrantRequestScheme(file)`，弹窗提交的文档不授），主窗口登记后前端直接给 iframe 赋入口 `file://`；`tauri-runtime-cef` 新增 `allow_app_local_resources`，补丁只开门，加载仍走与桌面同一套运行时目录拦截，`localStorage` 与桌面同源；垫片预览判定改为「父窗口即 top 的 `file:` 子 frame」，宿主桥 `postMessage` 目标源改 `"*"`；CSP `frame-src` 加 `file:`、删 `http://127.0.0.1:*`；删除 `/wpe/<id>/<rel>` HTTP 目录服务及其 MIME 表、`serve_wpe_html` 与前端 `wpeEntryUrl`。WPE 收窄为只提供 Windows 桌面：`platform_supported()` 只对 Windows 为 true，`web_entry` 与两处文件文档登记按 Windows 门控（Windows 上用户可见行为不变；macOS / Linux 不再自动发现、不渲染网页壁纸）。
 - 壁纸窗口 Vue 化：与主窗口共用 `index.html`（`?window=wallpaper`），`main.ts` 按窗口动态导入 `bootstrap/app.ts` / `bootstrap/wallpaper.ts`（后者不装路由、组件库与 vant）；渲染拆为纯组件 `WallpaperStage.vue`（双层过渡、tile、WPE 视频属性，预留 `paused` / `interactive`）与负责 IPC / 看门狗 / ready 握手的 `WallpaperWindow.vue`，删除 `wallpaper.html` / `wallpaper.ts` 及其 rollup 入口；后端抽出 `build_wallpaper_target`。行为不变。dev 调试面板增加帧率（MIN / AVG，复用主窗口 `frameMonitor` store）。
 - 路径轮播合入 WPE：目录型 WPE 壁纸只在窗口模式参与轮播。原生模式有效路径的 `media-type/image` 是「非视频」过滤、不排除 `x-wpe/*`，所以由 rotator 在逐张可用性检查里跳过（Plasma 插件模式同样跳过），不改 count 与位置口径。
+- 下载目标文件名改为原子占坑：`compute_unique_download_path[_with_name]` 改名为 `occupy_unique_download_path[_with_name]`（新增 `move_from` 参数，返回 `OccupiedFile` 守卫），删除只算路径的 `unique_path`；新增 `occupy_unique_path` / `is_occupied_for_download` 与 `local_folder::album_for_file`。占用标记为 Unix `flock` / Windows share mode，Windows 上写入必须经守卫句柄、删除前先 drop。详见 `cocs/downloader-tasks/DOWNLOADER_FLOW.md`「目标文件占坑与占用标记」。
 - 仓库新增 `.gitattributes`（`* text=auto eol=lf`，`.bat` / `.cmd` 为 CRLF，`*.patch` / `*.diff` 不转换）与 `.editorconfig`，换行符统一为 LF，并把已有 CRLF 文件归一化。
+- 数据库迁移拆成同步 schema 迁移与可恢复的回填作业：新增 `backfill_jobs` 表（v048）、`storage/migrations/backfill.rs` 注册表（按批 `BEGIN IMMEDIATE` 提交并同事务写回 rowid 游标，崩溃续跑）、`Migration.min_backfill_version`（执行前同步排干被依赖的回填）、`BackfillService` 后台按序运行（忙碌快照 `backfills` + `backfill-finished`）与调试开关 `KABEGAME_BACKFILL_SYNC_THROUGH`；`Storage::new()` 改为返回 `Result`。桌面 / Android 启动拆成 `init_pre`（主线程建窗）→ 线程内 `init_heavy_globals` → 主线程 `init_post`，进度经 core `startup_state` watch、`startup-progress` 事件与新命令 `get_startup_state` 交给前端启动页（Init app 先挂载、`ready` 后卸载再挂主界面）；IPC `status` 增加 `backfillPending`。详见 `cocs/storage/DB_MIGRATIONS_AND_BACKFILLS.md`。

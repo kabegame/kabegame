@@ -33,6 +33,24 @@ fn album_index(albums: &[Album]) -> HashMap<PathBuf, Album> {
         .collect()
 }
 
+/// 文件所属的文件夹画册：按文件**直接父目录**精确匹配 `sync_folder`，与监听批次的归属规则一致
+/// （文件只属于直接父目录对应的画册，子目录里的文件归子画册；`sync_mode = none` 的画册不收）。
+///
+/// 下载器给新建文件入库后调用它补挂画册（同步探测到占用标记时放弃了导入）。
+/// 没有文件夹画册时只多一次查询，不做路径规范化。
+pub fn album_for_file(path: &Path) -> Result<Option<Album>, String> {
+    let albums = Storage::global().list_local_folder_albums()?;
+    if albums.is_empty() {
+        return Ok(None);
+    }
+    let Some(parent) = path.parent().map(normalize_path) else {
+        return Ok(None);
+    };
+    Ok(album_index(&albums)
+        .remove(&parent)
+        .filter(|album| SyncMode::from_str(&album.sync_mode) != Some(SyncMode::None)))
+}
+
 pub(crate) async fn process_batch(batch: FsBatch) -> Result<Vec<DiffRequest>, String> {
     let mut albums = Storage::global().list_local_folder_albums()?;
     let mut index = album_index(&albums);

@@ -103,5 +103,13 @@
   "timeDaysAgo": "{n} 天前",
   "timeWeeksAgo": "{n} 周前",
   "timeMonthsAgo": "{n} 个月前",
-  "timeYearsAgo": "{n} 年前"
+  "timeYearsAgo": "{n} 年前",
+  "startup": {
+    "settings": "正在读取设置…",
+    "plugins": "正在加载插件…",
+    "schema": "正在升级数据库（v{version} {name}）…",
+    "backfill": "正在更新数据：{name}",
+    "services": "正在启动服务…",
+    "failed": "启动失败"
+  }
 }

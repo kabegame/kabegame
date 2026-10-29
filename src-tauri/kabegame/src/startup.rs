@@ -94,7 +94,7 @@ impl<R: Runtime> CrawlerWebViewHandler for AppCrawlerWebViewHandler<R> {
     }
 }
 
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
+#[cfg(not(feature = "web"))]
 pub(crate) fn run_on_main_thread_sync<R, F>(app: &AppHandle<R>, f: F) -> Result<(), String>
 where
     R: Runtime,
@@ -285,17 +285,17 @@ fn activate_macos_window<R: tauri::Runtime>(
 
 // 壁纸组件，壁纸设置、轮播等功能
 #[cfg(not(feature = "web"))]
-pub fn init_wallpaper_controller(app: &mut tauri::App<crate::AppRuntime>) {
+pub fn init_wallpaper_controller(app_handle: &AppHandle<crate::AppRuntime>) {
     // 初始化全局壁纸控制器（基础 manager）
     // 使用全局单例（不再使用 manage）
-    if let Err(e) = WallpaperController::init_global(app.app_handle().clone()) {
+    if let Err(e) = WallpaperController::init_global(app_handle.clone()) {
         eprintln!("Failed to initialize WallpaperController: {}", e);
         return;
     }
 
     // 初始化壁纸轮播器
     // 使用全局单例（不再使用 manage）
-    if let Err(e) = WallpaperRotator::init_global(app.app_handle().clone()) {
+    if let Err(e) = WallpaperRotator::init_global(app_handle.clone()) {
         eprintln!("Failed to initialize WallpaperRotator: {}", e);
         return;
     }
@@ -308,7 +308,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App<crate::AppRuntime>) {
     // 创建系统托盘（使用 Tauri 2.0 内置 API）
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        crate::tray::setup_tray(app.app_handle().clone());
+        crate::tray::setup_tray(app_handle.clone());
     }
 
     tauri::async_runtime::spawn(async move {

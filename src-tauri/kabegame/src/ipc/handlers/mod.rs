@@ -298,6 +298,8 @@ fn handle_status() -> IpcResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "dataDir": kabegame_core::app_paths::AppPaths::global().data_dir.to_string_lossy(),
         "ipcProtocol": IPC_PROTOCOL_VERSION,
+        // 后台尚未跑完的回填作业数（只增字段，不升协议版本）。
+        "backfillPending": kabegame_core::storage::backfill_service::BackfillService::global().pending_count(),
         "features": {
             "storage": true,
             "plugin": true,

@@ -33,5 +33,8 @@
   "cleanHiddenEmpty": "No hidden images",
   "albumTree": "Album tree",
   "albumInfo": "Album info",
-  "metadataMigrationTitle": "Migrating plugin data"
+  "metadataMigrationTitle": "Migrating plugin data",
+  "backfillTitle": "Updating database",
+  "backfillWaiting": "Queued",
+  "backfillFailed": "Background database update failed ({name}); it will resume on next launch"
 }

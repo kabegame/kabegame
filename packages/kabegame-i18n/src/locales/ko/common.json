@@ -103,5 +103,13 @@
   "timeDaysAgo": "{n}일 전",
   "timeWeeksAgo": "{n}주 전",
   "timeMonthsAgo": "{n}개월 전",
-  "timeYearsAgo": "{n}년 전"
+  "timeYearsAgo": "{n}년 전",
+  "startup": {
+    "settings": "설정을 불러오는 중…",
+    "plugins": "플러그인을 불러오는 중…",
+    "schema": "데이터베이스 업그레이드 중 (v{version} {name})…",
+    "backfill": "데이터 업데이트 중: {name}",
+    "services": "서비스를 시작하는 중…",
+    "failed": "시작하지 못했습니다"
+  }
 }

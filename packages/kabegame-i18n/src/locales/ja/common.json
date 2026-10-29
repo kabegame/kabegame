@@ -103,5 +103,13 @@
   "timeDaysAgo": "{n} 日前",
   "timeWeeksAgo": "{n} 週間前",
   "timeMonthsAgo": "{n} か月前",
-  "timeYearsAgo": "{n} 年前"
+  "timeYearsAgo": "{n} 年前",
+  "startup": {
+    "settings": "設定を読み込み中…",
+    "plugins": "プラグインを読み込み中…",
+    "schema": "データベースを更新中（v{version} {name}）…",
+    "backfill": "データを更新中：{name}",
+    "services": "サービスを起動中…",
+    "failed": "起動に失敗しました"
+  }
 }

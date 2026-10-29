@@ -3,6 +3,7 @@ import { useOrganizeStore } from "@/stores/organize";
 import { useHiddenCleanupStore } from "@/stores/hiddenCleanup";
 import { useFolderSyncStore } from "@/stores/folderSync";
 import { useMetadataMigrationStore } from "@/stores/metadataMigration";
+import { useBackfillStore } from "@/stores/backfill";
 import { useUpdaterStore } from "@/stores/updater";
 import * as organizeService from "@/services/organize";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
@@ -16,6 +17,7 @@ export type BusyCard =
   | { kind: "hiddenCleanup" }
   | { kind: "folderSync"; albumId: string }
   | { kind: "metadataMigration"; pluginId: string }
+  | { kind: "backfill"; backfillId: string }
   | { kind: "updater" };
 
 const now = ref(Date.now());
@@ -56,6 +58,7 @@ export function useBusyTasks(): BusyTasksAggregation {
   const hiddenCleanupStore = useHiddenCleanupStore();
   const folderSyncStore = useFolderSyncStore();
   const metadataMigrationStore = useMetadataMigrationStore();
+  const backfillStore = useBackfillStore();
   const updaterStore = useUpdaterStore();
 
   const anyRunning = computed(
@@ -64,6 +67,7 @@ export function useBusyTasks(): BusyTasksAggregation {
       hiddenCleanupStore.running ||
       folderSyncStore.runningCount > 0 ||
       metadataMigrationStore.runningCount > 0 ||
+      backfillStore.runningCount > 0 ||
       updaterStore.isDownloading,
   );
 
@@ -83,10 +87,11 @@ export function useBusyTasks(): BusyTasksAggregation {
         () => hiddenCleanupStore.lastError,
         () => folderSyncStore.lastError,
         () => metadataMigrationStore.lastError,
+        () => backfillStore.lastError,
         () => updaterStore.lastDownloadError,
       ],
-      ([organizeError, hiddenCleanupError, folderError, metadataError, updaterError], previous) => {
-        const errors = [organizeError, hiddenCleanupError, folderError, metadataError, updaterError];
+      ([organizeError, hiddenCleanupError, folderError, metadataError, backfillError, updaterError], previous) => {
+        const errors = [organizeError, hiddenCleanupError, folderError, metadataError, backfillError, updaterError];
         if (errors.some((error, index) => !!error && error !== previous?.[index])) {
           hasUnseenFailure.value = true;
         }
@@ -117,6 +122,10 @@ export function useBusyTasks(): BusyTasksAggregation {
       .filter((task) => isDelayElapsed(task.startedAtMs))
       .sort((a, b) => a.startedAtMs - b.startedAtMs || a.pluginId.localeCompare(b.pluginId))
       .forEach((task) => result.push({ kind: "metadataMigration", pluginId: task.pluginId }));
+    // 后端按 introduced_at, id 顺序返回（运行中的在前、排队的在后），保持该顺序。
+    [...backfillStore.tasks.values()]
+      .filter((task) => isDelayElapsed(task.startedAtMs))
+      .forEach((task) => result.push({ kind: "backfill", backfillId: task.id }));
     if (updaterVisible.value) result.push({ kind: "updater" });
     return result;
   });
@@ -131,6 +140,11 @@ export function useBusyTasks(): BusyTasksAggregation {
         percentages.push(Math.max(0, Math.min(100, Math.round((task.processed / task.total) * 100))));
       }
     }
+    for (const task of backfillStore.tasks.values()) {
+      if (task.running && isDelayElapsed(task.startedAtMs) && task.total) {
+        percentages.push(Math.max(0, Math.min(100, Math.round((task.processed / task.total) * 100))));
+      }
+    }
     if (updaterVisible.value) percentages.push(updaterStore.downloadPercent);
     if (percentages.length === 0) return null;
     return Math.round(percentages.reduce((sum, value) => sum + value, 0) / percentages.length);
@@ -142,6 +156,7 @@ export function useBusyTasks(): BusyTasksAggregation {
     hiddenCleanupStore.clearError();
     folderSyncStore.clearError();
     metadataMigrationStore.clearError();
+    backfillStore.clearError();
     updaterStore.setDownloadError("");
   }
 

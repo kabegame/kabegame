@@ -112,8 +112,8 @@ pub enum PostprocessSource<'a> {
 - `DownloadOutcome::Path` → `PostprocessSource::Path`
 
 后处理内部根据 source 类型决定如何计算 hash、推断 MIME 和落盘：
-- `Bytes` 路径：直接从内存计算 hash/MIME，未去重时写入目标文件。
-- `Path` 路径：从临时文件读取计算 hash/MIME，未去重时将临时文件移动到目标位置（或 Android 上复制到 MediaStore），完成后删除临时文件。
+- `Bytes` 路径：直接从内存计算 hash/MIME，未去重时原子占坑目标文件并经占坑句柄写入（见 §6「目标文件占坑与占用标记」）。
+- `Path` 路径：从临时文件读取计算 hash/MIME，未去重时占坑目标名并把临时文件搬过去（Unix 同设备硬链接零拷贝，Windows / 跨设备复制进占坑句柄；Android 上复制到 MediaStore），完成后删除临时文件。
 
 ---
 
@@ -219,10 +219,23 @@ Hash 去重现在覆盖 Android `content://`，不再由 content 分支绕过。
 - 从 source 推断格式键，并在函数内计算最终文件名和扩展名
 - 桌面端若脚本指定了展示名（`custom_display_name`），`Bytes` 与 `Path { relocate_to: Some }` 都按 `custom_display_name + inferred_ext` 生成最终文件名
 - `images.type` 写入格式键，落盘采用该格式的规范后缀；桌面本地导入选择复制到目标目录时，也会在复制前按文件头 infer 并用规范后缀起名
-- 未重复时写入最终文件
+- 未重复时原子占坑最终文件并写入（见下一小节）
 - 生成缩略图或视频预览
 - 写入 `images`，其中 `local_path` 是磁盘路径，`thumbnail_path` 是缩略图路径或回退本地路径
-- 按需写入目标画册并广播事件
+- 按需写入目标画册并广播事件；新建文件若落在某个文件夹画册的 `sync_folder` 里，再补挂进该画册
+
+### 目标文件占坑与占用标记
+
+`images.local_path` 有唯一索引，旧实现用 `exists()` 判重选文件名，「查路径 → 处理 → 插入」不是原子的：同一帖子多张同名图并发下载会算出同一个 `name.jpg`，后写者覆盖前者内容、再撞 `UNIQUE constraint failed: images.local_path`，失败分支还会删掉前者的文件；下载目录与文件夹画册的 `sync_folder` 重叠时，监听器防抖后也会抢着给同一个文件建行。现在不改 SQL（唯一索引继续当「应用层仍有并发 bug」的报警器），只在应用层把「选文件名」从查询改成抢占：
+
+- `util.rs` 的 `occupy_unique_path(dir, filename, move_from)` 原子创建目标文件，`AlreadyExists` 就换下一个候选名（`stem(1).ext`、`stem(2).ext`……）；`occupy_unique_download_path[_with_name]` 在其上套用 URL / 展示名的命名规则。三者都返回 `OccupiedFile` 守卫，不再提供「只算路径不创建」的接口。
+- 文件出现在目标名的那一刻就带着**原生占用标记**：Unix 是 `flock` 排他锁（建议锁，不影响缩略图、尺寸读取等其它句柄）。为了让锁在文件出现前就生效，先建 `dir/.kabegame-occupy-<uuid>` 临时文件上锁，再 `hard_link` 到候选名（`EEXIST` 判重），成功后删临时名；不支持硬链接的文件系统退回 `create_new` + 上锁（中间有极短窗口，上锁失败只记日志、按无标记继续）。Windows 是只共享读的 share mode（`FILE_SHARE_READ`），创建即生效。
+- `move_from`（下载溢写文件、畅游 / CEF 原生下载的 `.part`）在 Unix 上「锁源文件 → 硬链接到候选名 → 删源名」，零拷贝，保留原 `rename` 的性能（`is_moved() == true`）；Windows、跨设备或不支持硬链接时得到空的占坑文件，由 `copy_from` 经句柄复制，再删源文件。
+- **Windows 上所有写入必须经占坑句柄**（`write_all` / `copy_from`），因为 share mode 不共享写；删除该文件前也必须先 drop 守卫（不共享删除）。其它句柄照常可读。
+- 守卫生命周期：`postprocess_downloaded_image` 全程持有 `Option<OccupiedFile>`，`add_image` 成功或失败后立刻 drop；「去重兜底」（按路径命中已有图片）删新建文件前、外层失败分支删文件前都先 drop。写入或复制失败时删掉不完整的目标文件。Android 的 `Bytes` 分支仍是 uuid 临时名 + `tokio::fs::write`，随后复制进 MediaStore，不占坑。
+- 本地导入的「复制到目标目录」（拖入文件夹画册）同样经 `occupy_unique_path` + `copy_from` 复制，`LocalImportHook` 持有守卫到后处理返回。
+- 文件夹同步给**新文件**建行前调用 `is_occupied_for_download` 探测（Unix `try_lock` 得 `WouldBlock`；Windows 以写方式打开得 `ERROR_SHARING_VIOLATION`），命中就放弃本次导入；未命中时再按路径查一次，因为标记在图片行写入之后才解除。
+- 补挂文件夹画册：本次新建并占坑的文件（下载器自己建的 `file_created`，或调用方建好并仍持有守卫的本地导入复制，后者在后处理里用同进程探测识别）`add_image` 成功、守卫 drop 后，经 `local_folder::album_for_file` 按**直接父目录**匹配 `sync_folder`（与监听批次归属一致，`sync_mode = none` 不收），命中就 `add_images_to_album_silent` + `emit_membership_added`，与输出画册的挂载并列、同一画册不重复写。这补上了同步被放弃的那一步；hash / 路径去重命中的链路没有新建文件，不做这个判断。
 
 桌面 WebView/CEF 下载完成后也复用同一后处理入口。`DownloadRequest`/`ActiveDownloadInfo` 携带 `task_id` / `surf_record_id`、`plugin_id`、输出画册、header 快照、脚本指定展示名和 `metadata_id`；敏感后端字段使用 `#[serde(skip)]`。CEF 只负责把字节落到 `downloads_temp_dir()/native-<id>.part` 并回传终态，worker 再以 `PostprocessSource::Path { relocate_to: Some(images_dir) }` 进入后处理。CEF 与 reqwest 下载发送相同 lifecycle，前端不再区分 `native` 字段。
 

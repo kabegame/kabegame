@@ -237,4 +237,7 @@ CREATE INDEX idx_task_logs_task_id ON task_logs(task_id);
         "#,
     )
     .expect("Failed to create initial database schema");
+    // ───────────── backfill_jobs（v048，与迁移共用 DDL） ─────────────
+    conn.execute_batch(super::BACKFILL_JOBS_DDL)
+        .expect("Failed to create backfill_jobs");
 }

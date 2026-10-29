@@ -33,5 +33,8 @@
   "cleanHiddenEmpty": "没有隐藏图片",
   "albumTree": "画册树",
   "albumInfo": "画册信息",
-  "metadataMigrationTitle": "迁移插件数据"
+  "metadataMigrationTitle": "迁移插件数据",
+  "backfillTitle": "更新数据库",
+  "backfillWaiting": "排队中",
+  "backfillFailed": "数据库后台更新失败（{name}），下次启动时会继续"
 }
