@@ -25,7 +25,7 @@ import { computed, ref } from "vue";
 import PluginDocRenderer, { type DocHeading } from "./PluginDocRenderer.vue";
 import PluginQuickPreviewCarousel from "./PluginQuickPreviewCarousel.vue";
 import type { Plugin } from "@/stores/plugins";
-import { bannerPreviewImages } from "../../utils/assetPath";
+import { useBannerPreviewImages } from "../../utils/assetPath";
 
 /** 滚动容器：供外层目录点击跳转 / scrollspy 使用 */
 const scrollEl = ref<HTMLElement | null>(null);
@@ -56,5 +56,5 @@ const emit = defineEmits<{
 }>();
 
 // 走马灯素材：按 kbAssets 声明顺序复用 banner 图，与快捷预览构造方式一致。
-const images = computed(() => bannerPreviewImages(props.plugin));
+const images = useBannerPreviewImages(computed(() => props.plugin));
 </script>

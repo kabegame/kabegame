@@ -1,4 +1,5 @@
-//! 各平台共用的插件文件 HTTP 路由。
+//! Android / Web 共用的插件文件 HTTP 路由。
+#[cfg(any(feature = "web", target_os = "android"))]
 use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
@@ -6,9 +7,12 @@ use axum::{
     routing::get,
     Router,
 };
-use kabegame_core::plugin::{package_file::*, PluginManager};
+#[cfg(any(feature = "web", target_os = "android"))]
+use kabegame_core::plugin::package_file::*;
+#[cfg(any(feature = "web", target_os = "android"))]
 use serde::Deserialize;
 
+#[cfg(any(feature = "web", target_os = "android"))]
 #[derive(Default, Deserialize)]
 struct FileQuery {
     v: Option<String>,
@@ -16,12 +20,14 @@ struct FileQuery {
     preview: Option<String>,
 }
 
+#[cfg(any(feature = "web", target_os = "android"))]
 pub fn plugin_file_routes() -> Router {
     Router::new()
         .route("/plugin_file/{plugin_id}/{*path}", get(handle_plugin_file))
         .layer(axum::middleware::from_fn(plugin_file_cors))
 }
 
+#[cfg(any(feature = "web", target_os = "android"))]
 async fn plugin_file_cors(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -42,6 +48,7 @@ async fn plugin_file_cors(
     response
 }
 
+#[cfg(any(feature = "web", target_os = "android"))]
 async fn handle_plugin_file(
     Path((id, path)): Path<(String, String)>,
     query: Result<Query<FileQuery>, axum::extract::rejection::QueryRejection>,
@@ -53,46 +60,32 @@ async fn handle_plugin_file(
     let Some(version) = query.v else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let origin = match (query.source, query.preview) {
-        (None, None) => PluginFileOrigin::Installed,
-        (Some(source_id), None) => PluginFileOrigin::Store { source_id },
-        (None, Some(token)) => PluginFileOrigin::Preview { token },
-        _ => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let Some(manager) = PluginManager::global_opt() else {
+    let Some(origin) = PluginFileOrigin::from_query(query.source, query.preview) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some(plugin) = manager.resolve_plugin_file(&id, &origin, &version) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Some(entry) = allowed_entry(&plugin, &path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
+    let if_none_match = headers
+        .get("if-none-match")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let result = tokio::task::spawn_blocking(move || -> Result<Response, String> {
-        let Some(file) = plugin.file_path.as_ref() else {
-            return Err("无插件文件".into());
+        let body = read_plugin_file(&id, &origin, &version, &path, if_none_match.as_deref())
+            .map_err(|error| error.to_string())?;
+        let (mut response, etag) = match body {
+            Some(body) => (
+                ([("content-type", body.mime)], body.bytes).into_response(),
+                body.etag,
+            ),
+            None => {
+                let plugin = kabegame_core::plugin::PluginManager::global_opt()
+                    .and_then(|manager| manager.resolve_plugin_file(&id, &origin, &version))
+                    .ok_or("插件文件不存在")?;
+                (StatusCode::NOT_MODIFIED.into_response(), etag_for(&plugin)?)
+            }
         };
-        let bytes = read_kgpg_entry(std::path::Path::new(file), &entry)?.ok_or("无条目")?;
-        let etag = etag_for(&plugin)?;
-        let matches = headers
-            .get("if-none-match")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| {
-                v.split(',').any(|value| {
-                    let value = value.trim().trim_start_matches("W/");
-                    value == etag || value == "*"
-                })
-            });
-        let response = if matches {
-            StatusCode::NOT_MODIFIED.into_response()
-        } else {
-            ([("content-type", mime_for_plugin_file(&entry))], bytes).into_response()
-        };
-        let mut response = response;
         response.headers_mut().insert(
             "etag",
             etag.parse()
-                .map_err(|e: axum::http::header::InvalidHeaderValue| e.to_string())?,
+                .map_err(|error: axum::http::header::InvalidHeaderValue| error.to_string())?,
         );
         response
             .headers_mut()

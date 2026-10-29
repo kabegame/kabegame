@@ -66,6 +66,9 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         // WPE 网页壁纸暂只支持 Windows（`web_entry` 在其它平台恒为 None），其它平台不登记。
         #[cfg(target_os = "windows")]
         tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);
+        // 壁纸窗口的 Vue 页同样用 <img> / <video> 显示图库媒体（file://）：登记 CEF 补丁 0005 + 0006，
+        // 应用页主 frame 的 file: 子资源免检；整窗导航到网页壁纸后主 frame 是 file: 文档，仍按壁纸目录拦截。
+        tauri_runtime_cef::allow_app_local_resources(WALLPAPER_LABEL);
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         let builder = WebviewWindowBuilder::new(

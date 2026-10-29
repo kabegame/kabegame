@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归待做）；Phase 7 方案已写（2026-10-28，关键决策待确认）；Phase 8 为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归 2026-10-29 完成）；Phase 6b 已实现（2026-10-29，静态检查与单测通过；真机回归待重编 CEF 后进行）；Phase 6c 已实现（2026-10-30，Windows 真机 9/12 通过）；Phase 6d 方案已写（2026-10-30）；Phase 7 方案已写（2026-10-28，关键决策待确认）；Phase 8 为实现清单
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -12,6 +12,9 @@
 > - [`phase-4-file-host-input.md`](phase-4-file-host-input.md)：Phase 4 点级方案——桌面 `file://` 宿主与鼠标转发。
 > - [`phase-5-shim-host.md`](phase-5-shim-host.md)：Phase 5 点级方案——运行时垫片、`file:` 来源判定与受限 IPC、拉取 / 推送协议、预览桥。
 > - [`phase-6a-file-preview.md`](phase-6a-file-preview.md)：Phase 6a 点级方案——预览 iframe 改走 `file://`，与桌面共用运行时目录拦截。
+> - [`phase-6b-file-media.md`](phase-6b-file-media.md)：Phase 6b 点级方案——图库媒体改走 `file://`（CEF 补丁 0006 子资源工厂、按 frame 分档的运行时闸门、插件详情 iframe 收紧、删除 `/proxy`）。
+> - [`phase-6c-no-http.md`](phase-6c-no-http.md)：Phase 6c 点级方案——桌面完全摆脱本地 HTTP 服务（0006 私有 CORS 列表 + 跨源白名单放开 `fetch(file:)`、Tauri 命令 `read_plugin_file` 替代 `/plugin_file`、拖出 / 复制改 `file://`、删除 `start_http_server`）。
+> - [`phase-6d-windows-drag-out.md`](phase-6d-windows-drag-out.md)：Phase 6d 点级方案——Windows 拖出放弃 `DownloadURL`，改走 CEF 补丁 0003 的真实文件链路（aura 钩子放宽到 Windows、清 `html` / `download_metadata`、不打 `x-renderer-taint`；运行时 / 应用 cfg 去平台限制；前端 `effectAllowed=copy`、Web 保留 `DownloadURL`；resolver `is_file()`）。
 > - [`phase-7-user-properties.md`](phase-7-user-properties.md)：Phase 7 点级方案——用户属性存储、属性面板、显示条件、本地化、`file` / `directory` 属性。
 > - `phase-N-<名称>.md`：其余 Phase 开工前的点级方案（待写）。
 
@@ -156,6 +159,9 @@ Tauri 自身的 `__TAURI_INTERNALS__` 初始化脚本是否同样只进主 frame
 | Phase 5 | 运行时垫片与宿主协议 | all-frames 垫片；`file:` 来源判定 + `wpe-web-capability`；桌面「拉取命令 + `listen` 推送」、预览「`postMessage` ↔ 父页面调命令」；作者默认值与界面语言 | Phase 4 |
 | Phase 6 | 桌面窗口收尾（暂时跳过） | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
 | Phase 6a | 预览 iframe 改 `file://` | 主窗口登记两项文件访问能力（0004 + CEF 补丁 0005）、`set_wpe_web_preview` 设根目录并返回入口、前端给 iframe 赋 `src`、CSP `file:`；预览与桌面同一套 Rust 拦截，`localStorage` 同源；删除 `/wpe` 目录服务 | Phase 5 |
+| Phase 6b | 图库媒体改 `file://` | CEF 补丁 0006 给应用页主 frame 加 `file:` 子资源工厂；运行时闸门按发起 frame 分档（应用页主 frame 免检、子 frame 导航与 `file:` 文档按根目录）；三个桌面平台与壁纸窗口都登记 0005；前端桌面媒体 URL 改 `file:///`、`fetch` / 拖出 / `/plugin_file` 走显式 HTTP 出口；插件详情 iframe 去 `allow-same-origin` + 内层 CSP；删除 `/proxy` | Phase 6a |
+| Phase 6c | 桌面零 HTTP | 修订 0006（工厂带该文档 origin 的私有 CORS 列表）+ 运行时登记 CEF 跨源白名单（应用 origin → `file`）放开 `fetch(file:)`；插件文件改 Tauri 命令 `read_plugin_file`（IPC 原始字节、前端按坐标缓存 blob / 文本，不加新 scheme；核心层纯函数与 Android / Web 的 axum 共用）；复制兜底与 Windows 拖出改 `file://`；删除 `start_http_server` / 桌面版 `get_http_server_base_url`；关闭无人使用的 Tauri asset 协议（`protocol-asset` feature + `assetProtocol` 配置 + runtime scheme 列表）；CSP `connect-src` 去 `127.0.0.1`、加 `file:` | Phase 6b |
+| Phase 6d | Windows 拖出走真实文件 | CEF 补丁 0003 的 aura 钩子放宽到 `IS_WIN`，delegate 注入文件时另清 `html` / `download_metadata`、不打 Windows 的 `chromium/x-renderer-taint`；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`；resolver 收紧为普通文件 | Phase 6c |
 | Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性（两种宿主都生效） | Phase 6a |
 | Phase 8 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 6 |
 | — | RGB 外设、鼠标交互 | 空实现 / 暂不做（见待定决策） | — |
@@ -324,6 +330,40 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 浏览器进程导航绕行）。
 `/wpe` HTTP 目录服务整个删除（Web 版不提供网页壁纸，应用 Web 服务器也不需要）。同时落实决策 11：WPE 只提供 Windows 桌面，
 其它平台对 `x-wpe/*` 只显示预览图。
+
+### Phase 6b — 图库媒体改 `file://`
+> 状态：已实现（2026-10-29），静态检查与单测通过；真机回归（需用户重编 CEF 带上 0006 后完全重启 dev）见 `versions/latest/regression.md`。依赖 Phase 6a。
+
+点级方案见 [phase-6b-file-media.md](phase-6b-file-media.md)。0005 落地后实测应用页 `<img src=file:>` 已过 `CanDisplay`
+但报 `ERR_UNKNOWN_URL_SCHEME`（非 `file:` 文档没有 `file:` 子资源工厂）。用户定下的形态：**主 frame 完全放开，子 frame 按根目录限制**。
+CEF 补丁 0006 在 `ChromeContentBrowserClientCef` 覆写 `RegisterNonNetworkSubresourceURLLoaderFactories`，沿用 0005 的键；运行时
+`resource_request_handler` 按 `frame.is_main()` / `is_navigation` / `request_initiator` 分三档，不按 frame id 建表（导航换进程会换 id）。
+三个桌面平台与壁纸窗口都登记 0005。前端桌面媒体 URL 直接 `file:///`，仍需 `fetch` 或交给外部的路径（Web 下载、复制兜底、
+Windows 拖出 `DownloadURL`、`/plugin_file`）走显式 `*ToHttpUrl`；本地 HTTP 服务不退役。插件详情 EJS iframe 去掉 `allow-same-origin`、
+加内层 CSP（`connect-src 'none'`，元素级远程图片照常），不再继承应用页的 `file:` 显示权；`/proxy` 开放代理删除（用户确认不需要 fetch 代理端点）。
+
+### Phase 6c — 桌面完全摆脱本地 HTTP 服务
+> 状态：代码已实施，Windows 真机 9/12 通过（2026-10-30）；拖出未通过，由 Phase 6d 取代。
+
+点级方案见 [phase-6c-no-http.md](phase-6c-no-http.md)。用户要求桌面不再起本地 HTTP、应用页能 `fetch(file:)` 读字节。调研：渲染侧
+已通（CEF Chrome runtime 的 extensions `Dispatcher` 把 `file` 注册为 fetch-API scheme），卡在浏览器侧两道 CORS 闸——CEF
+`ProxyURLLoaderFactory` 的跨源白名单（运行时建窗时 `CefAddCrossOriginWhitelistEntry(应用 origin, "file", "", true)`）与
+`FileURLLoaderFactory` 自己的列表（0006 改为给工厂实例一份只含该文档 origin 的私有列表；`nullptr` 不放行且 DCHECK）。不需要第三个补丁。
+`/plugin_file` 改 Tauri 命令 `read_plugin_file`（用户指定不加新 scheme，2026-10-30）：返回 `tauri::ipc::Response` 原始字节，CEF
+runtime 的 `ipc://` 主通道原生支持 raw 响应；前端按坐标缓存 blob URL / 文本，`PluginDocRenderer` 与 banner 走马灯改成先取 URL 再渲染，
+门禁由 ACL 现成提供；读取逻辑抽成核心层纯函数与 Android / Web 的 axum 共用。复制兜底直接 `fetch(file:)`，Windows 拖出 `DownloadURL`
+带 `file://`（真机失败：延迟渲染下载能完成，资源管理器仍拿不到文件；已另立 Phase 6d 把 0003 扩到 Windows）；6b 的 `*ToHttpUrl` 出口撤回；CSP `connect-src` 去 `127.0.0.1`、加 `file:`；
+顺带关掉 Tauri asset 协议（用户指定：`protocol-asset` feature、`assetProtocol` 配置、runtime 的 `asset` scheme，前端从未使用而它对所有 webview 开放 `**`）。
+
+### Phase 6d — Windows 拖出走真实文件
+> 状态：代码已实施（2026-10-30），待重编 CEF 与真机验证。
+
+点级方案见 [phase-6d-windows-drag-out.md](phase-6d-windows-drag-out.md)。两轮 `DEBUG-dragout` 插桩证实 Windows 的 `DownloadURL`
+延迟渲染下载能跑完（文件落在 `%TEMP%\chrome_drag…`），资源管理器松手后仍没有文件；运行时下载处理器还会把强制临时路径改成相对建议名。
+用户决定放弃这条路，改把 0003 扩到 Windows：Windows 与 Linux 共用 `web_contents_view_aura.cc`，内层补丁把钩子门控放宽到 `IS_WIN`，
+delegate 注入文件时另清 `html`（`CF_HTML`）与 `download_metadata`（第二份延迟渲染 `CF_HDROP`），Windows 不打跨进程可见的
+`chromium/x-renderer-taint`。CEF API 与 cef-rs 三平台 bindings 不变；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制，
+resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`。
 
 ### Phase 7 — 用户属性
 > 状态：方案已写（2026-10-28），关键决策待确认。Phase 6 暂时跳过，本 Phase 依赖 Phase 6a。

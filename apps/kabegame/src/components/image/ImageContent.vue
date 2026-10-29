@@ -29,7 +29,7 @@
           :draggable="dragEnabled"
           @load="onLoad"
           @error="onImgError(thumbSlot, $event)"
-          @dragstart="onDragStart"
+          @dragstart="onDragStart(thumbSlot, $event)"
         />
         <img
           v-if="origEngaged && !origSlot.dead"
@@ -43,7 +43,7 @@
           :draggable="dragEnabled"
           @load="onLoad"
           @error="onImgError(origSlot, $event)"
-          @dragstart="onDragStart"
+          @dragstart="onDragStart(origSlot, $event)"
         />
       </template>
 
@@ -60,7 +60,7 @@
         :draggable="dragEnabled"
         @load="onLoad"
         @error="onImgError(thumbSlot, $event)"
-        @dragstart="onDragStart"
+        @dragstart="onDragStart(thumbSlot, $event)"
       />
 
       <!-- 非视频 WPE 壁纸（web / scene）的原图形态：交给壁纸组件渲染（预览「桌面画布」内可交互） -->
@@ -95,7 +95,7 @@
         @loadeddata="onLoad"
         @canplay="onLoad"
         @error="onVideoError"
-        @dragstart="onDragStart"
+        @dragstart="onDragStart(videoSlot, $event)"
         @mousedown="onVideoMouseDown"
       />
     </template>
@@ -121,8 +121,8 @@ import { sendDebugEvent } from "../../debugIngest";
 // #endregion debug-drag
 import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
-import { fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl, compatibleToUrl } from "../../utils/fileUrl";
-import { IS_ANDROID, IS_LINUX, IS_MACOS } from "../../env";
+import { compatibleToUrl, fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
+import { IS_ANDROID, IS_WEB } from "../../env";
 
 /**
  * 资源开始加载
@@ -218,26 +218,25 @@ const dragFileName = (sourceUrl: string): string => {
 };
 
 /**
- * 原生拖拽起手：Windows 复用触发 dragstart 的元素当前实际加载成功的 source。
- * 原图缺失并已回退到兼容副本或缩略图时，拖出内容与用户此刻看到的内容一致。
+ * 原生拖拽起手。两条路径互斥，不共用载荷：
  *
- * 两条平台路径互斥，不共用载荷：
- *
- * - **Linux** 只写自定义 mime 里的 image id，浏览器进程据此查库换成真实本地文件
- *   （见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`）。这里**不再写** http 下载 URL：
- *   注入文件成功时 Chromium 会把 url_infos / text / file_contents 一起清掉，写了
- *   也留不下；留着只会让人误以为 Linux 拖出仍依赖 http server。
+ * - **桌面三平台（Windows / macOS / Linux）** 只写自定义 mime 里的 image id，浏览器进程
+ *   据此查库换成库内原文件（CEF 补丁 0003，见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`；
+ *   Windows 落地为 `CF_HDROP`）。这里**不写** URL：注入文件成功时 Chromium 会把
+ *   url_infos / text / file_contents / html / download_metadata 一并清掉，写了也留不下；
+ *   Windows 上 `DownloadURL` 还会多出一份延迟渲染的 `CF_HDROP` 与真实文件抢格式。
  *   自定义 mime 走 `DropData::custom_data`，不被 Chromium 的拖拽数据过滤器改写；
- *   只提议 id 而不传路径，即使前端被注入也只能导出图库中已有的图片。
- * - **Windows** 仍走 http 下载 URL：`DownloadURL`（Chromium 专有
- *   `mime:filename:url` 三段格式，Windows 上由 `PrepareDragForDownload` 转成
- *   CF_HDROP 虚拟文件；实际内容与 Content-Type 由响应决定，mime 段仅是提示，
- *   故直接用格式键）+ `text/uri-list`/`text/plain`。URL 可能来自 `/file/{*path}`、
- *   `/thumbnail/{*path}` 或 `/compatible/{*path}`，由当前媒体元素决定。
+ *   只提议 id 而不传路径，即使前端被注入也只能导出图库中已有的普通文件。
+ *   `effectAllowed` 定成 `copy`：Blink 默认 `uninitialized` 会把 move 一并放开，资源管理器
+ *   对同卷 `CF_HDROP`、Linux 文件管理器对同文件系统都默认移动，库内文件会被挪走。
+ * - **Web 版** 保留 `DownloadURL` + `text/uri-list` + `text/plain`：真实浏览器里
+ *   `DownloadURL` 是有效的拖出下载手段，URL 是 HTTP / CDN。地址按触发 dragstart 的元素
+ *   所属渲染槽**当前所在的源**（local / comp / thumb）生成，原图缺失并已回退到兼容副本或
+ *   缩略图时，拖出内容与用户此刻看到的内容一致。Android 没有原生拖出，dragstart 不会发生。
  *
  * nativeDrag 关闭时把 dragstart 掐掉：`draggable=false` 之外的第二道闸。
  */
-const onDragStart = (event: DragEvent) => {
+const onDragStart = (slot: MediaSlot, event: DragEvent) => {
   // #region debug-drag
   void sendDebugEvent(
     "img_dragstart",
@@ -252,21 +251,24 @@ const onDragStart = (event: DragEvent) => {
   beginInternalDrag();
   const dt = event.dataTransfer;
   if (!dt) return;
-  // Linux / macOS 走真实文件拖出：只提议 image id，由 browser process 侧授权后注入
-  // 本地路径（见 cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md）。这里写 HTTP URL 是徒劳的
-  // ——链路生效时 Chromium patch 会把 URL、text 与缩略图字节一并清掉。
-  if (IS_LINUX || IS_MACOS) {
-    if (props.image.id) dt.setData(DRAG_IMAGE_ID_MIME, props.image.id);
+  if (IS_WEB) {
+    // Web 版：真实浏览器里 DownloadURL 是有效的拖出下载手段，URL 是 HTTP / CDN。
+    const target = event.target;
+    const currentSrc =
+      target instanceof HTMLImageElement || target instanceof HTMLVideoElement ? target.currentSrc : "";
+    const url = currentSrc || slot.source?.url || "";
+    if (!url) return;
+    // filename 段不能含冒号（DownloadURL 以冒号分段）
+    const name = dragFileName(url).replace(/:/g, "_");
+    dt.setData("DownloadURL", `${displayImageMimeType(props.image.type)}:${name}:${url}`);
+    dt.setData("text/uri-list", url);
+    dt.setData("text/plain", url);
     return;
   }
-  const media = event.currentTarget as HTMLImageElement | HTMLVideoElement | null;
-  const url = media?.currentSrc || media?.src || "";
-  if (!url) return;
-  // filename 段不能含冒号（DownloadURL 以冒号分段）
-  const name = dragFileName(url).replace(/:/g, "_");
-  dt.setData("DownloadURL", `${displayImageMimeType(props.image.type)}:${name}:${url}`);
-  dt.setData("text/uri-list", url);
-  dt.setData("text/plain", url);
+  // 桌面三平台走真实文件拖出：只提议 image id，由 browser process 侧授权后注入本地路径
+  // （见 cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md）。只允许复制，库内文件不能被目标端移走。
+  dt.effectAllowed = "copy";
+  if (props.image.id) dt.setData(DRAG_IMAGE_ID_MIME, props.image.id);
 };
 
 /**
@@ -323,12 +325,11 @@ const thumbPath = computed(() => {
 });
 
 /** WPE 预览是否真的独立于壁纸目录（缺 preview 时 thumbnail_path 会回落成目录本身）。 */
-const hasWpePreview = computed(
-  () => !!thumbPath.value && thumbPath.value !== localPath.value,
-);
+const hasWpePreview = computed(() => !!thumbPath.value && thumbPath.value !== localPath.value);
 
 interface Source {
   tag: ImageSourceTag;
+  /** 显示用 URL：桌面 CEF 为 `file://`，Android / Web 为本地 HTTP 或 CDN。 */
   url: string;
 }
 
@@ -365,6 +366,8 @@ function useSlot(chain: () => Source[]) {
   const index = ref(0);
   const exhausted = ref(false);
   return reactive({
+    /** 当前所在的源；链走空时为 undefined。 */
+    source: computed<Source | undefined>(() => chain()[index.value]),
     src: computed(() => chain()[index.value]?.url ?? ""),
     dead: computed(() => exhausted.value || chain().length === 0),
     onError() {
@@ -388,6 +391,8 @@ const videoSlot = useSlot(() =>
     ? buildChain(compPath.value, localPath.value, thumbPath.value)
     : buildChain(thumbPath.value, compPath.value, localPath.value),
 );
+
+type MediaSlot = typeof thumbSlot;
 
 // stale 守卫：已被 key 换掉的旧元素卸载后仍可能派发迟到的 load/error 事件，
 // 其 handler 闭包指向存活实例的槽，会烧掉不相干的链环——一律忽略。

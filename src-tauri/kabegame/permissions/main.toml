@@ -83,6 +83,7 @@ commands.allow = [
   "run_missed_configs",
   "dismiss_missed_configs",
   "get_plugins",
+  "read_plugin_file",
   "refresh_plugins",
   "get_plugin_detail",
   "delete_plugin",

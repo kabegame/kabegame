@@ -789,27 +789,51 @@ mod imp {
             // 会被 i.pximg.net 等校验 referer 的 CDN 403。这里对下载请求补回
             // Referer = 当前主框架页(即用户正在浏览的来源页),还原浏览器从页面 P
             // 点击下载图片时本应带的 Referer(策略 ORIGIN:仅发送来源页 origin)。
+            //
+            // 非下载请求：登记了任一文件访问能力（0004 / 0005）的 webview 的 `file:` 请求按发起
+            // frame 分档，决定挂不挂目录闸门（见 file_access 模块注释）。
             fn resource_request_handler(
                 &self,
                 browser: Option<&mut Browser>,
-                _frame: Option<&mut Frame>,
+                frame: Option<&mut Frame>,
                 request: Option<&mut Request>,
-                _is_navigation: ::std::os::raw::c_int,
+                is_navigation: ::std::os::raw::c_int,
                 is_download: ::std::os::raw::c_int,
-                _request_initiator: Option<&CefString>,
+                request_initiator: Option<&CefString>,
                 _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
             ) -> Option<ResourceRequestHandler> {
                 if is_download != 1 {
-                    // 登记了任一文件访问能力（0004 / 0005）的 webview：每个 `file:` 请求都要过目录约束。
                     let is_file_request = request
                         .map(|request| CefString::from(&request.url()).to_string())
                         .is_some_and(|url| crate::file_access::is_file_url(&url));
-                    if is_file_request
-                        && crate::file_access::is_file_document_webview(&self.label)
+                    if !is_file_request
+                        || !crate::file_access::is_file_document_webview(&self.label)
                     {
-                        return Some(FileDocumentGuardHandler::new(self.label.clone()));
+                        return None;
                     }
-                    return None;
+                    // 按发起 frame 分档：
+                    // - 应用页主 frame 的子资源：登记了 0005 的 label 免检（图库媒体走 file://，补丁 0006）；
+                    // - 子 frame 的导航、主 frame 的导航、file: 文档（含壁纸窗口整窗 file: 时的主 frame）
+                    //   的子资源：按根目录。
+                    // 发起方 origin 是建工厂时钉死的文档 origin（子 frame 导航为 "null"），比 frame.url()
+                    // 的缓存可靠；两者任一是 file: 就走闸门。
+                    let frame_is_main = frame.as_ref().is_some_and(|frame| frame.is_main() == 1);
+                    let frame_url = frame
+                        .map(|frame| CefString::from(&frame.url()).to_string())
+                        .unwrap_or_default();
+                    let initiator = request_initiator
+                        .map(|initiator| initiator.to_string())
+                        .unwrap_or_default();
+                    let app_page_subresource = is_navigation == 0
+                        && frame_is_main
+                        && !initiator.is_empty()
+                        && initiator != "null"
+                        && !crate::file_access::is_file_url(&initiator)
+                        && !crate::file_access::is_file_url(&frame_url);
+                    if app_page_subresource && crate::file_access::app_page_open(&self.label) {
+                        return None;
+                    }
+                    return Some(FileDocumentGuardHandler::new(self.label.clone()));
                 }
                 let referrer = browser
                     .and_then(|b| b.main_frame())
@@ -1129,43 +1153,43 @@ mod imp {
                 _browser: Option<&mut Browser>,
                 drag_data: Option<&mut DragData>,
             ) {
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
-                {
-                    let Some(drag_data) = drag_data else { return };
-                    let custom_data = drag_data
-                        .custom_data(Some(&CefString::from(DRAG_IMAGE_ID_MIME)));
-                    // 先判空指针再转 CefString:`From<&CefStringUserfreeUtf16>` 对 null
-                    // 是容错的,但会往 stderr 刷一行 "Invalid UTF-16 string" —— 而不带本
-                    // 自定义 mime 的拖拽(拖文字、拖链接)是常态,不能每次都刷。
-                    // 裸 sys 类型经 `cef` 再导出的 `sys` 取得(cef-rs lib.rs 的
-                    // `pub use cef_dll_sys as sys`),本 crate 不直接依赖 cef-dll-sys。
-                    let custom_data_ref: Option<&cef::sys::_cef_string_utf16_t> =
-                        (&custom_data).into();
-                    if custom_data_ref.is_none() {
-                        return;
-                    }
-                    let id = CefString::from(&custom_data).to_string();
-                    if id.is_empty() {
-                        return;
-                    }
-                    let Some(resolver) = runtime::drag_file_resolver() else {
-                        return;
-                    };
-                    let Some(path) = resolver(&self.label, &id) else {
-                        return;
-                    };
-                    let Some(path_str) = path.to_str() else {
-                        return;
-                    };
-                    // 两个平台的落地路径都按 path 的 basename 命名、忽略 display_name
-                    // (macOS 侧是 public.file-url,接收端取 lastPathComponent);仍填入
-                    // basename,保证 CEF 的 GetFileNames() 语义自洽。
-                    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
-                    drag_data.add_file(
-                        Some(&CefString::from(path_str)),
-                        Some(&CefString::from(name)),
-                    );
+                // 三个桌面平台共用:Linux / Windows 走 aura 推模型(OSExchangeData),macOS 走
+                // WebDragSource 拉模型;哪个平台真会回调由 CEF 补丁 0003 决定,未带补丁的 CEF
+                // 不会进来。
+                let Some(drag_data) = drag_data else { return };
+                let custom_data = drag_data
+                    .custom_data(Some(&CefString::from(DRAG_IMAGE_ID_MIME)));
+                // 先判空指针再转 CefString:`From<&CefStringUserfreeUtf16>` 对 null
+                // 是容错的,但会往 stderr 刷一行 "Invalid UTF-16 string" —— 而不带本
+                // 自定义 mime 的拖拽(拖文字、拖链接)是常态,不能每次都刷。
+                // 裸 sys 类型经 `cef` 再导出的 `sys` 取得(cef-rs lib.rs 的
+                // `pub use cef_dll_sys as sys`),本 crate 不直接依赖 cef-dll-sys。
+                let custom_data_ref: Option<&cef::sys::_cef_string_utf16_t> =
+                    (&custom_data).into();
+                if custom_data_ref.is_none() {
+                    return;
                 }
+                let id = CefString::from(&custom_data).to_string();
+                if id.is_empty() {
+                    return;
+                }
+                let Some(resolver) = runtime::drag_file_resolver() else {
+                    return;
+                };
+                let Some(path) = resolver(&self.label, &id) else {
+                    return;
+                };
+                let Some(path_str) = path.to_str() else {
+                    return;
+                };
+                // 三个平台的落地文件名都取自 path 本身、忽略 display_name(Windows 是
+                // CF_HDROP 里的路径,Linux 是 text/uri-list,macOS 是 public.file-url,接收端
+                // 都取最后一段);仍填入 basename,保证 CEF 的 GetFileNames() 语义自洽。
+                let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+                drag_data.add_file(
+                    Some(&CefString::from(path_str)),
+                    Some(&CefString::from(name)),
+                );
             }
 
             fn on_drag_enter(
@@ -1519,15 +1543,29 @@ mod imp {
         // 登记过文件访问能力的 webview：同一个字典里按能力带上 bool 键（值都为 true）——
         // `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004：只给这个 browser 打开
         // `allow_file_access_from_file_urls`）与 `kabegame.allow_local_resources`（补丁 0005：
-        // 应用页可加载 `file:`）。弹窗路径（on_before_popup）另建字典、不带这些键，能力不随弹窗
-        // 扩散；DevTools 窗口会复制本字典，但 0005 在补丁两侧都不授弹窗里提交的文档。弹窗的初始
-        // `about:blank` 空文档会按 Blink 自身规则从 opener 继承 `CanDisplay(file:)`，它沿用本窗口的
-        // client，`file:` 请求照样过下面的闸门。
+        // 应用页可加载 `file:`；补丁 0006 按同一键给最外层主 frame 补 `file:` 子资源工厂）。弹窗路径
+        // （on_before_popup）另建字典、不带这些键，能力不随弹窗扩散；DevTools 窗口会复制本字典，但
+        // 0005 / 0006 都不授弹窗。弹窗的初始 `about:blank` 空文档会按 Blink 自身规则从 opener 继承
+        // `CanDisplay(file:)`，它沿用本窗口的 client，`file:` 子 frame 照样过下面的闸门（弹窗没有
+        // 0006 的子资源工厂，自身的 `file:` 子资源加载不了）。
         for key in crate::file_access::extra_info_keys(&webview_label) {
             if initialization_scripts_extra_info.set_bool(Some(&CefString::from(key)), 1) == 0 {
                 return Err(Error::CreateWebview(Box::new(io::Error::other(format!(
                     "CEF failed to write extra_info key '{key}'"
                 )))));
+            }
+        }
+        if crate::file_access::app_page_open(&webview_label) {
+            if let Ok(url) = Url::parse(&pending.url) {
+                // Rust url 库把自定义 tauri: 视为 opaque；CEF 已注册它为标准 origin。
+                let origin = if url.scheme() == "tauri" {
+                    format!("tauri://{}", url.host_str().unwrap_or("localhost"))
+                } else {
+                    url.origin().ascii_serialization()
+                };
+                if !crate::file_access::grant_app_fetch_file(&origin) {
+                    eprintln!("[cef-runtime] cross-origin whitelist for {origin} -> file failed (webview '{webview_label}')");
+                }
             }
         }
         let on_page_load = pending.on_page_load_handler.take().map(Rc::new);

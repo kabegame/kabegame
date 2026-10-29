@@ -122,6 +122,10 @@ deno task pathql:generate        # 生成 PathQL 客户端 packages/kabegame-pat
 deno task patch deno             # 将 third/deno 重置到干净基线，然后应用完整补丁序列
 deno task patch deno -r          # 将 third/deno 重置到干净基线
 deno task patch --all --check    # 试运行所有由补丁管理器管理的 third-patches/* 序列
+deno task patch cef --gen --from 0005 --out third-patches/cef/0006-xxx.patch
+                                 # 把 third/cef 工作树里「系列到 0005 之外」的剩余改动导出成新补丁；
+                                 # 不 reset、只读工作树（临时 GIT_INDEX_FILE）；省略 --out 写 stdout，
+                                 # 省略 --from 取系列最后一个，--from none 以纯净基线为底
 deno task build:ffmpeg           # 从源码构建 x264（third/x264）+ FFmpeg libav* 库（本机）
                                  # x264 已内置（无需系统 libx264）；Linux 构建使用
                                  # 执行标准/CLI Cargo 构建前必须先运行此命令。

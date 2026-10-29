@@ -114,12 +114,14 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览「桌面画布」`WallpaperDesktopCanvas`、`get_wallpaper_target_for_image`、背景层退回预览图，以及 `cef-ipc` 只收主 frame 的纵深防御；
     **图库预览 `file:` iframe**（Phase 6a，`/wpe` HTTP 目录服务随之删除）：主窗口建窗前 `allow_file_documents("main")` 与 `allow_app_local_resources("main")`、预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录（拒绝壁纸窗口、前端串行调用）、CSP `frame-src … file:`、两种宿主对照表（同一套运行时目录拦截，`localStorage` 同源）；
     **桌面 `file://` 宿主与鼠标转发**：`WindowWallpaperManager::set_wallpaper_path` 按路径判定并导航自己的窗口（网页壁纸时整窗导航到入口 `file://`、切走导航回 `mount()` 时记住的应用页，幂等；入口、根目录与转发线程随 `WallpaperWindow` 对象走、`Drop` 清理）、CEF 补丁 0004 按窗口开文件访问 + `OnBeforeResourceLoad` 按壁纸目录拦截 `file:` 请求，以及 Windows 轮询式鼠标移动 / 左键转发（`input_forward`，`inject_mouse`）；
-    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（远程 `file:` 来源只得 `wpe-web-capability`）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及接受的全局事件可见性。
+    **运行时垫片与宿主协议**：all-frames 垫片 `wpe_shim.js`（按地址自判启用）、`pull` / `listen` 两个原语（桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`，预览 iframe `postMessage` 给宿主页、由 `wpeWebBridge` 调 `get_wpe_web_state` 并用 `useTauriProxy` 代为 listen）、语言（`setting-change`）与本张 `metadataId` 补丁触发重拉、load 后首次全量 + 之后按键差异 + 换 listener 补投 + 拉取编号丢弃乱序、`file:` 文档照常注入 Tauri 脚本且运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（远程 `file:` 来源只得 `wpe-web-capability`）、导航成功后 `clear_js_listeners()`（tauri 补丁 0011）清掉旧文档的 JS 事件监听，以及接受的全局事件可见性；
+    **图库媒体走 `file://` 与按发起 frame 分档的闸门**（Phase 6b，CEF 补丁 0006）：三个桌面平台的主窗口与壁纸窗口都登记 0005，应用页主 frame 的 `<img>` / `<video>` / CSS 子资源免检，子 frame 导航与 `file:` 文档仍按根目录；前端 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl` 在桌面产出 `file://`，下载 / 复制兜底直接 `fetch(file:)`、Windows 拖出自 Phase 6d 起改走 0003 真实文件链路（`CF_HDROP`）；插件详情 EJS iframe 改 opaque origin + 内层 CSP；删除桌面本地 HTTP 服务；插件文件改由 Tauri 原始字节命令读取，0006 的私有 CORS 列表与运行时跨源白名单开放 `fetch(file:)`。
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 预览页面 `fetch` 同目录文件失败或越界读被放行 / 关闭预览后根目录未清空 / 预览画布比例或交互 / 切走后渲染进程未回收、子 frame 伪造 `cef-ipc` 请求、非 Windows 平台的 WPE 行为；
     排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应 / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件；
-    排查壁纸窗口导航后旧文档的事件监听残留、预览 iframe 收不到属性或关闭预览后仍在转发事件。
+    排查壁纸窗口导航后旧文档的事件监听残留、预览 iframe 收不到属性或关闭预览后仍在转发事件；
+    排查桌面图库图片 / 视频不显示（`ERR_UNKNOWN_URL_SCHEME`、图库媒体被误判 `deny file:`）、下载拿到 `file://`、插件详情模板的请求被 CSP 拒绝。
 
 ## 下载与任务（`downloader-tasks/`）
 
@@ -189,7 +191,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - [plugins/PLUGIN_FILE_ENDPOINT.md](plugins/PLUGIN_FILE_ENDPOINT.md)
   - 推荐配置由 `plugin://…/recommended` rows 观察方读取，按来源版本隔离；写后 `plugin-changed` 差异驱动相关 key 刷新。
-  - 主题：插件轻量记录与 `/plugin_file` 按需读取，`v` / `source` / `preview` 参数、白名单、404、ETag、推荐配置动态导入态、Android loopback 转发、前端缓存失效与任务脚本快照。
+  - 主题：插件轻量记录与桌面命令 / Android-Web `/plugin_file` 按需读取，`v` / `source` / `preview` 参数、白名单、404、ETag、推荐配置动态导入态、Android loopback 转发、前端缓存失效与任务脚本快照。
   - 适用场景：排查文档/图片/模板加载、错误版本或预览失效、商店来源隔离、推荐配置导入态、启动插件负载和脚本按需读取。
 
 - [plugins/PLUGIN_ASSETS.md](plugins/PLUGIN_ASSETS.md)
@@ -201,7 +203,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：插件列表或导航更新角标延迟、缓存失效与命中行为分析；排查不兼容版本仍提示或被导入、从插件详情返回后 tab 丢失或商店列表重拉、源增删后 tab 未刷新、商店卡片已安装状态不同步。
 
 - [plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md](plugins/PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md)
-  - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → `/plugin_file` 懒加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`），以及 CLI `--freeze-template` 冻结进 `metadata.template` 的模板（与插件模板并行获取、非空即覆盖，去重覆盖时随 data 一起替换或清空，迁移原样保留）。
+  - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → 桌面命令 / Android-Web `/plugin_file` 懒加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`），以及 CLI `--freeze-template` 冻结进 `metadata.template` 的模板（与插件模板并行获取、非空即覆盖，去重覆盖时随 data 一起替换或清空，迁移原样保留）。
   - 适用场景：编写/调试 `description.ejs`、理解模板从 ZIP 到展示的流程、排查详情区空白或跨域请求失败；`--id` 测试 id 下载的图片看不到模板。
 
 ## Tauri（`tauri/`）
@@ -215,16 +217,16 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：android dev/prod 真机并存隔离；排查 `Project directory ... does not exist`、auto-launch 拉起失败、`BuildConfig` 解析错误；升级 tauri-cli 版本；排查 deb 包 webkit 依赖或 Depends 重复。
 
 - [../src-tauri/tauri-runtime-cef/README.md](../src-tauri/tauri-runtime-cef/README.md)
-  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；**文件拖放**（`TauriCefDragHandler` 把 CEF 回调翻成 Tauri 四态 `WindowEvent::DragDrop`，依赖 patch 0002 补出的 `OnDragOver`/`OnDragLeave`/`OnDrop`，语义对齐 wry）；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包、**Chrome ProcessSingleton 双实例收口**（同 profile 双开时后到者识别 `NORMAL_EXIT_PROCESS_NOTIFIED` 干净退出，先到者经 `on_already_running_app_relaunch` 拦掉默认「弹一个浏览器窗口」、转 app 层注册的显示主窗口处理），以及 CEF 上游 pin/patch series 维护流程（`third/cef` 的 gitlink 始终指向官方上游 pin、patch 走标准系列；`automate-git.py` 只 fetch 分支、只认提交，故构建前由 `stageCefPatchesAsCommit()` 把工作区自动固化到 `kabegame-build` 分支——曾经人工维护 fork 分支并让 gitlink 误指向本地提交的做法已废除）。
+  - 主题：Windows/macOS/Linux 桌面 CEF runtime 后端的架构、平台门控与 CEF Views/windowed GPU 路径；自定义协议、page-load 生命周期与 `invoke` IPC 桥接；**`file:` 访问策略**（按 label 登记 0004 / 0005 能力，闸门按发起 frame 分档：应用页主 frame 的子资源免检，子 frame 导航与 `file:` 文档按根目录）；**文件拖放**（`TauriCefDragHandler` 把 CEF 回调翻成 Tauri 四态 `WindowEvent::DragDrop`，依赖 patch 0002 补出的 `OnDragOver`/`OnDragLeave`/`OnDrop`，语义对齐 wry）；Windows manifest 与 runtime 安装；`kabegame` package 内的扁平 `kabegame-cef-helper` 子进程、macOS 构建期直链 framework 与裸 exe dev 运行、CefAppProtocol external pump、release 打包、**Chrome ProcessSingleton 双实例收口**（同 profile 双开时后到者识别 `NORMAL_EXIT_PROCESS_NOTIFIED` 干净退出，先到者经 `on_already_running_app_relaunch` 拦掉默认「弹一个浏览器窗口」、转 app 层注册的显示主窗口处理），以及 CEF 上游 pin/patch series 维护流程（`third/cef` 的 gitlink 始终指向官方上游 pin、patch 走标准系列；`automate-git.py` 只 fetch 分支、只认提交，故构建前由 `stageCefPatchesAsCommit()` 把工作区自动固化到 `kabegame-build` 分支——曾经人工维护 fork 分支并让 gitlink 误指向本地提交的做法已废除）。
   - 适用场景：排查桌面 CEF 启动/渲染/IPC、升级 CEF/Chromium（官方 pin + patch series re-vendor）、调整 `tauri-runtime-cef` trait 适配；排查从外部拖入文件被 CEF 直接打开成预览页、`onDragDropEvent` 不触发；排查并发双开（如开机自启竞态）凭空多出一个带应用图标的 Chrome 窗口、或第二实例以 status=101 崩溃；排查 Windows GPU 子进程、macOS 裸跑子进程起不来/窗口空白/黑屏、message pump，或三平台 CEF_PATH 解析与打包；确认自编的 CEF 里到底有没有 kabegame patch。
 
 - [tauri/LINUX_REAL_FILE_DRAG_OUT.md](tauri/LINUX_REAL_FILE_DRAG_OUT.md)
-  - 主题：Linux 与 macOS 的 CEF standard 从图库拖出真实本地文件的完整链路。涵盖 Chromium `FilterDropData` 安全边界、前端 image id → Chromium/CEF delegate → Rust DB 授权的三段式权责、Linux「推」(`OSExchangeData`) 与 macOS「拉」(`NSPasteboardWriting` + `public.file-url`) 两种载荷模型的差异、Wayland/X11 的 URL/text/缩略图载荷清理与 macOS 额外要清的 html/download promise、macOS 必须摘掉的 `org.chromium.renderer-initiated-drag` 污染标记（不摘则所有 Chromium 系接收方都收不到文件）、Chromium/CEF/cef-rs/runtime 四层维护位置、label 与 DB 两道安全门，以及 Windows 复用当前媒体 `currentSrc` 的 wildcard HTTP URL 拖出行为。
-  - 适用场景：排查 Linux 拖到 GIMP/Krita、浏览器上传框或文件管理器仍得到 localhost URL；升级 CEF/Chromium 或 cef-rs bindings；修改拖出授权、webview label 白名单或 custom mime；确认 Windows `DownloadURL` 为什么不受影响。
+  - 主题：三个桌面平台（Linux / macOS / Windows）的 CEF standard 从图库拖出真实本地文件的完整链路。涵盖 Chromium `FilterDropData` 安全边界、前端 image id → Chromium/CEF delegate → Rust DB 授权（label 白名单 + `is_file()`，`x-wpe/*` 目录行不得拖出）的三段式权责、Linux / Windows 共用 aura「推」(`OSExchangeData`，Windows 落地为 `CF_HDROP`) 与 macOS「拉」(`NSPasteboardWriting` + `public.file-url`) 两种载荷模型的差异、Wayland/X11 的 URL/text/缩略图载荷清理、Windows 额外要清的 `html`（`CF_HTML`）与 `download_metadata`（第二份延迟渲染 `CF_HDROP`）、macOS 额外要清的 html/download promise、macOS 与 Windows 都必须摘掉的渲染器污染标记（macOS `org.chromium.renderer-initiated-drag`、Windows `chromium/x-renderer-taint`；不摘则所有 Chromium 系接收方都收不到文件）、前端 `effectAllowed=copy`（防止资源管理器 / 文件管理器默认移动库内文件）、Chromium/CEF/cef-rs/runtime 四层维护位置、label 与 DB 两道安全门、Windows 放弃 `DownloadURL` 延迟渲染下载的原因，以及 Web 版保留 `DownloadURL` 的分叉。
+  - 适用场景：排查 Linux 拖到 GIMP/Krita、浏览器上传框或文件管理器仍得到 URL / 缩略图；排查 Windows 拖到资源管理器没有文件、Word / Outlook 嵌入缩略图、Chrome / Edge / VSCode 收不到文件或库内文件被移走；升级 CEF/Chromium 或 cef-rs bindings；修改拖出授权、webview label 白名单或 custom mime。
 
 - [../third-patches/cef/README.md](../third-patches/cef/README.md)
-  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` reset/apply 模型与 re-vendor 流程。现有五个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补完整的落点侧回调；0003 给 Linux 与 macOS Chromium/CEF 补真实文件拖出的起手侧 delegate、`OnStartDragging` 与 custom data 读取（macOS 另需让 `WebDragSource` 提供 `public.file-url` 并摘掉 renderer 污染标记）；0004 按浏览器开启 `allow_file_access_from_file_urls`（建窗 `extra_info` 的 `kabegame.allow_file_access_from_file_urls`，供 `file://` 加载的 WPE 网页壁纸 fetch 同目录文件，目录限制由嵌入方在 `OnBeforeResourceLoad` 负责）；0005 按浏览器允许应用页加载本地资源（建窗 `extra_info` 的 `kabegame.allow_local_resources`：渲染侧对最外层主 frame 每次提交的非 `file:` 文档 `GrantLoadLocalResources`、浏览器侧给其进程 `GrantRequestScheme(file)`，弹窗提交的文档 / DevTools / 子 frame 不授（弹窗初始 `about:blank` 按 Blink 规则从 opener 继承、仍过闸门），只放开 `CanDisplay` 与导航、不放开 fetch，供图库预览给 iframe 赋 `file:` src；同样只开门、目录由嵌入方裁决）。生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
-  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移；给 CEF client 加新回调；维护 Linux 真实文件拖出的 Chromium/CEF 两半 patch；排查某个窗口的 `file://` 页面 fetch 同目录文件失败或意外能读本地文件；排查应用页给 iframe 赋 `file:` src 报 `Not allowed to load local resource` 或被改写成 `about:blank#blocked`。
+  - 主题：CEF 官方上游 vendor base、Kabegame 编号 patch series、`deno task patch` reset/apply 模型与 re-vendor 流程。现有六个 patch：0001 扁平子进程路径；0002 给 `CefDragHandler` 补完整的落点侧回调；0003 给 Linux、macOS 与 Windows Chromium/CEF 补真实文件拖出的起手侧 delegate、`OnStartDragging` 与 custom data 读取（Windows 与 Linux 共用 aura 钩子，另清 `html` / `download_metadata`、不打 `chromium/x-renderer-taint`；macOS 另需让 `WebDragSource` 提供 `public.file-url` 并摘掉 renderer 污染标记）；0004 按浏览器开启 `allow_file_access_from_file_urls`（建窗 `extra_info` 的 `kabegame.allow_file_access_from_file_urls`，供 `file://` 加载的 WPE 网页壁纸 fetch 同目录文件，目录限制由嵌入方在 `OnBeforeResourceLoad` 负责）；0005 按浏览器允许应用页加载本地资源（建窗 `extra_info` 的 `kabegame.allow_local_resources`：渲染侧对最外层主 frame 每次提交的非 `file:` 文档 `GrantLoadLocalResources`、浏览器侧给其进程 `GrantRequestScheme(file)`，弹窗提交的文档 / DevTools / 子 frame 不授（弹窗初始 `about:blank` 按 Blink 规则从 opener 继承、仍过闸门），只放开 `CanDisplay` 与导航、不放开 fetch，供图库预览给 iframe 赋 `file:` src；同样只开门、目录由嵌入方裁决）；0006 补全 0005 的子资源一半：`ChromeContentBrowserClientCef::RegisterNonNetworkSubresourceURLLoaderFactories`（先调父类）按同一键给非弹窗 browser 的最外层主 frame 塞 `file:` URLLoaderFactory，应用页的 `<img>` / `<video>` 才能真正加载 `file:`（否则 `ERR_UNKNOWN_URL_SCHEME`），工厂照常经 `WillCreateURLLoaderFactory` 包装、每个请求仍到 `OnBeforeResourceLoad`，CORS 模式的 `file:` 请求仍被拒。生成的 capi 与 `libcef_dll` 胶水由 `version_manager.py` 在 `cef_create_projects.sh` 里产出、不入 patch。
+  - 适用场景：新 checkout 后准备自编 CEF；升级 CEF 7827 pin；修复 Chromium 上游变化导致的 patch context 漂移；给 CEF client 加新回调；维护三个桌面平台真实文件拖出的 Chromium/CEF 两半 patch；排查某个窗口的 `file://` 页面 fetch 同目录文件失败或意外能读本地文件；排查应用页给 iframe 赋 `file:` src 报 `Not allowed to load local resource` 或被改写成 `about:blank#blocked`；排查桌面图库 `file://` 图片 / 视频报 `ERR_UNKNOWN_URL_SCHEME`（CEF 未带 0006）。
 
 ## 调试（`debug/`）
 
@@ -298,4 +300,4 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 - 新增流程文档后，必须在本索引补充条目（链到具体文件路径 + 主题 + 适用场景）。
 - 发生流程级改动时，先更新对应文档，再更新本索引描述（若语义有变化）。
-- **third-patches reset 模型**：patch-manager 接管的系列可自由增删改和重编号；`deno task patch <dir>` 先把子模块 reset 到纯净基线，再按文件名顺序全量 apply，`-r` 仅 reset。操作会丢弃子模块未提交改动，本地开发应先提交到分支。`rusty_v8` 是唯一的手动例外（就地复用的胖构建树，patch 由 `scripts/build-v8.ts` 应用）；`cef` 的正式补丁位于 `third-patches/cef/` 并由 patch-manager 应用，`scripts/build-chromium.ts` 仅将已应用补丁的工作树临时固化成 `kabegame-build` 提交，供只认提交的 automate-git 使用。详见 [third-patches/AGENTS.md](../third-patches/AGENTS.md)。
+- **third-patches reset 模型**：patch-manager 接管的系列可自由增删改和重编号；`deno task patch <dir>` 先把子模块 reset 到纯净基线，再按文件名顺序全量 apply，`-r` 仅 reset。操作会丢弃子模块未提交改动，本地开发应先提交到分支。生成新 patch 用 `deno task patch <dir> --gen --from <上一个> --out third-patches/<dir>/NNNN-xxx.patch`：它用临时 index 重建「基线 + 系列到 `x`」再与工作树 diff，不 reset、不碰真实 index。`rusty_v8` 是唯一的手动例外（就地复用的胖构建树，patch 由 `scripts/build-v8.ts` 应用）；`cef` 的正式补丁位于 `third-patches/cef/` 并由 patch-manager 应用，`scripts/build-chromium.ts` 仅将已应用补丁的工作树临时固化成 `kabegame-build` 提交，供只认提交的 automate-git 使用。详见 [third-patches/AGENTS.md](../third-patches/AGENTS.md)。

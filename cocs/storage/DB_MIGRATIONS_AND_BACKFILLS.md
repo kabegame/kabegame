@@ -130,7 +130,7 @@ setup (主线程)
               → startup-progress 转发 → 非 --minimized 时 create_main_window → CEF relaunch 处理器
  └─ spawn "kabegame-init" 线程，setup 立即返回
       ├─ init_heavy_globals：PluginManager → Storage（迁移 + 阻塞回填）→ 调度器 → 各 Service
-      ├─ run_on_main_thread_sync(init_post)：托盘、壁纸控制器、下载 worker、IPC / Web / HTTP 服务、插件缓存 …
+      ├─ run_on_main_thread_sync(init_post)：托盘、壁纸控制器、下载 worker、IPC / Web 服务、插件缓存 …
       ├─ BackfillService::start_pending
       └─ startup_state = Ready（任一步 Err → Failed{message}）
 ```

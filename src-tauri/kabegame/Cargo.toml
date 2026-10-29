@@ -57,7 +57,7 @@ tauri-plugin-wallpaper = { workspace = true, optional = true }
 tauri-plugin-task-notification = { workspace = true, optional = true }
 tauri-plugin-android-battery-optimization = { version = "0.1.4", optional = true }
 tauri = { version = "2.12.4", features = ["dbus", "common-controls-v6", "x11", "dynamic-acl", "compression",
-  "tray-icon", "devtools", "protocol-asset", "image-png", "unstable",
+  "tray-icon", "devtools", "image-png", "unstable",
 ], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -84,7 +84,7 @@ tauri-runtime-cef = { path = "../tauri-runtime-cef", optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri = { version = "2.12.4", default-features = false, features = [
-  "tray-icon", "devtools", "protocol-asset", "image-png", "unstable",
+  "tray-icon", "devtools", "image-png", "unstable",
   "compression", "common-controls-v6", "dynamic-acl", "x11", "dbus",
 ], optional = true }
 

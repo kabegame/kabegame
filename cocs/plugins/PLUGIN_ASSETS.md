@@ -132,7 +132,7 @@ package.json (kbAssets + kbDoc + kbChangelog)
     │
     └─ 展示
           ├─ 文档正文：PluginDocRenderer.vue 用 normalizeAssetPath(引用) 查 assetKeys
-          │            命中后用 pluginFileUrl(plugin, key) 指向 /plugin_file/<id>/<path>?v=<version>
+          │            命中后用 pluginAssetUrl(plugin, key) 在桌面生成 blob URL，Android / Web 仍指向 /plugin_file
           │            外链归一化返回 null → 原样交给 marked（不误判成「加载失败」）
           └─ 快捷预览走马灯：见第 5 节
 ```
@@ -165,7 +165,7 @@ package.json (kbAssets + kbDoc + kbChangelog)
 弹出（`HoverRevealPanel trigger="contextmenu"`，点面板外或 Esc 关闭，不随鼠标移出消失；
 悬停自动弹出在卡片网格里太容易误触），插件选择器的下拉行保持 hover 400ms；紧凑端都是长按
 500ms 弹出同一面板的底部抽屉形态。面板里的**示例图走马灯直接复用
-`Plugin.assetKeys`** —— 由 `/plugin_file` 按需提供图片字节；列表只保留键。
+`Plugin.assetKeys`** —— 由桌面 `read_plugin_file` 命令或 Android / Web `/plugin_file` 按需提供图片字节；列表只保留键。
 
 | 关注点 | 处理 |
 |---|---|
@@ -228,7 +228,7 @@ best-effort：
 「源」页面通过独立路由 `/plugins/:pluginId` 打开详情；商店条目需要远程包时在 query 中携带来源与版本。
 详情页与 `PluginImportDialog.vue` 复用 `PluginDetailContent.vue`，按当前 tab 获取文档/更新日志/推荐配置。
 `usePluginDetailLoader.ts` 已安装记录直接读 store，商店轻量详情按来源与版本缓存于内存，不使用 Dexie 详情表。
-导入文件由后端登记 preview token，从 `/plugin_file?...&preview=<token>` 读取；商店预览使用 source。
+导入文件由后端登记 preview token，按 preview token 从桌面命令或 Android / Web `/plugin_file` 读取；商店预览使用 source。
 
 ---
 

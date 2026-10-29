@@ -29,6 +29,7 @@ const opts = {
   noMcp: false,
   quiet: false,
   ephemeral: false,
+  noDaemon: false,
   prompt: "",
 };
 
@@ -40,6 +41,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--mcp") { /* 默认行为，保留为 no-op 兼容旧调用 */ }
   else if (a === "--quiet") opts.quiet = true;
   else if (a === "--ephemeral") opts.ephemeral = true;
+  else if (a === "--no-daemon") opts.noDaemon = true;
   else if (a === "--model" || a === "-m") opts.model = argv[++i];
   else if (a === "--schema") opts.schema = resolve(argv[++i]);
   else if (a === "--resume") opts.resume = argv[++i];
@@ -59,7 +61,8 @@ for (let i = 0; i < argv.length; i++) {
   -f, --prompt-file <f> 从文件读取任务描述（长 prompt 用这个）
   --timeout <秒>        默认 900
   --ephemeral          不把会话 rollout 落到 ~/.codex（用完即弃，之后不能 --resume）
-  --no-mcp             禁用 config.toml 里的 kabegame MCP server（默认不禁用；
+  --no-daemon          不经共享的后台 app-server（codex 全局参数，放在 exec 之前）
+  --no-mcp            禁用 config.toml 里的 kabegame MCP server（默认不禁用；
                        仅当 config 真的声明了它时才生效，否则跳过并提示）
   --mcp                no-op，保留兼容（不禁用已是默认）
   --quiet              不打印中间进度，只打印最终答案
@@ -87,7 +90,10 @@ const eventsPath = join(runDir, "events.jsonl");
 
 const sandbox = opts.full ? "danger-full-access" : opts.write ? "workspace-write" : "read-only";
 
-const args = ["exec"];
+// --no-daemon 是 codex 的全局参数（`codex --help` 里），必须排在 exec 子命令之前。
+const args = [];
+if (opts.noDaemon) args.push("--no-daemon");
+args.push("exec");
 if (opts.resume) {
   // resume 子命令不接受 --sandbox / -C / --color：沙箱和工作目录从被续的那个会话继承。
   args.push("resume");
@@ -115,8 +121,9 @@ if (opts.prompt) args.push(opts.prompt);
 writeFileSync(join(runDir, "meta.json"), JSON.stringify({ args, sandbox, cwd: opts.cd, startedAt: stamp }, null, 2));
 
 const eventsFd = openSync(eventsPath, "a");
-// stdin 必须给 /dev/null：非 tty 下 codex 会去读 stdin 当追加输入，管道不关就一直等。
-const child = spawn("codex", args, { cwd: opts.cd, stdio: [openSync("/dev/null", "r"), "pipe", "pipe"] });
+// stdin 必须关掉：非 tty 下 codex 会去读 stdin 当追加输入，管道不关就一直等。
+// 用 Node 的 "ignore"（POSIX 开 /dev/null、Windows 开 NUL），不能写死 "/dev/null"——Windows 上会被解析成 `D:\dev\null`。
+const child = spawn("codex", args, { cwd: opts.cd, stdio: ["ignore", "pipe", "pipe"] });
 
 let killed = false;
 const timer = setTimeout(() => {

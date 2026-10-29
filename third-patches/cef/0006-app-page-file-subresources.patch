@@ -1,0 +1,134 @@
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05fd0ffdcd8 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -8,6 +8,7 @@
+ #include <tuple>
+ 
+ #include "base/command_line.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/path_service.h"
+ #include "cef/include/wrapper/cef_library_loader.h"
+ #include "cef/libcef/browser/browser_frame.h"
+@@ -34,18 +35,24 @@
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "components/performance_manager/embedder/performance_manager_registry.h"
++#include "content/public/browser/browser_context.h"
+ #include "content/public/browser/client_certificate_delegate.h"
++#include "content/public/browser/file_url_loader.h"
+ #include "content/public/browser/navigation_throttle.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/render_view_host.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/shared_cors_origin_access_list.h"
++#include "services/network/public/mojom/cors_origin_pattern.mojom.h"
+ #include "content/public/browser/weak_document_ptr.h"
+ #include "content/public/common/content_switches.h"
+ #include "net/ssl/ssl_cert_request_info.h"
+ #include "net/ssl/ssl_private_key.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
++#include "url/url_constants.h"
+ 
+ #if !BUILDFLAG(IS_MAC)
+ #include "cef/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h"
+@@ -177,6 +184,17 @@ HINSTANCE GetCodeModuleHandle() {
+ }
+ #endif
+ 
++// Kabegame: same key as CefBrowserInfo::MaybeCreateFrame (patch 0005) and
++// CefRenderManager::MaybeCreateBrowser; the name must match.
++bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {
++  if (!extra_info) {
++    return false;
++  }
++  const CefString key("kabegame.allow_local_resources");
++  return extra_info->HasKey(key) && extra_info->GetType(key) == VTYPE_BOOL &&
++         extra_info->GetBool(key);
++}
++
+ }  // namespace
+ 
+ ChromeContentBrowserClientCef::ChromeContentBrowserClientCef() = default;
+@@ -458,6 +476,59 @@ void ChromeContentBrowserClientCef::OverrideWebPreferences(
+   web_contents->SetPageBaseBackgroundColor(base_background_color);
+ }
+ 
++void ChromeContentBrowserClientCef::
++    RegisterNonNetworkSubresourceURLLoaderFactories(
++        int render_process_id,
++        int render_frame_id,
++        const std::optional<url::Origin>& request_initiator_origin,
++        NonNetworkURLLoaderFactoryMap* factories) {
++  // Chrome registers IWA / chrome-extension: / chrome: factories here.
++  ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
++      render_process_id, render_frame_id, request_initiator_origin, factories);
++
++  // Kabegame: patch 0005 lets the app page pass SecurityOrigin::CanDisplay()
++  // and FilterURL for file: URLs, but content only hands a file: subresource
++  // factory to documents with a file: precursor scheme
++  // (RenderFrameHostImpl::CommitNavigation), so <img src="file:..."> in an
++  // http(s) / custom-scheme page still fails with ERR_UNKNOWN_URL_SCHEME. Add
++  // the factory for the outermost main frame of a non-popup browser created
++  // with "kabegame.allow_local_resources". emplace() is a no-op for file:
++  // documents, which already have one. The factory is wrapped by
++  // WillCreateURLLoaderFactory like every other non-network factory, so the
++  // client's OnBeforeResourceLoad still sees (and may cancel) each request.
++  // A private CORS list lets this document's origin read file: bytes. The
++  // profile-wide list stays unchanged; the CEF proxy also requires a client
++  // cross-origin whitelist entry for this origin.
++  content::RenderFrameHost* rfh =
++      content::RenderFrameHost::FromID(render_process_id, render_frame_id);
++  if (!rfh || rfh->GetParentOrOuterDocument() != nullptr) {
++    return;  // workers / service workers (no frame), subframes, fenced frames
++  }
++  auto browser = CefBrowserHostBase::GetBrowserForHost(rfh);
++  if (!browser || browser->browser_info()->is_popup() ||
++      !AllowsLocalResources(browser->browser_info()->extra_info())) {
++    return;
++  }
++  content::BrowserContext* browser_context = rfh->GetBrowserContext();
++  scoped_refptr<content::SharedCorsOriginAccessList> access_list =
++      browser_context->GetSharedCorsOriginAccessList();
++  if (request_initiator_origin && !request_initiator_origin->opaque()) {
++    access_list = content::SharedCorsOriginAccessList::Create();
++    std::vector<network::mojom::CorsOriginPatternPtr> allow;
++    allow.push_back(network::mojom::CorsOriginPattern::New(
++        url::kFileScheme, /*domain=*/std::string(), /*port=*/0,
++        network::mojom::CorsDomainMatchMode::kAllowSubdomains,
++        network::mojom::CorsPortMatchMode::kAllowAnyPort,
++        network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority));
++    access_list->SetForOrigin(*request_initiator_origin, std::move(allow),
++                              /*block_list=*/{}, base::DoNothing());
++  }
++  factories->emplace(
++      url::kFileScheme,
++      content::CreateFileURLLoaderFactory(
++          browser_context->GetPath(), std::move(access_list)));
++}
++
+ void ChromeContentBrowserClientCef::WillCreateURLLoaderFactory(
+     content::BrowserContext* browser_context,
+     content::RenderFrameHost* frame,
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.h b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+index c5d61ad97f6c53eeac7c70649b119ffac641935c..2a3ec84af6e2ea0d8d5375c35549662ad5800c98 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+@@ -68,6 +68,14 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
+   void OverrideWebPreferences(content::WebContents* web_contents,
+                               content::SiteInstance& main_frame_site,
+                               blink::web_pref::WebPreferences* prefs) override;
++  // Kabegame: adds a file: URLLoaderFactory for subresources of the app page
++  // (outermost main frame, non-popup browser created with the bool extra_info
++  // key "kabegame.allow_local_resources"). See the .cc for details.
++  void RegisterNonNetworkSubresourceURLLoaderFactories(
++      int render_process_id,
++      int render_frame_id,
++      const std::optional<url::Origin>& request_initiator_origin,
++      NonNetworkURLLoaderFactoryMap* factories) override;
+   void WillCreateURLLoaderFactory(
+       content::BrowserContext* browser_context,
+       content::RenderFrameHost* frame,

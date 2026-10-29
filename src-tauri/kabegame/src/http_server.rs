@@ -1,33 +1,35 @@
+#[cfg(not(target_os = "android"))]
+use std::path::Path;
 #[cfg(all(
     not(target_os = "android"),
     any(debug_assertions, not(feature = "web"))
 ))]
-use std::sync::Arc;
-#[cfg(not(target_os = "android"))]
-use std::{path::Path, sync::OnceLock};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(all(
     not(target_os = "android"),
     any(debug_assertions, not(feature = "web"))
 ))]
-use axum::middleware::{from_fn, Next};
-#[cfg(not(target_os = "android"))]
 use axum::{
     body::Body,
-    extract::{Path as UrlPath, Query},
+    http::Request,
+    middleware::{from_fn, Next},
+};
+#[cfg(not(target_os = "android"))]
+use axum::{
+    extract::Path as UrlPath,
     http::{
         header::{
             HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
             RANGE,
         },
-        Request, StatusCode, Uri,
+        StatusCode,
     },
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-#[cfg(not(target_os = "android"))]
-use serde::Deserialize;
+
 #[cfg(not(target_os = "android"))]
 use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
@@ -38,27 +40,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 ))]
 use tokio::sync::Semaphore;
 
-#[cfg(not(target_os = "android"))]
-pub static HTTP_SERVER_PORT: OnceLock<u16> = OnceLock::new();
-
 /// 单次 206 响应的最大字节数。响应体是一次性读进内存的 `Vec<u8>`,不能让开放式
 /// Range 把整段视频拉进来。
 #[cfg(not(target_os = "android"))]
 const MAX_RANGE_CHUNK: u64 = 8 * 1024 * 1024;
-
-#[cfg(not(target_os = "android"))]
-#[derive(Debug, Deserialize)]
-struct ProxyQuery {
-    url: String,
-}
-
-/// 插件文档图片：?pluginId=xxx&path=yyy（path 为 doc_root 内相对路径，如 screenshot.png）
-#[cfg(not(target_os = "android"))]
-#[derive(Debug, Deserialize)]
-struct PluginDocImageQuery {
-    plugin_id: String,
-    path: String,
-}
 
 #[cfg(not(target_os = "android"))]
 fn mime_from_path(path: &str) -> Option<String> {
@@ -322,98 +307,10 @@ async fn handle_compatible_path(
     }
 }
 
-/// 代理 GET 请求：/proxy?url=xxx，用 reqwest 拉取目标 URL 后流式返回（初步实现，无任务上下文）
-#[cfg(not(target_os = "android"))]
-async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
-    let url = query.url.trim();
-    if url.is_empty() {
-        return (StatusCode::BAD_REQUEST, "missing url").into_response();
-    }
-    let Ok(target_uri) = url.parse::<Uri>() else {
-        return (StatusCode::BAD_REQUEST, "invalid url").into_response();
-    };
-    let scheme = target_uri.scheme_str().unwrap_or("");
-    if scheme != "http" && scheme != "https" {
-        return (StatusCode::BAD_REQUEST, "only http and https are allowed").into_response();
-    }
-
-    let mut client_builder =
-        reqwest::Client::builder().redirect(reqwest::redirect::Policy::default());
-    if let Some(ref proxy_url) = kabegame_core::crawler::proxy::get_proxy_config().proxy_url {
-        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
-            client_builder = client_builder.proxy(proxy);
-        }
-    }
-    let client = match client_builder.build() {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("proxy client build failed: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    let upstream = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            let code = e
-                .status()
-                .map(|s| s.as_u16())
-                .and_then(|u| StatusCode::from_u16(u).ok())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
-            return (code, e.to_string()).into_response();
-        }
-    };
-
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let mut response_builder = Response::builder().status(status);
-
-    // 复制部分响应头（按字符串从 reqwest 取，避免 http 版本不一致）
-    let pass_header_names = ["content-type", "content-length", "content-encoding"];
-    if let Some(headers_mut) = response_builder.headers_mut() {
-        for name in pass_header_names {
-            if let Some(v) = upstream.headers().get(name) {
-                if let (Ok(hn), Ok(hv)) = (
-                    axum::http::header::HeaderName::try_from(name),
-                    HeaderValue::try_from(v.as_bytes()),
-                ) {
-                    headers_mut.insert(hn, hv);
-                }
-            }
-        }
-    }
-
-    response_builder
-        .body(Body::from_stream(upstream.bytes_stream()))
-        .unwrap_or_else(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "body build failed").into_response()
-        })
-}
-
-#[cfg(not(target_os = "android"))]
-async fn handle_unmatched(uri: Uri) -> Response {
-    (StatusCode::NOT_FOUND, "not found").into_response()
-}
-
-/// Returns a Router with file-serving routes usable by both local and web modes.
-/// Does NOT include `/plugin-doc-image` (inlined as data URLs on the frontend).
-#[cfg(not(target_os = "android"))]
-pub fn file_routes() -> Router {
-    Router::new()
-        .route("/file/{*path}", get(handle_file_path))
-        .route("/thumbnail/{*path}", get(handle_thumbnail_path))
-        .route("/compatible/{*path}", get(handle_compatible_path))
-        .route("/proxy", get(handle_proxy_query))
-        .merge(crate::plugin_file_server::plugin_file_routes())
-}
-
 /// 桌面应用 Web 服务器暴露的媒体路由。
 ///
-/// 只允许访问图库白名单内的文件，不包含会请求任意上游 URL 的 `/proxy`。
-#[cfg(not(target_os = "android"))]
+/// 只允许访问图库白名单内的文件（`/file` `/thumbnail` `/compatible`），不含 `/plugin_file`。
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn file_routes_media() -> Router {
     let routes = Router::new()
         .route("/file/{*path}", get(handle_file_path))
@@ -432,7 +329,7 @@ pub fn file_routes_media() -> Router {
 
 /// web 模式专用路由。
 ///
-/// - **Release**：保留 `/proxy` 与 `/plugin_file`。图库图片、缩略图和兼容副本直接由 CDN 返回，
+/// - **Release**：只保留 `/plugin_file`。图库图片、缩略图和兼容副本直接由 CDN 返回，
 ///   只对插件包做按需磁盘读取；`commands::image`
 ///   在 `ImageInfo` 序列化前把本地媒体路径改写成 CDN URL。
 /// - **Debug**：保留 `/file` `/thumbnail` `/compatible`，方便本地联调——
@@ -444,16 +341,12 @@ pub fn file_routes_web() -> Router {
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
         .route("/compatible/{*path}", get(handle_compatible_path))
         .layer(from_fn(image_concurrency_mw));
-    gated
-        .route("/proxy", get(handle_proxy_query))
-        .merge(crate::plugin_file_server::plugin_file_routes())
+    gated.merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 #[cfg(all(feature = "web", not(debug_assertions)))]
 pub fn file_routes_web() -> Router {
-    Router::new()
-        .route("/proxy", get(handle_proxy_query))
-        .merge(crate::plugin_file_server::plugin_file_routes())
+    Router::new().merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 /// Debug-only：/file 与 /thumbnail 的并发闸（10 个并发 + 无限排队）。
@@ -496,43 +389,6 @@ async fn image_concurrency_mw(req: Request<Body>, next: Next) -> Response {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-pub async fn start_http_server() -> Result<u16, String> {
-    if let Some(port) = HTTP_SERVER_PORT.get() {
-        return Ok(*port);
-    }
-
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| format!("bind file server failed: {e}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("read file server local addr failed: {e}"))?
-        .port();
-
-    let app = file_routes().fallback(handle_unmatched);
-    tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
-            eprintln!("[file-server] stopped: {e}");
-        }
-    });
-
-    let _ = HTTP_SERVER_PORT.set(port);
-    Ok(port)
-}
-
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
-#[tauri::command]
-pub async fn get_http_server_base_url() -> Result<String, String> {
-    for _ in 0..60 {
-        if let Some(port) = HTTP_SERVER_PORT.get() {
-            return Ok(format!("http://127.0.0.1:{port}"));
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    Err("file server not ready".to_string())
-}
-
 #[cfg(all(target_os = "android", not(feature = "web")))]
 #[tauri::command]
 pub async fn get_http_server_base_url<R: tauri::Runtime>(
@@ -547,7 +403,7 @@ pub async fn get_http_server_base_url<R: tauri::Runtime>(
         .map_err(|e| e.to_string())
 }
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(all(test, not(target_os = "android"), not(feature = "web")))]
 mod tests {
     use super::absolute_path_from_route;
 
@@ -580,7 +436,8 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(
                 listener,
-                super::file_routes().fallback(super::handle_unmatched),
+                super::file_routes_media()
+                    .fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "not found") }),
             )
             .await
             .expect("serve test router");

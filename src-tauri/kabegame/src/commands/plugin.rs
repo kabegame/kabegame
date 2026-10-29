@@ -6,7 +6,30 @@
 use serde_json::Value;
 
 use kabegame_core::commands;
+use kabegame_core::plugin::package_file::{
+    read_plugin_file as read_plugin_file_core, PluginFileOrigin,
+};
 use kabegame_core::plugin::PluginManager;
+
+/// 读取插件包内已声明条目的原始字节，供桌面端替代 `/plugin_file`。
+#[tauri::command]
+pub async fn read_plugin_file(
+    plugin_id: String,
+    version: String,
+    source: Option<String>,
+    preview: Option<String>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let origin = PluginFileOrigin::from_query(source, preview).ok_or("无效的插件文件来源")?;
+    let body = tauri::async_runtime::spawn_blocking(move || {
+        read_plugin_file_core(&plugin_id, &origin, &version, &path, None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?
+    .ok_or("插件文件不存在")?;
+    Ok(tauri::ipc::Response::new(body.bytes))
+}
 
 /// 桌面要整份插件列表（web 只要 `{id, version}` 索引，见 `web::dispatch`），
 /// 两端形状不同，故各自实现；共用的插件命令才走 core。

@@ -96,7 +96,8 @@ node .claude/skills/run-codex/driver.mjs --help
 ```
 
 `--write` / `--full` / `-m <模型>` / `--schema <file>` / `--resume <id|last>` / `-C <目录>` /
-`-f <prompt文件>` / `--timeout <秒>`（默认 900）/ `--ephemeral` / `--no-mcp` / `--quiet`。
+`-f <prompt文件>` / `--timeout <秒>`（默认 900）/ `--ephemeral` / `--no-daemon`（不经共享的后台 app-server，
+是 codex 的全局参数，driver 把它排在 `exec` 之前）/ `--no-mcp` / `--quiet`。
 
 ### 产物
 

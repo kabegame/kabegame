@@ -101,7 +101,7 @@
 桌面、Android、Web 的 `get_plugins` 都返回轻量列表（图标、packageJson、assetKeys 等），Web 不再逐个补 `get_plugin_detail`，也不再写 `pluginCacheDb`。
 `usePluginDetailLoader` 对商店详情只用内存缓存，按插件 id、sourceId 隔离并校验 expectedVersion；响应晚到时不得覆盖新选择。`storePluginCacheDb` 只保留 icons 表，v2 升级删除 details 表。
 
-后端已安装与商店 map 只保留轻量记录，正文、模板、推荐配置和图片统一经 `/plugin_file` 从对应 kgpg 按需读取。
+后端已安装与商店 map 只保留轻量记录，正文、模板、推荐配置和图片桌面经 `read_plugin_file`、Android / Web 经 `/plugin_file` 从对应 kgpg 按需读取。
 商店详情请求带 `source=<sourceId>`，文件 URL 带 `v=<version>`；导入商店包的预览沿用 store 来源，不占用导入文件的 8 项预览 LRU。
 前端文本缓存按完整 URL 隔离来源与版本，安装/更新版本变化或删除时按 pluginId 失效。推荐配置响应含动态 `isImported`，始终 `no-store`。
 详见 [PLUGIN_FILE_ENDPOINT.md](PLUGIN_FILE_ENDPOINT.md)。

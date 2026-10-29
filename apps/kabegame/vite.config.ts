@@ -14,8 +14,8 @@ const webDevApiProxyPaths = [
   "/api",
   "/file",
   "/thumbnail",
+  "/compatible",
   "/plugin_file",
-  "/proxy",
   "/mcp",
   "/__ping",
 ];
