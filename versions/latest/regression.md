@@ -256,3 +256,27 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 部署后首屏 | 线上 demo | 清缓存打开首页，按慢速 4G 再测一次 | 首次绘制、首个 pageview 明显提前 | 部署前的同口径对照：不限速 FCP 6.9 s → 1.8 s，慢速 4G 18.2 s → 5.6 s |
 | [x] | 本地模式插画：吉祥物站立图、冲浪 logo | 桌面 CEF dev | 经 CDP 读画廊页吉祥物与畅游页 logo 的 `currentSrc` / 尺寸并截图 | 加载 `src/assets` 下的原图 PNG，显示与改动前一致 | `/src/assets/kamechan/stand.png` 668×1540、`/src/assets/swim.png` 1254×1254，截图正常 |
 | [ ] | 本地模式插画：挥手、空状态、空封面、失物图 | 桌面 / Android dev | 点吉祥物挥手；打开空画册与空图库；触发图片丢失 | 显示原图 PNG | 未在 app 里触发；构建产物里这几张也只引用 PNG |
+
+## 数据库异步回填 + 启动页（`backfill_jobs` / `BackfillService` / Init app）
+
+迁移拆成同步 schema 迁移与可恢复回填：回填登记进 `backfill_jobs`，按批提交并同事务写游标；带 `min_backfill_version` 的迁移前同步排干被依赖的回填（启动页显示进度），其余进入界面后由 `BackfillService` 在后台跑（忙碌卡片）。桌面启动拆成主线程建窗 → 线程内重型初始化 → 主线程收尾，主窗口先挂启动页，`ready` 后卸载再挂主界面。框架验证用的两个临时作业（重建 `metadata_search_terms`、补算 `images.compatible_path`）已在验证后删除，发布态注册表为空；下表「dev 实测」各行均在临时作业仍存在时于 macOS dev 完成，dev 库验证前清空了全部搜索词、`compatible_path` 列与 `compatibles/` 下 548 个文件（1.4 G）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 旧库升级：迁移 + 后台回填 | macOS dev（库 v47） | `deno task dev` 启动 | 主窗口出现，v048 / v049 执行并登记两个作业；进入画廊后忙碌卡片「更新数据库」依次显示两个作业（排队中的显示「排队中」）并推进；结束后卡片消失 | 重型初始化约 1 s 就 ready，启动页未来得及挂载（首个阶段事件即 ready）；卡片截图「更新数据库 / 补算兼容副本 23% 1,242 / 5,299」 |
+| [x] | 回填终态数据 | dev 库 | 作业结束后查库 | 搜索词映射重建；`compatible_path` 无空行，需要的图片重新生成兼容副本，其余写哨兵；`compatibles/` 无孤儿文件 | 映射 550,644 / 词典 113,517（清空前 316,602 / 77,686，差异来自插件自定义 `searchTexts` 被默认展开规则重建，属预期取舍）；空行 0，哨兵 4,887，副本 412（jpg 295 / png 39 / webp 78）= 目录内 412 个文件（902 M）；无视频需要转码 |
+| [x] | 补丁免刷新 | dev | 回填期间停留画廊 | 被补 `compatiblePath` 的行经 `images-change` / `image-changed` 就地更新 | debug ingest 统计前端收到 5,295 / 5,299 条 `compatiblePath` 补丁（差额是强杀重启期间主界面尚未挂监听的批次） |
+| [x] | 中断续跑 | dev | 兼容副本作业进行中 `kill -9` 主进程，再启动 | 从游标续跑、不重做；无孤儿文件 | 强杀时 cursor 1952 / processed 1295、73 个副本 = 73 行引用；重启日志 `start image_compatible_path (processed 1295/…)`，终态 processed = total = 5299 |
+| [x] | 阻塞回填（启动页进度条） | dev | 清空词表、把搜索词作业重置为未完成，`KABEGAME_BACKFILL_SYNC_THROUGH=48 deno task dev` | 启动页显示「正在更新数据：重建搜索词」与进度条 / 计数，完成后依次 services → ready，卸载启动页进入画廊 | 截图「3,600 / 3,959」；前端收到 2600→3959 的进度事件后 ready 并卸载 |
+| [x] | 初始化失败 | dev | 临时注入作业失败（`DEBUG-backfill`，已删除）+ 阻塞开关启动 | 启动页显示「启动失败」与错误文本，「退出」按钮可退出；作业记 `attempts=1` 与 `last_error`、游标不前进，版本不变 | 截图正常；点退出后进程经 CEF 正常 shutdown 退出 |
+| [x] | CLI 本地模式不跑后台回填 | dev CLI（主程序关闭） | 作业未完成时 `kabegame-cli --via local data import-image <已入库图片>` | 命令照常执行；未被依赖的作业保持 pending | 去重 1、作业仍 done=0；同命令加 `KABEGAME_BACKFILL_SYNC_THROUGH=48` 时在阻塞阶段排干（done=1，映射恢复 550,644）；`pathql query` 正常 |
+| [x] | `--minimized` 自启动 | dev 二进制直跑 | 作业未完成时 `target/debug/kabegame --minimized` | 不建主窗口，初始化照常 ready，后台回填跑完 | 日志 `Startup ready` → `metadata_search_terms_rebuild done` |
+| [x] | 无作业时的正常启动 | dev（删除临时作业、库复位 v48） | `deno task dev` | 直接进入画廊，无忙碌卡片，不新增 `backfill_jobs` 行 | 启动页未挂载（ready 早于页面加载）；库仍 v48、作业 0 行 |
+| [ ] | 启动页在慢启动下可见 | 桌面 release / 慢盘 | 首次升级大库启动 | 重型初始化期间窗口显示「正在加载插件」「正在升级数据库（vNNN …）」等阶段 | 本机 dev 重型初始化太快，只在阻塞回填时看到启动页 |
+| [ ] | 回填期间写操作 | dev | 后台回填进行中下载 / 删除 / 收藏 | 均正常；批间释放写锁，不报 busy | 未在长作业期间实测 |
+| [ ] | 初始化失败的原生对话框 | `--minimized` | 让重型初始化失败 | 无主窗口时弹致命错误对话框 | 未实测；有主窗口时改为启动页显示错误 |
+| [x] | 整理「补充兼容格式」不变 | 代码 | — | 行为不变 | 验证用的抽取已撤回，`organize.rs` / `images.rs` 与改动前一致 |
+| [x] | 原生壁纸兼容副本 | 代码 | — | `wallpaper_compatible_path` 仍惰性生成，不做回填 | 未触碰相关代码 |
+| [ ] | Android 启动 | Android dev 真机 | 冷启动 | 启动页一闪或直接进入主界面，无白屏卡死 | 本机没有 adb，也没有 `bin/android/arm64/` 自建产物，未实测、也未做 `--mode android` 交叉检查 |
+| [ ] | Linux / Windows 启动 | 桌面 | 冷启动（含托盘、壁纸窗口、`init_post` 回主线程） | 主窗口先出现，托盘与壁纸照常 | 只在 macOS 实测 |
+| [ ] | Web 版 | web 服务 | 启动服务端并打开页面 | 跳过启动页，后台回填照常 | 未实测 |

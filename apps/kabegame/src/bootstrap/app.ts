@@ -17,7 +17,7 @@ import "vant/lib/toast/style";
 import "@/styles/vant-theme.css";
 import { vPullToRefresh } from "@/directives/pullToRefresh";
 import { vHscrollFade } from "@/directives/hscrollFade";
-import { IS_ANDROID, IS_MACOS } from "@/env";
+import { IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
 import { Toast, Picker, Popup, Button } from "vant";
 import "vant/lib/picker/style";
 import "vant/lib/popup/style";
@@ -27,6 +27,7 @@ import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAp
 import { usePluginStore } from "@/stores/plugins";
 import { setCrawlerBeforeAddTaskGuard } from "@/stores/crawler";
 import { i18n } from "@kabegame/i18n";
+import { runInitScreen } from "./initScreen";
 
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");
@@ -47,28 +48,45 @@ window.addEventListener(
   { capture: true },
 );
 
-const app = createApp(App);
+/**
+ * 主界面在后端全局单例就绪之后才创建：先挂启动页（Init app）等 `ready`，卸载后再挂主界面。
+ * web 的服务端在监听前已初始化完，直接跳过启动页。
+ * 不用顶层 await：构建 target（es2021 / safari13）不支持。
+ */
+function mountMainApp() {
+  const app = createApp(App);
 
-app.directive("pull-to-refresh", vPullToRefresh);
-app.directive("corner-badge", vCornerBadge);
-app.directive("hscroll-fade", vHscrollFade);
+  app.directive("pull-to-refresh", vPullToRefresh);
+  app.directive("corner-badge", vCornerBadge);
+  app.directive("hscroll-fade", vHscrollFade);
 
-// 注册所有图标
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component);
+  // 注册所有图标
+  for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+    app.component(key, component);
+  }
+
+  const pinia = createPinia();
+  app.use(pinia);
+  app.use(i18n);
+
+  setCrawlerBeforeAddTaskGuard(createMinAppVersionBeforeAddTaskGuard(usePluginStore()));
+  registerHeaderFeatures();
+  app.use(router);
+  app.use(ElementPlus);
+  app.use(Toast);
+  app.use(Picker);
+  app.use(Popup);
+  app.use(Button);
+
+  app.mount("#app");
 }
 
-const pinia = createPinia();
-app.use(pinia);
-app.use(i18n);
-
-setCrawlerBeforeAddTaskGuard(createMinAppVersionBeforeAddTaskGuard(usePluginStore()));
-registerHeaderFeatures();
-app.use(router);
-app.use(ElementPlus);
-app.use(Toast);
-app.use(Picker);
-app.use(Popup);
-app.use(Button);
-
-app.mount("#app");
+if (IS_WEB) {
+  mountMainApp();
+} else {
+  void runInitScreen().then(mountMainApp, (error) => {
+    // 启动页自身出错（IPC 不可用等）时退回直接挂主界面，不留白屏。
+    console.error("[init] init screen failed:", error);
+    mountMainApp();
+  });
+}

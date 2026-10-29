@@ -15,13 +15,16 @@
             ? `${card.kind}-${card.albumId}`
             : card.kind === 'metadataMigration'
               ? `${card.kind}-${card.pluginId}`
-              : card.kind
+              : card.kind === 'backfill'
+                ? `${card.kind}-${card.backfillId}`
+                : card.kind
         "
       >
         <BusyOrganizeCard v-if="card.kind === 'organize'" />
         <BusyHiddenCleanupCard v-else-if="card.kind === 'hiddenCleanup'" />
         <BusyFolderSyncCard v-else-if="card.kind === 'folderSync'" :album-id="card.albumId" @close="emit('close')" />
         <BusyMetadataMigrationCard v-else-if="card.kind === 'metadataMigration'" :plugin-id="card.pluginId" />
+        <BusyBackfillCard v-else-if="card.kind === 'backfill'" :backfill-id="card.backfillId" />
         <BusyUpdaterCard v-else />
       </template>
     </div>
@@ -35,6 +38,7 @@ import BusyOrganizeCard from "./BusyOrganizeCard.vue";
 import BusyHiddenCleanupCard from "./BusyHiddenCleanupCard.vue";
 import BusyFolderSyncCard from "./BusyFolderSyncCard.vue";
 import BusyMetadataMigrationCard from "./BusyMetadataMigrationCard.vue";
+import BusyBackfillCard from "./BusyBackfillCard.vue";
 import BusyUpdaterCard from "./BusyUpdaterCard.vue";
 
 const emit = defineEmits<{ close: [] }>();

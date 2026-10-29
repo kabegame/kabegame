@@ -33,5 +33,8 @@
   "cleanHiddenEmpty": "沒有隱藏圖片",
   "albumTree": "畫冊樹",
   "albumInfo": "畫冊資訊",
-  "metadataMigrationTitle": "遷移插件資料"
+  "metadataMigrationTitle": "遷移插件資料",
+  "backfillTitle": "更新資料庫",
+  "backfillWaiting": "排隊中",
+  "backfillFailed": "資料庫背景更新失敗（{name}），下次啟動時會繼續"
 }

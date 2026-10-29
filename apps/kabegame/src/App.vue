@@ -232,6 +232,7 @@ import * as organizeService from "@/services/organize";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
 import * as folderSyncService from "@/services/folderSync";
 import * as metadataMigrationService from "@/services/metadataMigration";
+import * as backfillService from "@/services/backfill";
 import { busyPoller } from "@/services/busyTasks";
 import UpdateButton from "./components/updater/UpdateButton.vue";
 import UpdateDialog from "./components/updater/UpdateDialog.vue";
@@ -689,6 +690,7 @@ onMounted(async () => {
     hiddenCleanupService.init(),
     folderSyncService.init(),
     metadataMigrationService.init(),
+    backfillService.init(),
   ]);
   await busyPoller.start();
 
@@ -716,6 +718,7 @@ onUnmounted(() => {
   hiddenCleanupService.dispose();
   folderSyncService.dispose();
   metadataMigrationService.dispose();
+  backfillService.dispose();
   busyPoller.dispose();
   downloadStateStore.dispose();
 });

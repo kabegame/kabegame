@@ -33,5 +33,8 @@
   "cleanHiddenEmpty": "非表示画像はありません",
   "albumTree": "アルバムツリー",
   "albumInfo": "アルバム情報",
-  "metadataMigrationTitle": "プラグインデータを移行中"
+  "metadataMigrationTitle": "プラグインデータを移行中",
+  "backfillTitle": "データベースを更新中",
+  "backfillWaiting": "待機中",
+  "backfillFailed": "データベースのバックグラウンド更新に失敗しました（{name}）。次回起動時に再開します"
 }

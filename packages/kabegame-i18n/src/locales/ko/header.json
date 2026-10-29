@@ -33,5 +33,8 @@
   "cleanHiddenEmpty": "숨김 이미지가 없습니다",
   "albumTree": "앨범 트리",
   "albumInfo": "앨범 정보",
-  "metadataMigrationTitle": "플러그인 데이터 마이그레이션"
+  "metadataMigrationTitle": "플러그인 데이터 마이그레이션",
+  "backfillTitle": "데이터베이스 업데이트",
+  "backfillWaiting": "대기 중",
+  "backfillFailed": "데이터베이스 백그라운드 업데이트 실패 ({name}). 다음 실행 시 이어서 진행합니다"
 }

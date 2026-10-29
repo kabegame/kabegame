@@ -285,6 +285,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：桌面端 GitHub Release 自动更新全链路。**状态机 + 调度 + 下载 + 安装归后端权威**（`UpdaterService` 单例，仿 `OrganizeService`），前端镜像（`get_updater_state` hydrate + 事件刷新）。涵盖 6-phase 状态机（unchecked/checking/checked/updateAvailable/downloading/restartable）、`checking`/`downloading` 独占不可重入、restartable 重检保留、tag-only 版本比较 + `v` 前缀归一化、asset 平台/模式匹配、三事件（`updater-state-change`/`update-download-progress`/`update-download-error`）、平台安装差异（macOS `open` dmg 后退出 / Windows 跑 setup.exe / Linux 仅跳转）。
   - 适用场景：新增/排查更新流程与状态机；排查「下载途中刷新丢状态」「下载中仍能触发检查」「restartable 误降级」；调整 asset 匹配 / 平台安装；排查 NEW/重启按钮、changelog 弹窗、检查更新转圈。
 
+## 存储（`storage/`）
+
+- [storage/DB_MIGRATIONS_AND_BACKFILLS.md](storage/DB_MIGRATIONS_AND_BACKFILLS.md)
+  - 主题：数据库两类迁移——同步 schema 迁移（`user_version` 顺序）与可恢复的异步回填作业（`Backfill` 注册表 + `backfill_jobs` 表，按批 `BEGIN IMMEDIATE` 提交、同事务写回 rowid 游标与进度、崩溃续跑，`BackfillCtx` 的 `with_conn` / `block_on` / `commit`）；`Migration.min_backfill_version` 的同步排干语义与「回填只碰引入时就存在的列」不变量、空迁移登记作业、全新安装不登记、平台门控（被依赖时标记跳过）、CLI 只跑阻塞阶段、`BackfillService` 后台按序运行与忙碌卡片 / `backfill-finished`、失败下次启动重试、`KABEGAME_BACKFILL_SYNC_THROUGH` 调试开关；以及三段式启动（`init_pre` 主线程建窗 → 线程内 `init_heavy_globals` → 主线程 `init_post` → 后台回填 → `Ready`）、`startup_state` watch / `startup-progress` / `get_startup_state`，前端启动页（Init app）mount / unmount 与不安装 i18n 的原因。
+  - 适用场景：新增需要补算数据的迁移或回填作业；某个迁移要改动回填读写的列；排查启动卡在启动页、启动页报错、回填不前进 / 重复处理 / 失败重试、忙碌卡片不消失；调整桌面 / Android 启动顺序或主线程要求。
+
 ## 维护规则
 
 - 新增流程文档后，必须在本索引补充条目（链到具体文件路径 + 主题 + 适用场景）。

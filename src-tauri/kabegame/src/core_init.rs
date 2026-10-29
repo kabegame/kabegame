@@ -1,6 +1,7 @@
 use kabegame_core::storage::hidden_cleanup::HiddenCleanupService;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
+use kabegame_core::storage::startup_state::{self, StartupPhase};
 #[cfg(all(not(target_os = "android"), feature = "standard"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use kabegame_core::{
@@ -26,10 +27,12 @@ where
     tokio::spawn(fut);
 }
 
-/// 统一初始化全局状态（local 与 web 共用主流程，桌面端多出 DedupeService/VD 等用 cfg 收束）
-pub fn init_globals() -> Result<(), String> {
+/// 毫秒级初始化：Settings、i18n 与事件广播。桌面端在主线程、主窗口创建之前调用
+/// （窗口与 `start_event_loop` 依赖它们）；local 与 web 共用。
+pub fn init_fast_globals() -> Result<(), String> {
     println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
     println!("Initializing Globals...");
+    startup_state::set(StartupPhase::Settings);
 
     Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
     println!("  ✓ Settings initialized");
@@ -40,11 +43,29 @@ pub fn init_globals() -> Result<(), String> {
         kabegame_i18n::sync_locale(lang.as_deref());
     }
 
+    // 事件广播只依赖自身，提前到这里让事件循环在重型初始化之前就绪。
+    kabegame_core::ipc::server::EventBroadcaster::init_global(1000)
+        .map_err(|e| format!("EventBroadcaster: {}", e))?;
+    kabegame_core::ipc::server::SubscriptionManager::init_global()
+        .map_err(|e| format!("SubscriptionManager: {}", e))?;
+    kabegame_core::emitter::GlobalEmitter::init_global()
+        .map_err(|e| format!("GlobalEmitter: {}", e))?;
+    println!("  ✓ Event broadcaster and emitter initialized");
+    Ok(())
+}
+
+/// 重型初始化：PluginManager、Storage（schema 迁移 + 被依赖的回填）、调度器与各 Service。
+/// 桌面端与 Android 在独立线程里调用（期间启动页经 `startup_state` 显示进度），web 顺序调用。
+/// 不得包含必须在主线程执行的调用（托盘、壁纸控制器等放在 app 层的 `init_post`）。
+pub fn init_heavy_globals() -> Result<(), String> {
+    startup_state::set(StartupPhase::Plugins);
     PluginManager::init_global()
         .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
     println!("  ✓ Plugin manager initialized");
 
+    // 迁移与阻塞回填的进度由 Storage::new() 直接写进 startup_state。
     Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
+    startup_state::set(StartupPhase::Services);
     let failed_count = Storage::global()
         .mark_pending_running_tasks_as_failed()
         .unwrap_or(0);
@@ -70,14 +91,6 @@ pub fn init_globals() -> Result<(), String> {
     let _ = Storage::global()
         .plugin_sources()
         .set_official_source_name(source_name);
-
-    kabegame_core::ipc::server::EventBroadcaster::init_global(1000)
-        .map_err(|e| format!("EventBroadcaster: {}", e))?;
-    kabegame_core::ipc::server::SubscriptionManager::init_global()
-        .map_err(|e| format!("SubscriptionManager: {}", e))?;
-    kabegame_core::emitter::GlobalEmitter::init_global()
-        .map_err(|e| format!("GlobalEmitter: {}", e))?;
-    println!("  ✓ Event broadcaster and emitter initialized");
 
     println!("  ✓ Runtime initialized");
 

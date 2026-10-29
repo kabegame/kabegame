@@ -1,5 +1,6 @@
 import { invoke } from "@/api/rpc";
 import { useSnapshotPoller } from "@/composables/useSnapshotPoller";
+import { useBackfillStore, type BackfillTask } from "@/stores/backfill";
 import { useFolderSyncStore, type FolderSyncTask } from "@/stores/folderSync";
 import { useHiddenCleanupStore, type HiddenCleanupRunState } from "@/stores/hiddenCleanup";
 import { useMetadataMigrationStore, type MetadataMigrationTask } from "@/stores/metadataMigration";
@@ -10,6 +11,7 @@ export interface BusyTasksSnapshot {
   hiddenCleanup: HiddenCleanupRunState;
   folderSync: FolderSyncTask[];
   metadataMigrations: MetadataMigrationTask[];
+  backfills: Omit<BackfillTask, "startedAtMs">[];
 }
 
 export const busyPoller = useSnapshotPoller<BusyTasksSnapshot>({
@@ -20,11 +22,13 @@ export const busyPoller = useSnapshotPoller<BusyTasksSnapshot>({
     useHiddenCleanupStore().applyRunState(snapshot.hiddenCleanup);
     useFolderSyncStore().applyRunState({ tasks: snapshot.folderSync });
     useMetadataMigrationStore().applyRunState(snapshot.metadataMigrations);
+    useBackfillStore().applyRunState(snapshot.backfills ?? []);
   },
   isActive: (snapshot) =>
     snapshot.organize.running ||
     snapshot.hiddenCleanup.running ||
     snapshot.folderSync.length > 0 ||
-    snapshot.metadataMigrations.length > 0,
+    snapshot.metadataMigrations.length > 0 ||
+    (snapshot.backfills?.length ?? 0) > 0,
   wakeEvents: ["busy-tasks-change"],
 });

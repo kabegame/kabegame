@@ -191,6 +191,7 @@ commands.allow = [
   "open_file_folder",
   "open_album_virtual_drive_folder",
   "exit_app",
+  "get_startup_state",
   "check_for_updates",
   "get_updater_state",
   "download_update",
