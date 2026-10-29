@@ -28,7 +28,7 @@ Provider DSL 的通用查询语义。
 - `POST /rpc/{method}`：web 版同一份 JSON-RPC 注册表，URL 方法名必须与 JSON-RPC body 一致；默认只读，写方法必须显式带 `?super=1`。旧 `/rpc` 入口保留给既有客户端。
 - `GET /events`：SSE 事件订阅，连接时先发 `connected`；桌面仍同时向 Tauri 前端 emit。
 - `GET /file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}`：从 URL path 取得绝对路径，只读取图库数据库已登记的本地文件，统一经过并发闸；不提供 query 形式或独立 `/download` 端点。
-  目录型 WPE 行（`type` 为 `x-wpe/*`）的 `local_path` 是目录，`/file` 对它 404：视频行的媒体 URL 取 `compatible_path`，**`x-wpe/web` 行 `compatible_path` 为空、没有媒体 URL**（页面只经本地媒体服务的 `/wpe/<id>/` 加载），只有作者预览图的 `/thumbnail`。
+  目录型 WPE 行（`type` 为 `x-wpe/*`）的 `local_path` 是目录，`/file` 对它 404：视频行的媒体 URL 取 `compatible_path`，**`x-wpe/web` 行 `compatible_path` 为空、没有媒体 URL**（页面只在桌面应用里以入口 `file://` 加载，本地 HTTP 服务与本服务器都没有壁纸目录路由），只有作者预览图的 `/thumbnail`。
 - `/mcp`：rmcp 3.0 StreamableHTTP。
 - `GET /__ping`：非网页客户端存活探测。
 

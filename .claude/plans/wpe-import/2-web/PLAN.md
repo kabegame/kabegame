@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 起为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归待做）；Phase 7 方案已写（2026-10-28，关键决策待确认）；Phase 8 为实现清单
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -11,7 +11,9 @@
 > - [`phase-3-web-import-preview.md`](phase-3-web-import-preview.md)：Phase 3 点级方案——Web 导入、`/wpe` 网页 MIME、CSP、`WallpaperStage` iframe 分支、预览「桌面画布」；文末为关键决策。
 > - [`phase-4-file-host-input.md`](phase-4-file-host-input.md)：Phase 4 点级方案——桌面 `file://` 宿主与鼠标转发。
 > - [`phase-5-shim-host.md`](phase-5-shim-host.md)：Phase 5 点级方案——运行时垫片、`file:` 来源判定与受限 IPC、拉取 / 推送协议、预览桥。
-> - `phase-N-<名称>.md`：Phase 6 起各 Phase 开工前的点级方案（待写）。
+> - [`phase-6a-file-preview.md`](phase-6a-file-preview.md)：Phase 6a 点级方案——预览 iframe 改走 `file://`，与桌面共用运行时目录拦截。
+> - [`phase-7-user-properties.md`](phase-7-user-properties.md)：Phase 7 点级方案——用户属性存储、属性面板、显示条件、本地化、`file` / `directory` 属性。
+> - `phase-N-<名称>.md`：其余 Phase 开工前的点级方案（待写）。
 
 ## 总体设计思路
 
@@ -152,8 +154,9 @@ Tauri 自身的 `__TAURI_INTERNALS__` 初始化脚本是否同样只进主 frame
 | Phase 3 | Web 导入 + 预览内嵌 | `x-wpe/web` 入库；`WallpaperStage` 加跨源 iframe 分支；`ImageContent` 对非视频 WPE 行切到 `WpeWallpaperContent`；预览「桌面画布」；`/wpe` 补网页 MIME；CSP `frame-src` 放行本地 HTTP 源 | Phase 2 |
 | Phase 4 | 桌面 `file://` 宿主 + 鼠标转发 | CEF 补丁 0004 按浏览器开文件访问；壁纸窗口对网页壁纸主 frame 导航到 `file://` 入口、切走导航回应用页；运行时按壁纸目录拦截 `file:` 请求、`file://` 文档不注入 Tauri 脚本；Windows 桌面鼠标移动 / 左键点击转发 | Phase 3 |
 | Phase 5 | 运行时垫片与宿主协议 | all-frames 垫片；`file:` 来源判定 + `wpe-web-capability`；桌面「拉取命令 + `listen` 推送」、预览「`postMessage` ↔ 父页面调命令」；作者默认值与界面语言 | Phase 4 |
-| Phase 6 | 桌面窗口收尾 | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
-| Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性 | Phase 5 |
+| Phase 6 | 桌面窗口收尾（暂时跳过） | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
+| Phase 6a | 预览 iframe 改 `file://` | 主窗口登记两项文件访问能力（0004 + CEF 补丁 0005）、`set_wpe_web_preview` 设根目录并返回入口、前端给 iframe 赋 `src`、CSP `file:`；预览与桌面同一套 Rust 拦截，`localStorage` 同源；删除 `/wpe` 目录服务 | Phase 5 |
+| Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性（两种宿主都生效） | Phase 6a |
 | Phase 8 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 6 |
 | — | RGB 外设、鼠标交互 | 空实现 / 暂不做（见待定决策） | — |
 
@@ -309,16 +312,37 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - **新增**
   - 多显示器：每个壁纸窗口各一个 iframe，属性变更广播到全部宿主。
 
+### Phase 6a — 预览 iframe 改 `file://`
+> 状态：已实现（2026-10-28），真机回归见 `versions/latest/regression.md`。
+
+点级方案见 [phase-6a-file-preview.md](phase-6a-file-preview.md)。HTTP 页面引用 `file:` 在渲染进程就被拦、Rust 侧无钩子，
+所以预览也改成 `file:` 文档：主窗口 `allow_file_documents("main")`，预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录，
+垫片按「非顶层 `file:`」判定预览，桥 `postMessage` 用 `"*"`。IPC 三道闸门不受 scheme 影响。真机证实应用页给子 frame 赋
+`file:` 的 `src` 同样被 `CanDisplay` 拦下（浏览器侧还有 `FilterURL` 改写成 `about:blank#blocked`）；改为 CEF 补丁 0005
+（主窗口建窗前 `allow_app_local_resources("main")`，渲染侧 `GrantLoadLocalResources`、浏览器侧 `GrantRequestScheme(file)`），
+该命令设好根目录后返回入口、前端赋 `src`；`WallpaperTarget.webEntry` 随之删除（见 phase-6a「实施记录」，含已撤掉的
+浏览器进程导航绕行）。
+`/wpe` HTTP 目录服务整个删除（Web 版不提供网页壁纸，应用 Web 服务器也不需要）。同时落实决策 11：WPE 只提供 Windows 桌面，
+其它平台对 `x-wpe/*` 只显示预览图。
+
 ### Phase 7 — 用户属性
-- **新增**
-  - 逐壁纸属性存在图片 `metadata` JSON 的 `userProperties` 段（已确认决策 6），值只存「用户改过的键」，读取时叠加在作者默认值之上；
-    保存 = 新 metadata 行 + 图片改指 + `image-changed { metadataId }`。
-  - 属性面板组件：按 `order` 排序、`group` 分组、`text` 说明行；`condition` 表达式求值决定显隐（只支持文档里的
-    `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS）；`localization` 按当前语言取文案。
-  - 面板入口：预览大图详情区与壁纸设置页；保存后的 `metadataId` 补丁由各宿主里的垫片自己重拉，按键差异投递（Phase 5 已接好）。
-  - `file` / `directory` 属性的选择与文件交付，方案按 Phase 1 结论落地。
-- **修改**
-  - `get_current_wallpaper_target` 返回「作者默认值 + 用户值」合并后的属性。
+> 状态：方案已写（2026-10-28），关键决策待确认。Phase 6 暂时跳过，本 Phase 依赖 Phase 6a。
+
+点级方案见 [phase-7-user-properties.md](phase-7-user-properties.md)。面板不复刻 WPE 属性页，用 Kabegame 自己的表单组件（用户指定）。要点：
+- 用户值存图片 metadata 顶层 `userProperties`（已确认决策 6），只存与作者默认值不同的键。
+  core 新增事务原语 `Storage::rewrite_image_metadata`：新行 + 改指 + 删无引用旧行，搜索词沿用旧行。写后发 `image-changed { metadataId }`。
+- core `wpe::user_props` 解析一次属性定义，三处共用：写命令校验、面板视图（已本地化）、页面状态（作者默认值 ⊕ 用户值）。
+- 命令 `get_wpe_web_properties` / `set_wpe_web_user_properties`，只给主窗口。
+- 面板：
+  - 字段复用 `KbNumber`（补 float `step`）、`KbSelect`、`KbBoolean`、`KbText`、`KbPath`，新增 `KbColor`；
+  - 显示条件照 WPE 自己的白名单解释器（`$parse.readOnly`，API.md 第一节）实现，不 eval、失败当 true；标签 HTML 按 ngSanitize 默认白名单净化（去掉链接与图片）；
+  - 本地化照 WPE 的查找顺序，WPE 内置词表从用户的 WPE 安装目录只读读取；
+  - 草稿即时生效，写入 300ms 防抖、串行。
+- 入口：预览右栏（`x-wpe/web` 行替换插件详情）、设置页「当前壁纸」。
+- `file` / `directory`：桌面与预览都生效（Phase 6a 之后两者同一套拦截）。
+  - 运行时 `file:` 策略加「追加放行」，拉取状态时按调用方 label 放行用户选的路径；
+  - 目录文件列表进状态，垫片实现 `userDirectoryFiles*` 与 `wallpaperRequestRandomFileForProperty`。
+- 不做：视频行的属性面板（`get_current_wallpaper_target` 不改）、紧凑布局、目录监视。
 
 ### Phase 8 — 音频可视化与媒体集成
 - **新增**（后端，Windows 优先）
@@ -349,18 +373,21 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
    不进 settings。写入入口是 WPE 定制详情面板；保存走元数据不可变语义——新建 metadata 行、图片改指新 `metadata_id`、发
    `image-changed { metadataId }` 补丁；各宿主收到补丁重取目标，再**模拟 WPE 的属性变化事件**（只含变化键的
    `applyUserProperties`）推给页面，不新增 Kabegame 事件类型。详见 phase-3 文档关键决策第 8 条。
-7. **Phase 3 关键决策全部按推荐项执行**（2026-10-26）：页面源先 HTTP 后迁自定义协议 **`kb-wpe`**；`file` / `directory` 属性
+7. **Phase 3 关键决策全部按推荐项执行**（2026-10-26）：页面源先 HTTP 后迁自定义协议 **`kb-wpe`**（2026-10-28 追记：Phase 6a 起预览也走 `file:` iframe、与桌面同源，`kb-wpe` 不再需要，HTTP 目录服务已删除）；`file` / `directory` 属性
    本 Phase 不支持；背景层退回缩略图；web 层不参与双层过渡；加 `sandbox`；IPC 主 frame / 白名单源校验纳入 Phase 3。
 
 8. **桌面网页壁纸走 `file://` 主 frame**（2026-10-27）：用户确认安全面可接受。壁纸窗口显示 `x-wpe/web` 时主 frame 直接导航到
    壁纸目录的入口 `file://`，与 WPE 进程模型一致；文件访问由 CEF 补丁 0004 只对壁纸窗口开启，越界读取由运行时按壁纸目录拦截。
-   图库预览仍用 HTTP 跨源 iframe。先导实验与补丁依据见 [API.md §5.2](API.md)。
+   图库预览仍用 HTTP 跨源 iframe（2026-10-28 追记：Phase 6a 起预览也改 `file:` iframe，见 [phase-6a-file-preview.md](phase-6a-file-preview.md)）。先导实验与补丁依据见 [API.md §5.2](API.md)。
 9. **桌面鼠标转发第一版只做移动 + 左键**（2026-10-27）：照 WPE 的轮询方式，不装键盘钩子，不转发滚轮。
 10. **宿主协议不照搬 WPE，自己用 Tauri 实现**（2026-10-27）：
     - 桌面壁纸窗口的 `file://` 页面允许注入 Tauri IPC，但只给受限权限（`wpe-web-capability`），推送用 Tauri `listen`；
     - 预览 iframe 用 `postMessage` 向主 frame（应用页）拉取，由应用页调用 Tauri 命令；订阅也 `postMessage` 登记，由应用页代为 listen 并转发（2026-10-28）；
     - `listen` 没有事件名作用域，壁纸页面因此能订阅应用全局事件，用户确认这是可接受的取舍，也算开放给壁纸的一项能力。
     - 依据与 WPE 的对照见 [API.md §4.8](API.md)，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)。
+11. **WPE 目前只提供 Windows 桌面**（2026-10-28）：发现 / 导入（`platform_supported` 收窄到 Windows）、桌面 `file://` 宿主、预览 `file:` iframe
+    全部按 `target_os = "windows"` 门控；macOS / Linux / Android / Web 对 `x-wpe/*` 行只显示预览图。`/wpe` HTTP 目录服务随 Phase 6a 删除。
+    落地见 [phase-6a-file-preview.md](phase-6a-file-preview.md) 点 5c。
 
 ## 待定决策（需用户确认）
 
@@ -369,6 +396,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 3. ~~**`file` / `directory` 属性**~~ 已定路线（2026-10-26，phase-3 决策 2）：Phase 3 不支持；Phase 7 前先测本地 scheme，再测 `file://`。原文：WPE 约定页面自己拼 `file:///`，HTTP 源的页面读不了本地文件。Phase 1 调研后在
    「CEF 放开 `file://` 并改用 `file://` 加载页面」「垫片改写路径到白名单路由」「暂不支持这两类属性」之间选。
 4. ~~**`localStorage` 持久化**~~ 已定（2026-10-26）：自定义协议 `kb-wpe`，Phase 5 落地；所有网页壁纸共用一个稳定源。
+   2026-10-28 追记：Phase 6a 把预览也改成 `file:` 源后与桌面同源，`kb-wpe` 不再需要。
 5. ~~**用户属性存储**~~ 已定（2026-10-26）：见已确认决策 6。
 6. ~~**桌面鼠标交互**~~ 已定（2026-10-27）：见已确认决策 9，Phase 4 实现。
 7. **Phase 8 是否纳入第二阶段**：音频与媒体集成成本最高、Rust 侧全新，可以推到 Scene 之后。

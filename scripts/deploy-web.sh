@@ -9,9 +9,11 @@ set -euo pipefail
 #   0. 前端静态资源 → OSS 挂载目录 /mnt/oss/web/（即 https://cdn.kabegame.com/web/）。
 #      生产 web 构建的 base 指向该 CDN（apps/kabegame/vite.config.ts），二进制只负责返回
 #      index.html；新二进制上线前资源必须已在 OSS，否则页面引用的 chunk 会 404。
-#      先 rsync 到服务器本地暂存目录，再在服务器上 cp 进挂载点：ossfs2 按写入时的文件名
-#      决定 Content-Type，rsync 直写挂载点会先写无扩展名的临时文件再改名，JS 被标成
+#      先经 ssh 用 tar 整包传到服务器本地暂存目录，再在服务器上 cp 进挂载点：ossfs2 按写入时
+#      的文件名决定 Content-Type，rsync 直写挂载点会先写无扩展名的临时文件再改名，JS 被标成
 #      application/octet-stream、浏览器拒绝执行；--inplace 又因 ossfs2 不支持 ftruncate 失败。
+#      暂存这一段也不用 rsync：Windows 上 chocolatey 的 rsync（cygwin）拉起 Git Bash 的 msys ssh
+#      会报 dup() in/out/err failed；产物只有几 MB，整包重传即可。
 #      只增不删：已打开旧页面的用户还会按需加载旧版本 chunk。
 #   1. 插件 .kgpg → 服务器**用户数据目录** plugins-directory/（与插件商店无关；
 #      web 二进制不像桌面安装包那样内嵌 resources/plugins，服务端插件完全由该目录提供）。
@@ -65,7 +67,9 @@ SSH_TARGET="${REMOTE_USER}@${REMOTE_HOST}"
 
 # 0) 前端静态资源 → OSS（服务仍在运行，无停机）
 echo "==> Uploading web static assets to ${REMOTE_HOST}:${REMOTE_OSS_WEB_DIR}/"
-rsync -rt --delete --exclude=/index.html "${LOCAL_WEB_DIST}/" "${SSH_TARGET}:${REMOTE_WEB_STAGING}/"
+# 暂存目录先清空再解包，等同于原来的 --delete；./index.html 只排除根目录那份
+tar -C "${LOCAL_WEB_DIST}" --exclude=./index.html -cf - . |
+  ssh "${SSH_TARGET}" "rm -rf '${REMOTE_WEB_STAGING}' && mkdir -p '${REMOTE_WEB_STAGING}' && tar -C '${REMOTE_WEB_STAGING}' -xf -"
 ssh "${SSH_TARGET}" "mkdir -p '${REMOTE_OSS_WEB_DIR}' && cp -r '${REMOTE_WEB_STAGING}/.' '${REMOTE_OSS_WEB_DIR}/'"
 ENTRY_TYPE=$(curl -fsSI "${ENTRY_JS}" | tr -d '\r' | awk -F': ' 'tolower($1) == "content-type" { print $2 }' || true)
 if [[ "${ENTRY_TYPE}" != *javascript* ]]; then

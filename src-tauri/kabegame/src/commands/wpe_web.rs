@@ -3,8 +3,11 @@
 //!
 //! - 桌面壁纸窗口（主 frame 是 `file://` 入口）：垫片直接调 [`wpe_web_pull_state`]，权限只来自
 //!   `wpe-web-capability`（远程 `file:` 来源）；
-//! - 图库预览（主窗口里的跨源 iframe）：垫片 `postMessage` 给宿主页，宿主页用主窗口权限调
+//! - 图库预览（主窗口里的 `file:` iframe，碰不到 IPC）：垫片 `postMessage` 给宿主页，宿主页用主窗口权限调
 //!   [`get_wpe_web_state`] 代办（`apps/kabegame/src/components/wallpaper/wpeWebBridge.ts`）。
+//!   iframe 的 `file:` 请求与桌面同一套运行时目录拦截，根目录由 [`set_wpe_web_preview`] 在预览挂载 /
+//!   卸载时设置 / 清空；它设好根目录后返回入口 `file://`，前端给 iframe 赋 `src`（应用页能加载
+//!   `file:` 子 frame 靠 CEF 补丁 0005，主窗口建窗前登记 `allow_app_local_resources("main")`）。
 //!
 //! 状态只在这里计算、每次都读图片当前的 metadata；宿主不推状态、不排队、不记版本号，乱序由垫片
 //! 按自己的拉取编号丢弃。
@@ -93,14 +96,88 @@ pub async fn wpe_web_pull_state<R: tauri::Runtime>(
         .ok_or_else(|| "web wallpaper row missing".to_string())
 }
 
+/// 图库预览：把调用方窗口的 `file:` 根目录设成这张网页壁纸的目录，并返回它的入口 `file://`
+/// （`Some(id)` → `Some(入口)`；`None` 只清空根目录、返回 `None`）。本命令不导航，前端拿到入口后给
+/// 预览 iframe 赋 `src`。预览 iframe 的每个 `file:` 请求都经运行时按这个根目录拦截；壁纸窗口不走这里。
+///
+/// 应用页（http / tauri 源）能给子 frame 赋 `src = "file:…"`，靠的是主窗口建窗前登记的
+/// `tauri_runtime_cef::allow_app_local_resources("main")`（CEF 补丁 0005：渲染侧放过
+/// `SecurityOrigin::CanDisplay`，浏览器侧给主 frame 进程 `file` 请求权）。补丁只开门，加载哪些文件
+/// 仍由这里设的根目录裁决，所以必须先设根目录、再交出入口。
+///
+/// 只给主窗口（`permissions/main.toml`，不进 `wpe-web.toml`）。`main-capability` 也绑定壁纸窗口的应用页，
+/// 所以按 label 拒绝壁纸窗口：那里的根目录由 `WallpaperWindow` 随导航管理。
+#[tauri::command]
+pub async fn set_wpe_web_preview<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    image_id: Option<String>,
+) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let label = webview.label().to_string();
+        check_preview_label(&label)?;
+        let Some(id) = image_id else {
+            tauri_runtime_cef::set_file_document_root(&label, None)?;
+            return Ok(None);
+        };
+        // 先开根目录再交出入口：主窗口的每个 `file:` 请求都按它拦截，没设好时连入口页都会被拒
+        let (root, entry) = preview_entry(&id).await?;
+        tauri_runtime_cef::set_file_document_root(&label, Some(root))?;
+        Ok(Some(entry.to_string()))
+    }
+    // WPE 网页壁纸暂只支持 Windows；前端据此报错并退回作者预览图。
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (webview, image_id);
+        Err("WPE web wallpapers are Windows-only for now".to_string())
+    }
+}
+
+/// 预览根目录只能设在壁纸窗口以外的 webview 上。
+#[cfg(target_os = "windows")]
+fn check_preview_label(label: &str) -> Result<(), String> {
+    if label == crate::wallpaper::manager::window::WALLPAPER_LABEL {
+        return Err("set_wpe_web_preview is not available in the wallpaper window".to_string());
+    }
+    Ok(())
+}
+
+/// 预览的根目录与入口：行必须是 `x-wpe/web`，二者都取 [`crate::wallpaper::web_entry`]（与桌面壁纸窗口
+/// 同一份算法：规范化目录 + 目录内的入口 `file://`，所以入口一定落在根目录内）。读 `project.json` 放 blocking 线程。
+#[cfg(target_os = "windows")]
+async fn preview_entry(image_id: &str) -> Result<(std::path::PathBuf, url::Url), String> {
+    let info = Storage::find_image_by_id(image_id)
+        .map_err(|e| format!("Storage error: {}", e))?
+        .ok_or("image not found")?;
+    if wpe_kind(info.media_type.as_deref()).as_deref() != Some("web") {
+        return Err("not a web wallpaper".to_string());
+    }
+    let dir = std::path::PathBuf::from(&info.local_path);
+    let entry = tauri::async_runtime::spawn_blocking(move || crate::wallpaper::web_entry(&dir))
+        .await
+        .map_err(|error| error.to_string())??;
+    entry.ok_or_else(|| "web wallpaper entry missing".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
     use tauri::utils::acl::RemoteUrlPattern;
     use url::Url;
 
+    /// 预览根目录命令拒绝壁纸窗口，主窗口放行。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn preview_root_rejects_wallpaper_window() {
+        assert!(
+            super::check_preview_label(crate::wallpaper::manager::window::WALLPAPER_LABEL).is_err()
+        );
+        assert!(super::check_preview_label("main").is_ok());
+    }
+
     /// `wpe-web-capability` 的 `remote.urls`：`file:///*` 能匹配桌面网页壁纸入口，
-    /// 不匹配应用页、预览用的本地 HTTP 源。
+    /// 不匹配应用页与本地 HTTP 源。图库预览的 iframe 同样是 `file:`，但这个 capability 只绑定
+    /// `wallpaper` 窗口，在 `main` 里零授权。
     #[test]
     fn wpe_web_capability_pattern_matches_file_urls() {
         let pattern = RemoteUrlPattern::from_str("file:///*").expect("file:///* 应能解析");
@@ -114,7 +191,7 @@ mod tests {
         let localhost = Url::parse("file://localhost/D:/x/y/index.html").unwrap();
         assert!(pattern.test(&localhost));
         assert!(!pattern.test(&Url::parse("http://127.0.0.1/").unwrap()));
-        assert!(!pattern.test(&Url::parse("http://127.0.0.1:33050/wpe/12097/index.html").unwrap()));
+        assert!(!pattern.test(&Url::parse("http://127.0.0.1:33050/index.html").unwrap()));
         assert!(!pattern.test(&Url::parse("http://tauri.localhost/index.html").unwrap()));
         assert!(!pattern.test(&Url::parse("https://example.com/").unwrap()));
     }

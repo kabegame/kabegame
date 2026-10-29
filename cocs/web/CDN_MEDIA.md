@@ -32,7 +32,7 @@ Web release 不由 Kabegame 进程读取媒体文件：`/file`、`/thumbnail`、
 
 部署时先把 `dist-kabegame-web/` 中除 `index.html` 以外的文件推到 OSS，再上传插件、停服换二进制：
 
-1. `rsync -rt --delete` 到服务器本地暂存目录 `~/kabegame/web-dist/`；
+1. `tar` 打包经 `ssh` 管道传到服务器本地暂存目录 `~/kabegame/web-dist/`（先清空再解包）；不用 rsync，因为 Windows 上 chocolatey 的 rsync（cygwin）拉起 Git Bash 的 msys `ssh` 会报 `dup() in/out/err failed`；
 2. 在服务器上 `cp -r` 进 ossfs2 挂载点 `/mnt/oss/web/`；
 3. 用 `curl` 确认入口脚本在 CDN 上以 JavaScript 类型返回，否则在停服前中止。
 

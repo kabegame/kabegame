@@ -800,7 +800,7 @@ mod imp {
                 _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
             ) -> Option<ResourceRequestHandler> {
                 if is_download != 1 {
-                    // 登记了文件文档策略的 webview：每个 `file:` 请求都要过目录约束。
+                    // 登记了任一文件访问能力（0004 / 0005）的 webview：每个 `file:` 请求都要过目录约束。
                     let is_file_request = request
                         .map(|request| CefString::from(&request.url()).to_string())
                         .is_some_and(|url| crate::file_access::is_file_url(&url));
@@ -1516,20 +1516,19 @@ mod imp {
         let mut initialization_scripts_extra_info =
             crate::subprocess::initialization_scripts_extra_info(&initialization_scripts_payload)
                 .map_err(|error| Error::CreateWebview(Box::new(io::Error::other(error))))?;
-        // 登记过文件文档策略的 webview：同一个字典里带上文件访问标记，CEF 补丁 0004 据此只给
-        // 这个 browser 打开 `allow_file_access_from_file_urls`。弹窗路径（on_before_popup）
-        // 另建字典、不带此键，偏好不随弹窗扩散。
-        if crate::file_access::is_file_document_webview(&webview_label)
-            && initialization_scripts_extra_info.set_bool(
-                Some(&CefString::from(
-                    crate::file_access::ALLOW_FILE_ACCESS_EXTRA_INFO_KEY,
-                )),
-                1,
-            ) == 0
-        {
-            return Err(Error::CreateWebview(Box::new(io::Error::other(
-                "CEF failed to write file-access extra_info",
-            ))));
+        // 登记过文件访问能力的 webview：同一个字典里按能力带上 bool 键（值都为 true）——
+        // `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004：只给这个 browser 打开
+        // `allow_file_access_from_file_urls`）与 `kabegame.allow_local_resources`（补丁 0005：
+        // 应用页可加载 `file:`）。弹窗路径（on_before_popup）另建字典、不带这些键，能力不随弹窗
+        // 扩散；DevTools 窗口会复制本字典，但 0005 在补丁两侧都不授弹窗里提交的文档。弹窗的初始
+        // `about:blank` 空文档会按 Blink 自身规则从 opener 继承 `CanDisplay(file:)`，它沿用本窗口的
+        // client，`file:` 请求照样过下面的闸门。
+        for key in crate::file_access::extra_info_keys(&webview_label) {
+            if initialization_scripts_extra_info.set_bool(Some(&CefString::from(key)), 1) == 0 {
+                return Err(Error::CreateWebview(Box::new(io::Error::other(format!(
+                    "CEF failed to write extra_info key '{key}'"
+                )))));
+            }
         }
         let on_page_load = pending.on_page_load_handler.take().map(Rc::new);
         let download_handler = pending

@@ -38,7 +38,7 @@
     {{/if}}
     "security": {
       "capabilities": ["main-capability"{{#if isAndroid}}, "android-capability", "crawler-capability", "surf-capability"{{else}}, "crawler-capability", "surf-capability", "surf-navbar-capability", "wpe-web-capability"{{/if}}],
-      "csp": "default-src 'self' ipc: cef-ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: cef-ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about: http://127.0.0.1:*;",
+      "csp": "default-src 'self' ipc: cef-ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src * data: blob:; media-src * data: blob: ; connect-src 'self' ipc: cef-ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'nonce-kabegame-ejs-bridge'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src 'self' blob: data: about: file:;",
       {{!-- Tauri 默认会给打包 HTML 里的 <style> 标签自动注入随机 nonce 并加到 style-src,
            一旦 style-src 出现 nonce-source,浏览器会忽略该指令里的 'unsafe-inline'
            (对内联 style="" 属性同样生效,且属性没有 nonce 机制可用),

@@ -77,16 +77,6 @@ export function compatibleToUrl(compatiblePath: string): string {
   return localMediaUrl("compatible", path);
 }
 
-/**
- * WPE 网页壁纸入口 URL：`/wpe/<imageId>/`，后端按 `project.json` 307 到入口 html，页面相对资源由
- * `/wpe/<imageId>/<rel>` 提供。按图片 id 寻址（不按路径），未初始化时返回空串。
- */
-export function wpeEntryUrl(imageId: string): string {
-  const id = (imageId || "").trim();
-  if (!id || httpServerBaseUrl === null) return "";
-  return `${httpServerBaseUrl}/wpe/${encodeURIComponent(id)}/`;
-}
-
 /** 所有平台共享插件文件 host；清单路径逐段编码，来源与版本进入缓存键。 */
 export function pluginFileUrl(plugin: Pick<Plugin, "id" | "version" | "fileOrigin">, relPath: string): string {
   if (httpServerBaseUrl === null) return "";

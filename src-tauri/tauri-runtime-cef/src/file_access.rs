@@ -1,16 +1,21 @@
-//! 按 webview label 的 `file://` 文档策略。
+//! 按 webview label 的 `file:` 访问策略：两项能力 + 一个闸门。
 //!
-//! 某些窗口需要以 `file://` 加载一个本地目录里的页面，并允许页面用 `fetch` / XHR
-//! 读同目录的其它文件（Wallpaper Engine 网页壁纸就是这么运行的）。Chromium 的
-//! `allow_file_access_from_file_urls` 偏好能做到这一点，但它同时放开了**任意**本地文件。
-//! 这里把边界拆成两层，都只作用于登记过的 label：
+//! 两项能力都是建 browser 时写进 `extra_info` 的 bool 键，由 CEF 补丁按 browser 开启：
 //!
-//! 1. 建 browser 时在 `extra_info` 里带 [`ALLOW_FILE_ACCESS_EXTRA_INFO_KEY`]，CEF 补丁
-//!    `third-patches/cef/0004` 据此只给这个 browser 打开偏好；
-//! 2. 该 browser 的每个 `file:` 资源请求都经 [`check_file_request`] 判定，只放行当前允许
-//!    根目录内的普通文件（拒绝越界、符号链接、目录、不存在）；没有根目录时一律拒绝。
+//! 1. **文件文档**（[`ALLOW_FILE_ACCESS_EXTRA_INFO_KEY`]，补丁 `third-patches/cef/0004`）：
+//!    以 `file://` 加载的页面可以用 `fetch` / XHR 读其它本地文件（Wallpaper Engine 网页壁纸
+//!    就是这么运行的）。Chromium 的 `allow_file_access_from_file_urls` 偏好本身放开的是**任意**
+//!    本地文件；
+//! 2. **应用页加载本地资源**（[`ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY`]，补丁 0005）：最外层主
+//!    frame 里的非 `file:` 文档（应用页）可以加载 `file:`，例如给 `<iframe>` 赋 `src = file:…`。
+//!    只放开显示与导航，应用页自己 `fetch` / XHR `file:` 仍失败。
 //!
-//! 运行时只提供机制；哪个窗口、哪个目录由应用决定。
+//! 补丁只开门，不管哪些文件能进来。带任一能力的 browser 都开**闸门**：它的每个 `file:` 资源
+//! 请求都经 [`check_file_request`] 判定，只放行当前允许根目录内的普通文件（拒绝越界、符号链接、
+//! 目录、不存在）；没有根目录时一律拒绝。两项能力与根目录并在同一张 label 表里，「进表即开闸门」
+//! 由结构保证。
+//!
+//! 运行时只提供机制；哪个窗口开哪项能力、放行哪个目录由应用决定。
 
 use std::{
     collections::HashMap,
@@ -22,19 +27,64 @@ use std::{
 pub(crate) const ALLOW_FILE_ACCESS_EXTRA_INFO_KEY: &str =
     "kabegame.allow_file_access_from_file_urls";
 
-/// label → 当前允许的根目录（`None` = 拒绝所有 `file:` 请求）。
-static FILE_DOCUMENT_POLICIES: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> =
-    OnceLock::new();
+/// 建 browser 时 `extra_info` 里的 bool 键；CEF 补丁 0005 读它允许应用页加载本地资源
+/// （渲染侧 `SecurityOrigin::GrantLoadLocalResources`、浏览器侧 `GrantRequestScheme(file)`）。
+/// 键名必须与补丁里的字面量一致。
+pub(crate) const ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY: &str = "kabegame.allow_local_resources";
 
-fn policies() -> &'static Mutex<HashMap<String, Option<PathBuf>>> {
-    FILE_DOCUMENT_POLICIES.get_or_init(|| Mutex::new(HashMap::new()))
+/// 一个 label 的 `file:` 访问策略。
+#[derive(Debug, Default)]
+struct FilePolicy {
+    /// 建窗带 0004 键：`file:` 文档可读本地文件。
+    file_documents: bool,
+    /// 建窗带 0005 键：应用页可加载 `file:`。
+    app_local_resources: bool,
+    /// 当前允许的根目录（`None` = 拒绝所有 `file:` 请求）。
+    root: Option<PathBuf>,
 }
 
-/// 建窗前登记 label。已登记的保留当前根目录不变。
+/// label → 策略。进表即开闸门。
+static FILE_POLICIES: OnceLock<Mutex<HashMap<String, FilePolicy>>> = OnceLock::new();
+
+fn policies() -> &'static Mutex<HashMap<String, FilePolicy>> {
+    FILE_POLICIES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 建窗前登记 label 的「文件文档」能力（0004）。已登记的保留当前根目录与其它能力不变。
 pub(crate) fn allow_file_documents(webview_label: &str) {
     if let Ok(mut map) = policies().lock() {
-        map.entry(webview_label.to_string()).or_insert(None);
+        map.entry(webview_label.to_string())
+            .or_default()
+            .file_documents = true;
     }
+}
+
+/// 建窗前登记 label 的「应用页加载本地资源」能力（0005）。已登记的保留当前根目录与其它能力不变。
+pub(crate) fn allow_app_local_resources(webview_label: &str) {
+    if let Ok(mut map) = policies().lock() {
+        map.entry(webview_label.to_string())
+            .or_default()
+            .app_local_resources = true;
+    }
+}
+
+/// 建 browser 时要写进 `extra_info` 的 bool 键（值都为 true），顺序固定为 0004、0005；
+/// 未登记的 label 为空。
+pub(crate) fn extra_info_keys(webview_label: &str) -> Vec<&'static str> {
+    let Ok(map) = policies().lock() else {
+        return Vec::new();
+    };
+    let Some(policy) = map.get(webview_label) else {
+        return Vec::new();
+    };
+    let mut keys = Vec::with_capacity(2);
+    if policy.file_documents {
+        keys.push(ALLOW_FILE_ACCESS_EXTRA_INFO_KEY);
+    }
+    if policy.app_local_resources {
+        keys.push(ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY);
+    }
+    keys
 }
 
 /// 设置 / 清空允许的根目录；未登记的 label 返回 Err。
@@ -45,16 +95,16 @@ pub(crate) fn set_file_document_root(
     let mut map = policies()
         .lock()
         .map_err(|_| "file document policy mutex poisoned".to_string())?;
-    let Some(slot) = map.get_mut(webview_label) else {
+    let Some(policy) = map.get_mut(webview_label) else {
         return Err(format!(
-            "webview '{webview_label}' 未登记文件文档策略（需在建窗前调用 allow_file_documents）"
+            "webview '{webview_label}' 未登记文件访问策略（需在建窗前调用 allow_file_documents / allow_app_local_resources）"
         ));
     };
-    *slot = root;
+    policy.root = root;
     Ok(())
 }
 
-/// label 是否登记过文件文档策略。
+/// label 是否登记过任一能力，即它的 `file:` 请求是否要过闸门。
 pub(crate) fn is_file_document_webview(webview_label: &str) -> bool {
     policies()
         .lock()
@@ -67,7 +117,7 @@ pub(crate) fn file_document_root(webview_label: &str) -> Option<PathBuf> {
     policies()
         .lock()
         .ok()
-        .and_then(|map| map.get(webview_label).cloned().flatten())
+        .and_then(|map| map.get(webview_label).and_then(|policy| policy.root.clone()))
 }
 
 /// URL 是否为 `file:` scheme（大小写不敏感，不解析其余部分）。
@@ -322,5 +372,43 @@ mod tests {
         assert_eq!(file_document_root(label), Some(PathBuf::from("/tmp/x")));
         set_file_document_root(label, None).unwrap();
         assert_eq!(file_document_root(label), None);
+    }
+
+    #[test]
+    fn extra_info_keys_follow_registration() {
+        // 未登记：不写键、不开闸门
+        let none = "file-access-test-keys-none";
+        assert!(extra_info_keys(none).is_empty());
+        assert!(!is_file_document_webview(none));
+
+        // 只登记 0005：写 0005 键，同样开闸门、可设根目录
+        let local = "file-access-test-keys-local";
+        allow_app_local_resources(local);
+        assert_eq!(
+            extra_info_keys(local),
+            vec![ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY]
+        );
+        assert!(is_file_document_webview(local));
+        set_file_document_root(local, Some(PathBuf::from("/tmp/local"))).unwrap();
+        assert_eq!(file_document_root(local), Some(PathBuf::from("/tmp/local")));
+
+        // 两项都登记：顺序固定为 0004、0005，与登记先后无关
+        let both = "file-access-test-keys-both";
+        allow_app_local_resources(both);
+        allow_file_documents(both);
+        assert_eq!(
+            extra_info_keys(both),
+            vec![
+                ALLOW_FILE_ACCESS_EXTRA_INFO_KEY,
+                ALLOW_LOCAL_RESOURCES_EXTRA_INFO_KEY
+            ]
+        );
+
+        // 已有根目录时再登记任一能力，不清根目录
+        set_file_document_root(both, Some(PathBuf::from("/tmp/both"))).unwrap();
+        allow_file_documents(both);
+        allow_app_local_resources(both);
+        assert_eq!(file_document_root(both), Some(PathBuf::from("/tmp/both")));
+        assert_eq!(extra_info_keys(both).len(), 2);
     }
 }

@@ -43,6 +43,8 @@
 - `capabilities/wpe-web.json`：桌面壁纸窗口里 `file://` 加载的 WPE 网页壁纸（`wpe-web-capability`，`local: false`、
   `remote.urls: ["file:///*"]`），只给 `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的
   `wpe_web_pull_state`；只在桌面分支的 `tauri.conf.json.handlebars` 里启用。
+  它只绑定 `wallpaper` 窗口：图库预览的 `file:` iframe 在主窗口里也是远程 `file:` 来源，但零授权；预览根目录命令
+  `set_wpe_web_preview` 只在 `permissions/main.toml`（由主窗口应用页调用，命令内按 label 拒绝壁纸窗口），不进 `wpe-web.toml`。
 
 ### 3) build 入口
 

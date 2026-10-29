@@ -40,7 +40,9 @@ pub struct WallpaperTarget {
     #[serde(rename = "type")]
     pub media_type: Option<String>,
     /// 浏览器兼容副本：普通视频仅在不可直接播放时有值；WPE 视频始终有值；WPE 网页为空
-    /// （页面经 `/wpe/<id>/` 加载）。
+    /// （页面以入口 `file://` 加载：桌面由 `WindowWallpaperManager` 整窗导航，图库预览由
+    /// `set_wpe_web_preview` 设好根目录后返回入口、前端给 iframe 赋 `src`，入口都由
+    /// `wallpaper::web_entry` 现算）。
     pub compatible_path: Option<String>,
     /// 目录型 WPE 视频壁纸的作者默认播放属性；其它类型为 null。
     pub wpe_video: Option<WpeVideoProps>,

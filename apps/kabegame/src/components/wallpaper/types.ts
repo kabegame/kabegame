@@ -23,7 +23,10 @@ export interface WpeVideoProps {
   } | null;
 }
 
-/** 壁纸目标（后端 `WallpaperTarget`）：普通文件按扩展名 / 类型播图或播视频，目录型 WPE 壁纸播 `compatiblePath`。 */
+/**
+ * 壁纸目标（后端 `WallpaperTarget`）：普通文件按扩展名 / 类型播图或播视频，目录型 WPE 视频播 `compatiblePath`；
+ * WPE 网页（`x-wpe/web`）没有可播放媒体，入口由后端在 `set_wpe_web_preview` 里按 id 现算并返回。
+ */
 export interface WallpaperTarget {
   id: string;
   path: string;

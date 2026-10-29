@@ -1,17 +1,13 @@
 // WPE 网页壁纸运行时垫片：all-frames 初始化脚本，桌面壁纸窗口与主窗口共用。
-// 只在两种文档里启用：桌面壁纸窗口的 file:// 主 frame；预览里主窗口的 /wpe/<id>/ 直接子 iframe。
-// 其它文档（应用页、别的 iframe）第一行就返回，不定义任何全局。
+// 只在两种文档里启用：桌面壁纸窗口的 file:// 主 frame；预览里主窗口的 file: 直接子 iframe。
+// 其它文档（应用页、更深的嵌套 iframe）第一行就返回，不定义任何全局。
 // 协议见 cocs/wpe/WPE_IMPORT.md「运行时垫片与宿主协议」：垫片向宿主拉取完整状态、订阅事件后重拉，
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。
 (function () {
   "use strict";
   var isTop = window === window.top;
   var desktop = isTop && location.protocol === "file:";
-  var preview =
-    !isTop &&
-    window.parent === window.top &&
-    (location.hostname === "127.0.0.1" || location.hostname === "localhost") &&
-    /^\/wpe\/[^/]+\//.test(location.pathname);
+  var preview = !isTop && window.parent === window.top && location.protocol === "file:";
   if ((!desktop && !preview) || window.__kbWpeShim) return;
   Object.defineProperty(window, "__kbWpeShim", { value: true });
 
@@ -177,7 +173,7 @@
     };
   }
 
-  // 预览：跨源 iframe 碰不到 IPC，拉取与 listen 都 postMessage 给宿主页代办
+  // 预览：file: iframe 碰不到 IPC，拉取与 listen 都 postMessage 给宿主页代办
   function parentTransport() {
     var nextId = 0;
     var pending = {}; // 拉取 id → 落地回调

@@ -160,6 +160,19 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
         _ => (0.0, 0.0),
     };
 
+    // 图库预览以 `file:` iframe 加载 WPE 网页壁纸入口，建窗前给主窗口登记两项能力：
+    // - CEF 补丁 0004：iframe 里的 `file:` 文档可以 fetch 同目录文件（只作用于 `file:` 文档）；
+    // - CEF 补丁 0005：应用页可以给 iframe 赋 `src = file:…`（只放开显示与导航，应用页自己 fetch
+    //   `file:` 仍失败）。
+    // 补丁只开门：每个 `file:` 请求都经运行时按根目录拦截。根目录只由 `set_wpe_web_preview` 在预览
+    // 挂载 / 卸载时设置 / 清空，不预览时为空、拒绝全部 `file:` 请求。WPE 网页壁纸暂只支持 Windows，
+    // 其它平台不登记。
+    #[cfg(target_os = "windows")]
+    {
+        tauri_runtime_cef::allow_file_documents("main"); // 0004：iframe 里的 file 文档 fetch 同目录
+        tauri_runtime_cef::allow_app_local_resources("main"); // 0005：应用页可给 iframe 赋 src=file:
+    }
+
     let builder =
         WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
             .title(t!("common.appName"))
@@ -170,7 +183,7 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
             .fullscreen(false)
             .visible(true)
             .devtools(true)
-            // WPE 网页壁纸垫片：只在图库预览的 /wpe/<id>/ 直接子 iframe 里启用，应用页与其它 iframe
+            // WPE 网页壁纸垫片：只在图库预览的 `file:` 直接子 iframe 里启用，应用页与其它 iframe
             // 里第一行就返回。
             .initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS);
 

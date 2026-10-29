@@ -1,41 +1,14 @@
 use super::{style_options, transition_options, WallpaperManager, WallpaperOption};
+use crate::wallpaper::web_entry;
 use crate::wallpaper::window::WallpaperWindow;
 use async_trait::async_trait;
-use kabegame_core::wpe::{read_project, WpeKind};
 use kabegame_i18n::t;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use url::Url;
 
 /// 壁纸窗口 label。
 pub const WALLPAPER_LABEL: &str = "wallpaper";
-
-/// `path` 若是网页壁纸（`x-wpe/web`）目录，解析出目录与入口的 `file://` URL；其它路径返回 `None`。
-///
-/// 只读一个小的 `project.json`，不 await，由调用方在窗口锁内同步执行。
-fn web_entry(path: &Path) -> Result<Option<(PathBuf, Url)>, String> {
-    if !path.is_dir() {
-        return Ok(None);
-    }
-    // read_project 校验 `file` 是目录内相对路径（拒绝越界）且入口存在。
-    let project = read_project(path).map_err(|skip| {
-        format!(
-            "无法加载 Wallpaper Engine 壁纸 {}: {}",
-            path.display(),
-            skip.message()
-        )
-    })?;
-    if project.kind != WpeKind::Web {
-        return Ok(None);
-    }
-    let entry = project
-        .entry_path()
-        .ok_or_else(|| format!("网页壁纸没有入口文件: {}", path.display()))?;
-    let entry = Url::from_file_path(&entry)
-        .map_err(|()| format!("网页壁纸入口不是绝对路径: {}", entry.display()))?;
-    Ok(Some((project.dir, entry)))
-}
 
 /// 窗口模式壁纸管理器。壁纸窗口的 label 见 [`WALLPAPER_LABEL`]，窗口是**懒建**的：
 /// 只在 `wallpaperMode == "window"` 期间存在。
@@ -90,6 +63,8 @@ impl<R: Runtime> WindowWallpaperManager<R> {
 
         // 网页壁纸以 file:// 加载并读同目录文件：建窗前登记 label，CEF 只给这个 browser
         // 打开文件访问偏好，file: 请求由运行时按当前壁纸目录约束（初始拒绝全部）。
+        // WPE 网页壁纸暂只支持 Windows（`web_entry` 在其它平台恒为 None），其它平台不登记。
+        #[cfg(target_os = "windows")]
         tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。

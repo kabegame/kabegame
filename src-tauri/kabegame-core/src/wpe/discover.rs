@@ -2,7 +2,8 @@
 //!
 //! Windows 从注册表 `HKCU\Software\Valve\Steam\SteamPath` 起步，Linux 走 Steam 的常见
 //! 安装目录；两者都解析 `steamapps/libraryfolders.vdf`，只在包含 app `431960`
-//! （Wallpaper Engine）的库里产出三类根。macOS / Android / Web 不适用，返回空。
+//! （Wallpaper Engine）的库里产出三类根。WPE 壁纸暂只支持 Windows（[`platform_supported`]）：
+//! Linux 的路径探测保留但不再进入，Linux / macOS / Android / Web 返回空。
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -42,9 +43,16 @@ pub struct WpeRoot {
 /// WPE 的 Steam app id。
 pub const WPE_STEAM_APP_ID: &str = "431960";
 
-/// 当前平台是否可能装 WPE。
+/// 当前平台是否提供 WPE 发现：暂只支持 Windows。
+///
+/// Linux 的 Steam 路径探测（[`steam_install_roots`]）保留但不再进入；macOS / Android / Web 不适用。
 pub fn platform_supported() -> bool {
-    cfg!(any(target_os = "windows", target_os = "linux"))
+    platform_supported_on(std::env::consts::OS)
+}
+
+/// 按目标系统名（`std::env::consts::OS` 的取值）判定，单测在任一平台都能覆盖各分支。
+fn platform_supported_on(os: &str) -> bool {
+    os == "windows"
 }
 
 /// Steam 安装根目录（Windows 注册表 / Linux 常见路径）。
@@ -347,6 +355,16 @@ pub fn discover_roots() -> Vec<WpeRoot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_supported_is_windows_only() {
+        assert!(platform_supported_on("windows"));
+        // 非 Windows 分支：Linux 不再进入 Steam 探测，其余平台本来就不适用
+        for os in ["linux", "macos", "android", "ios", "freebsd"] {
+            assert!(!platform_supported_on(os), "{os}");
+        }
+        assert_eq!(platform_supported(), cfg!(target_os = "windows"));
+    }
 
     #[test]
     fn parses_new_library_folders_format() {
