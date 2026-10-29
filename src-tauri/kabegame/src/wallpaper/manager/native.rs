@@ -72,7 +72,7 @@ end tell"#,
             ));
         }
 
-        println!("[DEBUG] macOS 壁纸路径设置完成（使用 osascript，样式跟随系统）");
+        tracing::debug!("macOS 壁纸路径设置完成（使用 osascript，样式跟随系统）");
         Ok(())
     }
 
@@ -195,15 +195,15 @@ end tell"#,
             .output();
 
         if let Err(e) = dark_output {
-            eprintln!(
-                "[WARN] 设置 `picture-uri-dark` 失败（可能该 key 不存在于当前 GNOME 版本）：{}",
+            tracing::warn!(
+                "设置 `picture-uri-dark` 失败（可能该 key 不存在于当前 GNOME 版本）：{}",
                 e
             );
         } else if let Ok(output) = dark_output {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!(
-                    "[WARN] `gsettings set picture-uri-dark` 失败（可能该 key 不存在于当前 GNOME 版本）：{}",
+                tracing::warn!(
+                    "`gsettings set picture-uri-dark` 失败（可能该 key 不存在于当前 GNOME 版本）：{}",
                     stderr.trim()
                 );
             }
@@ -297,7 +297,7 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
             desktop_key
                 .set_value("WallpaperTransition", &"1")
                 .map_err(|e| format!("设置 WallpaperTransition 失败: {}", e))?;
-            println!("[DEBUG] 已启用系统壁纸淡入淡出效果（WallpaperTransition=1）");
+            tracing::debug!("已启用系统壁纸淡入淡出效果（WallpaperTransition=1）");
         }
 
         Ok(())
@@ -385,8 +385,8 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
     async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {
         use std::path::Path;
 
-        println!("[DEBUG] NativeWallpaperManager::set_wallpaper_path 被调用");
-        println!("[DEBUG] file_path: {}", file_path);
+        tracing::debug!("NativeWallpaperManager::set_wallpaper_path 被调用");
+        tracing::debug!("file_path: {}", file_path);
 
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let file_path_owned =
@@ -433,13 +433,13 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                 // 这个接口应该能正确触发 Windows 原生的淡入淡出效果
                 // 如果失败，则回退到"延迟 + SystemParametersInfoW"的模拟方式
                 if let Ok(()) = self.set_wallpaper_via_com(&wide_path) {
-                    println!(
-                        "[DEBUG] 壁纸路径设置完成（使用 IDesktopWallpaper COM，支持原生淡入淡出）"
+                    tracing::debug!(
+                        "壁纸路径设置完成（使用 IDesktopWallpaper COM，支持原生淡入淡出）"
                     );
                     return Ok(());
                 }
 
-                println!("[DEBUG] IDesktopWallpaper COM 接口调用失败，回退到模拟方式");
+                tracing::debug!("IDesktopWallpaper COM 接口调用失败，回退到模拟方式");
 
                 use std::thread;
                 use std::time::Duration;
@@ -483,7 +483,9 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                     }
                 }
 
-                println!("[DEBUG] 壁纸路径设置完成（使用模拟淡入淡出：延迟100ms + SPIF_SENDWININICHANGE）");
+                tracing::debug!(
+                    "壁纸路径设置完成（使用模拟淡入淡出：延迟100ms + SPIF_SENDWININICHANGE）"
+                );
                 return Ok(());
             }
 
@@ -503,9 +505,10 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                 3u32 // SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE
             };
 
-            println!(
-                "[DEBUG] set_wallpaper_path: transition={}, fuWinIni={}",
-                transition, fu_win_ini
+            tracing::debug!(
+                "set_wallpaper_path: transition={}, fuWinIni={}",
+                transition,
+                fu_win_ini
             );
 
             // 直接使用 FFI 调用 SystemParametersInfoW
@@ -538,7 +541,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                 }
             }
 
-            println!("[DEBUG] 壁纸路径设置完成（使用 FFI，快速）");
+            tracing::debug!("壁纸路径设置完成（使用 FFI，快速）");
             Ok(())
         }
 
@@ -560,7 +563,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                 match manager.set_wallpaper_plasma(path, style) {
                     Ok(()) => Ok(()),
                     Err(e) => {
-                        eprintln!("[WARN] Plasma 壁纸设置失败，尝试 GNOME 实现: {}", e);
+                        tracing::warn!("Plasma 壁纸设置失败，尝试 GNOME 实现: {}", e);
                         manager.set_wallpaper_gnome(path, style)
                     }
                 }
@@ -574,7 +577,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                 match manager.set_wallpaper_gnome(path, style) {
                     Ok(()) => Ok(()),
                     Err(e) => {
-                        eprintln!("[WARN] GNOME 壁纸设置失败，尝试 Plasma 实现: {}", e);
+                        tracing::warn!("GNOME 壁纸设置失败，尝试 Plasma 实现: {}", e);
                         manager.set_wallpaper_plasma(path, style)
                     }
                 }
@@ -680,10 +683,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
             }
         }
 
-        println!(
-            "[DEBUG] 壁纸样式设置完成（使用 winreg，快速），style={}",
-            style
-        );
+        tracing::debug!("壁纸样式设置完成（使用 winreg，快速），style={}", style);
         Ok(())
     }
 
@@ -720,7 +720,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
                     }}\n",
                     fill_mode
                 );
-                println!("fill_mode {}", fill_mode);
+                tracing::debug!("fill_mode {}", fill_mode);
                 NativeWallpaperManager::<R>::run_qdbus_evaluate_script(&script)?;
             }
             Ok(())
@@ -773,7 +773,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
             match set_style_plasma(manager, style).await {
                 Ok(()) => Ok(()),
                 Err(e) => {
-                    eprintln!("[WARN] 设置 Plasma 样式失败，尝试 GNOME: {}", e);
+                    tracing::warn!("设置 Plasma 样式失败，尝试 GNOME: {}", e);
                     set_style_gnome(manager, style).await
                 }
             }
@@ -786,7 +786,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
             match set_style_gnome(manager, style).await {
                 Ok(()) => Ok(()),
                 Err(e) => {
-                    eprintln!("[WARN] 设置 GNOME 样式失败，尝试 Plasma: {}", e);
+                    tracing::warn!("设置 GNOME 样式失败，尝试 Plasma: {}", e);
                     set_style_plasma(manager, style).await
                 }
             }
@@ -806,7 +806,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
     #[cfg(target_os = "macos")]
     async fn set_style(&self, _style: &str) -> Result<(), String> {
         // macOS 样式跟随系统，不进行任何设置操作
-        println!("[DEBUG] macOS 壁纸样式跟随系统，不设置样式");
+        tracing::debug!("macOS 壁纸样式跟随系统，不设置样式");
         Ok(())
     }
 
@@ -814,7 +814,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
     #[cfg(target_os = "android")]
     async fn set_style(&self, _style: &str) -> Result<(), String> {
         // Android 平台：仅保存设置到配置，不进行系统级设置
-        println!("[DEBUG] Android 壁纸样式仅保存设置");
+        tracing::debug!("Android 壁纸样式仅保存设置");
         Ok(())
     }
 
@@ -835,8 +835,8 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
 
         // "none" 表示无过渡，不应该重新设置壁纸（避免触发系统默认的淡入效果）
         if transition == "none" {
-            println!(
-                "[DEBUG] 壁纸过渡效果设置为无过渡，仅保存设置，不重新设置壁纸，transition={}",
+            tracing::debug!(
+                "壁纸过渡效果设置为无过渡，仅保存设置，不重新设置壁纸，transition={}",
                 transition
             );
             return Ok(());
@@ -854,7 +854,7 @@ impl<R: Runtime> WallpaperManager for NativeWallpaperManager<R> {
 
         self.set_wallpaper_path(&current_wallpaper).await?;
 
-        println!("[DEBUG] 壁纸过渡效果设置完成，transition={}", transition);
+        tracing::debug!("壁纸过渡效果设置完成，transition={}", transition);
         Ok(())
     }
 

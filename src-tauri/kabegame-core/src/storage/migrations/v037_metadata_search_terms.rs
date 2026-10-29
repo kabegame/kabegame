@@ -105,8 +105,8 @@ CREATE INDEX IF NOT EXISTS idx_metadata_search_terms_metadata
 
     match result {
         Ok((metadata_count, mapping_count)) => {
-            println!(
-                "[v037] backfilled {metadata_count} metadata rows and {mapping_count} mappings"
+            tracing::info!(
+                "backfilled {metadata_count} metadata rows and {mapping_count} mappings"
             );
             Ok(())
         }

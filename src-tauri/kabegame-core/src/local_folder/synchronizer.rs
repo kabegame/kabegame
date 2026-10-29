@@ -151,8 +151,8 @@ async fn run_loop(
                         enqueue_paths(request, Arc::clone(&shared), Arc::clone(&semaphore));
                     }
                 }
-                Ok(Err(err)) => eprintln!("[local_folder.synchronizer] batch failed: {err}"),
-                Err(err) => eprintln!("[local_folder.synchronizer] batch panicked: {err}"),
+                Ok(Err(err)) => tracing::warn!("batch failed: {err}"),
+                Err(err) => tracing::warn!("batch panicked: {err}"),
             }
         }
         for (album_id, opts) in fulls {
@@ -200,11 +200,11 @@ async fn enqueue_full(
     let (album, albums) = match album_info {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
-            eprintln!("[local_folder.synchronizer] inspect {album_id} failed: {err}");
+            tracing::warn!("inspect {album_id} failed: {err}");
             return;
         }
         Err(err) => {
-            eprintln!("[local_folder.synchronizer] inspect {album_id} panicked: {err}");
+            tracing::warn!("inspect {album_id} panicked: {err}");
             return;
         }
     };
@@ -323,10 +323,10 @@ fn spawn_worker(album_id: String, shared: Arc<Shared>, semaphore: Arc<Semaphore>
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    eprintln!("[local_folder.synchronizer] task {album_id} failed: {err}")
+                    tracing::warn!("task {album_id} failed: {err}")
                 }
                 Err(err) => {
-                    eprintln!("[local_folder.synchronizer] task {album_id} panicked: {err}")
+                    tracing::warn!("task {album_id} panicked: {err}")
                 }
             }
         }

@@ -200,10 +200,7 @@ fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Opt
         return;
     }
     if let Err(e) = fs::remove_file(&target) {
-        eprintln!(
-            "[storage] remove thumbnail file failed ({}): {e}",
-            target.display()
-        );
+        tracing::warn!("remove thumbnail file failed ({}): {e}", target.display());
     }
 }
 
@@ -229,10 +226,7 @@ fn remove_compatible_file_if_owned(path: Option<&str>) {
         return;
     }
     if let Err(e) = fs::remove_file(&target) {
-        eprintln!(
-            "[storage] remove compatible file failed ({}): {e}",
-            target.display()
-        );
+        tracing::warn!("remove compatible file failed ({}): {e}", target.display());
     }
 }
 

@@ -179,7 +179,7 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
                     Ok(res) => {
                         kabegame_core::plugin::v8::set_android_webview_user_agent(&res.user_agent)
                     }
-                    Err(e) => eprintln!("[surf] 读取 WebView 默认 UA 失败: {e}"),
+                    Err(e) => tracing::warn!("读取 WebView 默认 UA 失败: {e}"),
                 }
             });
             // 桌面快捷方式点开的站点：冷启动时 intent 早于这里到达，Kotlin 暂存后在注册时投递。
@@ -201,7 +201,7 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
                     .run_mobile_plugin_async::<()>("listenShortcuts", ShortcutListenArgs { events })
                     .await
                 {
-                    eprintln!("[surf] 注册桌面快捷方式监听失败: {e}");
+                    tracing::warn!("注册桌面快捷方式监听失败: {e}");
                 }
             });
             app.manage(SurfAndroid(handle));
@@ -471,7 +471,7 @@ pub(crate) async fn cookie_header_for_url<R: Runtime>(
     {
         Ok(res) => (!res.cookie.trim().is_empty()).then_some(res.cookie),
         Err(e) => {
-            eprintln!("[surf] 读取 Cookie 失败: {e}");
+            tracing::warn!("读取 Cookie 失败: {e}");
             None
         }
     }
@@ -514,7 +514,7 @@ pub async fn surf_start_session<R: Runtime>(
     // 否则用户会看到「开始畅游」直接报错。
     if let Some(old) = session_snapshot()? {
         if let Err(error) = close_label(&app, old.label).await {
-            eprintln!("[surf] 关闭旧畅游页面失败，继续新建会话: {error}");
+            tracing::warn!("关闭旧畅游页面失败，继续新建会话: {error}");
         }
     }
 
@@ -707,7 +707,7 @@ pub(crate) async fn refresh_shortcut<R: Runtime>(app: &AppHandle<R>, host: &str)
         .run_mobile_plugin_async::<()>("updateShortcut", shortcut_args(&record))
         .await
     {
-        eprintln!("[surf] 刷新桌面快捷方式失败: {e}");
+        tracing::warn!("刷新桌面快捷方式失败: {e}");
     }
 }
 
@@ -724,7 +724,7 @@ pub(crate) async fn disable_shortcut<R: Runtime>(app: &AppHandle<R>, host: &str)
         )
         .await
     {
-        eprintln!("[surf] 禁用桌面快捷方式失败: {e}");
+        tracing::warn!("禁用桌面快捷方式失败: {e}");
     }
 }
 
@@ -741,7 +741,7 @@ async fn open_from_shortcut<R: Runtime>(app: AppHandle<R>, host: String) {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     if !ready {
-        eprintln!("[surf] 等待主窗口超时，放弃从桌面快捷方式打开 {host}");
+        tracing::warn!("等待主窗口超时，放弃从桌面快捷方式打开 {host}");
         return;
     }
     let host = normalize_surf_host(&host);
@@ -750,12 +750,12 @@ async fn open_from_shortcut<R: Runtime>(app: AppHandle<R>, host: String) {
         // 记录已删除时快捷方式本该被禁用；外部应用伪造的 intent 同样在这里止步。
         Ok(None) => return,
         Err(e) => {
-            eprintln!("[surf] 快捷方式读取畅游记录失败: {e}");
+            tracing::warn!("快捷方式读取畅游记录失败: {e}");
             return;
         }
     };
     if let Err(e) = surf_start_session(app, record.root_url).await {
-        eprintln!("[surf] 从桌面快捷方式开始畅游失败: {e}");
+        tracing::warn!("从桌面快捷方式开始畅游失败: {e}");
     }
 }
 

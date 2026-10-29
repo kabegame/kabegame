@@ -56,7 +56,7 @@ pub fn init() {
             env_nonempty("KABEGAME_UMAMI_SEND_URL"),
             env_nonempty("KABEGAME_UMAMI_WEBSITE_ID"),
         ) else {
-            println!("  - RPC tracking disabled (KABEGAME_UMAMI_SEND_URL / KABEGAME_UMAMI_WEBSITE_ID not set)");
+            tracing::info!("RPC tracking disabled (KABEGAME_UMAMI_SEND_URL / KABEGAME_UMAMI_WEBSITE_ID not set)");
             return None;
         };
         let client = match reqwest::Client::builder()
@@ -68,11 +68,11 @@ pub fn init() {
         {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("  ✗ RPC tracking disabled: failed to build HTTP client: {e}");
+                tracing::warn!("RPC tracking disabled: failed to build HTTP client: {e}");
                 return None;
             }
         };
-        println!("  ✓ RPC tracking → {send_url} (website {website})");
+        tracing::info!("RPC tracking → {send_url} (website {website})");
         let cfg = Arc::new(Config {
             send_url,
             website,
@@ -128,12 +128,12 @@ async fn run_worker(cfg: Arc<Config>, client: reqwest::Client, rx: mpsc::Receive
                 match send(&cfg, &client, &call).await {
                     Ok(()) => {
                         if !healthy.swap(true, Ordering::Relaxed) {
-                            println!("[umami] RPC tracking recovered");
+                            tracing::info!("RPC tracking recovered");
                         }
                     }
                     Err(e) => {
                         if healthy.swap(false, Ordering::Relaxed) {
-                            eprintln!("[umami] RPC tracking failed: {e}");
+                            tracing::warn!("RPC tracking failed: {e}");
                         }
                     }
                 }

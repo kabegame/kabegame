@@ -58,17 +58,14 @@ pub(crate) fn drop_session(host: &str) {
     let session = match sessions().lock() {
         Ok(mut sessions) => sessions.remove(host),
         Err(_) => {
-            eprintln!("[surf-session] 畅游文件系统会话注册表已损坏");
+            tracing::warn!("畅游文件系统会话注册表已损坏");
             None
         }
     };
     if let Some(session) = session {
         if let Err(error) = std::fs::remove_dir_all(&session.root) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "[surf-session] 清理会话目录 {} 失败：{error}",
-                    session.root.display()
-                );
+                tracing::warn!("清理会话目录 {} 失败：{error}", session.root.display());
             }
         }
     }
@@ -82,10 +79,7 @@ pub(crate) fn clear_stale_sessions() {
     };
     if let Err(error) = std::fs::remove_dir_all(root) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "[surf-session] 清理遗留会话目录 {} 失败：{error}",
-                root.display()
-            );
+            tracing::warn!("清理遗留会话目录 {} 失败：{error}", root.display());
         }
     }
 }

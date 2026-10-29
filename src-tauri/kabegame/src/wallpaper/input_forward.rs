@@ -94,7 +94,7 @@ fn cursor_over_desktop(point: POINT) -> bool {
 
 fn inject(label: &str, input: MouseInjection) {
     if let Err(error) = tauri_runtime_cef::inject_mouse(label, input) {
-        eprintln!("[wpe-input] 注入鼠标事件失败: {error}");
+        tracing::warn!("注入鼠标事件失败: {error}");
     }
 }
 

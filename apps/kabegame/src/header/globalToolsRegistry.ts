@@ -1,11 +1,12 @@
 import { computed } from "vue";
 import type { Component } from "vue";
-import { FolderOpened, Hide, Key } from "@kabegame/element-plus-icons";
+import { Document, FolderOpened, Hide, Key } from "@kabegame/element-plus-icons";
 import { i18n } from "@kabegame/i18n";
 import { IS_WEB } from "@/env";
 import { usePageBridgeStore } from "@/stores/pageBridge";
 import { useGlobalPathRoute } from "@/stores/pathRoute";
 import { useApp } from "@/stores/app";
+import { useAppLogsStore } from "@/stores/appLogs";
 import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
 import HiddenCleanupControl from "./comps/HiddenCleanupControl.vue";
 import CheckUpdateControl from "./comps/CheckUpdateControl.vue";
@@ -44,6 +45,7 @@ export function useGlobalTools() {
   const pageBridge = usePageBridgeStore();
   const globalPathRoute = useGlobalPathRoute();
   const app = useApp();
+  const appLogs = useAppLogsStore();
 
   const groups = computed<GlobalToolGroup[]>(() => {
     const maintenance: GlobalToolItem[] = [
@@ -69,6 +71,17 @@ export function useGlobalTools() {
         label: t("updater.checkUpdate"),
         comp: CheckUpdateControl,
         kind: "action",
+      });
+    }
+    // web 只对 super 开放（服务器日志含路径等内部信息）；非 web 平台 isSuper 恒为 true。
+    if (app.isSuper) {
+      maintenance.push({
+        id: "viewLogs",
+        group: "maintenance",
+        label: t("header.viewLogs"),
+        icon: Document,
+        kind: "action",
+        action: () => appLogs.open(),
       });
     }
     if (IS_WEB) {

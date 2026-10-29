@@ -350,10 +350,7 @@ pub fn occupy_unique_path(
 
         let (path, file) = create_new_unique(dir, filename, |opts| opts)?;
         if let Err(err) = file.lock() {
-            eprintln!(
-                "[downloader] 占用标记上锁失败，按无标记继续 {}: {err}",
-                path.display()
-            );
+            tracing::warn!("占用标记上锁失败，按无标记继续 {}: {err}", path.display());
         }
         Ok(OccupiedFile {
             path,

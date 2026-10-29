@@ -73,12 +73,12 @@ impl WebServerService {
                 let _ = rx.await;
             });
             if let Err(e) = server.await {
-                eprintln!("[Web Server] 服务异常退出: {e}");
+                tracing::warn!("服务异常退出: {e}");
             }
         });
 
         *self.running.lock().unwrap() = Some(RunningServer { shutdown, join });
-        println!("  ✓ Web server listening on {host}:{port}");
+        tracing::info!("Web server listening on {host}:{port}");
         Ok(())
     }
 

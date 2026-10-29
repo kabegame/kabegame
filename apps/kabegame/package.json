@@ -10,6 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fltsci/tauri-plugin-tracing": "^0.3.4",
     "@kabegame/element-plus": "workspace:*",
     "@kabegame/element-plus-icons": "workspace:*",
     "@kabegame/i18n": "workspace:*",

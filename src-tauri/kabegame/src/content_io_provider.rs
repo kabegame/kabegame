@@ -79,7 +79,7 @@ fn run_worker_loop<R: Runtime + 'static>(
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[ContentIo] worker runtime new failed: {}", e);
+            tracing::warn!("worker runtime new failed: {}", e);
             return;
         }
     };

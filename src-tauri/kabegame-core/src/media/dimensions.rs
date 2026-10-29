@@ -24,8 +24,8 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
             Ok(r) => match r.into_dimensions() {
                 Ok((w, h)) => Some((w as u32, h as u32)),
                 Err(e) => {
-                    eprintln!(
-                        "[media-dimensions] failed to read image dimensions from {}: {}",
+                    tracing::warn!(
+                        "failed to read image dimensions from {}: {}",
                         path.display(),
                         e
                     );
@@ -33,20 +33,12 @@ pub fn resolve_image_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
                 }
             },
             Err(e) => {
-                eprintln!(
-                    "[media-dimensions] failed to guess image format for {}: {}",
-                    path.display(),
-                    e
-                );
+                tracing::warn!("failed to guess image format for {}: {}", path.display(), e);
                 None
             }
         },
         Err(e) => {
-            eprintln!(
-                "[media-dimensions] failed to open image reader for {}: {}",
-                path.display(),
-                e
-            );
+            tracing::warn!("failed to open image reader for {}: {}", path.display(), e);
             None
         }
     }
@@ -88,10 +80,7 @@ pub fn resolve_video_dimensions_sync(local_path: &str) -> Option<(u32, u32)> {
     match avformat_media_dimensions(&path) {
         Some(dims) => Some(dims),
         None => {
-            eprintln!(
-                "[media-dimensions] failed to read video dimensions from {}",
-                path.display()
-            );
+            tracing::warn!("failed to read video dimensions from {}", path.display());
             None
         }
     }
@@ -202,7 +191,7 @@ pub mod android {
             .get_image_dimensions(uri)
             .await
             .map_err(|e| {
-                eprintln!("[media-dimensions] get_image_dimensions failed: {}", e);
+                tracing::warn!("get_image_dimensions failed: {}", e);
                 e
             })
             .ok()
@@ -214,7 +203,7 @@ pub mod android {
             .get_video_dimensions(uri)
             .await
             .map_err(|e| {
-                eprintln!("[media-dimensions] get_video_dimensions failed: {}", e);
+                tracing::warn!("get_video_dimensions failed: {}", e);
                 e
             })
             .ok()
@@ -246,7 +235,7 @@ pub mod android {
             .get_content_size(uri)
             .await
             .map_err(|e| {
-                eprintln!("[media-dimensions] get_content_size failed: {}", e);
+                tracing::warn!("get_content_size failed: {}", e);
                 e
             })
             .ok()

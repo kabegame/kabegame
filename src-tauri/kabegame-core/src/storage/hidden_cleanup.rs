@@ -75,7 +75,7 @@ impl HiddenCleanupService {
         let handle = tokio::runtime::Handle::current();
         let service = Arc::clone(&self);
         tokio::task::spawn_blocking(move || {
-            eprintln!("[hidden_cleanup] 开始清理，共 {total} 条");
+            tracing::info!("开始清理，共 {total} 条");
             if let Err(error) =
                 run_hidden_cleanup(&handle, storage, cancel, total, Arc::clone(&service))
             {
@@ -86,7 +86,7 @@ impl HiddenCleanupService {
                     false,
                     Some(error.clone()),
                 );
-                eprintln!("[hidden_cleanup] 任务失败: {error}");
+                tracing::warn!("任务失败: {error}");
             }
 
             service.clear_running();
@@ -183,7 +183,7 @@ fn run_hidden_cleanup(
                 "连续两批得到相同的 {} 个隐藏图片 id，停止清理以避免死循环",
                 signature.len()
             );
-            eprintln!("[hidden_cleanup] {error}");
+            tracing::warn!("{error}");
             return Err(error);
         }
         previous_batch = Some(signature);

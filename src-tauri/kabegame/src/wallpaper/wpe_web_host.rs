@@ -81,7 +81,7 @@ async fn current_web_wallpaper() -> Option<WebWallpaper> {
         Ok(Some(target)) => target,
         Ok(None) => return None,
         Err(error) => {
-            eprintln!("[wpe-web-host] 读取当前壁纸失败: {error}");
+            tracing::warn!("读取当前壁纸失败: {error}");
             return None;
         }
     };
@@ -96,15 +96,15 @@ async fn current_web_wallpaper() -> Option<WebWallpaper> {
         match tokio::task::spawn_blocking(move || kabegame_core::wpe::read_project(&dir)).await {
             Ok(Ok(project)) => project,
             Ok(Err(skip)) => {
-                eprintln!(
-                    "[wpe-web-host] 网页壁纸 {} 无法加载: {}",
+                tracing::warn!(
+                    "网页壁纸 {} 无法加载: {}",
                     target.id,
                     skip.message()
                 );
                 return None;
             }
             Err(error) => {
-                eprintln!("[wpe-web-host] 解析网页壁纸失败: {error}");
+                tracing::warn!("解析网页壁纸失败: {error}");
                 return None;
             }
         };
@@ -112,7 +112,7 @@ async fn current_web_wallpaper() -> Option<WebWallpaper> {
     let entry_url = match Url::from_file_path(&entry) {
         Ok(url) => url,
         Err(()) => {
-            eprintln!("[wpe-web-host] 入口不是绝对路径: {}", entry.display());
+            tracing::debug!("入口不是绝对路径: {}", entry.display());
             return None;
         }
     };
@@ -153,29 +153,29 @@ pub async fn sync<R: Runtime>(app: &AppHandle<R>) {
                 match current_url {
                     Some(Ok(url)) if url.scheme() != "file" => state.app_url = Some(url),
                     Some(Err(error)) => {
-                        eprintln!("[wpe-web-host] 读取壁纸窗口 URL 失败: {error}")
+                        tracing::warn!("读取壁纸窗口 URL 失败: {error}")
                     }
                     _ => {}
                 }
             }
             if state.app_url.is_none() {
                 // 没有回程地址就不离开应用页，否则之后切回图片 / 视频壁纸时回不来。
-                eprintln!("[wpe-web-host] 未知应用页 URL，保持在应用页");
+                tracing::debug!("未知应用页 URL，保持在应用页");
                 return;
             }
             if let Err(error) =
                 tauri_runtime_cef::set_file_document_root(WALLPAPER_LABEL, Some(web.dir.clone()))
             {
-                eprintln!("[wpe-web-host] 设置文件根目录失败: {error}");
+                tracing::warn!("设置文件根目录失败: {error}");
                 return;
             }
             if let Err(error) = webview.navigate(web.entry_url.clone()) {
-                eprintln!("[wpe-web-host] 导航到网页壁纸失败: {error}");
+                tracing::warn!("导航到网页壁纸失败: {error}");
                 let _ = tauri_runtime_cef::set_file_document_root(WALLPAPER_LABEL, None);
                 return;
             }
-            println!(
-                "[wpe-web-host] 壁纸窗口 → {} ({})",
+            tracing::debug!(
+                "壁纸窗口 → {} ({})",
                 web.entry_url, web.image_id
             );
             state.mode = HostMode::File {
@@ -192,7 +192,7 @@ pub async fn sync<R: Runtime>(app: &AppHandle<R>) {
                         ))
                     }
                     Some(Err(error)) => {
-                        eprintln!("[wpe-web-host] 取壁纸窗口句柄失败: {error}")
+                        tracing::warn!("取壁纸窗口句柄失败: {error}")
                     }
                     None => {}
                 }
@@ -210,9 +210,9 @@ pub async fn sync<R: Runtime>(app: &AppHandle<R>) {
                 return;
             };
             if let Err(error) = webview.navigate(app_url.clone()) {
-                eprintln!("[wpe-web-host] 导航回应用页失败: {error}");
+                tracing::warn!("导航回应用页失败: {error}");
             }
-            println!("[wpe-web-host] 壁纸窗口 → {app_url}");
+            tracing::debug!("壁纸窗口 → {app_url}");
             state.mode = HostMode::App;
         }
     }

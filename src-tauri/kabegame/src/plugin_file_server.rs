@@ -118,7 +118,7 @@ pub async fn start_plugin_file_server() -> Result<u16, String> {
         let app = plugin_file_routes();
         tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, app).await {
-                eprintln!("[plugin-file] {error}");
+                tracing::warn!("{error}");
             }
         });
         Ok(port)

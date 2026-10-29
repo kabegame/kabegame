@@ -827,6 +827,36 @@ pub fn init_registry() {
         },
     );
 
+    // ── 应用日志（super required：服务器日志含路径等内部信息）──────────────────────
+
+    map.insert(
+        "get_app_logs",
+        MethodEntry {
+            requires_super: true,
+            handler: Arc::new(|p| {
+                Box::pin(async move {
+                    #[derive(serde::Deserialize, Default)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        since_seq: Option<u64>,
+                        limit: Option<usize>,
+                    }
+                    let args: Args = if p.is_null() {
+                        Args::default()
+                    } else {
+                        serde_json::from_value(p).map_err(RpcError::invalid_params)?
+                    };
+                    let logs = kabegame_core::logging::recent_logs(
+                        args.since_seq,
+                        args.limit
+                            .unwrap_or(kabegame_core::logging::RECENT_CAPACITY),
+                    );
+                    serde_json::to_value(logs).map_err(RpcError::internal)
+                })
+            }),
+        },
+    );
+
     // ── write (super required) ────────────────────────────────────────────────
 
     map.insert(

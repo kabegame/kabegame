@@ -12,6 +12,7 @@ links = "tauri-plugin-pathes"
 tauri = { version = "2.12.4", default-features = false }
 serde = "1.0"
 thiserror = "2"
+tracing = { workspace = true }
 kabegame-core = { path = "../kabegame-core", default-features = false }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

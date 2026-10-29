@@ -77,6 +77,11 @@ impl AppPaths {
         self.data_dir.join("settings.json")
     }
 
+    /// 应用日志目录：`data_dir/logs`（按天滚动，见 `logging::attach_log_dir`）
+    pub fn logs_dir(&self) -> PathBuf {
+        self.data_dir.join("logs")
+    }
+
     /// images.db 数据库文件路径
     ///
     /// - 桌面：`data_dir/images.db`

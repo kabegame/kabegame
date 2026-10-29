@@ -64,7 +64,7 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     runner
         .run_on_main_thread(move || {
             if let Err(e) = update_tray_menu_on_main_thread(&app) {
-                eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
+                tracing::warn!("语言切换后刷新菜单失败: {}", e);
             }
         })
         .map_err(|e| format!("调度托盘菜单刷新失败: {}", e))
@@ -96,7 +96,7 @@ pub fn setup_tray<R: Runtime>(app: AppHandle<R>) {
     let menu = match build_tray_menu(&app) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("{}", e);
+            tracing::warn!("{}", e);
             return;
         }
     };
@@ -110,7 +110,7 @@ pub fn setup_tray<R: Runtime>(app: AppHandle<R>) {
         match tauri::image::Image::from_bytes(TURTLE_PNG) {
             Ok(img) => img,
             Err(e) => {
-                eprintln!("加载托盘图标失败: {}", e);
+                tracing::warn!("加载托盘图标失败: {}", e);
                 return;
             }
         }
@@ -119,7 +119,7 @@ pub fn setup_tray<R: Runtime>(app: AppHandle<R>) {
     let icon = match app.default_window_icon() {
         Some(icon) => icon.clone(),
         None => {
-            eprintln!("无法获取默认图标");
+            tracing::warn!("无法获取默认图标");
             return;
         }
     };
@@ -140,14 +140,14 @@ pub fn setup_tray<R: Runtime>(app: AppHandle<R>) {
     let tray = match builder.build(&app) {
         Ok(tray) => tray,
         Err(e) => {
-            eprintln!("创建系统托盘失败: {}", e);
+            tracing::warn!("创建系统托盘失败: {}", e);
             return;
         }
     };
 
     // 设置菜单（只在右键时显示）
     if let Err(e) = tray.set_menu(Some(menu)) {
-        eprintln!("设置托盘菜单失败: {}", e);
+        tracing::warn!("设置托盘菜单失败: {}", e);
     }
 
     // 处理托盘图标事件（带防抖）
@@ -166,13 +166,13 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id.as_ref() {
         "show" => {
             if let Err(e) = startup::ensure_main_window(app.clone()) {
-                eprintln!("[托盘] 显示窗口失败: {}", e);
+                tracing::warn!("显示窗口失败: {}", e);
             }
         }
         "hide" => {
             // 与关闭按钮共用同一条隐藏路径（只隐藏 label 为 "main" 的主窗口，排除壁纸窗口）
             if let Err(e) = crate::commands::window::hide_main_window(app.clone()) {
-                eprintln!("[托盘] 隐藏窗口失败: {}", e);
+                tracing::warn!("隐藏窗口失败: {}", e);
             }
         }
         "quit" => {
@@ -185,7 +185,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
                 // 使用全局单例（不再使用 state）
                 let rotator = crate::wallpaper::WallpaperRotator::global();
                 if let Err(e) = rotator.rotate().await {
-                    eprintln!("托盘切换下一张壁纸失败: {}", e);
+                    tracing::warn!("托盘切换下一张壁纸失败: {}", e);
                 }
             });
         }
@@ -209,13 +209,13 @@ fn handle_tray_icon_event<R: Runtime>(
     {
         // 防抖检查：防止快速连击导致窗口状态混乱
         if limiter.check().is_err() {
-            eprintln!("[托盘] 点击过快，已忽略（防抖）");
+            tracing::debug!("点击过快，已忽略（防抖）");
             return;
         }
 
         // 左键点击托盘总是显示并激活主窗口，不再切换隐藏。
         if startup::ensure_main_window(app.clone()).is_err() {
-            eprintln!("[托盘] 创建并显示窗口失败");
+            tracing::warn!("创建并显示窗口失败");
         }
     }
     // 右键点击会自动显示菜单（通过 set_menu 设置）

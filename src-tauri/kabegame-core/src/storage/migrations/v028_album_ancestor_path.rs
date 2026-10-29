@@ -49,10 +49,10 @@ UPDATE albums SET ancestor_path = tree.path
 
     match result {
         Ok((total, orphan)) => {
-            println!("[v028] backfilled {} album ancestor paths", total - orphan);
+            tracing::info!("backfilled {} album ancestor paths", total - orphan);
             if orphan > 0 {
-                eprintln!(
-                    "[v028] {orphan} albums unreachable from any root (cycle?) — ancestor_path left empty"
+                tracing::warn!(
+                    "{orphan} albums unreachable from any root (cycle?) — ancestor_path left empty"
                 );
             }
             Ok(())

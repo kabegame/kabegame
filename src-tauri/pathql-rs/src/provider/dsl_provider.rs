@@ -132,8 +132,8 @@ impl DslProvider {
                     Ok(rendered) => {
                         if crate::template::meta_looks_like_select(&rendered) {
                             if dbg {
-                                eprintln!(
-                                    "[pathql] eval_meta SQL provider={}::{} sql={:?}",
+                                tracing::debug!(
+                                    "eval_meta SQL provider={}::{} sql={:?}",
                                     self.def
                                         .namespace
                                         .as_ref()
@@ -147,13 +147,13 @@ impl DslProvider {
                                 Ok(rows) => {
                                     let result = rows.into_iter().next();
                                     if dbg {
-                                        eprintln!("[pathql] eval_meta SQL result={:?}", result);
+                                        tracing::debug!("eval_meta SQL result={:?}", result);
                                     }
                                     return Ok(result);
                                 }
                                 Err(e) => {
                                     if dbg {
-                                        eprintln!("[pathql] eval_meta SQL error: {}", e);
+                                        tracing::warn!("eval_meta SQL error: {}", e);
                                     }
                                     // SQL 执行失败时回落到模板渲染
                                 }
@@ -423,8 +423,8 @@ impl Provider for DslProvider {
                 let tctx = self.base_template_context(ctx, &[]);
                 let q_interned = self.intern_contrib_properties(q, &tctx, &mut state);
                 if crate::provider::runtime::dbg_enabled() {
-                    eprintln!(
-                        "[pathql] DslProvider({}::{}).apply_query Contrib — properties={:?} adhoc_after={:?}",
+                    tracing::debug!(
+                        "DslProvider({}::{}).apply_query Contrib — properties={:?} adhoc_after={:?}",
                         self.def.namespace.as_ref().map(|n| n.0.as_str()).unwrap_or(""),
                         self.def.name.0,
                         self.properties.keys().collect::<Vec<_>>(),
@@ -505,8 +505,8 @@ impl Provider for DslProvider {
                 .as_ref()
                 .map(|r| r.0.keys().map(|k| k.as_str()).collect())
                 .unwrap_or_default();
-            eprintln!(
-                "[pathql] DslProvider({}::{}).resolve({:?}) — static_list={:?} regex={:?}",
+            tracing::debug!(
+                "DslProvider({}::{}).resolve({:?}) — static_list={:?} regex={:?}",
                 self.def
                     .namespace
                     .as_ref()
@@ -531,9 +531,10 @@ impl Provider for DslProvider {
                 };
                 if let Some(captures) = re.captures(name) {
                     if dbg {
-                        eprintln!(
-                            "[pathql]   regex {:?} (rendered={:?}) matched",
-                            pattern_template, pattern
+                        tracing::debug!(
+                            "regex {:?} (rendered={:?}) matched",
+                            pattern_template,
+                            pattern
                         );
                     }
                     let cap_vec: Vec<String> = captures
@@ -558,9 +559,10 @@ impl Provider for DslProvider {
                     // 均由 runtime 通过 transform stack 延迟处理。
                     if let ProviderInvocation::ByDelegate(b) = invocation {
                         if dbg {
-                            eprintln!(
-                                "[pathql]   regex matched ByDelegate; returning delegate target {:?} for {:?}",
-                                b.delegate.provider, name
+                            tracing::debug!(
+                                "regex matched ByDelegate; returning delegate target {:?} for {:?}",
+                                b.delegate.provider,
+                                name
                             );
                         }
                         let target = match self.instantiate_call(&b.delegate, ctx).ok().flatten() {
@@ -630,9 +632,10 @@ impl Provider for DslProvider {
                     let rendered_key = self.render_key_template(key_template, ctx);
                     if rendered_key == name {
                         if dbg {
-                            eprintln!(
-                                "[pathql]   static list key {:?} (rendered={:?}) matched",
-                                key_template, rendered_key
+                            tracing::debug!(
+                                "static list key {:?} (rendered={:?}) matched",
+                                key_template,
+                                rendered_key
                             );
                         }
                         return ResolveRef::Terminal(
@@ -645,7 +648,7 @@ impl Provider for DslProvider {
             }
         }
         if dbg {
-            eprintln!("[pathql]   ← no match, returning None");
+            tracing::debug!("← no match, returning None");
         }
         ResolveRef::Terminal(None)
     }

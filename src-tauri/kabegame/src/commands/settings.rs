@@ -281,7 +281,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
     if enabled {
         // 启用：先挂载虚拟盘
         let mount_point = settings.get_album_drive_mount_point();
-        println!("mount point: {}", mount_point);
+        tracing::debug!("mount point: {}", mount_point);
         let vd_service = VirtualDriveService::global();
         let mount_result = tokio::task::spawn_blocking({
             let mount_point = mount_point.clone();
@@ -289,7 +289,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))?;
-        println!("mount over {:?}", mount_result);
+        tracing::debug!("mount over {:?}", mount_result);
         if let Err(e) = mount_result {
             return Err(e);
         }
@@ -330,7 +330,7 @@ pub fn set_language<R: tauri::Runtime>(
 
     #[cfg(not(target_os = "android"))]
     if let Err(e) = crate::tray::update_tray_menu(&app) {
-        eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
+        tracing::warn!("语言切换后刷新菜单失败: {}", e);
     }
     #[cfg(target_os = "android")]
     let _ = &app;
@@ -344,7 +344,7 @@ pub fn set_language<R: tauri::Runtime>(
     let storage = kabegame_core::storage::Storage::global();
     let _ = storage.ensure_favorite_album();
     if let Err(e) = storage.set_favorite_album_name(i18n_name) {
-        eprintln!("[收藏画册] 语言切换后设置 i18n 名称失败: {}", e);
+        tracing::warn!("语言切换后设置 i18n 名称失败: {}", e);
     }
 
     let raw_source_name = kabegame_i18n::t!("plugins.officialGithubReleaseSourceName");
@@ -357,7 +357,7 @@ pub fn set_language<R: tauri::Runtime>(
         .plugin_sources()
         .set_official_source_name(i18n_source_name)
     {
-        eprintln!("[插件官方源] 语言切换后设置 i18n 名称失败: {}", e);
+        tracing::warn!("语言切换后设置 i18n 名称失败: {}", e);
     }
 
     Ok(())

@@ -11,7 +11,6 @@ use crate::ipc::events::AppEvent;
 use crate::ipc::ipc::{
     decode_frame, encode_frame, read_one_frame, IpcEnvelope, IpcRequest, IpcResponse,
 };
-use crate::ipc_dbg;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -123,7 +122,7 @@ impl PersistentConnection {
 
         *self.handle.write().await = Some(handle);
         self.set_status(ConnectionStatus::Connected).await;
-        ipc_dbg!("[DEBUG] PersistentConnection 持久连接已建立");
+        tracing::trace!("PersistentConnection 持久连接已建立");
 
         let (read_half, mut write_half) = split(client);
         let read_task = tokio::spawn(Self::recieve_message_loop(
@@ -135,7 +134,7 @@ impl PersistentConnection {
         let write_task = tokio::spawn(async move {
             while let Some((request_id, req)) = request_rx.recv().await {
                 if let Err(e) = Self::send_request(&mut write_half, request_id, req).await {
-                    ipc_dbg!("[ERROR] PersistentConnection 发送请求失败: {}, 关闭连接", e);
+                    tracing::debug!("PersistentConnection 发送请求失败: {}, 关闭连接", e);
                     break;
                 }
             }
@@ -156,7 +155,7 @@ impl PersistentConnection {
                 .pending_requests
                 .clear();
             connection.set_status(ConnectionStatus::Disconnected).await;
-            ipc_dbg!("[DEBUG] PersistentConnection 连接已关闭");
+            tracing::trace!("PersistentConnection 连接已关闭");
         });
     }
 
@@ -175,11 +174,7 @@ impl PersistentConnection {
 
         let frame = encode_frame(&envelope)?;
 
-        ipc_dbg!(
-            "[DEBUG] PersistentConnection 发送请求 #{}: {:?}",
-            request_id,
-            req
-        );
+        tracing::trace!("PersistentConnection 发送请求 #{}: {:?}", request_id, req);
 
         write_half
             .write_all(&frame)
@@ -200,7 +195,7 @@ impl PersistentConnection {
         mut read_half: ReadHalf,
         event_tx: mpsc::UnboundedSender<Arc<AppEvent>>,
     ) {
-        ipc_dbg!("[DEBUG] PersistentConnection 接收消息循环已启动");
+        tracing::trace!("PersistentConnection 接收消息循环已启动");
 
         loop {
             match read_one_frame(&mut read_half).await {
@@ -210,9 +205,9 @@ impl PersistentConnection {
                 Err(e) => {
                     if e.contains("EOF") {
                         connection.set_status(ConnectionStatus::Disconnected).await;
-                        ipc_dbg!("[DEBUG] PersistentConnection 连接关闭 (EOF)");
+                        tracing::trace!("PersistentConnection 连接关闭 (EOF)");
                     } else {
-                        ipc_dbg!("[ERROR] PersistentConnection 读取失败: {}", e);
+                        tracing::debug!("PersistentConnection 读取失败: {}", e);
                     }
                     break;
                 }
@@ -229,31 +224,24 @@ impl PersistentConnection {
         payload: &[u8],
         event_tx: &mpsc::UnboundedSender<Arc<AppEvent>>,
     ) {
-        ipc_dbg!(
-            "[DEBUG] PersistentConnection 收到 CBOR 帧，长度: {}",
-            payload.len()
-        );
+        tracing::trace!("PersistentConnection 收到 CBOR 帧，长度: {}", payload.len());
 
         // 先尝试解析为响应
         match decode_frame::<IpcResponse>(payload) {
             Ok(resp) => {
                 // 这是响应
                 if let Some(id) = resp.request_id {
-                    ipc_dbg!(
-                        "[DEBUG] PersistentConnection 收到响应 #{}: ok={}",
-                        id,
-                        resp.ok
-                    );
+                    tracing::trace!("PersistentConnection 收到响应 #{}: ok={}", id, resp.ok);
 
                     let mut state = self.request_state.lock().await;
                     if let Some(tx) = state.pending_requests.remove(&id) {
                         let _ = tx.send(resp);
                     } else {
-                        ipc_dbg!("[WARN] PersistentConnection 响应 #{} 找不到对应的请求", id);
+                        tracing::debug!("PersistentConnection 响应 #{} 找不到对应的请求", id);
                     }
                 } else {
-                    ipc_dbg!(
-                        "[WARN] PersistentConnection 收到无 request_id 的响应: ok={}",
+                    tracing::debug!(
+                        "PersistentConnection 收到无 request_id 的响应: ok={}",
                         resp.ok
                     );
                 }
@@ -262,13 +250,13 @@ impl PersistentConnection {
                 // 解析响应失败，尝试解析为强类型事件。
                 match decode_frame::<AppEvent>(payload) {
                     Ok(event) => {
-                        ipc_dbg!("[DEBUG] PersistentConnection 收到事件");
+                        tracing::trace!("PersistentConnection 收到事件");
                         if let Err(e) = event_tx.send(Arc::new(event)) {
-                            ipc_dbg!("[WARN] PersistentConnection 发送事件失败: {}", e);
+                            tracing::debug!("PersistentConnection 发送事件失败: {}", e);
                         }
                     }
                     Err(e) => {
-                        ipc_dbg!("[WARN] PersistentConnection 收到未知事件或无效 CBOR: {}", e);
+                        tracing::debug!("PersistentConnection 收到未知事件或无效 CBOR: {}", e);
                     }
                 }
             }

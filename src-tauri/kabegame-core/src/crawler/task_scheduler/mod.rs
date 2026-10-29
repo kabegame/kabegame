@@ -480,7 +480,7 @@ impl TaskScheduler {
         };
         let current = task.status;
         if !current.can_transition_to(next) {
-            eprintln!("[Task FSM] reject {task_id}: {current:?} -> {next:?}");
+            tracing::debug!("reject {task_id}: {current:?} -> {next:?}");
             return false;
         }
         task.status = next;
@@ -641,7 +641,7 @@ async fn worker_loop(
             Err(payload) => {
                 let detail = panic_message(&*payload);
                 let message = format!("任务执行时发生内部错误（panic）：{detail}");
-                eprintln!("[TaskScheduler] task {task_id} {message}");
+                tracing::error!("task {task_id} {message}");
                 GlobalEmitter::global().emit_task_log(
                     &task_id,
                     "error",
@@ -932,7 +932,7 @@ pub(crate) async fn run_webview_session(
     }
     let destroy_result = handler.destroy_task_window(&run.task_id).await;
     if let Err(e) = destroy_result {
-        eprintln!(
+        tracing::warn!(
             "Failed to destroy crawler task window {}: {}",
             run.task_id, e
         );

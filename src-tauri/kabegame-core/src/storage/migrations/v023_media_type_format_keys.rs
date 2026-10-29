@@ -89,7 +89,7 @@ fn infer_format_key(path: &str, id: i64) -> Option<&'static str> {
         }
         Ok(None) => None,
         Err(error) => {
-            eprintln!("[v023] infer id={id} path={path} failed: {error}");
+            tracing::warn!("infer id={id} path={path} failed: {error}");
             None
         }
     }
@@ -139,7 +139,7 @@ fn migrate(conn: &Connection) -> Result<MigrationStats, String> {
     for row in query {
         match row {
             Ok(row) => rows.push(row),
-            Err(error) => eprintln!("[v023] read residual row failed: {error}"),
+            Err(error) => tracing::warn!("read residual row failed: {error}"),
         }
     }
     drop(stmt);
@@ -162,7 +162,7 @@ fn migrate(conn: &Connection) -> Result<MigrationStats, String> {
             params![target, id],
         ) {
             Ok(_) => updated += 1,
-            Err(error) => eprintln!("[v023] update id={id} failed: {error}"),
+            Err(error) => tracing::warn!("update id={id} failed: {error}"),
         }
     }
 
@@ -192,9 +192,13 @@ pub fn up(conn: &Connection) -> Result<(), String> {
         return Err(format!("commit: {error}"));
     }
 
-    println!(
-        "[v023] mapped {} known rows; processed {}/{} residual rows (inferred {}, fallback {})",
-        stats.known, stats.updated, stats.residual, stats.inferred, stats.fallback
+    tracing::info!(
+        "mapped {} known rows; processed {}/{} residual rows (inferred {}, fallback {})",
+        stats.known,
+        stats.updated,
+        stats.residual,
+        stats.inferred,
+        stats.fallback
     );
     Ok(())
 }

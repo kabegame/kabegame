@@ -42,8 +42,8 @@ impl<R: Runtime> WindowWallpaperManager<R> {
     /// 切换中止路径、关闭壁纸后重新开启）。这行日志把它变成可见的。
     fn warn_if_window_missing(&self, who: &str) {
         if self.app.get_webview_window(WALLPAPER_LABEL).is_none() {
-            eprintln!(
-                "[WARN] {}: 处于 window 模式但壁纸窗口不存在 —— 某条路径漏调了 \
+            tracing::warn!(
+                "{}: 处于 window 模式但壁纸窗口不存在 —— 某条路径漏调了 \
                  WindowWallpaperManager::init()，壁纸不会显示",
                 who
             );
@@ -127,7 +127,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         if let Some(window) = self.app.get_webview_window(WALLPAPER_LABEL) {
             #[cfg(target_os = "windows")]
             if let Err(error) = tauri_plugin_wemt::detach_window(&window) {
-                eprintln!("[wallpaper] 解绑桌面窗口失败，仍将销毁窗口: {error}");
+                tracing::warn!("解绑桌面窗口失败，仍将销毁窗口: {error}");
             }
             // `destroy()` 而非 `close()`：这是程序化拆除，不是「请求关闭」。
             // `close()` 会走 CloseRequested 事件，可被 `api.prevent_close()` 拦下
@@ -155,7 +155,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             return Ok(());
         }
 
-        println!("初始化窗口模式壁纸管理器");
+        tracing::debug!("初始化窗口模式壁纸管理器");
         let window = self.create_window()?;
         let wp_window = WallpaperWindow::new(window);
 

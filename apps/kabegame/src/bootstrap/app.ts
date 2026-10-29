@@ -27,10 +27,24 @@ import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAp
 import { usePluginStore } from "@/stores/plugins";
 import { setCrawlerBeforeAddTaskGuard } from "@/stores/crawler";
 import { i18n } from "@kabegame/i18n";
+import { logger } from "@/utils/logger";
 import { runInitScreen } from "./initScreen";
 
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");
+}
+
+const describeError = (error: unknown) =>
+  error instanceof Error ? `${error.message}\n${error.stack ?? ""}`.trim() : String(error);
+
+// 未捕获的前端异常写进应用日志（web 的 logger 回落 console，浏览器本来就会打印，不重复挂）。
+if (!IS_WEB) {
+  window.addEventListener("error", (event) => {
+    logger.error(`[window] ${describeError(event.error ?? event.message)}`);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    logger.error(`[unhandledrejection] ${describeError(event.reason)}`);
+  });
 }
 
 // 强制重新加载 WebView（拦截默认行为，确保在 Tauri 内可用）。
@@ -55,6 +69,12 @@ window.addEventListener(
  */
 function mountMainApp() {
   const app = createApp(App);
+
+  // 设置 errorHandler 会关掉 Vue 默认的控制台输出，这里补回 console.error。
+  app.config.errorHandler = (error, _instance, info) => {
+    console.error(error);
+    if (!IS_WEB) logger.error(`[vue] ${info}: ${describeError(error)}`);
+  };
 
   app.directive("pull-to-refresh", vPullToRefresh);
   app.directive("corner-badge", vCornerBadge);

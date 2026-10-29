@@ -18,7 +18,7 @@ pub fn up(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("v046 count orphan album_images: {e}"))?;
     if orphans > 0 {
-        println!("[db-migration] v046: 清理 {orphans} 条悬空画册成员");
+        tracing::info!("v046: 清理 {orphans} 条悬空画册成员");
     }
 
     conn.execute_batch(

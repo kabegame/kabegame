@@ -41,11 +41,11 @@ pub async fn start() {
     {
         Ok(Ok(albums)) => albums,
         Ok(Err(err)) => {
-            eprintln!("[local_folder] startup list albums failed: {err}");
+            tracing::warn!("startup list albums failed: {err}");
             return;
         }
         Err(err) => {
-            eprintln!("[local_folder] startup list task panicked: {err}");
+            tracing::warn!("startup list task panicked: {err}");
             return;
         }
     };

@@ -9,31 +9,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::sync::OnceLock;
 
 /// v3 重命名 `PluginRunParams.printConfig`，并新增任务级 `isDryRun`；
 /// v4 新增 `PluginRunParams.freezeTemplate`（旧主程序会静默丢弃，故升版让新 CLI 回退本地）。
 pub const IPC_PROTOCOL_VERSION: u32 = 4;
-
-pub fn ipc_debug_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| match std::env::var("KABEGAME_IPC_DEBUG") {
-        Ok(v) => {
-            let v = v.to_ascii_lowercase();
-            v == "1" || v == "true" || v == "yes" || v == "on"
-        }
-        Err(_) => false,
-    })
-}
-
-#[macro_export]
-macro_rules! ipc_dbg {
-    ($($arg:tt)*) => {
-        if $crate::ipc::ipc::ipc_debug_enabled() {
-            eprintln!($($arg)*);
-        }
-    };
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
@@ -261,6 +240,15 @@ pub enum IpcRequest {
 
     /// 获取正在下载的任务列表
     GetActiveDownloads,
+
+    /// 读取最近的应用日志（环形缓冲，`since_seq` 之后最新的至多 `limit` 条）；
+    /// 实时日志另经 `SubscribeEvents { kinds: ["log"] }` 订阅（日志是 opt-in 事件，空 kinds 不含它）。
+    AppLogs {
+        #[serde(default)]
+        since_seq: Option<u64>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
 
     // ======== Organize（应用后端）========
     /// 启动整理任务

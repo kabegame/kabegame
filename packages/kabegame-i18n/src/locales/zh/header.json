@@ -36,5 +36,25 @@
   "metadataMigrationTitle": "迁移插件数据",
   "backfillTitle": "更新数据库",
   "backfillWaiting": "排队中",
-  "backfillFailed": "数据库后台更新失败（{name}），下次启动时会继续"
+  "backfillFailed": "数据库后台更新失败（{name}），下次启动时会继续",
+  "viewLogs": "查看日志",
+  "logs": {
+    "title": "应用日志",
+    "sourceAll": "全部",
+    "sourceBackend": "后端",
+    "sourceFrontend": "前端",
+    "targetPlaceholder": "模块前缀",
+    "searchPlaceholder": "搜索日志",
+    "count": "显示 {shown} / 共 {total} 条",
+    "follow": "自动滚动",
+    "copy": "复制",
+    "copyLine": "复制此行",
+    "clear": "清空",
+    "openDir": "打开日志目录",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "openDirFailed": "打开日志目录失败：{detail}",
+    "empty": "暂无日志",
+    "loadFailed": "加载日志失败：{detail}"
+  }
 }

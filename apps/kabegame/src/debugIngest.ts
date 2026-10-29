@@ -1,4 +1,5 @@
-import { IS_ANDROID, IS_DEV } from "./env";
+import { trace } from "@fltsci/tauri-plugin-tracing";
+import { IS_DEV, IS_WEB } from "./env";
 
 export interface DebugIngestOptions {
   sessionId?: string;
@@ -17,6 +18,9 @@ export interface DebugIngestEvent {
 
 const DEBUG_INGEST_ENDPOINT = "/__kabegame_debug/ingest";
 
+/** 与后端 `debug_ingest.rs` 的 `FRONTEND_PREFIX` 一致。 */
+const DEBUG_TRACE_PREFIX = "kb-debug ";
+
 export function buildDebugEvent(
   name: string,
   payload: unknown = null,
@@ -32,6 +36,10 @@ export function buildDebugEvent(
   };
 }
 
+/**
+ * 开发期插桩。Tauri 下是一条 trace 日志（经 tauri-plugin-tracing），由后端的 debug ingest
+ * 订阅层转发到 dev server；Web dev 没有插件，直接 POST 给 Vite 中间件。见 cocs/debug/DEBUG_INGEST.md。
+ */
 export async function sendDebugEvent(
   name: string,
   payload: unknown = null,
@@ -41,14 +49,16 @@ export async function sendDebugEvent(
 
   try {
     const body = JSON.stringify(buildDebugEvent(name, payload, options));
-    // Android WebView 的请求经 shouldInterceptRequest 代理，POST body 到不了 dev server，改走查询参数
-    const endpoint = IS_ANDROID ? `${DEBUG_INGEST_ENDPOINT}?event=${encodeURIComponent(body)}` : DEBUG_INGEST_ENDPOINT;
-    await fetch(endpoint, {
+    if (!IS_WEB) {
+      trace(`${DEBUG_TRACE_PREFIX}${body}`);
+      return;
+    }
+    await fetch(DEBUG_INGEST_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: IS_ANDROID ? undefined : body,
+      body,
       keepalive: true,
     });
   } catch {

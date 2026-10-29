@@ -40,6 +40,11 @@ impl EventBroadcaster {
         Ok(())
     }
 
+    /// 尚未初始化时返回 None（日志层可能早于广播器初始化，不能 panic）
+    pub fn try_global() -> Option<&'static EventBroadcaster> {
+        EVENT_BROADCASTER.get()
+    }
+
     /// 获取全局 EventBroadcaster 引用
     pub fn global() -> &'static EventBroadcaster {
         EVENT_BROADCASTER
@@ -52,7 +57,7 @@ impl EventBroadcaster {
         let broadcaster = Self::global();
         let event_txs = broadcaster.event_txs.clone();
         // 就是要长时间持锁
-        eprintln!("[EVENT_FORWARD] ready for forward event");
+        tracing::debug!("ready for forward event");
         let mut sync_rx_guard = broadcaster.sync_rx.lock().await;
         loop {
             match sync_rx_guard.recv().await {
@@ -68,7 +73,7 @@ impl EventBroadcaster {
                     let tx = match event_txs.get(idx) {
                         Some(tx) => tx,
                         None => {
-                            eprintln!("[DEBUG] EventBroadcaster 路由失败(同步)：idx={} 越界", idx);
+                            tracing::warn!("EventBroadcaster 路由失败(同步)：idx={} 越界", idx);
                             continue;
                         }
                     };
@@ -100,9 +105,9 @@ impl EventBroadcaster {
         broadcaster.event_txs[kind.as_usize()].subscribe()
     }
 
-    /// 订阅所有事件的流
+    /// 订阅所有事件的流（不含日志等 opt-in 种类，见 `AppEventKind::default_kinds`）
     pub fn subscribe_all_stream(&self) -> mpsc::UnboundedReceiver<(u64, ArcAppEvent)> {
-        self.subscribe_filtered_stream(&AppEventKind::ALL)
+        self.subscribe_filtered_stream(&AppEventKind::default_kinds())
     }
 
     /// 订阅过滤后的事件流

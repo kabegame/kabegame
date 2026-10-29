@@ -225,8 +225,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 ## 调试（`debug/`）
 
+- [debug/APP_LOGGING.md](debug/APP_LOGGING.md)
+  - 主题：应用日志框架。全进程一个 tracing 订阅器（`kabegame_core::logging`），控制台 / 按天滚动文件（`<data_dir>/logs/kabegame.<UTC 日期>.log`，同步写、保留 14 个）/ `AppLogLayer`（2000 条环形缓冲 + 广播）/ debug ingest 四层各带过滤器；后端级别固定（release info、dev debug、依赖 warn），`KABEGAME_LOG` 用 `Targets` 语法覆盖；`AppEvent::Log` 是 opt-in 事件（「订阅全部」用 `default_kinds()` 不含它），三个出口先订阅再拉历史、按 seq 去重：Tauri `get_app_logs` + `start_app_log_stream` / `stop_app_log_stream`（经调用页传入的 Channel 批量推送，不用全局事件——Tauri 对未指定 target 的 `listen` 一律放行）、Web super 的 `/logs` SSE 与 `get_app_logs` RPC、IPC `AppLogs` + `SubscribeEvents ["log"]`（CLI `log tail`）；事件管线上逐事件日志只能 `trace!` 的防回环约束；前端 `logger` 经 `tauri-plugin-tracing`（只注册命令、权限只给主窗口）、未捕获异常入日志；控制台与文件共用 `format.rs` 单行格式（前端日志同样记为 `webview:<窗口>`）；写日志的定级与 target 约定。
+  - 适用场景：新增或修改日志输出、排查「查看日志」看不到 / 刷屏 / 自激放大、日志文件位置与切分、`KABEGAME_LOG` 调级、CLI `log tail`、Web 端日志暴露范围、前端日志进不了后端。
+
 - [debug/DEBUG_INGEST.md](debug/DEBUG_INGEST.md)
-  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。同一 middleware 还兼职 **CDP 端口寄存**（`/__kabegame_cdp/register` 登记 + `/__kabegame_cdp` 查询），把 CEF 随机分配的调试端口交给 `kabegame-chromium` skill。
+  - 主题：开发期 runtime debug ingest 方法。Vite dev server 提供 `POST /__kabegame_debug/ingest`，前端与 Rust 后端按 `session_id` 发送调试事件，middleware tee 到 `.kabegame/debug/debug-<session_id>.ndjson`。插桩只是 trace 日志（Rust `kabegame_core::kb_debug!`、Tauri 前端经 `tauri-plugin-tracing` 打 `kb-debug {json}`），由主程序 debug 构建的 `DebugIngestLayer` 订阅并批量 NDJSON 转发；Web dev 前端仍直接 POST。同一 middleware 还兼职 **CDP 端口寄存**（`/__kabegame_cdp/register` 登记 + `/__kabegame_cdp` 查询），把 CEF 随机分配的调试端口交给 `kabegame-chromium` skill。
   - 适用场景：仿 Cursor Debug Mode 的插桩式排查；需要把前端和 Rust 后端运行时状态汇总到同一个 NDJSON 会话文件；用 curl 验证 debug endpoint 或读取 session 日志；排查 CDP 端口发现（skill 连不上跑起来的 app）。
 
 ## 组件库（`ui/`）

@@ -82,10 +82,22 @@ IPC，不能回退 local。`TaskSetMaxConcurrentDownloads` 转发到唯一领域
 `pathql query` 都不会调度 metadata 迁移；应用下次启动全量刷新插件时会按版本门控补跑。经 app 后端
 安装插件仍由主程序正常调度迁移。
 
+### log tail
+
+`kabegame-cli log tail [--level <lvl>] [--target <模块>] [--grep <文本>] [--history <N>] [--no-follow]`
+读取并跟随运行中主程序的应用日志。日志只存在于主程序进程内，所以只能经 app 执行：`--via local`
+直接报错，`auto` 也按 `app` 选后端，主程序未运行或不兼容时给出明确错误而不是回退本地。流程是先
+`SubscribeEvents { kinds: ["log"] }`（`log` 是 opt-in 事件，空 kinds 不含它），再发
+`AppLogs` 拉整个环形缓冲，按级别 / 模块（`--target` 按 `::` 分段匹配，`kabegame` 不含 `kabegame_core`）/ 关键字筛选后输出最后 N 条（`--history` 按筛选后计数），之后的实时日志按 seq 去重依次输出；连接断开时退出。
+新增 `AppLogs` 不升协议版本：旧主程序会回「Unknown request」，不是静默丢字段。
+CLI 自身也装同一个 tracing 订阅器（只打 stderr、不落盘），本地模式下 core 的日志照常可见；
+面向用户的输出仍走 stdout。详见 [../debug/APP_LOGGING.md](../debug/APP_LOGGING.md)。
+
 ## SQL 调试
 
 `KABEGAME_SQL_DEBUG` 已设置且不是空串、`0` 或 `false` 时，Storage 在 SQLite 连接打开后立即注册
-`SQLITE_TRACE_STMT | SQLITE_TRACE_PROFILE`。STMT 向 stderr 输出 SQLite 展开绑定参数后的完整 SQL，
+`SQLITE_TRACE_STMT | SQLITE_TRACE_PROFILE`。STMT 以 info 级别日志（target `kabegame_core::storage::sql_debug`，
+CLI 打到 stderr，主程序同时进日志文件与「查看日志」）输出 SQLite 展开绑定参数后的完整 SQL，
 PROFILE 输出从语句开始到 reset/finalize 的毫秒耗时与 120 字符单行前缀。钩子早于公共 PRAGMA 和迁移，
 并挂在写连接和只读池的每条连接上，因此 app 初始化、迁移、PathQL resolve / fetch 和写操作都可见；
 并发读取的 trace 行可能交错，PROFILE 行可通过所带 SQL 前缀与对应语句配对。未启用时不注册回调。
@@ -102,7 +114,7 @@ CLI 在 `src/task_log.rs` 做同样的事：文案唯一来源是前端 `package
 
 - `connect()` 等待真实连接结果；失败返回 `Err`，不再启动后台连接后立即假成功。
 - 未连接时 `request()` 立即失败，连接中的请求最多等待 10 秒；客户端不显示任何原生弹窗。
-- 调试日志只在 `KABEGAME_IPC_DEBUG=1` 时通过 `ipc_dbg!` 输出。
+- IPC 逐帧调试日志是 `kabegame_core::ipc` 下的 `trace!`，用 `KABEGAME_LOG=kabegame_core::ipc=trace` 打开（原 `KABEGAME_IPC_DEBUG` / `ipc_dbg!` 已删除）。日志框架见 [../debug/APP_LOGGING.md](../debug/APP_LOGGING.md)。
 - 事件帧直接解为 `Arc<AppEvent>`，使用 unbounded 通道；`subscribe_events()` 一次性取走当前连接的
   receiver，同一连接二次订阅会报错。
 - 服务端先解出 envelope 的 `request_id`，不支持的 payload 会收到 `unsupported request` 响应，不会

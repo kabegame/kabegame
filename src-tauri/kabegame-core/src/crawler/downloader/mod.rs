@@ -95,7 +95,7 @@ pub(super) fn rebind_deduped_metadata(
                 fields: diff,
             }]);
         }
-        Err(e) => eprintln!("[downloader] rebind deduped metadata failed: {e}"),
+        Err(e) => tracing::warn!("rebind deduped metadata failed: {e}"),
     }
 }
 
@@ -110,7 +110,7 @@ fn link_into_folder_album(path: &Path, image_id: &str, output_album: Option<&str
         Ok(Some(album)) => album,
         Ok(None) => return,
         Err(error) => {
-            eprintln!("[downloader] 解析新文件所属文件夹画册失败: {error}");
+            tracing::warn!("解析新文件所属文件夹画册失败: {error}");
             return;
         }
     };
@@ -120,7 +120,7 @@ fn link_into_folder_album(path: &Path, image_id: &str, output_album: Option<&str
     let ids = vec![image_id.to_string()];
     if Storage::global().add_images_to_album_silent(&album.id, &ids) > 0 {
         if let Err(error) = emit_membership_added(&album.id, &ids) {
-            eprintln!("[album-event] 发射文件夹画册补挂成员事件失败: {error}");
+            tracing::warn!("发射文件夹画册补挂成员事件失败: {error}");
         }
     }
 }
@@ -145,7 +145,7 @@ fn apply_download_labels(
         Ok(applied) => {
             for (spec, error) in applied.skipped {
                 let path = format!("{}/{}", spec.segments.join("/"), spec.key);
-                eprintln!("[labels] 图片 {image_id} 跳过标签 `{path}`: {error}");
+                tracing::warn!("图片 {image_id} 跳过标签 `{path}`: {error}");
                 if let Some(task_id) = task_id {
                     emit_task_log(
                         task_id,
@@ -159,7 +159,7 @@ fn apply_download_labels(
             }
         }
         Err(error) => {
-            eprintln!("[labels] 图片 {image_id} 挂载标签失败: {error}");
+            tracing::warn!("图片 {image_id} 挂载标签失败: {error}");
             if let Some(task_id) = task_id {
                 emit_task_log(
                     task_id,
@@ -909,7 +909,7 @@ async fn persist_native_metadata_best_effort(
             file_bytes = match std::fs::read(&image.local_path) {
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    eprintln!("[downloader] read image for native metadata failed: {e}");
+                    tracing::warn!("read image for native metadata failed: {e}");
                     return None;
                 }
             };
@@ -925,14 +925,14 @@ async fn persist_native_metadata_best_effort(
     let json = match serde_json::to_string(&metadata) {
         Ok(json) => json,
         Err(e) => {
-            eprintln!("[downloader] serialize native metadata failed: {e}");
+            tracing::warn!("serialize native metadata failed: {e}");
             return None;
         }
     };
     match storage.replace_image_native_metadata(&image.id, expected_version, &json) {
         Ok(id) => Some(id),
         Err(e) => {
-            eprintln!("[downloader] store native metadata failed: {e}");
+            tracing::warn!("store native metadata failed: {e}");
             None
         }
     }
@@ -1030,7 +1030,7 @@ pub async fn postprocess_downloaded_image(
                         if added > 0 {
                             let ids = vec![existing.id.clone()];
                             if let Err(error) = emit_membership_added(album_id, &ids) {
-                                eprintln!("[album-event] 发射下载去重成员事件失败: {error}");
+                                tracing::warn!("发射下载去重成员事件失败: {error}");
                             }
                         }
                     }
@@ -1225,7 +1225,7 @@ pub async fn postprocess_downloaded_image(
                         if added > 0 {
                             let ids = vec![existing.id.clone()];
                             if let Err(error) = emit_membership_added(album_id, &ids) {
-                                eprintln!("[album-event] 发射路径去重成员事件失败: {error}");
+                                tracing::warn!("发射路径去重成员事件失败: {error}");
                             }
                         }
                     }
@@ -1314,8 +1314,8 @@ pub async fn postprocess_downloaded_image(
                 match preview {
                     Ok(r) => Ok(Some(r.preview_path)),
                     Err(e) => {
-                        eprintln!(
-                            "[downloader] video preview generation failed, storing without preview: {e}"
+                        tracing::warn!(
+                            "video preview generation failed, storing without preview: {e}"
                         );
                         Ok(None)
                     }
@@ -1471,7 +1471,7 @@ pub async fn postprocess_downloaded_image(
                 }),
                 Ok(None) => None,
                 Err(e) => {
-                    eprintln!("[downloader] compatible generation failed: {e}");
+                    tracing::warn!("compatible generation failed: {e}");
                     None
                 }
             };
@@ -1532,7 +1532,7 @@ pub async fn postprocess_downloaded_image(
                                 .add_images_to_album_silent(album_id, &[image_id.clone()]);
                             if added > 0 {
                                 if let Err(error) = emit_membership_added(album_id, &ids) {
-                                    eprintln!("[album-event] 发射下载成员事件失败: {error}");
+                                    tracing::warn!("发射下载成员事件失败: {error}");
                                 }
                             }
                         }
@@ -1555,8 +1555,8 @@ pub async fn postprocess_downloaded_image(
                         let th = thumb_ms.unwrap_or(0);
                         let ad = add_ms.unwrap_or(0);
                         let al = album_ms.unwrap_or(0);
-                        eprintln!(
-                            "[Postprocess] task_id={} url={} | hash={}ms thumbnail={}ms add_image={}ms add_album={}ms total={}ms",
+                        tracing::debug!(
+                            "task_id={} url={} | hash={}ms thumbnail={}ms add_image={}ms add_album={}ms total={}ms",
                             task_id.unwrap_or_default(),
                             if url.as_str().len() > 60 {
                                 format!("{}...", &url.as_str()[..60])

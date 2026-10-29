@@ -271,7 +271,7 @@ fn read_recommended_configs(plugin: &Plugin) -> Vec<(String, Value)> {
             match result {
                 Ok(content) => Some((path.to_string(), content)),
                 Err(error) => {
-                    eprintln!("[WARN] 读取推荐配置 {}/{path} 失败: {error}", plugin.id);
+                    tracing::warn!("读取推荐配置 {}/{path} 失败: {error}", plugin.id);
                     None
                 }
             }

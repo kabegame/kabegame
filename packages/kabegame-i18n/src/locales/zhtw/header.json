@@ -36,5 +36,25 @@
   "metadataMigrationTitle": "遷移插件資料",
   "backfillTitle": "更新資料庫",
   "backfillWaiting": "排隊中",
-  "backfillFailed": "資料庫背景更新失敗（{name}），下次啟動時會繼續"
+  "backfillFailed": "資料庫背景更新失敗（{name}），下次啟動時會繼續",
+  "viewLogs": "查看日誌",
+  "logs": {
+    "title": "應用日誌",
+    "sourceAll": "全部",
+    "sourceBackend": "後端",
+    "sourceFrontend": "前端",
+    "targetPlaceholder": "模組前綴",
+    "searchPlaceholder": "搜尋日誌",
+    "count": "顯示 {shown} / 共 {total} 條",
+    "follow": "自動捲動",
+    "copy": "複製",
+    "copyLine": "複製此行",
+    "clear": "清空",
+    "openDir": "開啟日誌目錄",
+    "copied": "已複製",
+    "copyFailed": "複製失敗",
+    "openDirFailed": "開啟日誌目錄失敗：{detail}",
+    "empty": "暫無日誌",
+    "loadFailed": "載入日誌失敗：{detail}"
+  }
 }

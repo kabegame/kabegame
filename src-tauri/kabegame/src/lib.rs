@@ -15,6 +15,7 @@ mod commands;
 /// 构建变体上报（web/android/standard）。web 与桌面路径共用，故不随 web/not-web 门控。
 mod build_mode;
 mod debug_ingest;
+pub mod logging_setup;
 mod plugin_file_server;
 
 #[cfg(all(not(feature = "web"), target_os = "android"))]
@@ -128,7 +129,7 @@ fn init() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = kabegame_core::storage::backfill_service::BackfillService::global()
         .start_pending(kabegame_core::storage::Storage::global())
     {
-        eprintln!("[backfill] 启动后台回填失败: {e}");
+        tracing::warn!("启动后台回填失败: {e}");
     }
     kabegame_core::storage::startup_state::set(
         kabegame_core::storage::startup_state::StartupPhase::Ready,
@@ -164,13 +165,13 @@ fn run_heavy_init(app_handle: AppHandle<crate::AppRuntime>) {
                     .start_pending(kabegame_core::storage::Storage::global())
             });
             if let Err(e) = started {
-                eprintln!("[backfill] 启动后台回填失败: {e}");
+                tracing::warn!("启动后台回填失败: {e}");
             }
             startup_state::set(StartupPhase::Ready);
-            println!("  ✓ Startup ready");
+            tracing::info!("Startup ready");
         }
         Err(error) => {
-            eprintln!("应用初始化过程中出现了错误！:{}", error);
+            tracing::error!("应用初始化过程中出现了错误！:{}", error);
             startup_state::set(StartupPhase::Failed {
                 message: error.clone(),
             });
@@ -189,9 +190,10 @@ fn run_heavy_init(app_handle: AppHandle<crate::AppRuntime>) {
 fn init_pre(
     #[cfg(not(feature = "web"))] app_handle: &AppHandle<crate::AppRuntime>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // AppPaths 此时已就绪（桌面 / Android 由 pathes 插件 setup 初始化，web 在 init 里先初始化）。
+    crate::logging_setup::attach_log_dir();
     crate::core_init::init_fast_globals()?;
-    #[cfg(debug_assertions)]
-    crate::debug_ingest::spawn_debug_event(
+    kabegame_core::kb_debug!(
         std::env::var("KABEGAME_DEBUG_SESSION_ID").unwrap_or_else(|_| "backend".to_string()),
         "backend_started",
         serde_json::json!({
@@ -236,7 +238,7 @@ fn init_pre(
                 // 用户手动再次启动（无该参数）才与 IPC AppShowWindow 一致地显示主窗口。
                 if !argv.iter().any(|arg| arg == "--minimized") {
                     if let Err(e) = startup::ensure_main_window(app_handle.clone()) {
-                        eprintln!("[relaunch] 显示主窗口失败: {}", e);
+                        tracing::warn!("显示主窗口失败: {}", e);
                     }
                 }
                 if let Some(path) = argv.iter().skip(1).find(|arg| arg.ends_with(".kgpg")) {
@@ -293,7 +295,7 @@ fn init_post(
     });
     #[cfg(not(feature = "web"))]
     if let Err(e) = init_crawler_webview_handler(app_handle.clone()) {
-        eprintln!("Failed to init crawler webview handler: {}", e);
+        tracing::warn!("Failed to init crawler webview handler: {}", e);
     }
     // 初始化壁纸控制器
     #[cfg(not(feature = "web"))]
@@ -360,7 +362,7 @@ fn init_post(
                     .start(port, lan)
                     .await
                 {
-                    eprintln!("[Web Server] 启动失败，已降级关闭: {e}");
+                    tracing::warn!("启动失败，已降级关闭: {e}");
                     let _ =
                         kabegame_core::settings::Settings::global().set_web_server_enabled(false);
                     web_server_service::WebServerService::global().stop().await;
@@ -396,6 +398,7 @@ fn spawn_local_folder_sync() {}
 // ---- web entry point ----
 #[cfg(feature = "web")]
 pub fn run() {
+    logging_setup::init();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -403,7 +406,7 @@ pub fn run() {
 
     rt.block_on(async move {
         if let Err(e) = init() {
-            eprintln!("服务器初始化失败: {}", e);
+            tracing::error!("服务器初始化失败: {}", e);
             process::exit(1);
         }
         crate::web::track::init();
@@ -413,14 +416,14 @@ pub fn run() {
             match kabegame_core::scheduler::collect_missed_runs_now() {
                 Ok(items) if !items.is_empty() => {
                     let ids: Vec<String> = items.iter().map(|i| i.config_id.clone()).collect();
-                    println!("  ✓ Auto-running {} missed schedule(s)", ids.len());
+                    tracing::info!("Auto-running {} missed schedule(s)", ids.len());
                     kabegame_core::scheduler::run_missed_configs(&ids);
                     let _ = kabegame_core::scheduler::Scheduler::global()
                         .reload_config("")
                         .await;
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("  ✗ Failed to collect missed runs: {e}"),
+                Err(e) => tracing::warn!("Failed to collect missed runs: {e}"),
             }
         });
 
@@ -435,7 +438,7 @@ pub fn run() {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .expect("Failed to bind 0.0.0.0:7490");
-        println!("  ✓ Web server listening on {addr}");
+        tracing::info!("Web server listening on {addr}");
         axum::serve(listener, router)
             .await
             .expect("Web server exited unexpectedly");
@@ -450,6 +453,7 @@ pub fn run() {
     feature = "standard"
 ))]
 pub fn run() {
+    logging_setup::init();
     // 不再手动 push "main" 窗口:base config `windows: []`,主窗口由 setup 的
     // `startup::create_main_window` 统一创建(与 Wry 路径完全一致)。Phase 3 minimal
     // 时没挂 setup 才需要那个临时 window push;4.2 挂上 configure_app 后,push 会和
@@ -470,7 +474,7 @@ fn handle_macos_run_event(app_handle: &tauri::AppHandle<AppRuntime>, event: taur
     match event {
         tauri::RunEvent::Reopen { .. } => {
             if let Err(e) = startup::ensure_main_window(app_handle.clone()) {
-                eprintln!("[macOS] Dock 点击显示主窗口失败: {e}");
+                tracing::warn!("Dock 点击显示主窗口失败: {e}");
             }
         }
         tauri::RunEvent::Opened { urls } => {
@@ -484,10 +488,10 @@ fn handle_macos_run_event(app_handle: &tauri::AppHandle<AppRuntime>, event: taur
                             serde_json::json!({ "kgpgPath": path.to_string_lossy() }),
                         );
                     } else {
-                        eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
+                        tracing::warn!("[macOS] 无法将路径转换为字符串: {:?}", path);
                     }
                 } else {
-                    eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法从 URL 提取文件路径: {url}");
+                    tracing::warn!("[macOS] 无法从 URL 提取文件路径: {url}");
                 }
             }
         }
@@ -511,7 +515,9 @@ pub(crate) fn configure_app(
                 .open_js_links_on_click(false)
                 .build(),
         )
-        .plugin(tauri_plugin_pathes::init());
+        .plugin(tauri_plugin_pathes::init())
+        // 只用它的 `log` 命令让前端日志进入 tracing；订阅器由 logging_setup 装配，不开 default subscriber。
+        .plugin(tauri_plugin_tracing::Builder::new().build());
 
     #[cfg(all(target_os = "windows", feature = "standard"))]
     {
@@ -545,7 +551,7 @@ pub(crate) fn configure_app(
                     api.prevent_close();
                     if let Err(e) = commands::window::hide_main_window(window.app_handle().clone())
                     {
-                        eprintln!("[窗口] 关闭主窗口时隐藏失败: {e}");
+                        tracing::warn!("关闭主窗口时隐藏失败: {e}");
                     }
                 }
             }
@@ -580,7 +586,7 @@ pub(crate) fn configure_app(
                     app.app_handle(),
                     kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string()),
                 );
-                eprintln!("应用初始化过程中出现了错误！:{}", e);
+                tracing::error!("应用初始化过程中出现了错误！:{}", e);
             }
             // dev-only：把 CEF 的随机 CDP 端口寄存到 vite dev server，
             // 供 .claude/skills/kabegame-chromium 只凭 1420 就能发现它。
@@ -821,6 +827,12 @@ pub(crate) fn configure_app(
             wallpaper_window_ready,
             // --- Filesystem ---
             open_path,
+            // --- App logs ---
+            get_app_logs,
+            start_app_log_stream,
+            stop_app_log_stream,
+            #[cfg(not(target_os = "android"))]
+            open_logs_dir,
             open_file_folder,
             open_album_virtual_drive_folder,
             // --- Misc ---
@@ -921,6 +933,7 @@ pub(crate) fn configure_app(
 ))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logging_setup::init();
     let app = configure_app(tauri::Builder::default())
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

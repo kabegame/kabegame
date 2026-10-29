@@ -35,7 +35,7 @@ pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn wallpaper_window_ready<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
     // 标记窗口已完全初始化
-    println!("壁纸窗口已就绪");
+    tracing::debug!("壁纸窗口已就绪");
     crate::wallpaper::WallpaperWindow::<R>::mark_ready();
     // 应用页启动完成后检查一次：开机即网页壁纸时由此把窗口导航到 file:// 入口。
     crate::wallpaper::wpe_web_host::spawn_sync(app);

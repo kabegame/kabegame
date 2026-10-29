@@ -129,11 +129,11 @@ pub fn init_kgpg_plugin(
         }
         // 初始化已安装插件缓存（仅用户 data 目录下的 .kgpg）
         if let Err(e) = pm.ensure_installed_cache_initialized().await {
-            eprintln!("Failed to initialize plugin cache: {}", e);
+            tracing::warn!("Failed to initialize plugin cache: {}", e);
         }
         // 初始化商店插件缓存（已下载到本地的 .kgpg）
         if let Err(e) = pm.init_store_plugin_cache().await {
-            eprintln!("Failed to initialize store plugin cache: {}", e);
+            tracing::warn!("Failed to initialize store plugin cache: {}", e);
         }
     };
     #[cfg(not(feature = "web"))]
@@ -273,14 +273,14 @@ pub fn init_wallpaper_controller(app_handle: &AppHandle<crate::AppRuntime>) {
     // 初始化全局壁纸控制器（基础 manager）
     // 使用全局单例（不再使用 manage）
     if let Err(e) = WallpaperController::init_global(app_handle.clone()) {
-        eprintln!("Failed to initialize WallpaperController: {}", e);
+        tracing::warn!("Failed to initialize WallpaperController: {}", e);
         return;
     }
 
     // 初始化壁纸轮播器
     // 使用全局单例（不再使用 manage）
     if let Err(e) = WallpaperRotator::init_global(app_handle.clone()) {
-        eprintln!("Failed to initialize WallpaperRotator: {}", e);
+        tracing::warn!("Failed to initialize WallpaperRotator: {}", e);
         return;
     }
 
@@ -302,18 +302,18 @@ pub fn init_wallpaper_controller(app_handle: &AppHandle<crate::AppRuntime>) {
     tauri::async_runtime::spawn(async move {
         // 初始化壁纸控制器（如创建窗口等）
         if let Err(e) = WallpaperController::global().init() {
-            eprintln!("[WARN] Failed to initialize wallpaper controller: {}", e);
+            tracing::warn!("Failed to initialize wallpaper controller: {}", e);
         }
 
         if let Err(e) = init_wallpaper_on_startup().await {
-            eprintln!("[WARN] init_wallpaper_on_startup failed: {}", e);
+            tracing::warn!("init_wallpaper_on_startup failed: {}", e);
         } else {
-            println!("[WALLPAPER_CONTROLLER] init finished");
+            tracing::debug!("init finished");
         }
     });
     tauri::async_runtime::spawn(async {
         if let Err(e) = WallpaperRotator::global().ensure_running().await {
-            eprintln!("[WARN] Failed to ensure wallpaper rotator running: {}", e);
+            tracing::warn!("Failed to ensure wallpaper rotator running: {}", e);
         }
     });
 }
@@ -432,8 +432,8 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
 
     let broadcaster = EventBroadcaster::global();
     let event_loop_future = async move {
-        let mut rx = broadcaster.subscribe_filtered_stream(&AppEventKind::ALL);
-        eprintln!("[EVENT_LOOP] ready for receive event");
+        let mut rx = broadcaster.subscribe_filtered_stream(&AppEventKind::default_kinds());
+        tracing::debug!("ready for receive event");
         while let Some((_, event)) = rx.recv().await {
             let kind = event.kind();
 
@@ -468,7 +468,7 @@ pub fn start_event_loop<#[cfg(not(feature = "web"))] R: Runtime>(
                 // 只能留在事件循环里；语言与并发等按 key 的副作用已下沉到各自 command。
                 AppEvent::SettingChange { .. } => {
                     if let Err(e) = Settings::trigger_debounce_save() {
-                        eprintln!("保存设置失败 {}", e);
+                        tracing::warn!("保存设置失败 {}", e);
                     }
                 }
                 // surf 的所有导入路径最终都会广播 DownloadState，在这里统一反馈终态。
@@ -558,7 +558,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
 pub fn start_ipc_server<#[cfg(not(feature = "web"))] R: Runtime>(
     #[cfg(not(feature = "web"))] app_handle: AppHandle<R>,
 ) {
-    println!("[IPC_SERVER] Starting IPC server...");
+    tracing::info!("Starting IPC server...");
 
     let task_future = async move {
         // 启动服务器（app_handle 直接传入 dispatch_request）
@@ -578,7 +578,7 @@ pub fn start_ipc_server<#[cfg(not(feature = "web"))] R: Runtime>(
         .await;
 
         if let Err(e) = res {
-            eprintln!("[IPC_SERVER] 服务器退出: {}", e);
+            tracing::warn!("服务器退出: {}", e);
         }
     };
 
@@ -940,7 +940,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
         let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {
             if let Err(e) = PlasmaPluginWallpaperManager::ensure_plasma_plugin_aligned() {
-                eprintln!("[WARN] ensure_plasma_plugin_aligned failed: {}", e);
+                tracing::warn!("ensure_plasma_plugin_aligned failed: {}", e);
             }
         }
     }

@@ -88,6 +88,6 @@ pub async fn set_web_server_lan_access(enabled: bool) -> Result<(), String> {
 /// setter 会发 setting-change，前端开关随之自动关闭；新端口 / 局域网值不落盘。
 fn disable_after_restart_failure(settings: &Settings) {
     if let Err(e) = settings.set_web_server_enabled(false) {
-        eprintln!("[Web Server] 重启失败后关闭开关失败: {e}");
+        tracing::warn!("重启失败后关闭开关失败: {e}");
     }
 }

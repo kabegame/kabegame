@@ -27,7 +27,7 @@ pub async fn purge_source_files(paths: &[String]) -> PurgeReport {
     {
         Ok(report) => report,
         Err(error) => {
-            eprintln!("[source_purge] 回收站任务执行失败，保留全部源文件: {error}");
+            tracing::warn!("回收站任务执行失败，保留全部源文件: {error}");
             PurgeReport {
                 purged: 0,
                 kept: kept_on_join_error,
@@ -55,7 +55,7 @@ pub async fn purge_source_files(paths: &[String]) -> PurgeReport {
             Ok(()) => report.purged += 1,
             Err(error) => {
                 report.kept += 1;
-                eprintln!("[source_purge] 删除源文件失败，保留文件: {path} — {error}");
+                tracing::warn!("删除源文件失败，保留文件: {path} — {error}");
             }
         }
     }
@@ -72,17 +72,13 @@ pub async fn purge_source_files(paths: &[String]) -> PurgeReport {
                 if accounted < media_uris.len() {
                     let missing = media_uris.len() - accounted;
                     report.kept += missing;
-                    eprintln!(
-                        "[source_purge] MediaStore 删除结果缺少 {missing} 条，按保留源文件计数"
-                    );
+                    tracing::debug!("MediaStore 删除结果缺少 {missing} 条，按保留源文件计数");
                 }
             }
             Err(error) => {
                 report.kept += media_uris.len();
                 for uri in &media_uris {
-                    eprintln!(
-                        "[source_purge] 删除 MediaStore 源文件失败，保留文件: {uri} — {error}"
-                    );
+                    tracing::warn!("删除 MediaStore 源文件失败，保留文件: {uri} — {error}");
                 }
             }
         }

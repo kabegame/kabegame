@@ -1,129 +1,166 @@
+//! 开发期 debug ingest：把 debug 事件转发到 Vite dev server 的 `/__kabegame_debug/ingest`。
+//!
+//! 插桩本身只是 tracing 日志：Rust 用 `kabegame_core::kb_debug!`（`kabegame::debug` 的 TRACE 事件），
+//! 前端经 tauri-plugin-tracing 打 `kb-debug {json}` 的 trace 日志。这里的 [`layer`] 是订阅它们的
+//! tracing 层，攒批后用 NDJSON POST 出去。只在 debug 构建存在。见 `cocs/debug/DEBUG_INGEST.md`。
+//!
+//! CDP 端口寄存同样只在 dev 生效，也放在这里。
+
 #[cfg(debug_assertions)]
 use serde_json::Value;
 
 #[cfg(debug_assertions)]
 const DEBUG_INGEST_PATH: &str = "/__kabegame_debug/ingest";
 
+/// `kb_debug!` 使用的 target。
 #[cfg(debug_assertions)]
-#[derive(serde::Serialize)]
-struct DebugIngestEvent {
-    session_id: String,
-    source: &'static str,
-    level: String,
-    name: String,
-    ts: u128,
-    payload: Value,
-}
+const RUST_TARGET: &str = "kabegame::debug";
 
+/// 前端 debug 日志的消息前缀（`apps/kabegame/src/debugIngest.ts`）。
 #[cfg(debug_assertions)]
-pub fn spawn_debug_event(session_id: impl Into<String>, name: impl Into<String>, payload: Value) {
-    spawn_debug_event_with_level(session_id, "debug", name, payload);
-}
+const FRONTEND_PREFIX: &str = "kb-debug ";
 
-#[cfg(not(debug_assertions))]
-pub fn spawn_debug_event(
-    _session_id: impl Into<String>,
-    _name: impl Into<String>,
-    _payload: serde_json::Value,
-) {
-}
-
+/// 交给 `kabegame_core::logging::init` 的额外层；`KABEGAME_DEBUG_INGEST=false` 或发布版为 None。
 #[cfg(debug_assertions)]
-pub fn spawn_debug_event_with_level(
-    session_id: impl Into<String>,
-    level: impl Into<String>,
-    name: impl Into<String>,
-    payload: Value,
-) {
+pub fn layer() -> Option<kabegame_core::logging::BoxedLayer> {
+    use tracing_subscriber::filter::filter_fn;
+    use tracing_subscriber::Layer;
+
     if !debug_ingest_enabled() {
-        return;
+        return None;
     }
-
-    let session_id = session_id.into();
-    let level = level.into();
-    let name = name.into();
-
-    spawn_task(async move {
-        if let Err(error) = send_debug_event_with_level(session_id, level, name, payload).await {
-            eprintln!("[kabegame-debug] failed to send debug event: {error}");
-        }
+    let (tx, rx) = std::sync::mpsc::channel::<Value>();
+    std::thread::Builder::new()
+        .name("kabegame-debug-ingest".to_string())
+        .spawn(move || run_sender(rx))
+        .ok()?;
+    let filter = filter_fn(|meta| {
+        meta.target() == RUST_TARGET
+            || (meta.target().is_empty() && *meta.level() == tracing::Level::TRACE)
     });
+    Some(Box::new(DebugIngestLayer { tx }.with_filter(filter)))
 }
 
 #[cfg(not(debug_assertions))]
-pub fn spawn_debug_event_with_level(
-    _session_id: impl Into<String>,
-    _level: impl Into<String>,
-    _name: impl Into<String>,
-    _payload: serde_json::Value,
-) {
+pub fn layer() -> Option<kabegame_core::logging::BoxedLayer> {
+    None
 }
 
 #[cfg(debug_assertions)]
-#[allow(dead_code)]
-pub async fn send_debug_event(
-    session_id: impl Into<String>,
-    name: impl Into<String>,
-    payload: Value,
-) -> Result<(), String> {
-    send_debug_event_with_level(session_id, "debug", name, payload).await
-}
-
-#[cfg(not(debug_assertions))]
-pub async fn send_debug_event(
-    _session_id: impl Into<String>,
-    _name: impl Into<String>,
-    _payload: serde_json::Value,
-) -> Result<(), String> {
-    Ok(())
+struct DebugIngestLayer {
+    tx: std::sync::mpsc::Sender<Value>,
 }
 
 #[cfg(debug_assertions)]
-pub async fn send_debug_event_with_level(
-    session_id: impl Into<String>,
-    level: impl Into<String>,
-    name: impl Into<String>,
-    payload: Value,
-) -> Result<(), String> {
-    if !debug_ingest_enabled() {
-        return Ok(());
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for DebugIngestLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut fields = FieldVisitor::default();
+        event.record(&mut fields);
+        let ingest = if event.metadata().target() == RUST_TARGET {
+            let payload = fields.take("payload");
+            serde_json::json!({
+                "session_id": fields.take("session_id"),
+                "source": "rust",
+                "level": "debug",
+                "name": fields.take("name"),
+                "ts": now_millis(),
+                "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::String(payload)),
+            })
+        } else {
+            // 前端事件自带 session_id / source / level / name / ts / payload，原样转发
+            let message = fields.take("message");
+            let Some(json) = message.strip_prefix(FRONTEND_PREFIX) else {
+                return;
+            };
+            match serde_json::from_str::<Value>(json) {
+                Ok(value @ Value::Object(_)) => value,
+                _ => return,
+            }
+        };
+        let _ = self.tx.send(ingest);
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct FieldVisitor(std::collections::HashMap<&'static str, String>);
+
+#[cfg(debug_assertions)]
+impl FieldVisitor {
+    fn take(&mut self, name: &str) -> String {
+        self.0.remove(name).unwrap_or_default()
+    }
+}
+
+#[cfg(debug_assertions)]
+impl tracing::field::Visit for FieldVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name(), value.to_string());
     }
 
-    let event = DebugIngestEvent {
-        session_id: session_id.into(),
-        source: "rust",
-        level: level.into(),
-        name: name.into(),
-        ts: now_millis(),
-        payload,
-    };
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name(), format!("{value:?}"));
+    }
+}
 
-    let client = reqwest::Client::builder()
+/// 专用线程：取走已到达的事件攒成一批，用 NDJSON 发出。失败只往 stderr 报一次——
+/// 这里是日志管线自身，不能再经 tracing 打日志。
+#[cfg(debug_assertions)]
+fn run_sender(rx: std::sync::mpsc::Receiver<Value>) {
+    const MAX_BATCH: usize = 200;
+
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return;
+    };
+    // reqwest 0.11 构造 Client 时需要处在 Tokio runtime 上下文里。
+    let _runtime_guard = runtime.enter();
+    let Ok(client) = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(800))
         .build()
-        .map_err(|error| error.to_string())?;
-    let response = client
-        .post(debug_ingest_url())
-        .json(&event)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("debug ingest returned {}", response.status()))
+    else {
+        return;
+    };
+    let url = debug_ingest_url();
+    let mut reported = false;
+    while let Ok(first) = rx.recv() {
+        let mut batch = vec![first];
+        while batch.len() < MAX_BATCH {
+            match rx.try_recv() {
+                Ok(event) => batch.push(event),
+                Err(_) => break,
+            }
+        }
+        let body = batch
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = runtime.block_on(
+            client
+                .post(&url)
+                .header("Content-Type", "application/x-ndjson")
+                .body(body)
+                .send(),
+        );
+        let error = match result {
+            Ok(response) if response.status().is_success() => None,
+            Ok(response) => Some(format!("debug ingest returned {}", response.status())),
+            Err(error) => Some(error.to_string()),
+        };
+        if let Some(error) = error {
+            if !reported {
+                reported = true;
+                eprintln!("[kabegame-debug] failed to send debug events to {url}: {error}");
+            }
+        }
     }
-}
-
-#[cfg(not(debug_assertions))]
-pub async fn send_debug_event_with_level(
-    _session_id: impl Into<String>,
-    _level: impl Into<String>,
-    _name: impl Into<String>,
-    _payload: serde_json::Value,
-) -> Result<(), String> {
-    Ok(())
 }
 
 /// vite dev server 上的 CDP 端口登记入口(见 `scripts/vite-debug-server.ts`)。
@@ -155,7 +192,7 @@ pub fn spawn_cdp_register() {
     };
     spawn_task(async move {
         if let Err(error) = register_cdp_port(port).await {
-            eprintln!("[kabegame-cdp] failed to publish CDP port {port} to dev server: {error}");
+            tracing::warn!("failed to publish CDP port {port} to dev server: {error}");
         }
     });
 }
@@ -215,7 +252,7 @@ async fn register_cdp_port(port: u16) -> Result<(), String> {
     if !response.status().is_success() {
         return Err(format!("dev server returned {}", response.status()));
     }
-    eprintln!("[kabegame-cdp] CDP ready on 127.0.0.1:{port}, published to dev server");
+    tracing::info!("CDP ready on 127.0.0.1:{port}, published to dev server");
     Ok(())
 }
 
@@ -286,18 +323,15 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
-#[cfg(all(debug_assertions, not(feature = "web")))]
+#[cfg(all(
+    debug_assertions,
+    not(feature = "web"),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
+    feature = "standard"
+))]
 fn spawn_task<F>(future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     tauri::async_runtime::spawn(future);
-}
-
-#[cfg(all(debug_assertions, feature = "web"))]
-fn spawn_task<F>(future: F)
-where
-    F: std::future::Future<Output = ()> + Send + 'static,
-{
-    tokio::spawn(future);
 }

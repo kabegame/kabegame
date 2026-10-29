@@ -147,9 +147,11 @@ impl ProviderRegistry {
                 Some((_, RegistryEntry::Programmatic(_))) => "Programmatic",
                 None => "MISSING",
             };
-            eprintln!(
-                "[pathql] registry.instantiate(current_ns={:?}, ref={:?}) → {}",
-                current_ns.0, reference.0, kind
+            tracing::debug!(
+                "registry.instantiate(current_ns={:?}, ref={:?}) → {}",
+                current_ns.0,
+                reference.0,
+                kind
             );
         }
         let (key, entry) = found.ok_or_else(|| {
@@ -160,11 +162,7 @@ impl ProviderRegistry {
             RegistryEntry::Programmatic(factory) => {
                 let r = factory(properties);
                 if crate::provider::runtime::dbg_enabled() && r.is_err() {
-                    eprintln!(
-                        "[pathql]   factory({:?}) failed: {:?}",
-                        reference.0,
-                        r.as_ref().err()
-                    );
+                    tracing::warn!("factory({:?}) failed: {:?}", reference.0, r.as_ref().err());
                 }
                 r?
             }

@@ -122,7 +122,7 @@ impl UpdaterService {
         match check_updates().await {
             Err(e) => {
                 // fail 出口：回退到进入前的 resting phase，状态不丢
-                eprintln!("[updater] check failed: {e}");
+                tracing::warn!("check failed: {e}");
                 {
                     let pre = self.pre_check_phase.lock().unwrap().clone();
                     self.state.lock().unwrap().phase = pre;

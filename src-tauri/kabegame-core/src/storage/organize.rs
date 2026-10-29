@@ -306,7 +306,7 @@ impl OrganizeService {
         let svc = Arc::clone(&self);
 
         tokio::task::spawn_blocking(move || {
-            eprintln!("[organize] 开始整理 {:?}", options);
+            tracing::info!("开始整理 {:?}", options);
             let res = run_organize(&handle, storage, options, cancel);
             if let Err(e) = res {
                 let state = svc.get_run_state();
@@ -317,7 +317,7 @@ impl OrganizeService {
                     false,
                     Some(e.clone()),
                 );
-                eprintln!("[organize] 任务失败: {}", e);
+                tracing::warn!("任务失败: {}", e);
             }
 
             // 清理运行状态
@@ -509,8 +509,8 @@ fn remove_replaced_compatible_file(previous_path: &str, replacement_path: &str) 
         return;
     }
     if let Err(e) = std::fs::remove_file(&previous) {
-        eprintln!(
-            "[organize] remove replaced compatible file failed ({}): {e}",
+        tracing::warn!(
+            "remove replaced compatible file failed ({}): {e}",
             previous.display()
         );
     }
@@ -786,7 +786,7 @@ fn run_organize(
                             regenerated_total += 1;
                         }
                         Err(e) => {
-                            eprintln!("[organize] video thumbnail generation failed for {id}: {e}");
+                            tracing::warn!("video thumbnail generation failed for {id}: {e}");
                         }
                     }
                 }
@@ -814,9 +814,7 @@ fn run_organize(
                     match crate::media::dimensions::probe_media_sync(local) {
                         Some(probe) if probe.browser_safe => CompatResult::NotNeeded,
                         Some(probe) => {
-                            eprintln!(
-                                "[organize] transcoding compatible video for {id} ({local_path})"
-                            );
+                            tracing::debug!("transcoding compatible video for {id} ({local_path})");
                             match crate::crawler::downloader::generate_compatible_video(
                                 local, &probe,
                             )
@@ -825,8 +823,8 @@ fn run_organize(
                                 Ok(Some(path)) => CompatResult::Generated(path),
                                 Ok(None) => CompatResult::Unknown,
                                 Err(e) => {
-                                    eprintln!(
-                                        "[organize] compatible generation failed for {id} ({local_path}): {e}"
+                                    tracing::warn!(
+                                        "compatible generation failed for {id} ({local_path}): {e}"
                                     );
                                     CompatResult::Unknown
                                 }
@@ -849,8 +847,8 @@ fn run_organize(
                         Ok(Some(path)) => CompatResult::Generated(path),
                         Ok(None) => CompatResult::NotNeeded,
                         Err(e) => {
-                            eprintln!(
-                                "[organize] compatible generation failed for {id} ({local_path}): {e}"
+                            tracing::warn!(
+                                "compatible generation failed for {id} ({local_path}): {e}"
                             );
                             CompatResult::Unknown
                         }
@@ -872,7 +870,7 @@ fn run_organize(
                     if let Err(e) =
                         storage.replace_image_compatible_path(&id.to_string(), &path_str)
                     {
-                        eprintln!("[organize] compatible_path update failed for {id}: {e}");
+                        tracing::warn!("compatible_path update failed for {id}: {e}");
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &path_str);
                         changed_image_patches.push(ImageFieldPatch {
@@ -889,9 +887,7 @@ fn run_organize(
                     if let Err(e) =
                         storage.replace_image_compatible_path(&id.to_string(), &local_path)
                     {
-                        eprintln!(
-                            "[organize] compatible_path sentinel update failed for {id}: {e}"
-                        );
+                        tracing::warn!("compatible_path sentinel update failed for {id}: {e}");
                     } else {
                         remove_replaced_compatible_file(&previous_compatible_path, &local_path);
                         changed_image_patches.push(ImageFieldPatch {
@@ -932,25 +928,21 @@ fn run_organize(
             {
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    eprintln!(
-                        "[organize] native metadata file read failed for {id} ({local_path}): {e}"
-                    );
+                    tracing::warn!("native metadata file read failed for {id} ({local_path}): {e}");
                     continue;
                 }
             };
             let Some(parsed) =
                 crate::media::native_metadata::parse_native_metadata(&format_key, &bytes)
             else {
-                eprintln!(
-                    "[organize] native metadata parse returned no result for {id} ({local_path})"
-                );
+                tracing::debug!("native metadata parse returned no result for {id} ({local_path})");
                 continue;
             };
             let json = match serde_json::to_string(&parsed) {
                 Ok(json) => json,
                 Err(e) => {
-                    eprintln!(
-                        "[organize] native metadata serialization failed for {id} ({local_path}): {e}"
+                    tracing::warn!(
+                        "native metadata serialization failed for {id} ({local_path}): {e}"
                     );
                     continue;
                 }
@@ -962,9 +954,7 @@ fn run_organize(
                     changed_image_patches.push(native_metadata_image_patch(&image_id, metadata_id));
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[organize] native metadata store failed for {id} ({local_path}): {e}"
-                    );
+                    tracing::warn!("native metadata store failed for {id} ({local_path}): {e}");
                 }
             }
         }

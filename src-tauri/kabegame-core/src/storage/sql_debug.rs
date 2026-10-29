@@ -26,16 +26,13 @@ fn on_trace(event: TraceEvent<'_>) {
     match event {
         // 触发器子程序的 STMT 事件里只有 "-- TRIGGER name" 注释，原样打印即可。
         TraceEvent::Stmt(stmt, sql) if !sql.starts_with("--") => {
-            eprintln!(
-                "[sql] {}",
-                stmt.expanded_sql().unwrap_or_else(|| sql.to_string())
-            );
+            tracing::info!("{}", stmt.expanded_sql().unwrap_or_else(|| sql.to_string()));
         }
-        TraceEvent::Stmt(_, sql) => eprintln!("[sql] {sql}"),
+        TraceEvent::Stmt(_, sql) => tracing::info!("{sql}"),
         // 耗时从语句开始到 reset/finalize，包含 Rust 侧逐行取值的时间。
         TraceEvent::Profile(stmt, elapsed) => {
-            eprintln!(
-                "[sql] {:.3}ms  {}",
+            tracing::info!(
+                "{:.3}ms  {}",
                 elapsed.as_secs_f64() * 1e3,
                 one_line_head(&stmt.sql(), 120)
             );

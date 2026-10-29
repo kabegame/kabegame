@@ -30,7 +30,7 @@ pub fn up(conn: &Connection) -> Result<(), String> {
     let mut updated = 0usize;
     for (id, path) in &rows {
         if path.starts_with("content://") {
-            eprintln!("[v012] skip id={id} (content:// handled by live path)");
+            tracing::debug!("skip id={id} (content:// handled by live path)");
             continue;
         }
         match crate::media::dimensions::resolve_video_dimensions_sync(path) {
@@ -39,20 +39,16 @@ pub fn up(conn: &Connection) -> Result<(), String> {
                     "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
                     params![w as i64, h as i64, id],
                 ) {
-                    eprintln!("[v012] update id={id} failed: {e}");
+                    tracing::warn!("update id={id} failed: {e}");
                 } else {
                     updated += 1;
                 }
             }
-            None => eprintln!("[v012] skip id={id} path={path} (unreadable/unparseable)"),
+            None => tracing::warn!("skip id={id} path={path} (unreadable/unparseable)"),
         }
     }
     conn.execute_batch("COMMIT")
         .map_err(|e| format!("commit: {e}"))?;
-    println!(
-        "[v012] backfilled {}/{} video dimensions",
-        updated,
-        rows.len()
-    );
+    tracing::info!("backfilled {}/{} video dimensions", updated, rows.len());
     Ok(())
 }

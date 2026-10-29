@@ -3,9 +3,13 @@
 ## 用户侧
 
 ### Added
+- 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加任意壁纸目录或 Steam 库；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
 - 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的「桌面画布」运行页面并可交互，也可在窗口模式设为桌面壁纸（暂不支持 WPE 属性、`file` / `directory` 类属性，应用背景显示作者预览图）。
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
+
+### Optimized
+- Windows 安装程序在最后阶段不再一个接一个地闪出大量黑色命令行窗口：搬运 CEF 运行时、DLL 与设置目录图标属性改用安装程序内置指令完成。
 
 ### Changed
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
@@ -28,7 +32,12 @@
 
 ## 开发侧
 
+### Added
+- 日志框架改用 `tracing`：`kabegame_core::logging` 装配全进程唯一订阅器（控制台 / 按天滚动文件 / `AppLogLayer` 环形缓冲与广播 / debug ingest 四层各带过滤器），约 380 处 `println!` / `eprintln!` 按语义改为分级宏；`KABEGAME_LOG` 用 `Targets` 语法临时调级（取代 `KABEGAME_IPC_DEBUG`）。事件循环新增 opt-in 的 `log` 事件，经 Tauri `get_app_logs` / `start_app_log_stream` / `stop_app_log_stream`（经 Channel 推送）、Web super 的 `/logs` SSE、IPC `AppLogs` 推给订阅方；CLI 新增 `kabegame-cli log tail`。引入 `tauri-plugin-tracing`，前端用 `@/utils/logger` 写日志，未捕获异常自动记录。详见 `cocs/debug/APP_LOGGING.md`。
+
 ### Changed
+- debug ingest 改为 trace 日志：Rust 用 `kabegame_core::kb_debug!`（core 也能插桩），Tauri 前端 `sendDebugEvent` 经插件打 `kb-debug` trace 日志，由 debug 构建的 `DebugIngestLayer` 批量 NDJSON 转发；删除 `spawn_debug_event` / `send_debug_event`。Android 前端 debug 事件不再需要 query 参数绕过 WebView 拦截。
+- `tokio` 随 `tauri-plugin-tracing` 的最低要求升到 1.54.1。
 - 壁纸轮播只认 `wallpaperRotationPath` + `wallpaperRotationPosition` 两个设置，命令 / IPC 改为 `set_wallpaper_rotation_path` / `get_wallpaper_rotation_path`（`SettingsGet/SetWallpaperRotationPath`），删除画册 id、子画册、模式三组命令与画册 `bigger_order` 路由；Android Worker 不再读数据库，改为消费 Rust 预取的 `rotation_queue.json`。详见 `cocs/wallpaper/ROTATION_PATHQL.md`。
 - 轮播线程不再因 `rotate()` 紧跟 `reset()` 留下的 notify permit 多切一张；`wallpaperRotationPosition` 改为 i64，`-1` 表示刚换路径、下一次从第 1 张开始（`SettingValue` 新增 `I64`）。
 - 设置迁移框架与数据库迁移对齐：模块文档写明新增步骤与约束，迁移失败不写回、照常启动，迁移写回前备份 `settings.json.bak-v<旧版本>`，每个迁移带单测；新增 v003 把旧轮播三键换算成路径。

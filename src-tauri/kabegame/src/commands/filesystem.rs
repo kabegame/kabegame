@@ -31,7 +31,7 @@ fn normalize_path(path: &str) -> &str {
 ///
 /// 文件夹与文件不做区分：目录交给系统默认的文件管理器（Windows 下 opener 内部对目录自带
 /// "explore" verb），文件交给注册的默认程序。
-fn open_with_default<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(), String> {
+pub(crate) fn open_with_default<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(), String> {
     let path = normalize_path(path);
     if path.is_empty() {
         return Err("路径不能为空".to_string());
@@ -64,7 +64,7 @@ pub fn open_file_folder<R: Runtime>(app: AppHandle<R>, file_path: String) -> Res
             #[cfg(target_os = "linux")]
             {
                 // Linux 桌面环境千差万别，定位失败时退化成打开父目录，至少让用户看到文件所在处。
-                eprintln!("定位文件失败，改为打开父目录: {error}");
+                tracing::warn!("定位文件失败，改为打开父目录: {error}");
                 let parent = std::path::Path::new(path)
                     .parent()
                     .ok_or_else(|| "Invalid file path".to_string())?;

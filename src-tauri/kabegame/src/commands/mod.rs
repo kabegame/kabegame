@@ -1,5 +1,6 @@
 // Commands 模块
 pub mod album;
+pub mod app_logs;
 pub mod crawler;
 #[cfg(target_os = "android")]
 pub mod crawler_android;
@@ -30,6 +31,7 @@ pub mod window;
 pub mod wpe;
 
 pub use album::*;
+pub use app_logs::*;
 pub use crawler::*;
 pub use filesystem::*;
 pub use image::*;

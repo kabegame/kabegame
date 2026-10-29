@@ -30,6 +30,8 @@ uuid = {workspace = true}
 deno_fs = { version = "0.162", features = ["sync_fs"] }
 deno_permissions = "0.111"
 percent-encoding = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
 
 # Tauri native app stack (activated by `standard` / `android` features)
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
@@ -37,6 +39,8 @@ tauri-plugin-dialog = { version = "=2.4.2", optional = true }
 tauri-plugin-global-shortcut = { version = "2.3.1", optional = true }
 tauri-plugin-pathes = { workspace = true, optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
+# 只用它的 `log` 命令让前端日志进入 tracing；订阅器由 kabegame-core::logging 装配。
+tauri-plugin-tracing = { version = "0.3", optional = true, default-features = false }
 
 # 桌面端启用 IPC 功能，移动端禁用
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -133,6 +137,7 @@ standard = [
     "dep:tauri-plugin-global-shortcut",
     "dep:tauri-plugin-pathes",
     "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-tracing",
     "dep:tauri-build",
 ]
 
@@ -149,6 +154,7 @@ android = [
     "dep:tauri-plugin-share",
     "dep:tauri-plugin-wallpaper",
     "dep:tauri-plugin-task-notification",
+    "dep:tauri-plugin-tracing",
     "dep:tauri-build",
 ]
 

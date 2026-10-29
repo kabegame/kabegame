@@ -221,6 +221,26 @@ impl Backend {
         }
     }
 
+    /// 主程序的最近日志；日志只存在于主程序进程内，本地模式没有。
+    pub async fn app_logs(
+        &self,
+        since_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<kabegame_core::logging::LogRecord>, String> {
+        match self {
+            Self::App(client) => client.app_logs(since_seq, Some(limit)).await,
+            Self::Local => Err("日志只能从运行中的主程序读取".to_string()),
+        }
+    }
+
+    /// 订阅主程序的实时日志（`log` 是 opt-in 事件，必须显式点名）。
+    pub async fn subscribe_logs(&self) -> Result<UnboundedReceiver<Arc<AppEvent>>, String> {
+        match self {
+            Self::App(client) => client.subscribe_events(&[AppEventKind::Log]).await,
+            Self::Local => Err("日志只能从运行中的主程序读取".to_string()),
+        }
+    }
+
     pub async fn cancel_task(&self, task_id: &str) {
         match self {
             Self::Local => {

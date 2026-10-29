@@ -197,7 +197,7 @@ $S screen /tmp/full.png --android   # adb screencap 整屏（含系统栏 / 原�
 - **别靠包装 `window.__TAURI_INTERNALS__.invoke` 统计 IPC 调用**：它是不可写、不可配置的属性，
   `eval` 里赋值静默失败，计数恒为空，会被误读成「没有调用」；CEF 下普通 invoke 走 `cef-ipc://`
   postMessage 桥而非 `fetch`，抓网络请求也看不全。要观测调用次数 / 顺序，用
-  `cocs/debug/DEBUG_INGEST.md` 的 debug ingest 插桩（前端 `sendDebugEvent`），本 skill 只负责驱动 UI。
+  `cocs/debug/DEBUG_INGEST.md` 的 debug ingest 插桩（前端 `sendDebugEvent`、Rust `kb_debug!`），本 skill 只负责驱动 UI。
 - **`click` 默认带 `force: true`**。页面上的亀ちゃん吉祥物（`.kamechan-mascot`）
   是常驻浮层，经常盖住侧栏底部，普通 click 会一直等 actionability 直到超时。
 - **不要把 `http://host:port` 直接喂给 `connectOverCDP`**：playwright 会拼成

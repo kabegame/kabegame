@@ -664,7 +664,7 @@ pub async fn start_http_server() -> Result<u16, String> {
     let app = file_routes().fallback(handle_unmatched);
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
-            eprintln!("[file-server] stopped: {e}");
+            tracing::debug!("stopped: {e}");
         }
     });
 

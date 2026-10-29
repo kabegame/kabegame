@@ -10,6 +10,8 @@ pub mod crawler;
 pub mod gallery;
 pub mod kgpg;
 pub mod local_folder;
+/// 应用日志：tracing 订阅器装配、最近日志缓冲与事件广播（见 cocs/debug/APP_LOGGING.md）。
+pub mod logging;
 pub mod media;
 pub mod plugin;
 pub mod providers;

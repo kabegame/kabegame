@@ -754,8 +754,8 @@ mod imp {
                     return 0;
                 }
                 let Some(callback) = callback else { return 0 };
-                eprintln!(
-                    "[CEF] renderer unresponsive for webview '{}', terminating for reload",
+                tracing::warn!(
+                    "renderer unresponsive for webview '{}', terminating for reload",
                     self.label
                 );
                 // 杀掉渲染进程 → 触发 on_render_process_terminated → reload 恢复
@@ -772,8 +772,8 @@ mod imp {
                 error_code: ::std::os::raw::c_int,
                 error_string: Option<&CefString>,
             ) {
-                eprintln!(
-                    "[CEF] renderer terminated for webview '{}': {status:?} ({error_code}) {}",
+                tracing::warn!(
+                    "renderer terminated for webview '{}': {status:?} ({error_code}) {}",
                     self.label,
                     error_string.map(|s| s.to_string()).unwrap_or_default()
                 );
@@ -1038,8 +1038,8 @@ mod imp {
                             .as_deref()
                             .map(|root| root.display().to_string())
                             .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[cef-runtime] deny file: {url} (outside {root}; {reason:?}) webview '{}'",
+                        tracing::info!(
+                            "deny file: {url} (outside {root}; {reason:?}) webview '{}'",
                             self.label
                         );
                         ReturnValue::CANCEL
@@ -1314,8 +1314,8 @@ mod imp {
                         &self.initialization_scripts_payload,
                     ) {
                         Ok(initialization_scripts) => *extra_info = Some(initialization_scripts),
-                        Err(error) => eprintln!(
-                            "[cef-runtime] failed to attach popup initialization scripts: {error}"
+                        Err(error) => tracing::warn!(
+                            "failed to attach popup initialization scripts: {error}"
                         ),
                     }
                 }

@@ -97,35 +97,35 @@ pub fn build_asset_index(pkg: &serde_json::Value) -> Vec<String> {
     let mut index = Vec::new();
     let mut seen = HashSet::new();
     let Some(pkg_obj) = pkg.as_object() else {
-        eprintln!("[WARN] package.json 不是 JSON 对象，无法构建资源清单");
+        tracing::warn!("package.json 不是 JSON 对象，无法构建资源清单");
         return index;
     };
 
     if pkg_obj.contains_key("kbDocAssets") {
-        eprintln!("[WARN] kbDocAssets 已被 kbAssets 取代（路径数组），本字段被忽略");
+        tracing::warn!("kbDocAssets 已被 kbAssets 取代（路径数组），本字段被忽略");
     }
     let Some(items) = pkg_obj.get("kbAssets") else {
         return index;
     };
     let Some(items) = items.as_array() else {
-        eprintln!("[WARN] kbAssets 不是数组，已忽略资源清单");
+        tracing::warn!("kbAssets 不是数组，已忽略资源清单");
         return index;
     };
     for item in items {
         let Some(raw) = item.as_str() else {
-            eprintln!("[WARN] kbAssets 含非字符串项，已跳过");
+            tracing::warn!("kbAssets 含非字符串项，已跳过");
             continue;
         };
         let Some(path) = normalize_asset_path(raw) else {
-            eprintln!("[WARN] kbAssets 含非法资源路径，已跳过: {raw:?}");
+            tracing::warn!("kbAssets 含非法资源路径，已跳过: {raw:?}");
             continue;
         };
         if let Err(error) = validate_kb_rel_path(&path) {
-            eprintln!("[WARN] kbAssets 项路径非法，已跳过 {raw:?}: {error}");
+            tracing::warn!("kbAssets 项路径非法，已跳过 {raw:?}: {error}");
             continue;
         }
         if !seen.insert(path.clone()) {
-            eprintln!("[WARN] kbAssets 归一化后重复，已忽略: {path:?}");
+            tracing::warn!("kbAssets 归一化后重复，已忽略: {path:?}");
             continue;
         }
         index.push(path);

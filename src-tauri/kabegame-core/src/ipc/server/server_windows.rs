@@ -2,7 +2,6 @@
 
 use crate::ipc::ipc::{encode_frame, read_one_frame, windows_pipe_name, write_all};
 use crate::ipc::{IpcRequest, IpcResponse};
-use crate::ipc_dbg;
 use tokio::io::split;
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 use tokio::time::{timeout, Duration};
@@ -83,7 +82,7 @@ fn create_secure_server() -> Result<NamedPipeServer, String> {
             .create_with_security_attributes_raw(windows_pipe_name(), &attrs as *const _ as *mut _)
     }
     .map_err(|e| format!("ipc create pipe failed: {}", e))?;
-    eprintln!("[DEBUG] IPC 服务器创建命名管道成功 {}", windows_pipe_name());
+    tracing::debug!("IPC 服务器创建命名管道成功 {}", windows_pipe_name());
     unsafe { LocalFree(sd_ptr as _) };
     Ok(server)
 }
@@ -104,8 +103,8 @@ where
                 Ok(s) => break 'bind s,
                 Err(e) => {
                     if attempt < MAX_RETRIES {
-                        eprintln!(
-                            "[IPC] 命名管道绑定失败 (尝试 {}/{}): {}，{}ms 后重试...",
+                        tracing::warn!(
+                            "命名管道绑定失败 (尝试 {}/{}): {}，{}ms 后重试...",
                             attempt + 1,
                             MAX_RETRIES + 1,
                             e,
@@ -115,11 +114,11 @@ where
                         continue;
                     }
                     if check_existing_app_instance().await {
-                        eprintln!(
+                        tracing::error!(
                             "错误: 无法绑定命名管道 {}，因为已有 Kabegame 实例正在运行。",
                             windows_pipe_name()
                         );
-                        eprintln!("请先停止正在运行的 Kabegame，或确保只有一个应用实例。");
+                        tracing::error!("请先停止正在运行的 Kabegame，或确保只有一个应用实例。");
                         return Err(format!("另一个 Kabegame 实例正在运行: {}", e));
                     }
                     return Err(format!("无法创建命名管道: {}", e));
@@ -138,7 +137,7 @@ where
         let connected = server;
         server = create_secure_server()?;
 
-        ipc_dbg!("[DEBUG] IPC 服务器接受新连接（持久连接模式）");
+        tracing::trace!("IPC 服务器接受新连接（持久连接模式）");
 
         // 为每个连接 spawn 一个任务来处理多个请求
         let handler = handler.clone();
@@ -152,7 +151,7 @@ where
 
             connection_handler::handle_connection(read_half, write_half, handler, client_id).await;
 
-            eprintln!("[DEBUG] IPC 服务器连接处理完成");
+            tracing::debug!("IPC 服务器连接处理完成");
         });
     }
 }

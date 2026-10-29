@@ -1,5 +1,30 @@
 # v4.7.0 regression
 
+## 应用日志（tracing + 按天落盘 + 事件循环广播 + 查看日志）
+
+2026-10-29：`kabegame_core::logging` 装配全进程唯一 tracing 订阅器（控制台 / `<data_dir>/logs/kabegame.<UTC 日期>.log` / `AppLogLayer` / debug ingest），约 380 处打印改为分级宏；`AppEventKind::Log` 为 opt-in，「订阅全部」改用 `default_kinds()`；出口为 Tauri `get_app_logs` + `set_app_log_stream`（`app-logs` 只发主窗口）、Web super `/logs` SSE + `get_app_logs` RPC、IPC `AppLogs`（CLI `log tail`）；前端经 `tauri-plugin-tracing` 写日志；debug ingest 改为 trace 日志 + 订阅层转发。静态验证：check-kabegame 的 cargo check（`kabegame` standard / web、`kabegame-cli`）0 error；vue-tsc 只有既有的 `vite.config.ts(74,20)` `isProd` 错误。单测：`kabegame-core` 新增 logging 8 个、事件 1 个全部通过；core 全量 392 通过、4 失败，均为既有失败（3 个 `wpe` Windows 路径用例在 macOS 上跑、1 个 `local_folder` 缩略图删除用例对应「只删 thumbnails_dir 内文件」规则），与本次无关。Android / Windows / Linux 专属文件的打印替换在 macOS 上编不到，只做了同参数宏替换。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 环形缓冲与过滤 | macOS 单测 | `test-kabegame kabegame-core --lib logging` | seq 递增、满容量淘汰最旧；since / limit 返回最新尾部；空 target 按 webview 级别；`KABEGAME_LOG` 叠加默认级别、非法级别报错 | 2026-10-29：8 个通过 |
+| [x] | 日志层记录与防重入 | macOS 单测 | 同上 | message 与字段（task_id、count）正确入记录；层内再打的日志被丢弃；带 `log{w=main}` span 的空 target 事件记为 `webview:main`、插件的空名位置字段被丢弃 | 2026-10-29 通过 |
+| [x] | Log 事件 opt-in | macOS 单测 | `ipc::events` | `default_kinds()` 不含 `Log`；`AppEvent::Log` 序列化为 `{"type":"log",seq,…}` 并能往返 | 2026-10-29 通过 |
+| [x] | 启动日志落盘 | 桌面 dev | 启动 app，打开 `.kabegame/debug/data/logs/` | 有 `kabegame.<UTC 日期>.log`，含 `Settings initialized` 等启动行，无 ANSI 转义 | 2026-10-29 macOS dev：生成 `kabegame.2026-10-29.log`，0 处 ANSI；同进程多次重启追加写入 |
+| [x] | 查看日志：历史与实时 | 桌面 dev | 工具箱 → 维护 →「查看日志」；随后跑一次整理或插件任务 | 弹窗先显示启动以来的历史；任务期间新日志实时追加并自动滚到底；手动上翻后自动滚动关闭 | 2026-10-29 CDP：入口在亀ちゃん工具箱维护分组；打开即显示启动以来 35 条；打开期间收到 3 条 `app-logs`。自动滚动未单独验证。2026-10-29 代理实测：连打 100 条与 2 秒内分散 50 条 `logger.info` 后列表都停在底部（scrollTop = max）且开关保持开启；把列表滚到顶后开关自动关闭，再来 30 条滚动位置仍为 0；重新打开开关立即跳到底。另：前端连续快速打日志时 seq 顺序与调用顺序不一致（180 条里 68 条错位），属异步 IPC 到达顺序 |
+| [ ] | 查看日志：筛选 | 桌面 dev | 依次切换级别（勾 DEBUG）、来源（前端 / 后端）、模块前缀（如 `kabegame_core::crawler`）、关键字 | 列表与「显示 N / 共 M 条」随筛选变化；点一行在下方显示完整消息与字段 | 2026-10-29 CDP：关键字筛到 2 条，勾 DEBUG 后 3 条，点行显示详情。来源与模块前缀未单独点测。2026-10-29 代理实测：来源「前端」184 条全为 `webview:main`、「后端」15 条无 `webview`；前缀选 `kabegame::core_init` / `kabegame_core::ipc` 后可见行全部以该前缀开头；勾 DEBUG 199→216，TRACE 无新增（dev 阈值 debug，缓冲里没有 TRACE）。失败：点模块前缀下拉的 × 清除后 `targetPrefix` 变成 `undefined`，`filtered` 里 `.trim()` 抛 TypeError（日志里有 `[vue] component update: Cannot read properties of undefined (reading 'trim')`），此后切来源 / 级别列表与计数都冻结不变，直到组件重建。另：前缀 `kabegame` 也会命中 `kabegame_core::*`（`startsWith` 不按 `::` 分段）。已修复（待 dev 复测）：模块前缀清除后按空串处理；前缀改为按 `::` 分段匹配，CLI `--target` 同规则 |
+| [ ] | 关闭即退订 | 桌面 dev | 关闭弹窗后持续产生日志，再打开 | 关闭期间后端停止推送；再打开时补拉关闭期间的历史，不重复 | 2026-10-29 CDP：关闭后打日志收到 0 条 `app-logs`；重开补到关闭期间那条，seq 无重复。实时推送已从全局事件 `app-logs` 改为 Channel（`start_app_log_stream` / `stop_app_log_stream { streamId }`），待 dev 复测 |
+| [x] | 复制 / 清空 / 打开目录 | 桌面 dev | 点「复制」「清空」「打开日志目录」 | 剪贴板为筛选后的行；清空后不回填旧日志；Finder / 资源管理器打开 logs 目录 | 2026-10-29：`pbpaste` 为筛选后的行；清空后关闭重开仍为 0 条、新日志照常进来；`open_logs_dir` 成功打开 Finder |
+| [ ] | 前端日志与未捕获异常 | 桌面 dev（devtools） | 执行 `logger.info("x")`；再 `setTimeout(() => { throw new Error("boom") })` | 查看器与日志文件出现 `webview:main` 的 INFO「x」与 ERROR「[window] boom…」 | 2026-10-29 CDP 通过。实测发现对象参数被插件转成 `[object Object]`、插件的调用位置总指向 `logger.ts`，已改为 `logger` 先序列化参数、后端丢弃该位置字段，复测对象显示为 JSON。2026-10-29 代理实测（未改状态，供复核）：查看器里 target 为 `webview:main`，但日志文件里前端日志 0 处 `webview:main`，行形如 `INFO log{w=main}: : agent-c7-marker =logger.ts:30:22)#    at eval …`，即 target 为空、空名位置字段也没丢弃——补 `webview:<label>` 与丢字段只在 `AppLogLayer` 做了，文件层仍是默认 fmt。已修复（待 dev 复测）：控制台与文件改用共用的 `logging/format.rs` 单行格式，前端日志记为 `webview:main`、不打印 span 与位置字段；单测 `formats_frontend_event_with_webview_target_and_no_span` 通过 |
+| [ ] | 畅游窗口无日志权限 | 桌面 dev | 在畅游页面 devtools 里调 `plugin:tracing\|log` | 被 ACL 拒绝；畅游内容页、畅游导航栏、爬虫窗口都收不到实时日志 | 2026-10-29 代理实测：example.com 畅游内容页有 `__TAURI_INTERNALS__`，`plugin:tracing\|log`、`get_app_logs`、`set_app_log_stream`、`plugin:event\|listen` 均报 `not allowed by ACL`，主窗口查看器与日志文件里没有这条探针日志，内容页收到 0 条 `app-logs`。但同一窗口的 `surf-navbar`（自有页面，有 `core:event:default`）用全局 `listen("app-logs")` 收到了主窗口的日志批次：Tauri 的 `match_any_or_filter` 对 target=Any 的监听者直接放行，`emit_to("main")` 挡不住；`crawler-*` 同样有 `core:event:allow-listen` 且允许远程 URL，未实测。已修复（待 dev 复测）：实时日志改经查看器传入的 Channel 推回调用页，不再发全局事件 |
+| [x] | debug ingest | 桌面 dev | 前端调用 `sendDebugEvent("probe", {a:1}, {sessionId:"log-probe"})`；查看 `backend_started` | `.kabegame/debug/debug-log-probe.ndjson` 有 source=frontend 的 `probe`，`ts` 为调用时刻；后端会话文件有 source=rust 的 `backend_started`；这两类事件不出现在查看器里 | 2026-10-29 通过。首次启动发现发送线程在 Tokio runtime 外构造 reqwest Client 而 panic（panic hook 已把它记进日志），已改为先 `runtime.enter()`，复测 `backend_started` 落盘。2026-10-29 代理实测：`sendDebugEvent("agent-probe", {x:1}, {sessionId:"agent-probe"})` 后 `debug-agent-probe.ndjson` 有一条 source=frontend、ts 与调用时刻一致的记录；`get_app_logs`（217 条）与当天日志文件里 `kb-debug` / `agent-probe` 均为 0 |
+| [ ] | debug ingest（Android） | Android dev | 前端调用 `sendDebugEvent` | 事件经后端转发落盘，不再出现空事件 | |
+| [x] | CLI log tail | 桌面 dev + dev CLI | `kabegame-cli log tail --level debug --history 50`，同时在 app 里操作；再退出 app | 先输出最近 50 条再持续跟随；退出 app 后提示连接断开；app 未运行时直接报错不回退本地 | 2026-10-29：历史、`--target` / `--level` 筛选、跟随（实时收到前端 `logger.info`）、`--via local` 报错均通过。实测修了两处：漏初始化 AppPaths 导致 panic；`--history` 改为按筛选后计数。退出 app / app 未运行两条未测。2026-10-29 代理实测：`log tail --level trace` 跟随中在主窗口 `exit_app`，CLI 收到 CEF 关闭的 DEBUG 行后打印「与主程序的连接已断开」并以退出码 1 结束；app 未运行时 `log tail`（默认 `--via auto`，含 `--no-follow`）直接报「日志只能从运行中的主程序读取：连接 Kabegame IPC 服务失败…Connection refused」，退出码 1，没有回退本地 |
+| [x] | 防自激 | 桌面 dev + dev CLI | 查看器勾 DEBUG + TRACE，同时 `kabegame-cli log tail --level trace` 跟随；空闲 10 秒后再触发操作 | 空闲时查看器与 CLI 都不增长；操作后增量与操作相称 | 2026-10-29 代理实测：空闲约 13 秒查看器 +0 条、CLI +0 行；一条 `logger.info` 加两次设置修改 → 两侧各 +1（就是那条日志）；再起一个 CLI 连接 → 两侧各 +3 条 `kabegame_core::ipc` DEBUG；每次之后 5 秒空闲均为 0 |
+| [x] | `KABEGAME_LOG` 调级 | 桌面 dev | `KABEGAME_LOG=kabegame_core::ipc=trace` 启动，用 CLI 发一个请求 | 控制台 / 文件出现 IPC 逐帧 trace 日志；不设时没有 | 2026-10-29 用 dev CLI 验证（同一订阅器）：设置后 stderr 出现 `kabegame_core::ipc::client::connection` 的 TRACE，不设为 0 条；非法值记一条 WARN 并退回默认 |
+| [ ] | Web super 日志 | web dev | 非 super 与 `?super=1` 分别打开工具箱；`curl -N 'http://127.0.0.1:7490/logs?super=1'` | 非 super 无「查看日志」，`/logs` 返回 403、`get_app_logs` 返回 forbidden；super 下可查看并实时滚动 | 2026-10-29 借桌面端应用 Web 服务器（同一套路由）验证了后端：无 super 时 `/logs` 403、RPC forbidden；super 下 RPC 返回历史、SSE 实时收到日志。Web 前端工具箱入口未测 |
+| [x] | 原有事件不受影响 | 桌面 dev | 下载、删图、画册增删、设置修改 | 画廊 / 任务 / 画册照常刷新（`default_kinds` 替换 `ALL` 未漏种类）；CLI `plugin run` 任务日志照常 | 2026-10-29：设置修改的 `setting-change` 照常到前端（2 次切换收到 2 条），画廊正常加载。下载 / 删图 / 画册未测。2026-10-29 代理实测（均未手动刷新）：本地导入 4 张 PNG，画廊页头 212 / 4189 在 1.6 秒内逐张涨到 216 / 4193，任务抽屉显示「本地导入 完成 ✓4」，3 条 `task-log` 实时到达且任务日志弹窗完整；新建画册 0.1~0.2 秒出现在树里、加 4 张后树计数与画册页头都变 4、改名 0.1 秒同步、删除 0.1~0.4 秒从树中消失；后端改 `networkRetryCount` 2→3→2，设置页输入框约 50 ms 同步；删除 4 张后 0.1 秒回落到 212 / 4189。dev CLI `plugin run manyacg --via app`（随机 2 个作品）两次均 completed，进度条正常绘制，任务日志经 `suspend` 打在进度条上方 |
+| [ ] | 发布版级别 | 桌面 release 包 | 安装后启动，查看日志文件 | 只有 INFO 及以上；无 DEBUG 行 | |
+
 ## 下载落盘先占坑（消除 `images.local_path` UNIQUE 冲突）
 
 2026-10-29：下载目标文件名从 `exists()` 查询改为原子创建 + 原生占用标记（Unix `flock`、Windows 只共享读的 share mode）：`occupy_unique_path` / `occupy_unique_download_path[_with_name]` 返回 `OccupiedFile` 守卫，后处理持有到 `add_image` 结束；溢写文件在 Unix 同设备上「锁源 → 硬链接 → 删源名」零拷贝，Windows / 跨设备经句柄复制；本地导入复制进目标目录同样占坑；文件夹同步给新文件建行前探测标记、命中放弃，探测未命中再按路径查一次；下载器对新建文件入库后按直接父目录补挂文件夹画册。不改 SQL。静态验证：check-kabegame driver 的 cargo check（`kabegame` 与 `kabegame-cli`）0 error；vue-tsc 报 1 个既有错误（`apps/kabegame/vite.config.ts(74,20)` 的 `isProd` 未定义，来自 HEAD 合并提交，本次未改前端）。Windows 分支本机（macOS）无法编译，只核对了 `windows-sys` 0.52 常量类型。真机（macOS dev，CDP + dev CLI 经 IPC 交给 app）：用临时 V8 插件 `collide-test` 从本地 HTTP 服务一次入队 16 个 `…/set<n>/img.png`（同名、内容各异）制造碰撞，结果见各行备注；测试图片、画册与插件已清理。
@@ -20,6 +45,19 @@
 | [ ] | 畅游下载 | macOS 桌面 CEF | 畅游窗口一键下载 / 右键下载图片与视频 | 照常入库，下载目录无残留 `.kabegame-occupy-*` 或 `.part` | 未验证：走 relocate 分支，代码未改 |
 | [ ] | Windows 读写与删除 | Windows 桌面 CEF | 下载图片与大视频；构造一次后处理失败（如去重兜底命中） | 缩略图 / 尺寸 / 兼容副本照常生成；失败分支能删掉新建文件（先 drop 守卫再删）；溢写文件经句柄复制后源 `.part` 被删 | 未验证：本机为 macOS，Windows 分支未编译 |
 | [ ] | 不支持硬链接的盘 | Linux / macOS，FAT / exFAT 下载目录 | 下载目录设在 U 盘上下载几张同名图 | 退回 `create_new` + 上锁，照常换名入库，无残留临时文件 | 未验证 |
+
+## Windows 安装程序不再弹命令行窗口
+
+2026-10-29：`src-tauri/kabegame/nsis/installer-hooks.nsh` 的安装 / 卸载钩子不再 `ExecWait cmd.exe /C move|attrib`（每个 DLL、CEF 文件、locale pak 各起一次 cmd，安装末尾连续闪出几十个黑窗口），移动改为 `KABEGAME_MOVE_FILE` 宏（`Delete` 目标 + `Rename`，同卷 `MoveFile`，失败时 `DetailPrint` 报错），属性改为 `SetFileAttributes`。本机（macOS）无 `makensis`，未编译、未真机运行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | 打包通过 | Windows 构建机 | `deno task b -c kabegame --release` 产出 NSIS 安装包 | `makensis` 无报错（宏内 `${If} ${Errors}` 可用） | 未验证 |
+| [ ] | 全新安装无黑窗口 | Windows | 在干净目录运行安装包，点开「显示细节」 | 全程不闪 cmd 窗口；细节里每个文件一行 `Move …`，无 `Move failed`；`$INSTDIR` 下有 `libcef.dll`、`*.pak`、`locales\*.pak`、`dokan2.dll`，`resources\cef` 已删除 | 未验证 |
+| [ ] | 覆盖安装 | Windows（已装旧版） | 不卸载直接运行新安装包 | 旧 DLL / pak 被覆盖，无 `Move failed`；应用能正常启动（CEF 加载正常） | 未验证 |
+| [ ] | 目录图标 | Windows | 安装后在资源管理器里看安装目录 | 文件夹显示应用图标；`desktop.ini` 为隐藏 + 系统，目录带系统 + 只读属性 | 未验证 |
+| [ ] | 卸载 | Windows | 从「应用和功能」卸载 | 不闪 cmd 窗口；安装目录被完整删除，无残留 `desktop.ini` | 未验证 |
+| [ ] | 带空格的安装路径 | Windows | 安装到 `C:\Program Files\Kabe Game Test` | 同全新安装，各文件正常搬运 | 未验证 |
 
 ## 合并：WPE 与路径轮播 / 基本信息芯片
 

@@ -68,7 +68,7 @@ fn unchanged_status(status: Option<&FolderStatus>, folder_mtime_ms: u64) -> Opti
 fn persist_status(album_id: &str, status: &FolderStatus) {
     let status_json = status.to_json();
     if let Err(err) = Storage::global().update_album_folder_status(album_id, Some(&status_json)) {
-        eprintln!("[local_folder] persist status for {album_id} failed: {err}");
+        tracing::warn!("persist status for {album_id} failed: {err}");
     }
     GlobalEmitter::global().emit_album_patches(vec![crate::emitter::AlbumFieldPatch::new(
         album_id,

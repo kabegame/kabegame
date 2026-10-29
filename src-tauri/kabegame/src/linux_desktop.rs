@@ -19,10 +19,7 @@ pub fn init_linux_desktop() -> LinuxDesktop {
     {
         let detected = detect_linux_desktop();
         let _ = LINUX_DESKTOP.set(detected);
-        println!(
-            "[LINUX_DESKTOP] detected desktop environment: {:?}",
-            detected
-        );
+        tracing::info!("detected desktop environment: {:?}", detected);
         detected
     }
 
@@ -118,7 +115,7 @@ fn detect_from_systemd_services() -> Option<LinuxDesktop> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lower = stdout.to_lowercase();
     // 先匹配 plasma，再匹配 gnome，避免 Plasma 上同时有 gnome 相关服务时误判
-    eprintln!("detected: {}", lower);
+    tracing::debug!("detected: {}", lower);
     if lower.contains("plasma") {
         return Some(LinuxDesktop::Plasma);
     }

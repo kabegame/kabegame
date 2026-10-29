@@ -56,7 +56,7 @@ pub async fn run_plugin(
 ) -> Result<PluginRunOutput, String> {
     let pm = PluginManager::global();
     if let Err(error) = pm.ensure_installed_cache_initialized().await {
-        eprintln!("[plugin-run] 插件目录扫描未全部成功: {error}");
+        tracing::warn!("插件目录扫描未全部成功: {error}");
     }
 
     let path = std::path::Path::new(&p.plugin);
@@ -673,7 +673,7 @@ fn emit_recommended_diff(before: RecommendedSnapshot) {
     let configs = match Storage::global().get_run_configs() {
         Ok(configs) => configs,
         Err(error) => {
-            eprintln!("[WARN] 读取写后推荐配置导入态失败: {error}");
+            tracing::warn!("读取写后推荐配置导入态失败: {error}");
             return;
         }
     };

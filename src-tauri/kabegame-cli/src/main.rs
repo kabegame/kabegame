@@ -8,6 +8,7 @@
 //! - `data import-image`：通过内建 local-import 任务导入单个本地图片或视频
 //! - `pathql generate`：生成 PathQL 客户端
 //! - `pathql query`：查询 PathQL 数据
+//! - `log tail`：读取并跟随运行中主程序的应用日志
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use include_dir::{include_dir, Dir};
@@ -22,6 +23,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 mod backend;
+mod log_tail;
 mod task_log;
 
 use backend::{choose_backend, Backend, LocalNeeds, Via};
@@ -54,6 +56,15 @@ enum Commands {
     /// 运行中任务控制
     #[command(subcommand)]
     Task(TaskCommands),
+    /// 主程序应用日志
+    #[command(subcommand)]
+    Log(LogCommands),
+}
+
+#[derive(Subcommand, Debug)]
+enum LogCommands {
+    /// 输出最近的日志并持续跟随（需要主程序在运行）
+    Tail(log_tail::LogTailArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -461,6 +472,11 @@ fn eval_liquid_cond(cond: &str, vars: &HashMap<String, String>) -> Result<bool, 
 
 #[tokio::main]
 async fn main() {
+    // core 的日志打到 stderr；CLI 面向用户的输出仍走 stdout。
+    kabegame_core::logging::init(kabegame_core::logging::LoggingOptions {
+        console: true,
+        extra: None,
+    });
     let Cli { via, command } = Cli::parse();
 
     let res = match command {
@@ -479,6 +495,9 @@ async fn main() {
         },
         Commands::Task(cmd) => match cmd {
             TaskCommands::Concurrency(args) => task_concurrency(args, via).await,
+        },
+        Commands::Log(cmd) => match cmd {
+            LogCommands::Tail(args) => log_tail::log_tail(args, via).await,
         },
     };
 

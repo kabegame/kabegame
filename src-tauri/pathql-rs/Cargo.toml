@@ -15,6 +15,7 @@ serde-saphyr = { workspace = true, optional = true }
 regex-automata = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
 arc-swap = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 default = []

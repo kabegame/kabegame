@@ -1133,7 +1133,7 @@ async fn http_get_text_with_retry(
             if status.is_redirection() {
                 if redirect_count >= 10 {
                     let msg = format!("[{label}] 重定向次数过多（>10）");
-                    eprintln!("{msg} URL: {current_url}");
+                    tracing::warn!("{msg} URL: {current_url}");
                     emit_http_error(
                         task_id,
                         task_log_i18n(
@@ -1153,7 +1153,7 @@ async fn http_get_text_with_retry(
                                     Ok(u) => u.to_string(),
                                     Err(e) => {
                                         let msg = format!("[{label}] 重定向 URL 解析失败：{e}");
-                                        eprintln!("{msg} URL: {current_url}");
+                                        tracing::warn!("{msg} URL: {current_url}");
                                         emit_http_error(
                                             task_id,
                                             task_log_i18n(
@@ -1199,7 +1199,7 @@ async fn http_get_text_with_retry(
                     continue;
                 }
                 let msg = format!("[{label}] 请求失败：{e}");
-                eprintln!("{msg} URL: {url}");
+                tracing::warn!("{msg} URL: {url}");
                 emit_http_error(
                     task_id,
                     task_log_i18n(
@@ -1234,7 +1234,7 @@ async fn http_get_text_with_retry(
                 continue;
             }
             let msg = format!("[{label}] HTTP 错误：{status}");
-            eprintln!("{msg} URL: {current_url}");
+            tracing::warn!("{msg} URL: {current_url}");
             emit_http_error(
                 task_id,
                 task_log_i18n(
@@ -1266,7 +1266,7 @@ async fn http_get_text_with_retry(
                     continue;
                 }
                 let msg = format!("[{label}] 读取响应失败：{e}");
-                eprintln!("{msg} URL: {final_url}");
+                tracing::warn!("{msg} URL: {final_url}");
                 emit_http_error(
                     task_id,
                     task_log_i18n(
@@ -1330,10 +1330,10 @@ fn build_client(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, 
         match reqwest::Proxy::all(proxy_url) {
             Ok(proxy) => {
                 client_builder = client_builder.proxy(proxy);
-                eprintln!("网络代理已配置 (async): {proxy_url}");
+                tracing::debug!("网络代理已配置 (async): {proxy_url}");
             }
             Err(e) => {
-                eprintln!("代理配置无效 ({proxy_url}), 将使用直连 (async): {e}");
+                tracing::warn!("代理配置无效 ({proxy_url}), 将使用直连 (async): {e}");
             }
         }
     }

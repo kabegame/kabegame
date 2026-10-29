@@ -411,7 +411,7 @@ fn sync_through_from_env() -> Option<u32> {
     match value.trim().parse() {
         Ok(version) => Some(version),
         Err(_) => {
-            eprintln!("[db-migration] ignore invalid {BACKFILL_SYNC_THROUGH_ENV}={value}");
+            tracing::warn!("ignore invalid {BACKFILL_SYNC_THROUGH_ENV}={value}");
             None
         }
     }
@@ -440,7 +440,7 @@ fn run_pending_with(
         if let Some(limit) = max_option(m.min_backfill_version, sync_through) {
             drain_backfills_through(conn, registry, limit, progress)?;
         }
-        println!("[db-migration] v{:03}: {}", m.version, m.name);
+        tracing::info!("v{:03}: {}", m.version, m.name);
         progress(StartupProgress::Schema {
             version: m.version,
             name: m.name,
@@ -473,9 +473,10 @@ fn drain_backfills_through(
 ) -> Result<(), String> {
     let pending = backfill::pending_jobs_in(conn, registry)?;
     for job in pending.iter().filter(|job| job.introduced_at <= limit) {
-        println!(
-            "[backfill] draining {} (v{:03}) before continuing",
-            job.job.id, job.introduced_at
+        tracing::info!(
+            "draining {} (v{:03}) before continuing",
+            job.job.id,
+            job.introduced_at
         );
         progress(StartupProgress::Backfill {
             id: job.job.id,
@@ -521,7 +522,7 @@ fn skip_gated_jobs_through(
             )
             .map_err(|e| format!("skip gated backfill {}: {e}", job.id))?;
         if changed > 0 {
-            println!("[backfill] {} skipped on this platform", job.id);
+            tracing::info!("{} skipped on this platform", job.id);
         }
     }
     Ok(())

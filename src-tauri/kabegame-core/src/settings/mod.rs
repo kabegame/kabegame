@@ -287,10 +287,7 @@ impl Settings {
         }
 
         if let Err(e) = Self::normalize_setting_value_now(&settings_file, SettingKey::Language) {
-            eprintln!(
-                "[Warn] Failed to persist normalized language setting: {}",
-                e
-            );
+            tracing::warn!("Failed to persist normalized language setting: {}", e);
         }
 
         Ok(())
@@ -488,7 +485,7 @@ impl Settings {
                 match serde_json::from_str::<serde_json::Value>(&content) {
                     Ok(json) => Some(json),
                     Err(e) => {
-                        eprintln!("[Warn] Failed to parse settings JSON: {}", e);
+                        tracing::warn!("Failed to parse settings JSON: {}", e);
                         None
                     }
                 }
@@ -509,7 +506,7 @@ impl Settings {
                 }
                 Ok(false) => false,
                 Err(e) => {
-                    eprintln!("[settings-migration] 迁移失败，保留原设置文件: {e}");
+                    tracing::warn!("迁移失败，保留原设置文件: {e}");
                     false
                 }
             }
@@ -548,10 +545,7 @@ impl Settings {
         }
         let backup = dir.join(format!("{prefix}{from_version}"));
         if let Err(e) = fs::copy(file, &backup) {
-            eprintln!(
-                "[settings-migration] 备份原设置文件失败 ({}): {e}",
-                backup.display()
-            );
+            tracing::warn!("备份原设置文件失败 ({}): {e}", backup.display());
         }
     }
 

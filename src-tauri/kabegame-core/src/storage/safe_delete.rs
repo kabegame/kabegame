@@ -137,8 +137,8 @@ fn path_is_normal_local(path: &Path) -> Result<(), String> {
 /// 本函数**永不**永久删除（不调用 `remove_file`）。
 pub fn trash_source_file(path: &Path) -> bool {
     if let Err(reason) = path_is_normal_local(path) {
-        eprintln!(
-            "[safe_delete] 保留磁盘文件（仅移出图库）: {} — {}",
+        tracing::debug!(
+            "保留磁盘文件（仅移出图库）: {} — {}",
             path.display(),
             reason
         );
@@ -147,11 +147,7 @@ pub fn trash_source_file(path: &Path) -> bool {
     match trash::delete(path) {
         Ok(()) => true,
         Err(e) => {
-            eprintln!(
-                "[safe_delete] 移入回收站失败，保留磁盘文件: {} — {}",
-                path.display(),
-                e
-            );
+            tracing::warn!("移入回收站失败，保留磁盘文件: {} — {}", path.display(), e);
             false
         }
     }
@@ -173,11 +169,7 @@ pub fn trash_source_files_batch(paths: &[&Path]) -> PurgeReport {
         .copied()
         .filter(|p| {
             if let Err(reason) = path_is_normal_local(p) {
-                eprintln!(
-                    "[safe_delete] 保留磁盘文件（仅移出图库）: {} — {}",
-                    p.display(),
-                    reason
-                );
+                tracing::debug!("保留磁盘文件（仅移出图库）: {} — {}", p.display(), reason);
                 report.kept += 1;
                 false
             } else {
@@ -190,8 +182,8 @@ pub fn trash_source_files_batch(paths: &[&Path]) -> PurgeReport {
         match trash::delete_all(chunk) {
             Ok(()) => report.purged += chunk.len(),
             Err(error) => {
-                eprintln!(
-                    "[safe_delete] 分块批量移入回收站失败，降级逐条处理（{} 条）: {error}",
+                tracing::warn!(
+                    "分块批量移入回收站失败，降级逐条处理（{} 条）: {error}",
                     chunk.len()
                 );
                 for path in chunk {

@@ -30,12 +30,12 @@ where
 /// 毫秒级初始化：Settings、i18n 与事件广播。桌面端在主线程、主窗口创建之前调用
 /// （窗口与 `start_event_loop` 依赖它们）；local 与 web 共用。
 pub fn init_fast_globals() -> Result<(), String> {
-    println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
-    println!("Initializing Globals...");
+    tracing::info!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
+    tracing::debug!("Initializing Globals...");
     startup_state::set(StartupPhase::Settings);
 
     Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
-    println!("  ✓ Settings initialized");
+    tracing::info!("Settings initialized");
 
     // 同步后端 i18n 语言（从配置恢复）
     {
@@ -50,7 +50,7 @@ pub fn init_fast_globals() -> Result<(), String> {
         .map_err(|e| format!("SubscriptionManager: {}", e))?;
     kabegame_core::emitter::GlobalEmitter::init_global()
         .map_err(|e| format!("GlobalEmitter: {}", e))?;
-    println!("  ✓ Event broadcaster and emitter initialized");
+    tracing::info!("Event broadcaster and emitter initialized");
     Ok(())
 }
 
@@ -61,7 +61,7 @@ pub fn init_heavy_globals() -> Result<(), String> {
     startup_state::set(StartupPhase::Plugins);
     PluginManager::init_global()
         .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
-    println!("  ✓ Plugin manager initialized");
+    tracing::info!("Plugin manager initialized");
 
     // 迁移与阻塞回填的进度由 Storage::new() 直接写进 startup_state。
     Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
@@ -70,9 +70,9 @@ pub fn init_heavy_globals() -> Result<(), String> {
         .mark_pending_running_tasks_as_failed()
         .unwrap_or(0);
     if failed_count > 0 {
-        println!("  ✓ Marked {failed_count} pending/running task(s) as failed");
+        tracing::info!("Marked {failed_count} pending/running task(s) as failed");
     }
-    println!("  ✓ Storage initialized");
+    tracing::info!("Storage initialized");
     // 收藏画册使用当前 locale 的 i18n 名称（与语言切换时 set_favorite_album_name 一致）
     let raw = kabegame_i18n::t!("albums.favorite");
     let name = if raw == "albums.favorite" {
@@ -92,23 +92,23 @@ pub fn init_heavy_globals() -> Result<(), String> {
         .plugin_sources()
         .set_official_source_name(source_name);
 
-    println!("  ✓ Runtime initialized");
+    tracing::info!("Runtime initialized");
 
     let download_queue = Arc::new(DownloadQueue::new());
-    println!("  ✓ DownloadQueue initialized");
+    tracing::info!("DownloadQueue initialized");
 
     TaskScheduler::init_global(download_queue.clone())
         .map_err(|e| format!("Failed to initialize task scheduler: {}", e))?;
-    println!("  ✓ TaskScheduler initialized");
+    tracing::info!("TaskScheduler initialized");
     Scheduler::init_global().map_err(|e| format!("Failed to initialize scheduler: {}", e))?;
     spawn_bg(async {
         if let Err(e) = Scheduler::global().start().await {
-            eprintln!("Failed to start scheduler: {}", e);
+            tracing::warn!("Failed to start scheduler: {}", e);
         }
     });
-    println!("  ✓ Auto scheduler initialized");
+    tracing::info!("Auto scheduler initialized");
 
-    println!("  ✓ ProviderRuntime deferred until kgpg plugin init");
+    tracing::info!("ProviderRuntime deferred until kgpg plugin init");
 
     // OrganizeService 在 local 和 web 模式下均需要（非 Android）
     #[cfg(not(target_os = "android"))]
@@ -121,14 +121,14 @@ pub fn init_heavy_globals() -> Result<(), String> {
         VirtualDriveService::init_global()
             .map_err(|e| format!("Failed to init VD service: {}", e))?;
         let virtual_drive_service = VirtualDriveService::global();
-        println!("  ✓ Virtual drive support enabled");
+        tracing::info!("Virtual drive support enabled");
 
         #[cfg(target_os = "windows")]
         {
             let vd_service_for_listener = virtual_drive_service.clone();
             spawn_bg(async move {
                 crate::vd_listener::start_vd_event_listener(vd_service_for_listener).await;
-                println!("  ✓ Virtual drive event listener started");
+                tracing::info!("Virtual drive event listener started");
             });
         }
 
@@ -146,9 +146,9 @@ pub fn init_heavy_globals() -> Result<(), String> {
                 })
                 .await;
                 if let Err(e) = mount_result {
-                    eprintln!("Auto mount failed: {}", e);
+                    tracing::warn!("Auto mount failed: {}", e);
                 } else if let Ok(Err(e)) = mount_result {
-                    eprintln!("Auto mount failed: {}", e);
+                    tracing::warn!("Auto mount failed: {}", e);
                 }
             }
         });

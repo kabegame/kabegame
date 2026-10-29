@@ -2,7 +2,6 @@
 
 use crate::ipc::ipc::{decode_frame, encode_frame, read_one_frame, IpcEnvelope};
 use crate::ipc::{IpcRequest, IpcResponse};
-use crate::ipc_dbg;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -32,11 +31,11 @@ pub async fn handle_connection<R, W, F, Fut>(
     let write_task = tokio::spawn(async move {
         while let Some(data) = write_rx.recv().await {
             if let Err(e) = write_half.write_all(&data).await {
-                eprintln!("[DEBUG] IPC 服务器写入失败: {}", e);
+                tracing::debug!("IPC 服务器写入失败: {}", e);
                 return;
             }
             if let Err(e) = write_half.flush().await {
-                eprintln!("[DEBUG] IPC 服务器刷新失败: {}", e);
+                tracing::debug!("IPC 服务器刷新失败: {}", e);
                 return;
             }
         }
@@ -49,7 +48,7 @@ pub async fn handle_connection<R, W, F, Fut>(
             read_result = read_one_frame(&mut read_half) => {
                 match read_result {
                     Ok(payload) => {
-                        ipc_dbg!("[DEBUG] IPC 服务器读取 CBOR 帧，长度: {}", payload.len());
+                        tracing::trace!("IPC 服务器读取 CBOR 帧，长度: {}", payload.len());
 
                         // 先取出 request_id，再解析具体请求。这样新旧协议不兼容时也能立即回错。
                         let (req, request_id): (IpcRequest, Option<u64>) = match decode_frame::<IpcEnvelope<serde_cbor::Value>>(&payload) {
@@ -57,17 +56,17 @@ pub async fn handle_connection<R, W, F, Fut>(
                                 let request_id = envelope.request_id;
                                 match serde_cbor::value::from_value::<IpcRequest>(envelope.payload) {
                                     Ok(req) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcEnvelope，request_id={}", request_id);
+                                        tracing::trace!("IPC 服务器解析为 IpcEnvelope，request_id={}", request_id);
                                         (req, Some(request_id))
                                     }
                                     Err(error) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器不支持请求: {}", error);
+                                        tracing::trace!("IPC 服务器不支持请求: {}", error);
                                         let mut resp = IpcResponse::err(format!("unsupported request: {error}"));
                                         resp.request_id = Some(request_id);
                                         let bytes = match encode_frame(&resp) {
                                             Ok(bytes) => bytes,
                                             Err(error) => {
-                                                ipc_dbg!("[DEBUG] IPC 服务器编码错误响应失败: {}", error);
+                                                tracing::trace!("IPC 服务器编码错误响应失败: {}", error);
                                                 continue;
                                             }
                                         };
@@ -80,11 +79,11 @@ pub async fn handle_connection<R, W, F, Fut>(
                             }
                             Err(_) => match decode_frame::<IpcRequest>(&payload) {
                                 Ok(req) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器解析为 IpcRequest（无 request_id）");
+                                    tracing::trace!("IPC 服务器解析为 IpcRequest（无 request_id）");
                                     (req, None)
                                 }
                                 Err(error) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", error);
+                                    tracing::trace!("IPC 服务器解析请求失败: {}", error);
                                     continue;
                                 }
                             },
@@ -92,8 +91,8 @@ pub async fn handle_connection<R, W, F, Fut>(
 
                         // 检查是否是 SubscribeEvents 请求
                         if let IpcRequest::SubscribeEvents { kinds } = req.clone() {
-                            ipc_dbg!(
-                                "[DEBUG] IPC 服务器收到 SubscribeEvents 请求, client_id={}, kinds={:?}",
+                            tracing::trace!(
+                                "IPC 服务器收到 SubscribeEvents 请求, client_id={}, kinds={:?}",
                                 client_id, kinds
                             );
 
@@ -104,13 +103,13 @@ pub async fn handle_connection<R, W, F, Fut>(
                             let bytes = match encode_frame(&resp) {
                                 Ok(b) => b,
                                 Err(e) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
+                                    tracing::trace!("IPC 服务器编码响应失败: {}", e);
                                     break;
                                 }
                             };
 
                             if write_tx.send(bytes).is_err() {
-                                ipc_dbg!("[DEBUG] IPC 服务器写入通道关闭");
+                                tracing::trace!("IPC 服务器写入通道关闭");
                                 break;
                             }
 
@@ -118,7 +117,7 @@ pub async fn handle_connection<R, W, F, Fut>(
                             // 解析事件类型列表：空列表 = 订阅全部
                             let event_kinds: Vec<crate::ipc::events::AppEventKind> =
                                 if kinds.is_empty() {
-                                    crate::ipc::events::AppEventKind::ALL.to_vec()
+                                    crate::ipc::events::AppEventKind::default_kinds()
                                 } else {
                                     kinds
                                     .iter()
@@ -127,9 +126,9 @@ pub async fn handle_connection<R, W, F, Fut>(
                                     })
                                     .collect()
                                 };
-                            ipc_dbg!("[DEBUG] IPC 服务器解析后的事件类型: {:?}", event_kinds);
+                            tracing::trace!("IPC 服务器解析后的事件类型: {:?}", event_kinds);
                             event_rx = Some(SubscriptionManager::global().subscribe(&client_id, event_kinds).await);
-                            ipc_dbg!("[DEBUG] IPC 服务器开始推送事件（通过 SubscriptionManager）");
+                            tracing::trace!("IPC 服务器开始推送事件（通过 SubscriptionManager）");
                             // 不再 return，继续处理后续请求
                             continue;
                         }
@@ -138,37 +137,37 @@ pub async fn handle_connection<R, W, F, Fut>(
                         let mut resp = handler(req).await;
                         resp.request_id = request_id;
 
-                        ipc_dbg!(
-                            "[DEBUG] IPC 服务器准备发送响应, request_id={:?}, ok={}",
+                        tracing::trace!(
+                            "IPC 服务器准备发送响应, request_id={:?}, ok={}",
                             request_id, resp.ok
                         );
 
                         let bytes = match encode_frame(&resp) {
                             Ok(b) => {
-                                ipc_dbg!(
-                                    "[DEBUG] IPC 服务器编码响应成功, 长度={}",
+                                tracing::trace!(
+                                    "IPC 服务器编码响应成功, 长度={}",
                                     b.len()
                                 );
                                 b
                             }
                             Err(e) => {
-                                ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
+                                tracing::trace!("IPC 服务器编码响应失败: {}", e);
                                 continue;
                             }
                         };
 
                         if write_tx.send(bytes).is_err() {
-                            ipc_dbg!("[DEBUG] IPC 服务器写入通道关闭");
+                            tracing::trace!("IPC 服务器写入通道关闭");
                             break;
                         }
 
-                        ipc_dbg!("[DEBUG] IPC 服务器已发送响应, request_id={:?}", request_id);
+                        tracing::trace!("IPC 服务器已发送响应, request_id={:?}", request_id);
                     }
                     Err(e) => {
                         if e.contains("EOF") || e.contains("连接关闭") {
-                            ipc_dbg!("[DEBUG] IPC 服务器连接关闭 (EOF)");
+                            tracing::trace!("IPC 服务器连接关闭 (EOF)");
                         } else {
-                            ipc_dbg!("[DEBUG] IPC 服务器读取失败: {}", e);
+                            tracing::trace!("IPC 服务器读取失败: {}", e);
                         }
                         break;
                     }
@@ -192,19 +191,19 @@ pub async fn handle_connection<R, W, F, Fut>(
                         match encode_frame(&*event) {
                             Ok(bytes) => {
                                 if write_tx.send(bytes).is_err() {
-                                    ipc_dbg!("[DEBUG] IPC 服务器写入通道关闭");
+                                    tracing::trace!("IPC 服务器写入通道关闭");
                                     break;
                                 }
-                                ipc_dbg!("[DEBUG] IPC 服务器已推送事件: id={}", id);
+                                tracing::trace!("IPC 服务器已推送事件: id={}", id);
                             }
                             Err(e) => {
-                                ipc_dbg!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
+                                tracing::trace!("IPC 服务器序列化事件失败: {}", e);
                             }
                         }
                     }
                     None => {
                         // 事件流关闭
-                        ipc_dbg!("[DEBUG] IPC 服务器事件流关闭");
+                        tracing::trace!("IPC 服务器事件流关闭");
                         break;
                     }
                 }
@@ -218,10 +217,11 @@ pub async fn handle_connection<R, W, F, Fut>(
 
     // 清理订阅
     let cleaned = SubscriptionManager::global().unsubscribe(&client_id).await;
-    eprintln!(
-        "[DEBUG] IPC 服务器清理客户端订阅: client_id={}, cleaned={}",
-        client_id, cleaned
+    tracing::debug!(
+        "IPC 服务器清理客户端订阅: client_id={}, cleaned={}",
+        client_id,
+        cleaned
     );
 
-    eprintln!("[DEBUG] IPC 服务器连接处理完成: client_id={}", client_id);
+    tracing::debug!("IPC 服务器连接处理完成: client_id={}", client_id);
 }
