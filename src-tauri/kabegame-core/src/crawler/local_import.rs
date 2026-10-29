@@ -7,7 +7,7 @@
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
 #[cfg(not(target_os = "android"))]
-use crate::crawler::downloader::{build_safe_filename, unique_path};
+use crate::crawler::downloader::{build_safe_filename, occupy_unique_path, OccupiedFile};
 use crate::crawler::downloader::{next_download_id, wait_after_download_if_needed, DownloadQueue};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::crawler::task_scheduler::Task;
@@ -92,24 +92,38 @@ impl LocalImportHook {
         next
     }
 
-    /// 复制到目标目录，重名时生成不冲突的文件名。
+    /// 复制到目标目录：原子占坑一个不冲突的文件名，再经占坑句柄写入内容。
+    ///
+    /// 目标目录常是文件夹画册的 `sync_folder`，返回的守卫要持有到后处理入库结束，
+    /// 期间文件夹同步探测到占用标记会放弃导入（由下载后处理补挂文件夹画册）。
     #[cfg(not(target_os = "android"))]
     async fn copy_into(
         &self,
         src: &std::path::Path,
         dest_dir: &std::path::Path,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<OccupiedFile, String> {
         let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("image");
         let fallback_ext = crate::media::image_type::mime_type_from_path(src)
             .as_deref()
             .and_then(crate::media::image_type::ext_from_mime)
             .unwrap_or_else(|| "bin".to_string());
         let safe = build_safe_filename(name, &fallback_ext);
-        let dest = unique_path(dest_dir, &safe);
-        fs::copy(src, &dest)
-            .await
-            .map_err(|e| format!("Failed to copy local file: {}", e))?;
-        Ok(dest)
+        let occupied = occupy_unique_path(dest_dir, &safe, None).map_err(|e| {
+            format!(
+                "Failed to occupy local import target in {}: {}",
+                dest_dir.display(),
+                e
+            )
+        })?;
+        let dest = occupied.path().to_path_buf();
+        match occupied.copy_from(src).await {
+            Ok(occupied) => Ok(occupied),
+            Err(e) => {
+                // 守卫已随失败的复制 drop，删掉不完整的目标文件
+                let _ = fs::remove_file(&dest).await;
+                Err(format!("Failed to copy local file: {}", e))
+            }
+        }
     }
 
     #[cfg(not(target_os = "android"))]
@@ -123,7 +137,8 @@ impl LocalImportHook {
             .clone()
             .ok_or_else(|| format!("Invalid file URL: {}", file.url))?;
 
-        let final_path = if self.copy_to_dir {
+        // `occupied` 是复制出的新文件的占坑守卫，持有到后处理（入库）结束
+        let (final_path, occupied) = if self.copy_to_dir {
             let dest_dir = self.copy_dest.as_ref().unwrap_or(&self.images_dir);
             fs::create_dir_all(dest_dir)
                 .await
@@ -131,12 +146,13 @@ impl LocalImportHook {
             if is_in_dir(&src, dest_dir).await {
                 // 源文件已在目标目录：复制只会产生「name (1).ext」副本（去重拦不住，
                 // 文件夹同步还会把副本当新文件入库），直接用原文件走后处理
-                src.clone()
+                (src.clone(), None)
             } else {
-                self.copy_into(&src, dest_dir).await?
+                let occupied = self.copy_into(&src, dest_dir).await?;
+                (occupied.path().to_path_buf(), Some(occupied))
             }
         } else {
-            src.clone()
+            (src.clone(), None)
         };
         let headers: HashMap<String, String> = HashMap::new();
         let imported = crate::crawler::downloader::postprocess_downloaded_image(
@@ -161,6 +177,7 @@ impl LocalImportHook {
             &[],
         )
         .await;
+        drop(occupied);
         wait_after_download_if_needed(download_start_time, None).await;
         let imported = imported?;
         if imported {

@@ -64,9 +64,16 @@ diff 对存在的媒体文件复用 `import_one`，对消失文件调用
   任务级 `outputDir` 设为 `sync_folder`，并传入 `recursive: true`、`copy_to_dir: true`。文件夹
   递归展开后扁平复制进同步目录，导入结果立即入库并挂到画册，不必等待下一轮同步。
 
-监听或全量同步随后会按路径 `find_image_by_path` 命中已有图片，`add_images_to_album_silent`
-不会重复挂载。数据库层的写守卫没有放开：普通“加入画册 / 从画册移除”对 `local_folder` 仍然
-只读，只有上述删除磁盘文件和 local-import 复制入同步目录的专用流程能够改变成员。
+复制进同步目录的文件（以及下载目录与 `sync_folder` 重叠时下载器新建的文件）从创建起就带着
+下载占用标记（Unix `flock`、Windows share mode，见
+[下载流程](../downloader-tasks/DOWNLOADER_FLOW.md)「目标文件占坑与占用标记」），守卫持有到图片行
+写入完成。`import_one` 只在新文件分支（`find_image_by_path` 未命中）调用
+`is_occupied_for_download` 探测：命中就放弃本次导入（返回未写入），由下载器入库后按直接父目录
+补挂进对应文件夹画册；未命中时再按路径查一次（标记在入库之后才解除，探测时已无标记说明
+下载器若有已经入库），避免与刚结束的下载抢同一个 `local_path`。之后的监听或全量同步按路径命中
+已有图片，`add_images_to_album_silent` 不会重复挂载。数据库层的写守卫没有放开：普通“加入画册 /
+从画册移除”对 `local_folder` 仍然只读，只有上述删除磁盘文件、local-import 复制入同步目录与下载器
+补挂新建文件的专用流程能够改变成员。
 
 ## 运行态与提示
 

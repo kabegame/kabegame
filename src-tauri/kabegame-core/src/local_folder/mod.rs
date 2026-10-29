@@ -16,6 +16,7 @@ pub mod synchronizer;
 mod tests;
 
 pub use create::{build_entries_non_recursive, NewLocalFolderEntry};
+pub use fs_batch::album_for_file;
 pub use run_state::{FolderSyncRunGuard, FolderSyncService, FolderSyncTaskState};
 pub use scan_service::{
     list_child_dirs, scan_and_visit, FolderScanHook, ScanCtx, ScanError, ScanIssue, ScanOptions,

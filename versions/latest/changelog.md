@@ -18,6 +18,7 @@
 - Android 平板（宽度超过紧凑断点）打开图片预览后左右滑动不再停在原图，能正常切换上一张 / 下一张；滑动过后按一次返回即可关闭预览，不再先被背后的多选状态吃掉。
 - Android 吉祥物亀ちゃん不再被底部导航栏挡住脚部，拖动范围也限制在系统栏之内。
 - Android 预览图片视频滑动后不暂停播放的问题
+- 修复下载时偶发「UNIQUE constraint failed: images.local_path」：同一帖子多张同名图片并发下载不再互相覆盖、丢图，会依次存成 `name.jpg`、`name(1).jpg`……；下载目录同时是文件夹画册时，新下载的图片也会立刻进入该画册，不再与文件夹同步抢着入库。
 
 ## 插件开发侧
 
@@ -41,4 +42,5 @@
 - WPE 第二阶段 Phase 3：`x-wpe/web` 入库（`compatible_path` / 宽高为空）；`/wpe` 新增专属网页 MIME 表 `WPE_WEB_MIME`（不进 `MEDIA_FORMATS`）与 HTML 产出点 `serve_wpe_html`；CSP `frame-src` 放行 `http://127.0.0.1:*`；`WallpaperStage` 新增独立 web 层（跨源 sandbox iframe，不参与双层过渡，切走即销毁）；`ImageContent` 新增 `wallpaper` 形态（`WpeWallpaperContent`）与预览 `WallpaperDesktopCanvas`；新增命令 `get_wallpaper_target_for_image`，`build_wallpaper_target` 的 WPE 作者属性改读图片 metadata；`tauri-runtime-cef` 的 `cef-ipc` 只接受主 frame（或与初始 URL 同源的子 frame）的 postMessage，其余 400。`/wpe` 非 HTML 文件的缓存头从一年 `immutable` 改为 `no-cache`，壁纸文件原地更新后不再读到旧 js / css。
 - 壁纸窗口 Vue 化：与主窗口共用 `index.html`（`?window=wallpaper`），`main.ts` 按窗口动态导入 `bootstrap/app.ts` / `bootstrap/wallpaper.ts`（后者不装路由、组件库与 vant）；渲染拆为纯组件 `WallpaperStage.vue`（双层过渡、tile、WPE 视频属性，预留 `paused` / `interactive`）与负责 IPC / 看门狗 / ready 握手的 `WallpaperWindow.vue`，删除 `wallpaper.html` / `wallpaper.ts` 及其 rollup 入口；后端抽出 `build_wallpaper_target`。行为不变。dev 调试面板增加帧率（MIN / AVG，复用主窗口 `frameMonitor` store）。
 - 路径轮播合入 WPE：目录型 WPE 壁纸只在窗口模式参与轮播。原生模式有效路径的 `media-type/image` 是「非视频」过滤、不排除 `x-wpe/*`，所以由 rotator 在逐张可用性检查里跳过（Plasma 插件模式同样跳过），不改 count 与位置口径。
+- 下载目标文件名改为原子占坑：`compute_unique_download_path[_with_name]` 改名为 `occupy_unique_download_path[_with_name]`（新增 `move_from` 参数，返回 `OccupiedFile` 守卫），删除只算路径的 `unique_path`；新增 `occupy_unique_path` / `is_occupied_for_download` 与 `local_folder::album_for_file`。占用标记为 Unix `flock` / Windows share mode，Windows 上写入必须经守卫句柄、删除前先 drop。详见 `cocs/downloader-tasks/DOWNLOADER_FLOW.md`「目标文件占坑与占用标记」。
 - 仓库新增 `.gitattributes`（`* text=auto eol=lf`，`.bat` / `.cmd` 为 CRLF，`*.patch` / `*.diff` 不转换）与 `.editorconfig`，换行符统一为 LF，并把已有 CRLF 文件归一化。

@@ -1210,6 +1210,68 @@ async fn sync_card_stays_hidden_until_debounce() {
     guard.finish(None, false, false);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn sync_skips_new_file_occupied_by_download() {
+    let _guard = test_guard();
+    // 关掉快速同步，保证下面的全量同步真的逐个扫描文件
+    let _fast = FastSyncGuard::set(false);
+    let (_temp, root) = temp_album_dir();
+    let album_id = create_sync_album(&root, None, SyncMode::Shallow);
+    let staged = tempfile::tempdir().unwrap();
+    let png = staged.path().join("src.png");
+    write_png(&png, [21, 22, 23]);
+
+    // 模拟下载器：原子占坑并经句柄写入，守卫存活期间同步不得给它建行
+    let mut occupied =
+        crate::crawler::downloader::occupy_unique_path(&root, "occupied.png", None).unwrap();
+    occupied.write_all(&fs::read(&png).unwrap()).unwrap();
+    let file = occupied.path().to_path_buf();
+
+    process_paths([(file.clone(), PathHint::File)]).await;
+    assert!(
+        image_id_for_path(&file).is_none(),
+        "diff 同步放弃占坑中的新文件"
+    );
+    run_full_to_idle(&album_id, manual_opts(Descend::None)).await;
+    assert!(
+        image_id_for_path(&file).is_none(),
+        "全量同步放弃占坑中的新文件"
+    );
+    assert_eq!(album_image_count(&album_id), 0);
+
+    // 标记解除后照常导入
+    drop(occupied);
+    process_paths([(file.clone(), PathHint::File)]).await;
+    assert!(image_id_for_path(&file).is_some());
+    assert_eq!(album_image_count(&album_id), 1);
+}
+
+#[test]
+fn album_for_file_matches_direct_parent_only() {
+    let _guard = test_guard();
+    let (_temp, root) = temp_album_dir();
+    fs::create_dir(root.join("child")).unwrap();
+    let album_id = create_sync_album(&root, None, SyncMode::Recursive);
+
+    assert_eq!(
+        super::album_for_file(&root.join("a.png"))
+            .unwrap()
+            .map(|album| album.id),
+        Some(album_id)
+    );
+    // 子目录还没有子画册：文件不归父画册
+    assert!(super::album_for_file(&root.join("child/b.png"))
+        .unwrap()
+        .is_none());
+
+    // sync_mode = none 的画册不收
+    let (_temp_none, none_root) = temp_album_dir();
+    create_sync_album(&none_root, None, SyncMode::None);
+    assert!(super::album_for_file(&none_root.join("c.png"))
+        .unwrap()
+        .is_none());
+}
+
 #[test]
 fn helper_timestamp_is_valid() {
     assert!(now_secs() > 0);

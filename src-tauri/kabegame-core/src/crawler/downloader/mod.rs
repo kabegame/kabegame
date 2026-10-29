@@ -99,6 +99,32 @@ pub(super) fn rebind_deduped_metadata(
     }
 }
 
+/// 新建文件入库后，若它落在某个文件夹画册的 `sync_folder` 里（按直接父目录归属），补挂进该画册。
+///
+/// 文件夹同步给新文件建行前会探测占用标记（[`is_occupied_for_download`]），命中就放弃本次导入，
+/// 由这里补上「挂进文件夹画册」这一步；`output_album` 是本次已挂过的输出画册，跳过以免重复写入。
+/// 挂载是附加信息：失败只记日志，不影响图片本身的入库结果。
+#[cfg(not(target_os = "android"))]
+fn link_into_folder_album(path: &Path, image_id: &str, output_album: Option<&str>) {
+    let album = match crate::local_folder::album_for_file(path) {
+        Ok(Some(album)) => album,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("[downloader] 解析新文件所属文件夹画册失败: {error}");
+            return;
+        }
+    };
+    if output_album == Some(album.id.as_str()) {
+        return;
+    }
+    let ids = vec![image_id.to_string()];
+    if Storage::global().add_images_to_album_silent(&album.id, &ids) > 0 {
+        if let Err(error) = emit_membership_added(&album.id, &ids) {
+            eprintln!("[album-event] 发射文件夹画册补挂成员事件失败: {error}");
+        }
+    }
+}
+
 /// 为新图或去重命中的旧图补充标签，并汇总发送一次成员变更事件。
 /// 标签是附加信息：失败只写任务日志警告，不影响图片本身的入库结果。
 fn apply_download_labels(
@@ -185,7 +211,8 @@ pub use queue::{
 };
 pub use util::{
     build_safe_filename, build_safe_filename_no_ext, compute_bytes_hash, compute_file_hash,
-    compute_unique_download_path, compute_unique_download_path_with_name, unique_path,
+    is_occupied_for_download, occupy_unique_download_path, occupy_unique_download_path_with_name,
+    occupy_unique_path, OccupiedFile,
 };
 
 use queue::{
@@ -1044,30 +1071,47 @@ pub async fn postprocess_downloaded_image(
         };
         // Materialize final path; track whether a temp file was created (for Android cleanup).
         let mut file_created = false;
+        // 本次新建文件的占坑守卫（见 `OccupiedFile`）：持有到图片行写入完成（成功或失败）才 drop，
+        // 期间本地文件夹同步探测到占用标记会放弃导入这个文件。Windows 上删除该文件前必须先 drop。
+        let mut occupied: Option<OccupiedFile> = None;
         let path = match &source {
             PostprocessSource::Bytes { output_dir, bytes } => {
-                #[cfg(target_os = "android")]
-                let path = {
-                    let ext = inferred_ext
-                        .unwrap_or_else(|| crate::media::image_type::default_image_extension().to_string());
-                    output_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext))
-                };
-
                 if let Err(e) = tokio::fs::create_dir_all(output_dir).await {
                     return Err(format!("Failed to create download directory: {}", e));
                 }
 
-                #[cfg(not(target_os = "android"))]
-                let path = compute_unique_download_path_with_name(
-                    output_dir,
-                    url,
-                    inferred_ext.as_deref(),
-                    custom_display_name,
-                )?;
+                // Android：uuid 临时名，随后复制进系统媒体库并删除，不参与文件夹同步
+                #[cfg(target_os = "android")]
+                let path = {
+                    let ext = inferred_ext
+                        .unwrap_or_else(|| crate::media::image_type::default_image_extension().to_string());
+                    let path = output_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
+                    if let Err(e) = tokio::fs::write(&path, bytes).await {
+                        return Err(format!("Failed to write file: {}", e));
+                    }
+                    path
+                };
 
-                if let Err(e) = tokio::fs::write(&path, bytes).await {
-                    return Err(format!("Failed to write file: {}", e));
-                }
+                // 桌面：原子占坑目标名，字节经占坑句柄写入（Windows 的 share mode 不共享写）
+                #[cfg(not(target_os = "android"))]
+                let path = {
+                    let mut occ = occupy_unique_download_path_with_name(
+                        output_dir,
+                        url,
+                        inferred_ext.as_deref(),
+                        custom_display_name,
+                        None,
+                    )?;
+                    let path = occ.path().to_path_buf();
+                    if let Err(e) = occ.write_all(bytes) {
+                        drop(occ);
+                        let _ = tokio::fs::remove_file(&path).await;
+                        return Err(format!("Failed to write file: {}", e));
+                    }
+                    occupied = Some(occ);
+                    path
+                };
+
                 file_created = true;
                 path
             }
@@ -1082,33 +1126,38 @@ pub async fn postprocess_downloaded_image(
                     return Err(format!("Failed to create directory: {}", e));
                 }
 
-                let path = compute_unique_download_path_with_name(
+                // 要删源文件时让占坑直接搬运它：Unix 同设备上零拷贝（锁源文件 → 硬链接 → 删源名）；
+                // Windows、跨设备或不支持硬链接时得到空的占坑文件，再经句柄复制进去
+                let occ = occupy_unique_download_path_with_name(
                     dir,
                     url,
                     inferred_ext.as_deref(),
                     custom_display_name,
+                    delete_source.then_some(*src_path),
                 )?;
-                if !delete_source {
-                    if let Err(e2) = tokio::fs::copy(src_path, &path).await {
-                        return Err(format!(
-                            "Failed to copy file {} ({})",
-                            src_path.display(),
-                            e2
-                        ));
-                    }
+                let path = occ.path().to_path_buf();
+                let occ = if occ.is_moved() {
+                    occ
                 } else {
-                    if let Err(e) = tokio::fs::rename(src_path, &path).await {
-                        if let Err(e2) = tokio::fs::copy(src_path, &path).await {
+                    match occ.copy_from(src_path).await {
+                        Ok(occ) => {
+                            if delete_source {
+                                let _ = tokio::fs::remove_file(src_path).await;
+                            }
+                            occ
+                        }
+                        Err(e) => {
+                            // 守卫已随失败的复制 drop，删掉不完整的目标文件
+                            let _ = tokio::fs::remove_file(&path).await;
                             return Err(format!(
-                                "Failed to copy file {} (rename: {}, copy: {})",
+                                "Failed to copy file {} ({})",
                                 src_path.display(),
-                                e,
-                                e2
+                                e
                             ));
                         }
-                        let _ = tokio::fs::remove_file(src_path).await;
                     }
-                }
+                };
+                occupied = Some(occ);
                 file_created = true;
                 path
             }
@@ -1182,6 +1231,8 @@ pub async fn postprocess_downloaded_image(
                     }
                 }
                 if file_created {
+                    // Windows 的占坑句柄不共享删除：先释放再删
+                    drop(occupied.take());
                     let _ = tokio::fs::remove_file(&path).await;
                 }
                 apply_download_labels(task_id, &existing.id, labels, true);
@@ -1467,6 +1518,8 @@ pub async fn postprocess_downloaded_image(
 
             let inserted = match Storage::global().add_image(image_info) {
                 Ok(mut inserted) => {
+                    // 图片行已写入：释放占用标记，此后文件夹同步按路径就能命中这张图
+                    drop(occupied.take());
                     let add_ms = t_add.map(|t| t.elapsed().as_millis() as u64);
                     let image_id = inserted.id.clone();
                     inserted.image_metadata_id = persist_native_metadata_best_effort(&inserted, bytes).await;
@@ -1482,6 +1535,18 @@ pub async fn postprocess_downloaded_image(
                                     eprintln!("[album-event] 发射下载成员事件失败: {error}");
                                 }
                             }
+                        }
+                    }
+                    // 本次新建并占坑的文件：下载器自己建的（file_created），或调用方建好并仍持有
+                    // 占坑守卫的（本地导入复制进目标目录）。文件夹同步对它们放弃了导入，这里补挂。
+                    // Android 的新建文件只是复制进媒体库前的临时文件，不参与文件夹画册。
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let fresh_file = file_created
+                            || (matches!(&source, PostprocessSource::Path { relocate_to: None, .. })
+                                && is_occupied_for_download(&path));
+                        if fresh_file {
+                            link_into_folder_album(&path, &image_id, output_album_id);
                         }
                     }
                     apply_download_labels(task_id, &image_id, labels, false);
@@ -1508,6 +1573,7 @@ pub async fn postprocess_downloaded_image(
                     true
                 }
                 Err(e) => {
+                    drop(occupied.take());
                     if let Some(ref thumb) = thumbnail_path {
                         if thumb != &path {
                             let _ = tokio::fs::remove_file(thumb).await;
@@ -1524,6 +1590,8 @@ pub async fn postprocess_downloaded_image(
             Ok(imported) => Ok(imported),
             Err(e) => {
                 if file_created {
+                    // Windows 的占坑句柄不共享删除：先释放再删
+                    drop(occupied.take());
                     let _ = tokio::fs::remove_file(path).await;
                 }
                 Err(e)

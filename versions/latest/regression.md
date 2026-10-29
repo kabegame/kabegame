@@ -1,5 +1,26 @@
 # v4.7.0 regression
 
+## 下载落盘先占坑（消除 `images.local_path` UNIQUE 冲突）
+
+2026-10-29：下载目标文件名从 `exists()` 查询改为原子创建 + 原生占用标记（Unix `flock`、Windows 只共享读的 share mode）：`occupy_unique_path` / `occupy_unique_download_path[_with_name]` 返回 `OccupiedFile` 守卫，后处理持有到 `add_image` 结束；溢写文件在 Unix 同设备上「锁源 → 硬链接 → 删源名」零拷贝，Windows / 跨设备经句柄复制；本地导入复制进目标目录同样占坑；文件夹同步给新文件建行前探测标记、命中放弃，探测未命中再按路径查一次；下载器对新建文件入库后按直接父目录补挂文件夹画册。不改 SQL。静态验证：check-kabegame driver 的 cargo check（`kabegame` 与 `kabegame-cli`）0 error；vue-tsc 报 1 个既有错误（`apps/kabegame/vite.config.ts(74,20)` 的 `isProd` 未定义，来自 HEAD 合并提交，本次未改前端）。Windows 分支本机（macOS）无法编译，只核对了 `windows-sys` 0.52 常量类型。真机（macOS dev，CDP + dev CLI 经 IPC 交给 app）：用临时 V8 插件 `collide-test` 从本地 HTTP 服务一次入队 16 个 `…/set<n>/img.png`（同名、内容各异）制造碰撞，结果见各行备注；测试图片、画册与插件已清理。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 占坑换名与探测 | macOS 单测 | `test-kabegame` 跑 `downloader::util` | 已有 `a.jpg` 时依次得到 `a(1).jpg`、`a(2).jpg`；守卫存活时 `is_occupied_for_download` 为真、drop 后为假；无残留 `.kabegame-occupy-*` | 2026-10-29：`downloader::util` 12 个全部通过（新增 4 个，旧 4 个适配新签名） |
+| [x] | 溢写文件零拷贝搬运 | macOS 单测（APFS） | `occupy_move_relocates_without_copy` | `move_from` 后源名消失、目标与源同一 inode、内容一致、`is_moved()` 为真 | 2026-10-29 通过 |
+| [x] | 经句柄复制 | macOS 单测 | `occupy_copy_from_writes_through_handle` | `copy_from` 后目标内容一致、源文件保留、仍带占用标记 | 2026-10-29 通过 |
+| [x] | 同名并发不撞 | macOS 单测 | 16 线程同时占坑 `same.jpg` 并各自写入 | 16 条互不相同的路径，内容各是自己线程写的 | 2026-10-29 通过 |
+| [x] | 同步放弃占坑文件 | macOS 单测 | `local_folder::sync_skips_new_file_occupied_by_download` | 守卫存活时 diff 与全量同步都不建行；drop 后 diff 同步照常导入并挂画册 | 2026-10-29 通过 |
+| [x] | 文件归属画册 | macOS 单测 | `local_folder::album_for_file_matches_direct_parent_only` | 直接父目录命中画册；子目录无子画册时不归父画册；`sync_mode = none` 不收 | 2026-10-29 通过；`local_folder` 共 43 个，42 过 1 败，失败的 `replace_image_thumbnail_path_deletes_old_independent_thumbnail` 是既有问题（WPE 改动后只删 `thumbnails_dir` 内缩略图，用例把旧缩略图放在临时目录），与本次无关 |
+| [x] | 文档示例 | macOS doctest | `test-kabegame` 跑 `--doc occupy_unique_download_path` | `no_run` 示例能编译 | 2026-10-29 通过 |
+| [x] | 多图同名不再撞库 | macOS 桌面 CEF dev | 临时插件一次入队 16 个同名 `img.png`（内容各异）经 dev CLI → IPC 在 app 下载 | 不再出现 `UNIQUE constraint failed: images.local_path`；下载目录得到 `name.jpg`、`name(1).jpg`…，各文件 hash 不同、对应各自 URL | 2026-10-29 真机：任务 completed、新下载 16 / 失败 0、日志无 UNIQUE；目录为 `img.png` … `img(15).png`，16 行 hash 互不相同且每行 hash 与磁盘文件 sha256 一致（无覆盖）；编号与 URL 序号错位（set3→`img(3)`、set0→`img(4)`）证明确为并发抢名；无残留 `.kabegame-occupy-*` |
+| [x] | 下载目录即文件夹画册 | macOS 桌面 CEF dev | `add_local_folder_album` 指向空目录并 `set_album_sync_mode` 为 `shallow`，再把另外 16 个同名图下载到该目录；之后 `sync_local_folder_album` 手动全量同步 | 同步卡片不报错、不产生重复行；下载结束后图片已在该画册（下载器补挂）；再手动全量同步无变化 | 2026-10-29 真机：目录下 16 行全部 `plugin_id = collide-test-test`、无 `local-import` 重复行；画册成员 16 / 本次行 16、`folder_status.state = ok`；手动全量同步后成员与行数仍为 16 |
+| [ ] | 拖入文件夹画册 | macOS 桌面 CEF | 向文件夹画册拖入几张图（含与已有文件同名的） | 复制进 `sync_folder` 并改名不冲突，立即入库并挂到该画册，无 UNIQUE 报错 | 未验证：未真机运行 |
+| [ ] | 大文件仍零拷贝 | macOS 桌面 CEF | 下载超过 5 MiB 的视频（走溢写），对照 `.kabegame/debug` 与耗时 | 无复制耗时回退，目标与溢写文件同设备时为硬链接搬运 | 未验证：未真机运行 |
+| [ ] | 畅游下载 | macOS 桌面 CEF | 畅游窗口一键下载 / 右键下载图片与视频 | 照常入库，下载目录无残留 `.kabegame-occupy-*` 或 `.part` | 未验证：走 relocate 分支，代码未改 |
+| [ ] | Windows 读写与删除 | Windows 桌面 CEF | 下载图片与大视频；构造一次后处理失败（如去重兜底命中） | 缩略图 / 尺寸 / 兼容副本照常生成；失败分支能删掉新建文件（先 drop 守卫再删）；溢写文件经句柄复制后源 `.part` 被删 | 未验证：本机为 macOS，Windows 分支未编译 |
+| [ ] | 不支持硬链接的盘 | Linux / macOS，FAT / exFAT 下载目录 | 下载目录设在 U 盘上下载几张同名图 | 退回 `create_new` + 上锁，照常换名入库，无残留临时文件 | 未验证 |
+
 ## 合并：WPE 与路径轮播 / 基本信息芯片
 
 2026-10-27：feat/wpe-import 合入 main 时，rotator 改为 main 的路径轮播，WPE 规则落在 `collect_available` 的逐张检查（`RotationSource.allow_wpe`）；基本信息面板改为 main 的芯片排版，WPE 行显示「Wallpaper Engine · 类型」芯片；预览弹窗的桌面判定统一用 `USE_PSWP`。合并在临时 worktree 完成，未真机运行。

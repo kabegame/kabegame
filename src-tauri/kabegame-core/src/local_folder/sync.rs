@@ -1,4 +1,4 @@
-use crate::crawler::downloader::compute_file_hash;
+use crate::crawler::downloader::{compute_file_hash, is_occupied_for_download};
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::create::build_entries_non_recursive;
 use crate::local_folder::import::{import_local_file, CarryFromOld};
@@ -291,7 +291,20 @@ impl FullDirHook {
         let storage = Storage::global();
         let mut wrote = false;
 
-        match Storage::find_image_by_path(&path_str)? {
+        let existing = match Storage::find_image_by_path(&path_str)? {
+            Some(existing) => Some(existing),
+            None => {
+                // 新文件正被下载流程占坑（见 `OccupiedFile`）：放弃本次导入，由下载器入库并补挂文件夹画册
+                if is_occupied_for_download(path) {
+                    return Ok(false);
+                }
+                // 占用标记在图片行写入之后才解除：探测时已无标记，说明下载器（若有）已经入库，
+                // 再按路径查一次，避免与刚结束的下载抢同一个 local_path
+                Storage::find_image_by_path(&path_str)?
+            }
+        };
+
+        match existing {
             Some(existing) => {
                 let linked =
                     storage.add_images_to_album_silent(&self.album_id, &[existing.id.clone()]);
