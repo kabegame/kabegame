@@ -41,6 +41,8 @@ pub struct WallpaperWindow<R: Runtime> {
     app_url: Option<Url>,
     /// 当前网页壁纸；`None` 表示停在应用页。
     web: Option<WebPage>,
+    /// ping 看门狗：mount 完成后启动，随本对象丢弃而停止。
+    pinger: Option<super::ping::Pinger>,
     /// 窗口句柄：`mount()` 时取，鼠标转发用。
     #[cfg(target_os = "windows")]
     hwnd: Option<isize>,
@@ -56,6 +58,7 @@ impl<R: Runtime> WallpaperWindow<R> {
             window,
             app_url: None,
             web: None,
+            pinger: None,
             #[cfg(target_os = "windows")]
             hwnd: None,
             #[cfg(target_os = "windows")]
@@ -132,13 +135,13 @@ impl<R: Runtime> WallpaperWindow<R> {
         // 读取失败只记日志：图片 / 视频不受影响，网页壁纸会报「未知应用页 URL」。
         match self.window.url() {
             Ok(url) if url.scheme() != "file" => self.app_url = Some(url),
-            Ok(url) => eprintln!("[wallpaper-window] 挂载时壁纸窗口不在应用页: {url}"),
-            Err(error) => eprintln!("[wallpaper-window] 读取壁纸窗口 URL 失败: {error}"),
+            Ok(url) => tracing::warn!("挂载时壁纸窗口不在应用页: {url}"),
+            Err(error) => tracing::warn!("读取壁纸窗口 URL 失败: {error}"),
         }
         #[cfg(target_os = "windows")]
         match self.window.hwnd() {
             Ok(hwnd) => self.hwnd = Some(hwnd.0 as isize),
-            Err(error) => eprintln!("[wallpaper-window] 取壁纸窗口句柄失败: {error}"),
+            Err(error) => tracing::warn!("取壁纸窗口句柄失败: {error}"),
         }
 
         #[cfg(target_os = "windows")]
@@ -154,7 +157,26 @@ impl<R: Runtime> WallpaperWindow<R> {
             .show()
             .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
 
+        let target = self.window.clone();
+        self.pinger = Some(super::ping::Pinger::start(
+            self.window.label().to_string(),
+            // 重载当前文档；窗口已销毁时 reload 返回错误，只记日志。
+            move || {
+                if let Err(error) = target.reload() {
+                    tracing::warn!("重载壁纸窗口失败: {error}");
+                    return;
+                }
+                // 同 `show_web`：旧文档的 JS 监听（含 wallpaper-ping）随重载作废，Tauri 不会自己清。
+                target.clear_js_listeners();
+            },
+        ));
         Ok(())
+    }
+
+    fn reset_pinger(&self) {
+        if let Some(pinger) = &self.pinger {
+            pinger.reset();
+        }
     }
 
     /// 显示网页壁纸：把整个窗口导航到入口的 `file://`。同一入口重复调用直接返回
@@ -182,7 +204,8 @@ impl<R: Runtime> WallpaperWindow<R> {
         // 清理，留着的话之后每个这类事件仍会向新文档 eval 投递脚本。新文档要先加载、执行脚本
         // 才会 listen，晚于这里。导航失败时页面没换，监听保留（上面已返回）。
         self.window.clear_js_listeners();
-        println!("[wallpaper-window] 壁纸窗口 → {entry}");
+        self.reset_pinger();
+        tracing::debug!("壁纸窗口 → {entry}");
         self.web = Some(WebPage { dir, entry });
         #[cfg(target_os = "windows")]
         if self.forwarder.is_none() {
@@ -190,7 +213,7 @@ impl<R: Runtime> WallpaperWindow<R> {
                 Some(hwnd) => {
                     self.forwarder = Some(super::input_forward::InputForwarder::start(label, hwnd))
                 }
-                None => eprintln!("[wallpaper-window] 没有壁纸窗口句柄，不转发桌面鼠标"),
+                None => tracing::warn!("没有壁纸窗口句柄，不转发桌面鼠标"),
             }
         }
         Ok(())
@@ -215,15 +238,13 @@ impl<R: Runtime> WallpaperWindow<R> {
             return;
         };
         if let Err(error) = self.window.navigate(app_url.clone()) {
-            eprintln!(
-                "[wallpaper-window] 从 {} 导航回应用页失败: {error}",
-                web.entry
-            );
+            tracing::warn!("从 {} 导航回应用页失败: {error}", web.entry);
             return;
         }
         // 同 `show_web`：清掉网页壁纸垫片注册的监听。
         self.window.clear_js_listeners();
-        println!("[wallpaper-window] 壁纸窗口 → {app_url}");
+        self.reset_pinger();
+        tracing::debug!("壁纸窗口 → {app_url}");
     }
 }
 

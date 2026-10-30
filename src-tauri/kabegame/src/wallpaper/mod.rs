@@ -1,4 +1,6 @@
 pub mod manager;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub mod ping;
 pub mod rotator;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod window;

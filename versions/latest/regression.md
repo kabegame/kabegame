@@ -1,6 +1,24 @@
 # v4.7.0 regression
 
-<<<<<<< HEAD
+## 壁纸窗口 ping 看门狗
+
+后端随 `WallpaperWindow` 启动 ping 看门狗，每 10s 经全局事件发 `wallpaper-ping`，应用页与 Windows 网页壁纸垫片按 label 过滤并调用 `wallpaper_pong`；pong 为 opt-in。连续 3 次未应答重载当前文档，重载后仍无应答则按 3 → 6 → 12……退避至 60，有效应答恢复阈值 3；导航 / 重载用 floor 作废旧应答。页面不计时，sleep 循环不补 tick，init 看门狗与 CEF 无响应恢复链路继续各司其职。以下用例待使用带环境注入的脚本和真机验证。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 事件协议单测 | 带环境注入的 test-kabegame | 运行 kabegame-core 的 `ipc::events` 用例 | 默认种类含 ping、不含 pong；两事件序列化、反序列化与名称正反映射一致 | 2026-10-30 macOS：`ipc::events` 5 个通过 |
+| [x] | ping 状态机单测 | 带环境注入的 test-kabegame | 运行 kabegame 的 `wallpaper::ping` 用例 | 持续应答不重载；无应答第 40s 重载；停止应答、label 隔离、reset 迟到应答、3 → 6 → 12 退避 / 60 上限 / 应答恢复、睡眠不补 tick、句柄丢弃退出均通过 | 2026-10-30 macOS：9 个通过。`test-kabegame kabegame` 能编译，但测试二进制在 `target/debug/deps/` 下按 `@executable_path/../Frameworks` 找不到 CEF framework（SIGABRT，与本次无关），改为对已编好的二进制加 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接运行 |
+| [x] | 编译与格式 | 带环境注入的 check-kabegame | 运行 vue-tsc 与 cargo check；逐个检查改动 Rust 文件的 rustfmt 和前端 Prettier | 无新增错误，改动文件格式正确 | 2026-10-30 macOS：vue-tsc 0 error、cargo check 0 error，改动文件无新增 warning；rustfmt `--check` 与 Prettier `--check` 均通过。Windows 专属分支本机编不到 |
+| [ ] | 正常不误报与序号往返 | macOS dev，窗口模式 | 用 kabegame-chromium 连 wallpaper target；以 `// DEBUG-wallpaper-ping` 临时 debug ingest 插桩记录 ping / pong，空闲 3 分钟后删除插桩 | 序号逐个对应，日志无「ping 未应答」 | |
+| [ ] | 遮挡不误报 | macOS dev，窗口模式 | 用最大化 / 全屏窗口覆盖桌面 6 分钟以上，CDP 读取 `document.visibilityState`，观察日志 | 状态为 hidden 且无未应答；若连续未应答则停下报告，不调大阈值掩盖 | |
+| [ ] | JS 卡死自动恢复 | macOS dev，窗口模式 | CDP 注入 `setTimeout(() => { const t = Date.now(); while (Date.now() - t < 300_000) {} }, 3000)` 后立刻断开 CDP，观察日志 | 先 3 条 warn，再 error / reload，随后 wallpaper 的 renderer unresponsive → terminated → 重载并恢复应答；reload 后 60s 内既无 unresponsive 也无恢复则报告、另补重建窗口兜底 | |
+| [ ] | 事件不外溢 | macOS dev + CLI / SSE | CLI 订阅全部事件或接 SSE，保持窗口模式 | 能看到 wallpaper-ping，看不到 wallpaper-pong | |
+| [ ] | 睡眠唤醒 | macOS dev，窗口模式 | 人工让 Mac 睡眠 1 分钟后唤醒，观察日志 | 最多一条未应答 warn，不 reload | |
+| [ ] | 网页壁纸正常与遮挡应答 | Windows dev，窗口模式 | 确认垫片 selfLabel 非空，分别空闲 3 分钟、覆盖桌面 6 分钟以上 | 仅应答本窗口，正常 / hidden 均不误报 | |
+| [ ] | 网页壁纸 JS 卡死恢复 | Windows dev，窗口模式 | 网页壁纸注入有界忙循环后立刻断开 CDP，观察日志 | 连续未应答后自动重载并恢复应答；遵守上述 60s 证伪判据 | |
+| [ ] | 网页壁纸与图片切换 | Windows dev，窗口模式 | 网页壁纸与图片来回切换，观察日志 | 新文档重新监听，旧应答作废，没有多余 reload | |
+| [ ] | 网页壁纸睡眠唤醒 | Windows dev，窗口模式 | 睡眠 1 分钟后唤醒，观察日志 | 不补发错过的 tick，最多一条 warn，不 reload | |
+
 ## CEF 渲染进程卡死判定改为 5 秒
 
 2026-10-30：`tauri-runtime-cef` 在 `on_before_command_line_processing` 里合并追加 `--enable-features=RendererHangWatcher:delay/5s`，把 Chromium 桌面默认的 15s hang monitor 延迟改为 5s（Android 默认值），判定仍是「延迟到期 → 主线程 ping 1s 无应答」；`disable_chrome_only_features` 泛化为 `merge_feature_switch`，vulkan 分支的 `enable-features=Vulkan` 也改为合并，避免两处各写一次互相覆盖。`on_render_process_unresponsive` / `on_render_process_terminated` 未改。静态验证：改动文件 rustfmt 无差异；dev 自动重编通过，二进制含该开关串。测法：CDP 给主窗口挂一个 Ctrl+Shift+H 的 keydown 监听（先 `sendBeacon` 到 debug ingest 记按键时刻，再进 60s 有界忙循环）后立即断开 CDP（DevTools 附着时 Chromium 不报无响应），人工按键，后台脚本盯日志与渲染进程。
@@ -39,7 +57,6 @@
 | [x] | 原有事件不受影响 | 桌面 dev | 下载、删图、画册增删、设置修改 | 画廊 / 任务 / 画册照常刷新（`default_kinds` 替换 `ALL` 未漏种类）；CLI `plugin run` 任务日志照常 | 2026-10-29：设置修改的 `setting-change` 照常到前端（2 次切换收到 2 条），画廊正常加载。下载 / 删图 / 画册未测。2026-10-29 代理实测（均未手动刷新）：本地导入 4 张 PNG，画廊页头 212 / 4189 在 1.6 秒内逐张涨到 216 / 4193，任务抽屉显示「本地导入 完成 ✓4」，3 条 `task-log` 实时到达且任务日志弹窗完整；新建画册 0.1~0.2 秒出现在树里、加 4 张后树计数与画册页头都变 4、改名 0.1 秒同步、删除 0.1~0.4 秒从树中消失；后端改 `networkRetryCount` 2→3→2，设置页输入框约 50 ms 同步；删除 4 张后 0.1 秒回落到 212 / 4189。dev CLI `plugin run manyacg --via app`（随机 2 个作品）两次均 completed，进度条正常绘制，任务日志经 `suspend` 打在进度条上方 |
 | [ ] | 发布版级别 | 桌面 release 包 | 安装后启动，查看日志文件 | 只有 INFO 及以上；无 DEBUG 行 | |
 
-=======
 ## tauri 补丁 0012：畅游 https 页面的 IPC `Origin`
 
 2026-10-30：Windows 上 Tauri IPC 主通道是 `http://ipc.localhost/<cmd>`。https 页面（畅游站点）按默认 referrer 策略 `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`（页面声明 `no-referrer` 时 http 页面也一样），Tauri `ipc` handler 在 `parse_invoke_request` 回 500 `Origin header is not a valid URL`。500 让 fetch 正常 resolve，`ipc-protocol.js` 不回退 `postMessage`，畅游页注入脚本的 `surf_report_url`、`surf_collect_attach`、`get_webview_i18n` 与页面 invoke 全部失败。新增 `third-patches/tauri/0012-tauri-ipc-origin-referrer-policy.patch`，给主通道 fetch 固定 `referrerPolicy: 'origin'`；`tauri-runtime-cef` 的 `cef-ipc` 回退 shim 同样设置。opaque 来源（`file:` 文档、沙箱 iframe）仍发 `null`，`file:` frame 由运行时 `pin_file_frame_origin` 改写，不受影响。
@@ -181,7 +198,7 @@
 | [ ] | 站点不能订阅事件 | 桌面 CEF dev | 任务运行中经 CDP 在爬虫窗口执行 `__TAURI_INTERNALS__.invoke('plugin:event\|listen', { event: 'images-added', target: { kind: 'Any' }, handler: __TAURI_INTERNALS__.transformCallback(() => {}) })` | Promise 被 ACL 拒绝（`event.listen not allowed`） | 未验证 |
 | [ ] | 站点不能伪造事件 | 桌面 CEF dev | 同上执行 `invoke('plugin:event\|emit', { event: 'app-import-plugin', payload: { kgpgPath: 'x' } })` | 被 ACL 拒绝，主窗口不弹导入对话框 | 未验证 |
 | [ ] | Android WebView 爬虫 | Android dev | 跑一个 WebView 插件 | 同桌面，任务成功结束（安卓同样使用 `crawler-capability`） | 未验证 |
->>>>>>> origin/feat/wpe-import
+
 ## 下载落盘先占坑（消除 `images.local_path` UNIQUE 冲突）
 
 2026-10-29：下载目标文件名从 `exists()` 查询改为原子创建 + 原生占用标记（Unix `flock`、Windows 只共享读的 share mode）：`occupy_unique_path` / `occupy_unique_download_path[_with_name]` 返回 `OccupiedFile` 守卫，后处理持有到 `add_image` 结束；溢写文件在 Unix 同设备上「锁源 → 硬链接 → 删源名」零拷贝，Windows / 跨设备经句柄复制；本地导入复制进目标目录同样占坑；文件夹同步给新文件建行前探测标记、命中放弃，探测未命中再按路径查一次；下载器对新建文件入库后按直接父目录补挂文件夹画册。不改 SQL。静态验证：check-kabegame driver 的 cargo check（`kabegame` 与 `kabegame-cli`）0 error；vue-tsc 报 1 个既有错误（`apps/kabegame/vite.config.ts(74,20)` 的 `isProd` 未定义，来自 HEAD 合并提交，本次未改前端）。Windows 分支本机（macOS）无法编译，只核对了 `windows-sys` 0.52 常量类型。真机（macOS dev，CDP + dev CLI 经 IPC 交给 app）：用临时 V8 插件 `collide-test` 从本地 HTTP 服务一次入队 16 个 `…/set<n>/img.png`（同名、内容各异）制造碰撞，结果见各行备注；测试图片、画册与插件已清理。

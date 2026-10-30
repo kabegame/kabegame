@@ -109,7 +109,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 - [wpe/WPE_IMPORT.md](wpe/WPE_IMPORT.md)
   - 主题：目录型 WPE 壁纸的入库模型（`local_path` 是目录、`type` 为 `x-wpe/*`）、格式表占位条目、
     **只提供 Windows 桌面**（`platform_supported` 只对 Windows 为 true，桌面 `file://` 宿主与预览 `file:` iframe 都按 Windows 门控）、Steam 库发现与任意文件夹识别、`wpe-import` 内建任务与「壁纸」收集入口、
-    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
+    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口为 `index.html?window=wallpaper` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手）+ 纯渲染组件 `WallpaperStage.vue`；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WallpaperStage` 独立 web 层（sandbox `file:` iframe，`set_wpe_web_preview` 设根目录后返回入口、前端赋 `src`，由补丁 0005 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览「桌面画布」`WallpaperDesktopCanvas`、`get_wallpaper_target_for_image`、背景层退回预览图，以及 `cef-ipc` 只收主 frame 的纵深防御；
     **图库预览 `file:` iframe**（Phase 6a，`/wpe` HTTP 目录服务随之删除）：主窗口建窗前 `allow_file_documents("main")` 与 `allow_app_local_resources("main")`、预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录（拒绝壁纸窗口、前端串行调用）、CSP `frame-src … file:`、两种宿主对照表（同一套运行时目录拦截，`localStorage` 同源）；
@@ -120,6 +120,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 预览页面 `fetch` 同目录文件失败或越界读被放行 / 关闭预览后根目录未清空 / 预览画布比例或交互 / 切走后渲染进程未回收、子 frame 伪造 `cef-ipc` 请求、非 Windows 平台的 WPE 行为；
     排查桌面网页壁纸不显示 / `fetch` 同目录文件失败 / 越界 `file:` 被放行或误拒（`deny file:` 日志）/ 页面调用应用命令被 ACL 拒绝 / 收不到属性 / 改语言后页面没反应 / 切回图片壁纸后窗口停在 `file://` / 桌面点击或移动不触发页面事件；
+    排查壁纸或网页壁纸卡死、白屏不自动恢复；
     排查壁纸窗口导航后旧文档的事件监听残留、预览 iframe 收不到属性或关闭预览后仍在转发事件；
     排查桌面图库图片 / 视频不显示（`ERR_UNKNOWN_URL_SCHEME`、图库媒体被误判 `deny file:`）、下载拿到 `file://`、插件详情模板的请求被 CSP 拒绝。
 

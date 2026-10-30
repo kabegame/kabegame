@@ -823,6 +823,8 @@ pub(crate) fn configure_app(
             get_window_state,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             wallpaper_window_ready,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            wallpaper_pong,
             // --- Filesystem ---
             open_path,
             // --- App logs ---

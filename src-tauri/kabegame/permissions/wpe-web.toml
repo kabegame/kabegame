@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "wpe-web"
 description = "WPE web wallpaper page (file://) permissions"
-commands.allow = ["wpe_web_pull_state"]
+commands.allow = ["wpe_web_pull_state", "wallpaper_pong"]

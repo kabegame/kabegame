@@ -4,6 +4,7 @@
  * 看门狗、`setting-change` 监听、启动时并行拉取设置与当前壁纸、`wallpaper_window_ready` 握手、dev 调试面板，
  * 再把结果作为 props 交给纯渲染组件 `WallpaperStage`。后端仍是唯一属主，本窗口是「自驱动」的观察方。
  */
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { IS_DEV } from "@/env";
@@ -85,6 +86,19 @@ const displayedError = computed(() => {
 // 事件监听器（setting-change）
 let unlistenSettingChange: UnlistenFn | null = null;
 
+// ---- ping 应答 ----
+// 后端每 10s 发一次 ping，连续 3 次没应答就重载。页面不计时，避免 hidden 定时器节流。
+// 挂载即应答：ping 只管「活着」，init 有没有跑通仍归 init 看门狗。
+let unlistenPing: UnlistenFn | null = null;
+
+async function listenPing() {
+  const label = getCurrentWebviewWindow().label;
+  unlistenPing = await listen<{ label: string; seq: number }>("wallpaper-ping", (event) => {
+    if (event.payload.label !== label) return; // 只应答本窗口
+    invoke("wallpaper_pong", { seq: event.payload.seq }).catch(() => {});
+  });
+}
+
 // ---- init 看门狗 ----
 // 睡眠瞬间 renderer 被杀 → CEF `on_render_process_terminated` reload → 重载后
 // init() 的首个 IPC await（listen/invoke）恰逢系统挂起，响应永久丢失（Tauri
@@ -111,7 +125,6 @@ async function init() {
   armInitWatchdog();
 
   try {
-    const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     windowLabel.value = getCurrentWebviewWindow().label;
   } catch (e) {
     setWindowError(`getCurrentWebviewWindow failed: ${String(e)}`);
@@ -194,12 +207,15 @@ async function init() {
 }
 
 function cleanup() {
+  unlistenPing?.();
+  unlistenPing = null;
   unlistenSettingChange?.();
   unlistenSettingChange = null;
 }
 
 // 子组件 WallpaperStage 的 onMounted 先于这里执行，等价于原实现 init() 开头的 initDOM()。
 onMounted(() => {
+  void listenPing();
   void init();
   // 清理：页面卸载（含看门狗 reload）时释放监听，同原实现
   window.addEventListener("beforeunload", cleanup);
@@ -237,8 +253,11 @@ onBeforeUnmount(() => {
     <div v-if="IS_DEV" class="debug-panel">
       <div class="debug-title">Wallpaper Debug</div>
       <div>
-        fps: <span class="text-zinc-400">MIN</span> <span :class="minFpsClass">{{ minFpsText }}</span>
-        <span class="text-zinc-400 ml-2">AVG</span> <span :class="avgFpsClass">{{ avgFpsText }}</span>
+        fps:
+        <span class="text-zinc-400">MIN</span>
+        <span class="ml-1" :class="minFpsClass">{{ minFpsText }}</span>
+        <span class="text-zinc-400 ml-2">AVG</span>
+        <span class="ml-1" :class="avgFpsClass">{{ avgFpsText }}</span>
       </div>
       <div>label: {{ windowLabel || "unknown" }}</div>
       <div>ready invoked: {{ readyInvoked ? "yes" : "no" }}</div>

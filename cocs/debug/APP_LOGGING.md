@@ -54,7 +54,7 @@ KABEGAME_LOG=info                              # 依赖 crate 默认级别改为
 
 `AppEventKind::Log` 是**仅显式订阅**（`is_opt_in`）的事件种类：
 
-- 「订阅全部」一律用 `AppEventKind::default_kinds()`（`ALL` 去掉 opt-in 种类）：主事件循环转 Tauri / `/events` SSE、`subscribe_all_stream`、IPC `SubscribeEvents` 的空 kinds。所以日志不会默认推给前端、Web 客户端或 CLI。
+- 「订阅全部」一律用 `AppEventKind::default_kinds()`（`ALL` 去掉 `log`、`wallpaper-pong` 等 opt-in 种类）：主事件循环转 Tauri / `/events` SSE、`subscribe_all_stream`、IPC `SubscribeEvents` 的空 kinds。所以日志不会默认推给前端、Web 客户端或 CLI。
 - `AppLogLayer` 广播前先看 `receiver_count(Log)`，没人订阅时只写环形缓冲，不序列化、不入队。
 
 三个出口都先订阅、再拉历史，按 seq 去重合并（先订阅是为了不漏掉拉历史期间的日志）：

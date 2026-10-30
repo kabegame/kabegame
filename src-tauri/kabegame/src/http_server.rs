@@ -389,43 +389,6 @@ async fn image_concurrency_mw(req: Request<Body>, next: Next) -> Response {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-pub async fn start_http_server() -> Result<u16, String> {
-    if let Some(port) = HTTP_SERVER_PORT.get() {
-        return Ok(*port);
-    }
-
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| format!("bind file server failed: {e}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("read file server local addr failed: {e}"))?
-        .port();
-
-    let app = file_routes().fallback(handle_unmatched);
-    tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
-            tracing::debug!("stopped: {e}");
-        }
-    });
-
-    let _ = HTTP_SERVER_PORT.set(port);
-    Ok(port)
-}
-
-#[cfg(all(not(target_os = "android"), not(feature = "web")))]
-#[tauri::command]
-pub async fn get_http_server_base_url() -> Result<String, String> {
-    for _ in 0..60 {
-        if let Some(port) = HTTP_SERVER_PORT.get() {
-            return Ok(format!("http://127.0.0.1:{port}"));
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    Err("file server not ready".to_string())
-}
-
 #[cfg(all(target_os = "android", not(feature = "web")))]
 #[tauri::command]
 pub async fn get_http_server_base_url<R: tauri::Runtime>(

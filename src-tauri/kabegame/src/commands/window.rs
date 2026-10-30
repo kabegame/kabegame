@@ -40,6 +40,14 @@ pub fn wallpaper_window_ready<R: tauri::Runtime>(_app: tauri::AppHandle<R>) -> R
     Ok(())
 }
 
+/// 壁纸窗口对 `wallpaper-ping` 的应答；应用页与网页壁纸垫片共用。
+/// label 取调用方 webview，页面替不了别的窗口应答。只发 opt-in 的 pong，不进窗口 / SSE。
+#[tauri::command]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub async fn wallpaper_pong<R: tauri::Runtime>(webview: tauri::Webview<R>, seq: u64) {
+    kabegame_core::emitter::GlobalEmitter::global().emit_wallpaper_pong(webview.label(), seq);
+}
+
 /// 切换主窗口全屏状态
 #[tauri::command]
 #[cfg(not(target_os = "android"))]

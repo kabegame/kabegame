@@ -118,6 +118,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 objc2 = { version = "0.6", default-features = false }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [build-dependencies]
 tauri-build = {workspace = true, optional = true}
 

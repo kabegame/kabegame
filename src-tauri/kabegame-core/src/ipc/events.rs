@@ -121,6 +121,8 @@ app_event_kinds! {
     PluginChanged,
     DownloadRemoved,
     Log,
+    WallpaperPing,
+    WallpaperPong,
 }
 
 impl AppEventKind {
@@ -163,6 +165,8 @@ impl AppEventKind {
             AppEventKind::PluginChanged => "plugin-changed",
             AppEventKind::DownloadRemoved => "download-removed",
             AppEventKind::Log => "log",
+            AppEventKind::WallpaperPing => "wallpaper-ping",
+            AppEventKind::WallpaperPong => "wallpaper-pong",
         }
         .to_string()
     }
@@ -200,14 +204,16 @@ impl AppEventKind {
             "plugin-changed" => Some(AppEventKind::PluginChanged),
             "download-removed" => Some(AppEventKind::DownloadRemoved),
             "log" => Some(AppEventKind::Log),
+            "wallpaper-ping" => Some(AppEventKind::WallpaperPing),
+            "wallpaper-pong" => Some(AppEventKind::WallpaperPong),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(AppEventKind::TasksChange),
             _ => None,
         }
     }
 
-    /// 只有显式点名才订阅的种类（当前仅日志）：「订阅全部」不包含它们。
+    /// 只有显式点名才订阅的种类：日志、壁纸窗口 ping 应答。「订阅全部」不包含它们。
     pub const fn is_opt_in(self) -> bool {
-        matches!(self, AppEventKind::Log)
+        matches!(self, AppEventKind::Log | AppEventKind::WallpaperPong)
     }
 
     /// 「订阅全部」的实际集合：ALL 去掉 opt-in 种类。
@@ -452,6 +458,17 @@ pub enum AppEvent {
         id: u64,
     },
 
+    /// 后端看门狗对壁纸窗口的 ping；页面只应答 label 等于自己窗口的那条。
+    WallpaperPing {
+        label: String,
+        seq: u64,
+    },
+    /// 壁纸窗口的应答（opt-in，只给后端看门狗）；label 取自调用方 webview。
+    WallpaperPong {
+        label: String,
+        seq: u64,
+    },
+
     /// 应用日志（opt-in：只推给显式订阅 `log` 的客户端）
     Log {
         #[serde(flatten)]
@@ -491,7 +508,7 @@ mod tests {
     #[test]
     fn log_event_is_opt_in_and_flattens_record() {
         assert!(!AppEventKind::default_kinds().contains(&AppEventKind::Log));
-        assert_eq!(AppEventKind::default_kinds().len(), AppEventKind::COUNT - 1);
+        assert_eq!(AppEventKind::default_kinds().len(), AppEventKind::COUNT - 2);
         let record = crate::logging::LogRecord {
             seq: 3,
             ts: 10,
@@ -515,6 +532,46 @@ mod tests {
             AppEventKind::from_event_name("log"),
             Some(AppEventKind::Log)
         );
+    }
+
+    #[test]
+    fn wallpaper_ping_is_default_and_pong_is_opt_in() {
+        let defaults = AppEventKind::default_kinds();
+        assert!(defaults.contains(&AppEventKind::WallpaperPing));
+        assert!(!defaults.contains(&AppEventKind::WallpaperPong));
+        assert!(!AppEventKind::WallpaperPing.is_opt_in());
+        assert!(AppEventKind::WallpaperPong.is_opt_in());
+
+        for (event, kind, name) in [
+            (
+                AppEvent::WallpaperPing {
+                    label: "wallpaper".into(),
+                    seq: 1,
+                },
+                AppEventKind::WallpaperPing,
+                "wallpaper-ping",
+            ),
+            (
+                AppEvent::WallpaperPong {
+                    label: "wallpaper".into(),
+                    seq: 1,
+                },
+                AppEventKind::WallpaperPong,
+                "wallpaper-pong",
+            ),
+        ] {
+            assert_eq!(event.kind(), kind);
+            let payload = serde_json::to_value(event).unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({"type": name, "label": "wallpaper", "seq": 1})
+            );
+            let decoded: AppEvent = serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(decoded.kind(), kind);
+            assert_eq!(serde_json::to_value(decoded).unwrap(), payload);
+            assert_eq!(kind.as_event_name(), name);
+            assert_eq!(AppEventKind::from_event_name(name), Some(kind));
+        }
     }
 
     #[test]
@@ -595,6 +652,8 @@ impl AppEvent {
             AppEvent::PluginChanged { .. } => AppEventKind::PluginChanged,
             AppEvent::DownloadRemoved { .. } => AppEventKind::DownloadRemoved,
             AppEvent::Log { .. } => AppEventKind::Log,
+            AppEvent::WallpaperPing { .. } => AppEventKind::WallpaperPing,
+            AppEvent::WallpaperPong { .. } => AppEventKind::WallpaperPong,
         }
     }
 }

@@ -135,7 +135,7 @@ true）、桌面 `file://` 宿主、图库预览的 `file:` iframe 都按 `targe
 或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router / 组件库 / vant，不 `loadAll` 设置）。
 Web 发布版与 Android 硬门控为主窗口。
 
-- `views/WallpaperWindow.vue`：壁纸窗口根，负责看门狗（`sessionStorage.wallpaperInitRetry` + reload）、`setting-change`
+- `views/WallpaperWindow.vue`：壁纸窗口根，负责 init 看门狗（`sessionStorage.wallpaperInitRetry` + reload）、挂载即监听并按 label 应答 `wallpaper-ping`、`setting-change`
   监听、启动时五个 getter 并行、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件。
 - `components/wallpaper/WallpaperStage.vue`：纯渲染组件（不 invoke / listen / 读 store；唯一例外是 web 层 iframe 的宿主侧
   `wpeWebBridge.ts`：建 iframe 前 `set_wpe_web_preview` 设预览根目录、销毁时清空，宿主桥代为拉取与 listen，见「图库预览：
@@ -216,11 +216,37 @@ Kabegame 在桌面上照此做：
     → 初始 URL」。两条通道都判成 `Origin::Remote { url: file:///… }`。
   - 对这个来源生效的只有 `capabilities/wpe-web.json` 的 `wpe-web-capability`：`windows: ["wallpaper"]`、
     `remote.urls: ["file:///*"]`、`local: false`（应用页回到壁纸窗口时仍只受 `main-capability` 约束），权限只有
-    `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state`；不给
+    `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state`、`wallpaper_pong`；不给
     `core:default`，页面拿不到窗口、路径、应用信息等核心命令。`main-capability` 是 `local: true`，对远程来源不生效，
     `get_settings` 等应用命令一律被 ACL 拒绝（`Command … not allowed by ACL`）。
 - 网页壁纸只在窗口模式出现；导航本身不经过 Vue，切换没有过渡动画（WPE 也是直接切换）；壁纸样式、音量、倍速对
   `file://` 页面不生效。
+
+### ping 看门狗
+
+`wallpaper/ping.rs` 的 `Pinger` 随 `WallpaperWindow` 持有，在 `mount()` 挂载、显示完成后启动；丢弃对象时
+reset 通道关闭，任务退出。后端用 sleep 循环每 10s 探测，页面收到事件才应答、不自己计时：窗口被遮挡变成 hidden
+时页面定时器会被 Chromium 节流，页面心跳容易误报。sleep 不补发错过的 tick，系统睡眠唤醒后最多多算一次未应答。
+
+往返使用两个全局事件种类：默认种类 `wallpaper-ping { label, seq }` 经 `GlobalEmitter` 广播、主事件循环 `app.emit`
+送到窗口；应用页 `WallpaperWindow.vue` 与桌面网页壁纸垫片都 `listen`，只应答 label 等于自己窗口的事件，再调用
+`wallpaper_pong(seq)`。命令从调用方 webview 取 label，页面不能替其它窗口应答；`wallpaper-pong { label, seq }`
+是 opt-in，默认不转发给窗口、SSE 或「订阅全部」的 IPC 客户端，只有显式订阅它的后端看门狗接收。
+
+连续 3 次未应答就 `reload()` 当前文档（应用页或 `file://` 入口，约 30~40s）。若重载后仍未收到一次有效应答，
+下次判死所需次数翻倍：3 → 6 → 12……，上限 60（约 10 分钟）；有效应答会清零连续未应答次数并把阈值恢复为 3。
+`show_web` / `show_app` 导航成功后调用 `reset()`，导航失败不重置；看门狗重载后也像导航一样 `clear_js_listeners()`
+（旧文档的 `wallpaper-ping` 等监听随重载作废，Tauri 不会自己清），并在状态机内做同样的重置：
+`floor = seq`、清空等待与未应答次数，只接收序号大于 floor 的应答，避免旧文档的迟到应答影响新文档。序号持续递增，
+导航重置保留当前退避阈值，直到收到有效应答。
+
+应用页挂载即应答，不等 init 完成。ping 检查事件投递、JS 主线程与回程 IPC 是否存活；原有 init 看门狗继续检查初始化
+是否跑通。CEF hang monitor 主要依赖输入事件回执，壁纸窗口几乎没有输入，由 ping 主动发起恢复。JS 卡死后 reload
+能否触发 Chromium commit timeout、进入现有 terminate + reload 链路仍需真机验证：重载后 60s 内既无 renderer
+unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不能用加大次数掩盖。
+
+代价是窗口模式期间默认流每 10s 多一条 `wallpaper-ping`，其它窗口、桌面应用 Web 服务器的 SSE 与「订阅全部」的 IPC
+客户端也可见（只有 label 与 seq）；订阅方可忽略。`wallpaper-pong` 不进入这些默认流。
 
 ### 图库预览：`file:` iframe
 
@@ -349,6 +375,10 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   宿主桥由 `WallpaperStage` 在创建 iframe 时挂上（插入 DOM、请求导航之前），随 iframe 销毁（`teardownWeb` 里 `dispose()`
   退订）；只认 `event.source === iframe.contentWindow` 的消息，回消息的目标源用 `"*"`（`file:` 源在 `postMessage` 的目标
   匹配上不可靠；发出的只有本张壁纸的状态与转发的事件）。垫片发出的消息只有拉取编号与事件名，不含数据。
+- **ping 应答**：仅桌面 `file://` 主 frame 监听 `wallpaper-ping`，从
+  `__TAURI_INTERNALS__.metadata.currentWebview.label` 取自身 label、过滤后调用 `wallpaper_pong(seq)`；不等 load 或属性
+  拉取成功。预览 iframe 不参与。`wpe-web` 除 `wpe_web_pull_state` 外的第二个命令就是 `wallpaper_pong`，只替调用方窗口
+  发应答，不读取数据。Windows 真机仍需确认 metadata 中的 label 有值。
 - **重拉触发**：`setting-change` 带 `language`（界面语言变了）；`image-changed` / `images-change` 里有**本张**图片
   （`state.imageId`）的 `metadataId` 补丁——图片 metadata 按 id 不可变，属性一改就换 `metadataId`（Phase 7 的设置面板保存时
   写新 metadata 行）；首个状态到达前任何 `metadataId` 补丁都重拉。垫片**先订阅再拉取**，订阅生效后的变化都会触发重拉。
@@ -368,7 +398,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   页面没换，不动监听；新文档要加载、执行脚本才会 listen，晚于清理）。页面自己 `location.reload()` 留下的一组垫片监听不额外
   处理；销毁窗口时 Tauri 自己会清。
 - **接受的取舍**：`core:event:allow-listen` 没有按事件名的作用域，桌面网页壁纸因此能订阅应用的全部全局事件；预览的宿主
-  代办同样不限事件名。这是用户确认过的取舍，也算开放给壁纸的一项能力；命令层只开一个拉取命令。
+  代办同样不限事件名。这是用户确认过的取舍，也算开放给壁纸的一项能力；可见事件现在还包括默认种类 `wallpaper-ping`，不含 opt-in 的 `wallpaper-pong`。命令层只开拉取状态与 ping 应答两个命令。
 - **不做**（后续 Phase）：暂停冻结与 `setPaused`、`fps`（Phase 6）；用户改属性的存储与面板、`file` / `directory` 属性
   （Phase 7，保存时发 `metadataId` 补丁，垫片已订阅并重拉）；音频与媒体数据（Phase 8，数据回程沿用 `listen` /
   `useTauriProxy`）；Web 发布版 / Android / macOS / Linux 不渲染网页壁纸。
@@ -485,6 +515,8 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
   `wallpaper/window.rs`（`WallpaperWindow` 状态、`show_web` / `show_app` / `Drop`）、`wallpaper/input_forward.rs`
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`
+- 壁纸窗口 ping 看门狗：`src-tauri/kabegame/src/wallpaper/ping.rs`、`wallpaper/window.rs`（生命周期与导航重置）、
+  `commands/window.rs`（`wallpaper_pong`）、`src-tauri/kabegame-core/src/{ipc/events.rs,emitter.rs}`（ping / pong 事件）
 - 壁纸窗口：`src-tauri/kabegame/src/wallpaper/manager/window.rs`、`apps/kabegame/src/main.ts`、`windowKind.ts`、
   `bootstrap/{app,wallpaper}.ts`、`views/WallpaperWindow.vue`、
   `components/wallpaper/{WallpaperStage.vue,types.ts,WpeWallpaperContent.vue,WallpaperDesktopCanvas.vue}`
