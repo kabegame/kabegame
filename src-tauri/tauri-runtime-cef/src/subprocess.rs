@@ -93,6 +93,17 @@ wrap_render_process_handler! {
             let (Some(browser), Some(frame), Some(context)) = (browser, frame, context) else {
                 return;
             };
+            // CEF 对每个 V8 世界都回调本函数（`DidCreateScriptContext` 不看 world_id）：主世界之外，
+            // DevTools（如「DevTools Performance Metrics」）、CDP `Page.createIsolatedWorld` 等建的
+            // 隔离世界也会进来。隔离世界与页面共享 DOM，再注入一遍会让事件监听、畅游右键菜单、
+            // IPC 上报都多出一份，所以只注入 frame 的主世界。放在借用脚本表之前：取主世界上下文
+            // 可能触发主世界初始化，进而嵌套回调本函数。
+            let Some(mut main_world) = frame.v8_context() else {
+                return;
+            };
+            if context.is_same(Some(&mut main_world)) != 1 {
+                return;
+            }
             let scripts = self.scripts_by_browser.borrow();
             let Some(scripts) = scripts.get(&browser.identifier()) else {
                 return;

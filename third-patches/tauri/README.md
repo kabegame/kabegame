@@ -96,16 +96,22 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
 - `0012-tauri-ipc-origin-referrer-policy.patch` — the custom-protocol IPC `fetch` in
   `scripts/ipc-protocol.js` gets `referrerPolicy: 'origin'`. The `ipc` handler rejects a request
   whose `Origin` header does not parse as a URL (`parse_invoke_request`, HTTP 500 "Origin header
-  is not a valid URL"). On Windows the IPC endpoint is `http://ipc.localhost`, and Chromium (CEF)
-  sends `Origin: null` on that POST when the page's referrer policy treats it as a downgrade: an
-  https page under the default `strict-origin-when-cross-origin` (every https site opened in
-  surf), or any page that declares `no-referrer`. The 500 resolves the `fetch`, so the script
+  is not a valid URL"). Chromium-based webviews send `Origin: null` under `no-referrer`; platforms
+  using the `http://ipc.localhost` workaround also do so for an https-to-http downgrade under
+  the default `strict-origin-when-cross-origin` policy. The 500 resolves the `fetch`, so the script
   never falls back to `postMessage` and every invoke from such a page fails. With `origin` the
   document's origin is always sent (verified in CEF: default / `no-referrer` → 500, `origin` /
   `unsafe-url` → 200). Opaque origins (`file:`, sandboxed frames) still send `null`; the CEF
   runtime rewrites `file:` frames itself. The CEF runtime's `cef-ipc` postMessage shim
   (`tauri-runtime-cef/src/ipc.rs`) sets the same policy. Re-check on bump:
   `scripts/ipc-protocol.js` `fetch(...convertFileSrc(cmd, 'ipc'), {...})`.
+- `0013-tauri-windows-native-custom-protocol.patch` — Windows uses native
+  `tauri://localhost` and `ipc://localhost` with Kabegame's CEF runtime. The four Rust
+  URL branches (`protocol::origin`, `window_origin`, isolation `frame-src`, and
+  `is_local_url`) keep the HTTP localhost workaround only on Android; `core.js`
+  `convertFileSrc` does the same. `use_https_scheme` has no effect on Windows.
+  A Tauri tree with this patch cannot use the Windows wry/WebView2 runtime.
+  Re-check these five anchors when updating Tauri.
 
 Apply the whole series manually before building against `third/tauri`:
 

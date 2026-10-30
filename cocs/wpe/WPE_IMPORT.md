@@ -427,7 +427,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 预览的 `file:` iframe 里的页面拿不到 Tauri 全局与 invoke key，但 CEF 的 `cef-ipc://` scheme handler 本身不区分 frame。
 `tauri-runtime-cef` 的 scheme factory 在 `create(browser, frame, ..)` 时记下 `frame.is_main()`，经 request extension
 （`protocol::RequestFrame`）交给 `ipc.rs` 的 `post_message_request`：只接受主 frame，或与该 webview 初始 URL 同源的
-子 frame，其余返回 400。畅游窗口的注入脚本跑在主 frame（Origin 是站点源），因此按「主 frame」放行而不是按「应用源」；
+子 frame，其余返回 400。三平台原生 `tauri://localhost` 的同源子 frame 由 `web_origin` 比较；畅游窗口的注入脚本跑在主 frame（Origin 是站点源），因此按「主 frame」放行而不是按「应用源」；
 CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 handler 承接，不在本防御范围内（仍靠 invoke key）。
 `RequestFrame` 同时带 frame URL：`file:` frame 的 `Origin` 在协议层被改写成 frame URL，两条通道都按远程 `file:` 来源走 ACL
 （见上「初始化脚本照常注入，IPC 按远程 `file:` 来源限权」）。预览 iframe 即便越过前两道，`file:` 来源也只匹配绑定在

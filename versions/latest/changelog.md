@@ -13,11 +13,13 @@
 - Windows 桌面版从图库把图片或视频拖到资源管理器、Word、聊天软件等程序时，得到的是库内原文件（不再是缩略图或需要下载的地址）；三个桌面平台的拖出都只复制，不会把库内文件移走。
 
 ### Changed
+- Windows 桌面版升级后，部分只存在本机界面里的偏好会恢复默认：画廊每页数量与布局、面板宽度、链接打开方式（会重新询问）、吉祥物开关与位置、上次浏览的画廊路径、视频音量等；应用设置与图库数据不受影响。
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
 - 图片详情的「基本信息」改为卡片式排版：名称作标题，源与收藏时间并在一行，类型、大小、尺寸做成可点筛选的芯片，宽高比画成与图片同比例的矩形框；URL 与本地路径各占一行，省略显示并带复制按钮，整体高度明显降低。
 - Web 版（demo.kabegame.com）首屏打开明显变快：脚本、样式和插画改从 CDN 加载并自动压缩，不再挤占服务器那点带宽；吉祥物、空状态等插画在 Web 版换成按显示尺寸压缩的 WebP（合计 8.2 MB → 244 KB），桌面与 Android 仍用原图。
 - 启动时主窗口立即出现：数据库升级等耗时初始化改在后台进行，期间窗口显示启动页与进度（升级需要先补算数据时显示进度条），完成后自动进入主界面；初始化失败会在启动页显示错误并可直接退出。其余数据补算在进入界面后于后台继续，可在「我正在忙这些」里看到进度，中途退出下次启动接着做。
 ### Fixed
+- Windows 桌面版畅游在 x.com 等限制严格的网站上，下载视频等大块数据不再降级到慢速通道。
 - Windows 窗口壁纸改挂到桌面背景 WorkerW，移除点击桌面和最小化时反复修正图标层 Z-order 的逻辑。
 - Android 平板 / 横屏宽屏布局的侧栏、主内容区与弹窗不再被状态栏、底部导航栏遮挡；平板上的弹窗与桌面一样限高、只在内容区滚动，底部按钮始终可见。
 - Android 平板（宽度超过紧凑断点）打开图片预览后左右滑动不再停在原图，能正常切换上一张 / 下一张；滑动过后按一次返回即可关闭预览，不再先被背后的多选状态吃掉。
@@ -26,8 +28,11 @@
 - WebView 爬虫打开的网站不再能订阅应用事件（此前可读到图库新增图片的本地路径等信息），也不能向主界面伪造事件。
 - 修复下载时偶发「UNIQUE constraint failed: images.local_path」：同一帖子多张同名图片并发下载不再互相覆盖、丢图，会依次存成 `name.jpg`、`name(1).jpg`……；下载目录同时是文件夹画册时，新下载的图片也会立刻进入该画册，不再与文件夹同步抢着入库。
 - Windows 桌面版畅游打开 https 网站时，地址同步、一键下载、右键下载图片和页面内提示等功能全部失效的问题。
+- 畅游时（尤其开着开发者工具）右键图片不再叠出两个「下载图片」菜单、要点两次才关闭；页面加载时的地址上报等也不再重复发送。
 
 ### Internal
+- CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
+- 新增 tauri 补丁 0013：Windows 改用原生 `tauri://localhost` / `ipc://localhost`；CEF runtime 删除 `http://<scheme>.localhost` 映射并统一三平台 scheme。拉取后须重新应用 tauri 补丁序列。
 - CEF 补丁 0006 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。
 - 新增 tauri 补丁 0012：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-cef` 的 `cef-ipc` 回退 shim 同样设置。
 - Phase 6d：CEF 补丁 0003 扩到 Windows（需重编 CEF）——Chromium 内层补丁的 aura `StartDragging` 钩子放宽到 `IS_LINUX || IS_WIN`，delegate 背书文件时另清 `html` / `download_metadata`，Windows 不打 `chromium/x-renderer-taint`；`tauri-runtime-cef` 的 `on_start_dragging` 去掉 Linux / macOS cfg，应用在三个桌面平台安装拖出 resolver，`authorize_drag_image` 收紧为 `is_file()`（`x-wpe/*` 目录行不得拖出）；前端桌面拖出只写 image id 并设 `effectAllowed = "copy"`，Web 版保留 `DownloadURL`。

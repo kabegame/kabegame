@@ -155,7 +155,7 @@ android = [
 # Web build: no Tauri stack (mutually exclusive with standard/light/android)
 web = []
 
-# Activated by `tauri build` in production — serves embedded assets via tauri.localhost.
+# Activated by `tauri build` in production — serves embedded assets via tauri://localhost on desktop.
 # Must NOT be pulled in by standard/light/android, or dev mode would bypass devUrl (Vite).
 custom-protocol = ["tauri?/custom-protocol"]
 

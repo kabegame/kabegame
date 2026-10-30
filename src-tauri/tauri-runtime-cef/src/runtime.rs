@@ -71,8 +71,8 @@ mod imp {
     static DRAG_FILE_RESOLVER: OnceLock<Box<DragFileResolver>> = OnceLock::new();
     const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &[
         "ImmersiveReadAnything",
-        // 开发期 debug ingest 与 Windows Tauri 协议域名仍会触发 Chromium 的
-        // Local / Private Network Access 检查；CEF 窗口无授权弹窗，故保留禁用。
+        // 开发期 debug ingest 仍会触发 Chromium 的 Local / Private Network Access
+        // 检查；CEF 窗口无授权弹窗，故保留禁用。
         "LocalNetworkAccessChecks",
         "PrivateNetworkAccessPermissionPrompt",
         "PrivateNetworkAccessRespectPreflightResults",

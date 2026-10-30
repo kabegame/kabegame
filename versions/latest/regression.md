@@ -1,8 +1,47 @@
 # v4.7.0 regression
 
+## CEF 运行时只往主世界注入初始化脚本
+
+2026-10-30：x.com 畅游页右键图片会叠出两个「下载图片」菜单，点一次只收起一个。原因是 CEF 的 `DidCreateScriptContext` 不看 world_id，对主世界和每个隔离世界都回调 `OnContextCreated`，运行时 `subprocess.rs` 在回调里无差别执行全部初始化脚本。开着 DevTools 时页面里有「DevTools Performance Metrics」隔离世界，Tauri 核心脚本、i18n、toast、一键下载、地址上报、右键菜单都在里面又跑了一份；隔离世界与页面共享 DOM，两份 `contextmenu` 监听各画一个菜单，菜单项的 `stopPropagation` 让另一份收不到 click。修复：`on_context_created` 先比较回调上下文与 `frame.v8_context()`（frame 的主世界），不同就不注入。子 frame 的主世界照常注入（all-frames 脚本不受影响）。**renderer 跑在 `kabegame-cef-helper` 里，dev 的热重编只换主程序，验证前须完全重启 dev 让 helper 重编。**
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 类型检查 | Windows 本地 | `deno task check -c kabegame`（`CARGO_TARGET_DIR=target-check`） | 0 error | 2026-10-30：vue-tsc 0 error、cargo 0 error（99s），`subprocess.rs` 无 warning |
+| [x] | S2 runtime 单测 | Windows 本地 | `driver.sh kabegame -p tauri-runtime-cef --lib`（`CARGO_TARGET_DIR=target-check`） | 全部通过 | 2026-10-30：74 passed / 0 failed |
+| [x] | 0 修复前对照 | Windows CEF dev（旧 helper） | x.com 畅游页开着 DevTools，右键推文图片；按脚本内容统计各注入脚本的解析次数与执行上下文；example.com 畅游页用 CDP `Page.createIsolatedWorld` 新建隔离世界后检查全局 | 复现两层菜单；隔离世界里有注入 | 2026-10-30：页面 body 下有两个可见的「下载图片」菜单 div；菜单脚本、`surf_report_url`、`surf_collect_attach`、i18n、Tauri 核心脚本各两份，一份在主世界、一份在「DevTools Performance Metrics」隔离世界（主世界的 `DOMDebugger.getEventListeners` 只列出一份 `contextmenu` 监听，看不到隔离世界那份）。CDP 新建的隔离世界里 `__TAURI_INTERNALS__`、`__kb_i18n__`、`__kabegame_toast` 都存在 |
+| [ ] | 1 隔离世界不再注入 | Windows CEF dev（重启 dev 后） | example.com 畅游页用 CDP `Page.createIsolatedWorld` 新建隔离世界，检查同样三个全局 | 隔离世界里三者都是 `undefined`，主世界照旧存在 | |
+| [ ] | 2 x.com 右键菜单 | Windows CEF dev（重启 dev 后） | 开着 DevTools，右键 x.com 推文图片，点一次「下载图片」 | 只出现一个菜单，点一次即收起并开始下载；各注入脚本只在主世界解析一次 | |
+| [ ] | 3 主世界注入照旧 | Windows CEF dev（重启 dev 后） | 主窗口、壁纸窗口（`file://` 网页壁纸）、畅游页刷新后调用 invoke | 都正常；畅游启动期的三个命令各发一次 | |
+| [ ] | 4 子 frame 照常注入 | Windows CEF dev（重启 dev 后） | 图库预览 WPE 网页壁纸（`file:` iframe），看属性是否送达 | `wpe_shim.js`（all-frames）在 iframe 主世界照常运行，属性首推正常 | |
+| [ ] | 5 macOS / Linux | macOS / Linux CEF dev | 同 2、3 | 同上 | 同一份运行时代码，需对应平台 |
+
+## tauri 补丁 0013：Windows 原生 `tauri://` / `ipc://`
+
+2026-10-30：Windows 桌面 CEF 改为直接承接原生自定义 scheme：正式版应用页为 `tauri://localhost/`，dev 与正式版 IPC 主通道均为 `ipc://localhost/<cmd>`。Android 继续走 `http(s)://<scheme>.localhost`。旧版在 x.com 等严格 CSP 页面会把 IPC 降级到 JSON 回退通道；历史版问题见 `versions/v4.6.0/regression.md`。Windows 正式版的界面本机偏好因 origin 改变会恢复默认，后端设置与图库数据应保留。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 补丁序列 | Windows 本地 | 生成 0012 / 0013，运行 `deno task patch tauri --check` | 0012 只含 `ipc-protocol.js`；0013 只含 `crates/tauri/`；`OK dry-run` | 2026-10-30 沙箱外复跑：`tauri: OK dry-run`；`--gen --from 0012` 的输出与 `0013-…patch` 逐字节一致（11 files, 34+/33-），`--gen --from 0013` 为没有剩余改动。此前 codex 沙箱内： `.git/modules/third/tauri/objects` 只读，`--gen` 无法写入对象库，`--check` 报子模块未初始化；改由纯 `git diff` 生成补丁，并在临时上游基线顺序 `git apply --check` / `git apply` 0001–0013，全部通过 |
+| [x] | S2 应用检查 | Windows 本地 | `CARGO_TARGET_DIR=D:/Codes/kabegame/target-check deno task check -c kabegame` | 0 error | 2026-10-30 沙箱外复跑：vue-tsc 0 error、cargo 0 error（62s），本次改动的文件没有 warning。codex 沙箱内两次卡在 `cef-dll-sys` 的 CMake/Ninja 阶段 |
+| [x] | S3 runtime 单测 | Windows 本地 | 分别运行 `ipc::`、`protocol::` | 全部通过 | `ipc::` 8 passed、`protocol::` 5 passed，0 failed |
+| [x] | S4 应用单测 | Windows 本地 | 运行 `--lib wpe_web` | 全部通过 | 2 passed，0 failed |
+| [ ] | S5 Android 静态检查 | Windows 本地 | `deno task check -c kabegame --mode android --skip vue` | Android 绕行仍编译 | 构建系统报 `rusty_v8 Android 自建产物缺失: bin\android\arm64\rusty_v8-build/`，未进入编译 |
+| [x] | B1 主窗口 | Windows CEF dev | 观察 invoke 请求 | `POST ipc://localhost/<cmd>` 200，本地命令可用 | 2026-10-30：`convertFileSrc(cmd, "ipc")` 返回 `ipc://localhost/<cmd>`；`get_supported_image_types`、`get_plugins` 都是 `POST ipc://localhost/…` 200、`Tauri-Response: ok`（应用页 `http://localhost:1420` 仍判为本地来源） |
+| [x] | B2 壁纸窗口 | Windows CEF dev | `file:` 页 invoke `wpe_web_pull_state`、`get_plugins` | 前者成功，后者被 ACL 拒绝 | 2026-10-30：壁纸窗口在 `file://` 入口上；`wpe_web_pull_state` 经 `ipc://localhost` 返回 `imageId 12098` 与属性；`get_plugins` 报 `not allowed by ACL`（`Tauri-Response: error`），仍是远程 `file:` 来源 |
+| [x] | B3 畅游 https | Windows CEF dev | 打开 `https://example.com/`，调用注入命令、尝试 `read_plugin_file`，再插入 `no-referrer` meta | 主通道 200，受限命令被 ACL 拒绝，`no-referrer` 下正常 | 2026-10-30：刷新后 `surf_collect_attach`、`surf_report_url`、`get_webview_i18n` 都是 `POST ipc://localhost/…` 200；`read_plugin_file` 报 `not allowed by ACL`；插 `no-referrer` meta 后 invoke 仍正常 |
+| [x] | B4 严格 CSP 与 raw body | Windows CEF dev | 畅游 x.com 并下载视频 | 无 `connect-src` 违规和回落，`crawl_fs_fwrite` 是 raw body | 2026-10-30（`https://x.com/home`，已登录）：刷新后没有 `connect-src` 违规日志和「IPC custom protocol failed」回落警告，注入脚本三个命令都走 `ipc://localhost` 200；`read_plugin_file` 被 ACL 拒绝。未实际下载视频：改为以 `Uint8Array` 作 invoke 参数，请求为 `ipc://localhost/…`、`Content-Type: application/octet-stream`、200，即 raw body 走主通道（修复前 x.com 上主通道被 CSP 拦，只能回落 `cef-ipc` JSON） |
+| [x] | B5 frame 隔离 | Windows CEF dev | 检查导航栏、图库预览 iframe、插件详情 iframe | opaque iframe 无 invoke key，不能调用 IPC | 2026-10-30：主窗口临时插入 `sandbox="allow-scripts"`、内层 `connect-src 'none'` 的 srcdoc iframe（测完移除）：`__TAURI_INTERNALS__` 为 `undefined`；`fetch(ipc://localhost/get_plugins)` 绕过 CSP 到达 handler，返回 500 `missing Tauri-Invoke-Key header`；`cef-ipc://` 返回 400 `only accepted from the main frame`。导航栏随畅游会话正常工作 |
+| [ ] | C1 正式版应用页 | Windows CEF release | 打开主窗口并调用本地命令 | 地址 `tauri://localhost/`，页面、JS 模块和 IPC 正常 | 需用户在隔离环境执行：release 版使用真实数据目录与正式版 CEF profile，本分支带 v047 / v048 数据库迁移，在用户真实数据上运行会升级其数据库。C1–C5 同此 |
+| [ ] | C2 壁纸窗口导航 | Windows CEF release | 切到网页壁纸再切回 | 应用页 `tauri://localhost/index.html?window=wallpaper` 正常恢复 | |
+| [ ] | C3 本地文件 | Windows CEF release | 查看图库媒体、`fetch(file:)` 复制、WPE iframe、拖出 | 文件加载、复制和拖出正常 | |
+| [ ] | C4 远程图片 | Windows CEF release | 查看插件商店图标与详情模板的 `http://` 图片 | 记录与 macOS / Linux 相同的混合内容表现 | |
+| [ ] | C5 用户数据 | Windows CEF release | 升级后查看界面偏好与后端数据 | 界面偏好恢复默认，后端设置与图库保留 | |
+| [ ] | D1 桌面其它平台 | macOS / Linux CEF | 冒烟主窗口、畅游、壁纸 | 原有功能正常 | |
+| [ ] | D2 Android | Android 真机 | 主界面与畅游的 Channel 数据 | 正常 | |
+
 ## tauri 补丁 0012：畅游 https 页面的 IPC `Origin`
 
-2026-10-30：Windows 上 Tauri IPC 主通道是 `http://ipc.localhost/<cmd>`。https 页面（畅游站点）按默认 referrer 策略 `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`（页面声明 `no-referrer` 时 http 页面也一样），Tauri `ipc` handler 在 `parse_invoke_request` 回 500 `Origin header is not a valid URL`。500 让 fetch 正常 resolve，`ipc-protocol.js` 不回退 `postMessage`，畅游页注入脚本的 `surf_report_url`、`surf_collect_attach`、`get_webview_i18n` 与页面 invoke 全部失败。新增 `third-patches/tauri/0012-tauri-ipc-origin-referrer-policy.patch`，给主通道 fetch 固定 `referrerPolicy: 'origin'`；`tauri-runtime-cef` 的 `cef-ipc` 回退 shim 同样设置。opaque 来源（`file:` 文档、沙箱 iframe）仍发 `null`，`file:` frame 由运行时 `pin_file_frame_origin` 改写，不受影响。
+2026-10-30：Windows 上 Tauri IPC 主通道原为 `http://ipc.localhost/<cmd>`，已由 0013 改成 `ipc://localhost/<cmd>`。https 页面（畅游站点）按默认 referrer 策略 `strict-origin-when-cross-origin` 发旧地址属于降级，CEF 把 `Origin` 发成 `null`（页面声明 `no-referrer` 时 http 页面也一样），Tauri `ipc` handler 在 `parse_invoke_request` 回 500 `Origin header is not a valid URL`。500 让 fetch 正常 resolve，`ipc-protocol.js` 不回退 `postMessage`，畅游页注入脚本的 `surf_report_url`、`surf_collect_attach`、`get_webview_i18n` 与页面 invoke 全部失败。新增 `third-patches/tauri/0012-tauri-ipc-origin-referrer-policy.patch`，给主通道 fetch 固定 `referrerPolicy: 'origin'`；`tauri-runtime-cef` 的 `cef-ipc` 回退 shim 同样设置。opaque 来源（`file:` 文档、沙箱 iframe）仍发 `null`，`file:` frame 由运行时 `pin_file_frame_origin` 改写，不受影响。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |

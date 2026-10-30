@@ -30,9 +30,9 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 
 | Tauri 能力 | CEF 实现 |
 | --- | --- |
-| 前端资源 | 全局 scheme handler factory 服务 `tauri://localhost`；Windows 上 Tauri core 把自定义 scheme `X` 改写为 `http://X.localhost`（见 `tauri` manager `webview.rs`），故 CEF 对 `http` scheme + `X.localhost` 域注册 factory（`protocol::cef_scheme_and_domain`），否则 `http://tauri.localhost` 会当成真实网络请求 → `ERR_CONNECTION_REFUSED` |
-| `invoke()` | 普通 invoke 走上游 `fetch(ipc://localhost/<cmd>)` 主通道，直接由 Tauri 注册的 `ipc` scheme handler 承接，请求与响应在 DevTools Network 面板可见（CEF scheme handler 处理的请求不发 CORS 预检、只在响应上校验 ACAO，Tauri `ipc` handler 返回 `*`；2026-10 Linux 实测首帧起全部 200、无回退）；fetch 失败时上游脚本自动回退 `window.ipc.postMessage`，由 shim 经 `cef-ipc://` JSON 桥转给 `ipc_handler`（JSON 通道，`Uint8Array` 会退化成数字数组）；**二进制 body**（`InvokeBody::Raw`，如 `crawl_fs_fwrite` 流式写）直接用标准 `invoke(cmd, Uint8Array, { headers })` 走主通道；`ipc` / `cef-ipc` scheme 注册带 `CSP_BYPASSING`，surf / 爬虫等第三方页面的严格 CSP 拦不住 IPC（2026-10 Linux 畅游窗口实测：`connect-src 'self'` 下标准 invoke 仍走 `ipc://`，raw body 可达） |
-| 初始化脚本 | browser 创建时通过版本化 `extra_info` 传给 renderer，在每个新 V8 context 的 `RenderProcessHandler::on_context_created` 中同步执行，保证首次加载、刷新与跨页面导航均为 document-start |
+| 前端资源 | 三个平台统一由全局 scheme handler factory 服务原生 `tauri://localhost`；Windows 依赖 tauri 补丁 0013，拉取后须重新应用补丁序列 |
+| `invoke()` | 三个平台的普通 invoke 都走上游 `fetch(ipc://localhost/<cmd>)` 主通道，直接由 Tauri 注册的 `ipc` scheme handler 承接，请求与响应在 DevTools Network 面板可见（CEF scheme handler 处理的请求不发 CORS 预检、只在响应上校验 ACAO，Tauri `ipc` handler 返回 `*`；2026-10 Linux 实测首帧起全部 200、无回退）；fetch 失败时上游脚本自动回退 `window.ipc.postMessage`，由 shim 经 `cef-ipc://` JSON 桥转给 `ipc_handler`（JSON 通道，`Uint8Array` 会退化成数字数组）；**二进制 body**（`InvokeBody::Raw`，如 `crawl_fs_fwrite` 流式写）直接用标准 `invoke(cmd, Uint8Array, { headers })` 走主通道；`ipc` / `cef-ipc` scheme 注册带 `CSP_BYPASSING`，Windows / macOS / Linux 上第三方页面的严格 CSP 都拦不住 IPC（Linux 已实测，Windows 待真机验证） |
+| 初始化脚本 | browser 创建时通过版本化 `extra_info` 传给 renderer，在每个新 V8 context 的 `RenderProcessHandler::on_context_created` 中同步执行，保证首次加载、刷新与跨页面导航均为 document-start。CEF 对隔离世界（DevTools、CDP `Page.createIsolatedWorld` 等）也回调该函数，运行时只在回调上下文与 `frame.v8_context()`（主世界）相同时注入；否则隔离世界与页面共享 DOM，监听与 IPC 上报会重复一份（例如畅游右键菜单叠两层） |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
 | 权限请求 | Tauri 2.12 的 `permission_request_handler` 转发到 CEF `PermissionHandler`；媒体权限映射为麦克风、摄像头、屏幕捕获，普通权限按 CEF bitmask 逐项映射。组合请求中任一项拒绝即整体拒绝，全部允许才整体允许，其余交回 CEF 默认处理 |
 | Cookie API | CEF 全局 `CookieManager` 映射到 Tauri `cookies_for_url` / `cookies` / `set_cookie` / `delete_cookie` |
@@ -89,22 +89,12 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   浏览器窗口」（曾表现为开机多出一个带应用图标的 Chrome 窗口），并调 app 层经
   `set_already_running_app_relaunch_handler` 注册的处理器——kabegame 在 `init` 里把它接到
   `ensure_main_window` + `.kgpg` 导入事件，与 IPC `AppShowWindow`/`AppImportPlugin` 同语义。
-- **前端/asset scheme 与 Linux 不同**：Windows/Android 上 Tauri core 用 `http://<scheme>.localhost`
-  提供自定义 scheme 资源（`tauri_protocol_url` / `window_origin` 改写，默认 `http`，
-  由 `use_https_scheme` 决定 http/https），主框架加载的是 `http://tauri.localhost`。因此
-  `protocol.rs` 在 Windows 对 `http` scheme + `<scheme>.localhost` 域注册 factory，而非
-  自定义 scheme（否则连接被当真实网络请求 → `ERR_CONNECTION_REFUSED`，页面 refused/白屏）。
-  `cef-ipc`（runtime 自有 postMessage 通道）在所有平台仍是自定义 scheme。
-- **https 页面的 IPC `Origin`**：Windows 上 `ipc://` 主通道也是 `http://ipc.localhost`。https 页面（畅游站点）按默认
-  referrer 策略 `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`，Tauri `ipc` handler 回 500
-  「Origin header is not a valid URL」，而 500 让 fetch 正常 resolve、不触发 `postMessage` 回退。`third-patches/tauri/0012`
-  给主通道 fetch 固定 `referrerPolicy: 'origin'`，`ipc.rs` 的 `cef-ipc` shim 同样设置；opaque 来源（`file:`、沙箱 frame）
-  仍是 `null`，`file:` frame 由 `pin_file_frame_origin` 改写。
-- **请求 URI 还原**：Tauri 的 handler 仍按自定义 scheme 约定解析 URI（`protocol/tauri.rs`
-  对整串 `strip_prefix("tauri://localhost")`）。CEF 拿到的是 `http://tauri.localhost/...`，
-  strip 失败 → 空路径 → 回退 `index.html`（JS 模块被当 `text/html` → MIME 报错）。故
-  `request_to_http` 在 Windows 把 `http(s)://<scheme>.localhost/<path>` 还原为
-  `<scheme>://localhost/<path>` 再交给 handler，与 wry 行为对齐。
+- **三平台原生 scheme**：Windows、macOS、Linux 都由 CEF 直接承接 `tauri://localhost`、
+  `ipc://localhost` 等逻辑 scheme；Windows 依赖 `third-patches/tauri/0013`。
+  runtime 与 tauri 补丁须同时生效，否则旧 Tauri 仍生成 `http://tauri.localhost` 而 CEF 不再注册该映射，页面无法加载。
+- **IPC `Origin`**：`third-patches/tauri/0012` 给主通道 fetch 固定 `referrerPolicy: 'origin'`，
+  防止声明 `no-referrer` 的页面送出 `Origin: null`；`ipc.rs` 的 `cef-ipc` shim 同样设置。
+  opaque 来源（`file:`、沙箱 frame）仍是 `null`，`file:` frame 由 `pin_file_frame_origin` 改写。
 - `WindowBuilder::owner` / `parent` 通过创建后的 `SetWindowLongPtrW(GWLP_HWNDPARENT)` /
   `SetParent` 尽力实现（CEF Views 不暴露创建参数）；kabegame 当前无调用方。
   `shadow` 无运行时等价物，no-op。`no_redirection_bitmap` 必须在 CEF 创建 HWND 时设置，

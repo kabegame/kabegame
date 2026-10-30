@@ -21,7 +21,7 @@
 
 JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通用 VFS 原语：页面 JS 读取/捕获字节，在当前任务或畅游会话的 `PluginVfs` 中分块落盘；MSE 多 SourceBuffer 再显式调用 `crawl_ffmpeg_mux` 做 stream-copy 合流。crawler 把最终虚拟路径交给 `crawl_download_image`，由 `task-vfs://` scheme 流式读入下载管线；surf 则调用 `surf_import_media`，以 `PostprocessSource::Path` 直通后处理。浏览器侧写盘进度仍通过 toast 展示，不再存在专用媒体上传会话或 base64 IPC。
 
-分块落盘的 raw 二进制 IPC 统一走标准 invoke：`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令以 `invoke(cmd, Uint8Array, { headers })` 发出，CEF 桌面端由 `fetch(ipc://localhost/<cmd>)` 主通道携带二进制 body（`InvokeBody::Raw`），`ipc` scheme 带 `CSP_BYPASSING`，第三方页面的严格 CSP 也拦不住；请求与响应在 DevTools Network 面板可见。fetch 失败时上游回退的 postMessage 只能传 JSON，会让二进制退化成数字数组。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
+分块落盘的 raw 二进制 IPC 统一走标准 invoke：`crawl_fs_fwrite` / `crawl_fs_write_file` 等 raw body 命令以 `invoke(cmd, Uint8Array, { headers })` 发出，CEF 桌面三平台（包括 Windows）由 `fetch(ipc://localhost/<cmd>)` 主通道携带二进制 body（`InvokeBody::Raw`），`ipc` scheme 带 `CSP_BYPASSING`，第三方页面的严格 CSP 也拦不住；请求与响应在 DevTools Network 面板可见。fetch 失败时上游回退的 postMessage 只能传 JSON，会让二进制退化成数字数组。见 `src-tauri/tauri-runtime-cef/src/ipc.rs`。
 
 ---
 

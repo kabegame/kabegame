@@ -80,8 +80,7 @@ struct ResponseState {
 
 // 全局动态分发 factory:每个逻辑 scheme 只注册一个实例,请求期按 browser id 查
 // label/handler。`logical_scheme` 是 `pending.uri_scheme_protocols` 的键(如
-// `tauri`),Windows 上虽以 `http`+`<scheme>.localhost` 域注册(见
-// `ensure_global_scheme_factory`),但这里仍用逻辑 scheme 查 handler。
+// `tauri`),三平台均用逻辑 scheme 注册并查找 handler。
 wrap_scheme_handler_factory! {
     struct GlobalSchemeHandlerFactory { logical_scheme: String }
 
@@ -307,50 +306,18 @@ pub(crate) fn take_webview_protocols<T: UserEvent>(
     Ok((label, schemes))
 }
 
-/// 逻辑 scheme(`pending.uri_scheme_protocols` 的键,如 `tauri`/`asset`/`ipc`)在
-/// 具体平台上实际由哪个 CEF scheme + 域来承载。
-///
-/// Windows/Android 上 Tauri 不用自定义 scheme,而是把自定义 scheme `X` 的资源经
-/// `http://X.localhost` 提供(见 `tauri` manager `webview.rs` 的 `window_origin`
-/// 改写与 `tauri_protocol_url`);因此主框架加载的 URL 是 `http://tauri.localhost`,
-/// CEF 必须对 **`http` scheme + `X.localhost` 域**注册 factory,而不是注册自定义
-/// scheme `X`(后者永不会被导航命中,请求会被当成真实网络请求 → ERR_CONNECTION_REFUSED)。
-///
-/// 例外:`cef-ipc` 是本 runtime 自有的 postMessage 通道(shim 里用
-/// `cef-ipc://localhost/`,见 [`crate::ipc`]),任何平台都保持自定义 scheme。
-///
-/// CEF Views 只用于 Linux/Windows,Android 不触达本 crate,故只需区分 Windows。
-#[cfg(target_os = "windows")]
-fn cef_scheme_and_domain(logical_scheme: &str) -> (String, Option<String>) {
-    if logical_scheme == crate::ipc::CEF_IPC_SCHEME {
-        (logical_scheme.to_string(), None)
-    } else {
-        ("http".to_string(), Some(format!("{logical_scheme}.localhost")))
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn cef_scheme_and_domain(logical_scheme: &str) -> (String, Option<String>) {
-    (logical_scheme.to_string(), None)
-}
-
 /// 向 CEF 全局注册 `logical_scheme` 的 factory,首次调用才实际注册,重复调用为 no-op。
 ///
-/// 注册用的 CEF scheme/域由 [`cef_scheme_and_domain`] 决定(Windows 走
-/// `http` + `<scheme>.localhost`);但 factory 始终以逻辑 scheme 为键,请求期在
-/// [`PROTOCOL_REGISTRY`] 里查 `entry.schemes.get(logical_scheme)`,故去重集合也以
-/// 逻辑 scheme 为键。
+/// 三平台都以逻辑 scheme、空域注册；请求期按 browser id 查对应 handler。
 fn ensure_global_scheme_factory(logical_scheme: &str) -> Result<()> {
     let mut set = registered_schemes().lock().unwrap();
     if set.contains(logical_scheme) {
         return Ok(());
     }
-    let (cef_scheme, domain) = cef_scheme_and_domain(logical_scheme);
     let mut factory = GlobalSchemeHandlerFactory::new(logical_scheme.to_string());
-    let domain = domain.map(|d| CefString::from(d.as_str()));
     let ok = cef::register_scheme_handler_factory(
-        Some(&CefString::from(cef_scheme.as_str())),
-        domain.as_ref(),
+        Some(&CefString::from(logical_scheme)),
+        None,
         Some(&mut factory),
     );
     if ok == 1 {
@@ -363,27 +330,19 @@ fn ensure_global_scheme_factory(logical_scheme: &str) -> Result<()> {
     }
 }
 
-/// 把 Windows 的 `http(s)://<scheme>.localhost[:port]/<path>?<query>` 还原为
-/// `<scheme>://localhost/<path>?<query>`,使 Tauri 的自定义-scheme handler 能正确
-/// 解析(见 [`request_to_http`] 处的说明)。非 `*.localhost` 或非 http(s) 的请求
-/// (如 `cef-ipc://localhost/`)原样返回。
-#[cfg(target_os = "windows")]
-fn rewrite_windows_localhost_uri(uri: http::Uri) -> http::Uri {
-    if !matches!(uri.scheme_str(), Some("http") | Some("https")) {
-        return uri;
+/// CEF 把自定义 scheme 注册为标准来源；`url` crate 对它们仍返回 opaque origin。
+/// 对有 host 的非特殊 scheme 手动拼出 Web origin，其余使用 `url` 的元组 origin。
+pub(crate) fn web_origin(url: &url::Url) -> Option<String> {
+    let origin = url.origin();
+    if origin.is_tuple() {
+        return Some(origin.ascii_serialization());
     }
-    let Some(host) = uri.host() else { return uri };
-    let Some(custom_scheme) = host.strip_suffix(".localhost") else {
-        return uri;
-    };
-    if custom_scheme.is_empty() {
-        return uri;
+    if url.scheme() == "file" {
+        return None;
     }
-    let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
-    match format!("{custom_scheme}://localhost{path_and_query}").parse() {
-        Ok(rewritten) => rewritten,
-        Err(_) => uri,
-    }
+    let host = url.host_str()?;
+    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
+    Some(format!("{}://{host}{port}", url.scheme()))
 }
 
 /// `file:` 文档的 `Origin` 是 `null`:Tauri 的 `ipc://` 主通道解析失败后,前端脚本改走
@@ -415,14 +374,6 @@ fn request_to_http(request: &cef::Request) -> std::result::Result<HttpRequest<Ve
         .to_string()
         .parse()
         .map_err(|_| ())?;
-    // Windows 上主框架/asset 请求经 `http://<scheme>.localhost/<path>` 到达(见
-    // `cef_scheme_and_domain`),但 Tauri 的 scheme handler 仍按自定义 scheme 约定
-    // 解析 URI —— 尤其 `protocol/tauri.rs` 会 `strip_prefix("tauri://localhost")`,
-    // 拿到 `http://...` 会得到空路径 → 回退 index.html(JS 模块因此被当 text/html)。
-    // 与 wry 的 Windows 行为对齐:把 URI 还原成 `<scheme>://localhost/<path>` 再交给
-    // handler。asset handler 只读 `uri().path()`,不受影响。
-    #[cfg(target_os = "windows")]
-    let uri = rewrite_windows_localhost_uri(uri);
     let mut http_request = HttpRequest::new(post_data_bytes(request));
     *http_request.method_mut() = method;
     *http_request.uri_mut() = uri;
@@ -477,6 +428,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn web_origin_handles_native_and_http_schemes() {
+        assert_eq!(
+            web_origin(&url::Url::parse("tauri://localhost/index.html").unwrap()).as_deref(),
+            Some("tauri://localhost")
+        );
+        assert_eq!(
+            web_origin(&url::Url::parse("ipc://localhost/command").unwrap()).as_deref(),
+            Some("ipc://localhost")
+        );
+        assert_eq!(
+            web_origin(&url::Url::parse("https://example.com:8443/path").unwrap()).as_deref(),
+            Some("https://example.com:8443")
+        );
+        assert_eq!(
+            web_origin(&url::Url::parse("file:///D:/wallpaper/index.html").unwrap()),
+            None
+        );
+        assert_eq!(web_origin(&url::Url::parse("file://server/share").unwrap()), None);
+    }
+
+    #[test]
     fn bad_request_response_is_stable() {
         let response = bad_request();
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
@@ -525,7 +497,7 @@ mod tests {
         assert_eq!(origin_of(&request), Some("http://127.0.0.1:33050"));
         // 非 file: frame 缺 Origin 时也不补
         let mut request = request_with_origin(None);
-        pin_file_frame_origin(&mut request, &frame("http://tauri.localhost/"));
+        pin_file_frame_origin(&mut request, &frame("tauri://localhost/"));
         assert_eq!(origin_of(&request), None);
         // frame URL 未知时不动
         let mut request = request_with_origin(Some("null"));
