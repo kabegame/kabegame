@@ -1,0 +1,294 @@
+diff --git a/crates/tauri/scripts/core.js b/crates/tauri/scripts/core.js
+index 86bafacc9cc79775e0001dffe3e31c393e745562..cfb108e6ebcd354887eae7414ab0f9139d0ed00b 100644
+--- a/crates/tauri/scripts/core.js
++++ b/crates/tauri/scripts/core.js
+@@ -13,7 +13,7 @@
+   Object.defineProperty(window.__TAURI_INTERNALS__, 'convertFileSrc', {
+     value: function (filePath, protocol = 'asset') {
+       const path = encodeURIComponent(filePath)
+-      return osName === 'windows' || osName === 'android'
++      return osName === 'android'
+         ? `${protocolScheme}://${protocol}.localhost/${path}`
+         : `${protocol}://localhost/${path}`
+     }
+diff --git a/crates/tauri/src/app.rs b/crates/tauri/src/app.rs
+index d37d1273cd41b493cbd5df575bb1e8353a87e065..923cf8ca88cae9eb24a06f7d71e344c5932c133a 100644
+--- a/crates/tauri/src/app.rs
++++ b/crates/tauri/src/app.rs
+@@ -339,7 +339,7 @@ impl<R: Runtime> AssetResolver<R> {
+   ///  Same as [`AssetResolver::get`] but resolves the custom protocol scheme based on a parameter.
+   ///
+   /// - `use_https_scheme`: If `true` when using [`Pattern::Isolation`](crate::Pattern::Isolation),
+-  ///   the csp header will contain `https://tauri.localhost` instead of `http://tauri.localhost`
++  ///   the CSP header on Android will contain `https://tauri.localhost` instead of `http://tauri.localhost`
+   pub fn get_for_scheme(&self, path: String, use_https_scheme: bool) -> Option<Asset> {
+     #[cfg(dev)]
+     {
+@@ -2261,7 +2261,7 @@ tauri::Builder::default()
+   /// different Origin headers across platforms:
+   ///
+   /// - macOS, iOS and Linux: `<scheme_name>://localhost/<path>` (so it will be `my-scheme://localhost/path/to/page).
+-  /// - Windows and Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
++  /// - Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
+   ///   To use `https` instead of `http`, use [`super::webview::WebviewBuilder::use_https_scheme`].
+   #[must_use]
+   pub fn register_uri_scheme_protocol<
+@@ -2329,7 +2329,7 @@ tauri::Builder::default()
+   /// different Origin headers across platforms:
+   ///
+   /// - macOS, iOS and Linux: `<scheme_name>://localhost/<path>` (so it will be `my-scheme://localhost/path/to/page).
+-  /// - Windows and Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
++  /// - Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
+   ///   To use `https` instead of `http`, use [`super::webview::WebviewBuilder::use_https_scheme`].
+   #[must_use]
+   pub fn register_asynchronous_uri_scheme_protocol<
+diff --git a/crates/tauri/src/manager/mod.rs b/crates/tauri/src/manager/mod.rs
+index 1cfd5e47ca2cc71912896bd9d9a291b7f02523b9..941020c7231347e2f764173e1184bbce36add49d 100644
+--- a/crates/tauri/src/manager/mod.rs
++++ b/crates/tauri/src/manager/mod.rs
+@@ -332,7 +332,7 @@ impl<R: Runtime> AppManager<R> {
+   }
+ 
+   /// The `tauri` custom protocol URL we use to serve the embedded assets.
+-  /// Returns `tauri://localhost` or its `wry` workaround URL `http://tauri.localhost`/`https://tauri.localhost`
++  /// Returns `tauri://localhost`, or Android's `http(s)://tauri.localhost` workaround URL.
+   pub(crate) fn tauri_protocol_url(&self, https: bool) -> Cow<'_, Url> {
+     Cow::Owned(Url::parse(&crate::protocol::origin("tauri", https)).unwrap())
+   }
+@@ -786,7 +786,7 @@ mod test {
+     {
+       assert_eq!(
+         manager.get_app_url(false).to_string(),
+-        if cfg!(windows) || cfg!(target_os = "android") {
++        if cfg!(target_os = "android") {
+           "http://tauri.localhost/"
+         } else {
+           "tauri://localhost"
+@@ -794,7 +794,7 @@ mod test {
+       );
+       assert_eq!(
+         manager.get_app_url(true).to_string(),
+-        if cfg!(windows) || cfg!(target_os = "android") {
++        if cfg!(target_os = "android") {
+           "https://tauri.localhost/"
+         } else {
+           "tauri://localhost"
+diff --git a/crates/tauri/src/manager/webview.rs b/crates/tauri/src/manager/webview.rs
+index 142297693057ee0e8b65477677f1d71806627849..0e46ab86b8c13e6c3a70e386ec9e4dce172c1a4e 100644
+--- a/crates/tauri/src/manager/webview.rs
++++ b/crates/tauri/src/manager/webview.rs
+@@ -246,7 +246,7 @@ impl<R: Runtime> WebviewManager<R> {
+     let window_url = Url::parse(&pending.url).unwrap();
+     let window_origin = if window_url.scheme() == "data" {
+       "null".into()
+-    } else if (cfg!(windows) || cfg!(target_os = "android"))
++    } else if cfg!(target_os = "android")
+       && window_url.scheme() != "http"
+       && window_url.scheme() != "https"
+     {
+diff --git a/crates/tauri/src/plugin.rs b/crates/tauri/src/plugin.rs
+index 6801928636e23bedda01e922b6c9c4191b216bd3..e1e397b4779191c2cad7e774ce4fe5015fac0392 100644
+--- a/crates/tauri/src/plugin.rs
++++ b/crates/tauri/src/plugin.rs
+@@ -630,7 +630,7 @@ impl<R: Runtime, C: DeserializeOwned> Builder<R, C> {
+   /// different Origin headers across platforms:
+   ///
+   /// - macOS, iOS and Linux: `<scheme_name>://localhost/<path>` (so it will be `my-scheme://localhost/path/to/page).
+-  /// - Windows and Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
++  /// - Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
+   ///   To use `https` instead of `http`, use [`super::webview::WebviewBuilder::use_https_scheme`].
+   #[must_use]
+   pub fn register_uri_scheme_protocol<
+@@ -704,7 +704,7 @@ impl<R: Runtime, C: DeserializeOwned> Builder<R, C> {
+   /// different Origin headers across platforms:
+   ///
+   /// - macOS, iOS and Linux: `<scheme_name>://localhost/<path>` (so it will be `my-scheme://localhost/path/to/page).
+-  /// - Windows and Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
++  /// - Android: `http://<scheme_name>.localhost/<path>` by default (so it will be `http://my-scheme.localhost/path/to/page`).
+   ///   To use `https` instead of `http`, use [`super::webview::WebviewBuilder::use_https_scheme`].
+   #[must_use]
+   pub fn register_asynchronous_uri_scheme_protocol<
+diff --git a/crates/tauri/src/protocol/isolation.rs b/crates/tauri/src/protocol/isolation.rs
+index e1407159ed847750c12b83e41336edc4b84c17d7..87d77f66bd20cb79672cb4e521ffafbaf3457bd1 100644
+--- a/crates/tauri/src/protocol/isolation.rs
++++ b/crates/tauri/src/protocol/isolation.rs
+@@ -26,7 +26,7 @@ pub fn get<R: Runtime>(
+   window_origin: String,
+   use_https_scheme: bool,
+ ) -> UriSchemeProtocolHandler {
+-  let frame_src = if cfg!(any(windows, target_os = "android")) {
++  let frame_src = if cfg!(target_os = "android") {
+     let https = if use_https_scheme { "https" } else { "http" };
+     format!("{https}://{schema}.localhost")
+   } else {
+diff --git a/crates/tauri/src/protocol/mod.rs b/crates/tauri/src/protocol/mod.rs
+index e6420793dbaf3cb265e5175e5211ddfff5a15454..c55051777a3a6c0f96f366a62d98a33615907b8c 100644
+--- a/crates/tauri/src/protocol/mod.rs
++++ b/crates/tauri/src/protocol/mod.rs
+@@ -27,10 +27,11 @@ pub(crate) const ENCODE_URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+ 
+ /// The origin (`scheme://host`, without a trailing slash) a custom protocol is served from.
+ ///
+-/// On Windows and Android custom protocols are served over `http(s)://{scheme}.localhost`;
++/// On Android custom protocols are served over `http(s)://{scheme}.localhost`;
+ /// everywhere else they are served over `{scheme}://localhost`.
+ pub(crate) fn origin(scheme: &str, use_https: bool) -> String {
+-  if cfg!(windows) || cfg!(target_os = "android") {
++  // Kabegame: Windows serves native schemes through CEF; only Android uses the HTTP workaround.
++  if cfg!(target_os = "android") {
+     let http = if use_https { "https" } else { "http" };
+     format!("{http}://{scheme}.localhost")
+   } else {
+diff --git a/crates/tauri/src/protocol/tauri.rs b/crates/tauri/src/protocol/tauri.rs
+index c93add83c1ad9c3d008247328fcf0fe0a7cf6771..318c7b3250eae56796c25e346fcf32480cafc778 100644
+--- a/crates/tauri/src/protocol/tauri.rs
++++ b/crates/tauri/src/protocol/tauri.rs
+@@ -159,7 +159,7 @@ async fn get_response<R: Runtime>(
+   let path = path
+     .strip_prefix("tauri://localhost")
+     .map(|p| p.to_string())
+-    // the `strip_prefix` only returns None when a request is made to `https://tauri.$P` on Windows and Android
++    // the `strip_prefix` only returns None for Android's `https://tauri.$P` workaround
+     // where `$P` is not `localhost/*`
+     .unwrap_or_default();
+ 
+diff --git a/crates/tauri/src/test/mod.rs b/crates/tauri/src/test/mod.rs
+index 9ad062c9b7143c1ef98e9cb6c5780aa9addb4460..a14568f41821712a9b9ffdd377f749b9b2403f1a 100644
+--- a/crates/tauri/src/test/mod.rs
++++ b/crates/tauri/src/test/mod.rs
+@@ -217,7 +217,7 @@ pub fn mock_app() -> App<MockRuntime> {
+ ///             cmd: "ping".into(),
+ ///             callback: tauri::ipc::CallbackFn(0),
+ ///             error: tauri::ipc::CallbackFn(1),
+-///             url: if cfg!(any(windows, target_os = "android")) {
++///             url: if cfg!(target_os = "android") {
+ ///                 "http://tauri.localhost"
+ ///             } else {
+ ///                 "tauri://localhost"
+@@ -280,7 +280,7 @@ pub fn assert_ipc_response<
+ ///             cmd: "ping".into(),
+ ///             callback: tauri::ipc::CallbackFn(0),
+ ///             error: tauri::ipc::CallbackFn(1),
+-///             url: if cfg!(any(windows, target_os = "android")) {
++///             url: if cfg!(target_os = "android") {
+ ///                 "http://tauri.localhost"
+ ///             } else {
+ ///                 "tauri://localhost"
+diff --git a/crates/tauri/src/webview/mod.rs b/crates/tauri/src/webview/mod.rs
+index 3abb7c0a8d86c0e8b04bede96dc66362e2b25300..80bb313264dc34ad9543e47dd7de99c92aa99cb3 100644
+--- a/crates/tauri/src/webview/mod.rs
++++ b/crates/tauri/src/webview/mod.rs
+@@ -1164,7 +1164,7 @@ fn main() {
+     self
+   }
+ 
+-  /// Sets whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android. Defaults to `false`.
++  /// Sets whether Android custom protocols use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost`. Defaults to `false`.
+   ///
+   /// ## Note
+   ///
+@@ -1929,9 +1929,9 @@ tauri::Builder::default()
+   /// [`app.security.csp`](https://v2.tauri.app/reference/config/#csp-1) directive,
+   /// e.g. `img-src 'self' asset: http://asset.localhost`.
+   ///
+-  /// On Windows and Android the URL is `http://{protocol}.localhost/{path}`
++  /// On Android the URL is `http://{protocol}.localhost/{path}`
+   /// (or `https://` if the webview was built with [`WebviewBuilder::use_https_scheme`]);
+-  /// on macOS, Linux and iOS it is `{protocol}://localhost/{path}`.
++  /// on Windows, macOS, Linux and iOS it is `{protocol}://localhost/{path}`.
+   ///
+   /// # Arguments
+   ///
+@@ -1995,12 +1995,12 @@ tauri::Builder::default()
+         let scheme = current_url.scheme();
+         let protocols = self.manager().webview.uri_scheme_protocols.lock().unwrap();
+ 
+-        #[cfg(all(not(windows), not(target_os = "android")))]
++        #[cfg(not(target_os = "android"))]
+         let local = protocols.contains_key(scheme);
+ 
+-        // on window and android, custom protocols are `http://<protocol-name>.path/to/route`
++        // on Android, custom protocols are `http://<protocol-name>.localhost/path/to/route`
+         // so we check using the first part of the domain
+-        #[cfg(any(windows, target_os = "android"))]
++        #[cfg(target_os = "android")]
+         let local = {
+           let scheme = scheme == self.manager().tauri_protocol_url(uses_https).scheme();
+           let protocol = current_url
+@@ -2705,7 +2705,7 @@ mod tests {
+     let convert =
+       |w: &crate::WebviewWindow<_>, protocol| w.convert_file_src(path, protocol).unwrap();
+ 
+-    #[cfg(any(windows, target_os = "android"))]
++    #[cfg(target_os = "android")]
+     {
+       assert_eq!(
+         convert(&http, None),
+@@ -2720,7 +2720,7 @@ mod tests {
+         format!("http://custom.localhost/{encoded}")
+       );
+     }
+-    #[cfg(not(any(windows, target_os = "android")))]
++    #[cfg(not(target_os = "android"))]
+     {
+       assert_eq!(convert(&http, None), format!("asset://localhost/{encoded}"));
+       assert_eq!(
+@@ -2751,19 +2751,19 @@ mod tests {
+   fn tauri_protocol_is_local() {
+     let webview = test_webview_window().webview;
+ 
+-    #[cfg(all(not(windows), not(target_os = "android")))]
++    #[cfg(not(target_os = "android"))]
+     assert!(webview.is_local_url(&Url::parse("tauri://localhost/").unwrap()));
+ 
+-    #[cfg(any(windows, target_os = "android"))]
++    #[cfg(target_os = "android")]
+     assert!(webview.is_local_url(&Url::parse("https://tauri.localhost/").unwrap()));
+   }
+ 
+-  // On Windows/Android, custom protocols are served as `https://<name>.localhost/`.
++  // On Android, custom protocols are served as `https://<name>.localhost/`.
+   // We ensure only `.localhost` domains are accepted to prevent a subdomain being able to
+   // impersonate a protocol name.
+-  #[cfg(any(windows, target_os = "android"))]
++  #[cfg(target_os = "android")]
+   #[test]
+-  fn windows_custom_protocol_rejects_spoofed_domain() {
++  fn android_custom_protocol_rejects_spoofed_domain() {
+     use crate::test::{mock_builder, mock_context, noop_assets};
+ 
+     let app = mock_builder()
+@@ -2779,7 +2779,7 @@ mod tests {
+ 
+     let url = |s| Url::parse(s).unwrap();
+ 
+-    // Legitimate Windows custom protocol URL
++    // Legitimate Android custom protocol URL
+     assert!(webview.is_local_url(&url("https://myproto.localhost/")));
+ 
+     // Attacker domain that starts with a registered protocol name — must NOT be local.
+diff --git a/crates/tauri/src/webview/webview_window.rs b/crates/tauri/src/webview/webview_window.rs
+index a45a6982d6d16026545fdca92c565e3ba7a3a926..1972580c682fdeb08dc278cb1ce1d48d04c66485 100644
+--- a/crates/tauri/src/webview/webview_window.rs
++++ b/crates/tauri/src/webview/webview_window.rs
+@@ -1204,7 +1204,7 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
+     self
+   }
+ 
+-  /// Sets whether the custom protocols should use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost` on Windows and Android. Defaults to `false`.
++  /// Sets whether Android custom protocols use `https://<scheme>.localhost` instead of the default `http://<scheme>.localhost`. Defaults to `false`.
+   ///
+   /// ## Note
+   ///
+@@ -2534,9 +2534,9 @@ impl<R: Runtime> WebviewWindow<R> {
+   /// [`app.security.csp`](https://v2.tauri.app/reference/config/#csp-1) directive,
+   /// e.g. `img-src 'self' asset: http://asset.localhost`.
+   ///
+-  /// On Windows and Android the URL is `http://{protocol}.localhost/{path}`
++  /// On Android the URL is `http://{protocol}.localhost/{path}`
+   /// (or `https://` if the webview was built with [`WebviewWindowBuilder::use_https_scheme`]);
+-  /// on macOS, Linux and iOS it is `{protocol}://localhost/{path}`.
++  /// on Windows, macOS, Linux and iOS it is `{protocol}://localhost/{path}`.
+   ///
+   /// # Arguments
+   ///

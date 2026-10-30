@@ -1559,14 +1559,10 @@ mod imp {
         }
         if crate::file_access::app_page_open(&webview_label) {
             if let Ok(url) = Url::parse(&pending.url) {
-                // Rust url 库把自定义 tauri: 视为 opaque；CEF 已注册它为标准 origin。
-                let origin = if url.scheme() == "tauri" {
-                    format!("tauri://{}", url.host_str().unwrap_or("localhost"))
-                } else {
-                    url.origin().ascii_serialization()
-                };
-                if !crate::file_access::grant_app_fetch_file(&origin) {
-                    eprintln!("[cef-runtime] cross-origin whitelist for {origin} -> file failed (webview '{webview_label}')");
+                if let Some(origin) = crate::protocol::web_origin(&url) {
+                    if !crate::file_access::grant_app_fetch_file(&origin) {
+                        eprintln!("[cef-runtime] cross-origin whitelist for {origin} -> file failed (webview '{webview_label}')");
+                    }
                 }
             }
         }

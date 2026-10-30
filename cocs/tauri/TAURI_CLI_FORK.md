@@ -4,7 +4,7 @@ kabegame 使用自有 fork 的 `cargo-tauri`，替代全局安装版。源码是
 （[tauri-apps/tauri](https://github.com/tauri-apps/tauri)，submodule 挂载于 `third/tauri`，
 pin tag `tauri-v2.12.4`）的 `crates/tauri-cli` 子 crate，fork 差异以 patch 形式存放于
 `third-patches/tauri/`（`0001`–`0005`、`0008`、`0009` 为 tauri-cli，`0006` 为
-tauri-runtime / tauri-runtime-wry，`0007` 为 tauri-utils，`0010`–`0012` 为 tauri），构建前先
+tauri-runtime / tauri-runtime-wry，`0007` 为 tauri-utils，`0010`–`0013` 为 tauri），构建前先
 `deno task patch tauri` 应用。基线 **Tauri 2.12.4 / tauri-cli 2.12.3**。
 
 > 不再有独立的 `kabegame/tauri-cli` fork 仓或 vendored `third/tauri-runtime` 拷贝：
@@ -156,10 +156,14 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
     `show_app` 在 `navigate` 成功后调用（见 [../wpe/WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「运行时垫片与宿主协议」）。
 - **0012 `tauri` IPC fetch 固定 `referrerPolicy: 'origin'`**（`crates/tauri/scripts/ipc-protocol.js`）
   - 自定义协议 IPC 的 `fetch` 加 `referrerPolicy: 'origin'`，让 `Origin` 头总是文档 origin。
-  - 动机：Windows 上 IPC 端点是 `http://ipc.localhost`，https 页面（畅游站点）按默认
+  - 动机：旧 Windows IPC 端点是 `http://ipc.localhost`，https 页面（畅游站点）按默认
     `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`（页面声明 `no-referrer` 时 http 页面也一样），
     Tauri `ipc` handler 回 500「Origin header is not a valid URL」；500 让 fetch 正常 resolve，脚本不回退 `postMessage`，
     该页的 invoke 全部失败。runtime 的 `cef-ipc` 回退 shim（`tauri-runtime-cef/src/ipc.rs`）同样设置。
+- **0013 `tauri` Windows 原生自定义协议**（`crates/tauri/src` 与 `scripts/core.js`）
+  - Windows 的应用页与 IPC 分别使用 `tauri://localhost`、`ipc://localhost`；只有 Android 保留
+    `http(s)://<scheme>.localhost` 绕行。Windows 的 `use_https_scheme` 不再影响协议地址。
+  - 此补丁依赖 Kabegame 的 CEF runtime；打补丁后的 Tauri 在 Windows 上不能配 wry/WebView2。
 
 ## 构建系统接线
 
@@ -230,6 +234,7 @@ identifier 派生源码目录（不存在则 `exit(1)`）、生成包名，且 a
    - `tauri` 的 `event/listener.rs` `remove_webview_js_listeners` 与 `js_event_listeners` 结构（0011）：
      上游若已提供按 webview 清 JS 监听的公开接口，删掉 0011 改用它
    - `tauri` 的 `scripts/ipc-protocol.js` 自定义协议 `fetch` 的 init 对象（0012）：上游若已固定 referrer 策略或改为不依赖 `Origin` 头，删掉 0012
+   - `tauri` 的 `protocol::origin`、`window_origin`、`protocol/isolation.rs` 的 `frame-src`、`is_local_url`、`scripts/core.js` 的 `convertFileSrc`（0013）：确认 Windows 仍走原生 scheme，Android 仍走 localhost 绕行
 4. 重新生成编号 patch 文件并更新 `third-patches/tauri/README.md`；如新 tag 的 `tauri-utils`
    版本与 crates.io 最新不一致，`cargo update -p tauri-utils --precise <monorepo 版本>` 重钉。
 5. 主仓库更新 submodule 指针；跑一次

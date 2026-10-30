@@ -193,6 +193,7 @@ mod tests {
         assert!(!pattern.test(&Url::parse("http://127.0.0.1/").unwrap()));
         assert!(!pattern.test(&Url::parse("http://127.0.0.1:33050/index.html").unwrap()));
         assert!(!pattern.test(&Url::parse("http://tauri.localhost/index.html").unwrap()));
+        assert!(!pattern.test(&Url::parse("tauri://localhost/index.html").unwrap()));
         assert!(!pattern.test(&Url::parse("https://example.com/").unwrap()));
     }
 }
