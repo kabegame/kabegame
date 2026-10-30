@@ -95,6 +95,11 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   `protocol.rs` 在 Windows 对 `http` scheme + `<scheme>.localhost` 域注册 factory，而非
   自定义 scheme（否则连接被当真实网络请求 → `ERR_CONNECTION_REFUSED`，页面 refused/白屏）。
   `cef-ipc`（runtime 自有 postMessage 通道）在所有平台仍是自定义 scheme。
+- **https 页面的 IPC `Origin`**：Windows 上 `ipc://` 主通道也是 `http://ipc.localhost`。https 页面（畅游站点）按默认
+  referrer 策略 `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`，Tauri `ipc` handler 回 500
+  「Origin header is not a valid URL」，而 500 让 fetch 正常 resolve、不触发 `postMessage` 回退。`third-patches/tauri/0012`
+  给主通道 fetch 固定 `referrerPolicy: 'origin'`，`ipc.rs` 的 `cef-ipc` shim 同样设置；opaque 来源（`file:`、沙箱 frame）
+  仍是 `null`，`file:` frame 由 `pin_file_frame_origin` 改写。
 - **请求 URI 还原**：Tauri 的 handler 仍按自定义 scheme 约定解析 URI（`protocol/tauri.rs`
   对整串 `strip_prefix("tauri://localhost")`）。CEF 拿到的是 `http://tauri.localhost/...`，
   strip 失败 → 空路径 → 回退 `index.html`（JS 模块被当 `text/html` → MIME 报错）。故

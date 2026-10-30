@@ -93,6 +93,19 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   handlers are untouched). Kabegame calls it after the wallpaper window navigates between the
   app page and a WPE web wallpaper's `file://` entry (`wallpaper/window.rs` `show_web` /
   `show_app`). Re-check on bump: `event/listener.rs` `remove_webview_js_listeners`.
+- `0012-tauri-ipc-origin-referrer-policy.patch` — the custom-protocol IPC `fetch` in
+  `scripts/ipc-protocol.js` gets `referrerPolicy: 'origin'`. The `ipc` handler rejects a request
+  whose `Origin` header does not parse as a URL (`parse_invoke_request`, HTTP 500 "Origin header
+  is not a valid URL"). On Windows the IPC endpoint is `http://ipc.localhost`, and Chromium (CEF)
+  sends `Origin: null` on that POST when the page's referrer policy treats it as a downgrade: an
+  https page under the default `strict-origin-when-cross-origin` (every https site opened in
+  surf), or any page that declares `no-referrer`. The 500 resolves the `fetch`, so the script
+  never falls back to `postMessage` and every invoke from such a page fails. With `origin` the
+  document's origin is always sent (verified in CEF: default / `no-referrer` → 500, `origin` /
+  `unsafe-url` → 200). Opaque origins (`file:`, sandboxed frames) still send `null`; the CEF
+  runtime rewrites `file:` frames itself. The CEF runtime's `cef-ipc` postMessage shim
+  (`tauri-runtime-cef/src/ipc.rs`) sets the same policy. Re-check on bump:
+  `scripts/ipc-protocol.js` `fetch(...convertFileSrc(cmd, 'ipc'), {...})`.
 
 Apply the whole series manually before building against `third/tauri`:
 
