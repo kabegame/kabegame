@@ -1,0 +1,241 @@
+diff --git a/libcef/browser/browser_info.cc b/libcef/browser/browser_info.cc
+index 77193c87581540263c02418e47bab261e0b48a28..1e56123de6b83db2af420345eef898e29d3fa9bf 100644
+--- a/libcef/browser/browser_info.cc
++++ b/libcef/browser/browser_info.cc
+@@ -14,8 +14,26 @@
+ #include "cef/libcef/common/values_impl.h"
+ #include "content/browser/renderer_host/frame_tree_node.h"
+ #include "content/browser/renderer_host/render_frame_host_impl.h"
++#include "content/public/browser/child_process_security_policy.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "ipc/ipc_message.h"
++#include "url/url_constants.h"
++
++namespace {
++
++// Kabegame: true if the browser was created with the bool extra_info key
++// "kabegame.allow_local_resources". The key name must match
++// CefRenderManager::MaybeCreateBrowser in the renderer process.
++bool AllowsLocalResources(const CefRefPtr<CefDictionaryValue>& extra_info) {
++  if (!extra_info) {
++    return false;
++  }
++  const CefString key("kabegame.allow_local_resources");
++  return extra_info->HasKey(key) && extra_info->GetType(key) == VTYPE_BOOL &&
++         extra_info->GetBool(key);
++}
++
++}  // namespace
+ 
+ CefBrowserInfo::FrameInfo::~FrameInfo() {
+ #if DCHECK_IS_ON()
+@@ -147,6 +165,22 @@ void CefBrowserInfo::MaybeCreateFrame(content::RenderFrameHost* host) {
+                                    ->render_manager()
+                                    ->current_frame_host() != host);
+ 
++  // Kabegame: let the process hosting the app page request file: URLs, so a
++  // renderer-initiated <iframe src="file:..."> navigation passes FilterURL in
++  // RenderFrameHostImpl::BeginNavigation instead of being rewritten to
++  // about:blank#blocked. Request-only: the file: document still commits in its
++  // own process. Done for every outermost main frame host before the
++  // early-return below, so speculative hosts, process swaps and renderer
++  // crash/reload are all covered; GrantRequestScheme is idempotent and has no
++  // revoke (the grant lives as long as the process). Mirrors Android WebView's
++  // AwContents::GrantFileSchemeAccesstoChildProcess. Which file: URLs actually
++  // load is still up to the client (e.g. OnBeforeResourceLoad).
++  if (!is_popup_ && host->GetParentOrOuterDocument() == nullptr &&
++      AllowsLocalResources(extra_info_)) {
++    content::ChildProcessSecurityPolicy::GetInstance()->GrantRequestScheme(
++        host->GetProcess()->GetDeprecatedID(), url::kFileScheme);
++  }
++
+   {
+     NotificationStateLock lock_scope(this);
+     DCHECK(browser_);
+diff --git a/libcef/renderer/blink_glue.cc b/libcef/renderer/blink_glue.cc
+index a9a030ef95b247c1e05ecad37de0b73eab8eb373..acc9983ce7701475335dd358d26a5fcc3f68d51d 100644
+--- a/libcef/renderer/blink_glue.cc
++++ b/libcef/renderer/blink_glue.cc
+@@ -37,6 +37,7 @@
+ #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
+ #include "third_party/blink/renderer/platform/loader/fetch/script_fetch_options.h"
+ #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
++#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+ #undef LOG
+ 
+ #include "base/logging.h"
+@@ -318,6 +319,27 @@ void StartNavigation(blink::WebLocalFrame* frame,
+       .StartNavigation(frame_load_request, blink::WebFrameLoadType::kStandard);
+ }
+ 
++void GrantLoadLocalResources(blink::WebLocalFrame* frame) {
++  if (!frame) {
++    return;
++  }
++
++  blink::LocalFrame* core_frame =
++      blink::To<blink::WebLocalFrameImpl>(frame)->GetFrame();
++  if (!core_frame) {
++    return;
++  }
++
++  blink::LocalDOMWindow* window = core_frame->DomWindow();
++  if (!window) {
++    return;
++  }
++
++  if (blink::SecurityOrigin* origin = window->GetMutableSecurityOrigin()) {
++    origin->GrantLoadLocalResources();
++  }
++}
++
+ void SetUseExternalPopupMenus(blink::WebView* view, bool value) {
+   static_cast<blink::WebViewImpl*>(view)
+       ->GetPage()
+diff --git a/libcef/renderer/blink_glue.h b/libcef/renderer/blink_glue.h
+index 1d096de0fc717aa5d9ce806e2d83eee960ab7d45..f470a17b2816a79265e207c1d8db9cfe19199191 100644
+--- a/libcef/renderer/blink_glue.h
++++ b/libcef/renderer/blink_glue.h
+@@ -122,6 +122,15 @@ BLINK_EXPORT bool HasPluginFrameOwner(blink::WebLocalFrame* frame);
+ BLINK_EXPORT void StartNavigation(blink::WebLocalFrame* frame,
+                                   const blink::WebURLRequest& request);
+ 
++// Kabegame: grants the document currently committed in |frame| the ability to
++// load local resources (blink::SecurityOrigin::GrantLoadLocalResources), so
++// that SecurityOrigin::CanDisplay() allows file: URLs, e.g. as the src of an
++// <iframe>. fetch / XHR (SecurityOrigin::CanRequest) are not affected. Blink
++// creates a new SecurityOrigin for every committed document, so the grant ends
++// with the document; same-origin about:blank / srcdoc children that alias the
++// parent's origin object share it.
++BLINK_EXPORT void GrantLoadLocalResources(blink::WebLocalFrame* frame);
++
+ // Sets whether select popup menus should be rendered by the browser.
+ BLINK_EXPORT void SetUseExternalPopupMenus(blink::WebView* view, bool value);
+ 
+diff --git a/libcef/renderer/browser_impl.cc b/libcef/renderer/browser_impl.cc
+index f09d1e8341ace58527473d18ca04c98219507747..3cbc0a1a9502e8c188097a800fc6a94b2c2b7dfd 100644
+--- a/libcef/renderer/browser_impl.cc
++++ b/libcef/renderer/browser_impl.cc
+@@ -276,11 +276,13 @@ void CefBrowserImpl::GetFrameNames(std::vector<CefString>& names) {
+ CefBrowserImpl::CefBrowserImpl(blink::WebView* web_view,
+                                int browser_id,
+                                bool is_popup,
+-                               const cef::BrowserConfig& config)
++                               const cef::BrowserConfig& config,
++                               bool allow_local_resources)
+     : blink::WebViewObserver(web_view),
+       browser_id_(browser_id),
+       is_popup_(is_popup),
+-      config_(config) {}
++      config_(config),
++      allow_local_resources_(allow_local_resources) {}
+ 
+ CefBrowserImpl::~CefBrowserImpl() = default;
+ 
+diff --git a/libcef/renderer/browser_impl.h b/libcef/renderer/browser_impl.h
+index b06678e55bc41d9a7d5660bc07a5591acca240e1..8193b443a66c3d99f77c89aff7dfe32bd78ff6f4 100644
+--- a/libcef/renderer/browser_impl.h
++++ b/libcef/renderer/browser_impl.h
+@@ -67,7 +67,8 @@ class CefBrowserImpl : public CefBrowser, public blink::WebViewObserver {
+   CefBrowserImpl(blink::WebView* web_view,
+                  int browser_id,
+                  bool is_popup,
+-                 const cef::BrowserConfig& config);
++                 const cef::BrowserConfig& config,
++                 bool allow_local_resources);
+ 
+   CefBrowserImpl(const CefBrowserImpl&) = delete;
+   CefBrowserImpl& operator=(const CefBrowserImpl&) = delete;
+@@ -82,6 +83,11 @@ class CefBrowserImpl : public CefBrowser, public blink::WebViewObserver {
+   bool is_popup() const { return is_popup_; }
+   const cef::BrowserConfig& config() const { return config_; }
+ 
++  // Kabegame: true if this (non-popup) browser was created with the bool
++  // extra_info key "kabegame.allow_local_resources". See
++  // CefRenderManager::MaybeCreateBrowser.
++  bool allow_local_resources() const { return allow_local_resources_; }
++
+   // blink::WebViewObserver methods.
+   void OnDestruct() override;
+   void FrameDetached(blink::WebLocalFrame* frame);
+@@ -96,6 +102,7 @@ class CefBrowserImpl : public CefBrowser, public blink::WebViewObserver {
+   const int browser_id_;
+   const bool is_popup_;
+   const cef::BrowserConfig config_;
++  const bool allow_local_resources_;
+ 
+   // Map of unique frame tokens to CefFrameImpl references.
+   using FrameMap = std::map<blink::LocalFrameToken, CefRefPtr<CefFrameImpl>>;
+diff --git a/libcef/renderer/render_frame_observer.cc b/libcef/renderer/render_frame_observer.cc
+index c416a1ef22b090abd93fab29712a516cae7a12a0..8a4e7f1c7879ac86c96ee254e181fdcf9fa23959 100644
+--- a/libcef/renderer/render_frame_observer.cc
++++ b/libcef/renderer/render_frame_observer.cc
+@@ -22,11 +22,13 @@
+ #include "cef/libcef/renderer/render_frame_observer.h"
+ #include "cef/libcef/renderer/v8_impl.h"
+ #include "content/public/renderer/render_frame.h"
++#include "third_party/blink/public/platform/web_url.h"
+ #include "third_party/blink/public/web/blink.h"
+ #include "third_party/blink/public/web/web_document.h"
+ #include "third_party/blink/public/web/web_element.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_node.h"
++#include "url/url_constants.h"
+ 
+ CefRenderFrameObserver::CefRenderFrameObserver(
+     content::RenderFrame* render_frame)
+@@ -40,6 +42,24 @@ void CefRenderFrameObserver::DidCommitProvisionalLoad(
+     return;
+   }
+ 
++  // Kabegame: per-browser opt-in for the app page to load local resources,
++  // e.g. <iframe src="file:...">. Blink creates a new SecurityOrigin for every
++  // committed document, so grant on every commit of the outermost main frame,
++  // and before OnDidCommitProvisionalLoad(), which may run queued script.
++  // Subframes (including OOPIFs, whose process also hosts a CefBrowserImpl for
++  // this browser) and fenced frames are skipped; file: documents can already
++  // load local resources. The browser-process half is in
++  // CefBrowserInfo::MaybeCreateFrame.
++  if (blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++      web_frame && web_frame->IsOutermostMainFrame() &&
++      !web_frame->GetDocument().Url().ProtocolIs(url::kFileScheme)) {
++    CefRefPtr<CefBrowserImpl> browser =
++        CefBrowserImpl::GetBrowserForMainFrame(web_frame);
++    if (browser && browser->allow_local_resources()) {
++      blink_glue::GrantLoadLocalResources(web_frame);
++    }
++  }
++
+   frame_->OnDidCommitProvisionalLoad();
+ 
+   if (frame_->GetParent() == nullptr) {
+diff --git a/libcef/renderer/render_manager.cc b/libcef/renderer/render_manager.cc
+index c974d479c6d054d723850988f500f1e61cdae566..ce9c9df469769b770311d05fad44b509159507c1 100644
+--- a/libcef/renderer/render_manager.cc
++++ b/libcef/renderer/render_manager.cc
+@@ -320,8 +320,24 @@ CefRefPtr<CefBrowserImpl> CefRenderManager::MaybeCreateBrowser(
+   }
+ 
+   CHECK(params->config);
++
++  // Kabegame: per-browser opt-in for the app page (the outermost main frame's
++  // non-file: document) to load local resources; applied on every main frame
++  // commit in CefRenderFrameObserver::DidCommitProvisionalLoad. Read it here,
++  // before |extra_info| is moved into OnBrowserCreated below. Popups never get
++  // it: DevTools windows copy the opener's extra_info. The key contains '.', so
++  // use FindBool() rather than FindBoolByDottedPath(). The key name must match
++  // CefBrowserInfo::MaybeCreateFrame in the browser process.
++  bool allow_local_resources = false;
++  if (!params->config->is_popup && params->extra_info) {
++    allow_local_resources =
++        params->extra_info->FindBool("kabegame.allow_local_resources")
++            .value_or(false);
++  }
++
+   CefRefPtr<CefBrowserImpl> browser = new CefBrowserImpl(
+-      web_view, params->browser_id, params->config->is_popup, *config);
++      web_view, params->browser_id, params->config->is_popup, *config,
++      allow_local_resources);
+   browsers_.insert(std::make_pair(web_view, browser));
+ 
+   // Notify the render process handler.

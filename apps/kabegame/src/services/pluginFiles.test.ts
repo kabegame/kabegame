@@ -1,87 +1,74 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { effectScope, nextTick, ref } from "vue";
 import type { Plugin } from "@/stores/plugins";
-import {
-  fetchPluginText,
-  invalidatePluginFiles,
-  resolvePluginLocalePath,
-  usePluginDescriptionTemplate,
-} from "./pluginFiles";
+import { fetchPluginText, invalidatePluginFiles, pluginAssetUrl, pluginFileKey } from "./pluginFiles";
 
-vi.mock("@/utils/fileUrl", () => ({
-  initHttpServerBaseUrl: vi.fn().mockResolvedValue(undefined),
-  pluginFileUrl: (plugin: Plugin, path: string) =>
-    `${plugin.id}/${plugin.version}/${JSON.stringify(plugin.fileOrigin)}/${path}`,
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@/env", () => ({ IS_WEB: false, IS_ANDROID: false }));
+vi.mock("@/api", () => ({ invoke }));
+vi.mock("@/composables/useImageTypes", () => ({
+  useImageTypes: () => ({ load: async () => {}, getMimeType: () => "image/png" }),
 }));
-const plugin: Plugin = {
+
+const plugin = {
   id: "test",
+  version: "1.0.0",
   name: {},
   description: {},
-  version: "1.0.0",
   baseUrl: "",
   sizeBytes: 0,
   config: {},
-  packageJson: { kbDescriptionTemplate: "description.ejs" },
-};
-const fetchMock = vi.fn();
+  packageJson: {},
+} as Plugin;
+const bytes = (text: string) => new TextEncoder().encode(text).buffer;
+const createObjectURL = vi.fn();
+const revokeObjectURL = vi.fn();
+
 beforeEach(() => {
   invalidatePluginFiles(plugin.id);
-  fetchMock.mockReset();
-  vi.stubGlobal("fetch", fetchMock);
+  invoke.mockReset();
+  createObjectURL.mockReset().mockReturnValue("blob:http://localhost/one");
+  revokeObjectURL.mockReset();
+  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
 });
 afterEach(() => vi.unstubAllGlobals());
-const response = (text: string) => new Response(text, { status: 200 });
 
-describe("插件文本请求缓存", () => {
-  it("同 URL 并发请求共用一次 fetch，版本与来源隔离", async () => {
-    fetchMock.mockResolvedValue(response("text"));
+describe("桌面插件文件", () => {
+  it("原始 IPC 字节解码为文本，按坐标缓存并隔离来源", async () => {
+    invoke.mockResolvedValueOnce(bytes("中文"));
     expect(await Promise.all([fetchPluginText(plugin, "a.md"), fetchPluginText(plugin, "a.md")])).toEqual([
-      "text",
-      "text",
+      "中文",
+      "中文",
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    fetchMock.mockResolvedValue(response("new"));
-    expect(await fetchPluginText({ ...plugin, version: "2.0.0" }, "a.md")).toBe("new");
-    fetchMock.mockResolvedValue(response("store"));
-    expect(await fetchPluginText({ ...plugin, fileOrigin: { kind: "store", sourceId: "s" } }, "a.md")).toBe("store");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-  it("失败移出缓存，安装更新失效后可重新读取", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("", { status: 404 })).mockResolvedValueOnce(response("ok"));
-    await expect(fetchPluginText(plugin, "a.md")).rejects.toThrow("404");
-    expect(await fetchPluginText(plugin, "a.md")).toBe("ok");
-    invalidatePluginFiles(plugin.id);
-    fetchMock.mockResolvedValueOnce(response("updated"));
-    expect(await fetchPluginText(plugin, "a.md")).toBe("updated");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-  it("语言路径采用 locale → default 回落", () => {
-    const paths = { default: "README.md", zh: "中文.md" };
-    expect(resolvePluginLocalePath(paths, "zh")).toBe("中文.md");
-    expect(resolvePluginLocalePath(paths, "ja")).toBe("README.md");
-    expect(resolvePluginLocalePath(null, "zh")).toBe("");
-  });
-  it("模板晚到不能覆盖后来选择的插件；加载期间保持空文本", async () => {
-    let finish!: (value: Response) => void;
-    fetchMock.mockImplementationOnce(
-      () =>
-        new Promise<Response>((resolve) => {
-          finish = resolve;
-        }),
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("read_plugin_file", {
+      pluginId: "test",
+      version: "1.0.0",
+      path: "a.md",
+      source: null,
+      preview: null,
+    });
+    expect(pluginFileKey(plugin, "a.md")).not.toBe(pluginFileKey({ ...plugin, version: "2" }, "a.md"));
+    expect(pluginFileKey(plugin, "a.md")).not.toBe(
+      pluginFileKey({ ...plugin, fileOrigin: { kind: "store", sourceId: "s" } }, "a.md"),
     );
-    fetchMock.mockResolvedValueOnce(response("current"));
-    const selected = ref<Plugin | null>(plugin);
-    const scope = effectScope();
-    const state = scope.run(() => usePluginDescriptionTemplate(selected))!;
-    expect(state.loading.value).toBe(true);
-    expect(state.text.value).toBe("");
-    await nextTick();
-    selected.value = { ...plugin, version: "2.0.0" };
-    await nextTick();
-    await vi.waitFor(() => expect(state.text.value).toBe("current"));
-    finish(response("stale"));
-    await nextTick();
-    expect(state.text.value).toBe("current");
-    scope.stop();
+  });
+
+  it("blob URL 命中缓存，失效后 revoke 并重新读取", async () => {
+    invoke.mockResolvedValue(bytes("image"));
+    expect(await pluginAssetUrl(plugin, "banner.png")).toBe("blob:http://localhost/one");
+    expect(await pluginAssetUrl(plugin, "banner.png")).toBe("blob:http://localhost/one");
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    invalidatePluginFiles(plugin.id);
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:http://localhost/one"));
+    await pluginAssetUrl(plugin, "banner.png");
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("读取失败后移出缓存", async () => {
+    invoke.mockRejectedValueOnce(new Error("missing")).mockResolvedValueOnce(bytes("ok"));
+    await expect(fetchPluginText(plugin, "a.md")).rejects.toThrow("missing");
+    expect(await fetchPluginText(plugin, "a.md")).toBe("ok");
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 });

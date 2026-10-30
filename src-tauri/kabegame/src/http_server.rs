@@ -1,33 +1,35 @@
+#[cfg(not(target_os = "android"))]
+use std::path::Path;
 #[cfg(all(
     not(target_os = "android"),
     any(debug_assertions, not(feature = "web"))
 ))]
-use std::sync::Arc;
-#[cfg(not(target_os = "android"))]
-use std::{path::Path, sync::OnceLock};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(all(
     not(target_os = "android"),
     any(debug_assertions, not(feature = "web"))
 ))]
-use axum::middleware::{from_fn, Next};
-#[cfg(not(target_os = "android"))]
 use axum::{
     body::Body,
-    extract::{Path as UrlPath, Query},
+    http::Request,
+    middleware::{from_fn, Next},
+};
+#[cfg(not(target_os = "android"))]
+use axum::{
+    extract::Path as UrlPath,
     http::{
         header::{
             HeaderValue, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
             RANGE,
         },
-        Request, StatusCode, Uri,
+        StatusCode,
     },
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-#[cfg(not(target_os = "android"))]
-use serde::Deserialize;
+
 #[cfg(not(target_os = "android"))]
 use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
@@ -38,27 +40,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 ))]
 use tokio::sync::Semaphore;
 
-#[cfg(not(target_os = "android"))]
-pub static HTTP_SERVER_PORT: OnceLock<u16> = OnceLock::new();
-
 /// 单次 206 响应的最大字节数。响应体是一次性读进内存的 `Vec<u8>`,不能让开放式
 /// Range 把整段视频拉进来。
 #[cfg(not(target_os = "android"))]
 const MAX_RANGE_CHUNK: u64 = 8 * 1024 * 1024;
-
-#[cfg(not(target_os = "android"))]
-#[derive(Debug, Deserialize)]
-struct ProxyQuery {
-    url: String,
-}
-
-/// 插件文档图片：?pluginId=xxx&path=yyy（path 为 doc_root 内相对路径，如 screenshot.png）
-#[cfg(not(target_os = "android"))]
-#[derive(Debug, Deserialize)]
-struct PluginDocImageQuery {
-    plugin_id: String,
-    path: String,
-}
 
 #[cfg(not(target_os = "android"))]
 fn mime_from_path(path: &str) -> Option<String> {
@@ -143,7 +128,7 @@ async fn handle_file_path(
         Ok(info) => info,
         Err(response) => return response,
     };
-    // 目录型 WPE 壁纸的 local_path 是目录，不能当文件读；入口视频走 /wpe/<id>/<rel>。
+    // 目录型 WPE 壁纸的 local_path 是目录，不能当文件读；入口视频走 /compatible（compatible_path）。
     if kabegame_core::media::image_type::is_wpe_type(image_info.media_type.as_deref()) {
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
@@ -322,254 +307,15 @@ async fn handle_compatible_path(
     }
 }
 
-/// 按图片 id 授权并返回目录型 WPE 壁纸行；非 WPE 行一律 404。
-#[cfg(not(target_os = "android"))]
-fn authorize_wpe_row(id: &str) -> Result<kabegame_core::storage::ImageInfo, Response> {
-    let info = match kabegame_core::storage::Storage::find_image_by_id(id) {
-        Ok(Some(info)) => info,
-        _ => return Err((StatusCode::NOT_FOUND, "wallpaper not found").into_response()),
-    };
-    if !kabegame_core::media::image_type::is_wpe_type(info.media_type.as_deref())
-        || !std::path::Path::new(&info.local_path).is_dir()
-    {
-        return Err((StatusCode::NOT_FOUND, "wallpaper not found").into_response());
-    }
-    Ok(info)
-}
-
-/// 逐段编码相对路径，保留 `/` 作为分隔符。
-#[cfg(not(target_os = "android"))]
-fn encode_relative_path(rel: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-    rel.split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| utf8_percent_encode(segment, NON_ALPHANUMERIC).to_string())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// `/wpe/<id>/`：307 到 `project.json` 声明的入口文件（iframe 文档加载会跟随）。
-#[cfg(not(target_os = "android"))]
-async fn handle_wpe_entry(UrlPath(id): UrlPath<String>) -> Response {
-    let info = match authorize_wpe_row(&id) {
-        Ok(info) => info,
-        Err(response) => return response,
-    };
-    let dir = std::path::PathBuf::from(&info.local_path);
-    let project = match tokio::task::spawn_blocking(move || kabegame_core::wpe::read_project(&dir))
-        .await
-    {
-        Ok(Ok(project)) => project,
-        _ => return (StatusCode::NOT_FOUND, "wallpaper not found").into_response(),
-    };
-    let Some(file) = project.file.as_deref() else {
-        return (StatusCode::NOT_FOUND, "wallpaper entry missing").into_response();
-    };
-    let location = format!("/wpe/{}/{}", encode_relative_path(&id), encode_relative_path(file));
-    Redirect::temporary(&location).into_response()
-}
-
-/// `/wpe/<id>/<rel>`：只提供该壁纸目录内的普通文件，越界请求拒绝。
-#[cfg(not(target_os = "android"))]
-async fn handle_wpe_file(
-    UrlPath((id, rel)): UrlPath<(String, String)>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    let info = match authorize_wpe_row(&id) {
-        Ok(info) => info,
-        Err(response) => return response,
-    };
-    let rel = rel.trim_matches('/');
-    if rel.is_empty() {
-        return (StatusCode::NOT_FOUND, "file not found").into_response();
-    }
-
-    let Ok(root) = std::path::Path::new(&info.local_path).canonicalize() else {
-        return (StatusCode::NOT_FOUND, "file not found").into_response();
-    };
-    let Ok(target) = root.join(rel).canonicalize() else {
-        return (StatusCode::NOT_FOUND, "file not found").into_response();
-    };
-    // canonicalize 后必须仍位于该壁纸目录内，同时拒绝目录本身。
-    if !target.starts_with(&root) || !target.is_file() {
-        return (StatusCode::NOT_FOUND, "file not found").into_response();
-    }
-
-    let target = target.to_string_lossy().into_owned();
-    let mime = wpe_mime_from_path(&target);
-    if mime.as_deref().is_some_and(|m| m.starts_with("text/html")) {
-        // HTML 走专用产出点（Phase 4 在此注入垫片）；其它文件照旧流式 + Range。
-        return serve_wpe_html(&target).await;
-    }
-    let range = headers
-        .get(RANGE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    serve_file_with_mime(&target, mime, range).await
-}
-
-/// `/wpe` 专属的网页资源 MIME 表。只服务 WPE 网页壁纸目录，**不进 `MEDIA_FORMATS`**：
-/// 那张表是「可入库的媒体格式」唯一事实来源，网页类型混进去会污染 `supported_media_extensions`
-/// 一类派生。表外扩展名回落媒体格式表，再查不到就是 `application/octet-stream`。
-#[cfg(not(target_os = "android"))]
-const WPE_WEB_MIME: &[(&str, &str)] = &[
-    ("html", "text/html; charset=utf-8"),
-    ("htm", "text/html; charset=utf-8"),
-    ("js", "text/javascript"),
-    ("mjs", "text/javascript"),
-    ("css", "text/css"),
-    ("json", "application/json"),
-    ("map", "application/json"),
-    ("svg", "image/svg+xml"),
-    ("xml", "application/xml"),
-    ("txt", "text/plain; charset=utf-8"),
-    ("wasm", "application/wasm"),
-    ("woff", "font/woff"),
-    ("woff2", "font/woff2"),
-    ("ttf", "font/ttf"),
-    ("otf", "font/otf"),
-    ("webm", "video/webm"),
-    ("ogg", "video/ogg"),
-    ("ogv", "video/ogg"),
-    ("oga", "audio/ogg"),
-    ("mp3", "audio/mpeg"),
-    ("wav", "audio/wav"),
-];
-
-/// `/wpe/<id>/<rel>` 的 MIME：先查网页表，再回落媒体格式表（图片 / 视频）；无扩展名返回 `None`。
-#[cfg(not(target_os = "android"))]
-fn wpe_mime_from_path(path: &str) -> Option<String> {
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())?
-        .to_ascii_lowercase();
-    if let Some((_, mime)) = WPE_WEB_MIME.iter().find(|(key, _)| *key == ext) {
-        return Some((*mime).to_string());
-    }
-    mime_from_path(path)
-}
-
-/// WPE 网页壁纸 HTML 的专用产出点：读整文件、`text/html; charset=utf-8`、`no-store`，忽略 Range。
-/// 本 Phase 原样返回、不注入任何脚本；**Phase 4 在这里把垫片 `<script>` 插到 `<head>` 最前面**，
-/// 并对 zcompat 兼容补丁做内存替换（不写回用户目录）。
-#[cfg(not(target_os = "android"))]
-async fn serve_wpe_html(path: &str) -> Response {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => {
-            let mut out = (StatusCode::OK, bytes).into_response();
-            out.headers_mut().insert(
-                CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
-            );
-            out.headers_mut()
-                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            out
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "file not found").into_response(),
-    }
-}
-
-/// 代理 GET 请求：/proxy?url=xxx，用 reqwest 拉取目标 URL 后流式返回（初步实现，无任务上下文）
-#[cfg(not(target_os = "android"))]
-async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
-    let url = query.url.trim();
-    if url.is_empty() {
-        return (StatusCode::BAD_REQUEST, "missing url").into_response();
-    }
-    let Ok(target_uri) = url.parse::<Uri>() else {
-        return (StatusCode::BAD_REQUEST, "invalid url").into_response();
-    };
-    let scheme = target_uri.scheme_str().unwrap_or("");
-    if scheme != "http" && scheme != "https" {
-        return (StatusCode::BAD_REQUEST, "only http and https are allowed").into_response();
-    }
-
-    let mut client_builder =
-        reqwest::Client::builder().redirect(reqwest::redirect::Policy::default());
-    if let Some(ref proxy_url) = kabegame_core::crawler::proxy::get_proxy_config().proxy_url {
-        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
-            client_builder = client_builder.proxy(proxy);
-        }
-    }
-    let client = match client_builder.build() {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("proxy client build failed: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    let upstream = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            let code = e
-                .status()
-                .map(|s| s.as_u16())
-                .and_then(|u| StatusCode::from_u16(u).ok())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
-            return (code, e.to_string()).into_response();
-        }
-    };
-
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let mut response_builder = Response::builder().status(status);
-
-    // 复制部分响应头（按字符串从 reqwest 取，避免 http 版本不一致）
-    let pass_header_names = ["content-type", "content-length", "content-encoding"];
-    if let Some(headers_mut) = response_builder.headers_mut() {
-        for name in pass_header_names {
-            if let Some(v) = upstream.headers().get(name) {
-                if let (Ok(hn), Ok(hv)) = (
-                    axum::http::header::HeaderName::try_from(name),
-                    HeaderValue::try_from(v.as_bytes()),
-                ) {
-                    headers_mut.insert(hn, hv);
-                }
-            }
-        }
-    }
-
-    response_builder
-        .body(Body::from_stream(upstream.bytes_stream()))
-        .unwrap_or_else(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "body build failed").into_response()
-        })
-}
-
-#[cfg(not(target_os = "android"))]
-async fn handle_unmatched(uri: Uri) -> Response {
-    (StatusCode::NOT_FOUND, "not found").into_response()
-}
-
-/// Returns a Router with file-serving routes usable by both local and web modes.
-/// Does NOT include `/plugin-doc-image` (inlined as data URLs on the frontend).
-#[cfg(not(target_os = "android"))]
-pub fn file_routes() -> Router {
-    Router::new()
-        .route("/file/{*path}", get(handle_file_path))
-        .route("/thumbnail/{*path}", get(handle_thumbnail_path))
-        .route("/compatible/{*path}", get(handle_compatible_path))
-        .route("/wpe/{id}/", get(handle_wpe_entry))
-        .route("/wpe/{id}/{*rel}", get(handle_wpe_file))
-        .route("/proxy", get(handle_proxy_query))
-        .merge(crate::plugin_file_server::plugin_file_routes())
-}
-
 /// 桌面应用 Web 服务器暴露的媒体路由。
 ///
-/// 只允许访问图库白名单内的文件，不包含会请求任意上游 URL 的 `/proxy`。
-#[cfg(not(target_os = "android"))]
+/// 只允许访问图库白名单内的文件（`/file` `/thumbnail` `/compatible`），不含 `/plugin_file`。
+#[cfg(all(not(target_os = "android"), not(feature = "web")))]
 pub fn file_routes_media() -> Router {
     let routes = Router::new()
         .route("/file/{*path}", get(handle_file_path))
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
-        .route("/compatible/{*path}", get(handle_compatible_path))
-        .route("/wpe/{id}/", get(handle_wpe_entry))
-        .route("/wpe/{id}/{*rel}", get(handle_wpe_file));
+        .route("/compatible/{*path}", get(handle_compatible_path));
 
     #[cfg(any(debug_assertions, not(feature = "web")))]
     {
@@ -583,7 +329,7 @@ pub fn file_routes_media() -> Router {
 
 /// web 模式专用路由。
 ///
-/// - **Release**：保留 `/proxy` 与 `/plugin_file`。图库图片、缩略图和兼容副本直接由 CDN 返回，
+/// - **Release**：只保留 `/plugin_file`。图库图片、缩略图和兼容副本直接由 CDN 返回，
 ///   只对插件包做按需磁盘读取；`commands::image`
 ///   在 `ImageInfo` 序列化前把本地媒体路径改写成 CDN URL。
 /// - **Debug**：保留 `/file` `/thumbnail` `/compatible`，方便本地联调——
@@ -595,16 +341,12 @@ pub fn file_routes_web() -> Router {
         .route("/thumbnail/{*path}", get(handle_thumbnail_path))
         .route("/compatible/{*path}", get(handle_compatible_path))
         .layer(from_fn(image_concurrency_mw));
-    gated
-        .route("/proxy", get(handle_proxy_query))
-        .merge(crate::plugin_file_server::plugin_file_routes())
+    gated.merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 #[cfg(all(feature = "web", not(debug_assertions)))]
 pub fn file_routes_web() -> Router {
-    Router::new()
-        .route("/proxy", get(handle_proxy_query))
-        .merge(crate::plugin_file_server::plugin_file_routes())
+    Router::new().merge(crate::plugin_file_server::plugin_file_routes())
 }
 
 /// Debug-only：/file 与 /thumbnail 的并发闸（10 个并发 + 无限排队）。
@@ -698,20 +440,9 @@ pub async fn get_http_server_base_url<R: tauri::Runtime>(
         .map_err(|e| e.to_string())
 }
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(all(test, not(target_os = "android"), not(feature = "web")))]
 mod tests {
-    use super::{absolute_path_from_route, wpe_mime_from_path};
-
-    #[test]
-    fn wpe_web_mime_table_covers_page_resources() {
-        assert_eq!(wpe_mime_from_path("C:/w/index.HTML").as_deref(), Some("text/html; charset=utf-8"));
-        assert_eq!(wpe_mime_from_path("/w/main.css").as_deref(), Some("text/css"));
-        assert_eq!(wpe_mime_from_path("/w/wallpaper.js").as_deref(), Some("text/javascript"));
-        assert_eq!(wpe_mime_from_path("/w/project.json").as_deref(), Some("application/json"));
-        // 图片仍回落媒体格式表；无扩展名不猜测。
-        assert_eq!(wpe_mime_from_path("/w/preview.png").as_deref(), Some("image/png"));
-        assert_eq!(wpe_mime_from_path("/w/LICENSE"), None);
-    }
+    use super::absolute_path_from_route;
 
     #[test]
     fn media_route_restores_unix_absolute_path() {
@@ -742,7 +473,8 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(
                 listener,
-                super::file_routes().fallback(super::handle_unmatched),
+                super::file_routes_media()
+                    .fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "not found") }),
             )
             .await
             .expect("serve test router");

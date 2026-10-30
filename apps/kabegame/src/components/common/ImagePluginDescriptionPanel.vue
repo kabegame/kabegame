@@ -46,11 +46,13 @@
       />
     </div>
     <div v-else-if="descriptionSrcdoc" class="description-iframe-wrap">
+      <!-- 插件 EJS 模板：opaque origin（不带 allow-same-origin），碰不到父页、不继承应用页的 file: 显示权；
+           内层 CSP 禁止脚本动态请求，与宿主只经 postMessage 桥（__bridge）通信 -->
       <iframe
         ref="descriptionIframeRef"
         class="description-iframe"
         :srcdoc="descriptionSrcdoc"
-        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerpolicy="no-referrer"
       />
     </div>
@@ -381,6 +383,16 @@ function buildDescriptionIframeThemeStyles(): string {
 
 const EJS_BRIDGE_NONCE = "kabegame-ejs-bridge";
 
+/**
+ * 详情 iframe 的内层 CSP：禁止脚本动态请求（fetch / XHR / WebSocket / beacon），元素级远程图片照常；
+ * `frame-src about:` 只放嵌套的 srcdoc / about:blank 子 frame（如来源页面快照），file: 与 http(s) frame 被拒。
+ * 与父页策略取交集，脚本仍需 nonce；`__bridge.fetch` 走 postMessage，不受 `connect-src` 影响。
+ */
+const DESCRIPTION_CSP =
+  `default-src 'none'; script-src 'unsafe-inline' 'nonce-${EJS_BRIDGE_NONCE}'; style-src 'unsafe-inline'; ` +
+  "img-src https: http: data: blob:; media-src https: http: data: blob:; font-src data:; " +
+  "connect-src 'none'; frame-src about:; form-action 'none'; base-uri 'none'";
+
 const descriptionSrcdoc = computed(() => {
   const img = props.image;
   const meta = effectiveMetadata.value;
@@ -397,7 +409,8 @@ const descriptionSrcdoc = computed(() => {
     );
     body = body.replace(/<script(?![^>]*\bnonce[=\s])/gi, `<script nonce="${EJS_BRIDGE_NONCE}"`);
     const theme = buildDescriptionIframeThemeStyles();
-    return `${theme}<script nonce="${EJS_BRIDGE_NONCE}">${DESCRIPTION_BRIDGE_INJECT_SCRIPT}<\/script>${body}`;
+    // CSP meta 必须在任何资源与脚本之前生效，前置到文档最前
+    return `<meta http-equiv="Content-Security-Policy" content="${DESCRIPTION_CSP}">${theme}<script nonce="${EJS_BRIDGE_NONCE}">${DESCRIPTION_BRIDGE_INJECT_SCRIPT}<\/script>${body}`;
   } catch (e) {
     console.error("image detail EJS render failed", e);
     return "";

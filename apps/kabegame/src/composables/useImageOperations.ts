@@ -6,7 +6,7 @@ import type { ImageInfo } from "@/types/image";
 import { HIDDEN_ALBUM_ID, addImagesToAlbum, createAlbum, searchAlbums } from "@/services/albums";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useSettingsStore } from "@/stores/settings";
-import { fileNameFromUrlOrPath, fileToUrl } from "@/utils/fileUrl";
+import { fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl } from "@/utils/fileUrl";
 import { isWpeMediaType } from "@/utils/mediaMime";
 import { IS_WEB } from "@/env";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -56,8 +56,9 @@ export function useImageOperations(
     }
   };
 
+  // 桌面兜底可直接 fetch(file:)；Android / Web 仍经 HTTP。
   const getImageDownloadUrl = (image: ImageInfo) =>
-    fileToUrl(image.localPath) || fileToUrl(image.thumbnailPath || "") || image.url || "";
+    fileToUrl(image.localPath) || thumbnailToUrl(image.thumbnailPath || "") || image.url || "";
 
   /** 目录型 WPE 壁纸没有可复制 / 拖出 / 分享的单个源文件。 */
   const isWpeImage = (image: ImageInfo) => isWpeMediaType(image.type);
@@ -65,7 +66,7 @@ export function useImageOperations(
   const getImageFileName = (image: ImageInfo) =>
     fileNameFromUrlOrPath(fileToUrl(image.localPath)) ||
     fileNameFromUrlOrPath(image.localPath) ||
-    fileNameFromUrlOrPath(fileToUrl(image.thumbnailPath || "")) ||
+    fileNameFromUrlOrPath(thumbnailToUrl(image.thumbnailPath || "")) ||
     fileNameFromUrlOrPath(image.url || "") ||
     image.id;
 
@@ -196,7 +197,7 @@ export function useImageOperations(
 
       const localPath = (image.localPath || "").trim();
       const thumbnailPath = (image.thumbnailPath || "").trim();
-      const imageUrl = getImageDownloadUrl(image) || fileToUrl(localPath) || fileToUrl(thumbnailPath);
+      const imageUrl = getImageDownloadUrl(image) || fileToUrl(localPath) || thumbnailToUrl(thumbnailPath);
 
       if (!IS_WEB && localPath) {
         try {

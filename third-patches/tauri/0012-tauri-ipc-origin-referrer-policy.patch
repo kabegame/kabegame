@@ -1,0 +1,20 @@
+diff --git a/crates/tauri/scripts/ipc-protocol.js b/crates/tauri/scripts/ipc-protocol.js
+index 9ca244053b197c276180aa0778cb840539ab1294..27713242e3f03f6f12fddc5219402d2c853fd2bb 100644
+--- a/crates/tauri/scripts/ipc-protocol.js
++++ b/crates/tauri/scripts/ipc-protocol.js
+@@ -37,7 +37,14 @@
+       fetch(window.__TAURI_INTERNALS__.convertFileSrc(cmd, 'ipc'), {
+         method: 'POST',
+         body: data,
+-        headers
++        headers,
++        // The IPC handler requires a parseable `Origin` header. Chromium-based webviews send
++        // `Origin: null` on this POST when the page's referrer policy treats it as a downgrade
++        // (an https page calling `http://ipc.localhost` under the default
++        // `strict-origin-when-cross-origin`, or any page under `no-referrer`); the handler then
++        // answers 500 and, since the fetch resolved, the postMessage fallback never runs.
++        // `origin` always sends the document's origin, whatever policy the page declares.
++        referrerPolicy: 'origin'
+       })
+         .then((response) => {
+           const callbackId =

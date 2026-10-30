@@ -71,16 +71,8 @@ mod imp {
     static DRAG_FILE_RESOLVER: OnceLock<Box<DragFileResolver>> = OnceLock::new();
     const CHROME_ONLY_DISABLED_FEATURES: &[&str] = &[
         "ImmersiveReadAnything",
-        // `tauri`/`asset` custom schemes are registered with `SECURE` below, so
-        // `http://tauri.localhost` counts as a secure origin to Chromium's Local/
-        // Private Network Access checks. LNA then requires a user permission grant
-        // before that "secure" page may reach loopback services (e.g. the app's own
-        // `http://127.0.0.1:<port>` media server in `http_server.rs`). Real Chrome
-        // shows a permission prompt for this; CEF windowed mode has no such UI, so
-        // the request is denied before any socket opens — no CSP violation, no
-        // network entry, images just never load. Disable both the legacy PNA and
-        // current LNA feature names since the exact one gated by CEF's pinned
-        // Chromium version isn't guaranteed.
+        // 开发期 debug ingest 与 Windows Tauri 协议域名仍会触发 Chromium 的
+        // Local / Private Network Access 检查；CEF 窗口无授权弹窗，故保留禁用。
         "LocalNetworkAccessChecks",
         "PrivateNetworkAccessPermissionPrompt",
         "PrivateNetworkAccessRespectPreflightResults",
@@ -1014,7 +1006,7 @@ mod imp {
                     | SchemeOptions::SECURE.get_raw()
                     | SchemeOptions::CORS_ENABLED.get_raw()
                     | SchemeOptions::FETCH_ENABLED.get_raw()) as i32;
-                for scheme in ["tauri", "asset"] {
+                for scheme in ["tauri"] {
                     registrar.add_custom_scheme(Some(&CefString::from(scheme)), web_resource_options);
                 }
 

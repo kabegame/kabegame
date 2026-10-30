@@ -1,4 +1,4 @@
-//! 插件文件的统一按需读取出口；HTTP 与 MCP 共用白名单和 ZIP 读取逻辑。
+//! 插件文件的统一按需读取出口；命令、HTTP 与 MCP 共用白名单和 ZIP 读取逻辑。
 use super::{assets::normalize_asset_path, Plugin, PluginManager, PluginScript, VarDefinition};
 use crate::plugin::var_canonical::canonical_user_config_for_compare;
 use crate::storage::RunConfig;
@@ -17,6 +17,72 @@ pub enum PluginFileOrigin {
     Preview {
         token: String,
     },
+}
+
+impl PluginFileOrigin {
+    pub fn from_query(source: Option<String>, preview: Option<String>) -> Option<Self> {
+        match (source, preview) {
+            (None, None) => Some(Self::Installed),
+            (Some(source_id), None) => Some(Self::Store { source_id }),
+            (None, Some(token)) => Some(Self::Preview { token }),
+            _ => None,
+        }
+    }
+}
+
+pub struct PluginFileBody {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    pub etag: String,
+}
+
+#[derive(Debug)]
+pub enum PluginFileError {
+    NotFound,
+    Read(String),
+}
+
+impl std::fmt::Display for PluginFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "插件文件不存在"),
+            Self::Read(error) => f.write_str(error),
+        }
+    }
+}
+
+impl std::error::Error for PluginFileError {}
+
+/// 按来源、版本及清单白名单读取插件条目；ETag 命中时不打开 ZIP。
+pub fn read_plugin_file(
+    id: &str,
+    origin: &PluginFileOrigin,
+    version: &str,
+    path: &str,
+    if_none_match: Option<&str>,
+) -> Result<Option<PluginFileBody>, PluginFileError> {
+    let plugin = PluginManager::global_opt()
+        .and_then(|manager| manager.resolve_plugin_file(id, origin, version))
+        .ok_or(PluginFileError::NotFound)?;
+    let entry = allowed_entry(&plugin, path).ok_or(PluginFileError::NotFound)?;
+    let etag = etag_for(&plugin).map_err(PluginFileError::Read)?;
+    if if_none_match.is_some_and(|header| {
+        header.split(',').any(|value| {
+            let value = value.trim().trim_start_matches("W/");
+            value == etag || value == "*"
+        })
+    }) {
+        return Ok(None);
+    }
+    let file = plugin.file_path.as_ref().ok_or(PluginFileError::NotFound)?;
+    let bytes = read_kgpg_entry(Path::new(file), &entry)
+        .map_err(PluginFileError::Read)?
+        .ok_or(PluginFileError::NotFound)?;
+    Ok(Some(PluginFileBody {
+        bytes,
+        mime: mime_for_plugin_file(&entry),
+        etag,
+    }))
 }
 
 impl PluginManager {
@@ -374,6 +440,30 @@ mod tests {
     use serde_json::json;
     use std::{collections::HashMap, io::Write};
 
+    #[test]
+    fn package_file_origin_from_query() {
+        assert_eq!(
+            PluginFileOrigin::from_query(None, None),
+            Some(PluginFileOrigin::Installed)
+        );
+        assert_eq!(
+            PluginFileOrigin::from_query(Some("store".into()), None),
+            Some(PluginFileOrigin::Store {
+                source_id: "store".into()
+            })
+        );
+        assert_eq!(
+            PluginFileOrigin::from_query(None, Some("token".into())),
+            Some(PluginFileOrigin::Preview {
+                token: "token".into()
+            })
+        );
+        assert_eq!(
+            PluginFileOrigin::from_query(Some("store".into()), Some("token".into())),
+            None
+        );
+    }
+
     fn plugin() -> Plugin {
         let mut plugin = (**super::super::builtin::builtin_plugins()
             .values()
@@ -468,6 +558,28 @@ mod tests {
             .lock()
             .unwrap()
             .push_back(("secret".into(), Arc::new(preview)));
+
+        // ETag 命中不读取条目；白名单外路径始终拒绝。
+        let etag = etag_for(&installed).unwrap();
+        assert!(read_plugin_file(
+            "test-file",
+            &PluginFileOrigin::Installed,
+            "1.2.3",
+            "icon.png",
+            Some(&etag),
+        )
+        .unwrap()
+        .is_none());
+        assert!(matches!(
+            read_plugin_file(
+                "test-file",
+                &PluginFileOrigin::Installed,
+                "1.2.3",
+                "main.js",
+                None,
+            ),
+            Err(PluginFileError::NotFound)
+        ));
 
         let runtime = ProviderRuntime::new(
             Arc::new(ClosureExecutor::new(SqlDialect::Sqlite, |_, _| {

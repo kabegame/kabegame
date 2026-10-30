@@ -1,0 +1,57 @@
+diff --git a/crates/tauri/src/event/listener.rs b/crates/tauri/src/event/listener.rs
+index 92050e998..308b195f1 100644
+--- a/crates/tauri/src/event/listener.rs
++++ b/crates/tauri/src/event/listener.rs
+@@ -270,7 +270,7 @@ impl Listeners {
+   }
+ 
+   /// Removes all JS event listeners registered from the given webview.
+-  fn remove_webview_js_listeners(&self, webview_label: &str) {
++  pub(crate) fn remove_webview_js_listeners(&self, webview_label: &str) {
+     self
+       .inner
+       .js_event_listeners
+diff --git a/crates/tauri/src/webview/mod.rs b/crates/tauri/src/webview/mod.rs
+index 980cab6af..3abb7c0a8 100644
+--- a/crates/tauri/src/webview/mod.rs
++++ b/crates/tauri/src/webview/mod.rs
+@@ -1904,6 +1904,21 @@ tauri::Builder::default()
+     self.webview.dispatcher.reload().map_err(Into::into)
+   }
+ 
++  /// Drops every event listener registered from JavaScript in this webview
++  /// (listeners added from Rust with `listen` are not affected).
++  ///
++  /// JS listeners are tracked per webview label and only removed when the webview is destroyed:
++  /// navigating to a new document keeps the old document's listeners, and every later matching
++  /// event is still delivered by evaluating a script in the new document.
++  /// Embedders that navigate a long-lived webview between documents call this once they know the
++  /// document was replaced. Listeners the new document registers afterwards are kept as usual.
++  pub fn clear_js_listeners(&self) {
++    self
++      .manager()
++      .listeners()
++      .remove_webview_js_listeners(self.label());
++  }
++
+   /// Converts a file path to a URL that can be loaded by this webview.
+   ///
+   /// This is the Rust equivalent of the JavaScript `convertFileSrc` function.
+diff --git a/crates/tauri/src/webview/webview_window.rs b/crates/tauri/src/webview/webview_window.rs
+index 7e9873a1d..a45a6982d 100644
+--- a/crates/tauri/src/webview/webview_window.rs
++++ b/crates/tauri/src/webview/webview_window.rs
+@@ -2517,6 +2517,13 @@ impl<R: Runtime> WebviewWindow<R> {
+     self.webview.reload()
+   }
+ 
++  /// Drops every event listener registered from JavaScript in this webview.
++  ///
++  /// See [`Webview::clear_js_listeners`].
++  pub fn clear_js_listeners(&self) {
++    self.webview.clear_js_listeners()
++  }
++
+   /// Converts a file path to a URL that can be loaded by this webview.
+   ///
+   /// This is the Rust equivalent of the JavaScript `convertFileSrc` function.

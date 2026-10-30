@@ -30,7 +30,7 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 
 | Tauri 能力 | CEF 实现 |
 | --- | --- |
-| 前端资源 | 全局 scheme handler factory 服务前端/asset 资源。Linux/macOS 走自定义 scheme（`tauri://localhost` / `asset://localhost`）；Windows 上 Tauri core 把自定义 scheme `X` 改写为 `http://X.localhost`（见 `tauri` manager `webview.rs`），故 CEF 改为对 `http` scheme + `X.localhost` 域注册 factory（`protocol::cef_scheme_and_domain`），否则 `http://tauri.localhost` 会当成真实网络请求 → `ERR_CONNECTION_REFUSED` |
+| 前端资源 | 全局 scheme handler factory 服务 `tauri://localhost`；Windows 上 Tauri core 把自定义 scheme `X` 改写为 `http://X.localhost`（见 `tauri` manager `webview.rs`），故 CEF 对 `http` scheme + `X.localhost` 域注册 factory（`protocol::cef_scheme_and_domain`），否则 `http://tauri.localhost` 会当成真实网络请求 → `ERR_CONNECTION_REFUSED` |
 | `invoke()` | 普通 invoke 走上游 `fetch(ipc://localhost/<cmd>)` 主通道，直接由 Tauri 注册的 `ipc` scheme handler 承接，请求与响应在 DevTools Network 面板可见（CEF scheme handler 处理的请求不发 CORS 预检、只在响应上校验 ACAO，Tauri `ipc` handler 返回 `*`；2026-10 Linux 实测首帧起全部 200、无回退）；fetch 失败时上游脚本自动回退 `window.ipc.postMessage`，由 shim 经 `cef-ipc://` JSON 桥转给 `ipc_handler`（JSON 通道，`Uint8Array` 会退化成数字数组）；**二进制 body**（`InvokeBody::Raw`，如 `crawl_fs_fwrite` 流式写）直接用标准 `invoke(cmd, Uint8Array, { headers })` 走主通道；`ipc` / `cef-ipc` scheme 注册带 `CSP_BYPASSING`，surf / 爬虫等第三方页面的严格 CSP 拦不住 IPC（2026-10 Linux 畅游窗口实测：`connect-src 'self'` 下标准 invoke 仍走 `ipc://`，raw body 可达） |
 | 初始化脚本 | browser 创建时通过版本化 `extra_info` 传给 renderer，在每个新 V8 context 的 `RenderProcessHandler::on_context_created` 中同步执行，保证首次加载、刷新与跨页面导航均为 document-start |
 | 页面生命周期 | `LoadHandler` 映射到 Tauri page-load hook |
@@ -39,8 +39,9 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | 窗口事件 | CEF `WindowDelegate` 回流为 Tauri runtime events；指定显示器全屏先退出旧全屏、移动到命中显示器，再进入 CEF Views 全屏 |
 | Linux 窗口身份 | CEF Views 默认不设 X11 `WM_CLASS` / Wayland app_id，桌面环境无法把窗口关联到 `.desktop`（任务栏双条目、StartupNotify 转圈超时）；`WindowDelegate::get_linux_window_properties` 显式提供（优先 `RuntimeInitArgs::app_id`，回退可执行文件名），deb 模板 `StartupWMClass={{exec}}` 与之匹配 |
 | Raw window handle | Linux 返回 Xlib window，Windows 返回 Win32 HWND（+HINSTANCE）；macOS CEF Views 暂不暴露 NSView，返回 unavailable |
-| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在 Linux 与 macOS 上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件，**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
-| 文件文档策略（公开 API） | 给需要以 `file://` 加载本地页面、并让页面 `fetch` / XHR 同目录文件的 webview 用（Kabegame 只有壁纸窗口的 WPE 网页壁纸）。`allow_file_documents(label)` 须在**建窗前**调用：该 label 的 browser 在建窗 `extra_info`（与初始化脚本同一个字典）里带 bool 键 `kabegame.allow_file_access_from_file_urls`，**依赖 `third-patches/cef/0004`** 据此只给这个 browser 打开 `WebPreferences::allow_file_access_from_file_urls`（弹窗路径不带此键）。`set_file_document_root(label, Some(dir) / None)` 设置 / 清空允许的根目录（未登记返回 Err）：该 browser 的每个 `file:` 请求在 `OnBeforeResourceLoad`（`FileDocumentGuardHandler`）里经纯函数 `file_access::check_file_request` 判定，只放行根目录内的普通文件（URL 百分号解码；拒绝符号链接、目录、不存在；canonicalize 后严格位于根内，Windows 大小写不敏感），根为 `None` 时全拒，拒绝记 `[cef-runtime] deny file: …`。渲染进程对带键 browser 的 `file:` 文档（及主 frame 为 `file:` 时的子 frame）**不注入任何初始化脚本**。运行时只做机制，哪个窗口、哪个目录由应用决定 |
+| 文件拖放 | `TauriCefDragHandler` 同时负责落点侧与起手侧。落点侧把 CEF 回调翻成 Tauri 的四态 `WindowEvent::DragDrop`（Enter/Over/Drop/Leave），前端 `onDragDropEvent` 因此可用；挂载与否遵循 `webview_attributes.drag_drop_handler_enabled`（默认 true），关掉即回落 CEF 默认行为。**依赖 `third-patches/cef/0002`**：上游 CEF 只有 `OnDragEnter`，它唯一的能力是取消整个拖放，既拿不到落点也无法在保留拖放的前提下抑制 Chromium 默认的「导航到被拖入的文件」；patch 补出 `OnDragOver`/`OnDragLeave`/`OnDrop`，`OnDrop` 返回 true 即中止投递给渲染进程。起手侧在三个桌面平台上读取前端声明的图片 id，经 app resolver 授权后注入真实本地文件（Linux / Windows 走 aura 推模型，Windows 落地为 `CF_HDROP`；macOS 走 `WebDragSource` 拉模型），**依赖带 Chromium 内层 patch 的 `third-patches/cef/0003`**。语义对齐 wry 的 `with_drag_drop_handler`。Enter 回调不带坐标，按原点上报（紧随的首个 Over 会带来真实位置）；Drop 不带坐标，沿用最后一次 Over 的位置 |
+| 文件访问：两项能力 + 按发起 frame 分档的闸门（公开 API） | 两项能力都须在**建窗前**按 label 登记，写进建窗 `extra_info`（与初始化脚本同一个字典）的 bool 键，由 CEF 补丁只给这个 browser 打开（弹窗路径另建字典、不带这些键）：① `allow_file_documents(label)` → `kabegame.allow_file_access_from_file_urls`，**依赖 `third-patches/cef/0004`** 打开 `WebPreferences::allow_file_access_from_file_urls`，让以 `file://` 加载的页面能 `fetch` / XHR 同目录文件；② `allow_app_local_resources(label)` → `kabegame.allow_local_resources`，**依赖 `third-patches/cef/0005`**：最外层主 frame 里的非 `file:` 文档（应用页）可以加载 `file:`（渲染侧每次提交 `SecurityOrigin::GrantLoadLocalResources` 放过 `CanDisplay`，浏览器侧 `GrantRequestScheme(file)` 放过导航的 `FilterURL`；弹窗 / DevTools / OOPIF / fenced frame 不授），只放开显示与导航，应用页 `fetch(file:)` 经 0006 私有 CORS 列表与运行时白名单放行；同一键还由 **`third-patches/cef/0006`** 给最外层主 frame（非弹窗）补 `file:` 子资源 URLLoaderFactory，`<img>` / `<video>` / CSS `url()` 才能真正加载 `file:`（没有它请求会以 `ERR_UNKNOWN_URL_SCHEME` 失败；CORS 模式请求仍被 `FileURLLoaderFactory` 拒绝）。Kabegame 的登记：主窗口与壁纸窗口在三个桌面平台都登记 ②（图库媒体走 `file://`）；Windows 上壁纸窗口另加 ①（WPE 网页壁纸主 frame），主窗口另加 ①（应用页给图库预览 iframe 赋 `src = file:…`，iframe 里的 `file:` 文档再读同目录）。两项能力与根目录并在 `file_access` 同一张 label 表的 `FilePolicy { file_documents, app_local_resources, root }` 里，`extra_info_keys(label)` 按能力给出要写的键；**登记任一项即开闸门**，`resource_request_handler` 按**发起 frame** 分档：应用页主 frame 的子资源（非导航、`frame.is_main()`、`request_initiator` 非空非 `null` 且与 `frame.url()` 都不是 `file:`）在登记了 ② 时**免检**（`file_access::app_page_open`，图库媒体）；子 frame 导航到 `file:`、主 frame 导航到 `file:`、`file:` 文档自己的子资源（含壁纸窗口整窗 `file:` 时的主 frame）过闸门。发起方 origin 是建工厂时钉死的文档 origin（子 frame 导航为 `null`），比 `frame.url()` 的缓存可靠，两者任一是 `file:` 就走闸门；不按 frame id 建表（OOPIF 换进程后 id 会变）。`set_file_document_root(label, Some(dir) / None)` 设置 / 清空允许的根目录（未登记返回 Err），过闸门的 `file:` 请求在 `OnBeforeResourceLoad`（`FileDocumentGuardHandler`）里经纯函数 `file_access::check_file_request` 判定，只放行根目录内的普通文件（URL 百分号解码；拒绝符号链接、目录、不存在；canonicalize 后严格位于根内，Windows 大小写不敏感），根为 `None` 时全拒，拒绝记 `[cef-runtime] deny file: …`。补丁只开门，加载哪些文件只由闸门裁决（主窗口的根目录由应用的 `set_wpe_web_preview` 在预览挂载 / 卸载时设置 / 清空，不预览时为空、拒绝全部过闸门的 `file:` 请求；应用页免检的图库媒体不看根目录）。`file:` 文档**照常注入**初始化脚本（Tauri 自身脚本只进主 frame，all-frames 脚本自己按地址判断是否启用），IPC 权限交给应用的 ACL：见下一行「`file:` 文档的 IPC 来源」。运行时只做机制，哪个窗口开哪项能力、放行哪个目录由应用决定 |
+| `file:` 文档的 IPC 来源 | `file:` 文档的 `Origin` 请求头是 `null`：Tauri 的 `ipc://` 主通道解析失败后前端改走 `cef-ipc` 回退通道，而回退通道此前拿不到合法 Origin 就退到 webview 初始 URL（应用页），请求被当成 `Origin::Local`、拿到本地 capability 的全部命令。现在 scheme factory 在 `create(browser, frame, ..)` 里同时记下 `frame.url()`（`protocol::RequestFrame`），`CefResourceHandler::open` 对 `file:` frame 把 `Origin` 改写成 frame URL（`pin_file_frame_origin`，其它来源不动），两条通道都判成 `Origin::Remote { url: file:///… }`，只拿到 `remote.urls` 匹配它的 capability（Kabegame 是 `wpe-web-capability`）。`cef-ipc` 的来源取值顺序为「`Origin` 头 → frame URL → 初始 URL」，已知 frame 时不再退到应用页；`file:///…` 装不进 `http::Uri`（空 authority），交给 `ipc_handler` 前改写成等价的 `file://localhost/…`，Tauri 用 `url::Url` 解析时归一回 `file:///…` |
 | 鼠标注入（公开 API） | `inject_mouse(label, MouseInjection::{Move, Leave, LeftDown, LeftUp} { x, y })`：坐标是视图 DIP，经 `CefBrowserHost::SendMouseMoveEvent` / `SendMouseClickEvent(LEFT, click_count=1)` 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序。只 `post_task` 到 UI 线程、不等回执（移动是高频的），找不到 browser 静默返回 `Ok`；`Move` / `Leave` 一律不带按键标志（同 WE 的 `modifiers=0`）：Blink 只对带左键的移动做拖动处理，带上会让拖动页面图片启动阻塞 UI 线程的 Win32 OLE 拖放，而真实抬起发生在 Explorer、本线程收不到，拖放挂住。Kabegame 用它做 Windows 桌面鼠标转发（`kabegame/src/wallpaper/input_forward.rs`） |
 | 渲染进程看门狗 | `TauriCefRequestHandler` 对所有 webview 无条件挂载（导航闸门为可选字段）。`on_render_process_unresponsive`（渲染进程 5s 未回执输入、再 1s 主线程 ping 无应答；`runtime.rs` 以 `--enable-features=RendererHangWatcher:delay/5s` 把 Chromium 桌面默认的 15s 改为 5s）直接 `terminate()`；只对可见窗口、且有待回执输入时计时，DevTools / CDP 附着期间 Chromium 会忽略；`on_render_process_terminated`（含真崩溃）自动 `browser.reload()` 恢复。`crawler-*` 标签的隐藏爬虫窗口在两个回调中均被排除——其卡死由 kabegame-core 调度器的 60s/120s 心跳看门狗判定并结束任务（见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.6） |
 
@@ -94,6 +95,11 @@ Android 不会把 CEF 放入 Kabegame 的依赖树。
   `protocol.rs` 在 Windows 对 `http` scheme + `<scheme>.localhost` 域注册 factory，而非
   自定义 scheme（否则连接被当真实网络请求 → `ERR_CONNECTION_REFUSED`，页面 refused/白屏）。
   `cef-ipc`（runtime 自有 postMessage 通道）在所有平台仍是自定义 scheme。
+- **https 页面的 IPC `Origin`**：Windows 上 `ipc://` 主通道也是 `http://ipc.localhost`。https 页面（畅游站点）按默认
+  referrer 策略 `strict-origin-when-cross-origin` 发它属于降级，CEF 把 `Origin` 发成 `null`，Tauri `ipc` handler 回 500
+  「Origin header is not a valid URL」，而 500 让 fetch 正常 resolve、不触发 `postMessage` 回退。`third-patches/tauri/0012`
+  给主通道 fetch 固定 `referrerPolicy: 'origin'`，`ipc.rs` 的 `cef-ipc` shim 同样设置；opaque 来源（`file:`、沙箱 frame）
+  仍是 `null`，`file:` frame 由 `pin_file_frame_origin` 改写。
 - **请求 URI 还原**：Tauri 的 handler 仍按自定义 scheme 约定解析 URI（`protocol/tauri.rs`
   对整串 `strip_prefix("tauri://localhost")`）。CEF 拿到的是 `http://tauri.localhost/...`，
   strip 失败 → 空路径 → 回退 `index.html`（JS 模块被当 `text/html` → MIME 报错）。故
@@ -319,18 +325,20 @@ CEFBUILD=~/kabegame-cefbuild deno task build:chromium
 同步更新 `third-patches/<dir>/README.md` 的 vendor base。cef-rs 侧还要重跑
 `update-bindings` 并把结果作为新编号 patch 追加。
 
+应用页 `fetch(file:)` 还需运行时对该 origin 登记 CEF 跨源白名单；补丁 0006 的私有 CORS 列表只授予该文档 origin，profile 共享列表不变。
+
 ## 当前限制
 
 - CEF Views 对部分 Tauri window API 没有等价能力；运行时对这些 API 返回保守值或 no-op。
 - Linux CEF 的 GL 后端固定 ANGLE/GL；ozone 后端由 `linux_ozone_platform()` 按会话探测（`WAYLAND_DISPLAY` 有值走原生 Wayland，否则 X11），`GDK_BACKEND` 与 `--ozone-platform` 取同一个值，`KABEGAME_OZONE_PLATFORM=x11|wayland` 可强制覆盖。**不要在别处另行判断后端。**
-- Linux 在 **CEF standard** 模式下安装拖出 resolver；当使用已重编且包含
+- 三个桌面平台在 **CEF standard** 模式下都安装拖出 resolver；当使用已重编且包含
   `third-patches/cef/0003-drag-source-filenames.patch` 的 CEF 时，图库拖出会交付真实本地
-  文件路径，绘图软件、浏览器上传框与文件管理器不再依赖目标端下载 localhost URL。
-  Linux 前端因此**只**写自定义 mime 里的 image id，不再写 `DownloadURL` / `text/uri-list` /
-  `text/plain`（写了也会被 Chromium 一并清掉）。代价是没有 HTTP 兜底：resolver 未安装、id 未获
-  授权或仍在用未包含 0003 的旧 CEF 时，目标端拿到的是 Blink 为 `<img>` 自动填充的缩略图载荷。
-  Windows 仍写那三项并沿用 `DownloadURL` 虚拟文件路径，URL 直接使用当前媒体元素实际加载的
-  `/file/{*path}`、`/thumbnail/{*path}` 或 `/compatible/{*path}`；macOS 与 Linux 一样走真实路径注入。
+  文件路径（Windows 为 `CF_HDROP`），绘图软件、浏览器上传框、文件管理器与资源管理器不再依赖
+  目标端下载 URL。桌面前端因此**只**写自定义 mime 里的 image id 并设 `effectAllowed = "copy"`，
+  不再写 `DownloadURL` / `text/uri-list` / `text/plain`（写了也会被 Chromium 一并清掉）。代价是
+  没有 URL 兜底：resolver 未安装、id 未获授权或仍在用未包含 0003 的旧 CEF 时，目标端拿到的是
+  Blink 为 `<img>` 自动填充的缩略图载荷。Windows 半边是 Phase 6d 加入的，旧的 Windows CEF 需重编；
+  Web 版不经 CEF，仍写 `DownloadURL`。详见 `cocs/tauri/LINUX_REAL_FILE_DRAG_OUT.md`。
 - Wayland 会话下**不能**用 `KABEGAME_OZONE_PLATFORM=x11` 退回 X11：XWayland 客户端往原生
   Wayland 目标拖出会被合成器直接拒绝（光标显示禁止符号），拖出在源头就失败，与上面这条
   链路是否生效无关。本机 Chrome 强制 `--ozone-platform=x11` 可独立复现。

@@ -1,4 +1,5 @@
-//! 把 `project.json` 的**作者默认值**换算成壁纸窗口可用的视频播放属性。
+//! 把 `project.json` 的**作者默认值**换算成壁纸窗口可用的视频播放属性；网页壁纸则原样取出
+//! 带 `value` 的条目（[`resolve_web_user_props`]），由垫片投递给页面的 `applyUserProperties`。
 //!
 //! WPE 不在磁盘上生成任何壁纸副本：缩放、对齐、翻转、背景色、播放速率、音量与
 //! 亮度 / 对比度 / 饱和度 / 色相全部是播放时的逐壁纸属性。Kabegame 同样只播原文件，
@@ -200,6 +201,39 @@ pub fn resolve_video_props_from_raw(raw: &Value) -> WpeVideoProps {
     }
 }
 
+/// 网页壁纸推给页面的用户属性：`general.properties` 中带 `value` 的条目，形如 `{ key: { type, value } }`。
+/// 没有 `value` 的纯展示条目（分组、说明行）与没有默认值的 `file` 属性不推。作者默认值层；
+/// Phase 7 的用户值在调用方叠加。
+pub fn resolve_web_user_props(raw: &Value) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    let Some(props) = properties(raw) else {
+        return out;
+    };
+    for (key, prop) in props {
+        let Some(value) = prop.get("value") else {
+            continue;
+        };
+        let mut entry = serde_json::Map::new();
+        if let Some(kind) = prop.get("type") {
+            entry.insert("type".into(), kind.clone());
+        }
+        entry.insert("value".into(), value.clone());
+        out.insert(key.clone(), Value::Object(entry));
+    }
+    out
+}
+
+/// Kabegame 界面语言（`Settings::get_resolved_language`）→ WPE 语言码（webwallpaper64 码表，连字符形式）。
+pub fn wpe_language_code(locale: &str) -> &'static str {
+    match locale {
+        "zh" => "zh-chs",
+        "zhtw" => "zh-cht",
+        "ja" => "ja-jp",
+        "ko" => "ko-kr",
+        _ => "en-us",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +308,95 @@ mod tests {
             "general": { "properties": { "alignment": { "value": 99 } } }
         })));
         assert_eq!(props.alignment, WpeAlignment::Cover);
+    }
+
+    /// kaguya（创意工坊 3679122549）`project.json` 的 `general.properties` 片段，外加分组 / 说明行。
+    fn kaguya_raw() -> Value {
+        json!({
+            "type": "web",
+            "file": "index.html",
+            "general": {
+                "properties": {
+                    "audio_sensitivity": {
+                        "index": 5, "max": 1.5, "min": 0.5, "order": 105, "step": 0.1,
+                        "text": "Audio Sensitivity", "type": "slider", "value": 1
+                    },
+                    "bg_mouse_sensitivity": {
+                        "index": 1, "max": 3, "min": 0.1, "order": 101, "step": 0.1,
+                        "text": "Mouse Animation Sensitivity", "type": "slider", "value": 1
+                    },
+                    "custom_user_bg": {
+                        "filter": "*.jpg|*.png|*.jpeg|*.webp", "index": 0, "order": 100,
+                        "text": "Custom BG Image", "type": "file"
+                    },
+                    "playback_rate": {
+                        "index": 2, "max": 2, "min": 0.25, "order": 102, "step": 0.25,
+                        "text": "Playback Speed", "type": "slider", "value": 1
+                    },
+                    "schemecolor": {
+                        "order": 0, "text": "ui_browse_properties_scheme_color", "type": "color",
+                        "value": "0.7529411764705882 0.7529411764705882 0.7529411764705882"
+                    },
+                    "text_color": {
+                        "index": 3, "order": 103, "text": "Text Color", "type": "color", "value": "1 1 1"
+                    },
+                    "visualizer_color": {
+                        "index": 4, "order": 104, "text": "Visualizer Color", "type": "color", "value": "1 1 1"
+                    },
+                    "group_audio": { "order": 200, "text": "<h3>Audio</h3>", "type": "group" },
+                    "note": { "order": 201, "text": "Only a description line" }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn web_user_props_keep_entries_with_value() {
+        let props = resolve_web_user_props(&kaguya_raw());
+        let mut keys: Vec<_> = props.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "audio_sensitivity",
+                "bg_mouse_sensitivity",
+                "playback_rate",
+                "schemecolor",
+                "text_color",
+                "visualizer_color"
+            ]
+        );
+        // 只保留 type 与 value，展示字段（text / min / max / step / order）不推
+        assert_eq!(props["audio_sensitivity"], json!({ "type": "slider", "value": 1 }));
+        assert_eq!(
+            props["schemecolor"],
+            json!({
+                "type": "color",
+                "value": "0.7529411764705882 0.7529411764705882 0.7529411764705882"
+            })
+        );
+        // 没有默认值的 file 属性、分组与说明行被跳过
+        assert!(!props.contains_key("custom_user_bg"));
+        assert!(!props.contains_key("group_audio"));
+        assert!(!props.contains_key("note"));
+    }
+
+    #[test]
+    fn web_user_props_without_type_or_properties() {
+        let props = resolve_web_user_props(&json!({
+            "general": { "properties": { "x": { "value": false } } }
+        }));
+        assert_eq!(props["x"], json!({ "value": false }));
+        assert!(resolve_web_user_props(&json!({ "type": "web" })).is_empty());
+    }
+
+    #[test]
+    fn wpe_language_codes() {
+        assert_eq!(wpe_language_code("zh"), "zh-chs");
+        assert_eq!(wpe_language_code("zhtw"), "zh-cht");
+        assert_eq!(wpe_language_code("ja"), "ja-jp");
+        assert_eq!(wpe_language_code("ko"), "ko-kr");
+        assert_eq!(wpe_language_code("en"), "en-us");
+        assert_eq!(wpe_language_code("fr"), "en-us");
     }
 }

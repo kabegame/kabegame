@@ -156,6 +156,8 @@ Markdown 的每个本地图片引用都必须在 `kbAssets` 声明；未引用�
 
 :::note
 模板内的内联 `<script>` 需要 `nonce="kabegame-ejs-bridge"`（注入脚本已自动带上）以通过 CSP。
+
+模板运行在不带 `allow-same-origin` 的沙箱 iframe 里，并带内层 CSP（`connect-src 'none'`）：直接 `fetch` / XHR / WebSocket、`<link>` 外链样式、远程字体与嵌套的 http(s) iframe 都会被拒，网络请求一律走 `__bridge.fetch`；`<img src="https://...">` 与 CSS 背景图等元素级远程图片照常显示。也不能访问 `window.parent` 或 `localStorage`。
 :::
 
 若插件未提供 `description.ejs`，或 `metadata` 为空，详情区回退到原始 k-v 列表显示。

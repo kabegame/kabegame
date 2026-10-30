@@ -8,7 +8,7 @@
 //!   `LeftUp`，保证按下 / 抬起成对。
 //! - 不拦截、不吞掉任何输入：Explorer 照常收到点击。
 //!
-//! 只在「窗口模式 + 当前是网页壁纸」时运行，由 `wpe_web_host` 启停。
+//! 只在「窗口模式 + 当前是网页壁纸」时运行，由 `WallpaperWindow`（`wallpaper/window.rs`）启停。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

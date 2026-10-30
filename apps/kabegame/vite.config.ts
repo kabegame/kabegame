@@ -14,8 +14,8 @@ const webDevApiProxyPaths = [
   "/api",
   "/file",
   "/thumbnail",
+  "/compatible",
   "/plugin_file",
-  "/proxy",
   "/mcp",
   "/__ping",
 ];
@@ -52,6 +52,7 @@ export default defineConfig(async ({ mode, command }) => {
   const { default: pubConfig, root } = await import("../../vite.config.pub");
 
   const isWeb = process.env.KABEGAME_MODE === "web" || mode === "web";
+  const isProd = command === "build";
   // 壁纸窗口与主窗口共用 index.html（?window=wallpaper，由 main.ts 分发），不再单开入口。
   const hasSurfNavbar = !isWeb;
   const rollupInput = {

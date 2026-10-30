@@ -6,7 +6,7 @@ Web release 不由 Kabegame 进程读取媒体文件：`/file`、`/thumbnail`、
 - `thumbnail_path` → `/thumbnails/<文件名>`
 - `compatible_path`、`wallpaper_compatible_path` → `/compatibles/<文件名>`
 
-桌面端和 debug Web 不做 CDN 转写，继续通过 `/file/{*path}`、`/thumbnail/{*path}`、`/compatible/{*path}` 读取本地路径。路径已经是 HTTP(S) URL 时原样透传。
+桌面端、Android 和 debug Web 不做 CDN 转写。桌面 CEF 的图库显示直接用 `file://`（`apps/kabegame/src/utils/fileUrl.ts` 的 `fileToUrl` / `thumbnailToUrl` / `compatibleToUrl`，CEF 补丁 0006 + 应用页主 frame 免检，见 `cocs/wpe/WPE_IMPORT.md`），桌面 `fetch(file:)` 可直接读字节，复制兜底使用 `file://`，三个桌面平台的拖出走 CEF 补丁 0003 的真实文件链路（不经媒体 URL）；桌面不再启动本地 HTTP 文件服务。Android 与 debug Web 仍通过 `/file`、`/thumbnail`、`/compatible` 路由显示。路径已经是 HTTP(S) URL 时原样透传。
 
 ## 线上存储约束
 
@@ -32,7 +32,7 @@ Web release 不由 Kabegame 进程读取媒体文件：`/file`、`/thumbnail`、
 
 部署时先把 `dist-kabegame-web/` 中除 `index.html` 以外的文件推到 OSS，再上传插件、停服换二进制：
 
-1. `rsync -rt --delete` 到服务器本地暂存目录 `~/kabegame/web-dist/`；
+1. `tar` 打包经 `ssh` 管道传到服务器本地暂存目录 `~/kabegame/web-dist/`（先清空再解包）；不用 rsync，因为 Windows 上 chocolatey 的 rsync（cygwin）拉起 Git Bash 的 msys `ssh` 会报 `dup() in/out/err failed`；
 2. 在服务器上 `cp -r` 进 ossfs2 挂载点 `/mnt/oss/web/`；
 3. 用 `curl` 确认入口脚本在 CDN 上以 JavaScript 类型返回，否则在停服前中止。
 

@@ -172,7 +172,9 @@ WebView 也有每任务隔离的私有 VFS，但只暴露**异步无同步方法
 
 ## 安全边界（capability）
 
-爬虫窗口的 Tauri capability 被刻意收紧，只放行：事件三件套（`core:event:allow-listen` / `allow-emit` / `allow-emit-to`）、`core:window:allow-hide`，以及这一整组 `crawl_*` 宿主命令（即 `Kabegame.*` 的底层）。
+爬虫窗口的 Tauri capability 被刻意收紧，只放行 `core:window:allow-hide` 和这一整组 `crawl_*` 宿主命令（即 `Kabegame.*` 的底层），不给任何应用事件权限。
+
+capability 按「窗口 + 页面来源」授权，分不清是插件脚本还是被爬站点自己的脚本在调用：插件能调的命令，站点也能调。所以这份清单只放任务内作用域的命令；应用事件会广播图库、画册、任务等全局数据，也能被伪造发给主窗口，因此不在其中。
 
 这意味着：
 

@@ -1,6 +1,6 @@
 # WPE 壁纸兼容 · 第二阶段：Web
 
-> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3 方案已写（[phase-3-web-import-preview.md](phase-3-web-import-preview.md)），待用户确认关键决策；Phase 5 起为实现清单
+> 状态：Phase 1 完成（2026-10-25）；Phase 2 完成（2026-10-26）；Phase 3、4 已实现（2026-10-27，真机回归进行中）；Phase 5 已实现（2026-10-28，真机回归待做）；Phase 6 暂时跳过；Phase 6a 已实现（2026-10-28，真机回归 2026-10-29 完成）；Phase 6b 已实现（2026-10-29，静态检查与单测通过；真机回归待重编 CEF 后进行）；Phase 6c 已实现（2026-10-30，Windows 真机 9/12 通过）；Phase 6d 方案已写（2026-10-30）；Phase 7 方案已写（2026-10-28，关键决策待确认）；Phase 8 为实现清单
 >
 > 上级总纲：[../PLAN.md](../PLAN.md)（阶段路线第 2 行）。第一阶段 Video 已完成初步真机测试。
 >
@@ -9,7 +9,14 @@
 > - [`API.md`](API.md)：Phase 1 的产出，WPE Web 壁纸接口参考、运行环境、兼容矩阵与难点方案（已完成）。
 > - [`phase-2-wallpaper-vue.md`](phase-2-wallpaper-vue.md)：Phase 2 点级方案——壁纸窗口 Vue 化、`WallpaperStage` 组件、预览内嵌。
 > - [`phase-3-web-import-preview.md`](phase-3-web-import-preview.md)：Phase 3 点级方案——Web 导入、`/wpe` 网页 MIME、CSP、`WallpaperStage` iframe 分支、预览「桌面画布」；文末为关键决策。
-> - `phase-N-<名称>.md`：Phase 5 起各 Phase 开工前的点级方案（待写）。
+> - [`phase-4-file-host-input.md`](phase-4-file-host-input.md)：Phase 4 点级方案——桌面 `file://` 宿主与鼠标转发。
+> - [`phase-5-shim-host.md`](phase-5-shim-host.md)：Phase 5 点级方案——运行时垫片、`file:` 来源判定与受限 IPC、拉取 / 推送协议、预览桥。
+> - [`phase-6a-file-preview.md`](phase-6a-file-preview.md)：Phase 6a 点级方案——预览 iframe 改走 `file://`，与桌面共用运行时目录拦截。
+> - [`phase-6b-file-media.md`](phase-6b-file-media.md)：Phase 6b 点级方案——图库媒体改走 `file://`（CEF 补丁 0006 子资源工厂、按 frame 分档的运行时闸门、插件详情 iframe 收紧、删除 `/proxy`）。
+> - [`phase-6c-no-http.md`](phase-6c-no-http.md)：Phase 6c 点级方案——桌面完全摆脱本地 HTTP 服务（0006 私有 CORS 列表 + 跨源白名单放开 `fetch(file:)`、Tauri 命令 `read_plugin_file` 替代 `/plugin_file`、拖出 / 复制改 `file://`、删除 `start_http_server`）。
+> - [`phase-6d-windows-drag-out.md`](phase-6d-windows-drag-out.md)：Phase 6d 点级方案——Windows 拖出放弃 `DownloadURL`，改走 CEF 补丁 0003 的真实文件链路（aura 钩子放宽到 Windows、清 `html` / `download_metadata`、不打 `x-renderer-taint`；运行时 / 应用 cfg 去平台限制；前端 `effectAllowed=copy`、Web 保留 `DownloadURL`；resolver `is_file()`）。
+> - [`phase-7-user-properties.md`](phase-7-user-properties.md)：Phase 7 点级方案——用户属性存储、属性面板、显示条件、本地化、`file` / `directory` 属性。
+> - `phase-N-<名称>.md`：其余 Phase 开工前的点级方案（待写）。
 
 ## 总体设计思路
 
@@ -149,9 +156,13 @@ Tauri 自身的 `__TAURI_INTERNALS__` 初始化脚本是否同样只进主 frame
 | Phase 2 | 壁纸窗口 Vue 化 | 同 `index.html` 分发；`WallpaperStage`（纯渲染）/ `WallpaperWindow`（IPC 根）；删除 `wallpaper.html` / `wallpaper.ts`；壁纸行为不变 | — |
 | Phase 3 | Web 导入 + 预览内嵌 | `x-wpe/web` 入库；`WallpaperStage` 加跨源 iframe 分支；`ImageContent` 对非视频 WPE 行切到 `WpeWallpaperContent`；预览「桌面画布」；`/wpe` 补网页 MIME；CSP `frame-src` 放行本地 HTTP 源 | Phase 2 |
 | Phase 4 | 桌面 `file://` 宿主 + 鼠标转发 | CEF 补丁 0004 按浏览器开文件访问；壁纸窗口对网页壁纸主 frame 导航到 `file://` 入口、切走导航回应用页；运行时按壁纸目录拦截 `file:` 请求、`file://` 文档不注入 Tauri 脚本；Windows 桌面鼠标移动 / 左键点击转发 | Phase 3 |
-| Phase 5 | 运行时垫片与宿主协议 | 注入脚本、`postMessage` 协议、作者默认值推送、通用设置与暂停 | Phase 3 |
-| Phase 6 | 桌面窗口收尾 | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
-| Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性 | Phase 5 |
+| Phase 5 | 运行时垫片与宿主协议 | all-frames 垫片；`file:` 来源判定 + `wpe-web-capability`；桌面「拉取命令 + `listen` 推送」、预览「`postMessage` ↔ 父页面调命令」；作者默认值与界面语言 | Phase 4 |
+| Phase 6 | 桌面窗口收尾（暂时跳过） | FPS 上限、暂停冻结、多显示器、轮播口径 | Phase 5 |
+| Phase 6a | 预览 iframe 改 `file://` | 主窗口登记两项文件访问能力（0004 + CEF 补丁 0005）、`set_wpe_web_preview` 设根目录并返回入口、前端给 iframe 赋 `src`、CSP `file:`；预览与桌面同一套 Rust 拦截，`localStorage` 同源；删除 `/wpe` 目录服务 | Phase 5 |
+| Phase 6b | 图库媒体改 `file://` | CEF 补丁 0006 给应用页主 frame 加 `file:` 子资源工厂；运行时闸门按发起 frame 分档（应用页主 frame 免检、子 frame 导航与 `file:` 文档按根目录）；三个桌面平台与壁纸窗口都登记 0005；前端桌面媒体 URL 改 `file:///`、`fetch` / 拖出 / `/plugin_file` 走显式 HTTP 出口；插件详情 iframe 去 `allow-same-origin` + 内层 CSP；删除 `/proxy` | Phase 6a |
+| Phase 6c | 桌面零 HTTP | 修订 0006（工厂带该文档 origin 的私有 CORS 列表）+ 运行时登记 CEF 跨源白名单（应用 origin → `file`）放开 `fetch(file:)`；插件文件改 Tauri 命令 `read_plugin_file`（IPC 原始字节、前端按坐标缓存 blob / 文本，不加新 scheme；核心层纯函数与 Android / Web 的 axum 共用）；复制兜底与 Windows 拖出改 `file://`；删除 `start_http_server` / 桌面版 `get_http_server_base_url`；关闭无人使用的 Tauri asset 协议（`protocol-asset` feature + `assetProtocol` 配置 + runtime scheme 列表）；CSP `connect-src` 去 `127.0.0.1`、加 `file:` | Phase 6b |
+| Phase 6d | Windows 拖出走真实文件 | CEF 补丁 0003 的 aura 钩子放宽到 `IS_WIN`，delegate 注入文件时另清 `html` / `download_metadata`、不打 Windows 的 `chromium/x-renderer-taint`；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`；resolver 收紧为普通文件 | Phase 6c |
+| Phase 7 | 用户属性 | 逐壁纸属性存储与面板、显示条件、本地化、`file` / `directory` 属性（两种宿主都生效） | Phase 6a |
 | Phase 8 | 音频可视化与媒体集成 | 系统回环采集 + 频谱、系统媒体会话信息推送 | Phase 6 |
 | — | RGB 外设、鼠标交互 | 空实现 / 暂不做（见待定决策） | — |
 
@@ -283,19 +294,19 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - 删除 `DEBUG-WPE-FILE` / `DEBUG-WPE-INPUT` 临时代码。
 
 ### Phase 5 — 运行时垫片与宿主协议
-- **新增**
-  - 垫片脚本 `wpe-runtime/shim.js`（前端源码打包进 app，由 HTTP 服务以固定路由提供）：定义 Phase 1 清单里的全部全局
-    接口；监听父页面 `message`，按消息类型调用页面注册的回调；注册函数在收到数据前不回调。
-  - 宿主侧 `WpeWebHost`（壁纸本体内的模块，桌面与预览因共用壁纸本体而共用它）：握手、推送作者默认值与通用设置、
-    转发暂停；校验 `event.source` 与 `event.origin`，只接受自己那个 iframe 的消息。
-  - 协议版本号写进握手消息，垫片与宿主不一致时宿主降级为「只推属性」。
-- **修改**（`http_server.rs`）
-  - `handle_wpe_file` 对 `text/html` 响应在 `<head>` 最前面插入垫片 `<script>`；没有 `<head>` 时插在文档最前面。
-    改写只发生在响应体，不碰磁盘文件；带 `Range` 的 HTML 请求直接返回整页。
-  - 新增垫片路由，与 `/wpe` 同在本地媒体路由下，Web 发布版不挂。
-- **新增**（后端）
-  - `wpe/properties.rs` 增加 `resolve_web_props(project)`：把 `general.properties` 换算成「推给页面的值」形态，
-    剔除 `group` / `text` 等纯展示条目；本地化字符串按当前语言替换。
+> 状态：已实现（2026-10-28），真机回归见 `versions/latest/regression.md`。
+
+点级方案见 [phase-5-shim-host.md](phase-5-shim-host.md)（2026-10-27 按已确认决策 10 重写，2026-10-28 两次修订）。要点：
+- 垫片 `webview_js/wpe_shim.js` 以 `initialization_script_for_all_frames` 注入壁纸窗口与主窗口，按地址自判启用。
+  传输只有 `pull` / `listen` 两个原语：桌面直接 `invoke("wpe_web_pull_state")` 与 `listen`；预览 iframe 都 `postMessage` 给宿主页，
+  宿主页调 `get_wpe_web_state`，并用 `useTauriProxy()` 代为 listen（`kbEvent$` 合并成一条管道转发）。宿主不主动推送。
+- 重拉触发：`setting-change` 的 `language`；本张图片的 `metadataId` 补丁（metadata 按 id 不可变，属性一改就换 id）。
+  load 后首次全量投递；之后用户属性按键差异、通用属性整份；首次投递后页面换 listener 时补投全量；乱序按垫片的拉取编号丢弃。
+- 运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（否则回退到应用页、被当成本地来源拿到全部权限），
+  并删除 Phase 4 的「`file:` 文档不注入初始化脚本」规则。
+- 新增 `wpe-web-capability`（壁纸窗口 + 远程 `file:///*`）：只开 `wpe_web_pull_state` 与事件 `listen` / `unlisten`。
+- Tauri 不在导航时清 JS 事件监听：补丁 0011 加 `clear_js_listeners()`，`WallpaperWindow` 每次导航成功后调用。
+- 状态 `{ imageId, user, general: { language } }` 只在 Rust 侧计算；`fps`、暂停留给 Phase 6。
 
 ### Phase 6 — 桌面窗口收尾
 - **修改**（`kabegame/src/wallpaper/rotator.rs`、`commands/wallpaper.rs`）
@@ -307,16 +318,71 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
 - **新增**
   - 多显示器：每个壁纸窗口各一个 iframe，属性变更广播到全部宿主。
 
+### Phase 6a — 预览 iframe 改 `file://`
+> 状态：已实现（2026-10-28），真机回归见 `versions/latest/regression.md`。
+
+点级方案见 [phase-6a-file-preview.md](phase-6a-file-preview.md)。HTTP 页面引用 `file:` 在渲染进程就被拦、Rust 侧无钩子，
+所以预览也改成 `file:` 文档：主窗口 `allow_file_documents("main")`，预览挂载 / 卸载经 `set_wpe_web_preview` 设 / 清根目录，
+垫片按「非顶层 `file:`」判定预览，桥 `postMessage` 用 `"*"`。IPC 三道闸门不受 scheme 影响。真机证实应用页给子 frame 赋
+`file:` 的 `src` 同样被 `CanDisplay` 拦下（浏览器侧还有 `FilterURL` 改写成 `about:blank#blocked`）；改为 CEF 补丁 0005
+（主窗口建窗前 `allow_app_local_resources("main")`，渲染侧 `GrantLoadLocalResources`、浏览器侧 `GrantRequestScheme(file)`），
+该命令设好根目录后返回入口、前端赋 `src`；`WallpaperTarget.webEntry` 随之删除（见 phase-6a「实施记录」，含已撤掉的
+浏览器进程导航绕行）。
+`/wpe` HTTP 目录服务整个删除（Web 版不提供网页壁纸，应用 Web 服务器也不需要）。同时落实决策 11：WPE 只提供 Windows 桌面，
+其它平台对 `x-wpe/*` 只显示预览图。
+
+### Phase 6b — 图库媒体改 `file://`
+> 状态：已实现（2026-10-29），静态检查与单测通过；真机回归（需用户重编 CEF 带上 0006 后完全重启 dev）见 `versions/latest/regression.md`。依赖 Phase 6a。
+
+点级方案见 [phase-6b-file-media.md](phase-6b-file-media.md)。0005 落地后实测应用页 `<img src=file:>` 已过 `CanDisplay`
+但报 `ERR_UNKNOWN_URL_SCHEME`（非 `file:` 文档没有 `file:` 子资源工厂）。用户定下的形态：**主 frame 完全放开，子 frame 按根目录限制**。
+CEF 补丁 0006 在 `ChromeContentBrowserClientCef` 覆写 `RegisterNonNetworkSubresourceURLLoaderFactories`，沿用 0005 的键；运行时
+`resource_request_handler` 按 `frame.is_main()` / `is_navigation` / `request_initiator` 分三档，不按 frame id 建表（导航换进程会换 id）。
+三个桌面平台与壁纸窗口都登记 0005。前端桌面媒体 URL 直接 `file:///`，仍需 `fetch` 或交给外部的路径（Web 下载、复制兜底、
+Windows 拖出 `DownloadURL`、`/plugin_file`）走显式 `*ToHttpUrl`；本地 HTTP 服务不退役。插件详情 EJS iframe 去掉 `allow-same-origin`、
+加内层 CSP（`connect-src 'none'`，元素级远程图片照常），不再继承应用页的 `file:` 显示权；`/proxy` 开放代理删除（用户确认不需要 fetch 代理端点）。
+
+### Phase 6c — 桌面完全摆脱本地 HTTP 服务
+> 状态：代码已实施，Windows 真机 9/12 通过（2026-10-30）；拖出未通过，由 Phase 6d 取代。
+
+点级方案见 [phase-6c-no-http.md](phase-6c-no-http.md)。用户要求桌面不再起本地 HTTP、应用页能 `fetch(file:)` 读字节。调研：渲染侧
+已通（CEF Chrome runtime 的 extensions `Dispatcher` 把 `file` 注册为 fetch-API scheme），卡在浏览器侧两道 CORS 闸——CEF
+`ProxyURLLoaderFactory` 的跨源白名单（运行时建窗时 `CefAddCrossOriginWhitelistEntry(应用 origin, "file", "", true)`）与
+`FileURLLoaderFactory` 自己的列表（0006 改为给工厂实例一份只含该文档 origin 的私有列表；`nullptr` 不放行且 DCHECK）。不需要第三个补丁。
+`/plugin_file` 改 Tauri 命令 `read_plugin_file`（用户指定不加新 scheme，2026-10-30）：返回 `tauri::ipc::Response` 原始字节，CEF
+runtime 的 `ipc://` 主通道原生支持 raw 响应；前端按坐标缓存 blob URL / 文本，`PluginDocRenderer` 与 banner 走马灯改成先取 URL 再渲染，
+门禁由 ACL 现成提供；读取逻辑抽成核心层纯函数与 Android / Web 的 axum 共用。复制兜底直接 `fetch(file:)`，Windows 拖出 `DownloadURL`
+带 `file://`（真机失败：延迟渲染下载能完成，资源管理器仍拿不到文件；已另立 Phase 6d 把 0003 扩到 Windows）；6b 的 `*ToHttpUrl` 出口撤回；CSP `connect-src` 去 `127.0.0.1`、加 `file:`；
+顺带关掉 Tauri asset 协议（用户指定：`protocol-asset` feature、`assetProtocol` 配置、runtime 的 `asset` scheme，前端从未使用而它对所有 webview 开放 `**`）。
+
+### Phase 6d — Windows 拖出走真实文件
+> 状态：代码已实施（2026-10-30），待重编 CEF 与真机验证。
+
+点级方案见 [phase-6d-windows-drag-out.md](phase-6d-windows-drag-out.md)。两轮 `DEBUG-dragout` 插桩证实 Windows 的 `DownloadURL`
+延迟渲染下载能跑完（文件落在 `%TEMP%\chrome_drag…`），资源管理器松手后仍没有文件；运行时下载处理器还会把强制临时路径改成相对建议名。
+用户决定放弃这条路，改把 0003 扩到 Windows：Windows 与 Linux 共用 `web_contents_view_aura.cc`，内层补丁把钩子门控放宽到 `IS_WIN`，
+delegate 注入文件时另清 `html`（`CF_HTML`）与 `download_metadata`（第二份延迟渲染 `CF_HDROP`），Windows 不打跨进程可见的
+`chromium/x-renderer-taint`。CEF API 与 cef-rs 三平台 bindings 不变；运行时 `on_start_dragging` 与应用 resolver 安装去掉 Linux / macOS 限制，
+resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台只写 image id 并 `effectAllowed=copy`，Web 保留 `DownloadURL`。
+
 ### Phase 7 — 用户属性
-- **新增**
-  - 逐壁纸属性存在图片 `metadata` JSON 的 `userProperties` 段（已确认决策 6），值只存「用户改过的键」，读取时叠加在作者默认值之上；
-    保存 = 新 metadata 行 + 图片改指 + `image-changed { metadataId }`。
-  - 属性面板组件：按 `order` 排序、`group` 分组、`text` 说明行；`condition` 表达式求值决定显隐（只支持文档里的
-    `<key>.value` 比较与逻辑运算，不 `eval` 任意 JS）；`localization` 按当前语言取文案。
-  - 面板入口：预览大图详情区与壁纸设置页；改动经事件推给所有正在显示该壁纸的宿主，只推变化的键。
-  - `file` / `directory` 属性的选择与文件交付，方案按 Phase 1 结论落地。
-- **修改**
-  - `get_current_wallpaper_target` 返回「作者默认值 + 用户值」合并后的属性。
+> 状态：方案已写（2026-10-28），关键决策待确认。Phase 6 暂时跳过，本 Phase 依赖 Phase 6a。
+
+点级方案见 [phase-7-user-properties.md](phase-7-user-properties.md)。面板不复刻 WPE 属性页，用 Kabegame 自己的表单组件（用户指定）。要点：
+- 用户值存图片 metadata 顶层 `userProperties`（已确认决策 6），只存与作者默认值不同的键。
+  core 新增事务原语 `Storage::rewrite_image_metadata`：新行 + 改指 + 删无引用旧行，搜索词沿用旧行。写后发 `image-changed { metadataId }`。
+- core `wpe::user_props` 解析一次属性定义，三处共用：写命令校验、面板视图（已本地化）、页面状态（作者默认值 ⊕ 用户值）。
+- 命令 `get_wpe_web_properties` / `set_wpe_web_user_properties`，只给主窗口。
+- 面板：
+  - 字段复用 `KbNumber`（补 float `step`）、`KbSelect`、`KbBoolean`、`KbText`、`KbPath`，新增 `KbColor`；
+  - 显示条件照 WPE 自己的白名单解释器（`$parse.readOnly`，API.md 第一节）实现，不 eval、失败当 true；标签 HTML 按 ngSanitize 默认白名单净化（去掉链接与图片）；
+  - 本地化照 WPE 的查找顺序，WPE 内置词表从用户的 WPE 安装目录只读读取；
+  - 草稿即时生效，写入 300ms 防抖、串行。
+- 入口：预览右栏（`x-wpe/web` 行替换插件详情）、设置页「当前壁纸」。
+- `file` / `directory`：桌面与预览都生效（Phase 6a 之后两者同一套拦截）。
+  - 运行时 `file:` 策略加「追加放行」，拉取状态时按调用方 label 放行用户选的路径；
+  - 目录文件列表进状态，垫片实现 `userDirectoryFiles*` 与 `wallpaperRequestRandomFileForProperty`。
+- 不做：视频行的属性面板（`get_current_wallpaper_target` 不改）、紧凑布局、目录监视。
 
 ### Phase 8 — 音频可视化与媒体集成
 - **新增**（后端，Windows 优先）
@@ -347,21 +413,30 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
    不进 settings。写入入口是 WPE 定制详情面板；保存走元数据不可变语义——新建 metadata 行、图片改指新 `metadata_id`、发
    `image-changed { metadataId }` 补丁；各宿主收到补丁重取目标，再**模拟 WPE 的属性变化事件**（只含变化键的
    `applyUserProperties`）推给页面，不新增 Kabegame 事件类型。详见 phase-3 文档关键决策第 8 条。
-7. **Phase 3 关键决策全部按推荐项执行**（2026-10-26）：页面源先 HTTP 后迁自定义协议 **`kb-wpe`**；`file` / `directory` 属性
+7. **Phase 3 关键决策全部按推荐项执行**（2026-10-26）：页面源先 HTTP 后迁自定义协议 **`kb-wpe`**（2026-10-28 追记：Phase 6a 起预览也走 `file:` iframe、与桌面同源，`kb-wpe` 不再需要，HTTP 目录服务已删除）；`file` / `directory` 属性
    本 Phase 不支持；背景层退回缩略图；web 层不参与双层过渡；加 `sandbox`；IPC 主 frame / 白名单源校验纳入 Phase 3。
 
 8. **桌面网页壁纸走 `file://` 主 frame**（2026-10-27）：用户确认安全面可接受。壁纸窗口显示 `x-wpe/web` 时主 frame 直接导航到
    壁纸目录的入口 `file://`，与 WPE 进程模型一致；文件访问由 CEF 补丁 0004 只对壁纸窗口开启，越界读取由运行时按壁纸目录拦截。
-   图库预览仍用 HTTP 跨源 iframe。先导实验与补丁依据见 [API.md §5.2](API.md)。
+   图库预览仍用 HTTP 跨源 iframe（2026-10-28 追记：Phase 6a 起预览也改 `file:` iframe，见 [phase-6a-file-preview.md](phase-6a-file-preview.md)）。先导实验与补丁依据见 [API.md §5.2](API.md)。
 9. **桌面鼠标转发第一版只做移动 + 左键**（2026-10-27）：照 WPE 的轮询方式，不装键盘钩子，不转发滚轮。
+10. **宿主协议不照搬 WPE，自己用 Tauri 实现**（2026-10-27）：
+    - 桌面壁纸窗口的 `file://` 页面允许注入 Tauri IPC，但只给受限权限（`wpe-web-capability`），推送用 Tauri `listen`；
+    - 预览 iframe 用 `postMessage` 向主 frame（应用页）拉取，由应用页调用 Tauri 命令；订阅也 `postMessage` 登记，由应用页代为 listen 并转发（2026-10-28）；
+    - `listen` 没有事件名作用域，壁纸页面因此能订阅应用全局事件，用户确认这是可接受的取舍，也算开放给壁纸的一项能力。
+    - 依据与 WPE 的对照见 [API.md §4.8](API.md)，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)。
+11. **WPE 目前只提供 Windows 桌面**（2026-10-28）：发现 / 导入（`platform_supported` 收窄到 Windows）、桌面 `file://` 宿主、预览 `file:` iframe
+    全部按 `target_os = "windows"` 门控；macOS / Linux / Android / Web 对 `x-wpe/*` 行只显示预览图。`/wpe` HTTP 目录服务随 Phase 6a 删除。
+    落地见 [phase-6a-file-preview.md](phase-6a-file-preview.md) 点 5c。
 
 ## 待定决策（需用户确认）
 
 1. ~~宿主形态~~：已由决策 3 确定。
-2. **垫片注入方式**：目录服务改写 HTML 插入 `<script>`（推荐），还是 CEF 初始化脚本注入子 frame。
+2. ~~**垫片注入方式**~~ 已定（2026-10-27）：用 Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口（预览 iframe）同一份垫片、按 `location` 自判是否启用；不改写 HTML 响应。桌面 `file:` 文档照常注入 Tauri 脚本，权限由 ACL 按远程 `file:` 来源限制（已确认决策 10）。细节见 Phase 5 方案。
 3. ~~**`file` / `directory` 属性**~~ 已定路线（2026-10-26，phase-3 决策 2）：Phase 3 不支持；Phase 7 前先测本地 scheme，再测 `file://`。原文：WPE 约定页面自己拼 `file:///`，HTTP 源的页面读不了本地文件。Phase 1 调研后在
    「CEF 放开 `file://` 并改用 `file://` 加载页面」「垫片改写路径到白名单路由」「暂不支持这两类属性」之间选。
 4. ~~**`localStorage` 持久化**~~ 已定（2026-10-26）：自定义协议 `kb-wpe`，Phase 5 落地；所有网页壁纸共用一个稳定源。
+   2026-10-28 追记：Phase 6a 把预览也改成 `file:` 源后与桌面同源，`kb-wpe` 不再需要。
 5. ~~**用户属性存储**~~ 已定（2026-10-26）：见已确认决策 6。
 6. ~~**桌面鼠标交互**~~ 已定（2026-10-27）：见已确认决策 9，Phase 4 实现。
 7. **Phase 8 是否纳入第二阶段**：音频与媒体集成成本最高、Rust 侧全新，可以推到 Scene 之后。

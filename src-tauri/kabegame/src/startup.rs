@@ -160,6 +160,15 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
         _ => (0.0, 0.0),
     };
 
+    // 主窗口的两类本地文件用途，都由 CEF 补丁按 browser 开启、运行时按发起 frame 分档拦截：
+    // - 图库媒体走 file://（补丁 0005 + 0006）：应用页主 frame 的 <img> / <video> / CSS url() 子资源
+    //   免检，三个桌面平台都开（本函数已按非 Android、非 web 门控）；应用页 fetch `file:` 还需 0006 私有 CORS 列表与运行时跨源白名单；
+    // - WPE 网页壁纸预览（补丁 0004 + 0005，只有 Windows）：`file:` iframe 及其子资源按根目录拦截。
+    //   根目录只由 `set_wpe_web_preview` 在预览挂载 / 卸载时设置 / 清空，不预览时为空、这类请求全拒。
+    tauri_runtime_cef::allow_app_local_resources("main"); // 0005：应用页加载 file:（0006 补子资源工厂）
+    #[cfg(target_os = "windows")]
+    tauri_runtime_cef::allow_file_documents("main"); // 0004：iframe 里的 file 文档 fetch 同目录
+
     let builder =
         WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
             .title(t!("common.appName"))
@@ -169,7 +178,10 @@ pub fn create_main_window<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Resul
             .resizable(true)
             .fullscreen(false)
             .visible(true)
-            .devtools(true);
+            .devtools(true)
+            // WPE 网页壁纸垫片：只在图库预览的 `file:` 直接子 iframe 里启用，应用页与其它 iframe
+            // 里第一行就返回。
+            .initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS);
 
     // #[cfg(not(target_os = "macos"))]
     // let builder = builder.transparent(true);
@@ -283,10 +295,6 @@ pub fn init_wallpaper_controller(app_handle: &AppHandle<crate::AppRuntime>) {
         tracing::warn!("Failed to initialize WallpaperRotator: {}", e);
         return;
     }
-
-    // 桌面网页壁纸的 file:// 宿主：订阅当前壁纸变化，决定壁纸窗口停在应用页还是壁纸入口。
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    crate::wallpaper::wpe_web_host::start_listener(app_handle.clone());
 
     // 壁纸窗口不在此创建：它与 `wallpaperMode == "window"` 同寿命，由
     // `WindowWallpaperManager::init()` 在进入 window 模式时创建并挂到桌面层，

@@ -1,5 +1,6 @@
 import type { Plugin } from "@/stores/plugins";
-import { pluginFileUrl } from "./fileUrl";
+import { shallowRef, watch, type Ref } from "vue";
+import { pluginAssetUrl, pluginFileKey, pluginFilesGeneration } from "@/services/pluginFiles";
 /**
  * 插件资源路径归一化。
  *
@@ -85,8 +86,73 @@ export function isBannerAsset(key: string): boolean {
   return key.toLowerCase().startsWith("banner");
 }
 
-/** 按清单声明顺序生成展示位图片 URL。 */
+/** 按清单顺序异步解析 banner 图；插件或文件缓存失效时重取。 */
+export function useBannerPreviewImages(pluginRef: Readonly<Ref<Plugin | null | undefined>>) {
+  const images = shallowRef<{ key: string; src: string }[]>([]);
+  watch(
+    [pluginRef, pluginFilesGeneration],
+    async ([plugin], _, onCleanup) => {
+      let current = true;
+      onCleanup(() => {
+        current = false;
+      });
+      images.value = [];
+      if (!plugin) return;
+      const keys = (plugin.assetKeys ?? []).filter(isBannerAsset);
+      const resolved = await Promise.all(
+        keys.map(async (key) => {
+          try {
+            return { key, src: await pluginAssetUrl(plugin, key) };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (current) images.value = resolved.filter((item): item is { key: string; src: string } => item !== null);
+    },
+    { immediate: true },
+  );
+  return images;
+}
+
+const bannerCache = new Map<string, { key: string; src: string }[]>();
+const loadingBanners = new Set<string>();
+const bannerRevision = shallowRef(0);
+let seenGeneration = -1;
+
+/** 快捷预览按需加载；异步结果到达后触发当前渲染。 */
 export function bannerPreviewImages(plugin?: Plugin | null): { key: string; src: string }[] {
+  if (seenGeneration !== pluginFilesGeneration.value) {
+    bannerCache.clear();
+    loadingBanners.clear();
+    seenGeneration = pluginFilesGeneration.value;
+  }
+  void bannerRevision.value;
   if (!plugin) return [];
-  return (plugin.assetKeys ?? []).filter(isBannerAsset).map((key) => ({ key, src: pluginFileUrl(plugin, key) }));
+  const keys = (plugin.assetKeys ?? []).filter(isBannerAsset);
+  const cacheKey = keys.map((key) => pluginFileKey(plugin, key)).join("|");
+  const cached = bannerCache.get(cacheKey);
+  if (cached) return cached;
+  if (!loadingBanners.has(cacheKey)) {
+    loadingBanners.add(cacheKey);
+    const generation = seenGeneration;
+    void Promise.all(
+      keys.map(async (key) => {
+        try {
+          return { key, src: await pluginAssetUrl(plugin, key) };
+        } catch {
+          return null;
+        }
+      }),
+    ).then((resolved) => {
+      if (generation !== seenGeneration) return;
+      bannerCache.set(
+        cacheKey,
+        resolved.filter((item): item is { key: string; src: string } => item !== null),
+      );
+      loadingBanners.delete(cacheKey);
+      bannerRevision.value++;
+    });
+  }
+  return [];
 }

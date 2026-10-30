@@ -51,7 +51,7 @@ mod webview;
 mod window;
 
 // The IPC bridge (`window.ipc.postMessage` → Rust) and the custom URI scheme
-// handler (`tauri://` / `asset://` serving the bundled frontend) are the two
+// handler (`tauri://` serving the bundled frontend) are the two
 // Tauri-specific pieces that wry hides behind one-liners but CEF needs wired up
 // through its multi-process render handler.
 mod ipc;
@@ -62,23 +62,42 @@ pub fn start_download(webview_label: &str, url: &str) -> Result<(), String> {
     webview::start_download(webview_label, url)
 }
 
-// ---- 文件文档策略 ----
+// ---- 文件访问：两项能力 + 应用 origin 跨源白名单 + 按发起 frame 分档的闸门 ----
 //
-// 某个 webview 需要以 `file://` 加载本地页面、并让页面读同目录文件时（WPE 网页壁纸），
-// 应用先在建窗前登记 label，再按需设置允许的根目录。两层边界都只作用于登记过的 label：
-// 建 browser 时 `extra_info` 带 `kabegame.allow_file_access_from_file_urls`（CEF 补丁 0004
-// 据此只给它打开 `allow_file_access_from_file_urls`）；它的每个 `file:` 请求在
-// `OnBeforeResourceLoad` 里过目录约束。它的 `file:` 文档也不注入任何初始化脚本。
+// 应用在建窗前按 label 登记能力，再按需设置允许的根目录。两项能力都写进建 browser 时的
+// `extra_info`，由 CEF 补丁只给这个 browser 打开：
+// - 文件文档（`kabegame.allow_file_access_from_file_urls`，补丁 0004）：`file://` 页面可以
+//   `fetch` / XHR 读本地文件（WPE 网页壁纸读同目录文件）；
+// - 应用页加载本地资源（`kabegame.allow_local_resources`，补丁 0005 + 0006）：最外层主 frame 里的
+//   非 `file:` 文档可以给 `<iframe>` 赋 `src = file:…`（WPE 预览，0005），也可以用 `<img>` / `<video>`
+//   / CSS `url()` 加载 `file:` 子资源（图库媒体，0006 补上子资源工厂）；应用页 `fetch(file:)` 还需 0006 私有 CORS 列表和运行时跨源白名单。
+// 补丁只开门；登记了任一能力的 label 的 `file:` 请求按发起 frame 分档：应用页主 frame 的子资源在登记
+// 了 0005 时免检，子 frame / 主 frame 的导航与 `file:` 文档的子资源在 `OnBeforeResourceLoad` 里过目录闸门。
+// `file:` 文档照常注入初始化脚本（Tauri 自身脚本只进主 frame）；IPC 来源在协议层按 frame URL
+// 判成远程 `file:`，权限由应用的 ACL 限定。
 
-/// 建窗前登记 `webview_label`。该 label 的 browser 在 `extra_info` 里带
+/// 建窗前给 `webview_label` 登记「文件文档」能力：该 label 的 browser 在 `extra_info` 里带
 /// `kabegame.allow_file_access_from_file_urls = true`（CEF 补丁 0004 据此打开文件访问偏好），
-/// 并启用 `file:` 目录约束；初始根目录为空（拒绝所有 `file:` 请求）。
+/// 并启用 `file:` 目录闸门；初始根目录为空（拒绝所有 `file:` 请求）。
 pub fn allow_file_documents(webview_label: &str) {
     file_access::allow_file_documents(webview_label)
 }
 
-/// 设置 / 清空 `webview_label` 允许的根目录。`Some(dir)` 只放行 `dir` 内的普通文件
-/// （拒绝越界、符号链接、目录、不存在）；`None` 拒绝所有 `file:` 请求。未登记的 label 返回 Err。
+/// 建窗前给 `webview_label` 登记「应用页加载本地资源」能力：该 label 的 browser 在 `extra_info`
+/// 里带 `kabegame.allow_local_resources = true`，CEF 补丁 0005 据此让最外层主 frame 的非 `file:`
+/// 文档能加载 `file:`（渲染侧放过 `CanDisplay`，浏览器侧给所在进程 `file` 请求权；弹窗里提交的文档、
+/// 子 frame 不授，弹窗的初始 `about:blank` 按 Blink 规则从 opener 继承但仍过同一闸门）。0005 只放开显示与
+/// 导航；CEF 补丁 0006 再给同一主 frame 塞带私有 CORS 列表的 `file:` 子资源工厂，运行时为应用 origin
+/// 登记跨源白名单，让 `<img>` / `<video>` 与 `fetch(file:)` 都能读取。同时表示该 label 的应用页（主 frame
+/// 非 `file:` 文档）发起的 `file:` 子资源**不过目录闸门**；子 frame
+/// 导航与 `file:` 文档的请求仍按根目录。同样启用 `file:` 目录闸门；初始根目录为空。
+pub fn allow_app_local_resources(webview_label: &str) {
+    file_access::allow_app_local_resources(webview_label)
+}
+
+/// 设置 / 清空 `webview_label` 允许的根目录（子 frame 导航与 `file:` 文档的请求按它裁决）。`Some(dir)`
+/// 只放行 `dir` 内的普通文件（拒绝越界、符号链接、目录、不存在）；`None` 拒绝这类请求。应用页主 frame
+/// 的免检子资源不看根目录。未登记的 label 返回 Err。
 pub fn set_file_document_root(
     webview_label: &str,
     root: Option<std::path::PathBuf>,

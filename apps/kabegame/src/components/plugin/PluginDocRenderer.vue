@@ -42,7 +42,7 @@ import { useI18n } from "@kabegame/i18n";
 import { useModal } from "../../composables/useModal";
 import { useUiStore } from "@/stores/ui";
 import { openExternalLink } from "../../utils/openExternalLink";
-import { pluginFileUrl } from "@/utils/fileUrl";
+import { pluginAssetUrl } from "@/services/pluginFiles";
 import type { Plugin } from "@/stores/plugins";
 import { normalizeAssetPath } from "../../utils/assetPath";
 
@@ -58,7 +58,7 @@ const props = withDefaults(
     markdown?: string | null;
     emptyDescription?: string;
     /**
-     * 插件清单与资源键：图片经统一 HTTP 出口读取，key 由 `normalizeAssetPath` 裁决，
+     * 插件清单与资源键：图片经插件文件统一出口读取，key 由 `normalizeAssetPath` 裁决，
      * 与后端 `assets::normalize_asset_path` 同构。
      */
     plugin?: Plugin | null;
@@ -266,20 +266,42 @@ const renderMarkdown = async (
     searchIndex = pathEnd + 1;
   }
 
-  // 2) 替换本地图片引用：用 plugin.assetKeys（HTTP 按需读取）。
+  // 2) 替换本地图片引用：用 plugin.assetKeys 按需读取。
   //    外链（http/https/data/协议相对）归一化返回 null，原样留给 marked 渲染。
   const assetKeys = new Set(plugin?.assetKeys ?? []);
+  const urls = new Map<string, string>();
+  if (plugin) {
+    await Promise.all(
+      [
+        ...new Set(
+          imageMatches
+            .map((img) => normalizeAssetPath(img.path))
+            .filter((key): key is string => !!key && assetKeys.has(key)),
+        ),
+      ].map(async (key) => {
+        try {
+          urls.set(key, await pluginAssetUrl(plugin, key));
+        } catch {
+          /* 使用现有的图片加载失败文案。 */
+        }
+      }),
+    );
+  }
   let processed = markdown;
+  const resolvedSources = new Map<string, string>();
   for (const img of imageMatches.slice().reverse()) {
     const key = normalizeAssetPath(img.path);
     if (key === null) continue;
 
     const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (plugin && assetKeys.has(key)) {
-      const url = pluginFileUrl(plugin, key);
+    if (plugin && urls.has(key)) {
+      const url = urls.get(key)!;
+      // DOMPurify 默认会删除 blob:；先用安全占位地址清洗，再只回填宿主生成的 URL。
+      const placeholder = `https://kb-plugin-asset.invalid/${resolvedSources.size}`;
+      resolvedSources.set(placeholder, url);
       processed = processed.replace(
         new RegExp(escapedMatch, "g"),
-        `<img src="${url}" alt="${escapeHtml(img.alt)}" style="max-width: 100%; height: auto;" />`,
+        `<img src="${placeholder}" alt="${escapeHtml(img.alt)}" style="max-width: 100%; height: auto;" />`,
       );
     } else {
       processed = processed.replace(
@@ -313,21 +335,28 @@ const renderMarkdown = async (
     breaks: true,
     renderer,
   }) as string;
-  return { html: sanitizeHtml(rawHtml), headings };
+  let html = sanitizeHtml(rawHtml);
+  for (const [placeholder, url] of resolvedSources) html = html.split(placeholder).join(escapeHtml(url));
+  return { html, headings };
 };
 
-watchEffect(() => {
-  void (async () => {
-    const text = md.value;
-    if (!text) {
-      html.value = "";
-      emit("headings", []);
-      return;
-    }
-    const result = await renderMarkdown(text, props.plugin);
+watchEffect((onCleanup) => {
+  const text = md.value;
+  const plugin = props.plugin;
+  let current = true;
+  onCleanup(() => {
+    current = false;
+  });
+  if (!text) {
+    html.value = "";
+    emit("headings", []);
+    return;
+  }
+  void renderMarkdown(text, plugin).then((result) => {
+    if (!current) return;
     html.value = result.html;
     emit("headings", result.headings);
-  })();
+  });
 });
 </script>
 

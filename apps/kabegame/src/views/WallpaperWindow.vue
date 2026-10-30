@@ -49,8 +49,8 @@ const windowError = ref("");
 const windowErrorAt = ref(0);
 
 /**
- * 接收当前壁纸目标。桌面网页壁纸（`x-wpe/web`）由 Rust（`wpe_web_host`）把整个窗口导航到
- * `file://` 入口，这里不渲染、保持现有画面，避免与 Rust 抢导航。
+ * 接收当前壁纸目标。桌面网页壁纸（`x-wpe/web`）由 Rust 的 `WindowWallpaperManager::set_wallpaper_path`
+ * 把整个窗口导航到 `file://` 入口，这里不渲染、保持现有画面，避免与 Rust 抢导航。
  */
 function acceptTarget(target: WallpaperTarget | null) {
   if (!target?.path) return;
