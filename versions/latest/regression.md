@@ -1,5 +1,18 @@
 # v4.7.0 regression
 
+## CEF 渲染进程卡死判定改为 5 秒
+
+2026-10-30：`tauri-runtime-cef` 在 `on_before_command_line_processing` 里合并追加 `--enable-features=RendererHangWatcher:delay/5s`，把 Chromium 桌面默认的 15s hang monitor 延迟改为 5s（Android 默认值），判定仍是「延迟到期 → 主线程 ping 1s 无应答」；`disable_chrome_only_features` 泛化为 `merge_feature_switch`，vulkan 分支的 `enable-features=Vulkan` 也改为合并，避免两处各写一次互相覆盖。`on_render_process_unresponsive` / `on_render_process_terminated` 未改。静态验证：改动文件 rustfmt 无差异；dev 自动重编通过，二进制含该开关串。测法：CDP 给主窗口挂一个 Ctrl+Shift+H 的 keydown 监听（先 `sendBeacon` 到 debug ingest 记按键时刻，再进 60s 有界忙循环）后立即断开 CDP（DevTools 附着时 Chromium 不报无响应），人工按键，后台脚本盯日志与渲染进程。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 改动前基线 | macOS 桌面 CEF dev | 主窗口在最前，按热键进入忙循环 | 约 16s 后 `renderer unresponsive for webview 'main'`，紧接 `terminated … RESULT_CODE_HUNG`，页面重载 | 2026-10-30：约 10:38:15 卡住，10:38:31.684 报无响应、+25ms 终止，重载后标记与横幅消失、`/gallery` 正常 |
+| [x] | 5s 判定并重载 | macOS 桌面 CEF dev | 同上 | 约 6s 报无响应并重载，页面恢复可用 | 2026-10-30：按键 15:12:36.815，无响应 15:12:42.815（正好 6.000s），+25ms 终止，15:12:42.842 新页面开始加载，画廊正常渲染 |
+| [ ] | 正常重负载不误杀 | 桌面 CEF | 画廊每页 1000 条来回翻页、冷启动大库、慢机器上操作 | 日志无 `renderer unresponsive`，页面不被重载 | 未验证 |
+| [ ] | Windows / Linux | Windows、Linux 桌面 CEF | 同「5s 判定并重载」 | 约 6s 自动重载 | 未验证：本机为 macOS |
+| [ ] | vulkan 模式开关合并 | Linux，`KABEGAME_CEF_GPU_MODE=vulkan` | 启动后看 GPU 是否走 Vulkan，并按热键测卡死 | Vulkan 与 5s 判定同时生效 | 未验证 |
+| [ ] | 爬虫窗口仍排除 | 桌面 CEF | 运行 WebView 爬虫任务时让其页面卡死 | 不 terminate / reload，由调度器心跳超时结束任务 | 未验证：回调代码未改 |
+
 ## 应用日志（tracing + 按天落盘 + 事件循环广播 + 查看日志）
 
 2026-10-29：`kabegame_core::logging` 装配全进程唯一 tracing 订阅器（控制台 / `<data_dir>/logs/kabegame.<UTC 日期>.log` / `AppLogLayer` / debug ingest），约 380 处打印改为分级宏；`AppEventKind::Log` 为 opt-in，「订阅全部」改用 `default_kinds()`；出口为 Tauri `get_app_logs` + `set_app_log_stream`（`app-logs` 只发主窗口）、Web super `/logs` SSE + `get_app_logs` RPC、IPC `AppLogs`（CLI `log tail`）；前端经 `tauri-plugin-tracing` 写日志；debug ingest 改为 trace 日志 + 订阅层转发。静态验证：check-kabegame 的 cargo check（`kabegame` standard / web、`kabegame-cli`）0 error；vue-tsc 只有既有的 `vite.config.ts(74,20)` `isProd` 错误。单测：`kabegame-core` 新增 logging 8 个、事件 1 个全部通过；core 全量 392 通过、4 失败，均为既有失败（3 个 `wpe` Windows 路径用例在 macOS 上跑、1 个 `local_folder` 缩略图删除用例对应「只删 thumbnails_dir 内文件」规则），与本次无关。Android / Windows / Linux 专属文件的打印替换在 macOS 上编不到，只做了同参数宏替换。

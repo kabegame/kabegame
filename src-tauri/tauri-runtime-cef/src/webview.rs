@@ -741,8 +741,9 @@ mod imp {
                 1
             }
 
-            // 渲染进程约 15s 未回执输入事件(Chromium hung-renderer 判定,只有可见
-            // 窗口会有输入)。爬虫隐藏窗口的卡死由调度器心跳看门狗负责,不在此处理
+            // 渲染进程 5s(runtime.rs 的 RendererHangWatcher 参数)+ 1s ping 未回执
+            // 输入事件(Chromium hung-renderer 判定,只有可见窗口会有输入;DevTools /
+            // CDP 附着时 Chromium 不报)。爬虫隐藏窗口的卡死由调度器心跳看门狗负责,不在此处理
             // ("crawler-" 前缀与 kabegame-core crawler_window_label 约定一致,
             // 标签特判先例见 ViewsBrowserViewDelegate 的 "-navbar")。
             fn on_render_process_unresponsive(

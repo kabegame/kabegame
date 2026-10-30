@@ -87,6 +87,10 @@ mod imp {
         "PrivateNetworkAccessSendPreflights",
         "BlockInsecurePrivateNetworkRequests",
     ];
+    // Chromium 桌面默认 15s(Android 5s)无输入回执才判渲染进程卡死,之后再等 1s
+    // 主线程 ping。我们的 on_render_process_unresponsive 直接 terminate + reload,
+    // 15s 体感太长,改用 Android 的 5s。
+    const RENDERER_HANG_WATCHER_FEATURE: &str = "RendererHangWatcher:delay/5s";
 
     fn windowed_quit() -> Arc<AtomicBool> {
         WINDOWED_QUIT
@@ -114,16 +118,25 @@ mod imp {
         })
     }
 
-    fn disable_chrome_only_features(command_line: &CommandLine) {
-        let switch = CefString::from("disable-features");
+    /// 把 `features` 合并进 `--enable-features` / `--disable-features`。同名开关
+    /// 重复 append 时后写的整串会覆盖先写的,所以必须读出已有值再追加;已有同名
+    /// 特性(忽略 `:参数` 后缀)时保留命令行上的写法。
+    fn merge_feature_switch(command_line: &CommandLine, switch_name: &str, features: &[&str]) {
+        let switch = CefString::from(switch_name);
         let mut value = if command_line.has_switch(Some(&switch)) == 1 {
             CefString::from(&command_line.switch_value(Some(&switch))).to_string()
         } else {
             String::new()
         };
+        fn feature_name(entry: &str) -> &str {
+            entry.split(':').next().unwrap_or(entry)
+        }
 
-        for feature in CHROME_ONLY_DISABLED_FEATURES {
-            if value.split(',').any(|entry| entry == *feature) {
+        for feature in features {
+            if value
+                .split(',')
+                .any(|entry| feature_name(entry) == feature_name(feature))
+            {
                 continue;
             }
             if !value.is_empty() {
@@ -230,10 +243,7 @@ mod imp {
                     Some(&CefString::from(angle_backend)),
                 );
                 if angle_backend == "vulkan" {
-                    command_line.append_switch_with_value(
-                        Some(&CefString::from("enable-features")),
-                        Some(&CefString::from("Vulkan")),
-                    );
+                    merge_feature_switch(command_line, "enable-features", &["Vulkan"]);
                 }
             }
         }
@@ -1057,7 +1067,8 @@ mod imp {
                 // CEF WebContents are not Chrome browser tabs. Some Chrome UI
                 // features assume tabs::TabInterface exists and crash on SPA
                 // soft navigations when variations enable them.
-                disable_chrome_only_features(cl);
+                merge_feature_switch(cl, "disable-features", CHROME_ONLY_DISABLED_FEATURES);
+                merge_feature_switch(cl, "enable-features", &[RENDERER_HANG_WATCHER_FEATURE]);
                 #[cfg(target_os = "linux")]
                 {
                     // 禁用 zygote:Linux 下渲染进程默认从 zygote fork,**不会**重新
