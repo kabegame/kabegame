@@ -5,18 +5,19 @@
  *
  * 约束：
  * - 只靠 props 驱动：不 invoke、不 listen、不读 settingsStore；数据绑定由调用方
- *   （壁纸窗口 `WallpaperWindow.vue`，以及后续的图库预览）负责。唯一例外是 web 层 iframe 的
- *   宿主侧（`wpeWebBridge.ts`）：iframe 插入 DOM 后经 `set_wpe_web_preview` 把主窗口的 `file:` 根目录设成
- *   这张壁纸的目录并取回入口 `file://`，再给 iframe 赋 `src`，销毁时清空根目录；页面里的 WPE 垫片碰不到 IPC，
- *   由宿主桥代为拉取状态、代为 listen，随 iframe 一起创建与销毁。
+ *   （壁纸窗口 `WallpaperWindow.vue`、图库预览 `WpeWallpaperContent.vue`）负责。web 层 iframe 也一样：
+ *   直接把目标里的 `webEntry` 赋给 `src`，没有命令往返、没有要维护的状态。页面里的 WPE 垫片有自己的 IPC 桥
+ *   （CEF 给每个子 frame 注入，权限来自 `wpe-web-capability`），自己拉取、自己 listen，事件只投递到这个 iframe，
+ *   iframe 销毁时它的监听随之清掉。
  * - 铺满父元素（父元素需有确定尺寸），可放在任意尺寸容器里。
  * - WPE 网页壁纸（`x-wpe/web`）走独立的 web 层：一次只存在一个 `file:` iframe（不透明源，与应用页隔离），
  *   不参与 base / top 双层过渡；切入时等页面 load 后整层淡入盖住媒体层，切走时新媒体先直设到 base、
  *   web 层淡出后 **销毁** iframe（先置 about:blank 再移除），让渲染进程回收。
  * - 网页壁纸 iframe 直接赋入口 `file://` 的 `src`：应用页是 http / tauri 源，Chromium 默认会在渲染进程用
  *   `SecurityOrigin::CanDisplay` 拦下（`Not allowed to load local resource`，iframe 停在 about:blank），
- *   主窗口靠 CEF 补丁 0005（建窗前 `allow_app_local_resources("main")`）放行；没有该补丁时 8s 超时报
- *   `not navigated`。补丁只开门，能加载哪些文件仍由运行时按根目录裁决。
+ *   主窗口与壁纸窗口靠 CEF 补丁 0005/0007（建窗前 `allow_app_local_resources`）放行；没有该补丁时 8s 超时报
+ *   `not navigated`。补丁只开门，能加载哪些文件由运行时闸门按库内网页壁纸目录裁决（iframe 导航须落进某个
+ *   网页壁纸目录，壁纸页面只能读自己的目录）；所以切换壁纸一律销毁重建 iframe，不在原 iframe 上改 `src`。
  * - DOM 仍按原实现命令式操作：模板 ref 只在 onMounted 时取一次元素，存到普通变量里
  *   （同原 `initDOM()`）。原因是视频 commit 会交换 base / top 两个 `<video>` 的角色，
  *   且清 src 必须用 `removeAttribute` 才不触发 error；若改成响应式 class / style / src 绑定，
@@ -25,7 +26,6 @@
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { compatibleToUrl, fileToUrl, initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
-import { attachWpeWebBridge, setWpeWebPreview } from "./wpeWebBridge";
 
 type Phase = "idle" | "prep" | "enter";
 type MediaType = "image" | "video" | "web";
@@ -111,10 +111,6 @@ let webLayerEl: HTMLElement | null = null;
 // iframe 命令式创建 / 销毁（同媒体层的命令式约定）；webToken 每次销毁递增，
 // 让还在 await 的进入 / 离开流程发现自己已过期后放弃。
 let webFrameEl: HTMLIFrameElement | null = null;
-/** 当前 iframe 的宿主桥（替页面里的 WPE 垫片拉取状态、代为 listen），随 iframe 销毁。 */
-let webBridge: { dispose(): void } | null = null;
-/** 本组件设过主窗口的 `file:` 预览根目录、尚未清空（teardownWeb 据此清空，没设过就不发命令）。 */
-let webPreviewRootSet = false;
 let webToken = 0;
 let webVisible = false;
 let webLoadTimer: number | null = null;
@@ -495,7 +491,10 @@ function waitWebFade(): Promise<void> {
   });
 }
 
-/** iframe 的指针事件：预览内嵌可交互，桌面窗口与媒体层一样不接收。 */
+/**
+ * iframe 的指针事件：预览内嵌与桌面壁纸窗口都接收（桌面由后端把桌面上的鼠标注入到窗口，iframe 不接收就到不了
+ * 页面，壁纸窗口传 `interactive`）；应用背景等非交互场景不接收。
+ */
 function applyWebInteractive() {
   if (webFrameEl) webFrameEl.style.pointerEvents = props.interactive ? "auto" : "none";
 }
@@ -527,14 +526,14 @@ function isInitialBlank(frame: HTMLIFrameElement): boolean {
 
 /**
  * 创建 iframe 并等待它的 load（或超时）；被 teardownWeb 打断时也会返回。
- * 插入 DOM 后由 `setWpeWebPreview` 设好根目录并取回入口 `file://`，再赋给 iframe 的 `src`（原因见头注释）。
- * 开放根目录失败或没有拿到入口时销毁 iframe 并抛错，由 setTarget 记错误并上报。
+ * 插入 DOM 后把目标里的入口 `file://` 赋给 `src`（原因见头注释）。没有入口（非 Windows、`project.json` 读不了）
+ * 时不建 iframe、直接抛错，由 setTarget 记错误并上报，调用方退回预览图。
  */
-async function createWebFrame(imageId: string): Promise<void> {
+async function createWebFrame(entry: string | null | undefined): Promise<void> {
   settleWebLoad();
   const layer = webLayerEl;
   if (!layer) return;
-  const token = webToken;
+  if (!entry) throw new Error("无法加载网页壁纸: 没有入口地址");
   const frame = document.createElement("iframe");
   frame.className = "wallpaper-web-frame";
   frame.setAttribute("sandbox", WEB_SANDBOX);
@@ -566,43 +565,27 @@ async function createWebFrame(imageId: string): Promise<void> {
     if (frame !== webFrameEl) return;
     // 仍停在初始 about:blank：导航根本没启动，多半是 CEF 没带补丁 0005，赋 `file:` 的 src 被 `CanDisplay` 拦下
     setLastError(
-      isInitialBlank(frame) ? "wpe web entry not navigated (CEF patch 0005 missing?)" : "wpe web entry load timeout",
+      isInitialBlank(frame)
+        ? "wpe web entry not navigated (CEF patch 0005/0007 missing?)"
+        : "wpe web entry load timeout",
     );
     updateDebugPanel();
     settleWebLoad();
   }, WEB_LOAD_TIMEOUT_MS);
-  // 宿主桥在插入 DOM、赋 src 之前挂上：垫片在壁纸文档开始时就会发 listen / pull
-  webBridge?.dispose();
-  webBridge = attachWpeWebBridge(frame, imageId);
   // 先插入再赋 src（插入时初始空文档的 load 由上面的 isInitialBlank 忽略）
   layer.appendChild(frame);
-  // 先开根目录再赋 src：主窗口的每个 `file:` 请求都按它拦截，没设好时连入口页都会被拒
-  webPreviewRootSet = true;
-  let entry: string | null;
-  try {
-    entry = await setWpeWebPreview(imageId);
-  } catch (error) {
-    // 等待期间被 teardownWeb 打断：它已移除 iframe、排队清空根目录
-    if (token !== webToken) return;
-    teardownWeb();
-    throw new Error(`无法加载网页壁纸: ${error}`);
-  }
-  if (token !== webToken) return;
-  if (!entry) {
-    teardownWeb();
-    throw new Error("无法加载网页壁纸: 没有拿到入口地址");
-  }
   frame.src = entry;
   return done;
 }
 
-/** 销毁 iframe：先置 about:blank 让渲染进程立刻卸载页面，再移出 DOM、清空预览根目录；同时打断进行中的进入 / 离开。 */
+/**
+ * 销毁 iframe：先置 about:blank 让渲染进程立刻卸载页面，再移出 DOM；同时打断进行中的进入 / 离开。
+ * frame 销毁后 Tauri 随 `SubframeDestroyed` 清掉页面登记的监听，这里不用清理别的。
+ */
 function teardownWeb() {
   webToken += 1;
   settleWebLoad();
   settleWebFade();
-  webBridge?.dispose();
-  webBridge = null;
   const frame = webFrameEl;
   webFrameEl = null;
   if (frame) {
@@ -612,11 +595,6 @@ function teardownWeb() {
       // ignore
     }
     frame.remove();
-  }
-  // 清空主窗口的 `file:` 根目录；不等待，页面卸载途中仍在发的请求被拒是预期
-  if (webPreviewRootSet) {
-    webPreviewRootSet = false;
-    void setWpeWebPreview(null).catch((error) => console.warn("[WallpaperStage] 清空网页壁纸目录失败:", error));
   }
   setWebLayerClasses(false);
   if (webLayerEl) webLayerEl.style.display = "none";
@@ -675,8 +653,8 @@ async function enterWeb(next: WallpaperTarget, normalizedPath: string) {
   applyWebPaused();
   updateDebugPanel();
 
-  // 等页面 load（或超时）再淡入，避免先露出一块空白页；入口由后端按 id 现算
-  await createWebFrame(next.id);
+  // 等页面 load（或超时）再淡入，避免先露出一块空白页；入口由后端随目标现算（webEntry）
+  await createWebFrame(next.webEntry);
   if (token !== webToken) return;
   // 等浏览器渲染 prep 状态，再切到 visible 触发过渡
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -1460,7 +1438,15 @@ function debugState(): Readonly<WallpaperStageDebugState> {
   return debug;
 }
 
-defineExpose({ debugState });
+/**
+ * 当前是否在显示 web 层（网页壁纸 iframe 存在，含加载中）。壁纸窗口据此决定 `wallpaper-ping` 由谁应答：
+ * web 层显示期间交给 iframe 里的垫片，页面卡死就不应答、照样触发重载。
+ */
+function isShowingWeb(): boolean {
+  return !!webFrameEl;
+}
+
+defineExpose({ debugState, isShowingWeb });
 </script>
 
 <template>

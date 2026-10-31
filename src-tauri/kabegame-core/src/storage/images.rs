@@ -402,6 +402,24 @@ fn first_gallery_image_at(path: &str) -> Result<Option<ImageInfo>, String> {
     Ok(image)
 }
 
+/// [`Storage::list_wpe_web_rows`] 的查询：保持 `type = ?1` 的等值形态，才能走 `idx_images_type`。
+const LIST_WPE_WEB_ROWS_SQL: &str =
+    "SELECT CAST(id AS TEXT), local_path FROM images WHERE type = ?1 ORDER BY id";
+
+fn wpe_web_type_key() -> &'static str {
+    crate::wpe::WpeKind::Web
+        .media_type()
+        .expect("WpeKind::Web has a format key")
+}
+
+fn query_wpe_web_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare_cached(LIST_WPE_WEB_ROWS_SQL)?;
+    let rows = stmt.query_map(params![wpe_web_type_key()], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
 fn encode_provider_segment(value: &str) -> String {
     pathql_rs::escape_path_segment(value)
 }
@@ -1398,6 +1416,14 @@ impl Storage {
         Ok(())
     }
 
+    /// 库内全部网页壁纸（`x-wpe/web`）行的 `(id, local_path)`，供网页壁纸目录索引启动时全量建表。
+    /// 按 `type` 等值查询、走 `idx_images_type`（v049）；类型键取自 [`crate::wpe::WpeKind::media_type`]，
+    /// 不在 SQL 里写字面量。网页壁纸只有几十到几百行，metadata 由调用方按行读取。
+    pub fn list_wpe_web_rows(&self) -> Result<Vec<(String, String)>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        query_wpe_web_rows(&conn).map_err(|e| format!("Failed to list web wallpapers: {}", e))
+    }
+
     pub fn pick_existing_gallery_image_id(&self, mode: &str) -> Result<Option<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -2072,5 +2098,65 @@ mod frozen_template_tests {
             )
             .unwrap();
         assert_eq!(old_alive, 0, "旧冻结行无人引用后被 GC");
+    }
+}
+
+#[cfg(test)]
+mod wpe_web_rows_tests {
+    use super::*;
+
+    fn library() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::storage::migrations::init::create_all_tables(&conn);
+        for (index, media_type) in [
+            "image/jpg",
+            "x-wpe/web",
+            "x-wpe/video",
+            "x-wpe/web",
+            "video/mp4",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO images (local_path, crawled_at, type) VALUES (?1, 0, ?2)",
+                params![format!("/lib/{index}"), media_type],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn lists_only_web_wallpapers() {
+        let conn = library();
+        assert_eq!(
+            query_wpe_web_rows(&conn).unwrap(),
+            vec![
+                ("2".to_string(), "/lib/1".to_string()),
+                ("4".to_string(), "/lib/3".to_string())
+            ]
+        );
+    }
+
+    /// 等值查询走 v049 建的 `idx_images_type`，不扫全表。
+    #[test]
+    fn list_uses_the_type_index() {
+        let conn = library();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {LIST_WPE_WEB_ROWS_SQL}"))
+            .unwrap()
+            .query_map(params![wpe_web_type_key()], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter().any(|line| line.contains("idx_images_type")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.starts_with("SCAN images")),
+            "{plan:?}"
+        );
     }
 }

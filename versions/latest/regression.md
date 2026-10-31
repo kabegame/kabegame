@@ -1,6 +1,32 @@
 # v4.7.0 regression
 
+## CEF 补丁 0007：文档 URL 随子资源工厂下发 + IPC 链路拉直
+
+CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁纸的首批 IPC 与 `file:` 请求归属错误。0007 在建 URLLoaderFactory 时捕获文档与父文档 URL，运行时据此计算 IPC `Origin` 并裁决文件访问；worker 的 `file:` 工厂失败关闭。需重新编译 CEF；旧 CEF 下网页壁纸 iframe 导航被拒，8 秒后退回作者预览图，主窗口 IPC 仍可用。静态检查与真机项留待主会话执行。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | P1 补丁序列 | Windows 沙箱外 | `deno task patch cef --gen --from 0006 --out third-patches/cef/0007-document-url-headers.patch`，再 `--check`、reset/apply 复现 | 0007 可复现 | 2026-10-31：`--gen --from 0006` 生成 0007（3 个文件，+104 / −3）；生成前确认 `third/cef` 相对 0001–0006 无剩余改动；`deno task patch cef --check` OK dry-run。未做 reset/apply 复现（会 reset 子模块，`--check` 已在一次性 worktree 里链式预检） |
+| [ ] | P2 重编 CEF | Windows MSYS2 | `CEFBUILD=/d/Codes/cefbuild deno task build:chromium`；记录 build.log 耗时与真实变更清单 | 仅 0007 的三个 CEF 文件进入真实变更 | 未执行 |
+| [x] | S1 runtime 单测 | Windows | `driver.sh kabegame -p tauri-runtime-cef --lib` | 点 2/4/5 单测通过 | 2026-10-31（`CARGO_TARGET_DIR=target-check`，`--no-fail-fast`）：runtime 36 passed |
+| [x] | S2 应用单测 | Windows | `driver.sh kabegame --lib wpe_web` | CallerOrigin 与 ACL 模式通过 | 2026-10-31：同一轮 `kabegame` lib 58 passed / 1 failed，失败的 `http_server::tests::media_routes_only_accept_wildcard_path_form` 是本机 `HTTP_PROXY` 让 reqwest 走了代理，设 `NO_PROXY=127.0.0.1,localhost` 后单独重跑通过，与本次无关；`kabegame-core --lib wpe` 30 passed |
+| [x] | S3 check 与格式 | Windows / macOS | `check-kabegame`、改动文件 rustfmt/Prettier | 0 error | 2026-10-31：vue-tsc 0 error、cargo 0 error，改动的 runtime 文件无新 warning；Prettier 通过；rustfmt 差异数 `protocol.rs` 2（合并前 HEAD 5 / origin 3）、`ipc.rs` 0，其余改动文件 0。cef-rs 的 `wrap_*!` 宏内不经 rustfmt，已手工按周围风格排版（宏内不能写 `///` 文档注释） |
+| [ ] | D1 首批请求 | Windows 新 CEF | 网页壁纸互切、与普通图片互切各 ≥10 次，预览也切换；debug ingest 按 ts 对照首次 IPC | 首次 Origin 即完整入口、pull 成功、无 `[kb-wpe]` 警告 | 取代 W11 / Phase 7 用例 12 的方法 |
+| [ ] | D2 属性与语言 | Windows 新 CEF | 预览与桌面显示作者属性并切语言 | 两处属性与语言同步 | 取代 W1 |
+| [ ] | D3 闸门首批请求 | Windows 新 CEF | 内联脚本立刻 fetch 同目录、另一壁纸、库外文件 | 仅同目录成功；拒绝日志 `requester Document` | 取代 W7 |
+| [ ] | D4 冷启动 | Windows 新 CEF | 当前桌面为 D3 壁纸时重启 | 首次拉属性并读同目录及用户选择目录 | 取代 W8 |
+| [ ] | D5 文件 / 目录属性 | Windows 新 CEF | 选目录、换目录、跨壁纸读取 | 新目录立即可读，旧目录与另一壁纸不可读 | 取代 W10 |
+| [ ] | D6 cef-ipc 回退 | Windows 新 CEF | iframe 强制主通道失败再 pull / `get_plugins` | pull 正确，越权命令被 ACL 拒绝 | iframe 形态复测 |
+| [ ] | D7 opaque 来源 | Windows 新 CEF | sandbox iframe 与 CSP sandbox 强制两条通道 | 主通道 500；回退占位来源并 reject | 取代旧项 5 的 400 预期 |
+| [ ] | D8 全窗口 IPC | Windows 新 CEF | 主窗口 raw body / Channel / listen；畅游下载；WebView 插件；壁纸握手与 ping | 均正常，无 unattributed scheme factory 日志 | 同时核对 macOS / Linux 子集 |
+| [ ] | D9 未归属 IPC | Windows 新 CEF | 下载链接与 iframe 导航到 `ipc:` | 不执行命令 | 兜底来源 null |
+| [ ] | D10 旧 CEF | Windows 旧构建（可选） | 加载网页壁纸 iframe | 被拒并退预览图，一次 0007 missing warn | 需保留旧构建 |
+| [ ] | D11 worker `file:` | Windows 新 CEF | worker fetch 同目录和库外文件 | 都失败 | 补丁前行为也待实测 |
+| [ ] | M 平台冒烟 | macOS / Linux | D8 子集与 B7 `file:///etc/hosts` iframe | IPC 正常；B7 拒绝日志 `requester Deny` | Android / Web 不链接 CEF |
+
 ## CEF 运行时：IPC 来源按发起方 origin 判定
+
+**历史回归说明**：项 1 / 2 测的是主 frame 整窗导航；iframe 形态见 0007 节 D1 / D6。项 5 的 400 预期由 D7 取代，原勾选记录保留。
 
 2026-10-31：Phase 7 真机回归发现，桌面壁纸窗口导航进网页壁纸后，垫片最早的 listen / pull 常拿到 `Origin: null` 被拒（17 次导航 12 次）。调查（只读，Chromium 149.0.7827.201 源码 + CEF #4034）：CEF 的 `frame.url()` 是 UI 线程缓存，到 `DidFinishNavigation` 才刷新，IO 线程上主 frame 的请求每次换成浏览器当前的主 frame（`MaybeChangeMainFrame`）；Chromium 不保证提交回执先于新文档的子资源请求到达。旧的 `pin_file_frame_origin` 据此读到空串或旧地址就不改写；同一竞态下 `cef-ipc` 回退退到 webview 初始 URL（应用页），`file:` 页面会被判成本地来源、拿到 `main-capability`。修复：`ipc` / `cef-ipc` 请求改用 `GetResourceRequestHandler` 的 factory 级 `request_initiator`（浏览器提交导航时按文档算好）写内部头，协议层覆写 `Origin`；`cef-ipc` 不合法 `Origin` 即拒。改动都在主程序（浏览器进程），dev 自动重编即可，不用重编 helper。
 
@@ -14,6 +40,43 @@
 | [x] | 3 应用页照旧 | 同上 | 主窗口操作若干命令；桌面从网页壁纸切回普通图片后看壁纸窗口应用页握手 | 本地命令正常；切回后壁纸窗口正常显示，没有 ACL 拒绝 | 2026-10-31 Claude 经 CDP 实测：壁纸切到 12823 后，壁纸窗口应用页 `get_current_wallpaper_image_id` 成功、`get_settings` 只报缺参数（已过 ACL；对照网页壁纸页在 ACL 就被拒），console 无 ACL / Origin 日志；主窗口命令全程正常；畅游导航栏页强制回退 `cef-ipc` 后同样成功（204） |
 | [x] | 4 畅游 | 同上 | example.com、x.com 畅游页：地址上报、右键下载、一键下载；页面插 `no-referrer` 后再调 | 都正常；`read_plugin_file` 等应用命令仍被 ACL 拒绝 | 2026-10-31 Claude 经 CDP 实测：example.com：启动期 `surf_collect_attach` / `surf_report_url` / `get_webview_i18n` 各一次、都是 200，`read_plugin_file` 被 ACL 拒绝，插 `no-referrer` 后与 raw body（octet-stream）invoke 正常；x.com 开着 DevTools：右键配图只出一个菜单，点一次「下载图片」收起并提示「下载成功」。一键下载未单独测（与右键下载同一条页面 IPC 通道） |
 | [x] | 5 opaque 来源被拒 | 同上 | 畅游页里建 `sandbox="allow-scripts"` 的 iframe 或用 CSP sandbox 页面发 `cef-ipc` | 回 400，不再借 frame URL 放行 | 行为变化，已与用户确认；2026-10-31 Claude 经 CDP 实测：畅游打开 `https://httpbin.org/response-headers?Content-Security-Policy=sandbox%20allow-scripts`（顶层主 frame 沙箱，`self.origin` 为 `null`，Tauri 脚本仍注入）：主通道 invoke 回 500「Origin header is not a valid URL」，强制回退后 `cef-ipc` 回 400、invoke 无回调；修复前会借 frame URL 按远程 httpbin 来源放行 |
+## frame 级 IPC（tauri 补丁 0018–0019）+ 网页壁纸统一成 iframe
+
+2026-10-31：frame 成为 IPC 的基本单位。0018：子 frame 请求在 `IpcFrame::Sub` 旁带不透明的 `SubframeId`（CEF frame identifier，请求 extension），Tauri 的 JS 监听表按「webview → frame → 事件」存储，监听登记、事件投递、Channel 消息与 `cef-ipc` 回退响应都 eval 进发起调用的 frame（runtime 新增 `eval_script_in_subframe`），`Unknown` 与无 id 的 `Sub` 无法 listen；Channel 大数据队列条目绑定 frame，`plugin:__TAURI_CHANNEL__|fetch` 只交给该 frame；runtime 报 `SubframeDestroyed` 时清该 frame 的监听与未取数据；关闭拦截只看主 frame；新增 `tauri::ipc::CallerOrigin`。0019：Tauri 把四段桥脚本另交给 runtime（`subframe_bridge_scripts`），CEF 渲染进程无条件先注入每个子 frame，ACL 是唯一闸门。CEF runtime：上报 `SubframeId`、`EvalInSubframe`、`FrameHandler::on_frame_destroyed`；回退通道放行所有给出了 frame 的请求，子 frame 拿不到来源时用占位来源交给 ACL 拒绝（不再退到应用页 URL）；`file:` 闸门不再按 label 存根目录，改由应用注册的解析器推出访问范围（`file:` 文档只能访问自己的壁纸目录与用户选择，应用页发起的 iframe 导航只能落进库里某个网页壁纸目录）。应用：网页壁纸一律是 `WallpaperStage` web 层里的 `file:` iframe（预览与桌面同一套，`src` 取目标的 `webEntry`），`wpe-web-capability` 绑定 `main` / `wallpaper`、`frames: "sub"`；垫片只剩直接 invoke / listen 一种传输（首批请求退避重试）；删除 `set_wpe_web_preview`、`get_wpe_web_state`、`wpeWebBridge.ts`、壁纸窗口整窗导航与 `web_wallpaper_dir`，`set_wallpaper_path` 只开关鼠标转发；新增网页壁纸目录索引（`wallpaper/wpe_web_dir_index.rs`，Storage 就绪后先订阅再走 `idx_images_type` 全量建表、随图片事件维护）。
+
+**前置依赖已由 0007 节落地**：请求归属改用建工厂时捕获的文档 URL，Windows 真机复测见 D1–D11。网页壁纸只在 Windows 提供，macOS 真机借**临时** capability 在畅游里验证 frame 级机制（验完已删除：`capabilities/zz-temp-b-*.json` 与 handlebars 里的两个 identifier；生成的 `tauri.conf.json` / `gen/schemas` 已复原）。计划里的 `surf-collect-state` 是 `emit_to(<导航栏>)`，到不了内容 webview 的 iframe，改用主窗口 `plugin:event|emit` 广播的测试事件 `kb-subframe-test`；Channel 取数用主窗口的日志流（`start_app_log_stream`）测，畅游页没有能产生大 Channel 消息的命令。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | U1 tauri 单测 | macOS，`third/tauri` | `cargo test -p tauri --lib`、`cargo test -p tauri-utils --lib` | 全部通过，含 frame 投递、退订、销毁清理、无 id / Unknown 不能 listen、Channel 与回退响应按 frame 回送、Channel 取数按 frame 归属、桥脚本即主 frame 桥 | 2026-10-31：tauri 111 passed（新增 `event::listener::test::js_listeners_are_scoped_per_frame`、`event::plugin::tests` 三项、`ipc::channel::tests` 三项、`ipc::protocol::tests` 四项、`manager::webview::tests::subframe_bridge_scripts_are_the_main_frame_bridge`，改 `manager::window::tests`）；tauri-utils 44 passed |
+| [x] | U2 补丁序列 | macOS | 开工前 `--gen --from 0017` 确认无剩余改动；`--gen` 生成 0018 / 0019；`deno task patch tauri --check` | 无剩余；OK dry-run | 2026-10-31：开工前「没有剩余改动」；0018 15 个文件、0019 2 个文件；`tauri: OK dry-run`；生成后再 `--gen --from 0019` 无剩余 |
+| [x] | U3 runtime + 应用单测 | macOS | `test-kabegame kabegame -p tauri-runtime-cef --lib --no-fail-fast` | 全部通过：`SubframeId` extension 与重建保留、跨源子 frame 回退请求放行且记 `Sub`、子 frame 缺来源用占位来源、闸门五种情况与发起方分类、子 frame 先注桥、目录索引祖先查找 / 按 id 删 / 目录不存在不登记 / 放行覆盖 / 键与闸门一致、`caller_document` 只认 `file:` | 2026-10-31：94 passed（kabegame 58 + runtime 36）。首跑发现两处：`Url::to_file_path` 不看 scheme（`tauri://localhost/` → `/`），已在 `wpe_web_pull_state` 先判 `file:`（新增 `caller_document`）；`about:srcdoc` 能装进 `http::Uri`，原占位来源预期改为按远程来源交 ACL。macOS 上 `-c kabegame` 的测试二进制在 `target/debug/deps`，按 `@executable_path/../Frameworks` 找不到 CEF（软链只在 `target/Frameworks`），本机在 gitignore 的 `target/` 里加了 `target/debug/Frameworks -> ../Frameworks` 才能跑；`DYLD_FRAMEWORK_PATH` 传不到测试进程 |
+| [x] | U4 core `list_wpe_web_rows` | macOS | `test-kabegame kabegame-core --lib wpe_web_rows` | 只列 `x-wpe/web`；`EXPLAIN QUERY PLAN` 走 `idx_images_type`、不全表扫 | 2026-10-31：2 passed |
+| [x] | U5 编译检查 | macOS standard | `check-kabegame`（vue-tsc + cargo check） | 0 error | 2026-10-31：vue-tsc 0、cargo 0。只在 Windows 编译的分支未覆盖，见 W12 |
+| [x] | U6 改动文件格式 | macOS | 改过的 Rust 文件逐个 `rustfmt --check --config skip_children=true`；前端与 capability 用 Prettier `--check` | 本次改动不引入新的格式差异 | 2026-10-31：third/tauri 改动文件干净；主仓 HEAD 本就干净的文件全部干净，`ipc.rs` / `protocol.rs` / `commands/wallpaper.rs` 只剩 HEAD 既有差异；`wpe_shim.js` 经 Prettier 写回 |
+| [x] | B1 子 frame 有桥、调不动命令 | macOS dev CEF，kabegame-chromium | 主窗口里插 srcdoc iframe，读 `contentWindow.__TAURI_INTERNALS__`，调 `get_wallpaper_volume` | iframe 有自己的桥（label `main`）；调用被 ACL 拒绝；主 frame 同命令放行 | 2026-10-31：`iframeBridgeIsOwn: true`、label `main`，iframe 报 `Command get_wallpaper_volume not allowed by ACL`，主 frame resolved |
+| [x] | B2 Channel 取数按 frame 归属 | 同上 | 主 frame 用 Channel 开日志流并刷 480 条长日志；同时 srcdoc iframe 每轮并发猜 id 0–63 调 `plugin:__TAURI_CHANNEL__\|fetch`，共 40 轮 | iframe 一条都取不到；主 frame 正常收到全部批次 | 2026-10-31：主 frame 收到 3 批、全部超过 8192 字节直投阈值（最大 80,941 字节）即都走 fetch 队列；iframe 约 2,560 次猜测 `stolen: []` |
+| [x] | B3 跨源 iframe 注入与 ACL | macOS dev，临时 capability（`surf-*`、`frames: "sub"`、`https://example.org/*`、allow-listen `kb-subframe-test` / `surf-collect-state`） | example.com 畅游页里嵌 `https://example.org/`，在 iframe 上下文 listen / invoke | iframe 有 `__TAURI_INTERNALS__` 与 `isTauri`；listen 测试事件成功；listen `images-added` 被作用域拒绝；`surf_report_url` 被拒（`surf-capability` 只认主 frame） | 2026-10-31：全部符合；iframe label `surf-example_com`，拒绝文案分别是 ``event `images-added` is not allowed to be listened by ACL`` 与 `Command surf_report_url not allowed by ACL` |
+| [x] | B4 srcdoc iframe 有桥被拒 | 同上 | 同页 srcdoc iframe（继承 example.com 来源）listen 与 invoke | 有桥；全部被拒 | 2026-10-31：`plugin:event\|listen` 与 `surf_report_url` 都 `not allowed by ACL` |
+| [x] | B5 事件只投递到对应 frame | 同上（主 frame 另借临时 capability 可听测试事件） | 主窗口广播 `kb-subframe-test` n=1；iframe 猜主 frame 的监听 id 去 unlisten；再广播 n=2 | 主 frame 与 iframe 各收一次，srcdoc 不收；猜 id 退订无效 | 2026-10-31：n=1 后主 frame `[1]`、iframe `[1]`、srcdoc `[]`；iframe 退订 id 44（主 frame 的）调用返回但无效果，n=2 后主 frame `[1,2]`、iframe `[1,2]`。debug ingest 插桩（已删）显示 listen 登记与两次投递都 eval 进 frame `B-D7B3…`、`found: true` |
+| [x] | B6 iframe 移除后监听被清 | 同上 | 移除 example.org iframe 后广播 n=3，读 debug ingest | 收到该 frame 的 `subframe_destroyed`；之后没有 eval 进它；主 frame 照收 | 2026-10-31：`subframe_destroyed` `B-D7B3…`（url example.org）；另有一个 url 为空的 `9-D29C…`，是 CEF 跨源加载 iframe 时先建后毁的临时 frame（计划已预期，删除为空操作）；n=3 后无任何 `eval_in_subframe`，主 frame `[1,2,3]` |
+| [x] | B7 macOS `file:` 闸门 | macOS dev | 主窗口应用页插 `file:///etc/hosts` iframe；读画廊 `file:` 图片 | iframe 导航被拒（非 Windows 不注册解析器）；画廊媒体照常免检 | 旧版实测日志原为 requester Target；0007 终态预期 requester Deny，待 M 项复测。2026-10-31：日志 `deny file: file:///etc/hosts (outside <none>; grants 0; NoRoot; requester Deny) webview 'main'`；画廊 `img[src^=file:]` naturalWidth 512 |
+| [x] | M1 主窗口各页 | macOS dev | 依次进入画廊、画册、源、设置、畅游、运行配置，调几个命令与 listen `images-added` | 正常渲染；主窗口特赦与事件不受影响；`get_current_wallpaper_target` 带 `webEntry` 字段 | 2026-10-31：各页路由正常、无错误提示，画廊截图 4185 张图正常加载；命令与 listen 都 ok，`webEntry=null`（macOS）；测试期间 dev 日志无 WARN / ERROR（GPU 进程的 libGLESv2 错误为既有） |
+| [x] | M4 畅游两窗口地址栏不串 | macOS dev | example.com / example.org 两窗口各做 2 次导航与 1 次 pushState；分别点两边导航栏的一键下载 | 各自导航栏只随本窗口变化；转圈只出现在对应窗口 | 2026-10-31：地址序列分别为 `/` → `?n=1` → `?n=2` → `/spa-a` 与 `/` → `?m=1` → `?m=2`，无串入；点 org 只有 org 的 `aria-busy` true → false，点 com 反之 |
+| [ ] | M9 关闭行为 | macOS dev | `plugin:window\|close` 关主窗口后 show；关闭两个畅游会话；运行 WebView 插件后关爬虫窗口 | 主窗口只隐藏；畅游窗口销毁；爬虫窗口只隐藏 | 2026-10-31 部分通过：主窗口 `is_visible` true → false、仍在 `get_all_windows`，show 后恢复；`surf_close_session` 后两个畅游窗口从列表消失。爬虫窗口一项未测（未起 WebView 插件任务）。测试创建的 example.org 畅游记录已删除，example.com 记录为既有 |
+| [ ] | W1 预览与桌面拉取属性、改语言（由 D2 取代） | Windows CEF dev（完全重启） | 预览与桌面各显示一张带作者属性的网页壁纸；切换界面语言 | 两处都拉到属性；改语言后两处都更新 | 由 0007 节对应 D 项取代 |
+| [ ] | W2 桌面鼠标转发 | Windows | 桌面网页壁纸上移动、左键点击 | 页面收到移动与点击（iframe 接收指针事件） | 待验证 |
+| [ ] | W3 来回切换不积累监听 | Windows | 图片 ↔ 网页壁纸来回切 10 次，插桩数 Tauri 侧该 webview 的 JS 监听 | 监听数不增长（iframe 销毁即清） | 待验证 |
+| [ ] | W4 网页卡死重载 | Windows | 网页壁纸页面里写死循环 | 约 30s 后整页重载并恢复（应用页显示 web 层期间不应答 ping） | 待验证 |
+| [ ] | W5 `localStorage` 互通 | Windows | 预览里写一个键，桌面读；反向再来一次 | 两处互通（同一顶层分区）；桌面此前在 `file://` 顶层存的数据不会带过来 | 待验证 |
+| [ ] | W6 网页壁纸 listen 越权 | Windows | 网页壁纸 iframe 里 listen `images-added` | 被 ACL 作用域拒绝 | 待验证（macOS 已用临时 capability 在畅游 iframe 验证同一机制，见 B3） |
+| [ ] | W7 闸门（由 D3 取代） | Windows | 壁纸页面 fetch 同目录文件、另一张网页壁纸目录下的文件、库外文件 | 同目录成功；另两类被拒，日志 `deny file:` | 由 0007 节对应 D 项取代 |
+| [ ] | W8 冷启动即网页壁纸（由 D4 取代） | Windows | 当前桌面是网页壁纸时重启应用 | 第一次加载就拉到属性、读到同目录与用户选的目录 | 由 0007 节对应 D 项取代 |
+| [ ] | W9 新导入 / 删除 | Windows | 不重启导入一张网页壁纸，预览并设为桌面；删除后再预览 | 导入后直接可用（索引随 `images-added` 更新）；删除后被拒 | 待验证 |
+| [ ] | W10 文件 / 目录属性（由 D5 取代） | Windows | 选目录后页面读其中文件；换目录；另一张网页壁纸读这张的选择 | 能读；换目录后旧目录的请求**立即**被拒（不必重开预览或切走桌面）；另一张读不到 | 由 0007 节对应 D 项取代 |
+| [ ] | W11 首批请求（由 D1 取代） | Windows | iframe 形态见 0007 节 D1；经 `set_wallpaper_by_image_id` 在网页壁纸之间反复切换，回放新文档 console | 首批 listen / pull 全部成功，闸门判定正确 | 由 0007 节对应 D 项取代 |
+| [ ] | W12 Windows / Linux 编译 | Windows、Linux | `check-kabegame` | 0 error | 未测：本机 macOS。只在 Windows 编译的新代码：`core_init.rs` 里 `init_wpe_web_dir_index()` 调用、`WallpaperWindow::set_mouse_forwarding` 的 Windows 分支、`manager/window.rs` 里 `allow_file_documents` 登记（既有） |
+| [ ] | A1 Android 不变 | Android dev | 冒烟：主界面、畅游 | 行为不变（wry 不上报 frame，`subframe_bridge_scripts` 被忽略） | 未测 |
 
 ## `images.type` 规范化与索引（v049）
 

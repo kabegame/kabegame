@@ -1,0 +1,2111 @@
+diff --git a/crates/tauri-runtime/src/lib.rs b/crates/tauri-runtime/src/lib.rs
+index 0c924c0360af4ca4d07ffec2b81e1b9ef6a04ac8..0414960c5bc4bba198094c7ea12433ef445ddec6 100644
+--- a/crates/tauri-runtime/src/lib.rs
++++ b/crates/tauri-runtime/src/lib.rs
+@@ -183,6 +183,9 @@ pub enum Error {
+   FailedToRemoveDataStore,
+   #[error("Could not find the webview runtime, make sure it is installed")]
+   WebviewRuntimeNotInstalled,
++  /// The runtime cannot evaluate scripts in a subframe.
++  #[error("the runtime cannot evaluate scripts in subframes")]
++  SubframeEvalUnsupported,
+ }
+ 
+ /// Result type.
+@@ -616,6 +619,15 @@ pub trait WebviewDispatch<T: UserEvent>: Debug + Clone + Send + Sync + Sized + '
+   /// Executes javascript on the window this [`WindowDispatch`] represents.
+   fn eval_script<S: Into<String>>(&self, script: S) -> Result<()>;
+ 
++  /// Executes javascript in the given subframe of this webview.
++  ///
++  /// A frame that no longer exists drops the script silently, like a main frame `eval` that lands
++  /// after a navigation. Runtimes that never report [`webview::SubframeId`] keep this default.
++  fn eval_script_in_subframe(&self, id: &webview::SubframeId, script: String) -> Result<()> {
++    let _ = (id, script);
++    Err(Error::SubframeEvalUnsupported)
++  }
++
+   /// Evaluate JavaScript with callback function on the webview this [`WebviewDispatch`] represents.
+   /// The evaluation result will be serialized into a JSON string and passed to the callback function.
+   ///
+diff --git a/crates/tauri-runtime/src/webview.rs b/crates/tauri-runtime/src/webview.rs
+index 87a26fd9d905daedc739fc670386e80bd2527604..9443c57ac2c5285c4ef79dacb7ca16d08214837f 100644
+--- a/crates/tauri-runtime/src/webview.rs
++++ b/crates/tauri-runtime/src/webview.rs
+@@ -949,6 +949,27 @@ pub enum IpcFrame {
+   Unknown,
+ }
+ 
++/// Opaque identifier of a subframe, defined by the runtime and only used to send data back to the
++/// subframe that made an IPC call.
++///
++/// Only requests from [`IpcFrame::Sub`] carry it: the runtime puts it into the request extensions
++/// next to [`IpcFrame`] (pages cannot forge extensions). The main frame has no id: it is addressed
++/// through its webview, since a runtime may give the main frame a new id after a cross-origin navigation.
++#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++pub struct SubframeId(pub Arc<str>);
++
++impl SubframeId {
++  /// Wraps the runtime's identifier of the subframe.
++  pub fn new(id: impl Into<Arc<str>>) -> Self {
++    Self(id.into())
++  }
++
++  /// The runtime's identifier of the subframe.
++  pub fn as_str(&self) -> &str {
++    &self.0
++  }
++}
++
+ /// An initialization script
+ #[derive(Debug, Clone)]
+ pub struct InitializationScript {
+diff --git a/crates/tauri-runtime/src/window.rs b/crates/tauri-runtime/src/window.rs
+index e3beefd3e471db50876fb563c92aa3abf9fefd7b..1b68d9381731805c715a4eb5f1edff69e27e4402 100644
+--- a/crates/tauri-runtime/src/window.rs
++++ b/crates/tauri-runtime/src/window.rs
+@@ -6,7 +6,7 @@
+ 
+ use crate::{
+   Icon, Runtime, UserEvent, WindowDispatch,
+-  webview::{DetachedWebview, PendingWebview},
++  webview::{DetachedWebview, PendingWebview, SubframeId},
+ };
+ 
+ use dpi::PixelUnit;
+@@ -91,6 +91,10 @@ pub enum WindowEvent {
+ pub enum WebviewEvent {
+   /// An event associated with the drag and drop action.
+   DragDrop(DragDropEvent),
++  /// A subframe of the webview was destroyed; its [`SubframeId`] is no longer valid.
++  ///
++  /// Only runtimes that report [`SubframeId`] emit it.
++  SubframeDestroyed(SubframeId),
+ }
+ 
+ /// The drag drop event payload.
+diff --git a/crates/tauri/src/app.rs b/crates/tauri/src/app.rs
+index 0056dfcea4d83cd15068564a8941cca8b59caf75..dc3df51a09b176209275a41742c604976480619c 100644
+--- a/crates/tauri/src/app.rs
++++ b/crates/tauri/src/app.rs
+@@ -202,12 +202,16 @@ impl From<RuntimeWindowEvent> for WindowEvent {
+ pub enum WebviewEvent {
+   /// An event associated with the drag and drop action.
+   DragDrop(DragDropEvent),
++  /// A subframe of the webview was destroyed. Tauri drops the JS event listeners it registered;
++  /// apps do not need to handle it. Only runtimes that report subframes emit it.
++  SubframeDestroyed(crate::webview::SubframeId),
+ }
+ 
+ impl From<RuntimeWebviewEvent> for WebviewEvent {
+   fn from(event: RuntimeWebviewEvent) -> Self {
+     match event {
+       RuntimeWebviewEvent::DragDrop(e) => Self::DragDrop(e),
++      RuntimeWebviewEvent::SubframeDestroyed(id) => Self::SubframeDestroyed(id),
+     }
+   }
+ }
+diff --git a/crates/tauri/src/event/listener.rs b/crates/tauri/src/event/listener.rs
+index b7b0c14055cd5f95bdaf0f33d30ad3a4f2a0a3e9..e64597b927bb827454ffd34cfa83ca587c36082f 100644
+--- a/crates/tauri/src/event/listener.rs
++++ b/crates/tauri/src/event/listener.rs
+@@ -2,7 +2,10 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // SPDX-License-Identifier: MIT
+ 
+-use crate::{Runtime, Webview};
++use crate::{
++  Runtime, Webview,
++  webview::{FrameAddress, SubframeId},
++};
+ 
+ use super::{EmitArgs, Event, EventId, EventTarget};
+ 
+@@ -45,13 +48,17 @@ impl Handler {
+ 
+ type WebviewLabel = String;
+ 
++/// The JS listener ids of one frame, per event name.
++type FrameJsListeners = HashMap<crate::EventName, HashSet<EventId>>;
++
+ /// Holds event handlers and pending event handlers, along with the salts associating them.
+ struct InnerListeners {
+   pending: Mutex<Vec<Pending>>,
+   handlers: Mutex<HashMap<crate::EventName, HashMap<EventId, Handler>>>,
+-  /// JS listeners per webview label and event name. Only the listener id is kept: delivery is decided
+-  /// by who the receiving webview is (see [`receiver_identities`]), not by a target sent from JS.
+-  js_event_listeners: Mutex<HashMap<WebviewLabel, HashMap<crate::EventName, HashSet<EventId>>>>,
++  /// JS listeners per webview label, frame and event name. Only the listener id is kept: delivery is
++  /// decided by who the receiving webview is (see [`receiver_identities`]), not by a target sent
++  /// from JS, and goes to the frame that registered the listener.
++  js_event_listeners: Mutex<HashMap<WebviewLabel, HashMap<FrameAddress, FrameJsListeners>>>,
+   function_name: &'static str,
+   listeners_object_name: &'static str,
+   next_event_id: Arc<AtomicU32>,
+@@ -227,10 +234,12 @@ impl Listeners {
+     self.emit_filter(emit_args, None::<&dyn Fn(&EventTarget) -> bool>)
+   }
+ 
++  /// Records a JS listener registered from the given frame of the given webview.
+   pub(crate) fn listen_js(
+     &self,
+     event: crate::EventName<&str>,
+     source_webview_label: &str,
++    source_frame: FrameAddress,
+     id: EventId,
+   ) {
+     let event = event.into_owned();
+@@ -238,35 +247,45 @@ impl Listeners {
+     listeners
+       .entry(source_webview_label.to_string())
+       .or_default()
++      .entry(source_frame)
++      .or_default()
+       .entry(event)
+       .or_default()
+       .insert(id);
+   }
+ 
+-  /// Removes a JS listener registered from the given webview.
++  /// Removes a JS listener registered from the given frame of the given webview.
+   ///
+-  /// Only the calling webview's own listeners are looked at: listener ids are a global counter,
+-  /// so another webview must not be able to drop them by guessing the id.
++  /// Only the calling frame's own listeners are looked at: listener ids are a global counter,
++  /// so another webview or frame must not be able to drop them by guessing the id.
+   pub(crate) fn unlisten_js(
+     &self,
+     webview_label: &str,
++    frame: &FrameAddress,
+     event: crate::EventName<&str>,
+     id: EventId,
+   ) {
+     let event = event.into_owned();
+     let mut js_listeners = self.inner.js_event_listeners.lock().unwrap();
+-    if let Some(events) = js_listeners.get_mut(webview_label) {
+-      if let Some(ids) = events.get_mut(&event) {
+-        ids.remove(&id);
++    let Some(frames) = js_listeners.get_mut(webview_label) else {
++      return;
++    };
++    let Some(events) = frames.get_mut(frame) else {
++      return;
++    };
++    if let Some(ids) = events.get_mut(&event) {
++      ids.remove(&id);
+ 
+-        if ids.is_empty() {
+-          events.remove(&event);
+-        }
++      if ids.is_empty() {
++        events.remove(&event);
+       }
+     }
++    if events.is_empty() {
++      frames.remove(frame);
++    }
+   }
+ 
+-  /// Removes all JS event listeners registered from the given webview.
++  /// Removes all JS event listeners registered from the given webview, in every frame.
+   pub(crate) fn remove_webview_js_listeners(&self, webview_label: &str) {
+     self
+       .inner
+@@ -276,6 +295,14 @@ impl Listeners {
+       .remove(webview_label);
+   }
+ 
++  /// Removes all JS event listeners registered from a destroyed subframe of the given webview.
++  pub(crate) fn remove_subframe_js_listeners(&self, webview_label: &str, id: &SubframeId) {
++    let mut js_listeners = self.inner.js_event_listeners.lock().unwrap();
++    if let Some(frames) = js_listeners.get_mut(webview_label) {
++      frames.remove(&FrameAddress::Sub(id.clone()));
++    }
++  }
++
+   /// Removes all event listeners associated with a destroyed webview.
+   pub(crate) fn remove_webview_listeners(&self, label: &str) {
+     self.remove_webview_js_listeners(label);
+@@ -288,8 +315,11 @@ impl Listeners {
+     self.remove_listeners_for_target(EventTarget::webview_window(label));
+   }
+ 
+-  /// Whether any of the given webviews registered a JS listener for the event.
+-  pub(crate) fn has_js_listener_in<S: AsRef<str>>(
++  /// Whether the main frame of any of the given webviews registered a JS listener for the event.
++  ///
++  /// Subframes are guests of the page: their listeners do not count (e.g. a subframe cannot keep
++  /// a window open by listening to its close request).
++  pub(crate) fn has_main_frame_js_listener_in<S: AsRef<str>>(
+     &self,
+     event: crate::EventName<&str>,
+     webview_labels: &[S],
+@@ -299,6 +329,7 @@ impl Listeners {
+     webview_labels.iter().any(|label| {
+       js_listeners
+         .get(label.as_ref())
++        .and_then(|frames| frames.get(&FrameAddress::Main))
+         .and_then(|events| events.get(&event))
+         .is_some_and(|ids| !ids.is_empty())
+     })
+@@ -332,9 +363,15 @@ impl Listeners {
+     let event = &emit_args.event;
+     let js_listeners = self.inner.js_event_listeners.lock().unwrap();
+     receivers.into_iter().try_for_each(|webview| {
+-      if let Some(ids) = js_listeners.get(webview.label()).and_then(|s| s.get(event)) {
+-        let ids = ids.iter().copied().collect::<Vec<_>>();
+-        webview.emit_js(emit_args, &ids)?;
++      let Some(frames) = js_listeners.get(webview.label()) else {
++        return Ok(());
++      };
++      // each frame only receives its own listeners, evaluated in that frame
++      for (address, events) in frames {
++        if let Some(ids) = events.get(event) {
++          let ids = ids.iter().copied().collect::<Vec<_>>();
++          webview.emit_js_to_frame(address, emit_args, &ids)?;
++        }
+       }
+ 
+       Ok(())
+@@ -523,12 +560,28 @@ mod test {
+     let labeled = listeners.listen(event.clone(), EventTarget::labeled(webview_label), event_fn);
+ 
+     let id = listeners.next_event_id();
+-    listeners.listen_js(event.as_str_event(), webview_label, id);
+-    assert!(listeners.has_js_listener_in(event.as_str_event(), &[webview_label]));
++    listeners.listen_js(event.as_str_event(), webview_label, FrameAddress::Main, id);
++    let sub_id = listeners.next_event_id();
++    listeners.listen_js(
++      event.as_str_event(),
++      webview_label,
++      FrameAddress::Sub(SubframeId::new("frame")),
++      sub_id,
++    );
++    assert!(listeners.has_main_frame_js_listener_in(event.as_str_event(), &[webview_label]));
+ 
+     listeners.remove_webview_listeners(webview_label);
+ 
+-    assert!(!listeners.has_js_listener_in(event.as_str_event(), &[webview_label]));
++    assert!(!listeners.has_main_frame_js_listener_in(event.as_str_event(), &[webview_label]));
++    // the subframe's listeners went with the webview
++    assert!(
++      !listeners
++        .inner
++        .js_event_listeners
++        .lock()
++        .unwrap()
++        .contains_key(webview_label)
++    );
+ 
+     let lock = listeners.inner.handlers.lock().unwrap();
+     let remaining: HashSet<EventId> = lock.get(&event).unwrap().keys().copied().collect();
+@@ -549,25 +602,26 @@ mod test {
+   fn unlisten_js_only_touches_the_calling_webview() {
+     let listeners = Listeners::default();
+     let event = crate::EventName::new("test-event".to_owned()).unwrap();
++    let main = FrameAddress::Main;
+ 
+     let a = listeners.next_event_id();
+-    listeners.listen_js(event.as_str_event(), "a", a);
++    listeners.listen_js(event.as_str_event(), "a", main.clone(), a);
+     let b = listeners.next_event_id();
+-    listeners.listen_js(event.as_str_event(), "b", b);
++    listeners.listen_js(event.as_str_event(), "b", main.clone(), b);
+ 
+     // webview `a` guesses `b`'s id: nothing happens
+-    listeners.unlisten_js("a", event.as_str_event(), b);
+-    assert!(listeners.has_js_listener_in(event.as_str_event(), &["a"]));
+-    assert!(listeners.has_js_listener_in(event.as_str_event(), &["b"]));
++    listeners.unlisten_js("a", &main, event.as_str_event(), b);
++    assert!(listeners.has_main_frame_js_listener_in(event.as_str_event(), &["a"]));
++    assert!(listeners.has_main_frame_js_listener_in(event.as_str_event(), &["b"]));
+ 
+     // `b` drops its own listener; `a` keeps its own
+-    listeners.unlisten_js("b", event.as_str_event(), b);
+-    assert!(!listeners.has_js_listener_in(event.as_str_event(), &["b"]));
+-    assert!(listeners.has_js_listener_in(event.as_str_event(), &["a"]));
++    listeners.unlisten_js("b", &main, event.as_str_event(), b);
++    assert!(!listeners.has_main_frame_js_listener_in(event.as_str_event(), &["b"]));
++    assert!(listeners.has_main_frame_js_listener_in(event.as_str_event(), &["a"]));
+ 
+-    listeners.unlisten_js("a", event.as_str_event(), a);
+-    assert!(!listeners.has_js_listener_in(event.as_str_event(), &["a", "b"]));
+-    // the emptied event key is removed
++    listeners.unlisten_js("a", &main, event.as_str_event(), a);
++    assert!(!listeners.has_main_frame_js_listener_in(event.as_str_event(), &["a", "b"]));
++    // the emptied event and frame keys are removed
+     assert!(
+       listeners
+         .inner
+@@ -575,10 +629,66 @@ mod test {
+         .lock()
+         .unwrap()
+         .values()
+-        .all(|events| events.is_empty())
++        .all(|frames| frames.is_empty())
+     );
+   }
+ 
++  /// Frame-scoped bookkeeping: a subframe cannot drop the main frame's listener (nor a sibling's)
++  /// by guessing its id, a destroyed subframe takes only its own listeners with it, and only main
++  /// frame listeners count for close-request interception.
++  #[test]
++  fn js_listeners_are_scoped_per_frame() {
++    let listeners = Listeners::default();
++    let event = crate::EventName::new("test-event".to_owned()).unwrap();
++    let main = FrameAddress::Main;
++    let frame_a = FrameAddress::Sub(SubframeId::new("a"));
++    let frame_b = FrameAddress::Sub(SubframeId::new("b"));
++    let frames = |listeners: &Listeners| {
++      let mut frames = listeners
++        .inner
++        .js_event_listeners
++        .lock()
++        .unwrap()
++        .get("w")
++        .map(|frames| frames.keys().cloned().collect::<Vec<_>>())
++        .unwrap_or_default();
++      frames.sort_by_key(|frame| format!("{frame:?}"));
++      frames
++    };
++
++    let in_main = listeners.next_event_id();
++    listeners.listen_js(event.as_str_event(), "w", main.clone(), in_main);
++    let in_a = listeners.next_event_id();
++    listeners.listen_js(event.as_str_event(), "w", frame_a.clone(), in_a);
++    let in_b = listeners.next_event_id();
++    listeners.listen_js(event.as_str_event(), "w", frame_b.clone(), in_b);
++
++    // guessing ids across frames does nothing
++    listeners.unlisten_js("w", &frame_a, event.as_str_event(), in_main);
++    listeners.unlisten_js("w", &frame_a, event.as_str_event(), in_b);
++    listeners.unlisten_js("w", &main, event.as_str_event(), in_a);
++    assert_eq!(frames(&listeners).len(), 3);
++
++    // a subframe-only listener does not intercept close requests
++    let only_sub = Listeners::default();
++    only_sub.listen_js(event.as_str_event(), "w", frame_a.clone(), 1);
++    assert!(!only_sub.has_main_frame_js_listener_in(event.as_str_event(), &["w"]));
++    assert!(listeners.has_main_frame_js_listener_in(event.as_str_event(), &["w"]));
++
++    // destroying `a` drops only `a`
++    listeners.remove_subframe_js_listeners("w", &SubframeId::new("a"));
++    assert_eq!(frames(&listeners), vec![main.clone(), frame_b.clone()]);
++    // unknown frames and webviews are no-ops
++    listeners.remove_subframe_js_listeners("w", &SubframeId::new("never-registered"));
++    listeners.remove_subframe_js_listeners("other", &SubframeId::new("b"));
++    assert_eq!(frames(&listeners), vec![main.clone(), frame_b.clone()]);
++
++    // each frame drops its own listener
++    listeners.unlisten_js("w", &frame_b, event.as_str_event(), in_b);
++    listeners.unlisten_js("w", &main, event.as_str_event(), in_main);
++    assert!(frames(&listeners).is_empty());
++  }
++
+   #[test]
+   fn receiver_identities_cover_webview_window_and_both() {
+     assert_eq!(
+diff --git a/crates/tauri/src/event/plugin.rs b/crates/tauri/src/event/plugin.rs
+index 1aa4b212f85b16b9d5868013588c4ba6e2cbb5ef..fc8d9501faa6aafe4123a8321f62464dbd7ff1ed 100644
+--- a/crates/tauri/src/event/plugin.rs
++++ b/crates/tauri/src/event/plugin.rs
+@@ -8,7 +8,7 @@ use crate::plugin::{Builder, TauriPlugin};
+ use crate::{AppHandle, Emitter, Manager, Webview};
+ use crate::{
+   EventId, Result, Runtime, command,
+-  ipc::{AclExempt, CallbackFn, CommandScope},
++  ipc::{AclExempt, CallbackFn, CallerFrameAddress, CommandScope},
+ };
+ 
+ use super::EventName;
+@@ -21,6 +21,9 @@ use super::ListenScope;
+ /// The event name must pass the [`ListenScope`] of the `core:event:allow-listen` grants
+ /// that apply to the request, unless the request is exempt from the ACL
+ /// (see [`crate::Builder::acl_exempt_webview`]).
++///
++/// The listener is registered in, and events are delivered to, the frame that made the call;
++/// a caller that cannot be addressed (see `FrameAddress::of_caller`) cannot listen.
+ #[command(root = "crate")]
+ async fn listen<R: Runtime>(
+   webview: Webview<R>,
+@@ -28,11 +31,15 @@ async fn listen<R: Runtime>(
+   handler: CallbackFn,
+   scope: CommandScope<ListenScope>,
+   exempt: AclExempt,
++  caller: CallerFrameAddress,
+ ) -> Result<EventId> {
+   if !exempt.0 && !scope.matches(event.as_str()) {
+     return Err(listen_denied(event.as_str()));
+   }
+-  webview.listen_js(event.as_str_event(), handler)
++  let address = caller
++    .0
++    .ok_or_else(|| listen_unaddressable(event.as_str()))?;
++  webview.listen_js(event.as_str_event(), handler, address)
+ }
+ 
+ fn listen_denied(event: &str) -> crate::Error {
+@@ -41,13 +48,25 @@ fn listen_denied(event: &str) -> crate::Error {
+   ))
+ }
+ 
++fn listen_unaddressable(event: &str) -> crate::Error {
++  crate::Error::Anyhow(anyhow::anyhow!(
++    "event `{event}` cannot be listened: the calling frame cannot receive events"
++  ))
++}
++
++/// Only the calling frame's own listeners can be removed: guessing the id of another webview's
++/// or frame's listener does nothing.
+ #[command(root = "crate")]
+ async fn unlisten<R: Runtime>(
+   webview: Webview<R>,
+   event: EventName,
+   event_id: EventId,
++  caller: CallerFrameAddress,
+ ) -> Result<()> {
+-  webview.unlisten_js(event.as_str_event(), event_id)
++  match caller.0 {
++    Some(address) => webview.unlisten_js(event.as_str_event(), event_id, &address),
++    None => Ok(()),
++  }
+ }
+ 
+ #[command(root = "crate")]
+@@ -115,7 +134,7 @@ mod tests {
+     App, WebviewWindow, WebviewWindowBuilder,
+     ipc::{CallbackFn, InvokeBody},
+     test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets},
+-    webview::{InvokeRequest, IpcFrame},
++    webview::{InvokeRequest, IpcFrame, SubframeId},
+   };
+ 
+   const LISTEN: &str = "plugin:event|listen";
+@@ -228,6 +247,7 @@ mod tests {
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
+         frame,
++        subframe_id: None,
+       },
+     )
+     .map(|_| ())
+@@ -350,4 +370,213 @@ mod tests {
+     let main = window(&app_with(vec![None], true, &[]), "main");
+     assert!(listen(&main, "images-added").is_err());
+   }
++
++  /// An app where `core:event:allow-listen` and `allow-unlisten` are granted to every frame of the
++  /// `main` window (`frames: any`), so the requests below only differ by the frame they come from.
++  fn app_for_every_frame() -> App<MockRuntime> {
++    use tauri_utils::acl::capability::CapabilityFrames;
++    let grant = || ResolvedCommand {
++      context: ExecutionContext::Local,
++      windows: vec!["main".parse().unwrap()],
++      frames: CapabilityFrames::Any,
++      ..Default::default()
++    };
++    let mut context = mock_context(noop_assets());
++    *context.runtime_authority_mut() = crate::runtime_authority!(
++      Default::default(),
++      Resolved {
++        allowed_commands: [
++          (LISTEN.to_string(), vec![grant()]),
++          (UNLISTEN.to_string(), vec![grant()]),
++        ]
++        .into_iter()
++        .collect(),
++        ..Default::default()
++      }
++    );
++    mock_builder().build(context).unwrap()
++  }
++
++  const UNLISTEN: &str = "plugin:event|unlisten";
++
++  fn invoke_from(
++    webview: &WebviewWindow<MockRuntime>,
++    cmd: &str,
++    body: serde_json::Value,
++    frame: IpcFrame,
++    subframe_id: Option<SubframeId>,
++  ) -> Result<serde_json::Value, String> {
++    get_ipc_response(
++      webview,
++      InvokeRequest {
++        cmd: cmd.into(),
++        callback: CallbackFn(0),
++        error: CallbackFn(1),
++        url: "tauri://localhost".parse().unwrap(),
++        body: InvokeBody::Json(body),
++        headers: Default::default(),
++        invoke_key: INVOKE_KEY.to_string(),
++        frame,
++        subframe_id,
++      },
++    )
++    .map(|body| body.deserialize::<serde_json::Value>().unwrap())
++    .map_err(|e| e.to_string())
++  }
++
++  fn listen_in(
++    webview: &WebviewWindow<MockRuntime>,
++    event: &str,
++    frame: IpcFrame,
++    subframe_id: Option<SubframeId>,
++  ) -> Result<u64, String> {
++    invoke_from(
++      webview,
++      LISTEN,
++      json!({ "event": event, "handler": 7 }),
++      frame,
++      subframe_id,
++    )
++    .map(|id| id.as_u64().unwrap())
++  }
++
++  #[test]
++  fn listen_needs_an_addressable_frame() {
++    let main = window(&app_for_every_frame(), "main");
++    assert!(listen_in(&main, "setting-change", IpcFrame::Main, None).is_ok());
++    assert!(
++      listen_in(
++        &main,
++        "setting-change",
++        IpcFrame::Sub,
++        Some(SubframeId::new("frame-a"))
++      )
++      .is_ok()
++    );
++    // allowed by the ACL, but there is no frame to deliver to
++    let no_id = listen_in(&main, "setting-change", IpcFrame::Sub, None).unwrap_err();
++    assert!(no_id.contains("cannot receive events"), "{no_id}");
++    let unknown = listen_in(&main, "setting-change", IpcFrame::Unknown, None).unwrap_err();
++    assert!(unknown.contains("cannot receive events"), "{unknown}");
++  }
++
++  /// The registration script runs in the calling frame, events reach each frame's own listeners
++  /// once, and a destroyed subframe stops receiving them.
++  #[test]
++  fn subframe_listeners_are_registered_and_delivered_in_their_frame() {
++    use crate::Emitter;
++
++    let app = app_for_every_frame();
++    let main = window(&app, "main");
++    let dispatcher = main.webview.webview.dispatcher.clone();
++    let frame = SubframeId::new("frame-a");
++
++    dispatcher.clear_evaluated_scripts();
++    let sub_id = listen_in(&main, "setting-change", IpcFrame::Sub, Some(frame.clone())).unwrap();
++    let scripts = dispatcher.evaluated_scripts();
++    // the listener is installed in the subframe only
++    assert!(
++      scripts
++        .iter()
++        .all(|(target, _)| target.as_ref() == Some(&frame)),
++      "{scripts:?}"
++    );
++    assert!(!scripts.is_empty());
++
++    let main_id = listen_in(&main, "setting-change", IpcFrame::Main, None).unwrap();
++
++    dispatcher.clear_evaluated_scripts();
++    app.emit("setting-change", "payload-1").unwrap();
++    let scripts = dispatcher.evaluated_scripts();
++    let delivered = |target: Option<&SubframeId>| {
++      scripts
++        .iter()
++        .filter(|(to, script)| to.as_ref() == target && script.contains("payload-1"))
++        .map(|(_, script)| script.clone())
++        .collect::<Vec<_>>()
++    };
++    let to_frame = delivered(Some(&frame));
++    let to_main = delivered(None);
++    assert_eq!(to_frame.len(), 1, "{scripts:?}");
++    assert_eq!(to_main.len(), 1, "{scripts:?}");
++    // each frame only gets its own listener id
++    assert!(
++      to_frame[0].contains(&format!("[{sub_id}]")),
++      "{}",
++      to_frame[0]
++    );
++    assert!(
++      to_main[0].contains(&format!("[{main_id}]")),
++      "{}",
++      to_main[0]
++    );
++
++    // the runtime reports the subframe destroyed: only the main frame keeps receiving
++    dispatcher.emit_webview_event(tauri_runtime::window::WebviewEvent::SubframeDestroyed(
++      frame.clone(),
++    ));
++    dispatcher.clear_evaluated_scripts();
++    app.emit("setting-change", "payload-2").unwrap();
++    let scripts = dispatcher.evaluated_scripts();
++    assert!(
++      scripts.iter().all(|(target, _)| target.is_none()),
++      "{scripts:?}"
++    );
++    assert_eq!(
++      scripts
++        .iter()
++        .filter(|(_, script)| script.contains("payload-2"))
++        .count(),
++      1
++    );
++  }
++
++  #[test]
++  fn subframe_cannot_unlisten_another_frames_listener() {
++    use crate::Emitter;
++
++    let app = app_for_every_frame();
++    let main = window(&app, "main");
++    let dispatcher = main.webview.webview.dispatcher.clone();
++    let frame = SubframeId::new("frame-a");
++    let main_id = listen_in(&main, "setting-change", IpcFrame::Main, None).unwrap();
++    let sub_id = listen_in(&main, "setting-change", IpcFrame::Sub, Some(frame.clone())).unwrap();
++    let unlisten = |id: u64, frame: IpcFrame, subframe_id: Option<SubframeId>| {
++      invoke_from(
++        &main,
++        UNLISTEN,
++        json!({ "event": "setting-change", "eventId": id }),
++        frame,
++        subframe_id,
++      )
++      .unwrap();
++    };
++    let delivered_to = |payload: &str| {
++      dispatcher.clear_evaluated_scripts();
++      app.emit("setting-change", payload).unwrap();
++      let mut targets = dispatcher
++        .evaluated_scripts()
++        .into_iter()
++        .filter(|(_, script)| script.contains(payload))
++        .map(|(target, _)| target.map(|id| id.as_str().to_string()))
++        .collect::<Vec<_>>();
++      targets.sort();
++      targets
++    };
++
++    // the subframe guesses the main frame's id, the main frame guesses the subframe's: no effect
++    unlisten(main_id, IpcFrame::Sub, Some(frame.clone()));
++    unlisten(sub_id, IpcFrame::Main, None);
++    unlisten(sub_id, IpcFrame::Sub, Some(SubframeId::new("frame-b")));
++    assert_eq!(
++      delivered_to("payload-1"),
++      vec![None, Some("frame-a".to_string())]
++    );
++
++    // each frame drops its own listener
++    unlisten(sub_id, IpcFrame::Sub, Some(frame));
++    assert_eq!(delivered_to("payload-2"), vec![None]);
++    unlisten(main_id, IpcFrame::Main, None);
++    assert!(delivered_to("payload-3").is_empty());
++  }
+ }
+diff --git a/crates/tauri/src/ipc/channel.rs b/crates/tauri/src/ipc/channel.rs
+index 7782275d9199856139b0035023aa587fc9d9fb44..1e8db5b0068e194452b7745d3b98195c083e53ac 100644
+--- a/crates/tauri/src/ipc/channel.rs
++++ b/crates/tauri/src/ipc/channel.rs
+@@ -15,8 +15,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
+ 
+ use crate::{
+   Manager, Runtime, State, Webview, command,
+-  ipc::{CommandArg, CommandItem},
++  ipc::{CallerFrameAddress, CommandArg, CommandItem},
+   plugin::{Builder as PluginBuilder, TauriPlugin},
++  webview::FrameAddress,
+ };
+ 
+ use super::{
+@@ -42,33 +43,39 @@ static CHANNEL_COUNTER: AtomicU32 = AtomicU32::new(0);
+ /// Maps channel ids to pending data that must be sent to the JavaScript side via the IPC.
+ ///
+ /// Scoped per webview: each webview has its own id sequence and lookups only
+-/// ever touch the calling webview's entries.
++/// ever touch the calling webview's entries. Each entry also belongs to the frame it is sent to:
++/// ids are sequential, so another frame of the same webview (e.g. a third-party iframe, which also
++/// gets the IPC bridge) could otherwise guess them.
+ #[derive(Default, Clone)]
+ pub struct ChannelDataIpcQueue(Arc<Mutex<HashMap<String, WebviewChannelDataQueue>>>);
+ 
+-/// Pending channel data of one webview.
++/// Pending channel data of one webview, with the frame each entry is sent to.
+ #[derive(Default)]
+ struct WebviewChannelDataQueue {
+   next_id: u32,
+-  entries: HashMap<u32, InvokeResponseBody>,
++  entries: HashMap<u32, (FrameAddress, InvokeResponseBody)>,
+ }
+ 
+ impl ChannelDataIpcQueue {
+-  /// Stores the body for the given webview and returns its id.
++  /// Stores the body for the given frame of the given webview and returns its id.
+   ///
+   /// Ids are sequential per webview and only address that webview's entries.
+   #[cfg(test)]
+-  fn insert(&self, webview_label: &str, body: InvokeResponseBody) -> u32 {
+-    self.insert_if(webview_label, body, || true).unwrap()
++  fn insert(&self, webview_label: &str, address: FrameAddress, body: InvokeResponseBody) -> u32 {
++    self
++      .insert_if(webview_label, address, body, || true)
++      .unwrap()
+   }
+ 
+-  /// Stores the body for the given webview and returns its id, unless `is_alive` returns false.
++  /// Stores the body for the given frame of the given webview and returns its id, unless
++  /// `is_alive` returns false.
+   ///
+   /// `is_alive` runs under the queue lock, so a webview closing concurrently either fails the check
+   /// or has the entry purged by [`Self::remove_webview_entries`] right after.
+   fn insert_if(
+     &self,
+     webview_label: &str,
++    address: FrameAddress,
+     body: InvokeResponseBody,
+     is_alive: impl FnOnce() -> bool,
+   ) -> Option<u32> {
+@@ -84,25 +91,37 @@ impl ChannelDataIpcQueue {
+         break candidate;
+       }
+     };
+-    queue.entries.insert(data_id, body);
++    queue.entries.insert(data_id, (address, body));
+     Some(data_id)
+   }
+ 
+-  /// Removes and returns the entry with the given id from the given webview's queue.
+-  fn remove(&self, webview_label: &str, data_id: u32) -> Option<InvokeResponseBody> {
+-    self
+-      .0
+-      .lock()
+-      .unwrap()
+-      .get_mut(webview_label)?
+-      .entries
+-      .remove(&data_id)
++  /// Removes and returns the entry with the given id from the given webview's queue, only if it is
++  /// sent to `address`. An entry of another frame is left in place, as if it did not exist.
++  fn remove(
++    &self,
++    webview_label: &str,
++    address: &FrameAddress,
++    data_id: u32,
++  ) -> Option<InvokeResponseBody> {
++    let mut cache = self.0.lock().unwrap();
++    let entries = &mut cache.get_mut(webview_label)?.entries;
++    if entries.get(&data_id)?.0 != *address {
++      return None;
++    }
++    entries.remove(&data_id).map(|(_, body)| body)
+   }
+ 
+   /// Drops all entries of the given webview.
+   pub(crate) fn remove_webview_entries(&self, webview_label: &str) {
+     self.0.lock().unwrap().remove(webview_label);
+   }
++
++  /// Drops the entries sent to a destroyed frame of the given webview: nothing would fetch them.
++  pub(crate) fn remove_frame_entries(&self, webview_label: &str, address: &FrameAddress) {
++    if let Some(queue) = self.0.lock().unwrap().get_mut(webview_label) {
++      queue.entries.retain(|_, (owner, _)| owner != address);
++    }
++  }
+ }
+ 
+ /// An IPC channel, used to stream values from Rust to the frontend.
+@@ -270,13 +289,26 @@ impl FromStr for JavaScriptChannelId {
+ 
+ impl JavaScriptChannelId {
+   /// Gets a [`Channel`] for this channel ID on the given [`Webview`].
++  ///
++  /// Messages go to the main frame of the webview. A channel received as a command argument is
++  /// delivered to the frame that made the call instead.
+   pub fn channel_on<R: Runtime, TSend>(&self, webview: Webview<R>) -> Channel<TSend> {
++    self.channel_on_frame(webview, FrameAddress::Main)
++  }
++
++  /// Gets a [`Channel`] for this channel ID on the given frame of the [`Webview`].
++  pub(crate) fn channel_on_frame<R: Runtime, TSend>(
++    &self,
++    webview: Webview<R>,
++    address: FrameAddress,
++  ) -> Channel<TSend> {
+     let callback_fn = self.0;
+     let callback_id = callback_fn.0;
+ 
+     let counter = Arc::new(AtomicUsize::new(0));
+     let counter_clone = counter.clone();
+     let webview_clone = webview.clone();
++    let address_clone = address.clone();
+ 
+     Channel::new_with_id(
+       callback_id,
+@@ -294,28 +326,32 @@ impl JavaScriptChannelId {
+           InvokeResponseBody::Json(json_string)
+             if json_string.len() < MAX_JSON_DIRECT_EXECUTE_THRESHOLD =>
+           {
+-            webview.eval(format_raw_js(
+-              callback_id,
+-              format!("{{ message: {json_string}, index: {current_index} }}"),
+-            ))?;
++            webview.eval_in_frame(
++              &address,
++              format_raw_js(
++                callback_id,
++                format!("{{ message: {json_string}, index: {current_index} }}"),
++              ),
++            )?;
+           }
+           InvokeResponseBody::Raw(bytes) if bytes.len() < MAX_RAW_DIRECT_EXECUTE_THRESHOLD => {
+             let bytes_as_json_array = serde_json::to_string(&bytes)?;
+-            webview.eval(format_raw_js(callback_id, format!("{{ message: new Uint8Array({bytes_as_json_array}).buffer, index: {current_index} }}")))?;
++            webview.eval_in_frame(&address, format_raw_js(callback_id, format!("{{ message: new Uint8Array({bytes_as_json_array}).buffer, index: {current_index} }}")))?;
+           }
+           // use the fetch API to speed up larger response payloads
+           _ => {
+             // the webview was closed (or replaced by a new one with the same label),
+             // so nothing would ever fetch this data
+-            let Some(data_id) =
+-              webview
+-                .state::<ChannelDataIpcQueue>()
+-                .insert_if(webview.label(), body, || webview.is_registered())
+-            else {
++            let Some(data_id) = webview.state::<ChannelDataIpcQueue>().insert_if(
++              webview.label(),
++              address.clone(),
++              body,
++              || webview.is_registered(),
++            ) else {
+               return Ok(());
+             };
+ 
+-            webview.eval(format!(
++            webview.eval_in_frame(&address, format!(
+               "window.__TAURI_INTERNALS__.invoke('{FETCH_CHANNEL_DATA_COMMAND}', null, {{ headers: {{ '{CHANNEL_ID_HEADER_NAME}': '{data_id}' }} }}).then((response) => window.__TAURI_INTERNALS__.runCallback({callback_id}, {{ message: response, index: {current_index} }})).catch(console.error)",
+             ))?;
+           }
+@@ -325,10 +361,13 @@ impl JavaScriptChannelId {
+       }),
+       Some(Box::new(move || {
+         let current_index = counter_clone.load(Ordering::Relaxed);
+-        let _ = webview_clone.eval(format_raw_js(
+-          callback_id,
+-          format!("{{ end: true, index: {current_index} }}"),
+-        ));
++        let _ = webview_clone.eval_in_frame(
++          &address_clone,
++          format_raw_js(
++            callback_id,
++            format!("{{ end: true, index: {current_index} }}"),
++          ),
++        );
+       })),
+     )
+   }
+@@ -414,8 +453,12 @@ impl<TSend> Channel<TSend> {
+     }
+   }
+ 
+-  // This is used from the IPC handler
+-  pub(crate) fn from_callback_fn<R: Runtime>(webview: Webview<R>, callback: CallbackFn) -> Self {
++  // This is used from the IPC handler: the response goes back to the frame that made the call.
++  pub(crate) fn from_callback_fn<R: Runtime>(
++    webview: Webview<R>,
++    address: FrameAddress,
++    callback: CallbackFn,
++  ) -> Self {
+     let callback_id = callback.0;
+     // One-shot response channel: only `send` is called on it, right after creation.
+     Channel::new_unregistered(
+@@ -426,28 +469,32 @@ impl<TSend> Channel<TSend> {
+           InvokeResponseBody::Json(json_string)
+             if json_string.len() < MAX_JSON_DIRECT_EXECUTE_THRESHOLD =>
+           {
+-            webview.eval(format_raw_js(callback_id, json_string))?;
++            webview.eval_in_frame(&address, format_raw_js(callback_id, json_string))?;
+           }
+           InvokeResponseBody::Raw(bytes) if bytes.len() < MAX_RAW_DIRECT_EXECUTE_THRESHOLD => {
+             let bytes_as_json_array = serde_json::to_string(&bytes)?;
+-            webview.eval(format_raw_js(
+-              callback_id,
+-              format!("new Uint8Array({bytes_as_json_array}).buffer"),
+-            ))?;
++            webview.eval_in_frame(
++              &address,
++              format_raw_js(
++                callback_id,
++                format!("new Uint8Array({bytes_as_json_array}).buffer"),
++              ),
++            )?;
+           }
+           // use the fetch API to speed up larger response payloads
+           _ => {
+             // the webview was closed (or replaced by a new one with the same label),
+             // so nothing would ever fetch this data
+-            let Some(data_id) =
+-              webview
+-                .state::<ChannelDataIpcQueue>()
+-                .insert_if(webview.label(), body, || webview.is_registered())
+-            else {
++            let Some(data_id) = webview.state::<ChannelDataIpcQueue>().insert_if(
++              webview.label(),
++              address.clone(),
++              body,
++              || webview.is_registered(),
++            ) else {
+               return Ok(());
+             };
+ 
+-            webview.eval(format!(
++            webview.eval_in_frame(&address, format!(
+               "window.__TAURI_INTERNALS__.invoke('{FETCH_CHANNEL_DATA_COMMAND}', null, {{ headers: {{ '{CHANNEL_ID_HEADER_NAME}': '{data_id}' }} }}).then((response) => window.__TAURI_INTERNALS__.runCallback({callback_id}, response)).catch(console.error)",
+             ))?;
+           }
+@@ -474,15 +521,21 @@ impl<TSend> Channel<TSend> {
+ }
+ 
+ impl<'de, R: Runtime, TSend> CommandArg<'de, R> for Channel<TSend> {
+-  /// Grabs the [`Webview`] from the [`CommandItem`] and returns the associated [`Channel`].
++  /// Grabs the [`Webview`] from the [`CommandItem`] and returns the associated [`Channel`],
++  /// delivering to the frame that made the call.
+   fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
+     let name = command.name;
+     let arg = command.key;
+     let webview = command.message.webview();
++    let Some(address) = command.message.caller_address.clone() else {
++      return Err(InvokeError::from(
++        "a channel cannot be delivered to the frame that made this call",
++      ));
++    };
+     let value: String =
+       Deserialize::deserialize(command).map_err(|e| crate::Error::InvalidArgs(name, arg, e))?;
+     JavaScriptChannelId::from_str(&value)
+-      .map(|id| id.channel_on(webview))
++      .map(|id| id.channel_on_frame(webview, address))
+       .map_err(|_| {
+         InvokeError::from(format!(
+ 	        "invalid channel value `{value}`, expected a string in the `{IPC_PAYLOAD_PREFIX}ID` format"
+@@ -491,11 +544,14 @@ impl<'de, R: Runtime, TSend> CommandArg<'de, R> for Channel<TSend> {
+   }
+ }
+ 
++/// Not checked by the ACL (see `on_message`): an entry is only handed to the frame it was sent to,
++/// any other caller gets "data not found".
+ #[command(root = "crate")]
+ fn fetch<R: Runtime>(
+   webview: Webview<R>,
+   request: Request<'_>,
+   cache: State<'_, ChannelDataIpcQueue>,
++  caller: CallerFrameAddress,
+ ) -> Result<Response, &'static str> {
+   if let Some(id) = request
+     .headers()
+@@ -503,7 +559,10 @@ fn fetch<R: Runtime>(
+     .and_then(|v| v.to_str().ok())
+     .and_then(|id| id.parse().ok())
+   {
+-    if let Some(data) = cache.remove(webview.label(), id) {
++    let data = caller
++      .0
++      .and_then(|address| cache.remove(webview.label(), &address, id));
++    if let Some(data) = data {
+       Ok(Response::new(data))
+     } else {
+       Err("data not found")
+@@ -525,52 +584,102 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
+ #[cfg(test)]
+ mod tests {
+   use super::*;
++  use crate::webview::SubframeId;
+ 
+   fn json_body(s: &str) -> InvokeResponseBody {
+     InvokeResponseBody::Json(s.to_string())
+   }
+ 
++  fn main() -> FrameAddress {
++    FrameAddress::Main
++  }
++
++  fn sub(id: &str) -> FrameAddress {
++    FrameAddress::Sub(SubframeId::new(id))
++  }
++
+   #[test]
+   fn queue_entries_are_scoped_to_the_owning_webview() {
+     let queue = ChannelDataIpcQueue::default();
+-    let id = queue.insert("main", json_body("{}"));
++    let id = queue.insert("main", main(), json_body("{}"));
+ 
+     // foreign webviews cannot fetch the entry
+-    assert!(queue.remove("settings", id).is_none());
++    assert!(queue.remove("settings", &main(), id).is_none());
+     // the owner can, once
+-    assert!(queue.remove("main", id).is_some());
+-    assert!(queue.remove("main", id).is_none());
++    assert!(queue.remove("main", &main(), id).is_some());
++    assert!(queue.remove("main", &main(), id).is_none());
++  }
++
++  #[test]
++  fn queue_entries_are_scoped_to_the_owning_frame() {
++    let queue = ChannelDataIpcQueue::default();
++    let for_main = queue.insert("main", main(), json_body("1"));
++    let for_frame = queue.insert("main", sub("frame-a"), json_body("2"));
++
++    // a subframe guessing the main frame's id gets nothing, and the entry stays
++    assert!(queue.remove("main", &sub("frame-a"), for_main).is_none());
++    assert!(queue.remove("main", &sub("frame-b"), for_main).is_none());
++    // nor can the main frame or a sibling take the subframe's entry
++    assert!(queue.remove("main", &main(), for_frame).is_none());
++    assert!(queue.remove("main", &sub("frame-b"), for_frame).is_none());
++    // each owner gets its own entry
++    assert_eq!(
++      queue.remove("main", &main(), for_main),
++      Some(json_body("1"))
++    );
++    assert_eq!(
++      queue.remove("main", &sub("frame-a"), for_frame),
++      Some(json_body("2"))
++    );
+   }
+ 
+   #[test]
+   fn ids_are_scoped_per_webview() {
+     let queue = ChannelDataIpcQueue::default();
+-    let a = queue.insert("a", json_body("1"));
+-    let b = queue.insert("b", json_body("2"));
++    let a = queue.insert("a", main(), json_body("1"));
++    let b = queue.insert("b", main(), json_body("2"));
+ 
+     // each webview has its own id sequence, so the same id exists twice
+     // without the entries being visible across webviews
+     assert_eq!(a, b);
+-    assert!(queue.remove("b", a).is_some());
+-    assert!(queue.remove("a", a).is_some());
++    assert!(queue.remove("b", &main(), a).is_some());
++    assert!(queue.remove("a", &main(), a).is_some());
+   }
+ 
+   #[test]
+   fn purge_removes_only_the_closed_webview_entries() {
+     let queue = ChannelDataIpcQueue::default();
+-    let a = queue.insert("a", json_body("1"));
+-    let b = queue.insert("b", json_body("2"));
++    let a = queue.insert("a", main(), json_body("1"));
++    let b = queue.insert("b", main(), json_body("2"));
+ 
+     queue.remove_webview_entries("a");
+ 
+-    assert!(queue.remove("a", a).is_none());
+-    assert!(queue.remove("b", b).is_some());
++    assert!(queue.remove("a", &main(), a).is_none());
++    assert!(queue.remove("b", &main(), b).is_some());
++  }
++
++  #[test]
++  fn purge_removes_only_the_destroyed_frame_entries() {
++    let queue = ChannelDataIpcQueue::default();
++    let gone = queue.insert("a", sub("gone"), json_body("1"));
++    let kept = queue.insert("a", sub("kept"), json_body("2"));
++    let top = queue.insert("a", main(), json_body("3"));
++
++    queue.remove_frame_entries("a", &sub("gone"));
++
++    assert!(queue.remove("a", &sub("gone"), gone).is_none());
++    assert!(queue.remove("a", &sub("kept"), kept).is_some());
++    assert!(queue.remove("a", &main(), top).is_some());
+   }
+ 
+   #[test]
+   fn insert_is_skipped_for_dead_webviews() {
+     let queue = ChannelDataIpcQueue::default();
+-    assert!(queue.insert_if("a", json_body("1"), || false).is_none());
++    assert!(
++      queue
++        .insert_if("a", main(), json_body("1"), || false)
++        .is_none()
++    );
+     assert!(queue.0.lock().unwrap().is_empty());
+   }
+ 
+@@ -616,4 +725,85 @@ mod tests {
+     new_channel.send(large()).unwrap();
+     assert_eq!(queued("main"), 1);
+   }
++
++  /// A channel created for a subframe evaluates its messages in that frame, queues its large
++  /// payloads for that frame, and only that frame can fetch them through the IPC.
++  #[test]
++  fn subframe_channel_is_delivered_and_fetched_by_its_frame_only() {
++    use crate::ipc::InvokeBody;
++    use crate::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
++    use crate::webview::{InvokeRequest, IpcFrame};
++
++    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
++    let window = crate::WebviewWindowBuilder::new(&app, "main", crate::WebviewUrl::default())
++      .build()
++      .unwrap();
++    let dispatcher = window.webview.webview.dispatcher.clone();
++    let frame = SubframeId::new("frame-a");
++    let channel = JavaScriptChannelId::from_str("__CHANNEL__:9")
++      .unwrap()
++      .channel_on_frame::<_, InvokeResponseBody>(window.webview.clone(), sub("frame-a"));
++
++    // small payloads are evaluated directly in the subframe
++    dispatcher.clear_evaluated_scripts();
++    channel.send(json_body("\"small\"")).unwrap();
++    let scripts = dispatcher.evaluated_scripts();
++    assert_eq!(scripts.len(), 1);
++    assert_eq!(scripts[0].0.as_ref(), Some(&frame));
++    assert!(scripts[0].1.contains("small"));
++
++    // large payloads ask the subframe to fetch them
++    dispatcher.clear_evaluated_scripts();
++    channel
++      .send(InvokeResponseBody::Raw(vec![
++        7;
++        MAX_RAW_DIRECT_EXECUTE_THRESHOLD
++      ]))
++      .unwrap();
++    let scripts = dispatcher.evaluated_scripts();
++    assert_eq!(scripts.len(), 1);
++    assert_eq!(scripts[0].0.as_ref(), Some(&frame));
++    assert!(scripts[0].1.contains(FETCH_CHANNEL_DATA_COMMAND));
++    let data_id = scripts[0]
++      .1
++      .split(&format!("'{CHANNEL_ID_HEADER_NAME}': '"))
++      .nth(1)
++      .and_then(|rest| rest.split('\'').next())
++      .unwrap()
++      .to_string();
++
++    let fetch = |frame: IpcFrame, subframe_id: Option<SubframeId>| {
++      let mut headers = http::HeaderMap::new();
++      headers.insert(CHANNEL_ID_HEADER_NAME, data_id.parse().unwrap());
++      get_ipc_response(
++        &window,
++        InvokeRequest {
++          cmd: FETCH_CHANNEL_DATA_COMMAND.into(),
++          callback: CallbackFn(0),
++          error: CallbackFn(1),
++          url: "tauri://localhost".parse().unwrap(),
++          body: InvokeBody::default(),
++          headers,
++          invoke_key: INVOKE_KEY.to_string(),
++          frame,
++          subframe_id,
++        },
++      )
++    };
++
++    // the main frame, another subframe and an unaddressable request all guess the id in vain
++    assert!(fetch(IpcFrame::Main, None).is_err());
++    assert!(fetch(IpcFrame::Sub, Some(SubframeId::new("frame-b"))).is_err());
++    assert!(fetch(IpcFrame::Sub, None).is_err());
++    assert!(fetch(IpcFrame::Unknown, None).is_err());
++    // the frame the data was sent to gets it, once
++    assert_eq!(
++      fetch(IpcFrame::Sub, Some(frame.clone())),
++      Ok(InvokeResponseBody::Raw(vec![
++        7;
++        MAX_RAW_DIRECT_EXECUTE_THRESHOLD
++      ]))
++    );
++    assert!(fetch(IpcFrame::Sub, Some(frame)).is_err());
++  }
+ }
+diff --git a/crates/tauri/src/ipc/mod.rs b/crates/tauri/src/ipc/mod.rs
+index 22aea3b37a699d40263e2f76bda645288de436d3..850982cb81aaabf687b265ff162977090c9c994e 100644
+--- a/crates/tauri/src/ipc/mod.rs
++++ b/crates/tauri/src/ipc/mod.rs
+@@ -21,7 +21,10 @@ pub use serialize_to_javascript::Options as SerializeOptions;
+ use tauri_macros::default_runtime;
+ use tauri_utils::acl::resolved::ResolvedCommand;
+ 
+-use crate::{Runtime, StateManager, webview::Webview};
++use crate::{
++  Runtime, StateManager,
++  webview::{FrameAddress, Webview},
++};
+ 
+ mod authority;
+ #[cfg(feature = "dynamic-acl")]
+@@ -507,6 +510,12 @@ pub struct InvokeMessage<R: Runtime> {
+   pub(crate) headers: HeaderMap,
+   /// Whether the request is exempt from the ACL, see [`RuntimeAuthority::exempt_webview`].
+   pub(crate) acl_exempt: bool,
++  /// The frame that made the call, where listener registrations, events, channel messages and
++  /// postMessage responses for it are delivered. `None` when it cannot be addressed
++  /// (see [`FrameAddress::of_caller`]).
++  pub(crate) caller_address: Option<FrameAddress>,
++  /// The caller origin the ACL was resolved against (the request's `Origin`).
++  pub(crate) caller_origin: Option<url::Url>,
+ }
+ 
+ impl<R: Runtime> Clone for InvokeMessage<R> {
+@@ -517,6 +526,8 @@ impl<R: Runtime> Clone for InvokeMessage<R> {
+       payload: self.payload.clone(),
+       headers: self.headers.clone(),
+       acl_exempt: self.acl_exempt,
++      caller_address: self.caller_address.clone(),
++      caller_origin: self.caller_origin.clone(),
+     }
+   }
+ }
+@@ -535,6 +546,8 @@ impl<R: Runtime> InvokeMessage<R> {
+       payload,
+       headers,
+       acl_exempt: false,
++      caller_address: None,
++      caller_origin: None,
+     }
+   }
+ 
+@@ -585,6 +598,47 @@ impl<R: Runtime> InvokeMessage<R> {
+   }
+ }
+ 
++/// The frame that made the call (see [`FrameAddress::of_caller`]).
++///
++/// Command argument for crate commands that send something back to the caller later: `listen`,
++/// `unlisten` and the channel data `fetch`. Read from the invoke message, never from the payload.
++pub(crate) struct CallerFrameAddress(pub(crate) Option<FrameAddress>);
++
++impl<'a, R: Runtime> CommandArg<'a, R> for CallerFrameAddress {
++  fn from_command(command: CommandItem<'a, R>) -> Result<Self, InvokeError> {
++    Ok(Self(command.message.caller_address.clone()))
++  }
++}
++
++/// The caller origin the ACL decision was based on: the request's `Origin` header.
++///
++/// A regular page only sends its scheme, host and port, which is why this is an origin and not a URL.
++/// A runtime may report more for documents whose origin is opaque: the CEF runtime of this
++/// fork rewrites the `Origin` of `file:` frames to the full document URL, so a command can tell
++/// which local document called it. Pages cannot change what the runtime reports.
++///
++/// # Examples
++///
++/// ```rust
++/// #[tauri::command]
++/// fn who_called(caller: tauri::ipc::CallerOrigin) -> String {
++///   caller.0.to_string()
++/// }
++/// ```
++#[derive(Debug, Clone)]
++pub struct CallerOrigin(pub url::Url);
++
++impl<'a, R: Runtime> CommandArg<'a, R> for CallerOrigin {
++  fn from_command(command: CommandItem<'a, R>) -> Result<Self, InvokeError> {
++    command
++      .message
++      .caller_origin
++      .clone()
++      .map(Self)
++      .ok_or_else(|| InvokeError::from("the caller origin of this invoke is unknown"))
++  }
++}
++
+ /// The `Callback` type is the return value of the `transformCallback` JavaScript function.
+ #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+ pub struct CallbackFn(pub u32);
+diff --git a/crates/tauri/src/ipc/protocol.rs b/crates/tauri/src/ipc/protocol.rs
+index 4cfab7f7ae905c03ca94d49b1239aa3910db56e8..a38b230caad0662b504d2da8b414fa38e69e36d9 100644
+--- a/crates/tauri/src/ipc/protocol.rs
++++ b/crates/tauri/src/ipc/protocol.rs
+@@ -8,7 +8,7 @@ use crate::{
+   Runtime,
+   ipc::InvokeResponseBody,
+   manager::AppManager,
+-  webview::{InvokeRequest, IpcFrame, UriSchemeProtocolHandler},
++  webview::{FrameAddress, InvokeRequest, IpcFrame, SubframeId, UriSchemeProtocolHandler},
+ };
+ use http::{
+   HeaderValue, Method, Request, StatusCode,
+@@ -307,7 +307,11 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+         headers: options.headers.0,
+         invoke_key: message.invoke_key,
+         frame: request_frame(request.extensions()),
++        subframe_id: request_subframe_id(request.extensions()),
+       };
++      // the response is evaluated in the frame that posted the message; a caller that cannot be
++      // addressed only posts here after its fetch failed, and gets nothing back
++      let caller = FrameAddress::of_caller(request.frame, request.subframe_id.as_ref());
+ 
+       #[cfg(feature = "tracing")]
+       let request_span = tracing::trace_span!("ipc::request::handle", cmd = request.cmd);
+@@ -326,6 +330,7 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+ 
+           fn responder_eval<R: Runtime>(
+             webview: &crate::Webview<R>,
++            address: &FrameAddress,
+             js: crate::Result<String>,
+             error: CallbackFn,
+           ) {
+@@ -333,9 +338,15 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+               crate::ipc::format_callback::format(error, &e.to_string())
+                 .expect("unable to serialize response error string to json")
+             });
+-            let _ = webview.eval(eval_js);
++            let _ = webview.eval_in_frame(address, eval_js);
+           }
+ 
++          let Some(address) = caller else {
++            #[cfg(feature = "tracing")]
++            tracing::trace!("ipc.response dropped: the caller frame cannot be addressed");
++            return;
++          };
++
+           let can_use_channel_for_response = cmd != crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND
+             && !options.custom_protocol_ipc_blocked;
+ 
+@@ -374,11 +385,12 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+                 && (v.starts_with('{') || v.starts_with('['))
+                 && can_use_channel_for_response
+               {
+-                let _ =
+-                  Channel::from_callback_fn(webview, callback).send(InvokeResponseBody::Json(v));
++                let _ = Channel::from_callback_fn(webview, address, callback)
++                  .send(InvokeResponseBody::Json(v));
+               } else {
+                 responder_eval(
+                   &webview,
++                  &address,
+                   crate::ipc::format_callback::format_result_raw(
+                     Result::<_, String>::Ok(v),
+                     callback,
+@@ -395,6 +407,7 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+               {
+                 responder_eval(
+                   &webview,
++                  &address,
+                   crate::ipc::format_callback::format_result(
+                     Result::<_, ()>::Ok(v),
+                     callback,
+@@ -403,12 +416,13 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+                   error,
+                 );
+               } else {
+-                let _ =
+-                  Channel::from_callback_fn(webview, callback).send(InvokeResponseBody::Raw(v));
++                let _ = Channel::from_callback_fn(webview, address, callback)
++                  .send(InvokeResponseBody::Raw(v));
+               }
+             }
+             InvokeResponse::Err(e) => responder_eval(
+               &webview,
++              &address,
+               crate::ipc::format_callback::format_result(
+                 Result::<(), _>::Err(&e.0),
+                 callback,
+@@ -424,10 +438,20 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
+       #[cfg(feature = "tracing")]
+       tracing::trace!("ipc.request.error {e}");
+ 
+-      let _ = webview.eval(format!(
+-        r#"console.error({})"#,
+-        serde_json::Value::String(e.to_string())
+-      ));
++      // report it in the console of the frame that posted the message, if it can be addressed
++      let extensions = request.extensions();
++      if let Some(address) = FrameAddress::of_caller(
++        request_frame(extensions),
++        request_subframe_id(extensions).as_ref(),
++      ) {
++        let _ = webview.eval_in_frame(
++          &address,
++          format!(
++            r#"console.error({})"#,
++            serde_json::Value::String(e.to_string())
++          ),
++        );
++      }
+     }
+   }
+ }
+@@ -546,6 +570,7 @@ fn parse_invoke_request<R: Runtime>(
+     headers: parts.headers,
+     invoke_key,
+     frame: request_frame(&parts.extensions),
++    subframe_id: request_subframe_id(&parts.extensions),
+   };
+ 
+   Ok(payload)
+@@ -557,6 +582,15 @@ fn request_frame(extensions: &http::Extensions) -> IpcFrame {
+   extensions.get::<IpcFrame>().copied().unwrap_or_default()
+ }
+ 
++/// The subframe id the runtime reported in the request extensions, only kept for subframe requests
++/// (see [`SubframeId`]).
++fn request_subframe_id(extensions: &http::Extensions) -> Option<SubframeId> {
++  if request_frame(extensions) != IpcFrame::Sub {
++    return None;
++  }
++  extensions.get::<SubframeId>().cloned()
++}
++
+ #[cfg(test)]
+ mod tests {
+   use std::str::FromStr;
+@@ -630,8 +664,9 @@ mod tests {
+     assert_eq!(invoke_request.url, url.parse().unwrap());
+     assert_eq!(invoke_request.headers, headers);
+     assert_eq!(invoke_request.body, InvokeBody::Raw(body));
+-    // no frame reported by the runtime: main frame
++    // no frame reported by the runtime: main frame, no subframe id
+     assert_eq!(invoke_request.frame, IpcFrame::Main);
++    assert_eq!(invoke_request.subframe_id, None);
+ 
+     let body = json!({
+       "key": 1,
+@@ -648,12 +683,14 @@ mod tests {
+ 
+     let mut request = request.body(serde_json::to_vec(&body).unwrap()).unwrap();
+     request.extensions_mut().insert(IpcFrame::Sub);
++    request.extensions_mut().insert(SubframeId::new("frame-7"));
+     let invoke_request = super::parse_invoke_request(&manager, request).unwrap();
+ 
+     assert_eq!(invoke_request.headers, headers);
+     assert_eq!(invoke_request.body, InvokeBody::Json(body));
+-    // the frame comes from the request extensions, never from a header
++    // the frame and its id come from the request extensions, never from a header
+     assert_eq!(invoke_request.frame, IpcFrame::Sub);
++    assert_eq!(invoke_request.subframe_id, Some(SubframeId::new("frame-7")));
+   }
+ 
+   #[test]
+@@ -666,6 +703,45 @@ mod tests {
+     assert_eq!(super::request_frame(&extensions), IpcFrame::Sub);
+   }
+ 
++  #[test]
++  fn subframe_id_is_only_kept_for_subframes() {
++    let mut extensions = http::Extensions::new();
++    extensions.insert(SubframeId::new("frame-1"));
++    // missing IpcFrame counts as the main frame: the id is ignored
++    assert_eq!(super::request_subframe_id(&extensions), None);
++    extensions.insert(IpcFrame::Main);
++    assert_eq!(super::request_subframe_id(&extensions), None);
++    extensions.insert(IpcFrame::Unknown);
++    assert_eq!(super::request_subframe_id(&extensions), None);
++    extensions.insert(IpcFrame::Sub);
++    assert_eq!(
++      super::request_subframe_id(&extensions),
++      Some(SubframeId::new("frame-1"))
++    );
++  }
++
++  #[test]
++  fn caller_address_follows_frame_and_id() {
++    use crate::webview::FrameAddress;
++    let id = SubframeId::new("frame-2");
++    assert_eq!(
++      FrameAddress::of_caller(IpcFrame::Main, None),
++      Some(FrameAddress::Main)
++    );
++    // the main frame is addressed through the webview even if an id was reported
++    assert_eq!(
++      FrameAddress::of_caller(IpcFrame::Main, Some(&id)),
++      Some(FrameAddress::Main)
++    );
++    assert_eq!(
++      FrameAddress::of_caller(IpcFrame::Sub, Some(&id)),
++      Some(FrameAddress::Sub(id.clone()))
++    );
++    // a subframe without an id and a frameless request cannot be answered
++    assert_eq!(FrameAddress::of_caller(IpcFrame::Sub, None), None);
++    assert_eq!(FrameAddress::of_caller(IpcFrame::Unknown, Some(&id)), None);
++  }
++
+   #[test]
+   fn parse_invoke_request_empty_path() {
+     let context = generate_context!("test/fixture/src-tauri/tauri.conf.json", crate, test = true);
+@@ -808,4 +884,112 @@ mod tests {
+     assert_eq!(invoke_request.headers, headers);
+     assert_eq!(invoke_request.body, InvokeBody::Json(body_json));
+   }
++
++  #[crate::command(root = "crate")]
++  fn ping() -> &'static str {
++    "pong"
++  }
++
++  /// postMessage fallback: the response, and the console error of an unparsable message, are
++  /// evaluated in the frame that posted it; a caller that cannot be addressed gets nothing back.
++  #[test]
++  fn post_message_responses_go_back_to_the_calling_frame() {
++    use crate::test::{INVOKE_KEY, mock_builder, mock_context, noop_assets};
++
++    let app = mock_builder()
++      .invoke_handler(crate::generate_handler![ping])
++      .build(mock_context(noop_assets()))
++      .unwrap();
++    let window = crate::WebviewWindowBuilder::new(&app, "main", Default::default())
++      .build()
++      .unwrap();
++    let dispatcher = window.webview.webview.dispatcher.clone();
++    let frame = SubframeId::new("frame-a");
++    let post = |body: String, ipc_frame: Option<IpcFrame>, subframe_id: Option<SubframeId>| {
++      let mut request = Request::builder()
++        .uri("tauri://localhost")
++        .body(body)
++        .unwrap();
++      if let Some(ipc_frame) = ipc_frame {
++        request.extensions_mut().insert(ipc_frame);
++      }
++      if let Some(subframe_id) = subframe_id {
++        request.extensions_mut().insert(subframe_id);
++      }
++      dispatcher.clear_evaluated_scripts();
++      super::handle_ipc_message(request, &app.handle().manager, "main");
++      // the command runs on the async runtime; wait for its response script
++      for _ in 0..200 {
++        if !dispatcher.evaluated_scripts().is_empty() {
++          break;
++        }
++        std::thread::sleep(std::time::Duration::from_millis(5));
++      }
++      dispatcher.evaluated_scripts()
++    };
++    let ping = json!({
++      "cmd": "ping",
++      "callback": 11,
++      "error": 12,
++      "payload": {},
++      "__TAURI_INVOKE_KEY__": INVOKE_KEY,
++    })
++    .to_string();
++
++    let scripts = post(ping.clone(), Some(IpcFrame::Sub), Some(frame.clone()));
++    assert_eq!(scripts.len(), 1, "{scripts:?}");
++    assert_eq!(scripts[0].0.as_ref(), Some(&frame));
++    assert!(scripts[0].1.contains("pong"), "{}", scripts[0].1);
++
++    let scripts = post(ping.clone(), None, None);
++    assert_eq!(scripts.len(), 1, "{scripts:?}");
++    assert_eq!(scripts[0].0, None);
++
++    // a subframe without an id and a frameless request cannot be answered
++    assert!(post(ping.clone(), Some(IpcFrame::Sub), None).is_empty());
++    assert!(post(ping, Some(IpcFrame::Unknown), None).is_empty());
++
++    // an unparsable message is reported in the console of the frame that posted it
++    let scripts = post("not json".into(), Some(IpcFrame::Sub), Some(frame.clone()));
++    assert_eq!(scripts.len(), 1, "{scripts:?}");
++    assert_eq!(scripts[0].0.as_ref(), Some(&frame));
++    assert!(scripts[0].1.contains("console.error"));
++  }
++
++  #[crate::command(root = "crate")]
++  fn caller_origin(caller: crate::ipc::CallerOrigin) -> String {
++    caller.0.to_string()
++  }
++
++  /// `CallerOrigin` is the URL the ACL was resolved against, taken from the request, not the payload.
++  #[test]
++  fn caller_origin_is_the_request_origin() {
++    use crate::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
++
++    let app = mock_builder()
++      .invoke_handler(crate::generate_handler![caller_origin])
++      .build(mock_context(noop_assets()))
++      .unwrap();
++    let window = crate::WebviewWindowBuilder::new(&app, "main", Default::default())
++      .build()
++      .unwrap();
++    let response = get_ipc_response(
++      &window,
++      InvokeRequest {
++        cmd: "caller_origin".into(),
++        callback: CallbackFn(0),
++        error: CallbackFn(1),
++        url: "tauri://localhost".parse().unwrap(),
++        body: InvokeBody::Json(json!({ "caller": "https://evil.example" })),
++        headers: Default::default(),
++        invoke_key: INVOKE_KEY.to_string(),
++        frame: IpcFrame::Sub,
++        subframe_id: Some(SubframeId::new("frame-a")),
++      },
++    )
++    .unwrap()
++    .deserialize::<String>()
++    .unwrap();
++    assert_eq!(response, "tauri://localhost");
++  }
+ }
+diff --git a/crates/tauri/src/manager/mod.rs b/crates/tauri/src/manager/mod.rs
+index f56fc32dd25b1732923e0e6e619335a376a2e706..008553c73861c10b8cbc9b491690508885d42dd3 100644
+--- a/crates/tauri/src/manager/mod.rs
++++ b/crates/tauri/src/manager/mod.rs
+@@ -1076,6 +1076,7 @@ mod test {
+       listeners.listen_js(
+         event.as_str_event(),
+         webview.label(),
++        crate::webview::FrameAddress::Main,
+         listeners.next_event_id(),
+       );
+     }
+diff --git a/crates/tauri/src/manager/webview.rs b/crates/tauri/src/manager/webview.rs
+index 0e46ab86b8c13e6c3a70e386ec9e4dce172c1a4e..ede78976fed194195e9e7058526eff026ae58fde 100644
+--- a/crates/tauri/src/manager/webview.rs
++++ b/crates/tauri/src/manager/webview.rs
+@@ -760,6 +760,19 @@ fn on_webview_event<R: Runtime>(webview: &Webview<R>, event: &WebviewEvent) -> c
+       DragDropEvent::Leave => webview.emit_to_webview(DRAG_LEAVE_EVENT, &())?,
+       _ => unimplemented!(),
+     },
++    // the frame is gone: drop what Tauri kept for it (its JS listeners and unfetched channel data)
++    WebviewEvent::SubframeDestroyed(id) => {
++      webview
++        .manager()
++        .listeners()
++        .remove_subframe_js_listeners(webview.label(), id);
++      webview
++        .state::<crate::ipc::channel::ChannelDataIpcQueue>()
++        .remove_frame_entries(
++          webview.label(),
++          &crate::webview::FrameAddress::Sub(id.clone()),
++        );
++    }
+   }
+ 
+   Ok(())
+diff --git a/crates/tauri/src/manager/window.rs b/crates/tauri/src/manager/window.rs
+index 9cc02f820804f40779d4cba05e56f4da72f3bf42..88b013844c8896b4af82ac07d38b1fbfd99ea310 100644
+--- a/crates/tauri/src/manager/window.rs
++++ b/crates/tauri/src/manager/window.rs
+@@ -152,9 +152,10 @@ impl<R: Runtime> Window<R> {
+       })
+   }
+ 
+-  /// Checks whether any webview of this window has a JS listener for the event.
++  /// Checks whether the main frame of any webview of this window has a JS listener for the event.
+   ///
+-  /// Window events are delivered to every webview of the window, so any of them counts.
++  /// Window events are delivered to every webview of the window, so any of them counts; a
++  /// subframe's listener does not (a subframe cannot keep the window open).
+   fn has_js_listener(&self, event: EventName<&str>) -> bool {
+     let labels = self
+       .webviews()
+@@ -164,7 +165,7 @@ impl<R: Runtime> Window<R> {
+     self
+       .manager()
+       .listeners()
+-      .has_js_listener_in(event, &labels)
++      .has_main_frame_js_listener_in(event, &labels)
+   }
+ }
+ 
+@@ -300,7 +301,10 @@ struct ScaleFactorChanged {
+ mod tests {
+   use super::WINDOW_CLOSE_REQUESTED_EVENT;
+   use crate::{
+-    WebviewWindowBuilder, sealed::ManagerBase, test::mock_app, webview::WebviewBuilder,
++    WebviewWindowBuilder,
++    sealed::ManagerBase,
++    test::mock_app,
++    webview::{FrameAddress, SubframeId, WebviewBuilder},
+     window::WindowBuilder,
+   };
+ 
+@@ -325,13 +329,24 @@ mod tests {
+     listeners.listen_js(
+       WINDOW_CLOSE_REQUESTED_EVENT,
+       other.label(),
++      FrameAddress::Main,
+       listeners.next_event_id(),
+     );
+     assert!(!multi.has_js_listener(WINDOW_CLOSE_REQUESTED_EVENT));
+ 
++    // a subframe of the window's webview listening does not intercept the close request
+     listeners.listen_js(
+       WINDOW_CLOSE_REQUESTED_EVENT,
+       child.label(),
++      FrameAddress::Sub(SubframeId::new("guest")),
++      listeners.next_event_id(),
++    );
++    assert!(!multi.has_js_listener(WINDOW_CLOSE_REQUESTED_EVENT));
++
++    listeners.listen_js(
++      WINDOW_CLOSE_REQUESTED_EVENT,
++      child.label(),
++      FrameAddress::Main,
+       listeners.next_event_id(),
+     );
+     assert!(multi.has_js_listener(WINDOW_CLOSE_REQUESTED_EVENT));
+diff --git a/crates/tauri/src/test/mock_runtime.rs b/crates/tauri/src/test/mock_runtime.rs
+index 44a681b0f0c41be0acc379143070c0d34ceebcb9..4b964c2fa80f3c05ebc1f97ac39ad6fb788dc015 100644
+--- a/crates/tauri/src/test/mock_runtime.rs
++++ b/crates/tauri/src/test/mock_runtime.rs
+@@ -11,7 +11,7 @@ use tauri_runtime::{
+   WebviewDispatch, WindowDispatch, WindowEventId,
+   dpi::{PhysicalPosition, PhysicalSize, Position, Size},
+   monitor::Monitor,
+-  webview::{DetachedWebview, PendingWebview},
++  webview::{DetachedWebview, PendingWebview, SubframeId},
+   window::{
+     CursorIcon, DetachedWindow, DetachedWindowWebview, PendingWindow, RawWindow, WindowBuilder,
+     WindowBuilderBase, WindowEvent, WindowId,
+@@ -183,6 +183,7 @@ impl<T: UserEvent> RuntimeHandle<T> for MockRuntimeHandle {
+             context: self.context.clone(),
+             url: Arc::new(Mutex::new(pending_webview.url)),
+             last_evaluated_script: Default::default(),
++            frames: Default::default(),
+           },
+         },
+         use_https_scheme: pending_webview.webview_attributes.use_https_scheme,
+@@ -217,6 +218,7 @@ impl<T: UserEvent> RuntimeHandle<T> for MockRuntimeHandle {
+         id,
+         context: self.context.clone(),
+         last_evaluated_script: Default::default(),
++        frames: Default::default(),
+         url: Arc::new(Mutex::new(pending.url)),
+       },
+     })
+@@ -332,12 +334,57 @@ pub struct MockWebviewDispatcher {
+   context: RuntimeContext,
+   url: Arc<Mutex<String>>,
+   last_evaluated_script: Arc<Mutex<Option<String>>>,
++  frames: MockFrames,
++}
++
++type MockWebviewEventListener = Box<dyn Fn(&tauri_runtime::window::WebviewEvent) + Send>;
++
++/// Frame-aware bookkeeping of the mock webview: every evaluated script with its target frame
++/// (`None` = main frame) and the registered webview event listeners.
++#[derive(Clone, Default)]
++struct MockFrames {
++  scripts: Arc<Mutex<Vec<(Option<SubframeId>, String)>>>,
++  webview_event_listeners: Arc<Mutex<Vec<MockWebviewEventListener>>>,
++}
++
++impl fmt::Debug for MockFrames {
++  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++    f.debug_struct("MockFrames")
++      .field("scripts", &self.scripts)
++      .finish_non_exhaustive()
++  }
+ }
+ 
+ impl MockWebviewDispatcher {
+   pub fn last_evaluated_script(&self) -> Option<String> {
+     self.last_evaluated_script.lock().unwrap().clone()
+   }
++
++  /// Every script evaluated since the last [`Self::clear_evaluated_scripts`], with the subframe it
++  /// was evaluated in (`None` for the main frame).
++  pub fn evaluated_scripts(&self) -> Vec<(Option<SubframeId>, String)> {
++    self.frames.scripts.lock().unwrap().clone()
++  }
++
++  pub fn clear_evaluated_scripts(&self) {
++    self.frames.scripts.lock().unwrap().clear();
++  }
++
++  /// Delivers a webview event to the registered listeners, as a runtime would.
++  pub fn emit_webview_event(&self, event: tauri_runtime::window::WebviewEvent) {
++    for listener in self.frames.webview_event_listeners.lock().unwrap().iter() {
++      listener(&event);
++    }
++  }
++
++  fn record_script(&self, frame: Option<SubframeId>, script: String) {
++    self
++      .last_evaluated_script
++      .lock()
++      .unwrap()
++      .replace(script.clone());
++    self.frames.scripts.lock().unwrap().push((frame, script));
++  }
+ }
+ 
+ #[derive(Debug, Clone)]
+@@ -573,6 +620,12 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
+     &self,
+     f: F,
+   ) -> tauri_runtime::WebviewEventId {
++    self
++      .frames
++      .webview_event_listeners
++      .lock()
++      .unwrap()
++      .push(Box::new(f));
+     self.context.next_window_event_id()
+   }
+ 
+@@ -596,11 +649,12 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
+   }
+ 
+   fn eval_script<S: Into<String>>(&self, script: S) -> Result<()> {
+-    self
+-      .last_evaluated_script
+-      .lock()
+-      .unwrap()
+-      .replace(script.into());
++    self.record_script(None, script.into());
++    Ok(())
++  }
++
++  fn eval_script_in_subframe(&self, id: &SubframeId, script: String) -> Result<()> {
++    self.record_script(Some(id.clone()), script);
+     Ok(())
+   }
+ 
+@@ -609,11 +663,7 @@ impl<T: UserEvent> WebviewDispatch<T> for MockWebviewDispatcher {
+     script: S,
+     callback: impl Fn(String) + Send + 'static,
+   ) -> Result<()> {
+-    self
+-      .last_evaluated_script
+-      .lock()
+-      .unwrap()
+-      .replace(script.into());
++    self.record_script(None, script.into());
+     Ok(())
+   }
+ 
+@@ -913,6 +963,7 @@ impl<T: UserEvent> WindowDispatch<T> for MockWindowDispatcher {
+             context: self.context.clone(),
+             url: Arc::new(Mutex::new(pending_webview.url)),
+             last_evaluated_script: Default::default(),
++            frames: Default::default(),
+           },
+         },
+         use_https_scheme: pending_webview.webview_attributes.use_https_scheme,
+@@ -946,6 +997,7 @@ impl<T: UserEvent> WindowDispatch<T> for MockWindowDispatcher {
+         id,
+         context: self.context.clone(),
+         last_evaluated_script: Default::default(),
++        frames: Default::default(),
+         url: Arc::new(Mutex::new(pending.url)),
+       },
+     })
+@@ -1256,6 +1308,7 @@ impl<T: UserEvent> Runtime<T> for MockRuntime {
+             context: self.context.clone(),
+             url: Arc::new(Mutex::new(pending_webview.url)),
+             last_evaluated_script: Default::default(),
++            frames: Default::default(),
+           },
+         },
+         use_https_scheme: pending_webview.webview_attributes.use_https_scheme,
+@@ -1290,6 +1343,7 @@ impl<T: UserEvent> Runtime<T> for MockRuntime {
+         id,
+         context: self.context.clone(),
+         last_evaluated_script: Default::default(),
++        frames: Default::default(),
+         url: Arc::new(Mutex::new(pending.url)),
+       },
+     })
+diff --git a/crates/tauri/src/test/mod.rs b/crates/tauri/src/test/mod.rs
+index 027063432df0b39fa89b3fac5c09b2c8721e81ed..d20c7ee551ea737829c223bc78629529a4427708 100644
+--- a/crates/tauri/src/test/mod.rs
++++ b/crates/tauri/src/test/mod.rs
+@@ -45,6 +45,7 @@
+ //!             headers: Default::default(),
+ //!             invoke_key: tauri::test::INVOKE_KEY.to_string(),
+ //!             frame: Default::default(),
++//!             subframe_id: None,
+ //!         },
+ //!     ).map(|b| b.deserialize::<String>().unwrap());
+ //! }
+@@ -228,6 +229,7 @@ pub fn mock_app() -> App<MockRuntime> {
+ ///             headers: Default::default(),
+ ///             invoke_key: tauri::test::INVOKE_KEY.to_string(),
+ ///             frame: Default::default(),
++///             subframe_id: None,
+ ///         },
+ ///       Ok("pong")
+ ///     );
+@@ -292,6 +294,7 @@ pub fn assert_ipc_response<
+ ///             headers: Default::default(),
+ ///             invoke_key: tauri::test::INVOKE_KEY.to_string(),
+ ///             frame: Default::default(),
++///             subframe_id: None,
+ ///         },
+ ///     );
+ ///     assert!(res.is_ok());
+diff --git a/crates/tauri/src/webview/mod.rs b/crates/tauri/src/webview/mod.rs
+index 00031eece81e33c33a8e10fea52409fba043ee8d..ea988981e3dec037cbb3104d9c3f6f5ece594e52 100644
+--- a/crates/tauri/src/webview/mod.rs
++++ b/crates/tauri/src/webview/mod.rs
+@@ -20,6 +20,7 @@ use serde::Serialize;
+ use tauri_macros::default_runtime;
+ pub use tauri_runtime::webview::{
+   IpcFrame, NewWindowFeatures, PageLoadEvent, PermissionKind, PermissionResponse, ScrollBarStyle,
++  SubframeId,
+ };
+ // Remove this re-export in v3
+ pub use tauri_runtime::Cookie;
+@@ -150,6 +151,31 @@ pub struct InvokeRequest {
+   /// The frame that requested this command, as reported by the runtime.
+   /// Capabilities apply to it according to their `frames` setting.
+   pub frame: IpcFrame,
++  /// The runtime's id of the requesting subframe, used to send listener registrations, events,
++  /// channel messages and postMessage responses back to that frame. Only set for [`IpcFrame::Sub`].
++  pub subframe_id: Option<SubframeId>,
++}
++
++/// A frame of a webview that scripts can be delivered to: the key of the JS listener table, the
++/// owner of queued channel data and the target of [`Webview::eval_in_frame`].
++#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++pub(crate) enum FrameAddress {
++  /// The main frame, addressed through the webview: still the same address after a navigation.
++  Main,
++  /// A subframe, addressed by the id the runtime reported; invalid once the frame is destroyed.
++  Sub(SubframeId),
++}
++
++impl FrameAddress {
++  /// Where data for the caller of an IPC request goes. `None` when it cannot be addressed:
++  /// a subframe the runtime gave no id for, or a request without a frame (e.g. a service worker).
++  pub(crate) fn of_caller(frame: IpcFrame, subframe_id: Option<&SubframeId>) -> Option<Self> {
++    match frame {
++      IpcFrame::Main => Some(Self::Main),
++      IpcFrame::Sub => subframe_id.cloned().map(Self::Sub),
++      IpcFrame::Unknown => None,
++    }
++  }
+ }
+ 
+ /// The platform webview handle. Accessed with [`Webview#method.with_webview`];
+@@ -1922,6 +1948,10 @@ tauri::Builder::default()
+   /// event is still delivered by evaluating a script in the new document.
+   /// Embedders that navigate a long-lived webview between documents call this once they know the
+   /// document was replaced. Listeners the new document registers afterwards are kept as usual.
++  ///
++  /// The listeners of every frame are dropped: replacing the main document destroys its subframes.
++  /// A subframe's listeners are otherwise dropped when the runtime reports it destroyed
++  /// (`WebviewEvent::SubframeDestroyed`).
+   pub fn clear_js_listeners(&self) {
+     self
+       .manager()
+@@ -2064,7 +2094,10 @@ tauri::Builder::default()
+     #[cfg(mobile)]
+     let app_handle = self.app_handle.clone();
+ 
+-    let message = InvokeMessage::new(self, request.cmd.to_string(), request.body, request.headers);
++    let mut message =
++      InvokeMessage::new(self, request.cmd.to_string(), request.body, request.headers);
++    message.caller_address = FrameAddress::of_caller(request.frame, request.subframe_id.as_ref());
++    message.caller_origin = Some(request.url.clone());
+ 
+     let acl_origin = if is_local {
+       Origin::Local
+@@ -2211,6 +2244,23 @@ tauri::Builder::default()
+       .map_err(Into::into)
+   }
+ 
++  /// Evaluates JavaScript in the given frame: the main frame through [`Self::eval`], a subframe
++  /// through the runtime's `eval_script_in_subframe`.
++  pub(crate) fn eval_in_frame(
++    &self,
++    address: &FrameAddress,
++    js: impl Into<String>,
++  ) -> crate::Result<()> {
++    match address {
++      FrameAddress::Main => self.eval(js),
++      FrameAddress::Sub(id) => self
++        .webview
++        .dispatcher
++        .eval_script_in_subframe(id, js.into())
++        .map_err(Into::into),
++    }
++  }
++
+   /// Evaluate JavaScript with callback function on this webview.
+   /// The evaluation result will be serialized into a JSON string and passed to the callback function.
+   ///
+@@ -2227,46 +2277,59 @@ tauri::Builder::default()
+       .map_err(Into::into)
+   }
+ 
+-  /// Register a JS event listener and return its identifier.
++  /// Register a JS event listener in the given frame and return its identifier.
+   ///
+-  /// Which emits reach it is decided by this webview's identity as a receiver,
+-  /// see [`crate::Emitter::emit_to`].
++  /// The registration script runs in that frame and events are only delivered there. Which emits
++  /// reach it is decided by this webview's identity as a receiver, see [`crate::Emitter::emit_to`].
+   pub(crate) fn listen_js(
+     &self,
+     event: EventName<&str>,
+     handler: CallbackFn,
++    address: FrameAddress,
+   ) -> crate::Result<EventId> {
+     let listeners = self.manager().listeners();
+ 
+     let id = listeners.next_event_id();
+ 
+-    self.eval(crate::event::listen_js_script(
+-      listeners.listeners_object_name(),
+-      event,
+-      id,
+-      handler,
+-    ))?;
++    self.eval_in_frame(
++      &address,
++      crate::event::listen_js_script(listeners.listeners_object_name(), event, id, handler),
++    )?;
+ 
+-    listeners.listen_js(event, self.label(), id);
++    listeners.listen_js(event, self.label(), address, id);
+ 
+     Ok(id)
+   }
+ 
+-  /// Unregister a JS event listener registered from this webview.
+-  pub(crate) fn unlisten_js(&self, event: EventName<&str>, id: EventId) -> crate::Result<()> {
++  /// Unregister a JS event listener registered from the given frame of this webview.
++  pub(crate) fn unlisten_js(
++    &self,
++    event: EventName<&str>,
++    id: EventId,
++    address: &FrameAddress,
++  ) -> crate::Result<()> {
+     let listeners = self.manager().listeners();
+ 
+-    listeners.unlisten_js(self.label(), event, id);
++    listeners.unlisten_js(self.label(), address, event, id);
+ 
+     Ok(())
+   }
+ 
+-  pub(crate) fn emit_js(&self, emit_args: &EmitArgs, ids: &[u32]) -> crate::Result<()> {
+-    self.eval(crate::event::emit_js_script(
+-      self.manager().listeners().function_name(),
+-      emit_args,
+-      &serde_json::to_string(ids)?,
+-    )?)?;
++  /// Delivers the event to the listeners `ids` registered in the given frame.
++  pub(crate) fn emit_js_to_frame(
++    &self,
++    address: &FrameAddress,
++    emit_args: &EmitArgs,
++    ids: &[u32],
++  ) -> crate::Result<()> {
++    self.eval_in_frame(
++      address,
++      crate::event::emit_js_script(
++        self.manager().listeners().function_name(),
++        emit_args,
++        &serde_json::to_string(ids)?,
++      )?,
++    )?;
+     Ok(())
+   }
+ 
+@@ -2836,6 +2899,7 @@ mod tests {
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
+         frame: Default::default(),
++        subframe_id: None,
+       },
+     );
+     assert!(
+@@ -2857,6 +2921,7 @@ mod tests {
+         headers: Default::default(),
+         invoke_key: INVOKE_KEY.to_string(),
+         frame: Default::default(),
++        subframe_id: None,
+       },
+     );
+     // The local request should either succeed or fail for a reason OTHER

@@ -17,11 +17,15 @@
 - Windows 安装程序在最后阶段不再一个接一个地闪出大量黑色命令行窗口：搬运 CEF 运行时、DLL 与设置目录图标属性改用安装程序内置指令完成。
 - 桌面端界面卡死后的自动恢复更快：页面无响应约 6 秒（原约 16 秒）即自动重新加载。
 
+### Fixed
+- 修复网页壁纸刚打开时偶尔要等几秒才应用属性、读不到为它选择的文件夹的问题。
+
 ### Changed
 - Windows 桌面版升级后，部分只存在本机界面里的偏好会恢复默认：画廊每页数量与布局、面板宽度、链接打开方式（会重新询问）、吉祥物开关与位置、上次浏览的画廊路径、视频音量等；应用设置与图库数据不受影响。
 - 壁纸轮播改为按一条视图路径依次切换：在画廊、画册、任务或畅游详情的过滤栏 ⋯ 菜单点「用当前视图轮播」，当前的过滤与排序就是轮播来源；设置页只显示当前轮播路径，原来的「选择画册 / 包含子画册 / 随机或顺序」三项去掉（随机即随机排序视图）。每次切换都从当前壁纸在视图里的下一张接着走，视图里的图片增删、排序变化不会让轮播跳张或重复；当前壁纸不在视图里时按保存的轮播位置继续，停止再开启、重启应用也接着上次；换视图会立刻切到新视图的第一张；原生壁纸模式只轮播图片，切换壁纸模式后从当前壁纸的下一张继续。旧设置升级时自动换算成对应路径。
 - 图片详情的「基本信息」改为卡片式排版：名称作标题，源与收藏时间并在一行，类型、大小、尺寸做成可点筛选的芯片，宽高比画成与图片同比例的矩形框；URL 与本地路径各占一行，省略显示并带复制按钮，整体高度明显降低。
 - Web 版（demo.kabegame.com）首屏打开明显变快：脚本、样式和插画改从 CDN 加载并自动压缩，不再挤占服务器那点带宽；吉祥物、空状态等插画在 Web 版换成按显示尺寸压缩的 WebP（合计 8.2 MB → 244 KB），桌面与 Android 仍用原图。
+- Windows 桌面网页壁纸与图库预览改为同一套实现（壁纸窗口里嵌入网页壁纸，不再整窗跳转）：图片 / 视频与网页壁纸之间也有切换过渡；预览与桌面的页面存储互通（桌面上此前保存的页面数据不会带过来）；改了文件夹属性后，旧文件夹立即不再可读；网页壁纸只能读取自己的壁纸目录和为它选择的文件。
 - 启动时主窗口立即出现：数据库升级等耗时初始化改在后台进行，期间窗口显示启动页与进度（升级需要先补算数据时显示进度条），完成后自动进入主界面；初始化失败会在启动页显示错误并可直接退出。其余数据补算在进入界面后于后台继续，可在「我正在忙这些」里看到进度，中途退出下次启动接着做。
 
 ### Fixed
@@ -78,6 +82,7 @@
 - 数据库迁移拆成同步 schema 迁移与可恢复的回填作业：新增 `backfill_jobs` 表（v048）、`storage/migrations/backfill.rs` 注册表（按批 `BEGIN IMMEDIATE` 提交并同事务写回 rowid 游标，崩溃续跑）、`Migration.min_backfill_version`（执行前同步排干被依赖的回填）、`BackfillService` 后台按序运行（忙碌快照 `backfills` + `backfill-finished`）与调试开关 `KABEGAME_BACKFILL_SYNC_THROUGH`；`Storage::new()` 改为返回 `Result`。桌面 / Android 启动拆成 `init_pre`（主线程建窗）→ 线程内 `init_heavy_globals` → 主线程 `init_post`，进度经 core `startup_state` watch、`startup-progress` 事件与新命令 `get_startup_state` 交给前端启动页（Init app 先挂载、`ready` 后卸载再挂主界面）；IPC `status` 增加 `backfillPending`。详见 `cocs/storage/DB_MIGRATIONS_AND_BACKFILLS.md`。
 - `deno task patch` 新增 `--gen [--from <x>] [--out <path>]`：在 `GIT_INDEX_FILE` 指向的临时 index 里以「纯净基线 + 系列套用到 x」为底树、`add -A` 工作树为目标树，两树 `git diff --full-index` 即系列之外的剩余改动，导出为新补丁；不 reset、不碰子模块真实 index 与工作树。`third-patches/AGENTS.md` 的新补丁工法改为推荐它。
 - 新增 tauri 补丁 0014–0017（拉取后须重新应用 tauri 补丁序列）：JS 事件按接收方 webview 身份投递并忽略前端 `listen` 传的 `target`、`unlisten` 只作用于调用方 webview；`core:event:allow-listen` 支持事件名作用域；capability 新增 `frames`（默认只认主 frame，frame 由 CEF runtime 经请求 extension 上报）；新增 `Builder::acl_exempt_webview`，主窗口与壁纸窗口的本地应用页免 ACL，删除约 200 条的 `permissions/main.toml`，新增只给主界面用的命令只需注册进 `generate_handler!`。补丁 0009 顺带补上 `mock_context` 缺的 `bins` 字段，`cargo test -p tauri` 可以编译。
+- 新增 tauri 补丁 0018–0019（拉取后须重新应用 tauri 补丁序列）：frame 成为 IPC 的基本单位——CEF 下每个子 frame 无条件注入 Tauri 桥（ACL 是唯一闸门），子 frame 请求带 `SubframeId`，监听登记 / 事件 / Channel 消息 / 回退响应都送回调用方 frame，Channel 取数按 frame 归属，`SubframeDestroyed` 清该 frame 的监听，关闭拦截只看主 frame，新增 `tauri::ipc::CallerOrigin`。应用侧网页壁纸统一为 `WallpaperStage` 的 `file:` iframe：`wpe-web-capability` 绑定 `main` 与 `wallpaper` 且 `frames: "sub"`，删除 `set_wpe_web_preview` / `get_wpe_web_state` / `wpeWebBridge.ts` 与壁纸窗口整窗导航；`file:` 闸门改由网页壁纸目录索引（`wallpaper/wpe_web_dir_index.rs`，`list_wpe_web_rows` 走 `idx_images_type`）经 `set_file_scope_resolver` 推出访问范围，删除按 webview 存的根目录与追加放行。
 - 新增 tauri 补丁 0013：Windows 改用原生 `tauri://localhost` / `ipc://localhost`；CEF runtime 删除 `http://<scheme>.localhost` 映射并统一三平台 scheme。拉取后须重新应用 tauri 补丁序列。
 - CEF 补丁 0006 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。
 - Phase 6d：CEF 补丁 0003 扩到 Windows（需重编 CEF）——Chromium 内层补丁的 aura `StartDragging` 钩子放宽到 `IS_LINUX || IS_WIN`，delegate 背书文件时另清 `html` / `download_metadata`，Windows 不打 `chromium/x-renderer-taint`；`tauri-runtime-cef` 的 `on_start_dragging` 去掉 Linux / macOS cfg，应用在三个桌面平台安装拖出 resolver，`authorize_drag_image` 收紧为 `is_file()`（`x-wpe/*` 目录行不得拖出）；前端桌面拖出只写 image id 并设 `effectAllowed = "copy"`，Web 版保留 `DownloadURL`。
@@ -85,7 +90,8 @@
 ### Fixed
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 0012：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-cef` 的 `cef-ipc` 回退 shim 同样设置。
-- CEF 运行时 IPC 来源改按发起方 origin 判定：`ipc` / `cef-ipc` 请求在 `GetResourceRequestHandler` 里取 factory 级 `request_initiator` 写入内部头 `Sec-Kabegame-Initiator-Origin`，协议层据此覆写 `Origin`（`file:` → `file:///`，opaque → `null`）；删除依赖 `frame.url()` 的 `pin_file_frame_origin`（CEF 的 frame URL 到 `DidFinishNavigation` 才刷新，新文档最早的请求读到空串或旧地址）；`cef-ipc` 不合法 `Origin` 直接拒绝，不再退到 frame URL 或 webview 初始 URL。WPE 滑块用户值在 `apply_changes` 按 `step` 对齐，`KbNumber` 新增 `stepStrictly`。
+- CEF 运行时 IPC 链路拉直：`ipc` / `cef-ipc` 由 `IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；`ipc_origin` 按 initiator 与 CEF 0007 的完整文档 URL 算一次 `Origin`，认不出写 `null`。删除 `IpcInitiatorHandler`、`Sec-Kabegame-Initiator-Origin` 与 `pin_file_frame_origin`；回退通道不合法来源统一用占位来源交给 ACL 拒绝。
+- 新增 CEF 补丁 0007（需重编 CEF）：建子资源 / 导航工厂时捕获文档与父文档 URL，对非 http(s) 请求写入两个私有归属头；`file:` 闸门按文档头分档，移除 worker 的 `file:` 工厂和垫片首批请求退避重试。
 
 ### Internal
 - v049 一次性规范化 `images.type` 并新增 `idx_images_type`；Rust 写入口保证非空小写格式键，媒体分类与格式查询去掉逐行 LOWER / COALESCE，保留画廊排序分页的索引计划；补充迁移、规则比对及 DSL 执行计划回归。

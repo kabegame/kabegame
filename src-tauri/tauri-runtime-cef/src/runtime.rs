@@ -37,8 +37,11 @@ mod imp {
     use tauri_runtime::{
         dpi::{PhysicalPosition, PhysicalSize, Position, Size},
         monitor::Monitor,
-        webview::{DetachedWebview, PendingWebview},
-        window::{DetachedWindow, DetachedWindowWebview, PendingWindow, RawWindow, WindowEvent},
+        webview::{DetachedWebview, PendingWebview, SubframeId},
+        window::{
+            DetachedWindow, DetachedWindowWebview, PendingWindow, RawWindow, WebviewEvent,
+            WindowEvent,
+        },
         DeviceEventFilter, Error, EventLoopProxy as RuntimeEventLoopProxy,
         ExitRequestedEventAction, Result, RunEvent, Runtime, RuntimeHandle, RuntimeInitArgs,
         UserEvent, WebviewEventId, WindowEventId,
@@ -545,6 +548,9 @@ mod imp {
         /// `CefContext::enqueue` 投入队列,由主循环 `emit_mapped_window_event`
         /// 分发给该窗口的 listeners + `RunEvent::WindowEvent`。
         CefWindowEvent(WindowId, WindowEvent),
+        /// webview 事件回流(如子 frame 销毁):CEF 回调在 UI 线程产生,入队后由主循环分发给该
+        /// webview 的 listeners(见 [`webview_event_emitter`])。
+        CefWebviewEvent(WebviewId, WebviewEvent),
         /// CEF `can_close` 首次被调用,需主循环向上层发 `CloseRequested` 裁决。
         /// 由 delegate 的 `close_requester` 投递;主循环处理后决定是否置
         /// `close_confirmed` 并再次触发 `cef_window.close()`。
@@ -570,6 +576,22 @@ mod imp {
         })
     }
 
+    /// 类型擦除的 webview 事件发射器,交给 CEF 回调(如 `FrameHandler`)在 UI 线程调用。
+    pub(crate) type WebviewEventEmitter = Arc<dyn Fn(WebviewEvent) + Send + Sync>;
+
+    /// 造一个投向 `webview_id` 的 webview 事件发射器。
+    ///
+    /// 与 [`window_event_emitter`] 同理:CEF 回调里不能直接碰 webview 的 listener 列表(listener 可能
+    /// 同步回调 runtime),统一 `enqueue` 成 `Message::CefWebviewEvent`,由主循环串行分发。
+    pub(crate) fn webview_event_emitter<T: UserEvent>(
+        webview_id: WebviewId,
+        context: CefContext<T>,
+    ) -> WebviewEventEmitter {
+        Arc::new(move |event| {
+            let _ = context.enqueue(Message::CefWebviewEvent(webview_id, event));
+        })
+    }
+
     impl<T: UserEvent> fmt::Debug for Message<T> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
@@ -592,6 +614,7 @@ mod imp {
                 Self::Window(id, _) => f.debug_tuple("Window").field(id).finish(),
                 Self::Webview(id, _) => f.debug_tuple("Webview").field(id).finish(),
                 Self::CefWindowEvent(id, _) => f.debug_tuple("CefWindowEvent").field(id).finish(),
+                Self::CefWebviewEvent(id, _) => f.debug_tuple("CefWebviewEvent").field(id).finish(),
                 Self::WindowCloseRequested(id) => {
                     f.debug_tuple("WindowCloseRequested").field(id).finish()
                 }
@@ -884,6 +907,8 @@ mod imp {
         SetFocus,
         SetVisible(bool),
         Eval(String),
+        /// 在指定子 frame 里执行脚本;frame 已不存在时静默丢弃。
+        EvalInSubframe(SubframeId, String),
         SetAutoResize(bool),
         SetZoom(f64),
     }
@@ -2825,6 +2850,7 @@ mod imp {
                 message @ (Message::UserEvent(_)
                 | Message::RequestExit(_)
                 | Message::CefWindowEvent(..)
+                | Message::CefWebviewEvent(..)
                 | Message::WindowCloseRequested(_)) => {
                     self.context.enqueue(message)?;
                 }
@@ -2909,6 +2935,30 @@ mod imp {
                 Message::WindowCloseRequested(window_id) => {
                     self.handle_window_close_requested(window_id, callback);
                 }
+                Message::CefWebviewEvent(webview_id, event) => {
+                    self.emit_webview_event(webview_id, &event);
+                }
+            }
+        }
+
+        /// 把 webview 事件分发给该 webview 的 listeners。先把 listener 列表**临时 move 出**再调用:
+        /// listener(Tauri 的处理器、应用注册的回调)可能同步回调 runtime(如 eval),主线程上会内联进
+        /// `handle_webview_message`,不能在持有 webviews 借用时调用。调用期间新登记的 listener 合并回去。
+        fn emit_webview_event(&self, webview_id: WebviewId, event: &WebviewEvent) {
+            let listeners = {
+                let mut webviews = self.webviews.0.borrow_mut();
+                let Some(state) = webviews.get_mut(&webview_id) else {
+                    return;
+                };
+                std::mem::take(&mut state.listeners)
+            };
+            for (_, listener) in &listeners {
+                listener(event);
+            }
+            let mut webviews = self.webviews.0.borrow_mut();
+            if let Some(state) = webviews.get_mut(&webview_id) {
+                let added = std::mem::replace(&mut state.listeners, listeners);
+                state.listeners.extend(added);
             }
         }
 
@@ -3252,6 +3302,26 @@ mod imp {
                             Some(&CefString::from(state.url.as_str())),
                             0,
                         );
+                    }
+                }
+                WebviewMessage::EvalInSubframe(subframe_id, script) => {
+                    let frame = state.resolve_browser().and_then(|browser| {
+                        browser.frame_by_identifier(Some(&CefString::from(subframe_id.as_str())))
+                    });
+                    match frame.filter(|frame| frame.is_valid() == 1) {
+                        Some(frame) => {
+                            let url = frame.url();
+                            frame.execute_java_script(
+                                Some(&CefString::from(script.as_str())),
+                                Some(&CefString::from(&url)),
+                                0,
+                            );
+                        }
+                        // frame 已销毁:与主 frame 导航后 eval 落空一致,静默丢弃
+                        None => tracing::trace!(
+                            "eval target frame no longer exists: {}",
+                            subframe_id.as_str()
+                        ),
                     }
                 }
                 WebviewMessage::SetAutoResize(auto_resize) => state.auto_resize = auto_resize,

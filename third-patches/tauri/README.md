@@ -92,9 +92,10 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   matching event is still `eval`-ed into the new document. The patch makes
   `Listeners::remove_webview_js_listeners` `pub(crate)` and adds public
   `Webview::clear_js_listeners()` / `WebviewWindow::clear_js_listeners()` (Rust-side `listen`
-  handlers are untouched). Kabegame calls it after the wallpaper window navigates between the
-  app page and a WPE web wallpaper's `file://` entry (`wallpaper/window.rs` `show_web` /
-  `show_app`). Re-check on bump: `event/listener.rs` `remove_webview_js_listeners`.
+  handlers are untouched). Kabegame calls it after the wallpaper window's ping watchdog reloads
+  the page (`wallpaper/window.rs`); since 0018 web wallpapers are iframes and the wallpaper window no
+  longer navigates (a subframe's listeners go with `SubframeDestroyed`). It drops the listeners of
+  every frame of the webview. Re-check on bump: `event/listener.rs` `remove_webview_js_listeners`.
 - `0012-tauri-ipc-origin-referrer-policy.patch` — the custom-protocol IPC `fetch` in
   `scripts/ipc-protocol.js` gets `referrerPolicy: 'origin'`. The `ipc` handler rejects a request
   whose `Origin` header does not parse as a URL (`parse_invoke_request`, HTTP 500 "Origin header
@@ -179,6 +180,65 @@ and app usage: [cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAUR
 The CEF runtime side (`src-tauri/tauri-runtime-cef`, not a patch) inserts `IpcFrame` on every
 custom-protocol request (`protocol::attach_request_frame`; no CEF frame → `Unknown`) and carries
 it through the rebuilt `cef-ipc` fallback request (`ipc::post_message_request`).
+
+0018–0019 make the frame the unit of IPC: subframes get Tauri's bridge, and everything Tauri sends
+back to a page (listener registrations, events, channel messages, postMessage responses) goes to
+the frame that made the call. Design and app usage: the "子 frame IPC" section of
+[cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md](../../cocs/tauri/TAURI_ACL_PERMISSION_SYSTEM.md).
+
+- `0018-tauri-frame-scoped-ipc.patch` — frame-scoped delivery. tauri-runtime:
+  `webview::SubframeId(Arc<str>)` (opaque, runtime-defined, re-exported as `tauri::webview::SubframeId`)
+  travels in the request extensions next to `IpcFrame`, subframe requests only;
+  `WebviewDispatch::eval_script_in_subframe` (default: `Error::SubframeEvalUnsupported`, so wry is
+  untouched); `window::WebviewEvent::SubframeDestroyed(SubframeId)` (also on tauri's public
+  `WebviewEvent`, `app.rs` `From`). tauri: `InvokeRequest.subframe_id` (read in
+  `ipc/protocol.rs` `request_subframe_id`, only kept for `IpcFrame::Sub`); crate-private
+  `webview::FrameAddress { Main, Sub(SubframeId) }` with `FrameAddress::of_caller` (`Unknown` and a
+  subframe without id → `None`) and `Webview::eval_in_frame` (main frame keeps `eval`, addressed
+  through the webview because a runtime may renumber it on cross-origin navigation).
+  `on_message` stores `InvokeMessage.caller_address` and `caller_origin` (the ACL origin, i.e. the
+  request `Origin`). Command arguments: crate-only `ipc::CallerFrameAddress`, public
+  `ipc::CallerOrigin(Url)`. `js_event_listeners` is keyed webview → frame → event;
+  `listen` / `unlisten` take `CallerFrameAddress` (an unaddressable caller cannot listen; unlisten
+  only touches the caller frame's table), `listen_js` evals the registration into the caller frame,
+  `emit_js_filter` keeps the 0014 receiver check and delivers per frame (`emit_js_to_frame`).
+  `remove_subframe_js_listeners` runs on `SubframeDestroyed` (`manager/webview.rs`
+  `on_webview_event`, which also drops that frame's queued channel data); `clear_js_listeners`
+  still drops every frame of the webview. Close-request interception only counts main-frame
+  listeners (`has_main_frame_js_listener_in`, renamed from `has_js_listener_in`). `Channel` as a
+  command argument is created for the caller frame (`channel_on_frame`; no address → error);
+  public `JavaScriptChannelId::channel_on` keeps meaning the main frame; `from_callback_fn` and
+  the postMessage `responder_eval` take the address (unaddressable caller → response dropped; such
+  requests only use the fetch path). `ChannelDataIpcQueue` entries remember their frame and
+  `plugin:__TAURI_CHANNEL__|fetch` (the one command that skips the ACL) takes
+  `CallerFrameAddress`: another frame guessing the sequential id gets "data not found".
+  Mock runtime: `MockWebviewDispatcher` records every eval with its target frame
+  (`evaluated_scripts`) and keeps webview event listeners (`emit_webview_event`). Tests:
+  `event::listener::test::js_listeners_are_scoped_per_frame`,
+  `event::plugin::tests::{listen_needs_an_addressable_frame, subframe_listeners_are_registered_and_delivered_in_their_frame, subframe_cannot_unlisten_another_frames_listener}`,
+  `ipc::channel::tests::{queue_entries_are_scoped_to_the_owning_frame, purge_removes_only_the_destroyed_frame_entries, subframe_channel_is_delivered_and_fetched_by_its_frame_only}`,
+  `ipc::protocol::tests::{subframe_id_is_only_kept_for_subframes, caller_address_follows_frame_and_id, post_message_responses_go_back_to_the_calling_frame, caller_origin_is_the_request_origin}`,
+  `manager::window::tests`. Re-check on bump: every `InvokeRequest { .. }` literal,
+  `webview/mod.rs` `on_message` / `listen_js` / `unlisten_js`, `event/listener.rs`
+  `emit_js_filter`, `ipc/channel.rs` `channel_on` / `from_callback_fn` / `fetch` / `CommandArg`,
+  `ipc/protocol.rs` `handle_ipc_message` responder, `manager/window.rs` `has_js_listener`, the
+  exhaustive matches on `WebviewEvent`.
+- `0019-tauri-subframe-ipc-injection.patch` — the bridge for subframes. tauri-runtime:
+  `WebviewAttributes.subframe_bridge_scripts: Vec<String>`. `manager/webview.rs`
+  `prepare_pending_webview` builds Tauri's four bridge scripts (`isTauri` / internals, invoke
+  script, metadata, `init.js`) once, keeps adding them as main-frame-only initialization scripts and
+  hands the same strings to the runtime. A runtime that reports `IpcFrame` / `SubframeId` injects them
+  into **every** subframe before its other scripts (the ACL is the only gate); a runtime that does not
+  (wry) must ignore them, since its requests count as the main frame. Plugin scripts and the
+  isolation pattern stay out. Test: `manager::webview::tests::subframe_bridge_scripts_are_the_main_frame_bridge`.
+  Re-check on bump: the script list in `prepare_pending_webview`, `WebviewAttributes::new`.
+
+The CEF runtime side of 0018–0019 (not a patch): `protocol::attach_request_frame` also inserts
+`SubframeId(frame.identifier())` for subframes, `ipc::post_message_request` carries it and accepts
+every request CEF attributes to a frame (the ACL decides), `WebviewMessage::EvalInSubframe` resolves
+the frame with `frame_by_identifier`, a `FrameHandler` reports `on_frame_destroyed` for non-main
+frames, and the renderer (`subprocess.rs`) evals `subframe_bridge_scripts` (key
+`kabegame.subframe_bridge_scripts.v1` in `extra_info`) first in every subframe.
 
 Apply the whole series manually before building against `third/tauri`:
 

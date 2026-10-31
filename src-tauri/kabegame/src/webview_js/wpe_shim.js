@@ -1,14 +1,14 @@
 // WPE 网页壁纸运行时垫片：all-frames 初始化脚本，桌面壁纸窗口与主窗口共用。
-// 只在两种文档里启用：桌面壁纸窗口的 file:// 主 frame；预览里主窗口的 file: 直接子 iframe。
-// 其它文档（应用页、更深的嵌套 iframe）第一行就返回，不定义任何全局。
+// 只在一种文档里启用：顶层的直接子 frame、且是 file:（WallpaperStage web 层的网页壁纸 iframe，图库预览与
+// 桌面同一份）。其它文档（应用页、更深的嵌套 iframe）第一行就返回，不定义任何全局。
 // 协议见 cocs/wpe/WPE_IMPORT.md「运行时垫片与宿主协议」：垫片向宿主拉取完整状态、订阅事件后重拉，
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。
 (function () {
   "use strict";
-  var isTop = window === window.top;
-  var desktop = isTop && location.protocol === "file:";
-  var preview = !isTop && window.parent === window.top && location.protocol === "file:";
-  if ((!desktop && !preview) || window.__kbWpeShim) return;
+  var direct = window !== window.top && window.parent === window.top && location.protocol === "file:";
+  // CEF 给每个子 frame 都注入了 Tauri 的 IPC 桥；能调什么由 ACL（wpe-web-capability，frames: sub）决定
+  var internals = window.__TAURI_INTERNALS__;
+  if (!direct || !internals || window.__kbWpeShim) return;
   Object.defineProperty(window, "__kbWpeShim", { value: true });
 
   // ---- WPE 全局接口（API.md §3.2 / §3.4）----
@@ -79,13 +79,21 @@
   }
   function deliverDirectories(prev, next) {
     var keys = {};
-    Object.keys(prev || {}).concat(Object.keys(next || {})).forEach(function (key) { keys[key] = true; });
+    Object.keys(prev || {})
+      .concat(Object.keys(next || {}))
+      .forEach(function (key) {
+        keys[key] = true;
+      });
     Object.keys(keys).forEach(function (key) {
       var before = new Set(fetchallFiles(prev, key));
       var after = fetchallFiles(next, key);
       var afterSet = new Set(after);
-      var removed = Array.from(before).filter(function (file) { return !afterSet.has(file); });
-      var added = after.filter(function (file) { return !before.has(file); });
+      var removed = Array.from(before).filter(function (file) {
+        return !afterSet.has(file);
+      });
+      var added = after.filter(function (file) {
+        return !before.has(file);
+      });
       if (removed.length) call("userDirectoryFilesRemoved", key, removed);
       if (added.length) call("userDirectoryFilesAddedOrChanged", key, added);
     });
@@ -96,7 +104,11 @@
     if (!files.length) return;
     var file = files[Math.floor(Math.random() * files.length)];
     setTimeout(function () {
-      try { cb(key, file); } catch (error) { console.error("[kb-wpe] random file", error); }
+      try {
+        cb(key, file);
+      } catch (error) {
+        console.error("[kb-wpe] random file", error);
+      }
     }, 0);
   }
   function deliverFull(state) {
@@ -122,7 +134,9 @@
   }
   function receive(next) {
     latest = next;
-    randomQueue.splice(0).forEach(function (request) { answerRandom(request[0], request[1]); });
+    randomQueue.splice(0).forEach(function (request) {
+      answerRandom(request[0], request[1]);
+    });
     // load 之前只记下来，不提前回调（为 WPE 写的页面默认回调时 DOM 已就绪）
     if (!loaded) return;
     if (!delivered) return deliverFull(next);
@@ -140,26 +154,39 @@
     if (latest && !delivered) deliverFull(latest);
   });
 
-  // ---- 传输：pull() → Promise<state>；listen(names, onEvent) → Promise，各事件并入同一个 onEvent ----
-  var transport = desktop ? tauriTransport(window.__TAURI_INTERNALS__) : parentTransport();
-  if (!transport) return;
+  // ---- 传输：iframe 自己直接 invoke / listen，事件只投递到本 frame ----
+  // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping / setting-change / image-changed /
+  // images-change，新增监听要同步改 capability）。来源由 CEF 补丁 0007 在建工厂时确定，首批请求即可用，不做重试。
+  var transport = {
+    pull: function () {
+      return internals.invoke("wpe_web_pull_state");
+    },
+    listen: function (names, onEvent) {
+      return Promise.all(
+        names.map(function (name) {
+          var handler = internals.transformCallback(function (event) {
+            onEvent({ name: name, payload: event.payload });
+          });
+          return internals.invoke("plugin:event|listen", { event: name, handler: handler });
+        }),
+      );
+    },
+  };
 
-  // ---- ping 应答（只桌面 file:// 主 frame）：后端每 10s 发一次 ping ----
-  // 只应答本窗口；连续 3 次不应答会整页重载。预览 iframe 碰不到 IPC，不参与。
-  if (desktop) {
-    var internals = window.__TAURI_INTERNALS__;
-    var meta = internals.metadata || {};
-    var selfLabel = meta.currentWebview ? meta.currentWebview.label : null;
-    transport
-      .listen(["wallpaper-ping"], function (event) {
-        var payload = event.payload || {};
-        if (payload.label !== selfLabel) return;
-        internals.invoke("wallpaper_pong", { seq: payload.seq }).catch(function () {});
-      })
-      .catch(function (error) {
-        console.warn("[kb-wpe] listen ping", error);
-      });
-  }
+  // ---- ping 应答：后端每 10s 向壁纸窗口发一次 ping，连续 3 次不应答会整页重载 ----
+  // 只应答本窗口：预览在主窗口里，metadata 的 label 是 main，过滤掉。网页壁纸显示期间壁纸窗口的应用页
+  // 不应答，交给这里——页面卡死就不应答，照样触发重载。
+  var meta = internals.metadata || {};
+  var selfLabel = meta.currentWebview ? meta.currentWebview.label : null;
+  transport
+    .listen(["wallpaper-ping"], function (event) {
+      var payload = event.payload || {};
+      if (payload.label !== selfLabel) return;
+      internals.invoke("wallpaper_pong", { seq: payload.seq }).catch(function () {});
+    })
+    .catch(function (error) {
+      console.warn("[kb-wpe] listen ping", error);
+    });
 
   // 拉取编号：某次结果落地后，丢弃更早发出、更晚返回的结果
   var issued = 0;
@@ -206,68 +233,4 @@
       console.warn("[kb-wpe] listen", error);
     })
     .then(pull);
-
-  // 桌面：主 frame 有 Tauri 脚本，直接 invoke / listen；权限只来自 wpe-web-capability（listen 只放行
-  // wallpaper-ping / setting-change / image-changed / images-change，新增监听要同步改 capability）
-  function tauriTransport(internals) {
-    if (!internals) return null;
-    return {
-      pull: function () {
-        return internals.invoke("wpe_web_pull_state");
-      },
-      listen: function (names, onEvent) {
-        return Promise.all(
-          names.map(function (name) {
-            return internals.invoke("plugin:event|listen", {
-              event: name,
-              handler: internals.transformCallback(function (event) {
-                onEvent({ name: name, payload: event.payload });
-              }),
-            });
-          }),
-        );
-      },
-    };
-  }
-
-  // 预览：file: iframe 碰不到 IPC，拉取与 listen 都 postMessage 给宿主页代办
-  function parentTransport() {
-    var nextId = 0;
-    var pending = {}; // 拉取 id → 落地回调
-    var onEvent = null;
-    // 发出的消息只有拉取编号与事件名，不含数据；宿主页按 event.source 认 iframe
-    function post(message) {
-      message.kbWpe = 1;
-      window.parent.postMessage(message, "*");
-    }
-    window.addEventListener("message", function (event) {
-      var data = event.data;
-      if (event.source !== window.parent || !data || data.kbWpe !== 1) return;
-      if (data.type === "state" && pending[data.id]) {
-        var settle = pending[data.id];
-        delete pending[data.id];
-        settle(data);
-      } else if (data.type === "event" && onEvent) {
-        onEvent({ name: data.name, payload: data.payload });
-      }
-    });
-    return {
-      pull: function () {
-        var id = ++nextId;
-        return new Promise(function (resolve, reject) {
-          pending[id] = function (data) {
-            if (data.error) reject(data.error);
-            else resolve(data.state);
-          };
-          post({ type: "pull", id: id });
-        });
-      },
-      listen: function (names, handler) {
-        onEvent = handler;
-        post({ type: "listen", events: names });
-        // 宿主页收到消息即登记；宿主自己的 Tauri listen 何时生效不回报，预览接受这一点窗口
-        return Promise.resolve();
-      },
-    };
-  }
 })();

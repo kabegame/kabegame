@@ -3,7 +3,7 @@ use crate::wallpaper::web_entry;
 use crate::wallpaper::window::WallpaperWindow;
 use async_trait::async_trait;
 use kabegame_i18n::t;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
@@ -16,10 +16,9 @@ pub const WALLPAPER_LABEL: &str = "wallpaper";
 /// 窗口的**生命周期**：`init()` 建窗口并挂到桌面层，`cleanup()` 销毁它。窗口一旦建立
 /// 即常显，中途不 hide/show。因此窗口的存在期与 `wallpaperMode == "window"` 严格同寿命。
 ///
-/// 窗口的**内容**：图片 / 视频由壁纸页面（`WallpaperWindow.vue`）监听 `setting-change`
-/// 自驱动渲染；网页壁纸（`x-wpe/web`）由 `set_wallpaper_path` 把窗口整个导航到入口的
-/// `file://`，切到别的壁纸时再导航回应用页（见 [`WallpaperWindow::show_web`] /
-/// [`WallpaperWindow::show_app`]）。网页壁纸的状态跟着 [`WallpaperWindow`] 走。
+/// 窗口的**内容**：图片 / 视频 / 网页壁纸都由壁纸页面（`WallpaperWindow.vue` → `WallpaperStage`）监听
+/// `setting-change` 自驱动渲染，网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，窗口不导航。
+/// `set_wallpaper_path` 只按当前壁纸开关 Windows 的桌面鼠标转发（[`WallpaperWindow::set_mouse_forwarding`]）。
 pub struct WindowWallpaperManager<R: Runtime> {
     app: AppHandle<R>,
     wallpaper_window: Arc<Mutex<Option<WallpaperWindow<R>>>>,
@@ -61,13 +60,13 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             return Ok(w);
         }
 
-        // 网页壁纸以 file:// 加载并读同目录文件：建窗前登记 label，CEF 只给这个 browser
-        // 打开文件访问偏好，file: 请求由运行时按当前壁纸目录约束（初始拒绝全部）。
+        // 网页壁纸是 web 层里的 file: iframe，页面要读同目录文件：建窗前登记 label，CEF 只给这个 browser
+        // 打开文件访问偏好（补丁 0004），file: 文档的请求由运行时按网页壁纸目录索引约束。
         // WPE 网页壁纸暂只支持 Windows（`web_entry` 在其它平台恒为 None），其它平台不登记。
         #[cfg(target_os = "windows")]
         tauri_runtime_cef::allow_file_documents(WALLPAPER_LABEL);
-        // 壁纸窗口的 Vue 页同样用 <img> / <video> 显示图库媒体（file://）：登记 CEF 补丁 0005 + 0006，
-        // 应用页主 frame 的 file: 子资源免检；整窗导航到网页壁纸后主 frame 是 file: 文档，仍按壁纸目录拦截。
+        // 壁纸窗口的 Vue 页用 <img> / <video> 显示图库媒体（file://），也要给 iframe 赋 file: src：登记
+        // CEF 补丁 0005 + 0006，应用页主 frame 的 file: 子资源免检，iframe 导航须落进库里某个网页壁纸目录。
         tauri_runtime_cef::allow_app_local_resources(WALLPAPER_LABEL);
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
@@ -78,7 +77,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         )
         // 固定标题，便于脚本/调试定位到正确窗口。
         .title(t!("window.wallpaperTitle"))
-        // WPE 网页壁纸垫片：只在 file:// 入口主 frame 里启用，应用页里第一行就返回。
+        // WPE 网页壁纸垫片：只在顶层的直接子 file: iframe 里启用，应用页里第一行就返回。
         .initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS)
         .fullscreen(true)
         .decorations(false)
@@ -111,12 +110,12 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     }
 
     async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {
-        // 窗口在 init() 时已挂载且常显。图片 / 视频由壁纸页面监听 setting-change 自驱动，
-        // 这里只决定窗口停在应用页还是网页壁纸入口。设图、轮播、启动恢复、切换模式、
+        // 窗口在 init() 时已挂载且常显。图片 / 视频 / 网页壁纸都由壁纸页面监听 setting-change
+        // 自驱动渲染，这里只按当前壁纸开关桌面鼠标转发。设图、轮播、启动恢复、切换模式、
         // 重新开启壁纸、改样式都会走到这里。
         self.warn_if_window_missing("set_wallpaper_path");
-        // 判定与导航都在窗口锁内同步完成（不 await），多个调用天然串行。
-        // 锁内不调 url() / hwnd() 等会同步等主线程的 getter，只调 navigate。
+        // 判定在窗口锁外做（读 project.json），开关在锁内同步完成；锁内不调会同步等主线程的 getter。
+        let is_web = web_entry(Path::new(file_path))?.is_some();
         let mut guard = self
             .wallpaper_window
             .lock()
@@ -125,13 +124,8 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             // 尚未 init：什么都不做，不兜底建窗。
             return Ok(());
         };
-        match web_entry(Path::new(file_path))? {
-            Some((dir, entry)) => wp.show_web(dir, entry),
-            None => {
-                wp.show_app();
-                Ok(())
-            }
-        }
+        wp.set_mouse_forwarding(is_web);
+        Ok(())
     }
 
     async fn set_style(&self, _style: &str) -> Result<(), String> {
@@ -140,23 +134,15 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     }
 
     async fn set_transition(&self, _transition: &str) -> Result<(), String> {
-        // 同 set_style：过渡由壁纸页面自驱动；网页壁纸的导航没有过渡。
+        // 同 set_style：过渡由壁纸页面自驱动（网页壁纸与图片 / 视频之间走同一套淡入淡出）。
         Ok(())
-    }
-
-    fn web_wallpaper_dir(&self, label: &str) -> Option<PathBuf> {
-        // 锁内只读字段，不调会同步等主线程的窗口 getter。
-        let guard = self.wallpaper_window.lock().ok()?;
-        // 以后多显示器：在窗口列表里按 label 找，每块屏的窗口各自回答自己的目录。
-        let wp = guard.as_ref().filter(|wp| wp.label() == label)?;
-        wp.web_dir().map(Path::to_path_buf)
     }
 
     fn cleanup(&self) -> Result<(), String> {
         // 离开 window 模式：销毁窗口，而不是藏起来。窗口挂载时被改成了 WorkerW 的
         // 子窗口（WS_CHILD + 改过的扩展样式），留着它下次只会在一个已被改过的窗口上
         // 再挂一次。
-        // 丢弃 WallpaperWindow：它的 Drop 清空文件根目录，鼠标转发线程随之停止。
+        // 丢弃 WallpaperWindow：鼠标转发线程随之停止（`InputForwarder` 的 Drop）。
         if let Ok(mut wp) = self.wallpaper_window.lock() {
             *wp = None;
         }
@@ -195,7 +181,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         let window = self.create_window()?;
         let mut wp_window = WallpaperWindow::new(window);
 
-        // 挂到桌面层。内部会先等前端 ready 再动窗口句柄，并记下应用页 URL 与窗口句柄。
+        // 挂到桌面层。内部会先等前端 ready 再动窗口句柄，并记下窗口句柄。
         wp_window.mount()?;
 
         self.wallpaper_window

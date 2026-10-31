@@ -22,7 +22,7 @@ use std::{
 use cef::{self, *};
 use http::{header::CONTENT_TYPE, Request as HttpRequest, Response as HttpResponse};
 use tauri_runtime::{
-    webview::{IpcFrame, PendingWebview},
+    webview::{IpcFrame, PendingWebview, SubframeId},
     Error, Result, UserEvent,
 };
 
@@ -42,23 +42,15 @@ pub(crate) struct WebviewProtocols {
 
 // browser id (i32) -> 该 browser 对应的 webview label + 各 scheme handler
 static PROTOCOL_REGISTRY: OnceLock<Mutex<HashMap<i32, WebviewProtocols>>> = OnceLock::new();
-/// 发起请求的 frame 身份,由 scheme factory 的 `create(browser, frame, ..)` 取得,经
-/// `http::Request` 的 extension 交给协议 handler。CEF 对非 frame 发起的请求(service worker、
-/// `CefURLRequest`)给 `frame = NULL`,此时不插入该 extension;dedicated worker 的请求记在创建它的
-/// frame 上。
-///
-/// 另有给 Tauri ACL 用的 [`IpcFrame`] extension,每个请求都插(见 [`attach_request_frame`])。
-///
-/// 不记 frame 的 URL:CEF 的 `frame.url()` 是 UI 线程缓存,到 `DidFinishNavigation` 才刷新,而 IO
-/// 线程上主 frame 的请求每次都换成浏览器当前的主 frame;新文档最早的请求读到的是空串或上一个文档
-/// 的地址。请求来源改由 [`INITIATOR_ORIGIN_HEADER`] 提供。
+/// 发起请求的 frame 身份，经请求 extension 交给 Tauri。文档 URL 只从 CEF 补丁 0007 的头读取。
 #[derive(Debug, Clone)]
 pub(crate) struct RequestFrame {
     pub(crate) is_main: bool,
+    /// CEF 的 frame 标识，子 frame 用它接收事件、Channel 与回退响应。
+    pub(crate) id: Option<String>,
 }
 
 impl RequestFrame {
-    /// 对应的 Tauri ACL frame 位置:capability 的 `frames` 据此匹配。
     pub(crate) fn ipc_frame(&self) -> IpcFrame {
         if self.is_main {
             IpcFrame::Main
@@ -66,13 +58,145 @@ impl RequestFrame {
             IpcFrame::Sub
         }
     }
+
+    pub(crate) fn subframe_id(&self) -> Option<SubframeId> {
+        if self.is_main {
+            return None;
+        }
+        self.id.as_deref().map(SubframeId::new)
+    }
 }
 
-/// IPC 请求(`ipc` / `cef-ipc`)的发起方 origin,由 `GetResourceRequestHandler` 的 `request_initiator`
-/// 换算后写入([`origin_from_initiator`]),协议层用它覆写 `Origin`([`apply_initiator_origin`])。
-/// `request_initiator` 是浏览器在提交导航时按文档算好、随子资源 factory 固定的值,没有上面的竞态,
-/// 也不受渲染进程伪造。`Sec-` 前缀让页面脚本无法自带这个头。
-pub(crate) const INITIATOR_ORIGIN_HEADER: &str = "Sec-Kabegame-Initiator-Origin";
+/// CEF 0007 写入的私有头。空值表示无法归属；不存在表示 CEF 未带补丁。
+pub(crate) const DOCUMENT_URL_HEADER: &str = "Sec-Kabegame-Document-Url";
+pub(crate) const PARENT_DOCUMENT_URL_HEADER: &str = "Sec-Kabegame-Parent-Document-Url";
+const PRIVATE_HEADER_PREFIX: &str = "sec-kabegame-";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DocumentAttribution {
+    pub(crate) patched: bool,
+    pub(crate) document: Option<String>,
+    pub(crate) parent: Option<String>,
+}
+
+impl DocumentAttribution {
+    pub(crate) fn of_request(request: &cef::Request) -> Self {
+        let mut headers = CefStringMultimap::new();
+        request.header_map(Some(&mut headers));
+        Self::from_headers(
+            headers
+                .into_iter()
+                .map(|(name, values)| (name, values.into_iter().next().unwrap_or_default())),
+        )
+    }
+
+    fn from_headers(headers: impl IntoIterator<Item = (String, String)>) -> Self {
+        let mut out = Self::default();
+        for (name, value) in headers {
+            let slot = if name.eq_ignore_ascii_case(DOCUMENT_URL_HEADER) {
+                &mut out.document
+            } else if name.eq_ignore_ascii_case(PARENT_DOCUMENT_URL_HEADER) {
+                &mut out.parent
+            } else {
+                continue;
+            };
+            out.patched = true;
+            *slot = Some(value).filter(|value| !value.is_empty());
+        }
+        out
+    }
+}
+
+/// IPC 主通道与回退通道的逻辑 scheme。
+pub(crate) fn ipc_scheme(url: &str) -> Option<&'static str> {
+    let (scheme, _) = url.split_once(':')?;
+    if scheme.eq_ignore_ascii_case("ipc") {
+        Some("ipc")
+    } else if scheme.eq_ignore_ascii_case(crate::ipc::CEF_IPC_SCHEME) {
+        Some(crate::ipc::CEF_IPC_SCHEME)
+    } else {
+        None
+    }
+}
+
+/// 以浏览器给出的 initiator 为来源；仅对 file: 用文档 URL 细化身份。
+pub(crate) fn ipc_origin(initiator: &str, doc: &DocumentAttribution) -> String {
+    let initiator = initiator.trim();
+    if initiator.is_empty() || initiator == "null" {
+        return "null".to_string();
+    }
+    if !crate::file_access::is_file_url(initiator) {
+        return initiator.to_string();
+    }
+    doc.document
+        .as_deref()
+        .and_then(|document| file_document_origin(initiator, document))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn file_document_origin(initiator: &str, document: &str) -> Option<String> {
+    let mut url = url::Url::parse(document).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    let initiator_host = initiator.get("file://".len()..).unwrap_or_default();
+    if !url
+        .host_str()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case(initiator_host)
+    {
+        return None;
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
+fn lookup_protocol(browser_id: i32, scheme: &str) -> Option<(String, Arc<ProtocolHandler>)> {
+    let guard = registry().lock().ok()?;
+    let entry = guard.get(&browser_id)?;
+    Some((entry.label.clone(), entry.schemes.get(scheme)?.clone()))
+}
+
+fn request_frame_of(frame: &Frame) -> RequestFrame {
+    RequestFrame {
+        is_main: frame.is_main() == 1,
+        id: Some(CefString::from(&frame.identifier()).to_string()).filter(|id| !id.is_empty()),
+    }
+}
+
+// IPC 请求由 GetResourceHandler 直接交给 Tauri 协议处理器（不经过全局 scheme factory）。
+wrap_resource_request_handler! {
+    pub(crate) struct IpcResourceRequestHandler {
+        scheme: &'static str,
+        origin: String,
+    }
+    impl ResourceRequestHandler {
+        fn resource_handler(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _request: Option<&mut cef::Request>,
+        ) -> Option<ResourceHandler> {
+            let (label, protocol) = lookup_protocol(browser?.identifier(), self.scheme)?;
+            Some(CefResourceHandler::new(
+                label,
+                protocol,
+                Arc::new(Mutex::new(ResponseState::default())),
+                frame.map(|frame| request_frame_of(frame)),
+                Some(self.origin.clone()),
+            ))
+        }
+    }
+}
+
+/// 未带 0007 的 CEF 遇到需要文档归属的请求时只警告一次。
+pub(crate) fn report_missing_document_patch() {
+    static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("CEF patch 0007 missing (no {DOCUMENT_URL_HEADER}): IPC and file: access of file: documents are denied until CEF is rebuilt");
+    }
+}
 
 // 已向 CEF 全局注册过 factory 的 scheme 集合(每 scheme 只注册一次)
 static REGISTERED_SCHEMES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -117,20 +241,18 @@ wrap_scheme_handler_factory! {
             _scheme_name: Option<&CefString>,
             _request: Option<&mut cef::Request>,
         ) -> Option<ResourceHandler> {
-            let id = browser?.identifier();
-            let guard = registry().lock().ok()?;
-            let entry = guard.get(&id)?;
-            let protocol = entry.schemes.get(&self.logical_scheme)?.clone();
-            let label = entry.label.clone();
-            // 记下发起请求的是否主 frame(`cef-ipc` 据此拒绝子 frame,见 crate::ipc)
-            let request_frame = frame.map(|frame| RequestFrame {
-                is_main: frame.is_main() == 1,
+            let (label, protocol) = lookup_protocol(browser?.identifier(), &self.logical_scheme)?;
+            // 未归属的 IPC 请求经 scheme factory 兜底时失败关闭。
+            let ipc_origin = ipc_scheme(&format!("{}:", self.logical_scheme)).map(|scheme| {
+                tracing::debug!("unattributed {scheme} request reached the scheme factory");
+                "null".to_string()
             });
             Some(CefResourceHandler::new(
                 label,
                 protocol,
                 Arc::new(Mutex::new(ResponseState::default())),
-                request_frame,
+                frame.map(|frame| request_frame_of(frame)),
+                ipc_origin,
             ))
         }
     }
@@ -143,6 +265,7 @@ wrap_resource_handler! {
         state: Arc<Mutex<ResponseState>>,
         // 发起请求的 frame;`None` 表示 CEF 未给出 frame。
         request_frame: Option<RequestFrame>,
+        ipc_origin: Option<String>,
     }
 
     impl ResourceHandler {
@@ -166,7 +289,10 @@ wrap_resource_handler! {
                     return 1;
                 }
             };
-            apply_initiator_origin(&mut request);
+            strip_private_headers(&mut request);
+            if let Some(origin) = self.ipc_origin.as_deref() {
+                set_origin(&mut request, origin);
+            }
             attach_request_frame(&mut request, self.request_frame.as_ref());
 
             self.state.lock().unwrap().open_in_progress = true;
@@ -366,40 +492,32 @@ pub(crate) fn web_origin(url: &url::Url) -> Option<String> {
     Some(format!("{}://{host}{port}", url.scheme()))
 }
 
-/// 是否 IPC 请求(Tauri 主通道 `ipc://` 或回退通道 `cef-ipc://`)。只有它们的来源要按发起方覆写。
-pub(crate) fn is_ipc_url(url: &str) -> bool {
-    url.split_once(':').is_some_and(|(scheme, _)| {
-        scheme.eq_ignore_ascii_case("ipc") || scheme.eq_ignore_ascii_case(crate::ipc::CEF_IPC_SCHEME)
-    })
-}
-
-/// 把 `request_initiator`(Chromium `url::Origin::Serialize`)换成 IPC 请求的 `Origin` 值:
-/// - `file:` 文档序列化成 `"file://"`(不是合法 URL),写成 `file:///`,Tauri 判成远程 `file:` 来源,
-///   ACL 按 `remote.urls` 匹配(WPE 网页壁纸只得 `wpe-web-capability`);
-/// - 普通 origin 原样;
-/// - opaque(沙箱页、错误页)或缺失写成 `null`,两条通道都拒绝,不会退到别的地址被判成本地来源。
-pub(crate) fn origin_from_initiator(initiator: Option<&str>) -> String {
-    match initiator.map(str::trim) {
-        Some("file://") => "file:///".to_string(),
-        Some(origin) if !origin.is_empty() => origin.to_string(),
-        _ => "null".to_string(),
+/// 内部归属头不传给 Tauri 或其它协议处理器。
+fn strip_private_headers(request: &mut HttpRequest<Vec<u8>>) {
+    let names: Vec<_> = request
+        .headers()
+        .keys()
+        .filter(|name| name.as_str().starts_with(PRIVATE_HEADER_PREFIX))
+        .cloned()
+        .collect();
+    for name in names {
+        request.headers_mut().remove(name);
     }
 }
 
-/// 有 [`INITIATOR_ORIGIN_HEADER`] 时用它覆写 `Origin`,并去掉这个内部头;没有时(非 IPC 请求)不动。
-fn apply_initiator_origin(request: &mut HttpRequest<Vec<u8>>) {
-    if let Some(origin) = request.headers_mut().remove(INITIATOR_ORIGIN_HEADER) {
-        request.headers_mut().insert(http::header::ORIGIN, origin);
-    }
+fn set_origin(request: &mut HttpRequest<Vec<u8>>, origin: &str) {
+    let value = http::HeaderValue::from_str(origin)
+        .unwrap_or_else(|_| http::HeaderValue::from_static("null"));
+    request.headers_mut().insert(http::header::ORIGIN, value);
 }
 
-/// 把发起请求的 frame 交给协议 handler:`RequestFrame`(运行时内部用)与 Tauri ACL 用的
-/// [`IpcFrame`]。extension 由浏览器进程填入、不随请求字节传递,页面无法伪造(请求头可以)。
-/// CEF 没给出 frame 时记为 [`IpcFrame::Unknown`],只有写了 `frames: "any"` 的 capability 能匹配;
-/// 不能留空,Tauri 把缺这个 extension 的请求当主 frame。
+/// frame 位置与子 frame 路由标识由浏览器进程放入 extension，页面无法伪造。
 fn attach_request_frame(request: &mut HttpRequest<Vec<u8>>, frame: Option<&RequestFrame>) {
     if let Some(frame) = frame {
         request.extensions_mut().insert(frame.clone());
+        if let Some(id) = frame.subframe_id() {
+            request.extensions_mut().insert(id);
+        }
     }
     request
         .extensions_mut()
@@ -513,101 +631,107 @@ mod tests {
             .and_then(|value| value.to_str().ok())
     }
 
-    /// 与 `request_to_http` 一样经 `HeaderName` 解析插入(名字转小写)。
-    fn with_initiator(mut request: HttpRequest<Vec<u8>>, origin: &str) -> HttpRequest<Vec<u8>> {
-        request.headers_mut().append(
-            INITIATOR_ORIGIN_HEADER.parse::<http::HeaderName>().unwrap(),
-            origin.parse().unwrap(),
+    #[test]
+    fn ipc_scheme_is_recognized() {
+        assert_eq!(ipc_scheme("ipc://localhost/cmd"), Some("ipc"));
+        assert_eq!(ipc_scheme("CEF-IPC://localhost/"), Some("cef-ipc"));
+        assert_eq!(ipc_scheme("tauri://localhost/"), None);
+    }
+
+    #[test]
+    fn ipc_origin_keeps_initiator_for_non_file_documents() {
+        let doc = DocumentAttribution {
+            document: Some("file:///D:/wpe/index.html".into()),
+            ..Default::default()
+        };
+        assert_eq!(ipc_origin("tauri://localhost", &doc), "tauri://localhost");
+        assert_eq!(
+            ipc_origin("https://example.com", &doc),
+            "https://example.com"
         );
-        request
     }
 
     #[test]
-    fn ipc_urls_are_recognized() {
-        assert!(is_ipc_url("ipc://localhost/plugin%3Aevent%7Clisten"));
-        assert!(is_ipc_url("IPC://localhost/cmd"));
-        assert!(is_ipc_url("cef-ipc://localhost/"));
-        assert!(!is_ipc_url("tauri://localhost/index.html"));
-        assert!(!is_ipc_url("file:///D:/wpe/1/index.html"));
-        assert!(!is_ipc_url("https://ipc.localhost/cmd"));
+    fn ipc_origin_identifies_file_documents() {
+        let doc = DocumentAttribution {
+            document: Some("file:///D:/wpe/1/index.html?x#y".into()),
+            ..Default::default()
+        };
+        assert_eq!(ipc_origin("file://", &doc), "file:///D:/wpe/1/index.html");
     }
 
     #[test]
-    fn initiator_maps_to_ipc_origin() {
-        // `file:` 文档：`url::Origin::Serialize` 给 "file://"
-        assert_eq!(origin_from_initiator(Some("file://")), "file:///");
-        assert_eq!(origin_from_initiator(Some("tauri://localhost")), "tauri://localhost");
-        assert_eq!(origin_from_initiator(Some("http://localhost:1420")), "http://localhost:1420");
-        // opaque 与缺失都不能被判成任何地址
-        assert_eq!(origin_from_initiator(Some("null")), "null");
-        assert_eq!(origin_from_initiator(Some("")), "null");
-        assert_eq!(origin_from_initiator(None), "null");
-        // 换算结果 Tauri 都能当 URL 解析（null 除外，由它拒绝）
-        assert!(url::Url::parse(&origin_from_initiator(Some("file://"))).is_ok());
+    fn ipc_origin_fails_closed() {
+        for initiator in ["null", "", "file://"] {
+            assert_eq!(
+                ipc_origin(initiator, &DocumentAttribution::default()),
+                "null"
+            );
+        }
+        for document in ["about:srcdoc", "tauri://localhost/", "file://other/share/a"] {
+            let doc = DocumentAttribution {
+                document: Some(document.into()),
+                ..Default::default()
+            };
+            assert_eq!(ipc_origin("file://server", &doc), "null");
+        }
     }
 
     #[test]
-    fn initiator_header_overrides_origin() {
-        // `file:` 文档的渲染进程发 "null"，按发起方写成 file:///，内部头被去掉
-        let mut request = with_initiator(request_with_origin(Some("null")), "file:///");
-        apply_initiator_origin(&mut request);
-        assert_eq!(origin_of(&request), Some("file:///"));
-        assert!(request.headers().get(INITIATOR_ORIGIN_HEADER).is_none());
-        // 刚离开网页壁纸的应用页：渲染进程的 Origin 与发起方一致，原样保留
-        let mut request = with_initiator(request_with_origin(Some("tauri://localhost")), "tauri://localhost");
-        apply_initiator_origin(&mut request);
-        assert_eq!(origin_of(&request), Some("tauri://localhost"));
-        // 渲染进程声称的来源与发起方不符：以发起方为准
-        let mut request = with_initiator(request_with_origin(Some("tauri://localhost")), "null");
-        apply_initiator_origin(&mut request);
+    fn document_attribution_reads_headers() {
+        assert!(!DocumentAttribution::from_headers([]).patched);
+        let doc = DocumentAttribution::from_headers([(DOCUMENT_URL_HEADER.into(), String::new())]);
+        assert!(doc.patched);
+        assert_eq!(doc.document, None);
+    }
+
+    #[test]
+    fn private_headers_are_stripped_and_origin_set_once() {
+        let mut request = request_with_origin(Some("tauri://forged"));
+        request.headers_mut().insert(
+            DOCUMENT_URL_HEADER,
+            http::HeaderValue::from_static("file:///D:/secret"),
+        );
+        set_origin(&mut request, "null");
+        strip_private_headers(&mut request);
         assert_eq!(origin_of(&request), Some("null"));
-        // 没有内部头（非 IPC 请求）：不动
-        let mut request = request_with_origin(Some("null"));
-        apply_initiator_origin(&mut request);
-        assert_eq!(origin_of(&request), Some("null"));
-        let mut request = request_with_origin(None);
-        apply_initiator_origin(&mut request);
-        assert_eq!(origin_of(&request), None);
-    }
-
-    fn ipc_frame_of(request: &HttpRequest<Vec<u8>>) -> Option<IpcFrame> {
-        request.extensions().get::<IpcFrame>().copied()
+        assert!(request.headers().get(DOCUMENT_URL_HEADER).is_none());
     }
 
     #[test]
     fn request_frame_is_reported_to_tauri_acl() {
-        // 主 frame
-        let mut request = request_with_origin(Some("tauri://localhost"));
-        attach_request_frame(&mut request, Some(&RequestFrame { is_main: true }));
-        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Main));
-        assert!(request
-            .extensions()
-            .get::<RequestFrame>()
-            .is_some_and(|f| f.is_main));
-
-        // 子 frame
-        let mut request = request_with_origin(Some("tauri://localhost"));
-        attach_request_frame(&mut request, Some(&RequestFrame { is_main: false }));
-        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Sub));
-        assert!(request
-            .extensions()
-            .get::<RequestFrame>()
-            .is_some_and(|f| !f.is_main));
-
-        // CEF 没给出 frame:记为 Unknown(不能缺省,缺省会被 Tauri 当成主 frame)
-        let mut request = request_with_origin(Some("tauri://localhost"));
+        let mut request = request_with_origin(None);
+        attach_request_frame(
+            &mut request,
+            Some(&RequestFrame {
+                is_main: true,
+                id: None,
+            }),
+        );
+        assert_eq!(
+            request.extensions().get::<IpcFrame>(),
+            Some(&IpcFrame::Main)
+        );
+        assert!(request.extensions().get::<SubframeId>().is_none());
+        let mut request = request_with_origin(None);
+        attach_request_frame(
+            &mut request,
+            Some(&RequestFrame {
+                is_main: false,
+                id: Some("3-7".into()),
+            }),
+        );
+        assert_eq!(request.extensions().get::<IpcFrame>(), Some(&IpcFrame::Sub));
+        assert_eq!(
+            request.extensions().get::<SubframeId>(),
+            Some(&SubframeId::new("3-7"))
+        );
+        let mut request = request_with_origin(None);
         attach_request_frame(&mut request, None);
-        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Unknown));
-        assert!(request.extensions().get::<RequestFrame>().is_none());
-    }
-
-    #[test]
-    fn request_frame_does_not_touch_origin() {
-        // 来源只由发起方 origin 决定（`apply_initiator_origin`），frame 位置不改 Origin
-        let mut request = request_with_origin(Some("null"));
-        attach_request_frame(&mut request, Some(&RequestFrame { is_main: true }));
-        assert_eq!(origin_of(&request), Some("null"));
-        assert_eq!(ipc_frame_of(&request), Some(IpcFrame::Main));
+        assert_eq!(
+            request.extensions().get::<IpcFrame>(),
+            Some(&IpcFrame::Unknown)
+        );
     }
 
     #[test]

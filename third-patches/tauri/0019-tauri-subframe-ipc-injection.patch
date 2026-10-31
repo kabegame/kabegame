@@ -1,0 +1,138 @@
+diff --git a/crates/tauri-runtime/src/webview.rs b/crates/tauri-runtime/src/webview.rs
+index 9443c57ac2c5285c4ef79dacb7ca16d08214837f..1e9c43c58ce7656d643452067792f629793d39a8 100644
+--- a/crates/tauri-runtime/src/webview.rs
++++ b/crates/tauri-runtime/src/webview.rs
+@@ -354,6 +354,13 @@ pub struct WebviewAttributes {
+   /// [addDocumentStartJavaScript]: https://developer.android.com/reference/androidx/webkit/WebViewCompat#addDocumentStartJavaScript(android.webkit.WebView,java.lang.String,java.util.Set%3Cjava.lang.String%3E)
+   /// [onPageStarted]: https://developer.android.com/reference/android/webkit/WebViewClient#onPageStarted(android.webkit.WebView,%20java.lang.String,%20android.graphics.Bitmap)
+   pub initialization_scripts: Vec<InitializationScript>,
++  /// Tauri's own IPC bridge scripts (`isTauri` / internals, the invoke script, metadata and `init.js`).
++  ///
++  /// A runtime that reports [`IpcFrame`] and [`SubframeId`] injects them into **every** subframe,
++  /// before any other initialization script; what a subframe may call is decided by the ACL.
++  /// A runtime that does not report frames (wry) must ignore them: its requests carry no
++  /// [`IpcFrame`] and count as the main frame.
++  pub subframe_bridge_scripts: Vec<String>,
+   pub data_directory: Option<PathBuf>,
+   pub drag_drop_handler_enabled: bool,
+   pub clipboard: bool,
+@@ -523,6 +530,7 @@ impl WebviewAttributes {
+       url,
+       user_agent: None,
+       initialization_scripts: Vec::new(),
++      subframe_bridge_scripts: Vec::new(),
+       data_directory: None,
+       drag_drop_handler_enabled: true,
+       clipboard: false,
+diff --git a/crates/tauri/src/manager/webview.rs b/crates/tauri/src/manager/webview.rs
+index ede78976fed194195e9e7058526eff026ae58fde..683ade91ed946cc1a5da1c149f8d5ad0abbd1ec2 100644
+--- a/crates/tauri/src/manager/webview.rs
++++ b/crates/tauri/src/manager/webview.rs
+@@ -165,7 +165,11 @@ impl<R: Runtime> WebviewManager<R> {
+       }
+     }
+ 
+-    all_initialization_scripts.push(main_frame_script(
++    // Tauri's own IPC bridge. The main frame gets it as main-frame-only initialization scripts;
++    // runtimes that report subframes inject the same scripts into every subframe (see
++    // `WebviewAttributes::subframe_bridge_scripts`), where the ACL decides what they may call.
++    // Plugin scripts and the isolation pattern stay out of subframes.
++    let bridge_scripts = vec![
+       r"
+         Object.defineProperty(window, 'isTauri', {
+           value: true,
+@@ -180,10 +184,9 @@ impl<R: Runtime> WebviewManager<R> {
+         }
+       "
+       .to_owned(),
+-    ));
+-    all_initialization_scripts.push(main_frame_script(self.invoke_initialization_script.clone()));
+-    all_initialization_scripts.push(main_frame_script(format!(
+-      r#"
++      self.invoke_initialization_script.clone(),
++      format!(
++        r#"
+           Object.defineProperty(window.__TAURI_INTERNALS__, 'metadata', {{
+             value: {{
+               currentWindow: {{ label: {current_window_label} }},
+@@ -191,15 +194,18 @@ impl<R: Runtime> WebviewManager<R> {
+             }}
+           }})
+         "#,
+-      current_window_label = serde_json::to_string(window_label)?,
+-      current_webview_label = serde_json::to_string(&label)?,
+-    )));
+-    all_initialization_scripts.push(main_frame_script(self.initialization_script(
+-      app_manager,
+-      &ipc_init.into_string(),
+-      &pattern_init.into_string(),
+-      use_https_scheme,
+-    )?));
++        current_window_label = serde_json::to_string(window_label)?,
++        current_webview_label = serde_json::to_string(&label)?,
++      ),
++      self.initialization_script(
++        app_manager,
++        &ipc_init.into_string(),
++        &pattern_init.into_string(),
++        use_https_scheme,
++      )?,
++    ];
++    all_initialization_scripts.extend(bridge_scripts.iter().cloned().map(main_frame_script));
++    webview_attributes.subframe_bridge_scripts = bridge_scripts;
+ 
+     all_initialization_scripts.extend(plugin_init_scripts);
+ 
+@@ -790,6 +796,52 @@ fn is_local_network_url(url: &url::Url) -> bool {
+ mod tests {
+   use super::*;
+ 
++  /// The subframe bridge is exactly Tauri's own main-frame bridge (same strings, same order), and
++  /// leaves out plugin initialization scripts and the scripts the webview was built with.
++  #[test]
++  fn subframe_bridge_scripts_are_the_main_frame_bridge() {
++    use crate::{sealed::ManagerBase, test::mock_app};
++    use tauri_runtime::webview::WebviewAttributes;
++
++    let app = mock_app();
++    let mut attributes = WebviewAttributes::new(WebviewUrl::default());
++    attributes
++      .initialization_scripts
++      .push(InitializationScript {
++        script: "window.customScript = 1".into(),
++        for_main_frame_only: false,
++      });
++    let pending = PendingWebview::new(attributes, "main").unwrap();
++    let pending = app
++      .manager()
++      .webview
++      .prepare_pending_webview(pending, "main", "main", &app)
++      .unwrap();
++    let attributes = &pending.webview_attributes;
++    let bridge = &attributes.subframe_bridge_scripts;
++
++    assert_eq!(bridge.len(), 4);
++    for (script, initialization) in bridge.iter().zip(&attributes.initialization_scripts) {
++      assert_eq!(script, &initialization.script);
++      assert!(initialization.for_main_frame_only);
++    }
++    assert!(bridge[0].contains("isTauri"));
++    assert!(bridge[1].contains(app.manager().webview.invoke_key()));
++    assert!(bridge[2].contains("currentWebview"));
++    assert!(
++      bridge
++        .iter()
++        .all(|script| !script.contains("window.customScript"))
++    );
++    // the webview's own scripts still follow the bridge in the main frame list
++    assert!(
++      attributes
++        .initialization_scripts
++        .iter()
++        .any(|script| script.script == "window.customScript = 1" && !script.for_main_frame_only)
++    );
++  }
++
+   #[test]
+   fn local_network_url() {
+     assert!(is_local_network_url(&"http://localhost".parse().unwrap()));
