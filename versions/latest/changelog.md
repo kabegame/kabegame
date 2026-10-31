@@ -30,9 +30,12 @@
 - 修复下载时偶发「UNIQUE constraint failed: images.local_path」：同一帖子多张同名图片并发下载不再互相覆盖、丢图，会依次存成 `name.jpg`、`name(1).jpg`……；下载目录同时是文件夹画册时，新下载的图片也会立刻进入该画册，不再与文件夹同步抢着入库。
 - Windows 桌面版畅游打开 https 网站时，地址同步、一键下载、右键下载图片和页面内提示等功能全部失效的问题。
 - 畅游时（尤其开着开发者工具）右键图片不再叠出两个「下载图片」菜单、要点两次才关闭；页面加载时的地址上报等也不再重复发送。
+- 桌面网页壁纸切换后有时不再跟随属性与界面语言变化、偶尔只显示「请选择目录」之类的空白提示的问题；同时堵住了网页壁纸在切换瞬间可能取得应用主界面权限的漏洞。
+- 网页壁纸带步长的滑块属性，在输入框直接键入的数值也会对齐到步长（例如步长 0.25 时键入 1.3 得到 1.25），与拖动滑块一致。
 
 ### Internal
 - WPE 网页壁纸用户属性：值存图片 metadata 的 `userProperties`，经新增的 `Storage::rewrite_image_metadata` 事务改写并发 `metadataId` 补丁驱动垫片与面板重拉；CEF 运行时文件策略新增 `grant_file_documents`，按窗口与当前根目录追加放行用户选的文件 / 目录（换根清空）；显示条件解释器 `utils/wpeProperties.ts`、WPE 内置词表只读读取安装目录。
+- CEF 运行时 IPC 来源改按发起方 origin 判定：`ipc` / `cef-ipc` 请求在 `GetResourceRequestHandler` 里取 factory 级 `request_initiator` 写入内部头 `Sec-Kabegame-Initiator-Origin`，协议层据此覆写 `Origin`（`file:` → `file:///`，opaque → `null`）；删除依赖 `frame.url()` 的 `pin_file_frame_origin`（CEF 的 frame URL 到 `DidFinishNavigation` 才刷新，新文档最早的请求读到空串或旧地址）；`cef-ipc` 不合法 `Origin` 直接拒绝，不再退到 frame URL 或 webview 初始 URL。WPE 滑块用户值在 `apply_changes` 按 `step` 对齐，`KbNumber` 新增 `stepStrictly`。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 0013：Windows 改用原生 `tauri://localhost` / `ipc://localhost`；CEF runtime 删除 `http://<scheme>.localhost` 映射并统一三平台 scheme。拉取后须重新应用 tauri 补丁序列。
 - CEF 补丁 0006 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。

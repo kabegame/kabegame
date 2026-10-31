@@ -122,8 +122,11 @@ Command <name> not allowed by ACL
 
 `file:` 文档的 `Origin` 请求头是 `null`。CEF runtime 的 `cef-ipc` 回退通道过去拿不到合法 Origin 时会退到 webview
 初始 URL（应用页），请求被 Tauri 判成 `Origin::Local`，于是本地 capability（`main-capability`）的全部命令都能调。
-现在 `tauri-runtime-cef` 在协议层把 `file:` frame 的 `Origin` 改写成 frame URL（`protocol::pin_file_frame_origin`），
-Tauri 判成 `Origin::Remote { url: file:///… }`，只有 `remote.urls` 匹配它的 capability 生效。`RemoteUrlPattern`
+现在 `tauri-runtime-cef` 在协议层按发起方 origin（`GetResourceRequestHandler` 的 factory 级 `request_initiator`）覆写
+IPC 请求的 `Origin`（`protocol::origin_from_initiator`）：`file:` 文档写成 `file:///`，Tauri 判成
+`Origin::Remote { url: file:/// }`，只有 `remote.urls` 匹配它的 capability 生效；opaque 来源写成 `null`，两条通道都拒绝，
+`cef-ipc` 不再退到 frame URL 或初始 URL。不要用 CEF 的 `frame.url()` 判来源：新文档提交后的一段时间里它是空串或上一个
+文档的地址，退到应用页会让 `file:` 页面拿到本地 capability。`RemoteUrlPattern`
 对 `file:///*` 的匹配有单测（`kabegame/src/commands/wpe_web.rs`）。给网页壁纸开新命令时只加进
 `permissions/wpe-web.toml`，不要加 `core:default` 或把壁纸窗口的本地 capability 改成也接受远程来源。
 

@@ -790,8 +790,11 @@ mod imp {
             // Referer = 当前主框架页(即用户正在浏览的来源页),还原浏览器从页面 P
             // 点击下载图片时本应带的 Referer(策略 ORIGIN:仅发送来源页 origin)。
             //
-            // 非下载请求：登记了任一文件访问能力（0004 / 0005）的 webview 的 `file:` 请求按发起
-            // frame 分档，决定挂不挂目录闸门（见 file_access 模块注释）。
+            // 非下载请求：
+            // - IPC 请求（`ipc` / `cef-ipc`）按 factory 级 `request_initiator` 标出来源，协议层据此
+            //   覆写 `Origin`（见 `protocol::INITIATOR_ORIGIN_HEADER`）；
+            // - 登记了任一文件访问能力（0004 / 0005）的 webview 的 `file:` 请求按发起 frame 分档，
+            //   决定挂不挂目录闸门（见 file_access 模块注释）。
             fn resource_request_handler(
                 &self,
                 browser: Option<&mut Browser>,
@@ -803,9 +806,18 @@ mod imp {
                 _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
             ) -> Option<ResourceRequestHandler> {
                 if is_download != 1 {
-                    let is_file_request = request
+                    let url = request
                         .map(|request| CefString::from(&request.url()).to_string())
-                        .is_some_and(|url| crate::file_access::is_file_url(&url));
+                        .unwrap_or_default();
+                    let initiator = request_initiator
+                        .map(|initiator| initiator.to_string())
+                        .unwrap_or_default();
+                    if crate::protocol::is_ipc_url(&url) {
+                        return Some(IpcInitiatorHandler::new(crate::protocol::origin_from_initiator(
+                            Some(&initiator),
+                        )));
+                    }
+                    let is_file_request = crate::file_access::is_file_url(&url);
                     if !is_file_request
                         || !crate::file_access::is_file_document_webview(&self.label)
                     {
@@ -820,9 +832,6 @@ mod imp {
                     let frame_is_main = frame.as_ref().is_some_and(|frame| frame.is_main() == 1);
                     let frame_url = frame
                         .map(|frame| CefString::from(&frame.url()).to_string())
-                        .unwrap_or_default();
-                    let initiator = request_initiator
-                        .map(|initiator| initiator.to_string())
                         .unwrap_or_default();
                     let app_page_subresource = is_navigation == 0
                         && frame_is_main
@@ -1031,6 +1040,32 @@ mod imp {
                         ReferrerPolicy::ORIGIN,
                     );
                 }
+                ReturnValue::CONTINUE
+            }
+        }
+    }
+
+    // IPC 请求的来源标记：无条件写入（覆盖同名头），协议层读出后改写 `Origin` 并去掉它。
+    wrap_resource_request_handler! {
+        pub(crate) struct IpcInitiatorHandler {
+            origin: String,
+        }
+        impl ResourceRequestHandler {
+            fn on_before_resource_load(
+                &self,
+                _browser: Option<&mut Browser>,
+                _frame: Option<&mut Frame>,
+                request: Option<&mut Request>,
+                _callback: Option<&mut Callback>,
+            ) -> ReturnValue {
+                let Some(request) = request else {
+                    return ReturnValue::CANCEL;
+                };
+                request.set_header_by_name(
+                    Some(&CefString::from(crate::protocol::INITIATOR_ORIGIN_HEADER)),
+                    Some(&CefString::from(self.origin.as_str())),
+                    1,
+                );
                 ReturnValue::CONTINUE
             }
         }

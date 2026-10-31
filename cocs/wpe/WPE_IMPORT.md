@@ -211,9 +211,15 @@ Kabegame 在桌面上照此做：
   - `file:` 文档的 `Origin` 请求头是 `null`。Phase 4 文档曾写「`cef-ipc` 入口本来也拒绝」，这不成立：Tauri 的
     `ipc://` 主通道解析 `null` 失败后前端改走 `cef-ipc` 回退通道，回退通道拿不到合法 Origin 时退到 webview 初始 URL
     （应用页），请求被当成 `Origin::Local`、拿到 `main-capability` 的全部命令；当时只是没注入 invoke key，缺口没暴露。
-  - 现在运行时在协议层统一修正（`tauri-runtime-cef` 的 `protocol::pin_file_frame_origin`）：scheme factory 记下发起请求
-    的 frame URL，`file:` frame 的请求把 `Origin` 改写成 frame URL；`cef-ipc` 的来源取值顺序为「`Origin` 头 → frame URL
-    → 初始 URL」。两条通道都判成 `Origin::Remote { url: file:///… }`。
+  - 现在运行时在协议层统一修正：`ipc` / `cef-ipc` 请求在 `GetResourceRequestHandler` 里按 factory 级
+    `request_initiator`（浏览器提交导航时按文档算好的发起方 origin，没有竞态，渲染进程改不了）写入内部头
+    `Sec-Kabegame-Initiator-Origin`，协议层用它覆写 `Origin`（`protocol::origin_from_initiator` / `apply_initiator_origin`）：
+    `file:` 文档写成 `file:///`，两条通道都判成 `Origin::Remote { url: file:/// }`；opaque 来源写成 `null` 被拒；
+    `cef-ipc` 只认合法 `Origin`，不再退到 frame URL 或初始 URL。
+  - 起初按 `frame.url()` 改写（`pin_file_frame_origin`，Phase 7 回归后删除）：CEF 的 frame URL 是 UI 线程缓存，到
+    `DidFinishNavigation` 才刷新，IO 线程上主 frame 的请求还会换成浏览器当前的主 frame，新文档最早的请求读到空串或上一个
+    文档的地址（CEF #4034 维护者：导航完成前不保证更新）。表现是壁纸导航后垫片的 listen / pull 常拿到 `Origin: null` 被拒
+    （实测 17 次导航 12 次），同一竞态下 `cef-ipc` 回退还会退到初始 URL（应用页），把 `file:` 页面判成本地来源。
   - 对这个来源生效的只有 `capabilities/wpe-web.json` 的 `wpe-web-capability`：`windows: ["wallpaper"]`、
     `remote.urls: ["file:///*"]`、`local: false`（应用页回到壁纸窗口时仍只受 `main-capability` 约束），权限只有
     `core:event:allow-listen` / `allow-unlisten` 与 `permissions/wpe-web.toml` 的 `wpe_web_pull_state`；不给
@@ -429,7 +435,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 （`protocol::RequestFrame`）交给 `ipc.rs` 的 `post_message_request`：只接受主 frame，或与该 webview 初始 URL 同源的
 子 frame，其余返回 400。三平台原生 `tauri://localhost` 的同源子 frame 由 `web_origin` 比较；畅游窗口的注入脚本跑在主 frame（Origin 是站点源），因此按「主 frame」放行而不是按「应用源」；
 CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 handler 承接，不在本防御范围内（仍靠 invoke key）。
-`RequestFrame` 同时带 frame URL：`file:` frame 的 `Origin` 在协议层被改写成 frame URL，两条通道都按远程 `file:` 来源走 ACL
+两条 IPC 通道的 `Origin` 都在协议层按发起方 origin 覆写，`file:` 文档按远程 `file:` 来源走 ACL
 （见上「初始化脚本照常注入，IPC 按远程 `file:` 来源限权」）。预览 iframe 即便越过前两道，`file:` 来源也只匹配绑定在
 `wallpaper` 窗口的 `wpe-web-capability`，在 `main` 里零授权。
 
@@ -438,6 +444,8 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
 ### 用户属性（第二阶段 Phase 7）
 
 `x-wpe/web` 的用户改动存于该图片 metadata 顶层的 `userProperties` 对象，只保存与作者默认值不同的键。写命令 `set_wpe_web_user_properties` 在 `Storage::rewrite_image_metadata` 的单个事务中读取旧数据、插入新 metadata 行、只改指这张图片并清理无引用旧行；搜索词映射、插件信息和模板沿用旧行。提交后广播 `metadataId` 字段补丁。`get_wpe_web_properties` 返回有序、已本地化的属性视图；桌面与预览的状态拉取按「作者默认值 + 用户值」组装。
+
+带作者 `step` 的滑块，拖动与输入框键入的值都对齐到 `min + k×step`（缺 `min` 从 0 起算）：前端 `KbNumber` 的 `stepStrictly` 提交前对齐，后端 `apply_changes` 写入前再对齐一次，外部写入也得到同样的值；作者默认值不对齐，没有用户值时页面拿到原值。
 
 预览右栏和设置页当前网页壁纸都可打开属性面板。面板本地草稿立即改变显示条件，300ms 防抖后串行提交；同张图片的 `metadataId` 补丁和界面语言变化触发重读。条件由受限解释器处理字面量、运算、三元、数组、`<key>.value` 及五个字符串 / 数组方法；不认识的条件默认显示，不执行任意脚本。属性说明和标签经 HTML 白名单净化。
 
@@ -475,7 +483,7 @@ CEF 未给出 frame 时维持原行为。`ipc://` 主通道由 Tauri 自己的 h
   `allow_app_local_resources("main")`）、`commands/wpe_web.rs`（`set_wpe_web_preview` 设根目录并返回入口）、
   `apps/kabegame/src/components/wallpaper/{WallpaperStage.vue,wpeWebBridge.ts}`
   （`createWebFrame` 赋 `src` / `teardownWeb` / `isInitialBlank`、`setWpeWebPreview` 串行链）
-- `src-tauri/tauri-runtime-cef/src/{protocol.rs,ipc.rs}`（IPC 纵深防御、`file:` frame 的 `Origin` 改写与来源回退顺序）、
+- `src-tauri/tauri-runtime-cef/src/{protocol.rs,ipc.rs}`（IPC 纵深防御、按发起方 origin 覆写 IPC `Origin`，`webview.rs` 的 `IpcInitiatorHandler` 写入发起方）、
   `file_access.rs` / `webview.rs` / `subprocess.rs`（`FilePolicy` 两项能力 + 按发起 frame 分档的闸门、`app_page_open`、
   `extra_info_keys` 写建窗键、`file:` 目录拦截、初始化脚本注入、鼠标注入）、`third-patches/cef/0004-per-browser-file-access.patch`、
   `third-patches/cef/0005-app-page-local-resources.patch`、`third-patches/cef/0006-app-page-file-subresources.patch`

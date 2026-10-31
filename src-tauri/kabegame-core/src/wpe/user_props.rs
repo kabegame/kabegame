@@ -189,12 +189,7 @@ pub fn normalize_value(def: &WpePropDef, value: &Value) -> Result<Value, String>
             if let Some(max) = def.max {
                 v = v.min(max);
             }
-            let number = if v.fract() == 0.0 && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
-                Number::from(v as i64)
-            } else {
-                Number::from_f64(v).ok_or_else(bad)?
-            };
-            Ok(Value::Number(number))
+            slider_number(v).ok_or_else(bad)
         }
         WpePropKind::Combo => {
             let text = value
@@ -250,8 +245,44 @@ pub fn normalize_value(def: &WpePropDef, value: &Value) -> Result<Value, String>
     }
 }
 
+/// 滑块数值入 JSON：整数存整数，其余存浮点。
+fn slider_number(v: f64) -> Option<Value> {
+    if v.fract() == 0.0 && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
+        return Some(Value::Number(Number::from(v as i64)));
+    }
+    Number::from_f64(v).map(Value::Number)
+}
+
+/// 十进制小数位数（`f64` 的 `Display` 不用科学计数法）。
+fn decimals(v: f64) -> usize {
+    format!("{v}")
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len())
+}
+
+/// 用户写入的滑块值按作者 `step` 对齐到 `min + k×step`（缺 `min` 从 0 起算），再夹回范围，
+/// 并按步长与起点的小数位消掉浮点噪声。作者默认值不对齐：没有用户值时页面拿到的是原值。
+fn snap_to_step(def: &WpePropDef, value: Value) -> Value {
+    let Some(step) = def.step.filter(|step| step.is_finite() && *step > 0.0) else {
+        return value;
+    };
+    let Some(v) = value.as_f64().filter(|_| def.kind == WpePropKind::Slider) else {
+        return value;
+    };
+    let base = def.min.unwrap_or(0.0);
+    let mut snapped = base + ((v - base) / step).round() * step;
+    if let Some(max) = def.max {
+        snapped = snapped.min(max);
+    }
+    if let Some(min) = def.min {
+        snapped = snapped.max(min);
+    }
+    let scale = 10f64.powi(decimals(step).max(decimals(base)).min(10) as i32);
+    slider_number((snapped * scale).round() / scale).unwrap_or(value)
+}
+
 /// 把 `{ key: 新值 | null }` 套到 metadata 上（`null` = 恢复默认），返回新的整份 metadata；没有变化返回
-/// `None`。键不存在或不可编辑时整个请求报错；归一后等于作者默认值的键删掉，段为空时整段去掉。
+/// `None`。键不存在或不可编辑时整个请求报错；滑块值按步长对齐；归一后等于作者默认值的键删掉，段为空时整段去掉。
 pub fn apply_changes(raw: &Value, changes: &Map<String, Value>) -> Result<Option<Value>, String> {
     let defs = parse_defs(raw);
     let mut values = user_values(raw);
@@ -267,7 +298,7 @@ pub fn apply_changes(raw: &Value, changes: &Map<String, Value>) -> Result<Option
             values.remove(key);
             continue;
         }
-        let normalized = normalize_value(def, value)?;
+        let normalized = snap_to_step(def, normalize_value(def, value)?);
         if matches!(def.kind, WpePropKind::File | WpePropKind::Directory)
             && normalized == Value::String(String::new())
             && def.default.is_none()
@@ -496,6 +527,34 @@ mod tests {
             .unwrap()
             .get(USER_PROPERTIES_KEY)
             .is_none());
+    }
+
+    #[test]
+    fn slider_writes_snap_to_step() {
+        let mut source = raw();
+        source["general"]["properties"]["rate"] =
+            json!({"type":"slider","value":1,"min":0.5,"max":2,"step":0.25});
+        source["general"]["properties"]["odd"] =
+            json!({"type":"slider","value":0.3,"min":0,"max":1,"step":0.3});
+        let write = |key: &str, value: Value| {
+            let mut changes = Map::new();
+            changes.insert(key.into(), value);
+            apply_changes(&source, &changes)
+                .unwrap()
+                .map(|next| user_values(&next).get(key).cloned())
+                .unwrap_or_default()
+        };
+        // 输入框键入的值对齐到 min + k×step
+        assert_eq!(write("rate", json!(1.3)), Some(json!(1.25)));
+        assert_eq!(write("rate", json!(1.4)), Some(json!(1.5)));
+        assert_eq!(write("rate", json!(5)), Some(json!(2)));
+        assert_eq!(write("rate", json!(0.6)), Some(json!(0.5)));
+        // 对齐后等于默认值：不留键
+        assert_eq!(write("rate", json!(1.1)), None);
+        // 上限不在网格上时停在最近的格点，不越过 max；结果不带浮点噪声
+        assert_eq!(write("odd", json!(1)), Some(json!(0.9)));
+        // 没有 step 的滑块不对齐
+        assert_eq!(write("slider", json!(33.3)), Some(json!(33.3)));
     }
 
     #[test]

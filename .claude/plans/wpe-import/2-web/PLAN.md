@@ -302,7 +302,7 @@ Phase 1 还发现了 8 处与本计划设计冲突或缺失的地方，列在 [A
   宿主页调 `get_wpe_web_state`，并用 `useTauriProxy()` 代为 listen（`kbEvent$` 合并成一条管道转发）。宿主不主动推送。
 - 重拉触发：`setting-change` 的 `language`；本张图片的 `metadataId` 补丁（metadata 按 id 不可变，属性一改就换 id）。
   load 后首次全量投递；之后用户属性按键差异、通用属性整份；首次投递后页面换 listener 时补投全量；乱序按垫片的拉取编号丢弃。
-- 运行时把 `file:` frame 的 IPC `Origin` 改写成 frame URL（否则回退到应用页、被当成本地来源拿到全部权限），
+- 运行时把 `file:` 文档的 IPC `Origin` 写成远程 `file:` 来源（否则回退到应用页、被当成本地来源拿到全部权限；起初按 frame URL 改写，导航后有竞态，Phase 7 回归后改为按发起方 origin `request_initiator` 覆写），
   并删除 Phase 4 的「`file:` 文档不注入初始化脚本」规则。
 - 新增 `wpe-web-capability`（壁纸窗口 + 远程 `file:///*`）：只开 `wpe_web_pull_state` 与事件 `listen` / `unlisten`。
 - Tauri 不在导航时清 JS 事件监听：补丁 0011 加 `clear_js_listeners()`，`WallpaperWindow` 每次导航成功后调用。

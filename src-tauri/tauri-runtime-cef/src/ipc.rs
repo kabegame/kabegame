@@ -20,10 +20,12 @@
 //! 放行不扩大攻击面);其余返回 400。frame 身份由 scheme factory 的 `frame.is_main()` 提供
 //! (见 [`crate::protocol::RequestFrame`]);CEF 未给出 frame 时维持原行为。
 //!
-//! 来源判定:Tauri 按交给 `ipc_handler` 的请求 URI 区分本地 / 远程来源。取值顺序是
-//! `Origin` 头 → 发起请求的 frame URL → webview 初始 URL;`file:` 文档(WPE 网页壁纸)的
-//! `Origin` 已在协议层改写成 frame URL,所以它总被判成远程 `file:` 来源,只拿到
-//! `remote.urls` 匹配它的 capability,不会退到应用页 URL 被当成本地来源。
+//! 来源判定:Tauri 按交给 `ipc_handler` 的请求 URI 区分本地 / 远程来源,这里只取 `Origin` 头。
+//! 两条通道的 `Origin` 都已在协议层按发起方 origin(factory 级 `request_initiator`)覆写
+//! (见 [`crate::protocol::INITIATOR_ORIGIN_HEADER`]):`file:` 文档(WPE 网页壁纸)写成 `file:///`,
+//! 判成远程 `file:` 来源,只拿到 `remote.urls` 匹配它的 capability;opaque 来源写成 `null`,直接拒绝。
+//! 不退到 frame URL 或 webview 初始 URL:CEF 的 frame URL 在新文档提交后的一段时间里是空串或上一个
+//! 文档的地址,退到应用页会让 `file:` 页面被判成本地来源、拿到应用页的全部权限。
 
 use std::{borrow::Cow, sync::Mutex};
 
@@ -101,14 +103,14 @@ pub(crate) fn install_post_message_bridge<T: UserEvent>(
 
 fn post_message_request(
     request: HttpRequest<Vec<u8>>,
-    fallback_url: &str,
+    initial_url: &str,
 ) -> Result<HttpRequest<String>, String> {
     if request.method() != http::Method::POST {
         return Err("CEF IPC postMessage only accepts POST".to_string());
     }
 
     if let Some(frame) = request.extensions().get::<RequestFrame>() {
-        if !frame.is_main && !is_same_origin_as(&request, fallback_url) {
+        if !frame.is_main && !is_same_origin_as(&request, initial_url) {
             return Err("CEF IPC postMessage is only accepted from the main frame".to_string());
         }
     }
@@ -116,25 +118,14 @@ fn post_message_request(
     // Tauri 的 handle_ipc_message 会对该 URI 做 `Url::parse(...).expect(...)`;
     // opaque origin(错误页、Cloudflare 拦截页、沙箱 iframe)的 Origin 头是字面量
     // "null",能过 http::Uri 但过不了 url::Url,必须在此过滤,否则整个进程 abort。
-    // 回退顺序:Origin 头 → 发起请求的 frame URL → webview 初始 URL。已知 frame 时不再
-    // 退回初始 URL(应用页):那会让任意 opaque 来源被 Tauri 判成本地来源(`file:` frame
-    // 的 Origin 已在协议层改写,见 `crate::protocol::pin_file_frame_origin`)。
-    let frame_url = request
-        .extensions()
-        .get::<RequestFrame>()
-        .and_then(|frame| frame.url.clone());
+    // 不合法就拒绝,不找替代地址(见模块注释「来源判定」)。
     let uri = request
         .headers()
         .get(http::header::ORIGIN)
         .and_then(|value| value.to_str().ok())
         .filter(|value| url::Url::parse(value).is_ok())
         .map(str::to_string)
-        .or(frame_url.filter(|url| url::Url::parse(url).is_ok()))
-        .unwrap_or_else(|| fallback_url.to_string());
-
-    if url::Url::parse(&uri).is_err() {
-        return Err(format!("CEF IPC postMessage origin is not an absolute URL: {uri}"));
-    }
+        .ok_or_else(|| "CEF IPC postMessage requires a valid Origin header".to_string())?;
 
     let body = String::from_utf8(request.into_body())
         .map_err(|_| "CEF IPC postMessage body must be UTF-8".to_string())?;
@@ -196,7 +187,7 @@ mod tests {
     use super::*;
 
     fn request(origin: Option<&str>, frame: Option<bool>) -> HttpRequest<Vec<u8>> {
-        request_from(origin, frame.map(|is_main| RequestFrame { is_main, url: None }))
+        request_from(origin, frame.map(|is_main| RequestFrame { is_main }))
     }
 
     fn request_from(origin: Option<&str>, frame: Option<RequestFrame>) -> HttpRequest<Vec<u8>> {
@@ -241,46 +232,31 @@ mod tests {
         assert!(post_message_request(request(Some("https://example.com"), None), APP).is_ok());
     }
 
-    fn main_frame_at(url: &str) -> Option<RequestFrame> {
-        Some(RequestFrame {
-            is_main: true,
-            url: Some(url.to_string()),
-        })
-    }
-
     /// Tauri 的 `handle_ipc_message` 实际拿到的来源：`Url::parse(request.uri().to_string())`。
     fn tauri_url(request: HttpRequest<String>) -> String {
         url::Url::parse(&request.uri().to_string()).unwrap().to_string()
     }
 
     #[test]
-    fn missing_origin_falls_back_to_frame_url() {
-        const ENTRY: &str = "file:///D:/wpe/3679122549/index.html";
-        // 缺 Origin、已知 frame URL：取 frame URL，不退到应用页
-        let request = post_message_request(request_from(None, main_frame_at(ENTRY)), APP).unwrap();
-        assert_eq!(tauri_url(request), ENTRY);
-        // Origin 为 null 同理
-        let request = post_message_request(request_from(Some("null"), main_frame_at(ENTRY)), APP).unwrap();
-        assert_eq!(tauri_url(request), ENTRY);
-        // 协议层已改写 Origin 的情形（`pin_file_frame_origin`）
-        let request = post_message_request(request_from(Some(ENTRY), main_frame_at(ENTRY)), APP).unwrap();
-        assert_eq!(tauri_url(request), ENTRY);
+    fn file_document_origin_is_remote_file() {
+        // 协议层按发起方写成 file:///（`crate::protocol::origin_from_initiator`）
+        let request = post_message_request(request(Some("file:///"), Some(true)), APP).unwrap();
+        assert_eq!(tauri_url(request), "file:///");
     }
 
     #[test]
-    fn valid_origin_wins_over_frame_url() {
-        let request = post_message_request(
-            request_from(Some("https://example.com"), main_frame_at("https://example.com/a/b")),
-            APP,
-        )
-        .unwrap();
+    fn invalid_origin_is_rejected_without_fallback() {
+        // 新文档刚提交、frame URL 还没刷新时，以前会退到初始 URL（应用页）被判成本地来源
+        assert!(post_message_request(request(Some("null"), Some(true)), APP).is_err());
+        assert!(post_message_request(request(None, Some(true)), APP).is_err());
+        assert!(post_message_request(request(Some("null"), None), APP).is_err());
+        assert!(post_message_request(request(None, None), APP).is_err());
+    }
+
+    #[test]
+    fn valid_origin_is_used_as_is() {
+        let request = post_message_request(request(Some("https://example.com"), Some(true)), APP).unwrap();
         assert_eq!(tauri_url(request), "https://example.com/");
-    }
-
-    #[test]
-    fn unknown_frame_url_falls_back_to_initial_url() {
-        let request = post_message_request(request(None, Some(true)), APP).unwrap();
-        assert_eq!(tauri_url(request), APP);
     }
 
     #[test]

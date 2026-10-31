@@ -390,7 +390,7 @@ V.evalCondition = function (e) {
 | 越界拦截 | `tauri-runtime-cef/src/file_access.rs` 的 `check_file_request`，在 `on_before_resource_load` 里取消：不在当前壁纸目录内（两端都 `canonicalize`）、符号链接、目录、不存在的 `file:` 请求 | 同一函数按 `main` 的根目录拦截；根目录由 `set_wpe_web_preview` 在预览挂载 / 卸载时设 / 清，不预览时为空、拒绝全部 `file:` |
 | MIME | 由 Chromium 按扩展名判定；`file:` 不走 HTTP 缓存 | 同左（Phase 6a 删除了 `/wpe` 专属 MIME 表与 `serve_wpe_html`） |
 | Tauri 脚本 | `file:` 主 frame 照常注入（Phase 5 删除了 Phase 4 的跳过规则）；Tauri 自身脚本只进主 frame，页面的嵌套 iframe 拿不到 invoke key；all-frames 的 WPE 垫片按地址自判启用 | Tauri 脚本只注入主 frame，`file:` iframe 里没有；all-frames 垫片在父窗口即 top 的 `file:` 子 frame 里启用 |
-| IPC | `file:` 文档 Origin 为 `null`；运行时在协议层把 `file:` frame 请求的 `Origin` 改写成 frame URL（`protocol::pin_file_frame_origin`），两条通道都判成远程 `file:///…`，只有 `wpe-web-capability` 生效（`wpe_web_pull_state` + 事件 `listen` / `unlisten`）。Phase 4 写的「`cef-ipc` 入口直接拒绝」不成立：回退通道会退到应用页 URL、被当成本地来源 | `cef-ipc` 只收主 frame 或与 webview 初始 URL 同源的子 frame（`ipc.rs`）；iframe 碰不到 IPC，拉取与 listen 经 `postMessage` 由宿主页代办（`wpeWebBridge.ts` + `useTauriProxy`，回消息目标源用 `"*"`、只认 `event.source`）；即便到 ACL，`file:` 来源只匹配绑定在 `wallpaper` 的 `wpe-web-capability`，在 `main` 里零授权 |
+| IPC | `file:` 文档 Origin 为 `null`；运行时在协议层按发起方 origin（factory 级 `request_initiator`）覆写 IPC 请求的 `Origin`，`file:` 文档写成 `file:///`（起初按 frame URL 改写，导航后新文档最早的请求读到空串或旧地址，Phase 7 回归后改掉），两条通道都判成远程 `file:///`，只有 `wpe-web-capability` 生效（`wpe_web_pull_state` + 事件 `listen` / `unlisten`）。Phase 4 写的「`cef-ipc` 入口直接拒绝」不成立：回退通道会退到应用页 URL、被当成本地来源 | `cef-ipc` 只收主 frame 或与 webview 初始 URL 同源的子 frame（`ipc.rs`）；iframe 碰不到 IPC，拉取与 listen 经 `postMessage` 由宿主页代办（`wpeWebBridge.ts` + `useTauriProxy`，回消息目标源用 `"*"`、只认 `event.source`）；即便到 ACL，`file:` 来源只匹配绑定在 `wallpaper` 的 `wpe-web-capability`，在 `main` 里零授权 |
 | `localStorage` 源 | `file://`，跨重启稳定，所有网页壁纸共用 | 与桌面同一个 `file://` 源，但按顶层站点（`localhost:1420`）分区、与桌面**不互通**，自身跨重启稳定（Phase 6a 之前是随机端口的 HTTP 源；2026-10-29 实测） |
 | 鼠标 | Windows：`wallpaper/input_forward.rs` 每 16ms 轮询，照 §4.5 转发移动与左键；挂载后 `AttachThreadInput(…, FALSE)` 与 Explorer 解除输入队列关联（`tauri-plugin-wemt`） | 页面本身可交互（iframe 接收指针事件） |
 | 带声自动播放 | 运行时全局 `autoplay-policy=no-user-gesture-required` | 同一进程，同一策略 |
@@ -409,7 +409,7 @@ V.evalCondition = function (e) {
 
 | 接口 / 能力 | 优先级 | Phase | 实现方式 |
 |---|---|---|---|
-| 垫片先于页面脚本执行 | P0 | 已完成（5） | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在顶层 `file:` 文档或父窗口即 top 的 `file:` 子 frame 里定义接口，应用页和其它 iframe 里什么都不做。桌面 `file:` 文档照常注入 Tauri 脚本，运行时把 IPC 来源改写成 frame URL，ACL 只给 `wpe-web-capability`。不改写 HTML 响应 |
+| 垫片先于页面脚本执行 | P0 | 已完成（5） | Tauri `initialization_script_for_all_frames`，桌面壁纸窗口与主窗口各挂同一份垫片；CEF `on_context_created` 在页面脚本之前执行。垫片按 `location` 自判，只在顶层 `file:` 文档或父窗口即 top 的 `file:` 子 frame 里定义接口，应用页和其它 iframe 里什么都不做。桌面 `file:` 文档照常注入 Tauri 脚本，运行时按发起方 origin 把 IPC 来源写成 `file:///`，ACL 只给 `wpe-web-capability`。不改写 HTML 响应 |
 | 页面读同目录资源 | P0 | 已完成 | 两种宿主同一机制：补丁 0004 按窗口开文件访问 + 运行时按根目录拦截（预览 Phase 6a 起） |
 | `applyUserProperties` 首推作者默认值 | P0 | 已完成（5） | 状态里的 `user` 为 `{ key: { type, value } }`（只含带 `value` 的条目）。垫片拉取：桌面调 `wpe_web_pull_state`，预览 `postMessage` 给父页面、由父页面调 `get_wpe_web_state`。`load` 后首次全量投递，之后重拉时按键差异投递；首次投递后页面换 listener 时补投全量 |
 | `applyUserProperties` 增量推送 | P1 | 已完成（投递 5 / 触发 7，触发待真机） | 用户改属性 = 新 metadata 行 + `metadataId` 补丁；垫片订阅补丁后重拉，只推值变化的键 |

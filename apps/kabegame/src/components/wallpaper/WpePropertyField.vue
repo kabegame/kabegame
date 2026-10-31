@@ -11,6 +11,7 @@
     :min="item.min ?? undefined"
     :max="item.max ?? undefined"
     :step="sliderStep"
+    :step-strictly="item.step != null"
     @update:model-value="emit('update:modelValue', $event)"
   />
   <KbSelect

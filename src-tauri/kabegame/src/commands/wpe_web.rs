@@ -410,12 +410,16 @@ mod tests {
         assert!(super::check_preview_label("main").is_ok());
     }
 
-    /// `wpe-web-capability` 的 `remote.urls`：`file:///*` 能匹配桌面网页壁纸入口，
+    /// `wpe-web-capability` 的 `remote.urls`：`file:///*` 能匹配桌面网页壁纸页面的 IPC 来源，
     /// 不匹配应用页与本地 HTTP 源。图库预览的 iframe 同样是 `file:`，但这个 capability 只绑定
     /// `wallpaper` 窗口，在 `main` 里零授权。
     #[test]
     fn wpe_web_capability_pattern_matches_file_urls() {
         let pattern = RemoteUrlPattern::from_str("file:///*").expect("file:///* 应能解析");
+        // 运行时按发起方 origin 写入的 `Origin`（`tauri_runtime_cef` 的 `origin_from_initiator`），
+        // 以及 cef-ipc 回退通道交给 Tauri 的 `file://localhost/`
+        assert!(pattern.test(&Url::parse("file:///").unwrap()));
+        assert!(pattern.test(&Url::parse("file://localhost/").unwrap()));
         let entry = Url::parse(
             "file:///D:/Applications/Steam/steamapps/workshop/content/431960/3679122549/index.html",
         )

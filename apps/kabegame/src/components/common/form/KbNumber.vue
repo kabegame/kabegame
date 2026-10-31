@@ -75,6 +75,8 @@ const props = defineProps<{
   placeholder?: string;
   /** 步进量：float 模式同时决定滑杆步长与显示的小数位。 */
   step?: number;
+  /** float 模式：输入框的值也按显式 step 对齐到 min + k×step（滑杆本就按步长走）。 */
+  stepStrictly?: boolean;
   disabled?: boolean;
 }>();
 
@@ -123,7 +125,9 @@ function formatNumber(v: number): string {
 }
 
 function clamp(v: number): number {
-  return Math.min(effectiveMax.value, Math.max(effectiveMin.value, v));
+  const step = props.stepStrictly && isFloat.value ? explicitStep.value : undefined;
+  const snapped = step === undefined ? v : effectiveMin.value + Math.round((v - effectiveMin.value) / step) * step;
+  return Math.min(effectiveMax.value, Math.max(effectiveMin.value, snapped));
 }
 
 function emitNumber(v: number) {
@@ -165,7 +169,7 @@ function onInputText(text: string) {
   emitNumber(parsed);
 }
 
-/** 提交：非法输入回退到当前值，合法输入 clamp 进范围 */
+/** 提交：非法输入回退到当前值，合法输入 clamp 进范围（stepStrictly 时先对齐步长） */
 function onInputCommit() {
   const parsed = Number(inputText.value);
   isEditing.value = false;
