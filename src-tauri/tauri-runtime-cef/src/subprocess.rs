@@ -1,6 +1,9 @@
 //! CEF renderer-process support shared by the browser runtime and helper binary.
 
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::{hash_map::Entry, HashMap},
+};
 
 use cef::*;
 use serde::{Deserialize, Serialize};
@@ -94,6 +97,34 @@ fn browser_scripts_from_extra_info(
     }))
 }
 
+/// 渲染进程里按 browser id 存的脚本。CEF 渲染侧按 `blink::WebView` 建浏览器对象（`CefRenderManager`
+/// 的 `browsers_` 以 WebView 为键），同一个 browser 在一个进程里可能同时有几个、id 相同，创建与销毁
+/// 回调各来一次：网页壁纸换 iframe 时，旧 WebView 卸载慢，新的已经建好。所以按 id 计数，最后一个
+/// 销毁才删；直接按 id 删会把新对象还要用的脚本一起删掉，此后该进程新建的 frame 都不注入。
+#[derive(Clone, Default)]
+struct ScriptTable(HashMap<i32, (usize, BrowserScripts)>);
+
+impl ScriptTable {
+    fn created(&mut self, browser_id: i32, scripts: BrowserScripts) {
+        let (instances, stored) = self.0.entry(browser_id).or_default();
+        *instances += 1;
+        *stored = scripts;
+    }
+
+    fn destroyed(&mut self, browser_id: i32) {
+        if let Entry::Occupied(mut entry) = self.0.entry(browser_id) {
+            entry.get_mut().0 -= 1;
+            if entry.get().0 == 0 {
+                entry.remove();
+            }
+        }
+    }
+
+    fn get(&self, browser_id: i32) -> Option<&BrowserScripts> {
+        self.0.get(&browser_id).map(|(_, scripts)| scripts)
+    }
+}
+
 /// 一个 frame 要按顺序执行的脚本:子 frame 先无条件执行桥脚本(能调什么由 ACL 决定),再执行
 /// 不限主 frame 的初始化脚本;主 frame 执行全部初始化脚本(Tauri 的桥已在其中)。
 fn scripts_for_frame(scripts: &BrowserScripts, is_main_frame: bool) -> Vec<&str> {
@@ -112,7 +143,7 @@ fn scripts_for_frame(scripts: &BrowserScripts, is_main_frame: bool) -> Vec<&str>
 
 wrap_render_process_handler! {
     struct InitializationRenderProcessHandler {
-        scripts_by_browser: RefCell<HashMap<i32, BrowserScripts>>,
+        scripts_by_browser: RefCell<ScriptTable>,
     }
 
     impl RenderProcessHandler {
@@ -126,7 +157,7 @@ wrap_render_process_handler! {
                 Ok(Some(scripts)) => {
                     self.scripts_by_browser
                         .borrow_mut()
-                        .insert(browser.identifier(), scripts);
+                        .created(browser.identifier(), scripts);
                 }
                 Ok(None) => {}
                 Err(error) => tracing::warn!("browser={} {error}", browser.identifier()),
@@ -137,7 +168,7 @@ wrap_render_process_handler! {
             if let Some(browser) = browser {
                 self.scripts_by_browser
                     .borrow_mut()
-                    .remove(&browser.identifier());
+                    .destroyed(browser.identifier());
             }
         }
 
@@ -162,11 +193,11 @@ wrap_render_process_handler! {
                 return;
             }
             let scripts = self.scripts_by_browser.borrow();
-            let Some(scripts) = scripts.get(&browser.identifier()) else {
+            let Some(scripts) = scripts.get(browser.identifier()) else {
                 return;
             };
             let is_main_frame = frame.is_main() == 1;
-// 每个子 frame 都注入 IPC 桥，来源按 initiator 与 CEF 补丁 0007 的文档 URL
+            // 每个子 frame 都注入 IPC 桥，来源按 initiator 与 CEF 补丁 0007 的文档 URL
             // 合成（protocol::ipc_origin）；权限由 ACL 决定，脚本按地址自行判断是否启用。
             let source_url = frame.url();
             let source_url = CefString::from(&source_url);
@@ -196,7 +227,7 @@ wrap_render_process_handler! {
 }
 
 pub(crate) fn initialization_render_process_handler() -> RenderProcessHandler {
-    InitializationRenderProcessHandler::new(RefCell::new(HashMap::new()))
+    InitializationRenderProcessHandler::new(RefCell::new(ScriptTable::default()))
 }
 
 #[cfg(test)]
@@ -269,5 +300,25 @@ mod tests {
             ..scripts
         };
         assert_eq!(scripts_for_frame(&no_bridge, false), vec!["all-frames"]);
+    }
+
+    /// 同一 browser 的两个渲染侧对象交叠（先建新的、后销毁旧的）：脚本还在，最后一个销毁才删。
+    #[test]
+    fn scripts_survive_overlapping_browser_objects() {
+        let scripts = BrowserScripts {
+            subframe_bridge: vec!["bridge".to_string()],
+            ..Default::default()
+        };
+        let mut table = ScriptTable::default();
+        table.created(7, scripts.clone());
+        table.created(7, scripts.clone());
+        table.created(8, scripts.clone());
+        table.destroyed(7);
+        assert_eq!(table.get(7), Some(&scripts));
+        table.destroyed(7);
+        assert_eq!(table.get(7), None);
+        // 多余的销毁回调不出错，也不影响别的 browser
+        table.destroyed(7);
+        assert_eq!(table.get(8), Some(&scripts));
     }
 }
